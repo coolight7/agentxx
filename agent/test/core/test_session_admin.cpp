@@ -1,4 +1,4 @@
-/// test_session_admin —— 会话列表检索与改名 (计划 RET-1a / STO-12b)
+/// test_session_admin —— 会话列表检索与改名
 ///
 /// 覆盖存储层之上的两个入口 (存储层 API 已在 `session_schema` 覆盖):
 /// - 重命名: `WireRenameSession` → 写 `meta.title` + `titleSource=user`,

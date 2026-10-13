@@ -109,7 +109,7 @@ agxxdeps_extract() {
     return $?
 }
 
-# ===== Boost (通用宿主构建: Linux/macOS; Windows 走各自 .bat) =====
+# ===== Boost (通用构建机: Linux/macOS; Windows 走各自 .bat) =====
 # 用法: agxxdeps_ensure_boost <install_dir> <variant:debug|release> <tag>
 # 依赖: 源码目录 {agxxdeps_src_dir}/boost (内含 bootstrap.sh, 由调用脚本保证)
 # 源码缺失时自动从 archives.boost.io 下载 boost-1.92.0 (源码目录不入库)
@@ -179,7 +179,7 @@ agxxdeps_ensure_boost() {
     return 0
 }
 
-# ===== OpenSSL (宿主 Linux/macOS 构建) =====
+# ===== OpenSSL (构建机 Linux/macOS) =====
 # 用法: agxxdeps_ensure_openssl <install_dir> <tag> [host]
 #   host: linux (默认) | macos, 决定 Configure 目标与 rpath 写法
 # 依赖: 源码目录 {agxxdeps_src_dir}/openssl-4.0.1 (或 openssl*, 自动探测)

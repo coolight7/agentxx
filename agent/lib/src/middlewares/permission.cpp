@@ -396,7 +396,7 @@ asio::awaitable<bool> PermissionMiddlewareHandle::checkToolPermission(
         }
     }
 
-    // 记录已批准目标: 执行前按同一套规则复验 (计划 SEC-5)
+    // 记录已批准目标: 执行前按同一套规则复验
     const auto toolCallId = args.value("tool_call_id", std::string{});
     if (!toolCallId.empty()) {
         approvedTargets_[approvedTargetsKey(toolName, toolCallId)]
@@ -685,7 +685,7 @@ void PermissionMiddlewareHandle::registerOnBus(const std::shared_ptr<agentxx::ev
     //   接口表声明 (见 PluginManager::registerToolPermission), 本中间件据此判定
     // - 未声明权限的工具不参与权限判定 (直接放行)
     // - 判定理由 (decision/reason/rule/target) 随响应回给调用方, 供工具结果文本、
-    //   日志与诊断共用 (计划 SEC-2)
+    //   日志与诊断共用
     checkServerId_ = bus->getRR<events::ReqToolPermissionCheck, events::RespToolPermissionCheck>(
                             events::Topic::ToolPermissionCheck
     )
@@ -708,7 +708,7 @@ void PermissionMiddlewareHandle::registerOnBus(const std::shared_ptr<agentxx::ev
 
     // 1b. 注册执行前目标复验服务 (ReqPermissionReverify -> RespPermissionReverify):
     //     判定阶段记录"已批准目标", 执行前用当前参数按同一套规则复验, 防止
-    //     判定与执行之间参数被改写 (计划 SEC-5: 批准目标 = 实际执行目标)
+    //     判定与执行之间参数被改写 (批准目标 = 实际执行目标)
     reverifyServerId_ = bus
                             ->getRR<events::ReqPermissionReverify, events::RespPermissionReverify>(
                                 events::Topic::PermissionReverify

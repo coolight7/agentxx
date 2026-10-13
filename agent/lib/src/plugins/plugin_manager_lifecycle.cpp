@@ -234,11 +234,11 @@ void toLoadOptions(
     }
 }
 
-/// 记录加载耗时与注册计数 (计划 PLG-10)
+/// 记录加载耗时与注册计数
 ///
 /// 在加加载口收尾时调用: 写回 [PluginInstance::loadMs] 并把"加载完成后到底注册了
 /// 什么"打到日志, 便于回答"插件装了但模型看不到工具"一类问题;
-/// 完整清单另见装配快照 (ARC-6, `--dump-config`)。
+/// 完整清单另见装配快照 (`--dump-config`)。
 void notePluginLoaded(
     const std::shared_ptr<PluginInstance>& inst,
     std::chrono::steady_clock::time_point  begin
@@ -267,7 +267,7 @@ void notePluginLoaded(
     );
 }
 
-/// 加载失败后记一句"怎么改"的建议 (计划 PLG-7)
+/// 加载失败后记一句"怎么改"的建议
 /// - 插件框架日志已经说明"哪一步失败了"; 这里补的是"照什么改" (路径/清单/导出符号),
 ///   只在失败路径调用, 正常加载不产生额外开销
 /// - 加载失败本身不是错误用法 (例如插件只是没装), 因此按 WARN 记录

@@ -102,7 +102,7 @@ asio::awaitable<neograph::ChatCompletion> ModelCallWrapNode::onReceiveToken(
                   ) {
             switch (token.type) {
                 case neograph::ChatStreamChunk::TYPE_CONTENT: {
-                    // 关键指标 (计划 OBS-3): 本轮首个正文/思考 token 的时间 (TTFT;
+                    // 关键指标: 本轮首个正文/思考 token 的时间 (TTFT;
                     // 同一轮只记第一次, 见 KeyMetrics) —— 这里只记"有内容到达"的事件
                     if (agentCtx && agentCtx->metrics) {
                         agentCtx->metrics->noteFirstToken();
@@ -150,8 +150,8 @@ asio::awaitable<neograph::ChatCompletion> ModelCallWrapNode::onReceiveToken(
     auto provider = resolveCurrentProvider(input.ctx.thread_id);
     // 用量记录里记录本次实际使用的模型名 (会话可能已切换模型)
     auto modelName = resolveCurrentModelName(input.ctx.thread_id);
-    // 用量记录 (计划 STO-8): 每次模型调用记一行, 成功记用量, 失败记原因
-    // - detail: 补充用量 (缓存读/写; 计划 LLM-8), provider 经 message.extra 单独回报
+    // 用量记录: 每次模型调用记一行, 成功记用量, 失败记原因
+    // - detail: 补充用量 (缓存读/写), provider 经 message.extra 单独回报
     auto recordUsage = [&agentCtx, &input, &modelName](
                            const neograph::ChatCompletion::Usage& usage,
                            const agentxx::protocol::UsageDetail&  detail,
@@ -259,7 +259,7 @@ asio::awaitable<neograph::ChatCompletion> ModelCallWrapNode::onReceiveToken(
         agentxx::middleware::MiddlewareContext::graphDataKey_LLMTokenUsage,
         completion.usage.total_tokens
     );
-    // 补充用量 (缓存读/写; 计划 LLM-8): 取出即置空, 不把记账字段带进会话消息
+    // 补充用量 (缓存读/写): 取出即置空, 不把记账字段带进会话消息
     const auto usageDetail = agentxx::protocol::takeUsageDetail(completion);
     recordUsage(completion.usage, usageDetail, true, {});
     noteMetrics(completion.usage, usageDetail, true);
@@ -371,7 +371,7 @@ neograph::CompletionParams ModelCallWrapNode::build_params(std::string_view sess
             = std::string{sessionId};
     }
 
-    // 稳定段指纹 (计划 PRM-1 / PRM-7): system 消息 + 工具 schema
+    // 稳定段指纹: system 消息 + 工具 schema
     // - 连续请求中该指纹不变 = provider 前缀缓存有效; 变化时计数并记日志
     if (ctxPtr && ctxPtr->sessions && !sessionId.empty()) {
         if (auto session = ctxPtr->sessions->get(sessionId); session) {
@@ -405,14 +405,14 @@ neograph::CompletionParams ModelCallWrapNode::build_params(std::string_view sess
 asio::awaitable<neograph::graph::NodeOutput>
     ModelCallWrapNode::callLLM(neograph::graph::NodeInput& in) {
     XX_LOGT("ModelCallWrapNode::callLLM START");
-    // 安全边界: 请求装配前取用待注入输入 (计划 LOOP-2)
+    // 安全边界: 请求装配前取用待注入输入
     // - next-step: 作为 user 消息进入权威上下文与展示历史 (本请求即包含)
     // - inject:    只拼进本次请求 (不改写上下文)
     // 放在 build_params 之前: next-step 追加的消息由 build_params 一并复制
     auto injections
         = agentxx::nodes::drainPendingSessionInputs(agentContext.lock(), in, in.ctx.thread_id, nodeName);
     auto params = build_params(in.ctx.thread_id);
-    // 单次调用的取消域 (计划 LLM-7): 运行取消照常级联, 消费方放弃时只中止本次调用
+    // 单次调用的取消域: 运行取消照常级联, 消费方放弃时只中止本次调用
     // (正在进行的 HTTP/SSE 请求立即结束, 不必等响应读完或套接字超时)
     agentxx::nodes::ProviderCallScope callScope{in.ctx.cancel_token};
     params.cancel_token = callScope.token();
@@ -898,7 +898,7 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
         if (agentCtxPtr) {
             // 稳定段 (systemPrompt + 静态附加段 + 运行时稳定附加段: 记忆文件/技能清单)
             // 随 system 消息下发, 属于稳定前缀; 动态段由 build_params 作为请求末尾的
-            // 独立消息附加, 不写进 system 消息 (计划 PRM-1)
+            // 独立消息附加, 不写进 system 消息
             newSystemMsg.content = agentCtxPtr->buildSystemPromptStable(in.ctx.thread_id);
         }
         if (haveSystemMsg) {
@@ -916,7 +916,7 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
     // 连续重试次数 (用于退避延时计算): 达到配置上限后停止重试, 不因部分输出重置,
     // 保证总失败次数严格不超过 llmMaxRetry, 避免消息无限堆积
     size_t retry = 0;
-    /// 本轮是否已经用掉"上下文超限 → 压缩一次后重试"的机会 (计划 LLM-3):
+    /// 本轮是否已经用掉"上下文超限 → 压缩一次后重试"的机会:
     /// 每次溢出只压缩一次, 再次溢出直接按失败处理, 避免反复压缩
     bool overflowCompactUsed = false;
 
@@ -1003,7 +1003,7 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
 
         // 错误分类与重试策略 (见 llm_error.h):
         // - 鉴权/额度/请求非法: 重试无意义, 直接结束本轮 (省掉无用的等待与请求)
-        // - 上下文超限: 压缩一次后立即重试 (LLM-3); 再次超限则按失败结束
+        // - 上下文超限: 压缩一次后立即重试; 再次超限则按失败结束
         // - 其余 (限流/超时/服务端/未知): 有界指数退避 + 抖动后重试
         const auto        errKind   = classifyLlmError(errInfo);
         const bool        retryable = isLlmErrorRetryable(errKind);

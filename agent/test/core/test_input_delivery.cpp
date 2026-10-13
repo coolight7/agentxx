@@ -324,7 +324,7 @@ bool contextHasText(
 }
 
 // ---------------------------------------------------------------------------
-// 1. 投递结果显式化: started / queued / rejected (LOOP-3)
+// 1. 投递结果显式化: started / queued / rejected
 // ---------------------------------------------------------------------------
 
 asio::awaitable<void> test_input_ack_statuses() {
@@ -405,7 +405,7 @@ asio::awaitable<void> test_input_ack_statuses() {
 }
 
 // ---------------------------------------------------------------------------
-// 2. 队列状态机 (LOOP-4): idle → running → paused → 消化积压 → idle
+// 2. 队列状态机: idle → running → paused → 消化积压 → idle
 // ---------------------------------------------------------------------------
 
 asio::awaitable<void> test_queue_state_machine() {
@@ -476,7 +476,7 @@ asio::awaitable<void> test_queue_state_machine() {
 }
 
 // ---------------------------------------------------------------------------
-// 3. next-step 注入: 在下一个 modelcall 边界进入权威上下文 (LOOP-2)
+// 3. next-step 注入: 在下一个 modelcall 边界进入权威上下文
 // ---------------------------------------------------------------------------
 
 asio::awaitable<void> test_next_step_injection() {
@@ -516,7 +516,7 @@ asio::awaitable<void> test_next_step_injection() {
 }
 
 // ---------------------------------------------------------------------------
-// 4. inject: 只进入下一次请求, 不改写权威上下文 (LOOP-2)
+// 4. inject: 只进入下一次请求, 不改写权威上下文
 // ---------------------------------------------------------------------------
 
 asio::awaitable<void> test_inject_only_in_request() {
@@ -550,7 +550,7 @@ asio::awaitable<void> test_inject_only_in_request() {
 }
 
 // ---------------------------------------------------------------------------
-// 5. collect: 静默窗口内合并同一客户端的连续输入 (LOOP-11)
+// 5. collect: 静默窗口内合并同一客户端的连续输入
 // ---------------------------------------------------------------------------
 
 asio::awaitable<void> test_collect_merging() {
@@ -584,7 +584,7 @@ asio::awaitable<void> test_collect_merging() {
 }
 
 // ---------------------------------------------------------------------------
-// 6. 收件箱存储层: 写入/查询/状态流转 (LOOP-1 的存储基础)
+// 6. 收件箱存储层: 写入/查询/状态流转
 // ---------------------------------------------------------------------------
 
 asio::awaitable<void> test_inbox_store_api() {
@@ -667,7 +667,7 @@ asio::awaitable<void> test_inbox_store_api() {
 }
 
 // ---------------------------------------------------------------------------
-// 7. 持久化收件箱: 重启后未投递输入按"待确认"恢复 (LOOP-1)
+// 7. 持久化收件箱: 重启后未投递输入按"待确认"恢复
 // ---------------------------------------------------------------------------
 
 asio::awaitable<void> test_durable_inbox_recovery() {
@@ -778,7 +778,7 @@ asio::awaitable<void> test_inbox_dropped_item_not_restored() {
     removeTempRoot(root);
 }
 
-/// 连接阶段校验与错误码 (计划 PRO-5)
+/// 连接阶段校验与错误码
 ///
 /// - 未握手的传输不能发业务消息: 端点回 `WireError(InvalidState)` (而不是按正常
 ///   流程处理或静默丢弃)

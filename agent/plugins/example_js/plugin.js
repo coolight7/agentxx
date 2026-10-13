@@ -1,5 +1,5 @@
 // example_js —— JS 插件示例
-// 通过全局 agentxx 桥注册工具/钩子/事件; 引擎 (agentxx_javascript_engine) 承载执行
+// 通过全局 agentxx 桥注册工具/钩子/事件; 引擎 (agentxx_javascript_engine) 负责执行
 
 // ---- 工具 1: 纯 JS 计算 ----
 agentxx.registerTool({
@@ -35,7 +35,7 @@ agentxx.registerTool({
   },
 });
 
-// ---- 工具 4: 调用宿主插件工具 (经 C 桥) ----
+// ---- 工具 4: 调用主程序插件工具 (经 C 桥) ----
 agentxx.registerTool({
   name: "js_call_host",
   description: "Call host plugin tool example_echo via agentxx.callTool.",
@@ -55,7 +55,7 @@ agentxx.registerTool({
   execute: (args) => Promise.reject(new Error(args.reason || "demo rejection")),
 });
 
-// ---- 工具 6: callTool 返回值形态 (F17: 始终为 Promise) ----
+// ---- 工具 6: callTool 返回值形态 (始终为 Promise) ----
 agentxx.registerTool({
   name: "js_calltool_kind",
   description: "JS plugin demo: typeof agentxx.callTool(...) must be 'object' (Promise).",
@@ -67,7 +67,7 @@ agentxx.onHook(0, (info) => {
   agentxx.log(2, "js hook agent_start fired: " + JSON.stringify(info));
 });
 
-// ---- 事件: 订阅 demo.topic (宿主自动加 plugin. 前缀) ----
+// ---- 事件: 订阅 demo.topic (主程序自动加 plugin. 前缀) ----
 agentxx.subscribe("demo.topic", (payload) => {
   agentxx.log(2, "js event received: " + JSON.stringify(payload));
 });

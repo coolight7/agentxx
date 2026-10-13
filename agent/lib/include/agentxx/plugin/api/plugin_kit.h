@@ -1080,7 +1080,7 @@ inline void tool(
         std::shared_ptr<std::atomic<bool>> cancelFlag;
         void*                              coroAddr = nullptr;
         /// 拥有 args/session/tool_call_id：业务协程可能挂起后继续读取这些视图
-        /// （F13），因此它们必须比 start 调用活得久。
+        /// 因此它们必须比 start 调用活得久。
         detail::RootRequest request;
         /// OpCtl 同样必须由 Job 拥有：业务协程以引用接收它，挂起后仍会读取
         /// （例如 ctl.throw_if_cancelled()），放在 start 栈上会悬垂。
@@ -1812,7 +1812,7 @@ inline void polled_tool(
 namespace detail {
 
 /// 按可调用性选择钩子业务签名：fn(ctx, point, input) / fn(ctx, input) / fn(input)。
-/// 返回类型原样转发：同步钩子通常是 void，异步钩子返回 Task<T>（F19 用返回类型
+/// 返回类型原样转发：同步钩子通常是 void，异步钩子返回 Task<T>（按返回类型
 /// 严格区分同步与异步，签名不匹配时在 if constexpr 分支给出明确错误）。
 template<typename HookFn, typename Ctx>
 inline decltype(auto) invokeHook(HookFn& fn, Ctx& ctx, int32_t pt, std::string_view input) {
@@ -1872,7 +1872,7 @@ inline void* hookStart(
     }
 
     /// 输入纳入拥有型 Request：同步钩子在调用期间有效，异步 Task 由 Job 持有到
-    /// 协程真正结束（F13）。
+    /// 协程真正结束。
     auto request = RootRequest::forHook(shim->ctx->host, node_input_json);
 
     using HookRet = decltype(invokeHook(shim->fn, *shim->ctx, pt, std::string_view{}));
@@ -1888,7 +1888,7 @@ inline void* hookStart(
         return nullptr;
     } else {
         /// Task<T> 钩子（通常 Task<void>）：由 promise 在协程结束后完成
-        /// 通知，返回 Job 作为主程序可取消的 provider 句柄（F19）。
+        /// 通知，返回 Job 作为主程序可取消的 provider 句柄。
         auto* job
             = new JobT{shim, std::make_shared<std::atomic<bool>>(false), nullptr, std::move(request)};
         auto task = invokeHook(shim->fn, *shim->ctx, pt, job->request.args());
@@ -2049,7 +2049,7 @@ inline decltype(auto) invokeGraphNode(NodeFn& fn, Ctx& ctx, const RootRequest& r
 /// 注册插件自定义图节点类型（统一 root adapter）。
 ///
 /// 与 tool/hook/capability 使用同一套生命周期与完成协议：
-/// - 输入（node/config/state/thread_id）由 [RootRequest] 拥有，跨挂起点有效（F13）；
+/// - 输入（node/config/state/thread_id）由 [RootRequest] 拥有，跨挂起点有效；
 /// - 返回 `std::string`：快同步节点，调用返回即完成（异常 → FAILED）；
 /// - 返回 `Task<std::string>`：锚定协程节点，主程序获得可取消的 provider 句柄，
 ///   完成通知在协程真正结束后 exactly-once 发出；
@@ -2099,7 +2099,7 @@ inline int32_t
             return nullptr;
         }
         // 输入纳入拥有型 Request：快同步节点在调用期间有效，异步节点由 Job
-        // 持有到协程真正结束（F13）。
+        // 持有到协程真正结束。
         auto request = detail::RootRequest::forGraphNode(
             shim->ctx->host,
             node_name,

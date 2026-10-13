@@ -890,7 +890,7 @@ TestResult testToolcallArgs() {
         XX_TEST_EXPECT_TRUE(hit.count(ToolcallWrapNode::makeRepeatCallKey("grep", grepKey)) > 0);
     }
 
-    // #51 正向下标 vs 倒数距离 (P0-1 回归):
+    // #51 正向下标 vs 倒数距离 (回归):
     // 过去 baseRun 中使用 `++assistantMsgIndex` 随 `rbegin()` 递增,
     // 当目标 assistant 位于消息列表末尾 (messages.back()) 时, 错误得到倒数距离 0;
     // 传入 0 后 findConsecutiveRepeatCallKeys 仅查 messages[0] (通常是 user/system 消息),
@@ -993,7 +993,7 @@ TestResult testToolcallArgs() {
     }
 
     // #54 多 key 并行循环检测: 每轮 assistant 同时包含多个不同 toolcall,
-    // 连续交替达 threshold 轮时, 所有达标 key 均必须被正确检出 (多 key 并行, P3-2)
+    // 连续交替达 threshold 轮时, 所有达标 key 均必须被正确检出 (多 key 并行)
     {
         auto msgs = std::vector<neograph::ChatMessage>{};
         msgs.push_back(makeTextMsg("user"));

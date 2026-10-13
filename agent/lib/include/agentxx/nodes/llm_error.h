@@ -25,7 +25,7 @@ enum class LlmErrorKind {
     /// 请求本身非法 (400, invalid_request_error, 参数不支持 等): 重试无意义
     InvalidRequest,
     /// 上下文超限 (context_length_exceeded / maximum context length / 413 等):
-    /// 压缩一次后重试 (见 RetryPolicy 的 LLM-3 处理)
+    /// 压缩一次后重试 (见 RetryPolicy 的处理)
     ContextOverflow,
     /// 限流 (429, rate limit, 请求频率 等): 可重试, 优先采用响应里的 retry-after
     RateLimit,

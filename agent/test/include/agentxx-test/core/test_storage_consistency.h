@@ -5,7 +5,7 @@
 namespace agentxx {
 namespace test {
 
-/// 存储一致性契约 (计划 TST-6)
+/// 存储一致性契约
 ///
 /// 用同一份"存一条/读回来/覆盖/重开/写失败"语义断言跑多个存储后端:
 /// settings_db(全局设置库)、SessionStore(会话库 store 表)、

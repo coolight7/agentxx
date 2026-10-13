@@ -105,7 +105,7 @@ public:
             return defaultDataDir();
         }
         std::string s{dataDir};
-        // P1-15: 相对路径 normalize (展开 ~/ 相对 CWD, 避免 lib 层拼接错误)
+        // 相对路径 normalize (展开 ~/ 相对 CWD, 避免 lib 层拼接错误)
         // 复用 string_util 的绝对化逻辑, 此处仅做轻量处理避免头依赖循环
         if (!std::filesystem::path(s).is_absolute()) {
             std::error_code ec;

@@ -11,7 +11,7 @@
 namespace agentxx {
 namespace client {
 
-/// 消息队列镜像 (计划 UI-1: 从 TUI 抽出的可单测模型, 无 FTXUI/无 IO 依赖)
+/// 消息队列镜像 (从 TUI 抽出的可单测模型, 无 FTXUI/无 IO 依赖)
 ///
 /// 背景: 服务端把排队输入 (busy 期间收到的用户输入/插件注入) 以
 /// `WireMessageQueueUpdate` 整体下发, 客户端界面据此展示"待发送队列"; 输入受理

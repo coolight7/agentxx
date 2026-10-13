@@ -229,7 +229,7 @@ static CachedUsage parseCachedUsage(const utilxx_base::Json& u) {
     return out;
 }
 
-/// 把缓存用量写进补全结果 (计划 LLM-8)
+/// 把缓存用量写进补全结果
 ///
 /// - 命中缓存的读取量写 `usage.cached_prompt_tokens`, 与 Anthropic 路径同一个字段
 /// - 写入量只在补充用量通道里传 (Usage 里没有对应字段); 两者都为 0 时不写,

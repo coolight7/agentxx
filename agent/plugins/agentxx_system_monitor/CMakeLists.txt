@@ -7,7 +7,7 @@
 #   (Windows: pdh/dxgi; macOS: IOKit/CoreFoundation framework)
 # - 从 libagentxx src/expand/get_cpu_gpu_use 拆分独立:
 #   - 工具 agentxx_get_system_core_info (原内置工具迁移, 同名同行为)
-#   - 能力 agentxx.system_usage (方法 query): 宿主 TUI 系统资源展示路径
+#   - 能力 agentxx.system_usage (方法 query): 主程序 TUI 系统资源展示路径
 #     (WireGetSystemUsage) 经能力调用获取使用率 JSON
 set(PLUGIN_NAME agentxx_system_monitor)
 
@@ -116,7 +116,7 @@ target_link_directories(${PLUGIN_NAME} PRIVATE
 # asio 头文件 (cpu_gpu_monitor 使用 asio 协程; 头文件-only, 仅需 include 路径)
 # boost 分发布局: ${BOOST_ROOT}/include/boost/asio/...; 源码用 asio/... 前缀
 # (映射 include/boost/), 而 asio 头内部用 <boost/asio/...> 形式 (映射 include/),
-# 两者缺一会导致内部头回退到系统安装的 boost, 与宿主 asio 混用崩溃
+# 两者缺一会导致内部头回退到系统安装的 boost, 与主程序 asio 混用崩溃
 target_include_directories(${PLUGIN_NAME} PRIVATE
   "${BOOST_ROOT}/include/"
   "${BOOST_ROOT}/include/boost/"

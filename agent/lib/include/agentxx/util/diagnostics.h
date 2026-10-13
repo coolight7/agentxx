@@ -11,7 +11,7 @@ class AgentContext;
 }
 namespace util {
 
-/// 诊断包 (计划 OBS-4 / STO-13 的导出部分)
+/// 诊断包 (环境/指标/装配/会话摘要/日志的导出实现)
 ///
 /// 目的: 用户报障时给出一份**自包含**的文本 (可直接贴出来), 包含环境、配置、
 /// 装配、会话摘要、关键指标与日志尾部 —— 而不需要对方复述界面或翻日志文件。
@@ -53,7 +53,7 @@ std::vector<std::string> recentLogLines(size_t limit = 0);
 /// 清空已捕获日志
 void clearCapturedLogs();
 
-/// 屏蔽文本中的常见凭据形态 (计划 OBS-2/诊断包安全边界)
+/// 屏蔽文本中的常见凭据形态 (诊断包安全边界)
 ///
 /// - `key=value` / `key: value` 形式的 api_key / token / secret / password /
 ///   authorization 值整体替换为 `***`;

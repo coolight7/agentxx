@@ -589,7 +589,7 @@ public:
     // 基线对比 (--baseline <bench_*.json>)
     // -----------------------------------------------------------------------
 
-    /// 载入基线报告 (优化前的 bench_*.json), 供本次运行对比
+    /// 读取基线报告 (优化前的 bench_*.json), 供本次运行对比
     bool loadBaselineFile(const std::string& path) {
         std::ifstream ifs(path, std::ios::binary);
         if (!ifs.is_open()) {

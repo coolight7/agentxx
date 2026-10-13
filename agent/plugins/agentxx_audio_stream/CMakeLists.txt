@@ -12,7 +12,7 @@ set(PLUGIN_NAME agentxx_audio_stream)
 # 当前为**全平台跳过** (平台列表为空):
 # - Windows WASAPI 实现尚未启用 (audio_stream.cpp 中 `#if XX_IS_WIN_D && false`,
 #   实际走 "not implemented on this platform" 桩分支), 即本插件在所有平台都只是
-#   桩实现; 宿主不把未实现能力伪装为已支持 → 在真实实现完成并通过验证前
+#   桩实现; 主程序不把未实现能力伪装为已支持 → 在真实实现完成并通过验证前
 #   不进入构建产物。
 # - 恢复方式: 实现可用后在下面的 gate 调用中声明平台 (如 windows) 并同步更新
 #   docs/zh-cn/design/plugins.md §14 (平台支持情况)。

@@ -67,7 +67,7 @@ public:
     /// `capabilitiesToJson` 生成, 与渲染前 `adaptItems` 使用的是同一份
     /// [tuiUiCapabilities] —— 插件读到的能力与本端实际能力不会分叉。
     ///
-    /// 另外补一段**体验级别**字段 (计划 UI-9): 描述层的能力段只表达"能画哪些
+    /// 另外补一段**体验级别**字段: 描述层的能力段只表达"能画哪些
     /// 组件/控件", 而插件在选择交互形态时还需要知道表单提交方式、尺寸形态与终端
     /// 能力。这些字段只增不改 (未知字段插件忽略即可), 描述层的解析不受影响。
     std::string uiCapabilitiesJson() const override {
@@ -95,7 +95,7 @@ public:
         term["mouse"]             = true;
         term["wide_chars"]        = true; // CJK 双宽正确测量
         // 输入栏硬件光标: 终端支持时把光标放在真实光标位置 (输入法候选框跟随);
-        // 不支持时回退到输入栏自绘的光标格 (计划 UI-5)
+        // 不支持时回退到输入栏自绘的光标格
         term["hardware_cursor"]   = tuiHardwareCursorSupported();
         j["terminal"]             = std::move(term);
 

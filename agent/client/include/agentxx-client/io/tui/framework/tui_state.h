@@ -144,7 +144,7 @@ struct TUIRenderState {
 
     // ---- 历史分页窗口状态 (服务端 viewMessages 尾窗同步 + 分页拉取) ----
     /// 已加载窗口首条消息在服务端完整 viewMessages 中的绝对下标
-    /// 历史分页窗口 (计划 UI-1: 上下边界/未完成的请求/序号连续性都在模型内,
+    /// 历史分页窗口 (上下边界/未完成的请求/序号连续性都在模型内,
     /// 见 [HistoryWindow]); 全量同步后 windowStart()==0, 尾窗同步后 > 0
     HistoryWindow history;
     /// 流式代次 (client 线程在**新建** currentToken 时递增; COW 复制不递增):
@@ -200,7 +200,7 @@ struct TUIRenderState {
     /// 放在共享状态而非 UI 组件内: 提交落盘发生在 client 线程, 需要读到用户
     /// 在 UI 线程点击的结果 (双方经 sharedState 的 mutex + COW 访问)。
     int streamThinkOverride = -1;
-    /// 消息队列镜像 (计划 UI-1: 队列快照/状态/投递回执记账见 [MessageQueueMirror])
+    /// 消息队列镜像 (队列快照/状态/投递回执记账见 [MessageQueueMirror])
     MessageQueueMirror queue;
 
     /// 当前是否已"完全授权所有权限" (服务端 WirePermissionState 下发/广播):

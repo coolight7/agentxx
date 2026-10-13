@@ -1695,7 +1695,7 @@ void TUIClientAgentIO::openSessionSelector() {
         XX_LOGI("[tui] new session: {}", newThreadId);
         switchToSession(newThreadId);
     });
-    // 会话改名 (RET-1a): 发 WireRenameSession, 结果经 onSessionRenameResult 回填
+    // 会话改名: 发 WireRenameSession, 结果经 onSessionRenameResult 回填
     overlay->onRename([this](std::string sessionId, std::string title) {
         requestRenameSession(std::move(sessionId), std::move(title));
     });
@@ -1946,7 +1946,7 @@ void TUIClientAgentIO::onPeerMessage(agentxx::agent::WireMessage msg) {
                 // 会话选择弹窗数据源: 分页响应回填/追加到已加载会话列表
                 onSessionListPage(m);
             } else if constexpr (std::is_same_v<T, agentxx::agent::WireRenameSessionResult>) {
-                // 会话改名结果: 成功则就地更新本地列表标题, 失败提示原因 (计划 RET-1a)
+                // 会话改名结果: 成功则就地更新本地列表标题, 失败提示原因
                 onSessionRenameResult(m);
             } else if constexpr (std::is_same_v<T, agentxx::agent::WireMessageQueueUpdate>) {
                 onMessageQueueUpdate(m);
@@ -1978,7 +1978,7 @@ void TUIClientAgentIO::onPeerMessage(agentxx::agent::WireMessage msg) {
                     postRedraw();
                 }
             } else if constexpr (std::is_same_v<T, agentxx::agent::WireInputAck>) {
-                // 输入受理回执 (计划 LOOP-3): 被拒绝时明确提示, 不再从 delta 猜测
+                // 输入受理回执: 被拒绝时明确提示, 不再从 delta 猜测
                 onInputAck(m);
             } else if constexpr (std::is_same_v<T, agentxx::agent::WireAddModelResult>) {
                 // 新增模型配置的回执: 成功时立即使用该模型 (状态栏 + 下一条消息携带;
@@ -2880,7 +2880,7 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
 // ---------------------------------------------------------------------------
 
 void TUIClientAgentIO::onSync(const agentxx::agent::WireSyncPayload& payload) {
-    // 增量补拉 (计划 STO-4): 服务端只回补"客户端已持有序号之后"的消息,
+    // 增量补拉: 服务端只回补"客户端已持有序号之后"的消息,
     // 按 msg.id 去重后追加到本地历史尾部, 不重置本地窗口 (也不清空待输入等状态)
     if (payload.incremental) {
         onIncrementalSync(payload);
@@ -2982,7 +2982,7 @@ void TUIClientAgentIO::onSync(const agentxx::agent::WireSyncPayload& payload) {
 // onTurnResult / onContextStats (client 线程)
 // ---------------------------------------------------------------------------
 
-/// 增量补拉 (计划 STO-4): 追加服务端回补的展示消息
+/// 增量补拉: 追加服务端回补的展示消息
 ///
 /// - 按 msg.id 去重 (既有历史里已存在则跳过): 断线期间经 delta 已收到的消息
 ///   不会重复插入
@@ -3052,7 +3052,7 @@ void TUIClientAgentIO::onTurnResult(const agentxx::agent::WireTurnResult& /*resu
 }
 
 void TUIClientAgentIO::onInputAck(const agentxx::agent::WireInputAck& ack) {
-    // 输入受理回执 (计划 LOOP-3): 界面不再从 delta 猜测投递结果
+    // 输入受理回执: 界面不再从 delta 猜测投递结果
     // - rejected: 明确提示用户 (文本/原因由服务端给出)
     // - started/queued/steered: 正常路径 (排队状态由 MessageQueueUpdate 展示)
     if (ack.status != agentxx::agent::InputStatus::Rejected) {

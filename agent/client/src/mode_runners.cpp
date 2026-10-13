@@ -447,7 +447,7 @@ static asio::awaitable<void> runRemoteCliAsync(
         .tailHash        = "",
         .model           = "",
         .language        = "en",
-        // 协议版本与能力声明 (计划 PRO-3): 服务端据此决定是否下发补拉/回执等能力
+        // 协议版本与能力声明: 服务端据此决定是否下发补拉/回执等能力
         .protocolVersion = agent::WireProtocol::kVersion,
         .capabilities    = {std::string{agent::WireProtocol::kCapInputDelivery},
                             std::string{agent::WireProtocol::kCapInputAck},
@@ -550,7 +550,7 @@ static asio::awaitable<void> runRemoteTuiAsync(
         .tailHash        = "",
         .model           = "",
         .language        = TUISettings::instance().languageCode(),
-        // 协议版本与能力声明 (计划 PRO-3): 版本高于服务端时握手会被明确拒绝
+        // 协议版本与能力声明: 版本高于服务端时握手会被明确拒绝
         .protocolVersion = agent::WireProtocol::kVersion,
         .capabilities    = {std::string{agent::WireProtocol::kCapInputDelivery},
                             std::string{agent::WireProtocol::kCapInputAck},

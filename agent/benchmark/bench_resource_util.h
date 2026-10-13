@@ -1327,7 +1327,7 @@ inline ResourceLlmSimServer startResourceLlmSimServer(size_t streamChunks = 0) {
                     append(neograph::json::object(), "tool_calls");
                 } else if (streamChunks > 1 && !replyContent.empty()) {
                     // 把回复切成 streamChunks 个 SSE 事件 (默认 0/1 = 单事件):
-                    // 用于测量逐事件 SSE 解析路径的开销随事件数的变化 (P3)
+                    // 用于测量逐事件 SSE 解析路径的开销随事件数的变化
                     neograph::json dRole;
                     dRole["role"] = "assistant";
                     append(dRole, "");

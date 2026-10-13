@@ -110,7 +110,7 @@ target_link_directories(${PLUGIN_NAME} PRIVATE
 
 # boost 分发布局: ${BOOST_ROOT}/include/boost/asio/...; 源码用 asio/... 前缀
 # (映射 include/boost/), 而 asio 头内部用 <boost/asio/...> 形式 (映射 include/),
-# 两者缺一会导致内部头回退到系统安装的 boost, 与宿主 asio 混用崩溃
+# 两者缺一会导致内部头回退到系统安装的 boost, 与主程序 asio 混用崩溃
 target_include_directories(${PLUGIN_NAME} PRIVATE
   "${BOOST_ROOT}/include/"
   "${BOOST_ROOT}/include/boost/"

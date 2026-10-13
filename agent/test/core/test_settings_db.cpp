@@ -136,7 +136,7 @@ static TestResult testTypedAccess() {
     return TestResult{};
 }
 
-/// 版本与乐观写入 (计划 STO-11):
+/// 版本与乐观写入:
 /// 无条件写入递增版本、按期望版本提交、版本不匹配返回冲突且不改内容、
 /// 两个句柄竞争时不丢更新的语义、重启后版本延续、老库(无 version 列)迁移
 static TestResult testVersionedWrite() {

@@ -8,7 +8,7 @@
 namespace agentxx {
 namespace client {
 
-/// JSONL stdio 一次性运行模式 (计划 PRO-8)
+/// JSONL stdio 一次性运行模式
 ///
 /// 与 `server` 模式共用同一套 Wire 协议与同一份会话驱动代码, 只把传输换成 stdin/stdout
 /// 的逐行 JSON (见 `agentxx::agent::JsonlAgentIOTransport`):

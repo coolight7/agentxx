@@ -80,7 +80,7 @@ public:
         return lastHelloAck_;
     }
 
-    /// 当前连接阶段 (计划 PRO-5); 见 [WireConnectionStage]
+    /// 当前连接阶段; 见 [WireConnectionStage]
     WireConnectionStage stage() const noexcept override;
 
     /// 更新连接阶段 (握手完成/被拒/重连/关闭时调用; 阶段变化记 Info 日志)
@@ -129,12 +129,12 @@ private:
 
     // 重连增量重放状态
     std::atomic<uint64_t>       lastDeltaSeq_{0};
-    /// 已持有的展示历史序号 (计划 STO-4; 由 Sync 快照更新, 重连时经 hello 回传)
+    /// 已持有的展示历史序号 (由 Sync 快照更新, 重连时经 hello 回传)
     std::atomic<uint64_t>       lastViewSeq_{0};
     std::string                 lastTailHash_;
     std::string                 helloSessionId_; // 首次 connect 时的 sessionId, 重连时复用
     std::string                 helloLanguage_;  // 首次 connect 时的 language, 重连时复用
-    /// 首次 connect 时的协议版本与能力声明 (计划 PRO-3), 重连时复用
+    /// 首次 connect 时的协议版本与能力声明, 重连时复用
     int                         helloProtocolVersion_ = 0;
     std::vector<std::string>    helloCapabilities_;
     std::optional<WireHelloAck> lastHelloAck_;   // 最近一次握手成功的 HelloAck
@@ -146,7 +146,7 @@ private:
 
     std::atomic<bool> stopped_{false};
     std::atomic<bool> connected_{false};
-    /// 连接阶段 (计划 PRO-5): 端点可能从其它线程读取/设置, 用原子保存枚举底层类型
+    /// 连接阶段: 端点可能从其它线程读取/设置, 用原子保存枚举底层类型
     std::atomic<uint8_t> stage_{static_cast<uint8_t>(WireConnectionStage::Unhandshaken)};
 };
 

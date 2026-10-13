@@ -217,7 +217,7 @@ public:
     PermissionDecision
         explainTarget(std::string_view path, size_t scope, std::string_view sessionId) const;
 
-    // ---------------- 执行前目标复验 (计划 SEC-5) ----------------
+    // ---------------- 执行前目标复验 ----------------
 
     /// 复验结果: 批准时的目标与当前参数解析出的目标是否一致
     struct ReverifyResult {
@@ -362,7 +362,7 @@ private:
 
     std::weak_ptr<agentxx::events::EventBus> registeredBus_;
     size_t                                   checkServerId_       = 0;
-    /// 执行前目标复验服务注册 id (计划 SEC-5)
+    /// 执行前目标复验服务注册 id
     size_t                                   reverifyServerId_    = 0;
     size_t                                   setIsolationSubId_   = 0;
     size_t                                   clearIsolationSubId_ = 0;

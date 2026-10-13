@@ -850,7 +850,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             st->events->unsubscribe(st->dynSub);
         }
 
-        // 8.4 同轮派发中退订后续 handler: 未开始的回调不得执行 (F18)
+        // 8.4 同轮派发中退订后续 handler: 未开始的回调不得执行
         struct UnsubNextState {
             const AgentxxClientEventsIface* events = nullptr;
             PluginxxSubscription*           next   = nullptr;
@@ -2532,7 +2532,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         XX_TEST_EXPECT_FALSE(top->userDisabled);
     }
 
-    // ---- 25. 客户端旧 host 指针在卸载后安全失败 (P0-1 / R2, client 侧) ----
+    // ---- 25. 客户端旧 host 指针在卸载后安全失败 (client 侧) ----
     // 插件保存的 host 指针跨卸载继续调用时必须安全失败: 控制块地址稳定,
     // 实例失效后各入口返回失败值, 且同名重载后旧指针不会转交新实例。
     {
@@ -2585,7 +2585,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         }
     }
 
-    // ---- 26. 客户端加载期 start 失败的真实 DSO 回滚 (R2 遗留: UI 项) ----
+    // ---- 26. 客户端加载期 start 失败的真实 DSO 回滚 (UI 项) ----
     // 测试插件 start 依次注册 状态栏项/面板/Info 段落/命令/订阅, 每步注册后
     // 立即经句柄自检 (update 必须成功, 保证"走到最后一步"意味着前面的注册
     // 真实生效), 然后主动失败: 主程序必须回滚全部 UI 注册与订阅。
@@ -2684,7 +2684,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
 #endif
     }
 
-    // ---- 27. 工具语义渲染缓存容量上限 (P1-3 遗留) ----
+    // ---- 27. 工具语义渲染缓存容量上限 ----
     // 长会话按 tool_call_id 持续写入不再无限增长: 超限淘汰最旧条目并回收
     // 其版本记录; 插件失效时的版本号仍单调变化 (旧快照重建信号)。
     {

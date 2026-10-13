@@ -35,7 +35,7 @@ struct PromptSessionVars {
     std::string platform;
 };
 
-/// 附加段的元数据 (计划 PRM-2)
+/// 附加段的元数据
 ///
 /// - `order`: 排序号 (小的在前; 同值按键名字典序稳定排序), 替代原先的硬编码键顺序
 /// - `source`: 来源标识 (内置 / 插件名), 供诊断与"同名裁决"展示; 不参与拼接
@@ -78,7 +78,7 @@ public:
     ///   order=0 处理
     std::map<std::string, std::string, std::less<>> appendSystemPrompts;
 
-    /// 附加段元数据表 (键与 [appendSystemPrompts] 一致; 计划 PRM-2)
+    /// 附加段元数据表 (键与 [appendSystemPrompts] 一致)
     std::map<std::string, PromptSectionMeta, std::less<>> appendSystemPromptMeta;
 
     /// 写入/更新一个附加段 (正文 + 元数据; 同键覆盖)

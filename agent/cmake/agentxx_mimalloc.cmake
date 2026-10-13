@@ -8,11 +8,11 @@
 #
 # 作用范围 (只作用于**最终程序**, 不作用于动态库):
 # - agentxx_cli / agentxx_test / agentxx_benchmark: 由本文件接入分配器
-# - libagentxx.so (FFI/嵌入) 与插件动态库: 不接入, 跟随宿主进程的分配器
-#   (动态库若自行覆盖 malloc, 宿主的 SQL/运行时等模块仍走各自的分配器, 反而
+# - libagentxx.so (FFI/嵌入) 与插件动态库: 不接入, 跟随最终程序的分配器
+#   (动态库若自行覆盖 malloc, 主程序的 SQL/运行时等模块仍走各自的分配器, 反而
 #    可能跨模块 free 不匹配); 内置合并进 libagentxx 的插件随最终程序一起使用
 #   mimalloc
-# - 宿主进程使用静态链接的插件源码 (内置合并) 时, 分配器由最终程序统一提供
+# - 最终程序静态链接插件源码 (内置合并) 时, 分配器由它统一提供
 #
 # 用法 (在 client/test/benchmark 的目标定义之后调用; SHARED 模式会追加目标的
 # 构建期搜索路径, 故需排在 agentxx_set_own_dir_rpath 之后):

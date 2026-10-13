@@ -582,7 +582,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
             }
         }
 
-        // ---- 15b. JS Promise 拒绝映射为工具失败 (F21: 拒绝不再当成成功文本) ----
+        // ---- 15b. JS Promise 拒绝映射为工具失败 (拒绝不再当成成功文本) ----
         {
             auto tool = ctx->toolRegistry->find("js_reject_demo");
             XX_TEST_EXPECT_TRUE(tool != nullptr);
@@ -615,7 +615,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
             }
         }
 
-        // ---- 16a. callTool 始终返回 Promise (F17: 不再同步阻塞 JS 线程) ----
+        // ---- 16a. callTool 始终返回 Promise (不再同步阻塞 JS 线程) ----
         {
             auto tool = ctx->toolRegistry->find("js_calltool_kind");
             XX_TEST_EXPECT_TRUE(tool != nullptr);
@@ -949,7 +949,7 @@ throw new Error("top-level rollback probe");
         }
     }
 
-    // ---- 25. M8 回归: 用户手动禁用的插件不被 enable 级联恢复 ----
+    // ---- 25. 回归: 用户手动禁用的插件不被 enable 级联恢复 ----
     {
         auto engine25 = co_await ctx->pluginManager->loadPluginAsync(jsLib);
         XX_TEST_EXPECT_TRUE(engine25 != nullptr);
@@ -3128,7 +3128,7 @@ throw new Error("top-level rollback probe");
         }
     }
 
-    // ---- 40. 加载期 start 失败的真实 DSO 回滚 (R2 遗留) ----
+    // ---- 40. 加载期 start 失败的真实 DSO 回滚 ----
     // 测试插件 start 依次注册 工具/图类型/订阅/prompt/hook/能力/资源 后主动失败:
     // - 主程序必须回滚全部已生效注册 (工具/图类型/订阅/prompt/hook 中间件/能力/资源);
     // - 再次加载同一 DSO, 同名注册必须全部重新成功 (插件经 probe 事件

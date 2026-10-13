@@ -1,4 +1,4 @@
-/// test_observability —— 关键指标与诊断包 (计划 OBS-3 / OBS-4)
+/// test_observability —— 关键指标与诊断包
 ///
 /// 覆盖:
 /// 1. KeyMetrics: 轮次起止与终态分类、首 token 延迟只记一次、模型调用用量与错误

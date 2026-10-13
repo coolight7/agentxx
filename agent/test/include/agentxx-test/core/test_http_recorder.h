@@ -7,7 +7,7 @@
 namespace agentxx {
 namespace test {
 
-/// HTTP 录制/回放夹具测试 (计划 LLM-13)
+/// HTTP 录制/回放夹具测试
 /// - 分帧/摘要: 请求摘要稳定性, 固定装置 JSON 与文件往返
 /// - 端到端: 录制 (真实 provider → 本地录制器 → 本地 LLM 模拟器) → 回放 (provider → 回放器)
 ///   两次调用的结果一致; 固定装置里没有凭据取值

@@ -110,7 +110,7 @@ asio::awaitable<bool> WsAgentIOTransport::connect(const WireHello& hello) {
     // 记录 sessionId 供重连时复用
     helloSessionId_ = hello.sessionId;
     helloLanguage_  = hello.language;
-    // 协议版本与能力声明 (计划 PRO-3): 重连时沿用同一份声明
+    // 协议版本与能力声明: 重连时沿用同一份声明
     helloProtocolVersion_ = hello.protocolVersion;
     helloCapabilities_    = hello.capabilities;
 
@@ -138,7 +138,7 @@ asio::awaitable<bool> WsAgentIOTransport::connect(const WireHello& hello) {
                 );
                 if (auto* ack = std::get_if<WireHelloAck>(&msg)) {
                     lastHelloAck_ = *ack;
-                    // 服务端明确拒绝 (鉴权失败 / 协议版本不受支持, 见计划 PRO-3):
+                    // 服务端明确拒绝 (鉴权失败 / 协议版本不受支持):
                     // 握手按失败处理, 原因经 lastHelloAck().error 暴露给调用方展示;
                     // 继续"连接成功"会让调用方在错误的前提下工作
                     if (!ack->ok) {
@@ -355,7 +355,7 @@ asio::awaitable<void> WsAgentIOTransport::readLoop() {
                 }
             } else if (auto* sync = std::get_if<WireSyncPayload>(&wireMsg.value())) {
                 lastTailHash_ = sync->tailHash;
-                // 展示历史序号 (计划 STO-4): 记录快照末尾序号, 重连时按它请求增量补拉
+                // 展示历史序号: 记录快照末尾序号, 重连时按它请求增量补拉
                 if (sync->lastViewSeq > 0) {
                     lastViewSeq_.store(sync->lastViewSeq, std::memory_order_release);
                 }

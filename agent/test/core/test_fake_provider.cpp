@@ -1,4 +1,4 @@
-/// test_fake_provider —— 假 provider 扩展点 (计划 LLM-5 / TST-1)
+/// test_fake_provider —— 假 provider 扩展点
 ///
 /// 背景: 现有 LLM 交互用例多经本地 HTTP 模拟服务器验证, 依赖端口、服务线程与
 /// HTTP 协议栈。本模块改为经 `ModelProviderRegistry::setProvider` 注入假 provider
@@ -12,7 +12,7 @@
 /// - 错误注入: 不可重试 (401) 立即结束; 可重试 (500 + retry_after) 退避后成功
 /// - 溢出压缩: 400 + context_length_exceeded 触发一次压缩后重试成功
 /// - 取消: 等待期间的取消立即中断未完成的请求 (不必等延迟走完)
-/// - 用量记账: 假 provider 上报的用量进入会话用量记录 (STO-8 的调用点)
+/// - 用量记账: 假 provider 上报的用量进入会话用量记录
 #include "agentxx-test/core/test_fake_provider.h"
 
 #include "agentxx-test/core/fake_provider.h"
@@ -386,7 +386,7 @@ asio::awaitable<void> test_fake_provider_cancel() {
 
 // ---------------------------------------------------------------------------
 // 6) 用量记账: 假 provider 上报的用量进入会话用量记录 (记账调用点在 modelcall)
-//    含缓存读/写量 (计划 LLM-8: Anthropic 的 cache_read/cache_creation)
+//    含缓存读/写量 (Anthropic 的 cache_read/cache_creation)
 // ---------------------------------------------------------------------------
 asio::awaitable<void> test_fake_provider_usage_ledger() {
     auto dir = makeTempDir();
@@ -430,7 +430,7 @@ asio::awaitable<void> test_fake_provider_usage_ledger() {
                 XX_TEST_EXPECT_EQ(recent[0].cachedPromptTokens, int64_t{7});
                 XX_TEST_EXPECT_EQ(recent[0].cacheWritePromptTokens, int64_t{11});
             }
-            // 关键指标: 缓存读/写量进聚合 (OBS-3)
+            // 关键指标: 缓存读/写量进聚合
             XX_TEST_EXPECT_EQ(agent->agentContext->metrics->cachedTokens(), int64_t{7});
             XX_TEST_EXPECT_EQ(agent->agentContext->metrics->cacheWriteTokens(), int64_t{11});
 

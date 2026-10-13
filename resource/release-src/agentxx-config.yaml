@@ -57,7 +57,7 @@ data_dir: default
 #   - permission.mode: ask 的默认放行范围 (该目录内读写放行, 其余询问)
 #   - filesystem 工具与权限校验的相对路径解析基准 (如 "src/main.cpp")
 #   - 命令执行工具 (agentxx_execute_*_command) 子进程的初始工作目录
-#   - 插件宿主信息 projectRoot (如 codegraph 未配置 paths 时默认索引该目录)
+#   - 主程序传给插件的 projectRoot (如 codegraph 未配置 paths 时默认索引该目录)
 # work_dir: ${AGENTXX_WORK_DIR}
 
 # === 权限配置
@@ -292,7 +292,7 @@ memory:
 #         直接经内置注册表加载; 如 `builtin://agentxx_filesystem`);
 #         也可简写 `name: <name>` 等价于 `path: builtin://<name>` (仅内置)
 # - enabled: 是否启用 (默认 true; false 跳过加载)
-# - args:    插件参数 json (整体传递给插件, 宿主不解析其字段语义;
+# - args:    插件参数 json (整体传递给插件, 主程序不解析其字段语义;
 #            参数含义由插件自行定义)
 # - config:  插件配置文件所在目录或文件路径 (可指向文件或目录;
 #            支持 `~`/`${VAR}`/相对路径, 归一化为绝对路径后透传给插件,

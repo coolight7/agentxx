@@ -550,7 +550,7 @@ int PluginManager::setGraphJson(PluginInstance* inst, PluginxxStringView graph_j
     if (!ctx) {
         return -1;
     }
-    // 独占 slot (计划 PLG-4): 图定义同时只允许一个插件实例占用。
+    // 独占 slot: 图定义同时只允许一个插件实例占用。
     // 两个插件交替覆盖时, 任何一方卸载都无法判断该恢复成哪一份定义;
     // 因此先占用者继续修改, 后到者明确被拒绝 (而不是静默覆盖)。
     if (!graphDefinitionOwner_.empty() && graphDefinitionOwner_ != inst->name) {

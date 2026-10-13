@@ -348,7 +348,7 @@ struct SessionInfo {
     std::string sessionId;
     std::string title;
     int64_t     lastActiveMs = 0;
-    /// 检索命中片段 (计划 RET-1a; 仅检索结果填充, 普通列表为空)
+    /// 检索命中片段 (仅检索结果填充, 普通列表为空)
     /// - 正文命中时为关键词附近的文本片段; 标题命中时为空 (标题本身即命中处)
     std::string snippet;
 };
@@ -525,14 +525,14 @@ inline size_t estimateWireDeltaBytes(const WireDelta& delta) {
     return bytes;
 }
 
-/// 输入投递模式 (`WireUserInput.delivery`; 计划 LOOP-2)
+/// 输入投递模式 (`WireUserInput.delivery`)
 ///
 /// - `next-turn` (默认): 排队等待当前轮次结束后作为新轮次执行
 /// - `next-step`: 在当前轮次的下一个 modelcall 安全边界注入 (写入会话权威上下文),
 ///   不打断正在进行的 provider 流; 空闲时等同 `next-turn`
 /// - `inject`: 只进入下一次请求的动态注入队列 (请求级可见, 不改写权威上下文,
 ///   也不唤醒会话); 空闲时保持待注入, 直到下一次请求装配时被取走
-/// - `collect`: 在短暂静默窗口内合并同一客户端的连续输入 (计划 LOOP-11),
+/// - `collect`: 在短暂静默窗口内合并同一客户端的连续输入,
 ///   窗口结束后按 `next-turn` 语义提交为一条
 ///
 /// 放在会话类型头 (而非 wire 头): 会话内待注入输入与消息队列条目都使用同一套
@@ -563,12 +563,12 @@ struct MessageQueueItem {
     int64_t                      createdAtMs = 0; ///< 创建时间戳 (毫秒)
     /// 投递模式 (取值见 agentxx::agent::InputDelivery; 空 = next-turn)
     std::string delivery;
-    /// 是否为进程重启后恢复的待确认输入 (计划 LOOP-1):
+    /// 是否为进程重启后恢复的待确认输入:
     /// 恢复项不会自动执行, 由用户确认 (发送新输入解除暂停) 或删除
     bool recovered = false;
 };
 
-/// 会话内待注入的输入 (next-step / inject; 计划 LOOP-2)
+/// 会话内待注入的输入 (next-step / inject)
 ///
 /// 与 MessageQueueItem 的区别: 排队条目等待"下一个轮次", 本结构等待"下一个
 /// 安全的 modelcall 边界", 因此不进入消息队列, 也不唤醒会话。
@@ -576,7 +576,7 @@ struct SessionPendingInput {
     std::string id;    ///< 条目标识 (与持久化收件箱 session_input.id 对应; 可空)
     std::string text;  ///< 文本内容
     std::string model; ///< 本条输入指定的待应用模型 (空 = 默认/当前)
-    /// 来源 (计划 LOOP-2 要求"记录来源"): "user" = 用户, 其余为插件名/内部来源
+    /// 来源 (要求"记录来源"): "user" = 用户, 其余为插件名/内部来源
     std::string source = "user";
     /// 投递模式 (InputDelivery::NextStep / Inject)
     std::string delivery;
@@ -585,7 +585,7 @@ struct SessionPendingInput {
     int64_t                      createdAtMs = 0;
 };
 
-/// 带持久化序号的展示历史消息 (计划 STO-4)
+/// 带持久化序号的展示历史消息
 /// - `seq` 为该消息在会话库 `view_message.seq` 中的序号 (会话内单调递增)
 /// - 断线重连增量补拉时按序号取差量 (见 SessionStore::loadViewMessagesAfter)
 struct SequencedViewMessage {
@@ -615,12 +615,12 @@ struct WireSyncPayload {
     /// 消息队列状态 (取值见 SessionQueueState; 空 = 旧服务端未提供)
     std::string queueState;
 
-    /// 本快照最后一条展示消息的持久化序号 (计划 STO-4; 0 = 无消息/未提供)
+    /// 本快照最后一条展示消息的持久化序号 (0 = 无消息/未提供)
     /// - 客户端记录后在重连 hello 中回传 (`WireHello::afterViewSeq`), 请求
     ///   "该序号之后"的增量补拉, 避免重连时重传整个尾窗
     uint64_t lastViewSeq = 0;
 
-    /// 本批消息是否为**增量补拉** (计划 STO-4)
+    /// 本批消息是否为**增量补拉**
     /// - true: `messages` 是既有历史尾部的追加内容, 客户端应按 msg.id 去重后追加,
     ///   不得整体替换本地历史
     /// - false (默认): 全量或尾窗快照, 客户端整体替换本地历史

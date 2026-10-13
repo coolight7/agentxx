@@ -64,7 +64,7 @@ inline constexpr std::string_view kFormCancelActionId = middleware::kInterruptCa
 /// - 支持的控件形态: buttons / select / checkbox / switch / text / number
 const pluginxx::ui::Capabilities& tuiUiCapabilities();
 
-/// 输入栏是否使用终端自身的光标显示输入位置 (计划 UI-5)
+/// 输入栏是否使用终端自身的光标显示输入位置
 ///
 /// - 输入元素在聚焦时使用**可见光标形状** (竖条/方块), 终端据此把系统光标画在
 ///   光标格上; 中文/日文输入法的候选框因此出现在正确位置 (否则会跑到屏幕角落);

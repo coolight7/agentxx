@@ -11,7 +11,7 @@
 namespace agentxx {
 namespace util {
 
-/// 关键指标 (计划 OBS-3)
+/// 关键指标
 ///
 /// 背景: 会话质量与成本问题 (首 token 变慢、工具大量失败、压缩频繁、上下文逼近上限)
 /// 在运行期没有任何可读的汇总, 只能翻日志。这里把少量**低成本**计数与计时集中在
@@ -49,7 +49,7 @@ public:
     // ---- 模型调用 ----
 
     /// 一次模型调用结算 (成功路径); usage 可为 0 (provider 未上报)
-    /// - cacheWriteTokens: 写入 prompt 缓存的 token 数 (仅 Anthropic 回报, 计划 LLM-8)
+    /// - cacheWriteTokens: 写入 prompt 缓存的 token 数 (仅 Anthropic 回报)
     void noteModelCall(
         int64_t promptTokens,
         int64_t completionTokens,
@@ -125,7 +125,7 @@ public:
     int64_t cachedTokens() const noexcept {
         return cachedTokens_.load(std::memory_order_relaxed);
     }
-    /// 写入 prompt 缓存的 token 累计 (仅 Anthropic 回报; 计划 LLM-8)
+    /// 写入 prompt 缓存的 token 累计 (仅 Anthropic 回报)
     int64_t cacheWriteTokens() const noexcept {
         return cacheWriteTokens_.load(std::memory_order_relaxed);
     }

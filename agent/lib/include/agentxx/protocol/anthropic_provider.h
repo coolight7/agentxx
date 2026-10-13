@@ -63,7 +63,7 @@ public:
     /// 将 neograph 工具定义转换为 Anthropic 格式
     static utilxx_base::Json convertTools(const std::vector<neograph::ChatTool>& tools);
 
-    /// 组装 Anthropic 用量 (计划 LLM-8; 非流式与流式两条路径共用的唯一入口)
+    /// 组装 Anthropic 用量 (非流式与流式两条路径共用的唯一入口)
     ///
     /// 上游语义与 OpenAI 不同: `input_tokens` **只统计未命中缓存的输入**,
     /// 命中缓存的读取量与写入量分别是 `cache_read_input_tokens` /
@@ -98,7 +98,7 @@ public:
         );
     }
 
-    /// 在请求体里加 prompt 缓存断点 (计划 LLM-8; 仅 `ModelConfig::cacheControl` 打开时调用)
+    /// 在请求体里加 prompt 缓存断点 (仅 `ModelConfig::cacheControl` 打开时调用)
     ///
     /// 断点加在**稳定前缀**的末尾, 使上游能把这些内容缓存下来供后续请求命中:
     /// ① 系统提示 (system 由字符串转内容块数组, 末块带断点);
@@ -295,7 +295,7 @@ public:
             if (msgView.valid() && msgView.is_object()) {
                 auto usageView = msgView["usage"];
                 if (usageView.valid() && usageView.is_object()) {
-                    // 用量计算方式 (计划 LLM-8): input_tokens 只含未命中缓存的输入,
+                    // 用量计算方式: input_tokens 只含未命中缓存的输入,
                     // 缓存读/写量单独回报, 统一由 [applyUsage] 折算成 prompt_tokens
                     applyUsage(
                         completion,
@@ -388,7 +388,7 @@ public:
             auto usageView = jv["usage"];
             if (usageView.valid() && usageView.is_object()) {
                 // 缺失字段沿用已知值: output_tokens 缺失保持原值 (与原行为一致),
-                // input_tokens / 缓存量缺失时沿用 message_start 报过的值 (计划 LLM-8)
+                // input_tokens / 缓存量缺失时沿用 message_start 报过的值
                 const auto detail = agentxx::protocol::readUsageDetail(completion);
                 const int  knownInputTokens
                     = completion.usage.prompt_tokens

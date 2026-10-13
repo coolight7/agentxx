@@ -67,7 +67,7 @@ jobs:
 
       # ===== Linux 环境依赖准备 =====
       # - 本项目依赖库 (Boost/OpenSSL) 由构建脚本自行从源码构建, 不再依赖
-      #   apt 安装的库 (libssl-dev 等); 仅保留编译链路本身需要的工具。
+      #   apt 安装的库 (libssl-dev 等); 仅保留编译流程本身需要的工具。
       # - ragel 是 hyperscan 代码生成器 (构建期工具), apt 提供则用之;
       #   若镜像缺失, 构建脚本会下载源码自建。
       # - 高版本 GCC: 项目要求 C++26 (推荐 gcc >= 14)。GitHub 托管 runner

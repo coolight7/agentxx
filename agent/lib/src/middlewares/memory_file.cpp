@@ -165,7 +165,7 @@ asio::awaitable<void>
     if (!state->cacheContextContent.empty()) {
         auto agentCtxPtr = agentContext.lock();
         if (agentCtxPtr && agentCtxPtr->middlewareHandleContext) {
-            // 稳定附加段按来源写入 (计划 PRM-1): 同一来源每轮覆盖, 不再逐轮追加 ——
+            // 稳定附加段按来源写入: 同一来源每轮覆盖, 不再逐轮追加 ——
             // 旧实现把片段 push_back 进 vector, 每轮都会把上一轮的片段再拼一次,
             // 系统提示词逐轮变长
             // - 记忆文件内容随 system 消息一起进稳定前缀 (上游 KV/前缀缓存可命中);

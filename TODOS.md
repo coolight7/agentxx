@@ -38,5 +38,5 @@ D2  插件能否自带   ui  /  client  侧插件能否注册渲染器
 ，无中断渲染器。
   •  A  只做  (a) ：新增   agentxx.agent.interrupt  v1（ request_interrupt_async(inputs_json, ui_json, timeout, cb) ），语义= 工具执行内阻塞式询问
 （不参与图  resume、不落历史）； B  (a)+(b)  再加  client  侧按  node/handleName  渲染器； C  暂缓  3.3 ； D  完整图中断/resume ：跨  C  ABI
- 无法展开插件协程帧，需宿主外层包装"中断-恢复"，成本与语义复杂度高。
-  •  建议 ：先   A （阻塞式），(b)  等真实宿主需求。
+ 无法展开插件协程帧，需主程序外层包装"中断-恢复"，成本与语义复杂度高。
+  •  建议 ：先   A （阻塞式），(b)  等真实使用方需求。

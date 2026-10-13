@@ -28,7 +28,7 @@ int64_t steadyNowMs() {
         .count();
 }
 
-/// 持久化写入失败时提示一次 (计划 STO-9)
+/// 持久化写入失败时提示一次
 ///
 /// - 仅在"同一失败原因尚未提示过"时推送一条 `WireDelta::MessageUITip`
 ///   (客户端插入提示消息), 避免每次写失败都刷屏
@@ -60,7 +60,7 @@ void reportPersistFailure(
     session->io->sendToPeer(std::move(delta));
 }
 
-/// 组装会话持久化回调 (计划 STO-9: 每次写入后检查写失败并提示一次)
+/// 组装会话持久化回调 (每次写入后检查写失败并提示一次)
 /// - 捕获 sessionId 副本, 回调生命周期随 session, 无悬垂风险;
 ///   session 用 weak_ptr 避免回调与 session 互相持有
 SessionStoreHooks makeSessionStoreHooks(
@@ -105,7 +105,7 @@ void appendPromptSegment(std::string& combined, const std::string& segment) {
 }
 
 /// 取附加段表 (来源 → 正文; 稳定附加段与动态段同形, 只有通道键不同)
-/// - 键排序的 map: 同一来源每轮覆盖写入 (不累积), 顺序稳定 (计划 PRM-1);
+/// - 键排序的 map: 同一来源每轮覆盖写入 (不累积), 顺序稳定;
 ///   旧实现用 vector 追加, 每轮都会把上一轮的片段再拼一次 (系统提示词逐轮变长)
 /// - 空正文的条目跳过
 ///
@@ -206,7 +206,7 @@ std::string Session::appendViewMessage(ViewMessage msg) {
     chainHash.append(msg.toJson().dump());
     auto id = fmt::format("msg_{:06d}", ++msgIdCounter_);
     msg.id  = id;
-    // 展示历史持久化序号 (计划 STO-4): 会话内单调递增, 与库里 view_message.seq 一致
+    // 展示历史持久化序号: 会话内单调递增, 与库里 view_message.seq 一致
     const auto viewSeq = ++viewSeqCounter_;
     viewMessages.push_back(std::move(msg));
     // 维护 msgId → 下标索引 (updateViewMessage 的 O(1) 定位用)
@@ -782,7 +782,7 @@ std::string AgentContext::buildSystemPromptStable(std::string_view sessionId) co
     }
     std::string combined;
     appendPromptSegment(combined, agentConfig->prompt.systemPrompt);
-    // 静态附加段: 按段落 order 排序 (计划 PRM-2), 同 order 按键名字典序稳定排列
+    // 静态附加段: 按段落 order 排序, 同 order 按键名字典序稳定排列
     for (const auto& section : agentConfig->prompt.orderedAppendSections()) {
         appendPromptSegment(combined, std::string{section.text});
     }

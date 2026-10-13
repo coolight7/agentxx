@@ -23,7 +23,7 @@ namespace io {
 /// - 附件 (Base64) 走同行内联, 因此上限取得比常见请求大得多
 inline constexpr size_t kJsonlMaxLineBytes = 64u * 1024u * 1024u;
 
-/// 一行 JSONL 的解码结果 (计划 PRO-8)
+/// 一行 JSONL 的解码结果
 struct JsonlFrame {
     /// 解析出的消息; 为空表示该行没有产出消息 (空行被跳过, 或 `error` 非空)
     std::optional<WireMessage> message;
@@ -47,7 +47,7 @@ std::string jsonlEncodeMessage(const WireMessage& msg);
 
 } // namespace io
 
-/// stdio JSONL 传输 (计划 PRO-8: 一次性运行 / 脚本驱动的进程外客户端)
+/// stdio JSONL 传输 (一次性运行 / 脚本驱动的进程外客户端)
 ///
 /// 用途: 让外部脚本或其它语言的进程直接经 stdin/stdout 驱动一个 agent 会话,
 /// 不需要 WebSocket 服务, 也不需要写 C++ 客户端。协议与 `server` 模式相同

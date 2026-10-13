@@ -1,4 +1,4 @@
-/// 后台任务登记表实现 (计划 ARC-5, 见 agentxx/util/task_scope.h)
+/// 后台任务登记表实现 (见 agentxx/util/task_scope.h)
 #include "agentxx/util/task_scope.h"
 
 #include "agentxx/util/exception.h"

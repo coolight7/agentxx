@@ -5,7 +5,7 @@
 #   dart pub get
 #   dart run ffigen
 #
-# 输出: lib/agentxx_ffi_bindings.dart —— 供宿主 dart 项目 (../../dart/) 以
+# 输出: lib/agentxx_ffi_bindings.dart —— 供嵌入方 dart 项目 (../../dart/) 以
 # DynamicLibrary.open('libagentxx.dll') 加载后按名查找导出符号使用。
 
 name: AgentxxFfiBindings

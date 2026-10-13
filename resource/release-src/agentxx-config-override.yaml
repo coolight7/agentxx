@@ -88,7 +88,7 @@ memory:
 #         直接经内置注册表加载; 如 `builtin://agentxx_filesystem`);
 #         也可简写 `name: <name>` 等价于 `path: builtin://<name>` (仅内置)
 # - enabled: 是否启用 (默认 true; false 跳过加载)
-# - args:    插件参数 json (整体传递给插件, 宿主不解析其字段语义;
+# - args:    插件参数 json (整体传递给插件, 主程序不解析其字段语义;
 #            参数含义由插件自行定义)
 # - config:  插件配置文件所在目录或文件路径 (可指向文件或目录;
 #            支持 `~`/`${VAR}`/相对路径, 归一化为绝对路径后透传给插件,

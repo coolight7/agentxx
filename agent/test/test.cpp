@@ -187,7 +187,7 @@ int main(int argn, char** argv) {
     auto testLogSink = std::make_shared<TestWarnErrorLogSink>();
     utilxx_base::LogDispatcher::instance().addSink(testLogSink);
 
-    // 凭据环境清理 (计划 TST-9): 见 clearCredentialEnv 说明
+    // 凭据环境清理: 见 clearCredentialEnv 说明
     {
         const auto cleared = agentxx::test::clearCredentialEnv();
         if (!cleared.empty()) {

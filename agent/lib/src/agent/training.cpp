@@ -234,7 +234,7 @@ utilxx_base::Json normalizePromptPatch(const utilxx_base::Json& parsed) {
     if (parsed.contains("appendSystemPrompts") && parsed["appendSystemPrompts"].is_object()) {
         utilxx_base::Json append = utilxx_base::Json::object();
         for (const auto& item : parsed["appendSystemPrompts"].items()) {
-            // 兼容两种形态: 纯字符串 (旧) 与 {text, order, source} 对象 (PRM-2);
+            // 兼容两种形态: 纯字符串 (旧) 与 {text, order, source} 对象;
             // 补丁只带正文 (order/source 由主程序写入, 不参与模型变异)
             std::string text;
             if (item.second.is_string()) {

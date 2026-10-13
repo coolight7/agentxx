@@ -18,7 +18,7 @@ static constexpr std::string_view kStableSourceSkills = "skills";
 std::string SkillMiddlewareHandle::formatSkillsMetadataList() {
     std::string oss;
     for (const auto& item : skillCache.skillData) {
-        // 来源展示给模型 (计划 PRM-5): 同名技能已按优先级裁决, 每个名字一条
+        // 来源展示给模型: 同名技能已按优先级裁决, 每个名字一条
         oss += fmt::format(
             R"(
 - **{}** Skill: {}
@@ -192,7 +192,7 @@ asio::awaitable<void> SkillMiddlewareHandle::onAgentcallStartFunc(neograph::grap
             );
         }
 
-        // ---- 同名裁决 (计划 PRM-5) ----
+        // ---- 同名裁决 ----
         // 优先级数字小的先注册 (会话/项目 < 用户 < 插件 < 内置): 同名技能只保留
         // 优先级最高的一份, 其余记为被遮蔽并记日志 —— 模型与 UI 看到的清单里
         // 每个名字只有一条, 且带来源
@@ -289,7 +289,7 @@ You have access to a skills library that provides specialized capabilities and d
             skillState->cachedResourceEpoch = resourceEpoch;
         }
 
-        // 稳定附加段按来源写入 (计划 PRM-1): 同一来源每轮覆盖, 不再逐轮追加
+        // 稳定附加段按来源写入: 同一来源每轮覆盖, 不再逐轮追加
         // - 技能清单随 system 消息一起进稳定前缀 (上游 KV/前缀缓存可命中);
         //   内容只在插件增删技能目录时改写, 改写会让该会话的前缀缓存失效一次
         auto& sections = agentCtxPtr->middlewareHandleContext->getGraphDataItemValue<

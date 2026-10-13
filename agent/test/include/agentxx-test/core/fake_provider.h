@@ -1,5 +1,5 @@
 #pragma once
-/// 假 provider (计划 LLM-5 / TST-1): 不经网络直接产出固定流、错误、延迟与工具调用。
+/// 假 provider: 不经网络直接产出固定流、错误、延迟与工具调用。
 ///
 /// 用途: 重试、压缩、中断、取消与工具循环用例共用同一注入扩展点, 不依赖真实网络、
 /// 额度或本地 HTTP 模拟服务器。注入点是 `ModelProviderRegistry::setProvider`
@@ -68,7 +68,7 @@ struct FakeStep {
     int promptTokens     = 100;
     int completionTokens = 50;
     int cachedTokens     = 0;
-    /// 写入 prompt 缓存的 token 数 (计划 LLM-8; 仅 Anthropic 类 provider 会回报)
+    /// 写入 prompt 缓存的 token 数 (仅 Anthropic 类 provider 会回报)
     int cacheWriteTokens = 0;
     int reasoningTokens  = 0;
 };
@@ -254,7 +254,7 @@ public:
         completion.usage.total_tokens         = step.promptTokens + step.completionTokens;
         completion.usage.cached_prompt_tokens = step.cachedTokens;
         completion.usage.reasoning_tokens     = step.reasoningTokens;
-        // 缓存写入量 (计划 LLM-8): 真实 Anthropic provider 也走这条额外通道,
+        // 缓存写入量: 真实 Anthropic provider 也走这条额外通道,
         // 由模型调用节点取出写用量记录 (取用后该键置空, 不进入会话消息)
         if (step.cacheWriteTokens > 0) {
             agentxx::protocol::setUsageDetail(

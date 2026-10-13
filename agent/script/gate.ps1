@@ -1,4 +1,4 @@
-# gate.ps1 —— 一键质量检查 (Windows 版; 计划 TST-8)
+# gate.ps1 —— 一键质量检查 (Windows 版)
 #
 # 与 agent/script/gate.sh 对应的 Windows 实现: 构建 (可选) → 全模块 fail-fast 测试
 # (含 boundaries 边界检查 / wire_roundtrip 协议往返 / config_validation 配置校验 /

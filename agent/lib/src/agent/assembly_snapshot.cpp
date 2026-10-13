@@ -1,4 +1,4 @@
-/// 启动装配快照实现 (计划 ARC-6 / TOOL-12 / CFG-3 / PLG-10)
+/// 启动装配快照实现
 ///
 /// 这里只做"把已经存在的装配事实整理成一份 JSON/文本", 不引入新的装配逻辑:
 /// - 配置侧快照直接读 AgentConfig;
@@ -124,7 +124,7 @@ void appendPluginEntries(const AgentContext& ctx, utilxx_base::Json& pluginsOut)
         // 功能点: 本实例声明的点数 / 登记的实现数 (禁用/卸载后回 0)
         item["feature_point_count"] = v.featurePointCount;
         item["feature_impl_count"]  = v.featureImplCount;
-        // 统一注册清单合计 (计划 PLG-1): 0 = 该实例当前没有向主程序贡献任何注册
+        // 统一注册清单合计: 0 = 该实例当前没有向主程序贡献任何注册
         item["registration_total"]  = v.registrationTotal;
         item["prompt_key_count"]    = v.promptKeyCount;
         item["skill_dir_count"]     = v.skillDirCount;
@@ -381,7 +381,7 @@ utilxx_base::Json buildRuntimeSnapshot(const AgentContext& ctx) {
     } else {
         graph["name"] = "";
     }
-    // 执行图定义的独占占用者 (计划 PLG-4): 非空表示当前图定义由某插件覆盖
+    // 执行图定义的独占占用者: 非空表示当前图定义由某插件覆盖
     graph["definition_owner"]
         = ctx.pluginManager ? ctx.pluginManager->graphDefinitionOwner() : std::string{};
     root["graph"] = std::move(graph);
@@ -435,7 +435,7 @@ utilxx_base::Json buildRuntimeSnapshot(const AgentContext& ctx) {
     components["failed"] = std::move(failures);
     root["components"]   = std::move(components);
 
-    // ---- 关键指标 (计划 OBS-3): 计数与耗时, 不含任何内容 ----
+    // ---- 关键指标: 计数与耗时, 不含任何内容 ----
     if (ctx.metrics) {
         root["metrics"] = ctx.metrics->toJson();
     }

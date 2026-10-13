@@ -1,4 +1,4 @@
-/// 并发与竞态清单 (计划 TST-4)
+/// 并发与竞态清单
 ///
 /// 背景: 这些时序竞态在单线程协程模型下同样存在 —— 两个协程的交错点由
 /// `co_await` 决定, 取消信号、工具结算、持久化刷盘和中断应答都可能在"别人
@@ -7,14 +7,14 @@
 /// 顶掉、轮次一定收敛 (不挂死)、节流与轮末刷盘合起来不丢消息。
 ///
 /// 覆盖:
-/// - R1 取消 vs 工具结算: 取消时已完成的结果保留, 未启动的补取消占位,
+/// - 取消 vs 工具结算: 取消时已完成的结果保留, 未启动的补取消占位,
 ///   整批结果数量与 tool_call 一一对应
-/// - R2 并行结果乱序: 5 个并行安全调用按声明顺序提交 (完成顺序完全相反)
-/// - R3 中断应答进行中 vs 取消: 无论落到"取消结束"还是"应答后 resume",
+/// - 并行结果乱序: 5 个并行安全调用按声明顺序提交 (完成顺序完全相反)
+/// - 中断应答进行中 vs 取消: 无论落到"取消结束"还是"应答后 resume",
 ///   轮次收敛且结果唯一 (应答迟到不重复执行)
-/// - R4 工具执行中被注销 (插件工具的动态注册表路径): 执行体保活,
+/// - 工具执行中被注销 (插件工具的动态注册表路径): 执行体保活,
 ///   调用正常返回真实结果, 注册表已不再包含该工具
-/// - R5 持久化节流 vs 轮末: 窗口内的多次写 + 轮末立即刷盘 = 库内容完整且不重复
+/// - 持久化节流 vs 轮末: 窗口内的多次写 + 轮末立即刷盘 = 库内容完整且不重复
 #include "agentxx-test/core/test_race_guards.h"
 
 #include "agentxx-test/core/test_agent.h" // 本地 LLM 模拟器
@@ -425,7 +425,7 @@ void expectExactlyOneResultPerCall(
 } // namespace
 
 // ===========================================================================
-// R1: 取消 vs 工具结算 (快的已完成, 中的执行中被取消, 独占的未启动)
+// 取消 vs 工具结算 (快的已完成, 中的执行中被取消, 独占的未启动)
 // ===========================================================================
 namespace {
 
@@ -544,7 +544,7 @@ asio::awaitable<void> test_cancel_vs_tool_settlement() {
 }
 
 // ===========================================================================
-// R2: 并行结果乱序 (5 个调用完成顺序与声明顺序完全相反)
+// 并行结果乱序 (5 个调用完成顺序与声明顺序完全相反)
 // ===========================================================================
 asio::awaitable<void> test_parallel_reverse_completion_order() {
     const std::string sessionId = "race_reverse_order";
@@ -611,7 +611,7 @@ asio::awaitable<void> test_parallel_reverse_completion_order() {
 }
 
 // ===========================================================================
-// R3: 中断应答进行中 vs 取消
+// 中断应答进行中 vs 取消
 // ===========================================================================
 asio::awaitable<void> test_interrupt_answer_inflight_vs_cancel() {
     const std::string sessionId = "race_interrupt_cancel";
@@ -716,7 +716,7 @@ asio::awaitable<void> test_interrupt_answer_inflight_vs_cancel() {
 }
 
 // ===========================================================================
-// R4: 工具执行中被注销 (插件工具走的就是这条动态注册表路径)
+// 工具执行中被注销 (插件工具走的就是这条动态注册表路径)
 // ===========================================================================
 asio::awaitable<void> test_unregister_during_tool_execution() {
     const std::string sessionId = "race_unregister";
@@ -793,7 +793,7 @@ asio::awaitable<void> test_unregister_during_tool_execution() {
 }
 
 // ===========================================================================
-// R5: 持久化节流 vs 轮末刷盘
+// 持久化节流 vs 轮末刷盘
 // ===========================================================================
 void test_persist_throttle_vs_turn_end() {
     const auto        root = makeTempRoot();
@@ -861,30 +861,30 @@ asio::awaitable<TestResult> run_race_guard_tests() {
         {
             const auto t0 = std::chrono::steady_clock::now();
             co_await test_cancel_vs_tool_settlement();
-            TEST_INFO << "[race_guards] R1 取消 vs 工具结算 用时 " << elapsedMs(t0) << " ms"
+            TEST_INFO << "[race_guards] 取消 vs 工具结算 用时 " << elapsedMs(t0) << " ms"
                       << std::endl;
         }
         {
             const auto t0 = std::chrono::steady_clock::now();
             co_await test_parallel_reverse_completion_order();
-            TEST_INFO << "[race_guards] R2 并行结果乱序 用时 " << elapsedMs(t0) << " ms" << std::endl;
+            TEST_INFO << "[race_guards] 并行结果乱序 用时 " << elapsedMs(t0) << " ms" << std::endl;
         }
         {
             const auto t0 = std::chrono::steady_clock::now();
             co_await test_interrupt_answer_inflight_vs_cancel();
-            TEST_INFO << "[race_guards] R3 中断应答进行中 vs 取消 用时 " << elapsedMs(t0) << " ms"
+            TEST_INFO << "[race_guards] 中断应答进行中 vs 取消 用时 " << elapsedMs(t0) << " ms"
                       << std::endl;
         }
         {
             const auto t0 = std::chrono::steady_clock::now();
             co_await test_unregister_during_tool_execution();
-            TEST_INFO << "[race_guards] R4 执行中注销工具 用时 " << elapsedMs(t0) << " ms"
+            TEST_INFO << "[race_guards] 执行中注销工具 用时 " << elapsedMs(t0) << " ms"
                       << std::endl;
         }
         {
             const auto t0 = std::chrono::steady_clock::now();
             test_persist_throttle_vs_turn_end();
-            TEST_INFO << "[race_guards] R5 节流 vs 轮末 用时 " << elapsedMs(t0) << " ms" << std::endl;
+            TEST_INFO << "[race_guards] 节流 vs 轮末 用时 " << elapsedMs(t0) << " ms" << std::endl;
         }
     } catch (const std::exception& e) {
         TEST_FAIL << "race_guards suite exception: " << e.what() << std::endl;

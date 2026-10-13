@@ -1,4 +1,4 @@
-/// 客户端界面能力段测试 (计划 UI-9)
+/// 客户端界面能力段测试
 ///
 /// 覆盖:
 /// - 描述层能力字段 (apiVersion / kind / blocks / controls / cell / gap) 与
@@ -51,7 +51,7 @@ TestResult testUiCapabilities() {
     // 终端换算方式一致: 固定 8u 换算出的列数与能力段自身算法一致
     XX_TEST_EXPECT_EQ(caps.colsOf(8.0, true), static_cast<int>(8.0 / caps.cell.width + 0.5));
 
-    // ---- 体验级别字段 (UI-9) ----
+    // ---- 体验级别字段 ----
     XX_TEST_EXPECT_TRUE(json.contains("form"));
     XX_TEST_EXPECT_TRUE(json["form"].value("multi_field", false));
     XX_TEST_EXPECT_TRUE(json["form"].value("submit_cancel", false));
@@ -67,8 +67,8 @@ TestResult testUiCapabilities() {
     XX_TEST_EXPECT_TRUE(json["terminal"].value("truecolor", false));
     XX_TEST_EXPECT_TRUE(json["terminal"].value("mouse", false));
     XX_TEST_EXPECT_TRUE(json["terminal"].value("wide_chars", false));
-    // 硬件光标尚未实现 (UI-5 待实施): 如实上报 false, 不虚报能力
-    // 输入栏硬件光标 (计划 UI-5): 取值来自 tuiHardwareCursorSupported() —— 终端
+    // 硬件光标尚未实现: 如实上报 false, 不虚报能力
+    // 输入栏硬件光标: 取值来自 tuiHardwareCursorSupported() —— 终端
     // 支持时请求系统光标定位 (输入法候选框跟随), 不支持时回退到自绘光标格。
     // 这里断言能力段与该唯一来源一致 (不允许各写一份常量)。
     XX_TEST_EXPECT_EQ(

@@ -4812,7 +4812,7 @@ void test_openai_sse_done_flag() {
     }
 }
 
-/// 缓存用量解析 (计划 LLM-8): 各网关回报"命中缓存的 prompt token"用的字段名不一致
+/// 缓存用量解析: 各网关回报"命中缓存的 prompt token"用的字段名不一致
 /// - 覆盖 Chat Completions SSE / Responses SSE 两条流式路径的字段兼容
 void test_usage_cached_tokens_parsing() {
     using server::OpenAIProvider;

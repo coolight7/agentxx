@@ -90,9 +90,9 @@ set(AGENTXX_PLUGIN_BUILTIN_LIST
 # ExternalProject 构建安装; 接管 malloc/free/new/delete, 替换 glibc / CRT 分配器)
 # - 作用范围: 最终程序 (agentxx_cli / agentxx_test / agentxx_benchmark), 见
 #   cmake/agentxx_mimalloc.cmake
-# - 不受影响的目标: libagentxx.so (动态库跟随宿主的分配器) 与插件动态库
+# - 不受影响的目标: libagentxx.so (跟随最终程序的分配器) 与插件动态库
 #   (plugins/ 不改动: 内置合并进 libagentxx 的插件随最终程序使用 mimalloc,
-#    独立编译的插件动态库不链接 mimalloc, 由宿主进程决定实际分配器)
+#    独立编译的插件动态库不链接 mimalloc, 由最终程序决定实际分配器)
 # - macOS/iOS 上 **不可用**: Mach-O 使用两层次命名空间, libc++/系统框架对
 #   malloc/free 的引用在链接期已绑定到 libSystem, 最终程序静态覆盖的分配器
 #   无法对其生效 (也不导出 _malloc), 跨模块 free 必然崩溃。故 macOS/iOS 自动关闭
@@ -622,10 +622,10 @@ endif()
 if (NOT XX_IS_MSVC_D)
   set(_AGENTXX_LINKER_FLAG "")
   if (AGENTXX_LINKER STREQUAL "auto")
-    # NOTE: 交叉编译时不可用宿主机的 mold/gold:
-    # - Android: NDK clang 的 LTO 链接需要 NDK 内的 LLVMgold.so 插件, 宿主链接器会因
+    # NOTE: 交叉编译时不可用构建机的 mold/gold:
+    # - Android: NDK clang 的 LTO 链接需要 NDK 内的 LLVMgold.so 插件, 构建机链接器会因
     #   找不到插件而失败 (mold: fatal: could not open plugin file .../lib/LLVMgold.so)
-    # - Windows/MinGW: 宿主 mold/gold 与 MinGW ld 不兼容, -fuse-ld=mold 会导致链接失败
+    # - Windows/MinGW: 构建机的 mold/gold 与 MinGW ld 不兼容, -fuse-ld=mold 会导致链接失败
     if (ANDROID OR XX_IS_ANDROID_D OR CMAKE_CROSSCOMPILING)
       message("[agentxx] Cross compile, use default linker")
     else ()
@@ -1200,7 +1200,7 @@ if (AGENTXX_ENABLE_HYPERSCAN)
   # - 上游 fat runtime 仅 Linux 支持 (需 ifunc + Makefiles/Ninja 生成器), 实现上把
   #   core2/corei7/avx2/avx512 各微架构的执行引擎分别编译一遍, 再由
   #   cmake/build_wrapper.sh 用 nm + objcopy --redefine-syms 给各 variant 的 .o
-  #   重命名符号, 载入时经 ifunc 按 CPU 选型;
+  #   重命名符号, 加载时经 ifunc 按 CPU 选型;
   # - objcopy 重命名要求 .o 有符号表, 而 LTO object 只有编译器中间表示
   #   ("objcopy: redefining symbols does not work on LTO-compiled object files"),
   #   即 fat runtime 与 LTO 只能择一;
@@ -1538,7 +1538,7 @@ ExternalProject_Add(
 
 # 插件界面描述层 (组件模型/解析/降级适配/纯文本降级/构建器/kit), 与渲染器无关:
 # TUI 与将来的 GUI 客户端共用同一份描述, 客户端各自只实现渲染
-# - 依赖 cxx_utilxx_base + fmt; 本库自带单测默认打开, 宿主构建时关闭 (单测在库仓库跑)
+# - 依赖 cxx_utilxx_base + fmt; 本库自带单测默认打开, 主程序构建时关闭 (单测在库仓库跑)
 ExternalProject_Add(
   cxx_pluginxx_ui_repo
   DEPENDS
@@ -1687,7 +1687,7 @@ endif ()
 # /MD(d) + /fsanitize=address 编译的可执行程序运行期需要能找到
 # clang_rt.asan_dynamic-x86_64.dll (随 MSVC 工具集安装在 cl.exe 同目录,
 # 经 delay-load thunk 全进程共享同一份实例)。superbuild 在此自动拷贝到 exec
-# 输出目录, 保证测试/client/插件宿主可直接启动; DEPENDS 各 repo 目标确保在
+# 输出目录, 保证测试/client/插件主程序可直接启动; DEPENDS 各 repo 目标确保在
 # 嵌套构建产出 exec 目录之后再拷贝。仅覆盖 x64 构建 (项目 Windows 脚本均为 -A x64)。
 if (XX_IS_WIN_D AND XX_IS_MSVC_D AND NOT XX_IS_RELEASE_D AND AGENTXX_ENABLE_SANITIZER)
   get_filename_component(_AGENTXX_MSVC_BIN_DIR "${CMAKE_CXX_COMPILER}" DIRECTORY)

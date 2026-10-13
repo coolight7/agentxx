@@ -74,7 +74,7 @@ endif ()
 # 2) 工具库本体: cxx_utilxx_base / cxx_utilxx / cxx_pluginxx
 # - 拆分说明: 原 `agentxx_util` 静态库已拆为三个独立 CMake 工程
 #   (`agent/third_party/cxx_utilxx_base` 基础件 + `agent/third_party/cxx_utilxx`
-#   重依赖工具 + `agent/third_party/cxx_pluginxx` 插件框架内核), 由 superbuild
+#   重依赖工具 + `agent/third_party/cxx_pluginxx` 插件框架核心), 由 superbuild
 #   先构建安装, 本处经 find_package 引用其**静态变体** (libagentxx 与各插件各
 #   链接一份, 符号互不冲突; 见 AGENTS.md 插件设计约束)
 # - 依赖 (fmt/simdjson/Boost/SQLite3/OpenSSL/html2md/iconv/uchardet) 由各包 config
@@ -362,7 +362,7 @@ set(_AGENTXX_LINK_LIBS
 # 顺序: 目标文件 → cxx_utilxx*.a → 其依赖库)
 # - agentxx_obj PRIVATE: 仅编译期 usage requirements (头路径/宏)
 # - agentxx_shared/static PUBLIC: 目标文件并入共享库; 静态库处理者连带链接
-# - cxx_pluginxx_static 加入后 (插件框架内核), 插件宿主实现经其获得通用运行时
+# - cxx_pluginxx_static 加入后 (插件框架核心), 主程序侧插件实现经其获得通用运行时
 # - cxx_pluginxx_ui_static (界面描述层) 提供解析/降级适配/纯文本降级
 foreach(_agentxx_target ${_AGENTXX_OBJ_LINK_TARGETS})
   target_link_libraries(${_agentxx_target} PRIVATE cxx_utilxx_base_static cxx_utilxx_static cxx_pluginxx_static cxx_pluginxx_ui_static)

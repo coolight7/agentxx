@@ -3259,7 +3259,7 @@ asio::awaitable<void>
     co_return;
 }
 
-/// 按规范化路径排队执行 (计划 TOOL-16)
+/// 按规范化路径排队执行
 ///
 /// 覆盖:
 /// - 同一文件的两次"读-改-写"并发执行: 只有一次命中 `old_str`, 另一次报
@@ -3552,7 +3552,7 @@ asio::awaitable<TestResult>
     // 同步兜底路径 (强制关闭文件异步 I/O 后 read/write/edit 走同步实现)
     co_await run(test_sync_fallback_without_async_file_io);
 
-    // 按规范化路径排队执行 (计划 TOOL-16)
+    // 按规范化路径排队执行
     co_await run(test_path_queue_serializes_read_modify_write);
 
     // 插件真实调用基本功能检查 (dlopen + 主程序 op_driver 完整流程; 插件未构建时跳过)

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# 插件导出符号白名单校验 (Reset-v1 / R6)
+# 插件导出符号白名单校验
 #
 # 契约 (见 docs/zh-cn/design/plugins.md §5 与各插件 CMakeLists):
-# - 插件动态库只导出宿主按名查找的入口符号:
+# - 插件动态库只导出主程序按名查找的入口符号:
 #   `agentxx_plugin_agent_{get_info,create,start,stop,destroy}` 与
 #   `agentxx_plugin_client_{get_info,create,start,stop,destroy}`;
 # - 第三方静态依赖与复用工具库的符号必须隐藏 (ELF: -fvisibility=hidden +

@@ -1,4 +1,4 @@
-/// test_wire_roundtrip —— Wire 协议消息往返与字段保真 (计划 PRO-1 / TST-2 / PRO-7 / PRO-11)
+/// test_wire_roundtrip —— Wire 协议消息往返与字段保真
 ///
 /// 覆盖:
 /// - 每条消息: `WsAgentIOTransport::serialize` → `deserialize` 后回到同一变体成员,
@@ -69,7 +69,7 @@ TestResult testWireRoundtrip() {
         ack.models    = {"gpt-x", "claude-y"};
         ack.deviceId = "device-42";
         ack.workDir  = "D:/work/项目";
-        // 协议版本与能力声明 (计划 PRO-3) 一并往返
+        // 协议版本与能力声明一并往返
         ack.protocolVersion = WireProtocol::kVersion;
         ack.capabilities    = serverWireCapabilities();
 
@@ -93,13 +93,13 @@ TestResult testWireRoundtrip() {
             XX_TEST_EXPECT_EQ(back.plugins[0].version, std::string{"1.2.3"});
             XX_TEST_EXPECT_EQ(back.plugins[0].interfaces.size(), size_t{2});
         }
-        // 协议版本与能力声明 (计划 PRO-3)
+        // 协议版本与能力声明
         XX_TEST_EXPECT_EQ(back.protocolVersion, WireProtocol::kVersion);
         XX_TEST_EXPECT_EQ(back.capabilities.size(), serverWireCapabilities().size());
         XX_TEST_EXPECT_EQ(back.error, std::string{});
     }
 
-    // ---------------- 握手: 协议版本与能力 (计划 PRO-3) ----------------
+    // ---------------- 握手: 协议版本与能力 ----------------
 
     {
         WireHello hello;
@@ -196,7 +196,7 @@ TestResult testWireRoundtrip() {
         XX_TEST_EXPECT_EQ(back.cachedPromptTokens, uint64_t{1200});
     }
 
-    // ---------------- 错误对象 (PRO-11: 文本与机器码分开) ----------------
+    // ---------------- 错误对象 (文本与机器码分开) ----------------
 
     {
         WireError e;
@@ -335,7 +335,7 @@ TestResult testWireRoundtrip() {
         auto back = roundTrip(WireSwitchSession{.sessionId = "s10"});
         XX_TEST_EXPECT_EQ(back.sessionId, std::string{"s10"});
     }
-    // 会话检索与重命名 (计划 RET-1a)
+    // 会话检索与重命名
     {
         // 检索: 关键词随请求往返; 命中片段随列表项往返
         WireListSessions req;
@@ -423,7 +423,7 @@ TestResult testWireRoundtrip() {
             XX_TEST_EXPECT_TRUE(back.items[0].recovered);
         }
     }
-    // 输入投递与受理回执 (计划 LOOP-2 / LOOP-3)
+    // 输入投递与受理回执
     {
         WireUserInput input;
         input.sessionId = "s5";

@@ -166,7 +166,7 @@ public:
 
         auto       agentCtxPtr = agentContext.lock();
         const auto len         = agentCtxPtr->middlewareHandleContext->handles.size();
-        // 已实际执行 onHandleStart 的下标记录 (M7): end 阶段按此回放, 不依赖
+        // 已实际执行 onHandleStart 的下标记录: end 阶段按此回放, 不依赖
         // 当前 disabled 位 —— 运行中插件禁用 (置 disabled) 不会破坏 start/end
         // 配对 (start 已执行的中间件, end 必定执行; 未被 start 的绝不 end)
         std::vector<size_t> startedIdxs;

@@ -1,4 +1,4 @@
-/// test_wire_schema —— Wire 协议字段清单生成与新鲜度校验 (计划 PRO-4 / TST-2)
+/// test_wire_schema —— Wire 协议字段清单生成与新鲜度校验
 ///
 /// 背景: 线协议是手写编解码 (`wire_protocol.cpp`), 字段清单散落在结构体定义与
 /// 编解码函数里, 其他语言实现 (或离线工具) 没有可读的单一来源。
@@ -539,7 +539,7 @@ std::vector<WireSample> wireSamples() {
         m.error = "name duplicated";
         out.push_back({"add_model_result", WireMessage{std::move(m)}});
     }
-    // 41) 会话重命名 (计划 RET-1a)
+    // 41) 会话重命名
     {
         WireRenameSession m;
         m.sessionId = "s1";
@@ -555,7 +555,7 @@ std::vector<WireSample> wireSamples() {
         m.ok        = true;
         out.push_back({"rename_session_result", WireMessage{std::move(m)}});
     }
-    // 43) 删除模型配置 (计划 A1; 追加在变体末尾)
+    // 43) 删除模型配置 (追加在变体末尾)
     {
         WireRemoveModel m;
         m.sessionId = "s1";
@@ -570,7 +570,7 @@ std::vector<WireSample> wireSamples() {
         m.error = "";
         out.push_back({"remove_model_result", WireMessage{std::move(m)}});
     }
-    // 45) 客户端注册主程序工具 (计划 A4)
+    // 45) 客户端注册主程序工具
     {
         WireHostToolRegister m;
         m.sessionId = "s1";

@@ -2,7 +2,7 @@
 # - 演示插件如何:
 #   1. 经 graph 接口表 (agentxx.agent.graph) 注册自定义节点类型
 #      (意图识别 intent_router / 时间输出 datetime_node)
-#   2. 查看/修改宿主执行图 JSON (默认名 agentxx.default)
+#   2. 查看/修改主程序执行图 JSON (默认名 agentxx.default)
 # - 插件仅 agent 侧入口 (无 client 入口)
 set(PLUGIN_NAME example_graph_node)
 

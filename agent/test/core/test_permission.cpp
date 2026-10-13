@@ -1,12 +1,12 @@
-/// test_permission —— 权限判定理由与执行前目标复验 (计划 SEC-2 / SEC-5 / TST-10)
+/// test_permission —— 权限判定理由与执行前目标复验
 ///
 /// 覆盖:
-/// - SEC-2 判定理由 (PermissionReason): 同一套判定规则下每个分支都给出理由 ——
+/// - 判定理由 (PermissionReason): 同一套判定规则下每个分支都给出理由 ——
 ///   未解析的目标、工作区隔离写拒绝、配置显式拒绝(优先于完全授权)、完全授权、
 ///   命中规则、未命中规则按模式默认兜底; 理由文本与命中规则/目标一并给出
-/// - SEC-5 执行前目标复验: 判定阶段记录"已批准目标", 执行前用当前参数按同一套规则
+/// - 执行前目标复验: 判定阶段记录"已批准目标", 执行前用当前参数按同一套规则
 ///   复验 —— 参数被改写时拒绝执行; 未声明权限的工具无约束
-/// - 判定规则正确性 (TST-10 收窄用例集): 配置拒绝优先于完全授权、工作区隔离写拒绝
+/// - 判定规则正确性 (收窄用例集): 配置拒绝优先于完全授权、工作区隔离写拒绝
 ///   优先于白名单、未声明权限的工具直接放行
 #include "agentxx-test/core/test_permission.h"
 
@@ -77,7 +77,7 @@ asio::awaitable<TestResult> run_permission_tests() {
     const auto worktreeDir = perm->normalizePermissionPath("./perm_test_base/.wt/", "");
     XX_TEST_EXPECT_FALSE(baseDir.empty());
 
-    // ---------------- SEC-2: 未解析的目标 ----------------
+    // ---------------- 未解析的目标 ----------------
 
     {
         const auto d = perm->explainTarget("", readScope, "");
@@ -86,7 +86,7 @@ asio::awaitable<TestResult> run_permission_tests() {
         XX_TEST_EXPECT_TRUE(d.describe().find("could not be resolved") != std::string::npos);
     }
 
-    // ---------------- SEC-2: 未命中规则 → 按模式默认兜底 ----------------
+    // ---------------- 未命中规则 → 按模式默认兜底 ----------------
 
     {
         perm->noRuleOperator = PermissionOperator::ALLOW;
@@ -107,7 +107,7 @@ asio::awaitable<TestResult> run_permission_tests() {
         perm->noRuleOperator = PermissionOperator::ALLOW;
     }
 
-    // ---------------- SEC-2: 命中规则 (允许 / 拒绝 / 询问) ----------------
+    // ---------------- 命中规则 (允许 / 拒绝 / 询问) ----------------
 
     {
         perm->setFilesystemPermission(allowedFile, PermissionOperator::ALLOW, readScope);
@@ -130,7 +130,7 @@ asio::awaitable<TestResult> run_permission_tests() {
         XX_TEST_EXPECT_TRUE(ask.reason == PermissionReason::Rule);
     }
 
-    // ---------------- SEC-2: 完全授权 ----------------
+    // ---------------- 完全授权 ----------------
 
     {
         perm->setFullAuthorized(true);
@@ -140,7 +140,7 @@ asio::awaitable<TestResult> run_permission_tests() {
         perm->setFullAuthorized(false);
     }
 
-    // ---------------- SEC-2 + TST-10: 配置显式拒绝优先于完全授权 ----------------
+    // ---------------- 配置显式拒绝优先于完全授权 ----------------
 
     {
         perm->addConfigDenyPath(deniedFile);
@@ -152,7 +152,7 @@ asio::awaitable<TestResult> run_permission_tests() {
         perm->setFullAuthorized(false);
     }
 
-    // ---------------- SEC-2 + TST-10: 工作区隔离写拒绝优先于白名单 ----------------
+    // ---------------- 工作区隔离写拒绝优先于白名单 ----------------
 
     {
         // worktree 子树内允许写, 主检出其余位置拒绝写 (读不受限)
@@ -183,7 +183,7 @@ asio::awaitable<TestResult> run_permission_tests() {
         XX_TEST_EXPECT_TRUE(writeAfterClear.decision == PathDecision::Allow);
     }
 
-    // ---------------- SEC-5: 执行前目标复验 ----------------
+    // ---------------- 执行前目标复验 ----------------
 
     {
         declareReadTool(perm, "perm_test_read");
@@ -214,7 +214,7 @@ asio::awaitable<TestResult> run_permission_tests() {
         const auto rvUnconstrained = perm->reverifyApprovedTargets("no_such_tool", "call-x", args);
         XX_TEST_EXPECT_TRUE(rvUnconstrained.ok);
 
-        // 未声明权限的工具: 直接放行 (TST-10 收窄用例)
+        // 未声明权限的工具: 直接放行 (收窄用例)
         utilxx_base::Json unknownArgs = utilxx_base::Json::object();
         unknownArgs["path"]           = "./perm_test_other/other.txt";
         std::string unknownReason;

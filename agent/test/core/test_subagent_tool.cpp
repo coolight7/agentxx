@@ -868,7 +868,7 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
             );
         }
 
-        // --- D. P0-3 回归: 包含 "中断"/"取消"/"cancel" 的普通错误不应被误判为取消 ---
+        // --- D. 回归: 包含 "中断"/"取消"/"cancel" 的普通错误不应被误判为取消 ---
         {
             agentxx::events::RespSubagentBatch resp;
             resp.results.push_back(agentxx::events::RespSubagentBatchItem{

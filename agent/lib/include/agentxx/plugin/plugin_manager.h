@@ -131,7 +131,7 @@ public:
     std::vector<std::string> featurePointImpls;
     PromptBackup             promptBackup;
 
-    /// 加载总耗时 (毫秒; 由 PluginManager 加加载口记录, 见 PLG-10)
+    /// 加载总耗时 (毫秒; 由 PluginManager 记录)
     uint64_t loadMs = 0;
 
     /// 通用表相关登记 (事件订阅 / 睡眠句柄 / 能力声明) 由基类持有, 见
@@ -249,7 +249,7 @@ class PluginManager : public pluginxx::PluginHostLifecycle<PluginInstance>,
                       public pluginxx::DomainHooks {
 public:
 
-    /// 本主程序向插件提供的接口表数量 (计划 PLG-8: 文档里的数字有常量可校验)
+    /// 本主程序向插件提供的接口表数量 (文档里的数字有常量可校验)
     /// - 10 张通用表 (`pluginxx.*`, 由插件框架实现: log/json/config/plugins/events/
     ///   scheduler/coroutine_runtime/tasks/cancel/capabilities)
     /// - 10 张 agent 业务表 (`agentxx.agent.*`: tools/permission/hooks/session/
@@ -273,7 +273,7 @@ public:
         std::vector<std::string> requiredInterfaces;
         std::vector<std::string> optionalInterfaces;
 
-        // ---- 诊断字段 (计划 PLG-10 / ARC-6 装配快照) ----
+        // ---- 诊断字段 (装配快照) ----
         /// 是否被用户显式禁用 (区别于依赖级联禁用)
         bool userDisabled = false;
         /// 是否因必选依赖不可用被级联禁用
@@ -293,7 +293,7 @@ public:
         /// 本实例声明的功能点数 / 登记的实现数
         size_t featurePointCount = 0;
         size_t featureImplCount  = 0;
-        /// 统一注册清单 (计划 PLG-1): 各项的合计 (0 = 已回到基线)
+        /// 统一注册清单: 各项的合计 (0 = 已回到基线)
         size_t registrationTotal = 0;
         /// 其中的提示词键占用数
         size_t promptKeyCount = 0;
@@ -301,7 +301,7 @@ public:
         size_t skillDirCount     = 0;
         size_t memoryFileCount   = 0;
         size_t mcpNamespaceCount = 0;
-        /// 是否占用执行图定义 (独占 slot; 计划 PLG-4)
+        /// 是否占用执行图定义 (独占 slot)
         bool ownsGraphDefinition = false;
     };
 
@@ -311,7 +311,7 @@ public:
     PluginManager(const PluginManager&)            = delete;
     PluginManager& operator=(const PluginManager&) = delete;
 
-    /// 统一注册清单 (计划 PLG-1)
+    /// 统一注册清单
     ///
     /// 一个插件实例能向主程序贡献的东西分散在多处 (工具注册表、权限中间件、
     /// 中间件链、图注册表、事件总线、能力表、提示词、资源应用器)。禁用/卸载后
@@ -630,7 +630,7 @@ public:
         return unregisterGraphNodeType(inst, strToSv(type));
     }
 
-    /// 加载失败时的"怎么改"提示 (计划 PLG-7)
+    /// 加载失败时的"怎么改"提示
     ///
     /// 插件框架只报"哪一步失败了", 不解释"你该怎么改"。本函数按路径形态巡检常见的
     /// 加载失败原因, 返回一句可直接照做的建议 (没发现问题返回空串):
@@ -976,7 +976,7 @@ private:
     std::map<std::string, PromptKeyState, std::less<>>                 promptKeys_;
     uint64_t                                                           promptSequence_ = 0;
 
-    /// 执行图定义独占 slot (计划 PLG-4): 占用者 + 占用前的基础定义
+    /// 执行图定义独占 slot: 占用者 + 占用前的基础定义
     /// - [graphDefinitionBase] 存 JSON 文本, 恢复时解析回 neograph json
     ///   (避免在头文件里带 neograph 类型)
     std::string    graphDefinitionOwner_;

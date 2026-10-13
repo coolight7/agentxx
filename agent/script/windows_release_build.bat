@@ -254,6 +254,32 @@ set "AGENTXX_VSWHERE1="
 set "AGENTXX_VSWHERE2="
 :bundle_runtime_done
 
+rem ===== Startup smoke check: the release output must actually run =====
+rem - Release builds link with LTCG (/GL + /LTCG) and the linker caches its code
+rem   generation in <IntDir><TargetName>.iobj (/LTCGOUT). If that cache is stale
+rem   or mixed with inputs whose data layout changed, the linked image can end up
+rem   self-inconsistent (code refers to a table that holds other data); loading a
+rem   plugin then calls a garbage function pointer. The link itself reports
+rem   success, so the breakage is only visible when the program runs.
+rem - `--dump-config` initializes libagentxx plus every configured plugin and then
+rem   exits; a crash (or non-zero exit) here means the fresh output is not usable.
+rem - Skip when AGENTXX_SKIP_SMOKE=1
+if "%AGENTXX_SKIP_SMOKE%"=="1" goto smoke_done
+if defined TEMP (set "AGENTXX_SMOKE_DIR=%TEMP%\agentxx-release-smoke") else (set "AGENTXX_SMOKE_DIR=%TMP%\agentxx-release-smoke")
+if not exist "%AGENTXX_SMOKE_DIR%\" mkdir "%AGENTXX_SMOKE_DIR%" >NUL 2>&1
+pushd "%AGENTXX_SMOKE_DIR%"
+"%build_dir%\exec\agentxx_cli.exe" --dump-config >NUL 2>&1
+set "AGENTXX_SMOKE_RC=%ERRORLEVEL%"
+popd
+if not "%AGENTXX_SMOKE_RC%"=="0" (
+    echo [smoke] agentxx_cli --dump-config failed: exit=%AGENTXX_SMOKE_RC%
+    echo [smoke] the release output does not run; a broken plugin DLL is the usual cause
+    echo [smoke] delete the stale LTCG caches and relink, then rebuild: del /S /Q "%build_dir%\*.iobj"
+    exit /b 1
+)
+echo [smoke] agentxx_cli starts and loads plugins OK
+:smoke_done
+
 rem ===== Archive release package (AGENTXX_PACKAGE_RELEASE=1 auto pack) =====
 if "%AGENTXX_PACKAGE_RELEASE%"=="1" (
     if not exist "%src_dir%\build\dist\" mkdir "%src_dir%\build\dist\"

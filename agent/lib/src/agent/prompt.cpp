@@ -662,7 +662,7 @@ void AgentPrompt::mergeFromJson(const utilxx_base::Json& j) {
                 // 兼容旧形态: 直接字符串 = 段落正文 (order 0, 无来源)
                 setAppendSection(key, val.get<std::string>());
             } else if (val.is_object()) {
-                // 新形态: {text, order, source} (计划 PRM-2)
+                // 新形态: {text, order, source}
                 std::string text;
                 if (val.contains("text") && val["text"].is_string()) {
                     text = val["text"].get<std::string>();

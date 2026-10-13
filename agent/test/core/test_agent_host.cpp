@@ -702,7 +702,7 @@ asio::awaitable<void> test_host_spawn_concurrent_limit() {
     co_return;
 }
 
-/// 验证: 嵌套委派 (子代理再派生子代理, P3 扁平化总线路径)
+/// 验证: 嵌套委派 (子代理再派生子代理, 扁平化总线路径)
 /// - 根 agent 执行 agentxx_subagent tool → 中断 → 根总线委派 → agent 节点容器派生 A
 /// - A 执行 agentxx_subagent tool → 中断 → A 自身总线 (service.subagent 由
 ///   agent 节点容器 registerServer) 委派 → agent 节点容器派生 B (与根委派完全同路径, 无 agent 节点容器函数直调)

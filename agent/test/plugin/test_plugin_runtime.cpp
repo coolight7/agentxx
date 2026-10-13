@@ -292,7 +292,7 @@ void PLUGINXX_CALL fakeDestroyHook(void* ud) {
     ++*static_cast<int*>(ud);
 }
 
-/// P1-A 接口表严格协商探针：伪装主程序只返回一次可控接口表，用于验证 SDK 对
+/// 接口表严格协商探针：伪装主程序只返回一次可控接口表，用于验证 SDK 对
 /// version / struct_size / NULL 表的拒绝行为（plugin.md 第 11.1 节）。
 struct FakeIfaceHost {
     PluginxxHost                   host{};
@@ -319,7 +319,7 @@ void installLifecycleHooks(PluginInstance& inst, int* destroys) {
     inst.pluginCtx        = destroys;
 }
 
-/// P1-4 生命周期事务探针: 记录 start/stop 实际调用次数，并让 start 可以按需失败。
+/// 生命周期事务探针: 记录 start/stop 实际调用次数，并让 start 可以按需失败。
 /// 探针本身挂在实例的 pluginCtx 上，不使用任何可变全局状态。
 void* PLUGINXX_CALL
     probeGraphRunStart(void* ud, const PluginxxStringView*, const PluginxxStringView*, const PluginxxStringView*, const PluginxxStringView*, const PluginxxOperatorNotify* notify, PluginxxString*) {
@@ -385,7 +385,7 @@ void* PLUGINXX_CALL
 TestResult testPluginRuntime() {
     TestResult result;
 
-    /// F01：拒绝不回调，双方登记和 lease 完整回滚；同步 done 仍为接受。
+    /// 拒绝不回调，双方登记和 lease 完整回滚；同步 done 仍为接受。
     {
         RuntimeFixture f;
         CallbackState  cb{.fixture = &f};
@@ -449,7 +449,7 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_TRUE(f.manager->runtime()->operations.empty());
     }
 
-    /// P0-A/F07/F14：任意线程复制 payload，提交后取消无效；caller Closing
+    /// 任意线程复制 payload，提交后取消无效；caller Closing
     /// 仍保护本次回调直到返回，不依赖 provider 启用位延长代码生命周期。
     {
         RuntimeFixture f;
@@ -559,7 +559,7 @@ TestResult testPluginRuntime() {
         f.manager->plugins_.erase(f.provider->name);
     }
 
-    /// F06：worker 发起互调，start/登记/完成完整地在 IO 线程执行。
+    /// worker 发起互调，start/登记/完成完整地在 IO 线程执行。
     {
         RuntimeFixture f;
         CallbackState  cb{.fixture = &f};
@@ -708,7 +708,7 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_EQ(f.provider->lifetime->leaseCount(), size_t{0});
     }
 
-    /// F14/F05：后台 task 提交 done 后，尚未 commit 就卸载，不调用失效 cancel_ud。
+    /// 后台 task 提交 done 后，尚未 commit 就卸载，不调用失效 cancel_ud。
     {
         RuntimeFixture         f;
         PluginxxOperatorNotify notify{};
@@ -735,7 +735,7 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_EQ(f.provider->lifetime->leaseCount(), size_t{0});
     }
 
-    /// F08：sleep 接受即计入 lease；取消和正常完成都回收记录，并且只回调一次。
+    /// sleep 接受即计入 lease；取消和正常完成都回收记录，并且只回调一次。
     {
         RuntimeFixture f;
         int            calls    = 0;
@@ -768,7 +768,7 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_EQ(f.provider->lifetime->leaseCount(), size_t{0});
     }
 
-    /// F15：无裸 manager 的 post；manager 消失不丢失已接受 callback/lease。
+    /// 无裸 manager 的 post；manager 消失不丢失已接受 callback/lease。
     {
         RuntimeFixture f;
         int            calls   = 0;
@@ -874,7 +874,7 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_EQ(f.caller->lifetime->leaseCount(), size_t{0});
     }
 
-    /// P0-2: cancel 与 done 并发竞速 —— 只产生一个终态、回调恰好一次；终态之后
+    /// cancel 与 done 并发竞速 —— 只产生一个终态、回调恰好一次；终态之后
     /// 到达的 cancel 不再进入插件（`OpCore` 用普通 mutex 保证锁内不调用插件）。
     {
         for (int round = 0; round < 32; ++round) {
@@ -1107,7 +1107,7 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_EQ(gLifecycleDestroys, 0);
     }
 
-    /// R3/P1-2: C17 ABI 编译期检查的 C++ 侧对照 —— C 翻译单元（-std=c17
+    /// C17 ABI 编译期检查的 C++ 侧对照 —— C 翻译单元（-std=c17
     /// -pedantic-errors）与 C++ 看到的布局和版本号必须逐项一致；编号表见
     /// test_plugin_abi_c17.c。
     {
@@ -1284,7 +1284,7 @@ TestResult testPluginRuntime() {
         }
     }
 
-    /// R3/P1-A: 接口表协商 —— 判定规则为
+    /// 接口表协商 —— 判定规则为
     /// `version >= MIN_VERSION` 且 `struct_size >= BASELINE_SIZE` (见
     /// `pluginxx/api/iface_meta.h`): 低于最低版本、表长不足基线、NULL 表都必须被 SDK
     /// 拒绝; 声明了更高版本的完整表必须接受 (不再写死字面量 1)。
@@ -1331,7 +1331,7 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_TRUE(AgentIfaces::query(&fake.host).tools == nullptr);
     }
 
-    /// P0-1: 主程序控制块 —— 实例关闭后，插件保存的旧 host 指针仍然可读，但所有
+    /// 主程序控制块 —— 实例关闭后，插件保存的旧 host 指针仍然可读，但所有
     /// vtable 入口安全失败；同名新实例使用新令牌，旧指针绝不转交到新实例。
     {
         RuntimeFixture f;
@@ -1363,7 +1363,7 @@ TestResult testPluginRuntime() {
         hostMemoryFree(out.data);
     }
 
-    /// P1-4/F20: prompt 贡献模型 —— 多 owner 叠加、卸载只移除自己的贡献、不把
+    /// prompt 贡献模型 —— 多 owner 叠加、卸载只移除自己的贡献、不把
     /// 已卸载 owner 的旧值写回，用户外部修改后卸载保留用户值。
     {
         auto ctx         = std::make_shared<agentxx::agent::AgentContext>();
@@ -1436,7 +1436,7 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_TRUE(prompt.toolPrompt.find("demo_tool") == prompt.toolPrompt.end());
     }
 
-    /// P1-4: 禁用/启用事务（导出 start/stop 的插件）—— 主程序侧立即摘除注册，
+    /// 禁用/启用事务（导出 start/stop 的插件）—— 主程序侧立即摘除注册，
     /// stop 在 IO 线程撤销插件自管注册，start 重新声明；stop 成功后清空旧记录，
     /// 因此重复 enable/disable 不会累积重复项。
     {
@@ -1590,7 +1590,7 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_TRUE(f.manager->find("lifecycle_plugin") == nullptr);
     }
 
-    /// F09: 依赖级联 —— 三级与菱形依赖的禁用/恢复；用户显式禁用不被级联恢复。
+    /// 依赖级联 —— 三级与菱形依赖的禁用/恢复；用户显式禁用不被级联恢复。
     {
         RuntimeFixture f;
         auto           leaf = f.instance("leaf", 20);
@@ -1639,7 +1639,7 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_FALSE(top->userDisabled);
     }
 
-    /// P0-1: 注册类入口的执行期复查 —— 排队期间实例进入 Closing 时，注册必须被
+    /// 注册类入口的执行期复查 —— 排队期间实例进入 Closing 时，注册必须被
     /// 拒绝，注册表与实例记录都不留下残留。
     {
         RuntimeFixture f;
@@ -1654,7 +1654,7 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_TRUE(f.provider->toolNames.empty());
     }
 
-    /// P0-1: 完整 vtable 路径 —— 工作线程发起注册，随后实例开始关闭。请求要么在
+    /// 完整 vtable 路径 —— 工作线程发起注册，随后实例开始关闭。请求要么在
     /// 入口被拒绝，要么排队到 IO 线程后由执行期复查拒绝；两种顺序都必须无残留、
     /// 不阻塞调用线程、lease 归零。
     {
@@ -1908,7 +1908,7 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_TRUE(f.manager->find("provider") == nullptr);
     }
 
-    /// P1-C/F04: GraphTypeSlot 代次 —— 编译后的旧节点在卸载/重载后只返回
+    /// GraphTypeSlot 代次 —— 编译后的旧节点在卸载/重载后只返回
     /// "插件已关闭/代次失效", 不调用任何插件回调; 同一实例重新注册类型也只会
     /// 使旧节点失效, 新编译的节点才使用新回调, 旧节点不得转交新实例。
     {
@@ -2036,7 +2036,7 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_EQ(callsReload, 1);
     }
 
-    /// F02: 订阅句柄独立于实例生命周期 —— 重复 unsubscribe 为空操作；
+    /// 订阅句柄独立于实例生命周期 —— 重复 unsubscribe 为空操作；
     /// 卸载 (detachAll 退订) 之后对旧句柄再次 unsubscribe 不得访问已释放实例。
     {
         auto           ctx = std::make_shared<agentxx::agent::AgentContext>();

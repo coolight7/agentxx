@@ -71,7 +71,7 @@ public:
         ///   (TUI) 向上滚动到窗口顶部时经 WireGetViewMessages 分页拉取
         ///   更早历史, 避免长会话恢复时全量传输
         size_t initialSyncTailCount = 0;
-        /// `collect` 投递模式的静默合并窗口 (计划 LOOP-11)
+        /// `collect` 投递模式的静默合并窗口
         /// - 窗口内同一客户端的连续输入合并为一条, 窗口结束后按 next-turn 提交
         /// - <=0 表示不合并 (collect 等同 next-turn)
         std::chrono::milliseconds collectWindow = std::chrono::milliseconds{400};
@@ -181,7 +181,7 @@ public:
         return queueState_ == SessionQueueState::Paused;
     }
 
-    /// 当前消息队列状态 (计划 LOOP-4)
+    /// 当前消息队列状态
     SessionQueueState queueState() const noexcept {
         return queueState_;
     }
@@ -232,7 +232,7 @@ private:
     ///   客户端据此展示"上方还有更早消息"并按 WireGetViewMessages 分页拉取
     /// - tailCount==0 时等价 buildFullSync() (全量, fromIndex=0)
     WireSyncPayload          buildTailSync(size_t tailCount);
-    /// 构建增量补拉载荷 (计划 STO-4): 仅含 [afterSeq] 之后的展示消息
+    /// 构建增量补拉载荷: 仅含 [afterSeq] 之后的展示消息
     /// - `incremental = true`: 客户端按 msg.id 去重后追加到本地历史尾部
     /// - 消息 id 为空的老数据不可去重: 此时返回全量同步 (调用方回退)
     WireSyncPayload buildIncrementalSync(
@@ -322,7 +322,7 @@ private:
     /// 删除消息队列条目; `return` false = 条目不存在 (调用方回 MessageNotFound)
     bool removeQueueItem(std::string_view itemId);
 
-    // ----- 输入投递 (计划 LOOP-1/2/3/4/11; 仅 ex_ 线程) -----
+    // ----- 输入投递 (仅 ex_ 线程) -----
 
     /// 受理一条客户端输入 (投递模式分发 + 回执 + 收件箱落库)
     ///
@@ -389,7 +389,7 @@ private:
         const std::shared_ptr<AgentIOTransportBase>& target = nullptr
     );
 
-    /// 处理会话重命名 (WireRenameSession → WireRenameSessionResult, 计划 RET-1a)
+    /// 处理会话重命名 (WireRenameSession → WireRenameSessionResult)
     /// - 标题写入会话库 `meta.title` 并标记来源为用户; 空标题/会话不存在/无持久化
     ///   都回 ok=false + 可读原因 (客户端据此提示)
     void handleRenameSession(
@@ -397,7 +397,7 @@ private:
         const std::shared_ptr<AgentIOTransportBase>& sender = nullptr
     );
 
-    /// 会话 ID 校验 (端点绑定单一会话; 统一入口校验, 见计划 PRO-7)
+    /// 会话 ID 校验 (端点绑定单一会话; 统一入口校验)
     /// - `sessionId` 为空: 视为"未指定", 按当前绑定会话处理 (旧客户端兼容)
     /// - 与当前绑定会话不一致: 拒绝该请求, 回 WireError(SessionMismatch) 给来源
     ///   (来源为空时广播), 并记警告日志 —— 避免切换会话后迟到的旧请求写到新会话
@@ -493,12 +493,12 @@ private:
     // 服务端消息队列 (仅 ex_ 线程访问)
     std::deque<MessageQueueItem> messageQueue_;
     uint64_t                     nextQueueItemId_ = 1;
-    /// 队列状态 (计划 LOOP-4: 取代 queuePaused_/pendingInsert_ 两个 bool)
+    /// 队列状态 (取代 queuePaused_/pendingInsert_ 两个 bool)
     SessionQueueState queueState_ = SessionQueueState::Idle;
     /// 轮次进行中收到"打断并运行下一条"时置位: 本轮结束后不暂停队列, 直接继续
     bool pendingInsert_ = false;
 
-    /// `collect` 静默合并窗口暂存 (计划 LOOP-11; 仅 ex_ 线程)
+    /// `collect` 静默合并窗口暂存 (仅 ex_ 线程)
     struct CollectEntry {
         uint64_t                            requestId = 0;
         std::string                         text;

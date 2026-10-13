@@ -61,14 +61,14 @@ public:
     /// SKILL.md text conetnt
     std::string mdText;
 
-    /// 所属扫描目录的优先级 (数字小的优先; 计划 PRM-5)
+    /// 所属扫描目录的优先级 (数字小的优先)
     int priority = 0;
 
     /// 来源标识 (config / project / user / plugin / builtin; 展示给模型与 UI)
     std::string source;
 };
 
-/// skill 扫描目录条目 (计划 PRM-5: 优先级与来源)
+/// skill 扫描目录条目 (优先级与来源)
 /// - `priority` 小的先注册; 同名技能由优先级小(高)的一个生效,
 ///   其余记为被遮蔽 (shadowed) 供诊断展示
 /// - 约定优先级: 会话/项目 0, 用户配置 10, 插件 100, 内置 200
@@ -150,7 +150,7 @@ Remember: Skills make you more capable and consistent. When in doubt, check if a
     _SkillContext skillCache{};
     bool          haveLoadSkillMetadata = false;
 
-    /// 被同名高优先级技能遮蔽的技能 ({技能名, 被遮蔽目录, 生效目录}; 计划 PRM-5)
+    /// 被同名高优先级技能遮蔽的技能 ({技能名, 被遮蔽目录, 生效目录})
     std::vector<std::array<std::string, 3>> shadowedSkills_;
 
     /// 是否需要重扫 (插件运行期增删扫描目录后置位; 下次 onAgentcallStartFunc 全量重扫)
@@ -184,7 +184,7 @@ public:
     /// - 默认按"插件"来源与优先级 (插件贡献的目录优先级低于项目/用户配置)
     void addSkillDirs(std::vector<std::string> paths);
 
-    /// 追加扫描目录并指定优先级/来源 (计划 PRM-5; 数字小的优先)
+    /// 追加扫描目录并指定优先级/来源 (数字小的优先)
     void addSkillDirs(std::vector<std::string> paths, int priority, std::string_view source);
 
     /// 摘除扫描目录并置重载标记 (io 线程; 缓存随下次轮次重建)

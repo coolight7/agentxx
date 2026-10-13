@@ -1,6 +1,6 @@
 #pragma once
 
-/// UI 快照夹具 (计划 UI-2 / TST-5)
+/// UI 快照夹具
 ///
 /// 目的: 渲染回归能被自动发现, 而不是靠人眼看输出。做法是把"固定尺寸下的纯文本画面"
 /// 与"命中区清单"存成仓库内的基线文件, 测试时逐字符比较; 不一致时打印首个不同的
@@ -8,7 +8,7 @@
 ///
 /// - 基线目录: `agent/test/snapshots/ui/` (构建时经 `AGENTXX_UI_SNAPSHOT_DIR` 传入)
 /// - 一键更新: 设 `AGENTXX_UPDATE_UI_SNAPSHOTS=1` 运行测试, 基线被重写 (之后人工 review diff)
-/// - 覆盖范围由 UI-2 定义: 表格 / 树 / 差异 / Markdown / 表单 / 窄终端 / CJK /
+/// - 覆盖范围: 表格 / 树 / 差异 / Markdown / 表单 / 窄终端 / CJK /
 ///   超长内容 / 未知组件降级
 #include <string>
 #include <string_view>

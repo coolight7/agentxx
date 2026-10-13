@@ -611,7 +611,7 @@ void test_model_multimodal_input() {
 }
 
 // ---------------------------------------------------------------------------
-// prompt 缓存断点开关 (yaml `model.list[].cache_control`, 默认 false; 计划 LLM-8)
+// prompt 缓存断点开关 (yaml `model.list[].cache_control`, 默认 false)
 // ---------------------------------------------------------------------------
 
 void test_model_cache_control() {
@@ -659,7 +659,7 @@ void test_model_cache_control() {
 }
 
 // ---------------------------------------------------------------------------
-// 数值与扩展配置解析 (CFG-9 期间修掉的小数截断问题)
+// 数值与扩展配置解析 (配置键目录校验期间修掉的小数截断问题)
 // ---------------------------------------------------------------------------
 
 void test_model_numeric_and_extra_config() {
@@ -846,7 +846,7 @@ void test_plugin_args_paths_parse() {
 }
 
 void test_yaml_to_json_big_integer() {
-    // P3-4: 超过 32 位 int 范围的大整数精确解析为整数 (long long), 不丢失精度到 double
+    // 超过 32 位 int 范围的大整数精确解析为整数 (long long), 不丢失精度到 double
     auto cfg = loadYaml(R"(plugin:
   list:
     - path: "/opt/plugins/test_plugin"
@@ -863,7 +863,7 @@ void test_yaml_to_json_big_integer() {
 }
 
 void test_url_decode() {
-    // P3-4: URL 解码功能验证 (支持 + 转空格, %XX 十六进制还原)
+    // URL 解码功能验证 (支持 + 转空格, %XX 十六进制还原)
     auto decoded = utilxx::HttpClient::urlDecode("hello%20world%2B%2F%3D+test%21");
     XX_TEST_EXPECT_EQ(decoded, std::string("hello world+/= test!"));
 }

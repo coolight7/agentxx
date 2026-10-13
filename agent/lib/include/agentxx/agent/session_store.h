@@ -29,7 +29,7 @@ namespace agent {
 ///                   同一会话目录同时只允许一个进程写入, 第二个进程写操作
 ///                   明确失败而不是互相覆盖; 读操作不取锁
 ///
-/// schema 版本 (计划 STO-2): meta.schema_version 记录结构版本; 打开写连接时
+/// schema 版本: meta.schema_version 记录结构版本; 打开写连接时
 /// 按相邻步骤迁移 (每步独立事务、幂等、迁移前备份 session.db.bak.v{n});
 /// 库版本高于本程序支持的版本时拒绝打开, 避免新数据被旧程序改坏。
 ///
@@ -76,7 +76,7 @@ public:
         utilxx_base::Json        llmMessages = utilxx_base::Json::array();
         /// 恢复后的 msg id 计数器 (保证新消息 id 不与已存消息冲突)
         uint64_t msgIdCounter = 0;
-        /// 库内最大展示消息序号 (计划 STO-4; 供重连增量补拉与继续编号)
+        /// 库内最大展示消息序号 (供重连增量补拉与继续编号)
         uint64_t lastViewSeq = 0;
         /// 该会话历史累计用量 (usage 表聚合; 无记录/读取失败时为全 0)
         UsageSummary usage;
@@ -85,7 +85,7 @@ public:
     /// 加载指定 session 的会话消息状态; 无数据/打开失败时返回空结构 (仅记日志)
     LoadedSession loadSession(std::string_view sessionId);
 
-    /// 读取展示历史中序号大于 [afterSeq] 的消息 (计划 STO-4: 断线增量补拉)
+    /// 读取展示历史中序号大于 [afterSeq] 的消息 (断线增量补拉)
     ///
     /// - 返回 `{seq, ViewMessage}` 列表, 按 seq 升序; 消息 id 为空的老数据也返回
     ///   (调用方按需回退全量同步)
@@ -151,7 +151,7 @@ public:
     /// - 失败仅记录日志, 不影响内存状态
     void saveLlmMessages(std::string_view sessionId, std::string_view llmMessagesJson);
 
-    // ---- 输入收件箱 (session.db session_input 表; 计划 LOOP-1) ----
+    // ---- 输入收件箱 (session.db session_input 表) ----
     //
     // 输入受理时先落库 (status=admitted), 真正进入上下文时标记 promoted;
     // 进程重启后只恢复 admitted 条目为"待确认", 不自动重放副作用。
@@ -208,7 +208,7 @@ public:
         int64_t     totalTokens             = 0;
         int64_t     cachedPromptTokens      = 0;
         /// 写入 prompt 缓存的 token 数 (Anthropic 的 cache_creation_input_tokens;
-        /// 其余 provider 为 0; 计划 LLM-8)
+        /// 其余 provider 为 0)
         int64_t     cacheWritePromptTokens  = 0;
         int64_t     reasoningTokens         = 0;
         bool        ok                      = true;
@@ -223,7 +223,7 @@ public:
     /// 最近的用量记录 (按时间倒序, 至多 limit 条; limit == 0 返回空)
     std::vector<UsageRecord> recentUsage(std::string_view sessionId, size_t limit);
 
-    // ---- 会话标题与检索 (计划 STO-12) ----
+    // ---- 会话标题与检索 ----
 
     /// 检索默认返回条数上限 (limit == 0 时使用)
     static constexpr size_t kSearchDefaultLimit = 50;
@@ -255,7 +255,7 @@ public:
     ///
     /// - 匹配语义: 大小写不敏感的子串匹配 (SQL LIKE; 关键词中的 `%` `_` `\` 自动转义)
     /// - 不做跨库索引: 逐个会话目录用临时只读连接查询 (与列表接口同顺序),
-    ///   需要更强检索能力时再考虑 FTS5 (见计划 STO-12)
+    ///   需要更强检索能力时再考虑 FTS5
     /// - 结果按最近活动时间降序; [limit] 为 0 时用 [kSearchDefaultLimit];
     ///   空关键词返回空结果
     std::vector<SessionSearchHit> searchSessions(std::string_view keyword, size_t limit = 0);
@@ -358,7 +358,7 @@ private:
     /// 迁移 view_message 的 msg_id 列与索引 (幂等; 老库 ALTER + 回填)
     static void ensureViewMessageMsgIdColumn(agentxx::util::SqliteDb& sessionDb);
 
-    /// 迁移 usage 的 cache_write_prompt_tokens 列 (幂等; 老库 ALTER 补列, 计划 LLM-8)
+    /// 迁移 usage 的 cache_write_prompt_tokens 列 (幂等; 老库 ALTER 补列)
     static void ensureUsageCacheWriteColumn(agentxx::util::SqliteDb& sessionDb);
 
     /// 读取会话 meta 中单个键 (只读临时连接, 不取写租约; 无数据返回空串)

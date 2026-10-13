@@ -281,7 +281,7 @@ utilxx_base::Json AnthropicProvider::convertTools(const std::vector<neograph::Ch
     return arr;
 }
 
-/// 是否为请求末尾的动态段内容块 (`<dynamic_context ...>`, 计划 PRM-1)
+/// 是否为请求末尾的动态段内容块 (`<dynamic_context ...>`)
 /// - 动态段由 modelcall 每轮按当前来源拼装 (记忆/技能等), 内容可能变化,
 ///   因此它不属于稳定前缀: 缓存断点必须落在它之前的消息上
 bool AnthropicProvider::isDynamicContextBlock(const utilxx_base::Json& block) {
@@ -412,7 +412,7 @@ neograph::ChatCompletion AnthropicProvider::parseResponse(const utilxx_base::Jso
 
     if (resp.contains("usage")) {
         auto u = resp["usage"];
-        // 用量计算方式 (计划 LLM-8): input_tokens 只含未命中缓存的输入, 缓存读/写量
+        // 用量计算方式: input_tokens 只含未命中缓存的输入, 缓存读/写量
         // 单独回报; 统一折算成整段 prompt 规模, 并把缓存写入量放进额外字段供用量记录使用
         applyUsage(
             completion,
@@ -450,7 +450,7 @@ utilxx_base::Json AnthropicProvider::buildBody(const neograph::CompletionParams&
         body["tools"] = convertTools(params.tools);
     }
 
-    // prompt 缓存断点 (计划 LLM-8): 默认关闭, 由 model.list 条目的 `cache_control` 打开
+    // prompt 缓存断点: 默认关闭, 由 model.list 条目的 `cache_control` 打开
     if (config_.cacheControl) {
         applyCacheBreakpoints(body);
     }

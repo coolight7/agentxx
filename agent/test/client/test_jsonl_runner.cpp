@@ -1,4 +1,4 @@
-/// JSONL stdio 一次性运行模式 (client 运行器) 测试 (计划 PRO-8)
+/// JSONL stdio 一次性运行模式 (client 运行器) 测试
 ///
 /// 覆盖运行器级别的语义 (与传输级用例互补, 见 core 模块 `jsonl_mode`):
 /// - 输入结束 (stdin EOF) 后仍把轮次结果写出去, 轮次跑完自动收尾返回

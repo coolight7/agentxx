@@ -348,7 +348,7 @@ inline void appendOpenAIToolsJson(std::string& out, const std::vector<neograph::
     out.push_back(']');
 }
 
-/// 补充用量明细 (缓存 token) 的单独传递 (计划 LLM-8)
+/// 补充用量明细 (缓存 token) 的单独传递
 ///
 /// 背景: `neograph::ChatCompletion::Usage` 只有 prompt / completion / total /
 /// cached_prompt / reasoning 五项; Anthropic 另外回报"缓存写入量"

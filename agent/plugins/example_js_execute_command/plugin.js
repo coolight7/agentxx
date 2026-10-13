@@ -1,7 +1,7 @@
 // example_js_execute_command —— JS 代码执行工具插件
 // 仿 agentxx_execute_command (agentxx_execute_bash_command / windows) 的设计，
 // 提供 example_js_execute_command 工具，在 QuickJS 沙箱内执行任意 JS 代码并返回格式化输出。
-// 依赖 agentxx_javascript_engine (interpreter.js 能力) 承载。
+// 依赖 agentxx_javascript_engine (interpreter.js 能力) 执行。
 
 (function () {
   var kName = "example_js_execute_command";

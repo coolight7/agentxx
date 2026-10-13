@@ -969,7 +969,7 @@ private:
         if (JS_IsException(ret)) {
             err = extractException(pctx->ctx, ret);
             JS_FreeValue(pctx->ctx, ret);
-            // F16: 脚本初始化是注册事务 —— 顶层异常时先撤销已产生的全部副作用
+            // 脚本初始化是注册事务 —— 顶层异常时先撤销已产生的全部副作用
             // (工具/钩子/订阅/资源/定时器), 再释放 JSContext。
             rollbackScriptEffects(pctx);
             return -1;
@@ -1876,7 +1876,7 @@ JSValue JsEngine::bridgeCall(
             }
             std::string sessionId = argc >= 3 ? jsToCppString(ctx, argv[2]) : "";
 
-            // F17: callTool 始终返回 Promise, 完成事件回到 JS 线程 settle。
+            // callTool 始终返回 Promise, 完成事件回到 JS 线程 settle。
             // - 本引擎 JS 工具: 同线程执行并把结果/内部 Promise 链到外层 Promise
             //   (不阻塞等待, 内部 Promise 由外层驱动的 job/timer/队列泵推进)
             // - 主程序插件工具: call_tool_async + 完成回调投递回 JS 线程 (不再

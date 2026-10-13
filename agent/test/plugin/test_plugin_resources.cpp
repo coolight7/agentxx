@@ -561,7 +561,7 @@ mcp:
             XX_TEST_EXPECT_EQ(oversize[0].first, bigPath.string());
             XX_TEST_EXPECT_EQ(oversize[0].second, bigContent.size());
         }
-        // 内容未被截断: 注入的稳定附加段里仍带整份文件 (计划 PRM-1: 按来源写入,
+        // 内容未被截断: 注入的稳定附加段里仍带整份文件 (按来源写入,
         // 随 system 消息进稳定前缀)
         const auto& injected = ctx->middlewareHandleContext
                                    ->getGraphDataItemValue<

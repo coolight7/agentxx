@@ -280,9 +280,9 @@ static void applySharedRuntimeConfig(
     }
 }
 
-/// 打印生效装配快照 (计划 ARC-6)
+/// 打印生效装配快照
 ///
-/// `--dump-diagnostics` 的实现 (计划 OBS-4): 装配一次 agent 后导出诊断包文本
+/// `--dump-diagnostics` 的实现: 装配一次 agent 后导出诊断包文本
 ///
 /// 与 [dumpConfigAndExit] 共用装配路径, 但导出的是"报障包": 环境与版本、关键指标、
 /// 装配快照 (配置含"是否已设置 Key"、不含 Key 取值)、会话摘要、日志尾部 (脱敏)。
@@ -396,7 +396,7 @@ static int dumpConfigAndExit(
         XX_OUT("{}\n", line);
     }
 
-    // 配置校验结果 (计划 CFG-1): 键路径 + 严重级别, 配置排查时先看这一段
+    // 配置校验结果: 键路径 + 严重级别, 配置排查时先看这一段
     auto report = agentxx::agent::validateAgentConfigWithPaths(*config);
     report.setSource(std::string{configPath});
     XX_OUT("\nconfig issues[{}]:\n", report.issues.size());
@@ -453,7 +453,7 @@ static int dumpConfigAndExit(
     return report.hasFatal() ? 1 : 0;
 }
 
-/// 启动期配置校验 (计划 CFG-1)
+/// 启动期配置校验
 ///
 /// 打印结构化问题 (键路径 + 严重级别 + 来源), 致命问题返回 false 由调用方终止启动。
 /// 校验规则只有一份实现 (agentxx::agent::validateAgentConfigWithPaths), 与
@@ -548,7 +548,7 @@ int main(int argn, char** argv) {
     auto defaultLogSink = std::make_shared<StderrLogSink>();
     utilxx_base::LogDispatcher::instance().addSink(defaultLogSink);
 
-    // 按模块调日志级别 (计划 OBS-5): `AGENTXX_LOG_MODULES=前缀=级别,...`
+    // 按模块调日志级别: `AGENTXX_LOG_MODULES=前缀=级别,...`
     // - 例: `modelcall=debug,toolcall=trace,plugin.=warn`
     // - 未命中任何条目的模块照常输出 (由 sink 侧按全局级别过滤)
     // - 非法段跳过并告警, 不影响其它段
@@ -588,7 +588,7 @@ int main(int argn, char** argv) {
     std::string configPath = std::string{kDefaultConfigFileName};
     bool configExplicit = false; ///< --config 是否被显式指定 (指定但文件不存在时报错)
     bool dumpConfig     = false; ///< --dump-config: 打印生效装配快照后退出
-    bool dumpDiagnostics = false; ///< --dump-diagnostics: 打印诊断包后退出 (计划 OBS-4)
+    bool dumpDiagnostics = false; ///< --dump-diagnostics: 打印诊断包后退出
     std::string overrideEnvPath;
     std::string mode = "tui";
     std::string agentUrl;
@@ -813,7 +813,7 @@ Options:
         return (std::filesystem::current_path() / fp).lexically_normal().string();
     };
 
-    // `--dump-diagnostics`: 打印诊断包后退出 (计划 OBS-4)
+    // `--dump-diagnostics`: 打印诊断包后退出
     // - 与 --dump-config 同一位置与同一装配路径, 导出的是"报障包"
     // - 只读导出: 不发网络请求、不写会话库
     if (dumpDiagnostics) {
@@ -828,7 +828,7 @@ Options:
         );
     }
 
-    // `--dump-config`: 打印生效装配快照后退出 (计划 ARC-6)
+    // `--dump-config`: 打印生效装配快照后退出
     // - 不进入任何交互模式, 不监听端口; 配置写错 (无可用模型) 时也打印配置侧快照
     if (dumpConfig) {
         return dumpConfigAndExit(
@@ -956,14 +956,14 @@ Options:
     applyAvailableModelsToConfig(config, yamlCfg.models, yamlCfg.useModelDefault);
     applySharedRuntimeConfig(config, yamlCfg, resolvePath);
 
-    // 配置校验 (计划 CFG-1): 结构/语义 + 路径存在性与权限组合
+    // 配置校验: 结构/语义 + 路径存在性与权限组合
     // - 致命问题 (无可用模型 / 必需绝对路径写错 / 持久化目录不可用) 在此终止启动
     // - 警告照常启动 (内存降级、会被夹取的取值、白黑名单重复等)
     if (!validateStartupConfig(config, configPath)) {
         return 1;
     }
 
-    // ======================== JSONL stdio 一次性运行模式 (计划 PRO-8) ========================
+    // ======================== JSONL stdio 一次性运行模式 ========================
     // 与 server 模式同一套 Wire 协议与同一份会话驱动实现, 传输换成 stdin/stdout 逐行 JSON:
     // - stdout 只写协议行 (可被外部脚本逐行解析), 日志与诊断走 stderr
     // - 对端从 hello_ack 的 sessionId 读回会话 id; 输入受理回执不等于轮次完成,

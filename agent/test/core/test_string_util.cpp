@@ -906,7 +906,7 @@ void test_parseNumberFromString() {
     auto r8 = utilxx_base::parseNumberFromString("99999999999999999999", ov);
     XX_TEST_EXPECT_TRUE(r8.ec == std::errc::result_out_of_range);
 
-    // 浮点边界 (M1-6 回归: libc++ 回退实现曾按 errno 判定失败, 导致下溢的
+    // 浮点边界 (回归: libc++ 回退实现曾按 errno 判定失败, 导致下溢的
     // 极小值 (1e-320) 被误判为非法 —— 下溢返回的仍是可用数值, 只有上溢
     // (±inf) 与无法完整消费的输入才算失败)
     double tiny = 0.0;

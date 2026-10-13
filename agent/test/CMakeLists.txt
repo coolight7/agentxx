@@ -69,7 +69,7 @@ file(GLOB test_plugin_C_SOURCES
 
 # ===== 插件框架定向探针 (AGENTXX_ENABLE_SANITIZER) =====
 # 插件运行时核心 (OpCore/InstanceLifetime/Operation 表) 是 header-only: 其
-# UBSan 覆盖由"用 -fsanitize=undefined 编译插件测试 TU"获得; 宿主 lib 侧插件
+# UBSan 覆盖由"用 -fsanitize=undefined 编译插件测试 TU"获得; 主程序 lib 侧插件
 # 源文件另由 lib/CMakeLists.txt 同选项插桩 (见顶层选项说明)。
 # 仅非 Release 生效: Release 编译/链接参数里都没有 -fsanitize=*, 单独插桩会因缺少
 # UBSan 运行库 (__ubsan_handle_*) 而链接失败; MSVC 无 UBSan, 跳过。
@@ -150,21 +150,21 @@ if (AGENTXX_BUILD_CLIENT)
   target_include_directories(agentxx_test PRIVATE 
     "${AGENTXX_CLIENT_SOURCE_DIR}/include/"
   )
-  # UI 快照基线目录 (计划 UI-2 / TST-5): 固定尺寸纯文本画面 + 命中区清单存在仓库内,
+  # UI 快照基线目录: 固定尺寸纯文本画面 + 命中区清单存在仓库内,
   # 一键更新用 AGENTXX_UPDATE_UI_SNAPSHOTS=1 (见 include/agentxx-test/client/ui_snapshot.h)
   target_compile_definitions(agentxx_test PRIVATE
     AGENTXX_UI_SNAPSHOT_DIR="${CMAKE_CURRENT_SOURCE_DIR}/snapshots/ui"
   )
 endif()
 
-# Wire 协议字段清单生成物 (计划 PRO-4 / TST-2): 模块 wire_schema 把生成结果与仓库内
+# Wire 协议字段清单生成物: 模块 wire_schema 把生成结果与仓库内
 # 生成物逐字节比对, 不一致即失败; 一键更新用 AGENTXX_UPDATE_WIRE_SCHEMA=1
 target_compile_definitions(agentxx_test PRIVATE
   AGENTXX_WIRE_SCHEMA_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../schema/wire-schema.json"
   AGENTXX_WIRE_SCHEMA_DOC_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../../docs/zh-cn/design/wire-protocol-fields.md"
 )
 
-# 配置键目录生成物 (计划 CFG-9): 模块 config_keys 生成并逐字节比对, 一键更新用
+# 配置键目录生成物: 模块 config_keys 生成并逐字节比对, 一键更新用
 # AGENTXX_UPDATE_CONFIG_KEYS=1 (生成后人工 review diff 再提交)
 target_compile_definitions(agentxx_test PRIVATE
   AGENTXX_CONFIG_KEYS_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../schema/config-keys.json"
@@ -276,7 +276,7 @@ if (AGENTXX_BUILD_CLIENT)
 endif()
 
 # ===== 加载期 start 失败回滚用例: 测试专用插件动态库 =====
-# 仅用于 test_plugins 的"start 全注册后失败 → 宿主回滚"真实 DSO 用例:
+# 仅用于 test_plugins 的"start 全注册后失败 → 主程序回滚"真实 DSO 用例:
 # - 源码只用纯 C ABI 头 (plugin_api.h), 不需要链接 libagentxx;
 # - 入口符号经 AGENTXX_PLUGIN_EXPORT 导出, 其余符号隐藏;
 # - 路径经编译定义传给测试, 运行时直接 dlopen 该文件。
@@ -304,7 +304,7 @@ target_compile_definitions(agentxx_test PRIVATE
 add_dependencies(agentxx_test agentxx_test_start_fail_plugin)
 
 # ===== 客户端加载期 start 失败回滚用例: 客户端测试专用插件动态库 =====
-# 仅用于 test_client_plugins 的"UI 全注册后失败 → 宿主回滚"真实 DSO 用例:
+# 仅用于 test_client_plugins 的"UI 全注册后失败 → 主程序回滚"真实 DSO 用例:
 # - 源码只用纯 C ABI 头 (client_plugin_api.h), 不需要链接 libagentxx;
 # - 入口符号经 AGENTXX_PLUGIN_EXPORT 导出, 其余符号隐藏;
 # - 行为受环境变量 AGENTXX_TEST_CLIENT_START_OK 控制 (测试内先失败后成功)。

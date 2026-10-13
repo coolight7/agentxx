@@ -75,7 +75,7 @@ if (_AGENTXX_ADD_AS_BUILTIN)
 endif()
 
 # ===== 独立动态库编译 (默认) =====
-# - 加载后可承载 type: js 脚本插件
+# - 加载后可运行 type: js 脚本插件
 # - 仅当 AGENTXX_ENABLE_PLUGIN_JS 时由 plugins/CMakeLists.txt 添加本子目录
 add_library(${PLUGIN_NAME} SHARED
   agentxx_javascript_engine.cpp

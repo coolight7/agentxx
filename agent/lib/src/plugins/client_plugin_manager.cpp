@@ -157,7 +157,7 @@ std::string keyOf(std::string_view token) {
     if (token == "pgdn" || token == "pagedn" || token == "page_down") {
         return "pagedown";
     }
-    // F1~F24
+    // F1~F24 功能键
     if (token.size() >= 2 && token[0] == 'f') {
         int         num  = 0;
         bool        ok   = true;

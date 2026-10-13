@@ -60,7 +60,6 @@ struct PendingInjections {
 };
 
 /// 在 modelcall 请求装配前的安全边界注入待处理的 next-step / inject 输入
-/// (计划 LOOP-2)
 ///
 /// - 调用时机: 每次请求装配前 (modelcall 节点内), 即"安全边界": 不会打断
 ///   正在进行的 provider 流; 空闲时会话没有请求装配, 待注入输入保持等待

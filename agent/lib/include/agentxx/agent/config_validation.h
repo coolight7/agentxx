@@ -10,7 +10,7 @@
 namespace agentxx {
 namespace agent {
 
-/// 配置问题严重级别 (计划 CFG-1)
+/// 配置问题严重级别
 /// - Warning: 可以继续启动, 但行为与预期可能不同 (内存降级、被忽略的键、会被夹取的取值)
 /// - Fatal:   必须终止启动 (没有可用模型、路径不可用、必需的绝对路径写成了相对路径)
 enum class ConfigIssueLevel : uint8_t {

@@ -186,7 +186,7 @@ std::string jsonOfMsgId(const std::string& dbFile, std::string_view msgId) {
 }
 
 /// 建立一个"老版本"会话库: 只有四张老表, 无 msg_id 列 / 无 schema_version /
-/// 无 usage 表 (模拟计划 STO-2 提到的历史数据结构)
+/// 无 usage 表 (模拟早期版本的历史数据结构)
 void createLegacyDb(const std::string& dbFile) {
     fs::create_directories(utilxx_base::utf8ToPath(fs::path{dbFile}.parent_path().string()));
     agentxx::util::SqliteDb db;
@@ -217,7 +217,7 @@ CREATE TABLE store (
     db.close();
 }
 
-/// 建立一个 v2 结构的会话库 (计划 LLM-8 的迁移起点):
+/// 建立一个 v2 结构的会话库 (缓存写入量列迁移的起点):
 /// 结构上到 v2 为止 (usage 表**没有** cache_write_prompt_tokens 列, 有 session_input),
 /// 且 meta.schema_version = 2, 用于验证按相邻步骤迁移到 v3
 void createV2Db(const std::string& dbFile) {
@@ -369,7 +369,7 @@ TestResult testSessionSchema() {
     XX_TEST_EXPECT_EQ(countRows(dbFuture, "view_message"), int64_t{1});
 
     // -----------------------------------------------------------------------
-    // D2) 迁移中断 (计划 TST-3): 迁移步骤失败时不推进版本、不改坏老数据;
+    // D2) 迁移中断: 迁移步骤失败时不推进版本、不改坏老数据;
     //     排除故障后重新打开可从旧版本续做 (每步独立事务)
     // -----------------------------------------------------------------------
     const auto dbBroken = sessionDbFile(root, "s-broken");
@@ -419,7 +419,7 @@ TestResult testSessionSchema() {
     XX_TEST_EXPECT_TRUE(jsonOfMsgId(dbBroken, "m-broken").empty());
 
     // -----------------------------------------------------------------------
-    // D2) v2 -> v3: 用量记录补"缓存写入量"列 (计划 LLM-8), 老记录按 0 保留
+    // D2) v2 -> v3: 用量记录补"缓存写入量"列, 老记录按 0 保留
     // -----------------------------------------------------------------------
     const auto dbV2 = sessionDbFile(root, "s-v2");
     createV2Db(dbV2);
@@ -558,7 +558,7 @@ TestResult testSessionSchema() {
     }
 
     // -----------------------------------------------------------------------
-    // G) 会话标题与检索 (STO-12): 自动标题与来源、用户改名、关键词检索
+    // G) 会话标题与检索: 自动标题与来源、用户改名、关键词检索
     // -----------------------------------------------------------------------
     {
         SessionStore store{root};
@@ -623,7 +623,7 @@ TestResult testSessionSchema() {
         XX_TEST_EXPECT_EQ(store.searchSessions("needle-keyword", 1).size(), size_t{1});
     }
 
-    // ---- 展示历史序号与增量补拉 (计划 STO-4) ----
+    // ---- 展示历史序号与增量补拉 ----
     {
         SessionStore store{root};
         const std::string seqSession = "s-seq";

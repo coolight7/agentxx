@@ -2,7 +2,7 @@
 # 交叉编译安卓 arm64-v8a 动态库 (libagentxx.so)
 # ===== 前置: 自动交叉构建 Boost / OpenSSL for Android (Hermetic deps) =====
 # - 依赖库全部自行交叉编译 (源码: third_party/boost、openssl-4.0.1), 不依赖
-#   系统/apt 安装的宿主库
+#   系统/apt 安装的构建机库
 # - Boost 经 third_party/boost-android (Boost-for-Android) 交叉编译, 产物按 ABI
 #   落到 third_party/boost-android-build-release/<abi>
 # - OpenSSL 直接经 NDK clang 交叉编译, 产物按 ABI 落到
@@ -96,7 +96,7 @@ for abi in "${abi_list[@]}"; do
         command -v "$_t" >/dev/null 2>&1 || { echo "[env] 缺少构建工具: $_t"; _env_fail=1; }
     done
     command -v ninja >/dev/null 2>&1 || command -v ninja-build >/dev/null 2>&1 || { echo "[env] 缺少 ninja (sudo apt-get install -y ninja-build)"; _env_fail=1; }
-    # 宿主 g++: 仅用于编译 b2 构建引擎/生成工具, 版本不做强制要求
+    # 构建机 g++: 仅用于编译 b2 构建引擎/生成工具, 版本不做强制要求
     if [[ "$_env_fail" == "1" ]]; then
         echo "  请安装: sudo apt-get install -y cmake ninja-build make git"
         exit 1

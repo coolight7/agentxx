@@ -350,7 +350,7 @@ void checkRenderLayerIncludes(const fs::path& root, Violations& v) {
     }
 }
 
-/// 规则 9: 客户端声明的 UI 组件名与描述层组件表一致 (计划 TST-7)
+/// 规则 9: 客户端声明的 UI 组件名与描述层组件表一致
 ///
 /// 背景: 客户端只声明自己真的能画的组件 (能力段), 声明错名字的后果是三层
 /// 静默失效 —— `adapt()` 认为客户端不支持该组件而提前降级, 渲染器里那条分支
@@ -438,7 +438,7 @@ void checkTuiBlockNames(const fs::path& root, Violations& v) {
     }
 }
 
-/// 规则 10: 接口表名集合 (计划 TST-7)
+/// 规则 10: 接口表名集合
 ///
 /// 数量常量 (`kInterfaceTableCount`) 只能发现"少了一张表", 发现不了"名字写错"或
 /// "换了名字": 插件按 IID 查询, 名字错一个字就是查询失败。因此这里从 SDK 头文件
@@ -538,7 +538,7 @@ void checkInterfaceTableNames(const fs::path& root, Violations& v) {
     }
 }
 
-/// 规则 13: 接口表四件套齐全 (计划 plugin-version §3.9)
+/// 规则 13: 接口表四件套齐全
 ///
 /// 每张接口表必须同时具备四项, 缺一不可 (新增表同样):
 /// - **IID** (`X_IFACE_<名>` 字符串常量): `query_interface` 的键;
@@ -735,7 +735,7 @@ void checkInterfaceTableQuadruple(const fs::path& root, Violations& v) {
     }
 }
 
-/// 规则 14: 接口表成员顺序台账 (计划 plugin-version §3.6/§7)
+/// 规则 14: 接口表成员顺序台账
 ///
 /// 重排成员、改成员签名、删除成员都**可能不改变结构体大小** —— 版本号与
 /// `struct_size` 都拦不住, 旧调用方会静默调到隔壁函数。唯一可行的防线是把"成员顺序"
@@ -868,7 +868,7 @@ void checkInterfaceTableLayout(const fs::path& root, Violations& v) {
     }
 }
 
-/// 规则 15: 称呼与用词 (计划 plugin-version §11)
+/// 规则 15: 称呼与用词
 ///
 /// 同一件事在全项目只有一个称呼 (§11.1): 主程序 / 插件框架 / 动态库插件 / JS 插件 /
 /// JS 运行时插件 / 嵌入方程序。含糊称呼与直译词一旦回潮, 读代码的人就要靠上下文猜
@@ -1051,7 +1051,7 @@ void checkTerminology(const fs::path& root, Violations& v) {
     }
 }
 
-/// 规则 11: 文档路径存在 (计划 TST-7)
+/// 规则 11: 文档路径存在
 ///
 /// `AGENTS.md` 是给人和 AI 看的入口, 里面引用的 `docs/zh-cn/**.md` 一旦改名或
 /// 搬走就会变成死链 (读者点不开, 模型按旧路径找文档)。这里把根 `AGENTS.md` 与
@@ -1089,7 +1089,7 @@ void checkDocumentedPaths(const fs::path& root, Violations& v) {
     }
 }
 
-/// 规则 12: 客户端模型层只依赖数据与标准库 (计划 UI-1)
+/// 规则 12: 客户端模型层只依赖数据与标准库
 ///
 /// 背景: 历史分页窗口与消息队列镜像被抽成独立模型 (client/.../tui/model/),
 /// 目的之一是**脱离终端可单测**。若模型里混进 FTXUI / 端点 / 传输 / 插件管理器
@@ -1146,7 +1146,7 @@ void checkModelLayerIncludes(const fs::path& root, Violations& v) {
     }
 }
 
-/// 规则 13: JSONL 一次性运行模式的 stdout 纪律 (计划 PRO-8)
+/// 规则 13: JSONL 一次性运行模式的 stdout 纪律
 ///
 /// 背景: `agentxx_cli jsonl` 的 stdout 就是对外协议 (每行一条 Wire 消息), 外部脚本按行
 /// 解析。运行器里若混进直接打印 (调试输出/进度提示), stdout 会被污染, 脚本解析随之失败。
@@ -1188,7 +1188,7 @@ void checkJsonlModeStdoutDiscipline(const fs::path& root, Violations& v) {
 
 } // namespace
 
-/// 规则 8: 接口表数量与文档一致 (计划 PLG-8 / TST-7)
+/// 规则 8: 接口表数量与文档一致
 /// - 数量常量在 `PluginManager::kInterfaceTableCount` / `ClientPluginManager::kInterfaceTableCount`
 /// - 文档: `docs/zh-cn/design/plugins.md` 与仓库根 `AGENTS.md` 都写明两侧数量;
 ///   增删接口表却忘记同步文档时本规则失败 (数字对不上就是漏更新)

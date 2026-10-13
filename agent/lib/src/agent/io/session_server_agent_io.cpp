@@ -32,7 +32,7 @@
 namespace agentxx {
 namespace agent {
 
-/// 增量补拉单次最多回补的展示消息条数 (计划 STO-4)
+/// 增量补拉单次最多回补的展示消息条数
 /// - 超过该值说明客户端离线时间很长, 回退全量/尾窗同步, 避免一次传输过大
 static constexpr size_t kIncrementalReplayMaxMessages = 512;
 
@@ -42,7 +42,7 @@ static constexpr size_t kIncrementalReplayMaxMessages = 512;
 ///   明确的拒绝结果, 好过无上限堆积
 static constexpr size_t kMaxStashedWhileSwitching = 64;
 
-/// 会话标题规范化 (计划 RET-1a): 去首尾空白、换行/制表符折叠为空格、限长
+/// 会话标题规范化: 去首尾空白、换行/制表符折叠为空格、限长
 /// - 标题是会话列表里的单行文本, 不是正文: 多行内容会被截断为一行
 /// - 超长截断按 UTF-8 字符边界处理, 避免产生半个字符
 static std::string normalizeSessionTitle(std::string_view raw) {
@@ -77,7 +77,7 @@ static std::string normalizeSessionTitle(std::string_view raw) {
     return out;
 }
 
-/// 会话列表/检索请求的统一取数实现 (计划 RET-1a)
+/// 会话列表/检索请求的统一取数实现
 ///
 /// 三种形态共用同一条消息 (`WireListSessions`):
 /// - 关键词非空: 按标题/展示历史正文检索 (忽略游标字段), 命中片段随条目回传
@@ -572,7 +572,7 @@ bool SessionServerAgentIO::removeQueueItem(std::string_view itemId) {
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// 输入投递 (LOOP-1/2/3/4/11)
+// 输入投递
 // ---------------------------------------------------------------------------
 
 void SessionServerAgentIO::sendInputAck(
@@ -632,7 +632,7 @@ void SessionServerAgentIO::handleUserInput(
         );
         return;
     }
-    // agent 侧分阶段关闭 (计划 ARC-5): agent 已进入关闭阶段时同样不受理新输入
+    // agent 侧分阶段关闭: agent 已进入关闭阶段时同样不受理新输入
     // - 与上面的端点停止相互独立: 端点在进程退出时由调用方 stop, agent 可能
     //   更早开始关闭 (例如主程序先关 agent 再停端点)
     if (auto agent = agent_.lock();
@@ -1158,7 +1158,7 @@ void SessionServerAgentIO::onPeerMessage(
     WireMessage                                  msg,
     const std::shared_ptr<AgentIOTransportBase>& sender
 ) {
-    // 连接阶段校验 (计划 PRO-5): 传输报告"尚未握手"时, 除 hello 之外的业务消息
+    // 连接阶段校验: 传输报告"尚未握手"时, 除 hello 之外的业务消息
     // 一律按 InvalidState 拒绝并给出原因, 而不是按正常流程处理或静默丢弃。
     // - 进程内 Channel 传输恒为 ready, 因此同进程主程序的行为不变
     // - WS 传输在对端 hello 被接受之前为 unhandshaken
@@ -1190,7 +1190,7 @@ void SessionServerAgentIO::onPeerMessage(
             if constexpr (std::is_same_v<T, WireHello>) {
                 handleHello(m, {}, sender);
             } else if constexpr (std::is_same_v<T, WireUserInput>) {
-                // 输入受理 (投递模式分发 + 回执 + 收件箱落库, 见 LOOP-1/2/3/11)
+                // 输入受理 (投递模式分发 + 回执 + 收件箱落库)
                 handleUserInput(std::move(m), sender);
             } else if constexpr (std::is_same_v<T, WireCancel>) {
                 if (!acceptSessionScope(m.sessionId, sender, "cancel")) {
@@ -1365,7 +1365,7 @@ void SessionServerAgentIO::onPeerMessage(
                     asio::detached
                 );
             } else if constexpr (std::is_same_v<T, WireRenameSession>) {
-                // 会话重命名 (计划 RET-1a): 标题写入会话库 meta.title 并把来源标为
+                // 会话重命名: 标题写入会话库 meta.title 并把来源标为
                 // 用户命名 (此后不再被自动标题覆盖); 结果回执让客户端区分成功与原因
                 handleRenameSession(m, sender);
             } else if constexpr (std::is_same_v<T, WireListDir>) {
@@ -1635,7 +1635,7 @@ void SessionServerAgentIO::handleHello(
 ) {
     cancelGraceTimer();
 
-    // 协议版本协商 (计划 PRO-3): 对端版本更高时明确拒绝, 不静默降级
+    // 协议版本协商: 对端版本更高时明确拒绝, 不静默降级
     // - 0 = 老客户端未声明版本: 按最低兼容版本继续 (向后兼容)
     // - 高于本服务端版本: 新客户端可能依赖本端不认识的消息/字段, 继续跑会出现
     //   难以排查的行为, 因此回 ok=false + 可读原因
@@ -1709,7 +1709,7 @@ void SessionServerAgentIO::handleHello(
 
     // 同步策略 (按代价从低到高, 先满足者胜出):
     // ① delta 重放: 实时重连 (客户端 lastSeq 仍在缓冲内) 时传输量最小
-    // ② 增量补拉 (计划 STO-4): 客户端给出已持有的展示历史序号时只补差量
+    // ② 增量补拉: 客户端给出已持有的展示历史序号时只补差量
     // ③ 全量/尾窗同步: 首次接入或序列不匹配时的兜底
     if (hello.lastSeq > 0) {
         auto deltas = deltasSince(hello.lastSeq);
@@ -1722,7 +1722,7 @@ void SessionServerAgentIO::handleHello(
         // 但必须给出快照 (客户端在等): 由下方兜底保证
     }
 
-    // 增量补拉 (计划 STO-4): 客户端给出已持有的展示历史序号时只补差量
+    // 增量补拉: 客户端给出已持有的展示历史序号时只补差量
     // - 优先于全量/尾窗同步, 但只有在序号落在服务端历史范围内时可用
     //   (序号超前说明客户端持有的是另一份历史, 如服务端会话被重建/换会话)
     // - 差量条数超过 [kIncrementalReplayMaxMessages] 时回退常规同步,
@@ -1806,7 +1806,7 @@ void SessionServerAgentIO::handleHello(
     helloAck.models    = std::move(models);
     helloAck.plugins   = std::move(loadedPlugins);
     helloAck.deviceId  = utilxx::getDeviceId();
-    // 协议版本与能力声明 (计划 PRO-3): 客户端据此判断可用功能 (如 afterViewSeq 补拉)
+    // 协议版本与能力声明: 客户端据此判断可用功能 (如 afterViewSeq 补拉)
     helloAck.protocolVersion = agentxx::agent::WireProtocol::kVersion;
     helloAck.capabilities    = agentxx::agent::serverWireCapabilities();
     if (std::find(hello.capabilities.begin(), hello.capabilities.end(), "host_tools")
@@ -1830,7 +1830,7 @@ void SessionServerAgentIO::handleHello(
 
     doSend(std::move(helloAck));
 
-    // 握手完成 (计划 PRO-5): 该传输进入可收发业务消息的阶段
+    // 握手完成: 该传输进入可收发业务消息的阶段
     if (sender) {
         sender->setStage(agentxx::agent::WireConnectionStage::Ready, "hello accepted");
     }
@@ -2148,7 +2148,7 @@ asio::awaitable<void> SessionServerAgentIO::run() {
     if (auto agent = agent_.lock(); agent && agent->agentContext) {
         co_await agent->agentContext->getSessionAsync(config_.sessionId);
     }
-    // 持久化收件箱恢复 (计划 LOOP-1): 未投递的输入作为"待确认"回到队列并暂停,
+    // 持久化收件箱恢复: 未投递的输入作为"待确认"回到队列并暂停,
     // 不自动执行 —— 进程重启后重放副作用的代价高于"少跑一轮"
     recoverPendingInputs();
     while (!stopped_.load(std::memory_order_acquire)) {

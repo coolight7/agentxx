@@ -23,7 +23,7 @@
     - [运行测试](#运行测试)
     - [配置文件](#配置文件)
     - [命令行使用](#命令行使用)
-    - [JSONL 模式 (脚本驱动, 计划 PRO-8)](#jsonl-模式-脚本驱动-计划-pro-8)
+    - [JSONL 模式 (脚本驱动)](#jsonl-模式-脚本驱动)
     - [作为库使用](#作为库使用)
 - [架构设计](#架构设计)
     - [整体架构](#整体架构)
@@ -753,7 +753,7 @@ model:
                                       # SQLite 落库剥离 dataUrl 仅留元数据; 上下文压缩时旧附件
                                       # 降级为 [用户附带了图片/音频/视频] 纯文本标签
       model_context_max_token: 128000
-      cache_control: false            # 是否在请求体里加 prompt 缓存断点 (计划 LLM-8)
+      cache_control: false            # 是否在请求体里加 prompt 缓存断点
                                       # 仅 `type: anthropic` 生效: 在稳定前缀末尾
                                       # (系统提示 / 工具定义 / 最后一条正文消息) 加
                                       # cache_control 断点, 上游把这些内容缓存下来供后续
@@ -1070,7 +1070,7 @@ agentxx_cli acp --config agentxx-config.yaml
 agentxx_cli train --config agentxx-config.yaml
 ```
 
-### JSONL 模式 (脚本驱动, 计划 PRO-8)
+### JSONL 模式 (脚本驱动)
 
 `jsonl` 模式与 `server` 模式共用同一套 Wire 协议与同一份会话驱动实现, 只把传输换成
 stdin/stdout 的逐行 JSON, 让外部脚本或其它语言的进程直接驱动一个会话 (无需 WebSocket,

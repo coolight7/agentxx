@@ -1,4 +1,4 @@
-/// test_toolcall_parallel —— 工具调用并行化 (计划 TOOL-1 / TOOL-2 / TOOL-3)
+/// test_toolcall_parallel —— 工具调用并行化
 ///
 /// 背景: 同一条 assistant 消息可以声明多个 tool_call。工具执行被拆成三个阶段:
 /// prepare (参数修正/权限/重复确认, 串行) → run (执行体, 受限并发) → finalize

@@ -99,7 +99,7 @@ static constexpr std::string_view kMetaTitle        = "title";
 static constexpr std::string_view kMetaLastActiveMs = "lastActiveMs";
 /// 标题来源: "auto" (首条用户消息预览) / "user" (用户改名); 老数据无该键
 static constexpr std::string_view kMetaTitleSource  = "titleSource";
-/// 展示历史持久化序号计数 (计划 STO-4; 见 SessionStore::LoadedSession::lastViewSeq)
+/// 展示历史持久化序号计数 (见 SessionStore::LoadedSession::lastViewSeq)
 static constexpr std::string_view kMetaViewSeqCounter = "viewSeqCounter";
 
 /// 读取会话用量聚合 (usage 表全量汇总)
@@ -237,7 +237,7 @@ void SessionStore::updateViewMessage(std::string_view sessionId, const ViewMessa
                 msg.id,
                 errmsg
             );
-            // 记录写失败原因 (计划 STO-9; 只记根因, 见 appendViewMessage 处注释)
+            // 记录写失败原因 (只记根因, 见 appendViewMessage 处注释)
             lastWriteError_ = errmsg;
             return false;
         }
@@ -498,7 +498,7 @@ void SessionStore::applyMigrationStep(agentxx::util::SqliteDb& sessionDb, int st
             ensureViewMessageMsgIdColumn(sessionDb);
             break;
         case 2:
-            // v2: 输入收件箱 (session_input 表; 计划 LOOP-1)
+            // v2: 输入收件箱 (session_input 表)
             // - 老库补表; 新库建表时已含 (IF NOT EXISTS 幂等)
             // - 无需数据回填: 老库中的输入要么已经执行完 (不在库内), 要么随进程
             //   退出丢失 (老版本不持久化输入)
@@ -518,7 +518,7 @@ void SessionStore::applyMigrationStep(agentxx::util::SqliteDb& sessionDb, int st
             );
             break;
         case 3:
-            // v3: 用量记录补"缓存写入量"列 (cache_write_prompt_tokens; 计划 LLM-8)
+            // v3: 用量记录补"缓存写入量"列 (cache_write_prompt_tokens)
             // - Anthropic 的 cache_creation_input_tokens (写入 prompt 缓存的量) 与
             //   cached_prompt_tokens (命中缓存的读取量) 分开记账, 便于评估
             //   `cache_control` 断点的收益
@@ -558,7 +558,7 @@ void SessionStore::ensureViewMessageMsgIdColumn(agentxx::util::SqliteDb& session
     sessionDb.exec("CREATE INDEX IF NOT EXISTS idx_view_message_msg_id ON view_message(msg_id)");
 }
 
-/// 迁移: 保证 usage 有 cache_write_prompt_tokens 列 (幂等; 计划 LLM-8)
+/// 迁移: 保证 usage 有 cache_write_prompt_tokens 列 (幂等)
 /// - 新库: CREATE TABLE 已含该列, 此处什么都不用做
 /// - 老库 (无该列): ALTER 增加列并默认 0 (历史记录没有缓存写入量, 不猜测回填)
 void SessionStore::ensureUsageCacheWriteColumn(agentxx::util::SqliteDb& sessionDb) {
@@ -987,7 +987,7 @@ void SessionStore::appendViewMessage(
             db.beginImmediate();
             bool inTx = true;
             try {
-                // 显式序号 (计划 STO-4): seq > 0 时按调用方给的展示历史序号写入
+                // 显式序号: seq > 0 时按调用方给的展示历史序号写入
                 // (会话内单调递增, 与内存中的 viewMessages 一一对应); seq == 0
                 // (老调用方) 才用库内自增
                 auto insert = seq > 0
@@ -1012,7 +1012,7 @@ void SessionStore::appendViewMessage(
                 meta.bindInt64(2, static_cast<int64_t>(msgIdCounter));
                 meta.step();
 
-                // 展示历史序号计数 (计划 STO-4; 供重启后继续编号与增量补拉)
+                // 展示历史序号计数 (供重启后继续编号与增量补拉)
                 if (seq > 0) {
                     meta.reset();
                     meta.bindText(1, kMetaViewSeqCounter);
@@ -1070,7 +1070,7 @@ void SessionStore::appendViewMessage(
         },
         [&](std::string errmsg) -> bool {
             XX_LOGE("SessionStore: appendViewMessage({}) failed: {}", sessionId, errmsg);
-            // 记录写失败原因 (计划 STO-9: 会话侧据此提示"消息未落盘")
+            // 记录写失败原因 (会话侧据此提示"消息未落盘")
             // - 只记根因 (不含操作名): 同一次故障下"追加消息"与"保存上下文"两条
             //   写路径的失败原因一致, 会话侧的提示去重才能合并成一条
             lastWriteError_ = errmsg;
@@ -1120,7 +1120,7 @@ void SessionStore::saveLlmMessages(std::string_view sessionId, std::string_view 
         },
         [&](std::string errmsg) -> bool {
             XX_LOGE("SessionStore: saveLlmMessages({}) failed: {}", sessionId, errmsg);
-            // 记录写失败原因 (计划 STO-9; 只记根因, 见 appendViewMessage 处注释)
+            // 记录写失败原因 (只记根因, 见 appendViewMessage 处注释)
             lastWriteError_ = errmsg;
             return false;
         }
@@ -1128,7 +1128,7 @@ void SessionStore::saveLlmMessages(std::string_view sessionId, std::string_view 
 }
 
 // ---------------------------------------------------------------------------
-// 展示历史增量补拉 (计划 STO-4)
+// 展示历史增量补拉
 // ---------------------------------------------------------------------------
 
 std::vector<SessionStore::ViewMessageRow> SessionStore::loadViewMessagesAfter(
@@ -1220,7 +1220,7 @@ std::vector<SessionStore::ViewMessageRow> SessionStore::loadViewMessagesAfter(
 }
 
 // ---------------------------------------------------------------------------
-// 输入收件箱 (session.db session_input 表; 计划 LOOP-1)
+// 输入收件箱 (session.db session_input 表)
 // ---------------------------------------------------------------------------
 void SessionStore::addSessionInput(std::string_view sessionId, const SessionInputRecord& record) {
     if (record.id.empty()) {

@@ -353,7 +353,7 @@ public:
     ///   增量补拉继续编号; 0 = 老数据未记录 (按 0 起算)
     void restore(std::vector<ViewMessage> messages, uint64_t msgIdCounter, uint64_t lastViewSeq = 0);
 
-    /// 展示历史持久化序号 (计划 STO-4; 单调递增, 每条消息一个)
+    /// 展示历史持久化序号 (单调递增, 每条消息一个)
     /// - 与 deltaSeq (WireDelta 流序号) 相互独立: 本序号标识"持久化历史里的第几条"
     /// - 客户端在 Sync 里记录它, 重连时经 WriteHello.afterViewSeq 请求增量补拉
     uint64_t lastViewSeq() const {
@@ -373,7 +373,7 @@ public:
     ///   时, 已结算的上下文最多丢失一个节流窗口 (kPersistThrottleMs) 而非整轮
     void requestSaveLlmMessages();
 
-    /// 最近一次已提示的持久化失败原因 (计划 STO-9; 空 = 尚未提示过)
+    /// 最近一次已提示的持久化失败原因 (空 = 尚未提示过)
     /// - 同一原因只提示一次, 避免每次写入失败都刷屏
     std::string lastPersistWarning() const {
         assertIoThread();
@@ -387,7 +387,7 @@ public:
     }
 
     // -------------------------------------------------------------------
-    // 稳定提示前缀指纹 (计划 PRM-1 / PRM-7; 仅 io 线程)
+    // 稳定提示前缀指纹 (仅 io 线程)
     //
     // 请求装配时对"稳定段" (system 消息 + 工具 schema) 取指纹: 连续请求中它不变,
     // provider 的前缀缓存才有效。变化时计数并记日志, 供排查"缓存命中率突然下降"。
@@ -418,7 +418,7 @@ public:
     }
 
     // -------------------------------------------------------------------
-    // 持久化语义分级 (计划 STO-5; 仅 io 线程)
+    // 持久化语义分级 (仅 io 线程)
     //
     // - persistNow: 用户输入 / 工具结算 / 压缩完成 / 轮次终态等"事实"立即落盘
     // - persistThrottled: 展示历史与统计保持节流 (默认路径)
@@ -460,7 +460,7 @@ public:
     }
 
     // -------------------------------------------------------------------
-    // 待注入输入 (next-step / inject; 计划 LOOP-2; 仅 io 线程)
+    // 待注入输入 (next-step / inject; 仅 io 线程)
     //
     // 与消息队列的区别: 队列条目等待"下一个轮次", 待注入输入等待"下一个安全的
     // modelcall 边界"。两者都不写入上下文, 直到被取用:
@@ -550,10 +550,10 @@ private:
     mutable std::string llmMessagesJsonTextCache_;
     std::string         modelName_;
     std::string                                   language_;
-    /// 最近一次已提示的持久化失败原因 (计划 STO-9; 去重)
+    /// 最近一次已提示的持久化失败原因 (去重)
     std::string lastPersistWarning_;
 
-    /// 稳定提示前缀指纹与变化次数 (计划 PRM-1/PRM-7; 仅 io 线程)
+    /// 稳定提示前缀指纹与变化次数 (仅 io 线程)
     uint64_t stablePrefixHash_    = 0;
     uint64_t stablePrefixChanges_ = 0;
 
@@ -575,7 +575,7 @@ private:
     std::shared_ptr<neograph::graph::CancelToken> cancelToken_ = nullptr;
     uint64_t                                      msgIdCounter_ = 0;
 
-    /// 展示历史持久化序号计数 (计划 STO-4; 每次 appendViewMessage 递增)
+    /// 展示历史持久化序号计数 (每次 appendViewMessage 递增)
     uint64_t viewSeqCounter_ = 0;
 
     /// 上下文版本号 (每次变更 +1)
@@ -668,7 +668,7 @@ struct AgentAppendComponentInfo {
     std::vector<AppendComponentNotification> failedComponents;
 };
 
-/// 单个工具的装配记录 (计划 TOOL-12 / ARC-6)
+/// 单个工具的装配记录
 ///
 /// 记录"装配期看到的事实", 供启动装配快照与诊断输出使用:
 /// 工具是否进入执行图, 来自哪里, 有哪些行为开关;
@@ -697,7 +697,7 @@ public:
     AgentContext();
     ~AgentContext();
 
-    /// 分阶段关闭 (计划 ARC-5): 标记"正在关闭"
+    /// 分阶段关闭: 标记"正在关闭"
     /// - 置位后端点不再受理新的用户输入 (回执给出 `server_stopped`)
     /// - 只影响新输入, **不等待也不取消正在跑的轮次** (退出时间不被长工具拖住)
     void markShuttingDown() noexcept {
@@ -744,7 +744,7 @@ public:
     std::vector<std::string> toolNames;
 
     /// 工具装配记录 (含被白名单过滤掉的工具; BaseAgent::init 填充)
-    /// - 供启动装配快照 (ARC-6)、工具清单诊断 (TOOL-12) 与 --dump-config 使用
+    /// - 供启动装配快照、工具清单诊断与 --dump-config 使用
     std::vector<ToolAssemblyRecord> toolAssembly;
 
     /// 工具来源提示 (工具名 → 来源): 装配期由中间件工具收集处写入,
@@ -755,18 +755,18 @@ public:
     /// - 由 BaseAgent::init 创建并注入
     std::shared_ptr<plugin::PluginManager> pluginManager = nullptr;
 
-    /// 后台任务登记表 (计划 ARC-5)
+    /// 后台任务登记表
     /// - fire-and-forget 的短后台任务 (事件发布 / 进度通知) 统一登记,
     ///   关闭时先取消再等待收敛 (见 [agentxx::util::TaskScope])
     /// - 由 BaseAgent::init 创建并注入; 未创建时这些调用点退化为直接 co_spawn
     std::shared_ptr<agentxx::util::TaskScope> taskScope = nullptr;
 
-    /// 关键指标 (计划 OBS-3): 轮次/首 token 延迟/模型调用与用量/工具终态/压缩次数
+    /// 关键指标: 轮次/首 token 延迟/模型调用与用量/工具终态/压缩次数
     /// - 由 BaseAgent::init 创建 (与事件总线同一生命周期), 诊断包与装配快照可读
     /// - 只记"发生了什么"的计数与耗时, 不含任何内容, 因此可安全导出 (见 diagnostics.h)
     std::shared_ptr<agentxx::util::KeyMetrics> metrics = nullptr;
 
-    /// 功能点注册表 (点 / 实现 / 调用; 计划 PLG 系列, 见
+    /// 功能点注册表 (点 / 实现 / 调用; 见
     /// [feature.h](/agent/lib/include/agentxx/feature/feature.h))
     /// - 由 BaseAgent::init 创建 (早于中间件装配, 因此中间件可以声明核心点;
     ///   也早于插件加载, 因此插件登记实现时点已存在)
@@ -957,7 +957,7 @@ public:
     std::string buildSystemPrompt(std::string_view sessionId = "") const;
 
     // -------------------------------------------------------------------
-    // 稳定段 / 动态段分离 (计划 PRM-1)
+    // 稳定段 / 动态段分离
     //
     // 提示词分两部分, 请求装配时分别放置, 保证连续请求的前缀稳定:
     // - 稳定段 (`buildSystemPromptStable`): systemPrompt + 静态附加段

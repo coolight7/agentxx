@@ -1,6 +1,6 @@
 #!/bin/bash
 # Linux 交叉编译 Windows x64 (MinGW-w64) Release 构建 — 全本地化 (Hermetic)
-# - 宿主: Linux x86_64 (WSL 亦可)
+# - 构建机: Linux x86_64 (WSL 亦可)
 # - 目标: Windows x64 (PE64, MinGW-w64 / UCRT)
 # - 工具链: llvm-mingw (Clang + MinGW-w64 headers/libs), 自动下载至
 #   agent/third_party/cross-windows/toolchain/
@@ -18,7 +18,7 @@
 #       openssl-mingw-build/        # OpenSSL for MinGW (静态库, 本脚本自动交叉编译)
 #       .toolchain_version
 #       README.md
-#   - 仅依赖宿主基础工具: cmake >=3.10, ninja/make, ccache (可选), curl/wget, tar, xz
+#   - 仅依赖构建机基础工具: cmake >=3.10, ninja/make, ccache (可选), curl/wget, tar, xz
 #   - 不依赖 apt 的 mingw 包; 系统若残留 mingw 不会被使用 (本脚本 PATH 优先本地工具链)
 #
 # 首次运行会自动:

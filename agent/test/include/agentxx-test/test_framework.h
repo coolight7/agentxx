@@ -66,7 +66,7 @@ inline std::optional<std::filesystem::path> executableDir() {
 #endif
 }
 
-/// 清除模型 API 凭据类环境变量 (计划 TST-9)
+/// 清除模型 API 凭据类环境变量
 ///
 /// 目的: 本机装有真实 API key 时, 任何"顺带发一次请求"的代码路径都会打线上服务
 /// (按量计费)。测试只在本地模拟器/假 provider 上跑, 因此启动时先清掉常见凭据,

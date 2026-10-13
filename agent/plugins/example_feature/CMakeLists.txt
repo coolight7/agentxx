@@ -2,7 +2,7 @@
 # - 演示插件如何:
 #   1. 经 feature 接口表 (agentxx.agent.feature) 声明自己的点
 #      (`plugin.example_feature.beat`, 本轮只允许 provide 类型)
-#   2. 为宿主点登记实现 (`agentxx.context.countTokens`: 覆盖核心估算)
+#   2. 为主程序的点登记实现 (`agentxx.context.countTokens`: 覆盖核心估算)
 #   3. 用同一套入口调用功能点 (callFeature, 只拿数据, 不改应用状态)
 # - 插件仅 agent 侧入口 (无 client 入口)
 set(PLUGIN_NAME example_feature)

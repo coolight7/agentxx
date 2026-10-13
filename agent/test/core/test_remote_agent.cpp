@@ -617,7 +617,7 @@ static asio::awaitable<void> test_remote_transport_loopback() {
     auto transport
         = std::make_shared<agentxx::agent::WsAgentIOTransport>(ex, url, "test-token", cfg, wsCfg);
 
-    // 连接阶段 (计划 PRO-5): 握手前为 unhandshaken
+    // 连接阶段: 握手前为 unhandshaken
     XX_TEST_EXPECT_TRUE(
         transport->stage() == agentxx::agent::WireConnectionStage::Unhandshaken
     );
@@ -659,7 +659,7 @@ static asio::awaitable<void> fakeAgentHandler(HttpServer::WsStream& ws) {
     if (!hello) {
         co_return;
     }
-    // 与真实服务端同语义 (计划 PRO-3): 版本更高明确拒绝, 并在回执里声明
+    // 与真实服务端同语义: 版本更高明确拒绝, 并在回执里声明
     // 本端版本与能力 —— 客户端据此判断可用功能
     const auto clientVersion = static_cast<int>(hello->value("protocolVersion", int64_t{0}));
     if (clientVersion > agentxx::agent::WireProtocol::kVersion) {
@@ -761,7 +761,7 @@ static asio::awaitable<void> test_remote_client_handshake() {
         agentxx::agent::WireHello hello{"session", "test-token", 0, ""};
         bool                      ok = co_await transport->connect(hello);
         XX_TEST_EXPECT_TRUE(ok);
-        // 服务端在 HelloAck 里回传协议版本与能力声明 (计划 PRO-3)
+        // 服务端在 HelloAck 里回传协议版本与能力声明
         if (auto ack = transport->lastHelloAck(); ack.has_value()) {
             XX_TEST_EXPECT_TRUE(ack->ok);
             XX_TEST_EXPECT_EQ(ack->protocolVersion, agentxx::agent::WireProtocol::kVersion);
@@ -3007,7 +3007,7 @@ static asio::awaitable<void> test_agent_server_multi_client() {
         auto* a = std::get_if<agentxx::agent::WireHelloAck>(&*ack1);
         XX_TEST_EXPECT_TRUE(a != nullptr && a->ok);
         if (a != nullptr) {
-            // 服务端回执声明协议版本与能力 (计划 PRO-3)
+            // 服务端回执声明协议版本与能力
             XX_TEST_EXPECT_EQ(a->protocolVersion, agentxx::agent::WireProtocol::kVersion);
             XX_TEST_EXPECT_GE(a->capabilities.size(), size_t{1});
             XX_TEST_EXPECT_TRUE(a->error.empty());
@@ -3027,7 +3027,7 @@ static asio::awaitable<void> test_agent_server_multi_client() {
     XX_TEST_EXPECT_TRUE(client1->alive());
     XX_TEST_EXPECT_TRUE(client2->alive());
 
-    // 协议版本高于服务端: 明确拒绝 (计划 PRO-3), 且不影响其它连接
+    // 协议版本高于服务端: 明确拒绝, 且不影响其它连接
     {
         auto [c3, s3] = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
         auto client3  = std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(c3));
@@ -3664,7 +3664,7 @@ static asio::awaitable<void> test_session_controller_queue_resume_after_abort() 
         XX_TEST_EXPECT_TRUE(!turnResults[3].hasError && !turnResults[3].interrupted);
     }
 
-    // ---- 5) P0-2 回归: 积压消息 (backlog) + 暂停态 + 用户新输入 -> 解除暂停恢复执行, 不死锁 ----
+    // ---- 5) 回归: 积压消息 (backlog) + 暂停态 + 用户新输入 -> 解除暂停恢复执行, 不死锁 ----
     // 发送 turn 5 开始运行, 同时排队 turn 6 (进入积压队列)
     clientT->send(agentxx::agent::WireMessage{
         agentxx::agent::WireUserInput{"queue-resume-test-session", "turn 5", ""}
@@ -3899,7 +3899,7 @@ static asio::awaitable<void> test_add_model_config_via_wire() {
 }
 
 // ---------------------------------------------------------------------------
-// 会话 ID 校验 (PRO-7): 端点只服务绑定的会话
+// 会话 ID 校验: 端点只服务绑定的会话
 // - 请求携带的 sessionId 与绑定会话不一致 → 回 WireError(SessionMismatch), 不处理
 // - 空 sessionId (旧客户端未携带) 按绑定会话处理, 语义与拆分前一致
 // ---------------------------------------------------------------------------
@@ -3981,7 +3981,7 @@ static asio::awaitable<void> test_session_scope_validation() {
 }
 
 // ---------------------------------------------------------------------------
-// 24. wire user_input 附件传输与超限拒绝 (计划 A10)
+// 24. wire user_input 附件传输与超限拒绝
 // ---------------------------------------------------------------------------
 
 static asio::awaitable<void> test_remote_user_input_attachments() {

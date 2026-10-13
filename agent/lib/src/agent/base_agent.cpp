@@ -159,7 +159,7 @@ static void checkToolSchemaValidity(
     }
 }
 
-/// 启动装配步骤 (计划 ARC-3)
+/// 启动装配步骤
 ///
 /// 把启动阶段变成可检查的清单, 而不是一串顺序调用:
 /// - [name] 步骤名: 日志、失败提示与依赖引用都用它
@@ -299,12 +299,12 @@ asio::awaitable<void> BaseAgent::init() {
         .run      = [&]() -> asio::awaitable<void> {
             notifyInitProgress("初始化事件总线 ...");
             initEventBus();
-            // 后台任务登记表 (计划 ARC-5): 与事件总线同一生命周期 —— 事件发布
+            // 后台任务登记表: 与事件总线同一生命周期 —— 事件发布
             // 与进度通知这类 fire-and-forget 任务登记在此, 关闭时先取消再等待收敛
             agentContext->taskScope = std::make_shared<agentxx::util::TaskScope>(
                 co_await asio::this_coro::executor
             );
-            // 关键指标 (计划 OBS-3): 与总线同一生命周期, 诊断包/快照可读
+            // 关键指标: 与总线同一生命周期, 诊断包/快照可读
             agentContext->metrics = std::make_shared<agentxx::util::KeyMetrics>();
             co_return;
         },
@@ -429,7 +429,7 @@ asio::awaitable<void> BaseAgent::init() {
             // - 作用于 initTools + 中间件收集后的完整工具集
             // - 仅按名称过滤; 白名单中不存在的名称自然跳过 (不报错)
             // - 被过滤掉的工具保留一条装配记录 (filtered=true + 原因), 便于回答
-            //   "为什么模型看不到这个工具" (计划 TOOL-12)
+            //   "为什么模型看不到这个工具"
             if (agentContext->agentConfig->enableToolFiltering) {
                 const auto& whitelist = agentContext->agentConfig->toolWhitelist;
                 auto        removed   = std::stable_partition(
@@ -647,7 +647,7 @@ asio::awaitable<void> BaseAgent::init() {
                 agentContext->toolNames.push_back(tool->get_name());
             }
 
-            // 工具装配记录 (计划 TOOL-12 / ARC-6): 名称 + 来源 + 行为开关
+            // 工具装配记录: 名称 + 来源 + 行为开关
             // - 此时 tools 已是白名单过滤后的最终集合 (被过滤的已在过滤步骤记录)
             // - 必须在 own_tools 之前收集: 之后工具对象归图引擎所有
             agentContext->toolAssembly.reserve(agentContext->toolAssembly.size() + tools.size());
@@ -679,7 +679,7 @@ asio::awaitable<void> BaseAgent::init() {
     // - 配置或依赖有问题在这里立即失败, 而不是等第一轮对话才暴露
     verifyStartupAssembly();
 
-    // 启动装配快照 (计划 ARC-6 / PLG-10): 记录本次启动实际装配成了什么
+    // 启动装配快照: 记录本次启动实际装配成了什么
     // - 计数摘要走 Info, 完整 JSON 走 Debug (常规启动不打全量, 排查时按需打开)
     // - `agentxx_cli --dump-config` 用同一份实现打印到标准输出
     logAssemblySnapshot(buildRuntimeSnapshot(*agentContext), "startup");
@@ -1443,7 +1443,7 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
         session->appendMessages({std::move(userMsg)}, false);
     }
 
-    // 用户输入已进入上下文: 立即落盘 (计划 STO-5: 用户输入属"事实", 不能让
+    // 用户输入已进入上下文: 立即落盘 (用户输入属"事实", 不能让
     // "用户已看到自己的消息、磁盘上却没有" 的窗口存在)
     session->persistNow("user-input");
 
@@ -1629,7 +1629,7 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
     // - 持久化回调内部捕获异常, 失败仅记日志, 不影响本轮结果
     // - 轮内已由 EventBridge 按消息结算节流落盘 (requestSaveLlmMessages),
     //   此处为权威终态同步; 进程中途被杀最多丢一个节流窗口 (<3s) 的增量
-    // 轮次终态: 上下文 + 展示历史立即落盘 (计划 STO-5: 轮次终态属"事实")
+    // 轮次终态: 上下文 + 展示历史立即落盘 (轮次终态属"事实")
     session->persistNow("turn-end");
 
     eventBridge->emitDelta(WireDelta{
@@ -1670,7 +1670,7 @@ BaseAgent::~BaseAgent() {
     engine = nullptr;
 }
 
-/// 分阶段关闭 (计划 ARC-5)
+/// 分阶段关闭
 ///
 /// 顺序: ① 停止受理新输入 → ② 取消并等待后台任务收敛 → ③ 关闭插件 → ④ 刷盘。
 /// - **不等待当前轮次结束**: 轮次是调用方 await 的受控工作, 等待会把退出时间拖到

@@ -92,7 +92,7 @@ inline std::string wsAbs(const std::string& workDir, const std::string& path) {
 }
 
 // ---------------------------------------------------------------------------
-// 按规范化文件路径排队执行 (计划 TOOL-16)
+// 按规范化文件路径排队执行
 //
 // 目的: 写文件与"读-改-写"(edit) 操作在同一进程内按**规范化绝对路径**互斥, 避免
 // 两个会话(或同一会话的两次工具调用) 并发改同一文件时互相覆盖 (丢失更新)。
@@ -872,7 +872,7 @@ inline std::string fileWriteExecuteImpl(
 
     std::ofstream stream;
     auto          path = utilxx_base::utf8ToPath(filepath);
-    // 按规范化路径排队 (计划 TOOL-16): 存在性检查与写入必须相对其它写者原子
+    // 按规范化路径排队: 存在性检查与写入必须相对其它写者原子
     auto pathLease = detail::lockPathBlocking(filepath);
     if (false == overwrite && std::filesystem::exists(path)) {
         throw std::runtime_error{"File already exist. Set `overwrite` = true if want to overwrite."
@@ -940,7 +940,7 @@ inline std::string fileEditExecuteImpl(
     detail::normalizeCrlfToLf(new_str);
 
     auto            path = utilxx_base::utf8ToPath(filepath);
-    // 按规范化路径排队 (计划 TOOL-16): 读-改-写整段相对其它写者原子
+    // 按规范化路径排队: 读-改-写整段相对其它写者原子
     auto            pathLease = detail::lockPathBlocking(filepath);
     std::error_code fsEc;
     bool            exists = std::filesystem::exists(path, fsEc);
@@ -1923,7 +1923,7 @@ inline asio::awaitable<std::string>
 
     // 存在性检查与父目录创建: 快速元数据操作, 与原实现一致内联执行
     auto path = utilxx_base::utf8ToPath(filepath);
-    // 按规范化路径排队 (计划 TOOL-16): 存在性检查与写入必须相对其它写者原子
+    // 按规范化路径排队: 存在性检查与写入必须相对其它写者原子
     auto            pathLease = co_await detail::lockPathAsync(filepath);
     if (false == overwrite && std::filesystem::exists(path)) {
         throw std::runtime_error{"File already exist. Set `overwrite` = true if want to overwrite."
@@ -1993,7 +1993,7 @@ inline asio::awaitable<std::string>
     detail::normalizeCrlfToLf(new_str);
 
     auto            path = utilxx_base::utf8ToPath(filepath);
-    // 按规范化路径排队 (计划 TOOL-16): 读-改-写整段相对其它写者原子
+    // 按规范化路径排队: 读-改-写整段相对其它写者原子
     auto            pathLease = co_await detail::lockPathAsync(filepath);
     std::error_code fsEc;
     bool            exists = std::filesystem::exists(path, fsEc);

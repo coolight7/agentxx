@@ -1,10 +1,10 @@
 /// 插件 C++ SDK 根操作适配测试（plugin.md 6.1/6.2/6.3）。
 ///
 /// 覆盖：
-/// - F13 输入所有权：tool 根操作的 args/session/tool_call_id 由 Request 拥有，
+/// - 输入所有权：tool 根操作的 args/session/tool_call_id 由 Request 拥有，
 ///   主程序借用缓冲区失效后协程继续读取仍然正确；
 /// - 完成协议：同步钩子（正常/抛异常）与异步 Task 钩子都是 exactly-once 完成；
-/// - F19 钩子返回类型分发：同步 void 立即完成，返回 Task<void> 时由协程真正结束
+/// - 钩子返回类型分发：同步 void 立即完成，返回 Task<void> 时由协程真正结束
 ///   后才完成，并返回主程序可取消的 provider 句柄。
 ///
 /// 用例不依赖真实管理器：用伪主程序接口表捕获 SDK 注册出来的 spec，再直接按 ABI
@@ -386,7 +386,7 @@ TestResult testPluginSdk() {
     TestResult         result;
     const PluginxxHost host{&g_fakeVtable, nullptr};
 
-    /// F13：tool 根操作的输入由 Request 拥有 —— 主程序借用缓冲区失效后，协程挂起
+    /// tool 根操作的输入由 Request 拥有 —— 主程序借用缓冲区失效后，协程挂起
     /// 恢复继续读取 args 仍必须得到原值。
     {
         bool                    released = false;
@@ -455,7 +455,7 @@ TestResult testPluginSdk() {
         XX_TEST_EXPECT_EQ(probe.payload, std::string{R"({"n":42})"});
     }
 
-    /// F19/完成协议：同步 void 钩子正常返回 -> OK；抛异常 -> FAILED；
+    /// 完成协议：同步 void 钩子正常返回 -> OK；抛异常 -> FAILED；
     /// 两种情况都恰好一次完成，且不返回 provider 句柄。
     {
         SdkCtx okCtx;
@@ -502,7 +502,7 @@ TestResult testPluginSdk() {
         }
     }
 
-    /// F19：返回 Task<void> 的钩子是异步的 —— start 返回 provider 句柄且不完成，
+    /// 返回 Task<void> 的钩子是异步的 —— start 返回 provider 句柄且不完成，
     /// 协程真正结束后才 exactly-once 完成；hook_cancel 可用。
     {
         bool                    released = false;

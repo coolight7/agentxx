@@ -645,7 +645,7 @@ asio::awaitable<void> test_offload_cancel_token() {
 }
 
 // ===========================================================================
-// 取消后队列语义测试 (P0-2 / P3-2):
+// 取消后队列语义测试:
 // backlog 积压 + 取消导致暂停态 + 用户推入新输入 -> 解除暂停恢复执行, 不死锁
 // ===========================================================================
 static asio::awaitable<void> test_cancel_queue_paused_backlog_resume() {
@@ -676,7 +676,7 @@ static asio::awaitable<void> test_cancel_queue_paused_backlog_resume() {
     XX_TEST_EXPECT_TRUE(sc->isQueuePausedForTest());
     XX_TEST_EXPECT_EQ(sc->queueSizeForTest(), size_t{2});
 
-    // 5. 关键断言 (P0-2/P3-2): 空闲态下队列有积压 (backlog 非空), 此时推入新用户输入
+    // 5. 关键断言: 空闲态下队列有积压 (backlog 非空), 此时推入新用户输入
     // 必须自动解除暂停 (queuePaused_ 变为 false), 唤醒 channel, 避免死锁
     sc->onPeerMessage(
         agentxx::agent::WireUserInput{std::string(sc->sessionId()), "new user input", ""}

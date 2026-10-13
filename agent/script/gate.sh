@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# gate.sh —— 一键质量检查 (计划 TST-8)
+# gate.sh —— 一键质量检查
 #
 # 在干净环境跑一条命令即可完成本轮改动要求的检查:
 #   1. 构建 (可选, --build): 只构建检查需要的目标 (agentxx_test / 插件)

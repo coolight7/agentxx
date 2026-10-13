@@ -1,4 +1,4 @@
-/// test_llm_error —— LLM 错误分类与重试策略 (计划 LLM-2 / LLM-3)
+/// test_llm_error —— LLM 错误分类与重试策略
 ///
 /// 覆盖:
 /// - classifyLlmError: 各家 provider 的常见错误文本落到正确分类

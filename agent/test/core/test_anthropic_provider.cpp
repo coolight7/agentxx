@@ -707,7 +707,7 @@ asio::awaitable<void> test_non_streaming_thinking(MockAnthropicServer& mock, uin
     }
 }
 
-/// prompt 缓存断点 (计划 LLM-8): 打开 `cache_control` 时, 断点落在稳定前缀末尾
+/// prompt 缓存断点: 打开 `cache_control` 时, 断点落在稳定前缀末尾
 ///
 /// 覆盖: system 字符串转内容块数组 (末块带断点) / 工具定义只给最后一个加断点 /
 /// 消息断点落在**动态段之前**那条 (末条 `<dynamic_context ...>` 不加断点)
@@ -726,7 +726,7 @@ asio::awaitable<void> test_cache_control_breakpoints(MockAnthropicServer& mock, 
         neograph::ChatMessage{.role = "user", .content = "第一轮问题"},
         neograph::ChatMessage{.role = "assistant", .content = "第一轮回答"},
     };
-    // 请求末尾的动态段 (PRM-1 的稳定段/动态段分离): 内容每轮都可能变,
+    // 请求末尾的动态段 (稳定段/动态段分离): 内容每轮都可能变,
     // 断点若落在它上面就每轮写新缓存而读不到旧缓存, 因此必须跳过
     {
         neograph::ChatMessage dyn;
@@ -818,7 +818,7 @@ asio::awaitable<void> test_cache_control_breakpoints(MockAnthropicServer& mock, 
     }
 }
 
-/// 缓存用量 (计划 LLM-8): Anthropic 的 input_tokens 只含未命中缓存的输入,
+/// 缓存用量: Anthropic 的 input_tokens 只含未命中缓存的输入,
 /// 缓存读/写量单独回报 —— 统一折算成整段 prompt 规模, 并保留写入量供用量记录使用
 asio::awaitable<void> test_usage_cache_tokens(MockAnthropicServer& mock, uint16_t port) {
     const std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);

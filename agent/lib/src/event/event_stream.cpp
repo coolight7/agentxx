@@ -274,7 +274,7 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
         return;
     }
     bool hasLLMOutput = false;
-    // 本批是否含已结算的工具结果 (计划 STO-5: 工具结算属"事实", 立即落盘)
+    // 本批是否含已结算的工具结果 (工具结算属"事实", 立即落盘)
     bool hasToolResult = false;
     for (const auto& jm : value) {
         auto role = jm.value("role", std::string{});
@@ -502,7 +502,7 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
     // 使进程在轮次中途被杀/崩溃时已结算的上下文最多丢一个节流窗口
     // (Session::kPersistThrottleMs), 而非整轮。
     // - 上下文写入 (含系统提示词更新 / 压缩回写) 不产生本事件, 因此不会重复落盘
-    // - 分级 (计划 STO-5): 工具结算立即落盘 (结果体积大且是后续推理的输入),
+    // - 分级: 工具结算立即落盘 (结果体积大且是后续推理的输入),
     //   纯模型输出保持节流 (窗口内合并, 轮末权威保存兜底)
     if (hasToolResult) {
         session_->persistNow("tool-settle");
@@ -719,7 +719,7 @@ void EventBridge::publishModelToken(const std::string& token, std::string_view k
             }
         );
     };
-    // 后台任务登记 (计划 ARC-5): 有登记表时由它统一在关闭阶段取消并等待收敛
+    // 后台任务登记: 有登记表时由它统一在关闭阶段取消并等待收敛
     if (ctxPtr->taskScope) {
         ctxPtr->taskScope->spawn("event-publish", std::move(task));
         return;

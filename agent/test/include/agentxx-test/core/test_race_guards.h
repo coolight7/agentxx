@@ -9,7 +9,7 @@ namespace asio = ::boost::asio;
 namespace agentxx {
 namespace test {
 
-/// 并发与竞态清单 (计划 TST-4)
+/// 并发与竞态清单
 ///
 /// 覆盖"取消 vs 工具结算/中断应答/持久化节流"与"并行结果乱序提交"、
 /// "工具执行中被注销"这几类时序竞态的不变量。

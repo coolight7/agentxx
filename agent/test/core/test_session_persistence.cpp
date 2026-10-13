@@ -1290,7 +1290,7 @@ static void testPersistenceResilience() {
     removeTempRoot(root);
 }
 
-/// P0-4 回归: Session 析构函数线程安全
+/// 回归: Session 析构函数线程安全
 /// - 绑定的 io 线程析构时正常 flushPendingViewOps
 /// - 非 io 线程析构时安全丢弃 pendingViewOps, 禁止跨线程调用 SQLite hooks
 static void testSessionDestructorThreadSafety() {

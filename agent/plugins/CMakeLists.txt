@@ -77,12 +77,12 @@ if (AGENTXX_ENABLE_HYPERSCAN)
 endif ()
 
 # ===== 插件动态库导出符号控制 =====
-# - 目标: 严格限制导出面, 仅宿主 dlsym/GetProcAddress 按名查找的入口符号
+# - 目标: 严格限制导出面, 仅主程序 dlsym/GetProcAddress 按名查找的入口符号
 #   (agentxx_plugin_agent_get_info/create/destroy + agentxx_plugin_client_get_info/create/destroy,
 #   见 plugin_api.h AGENTXX_PLUGIN_EXPORT) 导出, 其余全部隐藏:
 #   - 插件自身 C++ 内部符号 (STL/异常/typeinfo 等)
 #   - 第三方静态库符号 (simdjson/tree_sitter/io_uring/uchardet 等), 避免
-#     污染宿主动态符号表、多插件同名符号冲突、以及宿主符号误绑定到插件副本
+#     污染主程序动态符号表、多插件同名符号冲突、以及主程序符号误绑定到插件副本
 # - Linux/Android (ELF): 编译期 -fvisibility=hidden + 链接期 version script
 #   (--version-script, global 白名单 + local: *); 两者都需, 前者隐藏插件
 #   自身符号, 后者兜底隐藏静态库中按默认可见性编译的符号
@@ -101,7 +101,7 @@ if (XX_IS_ANDROID_D OR XX_IS_LINUX_D)
   #   前缀的符号全部隐藏
   set(_AGENTXX_EXPORT_SYMS_FILE "${CMAKE_CURRENT_BINARY_DIR}/plugin_symbols.map")
   file(WRITE "${_AGENTXX_EXPORT_SYMS_FILE}" "# agentxx 插件动态库导出符号白名单
-# 宿主仅经 dlsym/GetProcAddress 按名查找以下入口符号 (见 plugin_api.h
+# 主程序仅经 dlsym/GetProcAddress 按名查找以下入口符号 (见 plugin_api.h
 # AGENTXX_PLUGIN_EXPORT); local: * 隐藏其余全部符号 (含第三方静态库符号);
 # 通配符形式兼容单端插件 (仅定义 agent 或 client 之一) 在 lld 下的链接
 {
@@ -203,7 +203,7 @@ add_compile_definitions(
 # ===== 与 libagentxx 一致的特性宏 =====
 # 拆分前这些宏经 agentxx_util 的 PUBLIC INTERFACE 传播给插件; 工具库拆分后
 # 由 cxx_utilxx(-_base) 提供平台/asio 宏, 特性开关宏在该库中已改名为
-# UTILXX_* (本库自用), 插件侧仍需按宿主构建配置选择实现路径, 故在此显式定义。
+# UTILXX_* (本库自用), 插件侧仍需按主程序构建配置选择实现路径, 故在此显式定义。
 # 例: agentxx_execute_command 按 AGENTXX_ENABLE_BOOST_PROCESS 在
 #   boost.process v2 直传 argv / _popen 回退 两条实现路径间选择
 if (AGENTXX_ENABLE_BOOST_PROCESS)
@@ -236,7 +236,7 @@ else()
   list(REMOVE_ITEM _AGENTXX_BUILTIN_NAMED "")
 endif()
 
-# --- 每插件内置判定 + 统一装载 ---
+# --- 每插件内置判定 + 统一加载 ---
 # macro (非 function): 不产生新变量作用域, 子目录内置分支的 PARENT_SCOPE
 # 收集变量直接回到本目录作用域; _AGENTXX_ADD_AS_BUILTIN 为目录作用域变量,
 # add_subdirectory 后子目录继承本次判定值 (各插件 CMakeLists 开头处理),
@@ -273,7 +273,7 @@ set(AGENTXX_BUILTIN_PLUGIN_MANIFEST_ENTRIES "")
 # 插件动态库 (独立动态库模式) 由各插件 CMakeLists 直接输出到
 # ${AGENTXX_EXEC_INSTALL_PREFIX}/plugins/<插件名>/ (不经 install(TARGETS)),
 # 运行期应从 "插件自身所在目录" 与 exec 目录 ("../../") 搜索动态库依赖:
-# release 分发把 libstdc++.so.6 / libgcc_s.so.1 等复制到 exec, 宿主 dlopen 插件
+# release 分发把 libstdc++.so.6 / libgcc_s.so.1 等复制到 exec, 主程序 dlopen 插件
 # 时优先复用其中的运行库, 而不是先命中系统库 (与可执行文件/共享库
 # agentxx_cli/agentxx_test/agentxx_benchmark/libagentxx.so 的处理一致);
 # 传入的相对子目录 "../.." 即 exec 目录 (插件位于 exec/plugins/<插件名>/)
@@ -295,7 +295,7 @@ if (NOT TARGET cxx_pluginxx_ui_static)
 endif ()
 link_libraries(cxx_pluginxx_ui_static)
 
-# ===== 各插件装载 (启用开关判定 + 内置/动态库双模式) =====
+# ===== 各插件加载 (启用开关判定 + 内置/动态库双模式) =====
 # - 平台不支持时由各插件自身 CMakeLists 开头的判定提前 return() 跳过
 #   (见 cmake/plugin_platform_support.cmake 与各插件声明处); 内置清单登记
 #   由各插件 builtin 分支自行追加, 提前 return 时天然不会误登记

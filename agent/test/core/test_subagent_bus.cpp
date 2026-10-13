@@ -180,7 +180,7 @@ asio::awaitable<void> test_subagent_bus_timeout() {
 }
 
 /// 验证: MiddlewareContext::cleanupSession 清理一次性会话 (subagent) 的
-/// graphData / shareStore / 中间件 states, 防止按 thread 累积泄漏 (P0 修复)
+/// graphData / shareStore / 中间件 states, 防止按 thread 累积泄漏
 asio::awaitable<void> test_middleware_cleanup_thread() {
     auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
     agentContext->middlewareHandleContext

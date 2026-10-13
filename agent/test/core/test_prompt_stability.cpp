@@ -232,7 +232,7 @@ std::string systemContentOf(const utilxx_base::Json& request) {
 }
 
 // ---------------------------------------------------------------------------
-// 1. 段落排序与 JSON 往返 (计划 PRM-2)
+// 1. 段落排序与 JSON 往返
 // ---------------------------------------------------------------------------
 
 void test_prompt_section_order() {
@@ -306,7 +306,7 @@ void test_prompt_section_order() {
 }
 
 // ---------------------------------------------------------------------------
-// 2. 请求体结构与稳定段哈希 (计划 PRM-1 / PRM-7)
+// 2. 请求体结构与稳定段哈希
 // ---------------------------------------------------------------------------
 
 asio::awaitable<void> test_request_structure_and_stable_prefix() {
@@ -329,7 +329,7 @@ asio::awaitable<void> test_request_structure_and_stable_prefix() {
     const auto request1 = g_da_sim_last_request;
     const auto system1  = systemContentOf(request1);
     XX_TEST_EXPECT_TRUE(!system1.empty());
-    // 记忆内容进稳定段 (system 消息末尾): 随前缀一起被上游缓存命中 (PRM-1 修正)
+    // 记忆内容进稳定段 (system 消息末尾): 随前缀一起被上游缓存命中
     XX_TEST_EXPECT_TRUE(system1.find("MEMORY-MARKER") != std::string::npos);
 
     // 动态段当前没有写入方: 请求末尾不再附加 <dynamic_context> 消息
@@ -372,7 +372,7 @@ asio::awaitable<void> test_request_structure_and_stable_prefix() {
 }
 
 // ---------------------------------------------------------------------------
-// 3. 技能同名裁决 (计划 PRM-5): 优先级高者生效, 来源展示给模型
+// 3. 技能同名裁决: 优先级高者生效, 来源展示给模型
 // ---------------------------------------------------------------------------
 
 /// 取 agent 装配的技能中间件 (未装配返回 nullptr)
@@ -462,7 +462,7 @@ asio::awaitable<void> test_skill_name_adjudication() {
 }
 
 // ---------------------------------------------------------------------------
-// 4. 动态段机制保留 (预留给插件/今后功能, 计划 PRM-1 修正)
+// 4. 动态段机制保留 (预留给插件/今后功能)
 //
 // 写入 `xx_appendSystemMessage` 的片段仍作为**请求末尾的独立消息**附加, 不进
 // system 消息: 它位于稳定前缀之外, 每次调用全额重发且命中不了前缀缓存, 会明显

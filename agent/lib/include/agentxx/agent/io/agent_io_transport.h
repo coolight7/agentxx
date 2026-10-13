@@ -20,7 +20,7 @@ namespace agent {
 // - WS 传输: 内部负责 JSON 编解码, 调用方无感知
 // ---------------------------------------------------------------------------
 
-/// 输入受理状态 (`WireInputAck.status`; 计划 LOOP-3)
+/// 输入受理状态 (`WireInputAck.status`)
 ///
 /// 客户端据此展示"已开始 / 已排队 / 已注入 / 被拒绝", 不再从 delta 猜测。
 struct InputStatus {
@@ -50,7 +50,7 @@ struct InputRejectReason {
     inline static constexpr std::string_view TooManyAttachments = "too_many_attachments";
 };
 
-/// 服务端消息队列状态 (计划 LOOP-4: 取代"两个 bool"的隐式状态)
+/// 服务端消息队列状态 (取代"两个 bool"的隐式状态)
 ///
 /// 状态含义与转移:
 /// - `Idle`:     无进行中轮次; 队列为空时等待用户输入, 非空时即将开始执行
@@ -95,7 +95,7 @@ inline SessionQueueState sessionQueueStateFromText(std::string_view text) noexce
     return SessionQueueState::Idle;
 }
 
-/// 协议版本与能力协商 (计划 PRO-3)
+/// 协议版本与能力协商
 ///
 /// - 版本号只在**破坏性变更**时递增: 对端版本更高时明确拒绝 (回
 ///   `WireHelloAck{ok=false, error=…}`) 而不是静默降级 —— 静默降级会让新客户端
@@ -110,15 +110,15 @@ struct WireProtocol {
     /// 兼容的最低版本 (0 = 未声明版本的老客户端)
     inline static constexpr int kMinVersion = 0;
 
-    /// 能力: 输入投递模式 `next-step` / `inject` (LOOP-2)
+    /// 能力: 输入投递模式 `next-step` / `inject`
     inline static constexpr std::string_view kCapInputDelivery = "input.delivery";
-    /// 能力: 输入受理回执 (`WireInputAck`, LOOP-3)
+    /// 能力: 输入受理回执 (`WireInputAck`)
     inline static constexpr std::string_view kCapInputAck = "input.ack";
-    /// 能力: 队列状态 (排队/暂停/消化, LOOP-4)
+    /// 能力: 队列状态 (排队/暂停/消化)
     inline static constexpr std::string_view kCapQueueState = "queue.state";
-    /// 能力: 展示历史增量补拉 (`afterViewSeq`, STO-4)
+    /// 能力: 展示历史增量补拉 (`afterViewSeq`)
     inline static constexpr std::string_view kCapViewAfterSeq = "view.after_seq";
-    /// 能力: 会话重命名与搜索 (RET-1a; 服务端提供时客户端显示入口)
+    /// 能力: 会话重命名与搜索 (服务端提供时客户端显示入口)
     inline static constexpr std::string_view kCapSessionSearch = "session.search";
     /// 能力: 界面组件描述层 (agentxx.ui.item; 客户端声明)
     inline static constexpr std::string_view kCapUiItems = "ui.items";
@@ -145,10 +145,10 @@ struct WireHello {
     std::string tailHash;
     std::string model;
     std::string language = "en"; ///< 界面/客户端指定使用的语言 (默认 "en", 不支持 auto)
-    /// 已持有的展示历史序号 (计划 STO-4): >0 时服务端按"该序号之后的消息"增量补拉
+    /// 已持有的展示历史序号: >0 时服务端按"该序号之后的消息"增量补拉
     /// (见 WireSyncPayload::incremental), 0 = 未提供 (全量/尾窗同步)
     uint64_t afterViewSeq = 0;
-    /// 协议版本 (计划 PRO-3): 客户端按自身实现上报; 老客户端缺字段 → 0
+    /// 协议版本: 客户端按自身实现上报; 老客户端缺字段 → 0
     int protocolVersion = WireProtocol::kVersion;
     /// 客户端能力声明 (取值见 [WireProtocol]; 缺省 = 老客户端, 服务端按最保守处理)
     std::vector<std::string> capabilities;
@@ -161,7 +161,7 @@ struct WireHelloAck {
     std::vector<std::string> models;
     /// 拒绝原因 (仅 ok=false 时有值; 如协议版本不受支持)
     std::string error;
-    /// 服务端协议版本与能力声明 (计划 PRO-3)
+    /// 服务端协议版本与能力声明
     int                      protocolVersion = WireProtocol::kVersion;
     std::vector<std::string> capabilities;
 
@@ -201,7 +201,7 @@ struct WireUserInput {
     uint64_t requestId = 0;
 };
 
-/// 输入受理回执 (Server -> Client; 计划 LOOP-3)
+/// 输入受理回执 (Server -> Client)
 ///
 /// 仅在 `WireUserInput.requestId > 0` 时发送: 老客户端不认识本消息类型,
 /// WS 解码遇到未知类型会断开连接, 因此不能用"总是回执"的方式。
@@ -294,7 +294,7 @@ struct WireErrorCode {
     inline static constexpr int MessageNotFound = 5;
 };
 
-/// 连接阶段 (计划 PRO-5)
+/// 连接阶段
 ///
 /// 传输层用它表达"现在能不能收发业务消息", 端点据此在错误阶段回 `InvalidState`
 /// 而不是静默丢弃或按正常流程处理。进程内传输 (Channel) 建立即可用, 因此恒为
@@ -422,7 +422,7 @@ struct WireListSessions {
     std::string beforeId;
     /// 页大小; 0 = 全量列举 (旧行为)
     uint32_t limit = 0;
-    /// 关键词 (计划 RET-1a): 非空时按标题/展示历史正文的子串检索
+    /// 关键词: 非空时按标题/展示历史正文的子串检索
     /// - 检索模式下忽略游标字段, 服务端按最近活动降序返回命中项 (含命中片段)
     /// - 老服务端不认识该字段: 忽略并返回普通列表 (客户端按未检索处理)
     std::string keyword;
@@ -614,7 +614,7 @@ struct WireAddModelResult {
 };
 
 // ---------------------------------------------------------------------------
-// 会话重命名 (计划 RET-1a)
+// 会话重命名
 // ---------------------------------------------------------------------------
 
 /// 客户端重命名会话 (Client -> Server)
@@ -726,7 +726,7 @@ using WireMessage = std::variant<
     WirePermissionState,
     WireAddModel,
     WireAddModelResult,
-    /// 会话重命名 (计划 RET-1a; 追加在末尾保持既有变体下标稳定)
+    /// 会话重命名 (追加在末尾保持既有变体下标稳定)
     WireRenameSession,
     WireRenameSessionResult,
     /// 模型删除与 host tool
@@ -782,7 +782,7 @@ public:
     /// 线程安全: 可从任意线程调用 (实现内部投递回自身 executor)
     virtual void updateReconnectSessionId(std::string /*newSessionId*/) {}
 
-    /// 当前连接阶段 (计划 PRO-5)
+    /// 当前连接阶段
     /// - 进程内 Channel 传输建立即可用, 默认返回 [WireConnectionStage::Ready]
     /// - WS 传输覆写为真实阶段 (握手/重连/关闭)
     virtual WireConnectionStage stage() const noexcept {

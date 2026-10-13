@@ -50,7 +50,7 @@ struct MsgType {    // ===== Client -> Server =====
     /// 客户端新增模型配置 (TUI 选择模型弹窗的"添加模型配置")
     inline static constexpr std::string_view AddModel = "add_model";
 
-    /// 客户端重命名会话 (计划 RET-1a: 会话标题 + 检索入口)
+    /// 客户端重命名会话 (会话标题 + 检索入口)
     inline static constexpr std::string_view RenameSession = "rename_session";
 
     // ===== Server -> Client =====
@@ -88,7 +88,7 @@ struct MsgType {    // ===== Client -> Server =====
     inline static constexpr std::string_view AddModelResult = "add_model_result";
     /// 服务端输入受理回执 (仅当 user_input 携带 requestId > 0 时回复)
     inline static constexpr std::string_view InputAck = "input_ack";
-    /// 服务端会话重命名结果 (RenameSession 回执; 计划 RET-1a)
+    /// 服务端会话重命名结果 (RenameSession 回执)
     inline static constexpr std::string_view RenameSessionResult = "rename_session_result";
     /// 客户端请求删除模型配置
     inline static constexpr std::string_view RemoveModel = "remove_model";
@@ -412,7 +412,7 @@ inline utilxx_base::Json syncToJson(const WireSyncPayload& p) {
     // 历史分页元数据 (尾窗同步时 fromIndex>0 / totalMessages>0; 全量同步
     // 时 totalMessages == messages.size(), 字段冗余但便于客户端统一判断)
     j["totalMessages"]    = p.totalMessages;
-    // 展示历史序号 (计划 STO-4): lastViewSeq = 本快照最后一条消息的持久化序号,
+    // 展示历史序号: lastViewSeq = 本快照最后一条消息的持久化序号,
     // 客户端记录后在重连 hello 里回传 (afterViewSeq) 请求增量补拉;
     // incremental = true 表示本批消息是"追加到已有历史尾部"的增量补拉
     j["lastViewSeq"] = p.lastViewSeq;
@@ -491,11 +491,11 @@ inline utilxx_base::Json makeHello(
     if (!language.empty()) {
         j["language"] = language;
     }
-    // 已持有的展示历史序号 (计划 STO-4): 请求"该序号之后的展示消息"增量补拉
+    // 已持有的展示历史序号: 请求"该序号之后的展示消息"增量补拉
     if (afterViewSeq > 0) {
         j["afterViewSeq"] = afterViewSeq;
     }
-    // 协议版本与能力声明 (计划 PRO-3): 总是携带版本号 (老服务端忽略未知字段);
+    // 协议版本与能力声明: 总是携带版本号 (老服务端忽略未知字段);
     // 能力列表为空时不携带 (服务端按"未声明"处理, 走最保守路径)
     j["protocolVersion"] = protocolVersion;
     if (!capabilities.empty()) {
@@ -633,7 +633,7 @@ inline utilxx_base::Json makeHelloAck(
     if (!models.empty()) {
         j["models"] = models;
     }
-    // 拒绝原因 (计划 PRO-3: 协议版本/能力不匹配时给客户端可读说明)
+    // 拒绝原因 (协议版本/能力不匹配时给客户端可读说明)
     if (!error.empty()) {
         j["error"] = error;
     }
@@ -896,7 +896,7 @@ inline utilxx_base::Json makeContextMessages(const utilxx_base::Json& messages) 
 /// 客户端请求持久化会话列表 (无载荷; 列举全部持久化会话)
 /// - 分页字段可选: beforeMs/beforeId/limit 均缺省时为旧行为 (全量列举),
 ///   与旧版服务端互通
-/// - keyword 非空时按关键词检索 (标题或展示历史正文的子串, 计划 RET-1a):
+/// - keyword 非空时按关键词检索 (标题或展示历史正文的子串):
 ///   服务端忽略分页字段, 按最近活动降序返回命中项 (数量上限见服务端)
 inline utilxx_base::Json makeListSessions(
     int64_t          beforeMs = 0,
@@ -931,7 +931,7 @@ inline WireListSessions listSessionsFromJson(const utilxx_base::Json& j) {
     return m;
 }
 
-/// 客户端重命名会话 (空标题由服务端拒绝; 计划 RET-1a)
+/// 客户端重命名会话 (空标题由服务端拒绝)
 inline utilxx_base::Json makeRenameSession(std::string_view sessionId, std::string_view title) {
     return utilxx_base::Json{
         {"type",      MsgType::RenameSession},

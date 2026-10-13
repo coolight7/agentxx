@@ -1,5 +1,5 @@
 #pragma once
-/// 单次 provider 调用的取消域 (计划 LLM-7: 消费端退出时取消 provider)
+/// 单次 provider 调用的取消域 (消费端退出时取消 provider)
 ///
 /// 为什么需要独立一层取消令牌:
 /// - 运行级令牌 (`NodeInput::ctx.cancel_token`) 是**整个轮次**的取消域: 用户点"取消"
@@ -15,7 +15,7 @@
 /// - 子令牌是 `shared_ptr` 且由 fork 自带弱自引用, `cancel()` 投递的信号发射会保活
 ///   到执行完, 因此析构即取消是安全的。
 ///
-/// 边界: 本类只负责"取消域", 不做超时竞速 (TOOL-4 分发层硬超时经人工核定不做)。
+/// 边界: 本类只负责"取消域", 不做超时竞速 (分发层硬超时经人工核定不做)。
 #include "neograph/graph/cancel.h"
 #include <memory>
 #include <utility>

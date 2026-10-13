@@ -669,7 +669,7 @@ asio::awaitable<std::optional<std::string>> prepareToolInvocation(
     }
     {
         // 权限检查 (经 EventBus 请求 service.permission.check, 未配置权限服务时默认放行)
-        // - 拒绝理由随响应返回 (decision/reason/rule/target, 计划 SEC-2), 一并回给模型,
+        // - 拒绝理由随响应返回 (decision/reason/rule/target), 一并回给模型,
         //   便于模型与用户理解"为什么被拒绝"而不是只看到一句 Permission denied
         if (agentCtxPtr && agentCtxPtr->bus) {
             auto resp
@@ -850,7 +850,7 @@ asio::awaitable<bool> ToolcallWrapNode::prepareToolCall(
         co_return false;
     }
 
-    // 执行前目标复验 (计划 SEC-5): 判定阶段记录过"已批准目标", 这里用最终参数
+    // 执行前目标复验: 判定阶段记录过"已批准目标", 这里用最终参数
     // 按同一套规则再解析一次并比对 —— 判定与执行之间的任何改写都会在这里被拦下
     // (纯校验, 不重复询问用户; 服务未注册/无调用 id 时视为通过)
     if (agentCtxPtr && agentCtxPtr->bus && out.tool && !tc.id.empty()) {
@@ -1029,7 +1029,7 @@ asio::awaitable<std::optional<neograph::ChatMessage>> ToolcallWrapNode::runPrepa
             tool_msg.flags |= neograph::MessageFlag::Interrupt;
         }
         tool_msg.extra["durationMs"] = 0;
-        // 关键指标 (计划 OBS-3): 未执行即定案 (中断占位记 Interrupted, 其余记 Failed)
+        // 关键指标: 未执行即定案 (中断占位记 Interrupted, 其余记 Failed)
         if (auto ctx = agentContext.lock(); ctx && ctx->metrics) {
             ctx->metrics->noteToolCall(
                 prepared.interrupted ? agentxx::util::KeyMetrics::ToolOutcome::Interrupted

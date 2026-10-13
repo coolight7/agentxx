@@ -1,4 +1,4 @@
-/// test_provider_call_scope —— 单次 provider 调用的取消域 (计划 LLM-7)
+/// test_provider_call_scope —— 单次 provider 调用的取消域
 ///
 /// 验证 [agentxx::nodes::ProviderCallScope] 的语义:
 /// - 父令牌取消 → 级联到调用域 (运行取消仍然中止进行中的调用)

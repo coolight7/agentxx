@@ -118,7 +118,7 @@ void benchResourceCli() {
 
     // 环境变量旋钮 (用于按需加强/减弱负载; 详细说明见 docs/zh-cn/design/benchmark.md):
     // - AGENTXX_BENCH_STREAM_CHUNKS: mock LLM 每个响应的 SSE 事件数 (0 = 默认单事件),
-    //   用来测量逐事件 SSE 解析路径的开销 (memory-1 方案 §P3 的验收条件)
+    //   用来测量逐事件 SSE 解析路径的开销
     // - AGENTXX_BENCH_ROUNDS / AGENTXX_BENCH_ROUND_BYTES: P3 逐轮往返的轮数与每轮消息字节数
     auto envSize = [](std::string_view name, size_t def) -> size_t {
         if (auto v = utilxx_base::ApplicationEnv::instance().get(name)) {
@@ -491,7 +491,7 @@ void benchResourceCli() {
     printResourceResult(res2);
 
     // ---------------- P3: 真实逐轮往返 (长上下文下的每轮开销) ----------------
-    // 与 P1/P2 的"注入历史"不同: 这里每轮都走完整链路 —— 用户输入 → LLM 请求
+    // 与 P1/P2 的"注入历史"不同: 这里每轮都走完整流程 —— 用户输入 → LLM 请求
     // (SSE) → 工具调用与结果回写 → 消息落库 → 事件回传, 与真实对话一致。
     // 用于观察长上下文下的每轮固定开销、稳态漂移与单轮耗时; 轮数与消息字节数
     // 由 AGENTXX_BENCH_ROUNDS / AGENTXX_BENCH_ROUND_BYTES 控制 (默认 20 轮 × 8 KB)。
