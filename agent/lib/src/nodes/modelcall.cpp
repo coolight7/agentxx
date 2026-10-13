@@ -158,7 +158,7 @@ asio::awaitable<neograph::ChatCompletion> ModelCallWrapNode::onReceiveToken(
                            bool                                   ok,
                            std::string_view                       errorKind
                        ) {
-        if (!agentCtx || !agentCtx->sessions || !agentCtx->sessions->sessionStore) {
+        if (!agentCtx || !agentCtx->sessions) {
             return;
         }
         agentxx::agent::SessionStore::UsageRecord rec;
@@ -180,7 +180,20 @@ asio::awaitable<neograph::ChatCompletion> ModelCallWrapNode::onReceiveToken(
         rec.reasoningTokens        = usage.reasoning_tokens;
         rec.ok                     = ok;
         rec.errorKind              = std::string{errorKind};
-        agentCtx->sessions->sessionStore->addUsage(input.ctx.thread_id, rec);
+        if (agentCtx->sessions->sessionStore) {
+            agentCtx->sessions->sessionStore->addUsage(input.ctx.thread_id, rec);
+        }
+        // 会话累计用量 (界面显示"本会话已消耗多少 token"): 与用量台账在同一处记账,
+        // 保证界面数字与落盘记录使用同一套规则 (不持久化时界面照样有数字);
+        // 失败记录的用量为 0, 累加不影响结果
+        if (auto session = agentCtx->sessions->get(input.ctx.thread_id);
+            session && session->contextStats) {
+            auto& totals = session->contextStats->usage;
+            totals.promptTokens += rec.promptTokens;
+            totals.completionTokens += rec.completionTokens;
+            totals.totalTokens += rec.totalTokens;
+            totals.cachedPromptTokens += rec.cachedPromptTokens;
+        }
     };
     // 关键指标: 模型调用与用量 (失败在错误分类处记)
     auto noteMetrics = [&agentCtx](

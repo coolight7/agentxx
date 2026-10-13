@@ -540,7 +540,7 @@ TUI [F3] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
   - 更新检查 (可选): 启动时延迟 3 秒查询 GitHub Release (`/releases/latest` 的 302 Location
     或 JSON `tag_name`, 超时各 8 秒, 失败只记日志), 仅当最新版本大于当前编译版本才提示;
     受设置项 `tui.checkUpdateOnStartup` 控制; 即时检查经设置条目触发, 结果以弹窗
-    (有新版本)/toast (已最新或失败) 反馈; 详见 [tui.md](tui.md) §2.8
+    (有新版本)/toast (已最新或失败) 反馈; 详见 [tui.md](tui.md) §2.9
   - 历史分页加载: 恢复长会话时初始仅展示服务端末尾窗口 (本地模式 100 条),
     向上滚动接近窗口顶部时经 WireGetViewMessages 自动分页拉取更早历史,
     前插后滚动锚定保持视口稳定; 到达会话开头 (historyWindowStart=0) 后不再请求
@@ -574,6 +574,11 @@ TUI [F3] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
     (agentxx_system_monitor 在 agent 侧周期采集并 publish usage 事件, 经
     WirePluginData 通道回传 client 插件渲染), TUI 不发起资源请求、不解析/
     不渲染插件载荷
+  - Info 面板 Context 段: 侧边栏 Info tab 内容区第一段显示本会话**累计消耗**的
+    token 用量 (已消耗 / 缓存 / 输入 / 输出 + 缓存命中率), Append 段 (已加载组件) 与
+    插件 Info 段落排在它之后; 数据随 `WireContextStats` 下发 (服务端每次推送携带当前
+    累计值, 客户端覆盖显示, 与状态栏的"上下文占用"不是同一个量 —— 后者随压缩回落),
+    服务端尚未推送过用量时显示"( 无数据 )"; 详见 [tui.md](tui.md) §2.7
   - 插件 Info 栏段落扩展: client 插件可经 register_info_section 向侧边栏
     Info tab 注入段落 (标题 + 组件项, 与面板同一套描述层), 渲染在
     Append 组件列表之后; TUI 每帧从 client 插件注册表快照读取, 无需缓存

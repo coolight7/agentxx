@@ -342,7 +342,19 @@ path/to/agentxx_test string_util regex
   `utilxx_base::pathToUtf8Generic` / `utf8ToPath` 转换 (Windows 本地代码页会导致乱码)
 - 完全授权状态: `GetPermissionState` / `SetFullAuth` / `PermissionState` 三消息
   (状态源在权限中间件 `PermissionMiddlewareHandle::isFullAuthorized`, 客户端只持镜像; 点击先乐观更新,
-  服务端广播回来校准); TUI Info 侧边栏底部工作目录行显示/切换该状态 (见 tui.md §2.7)
+  服务端广播回来校准); TUI Info 侧边栏底部工作目录行显示/切换该状态 (见 tui.md §2.8)
+- Info 面板 Context 段 (2026-10): Info tab 内容区**第一段**显示本会话累计消耗的 token
+  (已消耗/缓存/输入/输出 + 缓存命中率), Append 段与插件段落排在它之后 (见 tui.md §2.7);
+  数据源 = 会话累计用量 `SessionUsageTotals` (`Session::contextStats->usage`, 与用量台账
+  `SessionStore` 的 `usage` 表在同一处结算 —— modelcall.cpp 的 `recordUsage`), 经
+  `WireContextStats` 的追加字段 (`promptTokens`/`completionTokens`/`totalTokens`/
+  `cachedPromptTokens`) 下发 (统一组装点 `agentxx/agent/io/context_stats_wire.h` 的
+  `toWireContextStats`); 会话首次加载时由台账聚合恢复, 跨进程重启连续; 与状态栏的
+  "上下文占用" 不是一个量 (后者随压缩回落); 未收到用量时显示"( 无数据 )";
+  缓存量取上游 `usage` 回报的缓存字段 (字段名各家不同, 逐个候选解析:
+  OpenAI `prompt_tokens_details.cached_tokens` / Responses `input_tokens_details.cached_tokens` /
+  DeepSeek `prompt_cache_hit_tokens` / Anthropic 形态 `cache_read_input_tokens`, 见
+  `openai_provider.cpp` 的 `parseCachedUsage`), 上游不回报时恒为 0
 - 更新检查: `agentxx-client/update_check.{h,cpp}` 请求 GitHub `/releases/latest` (读 302 `Location`,
   对端直接回 JSON 时读 `tag_name`; 超时各 8s; 仅比较三段版本号; 失败只记日志不打扰); 启动延迟 3 秒检查,
   受设置项 `tui.checkUpdateOnStartup` 控制; 设置条目可即时检查 (有新版本开弹窗 / 已最新或失败给 toast),

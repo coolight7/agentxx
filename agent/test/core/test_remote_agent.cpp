@@ -66,6 +66,10 @@ public:
     std::atomic<uint64_t>                  lastCtxTokens{0};
     std::atomic<uint64_t>                  lastMaxTokens{0};
     std::atomic<double>                    lastTps{0.0};
+    std::atomic<uint64_t>                  lastPromptTokens{0};
+    std::atomic<uint64_t>                  lastCompletionTokens{0};
+    std::atomic<uint64_t>                  lastTotalTokens{0};
+    std::atomic<uint64_t>                  lastCachedTokens{0};
     std::mutex                             mu;
 
     void onDelta(const agentxx::agent::WireDelta& delta) override {
@@ -86,6 +90,10 @@ public:
         lastCtxTokens.store(s.contextTokens);
         lastMaxTokens.store(s.maxContextTokens);
         lastTps.store(s.tps);
+        lastPromptTokens.store(s.promptTokens);
+        lastCompletionTokens.store(s.completionTokens);
+        lastTotalTokens.store(s.totalTokens);
+        lastCachedTokens.store(s.cachedPromptTokens);
     }
 
     asio::awaitable<std::optional<std::string>> getInput() override {
@@ -1420,7 +1428,16 @@ static asio::awaitable<void> test_remote_client_context_stats() {
             ws,
             io::makeHelloAck(true, hello->value("sessionId", std::string{}), "", {})
         );
-        co_await wsSendJson(ws, io::makeContextStats(1234, 5678, 12.5));
+        // 上下文占用 + 会话累计用量 (输入/输出/缓存) 一并下发
+        agentxx::agent::WireContextStats wireStats;
+        wireStats.contextTokens      = 1234;
+        wireStats.maxContextTokens   = 5678;
+        wireStats.tps                = 12.5;
+        wireStats.promptTokens       = 900;
+        wireStats.completionTokens   = 100;
+        wireStats.totalTokens        = 1000;
+        wireStats.cachedPromptTokens = 600;
+        co_await wsSendJson(ws, io::makeContextStats(wireStats));
         for (;;) {
             auto j = co_await wsRecvJson(ws);
             if (!j) {
@@ -1466,8 +1483,13 @@ static asio::awaitable<void> test_remote_client_context_stats() {
         co_await testSleep(ex, std::chrono::milliseconds{300});
         XX_TEST_EXPECT_EQ(io->lastCtxTokens.load(), uint64_t{1234});
         XX_TEST_EXPECT_EQ(io->lastMaxTokens.load(), uint64_t{5678});
-        // tps 字段 round-trip (makeContextStats 第三个参数)
+        // tps 字段 round-trip (WireContextStats::tps)
         XX_TEST_EXPECT_TRUE(io->lastTps.load() > 12.0 && io->lastTps.load() < 13.0);
+        // 会话累计用量字段 round-trip (界面据此显示已消耗/输入/输出/缓存 token)
+        XX_TEST_EXPECT_EQ(io->lastPromptTokens.load(), uint64_t{900});
+        XX_TEST_EXPECT_EQ(io->lastCompletionTokens.load(), uint64_t{100});
+        XX_TEST_EXPECT_EQ(io->lastTotalTokens.load(), uint64_t{1000});
+        XX_TEST_EXPECT_EQ(io->lastCachedTokens.load(), uint64_t{600});
     }
     transport->close();
 

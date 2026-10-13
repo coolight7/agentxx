@@ -181,10 +181,19 @@ TestResult testWireRoundtrip() {
         st.contextTokens    = 123456;
         st.maxContextTokens = 200000;
         st.tps              = 12.5;
+        st.promptTokens       = 1500;
+        st.completionTokens   = 300;
+        st.totalTokens        = 1800;
+        st.cachedPromptTokens = 1200;
         auto back           = roundTrip(st);
         XX_TEST_EXPECT_EQ(back.contextTokens, uint64_t{123456});
         XX_TEST_EXPECT_EQ(back.maxContextTokens, uint64_t{200000});
         XX_TEST_EXPECT_TRUE(back.tps > 12.49 && back.tps < 12.51);
+        // 会话累计用量 (界面显示已消耗/输入/输出/缓存 token)
+        XX_TEST_EXPECT_EQ(back.promptTokens, uint64_t{1500});
+        XX_TEST_EXPECT_EQ(back.completionTokens, uint64_t{300});
+        XX_TEST_EXPECT_EQ(back.totalTokens, uint64_t{1800});
+        XX_TEST_EXPECT_EQ(back.cachedPromptTokens, uint64_t{1200});
     }
 
     // ---------------- 错误对象 (PRO-11: 文本与机器码分开) ----------------

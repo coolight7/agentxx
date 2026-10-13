@@ -2,6 +2,7 @@
 #include "agentxx/util/neograph_json_bridge.h"
 
 #include "agentxx/agent/io/agent_io_transport.h"
+#include "agentxx/agent/io/context_stats_wire.h"
 #include "agentxx/middlewares/summarization.h"
 #include "agentxx/protocol/provider_common.h"
 #include "agentxx/util/task_scope.h"
@@ -509,12 +510,9 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
         session_->persistThrottled("llm-output");
     }
 
-    // llm node 执行完成，推送上下文统计更新
+    // llm node 执行完成，推送上下文统计更新 (占用 + 会话累计用量)
     if (hasLLMOutput && io_ && session_->contextStats) {
-        io_->sendToPeer(agentxx::agent::WireContextStats{
-            session_->contextStats->contextTokens,
-            session_->contextStats->maxContextTokens,
-        });
+        io_->sendToPeer(agentxx::agent::io::toWireContextStats(*session_->contextStats));
     }
 }
 
@@ -688,11 +686,9 @@ void EventBridge::pushTpsIfDue() {
                                  : 0.0;
     tpsLastPushSec_        = nowSec;
     tpsLastPushToken_      = tpsTokenCount_;
-    io_->sendToPeer(agentxx::agent::WireContextStats{
-        session_->contextStats->contextTokens,
-        session_->contextStats->maxContextTokens,
-        tps,
-    });
+    io_->sendToPeer(
+        agentxx::agent::io::toWireContextStats(*session_->contextStats, tps)
+    );
 }
 
 void EventBridge::publishModelToken(const std::string& token, std::string_view kind) {

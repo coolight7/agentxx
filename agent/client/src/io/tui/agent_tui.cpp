@@ -3067,7 +3067,7 @@ void TUIClientAgentIO::onInputAck(const agentxx::agent::WireInputAck& ack) {
 
 void TUIClientAgentIO::onContextStats(const agentxx::agent::WireContextStats& stats) {
     // 上下文统计写入 sharedState_ (而非 Session::contextStats —— TUI 不持有
-    // Session, 属于 server-io 线程); 状态栏等组件从 frameState 读取。
+    // Session, 属于 server-io 线程); 状态栏/Info 侧边栏等组件从 frameState 读取。
     // 会话切换后服务端推送新会话的 WireContextStats (#switchSession 路径),
     // 显示自动跟随新会话
     {
@@ -3076,6 +3076,14 @@ void TUIClientAgentIO::onContextStats(const agentxx::agent::WireContextStats& st
         st.contextTokens               = stats.contextTokens;
         st.maxContextTokens            = stats.maxContextTokens;
         st.tps                         = stats.tps;
+        // 会话累计用量 (Info 侧边栏 Context 段): 服务端每次推送都是"当前累计值",
+        // 直接覆盖; 老服务端不带这些字段时四个值恒为 0, 记为"无数据"
+        st.sessionPromptTokens       = stats.promptTokens;
+        st.sessionCompletionTokens   = stats.completionTokens;
+        st.sessionTotalTokens        = stats.totalTokens;
+        st.sessionCachedPromptTokens = stats.cachedPromptTokens;
+        st.sessionUsageKnown = (stats.promptTokens > 0 || stats.completionTokens > 0
+                                || stats.totalTokens > 0 || stats.cachedPromptTokens > 0);
     }
     postRedraw();
 }

@@ -338,13 +338,21 @@
         "type": "string",
         "contextTokens": "integer",
         "maxContextTokens": "integer",
-        "tps": "number"
+        "tps": "number",
+        "promptTokens": "integer",
+        "completionTokens": "integer",
+        "totalTokens": "integer",
+        "cachedPromptTokens": "integer"
       },
       "sample": {
         "type": "context_stats",
         "contextTokens": 123456,
         "maxContextTokens": 200000,
-        "tps": 12.5
+        "tps": 12.5,
+        "promptTokens": 9000,
+        "completionTokens": 1200,
+        "totalTokens": 10200,
+        "cachedPromptTokens": 7200
       }
     },
     {

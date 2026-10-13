@@ -769,6 +769,84 @@ void test_info_access_point_extended_components() {
     XX_TEST_EXPECT_TRUE(found);
 }
 
+/// Info 侧边栏 Context 段: 显示本会话已消耗/输入/输出/缓存 token 与缓存命中率,
+/// 且位置在 Append 段之上; 服务端未推送过用量时显示"( 无数据 )"而不是一串 0
+void test_info_sidebar_context_section() {
+    // 本用例按英文文案断言 (模块内其余用例可能切换过语言), 结束后恢复原语言
+    const auto savedLang = TUISettings::instance().language();
+    TUISettings::instance().setLanguage(TuiLanguage::EnUs);
+
+    asio::io_context io;
+    auto             tui = std::make_shared<TUIClientAgentIO>(io.get_executor(), "session");
+    tui->refreshRenderContext();
+
+    // 1) 尚未收到 WireContextStats: 只显示标题与"( 无数据 )"
+    {
+        const auto rows = tui->renderInfoSidebar();
+        const auto text = renderScrollItems(rows, 60, 12);
+        XX_TEST_EXPECT_TRUE(text.find("Context") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(text.find("( no data )") != std::string::npos);
+        // 未推送用量时不显示各项数字行
+        XX_TEST_EXPECT_TRUE(text.find("Used:") == std::string::npos);
+    }
+
+    // 2) 收到用量推送: 各行按 K/M 折算显示, 命中率按 缓存/输入 计算
+    //    (取值选 1024 的整数倍, 折算结果无小数, 便于逐项比对)
+    {
+        agentxx::agent::WireContextStats stats;
+        stats.contextTokens      = 40000;
+        stats.maxContextTokens   = 200000;
+        stats.promptTokens       = 8192; // 8K
+        stats.completionTokens   = 2048; // 2K
+        stats.totalTokens        = 10240; // 10K
+        stats.cachedPromptTokens = 6144; // 6K -> 命中率 75.0%
+        tui->onPeerMessage(agentxx::agent::WireMessage{stats});
+        tui->refreshRenderContext();
+
+        const auto rows = tui->renderInfoSidebar();
+        const auto text = renderScrollItems(rows, 60, 12);
+        XX_TEST_EXPECT_TRUE(text.find("Context") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(text.find("Used: 10K") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(text.find("Cached: 6K") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(text.find("Input: 8K") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(text.find("Output: 2K") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(text.find("Cache hit: 75.0%") != std::string::npos);
+
+        // 3) Context 段在 Append 段之上 (已加载组件列表之前)
+        agentxx::agent::AppendComponentNotification notif;
+        notif.type    = agentxx::agent::AppendComponentNotification::Type::Memory;
+        notif.name    = "AGENTS.md";
+        notif.success = true;
+        tui->sharedState().mutate([&](TUIRenderState& st) {
+            st.appendComponents.push_back(notif);
+        });
+        tui->refreshRenderContext();
+        const auto rows2 = tui->renderInfoSidebar();
+        const auto text2 = renderScrollItems(rows2, 60, 12);
+        const auto posContext = text2.find("Context");
+        const auto posAppend  = text2.find("Append");
+        XX_TEST_EXPECT_TRUE(posContext != std::string::npos);
+        XX_TEST_EXPECT_TRUE(posAppend != std::string::npos);
+        XX_TEST_EXPECT_TRUE(posContext < posAppend);
+    }
+
+    // 4) 输入为 0 时不显示命中率行 (0/0 无意义)
+    {
+        agentxx::agent::WireContextStats stats;
+        stats.totalTokens      = 500;
+        stats.completionTokens = 500;
+        tui->onPeerMessage(agentxx::agent::WireMessage{stats});
+        tui->refreshRenderContext();
+        const auto rows = tui->renderInfoSidebar();
+        const auto text = renderScrollItems(rows, 60, 12);
+        XX_TEST_EXPECT_TRUE(text.find("Cache hit") == std::string::npos);
+        XX_TEST_EXPECT_TRUE(text.find("( no data )") == std::string::npos);
+        XX_TEST_EXPECT_TRUE(text.find("Used: 500") != std::string::npos);
+    }
+
+    TUISettings::instance().setLanguage(savedLang);
+}
+
 TestResult testTuiWidget() {
     g_tui_widget_passed = 0;
     g_tui_widget_failed = 0;
@@ -788,6 +866,7 @@ TestResult testTuiWidget() {
     test_status_bar_click_actions();
     test_panel_access_point_extended_components();
     test_info_access_point_extended_components();
+    test_info_sidebar_context_section();
 
     return TestResult{g_tui_widget_passed, g_tui_widget_failed};
 }

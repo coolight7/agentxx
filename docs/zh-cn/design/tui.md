@@ -135,10 +135,10 @@
 | `InputComponent` | [components/input_bar.h](/agent/client/include/agentxx-client/io/tui/components/input_bar.h) | 输入框 + 附件托盘 + 待发队列行 |
 | `StatusBarComponent` | [components/status_bar.h](/agent/client/include/agentxx-client/io/tui/components/status_bar.h) | 状态栏 (模型/上下文/插件项/会话/设置) |
 | `SidebarComponent` | [components/sidebar.h](/agent/client/include/agentxx-client/io/tui/components/sidebar.h) | 侧边栏 (内容区 + tabs 列表 + 宽度拖拽) |
-| 弹窗 | [components/overlays.h](/agent/client/include/agentxx-client/io/tui/components/overlays.h) | 模型/会话/设置/关于/更新提示/待发队列/上下文/mermaid/text/diff/custom/文件选择 (含跨设备标签页, 见 §2.9) |
+| 弹窗 | [components/overlays.h](/agent/client/include/agentxx-client/io/tui/components/overlays.h) | 模型/会话/设置/关于/更新提示/待发队列/上下文/mermaid/text/diff/custom/文件选择 (含跨设备标签页, 见 §2.10) |
 | `InterruptView` | [components/interrupt_view.h](/agent/client/include/agentxx-client/io/tui/components/interrupt_view.h) | 中断询问表单 (形态完全由描述数据决定; 控件与提交行复用 `ui_components`) |
 | `SpinnerComponent` | [components/spinner.h](/agent/client/include/agentxx-client/io/tui/components/spinner.h) | 帧序列加载动画 (动画等级低于门槛时静态降级) |
-| `BannerArtComponent` | [components/banner_art.h](/agent/client/include/agentxx-client/io/tui/components/banner_art.h) | 空列表 banner 艺术字 (`AGENT++`): 右侧 `++` 由两个大字 `+` 变形为机器人图案 (见 §2.10) |
+| `BannerArtComponent` | [components/banner_art.h](/agent/client/include/agentxx-client/io/tui/components/banner_art.h) | 空列表 banner 艺术字 (`AGENT++`): 右侧 `++` 由两个大字 `+` 变形为机器人图案 (见 §2.11) |
 | `ui_components` | [ui_components.h](/agent/client/include/agentxx-client/io/tui/ui_components.h) | **组件渲染唯一实现**: 把界面描述层 (`cxx_pluginxx_ui`) 的组件项渲染为行模型 (元素 + 行数 + 元素内可命中区域) |
 
 `ui_components` 是全部展示描述的唯一渲染实现: 侧边栏面板、Info 段落、工具消息装饰、
@@ -326,7 +326,58 @@ struct UiActionItem {
 - 相关 schema 与约束见 [plugins.md](plugins.md) §9.1~§9.6 与
   [ui_components.h](/agent/client/include/agentxx-client/io/tui/ui_components.h)。
 
-### 2.7 Info 侧边栏底部 (工作目录 / 授权按钮 / 版本信息)
+### 2.7 Info 面板: Context 段 (已消耗 token 用量)
+
+Info tab 内容区 (`renderInfoSidebar()`, 见
+[tui_sidebar_content.cpp](/agent/client/src/io/tui/tui_sidebar_content.cpp)) 的**第一段**是
+Context 段, 显示本会话累计消耗的 token 用量; Append 段 (已加载组件) 与插件 Info 段落
+都排在它之后:
+
+```
+Context
+|- 已消耗: 12K
+|- 缓存: 9K
+|- 输入: 10K
+|- 输出: 2K
+|- 缓存命中率: 90.0%
+```
+
+- **"已消耗"与状态栏的上下文占用不是一回事**: 状态栏的 `ctx/max` 是"当前装了多少"
+  (压缩后回落), Context 段是"累计花掉多少", 只增不减。两者数据源同一条线消息
+  (`WireContextStats`), 但字段不同。
+- 数字按 `utilxx_base::formatSize` 折算 (`12K` / `1.5M`): token 数普遍到万级, 完整数字
+  会把侧边栏撑宽。
+- 缓存命中率 = 命中缓存的输入 / 输入 (`cachedPromptTokens / promptTokens`); **输入为 0 时
+  不渲染该行** (0/0 没有意义)。
+- "缓存"数字来自上游 `usage` 里回报的命中缓存输入量, 各家用不同字段名, provider 逐个候选
+  取值: `prompt_tokens_details.cached_tokens` (OpenAI Chat Completions 与多数兼容网关)、
+  `input_tokens_details.cached_tokens` (Responses API)、`prompt_cache_hit_tokens` (DeepSeek
+  官方)、`cache_read_input_tokens` / `cache_creation_input_tokens` (Anthropic 形态经网关
+  转发), 详见 [openai_provider.cpp](/agent/lib/src/protocol/openai_provider.cpp) 的
+  `parseCachedUsage` 与 [anthropic_provider.h](/agent/lib/include/agentxx/protocol/anthropic_provider.h)。
+  **上游不回报这些字段时缓存量恒为 0** —— 界面显示 `缓存: 0` 与 `缓存命中率: 0.0%` 时,
+  先确认该上游是否支持 prompt 缓存并回报命中量, 而不是怀疑本地统计。
+- 服务端尚未推送过用量 (老服务端 / 全新会话) 时只显示一行 `( 无数据 )` (`info.contextEmpty`),
+  而不是一串 0 —— 0 看起来像"统计归零", 无数据与真的没有消耗是两回事。
+- 数据来源与刷新: 服务端每次推送 `WireContextStats` 都带上当前累计值
+  (`promptTokens`/`completionTokens`/`totalTokens`/`cachedPromptTokens`), 客户端
+  `onContextStats` 直接**覆盖**(不是累加) `TUIRenderState` 的
+  `sessionPromptTokens`/`sessionCompletionTokens`/`sessionTotalTokens`/
+  `sessionCachedPromptTokens` + `sessionUsageKnown`。推送时机与上下文占用相同:
+  模型节点结束 (`EventBridge::handleNodeEnd`)、流式期间的 tps 定时推送、
+  握手/切换会话 (`SessionServerAgentIO::sendContextStats`)、压缩完成。
+- agent 侧的累计值由 `Session::contextStats->usage` (`SessionUsageTotals`) 持有,
+  与用量台账 (`SessionStore` 的 `usage` 表) 在**同一处结算** (见
+  [modelcall.cpp](/agent/lib/src/nodes/modelcall.cpp) 的 `recordUsage`), 因此界面数字与
+  落盘记录按同一套规则统计; 会话第一次加载时该累计值由台账聚合恢复
+  (`SessionsManager::getOrCreate*` 里的 `loaded.usage`), 进程重启后继续累计。
+- 文案键: `info.context` / `info.usedTokens` / `info.cacheTokens` / `info.inputTokens` /
+  `info.outputTokens` / `info.cacheHitRate` / `info.contextEmpty`。
+- 回归测试: `agentxx_test tui_widget` 的 `test_info_sidebar_context_section`
+  (无数据形态 / 各项数字与命中率 / Context 段在 Append 之上 / 输入为 0 时不显示命中率);
+  跨进程恢复与统计规则见 `agentxx_test usage_ledger`。
+
+### 2.8 Info 侧边栏底部 (工作目录 / 授权按钮 / 版本信息)
 
 [agent_tui.cpp](/agent/client/src/io/tui/agent_tui.cpp) 的 `renderInfoSidebarFooter()` 渲染
 Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行, 以及 (发现新版本时) 更新提示行。
@@ -346,7 +397,7 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
 - 路径一律以 **UTF-8** 显示 (`utilxx_base::pathToUtf8Generic`): Windows 下
   `std::filesystem::path::string()` 返回本地代码页, 中文目录会显示为乱码。
 
-### 2.8 更新检查 (GitHub Release)
+### 2.9 更新检查 (GitHub Release)
 
 可选地查询项目最新发布版本, 有更新才提示:
 
@@ -396,7 +447,7 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
   服务端到端 (302 / JSON / 404 / 旧版本) 在 `agentxx_test http`; 设置条目、更新提示
   弹窗 (版式/点击/Enter/Esc/窄终端换行) 与结果状态在 `agentxx_test tui_settings`。
 
-### 2.9 文件选择弹窗 (跨设备附件)
+### 2.10 文件选择弹窗 (跨设备附件)
 
 [FilePickerOverlay](/agent/client/include/agentxx-client/io/tui/components/overlays.h) (类声明在
 `overlays.h`, 实现单独在
@@ -418,7 +469,7 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
   `utilxx_base::utf8ToPath`), Windows 下中文目录不会显示为乱码。
 - 模态行为与其它弹窗一致: 未命中的鼠标事件同样吞掉 (滚轮不会滚动被遮挡的消息列表)。
 
-### 2.10 空状态艺术字动画 (`AGENT++`)
+### 2.11 空状态艺术字动画 (`AGENT++`)
 
 消息列表为空时展示的 banner 艺术字由
 [components/banner_art.h](/agent/client/include/agentxx-client/io/tui/components/banner_art.h)
@@ -443,7 +494,7 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
   `cacheable = false`): 缓存命中的旧 Element 会停在动画中的某一帧, 不再随帧推进。
 - 测试: `agentxx_test banner_art` (帧结构/前缀不变/末帧一致/逐帧收敛 + 播放与空列表接入)。
 
-### 2.11 添加模型配置 (选择模型弹窗 → 表单 → 线消息 → 服务端落盘)
+### 2.12 添加模型配置 (选择模型弹窗 → 表单 → 线消息 → 服务端落盘)
 
 模型列表来自服务端 (`WireModelInfo`), 模型本身是服务端配置 (`model.list`), 因此
 "添加模型" 由 **界面收集输入 + 服务端落盘并注册** 两段组成, 界面侧不写任何配置文件。
@@ -489,7 +540,7 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
   `tui_settings` (顶部条目与表单取值映射)、`util_misc` (线消息往返)、
   `remote_agent` (端到端: 校验 → 落盘 → 注册 → 立即切换 + 非法/重名分支)。
 
-### 2.12 客户端模型层 (历史窗口 / 队列镜像) 与输入栏光标
+### 2.13 客户端模型层 (历史窗口 / 队列镜像) 与输入栏光标
 
 **模型层 (计划 UI-1)**: 与"数据从哪来、怎么画"无关的两块状态抽成独立模型, 放在
 `agentxx-client/io/tui/model/` 下, **不依赖 FTXUI / 端点 / 网络 / 插件管理器**, 因此可脱离
@@ -519,7 +570,7 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
 `terminal.hardware_cursor` 的唯一来源 (`tuiHardwareCursorSupported()`), 插件读到的值与
 本端实际行为不会分叉。
 
-### 2.13 生成占位提示 (等待响应 / 正在调用工具)
+### 2.14 生成占位提示 (等待响应 / 正在调用工具)
 
 模型节点开始执行到首个可见输出之间常有一段空档 (请求排队、上游 prefill、推理模型出思考前),
 期间界面若没有任何提示, 用户无法区分"正在生成"与"卡住了"。占位提示就是填这段空档,

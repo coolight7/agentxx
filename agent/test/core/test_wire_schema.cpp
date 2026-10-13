@@ -313,9 +313,13 @@ std::vector<WireSample> wireSamples() {
     // 13) 上下文统计
     {
         WireContextStats m;
-        m.contextTokens    = 123456;
-        m.maxContextTokens = 200000;
-        m.tps              = 12.5;
+        m.contextTokens      = 123456;
+        m.maxContextTokens   = 200000;
+        m.tps                = 12.5;
+        m.promptTokens       = 9000;
+        m.completionTokens   = 1200;
+        m.totalTokens        = 10200;
+        m.cachedPromptTokens = 7200;
         out.push_back({"context_stats", WireMessage{std::move(m)}});
     }
     // 14) 错误对象

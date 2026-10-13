@@ -533,6 +533,12 @@ asio::awaitable<void> test_eventbridge_tps() {
     auto session = std::make_shared<agentxx::agent::Session>();
     auto io      = std::make_shared<TestEbIO>();
 
+    // 会话累计用量 (界面显示已消耗/输入/输出/缓存 token): 应随每次统计推送一并下发
+    session->contextStats->usage.promptTokens       = 800;
+    session->contextStats->usage.completionTokens   = 200;
+    session->contextStats->usage.totalTokens        = 1000;
+    session->contextStats->usage.cachedPromptTokens = 600;
+
     auto bridge = makeTestBridge(agentContext, session, io);
     // 缩短推送间隔 (默认 5 秒), 测试无需真实等待
     bridge->setTpsPushInterval(0.05);
@@ -567,6 +573,11 @@ asio::awaitable<void> test_eventbridge_tps() {
         XX_TEST_EXPECT_TRUE(io->stats[0].tps > 0.0);
         // 上下文统计字段透传 (默认 0)
         XX_TEST_EXPECT_EQ(io->stats[0].contextTokens, uint64_t{0});
+        // 会话累计用量随同一条消息下发 (界面显示已消耗/输入/输出/缓存 token)
+        XX_TEST_EXPECT_EQ(io->stats[0].promptTokens, uint64_t{800});
+        XX_TEST_EXPECT_EQ(io->stats[0].completionTokens, uint64_t{200});
+        XX_TEST_EXPECT_EQ(io->stats[0].totalTokens, uint64_t{1000});
+        XX_TEST_EXPECT_EQ(io->stats[0].cachedPromptTokens, uint64_t{600});
     }
 
     // 新流 (NODE_START) 重新计时: 间隔从新流首个 token 起算, 立即发 token 不推送

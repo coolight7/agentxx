@@ -166,6 +166,84 @@ static int jsonIntField(const utilxx_base::Json& obj, const char* key, int def =
     return def;
 }
 
+/// 缓存用量 (命中缓存的读取量 / 写入量), 单位 token
+///
+/// 单独成一个结构而不是直接写进 `usage`: 上游回报缓存 token 的字段名不统一, 而写缓存的量
+/// 在 `neograph::ChatCompletion::Usage` 里没有对应字段 (见 provider_common.h 的
+/// [agentxx::protocol::UsageDetail])。
+struct CachedUsage {
+    int readTokens  = 0;
+    int writeTokens = 0;
+};
+
+/// usage 里可能出现缓存用量的嵌套对象名
+/// - `prompt_tokens_details`: OpenAI Chat Completions 与多数兼容网关
+/// - `input_tokens_details`: OpenAI Responses API
+static constexpr const char* const kUsageDetailsKeys[] = {
+    "prompt_tokens_details", "input_tokens_details"
+};
+
+/// 从 usage 对象中提取缓存用量 (兼容各家字段名)
+///
+/// 各上游用的字段名不一致, 同一个网关还可能同时给出多组 (其中一组恒为 0, 例如
+/// commandcode 网关的 `prompt_tokens_details` 里 `cached_tokens` 与
+/// `cache_read_input_tokens` 并存), 因此**全部候选取最大值**, 不取第一个出现的字段:
+/// - 读取 (命中缓存): `prompt_tokens_details.cached_tokens` (OpenAI 与主流网关)、
+///   `prompt_tokens_details.cache_read_input_tokens` (Anthropic 形态经网关转发)、
+///   `input_tokens_details.cached_tokens` (Responses API)、
+///   `prompt_cache_hit_tokens` (DeepSeek 官方), 以及顶层 `cached_tokens` /
+///   `cache_read_input_tokens`
+/// - 写入: `prompt_tokens_details.cache_creation_input_tokens` /
+///   `.cache_write_tokens` (Anthropic 形态), 以及顶层同名两个字段
+///
+/// 只取"缓存用了多少", **不调整** `prompt_tokens`: OpenAI 形态的 `prompt_tokens` 已包含
+/// 命中缓存的部分 (DeepSeek 的 `prompt_cache_hit_tokens` 是它的子集), 相加会重复计数。
+static CachedUsage parseCachedUsage(const utilxx_base::Json& u) {
+    CachedUsage out;
+    if (!u.is_object()) {
+        return out;
+    }
+    auto takeMax = [](int& dst, int v) {
+        if (v > dst) {
+            dst = v;
+        }
+    };
+    for (const char* detailsKey : kUsageDetailsKeys) {
+        if (!u.contains(detailsKey)) {
+            continue;
+        }
+        const auto& details = u[detailsKey];
+        if (!details.is_object()) {
+            continue;
+        }
+        takeMax(out.readTokens, jsonIntField(details, "cached_tokens"));
+        takeMax(out.readTokens, jsonIntField(details, "cache_read_input_tokens"));
+        takeMax(out.writeTokens, jsonIntField(details, "cache_creation_input_tokens"));
+        takeMax(out.writeTokens, jsonIntField(details, "cache_write_tokens"));
+    }
+    takeMax(out.readTokens, jsonIntField(u, "prompt_cache_hit_tokens"));
+    takeMax(out.readTokens, jsonIntField(u, "cached_tokens"));
+    takeMax(out.readTokens, jsonIntField(u, "cache_read_input_tokens"));
+    takeMax(out.writeTokens, jsonIntField(u, "cache_creation_input_tokens"));
+    takeMax(out.writeTokens, jsonIntField(u, "cache_write_tokens"));
+    return out;
+}
+
+/// 把缓存用量写进补全结果 (计划 LLM-8)
+///
+/// - 命中缓存的读取量写 `usage.cached_prompt_tokens`, 与 Anthropic 路径同一个字段
+/// - 写入量只在补充用量通道里传 (Usage 里没有对应字段); 两者都为 0 时不写,
+///   省去热路径上一次 JSON 对象分配
+static void applyCachedUsage(neograph::ChatCompletion& completion, const CachedUsage& cached) {
+    completion.usage.cached_prompt_tokens = cached.readTokens;
+    if (cached.readTokens > 0 || cached.writeTokens > 0) {
+        agentxx::protocol::setUsageDetail(
+            completion,
+            agentxx::protocol::UsageDetail{cached.readTokens, cached.writeTokens}
+        );
+    }
+}
+
 /// 从 usage 对象中提取 token 统计 (兼容 Chat Completions 与 Responses API 及各类网关字段)
 /// - 官方字段: input_tokens / output_tokens / total_tokens (Responses API) 或 prompt_tokens /
 /// completion_tokens (Chat Completions)
@@ -231,6 +309,9 @@ static void parseUsage(const utilxx_base::Json& u, neograph::ChatCompletion& com
         completion.message.extra[OpenAIProvider::kReasoningTokensKey]
             = completion.usage.reasoning_tokens;
     }
+
+    // 缓存用量: 各网关字段名不同 (见 [parseCachedUsage]), 这里统一折算
+    applyCachedUsage(completion, parseCachedUsage(u));
 }
 
 /// JsonView 零拷贝辅助 (SSE 高频路径: 先 View 命中再按需物化)
@@ -345,6 +426,38 @@ static int viewIntField(const utilxx_base::JsonView& obj, std::string_view key, 
     return def;
 }
 
+/// View 版缓存用量提取 (与 [parseCachedUsage] 同语义, 高频 SSE 路径零拷贝路由)
+static CachedUsage parseCachedUsageView(const utilxx_base::JsonView& u) {
+    CachedUsage out;
+    if (!u.is_object()) {
+        return out;
+    }
+    auto takeMax = [](int& dst, int v) {
+        if (v > dst) {
+            dst = v;
+        }
+    };
+    for (const char* detailsKey : kUsageDetailsKeys) {
+        if (!u.contains(detailsKey)) {
+            continue;
+        }
+        auto details = u[detailsKey];
+        if (!details.valid() || !details.is_object()) {
+            continue;
+        }
+        takeMax(out.readTokens, viewIntField(details, "cached_tokens", 0));
+        takeMax(out.readTokens, viewIntField(details, "cache_read_input_tokens", 0));
+        takeMax(out.writeTokens, viewIntField(details, "cache_creation_input_tokens", 0));
+        takeMax(out.writeTokens, viewIntField(details, "cache_write_tokens", 0));
+    }
+    takeMax(out.readTokens, viewIntField(u, "prompt_cache_hit_tokens", 0));
+    takeMax(out.readTokens, viewIntField(u, "cached_tokens", 0));
+    takeMax(out.readTokens, viewIntField(u, "cache_read_input_tokens", 0));
+    takeMax(out.writeTokens, viewIntField(u, "cache_creation_input_tokens", 0));
+    takeMax(out.writeTokens, viewIntField(u, "cache_write_tokens", 0));
+    return out;
+}
+
 /// View 版 usage 提取 (与 parseUsage 同语义, 高频 SSE 路径零拷贝路由)
 /// - 细节分支与原实现一致: 仅 `contains(key)` 命中且为对象时取值,
 ///   非对象 (如字符串) 视为未命中而尝试下一分支 (与原 contains() 检查一致,
@@ -409,6 +522,9 @@ static void parseUsageView(const utilxx_base::JsonView& u, neograph::ChatComplet
         completion.message.extra[OpenAIProvider::kReasoningTokensKey]
             = completion.usage.reasoning_tokens;
     }
+
+    // 缓存用量: 各网关字段名不同 (见 [parseCachedUsage])
+    applyCachedUsage(completion, parseCachedUsageView(u));
 }
 
 /// 新模型 (o1/o3/o4/gpt-5 等) 只接受 max_completion_tokens 字段, 旧模型使用 max_tokens

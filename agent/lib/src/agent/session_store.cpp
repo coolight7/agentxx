@@ -102,6 +102,35 @@ static constexpr std::string_view kMetaTitleSource  = "titleSource";
 /// 展示历史持久化序号计数 (计划 STO-4; 见 SessionStore::LoadedSession::lastViewSeq)
 static constexpr std::string_view kMetaViewSeqCounter = "viewSeqCounter";
 
+/// 读取会话用量聚合 (usage 表全量汇总)
+///
+/// - [usageSummary] 与 [loadSession] 共用: 会话加载时顺着同一只读连接一并读出用量
+///   (供界面显示已消耗 token), 不必再另外开一个写连接 (也就不会在加载阶段取写租约)
+/// - 查询失败抛异常, 由调用方的 catchError 记录 (与其它读取路径一致)
+/// - `db` 必须已打开
+static SessionStore::UsageSummary readUsageSummary(agentxx::util::SqliteDb& db) {
+    SessionStore::UsageSummary out;
+    auto                       stmt = db.prepare(
+        "SELECT count(*), "
+        "COALESCE(sum(CASE WHEN ok = 0 THEN 1 ELSE 0 END), 0), "
+        "COALESCE(sum(prompt_tokens), 0), COALESCE(sum(completion_tokens), 0), "
+        "COALESCE(sum(total_tokens), 0), COALESCE(sum(cached_prompt_tokens), 0), "
+        "COALESCE(sum(reasoning_tokens), 0), "
+        "COALESCE(sum(cache_write_prompt_tokens), 0) FROM usage"
+    );
+    if (stmt.step()) {
+        out.calls                  = stmt.columnInt64(0);
+        out.failedCalls            = stmt.columnInt64(1);
+        out.promptTokens           = stmt.columnInt64(2);
+        out.completionTokens       = stmt.columnInt64(3);
+        out.totalTokens            = stmt.columnInt64(4);
+        out.cachedPromptTokens     = stmt.columnInt64(5);
+        out.reasoningTokens        = stmt.columnInt64(6);
+        out.cacheWritePromptTokens = stmt.columnInt64(7);
+    }
+    return out;
+}
+
 /// 会话名称预览: 取首行并截断到 max 个 UTF-8 字符 (避免弹窗展示过宽)
 static std::string titlePreview(std::string_view s, size_t max = 60) {
     const auto  nl = s.find('\n');
@@ -656,6 +685,18 @@ SessionStore::LoadedSession SessionStore::loadSession(std::string_view sessionId
         },
         [&](std::string errmsg) -> bool {
             XX_LOGE("SessionStore: loadSession({}) 读取 meta 失败: {}", sessionId, errmsg);
+            return false;
+        }
+    );
+    // 会话累计用量 (usage 表聚合): 与历史一起读出, 供界面显示"本会话已消耗多少
+    // token" (输入/输出/缓存命中); 用同一只读连接读取, 不取写租约
+    agentxx::util::catchError<bool>(
+        [&]() -> bool {
+            out.usage = readUsageSummary(db);
+            return true;
+        },
+        [&](std::string errmsg) -> bool {
+            XX_LOGE("SessionStore: loadSession({}) 读取用量聚合失败: {}", sessionId, errmsg);
             return false;
         }
     );
@@ -1359,25 +1400,7 @@ SessionStore::UsageSummary SessionStore::usageSummary(std::string_view sessionId
     std::lock_guard<std::mutex> lock(mutex_);
     agentxx::util::catchError<bool>(
         [&]() -> bool {
-            auto& db   = dbs(sessionId).sessionDb;
-            auto  stmt = db.prepare(
-                "SELECT count(*), "
-                "COALESCE(sum(CASE WHEN ok = 0 THEN 1 ELSE 0 END), 0), "
-                "COALESCE(sum(prompt_tokens), 0), COALESCE(sum(completion_tokens), 0), "
-                "COALESCE(sum(total_tokens), 0), COALESCE(sum(cached_prompt_tokens), 0), "
-                "COALESCE(sum(reasoning_tokens), 0), "
-                "COALESCE(sum(cache_write_prompt_tokens), 0) FROM usage"
-            );
-            if (stmt.step()) {
-                out.calls                  = stmt.columnInt64(0);
-                out.failedCalls            = stmt.columnInt64(1);
-                out.promptTokens           = stmt.columnInt64(2);
-                out.completionTokens       = stmt.columnInt64(3);
-                out.totalTokens            = stmt.columnInt64(4);
-                out.cachedPromptTokens     = stmt.columnInt64(5);
-                out.reasoningTokens        = stmt.columnInt64(6);
-                out.cacheWritePromptTokens = stmt.columnInt64(7);
-            }
+            out = readUsageSummary(dbs(sessionId).sessionDb);
             return true;
         },
         [&](std::string errmsg) -> bool {

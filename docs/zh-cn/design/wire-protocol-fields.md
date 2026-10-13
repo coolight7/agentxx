@@ -27,7 +27,7 @@
 | 9 | delta | `delta` | `type` string, `seq` integer, `text` string, `msgId` string, `tool_name` string, `tool_call_id` string, `arguments` string, `result` string, `historyCount` integer, `tailHash` string, `startTimeMs` integer, `durationMs` integer, `tps` number, `nodeName` string, `message` object{role:string, text:string, startTimeMs:integer, durationMs:integer}, `kind` string |
 | 10 | sync | `sync` | `fromIndex` integer, `tailHash` string, `deltaSeq` integer, `totalMessages` integer, `lastViewSeq` integer, `incremental` boolean, `messages` array<object{role:string, text:string, startTimeMs:integer, durationMs:integer}>, `message_queue` array<object{id:string, text:string, createdAtMs:integer, model:string, delivery:string, recovered:boolean}>, `queue_state` string, `type` string |
 | 11 | turn_result | `turn_result` | `type` string, `sessionId` string, `hasError` boolean, `interrupted` boolean, `errorMessage` string, `startTimeMs` integer, `durationMs` integer |
-| 12 | context_stats | `context_stats` | `type` string, `contextTokens` integer, `maxContextTokens` integer, `tps` number |
+| 12 | context_stats | `context_stats` | `type` string, `contextTokens` integer, `maxContextTokens` integer, `tps` number, `promptTokens` integer, `completionTokens` integer, `totalTokens` integer, `cachedPromptTokens` integer |
 | 13 | error | `error` | `type` string, `code` integer, `message` string |
 | 14 | log | `log` | `type` string, `level` integer, `message` string |
 | 15 | get_model | `get_model` | `type` string, `sessionId` string |

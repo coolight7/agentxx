@@ -105,6 +105,27 @@ asio::awaitable<TestResult> test_usage_ledger() {
             XX_TEST_EXPECT_TRUE(recent[0].timeMs > 0);
             XX_TEST_EXPECT_TRUE(recent[0].errorKind.empty());
         }
+
+        // ---- 会话累计用量 (界面显示"已消耗 token"): 与用量台账同一套记账规则 ----
+        auto sess = agent.agentContext->sessions->get("ledger_sess");
+        XX_TEST_EXPECT_TRUE(sess != nullptr);
+        if (sess && sess->contextStats) {
+            const auto& usage = sess->contextStats->usage;
+            XX_TEST_EXPECT_EQ(usage.promptTokens, int64_t{137});
+            XX_TEST_EXPECT_EQ(usage.completionTokens, int64_t{29});
+            XX_TEST_EXPECT_EQ(usage.totalTokens, int64_t{166});
+        }
+
+        // ---- 会话重新加载: 累计用量由用量台账恢复 (跨进程重启后继续累计) ----
+        agent.agentContext->sessions->remove("ledger_sess");
+        auto reloaded = agent.agentContext->sessions->getOrCreate("ledger_sess");
+        XX_TEST_EXPECT_TRUE(reloaded != nullptr);
+        if (reloaded && reloaded->contextStats) {
+            const auto& usage = reloaded->contextStats->usage;
+            XX_TEST_EXPECT_EQ(usage.promptTokens, int64_t{137});
+            XX_TEST_EXPECT_EQ(usage.completionTokens, int64_t{29});
+            XX_TEST_EXPECT_EQ(usage.totalTokens, int64_t{166});
+        }
     }
 
     // ---- 失败轮次: API 持续失败也要留痕 (失败原因进用量记录) ----

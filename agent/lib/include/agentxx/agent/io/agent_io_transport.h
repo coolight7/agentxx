@@ -259,6 +259,19 @@ struct WireContextStats {
     uint64_t maxContextTokens = 0;
     /// 当前 ModelCall 平均生成速度 (token/s, 估算值); 0 = 无流式/无数据
     double tps = 0.0;
+
+    // ---- 会话累计用量 (追加在末尾; 老对端不认识这些字段时按 0 处理) ----
+    // 与 contextTokens 的区别: 后者是"当前装了多少" (随压缩回落), 这里是"累计
+    // 花掉多少", 只增不减; 由各端点的会话统计 (Session::contextStats::usage) 填充
+
+    /// 输入 (prompt) token 累计; 含命中缓存与写入缓存的输入
+    uint64_t promptTokens = 0;
+    /// 输出 (completion) token 累计
+    uint64_t completionTokens = 0;
+    /// 合计 (prompt + completion)
+    uint64_t totalTokens = 0;
+    /// 其中命中 prompt 缓存的 token 累计 (缓存命中率 = 它与 promptTokens 之比)
+    uint64_t cachedPromptTokens = 0;
 };
 
 /// Wire 层错误码 (`WireError::code`)

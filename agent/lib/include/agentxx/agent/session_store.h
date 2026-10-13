@@ -56,6 +56,21 @@ public:
 
     // ---- 会话消息状态 (session.db) ----
 
+    /// 会话用量聚合 (供界面/诊断展示; 由用量记录汇总, 不依赖内存中的最后一次统计)
+    ///
+    /// 定义在 [LoadedSession] 之前: 加载会话时一并读出该聚合 (同一只读连接),
+    /// 供界面显示"本会话已消耗多少 token"
+    struct UsageSummary {
+        int64_t calls                  = 0; ///< 记录次数 (含失败)
+        int64_t failedCalls            = 0; ///< 失败次数
+        int64_t promptTokens           = 0;
+        int64_t completionTokens       = 0;
+        int64_t totalTokens            = 0;
+        int64_t cachedPromptTokens     = 0;
+        int64_t cacheWritePromptTokens = 0;
+        int64_t reasoningTokens        = 0;
+    };
+
     struct LoadedSession {
         std::vector<ViewMessage> viewMessages;
         utilxx_base::Json        llmMessages = utilxx_base::Json::array();
@@ -63,6 +78,8 @@ public:
         uint64_t msgIdCounter = 0;
         /// 库内最大展示消息序号 (计划 STO-4; 供重连增量补拉与继续编号)
         uint64_t lastViewSeq = 0;
+        /// 该会话历史累计用量 (usage 表聚合; 无记录/读取失败时为全 0)
+        UsageSummary usage;
     };
 
     /// 加载指定 session 的会话消息状态; 无数据/打开失败时返回空结构 (仅记日志)
@@ -195,18 +212,6 @@ public:
         int64_t     cacheWritePromptTokens  = 0;
         int64_t     reasoningTokens         = 0;
         bool        ok                      = true;
-    };
-
-    /// 会话用量聚合 (供界面/诊断展示; 由用量记录汇总, 不依赖内存中的最后一次统计)
-    struct UsageSummary {
-        int64_t calls                  = 0; ///< 记录次数 (含失败)
-        int64_t failedCalls            = 0; ///< 失败次数
-        int64_t promptTokens           = 0;
-        int64_t completionTokens       = 0;
-        int64_t totalTokens            = 0;
-        int64_t cachedPromptTokens     = 0;
-        int64_t cacheWritePromptTokens = 0;
-        int64_t reasoningTokens        = 0;
     };
 
     /// 追加一条用量记录 (失败仅记日志; 用量记录是统计信息, 不影响对话流程)

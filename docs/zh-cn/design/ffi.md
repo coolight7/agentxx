@@ -178,7 +178,7 @@ agentxx_ffi_event_queue_free(q);
 | `EVT_DELTA` | wire delta JSON | 流式增量 (kind=text_token/thinking_token/tool_start/tool_end/turn_end/...) |
 | `EVT_DELTA_TEXT_BATCH` | `{"kind":"text"｜"thinking","text":"自上次事件以来的新增文本"}` | 合批后的文本/思考增量 (仅 `set_delta_batch(>0)` 时产出); 嵌入方程序直接追加, 不必解析 wire delta 全部字段; 工具/轮次事件不受合批影响, 仍严格有序 |
 | `EVT_TURN_END` | wire turn_result JSON | 轮次结束 (`has_error` 字段报告异步错误) |
-| `EVT_CONTEXT_STATS` | wire context_stats JSON | 上下文 token 统计 (含 tps) |
+| `EVT_CONTEXT_STATS` | wire context_stats JSON | 上下文 token 统计 (含 tps) + 会话累计用量 (`promptTokens`/`completionTokens`/`totalTokens`/`cachedPromptTokens`) |
 | `EVT_MODEL_INFO` | wire model_info JSON | 当前模型信息 (查询/切换结果): `{currentModel, models[], capabilities[]}`; `capabilities` 为各模型多模态输入能力 `{name, image_input, audio_input, video_input}`, 嵌入方程序据此判断是否展示图片/音频/视频输入入口 |
 | `EVT_COMPONENTS` | wire append_component_info JSON | 启动组件 (MCP/Skill/Memory/插件) 加载信息 |
 | `EVT_INTERRUPT_REQ` | `{"interruptId","sessionId","node","value","argJson"}` | HIL 中断询问 (权限确认/输入收集); argJson 为 InterruptHandleArg 序列化 (`{name,arg,resultId,ui}`): **`ui` 为必填的中断 UI 描述** (声明式表单: 头行分段 + 有序块列表 text/markdown/diff/image/progress/separator/gap/control/submit + 预留 custom); 渲染指引见 4.6 |

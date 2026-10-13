@@ -343,6 +343,13 @@ constexpr Entry kTable[] = {
 
  // ---- 日志/Info 侧边栏内容 ----
     {"info.empty",                      "( Empty )",                                                                     "( 空 )"                                                                                                  },
+    {"info.context",                    "Context",                                                                       "上下文"                                                                                                },
+    {"info.usedTokens",                 "Used: {}",                                                                      "已消耗: {}"                                                                                             },
+    {"info.cacheTokens",                "Cached: {}",                                                                    "缓存: {}"                                                                                               },
+    {"info.inputTokens",                "Input: {}",                                                                     "输入: {}"                                                                                               },
+    {"info.outputTokens",               "Output: {}",                                                                    "输出: {}"                                                                                               },
+    {"info.cacheHitRate",               "Cache hit: {:.1f}%",                                                            "缓存命中率: {:.1f}%"                                                                                    },
+    {"info.contextEmpty",               "( no data )",                                                                   "( 无数据 )"                                                                                             },
     {"info.append",                     "Append",                                                                        "已加载"                                                                                                },
     {"info.appendFailed",               "Failed: {}",                                                                    "失败: {}"                                                                                               },
     {"info.viewFailed",                 "[ View ]",                                                                      "[ 查看 ]"                                                                                               },

@@ -747,16 +747,21 @@ inline utilxx_base::Json makeTurnResult(
     return j;
 }
 
-inline utilxx_base::Json
-    makeContextStats(uint64_t contextTokens, uint64_t maxContextTokens, double tps = 0.0) {
+inline utilxx_base::Json makeContextStats(const WireContextStats& msg) {
     utilxx_base::Json j = {
         {"type",             MsgType::ContextStats},
-        {"contextTokens",    contextTokens        },
-        {"maxContextTokens", maxContextTokens     },
+        {"contextTokens",    msg.contextTokens     },
+        {"maxContextTokens", msg.maxContextTokens  },
     };
-    if (tps > 0.0) {
-        j["tps"] = tps;
+    if (msg.tps > 0.0) {
+        j["tps"] = msg.tps;
     }
+    // 会话累计用量 (界面显示已消耗/输入/输出/缓存 token 与缓存命中率):
+    // 与上下文占用同一条消息下发, 每次推送都带当前累计值, 客户端直接覆盖显示
+    j["promptTokens"]       = msg.promptTokens;
+    j["completionTokens"]   = msg.completionTokens;
+    j["totalTokens"]        = msg.totalTokens;
+    j["cachedPromptTokens"] = msg.cachedPromptTokens;
     return j;
 }
 

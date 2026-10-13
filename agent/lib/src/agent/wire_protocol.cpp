@@ -94,7 +94,7 @@ utilxx_base::Json toJson(const WireTurnResult& msg) {
 }
 
 utilxx_base::Json toJson(const WireContextStats& msg) {
-    return makeContextStats(msg.contextTokens, msg.maxContextTokens, msg.tps);
+    return makeContextStats(msg);
 }
 
 utilxx_base::Json toJson(const WireError& msg) {
@@ -375,6 +375,11 @@ WireContextStats contextStatsFromJson(const utilxx_base::Json& j) {
     stats.contextTokens    = j.value("contextTokens", uint64_t{0});
     stats.maxContextTokens = j.value("maxContextTokens", uint64_t{0});
     stats.tps              = j.value("tps", 0.0);
+    // 会话累计用量 (老对端不带这些字段时按 0, 界面显示为无数据)
+    stats.promptTokens       = j.value("promptTokens", uint64_t{0});
+    stats.completionTokens   = j.value("completionTokens", uint64_t{0});
+    stats.totalTokens        = j.value("totalTokens", uint64_t{0});
+    stats.cachedPromptTokens = j.value("cachedPromptTokens", uint64_t{0});
     return stats;
 }
 

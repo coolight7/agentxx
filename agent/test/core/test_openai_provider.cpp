@@ -4812,6 +4812,187 @@ void test_openai_sse_done_flag() {
     }
 }
 
+/// 缓存用量解析 (计划 LLM-8): 各网关回报"命中缓存的 prompt token"用的字段名不一致
+/// - 覆盖 Chat Completions SSE / Responses SSE 两条流式路径的字段兼容
+void test_usage_cached_tokens_parsing() {
+    using server::OpenAIProvider;
+
+    // Chat Completions SSE: 主流网关形态 prompt_tokens_details.cached_tokens
+    // (实测 commandcode 网关同时给出 cache_read_input_tokens / cache_write_tokens, 其中一组恒为 0)
+    {
+        std::string buf
+            = "data: {\"id\":\"c1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"}}]}\n\n"
+              "data: {\"id\":\"c1\",\"choices\":[],\"usage\":{\"prompt_tokens\":517,"
+              "\"completion_tokens\":16,\"total_tokens\":533,\"prompt_tokens_details\":"
+              "{\"audio_tokens\":0,\"cached_tokens\":512,\"cache_write_tokens\":0,"
+              "\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0}}}\n\n";
+        neograph::ChatCompletion          completion;
+        std::string                       content, thinking;
+        std::map<int, neograph::ToolCall> tcMap;
+        OpenAIProvider::processSseBuffer(buf, completion, content, thinking, tcMap, nullptr);
+        XX_TEST_EXPECT_EQ(completion.usage.prompt_tokens, 517);
+        XX_TEST_EXPECT_EQ(completion.usage.cached_prompt_tokens, 512);
+        const auto detail = agentxx::protocol::readUsageDetail(completion);
+        XX_TEST_EXPECT_EQ(detail.cacheReadTokens, int64_t{512});
+        XX_TEST_EXPECT_EQ(detail.cacheWriteTokens, int64_t{0});
+    }
+
+    // 同一对象里多组字段并存时取最大值 (不取"第一个出现的字段": 先出现的可能恒为 0)
+    {
+        std::string buf
+            = "data: {\"usage\":{\"prompt_tokens\":1000,\"completion_tokens\":20,"
+              "\"cache_read_input_tokens\":768,\"cache_creation_input_tokens\":128,"
+              "\"prompt_tokens_details\":{\"cached_tokens\":0,\"cache_read_input_tokens\":400}}}\n\n";
+        neograph::ChatCompletion          completion;
+        std::string                       content, thinking;
+        std::map<int, neograph::ToolCall> tcMap;
+        OpenAIProvider::processSseBuffer(buf, completion, content, thinking, tcMap, nullptr);
+        XX_TEST_EXPECT_EQ(completion.usage.cached_prompt_tokens, 768);
+        const auto detail = agentxx::protocol::readUsageDetail(completion);
+        XX_TEST_EXPECT_EQ(detail.cacheReadTokens, int64_t{768});
+        XX_TEST_EXPECT_EQ(detail.cacheWriteTokens, int64_t{128});
+    }
+
+    // DeepSeek 官方字段名 prompt_cache_hit_tokens (顶层), 且字符串数字应能解析
+    {
+        std::string buf
+            = "data: {\"usage\":{\"prompt_tokens\":410,\"completion_tokens\":9,"
+              "\"total_tokens\":419,\"prompt_cache_hit_tokens\":\"384\","
+              "\"prompt_cache_miss_tokens\":26}}\n\n";
+        neograph::ChatCompletion          completion;
+        std::string                       content, thinking;
+        std::map<int, neograph::ToolCall> tcMap;
+        OpenAIProvider::processSseBuffer(buf, completion, content, thinking, tcMap, nullptr);
+        XX_TEST_EXPECT_EQ(completion.usage.cached_prompt_tokens, 384);
+    }
+
+    // Responses API SSE: input_tokens_details.cached_tokens (嵌套在 response.usage 里)
+    {
+        std::string buf
+            = "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_x\","
+              "\"status\":\"completed\",\"usage\":{\"input_tokens\":900,\"output_tokens\":30,"
+              "\"total_tokens\":930,\"input_tokens_details\":{\"cached_tokens\":832}}}}\n\n";
+        neograph::ChatCompletion          completion;
+        std::string                       content, thinking;
+        std::map<int, neograph::ToolCall> tcMap;
+        OpenAIProvider::processResponsesSseBuffer(
+            buf,
+            completion,
+            content,
+            thinking,
+            tcMap,
+            nullptr
+        );
+        XX_TEST_EXPECT_EQ(completion.usage.cached_prompt_tokens, 832);
+        XX_TEST_EXPECT_EQ(
+            agentxx::protocol::readUsageDetail(completion).cacheReadTokens,
+            int64_t{832}
+        );
+    }
+
+    // 离谱形态不抛异常: details 不是对象 / 缓存字段缺失 / 上游不上报缓存
+    {
+        std::string buf
+            = "data: {\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":2,"
+              "\"prompt_tokens_details\":\"weird\"}}\n\n";
+        neograph::ChatCompletion          completion;
+        std::string                       content, thinking;
+        std::map<int, neograph::ToolCall> tcMap;
+        OpenAIProvider::processSseBuffer(buf, completion, content, thinking, tcMap, nullptr);
+        XX_TEST_EXPECT_EQ(completion.usage.cached_prompt_tokens, 0);
+        XX_TEST_EXPECT_TRUE(agentxx::protocol::readUsageDetail(completion).empty());
+    }
+
+    {
+        // 完全没有缓存信息: usage 照常解析, 缓存量保持 0 且不占用补充用量通道
+        std::string buf = "data: {\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3,"
+                          "\"total_tokens\":10}}\n\n";
+        neograph::ChatCompletion          completion;
+        std::string                       content, thinking;
+        std::map<int, neograph::ToolCall> tcMap;
+        OpenAIProvider::processSseBuffer(buf, completion, content, thinking, tcMap, nullptr);
+        XX_TEST_EXPECT_EQ(completion.usage.prompt_tokens, 7);
+        XX_TEST_EXPECT_EQ(completion.usage.cached_prompt_tokens, 0);
+        XX_TEST_EXPECT_TRUE(agentxx::protocol::readUsageDetail(completion).empty());
+    }
+}
+
+/// 非流式路径的缓存用量解析 (与流式路径同一套字段兼容规则)
+asio::awaitable<void> test_non_streaming_usage_cached_tokens(MockOpenAIServer& mock, uint16_t port) {
+    std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+    mock.mode           = MockMode::Normal;
+
+    auto resp                              = mock.makeCompletionResponse("Hello", 2000, 40);
+    resp["usage"]["prompt_tokens_details"] = {
+        {"cached_tokens",   1792},
+        {"cache_write_tokens", 0}
+    };
+    mock.customResponse = resp;
+
+    auto provider = server::OpenAIProvider::create(makeOaiCfg("sk-test", baseUrl));
+
+    neograph::CompletionParams params;
+    params.model    = "gpt-4o-mini";
+    params.messages = {
+        neograph::ChatMessage{.role = "user", .content = "hi"}
+    };
+
+    try {
+        auto result = co_await provider->invoke(params, nullptr);
+        XX_TEST_EXPECT_EQ(result.usage.prompt_tokens, 2000);
+        XX_TEST_EXPECT_EQ(result.usage.cached_prompt_tokens, 1792);
+        XX_TEST_EXPECT_EQ(
+            agentxx::protocol::readUsageDetail(result).cacheReadTokens,
+            int64_t{1792}
+        );
+    } catch (const std::exception& e) {
+        XX_TEST_FAILED++;
+        TEST_FAIL << "non-streaming cached usage failed: " << e.what() << std::endl;
+    }
+}
+
+/// 流式路径的缓存用量解析 (末帧 usage 取自实测网关形状)
+asio::awaitable<void> test_streaming_usage_cached_tokens(MockOpenAIServer& mock, uint16_t port) {
+    std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+    mock.mode           = MockMode::Streaming;
+    mock.sseChunks.clear();
+    mock.sseChunks.push_back(MockOpenAIServer::sseData(
+        R"({"id":"c1","choices":[{"index":0,"delta":{"role":"assistant","content":"Hello"}}]})"
+    ));
+    mock.sseChunks.push_back(MockOpenAIServer::sseData(
+        R"({"id":"c1","choices":[],"usage":{"prompt_tokens":517,"completion_tokens":16,"total_tokens":533,"prompt_tokens_details":{"audio_tokens":0,"cached_tokens":512,"cache_write_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"text_tokens":0}}})"
+    ));
+    mock.sseChunks.push_back(MockOpenAIServer::sseDone());
+
+    auto provider = server::OpenAIProvider::create(makeOaiCfg("sk-test", baseUrl));
+
+    neograph::CompletionParams params;
+    params.model    = "gpt-4o-mini";
+    params.messages = {
+        neograph::ChatMessage{.role = "user", .content = "hi"}
+    };
+
+    try {
+        std::string accumulated;
+        auto        result = co_await provider->invoke(
+            params,
+            [&accumulated](const std::string& chunk) {
+                accumulated += chunk;
+            }
+        );
+        XX_TEST_EXPECT_EQ(accumulated, "Hello");
+        XX_TEST_EXPECT_EQ(result.usage.prompt_tokens, 517);
+        XX_TEST_EXPECT_EQ(result.usage.cached_prompt_tokens, 512);
+        XX_TEST_EXPECT_EQ(
+            agentxx::protocol::readUsageDetail(result).cacheReadTokens,
+            int64_t{512}
+        );
+    } catch (const std::exception& e) {
+        XX_TEST_FAILED++;
+        TEST_FAIL << "streaming cached usage failed: " << e.what() << std::endl;
+    }
+}
+
 asio::awaitable<TestResult> run_openai_provider_tests() {
     g_openai_passed = 0;
     g_openai_failed = 0;
@@ -4824,6 +5005,7 @@ asio::awaitable<TestResult> run_openai_provider_tests() {
     test_openai_sse_parsing_edge_cases();
     test_openai_sse_done_flag();
     test_openai_sse_malformed_types_tolerated();
+    test_usage_cached_tokens_parsing();
     test_responses_sse_incomplete_done();
 
     // ModelProviderRegistry::createProvider tests
@@ -4901,6 +5083,9 @@ asio::awaitable<TestResult> run_openai_provider_tests() {
     co_await test_extra_body_passthrough(*mock, port);
     co_await test_per_call_extra_fields(*mock, port);
     co_await test_streaming_completion(*mock, port);
+    // 缓存用量 (命中缓存读取量) 解析: 非流式与流式两条路径
+    co_await test_non_streaming_usage_cached_tokens(*mock, port);
+    co_await test_streaming_usage_cached_tokens(*mock, port);
 
     // OpenAI 兼容性增强测试
     co_await test_max_tokens_sent(*mock, port);

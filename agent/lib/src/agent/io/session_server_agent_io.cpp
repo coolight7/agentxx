@@ -3,6 +3,7 @@
 #include "agentxx/agent/base_agent.h"
 #include "agentxx/agent/config_writer.h"
 #include "agentxx/agent/context.h"
+#include "agentxx/agent/io/context_stats_wire.h"
 #include "agentxx/agent/session_store.h"
 #include "agentxx/event/event_stream.h"
 #include "agentxx/event/events.h"
@@ -2640,9 +2641,8 @@ void SessionServerAgentIO::sendContextStats(const std::shared_ptr<AgentIOTranspo
     if (!sess || !sess->contextStats) {
         return;
     }
-    auto             ctxTokens = sess->contextStats->contextTokens;
-    auto             maxTokens = sess->contextStats->maxContextTokens;
-    WireContextStats stats{ctxTokens, maxTokens};
+    // 上下文占用 + 会话累计用量 (界面显示已消耗/输入/输出/缓存 token) 统一组装
+    WireContextStats stats = io::toWireContextStats(*sess->contextStats);
     if (target) {
         sendToClient(target, stats);
     } else {

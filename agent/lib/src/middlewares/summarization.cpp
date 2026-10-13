@@ -5,6 +5,7 @@
 #include "agentxx/agent/agent_host.h"
 #include "agentxx/agent/io/agent_io.h"
 #include "agentxx/agent/io/agent_io_transport.h"
+#include "agentxx/agent/io/context_stats_wire.h"
 #include "agentxx/agent/model_registry.h"
 #include "agentxx/event/event_stream.h"
 #include "agentxx/event/events.h"
@@ -1307,17 +1308,22 @@ asio::awaitable<bool>
     );
     vm.durationMs = durationMs;
     session->updateViewMessage(vm);
+    if (session->contextStats) {
+        session->contextStats->contextTokens    = newTokens;
+        session->contextStats->maxContextTokens = modelContextMaxToken;
+    }
     if (session->io) {
         session->io->sendToPeer(agentxx::agent::WireDelta{
             .seq     = session->nextDeltaSeq(),
             .message = std::make_shared<agentxx::agent::ViewMessage>(vm),
             .type    = agentxx::agent::WireDelta::Type::UpdateMessage,
         });
-        session->io->sendToPeer(agentxx::agent::WireContextStats{newTokens, modelContextMaxToken});
-    }
-    if (session->contextStats) {
-        session->contextStats->contextTokens    = newTokens;
-        session->contextStats->maxContextTokens = modelContextMaxToken;
+        // 压缩后占用回落, 推送更新 (累计用量一并下发, 界面上的已消耗 token 不回退)
+        if (session->contextStats) {
+            session->io->sendToPeer(
+                agentxx::agent::io::toWireContextStats(*session->contextStats)
+            );
+        }
     }
 
     co_return true;

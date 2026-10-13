@@ -211,6 +211,53 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
 
     Elements elements;
 
+    // Context 段: 本会话已消耗的 token 用量 (累计值, 与上方"上下文占用"不同 ——
+    // 这里只增不减)。显示在 Append 段之上, 数据来自服务端推送的 WireContextStats
+    // (见 TUIClientAgentIO::onContextStats)。
+    //
+    // - 已消耗 = 输入 + 输出 合计; 输入含命中缓存与写入缓存的输入
+    // - 缓存命中率 = 命中缓存的输入 / 输入 (输入为 0 时不显示该行)
+    // - 服务端尚未推送过用量 (老服务端/新会话) 时只显示一行"( 无数据 )",
+    //   不显示一串 0, 避免看起来像是统计归零
+    {
+        Elements ctxEls;
+        ctxEls.push_back(text(tr("info.context")) | color(theme_.accentColor));
+        if (!st.sessionUsageKnown) {
+            ctxEls.push_back(
+                hbox({text("|- "), text(tr("info.contextEmpty"))}) | color(theme_.hintColor)
+            );
+        } else {
+            // 数字按 K/M 折算 (token 数普遍到万级, 完整数字会把侧边栏撑宽)
+            auto usageLine = [&](std::string_view key, uint64_t value) {
+                ctxEls.push_back(
+                    hbox({
+                        text("|- "),
+                        text(trf(key, utilxx_base::formatSize(value))),
+                    })
+                    | color(theme_.normalColor)
+                );
+            };
+            usageLine("info.usedTokens", st.sessionTotalTokens);
+            usageLine("info.cacheTokens", st.sessionCachedPromptTokens);
+            usageLine("info.inputTokens", st.sessionPromptTokens);
+            usageLine("info.outputTokens", st.sessionCompletionTokens);
+            // 输入为 0 时命中率没有意义 (0/0), 该行不显示
+            if (st.sessionPromptTokens > 0) {
+                const double hitRate = 100.0 * static_cast<double>(st.sessionCachedPromptTokens)
+                                       / static_cast<double>(st.sessionPromptTokens);
+                ctxEls.push_back(
+                    hbox({
+                        text("|- "),
+                        text(trf("info.cacheHitRate", hitRate)),
+                    })
+                    | color(theme_.normalColor)
+                );
+            }
+        }
+        elements.push_back(vbox(std::move(ctxEls)));
+        elements.push_back(text(""));
+    }
+
     // 已加载组件 (Plugin/Memory/Skill/MCP) 展示:
     // - CodeGraph 索引状态与系统资源占用由对应插件经 register_info_section
     //   注入本 Info 栏 (见下方 "插件扩展 Info 段落"), TUI 不再单独渲染
@@ -276,8 +323,11 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
         }
 
         elements.push_back(vbox(std::move(appendEls)));
+        elements.push_back(text(""));
     }
 
+    // 兜底: 连 Context 段都没有内容时提示 (Context 段恒渲染, 因此当前只在
+    // 未来把该段改为条件渲染后才会走到这里)
     if (elements.empty() && items.empty()) {
         pushPlain(text(tr("info.empty")) | color(theme_.hintColor));
     }

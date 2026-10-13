@@ -97,8 +97,32 @@ struct SessionStoreHooks {
     std::function<void(std::string_view)> onSaveLlmMessages;
 };
 
-/// 上下文统计 (供 UI 显示上下文占用)
-/// - 由 SummarizationMiddlewareHandle 在每次 modelcall 前更新
+/// 本会话已消耗的 token 累计量 (供 UI 显示; 与上下文占用不是一回事)
+///
+/// - 与 [ContextStats::contextTokens] 的区别: 后者是"当前装了多少" (随压缩回落),
+///   这里是"累计花掉多少", 只增不减
+/// - 每次模型调用结算时累加 (见 nodes/modelcall.cpp 的用量记账)
+/// - 会话第一次加载时由用量台账 (SessionStore 的 usage 表聚合) 恢复, 因此跨进程
+///   重启后继续累计; 不持久化在本进程内存之外的地方
+/// - 字段含义与 wire 协议 [agentxx::agent::WireContextStats] 的用量段一致
+struct SessionUsageTotals {
+    /// 输入 (prompt) token 累计; 含命中缓存与写入缓存的输入
+    int64_t promptTokens{0};
+
+    /// 输出 (completion) token 累计
+    int64_t completionTokens{0};
+
+    /// 合计 (prompt + completion)
+    int64_t totalTokens{0};
+
+    /// 其中命中 prompt 缓存的 token 累计
+    /// - 缓存命中率 = cachedPromptTokens / promptTokens
+    int64_t cachedPromptTokens{0};
+};
+
+/// 上下文统计 (供 UI 显示上下文占用与已消耗用量)
+/// - 占用由 SummarizationMiddlewareHandle 在每次 modelcall 前更新
+/// - 累计用量由模型调用结算处 (nodes/modelcall.cpp) 累加
 struct ContextStats {
     /// 当前上下文占用的 token 数
     size_t contextTokens{0};
@@ -109,6 +133,9 @@ struct ContextStats {
     /// 当前 ModelCall 的平均生成速度 (token/s, 估算值)
     /// - 由 EventBridge 在流式期间定时更新推送; 无流式时为 0
     double tps{0.0};
+
+    /// 本会话已消耗的 token 累计量
+    SessionUsageTotals usage;
 };
 
 /// 会话当前活动状态

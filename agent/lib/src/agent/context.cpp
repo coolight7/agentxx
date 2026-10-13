@@ -539,6 +539,16 @@ std::vector<SessionPendingInput> Session::takePendingInputs(std::string_view del
     return out;
 }
 
+/// 用量台账聚合 → 会话累计用量 (界面展示"已消耗 token"用)
+static SessionUsageTotals usageTotalsOf(const SessionStore::UsageSummary& summary) {
+    SessionUsageTotals out;
+    out.promptTokens       = summary.promptTokens;
+    out.completionTokens   = summary.completionTokens;
+    out.totalTokens        = summary.totalTokens;
+    out.cachedPromptTokens = summary.cachedPromptTokens;
+    return out;
+}
+
 std::shared_ptr<Session> SessionsManager::getOrCreate(std::string_view sessionId) {
     auto it = sessions_.find(sessionId);
     if (it != sessions_.end()) {
@@ -557,6 +567,11 @@ std::shared_ptr<Session> SessionsManager::getOrCreate(std::string_view sessionId
         );
         session->replaceMessagesFromJson(loaded.llmMessages);
         session->setStoreHooks(makeSessionStoreHooks(sessionStore, std::string{sessionId}, session));
+        // 累计用量同样从台账恢复 (之后每次模型调用累加, 见 nodes/modelcall.cpp):
+        // 界面显示"本会话已消耗多少 token"跨进程重启连续
+        if (session->contextStats) {
+            session->contextStats->usage = usageTotalsOf(loaded.usage);
+        }
     }
     utilxx_base::insertHeterogeneous(sessions_, std::string{sessionId}, session);
     return session;
@@ -599,6 +614,10 @@ asio::awaitable<std::shared_ptr<Session>>
         );
         session->replaceMessagesFromJson(loaded.llmMessages);
         session->setStoreHooks(makeSessionStoreHooks(sessionStore, std::string{sessionId}, session));
+        // 累计用量从台账恢复 (与 getOrCreate 同一处理)
+        if (session->contextStats) {
+            session->contextStats->usage = usageTotalsOf(loaded.usage);
+        }
     }
     utilxx_base::insertHeterogeneous(sessions_, std::string{sessionId}, session);
     co_return session;

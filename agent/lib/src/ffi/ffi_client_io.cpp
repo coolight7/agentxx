@@ -216,7 +216,7 @@ void FfiClientAgentIO::onContextStats(const agent::WireContextStats& stats) {
     }
     emitEvent(
         AGENTXX_FFI_EVT_CONTEXT_STATS,
-        dump(agent::io::makeContextStats(stats.contextTokens, stats.maxContextTokens, stats.tps))
+        dump(agent::io::makeContextStats(stats))
     );
 }
 

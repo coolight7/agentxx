@@ -168,12 +168,23 @@ struct TUIRenderState {
     /// 持久化会话总数 (WireSessionList.totalCount; 0 = 未知, 供弹窗展示 x/y)
     uint64_t sessionListTotalCount = 0;
 
-    /// 上下文统计 (WireContextStats 响应填充; 状态栏显示用)
+    /// 上下文统计 (WireContextStats 响应填充; 状态栏/Info 侧边栏显示用)
     /// - TUI 不持有 server-io 的 Session, 统计经 Wire 消息获取后存于此
     /// - 0/0 表示尚未收到服务端推送
     size_t contextTokens    = 0;
     size_t maxContextTokens = 0;
     double tps              = 0.0;
+
+    /// 本会话已消耗的 token 累计量 (WireContextStats 同一条消息下发)
+    /// - 与 contextTokens 的区别: 后者是"当前装了多少" (随压缩回落), 这里是
+    ///   "累计花掉多少", 只增不减; Info 侧边栏的 Context 段据此显示
+    /// - sessionUsageKnown 为 false 表示服务端尚未推送过 (老服务端或无数据),
+    ///   此时 Context 段显示无数据而不是一堆 0
+    uint64_t sessionPromptTokens       = 0;
+    uint64_t sessionCompletionTokens   = 0;
+    uint64_t sessionTotalTokens        = 0;
+    uint64_t sessionCachedPromptTokens = 0;
+    bool     sessionUsageKnown         = false;
     std::optional<TUIMessage::ThinkData> pendingTokenThink;
 
     /// 流式末尾 Think 折叠态的用户点击覆盖 (tri-state; UI 线程写, client 线程读):

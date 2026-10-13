@@ -160,7 +160,7 @@ Version Policy: `AGENTXX_FFI_API_VERSION` is currently **2** (the single change 
 | `EVT_DELTA` | wire delta JSON | Streaming delta (`kind=text_token/thinking_token/tool_start/tool_end/turn_end/...`) |
 | `EVT_DELTA_TEXT_BATCH` | `{"kind":"text"｜"thinking","text":"new text since last event"}` | Batched text/thinking delta (emitted only while `set_delta_batch(>0)`); the host appends the text directly instead of parsing every wire delta field; tool and turn events are never batched and stay strictly ordered |
 | `EVT_TURN_END` | wire turn_result JSON | Turn finished (`has_error` field reports asynchronous errors) |
-| `EVT_CONTEXT_STATS` | wire context_stats JSON | Context token statistics (including TPS) |
+| `EVT_CONTEXT_STATS` | wire context_stats JSON | Context token statistics (including TPS) plus session cumulative usage (`promptTokens`/`completionTokens`/`totalTokens`/`cachedPromptTokens`) |
 | `EVT_MODEL_INFO` | wire model_info JSON | Current model information (query/switch result) |
 | `EVT_COMPONENTS` | wire append_component_info JSON | Startup components (MCP, Skills, Memory, Plugins) loading status |
 | `EVT_INTERRUPT_REQ` | `{"interruptId","sessionId","node","value","argJson"}` | HITL interrupt prompt (permission confirmation / input collection); `argJson` is the serialized `InterruptHandleArg` (`{name,arg,resultId,ui}`): **`ui` is the required declarative form descriptor** (header segments + ordered blocks text/markdown/diff/image/progress/separator/gap/control/submit + reserved custom). See 4.6 for the rendering guide |
