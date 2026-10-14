@@ -27,6 +27,7 @@ option(AGENTXX_ENABLE_PLUGIN_MATH "Build agentxx_math plugin (math calculation).
 option(AGENTXX_ENABLE_PLUGIN_SYSTEM "Build agentxx_system plugin (current date/time)." ON)
 option(AGENTXX_ENABLE_PLUGIN_WEBSEARCH "Build agentxx_websearch plugin (search/fetch url)." ON)
 option(AGENTXX_ENABLE_PLUGIN_RAG_SEARCH "Build agentxx_rag_search plugin (embedding based docs search)." ON)
+option(AGENTXX_ENABLE_PLUGIN_LLM_UNCENSORED "Build agentxx_llm_uncensored plugin (extra system prompt injection)." ON)
 
 # ===== 插件平台支持 =====
 # 各插件并非全平台适配: 源码无对应平台的真实实现时 (仅有 "not supported/
@@ -329,6 +330,8 @@ agentxx_load_plugin(agentxx_execute_command AGENTXX_ENABLE_PLUGIN_EXECUTE_COMMAN
 agentxx_load_plugin(agentxx_system AGENTXX_ENABLE_PLUGIN_SYSTEM)
 agentxx_load_plugin(agentxx_websearch AGENTXX_ENABLE_PLUGIN_WEBSEARCH)
 agentxx_load_plugin(agentxx_rag_search AGENTXX_ENABLE_PLUGIN_RAG_SEARCH)
+# 附加系统提示词注入 (说话方式要求: 不搬产品黑话、不逐字直译)
+agentxx_load_plugin(agentxx_llm_uncensored AGENTXX_ENABLE_PLUGIN_LLM_UNCENSORED)
 
 # ===== 内置清单生成 =====
 # 说明: 各插件子目录只登记"插件名 + 需要改名的入口符号"(避免合并编译时符号冲突),

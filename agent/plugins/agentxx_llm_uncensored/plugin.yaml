@@ -1,0 +1,14 @@
+name: agentxx_llm_uncensored
+version: 1.0.0
+description: "Inject an extra system prompt section: avoid product jargon, no literal word-by-word translation"
+entry: libagentxx_llm_uncensored.so
+depends:
+# ---- 接口协商 (按前缀归属侧: agent.* 仅 agent 侧检查, client.* 仅 client 侧检查) ----
+# - agentxx.agent.core: 核心接口 (= api_version 核心, agent 主程序恒支持)
+# - agentxx.agent.prompt: 本插件唯一做的事就是经该表注入附加系统提示词段 (必需)
+# - 不声明 pluginxx.config: 参数读取按"有该表就用, 没有就用内置默认文本"处理;
+#   通用表条目两侧都会检查, 声明它只会让只看清单的 client 侧报"接口未支持"
+interfaces:
+  require:
+    - agentxx.agent.core
+    - agentxx.agent.prompt

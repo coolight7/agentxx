@@ -74,6 +74,7 @@
 #include "agentxx-test/plugin/test_client_plugins.h"
 #include "agentxx-test/plugin/test_codegraph_tools.h"
 #include "agentxx-test/plugin/test_cpu_gpu_use.h"
+#include "agentxx-test/plugin/test_llm_uncensored.h"
 #include "agentxx-test/plugin/test_plugin_bridge.h"
 #include "agentxx-test/plugin/test_plugin_cleanup.h"
 #include "agentxx-test/plugin/test_plugin_feature.h"
@@ -488,6 +489,7 @@ int main(int argn, char** argv) {
 
                 co_await run("anthropic_provider", agentxx::test::run_anthropic_provider_tests);
                 co_await run("plugins", agentxx::test::run_plugin_tests);
+                co_await run("plugin_llm_uncensored", agentxx::test::run_llm_uncensored_tests);
                 co_await run("plugin_cleanup", agentxx::test::run_plugin_cleanup_tests);
                 co_await run("plugin_feature", agentxx::test::run_plugin_feature_tests);
                 co_await run("plugin_hooks", agentxx::test::run_plugin_hooks_tests);

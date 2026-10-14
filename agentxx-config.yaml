@@ -375,6 +375,13 @@ plugin:
     - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_planning
       enabled: true
 
+    # === 附加系统提示词 (说话方式要求: 不搬产品黑话、不逐字直译)
+    # - 只注入一段附加系统提示词, 无工具/无线程; 禁用/卸载时该段自动撤销
+    # - 可选用 args.text 换注入文本, args.key 换段键名 (空串按未配置处理):
+    #   args: { text: "用大白话说明, 不要逐字直译", key: "llm_style" }
+    - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_llm_uncensored
+      enabled: true
+
     # 内置简写示例 (等价于上方目录形态; 无需外部 plugin.yaml):
     # - path: builtin://agentxx_filesystem
     #   enabled: true

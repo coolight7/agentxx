@@ -929,6 +929,7 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 插件经内置 `agentxx_jav
 | `agentxx_system_monitor` | 系统资源监控 (Windows/Linux/Android/macOS; 工具 + 周期采集 + client 侧 Info/状态栏渲染) |
 | `agentxx_planning` | 规划工具 + client 侧 Plan 渲染 (类型级工具渲染器「实时 + 历史回溯」+ 实时装饰 + Info 段落) |
 | `agentxx_math` | 数学计算工具 (`agentxx_math_calculate`, 支持四则/幂/阶乘/位运算/逻辑/三角/双曲/对数/组合排列等函数与隐式乘法) |
+| `agentxx_llm_uncensored` | 附加系统提示词注入 (默认「不要使用产品黑话词语、不要直译」; 可用 `args.text` / `args.key` 覆盖, 禁用/卸载自动撤销该段) |
 | `agentxx_codegraph` | 代码索引 5 工具 (search/context/callers/callees/path; 结果排序: 代码文件优先, md/json 等数据/文档文件排后) + client Info 栏 |
 | `agentxx_screen_capture` | 屏幕捕获 (仅 Windows) |
 | `agentxx_computer_use` | 键鼠控制 (仅 Windows, depends: screen_capture) |
