@@ -101,7 +101,83 @@ LlmErrorKind classifyLlmError(std::string_view errInfo) noexcept {
         return LlmErrorKind::ContextOverflow;
     }
 
-    // 2) 鉴权 (重试无意义)
+    // 2) 网络/传输层故障 (可重试)
+    // 排在状态码类之前: 这类文本常夹带地址与端口数字 (`https://host:10403 connect failed`
+    // 含 "403"), 若先判鉴权/额度/请求非法, 网络故障会被误判成"重试也没用"而直接停止
+    if (containsAny(
+            text,
+            {
+                // 连接层 (boost asio 诊断信息 / 系统 socket 错误)
+                "connection reset",
+                "connection closed",
+                "connection refused",
+                "connection aborted",
+                "connection terminated",
+                "connection failed",
+                "connection error",
+                "connection timed out",
+                "connection timeout",
+                "cannot connect",
+                "could not connect",
+                "couldn't connect",
+                "failed to connect",
+                "unable to connect",
+                "connect failed",
+                "connect error",
+                "connect timeout",
+                "broken pipe",
+                "stream truncated",
+                "stream closed",
+                "end of file",
+                "eof",
+                "asio.ssl",
+                "asio.netdb",
+                "network",
+                "unreachable",
+                "no route to host",
+                "transport error",
+                "i/o error",
+                // 域名解析
+                "name resolution",
+                "no such host",
+                "host not found",
+                "could not resolve",
+                "couldn't resolve",
+                "resolve host",
+                "resolve the host",
+                "getaddrinfo",
+                "nodename nor servname",
+                // TLS 握手
+                "handshake",
+                "ssl error",
+                "tls error",
+                // 中文系统文案 (Windows socket / .NET 常见说法)
+                "网络",
+                "无法连接",
+                "无法解析",
+                "连接被拒绝",
+                "连接被重置",
+                "连接重置",
+                "连接被关闭",
+                "连接中断",
+                "连接超时",
+                "连接失败",
+                "连接异常",
+                "连接尝试失败",
+                "基础连接已经关闭",
+                "意外关闭",
+                "远程主机强迫关闭",
+                "这样的主机",
+                "积极拒绝",
+                "没有反应",
+                "已中止 i/o",
+                "握手失败",
+            }
+        )) {
+        return LlmErrorKind::Network;
+    }
+
+    // 3) 鉴权 (重试无意义)
     if (containsAny(
             text,
             {"401",
@@ -117,7 +193,7 @@ LlmErrorKind classifyLlmError(std::string_view errInfo) noexcept {
         return LlmErrorKind::Auth;
     }
 
-    // 3) 额度/计费 (重试无意义)
+    // 4) 额度/计费 (重试无意义)
     if (containsAny(
             text,
             {"402",
@@ -134,7 +210,7 @@ LlmErrorKind classifyLlmError(std::string_view errInfo) noexcept {
         return LlmErrorKind::Quota;
     }
 
-    // 4) 请求非法 (重试无意义; 模型名/参数写错等)
+    // 5) 请求非法 (重试无意义; 模型名/参数写错等)
     if (containsAny(
             text,
             {"400",
@@ -150,7 +226,7 @@ LlmErrorKind classifyLlmError(std::string_view errInfo) noexcept {
         return LlmErrorKind::InvalidRequest;
     }
 
-    // 5) 限流 (可重试; 使用更大的基数并优先采信 retry-after)
+    // 6) 限流 (可重试; 使用更大的基数并优先采信 retry-after)
     if (containsAny(
             text,
             {"429",
@@ -165,22 +241,17 @@ LlmErrorKind classifyLlmError(std::string_view errInfo) noexcept {
         return LlmErrorKind::RateLimit;
     }
 
-    // 6) 超时/连接中断 (可重试)
+    // 7) 超时 (可重试; 连接层的超时已在网络类里判过)
     if (containsAny(
             text,
             {"timeout",
              "timed out",
-             "connection reset",
-             "connection closed",
-             "broken pipe",
-             "eof",
-             "network",
              "超时"}
         )) {
         return LlmErrorKind::Timeout;
     }
 
-    // 7) 服务端错误 (可重试)
+    // 8) 服务端错误 (可重试)
     if (containsAny(
             text,
             {"500",
@@ -229,7 +300,9 @@ std::string_view llmErrorKindText(LlmErrorKind kind) noexcept {
         case LlmErrorKind::RateLimit:
             return "rate limited";
         case LlmErrorKind::Timeout:
-            return "timeout or connection problem";
+            return "timeout";
+        case LlmErrorKind::Network:
+            return "network or transport error";
         case LlmErrorKind::Server:
             return "server error";
         case LlmErrorKind::Unknown:
@@ -244,9 +317,33 @@ int llmRetryDelaySeconds(LlmErrorKind kind, size_t attempt, std::string_view err
         return std::min(retryAfter, kLlmRetryMaxDelaySeconds);
     }
 
-    // 基数按类别区分: 限流需要更长的等待, 其余从 2 秒起
-    const int base = (kind == LlmErrorKind::RateLimit) ? 5 : 2;
-    int       delay = base;
+    // 基数按类别区分: 只影响"等多久", 不影响"是否重试"
+    // - 限流 5 秒: 上游明确要求放慢, 等最久 (通常还会给出 retry-after, 优先采用)
+    // - 服务端错误 3 秒: 上游自身出问题, 给一点恢复时间
+    // - 超时/未知/上下文超限 2 秒: 与历史行为一致
+    // - 网络故障 1 秒: 多为瞬时 (连接被掐、路由抖动、域名解析失败), 尽快重来
+    // - 不重试的三类不会走到这里, 与"未知"同基数只为避免出现 0 秒
+    int base = 2;
+    switch (kind) {
+        case LlmErrorKind::Network:
+            base = 1;
+            break;
+        case LlmErrorKind::Server:
+            base = 3;
+            break;
+        case LlmErrorKind::RateLimit:
+            base = 5;
+            break;
+        case LlmErrorKind::Unknown:
+        case LlmErrorKind::Timeout:
+        case LlmErrorKind::ContextOverflow:
+        case LlmErrorKind::Auth:
+        case LlmErrorKind::Quota:
+        case LlmErrorKind::InvalidRequest:
+            base = 2;
+            break;
+    }
+    int delay = base;
     for (size_t i = 1; i < attempt && delay < kLlmRetryMaxDelaySeconds; ++i) {
         delay *= 2;
     }

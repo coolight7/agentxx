@@ -1004,7 +1004,7 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
         // 错误分类与重试策略 (见 llm_error.h):
         // - 鉴权/额度/请求非法: 重试无意义, 直接结束本轮 (省掉无用的等待与请求)
         // - 上下文超限: 压缩一次后立即重试; 再次超限则按失败结束
-        // - 其余 (限流/超时/服务端/未知): 有界指数退避 + 抖动后重试
+        // - 其余 (限流/超时/网络/服务端/未知): 一律自动重试, 类别的差别只是等待时长
         const auto        errKind   = classifyLlmError(errInfo);
         const bool        retryable = isLlmErrorRetryable(errKind);
         const bool        overflow  = isLlmContextOverflow(errKind);

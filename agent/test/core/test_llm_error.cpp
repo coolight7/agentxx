@@ -2,11 +2,11 @@
 ///
 /// 覆盖:
 /// - classifyLlmError: 各家 provider 的常见错误文本落到正确分类
-///   (鉴权 / 额度 / 请求非法 / 上下文超限 / 限流 / 超时 / 服务端 / 未知)
-/// - 可重试性: 鉴权、额度、请求非法不可重试; 其余可重试
+///   (鉴权 / 额度 / 请求非法 / 上下文超限 / 限流 / 超时 / 网络 / 服务端 / 未知)
+/// - 可重试性: 只有鉴权、额度、请求非法不可重试; 其余 (含网络/传输层故障) 都可重试
 /// - 上下文超限识别 (触发一次压缩后重试的入口条件)
-/// - llmRetryDelaySeconds: 有界指数退避、限流基数更大、`retry-after` 优先、
-///   上限夹取、抖动不会让等待变成 0
+/// - llmRetryDelaySeconds: 有界指数退避、类别只影响等待基数 (网络最短、限流最长)、
+///   `retry-after` 优先、上限夹取、抖动不会让等待变成 0
 #include "agentxx-test/core/test_llm_error.h"
 
 #include "agentxx/nodes/llm_error.h"
@@ -107,13 +107,38 @@ TestResult testLlmError() {
 
         const char* timeoutCases[] = {
             "read timeout after 60s",
-            "connection reset by peer",
+            "SSE read-header timeout after 30s",
             "操作超时",
         };
         for (const auto* text : timeoutCases) {
             const auto kind = classifyLlmError(text);
             XX_TEST_EXPECT_TRUE(kind == LlmErrorKind::Timeout);
             XX_TEST_EXPECT_TRUE(isLlmErrorRetryable(kind));
+        }
+
+        // 网络/传输层故障: 真实观测到的文本 (boost asio 诊断信息 + Windows socket 中文文案)
+        const char* networkCases[] = {
+            "stream truncated [asio.ssl.stream:1]",
+            "connection reset by peer",
+            "SSE stream truncated: missing [DONE] marker | model=gpt-4o content_chars=128",
+            "asio.netdb:2 Host not found (authoritative)",
+            "asio.misc:2 End of file",
+            "write: broken pipe",
+            "SSL handshake failed",
+            "由于目标计算机积极拒绝，无法连接。 (10061)",
+            "不知道这样的主机。",
+            "远程主机强迫关闭了一个现有的连接。",
+            "由于线程退出或应用程序请求，已中止 I/O 操作。",
+            "连接尝试失败，因为连接方在一段时间后没有正确答复或连接的主机没有反应",
+            "无法解析服务器的名称或地址",
+            // 端口号里含 "403": 先判网络才不会被鉴权规则抢走 (旧行为下不重试)
+            "https://api.example.com:10403 connect failed",
+        };
+        for (const auto* text : networkCases) {
+            const auto kind = classifyLlmError(text);
+            XX_TEST_EXPECT_TRUE(kind == LlmErrorKind::Network);
+            XX_TEST_EXPECT_TRUE(isLlmErrorRetryable(kind));
+            XX_TEST_EXPECT_FALSE(isLlmContextOverflow(kind));
         }
 
         const char* serverCases[] = {
@@ -142,32 +167,51 @@ TestResult testLlmError() {
     // ---------------- 退避策略 ----------------
 
     {
-        // 指数增长且不超过上限
+        // 指数增长且不超过上限 (服务端错误基数 3 秒 + 抖动 0~2 秒)
         const int first  = llmRetryDelaySeconds(LlmErrorKind::Server, 1, "500");
         const int second = llmRetryDelaySeconds(LlmErrorKind::Server, 2, "500");
         const int tenth  = llmRetryDelaySeconds(LlmErrorKind::Server, 10, "500");
-        XX_TEST_EXPECT_TRUE(first >= 1 && first <= 4);   // 2 + 抖动(0~2)
+        XX_TEST_EXPECT_TRUE(first >= 3 && first <= 5);
         XX_TEST_EXPECT_TRUE(second >= first);
         XX_TEST_EXPECT_TRUE(tenth <= kLlmRetryMaxDelaySeconds);
+        XX_TEST_EXPECT_TRUE(llmRetryDelaySeconds(LlmErrorKind::Unknown, 1, "x") >= 1);
 
-        // 限流基数更大 (等待更久)
+        // 类别只决定等多久: 网络 < 超时(=未知) < 服务端 < 限流
+        // (抖动由错误文本决定, 用同一段文本才能直接比较基数)
+        const char* const seed    = "retry base ordering";
+        const int         netSec  = llmRetryDelaySeconds(LlmErrorKind::Network, 1, seed);
+        const int         timeSec = llmRetryDelaySeconds(LlmErrorKind::Timeout, 1, seed);
+        const int         unkSec  = llmRetryDelaySeconds(LlmErrorKind::Unknown, 1, seed);
+        const int         srvSec  = llmRetryDelaySeconds(LlmErrorKind::Server, 1, seed);
+        const int         rateSec = llmRetryDelaySeconds(LlmErrorKind::RateLimit, 1, seed);
+        XX_TEST_EXPECT_TRUE(netSec >= 1);
+        XX_TEST_EXPECT_TRUE(netSec <= timeSec);
+        XX_TEST_EXPECT_EQ(unkSec, timeSec);
+        XX_TEST_EXPECT_TRUE(unkSec <= srvSec);
+        XX_TEST_EXPECT_TRUE(srvSec <= rateSec);
+        XX_TEST_EXPECT_TRUE(rateSec <= kLlmRetryMaxDelaySeconds);
+
+        // 限流等得最久 (与上面 first 也保持不短于服务端)
         const int rate = llmRetryDelaySeconds(LlmErrorKind::RateLimit, 1, "429");
         XX_TEST_EXPECT_TRUE(rate >= first);
 
-        // retry-after 优先 (服务端给了明确时间就按它来)
+        // retry-after 优先 (任何类别都认: 服务端给了明确时间就按它来)
         const int honored
             = llmRetryDelaySeconds(LlmErrorKind::RateLimit, 3, R"({"retry-after": 7})");
         XX_TEST_EXPECT_EQ(honored, 7);
         const int honoredHeader
             = llmRetryDelaySeconds(LlmErrorKind::Timeout, 1, "Retry-After: 12\r\n");
         XX_TEST_EXPECT_EQ(honoredHeader, 12);
+        const int honoredNetwork
+            = llmRetryDelaySeconds(LlmErrorKind::Network, 1, "Retry-After: 9");
+        XX_TEST_EXPECT_EQ(honoredNetwork, 9);
 
         // 超大 retry-after 夹到上限, 不为 0
         const int clamped
             = llmRetryDelaySeconds(LlmErrorKind::RateLimit, 1, R"("retry_after": 9999)");
         XX_TEST_EXPECT_EQ(clamped, kLlmRetryMaxDelaySeconds);
         XX_TEST_EXPECT_TRUE(
-            llmRetryDelaySeconds(LlmErrorKind::Unknown, 1, "x") >= 1
+            llmRetryDelaySeconds(LlmErrorKind::Network, 10, "x") <= kLlmRetryMaxDelaySeconds
         );
     }
 

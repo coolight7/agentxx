@@ -87,3 +87,5 @@ Responses API 的思考模式下，上游要求把历次 assistant 思考内容�
   `output_item.done` 里给明文、不发增量事件) 仍无法补明文；若要覆盖，可在捕获时保留条目
   自带 `content`，代价是思考文字在会话里存两份（长会话里思考文字约占上下文 1/4）。
 - 未做: 把该 400 归入可重试错误。修复后同一请求不会再因此失败；重试相同请求仍然会失败。
+  （相关: 本轮另加了"网络/传输层故障"错误类 `LlmErrorKind::Network`，见
+  `resource/history/llm-network-error-retry/index.md`；该 400 属请求非法，仍不重试。）
