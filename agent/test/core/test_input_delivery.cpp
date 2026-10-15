@@ -341,17 +341,21 @@ std::string lastUserMessage(
     return {};
 }
 
-/// 从分页提示里取出 share store id (`... by ID 12. ...`); 没有提示时返回 0
-size_t shareStoreIdInText(std::string_view text) {
-    const auto pos = text.find("by ID ");
-    if (pos == std::string_view::npos) {
-        return 0;
+/// 从文本里收集所有分页提示中的 share store id (`... by ID 12. ...`); 无提示时为空
+std::vector<size_t> shareStoreIdsInText(std::string_view text) {
+    std::vector<size_t> ids;
+    size_t              pos = 0;
+    while ((pos = text.find("by ID ", pos)) != std::string_view::npos) {
+        size_t id = 0;
+        for (size_t i = pos + 6; i < text.size() && text[i] >= '0' && text[i] <= '9'; ++i) {
+            id = id * 10 + static_cast<size_t>(text[i] - '0');
+        }
+        if (id > 0) {
+            ids.push_back(id);
+        }
+        pos += 6;
     }
-    size_t id = 0;
-    for (size_t i = pos + 6; i < text.size() && text[i] >= '0' && text[i] <= '9'; ++i) {
-        id = id * 10 + static_cast<size_t>(text[i] - '0');
-    }
-    return id;
+    return ids;
 }
 
 /// 展示历史 (viewMessages) 里是否存在包含指定文本的消息
@@ -1020,7 +1024,7 @@ asio::awaitable<void> test_session_file_created_on_first_input() {
 }
 
 // ---------------------------------------------------------------------------
-// 10. 队列输入单条过长: 经 share store 分页 (展示历史保留原文)
+// 9. 队列输入单条过长: 经 share store 分页 (展示历史保留原文)
 // ---------------------------------------------------------------------------
 
 asio::awaitable<void> test_oversized_input_offload() {
@@ -1059,15 +1063,17 @@ asio::awaitable<void> test_oversized_input_offload() {
     // 提示里的 id 能取回完整原文
     const auto userText = lastUserMessage(fx->agent, fx->sessionId);
     XX_TEST_EXPECT_TRUE(userText.find("[Content offloaded.") == 0);
-    const auto storeId = shareStoreIdInText(userText);
-    XX_TEST_EXPECT_TRUE(storeId > 0);
-    auto stored
-        = fx->agent->agentContext->middlewareHandleContext->getShareStoreItemValue(
-            fx->sessionId,
-            storeId
-        );
-    XX_TEST_EXPECT_TRUE(stored.has_value());
-    XX_TEST_EXPECT_EQ(stored.value_or(std::string{}), longInput);
+    const auto storeIds = shareStoreIdsInText(userText);
+    XX_TEST_EXPECT_EQ(storeIds.size(), size_t{1});
+    if (!storeIds.empty()) {
+        auto stored
+            = fx->agent->agentContext->middlewareHandleContext->getShareStoreItemValue(
+                fx->sessionId,
+                storeIds.front()
+            );
+        XX_TEST_EXPECT_TRUE(stored.has_value());
+        XX_TEST_EXPECT_EQ(stored.value_or(std::string{}), longInput);
+    }
 
     // ③ 阈值 0 = 关闭压缩: 超出原阈值的输入原样进入上下文
     fx->cfg->userInputSummaryLimitLength = 0;
@@ -1080,6 +1086,89 @@ asio::awaitable<void> test_oversized_input_offload() {
         return fx->recorder->turnResults.load() >= 3;
     }));
     XX_TEST_EXPECT_TRUE(contextHasText(fx->agent, fx->sessionId, "plain line 120"));
+}
+
+// ---------------------------------------------------------------------------
+// 10. next-step / inject 注入单条过长: 同一套分页规则 (展示历史保留原文)
+// ---------------------------------------------------------------------------
+
+asio::awaitable<void> test_oversized_injected_input_offload() {
+    auto fx = co_await makeFixture("inject-offload-session", {}, "inject offload response");
+    fx->cfg->userInputSummaryLimitLength = 512;
+
+    // 先触发一次工具调用, 使同一轮次里有第二个 modelcall 边界
+    // (next-step/inject 需要轮次进行中才会作为待注入输入登记)
+    g_da_sim_tool_calls = utilxx_base::Json::array({
+        utilxx_base::Json{
+            {"id",        "call_1"                     },
+            {"name",      "no_such_tool_inject_offload"},
+            {"arguments", "{}"                         },
+        }
+    });
+    g_da_sim_tool_calls_remaining = 1;
+    g_da_sim_delay_ms             = 250;
+
+    fx->send("first turn", std::string{agentxx::agent::InputDelivery::NextTurn}, 1);
+    XX_TEST_EXPECT_TRUE(co_await waitFor([&] {
+        return fx->recorder->ackCount() >= 1;
+    }));
+
+    // 超长 next-step (写权威上下文) + 超长 inject (只进本次请求)
+    std::string longStep;
+    for (int i = 1; i <= 120; ++i) {
+        longStep += fmt::format("steer line {:03d}\n", i);
+    }
+    std::string longInject;
+    for (int i = 1; i <= 120; ++i) {
+        longInject += fmt::format("inject line {:03d}\n", i);
+    }
+    const auto stepTail   = std::string{"steer line 120"};
+    const auto injectTail = std::string{"inject line 120"};
+
+    fx->send(longStep, std::string{agentxx::agent::InputDelivery::NextStep}, 2);
+    fx->send(longInject, std::string{agentxx::agent::InputDelivery::Inject}, 3);
+    XX_TEST_EXPECT_TRUE(co_await waitFor([&] {
+        return fx->recorder->ackCount() >= 3;
+    }));
+    if (auto ack = fx->recorder->ack(1)) {
+        XX_TEST_EXPECT_EQ(ack->status, std::string{agentxx::agent::InputStatus::Steered});
+    }
+    if (auto ack = fx->recorder->ack(2)) {
+        XX_TEST_EXPECT_EQ(ack->status, std::string{agentxx::agent::InputStatus::Steered});
+    }
+    XX_TEST_EXPECT_TRUE(co_await waitFor([&] {
+        return fx->recorder->turnResults.load() >= 1;
+    }));
+
+    // next-step: 上下文里是分页提示 + 开头片段, 末尾内容只在 share store 与展示历史里
+    XX_TEST_EXPECT_TRUE(contextHasText(fx->agent, fx->sessionId, "steer line 001"));
+    XX_TEST_EXPECT_TRUE(!contextHasText(fx->agent, fx->sessionId, stepTail));
+    XX_TEST_EXPECT_TRUE(viewMessagesHasText(fx->agent, fx->sessionId, stepTail));
+
+    // inject: 请求里是分页后的内容, 权威上下文里没有它 (inject 语义不变)
+    const auto dumped = g_da_sim_last_request.dump();
+    XX_TEST_EXPECT_TRUE(dumped.find("Content offloaded") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(dumped.find("inject line 001") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(dumped.find(injectTail) == std::string::npos);
+    XX_TEST_EXPECT_TRUE(!contextHasText(fx->agent, fx->sessionId, "inject line"));
+
+    // 两条输入的原文都能按提示里的 id 从 share store 取回
+    bool stepStored   = false;
+    bool injectStored = false;
+    for (const auto id : shareStoreIdsInText(dumped)) {
+        auto value
+            = fx->agent->agentContext->middlewareHandleContext->getShareStoreItemValue(
+                fx->sessionId,
+                id
+            );
+        if (!value.has_value()) {
+            continue;
+        }
+        stepStored   = stepStored || (*value == longStep);
+        injectStored = injectStored || (*value == longInject);
+    }
+    XX_TEST_EXPECT_TRUE(stepStored);
+    XX_TEST_EXPECT_TRUE(injectStored);
 }
 
 } // namespace
@@ -1096,6 +1185,7 @@ asio::awaitable<TestResult> run_input_delivery_tests() {
     co_await test_connection_stage_guard();
     co_await test_session_file_created_on_first_input();
     co_await test_oversized_input_offload();
+    co_await test_oversized_injected_input_offload();
 
     // 还原全局模拟器开关 (避免影响后续模块)
     g_da_sim_delay_ms             = 0;

@@ -4,6 +4,7 @@
 #include "agentxx/agent/io/agent_io.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/util/neograph_json_bridge.h"
+#include "agentxx/util/share_store_offload.h"
 #include "fmt/format.h"
 #include "utilxx_base/log.h"
 #include <chrono>
@@ -151,11 +152,49 @@ void markSessionInputPromoted(
     ctx->sessions->sessionStore->markSessionInputPromoted(sessionId, inputId, seq);
 }
 
+/// 取进入 LLM 上下文的那份注入文本: 过长时按队列输入同一套规则分页
+/// - 达到 [agentxx::agent::AgentConfig::userInputSummaryLimitLength] 时原文存入
+///   会话 share store, 上下文里只留开头片段与取回提示 (模型用 `agentxx_share_store`
+///   按行取回); 0 = 不压缩
+/// - 只作用于上下文/请求: 展示历史仍用完整原文 (见 [appendUserViewMessage])
+/// - 分页失败 (无配置/无存储等) 时返回原文, 不影响注入本身
+std::string contextTextForInjectedInput(
+    const std::shared_ptr<agentxx::agent::AgentContext>& ctx,
+    std::string_view                                     sessionId,
+    const agentxx::agent::SessionPendingInput&           input
+) {
+    if (!ctx || !ctx->agentConfig || 0 == ctx->agentConfig->userInputSummaryLimitLength) {
+        return input.text;
+    }
+    auto offload = agentxx::util::offloadShareStoreIfOversized(
+        ctx,
+        sessionId,
+        input.text,
+        ctx->agentConfig->userInputSummaryLimitLength
+    );
+    if (!offload.offloaded) {
+        return input.text;
+    }
+    XX_LOGI(
+        "[session_context] injected input offloaded to share store: session={} delivery={} "
+        "bytes={} storeId={}",
+        sessionId,
+        input.delivery,
+        input.text.size(),
+        offload.storeId
+    );
+    return std::move(offload.text);
+}
+
 /// 构造一条来源化的 user 消息 (来源写入 extra, 供诊断/审计读取)
-neograph::ChatMessage makeInjectedUserMessage(const agentxx::agent::SessionPendingInput& input) {
+/// - [content] 进入上下文/请求的正文 (过长时已分页, 见 [contextTextForInjectedInput])
+neograph::ChatMessage makeInjectedUserMessage(
+    const agentxx::agent::SessionPendingInput& input,
+    std::string_view                           content
+) {
     utilxx_base::Json j{
-        {"role",    "user"          },
-        {"content", input.text      },
+        {"role",    "user"  },
+        {"content", content },
     };
     neograph::ChatMessage msg;
     neograph::from_json(agentxx::util::toNeographJson(j), msg);
@@ -228,10 +267,12 @@ PendingInjections drainPendingSessionInputs(
         std::vector<neograph::ChatMessage> msgs;
         msgs.reserve(steps.size());
         for (const auto& input : steps) {
-            msgs.push_back(makeInjectedUserMessage(input));
+            const auto text = contextTextForInjectedInput(ctx, sessionId, input);
+            msgs.push_back(makeInjectedUserMessage(input, text));
         }
         appendSessionMessages(ctx, in, std::move(msgs), nodeName);
         for (const auto& input : steps) {
+            // 展示历史用完整原文 (与队列输入一致: 只压缩模型看到的那份)
             appendUserViewMessage(session, input);
             markSessionInputPromoted(ctx, sessionId, input.id, session->deltaSeq);
         }
@@ -246,7 +287,8 @@ PendingInjections drainPendingSessionInputs(
     // inject: 仅本次请求可见 (不改写权威上下文)
     auto injects = session->takePendingInputs(agentxx::agent::InputDelivery::Inject);
     for (auto& input : injects) {
-        auto msg = makeInjectedUserMessage(input);
+        const auto text = contextTextForInjectedInput(ctx, sessionId, input);
+        auto       msg  = makeInjectedUserMessage(input, text);
         if (!input.source.empty() && input.source != "user") {
             msg.content = fmt::format("[{}] {}", input.source, msg.content);
         }

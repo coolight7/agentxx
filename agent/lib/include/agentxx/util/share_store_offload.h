@@ -23,9 +23,11 @@ struct ShareStoreOffload {
 
 /// 单条文本过长时截断, 并把原文存入会话 share store
 ///
-/// 同一套判定与提示格式的两处用途 (共用本实现, 避免两处规则漂移):
+/// 同一套判定与提示格式的三处用途 (共用本实现, 避免规则漂移):
 /// - toolcall 输出压缩: 见 [agentxx::nodes::ToolcallWrapNode::finalizeToolCall]
 /// - agent 队列输入进入轮次时: 见 [agentxx::agent::BaseAgent::runTurnAsync]
+/// - next-step / inject 注入进入上下文/请求时: 见
+///   [agentxx::nodes::drainPendingSessionInputs]
 ///
 /// 判定按 **utf8 字符数**: 内容达到 [limitLength] 个字符时把原文存入 share store,
 /// 返回的文本只保留开头片段与一行提示 —— 提示里给出 id、总行数与可见行范围,

@@ -67,6 +67,9 @@ struct PendingInjections {
 ///   (EventBridge 不展开 user 角色消息, 因此这里自行追加展示消息与 WireDelta)
 /// - `inject`: 只返回给调用方拼进本次请求 (记录来源; 非 user 来源加来源前缀),
 ///   不改写权威上下文, 因此在后续轮次里不可见
+/// - 单条过长 (达到 [agentxx::agent::AgentConfig::userInputSummaryLimitLength]) 时
+///   与队列输入同一套规则: 原文经 share store 卸载, 上下文/请求里只留开头片段与
+///   取回提示 (展示历史仍是完整原文)
 /// - 已持久化收件箱条目同步标记 promoted (进程重启后不会重复投递)
 ///
 /// - `args`:
