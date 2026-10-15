@@ -1217,6 +1217,53 @@ void test_state_version_bumps_on_change() {
     XX_TEST_EXPECT_TRUE(v2 > v1);
 }
 
+// ---------------------------------------------------------------------------
+// 本地条数上限清理 (头部删除消息): 中断表单的命中区/激活消息下标随清理前移
+//
+// 清理在帧间动作里执行 (下一帧渲染重建命中区之前), 旧命中区仍参与点击判定 ——
+// 下标不跟着前移会点到"另一条"消息的控件 (或落在越界下标上被静默丢弃)
+// ---------------------------------------------------------------------------
+
+void test_head_trim_shifts_hit_indices() {
+    InterruptFixture f;
+    // 头部先放两条普通消息 (模拟被清理的更早历史), 中断表单在其后 (下标 2)
+    f.sharedState.mutate([&](TUIRenderState& st) {
+        for (int i = 0; i < 2; ++i) {
+            auto m  = std::make_shared<TUIMessage>();
+            m->role = TUIMessage::Role::Assistant;
+            m->text = "leading message";
+            st.messages.push_back(std::move(m));
+        }
+    });
+    auto         ch = f.makeChannel();
+    const size_t mi = f.addInterrupt(ch, makeBoolButtonsUi());
+    XX_TEST_EXPECT_EQ(mi, size_t{2});
+
+    f.render(); // 建立命中区 (msgIndex = 2)
+    const auto hitsBefore = f.comp->interruptHitBoxes();
+    XX_TEST_EXPECT_TRUE(!hitsBefore.empty());
+    const size_t hitPos = 0; // 首个命中项: 按钮控件的第一个候选项
+    XX_TEST_EXPECT_EQ(hitsBefore[hitPos].msgIndex, mi);
+
+    // 清理头部两条: 消息数据删除 + 组件下标平移 (中间不渲染, 与运行期顺序一致)
+    f.sharedState.mutate([&](TUIRenderState& st) {
+        st.messages.erase(st.messages.begin(), st.messages.begin() + 2);
+    });
+    f.comp->onHistoryTrimmed(2);
+
+    const auto& hitsAfter = f.comp->interruptHitBoxes();
+    XX_TEST_EXPECT_EQ(hitsAfter.size(), hitsBefore.size()); ///< 指向被删消息的项才丢弃
+    XX_TEST_EXPECT_EQ(hitsAfter[hitPos].msgIndex, size_t{0}); ///< 同一条消息的新下标
+
+    // 按上一帧的坐标点击 (命中框未重建): 仍作用到同一条中断消息的同一控件
+    const auto hit = hitsAfter[hitPos]; // 拷贝 (clickHit 会触发事件处理)
+    XX_TEST_EXPECT_TRUE(f.clickHit(hit));
+    XX_TEST_EXPECT_EQ(f.comp->activeInterruptMsg(), size_t{0});
+    // 若命中区未平移 (msgIndex 仍是 2), 这条消息已不存在 -> 点击被静默丢弃,
+    // 激活态不会建立
+    XX_TEST_EXPECT_EQ(f.sharedState.readSnapshot()->messages.size(), size_t{1});
+}
+
 TestResult testTuiInterrupt() {
     g_tui_interrupt_passed = 0;
     g_tui_interrupt_failed = 0;
@@ -1256,6 +1303,8 @@ TestResult testTuiInterrupt() {
     test_unknown_control_diagnostic_and_others_usable();
     test_cancel_marks_all_and_notifies();
     test_expired_and_release_channel();
+    // 本地条数上限清理: 命中区/激活下标随头部删除前移
+    test_head_trim_shifts_hit_indices();
     // 估算与实测一致 / 状态版本
     test_estimate_matches_rendered_rows();
     test_state_version_bumps_on_change();

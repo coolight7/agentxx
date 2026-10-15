@@ -122,6 +122,20 @@ public:
         }
     }
 
+    /// 本地消息条数上限清理: 头部被移除 count 条消息后的状态同步
+    /// (client 线程经 UI 动作队列调用, 帧间执行)
+    /// - LazyScrollable 并行数组与锚点前移 + 被删条目的渲染缓存立即释放:
+    ///   视口顶行仍指向同一条消息 (被删条目全部在锚点之前时才允许调用)
+    /// - 中断视图与上一帧登记的命中区下标同步前移
+    void onHistoryTrimmed(size_t count);
+
+    /// 头部可安全清理的条数 = 视口顶行所在消息下标 (该下标及其之后的都可能
+    /// 显示在屏幕上, 一律不动)。消息之后的流式子项/生成占位子项属于列表末尾,
+    /// 锚点落在其上时返回消息数 (即消息全都不可见)
+    /// - `args`:
+    ///     - [messageCount] 当前消息条数 (把子项下标夹到消息范围内)
+    size_t trimSafeHeadCount(size_t messageCount) const;
+
     /// 复位滚动锚点 (消息列表整体替换/会话切换时调用: 内容已换, 旧锚点不再有意义)
     void resetHistoryPagination() {
         scrollable_->resetAnchorState();

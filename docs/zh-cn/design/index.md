@@ -384,6 +384,12 @@ TUI [F3] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
   LazyScrollable::notifyPrepended 做滚动锚定 (既有条目缓存/实测高度随索引
   平移保留, 偏移按新增区高度在 prepareLayout 内按新快照全额补偿并随
   实测增量收敛), 视口内容保持稳定
+- **客户端本地消息条数上限**: 客户端 (TUI) 只保留最近 100 条展示消息
+  (kLocalMessageLimit); 末尾追加消息后若超出上限, 且滚动位置在底部 (用户正
+  跟随最新内容), 则清理**视口上方未被显示**的头部消息 (消息数据 + 渲染缓存
+  + 命中区下标, 经 LazyScrollable::notifyTrimmedHead 平移, 视口零跳变),
+  同时把历史窗口起点右移 (HistoryWindow::noteTrimmedHead) —— 上滚到窗口顶部时
+  仍按页拉回。历史分页前插与整体同步不触发清理; 只限条数不按字节
 - **Grace Period**: 断线后会话保持运行的宽限期，避免误取消进行中的轮次
 - **进程内直连**: ChannelAgentIOTransport 零序列化 Channel 传输，同进程内 client 与 agent 直连
 - **传输层抽象**: `AgentIOTransportBase` 提供统一的 `connect/recv/send/close/alive` 接口，对调用方隐藏传输细节
@@ -544,6 +550,10 @@ TUI [F3] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
   - 历史分页加载: 恢复长会话时初始仅展示服务端末尾窗口 (本地模式 100 条),
     向上滚动接近窗口顶部时经 WireGetViewMessages 自动分页拉取更早历史,
     前插后滚动锚定保持视口稳定; 到达会话开头 (historyWindowStart=0) 后不再请求
+  - 本地条数上限: 客户端只保留最近 100 条展示消息 —— 末尾追加超出上限、且滚动位置
+    在底部时清理视口上方未被显示的头部消息 (数据 + 渲染缓存 + 命中区下标同步平移,
+    并右移历史窗口起点, 上滚可再按页拉回); 前插与整体同步不触发, 见
+    [tui.md](tui.md) §3.5
   - 启动连接状态 (banner 提示): TUI 启动后消息列表 banner 按 server-io
     连接状态显示 —— 启动中 (Connecting, 输入进入待发送队列, 连接完成后自动发送) /
     连接失败 (Failed, 显示"连接失败 + [重试]"可点击按钮重新连接) / 已连接 (正常输入);
@@ -586,7 +596,9 @@ TUI [F3] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
 - **LazyScrollable (Flutter ListView.builder 风格)**: 消息列表采用懒构建渲染架构 ——
   通过 itemCount/itemKey/estimateHeight/buildItem 回调描述列表，仅构建与视口相交的
   可见子项并局部布局/绘制；已构建子项按 LRU 有界缓存 (条数 + 源字节双预算)，
-  窗口外旧消息缓存被淘汰，内存占用与对话长度解耦；未进入视口的子项使用估算高度，
+  窗口外旧消息的**渲染结果**缓存被淘汰；消息数据本身另有条数上限 (见"客户端本地
+  消息条数上限": 只保留最近 100 条, 超出部分在末尾追加时清理)；未进入视口的
+  子项使用估算高度，
   进入视口后实测修正。失效 key 采用消息指针 + 廉价 O(1) 特征 (内容变化必然伴随
   指针变化，见 TUISharedState::mutableMessage)，避免对全部消息文本逐帧哈希。
   布局分两阶段: 先构建/实测可见子项 (修正估算高度)，再以修正后的总高度与滚动

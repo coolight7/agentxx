@@ -7,6 +7,8 @@
 //   底部多出空行, 下一帧才回到正确位置, 帧间交替表现为列表上下抖动
 // - [吸附跟随] stickToBottom 下内容增长自动跟随到底 (流式追加/消息入列)
 // - [滚轮滚动] 滚轮上滚解除吸附并保持视图不动, 滚回底部恢复吸附
+// - [本地条数上限清理] 头部删除消息后的下标平移 (视口内容稳定, 可清理区间与
+//   历史窗口记账同步)
 #include "agentxx-test/client/test_tui_scroll.h"
 #include "agentxx-test/client/test_tui_tool_header.h"
 
@@ -14,6 +16,7 @@
 #include "agentxx-client/io/tui/framework/tui_context.h"
 #include "agentxx-client/io/tui/framework/tui_settings.h"
 #include "agentxx-client/io/tui/framework/tui_state.h"
+#include "agentxx-client/io/tui/model/message_window.h"
 #include "agentxx-client/io/tui/tui_theme.h"
 #include "asio/io_context.hpp"
 #include "ftxui/component/animation.hpp"
@@ -420,6 +423,65 @@ static void testHistoryPrependAnchoring() {
         f.comp->onHistoryPrepended(1); // 空数组上调用安全 (仅记录条数语义)
         std::string frame = f.render();
         XX_TEST_EXPECT_TRUE(frame.find("FIRST_LOADED") != std::string::npos);
+    }
+
+    // ---- 场景 D: 本地条数上限清理 (头部删除 k 条, 见 model/message_window.h) ----
+    //
+    // 客户端在末尾追加消息后, 若超出本地上限且滚动位置在底部, 会把**视口上方**
+    // 的头部消息删掉 (消息数据 + 渲染缓存), 并同步:
+    // - 消息列表并行数组与锚点前移 (视口内容零跳变)
+    // - 历史窗口起点右移 (被删的一段在服务端仍在, 上滚时可重新分页拉回)
+    {
+        ScrollFixture f;
+        f.addHistory(8); // 每条都很高 -> 吸附底部时视口顶行在末尾几条上
+        f.sharedState.mutate([&](TUIRenderState& st) {
+            st.history.reset(100, 108, st.messages.size());
+        });
+        f.render();
+        f.render(); // 两帧建立测量/缓存
+
+        const size_t count = 8;
+        const size_t safe  = f.comp->trimSafeHeadCount(count);
+        XX_TEST_EXPECT_TRUE(safe > 0);
+        XX_TEST_EXPECT_TRUE(safe < count); // 视口内的消息不参与清理
+        // 判定组合 (与 applyLocalTrimCheck 同一套规则): 超出上限 + 吸附底部
+        XX_TEST_EXPECT_TRUE(f.comp->isStickToBottom());
+        XX_TEST_EXPECT_EQ(
+            planLocalMessageTrim(kLocalMessageLimit + 30, safe, true),
+            std::min<size_t>(safe, 30)
+        );
+        XX_TEST_EXPECT_EQ(planLocalMessageTrim(kLocalMessageLimit + 30, safe, false), size_t{0});
+
+        const std::string before       = f.render();
+        const int         totalBefore  = f.comp->totalHeight();
+        const int         offsetBefore = f.comp->scrollOffset();
+        const size_t      dropped      = std::min<size_t>(3, safe);
+
+        // 模拟清理: 消息数据删除 + 历史窗口记账 (client 线程) + 组件下标平移
+        f.sharedState.mutate([&](TUIRenderState& st) {
+            st.messages.erase(st.messages.begin(), st.messages.begin() + dropped);
+            st.history.noteTrimmedHead(dropped);
+        });
+        f.comp->onHistoryTrimmed(dropped);
+        const std::string after = f.render();
+
+        // 视口内容逐行一致 (被删消息全部位于视口上方; 缓存随索引平移保留)
+        XX_TEST_EXPECT_EQ(
+            normalizeScreenForCompare(before, ScrollFixture::kWidth),
+            normalizeScreenForCompare(after, ScrollFixture::kWidth)
+        );
+        // 总高度与派生偏移同步减少 (被删区在锚点上方, 只影响滚动条长度)
+        XX_TEST_EXPECT_TRUE(f.comp->totalHeight() < totalBefore);
+        XX_TEST_EXPECT_TRUE(f.comp->scrollOffset() < offsetBefore);
+        // 可清理区间随列表前移 (锚点索引同步减少)
+        XX_TEST_EXPECT_EQ(f.comp->trimSafeHeadCount(count - dropped), safe - dropped);
+        // 历史窗口: 起点右移 -> 上方重新成为"还有更早历史" (可再次分页拉回)
+        {
+            auto snap = f.sharedState.readSnapshot();
+            XX_TEST_EXPECT_EQ(snap->history.windowStart(), 100 + static_cast<uint64_t>(dropped));
+            XX_TEST_EXPECT_EQ(snap->history.totalCount(), uint64_t{108});
+            XX_TEST_EXPECT_TRUE(snap->history.hasMore());
+        }
     }
 }
 

@@ -18,6 +18,7 @@
 #include "markdown/text_utils.hpp"
 #include "utilxx/diff_util.h"
 #include "utilxx_base/string_util.h"
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -1053,6 +1054,59 @@ void MessageListComponent::maybeRequestMoreHistory() {
     }
     // 执行中去重与边界校验在实现方内部完成 (historyLoading 原子判定)
     ctx_.requestMoreHistory();
+}
+
+void MessageListComponent::onHistoryTrimmed(size_t count) {
+    if (count == 0) {
+        return;
+    }
+    // 滚动列表: 并行数组头删 + 被删条目的渲染缓存立即释放 + 锚点随索引前移
+    // (视口顶行仍指向同一条消息, 不需要任何偏移校正)
+    scrollable_->notifyTrimmedHead(count);
+    // 中断视图: 激活消息与上一帧命中区下标同步前移
+    interruptView_.onMessagesTrimmedHead(count);
+    // 附件卡片命中区: 指向被删消息的丢弃, 其余下标前移。这些命中区在下一帧
+    // 渲染重建之前仍参与点击判定, 不跟着前移会点到"下一条"消息
+    for (auto& hit : attachmentHits_) {
+        hit.msgIndex = (hit.msgIndex < count) ? static_cast<size_t>(-1) : (hit.msgIndex - count);
+    }
+    attachmentHits_.erase(
+        std::remove_if(
+            attachmentHits_.begin(),
+            attachmentHits_.end(),
+            [](const AttachmentHitBox& h) {
+                return h.msgIndex == static_cast<size_t>(-1);
+            }
+        ),
+        attachmentHits_.end()
+    );
+    // 折叠行命中区 (三个并行数组): 同批前移, 指向被删消息的丢弃
+    {
+        std::vector<ftxui::Box> boxes;
+        std::vector<size_t>     indices;
+        std::vector<char>       isStream;
+        boxes.reserve(collapsibleIndices_.size());
+        indices.reserve(collapsibleIndices_.size());
+        isStream.reserve(collapsibleIndices_.size());
+        for (size_t k = 0; k < collapsibleIndices_.size(); ++k) {
+            const size_t index = collapsibleIndices_[k];
+            if (index < count) {
+                continue;
+            }
+            boxes.push_back(k < collapsibleBoxes_.size() ? collapsibleBoxes_[k] : kNoBox);
+            indices.push_back(index - count);
+            isStream.push_back(k < collapsibleIsStream_.size() ? collapsibleIsStream_[k] : 0);
+        }
+        collapsibleBoxes_.swap(boxes);
+        collapsibleIndices_.swap(indices);
+        collapsibleIsStream_.swap(isStream);
+    }
+}
+
+size_t MessageListComponent::trimSafeHeadCount(size_t messageCount) const {
+    // 锚点 = 视口顶行所在子项: 它之前的子项都在视口上方 (不可见), 可以清理。
+    // 锚点落在流式/占位子项 (> 消息数) 时夹到消息数 (消息全部不可见)
+    return std::min(scrollable_->anchorIndex(), messageCount);
 }
 
 LazyBuiltItem MessageListComponent::buildItem(size_t index) {

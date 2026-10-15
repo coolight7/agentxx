@@ -7,6 +7,7 @@
 #include "agentxx-client/io/tui/framework/tui_state.h"
 #include "agentxx-client/io/tui/framework/ui_action_list.h"
 #include "agentxx-client/io/tui/framework/ui_hit.h"
+#include "agentxx-client/io/tui/model/message_window.h"
 #include "agentxx-client/io/tui/scrollable.h"
 #include "agentxx-client/io/tui/tui_theme.h"
 #include "agentxx-client/io/tui/ui_components.h"
@@ -604,6 +605,22 @@ private:
     void requestOlderHistory();
     /// 历史分页每页条数 (与服务端 SessionServerAgentIO 的默认兜底一致)
     static constexpr uint32_t kHistoryPageSize = 100;
+
+    // ---- 本地消息条数上限 (只保留最近 kLocalMessageLimit 条, 见 model/message_window.h) ----
+
+    /// 末尾追加一条展示消息 (client 线程, 调用方须持有 sharedState_ 锁):
+    /// 追加后超过本地上限时投递一次清理检查 (见 [applyLocalTrimCheck]。
+    /// 头部插入历史分页不走本函数 —— 只有尾部 push 参与清理)
+    void pushLocalMessageLocked(TUIRenderState& st, std::shared_ptr<TUIMessage> msg);
+    /// 投递一次"本地消息上限清理检查" (client 线程; 已有未执行的检查时忽略):
+    /// 判定与执行必须在 UI 线程完成 —— 只有消息列表组件知道视口当前显示到哪一条
+    void scheduleLocalTrimCheck();
+    /// 本地消息上限清理检查 (UI 线程, 帧首动作队列中执行, 渲染之前):
+    /// 超出上限、且滚动位置在底部时, 清理视口上方 (未被显示) 的头部消息,
+    /// 同步收缩滚动列表的并行数组与渲染缓存, 并让历史窗口可重新分页拉回
+    void applyLocalTrimCheck();
+    /// 是否有待执行的清理检查 (UI 线程动作里复位; 一帧内多次 push 只投递一次)
+    std::atomic<bool> localTrimCheckQueued_{false};
 
     // ---- 会话列表分页 (会话选择弹窗数据源, keyset 游标按最近活动降序) ----
 

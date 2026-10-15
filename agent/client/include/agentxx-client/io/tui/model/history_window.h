@@ -73,6 +73,16 @@ public:
     /// 增量补拉 (断线恢复) 追加尾部消息: 只更新总数/条数, 窗口起点不变
     void noteTailAppended(uint64_t appendedCount, uint64_t totalCount);
 
+    /// 本地清理头部消息 (本地条数上限): 已加载区间首条右移, 条数相应减少
+    ///
+    /// 语义: 客户端把最前面的 `trimmedCount` 条展示消息从内存里删掉了 (这些消息
+    /// 在服务端仍然存在, 绝对下标不变)。窗口起点右移后 [hasMore] 重新为真, 用户
+    /// 上滚到窗口顶部时可经分页把这一段拉回来 —— 页响应仍要求紧贴新窗口首条,
+    /// 连续性判定不受影响。
+    /// - 条数按实际删除的本地条数扣减 (空白消息过滤会让本地条数少于服务端条数,
+    ///   偏差方向是"窗口起点偏小", 最多重复拉回少量已删消息, 不会漏消息)
+    void noteTrimmedHead(uint64_t trimmedCount);
+
     /// 观察服务端下发的尾部序号 (增量补拉/实时 delta 的序号)
     SeqOutcome observeTailSeq(uint64_t seq);
     uint64_t    lastSeq() const noexcept {

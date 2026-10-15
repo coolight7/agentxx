@@ -6,6 +6,8 @@
 //   (高度和增量维护、key 按帧标记惰性比较、上一帧记录按列表复位)
 // - [前插稳定] notifyPrepended 后视口内容保持不动: scrollOffset 与 totalHeight
 //   同步等量增长, 屏幕逐行内容与滚动条比例均不跳变
+// - [头删稳定] notifyTrimmedHead (本地消息条数上限清理) 后视口内容保持不动:
+//   锚点随索引前移, 被删条目的渲染缓存释放, 其余缓存随索引平移保留
 // - [实测精确] 全部条目进入过视口后, totalHeight 等于各条目实测高度之和
 // - [滚动边界] 上滚到顶 scrollOffset==0; 下滚到底恢复吸附底部
 // - [估算偏差不影响视口内容] 给出离谱的粗略高度时, 视口内条目仍被渲染
@@ -88,8 +90,11 @@ struct ViewFixture {
             },
             [this](size_t i) {
                 ++keyCalls;
+                // key 由条目身份 (内容) 决定, 不含下标: 头部前插/清理时条目随
+                // 并行数组整体平移, 校验依然匹配, 缓存不失效 —— 与真实 itemKey
+                // "以消息指针 + 廉价特征构成" 一致
                 const size_t id = (i < ids.size()) ? ids[i] : 0;
-                return 0x1000ULL + i + keySalt + (keyOf ? keyOf(id) : 0);
+                return 0x1000ULL + id + keySalt + (keyOf ? keyOf(id) : 0);
             },
             [this](size_t i, int) {
                 ++quickCalls;
@@ -140,6 +145,15 @@ struct ViewFixture {
         ids.insert(ids.begin(), newIds.begin(), newIds.end());
         count += n;
         scrollable->notifyPrepended(n);
+    }
+
+    /// 模拟本地消息条数上限清理: 头部移除 n 条 (状态已删除 + 组件并行数组
+    /// 同步前移, 被删条目的渲染缓存释放)
+    void trimHead(size_t n) {
+        n = std::min(n, ids.size());
+        ids.erase(ids.begin(), ids.begin() + static_cast<std::ptrdiff_t>(n));
+        count -= n;
+        scrollable->notifyTrimmedHead(n);
     }
 
     /// 渲染一帧并返回屏幕文本
@@ -593,6 +607,66 @@ TestResult testTuiLazyView() {
         XX_TEST_EXPECT_EQ(f.scrollable->anchorIndex(), size_t{54});
         XX_TEST_EXPECT_EQ(f.topPos().id, size_t{38}); // 视口内容仍不变
         XX_TEST_EXPECT_EQ(f.topPos().row, 2);
+    }
+
+    // ---- 头删 (本地消息条数上限清理): 锚点前移 + 缓存释放, 视口逐行不变 ----
+    {
+        ViewFixture f(120, 2, 2);
+        f.render(); // 吸附底部
+        f.scrollable->setStickToBottom(false);
+        f.wheelRows(-1000); // 上滚到顶 (沿途实测每条, Element 进缓存)
+        f.render();
+        XX_TEST_EXPECT_EQ(f.scrollable->cachedItemCount(), size_t{120}); // 全部已缓存
+        f.wheelRows(1000); // 下滚到底 (恢复吸附底部)
+        f.render();
+        XX_TEST_EXPECT_TRUE(f.scrollable->isStickToBottom());
+        const size_t      anchorBefore = f.scrollable->anchorIndex();
+        const std::string before       = f.lastFrame();
+        const int         offsetBefore = f.scrollable->scrollOffset();
+        const int         totalBefore  = f.scrollable->totalHeight();
+        const auto        topBefore    = f.topPos();
+        const int         buildsBefore = f.buildCalls;
+        XX_TEST_EXPECT_EQ(anchorBefore, size_t{110}); // 尾部窗口起点 (20 行 / 每条 2 行)
+
+        // 清理头部 30 条 (全部位于锚点之前, 不在视口内)
+        f.trimHead(30);
+        f.render();
+        // 锚点与并行数组一起前移: 视口顶行仍指向同一条内容, 画面逐行不变
+        XX_TEST_EXPECT_EQ(f.scrollable->anchorIndex(), anchorBefore - 30);
+        XX_TEST_EXPECT_EQ(f.topPos().id, topBefore.id);
+        XX_TEST_EXPECT_EQ(f.topPos().row, topBefore.row);
+        XX_TEST_EXPECT_EQ(before, f.lastFrame());
+        // 派生偏移与总高度同步减去被删条目的行数 (窗口外条目, 只影响滚动条)
+        XX_TEST_EXPECT_EQ(f.scrollable->scrollOffset(), offsetBefore - 30 * 2);
+        XX_TEST_EXPECT_EQ(f.scrollable->totalHeight(), totalBefore - 30 * 2);
+        // 被删条目的渲染缓存已释放, 其余条目的缓存随索引平移保留 (不重建)
+        XX_TEST_EXPECT_EQ(f.scrollable->cachedItemCount(), size_t{90});
+        XX_TEST_EXPECT_EQ(f.buildCalls, buildsBefore);
+        // 继续上滚 1 行: 顶行跨入上一条目 (id 减 1), 定位仍严格
+        f.wheelRows(-1);
+        f.render();
+        XX_TEST_EXPECT_EQ(f.topPos().id, topBefore.id - 1);
+        XX_TEST_EXPECT_EQ(f.topPos().row, static_cast<int>(f.itemHeight) - 1);
+        // 一路滚到顶: 首条是被清理后的第一条 (id 30), 上方没有留白
+        f.wheelRows(-1000);
+        f.render();
+        XX_TEST_EXPECT_EQ(f.scrollable->scrollOffset(), 0);
+        XX_TEST_EXPECT_EQ(f.topPos().id, size_t{30});
+        XX_TEST_EXPECT_EQ(ViewFixture::contentRowCount(f.lastFrame()), kHeight);
+
+        // 防御: 删除条数超出已知条目数 (调用方判定失配, 如列表刚被整体替换) 时
+        // 数组整体丢弃、锚点回到开头, 下一帧按实测重建 (内容仍完整)
+        ViewFixture g(60, 1, 1);
+        g.render();
+        g.scrollable->setStickToBottom(false);
+        g.wheelRows(-10);
+        g.render();
+        g.scrollable->notifyTrimmedHead(200); // > 条目数 (夹具 count 仍为 60)
+        g.render();
+        XX_TEST_EXPECT_EQ(g.scrollable->anchorIndex(), size_t{0});
+        XX_TEST_EXPECT_EQ(g.scrollable->totalHeight(), static_cast<int>(g.count));
+        XX_TEST_EXPECT_EQ(g.topPos().id, size_t{0});
+        XX_TEST_EXPECT_EQ(ViewFixture::contentRowCount(g.lastFrame()), kHeight);
     }
 
     // ---- 下滚"到底"由实测布局判定: 估算低估不会把视口提前吸到底部 ----

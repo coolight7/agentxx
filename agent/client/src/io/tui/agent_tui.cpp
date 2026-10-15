@@ -221,15 +221,17 @@ void TUIClientAgentIO::sendPluginUserInput(std::string text) {
         if (awaitingInterruptInput_.load(std::memory_order_acquire)) {
             pushCurrentTokenLocked(st);
             resetTrailingRunningToolsLocked(st);
-            st.messages.push_back(
-                std::make_shared<TUIMessage>(TUIMessage::makeText(TUIMessage::Role::User, text))
-            );
-            // messageList_ 为 UI 线程独占组件, 投递到 UI 线程执行
+            // 先吸附底部再追加: 追加触发的本地条数清理检查据此判定"用户正跟随
+            // 最新内容" (见 [applyLocalTrimCheck])
             enqueueUiAction([this]() {
                 if (messageList_) {
                     messageList_->setStickToBottom(true);
                 }
             });
+            pushLocalMessageLocked(
+                st,
+                std::make_shared<TUIMessage>(TUIMessage::makeText(TUIMessage::Role::User, text))
+            );
             inputChannel_->async_send(
                 utilxx_base::AsioErrorCode{},
                 std::move(text),
@@ -580,10 +582,13 @@ void TUIClientAgentIO::start() {
             if (awaitingInterruptInput_.load(std::memory_order_acquire)) {
                 pushCurrentTokenLocked(st);
                 resetTrailingRunningToolsLocked(st);
-                st.messages.push_back(
+                // 先吸附底部再追加 (本回调已在 UI 线程): 追加触发的本地条数
+                // 清理检查据此判定"用户正跟随最新内容"
+                messageList_->setStickToBottom(true);
+                pushLocalMessageLocked(
+                    st,
                     std::make_shared<TUIMessage>(TUIMessage::makeText(TUIMessage::Role::User, text))
                 );
-                messageList_->setStickToBottom(true);
                 inputChannel_->async_send(
                     utilxx_base::AsioErrorCode{},
                     std::move(text),
@@ -2046,7 +2051,7 @@ void TUIClientAgentIO::pushCurrentTokenLocked(TUIRenderState& st) {
     // 空 content 消息过滤: 流式正文 (Assistant) 全为空白时不落入消息列表
     // (如模型只输出了空格/换行); Think 消息仍保留 (头部显示思考时长)
     if (!isBlankContentMessage(*msg)) {
-        st.messages.push_back(std::move(msg));
+        pushLocalMessageLocked(st, std::move(msg));
     }
     st.pendingTokenDurationMs  = 0;
     st.pendingTokenStartTimeMs = 0;
@@ -2144,6 +2149,88 @@ void TUIClientAgentIO::onMessageQueueUpdate(const agentxx::agent::WireMessageQue
         }
     }
     postRedraw();
+}
+
+// ---------------------------------------------------------------------------
+// 本地消息条数上限 (client 线程投递 + UI 线程执行; 见 model/message_window.h)
+//
+// 为什么判定在 UI 线程: "哪些消息可以安全清理"取决于消息列表当前的滚动位置
+// (视口顶行所在消息) 与是否吸附底部, 这两项只有 UI 线程独占的组件知道。
+// client 线程在末尾追加消息时只投递一次检查 (原子去重), 清理在帧首动作队列里
+// 执行, 同帧的布局/渲染随即按新列表 (与收缩后的并行数组) 进行。
+// ---------------------------------------------------------------------------
+
+void TUIClientAgentIO::pushLocalMessageLocked(TUIRenderState& st, std::shared_ptr<TUIMessage> msg) {
+    st.messages.push_back(std::move(msg));
+    if (st.messages.size() > agentxx::client::kLocalMessageLimit) {
+        scheduleLocalTrimCheck();
+    }
+}
+
+void TUIClientAgentIO::scheduleLocalTrimCheck() {
+    if (localTrimCheckQueued_.exchange(true, std::memory_order_acq_rel)) {
+        return; // 已有未执行的检查: 一帧内多次 push 共用一次
+    }
+    enqueueUiAction([this]() {
+        applyLocalTrimCheck();
+    });
+}
+
+void TUIClientAgentIO::applyLocalTrimCheck() {
+    // UI 线程 (帧首动作, 渲染之前): 读到的是上一帧实际显示的视口
+    localTrimCheckQueued_.store(false, std::memory_order_release);
+    if (!messageList_) {
+        // 无消息列表组件 (未启动界面/基准端点): 无"正在显示的内容"可言, 不清理
+        return;
+    }
+    size_t messageCount = 0;
+    {
+        auto snap    = sharedState_.readSnapshot();
+        messageCount = snap->messages.size();
+    }
+    // 清理条件: 超出上限 + 滚动位置在底部 + 只清理视口上方 (未被显示) 的头部消息
+    const bool   atBottom = messageList_->isStickToBottom();
+    const size_t safe     = messageList_->trimSafeHeadCount(messageCount);
+    const size_t plan     = agentxx::client::planLocalMessageTrim(messageCount, safe, atBottom);
+    if (plan == 0) {
+        return;
+    }
+    size_t dropped = 0;
+    size_t left    = 0;
+    {
+        std::lock_guard<std::mutex> lock(sharedState_.mutex());
+        auto&                       st = sharedState_.mutableState();
+        // 复查: 动作排队期间列表可能已被整体替换 (onSync / 会话切换) 或已缩短
+        if (st.messages.size() > agentxx::client::kLocalMessageLimit) {
+            dropped = std::min(plan, st.messages.size() - agentxx::client::kLocalMessageLimit);
+            st.messages.erase(
+                st.messages.begin(),
+                st.messages.begin() + static_cast<std::ptrdiff_t>(dropped)
+            );
+            // 历史窗口记账: 已加载区间首条右移 (这些消息在服务端仍在),
+            // 用户上滚到窗口顶部时按页重新拉回
+            st.history.noteTrimmedHead(dropped);
+            left = st.messages.size();
+        }
+    }
+    if (dropped == 0) {
+        return;
+    }
+    // 消息列表同步收缩: 并行数组头删 + 被清理条目的渲染缓存立即释放,
+    // 锚点随索引前移 (视口顶行仍指向同一条消息, 画面零跳变)
+    messageList_->onHistoryTrimmed(dropped);
+    XX_LOGD(
+        "[tui] local message limit: dropped {} head messages (limit={}, left={})",
+        dropped,
+        agentxx::client::kLocalMessageLimit,
+        left
+    );
+    postRedraw();
+    // 仍超上限 (视口顶行在更深处, 下一次布局会按底部窗口重取锚点) 时下一帧继续:
+    // 每次都会真删掉若干条, 不会空转
+    if (left > agentxx::client::kLocalMessageLimit) {
+        scheduleLocalTrimCheck();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2640,7 +2727,7 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
                     msg->startTimeMs
                         = delta.startTimeMs > 0 ? delta.startTimeMs : st.pendingTokenStartTimeMs;
                     msg->durationMs = delta.durationMs;
-                    st.messages.push_back(std::move(msg));
+                    pushLocalMessageLocked(st, std::move(msg));
                     st.currentTokenRole = TUIMessage::Role::Assistant;
                     st.isStreaming      = true;
                     break;
@@ -2704,7 +2791,7 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
                                          )
                                              .count()
                                      );
-                st.messages.push_back(std::move(m));
+                pushLocalMessageLocked(st, std::move(m));
                 st.isStreaming = true;
             } break;
             case Type::ToolEnd: {
@@ -2746,7 +2833,7 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
                     m->startTimeMs        = delta.startTimeMs;
                     m->durationMs         = delta.durationMs;
                     m->collapsed          = true;
-                    st.messages.push_back(std::move(m));
+                    pushLocalMessageLocked(st, std::move(m));
                 }
             } break;
             case Type::NodeStart: {
@@ -2796,7 +2883,7 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
                 }
                 // 空 content 消息过滤 (提示文本为空/全空白时无展示意义)
                 if (!isBlankContentMessage(*msg)) {
-                    st.messages.push_back(std::move(msg));
+                    pushLocalMessageLocked(st, std::move(msg));
                 }
                 st.isStreaming = true;
             } break;
@@ -2807,7 +2894,7 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
                 resetTrailingRunningToolsLocked(st);
                 // 空 content 消息过滤 (如正文为空/全空白的 assistant 消息)
                 if (delta.message && false == isBlankContentMessage(*delta.message)) {
-                    st.messages.push_back(delta.message);
+                    pushLocalMessageLocked(st, delta.message);
                 }
             } break;
             case Type::UpdateMessage: {
@@ -2853,12 +2940,15 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
                     msg->id          = delta.msgId;
                     msg->attachments = delta.attachments;
                     if (false == isBlankContentMessage(*msg)) {
-                        st.messages.push_back(std::move(msg));
+                        // 用户自己的新消息: 先恢复吸附底部, 再追加 (追加触发的
+                        // 本地条数清理检查读到的是"跟随最新内容"的状态, 不被
+                        // 上一轮的上滚挡住)
                         enqueueUiAction([this]() {
                             if (messageList_) {
                                 messageList_->setStickToBottom(true);
                             }
                         });
+                        pushLocalMessageLocked(st, std::move(msg));
                     }
                 }
                 st.isStreaming = true;
@@ -3010,7 +3100,7 @@ void TUIClientAgentIO::onIncrementalSync(const agentxx::agent::WireSyncPayload& 
                 if (isBlankContentMessage(*msg)) {
                     continue;
                 }
-                st.messages.push_back(std::move(msg));
+                pushLocalMessageLocked(st, std::move(msg));
             }
             // 序号连续性: 增量补拉的尾部序号应当接着上次观察到的值
             // (断号说明中间还有未收到的消息; 下一次重连的 afterViewSeq 补拉会补齐,
@@ -3159,7 +3249,9 @@ asio::awaitable<utilxx_base::Json> TUIClientAgentIO::handleInterrupt(
         m->interrupt->ui = uiJson;
         std::lock_guard<std::mutex> lock(sharedState_.mutex());
         auto&                       st = sharedState_.mutableState();
-        st.messages.push_back(std::move(m));
+        // 中断表单消息同样按本地条数上限记账 (它在列表末尾, 吸附底部时必然
+        // 在视口内, 不会被清理)
+        pushLocalMessageLocked(st, std::move(m));
     }
     postRedraw();
 

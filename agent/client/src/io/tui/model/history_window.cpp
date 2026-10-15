@@ -90,6 +90,15 @@ void HistoryWindow::noteTailAppended(const uint64_t appendedCount, const uint64_
     }
 }
 
+void HistoryWindow::noteTrimmedHead(const uint64_t trimmedCount) {
+    if (trimmedCount == 0) {
+        return;
+    }
+    // 已加载区间首条右移: 被删掉的那一段重新变成"上方的更早历史"
+    windowStart_ += trimmedCount;
+    loadedCount_  = (loadedCount_ > trimmedCount) ? (loadedCount_ - trimmedCount) : 0;
+}
+
 HistoryWindow::SeqOutcome HistoryWindow::observeTailSeq(const uint64_t seq) {
     if (!hasSeq_) {
         hasSeq_  = true;

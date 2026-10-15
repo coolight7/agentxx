@@ -435,6 +435,88 @@ void LazyScrollable::notifyPrepended(size_t count) {
     unknownPrefix_ += count;
 }
 
+void LazyScrollable::notifyTrimmedHead(size_t count) {
+    if (count == 0 || heights_.empty()) {
+        // 无并行数组 (尚未布局过): 索引尚未建立, 没有需要平移的状态
+        return;
+    }
+    // 防御: 删除条数超出已知条目数 (调用方判定失配, 如列表刚被整体替换) 时
+    // 按"能删多少删多少"处理 —— 数组清空, 下一帧布局按新列表重建
+    const size_t n = std::min(count, heights_.size());
+
+    // 上一帧的可见/已确保记录先复位 (索引即将整体前移)
+    for (size_t i : visibleIndices_) {
+        if (i < visibleBoxes_.size()) {
+            visibleBoxes_[i] = kInvalidBox;
+        }
+    }
+    visibleIndices_.clear();
+    for (size_t i : ensuredIndices_) {
+        if (i < protectedIndices_.size()) {
+            protectedIndices_[i] = false;
+        }
+    }
+    ensuredIndices_.clear();
+
+    // 被删子项: 渲染缓存立即释放 (LRU 条目析构 -> Element 树回收), 高度从总量扣除
+    long long removedRows = 0;
+    for (size_t i = 0; i < n; ++i) {
+        removeCacheAt(i);
+        // -1 (尚未估算的高度) 按 0 计 —— 与 setItemHeight 增加 totalHeight_ 时的
+        // 算法一致 (未估算的高度同样按 0 处理)
+        const int h = std::max(0, heights_[i]);
+        removedRows += h;
+        if (i < anchorIndex_) {
+            rowsAboveAnchor_ -= h;
+        }
+    }
+    totalHeight_ = std::max(0, totalHeight_ - static_cast<int>(removedRows));
+
+    // 并行数组整体前移 (与 [notifyPrepended] 的头插对称)
+    const auto cut = heights_.begin() + static_cast<std::ptrdiff_t>(n);
+    heights_.erase(heights_.begin(), cut);
+    measured_.erase(measured_.begin(), measured_.begin() + static_cast<std::ptrdiff_t>(n));
+    keys_.erase(keys_.begin(), keys_.begin() + static_cast<std::ptrdiff_t>(n));
+    keyFrames_.erase(keyFrames_.begin(), keyFrames_.begin() + static_cast<std::ptrdiff_t>(n));
+    hasCache_.erase(hasCache_.begin(), hasCache_.begin() + static_cast<std::ptrdiff_t>(n));
+    visibleBoxes_.erase(
+        visibleBoxes_.begin(),
+        visibleBoxes_.begin() + static_cast<std::ptrdiff_t>(n)
+    );
+    itemCache_.erase(itemCache_.begin(), itemCache_.begin() + static_cast<std::ptrdiff_t>(n));
+    lastBoxes_.erase(lastBoxes_.begin(), lastBoxes_.begin() + static_cast<std::ptrdiff_t>(n));
+    protectedIndices_.erase(
+        protectedIndices_.begin(),
+        protectedIndices_.begin() + static_cast<std::ptrdiff_t>(n)
+    );
+
+    // LRU 条目与按帧复用的不可缓存项: 索引同步前移 (list 迭代器稳定, 直接改 index;
+    // 被删区间的条目已随 removeCacheAt 从 list 移除)
+    for (auto& entry : lruList_) {
+        entry.index = (entry.index >= n) ? (entry.index - n) : 0;
+    }
+    for (auto& entry : transientItems_) {
+        entry.index = (entry.index >= n) ? (entry.index - n) : 0;
+    }
+
+    // 锚点随索引前移: 视口顶行仍指向同一条内容 (调用前提保证被删项在锚点之前)
+    if (anchorIndex_ >= n) {
+        anchorIndex_ -= n;
+    } else {
+        anchorIndex_ = 0;
+        anchorRow_   = 0;
+        recomputeRowsAboveAnchor();
+    }
+    if (pendingJumpIndex_ != kNoItem) {
+        pendingJumpIndex_ = (pendingJumpIndex_ >= n) ? (pendingJumpIndex_ - n) : 0;
+    }
+    // 前插尚未补齐的未知高度区同批前移 (被删区落在其中时缩短该前缀)
+    if (unknownPrefix_ > 0) {
+        unknownPrefix_ = (unknownPrefix_ > n) ? (unknownPrefix_ - n) : 0;
+    }
+    // contentEndsInViewport_ 不改: 头删不改变内容末尾的位置
+}
+
 void LazyScrollable::resetAnchorState() {
     anchorIndex_       = 0;
     anchorRow_         = 0;

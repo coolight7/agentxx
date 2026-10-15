@@ -540,23 +540,26 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
   `tui_settings` (顶部条目与表单取值映射)、`util_misc` (线消息往返)、
   `remote_agent` (端到端: 校验 → 落盘 → 注册 → 立即切换 + 非法/重名分支)。
 
-### 2.13 客户端模型层 (历史窗口 / 队列镜像) 与输入栏光标
+### 2.13 客户端模型层 (历史窗口 / 本地上限 / 队列镜像) 与输入栏光标
 
-**模型层**: 与"数据从哪来、怎么画"无关的两块状态抽成独立模型, 放在
+**模型层**: 与"数据从哪来、怎么画"无关的三块状态抽成独立模型, 放在
 `agentxx-client/io/tui/model/` 下, **不依赖 FTXUI / 端点 / 网络 / 插件管理器**, 因此可脱离
 终端直接单测 (`agentxx_test tui_model`, 边界条件全部在无终端环境跑):
 
 | 模型 | 文件 | 负责 |
 |------|------|------|
-| `HistoryWindow` | [model/history_window.h](/agent/client/include/agentxx-client/io/tui/model/history_window.h) | 展示历史的已加载区间 `[windowStart, +loadedCount)`, "上方是否还有更早历史", 分页请求的去重与进行中标记; 页响应判定 (接受 / 空页 / 迟到会话 / 不连续页); 断线增量补拉的尾部**序号连续性** (首个/连续/断号/重复) |
+| `HistoryWindow` | [model/history_window.h](/agent/client/include/agentxx-client/io/tui/model/history_window.h) | 展示历史的已加载区间 `[windowStart, +loadedCount)`, "上方是否还有更早历史", 分页请求的去重与进行中标记; 页响应判定 (接受 / 空页 / 迟到会话 / 不连续页); 断线增量补拉的尾部**序号连续性** (首个/连续/断号/重复); 本地清理头部消息后的窗口记账 (`noteTrimmedHead`) |
+| 本地上限判定 | [model/message_window.h](/agent/client/include/agentxx-client/io/tui/model/message_window.h) | `kLocalMessageLimit` (客户端只保留最近 100 条展示消息) 与纯函数 `planLocalMessageTrim` (条数超出 + 吸附底部 + 只清理视口上方时返回可清理条数) |
 | `MessageQueueMirror` | [model/queue_mirror.h](/agent/client/include/agentxx-client/io/tui/model/queue_mirror.h) | 服务端排队输入的镜像 (整体快照 = 唯一权威), 按 id 删除/查找, 队列状态 (idle/running/paused/draining, 未知文本按 idle), **投递回执记账** (同一 requestId 只记一次, 容量上限按最旧淘汰) |
 
-两者都是**可拷贝的值类型**, 随渲染快照 (`TUIRenderState`) 一起复制, 因此 UI 线程读到的
+它们都是**可拷贝的值类型**, 随渲染快照 (`TUIRenderState`) 一起复制, 因此 UI 线程读到的
 是本帧一致的一份状态; 端点只负责"发请求 / 渲染 / 提示"。
 
 - 历史窗口: 页响应必须紧贴当前窗口首条 (`startIndex + count == windowStart`) 才被接受,
   否则视为窗口已被整体替换后的过期响应; `windowStart == 0` 表示上方没有更早历史
   (全量同步、或已拉到会话开头)。切换会话时 `resetForSession` 使旧会话的迟到响应失效。
+- 本地条数上限: 见 §3.5 (只限条数不限字节; 仅末尾追加消息时判定, 头部插入 (历史分页)
+  不触发清理)。
 - 队列镜像: 快照应用时保留**界面展开态** (按条目 id/文本为键), 队列整体刷新不会把用户
   正展开的条目折回; 投递回执的重复/迟到不会重复提示用户。
 - 边界纪律: 模型层不得包含 FTXUI/组件/端点头 (`boundaries` 测试模块有专门规则, 目录为空
@@ -833,6 +836,33 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
 - 弹窗一律用 `tuiSurfacePopup/tuiSurfaceFrame/tuiSurfaceToast` 组装; 不要自行拼边框。
 - `bgcolor(ftxui::Color::Default)` 会把单元格背景重置为终端默认色 (抹掉父级背景),
   需要"不着色"时用 `UiActionStyle` 的默认值语义 (框架内部已跳过 Default)。
+
+### 3.5 客户端本地消息条数上限
+
+客户端只保留最近 `kLocalMessageLimit` (100) 条展示消息, 避免长会话把整段历史一直留在
+内存里 (服务端 `Session::viewMessages` 与会话历史同增, 客户端不必镜像全量)。
+
+- **只限条数, 不限字节**: 单条消息本体的体积不参与判定, 渲染结果的内存仍由
+  `LazyScrollable` 的缓存预算 (条数 + 字节双预算) 约束 —— 两者管的是不同的内存。
+- **只在末尾追加 (push) 时判定**: 历史分页前插 (`onViewMessagesPage`) 与整体替换
+  (`onSync`, 如会话切换/尾窗同步) 都不触发清理; 后者本身就把列表换成尾窗。
+- **判定在 UI 线程**: "哪些消息可以安全清理"取决于消息列表当前的滚动位置 (视口顶行
+  所在消息) 与是否吸附底部 —— 只有 UI 线程独占的组件知道。client 线程在追加消息时只
+  投递一次检查 (原子去重, 一帧内多次 push 共用一次), 实际清理在帧首动作队列里执行
+  (`TUIClientAgentIO::applyLocalTrimCheck`), 同帧布局/渲染随即按新列表进行。
+- **三条同时满足才清理** (`model/message_window.h` 的 `planLocalMessageTrim`):
+  条数超过上限、滚动位置在底部 (用户正跟随最新内容)、待清理部分不在视口内
+  (只清理视口顶行之前的那几条)。非底部 (用户正查看历史) 或整段内容都在屏幕上时不清理。
+- **清理内容**: 消息数据 (`TUIRenderState::messages` 头部若干条) + 该条目的渲染缓存
+  (`LazyScrollable::notifyTrimmedHead`: 并行数组头删、被删条目的 Element 释放、锚点随索引
+  前移 —— 视口顶行仍指向同一条消息, 画面零跳变) + 中断视图/附件卡片/折叠行等上一帧命中区
+  的消息下标同步前移 (它们在下一帧重建之前仍参与点击判定)。
+- **可重新拉回**: 清理同时把历史窗口起点右移 (`HistoryWindow::noteTrimmedHead`), 于是
+  `hasMore()` 重新为真 —— 用户上滚到窗口顶部时按页拉回这一段 (服务端 `viewMessages` 为
+  append-only, 绝对下标不变)。因此清理只影响"当前驻留的条数", 不丢历史。
+- 回归测试: `agentxx_test tui_model` (判定函数 + 窗口记账)、`tui_lazy_view` (头删后的锚点/
+  缓存平移)、`tui_scroll` 场景 D (组件级: 视口稳定 + 窗口可重新拉回)、`tui_interrupt`
+  (命中区下标随清理前移)。
 
 ---
 

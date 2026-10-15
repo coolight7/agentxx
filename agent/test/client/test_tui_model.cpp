@@ -10,15 +10,20 @@
 ///    - 分页请求的去重 (请求未完成期间不重复发) 与边界 (上方无历史时不发)
 ///    - 页响应判定: 接受 / 空页 / 迟到会话 / 不连续页 / 无未完成的请求
 ///    - 前插与尾部追加对窗口起点/条数的影响
+///    - 本地清理头部消息后的窗口记账 (起点右移, 可重新分页拉回)
 ///    - 尾部序号连续性: 首个 / 连续 / 断号 / 重复
 ///    - 切换会话后旧响应被丢弃
-/// 2. 消息队列镜像:
+/// 2. 本地消息条数上限判定 (planLocalMessageTrim):
+///    - 未超上限 / 非吸附底部 -> 不清理
+///    - 只清理超出上限的部分, 且不超过视口上方的可清理条数
+/// 3. 消息队列镜像:
 ///    - 快照应用 (条目 + 队列状态), 未知状态文本与空状态的处理
 ///    - 按 id 删除 / 查找 / 清空
 ///    - 投递回执记账: 重复 requestId 不重复记账, 容量上限按最旧淘汰
 #include "agentxx-test/client/test_tui_model.h"
 
 #include "agentxx-client/io/tui/model/history_window.h"
+#include "agentxx-client/io/tui/model/message_window.h"
 #include "agentxx-client/io/tui/model/queue_mirror.h"
 #include <string>
 #include <vector>
@@ -38,6 +43,7 @@ namespace test {
 
 using agentxx::client::HistoryWindow;
 using agentxx::client::MessageQueueMirror;
+using agentxx::client::planLocalMessageTrim;
 
 namespace {
 
@@ -138,9 +144,65 @@ void testHistoryWindow() {
     XX_TEST_EXPECT_FALSE(win.hasMore());
     XX_TEST_EXPECT_EQ(win.observeTailSeq(5), HistoryWindow::SeqOutcome::First);
     XX_TEST_EXPECT_EQ(win.applyPage("sess-1", 170, 30, 200), HistoryWindow::PageOutcome::StaleSession);
+
+    // 本地清理头部消息: 窗口起点右移 (被删的一段重新变成"上方的更早历史"),
+    // 条数相应减少; 之后分页仍可把这一段拉回来
+    win.resetForSession("sess-4");
+    win.reset(/*windowStart=*/100, /*totalCount=*/300, /*loadedCount=*/120);
+    win.noteTrimmedHead(20);
+    XX_TEST_EXPECT_EQ(win.windowStart(), uint64_t{120});
+    XX_TEST_EXPECT_EQ(win.loadedCount(), uint64_t{100});
+    XX_TEST_EXPECT_EQ(win.totalCount(), uint64_t{300}); ///< 服务端总数不受本地清理影响
+    XX_TEST_EXPECT_TRUE(win.hasMore());
+    // 上滚到窗口顶部触发的分页请求仍从新起点向前取值
+    XX_TEST_EXPECT_TRUE(win.beginOlderPageRequest());
+    XX_TEST_EXPECT_EQ(win.applyPage("sess-4", 20, 100, 300), HistoryWindow::PageOutcome::Accepted);
+    win.notePrepended(20, 100);
+    XX_TEST_EXPECT_EQ(win.windowStart(), uint64_t{20});
+    XX_TEST_EXPECT_EQ(win.loadedCount(), uint64_t{200});
+
+    // 清理条数大于已加载条数 (异常组合) 时条数归零, 起点仍按实际删除条数右移
+    win.resetForSession("sess-5");
+    win.reset(/*windowStart=*/0, /*totalCount=*/50, /*loadedCount=*/10);
+    win.noteTrimmedHead(30);
+    XX_TEST_EXPECT_EQ(win.windowStart(), uint64_t{30});
+    XX_TEST_EXPECT_EQ(win.loadedCount(), uint64_t{0});
+    // 连续性判定按新起点: 页尾必须紧贴 30 (清理前的位置 0 已不再是窗口首条)
+    XX_TEST_EXPECT_TRUE(win.beginOlderPageRequest());
+    XX_TEST_EXPECT_EQ(
+        win.applyPage("sess-5", 0, 10, 50),
+        HistoryWindow::PageOutcome::NonContiguous
+    );
+    XX_TEST_EXPECT_TRUE(win.beginOlderPageRequest());
+    XX_TEST_EXPECT_EQ(win.applyPage("sess-5", 10, 20, 50), HistoryWindow::PageOutcome::Accepted);
 }
 
-/// 2. 消息队列镜像: 快照/删除/状态/回执记账
+/// 2. 本地消息条数上限: 清理判定 (纯函数)
+void testLocalMessageTrimPlan() {
+    const size_t limit = agentxx::client::kLocalMessageLimit;
+
+    // 未超上限: 不清理 (边界: 恰好等于上限)
+    XX_TEST_EXPECT_EQ(planLocalMessageTrim(limit, 0, true), size_t{0});
+    XX_TEST_EXPECT_EQ(planLocalMessageTrim(limit - 1, 0, true), size_t{0});
+
+    // 超出上限但滚动位置不在底部 (用户正查看历史): 不清理
+    XX_TEST_EXPECT_EQ(planLocalMessageTrim(limit + 20, 10, false), size_t{0});
+
+    // 视口顶行在第 0 条 (整段内容都在屏幕上): 没有可安全清理的消息
+    XX_TEST_EXPECT_EQ(planLocalMessageTrim(limit + 20, 0, true), size_t{0});
+
+    // 只清理超出上限的部分 (视口上方还有更多可清理的也不多删)
+    XX_TEST_EXPECT_EQ(planLocalMessageTrim(limit + 3, 80, true), size_t{3});
+    // 视口上方可清理的条数不足时按可清理条数清理 (剩下的留在列表里)
+    XX_TEST_EXPECT_EQ(planLocalMessageTrim(limit + 30, 5, true), size_t{5});
+    // 视口顶行正好在"清理后应当保留的第一条"上: 恰好清理到上限
+    XX_TEST_EXPECT_EQ(planLocalMessageTrim(limit + 30, 30, true), size_t{30});
+    // 视口顶行下标超出消息数 (锚点落在流式/占位子项上): 按消息数算,
+    // 但仍只清理超出上限的部分
+    XX_TEST_EXPECT_EQ(planLocalMessageTrim(limit + 30, limit + 100, true), size_t{30});
+}
+
+/// 3. 消息队列镜像: 快照/删除/状态/回执记账
 void testQueueMirror() {
     MessageQueueMirror q;
     XX_TEST_EXPECT_TRUE(q.empty());
@@ -242,6 +304,7 @@ void testQueueMirror() {
 
 TestResult testTuiModels() {
     testHistoryWindow();
+    testLocalMessageTrimPlan();
     testQueueMirror();
     return TestResult{g_tm_passed, g_tm_failed};
 }

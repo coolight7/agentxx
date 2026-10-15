@@ -79,9 +79,13 @@ extern "C" size_t __sanitizer_get_current_allocated_bytes(void);
 #endif
 
 /// 当前进程堆内在用字节数; nullopt = 本平台/本次构建无可用统计
+/// - Windows + ASan 实测: 某些测试模块跑过之后该接口开始恒返回 0 (ASan 的越界检查
+///   仍然生效, 只是分配计数被清零), 此时按"无统计"处理, 否则断言会把读到的 0
+///   当成"没有分配"而误报失败
 std::optional<size_t> heapInUseBytes() {
 #ifdef XX_TEST_WITH_ASAN
-    return static_cast<size_t>(__sanitizer_get_current_allocated_bytes());
+    const auto total = static_cast<size_t>(__sanitizer_get_current_allocated_bytes());
+    return total == 0 ? std::nullopt : std::optional<size_t>{total};
 #elif XX_IS_MACOS_D || XX_IS_IOS_D
     vm_address_t* zones = nullptr;
     unsigned      count = 0;

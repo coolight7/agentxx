@@ -83,6 +83,28 @@ void InterruptView::clearActive() {
     activeMsg_ = static_cast<size_t>(-1);
 }
 
+void InterruptView::onMessagesTrimmedHead(size_t count) {
+    if (count == 0) {
+        return;
+    }
+    // 激活消息 (键盘作用对象) 下标前移; 落在被删区时清除激活
+    if (activeMsg_ != static_cast<size_t>(-1)) {
+        activeMsg_ = (activeMsg_ >= count) ? (activeMsg_ - count) : static_cast<size_t>(-1);
+    }
+    // 上一帧登记的命中区下标同批前移: 命中框由下一次渲染重建, 在这之前收到的
+    // 点击仍应按新下标作用到同一条消息; 指向被删消息的命中区直接丢弃
+    std::vector<HitBox> kept;
+    kept.reserve(hits_.size());
+    for (auto& hit : hits_) {
+        if (hit.msgIndex < count) {
+            continue;
+        }
+        hit.msgIndex -= count;
+        kept.push_back(std::move(hit));
+    }
+    hits_.swap(kept);
+}
+
 bool InterruptView::requestIdOf(const TUIMessage& msg, int64_t& out) {
     if (msg.role != TUIMessage::Role::Interrupt || !msg.interrupt) {
         return false;
