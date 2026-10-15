@@ -43,6 +43,10 @@ class OpenAIProvider : public neograph::Provider {
 public:
 
     /// ChatMessage.extra 中保存 Responses API reasoning 原始项的键 (如 encrypted_content / id 等)
+    ///
+    /// - 只保存回传所需的最小字段: `{type, encrypted_content, id}` (加密内容或网关的
+    ///   引用 id); 条目里的明文思考 (content 的 reasoning_text) 不在这里重复保存 ——
+    ///   它同时是 message.reasoning_content, 回传时由后者补回 (见 [buildResponsesBody])
     static constexpr const char* kResponsesReasoningItemsKey = "responses_reasoning_items";
     /// ChatMessage.extra 中保存思考 token 数量的键
     static constexpr const char* kReasoningTokensKey = "reasoning_tokens";

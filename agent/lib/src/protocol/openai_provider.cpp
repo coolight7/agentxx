@@ -608,6 +608,29 @@ bool isEmptyResponse(const neograph::ChatCompletion& completion) {
     );
 }
 
+/// reasoning item 是否已带明文思考 (content 里至少一个非空 reasoning_text)
+///
+/// - 回传历史思考前用它判断要不要用 `message.reasoning_content` 补 content:
+///   思考模式的上游 (deepseek 等) 要求回传 reasoning_text, 缺了返回
+///   HTTP 400 "The `reasoning_text` in the thinking mode must be passed back to the API"
+bool reasoningItemHasText(const utilxx_base::Json& item) {
+    if (!item.contains("content") || !item["content"].is_array()) {
+        return false;
+    }
+    for (const auto& part : item["content"]) {
+        if (part.is_object() && part.value("type", std::string{}) == "reasoning_text"
+            && !part.value("text", std::string{}).empty()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// 组装 reasoning item 的明文思考内容: `[{"type":"reasoning_text","text":...}]`
+utilxx_base::Json reasoningTextContent(const std::string& text) {
+    return utilxx_base::Json::array({{{"type", "reasoning_text"}, {"text", text}}});
+}
+
 } // namespace
 
 void OpenAIProvider::fillMissingToolCallIds(neograph::ChatCompletion& completion) {
@@ -882,7 +905,15 @@ utilxx_base::Json OpenAIProvider::buildResponsesBody(const neograph::CompletionP
         } else if (msg.role == "assistant") {
             // 回传历史 thinking 内容 (仅 sendThinking 开启时):
             // - 优先回传保存的原始/加密 reasoning items (含 encrypted_content / id 等)
-            // - 无捕获项时, 降级使用 summary 形式回传 reasoning_content (仅当未关闭思考摘要时)
+            // - 条目里没有明文思考时, 用 message.reasoning_content 补 reasoning_text:
+            //   思考模式的上游 (deepseek 等) 要求回传 reasoning_text, 只回传
+            //   encrypted_content / id 会返回
+            //   HTTP 400 "The `reasoning_text` in the thinking mode must be passed back
+            //   to the API"; 捕获条目时明文不重复保存, 就存在 reasoning_content 里
+            //   (实测上游按"当前续写的最后一条条目"校验, 这里对每条都补齐, 不依赖该细节)
+            // - 无捕获项时 (跨 provider 历史 / 旧会话数据), 用 reasoning_content
+            //   重建一个 reasoning item; 重建同样发 reasoning_text 而不是 summary_text
+            //   (只发摘要形式同样会被上述 400 拒绝)
             // 顺序: reasoning 在前, output_text 在中, function_call 在后
             if (config_.sendThinking) {
                 if (msg.extra.contains(kResponsesReasoningItemsKey)
@@ -899,15 +930,18 @@ utilxx_base::Json OpenAIProvider::buildResponsesBody(const neograph::CompletionP
                         if (!item.contains("summary")) {
                             item["summary"] = utilxx_base::Json::array();
                         }
+                        // 补 reasoning_text (条目自带明文时保持条目原样:
+                        // 部分网关只在条目里给明文, 消息里的 reasoning_content 可能是空的)
+                        if (!reasoningItemHasText(item) && !msg.reasoning_content.empty()) {
+                            item["content"] = reasoningTextContent(msg.reasoning_content);
+                        }
                         input.push_back(std::move(item));
                     }
                 } else if (config_.requestReasoningSummary && !msg.reasoning_content.empty()) {
                     input.push_back({
-                        {"type",    "reasoning"},
-                        {"summary",
-                         utilxx_base::Json::array(
-                             {{{"type", "summary_text"}, {"text", msg.reasoning_content}}}
-                         )                     },
+                        {"type",    "reasoning"                                 },
+                        {"content", reasoningTextContent(msg.reasoning_content) },
+                        {"summary", utilxx_base::Json::array()                  },
                     });
                 }
             }

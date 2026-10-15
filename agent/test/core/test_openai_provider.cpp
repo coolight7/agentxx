@@ -3859,8 +3859,11 @@ asio::awaitable<void> test_responses_reasoning_configurable(MockOpenAIServer& mo
 }
 
 /// Responses API: sendThinking=true 时
-///   - 请求 include=["reasoning.summary"] 获取思考摘要
-///   - assistant 消息携带历史 reasoning_content 时回传 reasoning item (summary 形式)
+///   - 请求 include=["reasoning.summary_text"] 获取思考摘要
+///   - assistant 消息有思考文字但没有捕获到的 reasoning item 时, 用思考文字重建
+///     reasoning item, 明文放进 content 的 reasoning_text
+///     (思考模式的上游要求回传 reasoning_text; 只发 summary_text 会被
+///     HTTP 400 "The `reasoning_text` in the thinking mode must be passed back to the API" 拒绝)
 asio::awaitable<void> test_responses_send_thinking(MockOpenAIServer& mock, uint16_t port) {
     std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
     mock.mode           = MockMode::ResponsesNormal;
@@ -3887,24 +3890,209 @@ asio::awaitable<void> test_responses_send_thinking(MockOpenAIServer& mock, uint1
         XX_TEST_EXPECT_EQ(sent["include"].size(), (size_t)1);
         XX_TEST_EXPECT_EQ(sent["include"][0].get<std::string>(), "reasoning.summary_text");
 
-        // assistant 消息回传 reasoning item (summary 形式)
+        // assistant 消息重建 reasoning item (明文思考放在 content 里, summary 空数组)
         const auto& input = sent["input"];
         XX_TEST_EXPECT_TRUE(input.is_array());
         bool foundReasoningItem = false;
         for (const auto& item : input) {
             if (item.is_object() && item.value("type", std::string{}) == "reasoning") {
-                foundReasoningItem  = true;
-                const auto& summary = item["summary"];
-                XX_TEST_EXPECT_TRUE(summary.is_array());
-                XX_TEST_EXPECT_EQ(summary.size(), (size_t)1);
-                XX_TEST_EXPECT_EQ(summary[0]["type"].get<std::string>(), "summary_text");
-                XX_TEST_EXPECT_EQ(summary[0]["text"].get<std::string>(), "上一轮思考过程");
+                foundReasoningItem   = true;
+                const auto& content = item["content"];
+                XX_TEST_EXPECT_TRUE(content.is_array());
+                XX_TEST_EXPECT_EQ(content.size(), (size_t)1);
+                XX_TEST_EXPECT_EQ(content[0]["type"].get<std::string>(), "reasoning_text");
+                XX_TEST_EXPECT_EQ(content[0]["text"].get<std::string>(), "上一轮思考过程");
+                // summary 字段仍补齐 (部分网关要求该字段存在)
+                XX_TEST_EXPECT_TRUE(item.contains("summary"));
+                XX_TEST_EXPECT_TRUE(item["summary"].is_array());
+                XX_TEST_EXPECT_TRUE(item["summary"].empty());
             }
         }
         XX_TEST_EXPECT_TRUE(foundReasoningItem);
     } catch (const std::exception& e) {
         XX_TEST_FAILED++;
         TEST_FAIL << "responses send thinking failed: " << e.what() << std::endl;
+    }
+}
+
+/// Responses API: 回传捕获的 reasoning item 时补 reasoning_text
+///
+/// 回归背景: opencode zen (deepseek 思考模式) 要求回传历史思考时必须带
+/// `content:[{"type":"reasoning_text","text":...}]`; 只回传 encrypted_content / id
+/// 会返回 HTTP 400
+/// "The `reasoning_text` in the thinking mode must be passed back to the API"
+/// (捕获条目时明文不重复保存, 只存在 message.reasoning_content 里, 发送前从这里补回)
+asio::awaitable<void>
+    test_responses_reasoning_text_passed_back_with_item(MockOpenAIServer& mock, uint16_t port) {
+    std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+    mock.mode           = MockMode::ResponsesNormal;
+
+    auto mc         = makeCodexCfg(baseUrl);
+    mc.sendThinking = true;
+    auto provider   = server::OpenAIProvider::create(mc);
+
+    /// 收集请求体 input 里的 reasoning item (调用方负责解析成功)
+    auto findReasoningItems = [](const utilxx_base::Json& body) {
+        std::vector<utilxx_base::Json> out;
+        if (!body.contains("input") || !body["input"].is_array()) {
+            return out;
+        }
+        for (const auto& item : body["input"]) {
+            if (item.is_object() && item.value("type", std::string{}) == "reasoning") {
+                out.push_back(item);
+            }
+        }
+        return out;
+    };
+
+    // 场景 1: 条目只有 encrypted_content / id → 用 reasoning_content 补 reasoning_text
+    {
+        neograph::ChatMessage assistant;
+        assistant.role              = "assistant";
+        assistant.reasoning_content = "上一轮思考过程";
+        assistant.tool_calls.push_back(neograph::ToolCall{
+            .id        = "call_1",
+            .name      = "get_time",
+            .arguments = "{}",
+        });
+        assistant.extra = agentxx::util::parseNeographJson(
+            R"({"responses_reasoning_items":[{"type":"reasoning","encrypted_content":"enc_ref_1","id":"rs_1"}]})"
+        );
+
+        neograph::CompletionParams params;
+        params.model    = "deepseek-v4.1-flash";
+        params.messages = {
+            {.role = "user", .content = "现在几点"},
+            assistant,
+            {.role       = "tool",
+             .content    = "12:00",
+             .tool_call_id = "call_1",
+             .tool_name  = "get_time"},
+        };
+
+        try {
+            co_await provider->invoke(params, nullptr);
+            auto  sent  = utilxx_base::Json::parse(mock.lastRequestBody);
+            auto  items = findReasoningItems(sent);
+            XX_TEST_EXPECT_EQ(items.size(), (size_t)1);
+            if (items.size() == 1) {
+                // 原样保留的字段
+                XX_TEST_EXPECT_EQ(items[0]["encrypted_content"].get<std::string>(), "enc_ref_1");
+                XX_TEST_EXPECT_EQ(items[0]["id"].get<std::string>(), "rs_1");
+                XX_TEST_EXPECT_TRUE(items[0].contains("summary"));
+                XX_TEST_EXPECT_TRUE(items[0]["summary"].empty());
+                // 补回的明文思考
+                const auto& content = items[0]["content"];
+                XX_TEST_EXPECT_TRUE(content.is_array());
+                XX_TEST_EXPECT_EQ(content.size(), (size_t)1);
+                XX_TEST_EXPECT_EQ(content[0]["type"].get<std::string>(), "reasoning_text");
+                XX_TEST_EXPECT_EQ(content[0]["text"].get<std::string>(), "上一轮思考过程");
+            }
+        } catch (const std::exception& e) {
+            XX_TEST_FAILED++;
+            TEST_FAIL << "responses reasoning_text backfill failed: " << e.what() << std::endl;
+        }
+    }
+
+    // 场景 2: 条目自带明文 (网关只在条目里给明文, 消息里没有) → 保持条目原样
+    {
+        neograph::ChatMessage assistant;
+        assistant.role    = "assistant";
+        assistant.content = "好的";
+        assistant.extra   = agentxx::util::parseNeographJson(
+            R"({"responses_reasoning_items":[{"type":"reasoning","encrypted_content":"enc_ref_2","id":"rs_2",)"
+            R"("content":[{"type":"reasoning_text","text":"条目自带的思考"}]}]})"
+        );
+
+        neograph::CompletionParams params;
+        params.model    = "deepseek-v4.1-flash";
+        params.messages = {
+            {.role = "user", .content = "在吗"},
+            assistant,
+            {.role = "user", .content = "做点事"},
+        };
+
+        try {
+            co_await provider->invoke(params, nullptr);
+            auto  sent  = utilxx_base::Json::parse(mock.lastRequestBody);
+            auto  items = findReasoningItems(sent);
+            XX_TEST_EXPECT_EQ(items.size(), (size_t)1);
+            if (items.size() == 1) {
+                const auto& content = items[0]["content"];
+                XX_TEST_EXPECT_TRUE(content.is_array());
+                XX_TEST_EXPECT_EQ(content.size(), (size_t)1);
+                XX_TEST_EXPECT_EQ(content[0]["text"].get<std::string>(), "条目自带的思考");
+            }
+        } catch (const std::exception& e) {
+            XX_TEST_FAILED++;
+            TEST_FAIL << "responses reasoning item text kept failed: " << e.what() << std::endl;
+        }
+    }
+
+    // 场景 3: 条目没有明文、消息也没有思考文字 → 原样回传 (不补 content, 不失败)
+    {
+        neograph::ChatMessage assistant;
+        assistant.role    = "assistant";
+        assistant.content = "好的";
+        assistant.extra   = agentxx::util::parseNeographJson(
+            R"({"responses_reasoning_items":[{"type":"reasoning","encrypted_content":"enc_ref_3"}]})"
+        );
+
+        neograph::CompletionParams params;
+        params.model    = "deepseek-v4.1-flash";
+        params.messages = {
+            {.role = "user", .content = "在吗"},
+            assistant,
+            {.role = "user", .content = "做点事"},
+        };
+
+        try {
+            co_await provider->invoke(params, nullptr);
+            auto  sent  = utilxx_base::Json::parse(mock.lastRequestBody);
+            auto  items = findReasoningItems(sent);
+            XX_TEST_EXPECT_EQ(items.size(), (size_t)1);
+            if (items.size() == 1) {
+                XX_TEST_EXPECT_TRUE(items[0].contains("summary"));
+                XX_TEST_EXPECT_TRUE(items[0]["summary"].empty());
+                XX_TEST_EXPECT_FALSE(items[0].contains("content"));
+            }
+        } catch (const std::exception& e) {
+            XX_TEST_FAILED++;
+            TEST_FAIL << "responses reasoning item without text failed: " << e.what() << std::endl;
+        }
+    }
+
+    // 场景 4: sendThinking=false → 不回传 reasoning item
+    {
+        auto mcNoThink         = makeCodexCfg(baseUrl);
+        mcNoThink.sendThinking = false;
+        auto providerNoThink   = server::OpenAIProvider::create(mcNoThink);
+
+        neograph::ChatMessage assistant;
+        assistant.role              = "assistant";
+        assistant.reasoning_content = "不该被回传的思考";
+        assistant.extra             = agentxx::util::parseNeographJson(
+            R"({"responses_reasoning_items":[{"type":"reasoning","encrypted_content":"enc_ref_4"}]})"
+        );
+
+        neograph::CompletionParams params;
+        params.model    = "deepseek-v4.1-flash";
+        params.messages = {
+            {.role = "user", .content = "在吗"},
+            assistant,
+            {.role = "user", .content = "做点事"},
+        };
+
+        try {
+            co_await providerNoThink->invoke(params, nullptr);
+            auto sent  = utilxx_base::Json::parse(mock.lastRequestBody);
+            auto items = findReasoningItems(sent);
+            XX_TEST_EXPECT_EQ(items.size(), (size_t)0);
+        } catch (const std::exception& e) {
+            XX_TEST_FAILED++;
+            TEST_FAIL << "responses sendThinking=false reasoning stripped failed: " << e.what()
+                      << std::endl;
+        }
     }
 }
 
@@ -5107,6 +5295,7 @@ asio::awaitable<TestResult> run_openai_provider_tests() {
     co_await test_responses_non_streaming(*mock, port);
     co_await test_responses_reasoning_configurable(*mock, port);
     co_await test_responses_send_thinking(*mock, port);
+    co_await test_responses_reasoning_text_passed_back_with_item(*mock, port);
     co_await test_responses_encrypted_thinking_capture_and_forward(*mock, port);
     co_await test_responses_reasoning_item_missing_summary_normalized(*mock, port);
     co_await test_responses_encrypted_signal_deferred_to_done(*mock, port);
