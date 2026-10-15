@@ -370,6 +370,10 @@ asio::awaitable<void> test_plugin_impl_overrides_core_ask() {
         XX_TEST_EXPECT_EQ(afterDisable.by, std::string{agentxx::feature::points::kOwnerCountTokens});
         XX_TEST_EXPECT_TRUE(afterDisable.value.has_value());
     }
+
+    // 收尾: 卸载 (用例结束时实例必须被释放 —— 实例持有插件上下文与 shim,
+    // 留着不放就是内存泄漏, 由 ASan 的退出检查报告)
+    XX_TEST_EXPECT_TRUE(co_await f.mgr->unloadAsync("example_feature", std::chrono::seconds{5}));
     co_return;
 }
 
@@ -576,6 +580,9 @@ asio::awaitable<void> test_call_busy_protection() {
     }));
     XX_TEST_EXPECT_EQ(first.status, PLUGINXX_OPERATOR_OK);
     XX_TEST_EXPECT_TRUE(first.payload.find(R"("gate":"open")") != std::string::npos);
+
+    // 收尾: 卸载 (用例结束时实例必须被释放; 见前一个用例的说明)
+    XX_TEST_EXPECT_TRUE(co_await f.mgr->unloadAsync("example_feature", std::chrono::seconds{5}));
     co_return;
 }
 
@@ -700,6 +707,8 @@ asio::awaitable<void> test_spec_size_gate() {
         ),
         0
     );
+    // 卸载 (用例结束时实例必须被释放; 见前几个用例的说明)
+    XX_TEST_EXPECT_TRUE(co_await f.mgr->unloadAsync("example_feature", std::chrono::seconds{5}));
     co_return;
 }
 

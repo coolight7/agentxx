@@ -1095,10 +1095,17 @@ TestResult testConfigKeys() {
     }
 
     // 源码扫描: 加载器解析的键名必须都在目录里
-    auto loaderPath = fs::path{__FILE__}.parent_path().parent_path().parent_path()
-                      / "client" / "src" / "config_loader.cpp";
-    const auto scanned
-        = scanLoaderKeys(utilxx_base::pathToUtf8Generic(loaderPath));
+    // 路径经 [agentxx::test::sourceFilePath] 解析 (构建期宏优先): 不能直接由
+    // `__FILE__` 推导, 构建脚本打开的 ccache 归一化 (CCACHE_BASEDIR) 会让它变相对路径
+    const auto loaderPath = sourceFilePath("client/src/config_loader.cpp");
+    std::set<std::string> scanned;
+    if (loaderPath.empty() || !fs::exists(loaderPath)) {
+        TEST_FAIL << "config_keys: 读不到源码文件 client/src/config_loader.cpp (源码根目录="
+                  << utilxx_base::pathToUtf8Generic(sourceRootDir())
+                  << "); 检查构建是否传入 AGENTXX_TEST_SOURCE_ROOT" << std::endl;
+    } else {
+        scanned = scanLoaderKeys(utilxx_base::pathToUtf8Generic(loaderPath));
+    }
     const auto catalog = catalogKeyNames(entries);
     XX_TEST_EXPECT_GE(scanned.size(), size_t{30}); // 规则失效 (扫不到东西) 也要失败
     std::vector<std::string> missing;

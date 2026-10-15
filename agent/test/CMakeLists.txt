@@ -171,6 +171,16 @@ target_compile_definitions(agentxx_test PRIVATE
   AGENTXX_CONFIG_KEYS_DOC_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../../docs/zh-cn/design/config-keys.md"
 )
 
+# agent 源码根目录 (含 lib/client/plugins/test): 少数测试要读源码本身做自检
+# (config_keys 扫 config_loader.cpp 的键名, boundaries 查分层规则)。
+# 不能用 `__FILE__` 推导: 构建脚本打开的 ccache 归一化 (CCACHE_BASEDIR) 会把编译器
+# 收到的源文件路径改写成相对路径, `__FILE__` 跟着变成相对路径, 从任意工作目录都
+# 推不出源码树。故构建期把绝对路径写成宏传进去 (见 test_framework.h 的 sourceRootDir)
+get_filename_component(AGENTXX_TEST_SOURCE_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
+target_compile_definitions(agentxx_test PRIVATE
+  AGENTXX_TEST_SOURCE_ROOT="${AGENTXX_TEST_SOURCE_ROOT}"
+)
+
 # PCH: 只预编译稳定第三方头，加速测试编译 (GCC/Clang，与 lib 保持一致)。
 # 第三方头须用 <...> 形式 (见 lib/CMakeLists.txt 说明)
 if (AGENTXX_ENABLE_PCH AND NOT XX_IS_MSVC_D)

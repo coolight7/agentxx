@@ -55,15 +55,34 @@ int g_ftxui_text_failed = 0;
 // 直接 abort ("pointer being freed was not allocated")。改为读取系统堆统计的
 // 差值, 不改变任何分配行为。
 //
+// - AddressSanitizer 构建: ASan 自己的计数 (它接管了分配器, 见下)
 // - macOS/iOS: 汇总所有 malloc zone 的 size_in_use
 // - Linux/Android: mallinfo2 (旧版 glibc 与 bionic 退回 mallinfo) 的 uordblks
 // - Windows: 调试 CRT 的存活分配字节 (与 memgrowth 同法; Release 无该统计)
 // - 取不到统计时返回 nullopt, 调用方跳过内存断言并打印说明
 // ---------------------------------------------------------------------------
 
+// ASan 接管分配器后, 系统堆统计读不到它的内存 (glibc 的 mallinfo2 实测恒为 0,
+// macOS 的 malloc zone 与 Windows 的 CRT 存活分配同理), 断言会退化成"读到 0 也算通过"。
+// 因此启用 ASan 时改用 ASan 自己的在用字节计数: 该接口属编译器运行库的分配器接口
+// (GCC/Clang 的 libasan 与 compiler-rt 都导出 `__sanitizer_get_current_allocated_bytes`),
+// 但 GCC 的 sanitizer 头里没有 allocator_interface.h (clang 才有), 故按 C 接口自行声明。
+#if defined(__SANITIZE_ADDRESS__)
+#  define XX_TEST_WITH_ASAN 1
+#elif defined(__has_feature)
+#  if __has_feature(address_sanitizer)
+#    define XX_TEST_WITH_ASAN 1
+#  endif
+#endif
+#ifdef XX_TEST_WITH_ASAN
+extern "C" size_t __sanitizer_get_current_allocated_bytes(void);
+#endif
+
 /// 当前进程堆内在用字节数; nullopt = 本平台/本次构建无可用统计
 std::optional<size_t> heapInUseBytes() {
-#if XX_IS_MACOS_D || XX_IS_IOS_D
+#ifdef XX_TEST_WITH_ASAN
+    return static_cast<size_t>(__sanitizer_get_current_allocated_bytes());
+#elif XX_IS_MACOS_D || XX_IS_IOS_D
     vm_address_t* zones = nullptr;
     unsigned      count = 0;
     malloc_get_all_zones(mach_task_self(), nullptr, &zones, &count);
