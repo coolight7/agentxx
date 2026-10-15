@@ -333,7 +333,12 @@ Element MessageListComponent::OnRender() {
                // 结果随消息在视口内的位置变化), 见 docs/zh-cn/design/tui.md §3.2
                filler() | size(WIDTH, EQUAL, 3),
                scrollable_->Render() | bold | flex,
-               filler() | size(WIDTH, EQUAL, 3),
+               // 右侧: 1 列间隔 + 1 列跳转按钮列 (▲ - + ▼) + 1 列留白。
+               // 固定列数合计仍是 6 列 (原为左右各 3 列留白) —— 按钮列占用右侧
+               // 留白中的 1 列, 消息内容宽度不变 (高度缓存/换行结果不受影响)
+               filler() | size(WIDTH, EQUAL, 1),
+               buildNavStrip(),
+               filler() | size(WIDTH, EQUAL, 1),
            })
            | reflect(areaBox_);
 }
@@ -380,6 +385,11 @@ void MessageListComponent::reportDecorVisibility(const std::vector<Box>& vboxes)
 bool MessageListComponent::OnEvent(Event event) {
     if (event.is_mouse()) {
         const auto& mouse = event.mouse();
+        // 右侧跳转按钮列最先判定: 折叠消息的命中判定只按行比较 (见
+        // handleCollapsibleClick), 放到它后面会被"同行点击 = 折叠该消息"吃掉
+        if (handleNavButtonClick(mouse)) {
+            return true;
+        }
         if (handleRetryClick(mouse)) {
             return true;
         }
@@ -458,6 +468,197 @@ bool MessageListComponent::handleCollapsibleClick(const Mouse& mouse) {
         return handled;
     }
     return false;
+}
+
+// ---------------------------------------------------------------------------
+// 右侧跳转按钮列 (`▲ - + ▼`)
+// ---------------------------------------------------------------------------
+
+namespace {
+
+/// 跳转按钮字符 (下标即 [MessageListComponent::NavButton], 自上而下):
+/// `▲`/`▼` 用实心三角表示"到顶部/到底部" (与中间的 `-`/`+` 区分), 二者都是
+/// 单列宽符号 (见 markdown::codepoint_width) 且常见终端字体均有对应字形
+constexpr const char* kNavButtonGlyphs[MessageListComponent::kNavButtonCount]
+    = {"▲", "-", "+", "▼"};
+
+/// "没有目标消息"下标 (与有效消息下标区分); 见 [MessageListComponent::prevUserMessageIndex]
+constexpr size_t kNoMessageIndex = static_cast<size_t>(-1);
+
+} // namespace
+
+/// 跳转按钮列的绘制节点 (自上而下 `▲ - + ▼`, 按钮之间空一行, 整组竖直居中)
+///
+/// 自绘节点, 而不是 `vbox` 里放 4 个 `text` 元素:
+/// - 消息区高度可能小于按钮组 (终端很矮 / 输入框与状态栏占位大): vbox 会把放不下的
+///   按钮排在盒子之外, 那些坐标落在相邻组件 (输入框/状态栏) 的区域上 —— 屏幕上会
+///   出现"幽灵按钮"; 自绘只画落在本节点盒子内的按钮
+/// - 每个按钮的命中区域与绘制在同一次布局里写回, 不会出现"画在一处、点中另一处"
+class MessageListComponent::NavStripNode : public ftxui::Node {
+public:
+
+    /// - `args`:
+    ///     - [hasContent] 消息列表是否有内容 (空列表 banner 无跳转目标: 不画不登记)
+    ///     - [state] 命中区域写回目标 (与组件共享)
+    ///     - [color] 按钮字符前景色 (主题的弱化提示色)
+    NavStripNode(bool hasContent, std::shared_ptr<NavStripState> state, ftxui::Color color) :
+        hasContent_(hasContent),
+        state_(std::move(state)),
+        color_(color) {}
+
+    void ComputeRequirement() override {
+        requirement_       = ftxui::Requirement{};
+        requirement_.min_x = 1; // 单列
+        // 高度需求按"紧凑排列"(= 按钮数) 报: 有间隔的 7 行是理想值, 报最小值可
+        // 避免矮终端下把它当成硬需求而多压缩消息区; 盒子够高时才用间隔排列
+        requirement_.min_y = static_cast<int>(kNavButtonCount);
+    }
+
+    void SetBox(ftxui::Box box) override {
+        ftxui::Node::SetBox(box);
+        // 帧首复位: 本帧未画出的按钮 (空列表 / 盒子放不下) 不参与命中
+        state_->boxes.fill(kNoBox);
+        if (!hasContent_ || box.IsEmpty()) {
+            return;
+        }
+        const int rows  = box.y_max - box.y_min + 1;
+        const int count = static_cast<int>(kNavButtonCount);
+        // 按钮之间空一行 (逐个点击时不易误点, 也让每个字形独立可辨); 消息区
+        // 放不下这些空行时退化为紧凑排列 (4 个按钮贴在一起), 优先保证四个都在
+        const int stride = (rows >= count * 2 - 1) ? 2 : 1;
+        const int span   = stride * (count - 1) + 1; // 首尾按钮之间的行数跨度
+        // 整组竖直居中; 居中位置放不下时贴顶, 放不下的按钮从下往上一律不画
+        const int start = box.y_min + std::max(0, (rows - span) / 2);
+        for (int i = 0; i < count; ++i) {
+            const int y = start + i * stride;
+            if (y > box.y_max) {
+                break; // 消息区高度不足: 该按钮本帧不画也不登记
+            }
+            // 命中区域含按钮下方的那一行 (按钮之间的空行); 组内相邻区域不重叠,
+            // 空行上的点击不会落到消息列表的折叠判定上
+            const int yMax = std::min(y + stride - 1, box.y_max);
+            state_->boxes[i] = ftxui::Box{box.x_min, box.x_min, y, yMax};
+        }
+    }
+
+    void Render(ftxui::Screen& screen) override {
+        // 本节点无子元素, 直接写单元格; 只画本帧登记了命中区域的按钮
+        // (各命中区域的首行就是它的字形行, 空行部分不写任何字符)
+        for (size_t i = 0; i < kNavButtonCount; ++i) {
+            const auto& box = state_->boxes[i];
+            if (box.IsEmpty()) {
+                continue;
+            }
+            auto& cell            = screen.CellAt(box.x_min, box.y_min);
+            cell.character        = kNavButtonGlyphs[i];
+            cell.foreground_color = color_;
+        }
+    }
+
+private:
+
+    bool                           hasContent_ = false;
+    std::shared_ptr<NavStripState> state_;
+    ftxui::Color                   color_ = ftxui::Color::Default;
+};
+
+Element MessageListComponent::buildNavStrip() {
+    // 有内容 (消息/流式输出/生成占位提示) 才画按钮: 空列表 banner 没有可跳转的目标
+    const bool hasContent = ctx_.frameState && !showEmptyBanner(*ctx_.frameState);
+    return std::make_shared<NavStripNode>(
+               hasContent,
+               navStrip_,
+               ctx_.theme ? ctx_.theme->hintColor : ftxui::Color::Default
+           )
+           | size(WIDTH, EQUAL, 1);
+}
+
+bool MessageListComponent::handleNavButtonClick(const Mouse& mouse) {
+    if (mouse.button != Mouse::Left || mouse.motion != Mouse::Released) {
+        return false;
+    }
+    for (size_t i = 0; i < kNavButtonCount; ++i) {
+        if (navStrip_->boxes[i].Contain(mouse.x, mouse.y)) {
+            activateNavButton(static_cast<NavButton>(i));
+            return true;
+        }
+    }
+    return false;
+}
+
+void MessageListComponent::activateNavButton(NavButton button) {
+    switch (button) {
+        case NavButton::Top:
+            scrollable_->scrollToIndex(0);
+            break;
+        case NavButton::Bottom:
+            scrollable_->scrollToBottom();
+            break;
+        case NavButton::PrevUser: {
+            // 上方没有用户消息时退化为跳到顶部: 按钮不空点 —— 停在已加载窗口的
+            // 顶部即"内存里最早的位置"(更早历史未加载, 上滑一行即触发分页预取)
+            const size_t index = prevUserMessageIndex();
+            scrollable_->scrollToIndex(index != kNoMessageIndex ? index : 0);
+            break;
+        }
+        case NavButton::NextUser: {
+            // 下方没有用户消息时退化为跳到底部 (最新内容)
+            const size_t index = nextUserMessageIndex();
+            if (index != kNoMessageIndex) {
+                scrollable_->scrollToIndex(index);
+            } else {
+                scrollable_->scrollToBottom();
+            }
+            break;
+        }
+    }
+    if (ctx_.postRedraw) {
+        ctx_.postRedraw();
+    }
+}
+
+size_t MessageListComponent::prevUserMessageIndex() const {
+    if (!ctx_.frameState) {
+        return kNoMessageIndex;
+    }
+    const auto& st = *ctx_.frameState;
+    if (st.messages.empty()) {
+        return kNoMessageIndex;
+    }
+    // 视口顶行落在锚点子项中间 (行偏移 > 0) 时该子项自身也是候选: 跳转把它的首行
+    // 对齐到视口顶 (等于把被裁掉的上半段滚回来)
+    const size_t anchor = scrollable_->anchorIndex();
+    size_t       cursor
+        = std::min(anchor + (scrollable_->anchorRow() > 0 ? size_t{1} : size_t{0}),
+                   st.messages.size());
+    while (cursor > 0) {
+        --cursor;
+        const auto& msg = st.messages[cursor];
+        if (msg && msg->role == TUIMessage::Role::User) {
+            return cursor;
+        }
+    }
+    return kNoMessageIndex;
+}
+
+size_t MessageListComponent::nextUserMessageIndex() const {
+    if (!ctx_.frameState) {
+        return kNoMessageIndex;
+    }
+    const auto& st = *ctx_.frameState;
+    // 从视口顶行所在子项的**下一条**开始找: 顶行那一条已经对齐/可见, 不重复跳
+    for (size_t i = scrollable_->anchorIndex() + 1; i < st.messages.size(); ++i) {
+        const auto& msg = st.messages[i];
+        if (msg && msg->role == TUIMessage::Role::User) {
+            return i;
+        }
+    }
+    return kNoMessageIndex;
+}
+
+ftxui::Box MessageListComponent::navButtonBox(NavButton button) const {
+    const size_t index = static_cast<size_t>(button);
+    return index < kNavButtonCount ? navStrip_->boxes[index] : kNoBox;
 }
 
 // ---------------------------------------------------------------------------

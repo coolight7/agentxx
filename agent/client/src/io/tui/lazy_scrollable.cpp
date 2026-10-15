@@ -423,6 +423,10 @@ void LazyScrollable::notifyPrepended(size_t count) {
         // 不存在任何"偏移校正"状态 (方案 §3.4: 前插 = 锚点平移)
         anchorIndex_ += count;
     }
+    if (pendingJumpIndex_ != kNoItem) {
+        // 待落实的跳转目标同批平移 (跳转已请求但尚未布局, 仍指向原来那一条)
+        pendingJumpIndex_ += count;
+    }
     // 新增区高度暂记未知 (-1): 调用方在状态前插后、本帧快照刷新前调用
     // (UI 动作队列语义), 此时经回调估算读到的是旧快照内容, 算出的结果必然错误。
     // 下一帧 prepareLayout 的 syncItemArrays 按新快照补齐粗略高度 ——
@@ -435,6 +439,19 @@ void LazyScrollable::resetAnchorState() {
     anchorIndex_       = 0;
     anchorRow_         = 0;
     rowsAboveAnchor_   = 0;
+    pendingScrollRows_ = 0;
+    pendingJumpIndex_  = kNoItem;
+}
+
+void LazyScrollable::scrollToIndex(size_t index) {
+    pendingJumpIndex_  = index;
+    stickToBottom_     = false; // 跳转后不再跟随新内容 (跳到底部用 scrollToBottom)
+    pendingScrollRows_ = 0;     // 同帧累积的滚轮行数被跳转覆盖
+}
+
+void LazyScrollable::scrollToBottom() {
+    pendingJumpIndex_  = kNoItem;
+    stickToBottom_     = true; // 尾部窗口发现会重新把锚点定到最后一屏
     pendingScrollRows_ = 0;
 }
 
@@ -650,6 +667,7 @@ void LazyScrollable::prepareLayout(const ftxui::Box& box) {
         anchorIndex_           = 0;
         anchorRow_             = 0;
         pendingScrollRows_     = 0;
+        pendingJumpIndex_      = kNoItem; // 空列表: 无内容可跳到
         contentEndsInViewport_ = true; // 空列表: 无可滚动内容
         return;
     }
@@ -657,6 +675,17 @@ void LazyScrollable::prepareLayout(const ftxui::Box& box) {
         // 锚点被列表收缩裁掉 (或复位后超出): 退到列表末尾
         anchorIndex_ = count - 1;
         anchorRow_   = 0;
+        recomputeRowsAboveAnchor();
+    }
+
+    // 跳转落实 (事件期只记目标, 见 [scrollToIndex]): 视口顶行对齐目标子项首行。
+    // 目标尚未实测时其粗略估算计入锚点以上高度和 —— 估算偏差不影响视口内容
+    // (定位只用实测高度, 见类注释不变量 1), 只让滚动条长度暂时偏旧
+    if (pendingJumpIndex_ != kNoItem) {
+        anchorIndex_       = std::min(pendingJumpIndex_, count - 1);
+        anchorRow_         = 0;
+        pendingJumpIndex_  = kNoItem;
+        pendingScrollRows_ = 0;
         recomputeRowsAboveAnchor();
     }
 

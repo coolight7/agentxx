@@ -297,6 +297,18 @@ static bool isBlankRow(std::string_view row) {
     return row.find_first_not_of(" \t\r") == std::string_view::npos;
 }
 
+/// 消息内容区是否为空白行: 忽略右侧留白区 (最后 3 列)
+///
+/// 最后 3 列是消息列表的版面装饰 (滚动条 gutter + 右侧跳转按钮列 `▲ - + ▼`),
+/// 不属于内容 —— 判断"内容之间是否隔了空行"时要把它们排除
+static bool isContentBlankRow(std::string_view row, int width) {
+    const size_t keep = width > 3 ? static_cast<size_t>(width) - 3 : 1;
+    if (row.size() > keep) {
+        row = row.substr(0, keep);
+    }
+    return isBlankRow(row);
+}
+
 /// 推进组件树动画 n 帧 (与运行期一致: 每次回调只给上一帧到当前的时间差)
 static void advanceAnimation(ftxui::ComponentBase& comp, int frames, float stepSeconds = 0.09F) {
     for (int i = 0; i < frames; ++i) {
@@ -650,6 +662,336 @@ static void testMarkdownListTextCopy() {
     }
 }
 
+// ---------------------------------------------------------------------------
+// 消息列表右侧跳转按钮 (▲ - + ▼)
+//
+// 需求: 消息列表右侧竖直排列四个按钮 (按钮之间空一行, 整组居中) —— `▲` 跳到顶部,
+// `-` 跳到视口上方最近的一条用户消息, `+` 跳到视口下方最近的一条用户消息,
+// `▼` 跳到底部。历史分页可能没加载完, 因此跳转只按内存中已有的消息计算,
+// 不要求先加载完整。
+// ---------------------------------------------------------------------------
+
+static void testNavStripButtons() {
+    using Nav = MessageListComponent::NavButton;
+
+    /// 按钮组占用的行数 (4 个按钮, 相邻按钮之间空 1 行): 与组件内的居中算法一致
+    constexpr int kNavGroupRows = 7;
+
+    /// 构造测试会话: U0 A A A A U1 A A A A U2 A A A A U3 A A A A
+    /// (助手消息各约 40 行: 保证跳到"最后一条用户消息"之后下方仍有一屏以上内容,
+    ///  否则 LazyScrollable 会把视口回夹到底部窗口, 锚点下标断言不成立)
+    auto buildList = [](ScrollFixture& f) {
+        f.sharedState.mutate([&](TUIRenderState& st) {
+            for (int i = 0; i < 4; ++i) {
+                auto u  = std::make_shared<TUIMessage>();
+                u->role = TUIMessage::Role::User;
+                u->text = fmt::format("USER_MARK_{}", i);
+                st.messages.push_back(std::move(u));
+                for (int j = 0; j < 4; ++j) {
+                    std::string text = fmt::format("assistant {} msg{} ", j, i);
+                    for (int k = 0; k < 20; ++k) {
+                        text += fmt::format("filler paragraph line {} of msg{}.", k, i) + "\n\n";
+                    }
+                    auto a  = std::make_shared<TUIMessage>();
+                    a->role = TUIMessage::Role::Assistant;
+                    a->text = std::move(text);
+                    st.messages.push_back(std::move(a));
+                }
+            }
+        });
+    };
+    constexpr size_t kUserIndex[4] = {0, 5, 10, 15};
+
+    /// 点击指定跳转按钮 (取其命中区域左上角); 返回是否被处理
+    auto clickNav = [](ScrollFixture& f, Nav button) {
+        const ftxui::Box box = f.comp->navButtonBox(button);
+        if (box.IsEmpty()) {
+            return false;
+        }
+        ftxui::Mouse m;
+        m.button = ftxui::Mouse::Left;
+        m.motion = ftxui::Mouse::Released;
+        m.x      = box.x_min;
+        m.y      = box.y_min;
+        return f.comp->OnEvent(ftxui::Event::Mouse("", m));
+    };
+
+    // ---- 布局: 右侧一列, 自上而下 ▲ - + ▼ (相邻按钮空一行, 整组竖直居中) ----
+    {
+        ScrollFixture f;
+        buildList(f);
+        f.render();
+
+        const ftxui::Box boxTop  = f.comp->navButtonBox(Nav::Top);
+        const ftxui::Box boxPrev = f.comp->navButtonBox(Nav::PrevUser);
+        const ftxui::Box boxNext = f.comp->navButtonBox(Nav::NextUser);
+        const ftxui::Box boxBot  = f.comp->navButtonBox(Nav::Bottom);
+        XX_TEST_EXPECT_FALSE(boxTop.IsEmpty());
+        XX_TEST_EXPECT_FALSE(boxPrev.IsEmpty());
+        XX_TEST_EXPECT_FALSE(boxNext.IsEmpty());
+        XX_TEST_EXPECT_FALSE(boxBot.IsEmpty());
+
+        // 同一列, 自上而下排列且相邻按钮空 1 行 (按钮字形在各自命中区域的首行)
+        XX_TEST_EXPECT_EQ(boxTop.x_min, boxPrev.x_min);
+        XX_TEST_EXPECT_EQ(boxTop.x_min, boxNext.x_min);
+        XX_TEST_EXPECT_EQ(boxTop.x_min, boxBot.x_min);
+        XX_TEST_EXPECT_EQ(boxPrev.y_min - boxTop.y_min, 2);
+        XX_TEST_EXPECT_EQ(boxNext.y_min - boxPrev.y_min, 2);
+        XX_TEST_EXPECT_EQ(boxBot.y_min - boxNext.y_min, 2);
+
+        // 整组在消息区竖直居中: 20 行视口 + 组跨度 7 行 (4 按钮 + 3 个空行)
+        // -> 组顶部在第 6 行 (上方 6 行、下方 7 行, 整数居中)
+        XX_TEST_EXPECT_EQ(kNavGroupRows, 7);
+        XX_TEST_EXPECT_EQ(f.height, ScrollFixture::kHeight);
+        XX_TEST_EXPECT_EQ(boxTop.y_min, 6);
+        XX_TEST_EXPECT_EQ(boxBot.y_min, 6 + kNavGroupRows - 1);
+
+        // 位于消息列表右侧 (屏幕最右两列之内 = 右侧留白区), 不占用消息内容宽
+        XX_TEST_EXPECT_EQ(boxTop.x_min, f.width - 2);
+
+        // 屏幕上该列自上而下就是 ▲ - + ▼ (字形为多字节, 按字节长度取)
+        const std::string frame = stripAnsiCodes(f.render());
+        const auto        hasGlyphAt = [&frame](int row, int col, const std::string& glyph) {
+            const std::string line = screenRowText(frame, row);
+            return col >= 0 && col + static_cast<int>(glyph.size()) <= static_cast<int>(line.size())
+                   && line.compare(static_cast<size_t>(col), glyph.size(), glyph) == 0;
+        };
+        XX_TEST_EXPECT_TRUE(hasGlyphAt(boxTop.y_min, boxTop.x_min, "▲"));
+        XX_TEST_EXPECT_TRUE(hasGlyphAt(boxPrev.y_min, boxPrev.x_min, "-"));
+        XX_TEST_EXPECT_TRUE(hasGlyphAt(boxNext.y_min, boxNext.x_min, "+"));
+        XX_TEST_EXPECT_TRUE(hasGlyphAt(boxBot.y_min, boxBot.x_min, "▼"));
+        // 相邻按钮之间的空行不画任何字符
+        XX_TEST_EXPECT_TRUE(hasGlyphAt(boxTop.y_min + 1, boxTop.x_min, " "));
+        XX_TEST_EXPECT_TRUE(hasGlyphAt(boxPrev.y_min + 1, boxPrev.x_min, " "));
+    }
+
+    // ---- ^ 跳到顶部: 解除吸附底部, 顶行是最早的一条消息 ----
+    {
+        ScrollFixture f;
+        buildList(f);
+        f.render();
+        XX_TEST_EXPECT_TRUE(f.comp->isStickToBottom()); // 默认吸附底部
+
+        XX_TEST_EXPECT_TRUE(clickNav(f, Nav::Top));
+        std::string frame = stripAnsiCodes(f.render());
+        XX_TEST_EXPECT_EQ(f.comp->anchorIndex(), size_t{0});
+        XX_TEST_EXPECT_FALSE(f.comp->isStickToBottom());
+        XX_TEST_EXPECT_TRUE(screenRowText(frame, 0).find("> USER_MARK_0") != std::string::npos);
+
+        // 已解除吸附: 底部新增内容不拉动视图 (顶行仍是同一条消息)
+        f.sharedState.mutate([&](TUIRenderState& st) {
+            auto a  = std::make_shared<TUIMessage>();
+            a->role = TUIMessage::Role::Assistant;
+            a->text = "appended tail marker TAILN_TOP";
+            st.messages.push_back(std::move(a));
+        });
+        f.render();
+        f.render();
+        XX_TEST_EXPECT_EQ(f.comp->anchorIndex(), size_t{0});
+        XX_TEST_EXPECT_TRUE(
+            screenRowText(stripAnsiCodes(f.render()), 0).find("> USER_MARK_0") != std::string::npos
+        );
+    }
+
+    // ---- v 跳到底部: 恢复吸附底部, 之后新增内容继续跟随 ----
+    {
+        ScrollFixture f;
+        buildList(f);
+        f.render();
+        for (int i = 0; i < 20; ++i) {
+            f.wheel(ftxui::Mouse::WheelUp);
+            f.render();
+        }
+        XX_TEST_EXPECT_FALSE(f.comp->isStickToBottom());
+
+        XX_TEST_EXPECT_TRUE(clickNav(f, Nav::Bottom));
+        std::string frame = stripAnsiCodes(f.render());
+        XX_TEST_EXPECT_TRUE(f.comp->isStickToBottom());
+        // 吸附底部: 最新内容贴底 (消息子项自带尾部空行, 故看最后两行)
+        XX_TEST_EXPECT_TRUE(
+            ScrollFixture::lastLines(frame, 2).find("filler paragraph line 19") != std::string::npos
+        );
+
+        f.sharedState.mutate([&](TUIRenderState& st) {
+            auto a  = std::make_shared<TUIMessage>();
+            a->role = TUIMessage::Role::Assistant;
+            a->text = "newest tail marker TAILN_BOT";
+            st.messages.push_back(std::move(a));
+        });
+        f.render();
+        XX_TEST_EXPECT_TRUE(
+            ScrollFixture::lastLines(stripAnsiCodes(f.render()), 2).find("TAILN_BOT")
+            != std::string::npos
+        );
+    }
+
+    // ---- - / + 在上一条 / 下一条用户消息之间跳转 ----
+    {
+        ScrollFixture f;
+        buildList(f);
+        f.render(); // 吸附底部
+
+        // - : 跳到视口上方最近的用户消息 (= 最后一条用户消息)
+        XX_TEST_EXPECT_TRUE(clickNav(f, Nav::PrevUser));
+        std::string frame = stripAnsiCodes(f.render());
+        XX_TEST_EXPECT_EQ(f.comp->anchorIndex(), kUserIndex[3]);
+        XX_TEST_EXPECT_TRUE(screenRowText(frame, 0).find("> USER_MARK_3") != std::string::npos);
+        XX_TEST_EXPECT_FALSE(f.comp->isStickToBottom());
+
+        // 再按一次 -: 继续跳到上一条用户消息
+        XX_TEST_EXPECT_TRUE(clickNav(f, Nav::PrevUser));
+        frame = stripAnsiCodes(f.render());
+        XX_TEST_EXPECT_EQ(f.comp->anchorIndex(), kUserIndex[2]);
+        XX_TEST_EXPECT_TRUE(screenRowText(frame, 0).find("> USER_MARK_2") != std::string::npos);
+
+        // + : 跳到下一条用户消息
+        XX_TEST_EXPECT_TRUE(clickNav(f, Nav::NextUser));
+        frame = stripAnsiCodes(f.render());
+        XX_TEST_EXPECT_EQ(f.comp->anchorIndex(), kUserIndex[3]);
+        XX_TEST_EXPECT_TRUE(screenRowText(frame, 0).find("> USER_MARK_3") != std::string::npos);
+
+        // 下滚几行使顶行落到该用户消息之后 (消息已离开视口顶), 再按 - 回到它
+        for (int i = 0; i < 3; ++i) {
+            f.wheel(ftxui::Mouse::WheelDown);
+        }
+        f.render();
+        XX_TEST_EXPECT_TRUE(
+            screenRowText(stripAnsiCodes(f.render()), 0).find("> USER_MARK_3") == std::string::npos
+        );
+        XX_TEST_EXPECT_TRUE(clickNav(f, Nav::PrevUser));
+        frame = stripAnsiCodes(f.render());
+        XX_TEST_EXPECT_EQ(f.comp->anchorIndex(), kUserIndex[3]);
+        XX_TEST_EXPECT_TRUE(screenRowText(frame, 0).find("> USER_MARK_3") != std::string::npos);
+
+        // 已在最后一条用户消息: 下方没有用户消息 -> + 退化为跳到底部 (恢复吸附)
+        XX_TEST_EXPECT_TRUE(clickNav(f, Nav::NextUser));
+        XX_TEST_EXPECT_TRUE(f.comp->isStickToBottom());
+    }
+
+    // ---- 列表里没有用户消息时退化: - 跳到顶部, + 跳到底部 ----
+    {
+        ScrollFixture f;
+        f.sharedState.mutate([&](TUIRenderState& st) {
+            for (int i = 0; i < 6; ++i) {
+                auto a  = std::make_shared<TUIMessage>();
+                a->role = TUIMessage::Role::Assistant;
+                a->text = fmt::format("assistant only {}\n\n", i) + std::string(600, 'z');
+                st.messages.push_back(std::move(a));
+            }
+        });
+        f.render(); // 吸附底部
+
+        XX_TEST_EXPECT_TRUE(clickNav(f, Nav::PrevUser)); // 上方无用户消息 -> 顶部
+        f.render();
+        XX_TEST_EXPECT_EQ(f.comp->anchorIndex(), size_t{0});
+        XX_TEST_EXPECT_FALSE(f.comp->isStickToBottom());
+
+        XX_TEST_EXPECT_TRUE(clickNav(f, Nav::NextUser)); // 下方无用户消息 -> 底部
+        XX_TEST_EXPECT_TRUE(f.comp->isStickToBottom());
+    }
+
+    // ---- 按钮点击不得被"折叠消息"吃掉 (命中判定顺序) ----
+    {
+        ScrollFixture f;
+        // 首条为**展开的长 Tip** (可折叠): 它占满整个视口, 因此按钮组所在的行
+        // 同时也是该消息的命中行 —— 点按钮必须只跳转, 不被折叠判定吃掉
+        f.sharedState.mutate([&](TUIRenderState& st) {
+            std::string body;
+            for (int i = 0; i < 40; ++i) {
+                body += fmt::format("tip body line {} with marker TIPNAV\n", i);
+            }
+            auto tip       = std::make_shared<TUIMessage>();
+            tip->role      = TUIMessage::Role::Tip;
+            tip->tip       = TUIMessage::TipData{};
+            tip->collapsed = false;
+            tip->text      = std::move(body);
+            st.messages.push_back(std::move(tip));
+            for (int i = 0; i < 6; ++i) {
+                auto a  = std::make_shared<TUIMessage>();
+                a->role = TUIMessage::Role::Assistant;
+                a->text = fmt::format("assistant {}\n\n", i) + std::string(600, 'y');
+                st.messages.push_back(std::move(a));
+            }
+        });
+        f.render();
+        XX_TEST_EXPECT_TRUE(clickNav(f, Nav::Top)); // 跳到顶部: 长 Tip 占满视口
+        f.render();                                 // 落实跳转
+        f.render();                                 // 折叠命中区域按顶部视图重建 (由上一帧可见区域反推)
+
+        const int navRow = f.comp->navButtonBox(Nav::Top).y_min;
+        XX_TEST_EXPECT_TRUE(f.comp->navButtonBox(Nav::Top).Contain(f.width - 2, navRow));
+
+        // 按钮所在行同样是 Tip 消息的命中行: 点按钮只跳转, 不折叠该消息
+        XX_TEST_EXPECT_TRUE(clickNav(f, Nav::Top));
+        auto snap = f.sharedState.readSnapshot();
+        XX_TEST_EXPECT_TRUE(!snap->messages.empty());
+        XX_TEST_EXPECT_FALSE(snap->messages[0]->collapsed);
+
+        // 点消息区域 (非按钮列) 仍然折叠该消息
+        ftxui::Mouse m;
+        m.button = ftxui::Mouse::Left;
+        m.motion = ftxui::Mouse::Released;
+        m.x      = 10;
+        m.y      = navRow;
+        XX_TEST_EXPECT_TRUE(f.comp->OnEvent(ftxui::Event::Mouse("", m)));
+        snap = f.sharedState.readSnapshot();
+        XX_TEST_EXPECT_TRUE(snap->messages[0]->collapsed);
+    }
+
+    // ---- 空列表 (banner): 无可跳转目标, 不画按钮也不登记命中 ----
+    {
+        ScrollFixture f;
+        f.render();
+        XX_TEST_EXPECT_TRUE(f.comp->navButtonBox(Nav::Top).IsEmpty());
+        XX_TEST_EXPECT_TRUE(f.comp->navButtonBox(Nav::PrevUser).IsEmpty());
+        XX_TEST_EXPECT_TRUE(f.comp->navButtonBox(Nav::NextUser).IsEmpty());
+        XX_TEST_EXPECT_TRUE(f.comp->navButtonBox(Nav::Bottom).IsEmpty());
+
+        ftxui::Mouse m;
+        m.button = ftxui::Mouse::Left;
+        m.motion = ftxui::Mouse::Released;
+        m.x      = f.width - 2; // 有消息时按钮列所在列
+        m.y      = 0;
+        XX_TEST_EXPECT_FALSE(f.comp->OnEvent(ftxui::Event::Mouse("", m)));
+    }
+
+    // ---- 消息区高度不足: 先退化为紧凑排列 (无间隔), 仍放不下时少画下面的按钮 ----
+    {
+        // 6 行: 放不下带间隔的 7 行, 退化为 4 个按钮紧凑排列 (全部保留)
+        ScrollFixture f;
+        f.height = 6;
+        buildList(f);
+        f.render();
+        const ftxui::Box boxTop  = f.comp->navButtonBox(Nav::Top);
+        const ftxui::Box boxPrev = f.comp->navButtonBox(Nav::PrevUser);
+        const ftxui::Box boxNext = f.comp->navButtonBox(Nav::NextUser);
+        const ftxui::Box boxBot  = f.comp->navButtonBox(Nav::Bottom);
+        XX_TEST_EXPECT_FALSE(boxTop.IsEmpty());
+        XX_TEST_EXPECT_FALSE(boxPrev.IsEmpty());
+        XX_TEST_EXPECT_FALSE(boxNext.IsEmpty());
+        XX_TEST_EXPECT_FALSE(boxBot.IsEmpty());
+        XX_TEST_EXPECT_EQ(boxPrev.y_min - boxTop.y_min, 1); // 紧凑排列 (无空行)
+        XX_TEST_EXPECT_EQ(boxTop.y_min, (f.height - 4) / 2); // 仍居中
+        XX_TEST_EXPECT_EQ(boxBot.y_min, boxTop.y_min + 3);
+    }
+    {
+        // 3 行: 只能放下前 3 个, 第 4 个 (▼) 不画也不登记命中
+        ScrollFixture f;
+        f.height = 3;
+        buildList(f);
+        f.render();
+        XX_TEST_EXPECT_FALSE(f.comp->navButtonBox(Nav::Top).IsEmpty());
+        XX_TEST_EXPECT_FALSE(f.comp->navButtonBox(Nav::PrevUser).IsEmpty());
+        XX_TEST_EXPECT_FALSE(f.comp->navButtonBox(Nav::NextUser).IsEmpty());
+        XX_TEST_EXPECT_TRUE(f.comp->navButtonBox(Nav::Bottom).IsEmpty()); // 第 4 行在消息区外
+
+        // 画出来的按钮仍可用
+        XX_TEST_EXPECT_TRUE(clickNav(f, Nav::Top));
+        f.render();
+        XX_TEST_EXPECT_EQ(f.comp->anchorIndex(), size_t{0});
+    }
+}
+
 TestResult testTuiScroll() {
     XX_TEST_EXPECT_TRUE(true);
 
@@ -664,6 +1006,9 @@ TestResult testTuiScroll() {
     testRoleLabelLocalization();
 
     testBannerRetryButtonHitArea();
+
+    // 消息列表右侧跳转按钮列 (▲ - + ▼)
+    testNavStripButtons();
 
     // markdown 列表文本的拖选复制 (列表悬挂缩进 / 行内空白列上的端点)
     testMarkdownListTextCopy();
@@ -2273,7 +2618,10 @@ TestResult testTuiScroll() {
         const int placeRow = screenRowOf(stripAnsiCodes(frame), "receiving tool call...");
         XX_TEST_EXPECT_TRUE(bodyRow >= 0);
         XX_TEST_EXPECT_EQ(placeRow - bodyRow, 2);
-        XX_TEST_EXPECT_TRUE(isBlankRow(screenRowText(stripAnsiCodes(frame), bodyRow + 1)));
+        XX_TEST_EXPECT_TRUE(isContentBlankRow(
+            screenRowText(stripAnsiCodes(frame), bodyRow + 1),
+            ScrollFixture::kWidth
+        ));
 
         // 降级路径 (动画等级不足, 流式整段 paragraph 单子项) 同样要有空行
         settings.setAnimationLevel(AnimationLevel::Disabled);

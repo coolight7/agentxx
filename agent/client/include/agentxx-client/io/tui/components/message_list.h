@@ -10,6 +10,7 @@
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/box.hpp"
 #include "utilxx_base/json.h"
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <map>
@@ -43,6 +44,8 @@ namespace agentxx::client {
 ///
 /// 事件处理:
 /// - 滚轮: 由内部 LazyScrollable 处理
+/// - 左键点击右侧跳转按钮列 (自上而下 `▲ - + ▼`): 顶部 / 上一条用户消息 /
+///   下一条用户消息 / 底部 (见 [NavButton])
 /// - 左键点击 Think/Tool 消息: 折叠/展开
 /// - 左键点击中断输入消息的控件: 由 InterruptView 按中断 UI 描述通用处理
 ///   (值按钮/枚举/数值步进/输入框/勾选项/确认/取消); 键盘 (字符/Backspace/
@@ -55,6 +58,17 @@ public:
 
     /// 中断输入项表单状态 (转发自 InterruptView::FormState)
     using InterruptUIState = agentxx::client::InterruptView::FormState;
+
+    /// 消息列表右侧跳转按钮 (顺序即自上而下的排列顺序; 按钮之间空一行, 整组竖直居中)
+    enum class NavButton : size_t {
+        Top      = 0, ///< `▲`: 跳到消息列表顶部 (同时解除吸附底部)
+        PrevUser = 1, ///< `-`: 跳到视口上方最近的一条用户消息
+        NextUser = 2, ///< `+`: 跳到视口下方最近的一条用户消息
+        Bottom   = 3, ///< `▼`: 跳到消息列表底部 (同时恢复吸附底部)
+    };
+
+    /// 跳转按钮数量 (`▲ - + ▼`)
+    static constexpr size_t kNavButtonCount = 4;
 
     /// decor 按钮命中检测 (UI 线程独占; 与中断控件命中区域同生命期):
     /// - OnRender 开头清空, 本帧 scrollable_->Render() 中构建可见 Tool 消息的
@@ -143,6 +157,22 @@ public:
     ///   (TUIRenderState::streamThinkOverride, 流提交落盘时据此保持用户选择)
     bool handleCollapsibleClick(const ftxui::Mouse& mouse);
 
+    /// 处理右侧跳转按钮列点击 (`▲ - + ▼`; 供 OnEvent 与外部调用)
+    ///
+    /// 判定必须**先于** [handleCollapsibleClick]: 折叠判定只按行比较
+    /// (命中区域为上一帧反推的整行), 放在其后会把按钮点击当成"折叠该行消息"。
+    bool handleNavButtonClick(const ftxui::Mouse& mouse);
+
+    /// 测试辅助: 指定跳转按钮最近一次布局的命中区域
+    /// (空 Box = 本帧未画出: 空列表 banner, 或消息区高度不足放不下该按钮)
+    ftxui::Box navButtonBox(NavButton button) const;
+
+    /// 测试辅助: 视口顶行所在子项下标
+    /// (消息下标; 流式区/生成占位提示项的下标 >= 消息数)
+    size_t anchorIndex() const {
+        return scrollable_->anchorIndex();
+    }
+
     /// 测试辅助: 中断消息块的高度估算 (行数; 不含消息尾部空行)
     size_t interruptEstimate(size_t msgIndex, int width) const;
 
@@ -216,6 +246,43 @@ public:
     }
 
 private:
+
+    // ---- 右侧跳转按钮列 (`▲ - + ▼`) ----
+
+    /// 跳转按钮列状态 (绘制节点布局时写回各按钮屏幕区域, 组件读取)
+    ///
+    /// 用 shared_ptr 共享: 元素 (节点) 在帧末析构, 而点击事件发生在其后 ——
+    /// 命中区域必须活到下一次事件处理 (与 [DecorHitBox::box] / [OwnedReflect]
+    /// 同一理由); 节点每次布局都会重填全部区域, 未画出的按钮留在 [kNoBox]。
+    struct NavStripState {
+        /// 各按钮本帧的屏幕区域 (下标即 [NavButton])
+        std::array<ftxui::Box, kNavButtonCount> boxes;
+
+        NavStripState() {
+            // 不要用默认构造的 ftxui::Box{} 表示"未画出": 它的四个分量都是 0,
+            // 会把屏幕左上角当成命中 (见 ui_hit.h 的 kNoBox 说明)
+            boxes.fill(kNoBox);
+        }
+    };
+
+    /// 跳转按钮列的绘制节点 (定义见 .cpp; 自绘 1 列按钮字符)
+    class NavStripNode;
+
+    /// 构建右侧跳转按钮列: 1 列宽, 自上而下绘制 `▲ - + ▼` (按钮之间空一行,
+    /// 整组在消息区竖直居中); 空列表 banner 状态无可跳转目标, 不画也不登记命中
+    ftxui::Element buildNavStrip();
+
+    /// 执行跳转按钮动作
+    void activateNavButton(NavButton button);
+
+    /// 视口顶行上方最近的一条用户消息下标 (无则返回 npos)
+    ///
+    /// 视口顶行落在某条消息中间 (锚点行偏移 > 0) 时该条自身也是候选:
+    /// 跳转 = 把它的首行对齐到视口顶 (等于把被裁掉的上半段滚回来), 再按一次
+    /// 才继续往上找更早的用户消息。
+    size_t prevUserMessageIndex() const;
+    /// 视口顶行下方最近的一条用户消息下标 (无则返回 npos)
+    size_t nextUserMessageIndex() const;
 
     std::vector<DecorHitBox> decorHits_;
 
@@ -341,6 +408,9 @@ private:
 
     TUICtx&                         ctx_;
     std::shared_ptr<LazyScrollable> scrollable_;
+
+    /// 右侧跳转按钮的命中区域 (`▲ - + ▼`; 见 [NavStripState])
+    std::shared_ptr<NavStripState> navStrip_ = std::make_shared<NavStripState>();
 
     /// 运行中 tool/think 头部加载动画 (动画等级 >= High 时替代 "+/-" 静态标识):
     /// 复用输入框前缀的 SpinnerComponent (braille 旋转点阵), requiredLevel=High;

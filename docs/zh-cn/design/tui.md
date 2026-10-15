@@ -131,7 +131,7 @@
 
 | 组件 | 文件 | 说明 |
 |------|------|------|
-| `MessageListComponent` | [components/message_list.h](/agent/client/include/agentxx-client/io/tui/components/message_list.h) | 消息列表 (LazyScrollable), 折叠/中断表单/附件/decor 按钮 |
+| `MessageListComponent` | [components/message_list.h](/agent/client/include/agentxx-client/io/tui/components/message_list.h) | 消息列表 (LazyScrollable), 折叠/中断表单/附件/decor 按钮/右侧跳转按钮列 (`▲ - + ▼`, 见 §2.15) |
 | `InputComponent` | [components/input_bar.h](/agent/client/include/agentxx-client/io/tui/components/input_bar.h) | 输入框 + 附件托盘 + 待发队列行 |
 | `StatusBarComponent` | [components/status_bar.h](/agent/client/include/agentxx-client/io/tui/components/status_bar.h) | 状态栏 (模型/上下文/插件项/会话/设置) |
 | `SidebarComponent` | [components/sidebar.h](/agent/client/include/agentxx-client/io/tui/components/sidebar.h) | 侧边栏 (内容区 + tabs 列表 + 宽度拖拽) |
@@ -617,6 +617,45 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
   `syncStream`, 这两个值会停留在上一流的状态 (增量模式的思考流留下头部项),
   使占位项的下标被推到列表末尾之外 —— 占位提示不显示, 该位置留下上一流的空头部行
 
+### 2.15 消息列表右侧跳转按钮列 (`▲ - + ▼`)
+
+长对话里"回到顶部 / 找到自己上一条消息"原先只能连续滚轮, 消息列表右侧因此有一条常驻的
+跳转按钮列 ([MessageListComponent](/agent/client/include/agentxx-client/io/tui/components/message_list.h)
+的 `NavButton`), 自上而下四个按钮, **相邻按钮之间空一行, 整组在消息区竖直居中**:
+
+| 按钮 | 含义 | 实现 |
+|------|------|------|
+| `▲` | 跳到列表顶部 | `LazyScrollable::scrollToIndex(0)` (同时解除吸附底部) |
+| `-` | 跳到**视口上方**最近的一条用户消息 | 视口顶行所在子项被裁掉上半段时 (锚点行偏移 > 0) 它自身也参与候选; 上方没有用户消息时退化为跳到顶部 |
+| `+` | 跳到**视口下方**最近的一条用户消息 | 视口顶行那一条自身不重复跳; 下方没有用户消息时退化为跳到底部 |
+| `▼` | 跳到列表底部 | `LazyScrollable::scrollToBottom()` (恢复吸附底部: 之后到达的新内容继续跟随) |
+
+- 字形选择: `▲`/`▼` 与中间的 `-`/`+` 一眼能区分, 二者都是单列宽符号
+  (见 `markdown::codepoint_width`) 且常见终端字体都有对应字形; 换 `↑`/`↓` 或 `⇑`/`⇓`
+  只需改 `kNavButtonGlyphs` 一处
+- 位置: 消息列表右侧留白中的中间那一列 (布局 `[留白 3][列表][留白 1][按钮列][留白 1]`),
+  固定列数合计仍是 6 列 —— 消息内容宽度与加这列之前完全一致, 已缓存的换行/高度结果不失效
+- 按钮列用**自绘节点** (`MessageListComponent::NavStripNode`), 不是 `vbox` 里放 4 个
+  `text`: 消息区高度可能小于按钮组 (终端很矮 / 输入框与状态栏占位大), vbox 会把放不下的
+  按钮排在盒子之外 —— 那些坐标落在相邻组件 (输入框/状态栏) 上, 屏幕出现"幽灵按钮";
+  自绘只画落在自己盒子内的按钮, 消息区放不下"按钮 + 间隔"时先退化为紧凑排列 (4 个都在),
+  再不够时从下往上少画 (同时不登记其命中区域)
+- 命中区域与绘制在同一次布局里写回 (`NavStripState`, 节点与组件共享; 元素帧末析构而
+  点击发生在后, 故用 shared_ptr 持有): 点中的一定就是屏幕上画出来的那一个。
+  每个按钮的命中区域含它下方的那一行间隔 (点空白行也算点这个按钮, 相邻区域不重叠) ——
+  避免"点在按钮旁边的空行上"落到消息列表的折叠判定里。
+  排版上按钮列必须**先于折叠判定**处理 —— 折叠判定只按行比较, 排在它之后会把按钮点击
+  当成"折叠该行消息"
+- 点击只记"要跳到哪一条" (`scrollToIndex` 待落实标记), 定位在下一次布局落实 (与滚轮
+  累积行数同一条路径): 事件期不做跨条目实测/构建 (那会丢命中登记, 见 §3.3.2)
+- 只按**内存里已有的消息**计算: 历史分页未加载完时 `-`/`+` 得到的就是当前窗口里的
+  上/下一条 (找不到时分别退化为顶部/底部), 不会为跳转去请求更早的历史; 分页仍由滚动
+  接近窗口顶部时的预取驱动 (见 §3.3.2)
+- 空列表 (banner) 不画按钮也不登记命中 (没有可跳转的目标); 列本身照旧占位, 有无内容时
+  消息内容宽度一致
+- 相关测试: `agentxx_test tui_scroll` 的跳转按钮场景 (布局与字符顺序、居中与间隔、
+  四类点击、两条退化路径、同行折叠消息不被误折叠、空列表、消息区高度不足的两种退化)
+
 ---
 
 ## 3. 必须遵守的约束
@@ -756,6 +795,10 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
   的最后一行; 内容底部已进入视口时下滚恢复吸附底部, 上滚即解除吸附。
   **不在事件里构建元素**: 构建会登记命中区 (decor 按钮/中断控件), 而每帧 `OnRender`
   会清空登记表, 事件期构建的元素其命中区会丢 (同一元素不再重建) -> 按钮点击失效。
+- **跳转 (顶部 / 底部 / 指定条目)**: 外部按钮 (消息列表右侧的 `▲ - + ▼`, 见 §2.15) 走
+  `scrollToIndex` / `scrollToBottom` —— 与滚轮同一套落实路径 (事件期只记标记, 下一次
+  布局改锚点), 区别是锚点**整条对齐目标首行**, 不逐行移动、不在事件期实测目标高度;
+  目标上方未实测条目按粗略估算计入锚点以上高度和, 只影响滚动条长度。
 - **前插 (历史分页)**: `notifyPrepended` 把并行数组与锚点索引一起平移, 视口内容零
   跳变, 不需要任何"偏移校正"状态; 新增区高度在下一帧按新快照补齐 (位于锚点上方,
   只影响滚动条长度)。

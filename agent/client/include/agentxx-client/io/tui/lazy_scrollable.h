@@ -77,6 +77,12 @@ struct LazyBuiltItem {
 /// 不构建子项 Element, 避免 OnEvent 期构建的元素其命中登记被下一帧
 /// OnRender 的清理动作丢掉 (详见 prepareLayout 注释)。
 ///
+/// ### 跳转 (顶部 / 底部 / 指定子项)
+///
+/// [scrollToIndex] / [scrollToBottom] 与滚轮同一套落实路径 (事件期只记标记,
+/// 下一次布局改锚点): 锚点整条对齐目标首行, 不逐行移动, 也不在事件期实测
+/// 目标高度 —— 因此历史分页只加载了一部分时, 跳转按"内存里已有的条目"定位。
+///
 /// ### 内容收缩后的回夹 (底部不留白)
 ///
 /// 内容变短 (如展开的长消息被折叠) 后视口可能停在"从锚点到内容末尾不足一屏"
@@ -203,6 +209,20 @@ public:
     /// 吸附底部状态下调用后, 下一帧仍会按尾部窗口重新确定锚点。
     void resetAnchorState();
 
+    /// 跳转到指定子项: 视口顶行对齐该子项的首行 (同时解除吸附底部)
+    ///
+    /// - 目标索引超界时夹到最后一项; 列表为空时无动作 (跳转标记被丢弃)
+    /// - 目标子项高度未实测时按粗略估算定位, 它进入视口被实测后自行修正 ——
+    ///   对"只加载了一部分的历史"因此只保证跳到内存里已有的那一条
+    /// - 实际落实在**下一次布局** (与滚轮累积行数同一条路径): 事件期只记目标,
+    ///   不做跨条目实测 —— 事件期构建元素会丢命中登记 (见 OnEvent 注释)
+    /// - 跳到底部请用 [scrollToBottom] (本方法会解除吸附底部, 之后到达的
+    ///   新内容不再跟随)
+    void scrollToIndex(size_t index);
+
+    /// 跳到底部 (恢复吸附底部: 之后到达的新内容继续跟随), 丢弃未落实的跳转标记
+    void scrollToBottom();
+
     /// 清除可见子项残留的鼠标选中高亮 (Text::has_selection_)。
     ///
     /// 背景: 本组件为懒构建/局部布局, 跳过 FTXUI 每帧的 ComputeRequirement
@@ -218,6 +238,9 @@ public:
     bool           OnEvent(ftxui::Event event) override;
 
 private:
+
+    /// "无目标" 标记 (与有效子项下标区分; 见 [scrollToIndex])
+    static constexpr size_t kNoItem = static_cast<size_t>(-1);
 
     class ListViewNode; // 视口布局节点 (嵌套类可访问私有成员; 定义见 .cpp)
 
@@ -340,6 +363,9 @@ private:
     // ---- 滚动状态 (锚点即主状态) ----
     /// 视口顶行所在子项索引
     size_t anchorIndex_ = 0;
+    /// 待落实的跳转目标 ([scrollToIndex]; kNoItem = 无): 事件期只记标记,
+    /// 由下一次 prepareLayout 落实 (同轮滚行数, 见 [applyPendingScrollRows])
+    size_t pendingJumpIndex_ = kNoItem;
     uint64_t prepareSeq_ = 0;     // prepareLayout 次数 (key 校验帧标记)
     size_t                                           cachedBytes_ = 0;
     /// 视口顶行在该子项内的行号 (0 <= 值 < 高度(anchor))

@@ -138,6 +138,10 @@ struct InterruptFixture {
 
     /// 渲染并统计内容占据的行数 (首/末非空行之间的跨度, 含内部空行):
     /// 用于校验"估算 == 实测" (消息块 = 内容行 + 尾部空行)
+    ///
+    /// 只统计**消息内容区**: 右侧留白 3 列里是滚动条 gutter 与跳转按钮列
+    /// (`▲ - + ▼`, 每帧固定画在消息区中部), 它们是版面装饰不是内容 ——
+    /// 计入会把任何短消息的行数跨度都撑成整个消息区
     size_t renderedRows(int width = 120, int height = 60) {
         ctx.frameState = sharedState.readSnapshot();
         auto el        = comp->Render();
@@ -146,11 +150,12 @@ struct InterruptFixture {
             ftxui::Dimension::Fixed(height)
         );
         ftxui::Render(screen, el);
-        int first = -1;
-        int last  = -1;
+        const int contentXMax = std::max(0, width - 4); // 去掉右侧留白 3 列
+        int       first       = -1;
+        int       last        = -1;
         for (int y = 0; y < height; ++y) {
             std::string line;
-            for (int x = 0; x < width; ++x) {
+            for (int x = 0; x <= contentXMax; ++x) {
                 line += screen.PixelAt(x, y).character;
             }
             if (line.find_first_not_of(' ') != std::string::npos) {
