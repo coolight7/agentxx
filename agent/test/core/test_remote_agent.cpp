@@ -3385,14 +3385,22 @@ static asio::awaitable<void> test_session_controller_message_queue() {
 
     auto sc = std::make_shared<agentxx::agent::SessionServerAgentIO>(ex, agent, scCfg);
 
-    auto [clientT, serverT] = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
-    sc->setTransport(std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT)));
+    // 两侧传输都用 shared_ptr 持有: 分离协程 (客户端接收循环/端点循环) 可能在用例
+    // 返回之后才被唤醒, 传输对象必须活得比用例栈长, 否则唤醒时访问已析构对象
+    // (ASan: heap-use-after-free)。用例返回前会等三条协程全部退出 (见收尾)
+    auto pair = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+    std::shared_ptr<agentxx::agent::AgentIOTransportBase> clientT = std::move(pair.first);
+    std::shared_ptr<agentxx::agent::AgentIOTransportBase> serverT = std::move(pair.second);
+    sc->setTransport(serverT);
+    serverT.reset(); // 端点接管 (transport_ + clients_), 用例不再持有
 
     std::vector<agentxx::agent::WireMessageQueueUpdate> queueUpdates;
     std::vector<agentxx::agent::WireTurnResult>         turnResults;
     std::mutex                                          mu;
 
     std::atomic<bool> clientLoopExited{false};
+    std::atomic<bool> transportLoopExited{false};
+    std::atomic<bool> runLoopExited{false};
     // 分离协程的闭包对象不入帧 (帧里只有 this 指针), 故经 keepAliveRun 按值入帧保活;
     // 用例返回前还会等它退出, 因此这里按引用捕获用例局部量是安全的
     auto clientLoop = [&]() -> asio::awaitable<void> {
@@ -3421,15 +3429,17 @@ static asio::awaitable<void> test_session_controller_message_queue() {
     asio::co_spawn(ex, keepAliveRun(clientLoop), asio::detached);
     asio::co_spawn(
         ex,
-        keepAliveRun([sc]() -> asio::awaitable<void> {
+        keepAliveRun([sc, &transportLoopExited]() -> asio::awaitable<void> {
             co_await sc->runTransportLoop();
+            transportLoopExited.store(true, std::memory_order_release);
         }),
         asio::detached
     );
     asio::co_spawn(
         ex,
-        keepAliveRun([sc]() -> asio::awaitable<void> {
+        keepAliveRun([sc, &runLoopExited]() -> asio::awaitable<void> {
             co_await sc->run();
+            runLoopExited.store(true, std::memory_order_release);
         }),
         asio::detached
     );
@@ -3516,15 +3526,23 @@ static asio::awaitable<void> test_session_controller_message_queue() {
         }
     }
 
-    // 收尾: 关闭传输并等接收循环退出 (分离协程可能在用例返回之后才被唤醒,
-    // 那时用例栈上的 mu/queueUpdates/turnResults 已析构, 见 keepAliveRun 说明)
+    // 收尾: 关闭传输并等三条分离协程全部退出 (分离协程可能在用例返回之后才被唤醒,
+    // 那时用例栈上的 mu/queueUpdates/turnResults 已析构, 见 keepAliveRun 说明;
+    // 也必须在返回前退干净, 否则端点与传输对象会留在分离协程帧里变成内存泄漏)
     clientT->close();
     sc->stop();
     sim.stop();
-    for (int i = 0; i < 50 && !clientLoopExited.load(std::memory_order_acquire); ++i) {
+    for (int i = 0; i < 200; ++i) {
+        if (clientLoopExited.load(std::memory_order_acquire)
+            && transportLoopExited.load(std::memory_order_acquire)
+            && runLoopExited.load(std::memory_order_acquire)) {
+            break;
+        }
         co_await testSleep(ex, std::chrono::milliseconds{10});
     }
     XX_TEST_EXPECT_TRUE(clientLoopExited.load(std::memory_order_acquire));
+    XX_TEST_EXPECT_TRUE(transportLoopExited.load(std::memory_order_acquire));
+    XX_TEST_EXPECT_TRUE(runLoopExited.load(std::memory_order_acquire));
     co_return;
 }
 

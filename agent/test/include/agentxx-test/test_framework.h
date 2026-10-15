@@ -66,6 +66,58 @@ inline std::optional<std::filesystem::path> executableDir() {
 #endif
 }
 
+/// agent 源码根目录 (含 `lib`/`client`/`plugins`/`test`), 供需要读源码的模块自检
+/// (config_keys 扫 `client/src/config_loader.cpp` 的键名, boundaries 查分层规则)
+///
+/// 解析按顺序取第一个通过目录特征校验的候选:
+/// 1. `AGENTXX_TEST_SOURCE_ROOT` —— 构建期写入的绝对路径 (最可靠);
+/// 2. `__FILE__` 推导 —— 没有该宏时的回退, 要求编译器收到的是绝对路径; 构建脚本
+///    打开的 ccache 归一化 (`CCACHE_BASEDIR`) 会把源文件参数改写成相对路径,
+///    此时 `__FILE__` 相对**当前工作目录**, 从构建产物目录运行推不出源码树;
+/// 3. 当前工作目录向上回溯 —— 手工在源码树内运行的兜底。
+///
+/// - `return` 找不到返回空路径, 调用方按"跳过"或"环境未就绪"处理, 不误报失败
+inline std::filesystem::path sourceRootDir() {
+    namespace fs = std::filesystem;
+    auto looksLikeRoot = [](const fs::path& p) {
+        std::error_code ec;
+        return !p.empty() && fs::is_directory(p / "lib" / "include", ec)
+               && fs::is_directory(p / "client", ec) && fs::is_directory(p / "test", ec)
+               && fs::is_directory(p / "plugins", ec);
+    };
+    std::vector<fs::path> candidates;
+#ifdef AGENTXX_TEST_SOURCE_ROOT
+    candidates.emplace_back(AGENTXX_TEST_SOURCE_ROOT);
+#endif
+    candidates.emplace_back(std::filesystem::path{__FILE__}.parent_path());
+    {
+        std::error_code ec;
+        candidates.push_back(fs::current_path(ec));
+    }
+    for (const auto& candidate : candidates) {
+        std::error_code ec;
+        auto            dir = fs::weakly_canonical(candidate, ec);
+        if (ec) {
+            dir = candidate;
+        }
+        for (auto p = dir; !p.empty() && p != p.root_path(); p = p.parent_path()) {
+            if (looksLikeRoot(p)) {
+                return p;
+            }
+        }
+    }
+    return {};
+}
+
+/// 源码树内的文件路径; 源码根目录解析失败时返回空路径
+inline std::filesystem::path sourceFilePath(std::string_view relative) {
+    const auto root = sourceRootDir();
+    if (root.empty()) {
+        return {};
+    }
+    return root / std::filesystem::path{std::string{relative}};
+}
+
 /// 清除模型 API 凭据类环境变量
 ///
 /// 目的: 本机装有真实 API key 时, 任何"顺带发一次请求"的代码路径都会打线上服务

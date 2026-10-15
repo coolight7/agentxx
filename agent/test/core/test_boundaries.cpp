@@ -132,23 +132,11 @@ void reportViolations(std::string_view rule, const Violations& v, size_t maxPrin
 }
 
 /// agent 源码根目录 (即 `agent/`, 内含 lib/client/plugins/test)
-/// - 由 `__FILE__` 推导: CMake 以绝对路径传入源文件, 故
-///   `{agent}/test/core/test_boundaries.cpp` 去掉三层即得 `{agent}`
-/// - 向上回溯校验目录特征 (lib+client+test 同时存在), 兼容不同构建布局;
+/// - 解析规则见 test_framework.h 的 [agentxx::test::sourceRootDir] (构建期宏优先,
+///   `__FILE__` 只是回退 —— ccache 归一化会让它变成相对路径);
 ///   找不到时返回空路径 (测试跳过并给出提示, 不误报失败)
 fs::path agentSourceRoot() {
-    std::error_code ec;
-    auto            dir = fs::weakly_canonical(fs::path{__FILE__}, ec);
-    if (ec) {
-        dir = fs::path{__FILE__};
-    }
-    for (auto p = dir.parent_path(); !p.empty() && p != p.root_path(); p = p.parent_path()) {
-        if (fs::is_directory(p / "lib" / "include", ec) && fs::is_directory(p / "client", ec)
-            && fs::is_directory(p / "test", ec) && fs::is_directory(p / "plugins", ec)) {
-            return p;
-        }
-    }
-    return {};
+    return agentxx::test::sourceRootDir();
 }
 
 // ---------------------------------------------------------------------------
@@ -1259,7 +1247,9 @@ void checkInterfaceTableCount(const fs::path& root, Violations& v) {
 TestResult testBoundaries() {
     const auto root = agentSourceRoot();
     if (root.empty()) {
-        TEST_SKIP << "boundaries: agent 源码根目录未找到 (从 __FILE__ 推导失败), 跳过" << std::endl;
+        TEST_SKIP << "boundaries: agent 源码根目录未找到 (检查构建是否传入 "
+                     "AGENTXX_TEST_SOURCE_ROOT), 跳过"
+                  << std::endl;
         return TestResult{0, 0};
     }
     TEST_INFO << "boundaries: agent 源码根 = " << toGeneric(root) << std::endl;

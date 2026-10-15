@@ -86,6 +86,14 @@ path/to/agentxx_test -f
 # - 测试模块名称定义见 `agent/test/test.cpp`
 path/to/agentxx_test string_util regex
 ```
+    - 少数模块要读源码本身做自检 (`config_keys` 扫 `client/src/config_loader.cpp` 的键名、
+      `boundaries` 查分层规则): 源码根目录经构建期宏 `AGENTXX_TEST_SOURCE_ROOT` 传入
+      (解析见 `test_framework.h` 的 `sourceRootDir`/`sourceFilePath`), **不能**用 `__FILE__`
+      直接推导 —— 构建脚本打开的 ccache 归一化 (`CCACHE_BASEDIR`) 会把编译器收到的源文件
+      路径改写成相对路径, `__FILE__` 跟着变相对, `boundaries` 会静默跳过、`config_keys` 扫到 0 个键
+    - 堆用量类断言 (如 `ftxui_text` 的渲染树内存上界) 在 ASan 构建下必须用 ASan 自己的
+      分配计数 (`__sanitizer_get_current_allocated_bytes`): ASan 接管分配器后
+      `mallinfo2`/malloc zone/CRT 存活分配都读不到它的内存 (读数恒 0)
 - `agent/benchmark`: 编译结果 {build}/exec/agentxx_benchmark
     - 性能测试（一般仅 release 启用编译该模块）
     - 资源基准 (resource_* 模块, 详见 docs/zh-cn/design/benchmark.md):
