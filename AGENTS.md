@@ -383,6 +383,12 @@ path/to/agentxx_test string_util regex
 - 工具错误约定: 参数检查失败抛 `std::invalid_argument`、运行期错误抛 `std::runtime_error`,
   由 `ToolcallWrapNode` 统一格式化为 `[Exception aborted: <msg>]` 结果文本; 插件侧在 SDK 边界捕获并上报
   FAILED (取消上报 CANCELLED); 不要返回 `{"error": ...}` 形态
+- 队列输入分页 (2026-10): 队列里的用户消息进入轮次时 (BaseAgent::runTurnAsync) 检查单条长度,
+  达到 `AgentConfig::userInputSummaryLimitLength` (默认 8K utf8 字符, 0=关闭) 即把原文经
+  share store 卸载, LLM 上下文只留开头片段 + `agentxx_share_store` 取回提示 (模型按行取回);
+  **展示历史与 TurnStart 回显保留完整原文** (只压缩模型看到的那份);
+  与 toolcall 输出压缩共用同一实现/提示格式 (agentxx::util::offloadShareStoreIfOversized),
+  阈值与判定见装配快照 `limits.user_input_summary_limit`
 - markdown 代码块折行: FTXUI 对超出盒宽的元素是裁剪而非折行, 故 ``` 围栏内容在构建期
   按显示宽度折行 (`markdown::wrap_line_by_width`, 见 markdown_ftxui 的 `build_code_block`):
   折行宽度 = 可用宽度 - 左右各 1 列内边距 - 外层缩进 (块引用每层 2 列 / 列表项前缀,

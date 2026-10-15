@@ -323,6 +323,55 @@ bool contextHasText(
     return false;
 }
 
+/// 会话上下文里最后一条 user 消息的内容 (无 user 消息时为空串)
+std::string lastUserMessage(
+    const std::shared_ptr<agentxx::agent::BaseAgent>& agent,
+    std::string_view                                  sessionId
+) {
+    auto session = agent->agentContext->sessions->get(sessionId);
+    if (!session) {
+        return {};
+    }
+    const auto& messages = session->messages();
+    for (auto it = messages.rbegin(); it != messages.rend(); ++it) {
+        if (it->role == "user") {
+            return it->content;
+        }
+    }
+    return {};
+}
+
+/// 从分页提示里取出 share store id (`... by ID 12. ...`); 没有提示时返回 0
+size_t shareStoreIdInText(std::string_view text) {
+    const auto pos = text.find("by ID ");
+    if (pos == std::string_view::npos) {
+        return 0;
+    }
+    size_t id = 0;
+    for (size_t i = pos + 6; i < text.size() && text[i] >= '0' && text[i] <= '9'; ++i) {
+        id = id * 10 + static_cast<size_t>(text[i] - '0');
+    }
+    return id;
+}
+
+/// 展示历史 (viewMessages) 里是否存在包含指定文本的消息
+bool viewMessagesHasText(
+    const std::shared_ptr<agentxx::agent::BaseAgent>& agent,
+    std::string_view                                  sessionId,
+    std::string_view                                  text
+) {
+    auto session = agent->agentContext->sessions->get(sessionId);
+    if (!session) {
+        return false;
+    }
+    for (const auto& vm : session->getFullViewMessagesCopy()) {
+        if (vm.text.find(text) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // ---------------------------------------------------------------------------
 // 1. 投递结果显式化: started / queued / rejected
 // ---------------------------------------------------------------------------
@@ -970,6 +1019,69 @@ asio::awaitable<void> test_session_file_created_on_first_input() {
     co_return;
 }
 
+// ---------------------------------------------------------------------------
+// 10. 队列输入单条过长: 经 share store 分页 (展示历史保留原文)
+// ---------------------------------------------------------------------------
+
+asio::awaitable<void> test_oversized_input_offload() {
+    auto fx = co_await makeFixture("offload-test-session", {}, "offload response");
+    // 阈值调小便于构造超长输入 (默认 8K 字符)
+    fx->cfg->userInputSummaryLimitLength = 512;
+
+    // ① 短输入: 原样进入上下文, 不产生分页提示
+    fx->send("short input", std::string{agentxx::agent::InputDelivery::NextTurn}, 1);
+    XX_TEST_EXPECT_TRUE(co_await waitFor([&] {
+        return fx->recorder->turnResults.load() >= 1;
+    }));
+    XX_TEST_EXPECT_TRUE(contextHasText(fx->agent, fx->sessionId, "short input"));
+    XX_TEST_EXPECT_TRUE(!contextHasText(fx->agent, fx->sessionId, "Content offloaded"));
+
+    // ② 超长输入 (多行): 上下文只留开头片段与取回提示, 原文进 share store
+    std::string longInput;
+    for (int i = 1; i <= 120; ++i) {
+        longInput += fmt::format("payload line {:03d}\n", i);
+    }
+    const auto tailMarker = std::string{"payload line 120"};
+    fx->send(longInput, std::string{agentxx::agent::InputDelivery::NextTurn}, 2);
+    XX_TEST_EXPECT_TRUE(co_await waitFor([&] {
+        return fx->recorder->turnResults.load() >= 2;
+    }));
+
+    XX_TEST_EXPECT_TRUE(contextHasText(fx->agent, fx->sessionId, "Content offloaded"));
+    XX_TEST_EXPECT_TRUE(contextHasText(fx->agent, fx->sessionId, "payload line 001"));
+    XX_TEST_EXPECT_TRUE(!contextHasText(fx->agent, fx->sessionId, tailMarker));
+    // 发给模型的请求里同样只有分页后的内容
+    XX_TEST_EXPECT_TRUE(g_da_sim_last_request.dump().find(tailMarker) == std::string::npos);
+
+    // 展示历史保留完整原文 (用户看到的是自己发的内容)
+    XX_TEST_EXPECT_TRUE(viewMessagesHasText(fx->agent, fx->sessionId, tailMarker));
+
+    // 提示里的 id 能取回完整原文
+    const auto userText = lastUserMessage(fx->agent, fx->sessionId);
+    XX_TEST_EXPECT_TRUE(userText.find("[Content offloaded.") == 0);
+    const auto storeId = shareStoreIdInText(userText);
+    XX_TEST_EXPECT_TRUE(storeId > 0);
+    auto stored
+        = fx->agent->agentContext->middlewareHandleContext->getShareStoreItemValue(
+            fx->sessionId,
+            storeId
+        );
+    XX_TEST_EXPECT_TRUE(stored.has_value());
+    XX_TEST_EXPECT_EQ(stored.value_or(std::string{}), longInput);
+
+    // ③ 阈值 0 = 关闭压缩: 超出原阈值的输入原样进入上下文
+    fx->cfg->userInputSummaryLimitLength = 0;
+    std::string plainInput;
+    for (int i = 1; i <= 120; ++i) {
+        plainInput += fmt::format("plain line {:03d}\n", i);
+    }
+    fx->send(plainInput, std::string{agentxx::agent::InputDelivery::NextTurn}, 3);
+    XX_TEST_EXPECT_TRUE(co_await waitFor([&] {
+        return fx->recorder->turnResults.load() >= 3;
+    }));
+    XX_TEST_EXPECT_TRUE(contextHasText(fx->agent, fx->sessionId, "plain line 120"));
+}
+
 } // namespace
 
 asio::awaitable<TestResult> run_input_delivery_tests() {
@@ -983,6 +1095,7 @@ asio::awaitable<TestResult> run_input_delivery_tests() {
     co_await test_inbox_dropped_item_not_restored();
     co_await test_connection_stage_guard();
     co_await test_session_file_created_on_first_input();
+    co_await test_oversized_input_offload();
 
     // 还原全局模拟器开关 (避免影响后续模块)
     g_da_sim_delay_ms             = 0;

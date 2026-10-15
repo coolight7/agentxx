@@ -16,6 +16,7 @@
 #include "agentxx/protocol/provider_common.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/observability.h"
+#include "agentxx/util/share_store_offload.h"
 #include "agentxx/util/task_scope.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -1315,9 +1316,35 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
     auto processedInput = std::string{userInput};
     utilxx_base::autoConvertToUtf8(processedInput);
 
+    // 队列输入单条过长时的压缩 (判定与提示格式与 toolcall 输出压缩共用, 见
+    // offloadShareStoreIfOversized): 原文存入会话 share store, LLM 上下文里只保留
+    // 开头片段与取回提示 —— 一次粘贴超长内容 (日志/大文件) 不再直接把上下文顶满,
+    // 模型可用 `agentxx_share_store` 按行取回剩余内容
+    // - 只改进入上下文的这份文本: 展示历史与 TurnStart 回显仍是完整原文
+    //   (用户看到的是自己发的内容, 不该被悄悄改写)
+    // - 阈值 <= 0 表示不压缩
+    auto llmInput = processedInput;
+    if (agentContext->agentConfig && agentContext->agentConfig->userInputSummaryLimitLength > 0) {
+        auto offload = agentxx::util::offloadShareStoreIfOversized(
+            agentContext,
+            sessionId,
+            processedInput,
+            agentContext->agentConfig->userInputSummaryLimitLength
+        );
+        if (offload.offloaded) {
+            XX_LOGI(
+                "User input offloaded to share store: session={} bytes={} storeId={}",
+                sessionId,
+                processedInput.size(),
+                offload.storeId
+            );
+            llmInput = std::move(offload.text);
+        }
+    }
+
     auto userMsgJson = utilxx_base::Json{
-        {"role",    "user"        },
-        {"content", processedInput},
+        {"role",    "user"   },
+        {"content", llmInput },
     };
     if (!attachments.empty()) {
         // 服务端附件自主加载: 若 dataUrl 为空且 pathOrUrl 为服务端本地路径,

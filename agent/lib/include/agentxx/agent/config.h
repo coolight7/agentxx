@@ -333,6 +333,16 @@ public:
     /// - 功能实现见 [agentxx::node::ToolcallWrapNode::execTool]
     size_t toolcallSummaryLimitOutputLength = 2 * 1024;
 
+    /// 队列输入 (用户发来的消息) 单条过长时的压缩阈值, 单位为 utf8 字符数 (默认 8K)
+    /// - 达到该长度时把原文存入会话 share store (模型可用 `agentxx_share_store`
+    ///   按行取回), LLM 上下文里只保留开头片段与取回提示, 避免一次粘贴把上下文顶满
+    /// - 只作用于 LLM 上下文: 展示历史与轮次回显仍是完整原文
+    /// - 0 表示不压缩 (输入原样进入上下文)
+    /// - 与 toolcall 输出压缩同一套判定与提示格式, 见
+    ///   [agentxx::util::offloadShareStoreIfOversized]
+    /// - 功能实现见 [agentxx::agent::BaseAgent::runTurnAsync]
+    size_t userInputSummaryLimitLength = 8 * 1024;
+
     /// 连续相同调用重复检查阈值 (默认 5 次)
     /// - 当 tool 启用了 [agentxx::tools::XXToolBase::repeatCallCheck] 且同一
     ///   llm <-> tool 交替链内 (无用户消息打断) 连续相同 tool + 相同参数调用

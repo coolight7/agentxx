@@ -2,6 +2,7 @@
 #include "agentxx/util/exception.h"
 #include "agentxx/util/neograph_json_bridge.h"
 #include "agentxx/util/observability.h"
+#include "agentxx/util/share_store_offload.h"
 
 #include "agentxx/event/event_stream.h"
 #include "agentxx/event/events.h"
@@ -964,43 +965,18 @@ asio::awaitable<std::string> ToolcallWrapNode::finalizeToolCall(
     const bool autoSummary
         = (autoSummaryIt != tool->extra.end() && autoSummaryIt->second == "true");
     if (autoSummary && result.size() >= limitLength) {
-        // 字节数量超过，按 utf8 长度判断
-        auto [targetIndex, lineCount, lastLineIndex]
-            = utilxx_base::findIndexAndLastLineIndexByUtf8Length(result, limitLength);
-        if (targetIndex > 0) {
-            const auto session_id = args.value("sessionId", std::string{});
-            assert(false == session_id.empty());
-            // 超过限制长度，截断并存储原文
-            auto storeId
-                = agentCtxPtr->middlewareHandleContext->addShareStoreItemValue(session_id, result);
-            // 总行数, 写入压缩结果便于后续用 `agentxx_share_store` 按行分页取值
-            const auto totalLineCount = utilxx_base::countLines(result);
-            // - 如果按行摘要超过总摘要长度的 1/3 即为可行，留出行数以便后续用
-            // `agentxx_share_store` 分页按行取值 否则取总摘要
-            if (lastLineIndex >= targetIndex / 3) {
-                co_return fmt::format(
-                    R"([Content offloaded. Use the `agentxx_share_store` tool to fetch the content by ID {}. Total {} lines, show [1, {}], hide [{}, {}].]
-{}
-...)",
-                    storeId,
-                    totalLineCount,
-                    lineCount,
-                    lineCount + 1,
-                    totalLineCount,
-                    std::string_view{result}.substr(0, lastLineIndex)
-                );
-            } else {
-                // - 内容集中在某些行，比如只有一行，但内容特别长，此时按 [lastLineIndex] 得到的是
-                // 0, 即为全部隐藏
-                // - 无法按行截断时取全部行数 (换行数) 作为截取行数
-                co_return fmt::format(
-                    R"([Content offloaded. Use the `agentxx_share_store` tool to fetch the full content by ID {}. Total {} lines.]
-{}...)",
-                    storeId,
-                    totalLineCount,
-                    std::string_view{result}.substr(0, targetIndex)
-                );
-            }
+        const auto session_id = args.value("sessionId", std::string{});
+        assert(false == session_id.empty());
+        // 超过限制长度: 原文存入 share store, 结果只留开头片段与取回提示
+        // (判定/提示格式与 agent 队列输入压缩共用, 见 offloadShareStoreIfOversized)
+        auto offload = agentxx::util::offloadShareStoreIfOversized(
+            agentCtxPtr,
+            session_id,
+            result,
+            limitLength
+        );
+        if (offload.offloaded) {
+            co_return std::move(offload.text);
         }
     }
     co_return result;

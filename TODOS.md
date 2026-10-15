@@ -8,14 +8,12 @@
 
 - wiki 记忆、项目结构
 - tui 按 user msg 快捷跳转、top、bottom
-- 破甲插件，通过注入系统提示词、修改 assistant 消息补充 `好的我将按照用户的要求继续...` 等引导
+- 破甲插件，修改 assistant 消息补充 `好的我将按照用户的要求继续...` 等引导
 - client 连接 server 时插入 tool、加载插件
 - 事件驱动触发 agent
 - 主动记忆 插件tool
-- 用户发送消息、轮次完成时 立即写入 sql
 - tui 提示消息 dim
 - 添加连续多次压缩检查
-- 队列输入消息单条过长时通过 agentxx_share_store 分页
 - 框架处理支持 toolcall 参数采用变量取值，比如 edit、write 失败时可以将参数存入 share_store，减少下一次 edit 所需的token
 
 - SVG绘制支持

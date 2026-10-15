@@ -241,11 +241,12 @@ utilxx_base::Json buildConfigSnapshot(const AgentConfig& config) {
     root["features"]           = std::move(features);
 
     utilxx_base::Json limits = utilxx_base::Json::object();
-    limits["llm_max_retry"]           = config.llmMaxRetry;
-    limits["tool_summary_limit"]      = config.toolcallSummaryLimitOutputLength;
-    limits["tool_repeat_threshold"]   = config.toolcallRepeatCheckThreshold;
-    limits["tool_parallel_max"]       = config.toolParallelMaxConcurrency;
-    root["limits"]                    = std::move(limits);
+    limits["llm_max_retry"]            = config.llmMaxRetry;
+    limits["tool_summary_limit"]       = config.toolcallSummaryLimitOutputLength;
+    limits["user_input_summary_limit"] = config.userInputSummaryLimitLength;
+    limits["tool_repeat_threshold"]    = config.toolcallRepeatCheckThreshold;
+    limits["tool_parallel_max"]        = config.toolParallelMaxConcurrency;
+    root["limits"]                     = std::move(limits);
 
     utilxx_base::Json resources = utilxx_base::Json::object();
     resources["skill_dirs"]     = config.skillDirPaths;

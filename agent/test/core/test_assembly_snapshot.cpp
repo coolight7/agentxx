@@ -88,6 +88,8 @@ std::shared_ptr<agentxx::agent::AgentConfig> makeRichConfig() {
     cfg->enableToolFiltering = true;
     cfg->toolWhitelist       = {"agentxx_share_store"};
     cfg->toolParallelMaxConcurrency = 6;
+    // 队列输入分页阈值 (装配快照 `limits.user_input_summary_limit` 取值来源)
+    cfg->userInputSummaryLimitLength = 4096;
 
     cfg->skillDirPaths.push_back("/tmp/agentxx-skills");
     cfg->memoryFilePaths.push_back("/tmp/agentxx-work/AGENTS.md");
@@ -163,6 +165,7 @@ TestResult testAssemblySnapshotConfig() {
     XX_TEST_EXPECT_TRUE(snapshot["features"].value("tool_filtering", false));
     XX_TEST_EXPECT_EQ(snapshot["features"]["tool_whitelist"].size(), size_t{1});
     XX_TEST_EXPECT_EQ(snapshot["limits"].value("tool_parallel_max", 0), 6);
+    XX_TEST_EXPECT_EQ(snapshot["limits"].value("user_input_summary_limit", 0), 4096);
 
     // ---- 语言与来源标记 ----
     XX_TEST_EXPECT_EQ(snapshot.value("language", std::string{}), std::string{"zh-cn"});

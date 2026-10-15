@@ -3,6 +3,8 @@
 #include "agentxx/agent/context.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/tools/share_store.h"
+#include "agentxx/util/share_store_offload.h"
+#include "fmt/format.h"
 #include "utilxx_base/json.h"
 #include <iostream>
 #include <stdexcept>
@@ -251,6 +253,105 @@ asio::awaitable<TestResult> run_share_store_tests() {
             );
         }
         XX_TEST_EXPECT_TRUE(threwBadOpt);
+    }
+
+    // -----------------------------------------------------------------------
+    // 单条文本分页卸载 (agentxx::util::offloadShareStoreIfOversized):
+    // agent 队列输入与 toolcall 输出压缩共用, 这里直接按阈值/截断分支核对
+    // -----------------------------------------------------------------------
+    {
+        // 本组用例统一的会话 id (与上面 `t1` 隔离, 便于按 id 取回核对原文)
+        const std::string sid = "offload-session";
+
+        // 阈值 0 = 不检查
+        {
+            auto r = agentxx::util::offloadShareStoreIfOversized(ctx, sid, "hello", 0);
+            XX_TEST_EXPECT_TRUE(!r.offloaded);
+            XX_TEST_EXPECT_EQ(r.storeId, size_t{0});
+            XX_TEST_EXPECT_EQ(r.text, std::string{"hello"});
+        }
+
+        // 未达阈值 (字符数): 原样返回
+        {
+            const std::string text(128, 'a');
+            auto r = agentxx::util::offloadShareStoreIfOversized(ctx, sid, text, 129);
+            XX_TEST_EXPECT_TRUE(!r.offloaded);
+            XX_TEST_EXPECT_EQ(r.text, text);
+        }
+
+        // 会话 id 为空 / agent 上下文为空: 不做卸载, 原样返回
+        {
+            const std::string text(512, 'a');
+            auto r1 = agentxx::util::offloadShareStoreIfOversized(ctx, "", text, 64);
+            XX_TEST_EXPECT_TRUE(!r1.offloaded);
+            XX_TEST_EXPECT_EQ(r1.text, text);
+
+            auto r2 = agentxx::util::offloadShareStoreIfOversized(
+                std::shared_ptr<agentxx::agent::AgentContext>{},
+                sid,
+                text,
+                64
+            );
+            XX_TEST_EXPECT_TRUE(!r2.offloaded);
+            XX_TEST_EXPECT_EQ(r2.text, text);
+        }
+
+        // 多行超限: 按行截断, 完整核对提示格式 (该格式与 toolcall 输出压缩共用)
+        {
+            // 20 行 "ab\n" (每行 3 字符) = 60 字符; 阈值 10 字符 → 片段到第 10 个
+            // 字符 (即第 4 行开头), 片段内 3 个换行, 最后一个换行在下标 8
+            std::string longText;
+            for (int i = 0; i < 20; ++i) {
+                longText += "ab\n";
+            }
+            auto r = agentxx::util::offloadShareStoreIfOversized(ctx, "offload-lines", longText, 10);
+            XX_TEST_EXPECT_TRUE(r.offloaded);
+            XX_TEST_EXPECT_EQ(r.storeId, size_t{1});
+            XX_TEST_EXPECT_EQ(
+                r.text,
+                fmt::format(
+                    "[Content offloaded. Use the `agentxx_share_store` tool to fetch the content by "
+                    "ID {}. Total {} lines, show [1, {}], hide [{}, {}].]\n{}\n...",
+                    1,
+                    20,
+                    3,
+                    4,
+                    20,
+                    "ab\nab\nab"
+                )
+            );
+            // 原文可在 store 中完整取回
+            auto stored
+                = ctx->middlewareHandleContext->getShareStoreItemValue("offload-lines", r.storeId);
+            XX_TEST_EXPECT_TRUE(stored.has_value());
+            XX_TEST_EXPECT_EQ(stored.value_or(std::string{}), longText);
+        }
+
+        // 单行超长: 按行截断几乎不剩内容, 改为按字符截断并提示按 id 取全文
+        {
+            const std::string longText(1024, 'z');
+            auto r = agentxx::util::offloadShareStoreIfOversized(
+                ctx,
+                "offload-single",
+                longText,
+                128
+            );
+            XX_TEST_EXPECT_TRUE(r.offloaded);
+            XX_TEST_EXPECT_EQ(
+                r.text,
+                fmt::format(
+                    "[Content offloaded. Use the `agentxx_share_store` tool to fetch the full "
+                    "content by ID {}. Total {} lines.]\n{}...",
+                    1,
+                    1,
+                    std::string(128, 'z')
+                )
+            );
+            auto stored
+                = ctx->middlewareHandleContext->getShareStoreItemValue("offload-single", r.storeId);
+            XX_TEST_EXPECT_TRUE(stored.has_value());
+            XX_TEST_EXPECT_EQ(stored.value_or(std::string{}), longText);
+        }
     }
 
     co_return TestResult{g_ss_passed, g_ss_failed};
