@@ -858,10 +858,20 @@ uint64_t MessageListComponent::itemKey(size_t index) {
             // 触发该块重建, 从"通用回退"切换为插件语义内容
             if (ctx_.pluginManager && m.tool) {
                 const auto cache = ctx_.pluginManager->toolRenderCache();
-                h                = combine(
+                const auto callKey
+                    = agentxx::plugin::ClientToolRenderRequest::keyFor(
+                        m.tool->toolCallId,
+                        m.tool->toolName
+                    );
+                h = combine(h, cache->version(callKey));
+                // "名称结果"(占位提示阶段按工具名解析出的过渡显示名, 键 = "#工具名")
+                // 的到达同样要使块重建: 未就绪帧正用它的显示名 (上一份结果没给显示名
+                // 时也走它), 少了这一项末帧会停在"无显示名"形态。该键的版本号变化很少
+                // (名称结果重算 / 插件失效 / 会话切换清空), 每次查询成本可忽略
+                h = combine(
                     h,
                     cache->version(agentxx::plugin::ClientToolRenderRequest::keyFor(
-                        m.tool->toolCallId,
+                        std::string_view{},
                         m.tool->toolName
                     ))
                 );
@@ -1426,10 +1436,13 @@ std::string MessageListComponent::genPlaceholderToolDisplayName(const TUIRenderS
         false,
         0
     );
-    if (res.matched && !res.displayName.empty()) {
+    // 显示名取特化渲染结果 (含"结果未就绪"时的过渡显示名); 尚无显示名时不回退
+    // 原始工具名: 该工具存在特化渲染器, 显示名随后就到, 先显示原始工具名会让
+    // 占位行闪一下 (见头文件 [hasGenPlaceholder] 与 renderClientTool 的说明)
+    if (!res.displayName.empty()) {
         return res.displayName;
     }
-    return st.genToolName;
+    return res.pendingRender ? std::string{} : st.genToolName;
 }
 
 LazyBuiltItem MessageListComponent::buildStreamingHeader(const TUIRenderState& st) {
@@ -1838,10 +1851,13 @@ Element MessageListComponent::buildMessageBlock(
                 header.push_back(text(tr("msg.roleTool")) | color(theme.toolColor));
             }
 
-            // 显示名: renderRes 提供的 displayName 优先, 回退原始 toolName
-            std::string displayName = (renderRes.matched && !renderRes.displayName.empty())
-                                          ? renderRes.displayName
-                                          : msg.tool->toolName;
+            // 显示名: renderRes 提供的显示名优先 (命中特化结果, 或结果未就绪时的
+            // 过渡显示名 —— 来自本次调用上一份结果/该工具的名称结果), 回退原始
+            // toolName; 若该工具存在特化渲染器但还没有任何可用的显示名, 则暂不显示
+            // 名称 —— 见下方 [pendingRender] 分支的说明
+            std::string displayName = !renderRes.displayName.empty() ? renderRes.displayName
+                                     : (renderRes.pendingRender ? std::string{}
+                                                                : msg.tool->toolName);
 
             if (!expanded) {
                 // 折叠状态, 特化渲染 (摘要内部预览按内容区剩余列宽自适应截断)
@@ -1865,6 +1881,26 @@ Element MessageListComponent::buildMessageBlock(
                         resOrArgsSummary = renderRes.summary;
                     } else {
                         resOrArgsSummary = " · " + renderRes.summary;
+                    }
+                } else if (renderRes.pendingRender) {
+                    // 特化渲染结果尚未就绪 (自定义 renderer 只在 client io 线程执行):
+                    // 本帧既不展示原始参数/结果预览 (会让折叠头闪一下非特化内容),
+                    // 也不留空 (空一帧同样是跳变 —— 摘要消失再回来)。处理:
+                    // - 有过渡摘要 (本次调用上一份结果, 见 renderClientTool): 照常
+                    //   显示, 结果就绪后替换, 屏幕上的内容只增不减;
+                    // - 首次查询且结果未就绪: 运行中沿用占位提示的同一句说明文字,
+                    //   该帧与刚被取代的占位行内容一致 (动画等级 >= High 时逐字一致:
+                    //   两行首列都是加载点阵; 等级更低时占位行首列是静态 "-", 本行是
+                    //   可折叠工具行的 "+", 只有这一列不同), 不出现空档;
+                    //   已完成则不显示说明文字 (工具已结束), 等结果上屏
+                    if (!renderRes.summary.empty()) {
+                        resOrArgsSummary = renderRes.summary.starts_with(" ·")
+                                               ? renderRes.summary
+                                               : " · " + renderRes.summary;
+                    } else if (!finished) {
+                        // tr 返回 string_view: 先加空格再拼接说明文字
+                        resOrArgsSummary.assign(" ");
+                        resOrArgsSummary += tr("msg.genToolCalling");
                     }
                 } else if (!finished) {
                     // 运行中无特化摘要回退

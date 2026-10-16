@@ -362,8 +362,14 @@ private:
     /// 占位提示子项下标 (= 消息数 + 流式子项数; 无占位提示时无意义)
     size_t genPlaceholderIndex(const TUIRenderState& st) const;
     /// 占位提示中显示的工具名 (工具调用阶段): 走工具特化渲染器的显示名解析
-    /// (如 agentxx_filesystem_read -> "Read"); 未命中渲染器时返回原始工具名
+    /// (如 agentxx_filesystem_read -> "Read")
     /// - 该阶段参数/结果尚未接收完, 只有工具名可用, 因此只查显示名不查摘要
+    /// - 特化结果尚未就绪且还没有显示名时返回空串 (不显示工具名) —— 显示名随后
+    ///   就到, 先显示原始工具名会让占位行闪一下非特化内容; 无渲染器的工具
+    ///   (特化渲染不适用) 仍返回原始工具名
+    /// - 与工具消息折叠头共用同一条回退规则 (见 [buildMessageBlock] 的
+    ///   pendingRender 分支): 占位行被工具消息取代时不会少一段内容, 动画等级
+    ///   >= High 时两行逐字一致
     std::string genPlaceholderToolDisplayName(const TUIRenderState& st) const;
     LazyBuiltItem buildGenPlaceholderItem(const TUIRenderState& st);
 

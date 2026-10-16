@@ -2267,6 +2267,154 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             );
             XX_TEST_EXPECT_TRUE(changed.pendingRender);
 
+            // 未命中时的过渡显示名: 该工具"名称结果"(占位提示阶段按工具名解析出
+            // 的那条, 键 = "#工具名") 的显示名随 pendingRender 一起返回, 使 UI 在
+            // 特化结果就绪前沿用它, 而不是回退原始工具名 + 原始参数
+            {
+                agentxx::plugin::ClientToolRenderEntry nameEntry;
+                nameEntry.key = agentxx::plugin::ClientToolRenderRequest::keyFor(
+                    std::string_view{},
+                    "agentxx_filesystem_read"
+                );
+                nameEntry.plugin      = "agentxx_filesystem";
+                nameEntry.matched     = true;
+                nameEntry.displayName = "Read";
+                cache->store(std::move(nameEntry));
+
+                auto transitional = agentxx::plugin::renderClientTool(
+                    reg.get(),
+                    cache.get(),
+                    "call_read_transitional",
+                    "agentxx_filesystem_read",
+                    R"({"path":"/home/user/b.cpp"})",
+                    "",
+                    false,
+                    false,
+                    100
+                );
+                XX_TEST_EXPECT_TRUE(transitional.pendingRender);
+                XX_TEST_EXPECT_FALSE(transitional.matched);
+                XX_TEST_EXPECT_EQ(transitional.displayName, std::string{"Read"});
+                XX_TEST_EXPECT_TRUE(transitional.summary.empty());
+
+                // 归属插件不一致 (插件重载/被其它插件覆盖) 时不得沿用旧显示名
+                agentxx::plugin::ClientToolRenderEntry foreign;
+                foreign.key = agentxx::plugin::ClientToolRenderRequest::keyFor(
+                    std::string_view{},
+                    "agentxx_filesystem_glob"
+                );
+                foreign.plugin      = "some_other_plugin";
+                foreign.matched     = true;
+                foreign.displayName = "Glob";
+                cache->store(std::move(foreign));
+
+                auto noSeed = agentxx::plugin::renderClientTool(
+                    reg.get(),
+                    cache.get(),
+                    "call_glob_transitional",
+                    "agentxx_filesystem_glob",
+                    R"({"file_patterns":["src/**/*.cpp"]})",
+                    "",
+                    false,
+                    false,
+                    100
+                );
+                XX_TEST_EXPECT_TRUE(noSeed.pendingRender);
+                XX_TEST_EXPECT_TRUE(noSeed.displayName.empty());
+            }
+
+            // 未就绪帧的过渡内容 (2): 本次调用已有上一份结果 (工具结果到达使输入
+            // 特征变化) 时, 连同显示名一起返回上一份摘要 —— UI 继续显示屏幕上已有
+            // 的内容, 不会出现摘要消失一帧再回来的跳变
+            {
+                agentxx::plugin::ClientToolRenderEntry last;
+                last.key = agentxx::plugin::ClientToolRenderRequest::keyFor(
+                    "call_read_sticky",
+                    "agentxx_filesystem_read"
+                );
+                last.plugin      = "agentxx_filesystem";
+                last.matched     = true;
+                last.displayName = "Read";
+                last.summary     = " · [0, 100] /home/user/b.cpp";
+                // 上一份结果的展开体内容: 过渡帧不该拷贝它 (matched=false 时调用方
+                // 不渲染 items, 而 Edit 这类工具的 items 可达几十 KB)
+                {
+                    utilxx_base::Json diffItem;
+                    diffItem["kind"]   = "Diff";
+                    diffItem["path"]   = "/home/user/b.cpp";
+                    diffItem["oldStr"] = "old";
+                    diffItem["newStr"] = "new";
+                    last.items.push_back(std::move(diffItem));
+                }
+                cache->store(std::move(last));
+
+                auto sticky = agentxx::plugin::renderClientTool(
+                    reg.get(),
+                    cache.get(),
+                    "call_read_sticky",
+                    "agentxx_filesystem_read",
+                    R"({"path":"/home/user/b.cpp","line_offset":0,"line_limit":100})",
+                    "     1|file content line one", // 结果到达: 输入特征与上一份不同
+                    true,
+                    false,
+                    100
+                );
+                XX_TEST_EXPECT_TRUE(sticky.pendingRender);
+                XX_TEST_EXPECT_FALSE(sticky.matched);
+                XX_TEST_EXPECT_EQ(sticky.displayName, std::string{"Read"});
+                XX_TEST_EXPECT_EQ(sticky.summary, std::string{" · [0, 100] /home/user/b.cpp"});
+                // 过渡帧不带展开体内容 (items 只在命中特化结果时填充)
+                XX_TEST_EXPECT_TRUE(sticky.items.empty());
+
+                // 调用没有 tool_call_id: 缓存键退化为 "#工具名", 与"名称结果"同键 ——
+                // 该情形只取名称结果的显示名, 不把它的摘要 (参数/结果都为空的渲染结果)
+                // 当成本次调用的摘要
+                auto noId = agentxx::plugin::renderClientTool(
+                    reg.get(),
+                    cache.get(),
+                    std::string_view{}, // 无 tool_call_id
+                    "agentxx_filesystem_read",
+                    R"({"path":"/home/user/d.cpp"})",
+                    "",
+                    false,
+                    false,
+                    100
+                );
+                XX_TEST_EXPECT_TRUE(noId.pendingRender);
+                XX_TEST_EXPECT_FALSE(noId.matched);
+                XX_TEST_EXPECT_EQ(noId.displayName, std::string{"Read"});
+                XX_TEST_EXPECT_TRUE(noId.summary.empty());
+                XX_TEST_EXPECT_TRUE(noId.items.empty());
+
+                // 上一份结果的归属插件不一致 (插件重载/被其它插件覆盖) 时不得沿用,
+                // 此时仍可回落到该工具的名称结果提供过渡显示名
+                agentxx::plugin::ClientToolRenderEntry foreignLast;
+                foreignLast.key = agentxx::plugin::ClientToolRenderRequest::keyFor(
+                    "call_read_sticky_foreign",
+                    "agentxx_filesystem_read"
+                );
+                foreignLast.plugin      = "some_other_plugin";
+                foreignLast.matched     = true;
+                foreignLast.displayName = "Read";
+                foreignLast.summary     = " · stale summary";
+                cache->store(std::move(foreignLast));
+
+                auto foreignSticky = agentxx::plugin::renderClientTool(
+                    reg.get(),
+                    cache.get(),
+                    "call_read_sticky_foreign",
+                    "agentxx_filesystem_read",
+                    R"({"path":"/home/user/b.cpp"})",
+                    "",
+                    false,
+                    false,
+                    100
+                );
+                XX_TEST_EXPECT_TRUE(foreignSticky.pendingRender);
+                XX_TEST_EXPECT_TRUE(foreignSticky.summary.empty());
+                XX_TEST_EXPECT_EQ(foreignSticky.displayName, std::string{"Read"});
+            }
+
             // 卸载后旧快照 + 旧缓存只能回退: 版本号递增驱动 UI 重建为通用渲染
             co_await mgr->unloadAsync("agentxx_filesystem");
             XX_TEST_EXPECT_TRUE(mgr->find("agentxx_filesystem") == nullptr);

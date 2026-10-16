@@ -20,9 +20,11 @@
 #include "asio/io_context.hpp"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/screen.hpp"
+#include "pluginxx/runtime/runtime.h" // mgr->runtime()->ioThreadId (异步渲染中间帧夹具)
 #include "utilxx_base/json.h"
 #include <memory>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -545,6 +547,22 @@ struct ToolHeaderFixture {
         });
     }
 
+    /// 把最后一条 Tool 消息置为已完成 (模拟 ToolEnd: 结果文本到达)。
+    /// 工具结束时消息内容变化, 特化渲染的输入特征 (结果文本) 随之变化, 语义
+    /// 缓存因此不命中 —— 用于覆盖"结果到达后的一帧"
+    void finishLastTool(std::string result) {
+        sharedState.mutate([&](TUIRenderState& st) {
+            for (auto it = st.messages.rbegin(); it != st.messages.rend(); ++it) {
+                if ((*it)->role != TUIMessage::Role::Tool || !(*it)->tool) {
+                    continue;
+                }
+                (*it)->tool->toolFinished = true;
+                (*it)->tool->toolResult   = std::move(result);
+                return;
+            }
+        });
+    }
+
     /// 追加一条 Think 消息 (头部为 "-/+/[Think]/预览")
     void pushThinking(std::string text, bool collapsed = true, int64_t durationMs = 0) {
         sharedState.mutate([&](TUIRenderState& st) {
@@ -632,6 +650,72 @@ struct ToolHeaderFixture {
             ])");
             st.pluginRegistry = std::move(reg);
         });
+    }
+
+    // ---- 异步特化渲染 (client io 线程执行 renderer) 的装配与驱动 ----
+
+    /// client 插件管理器的 io 上下文 (仅在装配管理器后使用)
+    asio::io_context                                      mgrIo;
+    std::shared_ptr<agentxx::plugin::ClientPluginManager> mgr;
+
+    /// 装配 client 插件管理器: 特化渲染改走异步语义缓存路径 (自定义 renderer
+    /// 只在 client io 线程执行), 用于覆盖"结果尚未就绪"的中间帧。
+    ///
+    /// 与默认夹具 (不装配管理器 -> renderClientTool 走"无语义缓存"分支,
+    /// renderer 在本线程同步执行) 的区别是本次要测的那条路径。
+    ///
+    /// 关键处理: 插件运行时的 IO 线程标识默认取绑定 executor 的线程 (= 本测试
+    /// 线程), 而真机上界面线程与 client io 线程是两个线程。不把它清掉, 本线程
+    /// 发出的渲染请求会被 postToIo 当作"已在 io 线程"内联执行, 中间帧根本不存在。
+    /// 清掉之后请求只入队 (夹具的 io 上下文默认不驱动, 见 [drainIo])。
+    void usePendingPluginManager() {
+        mgr = std::make_shared<agentxx::plugin::ClientPluginManager>(mgrIo.get_executor());
+        // 内置工具渲染器注册到管理器的注册表: 渲染请求由管理器在 client io 线程
+        // 执行时按管理器的注册表找 renderer (真机两侧同源, 见
+        // setupClientPlugins -> registerBuiltinToolRenderers)
+        agentxx::plugin::registerBuiltinToolRenderers(*mgr);
+        mgr->runtime()->ioThreadId.store(std::thread::id{}, std::memory_order_release);
+        ctx.pluginManager = mgr;
+    }
+
+    /// 驱动一次夹具 io: 执行已入队的渲染请求 (client io 线程的那一步),
+    /// 结果写入语义渲染缓存
+    void drainIo() {
+        mgrIo.restart();
+        mgrIo.poll();
+        mgrIo.restart();
+    }
+
+    /// 写入一条特化渲染条目 (用于构造"未就绪帧"的缓存状态)
+    /// - 不设 inputHash (保持 0): UI 查询用真实输入特征算哈希, 因此该条目只会被
+    ///   "上一份结果"查询 (lookupLatest) 取到, 不会被当作精确命中
+    void pushRenderEntry(
+        std::string key,
+        std::string plugin,
+        std::string displayName,
+        std::string summary = {}
+    ) {
+        agentxx::plugin::ClientToolRenderEntry entry;
+        entry.key         = std::move(key);
+        entry.plugin      = std::move(plugin);
+        entry.matched     = true;
+        entry.displayName = std::move(displayName);
+        entry.summary     = std::move(summary);
+        mgr->toolRenderCache()->store(std::move(entry));
+    }
+
+    /// 写入"名称结果"条目: 占位提示阶段按工具名解析出的特化显示名
+    /// (键 = "#工具名", 输入只有工具名, 无参数/结果)
+    void pushToolNameResult(
+        std::string toolName,
+        std::string plugin,
+        std::string displayName
+    ) {
+        pushRenderEntry(
+            agentxx::plugin::ClientToolRenderRequest::keyFor(std::string_view{}, toolName),
+            std::move(plugin),
+            std::move(displayName)
+        );
     }
 
     /// 剥离 ANSI 转义序列, 获取纯文本表示
@@ -902,6 +986,223 @@ void testTuiToolHeaderRunning() {
     XX_TEST_EXPECT_TRUE(
         f3.plainRender().find("custom_tool_run · {\"key\":\"val\"}") != std::string::npos
     );
+}
+
+// 特化渲染结果尚未就绪时的折叠头 / 占位行 (回归):
+//
+// 自定义 renderer 只在 client io 线程执行, 结果写入语义缓存前每帧都会走到
+// renderClientTool 的 "pendingRender" 分支。修复前该分支直接回退通用展示
+// (原始工具名 + 原始参数 JSON), 而占位提示刚展示过特化显示名, 于是工具消息
+// 出现时会闪一下非特化内容 (如 "agentxx_filesystem_read · {\"path\":...}"),
+// 下一帧才变成 "Read · [0, 100] /home/a.cpp"; 工具结果到达时 (finished 输入变了)
+// 会因同样的原因再闪一次 (显示原始结果首行)。Bash 等用预设模版注册的工具在 UI
+// 线程同步算出摘要, 没有该中间帧, 因此不闪。
+//
+// 未就绪帧同样不能"留空": 空一帧同样是跳变 (显示名或摘要消失再回来)。该分支
+// 现在按"上一份已知内容"过渡 —— 本次调用上一份结果优先, 其次该工具的名称结果;
+// 两者都没有时, 运行中沿用占位提示的同一句说明文字 (该帧与占位行逐字一致),
+// 已完成则不显示说明文字 (见 renderClientTool 与 message_list 的 [pendingRender] 分支)。
+void testTuiToolHeaderPendingRender() {
+    // 1. 占位提示 (工具调用阶段): 名称结果已解析 -> 沿用特化显示名, 不显示原始工具名
+    {
+        ToolHeaderFixture f;
+        f.usePendingPluginManager();
+        f.pushToolNameResult("agentxx_filesystem_read", "agentxx_filesystem", "Read");
+        f.sharedState.mutate([&](TUIRenderState& st) {
+            st.genPhase    = agentxx::agent::WireDelta::GenPhase::ToolCall;
+            st.genToolName = "agentxx_filesystem_read";
+            st.isStreaming = true;
+        });
+        const std::string out = f.plainRender();
+        XX_TEST_EXPECT_TRUE(out.find("Read receiving tool call...") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(out.find("agentxx_filesystem_read") == std::string::npos);
+    }
+
+    // 2. 占位提示: 名称结果还没算出来 -> 不显示原始工具名 (等特化显示名上屏)
+    {
+        ToolHeaderFixture f;
+        f.usePendingPluginManager();
+        f.sharedState.mutate([&](TUIRenderState& st) {
+            st.genPhase    = agentxx::agent::WireDelta::GenPhase::ToolCall;
+            st.genToolName = "agentxx_filesystem_read";
+            st.isStreaming = true;
+        });
+        const std::string out = f.plainRender();
+        XX_TEST_EXPECT_TRUE(out.find("receiving tool call...") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(out.find("agentxx_filesystem_read") == std::string::npos);
+    }
+
+    // 3. 运行中的工具消息: 沿用名称结果的显示名, 不展示原始工具名与原始参数 JSON,
+    //    摘要未就绪时沿用占位提示的同一句说明文字 (该帧与占位行逐字一致, 不留空档)
+    {
+        ToolHeaderFixture f;
+        f.usePendingPluginManager();
+        f.pushToolNameResult("agentxx_filesystem_read", "agentxx_filesystem", "Read");
+        f.pushTool(
+            "agentxx_filesystem_read",
+            R"({"path":"/home/a.cpp","line_offset":0,"line_limit":100})",
+            false // 运行中
+        );
+        const std::string out = f.plainRender();
+        // 运行中头部使用加载动画 (非 "+"), 故只断言角色标签之后的内容
+        XX_TEST_EXPECT_TRUE(out.find("[Tool] Read") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(out.find("Read receiving tool call...") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(out.find("agentxx_filesystem_read") == std::string::npos);
+        XX_TEST_EXPECT_TRUE(out.find("\"path\"") == std::string::npos);
+    }
+
+    // 4. 运行中且名称结果也没有 (某工具本会话首次调用): 只显示角色标签 + 占位提示
+    //    的同一句说明文字, 同样不展示原始工具名与原始参数 JSON
+    {
+        ToolHeaderFixture f;
+        f.usePendingPluginManager();
+        f.pushTool("agentxx_filesystem_read", R"({"path":"/home/b.cpp"})", false);
+        const std::string out = f.plainRender();
+        XX_TEST_EXPECT_TRUE(out.find("[Tool]") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(out.find("receiving tool call...") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(out.find("agentxx_filesystem_read") == std::string::npos);
+        XX_TEST_EXPECT_TRUE(out.find("\"path\"") == std::string::npos);
+    }
+
+    // 5. 已完成但结果的特化渲染未就绪: 不展示原始结果预览
+    {
+        ToolHeaderFixture f;
+        f.usePendingPluginManager();
+        f.pushToolNameResult("agentxx_filesystem_read", "agentxx_filesystem", "Read");
+        f.pushTool(
+            "agentxx_filesystem_read",
+            R"({"path":"/home/c.cpp"})",
+            true, // 已完成
+            true, // 折叠
+            "     1|file content line one"
+        );
+        const std::string out = f.plainRender();
+        XX_TEST_EXPECT_TRUE(out.find("+ [Tool] Read") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(out.find("file content line one") == std::string::npos);
+        XX_TEST_EXPECT_TRUE(out.find("agentxx_filesystem_read") == std::string::npos);
+    }
+
+    // 6. 没有特化渲染器的工具不受影响 (原始工具名 + 参数预览照常展示)
+    {
+        ToolHeaderFixture f;
+        f.usePendingPluginManager();
+        f.pushTool("custom_tool_run", R"({"key":"val"})", false);
+        XX_TEST_EXPECT_TRUE(
+            f.plainRender().find("custom_tool_run · {\"key\":\"val\"}") != std::string::npos
+        );
+    }
+
+    // 7. 端到端 (主程序内置渲染器): 未就绪帧不展示原始参数, 请求执行后切到特化摘要
+    {
+        ToolHeaderFixture f;
+        f.usePendingPluginManager();
+        f.pushTool("agentxx_share_store", R"({"opt":"insert","text":"a\nb"})", false);
+        const std::string pending = f.plainRender();
+        XX_TEST_EXPECT_TRUE(pending.find("agentxx_share_store") == std::string::npos);
+        XX_TEST_EXPECT_TRUE(pending.find("\"opt\"") == std::string::npos);
+        // 次帧: 内容区宽度经实测收敛后重新查询一次 (输入特征含宽度, 首帧宽度尚未
+        // 测量, 请求的输入特征与后续帧不同)
+        XX_TEST_EXPECT_TRUE(f.plainRender().find("\"opt\"") == std::string::npos);
+
+        // 布局 (内容宽度/滚动条列) 需要几帧才稳定, 而宽度属于渲染请求的输入特征:
+        // 逐帧"渲染 -> 驱动 io 执行已入队请求"直到特化摘要上屏
+        std::string ready;
+        for (int i = 0; i < 8; ++i) {
+            ready = f.plainRender();
+            if (ready.find("Store · insert 2 lines") != std::string::npos) {
+                break;
+            }
+            f.drainIo();
+        }
+        XX_TEST_EXPECT_TRUE(ready.find("Store · insert 2 lines") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(ready.find("agentxx_share_store") == std::string::npos);
+    }
+
+    // 8. 工具结束 (结果文本到达使输入特征变化) 的那一帧: 继续显示上一份摘要,
+    //    不空白也不要原始结果预览 —— 摘要消失一帧再回来同样是可见的跳变。
+    //    用主程序内置渲染器 (share_store) 走完整流程: 运行中的摘要由 client io
+    //    线程算出并写入缓存, 结果到达后的完成态摘要补上结果里的新 id (可区分)
+    {
+        ToolHeaderFixture f;
+        f.usePendingPluginManager();
+        f.pushTool(
+            "agentxx_share_store",
+            R"({"opt":"insert","text":"a\nb"})",
+            false // 运行中
+        );
+        // 逐帧驱动 io 直到运行中的特化摘要上屏 (布局宽度经实测收敛后才稳定)
+        std::string running;
+        for (int i = 0; i < 8; ++i) {
+            running = f.plainRender();
+            if (running.find("Store · insert 2 lines") != std::string::npos) {
+                break;
+            }
+            f.drainIo();
+        }
+        XX_TEST_EXPECT_TRUE(running.find("Store · insert 2 lines") != std::string::npos);
+
+        // 结果到达, 本帧特化结果尚未算出 (不驱动 io): 头部保持上一份摘要
+        f.finishLastTool(R"({"id":7})");
+        const std::string endFrame = f.plainRender();
+        XX_TEST_EXPECT_TRUE(endFrame.find("Store · insert 2 lines") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(endFrame.find("\"id\"") == std::string::npos);
+        XX_TEST_EXPECT_TRUE(endFrame.find("agentxx_share_store") == std::string::npos);
+
+        // 完成态的特化结果上屏: 摘要补上结果里的新 id (正常的内容更新, 不是空白帧)
+        f.drainIo();
+        const std::string done = f.plainRender();
+        XX_TEST_EXPECT_TRUE(done.find("Store · insert 2 lines → #7") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(done.find("agentxx_share_store") == std::string::npos);
+    }
+
+    // 9. 已完成消息 (块可跨帧缓存, 只有这类块才走"版本号变化 -> 重建"判定) 在两个
+    //    缓存条目都还没有时: 先显示空显示名, 名称结果到达后补上特化显示名 ——
+    //    消息块缓存 key 必须计入名称结果的版本号, 否则折叠头会一直停在无显示名形态
+    {
+        ToolHeaderFixture f;
+        f.usePendingPluginManager();
+        f.pushTool(
+            "agentxx_filesystem_read",
+            R"({"path":"/home/e.cpp"})",
+            true, // 已完成: 无加载动画, 块可缓存
+            true,
+            "     1|file content line one"
+        );
+        const std::string before = f.plainRender();
+        XX_TEST_EXPECT_TRUE(before.find("+ [Tool]") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(before.find("[Tool] Read") == std::string::npos);
+        XX_TEST_EXPECT_TRUE(before.find("agentxx_filesystem_read") == std::string::npos);
+
+        f.pushToolNameResult("agentxx_filesystem_read", "agentxx_filesystem", "Read");
+        const std::string after = f.plainRender();
+        XX_TEST_EXPECT_TRUE(after.find("+ [Tool] Read") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(after.find("agentxx_filesystem_read") == std::string::npos);
+    }
+
+    // 10. 该调用有"上一份结果"、但那份结果没给显示名 (renderer 返回空显示名) 时,
+    //     名称结果到达同样要使块重建 —— 只要有显示名来自名称结果的可能, 它的版本号
+    //     就要计入 key (否则末帧停在无显示名形态, 直到该调用自己的结果算出为止)
+    {
+        ToolHeaderFixture f;
+        f.usePendingPluginManager();
+        f.pushTool(
+            "agentxx_filesystem_read",
+            R"({"path":"/home/f.cpp"})",
+            true,
+            true,
+            "     1|file content line one"
+        );
+        // 上一份结果: matched 但显示名为空, 输入特征与本次查询不同 (仍是未就绪帧)
+        f.pushRenderEntry("call_1", "agentxx_filesystem", "");
+        const std::string before = f.plainRender();
+        XX_TEST_EXPECT_TRUE(before.find("[Tool] Read") == std::string::npos);
+        XX_TEST_EXPECT_TRUE(before.find("agentxx_filesystem_read") == std::string::npos);
+
+        f.pushToolNameResult("agentxx_filesystem_read", "agentxx_filesystem", "Read");
+        const std::string after = f.plainRender();
+        XX_TEST_EXPECT_TRUE(after.find("+ [Tool] Read") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(after.find("agentxx_filesystem_read") == std::string::npos);
+    }
 }
 
 // 插件工具消息装饰渲染 (planning 插件经 update_tool_decor 推送装饰):
@@ -1536,6 +1837,7 @@ TestResult testTuiToolHeader() {
     testTuiToolHeaderFallback();
     testTuiToolHeaderOverflow();
     testTuiToolHeaderRunning();
+    testTuiToolHeaderPendingRender();
     testTuiToolHeaderDecor();
     testTuiToolHeaderDecorExtended();
     testTuiToolHeaderDecorRegionSize();

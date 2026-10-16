@@ -893,6 +893,13 @@ std::shared_ptr<const ClientToolRenderEntry>
     return it->second;
 }
 
+std::shared_ptr<const ClientToolRenderEntry>
+    ClientToolRenderCache::lookupLatest(const std::string& key) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto                        it = entries_.find(key);
+    return it == entries_.end() ? nullptr : it->second;
+}
+
 uint64_t ClientToolRenderCache::version(const std::string& key) const {
     std::lock_guard<std::mutex> lock(mutex_);
     auto                        it = versions_.find(key);
@@ -4155,6 +4162,46 @@ ClientToolRenderResult renderClientTool(
                                 res.matched       = false;
                                 res.pendingRender = true;
                                 res.pendingPlugin = r.plugin;
+                                // 过渡内容 (显示名/摘要): 结果就绪前先给出"上一份已知
+                                // 内容", 不要让本帧比上一帧信息更少 (显示名或摘要消失
+                                // 一帧再回来同样是可见的跳变)。两级来源:
+                                // 1. 本次调用上一份结果 —— 结果到达 (isFinished 变化) 或
+                                //    终端宽度变化都会改变输入特征使缓存不命中, 而这份
+                                //    结果正是屏幕上已经显示的内容;
+                                // 2. 该工具的"名称结果" (键 = "#工具名", 输入只有工具名,
+                                //    占位提示阶段已解析过一次) —— 工具消息沿用它, 而不是
+                                //    回退原始工具名 + 原始参数, 否则占位提示刚展示过特化
+                                //    显示名, 折叠头会先闪一下非特化内容。
+                                // 归属插件必须一致: 插件重载/被覆盖后旧结果不可用。
+                                //
+                                // 只取显示名与摘要: items 属展开体内容, matched=false
+                                // 时调用方不会渲染它, 而未就绪帧每帧都会走到这里, 深拷
+                                // Edit 这类带 diff 内容的 items 没有意义。
+                                //
+                                // 调用没有 tool_call_id 时缓存键退化为 "#工具名", 与上面
+                                // 第 2 条来源同键 —— 该键下可能是占位提示阶段"参数/结果
+                                // 为空"的结果, 也可能是另一次无 id 调用的结果, 摘要都不
+                                // 代表本次调用 (如 Read 的 " ·"), 因此这种情形只借该键的
+                                // 显示名, 不取摘要。
+                                if (!toolCallId.empty()) {
+                                    if (auto last = cache->lookupLatest(key);
+                                        last && last->matched && last->plugin == r.plugin) {
+                                        res.displayName = last->displayName;
+                                        res.summary     = last->summary;
+                                    }
+                                }
+                                if (res.displayName.empty()) {
+                                    if (auto nameEntry = cache->lookupLatest(
+                                            ClientToolRenderRequest::keyFor(
+                                                std::string_view{},
+                                                toolName
+                                            )
+                                        );
+                                        nameEntry && nameEntry->matched
+                                        && nameEntry->plugin == r.plugin) {
+                                        res.displayName = nameEntry->displayName;
+                                    }
+                                }
                                 return res;
                             }
                             res.matched     = cached->matched;

@@ -230,14 +230,32 @@ bool acceptUiJsonSize(std::string_view json, std::string_view what, std::string_
 
 /// 工具特化渲染统一结果
 struct ClientToolRenderResult {
+    /// 显示名 (工具消息/占位提示头部)
+    /// - `matched` = true: 特化渲染结果里的显示名
+    /// - `pendingRender` = true: 过渡显示名 —— 本次调用上一份结果, 或该工具"名称
+    ///   结果"(占位提示阶段按工具名解析过一次)里的显示名。特化结果就绪前沿用它,
+    ///   而不是回退原始工具名 (折叠头会先闪一下非特化内容); 仍为空表示该工具
+    ///   还没有任何可用的显示名
     std::string       displayName;
+    /// 摘要 (折叠头的 " · 摘要" 部分)
+    /// - `matched` = true: 特化渲染结果里的摘要
+    /// - `pendingRender` = true: 本次调用上一份结果的摘要 —— 结果就绪前继续显示
+    ///   屏幕上已有的内容, 避免摘要消失一帧再回来 (此时 `matched` 恒为 false)。
+    ///   调用没有 tool_call_id 时为空: 缓存键退化为 `#工具名`, 与"名称结果"同键,
+    ///   该键下可能是占位提示阶段(参数/结果为空)或另一次无 id 调用的结果, 摘要都
+    ///   不代表本次调用
     std::string       summary;
+    /// 展开体内容 (客户端展开工具消息时渲染)
+    /// - 只有命中特化结果时填充; 过渡帧 (`pendingRender`) 不填 —— 调用方此时不
+    ///   渲染 items, 逐帧深拷贝大 items (如 Edit 的 diff 内容) 只是浪费
     utilxx_base::Json items   = utilxx_base::Json::array();
     bool              matched = false;
     bool              isDecor = false; ///< 是否来自动态 toolDecors (update_tool_decor)
     /// 命中"按 tool_name 注册的自定义 renderer"但语义结果尚未计算出来:
-    /// 调用方本次用通用回退渲染, 并按 [ClientToolRenderRequest] 提交一次请求。
-    /// 自定义 renderer 不在 UI 线程执行 (只在 client IO 线程)。
+    /// 调用方本帧用过渡内容渲染 (见 [displayName]/[summary]), 并按
+    /// [ClientToolRenderRequest] 提交一次请求; 两者都为空时才回退通用渲染
+    /// (原始工具名 + 原始参数/结果预览)。自定义 renderer 不在 UI 线程执行
+    /// (只在 client IO 线程)。
     bool pendingRender = false;
     /// pendingRender=true 时的 renderer 归属插件 (空 = 未知)
     std::string pendingPlugin;
@@ -310,6 +328,17 @@ public:
     std::shared_ptr<const ClientToolRenderEntry>
         lookup(const std::string& key, uint64_t inputHash) const;
 
+    /// 取该键"最近一次写入"的条目, **不校验输入特征** (UI 线程; 只读主程序拷贝)
+    ///
+    /// 用途: 特化渲染结果尚未就绪时沿用该键上一次的结果 —— 同一调用取上一份
+    /// 结果 (结果到达使输入特征变化的那一帧继续显示屏幕上已有的内容), 或工具
+    /// 消息读占位提示阶段算出的"名称结果" (键 = "#工具名", 输入只有工具名), 使
+    /// 折叠头在结果就绪前沿用同一显示名, 而不是回退原始工具名 + 原始参数。
+    ///
+    /// 注意: 只应用于"过渡展示"(显示名/摘要), 不能当作精确结果 —— 输入不同
+    /// (参数/宽度/完成状态变化) 的条目内容也不同。
+    std::shared_ptr<const ClientToolRenderEntry> lookupLatest(const std::string& key) const;
+
     /// 该键的内容版本号 (0 = 从未写入; 计入 TUI 消息块缓存 key)
     uint64_t version(const std::string& key) const;
 
@@ -355,7 +384,9 @@ private:
 /// 2. toolRenderers / builtinToolRenderers (按 toolName; 插件注册项优先) 预设模版
 ///    (纯主程序计算, 直接在 UI 线程算)
 /// 3. 同上的自定义 renderer: 只读 `cache` 中的语义结果;
-///    未命中返回 matched=false + pendingRender=true (调用方提交渲染请求)
+///    未命中返回 matched=false + pendingRender=true (调用方提交渲染请求),
+///    同时尽量带上该工具"名称结果"的过渡显示名 (显示名在结果就绪前不变 --
+///    displayName 与 pendingRender 的配合见 [ClientToolRenderResult::displayName])
 /// 4. 若均未命中, 返回 matched = false
 ClientToolRenderResult renderClientTool(
     const ClientUiRegistry*      reg,
