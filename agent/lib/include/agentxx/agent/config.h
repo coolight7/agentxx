@@ -1,6 +1,7 @@
 #pragma once
 
 #include "neograph/api.h"
+#include "neograph/types.h"
 #include "prompt.h"
 #include "utilxx_base/json.h"
 #include "utilxx_base/string_util.h"
@@ -366,6 +367,33 @@ public:
     /// 工具白名单过滤开关 (默认 false = 不过滤, 创建全部工具)
     /// - 子代理"无工具/自定义工具/继承父工具"场景由 AgentHost 按需开启
     bool enableToolFiltering = false;
+
+    // -------------------------------------------------------------------
+    // 子代理专用的瞬时字段 (不参与配置序列化, 由 AgentHost::spawnOneTask 按
+    // 任务的"同上下文"要求填写; 进程内一次性运行, 不落盘也不对外暴露)
+    // -------------------------------------------------------------------
+
+    /// 保留调用方给的首条 system 消息 (不按本 agent 的提示词重建)
+    /// - 用于"复用父会话可缓存前缀"的场合 (上下文压缩): 子代理按自己的配置重建
+    ///   system 时缺少运行时段落 (记忆文件/技能清单), 请求前缀在 system 内部就分叉,
+    ///   后面整段对话都命中不了缓存
+    bool keepProvidedSystemMessage = false;
+
+    /// 继承父会话上一次请求的工具定义 (只用于对齐请求前缀)
+    /// - 子代理自身可能没有工具 (压缩子代理 tools=[]), 但请求里必须带上与父会话
+    ///   完全相同的工具定义, provider 的前缀缓存才会命中
+    /// - 保持为空表示"用本 agent 自己的工具定义"; 捕获不到 (如进程刚启动、没有历史
+    ///   请求) 时也保持为空, 此时不承诺命中
+    std::shared_ptr<const std::vector<neograph::ChatTool>> requestToolsOverride = nullptr;
+
+    /// 本次运行不执行任何工具
+    /// - 模型若仍返回 tool_calls, 忽略它们并结束本轮 (正文就是结果)
+    /// - 工具定义仍在请求里 (前缀一致), 但不会调用任何工具
+    bool toolExecutionDisabled = false;
+
+    /// 支持 `tool_choice = "none"` 的 provider 在"不执行工具"运行时把它写进请求体
+    /// (属于额外保险: 前缀里不含它, 加它不影响缓存对齐; 自建后端不支持时置 false)
+    bool toolChoiceNoneSupported = true;
 
     /// 上下文压缩 (summarization) 中间件开关 (默认 true)
     /// - 子代理默认继承父配置; summarization 发起的压缩子代理显式关闭,

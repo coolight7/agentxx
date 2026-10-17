@@ -133,6 +133,29 @@ void KeyMetrics::noteCompaction(const int64_t tokensBefore, const int64_t tokens
     }
 }
 
+void KeyMetrics::notePromptRefresh(
+    const int64_t durationMs,
+    const int64_t changedSections,
+    const int64_t failures,
+    const int64_t sectionChars
+) {
+    promptRefreshes_.fetch_add(1, std::memory_order_relaxed);
+    if (changedSections > 0) {
+        promptChangedSections_.fetch_add(
+            static_cast<uint64_t>(changedSections),
+            std::memory_order_relaxed
+        );
+    }
+    if (failures > 0) {
+        promptRefreshFailures_.fetch_add(static_cast<uint64_t>(failures), std::memory_order_relaxed);
+    }
+    if (durationMs > 0) {
+        promptRefreshMs_.fetch_add(durationMs, std::memory_order_relaxed);
+    }
+    // 段落字符数取最近一次 (不是累计: 它描述"当前注入多少内容")
+    promptSectionChars_.store(sectionChars, std::memory_order_relaxed);
+}
+
 std::string KeyMetrics::lastModelErrorKind() const {
     std::lock_guard<std::mutex> lock(errorMutex_);
     return lastModelErrorKind_;
@@ -188,6 +211,19 @@ utilxx_base::Json KeyMetrics::toJson() const {
     compaction["tokens_after"]  = compactionTokensAfter_.load(std::memory_order_relaxed);
     j["compaction"]             = std::move(compaction);
 
+    // 运行时提示词段落刷新: 变化次数 = system 前缀被重建的次数
+    utilxx_base::Json prompt = utilxx_base::Json::object();
+    prompt["refreshes"]         = promptRefreshes_.load(std::memory_order_relaxed);
+    prompt["changed_sections"]  = promptChangedSections_.load(std::memory_order_relaxed);
+    prompt["failures"]          = promptRefreshFailures_.load(std::memory_order_relaxed);
+    prompt["total_ms"]          = promptRefreshMs_.load(std::memory_order_relaxed);
+    prompt["avg_ms"]            = avgOf(
+        promptRefreshMs_.load(std::memory_order_relaxed),
+        promptRefreshes_.load(std::memory_order_relaxed)
+    );
+    prompt["section_chars"]     = promptSectionChars_.load(std::memory_order_relaxed);
+    j["prompt_sources"]         = std::move(prompt);
+
     return j;
 }
 
@@ -200,7 +236,8 @@ std::string KeyMetrics::summary() const {
           + toolInterrupted_.load(std::memory_order_relaxed);
     return fmt::format(
         "turns={} (ok={} failed={} cancelled={} interrupted={}) ttft_avg={:.1f}ms (n={}) "
-        "model_calls={} errors={} tools={} (failed={}) compactions={}",
+        "model_calls={} errors={} tools={} (failed={}) compactions={} prompt_refreshes={} "
+        "prompt_changes={}",
         turns,
         turnsCompleted_.load(std::memory_order_relaxed),
         turnsFailed_.load(std::memory_order_relaxed),
@@ -212,7 +249,9 @@ std::string KeyMetrics::summary() const {
         modelErrors_.load(std::memory_order_relaxed),
         toolsTotal,
         toolFailed_.load(std::memory_order_relaxed),
-        compactions_.load(std::memory_order_relaxed)
+        compactions_.load(std::memory_order_relaxed),
+        promptRefreshes_.load(std::memory_order_relaxed),
+        promptChangedSections_.load(std::memory_order_relaxed)
     );
 }
 
@@ -240,6 +279,11 @@ void KeyMetrics::reset() {
     compactions_.store(0);
     compactionTokensBefore_.store(0);
     compactionTokensAfter_.store(0);
+    promptRefreshes_.store(0);
+    promptChangedSections_.store(0);
+    promptRefreshFailures_.store(0);
+    promptRefreshMs_.store(0);
+    promptSectionChars_.store(0);
     turnStartSteadyMs_.store(0);
     firstTokenSeen_.store(false);
     {

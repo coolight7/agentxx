@@ -52,6 +52,10 @@ events::ReqSubagentBatch parseSubagentBatchFromInterrupt(
                 = (t.contains("enable_summarization") && t["enable_summarization"].is_boolean())
                       ? std::optional<bool>{t["enable_summarization"].get<bool>()}
                       : std::nullopt,
+                // 前缀复用与工具执行策略 (上下文压缩用): 缺省 false (旧行为)
+                .keepProvidedSystemMessage = t.value("keep_provided_system", false),
+                .inheritRequestTools       = t.value("inherit_request_tools", false),
+                .toolExecutionDisabled     = t.value("disable_tool_execution", false),
                 // 任务结果标识: 缺省按任务序号兜底
                 .resultId = t.value("result_id", std::string{}),
             });
@@ -73,6 +77,10 @@ events::ReqSubagentBatch parseSubagentBatchFromInterrupt(
             = (arg.contains("enable_summarization") && arg["enable_summarization"].is_boolean())
                   ? std::optional<bool>{arg["enable_summarization"].get<bool>()}
                   : std::nullopt,
+            // 前缀复用与工具执行策略 (上下文压缩用): 缺省 false (旧行为)
+            .keepProvidedSystemMessage = arg.value("keep_provided_system", false),
+            .inheritRequestTools       = arg.value("inherit_request_tools", false),
+            .toolExecutionDisabled     = arg.value("disable_tool_execution", false),
             .resultId = interruptArg.resultId,
         });
     }

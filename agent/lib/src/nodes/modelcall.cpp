@@ -301,17 +301,24 @@ neograph::CompletionParams ModelCallWrapNode::build_params(std::string_view sess
     }
 
     // Build tool definitions
+    // - 同上下文运行 (上下文压缩的子代理): 直接继承父会话上一次请求的工具定义,
+    //   保证请求里的工具部分与父会话逐字节一致 (前缀缓存才命中);
+    //   工具本身在本次运行内不执行 (见 toolExecutionDisabled)
     std::vector<neograph::ChatTool> tool_defs;
-    tool_defs.reserve(tools_.size());
-    for (auto* tool : tools_) {
-        tool_defs.push_back(tool->get_definition());
-    }
+    const bool inheritRequestTools
+        = ctxPtr && ctxPtr->agentConfig && ctxPtr->agentConfig->requestToolsOverride;
+    if (inheritRequestTools) {
+        tool_defs = *ctxPtr->agentConfig->requestToolsOverride;
+    } else {
+        tool_defs.reserve(tools_.size());
+        for (auto* tool : tools_) {
+            tool_defs.push_back(tool->get_definition());
+        }
 
-    // 动态插件工具: 追加到 LLM 侧工具 schema (热插拔工具对模型可见的关键)
-    // - 插件工具注册后, 下一轮 modelcall 即随请求发送给 LLM
-    // - 插件工具卸载后, 定义从列表消失, 模型不再选择调用
-    if (auto ctxPtr = agentContext.lock()) {
-        if (ctxPtr->toolRegistry) {
+        // 动态插件工具: 追加到 LLM 侧工具 schema (热插拔工具对模型可见的关键)
+        // - 插件工具注册后, 下一轮 modelcall 即随请求发送给 LLM
+        // - 插件工具卸载后, 定义从列表消失, 模型不再选择调用
+        if (ctxPtr && ctxPtr->toolRegistry) {
             ctxPtr->toolRegistry->appendDefinitions(tool_defs);
         }
     }
@@ -328,8 +335,8 @@ neograph::CompletionParams ModelCallWrapNode::build_params(std::string_view sess
         auto sections = ctxPtr->buildDynamicContextSections(sessionId);
         if (!sections.empty()) {
             // 检查与告警: 动态段不在稳定前缀内, 每次调用都全额重发且无缓存命中;
-            // 内容不随轮次变化的片段应写入稳定附加段
-            // (MiddlewareContext::graphDataKey_appendSystemMessageStable)
+            // 内容不随轮次变化的片段应登记为稳定段来源
+            // (PromptSource 的 slot = Stable, 见 agentxx/agent/prompt_sources.h)
             std::string sources;
             for (const auto& [source, text] : sections) {
                 if (!sources.empty()) {
@@ -341,8 +348,8 @@ neograph::CompletionParams ModelCallWrapNode::build_params(std::string_view sess
                 "[modelcall] dynamic context section(s) [{}] present: content is attached at "
                 "the request tail, outside the stable prefix, so every call resends it without "
                 "cache hits and the KV cache hit rate drops noticeably; keep content that does "
-                "not change per turn in the stable appended sections "
-                "(graphDataKey_appendSystemMessageStable)",
+                "not change per turn in a stable prompt source "
+                "(PromptSource with slot = Stable, see prompt_sources.h)",
                 sources
             );
             std::string dynamic;
@@ -369,6 +376,24 @@ neograph::CompletionParams ModelCallWrapNode::build_params(std::string_view sess
     if (!sessionId.empty()) {
         params.extra_fields[std::string(agentxx::protocol::kExtraFieldSessionId)]
             = std::string{sessionId};
+    }
+
+    if (ctxPtr && ctxPtr->agentConfig) {
+        // 捕获本次请求的工具定义: 供同上下文子代理 (上下文压缩) 对齐请求前缀
+        // - 工具定义只与 agent 配置相关、与会话无关, 一份即可
+        // - 空列表不覆盖 (子代理取不到时会退回"不继承"的旧行为)
+        if (!params.tools.empty()) {
+            ctxPtr->lastRequestTools
+                = std::make_shared<const std::vector<neograph::ChatTool>>(params.tools);
+        }
+        // 本次运行不执行工具 (压缩子代理): 支持该字段的 provider 直接关闭工具选择
+        // - tool_choice 不参与提示词前缀, 加它不影响缓存对齐
+        // - Anthropic 的 tool_choice 取值是对象, 不在此处理 (靠"忽略 tool_calls"兜底)
+        if (ctxPtr->agentConfig->toolExecutionDisabled
+            && ctxPtr->agentConfig->toolChoiceNoneSupported && !params.tools.empty()
+            && ctxPtr->getSessionCurrentModelConfig(sessionId).type != "anthropic") {
+            params.extra_fields["tool_choice"] = "none";
+        }
     }
 
     // 稳定段指纹: system 消息 + 工具 schema
@@ -445,7 +470,31 @@ asio::awaitable<neograph::graph::NodeOutput>
 
     // assistant 回复定稿: 直接写入会话上下文 (唯一权威) 并发出与旧 messages
     // 通道写入同形的事件 (UI 展开 view 消息 + 请求节流持久化)
-    const bool hasToolCalls = !completion.message.tool_calls.empty();
+    bool hasToolCalls = !completion.message.tool_calls.empty();
+
+    // 本次运行不执行工具 (上下文压缩子代理): 模型若仍返回 tool_calls, 忽略它们
+    // 并结束本轮 —— 工具定义只是为了让请求前缀与父会话一致, 不产生任何工具调用;
+    // 响应正文就是结果, 工具调用不入上下文 (避免出现没有结果的悬挂 tool_calls)
+    if (hasToolCalls) {
+        if (auto ctxPtr = agentContext.lock();
+            ctxPtr && ctxPtr->agentConfig && ctxPtr->agentConfig->toolExecutionDisabled) {
+            XX_LOGD(
+                "[modelcall] {} tool_call(s) ignored: tool execution disabled for this run",
+                completion.message.tool_calls.size()
+            );
+            if (completion.message.content.empty()) {
+                // 只有 tool_calls 没有正文: 本次生成没有可用结果 (上层按空结果
+                // 走压缩失败/重试兜底), 这里只把 tool_calls 清掉, 不改错误语义
+                XX_LOGW(
+                    "[modelcall] tool execution disabled but model returned only tool_calls "
+                    "(no content); result will be empty"
+                );
+            }
+            completion.message.tool_calls.clear();
+            hasToolCalls = false;
+        }
+    }
+
     agentxx::nodes::appendSessionMessages(
         agentContext.lock(),
         in,
@@ -895,7 +944,15 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
         if (haveSystemMsg) {
             newSystemMsg = msgs.front();
         }
-        if (agentCtxPtr) {
+        // 同上下文运行 (上下文压缩的子代理): 保留调用方给的 system 消息
+        // - 该文本就是父会话本次请求发出的 system (父会话 modelcall 刚重建过),
+        //   保留它请求前缀才与父会话一致, 上游前缀缓存才命中
+        // - 子代理自己的配置里没有记忆文件/技能目录, 重建会缺运行时段落,
+        //   system 内部就分叉, 后面整段对话都命中不了
+        const bool keepProvidedSystem
+            = haveSystemMsg && agentCtxPtr && agentCtxPtr->agentConfig
+              && agentCtxPtr->agentConfig->keepProvidedSystemMessage;
+        if (agentCtxPtr && !keepProvidedSystem) {
             // 稳定段 (systemPrompt + 静态附加段 + 运行时稳定附加段: 记忆文件/技能清单)
             // 随 system 消息下发, 属于稳定前缀; 动态段由 build_params 作为请求末尾的
             // 独立消息附加, 不写进 system 消息

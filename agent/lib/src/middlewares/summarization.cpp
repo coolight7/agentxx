@@ -7,10 +7,12 @@
 #include "agentxx/agent/io/agent_io_transport.h"
 #include "agentxx/agent/io/context_stats_wire.h"
 #include "agentxx/agent/model_registry.h"
+#include "agentxx/agent/prompt_sources.h"
 #include "agentxx/event/event_stream.h"
 #include "agentxx/event/events.h"
 #include "agentxx/tools/subagent.h"
 #include "agentxx/util/exception.h"
+#include "agentxx/util/observability.h"
 #include "fmt/format.h"
 #include "utilxx/async_offload.h"
 #include "utilxx_base/string_util.h"
@@ -651,6 +653,8 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
             // 单任务批量请求; tools=[] 显式无工具 (与压缩注释意图一致, 避免
             // 子代理默认全量工具的执行成本与副作用), enable_summarization=false
             // 禁止二次压缩, sessionId=父线程 (同上下文模式)
+            // 另有 keepProvidedSystemMessage / inheritRequestTools /
+            // toolExecutionDisabled: 请求前缀与父会话一致 (缓存命中) 且不执行工具
             events::ReqSubagentBatch batchReq;
             batchReq.parentAgentName
                 = agentCtxPtr->agentConfig ? agentCtxPtr->agentConfig->agentName : std::string{};
@@ -661,6 +665,11 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
                 .sessionId    = std::string{sessionId},
                 .tools        = utilxx_base::Json::array(), // []: 无工具
                 .enableSummarization = false,
+                // 前缀复用: 保留调用方给的 system 消息 + 继承父会话上一次请求的工具
+                // 定义 (请求前缀一致 → 上游前缀缓存命中); 本次运行不执行任何工具
+                .keepProvidedSystemMessage = true,
+                .inheritRequestTools       = true,
+                .toolExecutionDisabled     = true,
             });
 
             // 超时保护: 手动压缩无父轮次取消令牌可级联, 子代理 LLM 卡住时不能
@@ -709,6 +718,12 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
         {"messages",             std::move(reqMsgsJson)},
         {"sessionId",            std::string{sessionId}},
         {"enable_summarization", false                 },
+        // 前缀复用: 保留调用方给的 system 消息 + 继承父会话上一次请求的工具定义
+        // (请求前缀与父会话逐字节一致, 上游前缀缓存才命中)
+        {"keep_provided_system", true},
+        {"inherit_request_tools", true},
+        // 本次运行不执行工具: 工具定义只用于对齐前缀, 模型返回 tool_calls 时忽略
+        {"disable_tool_execution", true},
     };
 
     // 经总线请求压缩 subagent (service.subagent.execute)
@@ -1110,6 +1125,23 @@ asio::awaitable<void>
         // 压缩完成属"事实"变更: 立即落盘, 不等轮末节流窗口
         session->persistNow("compaction");
 
+        // 压缩完成: 后续请求的上下文已经改变, 这也是唯一值得改写提示词注入内容的
+        // 时机 —— 只标记, 不读盘 (实际重取在下一个 model call 的 start 钩子里)。
+        // 内容没变时段落不动 (代价为零); 变了也只付一次 system 前缀重建, 而压缩后
+        // 上下文已经很短, 这是最便宜的时机
+        if (agentCtxPtr->promptSources) {
+            agentCtxPtr->promptSources->markDirty(
+                sessionId,
+                agentxx::agent::PromptRefreshReason::AfterCompaction
+            );
+        }
+        if (agentCtxPtr->metrics) {
+            agentCtxPtr->metrics->noteCompaction(
+                static_cast<int64_t>(oldTokens),
+                static_cast<int64_t>(newTokens)
+            );
+        }
+
         if (compacted) {
             // 成功压缩: 记录本次压缩后的消息条数, 供后续轮次做冷却判断
             agentCtxPtr->middlewareHandleContext->setGraphDataItemValue<size_t>(
@@ -1294,6 +1326,19 @@ asio::awaitable<bool>
     session->replaceMessages(std::move(compressedMessages));
     // 手动压缩在轮次外执行: 立即落盘 (无轮末权威保存兜底)
     session->persistNow("manual-compaction");
+    // 压缩完成: 标记提示词来源需要重取 (只置位, 下一次 model call 的 start 钩子读盘)
+    if (agentCtxPtr->promptSources) {
+        agentCtxPtr->promptSources->markDirty(
+            sessionId,
+            agentxx::agent::PromptRefreshReason::AfterCompaction
+        );
+    }
+    if (agentCtxPtr->metrics) {
+        agentCtxPtr->metrics->noteCompaction(
+            static_cast<int64_t>(oldTokens),
+            static_cast<int64_t>(newTokens)
+        );
+    }
     const auto durationMs
         = static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
                                    std::chrono::steady_clock::now() - startTime

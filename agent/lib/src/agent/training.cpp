@@ -975,6 +975,10 @@ void EvolutionTrainingAgent::removeTrainSession(std::string_view sessionId) cons
             if (ctx->middlewareHandleContext) {
                 ctx->middlewareHandleContext->cleanupSession(std::string{sessionId});
             }
+            // 提示词段落的会话文本一并释放 (见 PromptSourceRegistry::dropSession)
+            if (ctx->promptSources) {
+                ctx->promptSources->dropSession(sessionId);
+            }
             return true;
         },
         [sessionId](std::string errmsg) -> bool {

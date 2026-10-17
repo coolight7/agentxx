@@ -368,6 +368,8 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
         };
     }
     auto subCfg = makeSubagentConfig(parentConfig);
+    /// 同上下文模式: 任务指定了 sessionId (子代理与父会话共享上下文前缀与模型)
+    const bool sameContext = !task.sessionId.empty();
 
     // ---- worktree 绑定继承 (worktree 模式) ----
     // - 父会话已绑定 worktree 时, 子代理的工作目录预置为同一 worktree:
@@ -431,6 +433,44 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
         );
     }
 
+    // ---- 同上下文运行: 前缀复用与工具执行策略 ----
+    // - keepProvidedSystemMessage: 保留调用方给的 system 消息 (子代理按自己的配置
+    //   重建时会缺少运行时提示词段落, 前缀在 system 内部就分叉)
+    // - inheritRequestTools: 继承父会话上一次请求的工具定义 (请求前缀一致)
+    // - toolExecutionDisabled: 本次运行不执行任何工具 (工具定义只用于对齐前缀)
+    if (sameContext) {
+        subCfg->keepProvidedSystemMessage = task.keepProvidedSystemMessage;
+        subCfg->toolExecutionDisabled     = task.toolExecutionDisabled;
+
+        if (task.inheritRequestTools) {
+            // 父会话上一次请求的工具定义 (父上下文优先, 嵌套委派时是上一级子代理)
+            std::shared_ptr<const std::vector<neograph::ChatTool>> parentTools = nullptr;
+            if (parentAgentCtx && parentAgentCtx->lastRequestTools) {
+                parentTools = parentAgentCtx->lastRequestTools;
+            } else if (rootAgent_ && rootAgent_->getContext()) {
+                parentTools = rootAgent_->getContext()->lastRequestTools;
+            }
+            if (parentTools && !parentTools->empty()) {
+                // 继承时父工具定义必须原样出现在请求里 (数量/顺序/内容逐字节一致),
+                // 因此关闭工具白名单过滤: 子代理本来也不执行工具
+                subCfg->enableToolFiltering  = false;
+                subCfg->toolWhitelist.clear();
+                subCfg->requestToolsOverride = std::move(parentTools);
+                XX_LOGD(
+                    "spawnOneTask `{}`: inherit request tools ({} definitions)",
+                    subagentName,
+                    subCfg->requestToolsOverride->size()
+                );
+            } else {
+                // 捕获不到 (进程刚启动 / 没有历史请求): 退回旧行为, 不承诺命中
+                XX_LOGD(
+                    "spawnOneTask `{}`: no captured request tools, inherit skipped",
+                    subagentName
+                );
+            }
+        }
+    }
+
     auto subagent = createAgentInstance(std::move(subCfg));
     if (!subagent) {
         co_return events::RespSubagentBatchItem{
@@ -453,7 +493,6 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
 
     // 同上下文模式: 子代理的 share_store 工具桥接到父会话的 store
     // (id 空间一致: 子代理写入的长内容, 父会话按摘要中的 id 可直接读取)
-    const bool sameContext = !task.sessionId.empty();
     if (sameContext && rootAgent_ && rootAgent_->getContext()
         && rootAgent_->getContext()->middlewareHandleContext) {
         subCtx->agentConfig->sharedShareStoreContext

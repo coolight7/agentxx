@@ -420,6 +420,11 @@ utilxx_base::Json buildRuntimeSnapshot(const AgentContext& ctx) {
     }
     root["hooks"] = std::move(hooksJson);
 
+    // ---- 运行时提示词来源 (段落来源注册表: 每来源的生效状态, 不含正文) ----
+    if (ctx.promptSources) {
+        root["prompt_sources"] = ctx.promptSources->snapshot();
+    }
+
     // ---- 已加载组件 (skill / memory / mcp) 与加载失败项 ----
     utilxx_base::Json components  = utilxx_base::Json::object();
     components["skills"]          = ctx.appendComponentInfo.skills;
@@ -742,17 +747,49 @@ std::vector<std::string> renderAssemblySnapshot(const utilxx_base::Json& snapsho
             add("persistence: OFF (in-memory only, history is lost on exit)");
         }
     }
+    if (snapshot.contains("prompt_sources") && snapshot["prompt_sources"].is_object()) {
+        const auto& ps = snapshot["prompt_sources"];
+        add(fmt::format(
+            "promptSources[{}] sessions={} chars={}:",
+            ps.value("count", 0),
+            ps.value("sessions", 0),
+            ps.value("total_chars", 0)
+        ));
+        if (ps.contains("sources") && ps["sources"].is_array()) {
+            for (const auto& item : ps["sources"]) {
+                add(fmt::format(
+                    "  - {} [{}] order={} slot={} perSession={} builds={} changed={} "
+                    "failed={} chars={}{}",
+                    item.value("key", std::string{}),
+                    item.value("owner", std::string{}),
+                    item.value("order", 0),
+                    item.value("slot", std::string{}),
+                    item.value("per_session", false) ? "yes" : "no",
+                    item.value("refreshes", 0),
+                    item.value("changed", 0),
+                    item.value("failures", 0),
+                    item.value("chars", 0),
+                    item.contains("last_error") && item["last_error"].is_string()
+                        ? fmt::format(" last_error={}", item.value("last_error", std::string{}))
+                        : std::string{}
+                ));
+            }
+        }
+    }
     if (snapshot.contains("metrics") && snapshot["metrics"].is_object()) {
         const auto& m = snapshot["metrics"];
         add(fmt::format(
-            "metrics: turns={} (ok={} failed={}) ttft_avg_ms={:.1f} model_calls={} tools={} compactions={}",
+            "metrics: turns={} (ok={} failed={}) ttft_avg_ms={:.1f} model_calls={} tools={} "
+            "compactions={} prompt_refreshes={} prompt_changes={}",
             m["turns"].value("total", 0),
             m["turns"].value("completed", 0),
             m["turns"].value("failed", 0),
             m["ttft"].value("avg_ms", 0.0),
             m["model"].value("calls", 0),
             m["tools"].value("total", 0),
-            m["compaction"].value("count", 0)
+            m["compaction"].value("count", 0),
+            m.contains("prompt_sources") ? m["prompt_sources"].value("refreshes", 0) : 0,
+            m.contains("prompt_sources") ? m["prompt_sources"].value("changed_sections", 0) : 0
         ));
     }
     if (snapshot.contains("components") && snapshot["components"].is_object()) {

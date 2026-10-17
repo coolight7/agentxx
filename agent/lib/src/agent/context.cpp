@@ -104,40 +104,6 @@ void appendPromptSegment(std::string& combined, const std::string& segment) {
     combined += segment;
 }
 
-/// 取附加段表 (来源 → 正文; 稳定附加段与动态段同形, 只有通道键不同)
-/// - 键排序的 map: 同一来源每轮覆盖写入 (不累积), 顺序稳定;
-///   旧实现用 vector 追加, 每轮都会把上一轮的片段再拼一次 (系统提示词逐轮变长)
-/// - 空正文的条目跳过
-///
-/// - `args`:
-///     - [middlewareCtx] 中间件上下文 (空则返回空列表)
-///     - [sessionId] 会话 id (空则返回空列表)
-///     - [key] 附加段通道键 (见 `MiddlewareContext::graphDataKey_appendSystemMessage*`)
-///
-/// - `return` (来源, 正文) 列表, 按来源键名升序
-std::vector<std::pair<std::string, std::string>> collectAppendSections(
-    const std::shared_ptr<agentxx::middleware::MiddlewareContext>& middlewareCtx,
-    std::string_view                                               sessionId,
-    const std::string&                                             key
-) {
-    std::vector<std::pair<std::string, std::string>> out;
-    if (!middlewareCtx || sessionId.empty()) {
-        return out;
-    }
-    const auto& sections
-        = middlewareCtx->getGraphDataItemValue<std::map<std::string, std::string, std::less<>>>(
-            sessionId,
-            key
-        );
-    out.reserve(sections.size());
-    for (const auto& kv : sections) {
-        if (!kv.second.empty()) {
-            out.emplace_back(kv.first, kv.second);
-        }
-    }
-    return out;
-}
-
 /// Json 边界形态 -> typed 上下文 (逐条 ChatMessage JSON 反序列化)
 std::vector<neograph::ChatMessage> messagesFromJson(const utilxx_base::Json& msgs) {
     std::vector<neograph::ChatMessage> typed;
@@ -735,20 +701,56 @@ const ModelConfig& AgentContext::getSessionCurrentModelConfig(std::string_view s
 
 std::vector<std::pair<std::string, std::string>>
     AgentContext::buildStableContextSections(std::string_view sessionId) const {
-    return collectAppendSections(
-        middlewareHandleContext,
-        sessionId,
-        agentxx::middleware::MiddlewareContext::graphDataKey_appendSystemMessageStable
-    );
+    std::vector<std::pair<std::string, std::string>> out;
+    if (!promptSources) {
+        return out;
+    }
+    // 运行时段由来源注册表持有 (不再经 graphData 中转): 顺序 (order, 键名) 稳定,
+    // 内容只在 model call 的 start 钩子里按标记重取
+    for (const auto& section : promptSources->stableSections(sessionId)) {
+        out.emplace_back(std::string{section.key}, std::string{section.text});
+    }
+    return out;
 }
 
 std::vector<std::pair<std::string, std::string>>
     AgentContext::buildDynamicContextSections(std::string_view sessionId) const {
-    return collectAppendSections(
-        middlewareHandleContext,
-        sessionId,
-        agentxx::middleware::MiddlewareContext::graphDataKey_appendSystemMessage
-    );
+    std::vector<std::pair<std::string, std::string>> out;
+    if (!promptSources) {
+        return out;
+    }
+    for (const auto& section : promptSources->dynamicSections(sessionId)) {
+        out.emplace_back(std::string{section.key}, std::string{section.text});
+    }
+    return out;
+}
+
+std::vector<PromptSectionView>
+    AgentContext::promptSectionViews(std::string_view sessionId) const {
+    std::vector<PromptSectionView> out;
+    // 配置作用域静态段 (只读引用 AgentPrompt 内部存储, 只在本次调用内有效)
+    if (agentConfig) {
+        for (const auto& section : agentConfig->prompt.orderedAppendSections()) {
+            out.push_back(PromptSectionView{
+                .key   = section.key,
+                .text  = section.text,
+                .order = section.order,
+                .owner = section.source,
+                .scope = PromptSectionScope::Config,
+                .slot  = PromptSectionSlot::Stable,
+            });
+        }
+    }
+    // 接下来是运行时段 (会话作用域)
+    if (promptSources) {
+        for (const auto& section : promptSources->stableSections(sessionId)) {
+            out.push_back(section);
+        }
+        for (const auto& section : promptSources->dynamicSections(sessionId)) {
+            out.push_back(section);
+        }
+    }
+    return out;
 }
 
 std::string AgentContext::renderPromptVars(std::string text, std::string_view sessionId) const {
@@ -787,7 +789,8 @@ std::string AgentContext::buildSystemPromptStable(std::string_view sessionId) co
         appendPromptSegment(combined, std::string{section.text});
     }
     // 运行时稳定附加段 (记忆文件内容 / 技能清单): 随 system 消息一起进稳定前缀,
-    // 上游的 KV/前缀缓存能命中; 内容只在配置/插件资源变化时变 (会话内不变)
+    // 上游的 KV/前缀缓存能命中; 文本由来源注册表持有, 只在 model call 的 start
+    // 钩子里按标记重取 (首次 / 压缩完成 / 资源变更 / 显式请求)
     for (const auto& [source, text] : buildStableContextSections(sessionId)) {
         (void)source;
         appendPromptSegment(combined, text);

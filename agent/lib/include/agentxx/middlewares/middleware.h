@@ -452,21 +452,13 @@ public:
     inline static const std::string channel_messagesMeta{"xx_messagesMeta"};
 
     /// 稳定附加段表 (来源 → 正文; 值类型 `std::map<std::string, std::string, std::less<>>`)
-    /// - 由中间件写入, 同来源每轮覆盖 (不累积)
-    /// - 请求装配时拼接到 **system 消息末尾** (见 `AgentContext::buildSystemPromptStable`):
-    ///   内容属于稳定前缀, 上游的 KV/前缀缓存能命中, 不会每次调用都重复计费
-    /// - 只放"随会话资源 (配置/插件) 变化、不随轮次变化"的片段 —— 当前写入方为
-    ///   记忆文件中间件 (来源 `memory`) 与技能中间件 (来源 `skills`)
-    inline static const std::string graphDataKey_appendSystemMessageStable{
-        "xx_appendSystemMessageStable"
-    };
-
-    /// 动态段表 (来源 → 正文; 值类型同 [graphDataKey_appendSystemMessageStable])
-    /// - 由 modelcall 作为**请求末尾的独立消息**附加, 不写进 system 消息
-    /// - 位置在稳定前缀之外: 每次调用都要重新发送且命中不了前缀缓存, 会明显拉低
-    ///   KV 缓存命中率 (modelcall 里有存在性检查与告警)
-    /// - 当前没有写入方, 保留给"确实每轮都变化"的插件/今后功能
-    inline static const std::string graphDataKey_appendSystemMessage{"xx_appendSystemMessage"};
+    /// - **已退役**: 运行时提示词段落不再经 graphData 中转, 改由
+    ///   `agentxx::agent::PromptSourceRegistry` 按会话持有
+    ///   (见 `agent/lib/include/agentxx/agent/prompt_sources.h`);
+    ///   写入方 (记忆文件 / 技能清单) 改为登记来源, 读取方
+    ///   (`AgentContext::buildSystemPromptStable`) 改读注册表
+    /// - 不要在此重新引入段落通道: 段落不再参与 graphData 的"每轮清空"语义,
+    ///   否则又会出现"段落何时失效"的第二套规则
     inline static const std::string graphDataKey_messageCheckInfo{"xx_messageCheckInfo"};
     inline static const std::string graphDataKey_tempLLMThinking{"xx_ModelCallWrap_tempLLMThinking"
     };

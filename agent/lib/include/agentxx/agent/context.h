@@ -2,6 +2,7 @@
 
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/conversation_types.h"
+#include "agentxx/agent/prompt_sources.h"
 #include "asio/awaitable.hpp"
 #include "asio/thread_pool.hpp"
 #include "utilxx_base/log.h"
@@ -773,6 +774,21 @@ public:
     /// - 随本 AgentContext 一份: 多 agent 实例互不影响, 不使用全局变量
     std::shared_ptr<agentxx::feature::Registry> features = nullptr;
 
+    /// 运行时提示词来源注册表 (记忆文件 / 技能清单 / 将来的插件来源)
+    /// - 构造 AgentContext 时即创建 (早于中间件构造与插件加载), 中间件在构造函数里
+    ///   登记来源, 插件禁用/卸载时按 owner 撤销
+    /// - 段落文本只在这里持有 (不再经 graphData 中转); 唯一的读盘入口是 model call
+    ///   的 start 钩子 (见 agentxx/middlewares/prompt_source_refresh.h)
+    std::shared_ptr<PromptSourceRegistry> promptSources
+        = std::make_shared<PromptSourceRegistry>();
+
+    /// 本 agent 上一次请求实际发送的工具定义
+    /// - 由 modelcall 装配请求时写入; 供"同上下文子代理"对齐请求前缀
+    ///   (上下文压缩: 工具定义一致, 上游前缀缓存才命中)
+    /// - 工具定义只与 agent 配置相关、与会话无关, 因此一份即可; 子代理经
+    ///   shared_ptr 共享, 零拷贝
+    std::shared_ptr<const std::vector<neograph::ChatTool>> lastRequestTools = nullptr;
+
     /// per-agent 节点注册表 (支持多 Agent 实例, 不依赖全局 NodeFactory)
     /// - 由 BaseAgent::init 创建并注入; 插件经 graph 接口表注册自定义节点类型
     /// - 非 const: 插件注册需修改; 图编译后引擎持有内部快照, 运行期不再读取
@@ -961,8 +977,8 @@ public:
     //
     // 提示词分两部分, 请求装配时分别放置, 保证连续请求的前缀稳定:
     // - 稳定段 (`buildSystemPromptStable`): systemPrompt + 静态附加段
-    //   (appendSystemPrompts, 按 order 排序) + 运行时稳定附加段
-    //   (记忆文件内容 / 技能清单, 随配置与插件构造, 不随轮次变化) —— 全部进
+    //   (appendSystemPrompts, 按 order 排序) + 运行时稳定段
+    //   (记忆文件内容 / 技能清单, 由 PromptSourceRegistry 按会话持有) —— 全部进
     //   system 消息, 属于稳定前缀, 上游的 KV/前缀缓存可命中 (每轮不重复计费)
     // - 动态段 (`buildDynamicContextSections`): 每轮都可能变化的片段, 由
     //   modelcall 作为**请求末尾的独立消息**附加 —— 位置在稳定前缀之外, 每次
@@ -972,17 +988,21 @@ public:
     /// 稳定段文本 (systemPrompt + 静态附加段 + 运行时稳定附加段; 已做会话级占位符替换)
     std::string buildSystemPromptStable(std::string_view sessionId = "") const;
 
-    /// 运行时稳定附加段 (来源 → 正文; 按来源键名升序稳定排列)
-    /// - 由中间件经 `graphDataKey_appendSystemMessageStable` 写入 (同来源覆盖, 不累积)
-    /// - 内容随配置/插件构造 (记忆文件 / 技能清单), 会话内不变: 拼进 system 末尾
+    /// 运行时稳定附加段 (来源 → 正文; 按 (order, 键名) 稳定排列)
+    /// - 取自 [promptSources] 的稳定段视图; 会话内不变 (只在 model call 的
+    ///   start 钩子里按标记重取): 拼进 system 末尾, 与 static 段一起进前缀
     std::vector<std::pair<std::string, std::string>>
         buildStableContextSections(std::string_view sessionId = "") const;
 
-    /// 动态段片段 (来源 → 正文; 按来源键名升序稳定排列)
-    /// - 由中间件经 `graphDataKey_appendSystemMessage` 写入 (同来源覆盖, 不累积)
+    /// 动态段片段 (来源 → 正文; 按 (order, 键名) 稳定排列)
+    /// - 取自 [promptSources] 的动态段视图
     /// - 由 modelcall 附加在请求末尾, 不写进 system 消息 (会明显降低缓存命中率)
     std::vector<std::pair<std::string, std::string>>
         buildDynamicContextSections(std::string_view sessionId = "") const;
+
+    /// 段落视图 (按装配顺序: 配置作用域静态段在前, 运行时段在后)
+    /// - 供装配快照与诊断需要"某段是谁提供的、什么顺序"时使用
+    std::vector<PromptSectionView> promptSectionViews(std::string_view sessionId = "") const;
 
     /// 替换提示词里的会话级占位符 (工作目录 / 临时目录 / 会话 ID)
     std::string renderPromptVars(std::string text, std::string_view sessionId) const;

@@ -287,6 +287,14 @@ struct SubagentBatchItem {
     ///   避免对透传的上下文前缀二次压缩破坏 KV/prefix cache 一致性)
     /// - true: 显式启用
     std::optional<bool> enableSummarization;
+    /// 同上下文运行: 保留调用方给出的 system 消息 (不按子代理自身配置重建)
+    /// - 用于"复用父会话可缓存前缀"的场景 (上下文压缩)
+    bool keepProvidedSystemMessage = false;
+    /// 同上下文运行: 继承父会话上一次请求的工具定义 (只用于对齐请求前缀)
+    bool inheritRequestTools = false;
+    /// 本次运行不执行工具: 模型若仍返回 tool_calls, 忽略它们并结束本轮
+    /// - 工具定义仍在请求里 (前缀一致), 但不会调用任何工具
+    bool toolExecutionDisabled = false;
     /// 任务结果标识: 回填到父 toolcall 的 tool_call_id 或自定义 id;
     /// 为空时按任务序号 (1-based) 兜底编号
     std::string resultId;

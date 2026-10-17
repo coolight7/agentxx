@@ -9,6 +9,7 @@
 #include "agentxx/agent/session_store.h"
 #include "agentxx/feature/registry.h"
 #include "agentxx/middlewares/permission.h"
+#include "agentxx/middlewares/prompt_source_refresh.h"
 #include "agentxx/middlewares/subagent_manager.h"
 #include "agentxx/middlewares/summarization.h"
 #include "agentxx/nodes/graph_conditions.h"
@@ -987,6 +988,18 @@ neograph::json BaseAgent::initGraphDefinition() {
 asio::awaitable<void> BaseAgent::initMiddleware() {
     auto config = agentContext->agentConfig;
     {
+        // 运行时提示词来源刷新入口 (必须是第一个 handle)
+        // - 本钩子 (model call 的 start) 是运行时提示词段落**唯一**的刷新位置:
+        //   首次读取 / 压缩完成 / 资源变更 / 显式请求都在这里判断
+        // - 没有待刷新标记时只有一次布尔判断, 不产生 I/O; 内容未变时不动段落
+        //   (不会制造 system 前缀变化)
+        // - 必须早于 modelcall 的 baseRun (重建 system 消息), 否则本请求拿到的
+        //   仍是上一次的段落内容
+        agentContext->middlewareHandleContext->handles.push_back(
+            std::make_shared<agentxx::middleware::PromptSourceRefreshHandle>(agentContext)
+        );
+    }
+    {
         // subagent 委派管理中间件: 独立中间件持有 SubAgentManagerTool,
         // 注册事件总线服务 (service.subagent.execute), 并按配置决定是否
         // 把 `agentxx_subagent` 工具注入给模型
@@ -1867,6 +1880,10 @@ asio::awaitable<BaseAgent::SimpleRunResult> BaseAgent::runInternalAsync(
     if (cleanupAfter) {
         if (agentContext->middlewareHandleContext) {
             agentContext->middlewareHandleContext->cleanupSession(std::string{sessionId});
+        }
+        // 提示词段落的会话文本一并释放 (按会话持有的来源文本会随会话累积)
+        if (agentContext->promptSources) {
+            agentContext->promptSources->dropSession(sessionId);
         }
         agentContext->sessions->remove(sessionId);
     }

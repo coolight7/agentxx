@@ -68,6 +68,18 @@ public:
     /// 一次上下文压缩完成 (自动或手动)
     void noteCompaction(int64_t tokensBefore, int64_t tokensAfter);
 
+    // ---- 提示词来源刷新 ----
+
+    /// 一次运行时提示词段落刷新 (model call 的 start 钩子)
+    /// - durationMs: 本次刷新耗时; changedSections: 其中内容变化 (会让 system 前缀
+    ///   失效) 的段落数; failures: 失败/超时数; sectionChars: 刷新后段落总字符数
+    void notePromptRefresh(
+        int64_t durationMs,
+        int64_t changedSections,
+        int64_t failures,
+        int64_t sectionChars
+    );
+
     // ---- 导出 ----
 
     /// 指标 JSON (字段稳定; 时间量为毫秒累计 + 计数, 便于外部求平均)
@@ -150,6 +162,22 @@ public:
     int64_t compactionTokensAfter() const noexcept {
         return compactionTokensAfter_.load(std::memory_order_relaxed);
     }
+    /// 提示词段落刷新次数 / 其中变化次数 / 失败次数 / 耗时累计 / 段落字符数
+    uint64_t promptRefreshes() const noexcept {
+        return promptRefreshes_.load(std::memory_order_relaxed);
+    }
+    uint64_t promptChangedSections() const noexcept {
+        return promptChangedSections_.load(std::memory_order_relaxed);
+    }
+    uint64_t promptRefreshFailures() const noexcept {
+        return promptRefreshFailures_.load(std::memory_order_relaxed);
+    }
+    int64_t promptRefreshMs() const noexcept {
+        return promptRefreshMs_.load(std::memory_order_relaxed);
+    }
+    int64_t promptSectionChars() const noexcept {
+        return promptSectionChars_.load(std::memory_order_relaxed);
+    }
     /// 最近一次模型错误分类 (空 = 无错误)
     std::string lastModelErrorKind() const;
 
@@ -182,6 +210,12 @@ private:
     std::atomic<uint64_t> compactions_{0};
     std::atomic<int64_t>  compactionTokensBefore_{0};
     std::atomic<int64_t>  compactionTokensAfter_{0};
+
+    std::atomic<uint64_t> promptRefreshes_{0};
+    std::atomic<uint64_t> promptChangedSections_{0};
+    std::atomic<uint64_t> promptRefreshFailures_{0};
+    std::atomic<int64_t>  promptRefreshMs_{0};
+    std::atomic<int64_t>  promptSectionChars_{0};
 
     /// 本轮的单调起点 (noteTurnStart 记录, noteFirstToken/noteTurnEnd 取值)
     std::atomic<int64_t> turnStartSteadyMs_{0};

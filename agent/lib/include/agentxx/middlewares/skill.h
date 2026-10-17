@@ -1,11 +1,14 @@
 #pragma once
 
+#include "agentxx/agent/prompt_sources.h"
 #include "agentxx/middlewares/middleware.h"
 #include "asio/io_context.hpp"
 #include <array>
 #include <cstdint>
 #include <map>
+#include <memory>
 #include <neograph/neograph.h>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -33,7 +36,7 @@ public:
     ///     - 1-1024 characters
     ///     - Should describe both what the skill does and when to use it
     ///     - Should include specific keywords that help agents identify
-    ///     relevant tasks
+    ///       relevant tasks
     std::string description;
 
     /// License name or reference to bundled license file.
@@ -43,7 +46,7 @@ public:
     ///   Constraints per Agent Skills specification:
     ///   - 1-500 characters if provided
     ///   - Should only be included if there are specific compatibility
-    ///   requirements
+    ///     requirements
     ///   - Can indicate intended product, required packages, etc.
     std::string compatibility;
 
@@ -88,18 +91,21 @@ public:
     std::map<std::string, std::string> loadErrors{};
 };
 
+/// 技能中间件状态 (清单文本改由 PromptSourceRegistry 持有, 这里不再存内容)
 class SkillMiddlewareState : public BaseMiddlewareState {
 public:
-
-    std::string cacheFormatSkillPrompt;
-    /// 生成缓存时的资源纪元 (SkillMiddlewareHandle::resourceEpoch;
-    /// 插件运行期增删 skill 目录后纪元递增, 缓存据此失效重建)
-    uint64_t      cachedResourceEpoch = 0;
-    _SkillContext skillContext{};
 
     SkillMiddlewareState() {}
 };
 
+/// 技能中间件
+///
+/// - 扫描配置/插件声明的目录里的 `SKILL.md`, 把技能清单作为运行时提示词段落
+///   (键 `skills`) 注入 system 消息末尾, 属于稳定前缀
+/// - 清单文本由 [agentxx::agent::PromptSourceRegistry] 持有 (与会话无关, 全体共享);
+///   本中间件只负责扫描/裁决/生成清单
+/// - 取文本的时机由 model call 的 start 钩子决定 (首次 / 压缩完成 / 资源变更),
+///   **不监听文件变化、不按轮次重扫**
 class SkillMiddlewareHandle : public BaseMiddlewareHandle<SkillMiddlewareState> {
 protected:
 
@@ -123,7 +129,7 @@ Skills follow a **progressive disclosure** pattern - you see their name and desc
 4. **Access supporting files**: Skills may include helper scripts, configs, or reference docs - use absolute paths
 
 **When to Use Skills:**
-- User's request matches a skill's domain (e.g., "analyse X" -> `data-analyse` skill)
+- User's request matches a skill's domain (e.g. "analyse X" -> `data-analyse` skill)
 - You need specialized knowledge or structured workflows
 - A skill provides proven patterns for complex tasks
 
@@ -147,19 +153,34 @@ Remember: Skills make you more capable and consistent. When in doubt, check if a
     /// - 顺序即优先级顺序 (先注册的优先); 同名技能取最先注册的目录
     std::vector<SkillDirEntry> skillDirs;
 
+    /// 已解析的技能元数据 (清单生成用; 扫描后整体替换)
     _SkillContext skillCache{};
-    bool          haveLoadSkillMetadata = false;
 
     /// 被同名高优先级技能遮蔽的技能 ({技能名, 被遮蔽目录, 生效目录})
     std::vector<std::array<std::string, 3>> shadowedSkills_;
 
-    /// 是否需要重扫 (插件运行期增删扫描目录后置位; 下次 onAgentcallStartFunc 全量重扫)
-    bool needReloadSkillMetadata = false;
-    /// 资源纪元 (扫描目录变更时递增; 各线程状态缓存据此失效重建)
-    /// - 初始为 1 (状态侧 cachedResourceEpoch 默认 0, 保证首轮必定生成缓存)
-    uint64_t resourceEpoch = 1;
+    /// 资源注册表 (登记/撤销来源用; 弱引用避免与 AgentContext 形成环)
+    std::weak_ptr<agentxx::agent::PromptSourceRegistry> promptSources_;
+
+    /// 上次扫描结果的快照 (SKILL.md 路径 → 时间戳 + 字节数)
+    /// - 只用于"被要求刷新时省去重读 SKILL.md": 结构未变直接返回上次清单文本
+    /// - 不作为刷新触发条件 (代码里没有文件监听, 也没有按轮次的 stat 对比)
+    std::map<std::string, std::pair<uint64_t, uint64_t>, std::less<>> scanSnapshot_;
+
+    /// 上次生成的清单文本 (扫描结果未变时直接复用)
+    std::string cachedListText_;
+
+    /// 取段落文本 (来源的 build 实现; 见 PromptSource::build)
+    asio::awaitable<std::optional<std::string>> buildSectionAsync();
+
+    /// 扫描所有目录并重建 skillCache (含同名裁决); 返回 false 表示结果与上次相同
+    asio::awaitable<bool> scanSkillsAsync();
 
 public:
+
+    /// 段落键与归属 (注册表内唯一)
+    inline static constexpr std::string_view kSectionKey   = "skills";
+    inline static constexpr std::string_view kSectionOwner = "core:skills";
 
     SkillMiddlewareHandle(
         const std::vector<std::string>&             in_initSkillDirPaths,
@@ -168,26 +189,25 @@ public:
         std::string_view                            in_source   = "config"
     );
 
+    ~SkillMiddlewareHandle() override;
+
     std::string formatSkillsMetadataList();
 
     /// <error, metadata>
     asio::awaitable<std::pair<std::string, agentxx::middleware::_SkillMetadata>>
         readSkillFile(std::string_view dirpath);
 
-    asio::awaitable<void> onAgentcallStartFunc(neograph::graph::NodeInput& in) override;
-
     // ---------------- 插件资源扩展: 动态增删扫描目录 (仅 io 线程调用) ----------------
 
     /// 动态追加 skill 扫描目录 (插件声明/运行时注册)
-    /// - 元数据未加载: 直接并入列表, 首轮懒加载自然包含
-    /// - 已加载: 置重载标记 + 递增纪元, 下次轮次开始全量重扫 (缓存失效自愈)
+    /// - 只改目录列表并标记"资源变更"; 实际重扫在下一个请求装配前发生
     /// - 默认按"插件"来源与优先级 (插件贡献的目录优先级低于项目/用户配置)
     void addSkillDirs(std::vector<std::string> paths);
 
     /// 追加扫描目录并指定优先级/来源 (数字小的优先)
     void addSkillDirs(std::vector<std::string> paths, int priority, std::string_view source);
 
-    /// 摘除扫描目录并置重载标记 (io 线程; 缓存随下次轮次重建)
+    /// 摘除扫描目录并标记资源变更 (io 线程; 清单随下次请求重建)
     void removeSkillDirs(const std::vector<std::string>& paths);
 
     /// 当前扫描目录列表 (测试/调试用)
