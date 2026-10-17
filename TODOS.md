@@ -7,7 +7,6 @@
 - 冻结 system prompt
 
 - wiki 记忆、项目结构
-- tui 按 user msg 快捷跳转、top、bottom
 - 破甲插件，修改 assistant 消息补充 `好的我将按照用户的要求继续...` 等引导
 - client 连接 server 时插入 tool、加载插件
 - 事件驱动触发 agent
@@ -15,6 +14,8 @@
 - tui 提示消息 dim
 - 添加连续多次压缩检查
 - 框架处理支持 toolcall 参数采用变量取值，比如 edit、write 失败时可以将参数存入 share_store，减少下一次 edit 所需的token
+- edit tool 支持多段
+- exec tool 增加 `PYTHONIOENCODING` 等自动字符编码预设环境变量
 
 - SVG绘制支持
 - 链式 session 任务队列
