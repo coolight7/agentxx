@@ -3,6 +3,7 @@
 #include "agentxx-test/test_coro_util.h"
 
 #include "agentxx/agent/base_agent.h"
+#include "agentxx/agent/assembly_snapshot.h"
 #include "agentxx/agent/code_agent.h"
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/context.h"
@@ -10,8 +11,10 @@
 #include "agentxx/agent/io/session_server_agent_io.h"
 #include "agentxx/agent/io/wire_protocol.h"
 #include "agentxx/agent/prompt.h"
+#include "agentxx/agent/prompt_sources.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/middlewares/skill.h"
+#include "agentxx/util/observability.h"
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
 #include <asio/redirect_error.hpp>
@@ -464,14 +467,13 @@ asio::awaitable<void> test_skill_name_adjudication() {
 // ---------------------------------------------------------------------------
 // 4. 动态段机制保留 (预留给插件/今后功能)
 //
-// 写入 `xx_appendSystemMessage` 的片段仍作为**请求末尾的独立消息**附加, 不进
-// system 消息: 它位于稳定前缀之外, 每次调用全额重发且命中不了前缀缓存, 会明显
-// 降低 KV 缓存命中率 (modelcall 里有存在性检查与告警)
+// slot = Dynamic 的提示词来源仍作为**请求末尾的独立消息**附加, 不进 system 消息:
+// 它位于稳定前缀之外, 每次调用全额重发且命中不了前缀缓存, 会明显降低 KV 缓存
+// 命中率 (modelcall 里有存在性检查与告警)
 // ---------------------------------------------------------------------------
 
-/// 测试用动态段写入句柄 (模拟插件): 每轮 agent 调用开始时写入一个动态段来源
-/// - graphData 是每轮执行的临时数据 (AgentStartCall 刷新), 所以不能在运行前
-///   直接写, 必须像真实中间件那样在钩子里写
+/// 测试用动态段来源 (模拟插件): 在构造时把自己登记为 slot = Dynamic 的提示词来源
+/// - 段落由注册表持有 (不再经 graphData 通道), 文本随请求末尾下发
 class TestDynamicSectionHandle
     : public agentxx::middleware::BaseMiddlewareHandle<agentxx::middleware::BaseMiddlewareState> {
 public:
@@ -483,28 +485,38 @@ public:
     ) :
         BaseMiddlewareHandle<agentxx::middleware::BaseMiddlewareState>(
             "TestDynamicSectionHandle",
-            std::move(in_agentContext)
+            in_agentContext
         ),
         source_(std::move(source)),
-        text_(std::move(text)) {}
-
-    asio::awaitable<void> onAgentcallStartFunc(neograph::graph::NodeInput& in) override {
-        auto ctxPtr = agentContext.lock();
-        if (ctxPtr && ctxPtr->middlewareHandleContext) {
-            auto& sections = ctxPtr->middlewareHandleContext->getGraphDataItemValue<
-                std::map<std::string, std::string, std::less<>>>(
-                in.ctx.thread_id,
-                agentxx::middleware::MiddlewareContext::graphDataKey_appendSystemMessage
-            );
-            sections[source_] = text_;
+        text_(std::move(text)) {
+        if (auto ctxPtr = in_agentContext.lock(); ctxPtr && ctxPtr->promptSources) {
+            registry_ = ctxPtr->promptSources;
+            ctxPtr->promptSources->registerSource(agentxx::agent::PromptSource{
+                .key                 = source_,
+                .owner               = "test:dynamic",
+                .order               = 900,
+                .slot                = agentxx::agent::PromptSectionSlot::Dynamic,
+                .perSession          = false,
+                .refreshOnCompaction = true,
+                .timeout             = std::chrono::milliseconds{1000},
+                .build =
+                    [this](const agentxx::agent::PromptRefreshContext& /*rc*/)
+                    -> asio::awaitable<std::optional<std::string>> { co_return text_; },
+            });
         }
-        co_return;
+    }
+
+    ~TestDynamicSectionHandle() override {
+        if (auto registry = registry_.lock()) {
+            registry->removeSource(source_, "test:dynamic");
+        }
     }
 
 private:
 
-    std::string source_;
-    std::string text_;
+    std::string                                          source_;
+    std::string                                          text_;
+    std::weak_ptr<agentxx::agent::PromptSourceRegistry>   registry_;
 };
 
 asio::awaitable<void> test_dynamic_section_tail() {
@@ -557,6 +569,107 @@ asio::awaitable<void> test_dynamic_section_tail() {
     removeTempRoot(root);
 }
 
+// ---------------------------------------------------------------------------
+// 5. 压缩完成后的刷新时机 (A2 / A3 / A4)
+//
+// - 文件在外部被改动但**没有**发生压缩/资源变更 → 系统提示词不变 (证明没有监听)
+// - 压缩完成 (markDirty(AfterCompaction)) 且内容未变 → 系统提示词逐字节不变,
+//   stablePrefixChanges 不增长 (A2)
+// - 压缩完成且内容变了 → 下一次请求的 system 含新内容, stablePrefixChanges +1 (A3)
+// ---------------------------------------------------------------------------
+
+asio::awaitable<void> test_refresh_after_compaction() {
+    const auto root       = makeTempRoot();
+    const auto memoryFile = (fs::path{root} / "memory.md").string();
+    {
+        std::ofstream ofs{utilxx_base::utf8ToPath(memoryFile)};
+        ofs << "MEMORY-V1: first version\n";
+    }
+
+    agentxx::agent::AgentConfig tweaks;
+    tweaks.memoryFilePaths.push_back(memoryFile);
+
+    auto fx = co_await makeFixture("refresh-after-compaction-session", tweaks);
+
+    co_await runOneTurn(fx, "first turn");
+    const auto system1 = systemContentOf(g_da_sim_last_request);
+    XX_TEST_EXPECT_TRUE(system1.find("MEMORY-V1") != std::string::npos);
+
+    auto session = fx->agent->agentContext->sessions->get(fx->sessionId);
+    XX_TEST_EXPECT_TRUE(session != nullptr);
+    if (!session) {
+        removeTempRoot(root);
+        co_return;
+    }
+
+    // ---- A4: 文件在外部被改动, 但没有压缩/资源变更 → 不刷新 ----
+    {
+        std::ofstream ofs{utilxx_base::utf8ToPath(memoryFile)};
+        ofs << "MEMORY-V2: second version\n";
+    }
+    // 保证时间戳与上一版不同 (部分文件系统时间戳精度较粗)
+    {
+        std::error_code ec;
+        fs::last_write_time(
+            utilxx_base::utf8ToPath(memoryFile),
+            fs::file_time_type::clock::now() + std::chrono::seconds{3},
+            ec
+        );
+    }
+    co_await runOneTurn(fx, "second turn");
+    const auto system2 = systemContentOf(g_da_sim_last_request);
+    XX_TEST_EXPECT_EQ(system2, system1); // 逐字节相同: 没有文件监听
+    XX_TEST_EXPECT_TRUE(system2.find("MEMORY-V2") == std::string::npos);
+    XX_TEST_EXPECT_EQ(session->stablePrefixChanges(), uint64_t{0});
+
+    // ---- A2: 压缩完成但内容未变 → 系统提示词不变, 前缀变化次数不增长 ----
+    // (把文件内容改回与已注入的文本一致: 读盘后内容与当前段落相同)
+    {
+        std::ofstream ofs{utilxx_base::toCurrentSystemAbsolutePath(memoryFile)};
+        ofs << "MEMORY-V1: first version\n";
+    }
+    fx->agent->agentContext->promptSources->markDirty(
+        fx->sessionId,
+        agentxx::agent::PromptRefreshReason::AfterCompaction
+    );
+    co_await runOneTurn(fx, "third turn");
+    const auto system3 = systemContentOf(g_da_sim_last_request);
+    XX_TEST_EXPECT_EQ(system3, system1);
+    XX_TEST_EXPECT_EQ(session->stablePrefixChanges(), uint64_t{0});
+
+    // ---- A3: 压缩完成且内容变了 → 下一次请求生效, 前缀变化次数恰好 +1 ----
+    {
+        std::ofstream ofs{utilxx_base::toCurrentSystemAbsolutePath(memoryFile)};
+        ofs << "MEMORY-V3: third version\n";
+    }
+    fx->agent->agentContext->promptSources->markDirty(
+        fx->sessionId,
+        agentxx::agent::PromptRefreshReason::AfterCompaction
+    );
+    co_await runOneTurn(fx, "fourth turn");
+    const auto system4 = systemContentOf(g_da_sim_last_request);
+    XX_TEST_EXPECT_TRUE(system4.find("MEMORY-V3") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(system4.find("MEMORY-V1") == std::string::npos);
+    XX_TEST_EXPECT_EQ(session->stablePrefixChanges(), uint64_t{1});
+
+    // 刷新指标可见 (metrics.prompt_sources.changed_sections 至少 1 次)
+    if (fx->agent->agentContext->metrics) {
+        XX_TEST_EXPECT_TRUE(fx->agent->agentContext->metrics->promptChangedSections() >= 1);
+        XX_TEST_EXPECT_TRUE(fx->agent->agentContext->metrics->promptRefreshes() >= 1);
+    }
+
+    // 装配快照里能看到来源状态 (不含正文)
+    const auto snapshot = agentxx::agent::buildRuntimeSnapshot(*fx->agent->agentContext);
+    XX_TEST_EXPECT_TRUE(snapshot.contains("prompt_sources"));
+    if (snapshot.contains("prompt_sources")) {
+        const auto& ps = snapshot["prompt_sources"];
+        XX_TEST_EXPECT_TRUE(ps.value("count", 0) >= 2); // memory + skills
+        XX_TEST_EXPECT_TRUE(ps.dump().find("MEMORY-V3") == std::string::npos); // 不含正文
+    }
+
+    removeTempRoot(root);
+}
+
 } // namespace
 
 TestResult testPromptSectionOrder() {
@@ -571,6 +684,7 @@ asio::awaitable<TestResult> run_prompt_stability_tests() {
     co_await test_request_structure_and_stable_prefix();
     co_await test_skill_name_adjudication();
     co_await test_dynamic_section_tail();
+    co_await test_refresh_after_compaction();
     co_return TestResult{g_pr_passed - passedBefore, g_pr_failed - failedBefore};
 }
 

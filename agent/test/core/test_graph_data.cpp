@@ -23,7 +23,7 @@ namespace test {
 
 using agentxx::middleware::MiddlewareContext;
 
-/// 动态段表: `xx_appendSystemMessage` 的值类型 (来源键 → 文本)
+/// 段落表 (来源键 → 文本) 的值类型 (与 graphData 的 map 通道同形)
 using SectionMap = std::map<std::string, std::string, std::less<>>;
 
 namespace {
@@ -40,7 +40,7 @@ std::string stringAt(const utilxx_base::Json& obj, std::string_view key) {
     return value.get<std::string>();
 }
 
-/// 取动态段表里的段文本, 键缺失时返回占位文本 (同上, 失败路径不抛异常)
+/// 取段落表里的段文本, 键缺失时返回占位文本 (同上, 失败路径不抛异常)
 std::string sectionAt(const SectionMap& sections, std::string_view key) {
     auto it = sections.find(key);
     if (sections.end() == it) {
@@ -99,15 +99,19 @@ TestResult testGraphData() {
         const std::string sessionId = "graph_data_test";
         auto              source    = std::make_shared<MiddlewareContext>();
 
+        // 注意: 提示词段落已不再走 graphData 通道 (改由 PromptSourceRegistry 持有,
+        // 见 agentxx/agent/prompt_sources.h), 这里用普通通道验证 map 值的往返
+        const std::string probeMapKey{"xx_testSectionMap"};
         source->setGraphDataItemValue<SectionMap>(
             sessionId,
-            MiddlewareContext::graphDataKey_appendSystemMessage,
+            probeMapKey,
             SectionMap{{"memory", "M"}, {"skills", "S"}}
         );
-        // 稳定附加段与新通道同形 (记忆/技能内容走它随 system 消息下发), 一并覆盖往返
+        // 两个字符串通道同形 (不同值), 一并覆盖往返
+        const std::string probeMapKeyB{"xx_testSectionMapB"};
         source->setGraphDataItemValue<SectionMap>(
             sessionId,
-            MiddlewareContext::graphDataKey_appendSystemMessageStable,
+            probeMapKeyB,
             SectionMap{{"memory", "SM"}, {"skills", "SS"}}
         );
         source->setGraphDataItemValue<std::string>(
@@ -133,16 +137,14 @@ TestResult testGraphData() {
         const auto savedSnapshot
             = agentxx::util::fromNeographJson(source->getGraphDataToState(state, sessionId));
 
-        // 动态段表必须落成对象: 落成 null 即 checkpoint 丢值 (未覆盖类型的退化行为)
-        const auto& savedSections
-            = savedSnapshot[MiddlewareContext::graphDataKey_appendSystemMessage];
+        // map 值必须落成对象: 落成 null 即 checkpoint 丢值 (未覆盖类型的退化行为)
+        const auto& savedSections = savedSnapshot[probeMapKey];
         XX_TEST_EXPECT_TRUE(savedSections.is_object());
         XX_TEST_EXPECT_EQ(savedSections.size(), (size_t)2);
         XX_TEST_EXPECT_EQ(stringAt(savedSections, "memory"), std::string("M"));
 
-        // 稳定附加段通道同样完整落盘 (记忆/技能内容随它进 system 消息)
-        const auto& savedStable
-            = savedSnapshot[MiddlewareContext::graphDataKey_appendSystemMessageStable];
+        // 同形的第二个 map 通道同样完整落盘
+        const auto& savedStable = savedSnapshot[probeMapKeyB];
         XX_TEST_EXPECT_TRUE(savedStable.is_object());
         XX_TEST_EXPECT_EQ(stringAt(savedStable, "memory"), std::string("SM"));
 
@@ -150,18 +152,14 @@ TestResult testGraphData() {
         auto target = std::make_shared<MiddlewareContext>();
         target->setGraphDataFromState(savedSnapshot, sessionId);
 
-        const auto& restoredSections = target->getGraphDataItemValue<SectionMap>(
-            sessionId,
-            MiddlewareContext::graphDataKey_appendSystemMessage
-        );
+        const auto& restoredSections
+            = target->getGraphDataItemValue<SectionMap>(sessionId, probeMapKey);
         XX_TEST_EXPECT_EQ(restoredSections.size(), (size_t)2);
         XX_TEST_EXPECT_EQ(sectionAt(restoredSections, "memory"), std::string("M"));
         XX_TEST_EXPECT_EQ(sectionAt(restoredSections, "skills"), std::string("S"));
 
-        const auto& restoredStable = target->getGraphDataItemValue<SectionMap>(
-            sessionId,
-            MiddlewareContext::graphDataKey_appendSystemMessageStable
-        );
+        const auto& restoredStable
+            = target->getGraphDataItemValue<SectionMap>(sessionId, probeMapKeyB);
         XX_TEST_EXPECT_EQ(restoredStable.size(), (size_t)2);
         XX_TEST_EXPECT_EQ(sectionAt(restoredStable, "skills"), std::string("SS"));
 

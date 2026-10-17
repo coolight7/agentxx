@@ -18,6 +18,7 @@
 #include "asio/use_awaitable.hpp"
 #include "utilxx/http_client.h"
 #include "utilxx_base/string_util.h"
+#include <algorithm>
 #include <atomic>
 #include <filesystem>
 #include <memory>
@@ -199,6 +200,14 @@ std::string g_da_sim_fail_body;
 ///   结束时恢复 -1 (响应 handler 处理递减, 不自动重置)
 int g_da_sim_tool_calls_remaining = -1;
 
+// 模拟前缀缓存 (见 test_agent.h 说明)
+bool             g_da_sim_prefix_cache_enabled = false;
+double           g_da_sim_last_cache_ratio      = 0.0;
+int              g_da_sim_last_cached_tokens    = 0;
+int              g_da_sim_last_prompt_tokens    = 0;
+/// 上一条成功请求 (模拟缓存的前缀基准)
+static utilxx_base::Json g_da_sim_prev_for_cache = utilxx_base::Json::object();
+
 /// 默认模拟器配置
 static DaSimConfig g_defaultSimConfig;
 
@@ -255,7 +264,12 @@ DaSimServer startDaSimServer() {
     g_da_sim_fail_count           = 0;
     g_da_sim_fail_status          = 0;
     g_da_sim_fail_body.clear();
-    g_da_sim_tool_calls_remaining = -1;
+    g_da_sim_tool_calls_remaining  = -1;
+    g_da_sim_prefix_cache_enabled  = false;
+    g_da_sim_last_cache_ratio      = 0.0;
+    g_da_sim_last_cached_tokens    = 0;
+    g_da_sim_last_prompt_tokens    = 0;
+    g_da_sim_prev_for_cache        = utilxx_base::Json::object();
     utilxx::HttpClient::clearConnectionPool();
 
     DaSimServer sim;
@@ -319,6 +333,66 @@ DaSimServer startDaSimServer() {
                     if (ec) {
                         co_return;
                     }
+                }
+
+                // ---- 模拟前缀缓存 (provider prompt cache) ----
+                // 与上一条成功请求逐字节比较: 工具定义 -> 消息前缀; 命中的部分按
+                // 每 4 字节 1 token 估算, 写进 usage.prompt_tokens_details.cached_tokens
+                // (主程序侧 parseCachedUsage 会记入用量台账与关键指标)
+                int respPromptTokens = g_da_sim_prompt_tokens;
+                int respCachedTokens = 0;
+                if (g_da_sim_prefix_cache_enabled) {
+                    auto estimateTokens = [](const utilxx_base::Json& value) -> int {
+                        const std::string text
+                            = value.is_string() ? value.get<std::string>() : value.dump();
+                        return static_cast<int>(text.size() / 4) + 1;
+                    };
+                    auto toolsDumpOf = [](const utilxx_base::Json& req) -> std::string {
+                        if (!req.contains("tools") || !req["tools"].is_array()
+                            || req["tools"].empty()) {
+                            return {};
+                        }
+                        return req["tools"].dump();
+                    };
+
+                    respPromptTokens = estimateTokens(j["messages"]);
+                    const auto toolsDump = toolsDumpOf(j);
+                    if (!toolsDump.empty()) {
+                        respPromptTokens += estimateTokens(j["tools"]);
+                    }
+
+                    int cached = 0;
+                    const auto& prev = g_da_sim_prev_for_cache;
+                    if (prev.is_object() && toolsDumpOf(prev) == toolsDump) {
+                        // 工具定义一致 → 工具部分整体命中
+                        if (!toolsDump.empty()) {
+                            cached += estimateTokens(j["tools"]);
+                        }
+                        // 消息前缀逐条比较 (system 也在 messages[0] 里)
+                        if (j.contains("messages") && j["messages"].is_array()
+                            && prev.contains("messages") && prev["messages"].is_array()) {
+                            const auto& curMsgs = j["messages"];
+                            const auto& oldMsgs = prev["messages"];
+                            const auto  count   = std::min(curMsgs.size(), oldMsgs.size());
+                            for (size_t i = 0; i < count; ++i) {
+                                if (curMsgs[i].dump() != oldMsgs[i].dump()) {
+                                    break;
+                                }
+                                cached += estimateTokens(curMsgs[i]);
+                            }
+                        }
+                    }
+                    if (cached > respPromptTokens) {
+                        cached = respPromptTokens;
+                    }
+                    respCachedTokens              = cached;
+                    g_da_sim_last_cached_tokens   = cached;
+                    g_da_sim_last_prompt_tokens   = respPromptTokens;
+                    g_da_sim_last_cache_ratio     = respPromptTokens > 0
+                                                        ? static_cast<double>(cached)
+                                                              / static_cast<double>(respPromptTokens)
+                                                        : 0.0;
+                    g_da_sim_prev_for_cache       = j;
                 }
 
                 bool stream = j.value("stream", false);
@@ -418,10 +492,14 @@ DaSimServer startDaSimServer() {
                         ev["object"]  = "chat.completion.chunk";
                         ev["choices"] = utilxx_base::Json::array();
                         ev["usage"]   = utilxx_base::Json{
-                            {"prompt_tokens", g_da_sim_prompt_tokens},
+                            {"prompt_tokens", respPromptTokens},
                             {"completion_tokens", g_da_sim_completion_tokens},
-                            {"total_tokens", g_da_sim_prompt_tokens + g_da_sim_completion_tokens},
+                            {"total_tokens", respPromptTokens + g_da_sim_completion_tokens},
                         };
+                        if (g_da_sim_prefix_cache_enabled) {
+                            ev["usage"]["prompt_tokens_details"]
+                                = utilxx_base::Json{{"cached_tokens", respCachedTokens}};
+                        }
                         sseBody += "data: " + ev.dump() + "\n\n";
                     }
 
@@ -451,9 +529,13 @@ DaSimServer startDaSimServer() {
                     choice["finish_reason"] = hasToolCalls ? "tool_calls" : "stop";
 
                     auto usage                 = utilxx_base::Json::object();
-                    usage["prompt_tokens"]     = g_da_sim_prompt_tokens;
+                    usage["prompt_tokens"]     = respPromptTokens;
                     usage["completion_tokens"] = g_da_sim_completion_tokens;
-                    usage["total_tokens"] = g_da_sim_prompt_tokens + g_da_sim_completion_tokens;
+                    usage["total_tokens"]      = respPromptTokens + g_da_sim_completion_tokens;
+                    if (g_da_sim_prefix_cache_enabled) {
+                        usage["prompt_tokens_details"]
+                            = utilxx_base::Json{{"cached_tokens", respCachedTokens}};
+                    }
 
                     auto respBody       = utilxx_base::Json::object();
                     respBody["id"]      = "chatcmpl-test-sim";

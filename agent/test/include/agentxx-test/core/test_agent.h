@@ -46,6 +46,23 @@ extern std::string g_da_sim_fail_body;
 /// 前 N 次请求返回 tool_calls (之后返回纯文本); -1 = 不限制 (旧行为)
 extern int g_da_sim_tool_calls_remaining;
 
+// ===========================================================================
+// 模拟前缀缓存 (provider prompt cache)
+//
+// 打开后模拟器按"工具定义 + 消息前缀"与上一条成功请求逐字节比较, 把命中的
+// token 数写进 `usage.prompt_tokens_details.cached_tokens`, 供压缩请求的
+// 前缀对齐回归测试使用 (主程序侧已有的缓存用量解析会记入台账与关键指标)。
+// 同时 prompt_tokens 改为按本次请求体大小估算 (否则比例没有意义)。
+// ===========================================================================
+
+/// 是否启用模拟前缀缓存 (默认关闭, 不影响其他用例)
+extern bool g_da_sim_prefix_cache_enabled;
+/// 最近一条成功请求的 estimated(cached / prompt), 未启用时为 0
+extern double g_da_sim_last_cache_ratio;
+/// 最近一条成功请求的命中前缀 token 数与总 prompt token 数 (估算值)
+extern int g_da_sim_last_cached_tokens;
+extern int g_da_sim_last_prompt_tokens;
+
 /// 模拟器配置选项
 struct DaSimConfig {
     bool                      enableRandomDelay = false; // 启用随机延迟模拟网络抖动

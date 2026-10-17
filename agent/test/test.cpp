@@ -42,6 +42,8 @@
 #include "agentxx-test/core/test_input_delivery.h"
 #include "agentxx-test/core/test_persist_semantics.h"
 #include "agentxx-test/core/test_prompt_stability.h"
+#include "agentxx-test/core/test_prompt_sources.h"
+#include "agentxx-test/core/test_prompt_cache_prefix.h"
 #include "agentxx-test/core/test_provider_call_scope.h"
 #include "agentxx-test/core/test_race_guards.h"
 #include "agentxx-test/core/test_permission.h"
@@ -484,6 +486,8 @@ int main(int argn, char** argv) {
                 co_await run("session_admin", agentxx::test::run_session_admin_tests);
                 co_await run("session_sync", agentxx::test::run_session_sync_tests);
                 co_await run("prompt_stability_io", agentxx::test::run_prompt_stability_tests);
+                co_await run("prompt_sources", agentxx::test::run_prompt_source_tests);
+                co_await run("prompt_cache_prefix", agentxx::test::run_prompt_cache_prefix_tests);
                 co_await run("assembly_snapshot_io", agentxx::test::run_assembly_snapshot_tests);
                 co_await run("shutdown_stages", agentxx::test::run_shutdown_stage_tests);
 

@@ -10,6 +10,7 @@
 /// - T5 加载失败 → 声明资源不生效 ("失败不生效"语义)
 #include "agentxx-test/plugin/test_plugin_resources.h"
 
+#include "agentxx/agent/prompt_sources.h"
 #include "agentxx/agent/resource_applier.h"
 #include "agentxx/event/event_stream.h"
 #include "agentxx/middlewares/memory_file.h"
@@ -548,11 +549,12 @@ mcp:
             ctx
         );
 
-        neograph::graph::GraphState  state;
-        neograph::graph::RunContext  runCtx;
-        runCtx.thread_id = "mem_oversize_test";
-        neograph::graph::NodeInput in{state, runCtx, nullptr};
-        co_await memHandle->onAgentcallStartFunc(in);
+        // 段落文本由来源注册表持有 (不再经 graphData 通道): 刷新一次后按来源取
+        const std::string sessionId = "mem_oversize_test";
+        XX_TEST_EXPECT_TRUE(ctx->promptSources != nullptr);
+        agentxx::agent::PromptRefreshContext refreshCtx;
+        refreshCtx.sessionId = sessionId;
+        co_await ctx->promptSources->ensureFresh(sessionId, refreshCtx);
 
         // 只有超限文件被记录
         const auto& oversize = memHandle->oversizeMemoryFiles();
@@ -561,21 +563,16 @@ mcp:
             XX_TEST_EXPECT_EQ(oversize[0].first, bigPath.string());
             XX_TEST_EXPECT_EQ(oversize[0].second, bigContent.size());
         }
-        // 内容未被截断: 注入的稳定附加段里仍带整份文件 (按来源写入,
-        // 随 system 消息进稳定前缀)
-        const auto& injected = ctx->middlewareHandleContext
-                                   ->getGraphDataItemValue<
-                                       std::map<std::string, std::string, std::less<>>>(
-                                       runCtx.thread_id,
-                                       agentxx::middleware::MiddlewareContext::
-                                           graphDataKey_appendSystemMessageStable
-                                   );
+        // 内容未被截断: 稳定段里仍带整份文件 (随 system 消息进稳定前缀)
+        const auto injected
+            = ctx->promptSources->sectionText(agentxx::middleware::MemoryFileMiddlewareHandle::kSectionKey,
+                                              sessionId);
         XX_TEST_EXPECT_FALSE(injected.empty());
-        auto itMemory = injected.find("memory");
-        XX_TEST_EXPECT_TRUE(itMemory != injected.end());
-        if (itMemory != injected.end()) {
-            XX_TEST_EXPECT_TRUE(itMemory->second.find(bigContent) != std::string::npos);
-        }
+        XX_TEST_EXPECT_TRUE(injected.find(bigContent) != std::string::npos);
+
+        // 释放中间件: 来源一并撤销 (build 里捕获了 this)
+        memHandle.reset();
+        XX_TEST_EXPECT_FALSE(ctx->promptSources->removeSource("memory", "core:memory"));
     }
 
     // 清理临时目录并等待后台协程收尾
