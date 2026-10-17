@@ -1517,5 +1517,50 @@ token 估算与压缩改走功能点; `104d5c79`: 启用重复调用检查), 基
    ②第 16 节遗留的"真实逐轮段每轮成本跨批波动"与本节无关, 仍待"固定依赖、只变主仓"
    的 A/B 收敛。
 
+## 18. 压缩请求的前缀复用: 模拟前缀缓存实测 (Windows Debug + ASan, 2026-10-17)
+
+系统提示词改为"来源注册 + 按需刷新"后, 上下文压缩不再另起一段请求前缀, 而是复用父会话
+已缓存的前缀 (设计见 [index.md](index.md) 架构设计第 6 小节)。本节记录命中量的度量方式与
+本轮实测。
+
+### 18.1 度量方式
+
+- 测试内的模拟服务 (`agent/test/core/test_agent.cpp` 的 `startDaSimServer`) 保存上一个
+  请求; 新请求到达时按"工具定义 JSON → system 文本 → messages 逐条公共前缀"顺序比较,
+  按 4 字节 ≈ 1 token 折算, 把命中的量写进 `usage.prompt_tokens_details.cached_tokens`。
+- 主程序侧沿用已有的缓存用量解析 (`openai_provider.cpp` 的 `parseCachedUsage`), 命中量
+  进入用量台账与 `KeyMetrics`, 测试直接断言, 不额外插桩。
+- 模块: `agentxx_test.exe prompt_cache_prefix` (25 断言, 约 8s)。
+
+### 18.2 结果 (长历史会话: 两轮普通对话后手动压缩)
+
+| 请求 | cached / prompt (token) | 命中率 | 说明 |
+|---|---|---|---|
+| 第 2 轮普通请求 | 2060 / 14379 | 0.143 | 只与上一轮请求的公共部分重合 (上一轮请求短, 新增消息占大头) |
+| 压缩请求 (子代理) | 14386 / 14842 | 0.969 | system + 工具定义 + 父会话全部消息逐字节相同, 只有末尾压缩指令是新增 |
+| 压缩后父会话下一请求 | — | — | 断言 system 前缀与压缩请求逐字节相同 (上下文已换成 system / 压缩指令 / 摘要 三条) |
+
+改动前的对照: 压缩子代理清空了技能与记忆目录、且 `tools=[]`, system 与工具定义都与父请求
+不同 → 公共前缀为 0, 整段 (本例 14842 token) 全部按新 prompt 重新计算。
+
+### 18.3 复现
+
+```bash
+agentxx_test.exe prompt_cache_prefix
+# [INFO] 2nd turn request: cached/prompt = 2060/14379 (ratio 0.143264)
+# [INFO] compact request: cached/prompt = 14386/14842 (ratio 0.969276)
+```
+
+### 18.4 真实 provider (待补)
+
+步骤 (plan §4.3): 选一个会回报 `cached_tokens` 的 provider, 跑会话直到自动压缩, 从用量台账
+读取三条请求的 `cachedTokens / promptTokens`: (a) 普通轮次、(b) 压缩子代理、(c) 压缩后的父请求;
+预期 (b) ≥ 0.8, (c) 只命中 system 段。
+
+| 日期 | provider / 模型 | (a) 普通请求 | (b) 压缩请求 | (c) 压缩后请求 | 备注 |
+|---|---|---|---|---|---|
+| 待填 | | | | | 需要真实 key, 本轮开发环境未跑 |
+
+
 
 

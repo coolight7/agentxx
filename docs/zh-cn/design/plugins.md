@@ -440,6 +440,14 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 > `X_BASELINE_SIZE` (基线字节数); 当前全部为 v1 (基线 = 完整表长)。
 > 四件套要求、判定规则与追加策略见 **§17**。
 
+> **提示词段落来源 (第二期留位)**: 主程序侧的提示词装配已改为"来源注册 + 按需刷新"
+> (`PromptSourceRegistry`, 见 [index.md](index.md) 架构设计第 6 小节), 内置来源
+> `memory` / `skills` 走这条路径。插件目前仍只能经 `agentxx.agent.prompt` 的
+> `set_prompt` 贡献提示词文本; 计划在 `agentxx.agent.prompt` 表尾追加
+> `set_session_section` / `remove_session_section` / `request_refresh`, 让插件登记自己的
+> 段落来源 (身份 = `(sessionId, key, owner)`, 禁用摘生效 / 卸载按 owner 撤销,
+> 刷新不立即读盘、下一个请求生效)。本期未实现, 现有插件无需改动。
+
 ### 工具注册 flags (`AgentxxPluginToolSpec::flags`)
 
 注册工具时传入的位标志决定主程序如何对待该工具的执行:

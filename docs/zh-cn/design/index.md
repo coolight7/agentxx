@@ -1573,6 +1573,7 @@ AgentContext
     ├── middlewareHandleContext (中间件句柄)
     ├── bus                  (全局事件总线)
     ├── modelRegistry        (模型注册表)
+    ├── promptSources        (PromptSourceRegistry: 提示词段落来源与刷新, 按需读盘)
     ├── host                 (主程序引用, attachRoot/派生时注入)
     └── sessions (SessionsManager)
          ├── "session_1" → Session
@@ -1595,6 +1596,39 @@ AgentContext
   - contextStats: std::atomic 字段, 跨线程可读 (Summarization 写, IO 经 Wire 推送)
   - AsyncMutex: 协程感知互斥锁, 用于跨越 co_await 的临界区保护
 ```
+
+#### 6. 系统提示词装配: 来源注册与按需刷新
+
+系统提示词的文本拼装只有一处实现 (`AgentContext::buildSystemPromptStable` /
+`buildSystemPrompt`), 段落来源统一登记在 `PromptSourceRegistry`
+(`agent/lib/include/agentxx/agent/prompt_sources.h`, 挂在 `AgentContext::promptSources`):
+
+- **分组**: 静态附加段 (`PromptSectionScope::Stable`) 与运行时文档段
+  (`PromptSectionScope::Dynamic`) **分开存**, 只统一视图
+  (`PromptSectionView { key, owner, order, scope, text }`)；静态段属于可缓存前缀,
+  动态段拼在末尾
+- **来源** (`PromptSource`): key / owner / order / scope / perSession /
+  refreshOnCompaction / timeout / build 协程。内置来源两个: `memory` (记忆文件,
+  perSession, 压缩后刷新) 与 `skills` (技能清单, 全局)。两者都按"解析后路径集合指纹 +
+  每个文件 mtime/size"缓存内容, 路径集合不变且文件未变时不读盘
+- **刷新入口只有一处**: `PromptSourceRefreshHandle::onModelcallStartFunc`
+  (model call 的 start 钩子, 一轮一次) → `ensureFresh(ctx)`。脏标记来源三类:
+  资源变更 (`addMemoryFiles` / `addSkillDirs` 等)、上下文压缩写回之后
+  (`AfterCompaction`)、显式请求 (`Explicit`)
+- 刷新带超时 (由来源自己声明) 并传播取消; 单个来源失败只保留上次文本并计数, 不影响请求
+- 会话回收: `dropSession(sessionId)` 随会话清理释放 perSession 文本
+- 观测: `KeyMetrics::notePromptRefresh` 记刷新次数 / 变化段数 / 失败数 / 段落字符数；
+  装配快照 `prompt_sources` 段与 `--dump-diagnostics` 给出同一份元数据 (不含正文)
+
+**没有文件监听, 也没有轮询**: 外部改动记忆文件或技能目录不会自己生效, 要等一次压缩或
+资源变更触发刷新。这样 system 前缀在一轮之内永远是稳定的, 上游的前缀缓存不会被无谓打断。
+
+**压缩请求的前缀复用**: 压缩子代理按父会话已缓存的请求前缀发请求
+(子配置的 `keepProvidedSystemMessage` / `requestToolsOverride` / `toolExecutionDisabled`):
+保留调用方给的 system 消息不重建、工具定义原样继承父会话上一次请求、写
+`tool_choice: "none"` 且不执行任何工具。于是"工具定义 + system + 历史消息前缀"与父请求
+逐字节相同, provider 的前缀缓存可以直接命中 (实测见
+[benchmark.md](benchmark.md) 第 18 节); 压缩写回后标记来源脏, 下一轮请求前再刷新。
 
 ### 连接与重连机制
 

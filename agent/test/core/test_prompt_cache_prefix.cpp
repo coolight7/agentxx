@@ -207,6 +207,9 @@ asio::awaitable<void> run_prefix_body(
     XX_TEST_EXPECT_EQ(system2, system1); // 内容没变 → system 逐字节相同 (稳定前缀)
     XX_TEST_EXPECT_EQ(tools2, tools1);
     XX_TEST_EXPECT_TRUE(parentMsgs.size() > 20); // 长历史确实进了请求
+    TEST_INFO << "2nd turn request: cached/prompt = " << g_da_sim_last_cached_tokens << "/"
+              << g_da_sim_last_prompt_tokens << " (ratio " << g_da_sim_last_cache_ratio << ")"
+              << std::endl;
 
     // ---- 手动压缩 (同上下文子代理, 走 AgentHost): 检验请求前缀对齐 ----
     auto* summarization = findSummarizationMiddleware(*agent);
@@ -244,6 +247,9 @@ asio::awaitable<void> run_prefix_body(
         XX_TEST_EXPECT_TRUE(same);
     }
     // ④ 模拟前缀缓存: 长历史下命中比例 >= 0.9
+    TEST_INFO << "compact request: cached/prompt = " << g_da_sim_last_cached_tokens << "/"
+              << g_da_sim_last_prompt_tokens << " (ratio " << g_da_sim_last_cache_ratio << ")"
+              << std::endl;
     XX_TEST_EXPECT_TRUE(g_da_sim_last_cache_ratio >= 0.9);
     // ⑤ 不执行工具: 工具定义仍在请求里 (对齐前缀), 但 tool_choice 已被关闭
     XX_TEST_EXPECT_TRUE(compactRequest.contains("tool_choice"));

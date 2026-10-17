@@ -18,6 +18,16 @@
     - 支持 client 通过网络连接 agent server，此时两者在不同进程，通过网络传输交互（已支持 websocket）
     - 应当尽量统一抽象接口，分层屏蔽细节，降低复杂度，让架构设计更清晰
     - `会话 Agent_IO`、`CancelToken`、`上下文统计`、`模型选择` 应当独立记录，按 `thread_id` 取值
+- 系统提示词装配 (本期实施): 段落来源统一登记到 `PromptSourceRegistry`
+  (`agent/lib/include/agentxx/agent/prompt_sources.h`, 挂 `AgentContext::promptSources`);
+  静态附加段 (`Stable`) 与运行时文档段 (`Dynamic`) 分开存、只统一视图; 内置来源
+  `memory` (perSession, 压缩后刷新) / `skills`; 刷新唯一入口 =
+  `PromptSourceRefreshHandle::onModelcallStartFunc` (model call start 钩子), 脏标记来自
+  资源变更 / 压缩写回 / 显式请求; **不做文件监听与轮询** (mtime+size 只用于被要求刷新时
+  省去读盘); 压缩子代理按父会话前缀发请求 (`keepProvidedSystemMessage` +
+  `requestToolsOverride` + `toolExecutionDisabled` + `tool_choice=none`), 命中率实测见
+  [benchmark.md](docs/zh-cn/design/benchmark.md) 第 18 节; 详见
+  [index.md](docs/zh-cn/design/index.md) 架构设计第 6 小节
 - **编写代码注释**: 
     - 编写注释时，统一使用 markdown 风格，多行注释使用 `///` 开头, 示例(其中的 args 和 return 不必每一个都详细说明，尽量对需要注意、不容易从名称了解含义的进行说明):
 ```c++
