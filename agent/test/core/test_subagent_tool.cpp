@@ -439,6 +439,72 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
             XX_TEST_EXPECT_EQ(tasks.size(), size_t{1});
             XX_TEST_EXPECT_EQ(tasks[0].value("message", std::string{}), std::string{"solo task"});
         }
+
+        // --- C. 前缀复用开关 (压缩等内部调用方) 必须原样进中断参数 ---
+        // 这三个开关只有经中断参数传到 AgentHost 才生效; 早期只解析了
+        // sessionId/tools/enable_summarization, 压缩请求的工具段因此与父会话
+        // 分叉 (上游前缀缓存不命中), 此处锁定传递过程
+        {
+            env->resetInterruptState();
+            utilxx_base::Json args{
+                {"tasks",
+                 utilxx_base::Json::array(
+                     {utilxx_base::Json{
+                          {"subagent", "worker"},
+                          {"message", "compress"},
+                          {"sessionId", env->sessionId},
+                          {"keep_provided_system", true},
+                          {"inherit_request_tools", true},
+                          {"disable_tool_execution", true},
+                      },
+                      utilxx_base::Json{
+                          {"subagent", "worker"},
+                          {"message", "plain"},
+                          {"sessionId", env->sessionId},
+                      }}
+                 )                             },
+                {"sessionId",    env->sessionId},
+                {"tool_call_id", "call_switch" },
+            };
+            bool threwInterrupt = false;
+            try {
+                (void)co_await env->tool->execute_async(args);
+            } catch (const neograph::graph::NodeInterrupt&) {
+                threwInterrupt = true;
+            }
+            XX_TEST_EXPECT_TRUE(threwInterrupt);
+
+            const auto& stored = env->interruptArgs();
+            XX_TEST_EXPECT_EQ(stored.size(), size_t{1});
+            const auto& tasks = stored[0].arg["tasks"];
+            XX_TEST_EXPECT_EQ(tasks.size(), size_t{2});
+            // 任务 1: 三个开关全部为 true
+            XX_TEST_EXPECT_TRUE(tasks[0].value("keep_provided_system", false));
+            XX_TEST_EXPECT_TRUE(tasks[0].value("inherit_request_tools", false));
+            XX_TEST_EXPECT_TRUE(tasks[0].value("disable_tool_execution", false));
+            // 任务 2: 未指定 → 不写入 (读取端按 false 处理, 旧行为)
+            XX_TEST_EXPECT_FALSE(tasks[1].contains("keep_provided_system"));
+            XX_TEST_EXPECT_FALSE(tasks[1].contains("inherit_request_tools"));
+            XX_TEST_EXPECT_FALSE(tasks[1].contains("disable_tool_execution"));
+
+            // 读取端 (AgentRunner 派发前) 解析出同样的开关
+            agentxx::middleware::InterruptHandleArg handleArg;
+            handleArg.name = "subagent";
+            handleArg.arg  = stored[0].arg;
+            auto batch = agentxx::tools::parseSubagentBatchFromInterrupt(
+                handleArg,
+                "parent-agent",
+                env->sessionId,
+                nullptr
+            );
+            XX_TEST_EXPECT_EQ(batch.tasks.size(), size_t{2});
+            XX_TEST_EXPECT_TRUE(batch.tasks[0].keepProvidedSystemMessage);
+            XX_TEST_EXPECT_TRUE(batch.tasks[0].inheritRequestTools);
+            XX_TEST_EXPECT_TRUE(batch.tasks[0].toolExecutionDisabled);
+            XX_TEST_EXPECT_FALSE(batch.tasks[1].keepProvidedSystemMessage);
+            XX_TEST_EXPECT_FALSE(batch.tasks[1].inheritRequestTools);
+            XX_TEST_EXPECT_FALSE(batch.tasks[1].toolExecutionDisabled);
+        }
     }
 
     // ==================== S4. resume 结果提取 ====================

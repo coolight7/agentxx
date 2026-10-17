@@ -389,21 +389,19 @@ neograph::CompletionParams ModelCallWrapNode::build_params(std::string_view sess
     }
 
     if (ctxPtr && ctxPtr->agentConfig) {
-        // 捕获本次请求的工具定义: 供同上下文子代理 (上下文压缩) 对齐请求前缀
+        // 捕获本次请求的工具定义: 供同上下文子代理 (上下文对齐) 使用
         // - 工具定义只与 agent 配置相关、与会话无关, 一份即可
         // - 空列表不覆盖 (子代理取不到时会退回"不继承"的旧行为)
         if (!params.tools.empty()) {
             ctxPtr->lastRequestTools
                 = std::make_shared<const std::vector<neograph::ChatTool>>(params.tools);
         }
-        // 本次运行不执行工具 (压缩子代理): 支持该字段的 provider 直接关闭工具选择
-        // - tool_choice 不参与提示词前缀, 加它不影响缓存对齐
-        // - Anthropic 的 tool_choice 取值是对象, 不在此处理 (靠"忽略 tool_calls"兜底)
-        if (ctxPtr->agentConfig->toolExecutionDisabled
-            && ctxPtr->agentConfig->toolChoiceNoneSupported && !params.tools.empty()
-            && ctxPtr->getSessionCurrentModelConfig(sessionId).type != "anthropic") {
-            params.extra_fields["tool_choice"] = "none";
-        }
+        // 注意: 这里**不**改写 `tool_choice`。
+        // - 不执行工具的运行 (压缩子代理) 已经在 callLLM 里忽略 tool_calls,
+        //   不需要额外的"关闭工具选择"字段
+        // - 该字段与父请求不同会改变请求体, 实测有网关因此不再复用前缀缓存
+        //   (见 docs/zh-cn/design/benchmark.md 第 18.4 节)
+        // - 确实需要时由模型配置的 `extra_api_config` 显式给出 (通用透传)
     }
 
     // 稳定段指纹: system 消息 + 工具 schema
@@ -433,6 +431,64 @@ neograph::CompletionParams ModelCallWrapNode::build_params(std::string_view sess
                 );
             }
         }
+    }
+    // 请求前缀指纹 (debug): 排查"上游缓存为什么没命中"时对比相邻两次请求
+    // - system / 工具 / 前两条消息各一个哈希 + 条数与字符数, 不含正文
+    // - 只在有会话时统计; 代价是每请求 O(字符数) 的哈希, 可忽略
+    if (!sessionId.empty()) {
+        uint64_t systemHash = 0;
+        uint64_t toolsHash  = 0;
+        uint64_t headHash   = 0;
+        size_t   chars      = 0;
+        size_t   headCount  = 0;
+        for (const auto& m : params.messages) {
+            chars += m.content.size();
+            if (m.role == "system") {
+                systemHash = utilxx_base::hash::fnv1a64(
+                    fmt::format("{:016x}|{}", systemHash, m.content)
+                );
+            } else if (headCount < 2) {
+                headHash = utilxx_base::hash::fnv1a64(
+                    fmt::format("{:016x}|{}|{}", headHash, m.role, m.content)
+                );
+                ++headCount;
+            }
+        }
+        for (const auto& tool : params.tools) {
+            toolsHash = utilxx_base::hash::fnv1a64(
+                fmt::format("{:016x}|{}|{}", toolsHash, tool.name, tool.description)
+            );
+        }
+        // 逐条消息指纹: 对比相邻请求时用它在开头几条里找出前缀分叉的位置
+        // (只取消息条数/角色/长度/哈希, 不含正文)
+        std::string msgDigests;
+        const size_t digestCount = std::min<size_t>(params.messages.size(), 6);
+        for (size_t i = 0; i < digestCount; ++i) {
+            const auto& m = params.messages[i];
+            msgDigests += fmt::format(
+                " {}:{}:{}/{:08x}",
+                i,
+                m.role,
+                m.content.size(),
+                static_cast<uint32_t>(utilxx_base::hash::fnv1a64(m.content) & 0xffffffffu)
+            );
+        }
+        XX_LOGD(
+            "[modelcall] request prefix (session={}): msgs={} chars={} system={:016x} "
+            "tools={:016x}({}) head={:016x} toolOverride={} toolsDisabled={} first=[{} ]",
+            sessionId,
+            params.messages.size(),
+            chars,
+            systemHash,
+            toolsHash,
+            params.tools.size(),
+            headHash,
+            (ctxPtr && ctxPtr->agentConfig && ctxPtr->agentConfig->requestToolsOverride) ? "yes"
+                                                                                         : "no",
+            (ctxPtr && ctxPtr->agentConfig && ctxPtr->agentConfig->toolExecutionDisabled) ? "yes"
+                                                                                          : "no",
+            msgDigests
+        );
     }
     return params;
 }

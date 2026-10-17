@@ -1551,7 +1551,7 @@ agentxx_test.exe prompt_cache_prefix
 # [INFO] compact request: cached/prompt = 14386/14842 (ratio 0.969276)
 ```
 
-### 18.4 真实 provider 实测 (2026-10-17, 两轮: 修复前 / 修复子代理记账后)
+### 18.4 真实 provider 实测 (2026-10-17/18, 三轮: 修复前 / 补子代理记账 / 对齐压缩请求前缀)
 
 环境: `deepseek/deepseek-v4.1-flash` (OpenAI 兼容网关 `api.commandcode.ai`, 上游会回报
 `prompt_cache_hit_tokens`, 主程序按 `usage` 解析后写入用量台账 `usage.cached_prompt_tokens`),
@@ -1590,20 +1590,65 @@ Windows Debug + ASan, 临时 `data_dir` (会话库 `{data}/sqlite/sessions/<sess
   (`AgentContext::usageAccountSessions`), 自动压缩经总线到达 (`spawnBatch(req)` 不带父上下文)
   时回退到根会话; 台账 `usage` 表与会话累计用量都落在父会话 (prompt 39300 = 前一条 39090 +
   压缩指令, 摘要 completion 416)。
-- **该网关/模型上压缩请求的缓存命中是 0**, 与测试内模拟器 (0.969) 不一致:
-  - 排除"缓存写入延迟": 上一条普通请求 (39090) 在 2.7 秒前发出, 它的前缀 (35712) 就被本次
-    命中; 说明该 provider 对 ~36K 前缀的缓存 3 秒内已可用
-  - 模拟器已断言压缩请求的 system / 工具定义 / 消息前缀与父请求**逐字节相同**
-    (`prompt_cache_prefix` 的 ①~⑤), 所以差异只能来自 provider 侧
-  - 最可疑的是压缩请求多出的 `tool_choice: "none"` (唯一与父请求不同的请求体字段):
-    若上游据此重写工具段, 前缀就整体错位
-  - 下一步: 打开请求日志对比父请求与压缩请求的请求体, 或对该网关关掉
-    `toolChoiceNoneSupported` 再测一次 (见 `work.md` 待办)
+- **该轮压缩请求的缓存命中是 0** (父请求 0.914), 与测试内模拟器 (0.969) 不一致;
+  当时的最可疑项是压缩请求多出的 `tool_choice: "none"`. 该猜测在第三轮被证伪, 见下节。
 - 压缩后父会话第一条: `5248 / 5720 = 0.917` —— 上下文已换成
   `system | [Please compact context to save space] | 摘要 | [Please continue]`,
   命中的 5248 token 就是 system + 工具定义, 说明压缩没有破坏后续请求的前缀对齐 (A5/A7)。
 
-#### 实测中修掉的两个问题 (本轮已实施)
+#### 压缩请求缓存不命中: 定位与修复 (第三轮)
+
+先证伪 `tool_choice` 猜测: 去掉压缩请求注入的 `tool_choice: "none"`
+(`AgentConfig::toolChoiceNoneSupported` 字段一并删除, 不执行工具靠 `callLLM` 忽略
+`tool_calls` 已足够), 重测仍为 `cached = 0` —— 差异不在该字段。
+
+为定位真实差异, 在 `modelcall` 的请求装配末尾加了一条 debug 日志 (不含正文, 只有指纹),
+`AGENTXX_LOG_MODULES='modelcall=debug'` 打开:
+
+```
+[modelcall] request prefix (session=...): msgs= chars= system=<hash> tools=<hash>(<n>)
+  head=<hash> toolOverride=<yes|no> toolsDisabled=<yes|no> first=[ i:role:chars/<hash> ... ]
+```
+
+对真实会话逐请求比对后, 找到两个真实原因:
+
+1. **自动压缩路径把三个前缀对齐开关丢了** (根因)。自动压缩经
+   `topic service.subagent.execute` → `SubAgentManagerTool::execute_async` → 中断参数 →
+   `AgentRunner` → `parseSubagentBatchFromInterrupt` → `AgentHost::spawnOneTask`。
+   工具侧自己的 `TaskArg` 只解析了 `subagent/system_prompt/message/messages/sessionId/
+   tools/enable_summarization/result_id`, **没有** `keep_provided_system` /
+   `inherit_request_tools` / `disable_tool_execution` —— 三个开关在中断参数里就被丢掉了,
+   到 `AgentHost` 时一律按 false 处理: 子代理没保留调用方的 system 消息、也没继承父请求的
+   工具定义, 退回自己的工具集 (`agentxx_fileshare` 过滤后 middleware 追加的
+   `agentxx_share_store`, 共 1 个)。工具段因此从请求开头就与父请求分叉, 整段前缀命中不了。
+   实测指纹: 父请求 `tools=a84e86f99e5bc928(8)`, 压缩请求 `tools=e3cbf1e7b0d61e04(1)`。
+   修复: 工具侧解析并原样写回中断参数 (缺省不写 = false, 保持旧行为), 回归用例见
+   `subagent_tool` 的 S3.C。
+2. **压缩载荷裁剪阈值过紧** (第二个原因)。压缩请求载荷 = 父会话刚发成功的同一批消息 +
+   末尾一条指令, 但裁剪判断用 `countTokens(...) > modelMaxToken * 0.95`, 而本项目的 token
+   估算在这类中英混排负载上比上游实际计费**高约 25%**: 自动压缩在 75% 上限处触发时,
+   估算值已越过 0.95 线, 于是每次都"先丢掉最旧一条消息"。丢最旧消息会让前缀从第一条起
+   分叉 (实测压缩请求的消息列表少了第 1 条 user 消息), 命中率只剩 system + 工具段。
+   修复: 裁剪上限用模型上下文上限本身 (不再乘 0.95), 真超限由上游报错后按失败计数走
+   硬截断兜底 (见 `summarization.cpp` 的注释)。
+
+修复后同配置重测 (13 轮内触发一次自动压缩):
+
+| 请求 | prompt | cached | cached/prompt | 请求指纹 |
+|---|---|---|---|---|
+| 压缩前普通请求 (第 10 轮) | 23235 | 15744 | 0.678 | tools `…(8)`, 前 6 条消息指纹与下行逐条相同 |
+| **压缩请求 (子代理)** | 24915 | **6784** | **0.272** | tools `…(8)` `toolOverride=yes toolsDisabled=yes` |
+| 压缩后父会话第一条 | 5958 | 5248 | 0.881 | — |
+
+- 压缩请求现在与父请求**工具段相同、前 6 条消息指纹逐条相同** (`first=[ 0:system:5664/…
+  1:user:8301/… 2:assistant:0/… 3:tool:41493/… ]`), 说明请求前缀已对齐 (A5/A7)。
+- 命中的 6784 token 就是 system + 工具定义这一段 (与首轮请求的 prompt 6823 基本相等)。
+  同一轮里的普通请求命中率也只有 0.678 / 0.881 / 0.442, 说明剩下没命中的部分来自上游
+  本身 (该网关在不同后端间分流, 同一前缀的缓存不是每次都查得到), 不是请求内容差异:
+  同样的前缀在下一次请求里能被命中 (第 3 轮 14208/15765 = 0.901)。
+- 因此本项目能控制的部分已经到位: 请求体逐字节对齐 + 载荷不再无谓裁剪。
+
+#### 实测中修掉的两个问题 (第一/二轮已实施)
 
 1. **子代理用量没进台账**: 子代理的 `AgentContext` 没有 `sessionStore`, `recordUsage` 直接
    返回。已修: 派生时写入父会话记账目标 (见上), 嵌套委派沿用最外层目标不重复计数。
@@ -1613,14 +1658,24 @@ Windows Debug + ASan, 临时 `data_dir` (会话库 `{data}/sqlite/sessions/<sess
    且与 `enableSubagent` 无关 (该开关只控制是否把 subagent 工具注入给模型)。
    修完后 `jsonl` 里自动压缩不再报 `service.subagent ... no server registered`。
 
-复现命令 (对应上面表格):
+复现方法 (对应上面表格):
 
-```bash
-# 建长历史 + 触发自动压缩 (max_context_token 调小; pipeline 保持 stdin 打开)
-agentxx_cli.exe jsonl --session-id measure4 --config measure.yaml --env %APPDATA%/agentxx/.env < input.jsonl
-# 读台账 (逐请求的 prompt / cached)
-python read_usage.py {data}/sqlite/sessions/measure4/session.db
+```bat
+@echo off
+cd /d "{exec}"   :: 依赖同目录的 DLL
+set AGENTXX_LOG_MODULES=modelcall=debug   :: 打印请求前缀指纹
+set BASE={临时目录}
+:: 先等 init 与插件加载完成再灌入输入 (太早会被 "stop accepting new input" 丢掉),
+:: 输入结束后继续占住 stdin, 让轮次跑完
+( ping -n 26 127.0.0.1 >nul & type "%BASE%\input.txt" & ping -n 300 127.0.0.1 >nul ) ^
+    | agentxx_cli.exe cli --config "%BASE%\measure.yaml" --env "%APPDATA%\agentxx\.env" > "%BASE%\out.log" 2>&1
 ```
+
+- `measure.yaml` 关键项: `model_context_max_token: 30000` (让自动压缩在前几轮就触发)、
+  `permission.mode: pass`、插件只留 `agentxx_filesystem` + `agentxx_execute_command`、
+  `skill.list`/`memory.list` 置空 (去掉与工具无关的前缀差异)
+- `input.txt`: 每行一条长输入 (40K 字符填充), 5 行足以触发一次自动压缩
+- 读台账 (逐请求的 prompt / cached): `python read_usage.py {data}/sqlite/sessions/<sessionId>/session.db`
 
 
 

@@ -389,11 +389,9 @@ public:
     /// 本次运行不执行任何工具
     /// - 模型若仍返回 tool_calls, 忽略它们并结束本轮 (正文就是结果)
     /// - 工具定义仍在请求里 (前缀一致), 但不会调用任何工具
+    /// - 注意: 不再额外发送 `tool_choice` (各网关兼容性差, 且会改变请求体导致
+    ///   前缀缓存不命中); 需要时用模型配置的 `extra_api_config` 显式指定
     bool toolExecutionDisabled = false;
-
-    /// 支持 `tool_choice = "none"` 的 provider 在"不执行工具"运行时把它写进请求体
-    /// (属于额外保险: 前缀里不含它, 加它不影响缓存对齐; 自建后端不支持时置 false)
-    bool toolChoiceNoneSupported = true;
 
     /// 上下文压缩 (summarization) 中间件开关 (默认 true)
     /// - 子代理默认继承父配置; summarization 发起的压缩子代理显式关闭,

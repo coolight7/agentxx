@@ -25,7 +25,7 @@
   `PromptSourceRefreshHandle::onModelcallStartFunc` (model call start 钩子), 脏标记来自
   资源变更 / 压缩写回 / 显式请求; **不做文件监听与轮询** (mtime+size 只用于被要求刷新时
   省去读盘); 压缩子代理按父会话前缀发请求 (`keepProvidedSystemMessage` +
-  `requestToolsOverride` + `toolExecutionDisabled` + `tool_choice=none`), 命中率实测见
+  `requestToolsOverride` + `toolExecutionDisabled`), 命中率实测见
   [benchmark.md](docs/zh-cn/design/benchmark.md) 第 18 节; 详见
   [index.md](docs/zh-cn/design/index.md) 架构设计第 6 小节
 - 主程序装配与子代理记账 (本轮实施): 各运行形态 (`tui`/`cli`/`jsonl`/`server`/FFI) 都在

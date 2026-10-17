@@ -224,6 +224,9 @@ asio::awaitable<void> run_prefix_body(
         co_return;
     }
     const int  beforeCompact = static_cast<int>(g_da_sim_requests.size());
+    // 注意: 这里的引用在下一次请求入队后就失效 (vector 可能扩容),
+    // 需要跨压缩比较的值先拷出来
+    const auto parentToolChoice = parentRequest.value("tool_choice", std::string{});
     const bool compacted     = co_await summarization->compactSessionContext(sessionId);
     XX_TEST_EXPECT_TRUE(compacted);
     XX_TEST_EXPECT_EQ(g_da_sim_requests.size(), static_cast<size_t>(beforeCompact) + 1);
@@ -256,11 +259,13 @@ asio::awaitable<void> run_prefix_body(
               << g_da_sim_last_prompt_tokens << " (ratio " << g_da_sim_last_cache_ratio << ")"
               << std::endl;
     XX_TEST_EXPECT_TRUE(g_da_sim_last_cache_ratio >= 0.9);
-    // ⑤ 不执行工具: 工具定义仍在请求里 (对齐前缀), 但 tool_choice 已被关闭
-    XX_TEST_EXPECT_TRUE(compactRequest.contains("tool_choice"));
-    if (compactRequest.contains("tool_choice")) {
-        XX_TEST_EXPECT_EQ(compactRequest.value("tool_choice", std::string{}), std::string{"none"});
-    }
+    // ⑤ 不执行工具: 工具定义仍在请求里 (对齐前缀), 且不改写 tool_choice ——
+    //    真实网关实测表明该字段与父请求不同会让前缀缓存不再命中,
+    //    因此压缩请求与父请求的 tool_choice 必须完全一致
+    XX_TEST_EXPECT_EQ(
+        compactRequest.value("tool_choice", std::string{}),
+        parentToolChoice
+    );
     // ⑥ 压缩结果已写回 (会话上下文被替换成 system | user(压缩) | assistant(摘要))
     {
         auto session = agent->agentContext->sessions->get(sessionId);

@@ -320,7 +320,11 @@ asio::awaitable<std::string> SubAgentManagerTool::execute_async(const utilxx_bas
         std::string                      sessionId;
         std::optional<utilxx_base::Json> tools;
         std::optional<bool>              enableSummarization;
-        std::string                      resultId;
+        // 前缀复用与工具执行策略 (上下文压缩用); 缺省 false = 旧行为
+        bool        keepProvidedSystemMessage = false;
+        bool        inheritRequestTools       = false;
+        bool        toolExecutionDisabled     = false;
+        std::string resultId;
     };
 
     auto parseTask = [](const utilxx_base::Json& t) -> TaskArg {
@@ -339,6 +343,11 @@ asio::awaitable<std::string> SubAgentManagerTool::execute_async(const utilxx_bas
         if (t.contains("enable_summarization") && t["enable_summarization"].is_boolean()) {
             task.enableSummarization = t["enable_summarization"].get<bool>();
         }
+        // 压缩等内部调用方靠这三个开关让请求前缀与父会话一致 (缓存命中),
+        // 必须经中断参数原样带给 AgentHost, 否则前缀在 system/工具段就分叉
+        task.keepProvidedSystemMessage = t.value("keep_provided_system", false);
+        task.inheritRequestTools       = t.value("inherit_request_tools", false);
+        task.toolExecutionDisabled     = t.value("disable_tool_execution", false);
         return task;
     };
 
@@ -419,6 +428,16 @@ asio::awaitable<std::string> SubAgentManagerTool::execute_async(const utilxx_bas
                 // 压缩中间件开关: 缺省不设置 (继承 config 默认)
                 if (task.enableSummarization.has_value()) {
                     t["enable_summarization"] = *task.enableSummarization;
+                }
+                // 前缀复用与工具执行策略: 缺省不设置 (= false, 旧行为)
+                if (task.keepProvidedSystemMessage) {
+                    t["keep_provided_system"] = true;
+                }
+                if (task.inheritRequestTools) {
+                    t["inherit_request_tools"] = true;
+                }
+                if (task.toolExecutionDisabled) {
+                    t["disable_tool_execution"] = true;
                 }
                 // 任务结果标识: 缺省按任务序号兜底
                 if (!task.resultId.empty()) {

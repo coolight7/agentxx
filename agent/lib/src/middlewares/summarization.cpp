@@ -593,8 +593,14 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
 
     // 载荷裁剪: 压缩段本身超限时 (如超大附件), 从最旧消息开始丢弃;
     // 仅影响请求副本, 不影响覆盖回写结构; 丢弃数写入指令提示模型
+    // - 上限用模型上下文上限本身, 不再乘 0.95 的余量: 这份载荷就是父会话
+    //   刚才成功发出的同一批消息 + 末尾一条指令, 只有指令 (几百 token) 是新增的,
+    //   余量只会造成"明明发得出去却先丢掉最旧消息" —— 而丢最旧消息会让请求前缀
+    //   从第一条起与父会话分叉, 上游前缀缓存整段失效 (实测压缩请求缓存命中
+    //   从 ~90% 掉到只剩 system + 工具段)
+    // - 真超限时上游会按上下文超限报错, 由调用方按失败计数走硬截断兜底
     size_t droppedCount = 0;
-    while (reqMsgs.size() > 1 && countTokens({}, reqMsgs, false) > modelMaxToken * 0.95) {
+    while (reqMsgs.size() > 1 && countTokens({}, reqMsgs, false) > modelMaxToken) {
         size_t dropIdx = ("system" == reqMsgs[0].role) ? 1 : 0;
         if (dropIdx >= reqMsgs.size()) {
             break;

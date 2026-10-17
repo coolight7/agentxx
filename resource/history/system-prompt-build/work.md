@@ -275,6 +275,66 @@
 已排除"缓存写入延迟"(上一条 36K 前缀在 2.7 秒前发出且被本次命中), 最可疑的是压缩请求
 多出的 `tool_choice: "none"`。复测办法见 `benchmark.md` 18.4 与下方待办。
 
+### S11 压缩请求缓存不命中: 定位与修复 (第三轮)
+
+#### S11.1 先证伪 `tool_choice` 猜测
+
+- 删掉压缩请求注入的 `tool_choice: "none"`, `AgentConfig::toolChoiceNoneSupported`
+  字段一并删除 (不执行工具本来靠 `callLLM` 忽略 `tool_calls` 就够), 测试 ⑤ 改为断言
+  "压缩请求与父请求的 `tool_choice` 完全一致"。
+- 真实 provider 重测: 压缩请求**仍是 `cached = 0`** —— 说明差异不在该字段, 猜测作废。
+
+#### S11.2 加请求前缀指纹日志 (排查手段)
+
+`modelcall.cpp` 的请求装配末尾 (debug 级, 不含正文):
+
+```
+[modelcall] request prefix (session=...): msgs= chars= system=<hash> tools=<hash>(<n>)
+  head=<hash> toolOverride=<yes|no> toolsDisabled=<yes|no> first=[ i:role:chars/<hash> ... ]
+```
+
+用它逐请求对比, 直接看出"工具段数量不同""消息列表少了第 1 条"这类分叉。
+
+#### S11.3 真实原因一: 自动压缩路径丢掉三个前缀对齐开关
+
+- 自动压缩的调用路径: `topic service.subagent.execute` → `SubAgentManagerTool::execute_async`
+  → 中断参数 → `AgentRunner` → `parseSubagentBatchFromInterrupt` → `AgentHost::spawnOneTask`。
+- `tools/subagent.cpp` 里工具自己的 `TaskArg` **只解析了一部分字段**, 没有
+  `keep_provided_system` / `inherit_request_tools` / `disable_tool_execution`;
+  这三个开关在写回中断参数时也没带上, 于是 `AgentHost` 一律按 false 处理:
+  - 子代理按自己的配置重建 system (缺运行时段落)
+  - 子代理没继承父请求的工具定义, 用自己的工具集 (过滤后 middleware 又追加
+    `agentxx_share_store`, 共 1 个)
+  结果请求从工具段就分叉: 父请求 `tools=…(8)`, 压缩请求 `tools=…(1)`。
+- 修复: `TaskArg` 补三个字段 + 解析 + 条件写回中断参数 (缺省不写 = false 保持旧行为);
+  `subagent_tool` 新增 S3.C 用例锁住"解析 → 中断参数 → 再解析"整个过程。
+- 手动压缩走 `AgentHost::spawnBatch` 直派 (不经过工具), 所以一直是正常的 —— 这也解释了
+  "手动命中 0.969、自动命中 0"的差异。
+
+#### S11.4 真实原因二: 压缩载荷裁剪阈值过紧
+
+- 压缩请求载荷 = 父会话刚发成功的同一批消息 + 末尾一条指令, 但裁剪用的是
+  `countTokens(...) > modelMaxToken * 0.95`, 而本项目的 token 估算在这类中英混排负载上
+  比上游实际计费高约 25%: 自动压缩在 75% 处触发时估算值已越过 0.95 线, 于是每次都
+  先丢掉最旧一条消息 (实测压缩请求少了第 1 条 user 消息), 前缀从第一条起就分叉。
+- 修复: 裁剪上限改用模型上下文上限本身 (不乘 0.95); 真超限由上游报错后按失败计数
+  走硬截断兜底。注释里写明了原因 (避免后人又加回余量)。
+
+#### S11.5 修复后实测
+
+| 请求 | prompt | cached | cached/prompt | 指纹 |
+|---|---|---|---|---|
+| 压缩前普通请求 (第 10 轮) | 23235 | 15744 | 0.678 | tools `…(8)` |
+| 压缩请求 (子代理) | 24915 | 6784 | 0.272 | tools `…(8)` `toolOverride=yes toolsDisabled=yes`, 前 6 条消息指纹与上行逐条相同 |
+| 压缩后父会话第一条 | 5958 | 5248 | 0.881 | — |
+
+- 压缩请求的请求体已与父请求对齐 (工具段相同 + 消息前缀逐条相同), 命中的 6784 token
+  就是 system + 工具段。
+- 同一轮里普通请求的命中率也有 0.678 / 0.442 这样的波动, 而同样的前缀在下一次请求能被
+  命中 (0.901), 说明剩余未命中的部分来自上游网关的分流与缓存写入时机, 不是请求内容差异。
+- 回归: `summarization` 462、`subagent_tool` 143、`prompt_cache_prefix` 33、
+  `agent` 198、`agent_host` 95、`prompt_sources` 47、`boundaries` 14 全部通过。
+
 ## 遇到的问题与处理
 
 1. **新头文件在 MSVC 下找不到 `asio` 别名**
@@ -317,12 +377,12 @@
 | `854c2052` | 小修: 段落变化日志与统计单位对齐 |
 | `a5129e27` | 记录实施提交与待办 (work.md) |
 | `98ba5ff7` | 实测: 真实 provider 的前缀缓存命中 |
-| 待提交 | S10: 子代理用量计入父会话 + `jsonl`/`server` 接入主程序 + 测试 + 文档 |
+| `17702e21` | S10: 子代理用量计入父会话 + `jsonl`/`server` 接入主程序 + 测试 + 文档 |
+| 待提交 | S11: 撤销 `tool_choice=none` 注入 + 自动压缩路径补三个前缀对齐开关 + 压缩载荷裁剪阈值 + 请求前缀指纹日志 + 测试 + 文档 |
 
 ## 待完成任务
 
-1. 压缩请求的真实缓存命中 (该网关回报 0): 先对比父请求与压缩请求的请求体
-   (打开 `logPrintMessagesBeforeLLM`, 或临时打印请求体指纹), 再试
-   `toolChoiceNoneSupported = false` 复测, 确认是否由 `tool_choice: "none"` 引起。
-2. 第二期: 插件面提示词来源 (`agentxx.agent.prompt` 表尾三个成员), 见
+1. 第二期: 插件面提示词来源 (`agentxx.agent.prompt` 表尾三个成员), 见
    `docs/zh-cn/design/plugins.md` 的"提示词段落来源 (第二期留位)"。
+2. (可选) 上游网关分流导致的缓存命中波动: 本项目能控制的部分已到位 (请求体逐字节对齐、
+   载荷不再无谓裁剪), 剩余波动需要 provider 侧定位, 无代码改动点。

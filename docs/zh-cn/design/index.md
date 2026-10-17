@@ -1625,10 +1625,15 @@ AgentContext
 
 **压缩请求的前缀复用**: 压缩子代理按父会话已缓存的请求前缀发请求
 (子配置的 `keepProvidedSystemMessage` / `requestToolsOverride` / `toolExecutionDisabled`):
-保留调用方给的 system 消息不重建、工具定义原样继承父会话上一次请求、写
-`tool_choice: "none"` 且不执行任何工具。于是"工具定义 + system + 历史消息前缀"与父请求
-逐字节相同, provider 的前缀缓存可以直接命中 (实测见
-[benchmark.md](benchmark.md) 第 18 节); 压缩写回后标记来源脏, 下一轮请求前再刷新。
+保留调用方给的 system 消息不重建、工具定义原样继承父会话上一次请求、不执行任何工具
+(模型仍返回 `tool_calls` 时忽略)。于是"工具定义 + system + 历史消息前缀"与父请求
+逐字节相同, provider 的前缀缓存可以直接命中 (实测见 [benchmark.md](benchmark.md) 第 18 节);
+压缩写回后标记来源脏, 下一轮请求前再刷新。
+
+这三项开关必须经**中断参数**完整传递 (自动压缩走
+`SubAgentManagerTool` → 中断参数 → `AgentRunner` → `AgentHost`): 工具侧漏解析会让子代理
+退回自己的工具集与 system, 前缀从工具段就分叉 (曾经发生过, 见 benchmark.md 18.4);
+压缩载荷的裁剪阈值也不要加"余量", 否则一次无谓的丢消息就会让整段前缀失效。
 
 #### 7. 主程序装配与子代理用量
 
