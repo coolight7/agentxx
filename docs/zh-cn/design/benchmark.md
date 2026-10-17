@@ -1551,15 +1551,62 @@ agentxx_test.exe prompt_cache_prefix
 # [INFO] compact request: cached/prompt = 14386/14842 (ratio 0.969276)
 ```
 
-### 18.4 真实 provider (待补)
+### 18.4 真实 provider 实测 (2026-10-17)
 
-步骤 (plan §4.3): 选一个会回报 `cached_tokens` 的 provider, 跑会话直到自动压缩, 从用量台账
-读取三条请求的 `cachedTokens / promptTokens`: (a) 普通轮次、(b) 压缩子代理、(c) 压缩后的父请求;
-预期 (b) ≥ 0.8, (c) 只命中 system 段。
+环境: `deepseek/deepseek-v4.1-flash` (OpenAI 兼容网关 `api.commandcode.ai`, 上游会回报
+`prompt_cache_hit_tokens`, 主程序按 `usage` 解析后写入用量台账 `usage.cached_prompt_tokens`),
+Windows Debug + ASan, 临时 `data_dir` (会话库 `{data}/sqlite/sessions/<sessionId>/session.db`),
+工具集 = `agentxx_filesystem` 6 个 + `agentxx_execute_command` 1 个 (工具定义约 5.2K token)。
 
-| 日期 | provider / 模型 | (a) 普通请求 | (b) 压缩请求 | (c) 压缩后请求 | 备注 |
-|---|---|---|---|---|---|
-| 待填 | | | | | 需要真实 key, 本轮开发环境未跑 |
+负载: 每轮一条长输入 (含 40K~60K 字符填充文本), 模型只回 `ok`。输入超过
+`userInputSummaryLimitLength` (默认 8K utf8 字符) 时按规则分页 (头部片段 + share store 提示),
+因此**每轮上下文增长约 8K 字符**, 请求 token 每轮涨约 3.4K。
+
+#### 普通轮次 (前缀缓存随历史增长)
+
+| 轮次 | prompt | cached | cached/prompt |
+|---|---|---|---|
+| 2 | 12100 | 8576 | 0.709 |
+| 5 | 22226 | 18816 | 0.847 |
+| 8 | 32353 | 28928 | 0.894 |
+| 11 | 42479 | 39040 | 0.919 |
+| 12 | 45855 | 42368 | **0.924** |
+
+同样前缀的重复请求 (上一轮中断后重发, 前缀与 system/工具完全一致):
+`25472 / 25619 = 0.994`。
+
+结论: system + 工具定义 + 历史消息前缀在真实 provider 上确实命中; 历史越长, 命中占比越高
+(固定前缀约 5.2K token, 之后每轮新增的全是新内容)。
+
+#### 压缩
+
+- 压缩前最后一条普通请求: `39040 / 39137 = 0.912` (第 10 轮)
+- 压缩后父会话第一条请求: `5248 / 5726 = 0.917` —— 上下文已被换成
+  `system | [Please compact context to save space] | 摘要 | [Please continue]`,
+  **命中的 5248 token 就是 system + 工具定义**, 说明压缩前后前缀仍然对齐 (A5/A7)。
+- **压缩子代理请求本身没有进台账**: 子代理的 `AgentContext` 没有 `sessionStore`
+  (只有根 agent 有), `recordUsage` 直接返回, 所以 (b) 这一栏无法从
+  `usage` 表读到 —— 这是本次实测暴露出的一条待办 (把子代理用量并入父会话台账)。
+
+#### 本次实测发现的两个既有问题 (与本方案无关, 记录备查)
+
+1. **`jsonl` / `server` 模式没有 `AgentHost`**: 只有进程内 `tui`/`cli` 与 FFI 会
+   `AgentHost::attachRoot` (注册 `service.subagent`)。因此在 `jsonl` 模式触发自动压缩时
+   会出现 `subagent delegation failed: RequestResponseStream service.subagent request:
+   no server registered`, 随后按压缩失败处理并硬截断; 换成进程内 `cli` 模式后压缩正常
+   (摘要写回成功)。
+2. **`cli` 模式每次启动生成新的会话 id** (`generateUniqueSessionId()`), 跨进程续聊只能用
+   `jsonl` 的 `--session-id`; 而 `jsonl` 恰好缺 `AgentHost` —— 两者叠加使"脚本化跑长会话 +
+   自动压缩"这条路走不通, 需要先补 1。
+
+复现命令 (对应用上面表格):
+
+```bash
+# 建长历史 (每行一条输入; 用 pipeline 保持 stdin 打开, EOF 会触发收尾)
+agentxx_cli.exe jsonl --session-id measure1 --config measure.yaml --env %APPDATA%/agentxx/.env < input.jsonl
+# 读台账
+python read_usage.py {data}/sqlite/sessions/measure1/session.db
+```
 
 
 

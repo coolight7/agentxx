@@ -213,6 +213,24 @@
   含度量方式、结果表、复现命令与真实 provider 待补表。
 
 
+### 真实 provider 实测 (2026-10-17)
+
+配置取自工作目录 `agentxx-config.yaml` + `%APPDATA%/agentxx/.env`，模型
+`deepseek/deepseek-v4.1-flash`（OpenAI 兼容网关），上游回报缓存命中量。
+
+- 普通轮次（历史越长命中越高）：`prompt 12100 / cached 8576 = 0.709` →
+  `prompt 45855 / cached 42368 = 0.924`；相同前缀的重复请求 `25472/25619 = 0.994`。
+- 压缩后父会话第一条请求：`cached 5248 / prompt 5726 = 0.917`，命中的正是
+  system + 工具定义段 → 压缩前后前缀仍然对齐。
+- 压缩子代理请求的用量**没进台账**（子代理 `AgentContext` 没有 `sessionStore`），
+  所以 (b) 一栏读不到，已记为待办。
+- 实测中暴露两个既有问题（与本方案无关）：
+  ① `jsonl` / `server` 模式没有 `AgentHost`，自动压缩委派会报
+  `service.subagent ... no server registered` 并退化为硬截断（进程内 `cli`/`tui` 与 FFI 正常）；
+  ② `cli` 模式每次启动生成新会话 id，跨进程续聊只能用 `jsonl`，而 `jsonl` 恰好缺 `AgentHost`。
+
+详见 `docs/zh-cn/design/benchmark.md` 第 18.4 节。
+
 ## 遇到的问题与处理
 
 1. **新头文件在 MSVC 下找不到 `asio` 别名**
@@ -256,8 +274,9 @@
 
 ## 待完成任务
 
-1. 真实 provider 前缀缓存实测 (需要真实 key, 开发环境未跑):
-   按 plan §4.3 记录 (a) 普通轮次 / (b) 压缩请求 / (c) 压缩后的父请求 的
-   `cachedTokens / promptTokens`, 填进 `docs/zh-cn/design/benchmark.md` 第 18.4 节的表。
-2. 第二期: 插件面提示词来源 (`agentxx.agent.prompt` 表尾三个成员), 见
+1. 子代理用量并入父会话台账: 压缩子代理的 `AgentContext` 没有 `sessionStore`,
+   `recordUsage` 直接返回, 导致压缩请求的 prompt/cached 读不到 (本次实测算不上 (b) 栏)。
+2. `jsonl` / `server` 模式补 `AgentHost` (与进程内 `tui`/`cli` 一致 `attachRoot`):
+   否则自动压缩委派报 `service.subagent ... no server registered` 并退化为硬截断。
+3. 第二期: 插件面提示词来源 (`agentxx.agent.prompt` 表尾三个成员), 见
    `docs/zh-cn/design/plugins.md` 的"提示词段落来源 (第二期留位)"。
