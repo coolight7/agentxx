@@ -1551,7 +1551,7 @@ agentxx_test.exe prompt_cache_prefix
 # [INFO] compact request: cached/prompt = 14386/14842 (ratio 0.969276)
 ```
 
-### 18.4 真实 provider 实测 (2026-10-17)
+### 18.4 真实 provider 实测 (2026-10-17, 两轮: 修复前 / 修复子代理记账后)
 
 环境: `deepseek/deepseek-v4.1-flash` (OpenAI 兼容网关 `api.commandcode.ai`, 上游会回报
 `prompt_cache_hit_tokens`, 主程序按 `usage` 解析后写入用量台账 `usage.cached_prompt_tokens`),
@@ -1578,34 +1578,48 @@ Windows Debug + ASan, 临时 `data_dir` (会话库 `{data}/sqlite/sessions/<sess
 结论: system + 工具定义 + 历史消息前缀在真实 provider 上确实命中; 历史越长, 命中占比越高
 (固定前缀约 5.2K token, 之后每轮新增的全是新内容)。
 
-#### 压缩
+#### 压缩 (补齐子代理用量记账后重测)
 
-- 压缩前最后一条普通请求: `39040 / 39137 = 0.912` (第 10 轮)
-- 压缩后父会话第一条请求: `5248 / 5726 = 0.917` —— 上下文已被换成
+| 请求 | prompt | cached | cached/prompt |
+|---|---|---|---|
+| 前一条普通请求 (第 10 轮) | 39090 | 35712 | 0.914 |
+| **压缩请求 (子代理)** | 39300 | **0** | **0.000** |
+| 压缩后父会话第一条 | 5720 | 5248 | 0.917 |
+
+- 压缩请求现在能读到了: `AgentHost::spawnOneTask` 把父会话的记账目标写进子代理上下文
+  (`AgentContext::usageAccountSessions`), 自动压缩经总线到达 (`spawnBatch(req)` 不带父上下文)
+  时回退到根会话; 台账 `usage` 表与会话累计用量都落在父会话 (prompt 39300 = 前一条 39090 +
+  压缩指令, 摘要 completion 416)。
+- **该网关/模型上压缩请求的缓存命中是 0**, 与测试内模拟器 (0.969) 不一致:
+  - 排除"缓存写入延迟": 上一条普通请求 (39090) 在 2.7 秒前发出, 它的前缀 (35712) 就被本次
+    命中; 说明该 provider 对 ~36K 前缀的缓存 3 秒内已可用
+  - 模拟器已断言压缩请求的 system / 工具定义 / 消息前缀与父请求**逐字节相同**
+    (`prompt_cache_prefix` 的 ①~⑤), 所以差异只能来自 provider 侧
+  - 最可疑的是压缩请求多出的 `tool_choice: "none"` (唯一与父请求不同的请求体字段):
+    若上游据此重写工具段, 前缀就整体错位
+  - 下一步: 打开请求日志对比父请求与压缩请求的请求体, 或对该网关关掉
+    `toolChoiceNoneSupported` 再测一次 (见 `work.md` 待办)
+- 压缩后父会话第一条: `5248 / 5720 = 0.917` —— 上下文已换成
   `system | [Please compact context to save space] | 摘要 | [Please continue]`,
-  **命中的 5248 token 就是 system + 工具定义**, 说明压缩前后前缀仍然对齐 (A5/A7)。
-- **压缩子代理请求本身没有进台账**: 子代理的 `AgentContext` 没有 `sessionStore`
-  (只有根 agent 有), `recordUsage` 直接返回, 所以 (b) 这一栏无法从
-  `usage` 表读到 —— 这是本次实测暴露出的一条待办 (把子代理用量并入父会话台账)。
+  命中的 5248 token 就是 system + 工具定义, 说明压缩没有破坏后续请求的前缀对齐 (A5/A7)。
 
-#### 本次实测发现的两个既有问题 (与本方案无关, 记录备查)
+#### 实测中修掉的两个问题 (本轮已实施)
 
-1. **`jsonl` / `server` 模式没有 `AgentHost`**: 只有进程内 `tui`/`cli` 与 FFI 会
-   `AgentHost::attachRoot` (注册 `service.subagent`)。因此在 `jsonl` 模式触发自动压缩时
-   会出现 `subagent delegation failed: RequestResponseStream service.subagent request:
-   no server registered`, 随后按压缩失败处理并硬截断; 换成进程内 `cli` 模式后压缩正常
-   (摘要写回成功)。
-2. **`cli` 模式每次启动生成新的会话 id** (`generateUniqueSessionId()`), 跨进程续聊只能用
-   `jsonl` 的 `--session-id`; 而 `jsonl` 恰好缺 `AgentHost` —— 两者叠加使"脚本化跑长会话 +
-   自动压缩"这条路走不通, 需要先补 1。
+1. **子代理用量没进台账**: 子代理的 `AgentContext` 没有 `sessionStore`, `recordUsage` 直接
+   返回。已修: 派生时写入父会话记账目标 (见上), 嵌套委派沿用最外层目标不重复计数。
+2. **`jsonl` / `server` 模式缺 `AgentHost`**: 只有进程内 `tui`/`cli` 与 FFI 装配过主程序,
+   `jsonl` 里的装配还被 `enableSubagent` 门控。已修: 新增
+   `AgentHost::attachRootAgentHost()` 公共入口, 四种运行形态统一在 `agent::init()` 之后调用,
+   且与 `enableSubagent` 无关 (该开关只控制是否把 subagent 工具注入给模型)。
+   修完后 `jsonl` 里自动压缩不再报 `service.subagent ... no server registered`。
 
-复现命令 (对应用上面表格):
+复现命令 (对应上面表格):
 
 ```bash
-# 建长历史 (每行一条输入; 用 pipeline 保持 stdin 打开, EOF 会触发收尾)
-agentxx_cli.exe jsonl --session-id measure1 --config measure.yaml --env %APPDATA%/agentxx/.env < input.jsonl
-# 读台账
-python read_usage.py {data}/sqlite/sessions/measure1/session.db
+# 建长历史 + 触发自动压缩 (max_context_token 调小; pipeline 保持 stdin 打开)
+agentxx_cli.exe jsonl --session-id measure4 --config measure.yaml --env %APPDATA%/agentxx/.env < input.jsonl
+# 读台账 (逐请求的 prompt / cached)
+python read_usage.py {data}/sqlite/sessions/measure4/session.db
 ```
 
 

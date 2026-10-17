@@ -731,6 +731,15 @@ public:
     /// 会话存储：按 sessionId 取/建 Session
     std::shared_ptr<SessionsManager> sessions = std::make_shared<SessionsManager>();
 
+    /// 用量记账目标 (子代理把用量算到父/根会话): 为空时按本 agent 自己的会话记账
+    /// - 由 `AgentHost::spawnOneTask` 派生 subagent 时填入父上下文的 sessions 与
+    ///   父会话 id: 子代理 (含上下文压缩) 的模型调用计入用户看得见的会话,
+    ///   台账 `usage` 表与会话累计用量都落在父会话上
+    /// - 子代理自己的 SessionsManager 没有 sessionStore, 不设这个目标就记不下来
+    std::shared_ptr<SessionsManager> usageAccountSessions = nullptr;
+    /// 用量记账的会话 id (usageAccountSessions 非空时生效)
+    std::string usageAccountSessionId;
+
     /// 组件加载信息
     AgentAppendComponentInfo appendComponentInfo;
 

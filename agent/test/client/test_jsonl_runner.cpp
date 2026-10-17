@@ -10,14 +10,19 @@
 #include "agentxx-client/io/jsonl/jsonl_mode.h"
 #include "agentxx/agent/code_agent.h"
 #include "agentxx/agent/config.h"
+#include "agentxx/agent/context.h"
 #include "agentxx/agent/io/jsonl_io_transport.h"
 #include "agentxx/agent/io/wire_protocol.h"
+#include "agentxx/util/observability.h"
+#include <atomic>
 #include <chrono>
 #include <deque>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <variant>
 #include <vector>
 
@@ -43,6 +48,8 @@ struct MemoryLines {
     std::mutex               mu;
     std::deque<std::string>  input;
     std::vector<std::string> output;
+    /// 收到输出行时的观察点 (可选; 在写入线程上调, 用于观测运行期状态)
+    std::function<void(std::string_view)> onWrite;
 
     void pushLine(std::string line) {
         std::lock_guard<std::mutex> lock(mu);
@@ -66,8 +73,13 @@ struct MemoryLines {
             return true;
         };
         io.writeLine = [this](std::string_view line) {
-            std::lock_guard<std::mutex> lock(mu);
-            output.emplace_back(line);
+            {
+                std::lock_guard<std::mutex> lock(mu);
+                output.emplace_back(line);
+            }
+            if (onWrite) {
+                onWrite(line);
+            }
         };
         return io;
     }
@@ -264,6 +276,51 @@ void testJsonlRunnerEmptyInput() {
     XX_TEST_EXPECT_EQ(c.messages.size(), size_t{0});
 }
 
+// ---------------------------------------------------------------------------
+// 用例 3: 运行器装配了主程序 (AgentHost)
+// - 即使 `enableSubagent = false` (该开关只控制是否把 subagent 工具注入模型),
+//   运行器也必须装配主程序: 内部压缩经 `service.subagent` 委派,
+//   缺主程序会失败并退化为硬截断
+// - 观测点取在轮次结束那一行写出时 (此时 init 与主程序装配都已完成)
+// ---------------------------------------------------------------------------
+
+void testJsonlRunnerAttachesAgentHost() {
+    auto sim                  = std::make_shared<DaSimServer>(startDaSimServer());
+    g_da_sim_response_content = "host response";
+    g_da_sim_tool_calls       = utilxx_base::Json::array();
+    g_da_sim_fail_count       = 0;
+    g_da_sim_delay_ms         = 0;
+
+    auto cfg             = std::make_shared<agentxx::agent::AgentConfig>();
+    cfg->model.baseUrl   = "http://127.0.0.1:" + std::to_string(sim->port);
+    cfg->model.apiKey    = "EMPTY";
+    cfg->model.modelName = "default-model";
+    cfg->llmMaxRetry     = 1;
+    cfg->enableSubagent  = false; // 关掉工具注入, 主程序装配不得受影响
+    auto agent           = std::make_shared<agentxx::agent::CodeAgent>(cfg);
+
+    auto lines = std::make_shared<MemoryLines>();
+    lines->pushLine(helloLine("jsonl-host"));
+    lines->pushLine(userInputLine("jsonl-host", "hello", 31));
+
+    std::atomic<bool> hostAliveDuringTurn{false};
+    lines->onWrite = [&](std::string_view line) {
+        if (line.find("turn_result") != std::string_view::npos) {
+            hostAliveDuringTurn.store(
+                !agent->agentContext->host.expired(),
+                std::memory_order_release
+            );
+        }
+    };
+
+    agentxx::client::runJsonlStdio(agent, "jsonl-host", lines->lineIo());
+
+    // 轮次结束那一刻主程序仍然挂着 (会话期间可用)
+    XX_TEST_EXPECT_TRUE(hostAliveDuringTurn.load(std::memory_order_acquire));
+    auto c = collect(lines);
+    XX_TEST_EXPECT_EQ(countOfType<agentxx::agent::WireTurnResult>(c), size_t{1});
+}
+
 TestResult testJsonlRunner() {
     const int passedBefore = g_jr_passed;
     const int failedBefore = g_jr_failed;
@@ -271,6 +328,7 @@ TestResult testJsonlRunner() {
     // 运行器自己持有 io_context 并在其中运行: 用例直接同步调用 (返回即收尾完成)
     testJsonlRunnerOneShot();
     testJsonlRunnerEmptyInput();
+    testJsonlRunnerAttachesAgentHost();
 
     return TestResult{g_jr_passed - passedBefore, g_jr_failed - failedBefore};
 }

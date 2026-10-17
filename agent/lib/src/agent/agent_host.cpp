@@ -181,8 +181,20 @@ std::shared_ptr<BaseAgent> AgentHost::rootAgent() const {
     return rootAgent_;
 }
 
-void AgentHost::attachRoot(std::shared_ptr<BaseAgent> rootAgent) {
-    assert(rootAgent && "attachRoot: root agent is null");
+std::shared_ptr<AgentHost>
+    AgentHost::attachRootAgentHost(std::shared_ptr<BaseAgent> rootAgent) {
+    if (!rootAgent) {
+        XX_LOGW("AgentHost::attachRootAgentHost: root agent is null");
+        return nullptr;
+    }
+    Config hostCfg;
+    hostCfg.ioCtx = rootAgent->ioCtx;
+    auto host     = AgentHost::create(hostCfg);
+    host->attachRoot(std::move(rootAgent));
+    return host;
+}
+
+void AgentHost::attachRoot(std::shared_ptr<BaseAgent> rootAgent) {    assert(rootAgent && "attachRoot: root agent is null");
     if (rootAgent_) {
         XX_LOGW("AgentHost::attachRoot: root already attached, ignored");
         return;
@@ -487,9 +499,29 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
             .errorMessage = "AgentHost: subagent context is null",
         };
     }
-    // 注入共享基础设施与 agent 节点容器引用
+    /// 注入共享基础设施与 agent 节点容器引用
     subCtx->threadPool = threadPool_;
     subCtx->host       = weak_from_this();
+
+    // 用量记账目标: 子代理的模型调用计入父会话 (用户看的会话与台账都是父会话)
+    // - 子代理自己有独立 AgentContext/SessionsManager, 没有 sessionStore, 记不下来
+    // - 嵌套委派沿用最外层已确定的目标, 保证一次调用只记一笔 (不重复计数)
+    // - 自动压缩这类内部委派经总线到达 (`spawnBatch(req)` 不带父上下文),
+    //   此时回退到根 agent 的会话存储: 请求里的 parentSessionId 就是发起方会话
+    if (parentAgentCtx) {
+        if (parentAgentCtx->usageAccountSessions) {
+            subCtx->usageAccountSessions  = parentAgentCtx->usageAccountSessions;
+            subCtx->usageAccountSessionId = parentAgentCtx->usageAccountSessionId;
+        } else if (parentAgentCtx->sessions) {
+            subCtx->usageAccountSessions  = parentAgentCtx->sessions;
+            subCtx->usageAccountSessionId = std::string{parentSessionId};
+        }
+    }
+    if (!subCtx->usageAccountSessions && rootAgent_ && rootAgent_->getContext()
+        && rootAgent_->getContext()->sessions) {
+        subCtx->usageAccountSessions  = rootAgent_->getContext()->sessions;
+        subCtx->usageAccountSessionId = std::string{parentSessionId};
+    }
 
     // 同上下文模式: 子代理的 share_store 工具桥接到父会话的 store
     // (id 空间一致: 子代理写入的长内容, 父会话按摘要中的 id 可直接读取)

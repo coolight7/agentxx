@@ -19,6 +19,8 @@
 #include "agentxx/agent/code_agent.h"
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/prompt_sources.h"
+#include "agentxx/agent/session_store.h"
+#include "agentxx/event/events.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/middlewares/summarization.h"
 #include "agentxx/util/observability.h"
@@ -152,6 +154,7 @@ void pumpIoUntil(std::shared_ptr<asio::io_context> io, const std::atomic<bool>& 
 asio::awaitable<void> run_prefix_body(
     std::shared_ptr<asio::io_context> io,
     const std::string&                memoryFile,
+    const std::string&                storeRoot,
     agentxx::test::DaSimServer&       sim,
     TestResult&                       result,
     int                               passedBefore,
@@ -162,7 +165,9 @@ asio::awaitable<void> run_prefix_body(
     cfg->model.apiKey        = "EMPTY";
     cfg->model.modelName     = "default-model";
     cfg->permissionMode      = agentxx::agent::PermissionMode::Pass;
-    cfg->enableSessionStore  = false;
+    // 打开会话持久化: 用量台账 (usage 表) 才能按请求逐条核对
+    cfg->enableSessionStore    = true;
+    cfg->sessionStoreDirectory = storeRoot;
     cfg->prompt.systemPrompt = "SYSTEM-PROMPT-BASE";
     cfg->memoryFilePaths.push_back(memoryFile);
     cfg->llmMaxRetry = 1;
@@ -268,6 +273,47 @@ asio::awaitable<void> run_prefix_body(
             XX_TEST_EXPECT_TRUE(agent->agentContext->metrics->compactions() >= 1);
         }
     }
+    // ⑦ 压缩子代理的用量记到父会话台账 (子代理没有自己的 sessionStore):
+    //    父会话此前 2 条请求 → 现在应有第 3 条, 且内容就是压缩请求本身
+    {
+        auto store = agent->agentContext->sessions->sessionStore;
+        XX_TEST_EXPECT_TRUE(store != nullptr);
+        if (store) {
+            auto rows = store->recentUsage(sessionId, 10);
+            XX_TEST_EXPECT_EQ(rows.size(), size_t{3});
+            if (rows.size() >= 3) {
+                const auto& newest = rows.front();
+                XX_TEST_EXPECT_TRUE(newest.ok);
+                XX_TEST_EXPECT_EQ(newest.promptTokens, g_da_sim_last_prompt_tokens);
+                XX_TEST_EXPECT_EQ(newest.cachedPromptTokens, g_da_sim_last_cached_tokens);
+                // 摘要正文 (completion) 也确实记下来了
+                XX_TEST_EXPECT_TRUE(newest.completionTokens > 0);
+            }
+        }
+    }
+    // ⑧ 自动压缩经总线到达时 `spawnBatch(req)` 不带父上下文:
+    //    用量仍须回退到根会话台账 (否则自动压缩的调用又记不下来)
+    if (auto rootCtx = agent->agentContext; rootCtx && rootCtx->sessions->sessionStore) {
+        auto store           = rootCtx->sessions->sessionStore;
+        auto beforeRows      = store->recentUsage(sessionId, 20).size();
+        auto autoReq         = agentxx::events::ReqSubagentBatch{
+            .parentSessionId = sessionId,
+        };
+        autoReq.tasks.push_back(agentxx::events::SubagentBatchItem{
+            .subagentName        = "subagent_task",
+            .message             = "auto path usage accounting",
+            .sessionId           = sessionId,
+            .tools               = utilxx_base::Json::array(),
+            .enableSummarization = false,
+        });
+        auto resp = co_await host->spawnBatch(autoReq);
+        XX_TEST_EXPECT_EQ(resp.results.size(), size_t{1});
+        auto afterRows = store->recentUsage(sessionId, 20);
+        XX_TEST_EXPECT_EQ(afterRows.size(), beforeRows + 1);
+        if (!afterRows.empty()) {
+            XX_TEST_EXPECT_TRUE(afterRows.front().promptTokens > 0);
+        }
+    }
 
     // ---- 压缩后父会话的下一条请求: system 前缀仍与压缩请求一致 ----
     const int beforeNext = static_cast<int>(g_da_sim_requests.size());
@@ -324,6 +370,7 @@ asio::awaitable<TestResult> run_prompt_cache_prefix_tests() {
 
     const auto root       = makeTempRoot();
     const auto memoryFile = (fs::path{root} / "memory.md").string();
+    const auto storeRoot  = (fs::path{root} / "sessions").string();
     {
         std::ofstream ofs{utilxx_base::utf8ToPath(memoryFile)};
         ofs << "MEMORY-MARKER: prefix alignment must keep this section\n";
@@ -345,7 +392,7 @@ asio::awaitable<TestResult> run_prompt_cache_prefix_tests() {
     asio::co_spawn(
         *io,
         keepAliveRun([&, io]() -> asio::awaitable<void> {
-            co_await run_prefix_body(io, memoryFile, sim, result, passedBefore, failedBefore);
+            co_await run_prefix_body(io, memoryFile, storeRoot, sim, result, passedBefore, failedBefore);
             done = true;
         }),
         asio::detached

@@ -163,6 +163,19 @@ public:
     /// 根 agent (attachRoot 设置; 未注册为空)
     std::shared_ptr<BaseAgent> rootAgent() const;
 
+    /// 为根 agent 一次完成"创建主程序 + 注册根 agent"
+    /// - 等价于 `create(Config{.ioCtx = rootAgent->ioCtx})` + `attachRoot(rootAgent)`
+    /// - **与 `AgentConfig::enableSubagent` 无关**: 该开关只决定是否把
+    ///   `agentxx_subagent` 工具注入给模型; 程序内部路径 (上下文压缩委派) 与
+    ///   subagent 工具都依赖 `service.subagent` 服务, 服务始终装配
+    ///
+    /// - `args`:
+    ///     - [rootAgent] 已 init 的根 agent (须非空)
+    ///
+    /// - `return` 主程序实例; 返回值必须由调用方持有到会话结束
+    ///   (总线 handler 只持 weak_ptr, 容器销毁后委派立即失效)
+    static std::shared_ptr<AgentHost> attachRootAgentHost(std::shared_ptr<BaseAgent> rootAgent);
+
 private:
 
     explicit AgentHost(Config cfg);

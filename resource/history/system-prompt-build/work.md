@@ -231,6 +231,50 @@
 
 详见 `docs/zh-cn/design/benchmark.md` 第 18.4 节。
 
+### S10 两个后续项 (本轮实施)
+
+#### S10.1 子代理用量计入父会话
+
+- `AgentContext` 新增 `usageAccountSessions` + `usageAccountSessionId` (记账目标)。
+- `AgentHost::spawnOneTask`: 派生时把父上下文的记账目标写进子上下文; 嵌套委派沿用
+  最外层目标 (一次调用只记一笔); 自动压缩经总线到达 (`spawnBatch(req)` 不带父上下文) 时
+  回退到根 agent 的会话存储 + 请求里的 `parentSessionId`。
+- `modelcall.cpp` 的 `recordUsage`: 有记账目标就记到它 (台账 `usage` 表 + 会话累计用量),
+  否则按本 agent 自己的会话。
+- 效果: 压缩请求的 `prompt / cached` 现在能在父会话台账里查到
+  (实测 `39300 / 0`, 见下); 子代理工具调用的用量同样归到父会话。
+
+#### S10.2 `jsonl` / `server` 接入主程序 (AgentHost)
+
+- 新增公共入口 `AgentHost::attachRootAgentHost(rootAgent)` (= `create` + `attachRoot`,
+  `ioCtx` 取根 agent 的), 注释写明"与 `enableSubagent` 无关, 返回值必须活到会话结束"。
+- `jsonl_mode.cpp`: 去掉 `enableSubagent` 门控, 改调公共入口。
+- `main.cpp` (server 模式): init 后装配, 句柄由信号协程持有到进程退出, 关机时释放。
+- `mode_runners.cpp` (进程内 tui/cli): 改为调用同一入口 (行为不变)。
+- 效果: `jsonl` 里自动压缩不再报 `service.subagent ... no server registered`。
+
+#### 测试
+
+- `prompt_cache_prefix`: 打开会话持久化 (`sessionStoreDirectory` = 临时目录), 新增断言
+  ⑦ 手动压缩的请求用量落在父会话台账 (prompt/cached 与模拟器上报值一致),
+  ⑧ 自动路径 (`spawnBatch(req)` 不带父上下文) 也回退到根会话台账。→ 34 断言通过。
+- `jsonl_runner`: 新增用例 `testJsonlRunnerAttachesAgentHost` (关掉 `enableSubagent`,
+  在轮次结束那一行写出时检查 `agentContext->host` 仍然存活)。→ 18 断言通过。
+- 全量: `passed=38126 failed=1`, 唯一失败是 `boundaries` 的用词检查
+  (我在 index.md 写了停用词"宿"+"主"), 已改写; 复跑 `boundaries` 14/14 通过。
+
+#### 重测 (修复后)
+
+| 请求 | prompt | cached | cached/prompt |
+|---|---|---|---|
+| 前一条普通请求 (第 10 轮) | 39090 | 35712 | 0.914 |
+| 压缩请求 (子代理) | 39300 | 0 | **0.000** |
+| 压缩后父会话第一条 | 5720 | 5248 | 0.917 |
+
+压缩请求的用量已经记下来了, 但该网关/模型回报的缓存命中为 0, 与模拟器 (0.969) 不一致;
+已排除"缓存写入延迟"(上一条 36K 前缀在 2.7 秒前发出且被本次命中), 最可疑的是压缩请求
+多出的 `tool_choice: "none"`。复测办法见 `benchmark.md` 18.4 与下方待办。
+
 ## 遇到的问题与处理
 
 1. **新头文件在 MSVC 下找不到 `asio` 别名**
@@ -271,12 +315,14 @@
 | `92c920a3` | 测试: 提示词来源刷新与压缩前缀复用 (S9 测试) |
 | `3a4656d3` | 文档: 提示词来源注册与压缩前缀复用 (index / plugins / benchmark / work.md / AGENTS.md) |
 | `854c2052` | 小修: 段落变化日志与统计单位对齐 |
+| `a5129e27` | 记录实施提交与待办 (work.md) |
+| `98ba5ff7` | 实测: 真实 provider 的前缀缓存命中 |
+| 待提交 | S10: 子代理用量计入父会话 + `jsonl`/`server` 接入主程序 + 测试 + 文档 |
 
 ## 待完成任务
 
-1. 子代理用量并入父会话台账: 压缩子代理的 `AgentContext` 没有 `sessionStore`,
-   `recordUsage` 直接返回, 导致压缩请求的 prompt/cached 读不到 (本次实测算不上 (b) 栏)。
-2. `jsonl` / `server` 模式补 `AgentHost` (与进程内 `tui`/`cli` 一致 `attachRoot`):
-   否则自动压缩委派报 `service.subagent ... no server registered` 并退化为硬截断。
-3. 第二期: 插件面提示词来源 (`agentxx.agent.prompt` 表尾三个成员), 见
+1. 压缩请求的真实缓存命中 (该网关回报 0): 先对比父请求与压缩请求的请求体
+   (打开 `logPrintMessagesBeforeLLM`, 或临时打印请求体指纹), 再试
+   `toolChoiceNoneSupported = false` 复测, 确认是否由 `tool_choice: "none"` 引起。
+2. 第二期: 插件面提示词来源 (`agentxx.agent.prompt` 表尾三个成员), 见
    `docs/zh-cn/design/plugins.md` 的"提示词段落来源 (第二期留位)"。

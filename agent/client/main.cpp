@@ -7,6 +7,7 @@
 #include "agentxx-client/train/train.h"
 #include "agentxx-client/util/util.h"
 #include "agentxx/agent/code_agent.h"
+#include "agentxx/agent/agent_host.h"
 #include "agentxx/agent/assembly_snapshot.h"
 #include "agentxx/agent/config_static.h"
 #include "agentxx/agent/config_validation.h"
@@ -1033,10 +1034,16 @@ Options:
         srvCfg.token        = agentToken;
         auto server         = std::make_shared<agentxx::agent::io::AgentServer>(agent, srvCfg);
 
+        // 主程序 (agent 节点容器) 句柄: 在 init 之后装配, 由信号协程持有到进程退出
+        // - 服务端必须有它: 上下文压缩与 subagent 委派都经 `service.subagent`
+        //   (缺它会退化到硬截断); 与 `AgentConfig::enableSubagent` 无关
+        auto hostHolder = std::make_shared<std::shared_ptr<agentxx::agent::AgentHost>>();
+
         asio::co_spawn(
             *agent->ioCtx,
-            [agent, server]() -> asio::awaitable<void> {
+            [agent, server, hostHolder]() -> asio::awaitable<void> {
                 co_await agent->init();
+                *hostHolder = agentxx::agent::AgentHost::attachRootAgentHost(agent);
                 server->start(co_await asio::this_coro::executor);
                 co_return;
             },
@@ -1044,12 +1051,17 @@ Options:
         );
         asio::co_spawn(
             *agent->ioCtx,
-            [agent, server]() -> asio::awaitable<void> {
+            [agent, server, hostHolder]() -> asio::awaitable<void> {
                 asio::signal_set           signals(*agent->ioCtx, SIGINT, SIGTERM);
                 utilxx_base::AsioErrorCode ec;
                 co_await signals.async_wait(asio::redirect_error(asio::use_awaitable, ec));
                 XX_LOGI("[agent_server] signal received, shutting down ({})...", ec.message());
                 server->stop();
+                if (*hostHolder) {
+                    // 释放主程序 (节点容器总线的 handler 只持 weak_ptr,
+                    // 委派请求此后直接失败, 不会在关机阶段再拉起子代理)
+                    hostHolder->reset();
+                }
                 agent->ioCtx->stop();
                 co_return;
             },

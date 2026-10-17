@@ -1630,6 +1630,28 @@ AgentContext
 逐字节相同, provider 的前缀缓存可以直接命中 (实测见
 [benchmark.md](benchmark.md) 第 18 节); 压缩写回后标记来源脏, 下一轮请求前再刷新。
 
+#### 7. 主程序装配与子代理用量
+
+**装配入口统一**: `AgentHost::attachRootAgentHost(rootAgent)` = 创建 agent 节点容器
+(`AgentHost`) + `attachRoot` (在根 agent 总线上注册 `service.subagent` 委派服务)。
+各运行形态都在 `agent->init()` 之后调用它: 进程内 `tui`/`cli` (`mode_runners.cpp`)、
+`jsonl` 一次性运行 (`jsonl_mode.cpp`)、`server` 模式 (`main.cpp`)、FFI (`ffi_runtime.cpp`)。
+要点:
+
+- 装配**与 `AgentConfig::enableSubagent` 无关** —— 该开关只决定是否把
+  `agentxx_subagent` 工具注入给模型; 程序内部路径 (上下文压缩) 同样依赖
+  `service.subagent`, 缺主程序时会报 `no server registered` 并退化为硬截断
+- 返回值必须由调用方持有到会话结束 (总线 handler 只持 `weak_ptr`)
+
+**子代理用量计入父会话**: 子代理有自己的 `AgentContext` / `SessionsManager`, 但没有
+`sessionStore`, 直接记账会丢掉。`AgentHost::spawnOneTask` 派生时把父上下文的记账目标
+写进子上下文 (`AgentContext::usageAccountSessions` + `usageAccountSessionId`),
+模型调用 (`modelcall.cpp` 的 `recordUsage`) 优先记到该目标:
+
+- 台账 `usage` 表与会话累计用量都落在用户看得见的父会话上 (压缩子代理的 prompt/cached
+  因此可查, 见 benchmark.md 第 18.4 节)
+- 嵌套委派沿用最外层已确定的目标, 一次调用只记一笔 (不重复计数)
+
 ### 连接与重连机制
 
 #### WsAgentIOTransport 内部结构 (客户端模式)

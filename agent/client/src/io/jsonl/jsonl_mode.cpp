@@ -117,15 +117,12 @@ asio::awaitable<void> runJsonlStdioAsync(
 
     co_await agent->init();
 
-    // 子代理委派 (与进程内模式一致): 根 agent 挂到主程序总线上, 使 subagent 工具可用。
-    // 主程序对象须活到会话结束, 故用局部 shared_ptr 持有 (与 TUI/CLI 模式同一做法)
-    std::shared_ptr<agent::AgentHost> host;
-    if (auto ctx = agent->agentContext; ctx && ctx->agentConfig && ctx->agentConfig->enableSubagent) {
-        agent::AgentHost::Config hostCfg;
-        hostCfg.ioCtx = agent->ioCtx;
-        host = agent::AgentHost::create(hostCfg);
-        host->attachRoot(agent);
-    }
+    // 主程序装配 (与进程内 TUI/CLI 模式一致): 根 agent 挂到 agent 节点容器上,
+    // 注册 `service.subagent` 委派服务 —— 上下文压缩与 subagent 工具都依赖它。
+    // 注意与 `AgentConfig::enableSubagent` 无关 (那只决定是否把工具注入给模型);
+    // 主程序对象须活到会话结束, 故用局部 shared_ptr 持有
+    std::shared_ptr<agent::AgentHost> host
+        = agent::AgentHost::attachRootAgentHost(agent);
 
     XX_LOGI(
         "[jsonl] session `{}` ready: write one Wire message per line on stdin; "

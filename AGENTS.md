@@ -28,6 +28,13 @@
   `requestToolsOverride` + `toolExecutionDisabled` + `tool_choice=none`), 命中率实测见
   [benchmark.md](docs/zh-cn/design/benchmark.md) 第 18 节; 详见
   [index.md](docs/zh-cn/design/index.md) 架构设计第 6 小节
+- 主程序装配与子代理记账 (本轮实施): 各运行形态 (`tui`/`cli`/`jsonl`/`server`/FFI) 都在
+  `agent->init()` 之后调 `AgentHost::attachRootAgentHost(rootAgent)`, **与
+  `AgentConfig::enableSubagent` 无关** (该开关只控制是否把 `agentxx_subagent` 工具注入模型;
+  缺主程序时上下文压缩会报 `service.subagent ... no server registered` 并退化为硬截断),
+  返回值必须活到会话结束; 子代理 (含压缩) 的模型用量经
+  `AgentContext::usageAccountSessions` + `usageAccountSessionId` 记到父会话台账, 自动压缩
+  经总线到达 (`spawnBatch(req)` 不带父上下文) 时回退根会话, 详见 index.md 架构设计第 7 小节
 - **编写代码注释**: 
     - 编写注释时，统一使用 markdown 风格，多行注释使用 `///` 开头, 示例(其中的 args 和 return 不必每一个都详细说明，尽量对需要注意、不容易从名称了解含义的进行说明):
 ```c++
