@@ -373,6 +373,8 @@ asio::awaitable<void> PromptSourceRegistry::ensureFresh(
         auto&      slot     = state->slotFor(sid);
         const bool wasBuilt = slot.built;
         const bool differs  = wasBuilt && slot.text != *outcome.text;
+        const auto oldChars = slot.text.empty() ? size_t{0}
+                                                : utilxx_base::utf8GetLength(slot.text);
         slot.text           = std::move(*outcome.text);
         slot.built          = true;
         state->chars        = utilxx_base::utf8GetLength(slot.text);
@@ -383,8 +385,8 @@ asio::awaitable<void> PromptSourceRegistry::ensureFresh(
                 "[prompt] section `{}` changed ({} -> {} chars, reason={}, session={}); "
                 "system prefix will be rebuilt once",
                 state->src.key,
+                oldChars,
                 state->chars,
-                slot.text.size(),
                 reasonKey(reason),
                 sid
             );
@@ -407,7 +409,10 @@ asio::awaitable<void> PromptSourceRegistry::ensureFresh(
     stats.lastMs = steadyNowMs() - startMs;
     for (auto* state : ordered) {
         if (nullptr != state) {
-            stats.sectionChars += state->resolvedText(sid).size();
+            const auto& text = state->resolvedText(sid);
+            if (!text.empty()) {
+                stats.sectionChars += utilxx_base::utf8GetLength(text);
+            }
         }
     }
     co_return;

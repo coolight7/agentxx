@@ -1603,9 +1603,9 @@ AgentContext
 `buildSystemPrompt`), 段落来源统一登记在 `PromptSourceRegistry`
 (`agent/lib/include/agentxx/agent/prompt_sources.h`, 挂在 `AgentContext::promptSources`):
 
-- **分组**: 静态附加段 (`PromptSectionScope::Stable`) 与运行时文档段
-  (`PromptSectionScope::Dynamic`) **分开存**, 只统一视图
-  (`PromptSectionView { key, owner, order, scope, text }`)；静态段属于可缓存前缀,
+- **分组**: 静态附加段 (`PromptSectionSlot::Stable`) 与运行时文档段
+  (`PromptSectionSlot::Dynamic`) **分开存**, 只统一视图
+  (`PromptSectionView { key, text, order, owner, scope, slot }`)；静态段属于可缓存前缀,
   动态段拼在末尾
 - **来源** (`PromptSource`): key / owner / order / scope / perSession /
   refreshOnCompaction / timeout / build 协程。内置来源两个: `memory` (记忆文件,
