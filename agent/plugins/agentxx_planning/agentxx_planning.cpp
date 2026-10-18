@@ -145,12 +145,7 @@ Replace the entire diagram each call.)";
 constexpr std::string_view kArgTodosDesc = R"((write only) TACTICAL LAYER: Near-term task items.
 Focus on what you are actively doing NOW and what comes NEXT.
 Do NOT list all phases from the diagram — only immediate execution items.
-
-Item struct:
-{
-    "state": "pending",   // enum: pending, in_progress, completed, failed
-    "content": ""         // task description
-})";
+Each item: `state` is one of `pending` / `in_progress` / `completed` / `failed`, `content` is the task description.)";
 
 constexpr std::string_view kArgNotesDesc = R"((write only) MEMO LAYER: Any additional notes.
 Use this to record important information, tips, reminders, or identity/role-playing prompts.)";
@@ -423,7 +418,31 @@ static int planningSetup(PluginCtx* ctx) {
                                      /*required=*/true
                                  )
                                  .string("roadmap", kArgRoadmapDesc)
-                                 .array("todos", kArgTodosDesc, "object")
+                                 .objectArray(
+                                     "todos",
+                                     kArgTodosDesc,
+                                     utilxx_base::Json{
+                                         {"type", "object"},
+                                         {"properties",
+                                          utilxx_base::Json{
+                                              {"state",
+                                               utilxx_base::Json{
+                                                   {"type", "string"},
+                                                   {"enum",
+                                                    utilxx_base::Json::array(
+                                                        {"pending",
+                                                         "in_progress",
+                                                         "completed",
+                                                         "failed"}
+                                                    )},
+                                               }},
+                                              {"content",
+                                               utilxx_base::Json{{"type", "string"}}},
+                                          }},
+                                         {"required",
+                                          utilxx_base::Json::array({"state", "content"})},
+                                     }
+                                 )
                                  .string("notes", kArgNotesDesc)
                                  .build();
 
