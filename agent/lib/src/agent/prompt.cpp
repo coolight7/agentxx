@@ -215,15 +215,23 @@ Supports offset/limit for reading portions of large files.)",
               .depict =
                   R"(Perform exact string replacement in a text file (e.g. *.txt, *.md, *.cpp, *.h).
 Use this for surgical edits without rewriting the entire file.
+One call can change several places of the same file: pass them as `edits` (applied in order), or a single replacement as `old_str`/`new_str`.
 Note! This tool will replace all `\r\n` to `\n` when find `old_str` and replace.)",
               .args =
                   {
                       {"path",
                        R"(Path to the text file. Relative paths are resolved against the current working directory; `~` expands to the home directory.)"},
-                      {"old_str", "The exact string to find and replace. Must be non-empty and match precisely (including whitespace and indentation)."},
-                      {"new_str", "The replacement string."},
-                      {"multi_replace",
-                       R"(Default `false`. If `true`, replace ALL occurrences of `old_str`. If `false`, replace only the first occurrence.)"},
+                      {"edits",
+                       R"(A list of replacements applied in order, each item is `{"old_str": "...", "new_str": "..."}`.
+Every `old_str` must be non-empty and match the file content exactly (including whitespace and indentation); each item replaces the first match, and item N is matched against the content produced by items 1..N-1, so a later item may target text written by an earlier one.
+All items must match: when any item does not match, nothing is written and the error names that item.
+Example: `"edits": [{"old_str": "foo();", "new_str": "bar();"}, {"old_str": "old_name", "new_str": "new_name"}]`.
+Pass this instead of `old_str`/`new_str` to change several places in one file; do not pass both forms in one call.)"},
+                      {"old_str",
+                       R"(Single-replacement shorthand of `edits`: the exact string to find and replace (the first match is replaced). Must be non-empty and match precisely (including whitespace and indentation).
+Note! The replacement is done only when `edits` is not given.)"},
+                      {"new_str",
+                       "Single-replacement shorthand of `edits`: the replacement string."},
                   },
           },
       },

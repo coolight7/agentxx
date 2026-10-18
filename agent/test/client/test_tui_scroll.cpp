@@ -1791,7 +1791,7 @@ TestResult testTuiScroll() {
             et->tool               = TUIMessage::ToolData{};
             et->tool->toolName     = "agentxx_filesystem_edit";
             et->tool->toolFinished = true;
-            et->tool->toolResult   = "Success, Replace 1 hits"; // 成功 (非错误前缀)
+            et->tool->toolResult   = "success"; // 成功 (非错误前缀)
             et->collapsed          = false;
             std::string oldStr, newStr;
             for (int j = 0; j < 14; ++j) {
@@ -2010,7 +2010,7 @@ TestResult testTuiScroll() {
                         hm->tool               = TUIMessage::ToolData{};
                         hm->tool->toolName     = "agentxx_filesystem_edit";
                         hm->tool->toolFinished = true;
-                        hm->tool->toolResult   = "Success, Replace 1 hits";
+                        hm->tool->toolResult   = "success";
                         hm->collapsed          = false;
                         std::string os, ns;
                         for (int j = 0; j < 10; ++j) {

@@ -14,6 +14,7 @@
 #include "agentxx/nodes/toolcall.h"
 #include "agentxx/plugin/api/plugin_kit.h"
 #include "agentxx/plugin/plugin_manager.h"
+#include "agentxx/util/neograph_json_bridge.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/steady_timer.hpp"
@@ -2455,6 +2456,47 @@ throw new Error("top-level rollback probe");
                 });
                 XX_TEST_EXPECT_TRUE(r2.find("SECOND") != std::string::npos);
 
+                // 3b. edit 多段替换 (edits 数组) + 工具模式声明:
+                // 注册的工具模式里 edits 必须声明为"元素是对象"的数组
+                // (对象数组声明见 ToolSchemaBuilder::objectArray)
+                auto editDef  = editTool->get_definition();
+                auto editArgs = agentxx::util::fromNeographJson(editDef.parameters);
+                XX_TEST_EXPECT_TRUE(editArgs["properties"].contains("edits"));
+                XX_TEST_EXPECT_EQ(
+                    editArgs["properties"]["edits"]["type"].get<std::string>(),
+                    std::string{"array"}
+                );
+                XX_TEST_EXPECT_EQ(
+                    editArgs["properties"]["edits"]["items"]["type"].get<std::string>(),
+                    std::string{"object"}
+                );
+                // 元素模式里 old_str/new_str 都是必须给的字段
+                bool requiredOk = false;
+                for (const auto& one : editArgs["properties"]["edits"]["items"]["required"]) {
+                    if (one.is_string() && one.get<std::string>() == "old_str") {
+                        requiredOk = true;
+                    }
+                }
+                XX_TEST_EXPECT_TRUE(requiredOk);
+                XX_TEST_EXPECT_TRUE(
+                    editArgs["properties"]["edits"]["items"]["properties"].contains("new_str")
+                );
+
+                auto eMul = co_await editTool->execute_async(utilxx_base::Json{
+                    {"path",  file},
+                    {"edits",
+                     utilxx_base::Json::array(
+                         {utilxx_base::Json{{"old_str", "hello"}, {"new_str", "HELLO"}},
+                          utilxx_base::Json{{"old_str", "SECOND"}, {"new_str", "second"}}}
+                     )      },
+                });
+                XX_TEST_EXPECT_EQ(eMul, std::string{"success"});
+                auto r3 = co_await readTool->execute_async(utilxx_base::Json{
+                    {"path", file}
+                });
+                XX_TEST_EXPECT_TRUE(r3.find("HELLO") != std::string::npos);
+                XX_TEST_EXPECT_TRUE(r3.find("second") != std::string::npos);
+
                 // 4. list (仍走 offload 阻塞池): 两类工具在同一实例内共存
                 auto l = co_await listTool->execute_async(utilxx_base::Json{
                     {"path", dir.string()}
@@ -2527,6 +2569,21 @@ throw new Error("top-level rollback probe");
                     {"path", file}
                 });
                 XX_TEST_EXPECT_TRUE(r2.find("SECOND") != std::string::npos);
+
+                // 多段替换同样走同一实现 (edits 数组; 任一段不匹配时整次调用不写盘)
+                auto eMul = co_await editTool->execute_async(utilxx_base::Json{
+                    {"path",  file},
+                    {"edits",
+                     utilxx_base::Json::array(
+                         {utilxx_base::Json{{"old_str", "SECOND"}, {"new_str", "second"}},
+                          utilxx_base::Json{{"old_str", "not_in_file"}, {"new_str", "x"}}}
+                     )      },
+                });
+                XX_TEST_EXPECT_TRUE(eMul.find("[Error]") != std::string::npos);
+                auto r3 = co_await readTool->execute_async(utilxx_base::Json{
+                    {"path", file}
+                });
+                XX_TEST_EXPECT_TRUE(r3.find("SECOND") != std::string::npos);
             }
             fsx::remove_all(dir, ec);
             XX_TEST_EXPECT_TRUE(co_await ctx->pluginManager->unloadAsync("agentxx_filesystem"));

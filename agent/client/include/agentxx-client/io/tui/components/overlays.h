@@ -866,20 +866,22 @@ private:
     bool                               cachedMarkdown_ = true;
 };
 
-/// 通用 diff overlay (open_overlay DIFF 驱动; payload={path,old_str,new_str})
+/// 通用 diff overlay (open_overlay DIFF 驱动; payload 解析见 [parsePluginDiffPayload])
 ///
-/// - 渲染复用 message diff 逻辑 (computeLineDiff + side-by-side/统一样式,
-///   见 plugin_ui_items renderPluginDiff)
+/// - 支持单段与多段: `{path,old_str,new_str}` / `{path,edits:[{old_str,new_str},...]}`
+///   (`edits` 也接受单个对象); 多段时每段各渲染一份逐行差异, 段间一条分隔,
+///   文件路径只在首段展示
+/// - 渲染走共享组件层 (Diff 项 + Divider 项, 与工具展开体同一套实现;
+///   逐行 diff 见 plugin_ui_items renderPluginDiff)
 /// - Scrollable + Esc 关 + overlay.scrollHint 底栏; 宽 4/5、高 4/5 双约束
 class DiffOverlay : public ftxui::ComponentBase {
 public:
 
     explicit DiffOverlay(
-        TUICtx&     ctx,
-        std::string title,
-        std::string path,
-        std::string oldStr,
-        std::string newStr
+        TUICtx&                        ctx,
+        std::string                    title,
+        std::string                    path,
+        std::vector<PluginDiffSegment> segments
     );
 
     void onClose(std::function<void()> fn) {
@@ -898,13 +900,16 @@ private:
 
     std::vector<ScrollItem> buildItems();
 
-    TUICtx&                     ctx_;
-    std::string                 title_;
-    std::string                 path_;
-    std::string                 oldStr_;
-    std::string                 newStr_;
-    std::shared_ptr<Scrollable> scrollable_;
-    std::function<void()>       onClose_;
+    /// 内容项 (每段一个 Diff 项, 段间插一个 Divider 项), 构造时按段落生成一次
+    /// (段落文本可能很大, 不逐帧复制); 段落为空时给一个空 diff, 渲染为 "(no changes)"
+    static std::vector<pluginxx::ui::Item>
+        buildContentItems(const std::string& path, const std::vector<PluginDiffSegment>& segments);
+
+    TUICtx&                         ctx_;
+    std::string                     title_;
+    std::vector<pluginxx::ui::Item> items_;
+    std::shared_ptr<Scrollable>     scrollable_;
+    std::function<void()>           onClose_;
 
     /// 尺寸与外观选项 (open_overlay 的 extra_json; 见 [OverlayOptions])
     OverlayOptions options_;

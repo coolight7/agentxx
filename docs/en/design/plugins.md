@@ -373,6 +373,12 @@ The Agentxx client adopts a unified, layered tool-specialized rendering mechanis
      - **`<key, render_fn>` Callback Function**: Provides an `AgentxxToolRenderFn` receiving `AgentxxToolRenderInput` (`tool_name`, `args_json`, `result_text`, `is_finished`, `is_error`, `max_width`) and returning `AgentxxToolRenderOutput` (`displayName`, `summary`, `items_json`). Suitable for tools requiring complex argument parsing, conditional formatting, or dynamic UI item generation (e.g. `read` offset-limit parameters, `glob`/`grep` patterns and file summaries, `edit` diff comparisons).
      - **Declarative Template (`template_json`)**: When `render_fn == NULL`, the host automatically extracts fields from `args_json` and formats the summary according to the declarative template, e.g. `{"displayName":"Search","summaryKey":"query"}` or `{"displayName":"Bash","summaryKey":"command"}`.
    - **Generic Diff Rendering**: Expanded `items_json` supports `{"kind":"Diff","path":"...","oldStr":"...","newStr":"..."}` (or use the kit helper `agentxx::ui::kit::pathDiffRow`). The TUI generically renders this as an adaptive side-by-side or unified diff comparison, freely reusable by any plugin.
+   - **Diff Overlay (`open_overlay` DIFF) — single or multiple segments**: segments follow the same "one level less" rule as the edit tool arguments, because argument type auto-fix converts a single object and a one-element array into each other, so the UI must accept both:
+     - multiple: `{"path":"a.cpp","edits":[{"old_str":"..","new_str":".."}, ...]}`
+     - single: `{"path":"a.cpp","old_str":"..","new_str":".."}` (legacy form, still supported)
+     - `edits` as a **single object**: `{"path":"a.cpp","edits":{"old_str":"..","new_str":".."}}`
+     - bare array `[{...}, ...]`: multiple segments without a file path
+     Each segment renders its own line diff, separated by one divider row; the file path is shown only for the first segment. SDK helper: `ClientPluginBase::showDiffOverlay(title, path, segments)` (a single segment is sent in the legacy form so older hosts still render it).
    - **SDK Helper (`registerToolRenderer`)**:
      `plugin_kit.h` provides an ergonomic modern C++ lambda wrapper:
      ```cpp

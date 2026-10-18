@@ -81,7 +81,7 @@ git_worktree 及延迟加载装配 (`ToolSkillSearchSubAgentTask` 模板类, 当
 | **文件系统** | `agentxx_filesystem_list` | 列出文件/文件夹信息 (大小、类型、修改时间)，支持递归与 `path` 通配 (`*` / `?` / `[...]` / `**`：含通配符时展开模式并列出匹配条目本身，`recursive` 再下钻匹配到的目录) |
 | | `agentxx_filesystem_read` | 按行读取文本文件，支持 offset/limit |
 | | `agentxx_filesystem_write` | 创建/覆盖文本文件 |
-| | `agentxx_filesystem_edit` | 精确字符串替换编辑文本文件 |
+| | `agentxx_filesystem_edit` | 精确字符串替换编辑文本文件 (一次性改多处: `edits` 数组按顺序生效, 每段只替换第一处匹配; 任一段匹配不到则整次调用不写盘) |
 | | `agentxx_filesystem_glob` | 按 glob 模式搜索文件 |
 | | `agentxx_filesystem_grep` | 按纯文本 (text_patterns) / 正则 (regex_patterns) 搜索文件内容 (可同时指定取并集) |
 | **命令执行** | `agentxx_execute_bash_command` | 执行 Linux shell 命令，支持超时控制 (Linux/macOS)；插件启动时探测 python/node 可用性与版本并写入工具提示词 |

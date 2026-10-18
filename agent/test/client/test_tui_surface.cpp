@@ -12,12 +12,15 @@
 // - [整行高亮] 列表类弹窗选中项背景覆盖整行 (面性风格的选中表达)
 // - [主题配色] Dark/Light 下三个区域背景色两两不同, 且区别于整体背景与蒙版色
 // - [插件 items separator 项] 渲染为浅色背景区块而非横线
+// - [diff 弹窗] 单段 / 多段 (`edits` 数组) / `edits` 单对象 / 裸数组 的 payload 解析与
+//   渲染 (多段: 每段一份差异, 段间分隔行, 路径只出现一次)
 #include "agentxx-test/client/test_tui_surface.h"
 
 #include "agentxx-client/io/tui/components/overlays.h"
 #include "agentxx-client/io/tui/framework/tui_context.h"
 #include "agentxx-client/io/tui/framework/tui_settings.h"
 #include "agentxx-client/io/tui/framework/tui_state.h"
+#include "agentxx-client/io/tui/plugin_ui_items.h"
 #include "agentxx-client/io/tui/surface.h"
 #include "agentxx-client/io/tui/tui_theme.h"
 #include "ftxui/dom/elements.hpp"
@@ -635,6 +638,223 @@ TestResult testTuiSurface() {
         XX_TEST_EXPECT_TRUE(found);
         if (found) {
             XX_TEST_EXPECT_EQ(r.bgAt(r.midX(), iy + 1), fx.theme.surfaceFooterColor);
+        }
+    }
+
+    // ---- 通用 Diff 弹窗 (open_overlay DIFF): 单段 / 多段 / `edits` 单对象 ----
+    //
+    // 段落形态与 edit 工具参数同一套"少写一层"规则: 工具参数的类型自动修正会把
+    // 单个对象与单元素数组成对互转 (见 ToolcallWrapNode::autoFixArgsType), 因此
+    // 界面层两种形态都要认: `edits` 是数组或单个对象都能渲染。
+    {
+        // 1. payload 解析: 多段 / `edits` 单对象 / 旧写法 / 裸数组
+        {
+            auto multi = parsePluginDiffPayload(
+                R"({"path":"/a.cpp","edits":[{"old_str":"x1","new_str":"y1"},{"old_str":"x2","new_str":"y2"}]})"
+            );
+            XX_TEST_EXPECT_TRUE(multi.has_value());
+            if (multi) {
+                XX_TEST_EXPECT_EQ(multi->path, std::string{"/a.cpp"});
+                XX_TEST_EXPECT_EQ(multi->segments.size(), size_t{2});
+                if (multi->segments.size() == 2) {
+                    XX_TEST_EXPECT_EQ(multi->segments[0].oldStr, std::string{"x1"});
+                    XX_TEST_EXPECT_EQ(multi->segments[0].newStr, std::string{"y1"});
+                    XX_TEST_EXPECT_EQ(multi->segments[1].oldStr, std::string{"x2"});
+                    XX_TEST_EXPECT_EQ(multi->segments[1].newStr, std::string{"y2"});
+                }
+            }
+            // `edits` 单个对象 (少写一层数组): 按单段处理
+            auto singleObj = parsePluginDiffPayload(
+                R"({"path":"/b.cpp","edits":{"old_str":"x","new_str":"y"}})"
+            );
+            XX_TEST_EXPECT_TRUE(singleObj.has_value());
+            if (singleObj) {
+                XX_TEST_EXPECT_EQ(singleObj->path, std::string{"/b.cpp"});
+                XX_TEST_EXPECT_EQ(singleObj->segments.size(), size_t{1});
+                if (!singleObj->segments.empty()) {
+                    XX_TEST_EXPECT_EQ(singleObj->segments[0].oldStr, std::string{"x"});
+                    XX_TEST_EXPECT_EQ(singleObj->segments[0].newStr, std::string{"y"});
+                }
+            }
+            // 旧写法 (顶层 old_str/new_str)
+            auto legacy = parsePluginDiffPayload(
+                R"({"path":"/c.cpp","old_str":"x","new_str":"y"})"
+            );
+            XX_TEST_EXPECT_TRUE(legacy.has_value());
+            if (legacy) {
+                XX_TEST_EXPECT_EQ(legacy->path, std::string{"/c.cpp"});
+                XX_TEST_EXPECT_EQ(legacy->segments.size(), size_t{1});
+            }
+            // 裸数组: 无文件路径的多段
+            auto bareArray = parsePluginDiffPayload(R"([{"old_str":"x","new_str":"y"}])");
+            XX_TEST_EXPECT_TRUE(bareArray.has_value());
+            if (bareArray) {
+                XX_TEST_EXPECT_EQ(bareArray->path, std::string{});
+                XX_TEST_EXPECT_EQ(bareArray->segments.size(), size_t{1});
+            }
+            // 给了 `edits` 就不再回退到 old_str/new_str (与工具参数的互斥规则一致)
+            auto exclusive = parsePluginDiffPayload(
+                R"({"edits":[{"old_str":"x","new_str":"y"}],"old_str":"ignored","new_str":"ignored"})"
+            );
+            XX_TEST_EXPECT_TRUE(exclusive.has_value());
+            if (exclusive) {
+                XX_TEST_EXPECT_EQ(exclusive->segments.size(), size_t{1});
+                if (!exclusive->segments.empty()) {
+                    XX_TEST_EXPECT_EQ(exclusive->segments[0].oldStr, std::string{"x"});
+                }
+            }
+            // 空段 (两侧都空) 跳过; 缺 new_str 按空串 (删除整段)
+            auto skipEmpty = parsePluginDiffPayload(
+                R"({"edits":[{"old_str":"a","new_str":"b"},{},{"old_str":"c"}]})"
+            );
+            XX_TEST_EXPECT_TRUE(skipEmpty.has_value());
+            if (skipEmpty) {
+                XX_TEST_EXPECT_EQ(skipEmpty->segments.size(), size_t{2});
+                if (skipEmpty->segments.size() == 2) {
+                    XX_TEST_EXPECT_EQ(skipEmpty->segments[1].oldStr, std::string{"c"});
+                    XX_TEST_EXPECT_EQ(skipEmpty->segments[1].newStr, std::string{});
+                }
+            }
+            // 非法 payload: 非 JSON / 顶层既不是对象也不是数组
+            XX_TEST_EXPECT_FALSE(parsePluginDiffPayload("{ not json").has_value());
+            XX_TEST_EXPECT_FALSE(parsePluginDiffPayload("123").has_value());
+            // 合法但没有可用段: 解析成功, 段列表为空
+            auto noSegments = parsePluginDiffPayload(R"({"path":"/d.cpp"})");
+            XX_TEST_EXPECT_TRUE(noSegments.has_value());
+            if (noSegments) {
+                XX_TEST_EXPECT_EQ(noSegments->segments.size(), size_t{0});
+            }
+        }
+
+        // 2. 单段 (旧写法) 上屏: 路径 + 两侧文本
+        {
+            SurfaceFixture fx;
+            auto           comp = createUniversalOverlay(
+                fx.ctx,
+                AGENTXX_OVERLAY_DIFF,
+                "文件改动",
+                R"({"path":"/tmp/one.cpp","old_str":"int one = 1;","new_str":"int one = 2;"})",
+                "{}",
+                "test",
+                [] {}
+            );
+            XX_TEST_EXPECT_TRUE(comp != nullptr);
+            if (comp) {
+                auto r = fx.probe(comp);
+                checkSurfaceRegions(r, fx.theme, fx.theme.surfaceHeaderColor, __LINE__);
+                checkNoFrameGlyphs(r, __LINE__);
+                XX_TEST_EXPECT_TRUE(r.text.find("文件改动") != std::string::npos);
+                XX_TEST_EXPECT_TRUE(r.text.find("/tmp/one.cpp") != std::string::npos);
+                XX_TEST_EXPECT_TRUE(r.text.find("int one = 1;") != std::string::npos);
+                XX_TEST_EXPECT_TRUE(r.text.find("int one = 2;") != std::string::npos);
+            }
+        }
+
+        // 3. 多段 (edits 数组) 上屏: 每段各一份差异, 段间分隔行, 路径只出现一次
+        {
+            SurfaceFixture fx;
+            auto           comp = createUniversalOverlay(
+                fx.ctx,
+                AGENTXX_OVERLAY_DIFF,
+                "多段改动",
+                R"({"path":"/tmp/multi.cpp","edits":[
+                    {"old_str":"old_first();","new_str":"new_first();"},
+                    {"old_str":"old_second();","new_str":"new_second();"}]})",
+                "{}",
+                "test",
+                [] {}
+            );
+            XX_TEST_EXPECT_TRUE(comp != nullptr);
+            if (comp) {
+                auto r = fx.probe(comp);
+                checkSurfaceRegions(r, fx.theme, fx.theme.surfaceHeaderColor, __LINE__);
+                checkNoFrameGlyphs(r, __LINE__);
+                // 两段都上屏
+                XX_TEST_EXPECT_TRUE(r.text.find("old_first();") != std::string::npos);
+                XX_TEST_EXPECT_TRUE(r.text.find("new_first();") != std::string::npos);
+                XX_TEST_EXPECT_TRUE(r.text.find("old_second();") != std::string::npos);
+                XX_TEST_EXPECT_TRUE(r.text.find("new_second();") != std::string::npos);
+                // 路径只在首段展示一次
+                size_t hits = 0;
+                for (size_t pos = r.text.find("/tmp/multi.cpp"); pos != std::string::npos;
+                     pos        = r.text.find("/tmp/multi.cpp", pos + 1)) {
+                    ++hits;
+                }
+                XX_TEST_EXPECT_EQ(hits, size_t{1});
+                // 段间为分隔行 (面性风格: 浅色背景区块, 与其它 overlay 的分隔一致)
+                // 首段的删/增两行相邻, 其下一行即分隔行, 再下一行起是第二段
+                int o1x = -1, o1y = -1, n1x = -1, n1y = -1;
+                const bool foundFirst = r.findText("old_first();", o1x, o1y);
+                XX_TEST_EXPECT_TRUE(foundFirst);
+                XX_TEST_EXPECT_TRUE(r.findText("new_first();", n1x, n1y));
+                if (foundFirst) {
+                    // 同一段的删/增两行紧挨着 (中间不插别的行)
+                    XX_TEST_EXPECT_TRUE(o1y == n1y + 1 || n1y == o1y + 1);
+                    const int segTop = std::min(o1y, n1y);
+                    XX_TEST_EXPECT_EQ(
+                        r.bgAt(r.midX(), segTop + 2),
+                        fx.theme.surfaceFooterColor
+                    );
+                    int        sx = -1, sy = -1;
+                    XX_TEST_EXPECT_TRUE(r.findText("old_second();", sx, sy));
+                    XX_TEST_EXPECT_TRUE(sy >= segTop + 3);
+                }
+            }
+        }
+
+        // 4. `edits` 单个对象 (少写一层数组): 与单段写法表现一致
+        {
+            SurfaceFixture fx;
+            auto           comp = createUniversalOverlay(
+                fx.ctx,
+                AGENTXX_OVERLAY_DIFF,
+                "单对象改动",
+                R"({"path":"/tmp/single.cpp","edits":{"old_str":"old_obj();","new_str":"new_obj();"}})",
+                "{}",
+                "test",
+                [] {}
+            );
+            XX_TEST_EXPECT_TRUE(comp != nullptr);
+            if (comp) {
+                auto r = fx.probe(comp);
+                checkSurfaceRegions(r, fx.theme, fx.theme.surfaceHeaderColor, __LINE__);
+                checkNoFrameGlyphs(r, __LINE__);
+                XX_TEST_EXPECT_TRUE(r.text.find("/tmp/single.cpp") != std::string::npos);
+                XX_TEST_EXPECT_TRUE(r.text.find("old_obj();") != std::string::npos);
+                XX_TEST_EXPECT_TRUE(r.text.find("new_obj();") != std::string::npos);
+            }
+        }
+
+        // 5. 非法 payload 打不开弹窗; 空 payload 打开"无变化"的弹窗
+        {
+            SurfaceFixture fx;
+            XX_TEST_EXPECT_TRUE(
+                createUniversalOverlay(
+                    fx.ctx,
+                    AGENTXX_OVERLAY_DIFF,
+                    "坏 payload",
+                    "{ not json",
+                    "{}",
+                    "test",
+                    [] {}
+                )
+                    == nullptr
+            );
+            auto empty = createUniversalOverlay(
+                fx.ctx,
+                AGENTXX_OVERLAY_DIFF,
+                "空 payload",
+                "",
+                "{}",
+                "test",
+                [] {}
+            );
+            XX_TEST_EXPECT_TRUE(empty != nullptr);
+            if (empty) {
+                auto r = fx.probe(empty);
+                checkNoFrameGlyphs(r, __LINE__);
+                XX_TEST_EXPECT_TRUE(r.text.find("(no changes)") != std::string::npos);
+            }
         }
     }
 

@@ -2840,21 +2840,15 @@ std::shared_ptr<ftxui::ComponentBase> createUniversalOverlay(
             return m;
         }
         case AGENTXX_OVERLAY_DIFF: {
-            std::string path, oldStr, newStr;
-            try {
-                auto j = utilxx_base::Json::parse(payload.empty() ? "{}" : payload);
-                path   = j.value("path", std::string{});
-                oldStr = j.value("old_str", std::string{});
-                newStr = j.value("new_str", std::string{});
-            } catch (...) {
+            auto parsed = agentxx::client::parsePluginDiffPayload(payload);
+            if (!parsed.has_value()) {
                 return nullptr;
             }
             auto m = std::make_shared<DiffOverlay>(
                 ctx,
                 std::string(title),
-                std::move(path),
-                std::move(oldStr),
-                std::move(newStr)
+                std::move(parsed->path),
+                std::move(parsed->segments)
             );
             m->setOptions(options);
             m->onClose(std::move(onClose));
@@ -2888,17 +2882,14 @@ std::shared_ptr<ftxui::ComponentBase> createUniversalOverlay(
 }
 
 DiffOverlay::DiffOverlay(
-    TUICtx&     ctx,
-    std::string title,
-    std::string path,
-    std::string oldStr,
-    std::string newStr
+    TUICtx&                        ctx,
+    std::string                    title,
+    std::string                    path,
+    std::vector<PluginDiffSegment> segments
 ) :
     ctx_(ctx),
     title_(std::move(title)),
-    path_(std::move(path)),
-    oldStr_(std::move(oldStr)),
-    newStr_(std::move(newStr)) {
+    items_(buildContentItems(path, segments)) {
     scrollable_ = std::make_shared<Scrollable>([this]() -> std::vector<ScrollItem> {
         return buildItems();
     });
@@ -2906,11 +2897,70 @@ DiffOverlay::DiffOverlay(
     Add(scrollable_);
 }
 
+std::vector<pluginxx::ui::Item> DiffOverlay::buildContentItems(
+    const std::string&                    path,
+    const std::vector<PluginDiffSegment>& segments
+) {
+    std::vector<pluginxx::ui::Item> out;
+    // 段列表为空 (payload 没有可用段): 给一个空 diff, 由渲染层显示 "(no changes)"
+    // —— 与原单段实现的表现一致 (打开弹窗不会看到空白)
+    const size_t segCount = segments.empty() ? size_t{1} : segments.size();
+    out.reserve(segCount * 2);
+    for (size_t i = 0; i < segCount; ++i) {
+        if (i > 0) {
+            pluginxx::ui::Item divider;
+            divider.kind = "Divider";
+            out.push_back(std::move(divider));
+        }
+        pluginxx::ui::Item diff;
+        diff.kind = "Diff";
+        // 文件路径只在首段展示 (多段是同一个文件的多处改动)
+        diff.path   = (i == 0) ? path : std::string{};
+        diff.oldStr = (i < segments.size()) ? segments[i].oldStr : std::string{};
+        diff.newStr = (i < segments.size()) ? segments[i].newStr : std::string{};
+        out.push_back(std::move(diff));
+    }
+    return out;
+}
+
 std::vector<ScrollItem> DiffOverlay::buildItems() {
+    // 内容走共享组件层 (与工具展开体、CUSTOM overlay 同一套):
+    // 每段一个 Diff 项, 段间一个 Divider 项; 分隔用面性风格的浅色区块
+    // (与其它 overlay 一致, 不画横线)
     const auto& theme = *ctx_.theme;
-    return {
-        ScrollItem{agentxx::client::renderPluginDiff(path_, oldStr_, newStr_, theme), false}
-    };
+    UiRenderCtx rc;
+    rc.theme = &theme;
+    // 内容宽度: 优先用滚动容器上一帧测到的可用宽度; 首帧还没测过时按弹窗尺寸估算
+    // (不能用整屏宽度估算 —— 弹窗只占屏幕的一部分, 估宽了会算出过宽的并排列)
+    const int measured = scrollable_ ? scrollable_->contentWidth() : -1;
+    if (measured > 0) {
+        rc.width = measured;
+    } else {
+        double wFrac = 0.6, hFrac = 0.8;
+        int    popupW = 0, popupH = 0;
+        options_.resolveFractions(wFrac, hFrac);
+        overlayPopupSize(ctx_, wFrac, hFrac, popupW, popupH);
+        rc.width = std::max(20, popupW - 4); // 外框左右各 2 格内边距
+    }
+    // 弹窗内容按整行铺开, 缩进由外框提供
+    rc.indent         = 0;
+    rc.separatorStyle = UiSeparatorStyle::Block;
+
+    UiRenderResult res;
+    agentxx::client::renderItems(items_, rc, res);
+
+    std::vector<ScrollItem> out;
+    out.reserve(res.rows.size() + 1);
+    for (auto& row : res.rows) {
+        ScrollItem item;
+        item.element = std::move(row.element);
+        item.hits    = std::move(row.regions);
+        out.push_back(std::move(item));
+    }
+    if (out.empty()) {
+        out.push_back(ScrollItem{text(tr("info.empty")) | color(theme.hintColor), false});
+    }
+    return out;
 }
 
 Element DiffOverlay::OnRender() {

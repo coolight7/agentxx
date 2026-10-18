@@ -1216,6 +1216,163 @@ TestResult testToolcallArgs() {
         XX_TEST_EXPECT_EQ(args["mode"].get<std::string>(), std::string{"on"});
     }
 
+    // ===================== object <-> 对象数组 =====================
+    // (目标声明为对象数组时单个对象自动包装, 目标声明为对象时单元素对象数组自动解包)
+    // #67 对象数组 (items.type == object): 单个对象包装为 [对象]
+    {
+        neograph::ChatTool def;
+        def.name       = "tool_obj_a";
+        def.parameters = makeParams({
+            "edits",
+            {{"type", "array"},
+             {"items", {{"type", "object"},
+                        {"properties", {{"old_str", {{"type", "string"}}}}}}}}
+        });
+        auto args      = utilxx_base::Json{
+                 {"edits", {{"old_str", "a"}, {"new_str", "b"}}}
+        };
+        XX_TEST_EXPECT_TRUE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
+        XX_TEST_EXPECT_TRUE(args["edits"].is_array());
+        XX_TEST_EXPECT_EQ(args["edits"].size(), size_t{1});
+        XX_TEST_EXPECT_EQ(args["edits"][0].value("old_str", std::string{}), std::string{"a"});
+        XX_TEST_EXPECT_EQ(args["edits"][0].value("new_str", std::string{}), std::string{"b"});
+    }
+
+    // #68 items 未声明 type 但写了对象关键字 (properties/required): 同样包装 [对象]
+    {
+        neograph::ChatTool def;
+        def.name       = "tool_obj_b";
+        def.parameters = makeParams({
+            "actions",
+            {{"type", "array"}, {"items", {{"properties", {{"action", {{"type", "string"}}}}}}}}
+        });
+        auto args      = utilxx_base::Json{
+                 {"actions", {{"action", "click"}}}
+        };
+        XX_TEST_EXPECT_TRUE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
+        XX_TEST_EXPECT_TRUE(args["actions"].is_array());
+        XX_TEST_EXPECT_EQ(args["actions"][0].value("action", std::string{}), std::string{"click"});
+    }
+
+    // #69 元素为字符串的数组: 对象不包装 (目标不是对象数组, 交由工具自身报错)
+    {
+        neograph::ChatTool def;
+        def.name       = "tool_obj_c";
+        def.parameters = makeParams({
+            "tags",
+            {{"type", "array"}, {"items", {{"type", "string"}}}}
+        });
+        auto args      = utilxx_base::Json{
+                 {"tags", {{"k", "v"}}}
+        };
+        XX_TEST_EXPECT_FALSE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
+        XX_TEST_EXPECT_TRUE(args["tags"].is_object());
+    }
+
+    // #70 联合类型 ["array", "object"]: 对象本身已合法, 不包装
+    {
+        neograph::ChatTool def;
+        def.name       = "tool_obj_d";
+        def.parameters = makeParams({
+            "value",
+            {{"type", utilxx_base::Json::array({"array", "object"})}, {"items", {{"type", "object"}}}}
+        });
+        auto args      = utilxx_base::Json{
+                 {"value", {{"k", "v"}}}
+        };
+        XX_TEST_EXPECT_FALSE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
+        XX_TEST_EXPECT_TRUE(args["value"].is_object());
+    }
+
+    // #71 已是对象数组: 保持原样 (多元素也不动)
+    {
+        neograph::ChatTool def;
+        def.name       = "tool_obj_e";
+        def.parameters = makeParams({
+            "edits",
+            {{"type", "array"}, {"items", {{"type", "object"}}}}
+        });
+        auto args      = utilxx_base::Json{
+                 {"edits",
+              utilxx_base::Json::array(
+                  {utilxx_base::Json{{"old_str", "a"}}, utilxx_base::Json{{"old_str", "b"}}}
+              )}
+        };
+        XX_TEST_EXPECT_FALSE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
+        XX_TEST_EXPECT_EQ(args["edits"].size(), size_t{2});
+    }
+
+    // #72 对象参数 (type == object): 单元素对象数组解包为对象
+    {
+        neograph::ChatTool def;
+        def.name       = "tool_obj_f";
+        def.parameters = makeParams({
+            "config",
+            {{"type", "object"}, {"properties", {{"name", {{"type", "string"}}}}}}
+        });
+        auto args      = utilxx_base::Json{
+                 {"config", utilxx_base::Json::array({utilxx_base::Json{{"name", "x"}}})}
+        };
+        XX_TEST_EXPECT_TRUE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
+        XX_TEST_EXPECT_TRUE(args["config"].is_object());
+        XX_TEST_EXPECT_EQ(args["config"].value("name", std::string{}), std::string{"x"});
+    }
+
+    // #73 对象参数 + 多元素对象数组: 无法判断取哪一个, 保持原样 (工具自身报错)
+    {
+        neograph::ChatTool def;
+        def.name       = "tool_obj_g";
+        def.parameters = makeParams({"config", {{"type", "object"}}});
+        auto args      = utilxx_base::Json{
+                 {"config",
+              utilxx_base::Json::array(
+                  {utilxx_base::Json{{"name", "x"}}, utilxx_base::Json{{"name", "y"}}}
+              )}
+        };
+        XX_TEST_EXPECT_FALSE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
+        XX_TEST_EXPECT_TRUE(args["config"].is_array());
+    }
+
+    // #74 对象参数 + 单元素非对象数组 (字符串/数值): 不转换
+    {
+        neograph::ChatTool def;
+        def.name       = "tool_obj_h";
+        def.parameters = makeParams({"config", {{"type", "object"}}});
+        auto args      = utilxx_base::Json{
+                 {"config", utilxx_base::Json::array({"x"})}
+        };
+        XX_TEST_EXPECT_FALSE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
+        XX_TEST_EXPECT_TRUE(args["config"].is_array());
+
+        args = utilxx_base::Json{
+            {"config", utilxx_base::Json::array({42})}
+        };
+        XX_TEST_EXPECT_FALSE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
+        XX_TEST_EXPECT_TRUE(args["config"].is_array());
+    }
+
+    // #75 对象参数 + 对象 (已合法) / 联合 ["object", "array"]: 不转换
+    {
+        neograph::ChatTool def;
+        def.name       = "tool_obj_i";
+        def.parameters = makeParams({"config", {{"type", "object"}}});
+        auto args      = utilxx_base::Json{
+                 {"config", {{"name", "x"}}}
+        };
+        XX_TEST_EXPECT_FALSE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
+        XX_TEST_EXPECT_TRUE(args["config"].is_object());
+
+        def.parameters = makeParams({
+            "config",
+            {{"type", utilxx_base::Json::array({"object", "array"})}}
+        });
+        args = utilxx_base::Json{
+            {"config", utilxx_base::Json::array({utilxx_base::Json{{"name", "x"}}})}
+        };
+        XX_TEST_EXPECT_FALSE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
+        XX_TEST_EXPECT_TRUE(args["config"].is_array());
+    }
+
     return TestResult{g_tca_passed, g_tca_failed};
 }
 

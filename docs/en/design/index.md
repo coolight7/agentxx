@@ -72,7 +72,7 @@ Rich suite of tools organized by functional categories. Core programming utiliti
 | **Filesystem** | `agentxx_filesystem_list` | Lists file and directory metadata (size, type, modification time), supporting recursive traversal and shell wildcards (`*`, `?`, `[...]`, `**`) in `path`: matched entries themselves are listed, and `recursive` expands matched directories as well. |
 | | `agentxx_filesystem_read` | Reads text files line by line, supporting offset and limit parameters. |
 | | `agentxx_filesystem_write` | Creates or overwrites text files. |
-| | `agentxx_filesystem_edit` | Performs exact string replacement edits on text files. |
+| | `agentxx_filesystem_edit` | Performs exact string replacement edits on text files (several places in one call via the `edits` array, applied in order; each item replaces the first match, and when any item does not match, nothing is written). |
 | | `agentxx_filesystem_glob` | Searches files matching glob patterns. |
 | | `agentxx_filesystem_grep` | Searches file contents via literal text (`text_patterns`) or regular expressions (`regex_patterns`) (can search both simultaneously). |
 | **Command Execution** | `agentxx_execute_bash_command` | Executes Linux shell commands with timeout enforcement (Linux / macOS); the plugin probes python/node availability + version at start and writes them into the tool prompt. |

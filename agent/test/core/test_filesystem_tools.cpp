@@ -8,7 +8,7 @@
 #include "agentxx/event/event_stream.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/plugin/plugin_manager.h"
-#include "agentxx_filesystem/agentxx_fs_plugin.h" // 渲染摘要 helper (parseEditReplaceHits)
+#include "agentxx_filesystem/agentxx_fs_plugin.h" // 渲染摘要 helper (diffStatTextOfSegments)
 #include "agentxx_filesystem/filesystem_impl.h"
 #include "utilxx_base/string_util.h"
 #include <asio/experimental/concurrent_channel.hpp>
@@ -1196,51 +1196,32 @@ asio::awaitable<void>
     co_return;
 }
 
+/// 每段只替换**第一处**匹配 (没有"替换全部"的模式: 要改多处就写多段)
 asio::awaitable<void>
-    test_edit_text_file_multi_replace(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
-    auto filePath = testDir + "/edit_multi_test.txt";
+    test_edit_text_file_first_match_only(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    auto filePath = testDir + "/edit_first_match_test.txt";
     {
-        std::ofstream f(filePath);
+        std::ofstream f(filePath, std::ios::binary);
         f << "foo foo foo bar\n";
     }
 
     auto tool = agentxx::tools::FilesystemEditTextFileTool{agentContext};
     auto args = utilxx_base::Json{
-        {"path",          filePath},
-        {"old_str",       "foo"   },
-        {"new_str",       "baz"   },
-        {"multi_replace", true    },
+        {"path",    filePath},
+        {"old_str", "foo"   },
+        {"new_str", "baz"   },
     };
     auto result = co_await tool.execute_async(args);
-    if (result.find("Replace 3 hits") != std::string::npos) {
-        std::ifstream in(filePath);
-        std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-        if (content.find("foo") == std::string::npos
-            && content.find("baz baz baz") != std::string::npos) {
-            g_fs_passed++;
-            TEST_PASS << "FilesystemEditTextFileTool multi_replace works" << std::endl;
-        } else {
-            g_fs_failed++;
-            TEST_FAIL << "FilesystemEditTextFileTool multi_replace wrong "
-                         "content: '"
-                      << content << "'" << std::endl;
-        }
-    } else {
-        g_fs_failed++;
-        TEST_FAIL << "FilesystemEditTextFileTool multi_replace failed: " << result << std::endl;
-    }
 
-    // client 折叠头摘要按结果里的命中处数换算总行数
-    // (见 agentxx_fs_plugin::parseEditReplaceHits): 解析方式必须与实际输出的
-    // 结果文本一致, 这里用真实执行结果覆盖, 防止两处格式各自漂移
-    const int64_t hits = agentxx_fs_plugin::parseEditReplaceHits(result);
-    if (hits == 3) {
+    std::ifstream in(filePath, std::ios::binary);
+    std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    if (result == "success" && content == "baz foo foo bar\n") {
         g_fs_passed++;
-        TEST_PASS << "edit multi_replace hits parsed for renderer summary: 3" << std::endl;
+        TEST_PASS << "edit_text_file replaces only the first match" << std::endl;
     } else {
         g_fs_failed++;
-        TEST_FAIL << "edit multi_replace hits parse wrong: " << hits << ", result='" << result
-                  << "'" << std::endl;
+        TEST_FAIL << "edit_text_file first-match-only failed: result='" << result << "' content='"
+                  << content << "'" << std::endl;
     }
     co_return;
 }
@@ -1388,11 +1369,10 @@ asio::awaitable<void>
     co_return;
 }
 
+/// CRLF 文件 + LF 形式 old_str: 能匹配, 只替换第一处, 落盘为 LF
 asio::awaitable<void>
-    test_edit_text_file_crlf_multi_replace(std::weak_ptr<agentxx::agent::AgentContext> agentContext
-    ) {
-    // CRLF 文件 + multi_replace: LF 形式 old_str 应替换全部并落盘为 LF
-    auto filePath = testDir + "/crlf_edit_multi_test.txt";
+    test_edit_text_file_crlf_first_match(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    auto filePath = testDir + "/crlf_edit_first_test.txt";
     {
         std::ofstream f(filePath, std::ios::binary);
         f << "foo\r\nfoo\r\nfoo\r\n";
@@ -1400,28 +1380,364 @@ asio::awaitable<void>
 
     auto tool = agentxx::tools::FilesystemEditTextFileTool{agentContext};
     auto args = utilxx_base::Json{
-        {"path",          filePath},
-        {"old_str",       "foo"   },
-        {"new_str",       "baz"   },
-        {"multi_replace", true    },
+        {"path",    filePath},
+        {"old_str", "foo"   },
+        {"new_str", "baz"   },
     };
     auto result = co_await tool.execute_async(args);
-    if (result.find("Replace 3 hits") != std::string::npos) {
-        std::ifstream in(filePath, std::ios::binary);
-        std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-        if (content == "baz\nbaz\nbaz\n") {
-            g_fs_passed++;
-            TEST_PASS << "edit_text_file multi_replace works on CRLF file and writes LF"
-                      << std::endl;
-        } else {
-            g_fs_failed++;
-            TEST_FAIL << "edit_text_file CRLF multi_replace wrong content: '" << content << "'"
-                      << std::endl;
-        }
+
+    std::ifstream in(filePath, std::ios::binary);
+    std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    if (result == "success" && content == "baz\nfoo\nfoo\n") {
+        g_fs_passed++;
+        TEST_PASS << "edit_text_file replaces first match on CRLF file and writes LF" << std::endl;
     } else {
         g_fs_failed++;
-        TEST_FAIL << "edit_text_file CRLF multi_replace failed: " << result << std::endl;
+        TEST_FAIL << "edit_text_file CRLF first-match wrong: result='" << result << "' content='"
+                  << content << "'" << std::endl;
     }
+    co_return;
+}
+
+/// 读取文件全部内容 (二进制, 不做任何转换)
+static std::string readAllBytes(const std::string& filePath) {
+    std::ifstream in(filePath, std::ios::binary);
+    return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+}
+
+/// 多段替换 (`edits` 数组) 的基本行为: 每段各替换一处, 一次调用改多处
+asio::awaitable<void>
+    test_edit_text_file_multi_segments(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    auto filePath = testDir + "/edit_segments_test.txt";
+    {
+        std::ofstream f(filePath, std::ios::binary);
+        f << "alpha\r\nbeta\r\ngamma\r\n";
+    }
+
+    auto tool = agentxx::tools::FilesystemEditTextFileTool{agentContext};
+    auto args = utilxx_base::Json{
+        {"path",  filePath},
+        {"edits",
+         utilxx_base::Json::array(
+             {utilxx_base::Json{{"old_str", "alpha"}, {"new_str", "ALPHA"}},
+              utilxx_base::Json{{"old_str", "beta\n"}, {"new_str", "BETA\n"}}}
+         )      },
+    };
+    auto result = co_await tool.execute_async(args);
+    // 结果文本: 单段与多段统一为 `success` (每段各替换一处, 无额外处数信息)
+    if (result == "success") {
+        g_fs_passed++;
+        TEST_PASS << "edit_text_file multi segments result text correct" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "edit_text_file multi segments result text wrong: '" << result << "'"
+                  << std::endl;
+    }
+    // CRLF 文件 + 第二段带 CRLF 的 LF 形式 old_str: 归一化后匹配, 落盘为 LF
+    const auto content = readAllBytes(filePath);
+    if (content == "ALPHA\nBETA\ngamma\n") {
+        g_fs_passed++;
+        TEST_PASS << "edit_text_file multi segments applies every segment" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "edit_text_file multi segments wrong content: '" << content << "'" << std::endl;
+    }
+
+    // 折叠头摘要: 两段增删行数求和 ("ALPHA" 替换一处 + "BETA" 替换一处)
+    const auto segs = agentxx_fs_plugin::editSegmentsArg(args);
+    const auto stat = agentxx_fs_plugin::diffStatTextOfSegments(segs);
+    if (stat == "[+2 -2]") {
+        g_fs_passed++;
+        TEST_PASS << "diffStatTextOfSegments sums all segments" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "diffStatTextOfSegments wrong: '" << stat << "'" << std::endl;
+    }
+    co_return;
+}
+
+/// 多段替换按顺序生效: 后一段可以匹配前一段写进文件的文本
+asio::awaitable<void> test_edit_text_file_multi_segments_sequential(
+    std::weak_ptr<agentxx::agent::AgentContext> agentContext
+) {
+    auto filePath = testDir + "/edit_segments_seq_test.txt";
+    {
+        std::ofstream f(filePath);
+        f << "foo\n";
+    }
+
+    auto tool = agentxx::tools::FilesystemEditTextFileTool{agentContext};
+    auto args = utilxx_base::Json{
+        {"path",  filePath},
+        {"edits",
+         utilxx_base::Json::array(
+             {utilxx_base::Json{{"old_str", "foo"}, {"new_str", "bar"}},
+              utilxx_base::Json{{"old_str", "bar"}, {"new_str", "baz"}}}
+         )      },
+    };
+    auto result = co_await tool.execute_async(args);
+    const auto content = readAllBytes(filePath);
+    if (result == "success" && content == "baz\n") {
+        g_fs_passed++;
+        TEST_PASS << "edit_text_file later segment matches text written by earlier segment"
+                  << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "edit_text_file sequential segments failed: result='" << result
+                  << "' content='" << content << "'" << std::endl;
+    }
+    co_return;
+}
+
+/// 任一段匹配不到: 整次调用失败且不写盘 (文件保持原样)
+asio::awaitable<void> test_edit_text_file_multi_segments_atomic(
+    std::weak_ptr<agentxx::agent::AgentContext> agentContext
+) {
+    auto filePath = testDir + "/edit_segments_atomic_test.txt";
+    {
+        // 二进制写入: 失败用例要按字节比对原内容 (文本模式会写成本地换行)
+        std::ofstream f(filePath, std::ios::binary);
+        f << "keep me\n";
+    }
+
+    auto tool = agentxx::tools::FilesystemEditTextFileTool{agentContext};
+    auto args = utilxx_base::Json{
+        {"path",  filePath},
+        {"edits",
+         utilxx_base::Json::array(
+             {utilxx_base::Json{{"old_str", "keep"}, {"new_str", "KEEP"}},
+              utilxx_base::Json{{"old_str", "missing_text_xyz"}, {"new_str", "X"}}}
+         )      },
+    };
+    auto result = co_await tool.execute_async(args);
+    const bool mentionsFailedSegment
+        = result.find("[Error]") != std::string::npos && result.find("#2") != std::string::npos;
+    const auto content = readAllBytes(filePath);
+    if (mentionsFailedSegment && content == "keep me\n") {
+        g_fs_passed++;
+        TEST_PASS << "edit_text_file multi segments is all-or-nothing and names the failed item"
+                  << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "edit_text_file multi segments atomicity failed: result='" << result
+                  << "' content='" << content << "'" << std::endl;
+    }
+    co_return;
+}
+
+/// 多段替换: 同一段文本出现多次时, 每段也只替换**第一处**
+asio::awaitable<void> test_edit_text_file_multi_segments_first_match(
+    std::weak_ptr<agentxx::agent::AgentContext> agentContext
+) {
+    auto filePath = testDir + "/edit_segments_first_test.txt";
+    {
+        std::ofstream f(filePath, std::ios::binary);
+        f << "a a a\nb b\n";
+    }
+
+    auto tool = agentxx::tools::FilesystemEditTextFileTool{agentContext};
+    auto args = utilxx_base::Json{
+        {"path",  filePath},
+        {"edits",
+         utilxx_base::Json::array(
+             {utilxx_base::Json{{"old_str", "a"}, {"new_str", "A"}},
+              utilxx_base::Json{{"old_str", "b"}, {"new_str", "B"}}}
+         )      },
+    };
+    const auto result  = co_await tool.execute_async(args);
+    const auto content = readAllBytes(filePath);
+    if (result == "success" && content == "A a a\nB b\n") {
+        g_fs_passed++;
+        TEST_PASS << "edit_text_file multi segments replace only the first match each" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "edit_text_file multi segments first-match failed: result='" << result
+                  << "' content='" << content << "'" << std::endl;
+    }
+    co_return;
+}
+
+/// `edits` 的参数校验: 形状非法 / 段内缺字段 / 空段 / 与 old_str 同时给出 都报错
+asio::awaitable<void> test_edit_text_file_edits_invalid_args(
+    std::weak_ptr<agentxx::agent::AgentContext> agentContext
+) {
+    auto filePath = testDir + "/edit_segments_invalid_test.txt";
+    {
+        // 二进制写入: 失败用例要按字节比对原内容 (文本模式会写成本地换行)
+        std::ofstream f(filePath, std::ios::binary);
+        f << "abc\n";
+    }
+    auto tool = agentxx::tools::FilesystemEditTextFileTool{agentContext};
+
+    /// 期望某组参数得到错误结果 (且文件保持原样)
+    auto expectError = [&](const char* label, const utilxx_base::Json& args) -> asio::awaitable<void> {
+        auto result = co_await tool.execute_async(args);
+        if (result.find("[Error]") == 0) {
+            g_fs_passed++;
+            TEST_PASS << "edit_text_file rejects invalid args: " << label << std::endl;
+        } else {
+            g_fs_failed++;
+            TEST_FAIL << "edit_text_file should reject invalid args (" << label << "), got: '"
+                      << result << "'" << std::endl;
+        }
+        if (readAllBytes(filePath) != "abc\n") {
+            g_fs_failed++;
+            TEST_FAIL << "edit_text_file wrote file for invalid args: " << label << std::endl;
+        }
+        co_return;
+    };
+
+    co_await expectError("edits empty array", utilxx_base::Json{
+        {"path",  filePath},
+        {"edits", utilxx_base::Json::array()}
+    });
+    co_await expectError("edits is a string", utilxx_base::Json{
+        {"path",  filePath          },
+        {"edits", "old_str -> new_str"}
+    });
+    co_await expectError("edits item is not an object", utilxx_base::Json{
+        {"path",  filePath},
+        {"edits", utilxx_base::Json::array({"a"})}
+    });
+    co_await expectError("edits item without old_str", utilxx_base::Json{
+        {"path",  filePath},
+        {"edits", utilxx_base::Json::array({utilxx_base::Json{{"new_str", "b"}}})}
+    });
+    co_await expectError("edits item without new_str", utilxx_base::Json{
+        {"path",  filePath},
+        {"edits", utilxx_base::Json::array({utilxx_base::Json{{"old_str", "a"}}})}
+    });
+    co_await expectError("edits item unchanged", utilxx_base::Json{
+        {"path",  filePath},
+        {"edits", utilxx_base::Json::array({utilxx_base::Json{{"old_str", "a"}, {"new_str", "a"}}})}
+    });
+    co_await expectError("both edits and old_str", utilxx_base::Json{
+        {"path",    filePath},
+        {"edits",   utilxx_base::Json::array({utilxx_base::Json{{"old_str", "a"}, {"new_str", "b"}}})},
+        {"old_str", "abc"   },
+        {"new_str", "xyz"   },
+    });
+    co_await expectError("no replacement given", utilxx_base::Json{
+        {"path", filePath}
+    });
+
+    // 单个对象写法 (少写一层数组) 按单段处理: 与数组形态等价
+    auto single = co_await tool.execute_async(utilxx_base::Json{
+        {"path",  filePath},
+        {"edits", utilxx_base::Json{{"old_str", "abc"}, {"new_str", "xyz"}}}
+    });
+    if (single == "success" && readAllBytes(filePath) == "xyz\n") {
+        g_fs_passed++;
+        TEST_PASS << "edit_text_file accepts single object `edits`" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "edit_text_file single object `edits` failed: '" << single << "'" << std::endl;
+    }
+    co_return;
+}
+
+/// 同步执行体与协程执行体对多段替换给出一致结果 (两条路径共用同一实现)
+asio::awaitable<void> test_edit_text_file_multi_segments_sync_async_parity(
+    std::weak_ptr<agentxx::agent::AgentContext> agentContext
+) {
+    const auto workDir      = agentxx::tools::testResolvedWorkDir(agentContext);
+    auto       syncFilePath = testDir + "/edit_parity_sync.txt";
+    auto       asyncFilePath = testDir + "/edit_parity_async.txt";
+    const char* seed         = "one\ntwo\nthree\n";
+    {
+        std::ofstream f(syncFilePath);
+        f << seed;
+    }
+    {
+        std::ofstream f(asyncFilePath);
+        f << seed;
+    }
+
+    auto makeArgs = [](const std::string& path) {
+        return utilxx_base::Json{
+            {"path",  path},
+            {"edits",
+             utilxx_base::Json::array(
+                 {utilxx_base::Json{{"old_str", "one"}, {"new_str", "1"}},
+                  utilxx_base::Json{{"old_str", "three"}, {"new_str", "3"}}}
+             )      },
+        };
+    };
+
+    auto syncResult = agentxx_fs_plugin::fileEditExecute(makeArgs(syncFilePath), workDir);
+    auto tool       = agentxx::tools::FilesystemEditTextFileTool{agentContext};
+    auto asyncResult = co_await tool.execute_async(makeArgs(asyncFilePath));
+
+    if (syncResult == asyncResult
+        && readAllBytes(syncFilePath) == readAllBytes(asyncFilePath)
+        && readAllBytes(syncFilePath) == "1\ntwo\n3\n") {
+        g_fs_passed++;
+        TEST_PASS << "edit_text_file sync and async executors agree on multi segments"
+                  << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "edit_text_file sync/async parity failed: sync='" << syncResult
+                  << "' async='" << asyncResult << "'" << std::endl;
+    }
+    co_return;
+}
+
+/// `edits` 参数解析为替换段 (渲染侧读取同一份参数): 数组/单对象/旧写法 三种形态
+asio::awaitable<void>
+    test_edit_segments_arg_parsing(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    (void)agentContext;
+    using agentxx_fs_plugin::editSegmentsArg;
+
+    // 数组形态
+    auto arrArgs = utilxx_base::Json{
+        {"path",  "/a.txt"},
+        {"edits",
+         utilxx_base::Json::array(
+             {utilxx_base::Json{{"old_str", "a"}, {"new_str", "b"}},
+              utilxx_base::Json{{"old_str", "c"}, {"new_str", "d"}}}
+         )       },
+    };
+    const auto arr = editSegmentsArg(arrArgs);
+    XX_TEST_EXPECT_EQ(arr.size(), size_t{2});
+    if (arr.size() == 2) {
+        XX_TEST_EXPECT_EQ(arr[0].oldStr, std::string{"a"});
+        XX_TEST_EXPECT_EQ(arr[0].newStr, std::string{"b"});
+        XX_TEST_EXPECT_EQ(arr[1].oldStr, std::string{"c"});
+        XX_TEST_EXPECT_EQ(arr[1].newStr, std::string{"d"});
+    }
+
+    // 单对象形态 (少写一层数组)
+    auto objArgs = utilxx_base::Json{
+        {"path",  "/a.txt"                                                               },
+        {"edits", utilxx_base::Json{{"old_str", "a"}, {"new_str", "b"}}}
+    };
+    const auto obj = editSegmentsArg(objArgs);
+    XX_TEST_EXPECT_EQ(obj.size(), size_t{1});
+    if (obj.size() == 1) {
+        XX_TEST_EXPECT_EQ(obj[0].oldStr, std::string{"a"});
+    }
+
+    // 旧写法 (单段 old_str/new_str)
+    auto legacyArgs = utilxx_base::Json{
+        {"path",    "/a.txt"},
+        {"old_str", "x"     },
+        {"new_str", "y"     },
+    };
+    const auto legacy = editSegmentsArg(legacyArgs);
+    XX_TEST_EXPECT_EQ(legacy.size(), size_t{1});
+    if (legacy.size() == 1) {
+        XX_TEST_EXPECT_EQ(legacy[0].oldStr, std::string{"x"});
+        XX_TEST_EXPECT_EQ(legacy[0].newStr, std::string{"y"});
+    }
+
+    // 空参数 / 非对象: 空段列表 (调用方跳过摘要与 diff 片段)
+    XX_TEST_EXPECT_EQ(editSegmentsArg(utilxx_base::Json::object()).size(), size_t{0});
+    XX_TEST_EXPECT_EQ(editSegmentsArg(utilxx_base::Json{"x"}).size(), size_t{0});
+    // 数组里的非对象元素跳过, 合法项照常取出
+    auto mixedArgs = utilxx_base::Json{
+        {"edits", utilxx_base::Json::array({"bad", utilxx_base::Json{{"old_str", "a"}, {"new_str", "b"}}})}
+    };
+    XX_TEST_EXPECT_EQ(editSegmentsArg(mixedArgs).size(), size_t{1});
     co_return;
 }
 
@@ -2345,24 +2661,21 @@ asio::awaitable<void>
 
     // 1) 单处替换
     auto argsSingle = utilxx_base::Json{
-        {"path",          filePath                   },
-        {"old_str",       "目标旧字符串_AAA"   },
-        {"new_str",       "已替换新字符串_BBB"},
-        {"multi_replace", false                      }
+        {"path",    filePath                   },
+        {"old_str", "目标旧字符串_AAA"   },
+        {"new_str", "已替换新字符串_BBB"}
     };
     auto resSingle = co_await tool.execute_async(argsSingle);
     bool singleOk  = (resSingle == "success");
 
-    // 2) 多处替换 (剩余的一处替换)
+    // 2) 再替换剩余的一处 (每段只替换第一处)
     auto argsMulti = utilxx_base::Json{
-        {"path",          filePath                   },
-        {"old_str",       "目标旧字符串_AAA"   },
-        {"new_str",       "已替换新字符串_CCC"},
-        {"multi_replace", true                       }
+        {"path",    filePath                   },
+        {"old_str", "目标旧字符串_AAA"   },
+        {"new_str", "已替换新字符串_CCC"}
     };
     auto resMulti = co_await tool.execute_async(argsMulti);
-    bool multiOk  = resMulti.find("Success") != std::string::npos
-                   || resMulti.find("success") != std::string::npos;
+    bool multiOk  = (resMulti == "success");
 
     // 验证文件最终内容
     std::string readContent;
@@ -2377,10 +2690,9 @@ asio::awaitable<void>
 
     // 3) 同步版 edit 直测
     auto syncArgs = utilxx_base::Json{
-        {"path",          filePath                   },
-        {"old_str",       "已替换新字符串_BBB"},
-        {"new_str",       "同步替换新内容"    },
-        {"multi_replace", false                      }
+        {"path",    filePath                   },
+        {"old_str", "已替换新字符串_BBB"},
+        {"new_str", "同步替换新内容"    }
     };
     auto syncRes = agentxx_fs_plugin::fileEditExecute(syncArgs, testDir);
     bool syncOk  = (syncRes == "success");
@@ -2523,10 +2835,9 @@ asio::awaitable<void> test_sync_fallback_without_async_file_io(
         {"line_limit",  1       }
     };
     auto editArgs = utilxx_base::Json{
-        {"path",          filePath               },
-        {"old_str",       "目标旧字符串"   },
-        {"new_str",       "已替换新字符串"},
-        {"multi_replace", false                  }
+        {"path",    filePath               },
+        {"old_str", "目标旧字符串"   },
+        {"new_str", "已替换新字符串"}
     };
 
     // 记录一段完整 写→读→改→读 的输出 (供两种路径比对)
@@ -3502,12 +3813,19 @@ asio::awaitable<TestResult>
     co_await run(test_edit_text_file_empty_path);
     co_await run(test_edit_text_file_empty_old_str);
     co_await run(test_edit_text_file_single_replace);
-    co_await run(test_edit_text_file_multi_replace);
+    co_await run(test_edit_text_file_first_match_only);
     co_await run(test_edit_text_file_no_match);
     co_await run(test_read_text_file_crlf);
     co_await run(test_edit_text_file_crlf_file);
     co_await run(test_edit_text_file_lf_file_crlf_old);
-    co_await run(test_edit_text_file_crlf_multi_replace);
+    co_await run(test_edit_text_file_crlf_first_match);
+    co_await run(test_edit_text_file_multi_segments);
+    co_await run(test_edit_text_file_multi_segments_sequential);
+    co_await run(test_edit_text_file_multi_segments_atomic);
+    co_await run(test_edit_text_file_multi_segments_first_match);
+    co_await run(test_edit_text_file_edits_invalid_args);
+    co_await run(test_edit_text_file_multi_segments_sync_async_parity);
+    co_await run(test_edit_segments_arg_parsing);
 
     co_await run(test_glob_get_definition);
     co_await run(test_glob_empty_patterns);

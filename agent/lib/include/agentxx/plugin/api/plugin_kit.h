@@ -309,6 +309,28 @@ public:
         return array(name, desc, "string", required);
     }
 
+    /// 对象数组参数: 数组元素是对象 (`items` 为给定的对象模式)
+    /// - 用于 `[{...}, {...}]` 这类参数 (如 edit 的 `edits` 列表), 元素模式里
+    ///   自行声明 `properties` / `required`
+    /// - `itemSchema` 为 `items` 的完整内容 (如
+    ///   `Json{{"type","object"},{"properties", ...},{"required", ...}}`)
+    ToolSchemaBuilder& objectArray(
+        std::string_view         name,
+        std::string_view         desc,
+        const utilxx_base::Json& itemSchema,
+        bool                     required = false
+    ) {
+        utilxx_base::Json prop;
+        prop["type"]        = "array";
+        prop["description"] = toolPromptArgDesc(prompt_, name, desc);
+        prop["items"]       = itemSchema;
+        properties_[std::string(name)] = std::move(prop);
+        if (required) {
+            required_.push_back(std::string(name));
+        }
+        return *this;
+    }
+
     ToolSchemaBuilder& array(
         std::string_view name,
         std::string_view desc,
@@ -2766,6 +2788,12 @@ private:
 
 /* ==================== 客户端插件实例上下文基类 ==================== */
 
+/// diff overlay 的一段替换 (见 [ClientPluginBase::showDiffOverlay])
+struct DiffSegment {
+    std::string oldStr; ///< 替换前文本
+    std::string newStr; ///< 替换后文本
+};
+
 class ClientPluginBase {
 public:
 
@@ -2978,6 +3006,42 @@ public:
         spec.payload    = PluginStringView::from(payload.data(), payload.size());
         spec.extra_json = PluginStringView::from(extraJson.data(), extraJson.size());
         return iface.ui->open_overlay(host, &spec);
+    }
+
+    /// 打开 diff overlay (单段或多段, 每段一次替换; 主程序按逐行差异渲染)
+    /// - `segments` 为空时打开一个"无变化"的 diff (不会失败)
+    /// - 多段: 每段各渲染一份逐行差异, 段间以分隔行隔开, 文件路径只在首段展示
+    /// - 单段调用按旧写法 `{path,old_str,new_str}` 下发, 老主程序也能正确渲染;
+    ///   多段用的是 `edits` 字段, 老主程序不认识时只显示"(no changes)"
+    ///   (插件与客户端版本需要一起升级时按单段逐次调用即可)
+    int32_t showDiffOverlay(
+        std::string_view               title,
+        std::string_view               path,
+        const std::vector<DiffSegment>& segments,
+        std::string_view               extraJson = {}
+    ) const {
+        utilxx_base::Json payload = utilxx_base::Json::object();
+        if (!path.empty()) {
+            payload["path"] = path;
+        }
+        if (segments.size() == 1) {
+            // 单段: 用旧写法 (老主程序也能正确渲染)
+            payload["old_str"] = segments.front().oldStr;
+            payload["new_str"] = segments.front().newStr;
+        } else if (!segments.empty()) {
+            utilxx_base::Json edits = utilxx_base::Json::array();
+            for (const auto& seg : segments) {
+                utilxx_base::Json one = utilxx_base::Json::object();
+                one["old_str"]        = seg.oldStr;
+                one["new_str"]        = seg.newStr;
+                edits.push_back(std::move(one));
+            }
+            payload["edits"] = std::move(edits);
+        } else {
+            payload["old_str"] = std::string{};
+            payload["new_str"] = std::string{};
+        }
+        return showOverlay(AGENTXX_OVERLAY_DIFF, title, payload.dump(), extraJson);
     }
 
     // ==================== 组件树就地构建 ====================

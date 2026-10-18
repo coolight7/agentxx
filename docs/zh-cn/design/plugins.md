@@ -676,8 +676,22 @@ tool_call 中的前后调用形成顺序屏障。并发只发生在同一条 ass
 ### 9.3 通用 overlay (`open_overlay`)
 
 - `type`: `MERMAID` (payload = mermaid 源码) / `TEXT` (payload = 原文, `extra.markdown`
-  控制是否按 markdown 渲染) / `DIFF` (payload = `{path,old_str,new_str}`) /
+  控制是否按 markdown 渲染) / `DIFF` (payload = 见下) /
   `CUSTOM` (payload = `{"items":[...]}` 组件树, 见 9.1)。
+- `DIFF` payload = JSON, 支持**单段与多段** (一段 = 一次替换):
+
+  | 写法 | payload | 说明 |
+  |---|---|---|
+  | 多段 | `{"path":"a.cpp","edits":[{"old_str":"..","new_str":".."}, ...]}` | 每段各渲染一份逐行差异, 段间一条分隔, 路径只在首段展示 |
+  | 单段 (旧写法) | `{"path":"a.cpp","old_str":"..","new_str":".."}` | 保留支持 |
+  | `edits` 单对象 | `{"path":"a.cpp","edits":{"old_str":"..","new_str":".."}}` | 少写一层数组的形态, 与单段等价 |
+  | 裸数组 | `[{"old_str":"..","new_str":".."}, ...]` | 无文件路径的多段 |
+  - 段内缺 `old_str`/`new_str` 按空串 (删除 / 纯新增那一侧); 两侧都为空的段跳过
+  - 给了 `edits` 就不再读 `old_str`/`new_str` (与 edit 工具参数的互斥规则一致)
+  - 段落形态两种都认的原因: 工具参数的类型自动修正会把"单个对象"与"单元素数组"
+    成对互转 (`ToolcallWrapNode::autoFixArgsType`), 界面层不能只认其中一种
+  - SDK 便捷方法: `ClientPluginBase::showDiffOverlay(title, path, segments)`
+    (单段自动用旧写法下发, 老主程序也能渲染)
 - `extra_json` 支持尺寸与外观选项 (数据层, 老主程序忽略未知键):
 
   | 键 | 取值 | 说明 |

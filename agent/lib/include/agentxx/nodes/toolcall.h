@@ -202,11 +202,14 @@ public:
 
     /// 根据 tool 的参数 JSON Schema 自动修正参数类型兼容性, 尽量让 arg 类型匹配参数需求:
     /// - string -> 字符串数组: 参数声明为数组 (字符串数组) 而传入单个字符串时, 包装为 `[str]`
+    /// - object -> 对象数组: 参数声明为数组 (元素为对象) 而传入单个对象时, 包装为 `[obj]`
+    ///   (LLM 少写一层数组的常见形态, 如 `edits` / `actions` 这类参数)
     /// - string -> number/integer: 参数声明为数值而传入字符串时, 若字符串可完整解析为数值则转换
     ///   (integer 仅接受整数写法; number 支持小数/指数; 前导 '+', 首尾空白会被容忍)
     /// - number/integer -> string: 参数声明为字符串而传入数值时, 转为十进制字符串
     /// - bool -> string / string("true"/"false") -> boolean: 布尔与字符串互相转换
     /// - [单字符串数组] -> string: 参数声明为字符串而传入单元素字符串数组时, 解包为字符串
+    /// - [单对象数组] -> object: 参数声明为对象而传入单元素对象数组时, 解包为对象
     /// - 仅当目标类型不包含 arg 当前类型时转换; 无法解析或类型不明确时保持原样
     /// - `return` 是否发生了参数转换
     static bool autoFixArgsType(const neograph::ChatTool& def, utilxx_base::Json& args);

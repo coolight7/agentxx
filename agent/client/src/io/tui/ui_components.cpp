@@ -245,6 +245,9 @@ std::vector<std::string> textLines(const Item& item, const UiRenderCtx& ctx) {
 }
 
 /// diff 块渲染行数 (与 renderPluginDiff 的 side-by-side/统一两种形态一致)
+/// - 统一形态: 每条差异行占一行
+/// - 并排形态: 上下文行一行; 连续的"删除 + 新增"按较多的一侧占行 (与渲染时的
+///   左右配对方式一致) —— 多段替换时各段的估算都与实际渲染一致, 不会多留空行
 size_t diffBlockLines(const Item& item, const UiRenderCtx& ctx) {
     const auto   diff       = utilxx::computeLineDiff(item.oldStr, item.newStr);
     const int    sw         = (ctx.width > 0) ? ctx.width : Terminal::Size().dimx;
@@ -253,7 +256,30 @@ size_t diffBlockLines(const Item& item, const UiRenderCtx& ctx) {
     if (diff.empty()) {
         return pathLines + 1; // "(no changes)"
     }
-    return pathLines + (sideBySide ? (diff.size() / 2 + 1) : diff.size());
+    if (!sideBySide) {
+        return pathLines + diff.size();
+    }
+    size_t rows = 0;
+    size_t i    = 0;
+    while (i < diff.size()) {
+        if (diff[i].type == utilxx::DiffLineType::Context) {
+            ++rows;
+            ++i;
+            continue;
+        }
+        size_t dels = 0;
+        size_t adds = 0;
+        while (i < diff.size() && diff[i].type == utilxx::DiffLineType::Delete) {
+            ++dels;
+            ++i;
+        }
+        while (i < diff.size() && diff[i].type == utilxx::DiffLineType::Add) {
+            ++adds;
+            ++i;
+        }
+        rows += (dels > adds) ? dels : adds;
+    }
+    return pathLines + rows;
 }
 
 /// mermaid 状态图解析 + 渲染 (解析失败返回空元素与 0 行)

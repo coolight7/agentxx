@@ -913,6 +913,152 @@ inline std::string fileWriteExecuteImpl(
 // =====================================================================
 // agentxx_filesystem_edit 执行体 (原 FilesystemEditTextFileTool::execute_async)
 // =====================================================================
+namespace detail {
+
+/// edit 工具的一段替换 (`old_str` -> `new_str`)
+struct EditSegment {
+    std::string oldStr;
+    std::string newStr;
+};
+
+/// 段数上限: 只用于拦住畸形的超大参数 (正常调用不会接近这个数量)
+constexpr size_t kEditMaxSegments = 1000;
+
+/// 取 `old_str` 的首行片段 (错误提示里指明"哪一段没匹配上"用)
+/// - 按 UTF-8 长度截断, 不把多字节字符切成两半; 超长时追加 `...`
+inline std::string editOldStrExcerpt(std::string_view oldStr) {
+    constexpr size_t kMaxChars = 60;
+    auto             firstLine = oldStr.substr(0, oldStr.find('\n'));
+    const auto       cutIndex  = utilxx_base::findIndexByUtf8Length(firstLine, kMaxChars);
+    if (cutIndex > 0 && cutIndex < firstLine.size()) {
+        return fmt::format("{}...", firstLine.substr(0, cutIndex));
+    }
+    return std::string{firstLine};
+}
+
+/// 解析 edit 工具的替换段:
+/// - `edits` 数组 (推荐写法): 逐项取 `old_str`/`new_str`
+/// - `edits` 为单个对象: 按单段处理 (等价于只写一段的数组)
+/// - 未给 `edits`: 按 `old_str`/`new_str` 取单段 (与旧写法兼容)
+/// 每段要求 `old_str` 非空且与 `new_str` 不同; 两处写法同时给出时拒绝
+/// (避免调用方以为两处都会生效)
+///
+/// - `return` 至少一段的替换列表 (顺序即应用顺序)
+inline std::vector<EditSegment> parseEditSegments(const utilxx_base::Json& arguments) {
+    // 缺失键 → 只读 operator[] 返回 Null 常量
+    const auto& editsArg    = arguments["edits"];
+    const bool  hasEditsArg = !editsArg.is_null();
+    const auto  oldStrArg   = arguments.value<std::string>("old_str", std::string{});
+    const auto  newStrArg   = arguments.value<std::string>("new_str", std::string{});
+
+    std::vector<EditSegment> segments;
+
+    /// 从一段的 JSON 取 `old_str`/`new_str` (两键都必须给, 且都是字符串)
+    /// - `new_str` 缺失时报错而不是按空串处理: 漏写会变成"删除整段文本",
+    ///   删除请显式传空串
+    auto takeSegment = [](const utilxx_base::Json& item, size_t index) -> EditSegment {
+        if (!item.contains("old_str") || !item["old_str"].is_string()) {
+            throw std::invalid_argument{
+                fmt::format(R"(Arg `old_str` of edit #{} must be a string)", index)
+            };
+        }
+        if (!item.contains("new_str") || !item["new_str"].is_string()) {
+            throw std::invalid_argument{fmt::format(
+                R"(Arg `new_str` of edit #{} must be a string (pass an empty string to delete the matched text))",
+                index
+            )};
+        }
+        return EditSegment{
+            item["old_str"].get<std::string>(),
+            item["new_str"].get<std::string>()
+        };
+    };
+
+    if (hasEditsArg) {
+        if (!oldStrArg.empty() || !newStrArg.empty()) {
+            throw std::invalid_argument{
+                "Arg `edits` and `old_str`/`new_str` are both given, use only one of them."
+            };
+        }
+        // 单对象写法 (少写一层数组): 与只含一段的数组等价
+        if (editsArg.is_object()) {
+            segments.push_back(takeSegment(editsArg, 1));
+        } else if (editsArg.is_array()) {
+            segments.reserve(editsArg.size());
+            for (const auto& item : editsArg) {
+                if (!item.is_object()) {
+                    throw std::invalid_argument{
+                        "Arg `edits` must be an array of objects like "
+                        "`[{\"old_str\": \"...\", \"new_str\": \"...\"}]`."
+                    };
+                }
+                segments.push_back(takeSegment(item, segments.size() + 1));
+            }
+        } else {
+            throw std::invalid_argument{
+                "Arg `edits` must be an array of objects like "
+                "`[{\"old_str\": \"...\", \"new_str\": \"...\"}]`."
+            };
+        }
+        if (segments.empty()) {
+            throw std::invalid_argument{"Arg `edits` is empty"};
+        }
+        if (segments.size() > kEditMaxSegments) {
+            throw std::invalid_argument{
+                fmt::format(R"(Arg `edits` has too many segments (max {}))", kEditMaxSegments)
+            };
+        }
+    } else {
+        if (oldStrArg.empty()) {
+            throw std::invalid_argument{
+                "Arg `old_str` is empty (or pass the replacements as `edits`)."
+            };
+        }
+        // 旧写法 (单段): 与数组形态同样要求 `new_str` 明确给出
+        if (!arguments.contains("new_str") || !arguments["new_str"].is_string()) {
+            throw std::invalid_argument{
+                "Arg `new_str` is missing (pass an empty string to delete the matched text)."
+            };
+        }
+        segments.push_back(EditSegment{oldStrArg, newStrArg});
+    }
+
+    for (size_t i = 0; i < segments.size(); ++i) {
+        const auto& seg = segments[i];
+        if (seg.oldStr.empty()) {
+            throw std::invalid_argument{
+                fmt::format(R"(Arg `old_str` of edit #{} is empty)", i + 1)
+            };
+        }
+        if (seg.newStr == seg.oldStr) {
+            throw std::invalid_argument{
+                fmt::format(R"(Arg `old_str` and `new_str` of edit #{} are equal and unchanged.)", i + 1)
+            };
+        }
+    }
+    return segments;
+}
+
+/// 按顺序把各段应用到 content: 后一段作用于前一段改完的内容 (可用前一段写入的文本)
+/// - 每段只替换**第一处**匹配 (要改多处就写多段)
+/// - 某段匹配不到时抛 std::runtime_error (调用方据此整体放弃, 不落盘)
+inline void applyEditSegments(std::string& content, const std::vector<EditSegment>& segments) {
+    for (size_t i = 0; i < segments.size(); ++i) {
+        const auto& seg = segments[i];
+        const auto  pos = content.find(seg.oldStr);
+        if (pos == std::string::npos) {
+            throw std::runtime_error{fmt::format(
+                R"(No match `old_str` of edit #{} (`{}`) found, no change was written; try re-reading to get the latest file content.)",
+                i + 1,
+                editOldStrExcerpt(seg.oldStr)
+            )};
+        }
+        content.replace(pos, seg.oldStr.length(), seg.newStr);
+    }
+}
+
+} // namespace detail
+
 inline std::string fileEditExecuteImpl(
     const utilxx_base::Json& arguments,
     const std::string&       workDir,
@@ -922,22 +1068,15 @@ inline std::string fileEditExecuteImpl(
     if (filepath.empty()) {
         throw std::invalid_argument{"Arg `path` is empty"};
     }
-    auto old_str = arguments.value<std::string>("old_str", std::string{});
-    if (old_str.empty()) {
-        throw std::invalid_argument{"Arg `old_str` is empty"};
-    }
-    auto new_str       = arguments.value<std::string>("new_str", std::string{});
-    auto multi_replace = arguments.value<bool>("multi_replace", false);
-
-    if (new_str == old_str) {
-        throw std::invalid_argument{"Arg `old_str` and `new_str` are equal and unchanged."};
-    }
+    auto segments = detail::parseEditSegments(arguments);
 
     // 统一到 \n 换行符
     // - 与 filesystem_read 的逻辑不同，read 应当保留原始的内容，edit 应当尽可能保证修改成功，
     //   如果 llm 需要写回 crlf，可使用 shell
-    detail::normalizeCrlfToLf(old_str);
-    detail::normalizeCrlfToLf(new_str);
+    for (auto& seg : segments) {
+        detail::normalizeCrlfToLf(seg.oldStr);
+        detail::normalizeCrlfToLf(seg.newStr);
+    }
 
     auto            path = utilxx_base::utf8ToPath(filepath);
     // 按规范化路径排队: 读-改-写整段相对其它写者原子
@@ -959,23 +1098,8 @@ inline std::string fileEditExecuteImpl(
     utilxx_base::autoConvertToUtf8(content);
     detail::normalizeCrlfToLf(content);
 
-    int    replaceHit = 0;
-    size_t pos        = 0;
-    while ((pos = content.find(old_str, pos)) != std::string::npos) {
-        replaceHit++;
-        content.replace(pos, old_str.length(), new_str);
-        // 跳过新字符串，避免死循环
-        pos += new_str.length();
-        if (false == multi_replace) {
-            break;
-        }
-    }
-
-    if (0 == replaceHit) {
-        throw std::runtime_error{
-            R"(No match `old_str` found, Try re-reading to get the latest file content.)"
-        };
-    }
+    // 任一段匹配不到即整体放弃 (读到内容后才会写盘, 失败时文件保持原样)
+    detail::applyEditSegments(content, segments);
 
     // 原子写: 先写同目录临时文件, 成功后 rename 覆盖原文件,
     // 避免直接 truncate 原文件后写入中途失败导致原内容永久丢失
@@ -1015,9 +1139,6 @@ inline std::string fileEditExecuteImpl(
         };
     }
 
-    if (multi_replace) {
-        return fmt::format(R"(Success, Replace {} hits)", replaceHit);
-    }
     return "success";
 }
 
@@ -1967,7 +2088,7 @@ inline asio::awaitable<std::string>
 }
 
 /// agentxx_filesystem_edit 执行体协程版 (原 FilesystemEditTextFileTool::execute_async)
-/// - 异步读完整文件 → UTF-8/LF 归一化 → 替换 → 原子写 (同目录临时文件 +
+/// - 异步读完整文件 → UTF-8/LF 归一化 → 按段顺序替换 → 原子写 (同目录临时文件 +
 ///   rename 覆盖), 与同步版行为一致
 inline asio::awaitable<std::string>
     fileEditExecuteAsyncImpl(const utilxx_base::Json& arguments, const std::string& workDir) {
@@ -1975,22 +2096,15 @@ inline asio::awaitable<std::string>
     if (filepath.empty()) {
         throw std::invalid_argument{"Arg `path` is empty"};
     }
-    auto old_str = arguments.value<std::string>("old_str", std::string{});
-    if (old_str.empty()) {
-        throw std::invalid_argument{"Arg `old_str` is empty"};
-    }
-    auto new_str       = arguments.value<std::string>("new_str", std::string{});
-    auto multi_replace = arguments.value<bool>("multi_replace", false);
-
-    if (new_str == old_str) {
-        throw std::invalid_argument{"Arg `old_str` and `new_str` are equal and unchanged."};
-    }
+    auto segments = detail::parseEditSegments(arguments);
 
     // 统一到 \n 换行符
     // - 与 filesystem_read 的逻辑不同，read 应当保留原始的内容，edit 应当尽可能保证修改成功，
     //   如果 llm 需要写回 crlf，可使用 shell
-    detail::normalizeCrlfToLf(old_str);
-    detail::normalizeCrlfToLf(new_str);
+    for (auto& seg : segments) {
+        detail::normalizeCrlfToLf(seg.oldStr);
+        detail::normalizeCrlfToLf(seg.newStr);
+    }
 
     auto            path = utilxx_base::utf8ToPath(filepath);
     // 按规范化路径排队: 读-改-写整段相对其它写者原子
@@ -2013,23 +2127,8 @@ inline asio::awaitable<std::string>
     utilxx_base::autoConvertToUtf8(content);
     detail::normalizeCrlfToLf(content);
 
-    int    replaceHit = 0;
-    size_t pos        = 0;
-    while ((pos = content.find(old_str, pos)) != std::string::npos) {
-        replaceHit++;
-        content.replace(pos, old_str.length(), new_str);
-        // 跳过新字符串，避免死循环
-        pos += new_str.length();
-        if (false == multi_replace) {
-            break;
-        }
-    }
-
-    if (0 == replaceHit) {
-        throw std::runtime_error{
-            R"(No match `old_str` found, Try re-reading to get the latest file content.)"
-        };
-    }
+    // 任一段匹配不到即整体放弃 (读到内容后才会写盘, 失败时文件保持原样)
+    detail::applyEditSegments(content, segments);
 
     // 原子写: 先写同目录临时文件, 成功后 rename 覆盖原文件,
     // 避免直接 truncate 原文件后写入中途失败导致原内容永久丢失
@@ -2075,9 +2174,6 @@ inline asio::awaitable<std::string>
         };
     }
 
-    if (multi_replace) {
-        co_return fmt::format(R"(Success, Replace {} hits)", replaceHit);
-    }
     co_return "success";
 }
 

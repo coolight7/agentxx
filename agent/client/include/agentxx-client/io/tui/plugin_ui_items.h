@@ -13,12 +13,16 @@
 /// - hasPluginBinding: 快照中是否存在该 plugin 的绑定 (精确或 "" 兜底)
 /// - renderPluginDiff: diff 内容渲染 (message decor 与 DiffOverlay 共用;
 ///   复用 computeLineDiff + side-by-side/统一双样式, 避免双份实现)
+/// - parsePluginDiffPayload: diff overlay 的 payload 解析 (单段/多段)
 #include "agentxx-client/io/tui/tui_theme.h"
 #include "agentxx/plugin/client_plugin_manager.h"
 #include "ftxui/dom/elements.hpp"
 #include "utilxx/diff_util.h"
 #include "utilxx_base/json.h"
+#include <optional>
 #include <string>
+#include <string_view>
+#include <vector>
 
 namespace agentxx {
 namespace client {
@@ -61,6 +65,34 @@ ftxui::Element renderPluginDiff(
     const TUITheme&  theme,
     int              screenW = 0
 );
+
+/// diff 的一段替换 (`oldStr` → `newStr`; 一次编辑可以有多段)
+struct PluginDiffSegment {
+    std::string oldStr;
+    std::string newStr;
+};
+
+/// diff overlay 的 payload 解析结果 (见 [parsePluginDiffPayload])
+struct PluginDiffPayload {
+    std::string                    path;
+    std::vector<PluginDiffSegment> segments;
+};
+
+/// 解析 diff overlay 的 payload
+///
+/// 段落形态与 edit 工具参数同一套"少写一层"规则 —— 工具参数的类型自动修正会把
+/// 单个对象与单元素数组成对互转 (见 ToolcallWrapNode::autoFixArgsType), 因此界面层
+/// 两种形态都必须认:
+/// - 多段: `{"path":"a.cpp","edits":[{"old_str":"...","new_str":"..."}, ...]}`
+/// - `edits` 为**单个对象** (少写一层数组): `{"path":"a.cpp","edits":{...}}`
+/// - 单段 (旧写法, 保留支持): `{"path":"a.cpp","old_str":"...","new_str":"..."}`
+/// - 裸数组 `[{...},{...}]`: 按"无文件路径的多段"处理
+///
+/// - 段内缺 `old_str`/`new_str` 时按空串处理 (空串 = 删除 / 纯新增那一侧)
+/// - 段内两侧都为空的对象跳过 (没有内容的段不占一行)
+/// - `return` payload 不是 JSON / 顶层既不是对象也不是数组时为 `std::nullopt`
+///   (调用方按"打不开弹窗"处理); 解析成功但没有任何可用段时 `segments` 为空
+std::optional<PluginDiffPayload> parsePluginDiffPayload(std::string_view payloadJson);
 
 /// 快照中是否存在该 plugin 的绑定 (精确 target 或 "" 兜底任一)
 bool hasPluginBinding(std::string_view plugin, const agentxx::plugin::ClientUiRegistry* reg);

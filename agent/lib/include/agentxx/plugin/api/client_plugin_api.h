@@ -154,7 +154,14 @@ typedef void(PLUGINXX_CALL* AgentxxUiActionFn)(const AgentxxUiActionContext* ctx
 typedef enum AgentxxOverlayType {
     AGENTXX_OVERLAY_MERMAID = 0, ///< 状态图: payload = mermaid 源码
     AGENTXX_OVERLAY_TEXT    = 1, ///< 文本/Markdown: payload = 原文
-    AGENTXX_OVERLAY_DIFF    = 2, ///< 对比: payload = JSON {path,old_str,new_str}
+    /// 对比: payload = JSON, 支持单段与多段 (段 = 一次替换)
+    /// - 多段: `{"path":"a.cpp","edits":[{"old_str":"..","new_str":".."}, ...]}`
+    /// - 单段: `{"path":"a.cpp","old_str":"..","new_str":".."}` (旧写法)
+    /// - `edits` 也接受**单个对象** (少写一层数组的形态): 工具参数会自动互转对象与
+    ///   单元素数组, 界面层两种形态都认 (见 ToolcallWrapNode::autoFixArgsType)
+    /// - 裸数组 `[{"old_str":"..","new_str":".."}, ...]` 按"无路径的多段"处理
+    /// 多段时每段各渲染一份逐行差异, 段间以分隔行隔开, 路径只在首段展示
+    AGENTXX_OVERLAY_DIFF    = 2,
     AGENTXX_OVERLAY_CUSTOM = 3 ///< 自定义: payload = JSON {"items":[...]} (同 panel/items schema)
 } AgentxxOverlayType;
 

@@ -1640,37 +1640,104 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             XX_TEST_EXPECT_TRUE(editNoText.summary.find("[+0 -0]") == std::string::npos);
             XX_TEST_EXPECT_TRUE(editNoText.summary.find("/home/user/d.cpp") != std::string::npos);
 
-            // 15.3d edit multi_replace: 结果里的命中处数换算总行数 (1 处 +1 -1 × 3 处)
-            auto editMulti = co_await renderToolAsync(
+            // 15.3d edit 单段: 每段各替换一处, 折叠头按逐行 diff 给出增删行数
+            auto editSingle = co_await renderToolAsync(
                 mgr,
                 "call_edit_4",
                 "agentxx_filesystem_edit",
-                R"({"path":"/home/user/e.cpp","old_str":"oldCall();","new_str":"newCall();","multi_replace":true})",
-                "Success, Replace 3 hits",
+                R"({"path":"/home/user/e.cpp","old_str":"oldCall();","new_str":"newCall();"})",
+                "success",
                 true,
                 false,
                 100
             );
-            XX_TEST_EXPECT_TRUE(editMulti.matched);
+            XX_TEST_EXPECT_TRUE(editSingle.matched);
             XX_TEST_EXPECT_TRUE(
-                editMulti.summary.find("[+3 -3] /home/user/e.cpp") != std::string::npos
+                editSingle.summary.find("[+1 -1] /home/user/e.cpp") != std::string::npos
             );
 
-            // 15.3e edit multi_replace 运行中: 处数未知, 先按单处展示
-            auto editMultiRunning = co_await renderToolAsync(
+            // 15.3f edit 多段替换 (`edits` 数组): 展开体每段一个 Diff 片段
+            // (路径只在首段) + 段间分隔线; 折叠头各段增删行数求和
+            auto editSegments = co_await renderToolAsync(
                 mgr,
-                "call_edit_5",
+                "call_edit_6",
                 "agentxx_filesystem_edit",
-                R"({"path":"/home/user/f.cpp","old_str":"oldCall();","new_str":"newCall();","multi_replace":true})",
-                "",
-                false,
+                R"({"path":"/home/user/g.cpp","edits":[{"old_str":"oldA();","new_str":"newA();"},{"old_str":"x();","new_str":"x2();\ny2();"}]})",
+                "success",
+                true,
                 false,
                 100
             );
-            XX_TEST_EXPECT_TRUE(editMultiRunning.matched);
+            XX_TEST_EXPECT_TRUE(editSegments.matched);
+            XX_TEST_EXPECT_EQ(editSegments.displayName, "Edit");
+            // 第 1 段 +1 -1, 第 2 段 +2 -1 → 合计 [+3 -2]
             XX_TEST_EXPECT_TRUE(
-                editMultiRunning.summary.find("[+1 -1] /home/user/f.cpp") != std::string::npos
+                editSegments.summary.find("[+3 -2] /home/user/g.cpp") != std::string::npos
             );
+            XX_TEST_EXPECT_EQ(editSegments.items.size(), 3U);
+            if (editSegments.items.size() == 3) {
+                XX_TEST_EXPECT_EQ(editSegments.items[0].value("kind", std::string{}), "Diff");
+                XX_TEST_EXPECT_EQ(
+                    editSegments.items[0].value("path", std::string{}),
+                    "/home/user/g.cpp"
+                );
+                XX_TEST_EXPECT_EQ(
+                    editSegments.items[0].value("oldStr", std::string{}),
+                    "oldA();"
+                );
+                XX_TEST_EXPECT_EQ(editSegments.items[1].value("kind", std::string{}), "Divider");
+                XX_TEST_EXPECT_EQ(editSegments.items[2].value("kind", std::string{}), "Diff");
+                // 后续段不带 path (路径只在首段展示一次)
+                XX_TEST_EXPECT_EQ(editSegments.items[2].value("path", std::string{}), "");
+                XX_TEST_EXPECT_EQ(
+                    editSegments.items[2].value("newStr", std::string{}),
+                    "x2();\ny2();"
+                );
+            }
+
+            // 15.3h edit `edits` **单个对象** (少写一层数组的形态): 渲染结果与
+            // "只含一项的数组"完全一致 —— 工具参数的类型自动修正会把对象与单元素
+            // 数组成对互转, 界面层两种形态都要认
+            auto editSingleObj = co_await renderToolAsync(
+                mgr,
+                "call_edit_8",
+                "agentxx_filesystem_edit",
+                R"({"path":"/home/user/i.cpp","edits":{"old_str":"oldA();","new_str":"newA();"}})",
+                "success",
+                true,
+                false,
+                100
+            );
+            XX_TEST_EXPECT_TRUE(editSingleObj.matched);
+            XX_TEST_EXPECT_EQ(editSingleObj.displayName, "Edit");
+            XX_TEST_EXPECT_TRUE(
+                editSingleObj.summary.find("[+1 -1] /home/user/i.cpp") != std::string::npos
+            );
+            XX_TEST_EXPECT_EQ(editSingleObj.items.size(), 1U);
+            if (editSingleObj.items.size() == 1) {
+                XX_TEST_EXPECT_EQ(editSingleObj.items[0].value("kind", std::string{}), "Diff");
+                XX_TEST_EXPECT_EQ(
+                    editSingleObj.items[0].value("path", std::string{}),
+                    "/home/user/i.cpp"
+                );
+                XX_TEST_EXPECT_EQ(editSingleObj.items[0].value("oldStr", std::string{}), "oldA();");
+                XX_TEST_EXPECT_EQ(editSingleObj.items[0].value("newStr", std::string{}), "newA();");
+            }
+
+            // 15.3i 同一份参数写成数组形态: 展开体与折叠头与上面逐字一致
+            auto editArrayOne = co_await renderToolAsync(
+                mgr,
+                "call_edit_9",
+                "agentxx_filesystem_edit",
+                R"({"path":"/home/user/i.cpp","edits":[{"old_str":"oldA();","new_str":"newA();"}]})",
+                "success",
+                true,
+                false,
+                100
+            );
+            XX_TEST_EXPECT_TRUE(editArrayOne.matched);
+            XX_TEST_EXPECT_EQ(editArrayOne.summary, editSingleObj.summary);
+            XX_TEST_EXPECT_EQ(editArrayOne.items.dump(), editSingleObj.items.dump());
 
             co_await mgr->unloadAsync("agentxx_filesystem");
             XX_TEST_EXPECT_TRUE(mgr->find("agentxx_filesystem") == nullptr);
@@ -2045,6 +2112,56 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 XX_TEST_EXPECT_EQ(ui->open_overlay(exInst->hostView(), &diffSpec), 0);
                 XX_TEST_EXPECT_EQ(adapter->overlayOpenCount(), 2);
                 XX_TEST_EXPECT_EQ(adapter->lastOverlayType(), AGENTXX_OVERLAY_DIFF);
+
+                // SDK 便捷方法 showDiffOverlay: 单段按旧写法下发 (老主程序也能渲染),
+                // 多段用 `edits` 数组下发; 空段列表打开"无变化"的 diff
+                struct SdkProbe : agentxx::plugin::ClientPluginBase {};
+                SdkProbe sdk;
+                sdk.host  = exInst->hostView();
+                sdk.iface = agentxx::plugin::ClientIfaces::query(exInst->hostView());
+                const int beforeSdk = adapter->overlayOpenCount();
+
+                XX_TEST_EXPECT_EQ(
+                    sdk.showDiffOverlay("单段", "/p/a.cpp", {{"old();", "new();"}}, "{}"),
+                    0
+                );
+                XX_TEST_EXPECT_EQ(adapter->overlayOpenCount(), beforeSdk + 1);
+                XX_TEST_EXPECT_EQ(adapter->lastOverlayType(), AGENTXX_OVERLAY_DIFF);
+                {
+                    auto payload = utilxx_base::Json::parse(adapter->lastOverlayPayload());
+                    XX_TEST_EXPECT_EQ(payload.value("path", std::string{}), "/p/a.cpp");
+                    XX_TEST_EXPECT_EQ(payload.value("old_str", std::string{}), "old();");
+                    XX_TEST_EXPECT_EQ(payload.value("new_str", std::string{}), "new();");
+                    XX_TEST_EXPECT_FALSE(payload.contains("edits"));
+                }
+
+                XX_TEST_EXPECT_EQ(
+                    sdk.showDiffOverlay(
+                        "多段",
+                        "/p/b.cpp",
+                        {{"a();", "A();"}, {"b();", "B();"}},
+                        "{}"
+                    ),
+                    0
+                );
+                XX_TEST_EXPECT_EQ(adapter->overlayOpenCount(), beforeSdk + 2);
+                {
+                    auto payload = utilxx_base::Json::parse(adapter->lastOverlayPayload());
+                    XX_TEST_EXPECT_EQ(payload.value("path", std::string{}), "/p/b.cpp");
+                    XX_TEST_EXPECT_TRUE(payload.contains("edits"));
+                    XX_TEST_EXPECT_EQ(payload["edits"].size(), size_t{2});
+                    XX_TEST_EXPECT_EQ(
+                        payload["edits"][0].value("old_str", std::string{}),
+                        "a();"
+                    );
+                    XX_TEST_EXPECT_EQ(
+                        payload["edits"][1].value("new_str", std::string{}),
+                        "B();"
+                    );
+                }
+
+                XX_TEST_EXPECT_EQ(sdk.showDiffOverlay("空", "/p/c.cpp", {}, "{}"), 0);
+                XX_TEST_EXPECT_EQ(adapter->overlayOpenCount(), beforeSdk + 3);
             }
             co_await mgr->unloadAsync("example_plugin");
             XX_TEST_EXPECT_TRUE(mgr->find("example_plugin") == nullptr);

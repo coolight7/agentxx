@@ -155,6 +155,7 @@ struct SchemaTypes {
     bool isNumber  = false; // 声明了 "number"
     bool isInteger = false; // 声明了 "integer"
     bool isBool    = false;
+    bool isObject  = false; // 声明了 "object"
 
     /// 是否声明了数值类型 (number 或 integer)
     bool isNumeric() const {
@@ -178,6 +179,8 @@ SchemaTypes getSchemaTypes(const utilxx_base::Json& schema) {
             t.isInteger = true;
         } else if ("boolean" == one) {
             t.isBool = true;
+        } else if ("object" == one) {
+            t.isObject = true;
         }
     };
     auto type = schema.value("type", std::string{});
@@ -204,6 +207,26 @@ bool isStringArrayItems(const utilxx_base::Json& schema) {
         }
     }
     return true;
+}
+
+/// 数组元素是否为对象 (`items` 声明 object; 未声明 type 时看是否写了对象关键字):
+/// 用于把"少写一层数组"的单个对象包装成 `[obj]`
+/// - `items.type` 为 `"object"` (或联合类型中含 object) 时成立
+/// - `items` 未声明 type 但写了 `properties`/`required` 时按对象元素处理
+/// - 其余 (string/number/... 元素, 或 items 缺失) 不包装对象参数
+bool isObjectArrayItems(const utilxx_base::Json& schema) {
+    const auto items = schema["items"];
+    if (!items.is_object()) {
+        return false;
+    }
+    const auto itemTypes = getSchemaTypes(items);
+    if (itemTypes.isObject) {
+        return true;
+    }
+    if (itemTypes.isArray || itemTypes.isString || itemTypes.isNumeric() || itemTypes.isBool) {
+        return false;
+    }
+    return items.contains("properties") || items.contains("required");
 }
 
 /// 收集 schema 声明的字符串枚举值, 构造"忽略大小写 -> 规范值"映射 (Set 语义):
@@ -382,6 +405,8 @@ std::set<std::string> ToolcallWrapNode::findConsecutiveRepeatCallKeys(
 
 /// 根据 tool 的参数 JSON Schema 自动修正参数类型兼容性, 尽量让 arg 类型匹配参数需求:
 /// - string -> 字符串数组: 参数声明为数组 (字符串数组) 而传入单个字符串时, 包装为 `[str]`
+/// - object -> 对象数组: 参数声明为数组 (元素为对象) 而传入单个对象时, 包装为 `[obj]`
+///   (LLM 少写一层数组的常见形态, 如 `edits`/`actions` 这类参数)
 /// - string -> number/integer: 参数声明为数值而传入字符串时, 若字符串可完整解析为数值则转换
 ///   (integer 仅接受整数写法; number 支持小数/指数; 前导 '+', 首尾空白会被容忍)
 /// - number/integer -> string: 参数声明为字符串而传入数值时, 转为十进制字符串
@@ -390,6 +415,7 @@ std::set<std::string> ToolcallWrapNode::findConsecutiveRepeatCallKeys(
 ///   int64 表示范围内才无损转换, 如 3.0 转 3, 3.5 保持原样)
 /// - bool -> string / string("true"/"false") -> boolean: 布尔与字符串互相转换
 /// - [单字符串数组] -> string: 参数声明为字符串而传入单元素字符串数组时, 解包为字符串
+/// - [单对象数组] -> object: 参数声明为对象而传入单元素对象数组时, 解包为对象
 /// - 枚举字符串大小写: 参数值命中 schema `enum` 声明的字符串枚举项 (忽略大小写)
 ///   时改写为规范值, 如 LLM 传 "File" 而枚举声明为 `["file","dir"]` 时转为 "file"
 /// - 仅当目标类型不包含 arg 当前类型时转换; 无法解析或类型不明确时保持原样
@@ -494,12 +520,30 @@ bool ToolcallWrapNode::autoFixArgsType(const neograph::ChatTool& def, utilxx_bas
                 fixInfo    = "bool -> string";
                 changed    = true;
             }
+        } else if (arg.is_object()) {
+            // object -> 对象数组 (目标声明数组且元素为对象, 目标不含 object 时):
+            // LLM 少写一层数组的常见形态, 如 `edits`/`actions` 传成单个对象
+            if (types.isArray && !types.isObject && isObjectArrayItems(schema)) {
+                auto arr = utilxx_base::Json::array();
+                arr.push_back(arg);
+                args[name] = std::move(arr);
+                fixInfo    = "object -> [object]";
+                changed    = true;
+            }
         } else if (arg.is_array()) {
             // [单字符串数组] -> string (目标不含 array 时)
             if (types.isString && !types.isArray && arg.size() == 1 && arg[0].is_string()) {
                 args[name] = arg[0].get<std::string>();
                 fixInfo    = "[string] -> string";
                 changed    = true;
+            } else if (types.isObject && !types.isArray && arg.size() == 1 && arg[0].is_object()) {
+                // [单对象数组] -> object (目标不含 array 时): 与字符串数组解包同理
+                // - 来源与被赋值对象同属 `args[name]`: 赋值会先销毁旧值 (arg 随即失效),
+                //   故先把元素拷出来再赋值
+                utilxx_base::Json unwrapped = arg[0];
+                args[name]                  = std::move(unwrapped);
+                fixInfo                     = "[object] -> object";
+                changed                     = true;
             }
         }
 

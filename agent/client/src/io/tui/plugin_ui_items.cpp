@@ -2,6 +2,8 @@
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/terminal.hpp"
 #include "utilxx_base/string_util.h"
+#include <exception>
+#include <optional>
 
 using namespace ftxui;
 
@@ -211,6 +213,61 @@ Element renderPluginDiff(
         vbox(std::move(rightLines)) | flex,
     }));
     return vbox(std::move(els));
+}
+
+std::optional<PluginDiffPayload> parsePluginDiffPayload(std::string_view payloadJson) {
+    utilxx_base::Json root;
+    try {
+        // 空 payload 按空对象处理 (与原实现一致: 打开一个"无变化"的 diff 弹窗)
+        root = utilxx_base::Json::parse(payloadJson.empty() ? std::string_view{"{}"} : payloadJson);
+    } catch (const std::exception&) {
+        return std::nullopt;
+    }
+
+    PluginDiffPayload out;
+
+    /// 收一个段落对象 (非对象元素跳过; 两侧都为空 = 没有内容的段, 跳过)
+    auto takeSegment = [&out](const utilxx_base::Json& item) {
+        if (!item.is_object()) {
+            return;
+        }
+        PluginDiffSegment seg;
+        seg.oldStr = item.value("old_str", std::string{});
+        seg.newStr = item.value("new_str", std::string{});
+        if (seg.oldStr.empty() && seg.newStr.empty()) {
+            return;
+        }
+        out.segments.push_back(std::move(seg));
+    };
+
+    // 裸数组: 若干段落 (没有文件路径)
+    if (root.is_array()) {
+        for (const auto& item : root) {
+            takeSegment(item);
+        }
+        return out;
+    }
+    if (!root.is_object()) {
+        return std::nullopt;
+    }
+
+    out.path = root.value("path", std::string{});
+    if (root.contains("edits")) {
+        // `edits` 与 `old_str`/`new_str` 互斥 (与 edit 工具参数的规则一致):
+        // 给了 `edits` 就只看它, 不再回退到单段写法
+        const auto& edits = root["edits"];
+        if (edits.is_array()) {
+            for (const auto& item : edits) {
+                takeSegment(item);
+            }
+        } else {
+            takeSegment(edits);
+        }
+        return out;
+    }
+    // 单段旧写法: 顶层 old_str/new_str
+    takeSegment(root);
+    return out;
 }
 
 } // namespace client

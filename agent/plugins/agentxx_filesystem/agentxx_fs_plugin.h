@@ -12,6 +12,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace agentxx_fs_plugin {
@@ -47,7 +48,7 @@ inline std::vector<std::string> stringListArg(const utilxx_base::Json& args, std
     return out;
 }
 
-/// 逐行 diff 的增删行数摘要 (`[+3 -1]`, 折叠头展示的"类似 git 的 +行 -行 提示")
+/// 逐行 diff 的增删行数 (`[+3 -1]` 折叠头提示的原始计数)
 /// - 计数基于逐行 LCS (`utilxx::computeLineDiff`, 与 client 展开体 diff 渲染同一
 ///   算法), 因此折叠头显示的行数与展开后看到的差异一致 —— 不是 `old_str`/`new_str`
 ///   的行数差 (那样会把未变的上下文行也算进来)
@@ -57,16 +58,11 @@ inline std::vector<std::string> stringListArg(const utilxx_base::Json& args, std
 /// - `args`:
 ///     - [oldStr] 替换前文本 (`agentxx_filesystem_edit` 的 `old_str` 参数)
 ///     - [newStr] 替换后文本 (同上 `new_str` 参数)
-///     - [repeat] 替换处数 (默认 1); `multi_replace` 场景传实际命中处数
-///       (见 [parseEditReplaceHits]), 得到的是整个文件的**总**增删行数
-///       (单处统计 × 处数); 传 < 1 时按 1 处理
 ///
-/// - `return` 形如 `[+3 -1]` 的摘要; 两侧都为空或逐行比较无变化时返回空串
-///   (调用方跳过该段, 不显示 `[+0 -0]`)
-inline std::string
-    diffStatText(std::string_view oldStr, std::string_view newStr, int64_t repeat = 1) {
+/// - `return` 单段的增删行数 (未变的上下文行不计入)
+inline std::pair<int64_t, int64_t> diffStatCounts(std::string_view oldStr, std::string_view newStr) {
     if (oldStr.empty() && newStr.empty()) {
-        return {};
+        return {0, 0};
     }
     // 参数此刻可能仍在流式输出中 (截断的 JSON 由调用方按解析失败处理),
     // 这里只做文本处理: 拷贝一份再归一化, 不改动调用方持有的字符串
@@ -84,48 +80,70 @@ inline std::string
             ++removed;
         }
     }
+    return {added, removed};
+}
+
+/// 一段替换 (`agentxx_filesystem_edit` 的一次 `old_str` -> `new_str`)
+struct EditSegmentText {
+    std::string oldStr;
+    std::string newStr;
+};
+
+/// 从 edit 工具参数取替换段 (client 渲染摘要与展开体用)
+/// - `edits` 数组: 逐项取 `old_str`/`new_str` (非对象元素跳过)
+/// - `edits` 为单个对象 (少写一层数组的常见形态): 按单个段处理
+/// - 未给 `edits`: 按 `old_str`/`new_str` 取单个段 (旧写法)
+/// - 参数还在流式输出中 (解析失败) / 两种写法都没有: 返回空列表
+///   (调用方跳过摘要与 diff 片段)
+inline std::vector<EditSegmentText> editSegmentsArg(const utilxx_base::Json& args) {
+    std::vector<EditSegmentText> out;
+    if (!args.is_object()) {
+        return out;
+    }
+    auto takeOne = [&out](const utilxx_base::Json& item) {
+        if (!item.is_object()) {
+            return;
+        }
+        out.push_back(EditSegmentText{
+            item.value<std::string>("old_str", std::string{}),
+            item.value<std::string>("new_str", std::string{})
+        });
+    };
+    // 缺失键 → 只读 operator[] 返回 Null 常量
+    const auto& editsArg = args["edits"];
+    if (!editsArg.is_null()) {
+        if (editsArg.is_array()) {
+            for (const auto& item : editsArg) {
+                takeOne(item);
+            }
+        } else {
+            takeOne(editsArg);
+        }
+        return out;
+    }
+    auto oldStr = args.value<std::string>("old_str", std::string{});
+    auto newStr = args.value<std::string>("new_str", std::string{});
+    if (!oldStr.empty() || !newStr.empty()) {
+        out.push_back(EditSegmentText{std::move(oldStr), std::move(newStr)});
+    }
+    return out;
+}
+
+/// 替换段的增删行数摘要 (`[+3 -1]`, 折叠头展示的"类似 git 的 +行 -行 提示")
+/// - 各段各替换一处, 按逐行 diff 的增删行数求和 (见 [diffStatCounts])
+/// - 无任何变化时返回空串 (调用方不显示 `[+0 -0]`)
+inline std::string diffStatTextOfSegments(const std::vector<EditSegmentText>& segments) {
+    int64_t added   = 0;
+    int64_t removed = 0;
+    for (const auto& seg : segments) {
+        const auto [oneAdded, oneRemoved] = diffStatCounts(seg.oldStr, seg.newStr);
+        added += oneAdded;
+        removed += oneRemoved;
+    }
     if (added == 0 && removed == 0) {
         return {};
     }
-    const int64_t times = (repeat > 1) ? repeat : 1;
-    return fmt::format("[+{} -{}]", added * times, removed * times);
-}
-
-/// 解析 edit 工具 `multi_replace` 结果里的替换处数
-/// - 结果格式由工具执行体产出 (见 filesystem_impl.h 的 `fileEditExecuteImpl`):
-///   `Success, Replace 3 hits`; 单次替换 (非 multi_replace) 的结果是 `success`
-/// - 只接受严格形态 (固定前后缀 + 中间纯数字), 结果文本意外变形时返回 0,
-///   调用方按单处展示 (不报错, 只退化为不含总数的摘要)
-///
-/// - `args`:
-///     - [resultText] 工具结果文本 (渲染输入的 `result_text`)
-///
-/// - `return` 替换处数 (>= 1); 非该形态/解析失败返回 0
-inline int64_t parseEditReplaceHits(std::string_view resultText) {
-    constexpr std::string_view kPrefix = "Success, Replace ";
-    constexpr std::string_view kSuffix = " hits";
-    /// 处数上限: 只用于兜底防御 (避免畸形文本导致处数畸大 / 乘法溢出)
-    constexpr int64_t kMaxHits = 1'000'000;
-
-    if (!resultText.starts_with(kPrefix) || !resultText.ends_with(kSuffix)) {
-        return 0;
-    }
-    // 前后缀区间重叠的畸形文本 (长度不足) 会让下面的差值下溢, 一并拦掉
-    const size_t digitsLen = resultText.size() - kPrefix.size() - kSuffix.size();
-    if (digitsLen == 0 || digitsLen > resultText.size()) {
-        return 0;
-    }
-    int64_t hits = 0;
-    for (const char c : resultText.substr(kPrefix.size(), digitsLen)) {
-        if (c < '0' || c > '9') {
-            return 0;
-        }
-        hits = hits * 10 + (c - '0');
-        if (hits > kMaxHits) {
-            return 0;
-        }
-    }
-    return (hits > 0) ? hits : 0;
+    return fmt::format("[+{} -{}]", added, removed);
 }
 
 } // namespace agentxx_fs_plugin

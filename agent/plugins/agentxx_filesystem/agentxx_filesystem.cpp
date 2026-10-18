@@ -44,6 +44,7 @@ constexpr std::string_view kDepictWrite
 constexpr std::string_view kDepictEdit
     = R"(Perform exact string replacement in a text file (e.g. *.txt, *.md, *.cpp, *.h).
 Use this for surgical edits without rewriting the entire file.
+One call can change several places of the same file: pass them as `edits` (applied in order), or a single replacement as `old_str`/`new_str`.
 Note! This tool will replace all `\r\n` to `\n` when find `old_str` and replace.)";
 constexpr std::string_view kDepictGlob = "Find files and directories matching glob patterns.";
 constexpr std::string_view kDepictGrep
@@ -303,6 +304,9 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
     registerWritePathPermission(ctx, kNameWrite, "path");
 
     // 4. Edit
+    // 两种写法: 多段 `edits: [{old_str,new_str}, ...]` (推荐, 一次改多处) 与
+    // 单段 `old_str`/`new_str` (兼容旧写法); 两处同时给出时工具报错。
+    // 每段只替换第一处匹配 (要改多处就写多段)
     auto editSchema
         = ctx.schema(kNameEdit)
               .string(
@@ -310,16 +314,30 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
                   "Path to the text file. Relative paths are resolved against the current working directory; `~` expands to the home directory.",
                   /*required=*/true
               )
+              .objectArray(
+                  "edits",
+                  R"(A list of replacements applied in order, each item is `{"old_str": "...", "new_str": "..."}`.
+Every `old_str` must be non-empty and match the file content exactly (including whitespace and indentation); each item replaces the first match, and item N matches against the content produced by items 1..N-1, so a later item may target text written by an earlier one.
+All items must match: when any item does not match, nothing is written and the error names that item.
+Use this instead of `old_str`/`new_str` when changing several places in one file.)",
+                  utilxx_base::Json{
+                      {"type", "object"},
+                      {"properties",
+                       utilxx_base::Json{
+                           {"old_str", utilxx_base::Json{{"type", "string"}}},
+                           {"new_str", utilxx_base::Json{{"type", "string"}}},
+                       }},
+                      {"required", utilxx_base::Json::array({"old_str", "new_str"})},
+                  }
+              )
               .string(
                   "old_str",
-                  "The exact string to find and replace. Must be non-empty and match precisely (including whitespace and indentation).",
-                  /*required=*/true
+                  "Single-edit shorthand: the exact string to find and replace (the first match is replaced). Must be non-empty and match precisely (including whitespace and indentation). Not used together with `edits`.",
+                  false
               )
-              .string("new_str", "The replacement string.", /*required=*/true)
-              .boolean(
-                  "multi_replace",
-                  "Default `false`. If `true`, replace ALL occurrences of `old_str`. If `false`, replace only the first occurrence.",
-                  false,
+              .string(
+                  "new_str",
+                  "Single-edit shorthand: the replacement string.",
                   false
               )
               .build();
@@ -336,9 +354,7 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
                std::string_view workDir,
                const PluginxxCancelToken*) -> asio::awaitable<std::string> {
                 ArgReader args(args_json);
-                auto      path   = args.require<std::string>("path");
-                auto      oldStr = args.require<std::string>("old_str");
-                auto      newStr = args.require<std::string>("new_str");
+                auto      path = args.require<std::string>("path");
                 if (!args.ok()) {
                     co_return args.errorMessage();
                 }
@@ -358,9 +374,7 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
                std::string_view           workDir,
                const PluginxxCancelToken* cancel) {
                 ArgReader args(args_json);
-                auto      path   = args.require<std::string>("path");
-                auto      oldStr = args.require<std::string>("old_str");
-                auto      newStr = args.require<std::string>("new_str");
+                auto      path = args.require<std::string>("path");
                 if (!args.ok()) {
                     return args.errorMessage();
                 }
@@ -682,40 +696,45 @@ static int32_t fsClientSetup(FsClientCtx& ctx) {
     });
 
     // 6. Edit
+    // 展开体按替换段展开: 界面描述层的 `Diff` 组件只描述一段 `oldStr`/`newStr`,
+    // 因此多段替换表达为**多个 Diff 组件项** —— 文件路径只在首段显示, 段与段之间
+    // 用分隔线隔开 (渲染层无需改动: 每个 Diff 项各渲染一份逐行差异)
     ctx.registerRenderer(kNameEdit, [](const ToolRenderInput& in, ToolRenderOutput& out) {
         ArgReader   args(in.argsJson);
-        std::string path   = args.value("path", "");
-        std::string oldStr = args.value("old_str", "");
-        std::string newStr = args.value("new_str", "");
-        out.displayName    = "Edit";
+        std::string path     = args.value("path", "");
+        auto        segments = agentxx_fs_plugin::editSegmentsArg(args.raw());
+
         // 折叠头摘要: git 风格的 "+行 -行" 提示在前, 路径在后 (如 " · [+3 -1] /home/user/a.cpp")
-        // - 行数统计见 [diffStatText] (与展开体 diff 的逐行结果同源)
-        // - multi_replace 一处模式会替换多处, 实际处数只有结果里才有
-        //   ("Success, Replace N hits", 见 [parseEditReplaceHits]), 因此完成前按
-        //   单处展示, 完成后换成整个文件的总行数 (单处 × 处数)
-        int64_t repeat = 1;
-        if (args.value("multi_replace", false) && in.isFinished) {
-            const int64_t hits = parseEditReplaceHits(in.resultText);
-            if (hits > 1) {
-                repeat = hits;
-            }
-        }
-        const std::string diffStat = diffStatText(oldStr, newStr, repeat);
-        std::string       summary  = " ·";
+        // - 行数统计见 [diffStatTextOfSegments]: 各段各替换一处, 逐行 diff 求和
+        //   (与展开体渲染的差异同源, 因此显示的行数就是展开后能看到的)
+        const std::string diffStat = agentxx_fs_plugin::diffStatTextOfSegments(segments);
+        std::string summary = " ·";
         if (!diffStat.empty()) {
             summary += " " + diffStat;
         }
         if (!path.empty()) {
             summary += " " + path;
         }
-        out.summary = std::move(summary);
-        if (!path.empty() && (!oldStr.empty() || !newStr.empty())) {
+        out.displayName = "Edit";
+        out.summary     = std::move(summary);
+
+        bool firstSegment = true;
+        for (const auto& seg : segments) {
+            if (seg.oldStr.empty() && seg.newStr.empty()) {
+                continue;
+            }
+            if (!firstSegment) {
+                utilxx_base::Json divider;
+                divider["kind"] = "Divider";
+                out.items.push_back(std::move(divider));
+            }
             utilxx_base::Json diffItem;
             diffItem["kind"]   = "Diff";
-            diffItem["path"]   = path;
-            diffItem["oldStr"] = std::move(oldStr);
-            diffItem["newStr"] = std::move(newStr);
+            diffItem["path"]   = firstSegment ? std::string{path} : std::string{};
+            diffItem["oldStr"] = seg.oldStr;
+            diffItem["newStr"] = seg.newStr;
             out.items.push_back(std::move(diffItem));
+            firstSegment = false;
         }
     });
 
