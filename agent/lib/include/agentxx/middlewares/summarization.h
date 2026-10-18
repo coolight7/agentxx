@@ -138,13 +138,6 @@ public:
     /// - 对全部消息执行 (语义上保留最新)
     void cleanNoiseMessages(std::vector<neograph::ChatMessage>& messages);
 
-    /// thinking 清理: 只保留最新一条非空 thinking, 其余全部清空
-    /// - 旧轮 thinking 对续写没有价值 (结论已写在 content / tool 结果里)
-    /// - 部分模型的 thinking 是加密内容, 按字符估算 token 不准, 不留在上下文里
-    /// - 保留最新一条: 压缩子代理据此看到父会话最近一次的推理状态
-    /// - 用于压缩请求; 压缩结果只含摘要, 写回结果无需再清理
-    void cleanThinkingMessages(std::vector<neograph::ChatMessage>& messages);
-
     /// 摘要超过 [summaryMaxTokens] 时按估算 token 截断后返回 (保留开头 + 截断说明)
     /// - 压缩指令里的长度要求不保证被模型遵守, 这里保证写回的摘要不会把
     ///   刚压下去的上下文重新撑大
@@ -181,6 +174,8 @@ public:
     ///   sessionId=父线程 (与父会话相同 threadid + 相同模型 → 命中 KV cache),
     ///   tools=[] (子代理无任何工具, 仅对当前上下文原样做压缩, 不经过
     ///   share_store 外置), enable_summarization=false (禁止二次压缩)
+    /// - 载荷与父会话上一次请求逐字节一致 (含 thinking / 工具定义 / system 原文):
+    ///   任何"顺手清理"都会让上游前缀缓存整段失效, 所以这里不做 thinking 清理
     /// - subagent 内部完成"阅读上下文 → 输出摘要"的完整 agent 循环,
     ///   最终纯文本输出即为摘要
     /// - direct=false (默认): 自动触发压缩, 在 agent 轮次内调用 —— 经

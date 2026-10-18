@@ -1607,10 +1607,12 @@ Windows Debug + ASan, 临时 `data_dir` (会话库 `{data}/sqlite/sessions/<sess
 
 ```
 [modelcall] request prefix (session=...): msgs= chars= system=<hash> tools=<hash>(<n>)
-  head=<hash> toolOverride=<yes|no> toolsDisabled=<yes|no> first=[ i:role:chars/<hash> ... ]
+  head=<hash> toolOverride=<yes|no> toolsDisabled=<yes|no>
+  first=[ i:role:chars+thinking/chars hash ... ]
 ```
 
-对真实会话逐请求比对后, 找到两个真实原因:
+逐条消息的哈希覆盖"正文 + thinking + 工具调用"(三者都会进请求体), 否则 thinking 的差异
+会看不见。对真实会话逐请求比对后, 找到三个真实原因:
 
 1. **自动压缩路径把三个前缀对齐开关丢了** (根因)。自动压缩经
    `topic service.subagent.execute` → `SubAgentManagerTool::execute_async` → 中断参数 →
@@ -1631,22 +1633,32 @@ Windows Debug + ASan, 临时 `data_dir` (会话库 `{data}/sqlite/sessions/<sess
    分叉 (实测压缩请求的消息列表少了第 1 条 user 消息), 命中率只剩 system + 工具段。
    修复: 裁剪上限用模型上下文上限本身 (不再乘 0.95), 真超限由上游报错后按失败计数走
    硬截断兜底 (见 `summarization.cpp` 的注释)。
+3. **压缩前清理 thinking** (第三个原因, 也是最后一块)。模型配置 `send_thinking: true` 时,
+   请求体里**每条** assistant 消息都带 `reasoning_content`
+   (`chatMessagesToOpenAIJson` 逐条写入)。而压缩前会调
+   `cleanThinkingMessages(toSummarize)` 只留最新一条 thinking, 于是压缩请求与父会话上一次
+   请求从**第一条 assistant 消息**起就不一样了 —— 这正是"工具段已对齐、前几条 user 消息
+   也一致, 命中却仍只有 system + 工具段"的原因。
+   修复: 删掉这个清理 (`cleanThinkingMessages` 一并删除)。压缩请求就是要"原样重发父会话
+   刚发的那批消息", 任何顺手的清理都会让前缀失效；thinking 本来就被父请求发过, 不会多出成本。
+   用逐条消息指纹可以看到修复前后同一条消息的差异:
+   修复前 `2:assistant:0/84222325`(只哈希正文) 掩盖了 `+897` 字节的 thinking;
+   修复后指纹按"正文 + thinking + 工具调用"计算, 压缩请求与父请求逐条相同。
 
-修复后同配置重测 (13 轮内触发一次自动压缩):
+修复后同配置重测 (第 6 次请求触发自动压缩, 12 条消息进压缩请求):
 
 | 请求 | prompt | cached | cached/prompt | 请求指纹 |
 |---|---|---|---|---|
-| 压缩前普通请求 (第 10 轮) | 23235 | 15744 | 0.678 | tools `…(8)`, 前 6 条消息指纹与下行逐条相同 |
-| **压缩请求 (子代理)** | 24915 | **6784** | **0.272** | tools `…(8)` `toolOverride=yes toolsDisabled=yes` |
-| 压缩后父会话第一条 | 5958 | 5248 | 0.881 | — |
+| 压缩前普通请求 (第 5 轮) | 19071 | 17536 | 0.920 | tools `…(8)` |
+| **压缩请求 (子代理)** | 20943 | **18944** | **0.905** | tools `…(8)` `toolOverride=yes toolsDisabled=yes`, 前 6 条消息指纹与上行逐条相同 |
+| 压缩后父会话第一条 | 6130 | 5248 | 0.856 | — |
 
-- 压缩请求现在与父请求**工具段相同、前 6 条消息指纹逐条相同** (`first=[ 0:system:5664/…
-  1:user:8301/… 2:assistant:0/… 3:tool:41493/… ]`), 说明请求前缀已对齐 (A5/A7)。
-- 命中的 6784 token 就是 system + 工具定义这一段 (与首轮请求的 prompt 6823 基本相等)。
-  同一轮里的普通请求命中率也只有 0.678 / 0.881 / 0.442, 说明剩下没命中的部分来自上游
-  本身 (该网关在不同后端间分流, 同一前缀的缓存不是每次都查得到), 不是请求内容差异:
-  同样的前缀在下一次请求里能被命中 (第 3 轮 14208/15765 = 0.901)。
-- 因此本项目能控制的部分已经到位: 请求体逐字节对齐 + 载荷不再无谓裁剪。
+- 压缩请求命中 = 父请求的 token 数 (19071 → 18944, 差值是上游缓存块对齐), 也就是整段前缀
+  都被复用; 修复前同一位置是 `6784/24915 = 0.272` (只剩 system + 工具段)。
+- 压缩后父会话第一条 `5248/6130 = 0.856`: 上下文已换成
+  `system | [Please compact context to save space] | 摘要`, 命中的正是 system + 工具段。
+- 剩余没命中的部分都是"本次请求新增的内容"(末尾指令 / 新增消息), 属于必然。
+- 该结论与测试内模拟器一致 (0.969 vs 实测 0.905), 差距来自上游缓存块对齐与网关分流。
 
 #### 实测中修掉的两个问题 (第一/二轮已实施)
 

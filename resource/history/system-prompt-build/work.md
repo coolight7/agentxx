@@ -320,20 +320,30 @@
 - 修复: 裁剪上限改用模型上下文上限本身 (不乘 0.95); 真超限由上游报错后按失败计数
   走硬截断兜底。注释里写明了原因 (避免后人又加回余量)。
 
-#### S11.5 修复后实测
+#### S11.5 真实原因三: 压缩前清理 thinking
+
+- 修完上面两条后命中仍只有 system + 工具段 (6784/24915)。原因: 模型配置
+  `send_thinking: true` 时请求体里每条 assistant 都带 `reasoning_content`
+  (`chatMessagesToOpenAIJson` 逐条写入), 而压缩前会调 `cleanThinkingMessages()`
+  只留最新一条 thinking → 压缩请求与父会话上一次请求从第一条 assistant 起就不一样。
+- 定位手段: 把逐条消息指纹的哈希改成覆盖"正文 + thinking + 工具调用"
+  (原来只哈希正文, thinking 的差异看不见), 长度也一并打出来 (`chars+thinking/chars`)。
+- 修复: 删除 `cleanThinkingMessages` (函数 + 声明 + 两处调用)。压缩请求就是要原样重发
+  父会话刚发的那批消息, thinking 本来就被父请求发过, 不会多出成本。
+- 测试: `summarization` 移除 T11a (该函数的用例), T11 的 ⑤ 改为"全部 thinking 原样保留"
+  (index 2 = think-1, index 7 = think-3)。
+
+#### S11.6 修复后实测
 
 | 请求 | prompt | cached | cached/prompt | 指纹 |
 |---|---|---|---|---|
-| 压缩前普通请求 (第 10 轮) | 23235 | 15744 | 0.678 | tools `…(8)` |
-| 压缩请求 (子代理) | 24915 | 6784 | 0.272 | tools `…(8)` `toolOverride=yes toolsDisabled=yes`, 前 6 条消息指纹与上行逐条相同 |
-| 压缩后父会话第一条 | 5958 | 5248 | 0.881 | — |
+| 压缩前普通请求 (第 5 轮) | 19071 | 17536 | 0.920 | tools `…(8)` |
+| 压缩请求 (子代理) | 20943 | 18944 | **0.905** | tools `…(8)` `toolOverride=yes toolsDisabled=yes`, 前 6 条消息指纹与上行逐条相同 |
+| 压缩后父会话第一条 | 6130 | 5248 | 0.856 | — |
 
-- 压缩请求的请求体已与父请求对齐 (工具段相同 + 消息前缀逐条相同), 命中的 6784 token
-  就是 system + 工具段。
-- 同一轮里普通请求的命中率也有 0.678 / 0.442 这样的波动, 而同样的前缀在下一次请求能被
-  命中 (0.901), 说明剩余未命中的部分来自上游网关的分流与缓存写入时机, 不是请求内容差异。
-- 回归: `summarization` 462、`subagent_tool` 143、`prompt_cache_prefix` 33、
-  `agent` 198、`agent_host` 95、`prompt_sources` 47、`boundaries` 14 全部通过。
+- 压缩请求命中 = 父请求的 token 数 (19071 → 18944, 差值是上游缓存块对齐), 整段前缀被复用;
+  修复前同一位置是 6784/24915 = 0.272 (只剩 system + 工具段)。
+- 回归: `summarization` 457、`subagent_tool` 143、`prompt_cache_prefix` 33、`boundaries` 14 通过。
 
 ## 遇到的问题与处理
 

@@ -274,24 +274,6 @@ void SummarizationMiddlewareHandle::cleanNoiseMessages(std::vector<neograph::Cha
     messages = std::move(out2);
 }
 
-void SummarizationMiddlewareHandle::cleanThinkingMessages(std::vector<neograph::ChatMessage>& messages
-) {
-    // 只保留最新一条 thinking: 旧轮 thinking 对续写没有价值 (结论已写在 content /
-    // tool 结果里), 且部分模型的 thinking 是加密内容, 按字符估算 token 不准
-    int64_t keepIndex = -1;
-    for (int64_t i = static_cast<int64_t>(messages.size()) - 1; i >= 0; --i) {
-        if (!messages[static_cast<size_t>(i)].reasoning_content.empty()) {
-            keepIndex = i;
-            break;
-        }
-    }
-    for (int64_t i = 0; i < static_cast<int64_t>(messages.size()); ++i) {
-        if (i != keepIndex) {
-            messages[static_cast<size_t>(i)].reasoning_content.clear();
-        }
-    }
-}
-
 std::string SummarizationMiddlewareHandle::fitSummaryMaxTokens(std::string summary) const {
     if (summary.empty()) {
         return summary;
@@ -1027,8 +1009,10 @@ asio::awaitable<void>
             // 压缩前清洗消息中的多模态 data URL (Base64) 替换为纯文本标签
             // TODO: 替换前存储为文件，记录路径
             downgradeMultimodalUrlsToText(toSummarize);
-            // 只保留最新一条 thinking, 其余清空 (旧轮 thinking 无续写价值)
-            cleanThinkingMessages(toSummarize);
+            // 不清理 thinking: 模型配置 send_thinking 打开时请求体里每条 assistant
+            // 都带 `reasoning_content`, 只清一部分会让压缩请求与父会话刚发出的请求
+            // 不再逐字节相同, 上游前缀缓存从第一条 assistant 起全部失效
+            // (实测命中从 23235 掉到只剩 system + 工具段的 6784)
 
             /// llm 压缩 (同上下文 subagent, 中断后由 Session 派生并 resume)
             /// - 经功能点取摘要文本: 插件 / FFI 主程序的实现可在这里替换核心压缩;
@@ -1287,8 +1271,7 @@ asio::awaitable<bool>
 
         // 压缩前清洗消息中的多模态 data URL (Base64) 降级为纯文本标签
         downgradeMultimodalUrlsToText(toSummarize);
-        // 只保留最新一条 thinking, 其余清空 (旧轮 thinking 无续写价值)
-        cleanThinkingMessages(toSummarize);
+        // 不清理 thinking (同自动压缩: 会让请求前缀与父会话分叉)
 
         // 手动压缩在 agent 空闲时触发 (无 AgentRunner 中断循环), 不能走
         // NodeInterrupt 中断委派 (无人处理会逃逸 detached 被吞), 直派模式

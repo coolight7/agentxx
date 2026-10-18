@@ -1633,7 +1633,9 @@ AgentContext
 这三项开关必须经**中断参数**完整传递 (自动压缩走
 `SubAgentManagerTool` → 中断参数 → `AgentRunner` → `AgentHost`): 工具侧漏解析会让子代理
 退回自己的工具集与 system, 前缀从工具段就分叉 (曾经发生过, 见 benchmark.md 18.4);
-压缩载荷的裁剪阈值也不要加"余量", 否则一次无谓的丢消息就会让整段前缀失效。
+压缩载荷也不要"顺手清理" —— 裁剪阈值别加余量、别清理 thinking
+(`send_thinking` 打开时每条 assistant 的 `reasoning_content` 都进请求体),
+否则一次无谓的改动就让整段前缀失效。
 
 #### 7. 主程序装配与子代理用量
 

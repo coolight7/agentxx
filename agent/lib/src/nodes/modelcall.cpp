@@ -460,17 +460,28 @@ neograph::CompletionParams ModelCallWrapNode::build_params(std::string_view sess
             );
         }
         // 逐条消息指纹: 对比相邻请求时用它在开头几条里找出前缀分叉的位置
-        // (只取消息条数/角色/长度/哈希, 不含正文)
+        // (只取消息条数/角色/长度/哈希, 不含正文; 哈希覆盖正文 + thinking + 工具调用,
+        //  因为这三者都会进请求体)
         std::string msgDigests;
         const size_t digestCount = std::min<size_t>(params.messages.size(), 6);
         for (size_t i = 0; i < digestCount; ++i) {
             const auto& m = params.messages[i];
+            std::string basis = m.content;
+            basis += '\x1f';
+            basis += m.reasoning_content;
+            for (const auto& tc : m.tool_calls) {
+                basis += '\x1f';
+                basis += tc.id;
+                basis += '\x1e';
+                basis += tc.arguments;
+            }
             msgDigests += fmt::format(
-                " {}:{}:{}/{:08x}",
+                " {}:{}:{}+{}/{:08x}",
                 i,
                 m.role,
                 m.content.size(),
-                static_cast<uint32_t>(utilxx_base::hash::fnv1a64(m.content) & 0xffffffffu)
+                m.reasoning_content.size(),
+                static_cast<uint32_t>(utilxx_base::hash::fnv1a64(basis) & 0xffffffffu)
             );
         }
         XX_LOGD(

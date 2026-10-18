@@ -1342,38 +1342,10 @@ asio::awaitable<TestResult> run_summarization_tests() {
     //      assistant(压缩总结), 紧接着是未压缩的最近消息 (保留原角色与顺序)
     //   4. thinking 保留 (不剥离, 由 LLM 决定取舍)
 
-    // --- T11a. cleanThinkingMessages: 只保留最新一条 thinking, 其余清空 ---
-    {
-        auto  env = std::make_shared<SummarizationTestEnv>();
-        auto& h   = env->handle;
-        std::vector<neograph::ChatMessage> msgs{
-            makeMsg("user", "u1"),
-            [&]() {
-                auto m              = makeMsg("assistant", "a1");
-                m.reasoning_content = "think-1";
-                return m;
-            }(),
-            [&]() {
-                auto m              = makeMsg("assistant", "a2");
-                m.reasoning_content = "think-2";
-                return m;
-            }(),
-            makeMsg("user", "u2"),
-            makeMsg("assistant", "a3"), // 无 thinking
-        };
-        h->cleanThinkingMessages(msgs);
-        XX_TEST_EXPECT_TRUE(msgs[1].reasoning_content.empty()); // 旧 thinking 清空
-        XX_TEST_EXPECT_EQ(msgs[2].reasoning_content, std::string{"think-2"}); // 最新保留
-        XX_TEST_EXPECT_TRUE(msgs[4].reasoning_content.empty());
-        // 全部无 thinking: 不改变内容
-        std::vector<neograph::ChatMessage> noThink{
-            makeMsg("user", "x"),
-            makeMsg("assistant", "y"),
-        };
-        h->cleanThinkingMessages(noThink);
-        XX_TEST_EXPECT_EQ(noThink[0].content, std::string{"x"});
-        XX_TEST_EXPECT_EQ(noThink[1].content, std::string{"y"});
-    }
+    // --- T11a. 压缩请求保留全部 thinking (与父会话请求逐字节一致) ---
+    // 说明: 压缩请求不再清理 thinking —— send_thinking 打开时请求体里每条
+    // assistant 都带 reasoning_content, 只清一部分会让请求前缀与父会话分叉,
+    // 上游前缀缓存从第一条 assistant 起失效 (见 T11 的 ⑤ 断言)
 
     // --- T11b. fitSummaryMaxTokens: 摘要超长按内置上限 (64K token) 截断 ---
     {
@@ -1412,7 +1384,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
                     "",
                     {makeToolcall("c1", "read_file", R"({"path":"A"})")}
                 );
-                m.reasoning_content = "think-1"; // 旧 thinking: 压缩请求里应被清空
+                m.reasoning_content = "think-1"; // 旧 thinking: 压缩请求里应保留 (前缀一致)
                 return m;
             }(),
             makeToolResult("c1", "read_file", "r1"),
@@ -1470,12 +1442,13 @@ asio::awaitable<TestResult> run_summarization_tests() {
         XX_TEST_EXPECT_EQ(reqMsgs[8].value("content", std::string{}), std::string{"u4"});
         XX_TEST_EXPECT_EQ(reqMsgs[9].value("content", std::string{}), std::string{"a4"});
 
-        // ⑤ thinking: 压缩请求只保留最新一条, 其余清空 (见 cleanThinkingMessages)
-        //    - tc1 上的旧 thinking 已被清空
-        //    - 最新的 a3 thinking 保留 (供子代理了解父会话最近一次推理)
+        // ⑤ thinking: 全部原样保留 (与父会话请求逐字节一致, 前缀缓存才命中)
+        //    - tc1 上的旧 thinking 也保留: 父会话的上一次请求正是这么发的
         for (size_t i = 0; i < reqMsgs.size(); ++i) {
             const auto think = reqMsgs[i].value("reasoning_content", std::string{});
-            if (i == 7) {
+            if (i == 2) {
+                XX_TEST_EXPECT_EQ(think, std::string{"think-1"});
+            } else if (i == 7) {
                 XX_TEST_EXPECT_EQ(think, std::string{"think-3"});
             } else {
                 XX_TEST_EXPECT_TRUE(think.empty());
