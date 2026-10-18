@@ -363,7 +363,9 @@ asio::awaitable<utilxx_base::Json> SessionServerAgentIO::handleInterrupt(
     if (sessForCancel) {
         if (auto sessToken = sessForCancel->getCancelToken()) {
             waitOp = sessToken->fork();
-            waitOp->bind_executor(ex_);
+            // 只需要把 fork 子的取消信号投递到 ex_, 不需要在返回的 strand 上启动
+            // 协程, 因此显式丢弃返回值 (绑定本身已把内部执行器设为该 strand)
+            static_cast<void>(waitOp->bind_executor(ex_));
             if (waitOp->is_cancelled()) {
                 cancelled = true;
             }
@@ -1143,7 +1145,6 @@ void SessionServerAgentIO::onPeerMessage(WireMessage msg) {
 static std::string_view wireSessionIdOf(const WireMessage& msg) {
     return std::visit(
         [](const auto& m) -> std::string_view {
-            using T = std::decay_t<decltype(m)>;
             if constexpr (requires { m.sessionId; }) {
                 return m.sessionId;
             } else {

@@ -1332,9 +1332,15 @@ static asio::awaitable<void> test_run_transport_loop_replace_transport() {
     auto ex = co_await asio::this_coro::executor;
 
     // 第一次连接的传输对 (controller 端 tA / 对端 tAPeer)
-    auto [tA, tAPeer] = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+    // - 逐项取值而不是结构化绑定: GCC 在 -O3 下会把协程帧里的结构化绑定
+    //   (`auto [a, b] = ...`) 误报为 -Wmaybe-uninitialized
+    auto pairA  = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+    auto tA     = std::move(pairA.first);
+    auto tAPeer = std::move(pairA.second);
     // 替换后的新传输对 (controller 端 tB / 对端 tBPeer)
-    auto [tB, tBPeer] = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+    auto pairB  = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+    auto tB     = std::move(pairB.first);
+    auto tBPeer = std::move(pairB.second);
 
     auto io = std::make_shared<TestIO>();
     io->setTransport(std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(tA)));
@@ -2680,9 +2686,11 @@ static asio::awaitable<void> test_session_controller_one_to_many() {
     );
 
     // 1. 接入客户端 1
-    auto [c1, s1] = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
-    auto client1  = std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(c1));
-    auto server1  = std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(s1));
+    // 逐项取值而不是结构化绑定: GCC 在 -O3 下会把协程帧里的结构化绑定
+    // (`auto [a, b] = ...`) 误报为 -Wmaybe-uninitialized
+    auto pair1   = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+    auto client1 = std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(pair1.first));
+    auto server1 = std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(pair1.second));
 
     sc->attachClient(server1);
     XX_TEST_EXPECT_EQ(sc->clientCount(), size_t{1});
@@ -2732,9 +2740,11 @@ static asio::awaitable<void> test_session_controller_one_to_many() {
     }
 
     // 3. 接入客户端 2 (并发连接)
-    auto [c2, s2] = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
-    auto client2  = std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(c2));
-    auto server2  = std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(s2));
+    // 逐项取值而不是结构化绑定: GCC 在 -O3 下会把协程帧里的结构化绑定
+    // (`auto [a, b] = ...`) 误报为 -Wmaybe-uninitialized
+    auto pair2   = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+    auto client2 = std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(pair2.first));
+    auto server2 = std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(pair2.second));
 
     sc->attachClient(server2);
     XX_TEST_EXPECT_EQ(sc->clientCount(), size_t{2});
@@ -2974,14 +2984,18 @@ static asio::awaitable<void> test_agent_server_multi_client() {
     );
 
     // 客户端 1 的 transport pair
-    auto [c1, s1] = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
-    auto client1  = std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(c1));
-    auto server1  = std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(s1));
+    // 逐项取值而不是结构化绑定: GCC 在 -O3 下会把协程帧里的结构化绑定
+    // (`auto [a, b] = ...`) 误报为 -Wmaybe-uninitialized
+    auto pair1   = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+    auto client1 = std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(pair1.first));
+    auto server1 = std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(pair1.second));
 
     // 客户端 2 的 transport pair
-    auto [c2, s2] = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
-    auto client2  = std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(c2));
-    auto server2  = std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(s2));
+    // 逐项取值而不是结构化绑定: GCC 在 -O3 下会把协程帧里的结构化绑定
+    // (`auto [a, b] = ...`) 误报为 -Wmaybe-uninitialized
+    auto pair2   = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+    auto client2 = std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(pair2.first));
+    auto server2 = std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(pair2.second));
 
     // 服务端分别 serve 两个客户端 transport
     asio::co_spawn(
@@ -3029,9 +3043,15 @@ static asio::awaitable<void> test_agent_server_multi_client() {
 
     // 协议版本高于服务端: 明确拒绝, 且不影响其它连接
     {
-        auto [c3, s3] = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
-        auto client3  = std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(c3));
-        auto server3  = std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(s3));
+        // 逐项取值而不是结构化绑定: GCC 在 -O3 下会把协程帧里的结构化绑定
+        // (`auto [a, b] = ...`) 误报为 -Wmaybe-uninitialized
+        auto pair3   = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+        auto client3 = std::shared_ptr<agentxx::agent::AgentIOTransportBase>(
+            std::move(pair3.first)
+        );
+        auto server3 = std::shared_ptr<agentxx::agent::AgentIOTransportBase>(
+            std::move(pair3.second)
+        );
         asio::co_spawn(
             ex,
             keepAliveRun([server, server3]() -> asio::awaitable<void> {
@@ -3576,8 +3596,12 @@ static asio::awaitable<void> test_session_controller_queue_resume_after_abort() 
 
     auto sc = std::make_shared<agentxx::agent::SessionServerAgentIO>(ex, agent, scCfg);
 
-    auto [clientOwn, serverT] = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
-    sc->setTransport(std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT)));
+    // 逐项取值而不是结构化绑定: GCC 在 -O3 下会把协程帧里的结构化绑定
+    // (`auto [a, b] = ...`) 误报为 -Wmaybe-uninitialized
+    auto pairT = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+    sc->setTransport(
+        std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(pairT.second))
+    );
 
     std::vector<agentxx::agent::WireTurnResult> turnResults;
     std::mutex                                  mu;
@@ -3585,7 +3609,7 @@ static asio::awaitable<void> test_session_controller_queue_resume_after_abort() 
     // 传输对象用 shared_ptr 并被下方**分离协程按值捕获**保活: clientLoop 是 detached
     // 的, 其挂起的 recv 有可能在测试函数返回之后才被唤醒 —— 若按引用捕获, 唤醒时
     // 传输对象已析构 (ASan: heap-use-after-free, 与用例本身无关的时序问题)。
-    std::shared_ptr<agentxx::agent::ChannelAgentIOTransport> clientT = std::move(clientOwn);
+    std::shared_ptr<agentxx::agent::ChannelAgentIOTransport> clientT = std::move(pairT.first);
 
     std::atomic<bool> loopExited{false};
     auto clientLoop = [&, clientT]() -> asio::awaitable<void> {
@@ -3936,9 +3960,11 @@ static asio::awaitable<void> test_session_scope_validation() {
         std::weak_ptr<agentxx::agent::BaseAgent>{},
         cfg
     );
-    auto [c1, s1] = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
-    auto client1  = std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(c1));
-    auto server1  = std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(s1));
+    // 逐项取值而不是结构化绑定: GCC 在 -O3 下会把协程帧里的结构化绑定
+    // (`auto [a, b] = ...`) 误报为 -Wmaybe-uninitialized
+    auto pair1   = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+    auto client1 = std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(pair1.first));
+    auto server1 = std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(pair1.second));
     // setTransport: 同时登记为端点主 transport (广播路径 sendToPeer 依赖它)
     sc->setTransport(server1);
     asio::co_spawn(

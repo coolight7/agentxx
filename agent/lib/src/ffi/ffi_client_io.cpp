@@ -250,9 +250,13 @@ void FfiClientAgentIO::onPeerMessage(agent::WireMessage msg) {
                 asio::co_spawn(
                     ex_,
                     [self, ch, id, sessionId = m.sessionId]() mutable -> asio::awaitable<void> {
-                        auto [answered, result] = co_await self->waitHostInterrupt(id, ch);
-                        if (answered) {
-                            self->sendToPeer(agent::WireInterruptResponse{id, std::move(result)});
+                        // 结果接成具名变量而不是结构化绑定: GCC 在 -O3 下会把协程帧里的
+                        // `auto [a, b] = co_await ...` 误报为 -Wmaybe-uninitialized
+                        auto hostReply = co_await self->waitHostInterrupt(id, ch);
+                        if (hostReply.first) {
+                            self->sendToPeer(
+                                agent::WireInterruptResponse{id, std::move(hostReply.second)}
+                            );
                         }
                         co_return;
                     },

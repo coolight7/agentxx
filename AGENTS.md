@@ -58,6 +58,11 @@ int charToLower(int c) {
   写"重"协程时按需打断内联: 自己有源码就用 `AGENTXX_NOINLINE` (`__declspec(noinline)`,
   定义在 agent_runner.h); 对方不能改 (第三方库) 就用**非协程的 noinline 转发函数**
   包住调用 (包装自身没有帧, 见 agent_runner.cpp 的 `engineRunStreamAsync` 等)
+- **结构化绑定与协程帧**: GCC 16 在 `-O3` 下会把协程里的结构化绑定
+  (`auto [a, b] = co_await ...`, 也包括 `auto [a, b] = makePair(...)` 这种非 await 的)
+  误报为 `-Wmaybe-uninitialized` (告警行指向函数末尾, 是绑定用的匿名对象) ——
+  `-O0` 不报, 只在优化构建里出现; 这类位置改成具名变量再逐项取值
+  (`auto v = ...; std::get<0>(v)` / `v.first` / `v.second`) 即可消除
 - 应当使用 [XX_LOG](agent/third_party/cxx_utilxx_base/include/utilxx_base/log.h) 输出日志，而不是 std::cout/cerr，避免影响 TUI 显示
 - 最终的代码实现目标要能稳定运行在生产环境，广泛服务于各种设备和用户，需要仔细思考实现方案、编写足量的常规使用方式测试+各种边界情况测试
 - 非必要不应修改 `agent/third_party/` 内的代码，尽量修改本项目的代码实现功能。如果修改了的话应当删除 build 内对应的目录，让 cmake 重新编译，否则可能不生效

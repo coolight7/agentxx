@@ -1757,8 +1757,16 @@ void test_layered_base_dir_defaults_to_system_dir() {
         (fs::path{loaded.baseDir} / "agentxx-config.yaml").generic_string()
     );
     XX_TEST_EXPECT_EQ(loaded.baseEnvPath, (fs::path{loaded.baseDir} / ".env").generic_string());
-    // overlay 自身的配置始终生效
-    XX_TEST_EXPECT_EQ(loaded.cfg.skillDirPaths.size(), size_t{1});
+    // overlay 自身的配置始终生效: base 层取自真实数据目录, 其内容不确定
+    // (可能自带 skill 项), 故只断言 overlay 的条目出现在合并结果中
+    bool hasOverlayEntry = false;
+    for (const auto& p : loaded.cfg.skillDirPaths) {
+        if (p == "/skills/s1") {
+            hasOverlayEntry = true;
+            break;
+        }
+    }
+    XX_TEST_EXPECT_TRUE(hasOverlayEntry);
 }
 
 void test_layered_overlay_missing() {

@@ -215,11 +215,13 @@ asio::awaitable<bool> SkillMiddlewareHandle::scanSkillsAsync() {
         // catchErrorAsync: 单个技能解析失败仅记录错误, 不影响其他技能
         co_await agentxx::util::catchErrorAsync<bool>(
             [&]() -> asio::awaitable<bool> {
-                const auto [err, metadata] = co_await readSkillFile(candidate.skillDir);
-                if (err.empty()) {
-                    auto withSource            = metadata;
-                    withSource.priority        = candidate.priority;
-                    withSource.source          = candidate.source;
+                // 结果接成具名变量而不是结构化绑定: GCC 在 -O3 下会把协程帧里的
+                // `auto [a, b] = co_await ...` 误报为 -Wmaybe-uninitialized
+                auto loaded = co_await readSkillFile(candidate.skillDir);
+                if (loaded.first.empty()) {
+                    auto withSource                = std::move(loaded.second);
+                    withSource.priority            = candidate.priority;
+                    withSource.source              = candidate.source;
                     loadedData[candidate.skillDir] = std::move(withSource);
                     loadedOrder.push_back(LoadedEntry{
                         .priority = candidate.priority,
@@ -227,7 +229,7 @@ asio::awaitable<bool> SkillMiddlewareHandle::scanSkillsAsync() {
                         .dirpath  = candidate.skillDir,
                     });
                 } else {
-                    loadedErrors[candidate.skillDir] = err;
+                    loadedErrors[candidate.skillDir] = std::move(loaded.first);
                 }
                 co_return true;
             },

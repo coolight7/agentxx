@@ -172,16 +172,6 @@ const UiHitRegion* findRegion(const UiRenderResult& res, std::string_view id) {
     return nullptr;
 }
 
-/// 构造鼠标事件 (左键释放)
-ftxui::Mouse leftClick(int x, int y) {
-    ftxui::Mouse m;
-    m.button = ftxui::Mouse::Left;
-    m.motion = ftxui::Mouse::Released;
-    m.x      = x;
-    m.y      = y;
-    return m;
-}
-
 /// 渲染组件一帧 (布局填充内部框)
 void renderOnce(const ftxui::Component& comp, int w = 60, int h = 12) {
     auto screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(w), ftxui::Dimension::Fixed(h));

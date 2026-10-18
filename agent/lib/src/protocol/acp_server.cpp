@@ -24,8 +24,8 @@ AcpProtocolHandler::AcpProtocolHandler(
     Config                                     config
 ) :
     config_(std::move(config)),
-    agent_(std::move(agent)),
-    agentInfo_(std::move(agentInfo)) {}
+    agentInfo_(std::move(agentInfo)),
+    agent_(std::move(agent)) {}
 
 AcpProtocolHandler::~AcpProtocolHandler() {
     stop();

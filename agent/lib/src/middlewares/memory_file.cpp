@@ -179,8 +179,7 @@ asio::awaitable<std::optional<std::string>>
     }
     auto& cache   = cacheByPathSet_[digest];
     bool  changed = !cache.built;
-    bool           anyOk   = false;
-    bool           anyFail = false;
+    bool  anyOk   = false;
 
     oversizeFiles_.clear();
     std::string logContent;
@@ -193,7 +192,6 @@ asio::awaitable<std::optional<std::string>>
         uint64_t mtime = 0;
         uint64_t size  = 0;
         if (!readFileStamp(absolutePath, mtime, size)) {
-            anyFail = true;
             logContent += fmt::format(
                 "┣━ ❌ Can not stat Memory file: `{}`\n",
                 configuredPath
@@ -219,7 +217,6 @@ asio::awaitable<std::optional<std::string>>
         std::string error;
         auto        content = co_await readFileAsync(absolutePath, error);
         if (!content.has_value()) {
-            anyFail = true;
             logContent += fmt::format(
                 "┣━ ❌ Load Memory file failed: `{}` | {}\n",
                 configuredPath,

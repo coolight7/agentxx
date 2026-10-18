@@ -56,7 +56,9 @@ public:
 
     void bindExecutor(asio::any_io_executor ex) override {
         if (token_) {
-            token_->bind_executor(std::move(ex));
+            // 只做转发: 绑定后的 strand 由被包装令牌内部保存, 这里不需要在它上面
+            // 启动协程, 因此显式丢弃返回值
+            static_cast<void>(token_->bind_executor(std::move(ex)));
         }
     }
 

@@ -112,20 +112,6 @@ std::mutex                        gCaptureMutex;
 std::shared_ptr<CaptureLogSink>   gCaptureSink;
 bool                              gCaptureInstalled = false;
 
-// ---------------------------------------------------------------------------
-// 会话段
-// ---------------------------------------------------------------------------
-
-std::string humanBytes(uint64_t bytes) {
-    if (bytes >= 1024 * 1024) {
-        return fmt::format("{:.1f} MiB", static_cast<double>(bytes) / (1024.0 * 1024.0));
-    }
-    if (bytes >= 1024) {
-        return fmt::format("{:.1f} KiB", static_cast<double>(bytes) / 1024.0);
-    }
-    return fmt::format("{} B", bytes);
-}
-
 } // namespace
 
 // ---------------------------------------------------------------------------

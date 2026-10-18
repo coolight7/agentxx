@@ -45,6 +45,7 @@
 #include <iostream>
 #include <memory>
 #include <set>
+#include <tuple>
 
 namespace agentxx::client {
 
@@ -3256,8 +3257,12 @@ asio::awaitable<utilxx_base::Json> TUIClientAgentIO::handleInterrupt(
     postRedraw();
 
     // 等待一次提交或取消 (通道关闭 = server 过期通知 / TUI 退出 → 按未应答返回)
-    auto values          = utilxx_base::Json::object();
-    auto [ec, gotSubmit] = co_await ch->async_receive(asio::as_tuple(asio::use_awaitable));
+    // - 结果逐项取值而不是结构化绑定: GCC 在 -O3 下会把协程帧里的结构化绑定
+    //   (`auto [a, b] = co_await ...`) 误报为 -Wmaybe-uninitialized
+    auto values    = utilxx_base::Json::object();
+    auto received  = co_await ch->async_receive(asio::as_tuple(asio::use_awaitable));
+    auto ec        = std::get<0>(received);
+    auto gotSubmit = std::move(std::get<1>(received));
     if (!ec && !gotSubmit.cancelled) {
         // 一次提交: values 为控件 id → 值 的对象 (控件形态决定值类型);
         // 语义由 agent 侧消费 (客户端只回传表单值, 不解释业务含义)
@@ -3283,11 +3288,13 @@ asio::awaitable<utilxx_base::Json> TUIClientAgentIO::handleInterrupt(
 }
 
 asio::awaitable<std::optional<std::string>> TUIClientAgentIO::getInput() {
-    auto [ec, line] = co_await inputChannel_->async_receive(asio::as_tuple(asio::use_awaitable));
-    if (ec) {
+    // 结果逐项取值而不是结构化绑定: GCC 在 -O3 下会把协程帧里的结构化绑定
+    // (`auto [a, b] = co_await ...`) 误报为 -Wmaybe-uninitialized
+    auto received = co_await inputChannel_->async_receive(asio::as_tuple(asio::use_awaitable));
+    if (std::get<0>(received)) {
         co_return std::nullopt;
     }
-    co_return std::optional<std::string>(std::move(line));
+    co_return std::optional<std::string>(std::move(std::get<1>(received)));
 }
 
 } // namespace agentxx::client
