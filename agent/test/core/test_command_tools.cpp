@@ -778,12 +778,16 @@ asio::awaitable<void>
     const auto chineseCmd = fmt::format("{} -c 'print(\"\\u4e2d\\u6587\")'", env.python.exeName);
 #endif
 
-    // 预设变量是否真的进入子进程环境 (PYTHONIOENCODING / PYTHONUTF8 / JAVA_TOOL_OPTIONS)
+    // 预设变量是否真的进入子进程环境 (PYTHONIOENCODING / PYTHONUTF8 / JAVA_TOOL_OPTIONS
+    // / AGENTXX_EXEC_*_CODEPAGE)
     // - 内容没有 `$`/反引号/双引号, 两侧都用双引号包裹即可 (bash 不展开, cmd/PowerShell 原样传参)
     const std::string envProbePy
         = "import os;print(os.environ.get('PYTHONIOENCODING'), "
           "os.environ.get('PYTHONUTF8'), "
-          "'-Dstdout.encoding=UTF-8' in os.environ.get('JAVA_TOOL_OPTIONS',''))";
+          "'-Dstdout.encoding=UTF-8' in os.environ.get('JAVA_TOOL_OPTIONS',''), "
+          "'-Dfile.encoding=UTF-8' in os.environ.get('JAVA_TOOL_OPTIONS',''), "
+          "os.environ.get('AGENTXX_EXEC_OEM_CODEPAGE'), "
+          "os.environ.get('AGENTXX_EXEC_ANSI_CODEPAGE'))";
     const auto envProbeCmd = fmt::format("{} -c \"{}\"", env.python.exeName, envProbePy);
 
     auto encodingResult
@@ -803,12 +807,57 @@ asio::awaitable<void>
     XX_TEST_EXPECT_TRUE(chineseResult.find("中文") != std::string::npos);
 
     auto envResult = co_await tool.execute_async(utilxx_base::Json{{"command", envProbeCmd}});
-    // 期望输出 "utf-8 1 True": stdio 编码预设 / UTF-8 模式 / java 编码选项都已下发
-    XX_TEST_EXPECT_TRUE(envResult.find("utf-8 1 True") != std::string::npos);
+    // 期望输出: stdio 编码预设 / UTF-8 模式 / java 输出与默认字符集选项 / 系统代码页
+    // (非 Windows 不下发代码页变量, 探测结果为 None)
+    const auto        pages          = agentxx_execmd_plugin::systemCodePages();
+    const std::string expectedPreset = fmt::format(
+        "utf-8 1 True True {} {}",
+        pages.oem == 0 ? std::string{"None"} : std::to_string(pages.oem),
+        pages.ansi == 0 ? std::string{"None"} : std::to_string(pages.ansi)
+    );
+    XX_TEST_EXPECT_TRUE(envResult.find(expectedPreset) != std::string::npos);
     TEST_INFO << "child preset env: " << utilxx_base::removeBetweenSpace(envResult) << std::endl;
 
     TEST_PASS << "command child process gets utf-8 preset env (stdio encoding + chinese text ok)"
               << std::endl;
+    co_return;
+}
+
+/// 原生工具输出编码: 工具侧不猜测混合编码, 提示词给出的做法必须真的可用
+/// - 依据 execute_command_env.h 的 [consoleEncodingSection]: 原生字节落到文件,
+///   再用系统代码页显式读回 (顺带验证代码页变量与 `[int]` 转换写法)
+/// - 同时断言主程序侧 UTF-8 文本原样通过 (工具侧不做猜测, 不会弄坏正常文本)
+asio::awaitable<void>
+    test_exec_output_encoding_recipe(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+#if XX_IS_WIN_D
+    if (false == utilxx_base::detectPowerShell().available) {
+        TEST_INFO << "skip output encoding recipe test: PowerShell not found" << std::endl;
+        co_return;
+    }
+    const auto pages = agentxx_execmd_plugin::systemCodePages();
+    if (pages.oem == 0 || pages.oem == 65001) {
+        TEST_INFO << "skip output encoding recipe test: system code page is UTF-8" << std::endl;
+        co_return;
+    }
+    const auto command = std::string{
+        "[Console]::Out.WriteLine('utf8-line 中文'); "
+        "$f=Join-Path $env:TEMP 'agentxx_cp_probe.txt'; "
+        "$cp=[Text.Encoding]::GetEncoding([int]$env:AGENTXX_EXEC_OEM_CODEPAGE); "
+        "[IO.File]::WriteAllBytes($f,$cp.GetBytes('native-line 中文')); "
+        "[IO.File]::ReadAllText($f,$cp)"
+    };
+    auto tool   = agentxx::tools::ExecuteWindowsCommandTool{agentContext};
+    auto result = co_await tool.execute_async(utilxx_base::Json{{"command", command}});
+
+    XX_TEST_EXPECT_TRUE(result.find("utf8-line 中文") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(result.find("native-line 中文") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(result.find("\xEF\xBF\xBD") == std::string::npos);
+    TEST_INFO << "output encoding recipe: " << utilxx_base::removeBetweenSpace(result) << std::endl;
+    TEST_PASS << "system code page output read back with explicit encoding" << std::endl;
+#else
+    (void)agentContext;
+    TEST_INFO << "skip output encoding recipe test: Windows only" << std::endl;
+#endif
     co_return;
 }
 
@@ -861,6 +910,26 @@ asio::awaitable<void> test_exec_env_prompt(std::weak_ptr<agentxx::agent::AgentCo
         XX_TEST_EXPECT_TRUE(
             winCmdIt->second.find("## Interpreters detected at startup") != std::string::npos
         );
+        // 原生工具输出编码说明: 系统代码页不是 UTF-8 且 PowerShell 可用时必须有,
+        // 且带上本机代码页数字与切换用的变量名 (引导模型自行切换控制台解码)
+        const auto pages = agentxx_execmd_plugin::systemCodePages();
+        const bool needCodePageNote
+            = pages.oem != 0 && pages.ansi != 0 && (pages.oem != 65001 || pages.ansi != 65001);
+        if (needCodePageNote && env.powershell.available) {
+            XX_TEST_EXPECT_TRUE(
+                winCmdIt->second.find("## Native tool output encoding") != std::string::npos
+            );
+            XX_TEST_EXPECT_TRUE(
+                winCmdIt->second.find(std::to_string(pages.oem)) != std::string::npos
+            );
+            XX_TEST_EXPECT_TRUE(
+                winCmdIt->second.find("AGENTXX_EXEC_OEM_CODEPAGE") != std::string::npos
+            );
+        } else {
+            XX_TEST_EXPECT_TRUE(
+                winCmdIt->second.find("## Native tool output encoding") == std::string::npos
+            );
+        }
     }
     // popen 回退路径的 `command` 描述同样带解释器段 (与直传路径共用环境段)
     const auto winPromptPopen = agentxx_execmd_plugin::windowsToolPrompt(
@@ -1457,6 +1526,7 @@ asio::awaitable<TestResult>
     co_await run(test_detect_powershell);
     co_await run(test_exec_env_detection);
     co_await run(test_exec_env_utf8_preset);
+    co_await run(test_exec_output_encoding_recipe);
     co_await run(test_exec_env_prompt);
     co_await run(test_windows_execute_ps);
 

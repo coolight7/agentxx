@@ -484,6 +484,20 @@ path/to/agentxx_test string_util regex
   - 中断/异常不再需要"整份上下文快照 + 回灌": 会话不随图状态回滚, 节点抛出前已写入的消息保留
 - 测试模块: client 侧 19 个 (含 `banner_art` `update_check` `tui_form` `tui_surface` `tui_theme` `tui_ui_items` `tui_widget`),
   同步组另有 `json` `json_view` `json_reflection` `interrupt_ui` `ui_items` `plugin_runtime` `plugin_sdk` `plugin_bridge`
+- 命令执行环境与输出编码 (2026-10-18, 插件 `agentxx_execute_command`): 子进程固定下发
+  `PYTHONIOENCODING=utf-8` / `PYTHONUTF8=1` / `JAVA_TOOL_OPTIONS` (stdout/stderr 编码 +
+  `-Dfile.encoding=UTF-8`, JDK 17 及以前默认字符集也是 GBK) / `NO_COLOR` / `TERM=dumb` /
+  `PAGER=cat` / `GIT_PAGER=cat` / `PWD`, Windows 另有系统代码页变量
+  `AGENTXX_EXEC_OEM_CODEPAGE` / `AGENTXX_EXEC_ANSI_CODEPAGE`;
+  **原生工具的混合编码输出工具侧不改写** (整段本地编码仍由 `autoConvertToUtf8` 兜底;
+  按行/按段猜测样本太短、uchardet 易认错, 会把正常 UTF-8 文本弄坏), 由提示词引导模型自行处理:
+  ① 命令开头切控制台解码
+  `[Console]::OutputEncoding=[Text.Encoding]::GetEncoding([int]$env:AGENTXX_EXEC_OEM_CODEPAGE); <命令>`
+  (字符串重载在 PowerShell 7 上不接受代码页数字, 必须 `[int]` 转换);
+  ② 原生工具写文件 (cmd 层重定向, 字节直通) 后用显式编码读回, 如
+  `cmd /c "net share > %TEMP%\ns.txt 2>&1"; [IO.File]::ReadAllText("$env:TEMP\ns.txt",[Text.Encoding]::GetEncoding([int]$env:AGENTXX_EXEC_OEM_CODEPAGE))`
+  —— 两个提示词写法都已实测可用; 把原生输出接进 PowerShell 管道/变量会在 PowerShell 侧先解码
+  (留下 U+FFFD, 无法还原)
 
 ## 编译
 - 平台/编译器宏: 顶层 `agent/CMakeLists.txt` 统一判定并经 `_AGENTXX_COMMON_CMAKE_ARGS`

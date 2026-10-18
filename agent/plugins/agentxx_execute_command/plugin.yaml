@@ -1,6 +1,6 @@
 name: agentxx_execute_command
 version: 1.0.0
-description: "Command execution tools: agentxx_execute_bash_command, agentxx_execute_windows_command (PowerShell/cmd via WSL interop); probes python/node/PowerShell at plugin start and injects the results into the tool prompts"
+description: "Command execution tools: agentxx_execute_bash_command, agentxx_execute_windows_command (PowerShell/cmd via WSL interop); probes python/node/PowerShell at plugin start and injects the results into the tool prompts; hands the child process a UTF-8 environment (python/java/node), reports the system code page to commands and tells the model how to decode native tool output itself (mixed encoding output is not rewritten)"
 entry: libagentxx_execute_command.so
 depends:
 # ---- 接口协商 (按前缀归属侧: agent.* 仅 agent 侧检查, client.* 仅 client 侧) ----

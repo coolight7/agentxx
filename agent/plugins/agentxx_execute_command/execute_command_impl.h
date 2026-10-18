@@ -30,6 +30,7 @@
 #pragma once
 
 #include "agentxx/plugin/api/plugin_kit.h"
+#include "execute_command_env.h" // 系统代码页探测 (预设环境变量与工具提示词共用)
 #include "asio/as_tuple.hpp"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -218,8 +219,12 @@ inline std::string truncateStdErr(const std::string& s, long long storeId = -1) 
 //                            文件会解码失败, 需显式指定 encoding
 // - JAVA_TOOL_OPTIONS      : JVM 不看 LC_ALL, System.out/err 的编码由系统代码页决定;
 //                            追加 stdout/stderr 编码属性 (sun.* 供 JDK 18 及以前,
-//                            stdout.*/stderr.* 供 JDK 19+)。代价是该机制本身要求
-//                            JVM 启动时向 stderr 打一行 "Picked up JAVA_TOOL_OPTIONS: ..."
+//                            stdout.*/stderr.* 供 JDK 19+), 以及 file.encoding (默认字符集,
+//                            JDK 18 起已是 UTF-8, 17 及以前跟随系统代码页 —— 不设置时
+//                            new FileReader/PrintWriter 之类按 GBK 读写, 与 python 侧
+//                            的 PYTHONUTF8=1 语义对齐; 代价是读写旧 GBK 文件需显式 Charset)。
+//                            该机制本身要求 JVM 启动时向 stderr 打一行
+//                            "Picked up JAVA_TOOL_OPTIONS: ..."
 // - NO_COLOR=1             : 尊重 NO_COLOR 约定的工具不再输出 ANSI 颜色码
 // - TERM=dumb              : 不假定终端支持光标控制, 进度条/清屏序列自动关闭
 // - PAGER=cat              : less/more 不进入交互分页等待 (否则管道不关闭, 工具挂到超时)
@@ -229,6 +234,12 @@ inline std::string truncateStdErr(const std::string& s, long long storeId = -1) 
 // - PWD                    : 命令实际运行目录 (会话工作目录; 默认即主程序运行目录),
 //                            与子进程 cwd 一致 —— 脚本/构建工具读 $PWD 取当前目录,
 //                            Windows 侧 PowerShell/cmd 不自动设置该变量, 由此补齐
+// - Windows 代码页变量     : AGENTXX_EXEC_OEM_CODEPAGE / AGENTXX_EXEC_ANSI_CODEPAGE
+//                            下发系统代码页数字, 供命令内自行切换控制台编码
+//                            (`[Console]::OutputEncoding=[Text.Encoding]::GetEncoding(
+//                            [int]$env:AGENTXX_EXEC_OEM_CODEPAGE)`; 字符串重载在 .NET
+//                            Core (PowerShell 7) 上不接受代码页数字, 必须转 int);
+//                            提示词写法见 execute_command_env.h 的 [consoleEncodingSection]
 // - Windows                : 不改 locale (控制台代码页与命令自身编码策略共同决定输出,
 //                            强行覆盖会破坏中文等本地命令的输出), 输出编码交给上面
 //                            python / java 的专用变量
@@ -240,11 +251,12 @@ inline std::string truncateStdErr(const std::string& s, long long storeId = -1) 
 // 值为 `/utf-8`); 它会改变用户工程的编译语义 —— 老的 GBK 源文件被当成 UTF-8 读,
 // 中文字面量会静默变化, 因此不作为默认预设下发, 需要时由用户在工程里传 `/utf-8`。
 // MSVC 诊断信息本身的编码跟随控制台代码页 (chcp), LC_ALL/LANG/VSLANG 都无效,
-// 控制台是 UTF-8 时输出即为 UTF-8, 否则由 autoConvertToUtf8 兜底。
+// 控制台是 UTF-8 时输出即为 UTF-8; 整段都是本地编码时由 autoConvertToUtf8 兜底,
+// 混合编码不做猜测 (见下方"命令输出编码: 工具侧不做猜测")。
 //
 // 两条执行路径都要覆盖: boost.process 路径经 [applyExecEnvPolicy] 改写子进程环境表,
 // popen 回退路径无法指定环境, 用 [execEnvCommandPrefix] 在命令字符串前加赋值语句。
-// 两边取同一张 [kEnvPresets] 表, 避免取值不一致。
+// 两边取同一份 [resolveEnvPresets] 结果, 避免取值不一致。
 // ---------------------------------------------------------------------
 
 /// 命令运行目录: workDir (会话工作目录) 优先; 为空时回退主程序进程当前目录
@@ -265,6 +277,14 @@ inline std::string subprocessWorkDir(std::string_view workDir) {
     return ".";
 }
 
+/// 一条已算好取值的预设环境变量 (名 / 取值)
+struct EnvPresetValue {
+    /// 变量名
+    std::string name;
+    /// 下发的取值 (追加项的已有取值已并入, 见 [presetEnvValue])
+    std::string value;
+};
+
 /// 子进程环境策略 (由当前进程环境解析, 两侧路径共用同一份取值)
 struct ExecEnvPolicy {
     /// POSIX: 下发的 LC_ALL 值; Windows: 空串表示不改 locale
@@ -272,6 +292,9 @@ struct ExecEnvPolicy {
 
     /// 下发的 PWD 值 (命令实际运行目录, 见 [subprocessWorkDir])
     std::string pwd;
+
+    /// 下发的预设环境变量 (取值已算好, 见 [resolveEnvPresets])
+    std::vector<EnvPresetValue> presets;
 
     /// 一次性描述 (写日志用: 说明本次运行实际生效的策略)
     std::string describe;
@@ -292,9 +315,13 @@ inline constexpr EnvPreset kEnvPresets[] = {
     {.name = "PYTHONIOENCODING", .value = "utf-8"},
     {.name = "PYTHONUTF8", .value = "1"},
     // 追加而非覆盖: 用户可能用同名变量设置内存/代理等选项, 不能丢
+    // file.encoding: JDK 18 起默认 UTF-8, 17 及以前跟随系统代码页 (如 GBK);
+    // 不设置时 new FileReader/PrintWriter 之类按系统代码页读写, 与 python 侧的
+    // PYTHONUTF8=1 不一致, 故一并固定为 UTF-8 (读写旧 GBK 文件需显式 Charset)
     {.name         = "JAVA_TOOL_OPTIONS",
      .value        = "-Dsun.stdout.encoding=UTF-8 -Dsun.stderr.encoding=UTF-8 "
-                     "-Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8",
+                     "-Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8 "
+                     "-Dfile.encoding=UTF-8",
      .keepExisting = true},
     {.name = "NO_COLOR", .value = "1"},
     {.name = "TERM", .value = "dumb"},
@@ -310,8 +337,8 @@ inline std::string currentEnvValue(std::string_view name) {
 }
 
 /// 预设项的最终取值: 追加项把用户已有取值接在后面 (没有则只用我们自己的取值)
-/// - boost.process 路径直接写入该取值; popen 路径交由 shell 的
-///   `${NAME:+ ...}` / `%NAME%` 完成同样的追加 (见 [execEnvCommandPrefix])
+/// - 两条路径都用算好的取值 (boost.process 写子进程环境表; popen 由
+///   [execEnvCommandPrefix] 在命令前加赋值语句), 取值来源与子进程继承到的一致
 inline std::string presetEnvValue(const EnvPreset& preset) {
     std::string value{preset.value};
     if (false == preset.keepExisting) {
@@ -323,6 +350,27 @@ inline std::string presetEnvValue(const EnvPreset& preset) {
         value += existing;
     }
     return value;
+}
+
+/// 组装本次执行下发的预设清单: 固定表 (含追加规则) + 随机器变化的系统代码页
+/// - 系统代码页变量供命令内自行切换控制台编码用 (见 [kEnvOemCodePage]);
+///   输出侧的逐行还原直接读系统代码页, 不依赖这两个变量
+inline std::vector<EnvPresetValue> resolveEnvPresets() {
+    std::vector<EnvPresetValue> out;
+    out.reserve(std::size(kEnvPresets) + 2);
+    for (const auto& preset : kEnvPresets) {
+        out.push_back({std::string{preset.name}, presetEnvValue(preset)});
+    }
+#if XX_IS_WIN_D
+    const auto pages = systemCodePages();
+    if (pages.oem > 0) {
+        out.push_back({std::string{kEnvOemCodePage}, std::to_string(pages.oem)});
+    }
+    if (pages.ansi > 0) {
+        out.push_back({std::string{kEnvAnsiCodePage}, std::to_string(pages.ansi)});
+    }
+#endif
+    return out;
 }
 
 /// 包成 shell 单引号字面量 (POSIX 命令前缀用): 内嵌单引号写成 `'\''`
@@ -363,18 +411,16 @@ inline std::string currentLocaleEnvValue() {
 ///   当前目录下运行 (popen 回退路径无法改目录, 一律传空), 与 [subprocessWorkDir] 同义
 inline ExecEnvPolicy resolveExecEnvPolicy(std::string_view workDir = {}) {
     ExecEnvPolicy p;
-    p.pwd       = subprocessWorkDir(workDir);
+    p.pwd     = subprocessWorkDir(workDir);
+    p.presets = resolveEnvPresets();
     std::string vars;
-    for (const auto& preset : kEnvPresets) {
+    for (const auto& preset : p.presets) {
         if (false == vars.empty()) {
             vars += ' ';
         }
         vars += preset.name;
         vars += '=';
         vars += preset.value;
-        if (preset.keepExisting) {
-            vars += "(+existing)";
-        }
     }
 #if XX_IS_WIN_D
     vars += " (Windows: locale untouched)";
@@ -393,41 +439,25 @@ inline ExecEnvPolicy resolveExecEnvPolicy(std::string_view workDir = {}) {
 }
 
 /// popen 回退路径: 环境预设的命令前缀 (该路径无法单独指定子进程环境)
-/// - POSIX (`/bin/sh -c`): `export A='1' B="..."; ` 对整条命令生效
-///   (追加项用 `${B:+ $B}` 展开已有值, 值在双引号内不会再被分词)
+/// - POSIX (`/bin/sh -c`): `export A='1' B='...'; ` 对整条命令生效
 /// - Windows (`cmd /c`)  : `set "A=1"&& ...` 对后续命令生效
-///   (追加项用 `%B%` 展开已有值)
+/// - 追加项 (如 JAVA_TOOL_OPTIONS) 的已有取值已在 [resolveEnvPresets] 里并入取值,
+///   两条路径都按普通赋值下发, 不再依赖 shell 自行展开
 inline std::string execEnvCommandPrefix(const ExecEnvPolicy& policy) {
 #if XX_IS_WIN_D
     std::string prefix;
-    for (const auto& preset : kEnvPresets) {
-        const std::string name{preset.name};
-        const std::string value{preset.value};
-        if (preset.keepExisting) {
-            // 整段 if 必须用括号包住: 否则 `&&` 只挂在 else 分支上, 条件成立
-            // (追加) 时后面的赋值会被整段跳过 (cmd 的解析规则)
-            prefix += "(if defined " + name + " (set \"" + name + '=' + value + " %" + name
-                      + "%\") else (set \"" + name + '=' + value + "\"))&& ";
-        } else {
-            // 引号形式 `set "NAME=value"`: 取值可含空格, 且不会把分隔符前的空格并进取值
-            prefix += "set \"" + name + '=' + value + "\"&& ";
-        }
+    for (const auto& preset : policy.presets) {
+        // 引号形式 `set "NAME=value"`: 取值可含空格, 且不会把分隔符前的空格并进取值
+        prefix += "set \"" + preset.name + '=' + preset.value + "\"&& ";
     }
     // PWD: 命令运行目录 (取值来自会话工作目录, 可能与主程序目录不同)
     prefix += "set \"PWD=" + policy.pwd + "\"&& ";
     return prefix;
 #else
     std::string prefix = "export ";
-    for (const auto& preset : kEnvPresets) {
-        const std::string name{preset.name};
-        const std::string value{preset.value};
-        if (preset.keepExisting) {
-            // 已有同名变量时追加在后面 (已在双引号内, 不重新分词);
-            // `:+` 只在已有值非空时展开, 变量的取值本身前面不加空格
-            prefix += name + "=\"" + value + "${" + name + ":+ $" + name + "}\" ";
-        } else {
-            prefix += name + "='" + value + "' ";
-        }
+    for (const auto& preset : policy.presets) {
+        // 取值可能含空格/引号 (含并入的用户取值), 按 shell 单引号字面量转义
+        prefix += preset.name + "=" + shellSingleQuote(preset.value) + " ";
     }
     if (false == policy.locale.empty()) {
         prefix += "LC_ALL='" + policy.locale + "' ";
@@ -438,6 +468,19 @@ inline std::string execEnvCommandPrefix(const ExecEnvPolicy& policy) {
     return prefix;
 #endif
 }
+
+// ---------------------------------------------------------------------
+// 命令输出编码: 工具侧不做猜测
+//
+// 一次命令的输出可能是混合编码: 主程序侧文本 (PowerShell 自身输出) 是 UTF-8, 而原生
+// Windows 工具 (net / tasklist / ipconfig ...) 的中文按系统代码页写出原始字节 ——
+// PowerShell 在输出重定向时原样透传这些字节, 两者混在同一段缓冲区里。这种混合无法
+// 可靠判定: 按行/按段切分时样本太短, 字符集判定 (uchardet) 经常认错, 误转会把本来
+// 正常的 UTF-8 部分也弄坏, 因此工具侧只保留原有的整段 [autoConvertToUtf8] 兜底
+// (整段都是本地编码时有效), 混合输出交给提示词引导模型自行处理:
+// - 需要读到正确中文时, 在命令内切换控制台解码 (见 execute_command_env.h 的
+//   [consoleEncodingSection]), 或把输出重定向到文件后用显式编码读回。
+// ---------------------------------------------------------------------
 
 #if defined(BOOST_PROCESS_V2_PROCESS_HPP)
 
@@ -464,15 +507,15 @@ inline void killProcGroup(boost::process::process& proc, void* winJob = nullptr)
 inline void closePipesAfterKill(asio::readable_pipe& outpip, asio::readable_pipe& errpip);
 
 /// 把预设项写入子进程环境表 (boost.process 路径; 覆盖/追加同名继承值)
-/// - 取值与 popen 路径同源 (同一张 [kEnvPresets] 表 + [presetEnvValue] 的追加规则)
+/// - 取值与 popen 路径同源 (同一份 [resolveEnvPresets] 结果)
 inline void applyExecEnvPolicy(
     std::unordered_map<boost::process::environment::key, boost::process::environment::value>& env,
     const ExecEnvPolicy&                                                                     policy
 ) {
     using EnvKey   = boost::process::environment::key;
     using EnvValue = boost::process::environment::value;
-    for (const auto& preset : kEnvPresets) {
-        env[EnvKey{preset.name}] = EnvValue{presetEnvValue(preset)};
+    for (const auto& preset : policy.presets) {
+        env[EnvKey{preset.name}] = EnvValue{preset.value};
     }
     // PWD: 命令运行目录 (与子进程 cwd 一致; 取值见 [subprocessWorkDir])
     env[EnvKey{"PWD"}] = EnvValue{policy.pwd};

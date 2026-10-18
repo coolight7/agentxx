@@ -33,6 +33,13 @@
 
 #if XX_IS_WIN_D
 #include <cstdio>
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
 #else
 #include <climits>
 #include <fcntl.h>
@@ -370,6 +377,68 @@ inline std::string interpreterEnvSection(const ExecEnvInfo& env) {
     return out;
 }
 
+/// 系统代码页 (Windows 取值; 其他平台恒为 0)
+/// - ANSI: 本地单字节编码 (GetACP), OEM: 控制台编码 (GetOEMCP); 中文 Windows 两者都是 936
+/// - 用途: 原生工具 (net / tasklist / ipconfig ...) 把中文按系统代码页写进管道,
+///   读取侧据此还原 (见 execute_command_impl.h 的 [convertOutputToUtf8]);
+///   命令内也可用它切换控制台编码 (见 [consoleEncodingSection])
+struct SystemCodePages {
+    /// ANSI 代码页 (GetACP); 0 表示本平台不适用
+    unsigned int ansi = 0;
+    /// OEM 代码页 (GetOEMCP); 0 表示本平台不适用
+    unsigned int oem = 0;
+};
+
+inline SystemCodePages systemCodePages() {
+    SystemCodePages pages;
+#if XX_IS_WIN_D
+    pages.ansi = static_cast<unsigned int>(::GetACP());
+    pages.oem  = static_cast<unsigned int>(::GetOEMCP());
+#endif
+    return pages;
+}
+
+/// 系统代码页的下发变量名 (子进程可读; 命令内切换控制台编码时不必硬编码数字)
+inline constexpr std::string_view kEnvAnsiCodePage = "AGENTXX_EXEC_ANSI_CODEPAGE";
+inline constexpr std::string_view kEnvOemCodePage  = "AGENTXX_EXEC_OEM_CODEPAGE";
+
+/// 原生工具输出编码说明段: 追加到 Windows 侧 `command` 参数描述
+/// - 只在"会用到"的机器上追加: PowerShell 可用 (cmd.exe 直通字节, 无此问题) 且
+///   系统代码页不是 UTF-8 (65001) 时才有该问题
+/// - 工具侧不猜测混合编码 (按行/按段切分时样本太短, 字符集判定容易认错, 误转会把
+///   本来正常的 UTF-8 文本也弄坏), 因此这里给出模型可自行执行的两条路:
+///   命令内切换控制台解码 / 落文件后用显式编码读回
+inline std::string consoleEncodingSection(const ExecEnvInfo& env) {
+    if (false == env.powershell.available) {
+        return {};
+    }
+    const auto pages = systemCodePages();
+    if (pages.oem == 0 || pages.ansi == 0) {
+        return {};
+    }
+    if (pages.oem == 65001 && pages.ansi == 65001) {
+        return {};
+    }
+    return fmt::format(
+        "\n\n## Native tool output encoding\n"
+        "Native Windows tools (net, tasklist, ipconfig ...) print text in the system code page "
+        "(this machine: OEM {} / ANSI {}), not UTF-8, and this tool does not convert mixed "
+        "output for you (guessing would corrupt normal text).\n"
+        "- Garbled output? Switch the console decoding at the very start of the command:\n"
+        "  `[Console]::OutputEncoding=[Text.Encoding]::GetEncoding([int]$env:AGENTXX_EXEC_OEM_CODEPAGE); "
+        "net share`\n"
+        "- Or keep PowerShell decoding out of the way: let the tool write into a file at cmd "
+        "level, then read that file back with an explicit encoding:\n"
+        "  `cmd /c \"net share > %TEMP%\\ns.txt 2>&1\"; "
+        "[IO.File]::ReadAllText(\"$env:TEMP\\ns.txt\", "
+        "[Text.Encoding]::GetEncoding([int]$env:AGENTXX_EXEC_OEM_CODEPAGE))`\n"
+        "- `$env:AGENTXX_EXEC_ANSI_CODEPAGE` holds the ANSI code page (try it if the OEM one "
+        "still looks wrong); `chcp` alone does not change how PowerShell decodes child output.\n",
+        pages.oem,
+        pages.ansi
+    );
+}
+
 /// Windows 命令工具 depict: 标明实际执行器 (PowerShell 及版本号, 或回退 cmd.exe)
 inline std::string winCommandToolDepict(const ExecEnvInfo& env) {
     if (env.powershell.available) {
@@ -412,6 +481,7 @@ Write plain PowerShell code. Syntax essentials (follow them to avoid quoting/`$`
             ps.exeName
         );
         out += interpreterEnvSection(env);
+        out += consoleEncodingSection(env);
         return out;
     }
 
@@ -436,6 +506,7 @@ cmd.exe syntax essentials:
         winCommandPrefix(env)
     );
     out += interpreterEnvSection(env);
+    out += consoleEncodingSection(env);
     return out;
 }
 
@@ -491,6 +562,7 @@ Format: {} -NoProfile -Command "<powershell code>"
             );
         }
         out += interpreterEnvSection(env);
+        out += consoleEncodingSection(env);
         return out;
     }
 
@@ -526,6 +598,7 @@ If the user provides a Windows path (e.g. `C:\...` or `D:\...`), convert it to a
 - `notepad.exe C:\file.txt`: Open file in Notepad)";
     }
     out += interpreterEnvSection(env);
+    out += consoleEncodingSection(env);
     return out;
 }
 
