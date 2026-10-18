@@ -520,28 +520,21 @@ Row renderTable(const Item& item, const UiRenderCtx& ctx) {
     }
 
     std::vector<int> fixed(n, 0);
-    int              autoCount = 0;
     for (size_t c = 0; c < n; ++c) {
         const auto& width = item.columns[c].width;
-        if (width.isValue()) {
+        if (width.isValue() || width.isPercent()) {
+            // 数值列与比例列都直接换算成列数; 省略/auto 列保持 0, 由下面按权重分配
             fixed[c] = std::max(1, colsOf(width, avail, true));
-        } else if (width.isPercent()) {
-            fixed[c] = std::max(1, colsOf(width, avail, true));
-        } else {
-            ++autoCount;
         }
     }
     // auto 列按自然宽度作权重 (内容越长分得越多), 都没有内容时等分
     std::vector<int> weights(n, 0);
-    int              naturalSum = 0;
     for (size_t c = 0; c < n; ++c) {
         if (fixed[c] > 0) {
             continue;
         }
-        weights[c]  = std::max(1, natural[c]);
-        naturalSum += weights[c];
+        weights[c] = std::max(1, natural[c]);
     }
-    (void)naturalSum;
     const auto widths = layoutColumnWidths(fixed, weights, avail, kGap);
 
     Elements                 lines;

@@ -31,6 +31,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <vector>
 
 namespace {
@@ -494,17 +495,23 @@ asio::awaitable<void> test_parallel_cancel_keeps_completed() {
         co_return;
     };
 
-    auto [order, turnExc, turnResult, watcherExc]
-        = co_await asio::experimental::make_parallel_group(
-              asio::co_spawn(
-                  ex,
-                  agent.runTurnAsync("toolcall_par_4", "Run tools", nullptr),
-                  asio::deferred
-              ),
-              asio::co_spawn(ex, cancelWatcher(), asio::deferred)
-        )
-              .async_wait(asio::experimental::wait_for_all(), asio::use_awaitable);
-    (void)order;
+    // 结果逐项取值而不是结构化绑定: GCC 在 -O3 下会把协程帧里的
+    // `auto [a, b] = co_await ...` 误报为 -Wmaybe-uninitialized
+    auto group = asio::experimental::make_parallel_group(
+        asio::co_spawn(
+            ex,
+            agent.runTurnAsync("toolcall_par_4", "Run tools", nullptr),
+            asio::deferred
+        ),
+        asio::co_spawn(ex, cancelWatcher(), asio::deferred)
+    );
+    auto  waitResult = co_await group.async_wait(
+        asio::experimental::wait_for_all(),
+        asio::use_awaitable
+    );
+    auto& turnExc    = std::get<1>(waitResult);
+    auto& turnResult = std::get<2>(waitResult);
+    auto& watcherExc = std::get<3>(waitResult);
 
     XX_TEST_EXPECT_TRUE(turnExc == nullptr);
     XX_TEST_EXPECT_TRUE(watcherExc == nullptr);

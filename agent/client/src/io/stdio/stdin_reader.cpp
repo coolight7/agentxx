@@ -5,6 +5,7 @@
 #include "utilxx_base/asio_error.h"
 #include <iostream>
 #include <mutex>
+#include <tuple>
 #include <utility>
 
 namespace agentxx::client {
@@ -48,11 +49,13 @@ asio::awaitable<std::optional<std::string>> StdinReader::readLine() {
     if (eof_ && !channel_->ready()) {
         co_return std::nullopt;
     }
-    auto [ec, line] = co_await channel_->async_receive(asio::as_tuple(asio::use_awaitable));
-    if (ec) {
+    // 结果接成具名变量而不是结构化绑定: GCC 在 -O3 下会把协程帧里的
+    // `auto [a, b] = co_await ...` 误报为 -Wmaybe-uninitialized
+    auto received = co_await channel_->async_receive(asio::as_tuple(asio::use_awaitable));
+    if (std::get<0>(received)) {
         co_return std::nullopt;
     }
-    co_return std::optional<std::string>(std::move(line));
+    co_return std::optional<std::string>(std::move(std::get<1>(received)));
 }
 
 bool StdinReader::available() const {

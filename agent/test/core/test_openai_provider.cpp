@@ -2681,7 +2681,8 @@ asio::awaitable<void>
 // ---------------------------------------------------------------------------
 
 static std::string chunkFrame(const std::string& data) {
-    char hexBuf[16];
+    // 缓冲区要放得下完整长度: %zx 最多 16 位十六进制 + CRLF + 结尾 '\0'
+    char hexBuf[32];
     snprintf(hexBuf, sizeof(hexBuf), "%zx\r\n", data.size());
     return std::string(hexBuf) + data + "\r\n";
 }

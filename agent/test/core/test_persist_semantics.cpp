@@ -267,19 +267,19 @@ void test_persist_degradation_tip() {
 
         session->appendViewMessage(makeMsg("d1", "not saved"));
         session->persistNow("user-input");
-        XX_TEST_EXPECT_EQ(io->tipCount(), 1);
+        XX_TEST_EXPECT_EQ(io->tipCount(), size_t{1});
         XX_TEST_EXPECT_TRUE(io->lastTipText().find("Persistence degraded") != std::string::npos);
 
         // 同一原因不再重复提示
         session->appendViewMessage(makeMsg("d2", "still not saved"));
         session->persistNow("turn-end");
-        XX_TEST_EXPECT_EQ(io->tipCount(), 1);
+        XX_TEST_EXPECT_EQ(io->tipCount(), size_t{1});
     }
 
     // 外部锁释放后恢复正常写入: 不再提示
     session->appendViewMessage(makeMsg("d3", "saved"));
     session->persistNow("turn-end");
-    XX_TEST_EXPECT_EQ(io->tipCount(), 1);
+    XX_TEST_EXPECT_EQ(io->tipCount(), size_t{1});
 
     // 库内确实落盘了锁释放后的消息 (前两条因写失败丢失, 不静默假装成功)
     auto loaded = mgr.sessionStore->loadSession(sid);

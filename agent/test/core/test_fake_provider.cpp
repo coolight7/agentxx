@@ -139,16 +139,6 @@ bool hasToolDefinition(const neograph::CompletionParams& params, std::string_vie
     return false;
 }
 
-/// 请求体里第一条指定角色的消息内容 (无则返回空)
-std::string firstMessageOfRole(const neograph::CompletionParams& params, std::string_view role) {
-    for (const auto& msg : params.messages) {
-        if (msg.role == role) {
-            return msg.content;
-        }
-    }
-    return {};
-}
-
 int64_t steadyNowMs() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
                std::chrono::steady_clock::now().time_since_epoch()

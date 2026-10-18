@@ -75,15 +75,6 @@ void removeTempRoot(const std::string& root) {
     }
 }
 
-/// 非阻塞等待 (推进 io 轮转)
-asio::awaitable<void> spin(std::chrono::milliseconds total) {
-    auto ex = co_await asio::this_coro::executor;
-    asio::steady_timer t(ex);
-    t.expires_after(total);
-    utilxx_base::AsioErrorCode ec;
-    co_await t.async_wait(asio::redirect_error(asio::use_awaitable, ec));
-}
-
 /// 等待条件成立
 asio::awaitable<bool> waitFor(std::function<bool()> cond, int timeoutMs = 8000, int pollMs = 10) {
     auto ex       = co_await asio::this_coro::executor;

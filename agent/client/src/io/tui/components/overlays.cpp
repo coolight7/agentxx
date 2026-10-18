@@ -2729,9 +2729,9 @@ void OverlayOptions::resolveFractions(double& wFrac, double& hFrac) const {
 }
 
 TextOverlay::TextOverlay(TUICtx& ctx, std::string title, std::string content, bool markdown) :
-    ctx_(ctx),
     title_(std::move(title)),
     content_(std::move(content)),
+    ctx_(ctx),
     markdown_(markdown) {
     scrollable_ = std::make_shared<Scrollable>([this]() -> std::vector<ScrollItem> {
         return buildItems();
