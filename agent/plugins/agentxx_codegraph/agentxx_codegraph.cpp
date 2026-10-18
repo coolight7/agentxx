@@ -73,8 +73,6 @@ struct ToolPrompt {
     std::string limit;
     std::string symbol;
     std::string maxDepth;
-    std::string path;
-    std::string incremental;
     std::string from;
     std::string to;
 };
@@ -89,7 +87,7 @@ static ToolPrompt defaultToolPrompt(std::string_view name) {
               "Returns plain multi-line text: one block per symbol (\"[N] kind name\" plus "
               "indented file:line and signature lines).";
         p.query = "Symbol name to search for. Supports partial matching.";
-        p.limit = "Maximum number of results to return. Default: 20.";
+        p.limit = "Maximum number of symbols to return. Default `20`.";
     } else if (name == "agentxx_codegraph_context") {
         p.depict
             = "Get rich context for a code symbol: its definition, callers, callees, and methods "
@@ -97,32 +95,32 @@ static ToolPrompt defaultToolPrompt(std::string_view name) {
               "Useful for understanding how a function or class is used throughout the codebase.\n"
               "Returns plain multi-line text with \"symbol:\", \"callers (N):\", \"callees "
               "(N):\", \"methods (N):\" and \"edges (N):\" sections.";
-        p.symbol   = "Fully qualified symbol name (e.g. `MyClass::myMethod`).";
-        p.limit    = "Maximum results per category. Default: 10.";
-        p.maxDepth = "Maximum call-graph traversal depth. Default: 3.";
+        p.symbol   = "Symbol name, plain (`myMethod`) or qualified (`MyClass::myMethod`).";
+        p.limit    = "Maximum results per section (callers / callees / methods / edges). Default `10`.";
+        p.maxDepth = "Maximum call-graph traversal depth. Default `3`.";
     } else if (name == "agentxx_codegraph_callers") {
         p.depict
             = "Find all functions that call a given symbol (reverse call-graph traversal).\n"
               "Use this to understand what depends on a function before modifying it.\n"
               "Returns plain multi-line text: \"Callers (N):\" followed by one block per symbol.";
-        p.symbol   = "Symbol name to find callers for.";
-        p.maxDepth = "Maximum traversal depth. Default: 3.";
+        p.symbol   = "Symbol name to find callers for (plain or qualified).";
+        p.maxDepth = "Maximum traversal depth. Default `3`.";
     } else if (name == "agentxx_codegraph_callees") {
         p.depict
             = "Find all functions that a given symbol calls (forward call-graph traversal).\n"
               "Use this to understand a function's dependencies.\n"
               "Returns plain multi-line text: \"Callees (N):\" followed by one block per symbol.";
-        p.symbol   = "Symbol name to find callees for.";
-        p.maxDepth = "Maximum traversal depth. Default: 3.";
+        p.symbol   = "Symbol name to find callees for (plain or qualified).";
+        p.maxDepth = "Maximum traversal depth. Default `3`.";
     } else if (name == "agentxx_codegraph_path") {
         p.depict
             = "Find the call-chain path between two symbols in the call graph.\n"
               "Use this to trace how execution flows from one function to another.\n"
               "Returns plain multi-line text: \"Path (N):\" followed by one block per symbol on "
               "the path.";
-        p.from     = "Starting symbol name.";
-        p.to       = "Target symbol name.";
-        p.maxDepth = "Maximum search depth. Default: 10.";
+        p.from     = "Starting symbol name (plain or qualified).";
+        p.to       = "Target symbol name (plain or qualified).";
+        p.maxDepth = "Maximum search depth. Default `10`.";
     }
     return p;
 }
@@ -221,12 +219,6 @@ static void
         }
         if (!p.maxDepth.empty()) {
             args["max_depth"] = p.maxDepth;
-        }
-        if (!p.path.empty()) {
-            args["path"] = p.path;
-        }
-        if (!p.incremental.empty()) {
-            args["incremental"] = p.incremental;
         }
         if (!p.from.empty()) {
             args["from"] = p.from;
@@ -357,6 +349,7 @@ static std::string
 struct SchemaBuilder {
     codegraph::Json properties = codegraph::Json::object();
 
+    /// 字符串参数 (无默认值)
     void str(std::string_view key, std::string_view desc) {
         properties[std::string(key)] = codegraph::Json{
             {"type",        "string"         },
@@ -364,10 +357,12 @@ struct SchemaBuilder {
         };
     }
 
-    void num(std::string_view key, std::string_view desc) {
+    /// 整数参数 (带默认值)
+    void integer(std::string_view key, std::string_view desc, int64_t defVal) {
         properties[std::string(key)] = codegraph::Json{
-            {"type",        "number"         },
-            {"description", std::string(desc)}
+            {"type",        "integer"        },
+            {"description", std::string(desc)},
+            {"default",     defVal           }
         };
     }
 
@@ -391,20 +386,12 @@ static void registerAllTools(PluginCtx& ctx) {
 
     // agentxx_codegraph_search
     {
-        auto        p = ctx.toolPrompt("agentxx_codegraph_search");
-        std::string depict
-            = p.depict.empty() ? defaultToolPrompt("agentxx_codegraph_search").depict : p.depict;
+        auto        p   = ctx.toolPrompt("agentxx_codegraph_search");
+        const auto  def = defaultToolPrompt("agentxx_codegraph_search");
+        std::string depict = p.depict.empty() ? def.depict : p.depict;
         SchemaBuilder b;
-        b.str(
-            "query",
-            p.args.contains("query") ? p.args["query"]
-                                     : "Symbol name to search for. Supports partial matching."
-        );
-        b.num(
-            "limit",
-            p.args.contains("limit") ? p.args["limit"]
-                                     : "Maximum number of results to return. Default: 20."
-        );
+        b.str("query", p.args.contains("query") ? p.args["query"] : def.query);
+        b.integer("limit", p.args.contains("limit") ? p.args["limit"] : def.limit, 20);
         agentxx::plugin::blocking_tool(
             ctx,
             "agentxx_codegraph_search",
@@ -419,7 +406,9 @@ static void registerAllTools(PluginCtx& ctx) {
                 int64_t limit64 = args.value<int64_t>("limit", 20);
                 auto    r       = c.mgr->searchSymbols(query, static_cast<int>(limit64));
                 if (!r.success) {
-                    return fmt::format("error: {}", r.error);
+                    throw std::runtime_error{
+                        r.error.empty() ? "CodeGraph request failed" : r.error
+                    };
                 }
                 std::string out = fmt::format("Symbols ({}):", r.nodes.size());
                 if (r.nodes.empty()) {
@@ -453,20 +442,16 @@ static void registerAllTools(PluginCtx& ctx) {
 
     // agentxx_codegraph_context
     {
-        auto        p = ctx.toolPrompt("agentxx_codegraph_context");
-        std::string depict
-            = p.depict.empty() ? defaultToolPrompt("agentxx_codegraph_context").depict : p.depict;
+        auto        p   = ctx.toolPrompt("agentxx_codegraph_context");
+        const auto  def = defaultToolPrompt("agentxx_codegraph_context");
+        std::string depict = p.depict.empty() ? def.depict : p.depict;
         SchemaBuilder b;
-        b.str("symbol", p.args.contains("symbol") ? p.args["symbol"] : "Target symbol name.");
-        b.num(
-            "limit",
-            p.args.contains("limit") ? p.args["limit"]
-                                     : "Maximum results per category. Default: 10."
-        );
-        b.num(
+        b.str("symbol", p.args.contains("symbol") ? p.args["symbol"] : def.symbol);
+        b.integer("limit", p.args.contains("limit") ? p.args["limit"] : def.limit, 10);
+        b.integer(
             "max_depth",
-            p.args.contains("max_depth") ? p.args["max_depth"]
-                                         : "Maximum traversal depth. Default: 3."
+            p.args.contains("max_depth") ? p.args["max_depth"] : def.maxDepth,
+            3
         );
         agentxx::plugin::blocking_tool(
             ctx,
@@ -487,7 +472,9 @@ static void registerAllTools(PluginCtx& ctx) {
                     static_cast<int>(depth64)
                 );
                 if (!r.success) {
-                    return fmt::format("error: {}", r.error);
+                    throw std::runtime_error{
+                        r.error.empty() ? "CodeGraph request failed" : r.error
+                    };
                 }
                 return contextToText(r.context, c.mgr.get());
             },
@@ -498,15 +485,15 @@ static void registerAllTools(PluginCtx& ctx) {
 
     // agentxx_codegraph_callers
     {
-        auto        p = ctx.toolPrompt("agentxx_codegraph_callers");
-        std::string depict
-            = p.depict.empty() ? defaultToolPrompt("agentxx_codegraph_callers").depict : p.depict;
+        auto        p   = ctx.toolPrompt("agentxx_codegraph_callers");
+        const auto  def = defaultToolPrompt("agentxx_codegraph_callers");
+        std::string depict = p.depict.empty() ? def.depict : p.depict;
         SchemaBuilder b;
-        b.str("symbol", p.args.contains("symbol") ? p.args["symbol"] : "Target symbol name.");
-        b.num(
+        b.str("symbol", p.args.contains("symbol") ? p.args["symbol"] : def.symbol);
+        b.integer(
             "max_depth",
-            p.args.contains("max_depth") ? p.args["max_depth"]
-                                         : "Maximum traversal depth. Default: 3."
+            p.args.contains("max_depth") ? p.args["max_depth"] : def.maxDepth,
+            3
         );
         agentxx::plugin::blocking_tool(
             ctx,
@@ -522,7 +509,9 @@ static void registerAllTools(PluginCtx& ctx) {
                 int64_t depth64 = args.value<int64_t>("max_depth", 3);
                 auto    r       = c.mgr->getCallers(symbol, static_cast<int>(depth64));
                 if (!r.success) {
-                    return fmt::format("error: {}", r.error);
+                    throw std::runtime_error{
+                        r.error.empty() ? "CodeGraph request failed" : r.error
+                    };
                 }
                 return impactToText("Callers", r.impact, c.mgr.get());
             },
@@ -533,15 +522,15 @@ static void registerAllTools(PluginCtx& ctx) {
 
     // agentxx_codegraph_callees
     {
-        auto        p = ctx.toolPrompt("agentxx_codegraph_callees");
-        std::string depict
-            = p.depict.empty() ? defaultToolPrompt("agentxx_codegraph_callees").depict : p.depict;
+        auto        p   = ctx.toolPrompt("agentxx_codegraph_callees");
+        const auto  def = defaultToolPrompt("agentxx_codegraph_callees");
+        std::string depict = p.depict.empty() ? def.depict : p.depict;
         SchemaBuilder b;
-        b.str("symbol", p.args.contains("symbol") ? p.args["symbol"] : "Target symbol name.");
-        b.num(
+        b.str("symbol", p.args.contains("symbol") ? p.args["symbol"] : def.symbol);
+        b.integer(
             "max_depth",
-            p.args.contains("max_depth") ? p.args["max_depth"]
-                                         : "Maximum traversal depth. Default: 3."
+            p.args.contains("max_depth") ? p.args["max_depth"] : def.maxDepth,
+            3
         );
         agentxx::plugin::blocking_tool(
             ctx,
@@ -557,7 +546,9 @@ static void registerAllTools(PluginCtx& ctx) {
                 int64_t depth64 = args.value<int64_t>("max_depth", 3);
                 auto    r       = c.mgr->getCallees(symbol, static_cast<int>(depth64));
                 if (!r.success) {
-                    return fmt::format("error: {}", r.error);
+                    throw std::runtime_error{
+                        r.error.empty() ? "CodeGraph request failed" : r.error
+                    };
                 }
                 return impactToText("Callees", r.impact, c.mgr.get());
             },
@@ -568,16 +559,16 @@ static void registerAllTools(PluginCtx& ctx) {
 
     // agentxx_codegraph_path
     {
-        auto        p = ctx.toolPrompt("agentxx_codegraph_path");
-        std::string depict
-            = p.depict.empty() ? defaultToolPrompt("agentxx_codegraph_path").depict : p.depict;
+        auto        p   = ctx.toolPrompt("agentxx_codegraph_path");
+        const auto  def = defaultToolPrompt("agentxx_codegraph_path");
+        std::string depict = p.depict.empty() ? def.depict : p.depict;
         SchemaBuilder b;
-        b.str("from", p.args.contains("from") ? p.args["from"] : "Starting symbol name.");
-        b.str("to", p.args.contains("to") ? p.args["to"] : "Target symbol name.");
-        b.num(
+        b.str("from", p.args.contains("from") ? p.args["from"] : def.from);
+        b.str("to", p.args.contains("to") ? p.args["to"] : def.to);
+        b.integer(
             "max_depth",
-            p.args.contains("max_depth") ? p.args["max_depth"]
-                                         : "Maximum search depth. Default: 10."
+            p.args.contains("max_depth") ? p.args["max_depth"] : def.maxDepth,
+            10
         );
         agentxx::plugin::blocking_tool(
             ctx,
@@ -589,12 +580,14 @@ static void registerAllTools(PluginCtx& ctx) {
                 std::string                from = args.value<std::string>("from", std::string{});
                 std::string                to   = args.value<std::string>("to", std::string{});
                 if (from.empty() || to.empty()) {
-                    return "error: Args `from` and `to` are required";
+                    throw std::invalid_argument{"Args `from` and `to` are both required"};
                 }
                 int64_t depth64 = args.value<int64_t>("max_depth", 10);
                 auto    r       = c.mgr->findPath(from, to, static_cast<int>(depth64));
                 if (!r.success) {
-                    return fmt::format("error: {}", r.error);
+                    throw std::runtime_error{
+                        r.error.empty() ? "CodeGraph request failed" : r.error
+                    };
                 }
                 std::string out = fmt::format("Path ({}):", r.path.size());
                 if (r.path.empty()) {

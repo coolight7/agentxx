@@ -329,8 +329,8 @@ inline ExecEnvInfo detectExecEnv() {
 // 提示词文本
 // ---------------------------------------------------------------------------
 
-/// `all_output` 参数描述 (bash / windows 工具共用)
-inline constexpr std::string_view kAllOutputArgDesc =
+/// `full_output` 参数描述 (bash / windows 工具共用)
+inline constexpr std::string_view kFullOutputArgDesc =
     R"(Default `true`.
 `true`: Always return stdout and stderr output.
 `false`: Only return output when the command fails.)";
@@ -602,7 +602,7 @@ If the user provides a Windows path (e.g. `C:\...` or `D:\...`), convert it to a
     return out;
 }
 
-/// bash 工具 (POSIX) 提示词: depict + `command`/`all_output`/`timeout` 描述
+/// bash 工具 (POSIX) 提示词: depict + `command`/`full_output`/`timeout` 描述
 /// - `command` 描述含系统名、WSL 标记与探测到的解释器列表
 inline ExecPromptText bashToolPrompt(const ExecEnvInfo& env) {
     ExecPromptText prompt;
@@ -618,12 +618,12 @@ The command string is passed as-is to `bash -c` (no extra escaping layer):
         env.isWSL ? " (WSL)" : "",
         interpreterEnvSection(env)
     );
-    prompt.args["all_output"] = std::string{kAllOutputArgDesc};
+    prompt.args["full_output"] = std::string{kFullOutputArgDesc};
     prompt.args["timeout"]    = std::string{kTimeoutArgDesc};
     return prompt;
 }
 
-/// Windows 命令工具提示词: depict + `command`/`all_output`/`timeout` 描述
+/// Windows 命令工具提示词: depict + `command`/`full_output`/`timeout` 描述
 /// - `command` 描述的语法指引按实际执行路径选择:
 ///   [viaProcessSpawn] true (boost.process v2 直传 argv) 用 [winCommandProcessArgDesc],
 ///   false (未启用 boost.process 的 popen 回退) 用 [winCommandPopenArgDesc]
@@ -633,7 +633,7 @@ inline ExecPromptText windowsToolPrompt(const ExecEnvInfo& env, bool viaProcessS
     prompt.depict = winCommandToolDepict(env);
     prompt.args["command"]
         = viaProcessSpawn ? winCommandProcessArgDesc(env) : winCommandPopenArgDesc(env);
-    prompt.args["all_output"] = std::string{kAllOutputArgDesc};
+    prompt.args["full_output"] = std::string{kFullOutputArgDesc};
     prompt.args["timeout"]    = std::string{kTimeoutArgDesc};
     return prompt;
 }

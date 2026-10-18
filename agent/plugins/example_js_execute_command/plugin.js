@@ -48,9 +48,9 @@
   function truncateStdOut(s) { return truncateWithStoreFormat(s, kMaxStdOut); }
   function truncateStdErr(s) { return truncateWithStoreFormat(s, kMaxStdErr); }
 
-  function formatSuccess(exitCode, stdoutBuf, stderrBuf, allOutput) {
+  function formatSuccess(exitCode, stdoutBuf, stderrBuf, fullOutput) {
     var out = "[ExitCode]\n" + exitCode + "\n";
-    if (allOutput || exitCode !== 0) {
+    if (fullOutput || exitCode !== 0) {
       var so = stdoutBuf || "";
       var se = stderrBuf || "";
       if (so) so = truncateStdOut(so);
@@ -116,7 +116,7 @@
       return JSON.stringify({ error: "Arg `code` is empty" });
     }
     var timeout = typeof args.timeout === "number" ? args.timeout : 60;
-    var allOutput = typeof args.all_output === "boolean" ? args.all_output : true;
+    var fullOutput = typeof args.full_output === "boolean" ? args.full_output : true;
 
     var stdoutBuf = "";
     var stderrBuf = "";
@@ -237,7 +237,7 @@
     if (timedOut) {
       return formatTimeout(timeout, stdoutBuf, stderrBuf);
     }
-    return formatSuccess(exitCode, stdoutBuf, stderrBuf, allOutput);
+    return formatSuccess(exitCode, stdoutBuf, stderrBuf, fullOutput);
   }
 
   var toolSpec = {
@@ -255,7 +255,7 @@
           default: 60,
           description: "Default `60` seconds. Execution timeout in seconds. Set `0` for no limit. On timeout returns [Error] with partial StdOut/StdErr."
         },
-        all_output: {
+        full_output: {
           type: "boolean",
           default: true,
           description: "Default `true`. `true`: Always return StdOut and StdErr. `false`: Only return output when execution fails (non-zero exit)."

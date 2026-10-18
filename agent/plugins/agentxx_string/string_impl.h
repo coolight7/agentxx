@@ -50,9 +50,18 @@ inline std::string regexpExecute(const utilxx_base::Json& arguments) {
         throw ArgError{"Arg `opt` is empty"};
     }
 
-    auto regex = utilxx::XXRegex::createRegex(match_exps);
+    // `ignore_case`: 大小写不敏感匹配 (默认关闭 = 大小写敏感)
+    const bool ignoreCase = arguments.value<bool>("ignore_case", false);
+
+    auto regex = utilxx::XXRegex::createRegex(
+        match_exps,
+        utilxx::XXRegex::defHSFlags_normal,
+        ignoreCase
+    );
     if (!regex) {
-        return "[Error] Regex compilation failed";
+        throw std::runtime_error{
+            "Regex compilation failed (each item of `exps` is a regular expression)"
+        };
     }
     if (match_opt == std::string_view{"search"}) {
         auto results = std::vector<utilxx::XXRegexMatchResult>{};

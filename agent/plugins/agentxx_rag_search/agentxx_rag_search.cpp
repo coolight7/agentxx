@@ -95,12 +95,12 @@ static int32_t ragSetup(RagPluginCtx& ctx) {
     auto schema = ctx.schema(kNameSearch)
                       .string(
                           "query",
-                          "Search query text to find relevant documents.",
+                          "Search query to find relevant documents.",
                           /*required=*/true
                       )
                       .integer(
-                          "top_k",
-                          "Number of top relevant results to return (default 3, min 1, max 50).",
+                          "limit",
+                          "Number of results to return. Range: [1, 50]. Default `3`.",
                           false,
                           3
                       )
@@ -121,17 +121,17 @@ static int32_t ragSetup(RagPluginCtx& ctx) {
             if (!args.ok()) {
                 return args.errorMessage();
             }
-            int top_k = std::clamp(args.value("top_k", 3), 1, 50);
+            int limit = std::clamp(args.value("limit", 3), 1, 50);
 
             if (!c.store) {
-                return R"({"error":"rag index not initialized"})";
+                throw std::runtime_error{"RAG index is not initialized"};
             }
-            auto results = c.store->search(query, static_cast<size_t>(top_k));
+            auto results = c.store->search(query, static_cast<size_t>(limit));
             if (pluginxx_cancel_is_requested(cancel_token)) {
                 throw agentxx::plugin::CancelledException("rag_search cancelled");
             }
             if (!results.has_value()) {
-                return fmt::format("Search error: {}", results.error());
+                throw std::runtime_error{fmt::format("RAG search failed: {}", results.error())};
             }
             if (results->empty()) {
                 return fmt::format("No relevant documents found for: {}", query);

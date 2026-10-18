@@ -773,7 +773,7 @@ inline asio::awaitable<std::string> runProcPipeline(
     asio::readable_pipe&     outpip,
     asio::readable_pipe&     errpip,
     int                      timeout,
-    bool                     all_output,
+    bool                     full_output,
     const IsCancelledFn&     isCancelled    = nullptr,
     const StoreFn&           storeFn        = nullptr,
     void*                    winJob         = nullptr,
@@ -814,7 +814,7 @@ inline asio::awaitable<std::string> runProcPipeline(
             result << detail::makeTimeoutResult(timeout, strout, strerr, storeFn);
         } else {
             result << "[ExitCode]\n" << exitCode << "\n";
-            if (all_output || 0 != exitCode) {
+            if (full_output || 0 != exitCode) {
                 // 手动裁剪: 每路 stdout/stderr 独立按 UTF-8 长度限制, 格式与
                 // ToolcallNode::execTool 的 [Content offloaded...] 保持一致，通过 storeFn
                 // 将完整内容 offload 到 share_store（超限时）并带 ID
@@ -929,8 +929,8 @@ inline asio::awaitable<std::string> bashExecuteAsync(
     if (command.empty()) {
         throw std::invalid_argument{"Arg `command` is empty"};
     }
-    // [all_output] 为false时，仅执行失败才返回 stdout和stderr
-    auto all_output = arguments.value("all_output", true);
+    // [full_output] 为false时，仅执行失败才返回 stdout和stderr
+    auto full_output = arguments.value("full_output", true);
     auto timeout    = arguments.value("timeout", 60);
 
     std::string effectiveSessionKey{sessionKey};
@@ -1002,7 +1002,7 @@ inline asio::awaitable<std::string> bashExecuteAsync(
         outpip,
         errpip,
         timeout,
-        all_output,
+        full_output,
         isCancelled,
         storeFn,
         /*winJob=*/nullptr,
@@ -1024,7 +1024,8 @@ inline asio::awaitable<std::string> windowsExecuteAsync(
     if (command.empty()) {
         throw std::invalid_argument{"Arg `command` is empty"};
     }
-    auto all_output = arguments.value("all_output", true);
+    // [full_output] 为false时，仅执行失败才返回 stdout和stderr
+    auto full_output = arguments.value("full_output", true);
     auto timeout    = arguments.value("timeout", 60);
 
     std::string effectiveSessionKey{sessionKey};
@@ -1112,7 +1113,7 @@ inline asio::awaitable<std::string> windowsExecuteAsync(
         outpip,
         errpip,
         timeout,
-        all_output,
+        full_output,
         isCancelled,
         storeFn,
         winJob,

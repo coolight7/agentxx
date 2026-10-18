@@ -1,6 +1,7 @@
 /// agentxx_websearch 插件 —— 工具实现 (纯函数, 不含 C ABI 胶水)
 /// - 从 libagentxx src/tools/web_search 拆分: 同名工具同行为
-///     agentxx_web_search / agentxx_web_fetch / agentxx_web_fetch_markdown
+///     agentxx_web_search / agentxx_web_fetch (原 web_fetch 与 web_fetch_markdown
+///     已合并, 由 `format` 参数选择 raw 或 markdown)
 /// - 头文件-only: 插件入口与测试共同包含, 保证插件行为与测试覆盖一致
 /// - 依赖: cxx_utilxx (HttpClient) + cxx_utilxx_base (字符串编码转换 / 日志)
 /// - 统一异步操作模型 (受控轮询): 执行体为协程 (*ExecuteAsync), 由插件入口经
@@ -65,7 +66,8 @@ inline int parseTimeoutArg(const utilxx_base::Json& args, int defaultSeconds) {
     return defaultSeconds;
 }
 
-/// 解析 tool 参数中的 `header` 参数为 HTTP 请求头, 支持三种格式:
+/// 解析 tool 参数中的 `header` 参数为 HTTP 请求头, 支持三种格式
+/// (声明为对象; 另外两种保留以容忍模型偶发的写法):
 /// - JSON 对象: {"User-Agent": "xx", "X-Api-Key": "v"} (非字符串值转为文本)
 /// - JSON 字符串数组: ["User-Agent: xx", "X-Api-Key: v"]
 /// - JSON 字符串: "User-Agent: xx" (多行时按行解析 "Name: value")
@@ -144,68 +146,65 @@ inline utilxx::HttpClient::RequestConfig
 //   与原 lib 工具"异常即工具错误"语义一致
 // =====================================================================
 
-/// agentxx_web_fetch 执行体 (原 WebFetchUrlTool::execute_async)
+/// agentxx_web_fetch 执行体 (原 web_fetch 与 web_fetch_markdown 合并):
+/// - `format` = `markdown` (默认): 页面转 Markdown (HttpClient::fetchMarkdown)
+/// - `format` = `raw`: 原始响应体 (状态非 2xx / 响应体为空按错误处理)
 inline asio::awaitable<std::string> webFetchExecuteAsync(const utilxx_base::Json& arguments) {
-    auto url = arguments.value("url", std::string{});
+    std::string url = arguments.value("url", std::string{});
     if (url.empty()) {
         throw std::invalid_argument{"Arg `url` is empty"};
+    }
+    // 返回形态: 缺省 markdown (与合并前的 fetch_markdown 行为一致)
+    auto format = arguments.value("format", std::string{});
+    if (format.empty()) {
+        format = "markdown";
+    }
+    if (format != "markdown" && format != "raw") {
+        throw std::invalid_argument{fmt::format(
+            R"(Arg `format`({}) is invalid: use `markdown` or `raw`.)",
+            format
+        )};
     }
 
     // 统一的 timeout / header 参数: 支持自定义请求头与请求超时
     const auto headers = detail::parseHeaderArg(arguments);
     const int  timeout = detail::parseTimeoutArg(arguments, 30);
+    auto       config  = detail::makeConfig(timeout, std::chrono::seconds{30});
 
-    auto resp = co_await utilxx::HttpClient::getAsync(
-        url,
-        headers,
-        detail::makeConfig(timeout, std::chrono::seconds{30})
-    );
-    if (resp.has_value()) {
-        if (false == utilxx::HttpClient::respIsSucc(resp.value())) {
-            co_return fmt::format(
-                R"({{"error":"web_fetch_url failed, status {}, error: {}"}})",
-                resp.value().status,
-                resp.error_or("[unknown]")
-            );
+    if (format == "markdown") {
+        auto resp = co_await utilxx::HttpClient::fetchMarkdown(url, headers, config);
+        if (false == resp.has_value()) {
+            throw std::runtime_error(resp.error_or("[unknown]"));
         }
-
-        auto& data = resp.value().body;
-        if (data.empty()) {
-            co_return R"({"error": "Http GET request Success, but got empty body."})";
-        }
-        if (utilxx_base::autoConvertToUtf8(data)) {
-            co_return data;
-        }
-        co_return data;
-    }
-    throw std::runtime_error(resp.error_or("[unknown]"));
-}
-
-/// agentxx_web_fetch_markdown 执行体 (原 WebFetchUrlMarkdownTool::execute_async)
-inline asio::awaitable<std::string> webFetchMarkdownExecuteAsync(const utilxx_base::Json& arguments
-) {
-    std::string url = arguments.value("url", std::string{});
-    if (url.empty()) {
-        throw std::invalid_argument{"Arg `url` is empty"};
-    }
-
-    // 统一的 timeout / header 参数: 支持自定义请求头与请求超时
-    const auto headers = detail::parseHeaderArg(arguments);
-    const int  timeout = detail::parseTimeoutArg(arguments, 15);
-
-    auto resp = co_await utilxx::HttpClient::fetchMarkdown(
-        url,
-        headers,
-        detail::makeConfig(timeout, std::chrono::seconds{15})
-    );
-    if (resp.has_value()) {
         auto& data = resp.value();
         if (data.empty()) {
-            co_return R"({"error": "Request Success, but got empty result."})";
+            throw std::runtime_error{"Request succeeded, but the converted result is empty"};
         }
         co_return data;
     }
-    throw std::runtime_error(resp.error_or("[unknown]"));
+
+    auto resp = co_await utilxx::HttpClient::getAsync(url, headers, config);
+    if (false == resp.has_value()) {
+        throw std::runtime_error(resp.error_or("[unknown]"));
+    }
+    if (false == utilxx::HttpClient::respIsSucc(resp.value())) {
+        // 请求成功但状态非 2xx (如 429/403/500): 拼接状态码与错误响应体
+        auto errBody = resp.value().body;
+        if (errBody.size() > 512) {
+            errBody.resize(512);
+            errBody += "...";
+        }
+        throw std::runtime_error{
+            fmt::format("Http GET failed, status {}: {}", resp.value().status, errBody)
+        };
+    }
+
+    auto& data = resp.value().body;
+    if (data.empty()) {
+        throw std::runtime_error{"Http GET succeeded, but the response body is empty"};
+    }
+    utilxx_base::autoConvertToUtf8(data);
+    co_return data;
 }
 
 /// agentxx_web_search 执行体 —— API URL 路径 (原 WebSearchTool::execute_async)
@@ -223,8 +222,8 @@ inline asio::awaitable<std::string> webSearchExecuteAsync(
 
     // 统一的 timeout / header 参数: 支持自定义请求头与请求超时
     const auto headers = detail::parseHeaderArg(arguments);
-    const int  timeout = detail::parseTimeoutArg(arguments, 15);
-    auto       config  = detail::makeConfig(timeout, std::chrono::seconds{15});
+    const int  timeout = detail::parseTimeoutArg(arguments, 20);
+    auto       config  = detail::makeConfig(timeout, std::chrono::seconds{20});
 
     std::optional<std::string> out_resp_err;
     if (convertHtml2markdown) {
@@ -234,7 +233,7 @@ inline asio::awaitable<std::string> webSearchExecuteAsync(
         if (resp.has_value()) {
             auto& data = resp.value();
             if (data.empty()) {
-                co_return R"({"error": "Empty search result."})";
+                throw std::runtime_error{"The search request succeeded, but the result is empty"};
             }
             co_return data;
         }
@@ -247,7 +246,7 @@ inline asio::awaitable<std::string> webSearchExecuteAsync(
             if (utilxx::HttpClient::respIsSucc(respVal)) {
                 auto& data = respVal.body;
                 if (data.empty()) {
-                    co_return R"({"error": "Empty search result."})";
+                    throw std::runtime_error{"The search request succeeded, but the result is empty"};
                 }
                 co_return data;
             }
@@ -337,7 +336,7 @@ inline asio::awaitable<std::string> modelWebSearchExecuteAsync(
         auto parsed  = utilxx_base::Json::parse(respVal.body);
         auto content = parsed["choices"][0]["message"]["content"].get<std::string>();
         if (content.empty()) {
-            co_return R"({"error": "Model web search returned empty result."})";
+            throw std::runtime_error{"The model search succeeded, but the result is empty"};
         }
         co_return content;
     } catch (...) {

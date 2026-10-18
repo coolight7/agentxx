@@ -544,7 +544,7 @@ inline std::string fileListExecuteImpl(
                 return true;
             },
             [&](std::string errmsg) -> bool {
-                lines.push_back(fmt::format("[Error] {}: {}", detail::toUtf8(entity.path()), errmsg)
+                lines.push_back(fmt::format("[Error: {}: {}]", detail::toUtf8(entity.path()), errmsg)
                 );
                 return false;
             }
@@ -554,12 +554,12 @@ inline std::string fileListExecuteImpl(
     auto checkStop = [&]() -> bool {
         // 返回 true 表示应提前终止 (取消或超时)
         if (isCancelled && isCancelled()) {
-            lines.push_back("[Error] Cancelled");
+            lines.push_back("[Error: cancelled]");
             return true;
         }
         if (deadline.expired()) {
             lines.push_back(fmt::format(
-                R"([Error] Timed out after {} seconds. Try narrowing the path or setting a limit.)",
+                R"([Error: timed out after {} seconds. Try narrowing the path or setting a limit.])",
                 timeout
             ));
             return true;
@@ -735,14 +735,14 @@ inline std::string fileListExecuteImpl(
         // 与 shell "无匹配时保留模式原样" 的行为一致
         std::error_code ec;
         if (false == std::filesystem::exists(utilxx_base::utf8ToPath(targetPath), ec)) {
-            lines.push_back(fmt::format(R"([Error] No match `path`({}) file found)", rawPath));
+            lines.push_back(fmt::format(R"([Error: no match `path`({}) file found])", rawPath));
             return detail::joinLines(lines);
         }
     }
 
     auto fsPath = utilxx_base::utf8ToPath(targetPath);
     if (false == std::filesystem::exists(fsPath)) {
-        lines.push_back("[Error] Path not exist");
+        lines.push_back("[Error: path does not exist]");
     } else if (std::filesystem::is_directory(fsPath)) {
         appendDirContents(fsPath);
     } else if (std::filesystem::is_regular_file(fsPath)) {
@@ -750,7 +750,7 @@ inline std::string fileListExecuteImpl(
         // (与 read/write/edit 等按路径判定的工具保持一致)
         appendEntry(std::filesystem::directory_entry(fsPath));
     } else {
-        lines.push_back("[Error] Path exist, but is not a directory or file");
+        lines.push_back("[Error: path exists, but is not a directory or a file]");
     }
 
     flushPending();
@@ -782,6 +782,56 @@ inline void rejectLegacyLineArgs(const utilxx_base::Json& arguments) {
             "Args `line_offset`/`line_limit` are renamed to `offset`/`limit`"
         };
     }
+}
+
+/// 单次 read 的输出上限 (行数 / UTF-8 字节数)
+/// - 超过上限直接报错, 不截断: 截断会让调用方以为拿到了完整内容
+/// - 依据: 一次把几十万行/几 MB 的文本放进上下文既贵又没用, 定位内容应当先用
+///   `offset`/`limit` 分页或 grep 找到目标行
+constexpr size_t kReadMaxLines = 2000;
+constexpr size_t kReadMaxBytes = 256 * 1024;
+
+/// read 结果超限时报错 (给可行做法; `lines` 未知传 0)
+[[noreturn]] inline void throwReadTooLarge(size_t bytes, size_t lines = 0) {
+    const auto sizeText = lines > 0 ? fmt::format("{} line(s) / {} bytes", lines, bytes)
+                                    : fmt::format("{} bytes", bytes);
+    throw std::invalid_argument{fmt::format(
+        R"(Read result is too large for one call: {} (limit {} lines / {} bytes). Read it in parts with `offset`/`limit` (both counted in lines), or locate the wanted part with `agentxx_filesystem_grep`. A single line longer than the limit can not be split by this tool: use `agentxx_execute_command` (e.g. `head -c`, `cut`, `split`) instead.)",
+        sizeText,
+        kReadMaxLines,
+        kReadMaxBytes
+    )};
+}
+
+/// 检查 read 结果是否超过单次上限 (超过即报错)
+inline void checkReadResultLimit(std::string_view text) {
+    if (text.empty()) {
+        return;
+    }
+    size_t lines = 1;
+    for (char c : text) {
+        if (c == '\n') {
+            ++lines;
+        }
+    }
+    if (text.back() == '\n') {
+        --lines; // 末尾换行符不算新的一行
+    }
+    if (lines <= kReadMaxLines && text.size() <= kReadMaxBytes) {
+        return;
+    }
+    throwReadTooLarge(text.size(), lines);
+}
+
+/// 整文件读取前的体积预检: 超过上限直接报错, 不把超大体量的文件读进内存
+/// - 分页读取不受此限制: 只取指定行区间时文件本身可以很大 (只检查读出来的那段)
+inline void checkWholeFileSizeBeforeRead(const std::filesystem::path& fsPath) {
+    std::error_code ec;
+    const auto      size = std::filesystem::file_size(fsPath, ec);
+    if (ec || size <= static_cast<uintmax_t>(kReadMaxBytes)) {
+        return;
+    }
+    throwReadTooLarge(static_cast<size_t>(size));
 }
 
 } // namespace detail
@@ -841,6 +891,12 @@ inline std::string fileReadExecuteImpl(
                 continue;
             }
             result << line << "\n";
+            // 边读边看体量: 请求的区间过大时立即报错, 不先把整段读进内存
+            const auto readLines = lineNum - offset + 1;
+            const auto readBytes = static_cast<size_t>(result.tellp());
+            if (readLines > detail::kReadMaxLines || readBytes > detail::kReadMaxBytes) {
+                detail::throwReadTooLarge(readBytes, readLines);
+            }
         }
 
         stream.close();
@@ -860,15 +916,18 @@ inline std::string fileReadExecuteImpl(
         auto rawStr = result.str();
         // 保留原始的 crlf 或 \n 换行符不转换
         utilxx_base::autoConvertToUtf8(rawStr);
+        detail::checkReadResultLimit(rawStr);
         return rawStr;
     }
 
-    // 读取完整文件
+    // 读取完整文件 (先看体量: 超大文件直接报错, 不读进内存)
+    detail::checkWholeFileSizeBeforeRead(fsPath);
     auto result
         = std::string{std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>()};
     stream.close();
     // 保留原始的 crlf 或 \n 换行符不转换
     utilxx_base::autoConvertToUtf8(result);
+    detail::checkReadResultLimit(result);
     return result;
 }
 
@@ -1212,7 +1271,7 @@ inline std::string fileGlobExecuteImpl(
     std::vector<std::filesystem::path> resultList;
     for (const auto& pattern : file_patterns) {
         if (checkCancel() || deadline.expired()) {
-            return "[Error] Cancelled or timed out";
+            return "[Error: cancelled or timed out]";
         }
         // 到限即停: 遍历已在策略内停止, 后续 pattern 不再展开 (总量不超上限)
         if (walkPolicy.limitReached) {
@@ -1241,7 +1300,7 @@ inline std::string fileGlobExecuteImpl(
     }
 
     if (resultList.empty()) {
-        return R"([Error] No match `file_patterns` file found)";
+        return R"([Error: no file matched `file_patterns`])";
     }
 
     // 默认去重: 多 pattern 可能匹配到相同路径
@@ -1254,7 +1313,7 @@ inline std::string fileGlobExecuteImpl(
         filtered.reserve(resultList.size());
         for (const auto& p : resultList) {
             if (checkCancel() || deadline.expired()) {
-                return "[Error] Cancelled or timed out";
+                return "[Error: cancelled or timed out]";
             }
             if (typeFilter.count(detail::fileTypeOf(p))) {
                 filtered.push_back(p);
@@ -1318,11 +1377,11 @@ inline std::string fileGlobExecuteImpl(
         if (walkPolicy.limitReached) {
             // 被截断且过滤后无剩余: 提示里带上"未收集完整"的信息, 避免误判为"无匹配"
             return fmt::format(
-                R"([Error] No match `file_patterns` file found after filtering. Note: the walk stopped early at `max_files` = {}, so more matches may exist beyond the ones collected (raise `max_files` or narrow `file_patterns`).)",
+                R"([Error: no file matched `file_patterns` after filtering. Note: the walk stopped early at `max_files` = {}, so more matches may exist beyond the ones collected (raise `max_files` or narrow `file_patterns`).])",
                 maxFiles
             );
         }
-        return R"([Error] No match `file_patterns` file found after filtering)";
+        return R"([Error: no file matched `file_patterns` after filtering])";
     }
 
     // 结果数量达到上限时在首行说明: 遍历已停止, 只列出已匹配到的部分路径
@@ -1338,7 +1397,7 @@ inline std::string fileGlobExecuteImpl(
     }
     for (const auto& item : resultList) {
         if (checkCancel() || deadline.expired()) {
-            return "[Error] Cancelled or timed out";
+            return "[Error: cancelled or timed out]";
         }
         oss << detail::toUtf8(item) << '\n';
     }
@@ -1376,8 +1435,11 @@ inline std::string fileGrepExecuteImpl(
         item = detail::wsAbs(workDir, item);
     }
     auto output_mode = arguments.value("output_mode", std::string{"files_with_matches"});
-    if (output_mode.empty()) {
-        throw std::invalid_argument{"Arg `output_mode` is empty"};
+    if (output_mode != "files_with_matches" && output_mode != "content" && output_mode != "count") {
+        throw std::invalid_argument{fmt::format(
+            R"(Arg `output_mode`({}) is invalid: use `files_with_matches`, `content` or `count`.)",
+            output_mode
+        )};
     }
     auto timeout  = static_cast<int64_t>(arguments.value<double>("timeout", 60.0));
     auto deadline = Deadline::after(timeout);
@@ -1413,7 +1475,7 @@ inline std::string fileGrepExecuteImpl(
     glob::WalkPolicy walkPolicy = detail::makeWalkPolicy(excludePatterns, maxFiles);
     for (const auto& pattern : file_patterns) {
         if (checkStop()) {
-            return "[Error] Cancelled or timed out";
+            return "[Error: cancelled or timed out]";
         }
         // 到限即停: 遍历已在策略内停止, 后续 pattern 不再展开 (候选总数不超上限)
         if (walkPolicy.limitReached) {
@@ -1500,8 +1562,16 @@ inline std::string fileGrepExecuteImpl(
     // 未搜索", 避免调用方把结果当成完整结果
     const bool walkTruncated = walkPolicy.limitReached;
 
-    bool isContentMode = ("content" == output_mode);
-    auto resultStr     = std::ostringstream{};
+    // 输出模式 (三种模式下都完整扫描, 区别只在输出的内容):
+    // - `files_with_matches`: 每个命中文件一行 `路径:命中数`
+    // - `content`: 命中行按文件分组输出 (可带上下文行)
+    // - `count`: 只输出汇总数 (命中文件数 + 命中数), 输出行数固定
+    const bool isContentMode = ("content" == output_mode);
+    const bool isCountMode   = ("count" == output_mode);
+    auto       resultStr     = std::ostringstream{};
+    // count 模式的累计量 (只有该模式写入)
+    size_t countMatchedFiles = 0;
+    size_t countMatchesTotal = 0;
 
     // ---- 行索引辅助: 每文件只扫描一次构建"行起始偏移索引", 行号查询二分 O(log n)
 
@@ -1660,7 +1730,11 @@ inline std::string fileGrepExecuteImpl(
             effectiveCount = static_cast<size_t>(maxCountPerFile);
         }
 
-        if (!isContentMode) {
+        if (isCountMode) {
+            // count 模式: 只累计, 不逐文件输出 (扫描结束后汇总输出)
+            countMatchesTotal += effectiveCount;
+            ++countMatchedFiles;
+        } else if (!isContentMode) {
             // files_with_matches 模式: 输出 file:match_count
             resultStr << filepath << ":" << effectiveCount << "\n";
         } else {
@@ -1702,14 +1776,14 @@ inline std::string fileGrepExecuteImpl(
                                           );
     if (false == regex_patterns.empty() && !regex) {
         return fmt::format(
-            R"_([Error] Regex compilation failed (regex_patterns are parsed as regular expressions). If you intended literal text search, put the patterns in `text_patterns` instead.)_"
+            R"_([Error: regex compilation failed (regex_patterns are parsed as regular expressions). If you intended literal text search, put the patterns in `text_patterns` instead.])_"
         );
     }
 
     bool anyHit = false;
     for (const auto& item : refilelist) {
         if (checkStop()) {
-            return "[Error] Cancelled or timed out";
+            return "[Error: cancelled or timed out]";
         }
         auto filepath = detail::toUtf8(item);
         // 读取并预处理: 跳过二进制/非文本文件 (glob 阶段已过滤目录)
@@ -1763,6 +1837,28 @@ inline std::string fileGrepExecuteImpl(
     }
 
     if (anyHit) {
+        if (isCountMode) {
+            // count 模式: 固定几行汇总 (只给规模, 不给路径与行内容)
+            auto summary = fmt::format(
+                "{} file(s) matched, {} match(es) in total.\n",
+                countMatchedFiles,
+                countMatchesTotal
+            );
+            if (skippedTooLarge > 0) {
+                summary += fmt::format(
+                    "[Note] {} file(s) skipped: larger than `max_file_size_mb` = {}.\n",
+                    skippedTooLarge,
+                    maxFileSizeMb
+                );
+            }
+            if (walkTruncated) {
+                summary += fmt::format(
+                    "[Note] The walk stopped early at `max_files` = {}: more matched files may exist unscanned.\n",
+                    maxFiles
+                );
+            }
+            return summary;
+        }
         if (skippedTooLarge > 0) {
             // 跳过说明写在结果末尾 (不做静默丢弃): 调用方据此判断是否需要提高上限
             resultStr << fmt::format(
@@ -1810,12 +1906,12 @@ inline std::string fileGrepExecuteImpl(
 
 // =====================================================================
 // 对外执行体: 与原 lib 工具的 asyncWithTimeout+catchErrorAsync 外层语义一致
-// —— 可预期异常 (如无匹配/文件打开失败) 统一转为 "[Error] ..." 错误文本返回,
+// —— 可预期异常 (如无匹配/文件打开失败) 统一转为 "[Error: ...]" 错误文本返回,
 // 而非向调用方抛出; 保证插件 execute 回调、测试直测两种路径行为一致
 // =====================================================================
 namespace detail {
 
-/// 异常 → "[Error] ..." 文本包装 (取消类异常不在本层出现: impl 内部仅以
+/// 异常 → "[Error: ...]" 文本包装 (取消类异常不在本层出现: impl 内部仅以
 /// 返回值表达取消, 见各执行体的 checkStop 分支)
 template<typename Fn>
 inline std::string asErrorText(Fn&& fn) {
@@ -1823,11 +1919,254 @@ inline std::string asErrorText(Fn&& fn) {
         return fn();
     } catch (const std::exception& ex) {
         XX_LOGD("filesystem tool error -> text: {}", ex.what());
-        return fmt::format("[Error] {}", ex.what());
+        return fmt::format("[Error: {}]", ex.what());
     }
 }
 
 } // namespace detail
+
+// =====================================================================
+// agentxx_filesystem_move / _copy / _remove 执行体
+// =====================================================================
+namespace detail {
+
+/// 取路径参数并规范化为工作目录下的绝对路径 (空值报参数错误)
+inline std::string requirePathArg(
+    const utilxx_base::Json& arguments,
+    std::string_view         name,
+    const std::string&       workDir
+) {
+    auto value = arguments.value(std::string{name}, std::string{});
+    if (value.empty()) {
+        throw std::invalid_argument{fmt::format("Arg `{}` is empty", name)};
+    }
+    return wsAbs(workDir, value);
+}
+
+/// 路径是否存在 (悬空的符号链接也算: 它要能被删除或替换)
+inline bool pathExists(const std::filesystem::path& path) {
+    std::error_code ec;
+    return std::filesystem::exists(path, ec) || std::filesystem::is_symlink(path, ec);
+}
+
+/// 目标已存在时的统一处理: `overwrite` 未开启则报错, 开启时先删掉旧目标
+/// - 旧目标可能是目录, 用 remove_all 整体替换
+inline void prepareDestination(const std::string& dst, bool overwrite) {
+    auto dstPath = utilxx_base::utf8ToPath(dst);
+    if (false == pathExists(dstPath)) {
+        return;
+    }
+    if (false == overwrite) {
+        throw std::runtime_error{fmt::format(
+            R"(Destination already exists: {}. Pass `overwrite` = true to replace it.)",
+            dst
+        )};
+    }
+    std::error_code ec;
+    std::filesystem::remove_all(dstPath, ec);
+    if (ec) {
+        throw std::runtime_error{fmt::format(
+            R"(Can not replace the existing destination {}: {})",
+            dst,
+            ec.message()
+        )};
+    }
+}
+
+/// 目标位于源目录内部时拒绝执行 (复制/移动到自己的子目录会递归到自身)
+inline void rejectNestedDestination(const std::string& src, const std::string& dst) {
+    if (dst.size() <= src.size() || dst.compare(0, src.size(), src) != 0) {
+        return;
+    }
+    const char next = dst[src.size()];
+    if (next == '/' || next == '\\') {
+        throw std::invalid_argument{fmt::format(
+            R"(Arg `dst`({}) is inside `src`({}): that would recurse into itself.)",
+            dst,
+            src
+        )};
+    }
+}
+
+/// 目标父目录缺失时创建 (写到新目录是常见用法, 与 write 工具一致)
+inline void ensureParentDir(const std::filesystem::path& dstPath) {
+    if (false == dstPath.has_parent_path() || pathExists(dstPath.parent_path())) {
+        return;
+    }
+    std::error_code ec;
+    std::filesystem::create_directories(dstPath.parent_path(), ec);
+    if (ec) {
+        throw std::runtime_error{fmt::format(
+            R"(Can not create `dst`({})'s parent dirs: {})",
+            toUtf8(dstPath.parent_path()),
+            ec.message()
+        )};
+    }
+}
+
+/// move/copy 的公共参数检查: 取绝对路径、非空、不同一路径、不相互嵌套、源存在
+inline void resolveTransferArgs(
+    const utilxx_base::Json& arguments,
+    const std::string&       workDir,
+    std::string&             srcOut,
+    std::string&             dstOut
+) {
+    srcOut = requirePathArg(arguments, "src", workDir);
+    dstOut = requirePathArg(arguments, "dst", workDir);
+    if (srcOut == dstOut) {
+        throw std::invalid_argument{
+            fmt::format("Args `src` and `dst` are the same path: {}", srcOut)
+        };
+    }
+    rejectNestedDestination(srcOut, dstOut);
+    if (false == pathExists(utilxx_base::utf8ToPath(srcOut))) {
+        throw std::runtime_error{fmt::format("Source path does not exist: {}", srcOut)};
+    }
+}
+
+/// 跨设备/跨盘复制 (rename 不可用时的回退): 递归复制后删除源
+inline void copyThenRemoveSource(
+    const std::filesystem::path& srcPath,
+    const std::filesystem::path& dstPath,
+    const std::string&           src,
+    const std::string&           dst
+) {
+    std::error_code ec;
+    std::filesystem::copy(
+        srcPath,
+        dstPath,
+        std::filesystem::copy_options::recursive
+            | std::filesystem::copy_options::copy_symlinks,
+        ec
+    );
+    if (ec) {
+        throw std::runtime_error{fmt::format("Can not copy {} -> {}: {}", src, dst, ec.message())};
+    }
+    std::error_code rmEc;
+    std::filesystem::remove_all(srcPath, rmEc);
+    if (rmEc) {
+        throw std::runtime_error{fmt::format(
+            R"(Copied to {}, but can not remove the source {}: {})",
+            dst,
+            src,
+            rmEc.message()
+        )};
+    }
+}
+
+} // namespace detail
+
+/// 移动或重命名文件/目录 (同一文件系统内用 rename; 跨设备时回退为复制 + 删除源)
+inline std::string
+    fileMoveExecuteImpl(const utilxx_base::Json& arguments, const std::string& workDir) {
+    std::string src;
+    std::string dst;
+    detail::resolveTransferArgs(arguments, workDir, src, dst);
+    auto srcPath = utilxx_base::utf8ToPath(src);
+    auto dstPath = utilxx_base::utf8ToPath(dst);
+    detail::ensureParentDir(dstPath);
+    detail::prepareDestination(dst, arguments.value<bool>("overwrite", false));
+
+    std::error_code ec;
+    std::filesystem::rename(srcPath, dstPath, ec);
+    if (ec) {
+        if (ec == std::errc::cross_device_link) {
+            detail::copyThenRemoveSource(srcPath, dstPath, src, dst);
+        } else {
+            throw std::runtime_error{
+                fmt::format("Can not move {} -> {}: {}", src, dst, ec.message())
+            };
+        }
+    }
+    return fmt::format("Moved: {} -> {}", src, dst);
+}
+
+/// 复制文件/目录 (目录递归复制; 符号链接按链接复制, 不跟随)
+inline std::string
+    fileCopyExecuteImpl(const utilxx_base::Json& arguments, const std::string& workDir) {
+    std::string src;
+    std::string dst;
+    detail::resolveTransferArgs(arguments, workDir, src, dst);
+    auto srcPath = utilxx_base::utf8ToPath(src);
+    auto dstPath = utilxx_base::utf8ToPath(dst);
+    detail::ensureParentDir(dstPath);
+    detail::prepareDestination(dst, arguments.value<bool>("overwrite", false));
+
+    std::error_code ec;
+    std::filesystem::copy(
+        srcPath,
+        dstPath,
+        std::filesystem::copy_options::recursive | std::filesystem::copy_options::copy_symlinks,
+        ec
+    );
+    if (ec) {
+        throw std::runtime_error{fmt::format("Can not copy {} -> {}: {}", src, dst, ec.message())};
+    }
+    return fmt::format("Copied: {} -> {}", src, dst);
+}
+
+/// 删除文件或目录 (目录默认拒绝, 需显式 `recursive` = true; 符号链接只删链接本身)
+inline std::string
+    fileRemoveExecuteImpl(const utilxx_base::Json& arguments, const std::string& workDir) {
+    auto            path   = detail::requirePathArg(arguments, "path", workDir);
+    auto            fsPath = utilxx_base::utf8ToPath(path);
+    std::error_code ec;
+    if (false == detail::pathExists(fsPath)) {
+        throw std::runtime_error{fmt::format("Path does not exist: {}", path)};
+    }
+    const bool isSymlink = std::filesystem::is_symlink(fsPath, ec);
+    const bool isDir     = (false == isSymlink) && std::filesystem::is_directory(fsPath, ec);
+    if (isDir && false == arguments.value<bool>("recursive", false)) {
+        throw std::runtime_error{fmt::format(
+            R"(Path is a directory: {}. Pass `recursive` = true to delete it with everything inside.)",
+            path
+        )};
+    }
+    if (isDir) {
+        auto removed = std::filesystem::remove_all(fsPath, ec);
+        if (ec) {
+            throw std::runtime_error{fmt::format("Can not remove {}: {}", path, ec.message())};
+        }
+        return fmt::format("Removed: {} (directory, {} entries)", path, removed);
+    }
+    if (false == std::filesystem::remove(fsPath, ec) || ec) {
+        throw std::runtime_error{fmt::format(
+            "Can not remove {}: {}",
+            path,
+            ec ? ec.message() : std::string{"unknown error"}
+        )};
+    }
+    return fmt::format("Removed: {}", path);
+}
+
+/// 对外执行体 (同步): 异常统一转 "[Error: ...]" 文本返回
+/// - 三个工具都是单次元数据/目录操作, 不轮询取消 (形参与其他 *Execute 保持一致)
+inline std::string fileMoveExecute(
+    const utilxx_base::Json& arguments,
+    const std::string&       workDir,
+    const IsCancelledFn&     isCancelled = nullptr
+) {
+    (void)isCancelled;
+    return detail::asErrorText([&] { return fileMoveExecuteImpl(arguments, workDir); });
+}
+
+inline std::string fileCopyExecute(
+    const utilxx_base::Json& arguments,
+    const std::string&       workDir,
+    const IsCancelledFn&     isCancelled = nullptr
+) {
+    (void)isCancelled;
+    return detail::asErrorText([&] { return fileCopyExecuteImpl(arguments, workDir); });
+}
+
+inline std::string fileRemoveExecute(
+    const utilxx_base::Json& arguments,
+    const std::string&       workDir,
+    const IsCancelledFn&     isCancelled = nullptr
+) {
+    (void)isCancelled;
+    return detail::asErrorText([&] { return fileRemoveExecuteImpl(arguments, workDir); });
+}
 
 inline std::string fileListExecute(
     const utilxx_base::Json& arguments,
@@ -2017,6 +2356,12 @@ inline asio::awaitable<std::string>
             if (lineNum >= offset) {
                 auto line = std::string_view{buf}.substr(0, readlen);
                 result << line;
+                // 边读边看体量: 请求的区间过大时立即报错, 不先把整段读进内存
+                const auto readLines = lineNum - offset + 1;
+                const auto readBytes = static_cast<size_t>(result.tellp());
+                if (readLines > detail::kReadMaxLines || readBytes > detail::kReadMaxBytes) {
+                    detail::throwReadTooLarge(readBytes, readLines);
+                }
             }
             buf.erase(0, readlen);
         }
@@ -2038,13 +2383,16 @@ inline asio::awaitable<std::string>
         auto rawStr = result.str();
         // 保留原始的 crlf 或 \n 换行符不转换
         utilxx_base::autoConvertToUtf8(rawStr);
+        detail::checkReadResultLimit(rawStr);
         co_return rawStr;
     }
 
-    // 读取完整文件
+    // 读取完整文件 (先看体量: 超大文件直接报错, 不读进内存)
+    detail::checkWholeFileSizeBeforeRead(fsPath);
     auto data = co_await detail::asyncReadWholeFile(executor, filepath);
     // 保留原始的 crlf 或 \n 换行符不转换
     utilxx_base::autoConvertToUtf8(data);
+    detail::checkReadResultLimit(data);
     co_return data;
 }
 
@@ -2218,7 +2566,7 @@ inline asio::awaitable<std::string>
 #endif // ASIO_HAS_FILE || BOOST_ASIO_HAS_FILE
 
 /// 对外协程执行体: 与同步版 *Execute 外层语义一致 —— 可预期异常统一转为
-/// "[Error] ..." 错误文本返回, 保证受控轮询路径与测试直测行为一致
+/// "[Error: ...]" 错误文本返回, 保证受控轮询路径与测试直测行为一致
 /// (单文件读写为短操作不轮询取消, 故不设 isCancelled 形参)
 /// - 文件异步 I/O 可用时走真异步实现 (受控轮询), 否则走同步实现
 /// - 注意: 本包装自身必须是协程 (而非返回惰性协程的普通函数) —— 参数引用在
@@ -2233,7 +2581,7 @@ inline asio::awaitable<std::string>
         co_return fileReadExecuteImpl(arguments, workDir);
     } catch (const std::exception& ex) {
         XX_LOGD("filesystem tool error -> text: {}", ex.what());
-        co_return fmt::format("[Error] {}", ex.what());
+        co_return fmt::format("[Error: {}]", ex.what());
     }
 }
 
@@ -2246,7 +2594,7 @@ inline asio::awaitable<std::string>
         co_return fileWriteExecuteImpl(arguments, workDir);
     } catch (const std::exception& ex) {
         XX_LOGD("filesystem tool error -> text: {}", ex.what());
-        co_return fmt::format("[Error] {}", ex.what());
+        co_return fmt::format("[Error: {}]", ex.what());
     }
 }
 
@@ -2259,7 +2607,7 @@ inline asio::awaitable<std::string>
         co_return fileEditExecuteImpl(arguments, workDir);
     } catch (const std::exception& ex) {
         XX_LOGD("filesystem tool error -> text: {}", ex.what());
-        co_return fmt::format("[Error] {}", ex.what());
+        co_return fmt::format("[Error: {}]", ex.what());
     }
 }
 

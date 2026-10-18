@@ -127,8 +127,8 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx) {
               )
               .integer("timeout", argDescOr(winPrompt, "timeout", kTimeoutArgDesc), false, 60)
               .boolean(
-                  "all_output",
-                  argDescOr(winPrompt, "all_output", kAllOutputArgDesc),
+                  "full_output",
+                  argDescOr(winPrompt, "full_output", kFullOutputArgDesc),
                   false,
                   true
               )
@@ -230,8 +230,8 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx) {
               )
               .integer("timeout", argDescOr(bashPrompt, "timeout", kTimeoutArgDesc), false, 60)
               .boolean(
-                  "all_output",
-                  argDescOr(bashPrompt, "all_output", kAllOutputArgDesc),
+                  "full_output",
+                  argDescOr(bashPrompt, "full_output", kFullOutputArgDesc),
                   false,
                   true
               )
