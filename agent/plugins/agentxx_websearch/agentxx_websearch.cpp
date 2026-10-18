@@ -10,22 +10,45 @@ using namespace agentxx::plugin;
 
 namespace {
 
-constexpr std::string_view kNameSearch  = "agentxx_web_search";
-constexpr std::string_view kNameFetch   = "agentxx_web_fetch";
-constexpr std::string_view kNameFetchMd = "agentxx_web_fetch_markdown";
+constexpr std::string_view kNameSearch = "agentxx_web_search";
+constexpr std::string_view kNameFetch  = "agentxx_web_fetch";
 
 constexpr std::string_view kDepictSearch =
     R"(Perform a web search. Returns a markdown-formatted list of results.
-Use `agentxx_web_fetch_markdown` afterwards to retrieve full page content from a result.)";
+Use `agentxx_web_fetch` afterwards to retrieve full page content from a result.)";
 constexpr std::string_view kDepictFetch
-    = "Perform an HTTP GET request and return the raw response body.";
-constexpr std::string_view kDepictFetchMd =
-    R"(Perform an HTTP GET request and return the page content converted to Markdown.
+    = R"(Perform an HTTP GET request and return the response.
+With `format` = `markdown` (default) the page is converted to Markdown; with `format` = `raw` the raw response body is returned (for JSON/text APIs, or when the conversion is not wanted).
 Commonly used after `agentxx_web_search` to read a specific page.)";
 
-constexpr const char* kHeaderArgDesc =
+constexpr std::string_view kHeaderArgDesc =
     R"(Custom HTTP request headers to send, as a JSON object of header name to value.
 Example: {"X-Api-Key": "xxx", "User-Agent": "agentxx"})";
+
+constexpr std::string_view kFetchUrlDesc
+    = R"(Absolute HTTP/HTTPS URL to fetch.
+
+When resolving relative links found in the returned Markdown, combine them with this `url`:
+- Page `http://example.com/help/`:
+  - `model/delete/` (no leading /) → `http://example.com/help/model/delete/`
+  - `./model/create/` (leading .) → `http://example.com/help/model/create/`
+  - `../model/create/` (leading ..) → `http://example.com/model/create/`
+  - `/model/view/` (leading /) → `http://example.com/model/view/`
+- Page `http://example.com/help/what.html`:
+  - `model/delete/` (no leading /) → strip filename, append → `http://example.com/help/model/delete/`
+)";
+
+constexpr std::string_view kFetchFormatDesc
+    = R"(Default `markdown`. What to return:
+`markdown`: the page content converted to Markdown (best for HTML pages).
+`raw`: the response body exactly as received (best for JSON/text APIs, or when the conversion is not wanted).)";
+
+constexpr std::string_view kFetchTimeoutDesc
+    = "Default `30` seconds. Request timeout in seconds.";
+
+constexpr std::string_view kSearchQueryDesc = "The search query string.";
+
+constexpr std::string_view kSearchTimeoutDesc = "Default `20` seconds. Request timeout in seconds.";
 
 constexpr int32_t kAutoSummary = AGENTXX_PLUGIN_TOOL_FLAG_AUTO_SUMMARY;
 
@@ -70,13 +93,19 @@ static int32_t websearchSetup(WebsearchPluginCtx& ctx) {
         }
     }
 
-    // 1. fetch
-    auto fetchSchema
-        = ctx.schema(kNameFetch)
-              .string("url", "Absolute HTTP/HTTPS URL to fetch.", /*required=*/true)
-              .number("timeout", "Default `30` seconds. Request timeout in seconds.", false, 30.0)
-              .array("header", kHeaderArgDesc, "object")
-              .build();
+    // 1. fetch (原 fetch 与 fetch_markdown 合并: 由 `format` 选择返回形态)
+    auto fetchSchema = ctx.schema(kNameFetch)
+                           .string("url", kFetchUrlDesc, /*required=*/true)
+                           .enumString(
+                               "format",
+                               kFetchFormatDesc,
+                               {"markdown", "raw"},
+                               false,
+                               "markdown"
+                           )
+                           .number("timeout", kFetchTimeoutDesc, false, 30.0)
+                           .object("header", kHeaderArgDesc)
+                           .build();
 
     polled_tool(
         ctx,
@@ -103,67 +132,14 @@ static int32_t websearchSetup(WebsearchPluginCtx& ctx) {
         kAutoSummary
     );
 
-    // 2. fetch_markdown
-    auto fetchMdSchema
-        = ctx.schema(kNameFetchMd)
-              .string(
-                  "url",
-                  R"(Absolute HTTP/HTTPS URL to fetch.
-
-When resolving relative links found in the returned Markdown, combine them with this `url`:
-- Page `http://example.com/help/`:
-  - `model/delete/` (no leading /) → `http://example.com/help/model/delete/`
-  - `./model/create/` (leading .) → `http://example.com/help/model/create/`
-  - `../model/create/` (leading ..) → `http://example.com/model/create/`
-  - `/model/view/` (leading /) → `http://example.com/model/view/`
-- Page `http://example.com/help/what.html`:
-  - `model/delete/` (no leading /) → strip filename, append → `http://example.com/help/model/delete/`
-)",
-                  /*required=*/true
-              )
-              .number("timeout", "Default `15` seconds. Request timeout in seconds.", false, 15.0)
-              .array("header", kHeaderArgDesc, "object")
-              .build();
-
-    polled_tool(
-        ctx,
-        kNameFetchMd,
-        kDepictFetchMd,
-        fetchMdSchema,
-        [](WebsearchPluginCtx&,
-           std::string_view args_json,
-           std::string_view,
-           std::string_view,
-           const PluginxxCancelToken* cancel_token) -> asio::awaitable<std::string> {
-            if (pluginxx_cancel_is_requested(cancel_token)) {
-                throw CancelledException("web_fetch_markdown cancelled");
-            }
-            ArgReader args(args_json);
-            auto      result = co_await webFetchMarkdownExecuteAsync(args.raw());
-            if (pluginxx_cancel_is_requested(cancel_token)) {
-                throw CancelledException("web_fetch_markdown cancelled");
-            }
-            co_return result;
-        },
-        0,
-        kAutoSummary
-    );
-
-    // 3. search
+    // 2. search
     if (ctx.use_model_search || !ctx.search_api_url.empty()) {
-        auto searchSchema = ctx.schema(kNameSearch)
-                                .string(
-                                    "query",
-                                    "The search query string to look up on the web.",
-                                    /*required=*/true
-                                )
-                                .number(
-                                    "timeout",
-                                    "Default `20` seconds. Search request timeout in seconds.",
-                                    false,
-                                    20.0
-                                )
-                                .build();
+        auto searchSchema
+            = ctx.schema(kNameSearch)
+                  .string("query", kSearchQueryDesc, /*required=*/true)
+                  .number("timeout", kSearchTimeoutDesc, false, 20.0)
+                  .object("header", kHeaderArgDesc)
+                  .build();
 
         polled_tool(
             ctx,
@@ -242,19 +218,18 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
     WebsearchPluginCtx,
     "agentxx_websearch",
     "1.0.0",
-    "Web access tools: HTTP fetch, Markdown fetch, and web search",
+    "Web access tools: HTTP fetch (raw or Markdown) and web search",
     websearchStart,
     websearchStop
 );
 
 struct WebsearchClientCtx : public ClientPluginBase {};
 
-/// client 侧 start: 注册 3 个工具的折叠头模版 (stop 无需撤销, 主程序负责摘除)
+/// client 侧 start: 注册工具的折叠头模版 (stop 无需撤销, 主程序负责摘除)
 static void*
     websearchClientStart(WebsearchClientCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
     ctx.registerTemplate(kNameSearch, "Search", "query");
     ctx.registerTemplate(kNameFetch, "Fetch", "url");
-    ctx.registerTemplate(kNameFetchMd, "FetchMd", "url");
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
