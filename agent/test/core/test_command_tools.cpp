@@ -544,6 +544,66 @@ static std::shared_ptr<agentxx::agent::AgentContext> makeWorkDirContext(const st
     return ctx;
 }
 
+/// 路径比较用规范化: 分隔符统一为 `/`, 去掉结尾分隔符, Windows 忽略大小写
+/// (盘符大小写/正反斜杠格式差异不属于行为差异)
+static std::string normalizePathForCompare(std::string path) {
+    for (auto& c : path) {
+        if (c == '\\') {
+            c = '/';
+        }
+    }
+    while (path.size() > 1 && path.back() == '/') {
+        path.pop_back();
+    }
+#if XX_IS_WIN_D
+    path = utilxx_base::toLower(path);
+#endif
+    return path;
+}
+
+/// PWD 预设: 命令读到的 PWD 必须是命令自己实际的运行目录
+/// - boost.process 路径: PWD 与子进程 cwd 同一取值 (会话工作目录)
+/// - popen 回退路径: 改不了子进程目录, 命令在主程序当前目录下跑, PWD 取进程当前目录
+asio::awaitable<void> test_command_pwd_env(std::weak_ptr<agentxx::agent::AgentContext>) {
+    namespace fs    = std::filesystem;
+    auto            wd = (fs::temp_directory_path() / "agentxx_test_cmd_pwd").generic_string();
+    std::error_code ec;
+    fs::remove_all(wd, ec);
+    fs::create_directories(wd, ec);
+    if (ec) {
+        g_cmd_failed++;
+        TEST_FAIL << "create workdir failed: " << ec.message() << std::endl;
+        co_return;
+    }
+
+    auto ctx = makeWorkDirContext(wd);
+#if XX_IS_WIN_D
+    auto tool = agentxx::tools::ExecuteWindowsCommandTool{ctx};
+    // PowerShell 不像 POSIX shell 那样自动设置 PWD, 读到的就是本插件下发的取值
+    auto args = utilxx_base::Json{{"command", "Write-Output $env:PWD"}};
+#else
+    auto tool = agentxx::tools::ExecuteBashCommandTool{ctx};
+    auto args = utilxx_base::Json{{"command", "printenv PWD"}};
+#endif
+    auto result = co_await tool.execute_async(args);
+
+#if AGENTXX_ENABLE_BOOST_PROCESS
+    const auto expected = wd;
+#else
+    const auto expected = fs::current_path(ec).generic_string();
+#endif
+    const auto expectedNorm = normalizePathForCompare(expected);
+    if (normalizePathForCompare(result).find(expectedNorm) != std::string::npos) {
+        g_cmd_passed++;
+        TEST_PASS << "command env PWD = command run dir (" << expectedNorm << ")" << std::endl;
+    } else {
+        g_cmd_failed++;
+        TEST_FAIL << "expected PWD=" << expectedNorm << ", got: " << result << std::endl;
+    }
+    fs::remove_all(wd, ec);
+    co_return;
+}
+
 /// 子进程初始工作目录应为会话工作目录 (AgentConfig::workDir):
 /// 在 workDir 下创建 marker 文件后执行无路径参数的列目录命令,
 /// 输出包含 marker 名即证明子进程 cwd 确为 workDir
@@ -669,6 +729,86 @@ asio::awaitable<void> test_exec_env_detection(std::weak_ptr<agentxx::agent::Agen
     XX_TEST_EXPECT_EQ(env.python.version, env2.python.version);
     XX_TEST_EXPECT_EQ(env.node.exeName, env2.node.exeName);
     XX_TEST_EXPECT_EQ(env.node.version, env2.node.version);
+    co_return;
+}
+
+/// 子进程输出编码预设: python 的 stdout 编码必须是 UTF-8 (不随系统代码页/locale 变化),
+/// 中文输出原样到达 (不会被 autoConvertToUtf8 判成乱码丢弃)
+/// - 依据: execute_command_impl.h 的 kEnvPresets (PYTHONIOENCODING / PYTHONUTF8)
+asio::awaitable<void>
+    test_exec_env_utf8_preset(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    const auto env = agentxx_execmd_plugin::detectExecEnv();
+    if (false == env.python.available) {
+        TEST_INFO << "skip utf8 preset test: python not found" << std::endl;
+        co_return;
+    }
+
+    // PYTHONUTF8 只在 python 3.7+ 生效, 更老的版本只校验 stdio 编码
+    const bool utf8ModeSupported = [](std::string_view version) {
+        const auto first = version.find('.');
+        if (first == std::string_view::npos) {
+            return false;
+        }
+        const auto second    = version.find('.', first + 1);
+        const auto minorText = version.substr(
+            first + 1,
+            (second == std::string_view::npos ? version.size() : second) - first - 1
+        );
+        const long major = std::strtol(std::string{version.substr(0, first)}.c_str(), nullptr, 10);
+        const long minor = std::strtol(std::string{minorText}.c_str(), nullptr, 10);
+        return major > 3 || (major == 3 && minor >= 7);
+    }(env.python.version);
+
+#if XX_IS_WIN_D
+    auto tool = agentxx::tools::ExecuteWindowsCommandTool{agentContext};
+    // PowerShell 侧: 整条命令作为单个 -Command 参数, python 的参数用双引号
+    const auto encodingCmd = fmt::format(
+        "{} -c \"import sys;print(sys.stdout.encoding, getattr(sys.flags,'utf8_mode','n/a'))\"",
+        env.python.exeName
+    );
+    const auto chineseCmd
+        = fmt::format("{} -c \"print('\\u4e2d\\u6587')\"", env.python.exeName);
+#else
+    auto tool = agentxx::tools::ExecuteBashCommandTool{agentContext};
+    const auto encodingCmd = fmt::format(
+        "{} -c 'import sys;print(sys.stdout.encoding, getattr(sys.flags,"
+        "\"utf8_mode\",\"n/a\"))'",
+        env.python.exeName
+    );
+    const auto chineseCmd = fmt::format("{} -c 'print(\"\\u4e2d\\u6587\")'", env.python.exeName);
+#endif
+
+    // 预设变量是否真的进入子进程环境 (PYTHONIOENCODING / PYTHONUTF8 / JAVA_TOOL_OPTIONS)
+    // - 内容没有 `$`/反引号/双引号, 两侧都用双引号包裹即可 (bash 不展开, cmd/PowerShell 原样传参)
+    const std::string envProbePy
+        = "import os;print(os.environ.get('PYTHONIOENCODING'), "
+          "os.environ.get('PYTHONUTF8'), "
+          "'-Dstdout.encoding=UTF-8' in os.environ.get('JAVA_TOOL_OPTIONS',''))";
+    const auto envProbeCmd = fmt::format("{} -c \"{}\"", env.python.exeName, envProbePy);
+
+    auto encodingResult
+        = co_await tool.execute_async(utilxx_base::Json{{"command", encodingCmd}});
+    XX_TEST_EXPECT_TRUE(encodingResult.find("utf-8") != std::string::npos);
+    if (utf8ModeSupported) {
+        // PYTHONUTF8=1 生效时 stdout 编码与 sys.flags.utf8_mode 同时为 utf-8 / 1
+        XX_TEST_EXPECT_TRUE(encodingResult.find("utf-8 1") != std::string::npos);
+    } else {
+        TEST_INFO << "python " << env.python.version << " has no utf8_mode flag, skip that assert"
+                  << std::endl;
+    }
+    TEST_INFO << "python stdout encoding of child process: "
+              << utilxx_base::removeBetweenSpace(encodingResult) << std::endl;
+
+    auto chineseResult = co_await tool.execute_async(utilxx_base::Json{{"command", chineseCmd}});
+    XX_TEST_EXPECT_TRUE(chineseResult.find("中文") != std::string::npos);
+
+    auto envResult = co_await tool.execute_async(utilxx_base::Json{{"command", envProbeCmd}});
+    // 期望输出 "utf-8 1 True": stdio 编码预设 / UTF-8 模式 / java 编码选项都已下发
+    XX_TEST_EXPECT_TRUE(envResult.find("utf-8 1 True") != std::string::npos);
+    TEST_INFO << "child preset env: " << utilxx_base::removeBetweenSpace(envResult) << std::endl;
+
+    TEST_PASS << "command child process gets utf-8 preset env (stdio encoding + chinese text ok)"
+              << std::endl;
     co_return;
 }
 
@@ -1313,8 +1453,10 @@ asio::awaitable<TestResult>
 #endif
 
     co_await run(test_command_subprocess_workdir);
+    co_await run(test_command_pwd_env);
     co_await run(test_detect_powershell);
     co_await run(test_exec_env_detection);
+    co_await run(test_exec_env_utf8_preset);
     co_await run(test_exec_env_prompt);
     co_await run(test_windows_execute_ps);
 

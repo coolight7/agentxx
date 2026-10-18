@@ -43,6 +43,7 @@
 #include "asio/this_coro.hpp"
 #include "asio/use_awaitable.hpp"
 #include "utilxx_base/asio_error.h"
+#include "utilxx_base/env.h"
 #include "utilxx_base/json.h"
 #include "utilxx_base/log.h"
 #include "utilxx_base/string_util.h"
@@ -206,30 +207,138 @@ inline std::string truncateStdErr(const std::string& s, long long storeId = -1) 
 }
 
 // ---------------------------------------------------------------------
-// 子进程执行环境加固
+// 子进程执行环境 (输出编码统一 UTF-8 + 不进入交互/颜色模式)
 //
 // 命令输出的用途是给模型读, 不是给人看的终端会话。因此固定下发:
-// - NO_COLOR=1        : 尊重 NO_COLOR 约定的工具不再输出 ANSI 颜色码
-// - TERM=dumb         : 不假定终端支持光标控制, 进度条/清屏序列自动关闭
-// - PAGER=cat         : less/more 不进入交互分页等待 (否则管道不关闭, 工具挂到超时)
-// - GIT_PAGER=cat     : git 的 log/diff 等子命令同样不分页
-// - LC_ALL (POSIX)    : 使用当前环境已是 UTF-8 的取值, 否则用 C.UTF-8;
-//                       保证子进程按 UTF-8 输出 (命令本身改不了主程序进程的 locale)
-// - Windows           : 不改 locale (控制台代码页与命令自身编码策略共同决定输出,
-//                       强行覆盖会破坏中文等本地命令的输出)
+// - PYTHONIOENCODING=utf-8 : python 的 stdin/stdout/stderr 一律 UTF-8, 不再按
+//                            locale / 系统代码页推断 (中文 Windows 默认为 gbk)
+// - PYTHONUTF8=1           : python 进入 UTF-8 模式, open() 默认编码与文件系统
+//                            编码同为 UTF-8 (脚本写出的文本与工具读到的编码一致);
+//                            代价是脚本若不写 encoding 参数去读旧本地编码 (如 GBK)
+//                            文件会解码失败, 需显式指定 encoding
+// - JAVA_TOOL_OPTIONS      : JVM 不看 LC_ALL, System.out/err 的编码由系统代码页决定;
+//                            追加 stdout/stderr 编码属性 (sun.* 供 JDK 18 及以前,
+//                            stdout.*/stderr.* 供 JDK 19+)。代价是该机制本身要求
+//                            JVM 启动时向 stderr 打一行 "Picked up JAVA_TOOL_OPTIONS: ..."
+// - NO_COLOR=1             : 尊重 NO_COLOR 约定的工具不再输出 ANSI 颜色码
+// - TERM=dumb              : 不假定终端支持光标控制, 进度条/清屏序列自动关闭
+// - PAGER=cat              : less/more 不进入交互分页等待 (否则管道不关闭, 工具挂到超时)
+// - GIT_PAGER=cat          : git 的 log/diff 等子命令同样不分页
+// - LC_ALL (POSIX)         : 使用当前环境已是 UTF-8 的取值, 否则用 C.UTF-8;
+//                            保证子进程按 UTF-8 输出 (命令本身改不了主程序进程的 locale)
+// - PWD                    : 命令实际运行目录 (会话工作目录; 默认即主程序运行目录),
+//                            与子进程 cwd 一致 —— 脚本/构建工具读 $PWD 取当前目录,
+//                            Windows 侧 PowerShell/cmd 不自动设置该变量, 由此补齐
+// - Windows                : 不改 locale (控制台代码页与命令自身编码策略共同决定输出,
+//                            强行覆盖会破坏中文等本地命令的输出), 输出编码交给上面
+//                            python / java 的专用变量
+//
+// 没有对应环境变量的运行时不必下发: node / go / rust 一律以 UTF-8 写管道;
+// dotnet 的 Console 编码只能在代码里设置。ruby 的 -E 与 perl 的 -C 是全局选项
+// (部分版本拒绝写进 RUBYOPT), 且会把二进制输出也当文本转码, 故不预设。
+// MSVC 唯一可用的编码开关是 `CL` / `_CL_` (cl.exe 的环境变量, 前置/追加命令行选项,
+// 值为 `/utf-8`); 它会改变用户工程的编译语义 —— 老的 GBK 源文件被当成 UTF-8 读,
+// 中文字面量会静默变化, 因此不作为默认预设下发, 需要时由用户在工程里传 `/utf-8`。
+// MSVC 诊断信息本身的编码跟随控制台代码页 (chcp), LC_ALL/LANG/VSLANG 都无效,
+// 控制台是 UTF-8 时输出即为 UTF-8, 否则由 autoConvertToUtf8 兜底。
 //
 // 两条执行路径都要覆盖: boost.process 路径经 [applyExecEnvPolicy] 改写子进程环境表,
 // popen 回退路径无法指定环境, 用 [execEnvCommandPrefix] 在命令字符串前加赋值语句。
+// 两边取同一张 [kEnvPresets] 表, 避免取值不一致。
 // ---------------------------------------------------------------------
 
-/// 子进程环境加固策略 (由当前进程环境解析, 两侧路径共用同一份取值)
+/// 命令运行目录: workDir (会话工作目录) 优先; 为空时回退主程序进程当前目录
+/// - 两条执行路径共用同一判定: boost.process 路径作为子进程初始目录
+///   (process_start_dir) 与 `PWD` 预设取值; popen 回退路径无法改目录 (workDir 传空),
+///   此时它只决定 `PWD` 取值 (进程当前目录)
+/// - 始终返回非空串 (兜底 "." 等价于继承当前目录), 使 process_start_dir 可无条件传入
+inline std::string subprocessWorkDir(std::string_view workDir) {
+    if (false == workDir.empty()) {
+        return std::string{workDir};
+    }
+    std::error_code ec;
+    auto            cwd = std::filesystem::current_path(ec);
+    if (!ec && !cwd.empty()) {
+        return cwd.generic_string();
+    }
+    // 兜底: chdir(".") / current_directory="." 等价于继承 agent 进程当前目录
+    return ".";
+}
+
+/// 子进程环境策略 (由当前进程环境解析, 两侧路径共用同一份取值)
 struct ExecEnvPolicy {
     /// POSIX: 下发的 LC_ALL 值; Windows: 空串表示不改 locale
     std::string locale;
 
+    /// 下发的 PWD 值 (命令实际运行目录, 见 [subprocessWorkDir])
+    std::string pwd;
+
     /// 一次性描述 (写日志用: 说明本次运行实际生效的策略)
     std::string describe;
 };
+
+/// 单条预设环境变量
+struct EnvPreset {
+    /// 变量名
+    std::string_view name;
+    /// 下发的取值 (追加项时排用户已有取值之前, 让用户的同名选项优先)
+    std::string_view value;
+    /// true: 保留用户已有取值并追加在其后; false: 直接覆盖
+    bool keepExisting = false;
+};
+
+/// 固定下发的预设项 (顺序即 popen 路径的赋值顺序)
+inline constexpr EnvPreset kEnvPresets[] = {
+    {.name = "PYTHONIOENCODING", .value = "utf-8"},
+    {.name = "PYTHONUTF8", .value = "1"},
+    // 追加而非覆盖: 用户可能用同名变量设置内存/代理等选项, 不能丢
+    {.name         = "JAVA_TOOL_OPTIONS",
+     .value        = "-Dsun.stdout.encoding=UTF-8 -Dsun.stderr.encoding=UTF-8 "
+                     "-Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8",
+     .keepExisting = true},
+    {.name = "NO_COLOR", .value = "1"},
+    {.name = "TERM", .value = "dumb"},
+    {.name = "PAGER", .value = "cat"},
+    {.name = "GIT_PAGER", .value = "cat"},
+};
+
+/// 读取当前进程的同名环境变量 (无值时返回空串)
+/// - 用 utilxx_base::getSystemEnv: Windows 走 _dupenv_s (避免 MSVC C4996),
+///   且只读系统环境, 不受本进程预设变量影响 (与子进程继承到的取值一致)
+inline std::string currentEnvValue(std::string_view name) {
+    return utilxx_base::getSystemEnv(name).value_or(std::string{});
+}
+
+/// 预设项的最终取值: 追加项把用户已有取值接在后面 (没有则只用我们自己的取值)
+/// - boost.process 路径直接写入该取值; popen 路径交由 shell 的
+///   `${NAME:+ ...}` / `%NAME%` 完成同样的追加 (见 [execEnvCommandPrefix])
+inline std::string presetEnvValue(const EnvPreset& preset) {
+    std::string value{preset.value};
+    if (false == preset.keepExisting) {
+        return value;
+    }
+    const auto existing = currentEnvValue(preset.name);
+    if (false == existing.empty()) {
+        value += ' ';
+        value += existing;
+    }
+    return value;
+}
+
+/// 包成 shell 单引号字面量 (POSIX 命令前缀用): 内嵌单引号写成 `'\''`
+/// - 路径可能含空格/引号/`$` 等字符, 单引号内一律按字面处理
+inline std::string shellSingleQuote(std::string_view text) {
+    std::string out{"'"};
+    for (char c : text) {
+        if (c == '\'') {
+            out += "'\\''";
+        } else {
+            out += c;
+        }
+    }
+    out += '\'';
+    return out;
+}
 
 /// locale 名称是否已是 UTF-8 变体 (C.UTF-8 / en_US.UTF-8 / *.utf8 ...)
 inline bool isUtf8LocaleName(std::string_view name) {
@@ -242,46 +351,89 @@ inline bool isUtf8LocaleName(std::string_view name) {
 
 /// 当前进程的 locale 取值 (LC_ALL 优先, 回退 LANG)
 inline std::string currentLocaleEnvValue() {
-    auto read = [](const char* key) -> std::string {
-        const char* v = std::getenv(key);
-        return (v && *v) ? std::string{v} : std::string{};
-    };
-    auto v = read("LC_ALL");
+    auto v = currentEnvValue("LC_ALL");
     if (v.empty()) {
-        v = read("LANG");
+        v = currentEnvValue("LANG");
     }
     return v;
 }
 
-/// 解析子进程环境加固策略 (每次执行前调用: 只读环境变量, 开销可忽略)
-inline ExecEnvPolicy resolveExecEnvPolicy() {
+/// 解析子进程环境策略 (每次执行前调用: 只读环境变量, 开销可忽略)
+/// - `workDir`: 会话工作目录 (命令将要运行的目录); 为空表示命令在主程序进程
+///   当前目录下运行 (popen 回退路径无法改目录, 一律传空), 与 [subprocessWorkDir] 同义
+inline ExecEnvPolicy resolveExecEnvPolicy(std::string_view workDir = {}) {
     ExecEnvPolicy p;
+    p.pwd       = subprocessWorkDir(workDir);
+    std::string vars;
+    for (const auto& preset : kEnvPresets) {
+        if (false == vars.empty()) {
+            vars += ' ';
+        }
+        vars += preset.name;
+        vars += '=';
+        vars += preset.value;
+        if (preset.keepExisting) {
+            vars += "(+existing)";
+        }
+    }
 #if XX_IS_WIN_D
-    p.describe = "NO_COLOR=1 TERM=dumb PAGER=cat GIT_PAGER=cat (Windows: locale untouched)";
+    vars += " (Windows: locale untouched)";
 #else
     const auto current = currentLocaleEnvValue();
     // 已是 UTF-8 时保持用户取值 (语言/排序规则不变), 否则用通用 UTF-8 locale;
     // 系统不提供 C.UTF-8 时子进程退回 C locale, 仍保证不出现本地编码乱码
     p.locale = isUtf8LocaleName(current) ? current : std::string{"C.UTF-8"};
-    p.describe
-        = fmt::format("NO_COLOR=1 TERM=dumb PAGER=cat GIT_PAGER=cat LC_ALL={}", p.locale);
+    vars += " LC_ALL=";
+    vars += p.locale;
 #endif
+    vars += " PWD=";
+    vars += p.pwd;
+    p.describe = std::move(vars);
     return p;
 }
 
-/// popen 回退路径: 环境加固的命令前缀 (该路径无法单独指定子进程环境)
-/// - POSIX (`/bin/sh -c`): `export A=1 B=2; ` 对整条命令生效
-/// - Windows (`cmd /c`)  : `set A=1&& ...` 对后续命令生效
+/// popen 回退路径: 环境预设的命令前缀 (该路径无法单独指定子进程环境)
+/// - POSIX (`/bin/sh -c`): `export A='1' B="..."; ` 对整条命令生效
+///   (追加项用 `${B:+ $B}` 展开已有值, 值在双引号内不会再被分词)
+/// - Windows (`cmd /c`)  : `set "A=1"&& ...` 对后续命令生效
+///   (追加项用 `%B%` 展开已有值)
 inline std::string execEnvCommandPrefix(const ExecEnvPolicy& policy) {
 #if XX_IS_WIN_D
-    (void)policy;
-    // 注意 `=` 与 `&&` 之间不能有空格: 有空格会被当成变量值的一部分
-    return "set NO_COLOR=1&& set TERM=dumb&& set PAGER=cat&& set GIT_PAGER=cat&& ";
-#else
-    std::string prefix = "export NO_COLOR=1 TERM=dumb PAGER=cat GIT_PAGER=cat";
-    if (!policy.locale.empty()) {
-        prefix += fmt::format(" LC_ALL='{}'", policy.locale);
+    std::string prefix;
+    for (const auto& preset : kEnvPresets) {
+        const std::string name{preset.name};
+        const std::string value{preset.value};
+        if (preset.keepExisting) {
+            // 整段 if 必须用括号包住: 否则 `&&` 只挂在 else 分支上, 条件成立
+            // (追加) 时后面的赋值会被整段跳过 (cmd 的解析规则)
+            prefix += "(if defined " + name + " (set \"" + name + '=' + value + " %" + name
+                      + "%\") else (set \"" + name + '=' + value + "\"))&& ";
+        } else {
+            // 引号形式 `set "NAME=value"`: 取值可含空格, 且不会把分隔符前的空格并进取值
+            prefix += "set \"" + name + '=' + value + "\"&& ";
+        }
     }
+    // PWD: 命令运行目录 (取值来自会话工作目录, 可能与主程序目录不同)
+    prefix += "set \"PWD=" + policy.pwd + "\"&& ";
+    return prefix;
+#else
+    std::string prefix = "export ";
+    for (const auto& preset : kEnvPresets) {
+        const std::string name{preset.name};
+        const std::string value{preset.value};
+        if (preset.keepExisting) {
+            // 已有同名变量时追加在后面 (已在双引号内, 不重新分词);
+            // `:+` 只在已有值非空时展开, 变量的取值本身前面不加空格
+            prefix += name + "=\"" + value + "${" + name + ":+ $" + name + "}\" ";
+        } else {
+            prefix += name + "='" + value + "' ";
+        }
+    }
+    if (false == policy.locale.empty()) {
+        prefix += "LC_ALL='" + policy.locale + "' ";
+    }
+    // PWD: 命令运行目录 (路径可能含引号等字符, 按 shell 单引号转义)
+    prefix += "PWD=" + shellSingleQuote(policy.pwd) + " ";
     prefix += "; ";
     return prefix;
 #endif
@@ -306,38 +458,25 @@ struct NewProcessGroup {
 };
 #endif
 
-/// 子进程初始工作目录: workDir (会话工作目录) 优先; 为空时回退进程 cwd。
-/// 始终返回非空串 (兜底 "." 等价于继承当前目录), 使 process_start_dir 可无条件传入
-inline std::string subprocessWorkDir(const std::string& workDir) {
-    if (!workDir.empty()) {
-        return workDir;
-    }
-    std::error_code ec;
-    auto            cwd = std::filesystem::current_path(ec);
-    if (!ec && !cwd.empty()) {
-        return cwd.generic_string();
-    }
-    // 兜底: chdir(".") / current_directory="." 等价于继承 agent 进程当前目录
-    return ".";
-}
-
 // 前置声明 (定义在下方 WinJobGuard/killProcGroup 之后; procCancelWatchLoop
 // 与 timeoutGuard 需要调用它们)
 inline void killProcGroup(boost::process::process& proc, void* winJob = nullptr);
 inline void closePipesAfterKill(asio::readable_pipe& outpip, asio::readable_pipe& errpip);
 
-/// 把加固项写入子进程环境表 (boost.process 路径; 覆盖同名继承值)
+/// 把预设项写入子进程环境表 (boost.process 路径; 覆盖/追加同名继承值)
+/// - 取值与 popen 路径同源 (同一张 [kEnvPresets] 表 + [presetEnvValue] 的追加规则)
 inline void applyExecEnvPolicy(
     std::unordered_map<boost::process::environment::key, boost::process::environment::value>& env,
     const ExecEnvPolicy&                                                                     policy
 ) {
     using EnvKey   = boost::process::environment::key;
     using EnvValue = boost::process::environment::value;
-    env[EnvKey{"NO_COLOR"}]  = EnvValue{"1"};
-    env[EnvKey{"TERM"}]      = EnvValue{"dumb"};
-    env[EnvKey{"PAGER"}]     = EnvValue{"cat"};
-    env[EnvKey{"GIT_PAGER"}] = EnvValue{"cat"};
-    if (!policy.locale.empty()) {
+    for (const auto& preset : kEnvPresets) {
+        env[EnvKey{preset.name}] = EnvValue{presetEnvValue(preset)};
+    }
+    // PWD: 命令运行目录 (与子进程 cwd 一致; 取值见 [subprocessWorkDir])
+    env[EnvKey{"PWD"}] = EnvValue{policy.pwd};
+    if (false == policy.locale.empty()) {
         env[EnvKey{"LC_ALL"}] = EnvValue{policy.locale};
     }
 }
@@ -781,8 +920,9 @@ inline asio::awaitable<std::string> bashExecuteAsync(
             procEnv[kv.key()] = kv.value();
         }
     }
-    // 执行环境加固 (NO_COLOR / TERM / PAGER / locale; 见 resolveExecEnvPolicy)
-    detail::applyExecEnvPolicy(procEnv, detail::resolveExecEnvPolicy());
+    // 执行环境预设 (输出编码 / PWD / NO_COLOR / TERM / PAGER / locale;
+    // PWD 取值 = 命令运行目录, 与下面的 process_start_dir 同一判定)
+    detail::applyExecEnvPolicy(procEnv, detail::resolveExecEnvPolicy(workDir));
 
 #if XX_IS_WIN_D
     auto procExe  = boost::process::environment::find_executable("bash");
@@ -859,8 +999,8 @@ inline asio::awaitable<std::string> windowsExecuteAsync(
             procEnv[kv.key()] = kv.value();
         }
     }
-    // 执行环境加固 (与 bashExecuteAsync 同一份策略)
-    detail::applyExecEnvPolicy(procEnv, detail::resolveExecEnvPolicy());
+    // 执行环境预设 (与 bashExecuteAsync 同一份策略; PWD = 命令运行目录)
+    detail::applyExecEnvPolicy(procEnv, detail::resolveExecEnvPolicy(workDir));
 
     auto launch  = detail::buildWinProcLaunch(command);
     auto procExe = boost::process::environment::find_executable(launch.exeName);
@@ -969,8 +1109,9 @@ inline std::string bashExecute(
     if (command.empty()) {
         throw std::invalid_argument{"Arg `command` is empty"};
     }
-    // popen 无法单独指定子进程环境: 把加固项作为命令前缀 (POSIX `export ...;`
-    // / Windows `set ...&&`), 与 boost.process 路径同一份策略 (见 resolveExecEnvPolicy)
+    // popen 无法单独指定子进程环境: 把预设项作为命令前缀 (POSIX `export ...;`
+    // / Windows `set ...&&`), 与 boost.process 路径同一份策略 (见 resolveExecEnvPolicy)。
+    // 该路径也改不了子进程目录, 命令在主程序当前目录下运行, 故 PWD 取进程当前目录
     const auto hardenedCommand
         = detail::execEnvCommandPrefix(detail::resolveExecEnvPolicy()) + command;
 #if XX_IS_WIN_D

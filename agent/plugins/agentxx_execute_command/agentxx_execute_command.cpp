@@ -93,9 +93,11 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx) {
     //   由主程序固化, 之后无法再刷新 (提示词注入了也只能改主程序提示词表)
     ctx.env = detectExecEnv();
 
-    // 记录本次运行实际生效的子进程环境加固策略 (排查"为什么工具里跑命令的输出
-    // 与手敲不同": NO_COLOR/TERM/PAGER 固定下发, POSIX 侧 locale 按环境选择,
-    // Windows 侧不动 locale; 见 execute_command_impl.h 的 resolveExecEnvPolicy)
+    // 记录本次运行实际生效的子进程环境策略 (排查"为什么工具里跑命令的输出
+    // 与手敲不同": 输出编码 / PWD / NO_COLOR/TERM/PAGER 固定下发, POSIX 侧 locale
+    // 按环境选择, Windows 侧不动 locale; 见 execute_command_impl.h 的
+    // resolveExecEnvPolicy; 这里不带参数 = 按主程序当前目录记录, 实际每条命令的
+    // PWD 取该命令的运行目录)
     XX_LOGI(
         "agentxx_execute_command: child env policy: {}",
         agentxx_execmd_plugin::detail::resolveExecEnvPolicy().describe

@@ -272,12 +272,12 @@ pushd "%AGENTXX_SMOKE_DIR%"
 set "AGENTXX_SMOKE_RC=%ERRORLEVEL%"
 popd
 if not "%AGENTXX_SMOKE_RC%"=="0" (
-    echo [smoke] agentxx_cli --dump-config failed: exit=%AGENTXX_SMOKE_RC%
-    echo [smoke] the release output does not run; a broken plugin DLL is the usual cause
-    echo [smoke] delete the stale LTCG caches and relink, then rebuild: del /S /Q "%build_dir%\*.iobj"
+    echo [test] agentxx_cli --dump-config failed: exit=%AGENTXX_SMOKE_RC%
+    echo [test] the release output does not run; a broken plugin DLL is the usual cause
+    echo [test] delete the stale LTCG caches and relink, then rebuild: del /S /Q "%build_dir%\*.iobj"
     exit /b 1
 )
-echo [smoke] agentxx_cli starts and loads plugins OK
+echo [test] agentxx_cli starts and loads plugins OK
 :smoke_done
 
 rem ===== Archive release package (AGENTXX_PACKAGE_RELEASE=1 auto pack) =====
