@@ -1571,7 +1571,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 mgr,
                 "call_read_1",
                 "agentxx_filesystem_read",
-                R"({"path":"/home/user/a.cpp","line_offset":10,"line_limit":50})",
+                R"({"path":"/home/user/a.cpp","offset":10,"limit":50})",
                 "",
                 true,
                 false,
@@ -2312,7 +2312,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             agentxx::plugin::ClientToolRenderRequest req;
             req.toolCallId = "call_read_cache_1";
             req.toolName   = "agentxx_filesystem_read";
-            req.argsJson   = R"({"path":"/home/user/a.cpp","line_offset":10,"line_limit":50})";
+            req.argsJson   = R"({"path":"/home/user/a.cpp","offset":10,"limit":50})";
             req.resultText = "";
             req.isFinished = true;
             req.isError    = false;
@@ -2370,7 +2370,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             XX_TEST_EXPECT_TRUE(second.summary.find("[10, 60]") != std::string::npos);
 
             // 输入变化 (参数/宽度) → 缓存不命中, 需要重新渲染
-            req.argsJson = R"({"path":"/home/user/a.cpp","line_offset":1,"line_limit":2})";
+            req.argsJson = R"({"path":"/home/user/a.cpp","offset":1,"limit":2})";
             auto changed = agentxx::plugin::renderClientTool(
                 reg.get(),
                 cache.get(),
@@ -2470,7 +2470,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     cache.get(),
                     "call_read_sticky",
                     "agentxx_filesystem_read",
-                    R"({"path":"/home/user/b.cpp","line_offset":0,"line_limit":100})",
+                    R"({"path":"/home/user/b.cpp","offset":0,"limit":100})",
                     "     1|file content line one", // 结果到达: 输入特征与上一份不同
                     true,
                     false,
@@ -3011,7 +3011,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 mgr2,
                 "call_bs_before",
                 "agentxx_share_store",
-                R"({"opt":"insert","text":"a\nb"})",
+                R"({"opt":"new","text":"a\nb"})",
                 "",
                 true,
                 false,
@@ -3041,13 +3041,13 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         agentxx::plugin::registerBuiltinToolRenderers(*mgr2);
         XX_TEST_EXPECT_EQ(mgr2->uiRegistrySnapshot()->builtinToolRenderers.size(), size_t{2});
 
-        // 28.3 share_store insert: 操作 + 行数 + 新增 id (取自结果 JSON)
+        // 28.3 share_store new: 操作 + 行数 + 新增 id (取自结果 JSON)
         {
             auto res = co_await renderToolAsync(
                 mgr2,
-                "call_bs_insert",
+                "call_bs_new",
                 "agentxx_share_store",
-                R"({"opt":"insert","text":"line1\nline2\nline3"})",
+                R"({"opt":"new","text":"line1\nline2\nline3"})",
                 R"({"id":7})",
                 true,
                 false,
@@ -3055,7 +3055,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             );
             XX_TEST_EXPECT_TRUE(res.matched);
             XX_TEST_EXPECT_EQ(res.displayName, "Store");
-            XX_TEST_EXPECT_EQ(res.summary, " · insert 3 lines → #7");
+            XX_TEST_EXPECT_EQ(res.summary, " · new 3 lines → #7");
             XX_TEST_EXPECT_TRUE(res.items.empty()); ///< 展开体保持通用展示 (无 items)
         }
 
@@ -3063,16 +3063,16 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         {
             auto res = co_await renderToolAsync(
                 mgr2,
-                "call_bs_insert_running",
+                "call_bs_new_running",
                 "agentxx_share_store",
-                R"({"opt":"insert","text":"a\nb"})",
+                R"({"opt":"new","text":"a\nb"})",
                 "",
                 false,
                 false,
                 100
             );
             XX_TEST_EXPECT_TRUE(res.matched);
-            XX_TEST_EXPECT_EQ(res.summary, " · insert 2 lines");
+            XX_TEST_EXPECT_EQ(res.summary, " · new 2 lines");
         }
 
         // 28.5 get/set/delete: id 与行区间 (仅一侧时另一侧开放)
@@ -3081,7 +3081,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 mgr2,
                 "call_bs_get",
                 "agentxx_share_store",
-                R"({"opt":"get","id":12,"line_offset":0,"line_limit":100})",
+                R"({"opt":"get","id":12,"offset":0,"limit":100})",
                 "content",
                 true,
                 false,
@@ -3094,7 +3094,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 mgr2,
                 "call_bs_get_open",
                 "agentxx_share_store",
-                R"({"opt":"get","id":12,"line_offset":40})",
+                R"({"opt":"get","id":12,"offset":40})",
                 "",
                 true,
                 false,
@@ -3106,13 +3106,13 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 mgr2,
                 "call_bs_set",
                 "agentxx_share_store",
-                R"({"opt":"set","id":3,"text":"x\ny"})",
+                R"({"opt":"update","id":3,"text":"x\ny"})",
                 "success",
                 true,
                 false,
                 100
             );
-            XX_TEST_EXPECT_EQ(setRes.summary, " · set #3 2 lines");
+            XX_TEST_EXPECT_EQ(setRes.summary, " · update #3 2 lines");
 
             // `delete` 操作已移除: 与其它未识别的 opt 一样原样展示 (不带 id 摘要)
             auto delRes = co_await renderToolAsync(
@@ -3256,7 +3256,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 .renderFn = pluginFn,
             });
 
-            const std::string args       = R"({"opt":"insert","text":"a\nb"})";
+            const std::string args       = R"({"opt":"new","text":"a\nb"})";
             auto              withPlugin = agentxx::plugin::renderClientTool(
                 &reg,
                 nullptr, // 无语义缓存: renderer 同步执行 (不进入异步请求路径)
@@ -3287,7 +3287,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             );
             XX_TEST_EXPECT_TRUE(builtinOnly.matched);
             XX_TEST_EXPECT_EQ(builtinOnly.displayName, "Store");
-            XX_TEST_EXPECT_EQ(builtinOnly.summary, " · insert 2 lines");
+            XX_TEST_EXPECT_EQ(builtinOnly.summary, " · new 2 lines");
         }
 
         // 28.11 内置渲染器不受插件禁用/卸载影响 (进程级注册, 与插件生命周期无关)
@@ -3302,14 +3302,14 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 mgr2,
                 "call_bs_after_unload",
                 "agentxx_share_store",
-                R"({"opt":"insert","text":"a\nb"})",
+                R"({"opt":"new","text":"a\nb"})",
                 R"({"id":9})",
                 true,
                 false,
                 100
             );
             XX_TEST_EXPECT_TRUE(afterUnload.matched);
-            XX_TEST_EXPECT_EQ(afterUnload.summary, " · insert 2 lines → #9");
+            XX_TEST_EXPECT_EQ(afterUnload.summary, " · new 2 lines → #9");
             XX_TEST_EXPECT_EQ(mgr2->uiRegistrySnapshot()->builtinToolRenderers.size(), size_t{2});
         }
     }

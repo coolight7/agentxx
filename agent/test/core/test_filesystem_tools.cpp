@@ -1,6 +1,7 @@
 #include "agentxx-test/core/test_filesystem_tools.h"
 #include "agentxx-test/test_coro_util.h"
 #include "agentxx/agent/context.h"
+#include "agentxx/util/neograph_json_bridge.h"
 #include "utilxx_base/env.h"
 #include <neograph/types.h>
 // 原 lib 内置工具已迁移至 agentxx_filesystem 插件 (同名同行为); 测试直测
@@ -90,7 +91,7 @@ AGENTXX_TEST_FS_TOOL_ASYNC(
     FilesystemReadTextFileTool,
     fileReadExecuteAsync,
     "agentxx_filesystem_read",
-    R"(Read a text file (e.g. .txt, .md, .json, .log, source code) and return its contents with line numbers.)"
+    R"(Read a text file (e.g. .txt, .md, .json, .log, source code) and return its contents.)"
 )
 AGENTXX_TEST_FS_TOOL_ASYNC(
     FilesystemWriteFileTool,
@@ -782,12 +783,12 @@ asio::awaitable<void>
         }
     }
 
-    // 测试带 line_offset / line_limit 读取不存在文件
+    // 测试带 offset / limit 读取不存在文件
     try {
         auto offsetArgs = utilxx_base::Json{
-            {"path",        testDir + "/nonexistent.txt"},
-            {"line_offset", 0                           },
-            {"line_limit",  10                          },
+            {"path",   testDir + "/nonexistent.txt"},
+            {"offset", 0                           },
+            {"limit",  10                          },
         };
         auto result = co_await tool.execute_async(offsetArgs);
         if (utilxx_base::isIgnoreCaseContains(result, "not exist")
@@ -890,16 +891,16 @@ asio::awaitable<void>
     }
     auto tool = agentxx::tools::FilesystemReadTextFileTool{agentContext};
     auto args = utilxx_base::Json{
-        {"path",        offsetFile},
-        {"line_offset", 0         },
+        {"path",   offsetFile},
+        {"offset", 0         },
     };
     auto result = co_await tool.execute_async(args);
     if (result.find("aaaa") != std::string::npos) {
         g_fs_passed++;
-        TEST_PASS << "FilesystemReadTextFileTool respects line_offset=0" << std::endl;
+        TEST_PASS << "FilesystemReadTextFileTool respects offset=0" << std::endl;
     } else {
         g_fs_failed++;
-        TEST_FAIL << "FilesystemReadTextFileTool line_offset=0 failed, got: " << result
+        TEST_FAIL << "FilesystemReadTextFileTool offset=0 failed, got: " << result
                   << std::endl;
     }
     co_return;
@@ -929,8 +930,8 @@ asio::awaitable<void>
     test_read_text_file_limit(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemReadTextFileTool{agentContext};
     auto args = utilxx_base::Json{
-        {"path",       testDir + "/offset_test.txt"},
-        {"line_limit", 3                           },
+        {"path",  testDir + "/offset_test.txt"},
+        {"limit", 3                           },
     };
     auto result    = co_await tool.execute_async(args);
     auto lineCount = size_t{0};
@@ -941,10 +942,10 @@ asio::awaitable<void>
     }
     if (lineCount <= 3) {
         g_fs_passed++;
-        TEST_PASS << "FilesystemReadTextFileTool respects line_limit" << std::endl;
+        TEST_PASS << "FilesystemReadTextFileTool respects limit" << std::endl;
     } else {
         g_fs_failed++;
-        TEST_FAIL << "FilesystemReadTextFileTool line_limit failed, got " << lineCount << " lines"
+        TEST_FAIL << "FilesystemReadTextFileTool limit failed, got " << lineCount << " lines"
                   << std::endl;
     }
     co_return;
@@ -954,9 +955,9 @@ asio::awaitable<void>
     test_read_text_file_offset_and_limit(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FilesystemReadTextFileTool{agentContext};
     auto args = utilxx_base::Json{
-        {"path",        testDir + "/offset_test.txt"},
-        {"line_offset", 0                           },
-        {"line_limit",  2                           },
+        {"path",   testDir + "/offset_test.txt"},
+        {"offset", 0                           },
+        {"limit",  2                           },
     };
     auto result = co_await tool.execute_async(args);
     if (result.find("aaaa") != std::string::npos && result.find("bbbb") != std::string::npos
@@ -966,6 +967,27 @@ asio::awaitable<void>
     } else {
         g_fs_failed++;
         TEST_FAIL << "FilesystemReadTextFileTool offset+limit failed, got: " << result << std::endl;
+    }
+
+    // 旧参数名 (`line_offset`/`line_limit`) 已统一为 `offset`/`limit`: 传入旧名按参数错误处理
+    // (外层执行体转成 "[Error] ..." 文本), 不能静默忽略 ——
+    // 忽略会退化成读整个文件, 调用方却以为只读了指定区间
+    {
+        auto legacyArgs = utilxx_base::Json{
+            {"path",        testDir + "/offset_test.txt"},
+            {"line_offset", 0                           },
+            {"line_limit",  2                           },
+        };
+        auto legacyResult = co_await tool.execute_async(legacyArgs);
+        if (legacyResult.find("renamed") != std::string::npos
+            && legacyResult.find("aaaa") == std::string::npos) {
+            g_fs_passed++;
+            TEST_PASS << "FilesystemReadTextFileTool rejects legacy line_offset/line_limit"
+                      << std::endl;
+        } else {
+            g_fs_failed++;
+            TEST_FAIL << "legacy paging args not rejected, got: " << legacyResult << std::endl;
+        }
     }
     co_return;
 }
@@ -1283,9 +1305,9 @@ asio::awaitable<void>
 
     // offset/limit 读取: 同样保留原始 `\r`
     auto args2 = utilxx_base::Json{
-        {"path",        filePath},
-        {"line_offset", 1       },
-        {"line_limit",  1       },
+        {"path",   filePath},
+        {"offset", 1       },
+        {"limit",  1       },
     };
     auto part = co_await tool.execute_async(args2);
     auto partHasBeta
@@ -2546,9 +2568,9 @@ asio::awaitable<void>
 
     // 2) 分段读取 (offset + limit)
     auto argsSlice = utilxx_base::Json{
-        {"path",        filePath},
-        {"line_offset", 1       },
-        {"line_limit",  1       }
+        {"path",   filePath},
+        {"offset", 1       },
+        {"limit",  1       }
     };
     auto resSlice = co_await tool.execute_async(argsSlice);
     bool sliceOk  = resSlice.find("第二行关键内容") != std::string::npos
@@ -2830,9 +2852,9 @@ asio::awaitable<void> test_sync_fallback_without_async_file_io(
         {"path", filePath}
     };
     auto readPartArgs = utilxx_base::Json{
-        {"path",        filePath},
-        {"line_offset", 1       },
-        {"line_limit",  1       }
+        {"path",   filePath},
+        {"offset", 1       },
+        {"limit",  1       }
     };
     auto editArgs = utilxx_base::Json{
         {"path",    filePath               },
@@ -2999,12 +3021,27 @@ asio::awaitable<void> test_plugin_real_link() {
         linkCtx->toolRegistry->find("agentxx_filesystem_list")->extra["autoSummaryOutput"],
         std::string{"true"}
     );
-    // read 自带 line_offset/line_limit 分页参数, 读多少行由调用方决定:
+    // read 自带 offset/limit 分页参数, 读多少行由调用方决定:
     // 注册时只声明并行安全 (见 kReadFlags), 结果不做自动摘要, 原样交给调用方
     XX_TEST_EXPECT_EQ(
         linkCtx->toolRegistry->find("agentxx_filesystem_read")->extra["autoSummaryOutput"],
         std::string{"false"}
     );
+
+    // read 的参数名: 分页参数统一为 `offset`/`limit` (与调用方习惯一致)
+    // - 参数名与描述都取自注册进注册表的定义: 描述来自主程序提示词表
+    //   (AgentPrompt::toolPrompt), 两侧 key 不一致时描述会变空, 故一并校对
+    {
+        auto        def    = linkCtx->toolRegistry->find("agentxx_filesystem_read")->get_definition();
+        auto        params = agentxx::util::fromNeographJson(def.parameters);
+        const auto& props  = params["properties"];
+        XX_TEST_EXPECT_TRUE(props.contains("offset"));
+        XX_TEST_EXPECT_TRUE(props.contains("limit"));
+        XX_TEST_EXPECT_FALSE(props.contains("line_offset"));
+        XX_TEST_EXPECT_FALSE(props.contains("line_limit"));
+        XX_TEST_EXPECT_TRUE(!props["offset"]["description"].get<std::string>().empty());
+        XX_TEST_EXPECT_TRUE(!props["limit"]["description"].get<std::string>().empty());
+    }
 
     // 重复调用检查 (repeatCallCheck; 对应注册 flags 里的
     // AGENTXX_PLUGIN_TOOL_FLAG_REPEAT_CALL_CHECK): list/read/glob/grep/write 启用
@@ -3065,9 +3102,9 @@ asio::awaitable<void> test_plugin_real_link() {
         auto part = co_await callTool(
             "agentxx_filesystem_read",
             utilxx_base::Json{
-                {"path",        "link_smoke.txt"},
-                {"line_offset", 1               },
-                {"line_limit",  1               }
+                {"path",   "link_smoke.txt"},
+                {"offset", 1               },
+                {"limit",  1               }
         }
         );
         XX_TEST_EXPECT_TRUE(

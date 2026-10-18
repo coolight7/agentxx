@@ -82,7 +82,7 @@ but only read full instructions when needed:
 
 1. **Recognize when a skill applies**: Check if the user's task matches a skill's description.
 2. **Read the skill's full instructions**: Use `file read tool` on the skill path.
-   It reads the whole file by default; only set `line_offset`/`line_limit` if the file is very large.
+   It reads the whole file by default; only set `offset`/`limit` if the file is very large.
 3. **Follow the skill's instructions**: SKILL.md contains step-by-step workflows, best practices, and examples.
 4. **Access supporting files**: Skills may include helper scripts, configs, or reference docs — use absolute paths.
 
@@ -181,15 +181,15 @@ Shell wildcards are supported (`*`, `?`, `[...]`, and `**` for any directory dep
           "agentxx_filesystem_read",
           ToolPrompt{
               .depict =
-                  R"(Read a text file (e.g. .txt, .md, .json, .log, source code) and return its contents with line numbers.
-Supports offset/limit for reading portions of large files.)",
+                  R"(Read a text file (e.g. .txt, .md, .json, .log, source code) and return its contents.
+Supports `offset`/`limit` (both counted in lines) for reading portions of large files: `offset` lines are skipped from the beginning, then at most `limit` lines are returned. Both are optional; omitting them reads the whole file.)",
               .args =
                   {
                       {"path",
                        R"(Path to the text file. Relative paths are resolved against the current working directory; `~` expands to the home directory.)"},
-                      {"line_offset",
+                      {"offset",
                        R"(Number of lines to skip from the beginning. Default `0` (no offset). Returns an error if offset exceeds the file's line count.)"},
-                      {"line_limit",
+                      {"limit",
                        R"(Maximum number of lines to read. Range: [1, ∞]. Default `null` (read all). Values exceeding the file's line count are allowed without error.)"},
                   },
           },
@@ -448,16 +448,16 @@ Useful for passing large content between tool calls without repeating it in mess
                   {
                       {"opt", R"(Operation to perform:
 `get`: Retrieve stored text by its unique ID.
-`insert`: Store new text; returns a unique ID.
-`set`: Update existing text by its unique ID.
+`new`: Store new text; returns a unique ID.
+`update`: Replace the text stored under an existing ID.
 )"},
-                      {"text", "The text content to store. Required for `insert` and `set`."},
-                      {"line_offset",
-                       R"(Optional for `insert`/`set`. Line offset for partial operations. Default `0` (no offset). Returns an error if offset exceeds the stored text's line count.)"},
-                      {"line_limit",
-                       R"(Optional for `insert`/`set`. Maximum lines to read. Range: [1, ∞]. Default `null` (no limit). Values exceeding line count are allowed without error.)"},
+                      {"text", "The text content to store. Required for `new` and `update`."},
+                      {"offset",
+                       R"(Only applies to `get`. Number of lines to skip from the beginning. Default `0` (no offset). Returns an error if offset exceeds the stored text's line count.)"},
+                      {"limit",
+                       R"(Only applies to `get`. Maximum lines to read. Range: [1, ∞]. Default `null` (no limit). Values exceeding line count are allowed without error.)"},
                       {"id",
-                       "The unique ID of stored text. Required for `get` and `set`. It must be an ID returned by `insert`; a larger (never allocated) ID is rejected as an invalid argument."},
+                       "The unique ID of stored text. Required for `get` and `update`. It must be an ID returned by `new`; a larger (never allocated) ID is rejected as an invalid argument."},
                   },
           },
       },

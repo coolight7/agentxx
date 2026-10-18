@@ -3,13 +3,16 @@
 #include "agentxx/agent/context.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/tools/share_store.h"
+#include "agentxx/util/neograph_json_bridge.h"
 #include "agentxx/util/share_store_offload.h"
 #include "fmt/format.h"
 #include "utilxx_base/json.h"
+#include <algorithm>
 #include <iostream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace {
 // 本模块测试计数器 (仅本编译单元可见; 不经头文件 extern 导出)
@@ -41,68 +44,137 @@ asio::awaitable<TestResult> run_share_store_tests() {
     // 会话 `t1` 已分配 id 的最大值 (各用例 insert 后累积, 用于非法 id 校验)
     size_t maxId = 0;
 
-    auto insertAndGet = [&](const utilxx_base::Json& insertArgs) -> asio::awaitable<std::string> {
-        auto result = co_await tool.execute_async(insertArgs);
-        auto id     = utilxx_base::Json::parse(result).value<size_t>("id", 0);
-        auto get    = co_await tool.execute_async(utilxx_base::Json{
-               {"sessionId", insertArgs.value("sessionId", std::string{"t1"})},
-               {"opt", "get"},
-               {"id", id},
+    // 工具 schema: 分页参数统一为 `offset`/`limit`, `opt` 取值为 `get`/`new`/`update`
+    // - 参数描述取自主程序提示词表 (AgentPrompt::toolPrompt): key 与 schema 参数名
+    //   不一致时描述会变空, 因此这里同时校对两侧一致性
+    {
+        auto        def    = tool.get_definition();
+        auto        params = agentxx::util::fromNeographJson(def.parameters);
+        const auto& props  = params["properties"];
+        XX_TEST_EXPECT_TRUE(props.contains("offset"));
+        XX_TEST_EXPECT_TRUE(props.contains("limit"));
+        XX_TEST_EXPECT_FALSE(props.contains("line_offset"));
+        XX_TEST_EXPECT_FALSE(props.contains("line_limit"));
+
+        auto optDoc  = props["opt"]["description"].get<std::string>();
+        auto offDoc  = props["offset"]["description"].get<std::string>();
+        auto limDoc  = props["limit"]["description"].get<std::string>();
+        auto textDoc = props["text"]["description"].get<std::string>();
+        auto idDoc   = props["id"]["description"].get<std::string>();
+        XX_TEST_EXPECT_TRUE(!optDoc.empty());
+        XX_TEST_EXPECT_TRUE(!offDoc.empty());
+        XX_TEST_EXPECT_TRUE(!limDoc.empty());
+        XX_TEST_EXPECT_TRUE(!textDoc.empty());
+        XX_TEST_EXPECT_TRUE(!idDoc.empty());
+        // 描述里说明 offset/limit 只对 `get` 有效
+        XX_TEST_EXPECT_TRUE(offDoc.find("get") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(limDoc.find("get") != std::string::npos);
+
+        const auto& opEnum = props["opt"]["enum"];
+        XX_TEST_EXPECT_TRUE(opEnum.is_array());
+        std::vector<std::string> opts;
+        for (const auto& item : opEnum) {
+            opts.push_back(item.get<std::string>());
+        }
+        XX_TEST_EXPECT_EQ(opts.size(), size_t{3});
+        XX_TEST_EXPECT_TRUE(std::find(opts.begin(), opts.end(), "get") != opts.end());
+        XX_TEST_EXPECT_TRUE(std::find(opts.begin(), opts.end(), "new") != opts.end());
+        XX_TEST_EXPECT_TRUE(std::find(opts.begin(), opts.end(), "update") != opts.end());
+    }
+
+    /// 存入文本后取回 (`new` + `get`): 取回参数由调用方给出
+    /// (`offset`/`limit` 只对 `get` 有效, 因此切片参数一律传给 `get`)
+    auto insertThenGet = [&](std::string_view         text,
+                             const utilxx_base::Json& getExtra
+                             = utilxx_base::Json::object()) -> asio::awaitable<std::string> {
+        auto ins = co_await tool.execute_async(utilxx_base::Json{
+            {"sessionId", "t1"             },
+            {"opt",       "new"            },
+            {"text",      std::string{text}},
         });
-        co_return get;
+        auto id      = utilxx_base::Json::parse(ins).value<size_t>("id", 0);
+        auto getArgs = utilxx_base::Json{
+            {"sessionId", "t1" },
+            {"opt",       "get"},
+            {"id",        id   },
+        };
+        for (const auto& [k, v] : getExtra.items()) {
+            getArgs[k] = v;
+        }
+        co_return co_await tool.execute_async(getArgs);
     };
 
-    // #2: 行切片必须保留换行符, 且结尾不多余追加换行
+    // #2: 取回时的行切片必须保留换行符, 且结尾不多余追加换行
     {
-        auto get = co_await insertAndGet(utilxx_base::Json{
-            {"sessionId",   "t1"       },
-            {"opt",         "insert"   },
-            {"text",        "a\nb\nc\n"},
-            {"line_offset", 0          },
-            {"line_limit",  2          },
+        auto get = co_await insertThenGet("a\nb\nc\n", utilxx_base::Json{
+            {"offset", 0},
+            {"limit",  2},
         });
         XX_TEST_EXPECT_EQ(get, "a\nb\n");
     }
 
     // 中间偏移切片
     {
-        auto get = co_await insertAndGet(utilxx_base::Json{
-            {"sessionId",   "t1"          },
-            {"opt",         "insert"      },
-            {"text",        "a\nb\nc\nd\n"},
-            {"line_offset", 1             },
-            {"line_limit",  2             },
+        auto get = co_await insertThenGet("a\nb\nc\nd\n", utilxx_base::Json{
+            {"offset", 1},
+            {"limit",  2},
         });
         XX_TEST_EXPECT_EQ(get, "b\nc\n");
     }
 
     // 无结尾换行的输入切片 (EOF 边界: 不应多余追加换行)
     {
-        auto get = co_await insertAndGet(utilxx_base::Json{
-            {"sessionId",   "t1"     },
-            {"opt",         "insert" },
-            {"text",        "a\nb\nc"},
-            {"line_offset", 0        },
-            {"line_limit",  2        },
+        auto get = co_await insertThenGet("a\nb\nc", utilxx_base::Json{
+            {"offset", 0},
+            {"limit",  2},
         });
         XX_TEST_EXPECT_EQ(get, "a\nb\n");
     }
 
-    // 不切片 (无 offset/limit): 原样存储
+    // 不切片 (无 offset/limit): 原样取回
     {
-        auto get = co_await insertAndGet(utilxx_base::Json{
-            {"sessionId", "t1"    },
-            {"opt",       "insert"},
-            {"text",      "x\ny\n"},
-        });
+        auto get = co_await insertThenGet("x\ny\n");
         XX_TEST_EXPECT_EQ(get, "x\ny\n");
     }
 
-    // set 生命周期: insert → get → set → get
+    // offset/limit 只对 `get` 有效: `new`/`update` 传入时按无效参数忽略, 文本原样存储
+    {
+        auto ins = co_await tool.execute_async(utilxx_base::Json{
+            {"sessionId", "t1"          },
+            {"opt",       "new"         },
+            {"text",      "a\nb\nc\nd\n"},
+            {"offset",    1             },
+            {"limit",     2             },
+        });
+        auto id  = utilxx_base::Json::parse(ins).value<size_t>("id", 0);
+        auto all = co_await tool.execute_async(utilxx_base::Json{
+            {"sessionId", "t1" },
+            {"opt",       "get"},
+            {"id",        id   },
+        });
+        XX_TEST_EXPECT_EQ(all, "a\nb\nc\nd\n");
+
+        co_await tool.execute_async(utilxx_base::Json{
+            {"sessionId", "t1"          },
+            {"opt",       "update"      },
+            {"id",        id            },
+            {"text",      "w\nx\ny\nz\n"},
+            {"offset",    2             },
+            {"limit",     1             },
+        });
+        auto updated = co_await tool.execute_async(utilxx_base::Json{
+            {"sessionId", "t1" },
+            {"opt",       "get"},
+            {"id",        id   },
+        });
+        XX_TEST_EXPECT_EQ(updated, "w\nx\ny\nz\n");
+    }
+
+    // update 生命周期: new → get → update → get
     {
         auto ins = co_await tool.execute_async(utilxx_base::Json{
             {"sessionId", "t1"    },
-            {"opt",       "insert"},
+            {"opt",       "new"   },
             {"text",      "hello" },
         });
         auto id  = utilxx_base::Json::parse(ins).value<size_t>("id", 0);
@@ -116,7 +188,7 @@ asio::awaitable<TestResult> run_share_store_tests() {
 
         co_await tool.execute_async(utilxx_base::Json{
             {"sessionId", "t1"   },
-            {"opt",       "set"  },
+            {"opt",       "update"},
             {"id",        id     },
             {"text",      "world"},
         });
@@ -165,12 +237,12 @@ asio::awaitable<TestResult> run_share_store_tests() {
         }
         XX_TEST_EXPECT_TRUE(threwGet);
 
-        // set: 同样拒绝未分配的 id (不能凭空写入新 id)
+        // update: 同样拒绝未分配的 id (不能凭空写入新 id)
         bool threwSet = false;
         try {
             (void)co_await tool.execute_async(utilxx_base::Json{
                 {"sessionId", "t1"      },
-                {"opt",       "set"     },
+                {"opt",       "update"  },
                 {"id",        maxId + 1 },
                 {"text",      "new"     },
             });
@@ -253,6 +325,26 @@ asio::awaitable<TestResult> run_share_store_tests() {
             );
         }
         XX_TEST_EXPECT_TRUE(threwBadOpt);
+    }
+
+    // 旧参数名 (`line_offset`/`line_limit`) 已统一为 `offset`/`limit`: 传入旧名直接报参数错误,
+    // 不能静默忽略 (忽略会让调用方以为取到了指定行区间)
+    {
+        bool        threwLegacy = false;
+        std::string errText;
+        try {
+            (void)co_await tool.execute_async(utilxx_base::Json{
+                {"sessionId",   "t1" },
+                {"opt",         "get"},
+                {"id",          maxId},
+                {"line_offset", 0    },
+            });
+        } catch (const std::invalid_argument& e) {
+            threwLegacy = true;
+            errText     = e.what();
+        }
+        XX_TEST_EXPECT_TRUE(threwLegacy);
+        XX_TEST_EXPECT_TRUE(errText.find("renamed") != std::string::npos);
     }
 
     // -----------------------------------------------------------------------

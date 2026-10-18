@@ -121,7 +121,7 @@ agentxx::plugin::ClientToolRenderResult queryToolRender(
 /// 将工具调用参数 JSON 缩进格式化 (2 空格) 便于展开阅读, 例如:
 /// {
 ///   "path": "/a/b",
-///   "line_offset": 0
+///   "offset": 0
 /// }
 /// 参数解析失败或非对象时回退返回原始文本 (截断/异常参数)
 std::string formatToolArgs(std::string_view argsText) {

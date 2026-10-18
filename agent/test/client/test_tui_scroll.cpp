@@ -1593,8 +1593,8 @@ TestResult testTuiScroll() {
                                               + "\n"
                                                 "line2 with some words to wrap if narrow\n"
                                                 "line3\n";
-                        m->text      = "{\n  \"path\": \"/a/b/c\",\n  \"line_offset\": 0,\n"
-                                       "  \"line_limit\": 100\n}";
+                        m->text      = "{\n  \"path\": \"/a/b/c\",\n  \"offset\": 0,\n"
+                                       "  \"limit\": 100\n}";
                         m->collapsed = false;
                         break;
                     }

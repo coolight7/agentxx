@@ -156,7 +156,7 @@
     - ✅get_current_datetime 获取系统时间戳、本地时间、UTC时间
 - ✅**Tree-Messages**
     - agentxx_share_store (允许存取变量，在 llm-messages、skill、tool 之间传递数据)
-        - 支持 `line_offset`/`line_limit` 文本分页读取
+        - 支持 `offset`/`limit` 文本分页读取 (仅 `opt` = `get` 时有效)
         - 压缩上下文时会将部分内容存储到 `agentxx_share_store`
         - 自动拦截 tool/subagent 返回值，太长时存储原始内容到 `agentxx_share_store`, 并留下摘要和 id
     - 消息分支，支持修改历史消息/模型重新生成消息

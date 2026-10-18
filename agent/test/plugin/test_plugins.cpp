@@ -2438,9 +2438,9 @@ throw new Error("top-level rollback probe");
 
                 // 2. read (受控轮询, 带行区间)
                 auto r = co_await readTool->execute_async(utilxx_base::Json{
-                    {"path",        file},
-                    {"line_offset", 0   },
-                    {"line_limit",  2   },
+                    {"path",   file},
+                    {"offset", 0   },
+                    {"limit",  2   },
                 });
                 XX_TEST_EXPECT_TRUE(r.find("hello polled") != std::string::npos);
 
@@ -2552,9 +2552,9 @@ throw new Error("top-level rollback probe");
                 XX_TEST_EXPECT_TRUE(w.find("success") != std::string::npos);
 
                 auto r = co_await readTool->execute_async(utilxx_base::Json{
-                    {"path",        file},
-                    {"line_offset", 0   },
-                    {"line_limit",  2   },
+                    {"path",   file},
+                    {"offset", 0   },
+                    {"limit",  2   },
                 });
                 XX_TEST_EXPECT_TRUE(r.find("hello fallback") != std::string::npos);
 

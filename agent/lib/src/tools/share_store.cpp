@@ -24,13 +24,13 @@ std::optional<agentxx::middleware::SummarizationToolHandle>
         .generateDeduplicationKey
         = [](const utilxx_base::Json& args) -> std::optional<std::string> {
             if (args.is_object() && args["id"].is_string()) {
-                auto line_offset = args.value<int64_t>("line_offset", -1);
-                auto line_limit  = args.value<int64_t>("line_limit", -1);
+                auto offset = args.value<int64_t>("offset", -1);
+                auto limit  = args.value<int64_t>("limit", -1);
                 return fmt::format(
-                    "share_store:{}:lo:{}:ll:{}",
+                    "share_store:{}:offset:{}:limit:{}",
                     args["id"].get<std::string>(),
-                    line_offset,
-                    line_limit
+                    offset,
+                    limit
                 );
             }
             return std::nullopt;
@@ -65,8 +65,8 @@ neograph::ChatTool SessionShareStoreTool::get_definition() const {
                         {"enum",
                          utilxx_base::Json::array({
                              "get",
-                             "insert",
-                             "set",
+                             "new",
+                             "update",
                          })},
                         {"description", prompt.getArg("opt")},
                     },
@@ -79,17 +79,17 @@ neograph::ChatTool SessionShareStoreTool::get_definition() const {
                     },
                 },
                 {
-                    "line_offset",
+                    "offset",
                     {
                         {"type", "integer"},
-                        {"description", prompt.getArg("line_offset")},
+                        {"description", prompt.getArg("offset")},
                     },
                 },
                 {
-                    "line_limit",
+                    "limit",
                     {
                         {"type", "integer"},
-                        {"description", prompt.getArg("line_limit")},
+                        {"description", prompt.getArg("limit")},
                     },
                 },
                 {
@@ -113,18 +113,23 @@ asio::awaitable<std::string> SessionShareStoreTool::execute_async(const utilxx_b
     if (session_id.empty()) {
         throw std::invalid_argument{"Toolcall inner error, need `sessionId`"};
     }
+    // 已改名的分页参数直接报错: 静默忽略会让调用方以为取到了指定行区间
+    if (arguments.contains("line_offset") || arguments.contains("line_limit")) {
+        throw std::invalid_argument{
+            "Args `line_offset`/`line_limit` are renamed to `offset`/`limit`"
+        };
+    }
     size_t text_id          = arguments.value<size_t>("id", 0);
-    auto   text_line_offset = arguments.value<int64_t>("line_offset", -1);
-    auto   text_line_limit  = arguments.value<int64_t>("line_limit", -1);
+    auto   text_line_offset = arguments.value<int64_t>("offset", -1);
+    auto   text_line_limit  = arguments.value<int64_t>("limit", -1);
     auto   text             = arguments.value("text", std::string{});
     auto   text_opt         = arguments.value("opt", std::string{});
     if (text_opt.empty()) {
         throw std::invalid_argument{"Arg `opt` is empty"};
     }
 
-    // 分页切片: 对 `get` 取回的存储内容 / `set`·`insert` 的入参文本统一应用
-    // line_offset/line_limit (修正: 原实现对 get 无效, 因为切片作用在空入参 text 上,
-    // 而 get 分支直接返回了存储的完整内容)
+    // 分页切片: 只用于 `get` 取回的存储内容 —— 按行返回 [offset, offset+limit) 区间;
+    // `new`/`update` 的入参文本原样存储, `offset`/`limit` 对它们无效 (与工具描述一致)
     auto sliceByLine = [&](std::string input) -> std::string {
         if (text_line_offset < 0 && text_line_limit <= 0) {
             return input;
@@ -161,7 +166,7 @@ asio::awaitable<std::string> SessionShareStoreTool::execute_async(const utilxx_b
         if (lineNum <= offset) {
             // offset 超出文本行数
             throw std::runtime_error{fmt::format(
-                R"(Arg `line_offset`({} lines) is out of range of text lines({} lines).)",
+                R"(Arg `offset`({} lines) is out of range of text lines({} lines).)",
                 offset,
                 lineNum
             )};
@@ -182,8 +187,8 @@ asio::awaitable<std::string> SessionShareStoreTool::execute_async(const utilxx_b
     if (nullptr == mctx) {
         mctx = agentContextPtr->middlewareHandleContext;
     }
-    if (text_opt == std::string_view{"insert"}) {
-        auto reId = mctx->addShareStoreItemValue(session_id, sliceByLine(std::move(text)));
+    if (text_opt == std::string_view{"new"}) {
+        auto reId = mctx->addShareStoreItemValue(session_id, std::move(text));
         co_return utilxx_base::Json{
             {"id", reId},
         }
@@ -199,11 +204,11 @@ asio::awaitable<std::string> SessionShareStoreTool::execute_async(const utilxx_b
         }
         // 分页: 对存储的完整内容按行切片返回
         co_return sliceByLine(std::move(result.value()));
-    } else if (text_opt == std::string_view{"set"}) {
+    } else if (text_opt == std::string_view{"update"}) {
         if (text_id <= 0) {
             throw std::invalid_argument{"Arg `id` is empty"};
         }
-        mctx->setShareStoreItemValue(session_id, text_id, sliceByLine(std::move(text)));
+        mctx->setShareStoreItemValue(session_id, text_id, std::move(text));
         co_return "success";
     } else {
         throw std::invalid_argument{fmt::format("Arg `opt` is invalid: {}", text_opt)};

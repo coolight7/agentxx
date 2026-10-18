@@ -137,7 +137,7 @@
     - ✅ get_current_datetime (retrieves system timestamp, local time, and UTC time)
 - ✅ **Tree-Messages**
     - agentxx_share_store (allows storing and retrieving variables across LLM messages, skills, and tools)
-        - Supports `line_offset` / `line_limit` paginated text reading
+        - Supports `offset` / `limit` paginated text reading (only for `opt` = `get`)
         - Automatically offloads pruned messages to `agentxx_share_store` during context compaction
         - Automatically intercepts tool/subagent outputs; large responses are stored in `agentxx_share_store` with summary and ID left in context
     - Message branching, supporting historical message edits and model regeneration

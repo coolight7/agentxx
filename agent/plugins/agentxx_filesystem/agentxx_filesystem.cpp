@@ -37,8 +37,8 @@ Can also be used to check whether a specific file or directory exists.
 `path` may contain shell wildcards as in bash: `*` any characters, `?` one character, `[...]` a character class, `**` any directory depth (e.g. `src/*.cpp`, `src/**/*.h`). Matched entries themselves are then listed (like `ls -d`); with `recursive` = `true`, matched directories are expanded as well.
 Wildcard matching is case-sensitive and does not match hidden entries (name starting with `.`).)";
 constexpr std::string_view kDepictRead
-    = R"(Read a text file (e.g. .txt, .md, .json, .log, source code) and return its contents with line numbers.
-Supports offset/limit for reading portions of large files.)";
+    = R"(Read a text file (e.g. .txt, .md, .json, .log, source code) and return its contents.
+Supports `offset`/`limit` (both counted in lines) for reading portions of large files: `offset` lines are skipped from the beginning, then at most `limit` lines are returned. Both are optional; omitting them reads the whole file.)";
 constexpr std::string_view kDepictWrite
     = "Create a new file or overwrite an existing file with the given content.";
 constexpr std::string_view kDepictEdit
@@ -77,7 +77,7 @@ constexpr int32_t kReadOnlyFlags
     = kAutoSummary | AGENTXX_PLUGIN_TOOL_FLAG_PARALLEL_SAFE | kRepeatCheck;
 
 /// `read` 的注册 flags: 并行安全 + 重复调用检查, 不做自动摘要
-/// - `read` 自带 `line_offset`/`line_limit` 分页参数, 读多少行由调用方决定;
+/// - `read` 自带 `offset`/`limit` 分页参数, 读多少行由调用方决定;
 ///   主程序再按 [agentxx::agent::AgentConfig::toolcallSummaryLimitOutputLength]
 ///   自动摘要会把一次读取切成"头部 + share_store 页码", 与工具自身的分页重复 ——
 ///   调用方看到的行号会变成摘要后的结果行号, 与文件行号对不上
@@ -175,14 +175,14 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
         = ctx.schema(kNameRead)
               .string("path", kPathDesc, /*required=*/true)
               .integer(
-                  "line_offset",
-                  "Default `0`. Number of lines to skip from the beginning. Default `0` (no offset). Returns an error if offset exceeds the file's line count.",
+                  "offset",
+                  R"(Number of lines to skip from the beginning. Default `0` (no offset). Returns an error if offset exceeds the file's line count.)",
                   false,
                   0
               )
               .integer(
-                  "line_limit",
-                  "Maximum number of lines to read. Range: [1, ∞]. Default `null` (read all). Values exceeding the file's line count are allowed without error."
+                  "limit",
+                  R"(Maximum number of lines to read. Range: [1, ∞]. Default `null` (read all). Values exceeding the file's line count are allowed without error.)"
               )
               .build();
 
@@ -607,8 +607,8 @@ static int32_t fsClientSetup(FsClientCtx& ctx) {
     ctx.registerRenderer(kNameRead, [](const ToolRenderInput& in, ToolRenderOutput& out) {
         ArgReader   args(in.argsJson);
         std::string path = args.value("path", "");
-        int64_t     off  = args.value("line_offset", -1);
-        int64_t     lim  = args.value("line_limit", -1);
+        int64_t     off  = args.value("offset", -1);
+        int64_t     lim  = args.value("limit", -1);
         std::string rangeStr;
         if (off <= 0 && lim <= 0) {
         } else if (off <= 0) {

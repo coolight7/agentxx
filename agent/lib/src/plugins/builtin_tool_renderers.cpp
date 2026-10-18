@@ -137,9 +137,9 @@ std::string subagentTaskText(const utilxx_base::Json& args) {
 }
 
 /// `agentxx_share_store` 渲染: 显示名 "Store" + 操作摘要
-/// - insert: " · insert 152 lines → #7" (id 取自结果 JSON, 完成后才有)
-/// - set:    " · set #7 [0, 100] 152 lines"
-/// - get:    " · get #7 [0, 100]"
+/// - new:    " · new 152 lines → #7" (id 取自结果 JSON, 完成后才有)
+/// - update: " · update #7 152 lines"
+/// - get:    " · get #7 [0, 100]" (offset/limit 只对 get 有效, 仅它展示区间)
 /// - 未识别的 opt (协议扩展) 原样展示, 参数未就绪时仅提供显示名
 int32_t renderShareStore(const AgentxxToolRenderInput& in, RenderText& out) {
     out.displayName = std::string{kNameShareStore};
@@ -150,8 +150,8 @@ int32_t renderShareStore(const AgentxxToolRenderInput& in, RenderText& out) {
     }
     const std::string opt    = args->value("opt", std::string{});
     const int64_t     id     = args->value<int64_t>("id", 0);
-    const int64_t     offset = args->value<int64_t>("line_offset", -1);
-    const int64_t     limit  = args->value<int64_t>("line_limit", -1);
+    const int64_t     offset = args->value<int64_t>("offset", -1);
+    const int64_t     limit  = args->value<int64_t>("limit", -1);
     const std::string text   = args->value("text", std::string{});
 
     std::string summary = " ·";
@@ -162,24 +162,24 @@ int32_t renderShareStore(const AgentxxToolRenderInput& in, RenderText& out) {
         }
     };
 
-    if (opt == "insert") {
-        addPart("insert");
-        addPart(lineRangeText(offset, limit));
+    if (opt == "new") {
+        addPart("new");
         addPart(linesText(text));
-        // insert 的新增 id 只在结果里 (参数无 id), 完成后补 " → #7"
+        // new 的新增 id 只在结果里 (参数无 id), 完成后补 " → #7"
         if (in.is_finished != 0) {
             const uint64_t newId = shareStoreResultId(PluginStringView::str(in.result_text));
             if (newId > 0) {
                 addPart(fmt::format("→ #{}", newId));
             }
         }
-    } else if (opt == "get" || opt == "set") {
+    } else if (opt == "get" || opt == "update") {
         addPart(opt);
         if (id > 0) {
             addPart(fmt::format("#{}", id));
         }
-        addPart(lineRangeText(offset, limit));
-        if (opt == "set") {
+        if (opt == "get") {
+            addPart(lineRangeText(offset, limit));
+        } else {
             addPart(linesText(text));
         }
     } else if (!opt.empty()) {

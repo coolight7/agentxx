@@ -770,11 +770,28 @@ inline std::string fileListExecuteImpl(
 // =====================================================================
 // agentxx_filesystem_read 执行体 (原 FilesystemReadTextFileTool::execute_async)
 // =====================================================================
+
+namespace detail {
+
+/// 拒绝已改名的分页参数 (`line_offset`/`line_limit` → `offset`/`limit`)
+/// - 发现旧名时直接报参数错误: 静默忽略会让模型以为读了指定区间, 实际返回整个文件
+///   (read 不做自动摘要, 大文件会直接填满上下文)
+inline void rejectLegacyLineArgs(const utilxx_base::Json& arguments) {
+    if (arguments.contains("line_offset") || arguments.contains("line_limit")) {
+        throw std::invalid_argument{
+            "Args `line_offset`/`line_limit` are renamed to `offset`/`limit`"
+        };
+    }
+}
+
+} // namespace detail
+
 inline std::string fileReadExecuteImpl(
     const utilxx_base::Json& arguments,
     const std::string&       workDir,
     const IsCancelledFn& isCancelled = nullptr // 单文件短操作不轮询; 形参保持与其他执行体一致
 ) {
+    detail::rejectLegacyLineArgs(arguments);
     auto filepath = detail::wsAbs(workDir, arguments.value("path", std::string{}));
     if (filepath.empty()) {
         throw std::invalid_argument{"Arg `path` is empty"};
@@ -791,8 +808,8 @@ inline std::string fileReadExecuteImpl(
     if (std::filesystem::is_directory(fsPath, fsEc)) {
         throw std::runtime_error{"Path is a directory"};
     }
-    auto text_line_offset = arguments.value<int64_t>("line_offset", -1);
-    auto text_line_limit  = arguments.value<int64_t>("line_limit", -1);
+    auto text_line_offset = arguments.value<int64_t>("offset", -1);
+    auto text_line_limit  = arguments.value<int64_t>("limit", -1);
 
     /// 同步阻塞读取文件
     std::ifstream stream;
@@ -834,7 +851,7 @@ inline std::string fileReadExecuteImpl(
         if (lineNum <= offset) {
             // offset 超出文件行数
             throw std::runtime_error{fmt::format(
-                R"(Arg `line_offset`({} lines) is out of range of file lines({} lines).)",
+                R"(Arg `offset`({} lines) is out of range of file lines({} lines).)",
                 offset,
                 lineNum
             )};
@@ -1930,10 +1947,11 @@ inline asio::awaitable<std::string>
 } // namespace detail
 
 /// agentxx_filesystem_read 执行体协程版 (原 FilesystemReadTextFileTool::execute_async)
-/// - line_offset/line_limit 模式经 async_read_until 逐行推进 (保留原始换行符);
+/// - offset/limit 模式经 async_read_until 逐行推进 (保留原始换行符);
 ///   其余整文件读取; 读取后 autoConvertToUtf8 (保留 crlf 或 \n 原样不转换)
 inline asio::awaitable<std::string>
     fileReadExecuteAsyncImpl(const utilxx_base::Json& arguments, const std::string& workDir) {
+    detail::rejectLegacyLineArgs(arguments);
     auto filepath = detail::wsAbs(workDir, arguments.value("path", std::string{}));
     if (filepath.empty()) {
         throw std::invalid_argument{"Arg `path` is empty"};
@@ -1950,8 +1968,8 @@ inline asio::awaitable<std::string>
     if (std::filesystem::is_directory(fsPath, fsEc)) {
         throw std::runtime_error{"Path is a directory"};
     }
-    auto text_line_offset = arguments.value<int64_t>("line_offset", -1);
-    auto text_line_limit  = arguments.value<int64_t>("line_limit", -1);
+    auto text_line_offset = arguments.value<int64_t>("offset", -1);
+    auto text_line_limit  = arguments.value<int64_t>("limit", -1);
 
     auto executor = co_await asio::this_coro::executor;
 
@@ -2011,7 +2029,7 @@ inline asio::awaitable<std::string>
         if (lineNum <= offset) {
             // offset 超出文件行数
             throw std::runtime_error{fmt::format(
-                R"(Arg `line_offset`({} lines) is out of range of file lines({} lines).)",
+                R"(Arg `offset`({} lines) is out of range of file lines({} lines).)",
                 offset,
                 lineNum
             )};

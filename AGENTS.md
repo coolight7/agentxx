@@ -410,6 +410,10 @@ path/to/agentxx_test string_util regex
 - share store 内存策略: 会话库 `store` 表为唯一数据源, 内存仅保留
   `SessionShareStore::kCacheCapacity` (3) 条 LRU 缓存; 首次访问某会话只取回 `max(id)` 作自增计数
   (内存占用与条目数无关); id 大于 lastId (从未分配) 按参数错误抛异常; 已不支持删除条目
+- 分页参数统一命名 (2026-10): `agentxx_filesystem_read` 与 `agentxx_share_store` 的分页参数
+  统一为 `offset`/`limit` (均按行计); `agentxx_share_store` 的 `opt` 取值为 `get`/`new`/`update`
+  (原 `insert`/`set`), 且 `offset`/`limit` **仅 `get` 时有效** (`new`/`update` 传入即忽略, 文本原样存储);
+  描述文本有两份来源 (插件字面量 + `AgentPrompt::toolPrompt` 默认表), 改动时两侧需同步
 - 工具错误约定: 参数检查失败抛 `std::invalid_argument`、运行期错误抛 `std::runtime_error`,
   由 `ToolcallWrapNode` 统一格式化为 `[Exception aborted: <msg>]` 结果文本; 插件侧在 SDK 边界捕获并上报
   FAILED (取消上报 CANCELLED); 不要返回 `{"error": ...}` 形态

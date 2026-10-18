@@ -124,7 +124,7 @@ Skills follow a **progressive disclosure** pattern - you see their name and desc
 
 1. **Recognize when a skill applies**: Check if the user's task matches a skill's description
 2. **Read the skill's full instructions**: Use toolcall `agentxx_filesystem_read` on the path shown in the skill list above.
-   It reads the whole file by default; only set `line_offset`/`line_limit` if the file is very large.
+   It reads the whole file by default; only set `offset`/`limit` if the file is very large.
 3. **Follow the skill's instructions**: SKILL.md contains step-by-step workflows, best practices, and examples
 4. **Access supporting files**: Skills may include helper scripts, configs, or reference docs - use absolute paths
 

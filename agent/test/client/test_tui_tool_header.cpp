@@ -94,8 +94,8 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
             return -1;
         }
         std::string path = j.value("path", std::string{});
-        int64_t     off  = j.value("line_offset", int64_t{-1});
-        int64_t     lim  = j.value("line_limit", int64_t{-1});
+        int64_t     off  = j.value("offset", int64_t{-1});
+        int64_t     lim  = j.value("limit", int64_t{-1});
         std::string range;
         if (off <= 0 && lim <= 0) {
             // empty
@@ -762,7 +762,7 @@ void testTuiToolHeaderFilesystem() {
     // read_text_file: 完整 [offset, limit] 区间
     f.pushTool(
         "agentxx_filesystem_read",
-        R"({"path":"/home/a.cpp","line_offset":0,"line_limit":100})"
+        R"({"path":"/home/a.cpp","offset":0,"limit":100})"
     );
     XX_TEST_EXPECT_TRUE(f.render().find("Read · [0, 100] /home/a.cpp") != std::string::npos);
 
@@ -771,11 +771,11 @@ void testTuiToolHeaderFilesystem() {
     XX_TEST_EXPECT_TRUE(f.render().find("Read · /home/b.cpp") != std::string::npos);
 
     // read_text_file: 仅 limit
-    f.pushTool("agentxx_filesystem_read", R"({"path":"/home/c.cpp","line_limit":50})");
+    f.pushTool("agentxx_filesystem_read", R"({"path":"/home/c.cpp","limit":50})");
     XX_TEST_EXPECT_TRUE(f.render().find("Read · [0, 50] /home/c.cpp") != std::string::npos);
 
     // read_text_file: 仅 offset
-    f.pushTool("agentxx_filesystem_read", R"({"path":"/home/d.cpp","line_offset":10})");
+    f.pushTool("agentxx_filesystem_read", R"({"path":"/home/d.cpp","offset":10})");
     XX_TEST_EXPECT_TRUE(f.render().find("Read · [10, ~] /home/d.cpp") != std::string::npos);
 
     // list
@@ -877,7 +877,7 @@ void testTuiToolHeaderOverflow() {
     // 摘要含超长路径, 远超视口宽度
     f.pushTool(
         "agentxx_filesystem_read",
-        R"({"path":"/very/very/long/path/that/definitely/exceeds/the/narrow/viewport/width/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.cpp","line_offset":0,"line_limit":100})"
+        R"({"path":"/very/very/long/path/that/definitely/exceeds/the/narrow/viewport/width/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.cpp","offset":0,"limit":100})"
     );
     std::string out = f.render();
     // 前缀必须完整保留 (修复前会被按比例压扁, 丢失 "Tool]" 等字符)
@@ -1000,7 +1000,7 @@ void testTuiToolHeaderRunning() {
     ToolHeaderFixture fReadRange;
     fReadRange.pushTool(
         "agentxx_filesystem_read",
-        R"({"path":"/home/running.cpp","line_offset":0,"line_limit":100})",
+        R"({"path":"/home/running.cpp","offset":0,"limit":100})",
         false
     );
     XX_TEST_EXPECT_TRUE(
@@ -1090,7 +1090,7 @@ void testTuiToolHeaderPendingRender() {
         f.pushToolNameResult("agentxx_filesystem_read", "agentxx_filesystem", "Read");
         f.pushTool(
             "agentxx_filesystem_read",
-            R"({"path":"/home/a.cpp","line_offset":0,"line_limit":100})",
+            R"({"path":"/home/a.cpp","offset":0,"limit":100})",
             false // 运行中
         );
         const std::string out = f.plainRender();
@@ -1146,7 +1146,7 @@ void testTuiToolHeaderPendingRender() {
     {
         ToolHeaderFixture f;
         f.usePendingPluginManager();
-        f.pushTool("agentxx_share_store", R"({"opt":"insert","text":"a\nb"})", false);
+        f.pushTool("agentxx_share_store", R"({"opt":"new","text":"a\nb"})", false);
         const std::string pending = f.plainRender();
         XX_TEST_EXPECT_TRUE(pending.find("agentxx_share_store") == std::string::npos);
         XX_TEST_EXPECT_TRUE(pending.find("\"opt\"") == std::string::npos);
@@ -1159,12 +1159,12 @@ void testTuiToolHeaderPendingRender() {
         std::string ready;
         for (int i = 0; i < 8; ++i) {
             ready = f.plainRender();
-            if (ready.find("Store · insert 2 lines") != std::string::npos) {
+            if (ready.find("Store · new 2 lines") != std::string::npos) {
                 break;
             }
             f.drainIo();
         }
-        XX_TEST_EXPECT_TRUE(ready.find("Store · insert 2 lines") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(ready.find("Store · new 2 lines") != std::string::npos);
         XX_TEST_EXPECT_TRUE(ready.find("agentxx_share_store") == std::string::npos);
     }
 
@@ -1177,31 +1177,31 @@ void testTuiToolHeaderPendingRender() {
         f.usePendingPluginManager();
         f.pushTool(
             "agentxx_share_store",
-            R"({"opt":"insert","text":"a\nb"})",
+            R"({"opt":"new","text":"a\nb"})",
             false // 运行中
         );
         // 逐帧驱动 io 直到运行中的特化摘要上屏 (布局宽度经实测收敛后才稳定)
         std::string running;
         for (int i = 0; i < 8; ++i) {
             running = f.plainRender();
-            if (running.find("Store · insert 2 lines") != std::string::npos) {
+            if (running.find("Store · new 2 lines") != std::string::npos) {
                 break;
             }
             f.drainIo();
         }
-        XX_TEST_EXPECT_TRUE(running.find("Store · insert 2 lines") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(running.find("Store · new 2 lines") != std::string::npos);
 
         // 结果到达, 本帧特化结果尚未算出 (不驱动 io): 头部保持上一份摘要
         f.finishLastTool(R"({"id":7})");
         const std::string endFrame = f.plainRender();
-        XX_TEST_EXPECT_TRUE(endFrame.find("Store · insert 2 lines") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(endFrame.find("Store · new 2 lines") != std::string::npos);
         XX_TEST_EXPECT_TRUE(endFrame.find("\"id\"") == std::string::npos);
         XX_TEST_EXPECT_TRUE(endFrame.find("agentxx_share_store") == std::string::npos);
 
         // 完成态的特化结果上屏: 摘要补上结果里的新 id (正常的内容更新, 不是空白帧)
         f.drainIo();
         const std::string done = f.plainRender();
-        XX_TEST_EXPECT_TRUE(done.find("Store · insert 2 lines → #7") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(done.find("Store · new 2 lines → #7") != std::string::npos);
         XX_TEST_EXPECT_TRUE(done.find("agentxx_share_store") == std::string::npos);
     }
 
@@ -1578,35 +1578,35 @@ void testTuiToolHeaderDuration() {
 void testTuiToolHeaderBuiltin() {
     ToolHeaderFixture f;
 
-    // share_store insert: 操作 + 行数 + 新增 id (取自结果 JSON)
+    // share_store new: 操作 + 行数 + 新增 id (取自结果 JSON)
     f.pushTool(
         "agentxx_share_store",
-        R"({"opt":"insert","text":"line1\nline2\nline3"})",
+        R"({"opt":"new","text":"line1\nline2\nline3"})",
         true,
         true,
         R"({"id":7})"
     );
-    XX_TEST_EXPECT_TRUE(f.render().find("Store · insert 3 lines → #7") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(f.render().find("Store · new 3 lines → #7") != std::string::npos);
 
     // share_store get: id + 行区间
     f.pushTool(
         "agentxx_share_store",
-        R"({"opt":"get","id":12,"line_offset":0,"line_limit":100})",
+        R"({"opt":"get","id":12,"offset":0,"limit":100})",
         true,
         true,
         "content"
     );
     XX_TEST_EXPECT_TRUE(f.render().find("Store · get #12 [0, 100]") != std::string::npos);
 
-    // share_store set
+    // share_store update
     f.pushTool(
         "agentxx_share_store",
-        R"({"opt":"set","id":3,"text":"x\ny"})",
+        R"({"opt":"update","id":3,"text":"x\ny"})",
         true,
         true,
         "success"
     );
-    XX_TEST_EXPECT_TRUE(f.render().find("Store · set #3 2 lines") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(f.render().find("Store · update #3 2 lines") != std::string::npos);
     // 已移除的 `delete` 与其它未识别的 opt 一样原样展示 (不带 id/行区间摘要)
     f.pushTool("agentxx_share_store", R"({"opt":"delete","id":3})", true, true, "success");
     XX_TEST_EXPECT_TRUE(f.render().find("Store · delete") != std::string::npos);
@@ -1637,8 +1637,8 @@ void testTuiToolHeaderBuiltin() {
 
     // 运行中 (未完成) 的 share_store: 无新增 id 后缀, 且显示名保持运行态高亮
     ToolHeaderFixture g;
-    g.pushTool("agentxx_share_store", R"({"opt":"insert","text":"a\nb"})", false);
-    XX_TEST_EXPECT_TRUE(g.plainRender().find("Store · insert 2 lines") != std::string::npos);
+    g.pushTool("agentxx_share_store", R"({"opt":"new","text":"a\nb"})", false);
+    XX_TEST_EXPECT_TRUE(g.plainRender().find("Store · new 2 lines") != std::string::npos);
     XX_TEST_EXPECT_TRUE(g.render().find("102;204;255") != std::string::npos);
 }
 

@@ -461,7 +461,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 `AUTO_SUMMARY` 只给"输出大小无法由参数决定"的工具置位。工具自己能控制输出大小的**不要置位**:
 
 - 自带分页参数的工具 (读多少由调用方参数决定, 例如 `agentxx_filesystem_read` 的
-  `line_offset`/`line_limit`): 主程序再截断一次会与工具自身的分页重复, 摘要后的行号也会与源内容对不上;
+  `offset`/`limit`): 主程序再截断一次会与工具自身的分页重复, 摘要后的行号也会与源内容对不上;
 - 自带裁剪逻辑的工具 (例如 `agentxx_execute_windows_command` / `agentxx_execute_bash_command`
   按 stdout/stderr 两路各自裁剪到 30k 字符): 主程序按整段结果压缩时, 过长的 `[StdOut]` 会把
   `[StdErr]` 一起裁进隐藏区, 模型必须读回全量才能判断 stderr 是否有内容。

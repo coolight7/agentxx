@@ -888,7 +888,7 @@ inline FixedGroup makeFixedGroup(size_t index) {
         idxStr
     );
     std::string callId   = fmt::format("call-{}", idxStr);
-    std::string toolArgs = "{\"path\":\"README.md\",\"line_offset\":0,\"line_limit\":40}";
+    std::string toolArgs = "{\"path\":\"README.md\",\"offset\":0,\"limit\":40}";
     std::string toolContent
         = fmt::format("RES-BENCH tool result {} | {}", idxStr, getFixedToolResultPayload());
     std::string assistSummary = fmt::format(
@@ -1288,7 +1288,7 @@ inline ResourceLlmSimServer startResourceLlmSimServer(size_t streamChunks = 0) {
                 tc["type"]     = "function";
                 tc["function"] = {
                     {"name",      "agentxx_filesystem_read"                                     },
-                    {"arguments", "{\"path\":\"README.md\",\"line_offset\":0,\"line_limit\":40}"}
+                    {"arguments", "{\"path\":\"README.md\",\"offset\":0,\"limit\":40}"}
                 };
                 toolCalls.push_back(tc);
             }
