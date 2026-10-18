@@ -4,6 +4,7 @@
 #include "agentxx/agent/context.h"
 #include "fmt/format.h"
 #include "utilxx_base/json.h"
+#include <charconv>
 #include <limits>
 #include <sstream>
 #include <stdexcept>
@@ -12,6 +13,33 @@
 
 namespace agentxx {
 namespace tools {
+
+namespace {
+
+/// 解析 `id` 参数 (声明为字符串: 模型传数字时主程序已按模式改成字符串;
+/// 这里同时接受数字与纯数字字符串, 便于直接调用实现体的场合) 
+/// - 缺失/空值返回 0 (调用方按"未给 id"处理); 非数字字符串报参数错误
+inline size_t parseShareStoreId(const utilxx_base::Json& arguments) {
+    const auto& id = arguments["id"];
+    if (id.is_string()) {
+        const auto s     = id.get<std::string>();
+        size_t     value = 0;
+        auto [ptr, ec]   = std::from_chars(s.data(), s.data() + s.size(), value);
+        if (ec != std::errc{} || ptr != s.data() + s.size()) {
+            if (s.empty()) {
+                return 0;
+            }
+            throw std::invalid_argument{fmt::format("Arg `id` is not a valid ID: {}", s)};
+        }
+        return value;
+    }
+    if (id.is_number()) {
+        return static_cast<size_t>(id.get<double>());
+    }
+    return 0;
+}
+
+} // namespace
 
 SessionShareStoreTool::SessionShareStoreTool(
     std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
@@ -95,7 +123,7 @@ neograph::ChatTool SessionShareStoreTool::get_definition() const {
                 {
                     "id",
                     {
-                        {"type", "integer"},
+                        {"type", "string"},
                         {"description", prompt.getArg("id")},
                     },
                 },
@@ -119,7 +147,7 @@ asio::awaitable<std::string> SessionShareStoreTool::execute_async(const utilxx_b
             "Args `line_offset`/`line_limit` are renamed to `offset`/`limit`"
         };
     }
-    size_t text_id          = arguments.value<size_t>("id", 0);
+    size_t text_id          = parseShareStoreId(arguments);
     auto   text_line_offset = arguments.value<int64_t>("offset", -1);
     auto   text_line_limit  = arguments.value<int64_t>("limit", -1);
     auto   text             = arguments.value("text", std::string{});
