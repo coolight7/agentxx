@@ -16,6 +16,18 @@ constexpr std::string_view kDepictRegexp =
     R"(Search, replace, or remove text using regular expressions.
 Operates on in-memory text content (not files).)";
 
+constexpr std::string_view kExpsDesc
+    = R"(Array of regex patterns. A match succeeds if ANY pattern matches.
+Every pattern is applied and the result is the union of their matches (overlapping matches are merged, so one span is reported once).)";
+constexpr std::string_view kOptDesc = R"(Operation mode:
+`search`: Return all match results.
+`replace`: Replace matches with `replace_str` and return the resulting text.
+`remove`: Remove all matches and return the resulting text.)";
+constexpr std::string_view kReplaceStrDesc
+    = "Default: empty string. The replacement string used when `opt` is `replace`.";
+constexpr std::string_view kIgnoreCaseDesc
+    = "Default `false`. If `true`, matching is case-insensitive (like `grep -i`).";
+
 constexpr int32_t kAutoSummary = AGENTXX_PLUGIN_TOOL_FLAG_AUTO_SUMMARY;
 
 /// 连续相同调用重复检查: 达阈值时由主程序询问用户确认后再继续
@@ -59,23 +71,26 @@ static int32_t stringSetup(StringPluginCtx& ctx) {
               .string("content", "The input text to operate on.", /*required=*/true)
               .stringArray(
                   "exps",
-                  "Array of regex patterns. A match succeeds if ANY pattern matches.",
+                  kExpsDesc,
                   /*required=*/true
               )
               .enumString(
                   "opt",
-                  R"(Operation mode:
-`search`: Return all match results.
-`replace`: Replace matches with `replace_str` and return the resulting text.
-`remove`: Remove all matches and return the resulting text.)",
+                  kOptDesc,
                   {"search", "replace", "remove"},
                   /*required=*/true
               )
               .string(
                   "replace_str",
-                  "Default: empty string. The replacement string used when `opt` is `replace`.",
+                  kReplaceStrDesc,
                   false,
                   ""
+              )
+              .boolean(
+                  "ignore_case",
+                  kIgnoreCaseDesc,
+                  false,
+                  false
               )
               .build();
 
