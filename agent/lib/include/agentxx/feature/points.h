@@ -69,7 +69,7 @@ struct CountTokensValue {
 
 template<>
 struct Codec<CountTokensRequest> {
-    static std::string toJson(const CountTokensRequest& req);
+    static std::string                       toJson(const CountTokensRequest& req);
     static std::optional<CountTokensRequest> fromJson(std::string_view text);
 };
 
@@ -102,9 +102,8 @@ struct TokenEstimator {
     size_t estimateText(std::string_view text) const;
 
     /// 一组消息的 token 估算 (含角色 / 正文 / 工具调用 / 多媒体附件)
-    size_t
-        estimateMessages(const std::vector<neograph::ChatMessage>& messages, bool countThinking)
-            const;
+    size_t estimateMessages(const std::vector<neograph::ChatMessage>& messages, bool countThinking)
+        const;
 
     /// 身份串 (见 `points::kContextCountTokens` 说明)
     std::string identityOf(const CountTokensRequest& req) const;
@@ -127,7 +126,7 @@ struct SummarizeRequest {
     /// 压缩目标 (可选, 0 = 不指定)
     int64_t targetTokens = 0;
     /// 摘要长度上限 (可选, 0 = 用实现内置值)
-    int64_t maxSummaryTokens = 0;
+    int64_t     maxSummaryTokens = 0;
     std::string language;
     /// 手动触发 (agent 空闲时调用):
     /// - true: 核心实现直接派生压缩子代理并等待完成, 不抛中断 (与轮次无关)
@@ -143,13 +142,13 @@ struct SummarizeValue {
 
 template<>
 struct Codec<SummarizeRequest> {
-    static std::string toJson(const SummarizeRequest& req);
+    static std::string                     toJson(const SummarizeRequest& req);
     static std::optional<SummarizeRequest> fromJson(std::string_view text);
 };
 
 template<>
 struct Codec<SummarizeValue> {
-    static std::string toJson(const SummarizeValue& value);
+    static std::string                   toJson(const SummarizeValue& value);
     static std::optional<SummarizeValue> fromJson(std::string_view text);
 };
 
@@ -165,17 +164,15 @@ struct ContextPointOptions {
     /// 压缩核心实现 (由压缩中间件提供: 内部派生"用完即弃"的压缩子代理, 只返回
     /// 摘要文本; 返回 nullopt = 没有核心实现 / 这次算不出来)
     /// - 实现里**不许**写回会话 / 不发提示消息 / 不写 share store: 这些是调度方的事
-    std::function<asio::awaitable<std::optional<SummarizeValue>>(
-        const SummarizeRequest&,
-        const ImplContext&
-    )>
+    std::function<
+        asio::awaitable<std::optional<SummarizeValue>>(const SummarizeRequest&, const ImplContext&)>
         summarizeImpl;
 };
 
 /// 上下文相关核心点的引用集合 (由压缩中间件持有)
 struct ContextPoints {
     ProvidePoint<CountTokensRequest, CountTokensValue>* countTokens = nullptr;
-    ProvidePoint<SummarizeRequest, SummarizeValue>*     summarize  = nullptr;
+    ProvidePoint<SummarizeRequest, SummarizeValue>*     summarize   = nullptr;
 };
 
 /// 声明上下文两个核心点并登记核心实现 (由压缩中间件在装配期调用)

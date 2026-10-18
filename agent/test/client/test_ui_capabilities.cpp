@@ -33,7 +33,9 @@ TestResult testUiCapabilities() {
     const int failedBefore = g_uc_failed;
 
     // 空 weak_ptr: 本用例只读能力段, 不触发任何需要 TUI 实例的回调
-    const agentxx::client::TuiPluginAdapter adapter{std::weak_ptr<agentxx::client::TUIClientAgentIO>{}};
+    const agentxx::client::TuiPluginAdapter adapter{
+        std::weak_ptr<agentxx::client::TUIClientAgentIO>{}
+    };
 
     const std::string text = adapter.uiCapabilitiesJson();
     XX_TEST_EXPECT_FALSE(text.empty());

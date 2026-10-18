@@ -14,8 +14,8 @@
 #pragma once
 
 #include "agentxx/version.h"
-#include "utilxx_base/asio_error.h" // 全局 asio 别名 + AsioErrorCode/AsioSystemError
 #include "asio/awaitable.hpp"
+#include "utilxx_base/asio_error.h" // 全局 asio 别名 + AsioErrorCode/AsioSystemError
 #include <array>
 #include <optional>
 #include <string>
@@ -62,6 +62,7 @@ struct UpdateCheckResult {
     /// 失败原因 (ok=false 时非空)
     std::string error;
 };
+
 /// 查询指定 URL 的最新发布并与当前运行版本比较
 /// - `url` 默认 [kLatestReleaseUrl]; 可传 GitHub API 端点 (`.../api.github.com/...`)
 /// - 请求配置: 不跟随重定向 (需要读 Location), 连接/读块超时各 8 秒 —— 启动路径上

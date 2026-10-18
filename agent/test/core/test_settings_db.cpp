@@ -157,7 +157,7 @@ static TestResult testVersionedWrite() {
         // 无条件写入: 版本自增
         XX_TEST_EXPECT_TRUE(db->set("k", "v1"));
         XX_TEST_EXPECT_EQ(db->version("k"), int64_t{1});
-        v = 0;
+        v         = 0;
         auto val1 = db->getVersioned("k", &v);
         XX_TEST_EXPECT_HAS_VALUE(val1);
         XX_TEST_EXPECT_EQ(v, int64_t{1});
@@ -191,8 +191,8 @@ static TestResult testVersionedWrite() {
         }
 
         // 两个写入者竞争: A 读到版本后 B 先提交, A 再提交得到冲突 (不静默覆盖 B)
-        auto    dbB = std::make_shared<SettingsDb>(path);
-        int64_t vA  = 0;
+        auto    dbB  = std::make_shared<SettingsDb>(path);
+        int64_t vA   = 0;
         auto    valA = db->getVersioned("k", &vA);
         XX_TEST_EXPECT_HAS_VALUE(valA);
         XX_TEST_EXPECT_EQ(vA, int64_t{3});

@@ -9,9 +9,9 @@
 #include "agentxx-test/core/test_cancel.h"
 #include "agentxx-test/core/test_checkpoint_store.h"
 #include "agentxx-test/core/test_command_tools.h"
+#include "agentxx-test/core/test_concurrency.h"
 #include "agentxx-test/core/test_config_keys.h"
 #include "agentxx-test/core/test_config_validation.h"
-#include "agentxx-test/core/test_concurrency.h"
 #include "agentxx-test/core/test_datetime_tool.h"
 #include "agentxx-test/core/test_diff_util.h"
 #include "agentxx-test/core/test_event_bridge.h"
@@ -23,6 +23,7 @@
 #include "agentxx-test/core/test_graph_data.h"
 #include "agentxx-test/core/test_http.h"
 #include "agentxx-test/core/test_http_recorder.h"
+#include "agentxx-test/core/test_input_delivery.h"
 #include "agentxx-test/core/test_interrupt_bus.h"
 #include "agentxx-test/core/test_interrupt_ui.h"
 #include "agentxx-test/core/test_json.h"
@@ -39,38 +40,37 @@
 #include "agentxx-test/core/test_network_timeout.h"
 #include "agentxx-test/core/test_observability.h"
 #include "agentxx-test/core/test_openai_provider.h"
-#include "agentxx-test/core/test_input_delivery.h"
+#include "agentxx-test/core/test_permission.h"
 #include "agentxx-test/core/test_persist_semantics.h"
-#include "agentxx-test/core/test_prompt_stability.h"
-#include "agentxx-test/core/test_prompt_sources.h"
 #include "agentxx-test/core/test_prompt_cache_prefix.h"
+#include "agentxx-test/core/test_prompt_sources.h"
+#include "agentxx-test/core/test_prompt_stability.h"
 #include "agentxx-test/core/test_provider_call_scope.h"
 #include "agentxx-test/core/test_race_guards.h"
-#include "agentxx-test/core/test_permission.h"
 #include "agentxx-test/core/test_rag_search_tools.h"
 #include "agentxx-test/core/test_regex.h"
 #include "agentxx-test/core/test_remote_agent.h"
-#include "agentxx-test/core/test_session_persistence.h"
 #include "agentxx-test/core/test_session_admin.h"
+#include "agentxx-test/core/test_session_persistence.h"
 #include "agentxx-test/core/test_session_schema.h"
 #include "agentxx-test/core/test_session_sync.h"
 #include "agentxx-test/core/test_settings_db.h"
-#include "agentxx-test/core/test_storage_consistency.h"
-#include "agentxx-test/core/test_shutdown_stages.h"
 #include "agentxx-test/core/test_share_store.h"
+#include "agentxx-test/core/test_shutdown_stages.h"
+#include "agentxx-test/core/test_storage_consistency.h"
 #include "agentxx-test/core/test_string_tools.h"
 #include "agentxx-test/core/test_string_util.h"
 #include "agentxx-test/core/test_subagent_bus.h"
 #include "agentxx-test/core/test_subagent_tool.h"
-#include "agentxx-test/core/test_toolcall_parallel.h"
-#include "agentxx-test/core/test_wire_roundtrip.h"
-#include "agentxx-test/core/test_wire_schema.h"
 #include "agentxx-test/core/test_summarization.h"
+#include "agentxx-test/core/test_toolcall_parallel.h"
 #include "agentxx-test/core/test_training.h"
 #include "agentxx-test/core/test_ui_items.h"
 #include "agentxx-test/core/test_ui_kit.h"
 #include "agentxx-test/core/test_usage_ledger.h"
 #include "agentxx-test/core/test_util_misc.h"
+#include "agentxx-test/core/test_wire_roundtrip.h"
+#include "agentxx-test/core/test_wire_schema.h"
 #include "agentxx-test/core/test_worktree.h"
 #include "agentxx-test/core/test_writer_lease.h"
 #include "agentxx-test/plugin/test_client_plugins.h"
@@ -112,13 +112,13 @@
 #include "agentxx-test/client/test_tui_input.h"
 #include "agentxx-test/client/test_tui_interrupt.h"
 #include "agentxx-test/client/test_tui_lazy_view.h"
+#include "agentxx-test/client/test_tui_model.h"
 #include "agentxx-test/client/test_tui_scroll.h"
 #include "agentxx-test/client/test_tui_settings.h"
 #include "agentxx-test/client/test_tui_sidebar.h"
 #include "agentxx-test/client/test_tui_stream.h"
 #include "agentxx-test/client/test_tui_surface.h"
 #include "agentxx-test/client/test_tui_theme.h"
-#include "agentxx-test/client/test_tui_model.h"
 #include "agentxx-test/client/test_tui_tool_header.h"
 #include "agentxx-test/client/test_tui_ui_items.h"
 #include "agentxx-test/client/test_tui_widget.h"
@@ -130,8 +130,8 @@
 #include "agentxx-test/core/test_web_search_tools.h"
 #include "agentxx-test/core/test_websocket.h"
 #include "agentxx-test/test_coro_util.h"
-#include <cstring>
 #include <chrono>
+#include <cstring>
 #include <iostream>
 #include <map>
 
@@ -244,9 +244,9 @@ int main(int argn, char** argv) {
             return;
         }
         std::cout << "--- " << name << " ---" << std::endl;
-        const auto _t0 = std::chrono::steady_clock::now();
-        auto r  = fn();
-        total  += r;
+        const auto _t0  = std::chrono::steady_clock::now();
+        auto       r    = fn();
+        total          += r;
         std::cout << "--- " << name << " done: passed=" << r.passed << " failed=" << r.failed
                   << " ("
                   << std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -272,8 +272,8 @@ int main(int argn, char** argv) {
         runSync("string_util", agentxx::test::testStringUtil);
         runSync("regex", agentxx::test::testRegex);
         runSync("json", agentxx::test::testJson);
-    runSync("persist_semantics", agentxx::test::testPersistSemantics);
-    runSync("prompt_stability", agentxx::test::testPromptSectionOrder);
+        runSync("persist_semantics", agentxx::test::testPersistSemantics);
+        runSync("prompt_stability", agentxx::test::testPromptSectionOrder);
         runSync("json_view", agentxx::test::testJsonView);
         runSync("json_reflection", agentxx::test::testJsonReflection);
         runSync("llm_error", agentxx::test::testLlmError);
@@ -352,9 +352,9 @@ int main(int argn, char** argv) {
                     }
                     std::cout << "--- " << name << " ---" << std::endl;
                     try {
-                        const auto _t0 = std::chrono::steady_clock::now();
-                        auto r  = co_await testFn();
-                        total  += r;
+                        const auto _t0  = std::chrono::steady_clock::now();
+                        auto       r    = co_await testFn();
+                        total          += r;
                         std::cout << "--- " << name << " done: passed=" << r.passed
                                   << " failed=" << r.failed << " ("
                                   << std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -393,9 +393,9 @@ int main(int argn, char** argv) {
                     }
                     std::cout << "--- " << name << " ---" << std::endl;
                     try {
-                        const auto _t0 = std::chrono::steady_clock::now();
-                        auto r  = co_await testFn(ctx);
-                        total  += r;
+                        const auto _t0  = std::chrono::steady_clock::now();
+                        auto       r    = co_await testFn(ctx);
+                        total          += r;
                         std::cout << "--- " << name << " done: passed=" << r.passed
                                   << " failed=" << r.failed << " ("
                                   << std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -480,7 +480,7 @@ int main(int argn, char** argv) {
                 co_await run("acp", agentxx::test::run_acp_tests);
                 co_await run("a2a", agentxx::test::run_a2a_tests);
                 co_await run("openai_provider", agentxx::test::run_openai_provider_tests);
-    co_await run("permission", agentxx::test::run_permission_tests);
+                co_await run("permission", agentxx::test::run_permission_tests);
                 co_await run("input_delivery", agentxx::test::run_input_delivery_tests);
                 co_await run("fake_provider", agentxx::test::run_fake_provider_tests);
                 co_await run("session_admin", agentxx::test::run_session_admin_tests);
@@ -510,7 +510,7 @@ int main(int argn, char** argv) {
                 co_await run("checkpoint_store", agentxx::test::run_checkpoint_store_tests);
                 co_await run("agent", agentxx::test::run_agent_tests);
                 co_await run("usage_ledger", agentxx::test::test_usage_ledger);
-    co_await run("toolcall_parallel", agentxx::test::run_toolcall_parallel_tests);
+                co_await run("toolcall_parallel", agentxx::test::run_toolcall_parallel_tests);
                 co_await run("http_recorder", agentxx::test::run_http_recorder_tests);
                 co_await run("jsonl_mode", agentxx::test::run_jsonl_mode_tests);
                 co_await run("memgrowth", agentxx::test::run_memgrowth_tests);

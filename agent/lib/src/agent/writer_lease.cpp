@@ -6,19 +6,19 @@
 #include <unordered_map>
 
 #if XX_IS_WIN_D
-#  ifndef WIN32_LEAN_AND_MEAN
-#    define WIN32_LEAN_AND_MEAN
-#  endif
-#  ifndef NOMINMAX
-#    define NOMINMAX
-#  endif
-#  include <windows.h>
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
 #else
-#  include <cerrno>
-#  include <cstring>
-#  include <fcntl.h>
-#  include <sys/file.h>
-#  include <unistd.h>
+#include <cerrno>
+#include <cstring>
+#include <fcntl.h>
+#include <sys/file.h>
+#include <unistd.h>
 #endif
 
 namespace agentxx {
@@ -33,11 +33,11 @@ static constexpr const char* kLockFileName = ".writer.lock";
 
 #if XX_IS_WIN_D
 /// Windows 下持有的一次锁: 不共享方式打开的文件句柄
-using LockHandle = HANDLE;
+using LockHandle                           = HANDLE;
 static constexpr LockHandle kInvalidHandle = nullptr;
 #else
 /// POSIX 下持有的一次锁: flock 成功的文件描述符
-using LockHandle = int;
+using LockHandle                           = int;
 static constexpr LockHandle kInvalidHandle = -1;
 #endif
 
@@ -47,7 +47,7 @@ struct LeaseEntry {
     int        refcount = 0;
 };
 
-std::mutex                             g_leaseMutex;
+std::mutex                                  g_leaseMutex;
 std::unordered_map<std::string, LeaseEntry> g_leases;
 
 /// 目录的稳定键 (绝对规范路径; 同一目录的不同写法视为同一租约)
@@ -133,25 +133,19 @@ std::string SessionWriterLease::lockFilePath(const fs::path& dir) {
     return (dir / kLockFileName).string();
 }
 
-std::shared_ptr<SessionWriterLease> SessionWriterLease::acquire(
-    const fs::path& dir,
-    std::string*    errMsg
-) {
+std::shared_ptr<SessionWriterLease>
+    SessionWriterLease::acquire(const fs::path& dir, std::string* errMsg) {
     std::error_code ec;
     fs::create_directories(dir, ec);
     if (ec) {
         if (errMsg) {
-            *errMsg = fmt::format(
-                "create session dir `{}` failed: {}",
-                dir.string(),
-                ec.message()
-            );
+            *errMsg = fmt::format("create session dir `{}` failed: {}", dir.string(), ec.message());
         }
         return nullptr;
     }
 
-    const auto  key      = normalizeDir(dir);
-    const auto  lockFile = fs::path{key} / kLockFileName;
+    const auto key      = normalizeDir(dir);
+    const auto lockFile = fs::path{key} / kLockFileName;
 
     std::lock_guard<std::mutex> lock(g_leaseMutex);
     if (auto it = g_leases.find(key); it != g_leases.end()) {

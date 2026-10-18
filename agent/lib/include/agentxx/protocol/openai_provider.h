@@ -179,11 +179,8 @@ private:
     ///     - [out] 输出文本 (调用方负责保证生命周期覆盖本次请求)
     ///
     /// - `return` true 表示 out 可用; false 表示调用方应改走 [buildBody]
-    bool buildBodyText(
-        const neograph::CompletionParams& params,
-        bool                              stream,
-        std::string&                      out
-    ) const;
+    bool buildBodyText(const neograph::CompletionParams& params, bool stream, std::string& out)
+        const;
 
     utilxx_base::Json buildResponsesBody(const neograph::CompletionParams& params) const;
 

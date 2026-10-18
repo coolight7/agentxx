@@ -173,9 +173,9 @@ struct InterruptFixture {
         if (!h.box) {
             return false;
         }
-        const auto& box    = *h.box;
-        const int   localX = h.region.x + ((h.region.w > 0) ? (h.region.w / 2) : 0);
-        const int   localY = h.region.y + ((h.region.h > 1) ? (h.region.h / 2) : 0);
+        const auto&  box    = *h.box;
+        const int    localX = h.region.x + ((h.region.w > 0) ? (h.region.w / 2) : 0);
+        const int    localY = h.region.y + ((h.region.h > 1) ? (h.region.h / 2) : 0);
         ftxui::Mouse m;
         m.button = ftxui::Mouse::Left;
         m.motion = ftxui::Mouse::Released;
@@ -335,21 +335,30 @@ void test_extended_component_blocks() {
 
     // 表格 / 树 / 横排 + 趋势图 (描述层的组件项, 用构建器拼装)
     pluginxx::ui::Item table = pluginxx::ui::build::node("Table");
-    table.header            = true;
+    table.header             = true;
     table.columns.push_back(pluginxx::ui::TableColumn{
-        pluginxx::ui::TextValue::of("Path"), "start", pluginxx::ui::SizeValue::autoValue(), {},
+        pluginxx::ui::TextValue::of("Path"),
+        "start",
+        pluginxx::ui::SizeValue::autoValue(),
+        {},
     });
     table.columns.push_back(pluginxx::ui::TableColumn{
-        pluginxx::ui::TextValue::of("Scope"), "end", pluginxx::ui::SizeValue::autoValue(), {},
+        pluginxx::ui::TextValue::of("Scope"),
+        "end",
+        pluginxx::ui::SizeValue::autoValue(),
+        {},
     });
-    for (const auto& cells : {std::pair{"a.txt", "write"}, std::pair{"b.txt", "read"}}) {
+    for (const auto& cells : {
+             std::pair{"a.txt", "write"},
+             std::pair{"b.txt", "read" }
+    }) {
         table.rows.push_back({
-            pluginxx::ui::TableCell{pluginxx::ui::TextValue::of(cells.first), {}, {}},
+            pluginxx::ui::TableCell{pluginxx::ui::TextValue::of(cells.first),  {}, {}},
             pluginxx::ui::TableCell{pluginxx::ui::TextValue::of(cells.second), {}, {}},
         });
     }
 
-    pluginxx::ui::Item tree = pluginxx::ui::build::node("Tree");
+    pluginxx::ui::Item     tree = pluginxx::ui::build::node("Tree");
     pluginxx::ui::TreeNode root;
     root.label = pluginxx::ui::TextValue::of("src");
     for (const auto& child : {"main.cpp", "io/"}) {
@@ -393,7 +402,8 @@ void test_extended_component_blocks() {
     XX_TEST_EXPECT_TRUE(round.blocks[1].raw.contains("nodes"));
 }
 
-void test_text_block_wrap_counts_lines() {    InterruptFixture f;
+void test_text_block_wrap_counts_lines() {
+    InterruptFixture f;
     auto             ch = f.makeChannel();
 
     // 无空格长路径: wrap=true 时按宽度硬折行 (多行), wrap=false 时单行
@@ -482,7 +492,7 @@ void test_gap_unknown_and_custom_blocks() {
 
     // 扩展块 (custom): 有 props.items 时展开成内容, 否则渲染 fallback 文本
     agentxx::middleware::InterruptUiBlock custom;
-    custom.kind       = "custom";
+    custom.kind = "custom";
     custom.props["items"]
         = utilxx_base::Json::parse(R"([{"kind":"Text","text":"custom items text"}])");
     custom.fallback = "custom fallback text";
@@ -1252,7 +1262,7 @@ void test_head_trim_shifts_hit_indices() {
     f.comp->onHistoryTrimmed(2);
 
     const auto& hitsAfter = f.comp->interruptHitBoxes();
-    XX_TEST_EXPECT_EQ(hitsAfter.size(), hitsBefore.size()); ///< 指向被删消息的项才丢弃
+    XX_TEST_EXPECT_EQ(hitsAfter.size(), hitsBefore.size());   ///< 指向被删消息的项才丢弃
     XX_TEST_EXPECT_EQ(hitsAfter[hitPos].msgIndex, size_t{0}); ///< 同一条消息的新下标
 
     // 按上一帧的坐标点击 (命中框未重建): 仍作用到同一条中断消息的同一控件

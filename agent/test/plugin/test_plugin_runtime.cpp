@@ -681,7 +681,7 @@ TestResult testPluginRuntime() {
         asio::cancellation_signal cancel;
         // 协程体是 op->wait() (成员协程): op 由夹具持有, 且下面在作用域内等待 future
         // → 不需要 keepAliveRun
-        auto                      waited = asio::co_spawn(
+        auto waited = asio::co_spawn(
             f.io,
             op->wait(),
             asio::bind_cancellation_slot(cancel.slot(), asio::use_future)
@@ -1168,6 +1168,7 @@ TestResult testPluginRuntime() {
             void*    base_member;
             void*    added_member;
         };
+
         constexpr uint32_t kPtrBytes = static_cast<uint32_t>(sizeof(void*));
         const uint32_t     baseEnd
             = static_cast<uint32_t>(offsetof(FakeTable, base_member)) + kPtrBytes;
@@ -1304,8 +1305,8 @@ TestResult testPluginRuntime() {
 
         // 更高版本的完整表: 接受 (修掉"一张表升版连累所有表"的写法)
         AgentxxPluginToolsIface newerVersion = *realTools;
-        newerVersion.version                = AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_VERSION + 1;
-        fake.table                         = &newerVersion;
+        newerVersion.version                 = AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_VERSION + 1;
+        fake.table                           = &newerVersion;
         XX_TEST_EXPECT_TRUE(AgentIfaces::query(&fake.host).tools != nullptr);
 
         // 低于最低版本: 拒绝

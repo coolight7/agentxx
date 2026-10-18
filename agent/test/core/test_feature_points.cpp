@@ -64,7 +64,7 @@ struct Codec<agentxx::test::PingRequest> {
     static std::optional<agentxx::test::PingRequest> fromJson(std::string_view text) {
         return utilxx_base::catchError<std::optional<agentxx::test::PingRequest>>(
             [&]() -> std::optional<agentxx::test::PingRequest> {
-                const auto json = utilxx_base::Json::parse(text);
+                const auto                 json = utilxx_base::Json::parse(text);
                 agentxx::test::PingRequest req;
                 req.key = json.value<std::string>("key", "");
                 return req;
@@ -122,8 +122,8 @@ namespace {
 
 /// 等待若干毫秒 (被取消时立即返回; 用来模拟"实现要算一会儿")
 asio::awaitable<void> sleepMs(int ms) {
-    auto ex = co_await asio::this_coro::executor;
-    asio::steady_timer timer(ex, std::chrono::milliseconds{ms});
+    auto                      ex = co_await asio::this_coro::executor;
+    asio::steady_timer        timer(ex, std::chrono::milliseconds{ms});
     boost::system::error_code ec;
     co_await timer.async_wait(asio::redirect_error(asio::use_awaitable, ec));
     co_return;
@@ -140,16 +140,20 @@ ImplSpec jsonImpl(
     spec.layer    = layer;
     spec.owner    = std::move(owner);
     spec.priority = priority;
-    spec.fn       = [answerFn = std::move(answerFn)](std::string callJson)
-        -> asio::awaitable<std::optional<std::string>> {
+    spec.fn       = [answerFn = std::move(answerFn)](std::string callJson
+              ) -> asio::awaitable<std::optional<std::string>> {
         co_return answerFn(std::move(callJson));
     };
     return spec;
 }
 
 /// 造一个"返回错误形态"的实现 (用来验证异常隔离)
-ImplSpec
-    plainImpl(std::string owner, int32_t priority, ImplSpec::Fn fn, ImplLayer layer = ImplLayer::Plugin) {
+ImplSpec plainImpl(
+    std::string  owner,
+    int32_t      priority,
+    ImplSpec::Fn fn,
+    ImplLayer    layer = ImplLayer::Plugin
+) {
     ImplSpec spec;
     spec.layer    = layer;
     spec.owner    = std::move(owner);
@@ -158,7 +162,8 @@ ImplSpec
     return spec;
 }
 
-PointOptions pingOptions(std::string title, agentxx::feature::CacheMode cache, bool callable = false) {
+PointOptions
+    pingOptions(std::string title, agentxx::feature::CacheMode cache, bool callable = false) {
     PointOptions opts;
     opts.title    = std::move(title);
     opts.cache    = cache;
@@ -168,13 +173,10 @@ PointOptions pingOptions(std::string title, agentxx::feature::CacheMode cache, b
 
 ProvidePoint<PingRequest, PingValue>&
     makePingPoint(Registry& registry, std::string id, PointOptions opts) {
-    return registry.provide<PingRequest, PingValue>(
-        id,
-        std::move(opts),
-        [](const PingRequest& req) {
+    return registry
+        .provide<PingRequest, PingValue>(id, std::move(opts), [](const PingRequest& req) {
             return req.key;
-        }
-    );
+        });
 }
 
 // ==================== 顺序与默认优先级带 ====================
@@ -190,25 +192,19 @@ asio::awaitable<void> test_order_and_priority_band() {
     point.addCoreImpl(
         "core:test:fallback",
         0,
-        [](const PingRequest&, const agentxx::feature::ImplContext&)
-            -> asio::awaitable<std::optional<PingValue>> {
+        [](const PingRequest&,
+           const agentxx::feature::ImplContext&) -> asio::awaitable<std::optional<PingValue>> {
             co_return PingValue{1};
         }
     );
 
     // 插件层: priority 0 (登记顺序决定同优先级先后)
-    registry.addImpl(
-        "test.order",
-        jsonImpl("plugin:a", 0, [](std::string) {
-            return std::string{R"({"value":2})"};
-        })
-    );
-    registry.addImpl(
-        "test.order",
-        jsonImpl("plugin:b", 0, [](std::string) {
-            return std::string{R"({"value":3})"};
-        })
-    );
+    registry.addImpl("test.order", jsonImpl("plugin:a", 0, [](std::string) {
+                         return std::string{R"({"value":2})"};
+                     }));
+    registry.addImpl("test.order", jsonImpl("plugin:b", 0, [](std::string) {
+                         return std::string{R"({"value":3})"};
+                     }));
 
     auto r1 = co_await point.ask(PingRequest{"k1"});
     XX_TEST_EXPECT_TRUE(r1.ok());
@@ -218,9 +214,13 @@ asio::awaitable<void> test_order_and_priority_band() {
     // FFI 主程序实现默认优先级 1000: 排在插件之后、core 之前
     registry.addImpl(
         "test.order",
-        jsonImpl("host:h1", agentxx::feature::kHostDefaultPriority, [](std::string) {
-            return std::string{R"({"value":4})"};
-        })
+        jsonImpl(
+            "host:h1",
+            agentxx::feature::kHostDefaultPriority,
+            [](std::string) {
+                return std::string{R"({"value":4})"};
+            }
+        )
     );
     auto r2 = co_await point.ask(PingRequest{"k2"});
     XX_TEST_EXPECT_EQ(r2.by, std::string{"plugin:a"}); // 插件仍在前
@@ -231,24 +231,18 @@ asio::awaitable<void> test_order_and_priority_band() {
     XX_TEST_EXPECT_EQ(r3.by, std::string{"plugin:b"});
 
     // 显式优先级覆盖默认带: 插件 b 改 priority 1001 (排在主程序 1000 之后)
-    registry.addImpl(
-        "test.order",
-        jsonImpl("plugin:b", 1001, [](std::string) {
-            return std::string{R"({"value":30})"};
-        })
-    );
+    registry.addImpl("test.order", jsonImpl("plugin:b", 1001, [](std::string) {
+                         return std::string{R"({"value":30})"};
+                     }));
     auto r4 = co_await point.ask(PingRequest{"k4"});
     XX_TEST_EXPECT_EQ(r4.by, std::string{"host:h1"});
     XX_TEST_EXPECT_EQ((r4.ok() ? r4.value->value : -1), 4);
 
     // 越界裁剪: priority 5000 -> 裁剪到上限 1000 (清单里读回生效值)
-    registry.addImpl(
-        "test.order",
-        jsonImpl("plugin:c", 999999, [](std::string) {
-            return std::string{R"({"value":5})"};
-        })
-    );
-    const auto list    = registry.listPointsJson();
+    registry.addImpl("test.order", jsonImpl("plugin:c", 999999, [](std::string) {
+                         return std::string{R"({"value":5})"};
+                     }));
+    const auto  list   = registry.listPointsJson();
     const auto& points = list["points"];
     bool        found  = false;
     for (size_t i = 0; i < points.size(); ++i) {
@@ -284,12 +278,9 @@ asio::awaitable<void> test_no_registration_limit() {
         pingOptions("数量测试", agentxx::feature::CacheMode::None)
     );
     for (int i = 0; i < 64; ++i) {
-        registry.addImpl(
-            "test.many",
-            jsonImpl(fmt::format("plugin:p{}", i), i, [](std::string) {
-                return std::string{R"({"value":7})"};
-            })
-        );
+        registry.addImpl("test.many", jsonImpl(fmt::format("plugin:p{}", i), i, [](std::string) {
+                             return std::string{R"({"value":7})"};
+                         }));
     }
     XX_TEST_EXPECT_EQ(point.implCount(), size_t{64});
 
@@ -299,18 +290,36 @@ asio::awaitable<void> test_no_registration_limit() {
         "test.many2",
         pingOptions("数量测试2", agentxx::feature::CacheMode::None)
     );
-    XX_TEST_EXPECT_EQ(registry.addImpl("test.many2", jsonImpl("plugin:p0", 0, [](std::string) {
-                          return std::string{R"({"value":9})"};
-                      })),
-                      0);
+    XX_TEST_EXPECT_EQ(
+        registry.addImpl(
+            "test.many2",
+            jsonImpl(
+                "plugin:p0",
+                0,
+                [](std::string) {
+                    return std::string{R"({"value":9})"};
+                }
+            )
+        ),
+        0
+    );
     XX_TEST_EXPECT_EQ(second.implCount(), size_t{1});
     XX_TEST_EXPECT_EQ(registry.removeImplsByOwner("plugin:p0"), size_t{2});
 
     // 点不存在时登记被拒绝
-    XX_TEST_EXPECT_EQ(registry.addImpl("test.not.exists", jsonImpl("plugin:x", 0, [](std::string) {
-                          return std::string{};
-                      })),
-                      -1);
+    XX_TEST_EXPECT_EQ(
+        registry.addImpl(
+            "test.not.exists",
+            jsonImpl(
+                "plugin:x",
+                0,
+                [](std::string) {
+                    return std::string{};
+                }
+            )
+        ),
+        -1
+    );
     co_return;
 }
 
@@ -327,31 +336,26 @@ asio::awaitable<void> test_exception_isolation() {
     // 抛异常的实现
     registry.addImpl(
         "test.ex",
-        plainImpl("plugin:thrower", 0, [](std::string) -> asio::awaitable<std::optional<std::string>> {
-            throw std::runtime_error("boom");
-        })
+        plainImpl(
+            "plugin:thrower",
+            0,
+            [](std::string) -> asio::awaitable<std::optional<std::string>> {
+                throw std::runtime_error("boom");
+            }
+        )
     );
     // 返回不合法 JSON 的实现
-    registry.addImpl(
-        "test.ex",
-        jsonImpl("plugin:badjson", 10, [](std::string) {
-            return std::string{"not a json"};
-        })
-    );
+    registry.addImpl("test.ex", jsonImpl("plugin:badjson", 10, [](std::string) {
+                         return std::string{"not a json"};
+                     }));
     // 返回"空对象"= 没意见
-    registry.addImpl(
-        "test.ex",
-        jsonImpl("plugin:silent", 20, [](std::string) {
-            return std::string{"{}"};
-        })
-    );
+    registry.addImpl("test.ex", jsonImpl("plugin:silent", 20, [](std::string) {
+                         return std::string{"{}"};
+                     }));
     // 正常实现
-    registry.addImpl(
-        "test.ex",
-        jsonImpl("plugin:good", 30, [](std::string) {
-            return std::string{R"({"value":42})"};
-        })
-    );
+    registry.addImpl("test.ex", jsonImpl("plugin:good", 30, [](std::string) {
+                         return std::string{R"({"value":42})"};
+                     }));
 
     auto r = co_await point.ask(PingRequest{"k"});
     XX_TEST_EXPECT_TRUE(r.ok());
@@ -383,17 +387,14 @@ asio::awaitable<void> test_disable_marker() {
     point.addCoreImpl(
         "core:test:fallback",
         0,
-        [](const PingRequest&, const agentxx::feature::ImplContext&)
-            -> asio::awaitable<std::optional<PingValue>> {
+        [](const PingRequest&,
+           const agentxx::feature::ImplContext&) -> asio::awaitable<std::optional<PingValue>> {
             co_return PingValue{1};
         }
     );
-    registry.addImpl(
-        "test.disable",
-        jsonImpl("plugin:off", 0, [](std::string) {
-            return std::string{R"({"disable":true,"reason":"维护中"})"};
-        })
-    );
+    registry.addImpl("test.disable", jsonImpl("plugin:off", 0, [](std::string) {
+                         return std::string{R"({"disable":true,"reason":"维护中"})"};
+                     }));
 
     // ask: 记置空标记, 且不再问后面的实现 (拿不到 core 兜底值)
     auto r = co_await point.ask(PingRequest{"k"});
@@ -422,7 +423,7 @@ asio::awaitable<void> test_disable_marker() {
 // ==================== 值缓存 ====================
 
 asio::awaitable<void> test_value_cache() {
-    Registry registry;
+    Registry     registry;
     PointOptions opts;
     opts.title    = "值缓存";
     opts.cache    = agentxx::feature::CacheMode::ByIdentity;
@@ -434,10 +435,14 @@ asio::awaitable<void> test_value_cache() {
     auto calls = std::make_shared<std::atomic<int>>(0);
     registry.addImpl(
         "test.cache",
-        plainImpl("plugin:c", 0, [calls](std::string) -> asio::awaitable<std::optional<std::string>> {
-            calls->fetch_add(1);
-            co_return std::string{R"({"value":10})"};
-        })
+        plainImpl(
+            "plugin:c",
+            0,
+            [calls](std::string) -> asio::awaitable<std::optional<std::string>> {
+                calls->fetch_add(1);
+                co_return std::string{R"({"value":10})"};
+            }
+        )
     );
 
     auto r1 = co_await point.ask(PingRequest{"A"});
@@ -465,8 +470,8 @@ asio::awaitable<void> test_value_cache() {
     XX_TEST_EXPECT_EQ(calls->load(), 4);
 
     // call 前后值缓存条数与产出方不变 (核心用例)
-    const size_t before    = point.cacheSize();
-    auto         rc        = co_await point.call(PingRequest{"D"}, CallOptions{.caller = "plugin:x"});
+    const size_t before = point.cacheSize();
+    auto         rc     = co_await point.call(PingRequest{"D"}, CallOptions{.caller = "plugin:x"});
     XX_TEST_EXPECT_TRUE(rc.ok());
     XX_TEST_EXPECT_EQ(point.cacheSize(), before);
 
@@ -476,31 +481,24 @@ asio::awaitable<void> test_value_cache() {
     smallOpts.title    = "小上限";
     smallOpts.cache    = agentxx::feature::CacheMode::ByIdentity;
     smallOpts.maxBytes = 32;
-    auto& smallPoint   = small.provideJson(
-        "test.cache.small",
-        std::move(smallOpts),
-        "host:test"
-    );
-    small.addImpl(
-        "test.cache.small",
-        jsonImpl("plugin:s", 0, [](std::string) {
-            return std::string{R"({"value":")"} + std::string(200, 'x') + R"("})";
-        })
-    );
+    auto& smallPoint   = small.provideJson("test.cache.small", std::move(smallOpts), "host:test");
+    small.addImpl("test.cache.small", jsonImpl("plugin:s", 0, [](std::string) {
+                      return std::string{R"({"value":")"} + std::string(200, 'x') + R"("})";
+                  }));
     auto rs = co_await smallPoint.ask("{}");
     XX_TEST_EXPECT_TRUE(rs.ok());
     XX_TEST_EXPECT_EQ(smallPoint.cacheSize(), size_t{0});
 
     // None 策略不产生任何条目
-    Registry     none;
-    auto&        nonePoint = makePingPoint(
+    Registry none;
+    auto&    nonePoint = makePingPoint(
         none,
         "test.cache.none",
         pingOptions("不缓存", agentxx::feature::CacheMode::None)
     );
     none.addImpl("test.cache.none", jsonImpl("plugin:n", 0, [](std::string) {
-        return std::string{R"({"value":1})"};
-    }));
+                     return std::string{R"({"value":1})"};
+                 }));
     (void)co_await nonePoint.ask(PingRequest{"A"});
     (void)co_await nonePoint.ask(PingRequest{"A"});
     XX_TEST_EXPECT_EQ(nonePoint.cacheSize(), size_t{0});
@@ -516,23 +514,27 @@ asio::awaitable<void> test_value_cache() {
 
 /// 同一身份并发只跑一次实现 (in-flight 去重)
 asio::awaitable<void> test_inflight_dedup() {
-    Registry registry;
+    Registry     registry;
     PointOptions opts;
-    opts.title = "去重";
-    opts.cache = agentxx::feature::CacheMode::ByIdentity;
+    opts.title  = "去重";
+    opts.cache  = agentxx::feature::CacheMode::ByIdentity;
     auto& point = makePingPoint(registry, "test.inflight", std::move(opts));
 
     auto calls = std::make_shared<std::atomic<int>>(0);
     registry.addImpl(
         "test.inflight",
-        plainImpl("plugin:slow", 0, [calls](std::string) -> asio::awaitable<std::optional<std::string>> {
-            calls->fetch_add(1);
-            co_await sleepMs(60);
-            co_return std::string{R"({"value":77})"};
-        })
+        plainImpl(
+            "plugin:slow",
+            0,
+            [calls](std::string) -> asio::awaitable<std::optional<std::string>> {
+                calls->fetch_add(1);
+                co_await sleepMs(60);
+                co_return std::string{R"({"value":77})"};
+            }
+        )
     );
 
-    auto ex = co_await asio::this_coro::executor;
+    auto ex    = co_await asio::this_coro::executor;
     auto group = co_await asio::experimental::make_parallel_group(
                      asio::co_spawn(
                          ex,
@@ -548,7 +550,7 @@ asio::awaitable<void> test_inflight_dedup() {
                          },
                          asio::deferred
                      )
-                 )
+    )
                      .async_wait(asio::experimental::wait_for_all(), asio::deferred);
 
     const auto& ex1 = std::get<1>(group);
@@ -579,18 +581,25 @@ asio::awaitable<void> test_call_protections() {
     auto seenJson = std::make_shared<std::string>();
     registry.addImpl(
         "test.call",
-        plainImpl("plugin:inner", 0, [seenJson](std::string callJson)
-                      -> asio::awaitable<std::optional<std::string>> {
-            *seenJson = callJson;
-            co_return std::string{R"({"value":5})"};
-        })
+        plainImpl(
+            "plugin:inner",
+            0,
+            [seenJson](std::string callJson) -> asio::awaitable<std::optional<std::string>> {
+                *seenJson = callJson;
+                co_return std::string{R"({"value":5})"};
+            }
+        )
     );
     // 一个优先级更高的主程序实现 (排在 plugin:inner 之后, 因为默认带 1000)
     registry.addImpl(
         "test.call",
-        jsonImpl("host:outer", agentxx::feature::kHostDefaultPriority, [](std::string) {
-            return std::string{R"({"value":6})"};
-        })
+        jsonImpl(
+            "host:outer",
+            agentxx::feature::kHostDefaultPriority,
+            [](std::string) {
+                return std::string{R"({"value":6})"};
+            }
+        )
     );
 
     auto rc = co_await point.call(PingRequest{"K"}, CallOptions{.caller = "plugin:outer"});
@@ -613,17 +622,24 @@ asio::awaitable<void> test_call_protections() {
     auto selfCalls = std::make_shared<std::atomic<int>>(0);
     registry2.addImpl(
         "test.call.self",
-        plainImpl("plugin:outer", 0, [selfCalls](std::string)
-                      -> asio::awaitable<std::optional<std::string>> {
-            selfCalls->fetch_add(1);
-            co_return std::string{R"({"value":1})"};
-        })
+        plainImpl(
+            "plugin:outer",
+            0,
+            [selfCalls](std::string) -> asio::awaitable<std::optional<std::string>> {
+                selfCalls->fetch_add(1);
+                co_return std::string{R"({"value":1})"};
+            }
+        )
     );
     registry2.addImpl(
         "test.call.self",
-        jsonImpl("host:h", agentxx::feature::kHostDefaultPriority, [](std::string) {
-            return std::string{R"({"value":8})"};
-        })
+        jsonImpl(
+            "host:h",
+            agentxx::feature::kHostDefaultPriority,
+            [](std::string) {
+                return std::string{R"({"value":8})"};
+            }
+        )
     );
     auto rc2 = co_await point2.call(PingRequest{"K"}, CallOptions{.caller = "plugin:outer"});
     XX_TEST_EXPECT_EQ((rc2.ok() ? rc2.value->value : -1), 8);
@@ -639,21 +655,26 @@ asio::awaitable<void> test_call_protections() {
     auto innerError = std::make_shared<int>(0);
     registry3.addImpl(
         "test.call.busy",
-        plainImpl("plugin:inner", 0, [&point3, innerError](std::string)
-                      -> asio::awaitable<std::optional<std::string>> {
-            auto inner = co_await point3.call(
-                PingRequest{"K"},
-                CallOptions{.caller = "plugin:outer"}
-            );
-            *innerError = static_cast<int>(inner.error);
-            co_return std::string{R"({"value":11})"};
-        })
+        plainImpl(
+            "plugin:inner",
+            0,
+            [&point3, innerError](std::string) -> asio::awaitable<std::optional<std::string>> {
+                auto inner
+                    = co_await point3.call(PingRequest{"K"}, CallOptions{.caller = "plugin:outer"});
+                *innerError = static_cast<int>(inner.error);
+                co_return std::string{R"({"value":11})"};
+            }
+        )
     );
     registry3.addImpl(
         "test.call.busy",
-        jsonImpl("plugin:outer", agentxx::feature::kHostDefaultPriority, [](std::string) {
-            return std::string{R"({"value":12})"};
-        })
+        jsonImpl(
+            "plugin:outer",
+            agentxx::feature::kHostDefaultPriority,
+            [](std::string) {
+                return std::string{R"({"value":12})"};
+            }
+        )
     );
     auto rc3 = co_await point3.call(PingRequest{"K"}, CallOptions{.caller = "plugin:outer"});
     XX_TEST_EXPECT_TRUE(rc3.ok());
@@ -666,7 +687,7 @@ asio::awaitable<void> test_call_protections() {
 
 asio::awaitable<void> test_timeouts() {
     // ① implTimeoutMs: 实现挂住 -> 取消它并按"没意见"继续链, 最终拿到 core 值
-    Registry registry;
+    Registry     registry;
     PointOptions opts;
     opts.title         = "等实现超时";
     opts.cache         = agentxx::feature::CacheMode::None;
@@ -674,16 +695,20 @@ asio::awaitable<void> test_timeouts() {
     auto& point        = makePingPoint(registry, "test.timeout.impl", std::move(opts));
     registry.addImpl(
         "test.timeout.impl",
-        plainImpl("plugin:hang", 0, [](std::string) -> asio::awaitable<std::optional<std::string>> {
-            co_await sleepMs(5000);
-            co_return std::string{R"({"value":99})"};
-        })
+        plainImpl(
+            "plugin:hang",
+            0,
+            [](std::string) -> asio::awaitable<std::optional<std::string>> {
+                co_await sleepMs(5000);
+                co_return std::string{R"({"value":99})"};
+            }
+        )
     );
     point.addCoreImpl(
         "core:test:fallback",
         0,
-        [](const PingRequest&, const agentxx::feature::ImplContext&)
-            -> asio::awaitable<std::optional<PingValue>> {
+        [](const PingRequest&,
+           const agentxx::feature::ImplContext&) -> asio::awaitable<std::optional<PingValue>> {
             co_return PingValue{1};
         }
     );
@@ -704,13 +729,17 @@ asio::awaitable<void> test_timeouts() {
     opts2.title    = "调用方超时";
     opts2.cache    = agentxx::feature::CacheMode::None;
     opts2.callable = true;
-    auto& point2 = makePingPoint(registry2, "test.timeout.caller", std::move(opts2));
+    auto& point2   = makePingPoint(registry2, "test.timeout.caller", std::move(opts2));
     registry2.addImpl(
         "test.timeout.caller",
-        plainImpl("plugin:hang", 0, [](std::string) -> asio::awaitable<std::optional<std::string>> {
-            co_await sleepMs(5000);
-            co_return std::string{R"({"value":1})"};
-        })
+        plainImpl(
+            "plugin:hang",
+            0,
+            [](std::string) -> asio::awaitable<std::optional<std::string>> {
+                co_await sleepMs(5000);
+                co_return std::string{R"({"value":1})"};
+            }
+        )
     );
     auto rc = co_await point2.call(
         PingRequest{"k"},
@@ -728,33 +757,41 @@ asio::awaitable<void> test_timeouts() {
     );
     registry3.addImpl(
         "test.timeout.none",
-        plainImpl("plugin:slow", 0, [](std::string) -> asio::awaitable<std::optional<std::string>> {
-            co_await sleepMs(60);
-            co_return std::string{R"({"value":31})"};
-        })
+        plainImpl(
+            "plugin:slow",
+            0,
+            [](std::string) -> asio::awaitable<std::optional<std::string>> {
+                co_await sleepMs(60);
+                co_return std::string{R"({"value":31})"};
+            }
+        )
     );
     auto r3 = co_await point3.ask(PingRequest{"k"});
     XX_TEST_EXPECT_TRUE(r3.ok());
     XX_TEST_EXPECT_EQ((r3.ok() ? r3.value->value : -1), 31);
 
     // ④ 实现自报 default_timeout_ms 与点声明取较小非 0 值
-    Registry registry4;
+    Registry     registry4;
     PointOptions opts4;
     opts4.title         = "自报超时";
     opts4.cache         = agentxx::feature::CacheMode::None;
     opts4.implTimeoutMs = 0;
     auto& point4        = makePingPoint(registry4, "test.timeout.self", std::move(opts4));
-    auto  spec          = plainImpl("plugin:slow", 0, [](std::string) -> asio::awaitable<std::optional<std::string>> {
-        co_await sleepMs(5000);
-        co_return std::string{R"({"value":1})"};
-    });
+    auto  spec          = plainImpl(
+        "plugin:slow",
+        0,
+        [](std::string) -> asio::awaitable<std::optional<std::string>> {
+            co_await sleepMs(5000);
+            co_return std::string{R"({"value":1})"};
+        }
+    );
     spec.defaultTimeoutMs = 40;
     registry4.addImpl("test.timeout.self", std::move(spec));
     point4.addCoreImpl(
         "core:test:fallback",
         0,
-        [](const PingRequest&, const agentxx::feature::ImplContext&)
-            -> asio::awaitable<std::optional<PingValue>> {
+        [](const PingRequest&,
+           const agentxx::feature::ImplContext&) -> asio::awaitable<std::optional<PingValue>> {
             co_return PingValue{2};
         }
     );
@@ -774,13 +811,13 @@ asio::awaitable<void> test_list_and_dev_mode() {
     opts.callable = false;
     auto& point   = makePingPoint(registry, "test.list", std::move(opts));
     registry.addImpl("test.list", jsonImpl("plugin:p", 0, [](std::string) {
-        return std::string{R"({"value":1})"};
-    }));
+                         return std::string{R"({"value":1})"};
+                     }));
     point.addCoreImpl(
         "core:test:fallback",
         0,
-        [](const PingRequest&, const agentxx::feature::ImplContext&)
-            -> asio::awaitable<std::optional<PingValue>> {
+        [](const PingRequest&,
+           const agentxx::feature::ImplContext&) -> asio::awaitable<std::optional<PingValue>> {
             co_return PingValue{1};
         }
     );
@@ -822,7 +859,7 @@ asio::awaitable<void> test_list_and_dev_mode() {
 
 /// 真实核心点: agentxx.context.countTokens (阶段 2 迁移前先验证点本身可用)
 asio::awaitable<void> test_context_count_tokens_point() {
-    Registry registry;
+    Registry                              registry;
     agentxx::feature::ContextPointOptions options;
     auto points = agentxx::feature::registerContextPoints(registry, options);
     XX_TEST_EXPECT_TRUE(points.countTokens != nullptr);
@@ -842,12 +879,9 @@ asio::awaitable<void> test_context_count_tokens_point() {
     XX_TEST_EXPECT_TRUE(r2.fromCache);
 
     // 插件实现替换核心实现: 核心 ask 拿到插件给的值, by 是 plugin:<名>
-    registry.addImpl(
-        "agentxx.context.countTokens",
-        jsonImpl("plugin:tok", 0, [](std::string) {
-            return std::string{R"({"value":{"tokens":123456}})"};
-        })
-    );
+    registry.addImpl("agentxx.context.countTokens", jsonImpl("plugin:tok", 0, [](std::string) {
+                         return std::string{R"({"value":{"tokens":123456}})"};
+                     }));
     auto r3 = co_await points.countTokens->ask(req, agentxx::feature::AskOptions{.refresh = true});
     XX_TEST_EXPECT_EQ((r3.ok() ? r3.value->tokens : -1), int64_t{123456});
     XX_TEST_EXPECT_EQ(r3.by, std::string{"plugin:tok"});
@@ -867,13 +901,13 @@ asio::awaitable<void> test_context_count_tokens_point() {
 
 /// 参数形状: 交给实现前必须是合法 JSON, 否则按 `bad_args` 结果回 (不进实现链)
 asio::awaitable<void> test_bad_args_shape() {
-    Registry registry;
+    Registry     registry;
     PointOptions opts;
     opts.title    = "参数形状";
     opts.depict   = "验证非法 JSON 参数按 bad_args 回";
     opts.callable = true;
     opts.cache    = agentxx::feature::CacheMode::None;
-    auto& point = registry.provideJson("test.bad_args", opts, "core");
+    auto& point   = registry.provideJson("test.bad_args", opts, "core");
 
     int implCalls = 0;
     registry.addImpl("test.bad_args", jsonImpl("plugin:p", 0, [&implCalls](std::string) {
@@ -914,7 +948,7 @@ asio::awaitable<void> test_bad_args_shape() {
 
 /// 插件点: 声明 / 实现 / 撤销 / 命名空间校验
 asio::awaitable<void> test_plugin_points() {
-    Registry registry;
+    Registry                          registry;
     agentxx::feature::PluginPointDecl decl;
     decl.id        = "plugin.my_plugin.beat";
     decl.owner     = "plugin:my_plugin";
@@ -926,7 +960,7 @@ asio::awaitable<void> test_plugin_points() {
 
     // 命名空间校验: 别人的点不能声明
     agentxx::feature::PluginPointDecl bad = decl;
-    bad.id                                 = "plugin.other_plugin.beat";
+    bad.id                                = "plugin.other_plugin.beat";
     XX_TEST_EXPECT_EQ(registry.definePluginPoint(bad), -1);
     bad.id = "agentxx.context.countTokens";
     XX_TEST_EXPECT_EQ(registry.definePluginPoint(bad), -1);
@@ -934,27 +968,24 @@ asio::awaitable<void> test_plugin_points() {
     XX_TEST_EXPECT_EQ(registry.definePluginPoint(bad), -1);
 
     // 声明后恒为可调; 没有实现时 no_impl
-    auto* point = dynamic_cast<agentxx::feature::JsonProvidePoint*>(
-        registry.find("plugin.my_plugin.beat")
-    );
+    auto* point
+        = dynamic_cast<agentxx::feature::JsonProvidePoint*>(registry.find("plugin.my_plugin.beat"));
     XX_TEST_EXPECT_TRUE(point != nullptr);
     auto rc = co_await point->call(R"({"path":"a.wav"})", CallOptions{.caller = "plugin:other"});
     XX_TEST_EXPECT_EQ(static_cast<int>(rc.error), static_cast<int>(CallError::NoImpl));
 
     // 另一个插件为它登记实现
-    registry.addImpl(
-        "plugin.my_plugin.beat",
-        jsonImpl("plugin:other", 0, [](std::string callJson) {
-            return callJson.find("a.wav") != std::string::npos
-                       ? std::string{R"({"value":{"bpm":128}})"}
-                       : std::string{R"({})"};
-        })
-    );
+    registry.addImpl("plugin.my_plugin.beat", jsonImpl("plugin:other", 0, [](std::string callJson) {
+                         return callJson.find("a.wav") != std::string::npos
+                                    ? std::string{R"({"value":{"bpm":128}})"}
+                                    : std::string{R"({})"};
+                     }));
     auto r = co_await point->call(R"({"path":"a.wav"})", CallOptions{.caller = "plugin:consumer"});
     XX_TEST_EXPECT_TRUE(r.ok());
     XX_TEST_EXPECT_EQ(r.ok() ? r.value->value<int>("bpm", 0) : -1, 128);
     // 参数给不出目标 (返回空对象 = 没意见) -> no_impl
-    auto rEmpty = co_await point->call(R"({"path":"b.wav"})", CallOptions{.caller = "plugin:consumer"});
+    auto rEmpty
+        = co_await point->call(R"({"path":"b.wav"})", CallOptions{.caller = "plugin:consumer"});
     XX_TEST_EXPECT_EQ(static_cast<int>(rEmpty.error), static_cast<int>(CallError::NoImpl));
 
     // 撤销点: 声明方走了, 点与实现一起消失
@@ -968,9 +999,9 @@ asio::awaitable<void> test_plugin_points() {
 ///   功能点 `agentxx.context.countTokens` 供预算计算与插件调用
 /// - 这条测试守住"估算规则只写一次": 两边结果必须相等
 asio::awaitable<void> test_sync_path_matches_point() {
-    auto ctx        = std::make_shared<agentxx::agent::AgentContext>();
+    auto ctx         = std::make_shared<agentxx::agent::AgentContext>();
     ctx->agentConfig = std::make_shared<agentxx::agent::AgentConfig>();
-    ctx->features   = std::make_shared<Registry>();
+    ctx->features    = std::make_shared<Registry>();
 
     auto handle = std::make_shared<agentxx::middleware::SummarizationMiddlewareHandle>(ctx);
     XX_TEST_EXPECT_TRUE(handle->points().countTokens != nullptr);

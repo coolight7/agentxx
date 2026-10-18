@@ -61,8 +61,7 @@ void PluginGraphNode::applyMessagesWrite(
         return;
     }
 
-    const size_t written
-        = mgr->writeSessionMessages(in.ctx.thread_id, value, overwrite);
+    const size_t written = mgr->writeSessionMessages(in.ctx.thread_id, value, overwrite);
     if (written == 0) {
         return;
     }
@@ -73,9 +72,9 @@ void PluginGraphNode::applyMessagesWrite(
             neograph::graph::GraphEvent::Type::CHANNEL_WRITE,
             name_,
             neograph::json{
-                {"channel", "messages"},
-                {"value",   agentxx::util::toNeographJson(value)},
-            },
+                           {"channel", "messages"},
+                           {"value", agentxx::util::toNeographJson(value)},
+                           },
         });
     }
 }
@@ -167,10 +166,9 @@ asio::awaitable<neograph::graph::NodeOutput> PluginGraphNode::run(neograph::grap
                     || !w.contains("value")) {
                     continue;
                 }
-                const auto channel = w["channel"].get<std::string>();
-                const bool overwrite
-                    = w.contains("mode") && w["mode"].is_string()
-                      && w["mode"].get<std::string>() == "overwrite";
+                const auto channel   = w["channel"].get<std::string>();
+                const bool overwrite = w.contains("mode") && w["mode"].is_string()
+                                       && w["mode"].get<std::string>() == "overwrite";
                 if (channel == "messages") {
                     // 兼容改写: 上下文由会话持有 (图状态不再有 messages 通道),
                     // 插件对 messages 通道的写入 (常见于按旧契约编写的插件) 在此

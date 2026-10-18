@@ -244,9 +244,7 @@ asio::awaitable<void> runInitSteps(const std::vector<InitStep>& steps) {
             }
         );
         if (!ok) {
-            throw std::runtime_error{
-                fmt::format("init step `{}` failed: {}", step.name, failure)
-            };
+            throw std::runtime_error{fmt::format("init step `{}` failed: {}", step.name, failure)};
         }
         const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                             std::chrono::steady_clock::now() - begin
@@ -275,52 +273,53 @@ asio::awaitable<void> BaseAgent::init() {
             // - 放在 init() 而非构造函数: 构造函数可能早于日志 sink 注册, 警告会丢失
             if (config->dataDir.empty()) {
                 XX_LOGW("AgentConfig::dataDir is not set: settings/sessions/codegraph data "
-                        "will NOT be persisted to disk (in-memory only)");
+                         "will NOT be persisted to disk (in-memory only)");
             }
             co_return;
         },
     });
 
     steps.push_back(InitStep{
-        .name     = "model_registry",
+        .name  = "model_registry",
         .after = "config_precheck",
-        .run      = [&]() -> asio::awaitable<void> {
+        .run   = [&]() -> asio::awaitable<void> {
             // 逐步上报启动进度 (客户端 TUI 在"启动中"banner 展示当前正在执行的操作)
             notifyInitProgress("初始化模型注册表 ...");
             initModelRegistry();
             co_return;
         },
-        .rollback = [this]() {
-            agentContext->modelRegistry.reset();
-        },
+        .rollback =
+            [this]() {
+                agentContext->modelRegistry.reset();
+            },
     });
 
     steps.push_back(InitStep{
-        .name     = "event_bus",
+        .name  = "event_bus",
         .after = "model_registry",
-        .run      = [&]() -> asio::awaitable<void> {
+        .run   = [&]() -> asio::awaitable<void> {
             notifyInitProgress("初始化事件总线 ...");
             initEventBus();
             // 后台任务登记表: 与事件总线同一生命周期 —— 事件发布
             // 与进度通知这类 fire-and-forget 任务登记在此, 关闭时先取消再等待收敛
-            agentContext->taskScope = std::make_shared<agentxx::util::TaskScope>(
-                co_await asio::this_coro::executor
-            );
+            agentContext->taskScope
+                = std::make_shared<agentxx::util::TaskScope>(co_await asio::this_coro::executor);
             // 关键指标: 与总线同一生命周期, 诊断包/快照可读
             agentContext->metrics = std::make_shared<agentxx::util::KeyMetrics>();
             co_return;
         },
-        .rollback = [this]() {
-            agentContext->metrics.reset();
-            agentContext->taskScope.reset();
-            agentContext->bus.reset();
-        },
+        .rollback =
+            [this]() {
+                agentContext->metrics.reset();
+                agentContext->taskScope.reset();
+                agentContext->bus.reset();
+            },
     });
 
     steps.push_back(InitStep{
-        .name     = "feature_registry",
+        .name  = "feature_registry",
         .after = "event_bus",
-        .run      = [&]() -> asio::awaitable<void> {
+        .run   = [&]() -> asio::awaitable<void> {
             // 功能点注册表 (点 / 实现 / 调用): 早于中间件装配, 因此中间件可以声明
             // 核心点 (如 agentxx.context.countTokens); 也早于插件加载, 因此插件
             // 登记实现时点已存在
@@ -331,38 +330,39 @@ asio::awaitable<void> BaseAgent::init() {
             agentContext->features = std::make_shared<agentxx::feature::Registry>();
             co_return;
         },
-        .rollback = [this]() {
-            agentContext->features.reset();
-        },
+        .rollback =
+            [this]() {
+                agentContext->features.reset();
+            },
     });
 
     steps.push_back(InitStep{
-        .name     = "middleware_context",
+        .name  = "middleware_context",
         .after = "feature_registry",
-        .run      = [&]() -> asio::awaitable<void> {
+        .run   = [&]() -> asio::awaitable<void> {
             agentContext->middlewareHandleContext
                 = std::make_shared<agentxx::middleware::MiddlewareContext>(
                     agentContext->sessions->sessionStore
                 );
             co_return;
         },
-        .rollback = [this]() {
-            agentContext->middlewareHandleContext.reset();
-        },
+        .rollback =
+            [this]() {
+                agentContext->middlewareHandleContext.reset();
+            },
     });
 
     steps.push_back(InitStep{
-        .name     = "plugin_system",
+        .name  = "plugin_system",
         .after = "middleware_context",
-        .run      = [&]() -> asio::awaitable<void> {
+        .run   = [&]() -> asio::awaitable<void> {
             // 插件系统装配: 工具注册表 + 插件管理器 (挂在 AgentContext, 供
             // ToolcallWrapNode/ModelCallWrapNode/中间件栈取用)
             // - 在 initMiddleware 之前创建: 插件钩子注册 (加载插件时) push 到
             //   handles 栈, 与既有中间件并存
             // - 配置插件的实际加载在 init 末尾 (engine 构建后, 见下方)
             notifyInitProgress("初始化插件系统 ...");
-            agentContext->toolRegistry
-                = std::make_shared<agentxx::plugin::ToolRegistry>();
+            agentContext->toolRegistry = std::make_shared<agentxx::plugin::ToolRegistry>();
             agentContext->pluginManager
                 = std::make_shared<agentxx::plugin::PluginManager>(agentContext);
             // 装配 io executor: 插件 vtable 的跨线程调用 (JS 线程等) 经 post 到 io 线程
@@ -370,16 +370,17 @@ asio::awaitable<void> BaseAgent::init() {
             agentContext->pluginManager->setIoExecutor(co_await asio::this_coro::executor);
             co_return;
         },
-        .rollback = [this]() {
-            agentContext->pluginManager.reset();
-            agentContext->toolRegistry.reset();
-        },
+        .rollback =
+            [this]() {
+                agentContext->pluginManager.reset();
+                agentContext->toolRegistry.reset();
+            },
     });
 
     steps.push_back(InitStep{
-        .name     = "graph_registry",
+        .name  = "graph_registry",
         .after = "plugin_system",
-        .run      = [&]() -> asio::awaitable<void> {
+        .run   = [&]() -> asio::awaitable<void> {
             auto registry = std::make_shared<neograph::graph::GraphRegistry>();
             initRegisterNodes(*registry);
             graphRegistry = std::move(registry);
@@ -387,46 +388,49 @@ asio::awaitable<void> BaseAgent::init() {
             agentContext->graphRegistry = graphRegistry;
             co_return;
         },
-        .rollback = [this]() {
-            agentContext->graphRegistry.reset();
-            graphRegistry.reset();
-        },
+        .rollback =
+            [this]() {
+                agentContext->graphRegistry.reset();
+                graphRegistry.reset();
+            },
     });
 
     steps.push_back(InitStep{
-        .name     = "middleware",
+        .name  = "middleware",
         .after = "graph_registry",
-        .run      = [&]() -> asio::awaitable<void> {
+        .run   = [&]() -> asio::awaitable<void> {
             notifyInitProgress("注册中间件 (权限 / Skill / Memory / 规划) ...");
             co_await initMiddleware();
             co_return;
         },
-        .rollback = [this]() {
-            // 中间件自带的工具由 initTools 收集, 此处只清中间件栈
-            if (agentContext->middlewareHandleContext) {
-                agentContext->middlewareHandleContext->handles.clear();
-            }
-        },
+        .rollback =
+            [this]() {
+                // 中间件自带的工具由 initTools 收集, 此处只清中间件栈
+                if (agentContext->middlewareHandleContext) {
+                    agentContext->middlewareHandleContext->handles.clear();
+                }
+            },
     });
 
     steps.push_back(InitStep{
-        .name     = "tools",
+        .name  = "tools",
         .after = "middleware",
-        .run      = [&]() -> asio::awaitable<void> {
+        .run   = [&]() -> asio::awaitable<void> {
             notifyInitProgress("创建工具集 ...");
             tools = co_await initTools();
             initMiddlewareTools(tools);
             co_return;
         },
-        .rollback = [&]() {
-            tools.clear();
-        },
+        .rollback =
+            [&]() {
+                tools.clear();
+            },
     });
 
     steps.push_back(InitStep{
-        .name     = "tool_whitelist",
+        .name  = "tool_whitelist",
         .after = "tools",
-        .run      = [&]() -> asio::awaitable<void> {
+        .run   = [&]() -> asio::awaitable<void> {
             // 工具白名单过滤 (子代理"无工具/自定义/继承父工具"场景):
             // - 作用于 initTools + 中间件收集后的完整工具集
             // - 仅按名称过滤; 白名单中不存在的名称自然跳过 (不报错)
@@ -462,9 +466,9 @@ asio::awaitable<void> BaseAgent::init() {
     });
 
     steps.push_back(InitStep{
-        .name     = "summarization",
+        .name  = "summarization",
         .after = "tool_whitelist",
-        .run      = [&]() -> asio::awaitable<void> {
+        .run   = [&]() -> asio::awaitable<void> {
             notifyInitProgress("初始化上下文压缩 ...");
             initSummarizationHandles(tools);
             co_return;
@@ -472,9 +476,9 @@ asio::awaitable<void> BaseAgent::init() {
     });
 
     steps.push_back(InitStep{
-        .name     = "tool_definition_check",
+        .name  = "tool_definition_check",
         .after = "summarization",
-        .run      = [&]() -> asio::awaitable<void> {
+        .run   = [&]() -> asio::awaitable<void> {
             // 检查 tools 的提示词 (tool prompt 经 AgentPrompt::toolPrompt 填充到工具
             // 定义; 启动时校验, 避免请求期才暴露问题导致严格网关 HTTP 400)
             for (const auto& item : tools) {
@@ -488,13 +492,13 @@ asio::awaitable<void> BaseAgent::init() {
                 if (def.description.empty()) {
                     XX_LOGW(
                         "Tool `{}` definition description is empty (missing/empty toolPrompt "
-                        "depict); add an entry to AgentPrompt::toolPrompt",
+                          "depict); add an entry to AgentPrompt::toolPrompt",
                         name
                     );
                 }
 
-                // - parameters 缺失/null 时兜底为空对象 schema (部分严格网关如 SCNet 会因 "parameters":
-                // null 返回 400 "Format Error")
+                // - parameters 缺失/null 时兜底为空对象 schema (部分严格网关如 SCNet 会因
+                // "parameters": null 返回 400 "Format Error")
                 assert(def.parameters.is_object());
                 // - 递归校验 parameters JSON Schema (enum 扁平标量数组等),
                 //   非法 schema 会被严格网关以 HTTP 400 拒绝
@@ -505,9 +509,9 @@ asio::awaitable<void> BaseAgent::init() {
     });
 
     steps.push_back(InitStep{
-        .name     = "graph_definition",
+        .name  = "graph_definition",
         .after = "tool_definition_check",
-        .run      = [&]() -> asio::awaitable<void> {
+        .run   = [&]() -> asio::awaitable<void> {
             // 先计算默认执行图定义 (名称 "agentxx.default"), 供插件经 graph 接口表
             // 查看/修改; 插件加载(下方)完成后, 以最终值构建 engine
             agentContext->graphDefinitionJson = initGraphDefinition();
@@ -516,9 +520,9 @@ asio::awaitable<void> BaseAgent::init() {
     });
 
     steps.push_back(InitStep{
-        .name     = "plugins_load",
+        .name  = "plugins_load",
         .after = "graph_definition",
-        .run      = [&]() -> asio::awaitable<void> {
+        .run   = [&]() -> asio::awaitable<void> {
             // 加载配置启用的插件 (yaml `plugins` 段; 加载失败仅记日志不影响主流程)
             // - 提前到 engine 构建之前: 插件可在 create 阶段注册自定义节点类型
             //   (graph 接口表 register_node_type, 注入 per-agent GraphRegistry) 并
@@ -532,19 +536,20 @@ asio::awaitable<void> BaseAgent::init() {
             }
             co_return;
         },
-        .rollback = [this]() {
-            // 插件在 start 阶段可能已注册资源: 用同步关闭入口撤销
-            // (init 期间没有进行中的插件回调, 可安全调用 shutdownAll)
-            if (agentContext->pluginManager) {
-                agentContext->pluginManager->shutdownAll();
-            }
-        },
+        .rollback =
+            [this]() {
+                // 插件在 start 阶段可能已注册资源: 用同步关闭入口撤销
+                // (init 期间没有进行中的插件回调, 可安全调用 shutdownAll)
+                if (agentContext->pluginManager) {
+                    agentContext->pluginManager->shutdownAll();
+                }
+            },
     });
 
     steps.push_back(InitStep{
-        .name     = "engine_build",
+        .name  = "engine_build",
         .after = "plugins_load",
-        .run      = [&]() -> asio::awaitable<void> {
+        .run   = [&]() -> asio::awaitable<void> {
             // 构建执行图: 使用插件可能修改后的最终图定义; 插件修改非法时回退默认图
             notifyInitProgress("构建执行图 ...");
             auto graphDef = agentContext->graphDefinitionJson;
@@ -562,7 +567,7 @@ asio::awaitable<void> BaseAgent::init() {
                 ctx.instructions = config->prompt.systemPrompt;
                 ctx.provider     = ModelProviderRegistry::createProvider(config->model);
                 ctx.extra_config = neograph::json{
-                    {agentxx::nodes::ModelCallWrapNode::defUseModelRegistryKey, true},
+                      {agentxx::nodes::ModelCallWrapNode::defUseModelRegistryKey, true},
                 };
 
                 std::vector<neograph::Tool*> toolPtrs;
@@ -580,7 +585,7 @@ asio::awaitable<void> BaseAgent::init() {
             /// - 每次调用都新建 NodeContext/EngineConfig/EngineResources (link 内部 move)
             auto buildEngine
                 = [&](const neograph::json& def) -> std::unique_ptr<neograph::graph::GraphEngine> {
-                auto topology = neograph::graph::GraphCompiler::parse(def, *graphRegistry);
+                auto topology  = neograph::graph::GraphCompiler::parse(def, *graphRegistry);
                 auto validated = neograph::graph::GraphValidator::require_valid(
                     std::move(topology),
                     *graphRegistry
@@ -611,7 +616,7 @@ asio::awaitable<void> BaseAgent::init() {
                 // 插件修改的图定义非法 (未通过编译/校验): 回退默认图, 保证 agent 可启动
                 XX_LOGE(
                     "Graph build failed (plugin-modified graph likely invalid): {}\n"
-                    "Falling back to default graph",
+                      "Falling back to default graph",
                     e.what()
                 );
                 agentContext->graphDefinitionJson = initGraphDefinition();
@@ -622,15 +627,16 @@ asio::awaitable<void> BaseAgent::init() {
             assert(nullptr != engine);
             co_return;
         },
-        .rollback = [this]() {
-            engine.reset();
-        },
+        .rollback =
+            [this]() {
+                engine.reset();
+            },
     });
 
     steps.push_back(InitStep{
-        .name     = "bind_tools",
+        .name  = "bind_tools",
         .after = "engine_build",
-        .run      = [&]() -> asio::awaitable<void> {
+        .run   = [&]() -> asio::awaitable<void> {
             // 装配静态工具名集合 (插件工具注册冲突检测用; 覆盖内置/中间件/MCP 工具)
             // - 必须在 own_tools 之前收集: own_tools 会把 tools 元素 move 成空
             //   unique_ptr, 之后遍历将解引用空指针
@@ -748,10 +754,7 @@ void BaseAgent::verifyStartupAssembly() const {
         }
         std::error_code ec;
         if (!fs::exists(utilxx_base::utf8ToPath(plugin.path), ec)) {
-            XX_LOGW(
-                "startup check: plugin path not found: {} (it will be skipped)",
-                plugin.path
-            );
+            XX_LOGW("startup check: plugin path not found: {} (it will be skipped)", plugin.path);
         }
     }
 
@@ -790,10 +793,9 @@ void BaseAgent::verifyStartupAssembly() const {
     {
         std::ofstream ofs{probe, std::ios::binary | std::ios::trunc};
         if (!ofs) {
-            throw std::runtime_error{fmt::format(
-                "startup check failed: session root `{}` is not writable",
-                root
-            )};
+            throw std::runtime_error{
+                fmt::format("startup check failed: session root `{}` is not writable", root)
+            };
         }
         ofs << "agentxx";
         ofs.flush();
@@ -869,9 +871,9 @@ void BaseAgent::initRegisterNodes(neograph::graph::GraphRegistry& registry) {
     registry.register_type(
         std::string{agentxx::nodes::ModelCallWrapNode::defNodeType},
         [ctx](
-            const std::string&                   name,
-            const neograph::json&                nodeConfig,
-            const neograph::graph::NodeContext&  nodeCtx
+            const std::string&                  name,
+            const neograph::json&               nodeConfig,
+            const neograph::graph::NodeContext& nodeCtx
         ) {
             // 节点级配置合并: 图定义里该节点的额外键 (type 之外的键) 覆盖引擎级
             // extra_config, 使节点可通过图定义单独配置 (如关闭自动路由 xx_autoRoute,
@@ -1356,8 +1358,8 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
     }
 
     auto userMsgJson = utilxx_base::Json{
-        {"role",    "user"   },
-        {"content", llmInput },
+        {"role",    "user"  },
+        {"content", llmInput},
     };
     if (!attachments.empty()) {
         // 服务端附件自主加载: 若 dataUrl 为空且 pathOrUrl 为服务端本地路径,
@@ -1401,9 +1403,9 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
                 );
                 ifs.close();
                 if (att.mimeType.empty()) {
-                    auto ext = utilxx_base::toLower(
-                        utilxx_base::pathToUtf8Generic(filePath.extension())
-                    );
+                    auto ext
+                        = utilxx_base::toLower(utilxx_base::pathToUtf8Generic(filePath.extension())
+                        );
                     att.mimeType = std::string(mimeTypeFromExtension(ext));
                 }
                 att.dataUrl = fmt::format(
@@ -1523,9 +1525,8 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
         // - VALUES (每 super-step `__state__` 全量状态事件) 无人消费: EventBridge
         //   只处理 message_tip / messages, 而上下文已不在图状态里, 去掉后每步
         //   少一次整段状态序列化
-                  .stream_mode
-                  = neograph::graph::StreamMode::EVENTS | neograph::graph::StreamMode::TOKENS
-                    | neograph::graph::StreamMode::UPDATES,
+                  .stream_mode = neograph::graph::StreamMode::EVENTS | neograph::graph::StreamMode::TOKENS
+                       | neograph::graph::StreamMode::UPDATES,
                   .cancel_token = cancelToken,
         // 固定 false, 不随 isFirstMsg 变化:
         // - 引擎 checkpoint 仅进程内存活 (InMemorySingleCheckpointStore),

@@ -16,8 +16,8 @@
 ///    `AGENTXX_UPDATE_CONFIG_KEYS=1` 一键更新 (更新后人工 review diff)。
 #include "agentxx-test/core/test_config_keys.h"
 
-#include "agentxx-test/core/schema_artifact.h"
 #include "agentxx-client/config_loader.h"
+#include "agentxx-test/core/schema_artifact.h"
 #include "agentxx/agent/config.h"
 #include "utilxx_base/json.h"
 #include "utilxx_base/string_util.h"
@@ -181,7 +181,7 @@ std::vector<ConfigKeyEntry> configKeyEntries() {
     std::vector<ConfigKeyEntry> out;
 
     // 条目级键的"最小条目"文档: 只写必需字段, 用来观察其余键省略时的取值
-    const std::string kMinimalModelYaml  = "model:\n  list:\n    - name: m1\n";
+    const std::string kMinimalModelYaml = "model:\n  list:\n    - name: m1\n";
     const std::string kMinimalPluginYaml
         = "plugin:\n  list:\n    - path: \"builtin://agentxx_filesystem\"\n";
     const std::string kMinimalMcpYaml
@@ -197,7 +197,9 @@ std::vector<ConfigKeyEntry> configKeyEntries() {
          false,
          "",
          "cfg-keys-data",
-         [](const YamlAppConfig& cfg) { return cfg.dataDir; }}
+         [](const YamlAppConfig& cfg) {
+             return cfg.dataDir;
+         }}
     );
     out.push_back(
         {"work_dir",
@@ -208,7 +210,9 @@ std::vector<ConfigKeyEntry> configKeyEntries() {
          false,
          "",
          "cfg-keys-work",
-         [](const YamlAppConfig& cfg) { return cfg.workDir; }}
+         [](const YamlAppConfig& cfg) {
+             return cfg.workDir;
+         }}
     );
     out.push_back(
         {"language",
@@ -219,7 +223,9 @@ std::vector<ConfigKeyEntry> configKeyEntries() {
          false,
          "",
          "zh-cn",
-         [](const YamlAppConfig& cfg) { return cfg.language; }}
+         [](const YamlAppConfig& cfg) {
+             return cfg.language;
+         }}
     );
     out.push_back(
         {"subagent.enable",
@@ -230,7 +236,9 @@ std::vector<ConfigKeyEntry> configKeyEntries() {
          false,
          "true",
          "false",
-         [](const YamlAppConfig& cfg) { return boolText(cfg.enableSubagent); }}
+         [](const YamlAppConfig& cfg) {
+             return boolText(cfg.enableSubagent);
+         }}
     );
     out.push_back(
         {"worktree.enable",
@@ -241,7 +249,9 @@ std::vector<ConfigKeyEntry> configKeyEntries() {
          false,
          "false",
          "true",
-         [](const YamlAppConfig& cfg) { return boolText(cfg.worktreeEnable); }}
+         [](const YamlAppConfig& cfg) {
+             return boolText(cfg.worktreeEnable);
+         }}
     );
     out.push_back(
         {"dev_mode",
@@ -252,7 +262,9 @@ std::vector<ConfigKeyEntry> configKeyEntries() {
          false,
          "false",
          "true",
-         [](const YamlAppConfig& cfg) { return boolText(cfg.devMode); }}
+         [](const YamlAppConfig& cfg) {
+             return boolText(cfg.devMode);
+         }}
     );
     out.push_back(
         {"permission.mode",
@@ -276,7 +288,9 @@ std::vector<ConfigKeyEntry> configKeyEntries() {
          false,
          "",
          "/data/a|./b",
-         [](const YamlAppConfig& cfg) { return joinList(cfg.permissionAllowPaths); }}
+         [](const YamlAppConfig& cfg) {
+             return joinList(cfg.permissionAllowPaths);
+         }}
     );
     out.push_back(
         {"permission.blacklist.list",
@@ -287,7 +301,9 @@ std::vector<ConfigKeyEntry> configKeyEntries() {
          false,
          "",
          "./secret",
-         [](const YamlAppConfig& cfg) { return joinList(cfg.permissionDenyPaths); }}
+         [](const YamlAppConfig& cfg) {
+             return joinList(cfg.permissionDenyPaths);
+         }}
     );
     out.push_back(
         {"skill.list",
@@ -298,7 +314,9 @@ std::vector<ConfigKeyEntry> configKeyEntries() {
          false,
          "",
          "./skills|./more",
-         [](const YamlAppConfig& cfg) { return joinList(cfg.skillDirPaths); }}
+         [](const YamlAppConfig& cfg) {
+             return joinList(cfg.skillDirPaths);
+         }}
     );
     out.push_back(
         {"memory.list",
@@ -309,7 +327,9 @@ std::vector<ConfigKeyEntry> configKeyEntries() {
          false,
          "",
          "./AGENTS.md",
-         [](const YamlAppConfig& cfg) { return joinList(cfg.memoryFilePaths); }}
+         [](const YamlAppConfig& cfg) {
+             return joinList(cfg.memoryFilePaths);
+         }}
     );
 
     // ---- model 段: 用途模型名 ----
@@ -322,7 +342,9 @@ std::vector<ConfigKeyEntry> configKeyEntries() {
          false,
          "",
          "m1",
-         [](const YamlAppConfig& cfg) { return cfg.useModelDefault; }}
+         [](const YamlAppConfig& cfg) {
+             return cfg.useModelDefault;
+         }}
     );
     out.push_back(
         {"model.use.subagent",
@@ -333,7 +355,9 @@ std::vector<ConfigKeyEntry> configKeyEntries() {
          false,
          "",
          "m1",
-         [](const YamlAppConfig& cfg) { return cfg.useModelSubagent; }}
+         [](const YamlAppConfig& cfg) {
+             return cfg.useModelSubagent;
+         }}
     );
     out.push_back(
         {"model.use.web_search",
@@ -344,7 +368,9 @@ std::vector<ConfigKeyEntry> configKeyEntries() {
          false,
          "",
          "m1",
-         [](const YamlAppConfig& cfg) { return cfg.useModelWebSearch; }}
+         [](const YamlAppConfig& cfg) {
+             return cfg.useModelWebSearch;
+         }}
     );
     out.push_back(
         {"model.use.acp",
@@ -355,7 +381,9 @@ std::vector<ConfigKeyEntry> configKeyEntries() {
          false,
          "",
          "m1",
-         [](const YamlAppConfig& cfg) { return cfg.useModelAcp; }}
+         [](const YamlAppConfig& cfg) {
+             return cfg.useModelAcp;
+         }}
     );
     out.push_back(
         {"model.use.train",
@@ -366,7 +394,9 @@ std::vector<ConfigKeyEntry> configKeyEntries() {
          false,
          "",
          "m1",
-         [](const YamlAppConfig& cfg) { return cfg.useModelTrain; }}
+         [](const YamlAppConfig& cfg) {
+             return cfg.useModelTrain;
+         }}
     );
     out.push_back(
         {"model.use.train_scorer",
@@ -377,7 +407,9 @@ std::vector<ConfigKeyEntry> configKeyEntries() {
          false,
          "",
          "m1",
-         [](const YamlAppConfig& cfg) { return cfg.useModelTrainScorer; }}
+         [](const YamlAppConfig& cfg) {
+             return cfg.useModelTrainScorer;
+         }}
     );
     out.push_back(
         {"model.use.train_optimizer",
@@ -388,7 +420,9 @@ std::vector<ConfigKeyEntry> configKeyEntries() {
          false,
          "",
          "m1",
-         [](const YamlAppConfig& cfg) { return cfg.useModelTrainOptimizer; }}
+         [](const YamlAppConfig& cfg) {
+             return cfg.useModelTrainOptimizer;
+         }}
     );
 
     // ---- model 段: 条目字段 ----
@@ -419,7 +453,9 @@ std::vector<ConfigKeyEntry> configKeyEntries() {
          false,
          "openai",
          "anthropic",
-         modelProbe([](const agentxx::agent::ModelConfig& m) { return m.type; })}
+         modelProbe([](const agentxx::agent::ModelConfig& m) {
+             return m.type;
+         })}
     );
     out.push_back(
         {"model.list[].base_url",
@@ -430,7 +466,9 @@ std::vector<ConfigKeyEntry> configKeyEntries() {
          false,
          "",
          "https://api.example.com",
-         modelProbe([](const agentxx::agent::ModelConfig& m) { return m.baseUrl; })}
+         modelProbe([](const agentxx::agent::ModelConfig& m) {
+             return m.baseUrl;
+         })}
     );
     out.push_back(
         {"model.list[].api_key",
@@ -441,7 +479,9 @@ std::vector<ConfigKeyEntry> configKeyEntries() {
          false,
          "",
          "EMPTY",
-         modelProbe([](const agentxx::agent::ModelConfig& m) { return m.apiKey; })}
+         modelProbe([](const agentxx::agent::ModelConfig& m) {
+             return m.apiKey;
+         })}
     );
     out.push_back(
         {"model.list[].model_name",
@@ -452,7 +492,9 @@ std::vector<ConfigKeyEntry> configKeyEntries() {
          false,
          "",
          "gpt-4",
-         modelProbe([](const agentxx::agent::ModelConfig& m) { return m.modelName; })}
+         modelProbe([](const agentxx::agent::ModelConfig& m) {
+             return m.modelName;
+         })}
     );
     out.push_back(
         {"model.list[].api_path",
@@ -463,7 +505,9 @@ std::vector<ConfigKeyEntry> configKeyEntries() {
          false,
          "",
          "/v1/chat/completions",
-         modelProbe([](const agentxx::agent::ModelConfig& m) { return m.apiPath; })}
+         modelProbe([](const agentxx::agent::ModelConfig& m) {
+             return m.apiPath;
+         })}
     );
     out.push_back(
         {"model.list[].send_thinking",
@@ -474,7 +518,9 @@ std::vector<ConfigKeyEntry> configKeyEntries() {
          false,
          "false",
          "true",
-         modelProbe([](const agentxx::agent::ModelConfig& m) { return boolText(m.sendThinking); })}
+         modelProbe([](const agentxx::agent::ModelConfig& m) {
+             return boolText(m.sendThinking);
+         })}
     );
     out.push_back(
         {"model.list[].request_reasoning_summary",
@@ -498,7 +544,9 @@ std::vector<ConfigKeyEntry> configKeyEntries() {
          false,
          "false",
          "true",
-         modelProbe([](const agentxx::agent::ModelConfig& m) { return boolText(m.cacheControl); })}
+         modelProbe([](const agentxx::agent::ModelConfig& m) {
+             return boolText(m.cacheControl);
+         })}
     );
     out.push_back(
         {"model.list[].connect_timeout",
@@ -577,7 +625,9 @@ std::vector<ConfigKeyEntry> configKeyEntries() {
          false,
          "false",
          "true",
-         modelProbe([](const agentxx::agent::ModelConfig& m) { return boolText(m.imageInput); })}
+         modelProbe([](const agentxx::agent::ModelConfig& m) {
+             return boolText(m.imageInput);
+         })}
     );
     out.push_back(
         {"model.list[].audio_input",
@@ -588,7 +638,9 @@ std::vector<ConfigKeyEntry> configKeyEntries() {
          false,
          "false",
          "true",
-         modelProbe([](const agentxx::agent::ModelConfig& m) { return boolText(m.audioInput); })}
+         modelProbe([](const agentxx::agent::ModelConfig& m) {
+             return boolText(m.audioInput);
+         })}
     );
     out.push_back(
         {"model.list[].video_input",
@@ -599,7 +651,9 @@ std::vector<ConfigKeyEntry> configKeyEntries() {
          false,
          "false",
          "true",
-         modelProbe([](const agentxx::agent::ModelConfig& m) { return boolText(m.videoInput); })}
+         modelProbe([](const agentxx::agent::ModelConfig& m) {
+             return boolText(m.videoInput);
+         })}
     );
     out.push_back(
         {"model.list[].extra_headers",
@@ -710,9 +764,12 @@ std::vector<ConfigKeyEntry> configKeyEntries() {
          false,
          "true",
          "false",
-         pluginProbe("builtin://agentxx_filesystem", [](const agentxx::agent::PluginConfig& p) {
-             return boolText(p.enabled);
-         })}
+         pluginProbe(
+             "builtin://agentxx_filesystem",
+             [](const agentxx::agent::PluginConfig& p) {
+                 return boolText(p.enabled);
+             }
+         )}
     );
     out.push_back(
         {"plugin.list[].sides",
@@ -723,9 +780,12 @@ std::vector<ConfigKeyEntry> configKeyEntries() {
          false,
          "auto",
          "agent",
-         pluginProbe("builtin://agentxx_filesystem", [](const agentxx::agent::PluginConfig& p) {
-             return pluginSideText(p.sides);
-         })}
+         pluginProbe(
+             "builtin://agentxx_filesystem",
+             [](const agentxx::agent::PluginConfig& p) {
+                 return pluginSideText(p.sides);
+             }
+         )}
     );
     out.push_back(
         {"plugin.list[].args",
@@ -737,9 +797,12 @@ std::vector<ConfigKeyEntry> configKeyEntries() {
          false,
          "",
          R"({"index_root":"/repo","depth":0.5})",
-         pluginProbe("builtin://agentxx_filesystem", [](const agentxx::agent::PluginConfig& p) {
-             return p.args.is_null() ? std::string{} : p.args.dump();
-         })}
+         pluginProbe(
+             "builtin://agentxx_filesystem",
+             [](const agentxx::agent::PluginConfig& p) {
+                 return p.args.is_null() ? std::string{} : p.args.dump();
+             }
+         )}
     );
     out.push_back(
         {"plugin.list[].config",
@@ -750,9 +813,12 @@ std::vector<ConfigKeyEntry> configKeyEntries() {
          false,
          "",
          "./conf",
-         pluginProbe("builtin://agentxx_filesystem", [](const agentxx::agent::PluginConfig& p) {
-             return p.configPath;
-         })}
+         pluginProbe(
+             "builtin://agentxx_filesystem",
+             [](const agentxx::agent::PluginConfig& p) {
+                 return p.configPath;
+             }
+         )}
     );
 
     // ---- mcp 段 ----
@@ -779,7 +845,12 @@ std::vector<ConfigKeyEntry> configKeyEntries() {
          false,
          "http://127.0.0.1:9/sse",
          "http://127.0.0.1:9/sse",
-         mcpProbe("tools", [](const agentxx::agent::McpServerConfig& m) { return m.url; })}
+         mcpProbe(
+             "tools",
+             [](const agentxx::agent::McpServerConfig& m) {
+                 return m.url;
+             }
+         )}
     );
     out.push_back(
         {"mcp.list[].timeout",
@@ -791,9 +862,12 @@ std::vector<ConfigKeyEntry> configKeyEntries() {
          false,
          "120000",
          "5000",
-         mcpProbe("tools", [](const agentxx::agent::McpServerConfig& m) {
-             return std::to_string(m.toolTimeout.count());
-         })}
+         mcpProbe(
+             "tools",
+             [](const agentxx::agent::McpServerConfig& m) {
+                 return std::to_string(m.toolTimeout.count());
+             }
+         )}
     );
     out.push_back(
         {"mcp.list[].headers",
@@ -805,16 +879,19 @@ std::vector<ConfigKeyEntry> configKeyEntries() {
          false,
          "",
          "Authorization=Bearer token",
-         mcpProbe("tools", [](const agentxx::agent::McpServerConfig& m) {
-             std::string text;
-             for (const auto& [key, value] : m.headers) {
-                 if (!text.empty()) {
-                     text += "|";
+         mcpProbe(
+             "tools",
+             [](const agentxx::agent::McpServerConfig& m) {
+                 std::string text;
+                 for (const auto& [key, value] : m.headers) {
+                     if (!text.empty()) {
+                         text += "|";
+                     }
+                     text += key + "=" + value;
                  }
-                 text += key + "=" + value;
+                 return text;
              }
-             return text;
-         })}
+         )}
     );
 
     // ---- 已废弃的旧键 (识别但不生效, 只记一次迁移提示) ----
@@ -845,7 +922,9 @@ std::vector<ConfigKeyEntry> configKeyEntries() {
          false,
          "0",
          "0",
-         [](const YamlAppConfig& cfg) { return std::to_string(cfg.plugins.size()); }}
+         [](const YamlAppConfig& cfg) {
+             return std::to_string(cfg.plugins.size());
+         }}
     );
     out.push_back(
         {"use_model",
@@ -856,7 +935,9 @@ std::vector<ConfigKeyEntry> configKeyEntries() {
          false,
          "",
          "",
-         [](const YamlAppConfig& cfg) { return cfg.useModelDefault; }}
+         [](const YamlAppConfig& cfg) {
+             return cfg.useModelDefault;
+         }}
     );
 
     return out;
@@ -982,8 +1063,10 @@ std::set<std::string> catalogKeyNames(const std::vector<ConfigKeyEntry>& entries
         size_t           pos  = 0;
         while (pos <= path.size()) {
             auto dot = path.find('.', pos);
-            auto seg = path.substr(pos, dot == std::string_view::npos ? std::string_view::npos
-                                                                     : dot - pos);
+            auto seg = path.substr(
+                pos,
+                dot == std::string_view::npos ? std::string_view::npos : dot - pos
+            );
             // 去掉列表标记: `list[]` -> `list`
             if (auto bracket = seg.find('['); bracket != std::string_view::npos) {
                 seg = seg.substr(0, bracket);
@@ -1007,22 +1090,17 @@ std::set<std::string> catalogKeyNames(const std::vector<ConfigKeyEntry>& entries
 std::string buildKeysJson(const std::vector<ConfigKeyEntry>& entries) {
     auto keys = utilxx_base::Json::array();
     for (const auto& entry : entries) {
-        keys.push_back(
-            utilxx_base::Json{
-                {"path",    entry.keyPath    },
-                {"type",    entry.type       },
-                {"default", entry.defaultValue},
-                {"sample",  entry.sampleYaml.empty()
-                                ? std::string{}
-                                : trimText(entry.sampleYaml)},
-            }
-        );
+        keys.push_back(utilxx_base::Json{
+            {"path",    entry.keyPath                                                        },
+            {"type",    entry.type                                                           },
+            {"default", entry.defaultValue                                                   },
+            {"sample",  entry.sampleYaml.empty() ? std::string{} : trimText(entry.sampleYaml)},
+        });
     }
     utilxx_base::Json root;
     root["version"] = 1;
-    root["note"]
-        = "生成物, 请勿手工编辑; 重新生成: AGENTXX_UPDATE_CONFIG_KEYS=1 agentxx_test "
-          "config_keys";
+    root["note"] = "生成物, 请勿手工编辑; 重新生成: AGENTXX_UPDATE_CONFIG_KEYS=1 agentxx_test "
+                   "config_keys";
     root["source"] = "agent/client/src/config_loader.cpp";
     root["count"]  = static_cast<int64_t>(entries.size());
     root["keys"]   = std::move(keys);
@@ -1097,7 +1175,7 @@ TestResult testConfigKeys() {
     // 源码扫描: 加载器解析的键名必须都在目录里
     // 路径经 [agentxx::test::sourceFilePath] 解析 (构建期宏优先): 不能直接由
     // `__FILE__` 推导, 构建脚本打开的 ccache 归一化 (CCACHE_BASEDIR) 会让它变相对路径
-    const auto loaderPath = sourceFilePath("client/src/config_loader.cpp");
+    const auto            loaderPath = sourceFilePath("client/src/config_loader.cpp");
     std::set<std::string> scanned;
     if (loaderPath.empty() || !fs::exists(loaderPath)) {
         TEST_FAIL << "config_keys: 读不到源码文件 client/src/config_loader.cpp (源码根目录="
@@ -1122,8 +1200,7 @@ TestResult testConfigKeys() {
         for (size_t i = 0; i < missing.size(); ++i) {
             TEST_FAIL << (i == 0 ? "" : ", ") << "`" << missing[i] << "`";
         }
-        TEST_FAIL << " (add them to configKeyEntries() and regenerate the artifacts)"
-                  << std::endl;
+        TEST_FAIL << " (add them to configKeyEntries() and regenerate the artifacts)" << std::endl;
     }
 
     // 生成物比对

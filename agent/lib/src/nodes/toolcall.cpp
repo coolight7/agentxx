@@ -577,11 +577,11 @@ ToolcallWrapNode::ToolcallWrapNode(
 namespace {
 
 void insertAbortedToolResults(
-    std::string_view             phasePrefix,
-    std::string_view             exceptionStr,
-    neograph::graph::NodeInput&  in,
+    std::string_view                                     phasePrefix,
+    std::string_view                                     exceptionStr,
+    neograph::graph::NodeInput&                          in,
     const std::shared_ptr<agentxx::agent::AgentContext>& agentCtxPtr,
-    neograph::graph::NodeOutput& result
+    neograph::graph::NodeOutput&                         result
 ) noexcept {
     // 追加到会话上下文 (图状态不再持有 messages 通道): 通过节点事件通道
     // 通知 UI 与节流持久化, 与旧实现向 result.writes 挂 messages 通道写等价
@@ -592,7 +592,7 @@ void insertAbortedToolResults(
         if (!session) {
             return;
         }
-        const auto& messages = session->messages();
+        const auto&                  messages     = session->messages();
         const neograph::ChatMessage* assistantMsg = nullptr;
         for (auto it = messages.rbegin(); it != messages.rend(); ++it) {
             if (it->role == "assistant" && !it->tool_calls.empty()) {
@@ -610,7 +610,11 @@ void insertAbortedToolResults(
         for (const auto& tool : toolCalls) {
             auto msg = neograph::ChatMessage{
                 .role    = "tool",
-                .content = fmt::format("[Error: {} (tool call aborted at {} phase)]", exceptionStr, phasePrefix),
+                .content = fmt::format(
+                    "[Error: {} (tool call aborted at {} phase)]",
+                    exceptionStr,
+                    phasePrefix
+                ),
                 .tool_call_id = tool.id,
                 .tool_name    = tool.name,
                 .flags        = neograph::MessageFlag::AutoInserted,
@@ -826,18 +830,16 @@ asio::awaitable<bool> ToolcallWrapNode::prepareToolCall(
 ) const {
     auto agentCtxPtr = agentContext.lock();
 
-    out = PreparedToolCall{};
-    out.id        = tc.id;
-    out.name      = tc.name;
+    out             = PreparedToolCall{};
+    out.id          = tc.id;
+    out.name        = tc.name;
     out.cancelToken = cancelToken;
-    out.startMs   = static_cast<int64_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::system_clock::now().time_since_epoch()
-        )
-            .count()
-    );
-    out.repeatKey = makeRepeatCallKey(tc.name, tc.arguments);
-    out.repeatHit = repeatTriggeredKeys.count(out.repeatKey) > 0;
+    out.startMs     = static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                           std::chrono::system_clock::now().time_since_epoch()
+    )
+                                           .count());
+    out.repeatKey   = makeRepeatCallKey(tc.name, tc.arguments);
+    out.repeatHit   = repeatTriggeredKeys.count(out.repeatKey) > 0;
 
     // 中断缓存: 上次中断前已完成的结果直接复用 (不再执行, 也不再询问)
     if (auto cacheIt = toolcallsCache.find(tc.id); cacheIt != toolcallsCache.end()) {
@@ -899,18 +901,17 @@ asio::awaitable<bool> ToolcallWrapNode::prepareToolCall(
     // 按同一套规则再解析一次并比对 —— 判定与执行之间的任何改写都会在这里被拦下
     // (纯校验, 不重复询问用户; 服务未注册/无调用 id 时视为通过)
     if (agentCtxPtr && agentCtxPtr->bus && out.tool && !tc.id.empty()) {
-        auto resp
-            = co_await agentCtxPtr->bus
-                  ->request<events::ReqPermissionReverify, events::RespPermissionReverify>(
-                      events::Topic::PermissionReverify,
-                      events::ReqPermissionReverify{
-                          .sessionId  = std::string{sessionId},
-                          .toolName   = out.tool->get_name(),
-                          .toolCallId = tc.id,
-                          .arguments  = out.args,
-                      },
-                      std::chrono::milliseconds{0}
-                  );
+        auto resp = co_await agentCtxPtr->bus
+                        ->request<events::ReqPermissionReverify, events::RespPermissionReverify>(
+                            events::Topic::PermissionReverify,
+                            events::ReqPermissionReverify{
+                                .sessionId  = std::string{sessionId},
+                                .toolName   = out.tool->get_name(),
+                                .toolCallId = tc.id,
+                                .arguments  = out.args,
+                            },
+                            std::chrono::milliseconds{0}
+                        );
         if (resp.has_value() && !resp->ok) {
             XX_LOGW(
                 "Toolcall permission reverify failed: tool='{}' id='{}' reason={}",
@@ -925,8 +926,8 @@ asio::awaitable<bool> ToolcallWrapNode::prepareToolCall(
     co_return true;
 }
 
-asio::awaitable<std::string>
-    ToolcallWrapNode::runToolCallBody(const PreparedToolCall& prepared) const {
+asio::awaitable<std::string> ToolcallWrapNode::runToolCallBody(const PreparedToolCall& prepared
+) const {
     auto*       tool = prepared.tool;
     const auto& args = prepared.args;
 
@@ -1059,7 +1060,7 @@ asio::awaitable<std::optional<neograph::ChatMessage>> ToolcallWrapNode::runPrepa
         co_return tool_msg;
     }
 
-    bool        ok      = false;
+    bool        ok = false;
     std::string content;
     co_await agentxx::util::catchErrorAsync<bool>(
         [&]() -> asio::awaitable<bool> {
@@ -1084,8 +1085,8 @@ asio::awaitable<std::optional<neograph::ChatMessage>> ToolcallWrapNode::runPrepa
                 if (outInterrupted) {
                     *outInterrupted = true;
                 }
-                tool_msg.flags  |= neograph::MessageFlag::Interrupt;
-                tool_msg.content = "[Interrupt]";
+                tool_msg.flags   |= neograph::MessageFlag::Interrupt;
+                tool_msg.content  = "[Interrupt]";
                 if (auto ctx = agentContext.lock(); ctx && ctx->metrics) {
                     ctx->metrics->noteToolCall(agentxx::util::KeyMetrics::ToolOutcome::Interrupted);
                 }
@@ -1105,9 +1106,7 @@ asio::awaitable<std::optional<neograph::ChatMessage>> ToolcallWrapNode::runPrepa
         // 这里统一记为"本次调用被取消", 由调用方补 [User canceled] 占位
         [&](std::string& errinfo) -> std::optional<bool> {
             if (outError) {
-                *outError = std::make_exception_ptr(
-                    neograph::graph::CancelledException(errinfo)
-                );
+                *outError = std::make_exception_ptr(neograph::graph::CancelledException(errinfo));
             }
             return std::optional<bool>{true};
         },
@@ -1130,12 +1129,11 @@ asio::awaitable<std::optional<neograph::ChatMessage>> ToolcallWrapNode::runPrepa
         }
     }
     if (ok) {
-        const auto endMs = static_cast<int64_t>(
-            std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::system_clock::now().time_since_epoch()
+        const auto endMs
+            = static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                       std::chrono::system_clock::now().time_since_epoch()
             )
-                .count()
-        );
+                                       .count());
         tool_msg.extra["durationMs"] = std::max<int64_t>(0, endMs - prepared.startMs);
     } else {
         tool_msg.extra["durationMs"] = 0;
@@ -1158,31 +1156,30 @@ asio::awaitable<void> ToolcallWrapNode::runPreparedToolCallGuarded(
         // 中断逃逸到此 (内层已按中断语义处理大部分情况): 保持中断语义
         outInterrupted = true;
         neograph::ChatMessage msg;
-        msg.role                 = "tool";
-        msg.tool_call_id         = prepared.id;
-        msg.tool_name            = prepared.name;
-        msg.content              = "[Interrupt]";
-        msg.flags               |= neograph::MessageFlag::Interrupt;
-        msg.extra["startTimeMs"] = prepared.startMs;
-        msg.extra["durationMs"]  = 0;
-        outMsg                   = std::move(msg);
+        msg.role                  = "tool";
+        msg.tool_call_id          = prepared.id;
+        msg.tool_name             = prepared.name;
+        msg.content               = "[Interrupt]";
+        msg.flags                |= neograph::MessageFlag::Interrupt;
+        msg.extra["startTimeMs"]  = prepared.startMs;
+        msg.extra["durationMs"]   = 0;
+        outMsg                    = std::move(msg);
     } catch (...) {
         // 取消 (含 asio 取消产生的 operation_aborted) 与其它逃逸异常: 一律记为取消,
         // 由调用方补 [User canceled] 占位并保留已完成结果
         if (outError == nullptr) {
-            outError = std::make_exception_ptr(
-                neograph::graph::CancelledException("tool call aborted")
-            );
+            outError
+                = std::make_exception_ptr(neograph::graph::CancelledException("tool call aborted"));
         }
     }
     co_return;
 }
 
 asio::awaitable<void> ToolcallWrapNode::runToolBatch(
-    const std::vector<PreparedToolCall>&              batch,
+    const std::vector<PreparedToolCall>&               batch,
     std::vector<std::optional<neograph::ChatMessage>>& outMsgs,
-    std::exception_ptr&                               outError,
-    bool&                                             outInterrupted
+    std::exception_ptr&                                outError,
+    bool&                                              outInterrupted
 ) const {
     outMsgs.assign(batch.size(), std::nullopt);
     outError       = nullptr;
@@ -1201,20 +1198,22 @@ asio::awaitable<void> ToolcallWrapNode::runToolBatch(
     // - 结果按 batch 内槽位写回: 完成顺序与提交顺序无关
     // - batch 复制进共享状态: 派生的协程不引用本协程栈上的数据
     auto ex = co_await asio::this_coro::executor;
+
     struct BatchState {
         std::vector<PreparedToolCall>                     batch;
         std::vector<std::optional<neograph::ChatMessage>> msgs;
         std::exception_ptr                                error;
         bool                                              interrupted = false;
     };
-    auto state       = std::make_shared<BatchState>();
-    state->batch     = batch;
+
+    auto state   = std::make_shared<BatchState>();
+    state->batch = batch;
     state->msgs.assign(batch.size(), std::nullopt);
-    auto doneChannel = std::make_shared<
-        asio::experimental::channel<void(utilxx_base::AsioErrorCode, size_t)>>(
-        ex,
-        static_cast<unsigned>(batch.size())
-    );
+    auto doneChannel
+        = std::make_shared<asio::experimental::channel<void(utilxx_base::AsioErrorCode, size_t)>>(
+            ex,
+            static_cast<unsigned>(batch.size())
+        );
     // 本批次的取消信号: 会话取消时先向子协程发信号 (让它们的挂起等待尽快结束),
     // 再按取消路径返回, 不留下后台仍在推进的工具执行
     //
@@ -1269,8 +1268,7 @@ asio::awaitable<void> ToolcallWrapNode::runToolBatch(
     //   取消路径补齐 [User canceled] 占位 (未完成的槽位保持空)
     bool waitCancelled = false;
     for (size_t i = 0; i < state->batch.size(); ++i) {
-        auto [ec, idx]
-            = co_await doneChannel->async_receive(asio::as_tuple(asio::use_awaitable));
+        auto [ec, idx] = co_await doneChannel->async_receive(asio::as_tuple(asio::use_awaitable));
         (void)idx;
         if (ec) {
             waitCancelled = true;
@@ -1600,12 +1598,7 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
             tool_msg.flags        = neograph::MessageFlag::AutoInserted;
             typedResults.push_back(std::move(tool_msg));
         }
-        agentxx::nodes::appendSessionMessages(
-            agentCtxPtr,
-            in,
-            std::move(typedResults),
-            nodeName
-        );
+        agentxx::nodes::appendSessionMessages(agentCtxPtr, in, std::move(typedResults), nodeName);
         // 往外抛 cancel 异常, 由 WrapNode 统一按控制流处理
         std::rethrow_exception(cancelErrorPtr);
     }

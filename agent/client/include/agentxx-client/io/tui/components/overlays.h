@@ -147,38 +147,41 @@ public:
 
     /// 测试辅助: 设置控件文本值 (模拟用户输入; 控件不存在时忽略)
     void setControlText(std::string_view id, std::string text);
+
     /// 测试辅助: 表单底部错误文本 (无错误时为空)
     const std::string& errorText() const {
         return errorText_;
     }
+
     /// 测试辅助: 当前键盘焦点控件 id (无焦点时为空)
     const std::string& focusedControlId() const {
         return form_.focusedId;
     }
+
     /// 测试辅助: 提交按钮命中 (等价点击 [ 保存 ]; 返回外部是否已受理)
     bool submitByTest();
     /// 测试辅助: 取消按钮命中 (等价点击 [ 取消 ])
     void cancelByTest();
 
     /// 控件 id (供外部/测试引用)
-    static constexpr std::string_view kNameId              = "name";
-    static constexpr std::string_view kTypeId              = "type";
-    static constexpr std::string_view kBaseUrlId           = "base_url";
-    static constexpr std::string_view kApiPathId           = "api_path";
-    static constexpr std::string_view kApiKeyId            = "api_key";
-    static constexpr std::string_view kModelNameId         = "model_name";
-    static constexpr std::string_view kContextTokenId      = "model_context_max_token";
-    static constexpr std::string_view kConnectTimeoutId    = "connect_timeout";
-    static constexpr std::string_view kReadTimeoutId       = "read_chunk_timeout";
-    static constexpr std::string_view kMaxConnectionsId    = "max_concurrent_connections";
-    static constexpr std::string_view kSendThinkingId      = "send_thinking";
-    static constexpr std::string_view kReasoningSummaryId  = "request_reasoning_summary";
-    static constexpr std::string_view kImageInputId        = "image_input";
-    static constexpr std::string_view kAudioInputId        = "audio_input";
-    static constexpr std::string_view kVideoInputId        = "video_input";
-    static constexpr std::string_view kSslVerifyId         = "ssl_verify";
-    static constexpr std::string_view kExtraHeadersId      = "extra_headers";
-    static constexpr std::string_view kExtraConfigId       = "extra_api_config";
+    static constexpr std::string_view kNameId             = "name";
+    static constexpr std::string_view kTypeId             = "type";
+    static constexpr std::string_view kBaseUrlId          = "base_url";
+    static constexpr std::string_view kApiPathId          = "api_path";
+    static constexpr std::string_view kApiKeyId           = "api_key";
+    static constexpr std::string_view kModelNameId        = "model_name";
+    static constexpr std::string_view kContextTokenId     = "model_context_max_token";
+    static constexpr std::string_view kConnectTimeoutId   = "connect_timeout";
+    static constexpr std::string_view kReadTimeoutId      = "read_chunk_timeout";
+    static constexpr std::string_view kMaxConnectionsId   = "max_concurrent_connections";
+    static constexpr std::string_view kSendThinkingId     = "send_thinking";
+    static constexpr std::string_view kReasoningSummaryId = "request_reasoning_summary";
+    static constexpr std::string_view kImageInputId       = "image_input";
+    static constexpr std::string_view kAudioInputId       = "audio_input";
+    static constexpr std::string_view kVideoInputId       = "video_input";
+    static constexpr std::string_view kSslVerifyId        = "ssl_verify";
+    static constexpr std::string_view kExtraHeadersId     = "extra_headers";
+    static constexpr std::string_view kExtraConfigId      = "extra_api_config";
 
     /// 表单取值 → 模型配置 (`values` 为 formValues 的 `{"values":{...}}` 载荷)
     /// - 空 API Key 按 "EMPTY" 处理; ssl_verify 的 默认/true/false 映射为
@@ -210,7 +213,7 @@ private:
     /// markdown 渲染器生命周期 (Element 内部容器/链接 Box 指向它; 随内容重建)
     std::vector<std::unique_ptr<markdown::DomBuilder>> mdBuilders_;
 
-    std::function<void()>                                         onClose_;
+    std::function<void()>                                          onClose_;
     std::function<std::string(const agentxx::agent::ModelConfig&)> onSubmit_;
 };
 
@@ -292,10 +295,10 @@ private:
     bool        closeRequested_ = false;
     std::string pendingSessionId_;
 
-    std::function<void()>                            onClose_;
-    std::function<void(std::string)>                 onSelect_;
-    std::function<void()>                            onNewSession_;
-    std::function<void(std::string, std::string)>    onRename_;
+    std::function<void()>                         onClose_;
+    std::function<void(std::string)>              onSelect_;
+    std::function<void()>                         onNewSession_;
+    std::function<void(std::string, std::string)> onRename_;
 
     /// 条目 id: "新会话" 入口固定为 [kNewSessionId], 会话项为 kSessionIdPrefix + sessionId
     static constexpr const char* kNewSessionId    = "new-session";
@@ -404,7 +407,7 @@ private:
     TUICtx&      ctx_;
     UiActionList list_;
     /// 条目命中表 (每帧重登记; 只有本帧渲染出来的条目可点击)
-    UiHitMap     hits_;
+    UiHitMap hits_;
     /// 条目配色 (每帧按当前主题刷新: 分组标题色与切换主题都取自这里)
     UiActionStyle style_;
 
@@ -847,23 +850,23 @@ private:
 
     std::vector<ScrollItem> buildItems();
     // 成员按对齐/尺寸从大到小排列, 减少结构体内填充字节
-    std::function<void()>       onClose_;
+    std::function<void()> onClose_;
     /// 尺寸与外观选项 (open_overlay 的 extra_json; 见 [OverlayOptions])
     OverlayOptions options_;
-    std::string                 title_;
-    std::string                 content_;
-    std::string                        cachedContent_;
-    std::string                        cachedThemeName_;
+    std::string    title_;
+    std::string    content_;
+    std::string    cachedContent_;
+    std::string    cachedThemeName_;
 
     /// markdown 渲染缓存 (DomBuilder 生命周期与 Element 绑定, 见 attachments)
     std::vector<std::shared_ptr<void>> cachedAttachments_;
-    std::shared_ptr<Scrollable> scrollable_;
+    std::shared_ptr<Scrollable>        scrollable_;
     ftxui::Element                     cachedElement_;
 
-    TUICtx&                     ctx_;
-    int                                cachedMaxW_ = 0;
-    bool                        markdown_;
-    bool                               cachedMarkdown_ = true;
+    TUICtx& ctx_;
+    int     cachedMaxW_ = 0;
+    bool    markdown_;
+    bool    cachedMarkdown_ = true;
 };
 
 /// 通用 diff overlay (open_overlay DIFF 驱动; payload 解析见 [parsePluginDiffPayload])
@@ -962,7 +965,7 @@ private:
     OverlayOptions options_;
 
     /// 表单状态与当前组件树 (控件值/勾选/选中/焦点; 由主程序维护, 见 ui_components.h)
-    agentxx::client::UiFormState   form_;
+    agentxx::client::UiFormState    form_;
     std::vector<pluginxx::ui::Item> formItems_;
 
     /// 提交表单 (校验 → 组装 `{"values":{...}}` → 动作通道回传 __submit)
@@ -1032,7 +1035,7 @@ private:
 
     /// 目录条目
     struct DirEntry {
-    // 成员按对齐/尺寸从大到小排列, 减少结构体内填充字节
+        // 成员按对齐/尺寸从大到小排列, 减少结构体内填充字节
         std::string               name;     ///< 显示名 (文件名, 不含图标)
         std::string               fullPath; ///< 绝对路径
         uint64_t                  sizeBytes = 0;

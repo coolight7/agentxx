@@ -623,7 +623,6 @@ void testBannerRetryButtonHitArea() {
 // 回归: 内容更新帧与同内容再渲染帧必须完全一致 (流式抖动)
 // ---------------------------------------------------------------------------
 
-
 // 回归: markdown 列表文本的拖选复制 (消息列表层, 含正文左侧留白与列表悬挂缩进)
 //
 // 背景: 列表项内容左缘在项目符号 (marker) 之后, 续行靠左侧空列 (marker 所占的
@@ -641,9 +640,8 @@ static void testMarkdownListTextCopy() {
     f.sharedState.mutate([&](TUIRenderState& st) {
         auto m  = std::make_shared<TUIMessage>();
         m->role = TUIMessage::Role::Assistant;
-        m->text
-            = "- alpha bravo charlie delta echo foxtrot golf hotel india juliet\n"
-              "- second\n";
+        m->text = "- alpha bravo charlie delta echo foxtrot golf hotel india juliet\n"
+                  "- second\n";
         st.messages.push_back(std::move(m));
     });
     f.render();
@@ -658,8 +656,10 @@ static void testMarkdownListTextCopy() {
     /// 按 App 的帧顺序 (渲染 -> Select -> GetParts) 取一次拖选复制的结果
     auto copyOf = [&](int x0, int y0, int x1, int y1) {
         auto el     = f.comp->Render();
-        auto screen
-            = ftxui::Screen::Create(ftxui::Dimension::Fixed(f.width), ftxui::Dimension::Fixed(f.height));
+        auto screen = ftxui::Screen::Create(
+            ftxui::Dimension::Fixed(f.width),
+            ftxui::Dimension::Fixed(f.height)
+        );
         ftxui::Selection sel(x0, y0, x1, y1);
         ftxui::Render(screen, el.get(), sel);
         return CopyProbe{sel.GetParts(), std::move(screen)};
@@ -691,9 +691,7 @@ static void testMarkdownListTextCopy() {
     // 右下 -> 左上拖选: 终点落在续行的悬挂缩进列上。
     // 修复前: 终点被夹成"整行选中" -> 复制出整行正文 (末尾多出大量字符);
     //         起点所在行的左侧空列被补成一串空格 -> 开头多出空白
-    {
-        XX_TEST_EXPECT_EQ(copyOf(20, 0, 2, 1).text, std::string{"harlie delta"});
-    }
+    { XX_TEST_EXPECT_EQ(copyOf(20, 0, 2, 1).text, std::string{"harlie delta"}); }
 
     // 终点落在续行正文之中: 只取到终点列, 不多取
     {
@@ -704,24 +702,16 @@ static void testMarkdownListTextCopy() {
     }
 
     // 续行内部拖选: 只取该行的对应列 (选区不含缩进列, 不带出悬挂缩进)
-    {
-        XX_TEST_EXPECT_EQ(copyOf(14, 1, 23, 1).text, std::string{"xtrot golf"});
-    }
+    { XX_TEST_EXPECT_EQ(copyOf(14, 1, 23, 1).text, std::string{"xtrot golf"}); }
 
     // 只选续行的一部分: 从该行行首取到终点列 (含悬挂缩进的空白列)
-    {
-        XX_TEST_EXPECT_EQ(copyOf(0, 1, 10, 1).text, std::string{"    echo"});
-    }
+    { XX_TEST_EXPECT_EQ(copyOf(0, 1, 10, 1).text, std::string{"    echo"}); }
 
     // 选区完全落在正文左侧留白内: 不取任何正文 (不越界取整行)
-    {
-        XX_TEST_EXPECT_EQ(copyOf(0, 0, 2, 1).text, std::string{});
-    }
+    { XX_TEST_EXPECT_EQ(copyOf(0, 0, 2, 1).text, std::string{}); }
 
     // 第二个列表项 (marker 在正文左侧): 整体拖选取出 marker 与正文
-    {
-        XX_TEST_EXPECT_EQ(copyOf(0, 3, 35, 3).text, std::string{"  • second"});
-    }
+    { XX_TEST_EXPECT_EQ(copyOf(0, 3, 35, 3).text, std::string{"  • second"}); }
 }
 
 // ---------------------------------------------------------------------------
@@ -812,7 +802,7 @@ static void testNavStripButtons() {
         XX_TEST_EXPECT_EQ(boxTop.x_min, f.width - 2);
 
         // 屏幕上该列自上而下就是 ▲ - + ▼ (字形为多字节, 按字节长度取)
-        const std::string frame = stripAnsiCodes(f.render());
+        const std::string frame      = stripAnsiCodes(f.render());
         const auto        hasGlyphAt = [&frame](int row, int col, const std::string& glyph) {
             const std::string line = screenRowText(frame, row);
             return col >= 0 && col + static_cast<int>(glyph.size()) <= static_cast<int>(line.size())
@@ -978,7 +968,7 @@ static void testNavStripButtons() {
         f.render();
         XX_TEST_EXPECT_TRUE(clickNav(f, Nav::Top)); // 跳到顶部: 长 Tip 占满视口
         f.render();                                 // 落实跳转
-        f.render();                                 // 折叠命中区域按顶部视图重建 (由上一帧可见区域反推)
+        f.render(); // 折叠命中区域按顶部视图重建 (由上一帧可见区域反推)
 
         const int navRow = f.comp->navButtonBox(Nav::Top).y_min;
         XX_TEST_EXPECT_TRUE(f.comp->navButtonBox(Nav::Top).Contain(f.width - 2, navRow));
@@ -1032,7 +1022,7 @@ static void testNavStripButtons() {
         XX_TEST_EXPECT_FALSE(boxPrev.IsEmpty());
         XX_TEST_EXPECT_FALSE(boxNext.IsEmpty());
         XX_TEST_EXPECT_FALSE(boxBot.IsEmpty());
-        XX_TEST_EXPECT_EQ(boxPrev.y_min - boxTop.y_min, 1); // 紧凑排列 (无空行)
+        XX_TEST_EXPECT_EQ(boxPrev.y_min - boxTop.y_min, 1);  // 紧凑排列 (无空行)
         XX_TEST_EXPECT_EQ(boxTop.y_min, (f.height - 4) / 2); // 仍居中
         XX_TEST_EXPECT_EQ(boxBot.y_min, boxTop.y_min + 3);
     }
@@ -1097,8 +1087,7 @@ TestResult testTuiScroll() {
             // 流式子项与消息块一样自带尾部空行 (见 message_list.cpp 的
             // "所有子项都自带尾部空行" 约定), 故标记落在倒数第二行
             XX_TEST_EXPECT_TRUE(
-                ScrollFixture::lastLines(contentFrame, 2)
-                    .find("M" + std::to_string(step) + "END")
+                ScrollFixture::lastLines(contentFrame, 2).find("M" + std::to_string(step) + "END")
                 != std::string::npos
             );
         }
@@ -1209,16 +1198,12 @@ TestResult testTuiScroll() {
         f.setTokenEpoch(1, "second stream marker S2ND");
         std::string frame = f.render();
         // 流式子项自带尾部空行 (与消息块一致), 最新内容落在屏幕倒数第二行
-        XX_TEST_EXPECT_TRUE(
-            ScrollFixture::lastLines(frame, 2).find("S2ND") != std::string::npos
-        );
+        XX_TEST_EXPECT_TRUE(ScrollFixture::lastLines(frame, 2).find("S2ND") != std::string::npos);
 
         // 同流后续 token 追加 (epoch 不变) 仍正常增量显示
         f.setTokenEpoch(1, "second stream marker S2ND with more tail T3ST");
         std::string frame2 = f.render();
-        XX_TEST_EXPECT_TRUE(
-            ScrollFixture::lastLines(frame2, 2).find("T3ST") != std::string::npos
-        );
+        XX_TEST_EXPECT_TRUE(ScrollFixture::lastLines(frame2, 2).find("T3ST") != std::string::npos);
     }
 
     {
@@ -1821,13 +1806,14 @@ TestResult testTuiScroll() {
             // diff 内容由**插件自己的工具渲染器**提供 (主程序不再按工具名特化):
             // 这里模拟插件推送的装饰 (Diff 组件项), 覆盖"大 diff 消息"的滚动场景
             {
-                auto reg = st.pluginRegistry
-                               ? std::make_shared<agentxx::plugin::ClientUiRegistry>(*st.pluginRegistry)
-                               : std::make_shared<agentxx::plugin::ClientUiRegistry>();
-                auto& decor       = reg->toolDecors.emplace_back();
-                decor.plugin      = "agentxx_filesystem";
-                decor.toolCallId  = "call_edit_scroll_1";
-                decor.displayName = "Edit";
+                auto reg
+                    = st.pluginRegistry
+                          ? std::make_shared<agentxx::plugin::ClientUiRegistry>(*st.pluginRegistry)
+                          : std::make_shared<agentxx::plugin::ClientUiRegistry>();
+                auto& decor                = reg->toolDecors.emplace_back();
+                decor.plugin               = "agentxx_filesystem";
+                decor.toolCallId           = "call_edit_scroll_1";
+                decor.displayName          = "Edit";
                 utilxx_base::Json diffItem = utilxx_base::Json::object();
                 diffItem["kind"]           = "Diff";
                 diffItem["path"]           = "/a/b.txt";
@@ -2703,9 +2689,8 @@ TestResult testTuiScroll() {
             st.genToolName = "read_file";
         });
         std::string fallbackFrame = g.render();
-        const int   fBodyRow = screenRowOf(stripAnsiCodes(fallbackFrame), "MARK21_FALLBACK");
-        const int   fPlaceRow
-            = screenRowOf(stripAnsiCodes(fallbackFrame), "receiving tool call...");
+        const int   fBodyRow      = screenRowOf(stripAnsiCodes(fallbackFrame), "MARK21_FALLBACK");
+        const int fPlaceRow = screenRowOf(stripAnsiCodes(fallbackFrame), "receiving tool call...");
         XX_TEST_EXPECT_TRUE(fBodyRow >= 0);
         XX_TEST_EXPECT_EQ(fPlaceRow - fBodyRow, 2);
 
@@ -2721,8 +2706,8 @@ TestResult testTuiScroll() {
         });
         h.render();
         XX_TEST_EXPECT_EQ(h.comp->totalHeight(), 4); // 用户消息 2 行 + 占位项 2 行
-        const int userRow  = screenRowOf(stripAnsiCodes(h.render()), "> hi");
-        const int waitRow  = screenRowOf(stripAnsiCodes(h.render()), "waiting for response...");
+        const int userRow = screenRowOf(stripAnsiCodes(h.render()), "> hi");
+        const int waitRow = screenRowOf(stripAnsiCodes(h.render()), "waiting for response...");
         XX_TEST_EXPECT_TRUE(userRow >= 0);
         XX_TEST_EXPECT_EQ(waitRow - userRow, 2);
 

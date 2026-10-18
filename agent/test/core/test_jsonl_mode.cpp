@@ -88,9 +88,9 @@ struct MemoryLines {
 
 /// 输出侧快照: 原始行 + 解析出的消息 + 无法解析的行
 struct Collected {
-    std::vector<std::string>  rawLines;
-    std::vector<WireMessage>  messages;
-    std::vector<std::string>  unparsed;
+    std::vector<std::string> rawLines;
+    std::vector<WireMessage> messages;
+    std::vector<std::string> unparsed;
 };
 
 /// 取一行消息文本 (去掉结尾换行符)
@@ -304,13 +304,13 @@ namespace {
 
 /// 联调夹具: 本地 LLM 模拟器 + CodeAgent + 会话端点 + JSONL 传输 (注入内存行缓冲)
 struct JsonlFixture {
-    std::shared_ptr<DaSimServer>                       sim;
-    std::shared_ptr<agentxx::agent::AgentConfig>       cfg;
-    std::shared_ptr<agentxx::agent::CodeAgent>         agent;
-    std::shared_ptr<SessionServerAgentIO>              endpoint;
-    std::shared_ptr<JsonlAgentIOTransport>             transport;
-    std::shared_ptr<MemoryLines>                       lines;
-    std::string                                        sessionId;
+    std::shared_ptr<DaSimServer>                 sim;
+    std::shared_ptr<agentxx::agent::AgentConfig> cfg;
+    std::shared_ptr<agentxx::agent::CodeAgent>   agent;
+    std::shared_ptr<SessionServerAgentIO>        endpoint;
+    std::shared_ptr<JsonlAgentIOTransport>       transport;
+    std::shared_ptr<MemoryLines>                 lines;
+    std::string                                  sessionId;
 
     ~JsonlFixture() {
         if (transport) {
@@ -332,8 +332,8 @@ struct JsonlFixture {
 /// - 夹具建立后, 输出行落在 `lines->output`
 asio::awaitable<std::shared_ptr<JsonlFixture>>
     makeJsonlFixture(std::string sessionId, std::shared_ptr<MemoryLines> lines) {
-    auto fx  = std::make_shared<JsonlFixture>();
-    fx->sim  = std::make_shared<DaSimServer>(startDaSimServer());
+    auto fx   = std::make_shared<JsonlFixture>();
+    fx->sim   = std::make_shared<DaSimServer>(startDaSimServer());
     fx->lines = std::move(lines);
 
     g_da_sim_response_content     = "jsonl-mode-response";
@@ -402,8 +402,8 @@ asio::awaitable<void> testJsonlTransportWithAgent() {
         return countOfType<agentxx::agent::WireHelloAck>(collect(fx->lines)) > 0;
     }));
     {
-        auto             c    = collect(fx->lines);
-        auto             acks = allOfType<agentxx::agent::WireHelloAck>(c);
+        auto c    = collect(fx->lines);
+        auto acks = allOfType<agentxx::agent::WireHelloAck>(c);
         XX_TEST_EXPECT_EQ(acks.size(), size_t{1});
         if (!acks.empty()) {
             XX_TEST_EXPECT_TRUE(acks[0].ok);
@@ -412,8 +412,7 @@ asio::awaitable<void> testJsonlTransportWithAgent() {
         }
         // 第一条输出行就是握手回执 (对端按序解析)
         XX_TEST_EXPECT_TRUE(!c.messages.empty());
-        XX_TEST_EXPECT_TRUE(
-            std::holds_alternative<agentxx::agent::WireHelloAck>(c.messages.front())
+        XX_TEST_EXPECT_TRUE(std::holds_alternative<agentxx::agent::WireHelloAck>(c.messages.front())
         );
     }
 
@@ -422,8 +421,8 @@ asio::awaitable<void> testJsonlTransportWithAgent() {
         return countOfType<agentxx::agent::WireInputAck>(collect(fx->lines)) > 0;
     }));
     {
-        auto             c    = collect(fx->lines);
-        auto             acks = allOfType<agentxx::agent::WireInputAck>(c);
+        auto c    = collect(fx->lines);
+        auto acks = allOfType<agentxx::agent::WireInputAck>(c);
         XX_TEST_EXPECT_GE(acks.size(), size_t{1});
         if (!acks.empty()) {
             XX_TEST_EXPECT_EQ(acks[0].requestId, uint64_t{7});
@@ -471,7 +470,7 @@ asio::awaitable<void> testJsonlTransportWithAgent() {
             XX_TEST_EXPECT_EQ(acks[1].status, std::string{agentxx::agent::InputStatus::Queued});
         }
         // 轮次结果排在两条受理回执之后 (响应 ≠ 轮次完成)
-        const int ackIndex = indexOf<agentxx::agent::WireInputAck>(c);
+        const int ackIndex  = indexOf<agentxx::agent::WireInputAck>(c);
         const int turnIndex = indexOf<agentxx::agent::WireTurnResult>(c);
         XX_TEST_EXPECT_TRUE(turnIndex > ackIndex);
 

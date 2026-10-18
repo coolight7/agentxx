@@ -44,8 +44,8 @@ bool isOpenableUrl(std::string_view url) {
         if (c >= 0x80) {
             continue;
         }
-        const bool alnum = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z')
-                           || (c >= 'A' && c <= 'Z');
+        const bool alnum
+            = (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
         if (alnum) {
             continue;
         }
@@ -93,14 +93,9 @@ bool openUrlInBrowser(std::string_view url) {
         // 宽字符 API: 链接中的非 ASCII 字符按 UTF-8 → UTF-16 转换
         // (ShellExecuteW 不经 shell 解析, 无参数注入面)
         const std::wstring wide = utilxx_base::utf8ToPath(target).wstring();
-        const auto         ret  = reinterpret_cast<intptr_t>(ShellExecuteW(
-            nullptr,
-            L"open",
-            wide.c_str(),
-            nullptr,
-            nullptr,
-            SW_SHOWNORMAL
-        ));
+        const auto         ret  = reinterpret_cast<intptr_t>(
+            ShellExecuteW(nullptr, L"open", wide.c_str(), nullptr, nullptr, SW_SHOWNORMAL)
+        );
         // ShellExecuteW 返回值 <= 32 表示失败 (见 Win32 文档)
         if (ret <= 32) {
             XX_LOGW("[client] ShellExecute failed ({}) for url: {}", ret, target);
@@ -114,9 +109,8 @@ bool openUrlInBrowser(std::string_view url) {
 #elif XX_IS_ANDROID_D
         // Android (Termux 等环境): 优先 termux-open-url (termux-api 提供),
         // 不可用时回退 xdg-open
-        const std::string cmd
-            = "termux-open-url '" + target + "' >/dev/null 2>&1 || xdg-open '" + target
-              + "' >/dev/null 2>&1";
+        const std::string cmd = "termux-open-url '" + target + "' >/dev/null 2>&1 || xdg-open '"
+                                + target + "' >/dev/null 2>&1";
         if (std::system(cmd.c_str()) != 0) {
             XX_LOGW("[client] open url failed on android: {}", target);
         }

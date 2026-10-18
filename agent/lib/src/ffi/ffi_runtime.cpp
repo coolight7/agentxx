@@ -174,9 +174,9 @@ bool FfiAgentRuntime::buildConfigs(
         config->llmMaxRetry           = cfgJ.value("llmMaxRetry", config->llmMaxRetry);
         config->language              = agent::normalizeLanguage(cfgJ.value("language", "en"));
         // 配置 JSON 显式给出 language 时标记为显式: 连接客户端不再用界面语言覆盖
-        config->languageExplicit      = cfgJ.contains("language");
+        config->languageExplicit = cfgJ.contains("language");
         // 开发者模式 (配置 JSON `devMode`): 只控制"记录数据"的收集
-        config->devMode               = cfgJ.value("devMode", false);
+        config->devMode = cfgJ.value("devMode", false);
         {
             std::lock_guard<std::mutex> lock(langMutex_);
             language_ = config->language;
@@ -256,7 +256,7 @@ bool FfiAgentRuntime::buildConfigs(
     mc.readChunkTimeoutSeconds  = mj.value("readChunkTimeoutSeconds", 100);
     mc.maxConcurrentConnections = mj.value("maxConcurrentConnections", size_t{5});
     mc.anthropicVersion         = mj.value("anthropicVersion", "2023-06-01");
-    mc.modelContextMaxToken    = mj.value("modelContextMaxToken", size_t{0});
+    mc.modelContextMaxToken     = mj.value("modelContextMaxToken", size_t{0});
     mc.sendThinking             = mj.value("sendThinking", false);
     // 多模态输入能力 (与 yaml 的 image_input/audio_input/video_input 同义):
     // 决定嵌入方程序能否上传图片/音频/视频, 经 WireModelInfo.capabilities 下发
@@ -672,12 +672,9 @@ int FfiAgentRuntime::sendInput(std::string_view inputJson, std::string& err) {
     }
 
     auto clientIO = clientIO_;
-    asio::post(
-        *clientIoCtx_,
-        [clientIO, input = std::move(input)]() mutable {
-            clientIO->sendToPeer(std::move(input));
-        }
-    );
+    asio::post(*clientIoCtx_, [clientIO, input = std::move(input)]() mutable {
+        clientIO->sendToPeer(std::move(input));
+    });
     return AGENTXX_FFI_OK;
 }
 
@@ -854,18 +851,19 @@ std::string FfiAgentRuntime::listSessions(std::string& err) {
 std::string FfiAgentRuntime::getCapabilities() {
     utilxx_base::Json j = {
         {"apiVersion",     AGENTXX_FFI_API_VERSION},
-        {"libraryVersion", "0.4.0"},
-        {"capabilities",   {
-            AGENTXX_FFI_CAP_ADD_MODEL,
-            AGENTXX_FFI_CAP_REMOVE_MODEL,
-            AGENTXX_FFI_CAP_LIST_MODELS,
-            AGENTXX_FFI_CAP_MESSAGE_QUEUE,
-            AGENTXX_FFI_CAP_VIEW_MESSAGES,
-            AGENTXX_FFI_CAP_HOST_TOOLS,
-            AGENTXX_FFI_CAP_PLUGIN_DATA_UP,
-            AGENTXX_FFI_CAP_WIRE_PASSTHROUGH,
-            AGENTXX_FFI_CAP_DELTA_BATCH,
-        }}
+        {"libraryVersion", "0.4.0"                },
+        {"capabilities",
+         {
+             AGENTXX_FFI_CAP_ADD_MODEL,
+             AGENTXX_FFI_CAP_REMOVE_MODEL,
+             AGENTXX_FFI_CAP_LIST_MODELS,
+             AGENTXX_FFI_CAP_MESSAGE_QUEUE,
+             AGENTXX_FFI_CAP_VIEW_MESSAGES,
+             AGENTXX_FFI_CAP_HOST_TOOLS,
+             AGENTXX_FFI_CAP_PLUGIN_DATA_UP,
+             AGENTXX_FFI_CAP_WIRE_PASSTHROUGH,
+             AGENTXX_FFI_CAP_DELTA_BATCH,
+         }                                        }
     };
     return j.dump();
 }
@@ -1081,7 +1079,8 @@ int FfiAgentRuntime::toolRegister(std::string_view toolJson, std::string& err) {
     agent::WireHostToolRegister reg;
     reg.sessionId = sessionId_;
 
-    auto parseOneTool = [](const utilxx_base::Json& item) -> std::optional<agent::WireHostToolInfo> {
+    auto parseOneTool
+        = [](const utilxx_base::Json& item) -> std::optional<agent::WireHostToolInfo> {
         if (!item.is_object() || !item.contains("name") || !item["name"].is_string()) {
             return std::nullopt;
         }

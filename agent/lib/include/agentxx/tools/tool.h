@@ -131,7 +131,7 @@ public:
         size_t                                                      in_maxRetry          = 0,
         std::optional<agentxx::middleware::SummarizationToolHandle> in_summarizationHandle
         = std::nullopt,
-        bool in_repeatCallCheck = false,
+        bool in_repeatCallCheck  = false,
         bool in_supportsParallel = false
     );
 

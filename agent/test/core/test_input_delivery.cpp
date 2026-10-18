@@ -69,14 +69,9 @@ struct ClientRecorder {
                 using T = std::decay_t<decltype(m)>;
                 if constexpr (std::is_same_v<T, agentxx::agent::WireInputAck>) {
                     std::lock_guard<std::mutex> lock(mu);
-                    acks.push_back(Ack{
-                        m.requestId,
-                        m.status,
-                        m.reason,
-                        m.detail,
-                        m.itemId,
-                        m.delivery
-                    });
+                    acks.push_back(
+                        Ack{m.requestId, m.status, m.reason, m.detail, m.itemId, m.delivery}
+                    );
                 } else if constexpr (std::is_same_v<T, agentxx::agent::WireError>) {
                     std::lock_guard<std::mutex> lock(mu);
                     errors.push_back(m);
@@ -153,8 +148,7 @@ struct ClientRecorder {
 };
 
 /// 等待条件成立 (轮转 io 线程: 每 15ms 轮询一次, 不用阻塞 sleep)
-asio::awaitable<bool>
-    waitFor(std::function<bool()> cond, int timeoutMs = 8000, int pollMs = 15) {
+asio::awaitable<bool> waitFor(std::function<bool()> cond, int timeoutMs = 8000, int pollMs = 15) {
     auto ex       = co_await asio::this_coro::executor;
     auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds{timeoutMs};
     while (std::chrono::steady_clock::now() < deadline) {
@@ -171,7 +165,7 @@ asio::awaitable<bool>
 
 /// 非阻塞等待 (仅推进时间, 用于"某事件不应发生"的用例)
 asio::awaitable<void> spin(std::chrono::milliseconds total) {
-    auto ex = co_await asio::this_coro::executor;
+    auto               ex = co_await asio::this_coro::executor;
     asio::steady_timer t(ex);
     t.expires_after(total);
     utilxx_base::AsioErrorCode ec;
@@ -215,12 +209,12 @@ asio::awaitable<std::shared_ptr<Fixture>> makeFixture(
     std::string dataDir  = {},
     std::string response = "ok response"
 ) {
-    auto fx              = std::make_shared<Fixture>();
-    fx->sim              = startDaSimServer();
-    g_da_sim_response_content = std::move(response);
-    g_da_sim_tool_calls       = utilxx_base::Json::array();
-    g_da_sim_fail_count       = 0;
-    g_da_sim_delay_ms         = 0;
+    auto fx                       = std::make_shared<Fixture>();
+    fx->sim                       = startDaSimServer();
+    g_da_sim_response_content     = std::move(response);
+    g_da_sim_tool_calls           = utilxx_base::Json::array();
+    g_da_sim_fail_count           = 0;
+    g_da_sim_delay_ms             = 0;
     g_da_sim_tool_calls_remaining = -1;
 
     const auto baseUrl       = "http://127.0.0.1:" + std::to_string(fx->sim.port);
@@ -230,7 +224,7 @@ asio::awaitable<std::shared_ptr<Fixture>> makeFixture(
     fx->cfg->model.modelName = "default-model";
     fx->cfg->llmMaxRetry     = 1;
     if (!dataDir.empty()) {
-        fx->cfg->dataDir            = dataDir;
+        fx->cfg->dataDir = dataDir;
         // 会话持久化默认关闭 (库使用方按需开启): 收件箱用例要求落盘
         fx->cfg->enableSessionStore = true;
     }
@@ -246,8 +240,9 @@ asio::awaitable<std::shared_ptr<Fixture>> makeFixture(
     fx->endpoint    = std::make_shared<agentxx::agent::SessionServerAgentIO>(ex, fx->agent, scCfg);
 
     auto [clientOwn, serverT] = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
-    fx->endpoint
-        ->setTransport(std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT)));
+    fx->endpoint->setTransport(
+        std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT))
+    );
 
     fx->recorder = std::make_shared<ClientRecorder>();
     fx->clientT  = std::move(clientOwn);
@@ -423,10 +418,7 @@ asio::awaitable<void> test_input_ack_statuses() {
         return fx->recorder->ackCount() >= 3;
     }));
     if (auto ack = fx->recorder->ack(2)) {
-        XX_TEST_EXPECT_EQ(
-            ack->reason,
-            std::string{agentxx::agent::InputRejectReason::BadDelivery}
-        );
+        XX_TEST_EXPECT_EQ(ack->reason, std::string{agentxx::agent::InputRejectReason::BadDelivery});
     }
 
     // ④ 空闲时正常输入 → started
@@ -487,9 +479,7 @@ asio::awaitable<void> test_queue_state_machine() {
         XX_TEST_EXPECT_EQ(ack->status, std::string{agentxx::agent::InputStatus::Queued});
     }
 
-    fx->clientT->send(agentxx::agent::WireMessage{
-        agentxx::agent::WireCancel{fx->sessionId}
-    });
+    fx->clientT->send(agentxx::agent::WireMessage{agentxx::agent::WireCancel{fx->sessionId}});
     XX_TEST_EXPECT_TRUE(co_await waitFor([&] {
         return fx->endpoint->queueState() == agentxx::agent::SessionQueueState::Paused;
     }));
@@ -501,8 +491,8 @@ asio::awaitable<void> test_queue_state_machine() {
     }));
 
     // 用户发新输入 → 解除暂停并消化积压队列 (本条排在积压之后)
-    g_da_sim_delay_ms        = 0;
-    const int turnsBefore    = fx->recorder->turnResults.load();
+    g_da_sim_delay_ms     = 0;
+    const int turnsBefore = fx->recorder->turnResults.load();
     fx->send("resume turn", std::string{agentxx::agent::InputDelivery::NextTurn}, 3);
     XX_TEST_EXPECT_TRUE(co_await waitFor([&] {
         return fx->recorder->ackCount() >= 3;
@@ -536,12 +526,12 @@ asio::awaitable<void> test_next_step_injection() {
     auto fx = co_await makeFixture("nextstep-test-session", {}, "next step response");
 
     // 先触发一次工具调用, 使同一轮次里有第二个 modelcall 边界
-    g_da_sim_tool_calls = utilxx_base::Json::array({
+    g_da_sim_tool_calls           = utilxx_base::Json::array({
         utilxx_base::Json{
-            {"id",        "call_1"                   },
-            {"name",      "no_such_tool_next_step"   },
-            {"arguments", "{}"                       },
-        }
+                          {"id", "call_1"},
+                          {"name", "no_such_tool_next_step"},
+                          {"arguments", "{}"},
+                          }
     });
     g_da_sim_tool_calls_remaining = 1;
     g_da_sim_delay_ms             = 250;
@@ -644,7 +634,7 @@ asio::awaitable<void> test_inbox_store_api() {
     const auto root = makeTempRoot();
     {
         agentxx::agent::SessionStore store{root};
-        const std::string           sessionId = "store-api-session";
+        const std::string            sessionId = "store-api-session";
 
         agentxx::agent::SessionStore::SessionInputRecord rec;
         rec.id          = "i-1";
@@ -671,7 +661,10 @@ asio::awaitable<void> test_inbox_store_api() {
         store.markSessionInputPromoted(sessionId, "i-1", 42);
         XX_TEST_EXPECT_EQ(
             store
-                .listSessionInputs(sessionId, agentxx::agent::SessionStore::SessionInputStatus::Admitted)
+                .listSessionInputs(
+                    sessionId,
+                    agentxx::agent::SessionStore::SessionInputStatus::Admitted
+                )
                 .size(),
             size_t{0}
         );
@@ -691,7 +684,11 @@ asio::awaitable<void> test_inbox_store_api() {
             agentxx::agent::SessionStore::SessionInputStatus::Dropped
         );
         XX_TEST_EXPECT_EQ(
-            store.listSessionInputs(sessionId, agentxx::agent::SessionStore::SessionInputStatus::Dropped)
+            store
+                .listSessionInputs(
+                    sessionId,
+                    agentxx::agent::SessionStore::SessionInputStatus::Dropped
+                )
                 .size(),
             size_t{1}
         );
@@ -788,7 +785,7 @@ asio::awaitable<void> test_inbox_dropped_item_not_restored() {
     const std::string sessionId = "inbox-drop-session";
 
     {
-        auto fx = co_await makeFixture(sessionId, root, "drop response");
+        auto fx           = co_await makeFixture(sessionId, root, "drop response");
         g_da_sim_delay_ms = 300;
         fx->send("running", std::string{agentxx::agent::InputDelivery::NextTurn}, 1);
         XX_TEST_EXPECT_TRUE(co_await waitFor([&] {
@@ -805,9 +802,9 @@ asio::awaitable<void> test_inbox_dropped_item_not_restored() {
         }
         co_await spin(std::chrono::milliseconds{80});
         // 清空队列 (剩余条目一并作废)
-        fx->clientT->send(agentxx::agent::WireMessage{
-            agentxx::agent::WireClearMessageQueue{fx->sessionId}
-        });
+        fx->clientT->send(
+            agentxx::agent::WireMessage{agentxx::agent::WireClearMessageQueue{fx->sessionId}}
+        );
         co_await spin(std::chrono::milliseconds{150});
 
         auto store = fx->agent->agentContext->sessions->sessionStore;
@@ -886,15 +883,13 @@ asio::awaitable<void> test_connection_stage_guard() {
     auto fx = co_await makeFixture("stage_session", {}, "stage response");
 
     auto t = std::make_shared<StageTransport>();
-    XX_TEST_EXPECT_TRUE(
-        t->stage() == agentxx::agent::WireConnectionStage::Unhandshaken
-    );
+    XX_TEST_EXPECT_TRUE(t->stage() == agentxx::agent::WireConnectionStage::Unhandshaken);
 
     // 1) 未握手时发业务消息: 只回 InvalidState, 不进入业务处理
     fx->endpoint->onPeerMessage(
         agentxx::agent::WireMessage{
             agentxx::agent::WireUserInput{.sessionId = "stage_session", .text = "too early"}
-        },
+    },
         t
     );
     XX_TEST_EXPECT_TRUE(t->hasError(agentxx::agent::WireErrorCode::InvalidState));
@@ -904,7 +899,7 @@ asio::awaitable<void> test_connection_stage_guard() {
     fx->endpoint->onPeerMessage(
         agentxx::agent::WireMessage{
             agentxx::agent::WireHello{.sessionId = "stage_session", .token = "t"}
-        },
+    },
         t
     );
     XX_TEST_EXPECT_TRUE(t->stage() == agentxx::agent::WireConnectionStage::Ready);
@@ -915,11 +910,11 @@ asio::awaitable<void> test_connection_stage_guard() {
     fx->endpoint->onPeerMessage(
         agentxx::agent::WireMessage{
             agentxx::agent::WireUserInput{
-                .sessionId = "stage_session",
-                .text      = "accepted now",
-                .requestId = 7,
-            }
-        },
+                                          .sessionId = "stage_session",
+                                          .text      = "accepted now",
+                                          .requestId = 7,
+                                          }
+    },
         t
     );
     XX_TEST_EXPECT_FALSE(t->hasError(agentxx::agent::WireErrorCode::InvalidState));
@@ -935,14 +930,12 @@ asio::awaitable<void> test_connection_stage_guard() {
     co_await spin(std::chrono::milliseconds{200});
 
     // 4) 删除不存在的队列条目: 明确回 MessageNotFound (不再静默成功)
-    fx->clientT->send(
-        agentxx::agent::WireMessage{
-            agentxx::agent::WireRemoveQueueItem{
-                .sessionId = "stage_session",
-                .itemId    = "no-such-item",
-            }
-        }
-    );
+    fx->clientT->send(agentxx::agent::WireMessage{
+        agentxx::agent::WireRemoveQueueItem{
+                                            .sessionId = "stage_session",
+                                            .itemId    = "no-such-item",
+                                            }
+    });
     for (int i = 0; i < 200; ++i) {
         co_await spin(std::chrono::milliseconds{5});
         bool found = false;
@@ -970,14 +963,15 @@ asio::awaitable<void> test_connection_stage_guard() {
     XX_TEST_EXPECT_TRUE(foundNotFound);
 
     // 5) 阶段文本往返 (未知文本返回 nullopt, 由调用方兜底)
-    for (auto s : {agentxx::agent::WireConnectionStage::Unhandshaken,
-                   agentxx::agent::WireConnectionStage::Unbound,
-                   agentxx::agent::WireConnectionStage::Ready,
-                   agentxx::agent::WireConnectionStage::Reconnecting,
-                   agentxx::agent::WireConnectionStage::Draining}) {
-        auto parsed = agentxx::agent::wireConnectionStageFromText(
-            agentxx::agent::wireConnectionStageText(s)
-        );
+    for (auto s :
+         {agentxx::agent::WireConnectionStage::Unhandshaken,
+          agentxx::agent::WireConnectionStage::Unbound,
+          agentxx::agent::WireConnectionStage::Ready,
+          agentxx::agent::WireConnectionStage::Reconnecting,
+          agentxx::agent::WireConnectionStage::Draining}) {
+        auto parsed
+            = agentxx::agent::wireConnectionStageFromText(agentxx::agent::wireConnectionStageText(s)
+            );
         XX_TEST_EXPECT_HAS_VALUE(parsed);
         if (parsed) {
             XX_TEST_EXPECT_TRUE(*parsed == s);
@@ -1066,11 +1060,10 @@ asio::awaitable<void> test_oversized_input_offload() {
     const auto storeIds = shareStoreIdsInText(userText);
     XX_TEST_EXPECT_EQ(storeIds.size(), size_t{1});
     if (!storeIds.empty()) {
-        auto stored
-            = fx->agent->agentContext->middlewareHandleContext->getShareStoreItemValue(
-                fx->sessionId,
-                storeIds.front()
-            );
+        auto stored = fx->agent->agentContext->middlewareHandleContext->getShareStoreItemValue(
+            fx->sessionId,
+            storeIds.front()
+        );
         XX_TEST_EXPECT_TRUE(stored.has_value());
         XX_TEST_EXPECT_EQ(stored.value_or(std::string{}), longInput);
     }
@@ -1098,12 +1091,12 @@ asio::awaitable<void> test_oversized_injected_input_offload() {
 
     // 先触发一次工具调用, 使同一轮次里有第二个 modelcall 边界
     // (next-step/inject 需要轮次进行中才会作为待注入输入登记)
-    g_da_sim_tool_calls = utilxx_base::Json::array({
+    g_da_sim_tool_calls           = utilxx_base::Json::array({
         utilxx_base::Json{
-            {"id",        "call_1"                     },
-            {"name",      "no_such_tool_inject_offload"},
-            {"arguments", "{}"                         },
-        }
+                          {"id", "call_1"},
+                          {"name", "no_such_tool_inject_offload"},
+                          {"arguments", "{}"},
+                          }
     });
     g_da_sim_tool_calls_remaining = 1;
     g_da_sim_delay_ms             = 250;
@@ -1156,11 +1149,10 @@ asio::awaitable<void> test_oversized_injected_input_offload() {
     bool stepStored   = false;
     bool injectStored = false;
     for (const auto id : shareStoreIdsInText(dumped)) {
-        auto value
-            = fx->agent->agentContext->middlewareHandleContext->getShareStoreItemValue(
-                fx->sessionId,
-                id
-            );
+        auto value = fx->agent->agentContext->middlewareHandleContext->getShareStoreItemValue(
+            fx->sessionId,
+            id
+        );
         if (!value.has_value()) {
             continue;
         }

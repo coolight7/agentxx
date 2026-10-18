@@ -401,7 +401,8 @@ asio::awaitable<TestResult> run_plugin_tests() {
         XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains("example_echo"));
         XX_TEST_EXPECT_FALSE(ctx->pluginManager->registry()->contains("example_caller"));
         // 无轮次执行时 disable 立即摘除派发器; 处理器随实例一起摘除 (记录保留, 句柄置 0)
-        XX_TEST_EXPECT_TRUE(ctx->pluginManager->handlersOf(AGENTXX_PLUGIN_HOOK_AGENT_START).empty());
+        XX_TEST_EXPECT_TRUE(ctx->pluginManager->handlersOf(AGENTXX_PLUGIN_HOOK_AGENT_START).empty()
+        );
         XX_TEST_EXPECT_EQ(inst->hookRegistrations.size(), size_t{1});
         XX_TEST_EXPECT_EQ(inst->hookRegistrations.front().handle, int64_t{0});
         XX_TEST_EXPECT_FALSE(inst->enabled);
@@ -411,14 +412,17 @@ asio::awaitable<TestResult> run_plugin_tests() {
         for (int i = 0; i < 200 && !ctx->toolRegistry->contains("example_echo"); ++i) {
             co_await sleepMs(5);
         }
-        for (int i = 0; i < 200
-                        && ctx->pluginManager->handlersOf(AGENTXX_PLUGIN_HOOK_AGENT_START).empty();
+        for (int i = 0;
+             i < 200 && ctx->pluginManager->handlersOf(AGENTXX_PLUGIN_HOOK_AGENT_START).empty();
              ++i) {
             co_await sleepMs(5);
         }
         XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("example_echo"));
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->registry()->contains("example_caller"));
-        XX_TEST_EXPECT_EQ(ctx->pluginManager->handlersOf(AGENTXX_PLUGIN_HOOK_AGENT_START).size(), size_t{1});
+        XX_TEST_EXPECT_EQ(
+            ctx->pluginManager->handlersOf(AGENTXX_PLUGIN_HOOK_AGENT_START).size(),
+            size_t{1}
+        );
         {
             const auto& handles = ctx->middlewareHandleContext->handles;
             const bool  found   = std::any_of(handles.begin(), handles.end(), [](const auto& h) {
@@ -443,7 +447,8 @@ asio::awaitable<TestResult> run_plugin_tests() {
             return h->name == "plugin_hooks";
         });
         XX_TEST_EXPECT_FALSE(found);
-        XX_TEST_EXPECT_TRUE(ctx->pluginManager->handlersOf(AGENTXX_PLUGIN_HOOK_AGENT_START).empty());
+        XX_TEST_EXPECT_TRUE(ctx->pluginManager->handlersOf(AGENTXX_PLUGIN_HOOK_AGENT_START).empty()
+        );
         // 工具对象应已释放 (inflight 归零后 dlclose)
         XX_TEST_EXPECT_EQ(inst->tools.size(), size_t{0});
     }
@@ -848,8 +853,8 @@ throw new Error("top-level rollback probe");
             XX_TEST_EXPECT_TRUE(tool != nullptr);
             if (tool) {
                 // 该协程可能比本作用域活得更久: 共享状态用 shared_ptr 持有
-                auto       execDone = std::make_shared<std::atomic<bool>>(false);
-                auto              ex = co_await asio::this_coro::executor;
+                auto execDone = std::make_shared<std::atomic<bool>>(false);
+                auto ex       = co_await asio::this_coro::executor;
                 asio::co_spawn(
                     ex,
                     keepAliveRun([execDone, tool]() -> asio::awaitable<void> {
@@ -921,7 +926,7 @@ throw new Error("top-level rollback probe");
             ctx->pluginManager->onTurnEnd();
             {
                 const auto& handles = ctx->middlewareHandleContext->handles;
-                const bool  found   = std::any_of(handles.begin(), handles.end(), [](const auto& h) {
+                const bool  found = std::any_of(handles.begin(), handles.end(), [](const auto& h) {
                     return h->name == "plugin_hooks";
                 });
                 XX_TEST_EXPECT_FALSE(found); // 已物理摘除
@@ -930,10 +935,8 @@ throw new Error("top-level rollback probe");
             XX_TEST_EXPECT_EQ(inst24->hookRegistrations.front().handle, int64_t{0});
             // 启用: start 事务重新登记钩子 (派发器随首次登记回到链上)
             ctx->pluginManager->enable("example_plugin");
-            for (int i = 0; i < 200
-                            && ctx->pluginManager
-                                   ->handlersOf(AGENTXX_PLUGIN_HOOK_AGENT_START)
-                                   .empty();
+            for (int i = 0;
+                 i < 200 && ctx->pluginManager->handlersOf(AGENTXX_PLUGIN_HOOK_AGENT_START).empty();
                  ++i) {
                 co_await sleepMs(5);
             }
@@ -1982,9 +1985,9 @@ throw new Error("top-level rollback probe");
                     //   因此初始上下文写入会话而非 RunConfig.input
                     {
                         auto sess = gctx->getSession("graph-test-datetime");
-                        sess->replaceMessages(
-                            {neograph::ChatMessage{.role = "user", .content = "现在几点"}}
-                        );
+                        sess->replaceMessages({
+                            neograph::ChatMessage{.role = "user", .content = "现在几点"}
+                        });
                     }
                     neograph::graph::RunConfig runCfg;
                     runCfg.thread_id = "graph-test-datetime";
@@ -2011,17 +2014,17 @@ throw new Error("top-level rollback probe");
                     // intent_router 移除意图消息 → llm 重答 → 无 tool_calls → end)
                     {
                         auto sess = gctx->getSession("graph-test-normal");
-                        sess->replaceMessages(
-                            {neograph::ChatMessage{.role = "user", .content = "你好"}}
-                        );
+                        sess->replaceMessages({
+                            neograph::ChatMessage{.role = "user", .content = "你好"}
+                        });
                     }
                     neograph::graph::RunConfig runCfg2;
                     runCfg2.thread_id = "graph-test-normal";
                     auto result2      = co_await engine->run_async(runCfg2);
                     XX_TEST_EXPECT_TRUE(false == result2.interrupted);
                     try {
-                        auto sess      = gctx->getSession("graph-test-normal");
-                        bool hasUser   = false;
+                        auto sess         = gctx->getSession("graph-test-normal");
+                        bool hasUser      = false;
                         bool hasAssistant = false;
                         for (const auto& m : sess->messages()) {
                             if (m.role == "user") {
@@ -2265,10 +2268,10 @@ throw new Error("top-level rollback probe");
         auto tool = ctx->toolRegistry->find("example_caller");
         XX_TEST_EXPECT_TRUE(tool != nullptr);
         if (tool) {
-            constexpr int    kTotalCalls = 1000;
+            constexpr int kTotalCalls = 1000;
             // 该协程可能比本作用域活得更久: 共享状态用 shared_ptr 持有
             auto completed = std::make_shared<std::atomic<int>>(0);
-            auto             ex = co_await asio::this_coro::executor;
+            auto ex        = co_await asio::this_coro::executor;
             for (int i = 0; i < kTotalCalls; ++i) {
                 asio::co_spawn(
                     ex,
@@ -2316,7 +2319,7 @@ throw new Error("top-level rollback probe");
             // 该协程可能比本作用域活得更久: 共享状态用 shared_ptr 持有
             auto hostTicks  = std::make_shared<std::atomic<int>>(0);
             auto pluginDone = std::make_shared<std::atomic<bool>>(false);
-            auto              ex = co_await asio::this_coro::executor;
+            auto ex         = co_await asio::this_coro::executor;
             asio::co_spawn(
                 ex,
                 keepAliveRun([hostTicks, pluginDone]() -> asio::awaitable<void> {
@@ -2364,7 +2367,7 @@ throw new Error("top-level rollback probe");
             // 该协程可能比本作用域活得更久: 共享状态用 shared_ptr 持有
             auto hostTicks  = std::make_shared<std::atomic<int>>(0);
             auto polledDone = std::make_shared<std::atomic<bool>>(false);
-            auto              ex = co_await asio::this_coro::executor;
+            auto ex         = co_await asio::this_coro::executor;
             asio::co_spawn(
                 ex,
                 keepAliveRun([hostTicks, polledDone]() -> asio::awaitable<void> {
@@ -2488,7 +2491,7 @@ throw new Error("top-level rollback probe");
                      utilxx_base::Json::array(
                          {utilxx_base::Json{{"old_str", "hello"}, {"new_str", "HELLO"}},
                           utilxx_base::Json{{"old_str", "SECOND"}, {"new_str", "second"}}}
-                     )      },
+                     )            },
                 });
                 XX_TEST_EXPECT_EQ(eMul, std::string{"success"});
                 auto r3 = co_await readTool->execute_async(utilxx_base::Json{
@@ -2577,7 +2580,7 @@ throw new Error("top-level rollback probe");
                      utilxx_base::Json::array(
                          {utilxx_base::Json{{"old_str", "SECOND"}, {"new_str", "second"}},
                           utilxx_base::Json{{"old_str", "not_in_file"}, {"new_str", "x"}}}
-                     )      },
+                     )            },
                 });
                 XX_TEST_EXPECT_TRUE(eMul.find("[Error:") != std::string::npos);
                 auto r3 = co_await readTool->execute_async(utilxx_base::Json{
@@ -3023,13 +3026,14 @@ throw new Error("top-level rollback probe");
                 // 注: 下面所有 co_spawn(..., detached) 协程都可能比本作用域活得更久,
                 // 共享状态一律用 shared_ptr 持有 (捕获引用会在作用域结束后写坏内存;
                 // Release 实测为堆对象被写坏后释放野指针崩溃), 且卸载插件前必须等它们全部结束
-                auto              hostTicks  = std::make_shared<std::atomic<int>>(0);
-                auto              netDone    = std::make_shared<std::atomic<bool>>(false);
-                auto              ex         = co_await asio::this_coro::executor;
+                auto hostTicks = std::make_shared<std::atomic<int>>(0);
+                auto netDone   = std::make_shared<std::atomic<bool>>(false);
+                auto ex        = co_await asio::this_coro::executor;
                 asio::co_spawn(
                     ex,
                     keepAliveRun([hostTicks, netDone]() -> asio::awaitable<void> {
-                        for (int i = 0; i < 2000 && !netDone->load(std::memory_order_acquire); ++i) {
+                        for (int i = 0; i < 2000 && !netDone->load(std::memory_order_acquire);
+                             ++i) {
                             hostTicks->fetch_add(1, std::memory_order_relaxed);
                             co_await sleepMs(1);
                         }
@@ -3055,9 +3059,9 @@ throw new Error("top-level rollback probe");
                 XX_TEST_EXPECT_TRUE(out2.find("polled_web_ok") != std::string::npos);
 
                 // 3. 并发 6 路请求: 共享同一实例的 polled 驱动序列, 互不阻塞
-                constexpr int    kConcurrent = 6;
-                auto             okCount     = std::make_shared<std::atomic<int>>(0);
-                auto             doneCount   = std::make_shared<std::atomic<int>>(0);
+                constexpr int kConcurrent = 6;
+                auto          okCount     = std::make_shared<std::atomic<int>>(0);
+                auto          doneCount   = std::make_shared<std::atomic<int>>(0);
                 for (int i = 0; i < kConcurrent; ++i) {
                     asio::co_spawn(
                         ex,
@@ -3078,7 +3082,8 @@ throw new Error("top-level rollback probe");
                 }
                 // 必须等到 6 路**全部**结束, 而不是"计数达标或超时即继续": 否则后面
                 // (可能)执行的插件卸载会与仍在运行的 fetch 协程交错, 造成 use-after-free
-                for (int i = 0; i < 4000 && doneCount->load(std::memory_order_acquire) < kConcurrent;
+                for (int i = 0;
+                     i < 4000 && doneCount->load(std::memory_order_acquire) < kConcurrent;
                      ++i) {
                     co_await sleepMs(5);
                 }

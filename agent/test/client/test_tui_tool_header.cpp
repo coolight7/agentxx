@@ -295,13 +295,15 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
                     continue;
                 }
                 if (!firstSegment) {
-                    arr.push_back(utilxx_base::Json{{"kind", "Divider"}});
+                    arr.push_back(utilxx_base::Json{
+                        {"kind", "Divider"}
+                    });
                 }
                 arr.push_back(utilxx_base::Json{
-                    {"kind",   "Diff"                                          },
-                    {"path",   firstSegment ? path : std::string{}             },
-                    {"oldStr", seg.oldStr                                     },
-                    {"newStr", seg.newStr                                     },
+                    {"kind",   "Diff"                             },
+                    {"path",   firstSegment ? path : std::string{}},
+                    {"oldStr", seg.oldStr                         },
+                    {"newStr", seg.newStr                         },
                 });
                 firstSegment = false;
             }
@@ -634,15 +636,15 @@ struct ToolHeaderFixture {
     /// 该用例保护"装饰接入点同样能上屏新组件"。
     void pushDecorExtended() {
         sharedState.mutate([&](TUIRenderState& st) {
-            auto  reg    = st.pluginRegistry
-                               ? std::make_shared<agentxx::plugin::ClientUiRegistry>(*st.pluginRegistry)
-                               : std::make_shared<agentxx::plugin::ClientUiRegistry>();
-            auto& d      = reg->toolDecors.emplace_back();
-            d.plugin     = "agentxx_codegraph";
-            d.toolCallId = "call_1";
-            d.displayName = "Index";
-            d.summary     = "indexed 2 files";
-            d.items       = utilxx_base::Json::parse(R"([
+            auto  reg         = st.pluginRegistry
+                                    ? std::make_shared<agentxx::plugin::ClientUiRegistry>(*st.pluginRegistry)
+                                    : std::make_shared<agentxx::plugin::ClientUiRegistry>();
+            auto& d           = reg->toolDecors.emplace_back();
+            d.plugin          = "agentxx_codegraph";
+            d.toolCallId      = "call_1";
+            d.displayName     = "Index";
+            d.summary         = "indexed 2 files";
+            d.items           = utilxx_base::Json::parse(R"([
                 {"kind":"Table","header":true,
                  "columns":[{"title":"Path"},{"title":"Lines","align":"end","width":48}],
                  "rows":[["main.cpp","120"],["io.cpp","42"]]},
@@ -706,11 +708,7 @@ struct ToolHeaderFixture {
 
     /// 写入"名称结果"条目: 占位提示阶段按工具名解析出的特化显示名
     /// (键 = "#工具名", 输入只有工具名, 无参数/结果)
-    void pushToolNameResult(
-        std::string toolName,
-        std::string plugin,
-        std::string displayName
-    ) {
+    void pushToolNameResult(std::string toolName, std::string plugin, std::string displayName) {
         pushRenderEntry(
             agentxx::plugin::ClientToolRenderRequest::keyFor(std::string_view{}, toolName),
             std::move(plugin),
@@ -760,10 +758,7 @@ void testTuiToolHeaderFilesystem() {
     ToolHeaderFixture f;
 
     // read_text_file: 完整 [offset, limit] 区间
-    f.pushTool(
-        "agentxx_filesystem_read",
-        R"({"path":"/home/a.cpp","offset":0,"limit":100})"
-    );
+    f.pushTool("agentxx_filesystem_read", R"({"path":"/home/a.cpp","offset":0,"limit":100})");
     XX_TEST_EXPECT_TRUE(f.render().find("Read · [0, 100] /home/a.cpp") != std::string::npos);
 
     // read_text_file: 无区间 (默认 -1) 不显示中括号
@@ -932,7 +927,7 @@ void testTuiToolHeaderEditMultiSegmentBody() {
     // 文件路径只出现一次 (仅首段携带 path)
     size_t pathCount = 0;
     for (size_t pos = out.find("/home/seg.cpp"); pos != std::string::npos;
-         pos       = out.find("/home/seg.cpp", pos + 1)) {
+         pos        = out.find("/home/seg.cpp", pos + 1)) {
         ++pathCount;
     }
     XX_TEST_EXPECT_EQ(pathCount, size_t{1});
@@ -963,7 +958,7 @@ void testTuiToolHeaderEditMultiSegmentBody() {
 /// 装饰区域尺寸上报: owner = tool_call_id (插件据此查询 regionSize / 收 UI_LAYOUT)
 void testTuiToolHeaderDecorRegionSize() {
     asio::io_context io;
-    auto             mgr = std::make_shared<agentxx::plugin::ClientPluginManager>(io.get_executor());
+    auto mgr = std::make_shared<agentxx::plugin::ClientPluginManager>(io.get_executor());
 
     ToolHeaderFixture f(80, 14);
     f.ctx.pluginManager = mgr; // 夹具持有 TUICtx 引用: 构造后注入同样生效
@@ -1769,7 +1764,9 @@ void testTuiToolHeaderEditDiffStat() {
             R"({"path":"/home/q.cpp","edits":[{"old_str":"a","new_str":"A"},{"old_str":"b","new_str":"B"}]})",
             false // 运行中
         );
-        XX_TEST_EXPECT_TRUE(f.plainRender().find("Edit · [+2 -2] /home/q.cpp") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(
+            f.plainRender().find("Edit · [+2 -2] /home/q.cpp") != std::string::npos
+        );
     }
 
     // 参数缺失 old_str/new_str: 无中括号提示, 仅显示路径 (保持旧观感)

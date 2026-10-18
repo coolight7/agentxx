@@ -564,8 +564,8 @@ void test_status_bar_click_actions() {
         rich.order  = 0;
         rich.rich   = utilxx_base::Json::parse(
             R"({"segments":[{"text":"CPU","color":"hint"},{"text":"55%","color":"accent"}],)"
-            R"("sparkline":{"data":[1,3,2,5,4],"color":"accent"},)"
-            R"("meter":{"value":55,"total":100,"width":8,"unit":"%"}})"
+              R"("sparkline":{"data":[1,3,2,5,4],"color":"accent"},)"
+              R"("meter":{"value":55,"total":100,"width":8,"unit":"%"}})"
         );
         registry->statusItems.push_back(rich);
 
@@ -576,8 +576,8 @@ void test_status_bar_click_actions() {
         plain.align  = 1;
         registry->statusItems.push_back(plain);
 
-        auto bound = TUISharedState{};
-        ctx.frameState = bound.readSnapshot();
+        auto bound                     = TUISharedState{};
+        ctx.frameState                 = bound.readSnapshot();
         ctx.frameState->pluginRegistry = registry;
 
         auto screen
@@ -598,15 +598,16 @@ void test_status_bar_click_actions() {
         plain.id     = "test_plugin.text";
         plain.text   = "text-only";
         registry->statusItems.push_back(plain);
-        auto bound = TUISharedState{};
-        ctx.frameState = bound.readSnapshot();
+        auto bound                     = TUISharedState{};
+        ctx.frameState                 = bound.readSnapshot();
         ctx.frameState->pluginRegistry = registry;
 
         auto screen
             = ftxui::Screen::Create(ftxui::Dimension::Fixed(100), ftxui::Dimension::Fixed(3));
         ftxui::Render(screen, comp->Render());
-        XX_TEST_EXPECT_TRUE(screenTextIn(screen, ftxui::Box{0, 99, 0, 2}).find("text-only")
-                            != std::string::npos);
+        XX_TEST_EXPECT_TRUE(
+            screenTextIn(screen, ftxui::Box{0, 99, 0, 2}).find("text-only") != std::string::npos
+        );
     }
 
     // 键盘事件不被状态栏消费 (由外层集中处理 F2/F3/F4)
@@ -656,8 +657,8 @@ std::string renderScrollItems(const std::vector<ScrollItem>& rows, int w, int h)
     std::string out;
     for (int y = 0; y < h; ++y) {
         for (int x = 0; x < w; ++x) {
-            const std::string& ch = screen.PixelAt(x, y).character;
-            out += ch.empty() ? std::string{" "} : ch;
+            const std::string& ch  = screen.PixelAt(x, y).character;
+            out                   += ch.empty() ? std::string{" "} : ch;
         }
         out += '\n';
     }
@@ -796,10 +797,10 @@ void test_info_sidebar_context_section() {
         agentxx::agent::WireContextStats stats;
         stats.contextTokens      = 40000;
         stats.maxContextTokens   = 200000;
-        stats.promptTokens       = 8192; // 8K
-        stats.completionTokens   = 2048; // 2K
+        stats.promptTokens       = 8192;  // 8K
+        stats.completionTokens   = 2048;  // 2K
         stats.totalTokens        = 10240; // 10K
-        stats.cachedPromptTokens = 6144; // 6K -> 命中率 75.0%
+        stats.cachedPromptTokens = 6144;  // 6K -> 命中率 75.0%
         tui->onPeerMessage(agentxx::agent::WireMessage{stats});
         tui->refreshRenderContext();
 
@@ -821,8 +822,8 @@ void test_info_sidebar_context_section() {
             st.appendComponents.push_back(notif);
         });
         tui->refreshRenderContext();
-        const auto rows2 = tui->renderInfoSidebar();
-        const auto text2 = renderScrollItems(rows2, 60, 12);
+        const auto rows2      = tui->renderInfoSidebar();
+        const auto text2      = renderScrollItems(rows2, 60, 12);
         const auto posContext = text2.find("Context");
         const auto posAppend  = text2.find("Append");
         XX_TEST_EXPECT_TRUE(posContext != std::string::npos);

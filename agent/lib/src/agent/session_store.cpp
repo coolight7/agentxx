@@ -98,7 +98,7 @@ static constexpr std::string_view kMetaSessionId    = "sessionId";
 static constexpr std::string_view kMetaTitle        = "title";
 static constexpr std::string_view kMetaLastActiveMs = "lastActiveMs";
 /// 标题来源: "auto" (首条用户消息预览) / "user" (用户改名); 老数据无该键
-static constexpr std::string_view kMetaTitleSource  = "titleSource";
+static constexpr std::string_view kMetaTitleSource = "titleSource";
 /// 展示历史持久化序号计数 (见 SessionStore::LoadedSession::lastViewSeq)
 static constexpr std::string_view kMetaViewSeqCounter = "viewSeqCounter";
 
@@ -110,14 +110,13 @@ static constexpr std::string_view kMetaViewSeqCounter = "viewSeqCounter";
 /// - `db` 必须已打开
 static SessionStore::UsageSummary readUsageSummary(agentxx::util::SqliteDb& db) {
     SessionStore::UsageSummary out;
-    auto                       stmt = db.prepare(
-        "SELECT count(*), "
-        "COALESCE(sum(CASE WHEN ok = 0 THEN 1 ELSE 0 END), 0), "
-        "COALESCE(sum(prompt_tokens), 0), COALESCE(sum(completion_tokens), 0), "
-        "COALESCE(sum(total_tokens), 0), COALESCE(sum(cached_prompt_tokens), 0), "
-        "COALESCE(sum(reasoning_tokens), 0), "
-        "COALESCE(sum(cache_write_prompt_tokens), 0) FROM usage"
-    );
+    auto                       stmt
+        = db.prepare("SELECT count(*), "
+                     "COALESCE(sum(CASE WHEN ok = 0 THEN 1 ELSE 0 END), 0), "
+                     "COALESCE(sum(prompt_tokens), 0), COALESCE(sum(completion_tokens), 0), "
+                     "COALESCE(sum(total_tokens), 0), COALESCE(sum(cached_prompt_tokens), 0), "
+                     "COALESCE(sum(reasoning_tokens), 0), "
+                     "COALESCE(sum(cache_write_prompt_tokens), 0) FROM usage");
     if (stmt.step()) {
         out.calls                  = stmt.columnInt64(0);
         out.failedCalls            = stmt.columnInt64(1);
@@ -288,7 +287,7 @@ SessionStore::SessionDbs& SessionStore::dbs(std::string_view sessionId) {
     std::error_code ec;
     fs::create_directories(dir, ec);
     if (ec) {
-        auto reason = fmt::format("create dir {} failed: {}", dir.string(), ec.message());
+        auto reason     = fmt::format("create dir {} failed: {}", dir.string(), ec.message());
         lastWriteError_ = reason;
         throw std::runtime_error{"SessionStore: " + reason};
     }
@@ -307,7 +306,7 @@ SessionStore::SessionDbs& SessionStore::dbs(std::string_view sessionId) {
         std::string leaseErr;
         entry.dbs->writerLease = SessionWriterLease::acquire(dir, &leaseErr);
         if (!entry.dbs->writerLease) {
-            auto reason = fmt::format("session dir is busy: {}", leaseErr);
+            auto reason     = fmt::format("session dir is busy: {}", leaseErr);
             lastWriteError_ = reason;
             XX_LOGE("SessionStore: {} ({})", reason, sessionId);
             throw std::runtime_error{"SessionStore: " + reason};
@@ -398,7 +397,8 @@ void SessionStore::backupDbFile(
     bool hasTable = false;
     agentxx::util::catchError<bool>(
         [&]() -> bool {
-            auto stmt = sessionDb.prepare("SELECT count(*) FROM sqlite_master WHERE type = 'table'");
+            auto stmt
+                = sessionDb.prepare("SELECT count(*) FROM sqlite_master WHERE type = 'table'");
             if (stmt.step()) {
                 hasTable = stmt.columnInt64(0) > 0;
             }
@@ -423,8 +423,8 @@ void SessionStore::backupDbFile(
             return false;
         }
     );
-    const auto src = fs::path{dbFilePath};
-    const auto dst = fs::path{dbFilePath + fmt::format(".bak.v{}", fromVersion)};
+    const auto      src = fs::path{dbFilePath};
+    const auto      dst = fs::path{dbFilePath + fmt::format(".bak.v{}", fromVersion)};
     std::error_code ec;
     fs::copy_file(src, dst, fs::copy_options::overwrite_existing, ec);
     if (ec) {
@@ -502,17 +502,15 @@ void SessionStore::applyMigrationStep(agentxx::util::SqliteDb& sessionDb, int st
             // - 老库补表; 新库建表时已含 (IF NOT EXISTS 幂等)
             // - 无需数据回填: 老库中的输入要么已经执行完 (不在库内), 要么随进程
             //   退出丢失 (老版本不持久化输入)
-            sessionDb.exec(
-                "CREATE TABLE IF NOT EXISTS session_input ("
-                "    id           TEXT PRIMARY KEY,"
-                "    payload      TEXT NOT NULL,"
-                "    delivery     TEXT NOT NULL DEFAULT '',"
-                "    status       TEXT NOT NULL DEFAULT 'admitted',"
-                "    admitted_seq INTEGER NOT NULL DEFAULT 0,"
-                "    promoted_seq INTEGER NOT NULL DEFAULT 0,"
-                "    created_ms   INTEGER NOT NULL DEFAULT 0"
-                ")"
-            );
+            sessionDb.exec("CREATE TABLE IF NOT EXISTS session_input ("
+                           "    id           TEXT PRIMARY KEY,"
+                           "    payload      TEXT NOT NULL,"
+                           "    delivery     TEXT NOT NULL DEFAULT '',"
+                           "    status       TEXT NOT NULL DEFAULT 'admitted',"
+                           "    admitted_seq INTEGER NOT NULL DEFAULT 0,"
+                           "    promoted_seq INTEGER NOT NULL DEFAULT 0,"
+                           "    created_ms   INTEGER NOT NULL DEFAULT 0"
+                           ")");
             sessionDb.exec(
                 "CREATE INDEX IF NOT EXISTS idx_session_input_status ON session_input(status)"
             );
@@ -990,11 +988,11 @@ void SessionStore::appendViewMessage(
                 // 显式序号: seq > 0 时按调用方给的展示历史序号写入
                 // (会话内单调递增, 与内存中的 viewMessages 一一对应); seq == 0
                 // (老调用方) 才用库内自增
-                auto insert = seq > 0
-                                  ? db.prepare(
-                                        "INSERT INTO view_message(seq, json, msg_id) VALUES (?, ?, ?)"
-                                    )
-                                  : db.prepare("INSERT INTO view_message(json, msg_id) VALUES (?, ?)");
+                auto insert
+                    = seq > 0 ? db.prepare(
+                                    "INSERT INTO view_message(seq, json, msg_id) VALUES (?, ?, ?)"
+                                )
+                              : db.prepare("INSERT INTO view_message(json, msg_id) VALUES (?, ?)");
                 if (seq > 0) {
                     insert.bindInt64(1, static_cast<int64_t>(seq));
                     insert.bindText(2, dumpJsonUtf8(stripAttachmentDataUrl(msg).toJson()));
@@ -1143,7 +1141,7 @@ std::vector<SessionStore::ViewMessageRow> SessionStore::loadViewMessagesAfter(
     }
     const auto dbFile = fs::path(rootDir_) / sanitizeSessionId(sessionId) / "session.db";
     agentxx::util::SqliteDb db;
-    const auto             opened = agentxx::util::catchError<bool>(
+    const auto              opened = agentxx::util::catchError<bool>(
         [&]() -> bool {
             db.open(dbFile.string());
             return true;
@@ -1173,11 +1171,10 @@ std::vector<SessionStore::ViewMessageRow> SessionStore::loadViewMessagesAfter(
     }
     agentxx::util::catchError<bool>(
         [&]() -> bool {
-            auto stmt = limit > 0
-                            ? db.prepare("SELECT seq, json FROM view_message WHERE seq > ? "
-                                         "ORDER BY seq LIMIT ?")
-                            : db.prepare("SELECT seq, json FROM view_message WHERE seq > ? "
-                                         "ORDER BY seq");
+            auto stmt = limit > 0 ? db.prepare("SELECT seq, json FROM view_message WHERE seq > ? "
+                                               "ORDER BY seq LIMIT ?")
+                                  : db.prepare("SELECT seq, json FROM view_message WHERE seq > ? "
+                                               "ORDER BY seq");
             stmt.bindInt64(1, static_cast<int64_t>(afterSeq));
             if (limit > 0) {
                 stmt.bindInt64(2, static_cast<int64_t>(limit));
@@ -1208,11 +1205,7 @@ std::vector<SessionStore::ViewMessageRow> SessionStore::loadViewMessagesAfter(
             return true;
         },
         [&](std::string errmsg) -> bool {
-            XX_LOGE(
-                "SessionStore: loadViewMessagesAfter({}) failed: {}",
-                sessionId,
-                errmsg
-            );
+            XX_LOGE("SessionStore: loadViewMessagesAfter({}) failed: {}", sessionId, errmsg);
             return false;
         }
     );
@@ -1229,18 +1222,20 @@ void SessionStore::addSessionInput(std::string_view sessionId, const SessionInpu
     std::lock_guard<std::mutex> lock(mutex_);
     agentxx::util::catchError<bool>(
         [&]() -> bool {
-            auto& db = dbs(sessionId).sessionDb;
+            auto& db     = dbs(sessionId).sessionDb;
             auto  insert = db.prepare(
                 "INSERT INTO session_input(id, payload, delivery, status, admitted_seq, "
-                "promoted_seq, created_ms) VALUES (?, ?, ?, ?, ?, ?, ?) "
-                "ON CONFLICT(id) DO UPDATE SET payload = excluded.payload, "
-                "delivery = excluded.delivery, status = excluded.status"
+                 "promoted_seq, created_ms) VALUES (?, ?, ?, ?, ?, ?, ?) "
+                 "ON CONFLICT(id) DO UPDATE SET payload = excluded.payload, "
+                 "delivery = excluded.delivery, status = excluded.status"
             );
             insert.bindText(1, record.id);
             insert.bindText(2, record.payload);
             insert.bindText(3, record.delivery);
-            insert.bindText(4, record.status.empty() ? std::string{SessionInputStatus::Admitted}
-                                                     : record.status);
+            insert.bindText(
+                4,
+                record.status.empty() ? std::string{SessionInputStatus::Admitted} : record.status
+            );
             insert.bindInt64(5, record.admittedSeq);
             insert.bindInt64(6, record.promotedSeq);
             insert.bindInt64(7, record.createdMs);
@@ -1265,10 +1260,9 @@ void SessionStore::markSessionInputPromoted(
     std::lock_guard<std::mutex> lock(mutex_);
     agentxx::util::catchError<bool>(
         [&]() -> bool {
-            auto& db     = dbs(sessionId).sessionDb;
-            auto  update = db.prepare(
-                "UPDATE session_input SET status = ?, promoted_seq = ? WHERE id = ?"
-            );
+            auto& db = dbs(sessionId).sessionDb;
+            auto  update
+                = db.prepare("UPDATE session_input SET status = ?, promoted_seq = ? WHERE id = ?");
             update.bindText(1, std::string{SessionInputStatus::Promoted});
             update.bindInt64(2, static_cast<int64_t>(promotedSeq));
             update.bindText(3, id);
@@ -1316,14 +1310,16 @@ std::vector<SessionStore::SessionInputRecord>
     if (!sessionDataDirExists(sessionId)) {
         return out;
     }
-    std::lock_guard<std::mutex>     lock(mutex_);
+    std::lock_guard<std::mutex> lock(mutex_);
     agentxx::util::catchError<bool>(
         [&]() -> bool {
             auto& db = dbs(sessionId).sessionDb;
             auto  stmt
                 = statusFilter.empty()
-                      ? db.prepare("SELECT id, payload, delivery, status, admitted_seq, "
-                                   "promoted_seq, created_ms FROM session_input ORDER BY created_ms, id")
+                      ? db.prepare(
+                            "SELECT id, payload, delivery, status, admitted_seq, "
+                            "promoted_seq, created_ms FROM session_input ORDER BY created_ms, id"
+                        )
                       : db.prepare("SELECT id, payload, delivery, status, admitted_seq, "
                                    "promoted_seq, created_ms FROM session_input WHERE status = ? "
                                    "ORDER BY created_ms, id");
@@ -1359,13 +1355,12 @@ void SessionStore::addUsage(std::string_view sessionId, const UsageRecord& recor
     std::lock_guard<std::mutex> lock(mutex_);
     agentxx::util::catchError<bool>(
         [&]() -> bool {
-            auto& db     = dbs(sessionId).sessionDb;
-            auto  insert = db.prepare(
-                "INSERT INTO usage(time_ms, model, prompt_tokens, completion_tokens, "
-                "total_tokens, cached_prompt_tokens, cache_write_prompt_tokens, "
-                "reasoning_tokens, ok, error_kind) "
-                "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-            );
+            auto& db = dbs(sessionId).sessionDb;
+            auto  insert
+                = db.prepare("INSERT INTO usage(time_ms, model, prompt_tokens, completion_tokens, "
+                             "total_tokens, cached_prompt_tokens, cache_write_prompt_tokens, "
+                             "reasoning_tokens, ok, error_kind) "
+                             "VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
             insert.bindInt64(1, record.timeMs);
             insert.bindText(2, record.model);
             insert.bindInt64(3, record.promptTokens);
@@ -1423,23 +1418,23 @@ std::vector<SessionStore::UsageRecord>
             auto& db   = dbs(sessionId).sessionDb;
             auto  stmt = db.prepare(
                 "SELECT time_ms, model, prompt_tokens, completion_tokens, total_tokens, "
-                "cached_prompt_tokens, reasoning_tokens, ok, error_kind, "
-                "cache_write_prompt_tokens FROM usage "
-                "ORDER BY id DESC LIMIT ?"
+                 "cached_prompt_tokens, reasoning_tokens, ok, error_kind, "
+                 "cache_write_prompt_tokens FROM usage "
+                 "ORDER BY id DESC LIMIT ?"
             );
             stmt.bindInt64(1, static_cast<int64_t>(limit));
             while (stmt.step()) {
                 UsageRecord rec;
-                rec.timeMs                  = stmt.columnInt64(0);
-                rec.model                   = stmt.columnText(1);
-                rec.promptTokens            = stmt.columnInt64(2);
-                rec.completionTokens        = stmt.columnInt64(3);
-                rec.totalTokens             = stmt.columnInt64(4);
-                rec.cachedPromptTokens      = stmt.columnInt64(5);
-                rec.reasoningTokens         = stmt.columnInt64(6);
-                rec.ok                      = stmt.columnInt64(7) != 0;
-                rec.errorKind               = stmt.columnText(8);
-                rec.cacheWritePromptTokens  = stmt.columnInt64(9);
+                rec.timeMs                 = stmt.columnInt64(0);
+                rec.model                  = stmt.columnText(1);
+                rec.promptTokens           = stmt.columnInt64(2);
+                rec.completionTokens       = stmt.columnInt64(3);
+                rec.totalTokens            = stmt.columnInt64(4);
+                rec.cachedPromptTokens     = stmt.columnInt64(5);
+                rec.reasoningTokens        = stmt.columnInt64(6);
+                rec.ok                     = stmt.columnInt64(7) != 0;
+                rec.errorKind              = stmt.columnText(8);
+                rec.cacheWritePromptTokens = stmt.columnInt64(9);
                 out.push_back(std::move(rec));
             }
             return true;
@@ -1632,15 +1627,13 @@ std::vector<SessionStore::SessionSearchHit>
                             return true;
                         }
                         // 正文命中: 取最后一条命中的消息文本作为片段
-                        auto textStmt = db.prepare(
-                            "SELECT json_extract(json, '$.text') FROM view_message "
-                            "WHERE json_extract(json, '$.text') LIKE ? ESCAPE '\\' "
-                            "ORDER BY seq DESC LIMIT 1"
-                        );
+                        auto textStmt
+                            = db.prepare("SELECT json_extract(json, '$.text') FROM view_message "
+                                         "WHERE json_extract(json, '$.text') LIKE ? ESCAPE '\\' "
+                                         "ORDER BY seq DESC LIMIT 1");
                         textStmt.bindText(1, pattern);
                         if (textStmt.step() && !textStmt.columnIsNull(0)) {
-                            hit.snippet
-                                = makeSearchSnippet(textStmt.columnText(0), keyword);
+                            hit.snippet = makeSearchSnippet(textStmt.columnText(0), keyword);
                             out.push_back(std::move(hit));
                         }
                         return true;
@@ -1655,9 +1648,13 @@ std::vector<SessionStore::SessionSearchHit>
                     }
                 );
             }
-            std::sort(out.begin(), out.end(), [](const SessionSearchHit& a, const SessionSearchHit& b) {
-                return sessionNewerFirst(a.info, b.info);
-            });
+            std::sort(
+                out.begin(),
+                out.end(),
+                [](const SessionSearchHit& a, const SessionSearchHit& b) {
+                    return sessionNewerFirst(a.info, b.info);
+                }
+            );
             if (out.size() > limit) {
                 out.resize(limit);
             }

@@ -44,8 +44,7 @@ std::expected<void, std::string> AgentConfig::validate() const {
     const auto report = agentxx::agent::validateAgentConfig(*this);
     for (const auto& issue : report.issues) {
         if (issue.level == agentxx::agent::ConfigIssueLevel::Fatal) {
-            return std::unexpected{
-                fmt::format("AgentConfig: {}: {}", issue.keyPath, issue.message)
+            return std::unexpected{fmt::format("AgentConfig: {}: {}", issue.keyPath, issue.message)
             };
         }
     }

@@ -25,6 +25,7 @@ struct IfaceMeta<AgentxxPluginToolsIface> {
     static constexpr int32_t  min_version   = AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_MIN_VERSION;
     static constexpr uint32_t baseline_size = AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_BASELINE_SIZE;
 };
+
 static_assert(AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_BASELINE_SIZE >= 8u);
 static_assert(AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_BASELINE_SIZE <= sizeof(AgentxxPluginToolsIface));
 
@@ -33,6 +34,7 @@ struct IfaceMeta<AgentxxPluginPermissionIface> {
     static constexpr int32_t  min_version   = AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION_MIN_VERSION;
     static constexpr uint32_t baseline_size = AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION_BASELINE_SIZE;
 };
+
 static_assert(AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION_BASELINE_SIZE >= 8u);
 static_assert(
     AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION_BASELINE_SIZE <= sizeof(AgentxxPluginPermissionIface)
@@ -43,6 +45,7 @@ struct IfaceMeta<AgentxxPluginHooksIface> {
     static constexpr int32_t  min_version   = AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_MIN_VERSION;
     static constexpr uint32_t baseline_size = AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_BASELINE_SIZE;
 };
+
 static_assert(AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_BASELINE_SIZE >= 8u);
 static_assert(AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_BASELINE_SIZE <= sizeof(AgentxxPluginHooksIface));
 
@@ -51,6 +54,7 @@ struct IfaceMeta<AgentxxPluginSessionIface> {
     static constexpr int32_t  min_version   = AGENTXX_PLUGIN_IFACE_AGENT_SESSION_MIN_VERSION;
     static constexpr uint32_t baseline_size = AGENTXX_PLUGIN_IFACE_AGENT_SESSION_BASELINE_SIZE;
 };
+
 static_assert(AGENTXX_PLUGIN_IFACE_AGENT_SESSION_BASELINE_SIZE >= 8u);
 static_assert(
     AGENTXX_PLUGIN_IFACE_AGENT_SESSION_BASELINE_SIZE <= sizeof(AgentxxPluginSessionIface)
@@ -61,6 +65,7 @@ struct IfaceMeta<AgentxxPluginContextIface> {
     static constexpr int32_t  min_version   = AGENTXX_PLUGIN_IFACE_AGENT_CONTEXT_MIN_VERSION;
     static constexpr uint32_t baseline_size = AGENTXX_PLUGIN_IFACE_AGENT_CONTEXT_BASELINE_SIZE;
 };
+
 static_assert(AGENTXX_PLUGIN_IFACE_AGENT_CONTEXT_BASELINE_SIZE >= 8u);
 static_assert(
     AGENTXX_PLUGIN_IFACE_AGENT_CONTEXT_BASELINE_SIZE <= sizeof(AgentxxPluginContextIface)
@@ -71,6 +76,7 @@ struct IfaceMeta<AgentxxPluginModelIface> {
     static constexpr int32_t  min_version   = AGENTXX_PLUGIN_IFACE_AGENT_MODEL_MIN_VERSION;
     static constexpr uint32_t baseline_size = AGENTXX_PLUGIN_IFACE_AGENT_MODEL_BASELINE_SIZE;
 };
+
 static_assert(AGENTXX_PLUGIN_IFACE_AGENT_MODEL_BASELINE_SIZE >= 8u);
 static_assert(AGENTXX_PLUGIN_IFACE_AGENT_MODEL_BASELINE_SIZE <= sizeof(AgentxxPluginModelIface));
 
@@ -79,6 +85,7 @@ struct IfaceMeta<AgentxxPluginPromptIface> {
     static constexpr int32_t  min_version   = AGENTXX_PLUGIN_IFACE_AGENT_PROMPT_MIN_VERSION;
     static constexpr uint32_t baseline_size = AGENTXX_PLUGIN_IFACE_AGENT_PROMPT_BASELINE_SIZE;
 };
+
 static_assert(AGENTXX_PLUGIN_IFACE_AGENT_PROMPT_BASELINE_SIZE >= 8u);
 static_assert(AGENTXX_PLUGIN_IFACE_AGENT_PROMPT_BASELINE_SIZE <= sizeof(AgentxxPluginPromptIface));
 
@@ -87,6 +94,7 @@ struct IfaceMeta<AgentxxPluginResourcesIface> {
     static constexpr int32_t  min_version   = AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES_MIN_VERSION;
     static constexpr uint32_t baseline_size = AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES_BASELINE_SIZE;
 };
+
 static_assert(AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES_BASELINE_SIZE >= 8u);
 static_assert(
     AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES_BASELINE_SIZE <= sizeof(AgentxxPluginResourcesIface)
@@ -97,6 +105,7 @@ struct IfaceMeta<AgentxxPluginGraphIface> {
     static constexpr int32_t  min_version   = AGENTXX_PLUGIN_IFACE_AGENT_GRAPH_MIN_VERSION;
     static constexpr uint32_t baseline_size = AGENTXX_PLUGIN_IFACE_AGENT_GRAPH_BASELINE_SIZE;
 };
+
 static_assert(AGENTXX_PLUGIN_IFACE_AGENT_GRAPH_BASELINE_SIZE >= 8u);
 static_assert(AGENTXX_PLUGIN_IFACE_AGENT_GRAPH_BASELINE_SIZE <= sizeof(AgentxxPluginGraphIface));
 
@@ -105,6 +114,7 @@ struct IfaceMeta<AgentxxPluginFeatureIface> {
     static constexpr int32_t  min_version   = AGENTXX_PLUGIN_IFACE_AGENT_FEATURE_MIN_VERSION;
     static constexpr uint32_t baseline_size = AGENTXX_PLUGIN_IFACE_AGENT_FEATURE_BASELINE_SIZE;
 };
+
 static_assert(AGENTXX_PLUGIN_IFACE_AGENT_FEATURE_BASELINE_SIZE >= 8u);
 static_assert(
     AGENTXX_PLUGIN_IFACE_AGENT_FEATURE_BASELINE_SIZE <= sizeof(AgentxxPluginFeatureIface)
@@ -117,6 +127,7 @@ struct IfaceMeta<AgentxxClientUiIface> {
     static constexpr int32_t  min_version   = AGENTXX_IFACE_CLIENT_UI_MIN_VERSION;
     static constexpr uint32_t baseline_size = AGENTXX_IFACE_CLIENT_UI_BASELINE_SIZE;
 };
+
 static_assert(AGENTXX_IFACE_CLIENT_UI_BASELINE_SIZE >= 8u);
 static_assert(AGENTXX_IFACE_CLIENT_UI_BASELINE_SIZE <= sizeof(AgentxxClientUiIface));
 
@@ -125,6 +136,7 @@ struct IfaceMeta<AgentxxClientEventsIface> {
     static constexpr int32_t  min_version   = AGENTXX_IFACE_CLIENT_EVENTS_MIN_VERSION;
     static constexpr uint32_t baseline_size = AGENTXX_IFACE_CLIENT_EVENTS_BASELINE_SIZE;
 };
+
 static_assert(AGENTXX_IFACE_CLIENT_EVENTS_BASELINE_SIZE >= 8u);
 static_assert(AGENTXX_IFACE_CLIENT_EVENTS_BASELINE_SIZE <= sizeof(AgentxxClientEventsIface));
 
@@ -133,6 +145,7 @@ struct IfaceMeta<AgentxxClientSessionIface> {
     static constexpr int32_t  min_version   = AGENTXX_IFACE_CLIENT_SESSION_MIN_VERSION;
     static constexpr uint32_t baseline_size = AGENTXX_IFACE_CLIENT_SESSION_BASELINE_SIZE;
 };
+
 static_assert(AGENTXX_IFACE_CLIENT_SESSION_BASELINE_SIZE >= 8u);
 static_assert(AGENTXX_IFACE_CLIENT_SESSION_BASELINE_SIZE <= sizeof(AgentxxClientSessionIface));
 
@@ -141,6 +154,7 @@ struct IfaceMeta<AgentxxClientWireIface> {
     static constexpr int32_t  min_version   = AGENTXX_IFACE_CLIENT_WIRE_MIN_VERSION;
     static constexpr uint32_t baseline_size = AGENTXX_IFACE_CLIENT_WIRE_BASELINE_SIZE;
 };
+
 static_assert(AGENTXX_IFACE_CLIENT_WIRE_BASELINE_SIZE >= 8u);
 static_assert(AGENTXX_IFACE_CLIENT_WIRE_BASELINE_SIZE <= sizeof(AgentxxClientWireIface));
 
@@ -149,6 +163,7 @@ struct IfaceMeta<AgentxxClientSelfIface> {
     static constexpr int32_t  min_version   = AGENTXX_IFACE_CLIENT_SELF_MIN_VERSION;
     static constexpr uint32_t baseline_size = AGENTXX_IFACE_CLIENT_SELF_BASELINE_SIZE;
 };
+
 static_assert(AGENTXX_IFACE_CLIENT_SELF_BASELINE_SIZE >= 8u);
 static_assert(AGENTXX_IFACE_CLIENT_SELF_BASELINE_SIZE <= sizeof(AgentxxClientSelfIface));
 
@@ -157,6 +172,7 @@ struct IfaceMeta<AgentxxClientJsonIface> {
     static constexpr int32_t  min_version   = AGENTXX_IFACE_CLIENT_JSON_MIN_VERSION;
     static constexpr uint32_t baseline_size = AGENTXX_IFACE_CLIENT_JSON_BASELINE_SIZE;
 };
+
 static_assert(AGENTXX_IFACE_CLIENT_JSON_BASELINE_SIZE >= 8u);
 static_assert(AGENTXX_IFACE_CLIENT_JSON_BASELINE_SIZE <= sizeof(AgentxxClientJsonIface));
 
@@ -165,6 +181,7 @@ struct IfaceMeta<AgentxxClientLogIface> {
     static constexpr int32_t  min_version   = AGENTXX_IFACE_CLIENT_LOG_MIN_VERSION;
     static constexpr uint32_t baseline_size = AGENTXX_IFACE_CLIENT_LOG_BASELINE_SIZE;
 };
+
 static_assert(AGENTXX_IFACE_CLIENT_LOG_BASELINE_SIZE >= 8u);
 static_assert(AGENTXX_IFACE_CLIENT_LOG_BASELINE_SIZE <= sizeof(AgentxxClientLogIface));
 
@@ -173,6 +190,7 @@ struct IfaceMeta<AgentxxClientTimerIface> {
     static constexpr int32_t  min_version   = AGENTXX_IFACE_CLIENT_TIMER_MIN_VERSION;
     static constexpr uint32_t baseline_size = AGENTXX_IFACE_CLIENT_TIMER_BASELINE_SIZE;
 };
+
 static_assert(AGENTXX_IFACE_CLIENT_TIMER_BASELINE_SIZE >= 8u);
 static_assert(AGENTXX_IFACE_CLIENT_TIMER_BASELINE_SIZE <= sizeof(AgentxxClientTimerIface));
 
@@ -181,6 +199,7 @@ struct IfaceMeta<AgentxxClientKeybindIface> {
     static constexpr int32_t  min_version   = AGENTXX_IFACE_CLIENT_KEYBIND_MIN_VERSION;
     static constexpr uint32_t baseline_size = AGENTXX_IFACE_CLIENT_KEYBIND_BASELINE_SIZE;
 };
+
 static_assert(AGENTXX_IFACE_CLIENT_KEYBIND_BASELINE_SIZE >= 8u);
 static_assert(AGENTXX_IFACE_CLIENT_KEYBIND_BASELINE_SIZE <= sizeof(AgentxxClientKeybindIface));
 

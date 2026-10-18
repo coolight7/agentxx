@@ -23,9 +23,9 @@ struct ListViewState {
     int*                           measuredWidth;
     std::vector<ftxui::Box>*       visibleBoxes;
     /// 各子项本帧的完整布局区域 (输出; 命中定位换算局部坐标用)
-    std::vector<ftxui::Box>*       itemBoxes;
+    std::vector<ftxui::Box>* itemBoxes;
     /// 上一帧可见子项下标 (输出: 本帧覆盖; 用于清理离开视口子项的残留布局框)
-    std::vector<size_t>*           prevVisible;
+    std::vector<size_t>* prevVisible;
 };
 
 /// 仿 Flutter ListView 的 viewport 布局节点。

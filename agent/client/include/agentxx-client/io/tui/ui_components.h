@@ -164,10 +164,10 @@ struct UiRenderCtx {
 /// - `regions` 使用本行元素的局部坐标; `box` 由 [renderItem] 附加 reflect 后
 ///   在布局阶段填充为屏幕区域 (无命中区域时为空指针)
 struct UiRow {
-    ftxui::Element                element;
-    size_t                        lines = 1;
-    std::shared_ptr<ftxui::Box>   box;
-    std::vector<UiHitRegion>      regions;
+    ftxui::Element              element;
+    size_t                      lines = 1;
+    std::shared_ptr<ftxui::Box> box;
+    std::vector<UiHitRegion>    regions;
 };
 
 /// 渲染产物 (行序列 + 生命周期附件)

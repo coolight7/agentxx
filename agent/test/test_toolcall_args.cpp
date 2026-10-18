@@ -1225,8 +1225,7 @@ TestResult testToolcallArgs() {
         def.parameters = makeParams({
             "edits",
             {{"type", "array"},
-             {"items", {{"type", "object"},
-                        {"properties", {{"old_str", {{"type", "string"}}}}}}}}
+              {"items", {{"type", "object"}, {"properties", {{"old_str", {{"type", "string"}}}}}}}}
         });
         auto args      = utilxx_base::Json{
                  {"edits", {{"old_str", "a"}, {"new_str", "b"}}}
@@ -1275,7 +1274,8 @@ TestResult testToolcallArgs() {
         def.name       = "tool_obj_d";
         def.parameters = makeParams({
             "value",
-            {{"type", utilxx_base::Json::array({"array", "object"})}, {"items", {{"type", "object"}}}}
+            {{"type", utilxx_base::Json::array({"array", "object"})},
+              {"items", {{"type", "object"}}}}
         });
         auto args      = utilxx_base::Json{
                  {"value", {{"k", "v"}}}
@@ -1294,9 +1294,9 @@ TestResult testToolcallArgs() {
         });
         auto args      = utilxx_base::Json{
                  {"edits",
-              utilxx_base::Json::array(
-                  {utilxx_base::Json{{"old_str", "a"}}, utilxx_base::Json{{"old_str", "b"}}}
-              )}
+                  utilxx_base::Json::array(
+                 {utilxx_base::Json{{"old_str", "a"}}, utilxx_base::Json{{"old_str", "b"}}}
+             )}
         };
         XX_TEST_EXPECT_FALSE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
         XX_TEST_EXPECT_EQ(args["edits"].size(), size_t{2});
@@ -1325,9 +1325,9 @@ TestResult testToolcallArgs() {
         def.parameters = makeParams({"config", {{"type", "object"}}});
         auto args      = utilxx_base::Json{
                  {"config",
-              utilxx_base::Json::array(
-                  {utilxx_base::Json{{"name", "x"}}, utilxx_base::Json{{"name", "y"}}}
-              )}
+                  utilxx_base::Json::array(
+                 {utilxx_base::Json{{"name", "x"}}, utilxx_base::Json{{"name", "y"}}}
+             )}
         };
         XX_TEST_EXPECT_FALSE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
         XX_TEST_EXPECT_TRUE(args["config"].is_array());
@@ -1362,10 +1362,8 @@ TestResult testToolcallArgs() {
         XX_TEST_EXPECT_FALSE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
         XX_TEST_EXPECT_TRUE(args["config"].is_object());
 
-        def.parameters = makeParams({
-            "config",
-            {{"type", utilxx_base::Json::array({"object", "array"})}}
-        });
+        def.parameters
+            = makeParams({"config", {{"type", utilxx_base::Json::array({"object", "array"})}}});
         args = utilxx_base::Json{
             {"config", utilxx_base::Json::array({utilxx_base::Json{{"name", "x"}}})}
         };

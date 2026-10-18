@@ -62,9 +62,11 @@ public:
     const std::string& state() const noexcept {
         return state_;
     }
+
     bool idle() const noexcept {
         return state_ == "idle" || state_.empty();
     }
+
     bool paused() const noexcept {
         return state_ == "paused";
     }
@@ -72,12 +74,15 @@ public:
     const std::vector<Entry>& entries() const noexcept {
         return entries_;
     }
-    bool   empty() const noexcept {
+
+    bool empty() const noexcept {
         return entries_.empty();
     }
+
     size_t size() const noexcept {
         return entries_.size();
     }
+
     /// 按 id 查找 (未命中返回 nullptr)
     const Entry* find(std::string_view id) const;
 
@@ -87,16 +92,17 @@ public:
     bool noteInputAck(const AckRecord& ack);
     /// 最近的投递回执 (未命中返回 nullptr)
     const AckRecord* lastAck(uint64_t requestId) const;
-    size_t           ackCount() const noexcept {
+
+    size_t ackCount() const noexcept {
         return acks_.size();
     }
 
 private:
 
-    std::vector<Entry>            entries_;
-    std::string                   state_ = "idle";
-    std::deque<AckRecord>         acks_;
-    std::map<uint64_t, size_t>    ackIndex_; ///< requestId → acks_ 下标 (随淘汰重建)
+    std::vector<Entry>         entries_;
+    std::string                state_ = "idle";
+    std::deque<AckRecord>      acks_;
+    std::map<uint64_t, size_t> ackIndex_; ///< requestId → acks_ 下标 (随淘汰重建)
 };
 
 } // namespace client

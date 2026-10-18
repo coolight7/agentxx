@@ -972,10 +972,10 @@ void test_request_body_messages_json_matches_legacy_path() {
     // tool 应答
     {
         neograph::ChatMessage m;
-        m.role          = "tool";
-        m.content       = "[Error] 未找到\n路径";
-        m.tool_call_id  = "call_1";
-        m.tool_name     = "read_file";
+        m.role         = "tool";
+        m.content      = "[Error] 未找到\n路径";
+        m.tool_call_id = "call_1";
+        m.tool_name    = "read_file";
         msgs.push_back(m);
     }
     // assistant + 明文思考 (sendThinking 关闭时应被丢弃)
@@ -1067,7 +1067,8 @@ void test_request_body_tools_json_matches_legacy_path() {
 ///   就是请求体变了, 属于静默行为变化
 /// - 同时覆盖 `extra_fields` 与已有键重名时的回退: DOM 版本是原地覆盖 (键序不变),
 ///   文本路径无法表达, 必须回退到 DOM 版本而不是写出重复键
-asio::awaitable<void> test_request_body_text_matches_dom_path(MockOpenAIServer& mock, uint16_t port) {
+asio::awaitable<void>
+    test_request_body_text_matches_dom_path(MockOpenAIServer& mock, uint16_t port) {
     const std::string baseUrl = fmt::format("http://127.0.0.1:{}", port);
     // 参考消息集: 纯文本 / 空正文的 tool_calls / tool 应答 / 多模态 / reasoning_details
     auto makeMessages = []() {
@@ -1096,10 +1097,10 @@ asio::awaitable<void> test_request_body_text_matches_dom_path(MockOpenAIServer& 
         }
         {
             neograph::ChatMessage m;
-            m.role          = "tool";
-            m.content       = "[Error] 未找到\n路径";
-            m.tool_call_id  = "call_1";
-            m.tool_name     = "read_file";
+            m.role         = "tool";
+            m.content      = "[Error] 未找到\n路径";
+            m.tool_call_id = "call_1";
+            m.tool_name    = "read_file";
             msgs.push_back(m);
         }
         {
@@ -1151,7 +1152,7 @@ asio::awaitable<void> test_request_body_text_matches_dom_path(MockOpenAIServer& 
 
     // 1. 流式 (末尾追加 stream / stream_options), 两种 sendThinking
     for (bool sendThinking : {true, false}) {
-        mock.mode = MockMode::Streaming;
+        mock.mode      = MockMode::Streaming;
         mock.sseChunks = {
             MockOpenAIServer::sseData(R"({"choices":[{"delta":{"content":"ok"}}]})"),
             MockOpenAIServer::sseDone(),
@@ -1195,14 +1196,14 @@ asio::awaitable<void> test_request_body_text_matches_dom_path(MockOpenAIServer& 
         params.tools      = tools;
         params.max_tokens = 128;
         // session_id 是内部保留键, 不应进入请求体
-        params.extra_fields["user"]                     = neograph::json("u1");
-        params.extra_fields["session_id"]               = neograph::json("s1");
+        params.extra_fields["user"]       = neograph::json("u1");
+        params.extra_fields["session_id"] = neograph::json("s1");
 
-        auto cfg          = makeOaiCfg("sk-x", baseUrl, 10, 10, sendThinking);
+        auto cfg                       = makeOaiCfg("sk-x", baseUrl, 10, 10, sendThinking);
         cfg.extraConfig["temperature"] = 0.5;
         // 已存在 max_tokens 时, 互斥的输出上限键应被跳过
         cfg.extraConfig["max_completion_tokens"] = 999;
-        auto provider2 = server::OpenAIProvider::create(cfg);
+        auto provider2                           = server::OpenAIProvider::create(cfg);
 
         try {
             co_await provider2->invoke(params, nullptr);
@@ -1225,12 +1226,12 @@ asio::awaitable<void> test_request_body_text_matches_dom_path(MockOpenAIServer& 
 
     // 3. extra_fields 与已有键重名: 必须回退 DOM 版本 (原地覆盖, 不产生重复键)
     {
-        mock.mode = MockMode::Normal;
+        mock.mode     = MockMode::Normal;
         auto provider = server::OpenAIProvider::create(makeOaiCfg("sk-x", baseUrl));
 
         neograph::CompletionParams params;
-        params.model    = "gpt-4o-mini";
-        params.messages = msgs;
+        params.model                 = "gpt-4o-mini";
+        params.messages              = msgs;
         params.extra_fields["model"] = neograph::json("override-model");
 
         try {
@@ -1243,7 +1244,7 @@ asio::awaitable<void> test_request_body_text_matches_dom_path(MockOpenAIServer& 
             // 只出现一次 model 键 (重复键是非法 JSON 语义)
             size_t hits = 0;
             for (size_t p = mock.lastRequestBody.find("\"model\":"); p != std::string::npos;
-                 p       = mock.lastRequestBody.find("\"model\":", p + 1)) {
+                 p        = mock.lastRequestBody.find("\"model\":", p + 1)) {
                 ++hits;
             }
             XX_TEST_EXPECT_EQ(hits, size_t{1});
@@ -3897,7 +3898,7 @@ asio::awaitable<void> test_responses_send_thinking(MockOpenAIServer& mock, uint1
         bool foundReasoningItem = false;
         for (const auto& item : input) {
             if (item.is_object() && item.value("type", std::string{}) == "reasoning") {
-                foundReasoningItem   = true;
+                foundReasoningItem  = true;
                 const auto& content = item["content"];
                 XX_TEST_EXPECT_TRUE(content.is_array());
                 XX_TEST_EXPECT_EQ(content.size(), (size_t)1);
@@ -3965,16 +3966,13 @@ asio::awaitable<void>
         params.messages = {
             {.role = "user", .content = "现在几点"},
             assistant,
-            {.role       = "tool",
-             .content    = "12:00",
-             .tool_call_id = "call_1",
-             .tool_name  = "get_time"},
+            {.role = "tool", .content = "12:00", .tool_call_id = "call_1", .tool_name = "get_time"},
         };
 
         try {
             co_await provider->invoke(params, nullptr);
-            auto  sent  = utilxx_base::Json::parse(mock.lastRequestBody);
-            auto  items = findReasoningItems(sent);
+            auto sent  = utilxx_base::Json::parse(mock.lastRequestBody);
+            auto items = findReasoningItems(sent);
             XX_TEST_EXPECT_EQ(items.size(), (size_t)1);
             if (items.size() == 1) {
                 // 原样保留的字段
@@ -4002,21 +4000,21 @@ asio::awaitable<void>
         assistant.content = "好的";
         assistant.extra   = agentxx::util::parseNeographJson(
             R"({"responses_reasoning_items":[{"type":"reasoning","encrypted_content":"enc_ref_2","id":"rs_2",)"
-            R"("content":[{"type":"reasoning_text","text":"条目自带的思考"}]}]})"
+              R"("content":[{"type":"reasoning_text","text":"条目自带的思考"}]}]})"
         );
 
         neograph::CompletionParams params;
         params.model    = "deepseek-v4.1-flash";
         params.messages = {
-            {.role = "user", .content = "在吗"},
+            {.role = "user", .content = "在吗"   },
             assistant,
             {.role = "user", .content = "做点事"},
         };
 
         try {
             co_await provider->invoke(params, nullptr);
-            auto  sent  = utilxx_base::Json::parse(mock.lastRequestBody);
-            auto  items = findReasoningItems(sent);
+            auto sent  = utilxx_base::Json::parse(mock.lastRequestBody);
+            auto items = findReasoningItems(sent);
             XX_TEST_EXPECT_EQ(items.size(), (size_t)1);
             if (items.size() == 1) {
                 const auto& content = items[0]["content"];
@@ -4042,15 +4040,15 @@ asio::awaitable<void>
         neograph::CompletionParams params;
         params.model    = "deepseek-v4.1-flash";
         params.messages = {
-            {.role = "user", .content = "在吗"},
+            {.role = "user", .content = "在吗"   },
             assistant,
             {.role = "user", .content = "做点事"},
         };
 
         try {
             co_await provider->invoke(params, nullptr);
-            auto  sent  = utilxx_base::Json::parse(mock.lastRequestBody);
-            auto  items = findReasoningItems(sent);
+            auto sent  = utilxx_base::Json::parse(mock.lastRequestBody);
+            auto items = findReasoningItems(sent);
             XX_TEST_EXPECT_EQ(items.size(), (size_t)1);
             if (items.size() == 1) {
                 XX_TEST_EXPECT_TRUE(items[0].contains("summary"));
@@ -4079,7 +4077,7 @@ asio::awaitable<void>
         neograph::CompletionParams params;
         params.model    = "deepseek-v4.1-flash";
         params.messages = {
-            {.role = "user", .content = "在吗"},
+            {.role = "user", .content = "在吗"   },
             assistant,
             {.role = "user", .content = "做点事"},
         };
@@ -5044,10 +5042,9 @@ void test_usage_cached_tokens_parsing() {
 
     // DeepSeek 官方字段名 prompt_cache_hit_tokens (顶层), 且字符串数字应能解析
     {
-        std::string buf
-            = "data: {\"usage\":{\"prompt_tokens\":410,\"completion_tokens\":9,"
-              "\"total_tokens\":419,\"prompt_cache_hit_tokens\":\"384\","
-              "\"prompt_cache_miss_tokens\":26}}\n\n";
+        std::string buf = "data: {\"usage\":{\"prompt_tokens\":410,\"completion_tokens\":9,"
+                          "\"total_tokens\":419,\"prompt_cache_hit_tokens\":\"384\","
+                          "\"prompt_cache_miss_tokens\":26}}\n\n";
         neograph::ChatCompletion          completion;
         std::string                       content, thinking;
         std::map<int, neograph::ToolCall> tcMap;
@@ -5081,9 +5078,8 @@ void test_usage_cached_tokens_parsing() {
 
     // 离谱形态不抛异常: details 不是对象 / 缓存字段缺失 / 上游不上报缓存
     {
-        std::string buf
-            = "data: {\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":2,"
-              "\"prompt_tokens_details\":\"weird\"}}\n\n";
+        std::string buf = "data: {\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":2,"
+                          "\"prompt_tokens_details\":\"weird\"}}\n\n";
         neograph::ChatCompletion          completion;
         std::string                       content, thinking;
         std::map<int, neograph::ToolCall> tcMap;
@@ -5107,14 +5103,15 @@ void test_usage_cached_tokens_parsing() {
 }
 
 /// 非流式路径的缓存用量解析 (与流式路径同一套字段兼容规则)
-asio::awaitable<void> test_non_streaming_usage_cached_tokens(MockOpenAIServer& mock, uint16_t port) {
+asio::awaitable<void>
+    test_non_streaming_usage_cached_tokens(MockOpenAIServer& mock, uint16_t port) {
     std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
     mock.mode           = MockMode::Normal;
 
     auto resp                              = mock.makeCompletionResponse("Hello", 2000, 40);
     resp["usage"]["prompt_tokens_details"] = {
-        {"cached_tokens",   1792},
-        {"cache_write_tokens", 0}
+        {"cached_tokens",      1792},
+        {"cache_write_tokens", 0   }
     };
     mock.customResponse = resp;
 
@@ -5163,19 +5160,13 @@ asio::awaitable<void> test_streaming_usage_cached_tokens(MockOpenAIServer& mock,
 
     try {
         std::string accumulated;
-        auto        result = co_await provider->invoke(
-            params,
-            [&accumulated](const std::string& chunk) {
-                accumulated += chunk;
-            }
-        );
+        auto result = co_await provider->invoke(params, [&accumulated](const std::string& chunk) {
+            accumulated += chunk;
+        });
         XX_TEST_EXPECT_EQ(accumulated, "Hello");
         XX_TEST_EXPECT_EQ(result.usage.prompt_tokens, 517);
         XX_TEST_EXPECT_EQ(result.usage.cached_prompt_tokens, 512);
-        XX_TEST_EXPECT_EQ(
-            agentxx::protocol::readUsageDetail(result).cacheReadTokens,
-            int64_t{512}
-        );
+        XX_TEST_EXPECT_EQ(agentxx::protocol::readUsageDetail(result).cacheReadTokens, int64_t{512});
     } catch (const std::exception& e) {
         XX_TEST_FAILED++;
         TEST_FAIL << "streaming cached usage failed: " << e.what() << std::endl;

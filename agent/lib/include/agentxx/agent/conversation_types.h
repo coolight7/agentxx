@@ -171,11 +171,13 @@ struct MediaAttachment {
 
     static MediaAttachment fromJson(const utilxx_base::Json& j) {
         MediaAttachment att;
-        att.type        = mediaTypeFromString(j.value("type", j.value("kind", std::string{})));
-        att.displayName = j.value("display_name", j.value("displayName", j.value("name", std::string{})));
-        att.mimeType    = j.value("mime_type", j.value("mimeType", std::string{}));
-        att.pathOrUrl   = j.value("path_or_url", j.value("pathOrUrl", j.value("path", std::string{})));
-        att.dataUrl     = j.value("data_url", j.value("dataUrl", std::string{}));
+        att.type = mediaTypeFromString(j.value("type", j.value("kind", std::string{})));
+        att.displayName
+            = j.value("display_name", j.value("displayName", j.value("name", std::string{})));
+        att.mimeType = j.value("mime_type", j.value("mimeType", std::string{}));
+        att.pathOrUrl
+            = j.value("path_or_url", j.value("pathOrUrl", j.value("path", std::string{})));
+        att.dataUrl = j.value("data_url", j.value("dataUrl", std::string{}));
         if (j.contains("size_bytes") && j["size_bytes"].is_number()) {
             att.sizeBytes = j["size_bytes"].get<uint64_t>();
         } else if (j.contains("sizeBytes") && j["sizeBytes"].is_number()) {
@@ -308,11 +310,11 @@ struct ViewMessage {
 
     /// 多模态媒体附件列表
     std::vector<MediaAttachment> attachments;
-    int64_t     startTimeMs = 0; ///< 开始时间戳 (毫秒, Unix 时间戳)
-    int64_t     durationMs  = 0; ///< 运行时长 (毫秒)
-    std::optional<ThinkData>     think     = std::nullopt; ///< Role::Think 有效
-    std::optional<TipData>       tip       = std::nullopt; ///< Role::Tip 有效
-    Role        role = Role::User;
+    int64_t                      startTimeMs = 0; ///< 开始时间戳 (毫秒, Unix 时间戳)
+    int64_t                      durationMs  = 0; ///< 运行时长 (毫秒)
+    std::optional<ThinkData>     think       = std::nullopt; ///< Role::Think 有效
+    std::optional<TipData>       tip         = std::nullopt; ///< Role::Tip 有效
+    Role                         role        = Role::User;
     /// 折叠展示 (Think/Tool/System/Tip 消息; 点击可折叠/展开)
     bool collapsed = false;
 
@@ -365,8 +367,8 @@ struct AppendComponentNotification {
     std::string name;         // 名称 (MCP 命名空间 / Skill 名 / Memory 文件名)
     std::string errorMessage; // 失败时的错误信息
 
-    Type        type;
-    bool        success;      // 是否加载成功
+    Type type;
+    bool success; // 是否加载成功
 };
 
 /// 链式哈希 (FNV-1a 逐段追加): 将消息序列逐个 append 形成一条哈希链,

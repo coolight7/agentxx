@@ -1431,8 +1431,8 @@ bool TUIClientAgentIO::collapseExpanded(
 }
 
 TUIClientAgentIO::PluginFormData& TUIClientAgentIO::formFor(
-    const std::string&             ownerId,
-    const std::string&             plugin,
+    const std::string&              ownerId,
+    const std::string&              plugin,
     std::vector<pluginxx::ui::Item> items
 ) {
     auto& data  = pluginForms_[ownerId];
@@ -2248,7 +2248,7 @@ void TUIClientAgentIO::onViewMessagesPage(const agentxx::agent::WireViewMessages
     bool   anchored       = false;
     {
         std::lock_guard<std::mutex> lock(sharedState_.mutex());
-        auto& st = sharedState_.mutableState();
+        auto&                       st = sharedState_.mutableState();
         // 页响应判定集中在窗口模型 (迟到会话/空页/不连续页/重复响应)
         const auto outcome = st.history.applyPage(
             page.sessionId,
@@ -2504,7 +2504,7 @@ void TUIClientAgentIO::openUpdateNotice(std::string latestTag, std::string url) 
     }
     // 打开浏览器用的链接副本: 弹窗持有的是形参 move 后的值, 动作闭包存在弹窗内,
     // 因此按值捕获即可 (生命周期随弹窗)
-    const std::string target = url;
+    const std::string target  = url;
     auto              overlay = std::make_shared<UpdateNoticeOverlay>(
         ctx_,
         std::string{kAgentxxVersion},
@@ -2619,9 +2619,7 @@ void TUIClientAgentIO::requestNextSessionListPage() {
     requestSessionListPage(beforeMs, std::move(beforeId), kSessionListPageSize);
 }
 
-void TUIClientAgentIO::onSessionRenameResult(
-    const agentxx::agent::WireRenameSessionResult& resp
-) {
+void TUIClientAgentIO::onSessionRenameResult(const agentxx::agent::WireRenameSessionResult& resp) {
     {
         std::lock_guard<std::mutex> lock(sharedState_.mutex());
         auto&                       st = sharedState_.mutableState();
@@ -2637,8 +2635,8 @@ void TUIClientAgentIO::onSessionRenameResult(
     }
     if (!resp.ok) {
         // 失败原因来自服务端 (空标题/会话不存在/无持久化), 直接提示给用户
-        const std::string msg = resp.error.empty() ? std::string{tr("session.renameFailed")}
-                                                   : resp.error;
+        const std::string msg
+            = resp.error.empty() ? std::string{tr("session.renameFailed")} : resp.error;
         enqueueUiAction([this, msg] {
             showToast(msg);
         });
@@ -2787,11 +2785,11 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
                 m->startTimeMs        = delta.startTimeMs > 0
                                             ? delta.startTimeMs
                                             : static_cast<int64_t>(
-                                         std::chrono::duration_cast<std::chrono::milliseconds>(
-                                             std::chrono::system_clock::now().time_since_epoch()
-                                         )
-                                             .count()
-                                     );
+                                           std::chrono::duration_cast<std::chrono::milliseconds>(
+                                               std::chrono::system_clock::now().time_since_epoch()
+                                           )
+                                               .count()
+                                       );
                 pushLocalMessageLocked(st, std::move(m));
                 st.isStreaming = true;
             } break;
@@ -2855,7 +2853,8 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
                         st.pendingTokenStartTimeMs = delta.startTimeMs;
                         st.pendingTokenDurationMs  = delta.durationMs;
                     }
-                } else if (!st.messages.empty() && st.messages.back()->role != TUIMessage::Role::Think) {
+                } else if (!st.messages.empty()
+                           && st.messages.back()->role != TUIMessage::Role::Think) {
                     auto& m       = sharedState_.mutableMessage(st, st.messages.size() - 1);
                     m.startTimeMs = delta.startTimeMs;
                     m.durationMs  = delta.durationMs;
@@ -3086,7 +3085,7 @@ void TUIClientAgentIO::onIncrementalSync(const agentxx::agent::WireSyncPayload& 
         std::lock_guard<std::mutex> lock(sharedState_.mutex());
         auto&                       st = sharedState_.mutableState();
         if (!st.messages.empty()) {
-            const size_t messagesBefore = st.messages.size();
+            const size_t          messagesBefore = st.messages.size();
             std::set<std::string> knownIds;
             for (const auto& m : st.messages) {
                 if (m && !m->id.empty()) {
@@ -3114,10 +3113,7 @@ void TUIClientAgentIO::onIncrementalSync(const agentxx::agent::WireSyncPayload& 
                     st.history.lastSeq()
                 );
             }
-            st.history.noteTailAppended(
-                st.messages.size() - messagesBefore,
-                payload.totalMessages
-            );
+            st.history.noteTailAppended(st.messages.size() - messagesBefore, payload.totalMessages);
             applied = true;
         }
     }
@@ -3173,8 +3169,9 @@ void TUIClientAgentIO::onContextStats(const agentxx::agent::WireContextStats& st
         st.sessionCompletionTokens   = stats.completionTokens;
         st.sessionTotalTokens        = stats.totalTokens;
         st.sessionCachedPromptTokens = stats.cachedPromptTokens;
-        st.sessionUsageKnown = (stats.promptTokens > 0 || stats.completionTokens > 0
-                                || stats.totalTokens > 0 || stats.cachedPromptTokens > 0);
+        st.sessionUsageKnown
+            = (stats.promptTokens > 0 || stats.completionTokens > 0 || stats.totalTokens > 0
+               || stats.cachedPromptTokens > 0);
     }
     postRedraw();
 }

@@ -339,7 +339,8 @@ static TestResult testLlmMessagesTextMirror() {
     asst.tool_calls.push_back(
         neograph::ToolCall{.id = "call_1", .name = "read", .arguments = R"({"path":"a\nb"})"}
     );
-    asst.tool_calls.push_back(neograph::ToolCall{.id = "call_2", .name = "grep", .arguments = "{}"});
+    asst.tool_calls.push_back(neograph::ToolCall{.id = "call_2", .name = "grep", .arguments = "{}"}
+    );
     asst.history_contents.push_back("earlier content");
     asst.flags = neograph::MessageFlag::AutoInserted | neograph::MessageFlag::Summarized;
     asst.extra["share_id"] = 7;
@@ -379,7 +380,10 @@ static TestResult testLlmMessagesTextMirror() {
 
     // 整批替换 (边界形态入口) 后仍一致
     utilxx_base::Json fromJson = utilxx_base::Json::array();
-    fromJson.push_back(utilxx_base::Json{{"role", "user"}, {"content", "replaced"}});
+    fromJson.push_back(utilxx_base::Json{
+        {"role",    "user"    },
+        {"content", "replaced"}
+    });
     s->replaceMessagesFromJson(fromJson);
     XX_TEST_EXPECT_EQ(s->llmMessagesJsonText(), s->llmMessagesJson().dump());
 
@@ -540,14 +544,8 @@ static TestResult testSessionStoreIntegration() {
         s1->appendViewMessage(ViewMessage::makeText(V::Role::Assistant, "a1"));
         s1->appendViewMessage(makeMsg(V::Role::Tool, R"({"tool":"x"})"));
         s1->replaceMessagesFromJson(utilxx_base::Json::array({
-            utilxx_base::Json{
-                {"role",    "system"},
-                {"content", "sys"   }
-            },
-            utilxx_base::Json{
-                {"role",    "user"},
-                {"content", "u1"  }
-            },
+            utilxx_base::Json{{"role", "system"}, {"content", "sys"}},
+            utilxx_base::Json{{"role", "user"},   {"content", "u1"} },
         }));
         s1->saveLlmMessages();
         // 模拟轮末统一补存 (节流窗口内的 append 落库)
@@ -749,12 +747,15 @@ static TestResult testMiddlewareShareStorePersistence() {
         // 重启后仍可读取 (内容以库为准, 与内存缓存无关)
         auto ctx3 = std::make_shared<MiddlewareContext>(sessionStore);
         XX_TEST_EXPECT_EQ(ctx3->getShareStoreItemValue("m1", id3).value_or(""), std::string{"v3"});
-        XX_TEST_EXPECT_EQ(ctx3->getShareStoreItemValue("m1", id1).value_or(""), std::string{"v1-updated"});
+        XX_TEST_EXPECT_EQ(
+            ctx3->getShareStoreItemValue("m1", id1).value_or(""),
+            std::string{"v1-updated"}
+        );
         XX_TEST_EXPECT_EQ(ctx3->getShareStoreItemValue("m1", id2).value_or(""), std::string{"v2"});
 
         // ---- 内存缓存容量: 只保留最近使用的 3 条, 其余条目回库读取 ----
         // 连续写入 6 条, 缓存始终不超过容量 (内存占用与条目数量无关)
-        auto ctx4 = std::make_shared<MiddlewareContext>(sessionStore);
+        auto   ctx4   = std::make_shared<MiddlewareContext>(sessionStore);
         size_t lastId = 0;
         for (int i = 0; i < 6; ++i) {
             lastId = ctx4->addShareStoreItemValue("m2", fmt::format("item{}", i + 1));
@@ -1266,8 +1267,9 @@ static void testPersistenceResilience() {
         p->saveLlmMessages(
             "r_dirty",
             utilxx_base::Json::array({
-                utilxx_base::Json{{"role", "user"}, {"content", "ctx"}}
-            }).dump()
+                                         utilxx_base::Json{{"role", "user"}, {"content", "ctx"}}
+        }
+            ).dump()
         );
         {
             auto dir = fs::path(root) / SessionStore::sanitizeSessionId("r_dirty");

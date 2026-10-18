@@ -143,7 +143,10 @@ void testHistoryWindow() {
     XX_TEST_EXPECT_FALSE(win.hasSeq());
     XX_TEST_EXPECT_FALSE(win.hasMore());
     XX_TEST_EXPECT_EQ(win.observeTailSeq(5), HistoryWindow::SeqOutcome::First);
-    XX_TEST_EXPECT_EQ(win.applyPage("sess-1", 170, 30, 200), HistoryWindow::PageOutcome::StaleSession);
+    XX_TEST_EXPECT_EQ(
+        win.applyPage("sess-1", 170, 30, 200),
+        HistoryWindow::PageOutcome::StaleSession
+    );
 
     // 本地清理头部消息: 窗口起点右移 (被删的一段重新变成"上方的更早历史"),
     // 条数相应减少; 之后分页仍可把这一段拉回来
@@ -221,10 +224,7 @@ void testQueueMirror() {
     };
 
     // 快照应用: 整体替换 (含条目顺序) + 队列状态
-    q.applySnapshot(
-        {makeEntry("q-2", "second", 2000), makeEntry("q-1", "first", 1000)},
-        "running"
-    );
+    q.applySnapshot({makeEntry("q-2", "second", 2000), makeEntry("q-1", "first", 1000)}, "running");
     XX_TEST_EXPECT_EQ(q.size(), size_t{2});
     XX_TEST_EXPECT_EQ(q.state(), std::string{"running"});
     XX_TEST_EXPECT_FALSE(q.idle());
@@ -264,7 +264,7 @@ void testQueueMirror() {
     XX_TEST_EXPECT_TRUE(q.idle());
 
     // 投递回执记账: 同一 requestId 只记账一次 (界面据此只提示一次)
-    MessageQueueMirror        qa;
+    MessageQueueMirror            qa;
     MessageQueueMirror::AckRecord ack;
     ack.requestId = 7;
     ack.status    = "rejected";
@@ -294,7 +294,7 @@ void testQueueMirror() {
         XX_TEST_EXPECT_TRUE(qa.noteInputAck(a));
     }
     XX_TEST_EXPECT_EQ(qa.ackCount(), MessageQueueMirror::kAckHistoryLimit);
-    XX_TEST_EXPECT_TRUE(qa.lastAck(7) == nullptr);    ///< 最旧的一条已被淘汰
+    XX_TEST_EXPECT_TRUE(qa.lastAck(7) == nullptr); ///< 最旧的一条已被淘汰
     XX_TEST_EXPECT_TRUE(qa.lastAck(100 + MessageQueueMirror::kAckHistoryLimit) != nullptr);
     // 被淘汰的 requestId 可以重新记账 (不会被永久记为"已提示")
     XX_TEST_EXPECT_TRUE(qa.noteInputAck(ack));

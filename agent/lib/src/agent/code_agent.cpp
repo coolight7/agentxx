@@ -69,7 +69,7 @@ asio::awaitable<void> CodeAgent::initMiddleware() {
             } else {
                 agentContext->appendComponentInfo.failedComponents.push_back(
                     AppendComponentNotification{
-                        .name    = dirPath,
+                        .name = dirPath,
                         .errorMessage
                         = ec ? fmt::format("directory not accessible: {}", ec.message())
                              : "directory not found",
@@ -135,10 +135,9 @@ asio::awaitable<void> CodeAgent::initMiddleware() {
             "LogPrint",
             agentContext,
             agentxx::middleware::MiddlewareHooks{
-                .onModelcallRun
-                = [config = agentContext->agentConfig,
-                   ctxPtr = std::weak_ptr<AgentContext>(agentContext)](neograph::graph::NodeInput& in
-                  ) -> asio::awaitable<void> {
+                .onModelcallRun = [config = agentContext->agentConfig,
+                                   ctxPtr = std::weak_ptr<AgentContext>(agentContext
+                                   )](neograph::graph::NodeInput& in) -> asio::awaitable<void> {
                     if (config->logPrintMessagesBeforeLLM) {
                         agentxx::middleware::BaseMiddlewareHandleInterface::printMessages(
                             agentxx::nodes::sessionMessages(ctxPtr.lock(), in.ctx.thread_id),
@@ -263,8 +262,8 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
                                         mcpTools.error(),
                                         mcpCfg.url
                                     ),
-                                    .type         = AppendComponentNotification::Type::Mcp,
-                                    .success      = false,
+                                    .type    = AppendComponentNotification::Type::Mcp,
+                                    .success = false,
                                 }
                             );
                         }
@@ -284,8 +283,8 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
                                     result.error(),
                                     mcpCfg.url
                                 ),
-                                .type         = AppendComponentNotification::Type::Mcp,
-                                .success      = false,
+                                .type    = AppendComponentNotification::Type::Mcp,
+                                .success = false,
                             }
                         );
                     }

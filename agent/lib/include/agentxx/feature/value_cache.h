@@ -39,7 +39,7 @@ inline constexpr size_t kDefaultCacheMaxBytes = 256u * 1024u;
 struct ValueCacheEntry {
     std::string valueJson; ///< 值 (JSON 文本)
     std::string by;        ///< 产出方 (见文件头说明)
-    uint64_t    seq = 0;   ///< 最近使用序号 (淘汰时取最小者)
+    uint64_t    seq   = 0; ///< 最近使用序号 (淘汰时取最小者)
     size_t      bytes = 0; ///< valueJson 字节数
 };
 
@@ -152,7 +152,7 @@ public:
         for (auto it = entries_.begin(); it != entries_.end();) {
             if (it->second.by == owner) {
                 bytes_ -= it->second.bytes;
-                it = entries_.erase(it);
+                it      = entries_.erase(it);
                 ++removed;
             } else {
                 ++it;
@@ -199,13 +199,13 @@ private:
         entries_.erase(lru);
     }
 
-    CacheMode                                   mode_      = CacheMode::None;
-    size_t                                      maxItems_  = kDefaultCacheMaxItems;
-    size_t                                      maxBytes_  = kDefaultCacheMaxBytes;
-    size_t                                      bytes_     = 0;
-    uint64_t                                    useCounter_ = 0;
-    uint64_t                                    hits_       = 0;
-    uint64_t                                    misses_     = 0;
+    CacheMode                                           mode_       = CacheMode::None;
+    size_t                                              maxItems_   = kDefaultCacheMaxItems;
+    size_t                                              maxBytes_   = kDefaultCacheMaxBytes;
+    size_t                                              bytes_      = 0;
+    uint64_t                                            useCounter_ = 0;
+    uint64_t                                            hits_       = 0;
+    uint64_t                                            misses_     = 0;
     std::map<std::string, ValueCacheEntry, std::less<>> entries_;
 };
 

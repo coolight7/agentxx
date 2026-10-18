@@ -537,7 +537,7 @@ mcp:
     // 内容照原样注入, 中间件不截断也不换注入方式
     TEST_INFO << "[T6] oversize memory file warning" << std::endl;
     {
-        const auto limit = agentxx::middleware::MemoryFileMiddlewareHandle::kOversizeWarnChars;
+        const auto limit     = agentxx::middleware::MemoryFileMiddlewareHandle::kOversizeWarnChars;
         auto       bigPath   = tmpRoot / "big_memory.md";
         auto       smallPath = tmpRoot / "small_memory.md";
         const std::string bigContent(limit + 32, 'a');
@@ -564,9 +564,10 @@ mcp:
             XX_TEST_EXPECT_EQ(oversize[0].second, bigContent.size());
         }
         // 内容未被截断: 稳定段里仍带整份文件 (随 system 消息进稳定前缀)
-        const auto injected
-            = ctx->promptSources->sectionText(agentxx::middleware::MemoryFileMiddlewareHandle::kSectionKey,
-                                              sessionId);
+        const auto injected = ctx->promptSources->sectionText(
+            agentxx::middleware::MemoryFileMiddlewareHandle::kSectionKey,
+            sessionId
+        );
         XX_TEST_EXPECT_FALSE(injected.empty());
         XX_TEST_EXPECT_TRUE(injected.find(bigContent) != std::string::npos);
 

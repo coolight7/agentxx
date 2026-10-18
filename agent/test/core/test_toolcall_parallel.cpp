@@ -71,12 +71,7 @@ using Trace = std::shared_ptr<std::vector<TraceEntry>>;
 class TraceTool : public agentxx::tools::XXToolBase {
 public:
 
-    TraceTool(
-        std::string_view name,
-        Trace            trace,
-        int64_t          sleepMs,
-        bool             parallelSafe
-    ) :
+    TraceTool(std::string_view name, Trace trace, int64_t sleepMs, bool parallelSafe) :
         XXToolBase(
             name,
             std::weak_ptr<agentxx::agent::AgentContext>{},
@@ -94,7 +89,8 @@ public:
         return neograph::ChatTool{
             .name        = name_,
             .description = "trace tool for toolcall parallel test",
-            .parameters  = neograph::json{{"type", "object"}, {"properties", neograph::json::object()}},
+            .parameters
+            = neograph::json{{"type", "object"}, {"properties", neograph::json::object()}},
         };
     }
 
@@ -121,7 +117,7 @@ class ParallelTestAgent : public agentxx::agent::CodeAgent {
 public:
 
     ParallelTestAgent(
-        std::shared_ptr<agentxx::agent::AgentConfig>   cfg,
+        std::shared_ptr<agentxx::agent::AgentConfig>             cfg,
         std::vector<std::unique_ptr<agentxx::tools::XXToolBase>> extra
     ) :
         CodeAgent(std::move(cfg)),
@@ -145,9 +141,9 @@ private:
 /// 构造一个 tool_call 声明 (OpenAI 流式 delta 形态; 与模拟器约定一致)
 utilxx_base::Json makeToolCall(int index, std::string_view id, std::string_view name) {
     return utilxx_base::Json{
-        {"index", index},
-        {"id", std::string{id}},
-        {"type", "function"},
+        {"index",    index                                                              },
+        {"id",       std::string{id}                                                    },
+        {"type",     "function"                                                         },
         {"function", utilxx_base::Json{{"name", std::string{name}}, {"arguments", "{}"}}},
     };
 }
@@ -211,7 +207,7 @@ std::vector<std::pair<std::string, std::string>>
     if (!session) {
         return out;
     }
-    const auto& messages = session->messages();
+    const auto& messages       = session->messages();
     size_t      assistantIndex = messages.size();
     for (size_t i = messages.size(); i > 0; --i) {
         const auto& msg = messages[i - 1];
@@ -251,8 +247,7 @@ asio::awaitable<bool> waitToolResults(
     int                                             timeoutMs = 5000
 ) {
     asio::steady_timer timer{co_await asio::this_coro::executor};
-    const auto         deadline = std::chrono::steady_clock::now()
-                                  + std::chrono::milliseconds{timeoutMs};
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds{timeoutMs};
     while (std::chrono::steady_clock::now() < deadline) {
         if (toolResultsAfterLastAssistant(session).size() >= count) {
             co_return true;
@@ -272,17 +267,21 @@ asio::awaitable<void> test_parallel_tools_run_concurrently() {
     auto sim     = startDaSimServer();
     auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
 
-    auto cfg                 = std::make_shared<agentxx::agent::AgentConfig>();
-    cfg->model.baseUrl       = baseUrl;
-    cfg->model.apiKey        = "EMPTY";
-    cfg->model.modelName     = "test-sim";
-    cfg->prompt.systemPrompt = "You are a helpful assistant.";
+    auto cfg                        = std::make_shared<agentxx::agent::AgentConfig>();
+    cfg->model.baseUrl              = baseUrl;
+    cfg->model.apiKey               = "EMPTY";
+    cfg->model.modelName            = "test-sim";
+    cfg->prompt.systemPrompt        = "You are a helpful assistant.";
     cfg->toolParallelMaxConcurrency = 4;
 
     g_da_sim_response_content = "All tools done.";
     g_da_sim_delay_ms         = 0;
     // 声明顺序 a → b → c, 睡眠时长 80/10/40ms: 完成顺序必然与声明顺序不同
-    declareToolCalls({{"call_a", "test_par_a"}, {"call_b", "test_par_b"}, {"call_c", "test_par_c"}});
+    declareToolCalls({
+        {"call_a", "test_par_a"},
+        {"call_b", "test_par_b"},
+        {"call_c", "test_par_c"}
+    });
 
     auto trace = std::make_shared<std::vector<TraceEntry>>();
     std::vector<std::unique_ptr<agentxx::tools::XXToolBase>> tools;
@@ -310,9 +309,8 @@ asio::awaitable<void> test_parallel_tools_run_concurrently() {
     XX_TEST_EXPECT_TRUE(cEnd < aEnd);
 
     // 3) 结果仍按声明的 tool_call 顺序写回
-    const auto results = toolResultsAfterLastAssistant(
-        agent.agentContext->sessions->get("toolcall_par_1")
-    );
+    const auto results
+        = toolResultsAfterLastAssistant(agent.agentContext->sessions->get("toolcall_par_1"));
     XX_TEST_EXPECT_EQ(results.size(), size_t{3});
     if (results.size() == 3) {
         XX_TEST_EXPECT_EQ(results[0].first, std::string{"call_a"});
@@ -335,17 +333,21 @@ asio::awaitable<void> test_exclusive_tool_is_barrier() {
     auto sim     = startDaSimServer();
     auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
 
-    auto cfg                 = std::make_shared<agentxx::agent::AgentConfig>();
-    cfg->model.baseUrl       = baseUrl;
-    cfg->model.apiKey        = "EMPTY";
-    cfg->model.modelName     = "test-sim";
-    cfg->prompt.systemPrompt = "You are a helpful assistant.";
+    auto cfg                        = std::make_shared<agentxx::agent::AgentConfig>();
+    cfg->model.baseUrl              = baseUrl;
+    cfg->model.apiKey               = "EMPTY";
+    cfg->model.modelName            = "test-sim";
+    cfg->prompt.systemPrompt        = "You are a helpful assistant.";
     cfg->toolParallelMaxConcurrency = 4;
 
     g_da_sim_response_content = "Barrier tools done.";
     g_da_sim_delay_ms         = 0;
     // 声明顺序: 并行安全 p1 → 独占 w → 并行安全 p2
-    declareToolCalls({{"call_p1", "test_bar_p1"}, {"call_w", "test_bar_w"}, {"call_p2", "test_bar_p2"}});
+    declareToolCalls({
+        {"call_p1", "test_bar_p1"},
+        {"call_w",  "test_bar_w" },
+        {"call_p2", "test_bar_p2"}
+    });
 
     auto trace = std::make_shared<std::vector<TraceEntry>>();
     std::vector<std::unique_ptr<agentxx::tools::XXToolBase>> tools;
@@ -370,9 +372,8 @@ asio::awaitable<void> test_exclusive_tool_is_barrier() {
     XX_TEST_EXPECT_TRUE(p1End <= wStart);
     XX_TEST_EXPECT_TRUE(wEnd <= p2Start);
 
-    const auto results = toolResultsAfterLastAssistant(
-        agent.agentContext->sessions->get("toolcall_par_2")
-    );
+    const auto results
+        = toolResultsAfterLastAssistant(agent.agentContext->sessions->get("toolcall_par_2"));
     XX_TEST_EXPECT_EQ(results.size(), size_t{3});
     if (results.size() == 3) {
         XX_TEST_EXPECT_EQ(results[0].first, std::string{"call_p1"});
@@ -392,16 +393,20 @@ asio::awaitable<void> test_parallel_concurrency_limit() {
     auto sim     = startDaSimServer();
     auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
 
-    auto cfg                 = std::make_shared<agentxx::agent::AgentConfig>();
-    cfg->model.baseUrl       = baseUrl;
-    cfg->model.apiKey        = "EMPTY";
-    cfg->model.modelName     = "test-sim";
-    cfg->prompt.systemPrompt = "You are a helpful assistant.";
+    auto cfg                        = std::make_shared<agentxx::agent::AgentConfig>();
+    cfg->model.baseUrl              = baseUrl;
+    cfg->model.apiKey               = "EMPTY";
+    cfg->model.modelName            = "test-sim";
+    cfg->prompt.systemPrompt        = "You are a helpful assistant.";
     cfg->toolParallelMaxConcurrency = 2;
 
     g_da_sim_response_content = "Limited tools done.";
     g_da_sim_delay_ms         = 0;
-    declareToolCalls({{"call_l1", "test_lim_a"}, {"call_l2", "test_lim_b"}, {"call_l3", "test_lim_c"}});
+    declareToolCalls({
+        {"call_l1", "test_lim_a"},
+        {"call_l2", "test_lim_b"},
+        {"call_l3", "test_lim_c"}
+    });
 
     auto trace = std::make_shared<std::vector<TraceEntry>>();
     std::vector<std::unique_ptr<agentxx::tools::XXToolBase>> tools;
@@ -418,9 +423,8 @@ asio::awaitable<void> test_parallel_concurrency_limit() {
     // 同时执行数不超过配置上限 (3 个调用分两批: 2 + 1)
     XX_TEST_EXPECT_EQ(maxConcurrentOf(trace), size_t{2});
 
-    const auto results = toolResultsAfterLastAssistant(
-        agent.agentContext->sessions->get("toolcall_par_3")
-    );
+    const auto results
+        = toolResultsAfterLastAssistant(agent.agentContext->sessions->get("toolcall_par_3"));
     XX_TEST_EXPECT_EQ(results.size(), size_t{3});
     if (results.size() == 3) {
         XX_TEST_EXPECT_EQ(results[0].first, std::string{"call_l1"});
@@ -440,23 +444,28 @@ asio::awaitable<void> test_parallel_cancel_keeps_completed() {
     auto sim     = startDaSimServer();
     auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
 
-    auto cfg                 = std::make_shared<agentxx::agent::AgentConfig>();
-    cfg->model.baseUrl       = baseUrl;
-    cfg->model.apiKey        = "EMPTY";
-    cfg->model.modelName     = "test-sim";
-    cfg->prompt.systemPrompt = "You are a helpful assistant.";
+    auto cfg                        = std::make_shared<agentxx::agent::AgentConfig>();
+    cfg->model.baseUrl              = baseUrl;
+    cfg->model.apiKey               = "EMPTY";
+    cfg->model.modelName            = "test-sim";
+    cfg->prompt.systemPrompt        = "You are a helpful assistant.";
     cfg->toolParallelMaxConcurrency = 4;
 
     g_da_sim_response_content = "";
     g_da_sim_delay_ms         = 0;
     // 声明顺序: 快 (并行安全, 完成) → 慢 (并行安全, 取消时仍在跑) → 独占 (未启动)
-    declareToolCalls({{"call_fast", "test_can_fast"}, {"call_slow", "test_can_slow"}, {"call_never", "test_can_never"}});
+    declareToolCalls({
+        {"call_fast",  "test_can_fast" },
+        {"call_slow",  "test_can_slow" },
+        {"call_never", "test_can_never"}
+    });
 
     auto trace = std::make_shared<std::vector<TraceEntry>>();
     std::vector<std::unique_ptr<agentxx::tools::XXToolBase>> tools;
     tools.push_back(std::make_unique<TraceTool>("test_can_fast", trace, 30, true));
     tools.push_back(std::make_unique<TraceTool>("test_can_slow", trace, 800, true));
-    tools.push_back(std::make_unique<TraceTool>("test_can_never", trace, 10, /*parallelSafe=*/false));
+    tools.push_back(std::make_unique<TraceTool>("test_can_never", trace, 10, /*parallelSafe=*/false)
+    );
 
     ParallelTestAgent agent(cfg, std::move(tools));
     co_await agent.init();
@@ -469,8 +478,8 @@ asio::awaitable<void> test_parallel_cancel_keeps_completed() {
         asio::steady_timer timer(ex);
         const auto         deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
         while (std::chrono::steady_clock::now() < deadline) {
-            bool fastDone     = false;
-            bool slowStarted  = false;
+            bool fastDone    = false;
+            bool slowStarted = false;
             for (const auto& e : *trace) {
                 if (e.name == "test_can_fast" && !e.isStart) {
                     fastDone = true;
@@ -505,10 +514,8 @@ asio::awaitable<void> test_parallel_cancel_keeps_completed() {
         ),
         asio::co_spawn(ex, cancelWatcher(), asio::deferred)
     );
-    auto  waitResult = co_await group.async_wait(
-        asio::experimental::wait_for_all(),
-        asio::use_awaitable
-    );
+    auto waitResult
+        = co_await group.async_wait(asio::experimental::wait_for_all(), asio::use_awaitable);
     auto& turnExc    = std::get<1>(waitResult);
     auto& turnResult = std::get<2>(waitResult);
     auto& watcherExc = std::get<3>(waitResult);
@@ -519,11 +526,9 @@ asio::awaitable<void> test_parallel_cancel_keeps_completed() {
     XX_TEST_EXPECT_EQ(turnResult.errorMessage, std::string{"Cancelled by user"});
 
     // 取消时独占工具未启动: 其执行体不应被调用
-    const bool neverRan = std::none_of(
-        trace->begin(),
-        trace->end(),
-        [](const TraceEntry& e) { return e.name == "test_can_never"; }
-    );
+    const bool neverRan = std::none_of(trace->begin(), trace->end(), [](const TraceEntry& e) {
+        return e.name == "test_can_never";
+    });
     XX_TEST_EXPECT_TRUE(neverRan);
 
     // 已完成的快工具结果保留; 慢工具与未启动的独占工具补 [User canceled]
@@ -547,11 +552,10 @@ asio::awaitable<void> test_parallel_cancel_keeps_completed() {
         asio::steady_timer timer(ex);
         const auto         deadline = std::chrono::steady_clock::now() + std::chrono::seconds{3};
         while (std::chrono::steady_clock::now() < deadline) {
-            const bool slowDone = std::any_of(
-                trace->begin(),
-                trace->end(),
-                [](const TraceEntry& e) { return e.name == "test_can_slow" && !e.isStart; }
-            );
+            const bool slowDone
+                = std::any_of(trace->begin(), trace->end(), [](const TraceEntry& e) {
+                      return e.name == "test_can_slow" && !e.isStart;
+                  });
             if (slowDone) {
                 break;
             }

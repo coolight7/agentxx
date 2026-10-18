@@ -2,8 +2,8 @@
 #include "agentxx-test/core/test_agent.h" // 本地 LLM 模拟器 startDaSimServer/g_da_sim_*
 #include "agentxx-test/test_coro_util.h"
 
-#include "agentxx/agent/base_agent.h"
 #include "agentxx/agent/assembly_snapshot.h"
+#include "agentxx/agent/base_agent.h"
 #include "agentxx/agent/code_agent.h"
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/context.h"
@@ -130,10 +130,8 @@ struct Fixture {
     }
 };
 
-asio::awaitable<std::shared_ptr<Fixture>> makeFixture(
-    std::string                      sessionId,
-    const agentxx::agent::AgentConfig& tweaks
-) {
+asio::awaitable<std::shared_ptr<Fixture>>
+    makeFixture(std::string sessionId, const agentxx::agent::AgentConfig& tweaks) {
     auto fx                   = std::make_shared<Fixture>();
     fx->sim                   = startDaSimServer();
     g_da_sim_response_content = "prompt stability response";
@@ -160,8 +158,9 @@ asio::awaitable<std::shared_ptr<Fixture>> makeFixture(
     fx->endpoint    = std::make_shared<agentxx::agent::SessionServerAgentIO>(ex, fx->agent, scCfg);
 
     auto [clientOwn, serverT] = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
-    fx->endpoint
-        ->setTransport(std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT)));
+    fx->endpoint->setTransport(
+        std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT))
+    );
     fx->clientT = std::move(clientOwn);
 
     asio::co_spawn(
@@ -268,10 +267,7 @@ void test_prompt_section_order() {
     // JSON 往返: 新形态 {text, order, source} 与旧形态 (纯字符串) 都接受
     auto j = prompt.toJson();
     XX_TEST_EXPECT_TRUE(j["appendSystemPrompts"]["later"].is_object());
-    XX_TEST_EXPECT_EQ(
-        j["appendSystemPrompts"]["later"].value("order", 0),
-        20
-    );
+    XX_TEST_EXPECT_EQ(j["appendSystemPrompts"]["later"].value("order", 0), 20);
 
     agentxx::agent::AgentPrompt restored;
     restored.appendSystemPrompts.clear();
@@ -288,14 +284,11 @@ void test_prompt_section_order() {
     utilxx_base::Json legacy;
     legacy["appendSystemPrompts"] = utilxx_base::Json{
         {"legacy-key", "legacy text"},
-        {"later",      nullptr        },
+        {"later",      nullptr      },
     };
     restored.mergeFromJson(legacy);
     XX_TEST_EXPECT_TRUE(restored.appendSystemPrompts.count("later") == 0);
-    XX_TEST_EXPECT_EQ(
-        restored.appendSystemPrompts["legacy-key"],
-        std::string{"legacy text"}
-    );
+    XX_TEST_EXPECT_EQ(restored.appendSystemPrompts["legacy-key"], std::string{"legacy text"});
     XX_TEST_EXPECT_TRUE(restored.removeAppendSection("legacy-key"));
     XX_TEST_EXPECT_TRUE(restored.appendSystemPrompts.count("legacy-key") == 0);
     XX_TEST_EXPECT_TRUE(!restored.removeAppendSection("legacy-key"));
@@ -385,8 +378,7 @@ agentxx::middleware::SkillMiddlewareHandle* findSkillMiddleware(agentxx::agent::
         return nullptr;
     }
     for (auto& handle : ctx->middlewareHandleContext->handles) {
-        if (auto* skill
-            = dynamic_cast<agentxx::middleware::SkillMiddlewareHandle*>(handle.get())) {
+        if (auto* skill = dynamic_cast<agentxx::middleware::SkillMiddlewareHandle*>(handle.get())) {
             return skill;
         }
     }
@@ -394,7 +386,11 @@ agentxx::middleware::SkillMiddlewareHandle* findSkillMiddleware(agentxx::agent::
 }
 
 /// 写一个技能目录 (name 目录 + SKILL.md, 含 metadata)
-void writeSkillDir(const fs::path& parent, const std::string& name, const std::string& description) {
+void writeSkillDir(
+    const fs::path&    parent,
+    const std::string& name,
+    const std::string& description
+) {
     const auto dir = parent / name;
     fs::create_directories(dir);
     std::ofstream ofs{utilxx_base::utf8ToPath((dir / "SKILL.md").string())};
@@ -499,9 +495,10 @@ public:
                 .perSession          = false,
                 .refreshOnCompaction = true,
                 .timeout             = std::chrono::milliseconds{1000},
-                .build =
-                    [this](const agentxx::agent::PromptRefreshContext& /*rc*/)
-                    -> asio::awaitable<std::optional<std::string>> { co_return text_; },
+                .build               = [this](const agentxx::agent::PromptRefreshContext& /*rc*/)
+                    -> asio::awaitable<std::optional<std::string>> {
+                    co_return text_;
+                },
             });
         }
     }
@@ -514,9 +511,9 @@ public:
 
 private:
 
-    std::string                                          source_;
-    std::string                                          text_;
-    std::weak_ptr<agentxx::agent::PromptSourceRegistry>   registry_;
+    std::string                                         source_;
+    std::string                                         text_;
+    std::weak_ptr<agentxx::agent::PromptSourceRegistry> registry_;
 };
 
 asio::awaitable<void> test_dynamic_section_tail() {
@@ -663,7 +660,7 @@ asio::awaitable<void> test_refresh_after_compaction() {
     XX_TEST_EXPECT_TRUE(snapshot.contains("prompt_sources"));
     if (snapshot.contains("prompt_sources")) {
         const auto& ps = snapshot["prompt_sources"];
-        XX_TEST_EXPECT_TRUE(ps.value("count", 0) >= 2); // memory + skills
+        XX_TEST_EXPECT_TRUE(ps.value("count", 0) >= 2);                        // memory + skills
         XX_TEST_EXPECT_TRUE(ps.dump().find("MEMORY-V3") == std::string::npos); // 不含正文
     }
 

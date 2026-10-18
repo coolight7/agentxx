@@ -687,7 +687,16 @@ static constexpr int kSearchCandidateFactor = 3;
 /// 数据/文档类文件的扩展名与语言名 (两套写法合在一张表内:
 /// 语言名如 "markdown" 由提取器给出, 扩展名如 "md"/"json" 用于只有路径的结果)
 static constexpr std::string_view kDocOrDataTypes[] = {
-    "json", "md", "mdx", "markdown", "yaml", "yml", "xml", "html", "htm", "css",
+    "json",
+    "md",
+    "mdx",
+    "markdown",
+    "yaml",
+    "yml",
+    "xml",
+    "html",
+    "htm",
+    "css",
 };
 
 /// 扩展名/语言名是否属于数据/文档类 (大小写不敏感: 扩展名可能是 .MD / .Json)

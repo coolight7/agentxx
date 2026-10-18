@@ -201,10 +201,10 @@ std::string g_da_sim_fail_body;
 int g_da_sim_tool_calls_remaining = -1;
 
 // 模拟前缀缓存 (见 test_agent.h 说明)
-bool             g_da_sim_prefix_cache_enabled = false;
-double           g_da_sim_last_cache_ratio      = 0.0;
-int              g_da_sim_last_cached_tokens    = 0;
-int              g_da_sim_last_prompt_tokens    = 0;
+bool   g_da_sim_prefix_cache_enabled = false;
+double g_da_sim_last_cache_ratio     = 0.0;
+int    g_da_sim_last_cached_tokens   = 0;
+int    g_da_sim_last_prompt_tokens   = 0;
 /// 上一条成功请求 (模拟缓存的前缀基准)
 static utilxx_base::Json g_da_sim_prev_for_cache = utilxx_base::Json::object();
 
@@ -241,10 +241,10 @@ void DaSimServer::stop() {
         thr.join();
     }
     svr.reset();
-    port                          = 0;
-    g_da_sim_delay_ms             = 0;
-    g_da_sim_fail_count           = 0;
-    g_da_sim_fail_status          = 0;
+    port                 = 0;
+    g_da_sim_delay_ms    = 0;
+    g_da_sim_fail_count  = 0;
+    g_da_sim_fail_status = 0;
     g_da_sim_fail_body.clear();
     g_da_sim_tool_calls           = utilxx_base::Json::array();
     g_da_sim_tool_calls_remaining = -1;
@@ -260,16 +260,16 @@ DaSimServer startDaSimServer() {
     g_da_sim_delay_ms          = 0;
     g_da_sim_last_request      = utilxx_base::Json::object();
     g_da_sim_requests.clear();
-    g_da_sim_request_count        = 0;
-    g_da_sim_fail_count           = 0;
-    g_da_sim_fail_status          = 0;
+    g_da_sim_request_count = 0;
+    g_da_sim_fail_count    = 0;
+    g_da_sim_fail_status   = 0;
     g_da_sim_fail_body.clear();
-    g_da_sim_tool_calls_remaining  = -1;
-    g_da_sim_prefix_cache_enabled  = false;
-    g_da_sim_last_cache_ratio      = 0.0;
-    g_da_sim_last_cached_tokens    = 0;
-    g_da_sim_last_prompt_tokens    = 0;
-    g_da_sim_prev_for_cache        = utilxx_base::Json::object();
+    g_da_sim_tool_calls_remaining = -1;
+    g_da_sim_prefix_cache_enabled = false;
+    g_da_sim_last_cache_ratio     = 0.0;
+    g_da_sim_last_cached_tokens   = 0;
+    g_da_sim_last_prompt_tokens   = 0;
+    g_da_sim_prev_for_cache       = utilxx_base::Json::object();
     utilxx::HttpClient::clearConnectionPool();
 
     DaSimServer sim;
@@ -311,8 +311,9 @@ DaSimServer startDaSimServer() {
 
                 if (failing) {
                     const auto status = static_cast<http::status>(
-                        g_da_sim_fail_status > 0 ? g_da_sim_fail_status
-                                                 : static_cast<int>(http::status::internal_server_error)
+                        g_da_sim_fail_status > 0
+                            ? g_da_sim_fail_status
+                            : static_cast<int>(http::status::internal_server_error)
                     );
                     resp.result(status);
                     resp.set(http::field::content_type, "application/json");
@@ -355,14 +356,14 @@ DaSimServer startDaSimServer() {
                         return req["tools"].dump();
                     };
 
-                    respPromptTokens = estimateTokens(j["messages"]);
+                    respPromptTokens     = estimateTokens(j["messages"]);
                     const auto toolsDump = toolsDumpOf(j);
                     if (!toolsDump.empty()) {
                         respPromptTokens += estimateTokens(j["tools"]);
                     }
 
-                    int cached = 0;
-                    const auto& prev = g_da_sim_prev_for_cache;
+                    int         cached = 0;
+                    const auto& prev   = g_da_sim_prev_for_cache;
                     if (prev.is_object() && toolsDumpOf(prev) == toolsDump) {
                         // 工具定义一致 → 工具部分整体命中
                         if (!toolsDump.empty()) {
@@ -385,14 +386,14 @@ DaSimServer startDaSimServer() {
                     if (cached > respPromptTokens) {
                         cached = respPromptTokens;
                     }
-                    respCachedTokens              = cached;
-                    g_da_sim_last_cached_tokens   = cached;
-                    g_da_sim_last_prompt_tokens   = respPromptTokens;
-                    g_da_sim_last_cache_ratio     = respPromptTokens > 0
-                                                        ? static_cast<double>(cached)
-                                                              / static_cast<double>(respPromptTokens)
-                                                        : 0.0;
-                    g_da_sim_prev_for_cache       = j;
+                    respCachedTokens            = cached;
+                    g_da_sim_last_cached_tokens = cached;
+                    g_da_sim_last_prompt_tokens = respPromptTokens;
+                    g_da_sim_last_cache_ratio
+                        = respPromptTokens > 0
+                              ? static_cast<double>(cached) / static_cast<double>(respPromptTokens)
+                              : 0.0;
+                    g_da_sim_prev_for_cache = j;
                 }
 
                 bool stream = j.value("stream", false);
@@ -492,13 +493,14 @@ DaSimServer startDaSimServer() {
                         ev["object"]  = "chat.completion.chunk";
                         ev["choices"] = utilxx_base::Json::array();
                         ev["usage"]   = utilxx_base::Json{
-                            {"prompt_tokens", respPromptTokens},
-                            {"completion_tokens", g_da_sim_completion_tokens},
-                            {"total_tokens", respPromptTokens + g_da_sim_completion_tokens},
+                              {"prompt_tokens",     respPromptTokens                             },
+                              {"completion_tokens", g_da_sim_completion_tokens                   },
+                              {"total_tokens",      respPromptTokens + g_da_sim_completion_tokens},
                         };
                         if (g_da_sim_prefix_cache_enabled) {
-                            ev["usage"]["prompt_tokens_details"]
-                                = utilxx_base::Json{{"cached_tokens", respCachedTokens}};
+                            ev["usage"]["prompt_tokens_details"] = utilxx_base::Json{
+                                {"cached_tokens", respCachedTokens}
+                            };
                         }
                         sseBody += "data: " + ev.dump() + "\n\n";
                     }
@@ -533,8 +535,9 @@ DaSimServer startDaSimServer() {
                     usage["completion_tokens"] = g_da_sim_completion_tokens;
                     usage["total_tokens"]      = respPromptTokens + g_da_sim_completion_tokens;
                     if (g_da_sim_prefix_cache_enabled) {
-                        usage["prompt_tokens_details"]
-                            = utilxx_base::Json{{"cached_tokens", respCachedTokens}};
+                        usage["prompt_tokens_details"] = utilxx_base::Json{
+                            {"cached_tokens", respCachedTokens}
+                        };
                     }
 
                     auto respBody       = utilxx_base::Json::object();
@@ -983,9 +986,8 @@ asio::awaitable<void> test_agent_tool_calls() {
                 XX_TEST_EXPECT_TRUE(
                     gs.has_channel(agentxx::middleware::MiddlewareContext::channel_messagesMeta)
                 );
-                const auto meta = gs.get(
-                    agentxx::middleware::MiddlewareContext::channel_messagesMeta
-                );
+                const auto meta
+                    = gs.get(agentxx::middleware::MiddlewareContext::channel_messagesMeta);
                 XX_TEST_EXPECT_TRUE(meta.is_object());
 
                 auto session = agent.agentContext->sessions->get("tool_test");
@@ -1011,7 +1013,10 @@ asio::awaitable<void> test_agent_tool_calls() {
                         static_cast<int64_t>(0)
                     );
                 }
-                XX_TEST_EXPECT_EQ(agentxx::nodes::evalHasToolCallsCondition(gs), std::string{"false"});
+                XX_TEST_EXPECT_EQ(
+                    agentxx::nodes::evalHasToolCallsCondition(gs),
+                    std::string{"false"}
+                );
             }
         }
     }
@@ -1074,30 +1079,31 @@ asio::awaitable<void> test_agent_has_tool_calls_condition() {
         );
         state.overwrite(
             agentxx::middleware::MiddlewareContext::channel_messagesMeta,
-            neograph::json{{"count", 5}}
+            neograph::json{
+                {"count", 5}
+        }
         );
         XX_TEST_EXPECT_EQ(evalHasToolCallsCondition(state), std::string{"false"});
     }
     // (4) 兼容路径: 图状态自带 messages 通道 (自定义图)
     {
         neograph::graph::GraphState state;
-        neograph::json             msgs = neograph::json::array();
-        msgs.push_back(neograph::json{{"role", "user"}, {"content", "hi"}});
-        msgs.push_back(
-            neograph::json{
-                {"role",       "assistant"          },
-                {"content",    "calling"            },
-                {"tool_calls", neograph::json::array({neograph::json{{"id", "call_1"}}})},
-            }
-        );
+        neograph::json              msgs = neograph::json::array();
+        msgs.push_back(neograph::json{
+            {"role",    "user"},
+            {"content", "hi"  }
+        });
+        msgs.push_back(neograph::json{
+            {"role",       "assistant"                                              },
+            {"content",    "calling"                                                },
+            {"tool_calls", neograph::json::array({neograph::json{{"id", "call_1"}}})},
+        });
         // 工具结果在 assistant 之后: 仍应回溯到该 assistant 并返回 true (与内置同语义)
-        msgs.push_back(
-            neograph::json{
-                {"role",         "tool"    },
-                {"content",      "result"  },
-                {"tool_call_id", "call_1"  },
-            }
-        );
+        msgs.push_back(neograph::json{
+            {"role",         "tool"  },
+            {"content",      "result"},
+            {"tool_call_id", "call_1"},
+        });
         state.init_channel(
             "messages",
             neograph::graph::ReducerType::APPEND,
@@ -1113,9 +1119,9 @@ asio::awaitable<void> test_agent_has_tool_calls_condition() {
             neograph::graph::ReducerType::APPEND,
             neograph::graph::ReducerRegistry::instance().get("append"),
             neograph::json::array({
-                neograph::json{{"role", "user"}, {"content", "hi"}},
+                neograph::json{{"role", "user"},      {"content", "hi"}          },
                 neograph::json{{"role", "assistant"}, {"content", "plain answer"}},
-            })
+        })
         );
         XX_TEST_EXPECT_EQ(evalHasToolCallsCondition(state2), std::string{"false"});
     }
@@ -1133,7 +1139,9 @@ asio::awaitable<void> test_agent_has_tool_calls_condition() {
         );
         state.overwrite(
             agentxx::middleware::MiddlewareContext::channel_messagesMeta,
-            neograph::json{{"last_assistant_tool_calls", 1}}
+            neograph::json{
+                {"last_assistant_tool_calls", 1}
+        }
         );
 
         auto cond = registry.condition(std::string{agentxx::nodes::kConditionHasToolCalls});
@@ -1187,10 +1195,11 @@ asio::awaitable<void> test_agent_llm_error_policy() {
         g_da_sim_request_count = 0;
         g_da_sim_fail_count    = 1;
         g_da_sim_fail_status   = 401;
-        g_da_sim_fail_body     = R"({"error":{"type":"authentication_error","message":"Invalid API key"}})";
+        g_da_sim_fail_body
+            = R"({"error":{"type":"authentication_error","message":"Invalid API key"}})";
 
-        auto cfg      = makeCfg();
-        auto agent    = std::make_shared<agentxx::agent::CodeAgent>(cfg);
+        auto cfg   = makeCfg();
+        auto agent = std::make_shared<agentxx::agent::CodeAgent>(cfg);
         co_await agent->init();
         (void)co_await agent->runTurnAsync("llm_err_auth", "hello", nullptr);
 
@@ -1230,7 +1239,7 @@ asio::awaitable<void> test_agent_llm_error_policy() {
         g_da_sim_fail_body
             = R"({"error":{"code":"context_length_exceeded","message":"maximum context length exceeded"}})";
 
-        auto cfg   = makeCfg();
+        auto cfg       = makeCfg();
         auto realAgent = std::make_shared<agentxx::agent::CodeAgent>(cfg);
         co_await realAgent->init();
         const auto result = co_await realAgent->runTurnAsync("llm_err_overflow2", "hello", nullptr);
@@ -1247,7 +1256,6 @@ asio::awaitable<void> test_agent_llm_error_policy() {
     sim.stop();
     co_return;
 }
-
 
 /// - 会话上下文里能查到本轮用户正文 (权威面)
 /// - 图状态序列化载荷既不含该正文, 也远小于上下文本身 (只含控制通道)
@@ -1269,7 +1277,7 @@ asio::awaitable<void> test_agent_context_not_in_graph_state() {
     co_await agent.init();
 
     // 用户输入带唯一标记 + 8 KB 正文, 便于在图状态载荷里查找
-    const std::string marker = "MARKER_CTX_OUT_OF_GRAPH_STATE";
+    const std::string marker   = "MARKER_CTX_OUT_OF_GRAPH_STATE";
     std::string       bigInput = marker + std::string(8000, 'x');
 
     auto result = co_await agent.runTurnAsync("state_ctx_test", bigInput, nullptr);
@@ -1316,7 +1324,8 @@ asio::awaitable<void> test_agent_context_not_in_graph_state() {
     co_return;
 }
 
-asio::awaitable<void> test_agent_multi_turn() {    auto sim     = startDaSimServer();
+asio::awaitable<void> test_agent_multi_turn() {
+    auto sim     = startDaSimServer();
     auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
 
     auto cfg                 = std::make_shared<agentxx::agent::AgentConfig>();
@@ -1890,9 +1899,9 @@ asio::awaitable<void> test_agent_system_prompt_session_dirs() {
     // 1) 占位符替换
     {
         agentxx::agent::PromptSessionVars vars;
-        vars.workDir   = "/work/dir";
-        vars.tempDir   = "/tmp/agentxx/s1";
-        vars.sessionId = "s1";
+        vars.workDir    = "/work/dir";
+        vars.tempDir    = "/tmp/agentxx/s1";
+        vars.sessionId  = "s1";
         const auto text = agentxx::agent::AgentPrompt::renderVars(
             R"_(dir=${work_dir} temp=${temp_dir} sid=${session_id} json={"a":1} brace={)_",
             vars
@@ -1962,14 +1971,12 @@ asio::awaitable<void> test_agent_system_prompt_session_dirs() {
         auto session = agent->getContext()->getSession(sessionId);
         XX_TEST_EXPECT_TRUE(session != nullptr);
         if (session) {
-            session->setWorktreeBinding(
-                agentxx::agent::WorktreeBinding{
-                    .name     = "prompt_dirs_wt",
-                    .path     = "/wt/prompt_dirs_wt",
-                    .branch   = "agentxx/wt-prompt_dirs_wt",
-                    .repoRoot = "/repo",
-                }
-            );
+            session->setWorktreeBinding(agentxx::agent::WorktreeBinding{
+                .name     = "prompt_dirs_wt",
+                .path     = "/wt/prompt_dirs_wt",
+                .branch   = "agentxx/wt-prompt_dirs_wt",
+                .repoRoot = "/repo",
+            });
             XX_TEST_EXPECT_EQ(
                 agent->getContext()->getSessionWorkDir(sessionId),
                 std::string{"/wt/prompt_dirs_wt"}
@@ -2164,8 +2171,8 @@ asio::awaitable<TestResult> run_agent_tests() {
         co_await test_agent_conversation_turn();
         co_await test_agent_tool_calls();
         co_await test_agent_multi_turn();
-    co_await test_agent_has_tool_calls_condition();
-    co_await test_agent_context_not_in_graph_state();
+        co_await test_agent_has_tool_calls_condition();
+        co_await test_agent_context_not_in_graph_state();
         co_await test_agent_large_history();
         co_await test_agent_nonstream();
         co_await test_agent_persistence_datadir_gate();

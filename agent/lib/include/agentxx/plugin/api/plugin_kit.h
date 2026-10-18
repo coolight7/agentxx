@@ -15,7 +15,6 @@
 #include "agentxx/plugin/api/agentxx_ui_kit.g.h"
 #include "agentxx/plugin/api/client_plugin_api.h"
 #include "agentxx/plugin/api/plugin_api.h"
-#include "pluginxx/ui.h"
 #include "asio/awaitable.hpp"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -25,6 +24,7 @@
 #include "fmt/format.h"
 #include "fmt/ranges.h"
 #include "pluginxx/kit/kit.h"
+#include "pluginxx/ui.h"
 #include "utilxx_base/container_util.h"
 #include "utilxx_base/json.h"
 #include "utilxx_base/json_view.h"
@@ -105,29 +105,29 @@ using pluginxx::yield;
 
 /// agent 侧接口表聚合 (一次查询; 成员为 NULL 表示主程序未实现该接口)
 struct AgentIfaces {
-    const AgentxxPluginToolsIface*      tools        = nullptr; ///< "agentxx.agent.tools"
-    const AgentxxPluginPermissionIface* permission   = nullptr; ///< "agentxx.agent.permission"
+    const AgentxxPluginToolsIface*      tools      = nullptr; ///< "agentxx.agent.tools"
+    const AgentxxPluginPermissionIface* permission = nullptr; ///< "agentxx.agent.permission"
     /// "agentxx.agent.hooks": 钩子登记 (基础两项 + 有序登记与清单三项, 同一张表)
-    const AgentxxPluginHooksIface*      hooks        = nullptr;
-    const PluginxxEventsIface*          events       = nullptr; ///< "pluginxx.events"
-    const PluginxxCapabilitiesIface*    capabilities = nullptr; ///< "pluginxx.capabilities"
-    const PluginxxSchedulerIface*       scheduler    = nullptr; ///< "pluginxx.scheduler"
+    const AgentxxPluginHooksIface*   hooks        = nullptr;
+    const PluginxxEventsIface*       events       = nullptr; ///< "pluginxx.events"
+    const PluginxxCapabilitiesIface* capabilities = nullptr; ///< "pluginxx.capabilities"
+    const PluginxxSchedulerIface*    scheduler    = nullptr; ///< "pluginxx.scheduler"
     /// "agentxx.agent.session": 会话共享存储与提示
-    const AgentxxPluginSessionIface*    session      = nullptr; ///< "agentxx.agent.session"
+    const AgentxxPluginSessionIface* session = nullptr; ///< "agentxx.agent.session"
     /// "agentxx.agent.context": 会话 LLM 上下文查询 (图状态不含上下文内容)
-    const AgentxxPluginContextIface*    context      = nullptr; ///< "agentxx.agent.context"
-    const PluginxxPluginsIface*         plugins      = nullptr; ///< "pluginxx.plugins"
-    const PluginxxConfigIface*          config       = nullptr; ///< "pluginxx.config"
-    const AgentxxPluginPromptIface*     prompt       = nullptr; ///< "agentxx.agent.prompt"
-    const PluginxxJsonIface*            json         = nullptr; ///< "pluginxx.json"
-    const PluginxxLogIface*             log          = nullptr; ///< "pluginxx.log"
-    const AgentxxPluginResourcesIface*  resources    = nullptr; ///< "agentxx.agent.resources"
-    const AgentxxPluginModelIface*      model        = nullptr; ///< "agentxx.agent.model"
-    const PluginxxCancelIface*          cancel       = nullptr; ///< "pluginxx.cancel"
-    const AgentxxPluginGraphIface*      graph        = nullptr; ///< "agentxx.agent.graph"
-    const PluginxxTasksIface*           tasks        = nullptr; ///< "pluginxx.tasks"
+    const AgentxxPluginContextIface*   context   = nullptr; ///< "agentxx.agent.context"
+    const PluginxxPluginsIface*        plugins   = nullptr; ///< "pluginxx.plugins"
+    const PluginxxConfigIface*         config    = nullptr; ///< "pluginxx.config"
+    const AgentxxPluginPromptIface*    prompt    = nullptr; ///< "agentxx.agent.prompt"
+    const PluginxxJsonIface*           json      = nullptr; ///< "pluginxx.json"
+    const PluginxxLogIface*            log       = nullptr; ///< "pluginxx.log"
+    const AgentxxPluginResourcesIface* resources = nullptr; ///< "agentxx.agent.resources"
+    const AgentxxPluginModelIface*     model     = nullptr; ///< "agentxx.agent.model"
+    const PluginxxCancelIface*         cancel    = nullptr; ///< "pluginxx.cancel"
+    const AgentxxPluginGraphIface*     graph     = nullptr; ///< "agentxx.agent.graph"
+    const PluginxxTasksIface*          tasks     = nullptr; ///< "pluginxx.tasks"
     /// "agentxx.agent.feature": 功能点 (登记实现 / 声明插件点 / 调用 / 读清单)
-    const AgentxxPluginFeatureIface*    feature      = nullptr;
+    const AgentxxPluginFeatureIface* feature = nullptr;
     /// "pluginxx.coroutine_runtime": 协程驱动 (host driver/wake 协议)。
     const PluginxxCoroutineRuntimeIface* coroutineRuntime = nullptr;
 
@@ -166,7 +166,7 @@ struct AgentIfaces {
         f.graph  = queryInterface<AgentxxPluginGraphIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_GRAPH);
         f.feature
             = queryInterface<AgentxxPluginFeatureIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_FEATURE);
-        f.tasks  = queryInterface<PluginxxTasksIface>(host, PLUGINXX_IFACE_TASKS);
+        f.tasks = queryInterface<PluginxxTasksIface>(host, PLUGINXX_IFACE_TASKS);
         f.coroutineRuntime
             = queryInterface<PluginxxCoroutineRuntimeIface>(host, PLUGINXX_IFACE_COROUTINE_RUNTIME);
         return f;
@@ -309,14 +309,16 @@ public:
     ToolSchemaBuilder& object(
         std::string_view name,
         std::string_view desc,
-        bool             required = false,
+        bool             required  = false,
         std::string_view valueType = "string"
     ) {
         utilxx_base::Json prop;
         prop["type"]        = "object";
         prop["description"] = toolPromptArgDesc(prompt_, name, desc);
         if (!valueType.empty()) {
-            prop["additionalProperties"] = utilxx_base::Json{{"type", std::string(valueType)}};
+            prop["additionalProperties"] = utilxx_base::Json{
+                {"type", std::string(valueType)}
+            };
         }
         properties_[std::string(name)] = std::move(prop);
         if (required) {
@@ -342,9 +344,9 @@ public:
         bool                     required = false
     ) {
         utilxx_base::Json prop;
-        prop["type"]        = "array";
-        prop["description"] = toolPromptArgDesc(prompt_, name, desc);
-        prop["items"]       = itemSchema;
+        prop["type"]                   = "array";
+        prop["description"]            = toolPromptArgDesc(prompt_, name, desc);
+        prop["items"]                  = itemSchema;
         properties_[std::string(name)] = std::move(prop);
         if (required) {
             required_.push_back(std::string(name));
@@ -479,7 +481,7 @@ public:
         if (!host || !iface.context || !iface.context->get_messages) {
             return {};
         }
-        auto     tidSv = PluginStringView::from(tid.data(), tid.size());
+        auto           tidSv = PluginStringView::from(tid.data(), tid.size());
         PluginxxString out{nullptr, 0};
         if (iface.context->get_messages(host, &tidSv, &out) != 0 || !out.data) {
             return {};
@@ -751,7 +753,7 @@ inline std::string wrapFeatureAnswer(std::string_view raw) {
             && (json.contains("value") || json.contains("disable") || json.contains("verdict"))) {
             return std::string{raw};
         }
-        Json wrapped = Json::object();
+        Json wrapped     = Json::object();
         wrapped["value"] = std::move(json);
         return wrapped.dump();
     } catch (...) {
@@ -893,14 +895,14 @@ inline int32_t defineFeaturePoint(const PluginBase& ctx, const FeaturePointSpec&
         return -1;
     }
     AgentxxPluginFeaturePointSpec native{};
-    native.struct_size    = sizeof(AgentxxPluginFeaturePointSpec);
-    native.type           = AGENTXX_PLUGIN_FEATURE_TYPE_PROVIDE;
+    native.struct_size     = sizeof(AgentxxPluginFeaturePointSpec);
+    native.type            = AGENTXX_PLUGIN_FEATURE_TYPE_PROVIDE;
     native.impl_timeout_ms = spec.implTimeoutMs;
-    native.id             = PluginStringView::from(spec.id.data(), spec.id.size());
-    native.title          = PluginStringView::from(spec.title.data(), spec.title.size());
-    native.depict         = PluginStringView::from(spec.depict.data(), spec.depict.size());
-    native.args_doc       = PluginStringView::from(spec.argsDoc.data(), spec.argsDoc.size());
-    native.result_doc     = PluginStringView::from(spec.resultDoc.data(), spec.resultDoc.size());
+    native.id              = PluginStringView::from(spec.id.data(), spec.id.size());
+    native.title           = PluginStringView::from(spec.title.data(), spec.title.size());
+    native.depict          = PluginStringView::from(spec.depict.data(), spec.depict.size());
+    native.args_doc        = PluginStringView::from(spec.argsDoc.data(), spec.argsDoc.size());
+    native.result_doc      = PluginStringView::from(spec.resultDoc.data(), spec.resultDoc.size());
     return ctx.iface.feature->define_point(ctx.host, &native);
 }
 
@@ -940,8 +942,8 @@ inline int32_t
     }
 
     struct ImplShim {
-        Ctx*                 ctx = nullptr;
-        std::decay_t<Fn>     fn;
+        Ctx*             ctx = nullptr;
+        std::decay_t<Fn> fn;
     };
 
     /// 异步实现的 provider 句柄 (拥有输入 Request, 由 promise.opCleanup_ 回收)
@@ -961,8 +963,8 @@ inline int32_t
     spec.point_id           = PluginStringView::from(pointId.data(), pointId.size());
     spec.user_data          = shim;
 
-    spec.impl_start = [](void*                         user_data,
-                         const PluginxxStringView*     /*point_id*/,
+    spec.impl_start = [](void* user_data,
+                         const PluginxxStringView* /*point_id*/,
                          const PluginxxStringView*     call_json,
                          const PluginxxOperatorNotify* notify,
                          PluginxxString*               error_out) -> void* {
@@ -1005,7 +1007,7 @@ inline int32_t
                 guard.failed("feature impl returned an empty task");
                 return nullptr;
             }
-            auto  h       = task.handle_;
+            auto h        = task.handle_;
             task.handle_  = nullptr;
             auto& p       = h.promise();
             p.notify_     = notify ? *notify : PluginxxOperatorNotify{nullptr, nullptr};
@@ -1085,7 +1087,6 @@ inline detail::FeatureCallAwaiter
         &ctx.bridge()
     };
 }
-
 
 /// ==================== (kit::tool / fast_tool / blocking_tool / hook / capability)
 /// ====================
@@ -1932,8 +1933,12 @@ inline void* hookStart(
     } else {
         /// Task<T> 钩子（通常 Task<void>）：由 promise 在协程结束后完成
         /// 通知，返回 Job 作为主程序可取消的 provider 句柄。
-        auto* job
-            = new JobT{shim, std::make_shared<std::atomic<bool>>(false), nullptr, std::move(request)};
+        auto* job = new JobT{
+            shim,
+            std::make_shared<std::atomic<bool>>(false),
+            nullptr,
+            std::move(request)
+        };
         auto task = invokeHook(shim->fn, *shim->ctx, pt, job->request.args());
         if (!task.handle_) {
             delete job;
@@ -1987,7 +1992,7 @@ inline void hook(Ctx& ctx, AgentxxPluginHookPoint point, HookFn&& fn) {
     spec.struct_size = sizeof(AgentxxPluginHookSpec);
     spec.point       = point;
     spec.user_data   = shim;
-    spec.hook_start = &detail::hookStart<Ctx, HookFn>;
+    spec.hook_start  = &detail::hookStart<Ctx, HookFn>;
     spec.hook_cancel = &detail::hookCancel<Ctx, HookFn>;
 
     if (ctx.iface.hooks && ctx.iface.hooks->register_hook) {
@@ -2035,7 +2040,7 @@ inline int64_t
     spec.depict      = PluginStringView::from(opts.depict.data(), opts.depict.size());
     spec.user_data   = shim;
     spec.hook_start  = &detail::hookStart<Ctx, HookFn>;
-    spec.hook_cancel  = &detail::hookCancel<Ctx, HookFn>;
+    spec.hook_cancel = &detail::hookCancel<Ctx, HookFn>;
 
     int64_t handle = 0;
     if (ctx.iface.hooks->register_hook_ex(ctx.host, &spec, &handle) != 0) {
@@ -2727,11 +2732,11 @@ public:
     /// - `variant`: 按钮样式 ("primary" / "secondary" / "ghost" / "link"; 空 = secondary)
     /// - `args`: 派发时回传给 handler 的参数 (客户端在动作参数里原样带上)
     pluginxx::ui::Item makeButton(
-        std::string              label,
-        Handler                  onClick = nullptr,
-        std::string              tone    = {},
-        utilxx_base::Json        args    = utilxx_base::Json::object(),
-        std::string              variant = {}
+        std::string       label,
+        Handler           onClick = nullptr,
+        std::string       tone    = {},
+        utilxx_base::Json args    = utilxx_base::Json::object(),
+        std::string       variant = {}
     ) {
         const std::string id = "act_" + std::to_string(++counter_);
         if (onClick) {
@@ -2746,9 +2751,9 @@ public:
         // 经 agentxx 扩展 kit 组装 (kit 只装配, 语义与手写一致; 生成物见
         // agentxx/plugin/api/agentxx_ui_kit.g.h)
         pluginxx::ui::Json params;
-        params["label"]   = std::move(label);
-        params["variant"] = variant.empty() ? std::string{"secondary"} : std::move(variant);
-        params["action"]  = pluginxx::ui::dumpAction(action);
+        params["label"]        = std::move(label);
+        params["variant"]      = variant.empty() ? std::string{"secondary"} : std::move(variant);
+        params["action"]       = pluginxx::ui::dumpAction(action);
         pluginxx::ui::Item btn = agentxx::ui::kit::button(params);
         if (!tone.empty()) {
             btn.tone = std::move(tone);
@@ -2951,8 +2956,7 @@ public:
     }
 
     /// 更新面板内容 (组件树直接提交)
-    int32_t
-        setPanelItems(AgentxxPanel* panel, const std::vector<pluginxx::ui::Item>& items) const {
+    int32_t setPanelItems(AgentxxPanel* panel, const std::vector<pluginxx::ui::Item>& items) const {
         if (!host || !iface.ui || !iface.ui->update_panel || panel == nullptr) {
             return -1;
         }
@@ -2972,7 +2976,7 @@ public:
 
     /// 更新 Info 栏段落内容 (组件树直接提交)
     int32_t setInfoSectionItems(
-        AgentxxInfoSection*                   section,
+        AgentxxInfoSection*                    section,
         const std::vector<pluginxx::ui::Item>& items
     ) const {
         if (!host || !iface.ui || !iface.ui->update_info_section || section == nullptr) {
@@ -3023,9 +3027,9 @@ public:
         spec.version     = 1;
         spec.struct_size = sizeof(AgentxxOverlaySpec);
         spec.type        = type;
-        spec.title      = PluginStringView::from(title.data(), title.size());
-        spec.payload    = PluginStringView::from(payload.data(), payload.size());
-        spec.extra_json = PluginStringView::from(extraJson.data(), extraJson.size());
+        spec.title       = PluginStringView::from(title.data(), title.size());
+        spec.payload     = PluginStringView::from(payload.data(), payload.size());
+        spec.extra_json  = PluginStringView::from(extraJson.data(), extraJson.size());
         return iface.ui->open_overlay(host, &spec);
     }
 
@@ -3036,10 +3040,10 @@ public:
     ///   多段用的是 `edits` 字段, 老主程序不认识时只显示"(no changes)"
     ///   (插件与客户端版本需要一起升级时按单段逐次调用即可)
     int32_t showDiffOverlay(
-        std::string_view               title,
-        std::string_view               path,
+        std::string_view                title,
+        std::string_view                path,
         const std::vector<DiffSegment>& segments,
-        std::string_view               extraJson = {}
+        std::string_view                extraJson = {}
     ) const {
         utilxx_base::Json payload = utilxx_base::Json::object();
         if (!path.empty()) {
@@ -3221,10 +3225,10 @@ public:
     /// 调用不会有 JSON 解析开销。**仅 client io 线程可调** (读 `get_client_state`)。
     const pluginxx::ui::Capabilities& uiCapabilities() const {
         if (!uiCapsCached_) {
-            uiCapsCached_      = true;
-            const auto state   = clientStateJson();
-            const auto it      = state.find("ui");
-            uiCapsCache_       = (state.is_object() && it != state.end() && it->is_object())
+            uiCapsCached_    = true;
+            const auto state = clientStateJson();
+            const auto it    = state.find("ui");
+            uiCapsCache_     = (state.is_object() && it != state.end() && it->is_object())
                                    ? pluginxx::ui::capabilitiesFromJson(*it)
                                    : pluginxx::ui::fullCapabilities();
         }

@@ -146,10 +146,9 @@ asio::awaitable<ContainerSnapshot> snapshotContainersOnAgentThread(
     if (!runAgentCtx) {
         co_return snapshotContainers(agent->agentContext, sessionId);
     }
-    using SnapCh
-        = asio::experimental::channel<void(utilxx_base::AsioErrorCode, ContainerSnapshot)>;
-    auto ch  = std::make_shared<SnapCh>(agent->ioCtx->get_executor(), 1);
-    auto ctx = agent->agentContext;
+    using SnapCh = asio::experimental::channel<void(utilxx_base::AsioErrorCode, ContainerSnapshot)>;
+    auto ch      = std::make_shared<SnapCh>(agent->ioCtx->get_executor(), 1);
+    auto ctx     = agent->agentContext;
     asio::co_spawn(
         *agent->ioCtx,
         keepAliveRun([ctx, sessionId, ch]() -> asio::awaitable<void> {
@@ -294,7 +293,9 @@ asio::awaitable<int> runScenario(
                             success     = !result.hasError;
                         }
                         co_await ch->async_send(
-                            utilxx_base::AsioErrorCode{}, success, asio::use_awaitable
+                            utilxx_base::AsioErrorCode{},
+                            success,
+                            asio::use_awaitable
                         );
                         co_return;
                     }

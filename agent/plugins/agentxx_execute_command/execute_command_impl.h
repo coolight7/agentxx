@@ -30,7 +30,6 @@
 #pragma once
 
 #include "agentxx/plugin/api/plugin_kit.h"
-#include "execute_command_env.h" // 系统代码页探测 (预设环境变量与工具提示词共用)
 #include "asio/as_tuple.hpp"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -43,6 +42,7 @@
 #include "asio/steady_timer.hpp"
 #include "asio/this_coro.hpp"
 #include "asio/use_awaitable.hpp"
+#include "execute_command_env.h" // 系统代码页探测 (预设环境变量与工具提示词共用)
 #include "utilxx_base/asio_error.h"
 #include "utilxx_base/env.h"
 #include "utilxx_base/json.h"
@@ -321,8 +321,7 @@ inline constexpr EnvPreset kEnvPresets[] = {
     {.name         = "JAVA_TOOL_OPTIONS",
      .value        = "-Dsun.stdout.encoding=UTF-8 -Dsun.stderr.encoding=UTF-8 "
                      "-Dstdout.encoding=UTF-8 -Dstderr.encoding=UTF-8 "
-                     "-Dfile.encoding=UTF-8",
-     .keepExisting = true},
+                     "-Dfile.encoding=UTF-8", .keepExisting = true},
     {.name = "NO_COLOR", .value = "1"},
     {.name = "TERM", .value = "dumb"},
     {.name = "PAGER", .value = "cat"},
@@ -428,13 +427,13 @@ inline ExecEnvPolicy resolveExecEnvPolicy(std::string_view workDir = {}) {
     const auto current = currentLocaleEnvValue();
     // 已是 UTF-8 时保持用户取值 (语言/排序规则不变), 否则用通用 UTF-8 locale;
     // 系统不提供 C.UTF-8 时子进程退回 C locale, 仍保证不出现本地编码乱码
-    p.locale = isUtf8LocaleName(current) ? current : std::string{"C.UTF-8"};
-    vars += " LC_ALL=";
-    vars += p.locale;
+    p.locale  = isUtf8LocaleName(current) ? current : std::string{"C.UTF-8"};
+    vars     += " LC_ALL=";
+    vars     += p.locale;
 #endif
-    vars += " PWD=";
-    vars += p.pwd;
-    p.describe = std::move(vars);
+    vars       += " PWD=";
+    vars       += p.pwd;
+    p.describe  = std::move(vars);
     return p;
 }
 
@@ -510,7 +509,7 @@ inline void closePipesAfterKill(asio::readable_pipe& outpip, asio::readable_pipe
 /// - 取值与 popen 路径同源 (同一份 [resolveEnvPresets] 结果)
 inline void applyExecEnvPolicy(
     std::unordered_map<boost::process::environment::key, boost::process::environment::value>& env,
-    const ExecEnvPolicy&                                                                     policy
+    const ExecEnvPolicy&                                                                      policy
 ) {
     using EnvKey   = boost::process::environment::key;
     using EnvValue = boost::process::environment::value;
@@ -931,7 +930,7 @@ inline asio::awaitable<std::string> bashExecuteAsync(
     }
     // [full_output] 为false时，仅执行失败才返回 stdout和stderr
     auto full_output = arguments.value("full_output", true);
-    auto timeout    = arguments.value("timeout", 60);
+    auto timeout     = arguments.value("timeout", 60);
 
     std::string effectiveSessionKey{sessionKey};
     if (effectiveSessionKey.empty() && arguments.contains("sessionId")
@@ -1026,7 +1025,7 @@ inline asio::awaitable<std::string> windowsExecuteAsync(
     }
     // [full_output] 为false时，仅执行失败才返回 stdout和stderr
     auto full_output = arguments.value("full_output", true);
-    auto timeout    = arguments.value("timeout", 60);
+    auto timeout     = arguments.value("timeout", 60);
 
     std::string effectiveSessionKey{sessionKey};
     if (effectiveSessionKey.empty() && arguments.contains("sessionId")

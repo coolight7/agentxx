@@ -117,7 +117,8 @@ std::string InterruptView::controlIdOf(const middleware::InterruptUiBlock& block
     return block.id.empty() ? std::string{"value"} : block.id;
 }
 
-std::vector<InterruptView::FormItem> InterruptView::formItems(const middleware::InterruptUi& ui) const {
+std::vector<InterruptView::FormItem> InterruptView::formItems(const middleware::InterruptUi& ui
+) const {
     std::vector<FormItem> out;
     for (size_t bi = 0; bi < ui.blocks.size(); ++bi) {
         const auto& block = ui.blocks[bi];
@@ -147,8 +148,7 @@ std::vector<InterruptView::FormItem> InterruptView::formItems(const middleware::
     return out;
 }
 
-std::vector<pluginxx::ui::Item>
-    InterruptView::plainItems(const std::vector<FormItem>& items) {
+std::vector<pluginxx::ui::Item> InterruptView::plainItems(const std::vector<FormItem>& items) {
     std::vector<pluginxx::ui::Item> out;
     out.reserve(items.size());
     for (const auto& item : items) {
@@ -269,14 +269,12 @@ void InterruptView::registerBlockHits(
             }
             const bool isSubmit = (region.kind == UiHitRegionKind::FormSubmit);
             const bool cancel   = isSubmit && (std::string_view{region.id} == kFormCancelActionId);
-            hit(
-                msgIndex,
+            hit(msgIndex,
                 blockIndex,
                 isSubmit ? std::string{kItemIdSubmit} : region.id,
                 isSubmit ? (cancel ? kSubSubmitCancel : kSubSubmitConfirm) : region.sub,
                 row.box,
-                region
-            );
+                region);
         }
     }
 }
@@ -715,20 +713,20 @@ void InterruptView::confirm(size_t msgIndex) {
         if (!isWaiting(src)) {
             return;
         }
-        const auto        ui    = resolveUi(src);
-        const auto        items = plainItems(formItems(ui));
-        auto&             state = mutateUiState(src); // 校验提示/提交结果影响渲染 → 递增版本
+        const auto ui    = resolveUi(src);
+        const auto items = plainItems(formItems(ui));
+        auto& state = mutateUiState(src); // 校验提示/提交结果影响渲染 → 递增版本
 
         // 校验 (数值范围/整数约束/候选项缺失) 与取值都走共享表单层
         if (!validateForm(items, state)) {
             needRedraw = true;
             return; // 校验失败: 提示保留在各控件下方, 不提交
         }
-        auto formState = formValues(items, state);
-        utilxx_base::Json values
-            = (formState.is_object() && formState.contains("values") && formState["values"].is_object())
-                  ? formState["values"]
-                  : utilxx_base::Json::object();
+        auto              formState = formValues(items, state);
+        utilxx_base::Json values    = (formState.is_object() && formState.contains("values")
+                                    && formState["values"].is_object())
+                                          ? formState["values"]
+                                          : utilxx_base::Json::object();
 
         // 提交结果展示文本 (状态行): 各控件结果值拼接 (标签: 值)
         for (const auto& block : ui.blocks) {

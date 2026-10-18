@@ -160,15 +160,15 @@ asio::awaitable<void> run_prefix_body(
     int                               passedBefore,
     int                               failedBefore
 ) {
-    auto cfg                 = std::make_shared<agentxx::agent::AgentConfig>();
-    cfg->model.baseUrl       = "http://127.0.0.1:" + std::to_string(sim.port);
-    cfg->model.apiKey        = "EMPTY";
-    cfg->model.modelName     = "default-model";
-    cfg->permissionMode      = agentxx::agent::PermissionMode::Pass;
+    auto cfg             = std::make_shared<agentxx::agent::AgentConfig>();
+    cfg->model.baseUrl   = "http://127.0.0.1:" + std::to_string(sim.port);
+    cfg->model.apiKey    = "EMPTY";
+    cfg->model.modelName = "default-model";
+    cfg->permissionMode  = agentxx::agent::PermissionMode::Pass;
     // 打开会话持久化: 用量台账 (usage 表) 才能按请求逐条核对
     cfg->enableSessionStore    = true;
     cfg->sessionStoreDirectory = storeRoot;
-    cfg->prompt.systemPrompt = "SYSTEM-PROMPT-BASE";
+    cfg->prompt.systemPrompt   = "SYSTEM-PROMPT-BASE";
     cfg->memoryFilePaths.push_back(memoryFile);
     cfg->llmMaxRetry = 1;
 
@@ -223,11 +223,11 @@ asio::awaitable<void> run_prefix_body(
         result = TestResult{g_pcp_passed - passedBefore, g_pcp_failed - failedBefore};
         co_return;
     }
-    const int  beforeCompact = static_cast<int>(g_da_sim_requests.size());
+    const int beforeCompact = static_cast<int>(g_da_sim_requests.size());
     // 注意: 这里的引用在下一次请求入队后就失效 (vector 可能扩容),
     // 需要跨压缩比较的值先拷出来
     const auto parentToolChoice = parentRequest.value("tool_choice", std::string{});
-    const bool compacted     = co_await summarization->compactSessionContext(sessionId);
+    const bool compacted        = co_await summarization->compactSessionContext(sessionId);
     XX_TEST_EXPECT_TRUE(compacted);
     XX_TEST_EXPECT_EQ(g_da_sim_requests.size(), static_cast<size_t>(beforeCompact) + 1);
     if (g_da_sim_requests.size() < static_cast<size_t>(beforeCompact + 1)) {
@@ -262,10 +262,7 @@ asio::awaitable<void> run_prefix_body(
     // ⑤ 不执行工具: 工具定义仍在请求里 (对齐前缀), 且不改写 tool_choice ——
     //    真实网关实测表明该字段与父请求不同会让前缀缓存不再命中,
     //    因此压缩请求与父请求的 tool_choice 必须完全一致
-    XX_TEST_EXPECT_EQ(
-        compactRequest.value("tool_choice", std::string{}),
-        parentToolChoice
-    );
+    XX_TEST_EXPECT_EQ(compactRequest.value("tool_choice", std::string{}), parentToolChoice);
     // ⑥ 压缩结果已写回 (会话上下文被替换成 system | user(压缩) | assistant(摘要))
     {
         auto session = agent->agentContext->sessions->get(sessionId);
@@ -299,10 +296,10 @@ asio::awaitable<void> run_prefix_body(
     // ⑧ 自动压缩经总线到达时 `spawnBatch(req)` 不带父上下文:
     //    用量仍须回退到根会话台账 (否则自动压缩的调用又记不下来)
     if (auto rootCtx = agent->agentContext; rootCtx && rootCtx->sessions->sessionStore) {
-        auto store           = rootCtx->sessions->sessionStore;
-        auto beforeRows      = store->recentUsage(sessionId, 20).size();
-        auto autoReq         = agentxx::events::ReqSubagentBatch{
-            .parentSessionId = sessionId,
+        auto store      = rootCtx->sessions->sessionStore;
+        auto beforeRows = store->recentUsage(sessionId, 20).size();
+        auto autoReq    = agentxx::events::ReqSubagentBatch{
+               .parentSessionId = sessionId,
         };
         autoReq.tasks.push_back(agentxx::events::SubagentBatchItem{
             .subagentName        = "subagent_task",
@@ -332,18 +329,18 @@ asio::awaitable<void> run_prefix_body(
     // ---- 不执行工具: 模型返回 tool_calls 时忽略, 不进入 tools 节点 ----
     // 若工具被执行, 图会再发一次请求 (llm -> tools -> llm), 请求数增量 > 1
     {
-        g_da_sim_tool_calls = utilxx_base::Json::array(
-            {utilxx_base::Json{
-                {"id",       "call_prefix_1"                                         },
-                {"type",     "function"                                              },
-                {"function",
+        g_da_sim_tool_calls = utilxx_base::Json::array({
+            utilxx_base::Json{
+                              {"id", "call_prefix_1"},
+                              {"type", "function"},
+                              {"function",
                  utilxx_base::Json{
-                     {"name",      "agentxx_filesystem_read"},
-                     {"arguments", R"({"path":"a.txt"})"   },
+                     {"name", "agentxx_filesystem_read"},
+                     {"arguments", R"({"path":"a.txt"})"},
                  }},
-            }}
-        );
-        const int before = static_cast<int>(g_da_sim_requests.size());
+                              }
+        });
+        const int before    = static_cast<int>(g_da_sim_requests.size());
         (void)co_await summarization->compactSessionContext(sessionId);
         XX_TEST_EXPECT_EQ(g_da_sim_requests.size(), static_cast<size_t>(before) + 1);
         g_da_sim_tool_calls = utilxx_base::Json::array();
@@ -397,7 +394,15 @@ asio::awaitable<TestResult> run_prompt_cache_prefix_tests() {
     asio::co_spawn(
         *io,
         keepAliveRun([&, io]() -> asio::awaitable<void> {
-            co_await run_prefix_body(io, memoryFile, storeRoot, sim, result, passedBefore, failedBefore);
+            co_await run_prefix_body(
+                io,
+                memoryFile,
+                storeRoot,
+                sim,
+                result,
+                passedBefore,
+                failedBefore
+            );
             done = true;
         }),
         asio::detached

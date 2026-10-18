@@ -36,37 +36,38 @@ inline std::string keybindOfEvent(const ftxui::Event& event) {
         const Event* event;
         const char*  name;
     };
+
     static const KeyName kKeys[] = {
-        {&Event::ArrowUp, "up"},
-        {&Event::ArrowDown, "down"},
-        {&Event::ArrowLeft, "left"},
-        {&Event::ArrowRight, "right"},
-        {&Event::ArrowUpCtrl, "ctrl+up"},
-        {&Event::ArrowDownCtrl, "ctrl+down"},
-        {&Event::ArrowLeftCtrl, "ctrl+left"},
+        {&Event::ArrowUp,        "up"        },
+        {&Event::ArrowDown,      "down"      },
+        {&Event::ArrowLeft,      "left"      },
+        {&Event::ArrowRight,     "right"     },
+        {&Event::ArrowUpCtrl,    "ctrl+up"   },
+        {&Event::ArrowDownCtrl,  "ctrl+down" },
+        {&Event::ArrowLeftCtrl,  "ctrl+left" },
         {&Event::ArrowRightCtrl, "ctrl+right"},
-        {&Event::Home, "home"},
-        {&Event::End, "end"},
-        {&Event::PageUp, "pageup"},
-        {&Event::PageDown, "pagedown"},
-        {&Event::Insert, "insert"},
-        {&Event::Delete, "delete"},
-        {&Event::Backspace, "backspace"},
-        {&Event::Tab, "tab"},
-        {&Event::Return, "enter"},
-        {&Event::Escape, "esc"},
-        {&Event::F1, "f1"},
-        {&Event::F2, "f2"},
-        {&Event::F3, "f3"},
-        {&Event::F4, "f4"},
-        {&Event::F5, "f5"},
-        {&Event::F6, "f6"},
-        {&Event::F7, "f7"},
-        {&Event::F8, "f8"},
-        {&Event::F9, "f9"},
-        {&Event::F10, "f10"},
-        {&Event::F11, "f11"},
-        {&Event::F12, "f12"},
+        {&Event::Home,           "home"      },
+        {&Event::End,            "end"       },
+        {&Event::PageUp,         "pageup"    },
+        {&Event::PageDown,       "pagedown"  },
+        {&Event::Insert,         "insert"    },
+        {&Event::Delete,         "delete"    },
+        {&Event::Backspace,      "backspace" },
+        {&Event::Tab,            "tab"       },
+        {&Event::Return,         "enter"     },
+        {&Event::Escape,         "esc"       },
+        {&Event::F1,             "f1"        },
+        {&Event::F2,             "f2"        },
+        {&Event::F3,             "f3"        },
+        {&Event::F4,             "f4"        },
+        {&Event::F5,             "f5"        },
+        {&Event::F6,             "f6"        },
+        {&Event::F7,             "f7"        },
+        {&Event::F8,             "f8"        },
+        {&Event::F9,             "f9"        },
+        {&Event::F10,            "f10"       },
+        {&Event::F11,            "f11"       },
+        {&Event::F12,            "f12"       },
     };
     for (const auto& key : kKeys) {
         if (event == *key.event) {
@@ -79,8 +80,8 @@ inline std::string keybindOfEvent(const ftxui::Event& event) {
     // "\x1b\x01".."\x1b\x1a" (ctrl+alt+字母); 事件比较只看原始输入串, 因此
     // 逐个比对即可 (表驱动, 26 个字母)
     for (int i = 0; i < 26; ++i) {
-        const char letter = static_cast<char>('a' + i);
-        const char ctrl   = static_cast<char>(1 + i);
+        const char  letter = static_cast<char>('a' + i);
+        const char  ctrl   = static_cast<char>(1 + i);
         std::string combo;
         combo += '\x1b';
         combo += ctrl;

@@ -87,7 +87,7 @@ public:
         uint64_t                    generation = 0;
         std::shared_ptr<ftxui::Box> box;
         /// 行内可命中区域 (局部坐标; 命中后按坐标定位具体区域, 如表格单元格)
-        std::vector<UiHitRegion>    regions;
+        std::vector<UiHitRegion> regions;
     };
 
     /// 多模态附件卡片命中检测 (UI 线程独占; 与 decorHits_ 同生命期):
@@ -317,8 +317,8 @@ private:
     agentxx::client::InterruptView interruptView_;
 
     // ---- LazyScrollable 回调 ----
-    size_t        itemCount();
-    uint64_t      itemKey(size_t index);
+    size_t   itemCount();
+    uint64_t itemKey(size_t index);
     /// 未进入视口条目的**粗略**高度估算 (行; O(1) 或轻量线性扫描, 不做渲染):
     /// 只服务总高度/滚动条长度, 进入视口后由布局实测修正。
     /// 不查插件语义渲染 (queryToolRender)、不 measureItems、不做中断表单 layoutForm
@@ -370,7 +370,7 @@ private:
     /// - 与工具消息折叠头共用同一条回退规则 (见 [buildMessageBlock] 的
     ///   pendingRender 分支): 占位行被工具消息取代时不会少一段内容, 动画等级
     ///   >= High 时两行逐字一致
-    std::string genPlaceholderToolDisplayName(const TUIRenderState& st) const;
+    std::string   genPlaceholderToolDisplayName(const TUIRenderState& st) const;
     LazyBuiltItem buildGenPlaceholderItem(const TUIRenderState& st);
 
     ftxui::Element buildMessageBlock(

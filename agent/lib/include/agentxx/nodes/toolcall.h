@@ -108,10 +108,8 @@ public:
     asio::awaitable<std::string> runToolCallBody(const PreparedToolCall& prepared) const;
 
     /// finalize 阶段: 结果定稿 (超出限制时经 share_store 卸载并给出定位提示)
-    asio::awaitable<std::string> finalizeToolCall(
-        const PreparedToolCall& prepared,
-        std::string             rawResult
-    ) const;
+    asio::awaitable<std::string>
+        finalizeToolCall(const PreparedToolCall& prepared, std::string rawResult) const;
 
     /// 执行单个 tool
     /// - [cancelToken] 当前轮次取消令牌: 传递给 ContextualAsyncTool 以便 tool
@@ -139,10 +137,10 @@ public:
     /// - 取消 (CancelledException) 与其他异常记入 `outError` 并按批次停止新调用:
     ///   未启动/未完成的槽位保持空, 由调用方补取消占位
     asio::awaitable<void> runToolBatch(
-        const std::vector<PreparedToolCall>&              batch,
+        const std::vector<PreparedToolCall>&               batch,
         std::vector<std::optional<neograph::ChatMessage>>& outMsgs,
-        std::exception_ptr&                               outError,
-        bool&                                             outInterrupted
+        std::exception_ptr&                                outError,
+        bool&                                              outInterrupted
     ) const;
 
     /// 执行单个已准备的调用并组装结果消息 (run + finalize + 结果消息封装)
@@ -163,10 +161,10 @@ public:
     /// - 其余异常: 兜底按取消处理 (普通工具错误已在 [runPreparedToolCall] 内转为结果文本)
     /// - 派生协程调用它时不得让异常逃逸 (detached 处理器的未捕获异常会终止进程)
     asio::awaitable<void> runPreparedToolCallGuarded(
-        const PreparedToolCall&                prepared,
-        std::optional<neograph::ChatMessage>&  outMsg,
-        std::exception_ptr&                    outError,
-        bool&                                  outInterrupted
+        const PreparedToolCall&               prepared,
+        std::optional<neograph::ChatMessage>& outMsg,
+        std::exception_ptr&                   outError,
+        bool&                                 outInterrupted
     ) const;
 
     /// 执行体是否声明并行安全 (未声明 = 独占)
@@ -174,7 +172,6 @@ public:
 
     /// 并行安全调用的并发上限 (AgentConfig::toolParallelMaxConcurrency, 夹到 [1, 32])
     size_t toolParallelLimit() const;
-
 
     /// 计算重复调用标识 key: `{toolName}_{arg字符串长度}_{arg哈希值}`
     /// - 相同 tool + 相同参数 (arguments 原始 JSON 字符串) 得到相同 key;

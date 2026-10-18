@@ -89,11 +89,7 @@ int32_t clampHookPriority(int32_t point, std::string_view owner, int32_t priorit
             agentxx::feature::kPriorityMin,
             agentxx::feature::kPriorityMax
         );
-        return std::clamp(
-            priority,
-            agentxx::feature::kPriorityMin,
-            agentxx::feature::kPriorityMax
-        );
+        return std::clamp(priority, agentxx::feature::kPriorityMin, agentxx::feature::kPriorityMax);
     }
     return priority;
 }
@@ -160,8 +156,8 @@ PluginManager::HookHandlerView PluginManager::viewOf(const HookHandlerEntry& ent
     return view;
 }
 
-std::vector<PluginManager::HookHandlerView>
-    PluginManager::handlersOf(AgentxxPluginHookPoint point) const {
+std::vector<PluginManager::HookHandlerView> PluginManager::handlersOf(AgentxxPluginHookPoint point
+) const {
     std::vector<HookHandlerView> out;
     for (const auto& entry : orderedHandlers(point)) {
         out.push_back(viewOf(entry));
@@ -340,13 +336,13 @@ int PluginManager::registerHookEx(
     }
 
     HookHandlerEntry entry;
-    entry.point    = spec->point;
-    entry.owner    = fmt::format("plugin:{}", inst->name);
-    entry.priority = clampHookPriority(spec->point, entry.owner, spec->priority);
-    entry.ownerTag = viewToStr(spec->owner_tag);
-    entry.depict   = viewToStr(spec->depict);
-    entry.load     = (inst->builtinUnload != nullptr) ? "builtin" : "dynamic";
-    entry.inst     = inst->self;
+    entry.point            = spec->point;
+    entry.owner            = fmt::format("plugin:{}", inst->name);
+    entry.priority         = clampHookPriority(spec->point, entry.owner, spec->priority);
+    entry.ownerTag         = viewToStr(spec->owner_tag);
+    entry.depict           = viewToStr(spec->depict);
+    entry.load             = (inst->builtinUnload != nullptr) ? "builtin" : "dynamic";
+    entry.inst             = inst->self;
     entry.spec.point       = spec->point;
     entry.spec.hook_start  = spec->hook_start;
     entry.spec.hook_cancel = spec->hook_cancel;
@@ -490,14 +486,13 @@ asio::awaitable<void> runPluginHookHandler(
     int64_t                                handle,
     std::string                            inputJson
 ) {
-    auto       ex   = co_await asio::this_coro::executor;
+    auto       ex       = co_await asio::this_coro::executor;
     const auto specCopy = spec;
 
     plugin::OpDrive drive;
-    drive.start = [specCopy, inputJson, point](
-                      const PluginxxOperatorNotify* notify,
-                      PluginxxString*               err
-                  ) -> void* {
+    drive.start = [specCopy,
+                   inputJson,
+                   point](const PluginxxOperatorNotify* notify, PluginxxString* err) -> void* {
         auto inSv = agentxx::plugin::PluginStringView::from(inputJson.data(), inputJson.size());
         return specCopy.hook_start(specCopy.user_data, point, &inSv, notify, err);
     };
@@ -535,14 +530,16 @@ asio::awaitable<void> runPluginHookHandler(
 
 } // namespace
 
-asio::awaitable<void>
-    PluginManager::dispatchHook(AgentxxPluginHookPoint point, const neograph::graph::NodeInput& in) {
+asio::awaitable<void> PluginManager::dispatchHook(
+    AgentxxPluginHookPoint            point,
+    const neograph::graph::NodeInput& in
+) {
     if (point < 0 || point >= AGENTXX_PLUGIN_HOOK_COUNT) {
         co_return;
     }
     // 派发开始时取快照: 派发过程中登记/撤销不影响本次 (每个处理器执行前仍检查实例可用)
-    const auto handlers = orderedHandlers(point);
-    const bool devMode  = agentxx::agent::AgentConfigStatic::devMode;
+    const auto  handlers = orderedHandlers(point);
+    const bool  devMode  = agentxx::agent::AgentConfigStatic::devMode;
     std::string order;
     const auto  startedAt = std::chrono::steady_clock::now();
     size_t      executed  = 0;
@@ -554,7 +551,8 @@ asio::awaitable<void>
                 continue; // 实例已卸载或已禁用: 该处理器不生效
             }
             if (devMode) {
-                order += fmt::format("{}{}#{}", order.empty() ? "" : ", ", entry.owner, entry.handle);
+                order
+                    += fmt::format("{}{}#{}", order.empty() ? "" : ", ", entry.owner, entry.handle);
             }
             co_await runPluginHookHandler(
                 inst,
@@ -573,11 +571,12 @@ asio::awaitable<void>
             order += fmt::format("{}{}#{}", order.empty() ? "" : ", ", entry.owner, entry.handle);
         }
         try {
-            const auto inputJson = summarizeNodeInput(point, in).dump();
-            auto       inSv      = agentxx::plugin::PluginStringView::from(inputJson);
-            PluginxxString err{nullptr, 0};
+            const auto             inputJson = summarizeNodeInput(point, in).dump();
+            auto                   inSv      = agentxx::plugin::PluginStringView::from(inputJson);
+            PluginxxString         err{nullptr, 0};
             PluginxxOperatorNotify notify{&ignoreHookCompletion, nullptr};
-            void* const op = entry.spec.hook_start(entry.spec.user_data, point, &inSv, &notify, &err);
+            void* const            op
+                = entry.spec.hook_start(entry.spec.user_data, point, &inSv, &notify, &err);
             if (err.data != nullptr) {
                 agentxx::plugin::hostMemoryFree(err.data);
             }
@@ -627,12 +626,12 @@ asio::awaitable<void>
 // =====================================================================
 
 std::string PluginManager::hooksJson() {
-    const bool       devMode = agentxx::agent::AgentConfigStatic::devMode;
-    utilxx_base::Json points = utilxx_base::Json::array();
-    int64_t           total  = 0;
+    const bool        devMode = agentxx::agent::AgentConfigStatic::devMode;
+    utilxx_base::Json points  = utilxx_base::Json::array();
+    int64_t           total   = 0;
 
     for (int32_t p = 0; p < AGENTXX_PLUGIN_HOOK_COUNT; ++p) {
-        const auto point = static_cast<AgentxxPluginHookPoint>(p);
+        const auto        point        = static_cast<AgentxxPluginHookPoint>(p);
         utilxx_base::Json handlersJson = utilxx_base::Json::array();
         for (const auto& entry : orderedHandlers(point)) {
             const auto        view = viewOf(entry);
@@ -684,24 +683,22 @@ std::string PluginManager::hooksJson() {
 // 派发器 (中间件句柄)
 // =====================================================================
 
-asio::awaitable<void>
-    PluginHookDispatchHandle::onAgentcallStartFunc(neograph::graph::NodeInput& in) {
+asio::awaitable<void> PluginHookDispatchHandle::onAgentcallStartFunc(neograph::graph::NodeInput& in
+) {
     if (auto mgr = manager_.lock()) {
         co_await mgr->dispatchHook(AGENTXX_PLUGIN_HOOK_AGENT_START, in);
     }
 }
 
-asio::awaitable<void> PluginHookDispatchHandle::onAgentcallEndFunc(
-    const neograph::graph::NodeInput& in,
-    neograph::graph::NodeOutput&
-) {
+asio::awaitable<void> PluginHookDispatchHandle::
+    onAgentcallEndFunc(const neograph::graph::NodeInput& in, neograph::graph::NodeOutput&) {
     if (auto mgr = manager_.lock()) {
         co_await mgr->dispatchHook(AGENTXX_PLUGIN_HOOK_AGENT_END, in);
     }
 }
 
-asio::awaitable<void>
-    PluginHookDispatchHandle::onModelcallStartFunc(neograph::graph::NodeInput& in) {
+asio::awaitable<void> PluginHookDispatchHandle::onModelcallStartFunc(neograph::graph::NodeInput& in
+) {
     if (auto mgr = manager_.lock()) {
         co_await mgr->dispatchHook(AGENTXX_PLUGIN_HOOK_MODEL_START, in);
     }
@@ -713,26 +710,22 @@ asio::awaitable<void> PluginHookDispatchHandle::onModelcallRunFunc(neograph::gra
     }
 }
 
-asio::awaitable<void> PluginHookDispatchHandle::onModelcallEndFunc(
-    const neograph::graph::NodeInput& in,
-    neograph::graph::NodeOutput&
-) {
+asio::awaitable<void> PluginHookDispatchHandle::
+    onModelcallEndFunc(const neograph::graph::NodeInput& in, neograph::graph::NodeOutput&) {
     if (auto mgr = manager_.lock()) {
         co_await mgr->dispatchHook(AGENTXX_PLUGIN_HOOK_MODEL_END, in);
     }
 }
 
-asio::awaitable<void>
-    PluginHookDispatchHandle::onToolcallStartFunc(neograph::graph::NodeInput& in) {
+asio::awaitable<void> PluginHookDispatchHandle::onToolcallStartFunc(neograph::graph::NodeInput& in
+) {
     if (auto mgr = manager_.lock()) {
         co_await mgr->dispatchHook(AGENTXX_PLUGIN_HOOK_TOOL_START, in);
     }
 }
 
-asio::awaitable<void> PluginHookDispatchHandle::onToolcallEndFunc(
-    const neograph::graph::NodeInput& in,
-    neograph::graph::NodeOutput&
-) {
+asio::awaitable<void> PluginHookDispatchHandle::
+    onToolcallEndFunc(const neograph::graph::NodeInput& in, neograph::graph::NodeOutput&) {
     if (auto mgr = manager_.lock()) {
         co_await mgr->dispatchHook(AGENTXX_PLUGIN_HOOK_TOOL_END, in);
     }

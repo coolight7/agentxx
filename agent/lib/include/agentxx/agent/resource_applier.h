@@ -121,11 +121,11 @@ private:
 
     /// 动态 MCP 条目 (io 线程独占访问)
     struct McpEntry {
-    // 成员按对齐/尺寸从大到小排列, 减少结构体内填充字节
-        McpServerConfig                      cfg;
-        std::string                          owner;
+        // 成员按对齐/尺寸从大到小排列, 减少结构体内填充字节
+        McpServerConfig          cfg;
+        std::string              owner;
         std::vector<std::string> toolNames; ///< 已注册进 ToolRegistry 的工具名
-                                                     ///< 注销后旧协程经指针比对识别 stale
+                                            ///< 注销后旧协程经指针比对识别 stale
         enum class Status {
             Connecting,
             Ready

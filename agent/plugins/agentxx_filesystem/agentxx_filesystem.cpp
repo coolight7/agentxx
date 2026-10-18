@@ -23,14 +23,14 @@ using namespace agentxx::plugin;
 
 namespace {
 
-constexpr std::string_view kNameList  = "agentxx_filesystem_list";
-constexpr std::string_view kNameRead  = "agentxx_filesystem_read";
-constexpr std::string_view kNameWrite = "agentxx_filesystem_write";
-constexpr std::string_view kNameEdit  = "agentxx_filesystem_edit";
-constexpr std::string_view kNameGlob  = "agentxx_filesystem_glob";
-constexpr std::string_view kNameGrep  = "agentxx_filesystem_grep";
-constexpr std::string_view kNameMove  = "agentxx_filesystem_move";
-constexpr std::string_view kNameCopy  = "agentxx_filesystem_copy";
+constexpr std::string_view kNameList   = "agentxx_filesystem_list";
+constexpr std::string_view kNameRead   = "agentxx_filesystem_read";
+constexpr std::string_view kNameWrite  = "agentxx_filesystem_write";
+constexpr std::string_view kNameEdit   = "agentxx_filesystem_edit";
+constexpr std::string_view kNameGlob   = "agentxx_filesystem_glob";
+constexpr std::string_view kNameGrep   = "agentxx_filesystem_grep";
+constexpr std::string_view kNameMove   = "agentxx_filesystem_move";
+constexpr std::string_view kNameCopy   = "agentxx_filesystem_copy";
 constexpr std::string_view kNameRemove = "agentxx_filesystem_remove";
 
 constexpr std::string_view kDepictList
@@ -60,8 +60,7 @@ Missing parent directories of `dst` are created; an existing `dst` is refused un
 constexpr std::string_view kDepictCopy
     = R"(Copy a file or directory to another path. Directories are copied recursively; symlinks are copied as links.
 Missing parent directories of `dst` are created; an existing `dst` is refused unless `overwrite` is `true`.)";
-constexpr std::string_view kDepictRemove
-    = R"(Delete a file or directory.
+constexpr std::string_view kDepictRemove = R"(Delete a file or directory.
 A directory (together with everything inside) is deleted only when `recursive` is `true`; a symlink is removed without following it.)";
 
 constexpr std::string_view kPathDesc
@@ -142,8 +141,7 @@ constexpr std::string_view kGrepRegexPatternsDesc
     = R"(One or more regular expression patterns (like `grep -E`). A match is found if ANY pattern matches.
 Optional if `text_patterns` is given; `text_patterns` and `regex_patterns` can be specified together, and the result is the union of both matches.
 Use this for pattern-based matching (e.g. `line[0-9]+`, `throw|co_return`); use `text_patterns` for literal search.)";
-constexpr std::string_view kGrepOutputModeDesc
-    = R"(Default: `files_with_matches`.
+constexpr std::string_view kGrepOutputModeDesc = R"(Default: `files_with_matches`.
 `files_with_matches`: Return file paths with match counts (format: `file:count`).
 `content`: Return matching lines grouped by file to reduce path repetition. Each file
 starts with a header line `{filepath}:`, followed by that file's lines (`{line}:{content}`). Example:
@@ -236,7 +234,7 @@ static bool destinationAllowed(
     const std::string& dst,
     std::string&       reasonOut
 ) {
-    auto dstAbs = agentxx_fs_plugin::detail::wsAbs(std::string{workDir}, dst);
+    auto dstAbs    = agentxx_fs_plugin::detail::wsAbs(std::string{workDir}, dst);
     auto decisions = agentxx::plugin::checkPathDecisions(
         ctx,
         agentxx::plugin::PermissionScope::Write,
@@ -393,11 +391,7 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
                   /*required=*/true
               )
               .string("content", "Content to write into the file.", /*required=*/true)
-              .boolean(
-                  "overwrite",
-                  kWriteOverwriteDesc,
-                  true
-              )
+              .boolean("overwrite", kWriteOverwriteDesc, true)
               .build();
 
     if (utilxx_base::isAsyncFileIoSupported()) {
@@ -465,25 +459,17 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
                   "edits",
                   kEditEditsDesc,
                   utilxx_base::Json{
-                      {"type", "object"},
+                      {"type",       "object"                                        },
                       {"properties",
                        utilxx_base::Json{
                            {"old_str", utilxx_base::Json{{"type", "string"}}},
                            {"new_str", utilxx_base::Json{{"type", "string"}}},
-                       }},
-                      {"required", utilxx_base::Json::array({"old_str", "new_str"})},
-                  }
+                       }                                                             },
+                      {"required",   utilxx_base::Json::array({"old_str", "new_str"})},
+    }
               )
-              .string(
-                  "old_str",
-                  kEditOldStrDesc,
-                  false
-              )
-              .string(
-                  "new_str",
-                  kEditNewStrDesc,
-                  false
-              )
+              .string("old_str", kEditOldStrDesc, false)
+              .string("new_str", kEditNewStrDesc, false)
               .build();
 
     if (utilxx_base::isAsyncFileIoSupported()) {
@@ -535,38 +521,19 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
     // (目标是模式表达的扫描起点); 模式实际展开出的路径在工具内用
     // makeReadPathFilter 逐项复核 (拒绝/未获批准的路径不进入结果), 防止
     // `**` 之类模式绕过针对子目录的拒绝规则
-    auto globSchema
-        = ctx.schema(kNameGlob)
-              .stringArray(
-                  "file_patterns",
-                  kGlobFilePatternsDesc,
-                  /*required=*/true
-              )
-              .stringArray("exclude_patterns", kGlobExcludeDesc)
-              .integer(
-                  "max_depth",
-                  kGlobMaxDepthDesc,
-                  false,
-                  -1
-              )
-              .boolean(
-                  "sort",
-                  kGlobSortDesc,
-                  false,
-                  false
-              )
-              .stringArray(
-                  "type",
-                  kGlobTypeDesc
-              )
-              .integer(
-                  "max_files",
-                  kGlobMaxFilesDesc,
-                  false,
-                  1000
-              )
-              .number("timeout", kTimeoutDesc, false, 60.0)
-              .build();
+    auto globSchema = ctx.schema(kNameGlob)
+                          .stringArray(
+                              "file_patterns",
+                              kGlobFilePatternsDesc,
+                              /*required=*/true
+                          )
+                          .stringArray("exclude_patterns", kGlobExcludeDesc)
+                          .integer("max_depth", kGlobMaxDepthDesc, false, -1)
+                          .boolean("sort", kGlobSortDesc, false, false)
+                          .stringArray("type", kGlobTypeDesc)
+                          .integer("max_files", kGlobMaxFilesDesc, false, 1000)
+                          .number("timeout", kTimeoutDesc, false, 60.0)
+                          .build();
 
     blocking_tool(
         ctx,
@@ -598,64 +565,29 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
     registerReadPathPermission(ctx, kNameGlob, "file_patterns");
 
     // 6. Grep
-    auto grepSchema
-        = ctx.schema(kNameGrep)
-              .stringArray(
-                  "file_patterns",
-                  kGrepFilePatternsDesc,
-                  /*required=*/true
-              )
-              .stringArray(
-                  "text_patterns",
-                  kGrepTextPatternsDesc
-              )
-              .stringArray(
-                  "regex_patterns",
-                  kGrepRegexPatternsDesc
-              )
-              .stringArray(
-                  "exclude_patterns",
-                  kGrepExcludeDesc
-              )
-              .enumString(
-                  "output_mode",
-                  kGrepOutputModeDesc,
-                  {"files_with_matches", "content", "count"},
-                  false,
-                  "files_with_matches"
-              )
-              .integer(
-                  "max_count_per_file",
-                  kGrepMaxCountPerFileDesc,
-                  false,
-                  0
-              )
-              .integer(
-                  "max_files",
-                  kGrepMaxFilesDesc,
-                  false,
-                  1000
-              )
-              .number(
-                  "max_file_size_mb",
-                  kGrepMaxFileSizeDesc,
-                  false,
-                  32.0
-              )
-              .integer(
-                  "context_lines",
-                  kGrepContextLinesDesc,
-                  false,
-                  0
-              )
-              .boolean(
-                  "case_sensitive",
-                  kGrepCaseSensitiveDesc,
-                  false,
-                  true
-              )
-              .number("timeout", kTimeoutDesc, false, 60.0)
-              .build();
+    auto grepSchema = ctx.schema(kNameGrep)
+                          .stringArray(
+                              "file_patterns",
+                              kGrepFilePatternsDesc,
+                              /*required=*/true
+                          )
+                          .stringArray("text_patterns", kGrepTextPatternsDesc)
+                          .stringArray("regex_patterns", kGrepRegexPatternsDesc)
+                          .stringArray("exclude_patterns", kGrepExcludeDesc)
+                          .enumString(
+                              "output_mode",
+                              kGrepOutputModeDesc,
+                              {"files_with_matches", "content", "count"},
+                              false,
+                              "files_with_matches"
+                          )
+                          .integer("max_count_per_file", kGrepMaxCountPerFileDesc, false, 0)
+                          .integer("max_files", kGrepMaxFilesDesc, false, 1000)
+                          .number("max_file_size_mb", kGrepMaxFileSizeDesc, false, 32.0)
+                          .integer("context_lines", kGrepContextLinesDesc, false, 0)
+                          .boolean("case_sensitive", kGrepCaseSensitiveDesc, false, true)
+                          .number("timeout", kTimeoutDesc, false, 60.0)
+                          .build();
 
     blocking_tool(
         ctx,
@@ -689,12 +621,11 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
     registerReadPathPermission(ctx, kNameGrep, "file_patterns");
 
     // 7. Move
-    auto moveSchema
-        = ctx.schema(kNameMove)
-              .string("src", kMoveSrcDesc, /*required=*/true)
-              .string("dst", kMoveDstDesc, /*required=*/true)
-              .boolean("overwrite", kReplaceOverwriteDesc, false, false)
-              .build();
+    auto moveSchema = ctx.schema(kNameMove)
+                          .string("src", kMoveSrcDesc, /*required=*/true)
+                          .string("dst", kMoveDstDesc, /*required=*/true)
+                          .boolean("overwrite", kReplaceOverwriteDesc, false, false)
+                          .build();
 
     blocking_tool(
         ctx,
@@ -728,12 +659,11 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
     registerWritePathPermission(ctx, kNameMove, "src");
 
     // 8. Copy
-    auto copySchema
-        = ctx.schema(kNameCopy)
-              .string("src", kCopySrcDesc, /*required=*/true)
-              .string("dst", kCopyDstDesc, /*required=*/true)
-              .boolean("overwrite", kReplaceOverwriteDesc, false, false)
-              .build();
+    auto copySchema = ctx.schema(kNameCopy)
+                          .string("src", kCopySrcDesc, /*required=*/true)
+                          .string("dst", kCopyDstDesc, /*required=*/true)
+                          .boolean("overwrite", kReplaceOverwriteDesc, false, false)
+                          .build();
 
     blocking_tool(
         ctx,
@@ -766,11 +696,10 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
     registerWritePathPermission(ctx, kNameCopy, "src");
 
     // 9. Remove
-    auto removeSchema
-        = ctx.schema(kNameRemove)
-              .string("path", kRemovePathDesc, /*required=*/true)
-              .boolean("recursive", kRemoveRecursiveDesc, false, false)
-              .build();
+    auto removeSchema = ctx.schema(kNameRemove)
+                            .string("path", kRemovePathDesc, /*required=*/true)
+                            .boolean("recursive", kRemoveRecursiveDesc, false, false)
+                            .build();
 
     blocking_tool(
         ctx,
@@ -948,7 +877,7 @@ static int32_t fsClientSetup(FsClientCtx& ctx) {
         // - 行数统计见 [diffStatTextOfSegments]: 各段各替换一处, 逐行 diff 求和
         //   (与展开体渲染的差异同源, 因此显示的行数就是展开后能看到的)
         const std::string diffStat = agentxx_fs_plugin::diffStatTextOfSegments(segments);
-        std::string summary = " ·";
+        std::string       summary  = " ·";
         if (!diffStat.empty()) {
             summary += " " + diffStat;
         }

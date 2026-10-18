@@ -6,8 +6,8 @@
 /// - 完全没有输入时直接收尾返回, 不空转
 #include "agentxx-test/client/test_jsonl_runner.h"
 
-#include "agentxx-test/core/test_agent.h" // 本地 LLM 模拟器
 #include "agentxx-client/io/jsonl/jsonl_mode.h"
+#include "agentxx-test/core/test_agent.h" // 本地 LLM 模拟器
 #include "agentxx/agent/code_agent.h"
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/context.h"
@@ -151,21 +151,19 @@ std::string streamedText(const Collected& c) {
     return out;
 }
 
-std::shared_ptr<agentxx::agent::CodeAgent> makeCodeAgent(
-    std::shared_ptr<DaSimServer> sim,
-    std::string_view            response
-) {
+std::shared_ptr<agentxx::agent::CodeAgent>
+    makeCodeAgent(std::shared_ptr<DaSimServer> sim, std::string_view response) {
     g_da_sim_response_content     = std::string{response};
     g_da_sim_tool_calls           = utilxx_base::Json::array();
     g_da_sim_fail_count           = 0;
     g_da_sim_delay_ms             = 0;
     g_da_sim_tool_calls_remaining = -1;
 
-    auto cfg                  = std::make_shared<agentxx::agent::AgentConfig>();
-    cfg->model.baseUrl        = "http://127.0.0.1:" + std::to_string(sim->port);
-    cfg->model.apiKey         = "EMPTY";
-    cfg->model.modelName      = "default-model";
-    cfg->llmMaxRetry          = 1;
+    auto cfg             = std::make_shared<agentxx::agent::AgentConfig>();
+    cfg->model.baseUrl   = "http://127.0.0.1:" + std::to_string(sim->port);
+    cfg->model.apiKey    = "EMPTY";
+    cfg->model.modelName = "default-model";
+    cfg->llmMaxRetry     = 1;
     return std::make_shared<agentxx::agent::CodeAgent>(cfg);
 }
 

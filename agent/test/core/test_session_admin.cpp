@@ -145,7 +145,7 @@ void removeTempRoot(const std::string& root) {
 }
 
 asio::awaitable<std::shared_ptr<Fixture>> makeFixture(std::string sessionId, bool persist = true) {
-    auto fx = std::make_shared<Fixture>();
+    auto fx                   = std::make_shared<Fixture>();
     fx->root                  = makeTempRoot();
     fx->sim                   = startDaSimServer();
     g_da_sim_response_content = "ok response";
@@ -169,8 +169,9 @@ asio::awaitable<std::shared_ptr<Fixture>> makeFixture(std::string sessionId, boo
     fx->endpoint    = std::make_shared<agentxx::agent::SessionServerAgentIO>(ex, fx->agent, scCfg);
 
     auto [clientOwn, serverT] = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
-    fx->endpoint
-        ->setTransport(std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT)));
+    fx->endpoint->setTransport(
+        std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT))
+    );
 
     fx->recorder = std::make_shared<SaRecorder>();
     fx->clientT  = std::move(clientOwn);
@@ -207,8 +208,7 @@ asio::awaitable<void> spin(std::chrono::milliseconds total) {
 }
 
 /// 轮询等待条件成立 (超时返回条件当时取值)
-asio::awaitable<bool>
-    waitFor(std::function<bool()> cond, std::chrono::milliseconds timeout) {
+asio::awaitable<bool> waitFor(std::function<bool()> cond, std::chrono::milliseconds timeout) {
     const auto deadline = std::chrono::steady_clock::now() + timeout;
     while (std::chrono::steady_clock::now() < deadline) {
         if (cond()) {
@@ -253,7 +253,9 @@ asio::awaitable<void> test_rename_and_search() {
     (void)co_await fx->agent->runTurnAsync("beta", "部署 步骤 的细节补充", nullptr);
     // 落盘是轮末权威写 + 节流刷新的组合: 稍等一会儿再断言 (超时即失败)
     const bool persisted = co_await waitFor(
-        [&] { return sessionExists(fx, "alpha") && sessionExists(fx, "beta"); },
+        [&] {
+            return sessionExists(fx, "alpha") && sessionExists(fx, "beta");
+        },
         std::chrono::seconds{5}
     );
     if (!persisted) {
@@ -264,12 +266,15 @@ asio::awaitable<void> test_rename_and_search() {
     XX_TEST_EXPECT_TRUE(sessionExists(fx, "beta"));
 
     // ---- 1) 改名成功: 标题与来源都落库 ----
-    fx->clientT->send(
-        agentxx::agent::WireMessage{
-            agentxx::agent::WireRenameSession{.sessionId = "alpha", .title = "编译优化会话"}
-        }
+    fx->clientT->send(agentxx::agent::WireMessage{
+        agentxx::agent::WireRenameSession{.sessionId = "alpha", .title = "编译优化会话"}
+    });
+    co_await waitFor(
+        [&] {
+            return fx->recorder->renameCount() >= 1;
+        },
+        std::chrono::seconds{3}
     );
-    co_await waitFor([&] { return fx->recorder->renameCount() >= 1; }, std::chrono::seconds{3});
     auto renameRes = fx->recorder->lastRename();
     XX_TEST_EXPECT_HAS_VALUE(renameRes);
     if (renameRes) {
@@ -283,13 +288,13 @@ asio::awaitable<void> test_rename_and_search() {
 
     // ---- 2) 空标题被拒: 保留原标题 ----
     const size_t renameCountBefore = fx->recorder->renameCount();
-    fx->clientT->send(
-        agentxx::agent::WireMessage{
-            agentxx::agent::WireRenameSession{.sessionId = "alpha", .title = "   "}
-        }
-    );
+    fx->clientT->send(agentxx::agent::WireMessage{
+        agentxx::agent::WireRenameSession{.sessionId = "alpha", .title = "   "}
+    });
     co_await waitFor(
-        [&] { return fx->recorder->renameCount() > renameCountBefore; },
+        [&] {
+            return fx->recorder->renameCount() > renameCountBefore;
+        },
         std::chrono::seconds{3}
     );
     auto emptyRes = fx->recorder->lastRename();
@@ -302,13 +307,13 @@ asio::awaitable<void> test_rename_and_search() {
     XX_TEST_EXPECT_EQ(fx->store()->sessionTitle("alpha"), std::string{"编译优化会话"});
 
     // ---- 3) 不存在的会话被拒, 且不会因此建出目录 ----
-    fx->clientT->send(
-        agentxx::agent::WireMessage{
-            agentxx::agent::WireRenameSession{.sessionId = "not-exist", .title = "随便"}
-        }
-    );
+    fx->clientT->send(agentxx::agent::WireMessage{
+        agentxx::agent::WireRenameSession{.sessionId = "not-exist", .title = "随便"}
+    });
     co_await waitFor(
-        [&] { return fx->recorder->renameCount() > renameCountBefore + 1; },
+        [&] {
+            return fx->recorder->renameCount() > renameCountBefore + 1;
+        },
         std::chrono::seconds{3}
     );
     auto missingRes = fx->recorder->lastRename();
@@ -320,12 +325,15 @@ asio::awaitable<void> test_rename_and_search() {
     XX_TEST_EXPECT_FALSE(sessionExists(fx, "not-exist"));
 
     // ---- 4) 标题检索: 只回命中项 ----
-    fx->clientT->send(
-        agentxx::agent::WireMessage{
-            agentxx::agent::WireListSessions{.limit = 50, .keyword = "编译优化"}
-        }
+    fx->clientT->send(agentxx::agent::WireMessage{
+        agentxx::agent::WireListSessions{.limit = 50, .keyword = "编译优化"}
+    });
+    co_await waitFor(
+        [&] {
+            return fx->recorder->listCount() >= 1;
+        },
+        std::chrono::seconds{3}
     );
-    co_await waitFor([&] { return fx->recorder->listCount() >= 1; }, std::chrono::seconds{3});
     auto titleHit = fx->recorder->lastList();
     XX_TEST_EXPECT_EQ(titleHit.sessions.size(), size_t{1});
     if (titleHit.sessions.size() == 1) {
@@ -339,13 +347,13 @@ asio::awaitable<void> test_rename_and_search() {
 
     // ---- 5) 正文检索: 命中片段随条目回传 ----
     const size_t listCountBefore = fx->recorder->listCount();
-    fx->clientT->send(
-        agentxx::agent::WireMessage{
-            agentxx::agent::WireListSessions{.limit = 50, .keyword = "部署 步骤"}
-        }
-    );
+    fx->clientT->send(agentxx::agent::WireMessage{
+        agentxx::agent::WireListSessions{.limit = 50, .keyword = "部署 步骤"}
+    });
     co_await waitFor(
-        [&] { return fx->recorder->listCount() > listCountBefore; },
+        [&] {
+            return fx->recorder->listCount() > listCountBefore;
+        },
         std::chrono::seconds{3}
     );
     auto contentHit = fx->recorder->lastList();
@@ -353,20 +361,18 @@ asio::awaitable<void> test_rename_and_search() {
     if (contentHit.sessions.size() == 1) {
         XX_TEST_EXPECT_EQ(contentHit.sessions[0].sessionId, std::string{"beta"});
         XX_TEST_EXPECT_TRUE(!contentHit.sessions[0].snippet.empty());
-        XX_TEST_EXPECT_TRUE(
-            contentHit.sessions[0].snippet.find("部署") != std::string::npos
-        );
+        XX_TEST_EXPECT_TRUE(contentHit.sessions[0].snippet.find("部署") != std::string::npos);
     }
 
     // ---- 6) 协议入口: WireListSessions(..., keyword) 直接发送 ----
     const size_t apiListBefore = fx->recorder->listCount();
-    fx->clientT->send(
-        agentxx::agent::WireMessage{
-            agentxx::agent::WireListSessions{.limit = 50, .keyword = "优化"}
-        }
-    );
+    fx->clientT->send(agentxx::agent::WireMessage{
+        agentxx::agent::WireListSessions{.limit = 50, .keyword = "优化"}
+    });
     co_await waitFor(
-        [&] { return fx->recorder->listCount() > apiListBefore; },
+        [&] {
+            return fx->recorder->listCount() > apiListBefore;
+        },
         std::chrono::seconds{3}
     );
     auto apiHit = fx->recorder->lastList();
@@ -377,11 +383,11 @@ asio::awaitable<void> test_rename_and_search() {
 
     // ---- 7) 空关键词 = 普通列表: 两个会话都在 (改名后的标题生效) ----
     const size_t plainListBefore = fx->recorder->listCount();
-    fx->clientT->send(
-        agentxx::agent::WireMessage{agentxx::agent::WireListSessions{.limit = 50}}
-    );
+    fx->clientT->send(agentxx::agent::WireMessage{agentxx::agent::WireListSessions{.limit = 50}});
     co_await waitFor(
-        [&] { return fx->recorder->listCount() > plainListBefore; },
+        [&] {
+            return fx->recorder->listCount() > plainListBefore;
+        },
         std::chrono::seconds{3}
     );
     auto plain = fx->recorder->lastList();
@@ -400,12 +406,15 @@ asio::awaitable<void> test_rename_without_persistence() {
     auto fx = co_await makeFixture("sess-admin-mem", /*persist=*/false);
     XX_TEST_EXPECT_TRUE(fx->store() == nullptr);
 
-    fx->clientT->send(
-        agentxx::agent::WireMessage{
-            agentxx::agent::WireRenameSession{.sessionId = "alpha", .title = "内存模式"}
-        }
+    fx->clientT->send(agentxx::agent::WireMessage{
+        agentxx::agent::WireRenameSession{.sessionId = "alpha", .title = "内存模式"}
+    });
+    co_await waitFor(
+        [&] {
+            return fx->recorder->renameCount() >= 1;
+        },
+        std::chrono::seconds{3}
     );
-    co_await waitFor([&] { return fx->recorder->renameCount() >= 1; }, std::chrono::seconds{3});
     auto res = fx->recorder->lastRename();
     XX_TEST_EXPECT_HAS_VALUE(res);
     if (res) {

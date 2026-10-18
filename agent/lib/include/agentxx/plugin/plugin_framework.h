@@ -97,7 +97,8 @@ using pluginxx::topoSortPlugins;
 using pluginxx::CapabilityRegistry;
 using pluginxx::PluginCapabilityRegistration;
 
-// ==================== 插件框架的通用部分与业务数据入口 (pluginxx/host/host_core.h) ====================
+// ==================== 插件框架的通用部分与业务数据入口 (pluginxx/host/host_core.h)
+// ====================
 using pluginxx::DomainHooks;
 using pluginxx::EventSource;
 using pluginxx::PluginHostCore;

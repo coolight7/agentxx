@@ -75,8 +75,8 @@ std::vector<std::string_view> splitLines(std::string_view text) {
     std::vector<std::string_view> lines;
     size_t                        pos = 0;
     while (pos <= text.size()) {
-        const size_t     nl  = text.find('\n', pos);
-        const size_t     end = (nl == std::string_view::npos) ? text.size() : nl;
+        const size_t     nl   = text.find('\n', pos);
+        const size_t     end  = (nl == std::string_view::npos) ? text.size() : nl;
         std::string_view line = text.substr(pos, end - pos);
         if (!line.empty() || !lines.empty()) {
             lines.push_back(line);
@@ -123,11 +123,8 @@ std::vector<std::string> splitChars(std::string_view line) {
 /// 取字符序列的 [begin, begin + count) 段, 越界部分补空格
 ///
 /// - `return` 长度恒为 count 的一行
-std::vector<std::string> sliceChars(
-    const std::vector<std::string>& chars,
-    size_t                          begin,
-    size_t                          count
-) {
+std::vector<std::string>
+    sliceChars(const std::vector<std::string>& chars, size_t begin, size_t count) {
     std::vector<std::string> out(count, std::string{" "});
     for (size_t i = 0; i < count; ++i) {
         const size_t src = begin + i;
@@ -168,10 +165,7 @@ std::vector<std::vector<float>> buildDistanceField() {
             static_cast<float>(kPlusBarRow) + 0.5F
         );
     }
-    std::vector<std::vector<float>> dist(
-        kArtRows,
-        std::vector<float>(kPatternColumns, 0.F)
-    );
+    std::vector<std::vector<float>> dist(kArtRows, std::vector<float>(kPatternColumns, 0.F));
     for (size_t y = 0; y < kArtRows; ++y) {
         for (size_t x = 0; x < kPatternColumns; ++x) {
             float best = -1.F;
@@ -220,15 +214,14 @@ std::vector<std::string> buildFrames() {
     ArtGrid prefix(kArtRows, std::vector<std::string>(kPrefixColumns, std::string{" "}));
     ArtGrid robot(kArtRows, std::vector<std::string>(kPatternColumns, std::string{" "}));
     for (size_t y = 0; y < kArtRows; ++y) {
-        const auto chars
-            = (y < lines.size()) ? splitChars(lines[y]) : std::vector<std::string>{};
-        prefix[y] = sliceChars(chars, 0, kPrefixColumns);
-        robot[y]  = sliceChars(chars, kPrefixColumns, kPatternColumns);
+        const auto chars = (y < lines.size()) ? splitChars(lines[y]) : std::vector<std::string>{};
+        prefix[y]        = sliceChars(chars, 0, kPrefixColumns);
+        robot[y]         = sliceChars(chars, kPrefixColumns, kPatternColumns);
     }
 
-    const ArtGrid                 plus = buildPlusGrid();
-    const auto                    dist = buildDistanceField();
-    float                         dmax = 0.F;
+    const ArtGrid plus = buildPlusGrid();
+    const auto    dist = buildDistanceField();
+    float         dmax = 0.F;
     for (const auto& row : dist) {
         for (const float d : row) {
             dmax = std::max(dmax, d);
@@ -245,7 +238,7 @@ std::vector<std::string> buildFrames() {
         frames.push_back(holdFrame);
     }
     for (size_t i = 0; i < kMorphFrames; ++i) {
-        const float p = static_cast<float>(i + 1) / static_cast<float>(kMorphFrames);
+        const float p    = static_cast<float>(i + 1) / static_cast<float>(kMorphFrames);
         ArtGrid     grid = plus;
         for (size_t y = 0; y < kArtRows; ++y) {
             for (size_t x = 0; x < kPatternColumns; ++x) {
@@ -275,15 +268,16 @@ const std::string& bannerArtFinalFrame() {
     return bannerArtFrames().back();
 }
 
-BannerArtComponent::BannerArtComponent() : BannerArtComponent(Config{}) {}
+BannerArtComponent::BannerArtComponent() :
+    BannerArtComponent(Config{}) {}
 
-BannerArtComponent::BannerArtComponent(Config config) : config_(config) {
+BannerArtComponent::BannerArtComponent(Config config) :
+    config_(config) {
     // 帧间隔下限保护: 非正值视为每次动画回调推进一帧 (实际仍受 FTXUI 帧率上限约束)
-    interval_ = config_.frameInterval > std::chrono::milliseconds(0)
-                    ? std::chrono::duration_cast<std::chrono::duration<float>>(
-                          config_.frameInterval
-                      )
-                    : std::chrono::duration<float>(0.F);
+    interval_
+        = config_.frameInterval > std::chrono::milliseconds(0)
+              ? std::chrono::duration_cast<std::chrono::duration<float>>(config_.frameInterval)
+              : std::chrono::duration<float>(0.F);
 }
 
 bool BannerArtComponent::animating() const {

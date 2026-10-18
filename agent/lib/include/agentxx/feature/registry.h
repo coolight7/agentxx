@@ -146,8 +146,8 @@ private:
     /// 收进点表 (id 已被占用时返回已有点, 新点由调用方持有以便安全返回引用)
     PointBase& addPoint(std::unique_ptr<PointBase> point);
 
-    std::vector<std::unique_ptr<PointBase>>               storage_;
-    std::map<std::string, PointBase*, std::less<>>        byId_;
+    std::vector<std::unique_ptr<PointBase>>        storage_;
+    std::map<std::string, PointBase*, std::less<>> byId_;
 };
 
 } // namespace feature

@@ -18,12 +18,12 @@
 #include "agentxx/protocol/provider_common.h"
 #include "neograph/graph/cancel.h"
 #include "neograph/provider.h"
+#include <algorithm>
 #include <asio/awaitable.hpp>
 #include <asio/redirect_error.hpp>
 #include <asio/steady_timer.hpp>
 #include <asio/this_coro.hpp>
 #include <asio/use_awaitable.hpp>
-#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <deque>
@@ -47,7 +47,7 @@ struct FakeStep {
         Error,     ///< 抛出异常 (文本带 `HTTP <状态码>` 供 LLM 错误分类识别)
     };
 
-    Kind   kind = Kind::Text;
+    Kind kind = Kind::Text;
     /// Text: 完整回复正文
     std::string text;
     /// Text: 先于正文返回的思考片段 (TYPE_THINKING)
@@ -92,11 +92,8 @@ public:
     /// 把假 provider 注入 agent 上下文的模型注册表
     /// - 需在 `agent.init()` 之后调用
     template<typename AgentT>
-    static void inject(
-        AgentT&                              agent,
-        std::string_view                     modelName,
-        std::shared_ptr<FakeProvider>        provider
-    ) {
+    static void
+        inject(AgentT& agent, std::string_view modelName, std::shared_ptr<FakeProvider> provider) {
         agent.agentContext->modelRegistry->setProvider(modelName, std::move(provider));
     }
 
@@ -113,13 +110,18 @@ public:
     }
 
     /// 追加一次"思考 + 正文"回复
-    void pushThinking(std::string thinking, std::string answer, int delayMs = 0, size_t chunkChars = 0) {
+    void pushThinking(
+        std::string thinking,
+        std::string answer,
+        int         delayMs    = 0,
+        size_t      chunkChars = 0
+    ) {
         FakeStep step;
-        step.kind           = FakeStep::Kind::Text;
-        step.thinking       = std::move(thinking);
-        step.text           = std::move(answer);
-        step.delayMs        = delayMs;
-        step.chunkChars     = chunkChars;
+        step.kind               = FakeStep::Kind::Text;
+        step.thinking           = std::move(thinking);
+        step.text               = std::move(answer);
+        step.delayMs            = delayMs;
+        step.chunkChars         = chunkChars;
         step.thinkingChunkChars = chunkChars;
         pushStep(std::move(step));
     }
@@ -241,14 +243,19 @@ public:
             throw std::runtime_error{errorTextOf(step)};
         }
 
-        emitChunks(step.thinking, step.thinkingChunkChars, neograph::ChatStreamChunk::TYPE_THINKING, on_chunk);
+        emitChunks(
+            step.thinking,
+            step.thinkingChunkChars,
+            neograph::ChatStreamChunk::TYPE_THINKING,
+            on_chunk
+        );
         emitChunks(step.text, step.chunkChars, neograph::ChatStreamChunk::TYPE_CONTENT, on_chunk);
 
         neograph::ChatCompletion completion;
-        completion.message.role       = "assistant";
-        completion.message.content    = step.text;
-        completion.message.tool_calls = step.toolCalls;
-        completion.stop_reason        = step.toolCalls.empty() ? "end_turn" : "tool_use";
+        completion.message.role               = "assistant";
+        completion.message.content            = step.text;
+        completion.message.tool_calls         = step.toolCalls;
+        completion.stop_reason                = step.toolCalls.empty() ? "end_turn" : "tool_use";
         completion.usage.prompt_tokens        = step.promptTokens;
         completion.usage.completion_tokens    = step.completionTokens;
         completion.usage.total_tokens         = step.promptTokens + step.completionTokens;
@@ -287,8 +294,7 @@ private:
 
     /// 等待 `ms` 毫秒; 期间轮询取消令牌, 被取消返回 false
     /// - 轮询间隔 10 ms: 假 provider 没有真实套接字, 用它模拟"取消立即中断未完成的请求"
-    asio::awaitable<bool>
-        waitInterruptible(int ms, const neograph::CompletionParams& params) {
+    asio::awaitable<bool> waitInterruptible(int ms, const neograph::CompletionParams& params) {
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds{ms};
         asio::steady_timer timer{co_await asio::this_coro::executor};
         while (std::chrono::steady_clock::now() < deadline) {
@@ -312,9 +318,9 @@ private:
 
     /// 按 UTF-8 边界切片发送流式片段 (不切断多字节字符)
     static void emitChunks(
-        const std::string&             text,
-        size_t                         chunkChars,
-        int                            type,
+        const std::string&              text,
+        size_t                          chunkChars,
+        int                             type,
         const FormatDataStreamCallback& on_chunk
     ) {
         if (!on_chunk || text.empty()) {
@@ -344,11 +350,11 @@ private:
         return fmt::format("fake provider error: HTTP {} {}", step.errorStatus, step.errorBody);
     }
 
-    mutable std::mutex              mutex_;
-    std::deque<FakeStep>            script_;
-    std::string                     defaultText_ = "fake response";
+    mutable std::mutex                      mutex_;
+    std::deque<FakeStep>                    script_;
+    std::string                             defaultText_ = "fake response";
     std::vector<neograph::CompletionParams> requests_;
-    int                             cancelObserved_ = 0;
+    int                                     cancelObserved_ = 0;
 };
 
 } // namespace test

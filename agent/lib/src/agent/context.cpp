@@ -71,7 +71,9 @@ SessionStoreHooks makeSessionStoreHooks(
     std::weak_ptr<Session> weakSession = session;
     return SessionStoreHooks{
         .onAppendViewMessage =
-            [store, sessionId, weakSession](const ViewMessage& msg, uint64_t counter, uint64_t seq) {
+            [store,
+             sessionId,
+             weakSession](const ViewMessage& msg, uint64_t counter, uint64_t seq) {
                 store->appendViewMessage(sessionId, msg, counter, seq);
                 reportPersistFailure(weakSession.lock(), store);
             },
@@ -236,7 +238,11 @@ void Session::setStoreHooks(SessionStoreHooks hooks) {
     hooks_ = std::move(hooks);
 }
 
-void Session::restore(std::vector<ViewMessage> messages, uint64_t msgIdCounter, uint64_t lastViewSeq) {
+void Session::restore(
+    std::vector<ViewMessage> messages,
+    uint64_t                 msgIdCounter,
+    uint64_t                 lastViewSeq
+) {
     assertIoThread();
 
     // 整体替换 viewMessages 前丢弃待落盘队列: 队列按下标引用消息, 替换后
@@ -526,13 +532,10 @@ std::shared_ptr<Session> SessionsManager::getOrCreate(std::string_view sessionId
     if (sessionStore) {
         // 从 SQLite 恢复该 session 的历史消息/LLM 上下文, 并绑定持久化回调
         auto loaded = sessionStore->loadSession(sessionId);
-        session->restore(
-            std::move(loaded.viewMessages),
-            loaded.msgIdCounter,
-            loaded.lastViewSeq
-        );
+        session->restore(std::move(loaded.viewMessages), loaded.msgIdCounter, loaded.lastViewSeq);
         session->replaceMessagesFromJson(loaded.llmMessages);
-        session->setStoreHooks(makeSessionStoreHooks(sessionStore, std::string{sessionId}, session));
+        session->setStoreHooks(makeSessionStoreHooks(sessionStore, std::string{sessionId}, session)
+        );
         // 累计用量同样从台账恢复 (之后每次模型调用累加, 见 nodes/modelcall.cpp):
         // 界面显示"本会话已消耗多少 token"跨进程重启连续
         if (session->contextStats) {
@@ -573,13 +576,10 @@ asio::awaitable<std::shared_ptr<Session>>
 
     auto session = std::make_shared<Session>();
     if (sessionStore) {
-        session->restore(
-            std::move(loaded.viewMessages),
-            loaded.msgIdCounter,
-            loaded.lastViewSeq
-        );
+        session->restore(std::move(loaded.viewMessages), loaded.msgIdCounter, loaded.lastViewSeq);
         session->replaceMessagesFromJson(loaded.llmMessages);
-        session->setStoreHooks(makeSessionStoreHooks(sessionStore, std::string{sessionId}, session));
+        session->setStoreHooks(makeSessionStoreHooks(sessionStore, std::string{sessionId}, session)
+        );
         // 累计用量从台账恢复 (与 getOrCreate 同一处理)
         if (session->contextStats) {
             session->contextStats->usage = usageTotalsOf(loaded.usage);
@@ -725,8 +725,7 @@ std::vector<std::pair<std::string, std::string>>
     return out;
 }
 
-std::vector<PromptSectionView>
-    AgentContext::promptSectionViews(std::string_view sessionId) const {
+std::vector<PromptSectionView> AgentContext::promptSectionViews(std::string_view sessionId) const {
     std::vector<PromptSectionView> out;
     // 配置作用域静态段 (只读引用 AgentPrompt 内部存储, 只在本次调用内有效)
     if (agentConfig) {
@@ -763,17 +762,17 @@ std::string AgentContext::renderPromptVars(std::string text, std::string_view se
     vars.workDir   = getSessionBaseWorkDir(sessionId);
     vars.tempDir   = sessionTempDir(sessionId);
 #if XX_IS_WIN_D
-    vars.platform  = "Windows";
+    vars.platform = "Windows";
 #elif XX_IS_LINUX_D
-    vars.platform  = "Linux";
+    vars.platform = "Linux";
 #elif XX_IS_MACOS_D
-    vars.platform  = "macOS";
+    vars.platform = "macOS";
 #elif XX_IS_ANDROID_D
-    vars.platform  = "Android";
+    vars.platform = "Android";
 #elif XX_IS_IOS_D
-    vars.platform  = "iOS";
+    vars.platform = "iOS";
 #else
-    vars.platform  = "Unknown";
+    vars.platform = "Unknown";
 #endif
     return AgentPrompt::renderVars(text, vars);
 }

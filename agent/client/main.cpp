@@ -6,9 +6,9 @@
 #include "agentxx-client/mode_runners.h"
 #include "agentxx-client/train/train.h"
 #include "agentxx-client/util/util.h"
-#include "agentxx/agent/code_agent.h"
 #include "agentxx/agent/agent_host.h"
 #include "agentxx/agent/assembly_snapshot.h"
+#include "agentxx/agent/code_agent.h"
 #include "agentxx/agent/config_static.h"
 #include "agentxx/agent/config_validation.h"
 #include "agentxx/agent/io/agent_server.h"
@@ -406,18 +406,16 @@ static int dumpConfigAndExit(
     }
 
     if (!resolveModelConfig(yamlCfg.models, yamlCfg.useModelDefault).isValid()) {
-        XX_OUT(
-            "\n[assembly snapshot skipped] no usable default model configured "
-            "(see `model.list` / `model.use` above)\n"
-        );
+        XX_OUT("\n[assembly snapshot skipped] no usable default model configured "
+               "(see `model.list` / `model.use` above)\n");
         // 配置有致命问题时以非零码退出, 便于在脚本/CI 中当作配置校验使用
         return report.hasFatal() ? 1 : 0;
     }
 
     XX_OUT("\n=== effective assembly (init once, then exit) ===\n");
-    auto                          agent = std::make_shared<agentxx::agent::CodeAgent>(config);
-    utilxx_base::Json             runtimeSnapshot;
-    std::string                   initError;
+    auto              agent = std::make_shared<agentxx::agent::CodeAgent>(config);
+    utilxx_base::Json runtimeSnapshot;
+    std::string       initError;
     asio::co_spawn(
         *agent->ioCtx,
         [agent, &runtimeSnapshot, &initError]() -> asio::awaitable<void> {
@@ -557,10 +555,7 @@ int main(int argn, char** argv) {
         std::vector<std::string> invalid;
         const auto               applied = utilxx_base::applyLogModuleLevelSpec(spec, &invalid);
         if (applied > 0) {
-            XX_OUT(
-                "[Log] module levels applied: {} (from AGENTXX_LOG_MODULES)\n",
-                applied
-            );
+            XX_OUT("[Log] module levels applied: {} (from AGENTXX_LOG_MODULES)\n", applied);
         }
         for (const auto& bad : invalid) {
             XX_OUT(
@@ -588,8 +583,8 @@ int main(int argn, char** argv) {
 
     std::string configPath = std::string{kDefaultConfigFileName};
     bool configExplicit = false; ///< --config 是否被显式指定 (指定但文件不存在时报错)
-    bool dumpConfig     = false; ///< --dump-config: 打印生效装配快照后退出
-    bool dumpDiagnostics = false; ///< --dump-diagnostics: 打印诊断包后退出
+    bool        dumpConfig      = false; ///< --dump-config: 打印生效装配快照后退出
+    bool        dumpDiagnostics = false; ///< --dump-diagnostics: 打印诊断包后退出
     std::string overrideEnvPath;
     std::string mode = "tui";
     std::string agentUrl;
@@ -665,8 +660,8 @@ Options:
                 XX_LOGE("Invalid --port value: `{}`", portArg);
                 return 1;
             }
-        } else if (arg == "tui" || arg == "cli" || arg == "server" || arg == "acp"
-                   || arg == "train" || arg == "jsonl") {
+        } else if (arg == "tui" || arg == "cli" || arg == "server" || arg == "acp" || arg == "train"
+                   || arg == "jsonl") {
             mode = arg;
         } else {
             XX_LOGE("Unknown arg: `{}`", arg);

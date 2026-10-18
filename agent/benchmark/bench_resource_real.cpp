@@ -450,7 +450,7 @@ void benchResourceRealTui() {
     mc.baseUrl                            = fmt::format("http://127.0.0.1:{}/v1", sim.port);
     mc.apiKey                             = "EMPTY";
     mc.modelName                          = "bench-sim";
-    mc.modelContextMaxToken              = 8 << 20;
+    mc.modelContextMaxToken               = 8 << 20;
     agentConfig->model                    = mc;
     agentConfig->availableModels[mc.name] = mc;
     agentConfig->currentModelName         = mc.name;
@@ -679,14 +679,11 @@ void benchResourceRealTui() {
                 sess->appendViewMessage(g.viewTool);
                 sess->appendViewMessage(g.viewAssist);
                 sess->appendSettledLlmMessages(utilxx_base::Json::array({
+                    utilxx_base::Json{{"role", "user"}, {"content", g.userMsg.content}},
                     utilxx_base::Json{
-                        {"role",    "user"           },
-                        {"content", g.userMsg.content}
-                    },
-                    utilxx_base::Json{
-                        {"role",       "assistant"                                 },
-                        {"content",    nullptr                                     },
-                        {"tool_calls",
+                                      {"role", "assistant"},
+                                      {"content", nullptr},
+                                      {"tool_calls",
                          {{{"id", g.assistMsg.tool_calls[0].id},
                            {"type", "function"},
                            {"function",
@@ -694,10 +691,10 @@ void benchResourceRealTui() {
                              {"arguments", g.assistMsg.tool_calls[0].arguments}}}}}}
                     },
                     utilxx_base::Json{
-                        {"role",         "tool"                },
-                        {"tool_call_id", g.toolMsg.tool_call_id},
-                        {"name",         g.toolMsg.tool_name   },
-                        {"content",      g.toolMsg.content     }
+                                      {"role", "tool"},
+                                      {"tool_call_id", g.toolMsg.tool_call_id},
+                                      {"name", g.toolMsg.tool_name},
+                                      {"content", g.toolMsg.content}
                     },
                 }));
             }
@@ -795,14 +792,11 @@ void benchResourceRealTui() {
                 sess->appendViewMessage(g.viewTool);
                 sess->appendViewMessage(g.viewAssist);
                 sess->appendSettledLlmMessages(utilxx_base::Json::array({
+                    utilxx_base::Json{{"role", "user"}, {"content", g.userMsg.content}},
                     utilxx_base::Json{
-                        {"role",    "user"           },
-                        {"content", g.userMsg.content}
-                    },
-                    utilxx_base::Json{
-                        {"role",       "assistant"                                 },
-                        {"content",    nullptr                                     },
-                        {"tool_calls",
+                                      {"role", "assistant"},
+                                      {"content", nullptr},
+                                      {"tool_calls",
                          {{{"id", g.assistMsg.tool_calls[0].id},
                            {"type", "function"},
                            {"function",
@@ -810,10 +804,10 @@ void benchResourceRealTui() {
                              {"arguments", g.assistMsg.tool_calls[0].arguments}}}}}}
                     },
                     utilxx_base::Json{
-                        {"role",         "tool"                },
-                        {"tool_call_id", g.toolMsg.tool_call_id},
-                        {"name",         g.toolMsg.tool_name   },
-                        {"content",      g.toolMsg.content     }
+                                      {"role", "tool"},
+                                      {"tool_call_id", g.toolMsg.tool_call_id},
+                                      {"name", g.toolMsg.tool_name},
+                                      {"content", g.toolMsg.content}
                     },
                 }));
             }

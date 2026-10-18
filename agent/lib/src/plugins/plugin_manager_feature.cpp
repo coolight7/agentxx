@@ -71,8 +71,8 @@ std::string normalizePluginAnswer(std::string_view text) {
         return std::string{text};
     }
     if (parsed->is_object()
-        && (parsed->contains("value") || parsed->contains("disable")
-            || parsed->contains("verdict"))) {
+        && (parsed->contains("value") || parsed->contains("disable") || parsed->contains("verdict")
+        )) {
         return std::string{text};
     }
     utilxx_base::Json wrapped = utilxx_base::Json::object();
@@ -103,8 +103,8 @@ void setFeatureErrOut(PluginInstance* inst, PluginxxString* error_out, const std
 /// 记录该注册当前活跃的操作句柄; 取消时逐个请求取消。句柄用 weak_ptr, 操作自己
 /// 完成即失效, 不需要额外清理。
 struct ImplOps {
-    std::mutex                                    mutex;
-    std::vector<std::weak_ptr<pluginxx::OpCore>>  ops;
+    std::mutex                                   mutex;
+    std::vector<std::weak_ptr<pluginxx::OpCore>> ops;
 
     void track(const std::shared_ptr<pluginxx::OpCore>& op) {
         std::vector<std::weak_ptr<pluginxx::OpCore>> alive;
@@ -142,7 +142,10 @@ struct ImplOps {
 // 实现登记
 // =====================================================================
 
-int PluginManager::registerFeatureImpl(PluginInstance* inst, const AgentxxPluginFeatureImplSpec* spec) {
+int PluginManager::registerFeatureImpl(
+    PluginInstance*                     inst,
+    const AgentxxPluginFeatureImplSpec* spec
+) {
     if (inst == nullptr || spec == nullptr || !spec->impl_start) {
         return -1;
     }
@@ -163,40 +166,50 @@ int PluginManager::registerFeatureImpl(PluginInstance* inst, const AgentxxPlugin
     }
 
     // 实现体: 经操作协议驱动插件回调 (与工具 call_tool_async 同一套)
-    auto self   = shared_from_this();
-    auto ops    = std::make_shared<ImplOps>();
-    auto weakInst = std::weak_ptr<PluginInstance>{inst->self};
+    auto                               self     = shared_from_this();
+    auto                               ops      = std::make_shared<ImplOps>();
+    auto                               weakInst = std::weak_ptr<PluginInstance>{inst->self};
     const AgentxxPluginFeatureImplSpec specCopy = *spec;
     const std::string                  owner    = featureOwnerOf(*inst);
 
     agentxx::feature::ImplSpec impl;
-    impl.layer             = agentxx::feature::ImplLayer::Plugin;
-    impl.owner             = owner;
-    impl.priority          = spec->priority;
-    impl.defaultTimeoutMs  = spec->default_timeout_ms;
-    impl.load              = (inst->builtinUnload != nullptr) ? "builtin" : "dynamic";
-    impl.fn                = [self, weakInst, specCopy, pointId, ops](std::string callJson)
-        -> asio::awaitable<std::optional<std::string>> {
+    impl.layer            = agentxx::feature::ImplLayer::Plugin;
+    impl.owner            = owner;
+    impl.priority         = spec->priority;
+    impl.defaultTimeoutMs = spec->default_timeout_ms;
+    impl.load             = (inst->builtinUnload != nullptr) ? "builtin" : "dynamic";
+    impl.fn               = [self, weakInst, specCopy, pointId, ops](std::string callJson
+              ) -> asio::awaitable<std::optional<std::string>> {
         auto instPtr = weakInst.lock();
         if (!instPtr) {
             co_return std::nullopt; // 实例已卸载: 按"没意见"处理
         }
         auto runtime = instPtr->runtime.lock();
         if (!runtime || !isRuntimeIoThread(runtime)) {
-            XX_LOGW("功能点 `{}`: 实例 `{}` 的实现不在主程序 IO 线程上调用, 按没意见处理",
-                    pointId, instPtr->name);
+            XX_LOGW(
+                "功能点 `{}`: 实例 `{}` 的实现不在主程序 IO 线程上调用, 按没意见处理",
+                pointId,
+                instPtr->name
+            );
             co_return std::nullopt;
         }
         std::shared_ptr<pluginxx::OpCore> core;
         try {
-            core = pluginxx::OpCore::create(runtime, instPtr, nullptr, fmt::format("feature_impl {}", pointId));
+            core = pluginxx::OpCore::create(
+                runtime,
+                instPtr,
+                nullptr,
+                fmt::format("feature_impl {}", pointId)
+            );
         } catch (const std::exception& e) {
             XX_LOGW("功能点 `{}`: 实现 `{}` 无法启动: {}", pointId, instPtr->name, e.what());
             co_return std::nullopt;
         }
         pluginxx::OpDrive drive;
-        drive.start = [specCopy, pointId, callJson](const PluginxxOperatorNotify* notify,
-                                                   PluginxxString*               errorOut) -> void* {
+        drive.start
+            = [specCopy,
+               pointId,
+               callJson](const PluginxxOperatorNotify* notify, PluginxxString* errorOut) -> void* {
             const auto idSv   = PluginStringView::from(pointId);
             const auto jsonSv = PluginStringView::from(callJson);
             return specCopy.impl_start(specCopy.user_data, &idSv, &jsonSv, notify, errorOut);
@@ -250,8 +263,7 @@ int PluginManager::unregisterFeatureImpl(PluginInstance* inst, PluginxxStringVie
     if (id.empty()) {
         return -1;
     }
-    const size_t removed
-        = ctx->features->removeImpl(id, featureOwnerOf(*inst));
+    const size_t removed = ctx->features->removeImpl(id, featureOwnerOf(*inst));
     std::erase(inst->featurePointImpls, id);
     return removed > 0 ? 0 : -1;
 }
@@ -261,7 +273,7 @@ int PluginManager::unregisterFeatureImpl(PluginInstance* inst, PluginxxStringVie
 // =====================================================================
 
 int PluginManager::defineFeaturePoint(
-    PluginInstance*                     inst,
+    PluginInstance*                      inst,
     const AgentxxPluginFeaturePointSpec* spec
 ) {
     if (inst == nullptr || spec == nullptr) {
@@ -277,16 +289,16 @@ int PluginManager::defineFeaturePoint(
         return -1;
     }
     agentxx::feature::PluginPointDecl decl;
-    decl.id             = viewToStr(spec->id);
-    decl.owner          = featureOwnerOf(*inst);
-    decl.type           = (spec->type == AGENTXX_PLUGIN_FEATURE_TYPE_DECIDE)
-                              ? agentxx::feature::PointType::Decide
-                              : agentxx::feature::PointType::Provide;
-    decl.title          = viewToStr(spec->title);
-    decl.depict         = viewToStr(spec->depict);
-    decl.argsDoc        = viewToStr(spec->args_doc);
-    decl.resultDoc      = viewToStr(spec->result_doc);
-    decl.implTimeoutMs  = spec->impl_timeout_ms;
+    decl.id            = viewToStr(spec->id);
+    decl.owner         = featureOwnerOf(*inst);
+    decl.type          = (spec->type == AGENTXX_PLUGIN_FEATURE_TYPE_DECIDE)
+                             ? agentxx::feature::PointType::Decide
+                             : agentxx::feature::PointType::Provide;
+    decl.title         = viewToStr(spec->title);
+    decl.depict        = viewToStr(spec->depict);
+    decl.argsDoc       = viewToStr(spec->args_doc);
+    decl.resultDoc     = viewToStr(spec->result_doc);
+    decl.implTimeoutMs = spec->impl_timeout_ms;
     if (ctx->features->definePluginPoint(decl) != 0) {
         return -1;
     }
@@ -389,10 +401,7 @@ PluginxxOperatorHandle* PluginManager::callFeatureAsync(
         setFeatureErrOut(
             caller,
             error_out,
-            fmt::format(
-                "call_point_async: point `{}` 不接受按名调用 (需要类型化请求)",
-                point->id()
-            )
+            fmt::format("call_point_async: point `{}` 不接受按名调用 (需要类型化请求)", point->id())
         );
         return nullptr;
     }
@@ -404,7 +413,7 @@ PluginxxOperatorHandle* PluginManager::callFeatureAsync(
         argsText = "{}";
     }
 
-    auto runtime = caller->sharedSelf<PluginInstance>();
+    auto                              runtime = caller->sharedSelf<PluginInstance>();
     std::shared_ptr<pluginxx::OpCore> core;
     try {
         core = pluginxx::OpCore::create(
@@ -432,8 +441,8 @@ PluginxxOperatorHandle* PluginManager::callFeatureAsync(
             auto result = co_await jsonPoint->call(argsText, opts);
 
             utilxx_base::Json out = utilxx_base::Json::object();
-            out["ok"] = result.ok();
-            out["id"] = jsonPoint->id();
+            out["ok"]             = result.ok();
+            out["id"]             = jsonPoint->id();
             if (result.ok()) {
                 out["value"]     = result.value.has_value() ? *result.value : utilxx_base::Json{};
                 out["by"]        = result.by;

@@ -1,7 +1,7 @@
 #include "agentxx/middlewares/interrupt_ui.h"
 
-#include "pluginxx/ui.h"
 #include "fmt/format.h"
+#include "pluginxx/ui.h"
 #include "utilxx/diff_util.h"
 #include "utilxx_base/string_util.h"
 #include <algorithm>
@@ -525,16 +525,16 @@ std::optional<pluginxx::ui::Item> itemOf(const InterruptUiBlock& block) {
         );
     };
 
-    const int indentCols = std::max(0, block.indent);
+    const int  indentCols = std::max(0, block.indent);
     const auto withIndent = [indentCols](Item item) {
         return withIndentColumns(std::move(item), indentCols);
     };
 
     Item item;
     item.tone = block.color;
-    item.bold   = block.bold;
-    item.dim    = block.dim;
-    item.wrap   = block.wrap;
+    item.bold = block.bold;
+    item.dim  = block.dim;
+    item.wrap = block.wrap;
 
     if (block.kind == "text") {
         item.kind = "Text";
@@ -574,12 +574,18 @@ std::optional<pluginxx::ui::Item> itemOf(const InterruptUiBlock& block) {
         return withIndent(std::move(item));
     }
     if (block.kind == "progress") {
-        item.kind       = "Text";
-        std::string lbl = block.label.empty() ? (block.text.empty() ? "" : block.text) : block.label;
+        item.kind = "Text";
+        std::string lbl
+            = block.label.empty() ? (block.text.empty() ? "" : block.text) : block.label;
         std::string textStr;
         if (block.progressTotal > 0.0) {
             if (!lbl.empty()) {
-                textStr = fmt::format("[进度: {}/{} {}]", block.progressValue, block.progressTotal, lbl);
+                textStr = fmt::format(
+                    "[进度: {}/{} {}]",
+                    block.progressValue,
+                    block.progressTotal,
+                    lbl
+                );
             } else {
                 textStr = fmt::format("[进度: {}/{}]", block.progressValue, block.progressTotal);
             }
@@ -633,10 +639,8 @@ std::optional<pluginxx::ui::Item> itemOf(const InterruptUiBlock& block) {
         for (const auto& opt : block.options) {
             pluginxx::ui::ControlOption out;
             out.valueJson = opt.value.is_null() ? std::string{} : opt.value.dump();
-            out.label = textOf(
-                opt.labelKey,
-                opt.label.empty() ? jsonValueText(opt.value) : opt.label
-            );
+            out.label
+                = textOf(opt.labelKey, opt.label.empty() ? jsonValueText(opt.value) : opt.label);
             out.tone = opt.color;
             item.options.push_back(std::move(out));
         }
@@ -647,26 +651,30 @@ std::optional<pluginxx::ui::Item> itemOf(const InterruptUiBlock& block) {
     if (block.kind == "submit") {
         // 确认/取消行: 域内用两个按钮表达 —— 描述层没有"表单提交"这一层
         // (见 plan §3.4), 点击后经动作通道回传 __submit / __cancel, 由中断表单处理
-        const auto makeButton
-            = [](pluginxx::ui::TextValue label, std::string_view actionId, std::string_view variant) {
-                  Item out = pluginxx::ui::build::button(
-                      std::string_view{},
-                      pluginxx::ui::build::dispatch(std::string{actionId}),
-                      variant
-                  );
-                  out.label = std::move(label);
-                  return out;
-              };
+        const auto makeButton =
+            [](pluginxx::ui::TextValue label, std::string_view actionId, std::string_view variant) {
+                Item out = pluginxx::ui::build::button(
+                    std::string_view{},
+                    pluginxx::ui::build::dispatch(std::string{actionId}),
+                    variant
+                );
+                out.label = std::move(label);
+                return out;
+            };
         Item confirm = makeButton(
-            textOf(block.labelKey.empty() ? std::string{"interrupt.confirm"} : block.labelKey,
-                   block.label),
+            textOf(
+                block.labelKey.empty() ? std::string{"interrupt.confirm"} : block.labelKey,
+                block.label
+            ),
             kInterruptSubmitActionId,
             "primary"
         );
         Item cancel = makeButton(
-            textOf(block.cancelLabelKey.empty() ? std::string{"interrupt.cancel"}
-                                                : block.cancelLabelKey,
-                   block.cancelLabel),
+            textOf(
+                block.cancelLabelKey.empty() ? std::string{"interrupt.cancel"}
+                                             : block.cancelLabelKey,
+                block.cancelLabel
+            ),
             kInterruptCancelActionId,
             "secondary"
         );
@@ -711,11 +719,11 @@ InterruptUiBlock blockOf(const pluginxx::ui::Item& item) {
     if (item.kind == "Padding" && item.children.size() == 1) {
         constexpr double kCellWidth = pluginxx::ui::gen::kDefaultCellWidth;
         const double     left       = item.hasPadding ? item.padding.left : 0.0;
-        const bool       pureIndent = left > 0.0 && item.padding.top <= 0.0
-                                && item.padding.right <= 0.0 && item.padding.bottom <= 0.0;
+        const bool pureIndent = left > 0.0 && item.padding.top <= 0.0 && item.padding.right <= 0.0
+                                && item.padding.bottom <= 0.0;
         if (pureIndent && kCellWidth > 0.0) {
-            InterruptUiBlock out = blockOf(item.children.front());
-            out.indent += static_cast<int>(std::lround(left / kCellWidth));
+            InterruptUiBlock out  = blockOf(item.children.front());
+            out.indent           += static_cast<int>(std::lround(left / kCellWidth));
             return out;
         }
     }
@@ -729,9 +737,9 @@ InterruptUiBlock blockOf(const pluginxx::ui::Item& item) {
     InterruptUiBlock b;
     b.kind  = item.kind.empty() ? std::string{"text"} : item.kind;
     b.color = item.tone;
-    b.bold   = item.bold;
-    b.dim    = item.dim;
-    b.wrap   = item.wrap;
+    b.bold  = item.bold;
+    b.dim   = item.dim;
+    b.wrap  = item.wrap;
 
     if (item.kind == "Text" || item.kind.empty()) {
         b.kind = "text";
@@ -750,13 +758,11 @@ InterruptUiBlock blockOf(const pluginxx::ui::Item& item) {
         b.kind  = "gap";
         b.lines = std::max(
             0,
-            static_cast<int>(
-                std::lround(item.size.value / pluginxx::ui::gen::kDefaultCellHeight)
-            )
+            static_cast<int>(std::lround(item.size.value / pluginxx::ui::gen::kDefaultCellHeight))
         );
     } else if (item.kind == "Control") {
-        b.kind   = "control";
-        b.id     = item.id;
+        b.kind    = "control";
+        b.id      = item.id;
         b.control = item.control;
         splitText(item.label, b.labelKey, b.label);
         splitText(item.help, b.helpKey, b.help);

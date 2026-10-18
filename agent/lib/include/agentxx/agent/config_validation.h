@@ -36,7 +36,7 @@ struct ConfigIssue {
 struct ConfigValidationReport {
     std::vector<ConfigIssue> issues;
 
-    bool hasFatal() const noexcept;
+    bool   hasFatal() const noexcept;
     size_t count(ConfigIssueLevel level) const noexcept;
     /// 一行一条: `[warning] key.path: message (source)`
     std::vector<std::string> render() const;

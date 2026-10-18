@@ -10,15 +10,15 @@
 #include <vector>
 
 #if XX_IS_WIN_D
-#  ifndef WIN32_LEAN_AND_MEAN
-#    define WIN32_LEAN_AND_MEAN
-#  endif
-#  ifndef NOMINMAX
-#    define NOMINMAX
-#  endif
-#  include <windows.h>
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
 #elif XX_IS_MACOS_D || XX_IS_IOS_D
-#  include <mach-o/dyld.h>
+#include <mach-o/dyld.h>
 #endif
 
 namespace agentxx {
@@ -42,7 +42,7 @@ inline std::optional<std::filesystem::path> executableDir() {
     }
     return std::nullopt;
 #elif XX_IS_MACOS_D || XX_IS_IOS_D
-    uint32_t size = 1024;
+    uint32_t          size = 1024;
     std::vector<char> buf(size);
     if (::_NSGetExecutablePath(buf.data(), &size) != 0) {
         // 缓冲区不足: size 已被更新为所需大小, 重试一次
@@ -78,7 +78,7 @@ inline std::optional<std::filesystem::path> executableDir() {
 ///
 /// - `return` 找不到返回空路径, 调用方按"跳过"或"环境未就绪"处理, 不误报失败
 inline std::filesystem::path sourceRootDir() {
-    namespace fs = std::filesystem;
+    namespace fs       = std::filesystem;
     auto looksLikeRoot = [](const fs::path& p) {
         std::error_code ec;
         return !p.empty() && fs::is_directory(p / "lib" / "include", ec)
@@ -128,11 +128,19 @@ inline std::filesystem::path sourceFilePath(std::string_view relative) {
 /// - `return` 实际清除的变量名列表 (供打印)
 inline std::vector<std::string> clearCredentialEnv() {
     static constexpr const char* kNames[] = {
-        "OPENAI_API_KEY",     "OPENAI_BASE_URL",    "OPENAI_API_BASE",
-        "ANTHROPIC_API_KEY",  "ANTHROPIC_BASE_URL", "DEEPSEEK_API_KEY",
-        "GEMINI_API_KEY",     "GOOGLE_API_KEY",     "MOONSHOT_API_KEY",
-        "DASHSCOPE_API_KEY",  "AZURE_OPENAI_API_KEY",
-        "AZURE_OPENAI_ENDPOINT", "AGENTXX_API_KEY",
+        "OPENAI_API_KEY",
+        "OPENAI_BASE_URL",
+        "OPENAI_API_BASE",
+        "ANTHROPIC_API_KEY",
+        "ANTHROPIC_BASE_URL",
+        "DEEPSEEK_API_KEY",
+        "GEMINI_API_KEY",
+        "GOOGLE_API_KEY",
+        "MOONSHOT_API_KEY",
+        "DASHSCOPE_API_KEY",
+        "AZURE_OPENAI_API_KEY",
+        "AZURE_OPENAI_ENDPOINT",
+        "AGENTXX_API_KEY",
     };
     std::vector<std::string> cleared;
 #if XX_IS_WIN_D

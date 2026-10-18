@@ -410,41 +410,40 @@ static int planningSetup(PluginCtx* ctx) {
     // 规划持久化 + 事件发布为通用接口 (不再依赖专用 planning iface)
 
     {
-        std::string schema = ctx->schema(kNamePlanning)
-                                 .enumString(
-                                     "mode",
-                                     kArgModeDesc,
-                                     {"write", "read"},
-                                     /*required=*/true
-                                 )
-                                 .string("roadmap", kArgRoadmapDesc)
-                                 .objectArray(
-                                     "todos",
-                                     kArgTodosDesc,
-                                     utilxx_base::Json{
-                                         {"type", "object"},
-                                         {"properties",
-                                          utilxx_base::Json{
-                                              {"state",
-                                               utilxx_base::Json{
-                                                   {"type", "string"},
-                                                   {"enum",
-                                                    utilxx_base::Json::array(
-                                                        {"pending",
-                                                         "in_progress",
-                                                         "completed",
-                                                         "failed"}
-                                                    )},
-                                               }},
-                                              {"content",
-                                               utilxx_base::Json{{"type", "string"}}},
-                                          }},
-                                         {"required",
-                                          utilxx_base::Json::array({"state", "content"})},
-                                     }
-                                 )
-                                 .string("notes", kArgNotesDesc)
-                                 .build();
+        std::string schema
+            = ctx->schema(kNamePlanning)
+                  .enumString(
+                      "mode",
+                      kArgModeDesc,
+                      {
+                          "write",
+                          "read"
+        },
+                      /*required=*/true
+                  )
+                  .string("roadmap", kArgRoadmapDesc)
+                  .objectArray(
+                      "todos",
+                      kArgTodosDesc,
+                      utilxx_base::Json{
+                          {"type", "object"},
+                          {"properties",
+                           utilxx_base::Json{
+                               {"state",
+                                utilxx_base::Json{
+                                    {"type", "string"},
+                                    {"enum",
+                                     utilxx_base::Json::array(
+                                         {"pending", "in_progress", "completed", "failed"}
+                                     )},
+                                }},
+                               {"content", utilxx_base::Json{{"type", "string"}}},
+                           }},
+                          {"required", utilxx_base::Json::array({"state", "content"})},
+                      }
+                  )
+                  .string("notes", kArgNotesDesc)
+                  .build();
 
         agentxx::plugin::fast_tool(
             *ctx,
@@ -461,10 +460,9 @@ static int planningSetup(PluginCtx* ctx) {
                 if (mode != "write" && mode != "read") {
                     // 参数检查失败抛异常 (主程序统一按工具错误结果回给模型),
                     // 不再返回编码后的错误 JSON
-                    throw std::invalid_argument{fmt::format(
-                        "Arg `mode` must be \"write\" or \"read\", got \"{}\"",
-                        mode
-                    )};
+                    throw std::invalid_argument{
+                        fmt::format("Arg `mode` must be \"write\" or \"read\", got \"{}\"", mode)
+                    };
                 }
 
                 if (mode == "read") {
@@ -823,9 +821,10 @@ static utilxx_base::Json buildPlanItems(const utilxx_base::Json& plan, bool grap
             // 按钮会被推到整行右侧, 按钮底色还会被拉长到该列的右边缘
             pluginxx::ui::Item prefix = pluginxx::ui::build::text("|- ");
             items.push_back(std::move(prefix));
-            items.push_back(agentxx::ui::kit::button(
-                {{"label", "Graph"}, {"action", pluginxx::ui::dumpAction(action)}}
-            ));
+            items.push_back(agentxx::ui::kit::button({
+                {"label",  "Graph"                         },
+                {"action", pluginxx::ui::dumpAction(action)}
+            }));
         } else {
             pluginxx::ui::Item diagram = pluginxx::ui::build::node("Diagram");
             diagram.mermaid            = roadmap;
@@ -843,9 +842,10 @@ static utilxx_base::Json buildPlanItems(const utilxx_base::Json& plan, bool grap
 /// 装饰按新的输入特征重新计算)
 static utilxx_base::Json makeReadingPlaceholderPlan() {
     utilxx_base::Json plan = utilxx_base::Json::object();
-    plan["items"]          = pluginxx::ui::dumpBlocks(
-        {agentxx::ui::kit::hint({{"text", "Reading saved planning..."}})}
-    );
+    plan["items"]          = pluginxx::ui::dumpBlocks({
+        agentxx::ui::kit::hint({{"text", "Reading saved planning..."}}
+        )
+    });
     return plan;
 }
 
@@ -1222,7 +1222,7 @@ static int planningClientSetup(ClientCtx* ctx) {
             spec.version     = 1;
             spec.struct_size = sizeof(AgentxxOverlaySpec);
             spec.type        = AGENTXX_OVERLAY_MERMAID;
-            spec.title   = agentxx::plugin::PluginStringView::fromCstr("Planning Roadmap");
+            spec.title       = agentxx::plugin::PluginStringView::fromCstr("Planning Roadmap");
             spec.payload = agentxx::plugin::PluginStringView::from(roadmap.data(), roadmap.size());
             spec.extra_json = agentxx::plugin::PluginStringView::fromCstr("{}");
             c->ui->open_overlay(c->host, &spec);

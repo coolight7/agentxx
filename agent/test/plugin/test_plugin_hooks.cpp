@@ -32,14 +32,14 @@
 #include "agentxx/plugin/api/plugin_kit.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/plugin/tool_registry.h"
-#include "neograph/graph/cancel.h"
-#include "neograph/graph/node.h"
-#include "neograph/graph/registry.h"
 #include "asio/redirect_error.hpp"
 #include "asio/steady_timer.hpp"
 #include "asio/this_coro.hpp"
 #include "asio/use_awaitable.hpp"
 #include "fmt/format.h"
+#include "neograph/graph/cancel.h"
+#include "neograph/graph/node.h"
+#include "neograph/graph/registry.h"
 #include "utilxx_base/asio_error.h"
 #include "utilxx_base/json.h"
 #include <algorithm>
@@ -103,9 +103,9 @@ std::string findPluginDir(const char* pluginName) {
 /// `example_feature` 的 start 事务会因"点未声明"失败 —— 本模块要用它做
 /// "后加载但优先级更高"的对照插件。
 struct Fixture {
-    std::shared_ptr<agentxx::agent::AgentContext>    ctx;
-    std::shared_ptr<agentxx::plugin::PluginManager>  mgr;
-    agentxx::feature::ContextPoints                  points;
+    std::shared_ptr<agentxx::agent::AgentContext>   ctx;
+    std::shared_ptr<agentxx::plugin::PluginManager> mgr;
+    agentxx::feature::ContextPoints                 points;
 };
 
 asio::awaitable<Fixture> makeFixture() {
@@ -158,11 +158,9 @@ std::vector<std::string> jsonOrder(const utilxx_base::Json& hooksJson, std::stri
             break;
         }
         for (const auto& h : point["handlers"]) {
-            out.push_back(fmt::format(
-                "{}#{}",
-                h.value("owner", std::string{}),
-                h.value("handle", 0)
-            ));
+            out.push_back(
+                fmt::format("{}#{}", h.value("owner", std::string{}), h.value("handle", 0))
+            );
         }
         break;
     }
@@ -202,13 +200,8 @@ void* PLUGINXX_CALL coreHookStart(
 }
 
 /// 出错的 core 层处理器 (派发必须只记日志继续)
-void* PLUGINXX_CALL coreHookThrows(
-    void*,
-    int32_t,
-    const PluginxxStringView*,
-    const PluginxxOperatorNotify*,
-    PluginxxString*
-) {
+void* PLUGINXX_CALL
+    coreHookThrows(void*, int32_t, const PluginxxStringView*, const PluginxxOperatorNotify*, PluginxxString*) {
     throw std::runtime_error("core hook boom");
 }
 
@@ -226,46 +219,37 @@ void PLUGINXX_CALL coreHookCancelAsync(void* user_data, void*) {
     }
 }
 
-void* PLUGINXX_CALL coreHookAsync(
-    void*,
-    int32_t,
-    const PluginxxStringView*,
-    const PluginxxOperatorNotify*,
-    PluginxxString*
-) {
+void* PLUGINXX_CALL
+    coreHookAsync(void*, int32_t, const PluginxxStringView*, const PluginxxOperatorNotify*, PluginxxString*) {
     // core 层不支持异步: 返回非空句柄会被主程序记警告并请求取消
     return reinterpret_cast<void*>(static_cast<intptr_t>(0x1));
 }
 
 /// 登记一个 core 层处理器
 int64_t addCoreHook(
-    Fixture&        f,
-    bool            throwsInstead,
-    int32_t         priority,
-    std::string     module,
-    CoreHookTrace*  trace
+    Fixture&       f,
+    bool           throwsInstead,
+    int32_t        priority,
+    std::string    module,
+    CoreHookTrace* trace
 ) {
     AgentxxPluginHookSpec spec{};
     spec.struct_size = sizeof(AgentxxPluginHookSpec);
-    spec.point      = AGENTXX_PLUGIN_HOOK_AGENT_START;
-    spec.hook_start = throwsInstead ? &coreHookThrows : &coreHookStart;
+    spec.point       = AGENTXX_PLUGIN_HOOK_AGENT_START;
+    spec.hook_start  = throwsInstead ? &coreHookThrows : &coreHookStart;
     spec.hook_cancel = nullptr;
     spec.user_data   = trace;
-    return f.mgr->addCoreHookHandler(
-        AGENTXX_PLUGIN_HOOK_AGENT_START,
-        priority,
-        std::move(module),
-        spec
-    );
+    return f.mgr
+        ->addCoreHookHandler(AGENTXX_PLUGIN_HOOK_AGENT_START, priority, std::move(module), spec);
 }
 
 /// 登记一个插件层处理器 (绕过 kit, 直接走主程序入口)
 int64_t addPluginHook(
-    Fixture&                        f,
+    Fixture&                         f,
     agentxx::plugin::PluginInstance* inst,
-    int32_t                         priority,
-    std::string_view                ownerTag,
-    std::string_view                depict
+    int32_t                          priority,
+    std::string_view                 ownerTag,
+    std::string_view                 depict
 ) {
     AgentxxPluginHookSpecEx spec{};
     spec.struct_size = sizeof(AgentxxPluginHookSpecEx);
@@ -275,7 +259,11 @@ int64_t addPluginHook(
     spec.owner_tag   = agentxx::plugin::PluginStringView::from(ownerTag);
     spec.depict      = agentxx::plugin::PluginStringView::from(depict);
     spec.user_data   = nullptr;
-    spec.hook_start  = [](void*, int32_t, const PluginxxStringView*, const PluginxxOperatorNotify* notify, PluginxxString*) -> void* {
+    spec.hook_start  = [](void*,
+                         int32_t,
+                         const PluginxxStringView*,
+                         const PluginxxOperatorNotify* notify,
+                         PluginxxString*) -> void* {
         // 快同步处理器: 立即完成 (钩子结果被丢弃)
         if (notify != nullptr && notify->done != nullptr) {
             notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
@@ -283,7 +271,7 @@ int64_t addPluginHook(
         return nullptr;
     };
     spec.hook_cancel = nullptr;
-    int64_t handle   = 0;
+    int64_t   handle = 0;
     const int rc     = f.mgr->registerHookEx(inst, &spec, &handle);
     return rc == 0 ? handle : 0;
 }
@@ -296,9 +284,9 @@ int64_t addPluginHook(
 namespace {
 
 asio::awaitable<void> test_order_by_layer_priority_seq() {
-    auto      f          = co_await makeFixture();
-    const auto pluginA    = findPluginDir("example_plugin");   // 基础登记, 优先级 0
-    const auto pluginB    = findPluginDir("example_feature");  // 扩展登记, 优先级 -10
+    auto       f       = co_await makeFixture();
+    const auto pluginA = findPluginDir("example_plugin");  // 基础登记, 优先级 0
+    const auto pluginB = findPluginDir("example_feature"); // 扩展登记, 优先级 -10
 
     auto instA = co_await f.mgr->loadPluginAsync(pluginA);
     XX_TEST_EXPECT_TRUE(instA != nullptr);
@@ -323,7 +311,7 @@ asio::awaitable<void> test_order_by_layer_priority_seq() {
     }
 
     // 同优先级 → 按登记序号: 再给 example_plugin 登记一个优先级 0 的处理器 (句柄更大)
-    int64_t       baseHandleA = 0;
+    int64_t baseHandleA = 0;
     for (const auto& record : instA->hookRegistrations) {
         if (record.base) {
             baseHandleA = record.handle;
@@ -356,10 +344,7 @@ asio::awaitable<void> test_order_by_layer_priority_seq() {
     // 撤销 core 处理器 (按句柄; core 层没有实例归属)
     XX_TEST_EXPECT_TRUE(f.mgr->removeCoreHookHandler(coreHandle));
     XX_TEST_EXPECT_FALSE(f.mgr->removeCoreHookHandler(coreHandle));
-    XX_TEST_EXPECT_EQ(
-        f.mgr->handlersOf(AGENTXX_PLUGIN_HOOK_AGENT_START).size(),
-        size_t{3}
-    );
+    XX_TEST_EXPECT_EQ(f.mgr->handlersOf(AGENTXX_PLUGIN_HOOK_AGENT_START).size(), size_t{3});
 
     // 卸载插件: 处理器随实例一起走
     XX_TEST_EXPECT_TRUE(co_await f.mgr->unloadAsync("example_plugin", std::chrono::seconds{5}));
@@ -375,9 +360,9 @@ asio::awaitable<void> test_order_by_layer_priority_seq() {
 namespace {
 
 asio::awaitable<void> test_multiple_handlers_and_owner_check() {
-    auto      f  = co_await makeFixture();
-    auto instA  = co_await f.mgr->loadPluginAsync(findPluginDir("example_plugin"));
-    auto instB  = co_await f.mgr->loadPluginAsync(findPluginDir("example_feature"));
+    auto f     = co_await makeFixture();
+    auto instA = co_await f.mgr->loadPluginAsync(findPluginDir("example_plugin"));
+    auto instB = co_await f.mgr->loadPluginAsync(findPluginDir("example_feature"));
     XX_TEST_EXPECT_TRUE(instA != nullptr && instB != nullptr);
     if (!instA || !instB) {
         co_return;
@@ -428,14 +413,15 @@ asio::awaitable<void> test_multiple_handlers_and_owner_check() {
     XX_TEST_EXPECT_EQ(f.mgr->unregisterHookEx(instB.get(), h1), 0);
     handlers = f.mgr->handlersOf(AGENTXX_PLUGIN_HOOK_AGENT_START);
     XX_TEST_EXPECT_EQ(handlers.size(), base + 1);
-    XX_TEST_EXPECT_TRUE(
-        std::any_of(handlers.begin(), handlers.end(), [h2](const auto& h) {
-            return h.handle == h2;
-        })
-    );
+    XX_TEST_EXPECT_TRUE(std::any_of(handlers.begin(), handlers.end(), [h2](const auto& h) {
+        return h.handle == h2;
+    }));
     XX_TEST_EXPECT_EQ(f.mgr->unregisterHookEx(instB.get(), h2), 0);
     XX_TEST_EXPECT_EQ(f.mgr->handlersOf(AGENTXX_PLUGIN_HOOK_AGENT_START).size(), base);
-    XX_TEST_EXPECT_EQ(instB->hookRegistrations.size(), size_t{1}); ///< 只剩 example_feature 自己的登记
+    XX_TEST_EXPECT_EQ(
+        instB->hookRegistrations.size(),
+        size_t{1}
+    ); ///< 只剩 example_feature 自己的登记
 
     XX_TEST_EXPECT_TRUE(co_await f.mgr->unloadAsync("example_plugin", std::chrono::seconds{5}));
     XX_TEST_EXPECT_TRUE(co_await f.mgr->unloadAsync("example_feature", std::chrono::seconds{5}));
@@ -449,8 +435,8 @@ asio::awaitable<void> test_multiple_handlers_and_owner_check() {
 namespace {
 
 asio::awaitable<void> test_base_and_ex_independent_and_clamp() {
-    auto      f     = co_await makeFixture();
-    auto      inst  = co_await f.mgr->loadPluginAsync(findPluginDir("example_plugin"));
+    auto f    = co_await makeFixture();
+    auto inst = co_await f.mgr->loadPluginAsync(findPluginDir("example_plugin"));
     XX_TEST_EXPECT_TRUE(inst != nullptr);
     if (!inst) {
         co_return;
@@ -489,7 +475,11 @@ asio::awaitable<void> test_base_and_ex_independent_and_clamp() {
     baseSpec.struct_size = sizeof(AgentxxPluginHookSpec);
     baseSpec.point       = AGENTXX_PLUGIN_HOOK_AGENT_START;
     baseSpec.user_data   = nullptr;
-    baseSpec.hook_start  = [](void*, int32_t, const PluginxxStringView*, const PluginxxOperatorNotify* notify, PluginxxString*) -> void* {
+    baseSpec.hook_start  = [](void*,
+                             int32_t,
+                             const PluginxxStringView*,
+                             const PluginxxOperatorNotify* notify,
+                             PluginxxString*) -> void* {
         if (notify != nullptr && notify->done != nullptr) {
             notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
         }
@@ -521,17 +511,12 @@ asio::awaitable<void> test_base_and_ex_independent_and_clamp() {
     XX_TEST_EXPECT_EQ(f.mgr->handlersOf(AGENTXX_PLUGIN_HOOK_AGENT_START).size(), size_t{4});
 
     // 撤销基础登记: 只摘基础那条, 扩展登记的处理器还在
-    XX_TEST_EXPECT_EQ(
-        f.mgr->unregisterHook(inst.get(), AGENTXX_PLUGIN_HOOK_AGENT_START),
-        0
-    );
+    XX_TEST_EXPECT_EQ(f.mgr->unregisterHook(inst.get(), AGENTXX_PLUGIN_HOOK_AGENT_START), 0);
     handlers = f.mgr->handlersOf(AGENTXX_PLUGIN_HOOK_AGENT_START);
     XX_TEST_EXPECT_EQ(handlers.size(), size_t{3}); ///< high / low / extra 三个扩展处理器
-    XX_TEST_EXPECT_TRUE(
-        std::any_of(handlers.begin(), handlers.end(), [extra](const auto& h) {
-            return h.handle == extra;
-        })
-    );
+    XX_TEST_EXPECT_TRUE(std::any_of(handlers.begin(), handlers.end(), [extra](const auto& h) {
+        return h.handle == extra;
+    }));
     XX_TEST_EXPECT_EQ(
         f.mgr->unregisterHook(inst.get(), AGENTXX_PLUGIN_HOOK_AGENT_START),
         -1
@@ -581,8 +566,8 @@ asio::awaitable<void> test_single_dispatcher_lifecycle() {
     XX_TEST_EXPECT_TRUE(f.mgr->removeCoreHookHandler(h2));
     {
         const auto state = dispatchHandleState(f);
-        XX_TEST_EXPECT_TRUE(state.first);   ///< 链上还在
-        XX_TEST_EXPECT_TRUE(state.second);  ///< 已停用 (链遍历跳过)
+        XX_TEST_EXPECT_TRUE(state.first);  ///< 链上还在
+        XX_TEST_EXPECT_TRUE(state.second); ///< 已停用 (链遍历跳过)
     }
     f.mgr->flushPendingCleanup();
     f.mgr->onTurnEnd();
@@ -604,8 +589,8 @@ asio::awaitable<void> test_single_dispatcher_lifecycle() {
 namespace {
 
 asio::awaitable<void> test_dispatch_order_and_failure_isolation() {
-    auto      f    = co_await makeFixture();
-    auto      inst = co_await f.mgr->loadPluginAsync(findPluginDir("example_plugin"));
+    auto f    = co_await makeFixture();
+    auto inst = co_await f.mgr->loadPluginAsync(findPluginDir("example_plugin"));
     XX_TEST_EXPECT_TRUE(inst != nullptr);
     if (!inst) {
         co_return;
@@ -617,8 +602,8 @@ asio::awaitable<void> test_dispatch_order_and_failure_isolation() {
     XX_TEST_EXPECT_GE(throwing, int64_t{1});
     XX_TEST_EXPECT_GE(ok, int64_t{1});
 
-    neograph::graph::GraphState  state;
-    neograph::graph::RunContext  runCtx;
+    neograph::graph::GraphState state;
+    neograph::graph::RunContext runCtx;
     fillNodeInput(runCtx);
     neograph::graph::NodeInput in{state, runCtx, nullptr};
 
@@ -636,19 +621,15 @@ asio::awaitable<void> test_dispatch_order_and_failure_isolation() {
 
     // core 层只支持同步处理器: 返回操作句柄的会被请求取消, 但派发要继续
     {
-        AsyncCoreHookState asyncState;
+        AsyncCoreHookState    asyncState;
         AgentxxPluginHookSpec spec{};
         spec.struct_size = sizeof(AgentxxPluginHookSpec);
         spec.point       = AGENTXX_PLUGIN_HOOK_AGENT_START;
         spec.hook_start  = &coreHookAsync;
         spec.hook_cancel = &coreHookCancelAsync;
         spec.user_data   = &asyncState;
-        const int64_t handle = f.mgr->addCoreHookHandler(
-            AGENTXX_PLUGIN_HOOK_AGENT_START,
-            -5,
-            "test_async",
-            spec
-        );
+        const int64_t handle
+            = f.mgr->addCoreHookHandler(AGENTXX_PLUGIN_HOOK_AGENT_START, -5, "test_async", spec);
         XX_TEST_EXPECT_GE(handle, int64_t{1});
         co_await f.mgr->dispatchHook(AGENTXX_PLUGIN_HOOK_AGENT_START, in);
         XX_TEST_EXPECT_EQ(asyncState.cancels, 1); ///< 已请求取消 (core 层不驱动异步)
@@ -721,7 +702,10 @@ asio::awaitable<void> test_manifest_and_dev_mode() {
             XX_TEST_EXPECT_TRUE(first.value("enabled", false));
             // 第二个是插件自己在 start 里经 kit 登记的 (归属标签与说明来自插件代码)
             const auto& second = handlers[1];
-            XX_TEST_EXPECT_EQ(second.value("ownerTag", std::string{}), std::string{"example_feature"});
+            XX_TEST_EXPECT_EQ(
+                second.value("ownerTag", std::string{}),
+                std::string{"example_feature"}
+            );
             XX_TEST_EXPECT_EQ(second.value("priority", 0), -10);
             XX_TEST_EXPECT_TRUE(
                 second.value("depict", std::string{}).find("有序登记") != std::string::npos
@@ -732,8 +716,8 @@ asio::awaitable<void> test_manifest_and_dev_mode() {
 
     // 开发者模式: 派发后出现 stat 段 (次数 / 上次顺序与耗时)
     agentxx::agent::AgentConfigStatic::devMode = true;
-    neograph::graph::GraphState  state;
-    neograph::graph::RunContext  runCtx;
+    neograph::graph::GraphState state;
+    neograph::graph::RunContext runCtx;
     fillNodeInput(runCtx);
     neograph::graph::NodeInput in{state, runCtx, nullptr};
     co_await f.mgr->dispatchHook(AGENTXX_PLUGIN_HOOK_AGENT_START, in);
@@ -784,11 +768,9 @@ asio::awaitable<void> test_lifecycle_disable_enable_unload() {
     XX_TEST_EXPECT_EQ(inst->hookRegistrations.size(), size_t{1});
     XX_TEST_EXPECT_EQ(inst->hookRegistrations.front().handle, int64_t{0});
     XX_TEST_EXPECT_FALSE(dispatchHandleState(f).first);
-    XX_TEST_EXPECT_TRUE(jsonOrder(
-                            utilxx_base::Json::parse(f.mgr->hooksJson()),
-                            "AGENT_START"
-                        )
-                            .empty());
+    XX_TEST_EXPECT_TRUE(
+        jsonOrder(utilxx_base::Json::parse(f.mgr->hooksJson()), "AGENT_START").empty()
+    );
 
     // 启用: start 事务重新登记
     f.mgr->enable("example_plugin");
@@ -838,9 +820,9 @@ asio::awaitable<void> test_plugin_side_kit() {
 
     // 经 kit 登记 (优先级 -5 -> 排在基础登记之前)
     agentxx::plugin::HookOptions opts;
-    opts.priority = -5;
-    opts.ownerTag = "kit";
-    opts.depict   = "kit 登记的处理器";
+    opts.priority        = -5;
+    opts.ownerTag        = "kit";
+    opts.depict          = "kit 登记的处理器";
     const int64_t handle = agentxx::plugin::hookEx(
         sdk,
         AGENTXX_PLUGIN_HOOK_AGENT_START,
@@ -880,8 +862,7 @@ asio::awaitable<void> test_plugin_side_kit() {
 // ===========================================================================
 
 asio::awaitable<TestResult> run_plugin_hooks_tests() {
-    TEST_INFO << "[plugin_hooks] 钩子处理器清单与优先级 (agentxx.agent.hooks)"
-              << std::endl;
+    TEST_INFO << "[plugin_hooks] 钩子处理器清单与优先级 (agentxx.agent.hooks)" << std::endl;
     try {
         co_await test_order_by_layer_priority_seq();
         co_await test_multiple_handlers_and_owner_check();

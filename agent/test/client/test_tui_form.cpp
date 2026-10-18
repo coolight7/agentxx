@@ -62,14 +62,14 @@ std::vector<pluginxx::ui::Item> formItems(const char* json) {
 
 /// 动作派发探针 (记录 owner/action/args; 供断言"结果经动作通道回传")
 struct ActionProbe {
-    std::mutex         mu;
-    int                calls = 0;
-    std::string        owner;
-    std::string        action;
-    std::string        args;
+    std::mutex  mu;
+    int         calls = 0;
+    std::string owner;
+    std::string action;
+    std::string args;
 
     static void PLUGINXX_CALL onAction(const AgentxxUiActionContext* ctx, void* ud) {
-        auto* self = static_cast<ActionProbe*>(ud);
+        auto*                       self = static_cast<ActionProbe*>(ud);
         std::lock_guard<std::mutex> lk(self->mu);
         ++self->calls;
         self->owner.assign(
@@ -125,8 +125,8 @@ bool findTextPos(const ftxui::Screen& screen, std::string_view needle, int& outX
     for (int y = 0; y < screen.dimy(); ++y) {
         std::string line;
         for (int x = 0; x < screen.dimx(); ++x) {
-            const std::string& ch = screen.PixelAt(x, y).character;
-            line += ch.empty() ? std::string{" "} : ch;
+            const std::string& ch  = screen.PixelAt(x, y).character;
+            line                  += ch.empty() ? std::string{" "} : ch;
         }
         const auto pos = line.find(needle);
         if (pos != std::string::npos) {
@@ -213,11 +213,15 @@ void test_form_keyboard() {
     form.focusedId = "name";
 
     // 首次输入替换缺省值 (与中断历史行为一致)
-    XX_TEST_EXPECT_TRUE(agentxx::client::handleFormKeyInput(items, form, ftxui::Event::Character('x')));
+    XX_TEST_EXPECT_TRUE(
+        agentxx::client::handleFormKeyInput(items, form, ftxui::Event::Character('x'))
+    );
     XX_TEST_EXPECT_EQ(form.ensure("name").editText, std::string{"x"});
     XX_TEST_EXPECT_TRUE(form.ensure("name").edited);
 
-    XX_TEST_EXPECT_TRUE(agentxx::client::handleFormKeyInput(items, form, ftxui::Event::Character('y')));
+    XX_TEST_EXPECT_TRUE(
+        agentxx::client::handleFormKeyInput(items, form, ftxui::Event::Character('y'))
+    );
     XX_TEST_EXPECT_EQ(form.ensure("name").editText, std::string{"xy"});
 
     // 退格删除一个字符
@@ -229,9 +233,13 @@ void test_form_keyboard() {
     XX_TEST_EXPECT_EQ(form.focusedId, std::string{"num"});
 
     // 数值框过滤非数字字符 (只接受数字)
-    XX_TEST_EXPECT_TRUE(agentxx::client::handleFormKeyInput(items, form, ftxui::Event::Character('a')));
+    XX_TEST_EXPECT_TRUE(
+        agentxx::client::handleFormKeyInput(items, form, ftxui::Event::Character('a'))
+    );
     XX_TEST_EXPECT_EQ(form.ensure("num").editText, std::string{"5"});
-    XX_TEST_EXPECT_TRUE(agentxx::client::handleFormKeyInput(items, form, ftxui::Event::Character('7')));
+    XX_TEST_EXPECT_TRUE(
+        agentxx::client::handleFormKeyInput(items, form, ftxui::Event::Character('7'))
+    );
     XX_TEST_EXPECT_EQ(form.ensure("num").editText, std::string{"7"});
 
     // 方向键被消费 (单行无光标定位, 不落到滚动)
@@ -239,7 +247,7 @@ void test_form_keyboard() {
     XX_TEST_EXPECT_EQ(form.ensure("num").editText, std::string{"7"});
 
     // 非输入类控件的键盘语义: checkbox 空格翻转; buttons 左右切换; select 上下切换
-    auto others = formItems(R"([
+    auto                         others = formItems(R"([
         {"kind":"Control","control":"checkbox","id":"opt","label":"Opt","value":false},
         {"kind":"Control","control":"buttons","id":"pick",
          "options":[{"value":"a","label":"A"},{"value":"b","label":"B"}]},
@@ -249,7 +257,9 @@ void test_form_keyboard() {
     agentxx::client::UiFormState f2;
     agentxx::client::initFormState(f2, others);
     f2.focusedId = "opt";
-    XX_TEST_EXPECT_TRUE(agentxx::client::handleFormKeyInput(others, f2, ftxui::Event::Character(' ')));
+    XX_TEST_EXPECT_TRUE(
+        agentxx::client::handleFormKeyInput(others, f2, ftxui::Event::Character(' '))
+    );
     XX_TEST_EXPECT_TRUE(f2.ensure("opt").checked);
     f2.focusedId = "pick";
     XX_TEST_EXPECT_TRUE(agentxx::client::handleFormKeyInput(others, f2, ftxui::Event::ArrowRight));
@@ -265,7 +275,7 @@ void test_form_keyboard() {
 
 /// 校验与取值: 越界写提示且拒绝提交; 通过后按控件形态组装值
 void test_form_validate_and_values() {
-    auto items = formItems(R"([
+    auto                         items = formItems(R"([
         {"kind":"Control","control":"checkbox","id":"opt","label":"Opt","value":true},
         {"kind":"Control","control":"select","id":"mode",
          "options":[{"value":"fast","label":"Fast"},{"value":"safe","label":"Safe"}],
@@ -316,7 +326,7 @@ void test_form_validate_and_values() {
 
 /// 候选项缺失: 校验失败并写提示 (避免"提交了空值")
 void test_form_validate_missing_options() {
-    auto items = formItems(R"([
+    auto                         items = formItems(R"([
         {"kind":"Control","control":"select","id":"mode","options":[]},
         {"kind":"Control","control":"buttons","id":"pick","options":[]}
     ])");
@@ -334,7 +344,7 @@ void test_form_nested_controls() {
                                        "label":"I","value":false}]}
         ]}
     ])");
-    auto ids = agentxx::client::collectControlIds(items);
+    auto ids   = agentxx::client::collectControlIds(items);
     XX_TEST_EXPECT_EQ(ids.size(), size_t{1});
     XX_TEST_EXPECT_EQ(ids[0], std::string{"inner"});
     agentxx::client::UiFormState form;
@@ -353,8 +363,8 @@ void test_overlay_form_submit_through_action_channel() {
     asio::io_context io;
     // 持有 work guard: poll() 在"无工作可做"时会返回并把 io_context 标记为 stopped,
     // 之后再投递的派发动作会因"executor 已停止"被丢弃 (见 manager_base::postToIo)
-    auto             work = asio::make_work_guard(io);
-    auto             mgr = std::make_shared<FormTestManager>(io.get_executor());
+    auto work = asio::make_work_guard(io);
+    auto mgr  = std::make_shared<FormTestManager>(io.get_executor());
     mgr->setUiAdapter(std::make_shared<FormTestUiAdapter>());
     auto inst = mgr->createInstance("form_probe");
     XX_TEST_EXPECT_TRUE(inst != nullptr);
@@ -389,7 +399,7 @@ void test_overlay_form_submit_through_action_channel() {
             {"kind":"Button","label":"APPLY","variant":"primary","action":"__submit"},
             {"kind":"Button","label":"DROP","action":"__cancel"}]}
     ]})";
-    auto overlay = agentxx::client::createUniversalOverlay(
+    auto              overlay = agentxx::client::createUniversalOverlay(
         ctx,
         AGENTXX_OVERLAY_CUSTOM,
         "Files",
@@ -416,8 +426,8 @@ void test_overlay_form_submit_through_action_channel() {
     // 再渲染一帧: 内容宽度按滚动容器"上一帧测量值"确定 (首帧尚未测量, 按终端宽度估算),
     // 第二帧起画面与命中区域一致 —— 用例按稳定后的那一帧点击
     screen = renderFrame();
-    int  sx     = 0;
-    int  sy     = 0;
+    int sx = 0;
+    int sy = 0;
     XX_TEST_EXPECT_TRUE(findTextPos(screen, "a.txt", sx, sy));
     XX_TEST_EXPECT_TRUE(findTextPos(screen, "APPLY", sx, sy));
 
@@ -464,7 +474,7 @@ void test_panel_form_registers_hit_regions() {
     asio::io_context io;
     auto             mgr = std::make_shared<FormTestManager>(io.get_executor());
     mgr->setUiAdapter(std::make_shared<FormTestUiAdapter>());
-    auto inst = mgr->createInstance("panel_form_probe");
+    auto  inst  = mgr->createInstance("panel_form_probe");
     auto* panel = static_cast<AgentxxPanel*>(mgr->registerPanel(
         inst.get(),
         std::string_view{"panel_form_probe.panel"},

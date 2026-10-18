@@ -95,12 +95,7 @@ std::string TokenEstimator::identityOf(const CountTokensRequest& req) const {
     } else {
         hash = utilxx_base::hash::fnv1a64(req.text, hash);
     }
-    return fmt::format(
-        "{}|{}|{:016x}",
-        req.model.empty() ? "-" : req.model,
-        kind,
-        hash
-    );
+    return fmt::format("{}|{}|{:016x}", req.model.empty() ? "-" : req.model, kind, hash);
 }
 
 std::string TokenEstimator::requestToJson(const CountTokensRequest& req) {
@@ -111,7 +106,7 @@ std::string TokenEstimator::requestToJson(const CountTokensRequest& req) {
 
 std::string Codec<CountTokensRequest>::toJson(const CountTokensRequest& req) {
     utilxx_base::Json json = utilxx_base::Json::object();
-    json["text"] = req.text;
+    json["text"]           = req.text;
     if (!req.messages.empty()) {
         neograph::json neoMsgs;
         neograph::to_json(neoMsgs, req.messages);
@@ -178,7 +173,7 @@ std::optional<CountTokensValue> Codec<CountTokensValue>::fromJson(std::string_vi
 
 std::string Codec<SummarizeRequest>::toJson(const SummarizeRequest& req) {
     utilxx_base::Json json = utilxx_base::Json::object();
-    json["sessionId"]        = req.sessionId;
+    json["sessionId"]      = req.sessionId;
     if (!req.messages.empty()) {
         neograph::json neoMsgs;
         neograph::to_json(neoMsgs, req.messages);
@@ -228,8 +223,8 @@ std::optional<SummarizeRequest> Codec<SummarizeRequest>::fromJson(std::string_vi
 
 std::string Codec<SummarizeValue>::toJson(const SummarizeValue& value) {
     utilxx_base::Json json = utilxx_base::Json::object();
-    json["summary"]   = value.summary;
-    json["truncated"] = value.truncated;
+    json["summary"]        = value.summary;
+    json["truncated"]      = value.truncated;
     return json.dump();
 }
 
@@ -256,14 +251,14 @@ std::string summarizeIdentity(const SummarizeRequest& req) {
     // 身份只含"这次算哪一份输入": 会话 + 消息内容指纹 + 模型
     // (不含 targetTokens 这类策略参数; 要不同策略请显式给 identity 或 refresh)
     // - 增量哈希: 消息可能很大, 不拼接临时字符串
-    uint64_t hash = utilxx_base::hash::kFnv1a64OffsetBasis;
+    uint64_t hash           = utilxx_base::hash::kFnv1a64OffsetBasis;
     bool     hashedMessages = false;
     for (const auto& msg : req.messages) {
         hashedMessages = true;
-        hash = utilxx_base::hash::fnv1a64(msg.role, hash);
-        hash = utilxx_base::hash::fnv1a64("\x1f", hash);
-        hash = utilxx_base::hash::fnv1a64(msg.content, hash);
-        hash = utilxx_base::hash::fnv1a64("\x1e", hash);
+        hash           = utilxx_base::hash::fnv1a64(msg.role, hash);
+        hash           = utilxx_base::hash::fnv1a64("\x1f", hash);
+        hash           = utilxx_base::hash::fnv1a64(msg.content, hash);
+        hash           = utilxx_base::hash::fnv1a64("\x1e", hash);
     }
     if (!hashedMessages) {
         hash = utilxx_base::hash::fnv1a64(req.sessionId, hash);
@@ -280,16 +275,15 @@ std::string summarizeIdentity(const SummarizeRequest& req) {
 
 ContextPoints registerContextPoints(Registry& registry, const ContextPointOptions& options) {
     ContextPoints out;
-    auto estimator = std::make_shared<TokenEstimator>(options.estimator);
+    auto          estimator = std::make_shared<TokenEstimator>(options.estimator);
 
     // ---- agentxx.context.countTokens (可调; 按身份的值缓存) ----
     PointOptions countOpts;
-    countOpts.title     = "文本 Token 估算";
-    countOpts.depict    = "按模型规则估算一段文本或一组消息的 token 数";
-    countOpts.callable  = true;
-    countOpts.callDoc
-        = "参数: text 或 messages (二选一, 两个都给时以 messages 为准), "
-          "可选 model / kind / countThinking; 返回: {tokens}";
+    countOpts.title    = "文本 Token 估算";
+    countOpts.depict   = "按模型规则估算一段文本或一组消息的 token 数";
+    countOpts.callable = true;
+    countOpts.callDoc = "参数: text 或 messages (二选一, 两个都给时以 messages 为准), "
+                        "可选 model / kind / countThinking; 返回: {tokens}";
     countOpts.cache    = CacheMode::ByIdentity;
     countOpts.maxItems = 64;
     countOpts.maxBytes = 256u * 1024u;
@@ -303,7 +297,7 @@ ContextPoints registerContextPoints(Registry& registry, const ContextPointOption
     out.countTokens->addCoreImpl(
         std::string{points::kOwnerCountTokens},
         0, // 核心层内的顺序 (跨层顺序由层决定: 插件层恒在 core 层之前)
-        [estimator](const CountTokensRequest& req, const ImplContext&) 
+        [estimator](const CountTokensRequest& req, const ImplContext&)
             -> asio::awaitable<std::optional<CountTokensValue>> {
             CountTokensValue value;
             if (!req.messages.empty()) {
@@ -319,12 +313,12 @@ ContextPoints registerContextPoints(Registry& registry, const ContextPointOption
 
     // ---- agentxx.context.summarize (本轮不可调; 结果由调度方写回会话) ----
     PointOptions summarizeOpts;
-    summarizeOpts.title      = "上下文压缩";
-    summarizeOpts.depict     = "把一段上下文压成一段摘要文本 (不写回会话)";
-    summarizeOpts.callable   = false;
-    summarizeOpts.cache      = CacheMode::None;
+    summarizeOpts.title         = "上下文压缩";
+    summarizeOpts.depict        = "把一段上下文压成一段摘要文本 (不写回会话)";
+    summarizeOpts.callable      = false;
+    summarizeOpts.cache         = CacheMode::None;
     summarizeOpts.implTimeoutMs = 0;
-    out.summarize            = &registry.provide<SummarizeRequest, SummarizeValue>(
+    out.summarize               = &registry.provide<SummarizeRequest, SummarizeValue>(
         points::kContextSummarize,
         std::move(summarizeOpts),
         [](const SummarizeRequest& req) {
@@ -336,7 +330,7 @@ ContextPoints registerContextPoints(Registry& registry, const ContextPointOption
         out.summarize->addCoreImpl(
             std::string{points::kOwnerSummarize},
             0,
-            [impl](const SummarizeRequest& req, const ImplContext& ctx) 
+            [impl](const SummarizeRequest& req, const ImplContext& ctx)
                 -> asio::awaitable<std::optional<SummarizeValue>> {
                 co_return co_await impl(req, ctx);
             }

@@ -116,7 +116,9 @@ asio::awaitable<TestResult> run_permission_tests() {
         XX_TEST_EXPECT_TRUE(d.reason == PermissionReason::Rule);
         XX_TEST_EXPECT_FALSE(d.rule.empty());
         XX_TEST_EXPECT_EQ(d.target, allowedFile);
-        XX_TEST_EXPECT_TRUE(d.describe().find("matched a registered permission rule") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(
+            d.describe().find("matched a registered permission rule") != std::string::npos
+        );
     }
     {
         perm->setFilesystemPermission(deniedFile, PermissionOperator::DENY, readScope);
@@ -203,11 +205,13 @@ asio::awaitable<TestResult> run_permission_tests() {
         XX_TEST_EXPECT_TRUE(rv.reason.empty());
 
         // 参数被改写 (换成另一个目标): 复验拒绝, 理由带批准与执行两边的目标
-        auto tampered          = args;
-        tampered["path"]       = "./perm_test_other/other.txt";
-        const auto rvChanged   = perm->reverifyApprovedTargets("perm_test_read", "call-1", tampered);
+        auto tampered        = args;
+        tampered["path"]     = "./perm_test_other/other.txt";
+        const auto rvChanged = perm->reverifyApprovedTargets("perm_test_read", "call-1", tampered);
         XX_TEST_EXPECT_FALSE(rvChanged.ok);
-        XX_TEST_EXPECT_TRUE(rvChanged.reason.find("permission target changed") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(
+            rvChanged.reason.find("permission target changed") != std::string::npos
+        );
         XX_TEST_EXPECT_TRUE(rvChanged.reason.find("perm_test_other") != std::string::npos);
 
         // 未经过判定的工具调用 (未声明权限): 无约束, 复验通过

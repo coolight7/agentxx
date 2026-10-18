@@ -335,9 +335,9 @@ void FilePickerOverlay::confirmSelection() {
         }
     } else {
         // 服务端附件: 直接构造服务端路径附件 (dataUrl 留空, 服务端自主加载并转 Base64)
-        auto ext = utilxx_base::toLower(utilxx_base::pathToUtf8Generic(
-            utilxx_base::utf8ToPath(entry.fullPath).extension()
-        ));
+        auto ext = utilxx_base::toLower(
+            utilxx_base::pathToUtf8Generic(utilxx_base::utf8ToPath(entry.fullPath).extension())
+        );
         auto mime = agentxx::agent::mimeTypeFromExtension(ext);
 
         agentxx::agent::MediaAttachment att;

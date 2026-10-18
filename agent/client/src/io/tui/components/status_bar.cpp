@@ -59,19 +59,25 @@ ftxui::Element
     }
     if (const auto sp = rich.find("sparkline"); sp != rich.end() && sp->is_object()) {
         // 状态栏只有一行: 图形高度恒为 1
-        Item item = pluginxx::ui::parseBlock(utilxx_base::Json{{"kind", "Sparkline"}, *sp});
+        Item item        = pluginxx::ui::parseBlock(utilxx_base::Json{
+                   {"kind", "Sparkline"},
+            *sp
+        });
         item.glyphHeight = 1;
         cells.push_back(std::move(item));
     }
     if (const auto mt = rich.find("meter"); mt != rich.end() && mt->is_object()) {
-        cells.push_back(pluginxx::ui::parseBlock(utilxx_base::Json{{"kind", "Progress"}, *mt}));
+        cells.push_back(pluginxx::ui::parseBlock(utilxx_base::Json{
+            {"kind", "Progress"},
+            *mt
+        }));
     }
     if (cells.empty()) {
         return nullptr;
     }
 
     // 片段按横排组装 (共享实现负责间距与宽度分配; 间距 1 列 ≈ 8u)
-    Item row   = pluginxx::ui::build::row({});
+    Item row     = pluginxx::ui::build::row({});
     row.children = std::move(cells);
     row.hasGap   = true;
     row.gap      = pluginxx::ui::SizeValue::of(pluginxx::ui::gen::kDefaultCellWidth);

@@ -71,10 +71,9 @@ std::string formatUsageText(const CpuGpuUsage& usage) {
         const auto& gpu = usage.gpus[i];
         /// 显存取值: 优先独立显存; 统一内存 GPU (如 Apple Silicon) 没有独立显存,
         /// 退回与系统内存同源的共享显存, 否则该行会显示成 0MB/0MB
-        const bool        useSharedVram = gpu.dedicatedVramMB == 0 && gpu.sharedVramMB > 0;
-        const uint64_t    vramTotalMB   = useSharedVram ? gpu.sharedVramMB : gpu.dedicatedVramMB;
-        const uint64_t    vramUsedMB
-            = useSharedVram ? gpu.sharedVramUsedMB : gpu.dedicatedVramUsedMB;
+        const bool     useSharedVram = gpu.dedicatedVramMB == 0 && gpu.sharedVramMB > 0;
+        const uint64_t vramTotalMB   = useSharedVram ? gpu.sharedVramMB : gpu.dedicatedVramMB;
+        const uint64_t vramUsedMB = useSharedVram ? gpu.sharedVramUsedMB : gpu.dedicatedVramUsedMB;
         const std::string vramLabel = useSharedVram ? "VRAM (shared)" : "VRAM";
         std::string       title     = fmt::format("GPU {}", i);
         if (!gpu.name.empty()) {
@@ -324,7 +323,7 @@ static std::string buildUsageInfoItemsJson(const SysMonClientCtx&, const UsageSt
     // 组件项经描述层与扩展 kit 组装 (同一份描述, 终端与将来的 GUI 客户端共用;
     // 每行是一个 Text, 语义色用 tone)
     std::vector<pluginxx::ui::Item> items;
-    auto pushText = [&](const std::string& text, std::string tone = {}) {
+    auto                            pushText = [&](const std::string& text, std::string tone = {}) {
         utilxx_base::Json params;
         params["text"] = text;
         if (!tone.empty()) {

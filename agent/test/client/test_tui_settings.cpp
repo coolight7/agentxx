@@ -12,8 +12,8 @@
 #include "ftxui/screen/screen.hpp"
 #include "utilxx_base/env.h"
 #include <algorithm>
-#include <chrono>
 #include <cctype>
+#include <chrono>
 #include <filesystem>
 #include <fmt/format.h>
 #include <memory>
@@ -968,16 +968,16 @@ void test_tui_info_footer_auth_button() {
     asio::io_context ioc;
     auto             ex = ioc.get_executor();
 
-    const auto originalLang = TUISettings::instance().language();
-    auto       renderFooterText
-        = [&](const std::shared_ptr<TUIClientAgentIO>& tui) -> std::string {
+    const auto originalLang     = TUISettings::instance().language();
+    auto       renderFooterText = [&](const std::shared_ptr<TUIClientAgentIO>& tui) -> std::string {
         auto element = tui->renderInfoSidebarFooter();
-        auto screen  = ftxui::Screen::Create(ftxui::Dimension::Fixed(60), ftxui::Dimension::Fixed(6));
+        auto screen
+            = ftxui::Screen::Create(ftxui::Dimension::Fixed(60), ftxui::Dimension::Fixed(6));
         ftxui::Render(screen, element);
         return screen.ToString();
     };
 
-    auto tui = std::make_shared<TUIClientAgentIO>(ex, "session-1", TUITheme::darkTheme());
+    auto tui       = std::make_shared<TUIClientAgentIO>(ex, "session-1", TUITheme::darkTheme());
     auto transport = std::make_shared<MockTestTransport>();
     tui->setTransport(transport);
 
@@ -985,8 +985,12 @@ void test_tui_info_footer_auth_button() {
     TUISettings::instance().setLanguage(TuiLanguage::ZhCn);
     tui->refreshRenderContext();
     auto zhAsk = renderFooterText(tui);
-    XX_TEST_EXPECT_TRUE(zhAsk.find(std::string(TuiI18n::instance().t("info.authAsk"))) != std::string::npos);
-    XX_TEST_EXPECT_TRUE(zhAsk.find(std::string(TuiI18n::instance().t("info.authFull"))) == std::string::npos);
+    XX_TEST_EXPECT_TRUE(
+        zhAsk.find(std::string(TuiI18n::instance().t("info.authAsk"))) != std::string::npos
+    );
+    XX_TEST_EXPECT_TRUE(
+        zhAsk.find(std::string(TuiI18n::instance().t("info.authFull"))) == std::string::npos
+    );
 
     tui->onPeerMessage(agentxx::agent::WireMessage{agentxx::agent::WirePermissionState{true}});
     tui->refreshRenderContext();
@@ -1007,9 +1011,7 @@ void test_tui_info_footer_auth_button() {
 
     TUISettings::instance().setLanguage(TuiLanguage::ZhCn);
     tui->refreshRenderContext();
-    XX_TEST_EXPECT_TRUE(
-        renderFooterText(tui).find("[ 完全授权 ]") != std::string::npos
-    );
+    XX_TEST_EXPECT_TRUE(renderFooterText(tui).find("[ 完全授权 ]") != std::string::npos);
 
     // 语言设置复位 (本模块其他用例依赖默认语言表)
     TUISettings::instance().setLanguage(originalLang);
@@ -1024,7 +1026,7 @@ void test_tui_info_footer_update_notice() {
     const auto originalLang = TUISettings::instance().language();
     TUISettings::instance().setLanguage(TuiLanguage::ZhCn);
 
-    auto tui = std::make_shared<TUIClientAgentIO>(ex, "session-1", TUITheme::darkTheme());
+    auto tui       = std::make_shared<TUIClientAgentIO>(ex, "session-1", TUITheme::darkTheme());
     auto transport = std::make_shared<MockTestTransport>();
     tui->setTransport(transport);
 
@@ -1170,7 +1172,7 @@ void test_tui_manual_update_check_toast() {
     XX_TEST_EXPECT_TRUE(tui->toastText().find("network unreachable") != std::string::npos);
 
     // 3. 有更新 (无模态容器: 未启动 UI 线程): 不崩且不改动 toast; 状态已写入共享状态
-    const auto before = std::string{tui->toastText()};
+    const auto                         before = std::string{tui->toastText()};
     agentxx::client::UpdateCheckResult hasUpdate;
     hasUpdate.ok        = true;
     hasUpdate.hasUpdate = true;
@@ -1182,10 +1184,7 @@ void test_tui_manual_update_check_toast() {
     // 4. 英文文案
     TUISettings::instance().setLanguage(TuiLanguage::EnUs);
     tui->showUpdateCheckResult(noUpdate);
-    XX_TEST_EXPECT_EQ(
-        tui->toastText(),
-        std::string(TuiI18n::instance().t("toast.updateLatest"))
-    );
+    XX_TEST_EXPECT_EQ(tui->toastText(), std::string(TuiI18n::instance().t("toast.updateLatest")));
 
     TUISettings::instance().setLanguage(originalLang);
 }
@@ -1224,10 +1223,10 @@ public:
 
 /// 经管理器入口注册一条快捷键 (与插件走同一个 registerKeybind)
 AgentxxKeybind* registerProbeKeybind(
-    agentxx::plugin::ClientPluginManager& mgr,
+    agentxx::plugin::ClientPluginManager&  mgr,
     agentxx::plugin::ClientPluginInstance* inst,
-    std::string_view                      keys,
-    std::string_view                      description = std::string_view{}
+    std::string_view                       keys,
+    std::string_view                       description = std::string_view{}
 ) {
     AgentxxKeybindSpec spec{};
     spec.version     = 1;
@@ -1242,7 +1241,10 @@ AgentxxKeybind* registerProbeKeybind(
 }
 
 /// 固定视口下的最小 TUICtx (快捷键弹窗只读主题与插件管理器)
-TUICtx keybindTestCtx(const std::shared_ptr<agentxx::plugin::ClientPluginManager>& mgr, int height = 34) {
+TUICtx keybindTestCtx(
+    const std::shared_ptr<agentxx::plugin::ClientPluginManager>& mgr,
+    int                                                          height = 34
+) {
     TUICtx ctx;
     ctx.theme          = &keybindTheme();
     ctx.postRedraw     = [] {};
@@ -1360,10 +1362,8 @@ bool hasScrollbarThumb(const std::string& text) {
 
 /// 渲染一帧 (固定视口, 不随物理终端尺寸漂移)
 ftxui::Screen renderOnce(const ftxui::Component& comp, int width, int height) {
-    auto screen = ftxui::Screen::Create(
-        ftxui::Dimension::Fixed(width),
-        ftxui::Dimension::Fixed(height)
-    );
+    auto screen
+        = ftxui::Screen::Create(ftxui::Dimension::Fixed(width), ftxui::Dimension::Fixed(height));
     ftxui::Render(screen, comp->Render());
     return screen;
 }
@@ -1389,10 +1389,10 @@ void test_settings_overlay_keybind_entry() {
 
     // 未装配插件管理器: 条数按 0 显示 (不崩)
     {
-        auto         ctx    = keybindTestCtx(nullptr, 40);
-        auto         comp   = std::make_shared<SettingsOverlay>(ctx);
-        const auto   screen = renderOnce(comp, 100, 40);
-        const auto   text   = screenText(screen);
+        auto       ctx    = keybindTestCtx(nullptr, 40);
+        auto       comp   = std::make_shared<SettingsOverlay>(ctx);
+        const auto screen = renderOnce(comp, 100, 40);
+        const auto text   = screenText(screen);
         XX_TEST_EXPECT_TRUE(text.find("插件快捷键: 0") != std::string::npos);
         XX_TEST_EXPECT_TRUE(text.find("快捷键") != std::string::npos);
     }
@@ -1406,9 +1406,9 @@ void test_settings_overlay_keybind_entry() {
     XX_TEST_EXPECT_TRUE(registerProbeKeybind(*mgr, instA.get(), "ctrl+alt+k", "toggle") != nullptr);
     XX_TEST_EXPECT_TRUE(registerProbeKeybind(*mgr, instB.get(), "f9", "refresh") != nullptr);
 
-    auto ctx      = keybindTestCtx(mgr, 40);
-    auto comp     = std::make_shared<SettingsOverlay>(ctx);
-    int  opened   = 0;
+    auto ctx    = keybindTestCtx(mgr, 40);
+    auto comp   = std::make_shared<SettingsOverlay>(ctx);
+    int  opened = 0;
     comp->onKeybindList([&] {
         ++opened;
     });
@@ -1478,16 +1478,16 @@ void test_settings_overlay_check_update_now_entry() {
     const bool     original = settings.checkUpdateOnStartup();
     settings.setCheckUpdateOnStartup(true);
 
-    auto       ctx  = keybindTestCtx(nullptr, 40);
-    auto       comp = std::make_shared<SettingsOverlay>(ctx);
-    int        checks = 0;
+    auto ctx    = keybindTestCtx(nullptr, 40);
+    auto comp   = std::make_shared<SettingsOverlay>(ctx);
+    int  checks = 0;
     comp->onCheckUpdate([&] {
         ++checks;
     });
 
     const auto text = screenText(renderOnce(comp, 100, 40));
-    XX_TEST_EXPECT_TRUE(text.find("更新") != std::string::npos);      // 条目所在分组标题
-    XX_TEST_EXPECT_TRUE(text.find("立即检查") != std::string::npos);   // 条目文字
+    XX_TEST_EXPECT_TRUE(text.find("更新") != std::string::npos);     // 条目所在分组标题
+    XX_TEST_EXPECT_TRUE(text.find("立即检查") != std::string::npos); // 条目文字
     XX_TEST_EXPECT_EQ(checks, 0);
 
     // 点击条目 (条目占一行, 整行可点) -> 触发一次检查, 启动开关不变
@@ -1524,12 +1524,11 @@ void test_settings_overlay_check_update_now_entry() {
 void test_update_notice_overlay_render_and_download() {
     ScopedLanguage lang(TuiLanguage::ZhCn);
 
-    const std::string url = "https://github.com/coolight7/agentxx/releases/tag/v9.9.9";
-    auto              ctx = keybindTestCtx(nullptr, 20);
-    auto              comp
-        = std::make_shared<UpdateNoticeOverlay>(ctx, "0.1.0", "v9.9.9", url);
-    int  downloads = 0;
-    bool closed    = false;
+    const std::string url  = "https://github.com/coolight7/agentxx/releases/tag/v9.9.9";
+    auto              ctx  = keybindTestCtx(nullptr, 20);
+    auto              comp = std::make_shared<UpdateNoticeOverlay>(ctx, "0.1.0", "v9.9.9", url);
+    int               downloads = 0;
+    bool              closed    = false;
     comp->onDownload([&] {
         ++downloads;
     });
@@ -1598,8 +1597,8 @@ void test_update_notice_overlay_narrow_terminal() {
     auto ctx           = keybindTestCtx(nullptr, 16);
     ctx.viewportWidth  = 40;
     ctx.viewportHeight = 16;
-    auto comp = std::make_shared<UpdateNoticeOverlay>(ctx, "0.1.0", "v9.9.9", url);
-    int  downloads = 0;
+    auto comp          = std::make_shared<UpdateNoticeOverlay>(ctx, "0.1.0", "v9.9.9", url);
+    int  downloads     = 0;
     comp->onDownload([&] {
         ++downloads;
     });
@@ -1690,14 +1689,14 @@ void test_settings_overlay_short_terminal_scroll() {
 
     // 80x24 (经典默认终端): 内容 25 行 (9 条目 + 4 分组标题 + 8 条目间距 + 4 分组前空行)
     // 装不下, 内容区按可用高度限高 (24 - 外框 6 = 18 行), 弹窗本身不超出终端
-    auto ctx = keybindTestCtx(nullptr, 24);
+    auto ctx          = keybindTestCtx(nullptr, 24);
     ctx.viewportWidth = 80;
     auto       comp   = std::make_shared<SettingsOverlay>(ctx);
     const auto text   = screenText(renderOnce(comp, 80, 24));
-    XX_TEST_EXPECT_TRUE(text.find("界面") != std::string::npos);  // 首个分组标题
-    XX_TEST_EXPECT_TRUE(text.find("主题") != std::string::npos);  // 首项
+    XX_TEST_EXPECT_TRUE(text.find("界面") != std::string::npos); // 首个分组标题
+    XX_TEST_EXPECT_TRUE(text.find("主题") != std::string::npos); // 首项
     XX_TEST_EXPECT_TRUE(text.find("[Esc]") != std::string::npos); // 底部提示 (弹窗未被裁掉)
-    XX_TEST_EXPECT_TRUE(text.find("关于") == std::string::npos);  // 末尾条目在视口外
+    XX_TEST_EXPECT_TRUE(text.find("关于") == std::string::npos); // 末尾条目在视口外
 
     // End: 选中项跳到末项, 内容区跟着滚动 (末项进来, 首项出去)
     XX_TEST_EXPECT_TRUE(comp->OnEvent(ftxui::Event::End));
@@ -1720,7 +1719,7 @@ void test_settings_overlay_scroll_indicator() {
 
     // 100x24: 内容 (25 行) 多于可见高度 (18 行) -> 内容区右侧出现滚动条
     {
-        auto ctx = keybindTestCtx(nullptr, 24);
+        auto ctx          = keybindTestCtx(nullptr, 24);
         ctx.viewportWidth = 100;
         auto       comp   = std::make_shared<SettingsOverlay>(ctx);
         const auto text   = screenText(renderOnce(comp, 100, 24));
@@ -1728,7 +1727,7 @@ void test_settings_overlay_scroll_indicator() {
     }
     // 100x40: 内容全部显示 -> 没有滚动条
     {
-        auto ctx = keybindTestCtx(nullptr, 40);
+        auto ctx          = keybindTestCtx(nullptr, 40);
         ctx.viewportWidth = 100;
         auto       comp   = std::make_shared<SettingsOverlay>(ctx);
         const auto text   = screenText(renderOnce(comp, 100, 40));
@@ -1740,8 +1739,8 @@ void test_settings_overlay_scroll_indicator() {
 void test_settings_overlay_mouse_wheel() {
     ScopedLanguage lang(TuiLanguage::ZhCn);
 
-    auto       ctx  = keybindTestCtx(nullptr, 24);
-    auto       comp = std::make_shared<SettingsOverlay>(ctx);
+    auto ctx  = keybindTestCtx(nullptr, 24);
+    auto comp = std::make_shared<SettingsOverlay>(ctx);
     renderOnce(comp, 100, 24);
     XX_TEST_EXPECT_EQ(comp->selectedIndex(), 0);
 
@@ -1782,11 +1781,12 @@ void test_settings_overlay_mouse_wheel() {
 }
 
 /// 快捷键列表弹窗: 无注册时显示空状态; Esc 关闭
-void test_keybind_list_overlay_empty() {    ScopedLanguage lang(TuiLanguage::ZhCn);
+void test_keybind_list_overlay_empty() {
+    ScopedLanguage lang(TuiLanguage::ZhCn);
 
-    auto         ctx    = keybindTestCtx(nullptr);
-    auto         comp   = std::make_shared<KeybindListOverlay>(ctx);
-    bool         closed = false;
+    auto ctx    = keybindTestCtx(nullptr);
+    auto comp   = std::make_shared<KeybindListOverlay>(ctx);
+    bool closed = false;
     comp->onClose([&] {
         closed = true;
     });
@@ -1815,9 +1815,9 @@ void test_keybind_list_overlay_entries() {
     // 跨插件抢同一键位被拒: 记录进注册表快照 (列表的冲突段)
     XX_TEST_EXPECT_TRUE(registerProbeKeybind(*mgr, other.get(), "ctrl+alt+k", "dup") == nullptr);
 
-    auto       ctx    = keybindTestCtx(mgr);
-    auto       comp   = std::make_shared<KeybindListOverlay>(ctx);
-    const auto text   = screenText(renderOnce(comp, 100, 34));
+    auto       ctx  = keybindTestCtx(mgr);
+    auto       comp = std::make_shared<KeybindListOverlay>(ctx);
+    const auto text = screenText(renderOnce(comp, 100, 34));
     XX_TEST_EXPECT_EQ(comp->keybindCount(), size_t{2});
     XX_TEST_EXPECT_TRUE(text.find("ctrl+alt+k") != std::string::npos);
     XX_TEST_EXPECT_TRUE(text.find("toggle panel") != std::string::npos);
@@ -1841,11 +1841,11 @@ void test_keybind_list_overlay_scroll() {
     ScopedLanguage lang(TuiLanguage::ZhCn);
 
     asio::io_context io;
-    auto             mgr    = std::make_shared<KeybindTestManager>(io.get_executor());
+    auto             mgr = std::make_shared<KeybindTestManager>(io.get_executor());
     mgr->setUiAdapter(std::make_shared<KeybindTestUiAdapter>());
-    auto             instA  = mgr->createInstance("scroll_a");
-    auto             instB  = mgr->createInstance("scroll_b");
-    constexpr int    kTotal = 24; // 16 (单实例上限) + 8
+    auto          instA  = mgr->createInstance("scroll_a");
+    auto          instB  = mgr->createInstance("scroll_b");
+    constexpr int kTotal = 24; // 16 (单实例上限) + 8
     for (int i = 0; i < kTotal; ++i) {
         const std::string keys = fmt::format("ctrl+alt+{}", static_cast<char>('a' + i));
         auto&             host = (i < 16) ? instA : instB;
@@ -1900,13 +1900,19 @@ void test_model_selector_add_entry() {
     });
     ctx.frameState = sharedState.readSnapshot();
 
-    auto overlay  = std::make_shared<ModelSelectorOverlay>(ctx);
-    int  addCalls = 0;
+    auto overlay      = std::make_shared<ModelSelectorOverlay>(ctx);
+    int  addCalls     = 0;
     int  confirmCalls = 0;
     bool closed       = false;
-    overlay->onAddModel([&] { ++addCalls; });
-    overlay->onConfirm([&](std::string) { ++confirmCalls; });
-    overlay->onClose([&] { closed = true; });
+    overlay->onAddModel([&] {
+        ++addCalls;
+    });
+    overlay->onConfirm([&](std::string) {
+        ++confirmCalls;
+    });
+    overlay->onClose([&] {
+        closed = true;
+    });
 
     // 条目表 = 顶部固定条目 + 两个模型; 首次渲染选中项对齐到当前使用的模型
     (void)overlay->Render();
@@ -1947,7 +1953,7 @@ void test_model_config_form_overlay_submit() {
     ctx.postRedraw = [] {};
     ctx.frameState = sharedState.readSnapshot();
 
-    auto overlay = std::make_shared<ModelConfigOverlay>(ctx);
+    auto                                     overlay = std::make_shared<ModelConfigOverlay>(ctx);
     std::vector<agentxx::agent::ModelConfig> submitted;
     overlay->onSubmit([&](const agentxx::agent::ModelConfig& mc) -> std::string {
         submitted.push_back(mc);
@@ -2064,7 +2070,7 @@ void test_model_config_values_mapping() {
         "extra_headers":{"X-Gateway":"gw1"},
         "extra_api_config":{"reasoning":{"effort":"high"}}
     }})");
-    auto mc = ModelConfigOverlay::configOfValues(values);
+    auto mc     = ModelConfigOverlay::configOfValues(values);
     XX_TEST_EXPECT_TRUE(mc.has_value());
     if (mc.has_value()) {
         XX_TEST_EXPECT_EQ(mc->name, std::string("mapped"));
@@ -2108,14 +2114,12 @@ void test_model_config_values_mapping() {
         auto noName = utilxx_base::Json::parse(R"({"values":{"name":"   "}})");
         XX_TEST_EXPECT_FALSE(ModelConfigOverlay::configOfValues(noName).has_value());
 
-        auto badHeader = utilxx_base::Json::parse(
-            R"({"values":{"name":"n","extra_headers":{"X-A":1}}})"
-        );
+        auto badHeader
+            = utilxx_base::Json::parse(R"({"values":{"name":"n","extra_headers":{"X-A":1}}})");
         XX_TEST_EXPECT_FALSE(ModelConfigOverlay::configOfValues(badHeader).has_value());
 
-        auto badExtra = utilxx_base::Json::parse(
-            R"({"values":{"name":"n","extra_api_config":[1]}})"
-        );
+        auto badExtra
+            = utilxx_base::Json::parse(R"({"values":{"name":"n","extra_api_config":[1]}})");
         XX_TEST_EXPECT_FALSE(ModelConfigOverlay::configOfValues(badExtra).has_value());
     }
 }
@@ -2125,17 +2129,17 @@ void test_tui_add_model_result_switches_model() {
     asio::io_context ioc;
     auto             ex = ioc.get_executor();
 
-    auto tui = std::make_shared<TUIClientAgentIO>(ex, "session-1", TUITheme::darkTheme());
+    auto tui       = std::make_shared<TUIClientAgentIO>(ex, "session-1", TUITheme::darkTheme());
     auto transport = std::make_shared<MockTestTransport>();
     tui->setTransport(transport);
 
     // 成功回执: cachedModelName (状态栏) 与 pendingModel (下一条消息) 都切到新模型
     tui->onPeerMessage(agentxx::agent::WireMessage{
         agentxx::agent::WireAddModelResult{
-                                      .ok    = true,
-                                      .name  = "new-model",
-                                      .error = {},
-                                      }
+                                           .ok    = true,
+                                           .name  = "new-model",
+                                           .error = {},
+                                           }
     });
     {
         auto snap = tui->sharedState().readSnapshot();
@@ -2146,10 +2150,10 @@ void test_tui_add_model_result_switches_model() {
     // 失败回执: 不改动当前模型, 也不丢已记录的模型名
     tui->onPeerMessage(agentxx::agent::WireMessage{
         agentxx::agent::WireAddModelResult{
-                                      .ok    = false,
-                                      .name  = "bad-model",
-                                      .error = "模型名称已存在: bad-model",
-                                      }
+                                           .ok    = false,
+                                           .name  = "bad-model",
+                                           .error = "模型名称已存在: bad-model",
+                                           }
     });
     {
         auto snap = tui->sharedState().readSnapshot();
@@ -2172,8 +2176,7 @@ void test_model_config_form_row_band() {
     ctx.frameState = sharedState.readSnapshot();
 
     auto overlay = std::make_shared<ModelConfigOverlay>(ctx);
-    auto screen
-        = ftxui::Screen::Create(ftxui::Dimension::Fixed(100), ftxui::Dimension::Fixed(30));
+    auto screen  = ftxui::Screen::Create(ftxui::Dimension::Fixed(100), ftxui::Dimension::Fixed(30));
     (void)ftxui::Render(screen, overlay->Render());
 
     auto rowText = [&](int y) {
@@ -2217,10 +2220,7 @@ void test_model_config_form_row_band() {
         click.x      = 40;
         click.y      = labelRow + 1;
         XX_TEST_EXPECT_TRUE(overlay->OnEvent(ftxui::Event::Mouse("", click)));
-        XX_TEST_EXPECT_EQ(
-            overlay->focusedControlId(),
-            std::string{ModelConfigOverlay::kNameId}
-        );
+        XX_TEST_EXPECT_EQ(overlay->focusedControlId(), std::string{ModelConfigOverlay::kNameId});
     }
 }
 

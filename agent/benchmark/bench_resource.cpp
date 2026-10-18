@@ -146,7 +146,7 @@ void benchResourceCli() {
     mc.baseUrl                            = fmt::format("http://127.0.0.1:{}/v1", sim.port);
     mc.apiKey                             = "EMPTY";
     mc.modelName                          = "bench-sim";
-    mc.modelContextMaxToken              = 8 << 20; // 8M 确保不触发压缩/截断
+    mc.modelContextMaxToken               = 8 << 20; // 8M 确保不触发压缩/截断
     agentConfig->model                    = mc;
     agentConfig->availableModels[mc.name] = mc;
     agentConfig->currentModelName         = mc.name;
@@ -342,14 +342,11 @@ void benchResourceCli() {
                 sess->appendViewMessage(g.viewAssist);
 
                 sess->appendSettledLlmMessages(utilxx_base::Json::array({
+                    utilxx_base::Json{{"role", "user"}, {"content", g.userMsg.content}},
                     utilxx_base::Json{
-                        {"role",    "user"           },
-                        {"content", g.userMsg.content}
-                    },
-                    utilxx_base::Json{
-                        {"role",       "assistant"                                 },
-                        {"content",    nullptr                                     },
-                        {"tool_calls",
+                                      {"role", "assistant"},
+                                      {"content", nullptr},
+                                      {"tool_calls",
                          {{{"id", g.assistMsg.tool_calls[0].id},
                            {"type", "function"},
                            {"function",
@@ -357,10 +354,10 @@ void benchResourceCli() {
                              {"arguments", g.assistMsg.tool_calls[0].arguments}}}}}}
                     },
                     utilxx_base::Json{
-                        {"role",         "tool"                },
-                        {"tool_call_id", g.toolMsg.tool_call_id},
-                        {"name",         g.toolMsg.tool_name   },
-                        {"content",      g.toolMsg.content     }
+                                      {"role", "tool"},
+                                      {"tool_call_id", g.toolMsg.tool_call_id},
+                                      {"name", g.toolMsg.tool_name},
+                                      {"content", g.toolMsg.content}
                     },
                 }));
             }
@@ -422,14 +419,11 @@ void benchResourceCli() {
                 sess->appendViewMessage(g.viewAssist);
 
                 sess->appendSettledLlmMessages(utilxx_base::Json::array({
+                    utilxx_base::Json{{"role", "user"}, {"content", g.userMsg.content}},
                     utilxx_base::Json{
-                        {"role",    "user"           },
-                        {"content", g.userMsg.content}
-                    },
-                    utilxx_base::Json{
-                        {"role",       "assistant"                                 },
-                        {"content",    nullptr                                     },
-                        {"tool_calls",
+                                      {"role", "assistant"},
+                                      {"content", nullptr},
+                                      {"tool_calls",
                          {{{"id", g.assistMsg.tool_calls[0].id},
                            {"type", "function"},
                            {"function",
@@ -437,10 +431,10 @@ void benchResourceCli() {
                              {"arguments", g.assistMsg.tool_calls[0].arguments}}}}}}
                     },
                     utilxx_base::Json{
-                        {"role",         "tool"                },
-                        {"tool_call_id", g.toolMsg.tool_call_id},
-                        {"name",         g.toolMsg.tool_name   },
-                        {"content",      g.toolMsg.content     }
+                                      {"role", "tool"},
+                                      {"tool_call_id", g.toolMsg.tool_call_id},
+                                      {"name", g.toolMsg.tool_name},
+                                      {"content", g.toolMsg.content}
                     },
                 }));
             }
@@ -632,7 +626,7 @@ void benchResourceTui() {
     mc.baseUrl                            = fmt::format("http://127.0.0.1:{}/v1", sim.port);
     mc.apiKey                             = "EMPTY";
     mc.modelName                          = "bench-sim";
-    mc.modelContextMaxToken              = 8 << 20;
+    mc.modelContextMaxToken               = 8 << 20;
     agentConfig->model                    = mc;
     agentConfig->availableModels[mc.name] = mc;
     agentConfig->currentModelName         = mc.name;
@@ -819,14 +813,11 @@ void benchResourceTui() {
                 sess->appendViewMessage(g.viewAssist);
 
                 sess->appendSettledLlmMessages(utilxx_base::Json::array({
+                    utilxx_base::Json{{"role", "user"}, {"content", g.userMsg.content}},
                     utilxx_base::Json{
-                        {"role",    "user"           },
-                        {"content", g.userMsg.content}
-                    },
-                    utilxx_base::Json{
-                        {"role",       "assistant"                                 },
-                        {"content",    nullptr                                     },
-                        {"tool_calls",
+                                      {"role", "assistant"},
+                                      {"content", nullptr},
+                                      {"tool_calls",
                          {{{"id", g.assistMsg.tool_calls[0].id},
                            {"type", "function"},
                            {"function",
@@ -834,10 +825,10 @@ void benchResourceTui() {
                              {"arguments", g.assistMsg.tool_calls[0].arguments}}}}}}
                     },
                     utilxx_base::Json{
-                        {"role",         "tool"                },
-                        {"tool_call_id", g.toolMsg.tool_call_id},
-                        {"name",         g.toolMsg.tool_name   },
-                        {"content",      g.toolMsg.content     }
+                                      {"role", "tool"},
+                                      {"tool_call_id", g.toolMsg.tool_call_id},
+                                      {"name", g.toolMsg.tool_name},
+                                      {"content", g.toolMsg.content}
                     },
                 }));
             }
@@ -914,14 +905,11 @@ void benchResourceTui() {
                 sess->appendViewMessage(g.viewAssist);
 
                 sess->appendSettledLlmMessages(utilxx_base::Json::array({
+                    utilxx_base::Json{{"role", "user"}, {"content", g.userMsg.content}},
                     utilxx_base::Json{
-                        {"role",    "user"           },
-                        {"content", g.userMsg.content}
-                    },
-                    utilxx_base::Json{
-                        {"role",       "assistant"                                 },
-                        {"content",    nullptr                                     },
-                        {"tool_calls",
+                                      {"role", "assistant"},
+                                      {"content", nullptr},
+                                      {"tool_calls",
                          {{{"id", g.assistMsg.tool_calls[0].id},
                            {"type", "function"},
                            {"function",
@@ -929,10 +917,10 @@ void benchResourceTui() {
                              {"arguments", g.assistMsg.tool_calls[0].arguments}}}}}}
                     },
                     utilxx_base::Json{
-                        {"role",         "tool"                },
-                        {"tool_call_id", g.toolMsg.tool_call_id},
-                        {"name",         g.toolMsg.tool_name   },
-                        {"content",      g.toolMsg.content     }
+                                      {"role", "tool"},
+                                      {"tool_call_id", g.toolMsg.tool_call_id},
+                                      {"name", g.toolMsg.tool_name},
+                                      {"content", g.toolMsg.content}
                     },
                 }));
             }
@@ -1649,15 +1637,15 @@ void benchResourceFfi() {
     // 手写容易与头文件漂移 (曾把 stop/destroy 的 log 出参漏掉: 声明成一参后调用
     // 依然编译通过, 但被调函数仍会写这个出参, 于是写到寄存器里的野指针上,
     // Windows 上表现为访问违例); 同时保留头文件里的调用约定 (Win32 上是 __stdcall)
-    decltype(&::agentxx_ffi_create) agentxx_ffi_create = nullptr;
-    decltype(&::agentxx_ffi_start) agentxx_ffi_start   = nullptr;
-    decltype(&::agentxx_ffi_stop) agentxx_ffi_stop     = nullptr;
-    decltype(&::agentxx_ffi_destroy) agentxx_ffi_destroy = nullptr;
-    decltype(&::agentxx_ffi_send_input) agentxx_ffi_send_input = nullptr;
+    decltype(&::agentxx_ffi_create)               agentxx_ffi_create               = nullptr;
+    decltype(&::agentxx_ffi_start)                agentxx_ffi_start                = nullptr;
+    decltype(&::agentxx_ffi_stop)                 agentxx_ffi_stop                 = nullptr;
+    decltype(&::agentxx_ffi_destroy)              agentxx_ffi_destroy              = nullptr;
+    decltype(&::agentxx_ffi_send_input)           agentxx_ffi_send_input           = nullptr;
     decltype(&::agentxx_ffi_get_context_messages) agentxx_ffi_get_context_messages = nullptr;
     // string_free 在头文件里有重载 (指针版 + AgentxxString& 便捷版), decltype(&...) 取不到
     // 唯一类型, 这里显式写出类型 (与头文件的指针版一致, 保留调用约定)
-    void(AGENTXX_FFI_CALL* agentxx_ffi_string_free)(AgentxxString*) = nullptr;
+    void(AGENTXX_FFI_CALL * agentxx_ffi_string_free)(AgentxxString*) = nullptr;
 
     bool symsOk = RESOLVE_SYM(agentxx_ffi_create) && RESOLVE_SYM(agentxx_ffi_start)
                   && RESOLVE_SYM(agentxx_ffi_stop) && RESOLVE_SYM(agentxx_ffi_destroy)
@@ -1840,7 +1828,9 @@ void benchResourceFfi() {
             i + 1
         );
         // send_input 参数为输入 JSON (含 text/attachments/model/delivery)
-        std::string       inputJson = utilxx_base::Json{{"text", userText}}.dump();
+        std::string inputJson = utilxx_base::Json{
+            {"text", userText}
+        }.dump();
         AgentxxStringView inputSv{inputJson.data(), static_cast<uint64_t>(inputJson.size())};
         agentxx_ffi_send_input(ffiAgent, &inputSv, &logOut);
         if (logOut.data) {
@@ -1902,7 +1892,9 @@ void benchResourceFfi() {
             i + 1
         );
         // send_input 参数为输入 JSON (含 text/attachments/model/delivery)
-        std::string       inputJson = utilxx_base::Json{{"text", userText}}.dump();
+        std::string inputJson = utilxx_base::Json{
+            {"text", userText}
+        }.dump();
         AgentxxStringView inputSv{inputJson.data(), static_cast<uint64_t>(inputJson.size())};
         agentxx_ffi_send_input(ffiAgent, &inputSv, &logOut);
         if (logOut.data) {
@@ -1968,7 +1960,10 @@ void benchResourceFfi() {
     AgentxxString destroyLog{nullptr, 0};
     agentxx_ffi_destroy(ffiAgent, &destroyLog);
     if (destroyLog.data) {
-        XX_LOGW("[resource][ffi] destroy 返回详情: {}", std::string_view{destroyLog.data, destroyLog.size});
+        XX_LOGW(
+            "[resource][ffi] destroy 返回详情: {}",
+            std::string_view{destroyLog.data, destroyLog.size}
+        );
         agentxx_ffi_string_free(&destroyLog);
     }
 

@@ -41,7 +41,8 @@ PointBase& Registry::addPoint(std::unique_ptr<PointBase> point) {
     return *raw;
 }
 
-JsonProvidePoint& Registry::provideJson(std::string_view id, PointOptions opts, std::string origin) {
+JsonProvidePoint&
+    Registry::provideJson(std::string_view id, PointOptions opts, std::string origin) {
     if (auto* existing = find(id); existing != nullptr) {
         if (!existing->origin().starts_with("plugin:")) {
             XX_LOGE("功能点 `{}` 已存在 (来源 `{}`), 本次声明未注册进点表", id, existing->origin());
@@ -54,7 +55,8 @@ JsonProvidePoint& Registry::provideJson(std::string_view id, PointOptions opts, 
         // 插件点覆盖: 先撤掉旧点 (含其实现), 再声明新的
         undefinePluginPoint(id);
     }
-    auto point = std::make_unique<JsonProvidePoint>(std::string{id}, std::move(opts), std::move(origin));
+    auto point
+        = std::make_unique<JsonProvidePoint>(std::string{id}, std::move(opts), std::move(origin));
     return static_cast<JsonProvidePoint&>(addPoint(std::move(point)));
 }
 
@@ -88,11 +90,7 @@ int32_t Registry::definePluginPoint(const PluginPointDecl& decl) {
     const std::string_view pluginName = std::string_view{decl.owner}.substr(7);
     const std::string      prefix     = fmt::format("plugin.{}.", pluginName);
     if (!decl.id.starts_with(prefix) || decl.id.size() <= prefix.size()) {
-        XX_LOGW(
-            "插件点 `{}` 声明被拒绝: id 必须落在 `plugin.{}.` 命名空间内",
-            decl.id,
-            pluginName
-        );
+        XX_LOGW("插件点 `{}` 声明被拒绝: id 必须落在 `plugin.{}.` 命名空间内", decl.id, pluginName);
         return -1;
     }
     if (auto* existing = find(decl.id); existing != nullptr) {
@@ -108,7 +106,7 @@ int32_t Registry::definePluginPoint(const PluginPointDecl& decl) {
     PointOptions opts;
     opts.title         = decl.title.empty() ? decl.id : decl.title;
     opts.depict        = decl.depict;
-    opts.callable      = true; // 插件声明的点在其声明期间恒为可调
+    opts.callable      = true;            // 插件声明的点在其声明期间恒为可调
     opts.cache         = CacheMode::None; // 插件点本轮固定不缓存
     opts.implTimeoutMs = decl.implTimeoutMs;
     if (!decl.argsDoc.empty() || !decl.resultDoc.empty()) {

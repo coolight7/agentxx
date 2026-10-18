@@ -53,11 +53,8 @@ inline std::string regexpExecute(const utilxx_base::Json& arguments) {
     // `ignore_case`: 大小写不敏感匹配 (默认关闭 = 大小写敏感)
     const bool ignoreCase = arguments.value<bool>("ignore_case", false);
 
-    auto regex = utilxx::XXRegex::createRegex(
-        match_exps,
-        utilxx::XXRegex::defHSFlags_normal,
-        ignoreCase
-    );
+    auto regex
+        = utilxx::XXRegex::createRegex(match_exps, utilxx::XXRegex::defHSFlags_normal, ignoreCase);
     if (!regex) {
         throw std::runtime_error{
             "Regex compilation failed (each item of `exps` is a regular expression)"

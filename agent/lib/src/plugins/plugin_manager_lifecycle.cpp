@@ -16,8 +16,8 @@
 #include "agentxx/agent/config_static.h"
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/resource_applier.h"
-#include "agentxx/feature/registry.h"
 #include "agentxx/event/event_stream.h"
+#include "agentxx/feature/registry.h"
 #include "agentxx/middlewares/permission.h"
 #include "agentxx/plugin/plugin_framework.h"
 #include "agentxx/plugin/plugin_interfaces.h"
@@ -246,12 +246,10 @@ void notePluginLoaded(
     if (!inst) {
         return;
     }
-    inst->loadMs = static_cast<uint64_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now() - begin
-        )
-        .count()
-    );
+    inst->loadMs = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                             std::chrono::steady_clock::now() - begin
+    )
+                                             .count());
     XX_LOGI(
         "Plugin `{}` loaded in {} ms: tools={} hooks={} graphNodes={} events={} capabilities={} "
         "permissionTools={} (enable={})",
@@ -423,7 +421,7 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadNativeAsync(
     const plugin::PluginManifestResources&  resources,
     const plugin::PluginManifestInterfaces& interfaces
 ) {
-    const auto        begin     = std::chrono::steady_clock::now();
+    const auto                  begin = std::chrono::steady_clock::now();
     pluginxx::PluginLoadOptions options;
     bool                        hasOptions = false;
     toLoadOptions(cfg, options, hasOptions);
@@ -450,7 +448,7 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadBuiltinAsync
     const plugin::PluginManifestResources&  resources,
     const plugin::PluginManifestInterfaces& interfaces
 ) {
-    const auto        begin     = std::chrono::steady_clock::now();
+    const auto                  begin = std::chrono::steady_clock::now();
     pluginxx::PluginLoadOptions options;
     bool                        hasOptions = false;
     toLoadOptions(cfg, options, hasOptions);
@@ -476,7 +474,7 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadPluginAsync(
     const agentxx::agent::PluginConfig* cfg,
     bool                                allowClientOnlySkip
 ) {
-    const auto        begin     = std::chrono::steady_clock::now();
+    const auto                  begin = std::chrono::steady_clock::now();
     pluginxx::PluginLoadOptions options;
     bool                        hasOptions = false;
     toLoadOptions(cfg, options, hasOptions);
@@ -502,39 +500,39 @@ std::vector<PluginManager::PluginListView> PluginManager::list() const {
     out.reserve(plugins_.size());
     for (const auto& [name, inst] : plugins_) {
         PluginListView view;
-        view.name               = inst->name;
-        view.version            = inst->version;
-        view.description        = inst->description;
-        view.path               = inst->path;
-        view.configPath         = inst->configPath;
-        view.enabled            = inst->enabled;
-        view.inflight           = inst->lifetime ? inst->lifetime->leaseCount() : 0;
-        view.tools              = inst->toolNames;
-        view.depends            = inst->depends;
-        view.optionalDepends    = inst->optionalDepends;
-        view.requiredInterfaces = inst->interfaces.require;
-        view.optionalInterfaces = inst->interfaces.optional;
+        view.name                  = inst->name;
+        view.version               = inst->version;
+        view.description           = inst->description;
+        view.path                  = inst->path;
+        view.configPath            = inst->configPath;
+        view.enabled               = inst->enabled;
+        view.inflight              = inst->lifetime ? inst->lifetime->leaseCount() : 0;
+        view.tools                 = inst->toolNames;
+        view.depends               = inst->depends;
+        view.optionalDepends       = inst->optionalDepends;
+        view.requiredInterfaces    = inst->interfaces.require;
+        view.optionalInterfaces    = inst->interfaces.optional;
         view.userDisabled          = inst->userDisabled;
         view.blockedByDependencies = inst->blockedByDependencies;
         view.loadMs                = inst->loadMs;
         // 钩子: 注册表里生效中的条数 + 各处理器优先级 (按派发顺序, 一眼看出谁先跑)
-        view.hookCount             = liveHookHandlersOf(*inst);
+        view.hookCount = liveHookHandlersOf(*inst);
         for (const auto& handler : allHookHandlersOf(*inst)) {
             view.hookPriorities.push_back(handler.priority);
         }
-        view.graphNodeCount        = inst->graphNodeTypes.size();
-        view.eventSubCount         = inst->subscriptions.size();
-        view.permissionToolCount   = inst->permissionToolNames.size();
+        view.graphNodeCount      = inst->graphNodeTypes.size();
+        view.eventSubCount       = inst->subscriptions.size();
+        view.permissionToolCount = inst->permissionToolNames.size();
         {
-            const auto inventory      = registrationInventory(*inst);
-            view.registrationTotal    = inventory.total();
-            view.promptKeyCount       = inventory.promptKeys;
-            view.skillDirCount        = inventory.skillDirs;
-            view.memoryFileCount      = inventory.memoryFiles;
-            view.mcpNamespaceCount    = inventory.mcpNamespaces;
-            view.ownsGraphDefinition  = inventory.ownsGraphDefinition;
-            view.featurePointCount    = inventory.featurePoints;
-            view.featureImplCount     = inventory.featureImpls;
+            const auto inventory     = registrationInventory(*inst);
+            view.registrationTotal   = inventory.total();
+            view.promptKeyCount      = inventory.promptKeys;
+            view.skillDirCount       = inventory.skillDirs;
+            view.memoryFileCount     = inventory.memoryFiles;
+            view.mcpNamespaceCount   = inventory.mcpNamespaces;
+            view.ownsGraphDefinition = inventory.ownsGraphDefinition;
+            view.featurePointCount   = inventory.featurePoints;
+            view.featureImplCount    = inventory.featureImpls;
         }
         for (const auto& cap : inst->capabilityRegistrations) {
             view.capabilities.push_back(cap.name);

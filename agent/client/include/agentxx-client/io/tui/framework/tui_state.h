@@ -109,7 +109,8 @@ struct TUIRenderState {
     bool hasMoreHistory() const noexcept {
         return history.hasMore();
     }
-    std::string              cachedModelName;
+
+    std::string cachedModelName;
 
     /// 待应用模型选择:
     /// 模型选择弹窗确认后写入, 随下一次发送的用户消息 (WireUserInput.model)
@@ -163,8 +164,8 @@ struct TUIRenderState {
                && (pendingTokenThink->isEncrypted || pendingTokenThink->reasoningTokens > 0);
     }
 
-    int64_t                              pendingTokenDurationMs  = 0;
-    int64_t                              pendingTokenStartTimeMs = 0;
+    int64_t pendingTokenDurationMs  = 0;
+    int64_t pendingTokenStartTimeMs = 0;
     /// 持久化会话总数 (WireSessionList.totalCount; 0 = 未知, 供弹窗展示 x/y)
     uint64_t sessionListTotalCount = 0;
 
@@ -180,11 +181,11 @@ struct TUIRenderState {
     ///   "累计花掉多少", 只增不减; Info 侧边栏的 Context 段据此显示
     /// - sessionUsageKnown 为 false 表示服务端尚未推送过 (老服务端或无数据),
     ///   此时 Context 段显示无数据而不是一堆 0
-    uint64_t sessionPromptTokens       = 0;
-    uint64_t sessionCompletionTokens   = 0;
-    uint64_t sessionTotalTokens        = 0;
-    uint64_t sessionCachedPromptTokens = 0;
-    bool     sessionUsageKnown         = false;
+    uint64_t                             sessionPromptTokens       = 0;
+    uint64_t                             sessionCompletionTokens   = 0;
+    uint64_t                             sessionTotalTokens        = 0;
+    uint64_t                             sessionCachedPromptTokens = 0;
+    bool                                 sessionUsageKnown         = false;
     std::optional<TUIMessage::ThinkData> pendingTokenThink;
 
     /// 流式末尾 Think 折叠态的用户点击覆盖 (tri-state; UI 线程写, client 线程读):
@@ -206,9 +207,9 @@ struct TUIRenderState {
     /// 当前是否已"完全授权所有权限" (服务端 WirePermissionState 下发/广播):
     /// - 由 agent 侧权限中间件持有 (权限切换按钮或权限询问卡片勾选 fullAuth 由客户端切换)
     /// - Info 侧边栏底部的授权按钮显示与点击切换依据此值
-    bool fullAuthorized = false;
-    TUIMessage::Role             currentTokenRole = TUIMessage::Role::Assistant;
-    bool                         isStreaming      = false;
+    bool             fullAuthorized   = false;
+    TUIMessage::Role currentTokenRole = TUIMessage::Role::Assistant;
+    bool             isStreaming      = false;
 
     // ---- 生成占位提示 (服务端 GenStatus 增量) ----
     /// 模型生成阶段: 模型节点开始执行后, 首个正文/思考 token 或工具消息到达前,
@@ -227,7 +228,7 @@ struct TUIRenderState {
     bool modelInfoLoaded = false;
 
     bool showContextOverlay = false;
-    bool                                     sessionListLoaded = false;
+    bool sessionListLoaded  = false;
     /// 是否还有未加载的更早会话 (WireSessionList.hasMore; 旧版服务端全量响应
     /// 时恒为 false); 末尾空页防御: 收到空页即置 false 终止续取
     bool sessionListHasMore = false;

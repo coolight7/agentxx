@@ -57,8 +57,11 @@ TestResult testGraphData() {
 
     // ---- anyToJson: 动态段表 (缺失分支时返回 null, 中断 checkpoint 会丢值) ----
     {
-        std::any value = SectionMap{{"skills", "S"}, {"memory", "M"}};
-        auto     saved = MiddlewareContext::anyToJson(value);
+        std::any value = SectionMap{
+            {"skills", "S"},
+            {"memory", "M"}
+        };
+        auto saved = MiddlewareContext::anyToJson(value);
         XX_TEST_EXPECT_TRUE(saved.is_object());
         XX_TEST_EXPECT_EQ(saved.size(), (size_t)2);
         XX_TEST_EXPECT_EQ(stringAt(saved, "memory"), std::string("M"));
@@ -105,14 +108,20 @@ TestResult testGraphData() {
         source->setGraphDataItemValue<SectionMap>(
             sessionId,
             probeMapKey,
-            SectionMap{{"memory", "M"}, {"skills", "S"}}
+            SectionMap{
+                {"memory", "M"},
+                {"skills", "S"}
+        }
         );
         // 两个字符串通道同形 (不同值), 一并覆盖往返
         const std::string probeMapKeyB{"xx_testSectionMapB"};
         source->setGraphDataItemValue<SectionMap>(
             sessionId,
             probeMapKeyB,
-            SectionMap{{"memory", "SM"}, {"skills", "SS"}}
+            SectionMap{
+                {"memory", "SM"},
+                {"skills", "SS"}
+        }
         );
         source->setGraphDataItemValue<std::string>(
             sessionId,
@@ -165,11 +174,10 @@ TestResult testGraphData() {
 
         // 其余常用类型同样往返完整
         XX_TEST_EXPECT_EQ(
-            target
-                ->getGraphDataItemValue<std::string>(
-                    sessionId,
-                    MiddlewareContext::graphDataKey_interruptNode
-                ),
+            target->getGraphDataItemValue<std::string>(
+                sessionId,
+                MiddlewareContext::graphDataKey_interruptNode
+            ),
             std::string("llm")
         );
         XX_TEST_EXPECT_EQ(

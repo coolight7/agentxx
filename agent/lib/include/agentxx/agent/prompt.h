@@ -48,7 +48,7 @@ struct PromptSectionMeta {
 struct AppendSectionView {
     std::string_view key;
     std::string_view text;
-    int              order  = 0;
+    int              order = 0;
     std::string_view source;
 };
 

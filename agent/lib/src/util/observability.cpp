@@ -147,7 +147,10 @@ void KeyMetrics::notePromptRefresh(
         );
     }
     if (failures > 0) {
-        promptRefreshFailures_.fetch_add(static_cast<uint64_t>(failures), std::memory_order_relaxed);
+        promptRefreshFailures_.fetch_add(
+            static_cast<uint64_t>(failures),
+            std::memory_order_relaxed
+        );
     }
     if (durationMs > 0) {
         promptRefreshMs_.fetch_add(durationMs, std::memory_order_relaxed);
@@ -165,75 +168,75 @@ utilxx_base::Json KeyMetrics::toJson() const {
     utilxx_base::Json j = utilxx_base::Json::object();
 
     utilxx_base::Json turns = utilxx_base::Json::object();
-    turns["total"]       = turns_.load(std::memory_order_relaxed);
-    turns["completed"]   = turnsCompleted_.load(std::memory_order_relaxed);
-    turns["failed"]      = turnsFailed_.load(std::memory_order_relaxed);
-    turns["cancelled"]   = turnsCancelled_.load(std::memory_order_relaxed);
-    turns["interrupted"] = turnsInterrupted_.load(std::memory_order_relaxed);
-    turns["avg_ms"]      = avgOf(turnTotalMs_.load(std::memory_order_relaxed), turns_.load());
-    turns["max_ms"]      = turnMaxMs_.load(std::memory_order_relaxed);
-    j["turns"]           = std::move(turns);
+    turns["total"]          = turns_.load(std::memory_order_relaxed);
+    turns["completed"]      = turnsCompleted_.load(std::memory_order_relaxed);
+    turns["failed"]         = turnsFailed_.load(std::memory_order_relaxed);
+    turns["cancelled"]      = turnsCancelled_.load(std::memory_order_relaxed);
+    turns["interrupted"]    = turnsInterrupted_.load(std::memory_order_relaxed);
+    turns["avg_ms"]         = avgOf(turnTotalMs_.load(std::memory_order_relaxed), turns_.load());
+    turns["max_ms"]         = turnMaxMs_.load(std::memory_order_relaxed);
+    j["turns"]              = std::move(turns);
 
     // 首 token 延迟 (TTFT): 用户感知的"开始有反应"的时间
     utilxx_base::Json ttft = utilxx_base::Json::object();
-    ttft["samples"] = firstTokenSamples_.load(std::memory_order_relaxed);
-    ttft["avg_ms"]  = avgOf(
+    ttft["samples"]        = firstTokenSamples_.load(std::memory_order_relaxed);
+    ttft["avg_ms"]         = avgOf(
         firstTokenTotalMs_.load(std::memory_order_relaxed),
         firstTokenSamples_.load(std::memory_order_relaxed)
     );
     ttft["max_ms"] = firstTokenMaxMs_.load(std::memory_order_relaxed);
     j["ttft"]      = std::move(ttft);
 
-    utilxx_base::Json model = utilxx_base::Json::object();
-    model["calls"]             = modelCalls_.load(std::memory_order_relaxed);
-    model["errors"]            = modelErrors_.load(std::memory_order_relaxed);
-    model["last_error_kind"]   = lastModelErrorKind();
-    model["prompt_tokens"]     = promptTokens_.load(std::memory_order_relaxed);
-    model["completion_tokens"] = completionTokens_.load(std::memory_order_relaxed);
-    model["cached_tokens"]     = cachedTokens_.load(std::memory_order_relaxed);
+    utilxx_base::Json model     = utilxx_base::Json::object();
+    model["calls"]              = modelCalls_.load(std::memory_order_relaxed);
+    model["errors"]             = modelErrors_.load(std::memory_order_relaxed);
+    model["last_error_kind"]    = lastModelErrorKind();
+    model["prompt_tokens"]      = promptTokens_.load(std::memory_order_relaxed);
+    model["completion_tokens"]  = completionTokens_.load(std::memory_order_relaxed);
+    model["cached_tokens"]      = cachedTokens_.load(std::memory_order_relaxed);
     model["cache_write_tokens"] = cacheWriteTokens_.load(std::memory_order_relaxed);
-    j["model"]                 = std::move(model);
+    j["model"]                  = std::move(model);
 
     utilxx_base::Json tools = utilxx_base::Json::object();
-    tools["ok"]          = toolOk_.load(std::memory_order_relaxed);
-    tools["failed"]      = toolFailed_.load(std::memory_order_relaxed);
-    tools["cancelled"]   = toolCancelled_.load(std::memory_order_relaxed);
-    tools["interrupted"] = toolInterrupted_.load(std::memory_order_relaxed);
-    tools["total"]       = toolOk_.load(std::memory_order_relaxed)
-                           + toolFailed_.load(std::memory_order_relaxed)
-                           + toolCancelled_.load(std::memory_order_relaxed)
-                           + toolInterrupted_.load(std::memory_order_relaxed);
+    tools["ok"]             = toolOk_.load(std::memory_order_relaxed);
+    tools["failed"]         = toolFailed_.load(std::memory_order_relaxed);
+    tools["cancelled"]      = toolCancelled_.load(std::memory_order_relaxed);
+    tools["interrupted"]    = toolInterrupted_.load(std::memory_order_relaxed);
+    tools["total"]          = toolOk_.load(std::memory_order_relaxed)
+                     + toolFailed_.load(std::memory_order_relaxed)
+                     + toolCancelled_.load(std::memory_order_relaxed)
+                     + toolInterrupted_.load(std::memory_order_relaxed);
     j["tools"] = std::move(tools);
 
     utilxx_base::Json compaction = utilxx_base::Json::object();
-    compaction["count"]         = compactions_.load(std::memory_order_relaxed);
-    compaction["tokens_before"] = compactionTokensBefore_.load(std::memory_order_relaxed);
-    compaction["tokens_after"]  = compactionTokensAfter_.load(std::memory_order_relaxed);
-    j["compaction"]             = std::move(compaction);
+    compaction["count"]          = compactions_.load(std::memory_order_relaxed);
+    compaction["tokens_before"]  = compactionTokensBefore_.load(std::memory_order_relaxed);
+    compaction["tokens_after"]   = compactionTokensAfter_.load(std::memory_order_relaxed);
+    j["compaction"]              = std::move(compaction);
 
     // 运行时提示词段落刷新: 变化次数 = system 前缀被重建的次数
-    utilxx_base::Json prompt = utilxx_base::Json::object();
-    prompt["refreshes"]         = promptRefreshes_.load(std::memory_order_relaxed);
-    prompt["changed_sections"]  = promptChangedSections_.load(std::memory_order_relaxed);
-    prompt["failures"]          = promptRefreshFailures_.load(std::memory_order_relaxed);
-    prompt["total_ms"]          = promptRefreshMs_.load(std::memory_order_relaxed);
-    prompt["avg_ms"]            = avgOf(
+    utilxx_base::Json prompt   = utilxx_base::Json::object();
+    prompt["refreshes"]        = promptRefreshes_.load(std::memory_order_relaxed);
+    prompt["changed_sections"] = promptChangedSections_.load(std::memory_order_relaxed);
+    prompt["failures"]         = promptRefreshFailures_.load(std::memory_order_relaxed);
+    prompt["total_ms"]         = promptRefreshMs_.load(std::memory_order_relaxed);
+    prompt["avg_ms"]           = avgOf(
         promptRefreshMs_.load(std::memory_order_relaxed),
         promptRefreshes_.load(std::memory_order_relaxed)
     );
-    prompt["section_chars"]     = promptSectionChars_.load(std::memory_order_relaxed);
-    j["prompt_sources"]         = std::move(prompt);
+    prompt["section_chars"] = promptSectionChars_.load(std::memory_order_relaxed);
+    j["prompt_sources"]     = std::move(prompt);
 
     return j;
 }
 
 std::string KeyMetrics::summary() const {
-    const auto  turns   = turns_.load(std::memory_order_relaxed);
-    const auto  samples = firstTokenSamples_.load(std::memory_order_relaxed);
-    const auto& toolsTotal
-        = toolOk_.load(std::memory_order_relaxed) + toolFailed_.load(std::memory_order_relaxed)
-          + toolCancelled_.load(std::memory_order_relaxed)
-          + toolInterrupted_.load(std::memory_order_relaxed);
+    const auto  turns      = turns_.load(std::memory_order_relaxed);
+    const auto  samples    = firstTokenSamples_.load(std::memory_order_relaxed);
+    const auto& toolsTotal = toolOk_.load(std::memory_order_relaxed)
+                             + toolFailed_.load(std::memory_order_relaxed)
+                             + toolCancelled_.load(std::memory_order_relaxed)
+                             + toolInterrupted_.load(std::memory_order_relaxed);
     return fmt::format(
         "turns={} (ok={} failed={} cancelled={} interrupted={}) ttft_avg={:.1f}ms (n={}) "
         "model_calls={} errors={} tools={} (failed={}) compactions={} prompt_refreshes={} "

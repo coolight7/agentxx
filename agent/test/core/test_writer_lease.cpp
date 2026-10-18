@@ -12,17 +12,17 @@
 #include <thread>
 
 #if XX_IS_WIN_D
-#  ifndef WIN32_LEAN_AND_MEAN
-#    define WIN32_LEAN_AND_MEAN
-#  endif
-#  ifndef NOMINMAX
-#    define NOMINMAX
-#  endif
-#  include <windows.h>
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
 #else
-#  include <fcntl.h>
-#  include <sys/file.h>
-#  include <unistd.h>
+#include <fcntl.h>
+#include <sys/file.h>
+#include <unistd.h>
 #endif
 
 namespace {
@@ -107,7 +107,7 @@ bool osLockHeld(const std::string& dir) {
 
 ForeignWriterLock::ForeignWriterLock(const std::string& dir) {
     // 目录需先存在 (锁文件创建失败即视为未持锁)
-    const auto lockFile = SessionWriterLease::lockFilePath(dir);
+    const auto      lockFile = SessionWriterLease::lockFilePath(dir);
     std::error_code ec;
     fs::create_directories(utilxx_base::utf8ToPath(dir), ec);
 #if XX_IS_WIN_D
@@ -166,7 +166,8 @@ TestResult testWriterLease() {
     XX_TEST_EXPECT_TRUE(fs::exists(utilxx_base::utf8ToPath(SessionWriterLease::lockFilePath(root)))
     );
     XX_TEST_EXPECT_EQ(SessionWriterLease::heldCount(), size_t{1});
-    XX_TEST_EXPECT_TRUE(lease1 && lease1->dir().find(fs::path{root}.filename().string()) != std::string::npos
+    XX_TEST_EXPECT_TRUE(
+        lease1 && lease1->dir().find(fs::path{root}.filename().string()) != std::string::npos
     );
 
     // ---- 进程内可重入: 同一目录再次获取成功且不新增持有点 ----
@@ -191,15 +192,15 @@ TestResult testWriterLease() {
     XX_TEST_EXPECT_TRUE(osLockHeld(root));
 
     // ---- 不同目录互不影响 ----
-    auto other     = makeTempRoot();
+    auto other      = makeTempRoot();
     auto leaseRoot  = std::move(lease3);
     auto leaseOther = SessionWriterLease::acquire(other, &err);
     XX_TEST_EXPECT_TRUE(leaseOther != nullptr);
     XX_TEST_EXPECT_EQ(SessionWriterLease::heldCount(), size_t{2});
     leaseRoot.reset();
     XX_TEST_EXPECT_EQ(SessionWriterLease::heldCount(), size_t{1});
-    XX_TEST_EXPECT_FALSE(osLockHeld(root));  // 已释放
-    XX_TEST_EXPECT_TRUE(osLockHeld(other));  // 仍被本进程持有 (原生独占方式同样失败)
+    XX_TEST_EXPECT_FALSE(osLockHeld(root)); // 已释放
+    XX_TEST_EXPECT_TRUE(osLockHeld(other)); // 仍被本进程持有 (原生独占方式同样失败)
 
     // ---- 目录不存在时自动创建 ----
     leaseOther.reset();
@@ -216,8 +217,8 @@ TestResult testWriterLease() {
 
     // ---- 无法创建目录时报错返回 (失败语义: 调用方拿到原因, 不静默成功) ----
     // 用一个不可能创建的位置: 临时目录下已存在的普通文件当作父目录
-    const auto        blocker = (fs::path{other} / "blocker").string();
-    std::error_code   ec;
+    const auto      blocker = (fs::path{other} / "blocker").string();
+    std::error_code ec;
     {
         std::ofstream ofs{utilxx_base::utf8ToPath(blocker)};
         ofs << "x";

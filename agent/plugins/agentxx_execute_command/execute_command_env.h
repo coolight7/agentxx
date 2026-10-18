@@ -619,7 +619,7 @@ The command string is passed as-is to `bash -c` (no extra escaping layer):
         interpreterEnvSection(env)
     );
     prompt.args["full_output"] = std::string{kFullOutputArgDesc};
-    prompt.args["timeout"]    = std::string{kTimeoutArgDesc};
+    prompt.args["timeout"]     = std::string{kTimeoutArgDesc};
     return prompt;
 }
 
@@ -634,7 +634,7 @@ inline ExecPromptText windowsToolPrompt(const ExecEnvInfo& env, bool viaProcessS
     prompt.args["command"]
         = viaProcessSpawn ? winCommandProcessArgDesc(env) : winCommandPopenArgDesc(env);
     prompt.args["full_output"] = std::string{kFullOutputArgDesc};
-    prompt.args["timeout"]    = std::string{kTimeoutArgDesc};
+    prompt.args["timeout"]     = std::string{kTimeoutArgDesc};
     return prompt;
 }
 

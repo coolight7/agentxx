@@ -1097,8 +1097,8 @@ void SettingsOverlay::buildItems() {
     // 条目文字: 一个条目占一行, 文字取 `settings.*Value` (条目名称 + 当前值 / 动作
     // 文案已含在整句里), 不再另起一行重复显示条目名称
     list_.setItems({
-  // ---- 界面: 主题 / 动画 / 语言 ----
-  // 主题 (点击/Enter 循环切换 Dark <-> Light)
+        // ---- 界面: 主题 / 动画 / 语言 ----
+        // 主题 (点击/Enter 循环切换 Dark <-> Light)
         {.id    = "theme",
          .label = trf("settings.themeValue", ctx_.theme->name),
          .group = groupInterface,
@@ -1106,7 +1106,7 @@ void SettingsOverlay::buildItems() {
              [this] {
                  cycleTheme();
              }},
- // 动画等级 (点击/Enter 循环切换)
+        // 动画等级 (点击/Enter 循环切换)
         {.id    = "animation",
          .label = trf("settings.animValue", TUISettings::instance().animationLevelName()),
          .group = groupInterface,
@@ -1114,7 +1114,7 @@ void SettingsOverlay::buildItems() {
              [this] {
                  cycleAnimationLevel();
              }},
- // 界面语言 (点击/Enter 循环切换)
+        // 界面语言 (点击/Enter 循环切换)
         {.id    = "language",
          .label = trf("settings.langValue", TUISettings::instance().languageName()),
          .group = groupInterface,
@@ -1123,8 +1123,8 @@ void SettingsOverlay::buildItems() {
                  cycleLanguage();
              }},
 
- // ---- 显示: 日志 / 末尾思考 ----
-  // 日志等级 (点击/Enter 循环切换; TUI 日志侧边栏按此过滤)
+        // ---- 显示: 日志 / 末尾思考 ----
+        // 日志等级 (点击/Enter 循环切换; TUI 日志侧边栏按此过滤)
         {.id    = "log-level",
          .label = trf("settings.logValue", TUISettings::instance().logLevelName()),
          .group = groupDisplay,
@@ -1132,7 +1132,7 @@ void SettingsOverlay::buildItems() {
              [this] {
                  cycleLogLevel();
              }},
- // 末尾思考展示模式 (点击/Enter 循环切换: Auto Expand <-> Single Line)
+        // 末尾思考展示模式 (点击/Enter 循环切换: Auto Expand <-> Single Line)
         {.id    = "tail-thinking",
          .label = trf("settings.thinkValue", TUISettings::instance().tailThinkingModeName()),
          .group = groupDisplay,
@@ -1140,8 +1140,8 @@ void SettingsOverlay::buildItems() {
              [] {
                  cycleTailThinkingMode();
              }},
- // ---- 更新: 启动时检查开关 + 立即检查 ----
-  // 启动时检查更新 (点击/Enter 切换 开/关; 仅影响下次启动)
+        // ---- 更新: 启动时检查开关 + 立即检查 ----
+        // 启动时检查更新 (点击/Enter 切换 开/关; 仅影响下次启动)
         {.id    = "check-update",
          .label = trf(
              "settings.updateValue", std::string{
@@ -1153,7 +1153,7 @@ void SettingsOverlay::buildItems() {
              [] {
                  cycleCheckUpdateOnStartup();
              }},
- // 检查更新 (点击/Enter 立即检查一次; 有新版本时外部打开更新提示弹窗)
+        // 检查更新 (点击/Enter 立即检查一次; 有新版本时外部打开更新提示弹窗)
         {.id    = "check-update-now",
          .label = std::string{tr("settings.checkUpdateValue")},
          .group = groupUpdate,
@@ -1163,8 +1163,8 @@ void SettingsOverlay::buildItems() {
                      onCheckUpdate_();
                  }
              }},
- // ---- 其他: 快捷键 / 信息 ----
-  // 快捷键 (只读列表: 显示插件已注册的全局快捷键条数; 打开列表弹窗查看详情)
+        // ---- 其他: 快捷键 / 信息 ----
+        // 快捷键 (只读列表: 显示插件已注册的全局快捷键条数; 打开列表弹窗查看详情)
         {.id    = "keybinds",
          .label = trf("settings.keybindValue", keybindCount()),
          .group = groupOther,
@@ -1174,7 +1174,7 @@ void SettingsOverlay::buildItems() {
                      onKeybindList_();
                  }
              }},
- // Info (点击/Enter 打开关于弹窗)
+        // Info (点击/Enter 打开关于弹窗)
         {.id    = "about",
          .label = std::string{tr("settings.aboutValue")},
          .group = groupOther,
@@ -1950,15 +1950,15 @@ Element PendingInputsOverlay::OnRender() {
             });
         }
         Element row = pi.expanded ? hbox({
-                          text("- ") | color(theme.hintColor),
-                          std::move(body),
-                          std::move(delBtn),
-                      })
+                                        text("- ") | color(theme.hintColor),
+                                        std::move(body),
+                                        std::move(delBtn),
+                                    })
                                   : hbox({
-                                      text("+ ") | color(theme.userColor),
-                                      std::move(body),
-                                      std::move(delBtn),
-                                  });
+                                        text("+ ") | color(theme.userColor),
+                                        std::move(body),
+                                        std::move(delBtn),
+                                    });
         items.push_back(hits_.add(std::move(row), HitInfo{HitInfo::Kind::Item, pi.id}));
     }
 

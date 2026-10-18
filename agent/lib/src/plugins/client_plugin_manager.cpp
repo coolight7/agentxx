@@ -126,8 +126,20 @@ std::string keyOf(std::string_view token) {
         return std::string{token}; // 可打印单字符 (a-z/0-9/符号)
     }
     static const char* kNames[] = {
-        "esc",    "enter", "tab",     "space",   "backspace", "delete",   "insert",
-        "up",     "down",  "left",    "right",   "home",      "end",      "pageup",
+        "esc",
+        "enter",
+        "tab",
+        "space",
+        "backspace",
+        "delete",
+        "insert",
+        "up",
+        "down",
+        "left",
+        "right",
+        "home",
+        "end",
+        "pageup",
         "pagedown",
     };
     for (const char* name : kNames) {
@@ -159,8 +171,8 @@ std::string keyOf(std::string_view token) {
     }
     // F1~F24 功能键
     if (token.size() >= 2 && token[0] == 'f') {
-        int         num  = 0;
-        bool        ok   = true;
+        int  num = 0;
+        bool ok  = true;
         for (size_t i = 1; i < token.size(); ++i) {
             const char c = token[i];
             if (c < '0' || c > '9') {
@@ -183,11 +195,11 @@ std::string normalizeKeybindSpec(std::string_view keys) {
     if (lower.empty()) {
         return {};
     }
-    bool hasCtrl  = false;
-    bool hasAlt   = false;
-    bool hasShift = false;
-    bool hasSuper = false;
-    bool hasMod   = false;
+    bool        hasCtrl  = false;
+    bool        hasAlt   = false;
+    bool        hasShift = false;
+    bool        hasSuper = false;
+    bool        hasMod   = false;
     std::string mainKey;
     size_t      begin = 0;
     while (begin <= lower.size()) {
@@ -2290,8 +2302,7 @@ void PLUGINXX_CALL xx_cclose_overlay(const PluginxxHost* host) {
 
 // ---- 定时器 (agentxx.client.timer) ----
 
-AgentxxTimer* PLUGINXX_CALL
-    xx_cset_timer(const PluginxxHost* host, const AgentxxTimerSpec* spec) {
+AgentxxTimer* PLUGINXX_CALL xx_cset_timer(const PluginxxHost* host, const AgentxxTimerSpec* spec) {
     if (!spec) {
         return nullptr;
     }
@@ -2310,8 +2321,7 @@ void PLUGINXX_CALL xx_ccancel_timer(const PluginxxHost* host, AgentxxTimer* time
     });
 }
 
-int32_t PLUGINXX_CALL
-    xx_cis_visible(const PluginxxHost* host, const PluginxxStringView* owner_id) {
+int32_t PLUGINXX_CALL xx_cis_visible(const PluginxxHost* host, const PluginxxStringView* owner_id) {
     if (!owner_id || !owner_id->data) {
         return 0;
     }
@@ -2352,9 +2362,9 @@ int32_t PLUGINXX_CALL xx_clist_keybinds(const PluginxxHost* host, PluginxxString
         auto binds = mgr->keybinds();
         auto arr   = utilxx_base::Json::array();
         for (const auto& b : binds) {
-            auto item        = utilxx_base::Json::object();
-            item["keys"]     = b.keys;
-            item["plugin"]   = b.plugin;
+            auto item           = utilxx_base::Json::object();
+            item["keys"]        = b.keys;
+            item["plugin"]      = b.plugin;
             item["description"] = b.description;
             arr.push_back(std::move(item));
         }
@@ -2534,9 +2544,9 @@ void* ClientPluginManager::registerStatusItem(
         text = idStr;
     }
     // 富展示片段 (segments/sparkline/meter): 注册时即可给出, 更新时同 updateStatusItem
-    const bool hasRich = props.is_object()
-                         && (props.contains("segments") || props.contains("sparkline")
-                             || props.contains("meter"));
+    const bool hasRich
+        = props.is_object()
+          && (props.contains("segments") || props.contains("sparkline") || props.contains("meter"));
 
     auto handle    = std::make_shared<AgentxxStatusItem>();
     handle->inst   = inst;
@@ -2587,9 +2597,9 @@ int ClientPluginManager::updateStatusItem(
         text.clear();
     }
     // 富展示片段 (segments/sparkline/meter): 与 text 同为可选, 两者都为空才算非法更新
-    const bool hasRich = props.is_object()
-                         && (props.contains("segments") || props.contains("sparkline")
-                             || props.contains("meter"));
+    const bool hasRich
+        = props.is_object()
+          && (props.contains("segments") || props.contains("sparkline") || props.contains("meter"));
     // 富片段存在时 text 可省略 (状态栏以富内容为主, 文本仅作降级)
     if (!hasRich && text.empty()) {
         return -1;
@@ -3179,8 +3189,8 @@ void fireTimerTick(
     // 门控: 关联区域不可见时跳过本次回调并顺延 (计时继续; 可见后自然恢复)
     // - 一次性定时器在暂停期间不消耗 (区域可见后的下一次到时触发)
     // - 周期定时器在暂停期间不减计数 (触发次数上限只统计真正回调的次数)
-    const bool hidden = timer->pauseHidden && !timer->ownerId.empty()
-                        && !mgr->isRegionVisible(timer->ownerId);
+    const bool hidden
+        = timer->pauseHidden && !timer->ownerId.empty() && !mgr->isRegionVisible(timer->ownerId);
     // 同帧合并: 续期后已过去两个及以上周期说明 io 线程被占住 (回调积压), 本次
     // 到期与后续到期落在同一批事件里 —— 只回调一次, 丢弃已错过的周期, 避免插件
     // 被"追赶式"连续回调打满 (周期定时器才有意义; 一次性定时器照常触发)
@@ -3189,7 +3199,7 @@ void fireTimerTick(
                        && std::chrono::duration_cast<std::chrono::milliseconds>(
                               std::chrono::steady_clock::now() - timer->armedAt
                           )
-                              .count()
+                                  .count()
                               >= 2 * static_cast<int64_t>(timer->intervalMs);
     const bool usable = inst->enabled && inst->lifetime && inst->lifetime->acceptsOperations();
     if (stale) {
@@ -3250,7 +3260,8 @@ void armTimer(
 
 } // namespace
 
-AgentxxTimer* ClientPluginManager::setTimer(ClientPluginInstance* inst, const AgentxxTimerSpec* spec) {
+AgentxxTimer*
+    ClientPluginManager::setTimer(ClientPluginInstance* inst, const AgentxxTimerSpec* spec) {
     if (!inst || !spec || !spec->on_timer || spec->version != 1
         || !agentxx::plugin::specSizeOk<AgentxxTimerSpec>(spec->struct_size)) {
         return nullptr;
@@ -3266,7 +3277,10 @@ AgentxxTimer* ClientPluginManager::setTimer(ClientPluginInstance* inst, const Ag
     }
     // 能力门控: 与其它 register_* 入口一致 (主程序未声明定时器能力时拒绝)
     if (!hostSupportedInterfaces().contains(std::string{plugin_interfaces::ClientTimer})) {
-        XX_LOGW("[client_plugin] `{}` set_timer rejected: interface agentxx.client.timer unsupported", inst->name);
+        XX_LOGW(
+            "[client_plugin] `{}` set_timer rejected: interface agentxx.client.timer unsupported",
+            inst->name
+        );
         return nullptr;
     }
     // 上限只统计"仍存活"的定时器 (已结束/已取消的保留在表内但不计数)
@@ -3289,15 +3303,15 @@ AgentxxTimer* ClientPluginManager::setTimer(ClientPluginInstance* inst, const Ag
     if (!executor) {
         return nullptr;
     }
-    auto impl          = std::make_shared<ClientTimerImpl>(executor);
-    impl->inst         = inst->self;
-    impl->ownerId      = svToStr(spec->owner_id);
-    impl->intervalMs   = std::max<int32_t>(kTimerMinIntervalMs, spec->interval_ms);
-    impl->repeatMode   = spec->repeat > 0;
-    impl->repeat       = spec->repeat;
-    impl->pauseHidden  = spec->pause_when_hidden != 0;
-    impl->cb           = spec->on_timer;
-    impl->ud           = spec->user_data;
+    auto impl         = std::make_shared<ClientTimerImpl>(executor);
+    impl->inst        = inst->self;
+    impl->ownerId     = svToStr(spec->owner_id);
+    impl->intervalMs  = std::max<int32_t>(kTimerMinIntervalMs, spec->interval_ms);
+    impl->repeatMode  = spec->repeat > 0;
+    impl->repeat      = spec->repeat;
+    impl->pauseHidden = spec->pause_when_hidden != 0;
+    impl->cb          = spec->on_timer;
+    impl->ud          = spec->user_data;
     inst->timers.push_back(impl);
     armTimer(weak_from_this(), impl);
     return reinterpret_cast<AgentxxTimer*>(impl.get());
@@ -3310,7 +3324,7 @@ void ClientPluginManager::cancelTimer(ClientPluginInstance* inst, AgentxxTimer* 
     auto* impl = reinterpret_cast<ClientTimerImpl*>(timer);
     // 只接受仍在本实例表内的句柄 (重复取消/跨实例句柄忽略);
     // 已结束的定时器仍留在表内, 因此旧句柄可安全命中并直接标记
-    auto  it   = std::find_if(inst->timers.begin(), inst->timers.end(), [&](const auto& h) {
+    auto it = std::find_if(inst->timers.begin(), inst->timers.end(), [&](const auto& h) {
         return h.get() == impl;
     });
     if (it == inst->timers.end()) {
@@ -3321,11 +3335,7 @@ void ClientPluginManager::cancelTimer(ClientPluginInstance* inst, AgentxxTimer* 
     // 不在此释放: 句柄地址需保持稳定 (见 fireTimerTick 说明)
 }
 
-bool acceptUiJsonSize(
-    std::string_view json,
-    std::string_view what,
-    std::string_view plugin
-) {
+bool acceptUiJsonSize(std::string_view json, std::string_view what, std::string_view plugin) {
     if (json.size() <= kUiJsonMaxBytes) {
         return true;
     }
@@ -3369,8 +3379,10 @@ std::map<std::string, bool, std::less<>> ClientPluginManager::regionVisibility()
 
 // ==================== 全局快捷键 (agentxx.client.keybind) ====================
 
-AgentxxKeybind*
-    ClientPluginManager::registerKeybind(ClientPluginInstance* inst, const AgentxxKeybindSpec* spec) {
+AgentxxKeybind* ClientPluginManager::registerKeybind(
+    ClientPluginInstance*     inst,
+    const AgentxxKeybindSpec* spec
+) {
     if (!inst || !spec || !spec->on_keybind || spec->version != 1
         || !agentxx::plugin::specSizeOk<AgentxxKeybindSpec>(spec->struct_size)) {
         return nullptr;
@@ -3382,7 +3394,11 @@ AgentxxKeybind*
     const std::string rawKeys = svToStr(spec->keys);
     const std::string keys    = normalizeKeybindSpec(rawKeys);
     if (keys.empty()) {
-        XX_LOGW("[client_plugin] `{}` register_keybind rejected: invalid keys `{}`", inst->name, rawKeys);
+        XX_LOGW(
+            "[client_plugin] `{}` register_keybind rejected: invalid keys `{}`",
+            inst->name,
+            rawKeys
+        );
         return nullptr;
     }
     // 能力门控: 与其它 register_* 入口一致 (主程序未声明快捷键能力时拒绝)
@@ -3407,11 +3423,7 @@ AgentxxKeybind*
         std::lock_guard<std::mutex> lock(uiMutex_);
         for (const auto& k : uiRegistry_->keybinds) {
             if (k.keys == keys) {
-                XX_LOGW(
-                    "[client_plugin] keybind `{}` rejected: occupied by `{}`",
-                    keys,
-                    k.plugin
-                );
+                XX_LOGW("[client_plugin] keybind `{}` rejected: occupied by `{}`", keys, k.plugin);
                 // 记录冲突 (供设置弹窗展示"为什么这个快捷键没生效"): 只针对跨插件
                 // 占用, 同插件重复注册同一键位属插件自身行为, 不入表
                 if (k.plugin != inst->name) {
@@ -3439,9 +3451,9 @@ AgentxxKeybind*
     }
     inst->keybindRegs.push_back(std::move(reg));
 
-    auto handle    = std::make_shared<AgentxxKeybind>();
-    handle->inst   = inst;
-    handle->keys   = keys;
+    auto handle  = std::make_shared<AgentxxKeybind>();
+    handle->inst = inst;
+    handle->keys = keys;
     inst->keybindHandles.push_back(handle);
     return handle.get();
 }
@@ -3504,8 +3516,8 @@ std::vector<ClientKeybind> ClientPluginManager::keybinds() const {
 void ClientPluginManager::postKeybindInvocation(std::string keys) {
     auto self = shared_from_this();
     postToIo([self, keys = std::move(keys)]() mutable {
-        ClientKeybind   hit;
-        bool            found = false;
+        ClientKeybind                         hit;
+        bool                                  found = false;
         std::shared_ptr<ClientPluginInstance> inst;
         {
             std::lock_guard<std::mutex> lock(self->uiMutex_);
@@ -4086,7 +4098,7 @@ void ClientPluginManager::reportRegionSize(const std::string& id, int width, int
         item["h"]  = r.height;
         regions.push_back(std::move(item));
     }
-    payload["regions"] = std::move(regions);
+    payload["regions"]     = std::move(regions);
     const std::string text = payload.dump();
     auto              self = shared_from_this();
     asio::post(executor, [self, text]() {
@@ -4095,7 +4107,7 @@ void ClientPluginManager::reportRegionSize(const std::string& id, int width, int
 }
 
 std::vector<ClientRegionSize> ClientPluginManager::regionSizes() const {
-    std::lock_guard<std::mutex> lock(regionMutex_);
+    std::lock_guard<std::mutex>   lock(regionMutex_);
     std::vector<ClientRegionSize> out;
     out.reserve(regionSizes_.size());
     for (const auto& entry : regionSizes_) {
@@ -4191,12 +4203,11 @@ ClientToolRenderResult renderClientTool(
                                     }
                                 }
                                 if (res.displayName.empty()) {
-                                    if (auto nameEntry = cache->lookupLatest(
-                                            ClientToolRenderRequest::keyFor(
-                                                std::string_view{},
-                                                toolName
-                                            )
-                                        );
+                                    if (auto nameEntry
+                                        = cache->lookupLatest(ClientToolRenderRequest::keyFor(
+                                            std::string_view{},
+                                            toolName
+                                        ));
                                         nameEntry && nameEntry->matched
                                         && nameEntry->plugin == r.plugin) {
                                         res.displayName = nameEntry->displayName;
@@ -4261,11 +4272,7 @@ ClientToolRenderResult renderClientTool(
                                     output.items_json.data,
                                     static_cast<size_t>(output.items_json.size)
                                 };
-                                if (acceptUiJsonSize(
-                                        itemsJson,
-                                        "tool_renderer output",
-                                        r.plugin
-                                    )) {
+                                if (acceptUiJsonSize(itemsJson, "tool_renderer output", r.plugin)) {
                                     try {
                                         res.items = utilxx_base::Json::parse(itemsJson);
                                     } catch (...) {

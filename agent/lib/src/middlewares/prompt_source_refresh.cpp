@@ -16,8 +16,7 @@ PromptSourceRefreshHandle::PromptSourceRefreshHandle(
         std::move(in_agentContext)
     ) {}
 
-asio::awaitable<void> PromptSourceRefreshHandle::onModelcallStartFunc(
-    neograph::graph::NodeInput& in
+asio::awaitable<void> PromptSourceRefreshHandle::onModelcallStartFunc(neograph::graph::NodeInput& in
 ) {
     auto ctxPtr = agentContext.lock();
     if (!ctxPtr || !ctxPtr->promptSources) {

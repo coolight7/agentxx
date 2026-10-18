@@ -90,7 +90,9 @@ size_t ConfigValidationReport::count(ConfigIssueLevel level) const noexcept {
     return static_cast<size_t>(std::count_if(
         issues.begin(),
         issues.end(),
-        [level](const ConfigIssue& issue) { return issue.level == level; }
+        [level](const ConfigIssue& issue) {
+            return issue.level == level;
+        }
     ));
 }
 
@@ -114,9 +116,9 @@ utilxx_base::Json ConfigValidationReport::toJson() const {
     utilxx_base::Json out = utilxx_base::Json::array();
     for (const auto& issue : issues) {
         utilxx_base::Json item = utilxx_base::Json::object();
-        item["level"]   = issue.level == ConfigIssueLevel::Fatal ? "fatal" : "warning";
-        item["key"]     = issue.keyPath;
-        item["message"] = issue.message;
+        item["level"]          = issue.level == ConfigIssueLevel::Fatal ? "fatal" : "warning";
+        item["key"]            = issue.keyPath;
+        item["message"]        = issue.message;
         if (!issue.source.empty()) {
             item["source"] = issue.source;
         }
@@ -205,9 +207,11 @@ ConfigValidationReport validateAgentConfig(const AgentConfig& config) {
             report,
             ConfigIssueLevel::Warning,
             "data_dir",
-            fmt::format("is not an absolute path (`{}`): it will be resolved against the process "
-                        "cwd, which changes when the program is started elsewhere",
-                        config.dataDir)
+            fmt::format(
+                "is not an absolute path (`{}`): it will be resolved against the process "
+                "cwd, which changes when the program is started elsewhere",
+                config.dataDir
+            )
         );
     }
     if (!config.sessionStoreDirectory.empty()
@@ -221,7 +225,12 @@ ConfigValidationReport validateAgentConfig(const AgentConfig& config) {
     }
     for (size_t i = 0; i < config.skillDirPaths.size(); ++i) {
         if (config.skillDirPaths[i].empty()) {
-            addIssue(report, ConfigIssueLevel::Warning, indexed("skill.paths", i), "empty path entry, ignored");
+            addIssue(
+                report,
+                ConfigIssueLevel::Warning,
+                indexed("skill.paths", i),
+                "empty path entry, ignored"
+            );
         }
     }
     for (size_t i = 0; i < config.memoryFilePaths.size(); ++i) {
@@ -333,7 +342,10 @@ ConfigValidationReport validateAgentConfig(const AgentConfig& config) {
             report,
             ConfigIssueLevel::Warning,
             "llm.max_retry",
-            fmt::format("{} is very high: a failing request can take a long time to give up", config.llmMaxRetry)
+            fmt::format(
+                "{} is very high: a failing request can take a long time to give up",
+                config.llmMaxRetry
+            )
         );
     }
 
@@ -426,9 +438,9 @@ ConfigValidationReport validateConfigPaths(const AgentConfig& config) {
     ConfigValidationReport report;
 
     // ---- 会话根目录 / 数据目录 (仅在要求持久化时视为致命) ----
-    const bool persistenceRequested = config.enableSessionStore
-                                      && (!config.dataDir.empty()
-                                          || !config.sessionStoreDirectory.empty());
+    const bool persistenceRequested
+        = config.enableSessionStore
+          && (!config.dataDir.empty() || !config.sessionStoreDirectory.empty());
     if (!config.dataDir.empty()) {
         std::string error;
         if (!ensureDirUsable(config.dataDir, error)) {
@@ -460,15 +472,16 @@ ConfigValidationReport validateConfigPaths(const AgentConfig& config) {
     }
 
     // ---- 资源路径: 不存在只警告, 启动时记为加载失败 ----
-    auto checkList = [&](const std::vector<std::string>& paths, std::string_view key, bool wantDir) {
+    auto checkList = [&](const std::vector<std::string>& paths, std::string_view key, bool wantDir
+                     ) {
         for (size_t i = 0; i < paths.size(); ++i) {
             if (paths[i].empty()) {
                 continue;
             }
             std::error_code ec;
-            const auto      fp       = utilxx_base::utf8ToPath(paths[i]);
-            const bool      exists   = fs::exists(fp, ec);
-            const bool      typeOk   = exists && (wantDir ? fs::is_directory(fp, ec) : true);
+            const auto      fp     = utilxx_base::utf8ToPath(paths[i]);
+            const bool      exists = fs::exists(fp, ec);
+            const bool      typeOk = exists && (wantDir ? fs::is_directory(fp, ec) : true);
             if (!exists) {
                 addIssue(
                     report,

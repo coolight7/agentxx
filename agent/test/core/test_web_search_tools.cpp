@@ -277,9 +277,8 @@ asio::awaitable<void>
     co_return;
 }
 
-asio::awaitable<void> test_web_fetch_format_param(
-    std::weak_ptr<agentxx::agent::AgentContext> agentContext
-) {
+asio::awaitable<void>
+    test_web_fetch_format_param(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto  tool   = agentxx::tools::WebFetchUrlTool{agentContext};
     auto  def    = tool.get_definition();
     auto& params = def.parameters;
@@ -294,14 +293,13 @@ asio::awaitable<void> test_web_fetch_format_param(
     co_return;
 }
 
-asio::awaitable<void> test_web_fetch_invalid_format(
-    std::weak_ptr<agentxx::agent::AgentContext> agentContext
-) {
+asio::awaitable<void>
+    test_web_fetch_invalid_format(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::WebFetchUrlTool{agentContext};
     // 非法 `format` 在发起请求前就应报参数错误
     auto args = utilxx_base::Json{
         {"url",    "http://127.0.0.1:1/never"},
-        {"format", "html"                  },
+        {"format", "html"                    },
     };
     bool threw = false;
     try {

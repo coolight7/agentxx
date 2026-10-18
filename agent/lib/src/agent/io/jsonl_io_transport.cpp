@@ -8,11 +8,11 @@
 #include "utilxx_base/log.h"
 
 #if XX_IS_WIN_D
-#include <fcntl.h>  // _O_BINARY
-#include <io.h>     // _setmode
+#include <fcntl.h> // _O_BINARY
+#include <io.h>    // _setmode
 #endif
 
-#include <cstdio>   // stdin/stdout
+#include <cstdio> // stdin/stdout
 #include <iostream>
 #include <utility>
 
@@ -135,8 +135,9 @@ std::string jsonlEncodeMessage(const WireMessage& msg) {
 // ---------------------------------------------------------------------------
 
 JsonlAgentIOTransport::JsonlAgentIOTransport(asio::any_io_executor ex, LineIo io) :
-    ex_(std::move(ex)), io_(std::move(io)) {
-    reader_       = std::make_shared<ReaderState>();
+    ex_(std::move(ex)),
+    io_(std::move(io)) {
+    reader_        = std::make_shared<ReaderState>();
     reader_->lines = std::make_shared<LineChannel>(ex_, 64);
     if (!io_.readLine) {
         // 默认输入为 stdin: 二进制模式 + 后台线程阻塞读行
@@ -169,7 +170,7 @@ JsonlAgentIOTransport::~JsonlAgentIOTransport() {
 }
 
 void JsonlAgentIOTransport::startStdioReader() {
-    auto state = reader_;
+    auto state    = reader_;
     readerThread_ = std::thread([state]() {
         std::string line;
         while (!state->stop.load(std::memory_order_acquire)) {

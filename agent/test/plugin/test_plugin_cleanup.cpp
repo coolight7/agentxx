@@ -25,12 +25,12 @@
 #include "agentxx/plugin/api/plugin_kit.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/plugin/tool_registry.h"
-#include "neograph/graph/registry.h"
 #include "asio/redirect_error.hpp"
 #include "asio/steady_timer.hpp"
 #include "asio/this_coro.hpp"
 #include "asio/use_awaitable.hpp"
 #include "fmt/format.h"
+#include "neograph/graph/registry.h"
 #include "utilxx_base/asio_error.h"
 #include "utilxx_base/json.h"
 #include "utilxx_base/string_util.h"
@@ -119,22 +119,20 @@ void writeTextFile(const fs::path& path, std::string_view text) {
 
 /// 最小主程序夹具: AgentContext + 中间件上下文 + 总线 + 工具注册表 + 插件管理器
 struct Fixture {
-    std::shared_ptr<agentxx::agent::AgentContext>    ctx;
-    std::shared_ptr<agentxx::plugin::PluginManager>  mgr;
+    std::shared_ptr<agentxx::agent::AgentContext>   ctx;
+    std::shared_ptr<agentxx::plugin::PluginManager> mgr;
 };
 
 asio::awaitable<Fixture> makeFixture() {
     Fixture f;
-    f.ctx                     = std::make_shared<agentxx::agent::AgentContext>();
-    f.ctx->agentConfig        = std::make_shared<agentxx::agent::AgentConfig>();
+    f.ctx                          = std::make_shared<agentxx::agent::AgentContext>();
+    f.ctx->agentConfig             = std::make_shared<agentxx::agent::AgentConfig>();
     f.ctx->middlewareHandleContext = std::make_shared<agentxx::middleware::MiddlewareContext>();
-    f.ctx->bus                = std::make_shared<agentxx::events::EventBus>(
-        co_await asio::this_coro::executor
-    );
+    f.ctx->bus = std::make_shared<agentxx::events::EventBus>(co_await asio::this_coro::executor);
     f.ctx->toolRegistry = std::make_shared<agentxx::plugin::ToolRegistry>();
     // 图注册表: 插件经 graph 接口表注册自定义节点类型 (BaseAgent::init 会注入)
     f.ctx->graphRegistry = std::make_shared<neograph::graph::GraphRegistry>();
-    f.mgr               = std::make_shared<agentxx::plugin::PluginManager>(f.ctx);
+    f.mgr                = std::make_shared<agentxx::plugin::PluginManager>(f.ctx);
     f.ctx->pluginManager = f.mgr;
     // 装配 io executor (与 BaseAgent::init 一致): 跨线程 vtable 调用经真实 post
     f.mgr->setIoExecutor(co_await asio::this_coro::executor);
@@ -171,15 +169,12 @@ std::string appendSectionText(const agentxx::agent::AgentPrompt& prompt, const s
 namespace {
 
 asio::awaitable<void> test_registration_inventory_baseline() {
-    auto      f           = co_await makeFixture();
+    auto       f          = co_await makeFixture();
     const auto pluginPath = findPluginDir("example_plugin");
 
     // 加载前的基线: 没有工具、没有提示词贡献
     XX_TEST_EXPECT_FALSE(f.ctx->toolRegistry->contains("example_echo"));
-    XX_TEST_EXPECT_EQ(
-        appendSectionText(f.ctx->agentConfig->prompt, "toolPrompt"),
-        std::string{}
-    );
+    XX_TEST_EXPECT_EQ(appendSectionText(f.ctx->agentConfig->prompt, "toolPrompt"), std::string{});
     XX_TEST_EXPECT_EQ(f.mgr->graphDefinitionOwner(), std::string{});
 
     auto inst = co_await f.mgr->loadPluginAsync(pluginPath);
@@ -308,7 +303,10 @@ asio::awaitable<void> test_prompt_contribution_recompute() {
         ),
         0
     );
-    XX_TEST_EXPECT_EQ(appendSectionText(f.ctx->agentConfig->prompt, probeKey), std::string{"from-A"});
+    XX_TEST_EXPECT_EQ(
+        appendSectionText(f.ctx->agentConfig->prompt, probeKey),
+        std::string{"from-A"}
+    );
 
     // B 后贡献: 后写者生效 (贡献按 sequence 顺序应用)
     XX_TEST_EXPECT_EQ(
@@ -320,7 +318,10 @@ asio::awaitable<void> test_prompt_contribution_recompute() {
         ),
         0
     );
-    XX_TEST_EXPECT_EQ(appendSectionText(f.ctx->agentConfig->prompt, probeKey), std::string{"from-B"});
+    XX_TEST_EXPECT_EQ(
+        appendSectionText(f.ctx->agentConfig->prompt, probeKey),
+        std::string{"from-B"}
+    );
     {
         const auto invA = f.mgr->registrationInventory(*instA);
         const auto invB = f.mgr->registrationInventory(*instB);
@@ -330,12 +331,18 @@ asio::awaitable<void> test_prompt_contribution_recompute() {
 
     // 卸载 A: 只删除 A 的贡献, B 的取值仍然生效 (不回退成 A 的旧值/base)
     XX_TEST_EXPECT_TRUE(co_await f.mgr->unloadAsync("example_plugin", std::chrono::seconds{5}));
-    XX_TEST_EXPECT_EQ(appendSectionText(f.ctx->agentConfig->prompt, probeKey), std::string{"from-B"});
+    XX_TEST_EXPECT_EQ(
+        appendSectionText(f.ctx->agentConfig->prompt, probeKey),
+        std::string{"from-B"}
+    );
 
     // 外部直写 (用户/主程序代码): 直写立即生效 (模型看到的是直写值),
     // 贡献会在下一次"合成"时被识别为新基础值并在其上重新应用
     f.ctx->agentConfig->prompt.setAppendSection(probeKey, "external", 0, "user");
-    XX_TEST_EXPECT_EQ(appendSectionText(f.ctx->agentConfig->prompt, probeKey), std::string{"external"});
+    XX_TEST_EXPECT_EQ(
+        appendSectionText(f.ctx->agentConfig->prompt, probeKey),
+        std::string{"external"}
+    );
 
     // B 再贡献一次: 触发合成 —— 外部值成为新基础值, B 的贡献在其上生效
     XX_TEST_EXPECT_EQ(
@@ -347,11 +354,17 @@ asio::awaitable<void> test_prompt_contribution_recompute() {
         ),
         0
     );
-    XX_TEST_EXPECT_EQ(appendSectionText(f.ctx->agentConfig->prompt, probeKey), std::string{"from-B2"});
+    XX_TEST_EXPECT_EQ(
+        appendSectionText(f.ctx->agentConfig->prompt, probeKey),
+        std::string{"from-B2"}
+    );
 
     // 卸载 B: 外部直写的值 (已成为基础值) 保留, 不会被清成"不存在"
     XX_TEST_EXPECT_TRUE(co_await f.mgr->unloadAsync("agentxx_math", std::chrono::seconds{5}));
-    XX_TEST_EXPECT_EQ(appendSectionText(f.ctx->agentConfig->prompt, probeKey), std::string{"external"});
+    XX_TEST_EXPECT_EQ(
+        appendSectionText(f.ctx->agentConfig->prompt, probeKey),
+        std::string{"external"}
+    );
 
     // 清理: 移除探针键, 避免影响同进程的其它用例
     f.ctx->agentConfig->prompt.removeAppendSection(probeKey);
@@ -449,7 +462,7 @@ asio::awaitable<void> test_graph_slot_with_real_plugin() {
     auto f = co_await makeFixture();
 
     const std::string baseJson = f.mgr->getGraphJson();
-    auto inst = co_await f.mgr->loadPluginAsync(findPluginDir("example_graph_node"));
+    auto              inst = co_await f.mgr->loadPluginAsync(findPluginDir("example_graph_node"));
     XX_TEST_EXPECT_TRUE(inst != nullptr);
     if (!inst) {
         co_return;
@@ -468,7 +481,7 @@ asio::awaitable<void> test_graph_slot_with_real_plugin() {
 // 4. 加载失败建议
 // ===========================================================================
 asio::awaitable<void> test_load_failure_advice() {
-    auto f = co_await makeFixture();
+    auto  f   = co_await makeFixture();
     auto& mgr = *f.mgr;
     // 空路径
     {
@@ -529,7 +542,8 @@ asio::awaitable<void> test_load_failure_advice() {
             };
             for (const char* name : libNames) {
                 for (const auto& dir :
-                     {*exeDir, exeDir->parent_path(), exeDir->parent_path().parent_path() / "exec"}) {
+                     {*exeDir, exeDir->parent_path(), exeDir->parent_path().parent_path() / "exec"
+                     }) {
                     const auto probe = (dir / name).string();
                     if (fs::exists(utilxx_base::utf8ToPath(probe))) {
                         candidate = probe;

@@ -34,8 +34,8 @@ namespace fs = std::filesystem;
 namespace {
 
 using agentxx::agent::Session;
-using agentxx::agent::SessionStore;
 using agentxx::agent::SessionsManager;
+using agentxx::agent::SessionStore;
 using agentxx::agent::ViewMessage;
 
 /// 创建唯一临时目录
@@ -170,13 +170,16 @@ void test_persist_levels() {
     // 上下文变更 (不落盘) + persistNow: 上下文与展示历史一起立即落盘
     neograph::ChatMessage userMsg;
     {
-        utilxx_base::Json j{{"role", "user"}, {"content", "hi"}};
+        utilxx_base::Json j{
+            {"role",    "user"},
+            {"content", "hi"  }
+        };
         neograph::from_json(agentxx::util::toNeographJson(j), userMsg);
     }
     session.appendMessages({userMsg}, false);
     XX_TEST_EXPECT_EQ(counters.llm, 0);
     session.persistNow("user-input");
-    XX_TEST_EXPECT_EQ(counters.llm, 1);   // 用户输入立即写上下文
+    XX_TEST_EXPECT_EQ(counters.llm, 1);    // 用户输入立即写上下文
     XX_TEST_EXPECT_EQ(counters.append, 2); // 待落盘展示消息一并刷出
 
     // 紧接着 persistThrottled: 上下文仍在节流窗口内 → 不重复写

@@ -33,7 +33,7 @@ bool readFileStamp(const std::string& absolutePath, uint64_t& mtime, uint64_t& s
     if (ec) {
         return false;
     }
-    size = static_cast<uint64_t>(bytes);
+    size                 = static_cast<uint64_t>(bytes);
     const auto writeTime = std::filesystem::last_write_time(nativePath, ec);
     if (ec) {
         return false;
@@ -48,10 +48,7 @@ MemoryFileMiddlewareHandle::MemoryFileMiddlewareHandle(
     const std::vector<std::string>&             in_memoryFilePaths,
     std::weak_ptr<agentxx::agent::AgentContext> in_agentContext
 ) :
-    BaseMiddlewareHandle<MemoryFileMiddlewareState>(
-        "MemoryFileMiddlewareHandle",
-        in_agentContext
-    ),
+    BaseMiddlewareHandle<MemoryFileMiddlewareState>("MemoryFileMiddlewareHandle", in_agentContext),
     memoryFilePaths(in_memoryFilePaths) {
     auto ctx = in_agentContext.lock();
     if (!ctx || !ctx->promptSources) {
@@ -70,9 +67,8 @@ MemoryFileMiddlewareHandle::MemoryFileMiddlewareHandle(
         .perSession          = true,
         .refreshOnCompaction = true,
         .timeout             = std::chrono::milliseconds{3000},
-        .build =
-            [this](const agentxx::agent::PromptRefreshContext& rc)
-            -> asio::awaitable<std::optional<std::string>> {
+        .build               = [this](const agentxx::agent::PromptRefreshContext& rc
+                 ) -> asio::awaitable<std::optional<std::string>> {
             co_return co_await buildSectionAsync(rc);
         },
     });
@@ -147,9 +143,7 @@ asio::awaitable<std::optional<std::string>> MemoryFileMiddlewareHandle::readFile
 }
 
 asio::awaitable<std::optional<std::string>>
-    MemoryFileMiddlewareHandle::buildSectionAsync(
-        const agentxx::agent::PromptRefreshContext& ctx
-    ) {
+    MemoryFileMiddlewareHandle::buildSectionAsync(const agentxx::agent::PromptRefreshContext& ctx) {
     if (memoryFilePaths.empty()) {
         // 没有配置任何记忆文件: 返回空串表示"该段落没有内容"
         // (与 nullopt 的区别: 空串会清空段落, 用于文件被全部摘除的场景)
@@ -171,7 +165,7 @@ asio::awaitable<std::optional<std::string>>
         joined += path;
         joined.push_back('\n');
     }
-    const uint64_t digest  = utilxx_base::hash::fnv1a64(joined);
+    const uint64_t digest = utilxx_base::hash::fnv1a64(joined);
     // 缓存按路径集合保存: 活跃会话数决定条目数; 超过上限时整体清空 (只是多读一次盘,
     // 不会产生错误的段落内容)
     if (cacheByPathSet_.size() > 64) {
@@ -192,10 +186,7 @@ asio::awaitable<std::optional<std::string>>
         uint64_t mtime = 0;
         uint64_t size  = 0;
         if (!readFileStamp(absolutePath, mtime, size)) {
-            logContent += fmt::format(
-                "┣━ ❌ Can not stat Memory file: `{}`\n",
-                configuredPath
-            );
+            logContent += fmt::format("┣━ ❌ Can not stat Memory file: `{}`\n", configuredPath);
             // 保留该文件上次内容 (失败不影响其他文件)
             if (auto itOld = cache.files.find(absolutePath);
                 itOld != cache.files.end() && itOld->second.ok) {
@@ -210,18 +201,15 @@ asio::awaitable<std::optional<std::string>>
             continue;
         }
 
-        changed = true;
+        changed           = true;
         entry.stamp.mtime = mtime;
         entry.stamp.size  = size;
 
         std::string error;
         auto        content = co_await readFileAsync(absolutePath, error);
         if (!content.has_value()) {
-            logContent += fmt::format(
-                "┣━ ❌ Load Memory file failed: `{}` | {}\n",
-                configuredPath,
-                error
-            );
+            logContent
+                += fmt::format("┣━ ❌ Load Memory file failed: `{}` | {}\n", configuredPath, error);
             continue;
         }
 
@@ -246,10 +234,10 @@ asio::awaitable<std::optional<std::string>>
             );
         }
 
-        entry.content = std::move(*content);
-        entry.ok      = true;
-        anyOk         = true;
-        logContent += fmt::format("┣━ ✅ Loaded Memory file: `{}`\n", configuredPath);
+        entry.content  = std::move(*content);
+        entry.ok       = true;
+        anyOk          = true;
+        logContent    += fmt::format("┣━ ✅ Loaded Memory file: `{}`\n", configuredPath);
     }
 
     if (!logContent.empty()) {

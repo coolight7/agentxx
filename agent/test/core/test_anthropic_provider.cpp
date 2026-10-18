@@ -722,8 +722,8 @@ asio::awaitable<void> test_cache_control_breakpoints(MockAnthropicServer& mock, 
     neograph::CompletionParams params;
     params.model    = "claude-sonnet-4-20250514";
     params.messages = {
-        neograph::ChatMessage{.role = "system", .content = "你是助手"  },
-        neograph::ChatMessage{.role = "user", .content = "第一轮问题"},
+        neograph::ChatMessage{.role = "system",    .content = "你是助手"   },
+        neograph::ChatMessage{.role = "user",      .content = "第一轮问题"},
         neograph::ChatMessage{.role = "assistant", .content = "第一轮回答"},
     };
     // 请求末尾的动态段 (稳定段/动态段分离): 内容每轮都可能变,
@@ -808,9 +808,7 @@ asio::awaitable<void> test_cache_control_breakpoints(MockAnthropicServer& mock, 
             cfgOff.cacheControl = false;
             auto providerOff    = server::AnthropicProvider::create(cfgOff);
             co_await providerOff->invoke(params, nullptr);
-            XX_TEST_EXPECT_TRUE(
-                mock.lastRequestBody.find("cache_control") == std::string::npos
-            );
+            XX_TEST_EXPECT_TRUE(mock.lastRequestBody.find("cache_control") == std::string::npos);
         }
     } catch (const std::exception& e) {
         XX_TEST_FAILED++;
@@ -884,7 +882,10 @@ asio::awaitable<void> test_streaming_usage_cache_tokens(MockAnthropicServer& moc
             "content_block_delta",
             R"({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}})"
         ),
-        MockAnthropicServer::sseEvent("content_block_stop", R"({"type":"content_block_stop","index":0})"),
+        MockAnthropicServer::sseEvent(
+            "content_block_stop",
+            R"({"type":"content_block_stop","index":0})"
+        ),
         MockAnthropicServer::sseEvent(
             "message_delta",
             R"({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4}})"
@@ -902,8 +903,8 @@ asio::awaitable<void> test_streaming_usage_cache_tokens(MockAnthropicServer& moc
 
     try {
         // 有 stream 回调才会走向流式路径 (与真实调用一致)
-        neograph::StreamCallback noop = [](const std::string&) {};
-        auto result = co_await provider->invoke(params, noop);
+        neograph::StreamCallback noop   = [](const std::string&) {};
+        auto                     result = co_await provider->invoke(params, noop);
         XX_TEST_EXPECT_EQ(result.usage.prompt_tokens, 7 + 800 + 64);
         XX_TEST_EXPECT_EQ(result.usage.completion_tokens, 4);
         XX_TEST_EXPECT_EQ(result.usage.total_tokens, 7 + 800 + 64 + 4);

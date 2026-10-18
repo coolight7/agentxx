@@ -120,7 +120,7 @@ TestResult testMarkdownFlow() {
 
     // ---------------- 同宽度重复布局稳定 (折行缓存) ----------------
     {
-        auto flow = plainNode("the quick brown fox jumps over the lazy dog");
+        auto      flow  = plainNode("the quick brown fox jumps over the lazy dog");
         const int first = layoutHeight(flow, 17);
         XX_TEST_EXPECT_TRUE(first > 1);
         // 重复布局 (盒位置变化 / 多次测量) 结果不变, 且不重新折行
@@ -187,7 +187,7 @@ TestResult testMarkdownFlow() {
         XX_TEST_EXPECT_EQ(rows[1], std::string{"ccc"});
         XX_TEST_EXPECT_EQ(rows[2], std::string{});
         // 行首空格丢弃
-        auto lead = plainNode("aaaaaa bbb");
+        auto lead  = plainNode("aaaaaa bbb");
         auto rows2 = renderRows(lead, 6, 3);
         XX_TEST_EXPECT_EQ(rows2[0], std::string{"aaaaaa"});
         XX_TEST_EXPECT_EQ(rows2[1], std::string{"bbb"});
@@ -196,16 +196,17 @@ TestResult testMarkdownFlow() {
     // ---------------- 行内样式落到正确单元格 ----------------
     {
         std::vector<markdown::Span> spans(3);
-        spans[0].text             = "bold";
-        spans[0].style.bold       = true;
-        spans[1].text             = "-red";
-        spans[1].style.fg         = ftxui::Color::Red;
-        spans[2].text             = "-italic";
-        spans[2].style.italic     = true;
-        auto flow = std::make_shared<markdown::FlowText>(std::move(spans));
-        auto el   = std::static_pointer_cast<ftxui::Node>(flow) | ftxui::color(ftxui::Color::Blue);
+        spans[0].text         = "bold";
+        spans[0].style.bold   = true;
+        spans[1].text         = "-red";
+        spans[1].style.fg     = ftxui::Color::Red;
+        spans[2].text         = "-italic";
+        spans[2].style.italic = true;
+        auto flow             = std::make_shared<markdown::FlowText>(std::move(spans));
+        auto el = std::static_pointer_cast<ftxui::Node>(flow) | ftxui::color(ftxui::Color::Blue);
 
-        auto screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(14), ftxui::Dimension::Fixed(1));
+        auto screen
+            = ftxui::Screen::Create(ftxui::Dimension::Fixed(14), ftxui::Dimension::Fixed(1));
         ftxui::Render(screen, el);
         // "bold-red-italic"
         for (int x = 0; x < 4; ++x) {
@@ -310,7 +311,8 @@ TestResult testMarkdownFlow() {
         XX_TEST_EXPECT_TRUE(selectBox(6, 0, 1, 1).find("bbbb") == std::string::npos);
     }
 
-    // ---------------- 选中高亮 (与 ftxui::Text 一致: 选中单元格执行 Screen 的选中样式) ----------------
+    // ---------------- 选中高亮 (与 ftxui::Text 一致: 选中单元格执行 Screen 的选中样式)
+    // ----------------
     {
         // 逐帧顺序与 App 相同: ComputeRequirement -> SetBox -> Select -> Render
         // (Render 内部按 Selection 绘制, 选中单元格反色)
@@ -331,8 +333,7 @@ TestResult testMarkdownFlow() {
         // 选择清空: ComputeRequirement 复位高亮状态 (无选择时框架不再调用 Select),
         // 复位后重绘无高亮 (跳过每帧 ComputeRequirement 的主程序经
         // LazyScrollable::resetSelectionHighlight 走同一条复位路径)
-        auto clean
-            = ftxui::Screen::Create(ftxui::Dimension::Fixed(11), ftxui::Dimension::Fixed(1));
+        auto clean = ftxui::Screen::Create(ftxui::Dimension::Fixed(11), ftxui::Dimension::Fixed(1));
         node->ComputeRequirement();
         node->SetBox(ftxui::Box{0, 10, 0, 0});
         node->Render(clean);
@@ -351,7 +352,7 @@ TestResult testMarkdownFlow() {
             XX_TEST_EXPECT_TRUE(wideScreen.PixelAt(x, 0).inverted);
         }
         XX_TEST_EXPECT_EQ(wideScreen.PixelAt(1, 0).character, std::string{}); // 宽字符保留格
-        XX_TEST_EXPECT_FALSE(wideScreen.PixelAt(7, 0).inverted);             // 'c' 未选中
+        XX_TEST_EXPECT_FALSE(wideScreen.PixelAt(7, 0).inverted);              // 'c' 未选中
 
         // 折行文本: 跨行选区逐行高亮
         auto wrapped     = plainNode("aaa bbb");
@@ -384,8 +385,8 @@ TestResult testMarkdownFlow() {
 
         // 代码块 (自绘节点) 同样按选中列高亮: 只有被绘制的字符格高亮
         using markdown::CellStyle;
-        auto block      = std::make_shared<markdown::FlowCodeBlock>("ab\ncd", "", CellStyle{});
-        auto blockNode  = std::static_pointer_cast<ftxui::Node>(block);
+        auto block     = std::make_shared<markdown::FlowCodeBlock>("ab\ncd", "", CellStyle{});
+        auto blockNode = std::static_pointer_cast<ftxui::Node>(block);
         auto blockScreen
             = ftxui::Screen::Create(ftxui::Dimension::Fixed(6), ftxui::Dimension::Fixed(4));
         ftxui::Selection blockSel(0, 1, 3, 1); // 上内边距之下第一行代码
@@ -398,22 +399,19 @@ TestResult testMarkdownFlow() {
         // 代码块左缘不在 0 列 (左侧留白 2 列): 代码行文字从盒左缘 + 1 列 (内边距)
         // 起画, 取文本按屏幕列判定 —— 选中整个代码区应取回完整代码
         auto offsetBlock = std::make_shared<markdown::FlowCodeBlock>("ab\ncd", "", CellStyle{});
-        XX_TEST_EXPECT_EQ(
-            selectTextAt(offsetBlock, 2, 6, 4, 2, 1, 7, 2),
-            std::string{"ab\ncd"}
-        );
+        XX_TEST_EXPECT_EQ(selectTextAt(offsetBlock, 2, 6, 4, 2, 1, 7, 2), std::string{"ab\ncd"});
     }
 
     // ---------------- 链接可见区段登记 ----------------
     {
         std::vector<markdown::Span> spans(3);
-        spans[0].text = "go ";
-        spans[0].link = 0;
-        spans[1].text = "here now";
-        spans[1].link = 0;
-        spans[2].text = " tail";
-        auto flow     = std::make_shared<markdown::FlowText>(std::move(spans));
-        const auto el = std::static_pointer_cast<ftxui::Node>(flow);
+        spans[0].text   = "go ";
+        spans[0].link   = 0;
+        spans[1].text   = "here now";
+        spans[1].link   = 0;
+        spans[2].text   = " tail";
+        auto       flow = std::make_shared<markdown::FlowText>(std::move(spans));
+        const auto el   = std::static_pointer_cast<ftxui::Node>(flow);
 
         el->ComputeRequirement();
         el->SetBox(ftxui::Box{0, 12, 0, 0});
@@ -438,14 +436,12 @@ TestResult testMarkdownFlow() {
         }
 
         // 链接跨行时按行各登记一个盒子
-        auto wrapped = std::make_shared<markdown::FlowText>(
-            [] {
-                std::vector<markdown::Span> s(1);
-                s[0].text = "aaaa bbbb";
-                s[0].link = 0;
-                return s;
-            }()
-        );
+        auto       wrapped   = std::make_shared<markdown::FlowText>([] {
+            std::vector<markdown::Span> s(1);
+            s[0].text = "aaaa bbbb";
+            s[0].link = 0;
+            return s;
+        }());
         const auto wrappedEl = std::static_pointer_cast<ftxui::Node>(wrapped);
         wrappedEl->ComputeRequirement();
         wrappedEl->SetBox(ftxui::Box{0, 3, 0, 2});
@@ -475,8 +471,8 @@ TestResult testMarkdownFlow() {
         using markdown::FlowCodeBlock;
 
         // 无语言标签: 上内边距 + 代码行 + 下内边距; 代码文字从第 1 列起
-        auto block = std::make_shared<FlowCodeBlock>("a\nbb", "", CellStyle{});
-        const auto el = std::static_pointer_cast<ftxui::Node>(block);
+        auto       block = std::make_shared<FlowCodeBlock>("a\nbb", "", CellStyle{});
+        const auto el    = std::static_pointer_cast<ftxui::Node>(block);
         XX_TEST_EXPECT_EQ(layoutHeight(el, 10), 4);
         auto rows = renderRows(el, 10, 4);
         XX_TEST_EXPECT_EQ(rows[0], std::string{});
@@ -485,14 +481,12 @@ TestResult testMarkdownFlow() {
         XX_TEST_EXPECT_EQ(rows[3], std::string{});
 
         // 进度标签行在最上方 (左右各 1 空格), 并带暗色样式
-        auto labeled = std::make_shared<FlowCodeBlock>("x", "cpp", CellStyle{.dim = true});
+        auto       labeled   = std::make_shared<FlowCodeBlock>("x", "cpp", CellStyle{.dim = true});
         const auto labeledEl = std::static_pointer_cast<ftxui::Node>(labeled);
         XX_TEST_EXPECT_EQ(layoutHeight(labeledEl, 10), 4); // 标签 + 上边距 + 1 行 + 下边距
         {
-            auto screen = ftxui::Screen::Create(
-                ftxui::Dimension::Fixed(10),
-                ftxui::Dimension::Fixed(4)
-            );
+            auto screen
+                = ftxui::Screen::Create(ftxui::Dimension::Fixed(10), ftxui::Dimension::Fixed(4));
             ftxui::Render(screen, labeledEl);
             XX_TEST_EXPECT_EQ(screen.PixelAt(0, 0).character, std::string{" "});
             XX_TEST_EXPECT_EQ(screen.PixelAt(1, 0).character, std::string{"c"});
@@ -502,8 +496,8 @@ TestResult testMarkdownFlow() {
         }
 
         // 超宽代码行按可用宽度 (盒宽 - 2 列内边距) 硬拆
-        auto longLine = std::make_shared<FlowCodeBlock>("abcdefghij", "", CellStyle{});
-        const auto longEl = std::static_pointer_cast<ftxui::Node>(longLine);
+        auto       longLine = std::make_shared<FlowCodeBlock>("abcdefghij", "", CellStyle{});
+        const auto longEl   = std::static_pointer_cast<ftxui::Node>(longLine);
         XX_TEST_EXPECT_EQ(layoutHeight(longEl, 6), 5); // 4 + 4 + 2 列 -> 3 行 + 2 边距
         auto longRows = renderRows(longEl, 6, 5);
         XX_TEST_EXPECT_EQ(longRows[1], std::string{" abcd"});
@@ -512,18 +506,12 @@ TestResult testMarkdownFlow() {
 
         // 空代码块: 1 行空内容 + 上下内边距
         auto empty = std::make_shared<FlowCodeBlock>("", "", CellStyle{});
-        XX_TEST_EXPECT_EQ(
-            layoutHeight(std::static_pointer_cast<ftxui::Node>(empty), 10),
-            3
-        );
+        XX_TEST_EXPECT_EQ(layoutHeight(std::static_pointer_cast<ftxui::Node>(empty), 10), 3);
 
         // 末尾换行不算内容行; 宽字符占两列
         auto trailing = std::make_shared<FlowCodeBlock>("line\n", "", CellStyle{});
-        XX_TEST_EXPECT_EQ(
-            layoutHeight(std::static_pointer_cast<ftxui::Node>(trailing), 10),
-            3
-        );
-        auto wide = std::make_shared<FlowCodeBlock>("汉字", "", CellStyle{});
+        XX_TEST_EXPECT_EQ(layoutHeight(std::static_pointer_cast<ftxui::Node>(trailing), 10), 3);
+        auto       wide   = std::make_shared<FlowCodeBlock>("汉字", "", CellStyle{});
         const auto wideEl = std::static_pointer_cast<ftxui::Node>(wide);
         XX_TEST_EXPECT_EQ(layoutHeight(wideEl, 6), 3);
         auto wideRows = renderRows(wideEl, 6, 3);

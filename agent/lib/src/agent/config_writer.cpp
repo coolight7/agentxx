@@ -174,7 +174,8 @@ static bool isBlockJson(const utilxx_base::Json& v) {
 }
 
 /// JSON 值 → yaml 行 (递归; 嵌套块缩进逐层 +2)
-static void appendJsonValueLines(const utilxx_base::Json& v, int indent, std::vector<std::string>& out) {
+static void
+    appendJsonValueLines(const utilxx_base::Json& v, int indent, std::vector<std::string>& out) {
     const std::string pad(static_cast<size_t>(indent), ' ');
     if (v.is_object()) {
         for (const auto& [k, child] : v.items()) {
@@ -203,14 +204,16 @@ static void appendJsonValueLines(const utilxx_base::Json& v, int indent, std::ve
 
 /// 模型配置 → yaml 条目行 (`- name: ...` 开头, 其余键相对条目缩进 2 列)
 static std::vector<std::string> modelEntryLines(const ModelConfig& mc, int itemIndent) {
-    const std::string pad(static_cast<size_t>(itemIndent), ' ');
-    const std::string keyPad(static_cast<size_t>(itemIndent + 2), ' ');
+    const std::string  pad(static_cast<size_t>(itemIndent), ' ');
+    const std::string  keyPad(static_cast<size_t>(itemIndent + 2), ' ');
     const ModelConfig& defaults = ModelConfig::defaultModelConfig;
 
     std::vector<std::string> out;
     out.push_back(pad + std::string{kEntryComment});
     out.push_back(pad + "- name: " + yamlQuoted(mc.name));
-    out.push_back(keyPad + "type: " + yamlQuoted(mc.type.empty() ? std::string{"openai"} : mc.type));
+    out.push_back(
+        keyPad + "type: " + yamlQuoted(mc.type.empty() ? std::string{"openai"} : mc.type)
+    );
     out.push_back(keyPad + "base_url: " + yamlQuoted(mc.baseUrl));
     if (!mc.apiPath.empty()) {
         out.push_back(keyPad + "api_path: " + yamlQuoted(mc.apiPath));
@@ -349,7 +352,8 @@ static YAML::Node mapChild(const YAML::Node& node, std::string_view key) {
 // ---------------------------------------------------------------------------
 
 /// 按新内容重新解析, 确认目标条目的关键字段与写入意图一致
-static std::expected<void, std::string> verifyNewText(std::string_view newText, const ModelConfig& mc) {
+static std::expected<void, std::string>
+    verifyNewText(std::string_view newText, const ModelConfig& mc) {
     YAML::Node root;
     try {
         root = YAML::Load(std::string{newText});
@@ -393,8 +397,12 @@ static std::expected<void, std::string> verifyNewText(std::string_view newText, 
 ///   于是各键在还原后的文本里回到同一层缩进, 拼出来的是一份合法映射
 ///   (只去 `itemIndent` 会让首行在第 0 列、其余键在第 2 列, yaml 会把后续键
 ///   当成首行标量的多行续写, name 取不到值)
-static std::string
-    entryMappingText(const std::vector<std::string>& lines, size_t begin, size_t end, int itemIndent) {
+static std::string entryMappingText(
+    const std::vector<std::string>& lines,
+    size_t                          begin,
+    size_t                          end,
+    int                             itemIndent
+) {
     const size_t stripCols = static_cast<size_t>(itemIndent) + 2;
     std::string  out;
     for (size_t i = begin; i < end; ++i) {
@@ -539,8 +547,8 @@ static std::expected<void, std::string> writeTextAtomically(
             return std::unexpected{fmt::format("创建目录失败: {}", ec.message())};
         }
     }
-    auto tmp = path;
-    tmp += ".tmp";
+    auto tmp  = path;
+    tmp      += ".tmp";
     {
         std::ofstream outFile(tmp, std::ios::binary | std::ios::trunc);
         if (!outFile) {
@@ -581,8 +589,10 @@ static std::expected<void, std::string> writeTextAtomically(
 // 校验
 // ---------------------------------------------------------------------------
 
-std::expected<void, std::string>
-    validateNewModelConfig(const ModelConfig& mc, const std::set<std::string, std::less<>>& existingNames) {
+std::expected<void, std::string> validateNewModelConfig(
+    const ModelConfig&                        mc,
+    const std::set<std::string, std::less<>>& existingNames
+) {
     if (trimWhitespace(mc.name).empty()) {
         return std::unexpected{"模型名称不能为空"};
     }
@@ -755,8 +765,7 @@ std::expected<void, std::string>
             const std::string inlineVal = inlineValueOf(lines[listLine], "list");
             if (inlineVal == "[]") {
                 // 空流式序列: 改写成块序列 (保留原有行尾注释)
-                std::string rewritten
-                    = std::string(static_cast<size_t>(listIndent), ' ') + "list:";
+                std::string rewritten = std::string(static_cast<size_t>(listIndent), ' ') + "list:";
                 if (const auto commentPos = lines[listLine].find('#');
                     commentPos != std::string::npos) {
                     rewritten += " ";
@@ -826,7 +835,11 @@ std::expected<void, std::string>
     }
     out.insert(out.end(), insertLines.begin(), insertLines.end());
     if (!appendAtEnd) {
-        out.insert(out.end(), lines.begin() + static_cast<std::ptrdiff_t>(insertAfter) + 1, lines.end());
+        out.insert(
+            out.end(),
+            lines.begin() + static_cast<std::ptrdiff_t>(insertAfter) + 1,
+            lines.end()
+        );
     }
     // 新建文件/末尾追加时保证以换行结尾
     const bool  newEndsWithEol = endsWithEol || appendAtEnd;
@@ -909,8 +922,8 @@ std::expected<bool, std::string>
     out.reserve(lines.size());
     out.insert(out.end(), lines.begin(), lines.begin() + static_cast<std::ptrdiff_t>(entryBegin));
     out.insert(out.end(), lines.begin() + static_cast<std::ptrdiff_t>(entryEnd), lines.end());
-    std::string   newText = joinLines(out, eol);
-    constexpr char kLast = '\n';
+    std::string    newText = joinLines(out, eol);
+    constexpr char kLast   = '\n';
     if (!original.empty() && original.back() == kLast) {
         newText.push_back(kLast);
     }
@@ -921,8 +934,7 @@ std::expected<bool, std::string>
     {
         std::string verifyErr;
         std::string verifyEol;
-        auto        after
-            = scanModelListEntries(splitLines(newText, verifyEol), verifyErr);
+        auto        after = scanModelListEntries(splitLines(newText, verifyEol), verifyErr);
         if (!after.has_value()) {
             return std::unexpected{fmt::format("删除后校验失败: {}", verifyErr)};
         }

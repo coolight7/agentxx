@@ -111,7 +111,10 @@ void testKeyMetrics() {
     XX_TEST_EXPECT_TRUE(json["turns"].contains("avg_ms"));
     XX_TEST_EXPECT_EQ(json["ttft"]["samples"].get<int>(), 1);
     XX_TEST_EXPECT_EQ(json["model"]["calls"].get<int>(), 2);
-    XX_TEST_EXPECT_EQ(json["model"]["last_error_kind"].get<std::string>(), std::string{"rate limit"});
+    XX_TEST_EXPECT_EQ(
+        json["model"]["last_error_kind"].get<std::string>(),
+        std::string{"rate limit"}
+    );
     XX_TEST_EXPECT_EQ(json["tools"]["total"].get<int>(), 5);
     XX_TEST_EXPECT_EQ(json["tools"]["failed"].get<int>(), 1);
     XX_TEST_EXPECT_EQ(json["compaction"]["count"].get<int>(), 1);
@@ -159,7 +162,8 @@ void testRedactSecrets() {
         XX_TEST_EXPECT_TRUE(out.find("p4ssw0rd") == std::string::npos);
     }
     {
-        const auto out = agentxx::util::redactSecrets("https://example.com/v1?api_key=topsecret&x=1");
+        const auto out
+            = agentxx::util::redactSecrets("https://example.com/v1?api_key=topsecret&x=1");
         XX_TEST_EXPECT_TRUE(out.find("topsecret") == std::string::npos);
         XX_TEST_EXPECT_TRUE(out.find("x=1") != std::string::npos);
     }
@@ -216,31 +220,34 @@ void testDiagnosticsPackage() {
                );
     fs::create_directories(dir);
 
-    auto ctx            = std::make_shared<agentxx::agent::AgentContext>();
-    ctx->agentConfig    = std::make_shared<agentxx::agent::AgentConfig>();
-    ctx->metrics        = std::make_shared<agentxx::util::KeyMetrics>();
-    ctx->agentConfig->model.apiKey    = "sk-live-SECRET0123456789";
-    ctx->agentConfig->model.baseUrl   = "https://api.example.com/v1";
-    ctx->agentConfig->model.modelName = "test-model";
-    ctx->agentConfig->dataDir         = dir.string();
+    auto ctx                             = std::make_shared<agentxx::agent::AgentContext>();
+    ctx->agentConfig                     = std::make_shared<agentxx::agent::AgentConfig>();
+    ctx->metrics                         = std::make_shared<agentxx::util::KeyMetrics>();
+    ctx->agentConfig->model.apiKey       = "sk-live-SECRET0123456789";
+    ctx->agentConfig->model.baseUrl      = "https://api.example.com/v1";
+    ctx->agentConfig->model.modelName    = "test-model";
+    ctx->agentConfig->dataDir            = dir.string();
     ctx->agentConfig->enableSessionStore = true;
     // 功能点: 装配上下文两个核心点 (与 BaseAgent::init 同一顺序), 让诊断包的
     // featurePoints 段有真实内容可断言
     ctx->features = std::make_shared<agentxx::feature::Registry>();
-    agentxx::feature::registerContextPoints(*ctx->features, agentxx::feature::ContextPointOptions{});
+    agentxx::feature::registerContextPoints(
+        *ctx->features,
+        agentxx::feature::ContextPointOptions{}
+    );
 
     const std::string sessionId = "obs-session";
-    auto store = std::make_shared<agentxx::agent::SessionStore>(
+    auto              store     = std::make_shared<agentxx::agent::SessionStore>(
         (dir / "sqlite" / "sessions").string(),
         /*enableWriterLease=*/false
     );
     {
         agentxx::agent::SessionsManager mgr;
-        mgr.sessionStore = store;
-        auto session     = mgr.getOrCreate(sessionId);
+        mgr.sessionStore                    = store;
+        auto                        session = mgr.getOrCreate(sessionId);
         agentxx::agent::ViewMessage msg;
-        msg.id          = "m1";
-        msg.role        = agentxx::agent::ViewMessage::Role::User;
+        msg.id   = "m1";
+        msg.role = agentxx::agent::ViewMessage::Role::User;
         // 正文用独立标记: 与标题分开断言"默认不导出正文"
         msg.text        = "BODY-MARKER-42 this is a user message";
         msg.startTimeMs = 1700000000000LL;
@@ -249,7 +256,7 @@ void testDiagnosticsPackage() {
         // 固定标题 (避免自动标题取首条消息预览, 使"正文不外泄"的断言失焦)
         store->setSessionTitle(sessionId, "diagnostics fixture");
     }
-    ctx->sessions = std::make_shared<agentxx::agent::SessionsManager>();
+    ctx->sessions               = std::make_shared<agentxx::agent::SessionsManager>();
     ctx->sessions->sessionStore = store;
 
     agentxx::agent::SessionStore::UsageRecord usage;
@@ -321,16 +328,18 @@ void testDiagnosticsPackage() {
 
     // 凭据不外泄: 配置段只标记"已设置", 不出现 Key 取值
     XX_TEST_EXPECT_FALSE(text.find("sk-live-SECRET0123456789") != std::string::npos);
-    XX_TEST_EXPECT_TRUE(text.find("\"api_key_set\":true") != std::string::npos
-                        || text.find("api_key_set") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(
+        text.find("\"api_key_set\":true") != std::string::npos
+        || text.find("api_key_set") != std::string::npos
+    );
 
     // ---- 打开消息正文: 出现截断后的正文 (且经脱敏) ----
     {
         agentxx::util::DiagnosticsOptions opts;
-        opts.includeMessages  = true;
-        opts.logTailLines     = 0; ///< 不带日志 (验证该开关)
-        opts.maxMessageChars  = 8;
-        const auto withBody = agentxx::util::buildDiagnosticsText(*ctx, sessionId, opts);
+        opts.includeMessages = true;
+        opts.logTailLines    = 0; ///< 不带日志 (验证该开关)
+        opts.maxMessageChars = 8;
+        const auto withBody  = agentxx::util::buildDiagnosticsText(*ctx, sessionId, opts);
         XX_TEST_EXPECT_TRUE(withBody.find("recent view messages") != std::string::npos);
         XX_TEST_EXPECT_TRUE(withBody.find("BODY-MAR") != std::string::npos); ///< 正文前 8 字符
         XX_TEST_EXPECT_FALSE(withBody.find("this is a user message") != std::string::npos);
@@ -339,11 +348,11 @@ void testDiagnosticsPackage() {
 
     // ---- 无会话 / 无存储 / 无配置的降级路径不崩 ----
     {
-        auto bare = std::make_shared<agentxx::agent::AgentContext>();
+        auto       bare     = std::make_shared<agentxx::agent::AgentContext>();
         const auto bareText = agentxx::util::buildDiagnosticsText(*bare, "nope");
         XX_TEST_EXPECT_TRUE(bareText.find("# agentxx diagnostics") != std::string::npos);
         XX_TEST_EXPECT_FALSE(bareText.find("## metrics") != std::string::npos); ///< 无指标对象
-        XX_TEST_EXPECT_TRUE(bareText.find("## session") != std::string::npos); ///< 只给 id
+        XX_TEST_EXPECT_TRUE(bareText.find("## session") != std::string::npos);  ///< 只给 id
     }
 
     agentxx::util::disableLogCapture();

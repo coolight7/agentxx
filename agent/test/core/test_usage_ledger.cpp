@@ -72,7 +72,7 @@ asio::awaitable<TestResult> test_usage_ledger() {
     cfg->model.modelName     = "test-sim";
     cfg->prompt.systemPrompt = "You are a helpful assistant.";
     // 不重试: 失败用例立即以错误结束, 避免测试等待退避重试
-    cfg->llmMaxRetry         = 0;
+    cfg->llmMaxRetry = 0;
 
     g_da_sim_response_content  = "ledger response";
     g_da_sim_prompt_tokens     = 137;

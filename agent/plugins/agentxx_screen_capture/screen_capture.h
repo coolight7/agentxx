@@ -19,7 +19,7 @@ struct ScreenFrame {
     int                                   offsetX     = 0;
     int                                   offsetY     = 0;
     int                                   screenIndex = 0;
-    bool                                  isPrimary = false;
+    bool                                  isPrimary   = false;
 };
 
 using ScreenFrameListener = std::function<void(const std::vector<ScreenFrame>& frames)>;

@@ -269,8 +269,8 @@ struct SettingsState {
 /// settings_db 的写失败形态: 数据库路径的父目录被一个普通文件占住 (打开必失败),
 /// 写接口因此返回 false、读接口返回 nullopt —— 失败对调用方直接可见
 KvBackend makeSettingsBackend(const std::string& root) {
-    auto st      = std::make_shared<SettingsState>();
-    st->goodPath = (fs::path{root} / "global.db").string();
+    auto st          = std::make_shared<SettingsState>();
+    st->goodPath     = (fs::path{root} / "global.db").string();
     const auto block = fs::path{root} / "blocker";
     {
         std::ofstream ofs(utilxx_base::utf8ToPath(block.string()), std::ios::binary);
@@ -280,11 +280,17 @@ KvBackend makeSettingsBackend(const std::string& root) {
     st->db          = std::make_unique<agentxx::util::SettingsDb>(st->goodPath);
 
     KvBackend bk;
-    bk.name      = "settings_db";
-    bk.durable   = true;
-    bk.put       = [st](std::string_view k, std::string_view v) { return st->db->set(k, v); };
-    bk.get       = [st](std::string_view k) { return st->db->get(k); };
-    bk.reopen    = [st] { st->db = std::make_unique<agentxx::util::SettingsDb>(st->goodPath); };
+    bk.name    = "settings_db";
+    bk.durable = true;
+    bk.put     = [st](std::string_view k, std::string_view v) {
+        return st->db->set(k, v);
+    };
+    bk.get = [st](std::string_view k) {
+        return st->db->get(k);
+    };
+    bk.reopen = [st] {
+        st->db = std::make_unique<agentxx::util::SettingsDb>(st->goodPath);
+    };
     bk.makeWritesFail = [st] {
         st->db = std::make_unique<agentxx::util::SettingsDb>(st->blockedPath);
     };
@@ -301,18 +307,18 @@ KvBackend makeSettingsBackend(const std::string& root) {
 // ---------------------------------------------------------------------------
 
 struct StoreState {
-    std::string                        root;
-    std::string                        sessionId;
+    std::string                                   root;
+    std::string                                   sessionId;
     std::unique_ptr<agentxx::agent::SessionStore> store;
-    std::map<std::string, size_t>      ids;
-    std::unique_ptr<ForeignWriterLock> foreign; ///< 模拟"另一个进程正在写"
+    std::map<std::string, size_t>                 ids;
+    std::unique_ptr<ForeignWriterLock>            foreign; ///< 模拟"另一个进程正在写"
 };
 
 KvBackend makeSessionStoreBackend(const std::string& root) {
-    auto st        = std::make_shared<StoreState>();
-    st->root       = (fs::path{root} / "sessions").string();
-    st->sessionId  = "storage-contract";
-    st->store      = std::make_unique<agentxx::agent::SessionStore>(st->root);
+    auto st       = std::make_shared<StoreState>();
+    st->root      = (fs::path{root} / "sessions").string();
+    st->sessionId = "storage-contract";
+    st->store     = std::make_unique<agentxx::agent::SessionStore>(st->root);
 
     KvBackend bk;
     bk.name    = "session_store.store";
@@ -358,7 +364,9 @@ KvBackend makeSessionStoreBackend(const std::string& root) {
         st->foreign.reset();
         st->store = std::make_unique<agentxx::agent::SessionStore>(st->root);
     };
-    bk.lastError = [st]() { return st->store ? st->store->lastWriteError() : std::string{}; };
+    bk.lastError = [st]() {
+        return st->store ? st->store->lastWriteError() : std::string{};
+    };
     return bk;
 }
 
@@ -379,8 +387,8 @@ KvBackend makeShareStoreBackend(const std::string& root, bool withPersistence) {
     auto st       = std::make_shared<ShareStoreState>();
     st->root      = root;
     st->sessionId = withPersistence ? "share-cached" : "share-memory";
-    st->store     = withPersistence ? std::make_shared<agentxx::agent::SessionStore>(root) : nullptr;
-    st->ctx       = std::make_shared<agentxx::middleware::MiddlewareContext>(st->store);
+    st->store = withPersistence ? std::make_shared<agentxx::agent::SessionStore>(root) : nullptr;
+    st->ctx   = std::make_shared<agentxx::middleware::MiddlewareContext>(st->store);
 
     KvBackend bk;
     bk.name    = withPersistence ? "share_store.cached" : "share_store.memory";
@@ -447,7 +455,9 @@ KvBackend makeShareStoreBackend(const std::string& root, bool withPersistence) {
         st->store = std::make_shared<agentxx::agent::SessionStore>(st->root);
         st->ctx   = std::make_shared<agentxx::middleware::MiddlewareContext>(st->store);
     };
-    bk.lastError = [st]() { return st->store ? st->store->lastWriteError() : std::string{}; };
+    bk.lastError = [st]() {
+        return st->store ? st->store->lastWriteError() : std::string{};
+    };
     return bk;
 }
 

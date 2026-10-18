@@ -60,7 +60,7 @@ struct HttpInteraction {
     std::string requestBody;
     /// 白名单请求头 + 凭据头的 "是否出现" 标记
     utilxx_base::Json requestHeaders = utilxx_base::Json::object();
-    int               status        = 0;
+    int               status         = 0;
     std::string       contentType;
     std::string       responseBody;
 };
@@ -75,26 +75,24 @@ std::string
 
 /// 固定装置: 一组按时间顺序的交互 (可写入 JSON 文件入库)
 struct HttpFixture {
-    int                         version = 1;
-    std::string                 note;
+    int                          version = 1;
+    std::string                  note;
     std::vector<HttpInteraction> interactions;
 
     utilxx_base::Json toJson() const {
         auto arr = utilxx_base::Json::array();
         for (const auto& it : interactions) {
-            arr.push_back(
-                utilxx_base::Json{
-                    {"method",         it.method        },
-                    {"path",           it.path          },
-                    {"requestDigest",  it.requestDigest },
-                    {"requestBytes",   static_cast<int64_t>(it.requestBytes)},
-                    {"requestHeaders", it.requestHeaders},
-                    {"requestBody",    it.requestBody   },
-                    {"status",         it.status        },
-                    {"contentType",    it.contentType   },
-                    {"responseBody",   it.responseBody  },
-                }
-            );
+            arr.push_back(utilxx_base::Json{
+                {"method",         it.method                            },
+                {"path",           it.path                              },
+                {"requestDigest",  it.requestDigest                     },
+                {"requestBytes",   static_cast<int64_t>(it.requestBytes)},
+                {"requestHeaders", it.requestHeaders                    },
+                {"requestBody",    it.requestBody                       },
+                {"status",         it.status                            },
+                {"contentType",    it.contentType                       },
+                {"responseBody",   it.responseBody                      },
+            });
         }
         utilxx_base::Json root;
         root["version"]      = version;
@@ -197,8 +195,7 @@ inline std::string maskSecrets(std::string text, const std::vector<std::string>&
 }
 
 /// 文本脱敏: 先屏调用方给的取值, 再过通用凭据形态
-inline std::string
-    sanitizeText(std::string_view text, const std::vector<std::string>& secrets) {
+inline std::string sanitizeText(std::string_view text, const std::vector<std::string>& secrets) {
     return agentxx::util::redactSecrets(maskSecrets(std::string{text}, secrets));
 }
 
@@ -225,7 +222,9 @@ inline utilxx_base::Json sanitizeHeaders(const utilxx::HttpServer::Request& req)
 /// 起一个本地 HTTP 服务并在后台线程运行 (返回端口; 0 = 启动失败)
 inline uint16_t
     startServerInThread(const std::shared_ptr<utilxx::HttpServer>& server, std::thread& thread) {
-    thread = std::thread([s = server.get()]() { s->start(); });
+    thread = std::thread([s = server.get()]() {
+        s->start();
+    });
     for (int i = 0; i < 200; ++i) {
         const auto port = server->port();
         if (port != 0) {
@@ -252,8 +251,8 @@ inline const std::vector<std::string>& llmPaths() {
 
 /// 把处理器注册到全部常见路径的全部方法槽位
 inline void registerOnLlmPaths(
-    const std::shared_ptr<utilxx::HttpServer>&                server,
-    const std::shared_ptr<utilxx::HttpServer::Handler>&       handler
+    const std::shared_ptr<utilxx::HttpServer>&          server,
+    const std::shared_ptr<utilxx::HttpServer::Handler>& handler
 ) {
     for (const auto& path : llmPaths()) {
         for (int slot = 0; slot <= 3; ++slot) {
@@ -270,7 +269,7 @@ public:
 
     struct Options {
         /// 上游来源 (只取 origin, 如 `http://127.0.0.1:1234`; 路径按对端原样透传)
-        std::string              upstreamOrigin;
+        std::string upstreamOrigin;
         /// 额外需要屏掉的取值 (如测试用的 API key 文本)
         std::vector<std::string> secrets;
     };
@@ -315,15 +314,16 @@ public:
     HttpFixture fixture() const {
         std::lock_guard<std::mutex> lock(mutex_);
         HttpFixture                 out;
-        out.version      = 1;
-        out.note         = "由 http_recorder 录制 (请求头白名单 + 凭据只记存在标记, 正文已脱敏)";
+        out.version = 1;
+        out.note = "由 http_recorder 录制 (请求头白名单 + 凭据只记存在标记, 正文已脱敏)";
         out.interactions = interactions_;
         return out;
     }
 
 private:
 
-    explicit HttpRecorder(Options options) : options_(std::move(options)) {}
+    explicit HttpRecorder(Options options) :
+        options_(std::move(options)) {}
 
     bool setup() {
         server_ = std::make_shared<utilxx::HttpServer>(
@@ -331,8 +331,11 @@ private:
         );
         auto self    = this;
         auto handler = std::make_shared<utilxx::HttpServer::Handler>(
-            [self](utilxx::HttpServer::Request& req, utilxx::HttpServer::Response& resp, std::string_view)
-                -> asio::awaitable<void> {
+            [self](
+                utilxx::HttpServer::Request&  req,
+                utilxx::HttpServer::Response& resp,
+                std::string_view
+            ) -> asio::awaitable<void> {
                 co_await self->handle(req, resp);
                 co_return;
             }
@@ -355,21 +358,19 @@ private:
         return true;
     }
 
-    asio::awaitable<void> handle(
-        utilxx::HttpServer::Request&  req,
-        utilxx::HttpServer::Response& resp
-    ) {
+    asio::awaitable<void>
+        handle(utilxx::HttpServer::Request& req, utilxx::HttpServer::Response& resp) {
         namespace http = boost::beast::http;
         const std::string method{req.method_string()};
         const std::string path{utilxx::requestPath(req.target())};
         const std::string body = req.body();
 
         HttpInteraction it;
-        it.method        = method;
-        it.path          = path;
-        it.requestBytes  = body.size();
-        it.requestDigest = httpRequestDigest(method, path, body);
-        it.requestBody   = detail::sanitizeText(body, options_.secrets);
+        it.method         = method;
+        it.path           = path;
+        it.requestBytes   = body.size();
+        it.requestDigest  = httpRequestDigest(method, path, body);
+        it.requestBody    = detail::sanitizeText(body, options_.secrets);
         it.requestHeaders = detail::sanitizeHeaders(req);
 
         // 转发: 头逐一透传 (排除逐跳头), 路径按对端原样
@@ -402,8 +403,8 @@ private:
                     it.responseBody = detail::sanitizeText(result->body, options_.secrets);
                     forwardedOk     = true;
                 } else {
-                    it.status       = 502;
-                    it.contentType  = "application/json";
+                    it.status      = 502;
+                    it.contentType = "application/json";
                     it.responseBody = utilxx_base::Json{
                         {"error",   "http_recorder upstream failed"},
                         {"message", detail::sanitizeText(result.error(), options_.secrets)},
@@ -413,8 +414,8 @@ private:
                 co_return true;
             },
             [&](std::string errmsg) -> asio::awaitable<bool> {
-                it.status       = 502;
-                it.contentType  = "application/json";
+                it.status      = 502;
+                it.contentType = "application/json";
                 it.responseBody = utilxx_base::Json{
                     {"error",   "http_recorder upstream threw"},
                     {"message", detail::sanitizeText(errmsg, options_.secrets)},
@@ -447,12 +448,12 @@ private:
         co_return;
     }
 
-    Options                                                  options_;
-    std::shared_ptr<utilxx::HttpServer>                      server_;
-    std::thread                                              thread_;
-    uint16_t                                                 port_ = 0;
-    mutable std::mutex                                       mutex_;
-    std::vector<HttpInteraction>                             interactions_;
+    Options                             options_;
+    std::shared_ptr<utilxx::HttpServer> server_;
+    std::thread                         thread_;
+    uint16_t                            port_ = 0;
+    mutable std::mutex                  mutex_;
+    std::vector<HttpInteraction>        interactions_;
 };
 
 /// 回放器: 按顺序把固定装置里的响应回给调用方 (provider)
@@ -477,9 +478,8 @@ public:
 
     /// 启动回放服务; 端口分配失败返回 nullptr
     static std::shared_ptr<HttpPlayer> start(HttpFixture fixture, Options options) {
-        auto player = std::shared_ptr<HttpPlayer>(
-            new HttpPlayer(std::move(fixture), std::move(options))
-        );
+        auto player
+            = std::shared_ptr<HttpPlayer>(new HttpPlayer(std::move(fixture), std::move(options)));
         if (!player->setup()) {
             return nullptr;
         }
@@ -527,7 +527,8 @@ public:
 private:
 
     HttpPlayer(HttpFixture fixture, Options options) :
-        fixture_(std::move(fixture)), options_(std::move(options)) {}
+        fixture_(std::move(fixture)),
+        options_(std::move(options)) {}
 
     bool setup() {
         server_ = std::make_shared<utilxx::HttpServer>(
@@ -535,8 +536,11 @@ private:
         );
         auto self    = this;
         auto handler = std::make_shared<utilxx::HttpServer::Handler>(
-            [self](utilxx::HttpServer::Request& req, utilxx::HttpServer::Response& resp, std::string_view)
-                -> asio::awaitable<void> {
+            [self](
+                utilxx::HttpServer::Request&  req,
+                utilxx::HttpServer::Response& resp,
+                std::string_view
+            ) -> asio::awaitable<void> {
                 self->handle(req, resp);
                 co_return;
             }
@@ -630,14 +634,14 @@ private:
         }
     }
 
-    HttpFixture               fixture_;
-    Options                   options_;
+    HttpFixture                         fixture_;
+    Options                             options_;
     std::shared_ptr<utilxx::HttpServer> server_;
-    std::thread               thread_;
-    uint16_t                  port_ = 0;
-    mutable std::mutex        mutex_;
-    size_t                    served_ = 0;
-    std::vector<std::string>  mismatches_;
+    std::thread                         thread_;
+    uint16_t                            port_ = 0;
+    mutable std::mutex                  mutex_;
+    size_t                              served_ = 0;
+    std::vector<std::string>            mismatches_;
 };
 
 } // namespace test

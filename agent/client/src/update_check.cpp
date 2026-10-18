@@ -2,8 +2,8 @@
 
 #include "utilxx/http_client.h"
 #include "utilxx_base/string_util.h"
-#include <chrono>
 #include <charconv>
+#include <chrono>
 #include <cstddef>
 
 namespace agentxx {
@@ -15,7 +15,8 @@ namespace {
 constexpr auto kCheckTimeout = std::chrono::seconds{8};
 
 /// 从 302 响应的 Location 头中取出发布标签与发布页 URL
-/// - GitHub 的 `/releases/latest` 返回 `Location: https://github.com/<owner>/<repo>/releases/tag/<tag>`
+/// - GitHub 的 `/releases/latest` 返回 `Location:
+/// https://github.com/<owner>/<repo>/releases/tag/<tag>`
 /// - 取不到 `/tag/` 段时返回空标签 (调用方按失败处理)
 ///
 /// - `return` 标签 (如 "v0.2.0"; 未识别返回空串)
@@ -38,8 +39,8 @@ std::string tagFromReleaseUrl(std::string_view releaseUrl) {
 
 /// 去掉首尾空白 (含 `\r`, 头部值可能带行尾)
 std::string_view trimView(std::string_view s) noexcept {
-    while (!s.empty() && (s.front() == ' ' || s.front() == '\t' || s.front() == '\r'
-                          || s.front() == '\n')) {
+    while (!s.empty()
+           && (s.front() == ' ' || s.front() == '\t' || s.front() == '\r' || s.front() == '\n')) {
         s.remove_prefix(1);
     }
     while (!s.empty()
@@ -79,13 +80,15 @@ std::optional<VersionTriple> parseVersionTag(std::string_view tag) noexcept {
     }
 
     VersionTriple result{0, 0, 0};
-    size_t        part    = 0;
-    size_t        index   = 0;
+    size_t        part     = 0;
+    size_t        index    = 0;
     bool          anyDigit = false;
     while (index <= tag.size()) {
         const auto next = tag.find('.', index);
-        const auto seg  = tag.substr(index, (next == std::string_view::npos) ? std::string_view::npos
-                                                                            : next - index);
+        const auto seg  = tag.substr(
+            index,
+            (next == std::string_view::npos) ? std::string_view::npos : next - index
+        );
         if (seg.empty() || part >= result.size()) {
             return std::nullopt; // 空段 (如 "1..2") 或多于三段
         }

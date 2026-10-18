@@ -168,20 +168,24 @@ public:
 
     /// 收件箱条目 (payload 为 WireUserInput 的 JSON 形态, 由调用方提供)
     struct SessionInputRecord {
-        std::string id;                 ///< 条目标识 (队列条目 id, 如 "q-1")
-        std::string payload;            ///< 原始输入载荷 (JSON; 文本/模型/附件/投递模式)
-        std::string delivery;           ///< 投递模式 (InputDelivery 取值)
-        std::string status;             ///< 见 [SessionInputStatus]
-        int64_t     admittedSeq = 0;    ///< 受理时的会话 delta seq
-        int64_t     promotedSeq = 0;    ///< 投递时的会话 delta seq
-        int64_t     createdMs   = 0;    ///< 受理时间戳 (毫秒)
+        std::string id;       ///< 条目标识 (队列条目 id, 如 "q-1")
+        std::string payload;  ///< 原始输入载荷 (JSON; 文本/模型/附件/投递模式)
+        std::string delivery; ///< 投递模式 (InputDelivery 取值)
+        std::string status;   ///< 见 [SessionInputStatus]
+        int64_t     admittedSeq = 0; ///< 受理时的会话 delta seq
+        int64_t     promotedSeq = 0; ///< 投递时的会话 delta seq
+        int64_t     createdMs   = 0; ///< 受理时间戳 (毫秒)
     };
 
     /// 写入一条收件箱条目 (同 id 覆盖; 失败仅记日志)
     void addSessionInput(std::string_view sessionId, const SessionInputRecord& record);
 
     /// 标记条目已投递 (status=promoted + promotedSeq); 失败仅记日志
-    void markSessionInputPromoted(std::string_view sessionId, std::string_view id, uint64_t promotedSeq);
+    void markSessionInputPromoted(
+        std::string_view sessionId,
+        std::string_view id,
+        uint64_t         promotedSeq
+    );
 
     /// 标记条目终态 (dropped 等); 失败仅记日志
     void setSessionInputStatus(
@@ -202,16 +206,16 @@ public:
         /// 成员按尺寸从大到小排列, 减少结构体内填充字节
         std::string model;
         std::string errorKind; ///< 失败分类文本 (成功时为空)
-        int64_t     timeMs                  = 0;
-        int64_t     promptTokens            = 0;
-        int64_t     completionTokens        = 0;
-        int64_t     totalTokens             = 0;
-        int64_t     cachedPromptTokens      = 0;
+        int64_t     timeMs             = 0;
+        int64_t     promptTokens       = 0;
+        int64_t     completionTokens   = 0;
+        int64_t     totalTokens        = 0;
+        int64_t     cachedPromptTokens = 0;
         /// 写入 prompt 缓存的 token 数 (Anthropic 的 cache_creation_input_tokens;
         /// 其余 provider 为 0)
-        int64_t     cacheWritePromptTokens  = 0;
-        int64_t     reasoningTokens         = 0;
-        bool        ok                      = true;
+        int64_t cacheWritePromptTokens = 0;
+        int64_t reasoningTokens        = 0;
+        bool    ok                     = true;
     };
 
     /// 追加一条用量记录 (失败仅记日志; 用量记录是统计信息, 不影响对话流程)
@@ -366,9 +370,9 @@ private:
 
     std::string rootDir_;
     /// 是否启用跨进程写租约 (见构造函数说明)
-    bool        enableWriterLease_ = true;
+    bool enableWriterLease_ = true;
     /// 最近一次写路径失败原因 (空 = 无失败; 见 [lastWriteError])
-    std::string lastWriteError_;
+    std::string        lastWriteError_;
     mutable std::mutex mutex_;
     /// key: 原始 sessionId (未清洗, 清洗仅用于目录名)
     std::map<std::string, DbsEntry, std::less<>> dbs_;

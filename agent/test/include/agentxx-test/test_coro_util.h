@@ -36,7 +36,7 @@ namespace test {
 ///     asio::detached
 /// );
 /// ```
-template <class Fn>
+template<class Fn>
 asio::awaitable<void> keepAliveRun(Fn fn) {
     co_await fn();
 }

@@ -32,7 +32,7 @@ bool containsAny(std::string_view text, std::initializer_list<std::string_view> 
 /// - 大小写不敏感; 键与数字之间允许 `"`/`:`/`=` 与空白
 /// - 读不到或非法返回 0
 int parseRetryAfterSeconds(std::string_view rawText) {
-    const std::string text = toLowerCopy(rawText);
+    const std::string                     text = toLowerCopy(rawText);
     const std::array<std::string_view, 3> keys{"retry-after", "retry_after", "retryafter"};
     for (const auto key : keys) {
         size_t pos = 0;
@@ -40,9 +40,8 @@ int parseRetryAfterSeconds(std::string_view rawText) {
             pos += key.size();
             // 跳过键与值之间的分隔符与空白 (`{"retry-after": 7}` 中间有引号与冒号)
             while (pos < text.size()
-                   && (text[pos] == ':' || text[pos] == '=' || text[pos] == '"'
-                       || text[pos] == '\'' || text[pos] == ' '
-                       || text[pos] == '\t')) {
+                   && (text[pos] == ':' || text[pos] == '=' || text[pos] == '"' || text[pos] == '\''
+                       || text[pos] == ' ' || text[pos] == '\t')) {
                 ++pos;
             }
             int  value    = 0;
@@ -242,12 +241,7 @@ LlmErrorKind classifyLlmError(std::string_view errInfo) noexcept {
     }
 
     // 7) 超时 (可重试; 连接层的超时已在网络类里判过)
-    if (containsAny(
-            text,
-            {"timeout",
-             "timed out",
-             "超时"}
-        )) {
+    if (containsAny(text, {"timeout", "timed out", "超时"})) {
         return LlmErrorKind::Timeout;
     }
 

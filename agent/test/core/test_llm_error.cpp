@@ -35,16 +35,17 @@ TestResult testLlmError() {
 
     {
         struct Case {
-            const char*                   text;
-            agentxx::nodes::LlmErrorKind  want;
+            const char*                  text;
+            agentxx::nodes::LlmErrorKind want;
         };
+
         const Case overflowCases[] = {
             {R"({"error":{"message":"This model's maximum context length is 128000 tokens"}})",
-             LlmErrorKind::ContextOverflow},
-            {R"({"error":{"code":"context_length_exceeded"}})", LlmErrorKind::ContextOverflow},
-            {R"(HTTP 400: prompt is too long)", LlmErrorKind::ContextOverflow},
-            {R"(413 Request Entity Too Large)", LlmErrorKind::ContextOverflow},
-            {"上下文过长，请缩减历史", LlmErrorKind::ContextOverflow},
+             LlmErrorKind::ContextOverflow                                                                                   },
+            {R"({"error":{"code":"context_length_exceeded"}})",                                 LlmErrorKind::ContextOverflow},
+            {R"(HTTP 400: prompt is too long)",                                                 LlmErrorKind::ContextOverflow},
+            {R"(413 Request Entity Too Large)",                                                 LlmErrorKind::ContextOverflow},
+            {"上下文过长，请缩减历史",                                               LlmErrorKind::ContextOverflow},
         };
         for (const auto& c : overflowCases) {
             const auto kind = classifyLlmError(c.text);
@@ -202,8 +203,7 @@ TestResult testLlmError() {
         const int honoredHeader
             = llmRetryDelaySeconds(LlmErrorKind::Timeout, 1, "Retry-After: 12\r\n");
         XX_TEST_EXPECT_EQ(honoredHeader, 12);
-        const int honoredNetwork
-            = llmRetryDelaySeconds(LlmErrorKind::Network, 1, "Retry-After: 9");
+        const int honoredNetwork = llmRetryDelaySeconds(LlmErrorKind::Network, 1, "Retry-After: 9");
         XX_TEST_EXPECT_EQ(honoredNetwork, 9);
 
         // 超大 retry-after 夹到上限, 不为 0

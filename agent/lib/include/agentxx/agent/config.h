@@ -201,6 +201,7 @@ struct PluginConfig {
 
 class AgentConfig {
 public:
+
     // 成员按对齐/尺寸从大到小排列, 减少结构体内填充字节
 
     /// subagent 模型配置
@@ -278,7 +279,7 @@ public:
     std::string sessionStoreDirectory;
 
     /// - [duckduckgo] `https://duckduckgo.com/html/?q={}` 国内连接不稳定
-    std::string websearchApiUrl               = "";
+    std::string websearchApiUrl = "";
 
     /// 获取 subagent 实际使用的模型配置
     /// - 如果指定了 subagentModel 则返回它，否则返回主模型
@@ -287,12 +288,12 @@ public:
     /// 工具白名单 (enableToolFiltering 时生效): 仅保留名称在列表中的工具;
     /// 列表中的名称在子代理中不存在时自然跳过 (不报错)
     std::vector<std::string> toolWhitelist;
-    std::vector<std::string>    skillDirPaths{};
+    std::vector<std::string> skillDirPaths{};
     /// 上下文文件路径列表
     /// - 支持绝对路径或相对路径（相对路径按程序工作目录解析）
     /// - 文件内容会在每次模型调用时注入系统提示词
     std::vector<std::string> memoryFilePaths{};
-    std::vector<std::string>               ragDocsPaths{};
+    std::vector<std::string> ragDocsPaths{};
 
     /// 权限白名单: 始终放行 (ALLOW) 的路径列表 (yaml `permission.whitelist`)
     /// - 最长前缀匹配, 支持 * 通配符; 相对路径按程序工作目录解析为绝对路径
@@ -417,15 +418,15 @@ public:
     /// - 子代理经 AgentHost::spawnOneTask 继承父会话绑定
     ///   (workDir 预置为 worktree 路径 + inheritedWorktreePath 标记)
     bool enableWorktree = false;
-    bool        isSystemWSL = false;
+    bool isSystemWSL    = false;
 
     /// 是否启用会话 SQLite 持久化 (消息上下文/展示历史/share store)
     /// - 数据目录: {dataDir}/sqlite/sessions/{sessionId}/
     ///   - session.db  展示历史 + LLM 上下文 + 会话元数据 + share store KV (store 表)
     /// - 开启后会话在重启后可恢复历史消息/上下文/模型选择/share store
     /// - 默认关闭 (库使用方按需开启); agentxx_cli 在 buildDefaultConfig 中开启
-    bool enableSessionStore = false;
-    bool        websearchConvertHtml2markdown = true;
+    bool enableSessionStore            = false;
+    bool websearchConvertHtml2markdown = true;
 
     /// 在向 llm api 发起请求之前，自动检查 [messages] 是否符合 utf-8 编码、角色顺序等要求
     bool repairMessages = true;

@@ -18,8 +18,10 @@ namespace nodes {
 /// 取指定会话的 LLM 上下文 (typed 只读借用; 仅 io 线程)
 /// - 会话不存在时返回静态空列表 (不隐式创建会话, 避免只为读一次就构造 Session)
 /// - 借用期间不得跨 co_await, 且不得同时追加/替换上下文 (引用会失效)
-const std::vector<neograph::ChatMessage>&
-    sessionMessages(const std::shared_ptr<agentxx::agent::AgentContext>& ctx, std::string_view sessionId);
+const std::vector<neograph::ChatMessage>& sessionMessages(
+    const std::shared_ptr<agentxx::agent::AgentContext>& ctx,
+    std::string_view                                     sessionId
+);
 
 /// 刷新图状态里的上下文影子通道 (条数/版本/角色分布/末尾消息摘要)
 /// - 上下文变更点 (追加/替换/压缩) 调用, 供插件图节点观察会话上下文规模

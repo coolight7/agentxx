@@ -39,9 +39,8 @@ ShareStoreOffload offloadShareStoreIfOversized(
     // share store 目标: 与 `agentxx_share_store` 工具同一套解析 —— 配置了
     // sharedShareStoreContext (同上下文子代理) 时读写父会话的 store, 保证这里写入的
     // id 与模型取回时读的是同一份内容
-    auto shareStore = agentContext->agentConfig
-                          ? agentContext->agentConfig->sharedShareStoreContext
-                          : nullptr;
+    auto shareStore
+        = agentContext->agentConfig ? agentContext->agentConfig->sharedShareStoreContext : nullptr;
     if (!shareStore) {
         shareStore = agentContext->middlewareHandleContext;
     }

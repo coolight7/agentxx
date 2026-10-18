@@ -79,7 +79,7 @@ void HistoryWindow::notePrepended(const uint64_t startIndex, const uint64_t prep
     if (prependedCount == 0 && startIndex == windowStart_) {
         return;
     }
-    windowStart_ = startIndex;
+    windowStart_  = startIndex;
     loadedCount_ += prependedCount;
 }
 

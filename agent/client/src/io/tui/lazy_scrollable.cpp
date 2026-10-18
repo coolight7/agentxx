@@ -174,10 +174,10 @@ void LazyScrollable::setItemHeight(size_t index, int height) {
     if (index >= heights_.size()) {
         return;
     }
-    const int oldValue = std::max(0, heights_[index]);
-    const int newValue = std::max(1, height);
-    heights_[index]    = newValue;
-    totalHeight_ += newValue - oldValue;
+    const int oldValue  = std::max(0, heights_[index]);
+    const int newValue  = std::max(1, height);
+    heights_[index]     = newValue;
+    totalHeight_       += newValue - oldValue;
     // 锚点以上子项的高度变化会改变派生滚动偏移 (只影响滚动条/预取判定):
     // 锚点本身与其下方子项的变化不影响视图位置 (见头文件类注释不变量 1)
     if (index < anchorIndex_) {
@@ -210,24 +210,22 @@ void LazyScrollable::markEnsured(size_t index) {
 
 void LazyScrollable::recomputeRowsAboveAnchor() {
     // 只在锚点位置整体变化 (列表收缩裁掉锚点) 或高度整体失效 (宽度变化) 时调用
-    long long sum = 0;
-    const size_t n = std::min(anchorIndex_, heights_.size());
+    long long    sum = 0;
+    const size_t n   = std::min(anchorIndex_, heights_.size());
     for (size_t i = 0; i < n; ++i) {
         sum += std::max(1, std::max(0, heights_[i]));
     }
-    rowsAboveAnchor_ = static_cast<int>(
-        std::min<long long>(sum, std::numeric_limits<int>::max())
-    );
+    rowsAboveAnchor_ = static_cast<int>(std::min<long long>(sum, std::numeric_limits<int>::max()));
 }
 
 void LazyScrollable::resetHeightsToQuick() {
     // 宽度变化后的整体失效: 每条 O(1) 粗略估算 (不解析文本/不渲染), 实测标记清零
     long long total = 0;
     for (size_t i = 0; i < heights_.size(); ++i) {
-        const int h  = static_cast<int>(quickHeightFor(i));
-        heights_[i]  = h;
-        measured_[i] = false;
-        total += h;
+        const int h   = static_cast<int>(quickHeightFor(i));
+        heights_[i]   = h;
+        measured_[i]  = false;
+        total        += h;
     }
     totalHeight_ = static_cast<int>(std::min<long long>(total, std::numeric_limits<int>::max()));
     recomputeRowsAboveAnchor();
@@ -261,7 +259,7 @@ void LazyScrollable::syncItemArrays(size_t count) {
     if (count < oldSize) {
         for (size_t i = count; i < oldSize; ++i) {
             removeCacheAt(i);
-            const int h = std::max(0, heights_[i]);
+            const int h   = std::max(0, heights_[i]);
             totalHeight_ -= h;
             if (i < anchorIndex_) {
                 rowsAboveAnchor_ -= h;
@@ -464,7 +462,7 @@ void LazyScrollable::notifyTrimmedHead(size_t count) {
         removeCacheAt(i);
         // -1 (尚未估算的高度) 按 0 计 —— 与 setItemHeight 增加 totalHeight_ 时的
         // 算法一致 (未估算的高度同样按 0 处理)
-        const int h = std::max(0, heights_[i]);
+        const int h  = std::max(0, heights_[i]);
         removedRows += h;
         if (i < anchorIndex_) {
             rowsAboveAnchor_ -= h;
@@ -545,7 +543,7 @@ bool LazyScrollable::atContentBottom() const {
 }
 
 void LazyScrollable::applyPendingScrollRows(int contentWidth, size_t count) {
-    int rows = pendingScrollRows_;
+    int rows           = pendingScrollRows_;
     pendingScrollRows_ = 0;
     if (rows == 0 || count == 0) {
         return;
@@ -567,8 +565,8 @@ void LazyScrollable::applyPendingScrollRows(int contentWidth, size_t count) {
         // 锚点上移: 该条目不再计入"锚点以上高度和" (measureItem 已按新高度
         // 增量修正过它, 此处整体扣回)
         rowsAboveAnchor_ -= h;
-        anchorIndex_ = prev;
-        anchorRow_   = h - 1;
+        anchorIndex_      = prev;
+        anchorRow_        = h - 1;
         ++rows;
     }
 
@@ -659,7 +657,7 @@ size_t LazyScrollable::layoutViewportFromAnchor(int contentWidth, size_t count, 
     // 定位只用实测高度: 每个条目先测量 (key 变化则重建重测) 再落到屏幕坐标,
     // 不存在"先按估算定位、下一帧再修正"的抖动窗口 (方案 §3.4 不变量)
     size_t nextIndex = count;
-    int    cum       = -anchorRow_; // 相对视口顶的行号 (锚点条目的 anchorRow_ 行落在 0)
+    int    cum = -anchorRow_; // 相对视口顶的行号 (锚点条目的 anchorRow_ 行落在 0)
     for (size_t i = anchorIndex_; i < count; ++i) {
         if (cum >= viewportHeight_) {
             nextIndex = i;
@@ -750,7 +748,7 @@ void LazyScrollable::prepareLayout(const ftxui::Box& box) {
         anchorRow_             = 0;
         pendingScrollRows_     = 0;
         pendingJumpIndex_      = kNoItem; // 空列表: 无内容可跳到
-        contentEndsInViewport_ = true; // 空列表: 无可滚动内容
+        contentEndsInViewport_ = true;    // 空列表: 无可滚动内容
         return;
     }
     if (anchorIndex_ >= count) {

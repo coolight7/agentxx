@@ -128,16 +128,16 @@ private:
     std::shared_ptr<asio::steady_timer> reconnectTimer_;
 
     // 重连增量重放状态
-    std::atomic<uint64_t>       lastDeltaSeq_{0};
+    std::atomic<uint64_t> lastDeltaSeq_{0};
     /// 已持有的展示历史序号 (由 Sync 快照更新, 重连时经 hello 回传)
-    std::atomic<uint64_t>       lastViewSeq_{0};
-    std::string                 lastTailHash_;
-    std::string                 helloSessionId_; // 首次 connect 时的 sessionId, 重连时复用
-    std::string                 helloLanguage_;  // 首次 connect 时的 language, 重连时复用
+    std::atomic<uint64_t> lastViewSeq_{0};
+    std::string           lastTailHash_;
+    std::string           helloSessionId_; // 首次 connect 时的 sessionId, 重连时复用
+    std::string           helloLanguage_;  // 首次 connect 时的 language, 重连时复用
     /// 首次 connect 时的协议版本与能力声明, 重连时复用
     int                         helloProtocolVersion_ = 0;
     std::vector<std::string>    helloCapabilities_;
-    std::optional<WireHelloAck> lastHelloAck_;   // 最近一次握手成功的 HelloAck
+    std::optional<WireHelloAck> lastHelloAck_; // 最近一次握手成功的 HelloAck
 
     /// 握手期间 (connect 等待 HelloAck) 到达的非 HelloAck 消息 (仅 ex_ 线程访问)
     /// - 协议上服务端先发 HelloAck 再重放, 正常为空; 防御性保留先于 HelloAck

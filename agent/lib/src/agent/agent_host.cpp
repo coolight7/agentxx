@@ -181,8 +181,7 @@ std::shared_ptr<BaseAgent> AgentHost::rootAgent() const {
     return rootAgent_;
 }
 
-std::shared_ptr<AgentHost>
-    AgentHost::attachRootAgentHost(std::shared_ptr<BaseAgent> rootAgent) {
+std::shared_ptr<AgentHost> AgentHost::attachRootAgentHost(std::shared_ptr<BaseAgent> rootAgent) {
     if (!rootAgent) {
         XX_LOGW("AgentHost::attachRootAgentHost: root agent is null");
         return nullptr;
@@ -194,7 +193,8 @@ std::shared_ptr<AgentHost>
     return host;
 }
 
-void AgentHost::attachRoot(std::shared_ptr<BaseAgent> rootAgent) {    assert(rootAgent && "attachRoot: root agent is null");
+void AgentHost::attachRoot(std::shared_ptr<BaseAgent> rootAgent) {
+    assert(rootAgent && "attachRoot: root agent is null");
     if (rootAgent_) {
         XX_LOGW("AgentHost::attachRoot: root already attached, ignored");
         return;
@@ -465,7 +465,7 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
             if (parentTools && !parentTools->empty()) {
                 // 继承时父工具定义必须原样出现在请求里 (数量/顺序/内容逐字节一致),
                 // 因此关闭工具白名单过滤: 子代理本来也不执行工具
-                subCfg->enableToolFiltering  = false;
+                subCfg->enableToolFiltering = false;
                 subCfg->toolWhitelist.clear();
                 subCfg->requestToolsOverride = std::move(parentTools);
                 XX_LOGD(

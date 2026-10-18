@@ -47,13 +47,13 @@ static constexpr size_t kMaxStashedWhileSwitching = 64;
 /// - 超长截断按 UTF-8 字符边界处理, 避免产生半个字符
 static std::string normalizeSessionTitle(std::string_view raw) {
     static constexpr size_t kMaxTitleChars = 120;
-    std::string out;
+    std::string             out;
     out.reserve(std::min(raw.size(), kMaxTitleChars * 4));
-    bool lastWasSpace = true; // 前导空白一并吃掉
-    size_t chars = 0;
+    bool   lastWasSpace = true; // 前导空白一并吃掉
+    size_t chars        = 0;
     for (size_t i = 0; i < raw.size();) {
         const unsigned char c = static_cast<unsigned char>(raw[i]);
-        const size_t        len = (c < 0x80) ? 1 : ((c & 0xE0) == 0xC0 ? 2 : ((c & 0xF0) == 0xE0 ? 3 : 4));
+        const size_t len = (c < 0x80) ? 1 : ((c & 0xE0) == 0xC0 ? 2 : ((c & 0xF0) == 0xE0 ? 3 : 4));
         if (i + len > raw.size()) {
             break; // 尾部不完整的多字节序列直接丢弃
         }
@@ -88,7 +88,7 @@ static std::string normalizeSessionTitle(std::string_view raw) {
 static WireSessionList
     listSessionsFor(const WireListSessions& req, agentxx::agent::SessionStore& store) {
     if (!req.keyword.empty()) {
-        auto       hits = store.searchSessions(req.keyword, req.limit);
+        auto                     hits = store.searchSessions(req.keyword, req.limit);
         std::vector<SessionInfo> sessions;
         sessions.reserve(hits.size());
         for (auto& hit : hits) {
@@ -486,8 +486,8 @@ std::string SessionServerAgentIO::pushMessageQueueItem(
     //   1->0 队列状态, 避免 UI 闪烁
     // - 若空闲且队列已有积压消息: 解除暂停并唤醒驱动循环, 驱动循环从队首依次恢复执行,
     //   同时向客户端推送包含全部排队项的最新队列状态
-    const bool isIdle   = !turnActive_.load(std::memory_order_acquire);
-    const bool wasEmpty = messageQueue_.empty();
+    const bool isIdle    = !turnActive_.load(std::memory_order_acquire);
+    const bool wasEmpty  = messageQueue_.empty();
     const bool wasHalted = isQueueHalted();
 
     const std::string itemId = item.id;
@@ -683,11 +683,7 @@ void SessionServerAgentIO::handleUserInput(
             input.attachments.size(),
             kMaxAttachmentsPerMessage
         );
-        XX_LOGW(
-            "[session_ctrl] user_input rejected: {} (session={})",
-            errMsg,
-            config_.sessionId
-        );
+        XX_LOGW("[session_ctrl] user_input rejected: {} (session={})", errMsg, config_.sessionId);
         sendInputAck(
             sender,
             input.requestId,
@@ -707,9 +703,9 @@ void SessionServerAgentIO::handleUserInput(
         uint64_t maxSize = maxBytesForMediaType(att.type);
         uint64_t estSize = estimateAttachmentSizeBytes(att);
         if (estSize > maxSize) {
-            std::string name = !att.displayName.empty()
-                ? att.displayName
-                : (!att.pathOrUrl.empty() ? att.pathOrUrl : "attachment");
+            std::string name   = !att.displayName.empty()
+                                     ? att.displayName
+                                     : (!att.pathOrUrl.empty() ? att.pathOrUrl : "attachment");
             std::string errMsg = fmt::format(
                 "attachment '{}' exceeds maximum allowed size for {} ({} bytes > {} bytes)",
                 name,
@@ -771,8 +767,8 @@ void SessionServerAgentIO::handleUserInput(
     // - inject:    只进入下一次请求 (不改写上下文, 不唤醒会话)
     // - next-step: 轮次进行中才注入 (空闲时按 next-turn 立即开轮, 否则用户会
     //              发现"发了消息却没有任何反应")
-    const bool steerAtStep
-        = (delivery == InputDelivery::Inject) || (delivery == InputDelivery::NextStep && turnActive);
+    const bool steerAtStep = (delivery == InputDelivery::Inject)
+                             || (delivery == InputDelivery::NextStep && turnActive);
     if (steerAtStep) {
         auto sess = session();
         if (!sess) {
@@ -816,17 +812,16 @@ void SessionServerAgentIO::handleUserInput(
         }
 
         SessionPendingInput pending;
-        pending.id          = fmt::format("i-{}", nextInboxId_++);
-        pending.text        = std::move(input.text);
-        pending.model       = std::move(input.model);
-        pending.source      = "user";
-        pending.delivery    = std::string{delivery};
-        pending.createdAtMs = static_cast<int64_t>(
-            std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::system_clock::now().time_since_epoch()
+        pending.id       = fmt::format("i-{}", nextInboxId_++);
+        pending.text     = std::move(input.text);
+        pending.model    = std::move(input.model);
+        pending.source   = "user";
+        pending.delivery = std::string{delivery};
+        pending.createdAtMs
+            = static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                       std::chrono::system_clock::now().time_since_epoch()
             )
-                .count()
-        );
+                                       .count());
         // 收件箱载荷需要在 move 进会话前拷贝 (move 后 input.text 为空)
         MessageQueueItem inboxItem{
             .id          = pending.id,
@@ -902,9 +897,9 @@ void SessionServerAgentIO::flushCollectWindow() {
     collectPending_.clear();
 
     // 合并: 文本按输入顺序用换行拼接, 附件累加, 模型取最后一个非空
-    std::string                         mergedText;
-    std::string                         mergedModel;
-    std::vector<MediaAttachment>        mergedAttachments;
+    std::string                  mergedText;
+    std::string                  mergedModel;
+    std::vector<MediaAttachment> mergedAttachments;
     for (auto& entry : pending) {
         if (!mergedText.empty()) {
             mergedText += "\n";
@@ -975,19 +970,18 @@ void SessionServerAgentIO::persistInputAdmitted(const MessageQueueItem& item, ui
         );
         return;
     }
-    auto store = agent->agentContext->sessions->sessionStore;
+    auto                             store = agent->agentContext->sessions->sessionStore;
     SessionStore::SessionInputRecord record;
     record.id       = item.id;
     record.delivery = item.delivery;
     record.status   = std::string{SessionStore::SessionInputStatus::Admitted};
-    record.createdMs = item.createdAtMs > 0
-                           ? item.createdAtMs
-                           : static_cast<int64_t>(
-                                 std::chrono::duration_cast<std::chrono::milliseconds>(
-                                     std::chrono::system_clock::now().time_since_epoch()
-                                 )
-                                     .count()
-                             );
+    record.createdMs
+        = item.createdAtMs > 0
+              ? item.createdAtMs
+              : static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                         std::chrono::system_clock::now().time_since_epoch()
+                )
+                                         .count());
     // 载荷只保留元数据 (文本/模型/投递模式/附件元数据): 附件 Base64 不进库,
     // 恢复后由服务端按 pathOrUrl 重新读取, 避免会话库被大块 Base64 撑大
     utilxx_base::Json payload{
@@ -1007,8 +1001,8 @@ void SessionServerAgentIO::persistInputAdmitted(const MessageQueueItem& item, ui
         }
         payload["attachments"] = std::move(arr);
     }
-    record.payload = utilxx_base::Json(payload).dump();
-    auto sess      = session();
+    record.payload     = utilxx_base::Json(payload).dump();
+    auto sess          = session();
     record.admittedSeq = sess ? static_cast<int64_t>(sess->deltaSeq) : 0;
     store->addSessionInput(config_.sessionId, record);
     XX_LOGD(
@@ -1047,10 +1041,8 @@ void SessionServerAgentIO::recoverPendingInputs() {
         return;
     }
     auto store = agent->agentContext->sessions->sessionStore;
-    auto rows  = store->listSessionInputs(
-        config_.sessionId,
-        SessionStore::SessionInputStatus::Admitted
-    );
+    auto rows
+        = store->listSessionInputs(config_.sessionId, SessionStore::SessionInputStatus::Admitted);
     if (rows.empty()) {
         return;
     }
@@ -1075,8 +1067,8 @@ void SessionServerAgentIO::recoverPendingInputs() {
             }
         }
         MessageQueueItem item;
-        item.id = row.id;
-        item.delivery = row.delivery.empty() ? std::string{InputDelivery::NextTurn} : row.delivery;
+        item.id        = row.id;
+        item.delivery  = row.delivery.empty() ? std::string{InputDelivery::NextTurn} : row.delivery;
         item.recovered = true;
         item.createdAtMs = row.createdMs;
         // 载荷解析失败只跳过该条 (历史脏数据不应阻断会话启动)
@@ -1283,10 +1275,10 @@ void SessionServerAgentIO::onPeerMessage(
                 if (!acceptSessionScope(m.sessionId, sender, "get_context")) {
                     return;
                 }
-                auto              agent = agent_.lock();
-                auto              sess  = session();
+                auto agent = agent_.lock();
+                auto sess  = session();
                 // 上下文取自会话 (唯一权威); llmMessagesJson() 为惰性生成的 Json 形态
-                utilxx_base::Json msgs  = utilxx_base::Json::array();
+                utilxx_base::Json msgs = utilxx_base::Json::array();
                 if (sess) {
                     msgs = sess->llmMessagesJson();
                 }
@@ -1394,16 +1386,17 @@ void SessionServerAgentIO::onPeerMessage(
                                 }
                                 if (targetDir.empty()) {
                                     std::error_code ec;
-                                    targetDir
-                                        = utilxx_base::pathToUtf8Generic(
-                                            std::filesystem::current_path(ec)
-                                        );
+                                    targetDir = utilxx_base::pathToUtf8Generic(
+                                        std::filesystem::current_path(ec)
+                                    );
                                 }
                             }
 
                             std::error_code ec;
-                            auto            canonical
-                                = std::filesystem::canonical(utilxx_base::utf8ToPath(targetDir), ec);
+                            auto            canonical = std::filesystem::canonical(
+                                utilxx_base::utf8ToPath(targetDir),
+                                ec
+                            );
                             if (ec) {
                                 result.ok    = false;
                                 result.error = ec.message();
@@ -1445,9 +1438,9 @@ void SessionServerAgentIO::onPeerMessage(
 
                                 if (std::filesystem::is_directory(status)) {
                                     WireDirEntry de;
-                                    de.name     = filename;
-                                    de.fullPath = utilxx_base::pathToUtf8Generic(entry.path());
-                                    de.isDir    = true;
+                                    de.name      = filename;
+                                    de.fullPath  = utilxx_base::pathToUtf8Generic(entry.path());
+                                    de.isDir     = true;
                                     de.supported = true;
                                     dirs.push_back(std::move(de));
                                 } else if (std::filesystem::is_regular_file(status)) {
@@ -1459,9 +1452,9 @@ void SessionServerAgentIO::onPeerMessage(
                                         continue;
                                     }
                                     WireDirEntry de;
-                                    de.name     = filename;
-                                    de.fullPath = utilxx_base::pathToUtf8Generic(entry.path());
-                                    de.isDir    = false;
+                                    de.name      = filename;
+                                    de.fullPath  = utilxx_base::pathToUtf8Generic(entry.path());
+                                    de.isDir     = false;
                                     de.sizeBytes = std::filesystem::file_size(entry.path(), ec2);
                                     de.mediaType = *mt;
                                     de.supported
@@ -1531,9 +1524,8 @@ void SessionServerAgentIO::onPeerMessage(
                 switchTargetId_          = m.sessionId;
                 asio::co_spawn(
                     ex_,
-                    [self  = shared_from_this(),
-                     newId = std::move(m.sessionId),
-                     switchSeq]() -> asio::awaitable<void> {
+                    [self = shared_from_this(), newId = std::move(m.sessionId), switchSeq](
+                    ) -> asio::awaitable<void> {
                         if (auto agent = self->agent_.lock(); agent && agent->agentContext) {
                             // 加载失败 (如会话库损坏) 不阻断切换: 记录原因后按空历史提交,
                             // 保证暂存的请求仍会被重放
@@ -1651,7 +1643,7 @@ void SessionServerAgentIO::handleHello(
         reject.sessionId = config_.sessionId;
         reject.error     = fmt::format(
             "client protocol version {} is newer than server version {}; "
-            "please update the server side",
+                "please update the server side",
             hello.protocolVersion,
             agentxx::agent::WireProtocol::kVersion
         );
@@ -1698,8 +1690,8 @@ void SessionServerAgentIO::handleHello(
         }
     }
 
-    std::vector<WireDelta>            replayDeltas;
-    std::optional<WireSyncPayload>    replaySync;
+    std::vector<WireDelta>         replayDeltas;
+    std::optional<WireSyncPayload> replaySync;
     /// 客户端 lastSeq 已超出 delta 缓冲: 必须下发一份快照 (全量或增量补拉)
     bool                              deltaBufferMissed = false;
     std::string                       tailHash;
@@ -2085,9 +2077,8 @@ void SessionServerAgentIO::subscribePermissionEvents(
     fullAuthSubId_
         = bus->get<events::EventPermissionFullAuthChanged>(events::Topic::PermissionFullAuth)
               .subscribe(
-                  [weakSelf = std::weak_ptr<SessionServerAgentIO>{self}](
-                      const events::EventPermissionFullAuthChanged& evt
-                  ) -> asio::awaitable<void> {
+                  [weakSelf = std::weak_ptr<SessionServerAgentIO>{self
+                   }](const events::EventPermissionFullAuthChanged& evt) -> asio::awaitable<void> {
                       auto sp = weakSelf.lock();
                       if (!sp) {
                           co_return;
@@ -2102,7 +2093,8 @@ void SessionServerAgentIO::subscribePermissionEvents(
               );
 }
 
-agentxx::middleware::PermissionMiddlewareHandle* SessionServerAgentIO::permissionMiddleware() const {
+agentxx::middleware::PermissionMiddlewareHandle*
+    SessionServerAgentIO::permissionMiddleware() const {
     auto agent = agent_.lock();
     if (!agent || !agent->agentContext || !agent->agentContext->middlewareHandleContext) {
         return nullptr;
@@ -2399,7 +2391,7 @@ WireSyncPayload SessionServerAgentIO::buildTailSync(size_t tailCount) {
     auto            sess = session();
     if (!sess) {
         p.messageQueue = std::vector<MessageQueueItem>(messageQueue_.begin(), messageQueue_.end());
-    p.queueState   = std::string{sessionQueueStateText(queueState_)};
+        p.queueState   = std::string{sessionQueueStateText(queueState_)};
         return p;
     }
     const size_t total = sess->viewMessageCount();
@@ -2513,11 +2505,7 @@ void SessionServerAgentIO::handleRenameSession(
         return;
     }
 
-    XX_LOGI(
-        "[session_ctrl] session '{}' renamed to '{}'",
-        sessionId,
-        title
-    );
+    XX_LOGI("[session_ctrl] session '{}' renamed to '{}'", sessionId, title);
     result.ok    = true;
     result.title = title;
     reply(std::move(result));
@@ -2562,8 +2550,7 @@ bool SessionServerAgentIO::stashWhileSwitching(
     }
     // 握手与切换请求本身不暂存: 前者属于连接建立流程 (重连后客户端要立刻拿到
     // hello_ack), 后者要马上登记为最新的切换目标
-    if (std::holds_alternative<WireHello>(msg)
-        || std::holds_alternative<WireSwitchSession>(msg)) {
+    if (std::holds_alternative<WireHello>(msg) || std::holds_alternative<WireSwitchSession>(msg)) {
         return false;
     }
     // 只暂存发给"正在切换过去的那个会话"的请求; 发给其他会话的照常按当前绑定
@@ -2807,11 +2794,12 @@ asio::awaitable<std::string> SessionServerAgentIO::callHostToolAsync(
     uint32_t                              timeoutSec
 ) {
     if (!client || !client->alive()) {
-        throw std::runtime_error(fmt::format("host tool client is not connected for tool: {}", name));
+        throw std::runtime_error(fmt::format("host tool client is not connected for tool: {}", name)
+        );
     }
 
-    const int64_t callId = nextHostToolCallId_++;
-    auto          ch     = std::make_shared<HostToolRespChannel>(ex_, 1);
+    const int64_t callId          = nextHostToolCallId_++;
+    auto          ch              = std::make_shared<HostToolRespChannel>(ex_, 1);
     pendingHostToolCalls_[callId] = PendingHostToolCall{ch, std::string(name)};
 
     WireHostToolCall call;
@@ -2841,6 +2829,7 @@ asio::awaitable<std::string> SessionServerAgentIO::callHostToolAsync(
         std::map<int64_t, PendingHostToolCall>& map;
         int64_t                                 id;
         std::shared_ptr<asio::steady_timer>     t;
+
         ~ScopeGuard() {
             map.erase(id);
             if (t) {
@@ -2905,11 +2894,8 @@ void SessionServerAgentIO::handleHostToolRegister(
             co_return co_await self->callHostToolAsync(client, name, args, timeoutSec);
         };
 
-        auto hostTool = std::make_shared<tools::HostTool>(
-            toolInfo,
-            agent->agentContext,
-            std::move(handler)
-        );
+        auto hostTool
+            = std::make_shared<tools::HostTool>(toolInfo, agent->agentContext, std::move(handler));
 
         if (toolRegistry->registerTool(toolInfo.name, hostTool)) {
             if (std::find(registeredNames.begin(), registeredNames.end(), toolInfo.name)

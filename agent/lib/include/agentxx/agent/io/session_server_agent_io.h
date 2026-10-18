@@ -231,14 +231,11 @@ private:
     /// - fromIndex = 窗口起始绝对下标, totalMessages = 会话总消息数;
     ///   客户端据此展示"上方还有更早消息"并按 WireGetViewMessages 分页拉取
     /// - tailCount==0 时等价 buildFullSync() (全量, fromIndex=0)
-    WireSyncPayload          buildTailSync(size_t tailCount);
+    WireSyncPayload buildTailSync(size_t tailCount);
     /// 构建增量补拉载荷: 仅含 [afterSeq] 之后的展示消息
     /// - `incremental = true`: 客户端按 msg.id 去重后追加到本地历史尾部
     /// - 消息 id 为空的老数据不可去重: 此时返回全量同步 (调用方回退)
-    WireSyncPayload buildIncrementalSync(
-        std::vector<SequencedViewMessage> rows,
-        uint64_t                          afterSeq
-    );
+    WireSyncPayload buildIncrementalSync(std::vector<SequencedViewMessage> rows, uint64_t afterSeq);
     std::shared_ptr<Session> session();
 
     /// 构建模型信息响应 (WireModelInfo): 当前会话模型名 + 可用模型列表 +
@@ -339,10 +336,7 @@ private:
     /// - `args`:
     ///     - [input]  客户端输入 (携带 sessionId/delivery/requestId)
     ///     - [sender] 来源 transport (回执只发给它; 为空时广播)
-    void handleUserInput(
-        WireUserInput                                input,
-        const std::shared_ptr<AgentIOTransportBase>& sender
-    );
+    void handleUserInput(WireUserInput input, const std::shared_ptr<AgentIOTransportBase>& sender);
 
     /// 发送输入受理回执 (requestId == 0 时跳过: 旧客户端不认识该消息类型)
     void sendInputAck(
@@ -350,9 +344,9 @@ private:
         uint64_t                                     requestId,
         std::string_view                             delivery,
         std::string_view                             status,
-        std::string_view                             reason  = {},
-        std::string                              detail  = {},
-        std::string_view                             itemId  = {}
+        std::string_view                             reason = {},
+        std::string                                  detail = {},
+        std::string_view                             itemId = {}
     );
 
     /// 队列状态转移 (记 Debug 日志: 旧状态 → 新状态 + 原因)
@@ -485,10 +479,12 @@ private:
     /// 切换会话请求序号: 切换要等目标会话历史加载完才提交绑定, 期间可能又来一次
     /// 切换请求 —— 只让序号最新的一次提交, 避免先发出的旧请求后到把会话切回旧目标
     uint64_t switchSeq_ = 0;
-    /// 正在切换过去的会话 id (空 = 没有进行中的切换; 见 [SessionServerAgentIO::stashWhileSwitching])
+    /// 正在切换过去的会话 id (空 = 没有进行中的切换; 见
+    /// [SessionServerAgentIO::stashWhileSwitching])
     std::string switchTargetId_;
     /// 切换期间暂存的消息 (按到达顺序, 切换提交后原样重新分发)
-    std::vector<std::pair<WireMessage, std::shared_ptr<AgentIOTransportBase>>> stashedWhileSwitching_;
+    std::vector<std::pair<WireMessage, std::shared_ptr<AgentIOTransportBase>>>
+        stashedWhileSwitching_;
 
     // 服务端消息队列 (仅 ex_ 线程访问)
     std::deque<MessageQueueItem> messageQueue_;
@@ -500,15 +496,16 @@ private:
 
     /// `collect` 静默合并窗口暂存 (仅 ex_ 线程)
     struct CollectEntry {
-        uint64_t                            requestId = 0;
-        std::string                         text;
-        std::string                         model;
-        std::vector<MediaAttachment>        attachments;
+        uint64_t                              requestId = 0;
+        std::string                           text;
+        std::string                           model;
+        std::vector<MediaAttachment>          attachments;
         std::shared_ptr<AgentIOTransportBase> sender;
     };
-    std::vector<CollectEntry>            collectPending_;
-    std::shared_ptr<asio::steady_timer>  collectTimer_;
-    uint64_t                             nextCollectId_ = 1;
+
+    std::vector<CollectEntry>           collectPending_;
+    std::shared_ptr<asio::steady_timer> collectTimer_;
+    uint64_t                            nextCollectId_ = 1;
     /// 收件箱条目自增序号 (与队列条目 id 无关, 仅用于恢复时的稳定 id)
     uint64_t nextInboxId_ = 1;
     /// 本端点实例受理过的收件箱条目 id (启动恢复时用于跳过"本进程刚受理、还没轮到

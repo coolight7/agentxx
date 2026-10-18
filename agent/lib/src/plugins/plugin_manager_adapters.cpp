@@ -2,10 +2,10 @@
 #include "agentxx/util/cancel_adapter.h"
 #include "agentxx/util/neograph_json_bridge.h"
 
+#include "agentxx/agent/resource_applier.h"
 #include "agentxx/event/event_stream.h"
 #include "agentxx/feature/registry.h"
 #include "agentxx/middlewares/permission.h"
-#include "agentxx/agent/resource_applier.h"
 #include "agentxx/plugin/plugin_graph_node.h"
 #include "asio/this_coro.hpp"
 #include "fmt/format.h"
@@ -595,7 +595,7 @@ void PluginManager::releaseGraphDefinitionSlot(PluginInstance* inst) {
     auto ctx = agentContext_.lock();
     if (ctx && graphDefinitionBaseCaptured_) {
         try {
-            auto base = utilxx_base::Json::parse(graphDefinitionBase_);
+            auto base                = utilxx_base::Json::parse(graphDefinitionBase_);
             ctx->graphDefinitionJson = agentxx::util::toNeographJson(base);
             XX_LOGI(
                 "Plugin `{}` released graph definition slot; restored the previous definition",
@@ -610,8 +610,8 @@ void PluginManager::releaseGraphDefinitionSlot(PluginInstance* inst) {
     graphDefinitionBaseCaptured_ = false;
 }
 
-PluginManager::RegistrationInventory
-    PluginManager::registrationInventory(const PluginInstance& inst) const {
+PluginManager::RegistrationInventory PluginManager::registrationInventory(const PluginInstance& inst
+) const {
     // 只统计"当前生效"的注册 (禁用/卸载后实例仍保留注册记录, 但那些记录不在
     // 主程序侧生效: 工具已被摘出注册表、钩子处理器已从注册表移除、图节点 slot 已失效)。
     // 因此每一项都按"生效事实"取数, 而不是按记录条数。
@@ -647,14 +647,15 @@ PluginManager::RegistrationInventory
     if (inst.enabled) {
         if (auto ctx = agentContext_.lock()) {
             if (ctx->resourceApplier) {
-                const auto owned = ctx->resourceApplier->ownedBy(inst.name);
+                const auto owned  = ctx->resourceApplier->ownedBy(inst.name);
                 out.skillDirs     = owned.skillDirs.size();
                 out.memoryFiles   = owned.memoryFiles.size();
                 out.mcpNamespaces = owned.mcpNamespaces.size();
             }
         }
     }
-    out.ownsGraphDefinition = (!graphDefinitionOwner_.empty() && graphDefinitionOwner_ == inst.name);
+    out.ownsGraphDefinition
+        = (!graphDefinitionOwner_.empty() && graphDefinitionOwner_ == inst.name);
 
     // 功能点: 只数"当前生效"的项 —— 实现按注册表里存在的归属计数, 点按注册表里
     // 来源等于本实例的点计数 (禁用/卸载时已被摘除)

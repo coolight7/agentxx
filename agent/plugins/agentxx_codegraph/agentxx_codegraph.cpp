@@ -95,8 +95,9 @@ static ToolPrompt defaultToolPrompt(std::string_view name) {
               "Useful for understanding how a function or class is used throughout the codebase.\n"
               "Returns plain multi-line text with \"symbol:\", \"callers (N):\", \"callees "
               "(N):\", \"methods (N):\" and \"edges (N):\" sections.";
-        p.symbol   = "Symbol name, plain (`myMethod`) or qualified (`MyClass::myMethod`).";
-        p.limit    = "Maximum results per section (callers / callees / methods / edges). Default `10`.";
+        p.symbol = "Symbol name, plain (`myMethod`) or qualified (`MyClass::myMethod`).";
+        p.limit
+            = "Maximum results per section (callers / callees / methods / edges). Default `10`.";
         p.maxDepth = "Maximum call-graph traversal depth. Default `3`.";
     } else if (name == "agentxx_codegraph_callers") {
         p.depict
@@ -386,9 +387,9 @@ static void registerAllTools(PluginCtx& ctx) {
 
     // agentxx_codegraph_search
     {
-        auto        p   = ctx.toolPrompt("agentxx_codegraph_search");
-        const auto  def = defaultToolPrompt("agentxx_codegraph_search");
-        std::string depict = p.depict.empty() ? def.depict : p.depict;
+        auto          p      = ctx.toolPrompt("agentxx_codegraph_search");
+        const auto    def    = defaultToolPrompt("agentxx_codegraph_search");
+        std::string   depict = p.depict.empty() ? def.depict : p.depict;
         SchemaBuilder b;
         b.str("query", p.args.contains("query") ? p.args["query"] : def.query);
         b.integer("limit", p.args.contains("limit") ? p.args["limit"] : def.limit, 20);
@@ -442,9 +443,9 @@ static void registerAllTools(PluginCtx& ctx) {
 
     // agentxx_codegraph_context
     {
-        auto        p   = ctx.toolPrompt("agentxx_codegraph_context");
-        const auto  def = defaultToolPrompt("agentxx_codegraph_context");
-        std::string depict = p.depict.empty() ? def.depict : p.depict;
+        auto          p      = ctx.toolPrompt("agentxx_codegraph_context");
+        const auto    def    = defaultToolPrompt("agentxx_codegraph_context");
+        std::string   depict = p.depict.empty() ? def.depict : p.depict;
         SchemaBuilder b;
         b.str("symbol", p.args.contains("symbol") ? p.args["symbol"] : def.symbol);
         b.integer("limit", p.args.contains("limit") ? p.args["limit"] : def.limit, 10);
@@ -485,9 +486,9 @@ static void registerAllTools(PluginCtx& ctx) {
 
     // agentxx_codegraph_callers
     {
-        auto        p   = ctx.toolPrompt("agentxx_codegraph_callers");
-        const auto  def = defaultToolPrompt("agentxx_codegraph_callers");
-        std::string depict = p.depict.empty() ? def.depict : p.depict;
+        auto          p      = ctx.toolPrompt("agentxx_codegraph_callers");
+        const auto    def    = defaultToolPrompt("agentxx_codegraph_callers");
+        std::string   depict = p.depict.empty() ? def.depict : p.depict;
         SchemaBuilder b;
         b.str("symbol", p.args.contains("symbol") ? p.args["symbol"] : def.symbol);
         b.integer(
@@ -522,9 +523,9 @@ static void registerAllTools(PluginCtx& ctx) {
 
     // agentxx_codegraph_callees
     {
-        auto        p   = ctx.toolPrompt("agentxx_codegraph_callees");
-        const auto  def = defaultToolPrompt("agentxx_codegraph_callees");
-        std::string depict = p.depict.empty() ? def.depict : p.depict;
+        auto          p      = ctx.toolPrompt("agentxx_codegraph_callees");
+        const auto    def    = defaultToolPrompt("agentxx_codegraph_callees");
+        std::string   depict = p.depict.empty() ? def.depict : p.depict;
         SchemaBuilder b;
         b.str("symbol", p.args.contains("symbol") ? p.args["symbol"] : def.symbol);
         b.integer(
@@ -559,9 +560,9 @@ static void registerAllTools(PluginCtx& ctx) {
 
     // agentxx_codegraph_path
     {
-        auto        p   = ctx.toolPrompt("agentxx_codegraph_path");
-        const auto  def = defaultToolPrompt("agentxx_codegraph_path");
-        std::string depict = p.depict.empty() ? def.depict : p.depict;
+        auto          p      = ctx.toolPrompt("agentxx_codegraph_path");
+        const auto    def    = defaultToolPrompt("agentxx_codegraph_path");
+        std::string   depict = p.depict.empty() ? def.depict : p.depict;
         SchemaBuilder b;
         b.str("from", p.args.contains("from") ? p.args["from"] : def.from);
         b.str("to", p.args.contains("to") ? p.args["to"] : def.to);
@@ -950,7 +951,7 @@ struct ClientCtx {
 static std::string buildInfoItemsJson(ClientCtx& c) {
     // 组件项经描述层与扩展 kit 组装 (文本行用 kit::text, 进度用构建器)
     std::vector<pluginxx::ui::Item> items;
-    auto pushText = [&](const std::string& text, std::string tone = {}) {
+    auto                            pushText = [&](const std::string& text, std::string tone = {}) {
         utilxx_base::Json params;
         params["text"] = text;
         if (!tone.empty()) {

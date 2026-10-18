@@ -83,7 +83,6 @@ pluginxx::ui::Item withIndent(pluginxx::ui::Item item, int indentCols) {
 
 } // namespace
 
-
 // ---------------------------------------------------------------------------
 // 组件桥接 (用组件构建器拼中断块)
 // ---------------------------------------------------------------------------
@@ -118,7 +117,7 @@ InterruptUiBlock tableBlock(
         col.title = TextValue::of(title);
         // 对齐方式: 描述层用 start/center/end (旧写法 left/right 在此转换)
         col.align = align.empty() || align == "left" ? std::string{"start"}
-                  : align == "right"                 ? std::string{"end"}
+                    : align == "right"               ? std::string{"end"}
                                                      : align;
         if (width > 0) {
             col.width = SizeValue::of(static_cast<double>(width));
@@ -232,12 +231,8 @@ InterruptUiBlock gapBlock(int lines) {
     return contentBlock(std::move(item));
 }
 
-InterruptUiBlock imageBlock(
-    std::string pathOrDataUrl,
-    std::string alt,
-    int         maxHeight,
-    bool        isDataUrl
-) {
+InterruptUiBlock
+    imageBlock(std::string pathOrDataUrl, std::string alt, int maxHeight, bool isDataUrl) {
     InterruptUiBlock b;
     b.kind = "image";
     if (isDataUrl) {
@@ -250,12 +245,8 @@ InterruptUiBlock imageBlock(
     return b;
 }
 
-InterruptUiBlock progressBlock(
-    double      value,
-    double      total,
-    std::string label,
-    std::string labelKey
-) {
+InterruptUiBlock
+    progressBlock(double value, double total, std::string label, std::string labelKey) {
     InterruptUiBlock b;
     b.kind          = "progress";
     b.progressValue = value;

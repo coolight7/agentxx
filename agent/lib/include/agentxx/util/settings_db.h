@@ -35,10 +35,10 @@ public:
 
     /// 带版本写入的结果
     struct WriteResult {
-        WriteStatus status  = WriteStatus::Failed;
+        WriteStatus status = WriteStatus::Failed;
         /// 版本号: Ok 时为写入后的新版本; Conflict 时为库中当前版本;
         /// Failed 时为 0
-        int64_t     version = 0;
+        int64_t version = 0;
     };
 
     /// - [dbPath] 数据库文件路径; 为空使用默认 {dataDir}/sqlite/global.db
@@ -72,8 +72,7 @@ public:
     /// - 条目不存在时其版本视为 0 (用 expectedVersion = 0 表示"新建")
     /// - 版本不等于期望值时返回 Conflict, 且不修改库中内容
     /// - 写入成功后版本号变为 expectedVersion + 1 (与 [set] 的递增规则一致)
-    WriteResult
-        setVersioned(std::string_view key, std::string_view value, int64_t expectedVersion);
+    WriteResult setVersioned(std::string_view key, std::string_view value, int64_t expectedVersion);
 
     /// 读取整数 (非法/不存在返回默认值)
     int64_t getInt64(std::string_view key, int64_t def = 0);

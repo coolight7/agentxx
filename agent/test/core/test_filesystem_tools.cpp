@@ -12,8 +12,8 @@
 #include "agentxx_filesystem/agentxx_fs_plugin.h" // 渲染摘要 helper (diffStatTextOfSegments)
 #include "agentxx_filesystem/filesystem_impl.h"
 #include "utilxx_base/string_util.h"
-#include <asio/experimental/concurrent_channel.hpp>
 #include <asio/co_spawn.hpp>
+#include <asio/experimental/concurrent_channel.hpp>
 #include <asio/steady_timer.hpp>
 #include <asio/this_coro.hpp>
 #include <chrono>
@@ -918,8 +918,7 @@ asio::awaitable<void>
         TEST_PASS << "FilesystemReadTextFileTool respects offset=0" << std::endl;
     } else {
         g_fs_failed++;
-        TEST_FAIL << "FilesystemReadTextFileTool offset=0 failed, got: " << result
-                  << std::endl;
+        TEST_FAIL << "FilesystemReadTextFileTool offset=0 failed, got: " << result << std::endl;
     }
     co_return;
 }
@@ -1254,7 +1253,7 @@ asio::awaitable<void>
     auto result = co_await tool.execute_async(args);
 
     std::ifstream in(filePath, std::ios::binary);
-    std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::string   content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     if (result == "success" && content == "baz foo foo bar\n") {
         g_fs_passed++;
         TEST_PASS << "edit_text_file replaces only the first match" << std::endl;
@@ -1427,7 +1426,7 @@ asio::awaitable<void>
     auto result = co_await tool.execute_async(args);
 
     std::ifstream in(filePath, std::ios::binary);
-    std::string content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::string   content((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     if (result == "success" && content == "baz\nfoo\nfoo\n") {
         g_fs_passed++;
         TEST_PASS << "edit_text_file replaces first match on CRLF file and writes LF" << std::endl;
@@ -1461,7 +1460,7 @@ asio::awaitable<void>
          utilxx_base::Json::array(
              {utilxx_base::Json{{"old_str", "alpha"}, {"new_str", "ALPHA"}},
               utilxx_base::Json{{"old_str", "beta\n"}, {"new_str", "BETA\n"}}}
-         )      },
+         )                },
     };
     auto result = co_await tool.execute_async(args);
     // 结果文本: 单段与多段统一为 `success` (每段各替换一处, 无额外处数信息)
@@ -1480,7 +1479,8 @@ asio::awaitable<void>
         TEST_PASS << "edit_text_file multi segments applies every segment" << std::endl;
     } else {
         g_fs_failed++;
-        TEST_FAIL << "edit_text_file multi segments wrong content: '" << content << "'" << std::endl;
+        TEST_FAIL << "edit_text_file multi segments wrong content: '" << content << "'"
+                  << std::endl;
     }
 
     // 折叠头摘要: 两段增删行数求和 ("ALPHA" 替换一处 + "BETA" 替换一处)
@@ -1513,9 +1513,9 @@ asio::awaitable<void> test_edit_text_file_multi_segments_sequential(
          utilxx_base::Json::array(
              {utilxx_base::Json{{"old_str", "foo"}, {"new_str", "bar"}},
               utilxx_base::Json{{"old_str", "bar"}, {"new_str", "baz"}}}
-         )      },
+         )                },
     };
-    auto result = co_await tool.execute_async(args);
+    auto       result  = co_await tool.execute_async(args);
     const auto content = readAllBytes(filePath);
     if (result == "success" && content == "baz\n") {
         g_fs_passed++;
@@ -1547,9 +1547,9 @@ asio::awaitable<void> test_edit_text_file_multi_segments_atomic(
          utilxx_base::Json::array(
              {utilxx_base::Json{{"old_str", "keep"}, {"new_str", "KEEP"}},
               utilxx_base::Json{{"old_str", "missing_text_xyz"}, {"new_str", "X"}}}
-         )      },
+         )                },
     };
-    auto result = co_await tool.execute_async(args);
+    auto       result = co_await tool.execute_async(args);
     const bool mentionsFailedSegment
         = result.find("[Error:") != std::string::npos && result.find("#2") != std::string::npos;
     const auto content = readAllBytes(filePath);
@@ -1582,7 +1582,7 @@ asio::awaitable<void> test_edit_text_file_multi_segments_first_match(
          utilxx_base::Json::array(
              {utilxx_base::Json{{"old_str", "a"}, {"new_str", "A"}},
               utilxx_base::Json{{"old_str", "b"}, {"new_str", "B"}}}
-         )      },
+         )                },
     };
     const auto result  = co_await tool.execute_async(args);
     const auto content = readAllBytes(filePath);
@@ -1598,9 +1598,9 @@ asio::awaitable<void> test_edit_text_file_multi_segments_first_match(
 }
 
 /// `edits` 的参数校验: 形状非法 / 段内缺字段 / 空段 / 与 old_str 同时给出 都报错
-asio::awaitable<void> test_edit_text_file_edits_invalid_args(
-    std::weak_ptr<agentxx::agent::AgentContext> agentContext
-) {
+asio::awaitable<void>
+    test_edit_text_file_edits_invalid_args(std::weak_ptr<agentxx::agent::AgentContext> agentContext
+    ) {
     auto filePath = testDir + "/edit_segments_invalid_test.txt";
     {
         // 二进制写入: 失败用例要按字节比对原内容 (文本模式会写成本地换行)
@@ -1610,7 +1610,8 @@ asio::awaitable<void> test_edit_text_file_edits_invalid_args(
     auto tool = agentxx::tools::FilesystemEditTextFileTool{agentContext};
 
     /// 期望某组参数得到错误结果 (且文件保持原样)
-    auto expectError = [&](const char* label, const utilxx_base::Json& args) -> asio::awaitable<void> {
+    auto expectError
+        = [&](const char* label, const utilxx_base::Json& args) -> asio::awaitable<void> {
         auto result = co_await tool.execute_async(args);
         if (result.find("[Error:") == 0) {
             g_fs_passed++;
@@ -1627,43 +1628,69 @@ asio::awaitable<void> test_edit_text_file_edits_invalid_args(
         co_return;
     };
 
-    co_await expectError("edits empty array", utilxx_base::Json{
-        {"path",  filePath},
-        {"edits", utilxx_base::Json::array()}
-    });
-    co_await expectError("edits is a string", utilxx_base::Json{
-        {"path",  filePath          },
-        {"edits", "old_str -> new_str"}
-    });
-    co_await expectError("edits item is not an object", utilxx_base::Json{
-        {"path",  filePath},
-        {"edits", utilxx_base::Json::array({"a"})}
-    });
-    co_await expectError("edits item without old_str", utilxx_base::Json{
-        {"path",  filePath},
-        {"edits", utilxx_base::Json::array({utilxx_base::Json{{"new_str", "b"}}})}
-    });
-    co_await expectError("edits item without new_str", utilxx_base::Json{
-        {"path",  filePath},
-        {"edits", utilxx_base::Json::array({utilxx_base::Json{{"old_str", "a"}}})}
-    });
-    co_await expectError("edits item unchanged", utilxx_base::Json{
-        {"path",  filePath},
-        {"edits", utilxx_base::Json::array({utilxx_base::Json{{"old_str", "a"}, {"new_str", "a"}}})}
-    });
-    co_await expectError("both edits and old_str", utilxx_base::Json{
-        {"path",    filePath},
-        {"edits",   utilxx_base::Json::array({utilxx_base::Json{{"old_str", "a"}, {"new_str", "b"}}})},
-        {"old_str", "abc"   },
-        {"new_str", "xyz"   },
-    });
-    co_await expectError("no replacement given", utilxx_base::Json{
-        {"path", filePath}
-    });
+    co_await expectError(
+        "edits empty array",
+        utilxx_base::Json{
+            {"path",  filePath                  },
+            {"edits", utilxx_base::Json::array()}
+    }
+    );
+    co_await expectError(
+        "edits is a string",
+        utilxx_base::Json{
+            {"path",  filePath            },
+            {"edits", "old_str -> new_str"}
+    }
+    );
+    co_await expectError(
+        "edits item is not an object",
+        utilxx_base::Json{
+            {"path",  filePath                       },
+            {"edits", utilxx_base::Json::array({"a"})}
+    }
+    );
+    co_await expectError(
+        "edits item without old_str",
+        utilxx_base::Json{
+            {"path",  filePath                                                       },
+            {"edits", utilxx_base::Json::array({utilxx_base::Json{{"new_str", "b"}}})}
+    }
+    );
+    co_await expectError(
+        "edits item without new_str",
+        utilxx_base::Json{
+            {"path",  filePath                                                       },
+            {"edits", utilxx_base::Json::array({utilxx_base::Json{{"old_str", "a"}}})}
+    }
+    );
+    co_await expectError(
+        "edits item unchanged",
+        utilxx_base::Json{
+            {"path",  filePath                                                                },
+            {"edits",
+             utilxx_base::Json::array({utilxx_base::Json{{"old_str", "a"}, {"new_str", "a"}}})}
+    }
+    );
+    co_await expectError(
+        "both edits and old_str",
+        utilxx_base::Json{
+            {"path",    filePath                                                              },
+            {"edits",
+             utilxx_base::Json::array({utilxx_base::Json{{"old_str", "a"}, {"new_str", "b"}}})},
+            {"old_str", "abc"                                                                 },
+            {"new_str", "xyz"                                                                 },
+    }
+    );
+    co_await expectError(
+        "no replacement given",
+        utilxx_base::Json{
+            {"path", filePath}
+    }
+    );
 
     // 单个对象写法 (少写一层数组) 按单段处理: 与数组形态等价
     auto single = co_await tool.execute_async(utilxx_base::Json{
-        {"path",  filePath},
+        {"path",  filePath                                                 },
         {"edits", utilxx_base::Json{{"old_str", "abc"}, {"new_str", "xyz"}}}
     });
     if (single == "success" && readAllBytes(filePath) == "xyz\n") {
@@ -1680,10 +1707,10 @@ asio::awaitable<void> test_edit_text_file_edits_invalid_args(
 asio::awaitable<void> test_edit_text_file_multi_segments_sync_async_parity(
     std::weak_ptr<agentxx::agent::AgentContext> agentContext
 ) {
-    const auto workDir      = agentxx::tools::testResolvedWorkDir(agentContext);
-    auto       syncFilePath = testDir + "/edit_parity_sync.txt";
-    auto       asyncFilePath = testDir + "/edit_parity_async.txt";
-    const char* seed         = "one\ntwo\nthree\n";
+    const auto  workDir       = agentxx::tools::testResolvedWorkDir(agentContext);
+    auto        syncFilePath  = testDir + "/edit_parity_sync.txt";
+    auto        asyncFilePath = testDir + "/edit_parity_async.txt";
+    const char* seed          = "one\ntwo\nthree\n";
     {
         std::ofstream f(syncFilePath);
         f << seed;
@@ -1700,24 +1727,22 @@ asio::awaitable<void> test_edit_text_file_multi_segments_sync_async_parity(
              utilxx_base::Json::array(
                  {utilxx_base::Json{{"old_str", "one"}, {"new_str", "1"}},
                   utilxx_base::Json{{"old_str", "three"}, {"new_str", "3"}}}
-             )      },
+             )            },
         };
     };
 
-    auto syncResult = agentxx_fs_plugin::fileEditExecute(makeArgs(syncFilePath), workDir);
-    auto tool       = agentxx::tools::FilesystemEditTextFileTool{agentContext};
+    auto syncResult  = agentxx_fs_plugin::fileEditExecute(makeArgs(syncFilePath), workDir);
+    auto tool        = agentxx::tools::FilesystemEditTextFileTool{agentContext};
     auto asyncResult = co_await tool.execute_async(makeArgs(asyncFilePath));
 
-    if (syncResult == asyncResult
-        && readAllBytes(syncFilePath) == readAllBytes(asyncFilePath)
+    if (syncResult == asyncResult && readAllBytes(syncFilePath) == readAllBytes(asyncFilePath)
         && readAllBytes(syncFilePath) == "1\ntwo\n3\n") {
         g_fs_passed++;
-        TEST_PASS << "edit_text_file sync and async executors agree on multi segments"
-                  << std::endl;
+        TEST_PASS << "edit_text_file sync and async executors agree on multi segments" << std::endl;
     } else {
         g_fs_failed++;
-        TEST_FAIL << "edit_text_file sync/async parity failed: sync='" << syncResult
-                  << "' async='" << asyncResult << "'" << std::endl;
+        TEST_FAIL << "edit_text_file sync/async parity failed: sync='" << syncResult << "' async='"
+                  << asyncResult << "'" << std::endl;
     }
     co_return;
 }
@@ -1735,7 +1760,7 @@ asio::awaitable<void>
          utilxx_base::Json::array(
              {utilxx_base::Json{{"old_str", "a"}, {"new_str", "b"}},
               utilxx_base::Json{{"old_str", "c"}, {"new_str", "d"}}}
-         )       },
+         )                },
     };
     const auto arr = editSegmentsArg(arrArgs);
     XX_TEST_EXPECT_EQ(arr.size(), size_t{2});
@@ -1748,7 +1773,7 @@ asio::awaitable<void>
 
     // 单对象形态 (少写一层数组)
     auto objArgs = utilxx_base::Json{
-        {"path",  "/a.txt"                                                               },
+        {"path",  "/a.txt"                                             },
         {"edits", utilxx_base::Json{{"old_str", "a"}, {"new_str", "b"}}}
     };
     const auto obj = editSegmentsArg(objArgs);
@@ -1775,7 +1800,8 @@ asio::awaitable<void>
     XX_TEST_EXPECT_EQ(editSegmentsArg(utilxx_base::Json{"x"}).size(), size_t{0});
     // 数组里的非对象元素跳过, 合法项照常取出
     auto mixedArgs = utilxx_base::Json{
-        {"edits", utilxx_base::Json::array({"bad", utilxx_base::Json{{"old_str", "a"}, {"new_str", "b"}}})}
+        {"edits",
+         utilxx_base::Json::array({"bad", utilxx_base::Json{{"old_str", "a"}, {"new_str", "b"}}})}
     };
     XX_TEST_EXPECT_EQ(editSegmentsArg(mixedArgs).size(), size_t{1});
     co_return;
@@ -3050,7 +3076,7 @@ asio::awaitable<void> test_plugin_real_link() {
     // - 参数名与描述都取自注册进注册表的定义: 描述来自主程序提示词表
     //   (AgentPrompt::toolPrompt), 两侧 key 不一致时描述会变空, 故一并校对
     {
-        auto        def    = linkCtx->toolRegistry->find("agentxx_filesystem_read")->get_definition();
+        auto        def = linkCtx->toolRegistry->find("agentxx_filesystem_read")->get_definition();
         auto        params = agentxx::util::fromNeographJson(def.parameters);
         const auto& props  = params["properties"];
         XX_TEST_EXPECT_TRUE(props.contains("offset"));
@@ -3064,11 +3090,12 @@ asio::awaitable<void> test_plugin_real_link() {
     // 重复调用检查 (repeatCallCheck; 对应注册 flags 里的
     // AGENTXX_PLUGIN_TOOL_FLAG_REPEAT_CALL_CHECK): list/read/glob/grep/write 启用
     // (主程序在连续同名同参调用达阈值时询问用户), edit 不启用
-    for (const char* name : {"agentxx_filesystem_list",
-                             "agentxx_filesystem_read",
-                             "agentxx_filesystem_glob",
-                             "agentxx_filesystem_grep",
-                             "agentxx_filesystem_write"}) {
+    for (const char* name :
+         {"agentxx_filesystem_list",
+          "agentxx_filesystem_read",
+          "agentxx_filesystem_glob",
+          "agentxx_filesystem_grep",
+          "agentxx_filesystem_write"}) {
         XX_TEST_EXPECT_EQ(
             linkCtx->toolRegistry->find(name)->extra["repeatCallCheck"],
             std::string{"true"}
@@ -3637,9 +3664,9 @@ asio::awaitable<void>
 asio::awaitable<void> test_path_queue_serializes_read_modify_write(
     std::weak_ptr<agentxx::agent::AgentContext> agentContext
 ) {
-    namespace fs = std::filesystem;
-    auto        dirPath  = testDir + "/路径排队测试目录";
-    auto        filePath = dirPath + "/queue.txt";
+    namespace fs  = std::filesystem;
+    auto dirPath  = testDir + "/路径排队测试目录";
+    auto filePath = dirPath + "/queue.txt";
     fs::create_directories(utilxx_base::utf8ToPath(dirPath));
 
     // 路径键归一: 同一文件的不同写法必须落到同一把门闩
@@ -3656,18 +3683,20 @@ asio::awaitable<void> test_path_queue_serializes_read_modify_write(
         XX_TEST_EXPECT_TRUE(lease->ownsLock());
         XX_TEST_EXPECT_GE(agentxx_fs_plugin::detail::pathLockTable().entryCount(), size_t{1});
 
-        bool        secondAcquired = false;
-        auto        ex             = co_await asio::this_coro::executor;
-        auto        done           = std::make_shared<bool>(false);
+        bool secondAcquired = false;
+        auto ex             = co_await asio::this_coro::executor;
+        auto done           = std::make_shared<bool>(false);
         asio::co_spawn(
             ex,
             keepAliveRun([&, done]() -> asio::awaitable<void> {
-                auto second = co_await agentxx_fs_plugin::detail::lockPathAsync(filePath);
+                auto second    = co_await agentxx_fs_plugin::detail::lockPathAsync(filePath);
                 secondAcquired = true;
                 (void)second;
                 co_return;
             }),
-            [done](std::exception_ptr) { *done = true; }
+            [done](std::exception_ptr) {
+                *done = true;
+            }
         );
         // 让出控制权若干轮: 第二次获取必须仍被挡住
         for (int i = 0; i < 20; ++i) {
@@ -3693,25 +3722,23 @@ asio::awaitable<void> test_path_queue_serializes_read_modify_write(
         auto writeTool = agentxx::tools::FilesystemWriteFileTool{agentContext};
         auto editTool  = agentxx::tools::FilesystemEditTextFileTool{agentContext};
 
-        auto writeRes = co_await writeTool.execute_async(
-            utilxx_base::Json{
-                {"path",      filePath},
-                {"content",   "alpha\nbeta\ngamma\n"},
-                {"overwrite", true},
-        }
-        );
+        auto writeRes = co_await writeTool.execute_async(utilxx_base::Json{
+            {"path",      filePath              },
+            {"content",   "alpha\nbeta\ngamma\n"},
+            {"overwrite", true                  },
+        });
         XX_TEST_EXPECT_EQ(writeRes, std::string{"success"});
 
-        auto ex = co_await asio::this_coro::executor;
+        auto ex        = co_await asio::this_coro::executor;
         auto editArgsA = utilxx_base::Json{
             {"path",    filePath},
-            {"old_str", "beta"   },
-            {"new_str", "BETA"   },
+            {"old_str", "beta"  },
+            {"new_str", "BETA"  },
         };
         auto editArgsB = utilxx_base::Json{
             {"path",    filePath},
-            {"old_str", "beta"   },
-            {"new_str", "beta2"  },
+            {"old_str", "beta"  },
+            {"new_str", "beta2" },
         };
         std::string resA;
         std::string resB;
@@ -3770,20 +3797,16 @@ asio::awaitable<void> test_path_queue_serializes_read_modify_write(
     // 不同路径互不阻塞: 两个文件的写操作都成功
     {
         auto writeTool = agentxx::tools::FilesystemWriteFileTool{agentContext};
-        auto resA      = co_await writeTool.execute_async(
-            utilxx_base::Json{
-                {"path",      dirPath + "/a.txt"},
-                {"content",   "A"               },
-                {"overwrite", true              },
-        }
-        );
-        auto resB = co_await writeTool.execute_async(
-            utilxx_base::Json{
-                {"path",      dirPath + "/b.txt"},
-                {"content",   "B"               },
-                {"overwrite", true              },
-        }
-        );
+        auto resA      = co_await writeTool.execute_async(utilxx_base::Json{
+                 {"path",      dirPath + "/a.txt"},
+                 {"content",   "A"               },
+                 {"overwrite", true              },
+        });
+        auto resB      = co_await writeTool.execute_async(utilxx_base::Json{
+                 {"path",      dirPath + "/b.txt"},
+                 {"content",   "B"               },
+                 {"overwrite", true              },
+        });
         XX_TEST_EXPECT_EQ(resA, std::string{"success"});
         XX_TEST_EXPECT_EQ(resB, std::string{"success"});
     }
@@ -3793,8 +3816,8 @@ asio::awaitable<void> test_path_queue_serializes_read_modify_write(
         auto syncWriteRes = agentxx_fs_plugin::fileWriteExecute(
             utilxx_base::Json{
                 {"path",      dirPath + "/sync.txt"},
-                {"content",   "sync"                },
-                {"overwrite", true                  },
+                {"content",   "sync"               },
+                {"overwrite", true                 },
         },
             agentxx::tools::testResolvedWorkDir(agentContext)
         );
@@ -3802,8 +3825,8 @@ asio::awaitable<void> test_path_queue_serializes_read_modify_write(
         const auto syncEditRes = agentxx_fs_plugin::fileEditExecute(
             utilxx_base::Json{
                 {"path",    dirPath + "/sync.txt"},
-                {"old_str", "sync"                },
-                {"new_str", "sync-edited"         },
+                {"old_str", "sync"               },
+                {"new_str", "sync-edited"        },
         },
             agentxx::tools::testResolvedWorkDir(agentContext)
         );
@@ -3848,12 +3871,12 @@ asio::awaitable<void> test_move_file_basic(std::weak_ptr<agentxx::agent::AgentCo
     removeQuiet(dir);
     writeTextFileQuiet(src, "move content\n");
 
-    auto tool   = agentxx::tools::FilesystemMoveTool{agentContext};
-    auto result = co_await tool.execute_async(utilxx_base::Json{
-        {"src", src},
-        {"dst", dst},
+    auto       tool   = agentxx::tools::FilesystemMoveTool{agentContext};
+    auto       result = co_await tool.execute_async(utilxx_base::Json{
+              {"src", src},
+              {"dst", dst},
     });
-    const bool ok = result.find("Moved") != std::string::npos && false == fsPathExists(src)
+    const bool ok     = result.find("Moved") != std::string::npos && false == fsPathExists(src)
                     && readAllBytes(dst) == "move content\n";
     if (ok) {
         g_fs_passed++;
@@ -3867,20 +3890,20 @@ asio::awaitable<void> test_move_file_basic(std::weak_ptr<agentxx::agent::AgentCo
 }
 
 /// 移动目录 (含子文件): 目标目录整体出现
-asio::awaitable<void>
-    test_move_directory(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+asio::awaitable<void> test_move_directory(std::weak_ptr<agentxx::agent::AgentContext> agentContext
+) {
     const auto srcDir = testDir + "/mv_dir_src";
     const auto dstDir = testDir + "/mv_dir_dst";
     removeQuiet(srcDir);
     removeQuiet(dstDir);
     writeTextFileQuiet(srcDir + "/nested/keep.txt", "nested content\n");
 
-    auto tool   = agentxx::tools::FilesystemMoveTool{agentContext};
-    auto result = co_await tool.execute_async(utilxx_base::Json{
-        {"src", srcDir},
-        {"dst", dstDir},
+    auto       tool   = agentxx::tools::FilesystemMoveTool{agentContext};
+    auto       result = co_await tool.execute_async(utilxx_base::Json{
+              {"src", srcDir},
+              {"dst", dstDir},
     });
-    const bool ok = result.find("Moved") != std::string::npos && false == fsPathExists(srcDir)
+    const bool ok     = result.find("Moved") != std::string::npos && false == fsPathExists(srcDir)
                     && readAllBytes(dstDir + "/nested/keep.txt") == "nested content\n";
     if (ok) {
         g_fs_passed++;
@@ -3895,8 +3918,7 @@ asio::awaitable<void>
 }
 
 /// 目标已存在: 默认拒绝 (源与目标都不变), `overwrite` = true 时替换
-asio::awaitable<void> test_move_overwrite(
-    std::weak_ptr<agentxx::agent::AgentContext> agentContext
+asio::awaitable<void> test_move_overwrite(std::weak_ptr<agentxx::agent::AgentContext> agentContext
 ) {
     const auto dir = testDir + "/mv_overwrite";
     const auto src = dir + "/a.txt";
@@ -3905,17 +3927,19 @@ asio::awaitable<void> test_move_overwrite(
     writeTextFileQuiet(src, "new content\n");
     writeTextFileQuiet(dst, "old content\n");
 
-    auto tool = agentxx::tools::FilesystemMoveTool{agentContext};
-    auto refused
-        = co_await tool.execute_async(utilxx_base::Json{{"src", src}, {"dst", dst}});
+    auto       tool      = agentxx::tools::FilesystemMoveTool{agentContext};
+    auto       refused   = co_await tool.execute_async(utilxx_base::Json{
+                {"src", src},
+                {"dst", dst}
+    });
     const bool refusedOk = refused.find("[Error:") != std::string::npos
-                           && refused.find("overwrite") != std::string::npos
-                           && fsPathExists(src) && readAllBytes(dst) == "old content\n";
+                           && refused.find("overwrite") != std::string::npos && fsPathExists(src)
+                           && readAllBytes(dst) == "old content\n";
 
-    auto forced = co_await tool.execute_async(utilxx_base::Json{
-        {"src",       src },
-        {"dst",       dst },
-        {"overwrite", true},
+    auto       forced   = co_await tool.execute_async(utilxx_base::Json{
+                {"src",       src },
+                {"dst",       dst },
+                {"overwrite", true},
     });
     const bool forcedOk = forced.find("Moved") != std::string::npos && false == fsPathExists(src)
                           && readAllBytes(dst) == "new content\n";
@@ -3932,28 +3956,27 @@ asio::awaitable<void> test_move_overwrite(
 }
 
 /// 参数边界: 源不存在 / 源与目标同路径 / 目标位于源目录内部 一律报参数错误
-asio::awaitable<void> test_move_invalid_args(
-    std::weak_ptr<agentxx::agent::AgentContext> agentContext
-) {
+asio::awaitable<void>
+    test_move_invalid_args(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     const auto dir = testDir + "/mv_invalid";
     removeQuiet(dir);
     writeTextFileQuiet(dir + "/a.txt", "x\n");
 
     auto tool = agentxx::tools::FilesystemMoveTool{agentContext};
 
-    auto missing = co_await tool.execute_async(utilxx_base::Json{
-        {"src", dir + "/missing.txt"},
-        {"dst", dir + "/b.txt"      },
+    auto       missing = co_await tool.execute_async(utilxx_base::Json{
+              {"src", dir + "/missing.txt"},
+              {"dst", dir + "/b.txt"      },
     });
-    auto same = co_await tool.execute_async(utilxx_base::Json{
-        {"src", dir + "/a.txt"},
-        {"dst", dir + "/a.txt"},
+    auto       same    = co_await tool.execute_async(utilxx_base::Json{
+                 {"src", dir + "/a.txt"},
+                 {"dst", dir + "/a.txt"},
     });
-    auto nested = co_await tool.execute_async(utilxx_base::Json{
-        {"src", dir            },
-        {"dst", dir + "/inner"},
+    auto       nested  = co_await tool.execute_async(utilxx_base::Json{
+               {"src", dir           },
+               {"dst", dir + "/inner"},
     });
-    const bool ok = missing.find("[Error:") != std::string::npos
+    const bool ok      = missing.find("[Error:") != std::string::npos
                     && missing.find("does not exist") != std::string::npos
                     && same.find("[Error:") != std::string::npos
                     && same.find("same path") != std::string::npos
@@ -3972,19 +3995,18 @@ asio::awaitable<void> test_move_invalid_args(
 }
 
 /// 相对路径以会话工作目录为基准解析 (workDir ≠ 进程 cwd)
-asio::awaitable<void> test_move_relative_with_workdir(std::weak_ptr<agentxx::agent::AgentContext>)
-{
+asio::awaitable<void> test_move_relative_with_workdir(std::weak_ptr<agentxx::agent::AgentContext>) {
     const auto dir = testDir + "/mv_relative";
     removeQuiet(dir);
     writeTextFileQuiet(dir + "/src.txt", "relative content\n");
 
-    auto ctx    = makeWorkDirContext(testDir);
-    auto tool   = agentxx::tools::FilesystemMoveTool{ctx};
-    auto result = co_await tool.execute_async(utilxx_base::Json{
-        {"src", "mv_relative/src.txt"},
-        {"dst", "mv_relative/dst.txt"},
+    auto       ctx    = makeWorkDirContext(testDir);
+    auto       tool   = agentxx::tools::FilesystemMoveTool{ctx};
+    auto       result = co_await tool.execute_async(utilxx_base::Json{
+              {"src", "mv_relative/src.txt"},
+              {"dst", "mv_relative/dst.txt"},
     });
-    const bool ok = result.find("Moved") != std::string::npos
+    const bool ok     = result.find("Moved") != std::string::npos
                     && readAllBytes(dir + "/dst.txt") == "relative content\n";
     if (ok) {
         g_fs_passed++;
@@ -4006,12 +4028,12 @@ asio::awaitable<void> test_copy_file_basic(std::weak_ptr<agentxx::agent::AgentCo
     removeQuiet(dir);
     writeTextFileQuiet(src, "copy content\n");
 
-    auto tool   = agentxx::tools::FilesystemCopyTool{agentContext};
-    auto result = co_await tool.execute_async(utilxx_base::Json{
-        {"src", src},
-        {"dst", dst},
+    auto       tool   = agentxx::tools::FilesystemCopyTool{agentContext};
+    auto       result = co_await tool.execute_async(utilxx_base::Json{
+              {"src", src},
+              {"dst", dst},
     });
-    const bool ok = result.find("Copied") != std::string::npos
+    const bool ok     = result.find("Copied") != std::string::npos
                     && readAllBytes(src) == "copy content\n"
                     && readAllBytes(dst) == "copy content\n";
     if (ok) {
@@ -4034,12 +4056,12 @@ asio::awaitable<void>
     removeQuiet(dstDir);
     writeTextFileQuiet(srcDir + "/nested/deep.txt", "deep content\n");
 
-    auto tool   = agentxx::tools::FilesystemCopyTool{agentContext};
-    auto result = co_await tool.execute_async(utilxx_base::Json{
-        {"src", srcDir},
-        {"dst", dstDir},
+    auto       tool   = agentxx::tools::FilesystemCopyTool{agentContext};
+    auto       result = co_await tool.execute_async(utilxx_base::Json{
+              {"src", srcDir},
+              {"dst", dstDir},
     });
-    const bool ok = result.find("Copied") != std::string::npos
+    const bool ok     = result.find("Copied") != std::string::npos
                     && readAllBytes(dstDir + "/nested/deep.txt") == "deep content\n"
                     && readAllBytes(srcDir + "/nested/deep.txt") == "deep content\n";
     if (ok) {
@@ -4055,8 +4077,7 @@ asio::awaitable<void>
 }
 
 /// 复制到已存在的目标: 默认拒绝, `overwrite` = true 时替换
-asio::awaitable<void> test_copy_overwrite(
-    std::weak_ptr<agentxx::agent::AgentContext> agentContext
+asio::awaitable<void> test_copy_overwrite(std::weak_ptr<agentxx::agent::AgentContext> agentContext
 ) {
     const auto dir = testDir + "/cp_overwrite";
     const auto src = dir + "/a.txt";
@@ -4065,15 +4086,17 @@ asio::awaitable<void> test_copy_overwrite(
     writeTextFileQuiet(src, "new content\n");
     writeTextFileQuiet(dst, "old content\n");
 
-    auto tool = agentxx::tools::FilesystemCopyTool{agentContext};
-    auto refused
-        = co_await tool.execute_async(utilxx_base::Json{{"src", src}, {"dst", dst}});
-    const bool refusedOk = refused.find("[Error:") != std::string::npos
-                           && readAllBytes(dst) == "old content\n";
-    auto forced = co_await tool.execute_async(utilxx_base::Json{
-        {"src",       src },
-        {"dst",       dst },
-        {"overwrite", true},
+    auto       tool    = agentxx::tools::FilesystemCopyTool{agentContext};
+    auto       refused = co_await tool.execute_async(utilxx_base::Json{
+              {"src", src},
+              {"dst", dst}
+    });
+    const bool refusedOk
+        = refused.find("[Error:") != std::string::npos && readAllBytes(dst) == "old content\n";
+    auto       forced   = co_await tool.execute_async(utilxx_base::Json{
+                {"src",       src },
+                {"dst",       dst },
+                {"overwrite", true},
     });
     const bool forcedOk = forced.find("Copied") != std::string::npos
                           && readAllBytes(dst) == "new content\n"
@@ -4097,10 +4120,12 @@ asio::awaitable<void> test_remove_file(std::weak_ptr<agentxx::agent::AgentContex
     writeTextFileQuiet(dir + "/a.txt", "a\n");
     writeTextFileQuiet(dir + "/keep.txt", "keep\n");
 
-    auto tool   = agentxx::tools::FilesystemRemoveTool{agentContext};
-    auto result = co_await tool.execute_async(utilxx_base::Json{{"path", dir + "/a.txt"}});
-    const bool ok = result.find("Removed") != std::string::npos && false == fsPathExists(dir + "/a.txt")
-                    && fsPathExists(dir + "/keep.txt");
+    auto       tool   = agentxx::tools::FilesystemRemoveTool{agentContext};
+    auto       result = co_await tool.execute_async(utilxx_base::Json{
+              {"path", dir + "/a.txt"}
+    });
+    const bool ok     = result.find("Removed") != std::string::npos
+                    && false == fsPathExists(dir + "/a.txt") && fsPathExists(dir + "/keep.txt");
     if (ok) {
         g_fs_passed++;
         TEST_PASS << "filesystem_remove deletes a file" << std::endl;
@@ -4113,21 +4138,22 @@ asio::awaitable<void> test_remove_file(std::weak_ptr<agentxx::agent::AgentContex
 }
 
 /// 删除目录: 默认拒绝 (需显式 `recursive` = true), 开启后连同内容一并删除
-asio::awaitable<void> test_remove_directory(
-    std::weak_ptr<agentxx::agent::AgentContext> agentContext
+asio::awaitable<void> test_remove_directory(std::weak_ptr<agentxx::agent::AgentContext> agentContext
 ) {
     const auto dir = testDir + "/rm_dir";
     removeQuiet(dir);
     writeTextFileQuiet(dir + "/nested/a.txt", "a\n");
 
-    auto tool   = agentxx::tools::FilesystemRemoveTool{agentContext};
-    auto denied = co_await tool.execute_async(utilxx_base::Json{{"path", dir}});
+    auto       tool     = agentxx::tools::FilesystemRemoveTool{agentContext};
+    auto       denied   = co_await tool.execute_async(utilxx_base::Json{
+                {"path", dir}
+    });
     const bool deniedOk = denied.find("[Error:") != std::string::npos
                           && denied.find("recursive") != std::string::npos && fsPathExists(dir);
 
-    auto removed = co_await tool.execute_async(utilxx_base::Json{
-        {"path",      dir },
-        {"recursive", true},
+    auto       removed = co_await tool.execute_async(utilxx_base::Json{
+              {"path",      dir },
+              {"recursive", true},
     });
     const bool removedOk
         = removed.find("Removed") != std::string::npos && false == fsPathExists(dir);
@@ -4144,9 +4170,8 @@ asio::awaitable<void> test_remove_directory(
 }
 
 /// 删除不存在的路径: 报错而不静默成功
-asio::awaitable<void> test_remove_missing_path(
-    std::weak_ptr<agentxx::agent::AgentContext> agentContext
-) {
+asio::awaitable<void>
+    test_remove_missing_path(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool   = agentxx::tools::FilesystemRemoveTool{agentContext};
     auto result = co_await tool.execute_async(utilxx_base::Json{
         {"path", testDir + "/rm_missing/never.txt"},
@@ -4179,28 +4204,30 @@ asio::awaitable<void>
     }
     auto tool = agentxx::tools::FilesystemReadTextFileTool{agentContext};
 
-    auto whole = co_await tool.execute_async(utilxx_base::Json{{"path", filePath}});
+    auto       whole   = co_await tool.execute_async(utilxx_base::Json{
+                {"path", filePath}
+    });
     const bool wholeOk = whole.find("[Error:") != std::string::npos
                          && whole.find("too large for one call") != std::string::npos
                          && whole.find("`offset`/`limit`") != std::string::npos;
 
     // 显式 limit = 2000 行: 正好在上限内, 允许
-    auto capped = co_await tool.execute_async(utilxx_base::Json{
-        {"path",  filePath},
-        {"limit", 2000    },
+    auto       capped   = co_await tool.execute_async(utilxx_base::Json{
+                {"path",  filePath},
+                {"limit", 2000    },
     });
     const bool cappedOk = capped.find("line 0") != std::string::npos
                           && capped.find("line 1999") != std::string::npos
                           && capped.find("line 2000") == std::string::npos;
 
     // 分段读尾部: offset 越过前 2000 行
-    auto tail = co_await tool.execute_async(utilxx_base::Json{
-        {"path",   filePath},
-        {"offset", 2000    },
-        {"limit",  100     },
+    auto       tail   = co_await tool.execute_async(utilxx_base::Json{
+                {"path",   filePath},
+                {"offset", 2000    },
+                {"limit",  100     },
     });
-    const bool tailOk
-        = tail.find("line 2000") != std::string::npos && tail.find("line 2400") == std::string::npos;
+    const bool tailOk = tail.find("line 2000") != std::string::npos
+                        && tail.find("line 2400") == std::string::npos;
     if (wholeOk && cappedOk && tailOk) {
         g_fs_passed++;
         TEST_PASS << "read_text_file enforces the per-call line limit" << std::endl;
@@ -4224,9 +4251,11 @@ asio::awaitable<void>
         std::ofstream f(filePath, std::ios::binary | std::ios::trunc);
         f << std::string(300 * 1024, 'x') << "\n";
     }
-    auto tool   = agentxx::tools::FilesystemReadTextFileTool{agentContext};
-    auto result = co_await tool.execute_async(utilxx_base::Json{{"path", filePath}});
-    const bool ok = result.find("[Error:") != std::string::npos
+    auto       tool   = agentxx::tools::FilesystemReadTextFileTool{agentContext};
+    auto       result = co_await tool.execute_async(utilxx_base::Json{
+              {"path", filePath}
+    });
+    const bool ok     = result.find("[Error:") != std::string::npos
                     && result.find("can not be split") != std::string::npos
                     && result.find("agentxx_execute_command") != std::string::npos;
     if (ok) {
@@ -4250,13 +4279,13 @@ asio::awaitable<void> test_grep_count_mode(std::weak_ptr<agentxx::agent::AgentCo
     writeTextFileQuiet(dir + "/a.txt", "hit\nhit\nmiss\n");
     writeTextFileQuiet(dir + "/b.txt", "hit\n");
 
-    auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
-    auto result = co_await tool.execute_async(utilxx_base::Json{
-        {"file_patterns", utilxx_base::Json::array({dir + "/**/*.txt"})},
-        {"text_patterns", utilxx_base::Json::array({"hit"})          },
-        {"output_mode",   "count"                                    },
+    auto       tool   = agentxx::tools::FilesystemGrepTool{agentContext};
+    auto       result = co_await tool.execute_async(utilxx_base::Json{
+              {"file_patterns", utilxx_base::Json::array({dir + "/**/*.txt"})},
+              {"text_patterns", utilxx_base::Json::array({"hit"})            },
+              {"output_mode",   "count"                                      },
     });
-    const bool ok = result.find("2 file(s) matched") != std::string::npos
+    const bool ok     = result.find("2 file(s) matched") != std::string::npos
                     && result.find("3 match(es) in total") != std::string::npos
                     && result.find("a.txt") == std::string::npos;
     if (ok) {
@@ -4270,8 +4299,8 @@ asio::awaitable<void> test_grep_count_mode(std::weak_ptr<agentxx::agent::AgentCo
     // 非法 output_mode: 参数错误 (列出可用取值)
     auto bad = co_await tool.execute_async(utilxx_base::Json{
         {"file_patterns", utilxx_base::Json::array({dir + "/**/*.txt"})},
-        {"text_patterns", utilxx_base::Json::array({"hit"})          },
-        {"output_mode",   "summary"                                  },
+        {"text_patterns", utilxx_base::Json::array({"hit"})            },
+        {"output_mode",   "summary"                                    },
     });
     if (bad.find("[Error:") != std::string::npos
         && bad.find("`output_mode`") != std::string::npos) {
@@ -4295,19 +4324,19 @@ asio::awaitable<void> test_glob_type_array(std::weak_ptr<agentxx::agent::AgentCo
     std::error_code ec;
     std::filesystem::create_directories(std::filesystem::path{dir + "/sub"}, ec);
 
-    auto tool = agentxx::tools::FilesystemGlobTool{agentContext};
-    auto dirs = co_await tool.execute_async(utilxx_base::Json{
-        {"file_patterns", utilxx_base::Json::array({dir + "/*"})},
-        {"type",          utilxx_base::Json::array({"dir"})     },
+    auto       tool  = agentxx::tools::FilesystemGlobTool{agentContext};
+    auto       dirs  = co_await tool.execute_async(utilxx_base::Json{
+               {"file_patterns", utilxx_base::Json::array({dir + "/*"})},
+               {"type",          utilxx_base::Json::array({"dir"})     },
     });
-    auto files = co_await tool.execute_async(utilxx_base::Json{
-        {"file_patterns", utilxx_base::Json::array({dir + "/*"})},
-        {"type",          utilxx_base::Json::array({"file"})    },
+    auto       files = co_await tool.execute_async(utilxx_base::Json{
+              {"file_patterns", utilxx_base::Json::array({dir + "/*"})},
+              {"type",          utilxx_base::Json::array({"file"})    },
     });
-    const bool dirsOk = dirs.find("sub") != std::string::npos
-                        && dirs.find("f.txt") == std::string::npos;
-    const bool filesOk = files.find("f.txt") != std::string::npos
-                         && files.find("sub") == std::string::npos;
+    const bool dirsOk
+        = dirs.find("sub") != std::string::npos && dirs.find("f.txt") == std::string::npos;
+    const bool filesOk
+        = files.find("f.txt") != std::string::npos && files.find("sub") == std::string::npos;
     if (dirsOk && filesOk) {
         g_fs_passed++;
         TEST_PASS << "filesystem_glob accepts an array for `type`" << std::endl;
@@ -4321,22 +4350,21 @@ asio::awaitable<void> test_glob_type_array(std::weak_ptr<agentxx::agent::AgentCo
 }
 
 /// write 的 `overwrite` 省略时按 false 处理: 新文件可建, 已存在的文件报错
-asio::awaitable<void> test_write_overwrite_omitted(
-    std::weak_ptr<agentxx::agent::AgentContext> agentContext
-) {
+asio::awaitable<void>
+    test_write_overwrite_omitted(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     const auto dir = testDir + "/write_overwrite";
     removeQuiet(dir);
     auto tool = agentxx::tools::FilesystemWriteFileTool{agentContext};
 
-    auto created = co_await tool.execute_async(utilxx_base::Json{
-        {"path",    dir + "/new.txt"},
-        {"content", "first\n"       },
+    auto       created = co_await tool.execute_async(utilxx_base::Json{
+              {"path",    dir + "/new.txt"},
+              {"content", "first\n"       },
     });
-    auto existed = co_await tool.execute_async(utilxx_base::Json{
-        {"path",    dir + "/new.txt"},
-        {"content", "second\n"      },
+    auto       existed = co_await tool.execute_async(utilxx_base::Json{
+              {"path",    dir + "/new.txt"},
+              {"content", "second\n"      },
     });
-    const bool ok = created.find("success") != std::string::npos
+    const bool ok      = created.find("success") != std::string::npos
                     && existed.find("[Error:") != std::string::npos
                     && readAllBytes(dir + "/new.txt") == "first\n";
     if (ok) {

@@ -75,8 +75,8 @@ public:
         def.name        = "fake_echo";
         def.description = "echo the given value (fake provider test tool)";
         def.parameters  = neograph::json{
-            {"type", "object"},
-            {"properties", neograph::json{{"value", neograph::json{{"type", "string"}}}}},
+             {"type",       "object"                                                     },
+             {"properties", neograph::json{{"value", neograph::json{{"type", "string"}}}}},
         };
         return def;
     }
@@ -111,7 +111,7 @@ std::shared_ptr<agentxx::agent::AgentConfig> makeCfg(std::string dataDir = {}) {
     cfg->llmMaxRetry         = 5;
     cfg->dataDir             = std::move(dataDir);
     // 记账用例需要会话库落盘 (默认关闭)
-    cfg->enableSessionStore  = !cfg->dataDir.empty();
+    cfg->enableSessionStore = !cfg->dataDir.empty();
     return cfg;
 }
 
@@ -147,8 +147,7 @@ int64_t steadyNowMs() {
 }
 
 std::string makeTempDir() {
-    auto dir = fs::temp_directory_path()
-               / fmt::format("agentxx_fp_test_{}", steadyNowMs());
+    auto dir = fs::temp_directory_path() / fmt::format("agentxx_fp_test_{}", steadyNowMs());
     fs::create_directories(dir);
     return dir.string();
 }
@@ -170,8 +169,8 @@ void removeTempDir(const std::string& dir) {
 // 1) 固定流: 分片正文 + 思考片段 + 请求体结构
 // ---------------------------------------------------------------------------
 asio::awaitable<void> test_fake_provider_stream() {
-    auto provider = std::make_shared<FakeProvider>();
-    const std::string answer = "你好, 假 provider! streaming chunks ✓ 结尾";
+    auto              provider = std::make_shared<FakeProvider>();
+    const std::string answer   = "你好, 假 provider! streaming chunks ✓ 结尾";
     // 一次响应内含思考片段 + 正文, 均按 5 个字符分片 (跨越 UTF-8 多字节字符边界)
     provider->pushThinking("先想一下", answer, 0, 5);
 
@@ -208,8 +207,7 @@ asio::awaitable<void> test_fake_provider_stream() {
 // ---------------------------------------------------------------------------
 asio::awaitable<void> test_fake_provider_tool_loop() {
     auto provider = std::make_shared<FakeProvider>();
-    provider->pushToolCalls(
-        {FakeProvider::toolCall("call_1", "fake_echo", R"({"value":"hello"})")}
+    provider->pushToolCalls({FakeProvider::toolCall("call_1", "fake_echo", R"({"value":"hello"})")}
     );
     provider->pushText("工具已执行, 这是最终回答");
 
@@ -368,8 +366,8 @@ asio::awaitable<void> test_fake_provider_cancel() {
     auto       result = co_await agent->runTurnAsync("fake_cancel", "长请求", nullptr);
     const auto cost   = steadyNowMs() - start;
 
-    XX_TEST_EXPECT_TRUE(result.hasError);          // 取消按失败结束本轮
-    XX_TEST_EXPECT_TRUE(cost < int64_t{2000});     // 没有等满 5 秒延迟
+    XX_TEST_EXPECT_TRUE(result.hasError);             // 取消按失败结束本轮
+    XX_TEST_EXPECT_TRUE(cost < int64_t{2000});        // 没有等满 5 秒延迟
     XX_TEST_EXPECT_GE(provider->cancelObserved(), 1); // 假 provider 在等待期间观察到取消
     co_return;
 }
@@ -381,7 +379,7 @@ asio::awaitable<void> test_fake_provider_cancel() {
 asio::awaitable<void> test_fake_provider_usage_ledger() {
     auto dir = makeTempDir();
     {
-        auto provider = std::make_shared<FakeProvider>();
+        auto     provider = std::make_shared<FakeProvider>();
         FakeStep step;
         step.kind             = FakeStep::Kind::Text;
         step.text             = "记账用例";
@@ -431,8 +429,7 @@ asio::awaitable<void> test_fake_provider_usage_ledger() {
                 for (const auto& m : session->messages()) {
                     XX_TEST_EXPECT_FALSE(
                         m.extra.contains(std::string{agentxx::protocol::kUsageDetailExtraKey})
-                        && !m.extra[std::string{agentxx::protocol::kUsageDetailExtraKey}]
-                                .is_null()
+                        && !m.extra[std::string{agentxx::protocol::kUsageDetailExtraKey}].is_null()
                     );
                 }
             }

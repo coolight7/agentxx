@@ -82,7 +82,7 @@ public:
     struct LineIo {
         /// 读取下一行; 返回 false 表示输入结束 (EOF)
         /// - 该回调在 io 线程上同步调用 (注入的读取器必须立即返回, 不能长时间阻塞)
-        std::function<bool(std::string& line)>     readLine;
+        std::function<bool(std::string& line)> readLine;
         /// 写出**一整行** (含结尾换行符, 见 [jsonlEncodeMessage]); 实现负责 flush
         std::function<void(std::string_view line)> writeLine;
     };
@@ -113,7 +113,7 @@ public:
 
     /// 统计 (诊断与测试): 已读行数 / 已写行数 / 被拒绝的非法行数
     struct Stats {
-        uint64_t linesRead   = 0; ///< 从输入读到的非空行数 (含非法行)
+        uint64_t linesRead    = 0; ///< 从输入读到的非空行数 (含非法行)
         uint64_t linesWritten = 0; ///< 成功写出的协议行数
         uint64_t invalidLines = 0; ///< 被拒绝的行数 (已回 WireError)
     };
@@ -143,17 +143,17 @@ private:
     /// 从注入的读取器同步取一行; 无输入返回 nullopt
     std::optional<std::string> pollInjectedLine();
 
-    asio::any_io_executor        ex_;
-    LineIo                       io_;
-    std::shared_ptr<ReaderState> reader_;
-    std::thread                  readerThread_;
-    std::atomic<bool>            closed_{false};
-    std::atomic<bool>            inputEnded_{false};
-    std::mutex                   writeMu_;
+    asio::any_io_executor            ex_;
+    LineIo                           io_;
+    std::shared_ptr<ReaderState>     reader_;
+    std::thread                      readerThread_;
+    std::atomic<bool>                closed_{false};
+    std::atomic<bool>                inputEnded_{false};
+    std::mutex                       writeMu_;
     std::atomic<WireConnectionStage> stage_{WireConnectionStage::Unhandshaken};
-    std::atomic<uint64_t>        linesRead_{0};
-    std::atomic<uint64_t>        linesWritten_{0};
-    std::atomic<uint64_t>        invalidLines_{0};
+    std::atomic<uint64_t>            linesRead_{0};
+    std::atomic<uint64_t>            linesWritten_{0};
+    std::atomic<uint64_t>            invalidLines_{0};
 };
 
 } // namespace agent

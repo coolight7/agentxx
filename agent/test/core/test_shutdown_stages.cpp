@@ -133,9 +133,9 @@ public:
 
 private:
 
-    std::mutex           mu_;
-    std::vector<Ack>     acks_;
-    std::atomic<int>     turnResults_{0};
+    std::mutex       mu_;
+    std::vector<Ack> acks_;
+    std::atomic<int> turnResults_{0};
 };
 
 /// 夹具: 模拟器 + CodeAgent + 会话端点 + 客户端传输
@@ -198,8 +198,9 @@ asio::awaitable<std::shared_ptr<Fixture>>
     fx->endpoint    = std::make_shared<agentxx::agent::SessionServerAgentIO>(ex, fx->agent, scCfg);
 
     auto [clientOwn, serverT] = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
-    fx->endpoint
-        ->setTransport(std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT)));
+    fx->endpoint->setTransport(
+        std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT))
+    );
 
     fx->recorder = std::make_shared<AckRecorder>();
     fx->clientT  = std::move(clientOwn);
@@ -226,7 +227,9 @@ asio::awaitable<std::shared_ptr<Fixture>>
     );
     asio::co_spawn(
         ex,
-        keepAliveRun([ep = fx->endpoint]() -> asio::awaitable<void> { co_await ep->run(); }),
+        keepAliveRun([ep = fx->endpoint]() -> asio::awaitable<void> {
+            co_await ep->run();
+        }),
         asio::detached
     );
     co_return fx;
@@ -260,7 +263,7 @@ TestResult testTaskScopeSemantics() {
     // 取消: 挂起在长定时器上的任务收到取消信号后结束等待 (协程退出, 登记项摘除)
     bool cancelledObserved = false;
     scope->spawn("wait-cancel", [&cancelledObserved]() -> asio::awaitable<void> {
-        auto ex = co_await asio::this_coro::executor;
+        auto               ex = co_await asio::this_coro::executor;
         asio::steady_timer timer{ex};
         timer.expires_after(std::chrono::seconds{30});
         utilxx_base::AsioErrorCode ec;
@@ -296,7 +299,7 @@ TestResult testTaskScopeSemantics() {
 
     // 超时路径: 任务不响应取消 (忽略取消信号, 自己等 200ms 自然结束)
     scope->spawn("stubborn", []() -> asio::awaitable<void> {
-        auto ex = co_await asio::this_coro::executor;
+        auto               ex = co_await asio::this_coro::executor;
         asio::steady_timer timer{ex};
         timer.expires_after(std::chrono::milliseconds{200});
         utilxx_base::AsioErrorCode ec;
@@ -338,11 +341,16 @@ asio::awaitable<void> test_stages_input_stop_and_flush() {
 
     // 跑一轮, 让会话里有真实消息
     fx->send("hello before shutdown", 1);
-    const bool gotTurn = co_await waitFor([&]() { return fx->recorder->turnResults() > 0; }, 10000);
+    const bool gotTurn = co_await waitFor(
+        [&]() {
+            return fx->recorder->turnResults() > 0;
+        },
+        10000
+    );
     XX_TEST_EXPECT_TRUE(gotTurn);
 
     // 执行分阶段关闭
-    const auto begin = std::chrono::steady_clock::now();
+    const auto begin  = std::chrono::steady_clock::now();
     const bool closed = co_await fx->agent->shutdownAsync(std::chrono::milliseconds{3000});
     const auto costMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                             std::chrono::steady_clock::now() - begin
@@ -355,7 +363,12 @@ asio::awaitable<void> test_stages_input_stop_and_flush() {
     // 关闭后新输入被拒 (rejected + server_stopped)
     const size_t acksBefore = fx->recorder->ackCount();
     fx->send("after shutdown", 2);
-    const bool gotAck = co_await waitFor([&]() { return fx->recorder->ackCount() > acksBefore; }, 3000);
+    const bool gotAck = co_await waitFor(
+        [&]() {
+            return fx->recorder->ackCount() > acksBefore;
+        },
+        3000
+    );
     XX_TEST_EXPECT_TRUE(gotAck);
     auto ack = fx->recorder->ackAt(acksBefore);
     XX_TEST_EXPECT_HAS_VALUE(ack);
@@ -387,12 +400,16 @@ asio::awaitable<void> test_stages_input_stop_and_flush() {
 
 /// 用例 2: 不等待当前轮次结束 (模型延迟期间关闭)
 asio::awaitable<void> test_shutdown_does_not_wait_turn() {
-    auto fx = co_await makeFixture("shutdown-running-turn");
+    auto fx           = co_await makeFixture("shutdown-running-turn");
     g_da_sim_delay_ms = 1200; // 模型响应延迟, 保证关闭时轮次仍在跑
 
     fx->send("slow turn");
-    const bool requestArrived
-        = co_await waitFor([&]() { return g_da_sim_request_count.load() > 0; }, 3000);
+    const bool requestArrived = co_await waitFor(
+        [&]() {
+            return g_da_sim_request_count.load() > 0;
+        },
+        3000
+    );
     XX_TEST_EXPECT_TRUE(requestArrived);
     XX_TEST_EXPECT_EQ(fx->recorder->turnResults(), 0);
 
@@ -408,8 +425,12 @@ asio::awaitable<void> test_shutdown_does_not_wait_turn() {
     XX_TEST_EXPECT_EQ(fx->recorder->turnResults(), 0);
 
     // 轮次随后自行结束 (关闭不取消它)
-    const bool turnFinished
-        = co_await waitFor([&]() { return fx->recorder->turnResults() > 0; }, 10000);
+    const bool turnFinished = co_await waitFor(
+        [&]() {
+            return fx->recorder->turnResults() > 0;
+        },
+        10000
+    );
     XX_TEST_EXPECT_TRUE(turnFinished);
     g_da_sim_delay_ms = 0;
     co_return;

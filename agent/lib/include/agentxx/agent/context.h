@@ -184,7 +184,8 @@ public:
     ///   保证 messagesVersion 单调递增 (中断/异常快照与回滚依赖该版本号)
     /// - 仅 ioContext 线程访问 (与 viewMessages 同一约束)
 
-    /// viewMessages 的链式哈希 (用于 client 校验一致性)    /// - 仅 ioContext 线程可读写 (appendViewMessage 内部更新)
+    /// viewMessages 的链式哈希 (用于 client 校验一致性)    /// - 仅 ioContext 线程可读写
+    /// (appendViewMessage 内部更新)
     ChainHash chainHash;
 
     /// WireDelta 流序号 (单调递增; 仅 io 线程读写)
@@ -352,7 +353,8 @@ public:
     /// - 不触发持久化回调 (恢复本身不产生新的写入)
     /// - [lastViewSeq] 为库内最大展示消息序号 (见 [lastViewSeq]), 供重连
     ///   增量补拉继续编号; 0 = 老数据未记录 (按 0 起算)
-    void restore(std::vector<ViewMessage> messages, uint64_t msgIdCounter, uint64_t lastViewSeq = 0);
+    void
+        restore(std::vector<ViewMessage> messages, uint64_t msgIdCounter, uint64_t lastViewSeq = 0);
 
     /// 展示历史持久化序号 (单调递增, 每条消息一个)
     /// - 与 deltaSeq (WireDelta 流序号) 相互独立: 本序号标识"持久化历史里的第几条"
@@ -550,7 +552,7 @@ private:
     /// 上下文 Json 数组文本镜像 (惰性生成; 落盘路径专用, 与上者内容一致但更省内存)
     mutable std::string llmMessagesJsonTextCache_;
     std::string         modelName_;
-    std::string                                   language_;
+    std::string         language_;
     /// 最近一次已提示的持久化失败原因 (去重)
     std::string lastPersistWarning_;
 
@@ -573,7 +575,7 @@ private:
     /// 标记上下文已变更: 版本号递增 + Json 镜像失效
     void markMessagesChanged();
 
-    std::shared_ptr<neograph::graph::CancelToken> cancelToken_ = nullptr;
+    std::shared_ptr<neograph::graph::CancelToken> cancelToken_  = nullptr;
     uint64_t                                      msgIdCounter_ = 0;
 
     /// 展示历史持久化序号计数 (每次 appendViewMessage 递增)
@@ -599,9 +601,9 @@ private:
 
     /// 绑定的 io 线程 id (std::thread::id{} 表示未绑定)
     std::atomic<std::thread::id> ioThreadId_{std::thread::id{}};
-    mutable bool              llmMessagesJsonDirty_ = true;
+    mutable bool                 llmMessagesJsonDirty_ = true;
     /// 文本镜像的脏标记 (与 Json 镜像独立维护: 两条路径各自惰性生成)
-    mutable bool              llmMessagesJsonTextDirty_ = true;
+    mutable bool llmMessagesJsonTextDirty_ = true;
 
     /// 压入一条待落盘 view 操作并按节流规则决定是否立即刷出
     void enqueueViewPersist(PendingViewOp op);
@@ -788,8 +790,7 @@ public:
     ///   登记来源, 插件禁用/卸载时按 owner 撤销
     /// - 段落文本只在这里持有 (不再经 graphData 中转); 唯一的读盘入口是 model call
     ///   的 start 钩子 (见 agentxx/middlewares/prompt_source_refresh.h)
-    std::shared_ptr<PromptSourceRegistry> promptSources
-        = std::make_shared<PromptSourceRegistry>();
+    std::shared_ptr<PromptSourceRegistry> promptSources = std::make_shared<PromptSourceRegistry>();
 
     /// 本 agent 上一次请求实际发送的工具定义
     /// - 由 modelcall 装配请求时写入; 供"同上下文子代理"对齐请求前缀
@@ -1015,7 +1016,6 @@ public:
 
     /// 替换提示词里的会话级占位符 (工作目录 / 临时目录 / 会话 ID)
     std::string renderPromptVars(std::string text, std::string_view sessionId) const;
-
 
 private:
 

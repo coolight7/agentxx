@@ -2094,8 +2094,8 @@ asio::awaitable<void> test_update_check_with_local_server() {
     // 夹具标签按当前版本推算, 不写死数值: 版本号已改为日期式 (如 2026.1011.0),
     // 写死的 9.9.9 / 8.0.0 会低于当前版本, "有更新" 判定必然失败。
     // major + 1 保证高于当前版本 (minor/patch 只用于区分两个夹具)
-    const std::string newerTag     = fmt::format("v{}.0.0", agentxx::kVersionMajor + 1);
-    const std::string newerJsonTag = fmt::format("v{}.1.0", agentxx::kVersionMajor + 1);
+    const std::string newerTag       = fmt::format("v{}.0.0", agentxx::kVersionMajor + 1);
+    const std::string newerJsonTag   = fmt::format("v{}.1.0", agentxx::kVersionMajor + 1);
     const auto        releasePageUrl = [](const std::string& tag) {
         return fmt::format("https://github.com/coolight7/agentxx/releases/tag/{}", tag);
     };
@@ -2105,10 +2105,8 @@ asio::awaitable<void> test_update_check_with_local_server() {
         "/releases/latest",
         0,
         std::make_shared<Server::Handler>(
-            [location = releasePageUrl(newerTag)](
-                Server::Request&,
-                Server::Response& resp,
-                std::string_view
+            [location = releasePageUrl(newerTag
+             )](Server::Request&, Server::Response& resp, std::string_view
             ) -> asio::awaitable<void> {
                 resp.result(status::found);
                 resp.set(field::location, location);
@@ -2122,10 +2120,9 @@ asio::awaitable<void> test_update_check_with_local_server() {
         "/api/releases/latest",
         0,
         std::make_shared<Server::Handler>(
-            [tag = newerJsonTag, url = releasePageUrl(newerJsonTag)](
-                Server::Request&,
-                Server::Response& resp,
-                std::string_view
+            [tag = newerJsonTag,
+             url = releasePageUrl(newerJsonTag
+             )](Server::Request&, Server::Response& resp, std::string_view
             ) -> asio::awaitable<void> {
                 resp.result(status::ok);
                 resp.set(field::content_type, "application/json");
@@ -2175,7 +2172,7 @@ asio::awaitable<void> test_update_check_with_local_server() {
     std::thread serverThread([&server] {
         server.start();
     });
-    uint16_t port = 0;
+    uint16_t    port = 0;
     for (int i = 0; i < 200 && port == 0; ++i) {
         port = server.port();
         if (port == 0) {

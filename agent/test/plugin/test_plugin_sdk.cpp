@@ -801,7 +801,7 @@ TestResult testPluginSdk() {
 
         // 2) panelItems 就地构建器: 作用域结束自动提交
         {
-            auto              writer = client.panelItems(panel);
+            auto               writer = client.panelItems(panel);
             pluginxx::ui::Item title  = pluginxx::ui::build::text("from-writer");
             title.bold                = true;
             writer.add(std::move(title));
@@ -850,8 +850,8 @@ TestResult testPluginSdk() {
         // 5) 工具消息装饰: DecorSpec → update_tool_decor; 清除 = 空 JSON
         {
             ClientPluginBase::DecorSpec spec;
-            spec.displayName = "Plan";
-            spec.summary     = "[~] a; [ ] b";
+            spec.displayName             = "Plan";
+            spec.summary                 = "[~] a; [ ] b";
             pluginxx::ui::Item stepTable = pluginxx::ui::build::node("Table");
             stepTable.header             = true;
             stepTable.columns.push_back(pluginxx::ui::TableColumn{
@@ -861,9 +861,9 @@ TestResult testPluginSdk() {
                 {},
             });
             for (const auto& step : {"a", "b"}) {
-                stepTable.rows.push_back(
-                    {pluginxx::ui::TableCell{pluginxx::ui::TextValue::of(step), {}, {}}}
-                );
+                stepTable.rows.push_back({
+                    pluginxx::ui::TableCell{pluginxx::ui::TextValue::of(step), {}, {}}
+                });
             }
             spec.items.push_back(std::move(stepTable));
             XX_TEST_EXPECT_EQ(client.setToolDecor("call_1", spec), 0);
@@ -881,7 +881,7 @@ TestResult testPluginSdk() {
 
         // 6) overlay: 组件树作为 payload + 尺寸选项透传
         {
-            g_clientUiCapture = ClientUiCapture{};
+            g_clientUiCapture               = ClientUiCapture{};
             pluginxx::ui::Item overlayTable = pluginxx::ui::build::node("Table");
             overlayTable.header             = true;
             overlayTable.columns.push_back(pluginxx::ui::TableColumn{
@@ -890,9 +890,9 @@ TestResult testPluginSdk() {
                 pluginxx::ui::SizeValue::autoValue(),
                 {},
             });
-            overlayTable.rows.push_back(
-                {pluginxx::ui::TableCell{pluginxx::ui::TextValue::of("x"), {}, {}}}
-            );
+            overlayTable.rows.push_back({
+                pluginxx::ui::TableCell{pluginxx::ui::TextValue::of("x"), {}, {}}
+            });
             XX_TEST_EXPECT_EQ(
                 client.showItemsOverlay("Files", {std::move(overlayTable)}, "{\"size\":\"large\"}"),
                 0

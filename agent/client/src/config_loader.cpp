@@ -239,8 +239,6 @@ static bool parseFullNumber(std::string_view text, T& out) {
     return result.ec == std::errc{} && result.ptr == text.data() + text.size();
 }
 
-
-
 /// YAML → JSON 并递归展开 ${VAR} (插件 args 专用)
 /// - 标量先经 resolveEnvVars 展开再判断类型 (true/false/数字/字符串)
 /// - 与 yamlToJson 语义一致, 仅多了 env 展开步骤
@@ -613,11 +611,8 @@ static YamlAppConfig parseYamlConfigNode(
             // 自定义 HTTP 请求头 (仅 http/sse 传输时发送, 如 Authorization 等)
             if (node["headers"] && node["headers"].IsMap()) {
                 for (const auto& kv : node["headers"]) {
-                    auto hKey = resolveEnvVars(
-                        kv.first.as<std::string>(""),
-                        dotEnvVars,
-                        overrideEnvVars
-                    );
+                    auto hKey
+                        = resolveEnvVars(kv.first.as<std::string>(""), dotEnvVars, overrideEnvVars);
                     auto hVal = resolveEnvVars(
                         kv.second.as<std::string>(""),
                         dotEnvVars,
@@ -698,11 +693,8 @@ static YamlAppConfig parseYamlConfigNode(
     //   (客户端界面语言见 settings_db 的 `tui.lang`, 两者互不影响)
     // - 空值视为未配置 (保持 AgentConfig 默认 "en")
     if (root["language"]) {
-        const auto raw = resolveEnvVars(
-            root["language"].as<std::string>(""),
-            dotEnvVars,
-            overrideEnvVars
-        );
+        const auto raw
+            = resolveEnvVars(root["language"].as<std::string>(""), dotEnvVars, overrideEnvVars);
         if (!raw.empty()) {
             cfg.language = agent::normalizeLanguage(raw);
         }
@@ -756,11 +748,9 @@ static YamlAppConfig parseYamlConfigNode(
     // - 开启时才收集"记录数据" (功能点调用统计 / 钩子派发记录 / 成功调用日志);
     //   启动时读取后冻结, 只控制记录收集, 不改变任何行为
     if (root["dev_mode"]) {
-        auto val = utilxx_base::toLower(resolveEnvVars(
-            root["dev_mode"].as<std::string>("false"),
-            dotEnvVars,
-            overrideEnvVars
-        ));
+        auto val = utilxx_base::toLower(
+            resolveEnvVars(root["dev_mode"].as<std::string>("false"), dotEnvVars, overrideEnvVars)
+        );
         if (val == "true" || val == "1" || val == "yes" || val == "on") {
             cfg.devMode = true;
         } else if (val == "false" || val == "0" || val == "no" || val == "off" || val.empty()) {

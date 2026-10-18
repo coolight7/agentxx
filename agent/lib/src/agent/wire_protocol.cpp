@@ -250,11 +250,11 @@ utilxx_base::Json toJson(const WireHostToolResult& msg) {
 
 WireHello helloFromJson(const utilxx_base::Json& j) {
     WireHello hello;
-    hello.sessionId = j.value("sessionId", std::string{});
-    hello.token     = j.value("token", std::string{});
-    hello.lastSeq   = j.value("lastSeq", uint64_t{0});
-    hello.tailHash  = j.value("tailHash", std::string{});
-    hello.language  = j.value("language", std::string{});
+    hello.sessionId    = j.value("sessionId", std::string{});
+    hello.token        = j.value("token", std::string{});
+    hello.lastSeq      = j.value("lastSeq", uint64_t{0});
+    hello.tailHash     = j.value("tailHash", std::string{});
+    hello.language     = j.value("language", std::string{});
     hello.afterViewSeq = j.value("afterViewSeq", uint64_t{0});
     // 协议版本: 老客户端缺字段 → 0 (最低兼容版本, 服务端不拒绝)
     hello.protocolVersion = static_cast<int>(j.value("protocolVersion", int64_t{0}));

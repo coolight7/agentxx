@@ -43,8 +43,6 @@ namespace test {
 
 namespace fs = std::filesystem;
 
-using agentxx::agent::io::serialize;
-using agentxx::agent::WireProtocol;
 using agentxx::agent::AppendComponentNotification;
 using agentxx::agent::MediaType;
 using agentxx::agent::MessageQueueItem;
@@ -85,6 +83,7 @@ using agentxx::agent::WireModelInfo;
 using agentxx::agent::WirePermissionState;
 using agentxx::agent::WirePluginData;
 using agentxx::agent::WirePluginDataUp;
+using agentxx::agent::WireProtocol;
 using agentxx::agent::WireRemoveQueueItem;
 using agentxx::agent::WireRenameSession;
 using agentxx::agent::WireRenameSessionResult;
@@ -96,6 +95,7 @@ using agentxx::agent::WireSyncPayload;
 using agentxx::agent::WireTurnResult;
 using agentxx::agent::WireUserInput;
 using agentxx::agent::WireViewMessagesPage;
+using agentxx::agent::io::serialize;
 // 模型删除与 host tool (追加在变体末尾)
 using agentxx::agent::WireHostToolCall;
 using agentxx::agent::WireHostToolInfo;
@@ -140,11 +140,11 @@ std::string jsonTypeOf(const utilxx_base::Json& value, int depth = 0) {
         if (depth >= 2) {
             return "object";
         }
-        std::string out = "object{";
+        std::string out   = "object{";
         bool        first = true;
         for (const auto& [key, child] : value.items()) {
-            out += fmt::format("{}{}:{}", first ? "" : ", ", key, jsonTypeOf(child, depth + 1));
-            first = false;
+            out   += fmt::format("{}{}:{}", first ? "" : ", ", key, jsonTypeOf(child, depth + 1));
+            first  = false;
         }
         out += "}";
         return out;
@@ -176,21 +176,19 @@ std::vector<WireSample> wireSamples() {
     // 2) 握手: 服务端 -> 客户端
     {
         WireHelloAck m;
-        m.ok        = true;
-        m.sessionId = "sess-中文-1";
-        m.tailHash  = "deadbeef";
-        m.models    = {"gpt-x", "claude-y"};
-        m.deviceId  = "device-42";
-        m.workDir   = "D:/work/项目";
+        m.ok              = true;
+        m.sessionId       = "sess-中文-1";
+        m.tailHash        = "deadbeef";
+        m.models          = {"gpt-x", "claude-y"};
+        m.deviceId        = "device-42";
+        m.workDir         = "D:/work/项目";
         m.protocolVersion = WireProtocol::kVersion;
         m.capabilities    = agentxx::agent::serverWireCapabilities();
-        m.plugins.push_back(
-            WireHelloAck::PluginInfo{
-                .name       = "agentxx_filesystem",
-                .version    = "1.2.3",
-                .interfaces = {"agentxx.agent.tools"},
-            }
-        );
+        m.plugins.push_back(WireHelloAck::PluginInfo{
+            .name       = "agentxx_filesystem",
+            .version    = "1.2.3",
+            .interfaces = {"agentxx.agent.tools"},
+        });
         out.push_back({"hello_ack", WireMessage{std::move(m)}});
     }
     // 3) 用户输入
@@ -243,7 +241,9 @@ std::vector<WireSample> wireSamples() {
     {
         WireInterruptResponse m;
         m.id     = 42;
-        m.result = utilxx_base::Json{{"allow", "true"}};
+        m.result = utilxx_base::Json{
+            {"allow", "true"}
+        };
         out.push_back({"interrupt_response", WireMessage{std::move(m)}});
     }
     // 9) 中断过期
@@ -281,18 +281,16 @@ std::vector<WireSample> wireSamples() {
         m.messages      = {ViewMessage::makeText(ViewMessage::Role::User, "历史消息")};
         m.tailHash      = "deadbeef";
         m.totalMessages = 1;
-        m.messageQueue.push_back(
-            MessageQueueItem{
-                .id          = "q-1",
-                .text        = "排队消息",
-                .model       = "gpt-x",
-                .createdAtMs = 1700000000999LL,
-                .delivery    = std::string{agentxx::agent::InputDelivery::NextTurn},
-                .recovered   = true,
-            }
-        );
-        m.deltaSeq    = 7;
-        m.queueState  = std::string{
+        m.messageQueue.push_back(MessageQueueItem{
+            .id          = "q-1",
+            .text        = "排队消息",
+            .model       = "gpt-x",
+            .createdAtMs = 1700000000999LL,
+            .delivery    = std::string{agentxx::agent::InputDelivery::NextTurn},
+            .recovered   = true,
+        });
+        m.deltaSeq   = 7;
+        m.queueState = std::string{
             agentxx::agent::sessionQueueStateText(agentxx::agent::SessionQueueState::Paused)
         };
         m.lastViewSeq = 5;
@@ -338,14 +336,12 @@ std::vector<WireSample> wireSamples() {
         WireModelInfo m;
         m.currentModel = "gpt-x";
         m.models       = {"gpt-x", "claude-y"};
-        m.capabilities.push_back(
-            ModelCapabilityInfo{
-                .name       = "gpt-x",
-                .imageInput = true,
-                .audioInput = false,
-                .videoInput = false,
-            }
-        );
+        m.capabilities.push_back(ModelCapabilityInfo{
+            .name       = "gpt-x",
+            .imageInput = true,
+            .audioInput = false,
+            .videoInput = false,
+        });
         out.push_back({"model_info", WireMessage{std::move(m)}});
     }
     // 18) 请求组件加载信息
@@ -355,22 +351,18 @@ std::vector<WireSample> wireSamples() {
     // 19) 组件加载信息
     {
         WireAppendComponentInfo m;
-        m.notifications.push_back(
-            AppendComponentNotification{
-                .name         = "agentxx_filesystem",
-                .errorMessage = "",
-                .type         = AppendComponentNotification::Type::Plugin,
-                .success      = true,
-            }
-        );
-        m.notifications.push_back(
-            AppendComponentNotification{
-                .name         = "broken-mcp",
-                .errorMessage = "connect failed",
-                .type         = AppendComponentNotification::Type::Mcp,
-                .success      = false,
-            }
-        );
+        m.notifications.push_back(AppendComponentNotification{
+            .name         = "agentxx_filesystem",
+            .errorMessage = "",
+            .type         = AppendComponentNotification::Type::Plugin,
+            .success      = true,
+        });
+        m.notifications.push_back(AppendComponentNotification{
+            .name         = "broken-mcp",
+            .errorMessage = "connect failed",
+            .type         = AppendComponentNotification::Type::Mcp,
+            .success      = false,
+        });
         out.push_back({"append_component_info", WireMessage{std::move(m)}});
     }
     // 20) 请求上下文
@@ -381,8 +373,8 @@ std::vector<WireSample> wireSamples() {
     {
         WireContextMessages m;
         m.messages = utilxx_base::Json::array({
-            utilxx_base::Json{{"role", "system"}, {"content", "sys"}},
-            utilxx_base::Json{{"role", "user"}, {"content", "你好"}},
+            utilxx_base::Json{{"role", "system"}, {"content", "sys"}   },
+            utilxx_base::Json{{"role", "user"},   {"content", "你好"}},
         });
         out.push_back({"context_messages", WireMessage{std::move(m)}});
     }
@@ -399,13 +391,11 @@ std::vector<WireSample> wireSamples() {
         WireSessionList m;
         m.totalCount = 3;
         m.hasMore    = true;
-        m.sessions.push_back(
-            SessionInfo{
-                .sessionId    = "s10",
-                .title        = "会话标题",
-                .lastActiveMs = 1700000000000LL,
-            }
-        );
+        m.sessions.push_back(SessionInfo{
+            .sessionId    = "s10",
+            .title        = "会话标题",
+            .lastActiveMs = 1700000000000LL,
+        });
         out.push_back({"session_list", WireMessage{std::move(m)}});
     }
     // 25) 切换会话
@@ -433,16 +423,14 @@ std::vector<WireSample> wireSamples() {
         m.state     = std::string{
             agentxx::agent::sessionQueueStateText(agentxx::agent::SessionQueueState::Running)
         };
-        m.items.push_back(
-            MessageQueueItem{
-                .id          = "q-1",
-                .text        = "排队消息",
-                .model       = "",
-                .createdAtMs = 1700000000999LL,
-                .delivery    = "",
-                .recovered   = false,
-            }
-        );
+        m.items.push_back(MessageQueueItem{
+            .id          = "q-1",
+            .text        = "排队消息",
+            .model       = "",
+            .createdAtMs = 1700000000999LL,
+            .delivery    = "",
+            .recovered   = false,
+        });
         out.push_back({"message_queue_update", WireMessage{std::move(m)}});
     }
     // 29) 清空队列
@@ -489,16 +477,14 @@ std::vector<WireSample> wireSamples() {
         m.currentDir = "D:/素材";
         m.parentDir  = "D:/";
         m.error      = "";
-        m.entries.push_back(
-            WireDirEntry{
-                .name      = "图.png",
-                .fullPath  = "D:/素材/图.png",
-                .sizeBytes = 1024,
-                .isDir     = false,
-                .supported = true,
-                .mediaType = MediaType::Image,
-            }
-        );
+        m.entries.push_back(WireDirEntry{
+            .name      = "图.png",
+            .fullPath  = "D:/素材/图.png",
+            .sizeBytes = 1024,
+            .isDir     = false,
+            .supported = true,
+            .mediaType = MediaType::Image,
+        });
         out.push_back({"list_dir_result", WireMessage{std::move(m)}});
     }
     // 36) 请求权限状态
@@ -527,8 +513,12 @@ std::vector<WireSample> wireSamples() {
         m.imageInput               = true;
         m.audioInput               = false;
         m.videoInput               = false;
-        m.extraApiConfig           = utilxx_base::Json{{"k", 1}};
-        m.extraHeaders             = utilxx_base::Json{{"H", "v"}};
+        m.extraApiConfig           = utilxx_base::Json{
+                      {"k", 1}
+        };
+        m.extraHeaders = utilxx_base::Json{
+            {"H", "v"}
+        };
         out.push_back({"add_model", WireMessage{std::move(m)}});
     }
     // 40) 新增模型配置结果
@@ -628,15 +618,13 @@ std::string buildSchemaJson(const std::vector<WireSample>& samples) {
         for (const auto& [key, value] : json.items()) {
             fields[key] = jsonTypeOf(value);
         }
-        messages.push_back(
-            utilxx_base::Json{
-                {"index",  static_cast<int64_t>(i)},
-                {"name",   sample.name            },
-                {"type",   json.value("type", std::string{})},
-                {"fields", std::move(fields)      },
-                {"sample", json                    },
-            }
-        );
+        messages.push_back(utilxx_base::Json{
+            {"index", static_cast<int64_t>(i)},
+            {"name", sample.name},
+            {"type", json.value("type", std::string{})},
+            {"fields", std::move(fields)},
+            {"sample", json},
+        });
     }
 
     utilxx_base::Json root;
@@ -712,7 +700,6 @@ std::string schemaDocPath() {
     return {};
 #endif
 }
-
 
 } // namespace
 

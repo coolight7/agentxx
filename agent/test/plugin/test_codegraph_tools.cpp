@@ -208,7 +208,16 @@ static std::vector<std::string> parseResultFiles(const std::string& out) {
 /// 文件是否属于数据/文档类 (按扩展名判断, 规则与插件内一致)
 static bool isDocOrDataFile(const std::string& path) {
     static const char* kExts[] = {
-        "json", "md", "mdx", "markdown", "yaml", "yml", "xml", "html", "htm", "css",
+        "json",
+        "md",
+        "mdx",
+        "markdown",
+        "yaml",
+        "yml",
+        "xml",
+        "html",
+        "htm",
+        "css",
     };
     auto dot = path.find_last_of('.');
     if (dot == std::string::npos) {
@@ -378,10 +387,10 @@ asio::awaitable<TestResult>
             auto hasSwiftFixture = [](const std::string& text) {
                 return text.find("widgets.swift") != std::string::npos;
             };
-            auto swiftOut = co_await tool->execute_async(utilxx_base::Json{
-                {"query", "flockWidget"}
+            auto swiftOut      = co_await tool->execute_async(utilxx_base::Json{
+                     {"query", "flockWidget"}
             });
-            int waitedSwiftMs = 0;
+            int  waitedSwiftMs = 0;
             while (!hasSwiftFixture(swiftOut) && waitedSwiftMs < kWaitTimeoutMs) {
                 timer.expires_after(std::chrono::milliseconds(500));
                 co_await timer.async_wait(asio::use_awaitable);

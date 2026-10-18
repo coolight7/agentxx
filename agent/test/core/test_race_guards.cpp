@@ -101,10 +101,10 @@ class TraceTool : public agentxx::tools::XXToolBase {
 public:
 
     TraceTool(
-        std::string_view name,
-        Trace            trace,
-        int64_t          sleepMs,
-        bool             parallelSafe,
+        std::string_view  name,
+        Trace             trace,
+        int64_t           sleepMs,
+        bool              parallelSafe,
         std::atomic<int>* execCount = nullptr
     ) :
         XXToolBase(
@@ -125,7 +125,8 @@ public:
         return neograph::ChatTool{
             .name        = name_,
             .description = "race guard trace tool",
-            .parameters  = neograph::json{{"type", "object"}, {"properties", neograph::json::object()}},
+            .parameters
+            = neograph::json{{"type", "object"}, {"properties", neograph::json::object()}},
         };
     }
 
@@ -147,7 +148,7 @@ private:
 
     std::string       name_;
     Trace             trace_;
-    int64_t           sleepMs_ = 0;
+    int64_t           sleepMs_   = 0;
     std::atomic<int>* execCount_ = nullptr;
 };
 
@@ -163,7 +164,8 @@ public:
         return neograph::ChatTool{
             .name        = "race_interrupt",
             .description = "interrupt tool for race guard test",
-            .parameters  = neograph::json{{"type", "object"}, {"properties", neograph::json::object()}},
+            .parameters
+            = neograph::json{{"type", "object"}, {"properties", neograph::json::object()}},
         };
     }
 
@@ -179,9 +181,9 @@ public:
             sessionId,
             [&]() {
                 return agentxx::middleware::InterruptHandleArg{
-                    .name = agentxx::middleware::MiddlewareContext::interruptHandleName_default,
-                    .arg  = utilxx_base::Json{{"question", "approve?"}},
-                    .resultId = resultId,
+                             .name = agentxx::middleware::MiddlewareContext::interruptHandleName_default,
+                             .arg      = utilxx_base::Json{{"question", "approve?"}},
+                             .resultId = resultId,
                 };
             },
             nullptr
@@ -273,30 +275,27 @@ public:
         co_return std::nullopt;
     }
 
-    asio::awaitable<utilxx_base::Json> handleInterrupt(
-        std::string_view,
-        std::string_view,
-        std::string_view,
-        std::string_view
-    ) override {
+    asio::awaitable<utilxx_base::Json>
+        handleInterrupt(std::string_view, std::string_view, std::string_view, std::string_view)
+            override {
         ++interruptCalls;
         asio::steady_timer timer{co_await asio::this_coro::executor};
         timer.expires_after(std::chrono::milliseconds{answerDelayMs});
         utilxx_base::AsioErrorCode ec;
         co_await timer.async_wait(asio::redirect_error(asio::use_awaitable, ec));
         answerDelivered.store(!ec, std::memory_order_release);
-        co_return agentxx::middleware::makeInterruptResult(
-            utilxx_base::Json{{"handled", "late-answer"}}
-        );
+        co_return agentxx::middleware::makeInterruptResult(utilxx_base::Json{
+            {"handled", "late-answer"}
+        });
     }
 };
 
 /// 构造一个 tool_call 声明 (OpenAI 流式 delta 形态)
 utilxx_base::Json makeToolCall(int index, std::string_view id, std::string_view name) {
     return utilxx_base::Json{
-        {"index", index},
-        {"id", std::string{id}},
-        {"type", "function"},
+        {"index",    index                                                              },
+        {"id",       std::string{id}                                                    },
+        {"type",     "function"                                                         },
         {"function", utilxx_base::Json{{"name", std::string{name}}, {"arguments", "{}"}}},
     };
 }
@@ -311,7 +310,8 @@ void declareToolCalls(const std::vector<std::pair<std::string, std::string>>& id
 }
 
 /// 最后一条带 tool_calls 的 assistant 之后连续的 tool 结果
-std::vector<std::pair<std::string, std::string>> toolResults(const std::shared_ptr<agentxx::agent::Session>& session) {
+std::vector<std::pair<std::string, std::string>>
+    toolResults(const std::shared_ptr<agentxx::agent::Session>& session) {
     std::vector<std::pair<std::string, std::string>> out;
     if (!session) {
         return out;
@@ -390,8 +390,7 @@ asio::awaitable<bool> waitToolResults(
     int                                             timeoutMs = 6000
 ) {
     asio::steady_timer timer{co_await asio::this_coro::executor};
-    const auto         deadline = std::chrono::steady_clock::now()
-                                  + std::chrono::milliseconds{timeoutMs};
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds{timeoutMs};
     while (std::chrono::steady_clock::now() < deadline) {
         if (toolResults(session).size() >= count) {
             co_return true;
@@ -443,9 +442,11 @@ asio::awaitable<void> test_cancel_vs_tool_settlement() {
 
     g_da_sim_response_content = "";
     g_da_sim_delay_ms         = 0;
-    declareToolCalls(
-        {{"call_fast", "race_fast"}, {"call_mid", "race_mid"}, {"call_later", "race_later"}}
-    );
+    declareToolCalls({
+        {"call_fast",  "race_fast" },
+        {"call_mid",   "race_mid"  },
+        {"call_later", "race_later"}
+    });
 
     auto trace = std::make_shared<std::vector<TraceEntry>>();
     std::vector<std::unique_ptr<agentxx::tools::XXToolBase>> tools;
@@ -494,10 +495,8 @@ asio::awaitable<void> test_cancel_vs_tool_settlement() {
         asio::co_spawn(ex, agent.runTurnAsync(sessionId, "Run tools", nullptr), asio::deferred),
         asio::co_spawn(ex, cancelWatcher(), asio::deferred)
     );
-    auto  waitResult = co_await group.async_wait(
-        asio::experimental::wait_for_all(),
-        asio::use_awaitable
-    );
+    auto waitResult
+        = co_await group.async_wait(asio::experimental::wait_for_all(), asio::use_awaitable);
     auto& turnExc    = std::get<1>(waitResult);
     auto& turnResult = std::get<2>(waitResult);
     auto& watcherExc = std::get<3>(waitResult);
@@ -508,11 +507,9 @@ asio::awaitable<void> test_cancel_vs_tool_settlement() {
     XX_TEST_EXPECT_EQ(turnResult.errorMessage, std::string{"Cancelled by user"});
 
     // 独占工具排在并行批之后: 取消时还没轮到它, 其执行体不得被调用
-    const bool laterRan = std::any_of(
-        trace->begin(),
-        trace->end(),
-        [](const TraceEntry& e) { return e.name == "race_later"; }
-    );
+    const bool laterRan = std::any_of(trace->begin(), trace->end(), [](const TraceEntry& e) {
+        return e.name == "race_later";
+    });
     XX_TEST_EXPECT_FALSE(laterRan);
 
     auto session = agent.agentContext->sessions->get(sessionId);
@@ -532,11 +529,9 @@ asio::awaitable<void> test_cancel_vs_tool_settlement() {
     {
         asio::steady_timer timer(ex);
         for (int i = 0; i < 300; ++i) {
-            const bool midDone = std::any_of(
-                trace->begin(),
-                trace->end(),
-                [](const TraceEntry& e) { return e.name == "race_mid" && !e.isStart; }
-            );
+            const bool midDone = std::any_of(trace->begin(), trace->end(), [](const TraceEntry& e) {
+                return e.name == "race_mid" && !e.isStart;
+            });
             if (midDone) {
                 break;
             }
@@ -564,9 +559,9 @@ asio::awaitable<void> test_parallel_reverse_completion_order() {
     cfg->prompt.systemPrompt        = "You are a helpful assistant.";
     cfg->toolParallelMaxConcurrency = 8;
 
-    g_da_sim_response_content = "All reverse tools done.";
-    g_da_sim_delay_ms         = 0;
-    constexpr int kCount      = 5;
+    g_da_sim_response_content                               = "All reverse tools done.";
+    g_da_sim_delay_ms                                       = 0;
+    constexpr int                                    kCount = 5;
     std::vector<std::pair<std::string, std::string>> declared;
     for (int i = 0; i < kCount; ++i) {
         declared.emplace_back(fmt::format("call_r{}", i), fmt::format("race_rev{}", i));
@@ -630,16 +625,18 @@ asio::awaitable<void> test_interrupt_answer_inflight_vs_cancel() {
     cfg->model.modelName     = "test-sim";
     cfg->prompt.systemPrompt = "You are a helpful assistant.";
 
-    g_da_sim_response_content = "Final answer.";
-    g_da_sim_delay_ms         = 0;
+    g_da_sim_response_content     = "Final answer.";
+    g_da_sim_delay_ms             = 0;
     g_da_sim_tool_calls_remaining = 1;
-    declareToolCalls({{"call_int_1", "race_interrupt"}});
+    declareToolCalls({
+        {"call_int_1", "race_interrupt"}
+    });
 
     InterruptRaceAgent agent(cfg);
     co_await agent.init();
 
-    auto ex = co_await asio::this_coro::executor;
-    auto io = std::make_shared<DelayedInterruptIO>(agent.agentContext);
+    auto ex           = co_await asio::this_coro::executor;
+    auto io           = std::make_shared<DelayedInterruptIO>(agent.agentContext);
     io->answerDelayMs = 300;
 
     // 中断已经问出去之后取消 (应答还在路上)
@@ -666,21 +663,15 @@ asio::awaitable<void> test_interrupt_answer_inflight_vs_cancel() {
     // 结果逐项取值而不是结构化绑定: GCC 在 -O3 下会把协程帧里的
     // `auto [a, b] = co_await ...` 误报为 -Wmaybe-uninitialized
     auto group = asio::experimental::make_parallel_group(
-        asio::co_spawn(
-            ex,
-            agent.runTurnAsync(sessionId, "Please interrupt", io),
-            asio::deferred
-        ),
+        asio::co_spawn(ex, agent.runTurnAsync(sessionId, "Please interrupt", io), asio::deferred),
         asio::co_spawn(ex, cancelWatcher(), asio::deferred)
     );
-    auto  waitResult = co_await group.async_wait(
-        asio::experimental::wait_for_all(),
-        asio::use_awaitable
-    );
-    auto& turnExc    = std::get<1>(waitResult);
-    auto& turnResult = std::get<2>(waitResult);
-    auto& watcherExc = std::get<3>(waitResult);
-    const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+    auto waitResult
+        = co_await group.async_wait(asio::experimental::wait_for_all(), asio::use_awaitable);
+    auto&      turnExc    = std::get<1>(waitResult);
+    auto&      turnResult = std::get<2>(waitResult);
+    auto&      watcherExc = std::get<3>(waitResult);
+    const auto elapsedMs  = std::chrono::duration_cast<std::chrono::milliseconds>(
                                std::chrono::steady_clock::now() - startAt
     )
                                .count();
@@ -743,7 +734,9 @@ asio::awaitable<void> test_unregister_during_tool_execution() {
 
     g_da_sim_response_content = "Done.";
     g_da_sim_delay_ms         = 0;
-    declareToolCalls({{"call_dyn_1", "race_dyn"}});
+    declareToolCalls({
+        {"call_dyn_1", "race_dyn"}
+    });
 
     auto trace = std::make_shared<std::vector<TraceEntry>>();
     // 动态注册表持有 shared_ptr (与插件工具同一形态)
@@ -782,10 +775,8 @@ asio::awaitable<void> test_unregister_during_tool_execution() {
         asio::co_spawn(ex, agent.runTurnAsync(sessionId, "Run tool", nullptr), asio::deferred),
         asio::co_spawn(ex, unregisterWatcher(), asio::deferred)
     );
-    auto  waitResult = co_await group.async_wait(
-        asio::experimental::wait_for_all(),
-        asio::use_awaitable
-    );
+    auto waitResult
+        = co_await group.async_wait(asio::experimental::wait_for_all(), asio::use_awaitable);
     auto& turnExc    = std::get<1>(waitResult);
     auto& turnResult = std::get<2>(waitResult);
     auto& watcherExc = std::get<3>(waitResult);

@@ -144,7 +144,8 @@ public:
     /// - 未超限时原样返回
     std::string fitSummaryMaxTokens(std::string summary) const;
 
-    /// 工具调用压缩: 去重截断 (现有) + 探索型调用序列折叠    /// - 连续 >= 3 次的同工具单工具调用段 (中间无 user/system 打断, 且工具注册了
+    /// 工具调用压缩: 去重截断 (现有) + 探索型调用序列折叠    /// - 连续 >= 3 次的同工具单工具调用段
+    /// (中间无 user/system 打断, 且工具注册了
     ///   truncateResponse 而无 truncateRequest 的"读类"工具), 只保留最后一组
     ///   (assistant + tool 结果), 其余整组删除: 探索过程无价值, 结论在最后一组
     void doSummarizeToolcall(std::vector<neograph::ChatMessage>& messages);

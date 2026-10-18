@@ -233,9 +233,9 @@ public:
     /// - 未记录过批准 (未声明权限的工具/无 toolCallId): 视为通过 (无权限约束)
     /// - 仅比对目标集合, 不重复询问用户 (询问只发生在判定阶段一次)
     ReverifyResult reverifyApprovedTargets(
-        std::string_view          toolName,
-        std::string_view          toolCallId,
-        const utilxx_base::Json&  args
+        std::string_view         toolName,
+        std::string_view         toolCallId,
+        const utilxx_base::Json& args
     ) const;
 
     /// 批量判定路径 (相对路径按会话生效工作目录规范化; 空路径或规范化失败按
@@ -341,6 +341,7 @@ private:
         std::vector<std::string> targets;
         ToolPermissionSpec       spec;
     };
+
     std::map<std::string, ApprovedTargets, std::less<>> approvedTargets_{};
 
     /// 按声明从参数解析受约束目标 (判定与执行前复验共用同一套规则)
@@ -361,11 +362,11 @@ private:
     std::map<std::string, SessionFsIsolation, std::less<>> sessionIsolations_;
 
     std::weak_ptr<agentxx::events::EventBus> registeredBus_;
-    size_t                                   checkServerId_       = 0;
+    size_t                                   checkServerId_ = 0;
     /// 执行前目标复验服务注册 id
-    size_t                                   reverifyServerId_    = 0;
-    size_t                                   setIsolationSubId_   = 0;
-    size_t                                   clearIsolationSubId_ = 0;
+    size_t reverifyServerId_    = 0;
+    size_t setIsolationSubId_   = 0;
+    size_t clearIsolationSubId_ = 0;
 };
 
 } // namespace middleware

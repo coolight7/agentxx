@@ -34,7 +34,7 @@ int g_ui_snap_failed = 0;
 
 #ifndef AGENTXX_UI_SNAPSHOT_DIR
 // 独立构建 (不经顶层) 时未注入基线目录: 快照用例退化为"能渲染且内容非空"而不比较基线
-#  define AGENTXX_UI_SNAPSHOT_DIR ""
+#define AGENTXX_UI_SNAPSHOT_DIR ""
 #endif
 
 namespace fs = std::filesystem;
@@ -54,9 +54,8 @@ std::string renderRowsToGrid(const UiRenderResult& res, int w, int h) {
     for (const auto& row : res.rows) {
         els.push_back(row.element);
     }
-    auto el = ftxui::vbox(std::move(els));
-    auto screen
-        = ftxui::Screen::Create(ftxui::Dimension::Fixed(w), ftxui::Dimension::Fixed(h));
+    auto el     = ftxui::vbox(std::move(els));
+    auto screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(w), ftxui::Dimension::Fixed(h));
     ftxui::Render(screen, el);
     std::string out;
     out.reserve(static_cast<size_t>(w + 1) * static_cast<size_t>(h));
@@ -167,10 +166,7 @@ UiSnapshotCheck checkUiSnapshot(std::string_view name, const std::string& actual
         std::ifstream ifs{utilxx_base::utf8ToPath(path), std::ios::binary};
         baselineExists = ifs.is_open();
         if (baselineExists) {
-            baseline.assign(
-                std::istreambuf_iterator<char>{ifs},
-                std::istreambuf_iterator<char>{}
-            );
+            baseline.assign(std::istreambuf_iterator<char>{ifs}, std::istreambuf_iterator<char>{});
         }
     }
     if (uiSnapshotUpdateMode()) {
@@ -232,25 +228,24 @@ UiRenderResult renderJson(const std::string& json, const UiRenderCtx& ctx) {
 }
 
 /// 断言一个快照 (文本 + 命中区)
-#define XX_EXPECT_SNAPSHOT(name, res, width, height)                                    \
-    do {                                                                               \
-        const auto _grid = renderRowsToGrid((res), (width), (height));                   \
-        const auto _hits = serializeHitRegions((res));                                  \
-        auto       _text = checkUiSnapshot((name), _grid);                              \
-        if (!_text.ok) {                                                                \
-            TEST_FAIL << "snapshot " << (name) << ": " << _text.diff << std::endl;      \
-            XX_TEST_FAILED++;                                                           \
-        } else {                                                                        \
-            XX_TEST_PASSED++;                                                           \
-        }                                                                               \
-        auto _hitCheck = checkUiSnapshot(std::string{name} + ".hits", _hits);           \
-        if (!_hitCheck.ok) {                                                            \
-            TEST_FAIL << "snapshot " << (name) << ".hits: " << _hitCheck.diff           \
-                      << std::endl;                                                     \
-            XX_TEST_FAILED++;                                                           \
-        } else {                                                                        \
-            XX_TEST_PASSED++;                                                           \
-        }                                                                               \
+#define XX_EXPECT_SNAPSHOT(name, res, width, height)                                        \
+    do {                                                                                    \
+        const auto _grid = renderRowsToGrid((res), (width), (height));                      \
+        const auto _hits = serializeHitRegions((res));                                      \
+        auto       _text = checkUiSnapshot((name), _grid);                                  \
+        if (!_text.ok) {                                                                    \
+            TEST_FAIL << "snapshot " << (name) << ": " << _text.diff << std::endl;          \
+            XX_TEST_FAILED++;                                                               \
+        } else {                                                                            \
+            XX_TEST_PASSED++;                                                               \
+        }                                                                                   \
+        auto _hitCheck = checkUiSnapshot(std::string{name} + ".hits", _hits);               \
+        if (!_hitCheck.ok) {                                                                \
+            TEST_FAIL << "snapshot " << (name) << ".hits: " << _hitCheck.diff << std::endl; \
+            XX_TEST_FAILED++;                                                               \
+        } else {                                                                            \
+            XX_TEST_PASSED++;                                                               \
+        }                                                                                   \
     } while (0)
 
 } // namespace
@@ -260,8 +255,7 @@ TestResult testUiSnapshots() {
     const int failedBefore = g_ui_snap_failed;
 
     if (uiSnapshotDir().empty()) {
-        TEST_SKIP << "AGENTXX_UI_SNAPSHOT_DIR not defined: snapshots are render-only"
-                  << std::endl;
+        TEST_SKIP << "AGENTXX_UI_SNAPSHOT_DIR not defined: snapshots are render-only" << std::endl;
     }
 
     // ---------------- 夹具自身的失败路径 (检查用例必须真的会失败) ----------------
@@ -269,7 +263,9 @@ TestResult testUiSnapshots() {
         // 基线不存在: 判失败并提示如何生成
         auto missing = checkUiSnapshot("__no_such_baseline__", "x\n");
         XX_TEST_EXPECT_FALSE(missing.ok);
-        XX_TEST_EXPECT_TRUE(missing.diff.find("AGENTXX_UPDATE_UI_SNAPSHOTS=1") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(
+            missing.diff.find("AGENTXX_UPDATE_UI_SNAPSHOTS=1") != std::string::npos
+        );
     }
     if (!uiSnapshotDir().empty() && !uiSnapshotUpdateMode()) {
         // 内容不一致: 判失败并给出首个不同的行/列
@@ -298,14 +294,15 @@ TestResult testUiSnapshots() {
     }
 
     // ---------------- 树 (连接线 + 主程序折叠状态) ----------------
-    const std::string treeJson = R"([{"kind":"Tree","nodes":[{"label":"src","children":[{"label":"main.cpp"},{"label":"io.cpp"}]},{"label":"README.md"}]}])";
+    const std::string treeJson
+        = R"([{"kind":"Tree","nodes":[{"label":"src","children":[{"label":"main.cpp"},{"label":"io.cpp"}]},{"label":"README.md"}]}])";
     {
         auto res = renderJson(treeJson, ctxFor(40));
         XX_EXPECT_SNAPSHOT("tree_expanded", res, 40, 8);
     }
     {
         // 主程序维护折叠状态: 键为节点路径 (见 UI 折叠约定)
-        auto ctx = ctxFor(40);
+        auto ctx             = ctxFor(40);
         ctx.collapseExpanded = [](const std::string& id, bool defaultValue) {
             return (id.find("src") != std::string::npos) ? false : defaultValue;
         };
@@ -331,13 +328,13 @@ TestResult testUiSnapshots() {
             {"kind":"Control","control":"number","id":"count","label":"数量","value":3,"min":0,"max":10,"step":1,"integer":true},
             {"kind":"Row","children":[{"kind":"Button","label":"提交","variant":"primary","action":"__submit"},{"kind":"Button","label":"取消","action":"__cancel"}]}
         ])";
-        auto items = pluginxx::ui::parseBlocks(utilxx_base::Json::parse(formJson));
-        auto ctx   = ctxFor(48);
-        UiFormState form;
+        auto              items    = pluginxx::ui::parseBlocks(utilxx_base::Json::parse(formJson));
+        auto              ctx      = ctxFor(48);
+        UiFormState       form;
         initFormState(form, items);
         // 用户交互: 选中第二项候选 + 编辑文本框 (快照要覆盖"有状态"的画面)
-        form.ensure("mode").selected = 1;
-        form.focusedId                = "name";
+        form.ensure("mode").selected    = 1;
+        form.focusedId                  = "name";
         form.ensure("name").initialized = true;
         form.ensure("name").editText    = "my-session";
         ctx.form                        = &form;

@@ -81,7 +81,7 @@ events::ReqSubagentBatch parseSubagentBatchFromInterrupt(
             .keepProvidedSystemMessage = arg.value("keep_provided_system", false),
             .inheritRequestTools       = arg.value("inherit_request_tools", false),
             .toolExecutionDisabled     = arg.value("disable_tool_execution", false),
-            .resultId = interruptArg.resultId,
+            .resultId                  = interruptArg.resultId,
         });
     }
     return batchReq;
@@ -379,14 +379,14 @@ asio::awaitable<std::string> SubAgentManagerTool::execute_async(const utilxx_bas
                 throw std::invalid_argument{"Arg `subagent` is empty"};
             }
             if (task.message.empty() && !task.messages.has_value()) {
-                throw std::invalid_argument{"Arg `message` is empty (need `message` or `messages`)"};
+                throw std::invalid_argument{"Arg `message` is empty (need `message` or `messages`)"
+                };
             }
             auto subIt = subAgentList.find(task.subagent);
             if (subIt == subAgentList.end() || nullptr == subIt->second) {
-                throw std::invalid_argument{fmt::format(
-                    "Arg `subagent` is not one of [{}]",
-                    subagentNames.str()
-                )};
+                throw std::invalid_argument{
+                    fmt::format("Arg `subagent` is not one of [{}]", subagentNames.str())
+                };
             }
         }
     }

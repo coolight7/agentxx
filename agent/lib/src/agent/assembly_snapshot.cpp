@@ -57,28 +57,28 @@ const char* pluginSideKey(PluginSide side) noexcept {
 
 /// 单个模型的快照 (API key 只输出是否已设置, 不输出内容)
 utilxx_base::Json modelSnapshotJson(const ModelConfig& mc) {
-    utilxx_base::Json j = utilxx_base::Json::object();
-    j["name"]                  = mc.name;
-    j["type"]                  = mc.type;
-    j["model"]                 = mc.modelName;
-    j["base_url"]              = mc.baseUrl;
-    j["api_path"]              = mc.apiPath;
-    j["api_key_set"]           = !mc.apiKey.empty() && mc.apiKey != "EMPTY";
-    j["context_max_token"]     = mc.modelContextMaxToken;
-    j["max_connections"]       = mc.maxConcurrentConnections;
-    j["connect_timeout_s"]     = mc.connectTimeoutSeconds;
-    j["read_chunk_timeout_s"]  = mc.readChunkTimeoutSeconds;
-    j["send_thinking"]         = mc.sendThinking;
-    j["reasoning_summary"]     = mc.requestReasoningSummary;
-    j["image_input"]           = mc.imageInput;
-    j["audio_input"]           = mc.audioInput;
-    j["video_input"]           = mc.videoInput;
-    utilxx_base::Json headers  = utilxx_base::Json::array();
+    utilxx_base::Json j       = utilxx_base::Json::object();
+    j["name"]                 = mc.name;
+    j["type"]                 = mc.type;
+    j["model"]                = mc.modelName;
+    j["base_url"]             = mc.baseUrl;
+    j["api_path"]             = mc.apiPath;
+    j["api_key_set"]          = !mc.apiKey.empty() && mc.apiKey != "EMPTY";
+    j["context_max_token"]    = mc.modelContextMaxToken;
+    j["max_connections"]      = mc.maxConcurrentConnections;
+    j["connect_timeout_s"]    = mc.connectTimeoutSeconds;
+    j["read_chunk_timeout_s"] = mc.readChunkTimeoutSeconds;
+    j["send_thinking"]        = mc.sendThinking;
+    j["reasoning_summary"]    = mc.requestReasoningSummary;
+    j["image_input"]          = mc.imageInput;
+    j["audio_input"]          = mc.audioInput;
+    j["video_input"]          = mc.videoInput;
+    utilxx_base::Json headers = utilxx_base::Json::array();
     for (const auto& [k, v] : mc.extraHeaders) {
         (void)v; // 头取值可能是凭据, 只输出名称
         headers.push_back(k);
     }
-    j["extra_headers"] = std::move(headers);
+    j["extra_headers"]          = std::move(headers);
     utilxx_base::Json extraKeys = utilxx_base::Json::array();
     if (mc.extraConfig.is_object()) {
         for (const auto& [k, v] : mc.extraConfig.items()) {
@@ -97,44 +97,44 @@ void appendPluginEntries(const AgentContext& ctx, utilxx_base::Json& pluginsOut)
         return;
     }
     for (const auto& v : ctx.pluginManager->list()) {
-        utilxx_base::Json item = utilxx_base::Json::object();
-        item["name"]                = v.name;
-        item["version"]             = v.version;
-        item["path"]                = v.path;
-        item["config_path"]         = v.configPath;
-        item["enabled"]             = v.enabled;
-        item["user_disabled"]       = v.userDisabled;
-        item["blocked_by_deps"]     = v.blockedByDependencies;
-        item["inflight"]            = v.inflight;
-        item["load_ms"]             = v.loadMs;
-        item["tools"]               = v.tools;
-        item["tool_count"]          = v.tools.size();
-        item["hook_count"]          = v.hookCount;
+        utilxx_base::Json item  = utilxx_base::Json::object();
+        item["name"]            = v.name;
+        item["version"]         = v.version;
+        item["path"]            = v.path;
+        item["config_path"]     = v.configPath;
+        item["enabled"]         = v.enabled;
+        item["user_disabled"]   = v.userDisabled;
+        item["blocked_by_deps"] = v.blockedByDependencies;
+        item["inflight"]        = v.inflight;
+        item["load_ms"]         = v.loadMs;
+        item["tools"]           = v.tools;
+        item["tool_count"]      = v.tools.size();
+        item["hook_count"]      = v.hookCount;
         // 钩子处理器的生效优先级 (按派发顺序; 一眼看出谁先跑)
         utilxx_base::Json hookPriorities = utilxx_base::Json::array();
         for (const auto priority : v.hookPriorities) {
             hookPriorities.push_back(priority);
         }
-        item["hook_priorities"] = std::move(hookPriorities);
-        item["graph_node_count"]    = v.graphNodeCount;
-        item["event_sub_count"]     = v.eventSubCount;
-        item["capability_count"]    = v.capabilities.size();
-        item["capabilities"]        = v.capabilities;
-        item["permission_tools"]    = v.permissionToolCount;
+        item["hook_priorities"]  = std::move(hookPriorities);
+        item["graph_node_count"] = v.graphNodeCount;
+        item["event_sub_count"]  = v.eventSubCount;
+        item["capability_count"] = v.capabilities.size();
+        item["capabilities"]     = v.capabilities;
+        item["permission_tools"] = v.permissionToolCount;
         // 功能点: 本实例声明的点数 / 登记的实现数 (禁用/卸载后回 0)
         item["feature_point_count"] = v.featurePointCount;
         item["feature_impl_count"]  = v.featureImplCount;
         // 统一注册清单合计: 0 = 该实例当前没有向主程序贡献任何注册
-        item["registration_total"]  = v.registrationTotal;
-        item["prompt_key_count"]    = v.promptKeyCount;
-        item["skill_dir_count"]     = v.skillDirCount;
-        item["memory_file_count"]   = v.memoryFileCount;
-        item["mcp_namespace_count"] = v.mcpNamespaceCount;
+        item["registration_total"]    = v.registrationTotal;
+        item["prompt_key_count"]      = v.promptKeyCount;
+        item["skill_dir_count"]       = v.skillDirCount;
+        item["memory_file_count"]     = v.memoryFileCount;
+        item["mcp_namespace_count"]   = v.mcpNamespaceCount;
         item["owns_graph_definition"] = v.ownsGraphDefinition;
-        item["depends"]             = v.depends;
-        item["optional_depends"]    = v.optionalDepends;
-        item["require_interfaces"]  = v.requiredInterfaces;
-        item["optional_interfaces"] = v.optionalInterfaces;
+        item["depends"]               = v.depends;
+        item["optional_depends"]      = v.optionalDepends;
+        item["require_interfaces"]    = v.requiredInterfaces;
+        item["optional_interfaces"]   = v.optionalInterfaces;
         pluginsOut.push_back(std::move(item));
     }
 }
@@ -142,17 +142,17 @@ void appendPluginEntries(const AgentContext& ctx, utilxx_base::Json& pluginsOut)
 /// 工具装配记录 → 快照条目
 utilxx_base::Json toolRecordJson(const ToolAssemblyRecord& rec) {
     utilxx_base::Json item = utilxx_base::Json::object();
-    item["name"]               = rec.name;
-    item["source"]             = rec.source;
-    item["filtered"]           = rec.filtered;
+    item["name"]           = rec.name;
+    item["source"]         = rec.source;
+    item["filtered"]       = rec.filtered;
     if (rec.filtered) {
         item["filter_reason"] = rec.filterReason;
     }
-    item["auto_summary"]      = rec.autoSummaryOutput;
-    item["delay_load"]        = rec.canDelayLoad;
-    item["repeat_check"]      = rec.repeatCallCheck;
-    item["parallel_safe"]     = rec.supportsParallel;
-    item["max_retry"]         = rec.maxRetry;
+    item["auto_summary"]  = rec.autoSummaryOutput;
+    item["delay_load"]    = rec.canDelayLoad;
+    item["repeat_check"]  = rec.repeatCallCheck;
+    item["parallel_safe"] = rec.supportsParallel;
+    item["max_retry"]     = rec.maxRetry;
     return item;
 }
 
@@ -189,10 +189,10 @@ utilxx_base::Json buildConfigSnapshot(const AgentConfig& config) {
     root["section"]        = "config";
 
     utilxx_base::Json paths = utilxx_base::Json::object();
-    paths["data_dir"]  = config.dataDir;
-    paths["work_dir"]  = config.resolvedWorkDir();
-    paths["session_root"] = config.sessionStoreDirectory;
-    root["paths"]      = std::move(paths);
+    paths["data_dir"]       = config.dataDir;
+    paths["work_dir"]       = config.resolvedWorkDir();
+    paths["session_root"]   = config.sessionStoreDirectory;
+    root["paths"]           = std::move(paths);
 
     utilxx_base::Json model = utilxx_base::Json::object();
     model["default"]        = modelSnapshotJson(config.model);
@@ -201,12 +201,12 @@ utilxx_base::Json buildConfigSnapshot(const AgentConfig& config) {
     if (config.subagentModel.has_value()) {
         sub = modelSnapshotJson(*config.subagentModel);
     }
-    model["subagent"]  = std::move(sub);
+    model["subagent"]     = std::move(sub);
     utilxx_base::Json web = utilxx_base::Json();
     if (config.websearchModel.has_value()) {
         web = modelSnapshotJson(*config.websearchModel);
     }
-    model["websearch"] = std::move(web);
+    model["websearch"]          = std::move(web);
     utilxx_base::Json available = utilxx_base::Json::object();
     for (const auto& [name, mc] : config.availableModels) {
         available[name] = modelSnapshotJson(mc);
@@ -214,7 +214,7 @@ utilxx_base::Json buildConfigSnapshot(const AgentConfig& config) {
     model["available"] = std::move(available);
     root["model"]      = std::move(model);
 
-    utilxx_base::Json prompt = utilxx_base::Json::object();
+    utilxx_base::Json prompt      = utilxx_base::Json::object();
     prompt["system_prompt_chars"] = config.prompt.systemPrompt.size();
     utilxx_base::Json sections    = utilxx_base::Json::array();
     for (const auto& key : config.prompt.appendSectionKeys()) {
@@ -230,17 +230,17 @@ utilxx_base::Json buildConfigSnapshot(const AgentConfig& config) {
     perm["deny_paths"]     = config.permissionDenyPaths;
     root["permission"]     = std::move(perm);
 
-    utilxx_base::Json features = utilxx_base::Json::object();
-    features["session_store"] = config.enableSessionStore;
-    features["summarization"] = config.enableSummarization;
-    features["subagent"]      = config.enableSubagent;
-    features["worktree"]      = config.enableWorktree;
-    features["tool_filtering"] = config.enableToolFiltering;
-    features["tool_whitelist"] = config.toolWhitelist;
+    utilxx_base::Json features  = utilxx_base::Json::object();
+    features["session_store"]   = config.enableSessionStore;
+    features["summarization"]   = config.enableSummarization;
+    features["subagent"]        = config.enableSubagent;
+    features["worktree"]        = config.enableWorktree;
+    features["tool_filtering"]  = config.enableToolFiltering;
+    features["tool_whitelist"]  = config.toolWhitelist;
     features["repair_messages"] = config.repairMessages;
-    root["features"]           = std::move(features);
+    root["features"]            = std::move(features);
 
-    utilxx_base::Json limits = utilxx_base::Json::object();
+    utilxx_base::Json limits           = utilxx_base::Json::object();
     limits["llm_max_retry"]            = config.llmMaxRetry;
     limits["tool_summary_limit"]       = config.toolcallSummaryLimitOutputLength;
     limits["user_input_summary_limit"] = config.userInputSummaryLimitLength;
@@ -278,9 +278,9 @@ utilxx_base::Json buildConfigSnapshot(const AgentConfig& config) {
     // 键名与运行侧区分: 这里只是"配置里声明了哪些插件", 加载结果在运行侧快照的
     // `plugins` (含启用状态 / 加载耗时 / 注册计数)
     root["plugin_declarations"] = std::move(plugins);
-    root["language"] = config.language;
-    root["language_explicit"] = config.languageExplicit;
-    root["agent_name"] = config.agentName;
+    root["language"]            = config.language;
+    root["language_explicit"]   = config.languageExplicit;
+    root["agent_name"]          = config.agentName;
     return root;
 }
 
@@ -332,9 +332,9 @@ utilxx_base::Json buildRuntimeSnapshot(const AgentContext& ctx) {
             dynamicTools.push_back(std::move(item));
         }
     }
-    utilxx_base::Json toolSection = utilxx_base::Json::object();
-    toolSection["assembled"]      = std::move(tools);
-    toolSection["dynamic"]        = std::move(dynamicTools);
+    utilxx_base::Json toolSection  = utilxx_base::Json::object();
+    toolSection["assembled"]       = std::move(tools);
+    toolSection["dynamic"]         = std::move(dynamicTools);
     toolSection["assembled_count"] = ctx.toolAssembly.size();
     toolSection["enabled_count"]   = ctx.toolNames.size();
     toolSection["dynamic_count"]   = ctx.toolRegistry ? ctx.toolRegistry->size() : 0;
@@ -347,11 +347,11 @@ utilxx_base::Json buildRuntimeSnapshot(const AgentContext& ctx) {
 
     // ---- 执行图 ----
     utilxx_base::Json graph = utilxx_base::Json::object();
-    const auto&        def  = ctx.graphDefinitionJson;
+    const auto&       def   = ctx.graphDefinitionJson;
     if (def.is_object()) {
-        graph["name"]  = def.contains("name") && def["name"].is_string()
-                             ? def["name"].get<std::string>()
-                             : std::string{};
+        graph["name"] = def.contains("name") && def["name"].is_string()
+                            ? def["name"].get<std::string>()
+                            : std::string{};
         // 节点表是"节点名 → 配置"的对象 (图定义方言); 兼容数组形态
         utilxx_base::Json nodeTypes = utilxx_base::Json::array();
         size_t            nodeCount = 0;
@@ -376,9 +376,7 @@ utilxx_base::Json buildRuntimeSnapshot(const AgentContext& ctx) {
         }
         graph["nodes"]      = nodeCount;
         graph["node_types"] = std::move(nodeTypes);
-        graph["edges"]      = def.contains("edges") && def["edges"].is_array()
-                                  ? def["edges"].size()
-                                  : 0;
+        graph["edges"] = def.contains("edges") && def["edges"].is_array() ? def["edges"].size() : 0;
     } else {
         graph["name"] = "";
     }
@@ -388,11 +386,11 @@ utilxx_base::Json buildRuntimeSnapshot(const AgentContext& ctx) {
     root["graph"] = std::move(graph);
 
     // ---- 持久化 ----
-    utilxx_base::Json persist = utilxx_base::Json::object();
+    utilxx_base::Json persist  = utilxx_base::Json::object();
     const bool        hasStore = ctx.sessions && ctx.sessions->sessionStore;
-    persist["enabled"]        = hasStore;
-    persist["root"]           = hasStore ? ctx.sessions->sessionStore->rootDir() : std::string{};
-    persist["schema_version"] = SessionStore::schemaVersion();
+    persist["enabled"]         = hasStore;
+    persist["root"]            = hasStore ? ctx.sessions->sessionStore->rootDir() : std::string{};
+    persist["schema_version"]  = SessionStore::schemaVersion();
     if (hasStore) {
         persist["writer_lease"] = ctx.sessions->sessionStore->writerLeaseEnabled();
     }
@@ -426,11 +424,11 @@ utilxx_base::Json buildRuntimeSnapshot(const AgentContext& ctx) {
     }
 
     // ---- 已加载组件 (skill / memory / mcp) 与加载失败项 ----
-    utilxx_base::Json components  = utilxx_base::Json::object();
-    components["skills"]          = ctx.appendComponentInfo.skills;
-    components["memory_files"]    = ctx.appendComponentInfo.memoryFiles;
-    components["mcp_tools"]       = ctx.appendComponentInfo.mcpTools;
-    utilxx_base::Json failures    = utilxx_base::Json::array();
+    utilxx_base::Json components = utilxx_base::Json::object();
+    components["skills"]         = ctx.appendComponentInfo.skills;
+    components["memory_files"]   = ctx.appendComponentInfo.memoryFiles;
+    components["mcp_tools"]      = ctx.appendComponentInfo.mcpTools;
+    utilxx_base::Json failures   = utilxx_base::Json::array();
     for (const auto& fc : ctx.appendComponentInfo.failedComponents) {
         utilxx_base::Json item = utilxx_base::Json::object();
         item["name"]           = fc.name;
@@ -469,7 +467,9 @@ utilxx_base::Json mergeAssemblySnapshot(
 
 std::vector<std::string> renderAssemblySnapshot(const utilxx_base::Json& snapshot) {
     std::vector<std::string> lines;
-    auto                     add = [&lines](std::string text) { lines.push_back(std::move(text)); };
+    auto                     add = [&lines](std::string text) {
+        lines.push_back(std::move(text));
+    };
 
     /// 插件行的钩子优先级片段 (` prio=[0,-10]`; 该插件没有处理器时为空)
     auto hookPrioritiesText = [](const utilxx_base::Json& pluginItem) -> std::string {
@@ -562,9 +562,11 @@ std::vector<std::string> renderAssemblySnapshot(const utilxx_base::Json& snapsho
     if (snapshot.contains("middlewares") && snapshot["middlewares"].is_array()) {
         std::vector<std::string> names;
         for (const auto& item : snapshot["middlewares"]) {
-            names.push_back(
-                fmt::format("{}{}", item.value("name", std::string{}), item.value("disabled", false) ? "(off)" : "")
-            );
+            names.push_back(fmt::format(
+                "{}{}",
+                item.value("name", std::string{}),
+                item.value("disabled", false) ? "(off)" : ""
+            ));
         }
         add(fmt::format("middlewares[{}]: {}", names.size(), fmt::join(names, " -> ")));
     }
@@ -638,8 +640,8 @@ std::vector<std::string> renderAssemblySnapshot(const utilxx_base::Json& snapsho
     if (snapshot.contains("feature_points") && snapshot["feature_points"].is_object()) {
         const auto& section = snapshot["feature_points"];
         const auto& points  = section.contains("points") && section["points"].is_array()
-                                 ? section["points"]
-                                 : utilxx_base::Json::array();
+                                  ? section["points"]
+                                  : utilxx_base::Json::array();
         add(fmt::format(
             "featurePoints[{}] devMode={}:",
             points.size(),
@@ -649,13 +651,13 @@ std::vector<std::string> renderAssemblySnapshot(const utilxx_base::Json& snapsho
             if (!p.is_object()) {
                 continue;
             }
-            const auto  impls      = p.contains("impls") && p["impls"].is_array() ? p["impls"].size()
-                                                                                 : size_t{0};
-            const auto  by         = p.value("effectiveBy", std::string{});
-            const auto  disabledBy = p.value("disabledBy", std::string{});
-            const auto  cacheMode  = p.contains("cache") && p["cache"].is_object()
-                                         ? p["cache"].value("mode", std::string{})
-                                         : std::string{};
+            const auto impls
+                = p.contains("impls") && p["impls"].is_array() ? p["impls"].size() : size_t{0};
+            const auto by         = p.value("effectiveBy", std::string{});
+            const auto disabledBy = p.value("disabledBy", std::string{});
+            const auto cacheMode  = p.contains("cache") && p["cache"].is_object()
+                                        ? p["cache"].value("mode", std::string{})
+                                        : std::string{};
             add(fmt::format(
                 "  - {} [{}] impls={} by={} cache={} callable={}{}",
                 p.value("id", std::string{}),
@@ -670,11 +672,11 @@ std::vector<std::string> renderAssemblySnapshot(const utilxx_base::Json& snapsho
     }
     // 钩子处理器: 各点上有哪些处理器、谁排在前面 (排障时与 featurePoints 一起看)
     if (snapshot.contains("hooks") && snapshot["hooks"].is_object()) {
-        const auto& section  = snapshot["hooks"];
-        const auto& points   = section.contains("points") && section["points"].is_array()
-                                   ? section["points"]
-                                   : utilxx_base::Json::array();
-        const auto  devMode  = section.value("devMode", false);
+        const auto& section = snapshot["hooks"];
+        const auto& points  = section.contains("points") && section["points"].is_array()
+                                  ? section["points"]
+                                  : utilxx_base::Json::array();
+        const auto  devMode = section.value("devMode", false);
         add(fmt::format(
             "hookHandlers[{}] devMode={}:",
             section.value("handlers", 0),
@@ -723,7 +725,7 @@ std::vector<std::string> renderAssemblySnapshot(const utilxx_base::Json& snapsho
         }
     }
     if (snapshot.contains("graph") && snapshot["graph"].is_object()) {
-        const auto& graph       = snapshot["graph"];
+        const auto& graph           = snapshot["graph"];
         const auto  definitionOwner = graph.value("definition_owner", std::string{});
         add(fmt::format(
             "graph: {} nodes={} edges={}{}",
@@ -829,7 +831,8 @@ void logAssemblySnapshot(const utilxx_base::Json& snapshot, std::string_view sta
         snapshot.contains("graph") ? snapshot["graph"].value("name", std::string{}) : std::string{}
     );
     if (snapshot.contains("persistence")) {
-        summary += snapshot["persistence"].value("enabled", false) ? " persistence=on" : " persistence=off";
+        summary += snapshot["persistence"].value("enabled", false) ? " persistence=on"
+                                                                   : " persistence=off";
     }
     XX_LOGI("{}", summary);
     XX_LOGD("{}", snapshot.dump());

@@ -66,33 +66,22 @@ static int32_t stringSetup(StringPluginCtx& ctx) {
     );
 
     // 2. regexp
-    auto regexpSchema
-        = ctx.schema(kNameRegexp)
-              .string("content", "The input text to operate on.", /*required=*/true)
-              .stringArray(
-                  "exps",
-                  kExpsDesc,
-                  /*required=*/true
-              )
-              .enumString(
-                  "opt",
-                  kOptDesc,
-                  {"search", "replace", "remove"},
-                  /*required=*/true
-              )
-              .string(
-                  "replace_str",
-                  kReplaceStrDesc,
-                  false,
-                  ""
-              )
-              .boolean(
-                  "ignore_case",
-                  kIgnoreCaseDesc,
-                  false,
-                  false
-              )
-              .build();
+    auto regexpSchema = ctx.schema(kNameRegexp)
+                            .string("content", "The input text to operate on.", /*required=*/true)
+                            .stringArray(
+                                "exps",
+                                kExpsDesc,
+                                /*required=*/true
+                            )
+                            .enumString(
+                                "opt",
+                                kOptDesc,
+                                {"search", "replace", "remove"},
+                                /*required=*/true
+                            )
+                            .string("replace_str", kReplaceStrDesc, false, "")
+                            .boolean("ignore_case", kIgnoreCaseDesc, false, false)
+                            .build();
 
     blocking_tool(
         ctx,

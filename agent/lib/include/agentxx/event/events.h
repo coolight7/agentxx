@@ -242,7 +242,7 @@ struct RespPermission {
     // 成员按对齐/尺寸从大到小排列, 减少结构体内填充字节
     /// 拒绝原因 (供 LLM/日志参考)
     std::string reason;
-    Decision decision = Decision::Deny;
+    Decision    decision = Decision::Deny;
     /// 用户是否选择"记住本次选择" (权限询问卡片的 remember 勾选项):
     /// - true 时由请求方 ([PermissionMiddlewareHandle]) 按本次 target 为其子树
     ///   注册允许/拒绝规则, 后续同目标访问直接按规则处理, 不再询问

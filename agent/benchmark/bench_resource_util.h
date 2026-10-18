@@ -1287,7 +1287,7 @@ inline ResourceLlmSimServer startResourceLlmSimServer(size_t streamChunks = 0) {
                 tc["id"]       = "call-000001";
                 tc["type"]     = "function";
                 tc["function"] = {
-                    {"name",      "agentxx_filesystem_read"                                     },
+                    {"name",      "agentxx_filesystem_read"                           },
                     {"arguments", "{\"path\":\"README.md\",\"offset\":0,\"limit\":40}"}
                 };
                 toolCalls.push_back(tc);
@@ -1337,8 +1337,8 @@ inline ResourceLlmSimServer startResourceLlmSimServer(size_t streamChunks = 0) {
                         const size_t len
                             = (i + 1 == streamChunks) ? (replyContent.size() - pos) : step;
                         neograph::json dc;
-                        dc["content"] = replyContent.substr(pos, len);
-                        pos += len;
+                        dc["content"]  = replyContent.substr(pos, len);
+                        pos           += len;
                         append(dc, "");
                     }
                     append(neograph::json::object(), "stop");

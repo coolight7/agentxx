@@ -245,7 +245,7 @@ struct FfiMockLLM {
         );
         auto handler = std::make_shared<utilxx::HttpServer::Handler>(
             [this](
-                utilxx::HttpServer::Request& req,
+                utilxx::HttpServer::Request&  req,
                 utilxx::HttpServer::Response& resp,
                 std::string_view
             ) -> asio::awaitable<void> {
@@ -845,9 +845,7 @@ void testSendInputJsonAndAttachments() {
         // text 与 attachments 都为空
         auto emptySv = agentxx_string_view_cstr(R"({"text":""})");
         XX_TEST_EXPECT_EQ(agentxx_ffi_send_input(a, &emptySv, &log), AGENTXX_FFI_ERR_INVALID);
-        XX_TEST_EXPECT_TRUE(
-            log.data != nullptr && std::strstr(log.data, "至少需要") != nullptr
-        );
+        XX_TEST_EXPECT_TRUE(log.data != nullptr && std::strstr(log.data, "至少需要") != nullptr);
         agentxx_ffi_string_free(&log);
 
         // attachments 不是数组
@@ -861,12 +859,10 @@ void testSendInputJsonAndAttachments() {
             tooMany += (i == 0 ? "" : ",");
             tooMany += fmt::format(R"({{"type":"image","name":"i{}.png","size":10}})", i);
         }
-        tooMany += "]}";
-        auto tooManySv = agentxx_string_view(tooMany.data(), tooMany.size());
+        tooMany        += "]}";
+        auto tooManySv  = agentxx_string_view(tooMany.data(), tooMany.size());
         XX_TEST_EXPECT_EQ(agentxx_ffi_send_input(a, &tooManySv, &log), AGENTXX_FFI_ERR_INVALID);
-        XX_TEST_EXPECT_TRUE(
-            log.data != nullptr && std::strstr(log.data, "条数") != nullptr
-        );
+        XX_TEST_EXPECT_TRUE(log.data != nullptr && std::strstr(log.data, "条数") != nullptr);
         agentxx_ffi_string_free(&log);
 
         // 单个附件超大小上限 (图片 10MB; 声明 15MB)
@@ -874,9 +870,7 @@ void testSendInputJsonAndAttachments() {
             R"({"text":"x","attachments":[{"type":"image","name":"big.png","size":15728640}]})"
         );
         XX_TEST_EXPECT_EQ(agentxx_ffi_send_input(a, &oversizeSv, &log), AGENTXX_FFI_ERR_INVALID);
-        XX_TEST_EXPECT_TRUE(
-            log.data != nullptr && std::strstr(log.data, "上限") != nullptr
-        );
+        XX_TEST_EXPECT_TRUE(log.data != nullptr && std::strstr(log.data, "上限") != nullptr);
         agentxx_ffi_string_free(&log);
 
         // 以上非法输入都不应开启轮次
@@ -926,8 +920,8 @@ void testSendInputJsonAndAttachments() {
         XX_TEST_EXPECT_TRUE(!body.empty());
         bool found = false;
         if (!body.empty()) {
-            auto j     = utilxx_base::Json::parse(body);
-            auto msgs  = j.value("messages", utilxx_base::Json::array());
+            auto j    = utilxx_base::Json::parse(body);
+            auto msgs = j.value("messages", utilxx_base::Json::array());
             for (const auto& m : msgs) {
                 if (!m.contains("content") || !m["content"].is_array()) {
                     continue;
@@ -940,10 +934,7 @@ void testSendInputJsonAndAttachments() {
                         continue;
                     }
                     found = true;
-                    XX_TEST_EXPECT_EQ(
-                        part["image_url"].value("url", std::string{}),
-                        dataUrl
-                    );
+                    XX_TEST_EXPECT_EQ(part["image_url"].value("url", std::string{}), dataUrl);
                 }
             }
         }
@@ -1159,8 +1150,9 @@ void testModelManagement() {
     std::error_code ec;
     fs::remove_all(tmpDataDir, ec);
     fs::create_directories(tmpDataDir, ec);
-    const std::string cfgJson
-        = utilxx_base::Json{{"dataDir", tmpDataDir.generic_string()}}.dump();
+    const std::string cfgJson = utilxx_base::Json{
+        {"dataDir", tmpDataDir.generic_string()}
+    }.dump();
 
     AgentxxString    log{};
     auto             cfgSv   = agentxx_string_view(cfgJson.data(), cfgJson.size());
@@ -1206,9 +1198,7 @@ void testModelManagement() {
     agentxx_ffi_string_free(&listOut);
 
     // 3b. 重名添加应被拒绝 (配置里已有同名模型)
-    XX_TEST_EXPECT_TRUE(
-        agentxx_ffi_add_model(a, &newModelSv, &log) != AGENTXX_FFI_OK
-    );
+    XX_TEST_EXPECT_TRUE(agentxx_ffi_add_model(a, &newModelSv, &log) != AGENTXX_FFI_OK);
     agentxx_ffi_string_free(&log);
 
     // 4. 尝试删除当前正在使用的模型 (应被拒绝):
@@ -1242,8 +1232,11 @@ void testModelManagement() {
 
     // 5b. 落盘校验: 条目已从 yaml 移除 (重启后不会复现)
     {
-        std::ifstream f(tmpDataDir / "agentxx-config.yaml", std::ios::binary);
-        const std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        std::ifstream     f(tmpDataDir / "agentxx-config.yaml", std::ios::binary);
+        const std::string text(
+            (std::istreambuf_iterator<char>(f)),
+            std::istreambuf_iterator<char>()
+        );
         XX_TEST_EXPECT_TRUE(text.find("new-mock-model") == std::string::npos);
     }
 
@@ -1270,10 +1263,7 @@ void testModelManagement() {
         agentxx_ffi_string_free(&log);
 
         auto emptyNameSv = agentxx_string_view_cstr("");
-        XX_TEST_EXPECT_EQ(
-            agentxx_ffi_remove_model(a, &emptyNameSv, &log),
-            AGENTXX_FFI_ERR_INVALID
-        );
+        XX_TEST_EXPECT_EQ(agentxx_ffi_remove_model(a, &emptyNameSv, &log), AGENTXX_FFI_ERR_INVALID);
         agentxx_ffi_string_free(&log);
     }
 
@@ -1323,7 +1313,8 @@ void testSendWire() {
     mock.stop();
 }
 
-/// 12) 嵌入方程序工具与文本合批接口: tool_register / tool_unregister / tool_respond / set_delta_batch
+/// 12) 嵌入方程序工具与文本合批接口: tool_register / tool_unregister / tool_respond /
+/// set_delta_batch
 void testHostToolAndDeltaBatch() {
     FfiMockLLM mock;
     uint16_t   port = 0;
@@ -1349,7 +1340,7 @@ void testHostToolAndDeltaBatch() {
             "timeoutSec": 30
         }]
     })";
-    auto toolSv = agentxx_string_view(toolJson.data(), toolJson.size());
+    auto        toolSv   = agentxx_string_view(toolJson.data(), toolJson.size());
     XX_TEST_EXPECT_EQ(agentxx_ffi_tool_register(a, &toolSv, &log), AGENTXX_FFI_OK);
 
     // 2. 响应工具

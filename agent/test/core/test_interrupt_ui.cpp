@@ -517,36 +517,41 @@ void test_plain_text_extended_blocks() {
     InterruptUi ui;
     // 扩展组件块 = 描述层的组件描述 (规范写法: 组件名 PascalCase、字段 camelCase)
     ui.blocks.push_back(InterruptUiBlock::fromJson(Json{
-        {"kind", "Table"},
-        {"header", true},
-        {"columns", Json::array({Json{{"title", "Path"}}, Json{{"title", "Scope"}, {"align", "end"}}})},
-        {"rows", Json::array({Json::array({"a.txt", "write"}), Json::array({"b.txt", "read"})})},
+        {"kind",    "Table"                                                                       },
+        {"header",  true                                                                          },
+        {"columns",
+         Json::array({Json{{"title", "Path"}}, Json{{"title", "Scope"}, {"align", "end"}}})       },
+        {"rows",    Json::array({Json::array({"a.txt", "write"}), Json::array({"b.txt", "read"})})},
     }));
     ui.blocks.push_back(InterruptUiBlock::fromJson(Json{
-        {"kind", "KV"},
+        {"kind",  "KV"                                               },
         {"pairs", Json::array({Json{{"k", "Model"}, {"v", "gpt-x"}}})},
     }));
     ui.blocks.push_back(InterruptUiBlock::fromJson(Json{
-        {"kind", "Tree"},
-        {"nodes", Json::array({Json{{"label", "src"}, {"children", Json::array({Json{{"label", "main.cpp"}}})}}})},
+        {"kind",  "Tree"},
+        {"nodes",
+         Json::array(
+             {Json{{"label", "src"}, {"children", Json::array({Json{{"label", "main.cpp"}}})}}}
+         )              },
     }));
     ui.blocks.push_back(InterruptUiBlock::fromJson(Json{
-        {"kind", "Progress"},
-        {"value", 72},
-        {"total", 100},
-        {"label", "CPU"},
+        {"kind",  "Progress"},
+        {"value", 72        },
+        {"total", 100       },
+        {"label", "CPU"     },
     }));
     ui.blocks.push_back(InterruptUiBlock::fromJson(Json{
-        {"kind", "Sparkline"},
+        {"kind", "Sparkline"           },
         {"data", Json::array({1, 5, 3})},
     }));
     ui.blocks.push_back(InterruptUiBlock::fromJson(Json{
-        {"kind", "Row"},
-        {"children", Json::array({Json{{"kind", "Text"}, {"text", "L"}},
-                                  Json{{"kind", "Text"}, {"text", "R"}}})},
+        {"kind",     "Row"                                                                          },
+        {"children",
+         Json::array({Json{{"kind", "Text"}, {"text", "L"}}, Json{{"kind", "Text"}, {"text", "R"}}})
+        },
     }));
     ui.blocks.push_back(InterruptUiBlock::fromJson(Json{
-        {"kind", "future_widget"},
+        {"kind",     "future_widget"     },
         {"fallback", "unsupported widget"},
     }));
 
@@ -567,15 +572,17 @@ void test_plain_text_extended_blocks() {
 
     // 未知 kind 且无 fallback: 跳过 (向前兼容)
     InterruptUi unknown;
-    unknown.blocks.push_back(InterruptUiBlock::fromJson(Json{{"kind", "future_widget"}}));
+    unknown.blocks.push_back(InterruptUiBlock::fromJson(Json{
+        {"kind", "future_widget"}
+    }));
     XX_TEST_EXPECT_EQ(interruptUiPlainText(unknown, 0), std::string{});
 
     // 缩进与折行 (宽度按显示列宽算法, 与文本块一致)
     InterruptUi indented;
     indented.blocks.push_back(InterruptUiBlock::fromJson(Json{
-        {"kind", "text"},
-        {"text", "abcdefgh"},
-        {"indent", 2},
+        {"kind",   "text"    },
+        {"text",   "abcdefgh"},
+        {"indent", 2         },
     }));
     const auto wrappedText = interruptUiPlainText(indented, 6);
     XX_TEST_EXPECT_TRUE(wrappedText.find("  abcd") != std::string::npos);
@@ -596,47 +603,47 @@ void test_ui_image_progress_path() {
     InterruptUi ui;
     // 1) 图片块 (dataUrl 形态)
     ui.blocks.push_back(InterruptUiBlock::fromJson(Json{
-        {"kind", "image"},
-        {"dataUrl", "data:image/png;base64,AAAA"},
-        {"alt", "生成结果预览"},
-        {"maxHeight", 12},
+        {"kind",      "image"                     },
+        {"dataUrl",   "data:image/png;base64,AAAA"},
+        {"alt",       "生成结果预览"        },
+        {"maxHeight", 12                          },
     }));
     // 2) 图片块 (path 形态; 无 alt)
     ui.blocks.push_back(InterruptUiBlock::fromJson(Json{
-        {"kind", "image"},
+        {"kind", "image"       },
         {"path", "/tmp/out.png"},
     }));
     // 3) 进度块 (有总量 + 标签)
     ui.blocks.push_back(InterruptUiBlock::fromJson(Json{
-        {"kind", "progress"},
-        {"value", 72},
-        {"total", 100},
+        {"kind",  "progress"    },
+        {"value", 72            },
+        {"total", 100           },
         {"label", "生成进度"},
     }));
     // 4) 进度块 (无总量 = 不确定态)
     ui.blocks.push_back(InterruptUiBlock::fromJson(Json{
-        {"kind", "progress"},
-        {"value", 3},
-        {"total", 0},
+        {"kind",    "progress"          },
+        {"value",   3                   },
+        {"total",   0                   },
         {"textKey", "interrupt.progress"},
     }));
     // 5) 路径控件
     ui.blocks.push_back(InterruptUiBlock::fromJson(Json{
-        {"kind", "control"},
-        {"control", "path"},
-        {"id", "target"},
-        {"label", "选择文件"},
-        {"help", "支持 png/jpg"},
-        {"mode", "dir"},
-        {"filter", Json::array({".png", ".jpg"})},
-        {"defaultValue", "/tmp"},
+        {"kind",         "control"                    },
+        {"control",      "path"                       },
+        {"id",           "target"                     },
+        {"label",        "选择文件"               },
+        {"help",         "支持 png/jpg"             },
+        {"mode",         "dir"                        },
+        {"filter",       Json::array({".png", ".jpg"})},
+        {"defaultValue", "/tmp"                       },
     }));
     // 6) 路径控件 (缺 mode = 默认 file)
     ui.blocks.push_back(InterruptUiBlock::fromJson(Json{
-        {"kind", "control"},
-        {"control", "path"},
-        {"id", "picked"},
-        {"label", "文件"},
+        {"kind",    "control"},
+        {"control", "path"   },
+        {"id",      "picked" },
+        {"label",   "文件" },
     }));
 
     // --- 字段还原 ---
@@ -687,8 +694,8 @@ void test_ui_image_progress_path() {
     // --- 纯文本降级 (行式前端仍要有内容) ---
     const auto text = interruptUiPlainText(ui, 0);
     XX_TEST_EXPECT_TRUE(text.find("生成结果预览") != std::string::npos); // 图片: 用 alt
-    XX_TEST_EXPECT_TRUE(text.find("/tmp/out.png") != std::string::npos);  // 图片: 无 alt 用路径
-    XX_TEST_EXPECT_TRUE(text.find("72/100") != std::string::npos);        // 进度: value/total
+    XX_TEST_EXPECT_TRUE(text.find("/tmp/out.png") != std::string::npos); // 图片: 无 alt 用路径
+    XX_TEST_EXPECT_TRUE(text.find("72/100") != std::string::npos);       // 进度: value/total
     XX_TEST_EXPECT_TRUE(text.find("生成进度") != std::string::npos);
     XX_TEST_EXPECT_TRUE(text.find("选择文件") != std::string::npos); // 路径控件标签
     XX_TEST_EXPECT_TRUE(text.find("dir") != std::string::npos);      // 路径模式
@@ -712,7 +719,8 @@ void test_ui_image_progress_path() {
     XX_TEST_EXPECT_EQ(pProg.label, std::string("加载中"));
     XX_TEST_EXPECT_EQ(pProg.labelKey, std::string("prog.loading"));
 
-    const auto pPath = preset::pathControl("p1", "选择图片", "p.key", "multi", {".png"}, Json("/tmp"));
+    const auto pPath
+        = preset::pathControl("p1", "选择图片", "p.key", "multi", {".png"}, Json("/tmp"));
     XX_TEST_EXPECT_EQ(pPath.kind, std::string("control"));
     XX_TEST_EXPECT_EQ(pPath.control, std::string("path"));
     XX_TEST_EXPECT_EQ(pPath.id, std::string("p1"));
@@ -729,10 +737,10 @@ void test_ui_image_progress_bridge() {
     using namespace agentxx::middleware;
 
     // 图片块: 组件层没有图片元素, 桥接为带替代文本的文本行
-    const auto image = InterruptUiBlock::fromJson(Json{
-        {"kind", "image"},
-        {"dataUrl", "data:image/png;base64,AAAA"},
-        {"alt", "预览图"},
+    const auto image     = InterruptUiBlock::fromJson(Json{
+            {"kind",    "image"                     },
+            {"dataUrl", "data:image/png;base64,AAAA"},
+            {"alt",     "预览图"                 },
     });
     const auto imageItem = itemOf(image);
     XX_TEST_EXPECT_TRUE(imageItem.has_value());
@@ -742,10 +750,10 @@ void test_ui_image_progress_bridge() {
     }
 
     // 进度块: 桥接为 "value/total" 文本行
-    const auto progress = InterruptUiBlock::fromJson(Json{
-        {"kind", "progress"},
-        {"value", 5},
-        {"total", 8},
+    const auto progress     = InterruptUiBlock::fromJson(Json{
+            {"kind",  "progress"},
+            {"value", 5         },
+            {"total", 8         },
     });
     const auto progressItem = itemOf(progress);
     XX_TEST_EXPECT_TRUE(progressItem.has_value());
@@ -756,13 +764,13 @@ void test_ui_image_progress_bridge() {
 
     // 路径控件: 非交互主程序按 "标签: [路径输入 (mode)]" 降级
     const auto pathControl = InterruptUiBlock::fromJson(Json{
-        {"kind", "control"},
-        {"control", "path"},
-        {"id", "f"},
-        {"label", "文件"},
-        {"mode", "multi"},
+        {"kind",    "control"},
+        {"control", "path"   },
+        {"id",      "f"      },
+        {"label",   "文件" },
+        {"mode",    "multi"  },
     });
-    const auto pathItem = itemOf(pathControl);
+    const auto pathItem    = itemOf(pathControl);
     XX_TEST_EXPECT_TRUE(pathItem.has_value());
     if (pathItem) {
         XX_TEST_EXPECT_EQ(pathItem->kind, std::string{"Text"});
@@ -774,9 +782,9 @@ void test_ui_image_progress_bridge() {
         "ok",
         {preset::option("true", "Yes")},
         "Confirm",
-        {},          // labelKey
-        Json(true),  // defaultValue
-        true         // commitOnPick
+        {},         // labelKey
+        Json(true), // defaultValue
+        true        // commitOnPick
     );
     const auto buttonsItem = itemOf(buttons);
     XX_TEST_EXPECT_TRUE(buttonsItem.has_value());
@@ -839,11 +847,14 @@ void test_component_bridge() {
     using pluginxx::ui::TextValue;
 
     // 1) 组件项 → 中断块 (块只保留描述层的 JSON 原文, 内容不丢)
-    Item table    = pluginxx::ui::build::node("Table");
-    table.header  = true;
-    table.columns.push_back(TableColumn{TextValue::of("Path"), "start", SizeValue::autoValue(), {}});
+    Item table   = pluginxx::ui::build::node("Table");
+    table.header = true;
+    table.columns.push_back(TableColumn{TextValue::of("Path"), "start", SizeValue::autoValue(), {}}
+    );
     table.columns.push_back(TableColumn{TextValue::of("Scope"), "end", SizeValue::of(6), {}});
-    table.rows.push_back({TableCell{TextValue::of("a.txt"), {}, {}}});
+    table.rows.push_back({
+        TableCell{TextValue::of("a.txt"), {}, {}}
+    });
 
     Item progress  = pluginxx::ui::build::progress(72, 100, "%");
     progress.label = TextValue::of("CPU");
@@ -869,7 +880,7 @@ void test_component_bridge() {
 
     // 3) 端到端: 含扩展组件的中断描述在行式前端 (CLI/日志) 上也有内容
     InterruptUi desc;
-    desc.blocks = blocks;
+    desc.blocks     = blocks;
     const auto text = interruptUiPlainText(desc, 80);
     XX_TEST_EXPECT_TRUE(text.find("标题") != std::string::npos);
     XX_TEST_EXPECT_TRUE(text.find("a.txt") != std::string::npos);
@@ -925,8 +936,14 @@ void test_component_bridge() {
         XX_TEST_EXPECT_TRUE(
             submitRow->children[0].action.kind == pluginxx::ui::Action::Kind::Dispatch
         );
-        XX_TEST_EXPECT_EQ(submitRow->children[0].action.name, std::string{kInterruptSubmitActionId});
-        XX_TEST_EXPECT_EQ(submitRow->children[1].action.name, std::string{kInterruptCancelActionId});
+        XX_TEST_EXPECT_EQ(
+            submitRow->children[0].action.name,
+            std::string{kInterruptSubmitActionId}
+        );
+        XX_TEST_EXPECT_EQ(
+            submitRow->children[1].action.name,
+            std::string{kInterruptCancelActionId}
+        );
         XX_TEST_EXPECT_EQ(submitRow->children[0].label.fallback, std::string{"APPLY"});
     }
 
@@ -946,7 +963,12 @@ void test_component_bridge() {
         XX_TEST_EXPECT_EQ(treeItem->nodes[0].children[0].label.fallback, std::string{"main.cpp"});
     }
 
-    const auto tableBlock = preset::tableBlock({{"File", "left", 0}}, {{"x.cpp"}});
+    const auto tableBlock = preset::tableBlock(
+        {
+            {"File", "left", 0}
+    },
+        {{"x.cpp"}}
+    );
     XX_TEST_EXPECT_EQ(tableBlock.kind, std::string{"Table"});
     const auto tableBlockItem = itemOf(tableBlock);
     XX_TEST_EXPECT_TRUE(tableBlockItem.has_value());
@@ -955,6 +977,7 @@ void test_component_bridge() {
         XX_TEST_EXPECT_EQ(tableBlockItem->rows[0][0].text.fallback, std::string{"x.cpp"});
     }
 }
+
 TestResult testInterruptUi() {
     g_interrupt_ui_passed = 0;
     g_interrupt_ui_failed = 0;

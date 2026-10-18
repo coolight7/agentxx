@@ -436,10 +436,10 @@ asio::awaitable<void>
 asio::awaitable<void>
     test_regexp_no_match_is_result(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::StringRegexpTool{agentContext};
-    auto r = co_await tool.execute_async(utilxx_base::Json{
-        {"content", "hello"},
-        {"exps",    utilxx_base::Json::array({"zzz"})},
-        {"opt",     "search"},
+    auto r    = co_await tool.execute_async(utilxx_base::Json{
+           {"content", "hello"                          },
+           {"exps",    utilxx_base::Json::array({"zzz"})},
+           {"opt",     "search"                         },
     });
     if (r == std::string{"No match found"}) {
         g_st_passed++;
@@ -450,6 +450,7 @@ asio::awaitable<void>
     }
     co_return;
 }
+
 asio::awaitable<TestResult>
     run_string_tools_tests(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto run = [agentContext](auto testFn) -> asio::awaitable<void> {

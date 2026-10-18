@@ -27,7 +27,7 @@ inline WireContextStats toWireContextStats(const ContextStats& stats, double tps
     out.maxContextTokens = static_cast<uint64_t>(stats.maxContextTokens);
     out.tps              = tps;
     // 累计用量按非负值下发 (统计本身只增, 负数只可能来自脏数据)
-    out.promptTokens       = static_cast<uint64_t>(std::max<int64_t>(0, stats.usage.promptTokens));
+    out.promptTokens = static_cast<uint64_t>(std::max<int64_t>(0, stats.usage.promptTokens));
     out.completionTokens
         = static_cast<uint64_t>(std::max<int64_t>(0, stats.usage.completionTokens));
     out.totalTokens = static_cast<uint64_t>(std::max<int64_t>(0, stats.usage.totalTokens));

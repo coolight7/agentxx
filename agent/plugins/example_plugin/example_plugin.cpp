@@ -557,10 +557,12 @@ static void PLUGINXX_CALL on_client_turn_end(const PluginxxStringView* payload_j
             utilxx_base::Json               turnsText;
             turnsText["text"] = fmt::format("Turns: {}", ctx->turn_count);
             items.push_back(agentxx::ui::kit::text(turnsText));
-            items.push_back(agentxx::ui::kit::hint({{"text", "Example Info section is live"}}));
+            items.push_back(agentxx::ui::kit::hint({
+                {"text", "Example Info section is live"}
+            }));
             utilxx_base::Json payload;
-            payload["items"]        = pluginxx::ui::dumpBlocks(items);
-            const std::string json  = payload.dump();
+            payload["items"]         = pluginxx::ui::dumpBlocks(items);
+            const std::string json   = payload.dump();
             auto              jsonSv = agentxx::plugin::PluginStringView::fromCstr(json.c_str());
             ctx->ui->update_info_section(ctx->host, ctx->info_section, &jsonSv);
         }
@@ -597,7 +599,9 @@ static void PLUGINXX_CALL on_client_plugin_data(const PluginxxStringView* payloa
         utilxx_base::Json               lineText;
         lineText["text"] = line;
         items.push_back(agentxx::ui::kit::text(lineText));
-        items.push_back(agentxx::ui::kit::badge({{"text", "updated"}}));
+        items.push_back(agentxx::ui::kit::badge({
+            {"text", "updated"}
+        }));
         if (ctx->ui && ctx->ui->update_panel) {
             utilxx_base::Json payload;
             payload["items"]         = pluginxx::ui::dumpBlocks(items);

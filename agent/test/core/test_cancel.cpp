@@ -283,23 +283,17 @@ asio::awaitable<void> test_agent_cancel_llm_request() {
 
     const auto startAt = std::chrono::steady_clock::now();
     auto       group   = asio::experimental::make_parallel_group(
-        asio::co_spawn(
-            ex,
-            agent.runTurnAsync("cancel_llm_test", "Hello", nullptr),
-            asio::deferred
-        ),
+        asio::co_spawn(ex, agent.runTurnAsync("cancel_llm_test", "Hello", nullptr), asio::deferred),
         asio::co_spawn(ex, cancelWatcher(), asio::deferred)
     );
     // 结果逐项取值而不是结构化绑定: GCC 在 -O3 下会把协程帧里的
     // `auto [a, b] = co_await ...` 误报为 -Wmaybe-uninitialized
-    auto  waitResult = co_await group.async_wait(
-        asio::experimental::wait_for_all(),
-        asio::use_awaitable
-    );
-    auto& turnExc    = std::get<1>(waitResult);
-    auto& turnResult = std::get<2>(waitResult);
-    auto& watcherExc = std::get<3>(waitResult);
-    const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+    auto waitResult
+        = co_await group.async_wait(asio::experimental::wait_for_all(), asio::use_awaitable);
+    auto&      turnExc    = std::get<1>(waitResult);
+    auto&      turnResult = std::get<2>(waitResult);
+    auto&      watcherExc = std::get<3>(waitResult);
+    const auto elapsedMs  = std::chrono::duration_cast<std::chrono::milliseconds>(
                                std::chrono::steady_clock::now() - startAt
     )
                                .count();
@@ -498,14 +492,12 @@ asio::awaitable<void> test_agent_cancel_toolcall() {
     );
     // 结果逐项取值而不是结构化绑定: GCC 在 -O3 下会把协程帧里的
     // `auto [a, b] = co_await ...` 误报为 -Wmaybe-uninitialized
-    auto  waitResult = co_await group.async_wait(
-        asio::experimental::wait_for_all(),
-        asio::use_awaitable
-    );
-    auto& turnExc    = std::get<1>(waitResult);
-    auto& turnResult = std::get<2>(waitResult);
-    auto& watcherExc = std::get<3>(waitResult);
-    const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+    auto waitResult
+        = co_await group.async_wait(asio::experimental::wait_for_all(), asio::use_awaitable);
+    auto&      turnExc    = std::get<1>(waitResult);
+    auto&      turnResult = std::get<2>(waitResult);
+    auto&      watcherExc = std::get<3>(waitResult);
+    const auto elapsedMs  = std::chrono::duration_cast<std::chrono::milliseconds>(
                                std::chrono::steady_clock::now() - startAt
     )
                                .count();

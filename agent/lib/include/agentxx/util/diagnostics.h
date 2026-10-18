@@ -9,6 +9,7 @@ namespace agentxx {
 namespace agent {
 class AgentContext;
 }
+
 namespace util {
 
 /// 诊断包 (环境/指标/装配/会话摘要/日志的导出实现)
@@ -23,7 +24,7 @@ namespace util {
 /// - 日志尾部经 [redactSecrets] 处理 (屏蔽常见凭据形态), 并且**不导出环境变量**。
 struct DiagnosticsOptions {
     /// 是否包含会话消息正文 (默认关闭; 打开时最多 [maxMessageChars] 字符)
-    bool   includeMessages = false;
+    bool includeMessages = false;
     /// 单条消息正文上限 (字符)
     size_t maxMessageChars = 200;
     /// 日志尾部行数 (需先启用 [enableLogCapture]; 0 = 不含日志)
@@ -37,9 +38,9 @@ struct DiagnosticsOptions {
 /// - `sessionId` 为空时跳过会话段;
 /// - 依赖 `AgentContext` 中已装配的部分 (配置/插件/会话管理器/存储), 缺哪部分跳过哪段。
 std::string buildDiagnosticsText(
-    agent::AgentContext&                  ctx,
-    std::string_view                      sessionId    = {},
-    const DiagnosticsOptions&             options      = {}
+    agent::AgentContext&      ctx,
+    std::string_view          sessionId = {},
+    const DiagnosticsOptions& options   = {}
 );
 
 /// 安装日志环形缓冲 (进程级; 重复调用只更新容量)

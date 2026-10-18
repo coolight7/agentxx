@@ -143,20 +143,20 @@ struct ClientActionBinding {
 
 /// 展示区域尺寸快照条目 (面板/Info 段落的可用宽高; UI 线程写, io 线程读)
 struct ClientRegionSize {
-    std::string id;            ///< 归属 id (面板 id / 段落 id)
-    int         width  = 0;    ///< 可用显示宽度 (列)
-    int         height = 0;    ///< 当前内容行数 (行)
+    std::string id;         ///< 归属 id (面板 id / 段落 id)
+    int         width  = 0; ///< 可用显示宽度 (列)
+    int         height = 0; ///< 当前内容行数 (行)
 };
 
 /// 全局快捷键注册记录 (UI 注册表快照条目)
 /// - 派发: UI 线程按"当前按键的规范化描述"查到本项后投递到 client io 线程执行回调
 ///   (UI 线程不进入插件代码); 同一键位只允许一个注册者 (先注册者优先)
 struct ClientKeybind {
-    std::string plugin;              ///< 所属插件名
-    std::string keys;                ///< 规范化后的键位描述 (见 [normalizeKeybindSpec])
-    std::string description;         ///< 说明文本 (帮助/列表展示)
+    std::string plugin;      ///< 所属插件名
+    std::string keys;        ///< 规范化后的键位描述 (见 [normalizeKeybindSpec])
+    std::string description; ///< 说明文本 (帮助/列表展示)
     void(PLUGINXX_CALL* handler)(void* ud) = nullptr;
-    void* ud = nullptr;
+    void* ud                               = nullptr;
 };
 
 /// 快捷键注册被拒记录 (键位已被占用; 供设置弹窗展示冲突情况)
@@ -183,16 +183,16 @@ std::string normalizeKeybindSpec(std::string_view keys);
 
 /// UI 注册表快照 (UI 线程渲染读取; COW shared_ptr 语义)
 struct ClientUiRegistry {
-    std::vector<ClientStatusItem>    statusItems;
-    std::vector<ClientPanel>         panels;
-    std::vector<ClientInfoSection>   infoSections;
-    std::vector<ClientCommand>       commands;
-    std::vector<ClientKeybind>       keybinds;
+    std::vector<ClientStatusItem>  statusItems;
+    std::vector<ClientPanel>       panels;
+    std::vector<ClientInfoSection> infoSections;
+    std::vector<ClientCommand>     commands;
+    std::vector<ClientKeybind>     keybinds;
     /// 快捷键冲突记录 (注册受阻于已占用的键位; 见 [ClientKeybindConflict])
     /// - 与 [keybinds] 同一 COW 快照: UI 线程一次快照读到"已注册"与"未抢到"两侧信息
     std::vector<ClientKeybindConflict> keybindConflicts;
-    std::vector<ClientToolDecor>     toolDecors;
-    std::vector<ClientToolRenderReg> toolRenderers;
+    std::vector<ClientToolDecor>       toolDecors;
+    std::vector<ClientToolRenderReg>   toolRenderers;
     /// 主程序内置工具特化渲染器 (lib 内置工具无插件归属, 由主程序自身注册;
     /// 见 [ClientPluginManager::registerBuiltinToolRenderer])
     /// - 与 toolRenderers 分表存放: 匹配优先级低于插件注册项 (插件可覆盖内置渲染)
@@ -236,7 +236,7 @@ struct ClientToolRenderResult {
     ///   结果"(占位提示阶段按工具名解析过一次)里的显示名。特化结果就绪前沿用它,
     ///   而不是回退原始工具名 (折叠头会先闪一下非特化内容); 仍为空表示该工具
     ///   还没有任何可用的显示名
-    std::string       displayName;
+    std::string displayName;
     /// 摘要 (折叠头的 " · 摘要" 部分)
     /// - `matched` = true: 特化渲染结果里的摘要
     /// - `pendingRender` = true: 本次调用上一份结果的摘要 —— 结果就绪前继续显示
@@ -244,7 +244,7 @@ struct ClientToolRenderResult {
     ///   调用没有 tool_call_id 时为空: 缓存键退化为 `#工具名`, 与"名称结果"同键,
     ///   该键下可能是占位提示阶段(参数/结果为空)或另一次无 id 调用的结果, 摘要都
     ///   不代表本次调用
-    std::string       summary;
+    std::string summary;
     /// 展开体内容 (客户端展开工具消息时渲染)
     /// - 只有命中特化结果时填充; 过渡帧 (`pendingRender`) 不填 —— 调用方此时不
     ///   渲染 items, 逐帧深拷贝大 items (如 Edit 的 diff 内容) 只是浪费
@@ -410,21 +410,21 @@ ClientToolRenderResult renderClientTool(
 /// - `armedAt` 用于**同帧合并**: io 线程繁忙/事件积压导致多个周期同时到期时,
 ///   只回调一次并丢弃已错过的周期 (不追赶式连续回调)
 struct ClientTimerImpl {
-    asio::steady_timer    timer;
+    asio::steady_timer timer;
     /// 归属实例 (弱引用: 回调前升级, 实例已卸载则丢弃本次触发)
     std::weak_ptr<ClientPluginInstance> inst{};
-    std::string                         ownerId;         ///< 关联展示区域 id (可空)
-    int32_t                             intervalMs  = 50; ///< 触发间隔 (已按主程序下限收敛)
-    int32_t                             repeat      = 0;  ///< 剩余触发次数 (0 = 一次性)
-    bool                                repeatMode  = false; ///< true = 周期 (按 repeat 计数)
-    bool                                pauseHidden = false; ///< 关联区域不可见时跳过回调
+    std::string                         ownerId; ///< 关联展示区域 id (可空)
+    int32_t intervalMs  = 50;                    ///< 触发间隔 (已按主程序下限收敛)
+    int32_t repeat      = 0;                     ///< 剩余触发次数 (0 = 一次性)
+    bool    repeatMode  = false;                 ///< true = 周期 (按 repeat 计数)
+    bool    pauseHidden = false;                 ///< 关联区域不可见时跳过回调
     /// 上次续期时刻 (判定"迟到"用; 见 [armTimer])
     std::chrono::steady_clock::time_point armedAt{};
     /// 因同帧合并被丢弃的触发次数 (诊断用)
-    uint64_t                            dropped = 0;
+    uint64_t dropped               = 0;
     void(PLUGINXX_CALL* cb)(void*) = nullptr;
-    void*       ud    = nullptr;
-    bool        alive = true;
+    void* ud                       = nullptr;
+    bool  alive                    = true;
 
     explicit ClientTimerImpl(asio::any_io_executor ex) :
         timer(std::move(ex)) {}
@@ -465,7 +465,7 @@ public:
     std::vector<ClientInfoSection> infoSectionRegs; ///< Info 段落注册信息 (disable 保留)
     std::vector<ClientCommand>     commandRegs;     ///< 命令注册信息 (disable 保留)
     /// 全局快捷键注册信息 (同命令: disable 时随 UI 注册表摘除, enable 由 start 重声明)
-    std::vector<ClientKeybind>     keybindRegs;
+    std::vector<ClientKeybind> keybindRegs;
     /// 工具消息装饰 (disable 保留, enable 恢复; 无句柄 —— 以 plugin+toolCallId 键控)
     std::vector<ClientToolDecor> toolDecorRegs;
     /// 工具特化渲染器 (disable 保留, enable 恢复; 以 plugin+toolName 键控)
@@ -1135,7 +1135,8 @@ private:
         std::vector<std::string> interfaces; ///< 该插件声明的接口 (require∪optional)
     };
 
-    std::vector<ServerPluginInfo> serverPlugins_;    /// PLUGIN_DATA 无订阅者警告去重 (仅 io 线程; 每插件名只警告一次):
+    std::vector<ServerPluginInfo>
+        serverPlugins_; /// PLUGIN_DATA 无订阅者警告去重 (仅 io 线程; 每插件名只警告一次):
     /// 收到 WirePluginData 但无任何 client 插件订阅 EVT_PLUGIN_DATA 时,
     /// 多半是对端插件未在本地加载 —— 提示一次便于排查, 不随事件频率刷屏
     std::set<std::string> pluginDataNoSubWarned_;
@@ -1144,17 +1145,17 @@ private:
     std::map<std::string, std::string> skippedPlugins_{};
 
     /// 展示区域尺寸快照 (UI 线程写, 任意线程读; 见 reportRegionSize)
-    mutable std::mutex                                          regionMutex_;
-    std::map<std::string, ClientRegionSize, std::less<>>        regionSizes_;
+    mutable std::mutex                                   regionMutex_;
+    std::map<std::string, ClientRegionSize, std::less<>> regionSizes_;
 
     /// 展示区域可见性快照 (UI 线程写, 任意线程读; 见 reportRegionVisible)
     /// - 供 `pause_when_hidden` 定时器门控与 `agentxx.client.timer` 的 is_visible 使用
-    std::map<std::string, bool, std::less<>>                    regionVisibility_;
+    std::map<std::string, bool, std::less<>> regionVisibility_;
 
     /// 动画等级门控 (装配方经 setAnimationEnabled 更新; 默认允许定时器)
     std::atomic<bool> animationEnabled_{true};
 
-    std::string                        language_ = "en";
+    std::string language_ = "en";
 };
 
 /// UI 适配器抽象接口 (UI 无关语义层 → 具体 UI 实现)

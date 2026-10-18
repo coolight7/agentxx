@@ -122,11 +122,10 @@ public:
         //   resume 后重新执行该节点再写入
         auto sess = ctx->sessions ? ctx->sessions->get(sessionId) : nullptr;
         if (sess && sess->isIoThread() && sess->messagesCount() == 3) {
-            const auto& msgs = sess->messages();
-            interruptTempOrderOk
-                = msgs[0].role == "system" && msgs[1].role == "user"
-                  && msgs[2].role == "assistant" && msgs[2].tool_calls.size() == 1
-                  && msgs[2].tool_calls[0].id == "call_it_1";
+            const auto& msgs     = sess->messages();
+            interruptTempOrderOk = msgs[0].role == "system" && msgs[1].role == "user"
+                                   && msgs[2].role == "assistant" && msgs[2].tool_calls.size() == 1
+                                   && msgs[2].tool_calls[0].id == "call_it_1";
         }
 
         co_return agentxx::middleware::makeInterruptResult(utilxx_base::Json{
@@ -521,14 +520,12 @@ asio::awaitable<void> test_cancel_auto_supplement() {
         ),
         asio::co_spawn(ex, cancelWatcher(), asio::deferred)
     );
-    auto  waitResult = co_await group.async_wait(
-        asio::experimental::wait_for_all(),
-        asio::use_awaitable
-    );
-    auto& turnExc    = std::get<1>(waitResult);
-    auto& turnResult = std::get<2>(waitResult);
-    auto& watcherExc = std::get<3>(waitResult);
-    const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+    auto waitResult
+        = co_await group.async_wait(asio::experimental::wait_for_all(), asio::use_awaitable);
+    auto&      turnExc    = std::get<1>(waitResult);
+    auto&      turnResult = std::get<2>(waitResult);
+    auto&      watcherExc = std::get<3>(waitResult);
+    const auto elapsedMs  = std::chrono::duration_cast<std::chrono::milliseconds>(
                                std::chrono::steady_clock::now() - startAt
     )
                                .count();
@@ -661,7 +658,7 @@ static void runRepairDanglingScenario(
 
     // ---- 断言清理结果 ----
     const auto& resultMsgs = ctx->getSession(runCtx.thread_id)->messages();
-    size_t     idx        = 0;
+    size_t      idx        = 0;
     // system + user 保留
     XX_TEST_EXPECT_TRUE(resultMsgs.size() >= 2);
     XX_TEST_EXPECT_EQ(resultMsgs[0].role, std::string{"system"});

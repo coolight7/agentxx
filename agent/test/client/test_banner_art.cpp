@@ -114,9 +114,9 @@ size_t diffToFinal(const ArtGrid& grid, const ArtGrid& finalGrid) {
     for (size_t y = 0; y < grid.size(); ++y) {
         const size_t cols = std::max(grid[y].size(), finalGrid[y].size());
         for (size_t x = 0; x < cols; ++x) {
-            const std::string cur   = (x < grid[y].size()) ? grid[y][x] : std::string{" "};
-            const std::string final = (x < finalGrid[y].size()) ? finalGrid[y][x]
-                                                                : std::string{" "};
+            const std::string cur = (x < grid[y].size()) ? grid[y][x] : std::string{" "};
+            const std::string final
+                = (x < finalGrid[y].size()) ? finalGrid[y][x] : std::string{" "};
             if (cur != final) {
                 ++diff;
             }
@@ -144,10 +144,7 @@ std::vector<std::string> trimmedLines(std::string_view text) {
 
 /// 渲染一帧并取各行可见文字 (逐格拼接: 艺术字字符均为单列宽, 一列一个字符)
 std::vector<std::string> renderRows(const ftxui::Element& el, int w, int h) {
-    auto screen = ftxui::Screen::Create(
-        ftxui::Dimension::Fixed(w),
-        ftxui::Dimension::Fixed(h)
-    );
+    auto screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(w), ftxui::Dimension::Fixed(h));
     ftxui::Render(screen, el);
     std::vector<std::string> rows;
     rows.reserve(static_cast<size_t>(screen.dimy()));
@@ -173,7 +170,7 @@ void advance(ftxui::ComponentBase& comp, int frames) {
 
 /// 渲染组件当前的 6 行艺术字 (行尾空白去掉)
 std::vector<std::string> artRowsOf(ftxui::ComponentBase& comp) {
-    const auto rows = renderRows(comp.Render(), 80, 8);
+    const auto               rows = renderRows(comp.Render(), 80, 8);
     std::vector<std::string> out;
     for (int i = 0; i < 6 && i < static_cast<int>(rows.size()); ++i) {
         out.emplace_back(trimRight(rows[static_cast<size_t>(i)]));

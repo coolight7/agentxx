@@ -1,7 +1,7 @@
 #include "agentxx/nodes/session_context.h"
 
-#include "agentxx/agent/session_store.h"
 #include "agentxx/agent/io/agent_io.h"
+#include "agentxx/agent/session_store.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/util/neograph_json_bridge.h"
 #include "agentxx/util/share_store_offload.h"
@@ -64,8 +64,10 @@ neograph::json buildMessagesMeta(const std::shared_ptr<agentxx::agent::Session>&
 
 } // namespace
 
-const std::vector<neograph::ChatMessage>&
-    sessionMessages(const std::shared_ptr<agentxx::agent::AgentContext>& ctx, std::string_view sessionId) {
+const std::vector<neograph::ChatMessage>& sessionMessages(
+    const std::shared_ptr<agentxx::agent::AgentContext>& ctx,
+    std::string_view                                     sessionId
+) {
     if (!ctx || !ctx->sessions || sessionId.empty()) {
         return emptyMessages();
     }
@@ -127,11 +129,12 @@ size_t appendSessionMessages(
     if (in.stream_cb != nullptr) {
         (*in.stream_cb)(neograph::graph::GraphEvent{
             neograph::graph::GraphEvent::Type::CHANNEL_WRITE,
-            nodeName.empty() ? std::string{"session"} : std::string{nodeName},
+            nodeName.empty() ? std::string{"session"              }
+              : std::string{nodeName               },
             neograph::json{
-                {"channel", "messages"},
-                {"value",   std::move(batch)},
-            },
+                                           {"channel", "messages"},
+                                           {"value", std::move(batch)},
+                                           },
         });
     }
     return session->messagesCount();
@@ -193,12 +196,12 @@ neograph::ChatMessage makeInjectedUserMessage(
     std::string_view                           content
 ) {
     utilxx_base::Json j{
-        {"role",    "user"  },
-        {"content", content },
+        {"role",    "user" },
+        {"content", content},
     };
     neograph::ChatMessage msg;
     neograph::from_json(agentxx::util::toNeographJson(j), msg);
-    neograph::json extra = neograph::json::object();
+    neograph::json extra    = neograph::json::object();
     extra["input_source"]   = input.source.empty() ? std::string{"user"} : input.source;
     extra["input_delivery"] = input.delivery;
     if (!input.id.empty()) {
@@ -218,13 +221,11 @@ void appendUserViewMessage(
     if (!session) {
         return;
     }
-    const auto nowMs = static_cast<int64_t>(
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::system_clock::now().time_since_epoch()
-        )
-            .count()
-    );
-    auto vm = agentxx::agent::ViewMessage::makeText(
+    const auto nowMs = static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                std::chrono::system_clock::now().time_since_epoch()
+    )
+                                                .count());
+    auto       vm    = agentxx::agent::ViewMessage::makeText(
         agentxx::agent::ViewMessage::Role::User,
         input.text,
         input.createdAtMs > 0 ? input.createdAtMs : nowMs

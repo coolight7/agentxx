@@ -12,10 +12,10 @@
 #include "agentxx-client/io/tui/scrollable.h"
 #include "agentxx-client/io/tui/tui_theme.h"
 #include "agentxx-client/io/tui/ui_components.h"
-#include "pluginxx/ui.h"
 #include "ftxui/component/event.hpp"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/screen.hpp"
+#include "pluginxx/ui.h"
 #include "utilxx_base/json.h"
 #include <string>
 #include <vector>
@@ -792,7 +792,7 @@ TestResult testTuiUiItems() {
         auto ctx  = ctxFor(40);
         auto form = std::make_shared<agentxx::client::UiFormState>();
         ctx.form  = form.get();
-        auto res = renderJson(
+        auto res  = renderJson(
             R"([{"kind":"Row","gap":8,"children":[
                  {"kind":"Button","label":"应用","variant":"primary","action":"__submit"},
                  {"kind":"Button","label":"取消","action":"__cancel"}]}])",
@@ -871,7 +871,7 @@ TestResult testTuiUiItems() {
 
         // 整行铺输入框底色 (第 2 行 = 输入框行, 第 0 列到最后一列都是底色)
         {
-            auto screen = renderScreen(res, 40, 4);
+            auto screen   = renderScreen(res, 40, 4);
             bool bandFull = true;
             for (int x = 0; x < 40; ++x) {
                 if (screen.CellAt(x, 1).background_color != theme().inputBgColor) {
@@ -1078,8 +1078,8 @@ TestResult testTuiUiItems() {
         auto items = std::make_shared<std::vector<ScrollItem>>();
         for (int i = 0; i < 20; ++i) {
             pluginxx::ui::Item item;
-            item.kind = "Text";
-            item.text = pluginxx::ui::TextValue::of("row-" + std::to_string(i));
+            item.kind          = "Text";
+            item.text          = pluginxx::ui::TextValue::of("row-" + std::to_string(i));
             UiRenderCtx    ctx = ctxFor(20);
             UiRenderResult res;
             agentxx::client::renderItem(item, ctx, res);

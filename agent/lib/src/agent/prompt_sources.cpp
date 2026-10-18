@@ -75,8 +75,8 @@ PromptSourceRegistry::TextSlot&
     return sessionSlots[std::move(key)];
 }
 
-const std::string&
-    PromptSourceRegistry::SourceState::resolvedText(std::string_view sessionId) const {
+const std::string& PromptSourceRegistry::SourceState::resolvedText(std::string_view sessionId
+) const {
     const auto* slot = findSlot(sessionId);
     if (nullptr == slot) {
         return emptyText();
@@ -115,23 +115,29 @@ void PromptSourceRegistry::registerSource(PromptSource src) {
             state.changed      = it->second.changed;
             state.failures     = it->second.failures;
             state.lastError    = std::move(it->second.lastError);
-            XX_LOGW("[prompt] source `{}` re-registered by `{}`, keeping cached text",
-                    state.src.key,
-                    state.src.owner);
+            XX_LOGW(
+                "[prompt] source `{}` re-registered by `{}`, keeping cached text",
+                state.src.key,
+                state.src.owner
+            );
         } else {
-            XX_LOGW("[prompt] source `{}` owner changed `{}` -> `{}`, cached text dropped",
-                    state.src.key,
-                    it->second.src.owner,
-                    state.src.owner);
+            XX_LOGW(
+                "[prompt] source `{}` owner changed `{}` -> `{}`, cached text dropped",
+                state.src.key,
+                it->second.src.owner,
+                state.src.owner
+            );
         }
         it->second = std::move(state);
     } else {
-        XX_LOGD("[prompt] source registered: key=`{}` owner=`{}` order={} slot={} perSession={}",
-                state.src.key,
-                state.src.owner,
-                state.src.order,
-                slotKey(state.src.slot),
-                state.src.perSession);
+        XX_LOGD(
+            "[prompt] source registered: key=`{}` owner=`{}` order={} slot={} perSession={}",
+            state.src.key,
+            state.src.owner,
+            state.src.order,
+            slotKey(state.src.slot),
+            state.src.perSession
+        );
         sources_.emplace(state.src.key, std::move(state));
     }
 
@@ -146,10 +152,12 @@ bool PromptSourceRegistry::removeSource(std::string_view key, std::string_view o
         return false;
     }
     if (!owner.empty() && it->second.src.owner != owner) {
-        XX_LOGW("[prompt] removeSource `{}` rejected: owned by `{}`, requested by `{}`",
-                key,
-                it->second.src.owner,
-                owner);
+        XX_LOGW(
+            "[prompt] removeSource `{}` rejected: owned by `{}`, requested by `{}`",
+            key,
+            it->second.src.owner,
+            owner
+        );
         return false;
     }
     XX_LOGD("[prompt] source removed: key=`{}` owner=`{}`", key, it->second.src.owner);
@@ -161,7 +169,7 @@ bool PromptSourceRegistry::removeSource(std::string_view key, std::string_view o
 }
 
 void PromptSourceRegistry::markDirty(std::string_view sessionId, PromptRefreshReason reason) {
-    auto& state            = sessions_[std::string{sessionId}];
+    auto& state           = sessions_[std::string{sessionId}];
     state.pendingReasons |= reasonBit(reason);
 }
 
@@ -272,10 +280,12 @@ asio::awaitable<void> PromptSourceRegistry::ensureFresh(
     /// 刷新期间的 busy 复位 (异常/取消逃逸时也要复位)
     struct BusyGuard {
         SessionState& state;
+
         ~BusyGuard() {
             state.busy = false;
         }
     };
+
     session.busy = true;
     BusyGuard busyGuard{session};
 
@@ -305,16 +315,16 @@ asio::awaitable<void> PromptSourceRegistry::ensureFresh(
         }
 
         // build 拿一份上下文副本 (超时时协程被销毁, 不引用调用方栈上的对象)
-        auto ctx     = std::make_shared<PromptRefreshContext>(inCtx);
+        auto ctx       = std::make_shared<PromptRefreshContext>(inCtx);
         ctx->sessionId = sid;
         ctx->reason    = reason;
         ctx->first     = first;
 
         /// 取文本的结果: ok=false 表示异常/超时 (不是"没有意见")
         struct BuildResult {
-            bool                        ok = false;
-            std::optional<std::string>  text;
-            std::string                 error;
+            bool                       ok = false;
+            std::optional<std::string> text;
+            std::string                error;
         };
 
         const auto timeout
@@ -329,7 +339,11 @@ asio::awaitable<void> PromptSourceRegistry::ensureFresh(
                         co_return BuildResult{.ok = true, .text = std::move(text)};
                     },
                     [](std::string errmsg) -> asio::awaitable<BuildResult> {
-                        co_return BuildResult{.ok = false, .text = std::nullopt, .error = std::move(errmsg)};
+                        co_return BuildResult{
+                            .ok    = false,
+                            .text  = std::nullopt,
+                            .error = std::move(errmsg)
+                        };
                     },
                     ctx->cancelToken
                 );
@@ -373,8 +387,7 @@ asio::awaitable<void> PromptSourceRegistry::ensureFresh(
         auto&      slot     = state->slotFor(sid);
         const bool wasBuilt = slot.built;
         const bool differs  = wasBuilt && slot.text != *outcome.text;
-        const auto oldChars = slot.text.empty() ? size_t{0}
-                                                : utilxx_base::utf8GetLength(slot.text);
+        const auto oldChars = slot.text.empty() ? size_t{0} : utilxx_base::utf8GetLength(slot.text);
         slot.text           = std::move(*outcome.text);
         slot.built          = true;
         state->chars        = utilxx_base::utf8GetLength(slot.text);
@@ -395,9 +408,11 @@ asio::awaitable<void> PromptSourceRegistry::ensureFresh(
 
     if (cancelled) {
         // 取消: 保留 dirty 标记与旧文本, 下次请求再试
-        XX_LOGD("[prompt] refresh cancelled for session {} (reason={}), keeping old text",
-                sid,
-                reasonKey(reason));
+        XX_LOGD(
+            "[prompt] refresh cancelled for session {} (reason={}), keeping old text",
+            sid,
+            reasonKey(reason)
+        );
         stats.lastMs = steadyNowMs() - startMs;
         co_return;
     }
@@ -422,8 +437,8 @@ asio::awaitable<void> PromptSourceRegistry::ensureFresh(
 // 视图 / 查询 / 回收 / 快照
 // ---------------------------------------------------------------------------
 
-std::vector<PromptSectionView>
-    PromptSourceRegistry::stableSections(std::string_view sessionId) const {
+std::vector<PromptSectionView> PromptSourceRegistry::stableSections(std::string_view sessionId
+) const {
     std::vector<const SourceState*> ordered;
     ordered.reserve(sources_.size());
     for (const auto& [key, state] : sources_) {
@@ -458,8 +473,8 @@ std::vector<PromptSectionView>
     return views;
 }
 
-std::vector<PromptSectionView>
-    PromptSourceRegistry::dynamicSections(std::string_view sessionId) const {
+std::vector<PromptSectionView> PromptSourceRegistry::dynamicSections(std::string_view sessionId
+) const {
     std::vector<PromptSectionView> views;
     for (const auto& [key, state] : sources_) {
         (void)key;
@@ -479,17 +494,21 @@ std::vector<PromptSectionView>
             .slot  = state.src.slot,
         });
     }
-    std::sort(views.begin(), views.end(), [](const PromptSectionView& a, const PromptSectionView& b) {
-        if (a.order != b.order) {
-            return a.order < b.order;
+    std::sort(
+        views.begin(),
+        views.end(),
+        [](const PromptSectionView& a, const PromptSectionView& b) {
+            if (a.order != b.order) {
+                return a.order < b.order;
+            }
+            return a.key < b.key;
         }
-        return a.key < b.key;
-    });
+    );
     return views;
 }
 
-std::string PromptSourceRegistry::sectionText(std::string_view key, std::string_view sessionId
-) const {
+std::string
+    PromptSourceRegistry::sectionText(std::string_view key, std::string_view sessionId) const {
     auto it = sources_.find(key);
     if (it == sources_.end()) {
         return {};
@@ -531,19 +550,19 @@ utilxx_base::Json PromptSourceRegistry::snapshot() const {
     auto   sources    = utilxx_base::Json::array();
     for (const auto& [key, state] : sources_) {
         (void)key;
-        utilxx_base::Json item = utilxx_base::Json::object();
-        item["key"]            = state.src.key;
-        item["owner"]          = state.src.owner;
-        item["order"]          = state.src.order;
-        item["slot"]           = slotKey(state.src.slot);
-        item["per_session"]    = state.src.perSession;
+        utilxx_base::Json item        = utilxx_base::Json::object();
+        item["key"]                   = state.src.key;
+        item["owner"]                 = state.src.owner;
+        item["order"]                 = state.src.order;
+        item["slot"]                  = slotKey(state.src.slot);
+        item["per_session"]           = state.src.perSession;
         item["refresh_on_compaction"] = state.src.refreshOnCompaction;
-        item["last_reason"]    = reasonKey(state.lastReason);
-        item["last_ms"]        = state.lastMs;
-        item["chars"]          = state.chars;
-        item["refreshes"]      = state.refreshes;
-        item["changed"]        = state.changed;
-        item["failures"]       = state.failures;
+        item["last_reason"]           = reasonKey(state.lastReason);
+        item["last_ms"]               = state.lastMs;
+        item["chars"]                 = state.chars;
+        item["refreshes"]             = state.refreshes;
+        item["changed"]               = state.changed;
+        item["failures"]              = state.failures;
         // 已取到文本的会话数 (共享来源: 0 或 1; 按会话来源: 已取过的会话数)
         size_t builtSessions = 0;
         if (state.src.perSession) {

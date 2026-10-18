@@ -195,8 +195,11 @@ void SettingsDb::writeLocked(std::string_view key, std::string_view value, int64
     stmt.step();
 }
 
-SettingsDb::WriteResult
-    SettingsDb::setVersioned(std::string_view key, std::string_view value, int64_t expectedVersion) {
+SettingsDb::WriteResult SettingsDb::setVersioned(
+    std::string_view key,
+    std::string_view value,
+    int64_t          expectedVersion
+) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!ensureOpen()) {
         return WriteResult{WriteStatus::Failed, 0};

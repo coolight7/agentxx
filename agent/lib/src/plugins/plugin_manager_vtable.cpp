@@ -332,8 +332,8 @@ static int32_t PLUGINXX_CALL xx_register_hook_ex(
             || !spec->hook_start) {
             return -1;
         }
-        auto                   mgrPtr   = mgr;
-        auto                   instPtr  = inst;
+        auto                    mgrPtr   = mgr;
+        auto                    instPtr  = inst;
         AgentxxPluginHookSpecEx specCopy = *spec;
         return ioCallSyncKeep<int32_t>(call, mgrPtr, [mgrPtr, instPtr, specCopy, out_handle]() {
             return mgrPtr->registerHookEx(instPtr, &specCopy, out_handle);
@@ -386,7 +386,8 @@ static int32_t PLUGINXX_CALL xx_get_share_store(
     });
 }
 
-static int64_t PLUGINXX_CALL xx_add_share_store(    const PluginxxHost*       host,
+static int64_t PLUGINXX_CALL xx_add_share_store(
+    const PluginxxHost*       host,
     const PluginxxStringView* session_id,
     const PluginxxStringView* content
 ) {
@@ -432,17 +433,15 @@ static int32_t PLUGINXX_CALL xx_context_get_messages(
         }
         auto mgrPtr = mgr;
         auto sid    = *session_id;
-        *out        = ioCallSyncKeep<PluginxxString>(call, mgrPtr, [mgrPtr, sid]() -> PluginxxString {
+        *out = ioCallSyncKeep<PluginxxString>(call, mgrPtr, [mgrPtr, sid]() -> PluginxxString {
             return mgrPtr->getSessionMessages(sid);
         });
         return (out->data != nullptr) ? 0 : -1;
     });
 }
 
-static int64_t PLUGINXX_CALL xx_context_messages_count(
-    const PluginxxHost*       host,
-    const PluginxxStringView* session_id
-) {
+static int64_t PLUGINXX_CALL
+    xx_context_messages_count(const PluginxxHost* host, const PluginxxStringView* session_id) {
     return agentxx::plugin::guardVtableCall<int64_t>(-1, [&]() -> int64_t {
         auto call = enterHost(host, /*allowClosing=*/true);
         auto mgr  = call.manager();
@@ -465,7 +464,8 @@ static const AgentxxPluginContextIface g_ifaceContext = {
     /* messages_count */ xx_context_messages_count,
 };
 
-static void PLUGINXX_CALL xx_emit_message_tip(    const PluginxxHost*       host,
+static void PLUGINXX_CALL xx_emit_message_tip(
+    const PluginxxHost*       host,
     const PluginxxStringView* session_id,
     const PluginxxStringView* text,
     int32_t                   level
@@ -598,10 +598,8 @@ static int32_t PLUGINXX_CALL xx_feature_list_points(const PluginxxHost* host, Pl
     });
 }
 
-static int32_t PLUGINXX_CALL xx_feature_define_point(
-    const PluginxxHost*                   host,
-    const AgentxxPluginFeaturePointSpec*  spec
-) {
+static int32_t PLUGINXX_CALL
+    xx_feature_define_point(const PluginxxHost* host, const AgentxxPluginFeaturePointSpec* spec) {
     if (spec == nullptr) {
         return -1;
     }
@@ -622,10 +620,8 @@ static int32_t PLUGINXX_CALL
     });
 }
 
-static int32_t PLUGINXX_CALL xx_feature_register_impl(
-    const PluginxxHost*                  host,
-    const AgentxxPluginFeatureImplSpec*  spec
-) {
+static int32_t PLUGINXX_CALL
+    xx_feature_register_impl(const PluginxxHost* host, const AgentxxPluginFeatureImplSpec* spec) {
     if (spec == nullptr || !spec->impl_start) {
         return -1;
     }
@@ -1552,9 +1548,9 @@ int64_t PluginManager::sessionMessagesCount(PluginxxStringView session_id) {
 }
 
 size_t PluginManager::writeSessionMessages(
-    std::string_view          session_id,
-    const utilxx_base::Json&  messages,
-    bool                      overwrite
+    std::string_view         session_id,
+    const utilxx_base::Json& messages,
+    bool                     overwrite
 ) {
     auto ctx = agentContext_.lock();
     if (!ctx || !ctx->sessions || session_id.empty()) {

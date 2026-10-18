@@ -202,7 +202,7 @@ void EventBridge::handleGenStatusChunk(const neograph::ChatStreamChunk& chunk) {
 
 void EventBridge::emitGenStatus(
     agentxx::agent::WireDelta::GenPhase phase,
-    std::string_view                 toolName
+    std::string_view                    toolName
 ) {
     // 生成结束: 占位提示清除 (client 侧对重复的 Done 无副作用)
     genStatusActive_ = (phase != agentxx::agent::WireDelta::GenPhase::Done);
@@ -413,7 +413,7 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
             }
         } else if (role == "tool") {
             hasToolResult = true;
-            auto content = jm.value("content", std::string{});
+            auto content  = jm.value("content", std::string{});
             // 注意: 消息 JSON 由 neograph::ChatMessage::to_json 序列化, tool 结果
             // 的字段名为 snake_case (tool_name/tool_call_id); 兼容读取 camelCase
             // (手工构造 JSON 写入 channel 时可能使用), 避免 ToolEnd 关联失败
@@ -686,9 +686,7 @@ void EventBridge::pushTpsIfDue() {
                                  : 0.0;
     tpsLastPushSec_        = nowSec;
     tpsLastPushToken_      = tpsTokenCount_;
-    io_->sendToPeer(
-        agentxx::agent::io::toWireContextStats(*session_->contextStats, tps)
-    );
+    io_->sendToPeer(agentxx::agent::io::toWireContextStats(*session_->contextStats, tps));
 }
 
 void EventBridge::publishModelToken(const std::string& token, std::string_view kind) {

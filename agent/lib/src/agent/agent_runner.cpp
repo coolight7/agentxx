@@ -20,18 +20,18 @@ namespace {
 /// 内层协程的帧在包装内单独分配, 只有一个小小的 awaitable 句柄进入调用者。
 /// 详见 docs/zh-cn/design/benchmark.md 第 11 节 (定位) 与第 13 节 (处置)。
 AGENTXX_NOINLINE asio::awaitable<neograph::graph::RunResult> engineRunStreamAsync(
-    neograph::graph::GraphEngine*         engine,
-    neograph::graph::RunConfig            cfg,
-    neograph::graph::GraphStreamCallback  callback
+    neograph::graph::GraphEngine*        engine,
+    neograph::graph::RunConfig           cfg,
+    neograph::graph::GraphStreamCallback callback
 ) {
     return engine->run_stream_async(std::move(cfg), callback);
 }
 
 AGENTXX_NOINLINE asio::awaitable<neograph::graph::RunResult> engineResumeAsync(
-    neograph::graph::GraphEngine*         engine,
-    neograph::graph::RunConfig            cfg,
-    neograph::json                        input,
-    neograph::graph::GraphStreamCallback  callback
+    neograph::graph::GraphEngine*        engine,
+    neograph::graph::RunConfig           cfg,
+    neograph::json                       input,
+    neograph::graph::GraphStreamCallback callback
 ) {
     return engine->resume_async(std::move(cfg), std::move(input), callback);
 }

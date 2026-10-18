@@ -26,11 +26,11 @@ public:
 
     /// 页响应处理结果
     enum class PageOutcome {
-        Accepted,       ///< 页已可用 (调用方前插后调用 [notePrepended])
-        Empty,          ///< 空页 = 上方没有更早历史, 窗口起点归零
-        StaleSession,   ///< 迟到响应 (会话已切换), 丢弃
-        NotLoading,     ///< 当前没有未完成的请求 (重复/意外响应), 丢弃
-        NonContiguous,  ///< 页不紧贴窗口首条 (窗口已被整体替换), 丢弃
+        Accepted,      ///< 页已可用 (调用方前插后调用 [notePrepended])
+        Empty,         ///< 空页 = 上方没有更早历史, 窗口起点归零
+        StaleSession,  ///< 迟到响应 (会话已切换), 丢弃
+        NotLoading,    ///< 当前没有未完成的请求 (重复/意外响应), 丢弃
+        NonContiguous, ///< 页不紧贴窗口首条 (窗口已被整体替换), 丢弃
     };
 
     /// 尾部序号观察结果 (断线/增量补拉场景)
@@ -49,6 +49,7 @@ public:
 
     /// 切换会话: 窗口作废, 未完成的请求随之失效 (迟到响应返回 [PageOutcome::StaleSession])
     void resetForSession(std::string sessionId);
+
     const std::string& sessionId() const noexcept {
         return sessionId_;
     }
@@ -56,16 +57,23 @@ public:
     /// 开始一次"拉取更早一页"的请求; 不满足条件 (加载中 / 上方无更早历史) 返回 false
     /// - 成功后 [loading] 为 true, 直到 [applyPage] 或 [abortLoading] 结束
     bool beginOlderPageRequest();
+
     bool loading() const noexcept {
         return loading_;
     }
+
     void abortLoading() noexcept {
         loading_ = false;
     }
 
     /// 处理一页更早历史的响应 (不改变窗口, 判定交给调用方: 接受时随后调用
     /// [notePrepended] 把页内条数计入窗口)
-    PageOutcome applyPage(std::string_view pageSessionId, uint64_t startIndex, uint64_t count, uint64_t totalCount);
+    PageOutcome applyPage(
+        std::string_view pageSessionId,
+        uint64_t         startIndex,
+        uint64_t         count,
+        uint64_t         totalCount
+    );
 
     /// 前插完成: 窗口起点左移到 `startIndex`, 已加载条数增加 (接受页后调用)
     void notePrepended(uint64_t startIndex, uint64_t prependedCount);
@@ -85,12 +93,15 @@ public:
 
     /// 观察服务端下发的尾部序号 (增量补拉/实时 delta 的序号)
     SeqOutcome observeTailSeq(uint64_t seq);
-    uint64_t    lastSeq() const noexcept {
+
+    uint64_t lastSeq() const noexcept {
         return lastSeq_;
     }
+
     bool hasSeq() const noexcept {
         return hasSeq_;
     }
+
     bool hasGap() const noexcept {
         return gap_;
     }
@@ -99,14 +110,17 @@ public:
     uint64_t windowStart() const noexcept {
         return windowStart_;
     }
+
     /// 服务端会话总消息数 (0 = 未知)
     uint64_t totalCount() const noexcept {
         return totalCount_;
     }
+
     /// 已加载区间内的条数 (界面过滤空消息后的实际条数)
     uint64_t loadedCount() const noexcept {
         return loadedCount_;
     }
+
     /// 上方是否还有更早历史
     bool hasMore() const noexcept {
         return windowStart_ > 0;

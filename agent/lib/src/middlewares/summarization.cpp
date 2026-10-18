@@ -116,11 +116,11 @@ SummarizationMiddlewareHandle::SummarizationMiddlewareHandle(
 
     // token 估算规则: 一份实例, 功能点核心实现与同步快路径共用
     // (规则本身在 agentxx::feature::TokenEstimator 里, 这里只注入本中间件的系数)
-    tokenEstimator          = std::make_shared<agentxx::feature::TokenEstimator>();
-    tokenEstimator->asciiCharsPerToken     = asciiCharsPerToken;
-    tokenEstimator->unicodeCharsPerToken   = unicodeCharsPerToken;
-    tokenEstimator->tokensPerImage         = tokensPerImage;
-    tokenEstimator->extraTokensPerMessage  = extraTokensPerMessage;
+    tokenEstimator                        = std::make_shared<agentxx::feature::TokenEstimator>();
+    tokenEstimator->asciiCharsPerToken    = asciiCharsPerToken;
+    tokenEstimator->unicodeCharsPerToken  = unicodeCharsPerToken;
+    tokenEstimator->tokensPerImage        = tokensPerImage;
+    tokenEstimator->extraTokensPerMessage = extraTokensPerMessage;
 
     // 声明上下文两点 (token 估算 / 压缩) 并登记核心实现
     // - 中间件在插件加载前装配, 因此插件登记实现时点一定已存在
@@ -129,9 +129,10 @@ SummarizationMiddlewareHandle::SummarizationMiddlewareHandle(
         agentxx::feature::ContextPointOptions pointOptions;
         pointOptions.estimator = *tokenEstimator;
         pointOptions.summarizeImpl
-            = [this](const agentxx::feature::SummarizeRequest&  req,
-                     const agentxx::feature::ImplContext& /*ictx*/)
-            -> asio::awaitable<std::optional<agentxx::feature::SummarizeValue>> {
+            = [this](
+                  const agentxx::feature::SummarizeRequest& req,
+                  const agentxx::feature::ImplContext& /*ictx*/
+              ) -> asio::awaitable<std::optional<agentxx::feature::SummarizeValue>> {
             // 核心实现: 只产出摘要文本, 不写回会话 (调度在中间件)
             auto summary = co_await doSummarizeWithLLM(req.sessionId, req.messages, req.manual);
             if (summary.empty()) {
@@ -548,7 +549,8 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
         co_return std::string{};
     }
 
-    // 压缩指令模板 (优先取独立配置 prompt.summarizePrompt，回退兼容旧配置 appendSystemPrompts["summarization"])
+    // 压缩指令模板 (优先取独立配置 prompt.summarizePrompt，回退兼容旧配置
+    // appendSystemPrompts["summarization"])
     std::string summarizePrompt = agentCtxPtr->agentConfig->prompt.summarizePrompt;
     if (summarizePrompt.empty()) {
         auto itSumm = agentCtxPtr->agentConfig->prompt.appendSystemPrompts.find("summarization");
@@ -702,16 +704,16 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
     }
 
     auto args = utilxx_base::Json{
-        {"subagent",             "subagent_task"       },
-        {"messages",             std::move(reqMsgsJson)},
-        {"sessionId",            std::string{sessionId}},
-        {"enable_summarization", false                 },
+        {"subagent",               "subagent_task"       },
+        {"messages",               std::move(reqMsgsJson)},
+        {"sessionId",              std::string{sessionId}},
+        {"enable_summarization",   false                 },
         // 前缀复用: 保留调用方给的 system 消息 + 继承父会话上一次请求的工具定义
         // (请求前缀与父会话逐字节一致, 上游前缀缓存才命中)
-        {"keep_provided_system", true},
-        {"inherit_request_tools", true},
+        {"keep_provided_system",   true                  },
+        {"inherit_request_tools",  true                  },
         // 本次运行不执行工具: 工具定义只用于对齐前缀, 模型返回 tool_calls 时忽略
-        {"disable_tool_execution", true},
+        {"disable_tool_execution", true                  },
     };
 
     // 经总线请求压缩 subagent (service.subagent.execute)
@@ -729,10 +731,7 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
             co_return "";
         }
         if (resp->hasError) {
-            XX_LOGE(
-                "SummarizationMiddlewareHandle 压缩 subagent 执行失败: {}",
-                resp->errorMessage
-            );
+            XX_LOGE("SummarizationMiddlewareHandle 压缩 subagent 执行失败: {}", resp->errorMessage);
             co_return "";
         }
         // 取消/错误串透传防护: 子代理被取消时主程序返回
@@ -863,7 +862,7 @@ asio::awaitable<void>
 
     // 从会话的模型配置提取模型支持的最大 token, 模型配置未指定时使用默认值
     size_t modelContextMaxToken = modelSupportMaxTokenDefault;
-    bool   enableCountThinking   = false;
+    bool   enableCountThinking  = false;
     {
         const auto& currentModelConfig = agentCtxPtr->getSessionCurrentModelConfig(sessionId);
         if (currentModelConfig.modelContextMaxToken > 0) {
@@ -891,7 +890,7 @@ asio::awaitable<void>
     // (TPS 显示的同步快路径不参与, 见 plan §8.1)
     const auto countTokenUsage
         = co_await countTokensViaPoint(in.ctx.thread_id, messages, enableCountThinking);
-    const auto tokenUsage      = (apiTokenUsage > 0) ? apiTokenUsage : countTokenUsage;
+    const auto tokenUsage = (apiTokenUsage > 0) ? apiTokenUsage : countTokenUsage;
     // 发布上下文统计到对应会话, 供 UI 显示上下文占用百分比
     if (session->contextStats) {
         // UI显示优先使用 apiTokenUsage 即可
@@ -1222,7 +1221,7 @@ asio::awaitable<bool>
     }
 
     size_t modelContextMaxToken = modelSupportMaxTokenDefault;
-    bool   enableCountThinking   = false;
+    bool   enableCountThinking  = false;
     {
         const auto& currentModelConfig = agentCtxPtr->getSessionCurrentModelConfig(sessionId);
         if (currentModelConfig.modelContextMaxToken > 0) {
@@ -1354,9 +1353,7 @@ asio::awaitable<bool>
         });
         // 压缩后占用回落, 推送更新 (累计用量一并下发, 界面上的已消耗 token 不回退)
         if (session->contextStats) {
-            session->io->sendToPeer(
-                agentxx::agent::io::toWireContextStats(*session->contextStats)
-            );
+            session->io->sendToPeer(agentxx::agent::io::toWireContextStats(*session->contextStats));
         }
     }
 

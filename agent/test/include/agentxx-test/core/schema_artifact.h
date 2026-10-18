@@ -100,8 +100,8 @@ inline ArtifactCheck checkGeneratedArtifact(
     const std::string& path,
     const std::string& actual,
     bool               update,
-    std::string_view   artifact       = "artifact",
-    std::string_view   updateEnvName  = ""
+    std::string_view   artifact      = "artifact",
+    std::string_view   updateEnvName = ""
 ) {
     ArtifactCheck out;
     if (path.empty()) {
@@ -110,10 +110,9 @@ inline ArtifactCheck checkGeneratedArtifact(
         return out;
     }
     if (update) {
-        out.ok = writeArtifactFile(path, actual);
-        out.message
-            = out.ok ? fmt::format("[{}] regenerated: {}", artifact, path)
-                     : fmt::format("[{}] failed to write: {}", artifact, path);
+        out.ok      = writeArtifactFile(path, actual);
+        out.message = out.ok ? fmt::format("[{}] regenerated: {}", artifact, path)
+                             : fmt::format("[{}] failed to write: {}", artifact, path);
         return out;
     }
     const auto baseline = readArtifactFile(path);
@@ -122,9 +121,8 @@ inline ArtifactCheck checkGeneratedArtifact(
             "[{}] missing: {}{}",
             artifact,
             path,
-            updateEnvName.empty()
-                ? std::string{}
-                : fmt::format(" (run with {}=1 to generate)", updateEnvName)
+            updateEnvName.empty() ? std::string{}
+                                  : fmt::format(" (run with {}=1 to generate)", updateEnvName)
         );
         return out;
     }

@@ -87,13 +87,13 @@ public:
     /// - [initialResult] 非空时跳过首跑直接进入中断处理循环
     ///   (程序重启恢复中断路径, 由调用方从 checkpoint 重建中断信息)
     AGENTXX_NOINLINE asio::awaitable<Outcome>
-        run(std::shared_ptr<AgentContext>                 ctx,
-            neograph::graph::GraphEngine*                 engine,
-            std::string_view                              sessionId,
-            neograph::graph::RunConfig                    cfg,
-            std::shared_ptr<neograph::graph::CancelToken> cancelToken,
-            Hooks                                         hooks,
-            std::optional<neograph::graph::RunResult>     initialResult = std::nullopt);
+                     run(std::shared_ptr<AgentContext>                 ctx,
+                         neograph::graph::GraphEngine*                 engine,
+                         std::string_view                              sessionId,
+                         neograph::graph::RunConfig                    cfg,
+                         std::shared_ptr<neograph::graph::CancelToken> cancelToken,
+                         Hooks                                         hooks,
+                         std::optional<neograph::graph::RunResult>     initialResult = std::nullopt);
 };
 
 } // namespace agent

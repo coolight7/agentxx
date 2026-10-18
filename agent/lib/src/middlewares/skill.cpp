@@ -23,7 +23,7 @@ bool readFileStamp(const std::string& path, uint64_t& mtime, uint64_t& size) {
     if (ec) {
         return false;
     }
-    size = static_cast<uint64_t>(bytes);
+    size                 = static_cast<uint64_t>(bytes);
     const auto writeTime = std::filesystem::last_write_time(nativePath, ec);
     if (ec) {
         return false;
@@ -144,9 +144,10 @@ asio::awaitable<bool> SkillMiddlewareHandle::scanSkillsAsync() {
         int         priority = 0;
         std::string source;
     };
-    auto                          skillQueue = std::vector<SkillDirEntry>{skillDirs.begin(), skillDirs.end()};
-    std::vector<Candidate>        candidates;
-    std::map<std::string, std::string> walkErrors;
+
+    auto skillQueue = std::vector<SkillDirEntry>{skillDirs.begin(), skillDirs.end()};
+    std::vector<Candidate>                                            candidates;
+    std::map<std::string, std::string>                                walkErrors;
     std::map<std::string, std::pair<uint64_t, uint64_t>, std::less<>> newSnapshot;
 
     for (size_t i = 0; i < skillQueue.size(); ++i) {
@@ -173,7 +174,8 @@ asio::awaitable<bool> SkillMiddlewareHandle::scanSkillsAsync() {
                     } else {
                         // 添加子目录等待扫描 (继承本目录的优先级与来源)
                         for (const auto& entity :
-                             std::filesystem::directory_iterator(utilxx_base::utf8ToPath(entry.path))) {
+                             std::filesystem::directory_iterator(utilxx_base::utf8ToPath(entry.path)
+                             )) {
                             if (entity.is_directory()) {
                                 skillQueue.push_back(SkillDirEntry{
                                     .path     = entity.path().string(),
@@ -205,11 +207,13 @@ asio::awaitable<bool> SkillMiddlewareHandle::scanSkillsAsync() {
     // ---- 3. 逐目录解析 SKILL.md ----
     decltype(skillCache.skillData)  loadedData;
     decltype(skillCache.loadErrors) loadedErrors = std::move(walkErrors);
+
     struct LoadedEntry {
         int         priority = 0;
         std::string source;
         std::string dirpath;
     };
+
     std::vector<LoadedEntry> loadedOrder;
     for (const auto& candidate : candidates) {
         // catchErrorAsync: 单个技能解析失败仅记录错误, 不影响其他技能
@@ -376,8 +380,7 @@ SkillMiddlewareHandle::SkillMiddlewareHandle(
         .perSession          = false,
         .refreshOnCompaction = true,
         .timeout             = std::chrono::milliseconds{5000},
-        .build =
-            [this](const agentxx::agent::PromptRefreshContext& /*rc*/)
+        .build               = [this](const agentxx::agent::PromptRefreshContext& /*rc*/)
             -> asio::awaitable<std::optional<std::string>> {
             co_return co_await buildSectionAsync();
         },
@@ -416,13 +419,10 @@ void SkillMiddlewareHandle::addSkillDirs(
             continue;
         }
         // 去重: 与 yaml 主配置/已注册目录重复时不重复扫描
-        const bool exists = std::any_of(
-            skillDirs.begin(),
-            skillDirs.end(),
-            [&](const SkillDirEntry& dir) {
-                return dir.path == p;
-            }
-        );
+        const bool exists
+            = std::any_of(skillDirs.begin(), skillDirs.end(), [&](const SkillDirEntry& dir) {
+                  return dir.path == p;
+              });
         if (!exists) {
             skillDirs.push_back(SkillDirEntry{
                 .path     = std::move(p),
@@ -452,13 +452,9 @@ void SkillMiddlewareHandle::addSkillDirs(
 void SkillMiddlewareHandle::removeSkillDirs(const std::vector<std::string>& paths) {
     bool changed = false;
     for (const auto& p : paths) {
-        auto it = std::find_if(
-            skillDirs.begin(),
-            skillDirs.end(),
-            [&](const SkillDirEntry& dir) {
-                return dir.path == p;
-            }
-        );
+        auto it = std::find_if(skillDirs.begin(), skillDirs.end(), [&](const SkillDirEntry& dir) {
+            return dir.path == p;
+        });
         if (it != skillDirs.end()) {
             skillDirs.erase(it);
             changed = true;

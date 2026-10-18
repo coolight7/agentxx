@@ -69,12 +69,12 @@ std::string messageOf(const ConfigValidationReport& report, std::string_view key
 /// 一份"可正常启动"的基础配置 (模型 + 绝对路径都在)
 agentxx::agent::AgentConfig makeValidConfig(const std::string& root) {
     agentxx::agent::AgentConfig cfg;
-    cfg.model.baseUrl   = "http://127.0.0.1:1/v1";
-    cfg.model.apiKey    = "EMPTY";
-    cfg.model.modelName = "test-model";
-    cfg.dataDir         = root;
-    cfg.workDir         = root;
-    cfg.enableSessionStore = true;
+    cfg.model.baseUrl                 = "http://127.0.0.1:1/v1";
+    cfg.model.apiKey                  = "EMPTY";
+    cfg.model.modelName               = "test-model";
+    cfg.dataDir                       = root;
+    cfg.workDir                       = root;
+    cfg.enableSessionStore            = true;
     cfg.availableModels["test-model"] = cfg.model;
     cfg.currentModelName              = "test-model";
     return cfg;
@@ -107,9 +107,9 @@ TestResult testConfigValidation() {
 
     // ---- model.use 指向不存在模型 → 致命 ----
     {
-        auto cfg              = makeValidConfig(root);
-        cfg.currentModelName  = "not-there";
-        auto report           = agentxx::agent::validateAgentConfig(cfg);
+        auto cfg             = makeValidConfig(root);
+        cfg.currentModelName = "not-there";
+        auto report          = agentxx::agent::validateAgentConfig(cfg);
         XX_TEST_EXPECT_TRUE(report.hasFatal());
         XX_TEST_EXPECT_TRUE(hasKey(report, "model.use"));
         XX_TEST_EXPECT_TRUE(messageOf(report, "model.use").find("not-there") != std::string::npos);
@@ -133,7 +133,7 @@ TestResult testConfigValidation() {
 
     // ---- 插件 config 相对路径 → 致命; 插件路径重复/缺失 → 警告 ----
     {
-        auto cfg = makeValidConfig(root);
+        auto                         cfg = makeValidConfig(root);
         agentxx::agent::PluginConfig pc;
         pc.path       = (fs::path{root} / "plugin.dll").string();
         pc.configPath = "relative.yaml";
@@ -150,7 +150,9 @@ TestResult testConfigValidation() {
         auto pathReport = agentxx::agent::validateConfigPaths(cfg);
         XX_TEST_EXPECT_FALSE(pathReport.hasFatal());
         XX_TEST_EXPECT_TRUE(hasKey(pathReport, "plugin.list[0]"));
-        XX_TEST_EXPECT_TRUE(messageOf(pathReport, "plugin.list[0]").find("does not exist") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(
+            messageOf(pathReport, "plugin.list[0]").find("does not exist") != std::string::npos
+        );
 
         auto dupReport = agentxx::agent::validateAgentConfig(cfg);
         XX_TEST_EXPECT_TRUE(hasKey(dupReport, "plugin.list[1]"));
@@ -161,19 +163,24 @@ TestResult testConfigValidation() {
 
     // ---- 权限组合: Deny + 白名单、Pass 模式、白黑名单同路径 ----
     {
-        auto cfg                      = makeValidConfig(root);
-        cfg.permissionMode            = agentxx::agent::PermissionMode::Deny;
-        cfg.permissionAllowPaths      = {root};
-        auto report                   = agentxx::agent::validateAgentConfig(cfg);
+        auto cfg                 = makeValidConfig(root);
+        cfg.permissionMode       = agentxx::agent::PermissionMode::Deny;
+        cfg.permissionAllowPaths = {root};
+        auto report              = agentxx::agent::validateAgentConfig(cfg);
         XX_TEST_EXPECT_FALSE(report.hasFatal());
         XX_TEST_EXPECT_TRUE(hasKey(report, "permission.mode"));
-        XX_TEST_EXPECT_TRUE(messageOf(report, "permission.mode").find("whitelist still wins") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(
+            messageOf(report, "permission.mode").find("whitelist still wins") != std::string::npos
+        );
     }
     {
         auto cfg           = makeValidConfig(root);
         cfg.permissionMode = agentxx::agent::PermissionMode::Pass;
         auto report        = agentxx::agent::validateAgentConfig(cfg);
-        XX_TEST_EXPECT_TRUE(messageOf(report, "permission.mode").find("`pass` allows every path") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(
+            messageOf(report, "permission.mode").find("`pass` allows every path")
+            != std::string::npos
+        );
     }
     {
         auto cfg                 = makeValidConfig(root);
@@ -188,13 +195,13 @@ TestResult testConfigValidation() {
 
     // ---- 取值会被夹取 / 组合无意义 ----
     {
-        auto cfg                           = makeValidConfig(root);
-        cfg.toolParallelMaxConcurrency     = 99;
-        cfg.enableToolFiltering            = true;
+        auto cfg                       = makeValidConfig(root);
+        cfg.toolParallelMaxConcurrency = 99;
+        cfg.enableToolFiltering        = true;
         cfg.toolWhitelist.clear();
-        cfg.enableSessionStore             = false;
-        cfg.sessionStoreDirectory          = root; // 配了根但关掉持久化
-        auto report                        = agentxx::agent::validateAgentConfig(cfg);
+        cfg.enableSessionStore    = false;
+        cfg.sessionStoreDirectory = root; // 配了根但关掉持久化
+        auto report               = agentxx::agent::validateAgentConfig(cfg);
         XX_TEST_EXPECT_TRUE(hasKey(report, "tool.parallel_max"));
         XX_TEST_EXPECT_TRUE(hasKey(report, "tool.whitelist"));
         XX_TEST_EXPECT_TRUE(hasKey(report, "session_store.enable"));
@@ -203,10 +210,10 @@ TestResult testConfigValidation() {
 
     // ---- 内存模式 (无 data_dir) → 警告而非致命 ----
     {
-        auto cfg           = makeValidConfig(root);
-        cfg.dataDir        = "";
+        auto cfg               = makeValidConfig(root);
+        cfg.dataDir            = "";
         cfg.enableSessionStore = false;
-        auto report        = agentxx::agent::validateConfigPaths(cfg);
+        auto report            = agentxx::agent::validateConfigPaths(cfg);
         XX_TEST_EXPECT_FALSE(report.hasFatal());
         XX_TEST_EXPECT_TRUE(hasKey(report, "data_dir"));
         XX_TEST_EXPECT_TRUE(messageOf(report, "data_dir").find("memory") != std::string::npos);
@@ -219,13 +226,14 @@ TestResult testConfigValidation() {
             std::ofstream ofs{utilxx_base::utf8ToPath(blockedRoot)};
             ofs << "not a directory";
         }
-        auto cfg                      = makeValidConfig(root);
-        cfg.sessionStoreDirectory     = blockedRoot;
-        auto report                   = agentxx::agent::validateConfigPaths(cfg);
+        auto cfg                  = makeValidConfig(root);
+        cfg.sessionStoreDirectory = blockedRoot;
+        auto report               = agentxx::agent::validateConfigPaths(cfg);
         XX_TEST_EXPECT_TRUE(report.hasFatal());
         XX_TEST_EXPECT_TRUE(hasKey(report, "session_store.directory"));
         XX_TEST_EXPECT_TRUE(
-            messageOf(report, "session_store.directory").find("not a directory") != std::string::npos
+            messageOf(report, "session_store.directory").find("not a directory")
+            != std::string::npos
         );
     }
 
@@ -244,10 +252,10 @@ TestResult testConfigValidation() {
 
     // ---- MCP: 空命名空间 / 非 http 端点 ----
     {
-        auto cfg = makeValidConfig(root);
-        cfg.mcpServerUrls[""] = agentxx::agent::McpServerConfig{.url = "http://127.0.0.1:1/sse"};
+        auto cfg                 = makeValidConfig(root);
+        cfg.mcpServerUrls[""]    = agentxx::agent::McpServerConfig{.url = "http://127.0.0.1:1/sse"};
         cfg.mcpServerUrls["bad"] = agentxx::agent::McpServerConfig{.url = "ftp://example.com"};
-        auto structure = agentxx::agent::validateAgentConfig(cfg);
+        auto structure           = agentxx::agent::validateAgentConfig(cfg);
         XX_TEST_EXPECT_TRUE(hasKey(structure, "mcp.list"));
         auto paths = agentxx::agent::validateConfigPaths(cfg);
         XX_TEST_EXPECT_TRUE(hasKey(paths, "mcp.list[bad].url"));

@@ -22,7 +22,7 @@ struct AudioData {
     std::chrono::steady_clock::time_point timestamp;
     uint32_t                              sampleRate    = 0;
     AudioDataSource                       source        = AudioDataSource::SystemOutput;
-    uint32_t                              processId = 0;
+    uint32_t                              processId     = 0;
     uint16_t                              channels      = 0;
     uint16_t                              bitsPerSample = 0;
 };

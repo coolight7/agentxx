@@ -179,9 +179,8 @@ struct CachedUsage {
 /// usage 里可能出现缓存用量的嵌套对象名
 /// - `prompt_tokens_details`: OpenAI Chat Completions 与多数兼容网关
 /// - `input_tokens_details`: OpenAI Responses API
-static constexpr const char* const kUsageDetailsKeys[] = {
-    "prompt_tokens_details", "input_tokens_details"
-};
+static constexpr const char* const kUsageDetailsKeys[]
+    = {"prompt_tokens_details", "input_tokens_details"};
 
 /// 从 usage 对象中提取缓存用量 (兼容各家字段名)
 ///
@@ -628,7 +627,9 @@ bool reasoningItemHasText(const utilxx_base::Json& item) {
 
 /// 组装 reasoning item 的明文思考内容: `[{"type":"reasoning_text","text":...}]`
 utilxx_base::Json reasoningTextContent(const std::string& text) {
-    return utilxx_base::Json::array({{{"type", "reasoning_text"}, {"text", text}}});
+    return utilxx_base::Json::array({
+        {{"type", "reasoning_text"}, {"text", text}}
+    });
 }
 
 } // namespace
@@ -719,7 +720,8 @@ bool OpenAIProvider::buildBodyText(
                 continue;
             }
             // 避免同时出现互斥的输出 token 上限字段
-            if ((key == "max_tokens" || key == "max_output_tokens" || key == "max_completion_tokens")
+            if ((key == "max_tokens" || key == "max_output_tokens" || key == "max_completion_tokens"
+                )
                 && (keys.contains("max_output_tokens") || keys.contains("max_completion_tokens")
                     || keys.contains("max_tokens"))) {
                 continue;
@@ -771,7 +773,7 @@ utilxx_base::Json OpenAIProvider::buildBody(const neograph::CompletionParams& pa
         = agentxx::protocol::chatMessagesToOpenAIJson(params.messages, config_.sendThinking);
 
     if (!params.tools.empty()) {
-        body["tools"] = agentxx::protocol::chatToolsToOpenAIJson(params.tools);
+        body["tools"]       = agentxx::protocol::chatToolsToOpenAIJson(params.tools);
         body["tool_choice"] = "auto";
     }
 
@@ -939,9 +941,9 @@ utilxx_base::Json OpenAIProvider::buildResponsesBody(const neograph::CompletionP
                     }
                 } else if (config_.requestReasoningSummary && !msg.reasoning_content.empty()) {
                     input.push_back({
-                        {"type",    "reasoning"                                 },
-                        {"content", reasoningTextContent(msg.reasoning_content) },
-                        {"summary", utilxx_base::Json::array()                  },
+                        {"type",    "reasoning"                                },
+                        {"content", reasoningTextContent(msg.reasoning_content)},
+                        {"summary", utilxx_base::Json::array()                 },
                     });
                 }
             }
@@ -2102,9 +2104,9 @@ bool OpenAIProvider::processResponsesSseLine(
             if (itype == "function_call") {
                 int idx = viewOutputIndex(jv);
                 // 本次事件是否该调用的首次出现 (下面 tcMap[idx] 访问会插入条目)
-                const bool firstFragment = (tcMap.find(idx) == tcMap.end());
-                auto&      tc           = tcMap[idx];
-                std::string id          = viewStrField(item, "call_id");
+                const bool  firstFragment = (tcMap.find(idx) == tcMap.end());
+                auto&       tc            = tcMap[idx];
+                std::string id            = viewStrField(item, "call_id");
                 if (id.empty()) {
                     id = viewStrField(item, "id");
                 }

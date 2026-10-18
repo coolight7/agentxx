@@ -485,7 +485,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
     auto inst = co_await mgr->loadNativeAsync(path);
     XX_TEST_EXPECT_TRUE(inst != nullptr);
     if (!inst) {
-    co_return TestResult{g_client_plugin_passed, g_client_plugin_failed};
+        co_return TestResult{g_client_plugin_passed, g_client_plugin_failed};
     }
     XX_TEST_EXPECT_EQ(inst->name, "example_plugin");
 
@@ -1045,12 +1045,8 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         mgr->reportRegionSize("", 10, 10);
         mgr->reportRegionSize("agentxx_test.panel", 0, 10);
         XX_TEST_EXPECT_EQ(mgr->regionSizes().size(), size_t{1});
-        XX_TEST_EXPECT_TRUE(
-            mgr->clientStateJson().find("\"regions\"") != std::string::npos
-        );
-        XX_TEST_EXPECT_TRUE(
-            mgr->clientStateJson().find("agentxx_test.panel") != std::string::npos
-        );
+        XX_TEST_EXPECT_TRUE(mgr->clientStateJson().find("\"regions\"") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(mgr->clientStateJson().find("agentxx_test.panel") != std::string::npos);
 
         // 11.2 require 未满足 → 加载跳过并记录原因 (直连路径, dlopen 后限制):
         // 拷贝真实可加载的示例库, manifest 声明本主程序不支持的必选接口
@@ -1353,12 +1349,8 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     XX_TEST_EXPECT_TRUE(sec.items[2].is_object());
                     XX_TEST_EXPECT_EQ(sec.items[2].value("kind", ""), std::string{"Text"});
                     // 动作按描述层解析: 短写字符串与对象写法等价 (dispatch + 名字)
-                    const auto graphAction
-                        = pluginxx::ui::parseAction(graphButton["action"]);
-                    XX_TEST_EXPECT_EQ(
-                        graphAction.kind,
-                        pluginxx::ui::Action::Kind::Dispatch
-                    );
+                    const auto graphAction = pluginxx::ui::parseAction(graphButton["action"]);
+                    XX_TEST_EXPECT_EQ(graphAction.kind, pluginxx::ui::Action::Kind::Dispatch);
                     XX_TEST_EXPECT_EQ(graphAction.name, std::string{"planning.open_graph"});
                     // 状态图源码经 dispatch 动作派发时由插件自持 (不随按钮双发)
                 }
@@ -1371,7 +1363,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 .toolCallId = "call_plan_write_1",
                 .arguments
                 = R"({"mode":"write","roadmap":"stateDiagram-v2\n[*] --> p1\np1 --> [*]","todos":[{"state":"in_progress","content":"write task"}]})",
-                .type       = agentxx::agent::WireDelta::Type::ToolStart,
+                .type = agentxx::agent::WireDelta::Type::ToolStart,
             };
             mgr->onDelta(deltaWriteStart);
 
@@ -1414,7 +1406,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 .toolCallId = "call_plan_read_1",
                 .result
                 = R"({"roadmap":"stateDiagram-v2\n[*] --> p2\np2 --> [*]","todos":[{"state":"completed","content":"read task done"}]})",
-                .type       = agentxx::agent::WireDelta::Type::ToolEnd,
+                .type = agentxx::agent::WireDelta::Type::ToolEnd,
             };
             mgr->onDelta(deltaReadEnd);
 
@@ -1681,10 +1673,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     editSegments.items[0].value("path", std::string{}),
                     "/home/user/g.cpp"
                 );
-                XX_TEST_EXPECT_EQ(
-                    editSegments.items[0].value("oldStr", std::string{}),
-                    "oldA();"
-                );
+                XX_TEST_EXPECT_EQ(editSegments.items[0].value("oldStr", std::string{}), "oldA();");
                 XX_TEST_EXPECT_EQ(editSegments.items[1].value("kind", std::string{}), "Divider");
                 XX_TEST_EXPECT_EQ(editSegments.items[2].value("kind", std::string{}), "Diff");
                 // 后续段不带 path (路径只在首段展示一次)
@@ -2116,13 +2105,21 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 // SDK 便捷方法 showDiffOverlay: 单段按旧写法下发 (老主程序也能渲染),
                 // 多段用 `edits` 数组下发; 空段列表打开"无变化"的 diff
                 struct SdkProbe : agentxx::plugin::ClientPluginBase {};
+
                 SdkProbe sdk;
-                sdk.host  = exInst->hostView();
-                sdk.iface = agentxx::plugin::ClientIfaces::query(exInst->hostView());
+                sdk.host            = exInst->hostView();
+                sdk.iface           = agentxx::plugin::ClientIfaces::query(exInst->hostView());
                 const int beforeSdk = adapter->overlayOpenCount();
 
                 XX_TEST_EXPECT_EQ(
-                    sdk.showDiffOverlay("单段", "/p/a.cpp", {{"old();", "new();"}}, "{}"),
+                    sdk.showDiffOverlay(
+                        "单段",
+                        "/p/a.cpp",
+                        {
+                            {"old();", "new();"}
+                },
+                        "{}"
+                    ),
                     0
                 );
                 XX_TEST_EXPECT_EQ(adapter->overlayOpenCount(), beforeSdk + 1);
@@ -2139,7 +2136,10 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     sdk.showDiffOverlay(
                         "多段",
                         "/p/b.cpp",
-                        {{"a();", "A();"}, {"b();", "B();"}},
+                        {
+                            {"a();", "A();"},
+                            {"b();", "B();"}
+                },
                         "{}"
                     ),
                     0
@@ -2150,14 +2150,8 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     XX_TEST_EXPECT_EQ(payload.value("path", std::string{}), "/p/b.cpp");
                     XX_TEST_EXPECT_TRUE(payload.contains("edits"));
                     XX_TEST_EXPECT_EQ(payload["edits"].size(), size_t{2});
-                    XX_TEST_EXPECT_EQ(
-                        payload["edits"][0].value("old_str", std::string{}),
-                        "a();"
-                    );
-                    XX_TEST_EXPECT_EQ(
-                        payload["edits"][1].value("new_str", std::string{}),
-                        "B();"
-                    );
+                    XX_TEST_EXPECT_EQ(payload["edits"][0].value("old_str", std::string{}), "a();");
+                    XX_TEST_EXPECT_EQ(payload["edits"][1].value("new_str", std::string{}), "B();");
                 }
 
                 XX_TEST_EXPECT_EQ(sdk.showDiffOverlay("空", "/p/c.cpp", {}, "{}"), 0);
@@ -2207,7 +2201,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             [&](const utilxx_base::Json& args) {
                 ++hitsB;
                 XX_TEST_EXPECT_EQ(args.value("k", 0), 1);
-            },
+        },
             "accent",
             utilxx_base::Json{{"k", 1}}
         );
@@ -3420,14 +3414,15 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             struct Counter {
                 int ticks = 0;
             } counter;
+
             auto makeSpec = [&](int intervalMs, int repeat, bool pauseHidden) {
                 AgentxxTimerSpec spec{};
                 spec.version           = 1;
                 spec.interval_ms       = intervalMs;
                 spec.repeat            = repeat;
                 spec.pause_when_hidden = pauseHidden ? 1 : 0;
-                spec.owner_id          = agentxx::plugin::PluginStringView::from("example_plugin.panel", 20);
-                spec.on_timer          = [](void* ud) {
+                spec.owner_id = agentxx::plugin::PluginStringView::from("example_plugin.panel", 20);
+                spec.on_timer = [](void* ud) {
                     ++static_cast<Counter*>(ud)->ticks;
                 };
                 spec.user_data = &counter;
@@ -3436,31 +3431,31 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
 
             // 30.1 基本校验: 版本/回调缺失 → 拒绝
             {
-                auto bad = makeSpec(60, 0, false);
+                auto bad    = makeSpec(60, 0, false);
                 bad.version = 2;
                 XX_TEST_EXPECT_TRUE(ifaceTimer->set_timer(instT->hostView(), &bad) == nullptr);
-                bad.version = 1;
+                bad.version  = 1;
                 bad.on_timer = nullptr;
                 XX_TEST_EXPECT_TRUE(ifaceTimer->set_timer(instT->hostView(), &bad) == nullptr);
             }
 
             // 30.2 一次性定时器: 触发恰好一次 (间隔低于下限时按 50ms 收敛)
             {
-                counter.ticks     = 0;
-                auto spec         = makeSpec(10, 0, false);
-                auto* oneShot     = ifaceTimer->set_timer(instT->hostView(), &spec);
+                counter.ticks = 0;
+                auto  spec    = makeSpec(10, 0, false);
+                auto* oneShot = ifaceTimer->set_timer(instT->hostView(), &spec);
                 XX_TEST_EXPECT_TRUE(oneShot != nullptr);
                 co_await sleepMs(200);
                 XX_TEST_EXPECT_EQ(counter.ticks, 1);
                 co_await sleepMs(120);
-                XX_TEST_EXPECT_EQ(counter.ticks, 1); // 不再触发
+                XX_TEST_EXPECT_EQ(counter.ticks, 1);                  // 不再触发
                 ifaceTimer->cancel_timer(instT->hostView(), oneShot); // 已结束: 幂等
             }
 
             // 30.3 周期定时器: repeat 次数上限到达后自动停止
             {
-                counter.ticks = 0;
-                auto spec     = makeSpec(50, 3, false);
+                counter.ticks  = 0;
+                auto  spec     = makeSpec(50, 3, false);
                 auto* periodic = ifaceTimer->set_timer(instT->hostView(), &spec);
                 XX_TEST_EXPECT_TRUE(periodic != nullptr);
                 co_await sleepMs(400);
@@ -3471,10 +3466,11 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
 
             // 30.4 区域可见性门控 (is_visible + pause_when_hidden)
             {
-                PluginxxStringView owner = agentxx::plugin::PluginStringView::from("example_plugin.panel", 20);
+                PluginxxStringView owner
+                    = agentxx::plugin::PluginStringView::from("example_plugin.panel", 20);
                 XX_TEST_EXPECT_EQ(ifaceTimer->is_visible(instT->hostView(), &owner), 0);
                 counter.ticks = 0;
-                auto spec     = makeSpec(50, 0, true); // 不可见 → 跳过回调 (计时继续)
+                auto  spec    = makeSpec(50, 0, true); // 不可见 → 跳过回调 (计时继续)
                 auto* hidden  = ifaceTimer->set_timer(instT->hostView(), &spec);
                 XX_TEST_EXPECT_TRUE(hidden != nullptr);
                 co_await sleepMs(160);
@@ -3491,8 +3487,8 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 mgrT->reportRegionVisible("example_plugin.panel", true);
                 XX_TEST_EXPECT_TRUE(mgrT->regionVisibility().at("example_plugin.panel"));
                 // 不可见时取消 (cancel_timer 任何时候都有效)
-                counter.ticks = 0;
-                auto spec2    = makeSpec(50, 5, false);
+                counter.ticks  = 0;
+                auto  spec2    = makeSpec(50, 5, false);
                 auto* cancelMe = ifaceTimer->set_timer(instT->hostView(), &spec2);
                 XX_TEST_EXPECT_TRUE(cancelMe != nullptr);
                 ifaceTimer->cancel_timer(instT->hostView(), cancelMe);
@@ -3505,10 +3501,10 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             {
                 mgrT->setAnimationEnabled(false);
                 XX_TEST_EXPECT_FALSE(mgrT->animationEnabled());
-                auto spec  = makeSpec(50, 0, false);
+                auto spec = makeSpec(50, 0, false);
                 XX_TEST_EXPECT_TRUE(ifaceTimer->set_timer(instT->hostView(), &spec) == nullptr);
                 mgrT->setAnimationEnabled(true);
-                auto ok    = ifaceTimer->set_timer(instT->hostView(), &spec);
+                auto ok = ifaceTimer->set_timer(instT->hostView(), &spec);
                 XX_TEST_EXPECT_TRUE(ok != nullptr);
                 ifaceTimer->cancel_timer(instT->hostView(), ok);
             }
@@ -3517,8 +3513,8 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             {
                 std::vector<AgentxxTimer*> timers;
                 for (size_t i = 0; i < 8; ++i) {
-                    auto spec = makeSpec(1000, 0, false);
-                    auto* t   = ifaceTimer->set_timer(instT->hostView(), &spec);
+                    auto  spec = makeSpec(1000, 0, false);
+                    auto* t    = ifaceTimer->set_timer(instT->hostView(), &spec);
                     if (t) {
                         timers.push_back(t);
                     }
@@ -3534,7 +3530,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             // 30.7 生命周期: 卸载后定时器全部取消 (卸载会等待尚未返回的回调结束)
             {
                 counter.ticks = 0;
-                auto spec     = makeSpec(50, 100, false);
+                auto  spec    = makeSpec(50, 100, false);
                 auto* live    = ifaceTimer->set_timer(instT->hostView(), &spec);
                 XX_TEST_EXPECT_TRUE(live != nullptr);
                 XX_TEST_EXPECT_TRUE(co_await mgrT->unloadAsync("example_plugin"));
@@ -3563,12 +3559,14 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             struct KeyCounter {
                 int hits = 0;
             } keyCounter;
+
             auto makeSpec = [&](std::string_view keys, std::string_view desc) {
                 AgentxxKeybindSpec spec{};
-                spec.version     = 1;
-                spec.keys        = agentxx::plugin::PluginStringView::from(keys.data(), keys.size());
-                spec.description = agentxx::plugin::PluginStringView::from(desc.data(), desc.size());
-                spec.on_keybind  = [](void* ud) {
+                spec.version = 1;
+                spec.keys    = agentxx::plugin::PluginStringView::from(keys.data(), keys.size());
+                spec.description
+                    = agentxx::plugin::PluginStringView::from(desc.data(), desc.size());
+                spec.on_keybind = [](void* ud) {
                     ++static_cast<KeyCounter*>(ud)->hits;
                 };
                 spec.user_data = &keyCounter;
@@ -3604,8 +3602,8 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
 
             // 31.2 注册/查询/派发/注销
             {
-                auto spec   = makeSpec("ctrl+alt+k", "test keybind");
-                auto* bind  = ifaceKey->register_keybind(instK->hostView(), &spec);
+                auto  spec = makeSpec("ctrl+alt+k", "test keybind");
+                auto* bind = ifaceKey->register_keybind(instK->hostView(), &spec);
                 XX_TEST_EXPECT_TRUE(bind != nullptr);
                 XX_TEST_EXPECT_TRUE(mgrK->hasKeybind("ctrl+alt+k"));
                 XX_TEST_EXPECT_FALSE(mgrK->hasKeybind("ctrl+alt+j"));
@@ -3647,7 +3645,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 XX_TEST_EXPECT_EQ(mgrK->keybinds().size(), size_t{0});
                 mgrK->postKeybindInvocation("ctrl+alt+k");
                 co_await sleepMs(50);
-                XX_TEST_EXPECT_EQ(keyCounter.hits, 1); // 已注销: 不再回调
+                XX_TEST_EXPECT_EQ(keyCounter.hits, 1);                 // 已注销: 不再回调
                 ifaceKey->unregister_keybind(instK->hostView(), bind); // 重复注销幂等
             }
 
@@ -3656,12 +3654,14 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 auto bad = makeSpec("q", "no modifier");
                 XX_TEST_EXPECT_TRUE(ifaceKey->register_keybind(instK->hostView(), &bad) == nullptr);
                 auto bad2 = makeSpec("ctrl+nosuchkey", "bad key");
-                XX_TEST_EXPECT_TRUE(ifaceKey->register_keybind(instK->hostView(), &bad2) == nullptr);
+                XX_TEST_EXPECT_TRUE(
+                    ifaceKey->register_keybind(instK->hostView(), &bad2) == nullptr
+                );
             }
 
             // 31.4 卸载: 注册表摘除 (按键不再派发)
             {
-                auto spec  = makeSpec("ctrl+shift+p", "unload case");
+                auto  spec = makeSpec("ctrl+shift+p", "unload case");
                 auto* bind = ifaceKey->register_keybind(instK->hostView(), &spec);
                 XX_TEST_EXPECT_TRUE(bind != nullptr);
                 XX_TEST_EXPECT_TRUE(mgrK->hasKeybind("ctrl+shift+p"));
@@ -3762,8 +3762,10 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         mgr->setUiAdapter(std::make_shared<MockPluginUiAdapter>());
         auto inst = co_await mgr->loadNativeAsync(findExamplePluginPath());
         XX_TEST_EXPECT_TRUE(inst != nullptr);
-        auto* ifaceUi
-            = agentxx::plugin::queryInterface<AgentxxClientUiIface>(inst->hostView(), AGENTXX_IFACE_CLIENT_UI);
+        auto* ifaceUi = agentxx::plugin::queryInterface<AgentxxClientUiIface>(
+            inst->hostView(),
+            AGENTXX_IFACE_CLIENT_UI
+        );
         XX_TEST_EXPECT_TRUE(ifaceUi != nullptr);
         if (inst && ifaceUi) {
             // 超大描述: 单条 JSON 超过 1 MiB (主程序在入口处直接拒绝, 不解析不落表)
@@ -3771,8 +3773,10 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                                      + std::string(1024 * 1024 + 64, 'x') + "\"}]}";
             XX_TEST_EXPECT_TRUE(huge.size() > agentxx::plugin::kUiJsonMaxBytes);
 
-            PluginxxStringView idSv   = agentxx::plugin::PluginStringView::from(std::string_view{"example_plugin.big"});
-            PluginxxStringView propSv = agentxx::plugin::PluginStringView::from(std::string_view{"{\"title\":\"Big\"}"});
+            PluginxxStringView idSv
+                = agentxx::plugin::PluginStringView::from(std::string_view{"example_plugin.big"});
+            PluginxxStringView propSv
+                = agentxx::plugin::PluginStringView::from(std::string_view{"{\"title\":\"Big\"}"});
             auto* panel = ifaceUi->register_panel(inst->hostView(), &idSv, &propSv);
             XX_TEST_EXPECT_TRUE(panel != nullptr);
             if (panel) {
@@ -3786,7 +3790,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
 
                 // 注册表内容保持为上一次成功写入 (拒绝不留半截状态)
                 {
-                    auto reg = mgr->uiRegistrySnapshot();
+                    auto                                reg   = mgr->uiRegistrySnapshot();
                     const agentxx::plugin::ClientPanel* found = nullptr;
                     for (const auto& p : reg->panels) {
                         if (p.id == "example_plugin.big") {
@@ -3816,9 +3820,10 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
     // 需要处理停机, 这里直接在主线程 run_for 驱动 (阻塞也只影响本用例)。
     {
         using clk = std::chrono::steady_clock;
+
         struct Probe {
-            std::atomic<int>     ticks{0};
-            std::atomic<bool>    blocked{false};
+            std::atomic<int>  ticks{0};
+            std::atomic<bool> blocked{false};
             /// 阻塞回调结束时刻 (steady_clock 毫秒; 0 = 未结束)
             std::atomic<int64_t> blockEndMs{0};
             /// 阻塞结束后首次回调与 blockEnd 的间隔 (ms; -1 = 尚未回调)
@@ -3855,12 +3860,10 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 blocker.on_timer    = [](void* ud) {
                     auto* p = static_cast<Probe*>(ud);
                     std::this_thread::sleep_for(std::chrono::milliseconds{300});
-                    p->blockEndMs.store(
-                        std::chrono::duration_cast<std::chrono::milliseconds>(
-                            clk::now().time_since_epoch()
-                        )
-                            .count()
-                    );
+                    p->blockEndMs.store(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                            clk::now().time_since_epoch()
+                    )
+                                            .count());
                     p->blocked.store(true);
                 };
                 blocker.user_data = &probe;
@@ -3875,13 +3878,12 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     auto* p = static_cast<Probe*>(ud);
                     p->ticks.fetch_add(1);
                     if (p->blocked.load()) {
-                        int64_t expected = -1;
-                        const int64_t gap
-                            = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                  clk::now().time_since_epoch()
-                              )
-                                  .count()
-                              - p->blockEndMs.load();
+                        int64_t       expected = -1;
+                        const int64_t gap = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                                clk::now().time_since_epoch()
+                                            )
+                                                .count()
+                                            - p->blockEndMs.load();
                         p->firstGapAfterBlockMs.compare_exchange_strong(expected, gap);
                     }
                 };

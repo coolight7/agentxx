@@ -49,7 +49,7 @@ asio::awaitable<void> sleepFor(asio::any_io_executor ex, std::chrono::millisecon
 
 /// 轮询等待条件成立; 超时返回 false (调用方据此决定是否强制收尾)
 asio::awaitable<bool> waitFor(
-    asio::any_io_executor    ex,
+    asio::any_io_executor        ex,
     const std::function<bool()>& cond,
     std::chrono::milliseconds    timeout,
     std::chrono::milliseconds    poll = std::chrono::milliseconds{50}
@@ -81,11 +81,11 @@ asio::awaitable<void> runJsonlStdioAsync(
     auto transport = std::make_shared<JsonlAgentIOTransport>(ex, std::move(lineIo));
 
     SessionServerAgentIO::Config scCfg;
-    scCfg.sessionId  = sessionId;
+    scCfg.sessionId   = sessionId;
     scCfg.gracePeriod = kGracePeriod;
     // 一次性运行没有"向上滚动加载更早历史"的界面: 首次同步直接给完整历史
     scCfg.initialSyncTailCount = 0;
-    auto serverIO = std::make_shared<SessionServerAgentIO>(ex, agent, scCfg);
+    auto serverIO              = std::make_shared<SessionServerAgentIO>(ex, agent, scCfg);
     serverIO->setTransport(transport);
 
     // 接收循环先于 init 启动 (与非分离模式同一顺序): init (MCP/插件/组件加载) 可能
@@ -121,8 +121,7 @@ asio::awaitable<void> runJsonlStdioAsync(
     // 注册 `service.subagent` 委派服务 —— 上下文压缩与 subagent 工具都依赖它。
     // 注意与 `AgentConfig::enableSubagent` 无关 (那只决定是否把工具注入给模型);
     // 主程序对象须活到会话结束, 故用局部 shared_ptr 持有
-    std::shared_ptr<agent::AgentHost> host
-        = agent::AgentHost::attachRootAgentHost(agent);
+    std::shared_ptr<agent::AgentHost> host = agent::AgentHost::attachRootAgentHost(agent);
 
     XX_LOGI(
         "[jsonl] session `{}` ready: write one Wire message per line on stdin; "
@@ -146,9 +145,8 @@ asio::awaitable<void> runJsonlStdioAsync(
     }
 
     // 收尾: 等当前轮次与排队输入跑完; 超时则记日志并强制收尾 (不假装成功)
-    const auto drainTimeout
-        = interrupted->load() ? kInterruptDrainTimeout : kDrainTimeout;
-    const bool drained = co_await waitFor(
+    const auto drainTimeout = interrupted->load() ? kInterruptDrainTimeout : kDrainTimeout;
+    const bool drained      = co_await waitFor(
         ex,
         [&]() {
             return !serverIO->turnActive() && serverIO->queueSizeForTest() == 0;

@@ -52,9 +52,9 @@ public:
     asio::awaitable<void> init();
 
     struct TurnResult {
-    // 成员按对齐/尺寸从大到小排列, 减少结构体内填充字节
+        // 成员按对齐/尺寸从大到小排列, 减少结构体内填充字节
         std::string errorMessage;
-        bool        hasError = false;
+        bool        hasError    = false;
         bool        interrupted = false;
     };
 

@@ -126,22 +126,22 @@ struct SummarizationTestEnv {
         ctx->modelRegistry->registerModel("fallback", fallback);
 
         agentxx::agent::ModelConfig small;
-        small.name                  = "small";
-        small.modelName             = "small-model";
+        small.name                 = "small";
+        small.modelName            = "small-model";
         small.modelContextMaxToken = 1000;
         ctx->modelRegistry->registerModel("small", small);
 
         agentxx::agent::ModelConfig big;
-        big.name                  = "big";
-        big.modelName             = "big-model";
+        big.name                 = "big";
+        big.modelName            = "big-model";
         big.modelContextMaxToken = 5000;
         ctx->modelRegistry->registerModel("big", big);
 
         agentxx::agent::ModelConfig thinking;
-        thinking.name                  = "thinking";
-        thinking.modelName             = "thinking-model";
+        thinking.name                 = "thinking";
+        thinking.modelName            = "thinking-model";
         thinking.modelContextMaxToken = 1000;
-        thinking.sendThinking          = true;
+        thinking.sendThinking         = true;
         ctx->modelRegistry->registerModel("thinking", thinking);
 
         // 默认模型名 = 首个注册的 "fallback"
@@ -1639,8 +1639,8 @@ asio::awaitable<TestResult> run_summarization_tests() {
         ctx->middlewareHandleContext = std::make_shared<agentxx::middleware::MiddlewareContext>();
         ctx->modelRegistry           = std::make_shared<agentxx::agent::ModelProviderRegistry>();
         agentxx::agent::ModelConfig mcfg;
-        mcfg.name                  = "m";
-        mcfg.modelName             = "m-model";
+        mcfg.name                 = "m";
+        mcfg.modelName            = "m-model";
         mcfg.modelContextMaxToken = 1000;
         ctx->modelRegistry->registerModel("m", mcfg);
         ctx->agentConfig->model.modelName = "m";
@@ -2131,8 +2131,8 @@ asio::awaitable<TestResult> run_summarization_tests() {
         ctx->middlewareHandleContext = std::make_shared<agentxx::middleware::MiddlewareContext>();
         ctx->modelRegistry           = std::make_shared<agentxx::agent::ModelProviderRegistry>();
         agentxx::agent::ModelConfig mcfg;
-        mcfg.name                  = "m";
-        mcfg.modelName             = "m-model";
+        mcfg.name                 = "m";
+        mcfg.modelName            = "m-model";
         mcfg.modelContextMaxToken = 1000;
         ctx->modelRegistry->registerModel("m", mcfg);
         ctx->agentConfig->model.modelName = "m";

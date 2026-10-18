@@ -47,10 +47,10 @@ constexpr int kHeight = 20;
 
 /// 视口夹具: 直接构造 LazyScrollable (不依赖消息列表), 可控条目高度与 key
 struct ViewFixture {
-    size_t   count      = 0;              // 条目数
-    size_t   itemHeight = 1;              // 每条实测高度 (行)
-    size_t   quickRows  = 1;              // 粗略估算高度 (行)
-    uint64_t keySalt    = 0;              // 影响所有 key (模拟内容变化)
+    size_t   count      = 0; // 条目数
+    size_t   itemHeight = 1; // 每条实测高度 (行)
+    size_t   quickRows  = 1; // 粗略估算高度 (行)
+    uint64_t keySalt    = 0; // 影响所有 key (模拟内容变化)
     /// 按条目身份 id 给出粗略高度 (未设置时用 quickRows);
     /// 用于构造"估算与实测严重不符"的场景 (估算只应影响滚动条长度)
     std::function<size_t(size_t id)> quickOf;
@@ -65,13 +65,13 @@ struct ViewFixture {
     int width  = 60;
     int height = 20;
 
-    std::vector<size_t> ids;      // 条目身份 (与内容绑定; 前插时同步头插)
+    std::vector<size_t> ids; // 条目身份 (与内容绑定; 前插时同步头插)
     size_t              nextId = 0;
 
-    int buildCalls  = 0; // buildItem 调用次数
-    int keyCalls    = 0; // itemKey 调用次数
-    int quickCalls  = 0; // quickHeight 调用次数
-    size_t maxBuilt = 0; // 构建过的最大索引 (下游是否被扫过)
+    int    buildCalls = 0; // buildItem 调用次数
+    int    keyCalls   = 0; // itemKey 调用次数
+    int    quickCalls = 0; // quickHeight 调用次数
+    size_t maxBuilt   = 0; // 构建过的最大索引 (下游是否被扫过)
 
     std::shared_ptr<LazyScrollable> scrollable;
 
@@ -83,7 +83,7 @@ struct ViewFixture {
         for (size_t i = 0; i < count; ++i) {
             ids[i] = i;
         }
-        nextId = count;
+        nextId     = count;
         scrollable = std::make_shared<LazyScrollable>(
             [this] {
                 return count;
@@ -107,9 +107,9 @@ struct ViewFixture {
                 // 内容由**身份 id** 决定 (与索引无关): 前插时 id 随条目一起后移,
                 // 因此"视口画面不变"可以直接逐行比较 (与真实消息按内容对齐一致)
                 const std::string label = (i < ids.size()) ? std::to_string(ids[i]) : "?";
-                const size_t      rowsOf = heightOf ? heightOf((i < ids.size()) ? ids[i] : 0)
-                                                    : itemHeight;
-                ftxui::Elements    rows;
+                const size_t      rowsOf
+                    = heightOf ? heightOf((i < ids.size()) ? ids[i] : 0) : itemHeight;
+                ftxui::Elements rows;
                 for (size_t r = 0; r < std::max<size_t>(1, rowsOf); ++r) {
                     // 逐行带行号: 视口顶行/底行能被解析成 (条目 id, 条目内行号),
                     // 用于断言"定位只用实测高度"
@@ -158,7 +158,7 @@ struct ViewFixture {
 
     /// 渲染一帧并返回屏幕文本
     std::string render() {
-        auto el = scrollable->Render() | ftxui::flex;
+        auto el     = scrollable->Render() | ftxui::flex;
         auto screen = ftxui::Screen::Create(
             ftxui::Dimension::Fixed(width),
             ftxui::Dimension::Fixed(height)
@@ -231,8 +231,8 @@ struct ViewFixture {
         if (p == std::string::npos) {
             return Pos{};
         }
-        const size_t b  = p + 5;
-        const size_t e  = line.find(' ', b);
+        const size_t b = p + 5;
+        const size_t e = line.find(' ', b);
         if (e == std::string::npos) {
             return Pos{};
         }
@@ -247,6 +247,7 @@ struct ViewFixture {
     Pos topPos() {
         return parseLine(firstLineOf(lastFrame()));
     }
+
     /// 视口末行 (底行) 的 (条目 id, 行号)
     Pos bottomPos() {
         return parseLine(lastLineOf(lastFrame()));
@@ -273,7 +274,7 @@ struct ViewFixture {
         int    count = 0;
         size_t start = 0;
         while (start < frameText.size()) {
-            const size_t end = frameText.find('\n', start);
+            const size_t end  = frameText.find('\n', start);
             const size_t stop = (end == std::string::npos) ? frameText.size() : end;
             if (parseLine(frameText.substr(start, stop - start)).id != static_cast<size_t>(-1)) {
                 ++count;
@@ -301,8 +302,8 @@ TestResult testTuiLazyView() {
 
         // 后续帧 (无滚动): 基本不再新增构建; key 校验也只覆盖窗口 ± 预取带
         const int buildsAfterFirst = f.buildCalls;
-        f.keyCalls = 0;
-        f.quickCalls = 0;
+        f.keyCalls                 = 0;
+        f.quickCalls               = 0;
         f.render();
         XX_TEST_EXPECT_TRUE(f.buildCalls <= buildsAfterFirst + 2);
         XX_TEST_EXPECT_TRUE(f.keyCalls <= static_cast<int>(kHeight) + 32);
@@ -312,9 +313,7 @@ TestResult testTuiLazyView() {
         ViewFixture huge(5000, 1);
         huge.render();
         XX_TEST_EXPECT_TRUE(huge.buildCalls <= static_cast<int>(kHeight) + 16);
-        XX_TEST_EXPECT_TRUE(
-            std::abs(huge.buildCalls - f.buildCalls) <= static_cast<int>(kHeight)
-        );
+        XX_TEST_EXPECT_TRUE(std::abs(huge.buildCalls - f.buildCalls) <= static_cast<int>(kHeight));
 
         // 上滚若干行: 只构建新进入视口的条目
         ViewFixture g(2000, 1);
@@ -436,7 +435,7 @@ TestResult testTuiLazyView() {
         ViewFixture f(30, 2);
         f.render();
         const int buildsBefore = f.buildCalls;
-        f.keySalt = 0x5000; // 全部条目 key 变化
+        f.keySalt              = 0x5000; // 全部条目 key 变化
         f.render();
         XX_TEST_EXPECT_TRUE(f.buildCalls > buildsBefore); // 窗口内条目已重建
         XX_TEST_EXPECT_TRUE(f.lastFrame().find("mark=29") != std::string::npos);
@@ -456,7 +455,8 @@ TestResult testTuiLazyView() {
         f.width  = 60;
         f.height = 20;
         f.render();
-        const int bottom = std::max(0, f.scrollable->totalHeight() - f.scrollable->viewportHeight());
+        const int bottom
+            = std::max(0, f.scrollable->totalHeight() - f.scrollable->viewportHeight());
         // 吸附底部: 派生偏移 = 底部边界, 且视口末行就是最后一条的最后一行
         XX_TEST_EXPECT_EQ(f.scrollable->scrollOffset(), bottom);
         XX_TEST_EXPECT_EQ(f.bottomPos().id, f.count - 1);
@@ -731,7 +731,7 @@ TestResult testTuiLazyView() {
     // ---- 内容收缩后回夹: 折叠展开的长消息, 视口底部不留白 ----
     {
         // 末条 (id 19) 为展开的长消息 (300 行), 其余各 1 行
-        ViewFixture f(20, 1);
+        ViewFixture  f(20, 1);
         const size_t longRows = 300;
         f.heightOf            = [longRows](size_t id) {
             return id == 19 ? longRows : size_t{1};

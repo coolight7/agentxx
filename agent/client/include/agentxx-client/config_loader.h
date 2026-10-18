@@ -43,13 +43,13 @@ inline constexpr std::string_view permissionModeDepict(agent::PermissionMode mod
 
 struct YamlAppConfig {
     // 成员按对齐/尺寸从大到小排列, 减少结构体内填充字节
-    std::string                                   useModelDefault;
-    std::string                                   useModelSubagent;
-    std::string                                   useModelWebSearch;
-    std::string                                   useModelAcp;
-    std::string                                   useModelTrain;
-    std::string                                   useModelTrainScorer;
-    std::string                                   useModelTrainOptimizer;
+    std::string useModelDefault;
+    std::string useModelSubagent;
+    std::string useModelWebSearch;
+    std::string useModelAcp;
+    std::string useModelTrain;
+    std::string useModelTrainScorer;
+    std::string useModelTrainOptimizer;
     /// 统一数据根目录 (yaml `data_dir`, 支持 `~`/环境变量展开)
     /// - 为空表示不持久化: 设置/会话/codegraph 数据仅存内存 (BaseAgent 输出警告)
     /// - 特殊关键字 `default` (仅 tui/cli 模式): 使用当前系统数据目录
@@ -70,9 +70,9 @@ struct YamlAppConfig {
     /// - 为空 = 未配置: 由客户端连接时携带的界面语言决定会话语言
     /// - 非空 = 显式配置: 置 AgentConfig::languageExplicit, 客户端界面语言不再覆盖
     ///   (界面语言见设置库键 `tui.lang`)
-    std::string language;
-    std::vector<std::string>                      skillDirPaths;
-    std::vector<std::string>                      memoryFilePaths;
+    std::string              language;
+    std::vector<std::string> skillDirPaths;
+    std::vector<std::string> memoryFilePaths;
     /// 权限白名单: 始终放行的路径列表 (yaml `permission.whitelist`)
     /// - 最长前缀匹配, 支持 * 通配符; 相对路径按程序工作目录解析
     /// - 优先级高于模式默认规则 (如 deny 模式下白名单路径仍可访问)
@@ -86,7 +86,7 @@ struct YamlAppConfig {
     /// - enabled: 默认 true; sides: 运行侧 (auto/agent/client, 默认 auto);
     ///   args: 自定义参数 (预留, 存留供查询);
     ///   config: 插件配置文件所在目录或文件路径 (可指向文件/目录)
-    std::vector<agent::PluginConfig> plugins;
+    std::vector<agent::PluginConfig>          plugins;
     std::map<std::string, agent::ModelConfig> models;
     /// MCP 服务器配置 (yaml `mcp` 列表项, key 为命名空间)
     /// - timeout 字段按秒配置, 0 = 不限制, 未配置默认 120 秒

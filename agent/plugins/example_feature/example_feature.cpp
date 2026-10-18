@@ -136,18 +136,22 @@ static int featureAgentSetup(FeatureCtx& ctx) {
     // 2. 为自己的点登记实现 (同步形态: 必须快速返回, 不做 IO / 不等待)
     //    - 收到的是调用载荷 JSON: {point, args, request, caller, viaCall, identity, sessionId}
     //    - 返回文本会被 kit 包成回答: 返回完整 JSON 对象时按 `{"value": ...}` 处理
-    if (provideFeature(ctx, "plugin.example_feature.beat", [](FeatureCtx& c, std::string_view call) {
-            ++c.counter;
-            const auto in   = utilxx_base::Json::parse(call);
-            const auto args = in.value<utilxx_base::Json>("args", utilxx_base::Json::object());
-            const auto path = args.value<std::string>("path", "");
-            auto       out  = utilxx_base::Json::object();
-            out["bpm"]       = 128;
-            out["path"]      = path;
-            out["beats"]     = utilxx_base::Json::array();
-            out["confident"] = true;
-            return out.dump();
-        })
+    if (provideFeature(
+            ctx,
+            "plugin.example_feature.beat",
+            [](FeatureCtx& c, std::string_view call) {
+                ++c.counter;
+                const auto in    = utilxx_base::Json::parse(call);
+                const auto args  = in.value<utilxx_base::Json>("args", utilxx_base::Json::object());
+                const auto path  = args.value<std::string>("path", "");
+                auto       out   = utilxx_base::Json::object();
+                out["bpm"]       = 128;
+                out["path"]      = path;
+                out["beats"]     = utilxx_base::Json::array();
+                out["confident"] = true;
+                return out.dump();
+            }
+        )
         != 0) {
         return -1;
     }
@@ -189,9 +193,13 @@ static int featureAgentSetup(FeatureCtx& ctx) {
     }
 
     // 5. 为主程序点登记实现 (覆盖核心 token 估算: 固定值, 便于测试断言)
-    if (provideFeature(ctx, "agentxx.context.countTokens", [](FeatureCtx&, std::string_view) {
-            return std::string{R"({"tokens":424242})"};
-        })
+    if (provideFeature(
+            ctx,
+            "agentxx.context.countTokens",
+            [](FeatureCtx&, std::string_view) {
+                return std::string{R"({"tokens":424242})"};
+            }
+        )
         != 0) {
         // 主程序点可能未装配 (如裸 PluginManager 环境): 不算致命, 记一条日志继续
         ctx.log.info("example_feature: host point agentxx.context.countTokens not declared yet");
@@ -204,9 +212,9 @@ static int featureAgentSetup(FeatureCtx& ctx) {
     //    - 主程序不支持时返回 0, 这里按"功能不可用"降级 (加载照常成功)
     if (ctx.iface.hooks && ctx.iface.hooks->register_hook_ex) {
         HookOptions opts;
-        opts.priority = -10;
-        opts.ownerTag = "example_feature";
-        opts.depict   = "演示有序登记: 排在其它插件的钩子之前";
+        opts.priority        = -10;
+        opts.ownerTag        = "example_feature";
+        opts.depict          = "演示有序登记: 排在其它插件的钩子之前";
         const int64_t handle = hookEx(
             ctx,
             AGENTXX_PLUGIN_HOOK_AGENT_START,
@@ -230,7 +238,11 @@ static int featureAgentSetup(FeatureCtx& ctx) {
     return 0;
 }
 
-static void* featureAgentStart(FeatureCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString* error) {
+static void* featureAgentStart(
+    FeatureCtx&                   ctx,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               error
+) {
     if (!notify) {
         if (error) {
             agentxx::plugin::PluginString::set(
@@ -256,7 +268,8 @@ static void* featureAgentStart(FeatureCtx& ctx, const PluginxxOperatorNotify* no
     return nullptr;
 }
 
-static void* featureAgentStop(FeatureCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
+static void*
+    featureAgentStop(FeatureCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
     // 反注册由主程序在 stop 后统一撤销 (实现/点随实例走), 这里只给完成信号
     ctx.log.info("example_feature stopped");
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);

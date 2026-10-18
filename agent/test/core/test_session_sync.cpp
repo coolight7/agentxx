@@ -46,10 +46,10 @@ namespace {
 
 /// 客户端收到的消息记录 (由测试协程从传输层读入)
 struct Recorder {
-    std::mutex                                          mu;
-    std::vector<agentxx::agent::WireSyncPayload>        syncs;
-    std::vector<agentxx::agent::WireHelloAck>           acks;
-    std::atomic<int>                                    turnResults{0};
+    std::mutex                                   mu;
+    std::vector<agentxx::agent::WireSyncPayload> syncs;
+    std::vector<agentxx::agent::WireHelloAck>    acks;
+    std::atomic<int>                             turnResults{0};
 
     void handle(agentxx::agent::WireMessage msg) {
         std::visit(
@@ -111,10 +111,10 @@ struct Fixture {
     /// 发送握手 (afterViewSeq = 客户端已持有的展示历史序号)
     void sendHello(uint64_t afterViewSeq, uint64_t lastSeq = 0) {
         agentxx::agent::WireHello hello;
-        hello.sessionId     = sessionId;
-        hello.lastSeq       = lastSeq;
-        hello.afterViewSeq  = afterViewSeq;
-        hello.language      = "en";
+        hello.sessionId    = sessionId;
+        hello.lastSeq      = lastSeq;
+        hello.afterViewSeq = afterViewSeq;
+        hello.language     = "en";
         clientT->send(agentxx::agent::WireMessage{std::move(hello)});
     }
 
@@ -161,11 +161,8 @@ void removeTempRoot(const std::string& root) {
 }
 
 /// 创建夹具 (dataDir 非空时开启会话持久化)
-asio::awaitable<std::shared_ptr<Fixture>> makeFixture(
-    std::string sessionId,
-    std::string dataDir = {},
-    size_t      tailCount = 0
-) {
+asio::awaitable<std::shared_ptr<Fixture>>
+    makeFixture(std::string sessionId, std::string dataDir = {}, size_t tailCount = 0) {
     auto fx                   = std::make_shared<Fixture>();
     fx->sim                   = startDaSimServer();
     g_da_sim_response_content = "sync test response";
@@ -190,14 +187,15 @@ asio::awaitable<std::shared_ptr<Fixture>> makeFixture(
     auto ex = co_await asio::this_coro::executor;
 
     agentxx::agent::SessionServerAgentIO::Config scCfg;
-    scCfg.sessionId             = sessionId;
-    scCfg.initialSyncTailCount  = tailCount;
-    fx->sessionId               = sessionId;
+    scCfg.sessionId            = sessionId;
+    scCfg.initialSyncTailCount = tailCount;
+    fx->sessionId              = sessionId;
     fx->endpoint = std::make_shared<agentxx::agent::SessionServerAgentIO>(ex, fx->agent, scCfg);
 
     auto [clientOwn, serverT] = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
-    fx->endpoint
-        ->setTransport(std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT)));
+    fx->endpoint->setTransport(
+        std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT))
+    );
 
     fx->recorder = std::make_shared<Recorder>();
     fx->clientT  = std::move(clientOwn);
@@ -299,9 +297,12 @@ asio::awaitable<void> test_incremental_replay() {
     // ⑤ delta 序号有效时优先 delta 重放 (更省): 不再下发 Sync 快照
     const size_t syncsBeforeDelta = fx->recorder->syncCount();
     fx->sendHello(fx->lastViewSeq(), fx->lastViewSeq());
-    co_await waitFor([&] {
-        return fx->recorder->syncCount() > syncsBeforeDelta;
-    }, 300);
+    co_await waitFor(
+        [&] {
+            return fx->recorder->syncCount() > syncsBeforeDelta;
+        },
+        300
+    );
     XX_TEST_EXPECT_EQ(fx->recorder->syncCount(), syncsBeforeDelta);
 
     removeTempRoot(root);
@@ -332,8 +333,8 @@ asio::awaitable<void> test_incremental_requires_store() {
 // ---------------------------------------------------------------------------
 
 asio::awaitable<void> test_incremental_after_restart() {
-    const auto        root = makeTempRoot();
-    const std::string sid  = "sync-restart-session";
+    const auto        root          = makeTempRoot();
+    const std::string sid           = "sync-restart-session";
     uint64_t          seqAfterFirst = 0;
     {
         auto fx = co_await makeFixture(sid, root);

@@ -23,11 +23,8 @@ namespace tools {
 class HostTool : public XXToolBase {
 public:
 
-    using CallHandler = std::function<asio::awaitable<std::string>(
-        std::string_view         name,
-        const utilxx_base::Json& args,
-        uint32_t                 timeoutSec
-    )>;
+    using CallHandler = std::function<asio::awaitable<
+        std::string>(std::string_view name, const utilxx_base::Json& args, uint32_t timeoutSec)>;
 
     HostTool(
         agent::WireHostToolInfo                     info,

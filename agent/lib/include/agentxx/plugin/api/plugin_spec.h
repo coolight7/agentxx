@@ -5,8 +5,10 @@
 ///
 /// | 方向 | 结构体 | 填充方 | 读取方 | 何时需要 gate |
 /// |---|---|---|---|---|
-/// | 插件填 → 主程序读 | spec (`AgentxxPluginToolSpec` / `AgentxxOverlaySpec` …) | 插件 | 主程序 | 老插件 (短) + 新主程序 (长): 读尾部字段前必须判长度 |
-/// | 主程序填 → 插件读 | input (`AgentxxToolRenderInput` / `AgentxxUiActionContext`) | 主程序 | 插件 | 新插件 (认识长布局) + 老主程序 (填得短): 读尾部字段前必须判长度 |
+/// | 插件填 → 主程序读 | spec (`AgentxxPluginToolSpec` / `AgentxxOverlaySpec` …) | 插件 | 主程序 |
+/// 老插件 (短) + 新主程序 (长): 读尾部字段前必须判长度 | | 主程序填 → 插件读 | input
+/// (`AgentxxToolRenderInput` / `AgentxxUiActionContext`) | 主程序 | 插件 | 新插件 (认识长布局) +
+/// 老主程序 (填得短): 读尾部字段前必须判长度 |
 ///
 /// (反方向都天然安全: 读取方只认识自己的前缀字段, 偏移与填充方逐字节一致。)
 ///
@@ -57,27 +59,24 @@ constexpr bool specSizeOk(uint32_t struct_size) noexcept {
 /// - 用法: `specHas(&AgentxxOverlaySpec::extra_json, spec->struct_size)`
 ///   (`Spec` 由成员指针自动推出)。
 template<typename Spec, typename M>
-inline bool specHas(M Spec::* member, uint32_t struct_size) noexcept {
+inline bool specHas(M Spec::*member, uint32_t struct_size) noexcept {
     return struct_size >= pluginxx::memberEndOf(member);
 }
 
 /* ==================== 基线常量特化 (每处一行, 便于清点) ==================== */
 
 /// 定义一条基线特化并自检: 基线不得小于结构体头部以外的任何对齐空洞起点, 也不得超过完整尺寸
-#define AGENTXX_DECLARE_SPEC_BASELINE(Spec, Baseline)                                              \
-    template<>                                                                                     \
-    struct SpecBaseline<Spec> {                                                                    \
-        static constexpr uint32_t value = static_cast<uint32_t>(Baseline);                          \
-        static_assert((Baseline) >= 8u);                                                            \
-        static_assert((Baseline) <= sizeof(Spec));                                                  \
+#define AGENTXX_DECLARE_SPEC_BASELINE(Spec, Baseline)                      \
+    template<>                                                             \
+    struct SpecBaseline<Spec> {                                            \
+        static constexpr uint32_t value = static_cast<uint32_t>(Baseline); \
+        static_assert((Baseline) >= 8u);                                   \
+        static_assert((Baseline) <= sizeof(Spec));                         \
     }
 
 AGENTXX_DECLARE_SPEC_BASELINE(AgentxxPluginToolSpec, AGENTXX_PLUGIN_TOOL_SPEC_BASELINE_SIZE);
 AGENTXX_DECLARE_SPEC_BASELINE(AgentxxPluginHookSpec, AGENTXX_PLUGIN_HOOK_SPEC_BASELINE_SIZE);
-AGENTXX_DECLARE_SPEC_BASELINE(
-    AgentxxPluginHookSpecEx,
-    AGENTXX_PLUGIN_HOOK_SPEC_EX_BASELINE_SIZE
-);
+AGENTXX_DECLARE_SPEC_BASELINE(AgentxxPluginHookSpecEx, AGENTXX_PLUGIN_HOOK_SPEC_EX_BASELINE_SIZE);
 AGENTXX_DECLARE_SPEC_BASELINE(
     AgentxxPluginToolPermissionSpec,
     AGENTXX_PLUGIN_TOOL_PERMISSION_SPEC_BASELINE_SIZE

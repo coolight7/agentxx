@@ -9,12 +9,13 @@ namespace agentxx {
 namespace agent {
 class AgentContext;
 }
+
 namespace util {
 
 /// 单条文本卸载到会话 share store 的结果 (见 [offloadShareStoreIfOversized])
 struct ShareStoreOffload {
     /// 是否发生了卸载 (false = 内容未达阈值, [text] 即输入原文)
-    bool   offloaded = false;
+    bool offloaded = false;
     /// 原文在 share store 中占用的 id (未卸载时为 0)
     size_t storeId = 0;
     /// 定稿文本: 未卸载时与输入原文相同; 卸载时为 "取回提示 + 开头片段"

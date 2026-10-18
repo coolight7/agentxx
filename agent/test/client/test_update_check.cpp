@@ -149,9 +149,7 @@ void test_check_update_storage_key() {
     // 键缺失时按默认值 (开) 处理 (见 TUISettings::attachDb)
     auto root = std::filesystem::temp_directory_path()
                 / ("agentxx_update_check_test_"
-                   + std::to_string(
-                       std::chrono::steady_clock::now().time_since_epoch().count()
-                   ));
+                   + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     std::error_code ec;
     std::filesystem::remove_all(root, ec);
     std::filesystem::create_directories(root, ec);
@@ -194,9 +192,7 @@ void test_check_failure_returns_error() {
 /// shell 命令串的字符 (校验不通过时不会发起任何打开动作)
 void test_openable_url_validation() {
     // 正常发布页链接 (含 tag 与常见分隔符)
-    XX_TEST_EXPECT_TRUE(
-        isOpenableUrl("https://github.com/coolight7/agentxx/releases/tag/v9.9.9")
-    );
+    XX_TEST_EXPECT_TRUE(isOpenableUrl("https://github.com/coolight7/agentxx/releases/tag/v9.9.9"));
     XX_TEST_EXPECT_TRUE(isOpenableUrl("http://127.0.0.1:8080/releases?tag=v1.0.0&page=2"));
     XX_TEST_EXPECT_TRUE(isOpenableUrl("https://github.com/x/y#/tree/main?q=a%20b"));
     // 非 ASCII (UTF-8) 字节按原样交给系统

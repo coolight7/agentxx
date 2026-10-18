@@ -2181,10 +2181,7 @@ static void writeTextFile(const std::string& path, std::string_view text) {
 
 static std::string readTextFile(const std::string& path) {
     std::ifstream ifs(path, std::ios::binary);
-    return std::string{
-        std::istreambuf_iterator<char>(ifs),
-        std::istreambuf_iterator<char>()
-    };
+    return std::string{std::istreambuf_iterator<char>(ifs), std::istreambuf_iterator<char>()};
 }
 
 /// 测试用模型配置 (各字段取非默认值, 便于校验写入内容)
@@ -2195,7 +2192,7 @@ static agentxx::agent::ModelConfig sampleWriterModel(std::string name) {
     mc.baseUrl                  = "https://api.example.com/v1";
     mc.apiKey                   = "sk-test";
     mc.modelName                = "gpt-test";
-    mc.modelContextMaxToken    = 128000;
+    mc.modelContextMaxToken     = 128000;
     mc.sendThinking             = true;
     mc.imageInput               = true;
     mc.maxConcurrentConnections = 7;
@@ -2208,13 +2205,13 @@ void test_config_writer_creates_file() {
     fs::remove(path, ec);
 
     agentxx::agent::ModelConfig mc;
-    mc.name                  = "added-model";
-    mc.type                  = "openai";
-    mc.baseUrl               = "https://api.example.com/v1";
-    mc.apiKey                = "sk-test";
-    mc.modelName             = "gpt-test";
+    mc.name                 = "added-model";
+    mc.type                 = "openai";
+    mc.baseUrl              = "https://api.example.com/v1";
+    mc.apiKey               = "sk-test";
+    mc.modelName            = "gpt-test";
     mc.modelContextMaxToken = 128000;
-    mc.imageInput            = true;
+    mc.imageInput           = true;
 
     auto written = agentxx::agent::appendModelConfigToYamlFile(path, mc);
     XX_TEST_EXPECT_TRUE(written.has_value());
@@ -2239,26 +2236,25 @@ void test_config_writer_creates_file() {
 }
 
 void test_config_writer_appends_inside_existing_list() {
-    const auto        path = tempWriterYamlPath("append");
+    const auto path = tempWriterYamlPath("append");
     // 贴近真实配置文件的写法: 条目行内注释 / list: 后的说明注释 /
     // 嵌套 extra_api_config / 列表段后面还有 use: 与其它根段
-    const std::string original
-        = "# 顶层注释\n"
-          "data_dir: default\n"
-          "model:\n"
-          "  # 模型列表\n"
-          "  list:\n"
-          "    # 声明模型, [name] 只是自定义名称\n"
-          "    - name: first\n"
-          "      type: \"openai\" # 必选\n"
-          "      base_url: \"https://a.example.com\" # API 地址\n"
-          "      api_key: \"k1\"\n"
-          "      extra_api_config:\n"
-          "        reasoning_effort: \"high\"\n"
-          "  use:\n"
-          "    default: first\n"
-          "plugin:\n"
-          "  list: []\n";
+    const std::string original = "# 顶层注释\n"
+                                 "data_dir: default\n"
+                                 "model:\n"
+                                 "  # 模型列表\n"
+                                 "  list:\n"
+                                 "    # 声明模型, [name] 只是自定义名称\n"
+                                 "    - name: first\n"
+                                 "      type: \"openai\" # 必选\n"
+                                 "      base_url: \"https://a.example.com\" # API 地址\n"
+                                 "      api_key: \"k1\"\n"
+                                 "      extra_api_config:\n"
+                                 "        reasoning_effort: \"high\"\n"
+                                 "  use:\n"
+                                 "    default: first\n"
+                                 "plugin:\n"
+                                 "  list: []\n";
     writeTextFile(path, original);
 
     auto written = agentxx::agent::appendModelConfigToYamlFile(path, sampleWriterModel("second"));
@@ -2316,10 +2312,7 @@ void test_config_writer_appends_section_when_missing() {
     // 情况 2: 有 model 段但没有 list -> 追加 list 行 (缩进沿用段内子键)
     {
         const auto path = tempWriterYamlPath("no_list");
-        writeTextFile(
-            path,
-            "model:\n  use:\n    default: old\n  overwrite:\n    mode: merge\n"
-        );
+        writeTextFile(path, "model:\n  use:\n    default: old\n  overwrite:\n    mode: merge\n");
         auto written = agentxx::agent::appendModelConfigToYamlFile(path, sampleWriterModel("m2"));
         XX_TEST_EXPECT_TRUE(written.has_value());
         auto cfg = agentxx::client::loadYamlConfig(path, {}, {});
@@ -2374,8 +2367,7 @@ void test_config_writer_rejects_duplicate_and_bad_structure() {
     // 模型名为空: 直接拒绝
     {
         const auto path = tempWriterYamlPath("empty_name");
-        auto       written
-            = agentxx::agent::appendModelConfigToYamlFile(path, sampleWriterModel(""));
+        auto written    = agentxx::agent::appendModelConfigToYamlFile(path, sampleWriterModel(""));
         XX_TEST_EXPECT_FALSE(written.has_value());
         XX_TEST_EXPECT_FALSE(fs::exists(path));
     }
@@ -2383,7 +2375,10 @@ void test_config_writer_rejects_duplicate_and_bad_structure() {
 
 void test_config_writer_keeps_crlf() {
     const auto path = tempWriterYamlPath("crlf");
-    writeTextFile(path, "model:\r\n  list:\r\n    - name: \"a\"\r\n      base_url: \"https://a\"\r\n");
+    writeTextFile(
+        path,
+        "model:\r\n  list:\r\n    - name: \"a\"\r\n      base_url: \"https://a\"\r\n"
+    );
     auto written = agentxx::agent::appendModelConfigToYamlFile(path, sampleWriterModel("b"));
     XX_TEST_EXPECT_TRUE(written.has_value());
     const std::string text = readTextFile(path);
@@ -2454,7 +2449,7 @@ void test_config_writer_removes_model() {
     XX_TEST_EXPECT_EQ(agentxx::client::loadYamlConfig(path, {}, {}).models.size(), size_t{2});
 
     // 删不存在于文件的模型: false, 文件不变
-    const std::string before = readTextFile(path);
+    const std::string before  = readTextFile(path);
     auto              missing = agentxx::agent::removeModelConfigFromYamlFile(path, "nope");
     XX_TEST_EXPECT_TRUE(missing.has_value());
     XX_TEST_EXPECT_FALSE(missing.value());
@@ -2580,28 +2575,28 @@ void test_validate_new_model_config_rules() {
         mc.apiKey = "sk-only-key";
         XX_TEST_EXPECT_TRUE(validateNewModelConfig(mc, existing).has_value());
 
-        auto bad = base();
+        auto bad    = base();
         bad.baseUrl = "ftp://api.example.com";
         XX_TEST_EXPECT_FALSE(validateNewModelConfig(bad, existing).has_value());
     }
     // 数值范围
     {
-        auto mc = base();
+        auto mc                  = base();
         mc.connectTimeoutSeconds = 0;
         XX_TEST_EXPECT_FALSE(validateNewModelConfig(mc, existing).has_value());
-        mc = base();
+        mc                         = base();
         mc.readChunkTimeoutSeconds = 100000;
         XX_TEST_EXPECT_FALSE(validateNewModelConfig(mc, existing).has_value());
-        mc = base();
+        mc                          = base();
         mc.maxConcurrentConnections = 5000;
         XX_TEST_EXPECT_FALSE(validateNewModelConfig(mc, existing).has_value());
-        mc = base();
+        mc                      = base();
         mc.modelContextMaxToken = 20000000;
         XX_TEST_EXPECT_FALSE(validateNewModelConfig(mc, existing).has_value());
     }
     // extra_api_config 必须是对象
     {
-        auto mc = base();
+        auto mc        = base();
         mc.extraConfig = utilxx_base::Json::parse("[1,2]");
         XX_TEST_EXPECT_FALSE(validateNewModelConfig(mc, existing).has_value());
         mc.extraConfig = utilxx_base::Json::parse(R"({"reasoning_effort":"high"})");

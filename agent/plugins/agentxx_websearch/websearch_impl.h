@@ -160,10 +160,9 @@ inline asio::awaitable<std::string> webFetchExecuteAsync(const utilxx_base::Json
         format = "markdown";
     }
     if (format != "markdown" && format != "raw") {
-        throw std::invalid_argument{fmt::format(
-            R"(Arg `format`({}) is invalid: use `markdown` or `raw`.)",
-            format
-        )};
+        throw std::invalid_argument{
+            fmt::format(R"(Arg `format`({}) is invalid: use `markdown` or `raw`.)", format)
+        };
     }
 
     // 统一的 timeout / header 参数: 支持自定义请求头与请求超时
@@ -246,7 +245,8 @@ inline asio::awaitable<std::string> webSearchExecuteAsync(
             if (utilxx::HttpClient::respIsSucc(respVal)) {
                 auto& data = respVal.body;
                 if (data.empty()) {
-                    throw std::runtime_error{"The search request succeeded, but the result is empty"};
+                    throw std::runtime_error{"The search request succeeded, but the result is empty"
+                    };
                 }
                 co_return data;
             }

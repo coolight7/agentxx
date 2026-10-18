@@ -75,29 +75,29 @@ public:
 
         // 表单: 一次提交整份表单的值 (本项目域内约定 `__submit`/`__cancel`),
         // 单个控件点击即派发; 多字段提交是中断表单与插件面板的共同形态
-        utilxx_base::Json form    = utilxx_base::Json::object();
-        form["multi_field"]       = true; // 一次提交多个控件值
-        form["submit_cancel"]     = true; // 提供 __submit / __cancel
-        form["commit_on_pick"]    = true; // 中断一问一答: 点击候选项即提交
-        form["validation"]        = true; // 校验失败在控件下方给出提示
-        j["form"]                 = std::move(form);
+        utilxx_base::Json form = utilxx_base::Json::object();
+        form["multi_field"]    = true; // 一次提交多个控件值
+        form["submit_cancel"]  = true; // 提供 __submit / __cancel
+        form["commit_on_pick"] = true; // 中断一问一答: 点击候选项即提交
+        form["validation"]     = true; // 校验失败在控件下方给出提示
+        j["form"]              = std::move(form);
 
         // 布局/尺寸形态: 描述层的 percent/aspect 之外, 本端还支持 auto 与固定尺寸
-        utilxx_base::Json layout  = utilxx_base::Json::object();
-        layout["auto"]            = true;
-        layout["fixed"]           = true;
-        layout["scroll"]          = true; // 内容超高时滚动 (面板/overlay)
-        j["layout"]               = std::move(layout);
+        utilxx_base::Json layout = utilxx_base::Json::object();
+        layout["auto"]           = true;
+        layout["fixed"]          = true;
+        layout["scroll"]         = true; // 内容超高时滚动 (面板/overlay)
+        j["layout"]              = std::move(layout);
 
         // 终端能力: 颜色数/鼠标/宽字符/光标
-        utilxx_base::Json term    = utilxx_base::Json::object();
-        term["truecolor"]         = true;
-        term["mouse"]             = true;
-        term["wide_chars"]        = true; // CJK 双宽正确测量
+        utilxx_base::Json term = utilxx_base::Json::object();
+        term["truecolor"]      = true;
+        term["mouse"]          = true;
+        term["wide_chars"]     = true; // CJK 双宽正确测量
         // 输入栏硬件光标: 终端支持时把光标放在真实光标位置 (输入法候选框跟随);
         // 不支持时回退到输入栏自绘的光标格
-        term["hardware_cursor"]   = tuiHardwareCursorSupported();
-        j["terminal"]             = std::move(term);
+        term["hardware_cursor"] = tuiHardwareCursorSupported();
+        j["terminal"]           = std::move(term);
 
         return j.dump();
     }

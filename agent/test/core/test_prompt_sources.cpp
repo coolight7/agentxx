@@ -39,14 +39,14 @@ using agentxx::agent::PromptSourceRegistry;
 
 /// 构造一个"返回固定文本"的来源; buildCount 记录取文本次数
 PromptSource makeTextSource(
-    std::string              key,
-    std::string              owner,
-    int                      order,
-    std::string              text,
-    std::shared_ptr<size_t>  buildCount,
-    bool                     perSession = false,
-    bool                     refreshOnCompaction = true,
-    PromptSectionSlot        slot = PromptSectionSlot::Stable
+    std::string             key,
+    std::string             owner,
+    int                     order,
+    std::string             text,
+    std::shared_ptr<size_t> buildCount,
+    bool                    perSession          = false,
+    bool                    refreshOnCompaction = true,
+    PromptSectionSlot       slot                = PromptSectionSlot::Stable
 ) {
     PromptSource src;
     src.key                 = std::move(key);
@@ -56,8 +56,9 @@ PromptSource makeTextSource(
     src.perSession          = perSession;
     src.refreshOnCompaction = refreshOnCompaction;
     src.timeout             = std::chrono::milliseconds{500};
-    src.build               = [text = std::move(text), buildCount](const PromptRefreshContext&)
-        -> asio::awaitable<std::optional<std::string>> {
+    src.build
+        = [text = std::move(text),
+           buildCount](const PromptRefreshContext&) -> asio::awaitable<std::optional<std::string>> {
         ++(*buildCount);
         co_return text;
     };
@@ -65,8 +66,11 @@ PromptSource makeTextSource(
 }
 
 /// 取某个会话可见的稳定段文本 (按 key 查找; 没有该段时返回空串)
-std::string sectionOf(const PromptSourceRegistry& registry, std::string_view key, std::string_view session)
-{
+std::string sectionOf(
+    const PromptSourceRegistry& registry,
+    std::string_view            key,
+    std::string_view            session
+) {
     for (const auto& view : registry.stableSections(session)) {
         if (view.key == key) {
             return std::string{view.text};
@@ -83,14 +87,12 @@ asio::awaitable<TestResult> run_prompt_source_tests() {
 
     // ================= T1. 首次读取 + 内容未变不重复读盘 (A1/A2) =================
     {
-        PromptSourceRegistry   registry;
-        auto                   builds = std::make_shared<size_t>(0);
-        PromptRefreshContext   ctx;
+        PromptSourceRegistry registry;
+        auto                 builds = std::make_shared<size_t>(0);
+        PromptRefreshContext ctx;
         ctx.sessionId = "s1";
 
-        registry.registerSource(
-            makeTextSource("alpha", "core:alpha", 10, "ALPHA-TEXT", builds)
-        );
+        registry.registerSource(makeTextSource("alpha", "core:alpha", 10, "ALPHA-TEXT", builds));
         XX_TEST_EXPECT_EQ(registry.sourceCount(), size_t{1});
         XX_TEST_EXPECT_TRUE(registry.isDirty("s1"));
 
@@ -123,14 +125,15 @@ asio::awaitable<TestResult> run_prompt_source_tests() {
         ctx.sessionId = "s2";
 
         // 文本由外部变量驱动: 模拟"文件内容变了"
-        auto text = std::make_shared<std::string>("V1");
+        auto         text = std::make_shared<std::string>("V1");
         PromptSource src;
         src.key     = "mem";
         src.owner   = "core:mem";
         src.order   = 100;
         src.timeout = std::chrono::milliseconds{500};
-        src.build   = [text, builds](const PromptRefreshContext&)
-            -> asio::awaitable<std::optional<std::string>> {
+        src.build
+            = [text,
+               builds](const PromptRefreshContext&) -> asio::awaitable<std::optional<std::string>> {
             ++(*builds);
             co_return *text;
         };
@@ -159,9 +162,15 @@ asio::awaitable<TestResult> run_prompt_source_tests() {
         auto                 builds = std::make_shared<size_t>(0);
         PromptRefreshContext ctx;
         ctx.sessionId = "s3";
-        registry.registerSource(
-            makeTextSource("static", "core:static", 10, "S", builds, false, /*refreshOnCompaction=*/false)
-        );
+        registry.registerSource(makeTextSource(
+            "static",
+            "core:static",
+            10,
+            "S",
+            builds,
+            false,
+            /*refreshOnCompaction=*/false
+        ));
 
         co_await registry.ensureFresh("s3", ctx);
         XX_TEST_EXPECT_EQ(*builds, size_t{1});
@@ -185,12 +194,13 @@ asio::awaitable<TestResult> run_prompt_source_tests() {
         PromptRefreshContext ctx;
         ctx.sessionId = "s4";
 
-        auto mode     = std::make_shared<int>(0); // 0=正常 1=抛异常 2=nullopt 3=空串
+        auto         mode = std::make_shared<int>(0); // 0=正常 1=抛异常 2=nullopt 3=空串
         PromptSource src;
         src.key     = "flaky";
         src.owner   = "core:flaky";
         src.timeout = std::chrono::milliseconds{500};
-        src.build   = [mode](const PromptRefreshContext&) -> asio::awaitable<std::optional<std::string>> {
+        src.build
+            = [mode](const PromptRefreshContext&) -> asio::awaitable<std::optional<std::string>> {
             if (*mode == 1) {
                 throw std::runtime_error("boom");
             }
@@ -240,8 +250,8 @@ asio::awaitable<TestResult> run_prompt_source_tests() {
         src.order      = 100;
         src.perSession = true;
         src.timeout    = std::chrono::milliseconds{500};
-        src.build      = [builds](const PromptRefreshContext& rc)
-            -> asio::awaitable<std::optional<std::string>> {
+        src.build      = [builds](const PromptRefreshContext& rc
+                    ) -> asio::awaitable<std::optional<std::string>> {
             ++(*builds);
             co_return std::string{"workdir="} + rc.workDir;
         };
@@ -279,9 +289,16 @@ asio::awaitable<TestResult> run_prompt_source_tests() {
         registry.registerSource(makeTextSource("alpha", "core:alpha", 100, "A", builds));
         registry.registerSource(makeTextSource("beta", "core:beta", 100, "B", builds));
         // 动态段不参与稳定段视图
-        registry.registerSource(
-            makeTextSource("dyn", "test:dyn", 50, "D", builds, false, true, PromptSectionSlot::Dynamic)
-        );
+        registry.registerSource(makeTextSource(
+            "dyn",
+            "test:dyn",
+            50,
+            "D",
+            builds,
+            false,
+            true,
+            PromptSectionSlot::Dynamic
+        ));
 
         co_await registry.ensureFresh("s6", ctx);
         auto stable = registry.stableSections("s6");

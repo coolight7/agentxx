@@ -29,12 +29,12 @@ int g_ui_items_failed = 0;
 namespace agentxx {
 namespace test {
 
-using utilxx_base::Json;
 using pluginxx::ui::Item;
 using pluginxx::ui::SizeValue;
 using pluginxx::ui::TableCell;
 using pluginxx::ui::TableColumn;
 using pluginxx::ui::TextValue;
+using utilxx_base::Json;
 
 namespace {
 
@@ -47,7 +47,8 @@ bool has(std::string_view haystack, std::string_view needle) {
 Item sampleTable() {
     Item table   = pluginxx::ui::build::node("Table");
     table.header = true;
-    table.columns.push_back(TableColumn{TextValue::of("Path"), "start", SizeValue::autoValue(), {}});
+    table.columns.push_back(TableColumn{TextValue::of("Path"), "start", SizeValue::autoValue(), {}}
+    );
     table.columns.push_back(TableColumn{TextValue::of("Scope"), "end", SizeValue::of(6), {}});
     table.rows.push_back({
         TableCell{TextValue::of("a.txt"), {}, {}},
@@ -64,11 +65,11 @@ TestResult testUiItems() {
     // ---------------- 块 → 组件项 (itemOf) ----------------
     {
         InterruptUiBlock b;
-        b.kind = "text";
-        b.text = "hello";
-        b.color = "accent";
-        b.bold  = true;
-        b.wrap  = true;
+        b.kind          = "text";
+        b.text          = "hello";
+        b.color         = "accent";
+        b.bold          = true;
+        b.wrap          = true;
         const auto item = itemOf(b);
         XX_TEST_EXPECT_TRUE(item.has_value());
         if (item) {
@@ -82,9 +83,9 @@ TestResult testUiItems() {
     {
         // i18n 键: 文本块带 textKey 时用 TextValue 的 key 保存 (客户端词表解析)
         InterruptUiBlock b;
-        b.kind    = "text";
-        b.textKey = "interrupt.header";
-        b.text    = "Header";
+        b.kind          = "text";
+        b.textKey       = "interrupt.header";
+        b.text          = "Header";
         const auto item = itemOf(b);
         XX_TEST_EXPECT_TRUE(item.has_value());
         if (item) {
@@ -95,9 +96,9 @@ TestResult testUiItems() {
     {
         // 缩进: 描述层没有 indent 字段, 用 Padding 容器表达 (u 由客户端换算)
         InterruptUiBlock b;
-        b.kind   = "text";
-        b.text   = "indented";
-        b.indent = 2;
+        b.kind          = "text";
+        b.text          = "indented";
+        b.indent        = 2;
         const auto item = itemOf(b);
         XX_TEST_EXPECT_TRUE(item.has_value());
         if (item) {
@@ -108,8 +109,8 @@ TestResult testUiItems() {
     }
     {
         InterruptUiBlock b;
-        b.kind   = "gap";
-        b.lines  = 2;
+        b.kind          = "gap";
+        b.lines         = 2;
         const auto item = itemOf(b);
         XX_TEST_EXPECT_TRUE(item.has_value());
         if (item) {
@@ -120,16 +121,16 @@ TestResult testUiItems() {
     }
     {
         InterruptUiBlock b;
-        b.kind = "separator";
+        b.kind          = "separator";
         const auto item = itemOf(b);
         XX_TEST_EXPECT_TRUE(item.has_value() && item->kind == "Divider");
     }
     {
         InterruptUiBlock b;
-        b.kind   = "diff";
-        b.path   = "a.cpp";
-        b.oldStr = "x";
-        b.newStr = "y";
+        b.kind          = "diff";
+        b.path          = "a.cpp";
+        b.oldStr        = "x";
+        b.newStr        = "y";
         const auto item = itemOf(b);
         XX_TEST_EXPECT_TRUE(item.has_value());
         if (item) {
@@ -142,8 +143,8 @@ TestResult testUiItems() {
     {
         // markdown 块
         InterruptUiBlock b;
-        b.kind = "markdown";
-        b.text = "# title";
+        b.kind          = "markdown";
+        b.text          = "# title";
         const auto item = itemOf(b);
         XX_TEST_EXPECT_TRUE(item.has_value());
         if (item) {
@@ -154,18 +155,18 @@ TestResult testUiItems() {
     {
         // 控件: 形态/标签/说明/候选项原值/缺省值/数值范围都进描述层
         InterruptUiBlock b;
-        b.kind       = "control";
-        b.id         = "level";
-        b.control    = "number";
-        b.label      = "Level";
-        b.help       = "1..5";
-        b.defaultValue = 3;
-        b.integer    = true;
-        b.hasMin     = true;
-        b.minValue   = 1.0;
-        b.hasMax     = true;
-        b.maxValue   = 5.0;
-        b.step       = 2.0;
+        b.kind          = "control";
+        b.id            = "level";
+        b.control       = "number";
+        b.label         = "Level";
+        b.help          = "1..5";
+        b.defaultValue  = 3;
+        b.integer       = true;
+        b.hasMin        = true;
+        b.minValue      = 1.0;
+        b.hasMax        = true;
+        b.maxValue      = 5.0;
+        b.step          = 2.0;
         const auto item = itemOf(b);
         XX_TEST_EXPECT_TRUE(item.has_value());
         if (item) {
@@ -205,20 +206,14 @@ TestResult testUiItems() {
     {
         // 提交行: 确认/取消是域内两个按钮 (动作 id 为域内提交约定)
         InterruptUiBlock b;
-        b.kind = "submit";
+        b.kind          = "submit";
         const auto item = itemOf(b);
         XX_TEST_EXPECT_TRUE(item.has_value());
         if (item) {
             XX_TEST_EXPECT_EQ(item->kind, std::string{"Row"});
             XX_TEST_EXPECT_EQ(item->children.size(), size_t{2});
-            XX_TEST_EXPECT_EQ(
-                item->children[0].action.name,
-                std::string{kInterruptSubmitActionId}
-            );
-            XX_TEST_EXPECT_EQ(
-                item->children[1].action.name,
-                std::string{kInterruptCancelActionId}
-            );
+            XX_TEST_EXPECT_EQ(item->children[0].action.name, std::string{kInterruptSubmitActionId});
+            XX_TEST_EXPECT_EQ(item->children[1].action.name, std::string{kInterruptCancelActionId});
             // 文案只给键 (字面文本由客户端词表提供)
             XX_TEST_EXPECT_EQ(item->children[0].label.key, std::string{"interrupt.confirm"});
         }
@@ -226,8 +221,8 @@ TestResult testUiItems() {
     {
         // 扩展组件: 块描述即组件描述 (按 raw 解析)
         InterruptUiBlock b;
-        b.kind = "Table";
-        b.raw  = pluginxx::ui::dumpItem(sampleTable());
+        b.kind          = "Table";
+        b.raw           = pluginxx::ui::dumpItem(sampleTable());
         const auto item = itemOf(b);
         XX_TEST_EXPECT_TRUE(item.has_value());
         if (item) {
@@ -283,7 +278,9 @@ TestResult testUiItems() {
     // ---------------- 预设模板结构 ----------------
     {
         // 单输入项: 控件 id = "value"; bool 类型是"点击即提交"的一问一答
-        const auto ui = preset::inputForm({preset::InputSpec{.label = "继续?", .type = "bool"}});
+        const auto ui = preset::inputForm({
+            preset::InputSpec{.label = "继续?", .type = "bool"}
+        });
         XX_TEST_EXPECT_TRUE(!ui.blocks.empty());
         const auto* control = [&]() -> const InterruptUiBlock* {
             for (const auto& b : ui.blocks) {
@@ -304,10 +301,10 @@ TestResult testUiItems() {
     }
     {
         // 多输入项: 控件 id 追加序号; enum → select; int → number; string → text
-        const auto ui = preset::inputForm({
-            preset::InputSpec{.type = "enum", .enumValues = {"a", "b"}},
-            preset::InputSpec{.type = "int", .defaultValue = "7"},
-            preset::InputSpec{.type = "string", .defaultValue = "x"},
+        const auto                           ui = preset::inputForm({
+            preset::InputSpec{.type = "enum",   .enumValues = {"a", "b"}},
+            preset::InputSpec{.type = "int",    .defaultValue = "7"     },
+            preset::InputSpec{.type = "string", .defaultValue = "x"     },
         });
         std::vector<const InterruptUiBlock*> controls;
         for (const auto& b : ui.blocks) {
@@ -330,14 +327,14 @@ TestResult testUiItems() {
     {
         // 确认卡片: 控件 id 可指定, 默认选中"否"(安全语义), 记住项可选
         preset::ConfirmCardOptions opts;
-        opts.title       = "继续?";
-        opts.text        = "**说明**";
-        opts.controlId   = "allow";
-        opts.remember    = true;
-        opts.defaultValue = false;
-        const auto ui = preset::confirmCard(opts);
-        bool hasRemember = false;
-        bool hasAllow    = false;
+        opts.title             = "继续?";
+        opts.text              = "**说明**";
+        opts.controlId         = "allow";
+        opts.remember          = true;
+        opts.defaultValue      = false;
+        const auto ui          = preset::confirmCard(opts);
+        bool       hasRemember = false;
+        bool       hasAllow    = false;
         for (const auto& b : ui.blocks) {
             if (b.kind != "control") {
                 continue;
@@ -397,7 +394,14 @@ TestResult testUiItems() {
     {
         InterruptUi desc;
         desc.blocks.push_back(preset::contentBlock(sampleTable()));
-        desc.blocks.push_back(preset::meterBlock("CPU", 72, 100, {{90, "error"}}));
+        desc.blocks.push_back(preset::meterBlock(
+            "CPU",
+            72,
+            100,
+            {
+                {90, "error"}
+        }
+        ));
         desc.blocks.push_back(preset::submitBlock());
         const auto text = interruptUiPlainText(desc, 40);
         XX_TEST_EXPECT_TRUE(has(text, "Path"));
@@ -408,7 +412,7 @@ TestResult testUiItems() {
     }
     {
         // 未知块有 fallback 时按文本输出 (不静默丢内容)
-        InterruptUi desc;
+        InterruptUi      desc;
         InterruptUiBlock b;
         b.kind     = "future_block";
         b.fallback = "n/a";

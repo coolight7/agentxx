@@ -38,8 +38,8 @@
 #include <regex>
 #include <set>
 #include <sstream>
-#include <string>
 #include <stdexcept>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -111,7 +111,7 @@ inline std::string wsAbs(const std::string& workDir, const std::string& path) {
 /// 规范化路径键: 已存在部分解析软链接/`..` (weakly_canonical), 其余按词法归一
 /// - 同一文件的不同写法 (相对/绝对/`..`/软链接) 归一到同一把门闩
 inline std::string pathLockKey(std::string_view absolutePath) {
-    auto            p  = utilxx_base::utf8ToPath(std::string{absolutePath});
+    auto            p = utilxx_base::utf8ToPath(std::string{absolutePath});
     std::error_code ec;
     auto            canonical = std::filesystem::weakly_canonical(p, ec);
     if (ec) {
@@ -217,13 +217,13 @@ private:
 
     PathLockTable() = default;
 
-    std::mutex                                              tableMutex_;
+    std::mutex                                                 tableMutex_;
     std::map<std::string, std::shared_ptr<Entry>, std::less<>> table_;
 };
 
 /// 同步获取路径门闩 (阻塞直到拿到)
 inline std::shared_ptr<PathLockTable::Lease> lockPathBlocking(const std::string& absolutePath) {
-    const auto                    key   = pathLockKey(absolutePath);
+    const auto                            key   = pathLockKey(absolutePath);
     std::shared_ptr<PathLockTable::Entry> entry = PathLockTable::instance().acquireEntry(key);
     for (;;) {
         {
@@ -238,11 +238,11 @@ inline std::shared_ptr<PathLockTable::Lease> lockPathBlocking(const std::string&
 }
 
 /// 协程获取路径门闩 (等待时按 1ms 间隔重试)
-inline asio::awaitable<std::shared_ptr<PathLockTable::Lease>>
-    lockPathAsync(std::string absolutePath) {
-    const auto                              key   = pathLockKey(absolutePath);
-    std::shared_ptr<PathLockTable::Entry>   entry = PathLockTable::instance().acquireEntry(key);
-    const auto                              executor = co_await asio::this_coro::executor;
+inline asio::awaitable<std::shared_ptr<PathLockTable::Lease>> lockPathAsync(std::string absolutePath
+) {
+    const auto                            key      = pathLockKey(absolutePath);
+    std::shared_ptr<PathLockTable::Entry> entry    = PathLockTable::instance().acquireEntry(key);
+    const auto                            executor = co_await asio::this_coro::executor;
     for (;;) {
         {
             std::lock_guard<std::mutex> lock(entry->mutex);
@@ -544,7 +544,8 @@ inline std::string fileListExecuteImpl(
                 return true;
             },
             [&](std::string errmsg) -> bool {
-                lines.push_back(fmt::format("[Error: {}: {}]", detail::toUtf8(entity.path()), errmsg)
+                lines.push_back(
+                    fmt::format("[Error: {}: {}]", detail::toUtf8(entity.path()), errmsg)
                 );
                 return false;
             }
@@ -1044,10 +1045,7 @@ inline std::vector<EditSegment> parseEditSegments(const utilxx_base::Json& argum
                 index
             )};
         }
-        return EditSegment{
-            item["old_str"].get<std::string>(),
-            item["new_str"].get<std::string>()
-        };
+        return EditSegment{item["old_str"].get<std::string>(), item["new_str"].get<std::string>()};
     };
 
     if (hasEditsArg) {
@@ -1063,18 +1061,15 @@ inline std::vector<EditSegment> parseEditSegments(const utilxx_base::Json& argum
             segments.reserve(editsArg.size());
             for (const auto& item : editsArg) {
                 if (!item.is_object()) {
-                    throw std::invalid_argument{
-                        "Arg `edits` must be an array of objects like "
-                        "`[{\"old_str\": \"...\", \"new_str\": \"...\"}]`."
+                    throw std::invalid_argument{"Arg `edits` must be an array of objects like "
+                                                "`[{\"old_str\": \"...\", \"new_str\": \"...\"}]`."
                     };
                 }
                 segments.push_back(takeSegment(item, segments.size() + 1));
             }
         } else {
-            throw std::invalid_argument{
-                "Arg `edits` must be an array of objects like "
-                "`[{\"old_str\": \"...\", \"new_str\": \"...\"}]`."
-            };
+            throw std::invalid_argument{"Arg `edits` must be an array of objects like "
+                                        "`[{\"old_str\": \"...\", \"new_str\": \"...\"}]`."};
         }
         if (segments.empty()) {
             throw std::invalid_argument{"Arg `edits` is empty"};
@@ -1102,14 +1097,14 @@ inline std::vector<EditSegment> parseEditSegments(const utilxx_base::Json& argum
     for (size_t i = 0; i < segments.size(); ++i) {
         const auto& seg = segments[i];
         if (seg.oldStr.empty()) {
-            throw std::invalid_argument{
-                fmt::format(R"(Arg `old_str` of edit #{} is empty)", i + 1)
+            throw std::invalid_argument{fmt::format(R"(Arg `old_str` of edit #{} is empty)", i + 1)
             };
         }
         if (seg.newStr == seg.oldStr) {
-            throw std::invalid_argument{
-                fmt::format(R"(Arg `old_str` and `new_str` of edit #{} are equal and unchanged.)", i + 1)
-            };
+            throw std::invalid_argument{fmt::format(
+                R"(Arg `old_str` and `new_str` of edit #{} are equal and unchanged.)",
+                i + 1
+            )};
         }
     }
     return segments;
@@ -1154,7 +1149,7 @@ inline std::string fileEditExecuteImpl(
         detail::normalizeCrlfToLf(seg.newStr);
     }
 
-    auto            path = utilxx_base::utf8ToPath(filepath);
+    auto path = utilxx_base::utf8ToPath(filepath);
     // 按规范化路径排队: 读-改-写整段相对其它写者原子
     auto            pathLease = detail::lockPathBlocking(filepath);
     std::error_code fsEc;
@@ -1419,7 +1414,9 @@ inline std::string fileGrepExecuteImpl(
     auto text_patterns  = arguments.value("text_patterns", std::vector<std::string>{});
     auto regex_patterns = arguments.value("regex_patterns", std::vector<std::string>{});
     if (text_patterns.empty() && regex_patterns.empty()) {
-        throw std::invalid_argument{"Arg `text_patterns` and `regex_patterns` are both empty (specify at least one of them)"};
+        throw std::invalid_argument{
+            "Arg `text_patterns` and `regex_patterns` are both empty (specify at least one of them)"
+        };
     }
     auto file_patterns = arguments.value("file_patterns", std::vector<std::string>{});
     if (file_patterns.empty()) {
@@ -1965,11 +1962,9 @@ inline void prepareDestination(const std::string& dst, bool overwrite) {
     std::error_code ec;
     std::filesystem::remove_all(dstPath, ec);
     if (ec) {
-        throw std::runtime_error{fmt::format(
-            R"(Can not replace the existing destination {}: {})",
-            dst,
-            ec.message()
-        )};
+        throw std::runtime_error{
+            fmt::format(R"(Can not replace the existing destination {}: {})", dst, ec.message())
+        };
     }
 }
 
@@ -2035,8 +2030,7 @@ inline void copyThenRemoveSource(
     std::filesystem::copy(
         srcPath,
         dstPath,
-        std::filesystem::copy_options::recursive
-            | std::filesystem::copy_options::copy_symlinks,
+        std::filesystem::copy_options::recursive | std::filesystem::copy_options::copy_symlinks,
         ec
     );
     if (ec) {
@@ -2147,7 +2141,9 @@ inline std::string fileMoveExecute(
     const IsCancelledFn&     isCancelled = nullptr
 ) {
     (void)isCancelled;
-    return detail::asErrorText([&] { return fileMoveExecuteImpl(arguments, workDir); });
+    return detail::asErrorText([&] {
+        return fileMoveExecuteImpl(arguments, workDir);
+    });
 }
 
 inline std::string fileCopyExecute(
@@ -2156,7 +2152,9 @@ inline std::string fileCopyExecute(
     const IsCancelledFn&     isCancelled = nullptr
 ) {
     (void)isCancelled;
-    return detail::asErrorText([&] { return fileCopyExecuteImpl(arguments, workDir); });
+    return detail::asErrorText([&] {
+        return fileCopyExecuteImpl(arguments, workDir);
+    });
 }
 
 inline std::string fileRemoveExecute(
@@ -2165,7 +2163,9 @@ inline std::string fileRemoveExecute(
     const IsCancelledFn&     isCancelled = nullptr
 ) {
     (void)isCancelled;
-    return detail::asErrorText([&] { return fileRemoveExecuteImpl(arguments, workDir); });
+    return detail::asErrorText([&] {
+        return fileRemoveExecuteImpl(arguments, workDir);
+    });
 }
 
 inline std::string fileListExecute(
@@ -2411,7 +2411,7 @@ inline asio::awaitable<std::string>
     // 存在性检查与父目录创建: 快速元数据操作, 与原实现一致内联执行
     auto path = utilxx_base::utf8ToPath(filepath);
     // 按规范化路径排队: 存在性检查与写入必须相对其它写者原子
-    auto            pathLease = co_await detail::lockPathAsync(filepath);
+    auto pathLease = co_await detail::lockPathAsync(filepath);
     if (false == overwrite && std::filesystem::exists(path)) {
         throw std::runtime_error{"File already exist. Set `overwrite` = true if want to overwrite."
         };
@@ -2472,7 +2472,7 @@ inline asio::awaitable<std::string>
         detail::normalizeCrlfToLf(seg.newStr);
     }
 
-    auto            path = utilxx_base::utf8ToPath(filepath);
+    auto path = utilxx_base::utf8ToPath(filepath);
     // 按规范化路径排队: 读-改-写整段相对其它写者原子
     auto            pathLease = co_await detail::lockPathAsync(filepath);
     std::error_code fsEc;

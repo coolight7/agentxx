@@ -81,15 +81,15 @@ size_t estimateMarkdownLines(std::string_view s, int width) {
     if (s.empty()) {
         return 1;
     }
-    const size_t useWidth       = (width <= 0) ? 80 : static_cast<size_t>(width);
+    const size_t useWidth = (width <= 0) ? 80 : static_cast<size_t>(width);
     // 代码行折行可用列数: 与 build_code_block 一致 (总宽度 - 左右各 1 列内边距,
     // <= 0 表示不折行); 外层缩进 (块引用/列表) 未计入, 该情形下估算略低
-    const int    codeAvail      = static_cast<int>(useWidth) - 2;
-    size_t       total          = 0;
-    size_t       blocks         = 0; // 渲染块计数 (块间空行 +1, build_document 语义)
-    bool         inFence        = false;
-    bool         fenceIsMermaid = false; // 当前围栏是否为 ```mermaid (图形估算)
-    size_t       fenceLines     = 0;     // 当前 mermaid 围栏源行数 (含开始/结束围栏)
+    const int codeAvail      = static_cast<int>(useWidth) - 2;
+    size_t    total          = 0;
+    size_t    blocks         = 0; // 渲染块计数 (块间空行 +1, build_document 语义)
+    bool      inFence        = false;
+    bool      fenceIsMermaid = false; // 当前围栏是否为 ```mermaid (图形估算)
+    size_t    fenceLines     = 0;     // 当前 mermaid 围栏源行数 (含开始/结束围栏)
 
     std::string para; // 普通段落累积 (softbreak -> 空格合并)
     auto        flushParagraph = [&]() {
@@ -116,12 +116,12 @@ size_t estimateMarkdownLines(std::string_view s, int width) {
     const size_t n = s.size();
     size_t       i = 0;
     while (i < n) {
-        const size_t     eol     = s.find('\n', i);
-        const size_t     lineEnd = (eol == std::string_view::npos) ? n : eol;
+        const size_t eol     = s.find('\n', i);
+        const size_t lineEnd = (eol == std::string_view::npos) ? n : eol;
         const std::string_view rawLine = s.substr(i, lineEnd - i); // 未去空白 (折行按原文算)
-        std::string_view       line    = rawLine;
-        const size_t           b       = line.find_first_not_of(" \t");
-        const size_t           e       = line.find_last_not_of(" \t");
+        std::string_view line = rawLine;
+        const size_t     b    = line.find_first_not_of(" \t");
+        const size_t     e    = line.find_last_not_of(" \t");
         line = (b == std::string_view::npos) ? std::string_view{} : line.substr(b, e - b + 1);
         if (line.empty()) {
             // 空行: 段落终止 (围栏内空行属于代码内容, 渲染 1 行)

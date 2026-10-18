@@ -34,7 +34,7 @@ using agentxx::nodes::ProviderCallScope;
 void testScopeCancelSemantics() {
     // 1) 运行取消 (父令牌) 级联到调用域
     {
-        auto run = std::make_shared<neograph::graph::CancelToken>();
+        auto              run = std::make_shared<neograph::graph::CancelToken>();
         ProviderCallScope scope{run};
         XX_TEST_EXPECT_FALSE(scope.cancelled());
         XX_TEST_EXPECT_TRUE(scope.token() != run); // 不是运行令牌本身
@@ -69,7 +69,7 @@ void testScopeCancelSemantics() {
 void testScopeRaiiSemantics() {
     // 1) markDone 后析构: 不取消
     {
-        auto run = std::make_shared<neograph::graph::CancelToken>();
+        auto run   = std::make_shared<neograph::graph::CancelToken>();
         auto child = std::shared_ptr<neograph::graph::CancelToken>{};
         {
             ProviderCallScope scope{run};
@@ -82,7 +82,7 @@ void testScopeRaiiSemantics() {
 
     // 2) 未 markDone 就析构 (消费方放弃): 调用域被取消, 父令牌不受影响
     {
-        auto run = std::make_shared<neograph::graph::CancelToken>();
+        auto run   = std::make_shared<neograph::graph::CancelToken>();
         auto child = std::shared_ptr<neograph::graph::CancelToken>{};
         {
             ProviderCallScope scope{run};

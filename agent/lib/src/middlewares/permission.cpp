@@ -353,13 +353,8 @@ asio::awaitable<bool> PermissionMiddlewareHandle::checkToolPermission(
 ) {
     // 无目标声明的工具: 工具级判定 (目标为空, 命中不到规则表, 由 noRuleOperator 兜底)
     if (spec.targetKind == ToolPermissionTargetKind::None || spec.targetArgs.empty()) {
-        const bool allow = co_await checkTargetPermission(
-            toolName,
-            args,
-            spec.scope,
-            {},
-            spec.category
-        );
+        const bool allow
+            = co_await checkTargetPermission(toolName, args, spec.scope, {}, spec.category);
         if (reasonOut) {
             *reasonOut = allow ? std::string{"allow"} : std::string{"denied"};
         }
@@ -385,13 +380,7 @@ asio::awaitable<bool> PermissionMiddlewareHandle::checkToolPermission(
             *reasonOut = decision.describe();
         }
         // 依次判定: 任一目标被拒绝即拒绝整个调用 (询问逐个进行)
-        if (!co_await checkTargetPermission(
-                toolName,
-                args,
-                spec.scope,
-                target,
-                spec.category
-            )) {
+        if (!co_await checkTargetPermission(toolName, args, spec.scope, target, spec.category)) {
             co_return false;
         }
     }
@@ -686,47 +675,41 @@ void PermissionMiddlewareHandle::registerOnBus(const std::shared_ptr<agentxx::ev
     // - 未声明权限的工具不参与权限判定 (直接放行)
     // - 判定理由 (decision/reason/rule/target) 随响应回给调用方, 供工具结果文本、
     //   日志与诊断共用
-    checkServerId_ = bus->getRR<events::ReqToolPermissionCheck, events::RespToolPermissionCheck>(
-                            events::Topic::ToolPermissionCheck
-    )
-                         .registerServer(
-                             [this](const events::ReqToolPermissionCheck& req, size_t)
-                                 -> asio::awaitable<events::RespToolPermissionCheck> {
-                                 utilxx_base::Json argsCopy = req.arguments;
-                                 std::string       reason;
-                                 auto allow = co_await checkToolPermission(
-                                     req.toolName,
-                                     argsCopy,
-                                     &reason
-                                 );
-                                 co_return events::RespToolPermissionCheck{
-                                     .allow  = allow,
-                                     .reason = std::move(reason),
-                                 };
-                             }
-                         );
+    checkServerId_
+        = bus->getRR<events::ReqToolPermissionCheck, events::RespToolPermissionCheck>(
+                 events::Topic::ToolPermissionCheck
+        )
+              .registerServer(
+                  [this](const events::ReqToolPermissionCheck& req, size_t)
+                      -> asio::awaitable<events::RespToolPermissionCheck> {
+                      utilxx_base::Json argsCopy = req.arguments;
+                      std::string       reason;
+                      auto allow = co_await checkToolPermission(req.toolName, argsCopy, &reason);
+                      co_return events::RespToolPermissionCheck{
+                          .allow  = allow,
+                          .reason = std::move(reason),
+                      };
+                  }
+              );
 
     // 1b. 注册执行前目标复验服务 (ReqPermissionReverify -> RespPermissionReverify):
     //     判定阶段记录"已批准目标", 执行前用当前参数按同一套规则复验, 防止
     //     判定与执行之间参数被改写 (批准目标 = 实际执行目标)
-    reverifyServerId_ = bus
-                            ->getRR<events::ReqPermissionReverify, events::RespPermissionReverify>(
-                                events::Topic::PermissionReverify
-                            )
-                            .registerServer(
-                                [this](const events::ReqPermissionReverify& req, size_t)
-                                    -> asio::awaitable<events::RespPermissionReverify> {
-                                    const auto r = reverifyApprovedTargets(
-                                        req.toolName,
-                                        req.toolCallId,
-                                        req.arguments
-                                    );
-                                    co_return events::RespPermissionReverify{
-                                        .ok     = r.ok,
-                                        .reason = r.reason,
-                                    };
-                                }
-                            );
+    reverifyServerId_
+        = bus->getRR<events::ReqPermissionReverify, events::RespPermissionReverify>(
+                 events::Topic::PermissionReverify
+        )
+              .registerServer(
+                  [this](const events::ReqPermissionReverify& req, size_t)
+                      -> asio::awaitable<events::RespPermissionReverify> {
+                      const auto r
+                          = reverifyApprovedTargets(req.toolName, req.toolCallId, req.arguments);
+                      co_return events::RespPermissionReverify{
+                          .ok     = r.ok,
+                          .reason = r.reason,
+                      };
+                  }
+              );
 
     // 2. 订阅会话隔离设置事件 (EventSetSessionIsolation)
     // - 发布方: agentxx_git_worktree (工具, 经 ctx->bus 即本总线发布)

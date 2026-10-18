@@ -91,8 +91,7 @@ std::string sliceCols(const std::string& row, int from, int to) {
     size_t      i   = 0;
     while (i < row.size()) {
         const size_t len = std::min(markdown::utf8_byte_length(row[i]), row.size() - i);
-        const int    cw
-            = markdown::codepoint_width(markdown::utf8_codepoint(row.data() + i, len));
+        const int    cw  = markdown::codepoint_width(markdown::utf8_codepoint(row.data() + i, len));
         if (col >= from && col < to) {
             out.append(row, i, len);
         }
@@ -139,13 +138,8 @@ bool contains(const std::string& text, std::string_view needle) {
 }
 
 /// 拼接若干行的同一列区间 (代码块折行后的内容还原)
-std::string joinCols(
-    const std::vector<std::string>& rows,
-    int                             firstRow,
-    int                             lastRow,
-    int                             from,
-    int                             to
-) {
+std::string
+    joinCols(const std::vector<std::string>& rows, int firstRow, int lastRow, int from, int to) {
     std::string out;
     for (int y = firstRow; y <= lastRow; ++y) {
         out += rtrim(sliceCols(rows[static_cast<size_t>(y)], from, to));
@@ -209,8 +203,8 @@ TestResult testMarkdownBlock() {
 
     // ---------------- 块引用内的代码块: 扣掉引用前缀列数 ----------------
     {
-        constexpr int     W    = 40;
-        constexpr int     KCol = W - 2 - 2; // 引用前缀 "│ " 占 2 列
+        constexpr int     W          = 40;
+        constexpr int     KCol       = W - 2 - 2; // 引用前缀 "│ " 占 2 列
         const std::string quotedLine = std::string(80, 'q') + "_QUOTETAIL"; // 90 列
         const std::string content    = "> ```\n> " + quotedLine + "\n> ```\n";
 
@@ -252,12 +246,11 @@ TestResult testMarkdownBlock() {
         constexpr int W = 40;
         // 单元格自然宽度合计超出可用宽度: 表格按可用列数压缩并折行;
         // 引用前缀 2 列必须从可用宽度里扣除, 否则右侧边框会被裁剪
-        const std::string content
-            = "> | h1 | h2 |\n"
-              "> | --- | --- |\n"
-              "> | 0123456789012345678901234567890123 | x |\n";
-        auto rows      = renderRows(content, W, W, 12);
-        int  topBorder = -1;
+        const std::string content   = "> | h1 | h2 |\n"
+                                      "> | --- | --- |\n"
+                                      "> | 0123456789012345678901234567890123 | x |\n";
+        auto              rows      = renderRows(content, W, W, 12);
+        int               topBorder = -1;
         for (size_t y = 0; y < rows.size(); ++y) {
             if (contains(rows[y], "\u250C")) { // ┌
                 topBorder = static_cast<int>(y);
@@ -278,7 +271,7 @@ TestResult testMarkdownBlock() {
     {
         constexpr int W = 30;
         // 粗体 / 斜体 / 行内代码: 同一行内按片段区分样式
-        auto md = renderMd("**bold** *it* `code`", W, W, 2);
+        auto md   = renderMd("**bold** *it* `code`", W, W, 2);
         auto rows = renderRows("**bold** *it* `code`", W, W, 2);
         XX_TEST_EXPECT_EQ(rtrim(rows[0]), std::string{"bold it code"});
         for (int x = 0; x < 4; ++x) {

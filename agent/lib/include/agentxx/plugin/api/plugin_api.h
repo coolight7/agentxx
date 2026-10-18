@@ -39,7 +39,8 @@ extern "C" {
 #endif
 
 /* ==================== 插件入口符号名 (主程序自定义, 插件框架不再提供) ==================== */
-/* 插件框架只定义"主程序怎么交出符号名"的扩展点 (pluginxx/api/entry.h); 符号名属于主程序命名空间。 */
+/* 插件框架只定义"主程序怎么交出符号名"的扩展点 (pluginxx/api/entry.h); 符号名属于主程序命名空间。
+ */
 #define AGENTXX_PLUGIN_AGENT_SYMBOL_GET_INFO "agentxx_plugin_agent_get_info"
 #define AGENTXX_PLUGIN_AGENT_SYMBOL_CREATE   "agentxx_plugin_agent_create"
 #define AGENTXX_PLUGIN_AGENT_SYMBOL_START    "agentxx_plugin_agent_start"
@@ -266,7 +267,7 @@ typedef struct AgentxxPluginPermissionPathQuery {
 #define AGENTXX_PLUGIN_PERMISSION_PATH_QUERY_BASELINE_SIZE sizeof(AgentxxPluginPermissionPathQuery)
 
 typedef struct AgentxxPluginPermissionIface {
-    int32_t  version;     ///< 主程序填 AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION_VERSION
+    int32_t version;      ///< 主程序填 AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION_VERSION
     uint32_t struct_size; ///< 主程序填 sizeof(AgentxxPluginPermissionIface) 或更大的已知表长
 
     /// 声明工具权限限制 (工具注册后调用; 同工具重复声明为覆盖)
@@ -534,8 +535,8 @@ typedef void(PLUGINXX_CALL* AgentxxPluginGraphNodeRunCancelFn)(void* user_data, 
 /// 插件节点类型注册规格
 typedef struct AgentxxPluginGraphNodeTypeSpec {
     /// 本结构体字节数 (sizeof(AgentxxPluginGraphNodeTypeSpec)); 0 = 基线布局
-    uint32_t struct_size;
-    uint32_t _reserved; ///< 8 字节补齐
+    uint32_t                          struct_size;
+    uint32_t                          _reserved;  ///< 8 字节补齐
     PluginxxStringView                type;       ///< 节点类型名 (须全局唯一)
     AgentxxPluginGraphNodeRunStartFn  run_start;  ///< 节点执行 (操作契约)
     AgentxxPluginGraphNodeRunCancelFn run_cancel; ///< 可空
@@ -689,8 +690,8 @@ typedef struct AgentxxPluginFeatureIface {
     /// 声明插件自己的功能点
     /// `return`: 0 成功; 非 0 失败 (id 非法 / 类型不支持 / 与主程序点冲突)
     int32_t(PLUGINXX_CALL* define_point)(
-        const PluginxxHost*                    host,
-        const AgentxxPluginFeaturePointSpec*   spec
+        const PluginxxHost*                  host,
+        const AgentxxPluginFeaturePointSpec* spec
     );
     /// 撤销插件自己的点 (连带撤掉这些点上的全部实现; 禁用/卸载时主程序自动处理)
     /// `return`: 0 成功; 非 0 失败 (点不存在 / 不是本实例声明的点)
@@ -702,8 +703,8 @@ typedef struct AgentxxPluginFeatureIface {
     /// 登记实现 (同一 `(点, 实例)` 重复登记 = 覆盖; 数量不设上限)
     /// `return`: 0 成功; 非 0 失败 (点未声明 / 回调为空)
     int32_t(PLUGINXX_CALL* register_impl)(
-        const PluginxxHost*                   host,
-        const AgentxxPluginFeatureImplSpec*   spec
+        const PluginxxHost*                 host,
+        const AgentxxPluginFeatureImplSpec* spec
     );
     /// 撤销实现 (按点 id)
     /// `return`: 0 成功; 非 0 不存在

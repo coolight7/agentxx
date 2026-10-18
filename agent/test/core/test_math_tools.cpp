@@ -513,7 +513,7 @@ static asio::awaitable<void> test_error_handling(std::weak_ptr<agentxx::agent::A
                 {"expression", ""}
             });
         } catch (const std::invalid_argument& e) {
-            threw       = true;
+            threw = true;
             std::string msg{e.what()};
             if (msg.find("`expression` is empty") == std::string::npos) {
                 TEST_FAIL << "unexpected message for empty expression: " << msg << std::endl;

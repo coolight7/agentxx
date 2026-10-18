@@ -34,9 +34,9 @@ std::string serializeHitRegions(const agentxx::client::UiRenderResult& res);
 /// 快照比较结果
 struct UiSnapshotCheck {
     /// 与基线一致 (或在更新模式下已写回)
-    bool        ok = false;
+    bool ok = false;
     /// 本次写回了基线 (更新模式)
-    bool        updated = false;
+    bool updated = false;
     /// 不一致时的差异说明 (首个不同的行/列 + 两侧内容)
     std::string diff;
 };

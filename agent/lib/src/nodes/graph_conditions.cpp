@@ -16,7 +16,11 @@ const std::string& hasToolCallsName() {
 /// 条件声明的取值集合 (闭合): 与 neograph 内置 has_tool_calls 一致,
 /// 便于校验器检查条件边的 routes 覆盖
 neograph::graph::ConditionSpec hasToolCallsSpec() {
-    return neograph::graph::ConditionSpec{{"false", "true"}, /*open=*/false};
+    return neograph::graph::ConditionSpec{
+        {"false", "true"},
+ /*open=*/
+        false
+    };
 }
 
 } // namespace
@@ -27,8 +31,7 @@ std::string evalHasToolCallsCondition(const neograph::graph::GraphState& state) 
         const auto meta = state.get(agentxx::middleware::MiddlewareContext::channel_messagesMeta);
         if (meta.is_object()) {
             // 影子通道缺失该字段 (老版本写入的元信息) 时按"没有工具调用"处理
-            const auto toolCalls
-                = meta.value("last_assistant_tool_calls", static_cast<int64_t>(0));
+            const auto toolCalls = meta.value("last_assistant_tool_calls", static_cast<int64_t>(0));
             return toolCalls > 0 ? "true" : "false";
         }
     }

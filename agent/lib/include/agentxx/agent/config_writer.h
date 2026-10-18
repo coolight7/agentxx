@@ -30,8 +30,8 @@ inline constexpr std::string_view kConfigYamlFileName = "agentxx-config.yaml";
 ///     - [existingNames] 已存在的模型名称集合 (来自当前可用模型列表)
 /// - `return` 通过返回空 expected; 失败返回给用户看的错误文本
 std::expected<void, std::string> validateNewModelConfig(
-    const ModelConfig&                                mc,
-    const std::set<std::string, std::less<>>&         existingNames
+    const ModelConfig&                        mc,
+    const std::set<std::string, std::less<>>& existingNames
 );
 
 /// 把模型配置追加到 yaml 文件的 `model.list` 段 (文件不存在时创建)

@@ -106,17 +106,19 @@ TestResult testHttpFixtureBasics() {
 
     // JSON 往返
     HttpFixture fixture;
-    fixture.note         = "往返用例";
+    fixture.note = "往返用例";
     HttpInteraction one;
-    one.method        = "POST";
-    one.path          = "/v1/chat/completions";
-    one.requestBody   = "{\"model\":\"m\"}";
-    one.requestDigest = agentxx::test::httpRequestDigest(one.method, one.path, one.requestBody);
-    one.requestBytes  = one.requestBody.size();
-    one.requestHeaders = utilxx_base::Json{{"content-type", "application/json"}};
-    one.status         = 200;
-    one.contentType    = "application/json";
-    one.responseBody   = "{\"ok\":true}";
+    one.method         = "POST";
+    one.path           = "/v1/chat/completions";
+    one.requestBody    = "{\"model\":\"m\"}";
+    one.requestDigest  = agentxx::test::httpRequestDigest(one.method, one.path, one.requestBody);
+    one.requestBytes   = one.requestBody.size();
+    one.requestHeaders = utilxx_base::Json{
+        {"content-type", "application/json"}
+    };
+    one.status       = 200;
+    one.contentType  = "application/json";
+    one.responseBody = "{\"ok\":true}";
     fixture.interactions.push_back(one);
 
     const auto json     = fixture.toJson();
@@ -140,8 +142,8 @@ TestResult testHttpFixtureBasics() {
     }
 
     // 文件往返
-    const auto dir  = makeTempDir();
-    const auto file = (fs::path{dir} / "fixture" / "http.json").string();
+    const auto  dir  = makeTempDir();
+    const auto  file = (fs::path{dir} / "fixture" / "http.json").string();
     std::string err;
     XX_TEST_EXPECT_TRUE(fixture.saveToFile(file, &err));
     XX_TEST_EXPECT_TRUE(err.empty());
@@ -189,10 +191,7 @@ TestResult testHttpFixtureRedaction() {
         headers.value("content-type", std::string{}),
         std::string{"application/json"}
     );
-    XX_TEST_EXPECT_EQ(
-        headers.value("anthropic-version", std::string{}),
-        std::string{"2023-06-01"}
-    );
+    XX_TEST_EXPECT_EQ(headers.value("anthropic-version", std::string{}), std::string{"2023-06-01"});
     XX_TEST_EXPECT_TRUE(headers.value("authorization_present", false));
     XX_TEST_EXPECT_TRUE(headers.value("x-api-key_present", false));
     XX_TEST_EXPECT_TRUE(headers.value("cookie_present", false));
@@ -208,8 +207,7 @@ TestResult testHttpFixtureRedaction() {
     XX_TEST_EXPECT_TRUE(sanitized.find("abcdef123456") == std::string::npos);
     // 不含凭据的正文原样保留 (避免"什么都屏蔽"让装置失去价值)
     XX_TEST_EXPECT_TRUE(
-        detail::sanitizeText("{\"model\":\"sim-model\"}", {}).find("sim-model")
-        != std::string::npos
+        detail::sanitizeText("{\"model\":\"sim-model\"}", {}).find("sim-model") != std::string::npos
     );
 
     return TestResult{g_hr_passed - passedBefore, g_hr_failed - failedBefore};
@@ -220,7 +218,7 @@ TestResult testHttpFixtureRedaction() {
 // ---------------------------------------------------------------------------
 
 asio::awaitable<void> testRecordThenReplay() {
-    auto sim = std::make_shared<DaSimServer>(startDaSimServer());
+    auto sim                      = std::make_shared<DaSimServer>(startDaSimServer());
     g_da_sim_response_content     = "http-recorder answer";
     g_da_sim_tool_calls           = utilxx_base::Json::array();
     g_da_sim_fail_count           = 0;
@@ -242,9 +240,9 @@ asio::awaitable<void> testRecordThenReplay() {
     }
 
     {
-        auto provider = agentxx::protocol::OpenAIProvider::create(
-            makeProviderCfg(recorder->baseUrl(), apiKey)
-        );
+        auto provider
+            = agentxx::protocol::OpenAIProvider::create(makeProviderCfg(recorder->baseUrl(), apiKey)
+            );
         auto result = co_await provider->invoke(makeParams("录制一轮"), nullptr);
         XX_TEST_EXPECT_TRUE(
             result.message.content.find("http-recorder answer") != std::string::npos
@@ -257,9 +255,7 @@ asio::awaitable<void> testRecordThenReplay() {
             XX_TEST_EXPECT_EQ(it.method, std::string{"POST"});
             XX_TEST_EXPECT_EQ(it.path, std::string{"/chat/completions"});
             XX_TEST_EXPECT_EQ(it.status, 200);
-            XX_TEST_EXPECT_TRUE(
-                it.responseBody.find("http-recorder answer") != std::string::npos
-            );
+            XX_TEST_EXPECT_TRUE(it.responseBody.find("http-recorder answer") != std::string::npos);
             XX_TEST_EXPECT_TRUE(it.requestBytes > 0);
             XX_TEST_EXPECT_EQ(it.requestDigest.size(), size_t{16});
             // 凭据: 只记"出现过", 不记取值
@@ -309,7 +305,7 @@ asio::awaitable<void> testRecordThenReplay() {
 // ---------------------------------------------------------------------------
 
 asio::awaitable<void> testReplayMismatchAndExhaustion() {
-    auto sim = std::make_shared<DaSimServer>(startDaSimServer());
+    auto sim                      = std::make_shared<DaSimServer>(startDaSimServer());
     g_da_sim_response_content     = "mismatch-probe answer";
     g_da_sim_tool_calls           = utilxx_base::Json::array();
     g_da_sim_fail_count           = 0;
@@ -317,19 +313,17 @@ asio::awaitable<void> testReplayMismatchAndExhaustion() {
     g_da_sim_tool_calls_remaining = -1;
 
     // 直接构造一条"只对应别的内容"的交互: 真实请求的摘要必然不同
-    HttpFixture fixture;
+    HttpFixture     fixture;
     HttpInteraction expected;
-    expected.method        = "POST";
-    expected.path          = "/chat/completions";
-    expected.requestDigest = agentxx::test::httpRequestDigest(
-        expected.method,
-        expected.path,
-        "{\"model\":\"other\"}"
-    );
-    expected.requestBytes   = 20;
-    expected.status         = 200;
-    expected.contentType    = "application/json";
-    expected.responseBody   = "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"x\"}}]}";
+    expected.method = "POST";
+    expected.path   = "/chat/completions";
+    expected.requestDigest
+        = agentxx::test::httpRequestDigest(expected.method, expected.path, "{\"model\":\"other\"}");
+    expected.requestBytes = 20;
+    expected.status       = 200;
+    expected.contentType  = "application/json";
+    expected.responseBody
+        = "{\"choices\":[{\"message\":{\"role\":\"assistant\",\"content\":\"x\"}}]}";
     fixture.interactions.push_back(expected);
 
     auto player = HttpPlayer::start(fixture);
@@ -341,10 +335,10 @@ asio::awaitable<void> testReplayMismatchAndExhaustion() {
 
     // ① 请求体与装置不符 → 回放器回 400, provider 抛错, 不推进游标
     {
-        auto   provider = agentxx::protocol::OpenAIProvider::create(
-            makeProviderCfg(player->baseUrl(), "EMPTY")
-        );
-        bool   threw = false;
+        auto provider
+            = agentxx::protocol::OpenAIProvider::create(makeProviderCfg(player->baseUrl(), "EMPTY")
+            );
+        bool        threw = false;
         std::string errText;
         try {
             (void)co_await provider->invoke(makeParams("不一样的内容"), nullptr);
@@ -401,7 +395,9 @@ asio::awaitable<void> testReplayMismatchAndExhaustion() {
         XX_TEST_EXPECT_TRUE(extra.has_value());
         if (extra.has_value()) {
             XX_TEST_EXPECT_EQ(extra->status, 400);
-            XX_TEST_EXPECT_TRUE(extra->body.find("no more recorded interaction") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(
+                extra->body.find("no more recorded interaction") != std::string::npos
+            );
         }
         const auto mismatches = player2->mismatches();
         XX_TEST_EXPECT_EQ(mismatches.size(), size_t{1});
@@ -420,7 +416,7 @@ asio::awaitable<void> testReplayMismatchAndExhaustion() {
 // ---------------------------------------------------------------------------
 
 asio::awaitable<void> testStreamingReplay() {
-    auto sim = std::make_shared<DaSimServer>(startDaSimServer());
+    auto sim                      = std::make_shared<DaSimServer>(startDaSimServer());
     g_da_sim_response_content     = "stream replay text";
     g_da_sim_tool_calls           = utilxx_base::Json::array();
     g_da_sim_fail_count           = 0;
@@ -442,7 +438,9 @@ asio::awaitable<void> testStreamingReplay() {
         auto provider = agentxx::protocol::OpenAIProvider::create(
             makeProviderCfg(recorder->baseUrl(), "EMPTY")
         );
-        neograph::StreamCallback onChunk = [&](const std::string& chunk) { chunkedDelta += chunk; };
+        neograph::StreamCallback onChunk = [&](const std::string& chunk) {
+            chunkedDelta += chunk;
+        };
         auto result = co_await provider->invoke(makeParams("流式一轮"), onChunk);
         firstText   = result.message.content;
         XX_TEST_EXPECT_TRUE(firstText.find("stream replay text") != std::string::npos);
@@ -466,11 +464,13 @@ asio::awaitable<void> testStreamingReplay() {
         co_return;
     }
     {
-        auto provider = agentxx::protocol::OpenAIProvider::create(
-            makeProviderCfg(player->baseUrl(), "EMPTY")
-        );
-        std::string          replayed;
-        neograph::StreamCallback onChunk = [&](const std::string& chunk) { replayed += chunk; };
+        auto provider
+            = agentxx::protocol::OpenAIProvider::create(makeProviderCfg(player->baseUrl(), "EMPTY")
+            );
+        std::string              replayed;
+        neograph::StreamCallback onChunk = [&](const std::string& chunk) {
+            replayed += chunk;
+        };
         auto result = co_await provider->invoke(makeParams("流式一轮"), onChunk);
         XX_TEST_EXPECT_EQ(result.message.content, firstText);
         XX_TEST_EXPECT_EQ(replayed, chunkedDelta);

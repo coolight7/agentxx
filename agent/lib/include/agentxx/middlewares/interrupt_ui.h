@@ -167,17 +167,17 @@ struct InterruptUiBlock {
     // ---- control: 取值 ----
     /// 候选项 (buttons/select)
     std::vector<InterruptUiOption> options;
-    double minValue = 0.0;
-    double maxValue = 0.0;
+    double                         minValue = 0.0;
+    double                         maxValue = 0.0;
     /// 步进量 (<=0 按 1)
     double step = 1.0;
     /// 左侧缩进空格数
     int indent = 0;
 
     // ---- gap ----
-    int lines = 1;
-    bool        bold = false;
-    bool        dim  = false;
+    int  lines = 1;
+    bool bold  = false;
+    bool dim   = false;
     /// 按可用宽度硬折行 (false = 单行, 超宽右缘裁剪)
     bool wrap = false;
     /// buttons: 点击即选中并提交整份表单 (一问一答形态)
@@ -187,9 +187,9 @@ struct InterruptUiBlock {
     /// 仅接受整数 (校验/步进规则)
     bool integer = false;
     /// 下界 (hasMin = false 表示不限)
-    bool   hasMin   = false;
+    bool hasMin = false;
     /// 上界 (hasMax = false 表示不限)
-    bool   hasMax   = false;
+    bool hasMax = false;
 
     // ---- control: text ----
     /// 多行输入框 (**预留字段, 当前按单行渲染**)

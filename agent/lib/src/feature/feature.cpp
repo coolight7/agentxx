@@ -9,10 +9,10 @@
 #include "agentxx/feature/feature.h"
 
 #include "agentxx/agent/config_static.h"
+#include "fmt/format.h"
 #include "utilxx/async_offload.h"
 #include "utilxx_base/json.h"
 #include "utilxx_base/log.h"
-#include "fmt/format.h"
 #include <algorithm>
 #include <stdexcept>
 
@@ -290,13 +290,13 @@ void PointBase::clearImpls() {
 
 std::string PointBase::effectiveBy() const {
     // 生效者 = 排序后第一个实现 (层 → 优先级 → 登记顺序)
-    auto views = implViews();
-    const ImplView* best = nullptr;
+    auto            views = implViews();
+    const ImplView* best  = nullptr;
     for (const auto& item : views) {
         if (best == nullptr || item.layer < best->layer
             || (item.layer == best->layer && item.priority < best->priority)
-            || (item.layer == best->layer && item.priority == best->priority
-                && item.seq < best->seq)) {
+            || (item.layer == best->layer && item.priority == best->priority && item.seq < best->seq
+            )) {
             best = &item;
         }
     }
@@ -356,13 +356,13 @@ void PointBase::noteOutcome(
 
 std::string PointBase::buildCallJson(const ImplEntry& entry, const ChainEnv& env) const {
     utilxx_base::Json call = utilxx_base::Json::object();
-    call["point"]     = id_;
-    call["args"]      = parseOrNull(env.argsJson);
-    call["request"]   = parseOrNull(env.requestJson);
-    call["caller"]    = env.caller;
-    call["viaCall"]   = env.viaCall;
-    call["identity"]  = env.identity;
-    call["sessionId"] = env.sessionId;
+    call["point"]          = id_;
+    call["args"]           = parseOrNull(env.argsJson);
+    call["request"]        = parseOrNull(env.requestJson);
+    call["caller"]         = env.caller;
+    call["viaCall"]        = env.viaCall;
+    call["identity"]       = env.identity;
+    call["sessionId"]      = env.sessionId;
     if (agentxx::agent::AgentConfigStatic::devMode) {
         // 开发者模式才带实现归属 (便于实现侧日志自认; 正常模式下载荷保持最小)
         call["owner"] = entry.owner;
@@ -376,8 +376,8 @@ asio::awaitable<std::optional<std::string>>
     // (实现既可能在调用时同步抛, 也可能在挂起点之后抛, 因此统一经 catchErrorAsync)
     const std::string owner = entry.owner;
     co_return co_await agentxx::util::catchErrorAsync<std::optional<std::string>>(
-        [&entry, callJson = std::move(callJson)]() mutable
-            -> asio::awaitable<std::optional<std::string>> {
+        [&entry,
+         callJson = std::move(callJson)]() mutable -> asio::awaitable<std::optional<std::string>> {
             co_return co_await entry.fn(std::move(callJson));
         },
         [this, owner](std::string errmsg) -> asio::awaitable<std::optional<std::string>> {
@@ -396,16 +396,16 @@ asio::awaitable<std::optional<ChainOutcome>>
             effectiveMs = candidate;
         }
     }
-    const auto timeout = std::chrono::milliseconds{effectiveMs};
+    const auto timeout  = std::chrono::milliseconds{effectiveMs};
     auto       callJson = buildCallJson(entry, env);
 
     std::optional<std::string> answer;
     if (timeout.count() > 0) {
         // 到点取消当次实现, 并按"没意见"继续问链上的下一个实现
-        const std::string pointId = id_;
-        const std::string owner   = entry.owner;
+        const std::string pointId  = id_;
+        const std::string owner    = entry.owner;
         const ImplEntry&  entryRef = entry;
-        answer                    = co_await utilxx::asyncWithTimeout<std::optional<std::string>>(
+        answer                     = co_await utilxx::asyncWithTimeout<std::optional<std::string>>(
             [this, &entryRef, callJson]() mutable -> asio::awaitable<std::optional<std::string>> {
                 co_return co_await invokeImpl(entryRef, std::move(callJson));
             },
@@ -437,8 +437,8 @@ asio::awaitable<std::optional<ChainOutcome>>
         out.disabled = true;
         out.error    = CallError::Disabled;
         out.message  = parsed.reason.empty()
-                         ? fmt::format("功能点 `{}` 被 `{}` 置空", id_, entry.owner)
-                         : parsed.reason;
+                           ? fmt::format("功能点 `{}` 被 `{}` 置空", id_, entry.owner)
+                           : parsed.reason;
         co_return out;
     }
     if (parsed.kind == ImplAnswer::Kind::Verdict) {
@@ -482,11 +482,8 @@ asio::awaitable<ChainOutcome> PointBase::runPluginLayer(const ChainEnv& env) {
 
 // ==================== 取值 / 调用主流程 ====================
 
-ResolvedValue PointBase::finalize(
-    const ChainOutcome&   outcome,
-    const ResolveRequest& req,
-    int64_t               ms
-) {
+ResolvedValue
+    PointBase::finalize(const ChainOutcome& outcome, const ResolveRequest& req, int64_t ms) {
     ResolvedValue out;
     out.identity = req.identity;
     out.ms       = ms;
@@ -514,11 +511,11 @@ ResolvedValue PointBase::finalize(
     }
 
     if (outcome.disabled) {
-        out.error = CallError::Disabled;
-        out.by    = outcome.by;
-        out.message
-            = outcome.message.empty() ? fmt::format("功能点 `{}` 被 `{}` 置空", id_, outcome.by)
-                                      : outcome.message;
+        out.error   = CallError::Disabled;
+        out.by      = outcome.by;
+        out.message = outcome.message.empty()
+                          ? fmt::format("功能点 `{}` 被 `{}` 置空", id_, outcome.by)
+                          : outcome.message;
         // 置空标记只由 `ask` 记录 (`call` 看到置空只影响本次)
         if (req.rememberDisable && !outcome.by.empty()) {
             disabledBy_ = outcome.by;
@@ -530,9 +527,8 @@ ResolvedValue PointBase::finalize(
     }
 
     out.error = (outcome.error == CallError::None) ? CallError::NoImpl : outcome.error;
-    out.message
-        = outcome.message.empty() ? fmt::format("功能点 `{}` 现在没有实现给出值", id_)
-                                  : outcome.message;
+    out.message = outcome.message.empty() ? fmt::format("功能点 `{}` 现在没有实现给出值", id_)
+                                          : outcome.message;
     return out;
 }
 
@@ -561,14 +557,12 @@ void PointBase::publishInFlight(
 }
 
 asio::awaitable<ResolvedValue> PointBase::runResolve(ResolveRequest req) {
-    const auto begin = std::chrono::steady_clock::now();
+    const auto begin     = std::chrono::steady_clock::now();
     const auto elapsedMs = [&begin]() -> int64_t {
-        return static_cast<int64_t>(
-            std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::steady_clock::now() - begin
-            )
-                .count()
-        );
+        return static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                        std::chrono::steady_clock::now() - begin
+        )
+                                        .count());
     };
 
     // 0) 负载上限: 跨边界只经一次拷贝, 超过上限直接拒绝并说明
@@ -619,8 +613,8 @@ asio::awaitable<ResolvedValue> PointBase::runResolve(ResolveRequest req) {
         out.identity = req.identity;
         out.error    = CallError::NotCallable;
         out.message  = opts_.callDoc.empty()
-                         ? fmt::format("功能点 `{}` 没有对外开放调用", id_)
-                         : fmt::format("功能点 `{}` 没有对外开放调用: {}", id_, opts_.callDoc);
+                           ? fmt::format("功能点 `{}` 没有对外开放调用", id_)
+                           : fmt::format("功能点 `{}` 没有对外开放调用: {}", id_, opts_.callDoc);
         noteOutcome(false, "", req.caller, elapsedMs());
         co_return out;
     }
@@ -641,10 +635,12 @@ asio::awaitable<ResolvedValue> PointBase::runResolve(ResolveRequest req) {
         noteOutcome(false, "", req.caller, elapsedMs());
         co_return out;
     }
+
     /// 作用域退出 (含协程被取消销毁) 时移除重入标记
     struct BusyGuard {
         std::set<std::string, std::less<>>* set = nullptr;
         std::string                         key;
+
         ~BusyGuard() {
             if (set != nullptr) {
                 set->erase(key);
@@ -695,13 +691,9 @@ asio::awaitable<ResolvedValue> PointBase::runResolve(ResolveRequest req) {
         bool finished = false;
         if (req.timeout.count() > 0) {
             const auto tmo = req.timeout;
-            finished       = co_await utilxx::asyncWithTimeout<bool>(
-                waitDone,
-                tmo,
-                []() {
-                    return false;
-                }
-            );
+            finished       = co_await utilxx::asyncWithTimeout<bool>(waitDone, tmo, []() {
+                return false;
+            });
         } else {
             finished = co_await waitDone();
         }
@@ -726,6 +718,7 @@ asio::awaitable<ResolvedValue> PointBase::runResolve(ResolveRequest req) {
         PointBase*                self = nullptr;
         std::string               identity;
         std::shared_ptr<InFlight> slot;
+
         ~PublishGuard() {
             if (slot == nullptr || slot->done) {
                 return;
@@ -741,17 +734,17 @@ asio::awaitable<ResolvedValue> PointBase::runResolve(ResolveRequest req) {
     env.typedRequest = req.typedRequest;
     env.requestJson  = req.requestJson;
     env.argsJson     = req.argsJson;
-    env.identity    = req.identity;
-    env.caller      = req.caller;
-    env.sessionId   = req.sessionId;
-    env.viaCall     = req.viaCall;
+    env.identity     = req.identity;
+    env.caller       = req.caller;
+    env.sessionId    = req.sessionId;
+    env.viaCall      = req.viaCall;
 
     ChainOutcome outcome;
     if (req.timeout.count() > 0) {
         // 调用方超时: 到点取消当次实现并返回 failed (message 写清限时值)
-        const auto tmo    = req.timeout;
+        const auto        tmo     = req.timeout;
         const std::string pointId = id_;
-        outcome           = co_await utilxx::asyncWithTimeout<ChainOutcome>(
+        outcome                   = co_await utilxx::asyncWithTimeout<ChainOutcome>(
             [this, &env]() -> asio::awaitable<ChainOutcome> {
                 co_return co_await runChain(env);
             },
@@ -795,23 +788,23 @@ std::vector<PointBase::ImplView> PointBase::implViews() const {
 
 utilxx_base::Json PointBase::listJson() const {
     utilxx_base::Json json = utilxx_base::Json::object();
-    json["id"]        = id_;
-    json["type"]      = pointTypeKey(type_);
-    json["title"]     = opts_.title;
-    json["depict"]    = opts_.depict;
-    json["origin"]    = origin_;
-    json["callable"]  = opts_.callable;
-    json["callDoc"]   = opts_.callDoc;
+    json["id"]             = id_;
+    json["type"]           = pointTypeKey(type_);
+    json["title"]          = opts_.title;
+    json["depict"]         = opts_.depict;
+    json["origin"]         = origin_;
+    json["callable"]       = opts_.callable;
+    json["callDoc"]        = opts_.callDoc;
 
     utilxx_base::Json cache = utilxx_base::Json::object();
-    cache["mode"]     = cacheModeKey(opts_.cache);
-    cache["maxItems"] = cache_.maxItems();
-    cache["maxBytes"] = cache_.maxBytes();
+    cache["mode"]           = cacheModeKey(opts_.cache);
+    cache["maxItems"]       = cache_.maxItems();
+    cache["maxBytes"]       = cache_.maxBytes();
     if (opts_.cache != CacheMode::None) {
-        cache["items"]      = cache_.size();
-        cache["bytes"]      = cache_.bytes();
-        cache["hits"]       = cache_.hits();
-        cache["misses"]     = cache_.misses();
+        cache["items"]  = cache_.size();
+        cache["bytes"]  = cache_.bytes();
+        cache["hits"]   = cache_.hits();
+        cache["misses"] = cache_.misses();
     }
     json["cache"] = std::move(cache);
 
@@ -834,13 +827,13 @@ utilxx_base::Json PointBase::listJson() const {
         });
         for (const auto& entry : views) {
             utilxx_base::Json item = utilxx_base::Json::object();
-            item["layer"]     = implLayerKey(entry.layer);
-            item["owner"]     = entry.owner;
-            item["priority"]  = entry.priority;
-            item["load"]      = entry.load;
-            item["note"]      = entry.note;
-            item["seq"]       = static_cast<int64_t>(entry.seq);
-            item["timeoutMs"] = entry.defaultTimeoutMs;
+            item["layer"]          = implLayerKey(entry.layer);
+            item["owner"]          = entry.owner;
+            item["priority"]       = entry.priority;
+            item["load"]           = entry.load;
+            item["note"]           = entry.note;
+            item["seq"]            = static_cast<int64_t>(entry.seq);
+            item["timeoutMs"]      = entry.defaultTimeoutMs;
             impls.push_back(std::move(item));
         }
     }
@@ -849,13 +842,13 @@ utilxx_base::Json PointBase::listJson() const {
     // 统计只在开发者模式下收集; 关闭时清单只给"当前状态"
     if (agentxx::agent::AgentConfigStatic::devMode) {
         utilxx_base::Json stat = utilxx_base::Json::object();
-        stat["asks"]       = static_cast<int64_t>(stats_.asks);
-        stat["calls"]      = static_cast<int64_t>(stats_.calls);
-        stat["errors"]     = static_cast<int64_t>(stats_.errors);
-        stat["lastBy"]     = stats_.lastBy;
-        stat["lastCaller"] = stats_.lastCaller;
-        stat["lastMs"]     = stats_.lastMs;
-        json["stat"]       = std::move(stat);
+        stat["asks"]           = static_cast<int64_t>(stats_.asks);
+        stat["calls"]          = static_cast<int64_t>(stats_.calls);
+        stat["errors"]         = static_cast<int64_t>(stats_.errors);
+        stat["lastBy"]         = stats_.lastBy;
+        stat["lastCaller"]     = stats_.lastCaller;
+        stat["lastMs"]         = stats_.lastMs;
+        json["stat"]           = std::move(stat);
     }
     return json;
 }

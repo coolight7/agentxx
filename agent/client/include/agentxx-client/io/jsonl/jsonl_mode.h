@@ -35,9 +35,9 @@ namespace client {
 ///                   服务端把空会话 id 视为"按当前绑定会话处理")
 ///     - [lineIo]    行读写注入点; 缺省时读 stdin / 写 stdout (测试用内存缓冲注入)
 void runJsonlStdio(
-    std::shared_ptr<agent::CodeAgent>          agent,
-    std::string                                sessionId = {},
-    agent::JsonlAgentIOTransport::LineIo       lineIo    = {}
+    std::shared_ptr<agent::CodeAgent>    agent,
+    std::string                          sessionId = {},
+    agent::JsonlAgentIOTransport::LineIo lineIo    = {}
 );
 
 } // namespace client

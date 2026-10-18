@@ -612,10 +612,9 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const utilxx_base::J
             .dump();
     }
 
-    throw std::invalid_argument{fmt::format(
-        "unknown opt '{}', expect create|info|status|remove",
-        opt
-    )};
+    throw std::invalid_argument{
+        fmt::format("unknown opt '{}', expect create|info|status|remove", opt)
+    };
 }
 
 } // namespace tools

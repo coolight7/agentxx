@@ -124,9 +124,9 @@ typedef int32_t(PLUGINXX_CALL* AgentxxToolRenderFn)(
 typedef struct AgentxxToolRenderSpec {
     uint32_t            struct_size; ///< sizeof(AgentxxToolRenderSpec); 0 = 基线布局
     int32_t             version;     ///< 结构体版本 (当前 == 1)
-    PluginxxStringView  tool_name; ///< 目标工具名 (必填, 如 "agentxx_filesystem_read")
-    AgentxxToolRenderFn render_fn; ///< 渲染回调 (可为 NULL; 非空时优先调用)
-    void*               user_data; ///< 回调上下文 (render_fn 非空时有效)
+    PluginxxStringView  tool_name;   ///< 目标工具名 (必填, 如 "agentxx_filesystem_read")
+    AgentxxToolRenderFn render_fn;   ///< 渲染回调 (可为 NULL; 非空时优先调用)
+    void*               user_data;   ///< 回调上下文 (render_fn 非空时有效)
     PluginxxStringView template_json; ///< 预设模版 JSON (render_fn 为 NULL 时由主程序解析执行)
 } AgentxxToolRenderSpec;
 
@@ -161,7 +161,7 @@ typedef enum AgentxxOverlayType {
     ///   单元素数组, 界面层两种形态都认 (见 ToolcallWrapNode::autoFixArgsType)
     /// - 裸数组 `[{"old_str":"..","new_str":".."}, ...]` 按"无路径的多段"处理
     /// 多段时每段各渲染一份逐行差异, 段间以分隔行隔开, 路径只在首段展示
-    AGENTXX_OVERLAY_DIFF    = 2,
+    AGENTXX_OVERLAY_DIFF = 2,
     AGENTXX_OVERLAY_CUSTOM = 3 ///< 自定义: payload = JSON {"items":[...]} (同 panel/items schema)
 } AgentxxOverlayType;
 
@@ -190,8 +190,8 @@ typedef struct AgentxxOverlaySpec {
 /* ==================== 接口表: 展示/命令/toast (agentxx.client.ui) ==================== */
 
 #define AGENTXX_IFACE_CLIENT_UI             "agentxx.client.ui"
-#define AGENTXX_IFACE_CLIENT_UI_VERSION     1   /* 追加成员 / 语义变化 -> +1 */
-#define AGENTXX_IFACE_CLIENT_UI_MIN_VERSION 1   /* 只在破坏性改动时 +1 (优先换 IID) */
+#define AGENTXX_IFACE_CLIENT_UI_VERSION     1 /* 追加成员 / 语义变化 -> +1 */
+#define AGENTXX_IFACE_CLIENT_UI_MIN_VERSION 1 /* 只在破坏性改动时 +1 (优先换 IID) */
 /* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
 #define AGENTXX_IFACE_CLIENT_UI_BASELINE_SIZE sizeof(AgentxxClientUiIface)
 
@@ -593,10 +593,7 @@ typedef struct AgentxxClientTimerIface {
     ///   单实例定时器数量超上限 (当前 8)
     /// - 句柄由主程序持有, 实例禁用/卸载时自动取消 (插件无需在 stop 里逐个取消,
     ///   但主动取消更及时)
-    AgentxxTimer*(PLUGINXX_CALL* set_timer)(
-        const PluginxxHost*       host,
-        const AgentxxTimerSpec*   spec
-    );
+    AgentxxTimer*(PLUGINXX_CALL* set_timer)(const PluginxxHost* host, const AgentxxTimerSpec* spec);
     /// 取消定时器 (io 线程; 句柄随后失效, 重复取消/空句柄忽略)
     void(PLUGINXX_CALL* cancel_timer)(const PluginxxHost* host, AgentxxTimer* timer);
     /// 关联区域当前是否可见 (1/0; owner_id 为空或主程序未上报过返回 0)
@@ -651,8 +648,8 @@ typedef struct AgentxxClientKeybindIface {
     /// - 快捷键在表单控件有焦点时同样生效 (全局优先级最高); 输入框内输入字符
     ///   不受影响 (可打印字符本身不参与匹配)
     AgentxxKeybind*(PLUGINXX_CALL* register_keybind)(
-        const PluginxxHost*        host,
-        const AgentxxKeybindSpec*  spec
+        const PluginxxHost*       host,
+        const AgentxxKeybindSpec* spec
     );
     /// 注销快捷键 (io 线程; 句柄随后失效, 重复注销/空句柄忽略)
     void(PLUGINXX_CALL* unregister_keybind)(const PluginxxHost* host, AgentxxKeybind* bind);

@@ -1022,11 +1022,7 @@ asio::awaitable<void> test_eventbridge_gen_status_error() {
         "llm",
         makeChunk(agentxx::protocol::chunk_type::kGenerationStart, "")
     });
-    bridgeCb(neograph::graph::GraphEvent{
-        ET::ERROR,
-        "llm",
-        neograph::json(std::string{"boom"})
-    });
+    bridgeCb(neograph::graph::GraphEvent{ET::ERROR, "llm", neograph::json(std::string{"boom"})});
 
     // NodeStart, GenStatus(Waiting), 结算包 (无思考段, 不产生), GenStatus(Done)
     XX_TEST_EXPECT_EQ(io->deltas.size(), size_t{3});
@@ -1041,11 +1037,7 @@ asio::awaitable<void> test_eventbridge_gen_status_error() {
     auto bridge2   = makeTestBridge(agentContext, session, io2);
     auto bridgeCb2 = bridge2->makeCallback();
     bridgeCb2(neograph::graph::GraphEvent{ET::NODE_START, "llm", neograph::json::object()});
-    bridgeCb2(neograph::graph::GraphEvent{
-        ET::ERROR,
-        "llm",
-        neograph::json(std::string{"boom"})
-    });
+    bridgeCb2(neograph::graph::GraphEvent{ET::ERROR, "llm", neograph::json(std::string{"boom"})});
     XX_TEST_EXPECT_EQ(io2->deltas.size(), size_t{1});
 
     co_return;

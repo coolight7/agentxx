@@ -278,9 +278,11 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
                 }
                 ++count;
                 elems.push_back(
-                    (splitName ? hbox({text(
-                         fmt::format("|  {}·{}", utilxx_base::getFileName(notif.name), notif.name)
-                     )})
+                    (splitName ? hbox({text(fmt::format(
+                                     "|  {}·{}",
+                                     utilxx_base::getFileName(notif.name),
+                                     notif.name
+                                 ))})
                                : hbox({text("|  "), text(notif.name) | xflex_shrink}))
                     | color(theme_.hintColor)
                 );

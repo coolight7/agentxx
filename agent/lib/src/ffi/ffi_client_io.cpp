@@ -117,7 +117,7 @@ void FfiClientAgentIO::failAllPendingInterrupts() {
     pending_.clear();
     for (int64_t id : pendingHostToolCalls_) {
         utilxx_base::Json j = {
-            {"callId", id},
+            {"callId", id         },
             {"reason", "cancelled"},
         };
         emitEvent(AGENTXX_FFI_EVT_HOST_TOOL_CANCELLED, dump(j));
@@ -138,7 +138,11 @@ void FfiClientAgentIO::setDeltaBatch(int32_t maxDelayMs) {
     }
 }
 
-bool FfiClientAgentIO::submitHostToolResponse(int64_t callId, int32_t isError, std::string resultJson) {
+bool FfiClientAgentIO::submitHostToolResponse(
+    int64_t     callId,
+    int32_t     isError,
+    std::string resultJson
+) {
     pendingHostToolCalls_.erase(callId);
     sendToPeer(agent::WireHostToolResult{
         .callId       = callId,
@@ -154,7 +158,7 @@ void FfiClientAgentIO::flushDeltaBatch() {
         return;
     }
     utilxx_base::Json j = {
-        {"kind", pendingDeltaKind_},
+        {"kind", pendingDeltaKind_           },
         {"text", std::move(pendingDeltaText_)},
     };
     pendingDeltaText_.clear();
@@ -172,7 +176,7 @@ void FfiClientAgentIO::onDelta(const agent::WireDelta& delta) {
         if (!pendingDeltaText_.empty() && pendingDeltaKind_ != kind) {
             flushDeltaBatch();
         }
-        pendingDeltaKind_ = kind;
+        pendingDeltaKind_  = kind;
         pendingDeltaText_ += delta.text;
         if (deltaBatchTimer_) {
             deltaBatchTimer_->expires_after(std::chrono::milliseconds(deltaBatchMs_));
@@ -214,10 +218,7 @@ void FfiClientAgentIO::onContextStats(const agent::WireContextStats& stats) {
     if (stats.contextTokens == 0 && stats.maxContextTokens == 0 && stats.tps <= 0.0) {
         return;
     }
-    emitEvent(
-        AGENTXX_FFI_EVT_CONTEXT_STATS,
-        dump(agent::io::makeContextStats(stats))
-    );
+    emitEvent(AGENTXX_FFI_EVT_CONTEXT_STATS, dump(agent::io::makeContextStats(stats)));
 }
 
 void FfiClientAgentIO::onServerReady() {
@@ -307,10 +308,10 @@ void FfiClientAgentIO::onPeerMessage(agent::WireMessage msg) {
             } else if constexpr (std::is_same_v<T, agent::WireHostToolCall>) {
                 pendingHostToolCalls_.insert(m.callId);
                 utilxx_base::Json j = {
-                    {"callId",     m.callId},
-                    {"name",       m.name},
-                    {"argsJson",   m.argsJson},
-                    {"sessionId",  m.sessionId},
+                    {"callId",     m.callId    },
+                    {"name",       m.name      },
+                    {"argsJson",   m.argsJson  },
+                    {"sessionId",  m.sessionId },
                     {"timeoutSec", m.timeoutSec},
                 };
                 emitEvent(AGENTXX_FFI_EVT_HOST_TOOL_CALL, dump(j));
@@ -328,14 +329,12 @@ void FfiClientAgentIO::onPeerMessage(agent::WireMessage msg) {
                     onSyncReply(SyncKind::RemoveModelResult, j);
                 }
                 emitEvent(AGENTXX_FFI_EVT_WIRE, dump(j));
-            } else if constexpr (
-                std::is_same_v<T, agent::WireListDirResult>
-                || std::is_same_v<T, agent::WireViewMessagesPage>
-                || std::is_same_v<T, agent::WireMessageQueueUpdate>
-                || std::is_same_v<T, agent::WirePermissionState>
-                || std::is_same_v<T, agent::WireRenameSessionResult>
-                || std::is_same_v<T, agent::WireInputAck>
-            ) {
+            } else if constexpr (std::is_same_v<T, agent::WireListDirResult>
+                                 || std::is_same_v<T, agent::WireViewMessagesPage>
+                                 || std::is_same_v<T, agent::WireMessageQueueUpdate>
+                                 || std::is_same_v<T, agent::WirePermissionState>
+                                 || std::is_same_v<T, agent::WireRenameSessionResult>
+                                 || std::is_same_v<T, agent::WireInputAck>) {
                 // 输入受理回执也走这条: 嵌入方程序据此区分"已开始 / 已排队 / 被拒绝"
                 // (被拒绝时 reason 给出结构化原因, 如 attachment_too_large)
                 emitEvent(AGENTXX_FFI_EVT_WIRE, dump(agent::io::toJson(m)));

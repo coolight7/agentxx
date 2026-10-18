@@ -371,7 +371,7 @@ TestResult testTuiSurface() {
             const int titleWidth = ftxui::string_width("选择模型");
             const int leftGap    = tx - (r.bounds.x_min + 2);
             const int rightGap   = (r.bounds.x_max - 2) - (tx + titleWidth - 1);
-            XX_TEST_EXPECT_TRUE(leftGap > 0); // 不再贴左内边距
+            XX_TEST_EXPECT_TRUE(leftGap > 0);                       // 不再贴左内边距
             XX_TEST_EXPECT_TRUE(std::abs(leftGap - rightGap) <= 1); // 左右留白对称
             XX_TEST_EXPECT_EQ(ty, r.bounds.y_min + 1); // 标题栏位于上内边距下一行
         }
@@ -501,7 +501,7 @@ TestResult testTuiSurface() {
         // 选中项 (第 0 项) 整行高亮: 文字起点 / 行中 / 行末 (右内边距之内) 皆为
         // 高亮背景色 —— 高亮色带铺满整行, 而不是只覆盖文字本身
         // (内容区右侧留 1 列给滚动条: 条目右边界 = 弹窗右内边距再往左 1 列)
-        const int rowRightEdge = r.bounds.x_max - 3;
+        const int  rowRightEdge = r.bounds.x_max - 3;
         int        sx = -1, sy = -1;
         const bool selFound = r.findText("主题: ", sx, sy);
         XX_TEST_EXPECT_TRUE(selFound);
@@ -677,9 +677,8 @@ TestResult testTuiSurface() {
                 }
             }
             // 旧写法 (顶层 old_str/new_str)
-            auto legacy = parsePluginDiffPayload(
-                R"({"path":"/c.cpp","old_str":"x","new_str":"y"})"
-            );
+            auto legacy
+                = parsePluginDiffPayload(R"({"path":"/c.cpp","old_str":"x","new_str":"y"})");
             XX_TEST_EXPECT_TRUE(legacy.has_value());
             if (legacy) {
                 XX_TEST_EXPECT_EQ(legacy->path, std::string{"/c.cpp"});
@@ -783,7 +782,7 @@ TestResult testTuiSurface() {
                 XX_TEST_EXPECT_EQ(hits, size_t{1});
                 // 段间为分隔行 (面性风格: 浅色背景区块, 与其它 overlay 的分隔一致)
                 // 首段的删/增两行相邻, 其下一行即分隔行, 再下一行起是第二段
-                int o1x = -1, o1y = -1, n1x = -1, n1y = -1;
+                int        o1x = -1, o1y = -1, n1x = -1, n1y = -1;
                 const bool foundFirst = r.findText("old_first();", o1x, o1y);
                 XX_TEST_EXPECT_TRUE(foundFirst);
                 XX_TEST_EXPECT_TRUE(r.findText("new_first();", n1x, n1y));
@@ -791,11 +790,8 @@ TestResult testTuiSurface() {
                     // 同一段的删/增两行紧挨着 (中间不插别的行)
                     XX_TEST_EXPECT_TRUE(o1y == n1y + 1 || n1y == o1y + 1);
                     const int segTop = std::min(o1y, n1y);
-                    XX_TEST_EXPECT_EQ(
-                        r.bgAt(r.midX(), segTop + 2),
-                        fx.theme.surfaceFooterColor
-                    );
-                    int        sx = -1, sy = -1;
+                    XX_TEST_EXPECT_EQ(r.bgAt(r.midX(), segTop + 2), fx.theme.surfaceFooterColor);
+                    int sx = -1, sy = -1;
                     XX_TEST_EXPECT_TRUE(r.findText("old_second();", sx, sy));
                     XX_TEST_EXPECT_TRUE(sy >= segTop + 3);
                 }
@@ -838,7 +834,7 @@ TestResult testTuiSurface() {
                     "test",
                     [] {}
                 )
-                    == nullptr
+                == nullptr
             );
             auto empty = createUniversalOverlay(
                 fx.ctx,
@@ -863,14 +859,12 @@ TestResult testTuiSurface() {
         SurfaceFixture fx;
         fx.sharedState.mutate([](TUIRenderState& st) {
             using Notif = agentxx::agent::AppendComponentNotification;
-            st.appendComponents.push_back(
-                Notif{
-                    .name         = "bad_plugin",
-                    .errorMessage = "加载失败原因",
-                    .type         = Notif::Type::Plugin,
-                    .success      = false,
-                }
-            );
+            st.appendComponents.push_back(Notif{
+                .name         = "bad_plugin",
+                .errorMessage = "加载失败原因",
+                .type         = Notif::Type::Plugin,
+                .success      = false,
+            });
         });
         auto comp = std::make_shared<FailedComponentsOverlay>(fx.ctx);
         auto r    = fx.probe(comp);
@@ -1055,7 +1049,7 @@ TestResult testTuiSurface() {
     // ---- 通用 overlay 尺寸与外观选项 (extra_json, 数据层) ----
     {
         // 缺省: 常规尺寸, 底栏显示, 不保留已有 overlay
-        auto def = agentxx::client::OverlayOptions::fromJson("");
+        auto   def = agentxx::client::OverlayOptions::fromJson("");
         double w = 0, h = 0;
         def.resolveFractions(w, h);
         XX_TEST_EXPECT_EQ(w, 0.6);

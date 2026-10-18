@@ -83,7 +83,7 @@ namespace plugin_interfaces {
 inline constexpr std::string_view AgentCore = "agentxx.agent.core";
 /// COM 风格接口表 IID (与 plugin_api.h 的 AGENTXX_IFACE_AGENT_* 宏一一对应;
 /// 清单 interfaces.require 可按插件实际查询的表精确声明)
-inline constexpr std::string_view AgentTools        = AGENTXX_PLUGIN_IFACE_AGENT_TOOLS;
+inline constexpr std::string_view AgentTools = AGENTXX_PLUGIN_IFACE_AGENT_TOOLS;
 /// 钩子登记 (基础两项 + 有序登记与清单三项, 同一张表; 见
 /// AGENTXX_PLUGIN_IFACE_AGENT_HOOKS)
 inline constexpr std::string_view AgentHooks        = AGENTXX_PLUGIN_IFACE_AGENT_HOOKS;
@@ -99,9 +99,9 @@ inline constexpr std::string_view AgentLog          = PLUGINXX_IFACE_LOG;
 inline constexpr std::string_view AgentResources    = AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES;
 inline constexpr std::string_view AgentModel        = AGENTXX_PLUGIN_IFACE_AGENT_MODEL;
 /// 功能点: 登记实现 / 声明插件点 / 调用点 / 读清单 (见 AGENTXX_PLUGIN_IFACE_AGENT_FEATURE)
-inline constexpr std::string_view AgentFeature      = AGENTXX_PLUGIN_IFACE_AGENT_FEATURE;
-inline constexpr std::string_view AgentCancel       = PLUGINXX_IFACE_CANCEL;
-inline constexpr std::string_view AgentTasks        = PLUGINXX_IFACE_TASKS;
+inline constexpr std::string_view AgentFeature = AGENTXX_PLUGIN_IFACE_AGENT_FEATURE;
+inline constexpr std::string_view AgentCancel  = PLUGINXX_IFACE_CANCEL;
+inline constexpr std::string_view AgentTasks   = PLUGINXX_IFACE_TASKS;
 /// 通用协程驱动表 (driver ticket / wake 协议; kit 的 PollOneBridge 依赖它)
 inline constexpr std::string_view AgentCoroutineRuntime = PLUGINXX_IFACE_COROUTINE_RUNTIME;
 
@@ -110,17 +110,17 @@ inline constexpr std::string_view AgentCoroutineRuntime = PLUGINXX_IFACE_COROUTI
 /// 主程序才会声明本项 (tui; cli 只有 toast/command 故不声明)。插件应优先按下方的
 /// 细粒度能力名精确声明自己实际使用的子能力 —— 声明表整体会让"主程序缺某子能力"
 /// 变成"整个插件不可加载/告警"
-inline constexpr std::string_view ClientUi          = AGENTXX_IFACE_CLIENT_UI;
-inline constexpr std::string_view ClientStatusItem  = "agentxx.client.status_item";
-inline constexpr std::string_view ClientPanel       = "agentxx.client.panel";
-inline constexpr std::string_view ClientToast       = "agentxx.client.toast";
+inline constexpr std::string_view ClientUi         = AGENTXX_IFACE_CLIENT_UI;
+inline constexpr std::string_view ClientStatusItem = "agentxx.client.status_item";
+inline constexpr std::string_view ClientPanel      = "agentxx.client.panel";
+inline constexpr std::string_view ClientToast      = "agentxx.client.toast";
 /// 全局快捷键: 主程序提供 `agentxx.client.keybind` 表 (注册/注销/列表),
 /// 快捷键在表单控件有焦点时同样生效 (见该表说明)
 inline constexpr std::string_view ClientKeybind     = AGENTXX_IFACE_CLIENT_KEYBIND;
 inline constexpr std::string_view ClientPromptModal = "agentxx.client.prompt_modal"; // 预留
 /// 定时器: 主程序提供 `agentxx.client.timer` 表 (一次性/周期定时器 + 区域可见性查询);
 /// 主程序动画等级为 Disabled 时拒绝注册 (插件据此降级为静态展示)
-inline constexpr std::string_view ClientTimer       = AGENTXX_IFACE_CLIENT_TIMER;
+inline constexpr std::string_view ClientTimer = AGENTXX_IFACE_CLIENT_TIMER;
 /// 工具消息装饰与特化渲染 (ui 表 v2 update_tool_decor / register_tool_renderer;
 /// TUI 声明, CLI 无消息渲染面不声明)
 inline constexpr std::string_view ClientMsgDecor    = "agentxx.client.msg_decor";

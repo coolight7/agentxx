@@ -169,7 +169,7 @@ struct EvolutionTrainingConfig {
     /// 为空则不支持取消。注意: 训练循环严格串行执行（变体写入共享 config），
     /// 不要在多个线程同时运行同一 trainer 的循环
     std::shared_ptr<neograph::graph::CancelToken> cancelToken;
-    double earlyTerminationScore      = 0.2;
+    double                                        earlyTerminationScore = 0.2;
 
     /// 收敛阈值（评分达到此值视为通过）
     double convergenceThreshold = 0.8;
@@ -194,7 +194,7 @@ struct EvolutionTrainingConfig {
 
     /// 早终：已测试用例数达到 [earlyTerminationCheckAfter] 后，
     /// 若平均分低于 [earlyTerminationScore] 则跳过剩余用例（剩余记 0 分）
-    int    earlyTerminationCheckAfter = 2;
+    int earlyTerminationCheckAfter = 2;
 
     /// 每代对排序后前 N 个精英复评一次并做 EMA 平滑，降低 LLM 评分噪声
     /// 对排序与收敛判定的干扰；0 表示关闭精英复评

@@ -937,17 +937,17 @@ asio::awaitable<CpuGpuUsage> CpuGpuMonitor::query() {
 //   只有"占用的系统内存"字段, 没有独立显存字段
 #include <CoreFoundation/CoreFoundation.h>
 #include <IOKit/IOKitLib.h>
-#include <mach/host_info.h>
-#include <mach/mach.h>
-#include <mach/mach_host.h>
-#include <mach/vm_statistics.h>
-#include <sys/sysctl.h>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <mach/host_info.h>
+#include <mach/mach.h>
+#include <mach/mach_host.h>
+#include <mach/vm_statistics.h>
 #include <string>
 #include <string_view>
+#include <sys/sysctl.h>
 #include <thread>
 #include <vector>
 
@@ -1170,7 +1170,7 @@ protected:
                     + static_cast<uint64_t>(info.cpu_ticks[CPU_STATE_SYSTEM])
                     + static_cast<uint64_t>(info.cpu_ticks[CPU_STATE_IDLE])
                     + static_cast<uint64_t>(info.cpu_ticks[CPU_STATE_NICE]);
-        out.idle  = static_cast<uint64_t>(info.cpu_ticks[CPU_STATE_IDLE]);
+        out.idle = static_cast<uint64_t>(info.cpu_ticks[CPU_STATE_IDLE]);
         return true;
     }
 
@@ -1195,12 +1195,11 @@ protected:
         const uint64_t totalBytes = totalPhysicalMemoryMB_ * 1024 * 1024;
         /// 可用内存 (近似 Linux /proc/meminfo 的 MemAvailable): 空闲页 + 非活跃页
         /// + 推测页 + 可清除页 —— 这些页在被新的分配申请到时都可由内核直接回收
-        const uint64_t availableBytes
-            = (static_cast<uint64_t>(vmStat.free_count)
-               + static_cast<uint64_t>(vmStat.inactive_count)
-               + static_cast<uint64_t>(vmStat.speculative_count)
-               + static_cast<uint64_t>(vmStat.purgeable_count))
-              * pageSize_;
+        const uint64_t availableBytes = (static_cast<uint64_t>(vmStat.free_count)
+                                         + static_cast<uint64_t>(vmStat.inactive_count)
+                                         + static_cast<uint64_t>(vmStat.speculative_count)
+                                         + static_cast<uint64_t>(vmStat.purgeable_count))
+                                        * pageSize_;
         const uint64_t usedBytes = availableBytes < totalBytes ? totalBytes - availableBytes : 0;
 
         result.memory.totalPhysicalMB = totalPhysicalMemoryMB_;
@@ -1238,7 +1237,8 @@ protected:
 
         /// 匹配字典由 IOServiceGetMatchingServices 消费 (成功/失败都由 IOKit 释放)
         io_iterator_t serviceIter = IO_OBJECT_NULL;
-        kern_return_t kr = IOServiceGetMatchingServices(macIokitMainPort(), matchDict, &serviceIter);
+        kern_return_t kr
+            = IOServiceGetMatchingServices(macIokitMainPort(), matchDict, &serviceIter);
         if (kr != KERN_SUCCESS || serviceIter == IO_OBJECT_NULL) {
             XX_LOGW("CpuGpuMonitor: IOServiceGetMatchingServices failed, kr={}", kr);
             return;
@@ -1320,19 +1320,19 @@ protected:
         const bool hasVramUsed  = cfDictNumber(stats, CFSTR("vramUsedBytes"), vramUsed);
         const bool hasVramFree  = cfDictNumber(stats, CFSTR("vramFreeBytes"), vramFree);
 
-        double systemMemoryUsed    = 0.0;
-        bool   hasSystemMemoryUsed = cfDictNumber(stats, CFSTR("In use system memory"), systemMemoryUsed);
+        double systemMemoryUsed = 0.0;
+        bool   hasSystemMemoryUsed
+            = cfDictNumber(stats, CFSTR("In use system memory"), systemMemoryUsed);
         if (!hasSystemMemoryUsed) {
             hasSystemMemoryUsed
                 = cfDictNumber(stats, CFSTR("Alloc system memory"), systemMemoryUsed);
         }
 
         if (hasVramTotal || hasVramUsed || hasVramFree) {
-            const uint64_t totalBytes = hasVramTotal
-                                            ? toBytes(vramTotal)
-                                            : toBytes(vramUsed) + toBytes(vramFree);
-            info.dedicatedVramMB      = bytesToMb(totalBytes);
-            info.dedicatedVramUsedMB  = hasVramUsed ? bytesToMb(toBytes(vramUsed)) : 0;
+            const uint64_t totalBytes
+                = hasVramTotal ? toBytes(vramTotal) : toBytes(vramUsed) + toBytes(vramFree);
+            info.dedicatedVramMB     = bytesToMb(totalBytes);
+            info.dedicatedVramUsedMB = hasVramUsed ? bytesToMb(toBytes(vramUsed)) : 0;
         }
 
         if (hasSystemMemoryUsed) {
@@ -1388,9 +1388,9 @@ protected:
             return cfStringToUtf8(static_cast<CFStringRef>(ref));
         }
         if (typeId == CFDataGetTypeID()) {
-            CFDataRef   data = static_cast<CFDataRef>(ref);
-            const char* ptr  = reinterpret_cast<const char*>(CFDataGetBytePtr(data));
-            const CFIndex len = CFDataGetLength(data);
+            CFDataRef     data = static_cast<CFDataRef>(ref);
+            const char*   ptr  = reinterpret_cast<const char*>(CFDataGetBytePtr(data));
+            const CFIndex len  = CFDataGetLength(data);
             if (!ptr || len <= 0) {
                 return {};
             }

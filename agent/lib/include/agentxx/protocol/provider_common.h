@@ -176,21 +176,22 @@ inline utilxx_base::Json chatMessagesToOpenAIJson(
         j["role"] = msg.role;
 
         if (msg.role == "tool") {
-            j["content"]       = msg.content;
-            j["tool_call_id"]  = msg.tool_call_id;
+            j["content"]      = msg.content;
+            j["tool_call_id"] = msg.tool_call_id;
         } else if (!msg.tool_calls.empty()) {
             // 带工具调用的助手消息: 无正文时 content 为 null (与 neograph 一致)
-            j["content"] = msg.content.empty() ? utilxx_base::Json{} : utilxx_base::Json(msg.content);
-            auto tcArr   = utilxx_base::Json::array();
+            j["content"]
+                = msg.content.empty() ? utilxx_base::Json{} : utilxx_base::Json(msg.content);
+            auto tcArr = utilxx_base::Json::array();
             for (const auto& tc : msg.tool_calls) {
                 tcArr.push_back(utilxx_base::Json{
-                    {"id", utilxx_base::Json(tc.id)},
-                    {"type", utilxx_base::Json("function")},
+                    {"id",       utilxx_base::Json(tc.id)     },
+                    {"type",     utilxx_base::Json("function")},
                     {"function",
                      utilxx_base::Json{
                          {"name", utilxx_base::Json(tc.name)},
                          {"arguments", utilxx_base::Json(tc.arguments)},
-                     }},
+                     }                                        },
                 });
             }
             j["tool_calls"] = std::move(tcArr);
@@ -199,13 +200,13 @@ inline utilxx_base::Json chatMessagesToOpenAIJson(
             auto parts = utilxx_base::Json::array();
             if (!msg.content.empty()) {
                 parts.push_back(utilxx_base::Json{
-                    {"type", utilxx_base::Json("text")},
+                    {"type", utilxx_base::Json("text")     },
                     {"text", utilxx_base::Json(msg.content)},
                 });
             }
             for (const auto& url : msg.image_urls) {
                 parts.push_back(utilxx_base::Json{
-                    {"type", utilxx_base::Json("image_url")},
+                    {"type",      utilxx_base::Json("image_url")                    },
                     {"image_url", utilxx_base::Json{{"url", utilxx_base::Json(url)}}},
                 });
             }
@@ -213,24 +214,24 @@ inline utilxx_base::Json chatMessagesToOpenAIJson(
                 if (auto parsed = neograph::parse_data_url(url)) {
                     // data URL 可拆成 base64 数据 + 格式; HTTP URL 拆不出, 走 url 字段
                     parts.push_back(utilxx_base::Json{
-                        {"type", utilxx_base::Json("input_audio")},
+                        {"type",        utilxx_base::Json("input_audio")},
                         {"input_audio",
                          utilxx_base::Json{
                              {"data", utilxx_base::Json(parsed->second)},
                              {"format",
                               utilxx_base::Json(neograph::media_format_from_mime(parsed->first))},
-                         }},
+                         }                                              },
                     });
                 } else {
                     parts.push_back(utilxx_base::Json{
-                        {"type", utilxx_base::Json("input_audio")},
+                        {"type",        utilxx_base::Json("input_audio")                  },
                         {"input_audio", utilxx_base::Json{{"url", utilxx_base::Json(url)}}},
                     });
                 }
             }
             for (const auto& url : msg.video_urls) {
                 parts.push_back(utilxx_base::Json{
-                    {"type", utilxx_base::Json("video_url")},
+                    {"type",      utilxx_base::Json("video_url")                    },
                     {"video_url", utilxx_base::Json{{"url", utilxx_base::Json(url)}}},
                 });
             }
@@ -309,13 +310,13 @@ inline utilxx_base::Json chatToolsToOpenAIJson(const std::vector<neograph::ChatT
         const neograph::json& params
             = tool.parameters.is_object() ? tool.parameters : neograph::json::object();
         arr.push_back(utilxx_base::Json{
-            {"type", utilxx_base::Json("function")},
+            {"type",     utilxx_base::Json("function")},
             {"function",
              utilxx_base::Json{
                  {"name", utilxx_base::Json(tool.name)},
                  {"description", utilxx_base::Json(tool.description)},
                  {"parameters", agentxx::util::fromNeographJson(params)},
-             }},
+             }                                        },
         });
     }
     return arr;
@@ -378,16 +379,16 @@ struct UsageDetail {
 
 /// provider 侧: 写入补充用量 (值为 0 的字段照写, 便于对端区分"已知为 0"与"未上报")
 inline void setUsageDetail(neograph::ChatCompletion& completion, const UsageDetail& detail) {
-    neograph::json obj                          = neograph::json::object();
-    obj[std::string{kUsageCacheReadTokensKey}]  = detail.cacheReadTokens;
-    obj[std::string{kUsageCacheWriteTokensKey}] = detail.cacheWriteTokens;
+    neograph::json obj                                          = neograph::json::object();
+    obj[std::string{kUsageCacheReadTokensKey}]                  = detail.cacheReadTokens;
+    obj[std::string{kUsageCacheWriteTokensKey}]                 = detail.cacheWriteTokens;
     completion.message.extra[std::string{kUsageDetailExtraKey}] = std::move(obj);
 }
 
 /// 模型调用节点侧: 取出补充用量, 并把该键置空 (不进入会话消息)
 /// - 键不存在时返回全 0
 inline UsageDetail takeUsageDetail(neograph::ChatCompletion& completion) {
-    auto        out = UsageDetail{};
+    auto              out = UsageDetail{};
     const std::string key{kUsageDetailExtraKey};
     auto&             extra = completion.message.extra;
     if (!extra.is_object() || !extra.contains(key)) {
@@ -423,7 +424,8 @@ inline UsageDetail readUsageDetail(const neograph::ChatCompletion& completion) {
     return out;
 }
 
-/// 判定是否为"有效空响应": content / 明文思考 / tool_calls 全空, 且无加密思考内容/// - 加密思考内容存于 `message.extra[carrierKey]`, 是供应商网关只回传思考密文
+/// 判定是否为"有效空响应": content / 明文思考 / tool_calls 全空, 且无加密思考内容/// -
+/// 加密思考内容存于 `message.extra[carrierKey]`, 是供应商网关只回传思考密文
 ///   (summary/content 均空) 时唯一的有效内容; 数组非空即视为有内容
 /// - 空响应对 Agent 而言等于本次生成失败: 无内容可展示、无 tool_calls 可路由,
 ///   由调用方抛出异常, 经 modelcall 重试流程自动重试并提示 UI

@@ -39,14 +39,13 @@ inline markdown::Theme const& renderTheme() {
 
 /// 典型的助手回复 (标题/段落/行内样式/列表/代码块/链接)
 inline std::string assistantText(size_t repeats) {
-    std::string out =
-        "# Result\n\n"
-        "The change is applied with **bold** and *italic* parts, `inline code` and a "
-        "[link](https://example.com/docs) that wraps over a couple of lines when the "
-        "available width is limited.\n\n"
-        "- first item with some words\n"
-        "- second item\n\n"
-        "```cpp\nint main() { return 0; }\n```\n\n";
+    std::string out = "# Result\n\n"
+                      "The change is applied with **bold** and *italic* parts, `inline code` and a "
+                      "[link](https://example.com/docs) that wraps over a couple of lines when the "
+                      "available width is limited.\n\n"
+                      "- first item with some words\n"
+                      "- second item\n\n"
+                      "```cpp\nint main() { return 0; }\n```\n\n";
     for (size_t i = 0; i < repeats; ++i) {
         out += "Paragraph number " + std::to_string(i)
                + " repeating ordinary prose so the body reaches the size of a real "
@@ -143,8 +142,9 @@ inline void benchRender() {
     const std::string userPlain   = userText(20);
     const std::string toolResult  = toolText(4096);
     {
-        std::cout << "  [sample sizes] assistant=" << assistantMd.size() << "B user="
-                  << userPlain.size() << "B tool=" << toolResult.size() << "B" << std::endl;
+        std::cout << "  [sample sizes] assistant=" << assistantMd.size()
+                  << "B user=" << userPlain.size() << "B tool=" << toolResult.size() << "B"
+                  << std::endl;
     }
 
     // ---- 1. 单条消息: 解析 + 建树 ----
@@ -166,8 +166,12 @@ inline void benchRender() {
     }
     {
         auto r = runBench("render: markdown parse+build [tool result 4KB]", 200, [&] {
-            auto [el, builder]
-                = renderMarkdown("```\n" + toolResult + "```\n", ftxui::Color::White, renderTheme(), kScreenW);
+            auto [el, builder] = renderMarkdown(
+                "```\n" + toolResult + "```\n",
+                ftxui::Color::White,
+                renderTheme(),
+                kScreenW
+            );
             (void)el;
             (void)builder;
         });
@@ -181,13 +185,11 @@ inline void benchRender() {
         auto element = el;
 
         auto r = runBench("render: layout first measure [assistant sample]", 200, [&] {
-            auto fresh = std::make_shared<markdown::FlowText>(
-                [] {
-                    std::vector<markdown::Span> spans(1);
-                    spans[0].text = bench_render_detail::assistantText(0);
-                    return spans;
-                }()
-            );
+            auto fresh = std::make_shared<markdown::FlowText>([] {
+                std::vector<markdown::Span> spans(1);
+                spans[0].text = bench_render_detail::assistantText(0);
+                return spans;
+            }());
             (void)measureHeight(fresh, kScreenW);
         });
         printResult(r);
@@ -199,7 +201,7 @@ inline void benchRender() {
         printResult(r2);
 
         // 流式: 盒位置每帧上移 (宽度不变)
-        int y = 0;
+        int  y  = 0;
         auto r3 = runBench("render: layout box moves each frame (streaming)", 2000, [&] {
             element->SetBox(ftxui::Box{0, kScreenW - 1, y, y + kTallHeight});
             y = (y + 1) % 64;
@@ -209,7 +211,7 @@ inline void benchRender() {
 
     // ---- 3. 整屏 N 条消息 ----
     for (size_t count : {30u, 120u}) {
-        std::vector<ftxui::Element> elements;
+        std::vector<ftxui::Element>                        elements;
         std::vector<std::unique_ptr<markdown::DomBuilder>> keep;
         for (size_t i = 0; i < count; ++i) {
             auto [el, builder]
@@ -225,7 +227,7 @@ inline void benchRender() {
         );
 
         // 整屏布局后绘制 (盒位置每帧上移, 与流式滚动一致)
-        int y = 0;
+        int  y = 0;
         auto r = runBench(
             "render: full screen " + std::to_string(count) + " messages (draw)",
             100,
@@ -237,13 +239,10 @@ inline void benchRender() {
         );
         printResult(r);
 
-        auto r2 = runBench(
-            "render: Screen::ToString " + std::to_string(count) + " messages",
-            100,
-            [&] {
-                (void)screen.ToString();
-            }
-        );
+        auto r2
+            = runBench("render: Screen::ToString " + std::to_string(count) + " messages", 100, [&] {
+                  (void)screen.ToString();
+              });
         printResult(r2);
     }
 

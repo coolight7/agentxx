@@ -2,8 +2,8 @@
 #include "agentxx/util/task_scope.h"
 
 #include "agentxx/util/exception.h"
-#include "asio/co_spawn.hpp"
 #include "asio/bind_cancellation_slot.hpp"
+#include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/steady_timer.hpp"
 #include "utilxx_base/asio_error.h"
@@ -13,9 +13,9 @@ namespace agentxx {
 namespace util {
 
 void TaskScope::spawn(std::string name, std::function<asio::awaitable<void>()> task) {
-    const uint64_t id = ++nextId_;
+    const uint64_t id     = ++nextId_;
     auto           signal = std::make_shared<asio::cancellation_signal>();
-    entries_[id] = Entry{.name = std::move(name), .signal = signal};
+    entries_[id]          = Entry{.name = std::move(name), .signal = signal};
     ++totalSpawned_;
 
     // 取消信号绑定到任务: 关闭时先发信号, 任务内部的 asio 等待尽快结束;

@@ -123,7 +123,7 @@ public:
     /// 已声明权限限制的工具名 (随工具注销/实例禁用卸载一并撤销)
     std::vector<std::string> permissionToolNames;
     /// 本实例登记的钩子处理器 (基础 + 扩展入口共用; 顺序 = 登记顺序)
-    std::vector<HookRegistration> hookRegistrations;
+    std::vector<HookRegistration>          hookRegistrations;
     std::vector<GraphNodeTypeRegistration> graphNodeTypes;
     /// 本实例声明的功能点 id (`plugin.<自己>.*`; 禁用摘生效, 卸载全摘)
     std::vector<std::string> featurePoints;
@@ -494,13 +494,13 @@ public:
 
     /// 钩子清单里的一个处理器 (只读视图; 清单 JSON 与诊断共用同一份事实)
     struct HookHandlerView {
-        int64_t     handle   = 0;    ///< 登记时分配的句柄
-        int32_t     point    = 0;    ///< AgentxxPluginHookPoint
-        std::string layer;           ///< `plugin` / `core`
-        std::string owner;           ///< `plugin:<插件名>` / `core:<模块>`
-        std::string ownerTag;        ///< 展示归属标签 (可空)
-        std::string depict;          ///< 一句话说明 (可空)
-        std::string load;            ///< `dynamic` / `builtin` (只说明怎么加载, 不影响顺序)
+        int64_t     handle = 0; ///< 登记时分配的句柄
+        int32_t     point  = 0; ///< AgentxxPluginHookPoint
+        std::string layer;      ///< `plugin` / `core`
+        std::string owner;      ///< `plugin:<插件名>` / `core:<模块>`
+        std::string ownerTag;   ///< 展示归属标签 (可空)
+        std::string depict;     ///< 一句话说明 (可空)
+        std::string load;       ///< `dynamic` / `builtin` (只说明怎么加载, 不影响顺序)
         int32_t     priority = 0;    ///< 生效优先级 (越界已裁剪到上下限)
         uint64_t    seq      = 0;    ///< 登记序号 (同优先级时按它排)
         bool        enabled  = true; ///< 派发时是否生效 (实例已禁用 -> false)
@@ -523,8 +523,11 @@ public:
     ///
     /// `return`: 0 成功 (`*outHandle` 收到句柄); 非 0 失败 (点越界 / 回调为空 /
     /// 实例正在关闭或已禁用)
-    int
-        registerHookEx(PluginInstance* inst, const AgentxxPluginHookSpecEx* spec, int64_t* outHandle);
+    int registerHookEx(
+        PluginInstance*                inst,
+        const AgentxxPluginHookSpecEx* spec,
+        int64_t*                       outHandle
+    );
 
     /// 撤销本实例登记的一个处理器 (按句柄; 别人的句柄被拒绝)
     ///
@@ -951,8 +954,8 @@ private:
     std::vector<HookHandlerEntry>                        hookHandlers_;
     int64_t                                              nextHookHandle_ = 1;
     uint64_t                                             hookSeq_        = 0;
-    std::shared_ptr<PluginHookDispatchHandle>             hookDispatch_;
-    std::array<HookPointStat, AGENTXX_PLUGIN_HOOK_COUNT>  hookStats_{};
+    std::shared_ptr<PluginHookDispatchHandle>            hookDispatch_;
+    std::array<HookPointStat, AGENTXX_PLUGIN_HOOK_COUNT> hookStats_{};
 
     /// 释放执行图定义 slot (占用者禁用/卸载时调用): 恢复基础定义并清空占用者
     void releaseGraphDefinitionSlot(PluginInstance* inst);
@@ -963,8 +966,8 @@ private:
     agentxx::middleware::PermissionMiddlewareHandle* permissionMiddleware();
 
     struct PendingMiddlewareCleanup {
-        std::string                                name;
-        std::weak_ptr<PluginHookDispatchHandle>    handle;
+        std::string                             name;
+        std::weak_ptr<PluginHookDispatchHandle> handle;
     };
 
     std::vector<PendingMiddlewareCleanup> pendingCleanups_;
@@ -979,9 +982,9 @@ private:
     /// 执行图定义独占 slot: 占用者 + 占用前的基础定义
     /// - [graphDefinitionBase] 存 JSON 文本, 恢复时解析回 neograph json
     ///   (避免在头文件里带 neograph 类型)
-    std::string    graphDefinitionOwner_;
-    std::string    graphDefinitionBase_;
-    bool           graphDefinitionBaseCaptured_ = false;
+    std::string graphDefinitionOwner_;
+    std::string graphDefinitionBase_;
+    bool        graphDefinitionBaseCaptured_ = false;
 };
 
 } // namespace plugin

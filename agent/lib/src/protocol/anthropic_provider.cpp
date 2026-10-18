@@ -333,7 +333,9 @@ void AnthropicProvider::applyCacheBreakpoints(utilxx_base::Json& body) {
 
     // ② 工具定义: 最后一个工具带断点 (工具 schema 是稳定的最大固定段之一)
     if (body.contains("tools") && body["tools"].is_array() && !body["tools"].empty()) {
-        body["tools"].back()["cache_control"] = utilxx_base::Json{{"type", "ephemeral"}};
+        body["tools"].back()["cache_control"] = utilxx_base::Json{
+            {"type", "ephemeral"}
+        };
     }
 
     // ③ 消息: 断点落在"最后一条非动态段消息"的末尾可缓存块上

@@ -88,17 +88,17 @@ enum class UiHitRegionKind : uint8_t {
 struct UiHitRegion {
     // 成员按对齐/尺寸从大到小排列, 减少结构体内填充字节
     /// 区域标识 (动作 id / 控件 id / 单元格键)
-    std::string     id;
+    std::string id;
     /// 附加参数 (JSON 文本等, 原样回传)
-    std::string     arg;
+    std::string arg;
     /// 归属插件名 (面板/段落/overlay 渲染时填入; 空 = 由调用方按上下文补齐)
     std::string plugin;
     /// 归属 id (面板 id / 段落 id / tool_call_id / "__overlay")
     std::string ownerId;
-    int             x = 0;
-    int             y = 0;
-    int             w = 0;
-    int             h = 1;
+    int         x = 0;
+    int         y = 0;
+    int         w = 0;
+    int         h = 1;
     /// 子序号 (控件内部下标: 候选值下标 / 加减按钮等; 非控件场景为 0)
     int sub = 0;
     /// 区域类型 (决定命中后的处理方式)
@@ -117,9 +117,9 @@ struct UiHitRegion {
 
     /// 按偏移平移 (容器组合子项时使用)
     UiHitRegion offsetBy(int dx, int dy) const {
-        UiHitRegion out = *this;
-        out.x += dx;
-        out.y += dy;
+        UiHitRegion out  = *this;
+        out.x           += dx;
+        out.y           += dy;
         return out;
     }
 };
@@ -145,16 +145,18 @@ public:
 
     /// 命中查询结果 (命中项 + 命中的子区域与局部坐标)
     struct FindResult {
-        const Entry*        entry  = nullptr;
+        const Entry* entry = nullptr;
         /// 命中的子区域 (整块登记时为 nullptr)
-        const UiHitRegion*  region = nullptr;
+        const UiHitRegion* region = nullptr;
         /// 命中点相对元素左上角的局部坐标
-        int                 localX = 0;
-        int                 localY = 0;
+        int localX = 0;
+        int localY = 0;
+
         /// 命中的动作标识 (有子区域时取区域 id, 否则为空)
         std::string_view id() const {
             return (region != nullptr) ? std::string_view{region->id} : std::string_view{};
         }
+
         /// 命中的附加参数 (有子区域时取区域参数, 否则为空)
         std::string_view arg() const {
             return (region != nullptr) ? std::string_view{region->arg} : std::string_view{};
@@ -191,7 +193,8 @@ public:
     /// 登记"元素 + 元素内若干可命中子区域": 返回的元素已附加 reflect
     /// - 子区域坐标相对该元素左上角 (见 [UiHitRegion]); 命中时返回 (payload, 区域, 局部坐标)
     /// - Box 归属说明同 [add]
-    ftxui::Element addRegions(ftxui::Element element, Payload payload, std::vector<UiHitRegion> regions) {
+    ftxui::Element
+        addRegions(ftxui::Element element, Payload payload, std::vector<UiHitRegion> regions) {
         entries_.push_back(Entry{
             std::move(payload),
             std::make_shared<ftxui::Box>(kNoBox),
@@ -241,11 +244,8 @@ public:
 
     /// 在登记项内查询命中的子区域 (不关心是哪个元素; 供调用方已经自行定位了
     /// 命中元素 (如滚动容器经 [Scrollable::hitTestItem] 定位) 的场景)
-    static const UiHitRegion* matchRegion(
-        const std::vector<UiHitRegion>& regions,
-        int                             localX,
-        int                             localY
-    ) {
+    static const UiHitRegion*
+        matchRegion(const std::vector<UiHitRegion>& regions, int localX, int localY) {
         for (const auto& region : regions) {
             if (region.contains(localX, localY)) {
                 return &region;
@@ -293,11 +293,8 @@ using UiHitMap = UiHitRegistry<UiHitInfo>;
 /// 在区域列表内按局部坐标查询命中项 (调用方已自行定位到元素时使用, 例如
 /// 滚动容器经 [Scrollable::hitTestItem] 得到子项下标与局部坐标后)
 /// - 未命中返回 nullptr
-inline const UiHitRegion* matchUiHitRegion(
-    const std::vector<UiHitRegion>& regions,
-    int                             localX,
-    int                             localY
-) {
+inline const UiHitRegion*
+    matchUiHitRegion(const std::vector<UiHitRegion>& regions, int localX, int localY) {
     for (const auto& region : regions) {
         if (region.contains(localX, localY)) {
             return &region;

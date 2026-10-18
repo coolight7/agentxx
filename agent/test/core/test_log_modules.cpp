@@ -68,10 +68,7 @@ TestResult testLogModuleLevels() {
         std::string{utilxx_base::logModuleOf("plain_file.h")},
         std::string{"plain_file"}
     );
-    XX_TEST_EXPECT_EQ(
-        std::string{utilxx_base::logModuleOf("a.b.c.cpp")},
-        std::string{"a.b.c"}
-    );
+    XX_TEST_EXPECT_EQ(std::string{utilxx_base::logModuleOf("a.b.c.cpp")}, std::string{"a.b.c"});
     XX_TEST_EXPECT_EQ(std::string{utilxx_base::logModuleOf("noext")}, std::string{"noext"});
     XX_TEST_EXPECT_TRUE(utilxx_base::logModuleOf("").empty());
 
@@ -80,7 +77,7 @@ TestResult testLogModuleLevels() {
     XX_TEST_EXPECT_EQ(LogDispatcher::instance().moduleLevelCount(), size_t{0});
     {
         std::vector<std::string> invalid;
-        const auto applied = utilxx_base::applyLogModuleLevelSpec(
+        const auto               applied = utilxx_base::applyLogModuleLevelSpec(
             "modelcall=debug, toolcall=TRACE ,plugin.=Warn",
             &invalid
         );
@@ -91,7 +88,7 @@ TestResult testLogModuleLevels() {
     {
         // 非法段: 缺 `=` / 空前缀 / 级别名不认识; 结尾逗号与空段不算错误
         std::vector<std::string> invalid;
-        const auto applied = utilxx_base::applyLogModuleLevelSpec(
+        const auto               applied = utilxx_base::applyLogModuleLevelSpec(
             "noequals,=debug,bogus=nope,, good=info,",
             &invalid
         );

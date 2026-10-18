@@ -31,14 +31,14 @@
 
 #include "agentxx/feature/value_cache.h"
 #include "agentxx/util/exception.h"
-#include "utilxx/async_offload.h"
-#include "utilxx_base/json.h"
-#include "utilxx_base/log.h"
 #include "asio/awaitable.hpp"
 #include "asio/redirect_error.hpp"
 #include "asio/steady_timer.hpp"
 #include "asio/use_awaitable.hpp"
 #include "fmt/format.h"
+#include "utilxx/async_offload.h"
+#include "utilxx_base/json.h"
+#include "utilxx_base/log.h"
 #include <algorithm>
 #include <chrono>
 #include <concepts>
@@ -122,8 +122,8 @@ struct PointOptions {
 
 /// 实现在运行期收到的调用上下文 (核心实现直接拿到它)
 struct ImplContext {
-    std::string point;           ///< 功能点 id
-    std::string owner;           ///< 本实现的归属 (`plugin:<名>` / `host:<名>` / `core:<域>:<实现>`)
+    std::string point; ///< 功能点 id
+    std::string owner; ///< 本实现的归属 (`plugin:<名>` / `host:<名>` / `core:<域>:<实现>`)
     std::string caller;          ///< 调用方 (空串 = 应用自己)
     bool        viaCall = false; ///< true = 外部主动调用 (零副作用契约)
     std::string identity;        ///< 本次身份
@@ -140,7 +140,7 @@ struct ImplSpec {
     using CancelFn = std::function<void()>;
 
     ImplLayer   layer = ImplLayer::Plugin;
-    std::string owner;                ///< 归属标签 (清单里显示)
+    std::string owner; ///< 归属标签 (清单里显示)
     int32_t     priority         = kPluginDefaultPriority;
     int32_t     defaultTimeoutMs = 0; ///< 实现自报的最大耗时 (0 = 不限)
     std::string load;                 ///< `dynamic` / `builtin` (仅展示, 不影响顺序)
@@ -152,9 +152,9 @@ struct ImplSpec {
 /// 一次调用在各层之间传递的上下文 (点内部使用)
 struct ChainEnv {
     std::string requestJson; ///< 应用点解析后的规范请求 (插件点为空对象)
-    std::string argsJson;    ///< 传给实现的参数 (核心点 = 规范请求; 插件点 = 调用方原样参数)
-    std::string identity;    ///< 本次身份
-    std::string caller;      ///< 调用方 (空串 = 应用自己)
+    std::string argsJson; ///< 传给实现的参数 (核心点 = 规范请求; 插件点 = 调用方原样参数)
+    std::string identity; ///< 本次身份
+    std::string caller;   ///< 调用方 (空串 = 应用自己)
     std::string sessionId;
     bool        viaCall = false;
     /// 强类型请求的借用指针 (`ProvidePoint` 自己设置与读取; 核心实现据此跳过 JSON)
@@ -237,11 +237,11 @@ template<class TValue>
 struct FeatureResult {
     CallError             error = CallError::None;
     std::optional<TValue> value;
-    std::string           by;       ///< 谁给的 (`core:<域>:<实现>` / `plugin:<名>` / `host:<名>`)
+    std::string           by; ///< 谁给的 (`core:<域>:<实现>` / `plugin:<名>` / `host:<名>`)
     std::string           identity; ///< 本次身份 (调用方可据此自己缓存)
     bool                  fromCache = false;
     int64_t               ms        = 0;
-    std::string           message;  ///< 失败时一定有可读说明
+    std::string           message; ///< 失败时一定有可读说明
 
     /// 是否拿到值
     bool ok() const noexcept {
@@ -319,7 +319,7 @@ public:
     void               setOrigin(std::string origin);
 
     /// 是否允许被外部主动调用
-    bool    callable() const noexcept;
+    bool callable() const noexcept;
     /// 等单个插件实现的超时 (毫秒; 0 = 不限)
     int32_t implTimeoutMs() const noexcept;
 
@@ -444,9 +444,9 @@ protected:
     struct ImplView {
         ImplLayer   layer = ImplLayer::Plugin;
         std::string owner;
-        int32_t     priority      = 0;
+        int32_t     priority         = 0;
         int32_t     defaultTimeoutMs = 0;
-        uint64_t    seq           = 0;
+        uint64_t    seq              = 0;
         std::string load;
         std::string note;
     };
@@ -456,21 +456,21 @@ protected:
 
     /// in-flight 表项完成后发布结果并唤醒等待者
     void publishInFlight(
-        const std::string&                identity,
-        const std::shared_ptr<InFlight>&  slot,
-        ChainOutcome                      outcome
+        const std::string&               identity,
+        const std::shared_ptr<InFlight>& slot,
+        ChainOutcome                     outcome
     );
 
-    std::string                              id_;
-    PointType                                type_ = PointType::Provide;
-    PointOptions                             opts_;
-    std::string                              origin_;
-    std::vector<ImplEntry>                   impls_;
-    uint64_t                                 seqCounter_ = 0;
-    std::string                              disabledBy_;
-    ValueCache                               cache_;
-    PointStats                               stats_;
-    std::set<std::string, std::less<>>       activeCallers_;
+    std::string                                                   id_;
+    PointType                                                     type_ = PointType::Provide;
+    PointOptions                                                  opts_;
+    std::string                                                   origin_;
+    std::vector<ImplEntry>                                        impls_;
+    uint64_t                                                      seqCounter_ = 0;
+    std::string                                                   disabledBy_;
+    ValueCache                                                    cache_;
+    PointStats                                                    stats_;
+    std::set<std::string, std::less<>>                            activeCallers_;
     std::map<std::string, std::shared_ptr<InFlight>, std::less<>> inFlight_;
 };
 
@@ -489,8 +489,8 @@ public:
     using ReqType   = TReq;
     using ValueType = TValue;
     /// 核心实现: 返回 nullopt 表示"没意见, 继续问下一个"
-    using CoreImplFn =
-        std::function<asio::awaitable<std::optional<TValue>>(const TReq&, const ImplContext&)>;
+    using CoreImplFn
+        = std::function<asio::awaitable<std::optional<TValue>>(const TReq&, const ImplContext&)>;
     /// 身份规则: 由点声明"这次要算的是哪一份输入"
     using IdentityFn = std::function<std::string(const TReq&)>;
 
@@ -510,9 +510,13 @@ public:
             }
         }
         coreImpls_.push_back(CoreImpl{std::move(owner), clampPriority(priority), std::move(fn)});
-        std::stable_sort(coreImpls_.begin(), coreImpls_.end(), [](const CoreImpl& a, const CoreImpl& b) {
-            return a.priority < b.priority;
-        });
+        std::stable_sort(
+            coreImpls_.begin(),
+            coreImpls_.end(),
+            [](const CoreImpl& a, const CoreImpl& b) {
+                return a.priority < b.priority;
+            }
+        );
     }
 
     /// 撤销核心实现 (按归属)
@@ -575,8 +579,8 @@ protected:
 
     /// 追加核心层实现到清单视图 (跨层的排序由基类按 (层, 优先级, 登记顺序) 统一处理)
     std::vector<ImplView> implViews() const override {
-        auto views = PointBase::implViews();
-        uint64_t seq = 0;
+        auto     views = PointBase::implViews();
+        uint64_t seq   = 0;
         for (const auto& item : coreImpls_) {
             views.push_back(ImplView{
                 ImplLayer::Core,
@@ -599,7 +603,7 @@ protected:
         }
 
         // 2) core 层 (强类型实现); 请求解码失败等价于"没有核心实现"
-        const TReq* reqPtr = static_cast<const TReq*>(env.typedRequest);
+        const TReq*         reqPtr = static_cast<const TReq*>(env.typedRequest);
         std::optional<TReq> decoded;
         if (reqPtr == nullptr) {
             decoded = Codec<TReq>::fromJson(env.requestJson);
@@ -629,7 +633,8 @@ protected:
                     [&fnRef, &reqRef, &ictx]() -> asio::awaitable<std::optional<TValue>> {
                         co_return co_await fnRef(reqRef, ictx);
                     },
-                    [this, &ownerRef](std::string errmsg) -> asio::awaitable<std::optional<TValue>> {
+                    [this,
+                     &ownerRef](std::string errmsg) -> asio::awaitable<std::optional<TValue>> {
                         // 实现抛异常只等于"没意见": 记一条警告后继续问下一个实现
                         XX_LOGW(
                             "功能点 `{}` 的核心实现 `{}` 失败, 按没意见继续: {}",

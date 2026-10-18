@@ -565,7 +565,7 @@ static std::string normalizePathForCompare(std::string path) {
 /// - boost.process 路径: PWD 与子进程 cwd 同一取值 (会话工作目录)
 /// - popen 回退路径: 改不了子进程目录, 命令在主程序当前目录下跑, PWD 取进程当前目录
 asio::awaitable<void> test_command_pwd_env(std::weak_ptr<agentxx::agent::AgentContext>) {
-    namespace fs    = std::filesystem;
+    namespace fs       = std::filesystem;
     auto            wd = (fs::temp_directory_path() / "agentxx_test_cmd_pwd").generic_string();
     std::error_code ec;
     fs::remove_all(wd, ec);
@@ -580,10 +580,14 @@ asio::awaitable<void> test_command_pwd_env(std::weak_ptr<agentxx::agent::AgentCo
 #if XX_IS_WIN_D
     auto tool = agentxx::tools::ExecuteWindowsCommandTool{ctx};
     // PowerShell 不像 POSIX shell 那样自动设置 PWD, 读到的就是本插件下发的取值
-    auto args = utilxx_base::Json{{"command", "Write-Output $env:PWD"}};
+    auto args = utilxx_base::Json{
+        {"command", "Write-Output $env:PWD"}
+    };
 #else
     auto tool = agentxx::tools::ExecuteBashCommandTool{ctx};
-    auto args = utilxx_base::Json{{"command", "printenv PWD"}};
+    auto args = utilxx_base::Json{
+        {"command", "printenv PWD"}
+    };
 #endif
     auto result = co_await tool.execute_async(args);
 
@@ -766,10 +770,9 @@ asio::awaitable<void>
         "{} -c \"import sys;print(sys.stdout.encoding, getattr(sys.flags,'utf8_mode','n/a'))\"",
         env.python.exeName
     );
-    const auto chineseCmd
-        = fmt::format("{} -c \"print('\\u4e2d\\u6587')\"", env.python.exeName);
+    const auto chineseCmd = fmt::format("{} -c \"print('\\u4e2d\\u6587')\"", env.python.exeName);
 #else
-    auto tool = agentxx::tools::ExecuteBashCommandTool{agentContext};
+    auto       tool        = agentxx::tools::ExecuteBashCommandTool{agentContext};
     const auto encodingCmd = fmt::format(
         "{} -c 'import sys;print(sys.stdout.encoding, getattr(sys.flags,"
         "\"utf8_mode\",\"n/a\"))'",
@@ -790,8 +793,9 @@ asio::awaitable<void>
           "os.environ.get('AGENTXX_EXEC_ANSI_CODEPAGE'))";
     const auto envProbeCmd = fmt::format("{} -c \"{}\"", env.python.exeName, envProbePy);
 
-    auto encodingResult
-        = co_await tool.execute_async(utilxx_base::Json{{"command", encodingCmd}});
+    auto encodingResult = co_await tool.execute_async(utilxx_base::Json{
+        {"command", encodingCmd}
+    });
     XX_TEST_EXPECT_TRUE(encodingResult.find("utf-8") != std::string::npos);
     if (utf8ModeSupported) {
         // PYTHONUTF8=1 生效时 stdout 编码与 sys.flags.utf8_mode 同时为 utf-8 / 1
@@ -803,10 +807,14 @@ asio::awaitable<void>
     TEST_INFO << "python stdout encoding of child process: "
               << utilxx_base::removeBetweenSpace(encodingResult) << std::endl;
 
-    auto chineseResult = co_await tool.execute_async(utilxx_base::Json{{"command", chineseCmd}});
+    auto chineseResult = co_await tool.execute_async(utilxx_base::Json{
+        {"command", chineseCmd}
+    });
     XX_TEST_EXPECT_TRUE(chineseResult.find("中文") != std::string::npos);
 
-    auto envResult = co_await tool.execute_async(utilxx_base::Json{{"command", envProbeCmd}});
+    auto envResult = co_await tool.execute_async(utilxx_base::Json{
+        {"command", envProbeCmd}
+    });
     // 期望输出: stdio 编码预设 / UTF-8 模式 / java 输出与默认字符集选项 / 系统代码页
     // (非 Windows 不下发代码页变量, 探测结果为 None)
     const auto        pages          = agentxx_execmd_plugin::systemCodePages();
@@ -839,15 +847,16 @@ asio::awaitable<void>
         TEST_INFO << "skip output encoding recipe test: system code page is UTF-8" << std::endl;
         co_return;
     }
-    const auto command = std::string{
-        "[Console]::Out.WriteLine('utf8-line 中文'); "
-        "$f=Join-Path $env:TEMP 'agentxx_cp_probe.txt'; "
-        "$cp=[Text.Encoding]::GetEncoding([int]$env:AGENTXX_EXEC_OEM_CODEPAGE); "
-        "[IO.File]::WriteAllBytes($f,$cp.GetBytes('native-line 中文')); "
-        "[IO.File]::ReadAllText($f,$cp)"
-    };
+    const auto command
+        = std::string{"[Console]::Out.WriteLine('utf8-line 中文'); "
+                      "$f=Join-Path $env:TEMP 'agentxx_cp_probe.txt'; "
+                      "$cp=[Text.Encoding]::GetEncoding([int]$env:AGENTXX_EXEC_OEM_CODEPAGE); "
+                      "[IO.File]::WriteAllBytes($f,$cp.GetBytes('native-line 中文')); "
+                      "[IO.File]::ReadAllText($f,$cp)"};
     auto tool   = agentxx::tools::ExecuteWindowsCommandTool{agentContext};
-    auto result = co_await tool.execute_async(utilxx_base::Json{{"command", command}});
+    auto result = co_await tool.execute_async(utilxx_base::Json{
+        {"command", command}
+    });
 
     XX_TEST_EXPECT_TRUE(result.find("utf8-line 中文") != std::string::npos);
     XX_TEST_EXPECT_TRUE(result.find("native-line 中文") != std::string::npos);

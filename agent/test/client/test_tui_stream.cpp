@@ -1179,7 +1179,7 @@ void testTuiStreamScenario12(asio::io_context& ioCtx) {
     // 轮次结束: 占位提示不残留
     {
         WireDelta d;
-        d.type = WireDelta::Type::GenStatus;
+        d.type     = WireDelta::Type::GenStatus;
         d.genPhase = GP::Waiting;
         client.testOnDelta(d);
 

@@ -3,8 +3,8 @@
 #include "agentxx/agent/assembly_snapshot.h"
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/session_store.h"
-#include "agentxx/util/observability.h"
 #include "agentxx/plugin/plugin_manager.h"
+#include "agentxx/util/observability.h"
 #include "agentxx/util/task_scope.h"
 #include "agentxx/version.h"
 #include "fmt/format.h"
@@ -56,9 +56,8 @@ public:
 
     std::vector<std::string> snapshot(size_t limit) const {
         std::lock_guard<std::mutex> lock(mutex_);
-        const size_t                count = (limit == 0 || limit > lines_.size()) ? lines_.size()
-                                                                                  : limit;
-        const size_t                begin = lines_.size() - count;
+        const size_t count = (limit == 0 || limit > lines_.size()) ? lines_.size() : limit;
+        const size_t begin = lines_.size() - count;
         return {lines_.begin() + static_cast<std::ptrdiff_t>(begin), lines_.end()};
     }
 
@@ -102,15 +101,15 @@ public:
 
 private:
 
-    mutable std::mutex       mutex_;
-    std::deque<std::string>  lines_;
-    size_t                   capacity_;
+    mutable std::mutex      mutex_;
+    std::deque<std::string> lines_;
+    size_t                  capacity_;
 };
 
 /// 进程级捕获 sink (首次 [enableLogCapture] 时安装)
-std::mutex                        gCaptureMutex;
-std::shared_ptr<CaptureLogSink>   gCaptureSink;
-bool                              gCaptureInstalled = false;
+std::mutex                      gCaptureMutex;
+std::shared_ptr<CaptureLogSink> gCaptureSink;
+bool                            gCaptureInstalled = false;
 
 } // namespace
 
@@ -177,14 +176,18 @@ std::string redactSecrets(const std::string_view text) {
     out = std::regex_replace(out, kKeyValue, "$1***");
 
     // ② `sk-xxxx` / `ghp_xxxx` / `github_pat_xxxx` 之类的裸 token
-    static const std::regex kBareToken{R"re(\b(sk-[A-Za-z0-9_\-]{8,}|gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}))re"};
+    static const std::regex kBareToken{
+        R"re(\b(sk-[A-Za-z0-9_\-]{8,}|gh[pousr]_[A-Za-z0-9]{16,}|github_pat_[A-Za-z0-9_]{16,}))re"
+    };
     out = std::regex_replace(out, kBareToken, "***");
 
     // ③ URL 里的 userinfo (https://user:pass@host) 与查询参数里的 key/token
     static const std::regex kUrlUserInfo{R"re((://[^/\s:@]+:)[^@\s/]+(@))re"};
     out = std::regex_replace(out, kUrlUserInfo, "$1***$2");
-    static const std::regex kUrlQuery{R"re(([?&](?:api_?key|access_?token|token|key|secret)=)[^&\s]+)re"};
-    out  = std::regex_replace(out, kUrlQuery, "$1***");
+    static const std::regex kUrlQuery{
+        R"re(([?&](?:api_?key|access_?token|token|key|secret)=)[^&\s]+)re"
+    };
+    out = std::regex_replace(out, kUrlQuery, "$1***");
 
     return out;
 }
@@ -197,9 +200,9 @@ namespace {
 
 /// 会话段: 计数/用量/存储体积 (默认不含消息正文)
 std::vector<std::string> sessionSection(
-    agent::AgentContext&         ctx,
-    const std::string_view       sessionId,
-    const DiagnosticsOptions&    options
+    agent::AgentContext&      ctx,
+    const std::string_view    sessionId,
+    const DiagnosticsOptions& options
 ) {
     std::vector<std::string> lines;
     if (sessionId.empty()) {
@@ -220,9 +223,8 @@ std::vector<std::string> sessionSection(
         }
     }
 
-    const auto store = (ctx.sessions && ctx.sessions->sessionStore)
-                           ? ctx.sessions->sessionStore
-                           : nullptr;
+    const auto store
+        = (ctx.sessions && ctx.sessions->sessionStore) ? ctx.sessions->sessionStore : nullptr;
     if (!store) {
         lines.push_back("- persistence: disabled (in-memory only)");
         return lines;
@@ -253,7 +255,9 @@ std::vector<std::string> sessionSection(
         "- persisted llm messages: {}",
         loaded.llmMessages.is_array() ? loaded.llmMessages.size() : 0
     ));
-    lines.push_back(fmt::format("- share store last id: {}", store->shareStoreLastId(std::string{sessionId})));
+    lines.push_back(
+        fmt::format("- share store last id: {}", store->shareStoreLastId(std::string{sessionId}))
+    );
 
     if (options.includeMessages) {
         const auto rows = store->loadViewMessagesAfter(std::string{sessionId}, 0, 50);
@@ -265,12 +269,9 @@ std::vector<std::string> sessionSection(
                 text += "...";
             }
             // 消息正文也可能被用户粘进凭据, 一并屏蔽
-            lines.push_back(fmt::format(
-                "    - #{} [{}] {}",
-                row.seq,
-                row.message.id,
-                redactSecrets(text)
-            ));
+            lines.push_back(
+                fmt::format("    - #{} [{}] {}", row.seq, row.message.id, redactSecrets(text))
+            );
         }
     }
     return lines;
@@ -279,17 +280,17 @@ std::vector<std::string> sessionSection(
 } // namespace
 
 std::string buildDiagnosticsText(
-    agent::AgentContext&         ctx,
-    const std::string_view       sessionId,
-    const DiagnosticsOptions&    options
+    agent::AgentContext&      ctx,
+    const std::string_view    sessionId,
+    const DiagnosticsOptions& options
 ) {
     std::vector<std::string> lines;
     lines.push_back("# agentxx diagnostics");
     lines.push_back("");
     {
         // 本地时间字符串 (strftime; 不用 fmt 的时间格式化, 避免依赖 fmt 的 chrono 支持)
-        const auto  now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
-        std::tm     tmBuf{};
+        const auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+        std::tm    tmBuf{};
 #if XX_IS_WIN_D
         localtime_s(&tmBuf, &now);
 #else
@@ -320,10 +321,8 @@ std::string buildDiagnosticsText(
         lines.push_back("");
         lines.push_back("## assembly");
         const auto configSnapshot = agent::buildConfigSnapshot(*ctx.agentConfig);
-        auto       snapshot       = agent::mergeAssemblySnapshot(
-            configSnapshot,
-            agent::buildRuntimeSnapshot(ctx)
-        );
+        auto       snapshot
+            = agent::mergeAssemblySnapshot(configSnapshot, agent::buildRuntimeSnapshot(ctx));
         for (const auto& line : agent::renderAssemblySnapshot(snapshot)) {
             lines.push_back(fmt::format("- {}", line));
         }

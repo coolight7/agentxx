@@ -68,11 +68,11 @@ int g_ftxui_text_failed = 0;
 // (GCC/Clang 的 libasan 与 compiler-rt 都导出 `__sanitizer_get_current_allocated_bytes`),
 // 但 GCC 的 sanitizer 头里没有 allocator_interface.h (clang 才有), 故按 C 接口自行声明。
 #if defined(__SANITIZE_ADDRESS__)
-#  define XX_TEST_WITH_ASAN 1
+#define XX_TEST_WITH_ASAN 1
 #elif defined(__has_feature)
-#  if __has_feature(address_sanitizer)
-#    define XX_TEST_WITH_ASAN 1
-#  endif
+#if __has_feature(address_sanitizer)
+#define XX_TEST_WITH_ASAN 1
+#endif
 #endif
 #ifdef XX_TEST_WITH_ASAN
 extern "C" size_t __sanitizer_get_current_allocated_bytes(void);
@@ -173,8 +173,8 @@ std::string rowText(const std::vector<std::string>& cells, int w, int y) {
     std::string out;
     bool        previous_fullwidth = false;
     for (int x = 0; x < w; ++x) {
-        const std::string& ch = cells[static_cast<size_t>(y) * static_cast<size_t>(w)
-                                      + static_cast<size_t>(x)];
+        const std::string& ch
+            = cells[static_cast<size_t>(y) * static_cast<size_t>(w) + static_cast<size_t>(x)];
         if (!previous_fullwidth) {
             out += ch.empty() ? std::string{" "} : ch;
         }
@@ -187,15 +187,7 @@ std::string rowText(const std::vector<std::string>& cells, int w, int y) {
 }
 
 /// 按 FTXUI 拖选路径取回 [x0, y0] - [x1, y1] 区域内的文本
-std::string selectText(
-    const Element& el,
-    int            w,
-    int            h,
-    int            x0,
-    int            y0,
-    int            x1,
-    int            y1
-) {
+std::string selectText(const Element& el, int w, int h, int x0, int y0, int x1, int y1) {
     el->ComputeRequirement();
     el->SetBox(Box{0, w - 1, 0, h - 1});
     Selection selection(x0, y0, x1, y1);
@@ -226,7 +218,11 @@ TestResult testFtxuiText() {
         XX_TEST_EXPECT_TRUE(req("e\xCC\x81x") == std::make_pair(2, 1));
         // 控制字符不占列 ('\r' 与 '\x01' 都丢弃; 字面量拆开写, 避免
         // "\x01b" 被当作单个十六进制转义 0x1B)
-        XX_TEST_EXPECT_TRUE(req("a\x01" "b") == std::make_pair(2, 1));
+        XX_TEST_EXPECT_TRUE(
+            req("a\x01"
+                "b")
+            == std::make_pair(2, 1)
+        );
         XX_TEST_EXPECT_TRUE(req("a\r\nb") == std::make_pair(1, 2));
     }
 
@@ -272,9 +268,15 @@ TestResult testFtxuiText() {
     // ---------------- 选择取文本 ----------------
     {
         XX_TEST_EXPECT_EQ(selectText(text("hello world"), 11, 1, 0, 0, 4, 0), std::string{"hello"});
-        XX_TEST_EXPECT_EQ(selectText(text("hello world"), 11, 1, 6, 0, 10, 0), std::string{"world"});
+        XX_TEST_EXPECT_EQ(
+            selectText(text("hello world"), 11, 1, 6, 0, 10, 0),
+            std::string{"world"}
+        );
         // 选择区间超出盒宽时按盒宽收敛 (SaturateHorizontal)
-        XX_TEST_EXPECT_EQ(selectText(text("hello world"), 11, 1, 0, 0, 99, 0), std::string{"hello world"});
+        XX_TEST_EXPECT_EQ(
+            selectText(text("hello world"), 11, 1, 0, 0, 99, 0),
+            std::string{"hello world"}
+        );
         // 跨行选择: 行间以换行分隔 —— 起点行从起点列取到行尾, 结束行从行首取到
         // 终点列, 中间行整行 (见 ftxui::Selection::RowRange)
         XX_TEST_EXPECT_EQ(selectText(text("abc\ndef"), 3, 2, 0, 0, 2, 1), std::string{"abc\ndef"});
@@ -286,7 +288,10 @@ TestResult testFtxuiText() {
         XX_TEST_EXPECT_EQ(selectText(text("汉字"), 4, 1, 2, 0, 3, 0), std::string{"字"});
         XX_TEST_EXPECT_EQ(selectText(text("汉字"), 4, 1, 0, 0, 3, 0), std::string{"汉字"});
         // 组合字符随其所修饰的字符一起被选中
-        XX_TEST_EXPECT_EQ(selectText(text("e\xCC\x81x"), 2, 1, 0, 0, 0, 0), std::string{"e\xCC\x81"});
+        XX_TEST_EXPECT_EQ(
+            selectText(text("e\xCC\x81x"), 2, 1, 0, 0, 0, 0),
+            std::string{"e\xCC\x81"}
+        );
         XX_TEST_EXPECT_EQ(selectText(text("e\xCC\x81x"), 2, 1, 1, 0, 1, 0), std::string{"x"});
 
         // 端点落在同一行的空白列 (没有任何节点绘制的列, 如列表项续行的悬挂缩进、
@@ -359,8 +364,8 @@ TestResult testFtxuiText() {
         auto builder = std::make_unique<markdown::DomBuilder>();
         builder->set_max_width(97);
 
-        Element     element;
-        const auto  allocated = measureHeapDelta([&] {
+        Element    element;
+        const auto allocated = measureHeapDelta([&] {
             element = builder->build(ast, -1, markdown::theme_default());
         });
         if (!allocated.has_value()) {

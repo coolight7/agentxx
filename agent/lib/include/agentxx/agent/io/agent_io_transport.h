@@ -24,9 +24,9 @@ namespace agent {
 ///
 /// 客户端据此展示"已开始 / 已排队 / 已注入 / 被拒绝", 不再从 delta 猜测。
 struct InputStatus {
-    inline static constexpr std::string_view Started  = "started";  ///< 已立即开始新轮次
-    inline static constexpr std::string_view Queued   = "queued";   ///< 已受理, 排队等待
-    inline static constexpr std::string_view Steered  = "steered";  ///< 已注入当前轮次
+    inline static constexpr std::string_view Started = "started";   ///< 已立即开始新轮次
+    inline static constexpr std::string_view Queued  = "queued";    ///< 已受理, 排队等待
+    inline static constexpr std::string_view Steered = "steered";   ///< 已注入当前轮次
     inline static constexpr std::string_view Rejected = "rejected"; ///< 未受理 (原因见 reason)
 };
 
@@ -206,13 +206,13 @@ struct WireUserInput {
 /// 仅在 `WireUserInput.requestId > 0` 时发送: 老客户端不认识本消息类型,
 /// WS 解码遇到未知类型会断开连接, 因此不能用"总是回执"的方式。
 struct WireInputAck {
-    uint64_t    requestId = 0;  ///< 回显请求序号 (客户端据此关联本地输入)
+    uint64_t    requestId = 0; ///< 回显请求序号 (客户端据此关联本地输入)
     std::string sessionId;
-    std::string delivery;       ///< 归一化后的投递模式 ([InputDelivery])
-    std::string status;         ///< 受理状态 ([InputStatus])
-    std::string reason;         ///< 拒绝原因 ([InputRejectReason]; 仅 rejected)
-    std::string detail;         ///< 给人看的说明 (可本地化/含细节)
-    std::string itemId;         ///< 队列条目 id (queued/started 时有值)
+    std::string delivery; ///< 归一化后的投递模式 ([InputDelivery])
+    std::string status;   ///< 受理状态 ([InputStatus])
+    std::string reason;   ///< 拒绝原因 ([InputRejectReason]; 仅 rejected)
+    std::string detail;   ///< 给人看的说明 (可本地化/含细节)
+    std::string itemId;   ///< 队列条目 id (queued/started 时有值)
 };
 
 struct WireCancel {
@@ -250,7 +250,7 @@ struct WireTurnResult {
     std::string errorMessage;
     int64_t     startTimeMs = 0; // 轮次开始时间戳 (毫秒)
     int64_t     durationMs  = 0; // 运行时长 (毫秒)
-    bool        hasError = false;
+    bool        hasError    = false;
     bool        interrupted = false;
 };
 
@@ -590,7 +590,7 @@ struct WireAddModel {
     std::string apiPath;   ///< 自定义 API 路径 (可空 = 按类型用默认路径)
     std::string apiKey;    ///< API Key (无鉴权服务填 EMPTY)
     std::string modelName; ///< 请求体里的 model 字段值
-    uint64_t    modelContextMaxToken    = 0;
+    uint64_t    modelContextMaxToken     = 0;
     uint64_t    maxConcurrentConnections = 5;
     int32_t     connectTimeoutSeconds    = 16;
     int32_t     readChunkTimeoutSeconds  = 60;
@@ -648,9 +648,9 @@ struct WireRemoveModelResult {
 
 /// 主程序/客户端注册的工具元数据
 struct WireHostToolInfo {
-    std::string       name;          ///< 工具名
-    std::string       description;   ///< 工具描述
-    utilxx_base::Json inputSchema;   ///< JSON Schema 对象
+    std::string       name;              ///< 工具名
+    std::string       description;       ///< 工具描述
+    utilxx_base::Json inputSchema;       ///< JSON Schema 对象
     uint32_t          timeoutSec    = 0; ///< 超时秒数 (0 = 不限)
     uint32_t          maxConcurrent = 0; ///< 最大并发数 (0 = 默认)
 };

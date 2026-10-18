@@ -97,54 +97,53 @@ asio::awaitable<neograph::ChatCompletion> ModelCallWrapNode::onReceiveToken(
     auto                               callback = input.stream_cb;
     neograph::FormatDataStreamCallback onToken;
     if (nullptr != callback) {
-        onToken = [&input, callback, ctxPtr, agentCtx, this](
-                      const neograph::ChatStreamChunk& token
-                  ) {
-            switch (token.type) {
-                case neograph::ChatStreamChunk::TYPE_CONTENT: {
-                    // 关键指标: 本轮首个正文/思考 token 的时间 (TTFT;
-                    // 同一轮只记第一次, 见 KeyMetrics) —— 这里只记"有内容到达"的事件
-                    if (agentCtx && agentCtx->metrics) {
-                        agentCtx->metrics->noteFirstToken();
-                    }
-                    // 记录 本次请求的临时LLM消息，以便触发异常时处理
-                    ctxPtr->modifyGraphDataItemValue<std::string>(
-                        input.ctx.thread_id,
-                        agentxx::middleware::MiddlewareContext::graphDataKey_tempLLMContent,
-                        [&token](std::string& msg) {
-                            msg += token.data;
-                        }
-                    );
-                } break;
-                case neograph::ChatStreamChunk::TYPE_THINKING: {
-                    if (agentCtx && agentCtx->metrics) {
-                        agentCtx->metrics->noteFirstToken();
-                    }
-                    ctxPtr->modifyGraphDataItemValue<std::string>(
-                        input.ctx.thread_id,
-                        agentxx::middleware::MiddlewareContext::graphDataKey_tempLLMThinking,
-                        [&token](std::string& msg) {
-                            msg += token.data;
-                        }
-                    );
-                } break;
-                default:
-                    // 生成阶段标记 (请求已发出 / 工具调用开始, 见
-                    // protocol/provider_common.h): 不是模型输出文本, 不参与正文与
-                    // 思考累积, 只随下面的事件转发给 UI (占位提示)
-                    break;
-            }
+        onToken
+            = [&input, callback, ctxPtr, agentCtx, this](const neograph::ChatStreamChunk& token) {
+                  switch (token.type) {
+                      case neograph::ChatStreamChunk::TYPE_CONTENT: {
+                          // 关键指标: 本轮首个正文/思考 token 的时间 (TTFT;
+                          // 同一轮只记第一次, 见 KeyMetrics) —— 这里只记"有内容到达"的事件
+                          if (agentCtx && agentCtx->metrics) {
+                              agentCtx->metrics->noteFirstToken();
+                          }
+                          // 记录 本次请求的临时LLM消息，以便触发异常时处理
+                          ctxPtr->modifyGraphDataItemValue<std::string>(
+                              input.ctx.thread_id,
+                              agentxx::middleware::MiddlewareContext::graphDataKey_tempLLMContent,
+                              [&token](std::string& msg) {
+                                  msg += token.data;
+                              }
+                          );
+                      } break;
+                      case neograph::ChatStreamChunk::TYPE_THINKING: {
+                          if (agentCtx && agentCtx->metrics) {
+                              agentCtx->metrics->noteFirstToken();
+                          }
+                          ctxPtr->modifyGraphDataItemValue<std::string>(
+                              input.ctx.thread_id,
+                              agentxx::middleware::MiddlewareContext::graphDataKey_tempLLMThinking,
+                              [&token](std::string& msg) {
+                                  msg += token.data;
+                              }
+                          );
+                      } break;
+                      default:
+                          // 生成阶段标记 (请求已发出 / 工具调用开始, 见
+                          // protocol/provider_common.h): 不是模型输出文本, 不参与正文与
+                          // 思考累积, 只随下面的事件转发给 UI (占位提示)
+                          break;
+                  }
 
-            if (nullptr != callback) {
-                neograph::json neoJson;
-                neograph::to_json(neoJson, token);
-                (*callback)(neograph::graph::GraphEvent{
-                    neograph::graph::GraphEvent::Type::LLM_TOKEN,
-                    nodeName,
-                    neoJson,
-                });
-            }
-        };
+                  if (nullptr != callback) {
+                      neograph::json neoJson;
+                      neograph::to_json(neoJson, token);
+                      (*callback)(neograph::graph::GraphEvent{
+                          neograph::graph::GraphEvent::Type::LLM_TOKEN,
+                          nodeName,
+                          neoJson,
+                      });
+                  }
+              };
     }
 
     auto provider = resolveCurrentProvider(input.ctx.thread_id);
@@ -162,32 +161,30 @@ asio::awaitable<neograph::ChatCompletion> ModelCallWrapNode::onReceiveToken(
             return;
         }
         agentxx::agent::SessionStore::UsageRecord rec;
-        rec.timeMs = static_cast<int64_t>(
-            std::chrono::duration_cast<std::chrono::milliseconds>(
-                std::chrono::system_clock::now().time_since_epoch()
-            )
-                .count()
-        );
-        rec.model                  = modelName;
-        rec.promptTokens           = usage.prompt_tokens;
-        rec.completionTokens       = usage.completion_tokens;
-        rec.totalTokens            = usage.total_tokens;
+        rec.timeMs = static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
+                                              std::chrono::system_clock::now().time_since_epoch()
+        )
+                                              .count());
+        rec.model  = modelName;
+        rec.promptTokens     = usage.prompt_tokens;
+        rec.completionTokens = usage.completion_tokens;
+        rec.totalTokens      = usage.total_tokens;
         // 命中缓存的读取量: 额外字段里有明确值时以它为准 (Anthropic 会把读取量从
         // input_tokens 里剔除, 与 OpenAI 的 cached_tokens 同一套规则)
-        rec.cachedPromptTokens     = detail.cacheReadTokens > 0 ? detail.cacheReadTokens
-                                                               : usage.cached_prompt_tokens;
+        rec.cachedPromptTokens
+            = detail.cacheReadTokens > 0 ? detail.cacheReadTokens : usage.cached_prompt_tokens;
         rec.cacheWritePromptTokens = detail.cacheWriteTokens;
         rec.reasoningTokens        = usage.reasoning_tokens;
         rec.ok                     = ok;
         rec.errorKind              = std::string{errorKind};
         // 记账目标: 子代理把用量算到父(根)会话 (见 AgentContext::usageAccountSessions);
         // 未设置时按本 agent 自己的会话
-        const auto accountSessions = agentCtx->usageAccountSessions ? agentCtx->usageAccountSessions
-                                                                    : agentCtx->sessions;
-        const auto accountSessionId = (agentCtx->usageAccountSessions
-                                       && !agentCtx->usageAccountSessionId.empty())
-                                          ? std::string_view{agentCtx->usageAccountSessionId}
-                                          : std::string_view{input.ctx.thread_id};
+        const auto accountSessions
+            = agentCtx->usageAccountSessions ? agentCtx->usageAccountSessions : agentCtx->sessions;
+        const auto accountSessionId
+            = (agentCtx->usageAccountSessions && !agentCtx->usageAccountSessionId.empty())
+                  ? std::string_view{agentCtx->usageAccountSessionId}
+                  : std::string_view{input.ctx.thread_id};
         if (accountSessions && accountSessions->sessionStore) {
             accountSessions->sessionStore->addUsage(accountSessionId, rec);
         }
@@ -197,10 +194,10 @@ asio::awaitable<neograph::ChatCompletion> ModelCallWrapNode::onReceiveToken(
         if (accountSessions) {
             if (auto session = accountSessions->get(accountSessionId);
                 session && session->contextStats) {
-                auto& totals = session->contextStats->usage;
-                totals.promptTokens += rec.promptTokens;
-                totals.completionTokens += rec.completionTokens;
-                totals.totalTokens += rec.totalTokens;
+                auto& totals               = session->contextStats->usage;
+                totals.promptTokens       += rec.promptTokens;
+                totals.completionTokens   += rec.completionTokens;
+                totals.totalTokens        += rec.totalTokens;
                 totals.cachedPromptTokens += rec.cachedPromptTokens;
             }
         }
@@ -223,7 +220,7 @@ asio::awaitable<neograph::ChatCompletion> ModelCallWrapNode::onReceiveToken(
     };
 
     neograph::ChatCompletion completion;
-    bool                     callFailed   = false;
+    bool                     callFailed = false;
     std::string              callErrorMsg;
     std::exception_ptr       callErrorEx;
     // 生成阶段提示 (见 protocol/provider_common.h): 通知 UI 本次请求已发出,
@@ -279,7 +276,7 @@ asio::awaitable<neograph::ChatCompletion> ModelCallWrapNode::onReceiveToken(
 neograph::CompletionParams ModelCallWrapNode::build_params(std::string_view sessionId) const {
     // 上下文以会话为唯一权威 (图状态不再持有 messages 通道): 直接取会话的 typed
     // 上下文, 由 provider 侧做一次 typed -> 请求体 JSON 转换, 不经图状态中转
-    auto ctxPtr = agentContext.lock();
+    auto ctxPtr   = agentContext.lock();
     auto messages = std::vector<neograph::ChatMessage>{};
     if (ctxPtr) {
         const auto& sessionMsgs = agentxx::nodes::sessionMessages(ctxPtr, sessionId);
@@ -315,7 +312,7 @@ neograph::CompletionParams ModelCallWrapNode::build_params(std::string_view sess
     //   保证请求里的工具部分与父会话逐字节一致 (前缀缓存才命中);
     //   工具本身在本次运行内不执行 (见 toolExecutionDisabled)
     std::vector<neograph::ChatTool> tool_defs;
-    const bool inheritRequestTools
+    const bool                      inheritRequestTools
         = ctxPtr && ctxPtr->agentConfig && ctxPtr->agentConfig->requestToolsOverride;
     if (inheritRequestTools) {
         tool_defs = *ctxPtr->agentConfig->requestToolsOverride;
@@ -413,9 +410,7 @@ neograph::CompletionParams ModelCallWrapNode::build_params(std::string_view sess
                 if (m.role != "system") {
                     continue;
                 }
-                h = utilxx_base::hash::fnv1a64(
-                    fmt::format("{}|{}", h, m.content)
-                );
+                h = utilxx_base::hash::fnv1a64(fmt::format("{}|{}", h, m.content));
             }
             for (const auto& tool : params.tools) {
                 h = utilxx_base::hash::fnv1a64(
@@ -444,9 +439,8 @@ neograph::CompletionParams ModelCallWrapNode::build_params(std::string_view sess
         for (const auto& m : params.messages) {
             chars += m.content.size();
             if (m.role == "system") {
-                systemHash = utilxx_base::hash::fnv1a64(
-                    fmt::format("{:016x}|{}", systemHash, m.content)
-                );
+                systemHash
+                    = utilxx_base::hash::fnv1a64(fmt::format("{:016x}|{}", systemHash, m.content));
             } else if (headCount < 2) {
                 headHash = utilxx_base::hash::fnv1a64(
                     fmt::format("{:016x}|{}|{}", headHash, m.role, m.content)
@@ -462,13 +456,13 @@ neograph::CompletionParams ModelCallWrapNode::build_params(std::string_view sess
         // 逐条消息指纹: 对比相邻请求时用它在开头几条里找出前缀分叉的位置
         // (只取消息条数/角色/长度/哈希, 不含正文; 哈希覆盖正文 + thinking + 工具调用,
         //  因为这三者都会进请求体)
-        std::string msgDigests;
+        std::string  msgDigests;
         const size_t digestCount = std::min<size_t>(params.messages.size(), 6);
         for (size_t i = 0; i < digestCount; ++i) {
-            const auto& m = params.messages[i];
-            std::string basis = m.content;
-            basis += '\x1f';
-            basis += m.reasoning_content;
+            const auto& m      = params.messages[i];
+            std::string basis  = m.content;
+            basis             += '\x1f';
+            basis             += m.reasoning_content;
             for (const auto& tc : m.tool_calls) {
                 basis += '\x1f';
                 basis += tc.id;
@@ -511,8 +505,12 @@ asio::awaitable<neograph::graph::NodeOutput>
     // - next-step: 作为 user 消息进入权威上下文与展示历史 (本请求即包含)
     // - inject:    只拼进本次请求 (不改写上下文)
     // 放在 build_params 之前: next-step 追加的消息由 build_params 一并复制
-    auto injections
-        = agentxx::nodes::drainPendingSessionInputs(agentContext.lock(), in, in.ctx.thread_id, nodeName);
+    auto injections = agentxx::nodes::drainPendingSessionInputs(
+        agentContext.lock(),
+        in,
+        in.ctx.thread_id,
+        nodeName
+    );
     auto params = build_params(in.ctx.thread_id);
     // 单次调用的取消域: 运行取消照常级联, 消费方放弃时只中止本次调用
     // (正在进行的 HTTP/SSE 请求立即结束, 不必等响应读完或套接字超时)
@@ -562,10 +560,8 @@ asio::awaitable<neograph::graph::NodeOutput>
             if (completion.message.content.empty()) {
                 // 只有 tool_calls 没有正文: 本次生成没有可用结果 (上层按空结果
                 // 走压缩失败/重试兜底), 这里只把 tool_calls 清掉, 不改错误语义
-                XX_LOGW(
-                    "[modelcall] tool execution disabled but model returned only tool_calls "
-                    "(no content); result will be empty"
-                );
+                XX_LOGW("[modelcall] tool execution disabled but model returned only tool_calls "
+                        "(no content); result will be empty");
             }
             completion.message.tool_calls.clear();
             hasToolCalls = false;
@@ -1026,9 +1022,8 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
         //   保留它请求前缀才与父会话一致, 上游前缀缓存才命中
         // - 子代理自己的配置里没有记忆文件/技能目录, 重建会缺运行时段落,
         //   system 内部就分叉, 后面整段对话都命中不了
-        const bool keepProvidedSystem
-            = haveSystemMsg && agentCtxPtr && agentCtxPtr->agentConfig
-              && agentCtxPtr->agentConfig->keepProvidedSystemMessage;
+        const bool keepProvidedSystem = haveSystemMsg && agentCtxPtr && agentCtxPtr->agentConfig
+                                        && agentCtxPtr->agentConfig->keepProvidedSystemMessage;
         if (agentCtxPtr && !keepProvidedSystem) {
             // 稳定段 (systemPrompt + 静态附加段 + 运行时稳定附加段: 记忆文件/技能清单)
             // 随 system 消息下发, 属于稳定前缀; 动态段由 build_params 作为请求末尾的
@@ -1139,9 +1134,9 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
         // - 鉴权/额度/请求非法: 重试无意义, 直接结束本轮 (省掉无用的等待与请求)
         // - 上下文超限: 压缩一次后立即重试; 再次超限则按失败结束
         // - 其余 (限流/超时/网络/服务端/未知): 一律自动重试, 类别的差别只是等待时长
-        const auto        errKind   = classifyLlmError(errInfo);
-        const bool        retryable = isLlmErrorRetryable(errKind);
-        const bool        overflow  = isLlmContextOverflow(errKind);
+        const auto errKind   = classifyLlmError(errInfo);
+        const bool retryable = isLlmErrorRetryable(errKind);
+        const bool overflow  = isLlmContextOverflow(errKind);
         // 本轮已用掉"溢出压缩重试"机会: 不再压缩, 避免反复压缩 (压缩本身也要花时间)
         if (overflow) {
             if (overflowCompactUsed) {
@@ -1156,19 +1151,17 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
         }
 
         // - 取消 / 不可重试 / 连续重试达到配置上限: 停止重试, 抛出原始异常结束本轮执行
-        if (isCancel || !retryable
-            || (overflow && overflowCompactUsed && retry > 0)
+        if (isCancel || !retryable || (overflow && overflowCompactUsed && retry > 0)
             || retry >= agentCtxPtr->agentConfig->llmMaxRetry) {
             // 抛出前检查末尾消息角色: 若末尾不是 assistant, 或末尾 assistant
             // 仍带 tool_calls (悬挂), 插入兜底提示消息
             // - 覆盖 无输出/短输出 失败的情况 (上轮未插入过)
             // - 已有 ≥512 部分输出时, 上轮已插入 assistant 保留消息, 无需重复插入
             // - 保证本轮以错误结束而不是把悬挂的 tool_calls 误路由回 tools 节点
-            const auto& curMsgs        = session->messages();
-            const bool  hasLastMsg     = !curMsgs.empty();
-            const bool  lastIsAssistant = hasLastMsg && curMsgs.back().role == "assistant";
-            const bool  lastHasToolCalls
-                = hasLastMsg && !curMsgs.back().tool_calls.empty();
+            const auto& curMsgs          = session->messages();
+            const bool  hasLastMsg       = !curMsgs.empty();
+            const bool  lastIsAssistant  = hasLastMsg && curMsgs.back().role == "assistant";
+            const bool  lastHasToolCalls = hasLastMsg && !curMsgs.back().tool_calls.empty();
             if (false == lastIsAssistant || lastHasToolCalls) {
                 appendAbortMessage(
                     fmt::format(
@@ -1210,9 +1203,8 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
                         {"value",
                          neograph::json{
                              {"tipType", "warning"},
-                             {"text",
-                              "LLM 请求超出上下文长度，已压缩会话上下文后重试一次"},
-                         }},
+                             {"text", "LLM 请求超出上下文长度，已压缩会话上下文后重试一次"},
+                         }                       },
                     };
                     (*in.stream_cb)(neograph::graph::GraphEvent{
                         neograph::graph::GraphEvent::Type::CHANNEL_WRITE,

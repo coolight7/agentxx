@@ -60,7 +60,8 @@ inline std::vector<std::string> stringListArg(const utilxx_base::Json& args, std
 ///     - [newStr] 替换后文本 (同上 `new_str` 参数)
 ///
 /// - `return` 单段的增删行数 (未变的上下文行不计入)
-inline std::pair<int64_t, int64_t> diffStatCounts(std::string_view oldStr, std::string_view newStr) {
+inline std::pair<int64_t, int64_t>
+    diffStatCounts(std::string_view oldStr, std::string_view newStr) {
     if (oldStr.empty() && newStr.empty()) {
         return {0, 0};
     }
@@ -136,9 +137,9 @@ inline std::string diffStatTextOfSegments(const std::vector<EditSegmentText>& se
     int64_t added   = 0;
     int64_t removed = 0;
     for (const auto& seg : segments) {
-        const auto [oneAdded, oneRemoved] = diffStatCounts(seg.oldStr, seg.newStr);
-        added += oneAdded;
-        removed += oneRemoved;
+        const auto [oneAdded, oneRemoved]  = diffStatCounts(seg.oldStr, seg.newStr);
+        added                             += oneAdded;
+        removed                           += oneRemoved;
     }
     if (added == 0 && removed == 0) {
         return {};

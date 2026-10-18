@@ -46,7 +46,7 @@ enum class PromptSectionScope : uint8_t {
 
 /// 段落落点
 enum class PromptSectionSlot : uint8_t {
-    Stable,  ///< 进 system 消息 (稳定前缀, 上游前缀缓存可命中)
+    Stable, ///< 进 system 消息 (稳定前缀, 上游前缀缓存可命中)
     Dynamic, ///< 作为请求末尾独立消息 (每轮全额重发, 只放确实每轮都变的内容)
 };
 
@@ -216,12 +216,12 @@ private:
         std::map<std::string, TextSlot, std::less<>> sessionSlots;
 
         PromptRefreshReason lastReason = PromptRefreshReason::Initial;
-        int64_t              lastMs    = 0;
-        size_t               chars     = 0;
-        uint64_t             refreshes = 0;
-        uint64_t             changed   = 0;
-        uint64_t             failures  = 0;
-        std::string          lastError;
+        int64_t             lastMs     = 0;
+        size_t              chars      = 0;
+        uint64_t            refreshes  = 0;
+        uint64_t            changed    = 0;
+        uint64_t            failures   = 0;
+        std::string         lastError;
 
         /// 该会话对应的文本槽 (不存在时返回 nullptr)
         const TextSlot* findSlot(std::string_view sessionId) const;
@@ -234,7 +234,7 @@ private:
 
     /// 单个会话的刷新标记
     struct SessionState {
-        bool     initialized    = false;
+        bool initialized = false;
         /// 待处理原因位集 (1u << static_cast<uint32_t>(PromptRefreshReason))
         uint32_t pendingReasons = 0;
         /// 正在刷新 (重入时只保留 dirty 标记)

@@ -618,9 +618,7 @@ static asio::awaitable<void> test_remote_transport_loopback() {
         = std::make_shared<agentxx::agent::WsAgentIOTransport>(ex, url, "test-token", cfg, wsCfg);
 
     // 连接阶段: 握手前为 unhandshaken
-    XX_TEST_EXPECT_TRUE(
-        transport->stage() == agentxx::agent::WireConnectionStage::Unhandshaken
-    );
+    XX_TEST_EXPECT_TRUE(transport->stage() == agentxx::agent::WireConnectionStage::Unhandshaken);
 
     agentxx::agent::WireHello hello{"session", "test-token", 0, ""};
     bool                      ok = co_await transport->connect(hello);
@@ -1543,10 +1541,10 @@ static asio::awaitable<void> test_channel_client_integration() {
                     st->send(agentxx::agent::WireMessage{d});
                     st->send(agentxx::agent::WireMessage{
                         agentxx::agent::WireTurnResult{
-                            .sessionId   = ui->sessionId,
-                            .hasError    = false,
-                            .interrupted = false,
-                        }
+                                                       .sessionId   = ui->sessionId,
+                                                       .hasError    = false,
+                                                       .interrupted = false,
+                                                       }
                     });
                 }
             }
@@ -2390,12 +2388,12 @@ static asio::awaitable<void> test_session_switch_defers_target_requests() {
     std::error_code dirEc;
     std::filesystem::create_directories(dataDir, dirEc);
 
-    auto cfg                    = std::make_shared<agentxx::agent::AgentConfig>();
-    cfg->model.baseUrl          = "http://127.0.0.1:1";
-    cfg->model.apiKey           = "EMPTY";
-    cfg->model.modelName        = "test-model";
-    cfg->dataDir                = dataDir.string();
-    cfg->enableSessionStore     = true;
+    auto cfg                = std::make_shared<agentxx::agent::AgentConfig>();
+    cfg->model.baseUrl      = "http://127.0.0.1:1";
+    cfg->model.apiKey       = "EMPTY";
+    cfg->model.modelName    = "test-model";
+    cfg->dataDir            = dataDir.string();
+    cfg->enableSessionStore = true;
     // 可切换的模型 (selectModel 只接受已注册的模型名)
     agentxx::agent::ModelConfig textModel;
     textModel.name                     = "test-model";
@@ -2408,9 +2406,9 @@ static asio::awaitable<void> test_session_switch_defers_target_requests() {
 
     // 只给目标会话一个可切换的模型名 (模型选择要求名字在注册表里)
     agentxx::agent::ModelConfig switchTo;
-    switchTo.name                    = "text-model";
-    switchTo.modelName               = "text-model";
-    switchTo.baseUrl                 = cfg->model.baseUrl;
+    switchTo.name      = "text-model";
+    switchTo.modelName = "text-model";
+    switchTo.baseUrl   = cfg->model.baseUrl;
     agent->agentContext->modelRegistry->registerModel("text-model", switchTo);
 
     agentxx::agent::SessionServerAgentIO::Config scCfg;
@@ -2421,16 +2419,18 @@ static asio::awaitable<void> test_session_switch_defers_target_requests() {
     sc->setTransport(std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT)));
 
     // 切换请求: 目标会话历史尚未加载, 切换在加载完成后才提交绑定
-    sc->onPeerMessage(agentxx::agent::WireMessage{agentxx::agent::WireSwitchSession{
-        "target-session",
-    }});
+    sc->onPeerMessage(agentxx::agent::WireMessage{
+        agentxx::agent::WireSwitchSession{
+                                          "target-session", }
+    });
     XX_TEST_EXPECT_EQ(std::string{sc->sessionId()}, std::string("session-a"));
 
     // 切换后紧接着发出的模型选择 (发给目标会话): 暂存, 不按旧绑定校验
-    sc->onPeerMessage(agentxx::agent::WireMessage{agentxx::agent::WireSelectModel{
-        "target-session",
-        "text-model",
-    }});
+    sc->onPeerMessage(agentxx::agent::WireMessage{
+        agentxx::agent::WireSelectModel{
+                                        "target-session", "text-model",
+                                        }
+    });
 
     // 等切换提交 (目标会话成为绑定会话)
     bool switched = false;
@@ -2451,10 +2451,11 @@ static asio::awaitable<void> test_session_switch_defers_target_requests() {
     }
 
     // 发给其他会话的请求不放行: 切换完成后旧会话请求仍按既有规则拒绝
-    sc->onPeerMessage(agentxx::agent::WireMessage{agentxx::agent::WireSelectModel{
-        "session-a",
-        "text-model",
-    }});
+    sc->onPeerMessage(agentxx::agent::WireMessage{
+        agentxx::agent::WireSelectModel{
+                                        "session-a", "text-model",
+                                        }
+    });
     auto stale = agent->agentContext->sessions->get("session-a");
     XX_TEST_EXPECT_TRUE(stale != nullptr);
     if (stale) {
@@ -3045,13 +3046,11 @@ static asio::awaitable<void> test_agent_server_multi_client() {
     {
         // 逐项取值而不是结构化绑定: GCC 在 -O3 下会把协程帧里的结构化绑定
         // (`auto [a, b] = ...`) 误报为 -Wmaybe-uninitialized
-        auto pair3   = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
-        auto client3 = std::shared_ptr<agentxx::agent::AgentIOTransportBase>(
-            std::move(pair3.first)
-        );
-        auto server3 = std::shared_ptr<agentxx::agent::AgentIOTransportBase>(
-            std::move(pair3.second)
-        );
+        auto pair3 = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+        auto client3
+            = std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(pair3.first));
+        auto server3
+            = std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(pair3.second));
         asio::co_spawn(
             ex,
             keepAliveRun([server, server3]() -> asio::awaitable<void> {
@@ -3599,8 +3598,7 @@ static asio::awaitable<void> test_session_controller_queue_resume_after_abort() 
     // 逐项取值而不是结构化绑定: GCC 在 -O3 下会把协程帧里的结构化绑定
     // (`auto [a, b] = ...`) 误报为 -Wmaybe-uninitialized
     auto pairT = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
-    sc->setTransport(
-        std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(pairT.second))
+    sc->setTransport(std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(pairT.second))
     );
 
     std::vector<agentxx::agent::WireTurnResult> turnResults;
@@ -3612,7 +3610,7 @@ static asio::awaitable<void> test_session_controller_queue_resume_after_abort() 
     std::shared_ptr<agentxx::agent::ChannelAgentIOTransport> clientT = std::move(pairT.first);
 
     std::atomic<bool> loopExited{false};
-    auto clientLoop = [&, clientT]() -> asio::awaitable<void> {
+    auto              clientLoop = [&, clientT]() -> asio::awaitable<void> {
         while (clientT->alive()) {
             auto msg = co_await clientT->recv();
             if (!msg) {
@@ -3779,10 +3777,7 @@ static std::filesystem::path tempAddModelDataDir() {
 
 static std::string readWholeFile(const std::filesystem::path& path) {
     std::ifstream ifs(path, std::ios::binary);
-    return std::string{
-        std::istreambuf_iterator<char>(ifs),
-        std::istreambuf_iterator<char>()
-    };
+    return std::string{std::istreambuf_iterator<char>(ifs), std::istreambuf_iterator<char>()};
 }
 
 static asio::awaitable<void> test_add_model_config_via_wire() {
@@ -3791,11 +3786,11 @@ static asio::awaitable<void> test_add_model_config_via_wire() {
     const auto dataDir = tempAddModelDataDir();
     const auto cfgPath = dataDir / "agentxx-config.yaml";
 
-    auto cfg                         = std::make_shared<agentxx::agent::AgentConfig>();
-    cfg->dataDir                     = dataDir.string();
-    cfg->model.baseUrl               = "http://127.0.0.1:1";
-    cfg->model.apiKey                = "EMPTY";
-    cfg->model.modelName             = "existing";
+    auto cfg             = std::make_shared<agentxx::agent::AgentConfig>();
+    cfg->dataDir         = dataDir.string();
+    cfg->model.baseUrl   = "http://127.0.0.1:1";
+    cfg->model.apiKey    = "EMPTY";
+    cfg->model.modelName = "existing";
     agentxx::agent::ModelConfig existing;
     existing.name                    = "existing";
     existing.baseUrl                 = "http://127.0.0.1:1";
@@ -3905,7 +3900,8 @@ static asio::awaitable<void> test_add_model_config_via_wire() {
                 XX_TEST_EXPECT_FALSE(r->error.empty());
             }
         }
-        XX_TEST_EXPECT_FALSE(agent->agentContext->agentConfig->availableModels.contains("bad-model"));
+        XX_TEST_EXPECT_FALSE(agent->agentContext->agentConfig->availableModels.contains("bad-model")
+        );
         XX_TEST_EXPECT_EQ(
             agent->getCurrentModelName("add-model-session"),
             std::string("added-by-wire")
@@ -3914,7 +3910,7 @@ static asio::awaitable<void> test_add_model_config_via_wire() {
 
     // ---- 3. 重名: 回执失败, 配置文件保持原样 ----
     {
-        const std::string before = readWholeFile(cfgPath);
+        const std::string            before = readWholeFile(cfgPath);
         agentxx::agent::WireAddModel dup;
         dup.sessionId = "add-model-session";
         dup.name      = "added-by-wire";
@@ -3983,9 +3979,7 @@ static asio::awaitable<void> test_session_scope_validation() {
     }
 
     // 1) 会话不匹配: 拒绝并回结构化错误 (码供程序判断, 文本给人看)
-    client1->send(
-        agentxx::agent::WireUserInput{.sessionId = "other-session", .text = "rejected"}
-    );
+    client1->send(agentxx::agent::WireUserInput{.sessionId = "other-session", .text = "rejected"});
     auto errMsg = co_await client1->recv();
     XX_TEST_EXPECT_TRUE(errMsg.has_value());
     if (errMsg.has_value()) {
@@ -4013,9 +4007,7 @@ static asio::awaitable<void> test_session_scope_validation() {
     auto qMsg2 = co_await client1->recv();
     XX_TEST_EXPECT_TRUE(qMsg2.has_value());
     if (qMsg2.has_value()) {
-        XX_TEST_EXPECT_TRUE(
-            std::holds_alternative<agentxx::agent::WireMessageQueueUpdate>(*qMsg2)
-        );
+        XX_TEST_EXPECT_TRUE(std::holds_alternative<agentxx::agent::WireMessageQueueUpdate>(*qMsg2));
     }
 
     client1->close();
@@ -4037,7 +4029,7 @@ static asio::awaitable<void> test_remote_user_input_attachments() {
 
     SessionServerAgentIO::Config cfg;
     cfg.sessionId = "att-session";
-    auto sc = std::make_shared<SessionServerAgentIO>(
+    auto sc       = std::make_shared<SessionServerAgentIO>(
         ex,
         std::weak_ptr<agentxx::agent::BaseAgent>{},
         cfg
@@ -4063,8 +4055,9 @@ static asio::awaitable<void> test_remote_user_input_attachments() {
         .type        = agentxx::agent::MediaType::Image,
         .displayName = "diagram.png",
         .mimeType    = "image/png",
-        .dataUrl     = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
-        .sizeBytes   = 68,
+        .dataUrl
+        = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==",
+        .sizeBytes = 68,
     });
     clientT->send(input);
 
@@ -4094,7 +4087,7 @@ static asio::awaitable<void> test_remote_user_input_attachment_oversize() {
 
     SessionServerAgentIO::Config cfg;
     cfg.sessionId = "att-oversize-session";
-    auto sc = std::make_shared<SessionServerAgentIO>(
+    auto sc       = std::make_shared<SessionServerAgentIO>(
         ex,
         std::weak_ptr<agentxx::agent::BaseAgent>{},
         cfg
@@ -4169,7 +4162,7 @@ static asio::awaitable<void> test_remote_user_input_attachment_count_limit() {
 
     SessionServerAgentIO::Config cfg;
     cfg.sessionId = "att-count-session";
-    auto sc = std::make_shared<SessionServerAgentIO>(
+    auto sc       = std::make_shared<SessionServerAgentIO>(
         ex,
         std::weak_ptr<agentxx::agent::BaseAgent>{},
         cfg
@@ -4232,10 +4225,10 @@ static asio::awaitable<void> test_remote_user_input_attachment_to_llm() {
     g_da_sim_response_content = "attachment received";
     g_da_sim_tool_calls       = utilxx_base::Json::array();
 
-    auto cfg              = std::make_shared<agentxx::agent::AgentConfig>();
-    cfg->model.baseUrl    = baseUrl;
-    cfg->model.apiKey     = "EMPTY";
-    cfg->model.modelName  = "att-model";
+    auto cfg             = std::make_shared<agentxx::agent::AgentConfig>();
+    cfg->model.baseUrl   = baseUrl;
+    cfg->model.apiKey    = "EMPTY";
+    cfg->model.modelName = "att-model";
     // 图片输入能力: 客户端据此展示附件入口; 服务端组装请求体不依赖本开关
     cfg->model.imageInput = true;
     auto agent            = std::make_shared<agentxx::agent::BaseAgent>(cfg);
@@ -4250,14 +4243,16 @@ static asio::awaitable<void> test_remote_user_input_attachment_to_llm() {
     auto sc         = std::make_shared<agentxx::agent::SessionServerAgentIO>(ex, agent, scCfg);
     sc->setTransport(std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT)));
 
-    clientT->send(agentxx::agent::WireMessage{agentxx::agent::WireHello{
-        .sessionId = "att-llm-session",
-        .token     = "",
-        .lastSeq   = 0,
-        .tailHash  = "",
-        .model     = "",
-        .language  = "zh-cn",
-    }});
+    clientT->send(agentxx::agent::WireMessage{
+        agentxx::agent::WireHello{
+                                  .sessionId = "att-llm-session",
+                                  .token     = "",
+                                  .lastSeq   = 0,
+                                  .tailHash  = "",
+                                  .model     = "",
+                                  .language  = "zh-cn",
+                                  }
+    });
     asio::co_spawn(
         ex,
         keepAliveRun([sc]() -> asio::awaitable<void> {

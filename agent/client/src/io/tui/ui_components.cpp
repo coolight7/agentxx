@@ -25,11 +25,11 @@ namespace client {
 
 namespace {
 
-using utilxx_base::Json;
 using pluginxx::ui::Edges;
 using pluginxx::ui::Item;
 using pluginxx::ui::SizeValue;
 using pluginxx::ui::TextValue;
+using utilxx_base::Json;
 
 // ---------------------------------------------------------------------------
 // 能力段 (如实上报; adapt 按它决定降级结果)
@@ -38,9 +38,9 @@ using pluginxx::ui::TextValue;
 /// TUI 实际支持的组件 (未列出的由 adapt 降级: Stack → 最后一个子节点 /
 /// Image → alt 文本 / musicxx.Shader → 跳过)
 constexpr std::string_view kTuiBlockNames[] = {
-    "Text",   "Divider", "Gap",    "Button",   "Block", "Row",     "Column", "Expanded",
-    "Spacer", "SizedBox", "Padding", "Align",   "Collapse", "KV",  "Table",  "Tree",
-    "Progress", "Badge", "Control", "Markdown", "Icon", "Diff",   "Sparkline", "Diagram",
+    "Text",     "Divider",  "Gap",     "Button",   "Block",    "Row",  "Column",    "Expanded",
+    "Spacer",   "SizedBox", "Padding", "Align",    "Collapse", "KV",   "Table",     "Tree",
+    "Progress", "Badge",    "Control", "Markdown", "Icon",     "Diff", "Sparkline", "Diagram",
 };
 
 // ---------------------------------------------------------------------------
@@ -150,9 +150,9 @@ int gapCols(const SizeValue& size) {
 
 /// 内边距/外边距 → 列 (左右) 与行 (上下); 终端不做像素级留白, 小于半格即消失
 struct Insets {
-    int left = 0;
-    int right = 0;
-    int top = 0;
+    int left   = 0;
+    int right  = 0;
+    int top    = 0;
     int bottom = 0;
 
     bool empty() const {
@@ -235,9 +235,9 @@ std::vector<std::string> textLines(const Item& item, const UiRenderCtx& ctx) {
     if (value.empty()) {
         return {};
     }
-    std::vector<std::string> lines
-        = item.wrap ? wrapTextToLines(value, std::max(1, contentWidth(ctx)))
-                    : std::vector<std::string>{value};
+    std::vector<std::string> lines = item.wrap
+                                         ? wrapTextToLines(value, std::max(1, contentWidth(ctx)))
+                                         : std::vector<std::string>{value};
     if (item.maxLines > 0 && lines.size() > static_cast<size_t>(item.maxLines)) {
         lines.resize(static_cast<size_t>(item.maxLines));
     }
@@ -298,7 +298,7 @@ std::pair<Element, size_t> buildDiagram(const Item& item, const UiRenderCtx& ctx
         }
     }
     // 图形宽度预算: 可用宽度扣除缩进与边界余量, 下限保底可读
-    const int avail = (ctx.width > 0) ? std::max(20, ctx.width - ctx.indent - 6) : 0;
+    const int   avail  = (ctx.width > 0) ? std::max(20, ctx.width - ctx.indent - 6) : 0;
     const auto& theme  = *ctx.theme;
     auto        diagEl = markdown::renderMermaidStateDiagram(
         diagram,
@@ -454,11 +454,11 @@ std::vector<int> layoutColumnWidths(
                 if (fixed[i] > 0) {
                     continue;
                 }
-                const int weight = (i < weights.size() && weights[i] > 0) ? weights[i] : 1;
-                const int share  = (i + 1 == n) ? (leftover - given)
-                                                : (leftover * weight / std::max(1, weightSum));
-                widths[i] += share;
-                given     += share;
+                const int weight  = (i < weights.size() && weights[i] > 0) ? weights[i] : 1;
+                const int share   = (i + 1 == n) ? (leftover - given)
+                                                 : (leftover * weight / std::max(1, weightSum));
+                widths[i]        += share;
+                given            += share;
             }
         } else if (stretchAll) {
             // 横向铺满: 剩余宽度均分给所有列 (含声明了固定宽度的列)
@@ -581,12 +581,7 @@ Row renderTable(const Item& item, const UiRenderCtx& ctx) {
             );
             colors.push_back(theme.accentColor);
         }
-        emit(
-            cells,
-            colors,
-            std::vector<std::string>(n),
-            std::vector<std::string>(n)
-        );
+        emit(cells, colors, std::vector<std::string>(n), std::vector<std::string>(n));
         std::string sepLine;
         for (size_t c = 0; c < n; ++c) {
             if (c > 0) {
@@ -631,10 +626,9 @@ Row renderTable(const Item& item, const UiRenderCtx& ctx) {
 Row renderKeyValue(const Item& item, const UiRenderCtx& ctx) {
     const auto& theme = *ctx.theme;
     const int   avail = std::max(1, contentWidth(ctx));
-    int         keyW  = item.keyWidth.isValue() ? colsOf(item.keyWidth, avail, true)
-                     : item.keyWidth.isPercent()
-                         ? colsOf(item.keyWidth, avail, true)
-                         : 0;
+    int         keyW  = item.keyWidth.isValue()     ? colsOf(item.keyWidth, avail, true)
+                        : item.keyWidth.isPercent() ? colsOf(item.keyWidth, avail, true)
+                                                    : 0;
     if (keyW <= 0) {
         for (const auto& p : item.pairs) {
             keyW = std::max(keyW, pluginxx::ui::displayWidth(textOf(p.key, ctx)));
@@ -675,13 +669,14 @@ Row renderTree(const Item& item, const UiRenderCtx& ctx) {
     std::vector<UiHitRegion> regions;
     int                      y = 0;
 
-    std::function<void(const std::vector<pluginxx::ui::TreeNode>&, const std::string&, const std::string&)>
+    std::function<
+        void(const std::vector<pluginxx::ui::TreeNode>&, const std::string&, const std::string&)>
         emit = [&](const std::vector<pluginxx::ui::TreeNode>& nodes,
-                   const std::string&                        prefix,
-                   const std::string&                        path) {
+                   const std::string&                         prefix,
+                   const std::string&                         path) {
             for (size_t i = 0; i < nodes.size(); ++i) {
-                const auto& node  = nodes[i];
-                const bool  last  = (i + 1 == nodes.size());
+                const auto&       node  = nodes[i];
+                const bool        last  = (i + 1 == nodes.size());
                 const std::string label = textOf(node.label, ctx);
                 // 节点路径 (折叠状态键; 结尾带 '/' 便于与 id 型键区分)
                 const std::string nodePath = path + label + "/";
@@ -775,11 +770,11 @@ std::vector<double> bucketize(const std::vector<double>& data, int buckets) {
 
 /// 迷你趋势图 (高度 1 = 单行块字符; 高度 > 1 = 多行纵向分辨率)
 Row renderSparkline(const Item& item, const UiRenderCtx& ctx) {
-    const auto& theme  = *ctx.theme;
-    const int   avail  = std::max(1, contentWidth(ctx));
-    const std::string label = textOf(item.label, ctx);
-    const int   labelW = label.empty() ? 0 : pluginxx::ui::displayWidth(label) + 1;
-    const int   height = std::clamp(item.glyphHeight, 1, 8);
+    const auto&       theme  = *ctx.theme;
+    const int         avail  = std::max(1, contentWidth(ctx));
+    const std::string label  = textOf(item.label, ctx);
+    const int         labelW = label.empty() ? 0 : pluginxx::ui::displayWidth(label) + 1;
+    const int         height = std::clamp(item.glyphHeight, 1, 8);
 
     Row row;
     if (item.data.empty()) {
@@ -793,10 +788,9 @@ Row renderSparkline(const Item& item, const UiRenderCtx& ctx) {
     }
 
     const bool hasSuffix = item.showLast;
-    const int  suffixW
-        = hasSuffix ? (pluginxx::ui::displayWidth(numText(item.data.back())) + 1) : 0;
-    const int    plotW = std::max(4, avail - labelW - suffixW);
-    const auto   data  = bucketize(item.data, plotW);
+    const int suffixW = hasSuffix ? (pluginxx::ui::displayWidth(numText(item.data.back())) + 1) : 0;
+    const int plotW   = std::max(4, avail - labelW - suffixW);
+    const auto   data = bucketize(item.data, plotW);
     const auto   minIt = std::min_element(data.begin(), data.end());
     const auto   maxIt = std::max_element(data.begin(), data.end());
     const double lo    = item.hasMin ? item.minValue : *minIt;
@@ -861,14 +855,12 @@ Row renderSparkline(const Item& item, const UiRenderCtx& ctx) {
 
 /// 进度/计量条 (填充块 + 背景块 + 数值文本; 阈值配色)
 Row renderProgress(const Item& item, const UiRenderCtx& ctx) {
-    const auto& theme  = *ctx.theme;
-    const int   avail  = std::max(1, contentWidth(ctx));
-    const std::string label = textOf(item.label, ctx);
-    const int   labelW = label.empty() ? 0 : pluginxx::ui::displayWidth(label) + 1;
-    const int   declared = colsOf(item.width, avail, true);
-    const int   barW     = (declared > 0)
-                               ? declared
-                               : std::max(6, std::min(24, avail - labelW - 8));
+    const auto&       theme    = *ctx.theme;
+    const int         avail    = std::max(1, contentWidth(ctx));
+    const std::string label    = textOf(item.label, ctx);
+    const int         labelW   = label.empty() ? 0 : pluginxx::ui::displayWidth(label) + 1;
+    const int         declared = colsOf(item.width, avail, true);
+    const int    barW   = (declared > 0) ? declared : std::max(6, std::min(24, avail - labelW - 8));
     const double total  = (item.total != 0.0) ? item.total : 100.0;
     const double ratio  = std::clamp(item.value / total, 0.0, 1.0);
     const int    filled = static_cast<int>(ratio * static_cast<double>(barW) + 0.5);
@@ -975,11 +967,11 @@ Element inputFieldRow(
     const Item&        item,
     const UiRenderCtx& ctx
 ) {
-    const auto& theme = *ctx.theme;
-    const bool  empty = value.empty();
+    const auto&        theme = *ctx.theme;
+    const bool         empty = value.empty();
     const std::string& shown = empty ? placeholder : value;
-    Element el = text(" " + shown + " ")
-                 | color(empty ? theme.hintColor : theme.inputTextColor) | xflex;
+    Element            el
+        = text(" " + shown + " ") | color(empty ? theme.hintColor : theme.inputTextColor) | xflex;
     if (ctx.form != nullptr && ctx.form->focusedId == item.id) {
         el = el | bold | underlined;
     }
@@ -1088,9 +1080,8 @@ bool mergeTextButton(
     }
 
     // 合并后各区域仍用合并行的局部坐标: 按钮侧区域按文本宽度右移
-    const int prefixCols
-        = ctx.indent + pluginxx::ui::displayWidth(textOf(textItem.text, ctx));
-    UiRow row;
+    const int prefixCols = ctx.indent + pluginxx::ui::displayWidth(textOf(textItem.text, ctx));
+    UiRow     row;
     row.lines   = 1;
     row.element = hbox({std::move(left.rows[0].element), std::move(right.rows[0].element)});
     row.regions = std::move(left.rows[0].regions);
@@ -1144,9 +1135,10 @@ Rows renderItemRows(const Item& item, const UiRenderCtx& ctx, UiRenderResult& ou
         rows.push_back(std::move(row));
     };
     /// 登记一个"整行可点"区域 (文本/容器类组件的 action)
-    auto actionRegion = [&](const pluginxx::ui::Action& action, int lines) -> std::vector<UiHitRegion> {
+    auto actionRegion
+        = [&](const pluginxx::ui::Action& action, int lines) -> std::vector<UiHitRegion> {
         std::vector<UiHitRegion> regions;
-        const std::string id = actionIdOf(action);
+        const std::string        id = actionIdOf(action);
         if (id.empty()) {
             return regions;
         }
@@ -1303,7 +1295,7 @@ Rows renderItemRows(const Item& item, const UiRenderCtx& ctx, UiRenderResult& ou
     // ---------------- Button ----------------
     if (item.kind == "Button") {
         const std::string label = textOf(item.label, ctx);
-        Element           el    = buttonElement(label, item.tone, item.variant, theme, item.disabled);
+        Element           el = buttonElement(label, item.tone, item.variant, theme, item.disabled);
         const std::string actionId = actionIdOf(item.action);
         std::vector<UiHitRegion> regions;
         // 域内的表单提交/取消动作由主程序处理 (插件不需要绑定动作处理器), 其余动作要求
@@ -1374,16 +1366,15 @@ Rows renderItemRows(const Item& item, const UiRenderCtx& ctx, UiRenderResult& ou
                 weights[static_cast<size_t>(i)] = std::max(1, child.flex);
             }
         }
-        const auto widths
-            = layoutColumnWidths(fixed, weights, avail, gap, item.align == "stretch");
+        const auto widths = layoutColumnWidths(fixed, weights, avail, gap, item.align == "stretch");
 
         Elements columnEls;
         Rows     columns;
         int      maxLines = 1;
         for (int i = 0; i < n; ++i) {
-            const int           w     = std::max(1, widths[static_cast<size_t>(i)]);
-            const Item&         child = item.children[static_cast<size_t>(i)];
-            const bool          last  = (i + 1 == n);
+            const int   w     = std::max(1, widths[static_cast<size_t>(i)]);
+            const Item& child = item.children[static_cast<size_t>(i)];
+            const bool  last  = (i + 1 == n);
             // 列内子项按列宽渲染 (indent = 0: 本行的基础缩进由 pushPlain 叠加)
             Rows subRows;
             if (child.kind == "Spacer") {
@@ -1396,7 +1387,7 @@ Rows renderItemRows(const Item& item, const UiRenderCtx& ctx, UiRenderResult& ou
             Row     columnRow = stackRows(subRows);
             Element el        = std::move(columnRow.element);
             // 行内对齐: main = center/end 时整行留白; spaceBetween 时末列右对齐
-            const bool rightAlign = (item.main == "spaceBetween" && last) || item.align == "end";
+            const bool rightAlign  = (item.main == "spaceBetween" && last) || item.align == "end";
             const bool centerAlign = (item.align == "center" && !rightAlign);
             if (rightAlign) {
                 el = hbox({filler(), std::move(el)});
@@ -1436,7 +1427,7 @@ Rows renderItemRows(const Item& item, const UiRenderCtx& ctx, UiRenderResult& ou
                     childrenRows.push_back(std::move(blank));
                 }
             }
-            first = false;
+            first    = false;
             auto sub = renderItemRows(child, ctx, out);
             childrenRows.insert(
                 childrenRows.end(),
@@ -1477,16 +1468,15 @@ Rows renderItemRows(const Item& item, const UiRenderCtx& ctx, UiRenderResult& ou
         int       height = rowsOf(item.height, true);
         if (item.aspect > 0.0 && width > 0) {
             // 终端按字符格比例近似: rows = ceil(列数 × 格宽 / (比例 × 格高))
-            const double cellW = tuiUiCapabilities().cell.width > 0.0
-                                     ? tuiUiCapabilities().cell.width
-                                     : 8.0;
-            const double cellH = tuiUiCapabilities().cell.height > 0.0
-                                     ? tuiUiCapabilities().cell.height
-                                     : 20.0;
+            const double cellW
+                = tuiUiCapabilities().cell.width > 0.0 ? tuiUiCapabilities().cell.width : 8.0;
+            const double cellH
+                = tuiUiCapabilities().cell.height > 0.0 ? tuiUiCapabilities().cell.height : 20.0;
             height = std::max(
                 1,
-                static_cast<int>(std::ceil(static_cast<double>(width) * cellW
-                                           / (item.aspect * cellH)))
+                static_cast<int>(
+                    std::ceil(static_cast<double>(width) * cellW / (item.aspect * cellH))
+                )
             );
         }
         if (item.children.empty()) {
@@ -1546,9 +1536,8 @@ Rows renderItemRows(const Item& item, const UiRenderCtx& ctx, UiRenderResult& ou
             if ((center || end) && row.regions.empty() && row.element) {
                 // 子项自身宽度未知: 交给 FTXUI 的 filler 居中/靠右 (有命中区域时
                 // 位置无法预测, 保持左对齐以保证命中正确)
-                row.element = center
-                                  ? hbox({filler(), std::move(row.element), filler()})
-                                  : hbox({filler(), std::move(row.element)});
+                row.element = center ? hbox({filler(), std::move(row.element), filler()})
+                                     : hbox({filler(), std::move(row.element)});
             }
             rows.push_back(std::move(row));
         }
@@ -1574,7 +1563,7 @@ Rows renderItemRows(const Item& item, const UiRenderCtx& ctx, UiRenderResult& ou
         for (int i = 0; i < margin.top; ++i) {
             pushPlain(text(" "), 1);
         }
-        auto inner = stackRows(renderChildren(item.children, childCtx(ctx, innerW, 0), out));
+        auto    inner   = stackRows(renderChildren(item.children, childCtx(ctx, innerW, 0), out));
         Element innerEl = std::move(inner.element);
         if (insetCols > 0) {
             innerEl = hbox({text(spaces(insetCols)), std::move(innerEl)});
@@ -1596,8 +1585,8 @@ Rows renderItemRows(const Item& item, const UiRenderCtx& ctx, UiRenderResult& ou
         if (border) {
             const std::string title = textOf(item.title, ctx);
             if (title.empty()) {
-                boxEl = std::move(boxEl) | borderStyled(BorderStyle::LIGHT)
-                        | color(theme.hintColor);
+                boxEl
+                    = std::move(boxEl) | borderStyled(BorderStyle::LIGHT) | color(theme.hintColor);
             } else {
                 boxEl = window(
                             text(title) | color(theme.accentColor) | bold,
@@ -1607,10 +1596,10 @@ Rows renderItemRows(const Item& item, const UiRenderCtx& ctx, UiRenderResult& ou
                         | color(theme.hintColor);
             }
         }
-        const int    dx     = (border ? 1 : 0) + pad.left + insetCols;
-        const int    dy     = (border ? 1 : 0) + pad.top;
-        const size_t lines  = inner.lines + static_cast<size_t>(pad.top + pad.bottom)
-                             + (border ? 2u : 0u);
+        const int    dx = (border ? 1 : 0) + pad.left + insetCols;
+        const int    dy = (border ? 1 : 0) + pad.top;
+        const size_t lines
+            = inner.lines + static_cast<size_t>(pad.top + pad.bottom) + (border ? 2u : 0u);
         std::vector<UiHitRegion> regions;
         for (const auto& region : inner.regions) {
             regions.push_back(region.offsetBy(dx, dy));
@@ -1628,8 +1617,8 @@ Rows renderItemRows(const Item& item, const UiRenderCtx& ctx, UiRenderResult& ou
         if (ctx.collapseExpanded) {
             expanded = ctx.collapseExpanded(item.id, item.expanded);
         }
-        const std::string title = textOf(item.title, ctx);
-        Element           header = hbox({
+        const std::string        title  = textOf(item.title, ctx);
+        Element                  header = hbox({
             text(expanded ? "- " : "+ ") | color(theme.accentColor),
             text(title) | color(theme.accentColor) | bold,
         });
@@ -1649,11 +1638,7 @@ Rows renderItemRows(const Item& item, const UiRenderCtx& ctx, UiRenderResult& ou
         pushPlain(std::move(header), 1, std::move(regions));
         if (expanded) {
             // 子项自带缩进 (与标题右移 2 列对齐), 直接追加不额外补白
-            auto sub = renderChildren(
-                item.children,
-                childCtx(ctx, ctx.width, ctx.indent + 2),
-                out
-            );
+            auto sub = renderChildren(item.children, childCtx(ctx, ctx.width, ctx.indent + 2), out);
             for (auto& row : sub) {
                 rows.push_back(std::move(row));
             }
@@ -1663,13 +1648,13 @@ Rows renderItemRows(const Item& item, const UiRenderCtx& ctx, UiRenderResult& ou
 
     // ---------------- Control (交互控件) ----------------
     if (item.kind == "Control") {
-        const bool interactive = ctx.form != nullptr;
-        const std::string label = textOf(item.label, ctx);
-        const std::string help  = textOf(item.help, ctx);
-        const bool inlineLabel  = (item.control == "checkbox" || item.control == "switch");
+        const bool        interactive = ctx.form != nullptr;
+        const std::string label       = textOf(item.label, ctx);
+        const std::string help        = textOf(item.help, ctx);
+        const bool        inlineLabel = (item.control == "checkbox" || item.control == "switch");
         // 输入类控件 (text/number): help 作为输入框内的占位文本 (空值时显示),
         // 不再单起一行说明 (与主消息输入框的占位行为一致)
-        const bool inputLike    = (item.control == "text" || item.control == "number");
+        const bool inputLike = (item.control == "text" || item.control == "number");
         if (!label.empty() && !inlineLabel) {
             pushPlain(text(label) | color(theme.accentColor) | bold, 1);
         }
@@ -1706,10 +1691,10 @@ Rows renderItemRows(const Item& item, const UiRenderCtx& ctx, UiRenderResult& ou
             );
         } else if (item.control == "number") {
             // 整行输入框 + 两端步进按钮 "[ - ]" / "[ + ]" (值区域撑满其余宽度)
-            const std::string value  = controlEditText(item, ctx.form);
-            constexpr int     kStepW = 5; // "[ - ]" 与 "[ + ]" 的显示宽度
-            const int         rowW   = contentWidth(ctx);
-            Element           el     = hbox({
+            const std::string        value  = controlEditText(item, ctx.form);
+            constexpr int            kStepW = 5; // "[ - ]" 与 "[ + ]" 的显示宽度
+            const int                rowW   = contentWidth(ctx);
+            Element                  el     = hbox({
                 inputStepButton("[ - ]", theme),
                 inputFieldRow(value, help, item, ctx) | flex,
                 inputStepButton("[ + ]", theme),
@@ -1934,7 +1919,7 @@ const pluginxx::ui::Capabilities& tuiUiCapabilities() {
 
 std::vector<pluginxx::ui::Item> adaptItems(const std::vector<pluginxx::ui::Item>& items) {
     pluginxx::ui::AdaptReport report;
-    auto out = pluginxx::ui::adaptBlocks(items, tuiUiCapabilities(), &report);
+    auto                      out = pluginxx::ui::adaptBlocks(items, tuiUiCapabilities(), &report);
     for (const auto& note : report.notes) {
         XX_LOGW("[tui] ui adapt: {}", note);
     }
@@ -1943,7 +1928,7 @@ std::vector<pluginxx::ui::Item> adaptItems(const std::vector<pluginxx::ui::Item>
 
 pluginxx::ui::Item adaptItem(const pluginxx::ui::Item& item) {
     pluginxx::ui::AdaptReport report;
-    auto out = pluginxx::ui::adaptItem(item, tuiUiCapabilities(), &report);
+    auto                      out = pluginxx::ui::adaptItem(item, tuiUiCapabilities(), &report);
     for (const auto& note : report.notes) {
         XX_LOGW("[tui] ui adapt: {}", note);
     }
@@ -2257,7 +2242,8 @@ bool validateForm(const std::vector<pluginxx::ui::Item>& items, UiFormState& for
                 if (!validateNumber(item, state)) {
                     ok = false;
                 }
-            } else if ((item.control == "buttons" || item.control == "select") && item.options.empty()) {
+            } else if ((item.control == "buttons" || item.control == "select")
+                       && item.options.empty()) {
                 // 无候选项: 该控件的值无法确定, 拒绝提交并提示 (与渲染诊断行一致)
                 state.tip = std::string{tr("ui.noOptions")};
                 ok        = false;
@@ -2291,7 +2277,8 @@ utilxx_base::Json formValues(const std::vector<pluginxx::ui::Item>& items, UiFor
                               std::max(0, static_cast<int>(item.options.size()) - 1)
                           );
                           if (!item.options.empty()) {
-                              values[item.id] = jsonOf(item.options[static_cast<size_t>(idx)].valueJson);
+                              values[item.id]
+                                  = jsonOf(item.options[static_cast<size_t>(idx)].valueJson);
                           }
                       } else if (item.control == "number") {
                           const std::string text
@@ -2319,7 +2306,8 @@ utilxx_base::Json formValues(const std::vector<pluginxx::ui::Item>& items, UiFor
     return out;
 }
 
-std::optional<pluginxx::ui::Item> itemFromInterruptBlock(const middleware::InterruptUiBlock& block) {
+std::optional<pluginxx::ui::Item> itemFromInterruptBlock(const middleware::InterruptUiBlock& block
+) {
     // 唯一实现在 lib (`agentxx::middleware::itemOf`): 中断描述 → 组件项的映射
     // 由 TUI 渲染、纯文本降级与"构建器拼中断"共用, 避免各接入点各写一份
     return middleware::itemOf(block);

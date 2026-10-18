@@ -95,9 +95,9 @@ bool allSupported(const std::vector<Item>& items, const Capabilities& caps) {
 
 /// 终端常用集: 去掉 Stack / Image 与客户端专属块 (与 TUI 客户端上报的一致)
 Capabilities tuiCaps() {
-    Capabilities             caps = pluginxx::ui::fullCapabilities();
-    caps.kind                     = "tui";
-    caps.cell                     = pluginxx::ui::CellSize{8.0, 20.0};
+    Capabilities caps = pluginxx::ui::fullCapabilities();
+    caps.kind         = "tui";
+    caps.cell         = pluginxx::ui::CellSize{8.0, 20.0};
     std::vector<std::string> keep;
     for (const auto& name : caps.blocks) {
         if (name == "Stack" || name == "Image" || name == "musicxx.Shader") {
@@ -127,7 +127,9 @@ Capabilities capsWithout(std::string_view drop) {
 TestResult testUiKit() {
     // ---------------- 基础 kit 的 agentxx 覆盖 ----------------
     {
-        const Item title = agentxx::ui::kit::title({{"text", "会话统计"}});
+        const Item title = agentxx::ui::kit::title({
+            {"text", "会话统计"}
+        });
         XX_TEST_EXPECT_EQ(title.kind, std::string{"Text"});
         XX_TEST_EXPECT_EQ(title.textType, std::string{"title"});
         XX_TEST_EXPECT_EQ(textOf(title), std::string{"会话统计"});
@@ -142,10 +144,10 @@ TestResult testUiKit() {
     }
     {
         // card 覆盖: 终端卡片留白更紧 (横向 8u / 纵向 4u)
-        const Item card = agentxx::ui::kit::card(
-            {{"title", "索引"},
-             {"children", Json::array({Json::parse(R"({"kind":"Text","text":"inner"})")})}}
-        );
+        const Item card = agentxx::ui::kit::card({
+            {"title",    "索引"                                                       },
+            {"children", Json::array({Json::parse(R"({"kind":"Text","text":"inner"})")})}
+        });
         XX_TEST_EXPECT_EQ(card.kind, std::string{"Block"});
         XX_TEST_EXPECT_EQ(card.variant, std::string{"card"});
         XX_TEST_EXPECT_TRUE(card.hasPadding);
@@ -158,7 +160,10 @@ TestResult testUiKit() {
     }
     {
         // listRow 覆盖: inset 行 + 8u 间距; 副标题 / 右侧文字缺省时不产出空节点
-        const Item row = agentxx::ui::kit::listRow({{"title", "切歌次数"}, {"trailing", "3"}});
+        const Item row = agentxx::ui::kit::listRow({
+            {"title",    "切歌次数"},
+            {"trailing", "3"           }
+        });
         XX_TEST_EXPECT_EQ(row.kind, std::string{"Block"});
         XX_TEST_EXPECT_EQ(row.variant, std::string{"inset"});
         XX_TEST_EXPECT_TRUE(row.hasPadding);
@@ -183,12 +188,17 @@ TestResult testUiKit() {
         }
 
         // 不带右侧文字时 Row 只有左侧一份内容
-        const Item plain = agentxx::ui::kit::listRow({{"title", "A"}});
+        const Item plain = agentxx::ui::kit::listRow({
+            {"title", "A"}
+        });
         XX_TEST_EXPECT_EQ(plain.children.front().children.size(), size_t{1});
 
         // 带副标题: 左侧多一行 caption
-        const Item row2
-            = agentxx::ui::kit::listRow({{"title", "A"}, {"subtitle", "B"}, {"trailing", "C"}});
+        const Item  row2 = agentxx::ui::kit::listRow({
+            {"title",    "A"},
+            {"subtitle", "B"},
+            {"trailing", "C"}
+        });
         const Item* col2 = findItem(row2, "Column");
         XX_TEST_EXPECT_TRUE(col2 != nullptr);
         if (col2 != nullptr) {
@@ -199,7 +209,10 @@ TestResult testUiKit() {
     }
     {
         // progressRow 覆盖: agentxx 默认按百分比显示
-        const Item row = agentxx::ui::kit::progressRow({{"label", "CPU"}, {"value", 42}});
+        const Item row = agentxx::ui::kit::progressRow({
+            {"label", "CPU"},
+            {"value", 42   }
+        });
         XX_TEST_EXPECT_EQ(row.kind, std::string{"Row"});
         const Item* bar = findItem(row, "Progress");
         XX_TEST_EXPECT_TRUE(bar != nullptr);
@@ -208,9 +221,12 @@ TestResult testUiKit() {
             XX_TEST_EXPECT_EQ(bar->total, 100.0);
             XX_TEST_EXPECT_EQ(bar->unit, std::string{"%"});
         }
-        const Item custom
-            = agentxx::ui::kit::progressRow({{"value", 3}, {"total", 10}, {"unit", "MB"}});
-        const Item* bar2 = findItem(custom, "Progress");
+        const Item  custom = agentxx::ui::kit::progressRow({
+            {"value", 3   },
+            {"total", 10  },
+            {"unit",  "MB"}
+        });
+        const Item* bar2   = findItem(custom, "Progress");
         XX_TEST_EXPECT_TRUE(bar2 != nullptr);
         if (bar2 != nullptr) {
             XX_TEST_EXPECT_EQ(bar2->unit, std::string{"MB"});
@@ -229,13 +245,13 @@ TestResult testUiKit() {
     // ---------------- agentxx 常用组合 ----------------
     {
         // toolCallRow: 工具名 + 摘要 + 状态标签; 没给状态就不产标签
-        const Item row = agentxx::ui::kit::toolCallRow(
-            {{"name", "grep"},
-             {"depict", "在 src 下搜索 TODO"},
-             {"status", "完成"},
-             {"statusTone", "success"},
-             {"action", "open:grep"}}
-        );
+        const Item row = agentxx::ui::kit::toolCallRow({
+            {"name",       "grep"                  },
+            {"depict",     "在 src 下搜索 TODO"},
+            {"status",     "完成"                },
+            {"statusTone", "success"               },
+            {"action",     "open:grep"             }
+        });
         XX_TEST_EXPECT_EQ(row.kind, std::string{"Block"});
         XX_TEST_EXPECT_EQ(row.variant, std::string{"inset"});
         XX_TEST_EXPECT_EQ(row.action.kind, Action::Kind::Dispatch);
@@ -252,13 +268,17 @@ TestResult testUiKit() {
             XX_TEST_EXPECT_EQ(col->children.size(), size_t{2}); // 名称 + 摘要
         }
 
-        const Item plain = agentxx::ui::kit::toolCallRow({{"name", "grep"}});
+        const Item plain = agentxx::ui::kit::toolCallRow({
+            {"name", "grep"}
+        });
         XX_TEST_EXPECT_TRUE(findItem(plain, "Badge") == nullptr);
         XX_TEST_EXPECT_EQ(findItem(plain, "Column")->children.size(), size_t{1});
     }
     {
         // thinkingBlock: 正文用 thinking 色调; label 可选
-        const Item block = agentxx::ui::kit::thinkingBlock({{"content", "先看索引再取内容"}});
+        const Item block = agentxx::ui::kit::thinkingBlock({
+            {"content", "先看索引再取内容"}
+        });
         XX_TEST_EXPECT_EQ(block.kind, std::string{"Block"});
         XX_TEST_EXPECT_EQ(block.variant, std::string{"inset"});
         XX_TEST_EXPECT_EQ(countChildren(block, "Column"), 1);
@@ -268,9 +288,11 @@ TestResult testUiKit() {
             XX_TEST_EXPECT_EQ(col->children.size(), size_t{1});
             XX_TEST_EXPECT_EQ(col->children.front().tone, std::string{"thinking"});
         }
-        const Item withLabel
-            = agentxx::ui::kit::thinkingBlock({{"content", "正文"}, {"label", "思考"}});
-        const Item* col2 = findItem(withLabel, "Column");
+        const Item  withLabel = agentxx::ui::kit::thinkingBlock({
+            {"content", "正文"},
+            {"label",   "思考"}
+        });
+        const Item* col2      = findItem(withLabel, "Column");
         XX_TEST_EXPECT_TRUE(col2 != nullptr);
         if (col2 != nullptr) {
             XX_TEST_EXPECT_EQ(col2->children.size(), size_t{2});
@@ -281,9 +303,11 @@ TestResult testUiKit() {
         // sessionStats: 可选标题 + 表格 (列宽交给客户端自动分配)
         const Json columns
             = Json::parse(R"([{"title":"指标","width":"auto"},{"title":"数值","align":"end"}])");
-        const Json rows = Json::parse(R"([["命中","12"],["未命中","3"]])");
-        const Item stats
-            = agentxx::ui::kit::sessionStats({{"columns", columns}, {"rows", rows}});
+        const Json  rows  = Json::parse(R"([["命中","12"],["未命中","3"]])");
+        const Item  stats = agentxx::ui::kit::sessionStats({
+            {"columns", columns},
+            {"rows",    rows   }
+        });
         const Item* table = findItem(stats, "Table");
         XX_TEST_EXPECT_TRUE(table != nullptr);
         if (table != nullptr) {
@@ -296,16 +320,20 @@ TestResult testUiKit() {
         }
         // 没给标题时不产出标题行
         XX_TEST_EXPECT_TRUE(findItem(stats, "Text") == nullptr);
-        const Item titled = agentxx::ui::kit::sessionStats(
-            {{"title", "本轮统计"}, {"columns", columns}, {"rows", rows}}
-        );
+        const Item titled = agentxx::ui::kit::sessionStats({
+            {"title",   "本轮统计"},
+            {"columns", columns       },
+            {"rows",    rows          }
+        });
         XX_TEST_EXPECT_TRUE(findItem(titled, "Text") != nullptr);
     }
     {
         // pathDiffRow: 目标未知 → 第一个变体 (Diff); 目标不支持 Diff → 等宽文本兜底
-        const Item diff = agentxx::ui::kit::pathDiffRow(
-            {{"path", "src/main.cpp"}, {"oldStr", "old"}, {"newStr", "new"}}
-        );
+        const Item  diff     = agentxx::ui::kit::pathDiffRow({
+            {"path",   "src/main.cpp"},
+            {"oldStr", "old"         },
+            {"newStr", "new"         }
+        });
         const Item* diffNode = findItem(diff, "Diff");
         XX_TEST_EXPECT_TRUE(diffNode != nullptr);
         if (diffNode != nullptr) {
@@ -316,7 +344,11 @@ TestResult testUiKit() {
 
         const Capabilities noDiff   = capsWithout("Diff");
         const Item         degraded = agentxx::ui::kit::pathDiffRow(
-            {{"path", "src/main.cpp"}, {"oldStr", "old"}, {"newStr", "new"}},
+            {
+                {"path",   "src/main.cpp"},
+                {"oldStr", "old"         },
+                {"newStr", "new"         }
+        },
             &noDiff
         );
         XX_TEST_EXPECT_TRUE(findItem(degraded, "Diff") == nullptr);
@@ -329,13 +361,16 @@ TestResult testUiKit() {
     }
     {
         // diagramBlock: 支持 Diagram 时给图; 不支持时退化成等宽源码
-        const Item diagram
-            = agentxx::ui::kit::diagramBlock({{"mermaid", "stateDiagram-v2\n  [*] --> A"}});
+        const Item diagram = agentxx::ui::kit::diagramBlock({
+            {"mermaid", "stateDiagram-v2\n  [*] --> A"}
+        });
         XX_TEST_EXPECT_TRUE(findItem(diagram, "Diagram") != nullptr);
 
         const Capabilities noDiagram = capsWithout("Diagram");
-        const Item         degraded   = agentxx::ui::kit::diagramBlock(
-            {{"mermaid", "stateDiagram-v2\n  [*] --> A"}},
+        const Item         degraded  = agentxx::ui::kit::diagramBlock(
+            {
+                {"mermaid", "stateDiagram-v2\n  [*] --> A"}
+        },
             &noDiagram
         );
         XX_TEST_EXPECT_TRUE(findItem(degraded, "Diagram") == nullptr);
@@ -348,8 +383,10 @@ TestResult testUiKit() {
     }
     {
         // interruptRow: 确认 / 取消两个等份按钮; 动作名缺省用中断域内约定
-        const Item row
-            = agentxx::ui::kit::interruptRow({{"confirmLabel", "确认"}, {"cancelLabel", "取消"}});
+        const Item row = agentxx::ui::kit::interruptRow({
+            {"confirmLabel", "确认"},
+            {"cancelLabel",  "取消"}
+        });
         XX_TEST_EXPECT_EQ(row.kind, std::string{"Row"});
         XX_TEST_EXPECT_EQ(row.main, std::string{"end"});
         XX_TEST_EXPECT_EQ(row.children.size(), size_t{2});
@@ -364,12 +401,12 @@ TestResult testUiKit() {
         }
 
         // 自定义动作名: 两个按钮各用给定的动作
-        const Item custom = agentxx::ui::kit::interruptRow(
-            {{"confirmLabel", "是"},
-             {"cancelLabel", "否"},
-             {"confirmAction", "yes"},
-             {"cancelAction", "no"}}
-        );
+        const Item custom = agentxx::ui::kit::interruptRow({
+            {"confirmLabel",  "是"},
+            {"cancelLabel",   "否"},
+            {"confirmAction", "yes"},
+            {"cancelAction",  "no" }
+        });
         XX_TEST_EXPECT_EQ(custom.children.size(), size_t{2});
         const Item* btnYes = findItem(custom.children[0], "Button");
         XX_TEST_EXPECT_TRUE(btnYes != nullptr);
@@ -396,7 +433,7 @@ TestResult testUiKit() {
             {"kind":"Diagram","mermaid":"stateDiagram-v2\n  [*] --> A"},
             {"kind":"musicxx.Shader","bundle":"bg.bundle"}
         ])");
-        const auto origin = pluginxx::ui::parseBlocks(description);
+        const auto origin      = pluginxx::ui::parseBlocks(description);
         XX_TEST_EXPECT_EQ(origin.size(), size_t{7});
 
         // 完整能力: 不做任何降级
@@ -435,8 +472,8 @@ TestResult testUiKit() {
         XX_TEST_EXPECT_TRUE(sawDiagram);
 
         // 不支持 Diagram 的客户端: 退化成等宽文本 (源码仍可见)
-        const Capabilities noDiagram = capsWithout("Diagram");
-        const auto noDiagramOut      = pluginxx::ui::adaptBlocks(origin, noDiagram);
+        const Capabilities noDiagram    = capsWithout("Diagram");
+        const auto         noDiagramOut = pluginxx::ui::adaptBlocks(origin, noDiagram);
         XX_TEST_EXPECT_TRUE(allSupported(noDiagramOut, noDiagram));
         bool sawMermaid = false;
         for (const auto& item : noDiagramOut) {
@@ -466,9 +503,12 @@ TestResult testUiKit() {
 
     // ---------------- kit 产出 → dump → parse 往返 ----------------
     {
-        const Item row = agentxx::ui::kit::toolCallRow(
-            {{"name", "grep"}, {"depict", "搜索"}, {"status", "完成"}, {"statusTone", "success"}}
-        );
+        const Item row  = agentxx::ui::kit::toolCallRow({
+            {"name",       "grep"   },
+            {"depict",     "搜索" },
+            {"status",     "完成" },
+            {"statusTone", "success"}
+        });
         const Item back = pluginxx::ui::parseBlock(pluginxx::ui::dumpItem(row));
         XX_TEST_EXPECT_EQ(back.kind, row.kind);
         XX_TEST_EXPECT_EQ(back.variant, row.variant);
@@ -479,14 +519,18 @@ TestResult testUiKit() {
 
         // 每个扩展 kit 组件都能被解析回来 (kind 不丢)
         const std::vector<Item> samples = {
-            agentxx::ui::kit::listRow({{"title", "A"}}),
-            agentxx::ui::kit::thinkingBlock({{"content", "B"}}),
-            agentxx::ui::kit::sessionStats(
-                {{"columns", Json::parse(R"([{"title":"C"}])")},
-                 {"rows", Json::parse(R"([["1"]])")}}
+            agentxx::ui::kit::listRow({{"title", "A"}}
             ),
-            agentxx::ui::kit::diagramBlock({{"mermaid", "stateDiagram-v2"}}),
-            agentxx::ui::kit::interruptRow({{"confirmLabel", "好"}, {"cancelLabel", "算了"}}),
+            agentxx::ui::kit::thinkingBlock({{"content", "B"}}
+            ),
+            agentxx::ui::kit::sessionStats(
+                {{"columns", Json::parse(R"([{"title":"C"}])")}, {"rows", Json::parse(R"([["1"]])")}
+                }
+            ),
+            agentxx::ui::kit::diagramBlock({{"mermaid", "stateDiagram-v2"}}
+            ),
+            agentxx::ui::kit::interruptRow({{"confirmLabel", "好"}, {"cancelLabel", "算了"}}
+            ),
         };
         for (const auto& sample : samples) {
             const Item parsed = pluginxx::ui::parseBlock(pluginxx::ui::dumpItem(sample));

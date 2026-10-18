@@ -105,10 +105,7 @@ std::string readTextFile(const fs::path& file) {
     if (!ifs) {
         return {};
     }
-    return std::string{
-        std::istreambuf_iterator<char>(ifs),
-        std::istreambuf_iterator<char>()
-    };
+    return std::string{std::istreambuf_iterator<char>(ifs), std::istreambuf_iterator<char>()};
 }
 
 std::string toGeneric(const fs::path& p) {
@@ -155,7 +152,8 @@ void checkClientIncludes(const fs::path& root, Violations& v, size_t& scanned) {
     for (const auto& f : files) {
         ++scanned;
         for (const auto& inc : readIncludes(f)) {
-            const auto where = toGeneric(f.lexically_relative(root)) + ":" + std::to_string(inc.line);
+            const auto where
+                = toGeneric(f.lexically_relative(root)) + ":" + std::to_string(inc.line);
             if (inc.path.find("lib/src") != std::string::npos
                 || inc.path.find("lib\\src") != std::string::npos) {
                 v.push_back(where + ": client 引用 lib 私有实现头 `" + inc.path + "`");
@@ -196,7 +194,8 @@ void checkPluginIncludes(const fs::path& root, Violations& v, size_t& scanned) {
     for (const auto& f : files) {
         ++scanned;
         for (const auto& inc : readIncludes(f)) {
-            const auto where = toGeneric(f.lexically_relative(root)) + ":" + std::to_string(inc.line);
+            const auto where
+                = toGeneric(f.lexically_relative(root)) + ":" + std::to_string(inc.line);
             if (inc.path.find("lib/src") != std::string::npos
                 || inc.path.find("lib\\src") != std::string::npos) {
                 v.push_back(where + ": 插件引用 lib 私有实现头 `" + inc.path + "`");
@@ -220,7 +219,8 @@ void checkLibIncludes(const fs::path& root, Violations& v, size_t& scanned) {
     for (const auto& f : files) {
         ++scanned;
         for (const auto& inc : readIncludes(f)) {
-            const auto where = toGeneric(f.lexically_relative(root)) + ":" + std::to_string(inc.line);
+            const auto where
+                = toGeneric(f.lexically_relative(root)) + ":" + std::to_string(inc.line);
             if (inc.path.rfind("agentxx-client/", 0) == 0
                 || inc.path.find("client/include") != std::string::npos
                 || inc.path.find("client\\include") != std::string::npos
@@ -243,8 +243,7 @@ void checkPluginExportConfig(const fs::path& root, Violations& v) {
         v.push_back(cmakeWhere + ": 无法读取插件构建配置");
         return;
     }
-    for (const std::string_view token :
-         {"local: *", "--version-script", "exported_symbols_list"}) {
+    for (const std::string_view token : {"local: *", "--version-script", "exported_symbols_list"}) {
         if (cmakeText.find(token) == std::string::npos) {
             v.push_back(
                 cmakeWhere + ": 缺少导出白名单配置 `" + std::string{token}
@@ -271,7 +270,7 @@ void checkPluginRawExport(const fs::path& root, Violations& v, size_t& scanned) 
         if (text.empty()) {
             continue;
         }
-        const auto where = toGeneric(f.lexically_relative(root));
+        const auto       where = toGeneric(f.lexically_relative(root));
         std::string_view rest{text};
         int              lineNo = 0;
         size_t           pos    = 0;
@@ -307,8 +306,8 @@ void checkRenderLayerIncludes(const fs::path& root, Violations& v) {
         root / "client" / "include" / "agentxx-client" / "io" / "tui" / "framework" / "ui_hit.h",
     };
     static const std::string_view kForbidden[] = {
-        "agentxx-client/io/tui/agent_tui.h",      // TUI 端点 (连接/会话状态/事件循环)
-        "agentxx-client/io/tui/components/",      // 具体界面部件 (持有会话镜像与端点)
+        "agentxx-client/io/tui/agent_tui.h", // TUI 端点 (连接/会话状态/事件循环)
+        "agentxx-client/io/tui/components/", // 具体界面部件 (持有会话镜像与端点)
         "agentxx/plugin/client_plugin_manager.h", // 插件管理器实现 (加载/生命周期)
         "agentxx/agent/io/",                      // 端点 / transport / wire
         "agentxx/agent/session",                  // 会话与持久化
@@ -326,7 +325,8 @@ void checkRenderLayerIncludes(const fs::path& root, Violations& v) {
             continue;
         }
         for (const auto& inc : readIncludes(f)) {
-            const auto where = toGeneric(f.lexically_relative(root)) + ":" + std::to_string(inc.line);
+            const auto where
+                = toGeneric(f.lexically_relative(root)) + ":" + std::to_string(inc.line);
             for (const auto& bad : kForbidden) {
                 if (inc.path.rfind(bad, 0) == 0) {
                     v.push_back(
@@ -353,8 +353,8 @@ void checkRenderLayerIncludes(const fs::path& root, Violations& v) {
 /// 只解析源码文本, 不依赖客户端是否参与本次构建 (避免关掉 client 后规则静默失效);
 /// 文件或数组缺失即失败, 改名后必须同步更新本规则。
 void checkTuiBlockNames(const fs::path& root, Violations& v) {
-    const auto file = root / "client" / "src" / "io" / "tui" / "ui_components.cpp";
-    const auto text = readTextFile(file);
+    const auto file  = root / "client" / "src" / "io" / "tui" / "ui_components.cpp";
+    const auto text  = readTextFile(file);
     const auto where = toGeneric(file.lexically_relative(root));
     if (text.empty()) {
         v.push_back(where + ": 无法读取客户端组件能力表");
@@ -366,15 +366,15 @@ void checkTuiBlockNames(const fs::path& root, Violations& v) {
         return;
     }
     const auto braceBegin = text.find('{', keyPos);
-    const auto braceEnd   = (braceBegin == std::string::npos) ? std::string::npos
-                                                              : text.find("};", braceBegin);
+    const auto braceEnd
+        = (braceBegin == std::string::npos) ? std::string::npos : text.find("};", braceBegin);
     if (braceBegin == std::string::npos || braceEnd == std::string::npos) {
         v.push_back(where + ": `kTuiBlockNames` 初始化列表无法解析 (改写后需同步本规则)");
         return;
     }
-    static const std::regex kQuoted{R"re("([A-Za-z0-9_.]+)")re"};
-    std::vector<std::string>  declared;
-    const auto                body = text.substr(braceBegin, braceEnd - braceBegin);
+    static const std::regex  kQuoted{R"re("([A-Za-z0-9_.]+)")re"};
+    std::vector<std::string> declared;
+    const auto               body = text.substr(braceBegin, braceEnd - braceBegin);
     for (auto it = std::sregex_iterator(body.begin(), body.end(), kQuoted);
          it != std::sregex_iterator();
          ++it) {
@@ -410,7 +410,7 @@ void checkTuiBlockNames(const fs::path& root, Violations& v) {
         auto sorted = declared;
         std::sort(sorted.begin(), sorted.end());
         for (auto it = std::adjacent_find(sorted.begin(), sorted.end()); it != sorted.end();
-             it = std::adjacent_find(it + 1, sorted.end())) {
+             it      = std::adjacent_find(it + 1, sorted.end())) {
             v.push_back(where + ": 组件 `" + *it + "` 在能力表里重复出现");
         }
     }
@@ -440,24 +440,25 @@ void checkTuiBlockNames(const fs::path& root, Violations& v) {
 /// 数量约定: 10 张通用表 + 10 张 agent 业务表 = 20 (与 `PluginManager::kInterfaceTableCount`
 /// 一致); 7 张 client 基础表 + 2 张交互表 (timer / keybind) = 9。
 void checkInterfaceTableNames(const fs::path& root, Violations& v) {
-    const auto genericHeader = root / "third_party" / "cxx_pluginxx" / "include" / "pluginxx"
-                               / "api" / "tables.h";
-    const auto agentHeader = root / "lib" / "include" / "agentxx" / "plugin" / "api"
-                             / "plugin_api.h";
-    const auto clientHeader = root / "lib" / "include" / "agentxx" / "plugin" / "api"
-                              / "client_plugin_api.h";
+    const auto genericHeader
+        = root / "third_party" / "cxx_pluginxx" / "include" / "pluginxx" / "api" / "tables.h";
+    const auto agentHeader
+        = root / "lib" / "include" / "agentxx" / "plugin" / "api" / "plugin_api.h";
+    const auto clientHeader
+        = root / "lib" / "include" / "agentxx" / "plugin" / "api" / "client_plugin_api.h";
 
     struct Group {
-        const fs::path*  file;
-        const char*      macro;  ///< 宏名前缀 (含 `_VERSION` 的变体不会匹配到引号, 天然排除)
-        size_t           expect;
-        const char*      prefix;
-        bool             documented; ///< 是否要求写进 plugins.md
+        const fs::path* file;
+        const char* macro; ///< 宏名前缀 (含 `_VERSION` 的变体不会匹配到引号, 天然排除)
+        size_t      expect;
+        const char* prefix;
+        bool        documented; ///< 是否要求写进 plugins.md
     };
+
     const Group groups[] = {
-        {&genericHeader, "PLUGINXX_IFACE_", 10, "pluginxx.", false},
-        {&agentHeader, "AGENTXX_PLUGIN_IFACE_AGENT_", 10, "agentxx.agent.", true},
-        {&clientHeader, "AGENTXX_IFACE_CLIENT_", 9, "agentxx.client.", true},
+        {&genericHeader, "PLUGINXX_IFACE_",             10, "pluginxx.",       false},
+        {&agentHeader,   "AGENTXX_PLUGIN_IFACE_AGENT_", 10, "agentxx.agent.",  true },
+        {&clientHeader,  "AGENTXX_IFACE_CLIENT_",       9,  "agentxx.client.", true },
     };
 
     std::vector<std::string> documentedNames;
@@ -476,8 +477,8 @@ void checkInterfaceTableNames(const fs::path& root, Violations& v) {
         std::string_view         rest{text};
         size_t                   pos = 0;
         while (pos <= rest.size()) {
-            const auto nl  = rest.find('\n', pos);
-            const auto end = (nl == std::string_view::npos) ? rest.size() : nl;
+            const auto  nl  = rest.find('\n', pos);
+            const auto  end = (nl == std::string_view::npos) ? rest.size() : nl;
             std::smatch m;
             const auto  line = std::string{rest.substr(pos, end - pos)};
             if (std::regex_search(line, m, pattern)) {
@@ -491,21 +492,18 @@ void checkInterfaceTableNames(const fs::path& root, Violations& v) {
         if (names.size() != group.expect) {
             v.push_back(
                 where + ": 接口表数量为 " + std::to_string(names.size()) + ", 期望 "
-                + std::to_string(group.expect)
-                + " (增删接口表时同步 kInterfaceTableCount 与本规则)"
+                + std::to_string(group.expect) + " (增删接口表时同步 kInterfaceTableCount 与本规则)"
             );
         }
         auto sorted = names;
         std::sort(sorted.begin(), sorted.end());
         for (auto it = std::adjacent_find(sorted.begin(), sorted.end()); it != sorted.end();
-             it = std::adjacent_find(it + 1, sorted.end())) {
+             it      = std::adjacent_find(it + 1, sorted.end())) {
             v.push_back(where + ": 接口表名重复 `" + *it + "`");
         }
         for (const auto& name : names) {
             if (name.rfind(group.prefix, 0) != 0) {
-                v.push_back(
-                    where + ": 接口表名 `" + name + "` 前缀不是 `" + group.prefix + "`"
-                );
+                v.push_back(where + ": 接口表名 `" + name + "` 前缀不是 `" + group.prefix + "`");
             }
             if (group.documented) {
                 documentedNames.push_back(name);
@@ -545,14 +543,15 @@ void checkInterfaceTableNames(const fs::path& root, Violations& v) {
 void checkInterfaceTableQuadruple(const fs::path& root, Violations& v) {
     struct Group {
         const fs::path* file;
-        const char*     macro;  ///< IID 宏前缀 (不含尾随 `_<名>`)
+        const char*     macro; ///< IID 宏前缀 (不含尾随 `_<名>`)
         const char*     label;
         size_t          expect;
     };
+
     const fs::path genericHeader
         = root / "third_party" / "cxx_pluginxx" / "include" / "pluginxx" / "api" / "tables.h";
-    const fs::path genericMeta = root / "third_party" / "cxx_pluginxx" / "include" / "pluginxx"
-                                 / "api" / "iface_meta.h";
+    const fs::path genericMeta
+        = root / "third_party" / "cxx_pluginxx" / "include" / "pluginxx" / "api" / "iface_meta.h";
     const fs::path agentHeader
         = root / "lib" / "include" / "agentxx" / "plugin" / "api" / "plugin_api.h";
     const fs::path clientHeader
@@ -561,13 +560,13 @@ void checkInterfaceTableQuadruple(const fs::path& root, Violations& v) {
         = root / "lib" / "include" / "agentxx" / "plugin" / "api" / "plugin_iface_meta.h";
 
     const Group groups[] = {
-        {&genericHeader, "PLUGINXX_IFACE_", "通用", 10},
-        {&agentHeader, "AGENTXX_PLUGIN_IFACE_AGENT_", "agent 业务", 10},
-        {&clientHeader, "AGENTXX_IFACE_CLIENT_", "client 业务", 9},
+        {&genericHeader, "PLUGINXX_IFACE_",             "通用",        10},
+        {&agentHeader,   "AGENTXX_PLUGIN_IFACE_AGENT_", "agent 业务",  10},
+        {&clientHeader,  "AGENTXX_IFACE_CLIENT_",       "client 业务", 9 },
     };
 
-    size_t                        tableTotal = 0;
-    std::vector<fs::path>         metaFiles{genericMeta, agentMeta};
+    size_t                tableTotal = 0;
+    std::vector<fs::path> metaFiles{genericMeta, agentMeta};
     for (const auto& group : groups) {
         const auto text  = readTextFile(*group.file);
         const auto where = toGeneric(group.file->lexically_relative(root));
@@ -606,9 +605,9 @@ void checkInterfaceTableQuadruple(const fs::path& root, Violations& v) {
             std::string_view rest{text};
             size_t           pos = 0;
             while (pos <= rest.size()) {
-                const auto nl  = rest.find('\n', pos);
-                const auto end = (nl == std::string_view::npos) ? rest.size() : nl;
-                const auto line = std::string{rest.substr(pos, end - pos)};
+                const auto  nl   = rest.find('\n', pos);
+                const auto  end  = (nl == std::string_view::npos) ? rest.size() : nl;
+                const auto  line = std::string{rest.substr(pos, end - pos)};
                 std::smatch m;
                 if (std::regex_search(line, m, defineRe) && m.size() > 2) {
                     const std::string name = m[1].str();
@@ -617,12 +616,13 @@ void checkInterfaceTableQuadruple(const fs::path& root, Violations& v) {
                         iids.push_back(name);
                     } else if (name.ends_with("_BASELINE_SIZE")) {
                         static const std::regex kSizeof{R"re(sizeof[ \t]*\([ \t]*(\w+)[ \t]*\))re"};
-                        std::smatch                sm;
+                        std::smatch             sm;
                         if (std::regex_search(body, sm, kSizeof) && sm.size() > 1) {
                             baselines.push_back(sm[1].str());
                         } else {
                             v.push_back(
-                                where + ": `" + name + "` 不是 `sizeof(表名)` 形态 (基线必须由编译器算)"
+                                where + ": `" + name
+                                + "` 不是 `sizeof(表名)` 形态 (基线必须由编译器算)"
                             );
                         }
                     } else if (name.ends_with("_MIN_VERSION")) {
@@ -647,8 +647,7 @@ void checkInterfaceTableQuadruple(const fs::path& root, Violations& v) {
         if (iids.size() != tables.size()) {
             v.push_back(
                 where + ": " + group.label + "接口表 IID 宏数量为 " + std::to_string(iids.size())
-                + ", 表数量为 " + std::to_string(tables.size())
-                + " (每张表都要有 IID 宏)"
+                + ", 表数量为 " + std::to_string(tables.size()) + " (每张表都要有 IID 宏)"
             );
         }
         if (versions.size() != tables.size()) {
@@ -698,9 +697,7 @@ void checkInterfaceTableQuadruple(const fs::path& root, Violations& v) {
     for (const auto& file : metaFiles) {
         const auto text = readTextFile(file);
         if (text.empty()) {
-            v.push_back(
-                toGeneric(file.lexically_relative(root)) + ": 无法读取 IfaceMeta 特化头"
-            );
+            v.push_back(toGeneric(file.lexically_relative(root)) + ": 无法读取 IfaceMeta 特化头");
             continue;
         }
         static const std::regex kSpecialize{R"re(struct[ \t]+IfaceMeta[ \t]*<[ \t]*\w+[ \t]*>)re"};
@@ -718,7 +715,8 @@ void checkInterfaceTableQuadruple(const fs::path& root, Violations& v) {
     }
     if (tableTotal != 29) {
         v.push_back(
-            "接口表合计为 " + std::to_string(tableTotal) + ", 期望 29 (通用 10 + agent 10 + client 9)"
+            "接口表合计为 " + std::to_string(tableTotal)
+            + ", 期望 29 (通用 10 + agent 10 + client 9)"
         );
     }
 }
@@ -737,37 +735,52 @@ void checkInterfaceTableLayout(const fs::path& root, Violations& v) {
         const char* table;   ///< 表结构体名
         const char* members; ///< 顶层函数指针成员, 按声明顺序以 `|` 分隔
     };
+
     // 台账由表头按声明顺序生成 (生成脚本见 resource/history/plugin-version/work.md)
     static const TableLayout kExpected[] = {
-    {"AgentxxClientEventsIface",         "subscribe|unsubscribe"},
-    {"AgentxxClientJsonIface",           "json_get_string|json_escape"},
-    {"AgentxxClientKeybindIface",        "register_keybind|unregister_keybind|list_keybinds"},
-    {"AgentxxClientLogIface",            "log"},
-    {"AgentxxClientSelfIface",           "get_own_info|get_plugin_args|get_plugin_config_path|get_language|set_language"},
-    {"AgentxxClientSessionIface",        "get_client_state|send_user_input|request_cancel"},
-    {"AgentxxClientTimerIface",          "set_timer|cancel_timer|is_visible"},
-    {"AgentxxClientUiIface",             "register_status_item|update_status_item|unregister_status_item|register_panel|update_panel|unregister_panel|register_info_section|update_info_section|unregister_info_section|register_command|unregister_command|show_toast|update_tool_decor|register_tool_renderer|unregister_tool_renderer|bind_action_handler|unbind_action_handler|open_overlay|close_overlay"},
-    {"AgentxxClientWireIface",           "send_plugin_data"},
-    {"AgentxxPluginContextIface",        "get_messages|messages_count"},
-    {"AgentxxPluginFeatureIface",        "list_points|define_point|undefine_point|register_impl|unregister_impl|call_point_async|op_cancel"},
-    {"AgentxxPluginGraphIface",          "register_node_type|unregister_node_type|get_graph_json|get_graph_name|set_graph_json"},
-    {"AgentxxPluginHooksIface",          "register_hook|unregister_hook|register_hook_ex|unregister_hook_ex|list_hooks"},
-    {"AgentxxPluginModelIface",          "get_config"},
-    {"AgentxxPluginPermissionIface",     "register_tool_permission|unregister_tool_permission|check_paths"},
-    {"AgentxxPluginPromptIface",         "get_prompt|set_prompt"},
-    {"AgentxxPluginResourcesIface",      "register_skill_dir|unregister_skill_dir|register_memory_file|unregister_memory_file|register_mcp_server|unregister_mcp_server|get_own_resources"},
-    {"AgentxxPluginSessionIface",        "get_share_store|emit_message_tip|add_share_store"},
-    {"AgentxxPluginToolsIface",          "register_tool|unregister_tool|call_tool_async|op_cancel"},
-    {"PluginxxCancelIface",              "is_cancelled"},
-    {"PluginxxCapabilitiesIface",        "register_capability|register_capability_ex|unregister_capability|has_capability|invoke_capability_async|op_cancel"},
-    {"PluginxxConfigIface",              "get_config|get_plugin_args|get_tool_prompt|get_session_work_dir|get_plugin_config_path|get_language|set_language"},
-    {"PluginxxCoroutineRuntimeIface",    "request_driver|cancel_driver|is_io_thread"},
-    {"PluginxxEventsIface",              "subscribe|unsubscribe|publish"},
-    {"PluginxxJsonIface",                "json_get_string|json_escape"},
-    {"PluginxxLogIface",                 "log"},
-    {"PluginxxPluginsIface",             "list_plugins|get_plugin|get_own_info"},
-    {"PluginxxSchedulerIface",           "is_io_thread|post_to_io|sleep|op_cancel|offload"},
-    {"PluginxxTasksIface",               "register_task|cancel_task"},
+        {"AgentxxClientEventsIface",      "subscribe|unsubscribe"                                                                                                                                                                                                                                                                                                             },
+        {"AgentxxClientJsonIface",        "json_get_string|json_escape"                                                                                                                                                                                                                                                                                                       },
+        {"AgentxxClientKeybindIface",     "register_keybind|unregister_keybind|list_keybinds"                                                                                                                                                                                                                                                                                 },
+        {"AgentxxClientLogIface",         "log"                                                                                                                                                                                                                                                                                                                               },
+        {"AgentxxClientSelfIface",
+         "get_own_info|get_plugin_args|get_plugin_config_path|get_language|set_language"                                                                                                                                                                                                                                                                                      },
+        {"AgentxxClientSessionIface",     "get_client_state|send_user_input|request_cancel"                                                                                                                                                                                                                                                                                   },
+        {"AgentxxClientTimerIface",       "set_timer|cancel_timer|is_visible"                                                                                                                                                                                                                                                                                                 },
+        {"AgentxxClientUiIface",
+         "register_status_item|update_status_item|unregister_status_item|register_panel|update_panel|unregister_panel|register_info_section|update_info_section|unregister_info_section|register_command|unregister_command|show_toast|update_tool_decor|register_tool_renderer|unregister_tool_renderer|bind_action_handler|unbind_action_handler|open_overlay|close_overlay"
+        },
+        {"AgentxxClientWireIface",        "send_plugin_data"                                                                                                                                                                                                                                                                                                                  },
+        {"AgentxxPluginContextIface",     "get_messages|messages_count"                                                                                                                                                                                                                                                                                                       },
+        {"AgentxxPluginFeatureIface",
+         "list_points|define_point|undefine_point|register_impl|unregister_impl|call_point_async|op_cancel"
+        },
+        {"AgentxxPluginGraphIface",
+         "register_node_type|unregister_node_type|get_graph_json|get_graph_name|set_graph_json"                                                                                                                                                                                                                                                                               },
+        {"AgentxxPluginHooksIface",
+         "register_hook|unregister_hook|register_hook_ex|unregister_hook_ex|list_hooks"                                                                                                                                                                                                                                                                                       },
+        {"AgentxxPluginModelIface",       "get_config"                                                                                                                                                                                                                                                                                                                        },
+        {"AgentxxPluginPermissionIface",
+         "register_tool_permission|unregister_tool_permission|check_paths"                                                                                                                                                                                                                                                                                                    },
+        {"AgentxxPluginPromptIface",      "get_prompt|set_prompt"                                                                                                                                                                                                                                                                                                             },
+        {"AgentxxPluginResourcesIface",
+         "register_skill_dir|unregister_skill_dir|register_memory_file|unregister_memory_file|register_mcp_server|unregister_mcp_server|get_own_resources"
+        },
+        {"AgentxxPluginSessionIface",     "get_share_store|emit_message_tip|add_share_store"                                                                                                                                                                                                                                                                                  },
+        {"AgentxxPluginToolsIface",       "register_tool|unregister_tool|call_tool_async|op_cancel"                                                                                                                                                                                                                                                                           },
+        {"PluginxxCancelIface",           "is_cancelled"                                                                                                                                                                                                                                                                                                                      },
+        {"PluginxxCapabilitiesIface",
+         "register_capability|register_capability_ex|unregister_capability|has_capability|invoke_capability_async|op_cancel"
+        },
+        {"PluginxxConfigIface",
+         "get_config|get_plugin_args|get_tool_prompt|get_session_work_dir|get_plugin_config_path|get_language|set_language"
+        },
+        {"PluginxxCoroutineRuntimeIface", "request_driver|cancel_driver|is_io_thread"                                                                                                                                                                                                                                                                                         },
+        {"PluginxxEventsIface",           "subscribe|unsubscribe|publish"                                                                                                                                                                                                                                                                                                     },
+        {"PluginxxJsonIface",             "json_get_string|json_escape"                                                                                                                                                                                                                                                                                                       },
+        {"PluginxxLogIface",              "log"                                                                                                                                                                                                                                                                                                                               },
+        {"PluginxxPluginsIface",          "list_plugins|get_plugin|get_own_info"                                                                                                                                                                                                                                                                                              },
+        {"PluginxxSchedulerIface",        "is_io_thread|post_to_io|sleep|op_cancel|offload"                                                                                                                                                                                                                                                                                   },
+        {"PluginxxTasksIface",            "register_task|cancel_task"                                                                                                                                                                                                                                                                                                         },
     };
 
     const fs::path headers[] = {
@@ -780,8 +793,8 @@ void checkInterfaceTableLayout(const fs::path& root, Violations& v) {
     /// (括号深度必须为 0: 表内嵌套的函数指针参数 —— 如 client ui 表
     /// `register_command` 的 `execute` 参数 —— 不是成员)
     const auto membersOf = [](std::string_view body) {
-        std::vector<std::string> out;
-        int                      depth = 0;
+        std::vector<std::string>   out;
+        int                        depth = 0;
         constexpr std::string_view kMark = "(PLUGINXX_CALL*";
         for (size_t i = 0; i < body.size(); ++i) {
             if (body[i] == '(') {
@@ -793,7 +806,8 @@ void checkInterfaceTableLayout(const fs::path& root, Violations& v) {
                     }
                     size_t k = j;
                     while (k < body.size()
-                           && (std::isalnum(static_cast<unsigned char>(body[k])) || body[k] == '_')) {
+                           && (std::isalnum(static_cast<unsigned char>(body[k])) || body[k] == '_')
+                    ) {
                         ++k;
                     }
                     if (k > j) {
@@ -814,11 +828,13 @@ void checkInterfaceTableLayout(const fs::path& root, Violations& v) {
             v.push_back(toGeneric(header.lexically_relative(root)) + ": 无法读取 (成员台账依赖它)");
             continue;
         }
-        static const std::regex kTable{R"re(typedef[ \t]+struct[ \t]+(\w+Iface)[ \t]*\{([\s\S]*?)\}[ \t]*\1[ \t]*;)re"};
+        static const std::regex kTable{
+            R"re(typedef[ \t]+struct[ \t]+(\w+Iface)[ \t]*\{([\s\S]*?)\}[ \t]*\1[ \t]*;)re"
+        };
         for (auto it = std::sregex_iterator(text.begin(), text.end(), kTable);
              it != std::sregex_iterator();
              ++it) {
-            const auto joined = membersOf((*it)[2].str());
+            const auto  joined = membersOf((*it)[2].str());
             std::string text2;
             for (const auto& m : joined) {
                 if (!text2.empty()) {
@@ -842,8 +858,8 @@ void checkInterfaceTableLayout(const fs::path& root, Violations& v) {
         }
         if (it->second != item.members) {
             v.push_back(
-                std::string{"接口表 `"} + item.table + "` 成员顺序变了:\n      期望: " + item.members
-                + "\n      实际: " + it->second
+                std::string{"接口表 `"} + item.table
+                + "` 成员顺序变了:\n      期望: " + item.members + "\n      实际: " + it->second
                 + "\n      (追加成员只允许加在末尾, 并同步本台账; 重排/改签名/删成员请换 IID)"
             );
         }
@@ -880,29 +896,30 @@ void checkTerminology(const fs::path& root, Violations& v) {
         const char* term;
         const char* why;
     };
+
     // 本表自身就是"停用词"清单, 逐行带 `term-table` 标记跳过检查
     static const Rule kRules[] = {
-        {"宿主", "统一称呼为'主程序'(FFI 场景为'嵌入方程序')"}, // term-table
-        {"应用侧", "统一称呼为'主程序'"},                     // term-table
-        {"基座", "统一称呼为'插件框架'"},                     // term-table
-        {"装载", "统一用'加载'"},                             // term-table
-        {"载入", "统一用'加载'"},                             // term-table
-        {"承载", "按句意写'保存/包含/提供/负责'"},            // term-table
-        {"载体", "按句意写'内容/数据/块'"},                   // term-table
-        {"编排", "用'调度/组织'"},                            // term-table
-        {"接缝", "用'扩展点/对接点'"},                        // term-table
-        {"链路", "用'流程/调用路径'"},                        // term-table
-        {"视角", "用'角度'"},                                 // term-table
-        {"口径", "用'规则/定义'"},                            // term-table
-        {"落地", "用'实现'"},                                 // term-table
-        {"埋点", "用'扩展点'"},                               // term-table
-        {"门禁", "用'校验/检查'"},                            // term-table
-        {"颗粒度", "用'划分粗细/粒度'"},                      // term-table
+        {"宿主",    "统一称呼为'主程序'(FFI 场景为'嵌入方程序')"}, // term-table
+        {"应用侧", "统一称呼为'主程序'"                                }, // term-table
+        {"基座",    "统一称呼为'插件框架'"                             }, // term-table
+        {"装载",    "统一用'加载'"                                         }, // term-table
+        {"载入",    "统一用'加载'"                                         }, // term-table
+        {"承载",    "按句意写'保存/包含/提供/负责'"                 }, // term-table
+        {"载体",    "按句意写'内容/数据/块'"                           }, // term-table
+        {"编排",    "用'调度/组织'"                                        }, // term-table
+        {"接缝",    "用'扩展点/对接点'"                                  }, // term-table
+        {"链路",    "用'流程/调用路径'"                                  }, // term-table
+        {"视角",    "用'角度'"                                               }, // term-table
+        {"口径",    "用'规则/定义'"                                        }, // term-table
+        {"落地",    "用'实现'"                                               }, // term-table
+        {"埋点",    "用'扩展点'"                                            }, // term-table
+        {"门禁",    "用'校验/检查'"                                        }, // term-table
+        {"颗粒度", "用'划分粗细/粒度'"                                  }, // term-table
     };
 
-    const auto repoRoot = root.parent_path();
+    const auto            repoRoot = root.parent_path();
     std::vector<fs::path> files;
-    const fs::path scanDirs[] = {
+    const fs::path        scanDirs[] = {
         root / "lib",
         root / "client",
         root / "plugins",
@@ -918,8 +935,8 @@ void checkTerminology(const fs::path& root, Violations& v) {
         if (!fs::is_directory(dir, ec)) {
             continue;
         }
-        for (fs::recursive_directory_iterator it(dir, fs::directory_options::skip_permission_denied,
-                                                ec),
+        for (fs::recursive_directory_iterator
+                 it(dir, fs::directory_options::skip_permission_denied, ec),
              end;
              it != end;
              it.increment(ec)) {
@@ -944,7 +961,7 @@ void checkTerminology(const fs::path& root, Violations& v) {
             }
         }
     }
-    const auto agentsMd = repoRoot / "AGENTS.md";
+    const auto      agentsMd = repoRoot / "AGENTS.md";
     std::error_code ec;
     if (fs::is_regular_file(agentsMd, ec)) {
         files.push_back(agentsMd);
@@ -966,12 +983,12 @@ void checkTerminology(const fs::path& root, Violations& v) {
             continue;
         }
         ++scanned;
-        int         lineNo = 0;
+        int              lineNo = 0;
         std::string_view rest{text};
         size_t           pos = 0;
         while (pos <= rest.size()) {
-            const auto nl  = rest.find('\n', pos);
-            const auto end = (nl == std::string_view::npos) ? rest.size() : nl;
+            const auto nl   = rest.find('\n', pos);
+            const auto end  = (nl == std::string_view::npos) ? rest.size() : nl;
             const auto line = std::string{rest.substr(pos, end - pos)};
             ++lineNo;
 
@@ -986,8 +1003,8 @@ void checkTerminology(const fs::path& root, Violations& v) {
                 for (const auto& rule : kRules) {
                     if (line.find(rule.term) != std::string::npos) {
                         v.push_back(
-                            genericPath + ":" + std::to_string(lineNo) + ": 称呼/用词 `"
-                            + rule.term + "` 已停用 (" + rule.why + ")\n      " + line
+                            genericPath + ":" + std::to_string(lineNo) + ": 称呼/用词 `" + rule.term
+                            + "` 已停用 (" + rule.why + ")\n      " + line
                         );
                     }
                 }
@@ -1010,7 +1027,8 @@ void checkTerminology(const fs::path& root, Violations& v) {
                     );
                 }
                 // `领域` 只允许出现在标识符行
-                if (line.find("领域") != std::string::npos && line.find("domain") == std::string::npos
+                if (line.find("领域") != std::string::npos
+                    && line.find("domain") == std::string::npos
                     && line.find("Domain") == std::string::npos) {
                     v.push_back(
                         genericPath + ":" + std::to_string(lineNo)
@@ -1046,7 +1064,7 @@ void checkTerminology(const fs::path& root, Violations& v) {
 /// 各目录 `AGENTS.md` 里出现的 `docs/zh-cn/**.md` 路径逐个按仓库根解析并检查
 /// 存在性 —— 路径一律写仓库根相对路径 (与本项目其它文档引用一致)。
 void checkDocumentedPaths(const fs::path& root, Violations& v) {
-    const auto repoRoot = root.parent_path();
+    const auto            repoRoot = root.parent_path();
     std::vector<fs::path> agentsFiles{repoRoot / "AGENTS.md"};
     for (const char* sub : {"lib", "client", "plugins", "test"}) {
         agentsFiles.push_back(root / sub / "AGENTS.md");
@@ -1098,30 +1116,29 @@ void checkModelLayerIncludes(const fs::path& root, Violations& v) {
     collectSources(srcDir, files);
     if (files.empty()) {
         v.push_back(
-            "客户端模型层为空: "
-            + toGeneric(includeDir.lexically_relative(root)) + " / "
-            + toGeneric(srcDir.lexically_relative(root))
-            + " (抽取被挪走后需同步更新本规则)"
+            "客户端模型层为空: " + toGeneric(includeDir.lexically_relative(root)) + " / "
+            + toGeneric(srcDir.lexically_relative(root)) + " (抽取被挪走后需同步更新本规则)"
         );
         return;
     }
 
     static const std::string_view kForbidden[] = {
-        "ftxui/",                                  // 终端渲染框架
-        "agentxx-client/io/tui/agent_tui.h",       // TUI 端点 (连接/会话状态/事件循环)
-        "agentxx-client/io/tui/components/",       // 具体界面部件
+        "ftxui/",                            // 终端渲染框架
+        "agentxx-client/io/tui/agent_tui.h", // TUI 端点 (连接/会话状态/事件循环)
+        "agentxx-client/io/tui/components/", // 具体界面部件
         "agentxx-client/io/tui/framework/tui_state.h", // 渲染状态快照 (含组件状态)
-        "agentxx-client/io/tui/ui_components.h",   // 渲染层
+        "agentxx-client/io/tui/ui_components.h",       // 渲染层
         "agentxx-client/io/tui/surface.h",
         "agentxx-client/plugin_ui_items.h",
-        "agentxx/plugin/client_plugin_manager.h",  // 插件管理器实现
-        "agentxx/agent/agent_host.h",              // 主程序与子代理派生
-        "utilxx/http_client.h",                    // 网络
+        "agentxx/plugin/client_plugin_manager.h", // 插件管理器实现
+        "agentxx/agent/agent_host.h",             // 主程序与子代理派生
+        "utilxx/http_client.h",                   // 网络
         "utilxx/ws_client.h",
     };
     for (const auto& f : files) {
         for (const auto& inc : readIncludes(f)) {
-            const auto where = toGeneric(f.lexically_relative(root)) + ":" + std::to_string(inc.line);
+            const auto where
+                = toGeneric(f.lexically_relative(root)) + ":" + std::to_string(inc.line);
             for (const auto& bad : kForbidden) {
                 if (inc.path.rfind(bad, 0) == 0) {
                     v.push_back(
@@ -1190,12 +1207,16 @@ void checkInterfaceTableCount(const fs::path& root, Violations& v) {
 
     // 数量本身: 10 张通用表 + 10 张 agent 业务表 / 7 张基础表 + 2 张交互表
     if (agentCount != 20) {
-        v.push_back("PluginManager::kInterfaceTableCount 应为 20 (10 通用 + 10 业务), 实际 "
-                    + std::to_string(agentCount));
+        v.push_back(
+            "PluginManager::kInterfaceTableCount 应为 20 (10 通用 + 10 业务), 实际 "
+            + std::to_string(agentCount)
+        );
     }
     if (clientCount != 9) {
-        v.push_back("ClientPluginManager::kInterfaceTableCount 应为 9 (7 基础 + 2 交互), 实际 "
-                    + std::to_string(clientCount));
+        v.push_back(
+            "ClientPluginManager::kInterfaceTableCount 应为 9 (7 基础 + 2 交互), 实际 "
+            + std::to_string(clientCount)
+        );
     }
 
     const auto contains = [](const std::string& text, std::string_view needle) {
@@ -1231,12 +1252,14 @@ void checkInterfaceTableCount(const fs::path& root, Violations& v) {
         v.push_back("缺少根 `AGENTS.md` (接口表数量校验依赖它)");
     } else {
         if (!contains(*agentsText, std::to_string(agentCount) + " 张")) {
-            v.push_back("根 AGENTS.md 未写明 agent 侧接口表数量 `" + std::to_string(agentCount)
-                        + " 张`");
+            v.push_back(
+                "根 AGENTS.md 未写明 agent 侧接口表数量 `" + std::to_string(agentCount) + " 张`"
+            );
         }
         if (!contains(*agentsText, std::to_string(clientCount) + " 张")) {
-            v.push_back("根 AGENTS.md 未写明 client 侧接口表数量 `" + std::to_string(clientCount)
-                        + " 张`");
+            v.push_back(
+                "根 AGENTS.md 未写明 client 侧接口表数量 `" + std::to_string(clientCount) + " 张`"
+            );
         }
     }
 }

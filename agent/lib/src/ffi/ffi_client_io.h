@@ -137,8 +137,9 @@ private:
     using ErrorCode   = utilxx_base::AsioErrorCode;
     using RespChannel = asio::experimental::concurrent_channel<void(ErrorCode, utilxx_base::Json)>;
 
-    /// client io 线程: 挂起等待嵌入方程序应答 (agentxx_ffi_interrupt_respond 经 submitInterruptResponse
-    /// 完成 channel); 返回 {answered=false} 表示通道被关闭 (过期/停止, 不回送响应)
+    /// client io 线程: 挂起等待嵌入方程序应答 (agentxx_ffi_interrupt_respond 经
+    /// submitInterruptResponse 完成 channel); 返回 {answered=false} 表示通道被关闭 (过期/停止,
+    /// 不回送响应)
     asio::awaitable<std::pair<bool, utilxx_base::Json>>
         waitHostInterrupt(int64_t id, std::shared_ptr<RespChannel> ch);
 

@@ -54,39 +54,39 @@ std::string joinLines(const std::vector<std::string>& lines) {
 std::shared_ptr<agentxx::agent::AgentConfig> makeRichConfig() {
     auto cfg = std::make_shared<agentxx::agent::AgentConfig>();
 
-    cfg->agentName = "Agentxx";
-    cfg->dataDir   = "/tmp/agentxx-data";
-    cfg->workDir   = "/tmp/agentxx-work";
+    cfg->agentName             = "Agentxx";
+    cfg->dataDir               = "/tmp/agentxx-data";
+    cfg->workDir               = "/tmp/agentxx-work";
     cfg->sessionStoreDirectory = "/tmp/agentxx-data/sqlite/sessions";
-    cfg->language  = "zh-cn";
-    cfg->languageExplicit = true;
+    cfg->language              = "zh-cn";
+    cfg->languageExplicit      = true;
 
-    cfg->model.type       = "openai";
-    cfg->model.name       = "primary";
-    cfg->model.modelName  = "gpt-test";
-    cfg->model.baseUrl    = "https://api.example.com/v1";
-    cfg->model.apiKey     = "sk-super-secret-value";
-    cfg->model.modelContextMaxToken = 128000;
-    cfg->model.extraHeaders["X-Tenant"] = "tenant-secret-value";
+    cfg->model.type                       = "openai";
+    cfg->model.name                       = "primary";
+    cfg->model.modelName                  = "gpt-test";
+    cfg->model.baseUrl                    = "https://api.example.com/v1";
+    cfg->model.apiKey                     = "sk-super-secret-value";
+    cfg->model.modelContextMaxToken       = 128000;
+    cfg->model.extraHeaders["X-Tenant"]   = "tenant-secret-value";
     cfg->model.extraConfig["temperature"] = 0.2;
 
-    auto sub = cfg->model;
-    sub.name = "secondary";
-    sub.modelName = "gpt-test-mini";
+    auto sub                          = cfg->model;
+    sub.name                          = "secondary";
+    sub.modelName                     = "gpt-test-mini";
     cfg->availableModels["primary"]   = cfg->model;
     cfg->availableModels["secondary"] = sub;
-    cfg->currentModelName = "primary";
+    cfg->currentModelName             = "primary";
 
     cfg->permissionMode = agentxx::agent::PermissionMode::AllAsk;
     cfg->permissionAllowPaths.push_back("/tmp/agentxx-work/allowed");
     cfg->permissionDenyPaths.push_back("/tmp/agentxx-work/secret");
 
-    cfg->enableSessionStore  = true;
-    cfg->enableSummarization = true;
-    cfg->enableSubagent      = true;
-    cfg->enableWorktree      = true;
-    cfg->enableToolFiltering = true;
-    cfg->toolWhitelist       = {"agentxx_share_store"};
+    cfg->enableSessionStore         = true;
+    cfg->enableSummarization        = true;
+    cfg->enableSubagent             = true;
+    cfg->enableWorktree             = true;
+    cfg->enableToolFiltering        = true;
+    cfg->toolWhitelist              = {"agentxx_share_store"};
     cfg->toolParallelMaxConcurrency = 6;
     // 队列输入分页阈值 (装配快照 `limits.user_input_summary_limit` 取值来源)
     cfg->userInputSummaryLimitLength = 4096;
@@ -99,10 +99,10 @@ std::shared_ptr<agentxx::agent::AgentConfig> makeRichConfig() {
     };
 
     agentxx::agent::PluginConfig pc;
-    pc.path    = "builtin://agentxx_filesystem";
-    pc.enabled = true;
-    pc.sides   = agentxx::agent::PluginSide::Agent;
-    pc.args    = utilxx_base::Json::object();
+    pc.path              = "builtin://agentxx_filesystem";
+    pc.enabled           = true;
+    pc.sides             = agentxx::agent::PluginSide::Agent;
+    pc.args              = utilxx_base::Json::object();
     pc.args["loadPaths"] = "/tmp/agentxx-work";
     cfg->plugins.push_back(std::move(pc));
 
@@ -130,7 +130,10 @@ TestResult testAssemblySnapshotConfig() {
     const auto text     = snapshot.dump();
 
     // ---- 模型: 关键字段在, 凭据不在 ----
-    XX_TEST_EXPECT_EQ(snapshot["model"]["default"].value("model", std::string{}), std::string{"gpt-test"});
+    XX_TEST_EXPECT_EQ(
+        snapshot["model"]["default"].value("model", std::string{}),
+        std::string{"gpt-test"}
+    );
     XX_TEST_EXPECT_EQ(
         snapshot["model"]["default"].value("base_url", std::string{}),
         std::string{"https://api.example.com/v1"}
@@ -150,8 +153,14 @@ TestResult testAssemblySnapshotConfig() {
     XX_TEST_EXPECT_TRUE(snapshot["model"]["available"].contains("secondary"));
 
     // ---- 路径与权限 ----
-    XX_TEST_EXPECT_EQ(snapshot["paths"].value("data_dir", std::string{}), std::string{"/tmp/agentxx-data"});
-    XX_TEST_EXPECT_EQ(snapshot["paths"].value("work_dir", std::string{}), std::string{"/tmp/agentxx-work"});
+    XX_TEST_EXPECT_EQ(
+        snapshot["paths"].value("data_dir", std::string{}),
+        std::string{"/tmp/agentxx-data"}
+    );
+    XX_TEST_EXPECT_EQ(
+        snapshot["paths"].value("work_dir", std::string{}),
+        std::string{"/tmp/agentxx-work"}
+    );
     XX_TEST_EXPECT_EQ(
         snapshot["paths"].value("session_root", std::string{}),
         std::string{"/tmp/agentxx-data/sqlite/sessions"}
@@ -199,7 +208,9 @@ TestResult testAssemblySnapshotConfig() {
     // ---- 合并 (配置 + 运行侧) ----
     auto merged = agentxx::agent::mergeAssemblySnapshot(
         snapshot,
-        utilxx_base::Json::object({{"models", utilxx_base::Json::object({{"count", 1}})}})
+        utilxx_base::Json::object({
+            {"models", utilxx_base::Json::object({{"count", 1}})}
+    })
     );
     XX_TEST_EXPECT_EQ(merged["models"].value("count", 0), 1);
     XX_TEST_EXPECT_TRUE(merged.contains("paths"));
@@ -213,17 +224,17 @@ asio::awaitable<TestResult> run_assembly_snapshot_tests() {
 
     // ---- 运行侧快照: 未过滤白名单的常规装配 ----
     {
-        auto cfg = std::make_shared<agentxx::agent::AgentConfig>();
-        cfg->model.type      = "openai";
-        cfg->model.name      = "test-model";
-        cfg->model.modelName = "test-model";
-        cfg->model.baseUrl   = "http://127.0.0.1:1/v1";
-        cfg->model.apiKey    = "EMPTY";
+        auto cfg                    = std::make_shared<agentxx::agent::AgentConfig>();
+        cfg->model.type             = "openai";
+        cfg->model.name             = "test-model";
+        cfg->model.modelName        = "test-model";
+        cfg->model.baseUrl          = "http://127.0.0.1:1/v1";
+        cfg->model.apiKey           = "EMPTY";
         cfg->mcpServerUrls["dummy"] = agentxx::agent::McpServerConfig{
             .url = "http://127.0.0.1:1/sse",
         };
 
-        auto agent = co_await makeInitializedAgent(cfg);
+        auto       agent    = co_await makeInitializedAgent(cfg);
         const auto snapshot = agentxx::agent::buildRuntimeSnapshot(*agent->agentContext);
 
         // 模型注册表
@@ -236,7 +247,8 @@ asio::awaitable<TestResult> run_assembly_snapshot_tests() {
         // 中间件顺序: 非空, 且日志中间件固定在末尾 (其注释要求作为最后一层)
         XX_TEST_EXPECT_GE(snapshot["middlewares"].size(), size_t{2});
         XX_TEST_EXPECT_EQ(
-            snapshot["middlewares"][snapshot["middlewares"].size() - 1].value("name", std::string{}),
+            snapshot["middlewares"][snapshot["middlewares"].size() - 1]
+                .value("name", std::string{}),
             std::string{"LogPrint"}
         );
         bool hasPermissionMiddleware = false;
@@ -253,7 +265,7 @@ asio::awaitable<TestResult> run_assembly_snapshot_tests() {
             snapshot["tools"].value("enabled_count", 0)
         );
         XX_TEST_EXPECT_GE(snapshot["tools"].value("enabled_count", 0), 1);
-        bool foundShareStore = false;
+        bool foundShareStore     = false;
         bool foundMiddlewareTool = false;
         for (const auto& item : snapshot["tools"]["assembled"]) {
             const auto name   = item.value("name", std::string{});
@@ -315,24 +327,25 @@ asio::awaitable<TestResult> run_assembly_snapshot_tests() {
 
     // ---- 运行侧快照: 开启工具白名单过滤, 被过滤的工具仍留记录 ----
     {
-        auto cfg = std::make_shared<agentxx::agent::AgentConfig>();
-        cfg->model.type      = "openai";
-        cfg->model.name      = "test-model";
-        cfg->model.modelName = "test-model";
-        cfg->model.baseUrl   = "http://127.0.0.1:1/v1";
-        cfg->model.apiKey    = "EMPTY";
+        auto cfg                 = std::make_shared<agentxx::agent::AgentConfig>();
+        cfg->model.type          = "openai";
+        cfg->model.name          = "test-model";
+        cfg->model.modelName     = "test-model";
+        cfg->model.baseUrl       = "http://127.0.0.1:1/v1";
+        cfg->model.apiKey        = "EMPTY";
         cfg->enableToolFiltering = true;
         cfg->toolWhitelist       = {"agentxx_share_store"};
         cfg->enableSubagent      = true;
 
-        auto agent = co_await makeInitializedAgent(cfg);
+        auto       agent    = co_await makeInitializedAgent(cfg);
         const auto snapshot = agentxx::agent::buildRuntimeSnapshot(*agent->agentContext);
 
         XX_TEST_EXPECT_EQ(snapshot["tools"].value("enabled_count", 0), 1);
         // 被过滤的记录先写入 (过滤发生在装配记录之前), 启用项要在整体列表中找到
         bool foundEnabledShareStore = false;
         for (const auto& item : snapshot["tools"]["assembled"]) {
-            if (!item.value("filtered", false) && item.value("name", std::string{}) == "agentxx_share_store") {
+            if (!item.value("filtered", false)
+                && item.value("name", std::string{}) == "agentxx_share_store") {
                 foundEnabledShareStore = true;
             }
         }

@@ -8,10 +8,10 @@
 /// - WireError 错误码常量 (SessionMismatch 等) 随之往返, 供客户端按码判断
 #include "agentxx-test/core/test_wire_roundtrip.h"
 
+#include "agentxx/agent/conversation_types.h"
 #include "agentxx/agent/io/agent_io_transport.h"
 #include "agentxx/agent/io/wire_protocol.h"
 #include "agentxx/agent/io/ws_io_transport.h"
-#include "agentxx/agent/conversation_types.h"
 #include <string>
 #include <variant>
 #include <vector>
@@ -67,19 +67,17 @@ TestResult testWireRoundtrip() {
         ack.sessionId = "sess-中文-1";
         ack.tailHash  = "deadbeef";
         ack.models    = {"gpt-x", "claude-y"};
-        ack.deviceId = "device-42";
-        ack.workDir  = "D:/work/项目";
+        ack.deviceId  = "device-42";
+        ack.workDir   = "D:/work/项目";
         // 协议版本与能力声明一并往返
         ack.protocolVersion = WireProtocol::kVersion;
         ack.capabilities    = serverWireCapabilities();
 
-        ack.plugins.push_back(
-            WireHelloAck::PluginInfo{
-                .name       = "agentxx_filesystem",
-                .version    = "1.2.3",
-                .interfaces = {"agentxx.agent.tools", "agentxx.agent.permission"},
-            }
-        );
+        ack.plugins.push_back(WireHelloAck::PluginInfo{
+            .name       = "agentxx_filesystem",
+            .version    = "1.2.3",
+            .interfaces = {"agentxx.agent.tools", "agentxx.agent.permission"},
+        });
         auto back = roundTrip(ack);
         XX_TEST_EXPECT_TRUE(back.ok);
         XX_TEST_EXPECT_EQ(back.sessionId, std::string{"sess-中文-1"});
@@ -122,7 +120,8 @@ TestResult testWireRoundtrip() {
         XX_TEST_EXPECT_EQ(back.capabilities.size(), size_t{2});
 
         // 老客户端 (缺字段): 版本 0、能力空 (服务端按最低兼容版本处理)
-        auto legacyJson = utilxx_base::Json::parse(WsAgentIOTransport::serialize(WireMessage{hello}));
+        auto legacyJson
+            = utilxx_base::Json::parse(WsAgentIOTransport::serialize(WireMessage{hello}));
         legacyJson.erase("protocolVersion");
         legacyJson.erase("capabilities");
         auto legacyBack = WsAgentIOTransport::deserialize(legacyJson.dump());
@@ -137,13 +136,15 @@ TestResult testWireRoundtrip() {
         }
 
         // 服务端拒绝: 版本更高时给出可读原因 (不静默降级)
-        auto rejectJson = WsAgentIOTransport::serialize(WireMessage{WireHelloAck{
-            .ok              = false,
-            .sessionId       = "sess-中文-1",
-            .error           = "client protocol version 99 is newer than server version 1",
-            .protocolVersion = WireProtocol::kVersion,
-            .capabilities    = serverWireCapabilities(),
-        }});
+        auto rejectJson = WsAgentIOTransport::serialize(WireMessage{
+            WireHelloAck{
+                         .ok              = false,
+                         .sessionId       = "sess-中文-1",
+                         .error           = "client protocol version 99 is newer than server version 1",
+                         .protocolVersion = WireProtocol::kVersion,
+                         .capabilities    = serverWireCapabilities(),
+                         }
+        });
         auto rejectBack = WsAgentIOTransport::deserialize(rejectJson);
         XX_TEST_EXPECT_TRUE(rejectBack.has_value());
         if (rejectBack.has_value()) {
@@ -178,14 +179,14 @@ TestResult testWireRoundtrip() {
     }
     {
         WireContextStats st;
-        st.contextTokens    = 123456;
-        st.maxContextTokens = 200000;
-        st.tps              = 12.5;
+        st.contextTokens      = 123456;
+        st.maxContextTokens   = 200000;
+        st.tps                = 12.5;
         st.promptTokens       = 1500;
         st.completionTokens   = 300;
         st.totalTokens        = 1800;
         st.cachedPromptTokens = 1200;
-        auto back           = roundTrip(st);
+        auto back             = roundTrip(st);
         XX_TEST_EXPECT_EQ(back.contextTokens, uint64_t{123456});
         XX_TEST_EXPECT_EQ(back.maxContextTokens, uint64_t{200000});
         XX_TEST_EXPECT_TRUE(back.tps > 12.49 && back.tps < 12.51);
@@ -215,14 +216,12 @@ TestResult testWireRoundtrip() {
         WireModelInfo info;
         info.currentModel = "gpt-x";
         info.models       = {"gpt-x", "claude-y"};
-        info.capabilities.push_back(
-            ModelCapabilityInfo{
-                .name       = "gpt-x",
-                .imageInput = true,
-                .audioInput = false,
-                .videoInput = false,
-            }
-        );
+        info.capabilities.push_back(ModelCapabilityInfo{
+            .name       = "gpt-x",
+            .imageInput = true,
+            .audioInput = false,
+            .videoInput = false,
+        });
         auto back = roundTrip(info);
         XX_TEST_EXPECT_EQ(back.currentModel, std::string{"gpt-x"});
         XX_TEST_EXPECT_EQ(back.models.size(), size_t{2});
@@ -257,13 +256,16 @@ TestResult testWireRoundtrip() {
     {
         WireContextMessages m;
         m.messages = utilxx_base::Json::array({
-            utilxx_base::Json{{"role", "system"}, {"content", "sys"}},
-            utilxx_base::Json{{"role", "user"}, {"content", "你好"}},
+            utilxx_base::Json{{"role", "system"}, {"content", "sys"}   },
+            utilxx_base::Json{{"role", "user"},   {"content", "你好"}},
         });
-        auto back = roundTrip(m);
+        auto back  = roundTrip(m);
         XX_TEST_EXPECT_EQ(back.messages.size(), size_t{2});
         if (back.messages.size() == 2) {
-            XX_TEST_EXPECT_EQ(back.messages[1].value("content", std::string{}), std::string{"你好"});
+            XX_TEST_EXPECT_EQ(
+                back.messages[1].value("content", std::string{}),
+                std::string{"你好"}
+            );
         }
     }
 
@@ -439,13 +441,11 @@ TestResult testWireRoundtrip() {
         XX_TEST_EXPECT_EQ(back.requestId, uint64_t{77});
 
         // 旧客户端不带 delivery/requestId: 解析为零值, 不报错
-        auto legacy = agentxx::agent::io::userInputFromJson(
-            utilxx_base::Json{
-                {"type",      agentxx::agent::io::MsgType::UserInput},
-                {"sessionId", "s5"                                   },
-                {"text",      "legacy"                               },
-        }
-        );
+        auto legacy = agentxx::agent::io::userInputFromJson(utilxx_base::Json{
+            {"type",      agentxx::agent::io::MsgType::UserInput},
+            {"sessionId", "s5"                                  },
+            {"text",      "legacy"                              },
+        });
         XX_TEST_EXPECT_TRUE(legacy.delivery.empty());
         XX_TEST_EXPECT_EQ(legacy.requestId, uint64_t{0});
         XX_TEST_EXPECT_EQ(
@@ -483,9 +483,7 @@ TestResult testWireRoundtrip() {
             std::string{sessionQueueStateText(SessionQueueState::Paused)},
             std::string{"paused"}
         );
-        XX_TEST_EXPECT_TRUE(
-            sessionQueueStateFromText("draining") == SessionQueueState::Draining
-        );
+        XX_TEST_EXPECT_TRUE(sessionQueueStateFromText("draining") == SessionQueueState::Draining);
         // 未知状态文本按 idle 处理 (老客户端/新服务端组合)
         XX_TEST_EXPECT_TRUE(sessionQueueStateFromText("bogus") == SessionQueueState::Idle);
     }
@@ -494,8 +492,7 @@ TestResult testWireRoundtrip() {
         XX_TEST_EXPECT_EQ(back.sessionId, std::string{"s5"});
     }
     {
-        auto back
-            = roundTrip(WireRemoveQueueItem{.sessionId = "s5", .itemId = "q1"});
+        auto back = roundTrip(WireRemoveQueueItem{.sessionId = "s5", .itemId = "q1"});
         XX_TEST_EXPECT_EQ(back.sessionId, std::string{"s5"});
         XX_TEST_EXPECT_EQ(back.itemId, std::string{"q1"});
     }
@@ -527,8 +524,10 @@ TestResult testWireRoundtrip() {
     {
         WireInterruptResponse resp;
         resp.id     = 42;
-        resp.result = utilxx_base::Json{{"allow", "true"}};
-        auto back   = roundTrip(resp);
+        resp.result = utilxx_base::Json{
+            {"allow", "true"}
+        };
+        auto back = roundTrip(resp);
         XX_TEST_EXPECT_EQ(back.id, int64_t{42});
         XX_TEST_EXPECT_EQ(back.result.value("allow", std::string{}), std::string{"true"});
     }
@@ -542,9 +541,9 @@ TestResult testWireRoundtrip() {
 
     {
         WirePluginData p;
-        p.plugin = "agentxx_codegraph";
-        p.event  = "status";
-        p.data   = R"({"ok":true})";
+        p.plugin  = "agentxx_codegraph";
+        p.event   = "status";
+        p.data    = R"({"ok":true})";
         auto back = roundTrip(p);
         XX_TEST_EXPECT_EQ(back.plugin, std::string{"agentxx_codegraph"});
         XX_TEST_EXPECT_EQ(back.event, std::string{"status"});
@@ -552,9 +551,9 @@ TestResult testWireRoundtrip() {
     }
     {
         WirePluginDataUp p;
-        p.plugin = "agentxx_host";
-        p.event  = "client_interfaces";
-        p.data   = R"({"interfaces":["ui"]})";
+        p.plugin  = "agentxx_host";
+        p.event   = "client_interfaces";
+        p.data    = R"({"interfaces":["ui"]})";
         auto back = roundTrip(p);
         XX_TEST_EXPECT_EQ(back.plugin, std::string{"agentxx_host"});
         XX_TEST_EXPECT_EQ(back.event, std::string{"client_interfaces"});
@@ -568,7 +567,7 @@ TestResult testWireRoundtrip() {
         XX_TEST_EXPECT_EQ(back.sessionId, std::string{"s7"});
     }
     {
-        WireAppendComponentInfo info;
+        WireAppendComponentInfo     info;
         AppendComponentNotification n;
         n.type         = AppendComponentNotification::Type::Plugin;
         n.name         = "agentxx_filesystem";
@@ -649,26 +648,30 @@ TestResult testWireRoundtrip() {
 
     {
         WireAddModel m;
-        m.sessionId                 = "s8";
-        m.name                      = "本机 ollama";
-        m.modelType                 = "openai";
-        m.baseUrl                   = "http://127.0.0.1:11434/v1";
-        m.apiPath                   = "/chat/completions";
-        m.apiKey                    = "EMPTY";
-        m.modelName                 = "qwen3";
-        m.modelContextMaxToken      = 131072;
-        m.maxConcurrentConnections  = 3;
-        m.connectTimeoutSeconds     = 8;
-        m.readChunkTimeoutSeconds   = 30;
-        m.sslVerify                 = 0;
-        m.sendThinking              = true;
-        m.requestReasoningSummary   = false;
-        m.imageInput                = true;
-        m.audioInput                = false;
-        m.videoInput                = false;
-        m.extraApiConfig            = utilxx_base::Json{{"k", 1}};
-        m.extraHeaders              = utilxx_base::Json{{"H", "v"}};
-        auto back                   = roundTrip(m);
+        m.sessionId                = "s8";
+        m.name                     = "本机 ollama";
+        m.modelType                = "openai";
+        m.baseUrl                  = "http://127.0.0.1:11434/v1";
+        m.apiPath                  = "/chat/completions";
+        m.apiKey                   = "EMPTY";
+        m.modelName                = "qwen3";
+        m.modelContextMaxToken     = 131072;
+        m.maxConcurrentConnections = 3;
+        m.connectTimeoutSeconds    = 8;
+        m.readChunkTimeoutSeconds  = 30;
+        m.sslVerify                = 0;
+        m.sendThinking             = true;
+        m.requestReasoningSummary  = false;
+        m.imageInput               = true;
+        m.audioInput               = false;
+        m.videoInput               = false;
+        m.extraApiConfig           = utilxx_base::Json{
+                      {"k", 1}
+        };
+        m.extraHeaders = utilxx_base::Json{
+            {"H", "v"}
+        };
+        auto back = roundTrip(m);
         XX_TEST_EXPECT_EQ(back.sessionId, std::string{"s8"});
         XX_TEST_EXPECT_EQ(back.name, std::string{"本机 ollama"});
         XX_TEST_EXPECT_EQ(back.baseUrl, std::string{"http://127.0.0.1:11434/v1"});
@@ -684,9 +687,9 @@ TestResult testWireRoundtrip() {
     }
     {
         WireAddModelResult r;
-        r.ok    = false;
-        r.name  = "bad";
-        r.error = "name duplicated";
+        r.ok      = false;
+        r.name    = "bad";
+        r.error   = "name duplicated";
         auto back = roundTrip(r);
         XX_TEST_EXPECT_FALSE(back.ok);
         XX_TEST_EXPECT_EQ(back.name, std::string{"bad"});
@@ -717,9 +720,9 @@ TestResult testWireRoundtrip() {
     {
         // 未知字段: 老客户端读新服务端消息时必须忽略而不是失败
         const auto j = utilxx_base::Json{
-            {"type",      io::MsgType::TurnResult},
-            {"sessionId", "s9"                   },
-            {"durationMs", 100                   },
+            {"type",        io::MsgType::TurnResult            },
+            {"sessionId",   "s9"                               },
+            {"durationMs",  100                                },
             {"futureField", utilxx_base::Json{{"nested", true}}},
         };
         auto back = WsAgentIOTransport::deserialize(j.dump());

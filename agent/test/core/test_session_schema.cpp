@@ -130,7 +130,8 @@ bool tableExists(const std::string& dbFile, std::string_view table) {
         [&]() -> bool {
             agentxx::util::SqliteDb db;
             db.open(dbFile);
-            auto stmt = db.prepare("SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?");
+            auto stmt
+                = db.prepare("SELECT count(*) FROM sqlite_master WHERE type='table' AND name=?");
             stmt.bindText(1, table);
             if (stmt.step()) {
                 out = stmt.columnInt64(0) > 0;
@@ -209,10 +210,8 @@ CREATE TABLE store (
     value TEXT NOT NULL
 );
 )sql");
-    db.exec(
-        "INSERT INTO view_message(json) VALUES "
-        "('{\"id\":\"legacy-1\",\"role\":\"user\",\"text\":\"legacy hello\"}')"
-    );
+    db.exec("INSERT INTO view_message(json) VALUES "
+            "('{\"id\":\"legacy-1\",\"role\":\"user\",\"text\":\"legacy hello\"}')");
     db.exec("INSERT INTO meta(key, value) VALUES('msgIdCounter', '1')");
     db.close();
 }
@@ -266,11 +265,9 @@ CREATE TABLE session_input (
 )sql");
     db.exec("INSERT INTO meta(key, value) VALUES('schema_version', '2')");
     // 历史用量记录: v2 形态 (没有"缓存写入量"这一列)
-    db.exec(
-        "INSERT INTO usage(time_ms, model, prompt_tokens, completion_tokens, total_tokens, "
-        "cached_prompt_tokens, reasoning_tokens, ok, error_kind) "
-        "VALUES(1700000000000, 'legacy-model', 10, 5, 15, 3, 1, 1, '')"
-    );
+    db.exec("INSERT INTO usage(time_ms, model, prompt_tokens, completion_tokens, total_tokens, "
+            "cached_prompt_tokens, reasoning_tokens, ok, error_kind) "
+            "VALUES(1700000000000, 'legacy-model', 10, 5, 15, 3, 1, 1, '')");
     db.close();
 }
 
@@ -324,12 +321,11 @@ TestResult testSessionSchema() {
     // -----------------------------------------------------------------------
     // C) 幂等: 再次打开并写入不重复迁移 (版本不变, 备份文件不被重写)
     // -----------------------------------------------------------------------
-    std::error_code     ec;
-    const auto          backupFile = dbLegacy + ".bak.v0";
-    const auto          backupTime = fs::last_write_time(utilxx_base::utf8ToPath(backupFile), ec);
-    const int64_t       backupSize = static_cast<int64_t>(
-        fs::file_size(utilxx_base::utf8ToPath(backupFile), ec)
-    );
+    std::error_code ec;
+    const auto      backupFile = dbLegacy + ".bak.v0";
+    const auto      backupTime = fs::last_write_time(utilxx_base::utf8ToPath(backupFile), ec);
+    const int64_t   backupSize
+        = static_cast<int64_t>(fs::file_size(utilxx_base::utf8ToPath(backupFile), ec));
     std::this_thread::sleep_for(std::chrono::milliseconds{30});
     {
         SessionStore store{root};
@@ -532,8 +528,8 @@ TestResult testSessionSchema() {
     // F) 写租约集成: 目录被外部占用时写操作明确失败 (lastWriteError 非空),
     //    且不产出任何数据; 外部锁释放后恢复可写
     // -----------------------------------------------------------------------
-    const auto dbBusy   = sessionDbFile(root, "s-busy");
-    const auto dirBusy  = sessionDir(root, "s-busy");
+    const auto dbBusy  = sessionDbFile(root, "s-busy");
+    const auto dirBusy = sessionDir(root, "s-busy");
     {
         ForeignWriterLock foreign{dirBusy};
         XX_TEST_EXPECT_TRUE(foreign.held());
@@ -594,7 +590,7 @@ TestResult testSessionSchema() {
         store.appendViewMessage("s-body", makeMsg("b2", "正文里出现了 needle-keyword 关键词"), 2);
 
         // 标题命中
-        auto hits           = store.searchSessions("构建脚本排查");
+        auto hits          = store.searchSessions("构建脚本排查");
         bool titleHitFound = false;
         for (const auto& h : hits) {
             if (h.info.sessionId == "s-title") {
@@ -625,7 +621,7 @@ TestResult testSessionSchema() {
 
     // ---- 展示历史序号与增量补拉 ----
     {
-        SessionStore store{root};
+        SessionStore      store{root};
         const std::string seqSession = "s-seq";
 
         // 显式序号写入 (会话分配): 恢复时按 meta 的 viewSeqCounter 续编号
@@ -666,11 +662,10 @@ TestResult testSessionSchema() {
 
         // 老库 (无 viewSeqCounter 记录) 兜底: 取库内最大行序号
         {
-            const auto dbFile = fs::path(utilxx_base::utf8ToPath(root))
-                                / utilxx_base::utf8ToPath(
-                                    SessionStore::sanitizeSessionId("s-seq-legacy")
-                                )
-                                / "session.db";
+            const auto dbFile
+                = fs::path(utilxx_base::utf8ToPath(root))
+                  / utilxx_base::utf8ToPath(SessionStore::sanitizeSessionId("s-seq-legacy"))
+                  / "session.db";
             fs::create_directories(dbFile.parent_path());
             agentxx::util::SqliteDb db;
             db.open(dbFile.string());

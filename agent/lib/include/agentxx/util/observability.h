@@ -95,89 +95,117 @@ public:
     uint64_t turns() const noexcept {
         return turns_.load(std::memory_order_relaxed);
     }
+
     uint64_t turnsCompleted() const noexcept {
         return turnsCompleted_.load(std::memory_order_relaxed);
     }
+
     uint64_t turnsFailed() const noexcept {
         return turnsFailed_.load(std::memory_order_relaxed);
     }
+
     uint64_t turnsCancelled() const noexcept {
         return turnsCancelled_.load(std::memory_order_relaxed);
     }
+
     uint64_t turnsInterrupted() const noexcept {
         return turnsInterrupted_.load(std::memory_order_relaxed);
     }
+
     uint64_t firstTokenSamples() const noexcept {
         return firstTokenSamples_.load(std::memory_order_relaxed);
     }
+
     int64_t firstTokenTotalMs() const noexcept {
         return firstTokenTotalMs_.load(std::memory_order_relaxed);
     }
+
     int64_t firstTokenMaxMs() const noexcept {
         return firstTokenMaxMs_.load(std::memory_order_relaxed);
     }
+
     int64_t turnTotalMs() const noexcept {
         return turnTotalMs_.load(std::memory_order_relaxed);
     }
+
     int64_t turnMaxMs() const noexcept {
         return turnMaxMs_.load(std::memory_order_relaxed);
     }
+
     uint64_t modelCalls() const noexcept {
         return modelCalls_.load(std::memory_order_relaxed);
     }
+
     uint64_t modelErrors() const noexcept {
         return modelErrors_.load(std::memory_order_relaxed);
     }
+
     int64_t promptTokens() const noexcept {
         return promptTokens_.load(std::memory_order_relaxed);
     }
+
     int64_t completionTokens() const noexcept {
         return completionTokens_.load(std::memory_order_relaxed);
     }
+
     int64_t cachedTokens() const noexcept {
         return cachedTokens_.load(std::memory_order_relaxed);
     }
+
     /// 写入 prompt 缓存的 token 累计 (仅 Anthropic 回报)
     int64_t cacheWriteTokens() const noexcept {
         return cacheWriteTokens_.load(std::memory_order_relaxed);
     }
+
     uint64_t toolOk() const noexcept {
         return toolOk_.load(std::memory_order_relaxed);
     }
+
     uint64_t toolFailed() const noexcept {
         return toolFailed_.load(std::memory_order_relaxed);
     }
+
     uint64_t toolCancelled() const noexcept {
         return toolCancelled_.load(std::memory_order_relaxed);
     }
+
     uint64_t toolInterrupted() const noexcept {
         return toolInterrupted_.load(std::memory_order_relaxed);
     }
+
     uint64_t compactions() const noexcept {
         return compactions_.load(std::memory_order_relaxed);
     }
+
     int64_t compactionTokensBefore() const noexcept {
         return compactionTokensBefore_.load(std::memory_order_relaxed);
     }
+
     int64_t compactionTokensAfter() const noexcept {
         return compactionTokensAfter_.load(std::memory_order_relaxed);
     }
+
     /// 提示词段落刷新次数 / 其中变化次数 / 失败次数 / 耗时累计 / 段落字符数
     uint64_t promptRefreshes() const noexcept {
         return promptRefreshes_.load(std::memory_order_relaxed);
     }
+
     uint64_t promptChangedSections() const noexcept {
         return promptChangedSections_.load(std::memory_order_relaxed);
     }
+
     uint64_t promptRefreshFailures() const noexcept {
         return promptRefreshFailures_.load(std::memory_order_relaxed);
     }
+
     int64_t promptRefreshMs() const noexcept {
         return promptRefreshMs_.load(std::memory_order_relaxed);
     }
+
     int64_t promptSectionChars() const noexcept {
         return promptSectionChars_.load(std::memory_order_relaxed);
     }
+
     /// 最近一次模型错误分类 (空 = 无错误)
     std::string lastModelErrorKind() const;
 
@@ -222,8 +250,8 @@ private:
     std::atomic<bool>    firstTokenSeen_{false};
 
     /// 最近一次模型错误分类 (只在 IO 线程写, 读时加锁拷贝)
-    mutable std::mutex  errorMutex_;
-    std::string         lastModelErrorKind_;
+    mutable std::mutex errorMutex_;
+    std::string        lastModelErrorKind_;
 };
 
 } // namespace util

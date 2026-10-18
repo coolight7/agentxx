@@ -17,7 +17,7 @@ namespace io {
 
 /// 双向 WS JSON 消息类型常量
 /// - 约定: {"type": "<msgType>", "id": <opt requestId>, "sessionId": <sessionId>, ...payload}
-struct MsgType {    // ===== Client -> Server =====
+struct MsgType { // ===== Client -> Server =====
     inline static constexpr std::string_view Hello                  = "hello";
     inline static constexpr std::string_view UserInput              = "user_input";
     inline static constexpr std::string_view InterruptResponse      = "interrupt_response";
@@ -411,7 +411,7 @@ inline utilxx_base::Json syncToJson(const WireSyncPayload& p) {
     j["deltaSeq"] = p.deltaSeq;
     // 历史分页元数据 (尾窗同步时 fromIndex>0 / totalMessages>0; 全量同步
     // 时 totalMessages == messages.size(), 字段冗余但便于客户端统一判断)
-    j["totalMessages"]    = p.totalMessages;
+    j["totalMessages"] = p.totalMessages;
     // 展示历史序号: lastViewSeq = 本快照最后一条消息的持久化序号,
     // 客户端记录后在重连 hello 里回传 (afterViewSeq) 请求增量补拉;
     // incremental = true 表示本批消息是"追加到已有历史尾部"的增量补拉
@@ -468,14 +468,14 @@ inline std::optional<WireSyncPayload> syncFromJson(const utilxx_base::Json& j) {
 // ---------------------------------------------------------------------------
 
 inline utilxx_base::Json makeHello(
-    std::string_view sessionId,
-    std::string_view token,
-    uint64_t         lastSeq      = 0,
-    std::string_view tailHash     = "",
-    std::string_view language     = "",
-    uint64_t         afterViewSeq = 0,
-    int              protocolVersion = WireProtocol::kVersion,
-    const std::vector<std::string>& capabilities = {}
+    std::string_view                sessionId,
+    std::string_view                token,
+    uint64_t                        lastSeq         = 0,
+    std::string_view                tailHash        = "",
+    std::string_view                language        = "",
+    uint64_t                        afterViewSeq    = 0,
+    int                             protocolVersion = WireProtocol::kVersion,
+    const std::vector<std::string>& capabilities    = {}
 ) {
     utilxx_base::Json j = {
         {"type",      MsgType::Hello},
@@ -540,8 +540,8 @@ inline utilxx_base::Json makeUserInput(
 /// [InputStatus] / [InputRejectReason]); 空字段不写入, 保证往返一致
 inline utilxx_base::Json makeInputAck(const WireInputAck& ack) {
     utilxx_base::Json j = {
-        {"type",   MsgType::InputAck   },
-        {"status", ack.status          },
+        {"type",   MsgType::InputAck},
+        {"status", ack.status       },
     };
     if (ack.requestId != 0) {
         j["requestId"] = ack.requestId;
@@ -615,10 +615,10 @@ inline utilxx_base::Json makeHelloAck(
     std::string_view                             sessionId,
     std::string_view                             tailHash,
     const std::vector<std::string>&              models,
-    const std::vector<WireHelloAck::PluginInfo>& plugins  = {},
-    std::string_view                             deviceId = "",
-    std::string_view                             workDir  = "",
-    std::string_view                             error    = "",
+    const std::vector<WireHelloAck::PluginInfo>& plugins         = {},
+    std::string_view                             deviceId        = "",
+    std::string_view                             workDir         = "",
+    std::string_view                             error           = "",
     int                                          protocolVersion = WireProtocol::kVersion,
     const std::vector<std::string>&              capabilities    = {}
 ) {
@@ -750,8 +750,8 @@ inline utilxx_base::Json makeTurnResult(
 inline utilxx_base::Json makeContextStats(const WireContextStats& msg) {
     utilxx_base::Json j = {
         {"type",             MsgType::ContextStats},
-        {"contextTokens",    msg.contextTokens     },
-        {"maxContextTokens", msg.maxContextTokens  },
+        {"contextTokens",    msg.contextTokens    },
+        {"maxContextTokens", msg.maxContextTokens },
     };
     if (msg.tps > 0.0) {
         j["tps"] = msg.tps;
@@ -1099,9 +1099,9 @@ inline WirePluginDataUp pluginDataUpFromJson(const utilxx_base::Json& j) {
 // ---------------------------------------------------------------------------
 
 inline utilxx_base::Json makeMessageQueueUpdate(
-    std::string_view                    sessionId,
+    std::string_view                     sessionId,
     const std::vector<MessageQueueItem>& items,
-    std::string_view                    state = ""
+    std::string_view                     state = ""
 ) {
     utilxx_base::Json j = {
         {"type",      MsgType::MessageQueueUpdate},
@@ -1436,7 +1436,7 @@ inline ModelConfig addModelToConfig(const WireAddModel& m) {
     mc.apiPath                  = m.apiPath;
     mc.apiKey                   = m.apiKey.empty() ? std::string{"EMPTY"} : m.apiKey;
     mc.modelName                = m.modelName;
-    mc.modelContextMaxToken    = static_cast<size_t>(m.modelContextMaxToken);
+    mc.modelContextMaxToken     = static_cast<size_t>(m.modelContextMaxToken);
     mc.maxConcurrentConnections = static_cast<size_t>(m.maxConcurrentConnections);
     mc.connectTimeoutSeconds    = m.connectTimeoutSeconds;
     mc.readChunkTimeoutSeconds  = m.readChunkTimeoutSeconds;
@@ -1461,13 +1461,13 @@ inline ModelConfig addModelToConfig(const WireAddModel& m) {
 
 inline utilxx_base::Json makeAddModelMsg(const WireAddModel& m) {
     utilxx_base::Json j = {
-        {"type",      MsgType::AddModel     },
-        {"sessionId", m.sessionId           },
-        {"name",      m.name                },
-        {"modelType", m.modelType           },
-        {"baseUrl",   m.baseUrl             },
-        {"apiKey",    m.apiKey              },
-        {"modelName", m.modelName           },
+        {"type",      MsgType::AddModel},
+        {"sessionId", m.sessionId      },
+        {"name",      m.name           },
+        {"modelType", m.modelType      },
+        {"baseUrl",   m.baseUrl        },
+        {"apiKey",    m.apiKey         },
+        {"modelName", m.modelName      },
     };
     if (!m.apiPath.empty()) {
         j["apiPath"] = m.apiPath;
@@ -1522,11 +1522,11 @@ inline WireAddModel addModelFromJson(const utilxx_base::Json& j) {
     m.modelName                = j.value("modelName", std::string{});
     m.modelContextMaxToken     = j.value("modelContextMaxToken", uint64_t{0});
     m.maxConcurrentConnections = j.value("maxConcurrentConnections", uint64_t{5});
-    m.connectTimeoutSeconds = static_cast<int32_t>(j.value("connectTimeoutSeconds", 16));
-    m.readChunkTimeoutSeconds = static_cast<int32_t>(j.value("readChunkTimeoutSeconds", 60));
-    m.sslVerify = j.contains("sslVerify") ? (j.value("sslVerify", true) ? int8_t{1} : int8_t{0})
-                                          : int8_t{-1};
-    m.sendThinking            = j.value("sendThinking", false);
+    m.connectTimeoutSeconds    = static_cast<int32_t>(j.value("connectTimeoutSeconds", 16));
+    m.readChunkTimeoutSeconds  = static_cast<int32_t>(j.value("readChunkTimeoutSeconds", 60));
+    m.sslVerify    = j.contains("sslVerify") ? (j.value("sslVerify", true) ? int8_t{1} : int8_t{0})
+                                             : int8_t{-1};
+    m.sendThinking = j.value("sendThinking", false);
     m.requestReasoningSummary = j.value("requestReasoningSummary", true);
     m.imageInput              = j.value("imageInput", false);
     m.audioInput              = j.value("audioInput", false);

@@ -429,18 +429,19 @@ int32_t AGENTXX_FFI_CALL
         } else {
             utilxx_base::Json j = {
                 {"apiVersion",     AGENTXX_FFI_API_VERSION},
-                {"libraryVersion", "0.4.0"},
-                {"capabilities",   {
-                    AGENTXX_FFI_CAP_ADD_MODEL,
-                    AGENTXX_FFI_CAP_REMOVE_MODEL,
-                    AGENTXX_FFI_CAP_LIST_MODELS,
-                    AGENTXX_FFI_CAP_MESSAGE_QUEUE,
-                    AGENTXX_FFI_CAP_VIEW_MESSAGES,
-                    AGENTXX_FFI_CAP_HOST_TOOLS,
-                    AGENTXX_FFI_CAP_PLUGIN_DATA_UP,
-                    AGENTXX_FFI_CAP_WIRE_PASSTHROUGH,
-                    AGENTXX_FFI_CAP_DELTA_BATCH,
-                }}
+                {"libraryVersion", "0.4.0"                },
+                {"capabilities",
+                 {
+                     AGENTXX_FFI_CAP_ADD_MODEL,
+                     AGENTXX_FFI_CAP_REMOVE_MODEL,
+                     AGENTXX_FFI_CAP_LIST_MODELS,
+                     AGENTXX_FFI_CAP_MESSAGE_QUEUE,
+                     AGENTXX_FFI_CAP_VIEW_MESSAGES,
+                     AGENTXX_FFI_CAP_HOST_TOOLS,
+                     AGENTXX_FFI_CAP_PLUGIN_DATA_UP,
+                     AGENTXX_FFI_CAP_WIRE_PASSTHROUGH,
+                     AGENTXX_FFI_CAP_DELTA_BATCH,
+                 }                                        }
             };
             capsJson = j.dump();
         }
@@ -594,11 +595,8 @@ int32_t AGENTXX_FFI_CALL agentxx_ffi_tool_respond(
     }
 }
 
-int32_t AGENTXX_FFI_CALL agentxx_ffi_set_delta_batch(
-    AgentxxFFIAgent* a,
-    int32_t          maxDelayMs,
-    AgentxxString*   log
-) {
+int32_t AGENTXX_FFI_CALL
+    agentxx_ffi_set_delta_batch(AgentxxFFIAgent* a, int32_t maxDelayMs, AgentxxString* log) {
     if (a == nullptr || !a->impl) {
         return ffiFail(AGENTXX_FFI_ERR_INVALID, "null handle", log);
     }

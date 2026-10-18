@@ -72,9 +72,11 @@ constexpr size_t kWorkerStackBytes = 8 * 1024 * 1024;
 /// 专用 JS 线程的所有权包装 (自定义栈大小; 仅负责句柄, 不改变 join/detach 语义)
 class JsWorkerThread {
 public:
-    JsWorkerThread() = default;
+
+    JsWorkerThread()                                 = default;
     JsWorkerThread(const JsWorkerThread&)            = delete;
     JsWorkerThread& operator=(const JsWorkerThread&) = delete;
+
     ~JsWorkerThread() {
         if (joinable()) {
             detach();
@@ -84,8 +86,8 @@ public:
     /// 启动线程 (entry(arg), 兼容 pthread 的 void* 返回); 失败返回 false
     bool start(void* (*entry)(void*), void* arg) {
 #if XX_IS_WIN_D
-        entry_ = entry;
-        arg_   = arg;
+        entry_            = entry;
+        arg_              = arg;
         const uintptr_t h = _beginthreadex(
             nullptr,
             static_cast<unsigned>(kWorkerStackBytes),
@@ -160,10 +162,11 @@ public:
     }
 
 private:
+
 #if XX_IS_WIN_D
-    HANDLE             handle_ = nullptr;
-    void* (*entry_)(void*)     = nullptr;
-    void*              arg_    = nullptr;
+    HANDLE handle_         = nullptr;
+    void* (*entry_)(void*) = nullptr;
+    void* arg_             = nullptr;
 #else
     pthread_t handle_{};
     bool      joinable_ = false;
@@ -174,12 +177,12 @@ private:
 
 namespace {
 
-constexpr size_t  kMemoryLimit        = 64 * 1024 * 1024; ///< JS 内存上限 64MB
+constexpr size_t kMemoryLimit = 64 * 1024 * 1024; ///< JS 内存上限 64MB
 /// JS 栈上限 (quickjs 自身检查; 必须小于 [kWorkerStackBytes])
 /// - 取 4MB 而非更小值: quickjs 解析/执行使用 C 递归, 插桩构建 (ASan) 下栈帧
 ///   显著放大, 512KB 会在合法脚本上误报 "Maximum call stack size exceeded"。
 constexpr size_t  kStackLimit         = 4 * 1024 * 1024;
-constexpr size_t  kTaskTimeoutMs      = 60000;            ///< 单任务 (工具执行等) 超时
+constexpr size_t  kTaskTimeoutMs      = 60000;  ///< 单任务 (工具执行等) 超时
 constexpr int64_t kPromiseWaitLimitMs = 120000; ///< Promise 等待上限 (绝对截止时间)
 
 /// agentxx 桥方法 magic

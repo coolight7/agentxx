@@ -35,8 +35,10 @@ utilxx_base::Json buildConfigSnapshot(const AgentConfig& config);
 utilxx_base::Json buildRuntimeSnapshot(const AgentContext& ctx);
 
 /// 合并配置侧与运行侧快照 (运行侧键覆盖配置侧同名键, 配置侧独有的保留)
-utilxx_base::Json
-    mergeAssemblySnapshot(const utilxx_base::Json& configSnapshot, const utilxx_base::Json& runtimeSnapshot);
+utilxx_base::Json mergeAssemblySnapshot(
+    const utilxx_base::Json& configSnapshot,
+    const utilxx_base::Json& runtimeSnapshot
+);
 
 /// 渲染为人工可读的文本行
 /// - 启动日志与 `--dump-config` 使用同一份渲染实现, 两者不会漂移

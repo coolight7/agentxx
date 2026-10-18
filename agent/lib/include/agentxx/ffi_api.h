@@ -191,10 +191,11 @@ AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL agentxx_ffi_library_version(AgentxxS
 AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL
     agentxx_ffi_strerror(int32_t code, AgentxxStringView* out);
 
-/// 查询当前 FFI 运行时能力清单 (JSON: {"apiVersion":2,"libraryVersion":"0.4.0","capabilities":[...]})
-/// out 需经 agentxx_ffi_string_free 释放
-AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL agentxx_ffi_get_capabilities(
-    AgentxxFFIAgent* a, AgentxxString* out, AgentxxString* log);
+/// 查询当前 FFI 运行时能力清单 (JSON:
+/// {"apiVersion":2,"libraryVersion":"0.4.0","capabilities":[...]}) out 需经 agentxx_ffi_string_free
+/// 释放
+AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL
+    agentxx_ffi_get_capabilities(AgentxxFFIAgent* a, AgentxxString* out, AgentxxString* log);
 
 /* ==================== 事件回调 ==================== */
 
@@ -208,14 +209,14 @@ typedef enum AgentxxFFIEventType {
     AGENTXX_FFI_EVT_MODEL_INFO,    ///< 模型信息 (查询/切换结果): wire model_info JSON
     AGENTXX_FFI_EVT_COMPONENTS, ///< 启动组件 (MCP/Skill/Memory/插件): wire append_component_info
                                 ///< JSON
-    AGENTXX_FFI_EVT_INTERRUPT_REQ,     ///< HIL 中断询问 (权限确认/输入收集)
-    AGENTXX_FFI_EVT_INTERRUPT_EXPIRED, ///< 中断已过期/已取消: {"interruptId"}
-    AGENTXX_FFI_EVT_PLUGIN_DATA,       ///< 插件事件转发: wire plugin_data JSON
-    AGENTXX_FFI_EVT_ERROR,             ///< 内部错误: {"code","message"}
-    AGENTXX_FFI_EVT_WIRE,              ///< 下行 Wire 消息透传: 原始 JSON
-    AGENTXX_FFI_EVT_HOST_TOOL_CALL,    ///< 嵌入方程序工具调用请求
+    AGENTXX_FFI_EVT_INTERRUPT_REQ,       ///< HIL 中断询问 (权限确认/输入收集)
+    AGENTXX_FFI_EVT_INTERRUPT_EXPIRED,   ///< 中断已过期/已取消: {"interruptId"}
+    AGENTXX_FFI_EVT_PLUGIN_DATA,         ///< 插件事件转发: wire plugin_data JSON
+    AGENTXX_FFI_EVT_ERROR,               ///< 内部错误: {"code","message"}
+    AGENTXX_FFI_EVT_WIRE,                ///< 下行 Wire 消息透传: 原始 JSON
+    AGENTXX_FFI_EVT_HOST_TOOL_CALL,      ///< 嵌入方程序工具调用请求
     AGENTXX_FFI_EVT_HOST_TOOL_CANCELLED, ///< 嵌入方程序工具调用取消
-    AGENTXX_FFI_EVT_DELTA_TEXT_BATCH,  ///< 文本/思考增量合批
+    AGENTXX_FFI_EVT_DELTA_TEXT_BATCH,    ///< 文本/思考增量合批
 } AgentxxFFIEventType;
 
 typedef struct AgentxxFFICallbacks {
@@ -318,29 +319,45 @@ AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL
 
 /// 动态添加模型配置 (同步等待 10s): model_json 与 create 时模型配置同构
 AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL agentxx_ffi_add_model(
-    AgentxxFFIAgent* a, const AgentxxStringView* model_json, AgentxxString* log);
+    AgentxxFFIAgent*         a,
+    const AgentxxStringView* model_json,
+    AgentxxString*           log
+);
 
 /// 动态删除模型配置 (同步等待 10s): 不可删除当前会话正在使用的模型
 AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL agentxx_ffi_remove_model(
-    AgentxxFFIAgent* a, const AgentxxStringView* model_name, AgentxxString* log);
+    AgentxxFFIAgent*         a,
+    const AgentxxStringView* model_name,
+    AgentxxString*           log
+);
 
 /// 列举可用模型 (同步查询, 与 EVT_MODEL_INFO 同构): out 需经 agentxx_ffi_string_free 释放
-AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL agentxx_ffi_list_models(
-    AgentxxFFIAgent* a, AgentxxString* out, AgentxxString* log);
+AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL
+    agentxx_ffi_list_models(AgentxxFFIAgent* a, AgentxxString* out, AgentxxString* log);
 
 /// 发送 Wire 协议消息 (白名单放行, 非白名单返回错误提示专用符号)
 AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL agentxx_ffi_send_wire(
-    AgentxxFFIAgent* a, const AgentxxStringView* wire_json, AgentxxString* log);
+    AgentxxFFIAgent*         a,
+    const AgentxxStringView* wire_json,
+    AgentxxString*           log
+);
 
 /* ==================== 嵌入方程序工具 (Host Tool) ==================== */
 
-/// 嵌入方程序注册动态工具 (tool_json 包含 name, description, inputSchema, timeoutSec, maxConcurrent 等)
+/// 嵌入方程序注册动态工具 (tool_json 包含 name, description, inputSchema, timeoutSec, maxConcurrent
+/// 等)
 AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL agentxx_ffi_tool_register(
-    AgentxxFFIAgent* a, const AgentxxStringView* tool_json, AgentxxString* log);
+    AgentxxFFIAgent*         a,
+    const AgentxxStringView* tool_json,
+    AgentxxString*           log
+);
 
 /// 嵌入方程序注销动态工具
 AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL agentxx_ffi_tool_unregister(
-    AgentxxFFIAgent* a, const AgentxxStringView* name, AgentxxString* log);
+    AgentxxFFIAgent*         a,
+    const AgentxxStringView* name,
+    AgentxxString*           log
+);
 
 /// 嵌入方程序返回工具执行结果 (is_error 非 0 表示执行失败)
 AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL agentxx_ffi_tool_respond(
@@ -348,13 +365,14 @@ AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL agentxx_ffi_tool_respond(
     int64_t                  call_id,
     int32_t                  is_error,
     const AgentxxStringView* result_json,
-    AgentxxString*           log);
+    AgentxxString*           log
+);
 
 /* ==================== 流式合批 ==================== */
 
 /// 设置文本增量合批窗口 (maxDelayMs <= 0 关闭合批恢复逐 token 事件)
-AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL agentxx_ffi_set_delta_batch(
-    AgentxxFFIAgent* a, int32_t maxDelayMs, AgentxxString* log);
+AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL
+    agentxx_ffi_set_delta_batch(AgentxxFFIAgent* a, int32_t maxDelayMs, AgentxxString* log);
 
 /* ==================== 同步查询 (阻塞等待服务端响应, 最长 10s) ====================
  * 返回值: int32_t 状态码 (AGENTXX_FFI_OK 成功); out 填入 JSON 结果 (agentxx_ffi_string_free 释放);

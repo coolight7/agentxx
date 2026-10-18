@@ -656,7 +656,8 @@ void test_wire_add_model_protocol() {
 
     // 2. 缺省字段: sslVerify 未指定 -> -1 (表示不写该项), 数值取默认
     {
-        auto parsed = addModelFromJson(utilxx_base::Json::parse(R"({"type":"add_model","name":"m"})"));
+        auto parsed
+            = addModelFromJson(utilxx_base::Json::parse(R"({"type":"add_model","name":"m"})"));
         XX_TEST_EXPECT_EQ(parsed.sslVerify, int8_t{-1});
         XX_TEST_EXPECT_EQ(parsed.maxConcurrentConnections, uint64_t{5});
         XX_TEST_EXPECT_EQ(parsed.connectTimeoutSeconds, int32_t{16});
@@ -668,12 +669,12 @@ void test_wire_add_model_protocol() {
     // 3. 模型配置 <-> 线消息转换: 未指定 TLS 校验时保持 nullopt
     {
         ModelConfig mc;
-        mc.name                = "cfg-model";
-        mc.baseUrl             = "https://api.example.com";
-        mc.apiKey              = "k";
+        mc.name                 = "cfg-model";
+        mc.baseUrl              = "https://api.example.com";
+        mc.apiKey               = "k";
         mc.modelContextMaxToken = 1024;
-        mc.extraHeaders["X-A"] = "1";
-        auto wire              = addModelOfConfig("sess", mc);
+        mc.extraHeaders["X-A"]  = "1";
+        auto wire               = addModelOfConfig("sess", mc);
         XX_TEST_EXPECT_EQ(wire.sslVerify, int8_t{-1});
         auto back = addModelToConfig(wire);
         XX_TEST_EXPECT_EQ(back.name, std::string("cfg-model"));
@@ -686,23 +687,26 @@ void test_wire_add_model_protocol() {
         noKey.name = "no-key";
         noKey.apiKey.clear();
         noKey.baseUrl = "http://127.0.0.1:8080/v1";
-        XX_TEST_EXPECT_EQ(addModelToConfig(addModelOfConfig("s", noKey)).apiKey, std::string("EMPTY"));
+        XX_TEST_EXPECT_EQ(
+            addModelToConfig(addModelOfConfig("s", noKey)).apiKey,
+            std::string("EMPTY")
+        );
     }
 
     // 4. 结果回执: 成功/失败往返
     {
         WireAddModelResult ok;
-        ok.ok   = true;
-        ok.name = "added-model";
+        ok.ok       = true;
+        ok.name     = "added-model";
         auto okJson = toJson(ok);
         XX_TEST_EXPECT_EQ(okJson["type"].get<std::string>(), std::string(MsgType::AddModelResult));
         XX_TEST_EXPECT_TRUE(okJson["ok"].get<bool>());
         XX_TEST_EXPECT_FALSE(okJson.contains("error"));
 
         WireAddModelResult fail;
-        fail.ok    = false;
-        fail.name  = "bad-model";
-        fail.error = "模型名称已存在: bad-model";
+        fail.ok             = false;
+        fail.name           = "bad-model";
+        fail.error          = "模型名称已存在: bad-model";
         WireMessage failMsg = fail;
         auto        deser   = deserialize(serialize(failMsg));
         XX_TEST_EXPECT_TRUE(deser.has_value());

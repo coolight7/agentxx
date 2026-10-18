@@ -491,7 +491,7 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
             agentxx::middleware::InterruptHandleArg handleArg;
             handleArg.name = "subagent";
             handleArg.arg  = stored[0].arg;
-            auto batch = agentxx::tools::parseSubagentBatchFromInterrupt(
+            auto batch     = agentxx::tools::parseSubagentBatchFromInterrupt(
                 handleArg,
                 "parent-agent",
                 env->sessionId,
