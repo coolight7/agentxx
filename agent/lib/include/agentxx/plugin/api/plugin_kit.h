@@ -304,6 +304,27 @@ public:
         return *this;
     }
 
+    /// 对象参数: 值是一个对象 (如 HTTP 请求头 `{"Name": "value"}`)
+    /// - 成员类型用 `valueType` 声明 (默认字符串; 传空则不加 `additionalProperties`)
+    ToolSchemaBuilder& object(
+        std::string_view name,
+        std::string_view desc,
+        bool             required = false,
+        std::string_view valueType = "string"
+    ) {
+        utilxx_base::Json prop;
+        prop["type"]        = "object";
+        prop["description"] = toolPromptArgDesc(prompt_, name, desc);
+        if (!valueType.empty()) {
+            prop["additionalProperties"] = utilxx_base::Json{{"type", std::string(valueType)}};
+        }
+        properties_[std::string(name)] = std::move(prop);
+        if (required) {
+            required_.push_back(std::string(name));
+        }
+        return *this;
+    }
+
     ToolSchemaBuilder&
         stringArray(std::string_view name, std::string_view desc, bool required = false) {
         return array(name, desc, "string", required);

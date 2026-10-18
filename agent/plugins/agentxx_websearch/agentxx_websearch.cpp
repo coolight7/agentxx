@@ -16,8 +16,7 @@ constexpr std::string_view kNameFetch  = "agentxx_web_fetch";
 constexpr std::string_view kDepictSearch =
     R"(Perform a web search. Returns a markdown-formatted list of results.
 Use `agentxx_web_fetch` afterwards to retrieve full page content from a result.)";
-constexpr std::string_view kDepictFetch
-    = R"(Perform an HTTP GET request and return the response.
+constexpr std::string_view kDepictFetch = R"(Perform an HTTP GET request and return the response.
 With `format` = `markdown` (default) the page is converted to Markdown; with `format` = `raw` the raw response body is returned (for JSON/text APIs, or when the conversion is not wanted).
 Commonly used after `agentxx_web_search` to read a specific page.)";
 
@@ -25,8 +24,7 @@ constexpr std::string_view kHeaderArgDesc =
     R"(Custom HTTP request headers to send, as a JSON object of header name to value.
 Example: {"X-Api-Key": "xxx", "User-Agent": "agentxx"})";
 
-constexpr std::string_view kFetchUrlDesc
-    = R"(Absolute HTTP/HTTPS URL to fetch.
+constexpr std::string_view kFetchUrlDesc = R"(Absolute HTTP/HTTPS URL to fetch.
 
 When resolving relative links found in the returned Markdown, combine them with this `url`:
 - Page `http://example.com/help/`:
@@ -38,13 +36,11 @@ When resolving relative links found in the returned Markdown, combine them with 
   - `model/delete/` (no leading /) → strip filename, append → `http://example.com/help/model/delete/`
 )";
 
-constexpr std::string_view kFetchFormatDesc
-    = R"(Default `markdown`. What to return:
+constexpr std::string_view kFetchFormatDesc = R"(Default `markdown`. What to return:
 `markdown`: the page content converted to Markdown (best for HTML pages).
 `raw`: the response body exactly as received (best for JSON/text APIs, or when the conversion is not wanted).)";
 
-constexpr std::string_view kFetchTimeoutDesc
-    = "Default `30` seconds. Request timeout in seconds.";
+constexpr std::string_view kFetchTimeoutDesc = "Default `30` seconds. Request timeout in seconds.";
 
 constexpr std::string_view kSearchQueryDesc = "The search query string.";
 
@@ -93,19 +89,14 @@ static int32_t websearchSetup(WebsearchPluginCtx& ctx) {
         }
     }
 
-    // 1. fetch (原 fetch 与 fetch_markdown 合并: 由 `format` 选择返回形态)
-    auto fetchSchema = ctx.schema(kNameFetch)
-                           .string("url", kFetchUrlDesc, /*required=*/true)
-                           .enumString(
-                               "format",
-                               kFetchFormatDesc,
-                               {"markdown", "raw"},
-                               false,
-                               "markdown"
-                           )
-                           .number("timeout", kFetchTimeoutDesc, false, 30.0)
-                           .object("header", kHeaderArgDesc)
-                           .build();
+    // 1. fetch (fetch 与 fetch_markdown: 由 `format` 选择返回形态)
+    auto fetchSchema
+        = ctx.schema(kNameFetch)
+              .string("url", kFetchUrlDesc, /*required=*/true)
+              .enumString("format", kFetchFormatDesc, {"markdown", "raw"}, false, "markdown")
+              .number("timeout", kFetchTimeoutDesc, false, 30.0)
+              .object("header", kHeaderArgDesc)
+              .build();
 
     polled_tool(
         ctx,
@@ -134,12 +125,11 @@ static int32_t websearchSetup(WebsearchPluginCtx& ctx) {
 
     // 2. search
     if (ctx.use_model_search || !ctx.search_api_url.empty()) {
-        auto searchSchema
-            = ctx.schema(kNameSearch)
-                  .string("query", kSearchQueryDesc, /*required=*/true)
-                  .number("timeout", kSearchTimeoutDesc, false, 20.0)
-                  .object("header", kHeaderArgDesc)
-                  .build();
+        auto searchSchema = ctx.schema(kNameSearch)
+                                .string("query", kSearchQueryDesc, /*required=*/true)
+                                .number("timeout", kSearchTimeoutDesc, false, 20.0)
+                                .object("header", kHeaderArgDesc)
+                                .build();
 
         polled_tool(
             ctx,

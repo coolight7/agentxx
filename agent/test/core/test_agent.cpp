@@ -1753,8 +1753,8 @@ asio::awaitable<void> test_agent_llm_retry_exhaust() {
 }
 
 /// Toolcall 节点拦截普通异常: 中间件 onToolcallStart 抛异常时,
-/// 插入 [Start/Exception aborted] 错误消息并继续调度 (agent 基于错误继续运行),
-/// 而不是终止会话; 取消/中断 仍重抛由 base_agent 控制流处理
+/// 插入 `[Error: ... (tool call aborted at Start phase)]` 错误消息并继续调度
+/// (agent 基于错误继续运行), 而不是终止会话; 取消/中断 仍重抛由 base_agent 控制流处理
 asio::awaitable<void> test_agent_toolcall_intercept_exception() {
     auto sim     = startDaSimServer();
     auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
@@ -1797,17 +1797,18 @@ asio::awaitable<void> test_agent_toolcall_intercept_exception() {
     // 2 次请求: tool_calls 请求 + 拦截后回 llm 的收尾请求
     XX_TEST_EXPECT_EQ(g_da_sim_request_count.load(), 2);
 
-    // 上下文包含 [Start/Exception aborted] 错误消息 + 末尾为最终回答
+    // 上下文包含 `[Error: ... (tool call aborted at Start phase)]` 错误消息 +
+    // 末尾为最终回答
     auto session = agent.agentContext->sessions->get("intercept_test");
     XX_TEST_EXPECT_TRUE(session != nullptr);
     auto msgs = session->llmMessagesJson();
     XX_TEST_EXPECT_TRUE(msgs.is_array());
     bool hasErrorMsg = false;
     for (const auto& m : msgs) {
-        // 匹配 "[Start/Exception aborted" 前缀: 实际插入格式为
-        // "[Start/Exception aborted: {exceptionStr}]" (带错误详情)
+        // 匹配 "aborted at Start phase": 实际插入格式为
+        // "[Error: {exceptionStr} (tool call aborted at Start phase)]" (带错误详情)
         if (m["role"] == "tool"
-            && m["content"].dump().find("[Start/Exception aborted") != std::string::npos) {
+            && m["content"].dump().find("aborted at Start phase") != std::string::npos) {
             hasErrorMsg = true;
         }
     }

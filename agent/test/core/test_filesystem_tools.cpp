@@ -117,6 +117,24 @@ AGENTXX_TEST_FS_TOOL(
     "agentxx_filesystem_grep",
     R"(Search file contents using text or regular expressions.)"
 )
+AGENTXX_TEST_FS_TOOL(
+    FilesystemMoveTool,
+    fileMoveExecute,
+    "agentxx_filesystem_move",
+    R"(Move or rename a file or directory.)"
+)
+AGENTXX_TEST_FS_TOOL(
+    FilesystemCopyTool,
+    fileCopyExecute,
+    "agentxx_filesystem_copy",
+    R"(Copy a file or directory to another path.)"
+)
+AGENTXX_TEST_FS_TOOL(
+    FilesystemRemoveTool,
+    fileRemoveExecute,
+    "agentxx_filesystem_remove",
+    R"(Delete a file or directory.)"
+)
 
 #undef AGENTXX_TEST_FS_TOOL
 #undef AGENTXX_TEST_FS_TOOL_ASYNC
@@ -627,7 +645,7 @@ asio::awaitable<void>
         {"path", testDir + "/no_such_*.txt"}
     };
     auto result = co_await tool.execute_async(args);
-    if (result.find("No match") != std::string::npos
+    if (result.find("no match") != std::string::npos
         && result.find("no_such_*.txt") != std::string::npos) {
         g_fs_passed++;
         TEST_PASS << "FileSystemListTool reports no match for wildcard without hits" << std::endl;
@@ -647,7 +665,7 @@ asio::awaitable<void>
         {"path", testDir + "/*.TXT"}
     };
     auto result = co_await tool.execute_async(args);
-    if (result.find("No match") != std::string::npos) {
+    if (result.find("no match") != std::string::npos) {
         g_fs_passed++;
         TEST_PASS << "FileSystemListTool wildcard match is case-sensitive" << std::endl;
     } else {
@@ -970,7 +988,7 @@ asio::awaitable<void>
     }
 
     // 旧参数名 (`line_offset`/`line_limit`) 已统一为 `offset`/`limit`: 传入旧名按参数错误处理
-    // (外层执行体转成 "[Error] ..." 文本), 不能静默忽略 ——
+    // (外层执行体转成 "[Error: ...]" 文本), 不能静默忽略 ——
     // 忽略会退化成读整个文件, 调用方却以为只读了指定区间
     {
         auto legacyArgs = utilxx_base::Json{
@@ -1533,7 +1551,7 @@ asio::awaitable<void> test_edit_text_file_multi_segments_atomic(
     };
     auto result = co_await tool.execute_async(args);
     const bool mentionsFailedSegment
-        = result.find("[Error]") != std::string::npos && result.find("#2") != std::string::npos;
+        = result.find("[Error:") != std::string::npos && result.find("#2") != std::string::npos;
     const auto content = readAllBytes(filePath);
     if (mentionsFailedSegment && content == "keep me\n") {
         g_fs_passed++;
@@ -1594,7 +1612,7 @@ asio::awaitable<void> test_edit_text_file_edits_invalid_args(
     /// 期望某组参数得到错误结果 (且文件保持原样)
     auto expectError = [&](const char* label, const utilxx_base::Json& args) -> asio::awaitable<void> {
         auto result = co_await tool.execute_async(args);
-        if (result.find("[Error]") == 0) {
+        if (result.find("[Error:") == 0) {
             g_fs_passed++;
             TEST_PASS << "edit_text_file rejects invalid args: " << label << std::endl;
         } else {
@@ -1962,7 +1980,7 @@ asio::awaitable<void>
     auto result = co_await tool.execute_async(args);
     if (result.find("test1.txt") != std::string::npos
         && result.find("test2.txt") != std::string::npos
-        && result.find("[Error]") == std::string::npos) {
+        && result.find("[Error:") == std::string::npos) {
         g_fs_passed++;
         TEST_PASS << "FilesystemGrepTool text+regex union returns both files" << std::endl;
     } else {
@@ -1993,7 +2011,7 @@ asio::awaitable<void>
         ++headerCount;
     }
     if (headerCount == 1 && result.find("\n1:hello world\n") != std::string::npos
-        && result.find("[Error]") == std::string::npos) {
+        && result.find("[Error:") == std::string::npos) {
         g_fs_passed++;
         TEST_PASS << "FilesystemGrepTool text+regex union content dedup works" << std::endl;
     } else {
@@ -2307,7 +2325,7 @@ asio::awaitable<void>
     };
     auto result = co_await tool.execute_async(args);
     if (result.find("test2.txt") != std::string::npos
-        && result.find("[Error]") == std::string::npos) {
+        && result.find("[Error:") == std::string::npos) {
         g_fs_passed++;
         TEST_PASS << "FilesystemGrepTool skips directories in glob results" << std::endl;
     } else {
@@ -2452,7 +2470,7 @@ asio::awaitable<void>
     };
     auto result   = co_await tool.execute_async(args);
     bool hasMatch = result.find("target.txt") != std::string::npos
-                    && result.find("[Error]") == std::string::npos;
+                    && result.find("[Error:") == std::string::npos;
 
     fs::remove_all(utilxx_base::utf8ToPath(unicodeDir));
 
@@ -2483,7 +2501,7 @@ asio::awaitable<void>
     auto result = co_await tool.execute_async(args);
     // 有效 pattern (test2.txt) 应正常命中并返回, 不应因前一个 pattern 为空或报错而整体失败
     if (result.find("test2.txt") != std::string::npos
-        && result.find("[Error]") == std::string::npos) {
+        && result.find("[Error:") == std::string::npos) {
         g_fs_passed++;
         TEST_PASS << "FilesystemGrepTool multi-pattern fault tolerance (catchError) works"
                   << std::endl;
@@ -2800,7 +2818,7 @@ asio::awaitable<void>
     };
     auto resFwm = co_await tool.execute_async(argsFwm);
     bool fwmOk  = resFwm.find("检索目标_中文.txt") != std::string::npos
-                 && resFwm.find("[Error]") == std::string::npos;
+                 && resFwm.find("[Error:") == std::string::npos;
 
     // 2) content 模式正则搜索
     auto argsContent = utilxx_base::Json{
@@ -3258,11 +3276,11 @@ asio::awaitable<void>
     const auto workDir   = agentxx::tools::testResolvedWorkDir(agentContext);
     bool       allPassed = true;
 
-    /// 统计输出中的"路径行"数量 (排除 `[Note]`/`[Error]` 前缀行)
+    /// 统计输出中的"路径行"数量 (排除 `[Note]`/`[Error` 前缀行)
     auto countPathLines = [](std::string_view text) -> size_t {
         size_t count = 0;
         for (auto line : utilxx_base::strSplit(text, '\n')) {
-            if (line.empty() || line.starts_with("[Note]") || line.starts_with("[Error]")) {
+            if (line.empty() || line.starts_with("[Note]") || line.starts_with("[Error")) {
                 continue;
             }
             ++count;
@@ -3374,7 +3392,7 @@ asio::awaitable<void>
             {"max_files",     10                                            },
         };
         auto result = ::agentxx_fs_plugin::fileGrepExecute(args, workDir);
-        bool ok     = result.find("[Error]") != std::string::npos
+        bool ok     = result.find("[Error:") != std::string::npos
                   && result.find("max_files") != std::string::npos;
         if (false == ok) {
             allPassed = false;
@@ -3796,6 +3814,543 @@ asio::awaitable<void> test_path_queue_serializes_read_modify_write(
     co_return;
 }
 
+// =====================================================================
+// move / copy / remove (写类工具)
+// =====================================================================
+
+/// 删除路径 (存在才删, 忽略错误): 用例起点清理用
+static void removeQuiet(const std::string& path) {
+    std::error_code ec;
+    std::filesystem::remove_all(std::filesystem::path{path}, ec);
+}
+
+/// 路径是否存在 (悬空的符号链接也算)
+static bool fsPathExists(const std::string& path) {
+    std::error_code ec;
+    auto            p = std::filesystem::path{path};
+    return std::filesystem::exists(p, ec) || std::filesystem::is_symlink(p, ec);
+}
+
+/// 写文本文件 (父目录缺失时创建)
+static void writeTextFileQuiet(const std::string& path, const std::string& text) {
+    std::error_code ec;
+    std::filesystem::create_directories(std::filesystem::path{path}.parent_path(), ec);
+    std::ofstream f(path, std::ios::binary | std::ios::trunc);
+    f << text;
+}
+
+/// 移动文件: 源消失、目标出现且内容一致
+asio::awaitable<void> test_move_file_basic(std::weak_ptr<agentxx::agent::AgentContext> agentContext
+) {
+    const auto dir = testDir + "/mv_basic";
+    const auto src = dir + "/a.txt";
+    const auto dst = dir + "/b.txt";
+    removeQuiet(dir);
+    writeTextFileQuiet(src, "move content\n");
+
+    auto tool   = agentxx::tools::FilesystemMoveTool{agentContext};
+    auto result = co_await tool.execute_async(utilxx_base::Json{
+        {"src", src},
+        {"dst", dst},
+    });
+    const bool ok = result.find("Moved") != std::string::npos && false == fsPathExists(src)
+                    && readAllBytes(dst) == "move content\n";
+    if (ok) {
+        g_fs_passed++;
+        TEST_PASS << "filesystem_move moves a file without copying" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "filesystem_move failed, result: " << result << std::endl;
+    }
+    removeQuiet(dir);
+    co_return;
+}
+
+/// 移动目录 (含子文件): 目标目录整体出现
+asio::awaitable<void>
+    test_move_directory(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    const auto srcDir = testDir + "/mv_dir_src";
+    const auto dstDir = testDir + "/mv_dir_dst";
+    removeQuiet(srcDir);
+    removeQuiet(dstDir);
+    writeTextFileQuiet(srcDir + "/nested/keep.txt", "nested content\n");
+
+    auto tool   = agentxx::tools::FilesystemMoveTool{agentContext};
+    auto result = co_await tool.execute_async(utilxx_base::Json{
+        {"src", srcDir},
+        {"dst", dstDir},
+    });
+    const bool ok = result.find("Moved") != std::string::npos && false == fsPathExists(srcDir)
+                    && readAllBytes(dstDir + "/nested/keep.txt") == "nested content\n";
+    if (ok) {
+        g_fs_passed++;
+        TEST_PASS << "filesystem_move moves a directory tree" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "filesystem_move directory failed, result: " << result << std::endl;
+    }
+    removeQuiet(srcDir);
+    removeQuiet(dstDir);
+    co_return;
+}
+
+/// 目标已存在: 默认拒绝 (源与目标都不变), `overwrite` = true 时替换
+asio::awaitable<void> test_move_overwrite(
+    std::weak_ptr<agentxx::agent::AgentContext> agentContext
+) {
+    const auto dir = testDir + "/mv_overwrite";
+    const auto src = dir + "/a.txt";
+    const auto dst = dir + "/b.txt";
+    removeQuiet(dir);
+    writeTextFileQuiet(src, "new content\n");
+    writeTextFileQuiet(dst, "old content\n");
+
+    auto tool = agentxx::tools::FilesystemMoveTool{agentContext};
+    auto refused
+        = co_await tool.execute_async(utilxx_base::Json{{"src", src}, {"dst", dst}});
+    const bool refusedOk = refused.find("[Error:") != std::string::npos
+                           && refused.find("overwrite") != std::string::npos
+                           && fsPathExists(src) && readAllBytes(dst) == "old content\n";
+
+    auto forced = co_await tool.execute_async(utilxx_base::Json{
+        {"src",       src },
+        {"dst",       dst },
+        {"overwrite", true},
+    });
+    const bool forcedOk = forced.find("Moved") != std::string::npos && false == fsPathExists(src)
+                          && readAllBytes(dst) == "new content\n";
+    if (refusedOk && forcedOk) {
+        g_fs_passed++;
+        TEST_PASS << "filesystem_move refuses an existing target unless overwrite" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "filesystem_move overwrite handling failed, refused: " << refused
+                  << " forced: " << forced << std::endl;
+    }
+    removeQuiet(dir);
+    co_return;
+}
+
+/// 参数边界: 源不存在 / 源与目标同路径 / 目标位于源目录内部 一律报参数错误
+asio::awaitable<void> test_move_invalid_args(
+    std::weak_ptr<agentxx::agent::AgentContext> agentContext
+) {
+    const auto dir = testDir + "/mv_invalid";
+    removeQuiet(dir);
+    writeTextFileQuiet(dir + "/a.txt", "x\n");
+
+    auto tool = agentxx::tools::FilesystemMoveTool{agentContext};
+
+    auto missing = co_await tool.execute_async(utilxx_base::Json{
+        {"src", dir + "/missing.txt"},
+        {"dst", dir + "/b.txt"      },
+    });
+    auto same = co_await tool.execute_async(utilxx_base::Json{
+        {"src", dir + "/a.txt"},
+        {"dst", dir + "/a.txt"},
+    });
+    auto nested = co_await tool.execute_async(utilxx_base::Json{
+        {"src", dir            },
+        {"dst", dir + "/inner"},
+    });
+    const bool ok = missing.find("[Error:") != std::string::npos
+                    && missing.find("does not exist") != std::string::npos
+                    && same.find("[Error:") != std::string::npos
+                    && same.find("same path") != std::string::npos
+                    && nested.find("[Error:") != std::string::npos
+                    && nested.find("inside `src`") != std::string::npos;
+    if (ok) {
+        g_fs_passed++;
+        TEST_PASS << "filesystem_move rejects missing/same/nested paths" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "filesystem_move invalid args handling failed, missing: " << missing
+                  << " same: " << same << " nested: " << nested << std::endl;
+    }
+    removeQuiet(dir);
+    co_return;
+}
+
+/// 相对路径以会话工作目录为基准解析 (workDir ≠ 进程 cwd)
+asio::awaitable<void> test_move_relative_with_workdir(std::weak_ptr<agentxx::agent::AgentContext>)
+{
+    const auto dir = testDir + "/mv_relative";
+    removeQuiet(dir);
+    writeTextFileQuiet(dir + "/src.txt", "relative content\n");
+
+    auto ctx    = makeWorkDirContext(testDir);
+    auto tool   = agentxx::tools::FilesystemMoveTool{ctx};
+    auto result = co_await tool.execute_async(utilxx_base::Json{
+        {"src", "mv_relative/src.txt"},
+        {"dst", "mv_relative/dst.txt"},
+    });
+    const bool ok = result.find("Moved") != std::string::npos
+                    && readAllBytes(dir + "/dst.txt") == "relative content\n";
+    if (ok) {
+        g_fs_passed++;
+        TEST_PASS << "filesystem_move resolves relative paths against workDir" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "filesystem_move relative path failed, result: " << result << std::endl;
+    }
+    removeQuiet(dir);
+    co_return;
+}
+
+/// 复制文件: 源保留、目标内容一致
+asio::awaitable<void> test_copy_file_basic(std::weak_ptr<agentxx::agent::AgentContext> agentContext
+) {
+    const auto dir = testDir + "/cp_basic";
+    const auto src = dir + "/a.txt";
+    const auto dst = dir + "/sub/b.txt"; // 父目录缺失: 应当自动创建
+    removeQuiet(dir);
+    writeTextFileQuiet(src, "copy content\n");
+
+    auto tool   = agentxx::tools::FilesystemCopyTool{agentContext};
+    auto result = co_await tool.execute_async(utilxx_base::Json{
+        {"src", src},
+        {"dst", dst},
+    });
+    const bool ok = result.find("Copied") != std::string::npos
+                    && readAllBytes(src) == "copy content\n"
+                    && readAllBytes(dst) == "copy content\n";
+    if (ok) {
+        g_fs_passed++;
+        TEST_PASS << "filesystem_copy copies a file and keeps the source" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "filesystem_copy failed, result: " << result << std::endl;
+    }
+    removeQuiet(dir);
+    co_return;
+}
+
+/// 复制目录 (递归): 子目录与文件一并复制, 源保留
+asio::awaitable<void>
+    test_copy_directory_recursive(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    const auto srcDir = testDir + "/cp_dir_src";
+    const auto dstDir = testDir + "/cp_dir_dst";
+    removeQuiet(srcDir);
+    removeQuiet(dstDir);
+    writeTextFileQuiet(srcDir + "/nested/deep.txt", "deep content\n");
+
+    auto tool   = agentxx::tools::FilesystemCopyTool{agentContext};
+    auto result = co_await tool.execute_async(utilxx_base::Json{
+        {"src", srcDir},
+        {"dst", dstDir},
+    });
+    const bool ok = result.find("Copied") != std::string::npos
+                    && readAllBytes(dstDir + "/nested/deep.txt") == "deep content\n"
+                    && readAllBytes(srcDir + "/nested/deep.txt") == "deep content\n";
+    if (ok) {
+        g_fs_passed++;
+        TEST_PASS << "filesystem_copy copies a directory recursively" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "filesystem_copy directory failed, result: " << result << std::endl;
+    }
+    removeQuiet(srcDir);
+    removeQuiet(dstDir);
+    co_return;
+}
+
+/// 复制到已存在的目标: 默认拒绝, `overwrite` = true 时替换
+asio::awaitable<void> test_copy_overwrite(
+    std::weak_ptr<agentxx::agent::AgentContext> agentContext
+) {
+    const auto dir = testDir + "/cp_overwrite";
+    const auto src = dir + "/a.txt";
+    const auto dst = dir + "/b.txt";
+    removeQuiet(dir);
+    writeTextFileQuiet(src, "new content\n");
+    writeTextFileQuiet(dst, "old content\n");
+
+    auto tool = agentxx::tools::FilesystemCopyTool{agentContext};
+    auto refused
+        = co_await tool.execute_async(utilxx_base::Json{{"src", src}, {"dst", dst}});
+    const bool refusedOk = refused.find("[Error:") != std::string::npos
+                           && readAllBytes(dst) == "old content\n";
+    auto forced = co_await tool.execute_async(utilxx_base::Json{
+        {"src",       src },
+        {"dst",       dst },
+        {"overwrite", true},
+    });
+    const bool forcedOk = forced.find("Copied") != std::string::npos
+                          && readAllBytes(dst) == "new content\n"
+                          && readAllBytes(src) == "new content\n";
+    if (refusedOk && forcedOk) {
+        g_fs_passed++;
+        TEST_PASS << "filesystem_copy refuses an existing target unless overwrite" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "filesystem_copy overwrite handling failed, refused: " << refused
+                  << " forced: " << forced << std::endl;
+    }
+    removeQuiet(dir);
+    co_return;
+}
+
+/// 删除文件: 目标消失, 同目录其他文件保留
+asio::awaitable<void> test_remove_file(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    const auto dir = testDir + "/rm_file";
+    removeQuiet(dir);
+    writeTextFileQuiet(dir + "/a.txt", "a\n");
+    writeTextFileQuiet(dir + "/keep.txt", "keep\n");
+
+    auto tool   = agentxx::tools::FilesystemRemoveTool{agentContext};
+    auto result = co_await tool.execute_async(utilxx_base::Json{{"path", dir + "/a.txt"}});
+    const bool ok = result.find("Removed") != std::string::npos && false == fsPathExists(dir + "/a.txt")
+                    && fsPathExists(dir + "/keep.txt");
+    if (ok) {
+        g_fs_passed++;
+        TEST_PASS << "filesystem_remove deletes a file" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "filesystem_remove file failed, result: " << result << std::endl;
+    }
+    removeQuiet(dir);
+    co_return;
+}
+
+/// 删除目录: 默认拒绝 (需显式 `recursive` = true), 开启后连同内容一并删除
+asio::awaitable<void> test_remove_directory(
+    std::weak_ptr<agentxx::agent::AgentContext> agentContext
+) {
+    const auto dir = testDir + "/rm_dir";
+    removeQuiet(dir);
+    writeTextFileQuiet(dir + "/nested/a.txt", "a\n");
+
+    auto tool   = agentxx::tools::FilesystemRemoveTool{agentContext};
+    auto denied = co_await tool.execute_async(utilxx_base::Json{{"path", dir}});
+    const bool deniedOk = denied.find("[Error:") != std::string::npos
+                          && denied.find("recursive") != std::string::npos && fsPathExists(dir);
+
+    auto removed = co_await tool.execute_async(utilxx_base::Json{
+        {"path",      dir },
+        {"recursive", true},
+    });
+    const bool removedOk
+        = removed.find("Removed") != std::string::npos && false == fsPathExists(dir);
+    if (deniedOk && removedOk) {
+        g_fs_passed++;
+        TEST_PASS << "filesystem_remove needs recursive for a directory" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "filesystem_remove directory failed, denied: " << denied
+                  << " removed: " << removed << std::endl;
+    }
+    removeQuiet(dir);
+    co_return;
+}
+
+/// 删除不存在的路径: 报错而不静默成功
+asio::awaitable<void> test_remove_missing_path(
+    std::weak_ptr<agentxx::agent::AgentContext> agentContext
+) {
+    auto tool   = agentxx::tools::FilesystemRemoveTool{agentContext};
+    auto result = co_await tool.execute_async(utilxx_base::Json{
+        {"path", testDir + "/rm_missing/never.txt"},
+    });
+    if (result.find("[Error:") != std::string::npos
+        && result.find("does not exist") != std::string::npos) {
+        g_fs_passed++;
+        TEST_PASS << "filesystem_remove reports a missing path" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "filesystem_remove missing path handling failed, result: " << result
+                  << std::endl;
+    }
+    co_return;
+}
+
+// =====================================================================
+// read 输出上限 / grep count 模式 (单次调用的输出规模约束)
+// =====================================================================
+
+/// read 超过 2000 行 直接报错 (不截断), 用 offset/limit 分段读可行
+asio::awaitable<void>
+    test_read_output_limit_lines(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    const auto filePath = testDir + "/read_limit_lines.txt";
+    {
+        std::ofstream f(filePath, std::ios::binary | std::ios::trunc);
+        for (int i = 0; i < 2500; ++i) {
+            f << "line " << i << "\n";
+        }
+    }
+    auto tool = agentxx::tools::FilesystemReadTextFileTool{agentContext};
+
+    auto whole = co_await tool.execute_async(utilxx_base::Json{{"path", filePath}});
+    const bool wholeOk = whole.find("[Error:") != std::string::npos
+                         && whole.find("too large for one call") != std::string::npos
+                         && whole.find("`offset`/`limit`") != std::string::npos;
+
+    // 显式 limit = 2000 行: 正好在上限内, 允许
+    auto capped = co_await tool.execute_async(utilxx_base::Json{
+        {"path",  filePath},
+        {"limit", 2000    },
+    });
+    const bool cappedOk = capped.find("line 0") != std::string::npos
+                          && capped.find("line 1999") != std::string::npos
+                          && capped.find("line 2000") == std::string::npos;
+
+    // 分段读尾部: offset 越过前 2000 行
+    auto tail = co_await tool.execute_async(utilxx_base::Json{
+        {"path",   filePath},
+        {"offset", 2000    },
+        {"limit",  100     },
+    });
+    const bool tailOk
+        = tail.find("line 2000") != std::string::npos && tail.find("line 2400") == std::string::npos;
+    if (wholeOk && cappedOk && tailOk) {
+        g_fs_passed++;
+        TEST_PASS << "read_text_file enforces the per-call line limit" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "read_text_file line limit failed, whole: " << whole.substr(0, 120)
+                  << " capped size: " << capped.size() << " tail size: " << tail.size()
+                  << std::endl;
+    }
+    std::error_code ec;
+    std::filesystem::remove(std::filesystem::path{filePath}, ec);
+    co_return;
+}
+
+/// read 单行即超过 256 KiB: 报错并指出该工具无法切分 (应改用命令/其他工具)
+asio::awaitable<void>
+    test_read_output_limit_single_long_line(std::weak_ptr<agentxx::agent::AgentContext> agentContext
+    ) {
+    const auto filePath = testDir + "/read_limit_longline.txt";
+    {
+        std::ofstream f(filePath, std::ios::binary | std::ios::trunc);
+        f << std::string(300 * 1024, 'x') << "\n";
+    }
+    auto tool   = agentxx::tools::FilesystemReadTextFileTool{agentContext};
+    auto result = co_await tool.execute_async(utilxx_base::Json{{"path", filePath}});
+    const bool ok = result.find("[Error:") != std::string::npos
+                    && result.find("can not be split") != std::string::npos
+                    && result.find("agentxx_execute_command") != std::string::npos;
+    if (ok) {
+        g_fs_passed++;
+        TEST_PASS << "read_text_file reports an unsplittable oversized line" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "read_text_file long line handling failed, result: " << result.substr(0, 200)
+                  << std::endl;
+    }
+    std::error_code ec;
+    std::filesystem::remove(std::filesystem::path{filePath}, ec);
+    co_return;
+}
+
+/// grep `output_mode` = `count`: 只给汇总 (命中文件数 + 命中数), 不含路径
+asio::awaitable<void> test_grep_count_mode(std::weak_ptr<agentxx::agent::AgentContext> agentContext
+) {
+    const auto dir = testDir + "/grep_count";
+    removeQuiet(dir);
+    writeTextFileQuiet(dir + "/a.txt", "hit\nhit\nmiss\n");
+    writeTextFileQuiet(dir + "/b.txt", "hit\n");
+
+    auto tool = agentxx::tools::FilesystemGrepTool{agentContext};
+    auto result = co_await tool.execute_async(utilxx_base::Json{
+        {"file_patterns", utilxx_base::Json::array({dir + "/**/*.txt"})},
+        {"text_patterns", utilxx_base::Json::array({"hit"})          },
+        {"output_mode",   "count"                                    },
+    });
+    const bool ok = result.find("2 file(s) matched") != std::string::npos
+                    && result.find("3 match(es) in total") != std::string::npos
+                    && result.find("a.txt") == std::string::npos;
+    if (ok) {
+        g_fs_passed++;
+        TEST_PASS << "filesystem_grep count mode returns totals only" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "filesystem_grep count mode failed, result: " << result << std::endl;
+    }
+
+    // 非法 output_mode: 参数错误 (列出可用取值)
+    auto bad = co_await tool.execute_async(utilxx_base::Json{
+        {"file_patterns", utilxx_base::Json::array({dir + "/**/*.txt"})},
+        {"text_patterns", utilxx_base::Json::array({"hit"})          },
+        {"output_mode",   "summary"                                  },
+    });
+    if (bad.find("[Error:") != std::string::npos
+        && bad.find("`output_mode`") != std::string::npos) {
+        g_fs_passed++;
+        TEST_PASS << "filesystem_grep rejects an unknown output_mode" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "filesystem_grep unknown output_mode handling failed, result: " << bad
+                  << std::endl;
+    }
+    removeQuiet(dir);
+    co_return;
+}
+
+/// glob `type` 声明为字符串数组: `["dir"]` 只返回目录, `["file"]` 只返回普通文件
+asio::awaitable<void> test_glob_type_array(std::weak_ptr<agentxx::agent::AgentContext> agentContext
+) {
+    const auto dir = testDir + "/glob_type";
+    removeQuiet(dir);
+    writeTextFileQuiet(dir + "/f.txt", "x\n");
+    std::error_code ec;
+    std::filesystem::create_directories(std::filesystem::path{dir + "/sub"}, ec);
+
+    auto tool = agentxx::tools::FilesystemGlobTool{agentContext};
+    auto dirs = co_await tool.execute_async(utilxx_base::Json{
+        {"file_patterns", utilxx_base::Json::array({dir + "/*"})},
+        {"type",          utilxx_base::Json::array({"dir"})     },
+    });
+    auto files = co_await tool.execute_async(utilxx_base::Json{
+        {"file_patterns", utilxx_base::Json::array({dir + "/*"})},
+        {"type",          utilxx_base::Json::array({"file"})    },
+    });
+    const bool dirsOk = dirs.find("sub") != std::string::npos
+                        && dirs.find("f.txt") == std::string::npos;
+    const bool filesOk = files.find("f.txt") != std::string::npos
+                         && files.find("sub") == std::string::npos;
+    if (dirsOk && filesOk) {
+        g_fs_passed++;
+        TEST_PASS << "filesystem_glob accepts an array for `type`" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "filesystem_glob type array failed, dirs: " << dirs << " files: " << files
+                  << std::endl;
+    }
+    removeQuiet(dir);
+    co_return;
+}
+
+/// write 的 `overwrite` 省略时按 false 处理: 新文件可建, 已存在的文件报错
+asio::awaitable<void> test_write_overwrite_omitted(
+    std::weak_ptr<agentxx::agent::AgentContext> agentContext
+) {
+    const auto dir = testDir + "/write_overwrite";
+    removeQuiet(dir);
+    auto tool = agentxx::tools::FilesystemWriteFileTool{agentContext};
+
+    auto created = co_await tool.execute_async(utilxx_base::Json{
+        {"path",    dir + "/new.txt"},
+        {"content", "first\n"       },
+    });
+    auto existed = co_await tool.execute_async(utilxx_base::Json{
+        {"path",    dir + "/new.txt"},
+        {"content", "second\n"      },
+    });
+    const bool ok = created.find("success") != std::string::npos
+                    && existed.find("[Error:") != std::string::npos
+                    && readAllBytes(dir + "/new.txt") == "first\n";
+    if (ok) {
+        g_fs_passed++;
+        TEST_PASS << "filesystem_write treats an omitted overwrite as false" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "filesystem_write omitted overwrite failed, created: " << created
+                  << " existed: " << existed << std::endl;
+    }
+    removeQuiet(dir);
+    co_return;
+}
+
 asio::awaitable<TestResult>
     run_filesystem_tools_tests(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     setupTestDir();
@@ -3909,6 +4464,26 @@ asio::awaitable<TestResult>
 
     // 按规范化路径排队执行
     co_await run(test_path_queue_serializes_read_modify_write);
+
+    // move / copy / remove (写类工具)
+    co_await run(test_move_file_basic);
+    co_await run(test_move_directory);
+    co_await run(test_move_overwrite);
+    co_await run(test_move_invalid_args);
+    co_await run(test_move_relative_with_workdir);
+    co_await run(test_copy_file_basic);
+    co_await run(test_copy_directory_recursive);
+    co_await run(test_copy_overwrite);
+    co_await run(test_remove_file);
+    co_await run(test_remove_directory);
+    co_await run(test_remove_missing_path);
+
+    // read 输出上限 / grep count 模式 / glob type 数组 / write overwrite 容错
+    co_await run(test_read_output_limit_lines);
+    co_await run(test_read_output_limit_single_long_line);
+    co_await run(test_grep_count_mode);
+    co_await run(test_glob_type_array);
+    co_await run(test_write_overwrite_omitted);
 
     // 插件真实调用基本功能检查 (dlopen + 主程序 op_driver 完整流程; 插件未构建时跳过)
     // - 无 agentContext 形参, 不经 run 适配器直调 (异常兜底语义一致)

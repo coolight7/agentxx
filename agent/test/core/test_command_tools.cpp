@@ -61,7 +61,7 @@ inline neograph::ChatTool execmdDefinitionOf(
                   {"type", "string"},
                   {"description", depict},
               }},
-             {"all_output",
+             {"full_output",
               {{"type", "boolean"},
                {"description",
                 "Default `true`. `false`: only return stdout and stderr when the command fails."}}},
@@ -317,7 +317,7 @@ asio::awaitable<void>
 
     auto props = params["properties"];
     XX_TEST_EXPECT_TRUE(props.contains("command"));
-    XX_TEST_EXPECT_TRUE(props.contains("all_output"));
+    XX_TEST_EXPECT_TRUE(props.contains("full_output"));
     XX_TEST_EXPECT_TRUE(props.contains("timeout"));
     XX_TEST_EXPECT_EQ(props["timeout"]["type"].get<std::string>(), "integer");
 
@@ -402,14 +402,14 @@ asio::awaitable<void>
     co_return;
 }
 
-// ---- all_output ----
+// ---- full_output ----
 
 asio::awaitable<void>
-    test_linux_all_output_false_success(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    test_linux_full_output_false_success(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::ExecuteBashCommandTool{agentContext};
     auto args = utilxx_base::Json{
-        {"command",    "echo success_msg"},
-        {"all_output", false             },
+        {"command",     "echo success_msg"},
+        {"full_output", false             },
     };
     auto result = co_await tool.execute_async(args);
     XX_TEST_EXPECT_TRUE(result.find("success_msg") == std::string::npos);
@@ -418,11 +418,11 @@ asio::awaitable<void>
 }
 
 asio::awaitable<void>
-    test_linux_all_output_false_failure(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    test_linux_full_output_false_failure(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::ExecuteBashCommandTool{agentContext};
     auto args = utilxx_base::Json{
-        {"command",    "echo fail_msg && exit 1"},
-        {"all_output", false                    },
+        {"command",     "echo fail_msg && exit 1"},
+        {"full_output", false                    },
     };
     auto result = co_await tool.execute_async(args);
     XX_TEST_EXPECT_TRUE(result.find("fail_msg") != std::string::npos);
@@ -889,7 +889,7 @@ asio::awaitable<void> test_exec_env_prompt(std::weak_ptr<agentxx::agent::AgentCo
             XX_TEST_EXPECT_TRUE(desc.find("node: NOT found") != std::string::npos);
         }
     }
-    XX_TEST_EXPECT_TRUE(bashPrompt.args.find("all_output") != bashPrompt.args.end());
+    XX_TEST_EXPECT_TRUE(bashPrompt.args.find("full_output") != bashPrompt.args.end());
     XX_TEST_EXPECT_TRUE(bashPrompt.args.find("timeout") != bashPrompt.args.end());
 
     // Windows 工具的提示词: depict 标明实际执行器 (PowerShell 版本号 / cmd.exe),
@@ -1485,8 +1485,8 @@ asio::awaitable<TestResult>
     co_await run(test_linux_timeout_default);
     co_await run(test_linux_timeout_json_escaping);
     co_await run(test_linux_timeout_kills_descendants);
-    co_await run(test_linux_all_output_false_success);
-    co_await run(test_linux_all_output_false_failure);
+    co_await run(test_linux_full_output_false_success);
+    co_await run(test_linux_full_output_false_failure);
     co_await run(test_linux_stderr);
     co_await run(test_linux_nonzero_exit);
     co_await run(test_linux_special_chars);

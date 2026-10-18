@@ -140,10 +140,10 @@ std::string formatToolArgs(std::string_view argsText) {
 }
 
 /// 工具结果文本是否表示失败
-/// 与服务端工具错误约定一致: 工具返回 "[Error] ..." / "[Exception aborted: ...]" 文本,
+/// 与服务端工具错误约定一致: 工具返回 "[Error: ...]" 文本,
 /// 中断为 "[Interrupt]"; 成功结果 (如 edit 的 "success") 不以这些前缀开头
 static bool isToolResultError(std::string_view result) {
-    return result.starts_with("[Error]") || result.starts_with("[Exception")
+    return result.starts_with("[Error") || result.starts_with("[Exception")
            || result.starts_with("[Interrupt]") || result.starts_with("[Permission");
 }
 
@@ -537,7 +537,7 @@ public:
             }
             // 命中区域含按钮下方的那一行 (按钮之间的空行); 组内相邻区域不重叠,
             // 空行上的点击不会落到消息列表的折叠判定上
-            const int yMax = std::min(y + stride - 1, box.y_max);
+            const int yMax   = std::min(y + stride - 1, box.y_max);
             state_->boxes[i] = ftxui::Box{box.x_min, box.x_min, y, yMax};
         }
     }
@@ -629,9 +629,10 @@ size_t MessageListComponent::prevUserMessageIndex() const {
     // 视口顶行落在锚点子项中间 (行偏移 > 0) 时该子项自身也是候选: 跳转把它的首行
     // 对齐到视口顶 (等于把被裁掉的上半段滚回来)
     const size_t anchor = scrollable_->anchorIndex();
-    size_t       cursor
-        = std::min(anchor + (scrollable_->anchorRow() > 0 ? size_t{1} : size_t{0}),
-                   st.messages.size());
+    size_t       cursor = std::min(
+        anchor + (scrollable_->anchorRow() > 0 ? size_t{1} : size_t{0}),
+        st.messages.size()
+    );
     while (cursor > 0) {
         --cursor;
         const auto& msg = st.messages[cursor];
@@ -857,12 +858,11 @@ uint64_t MessageListComponent::itemKey(size_t index) {
             // 自定义 renderer 的语义结果异步写入缓存 (client io 线程): 版本号变化
             // 触发该块重建, 从"通用回退"切换为插件语义内容
             if (ctx_.pluginManager && m.tool) {
-                const auto cache = ctx_.pluginManager->toolRenderCache();
-                const auto callKey
-                    = agentxx::plugin::ClientToolRenderRequest::keyFor(
-                        m.tool->toolCallId,
-                        m.tool->toolName
-                    );
+                const auto cache   = ctx_.pluginManager->toolRenderCache();
+                const auto callKey = agentxx::plugin::ClientToolRenderRequest::keyFor(
+                    m.tool->toolCallId,
+                    m.tool->toolName
+                );
                 h = combine(h, cache->version(callKey));
                 // "名称结果"(占位提示阶段按工具名解析出的过渡显示名, 键 = "#工具名")
                 // 的到达同样要使块重建: 未就绪帧正用它的显示名 (上一份结果没给显示名
@@ -1381,7 +1381,7 @@ LazyBuiltItem MessageListComponent::buildStreamingItem(const TUIRenderState& st)
 }
 
 LazyBuiltItem MessageListComponent::buildGenPlaceholderItem(const TUIRenderState& st) {
-    using Phase = agentxx::agent::WireDelta::GenPhase;
+    using Phase          = agentxx::agent::WireDelta::GenPhase;
     const auto& theme    = *ctx_.theme;
     const bool  toolCall = (st.genPhase == Phase::ToolCall);
     const auto  c        = toolCall ? theme.toolColor : theme.thinkingColor;
@@ -1389,7 +1389,7 @@ LazyBuiltItem MessageListComponent::buildGenPlaceholderItem(const TUIRenderState
     // 单行占位项: 折叠标记 (生成中恒为运行态) + 角色标签 + 阶段说明 (工具调用阶段
     // 附带已解析出的工具名)。首个正文/思考 token 或工具消息到达后由 client 线程
     // 清除占位 (见 TUIRenderState::genPhase 注释), 位置由真实内容接替
-    Elements header;
+    Elements   header;
     const bool animMark = runSpinner_->animationEnabled();
     header.push_back((animMark ? runningHeaderMark(true) : text("-")) | color(c));
     header.push_back(text(toolCall ? tr("msg.roleTool") : tr("msg.roleThink")) | color(c));
@@ -1855,9 +1855,10 @@ Element MessageListComponent::buildMessageBlock(
             // 过渡显示名 —— 来自本次调用上一份结果/该工具的名称结果), 回退原始
             // toolName; 若该工具存在特化渲染器但还没有任何可用的显示名, 则暂不显示
             // 名称 —— 见下方 [pendingRender] 分支的说明
-            std::string displayName = !renderRes.displayName.empty() ? renderRes.displayName
-                                     : (renderRes.pendingRender ? std::string{}
-                                                                : msg.tool->toolName);
+            std::string displayName
+                = !renderRes.displayName.empty()
+                      ? renderRes.displayName
+                      : (renderRes.pendingRender ? std::string{} : msg.tool->toolName);
 
             if (!expanded) {
                 // 折叠状态, 特化渲染 (摘要内部预览按内容区剩余列宽自适应截断)

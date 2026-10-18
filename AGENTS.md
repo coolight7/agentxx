@@ -412,11 +412,21 @@ path/to/agentxx_test string_util regex
   (内存占用与条目数无关); id 大于 lastId (从未分配) 按参数错误抛异常; 已不支持删除条目
 - 分页参数统一命名 (2026-10): `agentxx_filesystem_read` 与 `agentxx_share_store` 的分页参数
   统一为 `offset`/`limit` (均按行计); `agentxx_share_store` 的 `opt` 取值为 `get`/`new`/`update`
-  (原 `insert`/`set`), 且 `offset`/`limit` **仅 `get` 时有效** (`new`/`update` 传入即忽略, 文本原样存储);
-  描述文本有两份来源 (插件字面量 + `AgentPrompt::toolPrompt` 默认表), 改动时两侧需同步
+  (原 `insert`/`set`), 且 `offset`/`limit` **仅 `get` 时有效** (`new`/`update` 传入即忽略, 文本原样存储)
+- 插件工具提示词归属 (2026-10): 插件工具的提示词 (depict + 参数说明) 写在**插件自身**字面量里
+  (少数插件经 `agentxx.agent.prompt` 接口表注入, 如 execute_command/codegraph/planning);
+  `AgentPrompt::toolPrompt` (prompt.cpp) 只保留内置工具 (share_store / subagent / git_worktree),
+  并保持**表中存在同名条目时覆盖插件提示词**的逻辑 (改动插件工具文案只需改插件)
+- 工具集调整 (2026-10): 文件系统新增 `agentxx_filesystem_move` / `_copy` / `_remove`
+  三个写类工具 (权限: move/copy 声明 `src` 写作用域, 另一个目标 `dst` 在工具内用只读三态
+  查询复核; remove 声明 `path`); `read` 单次输出上限 2000 行 / 256 KiB (超过直接报错不截断);
+  `grep` 的 `output_mode` 增加 `count` (只给命中文件数与命中总数); `glob` 的 `type` 声明为
+  字符串数组; `web_fetch` 与 `web_fetch_markdown` 合并为 `web_fetch` (`format` = markdown|raw);
+  `execute_command` 的 `all_output` 改名 `full_output`; `rag_search` 的 `top_k` 改名 `limit`;
+  `string_regexp` 增加 `ignore_case`; `web_fetch` 的 `header` 声明为 object
 - 工具错误约定: 参数检查失败抛 `std::invalid_argument`、运行期错误抛 `std::runtime_error`,
-  由 `ToolcallWrapNode` 统一格式化为 `[Exception aborted: <msg>]` 结果文本; 插件侧在 SDK 边界捕获并上报
-  FAILED (取消上报 CANCELLED); 不要返回 `{"error": ...}` 形态
+  由 `ToolcallWrapNode` 统一格式化为 `[Error: <msg>]` 结果文本 (工具自身裁剪输出时同样用该前缀);
+  插件侧在 SDK 边界捕获并上报 FAILED (取消上报 CANCELLED); 不要返回 `{"error": ...}` 形态
 - 输入分页 (2026-10): 单条输入达到 `AgentConfig::userInputSummaryLimitLength` (默认 8K utf8 字符,
   0=关闭) 即把原文经 share store 卸载, 上下文/请求只留开头片段 + `agentxx_share_store` 取回提示
   (模型按行取回); 覆盖两处入口 —— 队列里的用户消息进入轮次时 (`BaseAgent::runTurnAsync`)

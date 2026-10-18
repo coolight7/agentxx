@@ -80,6 +80,8 @@ asio::awaitable<TestResult> run_share_store_tests() {
         XX_TEST_EXPECT_TRUE(std::find(opts.begin(), opts.end(), "get") != opts.end());
         XX_TEST_EXPECT_TRUE(std::find(opts.begin(), opts.end(), "new") != opts.end());
         XX_TEST_EXPECT_TRUE(std::find(opts.begin(), opts.end(), "update") != opts.end());
+        // `id` 声明为字符串: 模型传数字时主程序按模式改成字符串, 实现两种都接受
+        XX_TEST_EXPECT_EQ(props["id"]["type"].get<std::string>(), std::string{"string"});
     }
 
     /// 存入文本后取回 (`new` + `get`): 取回参数由调用方给出
@@ -444,6 +446,34 @@ asio::awaitable<TestResult> run_share_store_tests() {
             XX_TEST_EXPECT_TRUE(stored.has_value());
             XX_TEST_EXPECT_EQ(stored.value_or(std::string{}), longText);
         }
+    }
+
+    // `id` 按声明形态 (字符串) 传入: 与数字写法等价; 非数字字符串报参数错误
+    {
+        auto ins    = co_await tool.execute_async(utilxx_base::Json{
+            {"sessionId", "t1"                  },
+            {"opt",       "new"                 },
+            {"text",      "string id content\n"},
+        });
+        auto idNum  = utilxx_base::Json::parse(ins).value<size_t>("id", 0);
+        auto getStr = co_await tool.execute_async(utilxx_base::Json{
+            {"sessionId", "t1"                    },
+            {"opt",       "get"                   },
+            {"id",        std::to_string(idNum)   },
+        });
+        XX_TEST_EXPECT_EQ(getStr, "string id content\n");
+
+        bool threw = false;
+        try {
+            (void)co_await tool.execute_async(utilxx_base::Json{
+                {"sessionId", "t1" },
+                {"opt",       "get"},
+                {"id",        "abc"},
+            });
+        } catch (const std::invalid_argument& e) {
+            threw = std::string_view{e.what()}.find("`id`") != std::string_view::npos;
+        }
+        XX_TEST_EXPECT_TRUE(threw);
     }
 
     co_return TestResult{g_ss_passed, g_ss_failed};

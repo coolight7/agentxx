@@ -32,6 +32,12 @@ static neograph::json webToolParams(const char* queryKey, const char* timeoutDes
                   {"type", "string"},
                   {"description", "Absolute HTTP/HTTPS URL to fetch."},
               }},
+             {"format",
+              {
+                  {"type", "string"},
+                  {"enum", neograph::json::array({"markdown", "raw"})},
+                  {"description", "Default `markdown`."},
+              }},
              {"timeout", {{"type", "number"}, {"description", timeoutDesc}}},
              {"header",
               {{"type", "object"}, {"description", "Custom HTTP request headers to send."}}},
@@ -92,7 +98,9 @@ struct WebFetchUrlTool {
     neograph::ChatTool get_definition() const {
         return {
             "agentxx_web_fetch",
-            "Perform an HTTP GET request and return the raw response body.",
+            "Perform an HTTP GET request and return the response.\n"
+            "With `format` = `markdown` (default) the page is converted to Markdown; "
+            "with `format` = `raw` the raw response body is returned.",
             webToolParams("url", "Default `30` seconds. Request timeout in seconds.")
         };
     }
@@ -133,22 +141,6 @@ struct ModelWebSearchTool {
 private:
 
     agentxx_websearch_plugin::ModelSearchConfig modelCfg;
-};
-
-struct WebFetchUrlMarkdownTool {
-    explicit WebFetchUrlMarkdownTool(std::weak_ptr<agentxx::agent::AgentContext>) {}
-
-    neograph::ChatTool get_definition() const {
-        return {
-            "agentxx_web_fetch_markdown",
-            "Perform an HTTP GET request and return the page content converted to Markdown.",
-            webToolParams("url", "Default `15` seconds. Request timeout in seconds.")
-        };
-    }
-
-    asio::awaitable<std::string> execute_async(const utilxx_base::Json& args) const {
-        co_return co_await agentxx_websearch_plugin::webFetchMarkdownExecuteAsync(args);
-    }
 };
 
 } // namespace tools
@@ -285,61 +277,63 @@ asio::awaitable<void>
     co_return;
 }
 
-asio::awaitable<void> test_web_fetch_url_markdown_get_definition(
+asio::awaitable<void> test_web_fetch_format_param(
     std::weak_ptr<agentxx::agent::AgentContext> agentContext
 ) {
-    auto tool = agentxx::tools::WebFetchUrlMarkdownTool{agentContext};
-    auto def  = tool.get_definition();
-    if (def.name == "agentxx_web_fetch_markdown") {
+    auto  tool   = agentxx::tools::WebFetchUrlTool{agentContext};
+    auto  def    = tool.get_definition();
+    auto& params = def.parameters;
+    if (params.is_object() && params.contains("properties") && params["properties"].is_object()
+        && params["properties"].contains("format")) {
         g_ws_passed++;
-        TEST_PASS << "WebFetchUrlMarkdownTool::get_definition() name correct" << std::endl;
+        TEST_PASS << "WebFetchUrlTool definition has format parameter" << std::endl;
     } else {
         g_ws_failed++;
-        TEST_FAIL << "WebFetchUrlMarkdownTool::get_definition() name incorrect" << std::endl;
+        TEST_FAIL << "WebFetchUrlTool definition missing format parameter" << std::endl;
     }
     co_return;
 }
 
-asio::awaitable<void>
-    test_web_fetch_url_markdown_empty_url(std::weak_ptr<agentxx::agent::AgentContext> agentContext
-    ) {
-    auto tool = agentxx::tools::WebFetchUrlMarkdownTool{agentContext};
+asio::awaitable<void> test_web_fetch_invalid_format(
+    std::weak_ptr<agentxx::agent::AgentContext> agentContext
+) {
+    auto tool = agentxx::tools::WebFetchUrlTool{agentContext};
+    // 非法 `format` 在发起请求前就应报参数错误
     auto args = utilxx_base::Json{
-        {"url", ""}
+        {"url",    "http://127.0.0.1:1/never"},
+        {"format", "html"                  },
     };
     bool threw = false;
     try {
         (void)co_await tool.execute_async(args);
     } catch (const std::invalid_argument& e) {
         threw = true;
-        if (std::string_view{e.what()}.find("`url` is empty") == std::string::npos) {
+        if (std::string_view{e.what()}.find("`format`") == std::string::npos) {
             TEST_FAIL << "unexpected message: " << e.what() << std::endl;
         }
     }
     if (threw) {
         g_ws_passed++;
-        TEST_PASS << "WebFetchUrlMarkdownTool throws for empty url" << std::endl;
+        TEST_PASS << "WebFetchUrlTool throws for invalid format" << std::endl;
     } else {
         g_ws_failed++;
-        TEST_FAIL << "WebFetchUrlMarkdownTool should throw for empty url" << std::endl;
+        TEST_FAIL << "WebFetchUrlTool should throw for invalid format" << std::endl;
     }
     co_return;
 }
 
-asio::awaitable<void>
-    test_web_fetch_url_markdown_description(std::weak_ptr<agentxx::agent::AgentContext> agentContext
-    ) {
-    auto tool = agentxx::tools::WebFetchUrlMarkdownTool{agentContext};
+asio::awaitable<void> test_web_fetch_url_description_mentions_markdown(
+    std::weak_ptr<agentxx::agent::AgentContext> agentContext
+) {
+    auto tool = agentxx::tools::WebFetchUrlTool{agentContext};
     auto def  = tool.get_definition();
     if (def.description.find("markdown") != std::string::npos
         || def.description.find("Markdown") != std::string::npos) {
         g_ws_passed++;
-        TEST_PASS << "WebFetchUrlMarkdownTool description mentions markdown" << std::endl;
+        TEST_PASS << "WebFetchUrlTool description mentions markdown" << std::endl;
     } else {
         g_ws_failed++;
-        TEST_FAIL << "WebFetchUrlMarkdownTool description should mention "
-                     "markdown"
-                  << std::endl;
+        TEST_FAIL << "WebFetchUrlTool description should mention markdown" << std::endl;
     }
     co_return;
 }
@@ -396,10 +390,6 @@ asio::awaitable<void> test_web_tools_definition_timeout_header(
     {
         auto tool = agentxx::tools::WebFetchUrlTool{agentContext};
         checkTool("WebFetchUrlTool", tool.get_definition());
-    }
-    {
-        auto tool = agentxx::tools::WebFetchUrlMarkdownTool{agentContext};
-        checkTool("WebFetchUrlMarkdownTool", tool.get_definition());
     }
     {
         // 测试适配: ModelWebSearchTool 同名薄包装 (空 ModelConfig 仅验证 schema)
@@ -482,20 +472,21 @@ asio::awaitable<void>
             TEST_FAIL << "WebFetchUrlTool header not received, got: " << result << std::endl;
         }
     }
-    // WebFetchUrlMarkdownTool: header 参数
+    // WebFetchUrlTool (`format` = markdown): header 参数
     {
-        auto tool = agentxx::tools::WebFetchUrlMarkdownTool{agentContext};
+        auto tool = agentxx::tools::WebFetchUrlTool{agentContext};
         auto args = utilxx_base::Json{
             {"url",    baseUrl + "/echo-header"                                     },
+            {"format", "markdown"                                                   },
             {"header", utilxx_base::Json{{"X-Test-Header", "fetch-md-header-value"}}},
         };
         auto result = co_await tool.execute_async(args);
         if (result.find("fetch-md-header-value") != std::string::npos) {
             g_ws_passed++;
-            TEST_PASS << "WebFetchUrlMarkdownTool sends custom header" << std::endl;
+            TEST_PASS << "WebFetchUrlTool (markdown) sends custom header" << std::endl;
         } else {
             g_ws_failed++;
-            TEST_FAIL << "WebFetchUrlMarkdownTool header not received, got: " << result
+            TEST_FAIL << "WebFetchUrlTool (markdown) header not received, got: " << result
                       << std::endl;
         }
     }
@@ -579,9 +570,9 @@ asio::awaitable<TestResult>
     co_await run(test_web_fetch_url_get_definition);
     co_await run(test_web_fetch_url_empty_url);
     co_await run(test_web_fetch_url_default_timeout);
-    co_await run(test_web_fetch_url_markdown_get_definition);
-    co_await run(test_web_fetch_url_markdown_empty_url);
-    co_await run(test_web_fetch_url_markdown_description);
+    co_await run(test_web_fetch_format_param);
+    co_await run(test_web_fetch_invalid_format);
+    co_await run(test_web_fetch_url_description_mentions_markdown);
     co_return TestResult{g_ws_passed, g_ws_failed};
 }
 

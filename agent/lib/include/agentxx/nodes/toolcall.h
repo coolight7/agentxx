@@ -149,7 +149,7 @@ public:
     /// - 无需执行 (shortCircuit) 时直接给出结果消息
     /// - 取消: `*outError` 记录异常并返回 nullopt (调用方补占位)
     /// - 中断: `*outInterrupted` 置位并返回 `[Interrupt]` 结果消息
-    /// - 普通异常: 返回 `[Exception aborted: ...]` 结果消息 (与其他工具调用无关)
+    /// - 普通异常: 返回 `[Error: ...]` 结果消息 (与其他工具调用无关)
     /// - 执行体由调用方复制进 batch (协程捕获), 生命周期覆盖整批执行
     asio::awaitable<std::optional<neograph::ChatMessage>> runPreparedToolCall(
         const PreparedToolCall& prepared,

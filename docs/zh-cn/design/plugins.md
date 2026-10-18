@@ -247,7 +247,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
         auto mySchema = ctx.schema("my_blocking_tool")
                             .string("path", "Target file path", /*required=*/true)
                             .integer("timeout", "Timeout in seconds", false, 60)
-                            .boolean("all_output", "Return all output", false, true)
+                            .boolean("full_output", "Return all output", false, true)
                             .build();
 
         // 2. 阻塞工具 (自动卸载到主程序 blockingPool 线程池，不占 IO 线程)
@@ -527,7 +527,7 @@ tool_call 中的前后调用形成顺序屏障。并发只发生在同一条 ass
   抛 `std::runtime_error`。取消路径抛取消异常 (`neograph::graph::CancelledException`;
   插件侧抛 `pluginxx::CancelledException`, 由 SDK 边界转换为 CANCELLED)。
 - **主程序统一格式化**: 工具抛出的普通异常由 `ToolcallWrapNode` (`lib/src/nodes/toolcall.cpp`)
-  捕获, 工具结果文本写为 `[Exception aborted: <what>]`; 取消/中断异常按控制流处理
+  捕获, 工具结果文本写为 `[Error: <what>]`; 取消/中断异常按控制流处理
   (取消轮次而不是记成工具错误)。因此工具不需要自己拼错误结构, 模型也能稳定识别
   错误结果。
 - **插件侧写法**: 在工具回调里直接 `throw` 即可 —— SDK 的 `fast_tool` /
@@ -1394,7 +1394,7 @@ polled_tool(ctx, name, depict, schema,
 
   | 插件 / 工具 | 依据 |
   |---|---|
-  | `agentxx_websearch`：`web_search` / `web_fetch` / `web_fetch_markdown` | 实现体本就是 asio 协程（`co_await HttpClient::*Async`）；网络等待不再占用主程序工作线程池，同实例的 HTTP keep-alive 连接池天然复用 |
+  | `agentxx_websearch`：`web_search` / `web_fetch` (`format` = markdown\|raw) | 实现体本就是 asio 协程（`co_await HttpClient::*Async`）；网络等待不再占用主程序工作线程池，同实例的 HTTP keep-alive 连接池天然复用 |
   | `agentxx_execute_command`：`execute_bash_command` / `execute_windows_command`（Boost.Process v2 分支） | 子进程管道/计时器绑定协程 executor；并发多命令共享同一 poll 序列与同一个本地 reactor，不再各占一个池线程直到超时 |
   | `agentxx_filesystem`：`read` / `write` / `edit` | `asio::stream_file` 异步读写；文件 IO 真异步（可用性经 `utilxx_base::isAsyncFileIoSupported()` 判断：编译期宏 + 运行时 io_uring 探测），避免大文件读写占用池线程 |
 

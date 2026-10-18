@@ -159,7 +159,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
         auto mySchema = ctx.schema("my_blocking_tool")
                             .string("path", "Target file path", /*required=*/true)
                             .integer("timeout", "Timeout in seconds", false, 60)
-                            .boolean("all_output", "Return all output", false, true)
+                            .boolean("full_output", "Return all output", false, true)
                             .build();
 
         // 2. Blocking tool (automatically offloaded to host blockingPool, non-blocking to IO thread)
@@ -736,7 +736,7 @@ Costs and rules that must be respected together with the implementation:
 
   | Plugin / tool | Rationale |
   |---|---|
-  | `agentxx_websearch`: `web_search` / `web_fetch` / `web_fetch_markdown` | the bodies already were asio coroutines (`co_await HttpClient::*Async`); network waits no longer occupy the host worker pool and the per-instance HTTP keep-alive pool is reused |
+  | `agentxx_websearch`: `web_search` / `web_fetch` (`format` = markdown\|raw) | the bodies already were asio coroutines (`co_await HttpClient::*Async`); network waits no longer occupy the host worker pool and the per-instance HTTP keep-alive pool is reused |
   | `agentxx_execute_command`: `execute_bash_command` / `execute_windows_command` (Boost.Process v2 branch) | subprocess pipes and timers bind to the coroutine executor; concurrent commands share one poll sequence and one local reactor instead of each occupying a pool thread until its timeout |
   | `agentxx_filesystem`: `read` / `write` / `edit` | `asio::stream_file` async IO; file IO is genuinely asynchronous (availability decided by `utilxx_base::isAsyncFileIoSupported()`: compile-time macro plus a runtime io_uring probe), avoiding pool-thread occupation for large files |
 

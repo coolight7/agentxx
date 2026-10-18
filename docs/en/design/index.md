@@ -70,18 +70,20 @@ Rich suite of tools organized by functional categories. Core programming utiliti
 | Category | Tool | Description |
 |---|---|---|
 | **Filesystem** | `agentxx_filesystem_list` | Lists file and directory metadata (size, type, modification time), supporting recursive traversal and shell wildcards (`*`, `?`, `[...]`, `**`) in `path`: matched entries themselves are listed, and `recursive` expands matched directories as well. |
-| | `agentxx_filesystem_read` | Reads text files line by line, supporting offset and limit parameters. |
+| | `agentxx_filesystem_read` | Reads text files line by line, supporting `offset`/`limit`; one call returns at most 2000 lines / 256 KiB (a larger result is refused with an error instead of being truncated — read in parts, or locate the wanted lines with grep first). |
 | | `agentxx_filesystem_write` | Creates or overwrites text files. |
 | | `agentxx_filesystem_edit` | Performs exact string replacement edits on text files (several places in one call via the `edits` array, applied in order; each item replaces the first match, and when any item does not match, nothing is written). |
-| | `agentxx_filesystem_glob` | Searches files matching glob patterns. |
-| | `agentxx_filesystem_grep` | Searches file contents via literal text (`text_patterns`) or regular expressions (`regex_patterns`) (can search both simultaneously). |
+| | `agentxx_filesystem_glob` | Searches files matching glob patterns (`type` filters by file type and accepts a string or an array of strings). |
+| | `agentxx_filesystem_grep` | Searches file contents via literal text (`text_patterns`) or regular expressions (`regex_patterns`) (can search both simultaneously); `output_mode` is `files_with_matches` / `content` / `count` (count reports only the matched file and match totals). |
+| | `agentxx_filesystem_move` | Moves or renames a file or directory (a move on the same filesystem, falling back to copy-then-delete across devices; an existing target needs `overwrite`). |
+| | `agentxx_filesystem_copy` | Copies a file or directory (directories are copied recursively; an existing target needs `overwrite`). |
+| | `agentxx_filesystem_remove` | Deletes a file or directory (deleting a directory requires `recursive`). |
 | **Command Execution** | `agentxx_execute_bash_command` | Executes Linux shell commands with timeout enforcement (Linux / macOS); the plugin probes python/node availability + version at start and writes them into the tool prompt. |
 | | `agentxx_execute_windows_command` | Executes Windows commands, defaulting to PowerShell (the plugin auto-probes pwsh/powershell at start and injects the executable name + version into the tool prompt), falling back to cmd.exe (Windows / callable under WSL). |
 | | `example_js_execute_command` | Executes JavaScript code via the QuickJS interpreter (the JS equivalent of execute_bash_command; depends on `agentxx_javascript_engine` plugin). |
 | **Mathematics** | `agentxx_math_calculate` | Mathematical expression parsing and evaluation (arithmetic, exponentiation, factorials, bitwise, logic, constants, trigonometric/hyperbolic/logarithmic/combinatorial functions, implicit multiplication). |
 | **Network** | `agentxx_web_search` | Web search (DuckDuckGo / Model Search). |
-| | `agentxx_web_fetch` | HTTP GET retrieving raw webpage content. |
-| | `agentxx_web_fetch_markdown` | Fetches webpage content and converts it to Markdown. |
+| | `agentxx_web_fetch` | HTTP GET a page: `format` = `markdown` (default) converts it to Markdown, `raw` returns the response body as-is. |
 | **Knowledge Retrieval** | `agentxx_rag_search` | Vector semantic similarity search across knowledge bases. |
 | **Code Analysis** | `agentxx_codegraph_search` | Searches code symbols by name. |
 | | `agentxx_codegraph_context` | Retrieves symbol definitions, callers, and callees. |
@@ -1711,4 +1713,8 @@ entering or leaving a worktree never changes the system prompt.
 - All prompt text lives in `agent/lib/src/agent/prompt.cpp` (initialized in the constructor):
   `prompt.h` only declares members and the substitution API, so editing prompt text no longer
   rebuilds every translation unit that includes the header
+  - The table holds **built-in tools only** (share_store / subagent / git_worktree); plugin tool
+    prompts live inside the plugins themselves (a few inject them via the `agentxx.agent.prompt`
+    interface, e.g. execute_command / codegraph / planning). An entry with the same tool name still
+    overrides the plugin prompt (useful for customization/localization).
 

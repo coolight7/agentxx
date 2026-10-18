@@ -40,7 +40,7 @@
   在 `BaseAgent::initMiddleware` / `CodeAgent::initMiddleware` 中按栈顺序注册; 中间件的 toolcalls 由
   `initMiddlewareTools` 自动收集进工具列表
 - **权限**：文件系统权限经 `PermissionMiddlewareHandle` 的最长前缀匹配 (`utilxx::XXRouter`) + 通配符 `*`，默认规则由 `permission.mode` 决定；新增受控资源需定义询问分类并走 `service.permission` 主题。插件工具的工具权限限制由插件自己在注册工具后声明（`agentxx.agent.permission` 接口表，含作用域与目标参数）；未声明的工具不参与权限判定
-- **工具错误**: 参数检查失败抛 `std::invalid_argument`、运行期错误抛 `std::runtime_error`, 由 `ToolcallWrapNode` 统一格式化为 `[Exception aborted: ...]` 结果文本; 不要返回 `{"error": ...}` 形态 (详见 [plugins.md](design/plugins.md) §8)
+- **工具错误**: 参数检查失败抛 `std::invalid_argument`、运行期错误抛 `std::runtime_error`, 由 `ToolcallWrapNode` 统一格式化为 `[Error: ...]` 结果文本; 不要返回 `{"error": ...}` 形态 (详见 [plugins.md](design/plugins.md) §8)
 
 ## 3. 插件开发
 

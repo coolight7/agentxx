@@ -311,17 +311,17 @@ asio::awaitable<TestResult> run_plugin_tests() {
                 });
                 XX_TEST_EXPECT_TRUE(out4.find("Command timed out") != std::string::npos);
 
-                // 5. all_output=false 策略 (成功不输出，失败输出)
+                // 5. full_output=false 策略 (成功不输出，失败输出)
                 auto out5 = co_await tool->execute_async(utilxx_base::Json{
-                    {"code",       "console.log('secret_log'); return 'hide_log';"},
-                    {"all_output", false                                          },
+                    {"code",        "console.log('secret_log'); return 'hide_log';"},
+                    {"full_output", false                                          },
                 });
                 XX_TEST_EXPECT_TRUE(out5.find("secret_log") == std::string::npos);
                 XX_TEST_EXPECT_TRUE(out5.find("[ExitCode]\n0") != std::string::npos);
 
                 auto out5_err = co_await tool->execute_async(utilxx_base::Json{
-                    {"code",       "console.log('err_log'); throw new Error('visible_on_fail');"},
-                    {"all_output", false                                                        },
+                    {"code",        "console.log('err_log'); throw new Error('visible_on_fail');"},
+                    {"full_output", false                                                        },
                 });
                 XX_TEST_EXPECT_TRUE(out5_err.find("visible_on_fail") != std::string::npos);
 
@@ -2579,7 +2579,7 @@ throw new Error("top-level rollback probe");
                           utilxx_base::Json{{"old_str", "not_in_file"}, {"new_str", "x"}}}
                      )      },
                 });
-                XX_TEST_EXPECT_TRUE(eMul.find("[Error]") != std::string::npos);
+                XX_TEST_EXPECT_TRUE(eMul.find("[Error:") != std::string::npos);
                 auto r3 = co_await readTool->execute_async(utilxx_base::Json{
                     {"path", file}
                 });
@@ -2637,6 +2637,37 @@ throw new Error("top-level rollback probe");
             }
             if (grepSpec) {
                 XX_TEST_EXPECT_EQ(grepSpec->scope, Mw::FilesystemPermissionREAD);
+            }
+
+            // 2b. move/copy/remove 声明写作用域: move/copy 声明 `src` (被移动/
+            //     复制的路径), 另一个目标 `dst` 由工具内只读查询复核;
+            //     remove 声明 `path`
+            const auto* moveSpec   = permission->toolPermission("agentxx_filesystem_move");
+            const auto* copySpec   = permission->toolPermission("agentxx_filesystem_copy");
+            const auto* removeSpec = permission->toolPermission("agentxx_filesystem_remove");
+            XX_TEST_EXPECT_TRUE(moveSpec != nullptr);
+            XX_TEST_EXPECT_TRUE(copySpec != nullptr);
+            XX_TEST_EXPECT_TRUE(removeSpec != nullptr);
+            if (moveSpec) {
+                XX_TEST_EXPECT_EQ(moveSpec->scope, Mw::FilesystemPermissionWRITE);
+                XX_TEST_EXPECT_EQ(moveSpec->targetArgs.size(), size_t{1});
+                if (!moveSpec->targetArgs.empty()) {
+                    XX_TEST_EXPECT_EQ(moveSpec->targetArgs[0], std::string{"src"});
+                }
+            }
+            if (copySpec) {
+                XX_TEST_EXPECT_EQ(copySpec->scope, Mw::FilesystemPermissionWRITE);
+                XX_TEST_EXPECT_EQ(copySpec->targetArgs.size(), size_t{1});
+                if (!copySpec->targetArgs.empty()) {
+                    XX_TEST_EXPECT_EQ(copySpec->targetArgs[0], std::string{"src"});
+                }
+            }
+            if (removeSpec) {
+                XX_TEST_EXPECT_EQ(removeSpec->scope, Mw::FilesystemPermissionWRITE);
+                XX_TEST_EXPECT_EQ(removeSpec->targetArgs.size(), size_t{1});
+                if (!removeSpec->targetArgs.empty()) {
+                    XX_TEST_EXPECT_EQ(removeSpec->targetArgs[0], std::string{"path"});
+                }
             }
 
             // 3. 判定: 已声明工具按规则表兜底 (无规则 = noRuleOperator); 未声明工具直接放行
@@ -2984,13 +3015,11 @@ throw new Error("top-level rollback probe");
         /// 并发 fetch 是否已全部收束 (仍有挂起协程时不得卸载插件, 否则与其交错)
         bool webFetchesSettled = false;
         if (webInst && port != 0) {
-            const std::string baseUrl     = "http://127.0.0.1:" + std::to_string(port);
-            auto              fetchTool   = ctx->toolRegistry->find("agentxx_web_fetch");
-            auto              fetchMdTool = ctx->toolRegistry->find("agentxx_web_fetch_markdown");
+            const std::string baseUrl   = "http://127.0.0.1:" + std::to_string(port);
+            auto              fetchTool = ctx->toolRegistry->find("agentxx_web_fetch");
             XX_TEST_EXPECT_TRUE(fetchTool != nullptr);
-            XX_TEST_EXPECT_TRUE(fetchMdTool != nullptr);
 
-            if (fetchTool && fetchMdTool) {
+            if (fetchTool) {
                 // 注: 下面所有 co_spawn(..., detached) 协程都可能比本作用域活得更久,
                 // 共享状态一律用 shared_ptr 持有 (捕获引用会在作用域结束后写坏内存;
                 // Release 实测为堆对象被写坏后释放野指针崩溃), 且卸载插件前必须等它们全部结束
@@ -3009,16 +3038,19 @@ throw new Error("top-level rollback probe");
                 );
 
                 // 1. 单请求 (受控轮询驱动 socket 收发)
+                // 1. raw 路径
                 auto out1 = co_await fetchTool->execute_async(utilxx_base::Json{
                     {"url",     baseUrl + "/hello"},
                     {"timeout", 10                },
+                    {"format",  "raw"             },
                 });
                 XX_TEST_EXPECT_TRUE(out1.find("polled_web_ok") != std::string::npos);
 
                 // 2. markdown 路径
-                auto out2 = co_await fetchMdTool->execute_async(utilxx_base::Json{
+                auto out2 = co_await fetchTool->execute_async(utilxx_base::Json{
                     {"url",     baseUrl + "/hello"},
                     {"timeout", 10                },
+                    {"format",  "markdown"        },
                 });
                 XX_TEST_EXPECT_TRUE(out2.find("polled_web_ok") != std::string::npos);
 
@@ -3340,6 +3372,19 @@ throw new Error("top-level rollback probe");
 
             // 工具注册成功
             XX_TEST_EXPECT_TRUE(planCtx->toolRegistry->contains("agentxx_planning"));
+
+            // todos 声明为对象数组 (元素含 state 枚举与 content), 不再是一个裸 object 数组
+            if (auto planTool = planCtx->toolRegistry->find("agentxx_planning")) {
+                auto        def    = planTool->get_definition();
+                auto        params = agentxx::util::fromNeographJson(def.parameters);
+                const auto& todos  = params["properties"]["todos"];
+                XX_TEST_EXPECT_EQ(todos["type"].get<std::string>(), std::string{"array"});
+                const auto& items = todos["items"];
+                XX_TEST_EXPECT_EQ(items["type"].get<std::string>(), std::string{"object"});
+                XX_TEST_EXPECT_TRUE(items["properties"].contains("state"));
+                XX_TEST_EXPECT_TRUE(items["properties"].contains("content"));
+                XX_TEST_EXPECT_TRUE(items["properties"]["state"].contains("enum"));
+            }
 
             // 41.3 卸载插件: prompt 贡献被自动撤销
             XX_TEST_EXPECT_TRUE(co_await planCtx->pluginManager->unloadAsync("agentxx_planning"));

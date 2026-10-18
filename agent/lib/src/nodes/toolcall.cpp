@@ -610,7 +610,7 @@ void insertAbortedToolResults(
         for (const auto& tool : toolCalls) {
             auto msg = neograph::ChatMessage{
                 .role    = "tool",
-                .content = fmt::format("[{}/Exception aborted: {}]", phasePrefix, exceptionStr),
+                .content = fmt::format("[Error: {} (tool call aborted at {} phase)]", exceptionStr, phasePrefix),
                 .tool_call_id = tool.id,
                 .tool_name    = tool.name,
                 .flags        = neograph::MessageFlag::AutoInserted,
@@ -858,7 +858,7 @@ asio::awaitable<bool> ToolcallWrapNode::prepareToolCall(
                               ? agentCtxPtr->toolRegistry->find(tc.name)
                               : nullptr;
         if (!pluginTool) {
-            out.shortCircuit = fmt::format(R"([Error] Tool not found: {})", tc.name);
+            out.shortCircuit = fmt::format(R"([Error: tool not found: {}])", tc.name);
             co_return false;
         }
         out.tool      = pluginTool.get();
@@ -871,7 +871,7 @@ asio::awaitable<bool> ToolcallWrapNode::prepareToolCall(
     try {
         args = utilxx_base::Json::parse(tc.arguments);
     } catch (const std::exception& e) {
-        out.shortCircuit = fmt::format("[Exception aborted: {}]", e.what());
+        out.shortCircuit = fmt::format("[Error: {}]", e.what());
         co_return false;
     }
     if (args.is_object()) {
@@ -1093,7 +1093,7 @@ asio::awaitable<std::optional<neograph::ChatMessage>> ToolcallWrapNode::runPrepa
             co_return true;
         },
         [&](std::string errinfo) -> asio::awaitable<bool> {
-            content = fmt::format("[Exception aborted: {}]", errinfo);
+            content = fmt::format("[Error: {}]", errinfo);
             ok      = true;
             if (auto ctx = agentContext.lock(); ctx && ctx->metrics) {
                 ctx->metrics->noteToolCall(agentxx::util::KeyMetrics::ToolOutcome::Failed);
@@ -1498,14 +1498,14 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
                     if (in.ctx.cancel_token && in.ctx.cancel_token->is_cancelled()) {
                         prepError = std::current_exception();
                     } else {
-                        prepared.shortCircuit = fmt::format("[Exception aborted: {}]", e.what());
+                        prepared.shortCircuit = fmt::format("[Error: {}]", e.what());
                     }
                 }
                 co_return false;
             },
             [&](std::string errinfo) -> asio::awaitable<bool> {
                 // 参数解析/权限服务等普通异常: 作为本次调用的结果, 不影响同批其他调用
-                prepared.shortCircuit = fmt::format("[Exception aborted: {}]", errinfo);
+                prepared.shortCircuit = fmt::format("[Error: {}]", errinfo);
                 co_return true;
             },
             // 控制流异常兜底 (取消/中断): 记为取消, 由调用方按取消路径收尾

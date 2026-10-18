@@ -79,18 +79,20 @@ git_worktree 及延迟加载装配 (`ToolSkillSearchSubAgentTask` 模板类, 当
 | 分类 | 工具 | 说明 |
 |------|------|------|
 | **文件系统** | `agentxx_filesystem_list` | 列出文件/文件夹信息 (大小、类型、修改时间)，支持递归与 `path` 通配 (`*` / `?` / `[...]` / `**`：含通配符时展开模式并列出匹配条目本身，`recursive` 再下钻匹配到的目录) |
-| | `agentxx_filesystem_read` | 按行读取文本文件，支持 offset/limit |
+| | `agentxx_filesystem_read` | 按行读取文本文件，支持 `offset`/`limit`；单次调用输出上限 2000 行 / 256 KiB，超过直接报错（不截断，读大文件用分页或先 grep 定位） |
 | | `agentxx_filesystem_write` | 创建/覆盖文本文件 |
 | | `agentxx_filesystem_edit` | 精确字符串替换编辑文本文件 (一次性改多处: `edits` 数组按顺序生效, 每段只替换第一处匹配; 任一段匹配不到则整次调用不写盘) |
-| | `agentxx_filesystem_glob` | 按 glob 模式搜索文件 |
-| | `agentxx_filesystem_grep` | 按纯文本 (text_patterns) / 正则 (regex_patterns) 搜索文件内容 (可同时指定取并集) |
+| | `agentxx_filesystem_glob` | 按 glob 模式搜索文件 (`type` 可按文件类型过滤，取值为字符串或字符串数组) |
+| | `agentxx_filesystem_grep` | 按纯文本 (text_patterns) / 正则 (regex_patterns) 搜索文件内容 (可同时指定取并集)；`output_mode` 取 `files_with_matches` / `content` / `count` (count 只给命中文件数与命中总数) |
+| | `agentxx_filesystem_move` | 移动/重命名文件或目录 (同文件系统内为移动，跨设备回退为复制后删源；目标已存在时需 `overwrite`) |
+| | `agentxx_filesystem_copy` | 复制文件或目录 (目录递归复制；目标已存在时需 `overwrite`) |
+| | `agentxx_filesystem_remove` | 删除文件或目录 (删除目录需显式 `recursive`) |
 | **命令执行** | `agentxx_execute_bash_command` | 执行 Linux shell 命令，支持超时控制 (Linux/macOS)；插件启动时探测 python/node 可用性与版本并写入工具提示词 |
 | | `agentxx_execute_windows_command` | 执行 Windows 命令，默认 PowerShell (插件启动时自动探测 pwsh/powershell 并注入可执行文件名与版本号到工具提示词)，未找到时回退 cmd.exe (Windows / WSL 下调用) |
 | | `example_js_execute_command` | 通过 QuickJS 解释器执行 JavaScript 代码 (execute_bash_command 的 JS 等价物, 依赖插件 `agentxx_javascript_engine`) |
 | **数学计算** | `agentxx_math_calculate` | 数学表达式解析与计算 (四则运算、幂、阶乘、位运算、比较逻辑、常量、三角/双曲/对数/组合排列等函数、隐式乘法) |
 | **网络** | `agentxx_web_search` | 网络搜索 (DuckDuckGo / 模型搜索) |
-| | `agentxx_web_fetch` | HTTP GET 获取网页原文 |
-| | `agentxx_web_fetch_markdown` | 获取网页并转为 Markdown |
+| | `agentxx_web_fetch` | HTTP GET 获取网页内容：`format` = `markdown` (默认) 转 Markdown / `raw` 返回原文 |
 | **知识检索** | `agentxx_rag_search` | 基于向量相似度的知识库语义搜索 |
 | **代码分析** | `agentxx_codegraph_search` | 按名称搜索代码符号 |
 | | `agentxx_codegraph_context` | 获取符号的定义、调用者、被调用者 |
@@ -2377,4 +2379,6 @@ worktree 绑定是运行期经 `agentxx_git_worktree` 工具切换的临时状�
   - 替换在拼装完成后统一执行, 自定义 `systemPrompt` 与各附加段 (`appendSystemPrompts`) 都生效
 - 提示词文本统一放在 `agent/lib/src/agent/prompt.cpp` (构造函数里初始化):
   `prompt.h` 只声明成员与取值方式, 改提示词文本不会牵连所有包含该头文件的编译单元
-
+  - 表中**只放内置工具** (share_store / subagent / git_worktree); 插件工具的提示词写在插件自身字面量里
+    (少数插件经 `agentxx.agent.prompt` 接口表注入, 如 execute_command / codegraph / planning),
+    表里仍保留“同名条目存在时覆盖插件提示词”的能力 (定制/本地化时可用)
