@@ -440,6 +440,31 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 > `X_BASELINE_SIZE` (基线字节数); 当前全部为 v1 (基线 = 完整表长)。
 > 四件套要求、判定规则与追加策略见 **§17**。
 
+> **内置能力 (供其他插件 / 主程序侧调用)**
+>
+> 能力是"能力名 + JSON 载荷"的 RPC: 提供方在 `start` 里用 `capability(ctx, "名", fn)`
+> 登记, 调用方经 `agentxx.agent.capabilities` 的 `invoke_capability_async` 调用
+> (kit: `invoke_cap` / `invoke_capability_blocking`; 主程序侧
+> `PluginManager::invokeCapabilityAsync`)。调用必须携带**调用方插件实例** (主程序据此
+> 持有它的执行租约, 卸载等待覆盖本次调用); 主程序自身调用时传提供者实例即可
+> (`PluginManager::find(插件名)` 取得)。FFI 的 C 接口目前没有单独的能力调用入口。
+>
+> - `agentxx.system_usage` (`agentxx_system_monitor`): 读取当前系统负担的快照,
+>   `method` 不参与分支 (约定 `query`), 参数忽略。载荷字段 (占用为百分比, 容量为 MB):
+>   - `cpu` / `cpu_cores`: CPU 占用与逻辑核心数
+>   - `mem_total_mb` / `mem_used_mb` / `mem_available_mb` / `mem_percent`: 物理内存
+>     **总量 / 已用 / 可用** 与占用率
+>   - `gpu_count` / `gpu_peak_percent`: GPU 数量与各卡占用最大值
+>   - `vram_total_mb` / `vram_used_mb` / `vram_available_mb`: 各卡显存**总量 / 已用 /
+>     可用** 的合计
+>   - `gpus[]`: 逐卡 `name` / `usage_percent` / `vram_source`
+>     (`dedicated` / `shared` / `none`, 说明下面三项取自独立还是共享显存) /
+>     `vram_total_mb` / `vram_used_mb` / `vram_available_mb`, 以及原始的两份数据
+>     `dedicated_vram_{mb,used_mb,available_mb}` 与
+>     `shared_vram_{mb,used_mb,available_mb}`
+>   - 显存取值规则: 有独立显存用独立显存, 统一内存 GPU / 核显退回共享显存;
+>     驱动不上报已用时按 0 处理 (可用量等于总量)
+
 > **提示词段落来源 (第二期留位)**: 主程序侧的提示词加载已改为"来源注册 + 按需刷新"
 > (`PromptSourceRegistry`, 见 [index.md](index.md) 架构设计第 6 小节), 内置来源
 > `memory` / `skills` 走这条路径。插件目前仍只能经 `agentxx.agent.prompt` 的

@@ -20,7 +20,7 @@ class A2aClient;
 
 namespace agent {
 
-/// agent 节点容器中一个 agent 节点 (主 agent 与子代理完全平等)
+/// agent 节点容器中一个 agent 节点 (主 agent 与子 agent 完全平等)
 /// - 每个节点持有独立的 BaseAgent 实例 (独立 AgentContext / engine /
 ///   SessionStore / 中间件栈), 节点间互不共享可变状态
 /// - 生命周期归 AgentHost 所有: spawn 结束 / 取消 / 超时后由 agent 节点容器回收

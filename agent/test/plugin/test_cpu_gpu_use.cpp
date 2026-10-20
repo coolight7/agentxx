@@ -192,6 +192,12 @@ asio::awaitable<TestResult>
                 /// "物理内存 - 可回收页" 计算, 防止页统计方式写反)
                 uint64_t used = j.value("mem_used_mb", uint64_t{0});
                 XX_TEST_EXPECT_TRUE(used <= total);
+                /// 可用内存: 能力契约要求内存给出"可用量 + 总量" (其他插件/主程序据此
+                /// 判断压力); 各平台的已用量都由可用量反推, 两者必须互补 (MB 取整允许 1 的差)
+                uint64_t memAvailable = j.value("mem_available_mb", uint64_t{0});
+                XX_TEST_EXPECT_TRUE(memAvailable > 0);
+                XX_TEST_EXPECT_TRUE(memAvailable <= total + 1);
+                XX_TEST_EXPECT_TRUE(used + memAvailable + 1 >= total);
                 /// GPU 条目字段自检 (各平台逐卡读取; 无 GPU 的机器上数组为空,
                 /// 不因此失败): 名称 + 显存总量 + 利用率取值范围
                 if (j["gpus"].is_array()) {
@@ -218,7 +224,59 @@ asio::awaitable<TestResult>
                         }
                         double gpuUsage = gpu.value("usage_percent", -1.0);
                         XX_TEST_EXPECT_TRUE(gpuUsage >= 0.0 && gpuUsage <= 100.0);
+                        /// 显存"可用量 + 总量": vram_source 说明 vram_* 取自独立还是共享显存
+                        /// (统一内存 GPU 只有共享显存), 与所选来源的字段保持一致
+                        const std::string vramSource = gpu.value("vram_source", std::string{});
+                        XX_TEST_EXPECT_TRUE(
+                            vramSource == "dedicated" || vramSource == "shared"
+                            || vramSource == "none"
+                        );
+                        const uint64_t vramViewTotal = gpu.value("vram_total_mb", uint64_t{0});
+                        const uint64_t vramViewUsed  = gpu.value("vram_used_mb", uint64_t{0});
+                        const uint64_t vramViewAvail = gpu.value("vram_available_mb", uint64_t{0});
+                        XX_TEST_EXPECT_TRUE(vramViewAvail <= vramViewTotal);
+                        /// 可用量 = 总量 - 已用; 驱动不上报已用 (为 0) 时可用量就是总量
+                        XX_TEST_EXPECT_TRUE(
+                            vramViewUsed >= vramViewTotal
+                                ? vramViewAvail == 0
+                                : vramViewAvail == vramViewTotal - vramViewUsed
+                        );
+                        const uint64_t dedicatedTotal
+                            = gpu.value("dedicated_vram_mb", uint64_t{0});
+                        const uint64_t sharedTotal = gpu.value("shared_vram_mb", uint64_t{0});
+                        if (dedicatedTotal > 0) {
+                            XX_TEST_EXPECT_TRUE(vramSource == "dedicated");
+                            XX_TEST_EXPECT_EQ(vramViewTotal, dedicatedTotal);
+                        } else if (sharedTotal > 0) {
+                            XX_TEST_EXPECT_TRUE(vramSource == "shared");
+                            XX_TEST_EXPECT_EQ(vramViewTotal, sharedTotal);
+                        } else {
+                            XX_TEST_EXPECT_TRUE(vramSource == "none");
+                            XX_TEST_EXPECT_EQ(vramViewTotal, uint64_t{0});
+                        }
+                        if (sharedTotal > 0) {
+                            /// 共享显存也必须有可用量与总量 (核显/统一内存只有这一份)
+                            XX_TEST_EXPECT_TRUE(
+                                gpu.value("shared_vram_available_mb", uint64_t{0}) > 0
+                            );
+                        }
                     }
+                    /// 合计值: gpu_count = 数组长度, vram_* = 各卡之和 (不想遍历数组的
+                    /// 调用方直接读顶层三项), gpu_peak_percent = 各卡占用最大值
+                    XX_TEST_EXPECT_EQ(
+                        j.value<int64_t>("gpu_count", -1),
+                        static_cast<int64_t>(j["gpus"].size())
+                    );
+                    const double gpuPeak = j.value("gpu_peak_percent", -1.0);
+                    XX_TEST_EXPECT_TRUE(gpuPeak >= 0.0 && gpuPeak <= 100.0);
+                    uint64_t vramTotalSum = 0;
+                    uint64_t vramAvailSum = 0;
+                    for (const auto& gpu : j["gpus"]) {
+                        vramTotalSum += gpu.value("vram_total_mb", uint64_t{0});
+                        vramAvailSum += gpu.value("vram_available_mb", uint64_t{0});
+                    }
+                    XX_TEST_EXPECT_EQ(j.value("vram_total_mb", uint64_t{0}), vramTotalSum);
+                    XX_TEST_EXPECT_EQ(j.value("vram_available_mb", uint64_t{0}), vramAvailSum);
 #if XX_IS_MACOS_D
                     if (j["gpus"].empty()) {
                         /// 无 GPU 属于环境差异 (无头虚拟机/纯远程会话):

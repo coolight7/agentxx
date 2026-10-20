@@ -29,25 +29,121 @@ namespace {
 
 constexpr int kUsageIntervalSec = 5;
 
+/// 显存取哪一份数据
+enum class VramSource {
+    None,      ///< 驱动没报任何显存信息 (如 Linux 上的 Intel/virtio)
+    Dedicated, ///< 独立显存 (独显)
+    Shared,    ///< 共享显存 (核显/统一内存 GPU, 如 Apple Silicon)
+};
+
+const char* vramSourceName(VramSource source) {
+    switch (source) {
+        case VramSource::Dedicated:
+            return "dedicated";
+        case VramSource::Shared:
+            return "shared";
+        default:
+            return "none";
+    }
+}
+
+/// 可用量 = 总量 - 已用; 已用可能因驱动取整/统计口径略大于总量, 此时按 0 处理
+uint64_t availableOf(uint64_t totalMB, uint64_t usedMB) {
+    return usedMB < totalMB ? totalMB - usedMB : 0;
+}
+
+/// 一张卡对外报的显存三元组 (总量/已用/可用)
+struct VramView {
+    VramSource source      = VramSource::None;
+    uint64_t   totalMB     = 0;
+    uint64_t   usedMB      = 0;
+    uint64_t   availableMB = 0;
+};
+
+/// 选一张卡的显存: 有独立显存就用独立显存; 统一内存 GPU 与核显没有独立显存,
+/// 退回共享显存; 两者都没有时 source = None (总量/可用量为 0)
+/// - 工具文本与能力载荷都经这里取值, 两处显示不会出现口径差异
+VramView vramOf(const GpuInfo& gpu) {
+    VramView view;
+    if (gpu.dedicatedVramMB > 0) {
+        view.source  = VramSource::Dedicated;
+        view.totalMB = gpu.dedicatedVramMB;
+        view.usedMB  = gpu.dedicatedVramUsedMB;
+    } else if (gpu.sharedVramMB > 0) {
+        view.source  = VramSource::Shared;
+        view.totalMB = gpu.sharedVramMB;
+        view.usedMB  = gpu.sharedVramUsedMB;
+    }
+    view.availableMB = availableOf(view.totalMB, view.usedMB);
+    return view;
+}
+
+/// 可用内存 MB: 优先用平台直接报的可用量; 平台未提供 (0) 时按"总量 - 已用"兜底
+uint64_t availableMemoryMB(const MemoryInfo& memory) {
+    if (memory.availablePhysicalMB > 0 || memory.usedPhysicalMB == 0) {
+        return memory.availablePhysicalMB;
+    }
+    return availableOf(memory.totalPhysicalMB, memory.usedPhysicalMB);
+}
+
+/// 系统负担快照 (工具文本、能力载荷、周期事件共用同一份数据)
+///
+/// JSON 字段 (占用为百分比 0~100, 容量为 MB):
+/// - `cpu` / `cpu_cores`: 整机 CPU 占用与其逻辑核心数
+/// - `mem_total_mb` / `mem_used_mb` / `mem_available_mb` / `mem_percent`: 物理内存
+/// - `gpu_count` / `gpu_peak_percent`: GPU 数量与各卡占用的最大值
+/// - `vram_total_mb` / `vram_used_mb` / `vram_available_mb`: 各卡显存合计 (取值规则同单卡)
+/// - `gpus[]`: 逐卡明细
+///   - `name` / `usage_percent`: 名称与 GPU 占用
+///   - `vram_source`: `dedicated` / `shared` / `none`, 说明下面的 vram_* 取自哪份数据
+///   - `vram_total_mb` / `vram_used_mb` / `vram_available_mb`: 本卡显存 (可用量与总量)
+///   - `dedicated_vram_mb` / `dedicated_vram_used_mb` / `dedicated_vram_available_mb`
+///   - `shared_vram_mb` / `shared_vram_used_mb` / `shared_vram_available_mb`
+/// - 驱动不上报已用显存时按 0 处理, 此时可用量等于总量
 std::string usageToJson(const CpuGpuUsage& u) {
     utilxx_base::Json j;
-    j["cpu"]               = u.cpuUsagePercent;
-    j["cpu_cores"]         = u.cpuCoreCount;
-    j["mem_total_mb"]      = u.memory.totalPhysicalMB;
-    j["mem_used_mb"]       = u.memory.usedPhysicalMB;
-    j["mem_percent"]       = u.memory.usagePercent;
-    utilxx_base::Json gpus = utilxx_base::Json::array();
+    j["cpu"]              = u.cpuUsagePercent;
+    j["cpu_cores"]        = u.cpuCoreCount;
+    j["mem_total_mb"]     = u.memory.totalPhysicalMB;
+    j["mem_used_mb"]      = u.memory.usedPhysicalMB;
+    j["mem_available_mb"] = availableMemoryMB(u.memory);
+    j["mem_percent"]      = u.memory.usagePercent;
+
+    utilxx_base::Json gpus         = utilxx_base::Json::array();
+    uint64_t          vramTotalSum = 0;
+    uint64_t          vramUsedSum  = 0;
+    uint64_t          vramAvailSum = 0;
+    double            gpuPeak      = 0.0;
     for (const auto& g : u.gpus) {
+        const VramView vram = vramOf(g);
         gpus.push_back({
-            {"name",                   g.name               },
-            {"dedicated_vram_mb",      g.dedicatedVramMB    },
-            {"dedicated_vram_used_mb", g.dedicatedVramUsedMB},
-            {"shared_vram_mb",         g.sharedVramMB       },
-            {"shared_vram_used_mb",    g.sharedVramUsedMB   },
-            {"usage_percent",          g.usagePercent       }
+            {"name",                        g.name                                        },
+            {"usage_percent",               g.usagePercent                                },
+            {"vram_source",                 vramSourceName(vram.source)                   },
+            {"vram_total_mb",               vram.totalMB                                  },
+            {"vram_used_mb",                vram.usedMB                                   },
+            {"vram_available_mb",           vram.availableMB                              },
+            {"dedicated_vram_mb",           g.dedicatedVramMB                             },
+            {"dedicated_vram_used_mb",      g.dedicatedVramUsedMB                         },
+            {"dedicated_vram_available_mb",
+             availableOf(g.dedicatedVramMB, g.dedicatedVramUsedMB)                       },
+            {"shared_vram_mb",              g.sharedVramMB                                },
+            {"shared_vram_used_mb",         g.sharedVramUsedMB                            },
+            {"shared_vram_available_mb",    availableOf(g.sharedVramMB, g.sharedVramUsedMB)},
         });
+        vramTotalSum += vram.totalMB;
+        vramUsedSum += vram.usedMB;
+        vramAvailSum += vram.availableMB;
+        if (g.usagePercent > gpuPeak) {
+            gpuPeak = g.usagePercent;
+        }
     }
-    j["gpus"] = std::move(gpus);
+    j["gpus"]              = std::move(gpus);
+    j["gpu_count"]         = u.gpus.size();
+    j["gpu_peak_percent"]  = gpuPeak;
+    j["vram_total_mb"]     = vramTotalSum;
+    j["vram_used_mb"]      = vramUsedSum;
+    j["vram_available_mb"] = vramAvailSum;
     return j.dump();
 }
 
@@ -62,31 +158,30 @@ std::string formatUsageText(const CpuGpuUsage& usage) {
         return mb * 1024 * 1024;
     };
     ss << fmt::format(
-        "Memory: {:.1f}% · Used: {} / Total: {}\n",
+        "Memory: {:.1f}% · Used: {} / Total: {} · Available: {}\n",
         usage.memory.usagePercent,
         utilxx_base::formatSize(mbToBytes(usage.memory.usedPhysicalMB)),
-        utilxx_base::formatSize(mbToBytes(usage.memory.totalPhysicalMB))
+        utilxx_base::formatSize(mbToBytes(usage.memory.totalPhysicalMB)),
+        utilxx_base::formatSize(mbToBytes(availableMemoryMB(usage.memory)))
     );
     for (size_t i = 0; i < usage.gpus.size(); ++i) {
-        const auto& gpu = usage.gpus[i];
-        /// 显存取值: 优先独立显存; 统一内存 GPU (如 Apple Silicon) 没有独立显存,
-        /// 退回与系统内存同源的共享显存, 否则该行会显示成 0MB/0MB
-        const bool     useSharedVram = gpu.dedicatedVramMB == 0 && gpu.sharedVramMB > 0;
-        const uint64_t vramTotalMB   = useSharedVram ? gpu.sharedVramMB : gpu.dedicatedVramMB;
-        const uint64_t vramUsedMB = useSharedVram ? gpu.sharedVramUsedMB : gpu.dedicatedVramUsedMB;
-        const std::string vramLabel = useSharedVram ? "VRAM (shared)" : "VRAM";
-        std::string       title     = fmt::format("GPU {}", i);
+        const auto&    gpu   = usage.gpus[i];
+        const VramView vram  = vramOf(gpu);
+        std::string    title = fmt::format("GPU {}", i);
         if (!gpu.name.empty()) {
             title += fmt::format(" [{}]", gpu.name);
         }
-        ss << fmt::format(
-            "{}: GPU Usage: {:.1f}%, {}: {}MB Used / {}MB Total",
-            title,
-            gpu.usagePercent,
-            vramLabel,
-            vramUsedMB,
-            vramTotalMB
-        );
+        ss << fmt::format("{}: GPU Usage: {:.1f}%", title, gpu.usagePercent);
+        if (vram.source != VramSource::None) {
+            /// 统一内存 GPU (如 Apple Silicon) 没有独立显存, 标出来避免被读成"独显很小"
+            ss << fmt::format(
+                ", {}: {}MB Used / {}MB Total / {}MB Available",
+                vram.source == VramSource::Shared ? "VRAM (shared)" : "VRAM",
+                vram.usedMB,
+                vram.totalMB,
+                vram.availableMB
+            );
+        }
         if (i + 1 < usage.gpus.size()) {
             ss << "\n";
         }
@@ -144,13 +239,23 @@ static int32_t sysMonSetup(SysMonCtx& ctx) {
         }
     );
 
-    // 2. 能力: agentxx.system_usage
+    // 2. 能力: agentxx.system_usage —— 读取当前系统负担 (cpu/gpu 占用、内存与显存占用)
+    //    - 其他插件经 `agentxx.agent.capabilities` 的 invoke (kit: invoke_cap /
+    //      invoke_capability_blocking) 调用; 主程序/FFI 侧经
+    //      PluginManager::invokeCapabilityAsync 调用 (须携带调用方插件实例租约)
+    //    - `method` 不参与分支 (约定 "query"), 参数忽略: 每次都读一份当前快照
+    //    - 载荷字段见 [usageToJson] (内存与显存都给出可用量与总量)
+    //    - 查询要读系统/GPU 计数器 (约 100ms 以上), 交给主程序阻塞池执行,
+    //      异步返回: 调用方可以随时调用, 不会占住主程序 IO 线程
     capability(
         ctx,
         "agentxx.system_usage",
-        [](SysMonCtx& c, const PluginxxHost*, std::string_view, std::string_view) -> std::string {
-            auto usage = c.querySync();
-            return usageToJson(usage);
+        [](SysMonCtx& c, const PluginxxHost*, std::string_view, std::string_view)
+            -> Task<std::string> {
+            auto usage = co_await offload(c, [&c](const PluginxxCancelToken*) {
+                return c.querySync();
+            });
+            co_return usageToJson(usage);
         }
     );
 
@@ -271,8 +376,9 @@ static void* sysMonStop(SysMonCtx& ctx, const PluginxxOperatorNotify* notify, Pl
 AGENTXX_PLUGIN_AGENT_EXPORT(
     SysMonCtx,
     "agentxx_system_monitor",
-    "1.1.0",
-    "System resource monitor: CPU/memory/GPU usage tool",
+    "1.2.0",
+    "System resource monitor: CPU/memory/GPU usage tool; capability agentxx.system_usage "
+    "returns the current system load (usage + memory/vram total and available)",
     sysMonStart,
     sysMonStop
 );
@@ -520,7 +626,7 @@ static void*
 AGENTXX_PLUGIN_CLIENT_EXPORT(
     SysMonClientCtx,
     "agentxx_system_monitor",
-    "1.1.0",
+    "1.2.0",
     "System resource usage: Info section (CPU/RAM/GPU), /sysinfo toggle",
     sysMonClientStart,
     sysMonClientStop

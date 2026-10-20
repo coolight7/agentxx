@@ -656,7 +656,7 @@ AGENTXX_LOG_MODULES="plugin.=warn,plugin.agentxx_codegraph=debug" agentxx_cli tu
 | **ScreenCapture** | 屏幕截图与流式捕获 (多屏支持; 插件 `agentxx_screen_capture`, 仅 Windows) |
 | **AudioStream** | 系统音频/麦克风/程序音频流捕获 (插件 `agentxx_audio_stream`, 全平台跳过构建: 实现未启用) |
 | **TextSelectionMonitor** | 系统级文本选择事件监听 (插件 `agentxx_text_selection_monitor`, 仅 Windows UI Automation) |
-| **CpuGpuMonitor** | CPU/内存/GPU 使用率查询 (插件 `agentxx_system_monitor`, Windows 经 PDH/DXGI、Linux/Android 解析 `/proc`+sysfs、macOS 经 mach `host_statistics` + IOKit `IOAccelerator`; 工具 + 周期采集 + client 侧渲染) |
+| **CpuGpuMonitor** | CPU/内存/GPU 使用率查询 (插件 `agentxx_system_monitor`, Windows 经 PDH/DXGI、Linux/Android 解析 `/proc`+sysfs、macOS 经 mach `host_statistics` + IOKit `IOAccelerator`; 工具 + 周期采集 + client 侧渲染; 能力 `agentxx.system_usage` 给出当前系统负担快照 —— CPU/GPU 占用、内存与显存的占用率与**可用量/总量**) |
 | **CodeGraphManager** | 代码索引与符号分析 (基于 codegraph-cpp; 已拆分为插件 `agentxx_codegraph`): 索引范围由插件参数配置 (yaml `plugin.list` 段该插件条目的 `args`，字段语义由插件定义)：`paths` 加载路径列表 (可多个目录，未配置时按 `load_cwd` 默认索引当前工作目录)、`ignore_paths` 忽略路径 (支持 `*` 通配符)、`use_gitignore` 默认忽略 `.gitignore` 规则与 `.gitmodules` 子模块目录；遍历按目录剪枝 (忽略目录整棵子树不进入)，文件监听增量索引应用同一套过滤；sqlite 数据库存于 `{dataDir}/sqlite/codegraph/<折叠路径>/index.db`（深层折叠 + 单段截断控制长度，路径前缀匹配复用；dataDir 由 yaml `data_dir` 指定，未配置 dataDir 时插件自动跳过、索引不落盘） |
 
 ### 依赖注入

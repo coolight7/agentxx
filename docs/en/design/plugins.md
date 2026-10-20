@@ -333,6 +333,31 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 | `agentxx.agent.graph` | 1 | Execution Graph Extensibility: `register_node_type/unregister_node_type` (Injects custom node types into per-agent `GraphRegistry`) + `get_graph_json/get_graph_name/set_graph_json` (Inspect/modify host execution graph, default name `agentxx.default`; active during plugin load, consumed prior to host engine construction). |
 | `agentxx.agent.tasks` | 1 | Host-Managed Background Tasks: `register_task/cancel_task` (Auto-registered via kit `spawn`; host tracks handle, holds inflight count, and receives `notify.done`—on unload, host cancels via `detachAll` and cleanly awaits zero active ops via `waitInflightZero`; `notify` is an out-parameter whose `done` method can be invoked from any thread). |
 
+> **Built-in capabilities (callable by other plugins / the host side)**
+>
+> A capability is a name + JSON payload RPC: the provider registers it in `start` with
+> `capability(ctx, "name", fn)`, the caller goes through `agentxx.agent.capabilities`
+> (`invoke_capability_async`; kit: `invoke_cap` / `invoke_capability_blocking`; host side:
+> `PluginManager::invokeCapabilityAsync`). A call must carry the **calling plugin
+> instance** (the host holds its execution lease so unloading waits for the call); the
+> host itself passes the provider instance (`PluginManager::find(pluginName)`). The FFI
+> C API has no dedicated capability entry point today.
+>
+> - `agentxx.system_usage` (`agentxx_system_monitor`): snapshot of the current system load.
+>   `method` does not branch (by convention `query`), arguments are ignored. Fields
+>   (usage in percent, capacities in MB):
+>   - `cpu` / `cpu_cores`
+>   - `mem_total_mb` / `mem_used_mb` / `mem_available_mb` / `mem_percent`
+>   - `gpu_count` / `gpu_peak_percent`: GPU count and the maximum per-card usage
+>   - `vram_total_mb` / `vram_used_mb` / `vram_available_mb`: sum over all cards
+>   - `gpus[]`: per card `name` / `usage_percent` / `vram_source`
+>     (`dedicated` / `shared` / `none`) / `vram_total_mb` / `vram_used_mb` /
+>     `vram_available_mb`, plus the raw `dedicated_vram_{mb,used_mb,available_mb}` and
+>     `shared_vram_{mb,used_mb,available_mb}`
+>   - VRAM selection: dedicated memory when present, otherwise shared memory (unified
+>     memory GPUs / integrated graphics); a driver that reports no used VRAM yields 0 used,
+>     so available equals total
+
 ---
 
 ## 9. Client-Side Interface Tables

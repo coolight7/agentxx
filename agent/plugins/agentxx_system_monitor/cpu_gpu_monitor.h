@@ -16,7 +16,11 @@ namespace agentxx_system_monitor_plugin {
 struct MemoryInfo {
     uint64_t totalPhysicalMB = 0;
     uint64_t usedPhysicalMB  = 0;
-    double   usagePercent    = 0.0;
+    /// 可用物理内存 MB (系统认为"还能分配给新申请"的量)
+    /// - 各平台的已用量都由它反推 (`used = total - available`), 因此三者互补;
+    ///   取不到时为 0, 使用方按 `total - used` 兜底
+    uint64_t availablePhysicalMB = 0;
+    double   usagePercent        = 0.0;
 };
 
 struct GpuInfo {

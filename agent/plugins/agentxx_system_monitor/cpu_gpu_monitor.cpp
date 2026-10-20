@@ -204,7 +204,8 @@ private:
             return;
         }
 
-        result.memory.totalPhysicalMB = memStatus.ullTotalPhys / (1024 * 1024);
+        result.memory.totalPhysicalMB     = memStatus.ullTotalPhys / (1024 * 1024);
+        result.memory.availablePhysicalMB = memStatus.ullAvailPhys / (1024 * 1024);
         result.memory.usedPhysicalMB
             = (memStatus.ullTotalPhys - memStatus.ullAvailPhys) / (1024 * 1024);
 
@@ -715,12 +716,15 @@ protected:
         std::string        line;
         uint64_t           memTotalKB     = 0;
         uint64_t           memAvailableKB = 0;
+        uint64_t           memFreeKB      = 0;
 
         while (std::getline(memFile, line)) {
             if (line.rfind("MemTotal:", 0) == 0) {
                 std::sscanf(line.c_str(), "MemTotal: %lu kB", &memTotalKB);
             } else if (line.rfind("MemAvailable:", 0) == 0) {
                 std::sscanf(line.c_str(), "MemAvailable: %lu kB", &memAvailableKB);
+            } else if (line.rfind("MemFree:", 0) == 0) {
+                std::sscanf(line.c_str(), "MemFree: %lu kB", &memFreeKB);
             }
 
             if (memTotalKB > 0 && memAvailableKB > 0) {
@@ -728,10 +732,19 @@ protected:
             }
         }
 
+        /// 老内核 (3.14 之前) 没有 MemAvailable: 用 MemFree 兜底 —— 它不含可回收的
+        /// 文件页缓存, 数值偏小, 但仍是当前可用量的下界, 比上报 0 有用
+        if (memAvailableKB == 0) {
+            memAvailableKB = memFreeKB;
+        }
+
         if (memTotalKB > 0) {
-            result.memory.totalPhysicalMB = memTotalKB / 1024;
-            uint64_t usedKB               = memTotalKB - memAvailableKB;
-            result.memory.usedPhysicalMB  = usedKB / 1024;
+            /// 可用量不会大于总量: 方向异常的读数按"无可用"处理, 避免已用量下溢成巨值
+            const uint64_t availableKB = memAvailableKB < memTotalKB ? memAvailableKB : 0;
+            const uint64_t usedKB      = memTotalKB - availableKB;
+            result.memory.totalPhysicalMB     = memTotalKB / 1024;
+            result.memory.availablePhysicalMB = availableKB / 1024;
+            result.memory.usedPhysicalMB      = usedKB / 1024;
             result.memory.usagePercent
                 = static_cast<double>(usedKB) / static_cast<double>(memTotalKB) * 100.0;
         }
@@ -1202,8 +1215,9 @@ protected:
                                         * pageSize_;
         const uint64_t usedBytes = availableBytes < totalBytes ? totalBytes - availableBytes : 0;
 
-        result.memory.totalPhysicalMB = totalPhysicalMemoryMB_;
-        result.memory.usedPhysicalMB  = usedBytes / (1024 * 1024);
+        result.memory.totalPhysicalMB     = totalPhysicalMemoryMB_;
+        result.memory.availablePhysicalMB = availableBytes / (1024 * 1024);
+        result.memory.usedPhysicalMB      = usedBytes / (1024 * 1024);
         result.memory.usagePercent
             = static_cast<double>(usedBytes) / static_cast<double>(totalBytes) * 100.0;
     }
