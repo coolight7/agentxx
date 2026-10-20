@@ -608,7 +608,7 @@ sqlite / settings_db / async_offload / exception / lru_cache / container_util / 
 
 - `main.cpp`: 参数解析 (模式/模型/配置路径) → 内置环境变量注入 (可执行目录等) →
   分层加载配置 (overlay: 工作目录或 `--config`；base: `data_dir` 下) → 模型校验并给出引导 →
-  `CodeAgent` 装配 → 模式分发 (local/remote × tui/cli、server、acp、train)。
+  `CodeAgent` 加载 → 模式分发 (local/remote × tui/cli、server、acp、train)。
   含 `__asan_default_options` (abort_on_error + log_path) 与信号处理。
 - `config_loader`: YAML → Json 转换 (含 `${VAR}` 展开)、列表段 `overwrite{mode,remove}` 合并、
   路径列表/键控序列合并、旧键告警、`data_dir` 解析。

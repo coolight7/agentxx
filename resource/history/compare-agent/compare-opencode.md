@@ -31,8 +31,8 @@
 >   1. **每个模块新增「X.4 两者的优缺点」**（原「可迁移」小节顺延为 X.5），逐项区分「谁更强、强在哪、代价是什么」；同时按细读结果补充了九处具体事实（§2 agentxx 的每轮清场与重试/修复细节、§3 系统提示词每轮整体重建、§5 投影器同时挂 V1/V2 且 delta 不落库、§6 `bash` 的默认超时/捕获上限/权限断言、§8 传输层重试与模型到协议的硬编码映射、§9 压缩子代理复用父前缀 vs 扁平序列化、§11 agent `mode` 与后台任务 promote）。
 >   2. **迁移清单扩到 75 项**：新增 M73（重试按状态码/响应头 + 抖动）、M74（会话用量账本，含 cache read/write 与删除回退）、M75（陈旧调用/取消/中断三类收尾的一致性断言）。
 > - **第 3 版（2026-09，插件框架专项细读）**：本轮把两侧插件系统的实现读到函数级（agentxx 侧读完 `cxx_pluginxx` 全部头文件：`api/{abi,entry,tables,export}.h`、`host/{lifecycle,host_core,tables_impl,manifest,event_bus,domain_hooks,capability_registry,loader}.h`、`runtime/{runtime,instance_base,manager_base,op_driver,driver}.h`、`kit/kit.h`，以及宿主侧 `plugin_manager.h`、`plugin_manager_lifecycle.cpp`、`tool_registry.h`、`plugin_graph_node.h`、`client_plugin_manager.cpp` 的结构；opencode 侧读完 `plugin/src/v2/effect/{PLAN.md,README.md}`、`v2/promise/README.md`、`core/src/plugin/{internal.ts,promise.ts,host.ts}`、`core/src/effect/layer-node.ts`、`core/src/config/plugin/external.ts`、`plugin/src/{tool.ts,tui.ts}`、`core/src/plugin/provider/anthropic.ts`、`core/src/plugin/variant.ts`、`tui/src/plugin/{slots.tsx,api.ts}`），产出：
->   1. **§15 扩写为插件框架专项**：15.1/15.2 按「内核四层 / SDK / 宿主管理器」与「transform vs hook / 域状态模型 / boot 批处理 / 服务图 / 外部装载 / TUI 插件」重写；新增 **§15.5「架构设计细读：逐维度对照」**（边界与契约、生命周期与所有权、贡献与撤销、顺序与依赖、线程与并发、卸载与关闭安全、隔离与信任、装配与替换、热更新语义、可观测性 十条），对比表补 7 行、优缺点按实现细节重写。
->   2. **迁移清单扩到 79 项**：新增 M76（顺序位 + 批量重算合并）、M77（按名替换服务的装配接缝）、M78（插件渲染错误记录）、M79（只读域视图查询）。
+>   1. **§15 扩写为插件框架专项**：15.1/15.2 按「内核四层 / SDK / 宿主管理器」与「transform vs hook / 域状态模型 / boot 批处理 / 服务图 / 外部装载 / TUI 插件」重写；新增 **§15.5「架构设计细读：逐维度对照」**（边界与契约、生命周期与所有权、贡献与撤销、顺序与依赖、线程与并发、卸载与关闭安全、隔离与信任、加载与替换、热更新语义、可观测性 十条），对比表补 7 行、优缺点按实现细节重写。
+>   2. **迁移清单扩到 79 项**：新增 M76（顺序位 + 批量重算合并）、M77（按名替换服务的加载接缝）、M78（插件渲染错误记录）、M79（只读域视图查询）。
 >   3. **两处「读文档会高估现状」的提醒**：opencode 的 `PLAN.md` 属目标设计（`ctx.tool.hook` 等运行时 hook 面未落地，v2 现状只有 transform + `aisdk` hook + `plugin.add/remove`）；agentxx 的表数量文档滞后于实现（19/9 vs 实测 20/10）。
 
 ## 目录
@@ -56,7 +56,7 @@
 | [14](#14-远程协议sdk-与嵌入模式) | 远程协议、SDK 与嵌入模式 | 可借鉴**单一定义生成两端绑定**、**durable 事件流与实时流分离**、**不可透传游标**；agentxx 的「同进程与远程只换 transport」是更干净的一层 |
 | [15](#15-扩展机制c-abi-插件-vs-effect-插件) | 扩展机制（插件框架专项） | agentxx 的四层内核（ABI/宿主内核/运行时/SDK）、五态生命周期与 admission lease + 延迟收尾领先；opencode 的 **transform 重放（重算而非撤销）**、**hook 串行后见前**、**批量重建合并**与**服务图替换**值得借鉴；**§15.5 逐维度细读**是本节重点 |
 | [16](#16-测试与质量门禁) | 测试与质量门禁 | 可借鉴**HTTP 录制回放**、**生成产物一致性校验**、**导入边界测试**；agentxx 的资源基准与端到端会话测试可反向输出 |
-| [17](#17-配置模型目录与装配) | 配置、模型目录与装配 | 可借鉴**配置版本迁移**、**远程模型目录 + 本地缓存**、**鉴权方式分层（API Key/OAuth/环境变量）** |
+| [17](#17-配置模型目录与加载) | 配置、模型目录与加载 | 可借鉴**配置版本迁移**、**远程模型目录 + 本地缓存**、**鉴权方式分层（API Key/OAuth/环境变量）** |
 | [18](#18-迁移建议汇总) | 迁移建议汇总 | P0/P1/P2 三级清单（共 75 项，分 A–F 组与 4 个落地批次） |
 | [19](#19-反向清单agentxx-不必照搬的设计) | 反向清单 | 明确哪些差异是正当取舍 |
 | [20](#20-结语) | 结语 | 三条原则 |
@@ -127,7 +127,7 @@
 agent/
 ├── lib/            libagentxx（核心库：BaseAgent/CodeAgent、图节点、中间件、tools、
 │                    protocol client/server、plugin 宿主、sqlite 会话存储、FFI）
-├── client/         agentxx_cli（FTXUI TUI / stdio CLI / 远程 WS 客户端 / main 装配）
+├── client/         agentxx_cli（FTXUI TUI / stdio CLI / 远程 WS 客户端 / main 加载）
 ├── plugins/        15 个内置插件 + 5 个示例目录（每个插件静态链接 cxx_utilxx(_base) 一份）
 ├── test/           agentxx_test（68 个模块）
 └── benchmark/      agentxx_benchmark（资源基准）
@@ -186,7 +186,7 @@ tui / session-ui / ui / app（前端：只依赖 SDK + 自身 UI 依赖）
    - `agent/plugins/**` 只包含 `agentxx/plugin/api/**` 与 `cxx_utilxx*` 的公开头，不包含 lib 内部头；
    - 插件动态库导出符号仍只有白名单（已有 version script，可加一条自动化断言，见 §16）。
    成本低、收益直接：现在这些约束只靠 AGENTS.md 的文字。
-2. **[P2] 领域与策略的显式分层**：agentxx 的「策略」目前分布在 `AgentConfig` 分支、中间件开关、工具注入条件里（例如是否注入 `agentxx_subagent`、权限默认模式、延迟加载工具集合）。可参照 opencode 的做法，把这类决策集中为一层「提供者/装配」代码（不必引入插件化 hook），让领域代码（会话、图、工具结算）不直接读配置策略。落地位置：`agent/lib/src/agent/base_agent.cpp`、`code_agent.cpp` 的装配段。
+2. **[P2] 领域与策略的显式分层**：agentxx 的「策略」目前分布在 `AgentConfig` 分支、中间件开关、工具注入条件里（例如是否注入 `agentxx_subagent`、权限默认模式、延迟加载工具集合）。可参照 opencode 的做法，把这类决策集中为一层「提供者/加载」代码（不必引入插件化 hook），让领域代码（会话、图、工具结算）不直接读配置策略。落地位置：`agent/lib/src/agent/base_agent.cpp`、`code_agent.cpp` 的加载段。
 3. **[P2] 反向提醒**：不要为了「分层好看」把 lib 拆成多个动态库。agentxx 的独立可执行/动态库/静态库三形态与插件静态链接 `cxx_utilxx` 的约束，决定了「一个核心库 + 插件各自静态依赖」是更合适的形态（见 §15、§19）。
 
 ---
@@ -594,7 +594,7 @@ materialize(permissions) → { definitions, settle }
 ### 7.5 可迁移到 agentxx 的设计
 
 1. **[P1] 指令集合变更的显式通知**：把「记忆文件 + 技能清单」当作 §3 的上下文来源，变化时发一条中间系统消息（含当前完整集合与取代说明；集合清空时发撤销消息）。落地位置：`middlewares/memory_file.h`、`skill.h`（现在只有 `resourceEpoch` 失效，没有变更语义）+ `prompt.cpp`。
-2. **[P1] 技能/工具的按 agent 可见性过滤**：若 agentxx 支持多 agent 配置（主/子代理），把「技能列表」与「工具集合」按 agent 过滤后再进提示词与工具表；被拒绝的技能直接不出现在模型可见列表里（而不是靠模型自觉）。落地位置：`CodeAgent` 装配 + `AgentConfig` 的 per-agent 段 + `ToolcallWrapNode` 的工具物化。
+2. **[P1] 技能/工具的按 agent 可见性过滤**：若 agentxx 支持多 agent 配置（主/子代理），把「技能列表」与「工具集合」按 agent 过滤后再进提示词与工具表；被拒绝的技能直接不出现在模型可见列表里（而不是靠模型自觉）。落地位置：`CodeAgent` 加载 + `AgentConfig` 的 per-agent 段 + `ToolcallWrapNode` 的工具物化。
 3. **[P2] 技能正文的权限检查**：技能正文当前由 `agentxx_filesystem_read` 读取（受文件系统权限约束但不带「技能」语义）。可加一个专用 `agentxx_skill_read`（或在 read 工具上按技能目录做语义检查），让权限询问卡片显示「读取技能 X」而不是「读取路径 Y」。落地位置：`agent/lib/src/middlewares/skill.cpp` + 插件侧技能工具。
 4. **[P2] 指令发现的边界规则**：若将来支持「向上查找」式发现，必须同时照搬两条约束：路径规范化 + 不越出项目根；并给一个显式开关。落地位置：`prompt.cpp` / `resource_applier.cpp`。
 
@@ -1059,7 +1059,7 @@ materialize(permissions) → { definitions, settle }
   - **runtime hook（即时拦截）**：按注册顺序**串行**执行，后执行的 hook 能看到前面 hook 的修改；只影响后续调用（在途调用用开始时快照的注册列表跑完）；不参与域重建；接收「目的化的上下文对象」（只读数据 + 允许修改的方法），规范明确**不得暴露核心 draft 或内部对象**。
 - **域的状态模型与终结化**：`base state → 按顺序重放活动 transform → 核心终结化（finalization）→ 提交生效状态 → 发布 updated 事件`；终结化只做不变式与物化（catalog 的策略过滤与校验、reference 的仓库物化、integration 的连接投影、索引构建、提交后事件），更新事件在新状态可见之后发；**没有跨域事务**（规格明确不引入），跨域读取只能读到对方「已提交」的状态，且插件自己要负责在依赖变化时触发自己的域重建。
 - **boot 批处理与插件顺序**：`PluginInternal` 用**同一个 `PluginV2.add`** 注册全部内置插件（12 组：reference → agent → command → skill → models.dev → 配置派生的 agent/command/skill → 32 个 provider 插件 → 外部配置插件 → 配置 provider → variant），整个过程包在 `State.batch(...)` 里并 `forkScoped` 异步启动（不阻塞 Location 就绪）；默认顺序的意图写在 PLAN.md 的「Plugin Order」：内置 agents/commands/skills → models.dev 等基础数据源 → 配置投影 → provider 归一化与鉴权 → 用户插件 → 核心终结化；**同 id 替换会保留原来的顺序位置**（旧插件先被禁用再跑新的 setup）。
-- **插件服务来自同一套服务图**：宿主给插件的 `PluginHost`（`core/src/plugin/host.ts`）不是内部对象的直接暴露，而是「域编辑器 + 域重载 + `aisdk` hook + `plugin.add/remove`」；域的 draft 用 `mutable()` 包一层，只暴露允许的修改方法。服务的装配/替换/生命周期由 `core/src/effect/layer-node.ts` 统一表达：节点分 `layer`/`unbound`/`group`，`tag` 用来把服务提升到全局或 Location 作用域，`replacements` 支持按节点替换（替换前后的 tag 与错误类型在**类型层**被校验），编译时做环检测并合成 Effect `Layer`。
+- **插件服务来自同一套服务图**：宿主给插件的 `PluginHost`（`core/src/plugin/host.ts`）不是内部对象的直接暴露，而是「域编辑器 + 域重载 + `aisdk` hook + `plugin.add/remove`」；域的 draft 用 `mutable()` 包一层，只暴露允许的修改方法。服务的加载/替换/生命周期由 `core/src/effect/layer-node.ts` 统一表达：节点分 `layer`/`unbound`/`group`，`tag` 用来把服务提升到全局或 Location 作用域，`replacements` 支持按节点替换（替换前后的 tag 与错误类型在**类型层**被校验），编译时做环检测并合成 Effect `Layer`。
 - **外部插件与 Promise 适配**：`config/plugin/external.ts` 从配置文档的 `plugins` 段（npm 包名 / `file://` / 相对路径）与配置目录下的 `plugin/*.{ts,js}`（glob 后按名排序）收集候选，动态 `import()` 后用 Schema 校验模块形状（`{id, effect}` 或 `{id, setup}`），Promise 形态经 `PluginPromise.fromPromise` 适配成 Effect 插件——适配器保留 Scope 与**启动时的 fiber 上下文**，因此 Promise 插件的 transform 注册同样能并入 boot 批处理、同样随 Scope 撤销；整个过程在 scoped fiber 里跑且 `Effect.ignoreCause`，单个插件装载失败不拖垮宿主。
 - **TUI 插件是一套独立但同形的体系**：`packages/plugin/src/tui.ts`（568 行）定义类型面（路由、键位层、对话框、主题、KV 存储、toast、attention/声音、`TuiSlotMap` 槽位、`TuiPromptProps` 等），并按 v1 兼容保留被标 `@deprecated` 的 `api.command` 旧形态；宿主侧 `packages/tui/src/plugin/{slots,api,runtime,adapters,command-shim}.tsx` 提供：槽位注册表（`createSolidSlotRegistry`，按「插件/槽/阶段」上报插件错误，不互相影响）、路由注册表（同名路由取**最后注册**的渲染函数，返回注销函数）、以及 `AbortController` 形式的生命周期信号；宿主自己的侧栏/首页提示/diff 视图/which-key 也以插件形态组织（`feature-plugins`），即**宿主内置功能与第三方插件走同一条路径**。
 - **重算而非撤销**：catalog/config 类服务的状态由「当前活动的 transform 集合」重算（apply active transforms → apply policy → commit diff → 发 `Catalog.Event.Updated`），所以插件禁用后它的影响自然消失，不需要手工 undo（`specs/v2/catalog-config-plugin-lifecycle.md` 对比了「配置 transform + 全服务重载」与「catalog transform + 内部重建」两种方案，当前 core 选了后者的可重放 transform 形态）。
@@ -1085,7 +1085,7 @@ materialize(permissions) → { definitions, settle }
 | 顺序与依赖 | `depends`/`optional_depends` + 拓扑加载 + 反向级联卸载 | 无依赖声明；boot 显式顺序 + 同 id 替换保留顺序位 + 批量重建合并 | 互补：依赖模型 vs 顺序/重建语义 |
 | 卸载安全 | admission lease + 事件式等空闲 + 延迟收尾 + 旧 host 指针 tombstone + 关闭超时状态 | Scope 关闭（fiber 中断 + finalizer） | **agentxx 明显更细**（因为要真的 `dlclose`） |
 | 批量启停 | 逐个禁用/启用（各自重建 start 事务） | `State.batch` 内推迟重建，一批结束后每域重建一次 | 可借鉴：把批量重算合并（M76） |
-| 装配替换 | 显式依赖注入，无「按名替换服务」接缝 | `LayerNode.replacements`（tag/错误类型在类型层校验）+ `hoist` 作用域提升 | 可借鉴（M77） |
+| 加载替换 | 显式依赖注入，无「按名替换服务」接缝 | `LayerNode.replacements`（tag/错误类型在类型层校验）+ `hoist` 作用域提升 | 可借鉴（M77） |
 | 错误隔离 | 关闭异常有状态与日志；插件渲染错误回退 | TUI 槽位按「插件/槽/阶段」上报错误，互不影响 | 可借鉴（M78） |
 | 可观测性 | `list()`/`getPluginJson()` 含接口、能力、依赖、状态 | 事件 `Plugin.Event.Added` + 失败可 `wait` | agentxx 信息更全；可再加只读域视图（M79） |
 
@@ -1093,10 +1093,10 @@ materialize(permissions) → { definitions, settle }
 
 **agentxx**
 - 优点：纯 C ABI + 固定 ABI 规则（版本 1、8 字节对齐、定长类型、`PLUGINXX_CALL`、结构体指针参数 + `int32_t` 状态码）让插件可跨语言、跨编译器；**内核与宿主解耦**（入口符号名由宿主提供，内核零宿主专名，同一内核供多个宿主复用）；框架本体已拆为独立工程 `cxx_pluginxx`（ABI 契约层 / 内核宿主层 / 内核运行时 / 插件 SDK 四层）；`create` / `start` / `stop` / `destroy` 四段生命周期把「注册」做成宿主可回滚的事务，配五态状态机与 `CloseFailed` 显式失败态；**卸载安全机制完整**：admission lease（覆盖已进入代码与已排队未执行的调用）、事件式等待空闲、延迟收尾（`deferInstanceShutdown` + idle 回调）、旧 `host` 指针 tombstone、驱动句柄墓碑窗口、`hasPendingClose()` 自检；通用表入口统一「解析控制块 → 投递 IO 线程 → 调 `PluginHostCore` 同名方法」并在真正注册前复查实例状态；插件清单有 `depends`/`optional_depends`，加载做拓扑排序、卸载做反向级联；多实例三铁律 + 测试；导出符号白名单 + 静态链接工具库让不同版本可共存；能力协商使老宿主可降级；平台支持矩阵按插件声明。
-- 缺点：接口表多（本次实测 agent 侧 20 张、client 侧 10 张），文档与实现容易不同步（`AGENTS.md` 记 19/9 与实测 20/10 不一致）；插件的声明类贡献要靠**逐项反向操作**撤销（提示词用备份还原、图类型用代次槽失效、中间件用标记停用），漏一处就会残留，缺少「集合重算」这种一次性语义；没有细粒度变更事件与批量重算合并（启用/禁用逐个处理，UI 多为整体刷新）；没有「按名字替换服务实现」的装配接缝（测试替身与嵌入变体要多写代码）；ABI 边界下的调试（无栈回溯、跨库异常）成本高；插件渲染错误只有回退，缺少可查询的错误记录；插件状态容器靠 `plugin_ctx` + `user_data` 约定。
+- 缺点：接口表多（本次实测 agent 侧 20 张、client 侧 10 张），文档与实现容易不同步（`AGENTS.md` 记 19/9 与实测 20/10 不一致）；插件的声明类贡献要靠**逐项反向操作**撤销（提示词用备份还原、图类型用代次槽失效、中间件用标记停用），漏一处就会残留，缺少「集合重算」这种一次性语义；没有细粒度变更事件与批量重算合并（启用/禁用逐个处理，UI 多为整体刷新）；没有「按名字替换服务实现」的加载接缝（测试替身与嵌入变体要多写代码）；ABI 边界下的调试（无栈回溯、跨库异常）成本高；插件渲染错误只有回退，缺少可查询的错误记录；插件状态容器靠 `plugin_ctx` + `user_data` 约定。
 
 **opencode**
-- 优点：插件装载即开子 Scope，替换/卸载时关闭旧 Scope，注册物（transform/hook/工具/订阅）全部自动撤销，插件不用写 undo；贡献分两类且语义写得很细（transform 可重放、注册/注销触发域重建、批量装载推迟重建、重建串行化并合并、重建快照注册列表、重放期禁止再注册；hook 串行、后见前、只影响后续调用、不参与重建、不暴露内部 draft）；派生状态**重算**而不是手工回滚，禁用插件后影响自然消失；域状态模型明确（base → 重放 transform → 核心终结化 → 提交 → 发 updated 事件），且明确**不做跨域事务**；同 id 替换保留原顺序位；宿主给插件的是一组「域编辑器 + 域重载 + aisdk hook + plugin.add/remove」的目的化接口，不暴露核心 draft；服务装配由 `LayerNode` 表达（tag 作用域提升、按节点替换并在类型层校验、编译期环检测），测试与嵌入都靠它；内置插件与外部插件走同一 API（`PluginInternal` 用同一个 `PluginV2.add` 注册 12 组内置插件），外部插件支持 npm 包 / `file://` / 相对路径 / 配置目录 `plugin/*.{ts,js}`，动态 import + Schema 校验 + Promise 适配（保留 Scope 与启动 fiber 上下文），单个插件失败 `ignoreCause` 不影响宿主；TUI 插件有自己的槽位/路由/键位层体系，宿主内置功能也走同一路径，且槽位注册表按「插件/槽/阶段」隔离错误。
+- 优点：插件装载即开子 Scope，替换/卸载时关闭旧 Scope，注册物（transform/hook/工具/订阅）全部自动撤销，插件不用写 undo；贡献分两类且语义写得很细（transform 可重放、注册/注销触发域重建、批量装载推迟重建、重建串行化并合并、重建快照注册列表、重放期禁止再注册；hook 串行、后见前、只影响后续调用、不参与重建、不暴露内部 draft）；派生状态**重算**而不是手工回滚，禁用插件后影响自然消失；域状态模型明确（base → 重放 transform → 核心终结化 → 提交 → 发 updated 事件），且明确**不做跨域事务**；同 id 替换保留原顺序位；宿主给插件的是一组「域编辑器 + 域重载 + aisdk hook + plugin.add/remove」的目的化接口，不暴露核心 draft；服务加载由 `LayerNode` 表达（tag 作用域提升、按节点替换并在类型层校验、编译期环检测），测试与嵌入都靠它；内置插件与外部插件走同一 API（`PluginInternal` 用同一个 `PluginV2.add` 注册 12 组内置插件），外部插件支持 npm 包 / `file://` / 相对路径 / 配置目录 `plugin/*.{ts,js}`，动态 import + Schema 校验 + Promise 适配（保留 Scope 与启动 fiber 上下文），单个插件失败 `ignoreCause` 不影响宿主；TUI 插件有自己的槽位/路由/键位层体系，宿主内置功能也走同一路径，且槽位注册表按「插件/槽/阶段」隔离错误。
 - 缺点：插件与宿主同权限（同进程同语言），能任意改系统提示词、替换 SDK 语言模型，没有任何能力边界；只能同语言同运行时，无法跨语言分发，也无法做二进制级版本隔离（v1/v2 两代 API 只能靠可选字段与 `@deprecated` 共存，能力不对等：v2 至今没有 `experimental.chat.system.transform` 的等价物）；`PLAN.md` 里规划的 `ctx.tool.hook("execute.before")` 等运行时 hook 面**尚未落地**（当前 v2 实际只有 transform + aisdk hook + plugin.add/remove，读文档容易高估现状）；hook 多但缺「能力声明/兼容协商」；插件装载与卸载没有像 agentxx 那样的「关闭超时 + 显式失败态 + 延迟收尾」路径，出问题只能靠 Effect 运行时的中断语义。
 
 ### 15.5 架构设计细读：逐维度对照
@@ -1109,7 +1109,7 @@ materialize(permissions) → { definitions, settle }
 - 结论：agentxx 的边界更适合分发给第三方；opencode 的边界更适合「同一团队写扩展」。
 
 **2) 生命周期与所有权**
-- agentxx：`create → start（注册事务）→ stop（撤销）→ destroy`，配 `PluginInstanceState` 五态机；宿主提供 `finishLoad` / `rollbackLoad` 两条公共装配与回滚路径；`destroy` 幂等，且**有 lease 时拒绝销毁**（`destroyDeferred`）。
+- agentxx：`create → start（注册事务）→ stop（撤销）→ destroy`，配 `PluginInstanceState` 五态机；宿主提供 `finishLoad` / `rollbackLoad` 两条公共加载与回滚路径；`destroy` 幂等，且**有 lease 时拒绝销毁**（`destroyDeferred`）。
 - opencode：装载即执行 `effect(host)`，注册物挂在 Scope 上；「撤销」= 关闭 Scope（fiber 中断 + finalizer）+ 域重放；没有独立的 start/stop 事务，也没有「stop 欠着」这种状态（收尾由 Effect 运行时保证）。
 - 结论：agentxx 的状态更多、语义更显式（也因此更需要测试覆盖）；opencode 的状态更少、依赖运行时语义。
 
@@ -1138,10 +1138,10 @@ materialize(permissions) → { definitions, settle }
 - opencode：插件与宿主同权限（能改系统提示词、能替换 SDK 语言模型、能读宿主服务），隔离靠「同一个仓库/同一套信任」，分发可控性弱。
 - 结论：面向第三方分发的 agentxx 必须保留自己的边界。
 
-**8) 装配与替换（测试/嵌入）**
-- agentxx：依赖注入容器 + 插件宿主显式装配；插件的启用/禁用/卸载有完整路径，但没有「按服务替换实现」的通用机制。
+**8) 加载与替换（测试/嵌入）**
+- agentxx：依赖注入容器 + 插件宿主显式加载；插件的启用/禁用/卸载有完整路径，但没有「按服务替换实现」的通用机制。
 - opencode：`LayerNode` 的 `replacements` 支持在编译期把某个服务节点换成另一个实现（tag 与错误类型在类型层校验），测试与嵌入模式都靠它；`hoist` 把指定 tag 的服务提升到上层作用域（全局 vs Location）。
-- 结论：**可借鉴**：给 agentxx 的宿主装配加一层「按名字替换服务实现」的接缝，便于测试替身与嵌入场景（P2，落地在 `deps/injector.h` 与测试装配处）。
+- 结论：**可借鉴**：给 agentxx 的宿主加载加一层「按名字替换服务实现」的接缝，便于测试替身与嵌入场景（P2，落地在 `deps/injector.h` 与测试加载处）。
 
 **9) 热更新语义**
 - agentxx：禁用/启用会重建 start 事务（`stopForDisable`/`startForEnable`），卸载级联；注册表在禁用期不残留；`loadPluginAsync` 支持重复加载。
@@ -1161,7 +1161,7 @@ materialize(permissions) → { definitions, settle }
 4. **[P2] 反向：能力边界不要放弃**：opencode 的 v2 hook 可以任意改系统提示词、任意改 SDK 语言模型，代价是插件拥有与宿主相同的权限。agentxx 应继续保留「表 + 能力协商 + 权限声明」的边界，新增能力时优先扩展表而不是开放内部结构（§19）。
 5. **[P2] 文档同步**：把表数量（20/10）、新表（`agentxx.agent.context`）同步进 `AGENTS.md` 与 `docs/zh-cn/design/plugins.md`（当前记的 19/9 与实测不符）。
 6. **[P1] 顺序语义显式化（借鉴 M50 的细化）**：把「同 id 重载保留原顺序位」与「批量启用/禁用时受影响的域只重算一次」写进 `PluginManager` 的启停实现：现在重复加载/启用走的是「先停再起」，顺序由加载顺序决定；建议记录「顺序位」并在替换时复用，同时把批量启停的派生重算合并到一批结束后执行一次。落地位置：`plugin_manager_lifecycle.cpp`、`plugin_manager_adapters.cpp`。
-7. **[P2] 按名字替换服务实现（测试/嵌入接缝）**：给宿主装配加一层「服务名 → 替代实现」的接缝（opencode 用 `LayerNode.replacements` 在类型层做同样的事），便于测试替身、嵌入宿主与未来多宿主变体。落地位置：`deps/injector.h` + `base_agent.cpp` 的装配段。
+7. **[P2] 按名字替换服务实现（测试/嵌入接缝）**：给宿主加载加一层「服务名 → 替代实现」的接缝（opencode 用 `LayerNode.replacements` 在类型层做同样的事），便于测试替身、嵌入宿主与未来多宿主变体。落地位置：`deps/injector.h` + `base_agent.cpp` 的加载段。
 8. **[P2] 插件错误隔离的展示面**：TUI 侧借鉴 opencode 的槽位注册表：按「插件 / 槽位 / 阶段」记录渲染错误并只影响该处显示（现在是插件渲染抛错后回退，缺少可查询的错误记录）。落地位置：`client_plugin_manager.cpp` 的 UI 注册表 + `builtin_tool_renderers.cpp`。
 9. **[P2] 域视图的对外查询**：opencode 的 `PluginHost` 只暴露域编辑器与重载；agentxx 可给调试/工具链加一个只读的「域视图」（当前提示词段、工具清单、图节点类型、能力、订阅、依赖），把上面第 10 条列的诊断信息做成可查询的 JSON 接口。落地位置：`agentxx.agent.core` 表的查询方法（已有 `getPluginJson` 可在其上扩展）。
 
@@ -1225,7 +1225,7 @@ materialize(permissions) → { definitions, settle }
 
 ---
 
-## 17. 配置、模型目录与装配
+## 17. 配置、模型目录与加载
 
 ### 17.1 agentxx 现状
 
@@ -1258,7 +1258,7 @@ materialize(permissions) → { definitions, settle }
 | 模型元数据 | yaml 手填（无窗口/价格/模态来源） | 远程 models.dev + 定时刷新 + 本地缓存，可被插件 transform 覆盖 | **可借鉴**：模型窗口/价格/模态是预算、UI、成本统计的基础 |
 | 鉴权 | API Key | API Key + OAuth（含刷新、账户切换）+ 凭据与集成分离 | **可借鉴**（如 GitHub Copilot / OpenRouter 这类 OAuth 场景） |
 | 策略 | 分散（权限模式、插件启用、模型限制） | `policy.ts` 在 catalog 重算末尾统一应用 | 部分可借鉴 |
-| 插件装配 | yaml 列表 + 构建期内置 | npm/git/目录 + 后台安装 + 完成后合并重载 | 两者差异源于分发形态；agentxx 的「内置列表可选合并」更简单可控 |
+| 插件加载 | yaml 列表 + 构建期内置 | npm/git/目录 + 后台安装 + 完成后合并重载 | 两者差异源于分发形态；agentxx 的「内置列表可选合并」更简单可控 |
 | 设置存储 | 全局 KV（sqlite）+ 配置 yaml | 配置文档 + 数据库（会话/凭据/策略） | 各有分工；agentxx 的 KV 与 yaml 的边界需在文档里写清（哪些属于「设置」哪些属于「配置」） |
 
 ### 17.4 两者的优缺点
@@ -1281,7 +1281,7 @@ materialize(permissions) → { definitions, settle }
    - 来源优先级：内置默认 < 配置文件 < 远程目录（可选，带本地缓存与定时刷新）< 插件补充。
    落地位置：`agent/lib/include/agentxx/agent/model_registry.h` + yaml 模型段 + 可选的新插件负责远程目录。
 3. **[P1] 鉴权方式分层**：把「API Key」抽象为「凭据来源」之一（env / 配置 / 凭据库 / OAuth 刷新），为将来支持 OAuth 类 provider（如 GitHub Copilot）留出接口；凭据与 provider 定义分离（凭据可复用、可撤销、可多账户）。落地位置：`provider_common.h` + `model_registry.h`。
-4. **[P2] 策略集中**：把「允许使用哪些 provider/模型」「允许哪些工具类别」这类策略从多处配置收敛到一个显式策略层，在模型目录构建的末尾统一应用。落地位置：`AgentConfig` 的模型段 + 权限中间件的规则装配。
+4. **[P2] 策略集中**：把「允许使用哪些 provider/模型」「允许哪些工具类别」这类策略从多处配置收敛到一个显式策略层，在模型目录构建的末尾统一应用。落地位置：`AgentConfig` 的模型段 + 权限中间件的规则加载。
 5. **[P2] 设置与配置的边界文档**：明确「yaml 配置（可版本化、可分发）」与「设置 KV（本机偏好）」的分工与优先级，避免同类项两处可配。落地位置：`docs/zh-cn/design/index.md` 配置章。
 
 ---
@@ -1386,7 +1386,7 @@ materialize(permissions) → { definitions, settle }
 | M61 | 插件作用域化状态容器（禁用即整体清理） | `plugin_framework.h` | M49 | P2 |
 | M62 | 文档同步：表数量（20/10）与新表 | `AGENTS.md`、`docs/zh-cn/design/plugins.md` | — | P2 |
 | M76 | 插件顺序位 + 批量启停的重算合并（同 id 重载保留顺序位） | `plugin_manager_lifecycle.cpp`、`plugin_manager_adapters.cpp` | M49、M50 | P1 |
-| M77 | 按名字替换服务实现的装配接缝（测试替身/嵌入变体） | `deps/injector.h`、`base_agent.cpp` | — | P2 |
+| M77 | 按名字替换服务实现的加载接缝（测试替身/嵌入变体） | `deps/injector.h`、`base_agent.cpp` | — | P2 |
 | M78 | 插件渲染错误按「插件/槽位/阶段」记录并可查询 | `client_plugin_manager.cpp`、`builtin_tool_renderers.cpp` | — | P2 |
 | M79 | 只读「域视图」查询（提示词段/工具/图类型/能力/订阅/依赖） | `agentxx.agent.core` 表扩展 | M49 | P2 |
 | M63 | 策略集中（provider/模型/工具类别的允许与拒绝） | `AgentConfig` + `permission.cpp` | M56 | P2 |
@@ -1396,7 +1396,7 @@ materialize(permissions) → { definitions, settle }
 | M67 | 会话移动语义（换工作目录/换 worktree 时派生态失效） | `session_server_agent_io.cpp` | M11、M66 | P2 |
 | M68 | 工具显式声明使用哪个根（工作区/会话目录/worktree/临时） | `tools/tool.h`、`toolcall.cpp` | M66 | P2 |
 | M69 | 远端工作区与 A2A 统一为「位置」 | `a2a_*`、`context.h` | M66 | P2 |
-| M70 | 领域与策略的显式分层（策略集中到装配层） | `base_agent.cpp`、`code_agent.cpp` | M63 | P2 |
+| M70 | 领域与策略的显式分层（策略集中到加载层） | `base_agent.cpp`、`code_agent.cpp` | M63 | P2 |
 | M71 | 生成物一致性校验（若引入 M43） | 构建脚本 + CI | M43 | P2 |
 | M72 | 受限编排（模型写受限脚本编排工具，需沙箱与限额） | 新插件 | M23、M24 | P2 |
 
@@ -1405,7 +1405,7 @@ materialize(permissions) → { definitions, settle }
 1. **批次 1（可恢复性）**：M1、M2、M3、M4 → 让「输入、消息、重连」三个环节都有持久依据；配套 M54（边界测试）、M52（未实现清单）。
 2. **批次 2（上下文与成本）**：M11、M12、M13、M14、M15 → 长会话的缓存命中、压缩质量与溢出恢复；配套 M8、M53（格式版本与兼容测试）。
 3. **批次 3（工具与交互）**：M23、M24、M25、M26、M27 → 延迟、结果保真、陈旧调用与结构化提问；配套 M51（录制回放，让 provider/工具回归可控）。
-4. **批次 4（权限、扩展、装配）**：M32、M33、M49、M50、M55、M56、M57 → 权限记忆、声明式贡献重算、配置迁移与模型元数据。其中 M73（重试策略）与 M74（用量账本）可与批次 2 并行，二者都只依赖已有的重试/模型调用路径。
+4. **批次 4（权限、扩展、加载）**：M32、M33、M49、M50、M55、M56、M57 → 权限记忆、声明式贡献重算、配置迁移与模型元数据。其中 M73（重试策略）与 M74（用量账本）可与批次 2 并行，二者都只依赖已有的重试/模型调用路径。
 
 ---
 

@@ -273,7 +273,7 @@ public:
         std::vector<std::string> requiredInterfaces;
         std::vector<std::string> optionalInterfaces;
 
-        // ---- 诊断字段 (装配快照) ----
+        // ---- 诊断字段 (加载快照) ----
         /// 是否被用户显式禁用 (区别于依赖级联禁用)
         bool userDisabled = false;
         /// 是否因必选依赖不可用被级联禁用
@@ -417,10 +417,10 @@ public:
 
     /// 声明工具权限限制 (插件在注册工具后调用)
     /// - 声明内容: 权限作用域 (读/写)、目标参数名、目标类型 (路径/文本/无)
-    /// - 声明最终交给 agent 装配的权限中间件 ([PermissionMiddlewareHandle]):
+    /// - 声明最终交给 agent 加载的权限中间件 ([PermissionMiddlewareHandle]):
     ///   工具调用时的判定 (白/黑名单、permission.mode 默认、记住的选择、
     ///   工作区隔离、完全授权) 全部由该中间件执行, 插件只声明"哪些参数受约束"
-    /// - 权限声明属于附加能力: 主程序未装配权限中间件时返回非 0, 插件可忽略
+    /// - 权限声明属于附加能力: 主程序未加载权限中间件时返回非 0, 插件可忽略
     /// `return`: 0 成功, 非 0 失败 (工具非本实例所有 / 中间件不可用 / 声明非法)
     int registerToolPermission(PluginInstance* inst, const AgentxxPluginToolPermissionSpec* spec);
 
@@ -443,7 +443,7 @@ public:
     ///     - [paths] 待判定路径 (绝对路径优先; 相对路径按会话工作目录解析)
     ///     - [outDecisions] 等长出参 (AGENTXX_PLUGIN_PERMISSION_DECISION_*)
     ///
-    /// `return`: 0 成功; 非 0 不支持或失败 (权限中间件未装配时调用方应跳过过滤)
+    /// `return`: 0 成功; 非 0 不支持或失败 (权限中间件未加载时调用方应跳过过滤)
     int checkPermissionPaths(
         PluginInstance*                 inst,
         int32_t                         scope,
@@ -554,11 +554,11 @@ public:
     bool removeCoreHookHandler(int64_t handle);
 
     /// 钩子处理器清单 JSON
-    /// - 插件 `agentxx.agent.hooks` 的 `list_hooks`、装配快照 `hooks` 段与
+    /// - 插件 `agentxx.agent.hooks` 的 `list_hooks`、加载快照 `hooks` 段与
     ///   `--dump-diagnostics` 共用同一份实现 (形状见 docs/zh-cn/design/plugins.md §8)
     /// - 派发记录 (`stat` 段) 只在开发者模式下出现
     /// - 读的是注册表当前状态: 与登记/派发同一线程 (主程序 io 线程) 上调用
-    ///   (装配快照与诊断在这一生命周期阶段取数)
+    ///   (加载快照与诊断在这一生命周期阶段取数)
     std::string hooksJson();
 
     /// 某个点上当前生效的处理器 (按派发顺序: `plugin` 层 -> `core` 层, 层内
@@ -575,7 +575,7 @@ public:
     // ==================== 功能点 (agentxx.agent.feature) ====================
 
     /// 为某个点登记实现 (插件的功能点表入口)
-    /// - 点必须已声明 (主程序点在装配期声明; 插件点先经 [defineFeaturePoint])
+    /// - 点必须已声明 (主程序点在加载期声明; 插件点先经 [defineFeaturePoint])
     /// - 同一 `(点, 实例)` 重复登记 = 覆盖; 数量不设上限
     /// - `priority` 越界裁剪到上下限并记一条警告 (不拒绝登记)
     /// - 实现体经操作协议驱动 (与工具同一套), 完成回调在主程序 IO 线程发布
@@ -608,7 +608,7 @@ public:
         return undefineFeaturePoint(inst, strToSv(pointId));
     }
 
-    /// 功能点清单 JSON (插件 `list_points`、装配快照与诊断共用同一份实现)
+    /// 功能点清单 JSON (插件 `list_points`、加载快照与诊断共用同一份实现)
     std::string listFeaturePoints();
 
     /// 调用一个功能点 (异步; 完成回调经 notify 在主程序 IO 线程发布)
@@ -792,7 +792,7 @@ public:
     std::shared_ptr<pluginxx::EventSource> eventSource() override;
     /// 事件主题命名空间补齐 (不以 `plugin.`/`client.` 开头时补 `plugin.`)
     std::string qualifyEventTopic(std::string_view topic) override;
-    /// 阻塞工作委托到 AgentContext 的工作线程池; 未装配时返回 false (offload 失败)
+    /// 阻塞工作委托到 AgentContext 的工作线程池; 未加载时返回 false (offload 失败)
     bool postToWorkerThread(std::function<void()> fn) override;
 
     std::string configJson() override;
@@ -922,7 +922,7 @@ private:
     /// 注册表里属于某实例的全部处理器 (按点号、再按该点的派发顺序; 诊断与列表用)
     std::vector<HookHandlerView> allHookHandlersOf(const PluginInstance& inst) const;
 
-    /// 处理器视图 (清单 / 装配快照 / 测试共用)
+    /// 处理器视图 (清单 / 加载快照 / 测试共用)
     HookHandlerView viewOf(const HookHandlerEntry& entry) const;
 
     /// 插入一条处理器并挂上派发器 (登记入口的公共收尾)
@@ -960,8 +960,8 @@ private:
     /// 释放执行图定义 slot (占用者禁用/卸载时调用): 恢复基础定义并清空占用者
     void releaseGraphDefinitionSlot(PluginInstance* inst);
 
-    /// agent 装配的权限中间件 (插件工具权限声明实际生效处; 未装配返回 nullptr)
-    /// - 在中间件链中查找; 权限中间件由 BaseAgent::initMiddleware 装配, 插件
+    /// agent 加载的权限中间件 (插件工具权限声明实际生效处; 未加载返回 nullptr)
+    /// - 在中间件链中查找; 权限中间件由 BaseAgent::initMiddleware 加载, 插件
     ///   加载 (create/start 事务) 在其后执行, 正常运行期可查到
     agentxx::middleware::PermissionMiddlewareHandle* permissionMiddleware();
 

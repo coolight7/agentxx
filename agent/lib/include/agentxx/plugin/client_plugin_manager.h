@@ -571,12 +571,12 @@ public:
     ClientPluginManager(const ClientPluginManager&)            = delete;
     ClientPluginManager& operator=(const ClientPluginManager&) = delete;
 
-    // ==================== 装配 ====================
+    // ==================== 加载 ====================
 
     /// 注入 UI 适配器 (UI 无关语义层 → 具体 UI 实现; 模式启动时调用一次)
     void setUiAdapter(std::shared_ptr<PluginUiAdapter> adapter);
 
-    /// 当前 UI 适配器 (supportedInterfaces() 声明主程序接口集; 任意线程, 装配后不可变)
+    /// 当前 UI 适配器 (supportedInterfaces() 声明主程序接口集; 任意线程, 加载后不可变)
     std::shared_ptr<PluginUiAdapter> uiAdapter() const {
         return uiAdapter_;
     }
@@ -936,7 +936,7 @@ public:
     /// 区域可见性快照 (任意线程; 按 id 升序; 仅包含显式上报过的区域)
     std::map<std::string, bool, std::less<>> regionVisibility() const;
 
-    /// 动画等级门控 (装配方在启动与设置变化时调用; 默认 true = 允许定时器)
+    /// 动画等级门控 (加载方在启动与设置变化时调用; 默认 true = 允许定时器)
     /// - false: 新的 `set_timer` 一律失败 (插件据返回值降级为静态展示)
     void setAnimationEnabled(bool enabled) {
         animationEnabled_.store(enabled, std::memory_order_relaxed);
@@ -1033,7 +1033,7 @@ protected:
     }
 
     /// 生成 client 侧实例对象 (业务自引用/管理器弱引用)
-    /// - 元信息/lifecycle 入口/生命周期控制块/主程序控制块由 [attachInstance] 装配
+    /// - 元信息/lifecycle 入口/生命周期控制块/主程序控制块由 [attachInstance] 加载
     std::shared_ptr<ClientPluginInstance> createInstance(std::string name) override;
 
     /// client 侧插件入口符号名 (插件框架不硬编码主程序专名, 见 pluginxx/api/entry.h)
@@ -1099,7 +1099,7 @@ private:
 
     std::shared_ptr<PluginUiAdapter> uiAdapter_; ///< 注入后不可变 (io 线程读写)
 
-    /// 客户端界面能力段 (装配时从适配器读取一次; 见
+    /// 客户端界面能力段 (加载时从适配器读取一次; 见
     /// [PluginUiAdapter::uiCapabilitiesJson]) —— `get_client_state()` 的 `ui` 段,
     /// 空对象 = 该客户端不发布 (插件按描述层全支持处理)
     utilxx_base::Json uiCapabilitiesJson_ = utilxx_base::Json::object();
@@ -1152,7 +1152,7 @@ private:
     /// - 供 `pause_when_hidden` 定时器门控与 `agentxx.client.timer` 的 is_visible 使用
     std::map<std::string, bool, std::less<>> regionVisibility_;
 
-    /// 动画等级门控 (装配方经 setAnimationEnabled 更新; 默认允许定时器)
+    /// 动画等级门控 (加载方经 setAnimationEnabled 更新; 默认允许定时器)
     std::atomic<bool> animationEnabled_{true};
 
     std::string language_ = "en";
@@ -1163,7 +1163,7 @@ private:
 /// 实现方 (TUI/CLI/未来 GUI) 职责:
 /// - supportedInterfaces(): 声明支持的接口名集合 ("client.panel" 等, 常量见
 ///   [plugin_interfaces.h](/agent/lib/include/agentxx/plugin/plugin_interfaces.h)
-///   plugin_interfaces; 主程序据此装配 "client.ui" 接口表、
+///   plugin_interfaces; 主程序据此加载 "client.ui" 接口表、
 ///   子能力限制判定与插件加载限制)
 /// - 各回调在 client io 线程调用, 实现必须快速返回; 涉及 UI 线程独占操作
 ///   (组件树修改/重绘) 须自行跨线程投递 (如 TUI 的 enqueueUiAction)
@@ -1187,7 +1187,7 @@ public:
     ///
     /// - 取值来源: `pluginxx::ui::capabilitiesToJson(<本客户端的能力>)`
     /// - 返回空串 = 不发布该段 (插件按"描述层全支持"处理); 非对象 JSON 会被忽略
-    /// - 装配后不可变 (与 supportedInterfaces 同一约定), 启动时读取一次
+    /// - 加载后不可变 (与 supportedInterfaces 同一约定), 启动时读取一次
     virtual std::string uiCapabilitiesJson() const {
         return {};
     }

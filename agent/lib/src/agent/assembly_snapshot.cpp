@@ -1,11 +1,11 @@
-/// 启动装配快照实现
+/// 启动加载快照实现
 ///
-/// 这里只做"把已经存在的装配事实整理成一份 JSON/文本", 不引入新的装配逻辑:
+/// 这里只做"把已经存在的加载事实整理成一份 JSON/文本", 不引入新的加载逻辑:
 /// - 配置侧快照直接读 AgentConfig;
-/// - 运行侧快照读 AgentContext (模型注册表 / 中间件栈 / 工具装配记录 / 插件管理器 /
+/// - 运行侧快照读 AgentContext (模型注册表 / 中间件栈 / 工具加载记录 / 插件管理器 /
 ///   执行图 / 持久化 / 已加载组件)。
 ///
-/// 输出保持稳定顺序 (map 按键排序, 列表按装配顺序), 便于人工对比两次启动的输出。
+/// 输出保持稳定顺序 (map 按键排序, 列表按加载顺序), 便于人工对比两次启动的输出。
 #include "agentxx/agent/assembly_snapshot.h"
 
 #include "agentxx/agent/context.h"
@@ -90,7 +90,7 @@ utilxx_base::Json modelSnapshotJson(const ModelConfig& mc) {
     return j;
 }
 
-/// 装配侧记录一次的插件条目 → 快照条目
+/// 加载侧记录一次的插件条目 → 快照条目
 void appendPluginEntries(const AgentContext& ctx, utilxx_base::Json& pluginsOut) {
     pluginsOut = utilxx_base::Json::array();
     if (!ctx.pluginManager) {
@@ -139,7 +139,7 @@ void appendPluginEntries(const AgentContext& ctx, utilxx_base::Json& pluginsOut)
     }
 }
 
-/// 工具装配记录 → 快照条目
+/// 工具加载记录 → 快照条目
 utilxx_base::Json toolRecordJson(const ToolAssemblyRecord& rec) {
     utilxx_base::Json item = utilxx_base::Json::object();
     item["name"]           = rec.name;

@@ -108,7 +108,7 @@ asio::awaitable<Fixture> makeFixture() {
     f.ctx->toolRegistry  = std::make_shared<agentxx::plugin::ToolRegistry>();
     f.mgr                = std::make_shared<agentxx::plugin::PluginManager>(f.ctx);
     f.ctx->pluginManager = f.mgr;
-    // 装配 io executor (与 BaseAgent::init 一致): 跨线程 vtable 调用经真实 post
+    // 加载 io executor (与 BaseAgent::init 一致): 跨线程 vtable 调用经真实 post
     f.mgr->setIoExecutor(co_await asio::this_coro::executor);
     co_return f;
 }

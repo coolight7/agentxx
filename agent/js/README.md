@@ -4,7 +4,7 @@
 
 | 文件 | 说明 |
 |---|---|
-| `agentxx_ui_kit.js` | agentxx 扩展 kit：插件界面描述层的组件装配函数，写全局 `pluginxx.ui.kit`。内容是**合并后的超集**（基础 kit 的全部组件 + agentxx 自己的留白规则与常用组合），只加载它一个就够 |
+| `agentxx_ui_kit.js` | agentxx 扩展 kit：插件界面描述层的组件加载函数，写全局 `pluginxx.ui.kit`。内容是**合并后的超集**（基础 kit 的全部组件 + agentxx 自己的留白规则与常用组合），只加载它一个就够 |
 
 ## 当前状态：JS 侧还没有界面入口
 
@@ -44,6 +44,6 @@ const items = [
 
 ## 纪律
 
-- kit 只装配、不含逻辑；组件字段与适配规则见描述层生成的 `docs/ui-schema.md`；
+- kit 只加载、不含逻辑；组件字段与适配规则见描述层生成的 `docs/ui-schema.md`；
 - 尺寸只有一个单位 u（GUI 1u = 1 逻辑像素），终端客户端按自己的能力换算；
 - 新增组件 / 改留白要改 `agent/schema/agentxx-ui-kit.def.json`，重新生成后把生成物一起提交。

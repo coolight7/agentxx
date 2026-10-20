@@ -104,7 +104,7 @@ std::vector<pluginxx::ui::Item> adaptItems(const std::vector<pluginxx::ui::Item>
 - 适配保证收敛：最多降到 `Text`（`Text` 是所有客户端的收敛终点）；
 - `ParseReport` / `AdaptReport` 的提示记日志（`XX_LOGW("[tui] ui adapt: …")`），是排障第一手线索。
 
-## 6. kit：插件侧的装配便利
+## 6. kit：插件侧的加载便利
 
 | kit | 命名空间 | 内容 |
 |---|---|---|
@@ -113,7 +113,7 @@ std::vector<pluginxx::ui::Item> adaptItems(const std::vector<pluginxx::ui::Item>
 
 - 插件写 `agentxx::ui::Item` / `agentxx::ui::build::button` / `agentxx::ui::kit::toolCallRow`
   （`agentxx::ui` 与 `pluginxx::ui` 是同一批名字，扩展 kit 在 `agentxx::ui::kit`）；
-- kit 只装配、不含逻辑；参数用 `utilxx_base::Json` 对象传，键即参数名；
+- kit 只加载、不含逻辑；参数用 `utilxx_base::Json` 对象传，键即参数名；
 - 传 `env`（能力摘要）时 kit 会挑更合适的变体（例如目标不支持 `Diff` 时
   `pathDiffRow` 退化成等宽文本）；不传就是中立描述，由客户端 `adapt` 统一处理；
 - 组件说明见生成的 `docs/zh-cn/design/agentxx-ui-kit.md`；
@@ -162,7 +162,7 @@ CLI / 日志 / FFI 文本主程序走库的 `plainText`（`interruptUiPlainText`
 
 | 模块 | 覆盖 |
 |---|---|
-| `ui_kit` | 扩展 kit 各组件装配结果、`env` 变体选择、能力矩阵下的适配收敛、dump→parse 往返 |
+| `ui_kit` | 扩展 kit 各组件加载结果、`env` 变体选择、能力矩阵下的适配收敛、dump→parse 往返 |
 | `ui_items` | 中断块 ↔ 组件项桥接、预设结构、纯文本降级、显示列宽 |
 | `tui_ui_items` | 组件渲染（含 `percent` / `aspect` / `Align` / `Spacer` / 折叠嵌套 / 表格自动列宽）、测量与布局一致、命中区域 |
 | 库自带单测 | 解析/往返/上限/适配规则/纯文本金文件（在库仓库跑） |

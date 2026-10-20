@@ -5,7 +5,7 @@
 > - `harness`（Harness Open Source / 原 Gitness）: `D:\0Acoolight\Program\js\harness`（**Go** 1.20+, 四层 Web 服务 + google/wire 编译期依赖注入 + sqlite/postgres 双驱动 + React 前端）
 >
 > 注意：目录名 `js/harness` 容易误判，harness 是 **Go 服务端项目**（DevOps 平台：代码托管 + CI 流水线 + Gitspaces 云开发环境 + 制品库），不是 JS agent 项目。
-> 因此本文的对比重心不是"谁的 agent 循环更好"，而是：**一个成熟的多租户服务端工程把"配置/装配/存储/事件/作业/权限/沙箱/可观测/测试"这些横切层做到了什么程度**，其中哪些做法能搬进 agentxx 这个"单机本地优先、可远程、可插件扩展"的 agent 运行时。
+> 因此本文的对比重心不是"谁的 agent 循环更好"，而是：**一个成熟的多租户服务端工程把"配置/加载/存储/事件/作业/权限/沙箱/可观测/测试"这些横切层做到了什么程度**，其中哪些做法能搬进 agentxx 这个"单机本地优先、可远程、可插件扩展"的 agent 运行时。
 >
 > 本文按模块通读两个项目的源码、测试与文档后逐模块记录差异、优缺点与**可迁移到 agentxx 的设计**。
 > 全文分三部分：**第一部分（§0~§21）**按模块给出结论与迁移清单；**第二部分（§22~§33）**是对源码实现细节的深读（含对第一部分的 4 处修正，见 [§32](#32-对第一部分的修正与补强)）；**第三部分（§34~§43）**是插件框架专题（[§34](#34-harness-的插件是什么三套语义--一套真正的扩展机制) 解释 harness 的"插件"到底是哪三套语义）。
@@ -29,8 +29,8 @@
 | 章节 | 内容 | 一句话结论 |
 |---|---|---|
 | [0](#0-总览与对比方法) | 总览与对比方法 | 两个项目定位不同，可比的是横切层工程做法 |
-| [1](#1-总体架构分层与扩展模型) | 总体架构、分层与扩展模型 | harness 靠 wire 编译期装配、agentxx 靠 C ABI 运行时插件，各有代价 |
-| [2](#2-装配依赖注入与启动序列) | 装配、依赖注入与启动序列 | 应把"装配清单"显式化，并把启动/关闭做成可回滚的阶段序列 |
+| [1](#1-总体架构分层与扩展模型) | 总体架构、分层与扩展模型 | harness 靠 wire 编译期加载、agentxx 靠 C ABI 运行时插件，各有代价 |
+| [2](#2-加载依赖注入与启动序列) | 加载、依赖注入与启动序列 | 应把"加载清单"显式化，并把启动/关闭做成可回滚的阶段序列 |
 | [3](#3-配置体系) | 配置体系 | 派生默认值回填 + 启动期校验是 agentxx 缺的一环 |
 | [4](#4-并发模型与生命周期) | 并发模型与生命周期 | 应用 errgroup 式的"失败即收敛 + 分阶段优雅关闭" |
 | [5](#5-api-层与协议) | API 层与协议 | 错误分类渲染、请求解码分层、流式响应值得吸收 |
@@ -98,7 +98,7 @@
 | 语言/运行时 | C++23（`c++26/c17` 标准开关）, Boost.Asio 协程, 单线程 io_context 交错执行多会话 | Go 1.20+, 每请求 goroutine, `context` 贯穿, `errgroup` 收敛后台任务 |
 | 形态 | 本地优先的 agent 运行时：库 `libagentxx` + 客户端（TUI / CLI / 远程 WS）+ C ABI 插件 | 多租户服务端平台：单二进制 `gitness`（HTTP + SSH + git 数据面 + CI 执行器 + 制品库） |
 | 主要能力 | LLM 会话（多会话并发、工具调用、压缩、权限、子代理、worktree 隔离） | 代码托管（space/repo/pullreq/git）、流水线（pipeline/stage/step）、Gitspaces（容器化开发环境）、制品库 registry |
-| 扩展模型 | **运行时插件**：`agentxx_plugin_agent_create/start/stop/destroy` + 19 张 agent 接口表 + 9 张 client 接口表 | **编译期装配**：每个包导出 `WireSet`，`cmd/gitness/wire.go` 汇总，`wire_gen.go` 生成构造函数；无运行时插件 ABI |
+| 扩展模型 | **运行时插件**：`agentxx_plugin_agent_create/start/stop/destroy` + 19 张 agent 接口表 + 9 张 client 接口表 | **编译期加载**：每个包导出 `WireSet`，`cmd/gitness/wire.go` 汇总，`wire_gen.go` 生成构造函数；无运行时插件 ABI |
 | 客户端 | FTXUI TUI（唯一渲染实现）+ stdio CLI + 远程 WS 客户端 + FFI 宿主 | React Web（`web/src`, 1638 文件）+ Swagger 生成客户端 + `cli/textui` 交互式 shell |
 | 服务端形态 | 可选：`agentxx_cli` 既可是同进程 TUI，也可 `--server` 提供 WS/HTTP 端点给远端客户端 | 必须：HTTP(:3000) + 可选 SSH(:3022/22) + 可选 metrics server + CI poller |
 | 存储 | SQLite 单库/会话（`SessionStore` 按 sessionId 分目录）, `settings_db` 全局 KV | SQLite **或** PostgreSQL（同一套 `squirrel` 构造器 + `sqlx`）, 表数量级数十张, 迁移序列 `migrate_0001..0160+` |
@@ -125,7 +125,7 @@
 
 | 模块 | agentxx 现状 | harness 现状 | 更值得借鉴的方向 |
 |---|---|---|---|
-| 分层/扩展 | 分层清晰 + C ABI 插件，装配分散在 `init*` 虚函数 | 四层（handler→controller→service→store）+ wire 装配清单 | 装配清单显式化、启动阶段可回滚 |
+| 分层/扩展 | 分层清晰 + C ABI 插件，加载分散在 `init*` 虚函数 | 四层（handler→controller→service→store）+ wire 加载清单 | 加载清单显式化、启动阶段可回滚 |
 | 配置 | YAML 两层合并（base/overlay）+ `settings_db` 运行时 KV | `envconfig` 结构体 + `.env` + kingpin 参数 + 派生 URL 回填 | 派生默认值回填、启动期校验与报错定位 |
 | 并发/生命周期 | asio 协程 + io_context + `CancelToken`；客户端/服务端同线程模型 | goroutine + `context` + `errgroup` + 分阶段优雅关闭 | 失败即收敛、关闭顺序按依赖倒序、带超时 |
 | API/协议 | 手写 wire 协议（1293 行）+ 事件流 + TUI 直渲 | REST + openapi 生成 + 请求解码中间件 + 流式/SSE 渲染 | 错误分类渲染、请求解码分层、动态数组流式输出 |
@@ -147,7 +147,7 @@
 
 ## 1. 总体架构、分层与扩展模型
 
-### 1.1 harness：四层 + 编译期装配
+### 1.1 harness：四层 + 编译期加载
 
 **入口与分发**（`cmd/gitness/main.go`, `app/router/router.go`）
 
@@ -176,14 +176,14 @@
 
 **扩展模型**：**没有运行时插件 ABI**（下文 §34 会说明：harness 仓库里名为 "plugin" 的东西有四种用法，都不属于进程内扩展机制）。
 
-- `app/pkg.go` 只 import `github.com/google/wire/cmd/wire`（`//go:build tools`），说明装配完全在编译期完成。
+- `app/pkg.go` 只 import `github.com/google/wire/cmd/wire`（`//go:build tools`），说明加载完全在编译期完成。
 - 新增一个能力 = 新增 Go 包 + 该包导出 `WireSet` + 在 `cmd/gitness/wire.go` 的 `initSystem` 里追加一行 + 在 `providers.go` 里给出 Provider 函数；由 `wire_gen.go`（62 KB 生成物）在编译期推导构造顺序并检测缺失依赖。
 - `types/plugin.go` 里的 "plugin" 是**制品库插件（包格式）**语义，与扩展机制无关，容易误读。
 
 ### 1.2 agentxx：分层 + 运行时 C ABI 插件
 
 - **分层**（据 `AGENTS.md` 与目录）：`agent/client`（TUI/CLI/远程客户端 + 配置加载）、`agent/lib`（libagentxx：`BaseAgent`/`CodeAgent`、`nodes`、`middlewares`、`tools`、`protocol`、`plugins`、`io`、`util`）、`agent/plugins`（15 个内置能力插件）、`agent/third_party`（含自研三库 `cxx_utilxx_base` / `cxx_utilxx` / `cxx_pluginxx`）。
-- **装配点分散但显式**：`BaseAgent::init()` 依次调用 `initRegisterNodes` → `initMiddleware` → `initTools` → `initModelRegistry` → `initEventBus` → `initGraphDefinition`（见 `agent/lib/include/agentxx/agent/base_agent.h` 注释："在 `init()` 中于 `initMiddleware()` 之前调用"等约定）。子类 `CodeAgent` 覆写这些钩子即可改变 agent 形态（`agent/lib/src/agent/code_agent.cpp`）。
+- **加载点分散但显式**：`BaseAgent::init()` 依次调用 `initRegisterNodes` → `initMiddleware` → `initTools` → `initModelRegistry` → `initEventBus` → `initGraphDefinition`（见 `agent/lib/include/agentxx/agent/base_agent.h` 注释："在 `init()` 中于 `initMiddleware()` 之前调用"等约定）。子类 `CodeAgent` 覆写这些钩子即可改变 agent 形态（`agent/lib/src/agent/code_agent.cpp`）。
 - **执行引擎**：图引擎（NeoGraph）。默认图 `agentxx.default`：`__start__ → agent_start → llm →(条件边 xx_has_tool_calls)→ tools / agent_end → __end__`（`base_agent.h:initGraphDefinition` 注释 + `nodes/graph_conditions.h`）。
 - **上下文归属**：会话（`Session`）是 LLM 上下文的唯一权威，图状态里没有 `messages` 通道，只有只读影子通道 `xx_messagesMeta`（`nodes/session_context.h`, `nodes/graph_conditions.h` 注释）。
 - **插件**：API v1 纯 C ABI，`create` 只构造、`start` 是"注册事务"、`stop` 撤销自管资源、`destroy` 释放本地对象；能力经**接口表按名称查询**；多实例契约（禁可变全局/函数级 static、实例状态只放 `*plugin_ctx`）。
@@ -197,21 +197,21 @@
 | 第三方扩展 | 需重新编译并分发二进制 | 投放 `.so`/`.dll` 即可，可禁用/卸载 |
 | 隔离 | 同进程、同语言、无边界 | ABI 边界（结构体对齐/定长类型/调用约定显式约定） |
 | 卸载/热替换 | 不支持（静态） | 支持（`stop` + 卸载 + 级联依赖 + 关闭超时重试） |
-| 装配可读性 | 单一清单（`initSystem` 200+ 行）+ 生成代码 | 分散在 `init*` 钩子 + 插件管理器 |
+| 加载可读性 | 单一清单（`initSystem` 200+ 行）+ 生成代码 | 分散在 `init*` 钩子 + 插件管理器 |
 | 错误代价 | 一个 Provider 缺失 = 全量编译失败（定位容易） | 一个接口版本不匹配 = 运行期日志（定位稍难） |
 | 性能 | 直接调用 | 一次 vtable 间接调用（可忽略），但状态只能放堆块 |
 
-**harness 的优点**：装配是**一棵显式的树**，`cmd/gitness/wire.go` 的 `initSystem` 事实上就是"系统由哪些东西构成"的唯一权威文档；`wire.Bind(new(gitspaceinfraeventservice.Orchestrator), new(orchestrator.Orchestrator))` 这种"把宽接口绑到窄接口"的写法，使事件服务只依赖自己声明的窄接口，避免了包体量与循环依赖（代码注释明确说明：把 docker/oras 重的 orchestrator 挡在事件服务的 import 图之外）。这一点对 agentxx 有直接借鉴价值——agentxx 的插件与内置能力之间存在类似的"宽实现 vs 窄依赖"问题（例如插件要拿会话、要拿事件总线、要拿工具注册表）。
+**harness 的优点**：加载是**一棵显式的树**，`cmd/gitness/wire.go` 的 `initSystem` 事实上就是"系统由哪些东西构成"的唯一权威文档；`wire.Bind(new(gitspaceinfraeventservice.Orchestrator), new(orchestrator.Orchestrator))` 这种"把宽接口绑到窄接口"的写法，使事件服务只依赖自己声明的窄接口，避免了包体量与循环依赖（代码注释明确说明：把 docker/oras 重的 orchestrator 挡在事件服务的 import 图之外）。这一点对 agentxx 有直接借鉴价值——agentxx 的插件与内置能力之间存在类似的"宽实现 vs 窄依赖"问题（例如插件要拿会话、要拿事件总线、要拿工具注册表）。
 
-**harness 的缺点**：没有运行时扩展点，导致"运维期开关"只能靠配置项与 build tag（`nosqlite`、`wireinject`）；新增一个可替换能力必须新增接口 + 两个 Provider + 装配项，模板代码多。
+**harness 的缺点**：没有运行时扩展点，导致"运维期开关"只能靠配置项与 build tag（`nosqlite`、`wireinject`）；新增一个可替换能力必须新增接口 + 两个 Provider + 加载项，模板代码多。
 
 **agentxx 的优点**：插件模型支撑了"内置能力全部插件化"这个更强的目标（15 个内置插件），且多实例契约、禁用/卸载/级联依赖、`start` 事务化回滚都是 harness 完全没有的复杂度，agentxx 已经解决。
 
-**agentxx 的缺点**：装配清单缺少"单一入口"。`BaseAgent::init()` 的调用顺序靠注释约定（"在 initTools() 之前调用"），新增中间件/工具/节点/条件需要同时改多处；插件管理器的生命周期骨架（`PluginHostLifecycle`）虽然已统一，但**宿主侧装配**（哪些插件默认启用、哪些中间件默认挂载）仍是分散的。
+**agentxx 的缺点**：加载清单缺少"单一入口"。`BaseAgent::init()` 的调用顺序靠注释约定（"在 initTools() 之前调用"），新增中间件/工具/节点/条件需要同时改多处；插件管理器的生命周期骨架（`PluginHostLifecycle`）虽然已统一，但**宿主侧加载**（哪些插件默认启用、哪些中间件默认挂载）仍是分散的。
 
 **可迁移设计（§1）**
 
-1. **装配清单化（P1）**：在 `BaseAgent::init()` 内部引入一个显式的"阶段清单"结构（如 `std::vector<InitStep>{name, fn, rollbackFn}`），把 `initRegisterNodes/initMiddleware/initTools/initModelRegistry/initEventBus/initGraphDefinition` 收敛为数据而非调用序列；同时提供"当前生效能力的快照"供 `WireGetContext`/Info 面板展示（harness 的 `initSystem` 与 `swagger` 页面是同类"系统自描述"）。
+1. **加载清单化（P1）**：在 `BaseAgent::init()` 内部引入一个显式的"阶段清单"结构（如 `std::vector<InitStep>{name, fn, rollbackFn}`），把 `initRegisterNodes/initMiddleware/initTools/initModelRegistry/initEventBus/initGraphDefinition` 收敛为数据而非调用序列；同时提供"当前生效能力的快照"供 `WireGetContext`/Info 面板展示（harness 的 `initSystem` 与 `swagger` 页面是同类"系统自描述"）。
     - 落地：`agent/lib/src/agent/base_agent.cpp`（`init()`）+ `agent/lib/include/agentxx/agent/context.h`（新增 `capabilitySnapshot`）。
 2. **窄接口绑定（P1）**：插件/中间件对宿主的依赖目前是"一揽子 `AgentContext`"，可借鉴 wire 的 `Bind`，按消费者定义窄接口（如 `SessionReader`、`PermissionCheck`、`ToolRegistrar`），宿主侧用适配器满足；好处是中间件/插件测试可以只造窄桩。
     - 落地：`agent/lib/include/agentxx/agent/context.h` 拆分访问视图；插件 SDK 侧已具备（`agentxx/plugin/api/plugin_kit.h`）。
@@ -220,11 +220,11 @@
 
 ---
 
-## 2. 装配、依赖注入与启动序列
+## 2. 加载、依赖注入与启动序列
 
 ### 2.1 harness：wire + 分阶段启动
 
-- **装配**：`cmd/gitness/wire.go:initSystem` 是唯一装配根，`wire.Build(...)` 罗列 150+ 个 `WireSet`/Provider。每个包自己声明 `WireSet`（例：`app/store/wire.go` 只提供两个"字符串变换函数"；`app/store/cache/wire.go` 提供 5 个缓存 + 2 个失效器；`events/wire.go` 用 `ProvideSystem` 依据配置在 inmemory/redis 之间切换，并在内部构造 broker/consumer/producer）。
+- **加载**：`cmd/gitness/wire.go:initSystem` 是唯一加载根，`wire.Build(...)` 罗列 150+ 个 `WireSet`/Provider。每个包自己声明 `WireSet`（例：`app/store/wire.go` 只提供两个"字符串变换函数"；`app/store/cache/wire.go` 提供 5 个缓存 + 2 个失效器；`events/wire.go` 用 `ProvideSystem` 依据配置在 inmemory/redis 之间切换，并在内部构造 broker/consumer/producer）。
 - **配置注入**：`cli/operations/server/config.go` 是一组 `ProvideXxxConfig(config *types.Config) XxxConfig` 函数——**配置到子系统的转换层**。例如 `ProvideDatabaseConfig` 只挑 5 个字段；`ProvideBlobStoreConfig` 还会在 filesystem provider 且 bucket 为空时把 bucket 回填为 `~/.gitness/blob`；`ProvideEventsConfig/ProvideLockConfig/ProvidePubsubConfig/ProvideJobsConfig` 分别把 `types.Config` 的对应段落映射为子系统配置结构。这让"配置结构"与"子系统配置"解耦，子系统可在测试里被直接构造。
 - **启动序列**（`cli/operations/server/server.go:run`）：
     1. `signal.NotifyContext(SIGINT, SIGTERM)` 建根 ctx；
@@ -251,7 +251,7 @@
 | 配置到子系统的映射 | 显式 `ProvideXxxConfig` 转换层 | 直接读 `AgentConfig` 字段 | agentxx 可为每个子系统提供 `XxxConfig` 视图，便于测试与默认值回填 |
 | 启动/关闭对称性 | 分阶段 + 超时 + 倒序 | `init()` / `shutdownAsync()`，缺"阶段化" | 引入阶段化启动（含回滚）与倒序关闭 |
 | 幂等引导 | `bootstrap.go` 对每种内置实体"找不到就建/重复就查" | 无对应需求（无多实例竞争） | 不必迁移 |
-| 自描述 | `/swagger`、`/api/v1/system/config`（`handler/system/list_config.go`）暴露生效配置 | Info 面板展示模型/插件/工作目录 | 可补"生效装配快照"（见 §1 建议 1） |
+| 自描述 | `/swagger`、`/api/v1/system/config`（`handler/system/list_config.go`）暴露生效配置 | Info 面板展示模型/插件/工作目录 | 可补"生效加载快照"（见 §1 建议 1） |
 
 **各自做得好的设计**
 
@@ -308,7 +308,7 @@
 | 运行期可变 | 基本不可变（改了要重启） | `settings_db` 支持部分项热改 |
 | 敏感值 | 环境变量注入（CI/容器友好） | yaml/.env（本地友好） |
 
-**harness 的优点**：①**派生回填**把"用户只配两三个值也能跑"变成代码里的一条明确链路，且旧路径自动迁移；②默认值声明式，避免"文档与代码不一致"；③配置校验在装配期完成，错误信息带上下文（`failed to parse base url 'x': ...`）。
+**harness 的优点**：①**派生回填**把"用户只配两三个值也能跑"变成代码里的一条明确链路，且旧路径自动迁移；②默认值声明式，避免"文档与代码不一致"；③配置校验在加载期完成，错误信息带上下文（`failed to parse base url 'x': ...`）。
 
 **agentxx 的优点**：①两层合并 + 列表级 `merge/replace/remove` 的表达力远超环境变量方案，**本地多项目/多环境**场景更实用（这也是"工作目录 yaml 覆盖 `~/.agentxx`"的诉求来源）；②运行时设置库让界面设置不必重启；③配置即数据（模型列表/MCP/插件都是列表项），天然支持多模型并存与按会话选择。
 
@@ -548,7 +548,7 @@
 | 批量取 | `Map(keys)` | 无（逐条） |
 | 缓存边界显式性 | 注释中写明"罕见更新 → 整表清空" | 注释中写明"动画与缓存互斥"、"mtime 只定顺序不跳过目录" |
 
-**harness 的优点**：①**缓存是装饰器**——同一份 store 接口可以在 wi 装配时插一层缓存，业务代码不变；②失效走事件广播，**多实例/多进程天然一致**；③`Stats()` 让"缓存是否有效"可度量，避免"加了缓存更慢"；④`NoCache` 让排障可一键对比。
+**harness 的优点**：①**缓存是装饰器**——同一份 store 接口可以在 wi 加载时插一层缓存，业务代码不变；②失效走事件广播，**多实例/多进程天然一致**；③`Stats()` 让"缓存是否有效"可度量，避免"加了缓存更慢"；④`NoCache` 让排障可一键对比。
 
 **agentxx 的优点**：①缓存的**边界条件被写进注释**（动画/宽度/主题/命中范围），这类隐式约束在渲染层极易踩坑，写明即是资产；②`lazy_scrollable` 的逐项缓存 + 视口渲染是 TUI 长列表的关键优化，harness 侧对应物是 Web 虚拟滚动（不同技术栈，不可直接比较）；③"只取 max(id) 不读全量"体现了对内存占用的显式取舍。
 
@@ -591,7 +591,7 @@
     - `concurrency` 默认 2、上限 64（`WithConcurrency` 参数越界直接 panic，属于"配置错误就早失败"的姿态）；
     - 错误与信息各走独立 channel（`Errors()/Infos()`），`ReaderFactory` 起两个 goroutine 消费并转日志 + 计数（`Collector.RecordError/RecordDiscard`）。
 - **业务可主动丢弃**：`events.NewDiscardEventError(inner)` 让 handler 表达"这条事件处理方法即使失败也不要重试"（`reader.go` 检测 `errDiscardEvent` 后返回 nil）；这是"毒消息"问题的显式出口。
-- **可替换后端**：`events/wire.go:ProvideSystem` 按 `config.Mode` 在 `stream.MemoryBroker` 与 Redis Streams 之间选择，**业务代码零感知**（只在装配层切换）；内存实现保留 `MaxStreamLength` 上限以模拟 Redis 的 `MAXLEN` 裁剪。
+- **可替换后端**：`events/wire.go:ProvideSystem` 按 `config.Mode` 在 `stream.MemoryBroker` 与 Redis Streams 之间选择，**业务代码零感知**（只在加载层切换）；内存实现保留 `MaxStreamLength` 上限以模拟 Redis 的 `MAXLEN` 裁剪。
 - **持久化**：Redis 模式下事件本身存于 Redis Stream（`MaxStreamLength/ApproxMaxStreamLength` 控制裁剪），因此**消费者重启后能续消费**；内存模式退化为"进程内可靠"。
 
 **pubsub 设计要点**（`pubsub/*`）：`Publisher.Publish(ctx, topic, payload, opts...)` + `PubSub.Subscribe(ctx, topic, handler, opts...) Consumer`；`Consumer{Subscribe, Unsubscribe, Close}` 生命周期显式；命名空间选项（`WithPublishNamespace`/`WithChannelNamespace`）避免不同用途串频道；内存实现与 Redis 实现同接口。
@@ -622,7 +622,7 @@
 | 请求-响应 | 无（HTTP 语义承担） | **原生支持**（`service.permission` 等），带关联 id |
 | 类型安全 | Go 泛型 handler 注册（`ReaderRegisterEvent[T]`），编译期类型绑定 | 模板类 + `typeid` 运行期校验 |
 | 失败姿态 | 重试 N 次 → 丢弃 → 记指标 | 订阅者异常被吞（记录日志），发布不回滚 |
-| 后端可替换 | memory / redis（装配层切换） | 仅进程内 |
+| 后端可替换 | memory / redis（加载层切换） | 仅进程内 |
 | 命名规范 | `events:<category>:<type>` + 组名常量 | `<scope>.<subject>.<detail>` |
 | 主动丢毒消息 | `NewDiscardEventError` | 无（异常即吞） |
 | 派生：事件→UI | SSE（投影到浏览器） | `EventBridge` → `WireDelta`（投影到客户端） |
@@ -970,7 +970,7 @@
 
 - `LogStore{Find/Create/Update/Delete}`，`Find` 返回 `io.ReadCloser`（**流式读**）、`Create/Update` 接收 `io.Reader`；
 - DB 实现把日志按 `log_id` 整块存 `log_data`（`io.ReadAll` 后写库），S3 实现存对象存储，`combine.go` 组合两者；
-- 决策在装配层（`ProvideLogsConfig` / wire），业务只认接口。
+- 决策在加载层（`ProvideLogsConfig` / wire），业务只认接口。
 
 **(3) 大输出的第三类：流式响应**
 
@@ -1041,7 +1041,7 @@
 - 第三方库（如 drone runner、oras）经 `logr.NewContext(ctx, zerologr.New(&log))` 接入同一日志流。
 - 日志级别由 `GITNESS_DEBUG/GITNESS_TRACE` 控制（`SetupLogger`）。
 
-**(2) 审计**（`audit/`）：`middleware.go` + `objects.go` + `context.go` + `interface.go`，把"谁在什么资源上做了什么"落库；`audit.WireSet` 参与装配；部分 controller 显式调用（`audit` 出现在 webhook 等服务的依赖列表里）。
+**(2) 审计**（`audit/`）：`middleware.go` + `objects.go` + `context.go` + `interface.go`，把"谁在什么资源上做了什么"落库；`audit.WireSet` 参与加载；部分 controller 显式调用（`audit` 出现在 webhook 等服务的依赖列表里）。
 
 **(3) 实时日志**（`livelog/`）：`Line{pos, out, time}` + `LogStream{Create/Delete/Write/Tail/Info}`；`Tail` 返回 `(<-chan *Line, <-chan error)`；`Info()` 返回 `Streams map[int64]int`（每个 step 的订阅者数量）——**把"有多少人在看"做成可观测数据**；内存实现（`memory.go`）与基于 stream 的实现（`stream.go`）+ 订阅者管理（`sub.go`）。
 
@@ -1389,7 +1389,7 @@ agentxx_test string_util regex   # 只跑指定模块
 
 | # | 建议 | 说明 | 参考 |
 |---|---|---|---|
-| P1-1 | 装配清单化 + 窄接口绑定 | `init()` 阶段清单化（含回滚），消费者按需声明窄接口 | §1 wire 的 `WireSet`/`Bind` |
+| P1-1 | 加载清单化 + 窄接口绑定 | `init()` 阶段清单化（含回滚），消费者按需声明窄接口 | §1 wire 的 `WireSet`/`Bind` |
 | P1-2 | 子系统配置视图 | 每个子系统一个 `XxxConfig` + `makeXxxConfig()` | §2 `ProvideXxxConfig` |
 | P1-3 | 分阶段关闭 | 停止输入 → 等在跑轮/作业 → 停定时器 → 停插件 → 刷盘 | §2 关闭序列 |
 | P1-4 | 后台任务错误汇聚 | `TaskScope`：任一任务致命失败即收敛取消 | §4 `errgroup` |
@@ -1455,7 +1455,7 @@ agentxx_test string_util regex   # 只跑指定模块
 
 | harness 的设计 | 为什么不建议搬到 agentxx |
 |---|---|
-| **google/wire 编译期依赖注入** | agentxx 的核心扩展能力是**运行时插件**；引入编译期 DI 会让"插件在运行期注册能力"变得别扭。只要做到"装配清单化 + 启动期断言"即可获得主要收益。 |
+| **google/wire 编译期依赖注入** | agentxx 的核心扩展能力是**运行时插件**；引入编译期 DI 会让"插件在运行期注册能力"变得别扭。只要做到"加载清单化 + 启动期断言"即可获得主要收益。 |
 | **Redis 化的一切**（pubsub/lock/stream/cache） | harness 需要多实例一致性；agentxx 是单进程（甚至单线程）模型，引入远端依赖会破坏"离线可用 / 免外部服务 / 可嵌入式" 的定位。事件持久化只需本地 sqlite。 |
 | **RBAC + 多主体（principal/space/repo 权限矩阵）** | agentxx 是单用户本地工具，主体只有"用户 / 模型 / 插件"。搬 RBAC 只会增加概念负担；真正需要的是**作用域化的目标级判定**（已有基础）。 |
 | **HTTP/REST + OpenAPI + Swagger UI** | agentxx 的交互是"会话内长连接 + 中断协商"，WS + delta 更贴合；REST 化会增加一次语义转换。可借用的是"契约生成"与"错误分类"，不是协议形态。 |
@@ -1486,7 +1486,7 @@ harness 与 agentxx 处在两个坐标系里：一个把"多租户服务的长�
 
 | 模块 | harness | agentxx |
 |---|---|---|
-| 入口/装配 | `cmd/gitness/main.go`, `cmd/gitness/wire.go`, `cmd/gitness/wire_gen.go`, `app/bootstrap/bootstrap.go` | `agent/client/main.cpp`, `agent/client/src/mode_runners.cpp`, `agent/lib/src/agent/base_agent.cpp` |
+| 入口/加载 | `cmd/gitness/main.go`, `cmd/gitness/wire.go`, `cmd/gitness/wire_gen.go`, `app/bootstrap/bootstrap.go` | `agent/client/main.cpp`, `agent/client/src/mode_runners.cpp`, `agent/lib/src/agent/base_agent.cpp` |
 | 启动/关闭 | `cli/operations/server/server.go`, `cli/operations/server/config.go` | `agent/client/src/mode_runners.cpp`, `BaseAgent::init/shutdownAsync` |
 | 配置 | `types/config.go`, `cli/operations/server/config.go` | `agent/lib/include/agentxx/agent/config.h`, `agent/client/src/config_loader.cpp`, `util/settings_db.h` |
 | HTTP/路由 | `app/router/*.go`, `http/server.go`, `http/auxilary_server.go` | `agent/lib/include/agentxx/agent/io/*`, `agent/lib/src/agent/io/ws_io_transport.cpp` |
@@ -1526,7 +1526,7 @@ harness 与 agentxx 处在两个坐标系里：一个把"多租户服务的长�
 
 **harness（Go 服务端）**
 
-- 装配/启动：`cmd/gitness/{main.go,wire.go,driver_sqlite.go,driver_pq.go}`, `app/bootstrap/bootstrap.go`, `cli/operations/server/{server.go,config.go}`, `app/pkg.go`, `app/store/wire.go`, `app/services/wire.go`, `app/server/server.go`
+- 加载/启动：`cmd/gitness/{main.go,wire.go,driver_sqlite.go,driver_pq.go}`, `app/bootstrap/bootstrap.go`, `cli/operations/server/{server.go,config.go}`, `app/pkg.go`, `app/store/wire.go`, `app/services/wire.go`, `app/server/server.go`
 - 路由/中间件：`app/router/{router.go,api_router.go,web.go}`, `app/request/request.go`, `app/api/{api.go}`, `app/api/render/{render.go,render_error.go,sse.go}`, `app/api/usererror/usererror.go`, `app/api/middleware/{authn/authn.go,authz/authz.go,address/address.go,principal/principal.go,encode/encode.go}`, `app/api/handler/{space/events.go,gitspace/events.go,upload/download.go,system/health.go}`
 - 存储：`store/errors.go`, `store/database/{store.go,util.go,util_sqlite.go,dbtx/interface.go,dbtx/runner.go,dbtx/locker.go}`, `app/store/{database.go,cache.go}`, `app/store/cache/{wire.go,space_id.go,evictor.go}`, `app/store/logs.go`, `app/store/logs/db.go`, `app/store/database/{migrate/migrate.go,database.go,encode.go}`
 - 基础设施：`cache/{cache.go,lru_cache.go}`, `lock/*`（目录级）, `pubsub/pubsub.go`, `events/{events.go,reader.go,reporter.go,system.go,wire.go,options.go,error.go}`, `stream/{stream.go,options.go,memory_consumer.go}`, `job/{scheduler.go,types.go,definition.go,executor.go,job_overdue.go}`, `netpolicy/netpolicy.go`
@@ -1585,7 +1585,7 @@ harness 与 agentxx 处在两个坐标系里：一个把"多租户服务的长�
 2. **别名路径**：`space_path_is_primary` 用 `null.Bool` 而非 `bool`，注释解释得很直接：
    > "to allow DB enforcement of at most one primary path per repo/space we have a unique index on spaceID + IsPrimary and set IsPrimary to true for primary paths and to **nil** for non-primary paths."
    即：用唯一索引 `(space_id, is_primary)` 保证"最多一条主路径"，别名以 `NULL` 参与唯一索引（SQL 中 NULL 不冲突）——**用可空列把"至多一个真"塞进唯一索引**，是很实用的关系库技巧。
-3. **大小写策略由可注入变换函数决定**：`store.SpacePathTransformation` 在装配层给出（`app/store/wire.go` 给的是 `ToLowerSpacePathTransformation`），写入与查询两侧都过同一函数（`mapToInternalSpacePathSegment` 写 `IdentifierUnique = f(Identifier, isRoot)`），因此"是否大小写不敏感"是**配置而非硬编码**。
+3. **大小写策略由可注入变换函数决定**：`store.SpacePathTransformation` 在加载层给出（`app/store/wire.go` 给的是 `ToLowerSpacePathTransformation`），写入与查询两侧都过同一函数（`mapToInternalSpacePathSegment` 写 `IdentifierUnique = f(Identifier, isRoot)`），因此"是否大小写不敏感"是**配置而非硬编码**。
 
 ### 22.2 路径语义的边界条件（`app/paths/paths.go`）
 
@@ -1764,7 +1764,7 @@ agentxx 的对应物是"工具/子代理/命令的执行状态"，目前只有�
             })
     }
 
-三个值得记的细节：①**构造函数里就 Launch**（装配期决定生命周期）；②`Config.Prepare()` 里的**回填**（如 `HeaderIdentity` 缺省取 `UserAgentIdentity`）；③**策略写在调用点并给理由**——`trigger` 的 pullreq 读者显式 `WithMaxRetries(0)` 并注释"retries not needed for builds which failed to trigger"。
+三个值得记的细节：①**构造函数里就 Launch**（加载期决定生命周期）；②`Config.Prepare()` 里的**回填**（如 `HeaderIdentity` 缺省取 `UserAgentIdentity`）；③**策略写在调用点并给理由**——`trigger` 的 pullreq 读者显式 `WithMaxRetries(0)` 并注释"retries not needed for builds which failed to trigger"。
 
 ---
 
@@ -1776,7 +1776,7 @@ agentxx 的对应物是"工具/子代理/命令的执行状态"，目前只有�
 
 可提炼的实现模式（对 agentxx 的 `execute_command` / `git_worktree` 有直接参考）：
 
-- **内部 RPC 化**：`interface.go` 定义服务接口，`service.go`/`service_pack.go`/`wire.go` 负责装配；git 智能 HTTP 经 `app/router/git*.go` 转发，因此"git 操作"与"HTTP 服务"解耦。
+- **内部 RPC 化**：`interface.go` 定义服务接口，`service.go`/`service_pack.go`/`wire.go` 负责加载；git 智能 HTTP 经 `app/router/git*.go` 转发，因此"git 操作"与"HTTP 服务"解耦。
 - **推送前置处理器**（`pre_receive_pre_processor.go`）：把"推送前校验"做成流水线式预处理器，与 protection 规则引擎（§23.3 的 `PushVerifier`）联动。
 - **内容侧安全**（`scan_secrets.go`）：扫描推送内容里的密钥——与权限（能否操作）互补的另一类策略。
 - **维护作业化**（`optimize.go` / `repack.go` / `maintenance/`）：仓库优化也纳入后台作业体系。
@@ -2080,7 +2080,7 @@ UI 线程不能直接读会话状态：**UI 的取消/切模型等操作经 Wire
 
 | 接缝 | 做什么 | 深读要点 |
 |---|---|---|
-| `createInstance(name)` | 只设置 `self`/`manager` | 元信息/宿主控制块由内核骨架 `makeInstance` 统一装配，宿主不重复 |
+| `createInstance(name)` | 只设置 `self`/`manager` | 元信息/宿主控制块由内核骨架 `makeInstance` 统一加载，宿主不重复 |
 | `detachDomainRegistrations(inst)` | 注销工具 → **撤销工具权限声明** → `graphNodeType.slot->invalidate(inst)` → `restorePromptBackup` → `middleware->disabled = true` | "只摘除宿主侧生效的注册，保留实例内的注册记录"（启用时由 start 事务重新声明）；权限声明**随工具一起撤销** |
 | `detachDomainOwnedResources(inst)` | `eraseMiddleware` + `resourceApplier->setOwnerEnabled(inst->name, false)` | 中间件句柄与"资源启用标记"是实例专属资源 |
 | `clearDomainRegistrations(inst)` | stop 成功后清空工具/权限/hook/图记录 | "避免下次 start 在旧记录上重复累积" |
@@ -2301,7 +2301,7 @@ harness 里出现 "plugin" 的地方有**四种**，必须分开看：
 | A | **CI 步骤插件** | `types/plugin.go`、`app/store/database/plugin.go`、`app/pipeline/resolver/*` | 一份 **YAML 规格模板**（`spec`）+ 元数据（description/type/version/logo），供流水线 YAML 引用与 UI 表单生成；运行期由 drone runner 以**容器**执行 | 进程外：容器契约（镜像 + 输入 + 退出码） |
 | B | **模板（template）** | 同 resolver、`templateStore` | 与插件同一套解析机制，作用域是"某个 space 内" | 进程外：同样是 YAML 展开 |
 | C | **制品库包格式 handler** | `registry/app/factory/package.go`、`registry/app/pkg/{npm,maven,cargo,docker,...}` | 编译期注册表：每种包格式实现 `PackageHelper`，`Register/Get/IsValidPackageType` 按类型取用 | 编译期：Go 接口 + map 注册 |
-| D | **真正的通用扩展机制** | `cmd/gitness/wire.go` + 各包 `WireSet` | 编译期依赖注入（第一部分 §1/§2 已详述） | 编译期：新增 Go 包 + 装配一行 |
+| D | **真正的通用扩展机制** | `cmd/gitness/wire.go` + 各包 `WireSet` | 编译期依赖注入（第一部分 §1/§2 已详述） | 编译期：新增 Go 包 + 加载一行 |
 
 ### 34.1 A 的完整实现（harness 唯一的"插件框架"）
 
@@ -2514,7 +2514,7 @@ agentxx 的插件框架已拆为**独立工程 `cxx_pluginxx`（命名空间 `pl
 
 - 权限声明接口（`agentxx.agent.permission`）只有三个函数：`register_tool_permission` / `unregister_tool_permission` / `check_paths`；声明内容为 `{tool_name, scope(READ|WRITE), target_kind(NONE|PATH|TEXT), target_arg, category}`，`struct_size` 允许 0（"按当前布局解析"）——**向前兼容的读法**。
 - `check_paths` 的三态（`DENY/ALLOW/ASK`）与工具调用判定**同一口径**，唯一区别是"应询问时返回 ASK 而不询问"；调用建议写明："DENY 丢弃；**ASK 表示'未获批准'同样不应访问**"；失败时"调用方应跳过过滤，按原行为处理"（明确的失败姿态）。
-- 权限声明是**附加能力**："宿主未装配权限中间件时返回非 0，插件可忽略"——因此插件在精简宿主上仍可用（只是少了闸门）。
+- 权限声明是**附加能力**："宿主未加载权限中间件时返回非 0，插件可忽略"——因此插件在精简宿主上仍可用（只是少了闸门）。
 
 ### 41.3 边界纪律
 

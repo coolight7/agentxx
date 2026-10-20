@@ -286,7 +286,7 @@ public:
         return rootDir_;
     }
 
-    /// 是否对写连接启用跨进程写租约 (诊断/装配快照展示用)
+    /// 是否对写连接启用跨进程写租约 (诊断/加载快照展示用)
     bool writerLeaseEnabled() const noexcept {
         return enableWriterLease_;
     }

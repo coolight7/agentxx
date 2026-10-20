@@ -104,7 +104,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
     ctx->bus = std::make_shared<agentxx::events::EventBus>(co_await asio::this_coro::executor);
     ctx->toolRegistry  = std::make_shared<agentxx::plugin::ToolRegistry>();
     ctx->pluginManager = std::make_shared<agentxx::plugin::PluginManager>(ctx);
-    // 装配 io executor (与 BaseAgent::init 一致): 跨线程 (JS 线程/线程池) 的
+    // 加载 io executor (与 BaseAgent::init 一致): 跨线程 (JS 线程/线程池) 的
     // vtable 调用经真实 post 到 io 线程执行, 而非测试默认的"伪 io 线程"直连
     ctx->pluginManager->setIoExecutor(co_await asio::this_coro::executor);
 
@@ -1287,7 +1287,7 @@ throw new Error("top-level rollback probe");
                 agentxx::plugin::PluginString::free(inst31->hostView(), &e);
             }
 
-            // 不存在的工具: 装配失败返回 NULL 并带错误
+            // 不存在的工具: 加载失败返回 NULL 并带错误
             PluginxxString e2  = {nullptr, 0};
             auto*          op2 = ctx->pluginManager->callToolAsync(
                 inst31.get(),
@@ -1371,7 +1371,7 @@ throw new Error("top-level rollback probe");
             };
             XX_TEST_EXPECT_EQ(ctx->pluginManager->registerTool(inst31.get(), &cSpec), 0);
 
-            // 会话装配取消令牌 (与 ToolCallNode 注入路径一致)
+            // 会话加载取消令牌 (与 ToolCallNode 注入路径一致)
             auto sess = ctx->sessions->getOrCreate("t_plugin_cancel");
             XX_TEST_EXPECT_TRUE(sess != nullptr);
             sess->setCancelToken(std::make_shared<neograph::graph::CancelToken>());
@@ -2597,7 +2597,7 @@ throw new Error("top-level rollback probe");
     //             (agentxx.agent.permission 接口表), 声明交给权限中间件并由
     //             主程序统一判定; 插件禁用/卸载时声明随工具一并撤销 ----
     {
-        // 装配权限中间件 (真实运行中由 BaseAgent::initMiddleware 装配)
+        // 加载权限中间件 (真实运行中由 BaseAgent::initMiddleware 加载)
         auto permission = std::make_shared<agentxx::middleware::PermissionMiddlewareHandle>(ctx);
         ctx->middlewareHandleContext->handles.push_back(permission);
         using Mw = agentxx::middleware::PermissionMiddlewareHandle;
@@ -2755,7 +2755,7 @@ throw new Error("top-level rollback probe");
             XX_TEST_EXPECT_TRUE(permission->toolPermission("agentxx_filesystem_write") == nullptr);
             XX_TEST_EXPECT_TRUE(permission->toolPermission("agentxx_filesystem_read") == nullptr);
         }
-        // 摘除本用例装配的权限中间件 (避免影响后续用例)
+        // 摘除本用例加载的权限中间件 (避免影响后续用例)
         ctx->middlewareHandleContext->handles.pop_back();
     }
 
@@ -2928,7 +2928,7 @@ throw new Error("top-level rollback probe");
                 }
             }
 
-            // (6) 主程序未装配权限中间件: 查询返回失败 → 工具跳过过滤 (保持原行为)
+            // (6) 主程序未加载权限中间件: 查询返回失败 → 工具跳过过滤 (保持原行为)
             ctx->middlewareHandleContext->handles.pop_back();
             if (globTool) {
                 auto globOut = co_await globTool->execute_async(utilxx_base::Json{

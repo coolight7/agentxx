@@ -7,7 +7,7 @@
 ///   - 原版 asio 协程接口改为同步实现 (插件 execute 回调已运行在主程序线程池,
 ///     阻塞安全); embedding 网络调用经局部 io_context 驱动至完成 (与
 ///     agentxx_websearch 的 runSync 同模式)
-///   - embedding 客户端经 EmbedFn 函数对象注入: 插件入口装配真实 HTTP 版本,
+///   - embedding 客户端经 EmbedFn 函数对象注入: 插件入口加载真实 HTTP 版本,
 ///     测试可注入假实现 (不依赖网络), 与 filesystem_impl.h 的 IsCancelledFn
 ///     注入同思路; 分块/相似度/检索逻辑为纯函数, 行为与原版一致
 #pragma once
@@ -83,7 +83,7 @@ struct Document {
 };
 
 /// 批量 embedding 回调: 输入文本块列表, 输出等长向量列表或错误信息
-/// (插件入口装配 HttpClient 实现; 测试注入假实现)
+/// (插件入口加载 HttpClient 实现; 测试注入假实现)
 using EmbedFn = std::function<
     std::expected<std::vector<std::vector<double>>, std::string>(const std::vector<std::string>&)>;
 

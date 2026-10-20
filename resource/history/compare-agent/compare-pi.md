@@ -48,7 +48,7 @@
 | [13](#13-远程协议sdk-与外部集成) | 远程协议、SDK 与外部集成 | pi 有两条远程面（CBOR RPC 服务 + JSONL RPC 模式）与 TS SDK；agentxx 有 WS wire + MCP/ACP/A2A，但无独立 SDK 与请求级取消协议 |
 | [14](#14-扩展机制对比) | 扩展机制（TS extensions / chord vs C ABI 插件） | 两者都做「进程内可执行扩展」，agentxx 的 C ABI 在跨语言/版本隔离上更强，pi 的 API 形状在**声明式挂载点与资源生命周期**上更细 |
 | [15](#15-测试与质量门禁) | 测试与质量门禁 | pi 有一致性测试框架（同一语义多后端跑同一套断言）+ 假 provider；agentxx 有自研多模块测试 + 资源基准 |
-| [16](#16-配置设置与装配) | 配置、设置与装配 | pi 是「分层设置 + 项目信任 + 迁移脚本 + 包管理器」；agentxx 是「base/overlay 两段 yaml + 设置 KV」 |
+| [16](#16-配置设置与加载) | 配置、设置与加载 | pi 是「分层设置 + 项目信任 + 迁移脚本 + 包管理器」；agentxx 是「base/overlay 两段 yaml + 设置 KV」 |
 | [17](#17-迁移建议汇总) | 迁移建议汇总 | P0/P1/P2 三级清单 |
 | [18](#18-反向清单agentxx-不必照搬的设计) | 反向清单 | 明确哪些差异是正当取舍 |
 | [19](#19-结语) | 结语 | 三条原则 |
@@ -1038,7 +1038,7 @@ createToolResultMessage 生成规范的 ToolResultMessage
 
 ### 12.2 agentxx：FTXUI + 声明式 UI 描述 + 客户端唯一渲染实现
 
-- **渲染底座**：FTXUI（第三方库）。`TUIClientAgentIO`（`agent_tui.cpp` 2804 行）负责线程（UI 线程 + client 线程，`TUISharedState::mutate()` 后每帧 `readSnapshot()` 无锁渲染）、协议处理（`onDelta/onSync/onPeerMessage`）与组件树装配。
+- **渲染底座**：FTXUI（第三方库）。`TUIClientAgentIO`（`agent_tui.cpp` 2804 行）负责线程（UI 线程 + client 线程，`TUISharedState::mutate()` 后每帧 `readSnapshot()` 无锁渲染）、协议处理（`onDelta/onSync/onPeerMessage`）与组件树加载。
 - **组件拆分**：`MessageListComponent`（消息列表 + 折叠交互 + 懒加载滚动 `lazy_scrollable.cpp` 650 行）、`InputComponent`（输入栏 + 发送）、`StatusBarComponent`、`SidebarComponent`（侧边栏 tab + 拖拽 + 区域可见性上报）、Overlay 组件集（`overlays.cpp` 2178 行：模型选择、设置、会话选择、文件选择（含远程"本地/服务端"标签页）、待发送队列、上下文查看、快捷键列表、更新提示等）、`interrupt_view.cpp`（中断表单渲染）。
 - **声明式 UI 描述层**：`cxx_pluginxx_ui` 库（`pluginxx::ui::Item`/`parse`/`adapt`/`plainText`，自带测试工程）定义与宿主无关的组件描述；`ui_components.cpp`（2210 行）是**唯一渲染实现**，把描述渲染成"行模型"（元素 + 行数 + 元素内可命中区域），并保证"高度估算走同一条渲染路径"（`measureItem`）。终端列宽与 GUI 逻辑像素的换算只在渲染时发生（描述里长度是 u，能力段声明 `cell`）。
 - **命中与表单**：`ui_hit.h`（`UiHitRegion` 局部坐标）+ 滚动容器 `Scrollable::hitTestItem`（避免视口外子项的反射框残留）；表单状态由宿主维护（`UiFormState`），提交经动作通道回传 `__submit` + `{"values":{...}}`；中断表单与插件表单共用同一套渲染与交互。
@@ -1212,7 +1212,7 @@ createToolResultMessage 生成规范的 ToolResultMessage
 | 扩展载体 | C ABI 动态库（C/C++/Rust/… 皆可，只要导出 C 符号） | 进程内 TypeScript（jiti 运行时加载）+ chord facet（esbuild 打包） |
 | 能力面 | 29 张表（19 领域 + 10 通用）agent 侧 + 9 张 client 侧，覆盖工具/权限/钩子/事件/能力/调度/协程/会话/上下文/图/任务/UI/定时器/快捷键 | 单个 `ExtensionAPI` 对象（事件/工具/命令/快捷键/消息/持久化/会话控制/provider/UI/扩展间通信） |
 | 生命周期 | `create`（只构造）→ `start`（注册事务）→ `stop`（撤资源）→ `destroy`；宿主可禁用/启用/卸载并级联处理依赖 | 工厂函数（同步注册）→ `session_start`（起长资源）→ `session_shutdown`（幂等关；重载替换整个运行时） |
-| 依赖装配 | 插件自行经能力表查询；无依赖声明 | chord：插件声明 provides/requires，宿主校验依赖图、按 provider→consumer 顺序激活、逆序释放 |
+| 依赖加载 | 插件自行经能力表查询；无依赖声明 | chord：插件声明 provides/requires，宿主校验依赖图、按 provider→consumer 顺序激活、逆序释放 |
 | 状态共享 | 能力调用（`invoke_capability_async`）+ 事件总线 + share store | chord：类型化 service（单例/keyed、本地/远程）+ 复制状态（原子 overlay + 增量 delta） |
 | 跨进程扩展 | 天然支持（插件在宿主进程内，但 ABI 约束使其可移到独立进程；client 插件本身在客户端进程） | facet 按环境分别打包与加载（进程/浏览器/TUI 各自一份），但都是 JS |
 | 版本协商 | 每张表独立版本号 + 函数指针可空 + 插件声明支持表 | 无版本协商（内部 monorepo 版本一致；第三方扩展随包发布） |
@@ -1230,12 +1230,12 @@ createToolResultMessage 生成规范的 ToolResultMessage
 
 ### 14.4 可迁移到 agentxx 的设计
 
-1. **依赖声明（provides/requires）**（P1）：借鉴 chord 的装配模型：插件可在 manifest 里声明"我提供什么能力/我依赖什么能力"，宿主在加载阶段校验依赖图、按 provider→consumer 顺序启动、卸载时逆序停止并**保留 consumer 的 facade**（provider 短暂不可用时 consumer 不必感知）。落地位置：`plugin_manager_lifecycle.cpp`（拓扑排序）+ manifest 扩展字段 + `capabilities` 表增加"依赖查询"。
+1. **依赖声明（provides/requires）**（P1）：借鉴 chord 的加载模型：插件可在 manifest 里声明"我提供什么能力/我依赖什么能力"，宿主在加载阶段校验依赖图、按 provider→consumer 顺序启动、卸载时逆序停止并**保留 consumer 的 facade**（provider 短暂不可用时 consumer 不必感知）。落地位置：`plugin_manager_lifecycle.cpp`（拓扑排序）+ manifest 扩展字段 + `capabilities` 表增加"依赖查询"。
 2. **扩展生命周期事件补齐**（P1）：pi 的 `session_start`/`session_shutdown`/`agent_settled` 等事件让扩展有明确的"起/停/已稳定"时间点。agentxx 已有 start/stop 与 `onTurnBegin/onTurnEnd`，建议补"会话开始/结束"与"agent 稳定（本轮所有异步工作结束）"两类事件，便于插件管理会话级资源。落地位置：`events` 表新增 topic + `BaseAgent` 在会话创建/销毁与轮末稳定点发布。
 3. **插件参数与配置路径的规范化**（P2）：pi 用 `settings.json` + 项目信任控制配置来源；agentxx 已有 `get_plugin_args`/`get_plugin_config_path`，建议补"插件级设置项"的读写接口（插件可在设置弹窗中声明自己的设置项），与现有设置 KV 打通。落地位置：`client` 设置弹窗 + `config` 表扩展。
 4. **UI 组件能力协商已有，建议补"终端能力段"**（P2，与 §12.4-4 合并）：插件目前按"客户端组件能力"降级；再补"终端能力"（颜色/图形/同步输出）后，插件可对"终端是否支持图片/超链接"做决策。
 5. **扩展的"可观测自述"**（P2）：pi 的扩展有明确的注册登记（工具/命令/快捷键可在 UI 里列出并显示归属）；agentxx 的快捷键列表已有归属显示，建议把"插件注册的工具/命令/面板/定时器"也纳入统一的"插件贡献清单"（`list_plugins` 扩展字段），便于用户审计。
-6. **服务替换与复制状态（长期）**（P2）：若将来要做"多客户端协同"（同一会话在 TUI 与 Web 同时查看），chord 的 replicated state + 类型化 service + 依赖装配是一套现成参考模型；短期不建议引入，但值得在设计文档里留出"会话状态可复制"的方向（当前 `Sync`/`Delta` 已具备最小复制语义）。
+6. **服务替换与复制状态（长期）**（P2）：若将来要做"多客户端协同"（同一会话在 TUI 与 Web 同时查看），chord 的 replicated state + 类型化 service + 依赖加载是一套现成参考模型；短期不建议引入，但值得在设计文档里留出"会话状态可复制"的方向（当前 `Sync`/`Delta` 已具备最小复制语义）。
 
 ---
 
@@ -1265,7 +1265,7 @@ createToolResultMessage 生成规范的 ToolResultMessage
 - **Debug 插桩**：`AGENTXX_ENABLE_SANITIZER`（默认 ON）同时启用 ASan + UBSan，并为插件框架开定向探针（仅非 Release 生效，因为探针需要 UBSan 运行库符号）。
 - **`agentxx_benchmark`**（一般仅 Release 编译）：资源基准模块（同进程 CLI/TUI、真实两进程、真实 TUI 界面线程、真实 server 单独运行、PTY 驱动的 TUI 子进程、插件逐项边际内存），指标覆盖 RSS/PSS/私有脏页/匿名/峰值/线程/fd + glibc 堆在用与碎片 + `malloc_trim` 可回收 + smaps 模块级分解 + 逻辑内存 + 分阶段增量 + CPU 时间，输出 JSON（机器对比）与 Markdown（人工阅读），支持 `--baseline` 对比上次。
 - **构建/发布**：脚本化（linux/windows/macos/android），Release 默认 LTO + ICF，strip 由发布脚本负责。
-- **缺口**：没有"跨后端/跨装配一致性"的测试框架（只有一个 SQLite 后端）；没有假 provider（会话级测试大多要连真实 API 或用桩）；没有对"写顺序/竞态两个顺序"的系统化测试；文档与实现的一致性靠人工。
+- **缺口**：没有"跨后端/跨加载一致性"的测试框架（只有一个 SQLite 后端）；没有假 provider（会话级测试大多要连真实 API 或用桩）；没有对"写顺序/竞态两个顺序"的系统化测试；文档与实现的一致性靠人工。
 
 ### 15.3 对比
 
@@ -1285,7 +1285,7 @@ createToolResultMessage 生成规范的 ToolResultMessage
 
 **优点/缺点**
 
-- pi 的测试体系有两个 agentxx 目前缺的关键能力：① **一致性框架**（同一语义对多后端/多装配跑同一套断言，换实现即回归）；② **可控竞态与写顺序断言**（用装饰器/闸门强制交错，而不是"碰运气跑到"）。这两者对"并发 + 持久化"类代码的价值极高。
+- pi 的测试体系有两个 agentxx 目前缺的关键能力：① **一致性框架**（同一语义对多后端/多加载跑同一套断言，换实现即回归）；② **可控竞态与写顺序断言**（用装饰器/闸门强制交错，而不是"碰运气跑到"）。这两者对"并发 + 持久化"类代码的价值极高。
 - agentxx 的**资源基准**明显强于 pi：模块级内存分解（smaps）、glibc 堆碎片、基线对比、真实 TUI/真实两进程/PTY 场景——pi 的基准集中在会话存储与加载占用，没有 agentxx 这种"整机资源画像"。这是 agentxx 应保留并继续投入的差异化能力。
 - pi 的质量门禁是"自动化 + 可执行"的（依赖版本、导入形式、入口图、打包锁定文件全部脚本校验），适合 11 包的仓库规模；agentxx 靠编译器警告与人工评审，适合单仓小团队，但缺"依赖/配置漂移"的自动拦截。
 - 两边对"测试不得依赖真实付费服务"的取向一致（pi 明确禁止，agentxx 通过桩），但 pi 的假 provider 让"会话级端到端"能在 CI 里稳定跑，agentxx 目前这类测试较少。
@@ -1301,7 +1301,7 @@ createToolResultMessage 生成规范的 ToolResultMessage
 
 ---
 
-## 16. 配置、设置与装配
+## 16. 配置、设置与加载
 
 ### 16.1 pi：分层设置 + 项目信任 + 迁移脚本 + 包管理器
 
@@ -1323,7 +1323,7 @@ createToolResultMessage 生成规范的 ToolResultMessage
   - **overlay**：`--config` 指定（默认 `工作目录/agentxx-config.yaml`）及其同目录 `.env`；
   - **base**：overlay 里 `data_dir` 指向目录下的 `agentxx-config.yaml` / `.env`（未配 `data_dir` 时取系统数据目录 `~/.agentxx/`）；
   - 合并：标量/映射逐键覆盖；列表段 `{overwrite:{mode:merge|replace, remove:[...]}, list:[...]}` 支持按键归并与剔除（模型按 name、插件按 path/name、MCP 按 namespace、路径列表按字符串）；`.env` 同名变量取 overlay 值；旧键/旧写法告警并忽略。
-- **`AgentConfig`**（`lib/include/agentxx/agent/config.h`）是装配清单：模型（`model`/`availableModels`/`currentModelName`/`subagentModel`/`websearchModel`，每个 `ModelConfig` 含 baseUrl/apiKey/timeout/上下文上限/连接池/扩展请求参数）、权限（`permissionMode`/白名单/黑名单）、压缩（`enableSummarization`、输出长度阈值、阈值比例）、子代理（`enableSubagent`、`maxDepth`、`maxConcurrentSubagents`）、工具（`enableToolFiltering`/`toolWhitelist`、`toolTimeout`、`toolcallRepeatCheckThreshold`）、重试（`llmMaxRetry`）、存储（`enableSessionStore`/`dataDir`/`sessionStoreDirectory`）、工作目录（`workDir` + `resolvedWorkDir()`）、插件列表、资源（skill 目录/memory 文件/MCP）、提示词（`AgentPrompt`：systemPrompt + appendSystemPrompts + toolPrompt）、语言、日志与调试开关。
+- **`AgentConfig`**（`lib/include/agentxx/agent/config.h`）是加载清单：模型（`model`/`availableModels`/`currentModelName`/`subagentModel`/`websearchModel`，每个 `ModelConfig` 含 baseUrl/apiKey/timeout/上下文上限/连接池/扩展请求参数）、权限（`permissionMode`/白名单/黑名单）、压缩（`enableSummarization`、输出长度阈值、阈值比例）、子代理（`enableSubagent`、`maxDepth`、`maxConcurrentSubagents`）、工具（`enableToolFiltering`/`toolWhitelist`、`toolTimeout`、`toolcallRepeatCheckThreshold`）、重试（`llmMaxRetry`）、存储（`enableSessionStore`/`dataDir`/`sessionStoreDirectory`）、工作目录（`workDir` + `resolvedWorkDir()`）、插件列表、资源（skill 目录/memory 文件/MCP）、提示词（`AgentPrompt`：systemPrompt + appendSystemPrompts + toolPrompt）、语言、日志与调试开关。
 - **运行时设置（KV）**：客户端设置弹窗项落 SQLite（`settings_db`，如 `tui.lang`、`tui.checkUpdateOnStartup`、动画等级、思考展示模式等），分组为 界面/显示/更新/其他；设置项支持即时生效（主题、语言、动画等级）。
 - **插件配置**：插件经 `get_plugin_args`/`get_plugin_config_path` 读取 yaml 中 `plugins[].config`（可指向文件或目录）；插件可自行解析（如 JSON/YAML）。
 - **资源定位**：`dataDir` 派生出 `{dataDir}/sqlite/sessions/`（会话库）、codegraph 索引、设置库等；未配置 `dataDir` 时全部退化为内存并给出警告（`init()` 里输出，避免构造函数早于日志 sink 导致警告丢失——这个细节与 pi 的 `config.ts` 单一入口是同类问题的不同解法）。
@@ -1507,7 +1507,7 @@ createToolResultMessage 生成规范的 ToolResultMessage
 | Intent / settlement | （无显式对应） | 副作用的两段提交 |
 | Tool checkpoint | （无） | 工具持久进度快照 |
 | Hook（`before_run` 等 11 个） | 中间件（`onModelcallRunFunc`/总线服务） | 拦截点形态不同 |
-| Facet / service / replicated state（chord） | 插件 + 接口表 + 事件总线 | 组合与依赖装配 |
+| Facet / service / replicated state（chord） | 插件 + 接口表 + 事件总线 | 组合与依赖加载 |
 | Extension（进程内 TS） | 插件（C ABI 动态库） | 扩展载体 |
 | Skills / prompt templates / themes | Skill 中间件 / memory 文件 / 主题 | 声明式资源 |
 | RPC mode / SDK | wire 协议 + FFI / MCP / ACP / A2A | 对外集成 |

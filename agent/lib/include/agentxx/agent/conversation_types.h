@@ -533,7 +533,7 @@ inline size_t estimateWireDeltaBytes(const WireDelta& delta) {
 /// - `next-step`: 在当前轮次的下一个 modelcall 安全边界注入 (写入会话权威上下文),
 ///   不打断正在进行的 provider 流; 空闲时等同 `next-turn`
 /// - `inject`: 只进入下一次请求的动态注入队列 (请求级可见, 不改写权威上下文,
-///   也不唤醒会话); 空闲时保持待注入, 直到下一次请求装配时被取走
+///   也不唤醒会话); 空闲时保持待注入, 直到下一次请求加载时被取走
 /// - `collect`: 在短暂静默窗口内合并同一客户端的连续输入,
 ///   窗口结束后按 `next-turn` 语义提交为一条
 ///

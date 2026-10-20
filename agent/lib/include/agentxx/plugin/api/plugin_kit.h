@@ -10,7 +10,7 @@
 ///   工具模式构建 (ToolSchemaBuilder)、工具注册 (tool / fast_tool / blocking_tool /
 ///   polled_tool)、钩子 (hook)、图节点 (graph node)、工具权限声明、阻塞便捷调用
 ///   (call_tool_blocking)、client 侧特化渲染与实例上下文 (ClientPluginBase)、
-///   界面组件装配 (描述层 `pluginxx::ui` 与扩展 kit `agentxx::ui::kit`)。
+///   界面组件加载 (描述层 `pluginxx::ui` 与扩展 kit `agentxx::ui::kit`)。
 #pragma once
 #include "agentxx/plugin/api/agentxx_ui_kit.g.h"
 #include "agentxx/plugin/api/client_plugin_api.h"
@@ -2063,7 +2063,7 @@ inline int32_t unhookEx(Ctx& ctx, int64_t handle) {
 /// 处理器清单 JSON (主程序侧 `agentxx.agent.hooks` 的 `list_hooks`)
 ///
 /// 用于回答"这个点上有哪些处理器、谁的、什么顺序": 派发记录 (`stat` 段) 只在
-/// 主程序开发者模式下出现。主程序不支持 / 未装配时返回 `{}`。
+/// 主程序开发者模式下出现。主程序不支持 / 未加载时返回 `{}`。
 template<typename Ctx>
 inline std::string listHooks(const Ctx& ctx) {
     if (!ctx.iface.hooks || !ctx.iface.hooks->list_hooks) {
@@ -2237,7 +2237,7 @@ inline int32_t
  *     blocking_tool(ctx, "my_read", depict, schema, fn);
  *     registerReadPathPermission(ctx, "my_read", "path");
  *
- * 权限声明属于附加能力: 主程序未装配权限中间件时返回非 0, 插件可忽略 (工具
+ * 权限声明属于附加能力: 主程序未加载权限中间件时返回非 0, 插件可忽略 (工具
  * 照常可用, 只是不参与权限判定)。
  */
 
@@ -2704,7 +2704,7 @@ inline int32_t registerToolTemplate(
 ///
 /// 按钮是**界面描述层**的组件项 (`pluginxx::ui::Item`, 见 [makeButton]): 动作以
 /// dispatch 形式写进 `item.action`, 客户端按动作通道派发回本控制器的 handler。
-/// 组件装配走 kit: 基础 kit 在 `pluginxx::ui::kit`, 本客户端的常用组合在
+/// 组件加载走 kit: 基础 kit 在 `pluginxx::ui::kit`, 本客户端的常用组合在
 /// `agentxx::ui::kit`(生成的 `agentxx/plugin/api/agentxx_ui_kit.g.h`, 自包含)。
  */
 
@@ -2748,7 +2748,7 @@ public:
         if (args.is_object() && !args.empty()) {
             action.argsJson = args.dump();
         }
-        // 经 agentxx 扩展 kit 组装 (kit 只装配, 语义与手写一致; 生成物见
+        // 经 agentxx 扩展 kit 组装 (kit 只加载, 语义与手写一致; 生成物见
         // agentxx/plugin/api/agentxx_ui_kit.g.h)
         pluginxx::ui::Json params;
         params["label"]        = std::move(label);

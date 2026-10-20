@@ -316,7 +316,7 @@ std::string buildDiagnosticsText(
         lines.push_back(fmt::format("- json: {}", ctx.metrics->toJson().dump()));
     }
 
-    // ---- 装配 (配置 + 运行侧: 已脱敏快照, 与 --dump-config 同源) ----
+    // ---- 加载 (配置 + 运行侧: 已脱敏快照, 与 --dump-config 同源) ----
     if (ctx.agentConfig) {
         lines.push_back("");
         lines.push_back("## assembly");

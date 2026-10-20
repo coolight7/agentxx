@@ -56,7 +56,7 @@
 | test 模块化 | `test.cpp`: `selectedModules + shouldRun + runSync/run/runCtx` 三 helper, `--fail-fast/-f`, `AGENTXX_BUILD_CLIENT` 条件注册 | 直接照抄该三段式; bench 为同步 + 协程混合, 需 `runBenchSync/runBenchAsync` 两个 helper |
 | 5 插件形态 | 当前 `builtin` 清单为空 (release/debug 构建产物 `builtin_plugins.cpp` 均为 `#if 0`), 插件以 `exec/plugins/<name>/lib<name>.so + plugin.yaml` 目录形态分发 | bench 经**目录路径**加载 (与 `agentxx-config.yaml` 线上形态一致), 不用 `builtin://`; 目录缺失时回退 `builtin://<name>` 再失败才报错 |
 | 插件 sides | `filesystem/execute_command/websearch/planning` 有 `agentxx_plugin_client_create` (双端); `system` 无 client 入口 (纯 agent) | agent 侧 5 个全加载; client 侧期望加载 4 个, `system` 跳过属正常, 计数需分 `agentLoaded/clientLoaded` 两列, 不得混为一谈 |
-| 同进程链路 | `setupLocalUnifiedDirect`: Channel 对 + `SessionServerAgentIO::Config{initialSyncTailCount: TUI=100/CLI=0}` + 先起 transport 循环再 `init→host→onServerReady→run` | bench 复用**同一装配函数语义** (建议将 `mode_runners.cpp` 的 local 装配抽为 bench 可复用的小头, 或在 bench 内镜像实现并注释引用出处), 否则"测的不是线上链路" |
+| 同进程链路 | `setupLocalUnifiedDirect`: Channel 对 + `SessionServerAgentIO::Config{initialSyncTailCount: TUI=100/CLI=0}` + 先起 transport 循环再 `init→host→onServerReady→run` | bench 复用**同一加载函数语义** (建议将 `mode_runners.cpp` 的 local 加载抽为 bench 可复用的小头, 或在 bench 内镜像实现并注释引用出处), 否则"测的不是线上链路" |
 | 拆分链路 | `AgentServer::serveTransport` + `WsAgentIOTransport` (client 模式自带重连/心跳/握手) | bench 拆分模式**必须真起两个进程** ( fork/exec `agentxx_cli server` + `cli/tui --agent`), 在父进程按 PID 采样, 否则 WS 序列化/双堆开销量不到 |
 | TUI 线程模型 | `TUIClientAgentIO::start()` 起 `Fullscreen + Loop` UI 线程; `onDelta/onSync` 在 client 线程 `mutate()` 写 `TUISharedState`, UI 线程 `readSnapshot()` 读 | bench **不得调 `start()`** (无终端/会抢屏); 只构造端点 + `runTransportLoop`, 用 `sharedState().readSnapshot()` 量 client 堆, 这是 TUI 内存的主体; 需在文档明确"不含 FTXUI 帧缓存/字形缓存", 属可接受低估并在报告注明 |
 | CLI 输入 | `StdIOClientAgentIO::getInput()` 经 `StdinReader` 单例阻塞读 stdin | bench 不进输入循环; 只起 transport 循环; `sendPluginUserInput/sendToPeer` 由 bench 驱动 |
@@ -69,7 +69,7 @@
 
 ## 3. 总体方案 (一句话)
 
-> **benchmark 内新增 `bench_resource` 模块: 以"与线上同装配"的 in-process 等价链路测 M1/M2, 以"真双进程 `agentxx_cli server + client`"测 M3/M4 (按 PID 分侧采样), 以 `dlopen(libagentxx.so)` + 同模板 mock LLM 测 FFI 对照; 上下文不用真实 LLM, 而用"固定 user/assist/tool 交替模板"经真实 `Session` 写入路径 (view + llm 双集) 构造到 token 校准点, 在 P0/P1/P2 采瞬时 RSS + 进程 CPU% + 容器拆解; 主函数仿 test 做模块过滤。**
+> **benchmark 内新增 `bench_resource` 模块: 以"与线上同加载"的 in-process 等价链路测 M1/M2, 以"真双进程 `agentxx_cli server + client`"测 M3/M4 (按 PID 分侧采样), 以 `dlopen(libagentxx.so)` + 同模板 mock LLM 测 FFI 对照; 上下文不用真实 LLM, 而用"固定 user/assist/tool 交替模板"经真实 `Session` 写入路径 (view + llm 双集) 构造到 token 校准点, 在 P0/P1/P2 采瞬时 RSS + 进程 CPU% + 容器拆解; 主函数仿 test 做模块过滤。**
 
 ### 3.1 为什么不用"真跑多轮 runTurnAsync + mock LLM"来涨上下文
 
@@ -194,7 +194,7 @@ CpuWindow cpuBegin(pid); double cpuEnd(window, wallSec); // 进程时间差/墙�
 - 容器拆解 (归因列, 与 `memgrowth` 同法):
   - `viewBytes = Σ viewMessage.toJson().dump().size()`, `llmBytes = llmMessages.dump().size()`, `viewCount/llmCount`, `deltaBuffer`, `shareStoreItems`, TUI 侧 `sharedState messages/currentToken/pluginRegistry size` (快照拷贝计数, 不 dump 全量以免 bench 自身放大内存)。
 
-### 5.5 插件装配 (5 插件, 与线上同形)
+### 5.5 插件加载 (5 插件, 与线上同形)
 
 ```cpp
 std::vector<agent::PluginConfig> kBenchPlugins5(); // filesystem, execute_command, system, websearch, planning

@@ -167,7 +167,7 @@ public:
     /// - 等价于 `create(Config{.ioCtx = rootAgent->ioCtx})` + `attachRoot(rootAgent)`
     /// - **与 `AgentConfig::enableSubagent` 无关**: 该开关只决定是否把
     ///   `agentxx_subagent` 工具注入给模型; 程序内部路径 (上下文压缩委派) 与
-    ///   subagent 工具都依赖 `service.subagent` 服务, 服务始终装配
+    ///   subagent 工具都依赖 `service.subagent` 服务, 服务始终加载
     ///
     /// - `args`:
     ///     - [rootAgent] 已 init 的根 agent (须非空)

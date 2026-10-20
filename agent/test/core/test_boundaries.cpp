@@ -528,7 +528,7 @@ void checkInterfaceTableNames(const fs::path& root, Violations& v) {
 ///
 /// 每张接口表必须同时具备四项, 缺一不可 (新增表同样):
 /// - **IID** (`X_IFACE_<名>` 字符串常量): `query_interface` 的键;
-/// - **`struct_size`** 字段: 主程序装配时填 `sizeof(表)`;
+/// - **`struct_size`** 字段: 主程序加载时填 `sizeof(表)`;
 /// - **`version`** 字段 + `X_VERSION`: 语义档位;
 /// - **`X_MIN_VERSION`**: 本头能协同工作的最低表版本;
 /// - **`X_BASELINE_SIZE`**: 所有提供本表的主程序都应具备的字节数。

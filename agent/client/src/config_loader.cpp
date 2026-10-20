@@ -814,7 +814,7 @@ static YamlAppConfig parseYamlConfigNode(
     // - enabled: 默认 true; sides: 运行侧 (auto/agent/client, 默认 auto)
     // - args: 插件参数 (整体传递给插件, 主程序不解析)
     // - config: 插件配置文件所在目录或文件路径 (可指向文件/目录;
-    //   支持 `~`/`${VAR}`/相对路径, 由装配侧解析为绝对路径后透传给插件)
+    //   支持 `~`/`${VAR}`/相对路径, 由加载侧解析为绝对路径后透传给插件)
     // 插件列表 (归一化形状: `plugin.list`)
     const auto pluginItems = mapChild(mapChild(root, "plugin"), kSectionItemsKey);
     if (pluginItems.IsSequence()) {
@@ -860,8 +860,7 @@ static YamlAppConfig parseYamlConfigNode(
                     pc.sides = agent::PluginSide::Agent;
                 } else if (utilxx_base::isIgnoreCaseEqual(val, "client")) {
                     pc.sides = agent::PluginSide::Client;
-                } else if (!utilxx_base::isIgnoreCaseEqual(val, "auto")
-                           && !utilxx_base::isIgnoreCaseEqual(val, "both")) {
+                } else if (!utilxx_base::isIgnoreCaseEqual(val, "auto") && !utilxx_base::isIgnoreCaseEqual(val, "both")) {
                     XX_LOGW(
                         R"([Config] Warning: plugin `{}` invalid sides `{}`, fallback to auto)",
                         pc.path,
@@ -875,7 +874,7 @@ static YamlAppConfig parseYamlConfigNode(
             }
             if (node["config"]) {
                 // 插件配置文件所在目录或文件路径 (可指向文件/目录);
-                // 支持 ${VAR} 展开 (路径归一化与绝对化由装配侧完成)
+                // 支持 ${VAR} 展开 (路径归一化与绝对化由加载侧完成)
                 auto c = resolveEnvVars(
                     node["config"].as<std::string>(""),
                     dotEnvVars,

@@ -49,7 +49,7 @@
 | [12](#12-客户端-ui-与服务端渲染分层) | 客户端 UI 与服务端渲染分层 | codex 的“TUI 是 app-server 的客户端”值得借鉴：客户端只做投影与渲染 |
 | [13](#13-远程协议sdk-与外部集成) | 远程协议、SDK 与外部集成 | 协议生成化 + 能力位 + 无界面执行入口（exec/exec-server）是明显缺口 |
 | [14](#14-测试与质量门禁) | 测试与质量门禁 | 录制式模型模拟 + 快照 UI 测试 + 断言/风格门禁显著降低回归成本 |
-| [15](#15-配置特性开关与装配体系) | 配置、特性开关与装配体系 | 配置分层栈 + 生成式 schema + 特性阶段标记，比“读一个 yaml”更抗腐化 |
+| [15](#15-配置特性开关与加载体系) | 配置、特性开关与加载体系 | 配置分层栈 + 生成式 schema + 特性阶段标记，比“读一个 yaml”更抗腐化 |
 | [16](#16-扩展机制专题五种扩展面-vs-c-abi-插件) | 扩展机制专题 | codex 有 5 种扩展面且各有边界；agentxx 的 C ABI 插件在跨语言/隔离上更强，缺的是“声明式挂载点” |
 | [17](#17-迁移建议汇总) | 迁移建议汇总 | P0/P1/P2 三级清单 |
 | [18](#18-反向清单agentxx-不必照搬的设计) | 反向清单 | 明确哪些差异是正当取舍 |
@@ -140,7 +140,7 @@ IDE 插件 ───┘         │
 
 **源码要点**
 
-- `SessionSpawnArgs`（`core/src/session/mod.rs`）有 40+ 个字段，本身就是一个“装配清单”：auth、models_manager、git_root_discovery、environment_manager、skills_service、plugins_manager、mcp_manager、code_mode_session_provider、extensions、thread_store、image_store、attestation_provider、external_time_provider……。这套“依赖注入 + 特性开关”让 core 不必知道具体实现，也让测试可以替换任意一层。
+- `SessionSpawnArgs`（`core/src/session/mod.rs`）有 40+ 个字段，本身就是一个“加载清单”：auth、models_manager、git_root_discovery、environment_manager、skills_service、plugins_manager、mcp_manager、code_mode_session_provider、extensions、thread_store、image_store、attestation_provider、external_time_provider……。这套“依赖注入 + 特性开关”让 core 不必知道具体实现，也让测试可以替换任意一层。
 - 出站事件统一走 `Session::send_event*` 一族：先写 rollout（`persist_rollout_items`），再投递给 `tx_event`（客户端），必要时镜像到实时语音通道（`maybe_mirror_event_text_to_realtime`）与父代理（`maybe_notify_parent_of_terminal_turn`）。**“先落盘、后通知”**是这里的隐含顺序约定。
 
 ### 1.2 agentxx：分层库 + 端点传输
@@ -157,7 +157,7 @@ IDE 插件 ───┘         │
 | 服务面 | 端点抽象（进程内/WS），TUI 与 agent 同库同进程或经 WS | app-server 是独立进程/独立 crate，支持 stdio/WS/控制 socket/进程内四种连接 |
 | 跨机器 | 支持（WS 客户端—服务端），附件支持“服务端自取” | 支持（`RemoteAppServerClient`、`codex exec-server`、远程环境 `remote_env` 测试场景） |
 | 依赖方向 | `lib` ← `client` / `plugins`；`lib` 内节点/中间件/工具/插件分层 | 严格单向：`protocol`（纯类型）← `core` ← `app-server` ← `client`；安全与持久化独立成 crate |
-| 装配方式 | `BaseAgent::init()` 顺序：中间件 → 工具 → 图；子类 override 扩展 | `SessionSpawnArgs` 注入 + `ExtensionRegistry` 注册表 + `Feature` 开关 |
+| 加载方式 | `BaseAgent::init()` 顺序：中间件 → 工具 → 图；子类 override 扩展 | `SessionSpawnArgs` 注入 + `ExtensionRegistry` 注册表 + `Feature` 开关 |
 | 客户端耦合 | 客户端插件（C ABI）与 UI 组件描述层与 agent 共享 libagentxx | 客户端只依赖 `app-server-protocol` + `app-server-client`，不依赖 core |
 
 **优点/缺点**
@@ -840,14 +840,14 @@ approval → select sandbox → attempt → retry with an escalated sandbox stra
   - 输出用**头尾缓冲**（`HeadTailBuffer`）：长输出保留开头与结尾，中间省略——比“只留开头”更符合排错需求。
   - 进程退出与流式输出都由独立 watcher 任务处理（`spawn_exit_watcher`、`start_streaming_output`、`emit_exec_end_for_unified_exec`），因此“命令还在跑”与“UI 已经在显示输出”是两条并行路径。
   - 晚到的网络拒绝有 100ms 宽限（`LATE_NETWORK_DENIAL_GRACE_PERIOD`）：避免把“刚启动就因其后到达的网络策略变更而失败”误判成用户可见错误。
-  - 还给插件命令装配了指标侧车（`PluginMetricsSidecar`、`PLUGIN_METRICS_OUTPUT_ENV_VAR`）与危险命令检测（`is_dangerous_command`），测试可用 `set_deterministic_process_ids_for_tests` 获得确定的进程 id。
+  - 还给插件命令加载了指标侧车（`PluginMetricsSidecar`、`PLUGIN_METRICS_OUTPUT_ENV_VAR`）与危险命令检测（`is_dangerous_command`），测试可用 `set_deterministic_process_ids_for_tests` 获得确定的进程 id。
 - **`CodexThread` 的对外语义**（`codex_thread.rs`）是“一个线程能被怎么用”的完整清单，且每条都写清了边界：
   - `start_or_steer_turn` / `start_turn_if_idle` / `continue_turn_if_idle{expected_previous_turn_id}` / `steer_turn{expected_turn_id}` / `recover_turn_if_idle`：分别对应四种投递模式；`continue_turn_if_idle` 额外要求“输入必须是响应项，且永不视为用户授权”，并在“已有更新的任务开始过（即使已结束）”时拒绝。
   - `recover_turn_if_idle` 恢复被中断的轮次时**沿用已记录的 turn id**，并从参考上下文里恢复 `root_turn_id`；进入前要先过 `ensure_execution_capacity_for_turn_start`（配额准入）。
   - `suspend_turn_and_shutdown`：拒绝非根线程；存在**当前加载的后代**时拒绝挂起；调用方在挂起成功前**不得转移所有权**（需要停止执行、刷新历史、关闭写者）；会话会处理已接受的请求，即使调用方断开。
   - `inject_if_running`：把模型可见条目注入当前活动轮次，没有活动轮次时**原样返回条目**（调用方自己决定丢弃或留待下一轮）。
   - `active_turn_environment_selections`：给出活动轮次选定的环境快照（含仍在启动或已失败的），宿主据此对每个执行器做 steering 授权——这就是“跨机器/跨环境 steering 安全”的落点。
-- **`ThreadManager` 是能力装配中心**（`thread_manager.rs`）：对外提供 `start_thread`/`spawn_internal_session`/`fork_internal_session`/`reserve_thread_id`/`spawn_legacy_subagent`/`resume_legacy_thread_from_rollout`/`list_thread_ids`/`get_thread`/`update_thread_metadata`/`move_thread_to_section`/`list_agent_subtree_thread_ids`，并通过 `with_thread_id_generator`、`with_agent_control_factory`、`with_code_mode_session_provider` 注入可替换实现；`subscribe_thread_created` 用广播通道通知宿主新线程，后台 rollout 迁移也有独立入口（`start_background_rollout_migration`）。
+- **`ThreadManager` 是能力加载中心**（`thread_manager.rs`）：对外提供 `start_thread`/`spawn_internal_session`/`fork_internal_session`/`reserve_thread_id`/`spawn_legacy_subagent`/`resume_legacy_thread_from_rollout`/`list_thread_ids`/`get_thread`/`update_thread_metadata`/`move_thread_to_section`/`list_agent_subtree_thread_ids`，并通过 `with_thread_id_generator`、`with_agent_control_factory`、`with_code_mode_session_provider` 注入可替换实现；`subscribe_thread_created` 用广播通道通知宿主新线程，后台 rollout 迁移也有独立入口（`start_background_rollout_migration`）。
 
 ### 10.2 agentxx：子代理即独立 agent + 中断委派
 
@@ -1108,7 +1108,7 @@ approval → select sandbox → attempt → retry with an escalated sandbox stra
 
 ---
 
-## 15. 配置、特性开关与装配体系
+## 15. 配置、特性开关与加载体系
 
 ### 15.1 codex：配置分层栈 + 生成式 schema + 特性阶段
 
@@ -1194,7 +1194,7 @@ approval → select sandbox → attempt → retry with an escalated sandbox stra
 | 用户可写扩展 | 需要写动态库 | hooks/skills/插件包（文本或 npm 包） |
 | 事件面 | 事件总线主题（interrupt/subagent/…）+ 中间件钩子 | 12 个 hook 事件 + 扩展 crate 回调 |
 | 动态工具 | 插件工具 + MCP | MCP + 动态工具 + 扩展 crate 工具 + CodeMode |
-| 安装/分发 | 放入插件目录，由 `plugin.list` 装配 | 市场/包管理 + 推荐安装 + 策略控制 |
+| 安装/分发 | 放入插件目录，由 `plugin.list` 加载 | 市场/包管理 + 推荐安装 + 策略控制 |
 | 隔离 | 插件为独立动态库（同进程），有实例契约 | hooks 为独立进程，MCP/插件可为远端 |
 
 **优点/缺点**
@@ -1407,7 +1407,7 @@ approval → select sandbox → attempt → retry with an escalated sandbox stra
 | 文件 | 证明/确认的结论 |
 |---|---|
 | `AGENTS.md`（仓库根） | crate 纪律、模型可见上下文规则（禁止历史重写、注入项必须有上限）、测试与 API 变更规范、TUI 约定 |
-| `codex-rs/core/src/session/mod.rs` | `SessionSpawnArgs` 装配清单、提交循环与 `SessionIo`、审批/用户输入/提权的 pending 表、事件发送顺序（先落盘后通知） |
+| `codex-rs/core/src/session/mod.rs` | `SessionSpawnArgs` 加载清单、提交循环与 `SessionIo`、审批/用户输入/提权的 pending 表、事件发送顺序（先落盘后通知） |
 | `codex-rs/core/src/session/turn.rs` | `run_turn` 主循环、step 捕获、压缩时机、stop hooks、中断留痕 |
 | `codex-rs/core/src/tasks/mod.rs` | `SessionTask` 契约、任务启动/取消/收尾、优雅中断 100ms、用量指标 |
 | `codex-rs/protocol/src/turn_input.rs` | 四种投递模式、三种结果与 9 种拒绝原因 |

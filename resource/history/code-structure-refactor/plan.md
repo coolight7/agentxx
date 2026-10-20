@@ -361,7 +361,7 @@ MiddlewareWrapHandle(
     const onGraphNodeAfterCallFunc&  in_onToolcallEnd    = nullptr
 );
 ```
-在 `agent/lib/src/agent/code_agent.cpp` 装配 `LogPrint` 时出现如下代码：
+在 `agent/lib/src/agent/code_agent.cpp` 加载 `LogPrint` 时出现如下代码：
 ```cpp
 agentContext->middlewareHandleContext->handles.push_back(
     std::make_shared<MiddlewareWrapHandle<BaseMiddlewareState>>(

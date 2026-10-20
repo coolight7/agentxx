@@ -262,7 +262,7 @@ public:
 
     /// 会话工作目录 (yaml `work_dir`; FFI config_json "workDir")
     /// - 为空 (默认) 时回退进程当前工作目录, 完全保持旧行为 (见 resolvedWorkDir)
-    /// - 非空时应为绝对路径 (client/FFI 装配侧负责把相对路径按进程 cwd 解析),
+    /// - 非空时应为绝对路径 (client/FFI 加载侧负责把相对路径按进程 cwd 解析),
     ///   作为本 agent 的逻辑工作目录, 摆脱对进程全局 cwd 的隐式依赖:
     ///   - permission Ask 模式默认放行规则 (code_agent initMiddleware)
     ///   - filesystem 工具与权限校验的相对路径解析基准 (toCurrentSystemAbsolutePath)
@@ -442,7 +442,7 @@ public:
     std::expected<void, std::string> validate() const;
 
     /// 解析后的会话工作目录 (各使用点统一经此取值, 不直接读 workDir)
-    /// - workDir 非空: 原样返回 (装配侧负责解析为绝对路径)
+    /// - workDir 非空: 原样返回 (加载侧负责解析为绝对路径)
     /// - workDir 为空: 回退进程当前工作目录 (旧行为); 获取失败返回空串
     ///   (调用方对空串的兜底语义与原 getCurrentWorkPath 一致, 如 permission
     ///   Ask 模式获取失败时不注册默认放行规则)

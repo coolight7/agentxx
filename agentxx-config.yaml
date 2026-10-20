@@ -1,4 +1,12 @@
 # Agentxx 配置文件
+# 
+# **推荐做法**: 
+#   - 在 {data_dir}/.env 声明各种 api-key, {data_dir}/agentxx-config.yaml 内声明模型、插件
+#   - 然后在不同项目的根目录中放一个 agentxx-config.yaml, 声明使用的 mcp、memory、skill
+#   - 在项目文件夹执行 `agentxx_cli` 启动，无需指定配置文件路径，就会自动加载 {data_dir}/agentxx-config.yaml 
+#     作为 base 层配置，了解模型列表和插件列表；然后读取 {项目根目录}/agentxx-config.yaml 作为 overlay 层配置，
+#     读入本项目的 mcp、skill、AGENTS.md 等
+# 
 # 使用方式: agentxx_cli --config agentxx-config.yaml [train|acp]
 #
 # key 字段支持 ${VAR} 环境变量占位符，会在运行时被真实环境变量替换。
@@ -14,7 +22,8 @@
 #   LLM_API_KEY=sk-your-key-here
 #
 # === 分层配置 (base + overlay)
-# 本文件为 overlay 层 (工作目录或 --config 指定的配置); 数据目录下的同名文件为 base 层:
+# 本文件为 overlay 层 (工作目录或 --config 指定的配置)
+# 数据目录下的同名文件为 base 层:
 #   - base 配置文件: {data_dir}/agentxx-config.yaml
 #   - base 环境变量: {data_dir}/.env
 # 加载顺序: 先读本文件 (overlay), 再按其 data_dir 去找 base, 最后以 base 为底、
@@ -196,6 +205,19 @@ model:
       model_context_max_token: 1000000
       extra_api_config:
         reasoning_effort: "max"
+    - name: opencode-minimax-3.1-flash
+      type: "openai"
+      base_url: "https://opencode.ai/zen/go/v1"
+      api_key: "${OPENCODE_API_KEY}"
+      model_name: "minimax-m3.1-flash-free"
+      send_thinking: true
+      image_input: true
+      audio_input: false
+      video_input: false
+      model_context_max_token: 500000
+      extra_api_config:
+        reasoning:
+          effort: max
     - name: opencode-ds-flash
       type: "openai-responses"
       base_url: "https://opencode.ai/zen/go/v1"

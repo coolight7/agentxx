@@ -763,7 +763,7 @@ void SessionServerAgentIO::handleUserInput(
 
     const bool turnActive = turnActive_.load(std::memory_order_acquire);
 
-    // `inject` / `next-step`: 登记为待注入输入 (由 modelcall 的请求装配边界取用)
+    // `inject` / `next-step`: 登记为待注入输入 (由 modelcall 的请求加载边界取用)
     // - inject:    只进入下一次请求 (不改写上下文, 不唤醒会话)
     // - next-step: 轮次进行中才注入 (空闲时按 next-turn 立即开轮, 否则用户会
     //              发现"发了消息却没有任何反应")
@@ -782,7 +782,7 @@ void SessionServerAgentIO::handleUserInput(
             );
             return;
         }
-        // 带附件的输入无法在请求装配边界处理 (附件需要服务端加载并转 Base64,
+        // 带附件的输入无法在请求加载边界处理 (附件需要服务端加载并转 Base64,
         // 只在轮次启动路径实现): 按 next-turn 排队, 保证内容不丢失
         if (!input.attachments.empty()) {
             // 收件箱载荷 (元数据) 需在 move 前构造
@@ -980,7 +980,7 @@ void SessionServerAgentIO::persistInputAdmitted(const MessageQueueItem& item, ui
               ? item.createdAtMs
               : static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
                                          std::chrono::system_clock::now().time_since_epoch()
-                )
+              )
                                          .count());
     // 载荷只保留元数据 (文本/模型/投递模式/附件元数据): 附件 Base64 不进库,
     // 恢复后由服务端按 pathOrUrl 重新读取, 避免会话库被大块 Base64 撑大
@@ -1843,7 +1843,7 @@ void SessionServerAgentIO::handleHello(
 
     // 权限状态随握手下发: 客户端接入即知道当前是否已完全授权 (Info 侧边栏
     // 授权按钮的初值; 后续变更由权限状态事件广播保持同步)
-    // - 仅在 agent 装配了权限中间件时下发: 该状态本就由权限中间件持有, 未装配
+    // - 仅在 agent 加载了权限中间件时下发: 该状态本就由权限中间件持有, 未加载
     //   (如无 agent 的纯协议端点) 时下发一个恒 false 的状态没有意义, 且会让
     //   "握手后按序读消息" 的对端多收一条
     if (permissionMiddleware() != nullptr) {

@@ -10,7 +10,7 @@
 ///    插入、没有处理器时摘除; 派发时按注册表顺序串行执行处理器, 都在主程序 io 线程,
 ///    单个处理器失败只记一条警告日志并继续 (与旧实现一致);
 /// 3. **清单**: [PluginManager::hooksJson] / [PluginManager::handlersOf] —— 插件
-///    `list_hooks`、装配快照 `hooks` 段与 `--dump-diagnostics` 共用同一份实现;
+///    `list_hooks`、加载快照 `hooks` 段与 `--dump-diagnostics` 共用同一份实现;
 ///    派发记录只在开发者模式下收集 (见 plan §11.4)。
 ///
 /// 线程约定: 注册表只在主程序 io 线程上读写 (注册入口由 vtable 层投递, 与工具 /
@@ -407,8 +407,8 @@ bool PluginManager::removeCoreHookHandler(int64_t handle) {
 void PluginManager::ensureHookDispatch() {
     auto ctx = agentContext_.lock();
     if (!ctx || !ctx->middlewareHandleContext) {
-        // 中间件链还没装配 (理论上不会: 插件在 initMiddleware 之后才加载)
-        XX_LOGW("钩子派发器无法挂载: 中间件上下文尚未装配");
+        // 中间件链还没加载 (理论上不会: 插件在 initMiddleware 之后才加载)
+        XX_LOGW("钩子派发器无法挂载: 中间件上下文尚未加载");
         return;
     }
     if (hookDispatch_ == nullptr) {

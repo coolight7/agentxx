@@ -346,7 +346,7 @@ ClientPluginManager::~ClientPluginManager() {
 /// 生成 client 侧实例对象
 /// - 业务自引用 (self) 与所属管理器 (manager 弱引用);
 /// - 其余公共部分 (生命周期入口 / 基类自引用 / 生命周期控制块 / 主程序控制块)
-///   由 [attachInstance] 在加载路径中统一装配。
+///   由 [attachInstance] 在加载路径中统一加载。
 std::shared_ptr<ClientPluginInstance> ClientPluginManager::createInstance(std::string name) {
     auto inst     = std::make_shared<ClientPluginInstance>(std::move(name));
     inst->manager = weak_from_this();
@@ -365,11 +365,11 @@ void ClientPluginManager::onInstanceUnloaded(ClientPluginInstance& inst) {
     setRegistryGeneration(inst.name, 0, false);
 }
 
-// ==================== 装配 ====================
+// ==================== 加载 ====================
 
 void ClientPluginManager::setUiAdapter(std::shared_ptr<PluginUiAdapter> adapter) {
     uiAdapter_ = std::move(adapter);
-    // 界面能力段在装配时读取一次 (适配器装配后不可变, 见
+    // 界面能力段在加载时读取一次 (适配器加载后不可变, 见
     // [PluginUiAdapter::uiCapabilitiesJson]) —— get_client_state 是插件高频调用,
     // 每次重新解析 JSON 没有必要; 非法内容只记一条日志并按"未发布"处理
     uiCapabilitiesJson_ = utilxx_base::Json::object();
@@ -440,7 +440,7 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
     // - manifest: name/entry/depends/optional_depends/interfaces(接口声明)
     // - entry 平台化 + 配置子目录回退见公共 resolvePluginEntryPath
     // - 依赖解析与正式加载合并: 不再先 dlopen 探测再 close 后重新
-    //   dlopen —— 本函数一次 dlopen 完成 探测(entry 符号) + 装配
+    //   dlopen —— 本函数一次 dlopen 完成 探测(entry 符号) + 加载
     std::error_code          ec;
     std::string              libPath = path;
     std::vector<std::string> depends, optionalDepends;
@@ -1707,11 +1707,11 @@ static int32_t queryClientString(const PluginxxHost* host, PluginxxString* out, 
     );
 }
 
-/// "agentxx.client.ui" 展示接口表访问器 (定义于下方接口表装配区, 需在
+/// "agentxx.client.ui" 展示接口表访问器 (定义于下方接口表加载区, 需在
 /// xx_cquery_interface 处前向引用)
 static const AgentxxClientUiIface* clientUiIface();
 
-/// 其余标准接口表 (定义于下方装配区; 此处前向引用供 query_interface 分发)
+/// 其余标准接口表 (定义于下方加载区; 此处前向引用供 query_interface 分发)
 extern const AgentxxClientEventsIface  g_clientIfaceEvents;
 extern const AgentxxClientSessionIface g_clientIfaceSession;
 extern const AgentxxClientWireIface    g_clientIfaceWire;
@@ -2375,7 +2375,7 @@ int32_t PLUGINXX_CALL xx_clist_keybinds(const PluginxxHost* host, PluginxxString
 /// "agentxx.client.ui" 展示接口表访问器: 表内成员恒非空 (函数实现存在), 子能力是否
 /// 可用由各 register 入口的 hostSupportedInterfaces 限制决定 (拒绝时返回
 /// NULL/非 0) —— 与接口表 "NULL = 不支持" 契约的分工: 表级 NULL 用于主程序
-/// 整体缺失某子能力入口的场景 (当前主程序全量装配, 保留判空语义供第三方精简
+/// 整体缺失某子能力入口的场景 (当前主程序全量加载, 保留判空语义供第三方精简
 /// 主程序使用)。以函数内静态表实现 (前向引用无需 extern 声明)
 static const AgentxxClientUiIface* clientUiIface() {
     static const AgentxxClientUiIface table = {
@@ -4222,7 +4222,7 @@ ClientToolRenderResult renderClientTool(
                             return res;
                         }
 
-                        // 无语义缓存 (如单元测试/未装配 pluginManager 环境): 同步执行 renderer
+                        // 无语义缓存 (如单元测试/未加载 pluginManager 环境): 同步执行 renderer
                         AgentxxToolRenderInput input{};
                         input.struct_size  = sizeof(AgentxxToolRenderInput);
                         input.version      = 1;

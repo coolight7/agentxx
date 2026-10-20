@@ -4,7 +4,7 @@
 > 记录时间: 2026-09-18 (第一次) / 2026-09-18 续 (P3-3b：插件框架内核运行时搬迁)
 > 2026-09-18 第三次更新: P3-3c 主体完成 (SDK 通用/领域分层) + P4-1 部分 (能力注册表下沉)
 > 2026-09-18 第四次更新: P3-3c 收尾 (十张通用表**实现**整体下沉) + P4-1 完成
-> (`PluginHostCore` + `DomainHooks` + 通用表 vtable 入口装配); P4-2/P4-3 待实施
+> (`PluginHostCore` + `DomainHooks` + 通用表 vtable 入口加载); P4-2/P4-3 待实施
 > 2026-09-18 第五次更新: **P4-2 完成** (装载/启停/禁用启用/卸载/级联骨架整体下沉到
 > `pluginxx/host/lifecycle.h` 的 `PluginHostLifecycle<InstanceT>`) + **P4-3 主体完成**
 > (client 管理器接入同一骨架, `destroyPlugin()` 上移到 `PluginInstanceBase`) +
@@ -85,7 +85,7 @@ agentxx 侧新增 / 保留:
 关键解耦 (框架内核零宿主依赖):
 
 1. **`OpCore` 不再回查管理器类型**: `PluginInstanceBase` 新增 `std::weak_ptr<PluginRuntime> runtime`,
-   由 `PluginManagerBase::makeLifetime(inst)` 装配; `awaitPluginOp` 经
+   由 `PluginManagerBase::makeLifetime(inst)` 加载; `awaitPluginOp` 经
    `isRuntimeIoThread(runtime)` 校验 io 线程, 因此 `PluginOpAwaitArgs` 保持非模板, 调用点零改动。
 2. **内置插件表经注册点取数**: 内核不引用宿主符号 `agentxx_plugin_get_builtin_*`, 改由
    `pluginxx::setBuiltinPluginProvider` 注册点提供; 宿主在
@@ -127,7 +127,7 @@ config 的 `find_dependency(yaml-cpp)` + superbuild `cxx_pluginxx_repo` DEPENDS 
    删除源文件后旧头仍留在 `agentxx-project-install/include/` 并被优先命中
    (症状: 旧 `agentxx/plugin/op_driver.h` 与新的 `pluginxx/runtime/op_driver.h` 类型重定义)。
    搬迁/删除头文件后必须手动清理安装树对应文件 (或整体删除 `include/agentxx`)
-7. **测试里的伪实例要装配运行时**: `PluginInstanceBase::runtime` 由
+7. **测试里的伪实例要加载运行时**: `PluginInstanceBase::runtime` 由
    `PluginManagerBase::makeLifetime` 写入; 测试中手工构造实例的夹具需显式
    `inst->runtime = manager->runtime();`, 否则 `awaitPluginOp` 会以"缺少 IO 执行器"失败
 
@@ -135,7 +135,7 @@ config 的 `find_dependency(yaml-cpp)` + superbuild `cxx_pluginxx_repo` DEPENDS 
 
 目标: 把**十张通用表的定义与实现** (log/json/config/plugins/events/scheduler/
 coroutine_runtime/tasks/cancel/capabilities) 整体搬入 `cxx_pluginxx`, 使新宿主只需
-"继承宿主核心 + 实现领域钩子 + 装配 vtable" 即可复用; agentxx 只保留领域表与宿主数据。
+"继承宿主核心 + 实现领域钩子 + 加载 vtable" 即可复用; agentxx 只保留领域表与宿主数据。
 
 ### 新增 (agent/third_party/cxx_pluginxx/)
 
@@ -201,7 +201,7 @@ coroutine_runtime/tasks/cancel/capabilities) 整体搬入 `cxx_pluginxx`, 使新
 
 | 文件 | 内容 |
 |---|---|
-| `include/pluginxx/host/lifecycle.h` (新增) | `PluginHostLifecycle<InstanceT>` (继承 `PluginHostCore`): 装载/启停/禁用启用/卸载/级联依赖/关闭超时重试的**唯一实现**; 另含装载参数 `PluginLoadOptions` (args + configPath, 与宿主配置类型解耦)。装配辅助 `attachInstance` (生命周期入口 + 基类自引用 + `InstanceLifetime` + 宿主控制块) |
+| `include/pluginxx/host/lifecycle.h` (新增) | `PluginHostLifecycle<InstanceT>` (继承 `PluginHostCore`): 装载/启停/禁用启用/卸载/级联依赖/关闭超时重试的**唯一实现**; 另含装载参数 `PluginLoadOptions` (args + configPath, 与宿主配置类型解耦)。加载辅助 `attachInstance` (生命周期入口 + 基类自引用 + `InstanceLifetime` + 宿主控制块) |
 | `include/pluginxx/runtime/instance_base.h` | `destroyPlugin()` 上移为基类共用实现 (destroy 入口查找 + 调用 + 宿主控制块退休); 新增纯虚 `pluginDestroySymbol()` 与可选 `logTag()`; 字段 `builtinUnload` 上移 |
 
 **宿主接缝** (内核不认识的领域动作一律经接缝注入):
@@ -269,8 +269,8 @@ coroutine_runtime/tasks/cancel/capabilities) 整体搬入 `cxx_pluginxx`, 使新
    必须用限定名 (`pluginxx::PluginHostLifecycle<...>::unloadAsync`) 才能调到基类实现
 2. **纯虚接缝优于参数化基类**: `selfRef()` 一处纯虚就解决了"内核需要管理器自引用
    但不能继承 `enable_shared_from_this`"的死结 (多基类歧义会让 `weak_this` 都不初始化)
-3. **实例装配拆成 `createInstance` + `attachInstance`**: 领域实例只负责自己的字段,
-   基类自引用/生命周期控制块/宿主控制块统一装配, 因此 client 的自有装载路径也能复用
+3. **实例加载拆成 `createInstance` + `attachInstance`**: 领域实例只负责自己的字段,
+   基类自引用/生命周期控制块/宿主控制块统一加载, 因此 client 的自有装载路径也能复用
 4. **装载参数与宿主配置类型解耦**: 内核只认 `PluginLoadOptions{args, configPath}`,
    宿主侧保留原签名并做一层转换 (否则内核必须包含 `agentxx::agent::PluginConfig`)
 

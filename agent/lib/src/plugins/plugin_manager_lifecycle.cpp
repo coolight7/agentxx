@@ -114,7 +114,7 @@ void PluginManager::flushPendingCleanup() {
 /// 生成 agent 侧实例对象
 /// - 只做业务自引用 (self) 与所属管理器 (manager) 的设置;
 /// - 基类自引用 (ownerSelf)、元信息/描述/路径、生命周期入口、生命周期控制块与
-///   交给自己插件的 host 控制块由骨架的 makeInstance 统一装配。
+///   交给自己插件的 host 控制块由骨架的 makeInstance 统一加载。
 std::shared_ptr<PluginInstance> PluginManager::createInstance(std::string name) {
     auto inst     = std::make_shared<PluginInstance>(std::move(name));
     inst->self    = inst;
@@ -238,7 +238,7 @@ void toLoadOptions(
 ///
 /// 在加加载口收尾时调用: 写回 [PluginInstance::loadMs] 并把"加载完成后到底注册了
 /// 什么"打到日志, 便于回答"插件装了但模型看不到工具"一类问题;
-/// 完整清单另见装配快照 (`--dump-config`)。
+/// 完整清单另见加载快照 (`--dump-config`)。
 void notePluginLoaded(
     const std::shared_ptr<PluginInstance>& inst,
     std::chrono::steady_clock::time_point  begin

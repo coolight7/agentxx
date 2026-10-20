@@ -30,7 +30,7 @@ const ModelConfig& AgentConfig::getSubagentModel() const {
 }
 
 std::string AgentConfig::resolvedWorkDir() const noexcept {
-    // workDir 非空时原样返回 (client/FFI 装配侧已把相对路径按进程 cwd 解析为绝对路径);
+    // workDir 非空时原样返回 (client/FFI 加载侧已把相对路径按进程 cwd 解析为绝对路径);
     // 为空时回退进程当前工作目录, 与历史行为完全一致
     if (!workDir.empty()) {
         return workDir;

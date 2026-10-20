@@ -132,7 +132,7 @@ extern "C" PLUGINXX_EXPORT const PluginxxInfo* PLUGINXX_CALL agentxx_plugin_agen
 extern "C" PLUGINXX_EXPORT int32_t PLUGINXX_CALL
     agentxx_plugin_agent_create(const PluginxxHost* host, void** plugin_ctx) {
     // create 只构造上下文与接口查询, 注册事务由 start 执行;
-    // 守卫日志闭包捕获局部裸指针 (装配前置空 → 异常路径静默丢弃)
+    // 守卫日志闭包捕获局部裸指针 (加载前置空 → 异常路径静默丢弃)
     UncensoredCtx* raw = nullptr;
     return agentxx::plugin::guardCall(
         [&raw](const char* msg) noexcept {

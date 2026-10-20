@@ -73,7 +73,7 @@ inline neograph::ChatTool execmdDefinitionOf(
 }
 
 /// 会话工作目录解析 (原工具经 AgentContext; 与插件 get_session_work_dir 同源):
-/// ctx 未装配时回退进程 cwd, 相对路径用例语义不变
+/// ctx 未加载时回退进程 cwd, 相对路径用例语义不变
 inline std::string testResolvedWorkDir(const std::weak_ptr<agentxx::agent::AgentContext>& ctx) {
     if (auto p = ctx.lock()) {
         if (p->agentConfig) {
@@ -1061,8 +1061,8 @@ asio::awaitable<void>
     delay.expires_after(std::chrono::milliseconds(500));
     co_await delay.async_wait(asio::as_tuple(asio::use_awaitable));
     auto checkArgs = utilxx_base::Json{
-        // 当前会话唯一应无残留 ping (可能有其他程序的 ping, 用命令行特征过滤:
-        // -t 127.0.0.1 精确匹配本测试派生的)
+  // 当前会话唯一应无残留 ping (可能有其他程序的 ping, 用命令行特征过滤:
+  // -t 127.0.0.1 精确匹配本测试派生的)
         {"command",
          "$p = Get-CimInstance Win32_Process -Filter \"Name='ping.exe'\" | "
          "Where-Object { $_.CommandLine -match '127\\.0\\.0\\.1' -and $_.CommandLine -match '-t' }; "

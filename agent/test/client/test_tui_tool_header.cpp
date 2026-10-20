@@ -654,16 +654,16 @@ struct ToolHeaderFixture {
         });
     }
 
-    // ---- 异步特化渲染 (client io 线程执行 renderer) 的装配与驱动 ----
+    // ---- 异步特化渲染 (client io 线程执行 renderer) 的加载与驱动 ----
 
-    /// client 插件管理器的 io 上下文 (仅在装配管理器后使用)
+    /// client 插件管理器的 io 上下文 (仅在加载管理器后使用)
     asio::io_context                                      mgrIo;
     std::shared_ptr<agentxx::plugin::ClientPluginManager> mgr;
 
-    /// 装配 client 插件管理器: 特化渲染改走异步语义缓存路径 (自定义 renderer
+    /// 加载 client 插件管理器: 特化渲染改走异步语义缓存路径 (自定义 renderer
     /// 只在 client io 线程执行), 用于覆盖"结果尚未就绪"的中间帧。
     ///
-    /// 与默认夹具 (不装配管理器 -> renderClientTool 走"无语义缓存"分支,
+    /// 与默认夹具 (不加载管理器 -> renderClientTool 走"无语义缓存"分支,
     /// renderer 在本线程同步执行) 的区别是本次要测的那条路径。
     ///
     /// 关键处理: 插件运行时的 IO 线程标识默认取绑定 executor 的线程 (= 本测试

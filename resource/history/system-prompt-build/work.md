@@ -14,7 +14,7 @@
 | S5 | 压缩写回后标记 dirty (自动 / 手动 / 硬截断) + `noteCompaction` | 完成 |
 | S6 | 资源变更标记 dirty；`cleanupSession` 释放会话文本 | 完成 |
 | S7 | 压缩请求前缀复用 (保留 system / 工具覆盖 / 不执行工具 / `tool_choice`) | 完成 |
-| S8 | 指标、装配快照、诊断包、日志 | 完成 |
+| S8 | 指标、加载快照、诊断包、日志 | 完成 |
 | S9 | 测试模块 (`prompt_sources`、`prompt_cache_prefix`) + 既有测试改写 + 文档 | 完成 |
 
 测试现状 (Debug + ASan, Windows): **全量 `agentxx_test.exe` 通过 38119 断言 / 0 失败**，
@@ -187,7 +187,7 @@
 - `agent/test/core/test_prompt_stability.cpp`: `TestDynamicSectionHandle` 改为构造时登记来源、
   析构时撤销；新增 `test_refresh_after_compaction()` (A4 无监听 / A2 压缩后内容不变则 system
   逐字节不变且 `stablePrefixChanges == 0` / A3 内容变化后 `stablePrefixChanges == 1`，
-  并检查 metrics 与装配快照的 `prompt_sources` 不含正文)。
+  并检查 metrics 与加载快照的 `prompt_sources` 不含正文)。
 - `agent/test/core/test_graph_data.cpp`: 改用局部键 (`xx_testSectionMap` 等)，不再用已删除的通道常量。
 - `agent/test/plugin/test_plugin_resources.cpp`: T6 改为 `ensureFresh` +
   `promptSources->sectionText("memory", sessionId)`，并断言中间件析构后
@@ -203,7 +203,7 @@
 
 ### S9 文档
 
-- `docs/zh-cn/design/index.md`: 架构设计新增 "6. 系统提示词装配: 来源注册与按需刷新"
+- `docs/zh-cn/design/index.md`: 架构设计新增 "6. 系统提示词加载: 来源注册与按需刷新"
   (分组、来源字段、唯一刷新入口、会话回收、观测、无文件监听、压缩前缀复用);
   `AgentContext` 结构图补 `promptSources`。
 - `docs/zh-cn/design/plugins.md`: 接口表后加"提示词段落来源 (第二期留位)"说明 ——
@@ -249,7 +249,7 @@
 - 新增公共入口 `AgentHost::attachRootAgentHost(rootAgent)` (= `create` + `attachRoot`,
   `ioCtx` 取根 agent 的), 注释写明"与 `enableSubagent` 无关, 返回值必须活到会话结束"。
 - `jsonl_mode.cpp`: 去掉 `enableSubagent` 门控, 改调公共入口。
-- `main.cpp` (server 模式): init 后装配, 句柄由信号协程持有到进程退出, 关机时释放。
+- `main.cpp` (server 模式): init 后加载, 句柄由信号协程持有到进程退出, 关机时释放。
 - `mode_runners.cpp` (进程内 tui/cli): 改为调用同一入口 (行为不变)。
 - 效果: `jsonl` 里自动压缩不再报 `service.subagent ... no server registered`。
 
@@ -286,7 +286,7 @@
 
 #### S11.2 加请求前缀指纹日志 (排查手段)
 
-`modelcall.cpp` 的请求装配末尾 (debug 级, 不含正文):
+`modelcall.cpp` 的请求加载末尾 (debug 级, 不含正文):
 
 ```
 [modelcall] request prefix (session=...): msgs= chars= system=<hash> tools=<hash>(<n>)

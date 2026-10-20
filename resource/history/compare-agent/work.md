@@ -10,7 +10,7 @@
 |---|---|---|---|---|
 | ARC-1 | 核心边界可执行检查 | P0 | 完成（已构建 + 测试通过） | `agent/test/core/test_boundaries.cpp`（测试模块 `boundaries`） |
 | ARC-2 | 目录级规则文件 | P1 | 完成 | `agent/{lib,client,plugins,test}/AGENTS.md` |
-| ARC-3 | 装配清单和启动断言 | P0 | 完成（已构建 + 测试通过） | `agent/lib/src/agent/base_agent.cpp`（`InitStep`/`runInitSteps`/`verifyStartupAssembly`） |
+| ARC-3 | 加载清单和启动断言 | P0 | 完成（已构建 + 测试通过） | `agent/lib/src/agent/base_agent.cpp`（`InitStep`/`runInitSteps`/`verifyStartupAssembly`） |
 | STO-1 | 会话目录内核级写租约 | P0 | 完成（已构建 + 测试通过） | `agent/lib/include/agentxx/agent/writer_lease.h` + `src/agent/writer_lease.cpp`、`session_store.*` |
 | STO-2 | schema 版本和相邻迁移链 | P0 | 完成（已构建 + 测试通过） | `agent/lib/src/agent/session_store.cpp`（`kSchemaVersion`/`applyMigrationStep`/备份） |
 | STO-8 | 用量账本 | P1 | 完成（已构建 + 测试通过） | `session_store`（usage 表/聚合）、`nodes/modelcall.cpp`（记录点） |
@@ -40,7 +40,7 @@
 | TOOL-2 | 并发分类与上限 | P0 | 完成（已构建 + 测试通过） | `tools/tool.h`、`plugin_api.h`、`config.h` |
 | TOOL-3 | 并行取消和收尾 | P0 | 完成（已构建 + 测试通过） | `nodes/toolcall.cpp`；模块 `toolcall_parallel` |
 | TOOL-12 | 工具可用性诊断（并入 ARC-6） | P1 | 完成（已构建 + 测试通过） | `context.h`（`ToolAssemblyRecord`/`toolAssembly`）、`base_agent.cpp`、`assembly_snapshot.cpp` |
-| ARC-6 | 生效装配快照 + `--dump-config`（限定范围） | P1 | 完成（已构建 + 测试通过） | `include/agentxx/agent/assembly_snapshot.h` + `src/agent/assembly_snapshot.cpp`、`client/main.cpp` |
+| ARC-6 | 生效加载快照 + `--dump-config`（限定范围） | P1 | 完成（已构建 + 测试通过） | `include/agentxx/agent/assembly_snapshot.h` + `src/agent/assembly_snapshot.cpp`、`client/main.cpp` |
 | CFG-3 | 配置来源与诊断清单（并入 ARC-6） | P1 | 完成（已构建 + 测试通过） | 同上（配置侧快照） |
 | CFG-1 | 结构化配置校验（限定范围） | P0 | 完成（已构建 + 测试通过） | `include/agentxx/agent/config_validation.h` + `src/agent/config_validation.cpp`、`config.cpp`、`client/main.cpp` |
 | UI-2 | UI 快照夹具（含 TST-5） | P0 | 完成（已构建 + 测试通过） | `test/client/test_ui_snapshot.cpp` + `include/agentxx-test/client/ui_snapshot.h` + 基线 `test/snapshots/ui/`（模块 `ui_snapshot`） |
@@ -477,9 +477,9 @@
 | `usage_ledger` | 21 / 0 | 真实轮次经 modelcall 记账（流式用量 137/29/166）、失败轮次留痕、会话间互不影响 |
 | `settings_db` | 73 / 0 | 版本自增、按期望版本提交、冲突不改内容、双句柄竞争、重启延续、老版本列迁移 |
 | `session_persistence` | 621 / 0 | 回归：会话库读写、重启恢复（受本次存储改动影响） |
-| `agent` | 192 / 0 | 回归：装配清单重构后的启动/多轮/工具/中断路径 |
+| `agent` | 192 / 0 | 回归：加载清单重构后的启动/多轮/工具/中断路径 |
 | `summarization` | 445 / 0 | 回归：压缩链路 |
-| `plugins` / `plugin_resources` / `plugin_multi_instance` / `client_plugins` | 541 / 83 / 80 / 657 全 0 失败 | 回归：插件加载/资源/多实例（受装配清单重构影响） |
+| `plugins` / `plugin_resources` / `plugin_multi_instance` / `client_plugins` | 541 / 83 / 80 / 657 全 0 失败 | 回归：插件加载/资源/多实例（受加载清单重构影响） |
 
 顺带修好的测试夹具问题：本地 LLM 模拟器（`test/core/test_agent.cpp`）的 SSE 流此前没有返回
 `usage`，而 provider 默认请求 `stream_options.include_usage`，导致流式请求拿不到用量统计；
@@ -657,7 +657,7 @@ slot；卸载自动回到内置"；"错误告诉插件作者如何修正；文�
     因此工具按"是否还在注册表里"、钩子按"中间件是否还在链上"、能力按
     `hasCapability(name)`、图节点按 slot 是否 active 计数，资源和提示词按应用器/贡献表；
   - `PluginListView` 增 `registrationTotal / promptKeyCount / skillDirCount / memoryFileCount /
-    mcpNamespaceCount / ownsGraphDefinition`，装配快照（ARC-6）按插件输出这些字段。
+    mcpNamespaceCount / ownsGraphDefinition`，加载快照（ARC-6）按插件输出这些字段。
 - **PLG-2 贡献集合与重算（现状核对 + 测试 + 文档）**：
   - 提示词贡献模型（`PromptKeyState`：base + 按 sequence 应用的全部存活贡献；
     删除 owner 贡献后**重新合成**）在源码中已实现，但此前没有任何测试；
@@ -671,7 +671,7 @@ slot；卸载自动回到内置"；"错误告诉插件作者如何修正；文�
     **其他实例占用中被拒绝**（返回非 0，日志给出占用者与"先卸载/禁用它"的建议）；
   - 占用者禁用/卸载时（`detachDomainRegistrations`）恢复占用前的定义 = **回到内置**，
     并清空占用者；
-  - 装配快照的执行图段输出 `definition_owner`，渲染文本在非空时标注
+  - 加载快照的执行图段输出 `definition_owner`，渲染文本在非空时标注
     `(definition from plugin 'x')`。
 - **PLG-7 教学式错误**（`PluginManager::diagnosePluginPath` + 三个装载入口）：
   - 只读巡检常见装载失败原因并返回"照什么改"的建议：路径为空 / `builtin://` 缺名字 /
@@ -722,14 +722,14 @@ slot；卸载自动回到内置"；"错误告诉插件作者如何修正；文�
   接口表名集合 / 文档路径 / 客户端模型层边界）、`tui_scroll` 与 `tui_stream` 改用模型 API、
   `ui_capabilities` 改为断言能力段与唯一来源一致。
 - 产物构建：lib `INSTALL`、`agentxx_test`、`agentxx_cli` 均 exit=0。
-- 手工验证：`agentxx_cli --dump-diagnostics` 输出完整报障包（环境/指标/装配含配置 JSON/
+- 手工验证：`agentxx_cli --dump-diagnostics` 输出完整报障包（环境/指标/加载含配置 JSON/
   插件逐项/日志尾部 67 行）并退出码 0；`agentxx_cli --dump-config` 不受影响。
 
 ### 本轮之后仍待实施（按价值排序）
 
 1. **PRO-8 stdio JSONL 一次性运行**（P1，独立功能块）：新运行模式 + JSONL 分帧 + 用例。
 2. **LLM-8 Anthropic 缓存断点与缓存用量**（P1）：① 请求体可选 `cache_control` 断点
-   （新配置项 + Anthropic 请求装配 + 请求体断言）；② 解析 `cache_read_input_tokens` /
+   （新配置项 + Anthropic 请求加载 + 请求体断言）；② 解析 `cache_read_input_tokens` /
    `cache_creation_input_tokens` 落账本（"缓存写入量"需要 schema v3 迁移 + 新列）。
 3. **LLM-13 HTTP 录制回放**（P1）：测试侧"可注入传输层 + 录制/回放服务器"夹具（按请求摘要与
    顺序保存响应流、敏感 headers 脱敏），与已完成的假 provider 接缝互补。
@@ -761,10 +761,10 @@ slot；卸载自动回到内置"；"错误告诉插件作者如何修正；文�
     - 模型错误：provider 异常路径按 `classifyLlmError` 分类记录（与重试策略同一分类器）；
     - 工具终态：`ToolcallWrapNode` 的结算点（短路未执行、取消、中断、异常、正常产出各一处）；
   - 指标对象挂在 `AgentContext::metrics`（`BaseAgent::init` 的 `event_bus` 步骤创建，
-    与事件总线同一生命周期，回滚时释放）；装配快照新增 `metrics` 段并在渲染文本给一行摘要。
+    与事件总线同一生命周期，回滚时释放）；加载快照新增 `metrics` 段并在渲染文本给一行摘要。
 - **OBS-4 诊断包**（新增 `agent/lib/{include/agentxx/util,src/util}/diagnostics.{h,cpp}`）：
   - `buildDiagnosticsText(ctx, sessionId, options)` 按段输出 Markdown 风格文本：
-    头部 (时间/版本/平台/核数)、关键指标 (摘要 + JSON)、装配 (配置侧快照 + 运行侧
+    头部 (时间/版本/平台/核数)、关键指标 (摘要 + JSON)、加载 (配置侧快照 + 运行侧
     快照 + **配置快照 JSON**)、会话 (标题/消息计数/上下文条数/序号/账本聚合/持久化计数)、
     后台任务 (TaskScope 待办与名称)、插件逐项 (各分类生效计数 + 图定义占用者)、日志尾部；
   - 内容边界：默认**不含消息正文** (计数与用量足够定位问题)，需要时 `includeMessages`
@@ -775,7 +775,7 @@ slot；卸载自动回到内置"；"错误告诉插件作者如何修正；文�
     避免"什么都屏蔽"让诊断失去价值)；
   - 日志捕获：`enableLogCapture(capacity)` / `recentLogLines(limit)` / `clearCapturedLogs()`，
     基于 `ThreadedLogSink` 的环形缓冲 (自带后台线程；取快照前 `flush`，刚写的日志也在包里)；
-  - CLI：`--dump-diagnostics` 与 `--dump-config` 同一位置/同一装配路径，打印诊断包后退出
+  - CLI：`--dump-diagnostics` 与 `--dump-config` 同一位置/同一加载路径，打印诊断包后退出
     (只读导出：不发网络请求、不写会话库；无可用模型时仍给出配置侧信息与失败原因)。
 - **STO-13 并入**：会话段即"导出展示历史摘要 + 轮次/用量 + 诊断"的取证口径；
   `includeMessages=true` 时按行导出最近 50 条展示消息 (带序号与 id, 已截断/脱敏)，
@@ -788,7 +788,7 @@ slot；卸载自动回到内置"；"错误告诉插件作者如何修正；文�
 | KeyMetrics | 轮次终态四分类与耗时累计/最大值、TTFT 只记一次、模型调用用量与错误分类、工具四终态、压缩、JSON/summary 字段、reset |
 | 凭据脱敏 | `api_key=...` / JSON `"apiKey":"..."` / `Authorization: Bearer ...` / 裸 `sk-...` / URL userinfo / 查询参数；普通日志文本不被误伤 |
 | 日志捕获 | 未启用时读不到 (不隐式占内存)、容量上限按最旧淘汰、级别前缀、limit、清空、重装与关闭 |
-| 诊断包 | 段落齐全 (版本/平台/指标/装配/会话/日志尾部)、`config_json` 含 `api_key_set` 但不含 Key 取值、默认不含消息正文 (会话段)、日志尾部已脱敏、`includeMessages=true` 时出现截断正文、`logTailLines=0` 时无日志段、无配置/无会话/无指标对象的降级路径不崩 |
+| 诊断包 | 段落齐全 (版本/平台/指标/加载/会话/日志尾部)、`config_json` 含 `api_key_set` 但不含 Key 取值、默认不含消息正文 (会话段)、日志尾部已脱敏、`includeMessages=true` 时出现截断正文、`logTailLines=0` 时无日志段、无配置/无会话/无指标对象的降级路径不崩 |
 
 验证：
 
@@ -824,7 +824,7 @@ slot；卸载自动回到内置"；"错误告诉插件作者如何修正；文�
 - STO-11：`set()` 保持"无条件写入"语义并递增版本，需要读-改-写的调用方用
   `getVersioned` + `setVersioned`（冲突返回 `Conflict` 且不改内容）。
 - STO-12：只做存储层与检索（不建 FTS5、无协议/界面入口）。
-- ARC-3：装配步骤的回滚动作只做"释放本步骤创建的对象"（模型注册表/事件总线/中间件上下文/
+- ARC-3：加载步骤的回滚动作只做"释放本步骤创建的对象"（模型注册表/事件总线/中间件上下文/
   插件管理器/图注册表/引擎/工具列表）；插件卸载走框架的 `shutdownAll()`。启动断言失败抛
   `std::runtime_error`（带失败原因），由调用方决定如何上报。
 
@@ -866,7 +866,7 @@ slot；卸载自动回到内置"；"错误告诉插件作者如何修正；文�
 ## 修订记录
 
 - 阶段 A/B 完成后提交：`添加目录级规则文件 (计划 ARC-2)`、
-  `实现计划 1-5 章可行项: 架构边界检查、装配清单、会话写租约、schema 迁移链、用量账本、
+  `实现计划 1-5 章可行项: 架构边界检查、加载清单、会话写租约、schema 迁移链、用量账本、
   设置乐观版本 (ARC-1/ARC-3/STO-1/STO-2/STO-8/STO-11)`。
 - 阶段 C（STO-12 存储层）完成后提交：见 git 记录 `实现会话标题与检索 (计划 STO-12)`。
 - 阶段 E（SEC-9 / TST-13 / CFG-8）完成后提交：`新增安全责任、配置边界与实施状态文档, 会话语言与界面语言解耦 (SEC-9/TST-13/CFG-8)`。
@@ -880,7 +880,7 @@ slot；卸载自动回到内置"；"错误告诉插件作者如何修正；文�
 - 阶段 M（PRM-1 / PRM-2 / PRM-7）完成后提交：`提示词稳定段与动态段分离、段落排序、请求体结构断言 (PRM-1/PRM-2/PRM-7)`。
 - 阶段 M 补充（PRM-5）完成后提交：`技能优先级与同名裁决 (PRM-5)`。
 - 全量回归与测试夹具修正完成后提交：`修正测试夹具内存生命周期与只读工具自动摘要预期`。
-- 阶段 N（ARC-6 / TOOL-12 / CFG-3 / PLG-10）完成后提交：`启动装配快照与 --dump-config、插件装载耗时与注册计数 (ARC-6/TOOL-12/CFG-3/PLG-10)`。
+- 阶段 N（ARC-6 / TOOL-12 / CFG-3 / PLG-10）完成后提交：`启动加载快照与 --dump-config、插件装载耗时与注册计数 (ARC-6/TOOL-12/CFG-3/PLG-10)`。
 - 阶段 O（CFG-1）完成后提交：`配置结构化校验: 键路径/严重级别/来源, 路径与权限组合检查 (CFG-1)`。
 - 阶段 P（UI-2 / TST-5 / TST-8）完成后提交：`UI 快照夹具与一键门禁脚本 (UI-2/TST-5/TST-8)`。
 - 阶段 Q（TOOL-16）完成后提交：`按规范化文件路径排队执行写/改操作 (TOOL-16)`。
@@ -961,7 +961,7 @@ slot；卸载自动回到内置"；"错误告诉插件作者如何修正；文�
   - `validateConfigPaths(cfg)`：**访问文件系统** —— `data_dir`/会话根目录可建/可写
     （要求持久化时不可用 = 致命，否则警告）、skill/memory/rag 路径存在性（警告，
     启动时记为加载失败）、插件文件是否存在（警告，启动时跳过）、MCP 端点协议前缀；
-  - `validateAgentConfigWithPaths(cfg)`：两者合并（启动装配侧统一入口）。
+  - `validateAgentConfigWithPaths(cfg)`：两者合并（启动加载侧统一入口）。
 - **`AgentConfig::validate()` 改为同一套规则**（取第一条致命问题返回），消除两份实现漂移；
   之前该函数无调用点（"client 启动时调用"只是注释）。
 - **CLI 接线**（`agent/client/main.cpp`）：`validateStartupConfig()` 在启动路径
@@ -995,18 +995,18 @@ slot；卸载自动回到内置"；"错误告诉插件作者如何修正；文�
   属计划明确不做的"配置对象树重建"。键路径足以定位到配置项。
 - `ask` 模式在 `work_dir` 为空时回退进程 cwd 属既定行为，不产生警告（避免每个默认配置
   都刷警告）；只报"配置之间互相矛盾或无效"的组合。
-- 校验只在 CLI 装配侧调用；库使用方（FFI/嵌入）仍按需自行调用
+- 校验只在 CLI 加载侧调用；库使用方（FFI/嵌入）仍按需自行调用
   `validateAgentConfigWithPaths()`，lib 不替调用方决定终止启动。
 
-## 阶段 N：启动装配快照与工具清单诊断（ARC-6 / TOOL-12 / CFG-3 / PLG-10，2026-10-06）
+## 阶段 N：启动加载快照与工具清单诊断（ARC-6 / TOOL-12 / CFG-3 / PLG-10，2026-10-06）
 
-计划依据：`plan.md` §1.2 ARC-6（限定范围：启动一次性装配快照写日志 + CLI `--dump-config`；
+计划依据：`plan.md` §1.2 ARC-6（限定范围：启动一次性加载快照写日志 + CLI `--dump-config`；
 不做 TUI 诊断页与 wire 侧 `get_diagnostics`）、§5.2 TOOL-12（并入 ARC-6 的工具清单诊断）、
 §13 CFG-3（并入 ARC-6 的来源清单）、§12 PLG-10（限定范围：装载耗时 + 接口声明 + 注册计数）。
 
 已完成：
 
-- **装配快照模块**（新增 `agent/lib/{include/agentxx/agent,src/agent}/assembly_snapshot.{h,cpp}`）：
+- **加载快照模块**（新增 `agent/lib/{include/agentxx/agent,src/agent}/assembly_snapshot.{h,cpp}`）：
   - `buildConfigSnapshot(AgentConfig&)`（配置侧，不需要构造 agent）、
     `buildRuntimeSnapshot(AgentContext&)`（init() 之后）、`mergeAssemblySnapshot`、
     `renderAssemblySnapshot`（人工可读文本，日志与 `--dump-config` 同源）、
@@ -1018,11 +1018,11 @@ slot；卸载自动回到内置"；"错误告诉插件作者如何修正；文�
     （skill/memory/rag/mcp）、插件声明（path/enabled/sides/config/args 键名）、语言与来源标记、
     提示词段落与哈希。**凭据与参数值一律不落快照**（有断言）。
   - **运行侧**：模型注册表（默认 + 全部名称 + 数量）、中间件顺序（名称/是否禁用/会话数）、
-    工具清单（装配项：来源/行为开关/是否被白名单过滤 + 原因；动态插件项：来源）、
+    工具清单（加载项：来源/行为开关/是否被白名单过滤 + 原因；动态插件项：来源）、
     插件条目（启用状态/用户禁用/依赖阻塞/装载耗时/注册计数/接口声明/工具名）、
     执行图（名称/节点数/节点类型/边数）、持久化（是否开启/根目录/schema 版本/写租约）、
     组件加载信息（skill/memory/mcp 与失败项及原因）。
-- **工具装配记录**（`AgentContext::ToolAssemblyRecord` + `toolAssembly` + `toolSourceHints`）：
+- **工具加载记录**（`AgentContext::ToolAssemblyRecord` + `toolAssembly` + `toolSourceHints`）：
   - 中间件贡献的工具在收集时写入来源提示（`middleware:<中间件名>`）；
   - 白名单过滤改为 `stable_partition`，被过滤的工具保留一条 `filtered=true` 记录
     （原因 `not in toolWhitelist (enableToolFiltering)`），被移出集合的工具对象不再丢信息；
@@ -1069,7 +1069,7 @@ slot；卸载自动回到内置"；"错误告诉插件作者如何修正；文�
 注意事项 / 与计划的差异：
 
 - 计划 ARC-6 提到"作业和队列状态"：作业整节不做（JOB 核定不考虑），队列状态是运行期
-  按会话变化的量（`SessionQueueState`），不属于启动装配快照；未纳入。
+  按会话变化的量（`SessionQueueState`），不属于启动加载快照；未纳入。
 - 计划 ARC-6 的"TUI 诊断页 / wire `get_diagnostics`"按限定范围不做；快照只走日志与 CLI。
 - 工具来源中的 `dynamic`（插件动态注册表）与 `assembled`（进入执行图的静态工具）分开列出：
   插件工具不进图引擎静态工具集，混在一起会误导"哪个集合在参与冲突检测"。
@@ -1100,7 +1100,7 @@ slot；卸载自动回到内置"；"错误告诉插件作者如何修正；文�
     （键排序 map，同来源覆盖）。这同时修掉一个既有缺陷：旧实现用
     `vector<string>` 追加，`onAgentcallStartFunc` 每轮 push 一次且无人清理，
     系统提示词会逐轮累积重复片段（长会话上下文与成本持续膨胀）；
-  - 请求装配（`ModelCallProcessNode`/`build_params`）：动态段作为**请求末尾的独立
+  - 请求加载（`ModelCallProcessNode`/`build_params`）：动态段作为**请求末尾的独立
     user 消息**附加，用 `<dynamic_context source="...">` 包裹并标 `AutoInserted`；
     不写会话上下文（权威 transcript 只存稳定段）。选 user 角色而非 system 的原因：
     openai-responses 与 anthropic provider 会把 system 消息归并到系统字段（请求最前），
@@ -1109,7 +1109,7 @@ slot；卸载自动回到内置"；"错误告诉插件作者如何修正；文�
     `buildSystemPrompt()`（完整段，供 UI/上下文查看）保持不变。
 - **PRM-7 请求体结构 + 稳定段哈希断言**：
   - `Session::noteStablePrefixHash(hash)` / `stablePrefixHash()` / `stablePrefixChanges()`：
-    请求装配时对 "system 消息 + 工具 schema" 取指纹，变化即记 Info 日志并计数
+    请求加载时对 "system 消息 + 工具 schema" 取指纹，变化即记 Info 日志并计数
     （排查"provider 前缀缓存命中率下降"）；
   - 测试断言请求体结构（system 只含稳定段、动态段在末尾带来源、工具 schema 非空、
     记忆内容整条请求只出现一次）与连续两轮稳定段字节一致 + 变化次数为 0。
@@ -1139,7 +1139,7 @@ slot；卸载自动回到内置"；"错误告诉插件作者如何修正；文�
 
 - 计划 PRM-1 提到"provider 不支持该形态时才整体重建并记录缓存失效"：本项目三家 provider
   都接受末尾的 user 消息，因此不做 provider 能力探测（LLM-1 已核定不补能力元数据元数据），
-  统一按"稳定段 + 末尾动态消息"装配；稳定段变化经 `stablePrefixChanges` 计数 + 日志暴露。
+  统一按"稳定段 + 末尾动态消息"加载；稳定段变化经 `stablePrefixChanges` 计数 + 日志暴露。
 - 动态段的 `source` 目前由中间件固定写入（`memory` / `skills`）；插件若需要贡献动态段，
   仍应经 `appendSystemPrompts`（静态段）或后续扩展该 map（未在本轮开放插件接口）。
 ### 阶段 M 补充：技能优先级与同名裁决（PRM-5，2026-10-06）
@@ -1264,7 +1264,7 @@ slot；卸载自动回到内置"；"错误告诉插件作者如何修正；文�
     （`toast.inputRejected`，中英文案已补）。
 - **LOOP-2 投递模式**（`WireUserInput.delivery`）：
   - `next-turn`（默认，空值归一化到它）：进入消息队列（旧行为）；
-  - `next-step`：轮次进行中登记为"待注入"，在**下一个 modelcall 请求装配前**（安全边界）
+  - `next-step`：轮次进行中登记为"待注入"，在**下一个 modelcall 请求加载前**（安全边界）
     作为 user 消息写入会话权威上下文 + 展示历史（EventBridge 不展开 user 角色消息，
     因此由 `appendUserViewMessage` 自行追加展示消息并广播 `InsertMessage`）；
     空闲时按 `next-turn` 立即开轮；
@@ -1355,8 +1355,8 @@ slot；卸载自动回到内置"；"错误告诉插件作者如何修正；文�
 建议路径：先做 LOOP-4（把两个 bool 换成 `idle/running/paused/draining` 状态机 + 转移测试，
 纯内部改动），再做 LOOP-3（`WireUserInput` 增加 `delivery`、新增投递回执消息），
 最后做 LOOP-1（`session_input` 表 + 恢复时不自动重放副作用）。`next-step`（下一个安全
-modelcall 边界注入）需要 modelcall 请求装配侧提供一个"待注入队列"入口，建议与 CTX/PRM
-的动态段一起设计，避免二次改请求装配。
+modelcall 边界注入）需要 modelcall 请求加载侧提供一个"待注入队列"入口，建议与 CTX/PRM
+的动态段一起设计，避免二次改请求加载。
 
 ## 阶段 Q：按规范化路径排队执行（TOOL-16，2026-10-06）
 
@@ -1521,7 +1521,7 @@ modelcall 边界注入）需要 modelcall 请求装配侧提供一个"待注入�
   `client_plugins` 657/0、`ui_kit` 167/0、`tui_widget` 129/0、`tui_ui_items` 203/0、
   `ui_items` 117/0、`command` 49/0、`worktree` 0/0（须在工作目录下运行）。
 - 产物构建：lib `INSTALL`、`agentxx_test`、`agentxx_cli`、`agentxx_filesystem` 插件目标均 exit=0。
-- 手工验证：`agentxx_cli --dump-config` 输出配置侧 + 运行侧装配快照（13 模型 / 6 中间件 /
+- 手工验证：`agentxx_cli --dump-config` 输出配置侧 + 运行侧加载快照（13 模型 / 6 中间件 /
   17 插件工具 / 7 插件装载耗时 / 图 / 持久化 / 配置问题 2 条），退出码 0。
 ## 阶段 T：协议版本与能力握手（PRO-3，2026-10-06）
 
@@ -1909,7 +1909,7 @@ modelcall 边界注入）需要 modelcall 请求装配侧提供一个"待注入�
 - **运行模式**（新增 `agent/client/include/agentxx-client/io/jsonl/jsonl_mode.h` +
   `agent/client/src/io/jsonl/jsonl_mode.cpp`,`agentxx_cli jsonl`）：
   - 与 `server` 模式共用同一套会话驱动实现: 接收循环 → `init()` → 端点 `run()` →
-    轮次 → 结果; 装配顺序与进程内 TUI/CLI 模式一致 (接收循环先于 `init` 启动,
+    轮次 → 结果; 加载顺序与进程内 TUI/CLI 模式一致 (接收循环先于 `init` 启动,
     子代理宿主 `AgentHost::attachRoot` 一并挂载);
   - **一次性运行收尾**: 输入结束 (或 SIGINT/SIGTERM) 后等待当前轮次与排队输入跑完
     (EOF 上限 300 秒, 信号上限 5 秒), 然后停端点 → 关插件刷盘 → 关传输 → 停 io_context;
@@ -2245,7 +2245,7 @@ modelcall 边界注入）需要 modelcall 请求装配侧提供一个"待注入�
 
 | 计划提的窄视图 | 现有等价接口 | 已被测试替身覆盖的用例 |
 |---|---|---|
-| `SessionReader` | `agentxx/nodes/session_context.h`（`sessionMessages` 只读借用 / `appendSessionMessages` 受控写入 + 影子通道刷新 / `updateMessagesMeta`），会话本身仍归 `SessionsManager` + `Session` | `prompt_stability_io`（请求装配读会话上下文）、`summarization`（压缩改上下文）|
+| `SessionReader` | `agentxx/nodes/session_context.h`（`sessionMessages` 只读借用 / `appendSessionMessages` 受控写入 + 影子通道刷新 / `updateMessagesMeta`），会话本身仍归 `SessionsManager` + `Session` | `prompt_stability_io`（请求加载读会话上下文）、`summarization`（压缩改上下文）|
 | `PermissionCheck` | 事件总线服务 `service.permission.check` / `service.permission.reverify`（JSON 进 JSON 出，工具与节点不直接依赖权限中间件实现） | `permission`（45 项：判定理由全分支 + 执行前目标复验）、`toolcall_parallel`（权限短路结果）|
 | `ToolRegistrar` | 插件经 `agentxx.agent.tools` 接口表注册；宿主侧 `ToolRegistry`（重名/内置冲突拒绝）+ `AgentContext::ToolAssemblyRecord`（来源/开关/被过滤原因） | `assembly_snapshot_io`（工具清单与来源）、`plugins`/`plugin_resources`（注册与撤销）、`toolcall_args`（分发） |
 | （子代理） | 服务 `service.subagent` + `AgentHost::spawnBatch`（根 agent 与子代理平等挂在 HostBus 上） | `subagent_bus`、`subagent_tool`、`agent_host` |

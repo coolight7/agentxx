@@ -392,7 +392,7 @@ public:
     // -------------------------------------------------------------------
     // 稳定提示前缀指纹 (仅 io 线程)
     //
-    // 请求装配时对"稳定段" (system 消息 + 工具 schema) 取指纹: 连续请求中它不变,
+    // 请求加载时对"稳定段" (system 消息 + 工具 schema) 取指纹: 连续请求中它不变,
     // provider 的前缀缓存才有效。变化时计数并记日志, 供排查"缓存命中率突然下降"。
     // -------------------------------------------------------------------
 
@@ -671,9 +671,9 @@ struct AgentAppendComponentInfo {
     std::vector<AppendComponentNotification> failedComponents;
 };
 
-/// 单个工具的装配记录
+/// 单个工具的加载记录
 ///
-/// 记录"装配期看到的事实", 供启动装配快照与诊断输出使用:
+/// 记录"加载期看到的事实", 供启动加载快照与诊断输出使用:
 /// 工具是否进入执行图, 来自哪里, 有哪些行为开关;
 /// 被工具白名单过滤掉的工具也保留一条记录 (filtered=true), 便于回答
 /// "为什么模型看不到这个工具"。
@@ -750,17 +750,17 @@ public:
     /// - 由 BaseAgent::init 创建并注入
     std::shared_ptr<plugin::ToolRegistry> toolRegistry = nullptr;
 
-    /// 本 agent 实际装配的工具名列表 (BaseAgent::init 构建执行图时填充)
+    /// 本 agent 实际加载的工具名列表 (BaseAgent::init 构建执行图时填充)
     /// - 供子代理"全量继承父 agent 工具" (tools=["*"]) 使用:
     ///   AgentHost 据此填充子代理的 toolWhitelist
     std::vector<std::string> toolNames;
 
-    /// 工具装配记录 (含被白名单过滤掉的工具; BaseAgent::init 填充)
-    /// - 供启动装配快照、工具清单诊断与 --dump-config 使用
+    /// 工具加载记录 (含被白名单过滤掉的工具; BaseAgent::init 填充)
+    /// - 供启动加载快照、工具清单诊断与 --dump-config 使用
     std::vector<ToolAssemblyRecord> toolAssembly;
 
-    /// 工具来源提示 (工具名 → 来源): 装配期由中间件工具收集处写入,
-    /// 创建装配记录时优先取这里的值, 取不到再按插件/MCP/内置推断
+    /// 工具来源提示 (工具名 → 来源): 加载期由中间件工具收集处写入,
+    /// 创建加载记录时优先取这里的值, 取不到再按插件/MCP/内置推断
     std::map<std::string, std::string, std::less<>> toolSourceHints;
 
     /// 插件管理器 (生命周期/热插拔; 全局唯一)
@@ -774,13 +774,13 @@ public:
     std::shared_ptr<agentxx::util::TaskScope> taskScope = nullptr;
 
     /// 关键指标: 轮次/首 token 延迟/模型调用与用量/工具终态/压缩次数
-    /// - 由 BaseAgent::init 创建 (与事件总线同一生命周期), 诊断包与装配快照可读
+    /// - 由 BaseAgent::init 创建 (与事件总线同一生命周期), 诊断包与加载快照可读
     /// - 只记"发生了什么"的计数与耗时, 不含任何内容, 因此可安全导出 (见 diagnostics.h)
     std::shared_ptr<agentxx::util::KeyMetrics> metrics = nullptr;
 
     /// 功能点注册表 (点 / 实现 / 调用; 见
     /// [feature.h](/agent/lib/include/agentxx/feature/feature.h))
-    /// - 由 BaseAgent::init 创建 (早于中间件装配, 因此中间件可以声明核心点;
+    /// - 由 BaseAgent::init 创建 (早于中间件加载, 因此中间件可以声明核心点;
     ///   也早于插件加载, 因此插件登记实现时点已存在)
     /// - 随本 AgentContext 一份: 多 agent 实例互不影响, 不使用全局变量
     std::shared_ptr<agentxx::feature::Registry> features = nullptr;
@@ -793,7 +793,7 @@ public:
     std::shared_ptr<PromptSourceRegistry> promptSources = std::make_shared<PromptSourceRegistry>();
 
     /// 本 agent 上一次请求实际发送的工具定义
-    /// - 由 modelcall 装配请求时写入; 供"同上下文子代理"对齐请求前缀
+    /// - 由 modelcall 加载请求时写入; 供"同上下文子代理"对齐请求前缀
     ///   (上下文压缩: 工具定义一致, 上游前缀缓存才命中)
     /// - 工具定义只与 agent 配置相关、与会话无关, 因此一份即可; 子代理经
     ///   shared_ptr 共享, 零拷贝
@@ -985,7 +985,7 @@ public:
     // -------------------------------------------------------------------
     // 稳定段 / 动态段分离
     //
-    // 提示词分两部分, 请求装配时分别放置, 保证连续请求的前缀稳定:
+    // 提示词分两部分, 请求加载时分别放置, 保证连续请求的前缀稳定:
     // - 稳定段 (`buildSystemPromptStable`): systemPrompt + 静态附加段
     //   (appendSystemPrompts, 按 order 排序) + 运行时稳定段
     //   (记忆文件内容 / 技能清单, 由 PromptSourceRegistry 按会话持有) —— 全部进
@@ -1010,8 +1010,8 @@ public:
     std::vector<std::pair<std::string, std::string>>
         buildDynamicContextSections(std::string_view sessionId = "") const;
 
-    /// 段落视图 (按装配顺序: 配置作用域静态段在前, 运行时段在后)
-    /// - 供装配快照与诊断需要"某段是谁提供的、什么顺序"时使用
+    /// 段落视图 (按加载顺序: 配置作用域静态段在前, 运行时段在后)
+    /// - 供加载快照与诊断需要"某段是谁提供的、什么顺序"时使用
     std::vector<PromptSectionView> promptSectionViews(std::string_view sessionId = "") const;
 
     /// 替换提示词里的会话级占位符 (工作目录 / 临时目录 / 会话 ID)

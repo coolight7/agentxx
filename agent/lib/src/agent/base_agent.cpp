@@ -80,7 +80,7 @@ BaseAgent::BaseAgent(std::shared_ptr<agentxx::agent::AgentConfig> in_config) {
 /// - 背景: 严格网关 (SCNet / opencode Console Go / Gemini 等) 会校验 tools schema,
 ///   非法结构 (如 enum 嵌套数组 [[...]]、array 缺 items、联合类型 + items)
 ///   直接在请求期返回 HTTP 400, 且错误信息含糊 (invalid_prompt / INVALID_ARGUMENT
-///   / Provider returned error), 难排查; 故在启动装配工具时即校验, 尽早暴露问题
+///   / Provider returned error), 难排查; 故在启动加载工具时即校验, 尽早暴露问题
 /// - 检查点:
 ///   * enum 必须是数组, 且元素必须是标量 (string/number/boolean/null),
 ///     不能是数组/对象 —— 嵌套容器属于非法 enum schema;
@@ -141,8 +141,7 @@ static void checkToolSchemaValidity(
                 schema.contains("type") ? schema["type"].dump() : "<missing>"
             );
         }
-    } else if (schema.contains("type") && schema["type"].is_string()
-               && schema["type"].get<std::string>() == "array") {
+    } else if (schema.contains("type") && schema["type"].is_string() && schema["type"].get<std::string>() == "array") {
         // array 类型必须带 items (Gemini 缺 items 报 "missing field")
         XX_LOGE(
             "Tool `{}` schema `{}`: type \"array\" must have an \"items\" field; "
@@ -161,7 +160,7 @@ static void checkToolSchemaValidity(
     }
 }
 
-/// 启动装配步骤
+/// 启动加载步骤
 ///
 /// 把启动阶段变成可检查的清单, 而不是一串顺序调用:
 /// - [name] 步骤名: 日志、失败提示与依赖引用都用它
@@ -175,7 +174,7 @@ struct InitStep {
     std::function<void()>                  rollback;
 };
 
-/// 逆序回滚已完成的装配步骤
+/// 逆序回滚已完成的加载步骤
 /// - 回滚自身出错只记日志, 不掩盖最初的失败原因
 void rollbackInitSteps(const std::vector<InitStep>& steps, const std::vector<size_t>& done) {
     for (auto it = done.rbegin(); it != done.rend(); ++it) {
@@ -196,7 +195,7 @@ void rollbackInitSteps(const std::vector<InitStep>& steps, const std::vector<siz
     }
 }
 
-/// 按清单顺序执行装配步骤
+/// 按清单顺序执行加载步骤
 /// - 依赖检查: [InitStep::after] 指向的步骤必须已经成功执行
 /// - 记录每步耗时 (Debug 日志), 便于定位启动慢的环节
 /// - 任一步失败: 逆序回滚已完成步骤, 抛出带步骤名的错误;
@@ -320,7 +319,7 @@ asio::awaitable<void> BaseAgent::init() {
         .name  = "feature_registry",
         .after = "event_bus",
         .run   = [&]() -> asio::awaitable<void> {
-            // 功能点注册表 (点 / 实现 / 调用): 早于中间件装配, 因此中间件可以声明
+            // 功能点注册表 (点 / 实现 / 调用): 早于中间件加载, 因此中间件可以声明
             // 核心点 (如 agentxx.context.countTokens); 也早于插件加载, 因此插件
             // 登记实现时点已存在
             // - 开发者模式在启动时读取配置后冻结: 库内热路径只读进程级标记
@@ -356,7 +355,7 @@ asio::awaitable<void> BaseAgent::init() {
         .name  = "plugin_system",
         .after = "middleware_context",
         .run   = [&]() -> asio::awaitable<void> {
-            // 插件系统装配: 工具注册表 + 插件管理器 (挂在 AgentContext, 供
+            // 插件系统加载: 工具注册表 + 插件管理器 (挂在 AgentContext, 供
             // ToolcallWrapNode/ModelCallWrapNode/中间件栈取用)
             // - 在 initMiddleware 之前创建: 插件钩子注册 (加载插件时) push 到
             //   handles 栈, 与既有中间件并存
@@ -365,7 +364,7 @@ asio::awaitable<void> BaseAgent::init() {
             agentContext->toolRegistry = std::make_shared<agentxx::plugin::ToolRegistry>();
             agentContext->pluginManager
                 = std::make_shared<agentxx::plugin::PluginManager>(agentContext);
-            // 装配 io executor: 插件 vtable 的跨线程调用 (JS 线程等) 经 post 到 io 线程
+            // 加载 io executor: 插件 vtable 的跨线程调用 (JS 线程等) 经 post 到 io 线程
             // 执行并同步等待 (init 运行于 io 线程, 此处记录的线程 id 即 io 线程)
             agentContext->pluginManager->setIoExecutor(co_await asio::this_coro::executor);
             co_return;
@@ -434,7 +433,7 @@ asio::awaitable<void> BaseAgent::init() {
             // 工具白名单过滤 (子代理"无工具/自定义/继承父工具"场景):
             // - 作用于 initTools + 中间件收集后的完整工具集
             // - 仅按名称过滤; 白名单中不存在的名称自然跳过 (不报错)
-            // - 被过滤掉的工具保留一条装配记录 (filtered=true + 原因), 便于回答
+            // - 被过滤掉的工具保留一条加载记录 (filtered=true + 原因), 便于回答
             //   "为什么模型看不到这个工具"
             if (agentContext->agentConfig->enableToolFiltering) {
                 const auto& whitelist = agentContext->agentConfig->toolWhitelist;
@@ -637,7 +636,7 @@ asio::awaitable<void> BaseAgent::init() {
         .name  = "bind_tools",
         .after = "engine_build",
         .run   = [&]() -> asio::awaitable<void> {
-            // 装配静态工具名集合 (插件工具注册冲突检测用; 覆盖内置/中间件/MCP 工具)
+            // 加载静态工具名集合 (插件工具注册冲突检测用; 覆盖内置/中间件/MCP 工具)
             // - 必须在 own_tools 之前收集: own_tools 会把 tools 元素 move 成空
             //   unique_ptr, 之后遍历将解引用空指针
             if (agentContext->toolRegistry) {
@@ -648,14 +647,14 @@ asio::awaitable<void> BaseAgent::init() {
                 }
                 agentContext->toolRegistry->setStaticToolNames(std::move(staticNames));
             }
-            // 记录本 agent 装配的工具名列表 (供子代理"全量继承父工具"使用)
+            // 记录本 agent 加载的工具名列表 (供子代理"全量继承父工具"使用)
             agentContext->toolNames.clear();
             agentContext->toolNames.reserve(tools.size());
             for (auto& tool : tools) {
                 agentContext->toolNames.push_back(tool->get_name());
             }
 
-            // 工具装配记录: 名称 + 来源 + 行为开关
+            // 工具加载记录: 名称 + 来源 + 行为开关
             // - 此时 tools 已是白名单过滤后的最终集合 (被过滤的已在过滤步骤记录)
             // - 必须在 own_tools 之前收集: 之后工具对象归图引擎所有
             agentContext->toolAssembly.reserve(agentContext->toolAssembly.size() + tools.size());
@@ -680,14 +679,14 @@ asio::awaitable<void> BaseAgent::init() {
         },
     });
 
-    // 按清单顺序执行装配; 失败时逆序回滚已完成步骤并抛出带步骤名的错误
+    // 按清单顺序执行加载; 失败时逆序回滚已完成步骤并抛出带步骤名的错误
     co_await runInitSteps(steps);
 
-    // 装配后启动断言: 模型 / 必要节点 / 工具定义 / 插件目录 / 持久化
+    // 加载后启动断言: 模型 / 必要节点 / 工具定义 / 插件目录 / 持久化
     // - 配置或依赖有问题在这里立即失败, 而不是等第一轮对话才暴露
     verifyStartupAssembly();
 
-    // 启动装配快照: 记录本次启动实际装配成了什么
+    // 启动加载快照: 记录本次启动实际加载成了什么
     // - 计数摘要走 Info, 完整 JSON 走 Debug (常规启动不打全量, 排查时按需打开)
     // - `agentxx_cli --dump-config` 用同一份实现打印到标准输出
     logAssemblySnapshot(buildRuntimeSnapshot(*agentContext), "startup");
@@ -1122,7 +1121,7 @@ void BaseAgent::initMiddlewareTools(std::vector<std::unique_ptr<agentxx::tools::
 ) {
     for (auto& item : agentContext->middlewareHandleContext->handles) {
         if (false == item->toolcalls.empty()) {
-            // 记录来源 (工具装配记录用): 中间件贡献的工具在装配期就能确定归属,
+            // 记录来源 (工具加载记录用): 中间件贡献的工具在加载期就能确定归属,
             // 之后工具对象被 move 进图引擎, 无法再反查
             for (const auto& tool : item->toolcalls) {
                 if (tool) {

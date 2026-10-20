@@ -99,7 +99,7 @@ std::shared_ptr<EventSource> PluginManager::eventSource() {
         return nullptr;
     }
     // 发布走本管理器的 IO executor (与既有行为一致: publish 不阻塞插件调用线程);
-    // 未装配 executor 时退回事件总线自身的执行器。
+    // 未加载 executor 时退回事件总线自身的执行器。
     auto executor = ioExecutor() ? ioExecutor() : ctx->bus->executor();
     return std::make_shared<AgentEventBusSource>(ctx->bus, std::move(executor));
 }

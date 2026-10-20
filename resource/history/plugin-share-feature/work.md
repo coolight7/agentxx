@@ -37,8 +37,8 @@
 **改动的既有文件**
 
 - `agent/lib/include/agentxx/agent/context.h`：`AgentContext::features`（功能点注册表，随实例一份）
-- `agent/lib/src/agent/base_agent.cpp`：新增 `feature_registry` 装配步（在 `event_bus` 之后、
-  `middleware_context` 之前 —— 早于中间件装配，也早于插件装载），同时把配置里的开发者模式
+- `agent/lib/src/agent/base_agent.cpp`：新增 `feature_registry` 加载步（在 `event_bus` 之后、
+  `middleware_context` 之前 —— 早于中间件加载，也早于插件装载），同时把配置里的开发者模式
   镜像到进程级只读标记
 - `agent/lib/include/agentxx/agent/config_static.h`：`AgentConfigStatic::devMode`（启动期冻结）
 - `agent/lib/include/agentxx/agent/config.h` + `agent/client/include/agentxx-client/config_loader.h`
@@ -194,7 +194,7 @@ agentxx_test summarization feature_points event_stream event_bridge agent plugin
   `detachDomainRegistrations` 撤实现与点、`clearDomainRegistrations` 清记录；
   `registrationInventory` 统计生效中的 `featurePoints` / `featureImpls`（计入 `total()`）；
   `list()` 视图新增 `featurePointCount` / `featureImplCount`；
-  装配快照新增插件条目 `feature_point_count` / `feature_impl_count` 与运行侧 `feature_points` 段。
+  加载快照新增插件条目 `feature_point_count` / `feature_impl_count` 与运行侧 `feature_points` 段。
 
 **SDK（`agent/lib/include/agentxx/plugin/api/plugin_kit.h`）**
 
@@ -290,7 +290,7 @@ agentxx_test boundaries config_validation plugin_bridge feature_points plugins
   旧处理（它让 `bad_args` 永远不可见，坏参数被静默降级成"没带参数"），
   改为原样交给点判定 —— 插件拿到的结果 JSON 里就是 `{"ok":false,"error":"bad_args"}`。
 
-**清单进装配快照与 `--dump-diagnostics`**
+**清单进加载快照与 `--dump-diagnostics`**
 
 - `agent/lib/src/agent/assembly_snapshot.cpp`：
   - 插件条目文本行补 `features=<生效点>/<生效实现>`；
@@ -314,7 +314,7 @@ agentxx_test boundaries observability plugin_bridge feature_points plugin_cleanu
 - `feature_points`（+11）：`bad_args`（`call` 与 `ask` 两条入口、实现零调用）、
   合法 JSON 放行（对象 / 标量）、空串按"不带参数"处理；
 - `plugin_feature`（+4）：插件按名调用传非法 JSON → 受理成功 + `bad_args`；
-- `observability`（+3）：诊断包装配段含 `featurePoints[`、两个核心点 id 与
+- `observability`（+3）：诊断包加载段含 `featurePoints[`、两个核心点 id 与
   `devMode` 标注。
 
 ### 注意事项 / 留给后续阶段
@@ -469,7 +469,7 @@ agentxx_test boundaries observability plugin_bridge feature_points plugin_cleanu
    （给一个空实现的完成通知器）；返回操作句柄会被记警告并请求取消。库内当前无使用者 ——
    将来真要用异步 core 处理器，需要像插件层那样接 `OpCore` 驱动。
 3. **`hooksJson()` 的线程约定**：读注册表当前状态，应在宿主 io 线程调用（`list_hooks`
-   入口已由 vtable 投递；装配快照与诊断也在同一生命周期阶段取数）。装配快照若哪天改到
+   入口已由 vtable 投递；加载快照与诊断也在同一生命周期阶段取数）。加载快照若哪天改到
    别的线程构建，需要给注册表加锁或改成快照缓存。
 4. **清单只是只读视图**：不参与派发判定（派发只看注册表当前状态，且每次派发取一次快照）。
 5. **顺序调整 = 重新登记**：没有"运行时改优先级"的接口（

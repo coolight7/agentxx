@@ -453,7 +453,7 @@ private:
     ///   给所有已连接客户端, 多端界面保持一致
     void subscribePermissionEvents(const std::shared_ptr<agentxx::events::EventBus>& bus);
 
-    /// 查询 agent 侧权限中间件 (未装配时返回 nullptr)
+    /// 查询 agent 侧权限中间件 (未加载时返回 nullptr)
     agentxx::middleware::PermissionMiddlewareHandle* permissionMiddleware() const;
 
     /// 当前是否已"完全授权所有权限" (无权限中间件时按 false)

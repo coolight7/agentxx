@@ -77,7 +77,7 @@
 | 异步驱动 | `agent/lib/include/agentxx/plugin/op_driver.h` | `OpCore`、start/done 等待、取消、超时后的后台收尾、句柄回收 |
 | 图适配 | `plugin_graph_node.h/.cpp` | 将 C ABI graph node 适配为 NeoGraph 节点 |
 | Client 管理器 | `client_plugin_manager.h`、`client_plugin_manager.cpp` | Client 插件加载、事件、命令、UI 注册表、renderer、动作和卸载 |
-| Agent 生命周期 | `agent/context.cpp`、`agent/base_agent.cpp`、`agent/agent_host.cpp` | AgentContext/AgentHost 的插件装配和销毁 |
+| Agent 生命周期 | `agent/context.cpp`、`agent/base_agent.cpp`、`agent/agent_host.cpp` | AgentContext/AgentHost 的插件加载和销毁 |
 | 内置插件 | `agent/plugins/` | filesystem、command、web、RAG、monitor、planning、JS、平台插件和示例 |
 | 测试 | `agent/test/plugin/`、相关 `agent/test/core/`、Client 测试 | 插件系统、资源、多实例、Client 和业务插件测试 |
 

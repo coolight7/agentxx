@@ -59,7 +59,7 @@
 └─────────────────────────────────────────────────────────────┘
 ```
 
-装配时序 (双线程协同, clientEx ↔ agentEx):
+加载时序 (双线程协同, clientEx ↔ agentEx):
 
 1. `ChannelAgentIOTransport::makePair(clientEx, agentEx)` → 双端点 `setTransport`
 2. **在 agent 线程**: 先 `co_spawn(serverIO->runTransportLoop())`: init 期间客户端请求

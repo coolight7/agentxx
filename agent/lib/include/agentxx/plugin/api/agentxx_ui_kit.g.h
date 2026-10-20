@@ -3,7 +3,7 @@
 // 定义：agent/schema/agentxx-ui-kit.def.json
 #pragma once
 
-// kit：共享便捷组件。只装配、不含逻辑，也不引用客户端专属块。
+// kit：共享便捷组件。只加载、不含逻辑，也不引用客户端专属块。
 // 参数用 utilxx_base::Json 传（对象），键即组件参数名：
 //   agentxx::ui::kit::listRow({{"title", "切歌次数"}, {"trailing", "3"}})
 // 传 env（客户端能力摘要）时按目标选择更合适的变体；不传 env 时产出中立描述，

@@ -28,7 +28,7 @@ struct ConfigIssue {
     std::string keyPath;
     /// 面向用户的问题说明 (原因 + 如何修正)
     std::string message;
-    /// 来源描述 (配置文件链 / 环境变量 / 默认值); 由装配侧填入, 允许为空
+    /// 来源描述 (配置文件链 / 环境变量 / 默认值); 由加载侧填入, 允许为空
     std::string source;
 };
 
@@ -40,7 +40,7 @@ struct ConfigValidationReport {
     size_t count(ConfigIssueLevel level) const noexcept;
     /// 一行一条: `[warning] key.path: message (source)`
     std::vector<std::string> render() const;
-    /// 结构化输出 (供装配快照 / `--dump-config` 使用)
+    /// 结构化输出 (供加载快照 / `--dump-config` 使用)
     utilxx_base::Json toJson() const;
     /// 给已有及后续问题统一打来源标签
     void setSource(std::string_view source);
@@ -58,7 +58,7 @@ ConfigValidationReport validateAgentConfig(const AgentConfig& config);
 /// - 未配置 dataDir (内存模式) → Warning (明确"重启后不保留")
 ConfigValidationReport validateConfigPaths(const AgentConfig& config);
 
-/// 结构校验 + 路径校验 (启动装配侧统一调用)
+/// 结构校验 + 路径校验 (启动加载侧统一调用)
 ConfigValidationReport validateAgentConfigWithPaths(const AgentConfig& config);
 
 } // namespace agent

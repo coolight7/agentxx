@@ -97,7 +97,7 @@ struct PromptSource {
     std::function<asio::awaitable<std::optional<std::string>>(const PromptRefreshContext&)> build;
 };
 
-/// 段落只读视图 (装配 / 快照 / 诊断都用它)
+/// 段落只读视图 (加载 / 快照 / 诊断都用它)
 ///
 /// - 引用指向注册表或 `AgentPrompt` 内部存储, **只在本次调用内有效**,
 ///   不得跨 `co_await` 持有
@@ -126,7 +126,7 @@ struct PromptRefreshStats {
 
 /// 运行时提示词来源注册表
 ///
-/// 线程模型: 状态只在 io 线程访问 (与段落进入请求装配同线程); `ensureFresh`
+/// 线程模型: 状态只在 io 线程访问 (与段落进入请求加载同线程); `ensureFresh`
 /// 在同一 io 线程串行执行, 内部的 `busy` 标记避免重入 (重入时只保留 dirty 标记)。
 class PromptSourceRegistry {
 public:
@@ -152,7 +152,7 @@ public:
     /// 标记某会话需要刷新 (纯同步, 可在压缩路径安全调用; 不立即读盘)
     void markDirty(std::string_view sessionId, PromptRefreshReason reason);
 
-    /// 标记全体会话需要刷新 (资源变更; 只置位, 实际读盘在各会话的请求装配前)
+    /// 标记全体会话需要刷新 (资源变更; 只置位, 实际读盘在各会话的请求加载前)
     void markAllDirty(PromptRefreshReason reason);
 
     /// 该会话是否有待处理的刷新标记 (诊断/测试)

@@ -893,7 +893,7 @@ static asio::awaitable<void> test_session_controller_replay() {
         cfg
     );
 
-    // 强制 transport: 先装配再产出事件 (sendToPeer 同时写缓冲并实时转发 client)
+    // 强制 transport: 先加载再产出事件 (sendToPeer 同时写缓冲并实时转发 client)
     sc->setTransport(std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT)));
 
     for (uint64_t s = 1; s <= 5; ++s) {
@@ -970,7 +970,7 @@ static asio::awaitable<void> test_session_controller_replay_fallback() {
         cfg
     );
 
-    // 强制 transport: 先装配再产出事件
+    // 强制 transport: 先加载再产出事件
     sc->setTransport(std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT)));
 
     for (uint64_t s = 1; s <= 10; ++s) {
@@ -3799,7 +3799,7 @@ static asio::awaitable<void> test_add_model_config_via_wire() {
     cfg->availableModels["existing"] = existing;
     auto agent                       = std::make_shared<agentxx::agent::BaseAgent>(cfg);
 
-    // 最小装配: 不跑 agent->init() (测试不需要图/工具), 只补上模型注册表
+    // 最小加载: 不跑 agent->init() (测试不需要图/工具), 只补上模型注册表
     // (selectModel 要求注册表里有该模型才会切换会话模型)
     agent->agentContext->modelRegistry = std::make_shared<agentxx::agent::ModelProviderRegistry>();
     agent->agentContext->modelRegistry->registerModel("existing", existing);

@@ -3,7 +3,7 @@
 #
 # 在干净环境跑一条命令即可完成本轮改动要求的检查:
 #   1. 构建 (可选, --build): 只构建检查需要的目标 (agentxx_test / 插件)
-#   2. 单元测试: 全模块 fail-fast (含边界、协议往返、配置校验、UI 快照、装配快照)
+#   2. 单元测试: 全模块 fail-fast (含边界、协议往返、配置校验、UI 快照、加载快照)
 #   3. 源码/构建配置边界: `boundaries` 模块 (随上面一起跑)
 #   4. 插件导出符号白名单: check_plugin_exports.sh (Linux/macOS, 需 nm)
 #   5. SDK 反例编译: check_sdk_negative_compile.sh (需 python3 + compile_commands.json)

@@ -1066,7 +1066,7 @@ python resource/benchmark/harness/frame_owner.py <agentxx_cli.exe> <link.map>
 ### 14.4 结论
 
 1. 本轮改动**没有引入内存回退**: 全场景 34 个可比采样点 31 降 3 升, 升幅都在
-   运行间波动量级或装配新增的开销上 (两个 server 启动点 +0.91);
+   运行间波动量级或加载新增的开销上 (两个 server 启动点 +0.91);
 2. 第 13 节的帧处置与分配量收敛在长上下文上兑现为提交量: 50×8KB -35%、
    100×8KB -23%、50×100B -48%, 100×8KB 峰值提交 -50%; 专用工作集持平;
 3. 巨帧静态卡口维持 66 个 / 92.7 MiB, 与处置后一致 (训练链 6.4 MiB 未处置,
@@ -1226,7 +1226,7 @@ token 估算与压缩改走功能点; `104d5c79`: 启用重复调用检查), 基
 2. **新增注册表的成本量级是 0.1~0.2 MB**: 启动阶段 `agent_init_done` 比上一批高
    0.12~0.16 MB, `agent_constructed` 高 0.02~0.03 MB, 与功能点/钩子/接口表元数据
    三类注册表加上 `agent.config` (+2.3 KB, 系统提示词构建调整) 的量级一致;
-   相对 09-28 则仍是净下降 (插件装配点 -0.37 MB、未加载插件基线 -0.30 MB);
+   相对 09-28 则仍是净下降 (插件加载点 -0.37 MB、未加载插件基线 -0.30 MB);
 3. **长上下文与巨帧都持平**: harness 的专用工作集/提交在同一档内, 帧扫描逐项一致
    (66 个 / 92.7 MiB), 第 13 节的处置收益没有被抵消;
 4. **待跟进**: ①`real_tui/self/startup` 的线程 32→33、fd 223→257 (+34);
@@ -1602,7 +1602,7 @@ Windows Debug + ASan, 临时 `data_dir` (会话库 `{data}/sqlite/sessions/<sess
 (`AgentConfig::toolChoiceNoneSupported` 字段一并删除, 不执行工具靠 `callLLM` 忽略
 `tool_calls` 已足够), 重测仍为 `cached = 0` —— 差异不在该字段。
 
-为定位真实差异, 在 `modelcall` 的请求装配末尾加了一条 debug 日志 (不含正文, 只有指纹),
+为定位真实差异, 在 `modelcall` 的请求加载末尾加了一条 debug 日志 (不含正文, 只有指纹),
 `AGENTXX_LOG_MODULES='modelcall=debug'` 打开:
 
 ```
@@ -1664,8 +1664,8 @@ Windows Debug + ASan, 临时 `data_dir` (会话库 `{data}/sqlite/sessions/<sess
 
 1. **子代理用量没进台账**: 子代理的 `AgentContext` 没有 `sessionStore`, `recordUsage` 直接
    返回。已修: 派生时写入父会话记账目标 (见上), 嵌套委派沿用最外层目标不重复计数。
-2. **`jsonl` / `server` 模式缺 `AgentHost`**: 只有进程内 `tui`/`cli` 与 FFI 装配过主程序,
-   `jsonl` 里的装配还被 `enableSubagent` 门控。已修: 新增
+2. **`jsonl` / `server` 模式缺 `AgentHost`**: 只有进程内 `tui`/`cli` 与 FFI 加载过主程序,
+   `jsonl` 里的加载还被 `enableSubagent` 门控。已修: 新增
    `AgentHost::attachRootAgentHost()` 公共入口, 四种运行形态统一在 `agent::init()` 之后调用,
    且与 `enableSubagent` 无关 (该开关只控制是否把 subagent 工具注入给模型)。
    修完后 `jsonl` 里自动压缩不再报 `service.subagent ... no server registered`。

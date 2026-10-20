@@ -37,7 +37,7 @@ namespace agentxx {
 namespace tools {
 
 /// 会话工作目录解析 (原工具经 AgentContext; 与插件 get_session_work_dir 同源):
-/// ctx 未装配时回退进程 cwd, 相对路径用例语义不变
+/// ctx 未加载时回退进程 cwd, 相对路径用例语义不变
 inline std::string testResolvedWorkDir(const std::weak_ptr<agentxx::agent::AgentContext>& ctx) {
     if (auto p = ctx.lock()) {
         if (p->agentConfig) {
@@ -2985,7 +2985,7 @@ asio::awaitable<void> test_sync_fallback_without_async_file_io(
 ///     →done 上报; asio stream_file 异步文件 I/O 在寄生 loop 上推进)
 ///   - list/grep: offload线程池适配异步接口
 /// 会话工作目录经主程序 get_session_work_dir 接口注入 (绑定 testDir), 同时覆盖
-/// work_dir 接口表装配; 插件未构建 (无 .so 产物) 时优雅跳过
+/// work_dir 接口表加载; 插件未构建 (无 .so 产物) 时优雅跳过
 asio::awaitable<void> test_plugin_real_link() {
     namespace fs = std::filesystem;
 

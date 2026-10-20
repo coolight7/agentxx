@@ -189,7 +189,7 @@ ConfigValidationReport validateAgentConfig(const AgentConfig& config) {
         );
     }
 
-    // ---- 路径形态 (绝对路径要求; 相对路径的展开归属装配侧) ----
+    // ---- 路径形态 (绝对路径要求; 相对路径的展开归属加载侧) ----
     if (!config.workDir.empty() && !fs::path(config.workDir).is_absolute()) {
         addIssue(
             report,

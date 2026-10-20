@@ -123,7 +123,7 @@ SummarizationMiddlewareHandle::SummarizationMiddlewareHandle(
     tokenEstimator->extraTokensPerMessage = extraTokensPerMessage;
 
     // 声明上下文两点 (token 估算 / 压缩) 并登记核心实现
-    // - 中间件在插件加载前装配, 因此插件登记实现时点一定已存在
+    // - 中间件在插件加载前加载, 因此插件登记实现时点一定已存在
     // - 单测直接构造本中间件 (无 AgentContext) 时 featurePoints 为空, 走同步路径即可
     if (auto ctx = agentContext.lock(); ctx != nullptr && ctx->features != nullptr) {
         agentxx::feature::ContextPointOptions pointOptions;
@@ -708,11 +708,11 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
         {"messages",               std::move(reqMsgsJson)},
         {"sessionId",              std::string{sessionId}},
         {"enable_summarization",   false                 },
-        // 前缀复用: 保留调用方给的 system 消息 + 继承父会话上一次请求的工具定义
-        // (请求前缀与父会话逐字节一致, 上游前缀缓存才命中)
+ // 前缀复用: 保留调用方给的 system 消息 + 继承父会话上一次请求的工具定义
+  // (请求前缀与父会话逐字节一致, 上游前缀缓存才命中)
         {"keep_provided_system",   true                  },
         {"inherit_request_tools",  true                  },
-        // 本次运行不执行工具: 工具定义只用于对齐前缀, 模型返回 tool_calls 时忽略
+ // 本次运行不执行工具: 工具定义只用于对齐前缀, 模型返回 tool_calls 时忽略
         {"disable_tool_execution", true                  },
     };
 

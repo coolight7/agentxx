@@ -103,7 +103,7 @@ std::vector<utilxx_base::Json> messagesOf(const utilxx_base::Json& request) {
     return out;
 }
 
-/// 取装配的压缩中间件 (未装配返回 nullptr)
+/// 取加载的压缩中间件 (未加载返回 nullptr)
 agentxx::middleware::SummarizationMiddlewareHandle*
     findSummarizationMiddleware(agentxx::agent::CodeAgent& agent) {
     auto ctx = agent.agentContext;

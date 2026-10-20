@@ -5,7 +5,7 @@
 ///    分类、工具终态 (成功/失败/取消/中断)、压缩、JSON/summary 字段、reset
 /// 2. 凭据脱敏: key=value / Bearer / 裸 token / URL userinfo / 查询参数
 /// 3. 日志捕获: 环形缓冲容量、启停、清空
-/// 4. 诊断包: 段落齐全 (版本/环境、指标、装配、会话、日志尾部), 不含 API Key 取值,
+/// 4. 诊断包: 段落齐全 (版本/环境、指标、加载、会话、日志尾部), 不含 API Key 取值,
 ///    默认不含消息正文、显式打开时含截断正文, 日志尾部经脱敏
 #include "agentxx-test/core/test_observability.h"
 
@@ -228,7 +228,7 @@ void testDiagnosticsPackage() {
     ctx->agentConfig->model.modelName    = "test-model";
     ctx->agentConfig->dataDir            = dir.string();
     ctx->agentConfig->enableSessionStore = true;
-    // 功能点: 装配上下文两个核心点 (与 BaseAgent::init 同一顺序), 让诊断包的
+    // 功能点: 加载上下文两个核心点 (与 BaseAgent::init 同一顺序), 让诊断包的
     // featurePoints 段有真实内容可断言
     ctx->features = std::make_shared<agentxx::feature::Registry>();
     agentxx::feature::registerContextPoints(
@@ -286,14 +286,14 @@ void testDiagnosticsPackage() {
     XX_TEST_EXPECT_TRUE(text.find("## metrics (this process)") != std::string::npos);
     XX_TEST_EXPECT_TRUE(text.find("turns=1") != std::string::npos);
 
-    // 装配段 (与 --dump-config 同源): 含模型/工具/插件/持久化小节
+    // 加载段 (与 --dump-config 同源): 含模型/工具/插件/持久化小节
     XX_TEST_EXPECT_TRUE(text.find("## assembly") != std::string::npos);
     XX_TEST_EXPECT_TRUE(
         text.find("model.default: test-model (https://api.example.com/v1)") != std::string::npos
     );
     XX_TEST_EXPECT_TRUE(text.find("tools:") != std::string::npos);
     XX_TEST_EXPECT_TRUE(text.find("plugins[") != std::string::npos);
-    // 功能点清单也进装配段 (插件作者与排障看得到"哪个实现现在生效")
+    // 功能点清单也进加载段 (插件作者与排障看得到"哪个实现现在生效")
     XX_TEST_EXPECT_TRUE(text.find("featurePoints[") != std::string::npos);
     XX_TEST_EXPECT_TRUE(text.find("agentxx.context.countTokens") != std::string::npos);
     XX_TEST_EXPECT_TRUE(text.find("agentxx.context.summarize") != std::string::npos);

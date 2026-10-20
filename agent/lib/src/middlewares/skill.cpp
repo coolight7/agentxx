@@ -443,7 +443,7 @@ void SkillMiddlewareHandle::addSkillDirs(
             return a.priority < b.priority;
         }
     );
-    // 资源变更: 只标记, 实际重扫在下一个请求装配前 (model call 的 start 钩子)
+    // 资源变更: 只标记, 实际重扫在下一个请求加载前 (model call 的 start 钩子)
     if (auto registry = promptSources_.lock()) {
         registry->markAllDirty(agentxx::agent::PromptRefreshReason::ResourcesChanged);
     }

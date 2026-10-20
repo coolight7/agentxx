@@ -138,7 +138,7 @@ int32_t Registry::addImpl(std::string_view pointId, ImplSpec spec) {
     if (point == nullptr) {
         XX_LOGW(
             "功能点 `{}` 的实现登记被拒绝: 点不存在 (插件目录先 define_point, "
-            "应用点需先由主程序装配声明)",
+            "应用点需先由主程序加载声明)",
             pointId
         );
         return -1;

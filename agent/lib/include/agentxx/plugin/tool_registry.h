@@ -22,7 +22,7 @@ namespace plugin {
 /// - 内置工具 (engine->own_tools 的 unique_ptr 所有权) 不进入本表,
 ///   查找顺序: 本表优先 (动态) → ToolcallWrapNode 静态列表回退
 /// - 名称冲突检测: 注册时与 [静态工具名集合] 比对, 冲突返回失败
-///   (静态工具名由 BaseAgent::init 装配时注入)
+///   (静态工具名由 BaseAgent::init 加载时注入)
 class ToolRegistry {
 public:
 
@@ -47,7 +47,7 @@ public:
     /// 所有工具名 (供列表展示)
     std::vector<std::string> names() const;
 
-    /// 装配静态工具名集合 (BaseAgent::init 调用; 用于注册冲突检测)
+    /// 加载静态工具名集合 (BaseAgent::init 调用; 用于注册冲突检测)
     /// - 传入 engine 已持有所有权的内置工具名; 仅作名称比对, 不持有对象
     void setStaticToolNames(std::vector<std::string> names);
 

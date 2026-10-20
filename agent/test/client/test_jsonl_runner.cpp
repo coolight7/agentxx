@@ -275,11 +275,11 @@ void testJsonlRunnerEmptyInput() {
 }
 
 // ---------------------------------------------------------------------------
-// 用例 3: 运行器装配了主程序 (AgentHost)
+// 用例 3: 运行器加载了主程序 (AgentHost)
 // - 即使 `enableSubagent = false` (该开关只控制是否把 subagent 工具注入模型),
-//   运行器也必须装配主程序: 内部压缩经 `service.subagent` 委派,
+//   运行器也必须加载主程序: 内部压缩经 `service.subagent` 委派,
 //   缺主程序会失败并退化为硬截断
-// - 观测点取在轮次结束那一行写出时 (此时 init 与主程序装配都已完成)
+// - 观测点取在轮次结束那一行写出时 (此时 init 与主程序加载都已完成)
 // ---------------------------------------------------------------------------
 
 void testJsonlRunnerAttachesAgentHost() {
@@ -294,7 +294,7 @@ void testJsonlRunnerAttachesAgentHost() {
     cfg->model.apiKey    = "EMPTY";
     cfg->model.modelName = "default-model";
     cfg->llmMaxRetry     = 1;
-    cfg->enableSubagent  = false; // 关掉工具注入, 主程序装配不得受影响
+    cfg->enableSubagent  = false; // 关掉工具注入, 主程序加载不得受影响
     auto agent           = std::make_shared<agentxx::agent::CodeAgent>(cfg);
 
     auto lines = std::make_shared<MemoryLines>();

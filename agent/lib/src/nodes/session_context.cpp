@@ -262,7 +262,7 @@ PendingInjections drainPendingSessionInputs(
         return out;
     }
 
-    // next-step: 写入权威上下文 (安全边界 = 请求装配前, 不需打断流式输出)
+    // next-step: 写入权威上下文 (安全边界 = 请求加载前, 不需打断流式输出)
     auto steps = session->takePendingInputs(agentxx::agent::InputDelivery::NextStep);
     if (!steps.empty()) {
         std::vector<neograph::ChatMessage> msgs;

@@ -10,15 +10,15 @@
 > 状态取值：**已实施**（有代码 + 有测试）· **部分实施**（限定范围完成）·
 > **待实施**（已核定可行，未做）· **不做**（已核定不采用）· **未来计划**（保留方向，不排期）。
 
-## 1. 架构与装配
+## 1. 架构与加载
 
 | 编号 | 内容 | 状态 | 代码位置 / 验收 |
 |---|---|---|---|
 | ARC-1 | 核心边界可执行检查 | 已实施 | `agent/test/core/test_boundaries.cpp`（测试模块 `boundaries`） |
 | ARC-2 | 目录级规则文件 | 已实施 | `agent/{lib,client,plugins,test}/AGENTS.md` |
-| ARC-3 | 装配清单和启动断言 | 已实施 | `agent/lib/src/agent/base_agent.cpp`（`InitStep` 清单 + `verifyStartupAssembly`） |
+| ARC-3 | 加载清单和启动断言 | 已实施 | `agent/lib/src/agent/base_agent.cpp`（`InitStep` 清单 + `verifyStartupAssembly`） |
 | ARC-5 | 分阶段关闭与后台任务收敛 | 已实施（不等待轮次） | `util/task_scope.{h,cpp}` + `BaseAgent::shutdownAsync`（停止输入 → 后台任务取消收敛 → 关插件 → 刷盘）+ `AgentContext::markShuttingDown`；模块 `task_scope`、`shutdown_stages` |
-| ARC-6 | 生效装配快照（启动日志 + `--dump-config`） | 已实施（限定范围） | `agent/lib/{include/agentxx/agent,src/agent}/assembly_snapshot.*`（配置侧 + 运行侧快照、渲染、启动日志）+ `agent/client/main.cpp` 的 `--dump-config`；模块 `assembly_snapshot`、`assembly_snapshot_io` |
+| ARC-6 | 生效加载快照（启动日志 + `--dump-config`） | 已实施（限定范围） | `agent/lib/{include/agentxx/agent,src/agent}/assembly_snapshot.*`（配置侧 + 运行侧快照、渲染、启动日志）+ `agent/client/main.cpp` 的 `--dump-config`；模块 `assembly_snapshot`、`assembly_snapshot_io` |
 | ARC-7 | 新能力不进入核心骨架 | 已实施（纪律） | `agent/lib/AGENTS.md` |
 | ARC-8 | 消费者使用窄接口（试点） | 部分实施（试点结论：不新增一层） | 现有等价窄接口：上下文 `nodes/session_context.h`（读/写入口 + 影子通道刷新）、权限走总线服务 `service.permission.check/reverify`、工具注册 `agentxx.agent.tools` 表 + `ToolAssemblyRecord`、子代理 `service.subagent`（`AgentHost::spawnBatch`）；四处都有测试替身用例（`prompt_stability_io` / `permission` / `assembly_snapshot_io` / `subagent_bus`），再包一层 C++ 窄视图属重复抽象，故不新增 |
 | ARC-4 / ARC-7b / ARC-9 | 子系统配置视图 / 千行文件拆分 / 业务与策略分离 | 不做 | 提高内聚、无功能收益 |
@@ -83,7 +83,7 @@
 | LLM-3 | 溢出一次性压缩重试 | 已实施 | `nodes/modelcall.cpp`（首个溢出触发 `service.summarization.compact` 后立即重试，每轮仅一次）；模块 `agent` |
 | LLM-5 | 假 provider | 已实施 | `agent/test/include/agentxx-test/core/fake_provider.h`（脚本化固定流/错误/延迟/工具调用 + 请求记录）+ 模块 `fake_provider`；本地 HTTP 模拟器继续覆盖 provider 内部解析 |
 | LLM-7 | 消费端退出取消 | 已实施 | `agentxx/nodes/provider_call_scope.h`（`ProviderCallScope`：`fork` 出单次调用取消域，RAII 在消费方放弃时只中止本次调用）+ `nodes/modelcall.cpp` 接线；模块 `provider_call_scope` |
-| LLM-8 | 缓存断点与缓存用量 | 已实施 | Anthropic 请求装配（`ModelConfig::cacheControl` + `AnthropicProvider::applyCacheBreakpoints`：系统提示/工具定义/最后一条正文消息加 `cache_control` 断点，跳过末尾动态段）+ 用量换算（`input_tokens + cache_read + cache_creation` → `prompt_tokens`，缓存写入量经 `provider_common.h` 额外字段进用量记录 `usage.cache_write_prompt_tokens`，schema v3）；模块 `anthropic_provider`、`fake_provider`、`session_schema`、`config_loader` |
+| LLM-8 | 缓存断点与缓存用量 | 已实施 | Anthropic 请求加载（`ModelConfig::cacheControl` + `AnthropicProvider::applyCacheBreakpoints`：系统提示/工具定义/最后一条正文消息加 `cache_control` 断点，跳过末尾动态段）+ 用量换算（`input_tokens + cache_read + cache_creation` → `prompt_tokens`，缓存写入量经 `provider_common.h` 额外字段进用量记录 `usage.cache_write_prompt_tokens`，schema v3）；模块 `anthropic_provider`、`fake_provider`、`session_schema`、`config_loader` |
 | LLM-13 | HTTP 录制回放 | 已实施 | `agent/test/include/agentxx-test/core/http_recorder.h`（`HttpRecorder` 录制器 / `HttpPlayer` 回放器 / `HttpFixture` 固定装置 + 脱敏）；模块 `http_recorder` |
 | LLM-4 / LLM-6 | 静默看门狗 / 流式组装唯一实现 | 已实施 | provider 内组装 + 看门狗（`index.md` 协议支持一节有说明） |
 | LLM-1 / LLM-9 / LLM-10 / LLM-11 / LLM-12 | 模型能力元数据 / 轮次局部回退 / 凭据分层 / 连接状态 / 结构化输出入口 | 不做（9、12 后续计划） | 不补价格与能力元数据；provider 全走 HTTP |
@@ -138,7 +138,7 @@
 | PLG-1 | 注册可逆与清理审计 | 已实施 | `PluginManager::RegistrationInventory`（按生效事实计数）+ `registrationInventory()` + `PluginListView` 诊断字段；模块 `plugin_cleanup` |
 | PLG-2 | 声明式贡献集合与重算 | 已实施 | 提示词贡献模型（`PromptKeyState`：base + 按 sequence 的全部存活贡献，删除 owner 贡献后重新合成）+ `plugins.md` §15.7；模块 `plugin_cleanup` |
 | PLG-4 | 独占能力 slot（执行图定义） | 已实施 | `PluginManager::setGraphJson` / `releaseGraphDefinitionSlot`（占用者记载 + 他人占用被拒 + 禁用/卸载恢复占用前定义）；模块 `plugin_cleanup` |
-| PLG-6 | 装配树与域视图查询 | 已实施（限定：并入 ARC-6 快照） | `--dump-config` + 启动装配快照（插件/接口/依赖/能力/工具/图） |
+| PLG-6 | 加载树与域视图查询 | 已实施（限定：并入 ARC-6 快照） | `--dump-config` + 启动加载快照（插件/接口/依赖/能力/工具/图） |
 | PLG-7 | 教学式错误与信任声明 | 已实施 | `PluginManager::diagnosePluginPath`（路径/清单/入口符号逐项给出怎么改）+ 加载失败 WARN + `plugins.md` §15.7 信任声明；模块 `plugin_cleanup`、`plugin_resources` |
 | PLG-8 | 文档分页与接口表数字校验 | 部分实施（拆分不做） | 接口表名称集合与数量常量（`PluginManager::kInterfaceTableCount` = 19 / `ClientPluginManager` = 9）由 `boundaries` 规则 8/10 校验；`plugins.md` §8 澄清通用表查询 IID；文档拆分经核定不做（纯重组、收益低于改动成本） |
 | PLG-10 | 插件加载耗时与注册计数诊断 | 已实施（限定范围） | `plugin_manager.h`（`PluginListView` 诊断字段）+ `plugin_manager_lifecycle.cpp`（加载耗时 + 加载摘要日志）；模块 `assembly_snapshot_io` |
@@ -158,7 +158,7 @@
 | 编号 | 内容 | 状态 | 代码位置 / 验收 |
 |---|---|---|---|
 | RET-1a | 会话搜索/改名的协议与 TUI 入口 | 已实施 | `WireListSessions.keyword`、`WireRenameSession`/`WireRenameSessionResult`、`SessionInfo.snippet`；TUI 会话弹窗检索行（直接输入）+ `Ctrl+R` 改名；模块 `session_admin`、`tui_surface` |
-| OBS-3 | 关键指标（首 token / 轮次耗时 / 压缩次数等） | 已实施 | `util/observability.*`（`KeyMetrics`：轮次终态/TTFT/轮次耗时/模型调用与用量（含缓存读+写）/工具四终态/压缩前后 token）+ 装配快照 `metrics` 段；模块 `observability`、`fake_provider` |
+| OBS-3 | 关键指标（首 token / 轮次耗时 / 压缩次数等） | 已实施 | `util/observability.*`（`KeyMetrics`：轮次终态/TTFT/轮次耗时/模型调用与用量（含缓存读+写）/工具四终态/压缩前后 token）+ 加载快照 `metrics` 段；模块 `observability`、`fake_provider` |
 | OBS-4 | 诊断包导出 | 已实施 | `util/diagnostics.*`（`buildDiagnosticsText` + `redactSecrets` + 日志环形捕获）+ CLI `--dump-diagnostics`；模块 `observability` |
 | OBS-5 | 模块级日志开关 | 已实施 | `utilxx_base/log.h`（`LogEntry::module` + `logModuleOf` + `LogDispatcher::setModuleLevel/clearModuleLevels` + `applyLogModuleLevelSpec`）、主程序插件日志记为 `plugin.<名字>`（`pluginxx/host/tables_impl.h`）、CLI `AGENTXX_LOG_MODULES=前缀=级别,...`；模块 `log_modules`；见 [index.md](index.md) §按模块调日志级别 |
 | RET-1b / RET-2 / RET-3 / RET-4 / RET-5 / OBS-1 / OBS-2 | FTS5 索引 / 标题元数据独立 / 附件校验元数据 / 结构化定位符 / opId / `get_diagnostics` / telemetry 边界 | 不做（RET-2 已并入 STO-12、OBS-2 保留为设计约束） | 逐会话子串扫描够用；share_store 已有行定位提示 |
@@ -200,7 +200,7 @@
 - 2026-10-06：按实施记录同步状态：LOOP-1/2/3/4/11、STO-4/5/9、PRM-1/2/4/5/7、SEC-2/5/9、
   TST-10、PRO-1/7/11、LLM-2/3、TOOL-1/2/3/12/17、CFG-8 与 UI-3/4 均已完成（详见
   `resource/history/compare-agent/work.md`）。
-- 2026-10-06：ARC-6（启动装配快照 + `--dump-config`，含 CFG-3 / PLG-6 / PLG-10 / TOOL-12 诊断）
+- 2026-10-06：ARC-6（启动加载快照 + `--dump-config`，含 CFG-3 / PLG-6 / PLG-10 / TOOL-12 诊断）
   与 CFG-1（结构化配置校验）标记为已实施；UI-2 与 TST-5 合并为"UI 快照夹具"并已实施；
   TST-8 一键检查脚本（`gate.sh` / `gate.ps1`）已实施。
 

@@ -22,9 +22,9 @@
 >
 > **修订记录**
 > - **第 1 版（2026-09，分模块通读）**：按 §1–§18 共 18 个模块通读两侧源码/测试/文档并逐模块落盘，正文结构为「现状 → 对比 → 可迁移」；迁移项按 P0/P1/P2 归档到 §19（第 1 版共 **88 项**：P0 6 / P1 33 / P2 45 / 无需迁移 4），反向结论归档到 §20（15 条）。本版主要发现：
->   1. **两侧不是同类产品，但同一类问题的解法可以对照**：agentxx 是「给一个工作目录干活的编码代理」，openclaw 是「替你在各种聊天软件里收发消息、并在你的设备上执行动作的常驻助理」。本文因此把对比重点放在**机制**（会话串行、上下文装配、工具准入、插件边界、测试门禁）而不是功能清单。
+>   1. **两侧不是同类产品，但同一类问题的解法可以对照**：agentxx 是「给一个工作目录干活的编码代理」，openclaw 是「替你在各种聊天软件里收发消息、并在你的设备上执行动作的常驻助理」。本文因此把对比重点放在**机制**（会话串行、上下文加载、工具准入、插件边界、测试门禁）而不是功能清单。
 >   2. **agentxx 最值得先补的六项（P0）**：提示词缓存边界（§3，长会话直接省 token）、同轮工具并行（§6，独立调用不再白等）、记忆分层按需检索（§7，全量注入是上下文预算的最大浪费）、模型空闲看门狗（§8，provider 卡住只能等整体超时）、溢出错误的压缩重试（§9，长会话最常见的一类失败）、副作用消息幂等键（§14，远程模式下网络抖动会重复执行）。六项都不改架构形状。
->   3. **openclaw 最值得借鉴的三层机制**：① **写者租约 + 事务内复验**（§5）解决「多入口写同一会话」；② **上下文装配作为带契约的可替换槽位**（§3）把「谁拥有压缩、谁拥有预检」讲清；③ **把架构约束写成可执行检查**（§1/§16：scoped `AGENTS.md` + 自定义 lint 边界规则 + 按边界拆的 CodeQL + 契约/快照一致性 CI + 测试成本预算）。
+>   3. **openclaw 最值得借鉴的三层机制**：① **写者租约 + 事务内复验**（§5）解决「多入口写同一会话」；② **上下文加载作为带契约的可替换槽位**（§3）把「谁拥有压缩、谁拥有预检」讲清；③ **把架构约束写成可执行检查**（§1/§16：scoped `AGENTS.md` + 自定义 lint 边界规则 + 按边界拆的 CodeQL + 契约/快照一致性 CI + 测试成本预算）。
 >   4. **agentxx 相对更强的地方也明确记录下来**（避免盲目照搬）：C ABI 插件边界与五态生命周期事务、多实例三铁律、三层接口协商、`share_store` 大内容暂存、worktree 隔离（隔离优先于白名单）、三层压缩降级（确定性 → LLM → 硬截断）、声明式 UI 组件层 + 唯一渲染实现、`seq` 重放、资源基准体系。
 >   5. **明确不照搬的 15 条**（§20）大多可以用 openclaw 自己的原则解释：核心每加一样东西都会落到「每一次模型请求」上，所以能做成插件的就不进核心；agentxx 的核心更小、扩展点更硬，这条纪律同样适用。
 > - **第 2 版（2026-09，实现精读）**：本轮把附录 D 列出的「只读接口没读实现」的位置逐处读到底（agentxx 侧：`agent_runner.cpp` 全文、`base_agent.cpp::runTurnAsync`、`nodes/modelcall.cpp`（含 `repairMessages` 与重试循环）、`middlewares/summarization.cpp`（压缩全流程与 `hardTruncate`）、`middlewares/permission.cpp`（`decideTarget`/`requestPermission`）、`nodes/toolcall.cpp::execTool`、`agent/io/session_server_agent_io.cpp`（queue/grace/hello/replay）、`plugins/plugin_manager_lifecycle.cpp` 与内核 `pluginxx/host/lifecycle.h`；openclaw 侧：`packages/agent-core/src/agent-loop.ts`（含并行启动握手、taint、abort 落库）、`packages/sdk/src/{event-hub,run-event-replay}.ts`、`src/agents/embedded-agent-runner/run/session-bootstrap.ts` 的 `claimAgentSessionWriter`、`src/agents/embedded-agent-runner/tool-result-truncation.ts`、`src/agents/agent-tools.policy.ts` 与 `tool-result-limits.ts`）。产出：
@@ -40,7 +40,7 @@
 | [0](#0-总览与对比方法) | 总览与对比方法 | 两项目定位、规模、判据与结论速览 |
 | [1](#1-总体架构与包分层) | 总体架构与包分层 | openclaw 是「核心 + 库 + 插件包 + 原生壳」四层，边界靠 scoped `AGENTS.md`、oxlint 边界规则与测试项目矩阵守着；agentxx 是「核心库 + 客户端 + 插件」三层，边界靠文档与约定 |
 | [2](#2-会话运行模型与投递语义) | 会话运行模型与投递语义 | 可借鉴**四态投递模式（steer/followup/collect/interrupt）+ 车道级并发预算**；agentxx 需要把排队状态显式化 |
-| [3](#3-会话上下文与-llm-上下文组织) | 会话上下文与 LLM 上下文组织 | 可借鉴**上下文装配作为可替换槽位**与**「只有压缩才重写历史」**；agentxx 最该补的是**提示词缓存边界** |
+| [3](#3-会话上下文与-llm-上下文组织) | 会话上下文与 LLM 上下文组织 | 可借鉴**上下文加载作为可替换槽位**与**「只有压缩才重写历史」**；agentxx 最该补的是**提示词缓存边界** |
 | [4](#4-工作区沙箱与多设备节点) | 工作区、沙箱与多设备节点 | openclaw 把「位置」分成状态目录/工作区/沙箱工作区/执行目录四层并写清规则；agentxx 的 worktree 隔离更强、隔离层更弱（应当写清边界） |
 | [5](#5-持久化状态与崩溃恢复) | 持久化、状态与崩溃恢复 | 可借鉴**写者租约 + 事务内复验 + schema 版本骨架**；agentxx 需补「同会话多写者的显式裁决」 |
 | [6](#6-工具系统) | 工具系统 | 可借鉴**同轮并行（带启动检查点）**、**结果守卫与保真落盘**、**审批的执行身份绑定**；agentxx 的四开关与循环检测更强 |
@@ -54,7 +54,7 @@
 | [14](#14-远程协议sdk-与嵌入模式) | 远程协议、SDK 与嵌入模式 | 可借鉴**副作用消息的幂等键**、**协议版本与能力协商**、**协议 schema 机器可读**；agentxx 的重放与「同进程/远程只换 transport」更干净 |
 | [15](#15-扩展机制插件框架专项) | 扩展机制（插件框架专项） | agentxx 的 C ABI + 五态事务 + 三铁律 + 三层接口协商是 openclaw 没有的边界；openclaw 的**单槽位替换**、**清单先行校验**、**文档分页化**值得借鉴 |
 | [16](#16-测试与质量门禁) | 测试与质量门禁 | 可借鉴**测试成本预算**、**契约/生成物一致性检查**、**输出脱敏**、**边界静态守卫**；agentxx 的资源基准是差异化优势 |
-| [17](#17-配置模型目录与装配) | 配置、模型目录与装配 | 可借鉴**配置迁移骨架（版本 + 迁移 + 备份）**与**装配快照 + 版本号**；agentxx 的 base/overlay + 列表三态语义更可预期 |
+| [17](#17-配置模型目录与加载) | 配置、模型目录与加载 | 可借鉴**配置迁移骨架（版本 + 迁移 + 备份）**与**加载快照 + 版本号**；agentxx 的 base/overlay + 列表三态语义更可预期 |
 | [18](#18-openclaw-独有侧重的域多通道接入与自动化) | openclaw 独有侧重：多通道接入与自动化 | 通道边界契约、多用户路由、cron/常驻授权、做梦（离线整理）是 agentxx 没有的领域，按需借鉴（§18.6 给出相关性与建议） |
 | [19](#19-迁移建议汇总) | 迁移建议汇总 | P0 6 项 / P1 34 项 / P2 51 项 / 无需迁移 4 项，共 95 项；含 6 个落地批次 |
 | [20](#20-反向清单agentxx-不必照搬的设计) | 反向清单 | 15 条经调研确认的正当取舍 |
@@ -76,7 +76,7 @@
 | 语言/运行时 | C++23；Boost.Asio 协程；单 `io_context` 内多会话协程交错执行，无锁；MSVC/GCC/Clang、Linux/Windows/Android/macOS | TypeScript（Node ≥ 22，ESM）；promises + worker_threads；publish 为 npm 包 `openclaw`（bin `openclaw.mjs`） |
 | 顶层结构 | `agent/lib`（libagentxx）、`agent/client`（TUI/CLI）、`agent/plugins`（15 个内置插件 + 6 个示例目录）、`agent/test`、`agent/benchmark` | `src/`（核心）、`packages/`（25 个库）、`extensions/`（约 200 个内置插件）、`apps/`（原生壳）、`ui/`（Web 控制台）、`crates/`（少量 Rust） |
 | 编排核心 | NeoGraph 图引擎（节点 + 条件边 + `Command.goto_node`），节点被中间件栈包裹；ReAct = `agent_start → llm → tools → llm → agent_end` | 自研 attempt 循环（`packages/agent-core` 的 `agent-loop.ts`）+ `src/agents/embedded-agent-runner` 的轮次编排；每会话一条车道串行 |
-| 会话与上下文 | 会话是 LLM 上下文的唯一权威（typed `ChatMessage` + `messagesVersion`）；图状态里没有 `messages` 通道 | 会话 = SQLite 行 + transcript 事件；模型上下文由**上下文引擎**（可替换槽位，默认 legacy）在每轮装配 |
+| 会话与上下文 | 会话是 LLM 上下文的唯一权威（typed `ChatMessage` + `messagesVersion`）；图状态里没有 `messages` 通道 | 会话 = SQLite 行 + transcript 事件；模型上下文由**上下文引擎**（可替换槽位，默认 legacy）在每轮加载 |
 | 工具 | `XXToolBase`/`XXToolWrap`（自动压缩、延迟加载、重试、重复调用询问）+ `ToolcallWrapNode`（串行执行） | `src/agents/tools` + `agent-tools*.ts`（参数 schema、工具策略、调用前后适配器）+ 审批门 + 结果截断 |
 | 权限 | 中间件统一判定：插件声明的目标 + 白/黑名单 + 工作目录隔离 + 完全授权 + 记住选择 + worktree 写边界 + 三态路径复核 | `exec approvals` + 工具策略矩阵 + 操作员角色（operator scopes）+ 设备配对信任；安全策略按「风险 vs 可用性」权衡写在 `SECURITY.md` |
 | 扩展形态 | 纯 C ABI 动态库插件；agent 侧 19 张接口表（10 张通用 `pluginxx.*` + 9 张领域 `agentxx.agent.*`），client 侧 9 张；生命周期 `create/start/stop/destroy`；多实例三铁律 | 两类插件：code plugin（进程内 TS，`openclaw/plugin-sdk/*` 契约）与 bundle plugin（skills/MCP/配置）；`package.json` 的 `openclaw` 字段声明资源；`plugins.slots.*` 单槽位替换 |
@@ -86,7 +86,7 @@
 | 文档 | `docs/zh-cn/design/`：index 166 KB、plugins 103 KB、tui 45 KB、benchmark 60 KB、ffi 24 KB | `docs/`：1326 个文件 / 21.7 MB（含 `concepts/`、`gateway/`、`channels/`、`tools/`、`plugins/`、`providers/`…）+ 各目录 scoped `AGENTS.md` |
 | 代码规模（实测） | `agent/lib` 139 文件 / 5.45 万行；`agent/client` 68 / 2.36 万；`agent/plugins` 53 / 2.35 万；`agent/test` 172 / 7.64 万（口径：`.cpp/.h`，排除 `build/`、`third_party/`） | `src/` 非测试 12853 文件 / 90.8 MB；`src/` 测试 10404 文件 / 141 MB；全仓 `*.test.ts` 18596 个；`packages/` 1248 文件 / 8.0 MB；`extensions/` 1.07 万文件 / 90 MB（口径：`*.ts/*.tsx` 等，排除 `node_modules/`、`dist/`） |
 
-两个项目**不是同一类产品**：agentxx 是「给一个工作目录干活的编码代理」，openclaw 是「替你在各种聊天软件里收发消息、并在你的设备上执行动作的常驻助理」。因此本文的对比重点不在功能多少，而在**同一类问题上两边各自选择了什么机制**（会话串行、上下文装配、工具准入、插件边界、测试门禁），以及哪些机制搬到 C++ 协程 + 图引擎这一侧仍然成立。
+两个项目**不是同一类产品**：agentxx 是「给一个工作目录干活的编码代理」，openclaw 是「替你在各种聊天软件里收发消息、并在你的设备上执行动作的常驻助理」。因此本文的对比重点不在功能多少，而在**同一类问题上两边各自选择了什么机制**（会话串行、上下文加载、工具准入、插件边界、测试门禁），以及哪些机制搬到 C++ 协程 + 图引擎这一侧仍然成立。
 
 ### 0.2 对比方法与判据
 
@@ -103,7 +103,7 @@
 |---|---|---|---|
 | 分层 | 核心库/客户端/插件三层，边界靠文档 | 核心/库/插件包/原生壳四层，边界靠 scoped `AGENTS.md` + lint 边界规则 + 测试矩阵 | 把边界写成可执行检查（导入规则、包契约测试） |
 | 会话运行 | 轮内执行 + 内存排队 + 打断立即执行队首 | 每会话一条车道；投递四态（steer/followup/collect/interrupt）；车道并发预算分级 | 投递语义显式化、排队状态可观测、并发预算分域 |
-| 上下文 | 会话是唯一权威；每轮重拼 system prompt | 上下文引擎槽位（ingest/assemble/compact/commitTurn）+ 「只有压缩能改写历史」 | 装配过程可替换且可审计、提示词前缀稳定契约 |
+| 上下文 | 会话是唯一权威；每轮重拼 system prompt | 上下文引擎槽位（ingest/assemble/compact/commitTurn）+ 「只有压缩能改写历史」 | 加载过程可替换且可审计、提示词前缀稳定契约 |
 | 工作区 | 工作目录多源回退 + worktree 写边界 | 工作区 + 沙箱重定向 + 设备节点（caps/commands）+ managed worktrees | 设备能力协商、沙箱工作区重定向 |
 | 持久化 | 会话库（消息/上下文/viewMessages）+ 图 checkpoint，节流写 | SQLite + 写者租约（`activeWriterRunId`）+ 事务内校验 + 数据库访问下沉 worker | 写者租约式防陈旧写、事务内复验 |
 | 工具 | 特性丰富但同轮串行；大输出已 offload 到 share_store 保真（缺聚合预算与缓存感知剪枝） | 工具策略矩阵 + 审批门 + 结果截断分层 + 调用前后钩子 | 准入策略矩阵、审批门、聚合预算与缓存过期剪枝 |
@@ -117,7 +117,7 @@
 | 协议/SDK | 手写 wire + WS/Channel + MCP/A2A/ACP/FFI | Gateway WS（握手/能力发现/幂等键/设备配对）+ 生成式 SDK | 握手与能力发现、幂等键、设备令牌 |
 | 扩展 | C ABI + 19/9 张表 + 生命周期事务 + 多实例 + 接口协商 | 声明式清单 + 两类插件 + `slots` 单槽替换 + 资源发现回退 | 槽位化替换、清单声明与发现回退、插件信任分级 |
 | 测试 | 模块化测试程序 + 资源基准 | 测试项目矩阵 + 权重分片 + 边界 lint + 测试成本预算 | 测试分片与成本预算、静态边界守卫 |
-| 配置 | base/overlay yaml + 设置 KV + 覆盖/移除语义 | 分层配置 + doctor 拥有迁移 + 每 agent 一份模型运行时快照 | 迁移归属唯一、装配快照化 |
+| 配置 | base/overlay yaml + 设置 KV + 覆盖/移除语义 | 分层配置 + doctor 拥有迁移 + 每 agent 一份模型运行时快照 | 迁移归属唯一、加载快照化 |
 | 独有域 | — | 通道边界契约、定时任务/常驻指令/做梦（离线整理）、设备节点能力 | 按需借鉴（§18） |
 
 ---
@@ -161,7 +161,7 @@
 1. **每个目录一份 scoped `AGENTS.md`**（实测 30 份，其中 4 份是 agent 工作区模板，见 `docs/reference/templates/`；模块规则覆盖 `src/plugins`、`src/gateway`、`src/gateway/server-methods`、`src/agents`、`src/agents/tools`、`src/agents/embedded-agent-runner/run`、`src/agents` 下的 `tools`/`run`、`src/channels` 及其 `plugins/contracts/test-helpers`、`src/infra/outbound`、`src/plugin-sdk`、`src/tui`、`extensions`（含 `acpx`/`agentsapi`/`telegram`）、`apps/{android,ios,macos}`、`ui`、`test`、`test/helpers`、`scripts`、`docs`）。根 `AGENTS.md` 只写跨目录原则（「一个责任一个 owner」「小核心、强插件」「稳定会话上下文」），并明确要求「把规则更新到它自己的 owner 目录，不要在这里加竞争规则」。
 2. **自定义 lint 边界规则**：`config/oxlint/boundary-guards.json` 启用 `scripts/oxlint-boundary-guards.mjs` 这个 oxlint 插件，规则名即边界：`no-raw-window-open-call`、`no-register-http-handler-call`、`no-widen-then-assert`、`no-chained-type-assertions`（后两条限制用类型断言掩盖真实契约）。
 3. **CodeQL 按「边界 + 重要度」拆配置**：`.github/codeql/` 下有十余份，例如 `codeql-plugin-trust-boundary-critical-security.yml`、`codeql-channel-runtime-boundary-critical-quality.yml`、`codeql-process-exec-boundary-critical-security.yml`——把「信任边界」当成可静态分析的对象。
-4. **控制面/运行面分离**：`src/plugins/AGENTS.md` 明确要求「发现、清单解析、配置校验、装配提示、激活计划属控制面；真正的插件执行属运行面」，并要求「发现与激活保持惰性」——发现阶段不得 eager import 内置插件的重型 barrel。
+4. **控制面/运行面分离**：`src/plugins/AGENTS.md` 明确要求「发现、清单解析、配置校验、加载提示、激活计划属控制面；真正的插件执行属运行面」，并要求「发现与激活保持惰性」——发现阶段不得 eager import 内置插件的重型 barrel。
 5. **公共面单一来源**：`src/plugin-sdk/AGENTS.md` 拥有「公开边界扩张」的决策权；插件只能用 `openclaw/plugin-sdk/*` 入口，禁止 import `src/**` 内部实现。核心侧也不许给内置插件开后门（「Do not create private backdoors that bundled plugins can use but external plugins cannot」）。
 6. **数据与存储归一**：状态与缓存统一进 SQLite（Kysely 访问），禁止新增 JSON/JSONL/sidecar 存储；数据库访问下沉 worker 线程，网关主线程只 await 结果。
 
@@ -196,7 +196,7 @@
   - **把架构规则写进可执行检查**：边界 lint 规则、包契约测试、CodeQL 分区、快照/预算测试，让「架构约束」不依赖人记忆。
   - **scoped `AGENTS.md` 的威力**：规则就近声明、就近维护，且明确反对「在根目录叠加竞争规则」；对多 agent 协作的项目几乎等于机器可读的模块说明书。
   - **一致的数据与并发纪律**：SQLite 单一事实源 + 写事务同步（事务回调里禁止 `await`，先完成异步规划再复读权威行再写）+ 数据库访问下沉 worker，避免主线程被 I/O 拖住。
-  - **惰性边界写进规则**：发现/校验/装配走轻量元数据，只有真正执行才加载重型 runtime。
+  - **惰性边界写进规则**：发现/校验/加载走轻量元数据，只有真正执行才加载重型 runtime。
 - 缺点
   - **没有编译期边界**：插件与核心同进程、同语言，靠约定与 lint 兜底；规则一旦漏进某个 barrel 导入，问题以「启动变慢/内存上涨」的形式出现，成本不低（所以有 `scripts/profile-extension-memory.mts` 这类专项）。
   - **规则量巨大带来理解成本**：根 `AGENTS.md` 约 28 KB，各目录又有自己的规则，加上 `docs/` 22.7 MB，改动前「读完该读的」是硬门槛。
@@ -209,7 +209,7 @@
 | M1 | **按目录放局部规则文件**（对应 scoped `AGENTS.md`） | 新增 `agent/lib/AGENTS.md`、`agent/lib/include/agentxx/plugin/AGENTS.md`、`agent/client/AGENTS.md`、`agent/plugins/AGENTS.md`、`agent/test/AGENTS.md` | P1 | 每个目录只写该目录的硬约束（如「插件源码只能包含 `plugin_kit.h` umbrella，不得包含 `agentxx/plugin/api/*` 之外的头」「测试头文件必须走 `agentxx-test/...` 完整路径」）。避免所有规则堆在 `docs/` 的大文档里；根 `AGENTS.md` 保留跨目录原则并要求「规则更新到 owner 目录」。 |
 | M2 | **把边界规则做成可执行检查** | 新增一个轻量检查脚本（如 `agent/script/check_boundaries.py` 或 cmake 自定义目标），进 CI/构建前置 | P1 | 至少覆盖三条：① `agent/lib` 不得包含 `agentxx-client/...`；② `agent/plugins/*` 不得包含 `agentxx/...` 内部头（只允许 SDK umbrella 与工具库）；③ `agent/client` 不得包含 `agent/lib/src/...`。这三条是当前最容易被无意破坏的。 |
 | M3 | **表数量与接口清单单一来源** | `agent/lib/include/agentxx/plugin/plugin_interfaces.h` 已有的常量汇总，扩成一个自检：宿主启动时断言「支持的接口名集合 == 声明常量集合」 | P2 | 目前文档与实现已经漂移过（文档写 19/9，实测 client 侧已含 `timer`/`keybind`）。把「清单」变成可断言的常量表即可根治。 |
-| M4 | **控制面/运行面分离的显式约定** | `agent/lib/include/agentxx/plugin/`、`agent/client/src/plugins/` | P2 | openclaw 要求「发现、清单解析、配置校验、装配提示属于控制面，且必须惰性」。agentxx 的插件加载已是 `dlopen` + 符号查找，天然惰性；可借鉴的是**在文档与代码注释里显式区分两侧**，并规定「读取插件元数据的路径不得初始化插件实例」。 |
+| M4 | **控制面/运行面分离的显式约定** | `agent/lib/include/agentxx/plugin/`、`agent/client/src/plugins/` | P2 | openclaw 要求「发现、清单解析、配置校验、加载提示属于控制面，且必须惰性」。agentxx 的插件加载已是 `dlopen` + 符号查找，天然惰性；可借鉴的是**在文档与代码注释里显式区分两侧**，并规定「读取插件元数据的路径不得初始化插件实例」。 |
 | M5 | **存储归一** | 已是现状（会话库 + 图 checkpoint + `settings_db` 全部走 sqlite） | — | 无需迁移，但可把该约定写进 `agent/lib/AGENTS.md`，避免后续新增 JSON sidecar。 |
 
 ---
@@ -416,7 +416,7 @@ system 消息 = systemPrompt
 
 ### 3.2 openclaw 现状
 
-**上下文装配是一个可替换的槽位**（`plugins.slots.contextEngine`，默认内置 `legacy`）：
+**上下文加载是一个可替换的槽位**（`plugins.slots.contextEngine`，默认内置 `legacy`）：
 
 | 生命周期 | 时机 | 职责 |
 |---|---|---|
@@ -432,7 +432,7 @@ system 消息 = systemPrompt
 关键约束（这些是它值得学的部分）：
 
 - **`ownsCompaction`**：`true` 时宿主关掉自己的自动压缩与通用预检，交给引擎；`false` 时引擎的 `compact()` 仍会被 `/compact` 与溢出恢复调用，但内置自动压缩可能仍然跑。文档明确警告：非自持引擎写空实现的 `compact()` 是**不安全**的。
-- **`promptAuthority`**：默认 `"assembled"`（只检查装配后的估算）；引擎若自持压缩则宿主默认跳过通用预检；只有引擎声明 `"preassembly_may_overflow"` 时宿主才保留预检并取「装配估算」与「装配前全历史估算」的较大值。
+- **`promptAuthority`**：默认 `"assembled"`（只检查加载后的估算）；引擎若自持压缩则宿主默认跳过通用预检；只有引擎声明 `"preassembly_may_overflow"` 时宿主才保留预检并取「加载估算」与「加载前全历史估算」的较大值。
 - **`contextProjection`**：`mode: "thread_bootstrap"` + 稳定 `epoch` 表示「宿主别每轮重投影，按 epoch 注入一次并复用后端线程」（为 Codex app-server 这类有持久后端线程的运行时准备）。
 - **`acceptedHostParams`**：引擎声明自己接受哪些宿主注入字段，宿主取交集，未声明/未知字段**永不注入**。
 - **宿主能力要求（`hostRequirements`）**：引擎可声明「需要 `assemble-before-prompt`」，宿主在不满足时**fail closed**（在启动前拒绝）；而运行时**方法抛错**走的是另一条路——**隔离（quarantine）该引擎到进程结束并降级到 `legacy`**，让回复继续。声明了却无法履约（例如精确锚点消息已被改写）则**只在本轮降级**，下轮再试。
@@ -453,7 +453,7 @@ system 消息 = systemPrompt
 | 维度 | agentxx | openclaw |
 |---|---|---|
 | 上下文归属 | 会话是唯一权威；图状态只留只读影子通道 | transcript（会话记录）+ 可替换上下文引擎；`commitTurn` 只对成功轮次推进引擎状态 |
-| 装配过程 | 固定流水线（中间件 + 节点），无替换点 | 引擎槽位 + 明确的生命周期与方法契约，可整体替换 |
+| 加载过程 | 固定流水线（中间件 + 节点），无替换点 | 引擎槽位 + 明确的生命周期与方法契约，可整体替换 |
 | 提示词拼装 | 每轮整体重建（含动态段） | 分层渲染 + **缓存边界**显式区分稳定段与易变段 |
 | 压缩触发 | 75% 阈值 + 95%/失败 2 次硬截断 | 预算（窗口 − max(输出, buffer)）+ 溢出错误触发一次性压缩重试 |
 | 压缩归属 | 中间件（单一实现） | 可声明 `ownsCompaction` 交给引擎；否则内置压缩与引擎 `compact()` 并存 |
@@ -471,7 +471,7 @@ system 消息 = systemPrompt
   - **压缩路径实战导向**：确定性压缩先削（去重、折叠探索、清噪），LLM 压缩同 threadid 同模型（命中 KV cache），失败还有硬截断兜底——三层降级保证「请求一定发得出去」。
   - **压缩即落盘**：这一条比「轮末统一落盘」在崩溃场景下更稳（不会反复压缩同一段）。
 - 缺点
-  - **装配过程不可替换、且不透明**：要换压缩策略/换召回实现只能改中间件本体，没有「换一个装配器」的入口；`assemble` 的产出（消息序列、估算 token）也没有一个统一的「本轮上下文报告」可用于诊断。
+  - **加载过程不可替换、且不透明**：要换压缩策略/换召回实现只能改中间件本体，没有「换一个加载器」的入口；`assemble` 的产出（消息序列、估算 token）也没有一个统一的「本轮上下文报告」可用于诊断。
   - **提示词无缓存边界概念**：每轮把 `systemPrompt + 全部附加段 + 动态段` 整体重拼，动态段（时间、记忆、技能提示）夹在稳定段之后会让**前缀缓存**在动态段处失效；对长会话 + 支持 prompt cache 的 provider 是实打实的成本。
   - **没有提示词快照/回归**：提示词文本改动没有自动校验，容易「悄悄改变模型行为」。
   - **预算口径散落**：token 估算在压缩中间件里（`asciiCharsPerToken=4.0` 等经验系数），上下文统计另有一套，模型真上限来自模型配置——三处口径没有统一来源。
@@ -479,7 +479,7 @@ system 消息 = systemPrompt
 **openclaw**
 
 - 优点
-  - **装配是可替换且带契约的**：`assemble` 的返回结构（消息 + 估算 + 提示词增补 + 权威口径 + 投影模式）把「谁负责什么」写清楚了；`ownsCompaction` / `promptAuthority` 两个开关把「压缩归属」与「预检归属」解耦。
+  - **加载是可替换且带契约的**：`assemble` 的返回结构（消息 + 估算 + 提示词增补 + 权威口径 + 投影模式）把「谁负责什么」写清楚了；`ownsCompaction` / `promptAuthority` 两个开关把「压缩归属」与「预检归属」解耦。
   - **降级策略分级**：引擎坏 → 隔离并降级；能力不满足 → 启动前拒绝；锚点失效 → 只本轮降级。三档处理让「插件坏了不能让用户失语」这条产品目标落地。
   - **幂等提交**：`commitTurn` 的 `advancementKey` 让重试安全，避免重试把同一轮重复写进上下文引擎。
   - **提示词缓存边界是一等设计**：稳定段在上、易变段在下，且对本地后端（前缀缓存）与云 provider 都成立；提示词快照 + 漂移检查把这层约束守住了。
@@ -494,11 +494,11 @@ system 消息 = systemPrompt
 | 编号 | 设计 | 落地位置 | 优先级 | 说明 |
 |---|---|---|---|---|
 | M11 | **给系统提示词划一条显式缓存边界** | `agent/lib/src/agent/context.cpp`（`buildSystemPrompt`）、`agent/lib/include/agentxx/agent/prompt.h` | P0 | 现状把动态段拼在稳定段之后。建议改为：`AgentPrompt` 增加 `stablePrefix`（systemPrompt + 静态附加段，按键序稳定）与 `dynamicSuffix`（每轮变化的段：当前时间、动态记忆、技能提示、环境快照）两组；`buildSystemPrompt` 输出 `stablePrefix + dynamicSuffix`，并在文档与注释里写明「动态内容一律不得插入 stablePrefix 之前/中间」。这条对支持前缀缓存的 provider 直接省 token。 |
-| M12 | **补齐「上下文装配报告」** | `agent/lib/src/agent/context.cpp` + `wire_protocol.h`（`WireContextStats` 已有，扩展字段） | P1 | 每轮记录并上报：装配后消息数、估算 token、压缩是否发生、压缩前后 token、被裁掉的消息数、稳定前缀哈希。诊断长会话问题（尤其「为什么又压缩了」）时不用靠日志猜。 |
+| M12 | **补齐「上下文加载报告」** | `agent/lib/src/agent/context.cpp` + `wire_protocol.h`（`WireContextStats` 已有，扩展字段） | P1 | 每轮记录并上报：加载后消息数、估算 token、压缩是否发生、压缩前后 token、被裁掉的消息数、稳定前缀哈希。诊断长会话问题（尤其「为什么又压缩了」）时不用靠日志猜。 |
 | M13 | **压缩触发口径统一** | `SummarizationMiddlewareHandle` + `AgentContext` | P1 | 把「模型上限」「估算系数」「预留输出 token」「压缩阈值/兜底阈值」收拢到一处（如 `ContextBudget` 结构），压缩、统计、预检都读它；消除三处口径不一致的可能。 |
 | M14 | **压缩幂等键** | `SummarizationMiddlewareHandle::onModelcallRunFunc` | P2 | 现阶段靠「压缩完成即落盘」防重复压缩。可再补一个单调 `compactionGeneration`：同一段上下文只允许压缩一次，重试时若发现该段已被压缩则直接跳过（对应 openclaw 的 `advancementKey` 幂等）。 |
 | M15 | **提示词快照回归** | `agent/test/core/`（新增模块） | P2 | 为默认提示词与几类典型拼装（有/无技能、有无 worktree、有无 planning）各存一份快照文本（或哈希），改动提示词文本时测试失败并要求更新快照。成本极低，能挡住「无意中改了提示词」。 |
-| M16 | **上下文装配的可替换出口（评估后做）** | `agent/lib/include/agentxx/plugin/api/plugin_api.h` 的 `agentxx.agent.context` 表 | P2 | 现在该表只有 `get_messages` / `messages_count` 两个查询。若要支持「换装配策略」，可在同表扩展一个可选的 `assemble` 回调（默认不注册＝走内置流水线），并**明确契约**：返回的消息序列 + 估算 token + 是否自持压缩。注意 C ABI 边界上不宜传大对象，实际形态建议是「插件返回 JSON 描述 + 宿主按描述裁剪」，避免跨边界拷贝整段上下文。这项属研究性迁移，先不做。 |
+| M16 | **上下文加载的可替换出口（评估后做）** | `agent/lib/include/agentxx/plugin/api/plugin_api.h` 的 `agentxx.agent.context` 表 | P2 | 现在该表只有 `get_messages` / `messages_count` 两个查询。若要支持「换加载策略」，可在同表扩展一个可选的 `assemble` 回调（默认不注册＝走内置流水线），并**明确契约**：返回的消息序列 + 估算 token + 是否自持压缩。注意 C ABI 边界上不宜传大对象，实际形态建议是「插件返回 JSON 描述 + 宿主按描述裁剪」，避免跨边界拷贝整段上下文。这项属研究性迁移，先不做。 |
 | M93 | **会话轮次的内容来源标记（taint）** | `Session` 的 `ChatMessage` 扩展或独立元数据表；`appendSessionMessages` 统一打标 | P2 | openclaw 的 `turnTainted`：用户消息清除标记、工具结果可置位、assistant 落库前打标（见 §3.6）。用途是让「这一轮产出是否源自不可信的工具/外部内容」随消息走，供记忆写入（M33/M34）、审计（M52）与缓存决策消费。落地时**必须由宿主统一打标**，不能靠模型或工具自觉。 |
 
 ### 3.6 实现细读（本轮新增）
@@ -1140,7 +1140,7 @@ tokenUsage      = apiTokenUsage > 0 ? apiTokenUsage : countTokenUsage
 | 维度 | agentxx | openclaw |
 |---|---|---|
 | 协议族 | 3 种类型（openai / openai-responses / anthropic），各自一个 provider 实现 | provider 适配层在 `packages/ai`（186 文件）+ `src/llm/providers`；约 50 个 provider 插件 |
-| 模型注册与装配 | `ModelProviderRegistry`（命名配置 + provider 缓存），进程内一次性装配 | **每 agent 一份模型运行时世代快照**（鉴权模板 + 注册表 + 投影目录），原子替换、不复用陈旧世代 |
+| 模型注册与加载 | `ModelProviderRegistry`（命名配置 + provider 缓存），进程内一次性加载 | **每 agent 一份模型运行时世代快照**（鉴权模板 + 注册表 + 投影目录），原子替换、不复用陈旧世代 |
 | 会话级模型选择 | Session 独立记录「当前选择」，会话间隔离 | 会话级选择 + 「显式选择严格、不参与回退」的规则 |
 | 失败切换 | 仅 `llmMaxRetry` 次数重试（同模型） | 同模型有界恢复 → 鉴权档位轮换 → 模型回退（轮次局部，不改会话选择） |
 | 超时 | HTTP 连接超时 + 整体重试 | 五层（等待/运行预算/模型空闲看门狗/provider HTTP/清理窗口） |
@@ -1187,7 +1187,7 @@ tokenUsage      = apiTokenUsage > 0 ? apiTokenUsage : countTokenUsage
 | M40 | **模型级回退链** | `ModelProviderRegistry` + `ModelCallWrapNode` | P1 | `ModelConfig` 增加 `fallbacks: [模型名…]`；「重试耗尽且错误属于可回退类别（限流/鉴权失败/服务不可用）」时切到下一个候选。规则照抄 openclaw 的关键一条：**回退是轮次局部的，不改变会话选择**，只在结果里标注「本轮由 X 回答」。 |
 | M41 | **多鉴权档位与冷却** | `ModelConfig`（`apiKeys` 列表）+ provider 层轮换 | P2 | 最小形态：一个模型条目可配多个 api key，失败后轮换并给该 key 加冷却时间；不需要 OAuth。对「多个 key 分摊限流」的场景直接有用。 |
 | M42 | **缓存保留策略** | `ModelConfig` 增加 `cacheRetention`；provider 按各家 API 落地 | P2 | Anthropic 侧是显式 cache breakpoint（可指定缓存到哪一段）；OpenAI 侧主要是「保持前缀稳定 + 路由亲和」。agentxx 的先决条件是 §3 的 M11（提示词缓存边界）。建议顺序：先做 M11，再在 provider 层加可选断点。 |
-| M43 | **装配快照化** | `ModelProviderRegistry` + `AgentConfig` 加载路径 | P2 | openclaw 的「世代快照」在 agentxx 里可以退化成一个更简单的形态：配置热更新时**整体重建**注册表并以「新表替换旧表 + 递增版本号」发布，禁止边改边用；同时把「可用模型 + 能力表 + 目录」当作一个整体快照发给客户端（避免客户端拿到半新半旧的模型列表）。 |
+| M43 | **加载快照化** | `ModelProviderRegistry` + `AgentConfig` 加载路径 | P2 | openclaw 的「世代快照」在 agentxx 里可以退化成一个更简单的形态：配置热更新时**整体重建**注册表并以「新表替换旧表 + 递增版本号」发布，禁止边改边用；同时把「可用模型 + 能力表 + 目录」当作一个整体快照发给客户端（避免客户端拿到半新半旧的模型列表）。 |
 
 ---
 
@@ -1219,7 +1219,7 @@ tokenUsage      = apiTokenUsage > 0 ? apiTokenUsage : countTokenUsage
 **预检与触发**：
 
 - 请求预算 = 窗口 − max(输出预留, buffer)；接近上限触发自动压缩（默认挡位 `"safeguard"`，比 `"default"` 多了质量审计）。
-- **提前预检的权威口径**由上下文引擎的 `promptAuthority` 决定（见 §3.2）：`"assembled"` 只检查装配后的估算，引擎自持压缩时宿主默认跳过通用预检，`"preassembly_may_overflow"` 时取「装配估算」与「装配前全历史估算」的较大值。这个设计的用意是：**只有引擎自己最清楚"我返回的消息之外还有没有溢出风险"**。
+- **提前预检的权威口径**由上下文引擎的 `promptAuthority` 决定（见 §3.2）：`"assembled"` 只检查加载后的估算，引擎自持压缩时宿主默认跳过通用预检，`"preassembly_may_overflow"` 时取「加载估算」与「加载前全历史估算」的较大值。这个设计的用意是：**只有引擎自己最清楚"我返回的消息之外还有没有溢出风险"**。
 
 **溢出恢复（overflow recovery）**——这是它比 agentxx 多出来的一整条路径：
 
@@ -1982,9 +1982,9 @@ agentxx 侧对应：
 
 **控制面 / 运行面分离**（`src/plugins/AGENTS.md`）：
 
-- 发现、清单解析、配置校验、装配提示、激活计划属**控制面**；插件执行属**运行面**。
-- **清单优先**：发现/配置校验/装配必须能在插件 runtime 启动前完成。
-- **保持惰性**：loader/registry/公共产物变更时不得在元数据足够时 eager import 内置插件的重型 barrel；若插件有轻/重两面，发现/清单/装配状态检查一律走轻路径。
+- 发现、清单解析、配置校验、加载提示、激活计划属**控制面**；插件执行属**运行面**。
+- **清单优先**：发现/配置校验/加载必须能在插件 runtime 启动前完成。
+- **保持惰性**：loader/registry/公共产物变更时不得在元数据足够时 eager import 内置插件的重型 barrel；若插件有轻/重两面，发现/清单/加载状态检查一律走轻路径。
 - 禁止「内置插件能用的私有后门」；契约校验走专门的 bundled registry 路径，不要依赖激活 provider 的生产解析流程。
 - 可用性/选择契约：网关运行期插件元数据**视为稳定**，复用快照与有界缓存，不做每次调用的 stat/read/hash；元数据变更需要重启或 owner 的显式 reload/install/doctor 流程。**已配置/可用状态与实时健康要区分**：有凭据或缓存描述符不证明服务可达。
 
@@ -2044,7 +2044,7 @@ agentxx 侧对应：
 
 | 编号 | 设计 | 落地位置 | 优先级 | 说明 |
 |---|---|---|---|---|
-| M74 | **单槽位（slot）替换语义** | `agentxx.agent.*` 表扩展 + `PluginManagerLifecycle` | P1 | openclaw 的 `plugins.slots.*` 解决了「独占能力只能有一个实现」的问题（上下文引擎、记忆插件）。agentxx 现在的模型是「能力叠加」，适合工具，不适合「换掉压缩策略 / 换掉记忆实现」这类需求。建议：为少数**独占型扩展点**（上下文装配、记忆检索、摘要器）定义槽位配置（`slots.context_assembler` 等），并在卸载时**自动重置为内置实现**（agentxx 已有「卸载按备份恢复」的机制可复用）。 |
+| M74 | **单槽位（slot）替换语义** | `agentxx.agent.*` 表扩展 + `PluginManagerLifecycle` | P1 | openclaw 的 `plugins.slots.*` 解决了「独占能力只能有一个实现」的问题（上下文引擎、记忆插件）。agentxx 现在的模型是「能力叠加」，适合工具，不适合「换掉压缩策略 / 换掉记忆实现」这类需求。建议：为少数**独占型扩展点**（上下文加载、记忆检索、摘要器）定义槽位配置（`slots.context_assembler` 等），并在卸载时**自动重置为内置实现**（agentxx 已有「卸载按备份恢复」的机制可复用）。 |
 | M75 | **清单能力对齐：不执行插件即可校验配置、声明式元数据** | `plugin.yaml`（`pluginxx/host/manifest.h`） | P1 | 现状 `plugin.yaml` 主要声明接口与平台支持。可补三类 openclaw 用得很重的元数据：① **配置 schema**（宿主在加载前校验插件配置，给出可读错误，而不是等 `start` 失败）；② **配置 UI 提示**（设置面板里的分组/说明/默认值）；③ **静态能力快照**（插件声明自己提供哪些能力，供「发现/清单展示」用，不需要实例化）。第 ① 条收益最大。 |
 | M76 | **按目录分页的插件文档 + 快速上手** | `docs/zh-cn/design/plugins.md` 拆分或新增 `docs/zh-cn/design/plugins/` 子目录 | P1 | 103 KB 单文件对「只想写小插件」的人门槛过高。建议拆成：`getting-started`（最小插件 + 导出宏 + 一次完整示例）、`lifecycle`（五态与事务语义）、`kit`（SDK 与表清单）、`host`（宿主实现与领域表）、`client`（client 侧插件与 UI）、`rules`（三铁律、导出控制、平台 gate、权限声明）。与 M1（目录规则文件）配合。 |
 | M77 | **插件内存/启动成本的剖析工具** | `agent/benchmark`（插件逐项边际内存已存在） | P2 | agentxx 有「插件逐项边际内存」基准，说明这个维度已被重视。可再进一步照 openclaw 的做法：一个「只加载某个插件、测启动耗时与常驻内存」的独立脚本，作为插件评审的固定证据（新增内置插件时跑一次）。 |
@@ -2196,7 +2196,7 @@ agentxx 侧对应：
 
 ---
 
-## 17. 配置、模型目录与装配
+## 17. 配置、模型目录与加载
 
 ### 17.1 agentxx 现状
 
@@ -2220,11 +2220,11 @@ agentxx 侧对应：
 - 配置面文档分很多页：`configuration.md`、`configuration-reference.md`、`configuration-examples.md`、以及按领域拆的 `config-{agents,automation,browser-ui-desktop,channels,cloud-workers,extensions,gateway,hooks,observability,runtime,secrets-env,tools}.md`；`docs/gateway/doctor/config-migrations.md` 是迁移的共享 owner。
 - 键名/凭据语义有专门文档（`auth-credential-semantics.md`、`secret-placeholder-conventions.md`、`secretref-credential-surface.md` + 一份 JSON 矩阵）。
 
-**装配与目录**：
+**加载与目录**：
 
 - **每 agent 一份模型运行时世代快照**（见 §8.2）：鉴权模板 + 模型注册表 + 投影目录作为原子快照；**浏览/状态/cron/doctor/TUI/PDF/图像等路径读已发布目录**，不重复文件系统发现。
 - 模型目录来自远程 + 本地缓存（`model-catalog-core` + `src/model-catalog`），选择 UI 在 `src/model-picker`。
-- 装配相关模块：`src/config`（1226 文件）、`src/state`、`src/plugins`（清单与激活计划）、`src/secrets`（215 文件）、`src/infra`。
+- 加载相关模块：`src/config`（1226 文件）、`src/state`、`src/plugins`（清单与激活计划）、`src/secrets`（215 文件）、`src/infra`。
 - 多 agent 阵容（roster）：`agents.entries.*`，每 agent 可覆盖工作区、模型、工具策略、沙箱、prompt 参数（`docs/gateway/config-agents.md`）。
 - 引导与修复入口：`openclaw onboard` / `configure` / `setup`（创建工作区与种子文件）、`openclaw doctor`（诊断 + `--fix`）、`openclaw config`（CLI 读写配置）、Control UI 设置页。
 
@@ -2235,7 +2235,7 @@ agentxx 侧对应：
 | 分层 | base（data_dir）+ overlay（工作目录/--config）+ .env | 全局配置 + 每 agent 条目 + 插件配置 + 环境变量 / SecretRef |
 | 列表合并 | 显式 `overwrite.{mode,remove}` 语义（merge/replace/remove + 按身份剔除） | 无同类通用机制（配置以键为主，列表型配置各自定义语义） |
 | 配置迁移 | 旧键/旧写法告警并忽略；无迁移工具 | **doctor 拥有迁移**，同一改动必须带迁移；核心与插件各自的 doctor 契约 |
-| 装配 | 启动时构造 `AgentConfig` + `ModelProviderRegistry`（进程内一次性装配） | 每 agent 一份模型运行时世代快照，原子替换，陈旧世代不服务 |
+| 加载 | 启动时构造 `AgentConfig` + `ModelProviderRegistry`（进程内一次性加载） | 每 agent 一份模型运行时世代快照，原子替换，陈旧世代不服务 |
 | 目录发现 | 配置文件里手写模型条目 | 远程模型目录 + 本地缓存 + 投影；浏览/状态等路径读已发布目录 |
 | 配置来源 | yaml + .env；设置项在 settings_db（客户端侧） | 配置文件 + 环境变量 + SecretRef + Control UI + CLI；凭据语义有专门文档与矩阵 |
 | 多实例/多 agent | 多会话同 agent；多 agent 靠进程或多 AgentHost | 多 agent 阵容（roster）+ 每 agent 工作区/模型/工具策略覆盖 |
@@ -2253,7 +2253,7 @@ agentxx 侧对应：
 - 缺点
   - **没有配置迁移工具**：改键名/改结构只能「告警并忽略旧键」，老用户要么手工改要么丢配置；openclaw 的做法（同一改动必须带 doctor 迁移 + 备份 + 回执）明显更成熟。
   - **缺配置校验的「提前量」**：插件配置要到 `start` 失败才发现问题（M75 要解决的正是这条）。
-  - **装配是启动时一次性的**：没有「快照替换」概念（§8 的 M43），热更新路径需要额外小心。
+  - **加载是启动时一次性的**：没有「快照替换」概念（§8 的 M43），热更新路径需要额外小心。
   - **文档没有单一参考页**：配置项散落在 design/index.md（166 KB）里，查找成本高。
 
 **openclaw**
@@ -2261,7 +2261,7 @@ agentxx 侧对应：
 - 优点
   - **「迁移归 doctor 所有」是一条能长期演进的硬规矩**：运行时只读当前 schema，禁止兼容读取路径，避免「兼容分支越积越多」这一最常见的配置腐化模式；插件也必须自带 doctor 契约。
   - **配置面按领域分页**（13+ 篇 config-* 文档）+ 键名/凭据专门文档 + JSON 矩阵，可查性强。
-  - **世代快照装配**让「配置改了但一半模块还用旧值」这类问题不可能出现。
+  - **世代快照加载**让「配置改了但一半模块还用旧值」这类问题不可能出现。
   - **多 agent 阵容与逐 agent 覆盖**：工作区、模型、工具策略、沙箱都能按 agent 覆盖，适合「一个网关服务多个人/多个角色」。
 - 缺点
   - **配置面极广**：`src/config` 1226 文件，加上 SecretRef/凭据语义/环境变量矩阵，学习成本高。
@@ -2275,7 +2275,7 @@ agentxx 侧对应：
 | M85 | **配置迁移骨架（config version + migrate）** | `agent/client/src/config_loader.cpp` + `docs/zh-cn/design/index.md` | P1 | 现在旧键只被「告警并忽略」。建议：配置顶部支持 `config_version`（整数，缺省按 1）；加载时若版本低于当前，依次跑迁移函数（键重命名/结构改写）并在**改前备份原文件**、迁移后写回；迁移函数与被废弃的键集中在一处（一个 `config_migrations.cpp`），避免散落。这是 M22（会话库 schema 版本）在配置侧的对应物。 |
 | M86 | **配置的单一参考页** | 新增 `docs/zh-cn/design/config.md` | P2 | 从 index.md 抽出完整配置参考（每个键：类型、默认值、作用、是否热更新、示例），index.md 只留指向它的链接。同时可让「文档里的键集合」由脚本与解析器比对（M81 的第 ③ 条）。 |
 | M87 | **插件配置的加载前校验** | 与 M75 同批：`plugin.yaml` 增加 `config_schema` 段 | P1 | 宿主在加载插件前按其声明的 schema 校验配置，给出「哪个键、期望什么、实际什么」的可读错误；插件不必在 `start` 里手写校验。与 M75 是同一件事的两侧（清单侧 + 宿主侧）。 |
-| M88 | **装配快照 + 版本号（与 M43 合并）** | `AgentConfig` / `ModelProviderRegistry` | P2 | 配置热更新时：整体重建快照 → 递增 `configGeneration` → 替换；所有读取路径读快照而不是读配置对象；日志与 wire 消息带上 `configGeneration`，便于诊断「客户端看到的配置」与「服务端生效的配置」是否一致。 |
+| M88 | **加载快照 + 版本号（与 M43 合并）** | `AgentConfig` / `ModelProviderRegistry` | P2 | 配置热更新时：整体重建快照 → 递增 `configGeneration` → 替换；所有读取路径读快照而不是读配置对象；日志与 wire 消息带上 `configGeneration`，便于诊断「客户端看到的配置」与「服务端生效的配置」是否一致。 |
 
 ---
 
@@ -2417,7 +2417,7 @@ openclaw 把「记忆整理」做成一条**独立的后台通道**（`docs/conc
 
 | 编号 | 设计 | 章节 |
 |---|---|---|
-| M12 | 补齐「上下文装配报告」（每轮的装配与压缩事实） | [§3.5](#35-可迁移到-agentxx-的设计) |
+| M12 | 补齐「上下文加载报告」（每轮的加载与压缩事实） | [§3.5](#35-可迁移到-agentxx-的设计) |
 | M13 | 压缩触发口径统一（`ContextBudget` 单一来源） | [§3.5](#35-可迁移到-agentxx-的设计) |
 | M34 | 记忆条目的来源标记（`[owner]`/`[agent]`/`[untrusted]`） | [§7.5](#75-可迁移到-agentxx-的设计) |
 | M35 | 技能来源优先级 + 同名冲突裁决 | [§7.5](#75-可迁移到-agentxx-的设计) |
@@ -2462,9 +2462,9 @@ openclaw 把「记忆整理」做成一条**独立的后台通道**（`docs/conc
 |---|---|
 | 规则与文档 | M3（接口清单单一来源）、M4（控制面/运行面约定）、M68（UI 改动验收清单）、M83（测试目录二次分类）、M84（基准门禁化用法）、M86（配置单一参考页） |
 | 会话与协议 | M8（排队项持久化）、M9（车道化并发预算）、M10（debounce 参数化）、M23（会话事件序列）、M24（避免长耗时写入阻塞 io 线程）、M25（外部改动探测）、M71（协议 schema 机器可读）、M72（连接级鉴权钩子）、M92（重放缓冲的观察者计数与按需释放）、M94（取消/异常时立即产出合法 transcript 尾部） |
-| 上下文与记忆 | M14（压缩幂等键）、M15（提示词快照回归）、M16（装配可替换出口）、M36（后台整理通道）、M45（压缩质量门）、M46（压缩挪到回复结算后）、M47（压缩前提醒写记忆）、M93（轮次内容来源标记 taint） |
+| 上下文与记忆 | M14（压缩幂等键）、M15（提示词快照回归）、M16（加载可替换出口）、M36（后台整理通道）、M45（压缩质量门）、M46（压缩挪到回复结算后）、M47（压缩前提醒写记忆）、M93（轮次内容来源标记 taint） |
 | 工具与权限 | M30（压缩后重复调用守卫）、M31（审批执行身份绑定）、M32（工具面诊断入口）、M49（执行身份绑定落地）、M51（权限规则查询/撤销）、M52（仅元数据审计）、M53（凭据掩码流程）、M90（预览首尾保留 + 中段省略）、M91（存储形态/模型投影分离）、M95（符号链接规范化） |
-| LLM 与装配 | M41（多鉴权档位与冷却）、M42（缓存保留策略）、M43（装配快照化）、M88（装配快照 + 版本号） |
+| LLM 与加载 | M41（多鉴权档位与冷却）、M42（缓存保留策略）、M43（加载快照化）、M88（加载快照 + 版本号） |
 | 子代理与自动化 | M57（「完成 ≠ 目标达成」提示）、M58（定时/常驻任务）、M59（跨会话观察者） |
 | 客户端与媒体 | M62（大内容取回约定）、M63（媒体能力插件化）、M64（富输出显式通道）、M66（可更新进度展示位）、M67（能力协商补体验级） |
 | 插件 | M77（插件成本剖析工具）、M78（hook 决策语义规则）、M79（卸载后配置回落防护） |
@@ -2485,9 +2485,9 @@ openclaw 把「记忆整理」做成一条**独立的后台通道**（`docs/conc
 |---|---|---|
 | **第 1 批（低成本高收益）** | M11、M38、M44、M26、M69、M33 | 六项 P0。彼此独立、都不动架构形状，可并行开工；每项都能配一条可验证的测试。M26 落地时请参考 §2.6 的三条实现约束（派发前统一询问、启动期提交握手、按 `tool_call_id` 归位）。 |
 | **第 2 批（护栏先行）** | M1、M2、M81、M82、M80 | 先把「规则可执行、契约可校验、输出可脱敏、测试有预算」立起来，后续所有改动都受益（也避免第 3 批起就开始累积漂移）。 |
-| **第 3 批（运行语义）** | M7、M6、M21、M22、M13、M12 | 排队状态机 + 投递模式 + 写者租约 + schema 版本 + 预算口径统一 + 装配报告。这六项互相咬合（状态机影响 M6，写者租约是 M22/M46 的前提）；M21 的实现顺序以 §5.6 的四步为准。 |
+| **第 3 批（运行语义）** | M7、M6、M21、M22、M13、M12 | 排队状态机 + 投递模式 + 写者租约 + schema 版本 + 预算口径统一 + 加载报告。这六项互相咬合（状态机影响 M6，写者租约是 M22/M46 的前提）；M21 的实现顺序以 §5.6 的四步为准。 |
 | **第 4 批（上下文与工具口径）** | M27、M28、M29、M89、M60、M61、M48、M50、M35、M34、M93 | 工具结果的两层预算与缓存感知剪枝（M28/M89）、结果守卫、可用性/授权分层、结构化提问、附件两条校验、审批记忆持久化、权威复验规矩、技能优先级、记忆与轮次的来源标记（M34/M93 同批做最省事）。 |
-| **第 5 批（可靠性与装配）** | M39、M40、M54、M55、M56、M70、M85、M87、M65、M74、M75 | LLM 用量与回退、子代理三项、协议版本、配置迁移、插件配置校验、渲染快照、插件槽位与清单。 |
+| **第 5 批（可靠性与加载）** | M39、M40、M54、M55、M56、M70、M85、M87、M65、M74、M75 | LLM 用量与回退、子代理三项、协议版本、配置迁移、插件配置校验、渲染快照、插件槽位与清单。 |
 | **第 6 批（按需）** | 其余 P2（含本轮新增的 M90、M91、M92、M94、M95） | 依赖前置项或收益偏长期，按实际需求挑选；其中 M58（定时任务）与 M36（后台整理）建议与产品需求一起评估；M95（符号链接）建议与 M17（边界说明）一起做，先写清限制再决定是否实现二次判定。 |
 
 ---
@@ -2565,7 +2565,7 @@ openclaw 的 `VISION.md` 把这条写得很直白：核心每加一个工具、�
 | 合并多条为一次 | （无） | collect |
 | 打断并跑最新 | `InterruptAndRunNext` | interrupt |
 | 上下文 | `Session` 的 LLM 上下文 | transcript + 上下文引擎 |
-| 上下文装配器 | （固定流水线，无替换点） | context engine（`plugins.slots.contextEngine`） |
+| 上下文加载器 | （固定流水线，无替换点） | context engine（`plugins.slots.contextEngine`） |
 | 压缩 | `SummarizationMiddlewareHandle` | compaction（+ 上下文引擎的 `compact`） |
 | 提示词附加段 | `appendSystemPrompts`（按 key 拼接） | 提示词分层段（缓存边界上下） |
 | 工具基础能力 | `XXToolBase` 四开关 | tool policy + hooks + 结果守卫 |

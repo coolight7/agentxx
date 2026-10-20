@@ -1050,7 +1050,7 @@ bool MessageListComponent::fillViewport(size_t index) {
 
 void MessageListComponent::maybeRequestMoreHistory() {
     if (!ctx_.requestMoreHistory) {
-        return; // 未装配历史分页钩子 (如测试环境)
+        return; // 未加载历史分页钩子 (如测试环境)
     }
     if (!ctx_.frameState || !ctx_.frameState->hasMoreHistory()) {
         return; // 无更早历史 (全量同步 / 已加载到会话开头)

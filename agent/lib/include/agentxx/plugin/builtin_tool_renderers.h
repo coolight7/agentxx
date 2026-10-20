@@ -11,7 +11,7 @@ class ClientPluginManager;
 ///
 /// - 覆盖工具: `agentxx_share_store` (会话共享存储 get/insert/set/delete)、
 ///   `agentxx_subagent` (子代理委派, 单发与批量)
-/// - 由 client 侧装配阶段调用一次 (见 client 的 setupClientPlugins): 与插件渲染器
+/// - 由 client 侧加载阶段调用一次 (见 client 的 setupClientPlugins): 与插件渲染器
 ///   走同一条渲染路径 —— 回调在 client io 线程执行, 语义结果写入
 ///   [ClientToolRenderCache], UI 线程只读缓存
 /// - 重复调用幂等 (同一工具名覆盖旧项); 注册项匹配优先级低于插件注册项

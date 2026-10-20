@@ -61,10 +61,10 @@ struct PendingInjections {
     std::vector<neograph::ChatMessage> requestScoped;
 };
 
-/// 在 modelcall 请求装配前的安全边界注入待处理的 next-step / inject 输入
+/// 在 modelcall 请求加载前的安全边界注入待处理的 next-step / inject 输入
 ///
-/// - 调用时机: 每次请求装配前 (modelcall 节点内), 即"安全边界": 不会打断
-///   正在进行的 provider 流; 空闲时会话没有请求装配, 待注入输入保持等待
+/// - 调用时机: 每次请求加载前 (modelcall 节点内), 即"安全边界": 不会打断
+///   正在进行的 provider 流; 空闲时会话没有请求加载, 待注入输入保持等待
 /// - `next-step`: 作为 user 消息追加到会话权威上下文 + 展示历史, 并通知 UI
 ///   (EventBridge 不展开 user 角色消息, 因此这里自行追加展示消息与 WireDelta)
 /// - `inject`: 只返回给调用方拼进本次请求 (记录来源; 非 user 来源加来源前缀),

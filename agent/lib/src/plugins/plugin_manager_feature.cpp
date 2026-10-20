@@ -156,7 +156,7 @@ int PluginManager::registerFeatureImpl(
     }
     auto ctx = agentContext_.lock();
     if (!ctx || ctx->features == nullptr) {
-        XX_LOGW("插件 `{}` 登记功能点实现被拒绝: 功能点注册表未装配", inst->name);
+        XX_LOGW("插件 `{}` 登记功能点实现被拒绝: 功能点注册表未加载", inst->name);
         return -1;
     }
     const std::string pointId = viewToStr(spec->point_id);

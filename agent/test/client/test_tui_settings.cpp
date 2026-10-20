@@ -1387,7 +1387,7 @@ struct ScopedLanguage {
 void test_settings_overlay_keybind_entry() {
     ScopedLanguage lang(TuiLanguage::ZhCn);
 
-    // 未装配插件管理器: 条数按 0 显示 (不崩)
+    // 未加载插件管理器: 条数按 0 显示 (不崩)
     {
         auto       ctx    = keybindTestCtx(nullptr, 40);
         auto       comp   = std::make_shared<SettingsOverlay>(ctx);

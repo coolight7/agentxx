@@ -51,7 +51,7 @@ asio::awaitable<void> AgentIOBase::runTransportLoop() {
 
 void AgentIOBase::sendToPeer(WireMessage msg) {
     if (!transport_) {
-        // 端点间通信强制要求 transport; 走到这里说明装配遗漏 (如未 setTransport),
+        // 端点间通信强制要求 transport; 走到这里说明加载遗漏 (如未 setTransport),
         // 记录错误便于定位, 避免静默丢消息
         XX_LOGE(
             "[io] sendToPeer without transport, message dropped (variant index {})",

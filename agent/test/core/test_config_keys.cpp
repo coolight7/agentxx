@@ -1144,7 +1144,7 @@ std::string buildKeysDoc(const std::vector<ConfigKeyEntry>& entries) {
     out += "- 已废弃的旧键 (不再生效, 只记一次迁移提示): `models` -> `model.list`,\n";
     out += "  `plugins` -> `plugin.list`, `use_model` -> `model.use`。\n";
     out += "- 键值都支持 `${VAR}` 展开 (查找顺序: 程序内置变量 > `--env` > `.env` >\n";
-    out += "  系统环境变量); 路径类键的 `~` 展开与相对路径绝对化由装配侧完成。\n";
+    out += "  系统环境变量); 路径类键的 `~` 展开与相对路径绝对化由加载侧完成。\n";
     return out;
 }
 

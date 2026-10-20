@@ -440,7 +440,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 > `X_BASELINE_SIZE` (基线字节数); 当前全部为 v1 (基线 = 完整表长)。
 > 四件套要求、判定规则与追加策略见 **§17**。
 
-> **提示词段落来源 (第二期留位)**: 主程序侧的提示词装配已改为"来源注册 + 按需刷新"
+> **提示词段落来源 (第二期留位)**: 主程序侧的提示词加载已改为"来源注册 + 按需刷新"
 > (`PromptSourceRegistry`, 见 [index.md](index.md) 架构设计第 6 小节), 内置来源
 > `memory` / `skills` 走这条路径。插件目前仍只能经 `agentxx.agent.prompt` 的
 > `set_prompt` 贡献提示词文本; 计划在 `agentxx.agent.prompt` 表尾追加
@@ -494,7 +494,7 @@ tool_call 中的前后调用形成顺序屏障。并发只发生在同一条 ass
 - **未声明的工具不参与权限判定** (直接放行): 权限限制随工具来源走, 与仅加载部分插件
   的场景一致
 - **生命周期**: 工具注销、插件禁用/卸载时主程序自动撤销对应声明 (重新 start 时按新声明
-  恢复); 声明属于附加能力, 主程序未装配权限中间件时注册返回非 0, 插件可忽略
+  恢复); 声明属于附加能力, 主程序未加载权限中间件时注册返回非 0, 插件可忽略
 - **失败拒绝**: 非本实例所有的工具名、未知作用域/目标来源取值都会被拒绝并记日志
 - **模式/前缀参数工具的分工** (`agentxx_filesystem` 的 `glob` / `grep` / `list`):
   声明式目标 (如 `file_patterns`、可为通配模式的 `path`) 决定"是否询问用户一次"
@@ -510,7 +510,7 @@ tool_call 中的前后调用形成顺序屏障。并发只发生在同一条 ass
   区别仅在于 `ASK` 不发起询问。工具侧约定: `DENY` 丢弃, `ASK` 同样不作为
   (未获批准的范围不进入结果); 空路径/规范化失败按 `ASK` 返回 (不按已批准处理)。
   任意线程可调用 (非 io 线程由主程序投递到 io 线程同步等待), 单次批量建议 ≤ 512 项
-  (主程序在 io 线程执行), 主程序上限 16384; 主程序未装配权限中间件时返回非 0, 工具应
+  (主程序在 io 线程执行), 主程序上限 16384; 主程序未加载权限中间件时返回非 0, 工具应
   跳过过滤 (保持原行为) 而不是把所有路径当成拒绝
 - **kit 便捷层**: 声明侧 `registerReadPathPermission(ctx, tool, "path")` /
   `registerWritePathPermission(...)` (最常用的"路径参数 + 读/写"形态) 与通用
@@ -629,7 +629,7 @@ tool_call 中的前后调用形成顺序屏障。并发只发生在同一条 ass
   (`text`/`markdown`/`diff`/`separator`/`gap`/`control`/`submit`) 与描述层词汇
   (`Text`/`Diff`/…) 的转换都在这两个函数里，新增组件不必改中断层
 - 插件构建组件树不必手写 JSON: 描述层的构建器 (`pluginxx::ui::build`) 与 kit
-  (基础 `pluginxx::ui::kit` + 本项目扩展 kit `agentxx::ui::kit`) 只装配不给逻辑，
+  (基础 `pluginxx::ui::kit` + 本项目扩展 kit `agentxx::ui::kit`) 只加载不给逻辑，
   `ClientPluginBase` 提供 `setPanelItems/setInfoSectionItems/showItemsOverlay/panelItems/`
   `setToolDecor` 直接提交:
 
@@ -838,7 +838,7 @@ Agentxx 客户端采用统一的分层工具特化渲染机制，TUI 核心层�
      (见 [builtin_tool_renderers.h](/agent/lib/include/agentxx/plugin/builtin_tool_renderers.h))，
      内部经 `ClientPluginManager::registerBuiltinToolRenderer` 存入 UI 注册表的
      `builtinToolRenderers` 分表 (归属名固定为 `agentxx.core`)。
-   - client 侧在 `setupClientPlugins` (agent/client/src/mode_runners.cpp) 装配时注册一次
+   - client 侧在 `setupClientPlugins` (agent/client/src/mode_runners.cpp) 加载时注册一次
      (本地/远程、TUI/CLI 各模式共用)；渲染与插件渲染器同一条路径 (client IO 线程执行 +
      语义渲染缓存), 展开体保持主程序通用展示 (不提供 items)。
    - 匹配优先级低于插件注册项 (插件可为同名工具注册渲染器覆盖内置渲染)；
@@ -1153,7 +1153,7 @@ Closing → CloseFailed → Closing (可重试)
   多插件交替覆盖会让"谁该恢复"无解，因此这里选择显式拒绝而不是静默覆盖。
 
 诊断信息：`PluginManager::registrationInventory(inst)` 给出各分类**当前生效**的注册计数
-（不是记录条数），全部为 0 表示该实例在主程序侧已回到基线；`--dump-config` 的装配快照
+（不是记录条数），全部为 0 表示该实例在主程序侧已回到基线；`--dump-config` 的加载快照
 按插件输出 `registration_total` 等字段与图定义的占用者。
 
 **加载失败提示**：插件框架的日志说明"哪一步失败"，主程序再补一句"照什么改"
@@ -1460,7 +1460,7 @@ polled_tool(ctx, name, depict, schema,
 | 项 | 形态 | 谁写 | 作用 |
 |---|---|---|---|
 | **IID** | `#define X_IFACE_<名> "命名空间.名字"` | 人 | `query_interface` 的键 |
-| **`struct_size`** | 表头第 2 个字段 | 主程序装配时填 `sizeof(表)` | 能安全读多少字节 |
+| **`struct_size`** | 表头第 2 个字段 | 主程序加载时填 `sizeof(表)` | 能安全读多少字节 |
 | **`version`** | 表头第 1 个字段 + `X_VERSION` | 主程序填 `X_VERSION` | 语义档位 |
 | **`MIN_VERSION`** | `#define X_MIN_VERSION` | 人 (当前恒为 1) | 本头能协同工作的最低表版本 |
 | **`BASELINE_SIZE`** | `#define X_BASELINE_SIZE sizeof(表)` | 人 (追加时改成 `offsetof`) | 所有提供该表的主程序都应具备的字节数 |

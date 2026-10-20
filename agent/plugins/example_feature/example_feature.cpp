@@ -201,7 +201,7 @@ static int featureAgentSetup(FeatureCtx& ctx) {
             }
         )
         != 0) {
-        // 主程序点可能未装配 (如裸 PluginManager 环境): 不算致命, 记一条日志继续
+        // 主程序点可能未加载 (如裸 PluginManager 环境): 不算致命, 记一条日志继续
         ctx.log.info("example_feature: host point agentxx.context.countTokens not declared yet");
     }
 

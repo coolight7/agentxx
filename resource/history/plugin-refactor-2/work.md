@@ -357,7 +357,7 @@ vtable 投递纳入 admission lease）、`8c717236`（P0-2 终态与取消线性
 
 `JsEngine` 生命周期（引擎层）：
 
-- `create` 只构造并装配宿主句柄；`start()` 才 `JS_NewRuntime` + 启动专用 JS 线程
+- `create` 只构造并加载宿主句柄；`start()` 才 `JS_NewRuntime` + 启动专用 JS 线程
   并注册 `interpreter.js` 能力；`stop` 停止线程、释放 runtime —— disable→enable
   往返等价于一次 stop+start，引擎线程与脚本上下文按事务重建，不存在"线程已存在
   但实例已停用"的中间态（原设计把线程放在 create，disable 语义未定义）。

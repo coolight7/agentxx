@@ -44,7 +44,7 @@
 | **F. 第一批功能点** | `agentxx.context.countTokens`、`agentxx.context.summarize`、`agentxx.tool.summarizeOutput`（逐个给请求、结果、实现、值缓存、调用约定） | §8 |
 | **G. 跨边界接口** | 新接口表 `agentxx.agent.feature` v1（agent 领域表 9 → 10，总数 19 → 20）+ kit 糖 + **FFI 与命令行接入**（wire 消息、FFI 导出、子命令 `feature --list / --call / --dump-config`） | §9 |
 | **H. 线程、超时、体积** | 全部异步（宿主 IO 线程 + 操作协议）；超时两处都实现、默认 0 = 不限（`implTimeoutMs` / 调用方 `timeoutMs`）；不提供同步等待入口；大结果一次拷贝 + 上限 | §10 |
-| **I. 自省与排障** | `list_points` / `list_hooks` + 装配快照 / `--dump-diagnostics` 的 `features`·`hooks` 段；调用统计与成功调用日志**仅在开发者模式**下收集（§11.4） | §11 |
+| **I. 自省与排障** | `list_points` / `list_hooks` + 加载快照 / `--dump-diagnostics` 的 `features`·`hooks` 段；调用统计与成功调用日志**仅在开发者模式**下收集（§11.4） | §11 |
 | **J. 与既有机制的分工** | 工具 / 钩子 / 事件 / 能力 / 事件总线服务 / 提示词 / 资源 / FFI 宿主工具各自保留什么、哪些被功能点吸收 | §12 |
 | **K. 与 musicxx 的对照** | 逐条列出 musicxx 本轮与上一轮的设计项在 agentxx 的现状与处置（采纳 / 适配 / 暂不搬） | §13 |
 | **L. 路线图** | 本轮不做的项（通知型功能点、压缩对外开放、插件点值缓存、界面展示、第二批点、核心侧钩子处理器） | §18 |
@@ -98,7 +98,7 @@
     （wire 消息 + FFI 导出）、命令行（子命令 `feature --list / --call / --dump-config`）、
     脚本（`jsonl` 同一份 wire 消息）、远程客户端（wire）都用同一套"点 / 实现 / 调用 / 清单"语义
     （§9.5、§9.6）。
-15. **自省进同一份清单**：`list_points`（功能点）+ `list_hooks`（钩子）+ 装配快照 / `--dump-diagnostics`
+15. **自省进同一份清单**：`list_points`（功能点）+ `list_hooks`（钩子）+ 加载快照 / `--dump-diagnostics`
     的 `features` 与 `hooks` 段：显示每个点能不能调、怎么调、谁在提供、谁生效、谁把它关掉了。
     其中"被调过几次、最近谁调、耗时多少"这类**记录数据只在开发者模式**（`dev_mode`，启动期冻结）下收集
     （§11.4）：关闭时不累加、不占内存，清单只给当前状态。
@@ -122,7 +122,7 @@
 | 调用不能覆盖"最新值"、不能改应用状态 | `call()` 只读值缓存、不记置空、不写会话 / 不发提示 / 不落盘 | §4.2、§7 |
 | 各方注册的实现都能参与 | 实现链按层与优先级依次问，异常只等于"没意见" | §3.3 |
 | 钩子要能读清单与顺序 | 钩子处理器进有序注册表 + `list_hooks`（插件）与核心侧读数入口 | §6 |
-| 能看出"谁在提供、谁生效、能不能调" | `list_points` / `list_hooks` + 装配快照 / 诊断 `features`·`hooks` 段 | §11 |
+| 能看出"谁在提供、谁生效、能不能调" | `list_points` / `list_hooks` + 加载快照 / 诊断 `features`·`hooks` 段 | §11 |
 | 核心 / 插件 / FFI 宿主 / 命令行统一 | wire 消息 + FFI 导出 + 子命令 `feature --list / --call / --dump-config`，共用同一套语义 | §9.5、§9.6 |
 | 超时可按需实现 | 两处超时都实现、默认 0 = 不限：`implTimeoutMs`（等实现）/ `timeoutMs`（等整次调用） | §4.4、§10 |
 | 记录数据按需收集 | **开发者模式**（yaml `dev_mode`，启动期冻结）：开启才累计调用统计、派发记录与成功调用日志 | §11.4 |
@@ -212,7 +212,7 @@
 | 工具输出自动摘要 | 工具 `AGENTXX_PLUGIN_TOOL_FLAG_AUTO_SUMMARY` + `summarizationToolHandles` + share store 卸载 | 节点内实现 | `agentxx.tool.summarizeOutput`（provide）（§8.3） |
 | 权限判定（工具调用 / 路径三态） | `PermissionMiddlewareHandle::checkToolPermission` + `service.permission.check` / `service.permission.reverify` | 请求-响应服务 | 后续批次：`agentxx.permission.decide`（decide，只允许收紧，§8.4） |
 | 消息修复（空消息 / UTF-8 / 相邻 user 合并 / 哈希与条数检查） | `ModelCallWrapNode::baseRun` + `xx_messageCheckInfo` | 节点内实现 | 后续批次：`agentxx.context.repairMessages`（provide，不可调）（§8.4） |
-| 工具集过滤（白名单） | `AgentConfig::enableToolFiltering` + `toolWhitelist`（`base_agent.cpp`） | 配置 + 装配期过滤 | 后续批次：`agentxx.tool.select`（provide，不可调）（§8.4） |
+| 工具集过滤（白名单） | `AgentConfig::enableToolFiltering` + `toolWhitelist`（`base_agent.cpp`） | 配置 + 加载期过滤 | 后续批次：`agentxx.tool.select`（provide，不可调）（§8.4） |
 | 记忆文件 / 技能注入 | `memory_file` / `skill` 中间件（写稳定 system 段） | 中间件内实现 | 后续批次：`agentxx.memory.retrieve` / `agentxx.skill.match` |
 | 子代理执行 | `service.subagent(.batch/.execute)`（宿主应答） | 请求-响应服务 | 后续批次：`agentxx.subagent.run`（provide） |
 | 模型选择 / 用量 | 客户端 MRU + `AgentConfig` / `KeyMetrics` | 配置 | 暂不迁移（选择属界面偏好） |
@@ -244,7 +244,7 @@
   插件实现的调用与取消直接复用，不新写一套等待逻辑。
 * **协程驱动桥与 kit 原语**：`Task` / `invoke_cap` / `offload` / `sleep` / `spawn` / `PollOneBridge` ——
   kit 侧的功能点实现糖可以用与工具一样的形态写协程（§9.3）。
-* **装配快照与诊断**：`buildRuntimeSnapshot` / `renderAssemblySnapshot` / `buildDiagnosticsText`
+* **加载快照与诊断**：`buildRuntimeSnapshot` / `renderAssemblySnapshot` / `buildDiagnosticsText`
   （`--dump-diagnostics`）—— 功能点清单直接进这两处，不再另开一套导出（§11）。
 * **接口协商三层机制**：`plugin_interfaces.h` 的 `plugin_interfaces::*` 常量 +
   `checkInterfacesForSide` —— 新表要在这一层登记名字（§9.1）。
@@ -532,8 +532,8 @@ struct CallResult<TValue> {
 任何插件都可以为**任何点**（应用留出的点、别人声明的点、自己的点）登记实现，条件是：
 
 * 埋点默认接受外部实现（没有"只允许核心实现"的开关，见 §3.1）；登记被拒只有两种情况：
-  点不存在（应用点未装配 / 插件点未 `define_point`）、实例正在关闭或已禁用；
-* 登记的 `point_id` 必须已经声明（应用点在装配期声明，插件点必须先 `define_point`）；
+  点不存在（应用点未加载 / 插件点未 `define_point`）、实例正在关闭或已禁用；
+* 登记的 `point_id` 必须已经声明（应用点在加载期声明，插件点必须先 `define_point`）；
 * 同一 `(点, 插件实例)` 只保留一个实现（重复登记 = 覆盖，记日志）；
 * **不设数量上限**：同一个点可以被任意多个实例实现，一个实例也可以为任意多个点提供实现；
 * `priority` 越界不是拒绝，而是**裁剪到上下限并记一条警告**（默认带见 §3.3：插件 0、FFI 宿主 1000）；
@@ -660,7 +660,7 @@ int32_t(PLUGINXX_CALL* list_hooks)(const PluginxxHost* host, PluginxxString* out
 * `layer` / `owner` 的取值与功能点一致（§3.3）：`plugin:<插件名>` / `host:<宿主名>` / `core:<模块>`。
 * `load`（`dynamic` / `builtin`）只说明插件是怎么装载的，**不影响顺序**。
 * 读取入口：插件侧 `list_hooks`；core 侧 `PluginManager::hooksJson()` 与 `handlersOf(point)`
-  （内部使用，并进装配快照与 `--dump-diagnostics`）。**清单只读**：不参与派发判定，
+  （内部使用，并进加载快照与 `--dump-diagnostics`）。**清单只读**：不参与派发判定，
   派发只看注册表当前状态。
 * 每次派发失败仍只记一条警告日志（与现状一致）；**派发记录**（每次派发的点、处理器顺序、耗时）
   与对应的日志**只在开发者模式**（§11.4）收集，用于排查"为什么这个处理器先跑"。
@@ -671,7 +671,7 @@ int32_t(PLUGINXX_CALL* list_hooks)(const PluginxxHost* host, PluginxxString* out
   重新启用时由 `start` 事务重新登记（与工具 / 权限声明 / 功能点实现同一套规则）。
 * `RegistrationInventory::hooks` 改为"注册表里该实例生效的处理器数"；
   `middlewareAttached` 在钩子这条路上不再有意义（派发器是宿主级单例），实现时按新语义改名或删除，
-  并同步装配快照与诊断输出。
+  并同步加载快照与诊断输出。
 * `PluginListView` 增加 `hookPriorities`（或 `hookCount` + 首条优先级）便于一眼看出顺序。
 
 ### 6.5 不做的事
@@ -795,7 +795,7 @@ musicxx 本轮设计 C 的结论（"请求模型要能说明算哪一张图，�
 |---|---|---|---|
 | `agentxx.permission.decide` | decide（`anyVeto`） | 请求 `{sessionId, toolName, scope, targets[], args}`；结果 `{verdict:"deny"/"abstain", reason}` | 插件只能收紧；核心实现 = 现有规则引擎（allow / ask / deny 判定留在核心实现里） |
 | `agentxx.context.repairMessages` | provide | 请求 `{sessionId, messages[], model}`；结果 `{messages[], changed, notes[]}` | 不可调；把 `modelcall.cpp` 的修复逻辑搬进核心实现 |
-| `agentxx.tool.select` | provide | 请求 `{sessionId, tools[{name,source}]}`；结果 `{enabled[]}` | 不可调；吸收 `enableToolFiltering` / `toolWhitelist` 的装配期过滤 |
+| `agentxx.tool.select` | provide | 请求 `{sessionId, tools[{name,source}]}`；结果 `{enabled[]}` | 不可调；吸收 `enableToolFiltering` / `toolWhitelist` 的加载期过滤 |
 | `agentxx.memory.retrieve` | provide | 请求 `{sessionId, query, limit}`；结果 `{snippets[]}` | 动态段会破坏提示词稳定前缀，落点与缓存口径要先单独设计 |
 | `agentxx.skill.match` | provide | 请求 `{sessionId, query}`；结果 `{skills[]}` | 同上 |
 | `agentxx.subagent.run` | provide | 请求 `{parentSessionId, task, tools[], model}`；结果 `{resultText, sessionId}` | 吸收 `service.subagent.execute`；要处理中断与嵌套派生的既有语义 |
@@ -972,7 +972,7 @@ public:
 ```
 
 * 注册表挂在 `AgentContext`（`ctx->features`），在 `BaseAgent::init` 里创建；
-  核心点的声明放在各自中间件 / 节点的装配代码里（`initMiddleware` / 节点注册），
+  核心点的声明放在各自中间件 / 节点的加载代码里（`initMiddleware` / 节点注册），
   **早于插件装载**（`PluginManager::loadConfiguredPlugins`），因此插件登记实现时点已存在。
 * **没有"只允许核心实现"的开关**：所有点都接受插件 / FFI 宿主登记实现（§3.1、§3.3）。
 * `ImplContext` 给核心实现：`{layer, owner, caller, viaCall, identity, sessionId}`。
@@ -1045,7 +1045,7 @@ AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL agentxx_ffi_feature_respond(
 ### 9.6 命令行接入（子命令 `feature`）
 
 命令行统一做成一个**子命令**，与全局的 `--dump-config` / `--dump-diagnostics` 分工清楚：
-那两个是"整个装配"的快照，这里是"功能点"这一块的清单与调用。
+那两个是"整个加载"的快照，这里是"功能点"这一块的清单与调用。
 
 ```bash
 # 读清单（JSON；含 callable / callDoc / 实现链与顺序；开发者模式开启时含 stat）
@@ -1055,7 +1055,7 @@ agentxx_cli feature --list [--json | --text]
 agentxx_cli feature --call agentxx.context.countTokens \
     --args '{"text":"hello","model":"m1"}' [--timeout-ms 5000] [--session <id>]
 
-# 打印功能点相关的配置 / 装配段（与全局 --dump-config 里的 features 段同一份实现）
+# 打印功能点相关的配置 / 加载段（与全局 --dump-config 里的 features 段同一份实现）
 agentxx_cli feature --dump-config
 
 # 远程 / 跨进程：与 tui / cli / server 一样加 --agent
@@ -1065,8 +1065,8 @@ agentxx_cli feature --list --agent ws://192.168.1.100:17000/agent?token=xxx
 agentxx_cli feature --list --dev
 ```
 
-* **本地执行**（不带 `--agent`）：装配后直接读 `ctx->features`（不经 wire，少一层往返），
-  跑完即退出，与 `--dump-config` 同一条装配路径；
+* **本地执行**（不带 `--agent`）：加载后直接读 `ctx->features`（不经 wire，少一层往返），
+  跑完即退出，与 `--dump-config` 同一条加载路径；
 * **远程执行**（带 `--agent`）：经 wire 走 §9.5 的消息；
 * **`jsonl` 模式**天然可用（同一份 wire 协议）：脚本 / stdin 直接发
   `{"type":"feature_list","reqId":1}` 或
@@ -1089,7 +1089,7 @@ agentxx_cli feature --list --dev
 | 插件调用功能点 | `call_point_async` + `notify` 回调 | 不阻塞调用方；协程糖内部经桥接等待 |
 | FFI 宿主 / 远程客户端调用功能点 | wire `feature_call` + `feature_call_result`（按 `reqId` 配对） | 宿主不阻塞；调用方可给 `timeoutMs`（默认 0 = 不限），到点服务端取消当次实现并回 `failed` |
 | FFI 宿主 / 远程客户端提供实现 | wire `feature_impl_call` → 宿主线程 → `feature_impl_result` | 客户端断开时未应答的调用按"没意见"继续链并记日志 |
-| 命令行一次性调用 | 本地：装配后直接调 `ctx->features`；`jsonl`：走 wire | 结果 JSON 走 stdout，日志走 `XX_LOG` |
+| 命令行一次性调用 | 本地：加载后直接调 `ctx->features`；`jsonl`：走 wire | 结果 JSON 走 stdout，日志走 `XX_LOG` |
 | 超时（等实现） | 点的声明方可给 `implTimeoutMs`（**默认 0 = 不限**） | 到点取消当次实现（`impl_cancel`）并按"没意见"继续链；某个实现卡住不再拖死整条链 |
 | 超时（整次调用） | 调用方给 `timeoutMs`（**默认 0 = 不限**） | 到点取消当次实现并返回 `failed` + `message`；插件糖 / FFI / 命令行 / `jsonl` 都收这个参数 |
 | 取消 | 宿主取消当次实现；调用方放弃后丢弃晚到结果 | 不做"取消调用方整条流程"的承诺 |
@@ -1131,19 +1131,19 @@ agentxx_cli feature --list --dev
 * `load`（`dynamic` / `builtin`）只说明插件怎么装载的，不影响顺序。
 * `stat` 段**只在开发者模式**（§11.4）出现；关闭时清单只给"当前状态"
   （点 / 实现 / 顺序 / 可调性 / `disabledBy` 当前值），不累计任何记录数据。
-* 钩子清单（`list_hooks`）形状见 §6.3，两份清单在装配快照与诊断里并列出。
+* 钩子清单（`list_hooks`）形状见 §6.3，两份清单在加载快照与诊断里并列出。
 
 ### 11.2 出口
 
 | 出口 | 内容 |
 |---|---|
 | 插件 `list_points` / `list_hooks` | 功能点清单与钩子清单（插件用来判断"这个功能谁在提供、能不能调、谁排在前面"） |
-| 装配快照 | `buildRuntimeSnapshot` 增加 `features` 与 `hooks` 段：点数 / 各点生效实现 / 可调点数 / 处理器数与顺序；`renderAssemblySnapshot` 出人读文本 |
+| 加载快照 | `buildRuntimeSnapshot` 增加 `features` 与 `hooks` 段：点数 / 各点生效实现 / 可调点数 / 处理器数与顺序；`renderAssemblySnapshot` 出人读文本 |
 | `--dump-diagnostics` | `buildDiagnosticsText` 增加同一份清单（截断到可读长度） |
 | 命令行 | 子命令 `feature --list` / `feature --call <id>` / `feature --dump-config`（§9.6）；`jsonl` 模式经 wire 读清单与调用 |
 | FFI | `agentxx_ffi_feature_list`（同步查询）与 `EVT_FEATURE_RESULT` / `EVT_FEATURE_CALL`（§9.5） |
 | 日志 | 失败与生命周期事件始终记（warning / info）；**成功调用一行 info 只在开发者模式**（§11.4） |
-| 开发者模式 | `dev_mode`（yaml / FFI `devMode` / CLI `--dev`）：开启才累计统计与派发记录（§11.4）；装配快照里有 `dev_mode` 一行 |
+| 开发者模式 | `dev_mode`（yaml / FFI `devMode` / CLI `--dev`）：开启才累计统计与派发记录（§11.4）；加载快照里有 `dev_mode` 一行 |
 | 界面展示 | 本轮不做；§18 路线图登记"TUI 里显示功能点清单" |
 
 ### 11.3 统计口径（仅在开发者模式下收集）
@@ -1152,7 +1152,7 @@ agentxx_cli feature --list --dev
   按会话细分不做（点表是 agent 级，会话信息在 `identity` 与日志里）。
 * 统计只做展示与排障，不参与任何判定（不因失败次数自动禁用实现、不影响实现链顺序）。
 * **开关**：只有开发者模式（§11.4）下才累加；关闭时这些字段不存在于清单里（不是"全 0"，而是没有 `stat` 段）。
-* 内存：每个点一组固定大小的计数（无历史数组、无环形缓冲）；点表本身是装配期确定的，不会增长。
+* 内存：每个点一组固定大小的计数（无历史数组、无环形缓冲）；点表本身是加载期确定的，不会增长。
 * 钩子侧同理：派发次数、上一轮派发顺序与耗时只在开发者模式下记录（§6.3）。
 
 ### 11.4 开发者模式（记录数据的开关）
@@ -1174,7 +1174,7 @@ agentxx_cli feature --list --dev
 * **关闭时的开销**：热路径只多一次只读布尔判断（与 benchmark 标记同一做法）；不分配统计结构、不保留历史。
 * **只控制收集，不改变行为**：开发者模式不改实现链、不改值缓存策略、不改超时、不改日志级别；
   想同时打开 benchmark 统计或更详细的日志，由使用者在配置里分别打开，本设计不把它们绑在一起。
-* **可见性**：装配快照里有 `dev_mode: true/false` 一行（便于确认这次启动收不收数据）；
+* **可见性**：加载快照里有 `dev_mode: true/false` 一行（便于确认这次启动收不收数据）；
   任何出口在关闭时都不出现 `stat` 段，只给"当前状态"。
 
 ## 12. 设计 J：与既有机制的分工
@@ -1188,7 +1188,7 @@ agentxx_cli feature --list --dev
 | 工具互调（`call_tool_async`） | 插件之间点名调用工具 | 同上 |
 | 事件总线服务（`service.*`） | 迁移期内保留（压缩手动触发、权限询问、子代理、中断、跨 agent、TPS 同步服务） | **逐步被功能点吸收**：先接功能点、行为不变；被取代的服务在单独的提交里删除（§8.1 是第一个例子） |
 | 提示词（`agentxx.agent.prompt`） | 贡献 + 按键合成（已是很干净的贡献模型） | 不合并；提示词片段不是"功能" |
-| 资源（skill / memory / MCP） | 装配期资源贡献 | 后续批次的 `memory.retrieve` / `skill.match` 会读它们，但仍各管各的 |
+| 资源（skill / memory / MCP） | 加载期资源贡献 | 后续批次的 `memory.retrieve` / `skill.match` 会读它们，但仍各管各的 |
 | 图节点（`agentxx.agent.graph`） | 插件自定义节点类型 + 执行图定义 | 不合并；节点内部可以调用功能点 |
 | FFI 宿主工具（`agentxx_ffi_tool_register`） | 宿主（嵌入方）把自己的函数给模型用 | 不合并。宿主想"提供 / 调用功能"走功能点接入（wire + FFI 导出，§9.5）：读清单、调用点、登记实现；宿主实现默认优先级带 `1000`（比插件低、比 core 高，§3.3） |
 | 命令行 / JSONL / 远程客户端 | `jsonl` 与 `server` 共用同一份 wire 协议；脚本只发 JSON | 复用。功能点的清单与调用就是几条新 wire 消息（§9.5），脚本与远程客户端零新增概念 |
@@ -1213,7 +1213,7 @@ agentxx_cli feature --list --dev
 | 12 | **生命周期跟着插件走**：禁用摘生效、卸载全摘、重新启用重声明 | 已有同类机制（注册清单 / detach / clear） | 直接复用；功能点加进 `RegistrationInventory` 与诊断字段 |
 | 13 | **能力调用全面异步化**：四层接口统一异步、删同步 ABI、调用方自备超时、不做取消承诺 | 插件调用已经是协程 / 操作协议；但存在同步等待入口（`invoke_capability_blocking`、`check_paths` 非 IO 线程同步等待、C ABI 的 `ioCallSync`） | **部分采纳**：功能点只提供异步形态，不新增同步入口；存量入口保留（有明确约束：不得在 IO 线程阻塞），把"功能点不阻塞"写进文档 |
 | 14 | **一条通用实现通道**（不新增函数点） | 钩子点固定，插件不能自造 | 适配：功能点表本身就是通用通道（§5.2） |
-| 15 | **自省进同一份清单**（能不能调 / 怎么调 / 谁在提供 / 被调几次） | 装配快照有插件注册计数，无功能清单 | 采纳（`list_points` + `list_hooks` + 快照 `features` / `hooks` 段 + 诊断） |
+| 15 | **自省进同一份清单**（能不能调 / 怎么调 / 谁在提供 / 被调几次） | 加载快照有插件注册计数，无功能清单 | 采纳（`list_points` + `list_hooks` + 快照 `features` / `hooks` 段 + 诊断） |
 | 16 | **不设框架级超时** | 工具有 `default_timeout_ms`（插件自选） | **适配**：本轮把超时**实现出来但默认不限**（点声明方 `implTimeoutMs` / 实现自报值 / 调用方 `timeoutMs`，都为 0 = 不限）；"框架不替调用方猜超时"的口径不变 |
 | 17 | **不链式传值**（本轮不做） | 无 | 采纳（不做） |
 | 18 | **不做运行时权限校验**（框架口径） | 框架无运行期权限层 | 采纳（功能点不加权限层） |
@@ -1312,7 +1312,7 @@ AGENTS.md                                            # 接口表数量与功能�
 * `callable` / `callDoc` / `call()` / 三道保护 / 结果与错误码 / **两处超时**（`implTimeoutMs`、
   `timeoutMs`，都默认 0 = 不限）；把 `countTokens` 声明为可调；
 * `define_point` / `undefine_point`（命名空间校验 + `impl_timeout_ms`）+ 插件点调用；
-* 清单进装配快照与 `--dump-diagnostics`；调用统计与成功调用日志按开发者模式门控（§11.4）；
+* 清单进加载快照与 `--dump-diagnostics`；调用统计与成功调用日志按开发者模式门控（§11.4）；
 * 测试：`feature_points` 扩展（`not_callable` / `bad_args` / `busy` / 调用不写值缓存 / 不记置空 /
   调用方全是自己 / 超时两条路径 / 开发者模式开关 / 插件点端到端）+ `plugin_feature` 扩展；
 * 验证：`agentxx_test feature_points plugin_feature assembly_snapshot observability`。
@@ -1321,7 +1321,7 @@ AGENTS.md                                            # 接口表数量与功能�
 
 * `AgentxxPluginHookSpecEx` + 钩子表尾部三项 + `plugin_manager_hooks.cpp`（注册表 + 单派发器）+
   旧的按插件派发移除；kit `hookEx` / `listHooks`；
-* 默认带与裁剪、不设数量上限；派发记录按开发者模式门控；清单进装配快照 `hooks` 段与诊断；
+* 默认带与裁剪、不设数量上限；派发记录按开发者模式门控；清单进加载快照 `hooks` 段与诊断；
   `RegistrationInventory` / `PluginListView` 字段同步；
 * 测试模块 `plugin_hooks`：默认顺序与现状一致（同优先级按登记顺序）、显式优先级生效、
   同一实例同一点多个处理器、优先级越界裁剪 + 警告、撤销与禁用摘生效、清单字段、
@@ -1383,7 +1383,7 @@ AGENTS.md                                            # 接口表数量与功能�
   `layer` 只有 `plugin` / `core`；**开发者模式关**时没有 `stat` 段与派发记录，**开**时
   `asks` / `calls` / `errors` / `lastBy` / `lastCaller` 计数正确。
 * **开发者模式**：开关在启动时读取后**冻结**（运行期改配置不生效）；关闭时成功调用不记 info 日志、
-  钩子派发不记录（可断言日志条数）；开关状态出现在装配快照（`dev_mode`）。
+  钩子派发不记录（可断言日志条数）；开关状态出现在加载快照（`dev_mode`）。
 
 **核心点迁移（扩展现有模块）**
 
@@ -1414,7 +1414,7 @@ AGENTS.md                                            # 接口表数量与功能�
   优先级越界被裁剪 + 记警告（清单里读回的生效值可断言）。
 * 禁用 → 该实例处理器不生效（派发时跳过）且不改变其他处理器相对顺序；卸载 → 全部摘除。
 * 清单：`list_hooks` 字段齐全（point / name / handlers / handle / layer / owner / priority / seq / enabled）；
-  `hooks` 段进装配快照；`RegistrationInventory::hooks` 计数正确；
+  `hooks` 段进加载快照；`RegistrationInventory::hooks` 计数正确；
   开发者模式关时清单里没有派发记录。
 
 **命令行与 FFI（扩展 `ffi_c_api` / `jsonl_mode` / `wire_roundtrip` / `wire_schema`）**
@@ -1427,7 +1427,7 @@ AGENTS.md                                            # 接口表数量与功能�
 * `jsonl` 模式：`{"type":"feature_list"}` / `{"type":"feature_call"}` 有对应 `..._result` 行；
   老客户端不认识新消息时不出错（忽略）。
 * 命令行子命令：`feature --list` 输出清单后退出；`feature --call` 成功 / 失败两种退出码与 stdout 内容；
-  `--timeout-ms` 生效；`feature --dump-config` 输出与装配快照 `features` 段一致；`--agent` 走 wire；
+  `--timeout-ms` 生效；`feature --dump-config` 输出与加载快照 `features` 段一致；`--agent` 走 wire；
   `feature --help` 列出三个动作。
 
 **快照与诊断**
@@ -1521,14 +1521,14 @@ AGENTS.md                                            # 接口表数量与功能�
     核心、插件、宿主、脚本同一套语义。
 15. **开发者模式**（§11.4）：`dev_mode`（yaml / FFI `devMode` / CLI `--dev`）启动期读取并冻结；
     开启才收集调用统计、钩子派发记录、成功调用日志；只控制收集、不改变行为；
-    装配快照里可见 `dev_mode`。
+    加载快照里可见 `dev_mode`。
 16. 工具 / 事件 / 能力 / 提示词 / 资源 / 图节点不合并；`service.*` 逐步被功能点吸收。
 17. 第一批点：`agentxx.context.countTokens`（可调）、`agentxx.context.summarize`（不可调）、
     `agentxx.tool.summarizeOutput`（阶段 7 落地，不可调）。
 18. `agentxx.context.countTokens` 的值缓存参数：`ByIdentity`、`max_items = 64`、`max_bytes = 256 KiB`（已确认）。
 19. 旧宿主判定：表指针为空 = 宿主太旧，插件按"功能不可用"降级并记日志；不停用整个插件；
     FFI / wire 侧老宿主同样降级（清单为空、调用 `no_impl`）。
-20. 清单（功能点 + 钩子）进装配快照与 `--dump-diagnostics`；界面展示进 §18 路线图。
+20. 清单（功能点 + 钩子）进加载快照与 `--dump-diagnostics`；界面展示进 §18 路线图。
 
 ### 19.2 待确认（可以推翻，成本写在括号里）
 
@@ -1537,7 +1537,7 @@ AGENTS.md                                            # 接口表数量与功能�
 2. **`priority` 允许范围**：草案 ±1000（越界裁剪 + 警告）；数值可按实际需要调整（成本低）。
 3. **是否给压缩点设 `implTimeoutMs`**：草案保持 `0`（不限），由调用方按需给 `timeoutMs`；
    若实测出现"插件实现卡住压缩"，再给该点加一个声明值（成本低）。
-4. **`feature --dump-config` 的输出边界**：草案是与装配快照 `features` 段一致的文本；
+4. **`feature --dump-config` 的输出边界**：草案是与加载快照 `features` 段一致的文本；
    若希望它顺带打印 `hooks` 段或完整快照，改动在渲染函数（成本低）。
 5. **FFI 宿主实现的 owner 命名**：草案 `host:<客户端标识>`，`declare` 声明的宿主点用
    `host.<宿主名>.<名>`（成本低，但要同步文档与测试）。

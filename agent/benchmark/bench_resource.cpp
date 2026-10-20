@@ -75,7 +75,7 @@ namespace {
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// 插件装配辅助: 构建 5 常用插件配置并校验
+// 插件加载辅助: 构建 5 常用插件配置并校验
 // ---------------------------------------------------------------------------
 
 struct PluginsLoadPlan {
@@ -195,7 +195,7 @@ void benchResourceCli() {
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
 
-    // 装配 Channel 直连
+    // 加载 Channel 直连
     auto agentEx = agent->ioCtx->get_executor();
     auto [clientTransport, serverTransport]
         = agent::ChannelAgentIOTransport::makePair(clientEx, agentEx);

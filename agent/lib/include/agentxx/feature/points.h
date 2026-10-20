@@ -1,4 +1,4 @@
-/// agentxx 核心功能点的 id、请求/结果结构与实现装配
+/// agentxx 核心功能点的 id、请求/结果结构与实现加载
 ///
 /// 这一份头是"核心点的稳定清单": 点 id、展示名、说明全部集中在这里, 文档表格与
 /// 测试引用同一份常量 (避免命名与文档漂移)。插件不写进这份表 —— 插件的点是运行期
@@ -155,9 +155,9 @@ struct Codec<SummarizeValue> {
 /// 摘要身份串: `sessionId|messagesVersion|model`
 std::string summarizeIdentity(const SummarizeRequest& req);
 
-// ==================== 核心点的实现装配 ====================
+// ==================== 核心点的实现加载 ====================
 
-/// 上下文相关核心点的装配参数
+/// 上下文相关核心点的加载参数
 struct ContextPointOptions {
     /// token 估算规则 (与压缩中间件的构造参数一致)
     TokenEstimator estimator;
@@ -175,7 +175,7 @@ struct ContextPoints {
     ProvidePoint<SummarizeRequest, SummarizeValue>*     summarize   = nullptr;
 };
 
-/// 声明上下文两个核心点并登记核心实现 (由压缩中间件在装配期调用)
+/// 声明上下文两个核心点并登记核心实现 (由压缩中间件在加载期调用)
 /// - 同一 AgentContext 重复调用 = 无害重声明 (点复用, 核心实现按归属覆盖)
 ContextPoints registerContextPoints(Registry& registry, const ContextPointOptions& options);
 

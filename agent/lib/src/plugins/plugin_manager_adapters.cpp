@@ -323,7 +323,7 @@ int PluginManager::unregisterToolPermission(PluginInstance* inst, PluginxxString
         return -1;
     }
     inst->permissionToolNames.erase(it);
-    // 中间件未装配时无声明可撤销 (禁用/卸载阶段始终调用本函数做收尾)
+    // 中间件未加载时无声明可撤销 (禁用/卸载阶段始终调用本函数做收尾)
     if (auto* permission = permissionMiddleware()) {
         permission->unregisterToolPermission(name);
     }
@@ -359,7 +359,7 @@ int PluginManager::checkPermissionPaths(
             );
             return -1;
     }
-    // 权限中间件未装配: 无规则可判定, 返回失败让调用方跳过过滤 (按原行为处理)
+    // 权限中间件未加载: 无规则可判定, 返回失败让调用方跳过过滤 (按原行为处理)
     auto* permission = permissionMiddleware();
     if (!permission) {
         return -1;

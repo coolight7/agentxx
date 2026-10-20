@@ -80,10 +80,10 @@ std::string generateUniqueSessionId() {
 }
 
 // ---------------------------------------------------------------------------
-// client 插件系统装配辅助 (TUI/CLI/本地/远程共用)
+// client 插件系统加载辅助 (TUI/CLI/本地/远程共用)
 // ---------------------------------------------------------------------------
 
-/// 创建 ClientPluginManager 并装配到端点 (同步; 加载由调用方 co_await
+/// 创建 ClientPluginManager 并加载到端点 (同步; 加载由调用方 co_await
 /// loadConfiguredClientPlugins):
 /// - 端点经 setEventSink 注入 (AgentIOBase 关键路径事件 → 插件订阅分发)
 /// - TUI 额外经 setPluginManager 注入 (组件渲染/命令管线读取)
@@ -102,7 +102,7 @@ static std::shared_ptr<agentxx::plugin::ClientPluginManager> setupClientPlugins(
     mgr->setSessionId(sessionId);
     agentxx::plugin::registerBuiltinToolRenderers(*mgr);
     // TUI 端点: 组件上下文 (ctx_.pluginManager) 在 start() 的 UI 线程构建时
-    // 读取, 故 setPluginManager 必须在 start() 之前调用 (见各模式装配顺序)
+    // 读取, 故 setPluginManager 必须在 start() 之前调用 (见各模式加载顺序)
     if constexpr (std::is_same_v<IoT, TUIClientAgentIO>) {
         io->setPluginManager(mgr);
     }
@@ -306,7 +306,7 @@ static asio::awaitable<void>
     // 每次启动生成唯一会话 id, 避免多实例/多次启动共用 "session" 导致会话串扰
     const std::string sessionId = generateUniqueSessionId();
     io->setSessionId(sessionId);
-    // client 插件系统: 装配 (事件接收器) + 加载 (sides 过滤在管理器内完成)
+    // client 插件系统: 加载 (事件接收器) + 加载 (sides 过滤在管理器内完成)
     auto pluginMgr = setupClientPlugins<StdIOClientAgentIO, CliPluginAdapter>(
         clientEx,
         io,
@@ -363,7 +363,7 @@ static asio::awaitable<void>
         );
         tui->setWorkDir(agent->agentContext->agentConfig->resolvedWorkDir());
     }
-    // client 插件系统: 装配须在 start() 之前 (ctx_.pluginManager 在 UI 线程
+    // client 插件系统: 加载须在 start() 之前 (ctx_.pluginManager 在 UI 线程
     // 构建组件时读取); 加载 (协程) 在 start() 之后进行, 期间注册的面板经
     // postToUi 排队, UI 线程启动后正常挂载
     auto pluginMgr
@@ -421,7 +421,7 @@ static asio::awaitable<void> runRemoteCliAsync(
     // 共用 "session" 会使多个客户端实例挂到同一会话上互相串扰
     const std::string sessionId = generateUniqueSessionId();
     io->setSessionId(sessionId);
-    // client 插件系统: 装配 + 加载 (远程 client 进程只加载 client 侧插件;
+    // client 插件系统: 加载 + 加载 (远程 client 进程只加载 client 侧插件;
     // 与 agent 侧条目的 sides 过滤由管理器完成)
     auto pluginMgr
         = setupClientPlugins<StdIOClientAgentIO, CliPluginAdapter>(ex, io, sessionId, plugins);
@@ -445,7 +445,7 @@ static asio::awaitable<void> runRemoteCliAsync(
         .tailHash  = "",
         .model     = "",
         .language  = "en",
-        // 协议版本与能力声明: 服务端据此决定是否下发补拉/回执等能力
+ // 协议版本与能力声明: 服务端据此决定是否下发补拉/回执等能力
         .protocolVersion = agent::WireProtocol::kVersion,
         .capabilities
         = {std::string{agent::WireProtocol::kCapInputDelivery},
@@ -525,7 +525,7 @@ static asio::awaitable<void> runRemoteTuiAsync(
     // 模型名/上下文统计等均经 Wire 消息由服务端获取
     auto io = std::make_shared<TUIClientAgentIO>(ex, sessionId, resolveTuiTheme());
     io->setRemoteUrl(url);
-    // client 插件系统: 装配须在 start() 之前 (ctx_.pluginManager 在 UI 线程
+    // client 插件系统: 加载须在 start() 之前 (ctx_.pluginManager 在 UI 线程
     // 构建组件时读取); 加载在 start() 后进行 (面板经 postToUi 排队挂载)
     auto pluginMgr
         = setupClientPlugins<TUIClientAgentIO, TuiPluginAdapter>(ex, io, sessionId, plugins);
@@ -549,7 +549,7 @@ static asio::awaitable<void> runRemoteTuiAsync(
         .tailHash  = "",
         .model     = "",
         .language  = TUISettings::instance().languageCode(),
-        // 协议版本与能力声明: 版本高于服务端时握手会被明确拒绝
+ // 协议版本与能力声明: 版本高于服务端时握手会被明确拒绝
         .protocolVersion = agent::WireProtocol::kVersion,
         .capabilities
         = {std::string{agent::WireProtocol::kCapInputDelivery},

@@ -57,7 +57,7 @@ class JsEngine;
 namespace {
 
 // =====================================================================
-// C ABI 边界异常守卫 (由守卫函数调用处显式传入; entry 装配缓存)
+// C ABI 边界异常守卫 (由守卫函数调用处显式传入; entry 加载缓存)
 // =====================================================================
 
 /// JS 专用线程栈大小: 显式 8MB (与 Linux 默认一致)
@@ -483,7 +483,7 @@ public:
 
 private:
 
-    /// 主程序 log 接口表缓存 (setEngineHost 装配; 随实例生死)
+    /// 主程序 log 接口表缓存 (setEngineHost 加载; 随实例生死)
     const PluginxxLogIface* logIface_ = nullptr;
 
 public:
@@ -2514,7 +2514,7 @@ static void* PLUGINXX_CALL jsCapStart(
 
 extern "C" PLUGINXX_EXPORT int
     agentxx_plugin_agent_create(const PluginxxHost* host, void** plugin_ctx) {
-    // C ABI 边界异常守卫: create 只构造上下文 (查询接口 + 装配主程序句柄),
+    // C ABI 边界异常守卫: create 只构造上下文 (查询接口 + 加载主程序句柄),
     // 不创建 runtime/线程, 也不提交任何运行时注册; 异常返回
     // -1 走主程序加载失败清理路径
     JsEngine* raw = nullptr;
@@ -2689,7 +2689,7 @@ extern "C" PLUGINXX_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
     auto* engine = static_cast<JsEngine*>(plugin_ctx);
     // C ABI 边界异常守卫: 销毁回调 (同步等待停止收尾 = 停线程 + 释放 runtime)
     // 异常不得外泄, 否则 JS 线程/runtime 泄漏且主程序卸载流程被打断;
-    // 先借本实例主程序句柄装配日志闭包再 delete (delete 后不得访问成员)
+    // 先借本实例主程序句柄加载日志闭包再 delete (delete 后不得访问成员)
     const PluginxxHost*     ownHost = engine ? engine->host() : nullptr;
     const PluginxxLogIface* ownLog  = nullptr;
     if (ownHost && ownHost->vtable && ownHost->vtable->query_interface) {

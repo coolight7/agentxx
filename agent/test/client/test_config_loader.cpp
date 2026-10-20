@@ -934,7 +934,7 @@ void test_plugin_args_env_expand() {
 }
 
 void test_plugins_config_path_parse() {
-    // config: 可指向文件或目录, 支持 ${VAR} 展开, 主程序原样保存 (归一化由装配侧完成)
+    // config: 可指向文件或目录, 支持 ${VAR} 展开, 主程序原样保存 (归一化由加载侧完成)
     auto cfg = loadYaml(R"(plugin:
   list:
     - path: "/opt/plugins/my_plugin.so"

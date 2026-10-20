@@ -259,7 +259,7 @@ public:
         workDir_ = std::move(dir);
     }
 
-    /// 装配 client 插件管理器 (mode_runners 在 start() 后调用):
+    /// 加载 client 插件管理器 (mode_runners 在 start() 后调用):
     /// - 供命令管线 (onSend 拦截 "/" 命令) 与组件渲染 (状态栏/侧边栏) 读取
     /// - 同时也是事件接收器 (ClientEventSink), 经 setEventSink 注入
     void setPluginManager(std::shared_ptr<agentxx::plugin::ClientPluginManager> mgr) {
@@ -687,7 +687,7 @@ private:
     /// 输入请求序号: 每次发送用户输入自增, 用于关联受理回执
     uint64_t nextInputRequestId_ = 0;
 
-    /// client 插件管理器 (装配后不可变; uiRegistrySnapshot/hasCommand 线程安全)
+    /// client 插件管理器 (加载后不可变; uiRegistrySnapshot/hasCommand 线程安全)
     std::shared_ptr<agentxx::plugin::ClientPluginManager> pluginManager_;
 
     /// F12: 切换日志窗口 tab

@@ -504,8 +504,8 @@ constexpr bool specHas(uint32_t struct_size) noexcept {
 | 项 | 形态 | 谁写 | 作用 |
 |---|---|---|---|
 | **IID** | `#define X_IFACE_<名> "命名空间.名字"` | 人（字符串常量） | `query_interface` 的键；换契约 = 换 IID |
-| **`struct_size`** | 表头第 2 个字段 `uint32_t` | 宿主装配时填 `sizeof(表)` | 能安全读多少字节（基线门槛 + 追加成员 `ifaceHas` + 排障） |
-| **`version`** | 表头第 1 个字段 `int32_t` | 宿主装配时填 `X_VERSION` | 语义档位（追加/语义变化 → +1） |
+| **`struct_size`** | 表头第 2 个字段 `uint32_t` | 宿主加载时填 `sizeof(表)` | 能安全读多少字节（基线门槛 + 追加成员 `ifaceHas` + 排障） |
+| **`version`** | 表头第 1 个字段 `int32_t` | 宿主加载时填 `X_VERSION` | 语义档位（追加/语义变化 → +1） |
 | **`MIN_VERSION`** | `#define X_MIN_VERSION` | 人（当前恒为 1） | 本头文件能协同工作的最低表版本；破坏性改动时才 +1 |
 
 **四件套在源码里的位置（统一形态）**：
@@ -584,14 +584,14 @@ client 侧 7 + 2 = **9**，通用表 10（两侧共用，不重复计入领域�
 | 位置 | 变更 |
 |---|---|
 | `plugin_manager_adapters.cpp`（工具权限声明） | "小于我的就拒" → `specSizeOk`（接受 `0` 与 `>= 基线`） |
-| `plugin_manager_vtable.cpp`（路径查询 / 表装配） | 同上；`hooks_ex` 表对象删除，三入口填入 `hooks` 表；`query_interface` 去掉 `hooks_ex` 分支 |
+| `plugin_manager_vtable.cpp`（路径查询 / 表加载） | 同上；`hooks_ex` 表对象删除，三入口填入 `hooks` 表；`query_interface` 去掉 `hooks_ex` 分支 |
 | `plugin_manager_hooks.cpp`（钩子扩展） | 长度检查改 `specSizeOk`；文件头注释表名更新 |
 | `plugin_manager_feature.cpp` | **新增**两处 `specSizeOk` 检查 |
 | 渲染输入 / 动作上下文填充处（`client_plugin_manager.cpp` 的渲染回调构造与 `AgentxxUiActionContext` 派发） | **新增**填 `struct_size = sizeof(...)` |
 | `plugin_manager.cpp` / `plugin_manager_lifecycle.cpp`（加载入口） | **新增**插件级检查：`info->api_version < PLUGINXX_MIN_API_VERSION` → 拒载（对齐 client 侧的检查方式；`0`/过低都拒） |
-| `client_plugin_manager.cpp` | 检查方式统一为 `< AGENTXX_CLIENT_PLUGIN_MIN_API_VERSION`（当前等于 1，行为不变）；`hooks_ex` 相关装配删除 |
+| `client_plugin_manager.cpp` | 检查方式统一为 `< AGENTXX_CLIENT_PLUGIN_MIN_API_VERSION`（当前等于 1，行为不变）；`hooks_ex` 相关加载删除 |
 | `plugin_manager.h` | `kInterfaceTableCount` 10 + 11 → 10 + 10；`hookPriorities` 等注释里的表名更新 |
-| `assembly_snapshot.cpp` | 装配快照的接口表清单与数量（20）；钩子段来源表名 |
+| `assembly_snapshot.cpp` | 加载快照的接口表清单与数量（20）；钩子段来源表名 |
 
 ### 4.4 SDK 与插件侧
 

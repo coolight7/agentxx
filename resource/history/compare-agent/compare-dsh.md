@@ -53,7 +53,7 @@
 | 语言/运行时 | C++23, Boost.Asio 协程, 单线程 io_context 交错执行多会话 | TypeScript (ESM), Node ^22.19 / >=24, 单进程事件循环 |
 | 核心抽象 | NeoGraph 图引擎（节点 + 条件边）+ 中间件钩子 + 传输端点 | Cordis 插件树（服务 + 类型化事件 + 可逆副作用）|
 | 扩展形态 | 纯 C ABI 动态库插件（`.so`/`.dll`），宿主按名查符号，接口表按名称查询 | npm 包插件（同进程、同语言），经 Cordis `ctx.<service>` 注入与事件扩展 |
-| 装配方式 | `agentxx-config.yaml`：base（`data_dir`）+ overlay（工作目录）两层合并 | profile + bundle + 有序 patch（`cordis.patch.yml`），逐条覆盖/插入 |
+| 加载方式 | `agentxx-config.yaml`：base（`data_dir`）+ overlay（工作目录）两层合并 | profile + bundle + 有序 patch（`cordis.patch.yml`），逐条覆盖/插入 |
 | 会话语义 | 会话（`Session`）持有 typed 上下文，SQLite 落库；图状态只有影子元信息 | 会话 = 仅追加 `SessionEvent` 日志；模型历史由日志 `deriveMessages()` 派生 |
 | 客户端 | FTXUI TUI / stdio CLI / 远程 WS 客户端，客户端插件（C ABI）| Web（浏览器）+ Electron 桌面 + headless，客户端插件（浏览器 bundle）|
 | 内置能力形态 | 内置工具/能力本身也是插件（`agent/plugins/agentxx_*`）| 一切皆插件（含 agent loop、模型适配器、会话日志）|
@@ -113,7 +113,7 @@
 - **类型化事件是通信方式**：声明合并（declaration merging）注册事件名，分发模式分五种——`emit`（观察）、`waterfall`（环绕包装、可短路）、`parallel`、`serial`、`bail`。
 - **注册是可逆副作用**：所有贡献经 `ctx.effect()` / `ctx.on()` 安装，卸载时自动撤销（`AGENTS.md` 的硬性约定：“Registrations are effects”）。
 
-**装配**（`docs/architecture.zh.md#profile-与组合包`）：运行中的 `dsh` 是启动时按序叠加出的插件树——
+**加载**（`docs/architecture.zh.md#profile-与组合包`）：运行中的 `dsh` 是启动时按序叠加出的插件树——
 `profile`（具名组装，声明自己叠放的 bundle、树外插件、用户 `cordis.patch.yml`）→ 每个 bundle 依次应用 → profile patch → home 级 patch → `--patch` overlay；一条 patch 按 id 定位条目并替换其整个 config，或插入新条目。`dsh-base` 是所有 profile 的共享第一层。
 `dsh --profile web --dump-config` 可以把整棵配置树打印出来，**用户看到的每个条目都可被自己的 patch 替换**。
 
@@ -146,7 +146,7 @@
 - **宿主侧能力**：`PluginManager`（生命周期骨架来自内核 `pluginxx::PluginHostLifecycle`：装载/启停/禁用启用/卸载/级联依赖/关闭超时重试）、`ToolRegistry`（插件工具与内置工具统一注册、冲突检测、静态工具名集合）、`PluginGraphNode`（插件可注册/修改执行图）、能力协商（`capability_registry`）。
 - **中间件机制**（`agentxx/middlewares/middleware.h`）：`BaseMiddlewareHandleInterface` 提供 7 个钩子点（`onAgentcallStart/End`、`onModelcallStart/Run/End`、`onToolcallStart/End`），每个 handle 持有 `states`（按 `sessionId` 分片）与 `toolcalls`（中间件自带工具，`init()` 后由 `initMiddlewareTools` 收集）。
 - **内置工具即插件**：`agent/plugins/agentxx_*`（filesystem、execute_command、websearch、rag_search、planning、math、string、system、codegraph、system_monitor、screen_capture…）；`BaseAgent::initTools()` 只放核心（如 `SessionShareStoreTool`），CodeAgent 再加 MCP/GitWorktree。
-- **配置装配**：`agentxx-config.yaml` 分两层——base（overlay 的 `data_dir` 目录，缺省 `~/.agentxx/`）+ overlay（工作目录或 `--config`），`model.list` / `plugin.list` 等列表段用 `{overwrite:{mode:merge|replace, remove:[...]}, list:[...]}` 表达继承/替换/剔除。
+- **配置加载**：`agentxx-config.yaml` 分两层——base（overlay 的 `data_dir` 目录，缺省 `~/.agentxx/`）+ overlay（工作目录或 `--config`），`model.list` / `plugin.list` 等列表段用 `{overwrite:{mode:merge|replace, remove:[...]}, list:[...]}` 表达继承/替换/剔除。
 
 **源码要点（第 2 版补充，`agent/lib/src/plugins/plugin_manager_vtable.cpp`、`agent/lib/include/agentxx/nodes/wrap_handle.h`）**
 
@@ -166,7 +166,7 @@
 | 注册可逆性 | 强制：一切注册经 `ctx.effect()`，返回 disposer | 显式：`register_*`/`unregister_*` 成对，卸载时宿主统一撤销（如 `unregister_tool_permission`） | dsh 的“可逆副作用”是语言级约束，漏写会被 review/gate 挡下；agentxx 靠契约与测试保证 |
 | 事件模型 | 5 种分发模式（含 waterfall 环绕、bail 短路） | 7 个固定钩子点 + EventBus（请求/响应式 `req*`/`resp*` 消息） | dsh 的 waterfall 让“策略包装而不改循环”成为默认写法 |
 | 作用域 | 全局/按 agent 两层 + shadowing + restriction | 工具注册是进程/agent 级；按会话的数据放 middleware `states` | dsh 的 scope 是**能力可见性**维度的解耦；agentxx 目前主要靠“按 sessionId 分片” |
-| 装配 | profile + bundle + 有序 patch（含用户 patch/overlay） | 两层 yaml 合并 + 插件清单 | dsh 的 patch 能对**任意条目**替换 config；agentxx 目前是段级合并 |
+| 加载 | profile + bundle + 有序 patch（含用户 patch/overlay） | 两层 yaml 合并 + 插件清单 | dsh 的 patch 能对**任意条目**替换 config；agentxx 目前是段级合并 |
 | 运行期自修改 | 支持（模型写 Cordis 包并挂载，客户端半边需批准） | 支持（动态库 + 资源贡献），但需重新编译 | 结论：agentxx 的“自修改”边界受编译期约束，应把重点放在**热重载/热禁用**而非即时定义 |
 | 隔离性 | 同进程同语言，无隔离 | 插件符号隐藏（`-fvisibility=hidden` + version script），只导出入口符号 | agentxx 的符号控制避免了“插件覆盖宿主符号”类事故 |
 
@@ -178,9 +178,9 @@
    落地：`ToolRegistry`（增加 per-agent 过滤视图）、`BaseAgent::initTools`。
 3. **细粒度事件点的 waterfall 语义**：agentxx 的 7 个钩子是“通知式”（`onXxxStart` 可改 `NodeInput`，`onXxxEnd` 可改 `NodeOutput`），但缺少 dsh 那种“监听器可以包装下游返回值/短路决策链”的统一写法。可先在**工具执行**这一条链上做试点：`pre-execute`（可改参数/拒绝/标记需审批）→ `execute`（可环绕：超时、重试、计量）→ `post-execute`（检查/替换结果/追加上下文），每个环节都是“有序监听器链 + 链尾为真实执行”。
    落地：`ToolcallWrapNode::execTool`（现在是硬编码流程 + 中间件钩子）。
-4. **配置条目级 patch**：dsh 的 `--patch` 能按 id 替换任意插件 config，且能打印最终装配树（`--dump-config`）。agentxx 已有 `model.list`/`plugin.list` 的 merge/replace/remove，建议扩展为“按插件名/模型名定位并替换其整个 config 子树”，并提供对应的“导出最终合并结果”能力（便于排障与文档化）。
+4. **配置条目级 patch**：dsh 的 `--patch` 能按 id 替换任意插件 config，且能打印最终加载树（`--dump-config`）。agentxx 已有 `model.list`/`plugin.list` 的 merge/replace/remove，建议扩展为“按插件名/模型名定位并替换其整个 config 子树”，并提供对应的“导出最终合并结果”能力（便于排障与文档化）。
    落地：`agent/lib/src/agent/config.cpp`、`agent/client/src/config_loader.cpp`。
-5. **装配树可打印**：为 agentxx 增加 `--dump-config` 等价物，输出（模型列表、插件列表及来源层、中间件顺序、工具名清单、图定义），这是排查“插件改了图/加了工具”的最低成本手段。
+5. **加载树可打印**：为 agentxx 增加 `--dump-config` 等价物，输出（模型列表、插件列表及来源层、中间件顺序、工具名清单、图定义），这是排查“插件改了图/加了工具”的最低成本手段。
    落地：`agent/client/src/main.cpp`。当前已有的 `agentxx.agent.graph` 接口表可复用为数据源。
 
 ---
@@ -1583,7 +1583,7 @@ turn/end
 
 **agentxx 可吸收：**
 
-1. **patch 语义（按 id + 整段替换）与“打印最终装配树”**：现在 agentxx 只有段级 merge；配置漂移（哪一层生效了什么）很难回答。建议给 `plugin.list` / `model.list` 之外的段也引入“按插件名/工具名定位并整段替换”，并提供 `--dump-config` 等价物（插件清单 + 每项的来源层 + 中间件顺序 + 工具名清单 + 图定义）。
+1. **patch 语义（按 id + 整段替换）与“打印最终加载树”**：现在 agentxx 只有段级 merge；配置漂移（哪一层生效了什么）很难回答。建议给 `plugin.list` / `model.list` 之外的段也引入“按插件名/工具名定位并整段替换”，并提供 `--dump-config` 等价物（插件清单 + 每项的来源层 + 中间件顺序 + 工具名清单 + 图定义）。
 2. **配置字段分级（volatile vs 需重启）**：Cordis 允许“只改 volatile 字段不重挂载”。agentxx 可给 `PluginConfig`/`AgentConfig` 标注“可热改字段”，改这些字段时只更新运行中实例的引用并广播一次事件（`loader/volatile-update` 的等价物），其余字段才走 disable/enable。
 3. **失效即写回**：Loader 把“插件被依赖消失/被卸载而失效”写回配置文件（`disabled: true`）。agentxx 可把“插件装载失败/被级联禁用”写回 `plugin.list` 的覆盖段，避免用户每次启动都被同一条失败刷屏。
 4. **接口协商的“跳过而非报错”原则**：agentxx 已经做到了（`require` 未满足 INFO 跳过），建议把它写进对外文档并在 `plugin.yaml` 校验里给出“你声明了 client 侧接口但宿主是 cli”这类**可解释的跳过原因**（现在只有 INFO 日志）。
@@ -1656,7 +1656,7 @@ turn/end
 
 | 模块 | 关键位置 |
 |---|---|
-| 入口/装配 | `agent/client/src/main.cpp`、`agent/client/src/config_loader.cpp`、`agent/lib/src/agent/config.cpp` |
+| 入口/加载 | `agent/client/src/main.cpp`、`agent/client/src/config_loader.cpp`、`agent/lib/src/agent/config.cpp` |
 | Agent 主体 | `agent/lib/include/agentxx/agent/base_agent.h`、`agent/lib/src/agent/base_agent.cpp`、`code_agent.cpp` |
 | 图与节点 | `agent/lib/src/agent/base_agent.cpp`（`initGraphDefinition`）、`agent/lib/src/nodes/{modelcall,toolcall,agentcall,wrap_handle,session_context,graph_conditions}.cpp` |
 | 中间件 | `agent/lib/include/agentxx/middlewares/middleware.h`、`agent/lib/src/middlewares/{permission,summarization,skill,memory_file,subagent_manager}.cpp` |

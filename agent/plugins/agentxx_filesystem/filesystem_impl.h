@@ -587,7 +587,7 @@ inline std::string fileListExecuteImpl(
     /// - 只在这里应用输出上限: 达到 limit 后丢弃剩余待处理条目 (与未过滤时
     ///   "读到一个条目就判断上限" 的输出结果一致)
     /// - 不在此检查取消/超时: 由外层循环处理 (避免重复输出终止提示行)
-    /// - 查询不可用 (主程序未装配权限中间件/失败) 时不过滤, 保持原行为
+    /// - 查询不可用 (主程序未加载权限中间件/失败) 时不过滤, 保持原行为
     auto flushPending = [&]() {
         if (pending.empty()) {
             return;
@@ -1767,10 +1767,10 @@ inline std::string fileGrepExecuteImpl(
     // (Hyperscan 用 HS_FLAG_CASELESS, std::regex fallback 用 icase)
     auto regex = regex_patterns.empty() ? nullptr
                                         : utilxx::XXRegex::createRegex(
-                                              regex_patterns,
-                                              utilxx::XXRegex::defHSFlags_normal,
-                                              !caseSensitive
-                                          );
+                                            regex_patterns,
+                                            utilxx::XXRegex::defHSFlags_normal,
+                                            !caseSensitive
+                                        );
     if (false == regex_patterns.empty() && !regex) {
         return fmt::format(
             R"_([Error: regex compilation failed (regex_patterns are parsed as regular expressions). If you intended literal text search, put the patterns in `text_patterns` instead.])_"
@@ -1883,18 +1883,17 @@ inline std::string fileGrepExecuteImpl(
         R"_(Found {} files match `file_patterns`, but no match `text_patterns`/`regex_patterns` file found.{}{} Active modes: {}.)_",
         refilelist.size(),
         skippedTooLarge > 0 ? fmt::format(
-                                  " {} file(s) were skipped (larger than `max_file_size_mb` = {}).",
-                                  skippedTooLarge,
-                                  maxFileSizeMb
-                              )
+            " {} file(s) were skipped (larger than `max_file_size_mb` = {}).",
+            skippedTooLarge,
+            maxFileSizeMb
+        )
                             : std::string{},
         // 遍历因数量上限提前停止: 未搜索的文件里可能有匹配, 提示调用方提高上限
-        walkTruncated
-            ? fmt::format(
-                  " The walk stopped early at `max_files` = {}, so more matched files may exist unscanned (raise `max_files` or narrow `file_patterns`).",
-                  maxFiles
-              )
-            : std::string{},
+        walkTruncated ? fmt::format(
+            " The walk stopped early at `max_files` = {}, so more matched files may exist unscanned (raise `max_files` or narrow `file_patterns`).",
+            maxFiles
+        )
+                      : std::string{},
         (!text_patterns.empty() && !regex_patterns.empty())
             ? "literal text + regular expression (union)"
             : (text_patterns.empty() ? "regular expression" : "literal text")

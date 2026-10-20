@@ -17,7 +17,7 @@
 ///    (轮次执行中先停用, 轮末 flush 摘除)
 /// 6. 实际派发: 按注册表顺序执行 (含 `core` 层), 单个处理器失败不影响后续;
 ///    core 层处理器必须是同步的 (返回操作句柄会被请求取消并记警告)
-/// 7. 清单: `hooksJson()` 的字段与顺序、装配快照同源, 开发者模式控制 `stat` 段
+/// 7. 清单: `hooksJson()` 的字段与顺序、加载快照同源, 开发者模式控制 `stat` 段
 /// 8. 生命周期: 禁用摘除处理器 (记录保留)、启用按 start 重新登记、卸载后回到基线
 /// 9. 插件面: kit 的 `hookEx` / `listHooks` / `unhookEx` 经真实主程序走一遍
 #include "agentxx-test/plugin/test_plugin_hooks.h"
@@ -99,7 +99,7 @@ std::string findPluginDir(const char* pluginName) {
 /// 最小主程序夹具: AgentContext + 中间件上下文 + 总线 + 工具注册表 + 功能点注册表
 /// + 插件管理器
 ///
-/// 功能点注册表按 `BaseAgent::init` 的顺序装配 (核心点先声明), 否则示例插件
+/// 功能点注册表按 `BaseAgent::init` 的顺序加载 (核心点先声明), 否则示例插件
 /// `example_feature` 的 start 事务会因"点未声明"失败 —— 本模块要用它做
 /// "后加载但优先级更高"的对照插件。
 struct Fixture {
@@ -123,7 +123,7 @@ asio::awaitable<Fixture> makeFixture() {
 
     f.mgr                = std::make_shared<agentxx::plugin::PluginManager>(f.ctx);
     f.ctx->pluginManager = f.mgr;
-    // 装配 io executor (与 BaseAgent::init 一致): 跨线程 vtable 调用经真实 post
+    // 加载 io executor (与 BaseAgent::init 一致): 跨线程 vtable 调用经真实 post
     f.mgr->setIoExecutor(co_await asio::this_coro::executor);
     co_return f;
 }

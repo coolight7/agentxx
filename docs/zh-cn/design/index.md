@@ -74,7 +74,7 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 (同名同行为, 见 `agent/plugins/agentxx_*`)，经 yaml `plugin.list` 段配置加载，
 或构建期经 `AGENTXX_PLUGIN_BUILTIN_LIST`
 合并编译进 libagentxx (默认不内置)；lib 内仅保留 share_store / subagent /
-git_worktree 及延迟加载装配 (`ToolSkillSearchSubAgentTask` 模板类, 当前未独立注册为 tool)：
+git_worktree 及延迟加载加载 (`ToolSkillSearchSubAgentTask` 模板类, 当前未独立注册为 tool)：
 
 | 分类 | 工具 | 说明 |
 |------|------|------|
@@ -1405,7 +1405,7 @@ AgentIOBase (公共契约)
     ├── handleInterrupt() [双向]   → HIL 交互 (server 侧经会话总线被 BaseAgent 调用,
     │                                 client 侧收到 WireInterruptRequest 后调用)
     ├── registerOnBus() [server]   → 与会话级 EventBus 绑定 (注册 interrupt/permission handler)
-    ├── setTransport()/runTransportLoop() [双向] → transport 装配与接收循环
+    ├── setTransport()/runTransportLoop() [双向] → transport 加载与接收循环
     └── (protected)
         ├── onPeerMessage() [双向] → 收消息分发 (默认分发到下面四个回调, 子类覆写扩展)
         ├── onDelta() [client]     ← 增量事件 (仅由 onPeerMessage 分发, 外部不得直调)
@@ -1599,7 +1599,7 @@ AgentContext
   - AsyncMutex: 协程感知互斥锁, 用于跨越 co_await 的临界区保护
 ```
 
-#### 6. 系统提示词装配: 来源注册与按需刷新
+#### 6. 系统提示词加载: 来源注册与按需刷新
 
 系统提示词的文本拼装只有一处实现 (`AgentContext::buildSystemPromptStable` /
 `buildSystemPrompt`), 段落来源统一登记在 `PromptSourceRegistry`
@@ -1620,7 +1620,7 @@ AgentContext
 - 刷新带超时 (由来源自己声明) 并传播取消; 单个来源失败只保留上次文本并计数, 不影响请求
 - 会话回收: `dropSession(sessionId)` 随会话清理释放 perSession 文本
 - 观测: `KeyMetrics::notePromptRefresh` 记刷新次数 / 变化段数 / 失败数 / 段落字符数；
-  装配快照 `prompt_sources` 段与 `--dump-diagnostics` 给出同一份元数据 (不含正文)
+  加载快照 `prompt_sources` 段与 `--dump-diagnostics` 给出同一份元数据 (不含正文)
 
 **没有文件监听, 也没有轮询**: 外部改动记忆文件或技能目录不会自己生效, 要等一次压缩或
 资源变更触发刷新。这样 system 前缀在一轮之内永远是稳定的, 上游的前缀缓存不会被无谓打断。
@@ -1639,15 +1639,15 @@ AgentContext
 (`send_thinking` 打开时每条 assistant 的 `reasoning_content` 都进请求体),
 否则一次无谓的改动就让整段前缀失效。
 
-#### 7. 主程序装配与子代理用量
+#### 7. 主程序加载与子代理用量
 
-**装配入口统一**: `AgentHost::attachRootAgentHost(rootAgent)` = 创建 agent 节点容器
+**加载入口统一**: `AgentHost::attachRootAgentHost(rootAgent)` = 创建 agent 节点容器
 (`AgentHost`) + `attachRoot` (在根 agent 总线上注册 `service.subagent` 委派服务)。
 各运行形态都在 `agent->init()` 之后调用它: 进程内 `tui`/`cli` (`mode_runners.cpp`)、
 `jsonl` 一次性运行 (`jsonl_mode.cpp`)、`server` 模式 (`main.cpp`)、FFI (`ffi_runtime.cpp`)。
 要点:
 
-- 装配**与 `AgentConfig::enableSubagent` 无关** —— 该开关只决定是否把
+- 加载**与 `AgentConfig::enableSubagent` 无关** —— 该开关只决定是否把
   `agentxx_subagent` 工具注入给模型; 程序内部路径 (上下文压缩) 同样依赖
   `service.subagent`, 缺主程序时会报 `no server registered` 并退化为硬截断
 - 返回值必须由调用方持有到会话结束 (总线 handler 只持 `weak_ptr`)
@@ -2038,7 +2038,7 @@ agent/
 │   │   │           ├── input_bar.h    # 输入栏
 │   │   │           ├── status_bar.h   # 状态栏 (上下文占用/活动状态/插件状态项)
 │   │   │           └── spinner.h      # 加载动画
-│   │   ├── train/                # 训练模式 (train.h: EvolutionTrainingAgent 装配/用例加载/进化循环入口)
+│   │   ├── train/                # 训练模式 (train.h: EvolutionTrainingAgent 加载/用例加载/进化循环入口)
 │   │   └── util/                 # 客户端工具 (util.h 通用小工具 / clipboard.h 剪贴板 / open_url.h 打开浏览器)
 │   └── src/                      # 实现文件
 │       ├── main.cpp
@@ -2261,7 +2261,7 @@ BaseAgent (基类)
   └── AgentConfig → ModelConfig / AgentPrompt
 
 CodeAgent (继承 BaseAgent)
-  ├── 工具: lib 内仅 share_store/subagent/git_worktree (+延迟加载装配); 文件系统/命令/网络/
+  ├── 工具: lib 内仅 share_store/subagent/git_worktree (+延迟加载加载); 文件系统/命令/网络/
   │   RAG/字符串/系统时间/规划/CodeGraph 等全部经插件注入 (yaml plugin.list 段)
   └── 中间件: SubagentManager → Summarization → Permission → Skill → MemoryFile → LogPrint
       (planning/worktree 为插件+工具形态, 非中间件)

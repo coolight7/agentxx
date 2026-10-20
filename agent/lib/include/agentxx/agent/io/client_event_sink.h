@@ -20,7 +20,7 @@ namespace agent {
 /// - 端点销毁/停止前无需显式摘除: 端点是 sink 的持有方 (shared_ptr),
 ///   生命周期一致
 ///
-/// 装配: AgentIOBase::setEventSink() 注入 (模式启动时由 mode_runners 调用)。
+/// 加载: AgentIOBase::setEventSink() 注入 (模式启动时由 mode_runners 调用)。
 /// 端点未设置 sink 时所有回调为 no-op, 不影响现有功能。
 class ClientEventSink {
 public:

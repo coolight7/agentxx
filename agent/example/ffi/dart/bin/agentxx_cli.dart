@@ -27,7 +27,7 @@ Future<void> main(List<String> args) async {
     return; // --help 已打印 / 参数错误已报告
   }
 
-  // ---- 装配模型配置 (ffi_api.h ModelConfig 契约) ----
+  // ---- 加载模型配置 (ffi_api.h ModelConfig 契约) ----
   final modelJson = await _loadModelJson(opts);
   if (modelJson == null) {
     stdout.writeln('缺少模型配置。请任选其一:');
@@ -107,7 +107,7 @@ Future<void> _disposeQuietly(CliRepl repl, AgentClient client) async {
 }
 
 // ---------------------------------------------------------------------------
-// 参数与配置装配
+// 参数与配置加载
 // ---------------------------------------------------------------------------
 
 class _Options {

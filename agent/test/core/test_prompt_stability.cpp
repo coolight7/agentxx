@@ -146,7 +146,7 @@ asio::awaitable<std::shared_ptr<Fixture>>
     fx->cfg->model.modelName = "default-model";
     fx->cfg->llmMaxRetry     = 1;
 
-    // CodeAgent: 记忆文件 / 技能中间件在它上面装配 (BaseAgent 不装这些)
+    // CodeAgent: 记忆文件 / 技能中间件在它上面加载 (BaseAgent 不装这些)
     fx->agent = std::make_shared<agentxx::agent::CodeAgent>(fx->cfg);
     co_await fx->agent->init();
 
@@ -371,7 +371,7 @@ asio::awaitable<void> test_request_structure_and_stable_prefix() {
 // 3. 技能同名裁决: 优先级高者生效, 来源展示给模型
 // ---------------------------------------------------------------------------
 
-/// 取 agent 装配的技能中间件 (未装配返回 nullptr)
+/// 取 agent 加载的技能中间件 (未加载返回 nullptr)
 agentxx::middleware::SkillMiddlewareHandle* findSkillMiddleware(agentxx::agent::CodeAgent& agent) {
     auto ctx = agent.agentContext;
     if (!ctx || !ctx->middlewareHandleContext) {
@@ -655,7 +655,7 @@ asio::awaitable<void> test_refresh_after_compaction() {
         XX_TEST_EXPECT_TRUE(fx->agent->agentContext->metrics->promptRefreshes() >= 1);
     }
 
-    // 装配快照里能看到来源状态 (不含正文)
+    // 加载快照里能看到来源状态 (不含正文)
     const auto snapshot = agentxx::agent::buildRuntimeSnapshot(*fx->agent->agentContext);
     XX_TEST_EXPECT_TRUE(snapshot.contains("prompt_sources"));
     if (snapshot.contains("prompt_sources")) {

@@ -108,7 +108,7 @@ using pluginxx::unsubscribePluginSubscription;
 using pluginxx::PluginHostLifecycle;
 using pluginxx::PluginLoadOptions;
 
-// ==================== 通用表入口装配 (pluginxx/host/tables_impl.h) ====================
+// ==================== 通用表入口加载 (pluginxx/host/tables_impl.h) ====================
 using pluginxx::GenericTableEntries;
 using pluginxx::queryGenericPluginIface;
 

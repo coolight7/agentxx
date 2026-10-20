@@ -596,7 +596,7 @@ asio::awaitable<void> test_agent_init() {
     XX_TEST_EXPECT_TRUE(agent.engine != nullptr);
     XX_TEST_EXPECT_TRUE(agent.agentContext != nullptr);
 
-    // collectAppendComponentInfo: init 后插件管理器已装配 (无配置插件时列表为空),
+    // collectAppendComponentInfo: init 后插件管理器已加载 (无配置插件时列表为空),
     // 收集结果应包含已加载插件 (数量 + 名称列表), 与 MCP/Skill/Memory 同级。
     // protected 成员经测试子类暴露访问。
     class AppendCollectAgent : public agentxx::agent::CodeAgent {
@@ -625,7 +625,7 @@ asio::awaitable<void> test_agent_init() {
     co_return;
 }
 
-/// 取 agent 装配的权限中间件 (工具权限声明实际生效处; 未装配返回 nullptr)
+/// 取 agent 加载的权限中间件 (工具权限声明实际生效处; 未加载返回 nullptr)
 agentxx::middleware::PermissionMiddlewareHandle*
     findPermissionMiddleware(agentxx::agent::CodeAgent& agent) {
     auto ctx = agent.agentContext;
@@ -1830,7 +1830,7 @@ asio::awaitable<void> test_agent_toolcall_intercept_exception() {
 }
 
 /// 验证 buildSystemPrompt 与 WireGetContext 上下文查询携带 systemPrompt:
-/// 1) agent.buildSystemPrompt 正确拼装配置的系统提示词
+/// 1) agent.buildSystemPrompt 正确拼加载置的系统提示词
 /// 2) 客户端请求 WireGetContext 时, 服务端返回的上下文中包含 role 为 "system" 的消息,
 ///    且 content 等于 buildSystemPrompt 的结果
 asio::awaitable<void> test_agent_build_system_prompt_and_wire_get_context() {

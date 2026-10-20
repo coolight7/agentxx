@@ -888,7 +888,7 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
 | 模态打开时仍每帧渲染主界面整棵树 | `ModalContainer` | 弹窗打开时不渲染主界面 |
 | 每帧多次 `Terminal::Size()` (ioctl), 帧中途 resize 可能造成组件间尺寸不一致 | 各组件 | `TUICtx::refreshFrameSize()` 帧首刷新 + `terminalSize()` |
 | 侧边栏 tab 列表维护"可见下标 -> tab 下标"映射表 | `SidebarComponent` | 命中载荷直接携带条目归属 |
-| 状态栏/输入栏/消息列表的按钮点击散落在全局事件处理里 | `agent_tui.cpp` | 各组件自行处理自身区域内点击 (回调在装配时注入) |
+| 状态栏/输入栏/消息列表的按钮点击散落在全局事件处理里 | `agent_tui.cpp` | 各组件自行处理自身区域内点击 (回调在加载时注入) |
 | 上下文弹窗点击消息, 展开/折叠的是"别的消息" (消息多、滚动后尤其明显) | `ContextOverlay` 折叠头命中框 (子项元素内的 `reflect`: 视口外子项残留测量大框) | 改为按 `Scrollable::visibleBoxes()` + 子项->消息下标映射命中 (回归测试见 `agentxx_test tui_context_overlay`) |
 | 设置条目变多或终端过矮时, 末尾条目被裁掉 (看不到也点不到); 之前靠压缩条目间距回避 | `SettingsOverlay` | 条目改为分组显示 (标题只占一行), 内容区限高 + `vscroll_indicator \| yframe` 滚动 (选中项带 `focus` 自动滚入视口, 滚轮 = 上/下移动选中项); 回归测试见 `agentxx_test tui_settings` |
 | 工具消息刚出现时会闪一下非特化内容 (占位提示显示 `[工具] Read 正在调用工具...`, 工具消息却先显示 `agentxx_filesystem_read · {"path":...}`, 下一帧才"变回来"); 结果到达 (输入特征变化) 时再闪一次原始结果首行; 用预设模版注册的工具 (Bash) 不闪 | 折叠头/占位行的特化渲染查询 (`queryToolRender` + `renderClientTool`) | 自定义 renderer 只在 client io 线程执行, 结果写入语义缓存前是"未就绪"帧。该帧不再回退原始工具名 + 原始参数, 也不再留空: 显示名与摘要先用"上一份已知内容" (本次调用上一份结果 → 占位提示阶段算出的"名称结果"显示名), 两者都没有且工具仍在运行时沿用占位行的同一句说明文字 (`msg.genToolCalling`), 保证不出现"比上一帧信息更少"的一帧; 见 plugins.md §工具特化渲染架构第 6 条; 回归测试见 `agentxx_test tui_tool_header` 的 `testTuiToolHeaderPendingRender` |

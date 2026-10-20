@@ -211,7 +211,7 @@ struct FsPluginCtx : public PluginBase {};
 
 /// 构造按模式参数展开后的路径权限过滤器 (读作用域; 见 filesystem_impl.h 的 PathFilterFn)
 /// - 已明确允许(Allow)才保留; 被拒绝(Deny)与未获批准(Ask)一律不进入结果 (fail-closed)
-/// - 主程序未装配权限中间件时查询不可用, 过滤器返回空标记 → 工具跳过过滤 (保持原行为)
+/// - 主程序未加载权限中间件时查询不可用, 过滤器返回空标记 → 工具跳过过滤 (保持原行为)
 static PathFilterFn makeReadPathFilter(FsPluginCtx& ctx, std::string_view sessionId) {
     return [&ctx, sid = std::string{sessionId}](const std::vector<std::string>& paths) {
         return agentxx::plugin::filterPathPermissions(
@@ -226,7 +226,7 @@ static PathFilterFn makeReadPathFilter(FsPluginCtx& ctx, std::string_view sessio
 /// 目标路径的写权限复核 (move/copy 的 `dst` 同样是写入目标)
 /// - 声明的权限目标只能给一个参数, 所以 `dst` 在工具内用只读三态查询判定
 ///   (Deny/Ask 都不执行): 避免把文件写到被规则拒绝的目录里
-/// - 主程序未装配权限中间件时查询不可用 (返回空), 此时跳过复核保持原行为
+/// - 主程序未加载权限中间件时查询不可用 (返回空), 此时跳过复核保持原行为
 static bool destinationAllowed(
     FsPluginCtx&       ctx,
     std::string_view   sessionId,

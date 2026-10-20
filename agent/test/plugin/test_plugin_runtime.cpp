@@ -25,7 +25,7 @@
 #define XX_TEST_FAILED result.failed
 
 namespace agentxx::plugin {
-/// 主程序 vtable 装配入口（定义在 plugin_manager_vtable.cpp；测试用它给伪实例
+/// 主程序 vtable 加载入口（定义在 plugin_manager_vtable.cpp；测试用它给伪实例
 /// 拿到真实接口表，从而直接驱动 C ABI 入口）。
 const void* PLUGINXX_CALL xx_query_interface(const PluginxxHost*, const PluginxxStringView* iid);
 } // namespace agentxx::plugin
@@ -65,7 +65,7 @@ struct RuntimeFixture {
         // 只依赖 PluginInstanceBase::ownerSelf, 因此夹具必须与 makeInstance 一样设置它
         inst->ownerSelf = inst;
         inst->manager   = manager;
-        // 主程序控制块：交给插件的 host 视图必须有进程级稳定地址；这里装配真实
+        // 主程序控制块：交给插件的 host 视图必须有进程级稳定地址；这里加载真实
         // 主程序 vtable，便于用例直接驱动 C ABI 入口。
         auto vtableSv     = PluginStringView::fromCstr("__vtable");
         inst->hostControl = PluginHostControl::create(
@@ -73,7 +73,7 @@ struct RuntimeFixture {
             (const PluginxxHostVtable*)xx_query_interface(nullptr, &vtableSv)
         );
         const std::weak_ptr<pluginxx::PluginRuntime> runtime = manager->runtime();
-        // 与 PluginManagerBase::makeLifetime 的装配语义一致: 实例登记所属运行时,
+        // 与 PluginManagerBase::makeLifetime 的加载语义一致: 实例登记所属运行时,
         // Operation 驱动器据此取 io executor 与线程标识
         inst->runtime  = manager->runtime();
         inst->lifetime = std::make_shared<pluginxx::InstanceLifetime>(
@@ -310,7 +310,7 @@ const PluginxxHostVtable g_fakeIfaceVtable = {
     /* query_interface */ fakeIfaceQuery,
 };
 
-/// 装配一个“激活且导出 stop”的伪实例: destroy 计数挂在 pluginCtx 上。
+/// 加载一个“激活且导出 stop”的伪实例: destroy 计数挂在 pluginCtx 上。
 void installLifecycleHooks(PluginInstance& inst, int* destroys) {
     inst.lifecycleStop    = &fakeStopHook;
     inst.lifecycleStarted = true;
@@ -1441,7 +1441,7 @@ TestResult testPluginRuntime() {
     /// stop 在 IO 线程撤销插件自管注册，start 重新声明；stop 成功后清空旧记录，
     /// 因此重复 enable/disable 不会累积重复项。
     {
-        // 图类型注册需要主程序 graphRegistry (AgentContext 装配)。
+        // 图类型注册需要主程序 graphRegistry (AgentContext 加载)。
         auto           ctx = std::make_shared<agentxx::agent::AgentContext>();
         RuntimeFixture f(ctx);
         ctx->graphRegistry = std::make_shared<neograph::graph::GraphRegistry>();
@@ -2133,7 +2133,7 @@ TestResult testPluginRuntime() {
             XX_TEST_EXPECT_TRUE(runtime->request_driver != nullptr);
             XX_TEST_EXPECT_TRUE(runtime->cancel_driver != nullptr);
             XX_TEST_EXPECT_TRUE(runtime->is_io_thread != nullptr);
-            // is_io_thread: RuntimeFixture 由当前线程装配 io executor, 因此本线程
+            // is_io_thread: RuntimeFixture 由当前线程加载 io executor, 因此本线程
             // 就是该实例的 "IO 线程" (真实主程序里是 io_context 的 run 线程)。
             XX_TEST_EXPECT_EQ(runtime->is_io_thread(host), 1);
 

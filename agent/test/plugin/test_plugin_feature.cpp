@@ -6,7 +6,7 @@
 ///
 /// 覆盖:
 /// 1. 声明与登记: 插件点在注册表里 (归属 / 可调 / 实现层), 实例视图与注册清单
-///    计数, 清单 JSON 含插件点 (插件 `list_points` 与装配快照共用一份事实)
+///    计数, 清单 JSON 含插件点 (插件 `list_points` 与加载快照共用一份事实)
 /// 2. 覆盖核心点: 插件实现排在 core 之前并生效; 摘除后自动回落核心实现
 ///    (含按归属失效值缓存)
 /// 3. 按名调用 (`call_point_async`): 同步实现 / 协程实现 / 实现超时按没意见继续 /
@@ -87,7 +87,7 @@ std::string findPluginDir(const char* pluginName) {
 
 /// 最小主程序夹具: AgentContext + 中间件上下文 + 总线 + 工具注册表 + 功能点注册表
 ///
-/// 功能点注册表与上下文核心点在这里先装配 (与 BaseAgent::init 同一顺序:
+/// 功能点注册表与上下文核心点在这里先加载 (与 BaseAgent::init 同一顺序:
 /// 核心点先声明, 插件加载时才有地方登记实现)。
 struct Fixture {
     std::shared_ptr<agentxx::agent::AgentContext>   ctx;
@@ -111,7 +111,7 @@ asio::awaitable<Fixture> makeFixture() {
 
     f.mgr                = std::make_shared<agentxx::plugin::PluginManager>(f.ctx);
     f.ctx->pluginManager = f.mgr;
-    // 装配 io executor (与 BaseAgent::init 一致): 跨线程 vtable 调用经真实 post
+    // 加载 io executor (与 BaseAgent::init 一致): 跨线程 vtable 调用经真实 post
     f.mgr->setIoExecutor(co_await asio::this_coro::executor);
     co_return f;
 }
@@ -304,7 +304,7 @@ asio::awaitable<void> test_declaration_and_inventory() {
         }
     }
 
-    // 清单 JSON (插件 `list_points` 与装配快照共用): 含插件点与归属
+    // 清单 JSON (插件 `list_points` 与加载快照共用): 含插件点与归属
     {
         const auto listJson = f.mgr->listFeaturePoints();
         XX_TEST_EXPECT_TRUE(listJson.find("plugin.example_feature.beat") != std::string::npos);

@@ -209,9 +209,9 @@ static std::string extractTokenFromUrl(std::string& url) {
     return token;
 }
 
-/// 应用各模式共享的运行时装配 (MCP / Skill / Memory / 权限 / 子代理 / 插件)
+/// 应用各模式共享的运行时加载 (MCP / Skill / Memory / 权限 / 子代理 / 插件)
 /// - tui / cli / server / acp 模式共用: 分离进程启动 agent (server/acp) 时
-///   同样需要完整装配, 否则 agent 侧不加载插件等扩展组件
+///   同样需要完整加载, 否则 agent 侧不加载插件等扩展组件
 /// - 相对路径按程序工作目录解析为绝对路径 (resolvePath 由 main 注入)
 static void applySharedRuntimeConfig(
     std::shared_ptr<agentxx::agent::AgentConfig>&            config,
@@ -281,14 +281,14 @@ static void applySharedRuntimeConfig(
     }
 }
 
-/// 打印生效装配快照
+/// 打印生效加载快照
 ///
-/// `--dump-diagnostics` 的实现: 装配一次 agent 后导出诊断包文本
+/// `--dump-diagnostics` 的实现: 加载一次 agent 后导出诊断包文本
 ///
-/// 与 [dumpConfigAndExit] 共用装配路径, 但导出的是"报障包": 环境与版本、关键指标、
-/// 装配快照 (配置含"是否已设置 Key"、不含 Key 取值)、会话摘要、日志尾部 (脱敏)。
+/// 与 [dumpConfigAndExit] 共用加载路径, 但导出的是"报障包": 环境与版本、关键指标、
+/// 加载快照 (配置含"是否已设置 Key"、不含 Key 取值)、会话摘要、日志尾部 (脱敏)。
 /// - 不做任何网络请求、不进入交互模式, 打印完退出
-/// - 装配失败时仍会打印已生成的部分并附上失败原因, 依然有排查价值
+/// - 加载失败时仍会打印已生成的部分并附上失败原因, 依然有排查价值
 static int dumpDiagnosticsAndExit(
     const std::string&                                       mode,
     const YamlAppConfig&                                     yamlCfg,
@@ -307,7 +307,7 @@ static int dumpDiagnosticsAndExit(
     applyAvailableModelsToConfig(config, yamlCfg.models, yamlCfg.useModelDefault);
     applySharedRuntimeConfig(config, yamlCfg, resolvePath);
 
-    // 日志尾部: 先装捕获再装配, 这样 init 期间的日志也进包
+    // 日志尾部: 先装捕获再加载, 这样 init 期间的日志也进包
     agentxx::util::enableLogCapture(200);
 
     XX_OUT("=== agentxx dump-diagnostics (mode={}) ===\n", mode);
@@ -365,7 +365,7 @@ static int dumpDiagnosticsAndExit(
 /// 有可用模型时再构造一次 CodeAgent 并 init, 补上运行侧快照 (模型注册表 /
 /// 中间件顺序 / 工具清单与来源 / 插件加载结果 / 执行图 / 持久化)。
 /// - 不启动任何交互界面, 不监听端口, 打印完直接退出
-/// - 打印的是"实际装配结果", 与启动日志中的装配快照同源
+/// - 打印的是"实际加载结果", 与启动日志中的加载快照同源
 static int dumpConfigAndExit(
     const std::string&                                       mode,
     const YamlAppConfig&                                     yamlCfg,
@@ -583,7 +583,7 @@ int main(int argn, char** argv) {
 
     std::string configPath = std::string{kDefaultConfigFileName};
     bool configExplicit = false; ///< --config 是否被显式指定 (指定但文件不存在时报错)
-    bool        dumpConfig      = false; ///< --dump-config: 打印生效装配快照后退出
+    bool        dumpConfig      = false; ///< --dump-config: 打印生效加载快照后退出
     bool        dumpDiagnostics = false; ///< --dump-diagnostics: 打印诊断包后退出
     std::string overrideEnvPath;
     std::string mode = "tui";
@@ -621,8 +621,8 @@ Options:
     --host <host>        服务监听地址 (默认: 127.0.0.1)
     --port <port>        服务监听端口 (默认: 7007)
     --session-id <id>    jsonl 模式使用的会话 id (默认自动生成, 见 hello_ack)
-    --dump-config        打印生效装配快照 (配置 + 模型/中间件/工具/插件/图/持久化) 后退出
-    --dump-diagnostics   打印诊断包 (环境/关键指标/装配/会话摘要/日志尾部, 已脱敏) 后退出
+    --dump-config        打印生效加载快照 (配置 + 模型/中间件/工具/插件/图/持久化) 后退出
+    --dump-diagnostics   打印诊断包 (环境/关键指标/加载/会话摘要/日志尾部, 已脱敏) 后退出
 )_");
             return 0;
         } else if (arg == "--config" && i + 1 < argn) {
@@ -660,8 +660,7 @@ Options:
                 XX_LOGE("Invalid --port value: `{}`", portArg);
                 return 1;
             }
-        } else if (arg == "tui" || arg == "cli" || arg == "server" || arg == "acp" || arg == "train"
-                   || arg == "jsonl") {
+        } else if (arg == "tui" || arg == "cli" || arg == "server" || arg == "acp" || arg == "train" || arg == "jsonl") {
             mode = arg;
         } else {
             XX_LOGE("Unknown arg: `{}`", arg);
@@ -810,7 +809,7 @@ Options:
     };
 
     // `--dump-diagnostics`: 打印诊断包后退出
-    // - 与 --dump-config 同一位置与同一装配路径, 导出的是"报障包"
+    // - 与 --dump-config 同一位置与同一加载路径, 导出的是"报障包"
     // - 只读导出: 不发网络请求、不写会话库
     if (dumpDiagnostics) {
         return dumpDiagnosticsAndExit(
@@ -824,7 +823,7 @@ Options:
         );
     }
 
-    // `--dump-config`: 打印生效装配快照后退出
+    // `--dump-config`: 打印生效加载快照后退出
     // - 不进入任何交互模式, 不监听端口; 配置写错 (无可用模型) 时也打印配置侧快照
     if (dumpConfig) {
         return dumpConfigAndExit(
@@ -920,8 +919,8 @@ Options:
         applyModelToConfig(config, yamlCfg.models, yamlCfg.useModelAcp);
         applySubagentModelToConfig(config, yamlCfg.models, yamlCfg.useModelSubagent);
         applyWebSearchModelToConfig(config, yamlCfg.models, yamlCfg.useModelWebSearch);
-        // 共享运行时装配 (插件/MCP/Skill/Memory/权限/子代理): ACP 模式下 agent
-        // 运行在独立进程 (分离进程启动), 与 server/tui 模式一致需要完整装配;
+        // 共享运行时加载 (插件/MCP/Skill/Memory/权限/子代理): ACP 模式下 agent
+        // 运行在独立进程 (分离进程启动), 与 server/tui 模式一致需要完整加载;
         // 曾缺失导致 acp 启动的 agent 不加载任何插件
         applySharedRuntimeConfig(config, yamlCfg, resolvePath);
         // CodeGraph 参数经 plugins 配置传递 (主程序不解析 args 字段语义)
@@ -1029,7 +1028,7 @@ Options:
         srvCfg.token        = agentToken;
         auto server         = std::make_shared<agentxx::agent::io::AgentServer>(agent, srvCfg);
 
-        // 主程序 (agent 节点容器) 句柄: 在 init 之后装配, 由信号协程持有到进程退出
+        // 主程序 (agent 节点容器) 句柄: 在 init 之后加载, 由信号协程持有到进程退出
         // - 服务端必须有它: 上下文压缩与 subagent 委派都经 `service.subagent`
         //   (缺它会退化到硬截断); 与 `AgentConfig::enableSubagent` 无关
         auto hostHolder = std::make_shared<std::shared_ptr<agentxx::agent::AgentHost>>();

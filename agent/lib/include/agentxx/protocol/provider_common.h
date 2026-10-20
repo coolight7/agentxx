@@ -358,7 +358,7 @@ inline void appendOpenAIToolsJson(std::string& out, const std::vector<neograph::
 /// `completion.message.extra[kUsageDetailExtraKey]` (对象), 由模型调用节点取出后
 /// 写用量记录, 并把该键置空 —— 不让内部记账字段混进会话消息。
 ///
-/// - 该键不会被序列化进下一轮请求体 (extra 不参与请求装配)
+/// - 该键不会被序列化进下一轮请求体 (extra 不参与请求加载)
 /// - provider 不上报时键不存在, 调用方按 0 处理
 inline constexpr std::string_view kUsageDetailExtraKey = "_agentxx_usage_detail";
 

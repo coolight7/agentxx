@@ -195,7 +195,7 @@ agent/third_party/cxx_pluginxx/
 │       ├── loader.h        # NativeLoader (dlopen/LoadLibrary) + 入口符号查找
 │       ├── manifest.h      # plugin.yaml 解析 / 名字推导 / 拓扑排序 / 反向依赖
 │       ├── registry.h      # 实例表 / InflightGuard / 注册簿记
-│       ├── tables_impl.h   # 通用表实现装配 (log/json/config/plugins/events/scheduler/
+│       ├── tables_impl.h   # 通用表实现加载 (log/json/config/plugins/events/scheduler/
 │       │                   #   coroutine_runtime/tasks/cancel/capabilities)
 │       └── host_core.h     # PluginHostCore<InstanceT> (P4: 通用装载/启停/租约/op 记账)
 └── src/
@@ -758,7 +758,7 @@ shared/static 目标; `exec/` 下六个产物 (3 库 × 2 变体) 存在且命�
 
 1. 定义 `DomainHooks` (见 §5.6) 与 `PluginHostCore<InstanceT>`; 先只搬
    "实例表 / inflight / 租约 / op 记账 / 事件总线 / 能力注册表 / 调度 / 任务托管 /
-   通用表装配", 暂不动装载流程。
+   通用表加载", 暂不动装载流程。
 2. `PluginManager` 改为组合/继承 host core, 领域表实现保持不动; 跑全量回归。
 3. 再把装载/卸载/启用/禁用/级联依赖 (即 `plugin_manager_lifecycle.cpp` 的
    通用骨架) 搬进 host core; agentxx 只保留 `DomainHooks` 实现与领域表。
@@ -887,7 +887,7 @@ shared/static 目标; `exec/` 下六个产物 (3 库 × 2 变体) 存在且命�
 - [x] P3 验收: 旧插件二进制可加载 + 导出检查 + 负向编译 + UBSan 探针
       (Linux 侧脚本 `check_plugin_exports.sh` / `check_sdk_negative_compile.sh` 未在本机运行,
        导出面已用 `dumpbin` 等价核对; 见 work.md)
-- [x] P4-1 `DomainHooks` + `PluginHostCore` 骨架 (通用表状态/方法 + vtable 入口装配) + 回归
+- [x] P4-1 `DomainHooks` + `PluginHostCore` 骨架 (通用表状态/方法 + vtable 入口加载) + 回归
 - [x] P4-2 装载/启停/级联搬迁 (`PluginHostLifecycle<InstanceT>`) + 回归
 - [x] P4-3 `ClientPluginManager` 适配 (卸载/启停/级联共用内核; 装载保留自有实现)
 - [ ] P4-3 验收收尾: TUI/CLI 手工冒烟 (插件加载/禁用/卸载/重载/级联/工具调用/面板状态栏)

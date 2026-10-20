@@ -386,7 +386,7 @@ private:
     /// 分组标题变化处自动插一行标题 (见 [UiActionList::render])。
     void buildItems();
 
-    /// 已注册的插件全局快捷键条数 (读 UI 注册表快照; 未装配插件管理器时为 0)
+    /// 已注册的插件全局快捷键条数 (读 UI 注册表快照; 未加载插件管理器时为 0)
     size_t keybindCount() const;
 
     /// 循环切换主题: Dark -> Light -> Dark (需要访问 ctx_.theme, 非静态)

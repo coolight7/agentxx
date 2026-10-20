@@ -18,7 +18,7 @@
     - 支持 client 通过网络连接 agent server，此时两者在不同进程，通过网络传输交互（已支持 websocket）
     - 应当尽量统一抽象接口，分层屏蔽细节，降低复杂度，让架构设计更清晰
     - `会话 Agent_IO`、`CancelToken`、`上下文统计`、`模型选择` 应当独立记录，按 `thread_id` 取值
-- 系统提示词装配 (本期实施): 段落来源统一登记到 `PromptSourceRegistry`
+- 系统提示词加载 (本期实施): 段落来源统一登记到 `PromptSourceRegistry`
   (`agent/lib/include/agentxx/agent/prompt_sources.h`, 挂 `AgentContext::promptSources`);
   静态附加段 (`Stable`) 与运行时文档段 (`Dynamic`) 分开存、只统一视图; 内置来源
   `memory` (perSession, 压缩后刷新) / `skills`; 刷新唯一入口 =
@@ -28,7 +28,7 @@
   `requestToolsOverride` + `toolExecutionDisabled`), 命中率实测见
   [benchmark.md](docs/zh-cn/design/benchmark.md) 第 18 节; 详见
   [index.md](docs/zh-cn/design/index.md) 架构设计第 6 小节
-- 主程序装配与子代理记账 (本轮实施): 各运行形态 (`tui`/`cli`/`jsonl`/`server`/FFI) 都在
+- 主程序加载与子代理记账 (本轮实施): 各运行形态 (`tui`/`cli`/`jsonl`/`server`/FFI) 都在
   `agent->init()` 之后调 `AgentHost::attachRootAgentHost(rootAgent)`, **与
   `AgentConfig::enableSubagent` 无关** (该开关只控制是否把 `agentxx_subagent` 工具注入模型;
   缺主程序时上下文压缩会报 `service.subagent ... no server registered` 并退化为硬截断),
@@ -318,7 +318,7 @@ path/to/agentxx_test string_util regex
   并按基础值重新合成, 禁用/卸载只删自己的贡献 (不写回旧值, 不顶掉别人的贡献与用户直写);
   **独占型** (`set_graph_json` 执行图定义) 同时只允许一个占用者, 后到者被拒绝,
   占用者禁用/卸载恢复占用前的定义 (回到内置)。诊断: `PluginManager::registrationInventory`
-  给出各分类**生效**计数 (0 = 已回到基线), 装配快照输出 `registration_total` 与图定义
+  给出各分类**生效**计数 (0 = 已回到基线), 加载快照输出 `registration_total` 与图定义
   `definition_owner`; 加载失败由 `PluginManager::diagnosePluginPath` 给出"照什么改"的
   建议 (路径/清单/入口符号), 测试模块 `plugin_cleanup`
 
@@ -433,16 +433,16 @@ path/to/agentxx_test string_util regex
   与 next-step/inject 注入 (`nodes/session_context.cpp` 的 `drainPendingSessionInputs`);
   **展示历史与 TurnStart 回显保留完整原文** (只压缩模型看到的那份);
   与 toolcall 输出压缩共用同一实现/提示格式 (agentxx::util::offloadShareStoreIfOversized),
-  阈值与判定见装配快照 `limits.user_input_summary_limit`
+  阈值与判定见加载快照 `limits.user_input_summary_limit`
 - markdown 代码块折行: FTXUI 对超出盒宽的元素是裁剪而非折行, 故 ``` 围栏内容在构建期
   按显示宽度折行 (`markdown::wrap_line_by_width`, 见 markdown_ftxui 的 `build_code_block`):
   折行宽度 = 可用宽度 - 左右各 1 列内边距 - 外层缩进 (块引用每层 2 列 / 列表项前缀,
   构建期经 `tl_indent` + `IndentScope` 累加); `estimateMarkdownLines` 用同一函数统计
   行数, 两侧算法必须保持一致 (改动折行规则时两处同步)
 - 可观测性 (2026-10-07): `agentxx::util::KeyMetrics` 记轮次终态/TTFT/
-  模型调用与用量/工具终态/压缩, 挂在 `AgentContext::metrics`, 装配快照含 `metrics` 段;
+  模型调用与用量/工具终态/压缩, 挂在 `AgentContext::metrics`, 加载快照含 `metrics` 段;
   `agentxx::util::buildDiagnosticsText` + CLI `--dump-diagnostics` 导出
-  环境/指标/装配(含配置 JSON)/会话摘要/日志尾部, 默认不含消息正文、不含凭据取值
+  环境/指标/加载(含配置 JSON)/会话摘要/日志尾部, 默认不含消息正文、不含凭据取值
   (内容过 `redactSecrets`); 日志尾部经 `enableLogCapture` 的进程内环形缓冲捕获
 - 接口表数量: agent 侧 20 张 (10 张通用表 `pluginxx.*` + 10 张业务表 `agentxx.agent.*`;
   业务表含 `agentxx.agent.context` 会话 LLM 上下文查询 `get_messages`/`messages_count`
@@ -476,7 +476,7 @@ path/to/agentxx_test string_util regex
     表尾三项 `register_hook_ex`/`unregister_hook_ex`/`list_hooks`
     (SDK: `hookEx`/`unhookEx`/`listHooks`; 清单里的 `layer`/`owner` 与功能点同一规则);
     三成员属本表 v1 布局 (基线), 主程序不支持时判空降级
-  - 清单进装配快照 (`hooks` 段 + 插件行 `hook_priorities`) 与 `--dump-diagnostics`
+  - 清单进加载快照 (`hooks` 段 + 插件行 `hook_priorities`) 与 `--dump-diagnostics`
     (`hookHandlers[N]`); 派发记录 (`stat` 段: 次数 / 上次顺序与耗时) 只在开发者模式收集
   - 禁用: 处理器从注册表摘除 (派发时仍复核实例状态), 启用由 `start` 事务重新登记;
     单个处理器失败只记一条警告日志并继续下一个 (与旧行为一致)

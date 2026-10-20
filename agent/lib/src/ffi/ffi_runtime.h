@@ -58,7 +58,7 @@ public:
 
     enum class State {
         Created,  ///< 已创建未启动
-        Starting, ///< start 受理, init/装配进行中
+        Starting, ///< start 受理, init/加载进行中
         Ready,    ///< 服务端就绪 (EVT_READY 已发), 可正常交互
         Stopping, ///< stop 进行中 (等待线程退出)
         Stopped,  ///< 已停止 (所有线程已退出)

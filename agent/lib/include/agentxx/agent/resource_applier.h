@@ -65,7 +65,7 @@ struct AgentResourceSnapshot {
 /// 已保证投递); MCP 连接为异步网络 IO —— addMcpServer 仅做查重与登记后立即返回,
 /// 连接完成后工具动态进入 ToolRegistry (下一轮 modelcall 对模型可见)。
 ///
-/// 装配: 由 CodeAgent::initMiddleware 构造并注入 AgentContext::resourceApplier
+/// 加载: 由 CodeAgent::initMiddleware 构造并注入 AgentContext::resourceApplier
 /// (构造参数即该处创建的 Skill/Memory 中间件); BaseAgent 场景无中间件 →
 /// 保持 nullptr, 此时插件的资源注册 vtable API 返回非 0 (不支持)。
 class AgentResourceApplier : public std::enable_shared_from_this<AgentResourceApplier> {

@@ -116,7 +116,7 @@ asio::awaitable<void> CodeAgent::initMiddleware() {
         );
         agentContext->middlewareHandleContext->handles.push_back(memoryFileMiddleware);
     }
-    // 会话资源应用器装配 (插件 Skill/Memory/MCP 扩展; 见
+    // 会话资源应用器加载 (插件 Skill/Memory/MCP 扩展; 见
     // [resource_applier.h](/agent/lib/include/agentxx/agent/resource_applier.h)):
     // - 声明式资源由 PluginManager 在插件 entry 成功后经此应用 (失败不生效)
     // - 运行时注册经 vtable register_skill_dir 等转发到本应用器

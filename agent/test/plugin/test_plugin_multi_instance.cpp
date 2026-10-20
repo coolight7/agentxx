@@ -75,7 +75,7 @@ static asio::awaitable<void> sleepMsMI(int64_t ms) {
     co_return;
 }
 
-/// 构造最小 AgentContext (与 run_plugin_tests 相同装配)
+/// 构造最小 AgentContext (与 run_plugin_tests 相同加载)
 static std::shared_ptr<agent::AgentContext> makeAgentCtx(asio::any_io_executor ex) {
     auto ctx                     = std::make_shared<agent::AgentContext>();
     ctx->agentConfig             = std::make_shared<agent::AgentConfig>();

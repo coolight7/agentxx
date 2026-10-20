@@ -1,4 +1,4 @@
-/// 启动装配快照测试
+/// 启动加载快照测试
 ///
 /// 覆盖:
 /// - 配置侧快照: 模型 (API key 不外泄) / 路径 / 权限 / 特性 / 插件声明 / 提示词段落
@@ -88,7 +88,7 @@ std::shared_ptr<agentxx::agent::AgentConfig> makeRichConfig() {
     cfg->enableToolFiltering        = true;
     cfg->toolWhitelist              = {"agentxx_share_store"};
     cfg->toolParallelMaxConcurrency = 6;
-    // 队列输入分页阈值 (装配快照 `limits.user_input_summary_limit` 取值来源)
+    // 队列输入分页阈值 (加载快照 `limits.user_input_summary_limit` 取值来源)
     cfg->userInputSummaryLimitLength = 4096;
 
     cfg->skillDirPaths.push_back("/tmp/agentxx-skills");
@@ -109,7 +109,7 @@ std::shared_ptr<agentxx::agent::AgentConfig> makeRichConfig() {
     return cfg;
 }
 
-/// 装配一个最小可用的 CodeAgent 并完成 init (不发起任何网络请求)
+/// 加载一个最小可用的 CodeAgent 并完成 init (不发起任何网络请求)
 asio::awaitable<std::shared_ptr<agentxx::agent::CodeAgent>>
     makeInitializedAgent(std::shared_ptr<agentxx::agent::AgentConfig> cfg) {
     // 无 dataDir / 无持久化: init 不落盘 (内存模式)
@@ -222,7 +222,7 @@ asio::awaitable<TestResult> run_assembly_snapshot_tests() {
     const int passedBefore = g_as_passed;
     const int failedBefore = g_as_failed;
 
-    // ---- 运行侧快照: 未过滤白名单的常规装配 ----
+    // ---- 运行侧快照: 未过滤白名单的常规加载 ----
     {
         auto cfg                    = std::make_shared<agentxx::agent::AgentConfig>();
         cfg->model.type             = "openai";
@@ -259,7 +259,7 @@ asio::awaitable<TestResult> run_assembly_snapshot_tests() {
         }
         XX_TEST_EXPECT_TRUE(hasPermissionMiddleware);
 
-        // 工具清单: 装配数 = 启用数 (未开启白名单过滤), 分享存储工具来自 builtin
+        // 工具清单: 加载数 = 启用数 (未开启白名单过滤), 分享存储工具来自 builtin
         XX_TEST_EXPECT_EQ(
             snapshot["tools"].value("assembled_count", 0),
             snapshot["tools"].value("enabled_count", 0)
@@ -341,7 +341,7 @@ asio::awaitable<TestResult> run_assembly_snapshot_tests() {
         const auto snapshot = agentxx::agent::buildRuntimeSnapshot(*agent->agentContext);
 
         XX_TEST_EXPECT_EQ(snapshot["tools"].value("enabled_count", 0), 1);
-        // 被过滤的记录先写入 (过滤发生在装配记录之前), 启用项要在整体列表中找到
+        // 被过滤的记录先写入 (过滤发生在加载记录之前), 启用项要在整体列表中找到
         bool foundEnabledShareStore = false;
         for (const auto& item : snapshot["tools"]["assembled"]) {
             if (!item.value("filtered", false)
@@ -362,7 +362,7 @@ asio::awaitable<TestResult> run_assembly_snapshot_tests() {
         }
         XX_TEST_EXPECT_TRUE(sawFiltered);
         XX_TEST_EXPECT_TRUE(has(filteredReason, "toolWhitelist"));
-        // 装配数 = 启用数 + 被过滤数
+        // 加载数 = 启用数 + 被过滤数
         XX_TEST_EXPECT_EQ(
             snapshot["tools"].value("assembled_count", 0),
             snapshot["tools"].value("enabled_count", 0) + 1

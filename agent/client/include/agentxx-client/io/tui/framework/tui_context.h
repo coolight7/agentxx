@@ -95,7 +95,7 @@ struct TUICtx {
         return serverDeviceId != clientDeviceId;
     }
 
-    /// client 插件管理器 (mode_runners 装配后注入; 状态栏/侧边栏渲染与
+    /// client 插件管理器 (mode_runners 加载后注入; 状态栏/侧边栏渲染与
     /// 命令管线经此读取 UI 注册表快照; 线程安全: uiRegistrySnapshot/hasCommand
     /// 短锁, 渲染可无锁读取返回的 snapshot)
     std::shared_ptr<agentxx::plugin::ClientPluginManager> pluginManager;

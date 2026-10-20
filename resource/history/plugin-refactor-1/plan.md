@@ -174,7 +174,7 @@ bool await_suspend(std::coroutine_handle<Promise> h) {
 `PluginManager::loadNativeAsync` 与 `loadBuiltinAsync` 中，当 `createFn` 返回非 0 失败时，宿主直接 `plugins_.erase` 并 `dlclose`，未清理插件在创建过程中已经向宿主登记的工具、钩子、事件订阅与资源。
 
 #### 重构设计方案
-为 `PluginInstance` 引入严密的装配作用域保护，实现失败即全量回滚的原子加载：
+为 `PluginInstance` 引入严密的加载作用域保护，实现失败即全量回滚的原子加载：
 ```cpp
 plugins_[name] = inst;
 

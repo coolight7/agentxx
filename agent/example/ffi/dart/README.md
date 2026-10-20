@@ -59,7 +59,7 @@ Dart 侧轮询取出。`AgentClient` 已完整封装该流程。
 ## 目录结构
 
 ```
-bin/agentxx_cli.dart      入口: 参数解析 / 配置装配 / 主循环
+bin/agentxx_cli.dart      入口: 参数解析 / 配置加载 / 主循环
 lib/src/agent_client.dart AgentClient —— C API 封装 (事件流/交互/HIL)
 lib/src/events.dart       wire 协议 JSON → Dart 事件模型
 lib/src/repl.dart         终端渲染 + REPL + 中断应答流程

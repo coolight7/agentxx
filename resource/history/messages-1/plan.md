@@ -17,7 +17,7 @@
 
 | # | 存放位置 | 写入方 | 说明 |
 |---|---|---|---|
-| 1 | 图状态 `messages` 通道 | 各节点 (append / overwrite) | LLM 输入装配、路由、checkpoint 载荷 |
+| 1 | 图状态 `messages` 通道 | 各节点 (append / overwrite) | LLM 输入加载、路由、checkpoint 载荷 |
 | 2 | 会话 `Session::llmMessages` (`Json`) | `agent_runner.cpp:55` 轮末整体覆盖 | 持久化 + `WireGetContext` + 子代理播种的权威源 |
 | 3 | checkpoint `channel_values` | `graph_coordinator.cpp:258 / 290` 每 super-step | `InMemorySingleCheckpointStore` 每线程保留最新一份 |
 | 4 | 运行结果 `result.output` + typed 临时对象 | `graph_engine.cpp:1637` / 各处 `get_messages()` | 结束后再转回会话 |
@@ -50,7 +50,7 @@
 
 **可行, 且比"就地 append"更彻底**: 把上下文归会话后, 每轮内容拷贝可降到 2~3 次
 (provider typed 一次 + 请求体一次), 并且上述所有 state 序列化都变成 O(1) (与上下文无关)。
-代价是要替换 `messages` 通道承担的 3 个职责 (输入装配 / 循环路由 / 消息事件与插件可见状态),
+代价是要替换 `messages` 通道承担的 3 个职责 (输入加载 / 循环路由 / 消息事件与插件可见状态),
 并按 §7 的 5 个问题先定策略。
 
 ## 1. 目标与非目标
@@ -75,7 +75,7 @@
 
 | 职责 | 依赖点 |
 |---|---|
-| ① LLM 输入装配 | `lib/src/nodes/modelcall.cpp:153` (`build_params` → `state.get_messages()`); system 消息替换 `:647` 读 / `:677` 覆写; utf-8 修复回写 `:633`; 异常回滚快照 `include/agentxx/nodes/wrap_handle.h:262` |
+| ① LLM 输入加载 | `lib/src/nodes/modelcall.cpp:153` (`build_params` → `state.get_messages()`); system 消息替换 `:647` 读 / `:677` 覆写; utf-8 修复回写 `:633`; 异常回滚快照 `include/agentxx/nodes/wrap_handle.h:262` |
 | ② ReAct 循环路由 | 图定义条件边 `lib/src/agent/base_agent.cpp:507` (`has_tool_calls`); 实现 `neograph/src/core/graph_loader.cpp:119` (读最后一条 assistant 的 `tool_calls`) |
 | ③ 工具结果回传 | `lib/src/nodes/toolcall.cpp:1112` (`state.write`) / `:1130` (ChannelWrite) |
 | ④ 每轮播种 | 根: `base_agent.cpp:983` (`RunConfig.input`) → 引擎 `apply_input` (`neograph/src/core/graph_engine.cpp:1328`); 子代理: `lib/src/agent/agent_host.cpp:603-608` |

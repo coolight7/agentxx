@@ -25,12 +25,12 @@
 
 ### 1.1 目标
 
-1. **一个注册点**：运行时提示词来源（记忆文件、技能清单、将来的插件来源）统一向一个组件注册"我是谁、什么时候需要文本、文本怎么取"，组件负责取文本、比较变化、提供给请求装配。
+1. **一个注册点**：运行时提示词来源（记忆文件、技能清单、将来的插件来源）统一向一个组件注册"我是谁、什么时候需要文本、文本怎么取"，组件负责取文本、比较变化、提供给请求加载。
 2. **一个刷新入口**：只在 model call 开始时判断"要不要刷新"，涵盖首次读取、压缩完成、资源变更、显式请求四种原因。
 3. **刷新不影响缓存命中率**：内容没有变化时**不产生任何提示词变化**；变化只发生在压缩完成之后（该时刻 system 前缀本来就要付出一次重建，代价被压缩本身摊薄）。
 4. **不引入文件监听/轮询**：进程运行期间不因为磁盘文件变化而自动改写系统提示词。
 5. **压缩请求命中父会话缓存**：压缩子代理发出的请求，其可缓存前缀（system 消息 + 工具定义 + 消息前缀）与父会话上一次请求逐字节一致，工具在本次运行内不可执行。
-6. **可观测**：来源状态、刷新次数、失败次数、字符数、前缀变化次数都能从装配快照与诊断包读到；压缩命中率可测量。
+6. **可观测**：来源状态、刷新次数、失败次数、字符数、前缀变化次数都能从加载快照与诊断包读到；压缩命中率可测量。
 
 ### 1.2 验收标准（可测）
 
@@ -63,7 +63,7 @@
 - `AgentContext::buildSystemPromptStable`（`agent/src/agent/context.cpp:779-796`）= 主 prompt + 静态附加段（按 order、同 order 按 key）+ 运行时稳定段（`collectAppendSections` 按来源键名升序，`context.cpp:118-139`），最后统一做会话级占位符替换。
 - `buildSystemPrompt`（`context.cpp:798-816`）额外拼上动态段，供界面查看上下文用。
 - `graphData[thread_id]` 在**每轮开始时清空**（`nodes/agentcall.cpp:21`），所以段落是每轮临时数据；来源内容缓存活在中间件成员里。
-- 请求装配时 **每次重建 system 消息**：`ModelCallWrapNode::baseRun` 开头把会话首条 system 消息内容改为 `buildSystemPromptStable(thread_id)`（`nodes/modelcall.cpp:886-905`）。
+- 请求加载时 **每次重建 system 消息**：`ModelCallWrapNode::baseRun` 开头把会话首条 system 消息内容改为 `buildSystemPromptStable(thread_id)`（`nodes/modelcall.cpp:886-905`）。
 - 稳定前缀指纹：`build_params` 把 system 文本 + 工具定义做 `fnv1a64`，变化时计数并落日志（`modelcall.cpp:378-399`）→ `Session::noteStablePrefixHash/stablePrefixChanges`（`agent/context.h:390-418`）。**这是量化"刷新代价"的现成手段。**
 
 ### 2.2 一轮里的钩子顺序（已核对）
@@ -127,7 +127,7 @@ modelcall 节点:
 
 统一的部位：
 
-- 统一值模型 `PromptSection {key, order, owner, scope, slot, text}`，注册表对外提供 `listSections(sessionId)` 视图，静态段以 `scope = Config` 的形式**只读引用** `AgentPrompt`，运行时段以 `scope = Session` 由注册表持有；装配、装配快照、界面上下文查看、将来的插件读写接口都走这一个视图。
+- 统一值模型 `PromptSection {key, order, owner, scope, slot, text}`，注册表对外提供 `listSections(sessionId)` 视图，静态段以 `scope = Config` 的形式**只读引用** `AgentPrompt`，运行时段以 `scope = Session` 由注册表持有；加载、加载快照、界面上下文查看、将来的插件读写接口都走这一个视图。
 
 ### 3.2 组件：`PromptSourceRegistry`
 
@@ -180,7 +180,7 @@ struct PromptSource {
     std::function<asio::awaitable<std::optional<std::string>>(const PromptRefreshContext&)> build;
 };
 
-/// 段落只读视图 (装配 / 快照 / 界面 / 将来的插件读写都走它)
+/// 段落只读视图 (加载 / 快照 / 界面 / 将来的插件读写都走它)
 struct PromptSectionView {
     std::string_view  key;
     std::string_view  text;
@@ -202,7 +202,7 @@ public:
     /// 标记某会话需要刷新 (纯同步, 可在压缩路径安全调用; 不立即读盘)
     void markDirty(std::string_view sessionId, PromptRefreshReason reason);
 
-    /// 标记全体会话需要刷新 (资源变更; 只置位, 实际读盘在各自的请求装配前)
+    /// 标记全体会话需要刷新 (资源变更; 只置位, 实际读盘在各自的请求加载前)
     void markAllDirty(PromptRefreshReason reason);
 
     /// 刷新 (唯一读盘入口)
@@ -281,7 +281,7 @@ stateDiagram-v2
 | 原因 | 触发点 | 说明 |
 |---|---|---|
 | `Initial` | 该会话第一次 `ensureFresh` | 首次读取记忆文件 / 扫技能目录 |
-| `ResourcesChanged` | `AgentResourceApplier` 增删 memory 文件 / skill 目录、显式资源重载 | **显式程序动作**，不是文件变化检测；只标记，实际读盘在下一个请求装配前 |
+| `ResourcesChanged` | `AgentResourceApplier` 增删 memory 文件 / skill 目录、显式资源重载 | **显式程序动作**，不是文件变化检测；只标记，实际读盘在下一个请求加载前 |
 | `AfterCompaction` | 压缩写回完成（自动 / 手动 / 硬截断兜底三条路径） | 见 §3.6 |
 | `Explicit` | 客户端动作、插件调用、FFI | 立即生效（同一 model call 前） |
 
@@ -336,7 +336,7 @@ promptSourceRegistry->registerSource(PromptSource{
 
 ```cpp
 // 压缩完成: 本次请求的 system 前缀与后续请求的上下文都已经改变,
-// 是唯一值得改写注入内容的时机 (改动只影响后续请求, 不影响本次已装配的请求)
+// 是唯一值得改写注入内容的时机 (改动只影响后续请求, 不影响本次已加载的请求)
 agentContext->promptSources->markDirty(in.ctx.thread_id, PromptRefreshReason::AfterCompaction);
 if (agentContext->metrics) {
     agentContext->metrics->noteCompaction(static_cast<int64_t>(oldTokens),
@@ -384,7 +384,7 @@ modelcall #N+1
 #### 3.7.2 数据流
 
 1. **捕获父会话上一次请求的工具定义**（agent 级，一份）：
-   在 `ModelCallWrapNode::build_params` 里，参数装配完成后写入
+   在 `ModelCallWrapNode::build_params` 里，参数加载完成后写入
    `AgentContext::lastRequestTools = std::make_shared<const std::vector<neograph::ChatTool>>(params.tools)`
    （工具定义与 agent 配置相关、与会话无关，因此一份即可；`std::shared_ptr` 共享给子代理，零拷贝）。
 2. **system 文本**：压缩时直接取会话首条消息的正文（本次 model call 开头刚重建过，等于上一次请求发出的文本），随 `messages` 一并透传；子代理保留它、不重建。
@@ -427,7 +427,7 @@ bool toolExecutionDisabled = false;
 ### 3.9 观测与诊断
 
 - `KeyMetrics`：新增 `promptRefreshes` / `promptRefreshFailures` / `promptChangedSections` / `promptRefreshMs` / `promptSectionChars`（总量）；补上 `noteCompaction` 的调用。
-- 装配快照（`agent/src/agent/assembly_snapshot.cpp`）：新增 `prompt_sources` 段（每来源的 key/owner/order/slot/per_session/last_reason/last_ms/chars/refreshes/failures/last_error + 会话数 + 总字符数），`--dump-diagnostics` 出一行汇总（不含正文）。
+- 加载快照（`agent/src/agent/assembly_snapshot.cpp`）：新增 `prompt_sources` 段（每来源的 key/owner/order/slot/per_session/last_reason/last_ms/chars/refreshes/failures/last_error + 会话数 + 总字符数），`--dump-diagnostics` 出一行汇总（不含正文）。
 - 日志：
   - 刷新导致段落变化 → `XX_LOGI`（含 sessionId、原因、来源、字符数变化）；与现有 `stable prompt prefix changed` 日志配套，能直接看出"前缀为什么变了"。
   - 来源失败/超时 → `XX_LOGW`（按原因去重，不刷屏）。
@@ -435,7 +435,7 @@ bool toolExecutionDisabled = false;
 
 ### 3.10 线程、生命周期与内存约定
 
-- 注册表状态仅 io 线程访问（与段落进入请求装配同线程）；`ensureFresh` 在同一 io 线程串行执行，`busy` 标记避免重入（重入时只保留 dirty）。
+- 注册表状态仅 io 线程访问（与段落进入请求加载同线程）；`ensureFresh` 在同一 io 线程串行执行，`busy` 标记避免重入（重入时只保留 dirty）。
 - `perSession = false` 的来源只存一份文本（全体会话共享）；`perSession = true` 的来源按会话存，并由 `MiddlewareContext::cleanupSession`（`middlewares/middleware.cpp:383-390`）调用 `promptSources->dropSession()` 释放。
 - 单来源超时（默认 3s）、单次刷新总预算（默认 5s）都记日志并保留旧文本；失败次数计入快照。
 - 字符数上限沿用记忆文件现有告警阈值（8000 字符/文件），另在快照里给出总量；**只告警不截断**。
@@ -509,13 +509,13 @@ bool toolExecutionDisabled = false;
 | `agent/lib/src/agent/agent_host.cpp` | `spawnOneTask` 传递上述三个开关与工具覆盖 |
 | `agent/lib/include/agentxx/agent/config.h` | 新增子代理专用瞬时字段：`keepProvidedSystemMessage`、`requestToolsOverride`、`toolExecutionDisabled`、`toolChoiceNoneSupported` |
 | `agent/lib/src/nodes/modelcall.cpp` | `build_params` 保留 system 消息 / 使用工具覆盖 / 捕获 `lastRequestTools` / 追加 `tool_choice`；`toolExecutionDisabled` 时忽略 tool_calls 路由 |
-| `agent/lib/src/agent/base_agent.cpp` | 装配 `PromptSourceRefreshHandle`（最先） |
+| `agent/lib/src/agent/base_agent.cpp` | 加载 `PromptSourceRefreshHandle`（最先） |
 | `agent/lib/src/agent/code_agent.cpp` | 不再依赖 memory/skill 中间件的轮次钩子（构造函数登记来源） |
 | `agent/lib/src/agent/assembly_snapshot.cpp` | 增加 `prompt_sources` 段 |
 | `agent/lib/include/agentxx/util/observability.h` / `src/util/observability.cpp` | 新增提示词相关指标 |
 | `agent/lib/src/agent/resource_applier.cpp` | 资源变更改为 `markDirty(ResourcesChanged)`（不再走每轮重读标记） |
 | 测试：`test_graph_data.cpp`、`test_plugin_resources.cpp`、`test_prompt_stability.cpp`、`test_summarization.cpp`、`test_agent.cpp`（mock 缓存）、`test/test.cpp`（模块注册） | 按新段落来源改写断言；新增模块注册 |
-| 文档：`docs/zh-cn/design/index.md`（提示词装配与压缩两段）、`docs/zh-cn/design/plugins.md`（第二期留位）、`docs/zh-cn/design/benchmark.md`（实测数字） | 与实现一致 |
+| 文档：`docs/zh-cn/design/index.md`（提示词加载与压缩两段）、`docs/zh-cn/design/plugins.md`（第二期留位）、`docs/zh-cn/design/benchmark.md`（实测数字） | 与实现一致 |
 
 ### 5.3 不修改
 
@@ -535,7 +535,7 @@ bool toolExecutionDisabled = false;
 | S5 | 压缩写回后标记 dirty；三条路径（自动/手动/硬截断） | A3；`summarization` 测试扩展 |
 | S6 | 资源变更改标记；`cleanupSession` 释放会话文本 | A8；`plugin_resources` 扩展 |
 | S7 | 压缩请求前缀复用（system 保留 / 工具覆盖 / 工具不执行 / `tool_choice`） | A5 / A6；新增前缀测试模块 |
-| S8 | 指标、装配快照、诊断包、日志 | 快照与诊断包字段测试 |
+| S8 | 指标、加载快照、诊断包、日志 | 快照与诊断包字段测试 |
 | S9 | 文档更新 + 真实 provider 实测记录 | 文档与实现一致；实测数字入档 |
 
 回退方式：S1–S4 与 S5–S9 之间是弱耦合，前缀复用（S7）可单独回退到"子代理无工具 + 自己重建 system"的旧行为（缓存命中预期随之取消）。

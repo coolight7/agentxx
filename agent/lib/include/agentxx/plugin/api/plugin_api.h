@@ -273,7 +273,7 @@ typedef struct AgentxxPluginPermissionIface {
     /// 声明工具权限限制 (工具注册后调用; 同工具重复声明为覆盖)
     /// - 未声明的工具不参与权限判定 (直接放行); 声明后由主程序按权限规则
     ///   (白/黑名单、permission.mode、记住的选择、工作区隔离) 统一判定
-    /// - 权限声明属于附加能力: 主程序未装配权限中间件时返回非 0, 插件可忽略
+    /// - 权限声明属于附加能力: 主程序未加载权限中间件时返回非 0, 插件可忽略
     /// `return`: 0 成功, 非 0 不支持或失败
     int32_t(PLUGINXX_CALL* register_tool_permission)(
         const PluginxxHost*                    host,
@@ -444,7 +444,7 @@ typedef struct AgentxxPluginContextIface {
 typedef struct AgentxxPluginModelIface {
     int32_t  version; ///< 主程序填 AGENTXX_PLUGIN_IFACE_AGENT_MODEL_VERSION
     uint32_t struct_size;
-    /// 主程序主模型及关联配置 JSON (io 线程; host->alloc; 未装配返回空串):
+    /// 主程序主模型及关联配置 JSON (io 线程; host->alloc; 未加载返回空串):
     int32_t(PLUGINXX_CALL* get_config)(const PluginxxHost* host, PluginxxString* out);
 } AgentxxPluginModelIface;
 
@@ -594,7 +594,7 @@ typedef struct AgentxxPluginGraphIface {
 ///
 /// 三层: 点 (Point) / 实现 (Impl) / 调用 (Call)。插件可以:
 /// 1. 为**任何已声明的点**登记实现 ([AgentxxPluginFeatureImplSpec]): 应用点由主程序
-///    装配期声明, 插件点由插件自己经 define_point 声明;
+///    加载期声明, 插件点由插件自己经 define_point 声明;
 /// 2. **声明自己的点** ([AgentxxPluginFeaturePointSpec]): id 必须落在
 ///    `plugin.<本实例插件名>.*`, 声明期间恒可被任何一方调用 (本轮只允许 provide 类型);
 /// 3. **调用点** (call_point_async): 只拿数据 —— 不写值缓存、不记置空、不改调用方

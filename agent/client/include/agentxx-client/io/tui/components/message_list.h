@@ -207,7 +207,7 @@ public:
         return k < collapsibleIsStream_.size() && collapsibleIsStream_[k] != 0;
     }
 
-    /// 装配 [重试] 按钮点击回调 (连接失败 banner; 点击重新发起连接)
+    /// 加载 [重试] 按钮点击回调 (连接失败 banner; 点击重新发起连接)
     void setOnRetryClick(std::function<void()> fn) {
         onRetryClick_ = std::move(fn);
     }
@@ -309,7 +309,7 @@ private:
     ///   或 banner 重建时 —— 因此 [重试] 按钮消失后不再占用那块区域
     agentxx::client::UiHitMap bannerHits_;
 
-    /// [重试] 按钮点击回调 (连接失败后重新发起连接; 由 TUIClientAgentIO 装配)
+    /// [重试] 按钮点击回调 (连接失败后重新发起连接; 由 TUIClientAgentIO 加载)
     std::function<void()> onRetryClick_;
 
     /// 中断输入项通用视图 (渲染/估算/交互/结果组装; 形态由中断 UI 描述数据决定,

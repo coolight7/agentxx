@@ -551,7 +551,7 @@ static int planningSetup(PluginCtx* ctx) {
 extern "C" PLUGINXX_EXPORT int32_t PLUGINXX_CALL
     agentxx_plugin_agent_create(const PluginxxHost* host, void** plugin_ctx) {
     // C ABI 边界异常守卫: create 只构造上下文与接口查询, 注册事务由 start 执行;
-    // 守卫日志闭包捕获局部裸指针 (ctx 装配前置空 → 异常路径静默丢弃)
+    // 守卫日志闭包捕获局部裸指针 (ctx 加载前置空 → 异常路径静默丢弃)
     PluginCtx* raw = nullptr;
     return agentxx::plugin::guardCall(
         [&raw](const char* msg) noexcept {
@@ -1178,7 +1178,7 @@ static int planningClientSetup(ClientCtx* ctx) {
     // 类型级工具渲染器 (按 tool_name 注册): 由工具参数/结果直接推导折叠头与
     // 展开体, **重启恢复/重连/切换会话后由 Sync 回放的历史工具消息同样特化
     // 渲染** (这些消息没有 EVT_DELTA 装饰推送); 实时调用也走同一渲染器, 与
-    // 装饰推送 (展开头显示语义名) 内容同源。主程序无消息渲染面 (cli) 或未装配
+    // 装饰推送 (展开头显示语义名) 内容同源。主程序无消息渲染面 (cli) 或未加载
     // ui 表时注册失败 → 仅记日志, 不影响其他功能
     if (ctx->ui && ctx->ui->register_tool_renderer) {
         const int32_t rc = agentxx::plugin::registerToolRenderer(

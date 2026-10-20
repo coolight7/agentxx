@@ -11,9 +11,9 @@ namespace agent {
 
 class AgentContext;
 
-/// 启动装配快照
+/// 启动加载快照
 ///
-/// 目的: 让"这次启动到底装配成了什么"变成可检查、可打印的对象, 而不是散落在
+/// 目的: 让"这次启动到底加载成了什么"变成可检查、可打印的对象, 而不是散落在
 /// 十几条日志里。回答的问题包括:
 /// - 配置来自哪里 (配置文件 / 环境变量 / 默认值), 哪些键被忽略或即将被修正
 /// - 当前生效的模型、中间件顺序、工具清单 (来源 / 开关 / 被过滤原因)
@@ -24,12 +24,12 @@ class AgentContext;
 /// - [buildConfigSnapshot]: 只依赖 AgentConfig, 不构造 agent
 /// - [buildRuntimeSnapshot]: 需要 init() 之后的 AgentContext
 
-/// 配置侧装配快照 (不依赖 agent 实例)
+/// 配置侧加载快照 (不依赖 agent 实例)
 /// - `agentxx_cli --dump-config` 与启动日志共用同一份实现
 /// - API key 只输出"是否已设置", 不输出内容
 utilxx_base::Json buildConfigSnapshot(const AgentConfig& config);
 
-/// 运行侧装配快照 (init() 之后)
+/// 运行侧加载快照 (init() 之后)
 /// - 模型注册表 / 中间件顺序 / 工具清单 (含来源与过滤原因) / 插件状态 /
 ///   执行图 / 持久化 / 已加载组件 (skill/memory/mcp) 与加载失败项
 utilxx_base::Json buildRuntimeSnapshot(const AgentContext& ctx);
@@ -44,7 +44,7 @@ utilxx_base::Json mergeAssemblySnapshot(
 /// - 启动日志与 `--dump-config` 使用同一份渲染实现, 两者不会漂移
 std::vector<std::string> renderAssemblySnapshot(const utilxx_base::Json& snapshot);
 
-/// 启动期记录装配快照
+/// 启动期记录加载快照
 /// - Summary 级: 一行计数摘要 (模型/中间件/工具/插件/图/持久化)
 /// - Debug 级: 完整 JSON, 排查时按需打开
 void logAssemblySnapshot(const utilxx_base::Json& snapshot, std::string_view stage);

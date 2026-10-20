@@ -36,7 +36,7 @@ public:
 
     ~FfiClientAgentIO() override;
 
-    /// 设置本端点绑定会话 sessionId (运行层在装配时设置)
+    /// 设置本端点绑定会话 sessionId (运行层在加载时设置)
     void setSessionId(std::string sessionId);
 
     /// 设置 client io 线程 id (运行层注入; 判 stop/destroy 调用方)

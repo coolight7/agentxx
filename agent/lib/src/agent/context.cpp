@@ -806,7 +806,7 @@ std::string AgentContext::buildSystemPrompt(std::string_view sessionId) const {
     for (const auto& section : agentConfig->prompt.orderedAppendSections()) {
         appendPromptSegment(combined, std::string{section.text});
     }
-    // 稳定附加段与动态段都保留在末尾 (完整提示词仅供 UI 查看): 请求装配时稳定
+    // 稳定附加段与动态段都保留在末尾 (完整提示词仅供 UI 查看): 请求加载时稳定
     // 附加段随 system 消息下发, 动态段作为请求末尾的独立消息附加 (见 modelcall)
     for (const auto& [source, text] : buildStableContextSections(sessionId)) {
         (void)source;

@@ -271,7 +271,7 @@ std::string summarizeIdentity(const SummarizeRequest& req) {
     );
 }
 
-// ==================== 核心实现装配 ====================
+// ==================== 核心实现加载 ====================
 
 ContextPoints registerContextPoints(Registry& registry, const ContextPointOptions& options) {
     ContextPoints out;
