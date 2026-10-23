@@ -224,6 +224,31 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 
 然后改测试模块：
 
+`cmake --build … agentxx_test` 当前的错误分布（共 111 处，均在同一批文件里）：
+
+| 文件 | 错误数 | 主要问题 |
+|---|---|---|
+| `test/plugin/test_plugins.cpp` | 26 | 接口表调用补 `agent`；`loadConfiguredPlugins` 新形态 |
+| `test/plugin/test_plugin_hooks.cpp` | 24 | `registerHookEx`/`unregisterHookEx` → 句柄式；`HookRegistration.base` 已删；`register_hook_ex` → `register_hook` |
+| `test/plugin/test_plugin_bridge.cpp` | 18 | 接口表调用补 `agent` |
+| `test/plugin/test_plugin_runtime.cpp` | 15 | 删 `restorePromptBackup` 用例；表数量 21；v2 基线断言 |
+| `test/plugin/test_plugin_sdk.cpp` | 14 | kit 辅助函数新增的 `agent` 参数 |
+| `test/plugin/test_plugin_resources.cpp` | 9 | `register_skill_dir` / `get_own_resources` 等补 `agent` |
+| `test/plugin/test_cpu_gpu_use.cpp` | 5 | `invokeCapabilityAsync` 新增 `agent` 参数 |
+
+做法建议：在测试公共头（`agent/test/include/agentxx-test/...`）里加一个小助手，
+从管理器造引用，避免每处手写：
+
+```cpp
+inline PluginxxScopeRef scopeRefOf(const PluginManager& mgr) {
+    PluginxxScopeRef ref{};
+    ref.struct_size = sizeof(PluginxxScopeRef);
+    ref.id          = PluginStringView::from(mgr.agentId());
+    ref.seq         = mgr.mountSequence();   // 未挂载时为 0 = 不校验
+    return ref;
+}
+```
+
 | 模块 | 要做 |
 |---|---|
 | `test_plugin_hooks.cpp` | `registerHookEx`/`unregisterHookEx`/按点 `unregisterHook` → 统一句柄式 |
