@@ -116,6 +116,48 @@
 要点：`fast_tool` / `blocking_tool` / `polled_tool` 的 `ScopeRef` 是**第一个**参数
 （`ctx` 之后）；`hook(ctx, ref, point, fn)`；`graph_node(ctx, ref, type, schema, fn)`。
 
+#### 已迁移的插件
+
+- `agentxx_math`（**模板**，可直接照抄）：`start` 只剩 `notify->done`，注册搬到
+  `mount`，`unmount` 只给完成信号。
+
+```cpp
+static void* mathStart(MathPluginCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);   // 无进程级工作
+    (void)ctx;
+    return nullptr;
+}
+
+static void* mathMount(
+    MathPluginCtx&                     ctx,
+    const AgentxxPluginAgentMountSpec* spec,
+    const PluginxxOperatorNotify*      notify,
+    PluginxxString*                    error
+) {
+    if (!notify) { /* 写 error 并返回 nullptr */ }
+    const AgentRef ref(*spec);                    // 拷 agentId + 挂载序号
+    if (mathSetup(ctx, ref) != 0) { /* 写 error 并返回 nullptr */ }
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    return nullptr;                               // 无 per-agent 状态 = nullptr
+}
+
+static void* mathUnmount(
+    MathPluginCtx&, void*, const PluginxxOperatorNotify* notify, PluginxxString*
+) {
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+AGENTXX_PLUGIN_AGENT_EXPORT(
+    MathPluginCtx, "agentxx_math", "1.0.0", "...",
+    mathStart, mathStop, mathMount, mathUnmount
+);
+```
+
+- 需要 per-agent 状态时（工具计数、群列表等）：`mount` 里 `auto* st = new State{AgentRef(*spec)};`
+  → 注册时传 `st->ref` → `return st;`；`unmount` 里 `delete static_cast<State*>(ud);`。
+  多挂载共用一个 `plugin_ctx` 时用 `MountStore<State>`（已在 SDK 里）。
+
 ### 2.2 测试模块（阻塞编译）
 
 | 模块 | 要做 |

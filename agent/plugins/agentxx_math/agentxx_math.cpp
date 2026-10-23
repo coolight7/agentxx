@@ -25,8 +25,8 @@ Supports:
 
 struct MathPluginCtx : public PluginBase {};
 
-/// 注册事务 (start 的实际内容); 失败由主程序按拒绝处理并回滚。
-static int32_t mathSetup(MathPluginCtx& ctx) {
+/// 注册事务 (mount 的实际内容); 失败由主程序只回滚这一个 agent。
+static int32_t mathSetup(MathPluginCtx& ctx, const ScopeRef& ref) {
     auto schema
         = ctx.schema(kNameCalculate)
               .string(
@@ -49,6 +49,7 @@ static int32_t mathSetup(MathPluginCtx& ctx) {
 
     fast_tool(
         ctx,
+        ref,
         kNameCalculate,
         kDepictCalculate,
         schema,
@@ -61,27 +62,44 @@ static int32_t mathSetup(MathPluginCtx& ctx) {
 }
 
 static void*
-    mathStart(MathPluginCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString* error) {
+    mathStart(MathPluginCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
+    // 本插件没有进程级工作 (无连接/线程/定时器): start 只给出完成信号。
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    (void)ctx;
+    return nullptr;
+}
+
+/// 挂载: 每个 agent 一次 (本插件没有 per-agent 状态, 直接注册工具)
+static void* mathMount(
+    MathPluginCtx&                     ctx,
+    const AgentxxPluginAgentMountSpec* spec,
+    const PluginxxOperatorNotify*      notify,
+    PluginxxString*                    error
+) {
     if (!notify) {
         if (error) {
-            agentxx::plugin::PluginString::set(
-                ctx.host,
-                error,
-                "agentxx_math start: notify required"
-            );
+            PluginString::set(ctx.host, error, "agentxx_math mount: notify required");
         }
         return nullptr;
     }
-    if (mathSetup(ctx) != 0) {
+    const AgentRef ref(*spec);
+    if (mathSetup(ctx, ref) != 0) {
         if (error) {
-            agentxx::plugin::PluginString::set(
-                ctx.host,
-                error,
-                "agentxx_math start: registration failed"
-            );
+            PluginString::set(ctx.host, error, "agentxx_math mount: registration failed");
         }
         return nullptr;
     }
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+static void* mathUnmount(
+    MathPluginCtx&,
+    void*,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*
+) {
+    // 注册由主程序在本挂载卸载时自动撤销; per-agent 状态由挂载销毁。
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
@@ -98,5 +116,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
     "1.0.0",
     "Mathematical expression evaluator: parse and calculate math expressions",
     mathStart,
-    mathStop
+    mathStop,
+    mathMount,
+    mathUnmount
 );

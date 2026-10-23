@@ -101,14 +101,16 @@ static int32_t queryStringIo(const PluginxxHost* host, PluginxxString* out, Fn&&
 template<typename Fn>
 static int32_t
     onScopedInstanceIo(const PluginxxHost* host, const PluginxxScopeRef* agent, Fn&& fn) {
-    return onInstanceIo(host, [agent, fn = std::forward<Fn>(fn)](PluginInstance* inst, PluginManager* mgr
-                        ) -> int32_t {
-        if (!scopeOk(mgr, agent)) {
-            XX_LOGW("agentxx 注册接口: agent 引用无效, 请在 mount 里注册");
-            return AGENTXX_PLUGIN_ERR_NO_AGENT;
+    return onInstanceIo(
+        host,
+        [agent, fn = std::forward<Fn>(fn)](PluginInstance* inst, PluginManager* mgr) -> int32_t {
+            if (!scopeOk(mgr, agent)) {
+                XX_LOGW("agentxx 注册接口: agent 引用无效, 请在 mount 里注册");
+                return AGENTXX_PLUGIN_ERR_NO_AGENT;
+            }
+            return fn(inst, mgr);
         }
-        return fn(inst, mgr);
-    });
+    );
 }
 
 /// 带作用域校验的只读入口: 引用无效时返回 -1
@@ -138,8 +140,11 @@ static void PLUGINXX_CALL xx_free(void* ptr) {
     agentxx::plugin::hostMemoryFree(ptr);
 }
 
-static int32_t PLUGINXX_CALL
-    xx_register_tool(const PluginxxHost* host, const PluginxxScopeRef* agent, const AgentxxPluginToolSpec* spec) {
+static int32_t PLUGINXX_CALL xx_register_tool(
+    const PluginxxHost*          host,
+    const PluginxxScopeRef*      agent,
+    const AgentxxPluginToolSpec* spec
+) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
         auto call = enterHost(host);
         auto mgr  = call.manager();
