@@ -519,25 +519,27 @@ asio::awaitable<void> BaseAgent::init() {
     });
 
     steps.push_back(InitStep{
-        .name  = "plugins_load",
+        .name  = "plugin_mount",
         .after = "graph_definition",
         .run   = [&]() -> asio::awaitable<void> {
-            // 加载配置启用的插件 (yaml `plugins` 段; 加载失败仅记日志不影响主流程)
-            // - 提前到 engine 构建之前: 插件可在 create 阶段注册自定义节点类型
-            //   (graph 接口表 register_node_type, 注入 per-agent GraphRegistry) 并
-            //   修改执行图 JSON (set_graph_json, 覆盖默认图); 加载完成后下方以
-            //   最终图定义构建 engine
+            // 先加载插件 (进程级; 加载失败仅记日志不影响主流程), 再建立挂载:
+            // 所有 agent 级注册 (工具/权限/钩子/提示词/功能点/图/资源/事件) 都在
+            // 插件的 mount 回调里发生, 因此必须提前到 engine 构建之前。
             notifyInitProgress("加载插件 ...");
             if (agentContext->pluginManager && !agentContext->agentConfig->plugins.empty()) {
                 co_await agentContext->pluginManager->loadConfiguredPlugins(
                     agentContext->agentConfig->plugins
                 );
             }
+            notifyInitProgress("挂载插件 ...");
+            if (agentContext->pluginManager) {
+                co_await agentContext->pluginManager->mountAgentAsync();
+            }
             co_return;
         },
         .rollback =
             [this]() {
-                // 插件在 start 阶段可能已注册资源: 用同步关闭入口撤销
+                // 插件在 start/mount 阶段可能已注册资源: 用同步关闭入口撤销
                 // (init 期间没有进行中的插件回调, 可安全调用 shutdownAll)
                 if (agentContext->pluginManager) {
                     agentContext->pluginManager->shutdownAll();
@@ -547,7 +549,7 @@ asio::awaitable<void> BaseAgent::init() {
 
     steps.push_back(InitStep{
         .name  = "engine_build",
-        .after = "plugins_load",
+        .after = "plugin_mount",
         .run   = [&]() -> asio::awaitable<void> {
             // 构建执行图: 使用插件可能修改后的最终图定义; 插件修改非法时回退默认图
             notifyInitProgress("构建执行图 ...");

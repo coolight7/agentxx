@@ -93,9 +93,14 @@ private:
 // 事件表
 // =====================================================================
 
-std::shared_ptr<EventSource> PluginManager::eventSource() {
+std::shared_ptr<EventSource> PluginManager::eventSource(const PluginxxScopeRef* agent) {
     auto ctx = agentContext_.lock();
     if (!ctx || !ctx->bus) {
+        return nullptr;
+    }
+    // 本管理器就是该 agent 的挂载: 带引用时必须命中, 否则视为无效引用
+    // (空引用 = 宿主机级订阅, 也走同一份总线)
+    if (agent != nullptr && !mountOf(agent)) {
         return nullptr;
     }
     // 发布走本管理器的 IO executor (与既有行为一致: publish 不阻塞插件调用线程);
@@ -226,7 +231,10 @@ std::string PluginManager::getSessionWorkDir(std::string_view sessionId) {
     return getSessionWorkDir();
 }
 
-std::string PluginManager::sessionWorkDir(std::string_view sessionId) {
+std::string PluginManager::sessionWorkDir(const PluginxxScopeRef* agent, std::string_view sessionId) {
+    if (agent != nullptr && !mountOf(agent)) {
+        return {};
+    }
     return getSessionWorkDir(sessionId);
 }
 
@@ -260,7 +268,10 @@ std::string PluginManager::getModelConfigJson() {
 // cancel 表
 // =====================================================================
 
-bool PluginManager::isSessionCancelled(std::string_view sessionId) {
+bool PluginManager::isSessionCancelled(const PluginxxScopeRef* agent, std::string_view sessionId) {
+    if (agent != nullptr && !mountOf(agent)) {
+        return false;
+    }
     auto c = agentContext_.lock();
     if (!c || sessionId.empty()) {
         return false;

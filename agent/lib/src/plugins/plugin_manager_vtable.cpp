@@ -37,8 +37,14 @@ static HostCall enterHost(const PluginxxHost* host, bool allowClosing = false) {
     return enterPluginHost<PluginInstance, PluginManager>(host, allowClosing);
 }
 
+/// 校验作用域引用 (agent 级接口的公共门槛)
+/// - 引用为空 / 长度不足 / id 不匹配 / seq 不匹配 → false
+/// - 本主程序当前是一份管理器服务一个 agent, 所以只有一份可命中的引用
+static bool scopeOk(const PluginManager* mgr, const PluginxxScopeRef* agent) {
+    return mgr != nullptr && mgr->mountOf(agent);
+}
+
 /// 注册/写入类入口的公共骨架: 解析 host 上下文 → 把业务逻辑投递到 IO 线程执行。
-///
 /// - 参数视图只在本次调用内有效, 因此闭包必须按值捕获自己需要的拷贝;
 /// - `fn` 的入参是实例与管理器 (投递期间由 `keep` 保活, 含 admission lease);
 ///   业务参数校验由 `fn` 自己完成, 失败返回非 0 状态码。
@@ -90,6 +96,40 @@ static int32_t queryStringIo(const PluginxxHost* host, PluginxxString* out, Fn&&
 
 // C ABI 内存操作
 
+/// 带作用域校验的注册入口: 引用无效时直接返回 `AGENTXX_PLUGIN_ERR_NO_AGENT`
+/// (不产生任何副作用)
+template<typename Fn>
+static int32_t
+    onScopedInstanceIo(const PluginxxHost* host, const PluginxxScopeRef* agent, Fn&& fn) {
+    return onInstanceIo(host, [agent, fn = std::forward<Fn>(fn)](PluginInstance* inst, PluginManager* mgr
+                        ) -> int32_t {
+        if (!scopeOk(mgr, agent)) {
+            XX_LOGW("agentxx 注册接口: agent 引用无效, 请在 mount 里注册");
+            return AGENTXX_PLUGIN_ERR_NO_AGENT;
+        }
+        return fn(inst, mgr);
+    });
+}
+
+/// 带作用域校验的只读入口: 引用无效时返回 -1
+template<typename Fn>
+static int32_t queryScopedStringIo(
+    const PluginxxHost*     host,
+    const PluginxxScopeRef* agent,
+    PluginxxString*         out,
+    Fn&&                    fn
+) {
+    return queryStringIo(
+        host,
+        out,
+        [agent, fn = std::forward<Fn>(fn)](PluginInstance* inst, PluginManager* mgr) -> std::string {
+            if (!scopeOk(mgr, agent)) {
+                return std::string{};
+            }
+            return fn(inst, mgr);
+        }
+    );
+}
 static void* PLUGINXX_CALL xx_alloc(uint64_t size) {
     return agentxx::plugin::hostMemoryAlloc(size);
 }
@@ -99,13 +139,17 @@ static void PLUGINXX_CALL xx_free(void* ptr) {
 }
 
 static int32_t PLUGINXX_CALL
-    xx_register_tool(const PluginxxHost* host, const AgentxxPluginToolSpec* spec) {
+    xx_register_tool(const PluginxxHost* host, const PluginxxScopeRef* agent, const AgentxxPluginToolSpec* spec) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
         auto call = enterHost(host);
         auto mgr  = call.manager();
         auto inst = call.instance();
         if (!mgr || !inst || !spec || agentxx::plugin::PluginStringView::empty(&spec->name)) {
             return -1;
+        }
+        if (!scopeOk(mgr, agent)) {
+            XX_LOGW("agentxx.agent.tools.register_tool: 引用无效, 请在 mount 里注册");
+            return AGENTXX_PLUGIN_ERR_NO_AGENT;
         }
         // 长度门槛: 0 = 基线布局, 低于基线一律拒绝 (见 plugin_spec.h)
         if (!specSizeOk<AgentxxPluginToolSpec>(spec->struct_size)) {
@@ -120,19 +164,26 @@ static int32_t PLUGINXX_CALL
     });
 }
 
-static int32_t PLUGINXX_CALL
-    xx_unregister_tool(const PluginxxHost* host, const PluginxxStringView* name) {
+static int32_t PLUGINXX_CALL xx_unregister_tool(
+    const PluginxxHost*       host,
+    const PluginxxScopeRef*   agent,
+    const PluginxxStringView* name
+) {
     if (agentxx::plugin::PluginStringView::empty(name)) {
         return -1;
     }
     auto nameValCopy = *name;
-    return onInstanceIo(host, [nameValCopy](PluginInstance* inst, PluginManager* mgr) {
+    return onInstanceIo(host, [nameValCopy, agent](PluginInstance* inst, PluginManager* mgr) {
+        if (!scopeOk(mgr, agent)) {
+            return static_cast<int32_t>(AGENTXX_PLUGIN_ERR_NO_AGENT);
+        }
         return mgr->unregisterTool(inst, nameValCopy);
     });
 }
 
 static int32_t PLUGINXX_CALL xx_register_tool_permission(
     const PluginxxHost*                    host,
+    const PluginxxScopeRef*                agent,
     const AgentxxPluginToolPermissionSpec* spec
 ) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
@@ -141,6 +192,9 @@ static int32_t PLUGINXX_CALL xx_register_tool_permission(
         auto inst = call.instance();
         if (!mgr || !inst || !spec || agentxx::plugin::PluginStringView::empty(&spec->tool_name)) {
             return -1;
+        }
+        if (!scopeOk(mgr, agent)) {
+            return AGENTXX_PLUGIN_ERR_NO_AGENT;
         }
         auto mgrPtr  = mgr;
         auto instPtr = inst;
@@ -172,13 +226,19 @@ static int32_t PLUGINXX_CALL xx_register_tool_permission(
     });
 }
 
-static int32_t PLUGINXX_CALL
-    xx_unregister_tool_permission(const PluginxxHost* host, const PluginxxStringView* tool_name) {
+static int32_t PLUGINXX_CALL xx_unregister_tool_permission(
+    const PluginxxHost*       host,
+    const PluginxxScopeRef*   agent,
+    const PluginxxStringView* tool_name
+) {
     if (agentxx::plugin::PluginStringView::empty(tool_name)) {
         return -1;
     }
     auto nameValCopy = *tool_name;
-    return onInstanceIo(host, [nameValCopy](PluginInstance* inst, PluginManager* mgr) {
+    return onInstanceIo(host, [nameValCopy, agent](PluginInstance* inst, PluginManager* mgr) {
+        if (!scopeOk(mgr, agent)) {
+            return static_cast<int32_t>(AGENTXX_PLUGIN_ERR_NO_AGENT);
+        }
         return mgr->unregisterToolPermission(inst, nameValCopy);
     });
 }
@@ -189,6 +249,7 @@ static constexpr int32_t kPermissionCheckPathsMax = 16384;
 
 static int32_t PLUGINXX_CALL xx_check_paths(
     const PluginxxHost*                     host,
+    const PluginxxScopeRef*                 agent,
     const AgentxxPluginPermissionPathQuery* query,
     int32_t*                                out_decisions
 ) {
@@ -222,6 +283,9 @@ static int32_t PLUGINXX_CALL xx_check_paths(
         if (!mgr || !inst) {
             return -1;
         }
+        if (!scopeOk(mgr, agent)) {
+            return AGENTXX_PLUGIN_ERR_NO_AGENT;
+        }
         auto                 mgrPtr  = mgr;
         auto                 instPtr = inst;
         std::vector<int32_t> decisions;
@@ -240,12 +304,40 @@ static int32_t PLUGINXX_CALL xx_check_paths(
     });
 }
 
-static void PLUGINXX_CALL xx_op_cancel(::PluginxxOperatorHandle* op) {
-    cancelPluginOperation(op);
+/// 挂载表: 全部挂载的摘要数组 (`list`)
+///
+/// 定位在主程序业务表的开头, 因为 `query_interface` 在这个文件的后半段引用它。
+static int32_t PLUGINXX_CALL xx_mount_list(const PluginxxHost* host, PluginxxString* out) {
+    return queryStringIo(host, out, [](PluginInstance*, PluginManager* mgr) {
+        return mgr->listMountsJson();
+    });
 }
+
+/// 挂载表: 按 agentId 查一个挂载的摘要 (`get`)
+static int32_t PLUGINXX_CALL xx_mount_get(
+    const PluginxxHost*       host,
+    const PluginxxStringView* agent_id,
+    PluginxxString*           out
+) {
+    if (agentxx::plugin::PluginStringView::empty(agent_id)) {
+        return -1;
+    }
+    auto idStr = std::string(agent_id->data, static_cast<size_t>(agent_id->size));
+    return queryStringIo(host, out, [idStr](PluginInstance*, PluginManager* mgr) {
+        return mgr->mountInfoJson(idStr);
+    });
+}
+
+static const AgentxxPluginMountIface g_ifaceMount = {
+    /* version */ AGENTXX_PLUGIN_IFACE_AGENT_MOUNT_VERSION,
+    /* struct_size */ sizeof(AgentxxPluginMountIface),
+    /* list */ xx_mount_list,
+    /* get */ xx_mount_get,
+};
 
 static ::PluginxxOperatorHandle* PLUGINXX_CALL xx_call_tool_async(
     const PluginxxHost*       host,
+    const PluginxxScopeRef*   agent,
     const PluginxxStringView* name,
     const PluginxxStringView* args_json,
     const PluginxxStringView* session_id,
@@ -261,6 +353,10 @@ static ::PluginxxOperatorHandle* PLUGINXX_CALL xx_call_tool_async(
             hostMemorySetString(error_out, "call_tool_async: plugin runtime unavailable");
             return static_cast<::PluginxxOperatorHandle*>(nullptr);
         }
+        if (!scopeOk(mgr, agent)) {
+            hostMemorySetString(error_out, "call_tool_async: agent reference is invalid");
+            return static_cast<::PluginxxOperatorHandle*>(nullptr);
+        }
         return mgr->callToolAsync(
             inst,
             *name,
@@ -273,50 +369,11 @@ static ::PluginxxOperatorHandle* PLUGINXX_CALL xx_call_tool_async(
     });
 }
 
-static int32_t PLUGINXX_CALL
-    xx_register_hook(const PluginxxHost* host, const AgentxxPluginHookSpec* spec) {
-    return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
-        auto call = enterHost(host);
-        auto mgr  = call.manager();
-        auto inst = call.instance();
-        if (!mgr || !inst || !spec || spec->point < 0 || spec->point >= AGENTXX_PLUGIN_HOOK_COUNT
-            || !spec->hook_start) {
-            return -1;
-        }
-        // 长度门槛: 0 = 基线布局, 低于基线一律拒绝 (见 plugin_spec.h)
-        if (!specSizeOk<AgentxxPluginHookSpec>(spec->struct_size)) {
-            return -1;
-        }
-        auto                  mgrPtr   = mgr;
-        auto                  instPtr  = inst;
-        AgentxxPluginHookSpec specCopy = *spec;
-        return ioCallSyncKeep<int32_t>(call, mgrPtr, [mgrPtr, instPtr, specCopy]() {
-            return mgrPtr->registerHook(instPtr, &specCopy);
-        });
-    });
-}
+// ==================== 钩子登记与清单 (agentxx.agent.hooks) ====================
 
-static int32_t PLUGINXX_CALL xx_unregister_hook(const PluginxxHost* host, int32_t point) {
-    return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
-        auto call = enterHost(host);
-        auto mgr  = call.manager();
-        auto inst = call.instance();
-        if (!mgr || !inst || point < 0 || point >= AGENTXX_PLUGIN_HOOK_COUNT) {
-            return -1;
-        }
-        auto mgrPtr  = mgr;
-        auto instPtr = inst;
-        auto pt      = static_cast<AgentxxPluginHookPoint>(point);
-        return ioCallSyncKeep<int32_t>(call, mgrPtr, [mgrPtr, instPtr, pt]() {
-            return mgrPtr->unregisterHook(instPtr, pt);
-        });
-    });
-}
-
-// ==================== 钩子有序登记与清单 (agentxx.agent.hooks 的表尾三成员) ====================
-
-static int32_t PLUGINXX_CALL xx_register_hook_ex(
+static int32_t PLUGINXX_CALL xx_register_hook(
     const PluginxxHost*            host,
+    const PluginxxScopeRef*        agent,
     const AgentxxPluginHookSpecEx* spec,
     int64_t*                       out_handle
 ) {
@@ -332,32 +389,45 @@ static int32_t PLUGINXX_CALL xx_register_hook_ex(
             || !spec->hook_start) {
             return -1;
         }
+        if (!scopeOk(mgr, agent)) {
+            XX_LOGW("agentxx.agent.hooks.register_hook: 引用无效, 请在 mount 里注册");
+            return AGENTXX_PLUGIN_ERR_NO_AGENT;
+        }
         auto                    mgrPtr   = mgr;
         auto                    instPtr  = inst;
         AgentxxPluginHookSpecEx specCopy = *spec;
         return ioCallSyncKeep<int32_t>(call, mgrPtr, [mgrPtr, instPtr, specCopy, out_handle]() {
-            return mgrPtr->registerHookEx(instPtr, &specCopy, out_handle);
+            return mgrPtr->registerHook(instPtr, &specCopy, out_handle);
         });
     });
 }
 
-static int32_t PLUGINXX_CALL xx_unregister_hook_ex(const PluginxxHost* host, int64_t handle) {
+static int32_t PLUGINXX_CALL xx_unregister_hook(const PluginxxHost* host, int64_t handle) {
     if (handle <= 0) {
         return -1;
     }
     return onInstanceIo(host, [handle](PluginInstance* inst, PluginManager* mgr) {
-        return mgr->unregisterHookEx(inst, handle);
+        return mgr->unregisterHook(inst, handle);
     });
 }
 
-static int32_t PLUGINXX_CALL xx_list_hooks(const PluginxxHost* host, PluginxxString* out) {
-    return queryStringIo(host, out, [](PluginInstance*, PluginManager* mgr) {
+static int32_t PLUGINXX_CALL xx_list_hooks(
+    const PluginxxHost*     host,
+    const PluginxxScopeRef* agent,
+    PluginxxString*         out
+) {
+    return queryStringIo(host, out, [agent](PluginInstance*, PluginManager* mgr) {
+        // 引用为空 = 全部挂载的合并视图 (当前只有一份挂载, 两者等价)
+        if (agent && !pluginxx_scope_ref_ok(agent)) {
+            return std::string{};
+        }
         return mgr->hooksJson();
     });
 }
 
 static int32_t PLUGINXX_CALL xx_get_share_store(
     const PluginxxHost*       host,
+    const PluginxxScopeRef*   agent,
     const PluginxxStringView* session_id,
     int64_t                   id,
     PluginxxString*           out
@@ -370,6 +440,9 @@ static int32_t PLUGINXX_CALL xx_get_share_store(
         auto mgr  = call.manager();
         auto inst = call.instance();
         if (!mgr || !inst || agentxx::plugin::PluginStringView::empty(session_id)) {
+            return -1;
+        }
+        if (!scopeOk(mgr, agent)) {
             return -1;
         }
         auto mgrPtr  = mgr;
@@ -388,6 +461,7 @@ static int32_t PLUGINXX_CALL xx_get_share_store(
 
 static int64_t PLUGINXX_CALL xx_add_share_store(
     const PluginxxHost*       host,
+    const PluginxxScopeRef*   agent,
     const PluginxxStringView* session_id,
     const PluginxxStringView* content
 ) {
@@ -396,6 +470,9 @@ static int64_t PLUGINXX_CALL xx_add_share_store(
         auto mgr  = call.manager();
         auto inst = call.instance();
         if (!mgr || !inst || !session_id || !content) {
+            return -1;
+        }
+        if (!scopeOk(mgr, agent)) {
             return -1;
         }
         auto mgrPtr     = mgr;
@@ -418,6 +495,7 @@ static int64_t PLUGINXX_CALL xx_add_share_store(
 
 static int32_t PLUGINXX_CALL xx_context_get_messages(
     const PluginxxHost*       host,
+    const PluginxxScopeRef*   agent,
     const PluginxxStringView* session_id,
     PluginxxString*           out
 ) {
@@ -431,6 +509,9 @@ static int32_t PLUGINXX_CALL xx_context_get_messages(
         if (!mgr || !inst || agentxx::plugin::PluginStringView::empty(session_id)) {
             return -1;
         }
+        if (!scopeOk(mgr, agent)) {
+            return -1;
+        }
         auto mgrPtr = mgr;
         auto sid    = *session_id;
         *out = ioCallSyncKeep<PluginxxString>(call, mgrPtr, [mgrPtr, sid]() -> PluginxxString {
@@ -440,13 +521,19 @@ static int32_t PLUGINXX_CALL xx_context_get_messages(
     });
 }
 
-static int64_t PLUGINXX_CALL
-    xx_context_messages_count(const PluginxxHost* host, const PluginxxStringView* session_id) {
+static int64_t PLUGINXX_CALL xx_context_messages_count(
+    const PluginxxHost*       host,
+    const PluginxxScopeRef*   agent,
+    const PluginxxStringView* session_id
+) {
     return agentxx::plugin::guardVtableCall<int64_t>(-1, [&]() -> int64_t {
         auto call = enterHost(host, /*allowClosing=*/true);
         auto mgr  = call.manager();
         auto inst = call.instance();
         if (!mgr || !inst || agentxx::plugin::PluginStringView::empty(session_id)) {
+            return -1;
+        }
+        if (!scopeOk(mgr, agent)) {
             return -1;
         }
         auto mgrPtr = mgr;
@@ -466,6 +553,7 @@ static const AgentxxPluginContextIface g_ifaceContext = {
 
 static void PLUGINXX_CALL xx_emit_message_tip(
     const PluginxxHost*       host,
+    const PluginxxScopeRef*   agent,
     const PluginxxStringView* session_id,
     const PluginxxStringView* text,
     int32_t                   level
@@ -475,6 +563,9 @@ static void PLUGINXX_CALL xx_emit_message_tip(
         auto mgr  = call.manager();
         auto inst = call.instance();
         if (!mgr || !inst || !session_id || !text) {
+            return;
+        }
+        if (!scopeOk(mgr, agent)) {
             return;
         }
         auto mgrPtr  = mgr;
@@ -492,7 +583,7 @@ static void PLUGINXX_CALL xx_emit_message_tip(
 // =====================================================================
 
 static int32_t PLUGINXX_CALL
-    xx_register_node_type(const PluginxxHost* host, const AgentxxPluginGraphNodeTypeSpec* spec) {
+    xx_register_node_type(const PluginxxHost* host, const PluginxxScopeRef* agent, const AgentxxPluginGraphNodeTypeSpec* spec) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
         auto call = enterHost(host);
         auto mgr  = call.manager();
@@ -500,6 +591,9 @@ static int32_t PLUGINXX_CALL
         if (!mgr || !inst || !spec || agentxx::plugin::PluginStringView::empty(&spec->type)
             || !spec->run_start) {
             return -1;
+        }
+        if (!scopeOk(mgr, agent)) {
+            return AGENTXX_PLUGIN_ERR_NO_AGENT;
         }
         // 长度门槛: 0 = 基线布局, 低于基线一律拒绝 (见 plugin_spec.h)
         if (!specSizeOk<AgentxxPluginGraphNodeTypeSpec>(spec->struct_size)) {
@@ -514,18 +608,25 @@ static int32_t PLUGINXX_CALL
     });
 }
 
-static int32_t PLUGINXX_CALL
-    xx_unregister_node_type(const PluginxxHost* host, const PluginxxStringView* type) {
+static int32_t PLUGINXX_CALL xx_unregister_node_type(
+    const PluginxxHost*       host,
+    const PluginxxScopeRef*   agent,
+    const PluginxxStringView* type
+) {
     if (agentxx::plugin::PluginStringView::empty(type)) {
         return -1;
     }
     auto typeValCopy = *type;
-    return onInstanceIo(host, [typeValCopy](PluginInstance* inst, PluginManager* mgr) {
+    return onScopedInstanceIo(host, agent, [typeValCopy](PluginInstance* inst, PluginManager* mgr) {
         return mgr->unregisterGraphNodeType(inst, typeValCopy);
     });
 }
 
-static int32_t PLUGINXX_CALL xx_get_graph_json(const PluginxxHost* host, PluginxxString* out) {
+static int32_t PLUGINXX_CALL xx_get_graph_json(
+    const PluginxxHost*     host,
+    const PluginxxScopeRef* agent,
+    PluginxxString*         out
+) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
         if (!out) {
             return -1;
@@ -534,6 +635,9 @@ static int32_t PLUGINXX_CALL xx_get_graph_json(const PluginxxHost* host, Pluginx
         auto mgr  = call.manager();
         auto inst = call.instance();
         if (!mgr || !inst) {
+            return -1;
+        }
+        if (!scopeOk(mgr, agent)) {
             return -1;
         }
         auto mgrPtr = mgr;
@@ -548,7 +652,11 @@ static int32_t PLUGINXX_CALL xx_get_graph_json(const PluginxxHost* host, Pluginx
     });
 }
 
-static int32_t PLUGINXX_CALL xx_get_graph_name(const PluginxxHost* host, PluginxxString* out) {
+static int32_t PLUGINXX_CALL xx_get_graph_name(
+    const PluginxxHost*     host,
+    const PluginxxScopeRef* agent,
+    PluginxxString*         out
+) {
     return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
         if (!out) {
             return -1;
@@ -557,6 +665,9 @@ static int32_t PLUGINXX_CALL xx_get_graph_name(const PluginxxHost* host, Pluginx
         auto mgr  = call.manager();
         auto inst = call.instance();
         if (!mgr || !inst) {
+            return -1;
+        }
+        if (!scopeOk(mgr, agent)) {
             return -1;
         }
         auto mgrPtr = mgr;
@@ -579,71 +690,105 @@ static int32_t PLUGINXX_CALL xx_get_graph_name(const PluginxxHost* host, Pluginx
     });
 }
 
-static int32_t PLUGINXX_CALL
-    xx_set_graph_json(const PluginxxHost* host, const PluginxxStringView* graph_json) {
+static int32_t PLUGINXX_CALL xx_unregister_node_type(
+    const PluginxxHost*       host,
+    const PluginxxScopeRef*   agent,
+    const PluginxxStringView* type
+) {
+    if (agentxx::plugin::PluginStringView::empty(type)) {
+        return -1;
+    }
+    auto typeCopy = *type;
+    return onScopedInstanceIo(host, agent, [typeCopy](PluginInstance* inst, PluginManager* mgr) {
+        return mgr->unregisterGraphNodeType(inst, typeCopy);
+    });
+}
+
+static int32_t PLUGINXX_CALL xx_set_graph_json(
+    const PluginxxHost*       host,
+    const PluginxxScopeRef*   agent,
+    const PluginxxStringView* graph_json
+) {
     if (agentxx::plugin::PluginStringView::empty(graph_json)) {
         return -1;
     }
     auto jsonValCopy = *graph_json;
-    return onInstanceIo(host, [jsonValCopy](PluginInstance* inst, PluginManager* mgr) {
+    return onScopedInstanceIo(host, agent, [jsonValCopy](PluginInstance* inst, PluginManager* mgr) {
         return mgr->setGraphJson(inst, jsonValCopy);
     });
 }
 
 // ==================== 功能点表 (agentxx.agent.feature) ====================
 
-static int32_t PLUGINXX_CALL xx_feature_list_points(const PluginxxHost* host, PluginxxString* out) {
-    return queryStringIo(host, out, [](PluginInstance*, PluginManager* mgr) {
+static int32_t PLUGINXX_CALL xx_feature_list_points(
+    const PluginxxHost*     host,
+    const PluginxxScopeRef* agent,
+    PluginxxString*         out
+) {
+    return queryScopedStringIo(host, agent, out, [](PluginInstance*, PluginManager* mgr) {
         return mgr->listFeaturePoints();
     });
 }
 
-static int32_t PLUGINXX_CALL
-    xx_feature_define_point(const PluginxxHost* host, const AgentxxPluginFeaturePointSpec* spec) {
+static int32_t PLUGINXX_CALL xx_feature_define_point(
+    const PluginxxHost*                  host,
+    const PluginxxScopeRef*              agent,
+    const AgentxxPluginFeaturePointSpec* spec
+) {
     if (spec == nullptr) {
         return -1;
     }
     auto specCopy = *spec;
-    return onInstanceIo(host, [specCopy](PluginInstance* inst, PluginManager* mgr) {
+    return onScopedInstanceIo(host, agent, [specCopy](PluginInstance* inst, PluginManager* mgr) {
         return mgr->defineFeaturePoint(inst, &specCopy);
     });
 }
 
-static int32_t PLUGINXX_CALL
-    xx_feature_undefine_point(const PluginxxHost* host, const PluginxxStringView* point_id) {
+static int32_t PLUGINXX_CALL xx_feature_undefine_point(
+    const PluginxxHost*       host,
+    const PluginxxScopeRef*   agent,
+    const PluginxxStringView* point_id
+) {
     if (agentxx::plugin::PluginStringView::empty(point_id)) {
         return -1;
     }
     auto idCopy = *point_id;
-    return onInstanceIo(host, [idCopy](PluginInstance* inst, PluginManager* mgr) {
+    return onScopedInstanceIo(host, agent, [idCopy](PluginInstance* inst, PluginManager* mgr) {
         return mgr->undefineFeaturePoint(inst, idCopy);
     });
 }
 
-static int32_t PLUGINXX_CALL
-    xx_feature_register_impl(const PluginxxHost* host, const AgentxxPluginFeatureImplSpec* spec) {
+static int32_t PLUGINXX_CALL xx_feature_register_impl(
+    const PluginxxHost*                 host,
+    const PluginxxScopeRef*             agent,
+    const AgentxxPluginFeatureImplSpec* spec
+) {
     if (spec == nullptr || !spec->impl_start) {
         return -1;
     }
     auto specCopy = *spec;
-    return onInstanceIo(host, [specCopy](PluginInstance* inst, PluginManager* mgr) {
+    return onScopedInstanceIo(host, agent, [specCopy](PluginInstance* inst, PluginManager* mgr) {
         return mgr->registerFeatureImpl(inst, &specCopy);
     });
 }
 
-static int32_t PLUGINXX_CALL
-    xx_feature_unregister_impl(const PluginxxHost* host, const PluginxxStringView* point_id) {
+static int32_t PLUGINXX_CALL xx_feature_unregister_impl(
+    const PluginxxHost*       host,
+    const PluginxxScopeRef*   agent,
+    const PluginxxStringView* point_id
+) {
     if (agentxx::plugin::PluginStringView::empty(point_id)) {
         return -1;
     }
     auto idCopy = *point_id;
-    return onInstanceIo(host, [idCopy](PluginInstance* inst, PluginManager* mgr) {
+    return onScopedInstanceIo(host, agent, [idCopy](PluginInstance* inst, PluginManager* mgr) {
         return mgr->unregisterFeatureImpl(inst, idCopy);
     });
 }
 
 static ::PluginxxOperatorHandle* PLUGINXX_CALL xx_feature_call_point_async(
     const PluginxxHost*       host,
+    const PluginxxScopeRef*   agent,
     const PluginxxStringView* point_id,
     const PluginxxStringView* args_json,
     PluginxxOperatorCallback  cb,
@@ -658,6 +803,10 @@ static ::PluginxxOperatorHandle* PLUGINXX_CALL xx_feature_call_point_async(
             hostMemorySetString(error_out, "call_point_async: plugin runtime unavailable");
             return static_cast<::PluginxxOperatorHandle*>(nullptr);
         }
+        if (!scopeOk(mgr, agent)) {
+            hostMemorySetString(error_out, "call_point_async: agent reference is invalid");
+            return static_cast<::PluginxxOperatorHandle*>(nullptr);
+        }
         return mgr->callFeatureAsync(
             inst,
             *point_id,
@@ -669,97 +818,124 @@ static ::PluginxxOperatorHandle* PLUGINXX_CALL xx_feature_call_point_async(
     });
 }
 
-static int32_t PLUGINXX_CALL xx_get_prompt(const PluginxxHost* host, PluginxxString* out) {
-    return queryStringIo(host, out, [](PluginInstance* inst, PluginManager* mgr) {
+static int32_t PLUGINXX_CALL
+    xx_get_prompt(const PluginxxHost* host, const PluginxxScopeRef* agent, PluginxxString* out) {
+    return queryScopedStringIo(host, agent, out, [](PluginInstance* inst, PluginManager* mgr) {
         return mgr->getPromptJson();
     });
 }
 
-static int32_t PLUGINXX_CALL
-    xx_set_prompt(const PluginxxHost* host, const PluginxxStringView* prompt_json) {
+static int32_t PLUGINXX_CALL xx_set_prompt(
+    const PluginxxHost*       host,
+    const PluginxxScopeRef*   agent,
+    const PluginxxStringView* prompt_json
+) {
     if (agentxx::plugin::PluginStringView::empty(prompt_json)) {
         return -1;
     }
     auto pJsonCopy = *prompt_json;
-    return onInstanceIo(host, [pJsonCopy](PluginInstance* inst, PluginManager* mgr) {
+    return onScopedInstanceIo(host, agent, [pJsonCopy](PluginInstance* inst, PluginManager* mgr) {
         return mgr->setPromptJson(inst, pJsonCopy);
     });
 }
 
-static int32_t PLUGINXX_CALL xx_model_get_config(const PluginxxHost* host, PluginxxString* out) {
-    return queryStringIo(host, out, [](PluginInstance* inst, PluginManager* mgr) {
+static int32_t PLUGINXX_CALL
+    xx_model_get_config(const PluginxxHost* host, const PluginxxScopeRef* agent, PluginxxString* out) {
+    return queryScopedStringIo(host, agent, out, [](PluginInstance* inst, PluginManager* mgr) {
         return mgr->getModelConfigJson();
     });
 }
 
-static int32_t PLUGINXX_CALL
-    xx_register_skill_dir(const PluginxxHost* host, const PluginxxStringView* path) {
+static int32_t PLUGINXX_CALL xx_register_skill_dir(
+    const PluginxxHost*       host,
+    const PluginxxScopeRef*   agent,
+    const PluginxxStringView* path
+) {
     if (agentxx::plugin::PluginStringView::empty(path)) {
         return -1;
     }
     auto pathValCopy = *path;
-    return onInstanceIo(host, [pathValCopy](PluginInstance* inst, PluginManager* mgr) {
+    return onScopedInstanceIo(host, agent, [pathValCopy](PluginInstance* inst, PluginManager* mgr) {
         return mgr->registerSkillDir(inst, pathValCopy);
     });
 }
 
-static int32_t PLUGINXX_CALL
-    xx_unregister_skill_dir(const PluginxxHost* host, const PluginxxStringView* path) {
+static int32_t PLUGINXX_CALL xx_unregister_skill_dir(
+    const PluginxxHost*       host,
+    const PluginxxScopeRef*   agent,
+    const PluginxxStringView* path
+) {
     if (agentxx::plugin::PluginStringView::empty(path)) {
         return -1;
     }
     auto pathValCopy = *path;
-    return onInstanceIo(host, [pathValCopy](PluginInstance* inst, PluginManager* mgr) {
+    return onScopedInstanceIo(host, agent, [pathValCopy](PluginInstance* inst, PluginManager* mgr) {
         return mgr->unregisterSkillDir(inst, pathValCopy);
     });
 }
 
-static int32_t PLUGINXX_CALL
-    xx_register_memory_file(const PluginxxHost* host, const PluginxxStringView* path) {
+static int32_t PLUGINXX_CALL xx_register_memory_file(
+    const PluginxxHost*       host,
+    const PluginxxScopeRef*   agent,
+    const PluginxxStringView* path
+) {
     if (agentxx::plugin::PluginStringView::empty(path)) {
         return -1;
     }
     auto pathValCopy = *path;
-    return onInstanceIo(host, [pathValCopy](PluginInstance* inst, PluginManager* mgr) {
+    return onScopedInstanceIo(host, agent, [pathValCopy](PluginInstance* inst, PluginManager* mgr) {
         return mgr->registerMemoryFile(inst, pathValCopy);
     });
 }
 
-static int32_t PLUGINXX_CALL
-    xx_unregister_memory_file(const PluginxxHost* host, const PluginxxStringView* path) {
+static int32_t PLUGINXX_CALL xx_unregister_memory_file(
+    const PluginxxHost*       host,
+    const PluginxxScopeRef*   agent,
+    const PluginxxStringView* path
+) {
     if (agentxx::plugin::PluginStringView::empty(path)) {
         return -1;
     }
     auto pathValCopy = *path;
-    return onInstanceIo(host, [pathValCopy](PluginInstance* inst, PluginManager* mgr) {
+    return onScopedInstanceIo(host, agent, [pathValCopy](PluginInstance* inst, PluginManager* mgr) {
         return mgr->unregisterMemoryFile(inst, pathValCopy);
     });
 }
 
-static int32_t PLUGINXX_CALL
-    xx_register_mcp_server(const PluginxxHost* host, const PluginxxStringView* spec_json) {
+static int32_t PLUGINXX_CALL xx_register_mcp_server(
+    const PluginxxHost*       host,
+    const PluginxxScopeRef*   agent,
+    const PluginxxStringView* spec_json
+) {
     if (agentxx::plugin::PluginStringView::empty(spec_json)) {
         return -1;
     }
     auto specValCopy = *spec_json;
-    return onInstanceIo(host, [specValCopy](PluginInstance* inst, PluginManager* mgr) {
+    return onScopedInstanceIo(host, agent, [specValCopy](PluginInstance* inst, PluginManager* mgr) {
         return mgr->registerMcpServer(inst, specValCopy);
     });
 }
 
-static int32_t PLUGINXX_CALL
-    xx_unregister_mcp_server(const PluginxxHost* host, const PluginxxStringView* name_space) {
+static int32_t PLUGINXX_CALL xx_unregister_mcp_server(
+    const PluginxxHost*       host,
+    const PluginxxScopeRef*   agent,
+    const PluginxxStringView* name_space
+) {
     if (agentxx::plugin::PluginStringView::empty(name_space)) {
         return -1;
     }
     auto nsValCopy = *name_space;
-    return onInstanceIo(host, [nsValCopy](PluginInstance* inst, PluginManager* mgr) {
+    return onScopedInstanceIo(host, agent, [nsValCopy](PluginInstance* inst, PluginManager* mgr) {
         return mgr->unregisterMcpServer(inst, nsValCopy);
     });
 }
 
-static int32_t PLUGINXX_CALL xx_get_own_resources(const PluginxxHost* host, PluginxxString* out) {
-    return queryStringIo(host, out, [](PluginInstance* inst, PluginManager* mgr) {
+static int32_t PLUGINXX_CALL xx_get_own_resources(
+    const PluginxxHost*     host,
+    const PluginxxScopeRef* agent,
+    PluginxxString*         out
+) {
+    return queryScopedStringIo(host, agent, out, [](PluginInstance* inst, PluginManager* mgr) {
         return mgr->ownResourcesJson(inst);
     });
 }
@@ -770,7 +946,6 @@ static const AgentxxPluginToolsIface g_ifaceTools = {
     /* register_tool */ xx_register_tool,
     /* unregister_tool */ xx_unregister_tool,
     /* call_tool_async */ xx_call_tool_async,
-    /* op_cancel */ xx_op_cancel,
 };
 
 static const AgentxxPluginPermissionIface g_ifacePermission = {
@@ -786,8 +961,6 @@ static const AgentxxPluginHooksIface g_ifaceHooks = {
     /* struct_size */ sizeof(AgentxxPluginHooksIface),
     /* register_hook */ xx_register_hook,
     /* unregister_hook */ xx_unregister_hook,
-    /* register_hook_ex */ xx_register_hook_ex,
-    /* unregister_hook_ex */ xx_unregister_hook_ex,
     /* list_hooks */ xx_list_hooks,
 };
 
@@ -901,6 +1074,9 @@ const void* PLUGINXX_CALL xx_query_interface(const PluginxxHost*, const Pluginxx
     }
     if (n == AGENTXX_PLUGIN_IFACE_AGENT_FEATURE) {
         return &g_ifaceFeature;
+    }
+    if (n == AGENTXX_PLUGIN_IFACE_AGENT_MOUNT) {
+        return &g_ifaceMount;
     }
     return nullptr;
 }
@@ -1421,14 +1597,6 @@ int PluginManager::setPromptJson(PluginInstance* inst, PluginxxStringView prompt
     } catch (...) {
         return -1;
     }
-}
-
-/// 兼容入口：卸载/禁用时删除该 owner 的 prompt 贡献并重新合成。
-void PluginManager::restorePromptBackup(PluginInstance* inst) {
-    if (!inst) {
-        return;
-    }
-    removePromptContributions(inst->name);
 }
 
 std::string PluginManager::getPluginArgsJson(PluginInstance* inst) {

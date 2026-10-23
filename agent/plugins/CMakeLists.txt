@@ -348,10 +348,12 @@ extern \"C\" const AgentxxPluginInfo* AGENTXX_PLUGIN_CALL agentxx_plugin_agent_b
 extern \"C\" int32_t AGENTXX_PLUGIN_CALL agentxx_plugin_agent_builtin_create_${_bp}(const AgentxxPluginHost* host, void** plugin_ctx);
 extern \"C\" void AGENTXX_PLUGIN_CALL agentxx_plugin_agent_builtin_destroy_${_bp}(void* plugin_ctx);
 extern \"C\" void* AGENTXX_PLUGIN_CALL agentxx_plugin_agent_builtin_start_${_bp}(void* plugin_ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* err);
-extern \"C\" void* AGENTXX_PLUGIN_CALL agentxx_plugin_agent_builtin_stop_${_bp}(void* plugin_ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* err);")
+extern \"C\" void* AGENTXX_PLUGIN_CALL agentxx_plugin_agent_builtin_stop_${_bp}(void* plugin_ctx, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* err);
+extern \"C\" void* AGENTXX_PLUGIN_CALL agentxx_plugin_agent_builtin_mount_${_bp}(void* plugin_ctx, const struct AgentxxPluginAgentMountSpec* spec, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* err);
+extern \"C\" void* AGENTXX_PLUGIN_CALL agentxx_plugin_agent_builtin_unmount_${_bp}(void* plugin_ctx, void* mount_ud, const AgentxxPluginOperatorNotify* notify, AgentxxPluginString* err);")
   set(AGENTXX_BUILTIN_PLUGIN_MANIFEST_ENTRIES
     "${AGENTXX_BUILTIN_PLUGIN_MANIFEST_ENTRIES}
-    { { \"${_bp}\", sizeof(\"${_bp}\") - 1 }, agentxx_plugin_agent_builtin_get_info_${_bp}, agentxx_plugin_agent_builtin_create_${_bp}, agentxx_plugin_agent_builtin_destroy_${_bp}, agentxx_plugin_agent_builtin_start_${_bp}, agentxx_plugin_agent_builtin_stop_${_bp} },")
+    { { \"${_bp}\", sizeof(\"${_bp}\") - 1 }, agentxx_plugin_agent_builtin_get_info_${_bp}, agentxx_plugin_agent_builtin_create_${_bp}, agentxx_plugin_agent_builtin_destroy_${_bp}, agentxx_plugin_agent_builtin_start_${_bp}, agentxx_plugin_agent_builtin_stop_${_bp}, reinterpret_cast<void*>(agentxx_plugin_agent_builtin_mount_${_bp}), reinterpret_cast<void*>(agentxx_plugin_agent_builtin_unmount_${_bp}) },")
 
   set(_yaml_path "${CMAKE_CURRENT_SOURCE_DIR}/${_bp}/plugin.yaml")
   if(EXISTS "${_yaml_path}")

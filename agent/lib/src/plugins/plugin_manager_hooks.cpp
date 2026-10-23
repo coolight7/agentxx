@@ -253,67 +253,7 @@ void PluginManager::detachHookHandlers(PluginInstance* inst) {
     }
 }
 
-int PluginManager::registerHook(PluginInstance* inst, const AgentxxPluginHookSpec* spec) {
-    if (inst == nullptr || spec == nullptr || spec->point < 0
-        || spec->point >= AGENTXX_PLUGIN_HOOK_COUNT || !spec->hook_start) {
-        return -1;
-    }
-    if (!acceptsRegistration(inst)) {
-        XX_LOGW("插件 `{}` registerHook 被拒绝: 实例正在关闭或已禁用", inst->name);
-        return -1;
-    }
-    // 基础入口: 同一实例同一个点只保留一个处理器 (重复登记 = 覆盖)
-    for (auto& record : inst->hookRegistrations) {
-        if (record.base && record.point == spec->point) {
-            if (record.handle > 0) {
-                removeHookHandler(record.handle, inst, /*checkOwner=*/true);
-            }
-            record.handle = 0;
-        }
-    }
-    std::erase_if(inst->hookRegistrations, [spec](const PluginInstance::HookRegistration& record) {
-        return record.base && record.point == spec->point;
-    });
-
-    HookHandlerEntry entry;
-    entry.point    = spec->point;
-    entry.priority = agentxx::feature::kPluginDefaultPriority;
-    entry.owner    = fmt::format("plugin:{}", inst->name);
-    entry.load     = (inst->builtinUnload != nullptr) ? "builtin" : "dynamic";
-    entry.inst     = inst->self;
-    entry.spec     = *spec;
-
-    const int64_t handle = insertHookHandler(std::move(entry));
-    inst->hookRegistrations.push_back(PluginInstance::HookRegistration{spec->point, handle, true});
-    return 0;
-}
-
-int PluginManager::unregisterHook(PluginInstance* inst, AgentxxPluginHookPoint point) {
-    if (inst == nullptr || point < 0 || point >= AGENTXX_PLUGIN_HOOK_COUNT) {
-        return -1;
-    }
-    auto it = std::find_if(
-        inst->hookRegistrations.begin(),
-        inst->hookRegistrations.end(),
-        [point](const PluginInstance::HookRegistration& record) {
-            return record.base && record.point == static_cast<int32_t>(point);
-        }
-    );
-    if (it == inst->hookRegistrations.end()) {
-        return -1;
-    }
-    const int64_t handle = it->handle;
-    it->handle           = 0;
-    if (handle > 0) {
-        removeHookHandler(handle, inst, /*checkOwner=*/true);
-    }
-    std::erase_if(inst->hookRegistrations, [point](const PluginInstance::HookRegistration& record) {
-        return record.base && record.point == static_cast<int32_t>(point);
-    });
-    return 0;
-}
-
-int PluginManager::registerHookEx(
+int PluginManager::registerHook(
     PluginInstance*                inst,
     const AgentxxPluginHookSpecEx* spec,
     int64_t*                       outHandle
@@ -327,11 +267,11 @@ int PluginManager::registerHookEx(
     }
     // 长度门槛: 0 = 基线布局, 低于基线一律拒绝 (见 plugin_spec.h)
     if (!agentxx::plugin::specSizeOk<AgentxxPluginHookSpecEx>(spec->struct_size)) {
-        XX_LOGW("插件 `{}` registerHookEx 被拒绝: struct_size 过小", inst->name);
+        XX_LOGW("插件 `{}` register_hook 被拒绝: struct_size 过小", inst->name);
         return -1;
     }
     if (!acceptsRegistration(inst)) {
-        XX_LOGW("插件 `{}` registerHookEx 被拒绝: 实例正在关闭或已禁用", inst->name);
+        XX_LOGW("插件 `{}` register_hook 被拒绝: 实例正在关闭或已禁用", inst->name);
         return -1;
     }
 
@@ -349,12 +289,12 @@ int PluginManager::registerHookEx(
     entry.spec.user_data   = spec->user_data;
 
     const int64_t handle = insertHookHandler(std::move(entry));
-    inst->hookRegistrations.push_back(PluginInstance::HookRegistration{spec->point, handle, false});
+    inst->hookRegistrations.push_back(PluginInstance::HookRegistration{spec->point, handle});
     *outHandle = handle;
     return 0;
 }
 
-int PluginManager::unregisterHookEx(PluginInstance* inst, int64_t handle) {
+int PluginManager::unregisterHook(PluginInstance* inst, int64_t handle) {
     if (inst == nullptr || handle <= 0) {
         return -1;
     }

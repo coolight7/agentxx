@@ -81,9 +81,184 @@ PluginManager::PluginManager(std::weak_ptr<agentxx::agent::AgentContext> agentCo
     setDomainHooks(this);
     if (auto ctx = agentContext_.lock()) {
         registry_ = ctx->toolRegistry ? ctx->toolRegistry : std::make_shared<ToolRegistry>();
+        // 本挂载的 agent 标识: 单根用法下就是 "root" (AgentHost 可覆写成 "sub:N")
+        agentId_ = "root";
     } else {
         registry_ = std::make_shared<ToolRegistry>();
     }
+}
+
+// =====================================================================
+// 挂载 (本管理器 = 一个 agent 的挂载)
+// =====================================================================
+
+bool PluginManager::mountOf(const PluginxxScopeRef* ref) const {
+    if (!pluginxx_scope_ref_ok(ref) || ref == nullptr) {
+        return false;
+    }
+    if (ref->id.data == nullptr || ref->id.size == 0 || agentId_.empty()) {
+        return false;
+    }
+    if (agentId_.size() != static_cast<size_t>(ref->id.size)
+        || agentId_.compare(0, agentId_.size(), ref->id.data, agentId_.size()) != 0) {
+        return false;
+    }
+    // seq = 0 表示不校验 (FFI / 测试自行构造引用时可用)
+    return ref->seq == 0 || ref->seq == mountSeq_;
+}
+
+namespace {
+
+/// 把 C 字符串视图转成自有字符串
+std::string mountViewToStr(const PluginxxStringView& sv) {
+    if (sv.data == nullptr || sv.size == 0) {
+        return {};
+    }
+    return std::string{sv.data, static_cast<size_t>(sv.size)};
+}
+
+} // namespace
+
+asio::awaitable<void> PluginManager::mountAgentAsync() {
+    if (hasMount_) {
+        co_return; // 幂等
+    }
+    auto ctx = agentContext_.lock();
+    if (!ctx) {
+        co_return;
+    }
+
+    ++mountSeq_;
+
+    // 挂载入参: agent 标识/工作目录/语言/模型/挂载配置
+    std::string workDir   = getSessionWorkDir();
+    std::string language  = getLanguage();
+    std::string modelJson = getModelConfigJson();
+    const std::string agentName = ctx->agentConfig ? ctx->agentConfig->agentName : std::string{};
+
+    for (auto& [name, inst] : this->plugins_) {
+        (void)name;
+        if (!inst) {
+            continue;
+        }
+        if (!inst->mountFn) {
+            inst->pluginMounted = true; // 无挂载入口 = 本插件无 agent 侧能力
+            continue;
+        }
+        inst->mountSeq      = mountSeq_;
+        inst->mountUserData = nullptr;
+
+        const std::string configJson = inst->args.dump();
+        AgentxxPluginAgentMountSpec spec{};
+        spec.struct_size = sizeof(AgentxxPluginAgentMountSpec);
+        spec.flags       = 0;
+        spec.agent_id    = PluginStringView::from(agentId_);
+        spec.agent_name  = PluginStringView::from(agentName);
+        spec.work_dir    = PluginStringView::from(workDir);
+        spec.language    = PluginStringView::from(language);
+        spec.model_json  = PluginStringView::from(modelJson);
+        spec.config_json = PluginStringView::from(configJson);
+        spec.mount_seq   = mountSeq_;
+
+        std::string mountError;
+        auto        instPtr     = inst;
+        void*       mountResult = nullptr;
+        const bool  ok          = co_await pluginxx::awaitPluginLifecycle(
+            this->runtime(),
+            instPtr,
+            instPtr->pluginCtx,
+            [instPtr, &spec, &mountResult](const PluginxxOperatorNotify* notify, PluginxxString* err) {
+                mountResult = instPtr->mountFn(instPtr->pluginCtx, &spec, notify, err);
+                return mountResult;
+            },
+            "plugin mount",
+            mountError
+        );
+        if (!ok) {
+            XX_LOGE("agent '{}' 挂载插件 `{}` 失败: {}", agentId_, inst->name, mountError);
+            inst->mountUserData = nullptr;
+            inst->pluginMounted = false;
+            continue;
+        }
+        inst->mountUserData = mountResult;
+        inst->pluginMounted = true;
+    }
+
+    hasMount_ = true;
+    XX_LOGI("agent '{}' 完成插件挂载 (seq {})", agentId_, mountSeq_);
+    co_return;
+}
+
+asio::awaitable<void> PluginManager::unmountAgentAsync() {
+    if (!hasMount_) {
+        co_return;
+    }
+    // 逆序卸载
+    for (auto it = this->plugins_.rbegin(); it != this->plugins_.rend(); ++it) {
+        auto inst = it->second;
+        if (!inst || !inst->unmountFn || !inst->pluginMounted) {
+            continue;
+        }
+        std::string unmountError;
+        auto        instPtr = inst;
+        void*       mountUd = inst->mountUserData;
+        const bool  ok      = co_await pluginxx::awaitPluginLifecycle(
+            this->runtime(),
+            instPtr,
+            instPtr->pluginCtx,
+            [instPtr, mountUd](const PluginxxOperatorNotify* notify, PluginxxString* err) {
+                return instPtr->unmountFn(instPtr->pluginCtx, mountUd, notify, err);
+            },
+            "plugin unmount",
+            unmountError
+        );
+        if (!ok) {
+            XX_LOGW("agent '{}' 卸载插件 `{}` 失败: {}", agentId_, inst->name, unmountError);
+        }
+        inst->pluginMounted = false;
+        inst->mountUserData = nullptr;
+    }
+    hasMount_ = false;
+    XX_LOGI("agent '{}' 已拆全部插件挂载", agentId_);
+    co_return;
+}
+
+std::string PluginManager::listMountsJson() {
+    utilxx_base::Json arr = utilxx_base::Json::array();
+    if (!hasMount_ || agentId_.empty()) {
+        return arr.dump();
+    }
+    auto              ctx = agentContext_.lock();
+    utilxx_base::Json item;
+    item["agentId"]   = agentId_;
+    item["agentName"] = ctx && ctx->agentConfig ? ctx->agentConfig->agentName : std::string{};
+    item["workDir"]   = getSessionWorkDir();
+    item["language"]  = getLanguage();
+    item["mountSeq"]  = mountSeq_;
+    utilxx_base::Json names = utilxx_base::Json::array();
+    for (const auto& [name, inst] : this->plugins_) {
+        if (inst && inst->pluginMounted) {
+            names.push_back(name);
+        }
+    }
+    item["plugins"] = std::move(names);
+    arr.push_back(std::move(item));
+    return arr.dump();
+}
+
+std::string PluginManager::mountInfoJson(std::string_view agentId) {
+    if (agentId != agentId_ || !hasMount_) {
+        return {};
+    }
+    auto text = listMountsJson();
+    try {
+        auto arr = utilxx_base::Json::parse(text);
+        if (arr.is_array() && !arr.empty()) {
+            return arr[0].dump();
+        }
+    } catch (...) {
+    }
+    return {};
 }
 
 PluginManager::~PluginManager() {
@@ -157,10 +332,11 @@ void PluginManager::detachDomainRegistrations(PluginInstance* inst) {
         }
     }
 
-    // 执行图定义独占 slot: 占用者禁用/卸载时恢复占用前的定义 ("回到内置")
+    // 执行图定义独占 slot: 占用者卸载时恢复占用前的定义 ("回到内置")
     releaseGraphDefinitionSlot(inst);
 
-    restorePromptBackup(inst);
+    // 提示词: 删除本实例的全部贡献并重新合成受影响键 (不写回旧值, 不顶掉别人)
+    removePromptContributions(fmt::format("plugin:{}", inst->name));
 
     // 钩子处理器: 从注册表摘除本实例的全部处理器 (记录保留, 句柄置 0);
     // 没有处理器时派发器按需摘除 (轮次执行中先停用, 轮末真正摘除)
@@ -212,6 +388,48 @@ void PluginManager::onInstanceEnabledChanged(PluginInstance& inst, bool enabled)
         if (c->resourceApplier) {
             c->resourceApplier->setOwnerEnabled(inst.name, enabled);
         }
+    }
+}
+
+/// 实例加载完成: 解析插件侧的挂载/卸载入口 (`agentxx_plugin_agent_{mount,unmount}`)
+///
+/// - 两个符号都是**可选能力**: 缺失说明本插件不提供 agent 侧能力,
+///   它的 `start` 里也不应该注册任何 agent 级实体 (会被 `ERR_NO_AGENT` 拒);
+/// - 内置插件由框架下发的 `PluginxxBuiltinInfo` 直接给出函数指针
+///   (合并编译时符号已改名, 不能按名查找)。
+void PluginManager::onInstanceLoaded(PluginInstance& inst) {
+    inst.mountFn   = nullptr;
+    inst.unmountFn = nullptr;
+
+    if (inst.dlHandle) {
+        std::string symErr;
+        void*       mountSym
+            = pluginxx::NativeLoader::sym(inst.dlHandle, AGENTXX_PLUGIN_AGENT_SYMBOL_MOUNT, symErr);
+        symErr.clear();
+        void* unmountSym = pluginxx::NativeLoader::sym(
+            inst.dlHandle,
+            AGENTXX_PLUGIN_AGENT_SYMBOL_UNMOUNT,
+            symErr
+        );
+        inst.mountFn   = reinterpret_cast<AgentxxPluginAgentMountFn>(mountSym);
+        inst.unmountFn = reinterpret_cast<AgentxxPluginAgentUnmountFn>(unmountSym);
+        return;
+    }
+
+    // 内置插件: 按名查内置描述
+    uint64_t                   count = 0;
+    const PluginxxBuiltinInfo* table = get_builtin_plugins(&count);
+    for (uint64_t i = 0; i < count; ++i) {
+        const auto& entry = table[i];
+        if (entry.name.data == nullptr) {
+            continue;
+        }
+        if (std::string_view{entry.name.data, static_cast<size_t>(entry.name.size)} != inst.name) {
+            continue;
+        }
+        inst.mountFn   = reinterpret_cast<AgentxxPluginAgentMountFn>(entry.mount);
+        inst.unmountFn = reinterpret_cast<AgentxxPluginAgentUnmountFn>(entry.unmount);
+        break;
     }
 }
 

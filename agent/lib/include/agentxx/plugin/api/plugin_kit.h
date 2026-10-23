@@ -130,6 +130,8 @@ struct AgentIfaces {
     const AgentxxPluginFeatureIface* feature = nullptr;
     /// "pluginxx.coroutine_runtime": 协程驱动 (host driver/wake 协议)。
     const PluginxxCoroutineRuntimeIface* coroutineRuntime = nullptr;
+    /// "agentxx.agent.mount": 挂载查询 (诊断与自查)
+    const AgentxxPluginMountIface* mount = nullptr;
 
     /// 从主程序查询全部已知 agent 侧接口表 (host 为空时返回全 NULL 聚合)
     static AgentIfaces query(const PluginxxHost* host) {
@@ -169,6 +171,7 @@ struct AgentIfaces {
         f.tasks = queryInterface<PluginxxTasksIface>(host, PLUGINXX_IFACE_TASKS);
         f.coroutineRuntime
             = queryInterface<PluginxxCoroutineRuntimeIface>(host, PLUGINXX_IFACE_COROUTINE_RUNTIME);
+        f.mount = queryInterface<AgentxxPluginMountIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_MOUNT);
         return f;
     }
 };
@@ -462,28 +465,38 @@ public:
     }
 
     /// 写入会话共享存储 (经主程序 agentxx.agent.session 接口表)
-    int64_t addShareStore(PluginxxStringView tid, std::string_view content) const {
+    int64_t addShareStore(
+        const ScopeRef&   agent,
+        PluginxxStringView tid,
+        std::string_view  content
+    ) const {
         if (!host || !iface.session || !iface.session->add_share_store) {
             return -1;
         }
+        auto ref       = agent.raw();
         auto contentSv = PluginStringView::from(content.data(), content.size());
-        return iface.session->add_share_store(host, &tid, &contentSv);
+        return iface.session->add_share_store(host, &ref, &tid, &contentSv);
     }
 
-    int64_t addShareStore(std::string_view tid, std::string_view content) const {
-        return addShareStore(PluginStringView::from(tid.data(), tid.size()), content);
+    int64_t addShareStore(
+        const ScopeRef&  agent,
+        std::string_view tid,
+        std::string_view content
+    ) const {
+        return addShareStore(agent, PluginStringView::from(tid.data(), tid.size()), content);
     }
 
     /// 读取会话 LLM 上下文 (经主程序 agentxx.agent.context 接口表)
     /// - 上下文不在图状态里 (会话为唯一权威), 需要内容时经此查询
     /// - 返回 JSON 数组文本; 主程序未实现该能力或查询失败时返回空串
-    std::string getSessionMessages(std::string_view tid) const {
+    std::string getSessionMessages(const ScopeRef& agent, std::string_view tid) const {
         if (!host || !iface.context || !iface.context->get_messages) {
             return {};
         }
+        auto           ref   = agent.raw();
         auto           tidSv = PluginStringView::from(tid.data(), tid.size());
         PluginxxString out{nullptr, 0};
-        if (iface.context->get_messages(host, &tidSv, &out) != 0 || !out.data) {
+        if (iface.context->get_messages(host, &ref, &tidSv, &out) != 0 || !out.data) {
             return {};
         }
         std::string text{out.data, static_cast<size_t>(out.size)};
@@ -492,12 +505,13 @@ public:
     }
 
     /// 会话 LLM 上下文条数 (主程序未实现该能力时返回 -1)
-    int64_t sessionMessagesCount(std::string_view tid) const {
+    int64_t sessionMessagesCount(const ScopeRef& agent, std::string_view tid) const {
         if (!host || !iface.context || !iface.context->messages_count) {
             return -1;
         }
+        auto ref   = agent.raw();
         auto tidSv = PluginStringView::from(tid.data(), tid.size());
-        return iface.context->messages_count(host, &tidSv);
+        return iface.context->messages_count(host, &ref, &tidSv);
     }
 
 protected:
@@ -538,6 +552,124 @@ private:
     PluginxxSubscription* roundStartSub_ = nullptr;
 };
 
+/* ==================== per-agent 引用与状态表 ==================== */
+
+/// per-agent 引用的值类型: 挂载时下发, 存进 per-agent 状态, 之后任何线程直接用
+///
+/// - `id()`: agentId; `seq()`: 挂载序号 (同一 id 重新挂载会变)
+/// - `raw()`: 传给接口表的借用视图 (指向本对象内部, 不要长期保存)
+class AgentRef : public ScopeRef {
+public:
+
+    AgentRef() = default;
+
+    /// 从挂载入参构造 (自动拷 id 并带上序号)
+    explicit AgentRef(const AgentxxPluginAgentMountSpec& spec) :
+        ScopeRef(
+            spec.agent_id.data && spec.agent_id.size > 0
+                ? std::string(spec.agent_id.data, static_cast<size_t>(spec.agent_id.size))
+                : std::string{},
+            spec.mount_seq
+        ) {}
+};
+
+/// per-agent 状态表 (放在 plugin_ctx 里; 只在宿主 io 线程访问, 无需加锁)
+///
+/// `T` 需要有一个可赋值的 `AgentRef ref` 成员 (或自己持有 `AgentRef`)。
+/// 键 = agentId, 但命中需要 **id 与 seq 都匹配** —— 旧挂载留下的引用会被拒绝。
+template<typename T>
+class MountStore {
+public:
+
+    /// 建立一份状态 (id 已存在时返回已有项, 不改 ref)
+    T* create(const AgentRef& ref) {
+        auto [pos, inserted] = items_.try_emplace(std::string{ref.id()});
+        if (inserted) {
+            pos->second = std::make_unique<T>();
+            pos->second->ref = ref;
+        }
+        return pos->second.get();
+    }
+
+    /// 按引用查找 (id 与 seq 都要匹配; 否则返回 nullptr)
+    T* find(const AgentRef& ref) const {
+        auto it = items_.find(std::string{ref.id()});
+        if (it == items_.end() || !it->second || it->second->ref.seq() != ref.seq()) {
+            return nullptr;
+        }
+        return it->second.get();
+    }
+
+    T* findById(std::string_view agentId) const {
+        auto it = items_.find(std::string{agentId});
+        return it == items_.end() ? nullptr : it->second.get();
+    }
+
+    void erase(const AgentRef& ref) {
+        auto it = items_.find(std::string{ref.id()});
+        if (it != items_.end() && it->second && ref.seq() != 0 && it->second->ref.seq() != ref.seq()) {
+            return; // 序号不匹配: 不是本浸挂载的
+        }
+        items_.erase(std::string{ref.id()});
+    }
+
+    size_t size() const noexcept {
+        return items_.size();
+    }
+
+    bool empty() const noexcept {
+        return items_.empty();
+    }
+
+    template<typename Fn>
+    void forEach(Fn&& fn) const {
+        for (const auto& [id, item] : items_) {
+            if (item) {
+                fn(*item);
+            }
+        }
+    }
+
+private:
+
+    std::map<std::string, std::unique_ptr<T>, std::less<>> items_;
+};
+
+/// 全部挂载的摘要 JSON 数组 (主程序不支持时返回 `[]`)
+inline std::string listMounts(const PluginBase& ctx) {
+    if (!ctx.host || !ctx.iface.mount || !ctx.iface.mount->list) {
+        return "[]";
+    }
+    PluginxxString out{nullptr, 0};
+    if (ctx.iface.mount->list(ctx.host, &out) != 0 || !out.data) {
+        if (out.data) {
+            PluginString::free(ctx.host, &out);
+        }
+        return "[]";
+    }
+    std::string text{out.data, static_cast<size_t>(out.size)};
+    PluginString::free(ctx.host, &out);
+    return text;
+}
+
+/// 按 agentId 查一个挂载的摘要 (没有这个挂载返回空串)
+inline std::string mountInfoOf(const PluginBase& ctx, std::string_view agentId) {
+    if (!ctx.host || !ctx.iface.mount || !ctx.iface.mount->get) {
+        return {};
+    }
+    auto           idSv = PluginStringView::from(agentId.data(), agentId.size());
+    PluginxxString out{nullptr, 0};
+    if (ctx.iface.mount->get(ctx.host, &idSv, &out) != 0 || !out.data) {
+        if (out.data) {
+            PluginString::free(ctx.host, &out);
+        }
+        return {};
+    }
+    std::string text{out.data, static_cast<size_t>(out.size)};
+    PluginString::free(ctx.host, &out);
+    return text;
+}
+
 /* ==================== 插件框架 detail 名的引入 (pluginxx/kit/kit.h) ====================
  *
  * 业务 helper (polled_tool / graph node / call_tool awaiter) 需要插件框架协程设施的
@@ -572,6 +704,10 @@ using pluginxx::detail::YieldAwaiter;
 struct CallToolState {
     const PluginxxHost*            host  = nullptr;
     const AgentxxPluginToolsIface* tools = nullptr;
+    /// 目标 agent 引用 (借用视图指向调用方 AgentRef; 仅本次调用期间有效)
+    const PluginxxScopeRef* agent = nullptr;
+    /// 取消句柄用的表 (操作取消统一收拢到 `pluginxx.cancel`)
+    const PluginxxCancelIface* cancel = nullptr;
     /// 协程驱动桥 (可空): 完成回调经它投递 continuation 并唤醒 driver。
     PollOneBridge*            bridge = nullptr;
     std::string               name;
@@ -594,7 +730,9 @@ struct CallToolAwaiter {
         std::string_view               in_name,
         std::string_view               in_args,
         std::string_view               in_tid,
-        PollOneBridge*                 in_bridge = nullptr
+        PollOneBridge*                 in_bridge = nullptr,
+        const PluginxxScopeRef*        in_agent  = nullptr,
+        const PluginxxCancelIface*     in_cancel = nullptr
     ) :
         st(std::make_shared<CallToolState>()) {
         st->host      = in_host;
@@ -603,6 +741,8 @@ struct CallToolAwaiter {
         st->argsJson  = std::string(in_args);
         st->sessionId = std::string(in_tid);
         st->bridge    = in_bridge;
+        st->agent     = in_agent;
+        st->cancel    = in_cancel;
     }
 
     bool await_ready() const noexcept {
@@ -622,6 +762,7 @@ struct CallToolAwaiter {
 
         st->opHandle = st->tools->call_tool_async(
             st->host,
+            st->agent,
             &nameSv,
             &argsSv,
             &tidSv,
@@ -670,8 +811,8 @@ struct CallToolAwaiter {
                 std::memory_order_acq_rel
             )) {
             h.promise().set_outstanding([st = this->st]() {
-                if (st->tools && st->tools->op_cancel && st->opHandle) {
-                    st->tools->op_cancel(st->opHandle);
+                if (st->cancel && st->cancel->op_cancel && st->opHandle) {
+                    st->cancel->op_cancel(st->opHandle);
                 }
             });
             return true;
@@ -696,18 +837,22 @@ struct CallToolAwaiter {
 } // namespace detail
 
 inline detail::CallToolAwaiter call_tool(
-    const PluginBase& ctx,
-    std::string_view  name,
-    std::string_view  argsJson,
-    std::string_view  sessionId = {}
+    const PluginBase&  ctx,
+    const ScopeRef&    agent,
+    std::string_view   name,
+    std::string_view   argsJson,
+    std::string_view   sessionId = {}
 ) {
+    auto ref = agent.raw();
     return detail::CallToolAwaiter{
         ctx.host,
         ctx.iface.tools,
         name,
         argsJson,
         sessionId,
-        &ctx.bridge()
+        &ctx.bridge(),
+        &ref,
+        ctx.iface.cancel
     };
 }
 
@@ -766,6 +911,10 @@ inline std::string wrapFeatureAnswer(std::string_view raw) {
 struct FeatureCallState {
     const PluginxxHost*              host    = nullptr;
     const AgentxxPluginFeatureIface* feature = nullptr;
+    /// 目标 agent 引用 (借用视图; 仅本次调用期间有效)
+    const PluginxxScopeRef* agent = nullptr;
+    /// 取消句柄用的表 (操作取消统一收拢到 `pluginxx.cancel`)
+    const PluginxxCancelIface* cancel = nullptr;
     /// 协程驱动桥 (可空): 完成回调经它投递 continuation 并唤醒 driver。
     PollOneBridge*            bridge = nullptr;
     std::string               pointId;
@@ -787,7 +936,9 @@ struct FeatureCallAwaiter {
         const AgentxxPluginFeatureIface* in_feature,
         std::string_view                 in_pointId,
         std::string_view                 in_args,
-        PollOneBridge*                   in_bridge = nullptr
+        PollOneBridge*                   in_bridge = nullptr,
+        const PluginxxScopeRef*          in_agent  = nullptr,
+        const PluginxxCancelIface*       in_cancel = nullptr
     ) :
         st(std::make_shared<FeatureCallState>()) {
         st->host     = in_host;
@@ -795,6 +946,8 @@ struct FeatureCallAwaiter {
         st->pointId  = std::string(in_pointId);
         st->argsJson = std::string(in_args);
         st->bridge   = in_bridge;
+        st->agent    = in_agent;
+        st->cancel   = in_cancel;
     }
 
     bool await_ready() const noexcept {
@@ -813,6 +966,7 @@ struct FeatureCallAwaiter {
 
         st->opHandle = st->feature->call_point_async(
             st->host,
+            st->agent,
             &idSv,
             &argsSv,
             [](void* ud, int32_t cbSt, const PluginxxStringView* pl) {
@@ -860,8 +1014,8 @@ struct FeatureCallAwaiter {
                 std::memory_order_acq_rel
             )) {
             h.promise().set_outstanding([st = this->st]() {
-                if (st->feature && st->feature->op_cancel && st->opHandle) {
-                    st->feature->op_cancel(st->opHandle);
+                if (st->cancel && st->cancel->op_cancel && st->opHandle) {
+                    st->cancel->op_cancel(st->opHandle);
                 }
             });
             return true;
@@ -890,10 +1044,15 @@ struct FeatureCallAwaiter {
 /// 声明插件自己的功能点 (本轮只允许 provide; 声明期间恒可被调用)
 ///
 /// `return`: 0 成功; 非 0 失败 (id 非法 / 类型不支持 / 与主程序点冲突)
-inline int32_t defineFeaturePoint(const PluginBase& ctx, const FeaturePointSpec& spec) {
+inline int32_t defineFeaturePoint(
+    const PluginBase&      ctx,
+    const ScopeRef&        agent,
+    const FeaturePointSpec& spec
+) {
     if (!ctx.iface.feature || !ctx.iface.feature->define_point) {
         return -1;
     }
+    auto ref = agent.raw();
     AgentxxPluginFeaturePointSpec native{};
     native.struct_size     = sizeof(AgentxxPluginFeaturePointSpec);
     native.type            = AGENTXX_PLUGIN_FEATURE_TYPE_PROVIDE;
@@ -903,16 +1062,17 @@ inline int32_t defineFeaturePoint(const PluginBase& ctx, const FeaturePointSpec&
     native.depict          = PluginStringView::from(spec.depict.data(), spec.depict.size());
     native.args_doc        = PluginStringView::from(spec.argsDoc.data(), spec.argsDoc.size());
     native.result_doc      = PluginStringView::from(spec.resultDoc.data(), spec.resultDoc.size());
-    return ctx.iface.feature->define_point(ctx.host, &native);
+    return ctx.iface.feature->define_point(ctx.host, &ref, &native);
 }
 
 /// 撤销插件自己的点 (连带撤掉这些点上的全部实现)
-inline int32_t undefineFeaturePoint(const PluginBase& ctx, std::string_view id) {
+inline int32_t undefineFeaturePoint(const PluginBase& ctx, const ScopeRef& agent, std::string_view id) {
     if (!ctx.iface.feature || !ctx.iface.feature->undefine_point) {
         return -1;
     }
+    auto ref  = agent.raw();
     auto idSv = PluginStringView::from(id.data(), id.size());
-    return ctx.iface.feature->undefine_point(ctx.host, &idSv);
+    return ctx.iface.feature->undefine_point(ctx.host, &ref, &idSv);
 }
 
 /// 把协程实现 (`Task<T>`) 的返回值包成主程序认识的回答 JSON
@@ -1094,6 +1254,7 @@ inline detail::FeatureCallAwaiter
 template<typename Ctx, typename TaskFn>
 inline void tool(
     Ctx&             ctx,
+    const ScopeRef&  agent,
     std::string_view name,
     std::string_view depict,
     std::string_view schema,
@@ -1111,13 +1272,17 @@ inline void tool(
 
     struct ToolShim {
         Ctx*                               ctx = nullptr;
+        ScopeRef                           agent;
         std::decay_t<TaskFn>               fn;
         std::shared_ptr<std::atomic<bool>> cancelFlag;
     };
 
-    auto shim = ctx.storeShim(std::make_unique<ToolShim>(
-        ToolShim{&ctx, std::forward<TaskFn>(fn), std::make_shared<std::atomic<bool>>(false)}
-    ));
+    auto shim = ctx.storeShim(std::make_unique<ToolShim>(ToolShim{
+        &ctx,
+        agent,
+        std::forward<TaskFn>(fn),
+        std::make_shared<std::atomic<bool>>(false)
+    }));
 
     struct Job {
         ToolShim*                          shim;
@@ -1174,7 +1339,8 @@ inline void tool(
             shim->ctx ? shim->ctx->host : nullptr,
             shim->ctx ? shim->ctx->iface.cancel : nullptr,
             request.sessionId,
-            cancelReg
+            cancelReg,
+            shim->agent
         };
 
         auto* job = new Job{shim, cancelFlag, nullptr, std::move(request), std::move(ctl)};
@@ -1222,13 +1388,15 @@ inline void tool(
     };
 
     if (ctx.iface.tools && ctx.iface.tools->register_tool) {
-        ctx.iface.tools->register_tool(ctx.host, &spec);
+        auto ref = agent.raw();
+        ctx.iface.tools->register_tool(ctx.host, &ref, &spec);
     }
 }
 
 template<typename Ctx, typename SyncFn>
 inline void fast_tool(
     Ctx&             ctx,
+    const ScopeRef&  agent,
     std::string_view name,
     std::string_view depict,
     std::string_view schema,
@@ -1316,13 +1484,15 @@ inline void fast_tool(
     spec.execute_cancel = nullptr;
 
     if (ctx.iface.tools && ctx.iface.tools->register_tool) {
-        ctx.iface.tools->register_tool(ctx.host, &spec);
+        auto ref = agent.raw();
+        ctx.iface.tools->register_tool(ctx.host, &ref, &spec);
     }
 }
 
 template<typename Ctx, typename BlockFn>
 inline void blocking_tool(
     Ctx&             ctx,
+    const ScopeRef&  agent,
     std::string_view name,
     std::string_view depict,
     std::string_view schema,
@@ -1340,11 +1510,13 @@ inline void blocking_tool(
 
     struct BlockShim {
         Ctx*                  ctx = nullptr;
+        ScopeRef              agent;
         std::decay_t<BlockFn> fn;
     };
 
-    auto shim
-        = ctx.storeShim(std::make_unique<BlockShim>(BlockShim{&ctx, std::forward<BlockFn>(fn)}));
+    auto shim = ctx.storeShim(
+        std::make_unique<BlockShim>(BlockShim{&ctx, agent, std::forward<BlockFn>(fn)})
+    );
 
     struct Job {
         BlockShim*              shim = nullptr;
@@ -1388,7 +1560,8 @@ inline void blocking_tool(
         std::string workDirCache;
         std::string argsJsonCache;
         if (shim && shim->ctx) {
-            workDirCache  = shim->ctx->workDir(tidStr);
+            auto agentRaw = shim->agent.raw();
+            workDirCache  = shim->ctx->workDir(&agentRaw, tidStr);
             argsJsonCache = shim->ctx->argsJson();
             if (!tidStr.empty() && shim->ctx->cancelRegistry.isCancelled(tidStr)) {
                 shim->ctx->cancelRegistry.cancel(tidStr);
@@ -1566,7 +1739,8 @@ inline void blocking_tool(
     };
 
     if (ctx.iface.tools && ctx.iface.tools->register_tool) {
-        ctx.iface.tools->register_tool(ctx.host, &spec);
+        auto ref = agent.raw();
+        ctx.iface.tools->register_tool(ctx.host, &ref, &spec);
     }
 }
 
@@ -1674,6 +1848,7 @@ inline asio::awaitable<void> runPolledPumpJob(Job* job) {
 template<typename Ctx, typename PolledFn>
 inline void polled_tool(
     Ctx&             ctx,
+    const ScopeRef&  agent,
     std::string_view name,
     std::string_view depict,
     std::string_view schema,
@@ -1704,11 +1879,13 @@ inline void polled_tool(
 
     struct PolledShim {
         Ctx*         ctx = nullptr;
+        ScopeRef     agent;
         PolledFnType fn;
     };
 
-    auto shim
-        = ctx.storeShim(std::make_unique<PolledShim>(PolledShim{&ctx, std::forward<PolledFn>(fn)}));
+    auto shim = ctx.storeShim(
+        std::make_unique<PolledShim>(PolledShim{&ctx, agent, std::forward<PolledFn>(fn)})
+    );
 
     /// 一次 polled 根操作的拥有型状态。
     /// 生命周期: 业务协程帧 + [detail::runPolledPumpJob] 的收尾;
@@ -1786,7 +1963,8 @@ inline void polled_tool(
         job->request    = std::move(request);
         job->tid        = job->request.sessionId;
         job->args       = job->request.argsJson;
-        job->workDir    = c.workDir(job->tid);
+        auto agentRaw = s->agent.raw();
+        job->workDir  = c.workDir(&agentRaw, job->tid);
         job->cancelFlag = cancelFlag;
         job->root       = std::make_shared<detail::PolledRoot>(job->notify);
         job->token      = PluginxxCancelToken{kTokenIsRequested, job};
@@ -1847,7 +2025,8 @@ inline void polled_tool(
     };
 
     if (ctx.iface.tools && ctx.iface.tools->register_tool) {
-        ctx.iface.tools->register_tool(ctx.host, &spec);
+        auto ref = agent.raw();
+        ctx.iface.tools->register_tool(ctx.host, &ref, &spec);
     }
 }
 
@@ -1983,20 +2162,24 @@ inline void hookCancel(void* user_data, void* op) {
 } // namespace detail
 
 template<typename Ctx, typename HookFn>
-inline void hook(Ctx& ctx, AgentxxPluginHookPoint point, HookFn&& fn) {
+inline void hook(Ctx& ctx, const ScopeRef& agent, AgentxxPluginHookPoint point, HookFn&& fn) {
     using ShimT = detail::HookShim<Ctx, HookFn>;
 
     auto shim = ctx.storeShim(std::make_unique<ShimT>(ShimT{&ctx, std::forward<HookFn>(fn)}));
 
-    AgentxxPluginHookSpec spec{};
-    spec.struct_size = sizeof(AgentxxPluginHookSpec);
+    AgentxxPluginHookSpecEx spec{};
+    spec.struct_size = sizeof(AgentxxPluginHookSpecEx);
     spec.point       = point;
+    spec.priority    = 0;
+    spec.flags       = 0;
     spec.user_data   = shim;
     spec.hook_start  = &detail::hookStart<Ctx, HookFn>;
     spec.hook_cancel = &detail::hookCancel<Ctx, HookFn>;
 
     if (ctx.iface.hooks && ctx.iface.hooks->register_hook) {
-        ctx.iface.hooks->register_hook(ctx.host, &spec);
+        auto    ref    = agent.raw();
+        int64_t handle = 0;
+        ctx.iface.hooks->register_hook(ctx.host, &ref, &spec, &handle);
     }
 }
 
@@ -2022,10 +2205,15 @@ struct HookOptions {
 ///
 /// 撤销: [unhookEx] 按句柄精确撤销; 不撤销也会随实例卸载一并摘除。
 template<typename Ctx, typename HookFn>
-inline int64_t
-    hookEx(Ctx& ctx, AgentxxPluginHookPoint point, HookFn&& fn, const HookOptions& opts = {}) {
-    if (!ctx.iface.hooks || !ctx.iface.hooks->register_hook_ex) {
-        return 0; // 主程序不支持有序登记
+inline int64_t hookEx(
+    Ctx&                  ctx,
+    const ScopeRef&       agent,
+    AgentxxPluginHookPoint point,
+    HookFn&&              fn,
+    const HookOptions&    opts = {}
+) {
+    if (!ctx.iface.hooks || !ctx.iface.hooks->register_hook) {
+        return 0; // 主程序不支持钩子登记
     }
     using ShimT = detail::HookShim<Ctx, HookFn>;
 
@@ -2042,35 +2230,43 @@ inline int64_t
     spec.hook_start  = &detail::hookStart<Ctx, HookFn>;
     spec.hook_cancel = &detail::hookCancel<Ctx, HookFn>;
 
+    auto    ref    = agent.raw();
     int64_t handle = 0;
-    if (ctx.iface.hooks->register_hook_ex(ctx.host, &spec, &handle) != 0) {
+    if (ctx.iface.hooks->register_hook(ctx.host, &ref, &spec, &handle) != 0) {
         return 0;
     }
     return handle;
 }
 
-/// 撤销一个有序登记的钩子处理器 (按句柄; 不是本实例的句柄会被主程序拒绝)
+/// 撤销一个钩子处理器 (按句柄; 不是本挂载的句柄会被主程序拒绝)
 ///
 /// `return`: 0 成功; 非 0 失败 (主程序不支持 / 句柄不存在)
 template<typename Ctx>
-inline int32_t unhookEx(Ctx& ctx, int64_t handle) {
-    if (!ctx.iface.hooks || !ctx.iface.hooks->unregister_hook_ex || handle <= 0) {
+inline int32_t unhook(Ctx& ctx, int64_t handle) {
+    if (!ctx.iface.hooks || !ctx.iface.hooks->unregister_hook || handle <= 0) {
         return -1;
     }
-    return ctx.iface.hooks->unregister_hook_ex(ctx.host, handle);
+    return ctx.iface.hooks->unregister_hook(ctx.host, handle);
 }
 
 /// 处理器清单 JSON (主程序侧 `agentxx.agent.hooks` 的 `list_hooks`)
 ///
 /// 用于回答"这个点上有哪些处理器、谁的、什么顺序": 派发记录 (`stat` 段) 只在
 /// 主程序开发者模式下出现。主程序不支持 / 未加载时返回 `{}`。
+/// - `agent` 为空 = 全部挂载的合并视图 (诊断用)
 template<typename Ctx>
-inline std::string listHooks(const Ctx& ctx) {
+inline std::string listHooks(const Ctx& ctx, const ScopeRef* agent = nullptr) {
     if (!ctx.iface.hooks || !ctx.iface.hooks->list_hooks) {
         return "{}";
     }
     PluginxxString text{nullptr, 0};
-    if (ctx.iface.hooks->list_hooks(ctx.host, &text) != 0 || text.data == nullptr) {
+    PluginxxScopeRef refData{};
+    const PluginxxScopeRef* refPtr = nullptr;
+    if (agent && !agent->empty()) {
+        refData = agent->raw();
+        refPtr  = &refData;
+    }
+    if (ctx.iface.hooks->list_hooks(ctx.host, refPtr, &text) != 0 || text.data == nullptr) {
         return "{}";
     }
     std::string out(text.data, static_cast<size_t>(text.size));
@@ -2105,14 +2301,20 @@ inline decltype(auto) invokeGraphNode(NodeFn& fn, Ctx& ctx, const RootRequest& r
 ///
 /// `return`: 0 = 注册成功；非 0 = 类型名冲突或主程序不支持（调用方应使 start 事务失败）。
 template<typename Ctx, typename NodeFn>
-inline int32_t
-    graph_node(Ctx& ctx, std::string_view type, std::string_view configSchema, NodeFn&& fn) {
+inline int32_t graph_node(
+    Ctx&             ctx,
+    const ScopeRef&  agent,
+    std::string_view type,
+    std::string_view configSchema,
+    NodeFn&&         fn
+) {
     if (!ctx.iface.graph || !ctx.iface.graph->register_node_type) {
         return -1;
     }
 
     struct NodeShim {
         Ctx*                 ctx = nullptr;
+        ScopeRef             agent;
         std::decay_t<NodeFn> fn;
     };
 
@@ -2124,7 +2326,9 @@ inline int32_t
         detail::RootRequest                request;
     };
 
-    auto shim = ctx.storeShim(std::make_unique<NodeShim>(NodeShim{&ctx, std::forward<NodeFn>(fn)}));
+    auto shim = ctx.storeShim(
+        std::make_unique<NodeShim>(NodeShim{&ctx, agent, std::forward<NodeFn>(fn)})
+    );
 
     AgentxxPluginGraphNodeTypeSpec spec{};
     spec.struct_size        = sizeof(AgentxxPluginGraphNodeTypeSpec);
@@ -2161,7 +2365,8 @@ inline int32_t
             shim->ctx->host,
             shim->ctx->iface.cancel,
             request.sessionId,
-            &shim->ctx->cancelRegistry
+            &shim->ctx->cancelRegistry,
+            shim->agent
         };
 
         using NodeRet = decltype(detail::invokeGraphNode(shim->fn, *shim->ctx, request, ctl));
@@ -2224,7 +2429,8 @@ inline int32_t
         }
     };
 
-    return ctx.iface.graph->register_node_type(ctx.host, &spec);
+    auto ref = agent.raw();
+    return ctx.iface.graph->register_node_type(ctx.host, &ref, &spec);
 }
 /* ==================== 工具权限声明 ====================
  *
@@ -2269,6 +2475,7 @@ struct ToolPermissionSpec {
 inline int32_t registerToolPermission(
     const PluginxxHost*                 host,
     const AgentxxPluginPermissionIface* iface,
+    const PluginxxScopeRef*             agent,
     const ToolPermissionSpec&           spec
 ) {
     if (!host || !iface || !iface->register_tool_permission || spec.toolName.empty()) {
@@ -2281,13 +2488,18 @@ inline int32_t registerToolPermission(
     abiSpec.target_arg  = PluginStringView::from(spec.targetArg);
     abiSpec.struct_size = sizeof(AgentxxPluginToolPermissionSpec);
     abiSpec.category    = PluginStringView::from(spec.category);
-    return iface->register_tool_permission(host, &abiSpec);
+    return iface->register_tool_permission(host, agent, &abiSpec);
 }
 
 /// 声明工具权限 (从插件实例上下文取主程序与接口表)
 template<typename Ctx>
-inline int32_t registerToolPermission(const Ctx& ctx, const ToolPermissionSpec& spec) {
-    return registerToolPermission(ctx.host, ctx.iface.permission, spec);
+inline int32_t registerToolPermission(
+    const Ctx&              ctx,
+    const ScopeRef&         agent,
+    const ToolPermissionSpec& spec
+) {
+    auto ref = agent.raw();
+    return registerToolPermission(ctx.host, ctx.iface.permission, &ref, spec);
 }
 
 /// 便捷: 声明"路径参数 + 读作用域" (读取类工具, 目标参数值为路径)
@@ -2297,6 +2509,7 @@ inline int32_t registerToolPermission(const Ctx& ctx, const ToolPermissionSpec& 
 template<typename Ctx>
 inline int32_t registerReadPathPermission(
     const Ctx&       ctx,
+    const ScopeRef&  agent,
     std::string_view toolName,
     std::string_view pathArg
 ) {
@@ -2305,13 +2518,14 @@ inline int32_t registerReadPathPermission(
     spec.scope     = PermissionScope::Read;
     spec.target    = PermissionTarget::Path;
     spec.targetArg = pathArg;
-    return registerToolPermission(ctx, spec);
+    return registerToolPermission(ctx, agent, spec);
 }
 
 /// 便捷: 声明"路径参数 + 写作用域" (写入/编辑类工具, 目标参数值为路径)
 template<typename Ctx>
 inline int32_t registerWritePathPermission(
     const Ctx&       ctx,
+    const ScopeRef&  agent,
     std::string_view toolName,
     std::string_view pathArg
 ) {
@@ -2320,18 +2534,20 @@ inline int32_t registerWritePathPermission(
     spec.scope     = PermissionScope::Write;
     spec.target    = PermissionTarget::Path;
     spec.targetArg = pathArg;
-    return registerToolPermission(ctx, spec);
+    return registerToolPermission(ctx, agent, spec);
 }
 
 /// 撤销工具权限声明 (工具注销/插件禁用卸载时由主程序自动撤销, 一般无需手动调用)
 template<typename Ctx>
-inline int32_t unregisterToolPermission(const Ctx& ctx, std::string_view toolName) {
+inline int32_t
+    unregisterToolPermission(const Ctx& ctx, const ScopeRef& agent, std::string_view toolName) {
     if (!ctx.host || !ctx.iface.permission || !ctx.iface.permission->unregister_tool_permission
         || toolName.empty()) {
         return -1;
     }
+    auto ref    = agent.raw();
     auto nameSv = PluginStringView::from(toolName);
-    return ctx.iface.permission->unregister_tool_permission(ctx.host, &nameSv);
+    return ctx.iface.permission->unregister_tool_permission(ctx.host, &ref, &nameSv);
 }
 
 /* ---- 路径权限查询 (供模式/前缀参数工具逐项过滤) ----
@@ -2359,6 +2575,7 @@ enum class PathDecision : int32_t {
 inline std::vector<PathDecision> checkPathDecisions(
     const PluginxxHost*                 host,
     const AgentxxPluginPermissionIface* iface,
+    const PluginxxScopeRef*             agent,
     PermissionScope                     scope,
     std::string_view                    sessionId,
     const std::vector<std::string>&     paths
@@ -2381,7 +2598,7 @@ inline std::vector<PathDecision> checkPathDecisions(
     query.paths       = views.data();
 
     std::vector<int32_t> decisions(views.size(), AGENTXX_PLUGIN_PERMISSION_DECISION_ASK);
-    if (iface->check_paths(host, &query, decisions.data()) != 0) {
+    if (iface->check_paths(host, agent, &query, decisions.data()) != 0) {
         return {};
     }
     std::vector<PathDecision> out;
@@ -2396,11 +2613,13 @@ inline std::vector<PathDecision> checkPathDecisions(
 template<typename Ctx>
 inline std::vector<PathDecision> checkPathDecisions(
     const Ctx&                      ctx,
+    const ScopeRef&                 agent,
     PermissionScope                 scope,
     std::string_view                sessionId,
     const std::vector<std::string>& paths
 ) {
-    return checkPathDecisions(ctx.host, ctx.iface.permission, scope, sessionId, paths);
+    auto ref = agent.raw();
+    return checkPathDecisions(ctx.host, ctx.iface.permission, &ref, scope, sessionId, paths);
 }
 
 /// 单路径权限查询 (便捷; 内部走批量接口)
@@ -2408,12 +2627,13 @@ inline std::vector<PathDecision> checkPathDecisions(
 template<typename Ctx>
 inline PathDecision checkPathDecision(
     const Ctx&       ctx,
+    const ScopeRef&  agent,
     std::string_view path,
     PermissionScope  scope,
     std::string_view sessionId = {}
 ) {
     std::vector<std::string> paths{std::string{path}};
-    auto                     decisions = checkPathDecisions(ctx, scope, sessionId, paths);
+    auto                     decisions = checkPathDecisions(ctx, agent, scope, sessionId, paths);
     if (decisions.size() != 1) {
         return PathDecision::Ask;
     }
@@ -2428,6 +2648,7 @@ inline PathDecision checkPathDecision(
 inline std::vector<uint8_t> filterPathPermissions(
     const PluginxxHost*                 host,
     const AgentxxPluginPermissionIface* iface,
+    const PluginxxScopeRef*             agent,
     PermissionScope                     scope,
     std::string_view                    sessionId,
     const std::vector<std::string>&     paths,
@@ -2448,7 +2669,7 @@ inline std::vector<uint8_t> filterPathPermissions(
         if (pending.empty()) {
             return true;
         }
-        auto decisions = checkPathDecisions(host, iface, scope, sessionId, pending);
+        auto decisions = checkPathDecisions(host, iface, agent, scope, sessionId, pending);
         if (decisions.size() != pending.size()) {
             return false; // 查询失败: 交由调用方跳过过滤
         }
@@ -2484,14 +2705,17 @@ inline std::vector<uint8_t> filterPathPermissions(
 template<typename Ctx>
 inline std::vector<uint8_t> filterPathPermissions(
     const Ctx&                      ctx,
+    const ScopeRef&                 agent,
     PermissionScope                 scope,
     std::string_view                sessionId,
     const std::vector<std::string>& paths,
     size_t                          batchSize = 512
 ) {
+    auto ref = agent.raw();
     return filterPathPermissions(
         ctx.host,
         ctx.iface.permission,
+        &ref,
         scope,
         sessionId,
         paths,
@@ -2505,6 +2729,7 @@ inline PluginxxString call_tool_blocking(
     const PluginxxHost*            host,
     const AgentxxPluginToolsIface* tools,
     const PluginxxSchedulerIface*  sched,
+    const PluginxxScopeRef*        agent,
     std::string_view               name,
     std::string_view               args_json,
     std::string_view               thread_id,
@@ -2540,6 +2765,7 @@ inline PluginxxString call_tool_blocking(
 
     PluginxxOperatorHandle* handle = tools->call_tool_async(
         host,
+        agent,
         &nameSv,
         &argsSv,
         &tidSv,
@@ -3540,20 +3766,79 @@ inline void logClientCreateFailure(
     iface->log(host, 4, &sv);
 }
 
-/// Agent 侧插件入口导出 (生成 `agentxx_plugin_agent_{get_info,create,start,stop,destroy}`)。
+/// Agent 侧插件入口导出
+/// (生成 `agentxx_plugin_agent_{get_info,create,start,stop,destroy,mount,unmount}`)。
 ///
 /// 插件框架只提供"带符号前缀"的通用导出宏 (见 `pluginxx/kit/kit.h` 的
 /// [PLUGINXX_EXPORT_PLUGIN]); 入口符号名属于本主程序命名空间, 因此在这里包一层。
 /// 运行时由 PluginManager::entrySymbols() 交出同一批符号名。
-#define AGENTXX_PLUGIN_AGENT_EXPORT(CtxType, Name, Ver, Desc, StartFn, StopFn) \
-    PLUGINXX_EXPORT_PLUGIN(agentxx_plugin_agent_, CtxType, Name, Ver, Desc, StartFn, StopFn)
+///
+/// - `StartFn` / `StopFn`: 进程级 (一次), 形如
+///   `void*(CtxType&, const PluginxxOperatorNotify*, PluginxxString*)`
+/// - `MountFn` / `UnmountFn`: agent 级 (每 agent 一次), 形如
+///   `void*(CtxType&, const AgentxxPluginAgentMountSpec*, const PluginxxOperatorNotify*,
+///    PluginxxString*)` / `void*(CtxType&, void* mount_ud, const PluginxxOperatorNotify*,
+///    PluginxxString*)`;
+///   **没有 per-agent 状态的插件传 `nullptr, nullptr`**
+#define AGENTXX_PLUGIN_AGENT_EXPORT(                                                \
+    CtxType, Name, Ver, Desc, StartFn, StopFn, MountFn, UnmountFn                   \
+)                                                                                   \
+    PLUGINXX_EXPORT_PLUGIN(agentxx_plugin_agent_, CtxType, Name, Ver, Desc, StartFn, StopFn) \
+    AGENTXX_PLUGIN_AGENT_MOUNT_EXPORT(CtxType, MountFn, UnmountFn)
 
-/// Agent 侧只导出 start/stop 两个入口 (供手写 create/destroy 的插件使用)。
+/// 只生成挂载/卸载两个入口 (与 [AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT] 配套)
+#define AGENTXX_PLUGIN_AGENT_MOUNT_EXPORT(CtxType, MountFn, UnmountFn)                         \
+    extern "C" PLUGINXX_EXPORT void* PLUGINXX_CALL agentxx_plugin_agent_mount                \
+        (void*                              plugin_ctx,                                        \
+         const AgentxxPluginAgentMountSpec* spec,                                              \
+         const PluginxxOperatorNotify*      notify,                                            \
+         PluginxxString*                    err) {                                              \
+        if (!(MountFn)) {                                                                      \
+            return nullptr; /* 无挂载入口 = 本插件无 agent 侧能力 */                          \
+        }                                                                                      \
+        auto* ctx = static_cast<CtxType*>(plugin_ctx);                                          \
+        return agentxx::plugin::detail::callLifecycleEntry(                                     \
+            ctx ? ctx->host : nullptr,                                                          \
+            plugin_ctx,                                                                        \
+            notify,                                                                            \
+            err,                                                                               \
+            "plugin mount",                                                                   \
+            [&]() -> void* {                                                                   \
+                return (MountFn)(*ctx, spec, notify, err);                                     \
+            }                                                                                  \
+        );                                                                                     \
+    }                                                                                          \
+    extern "C" PLUGINXX_EXPORT void* PLUGINXX_CALL agentxx_plugin_agent_unmount               \
+        (void*                         plugin_ctx,                                             \
+         void*                         mount_ud,                                               \
+         const PluginxxOperatorNotify* notify,                                                 \
+         PluginxxString*               err) {                                                   \
+        if (!(UnmountFn)) {                                                                    \
+            if (notify && notify->done) {                                                      \
+                notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);                   \
+            }                                                                                  \
+            return nullptr;                                                                    \
+        }                                                                                      \
+        auto* ctx = static_cast<CtxType*>(plugin_ctx);                                          \
+        return agentxx::plugin::detail::callLifecycleEntry(                                     \
+            ctx ? ctx->host : nullptr,                                                          \
+            plugin_ctx,                                                                        \
+            notify,                                                                            \
+            err,                                                                               \
+            "plugin unmount",                                                                 \
+            [&]() -> void* {                                                                   \
+                return (UnmountFn)(*ctx, mount_ud, notify, err);                               \
+            }                                                                                  \
+        );                                                                                     \
+    }
+
+/// Agent 侧只导出 start/stop/mount/unmount 四个入口 (供手写 create/destroy 的插件使用)。
 ///
 /// 与 [AGENTXX_PLUGIN_AGENT_EXPORT] 的生命周期部分同语义, 但由插件自己实现
 /// `agentxx_plugin_agent_create` / `agentxx_plugin_agent_destroy`。
-#define AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(CtxType, StartFn, StopFn) \
-    PLUGINXX_EXPORT_PLUGIN_LIFECYCLE(agentxx_plugin_agent_, CtxType, StartFn, StopFn)
+#define AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(CtxType, StartFn, StopFn, MountFn, UnmountFn) \
+    PLUGINXX_EXPORT_PLUGIN_LIFECYCLE(agentxx_plugin_agent_, CtxType, StartFn, StopFn)       \
+    AGENTXX_PLUGIN_AGENT_MOUNT_EXPORT(CtxType, MountFn, UnmountFn)
 
 /// Client 侧只导出 start/stop 两个入口 (与
 /// [AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT] 对称)。

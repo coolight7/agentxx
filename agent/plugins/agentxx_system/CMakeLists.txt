@@ -25,6 +25,8 @@ if (_AGENTXX_ADD_AS_BUILTIN)
     "agentxx_plugin_agent_destroy=agentxx_plugin_agent_builtin_destroy_${PLUGIN_NAME}"
     "agentxx_plugin_agent_start=agentxx_plugin_agent_builtin_start_${PLUGIN_NAME}"
     "agentxx_plugin_agent_stop=agentxx_plugin_agent_builtin_stop_${PLUGIN_NAME}"
+    "agentxx_plugin_agent_mount=agentxx_plugin_agent_builtin_mount_${PLUGIN_NAME}"
+    "agentxx_plugin_agent_unmount=agentxx_plugin_agent_builtin_unmount_${PLUGIN_NAME}"
   )
   target_include_directories(${_target} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"          # agentxx_system_plugin.h / system_impl.h

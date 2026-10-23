@@ -46,8 +46,66 @@ extern "C" {
 #define AGENTXX_PLUGIN_AGENT_SYMBOL_START    "agentxx_plugin_agent_start"
 #define AGENTXX_PLUGIN_AGENT_SYMBOL_STOP     "agentxx_plugin_agent_stop"
 #define AGENTXX_PLUGIN_AGENT_SYMBOL_DESTROY  "agentxx_plugin_agent_destroy"
+/// 挂载 / 卸载入口 (每个 agent 一次; 缺失 = 本插件无 agent 侧能力)
+#define AGENTXX_PLUGIN_AGENT_SYMBOL_MOUNT   "agentxx_plugin_agent_mount"
+#define AGENTXX_PLUGIN_AGENT_SYMBOL_UNMOUNT "agentxx_plugin_agent_unmount"
+
+/// 需要 agent 引用的接口上, 引用缺失/无效/指向已卸载的挂载/序号不匹配
+///
+/// - 注册类接口返回它, 且**不产生任何副作用**;
+/// - 典型成因: 在 `start` 里注册 (那时还没有任何挂载), 或保存了上一轮挂载的旧引用。
+#define AGENTXX_PLUGIN_ERR_NO_AGENT (-2)
 
 #pragma pack(push, 8)
+
+/* ==================== 挂载入参 (每个 agent 一次) ==================== */
+
+/// 引擎侧 agent 挂载入参
+///
+/// - 字符串均为**借用视图**, 仅在本次调用期间有效; 需要就自己拷进 per-agent 状态;
+/// - `config_json` 是本挂载的配置 (加载表 args 与 `plugin.mount[].args` 的合并结果);
+/// - `mount_seq` 每次挂载都不同: 同一 `agent_id` 卸载后重新挂载会拿到新序号,
+///   上一轮留在插件里的旧引用自动失效。
+typedef struct AgentxxPluginAgentMountSpec {
+    /// 本结构体字节数 (`sizeof(AgentxxPluginAgentMountSpec)`); `0` = 基线布局
+    uint32_t struct_size;
+    uint32_t flags; ///< 预留 (0)
+    /// agent 标识 (如 "root" / "sub:3" / "ext:qq:1")
+    PluginxxStringView agent_id;
+    /// agent 展示名 (AgentConfig::agentName)
+    PluginxxStringView agent_name;
+    /// 工作目录 (绝对路径, UTF-8)
+    PluginxxStringView work_dir;
+    /// 语言代码 ("zh-cn" / "en")
+    PluginxxStringView language;
+    /// 当前模型配置 JSON
+    PluginxxStringView model_json;
+    /// 本挂载的插件配置 JSON (加载 args ⊕ plugin.mount[].args)
+    PluginxxStringView config_json;
+    /// 宿主内单调递增的挂载序号 (防 id 复用)
+    uint64_t mount_seq;
+} AgentxxPluginAgentMountSpec;
+
+/* 基线: 重置时 = 完整布局; 以后追加字段保持不变 (改为 offsetof(第一个追加字段)) */
+#define AGENTXX_PLUGIN_AGENT_MOUNT_SPEC_BASELINE_SIZE sizeof(AgentxxPluginAgentMountSpec)
+
+/// 挂载入口 (与 start/stop 同一套操作契约): 同步完成时先 `notify->done(OK)`
+/// 再返回 per-agent 状态 (即 mount_ud, 可为 NULL); 失败返回 NULL 并写 `out_error`。
+typedef void*(PLUGINXX_CALL* AgentxxPluginAgentMountFn)(
+    void*                              plugin_ctx,
+    const AgentxxPluginAgentMountSpec* spec,
+    const PluginxxOperatorNotify*      notify,
+    PluginxxString*                    out_error
+);
+
+/// 卸载入口: `mount_ud` 就是 mount 的返回值; 只释放该 agent 的状态,
+/// 宿主会自动撤销注册 (工具/权限/钩子/提示词/功能点/图/资源/事件)。
+typedef void*(PLUGINXX_CALL* AgentxxPluginAgentUnmountFn)(
+    void*                         plugin_ctx,
+    void*                         mount_ud,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               out_error
+);
 
 /* ==================== 工具定义 ==================== */
 
@@ -169,8 +227,9 @@ typedef struct AgentxxPluginHookSpecEx {
 /* ==================== 接口表: 工具 (agentxx.agent.tools) ==================== */
 
 #define AGENTXX_PLUGIN_IFACE_AGENT_TOOLS             "agentxx.agent.tools"
-#define AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_VERSION     1
-#define AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_MIN_VERSION 1
+/// v2: 全部成员增加 `agent` 参数; 删除 `op_cancel` (统一用 `pluginxx.cancel` 的取消)
+#define AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_VERSION     2
+#define AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_MIN_VERSION 2
 /* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
 #define AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_BASELINE_SIZE sizeof(AgentxxPluginToolsIface)
 
@@ -179,21 +238,26 @@ typedef struct AgentxxPluginToolsIface {
     uint32_t struct_size; ///< 主程序填 sizeof(AgentxxPluginToolsIface) 或更大的已知表长
 
     /// 注册工具 (io 线程约束, 非 io 线程由主程序投递同步等待)
+    /// - `agent` 必须非空 (引用无效返回 `AGENTXX_PLUGIN_ERR_NO_AGENT`, 无副作用)
     /// `return`: 0 成功, 非 0 冲突或失败
     int32_t(PLUGINXX_CALL* register_tool)(
         const PluginxxHost*          host,
+        const PluginxxScopeRef*      agent,
         const AgentxxPluginToolSpec* spec
     );
-    /// 注销工具 (按名称)
+    /// 注销工具 (按名称; 只允许注销本挂载在注册的工具)
     /// `return`: 0 成功, 非 0 不存在
     int32_t(PLUGINXX_CALL* unregister_tool)(
         const PluginxxHost*       host,
+        const PluginxxScopeRef*   agent,
         const PluginxxStringView* name
     );
 
     /* ---- 插件互调: 完成回调形 ---- */
+    /// 调用该 agent 工具表里的一个工具 (异步; 取消用 `pluginxx.cancel.op_cancel`)
     PluginxxOperatorHandle*(PLUGINXX_CALL* call_tool_async)(
         const PluginxxHost*       host,
+        const PluginxxScopeRef*   agent,
         const PluginxxStringView* name,
         const PluginxxStringView* args_json,
         const PluginxxStringView* session_id,
@@ -201,14 +265,14 @@ typedef struct AgentxxPluginToolsIface {
         void*                     ud,
         PluginxxString*           error_out
     );
-    void(PLUGINXX_CALL* op_cancel)(PluginxxOperatorHandle* op);
 } AgentxxPluginToolsIface;
 
 /* ==================== 接口表: 工具权限声明 (agentxx.agent.permission) ==================== */
 
 #define AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION             "agentxx.agent.permission"
-#define AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION_VERSION     1
-#define AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION_MIN_VERSION 1
+/// v2: 全部成员增加 `agent` 参数 (权限中间件与工作区都是 per-agent)
+#define AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION_VERSION     2
+#define AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION_MIN_VERSION 2
 /* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
 #define AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION_BASELINE_SIZE sizeof(AgentxxPluginPermissionIface)
 
@@ -277,12 +341,14 @@ typedef struct AgentxxPluginPermissionIface {
     /// `return`: 0 成功, 非 0 不支持或失败
     int32_t(PLUGINXX_CALL* register_tool_permission)(
         const PluginxxHost*                    host,
+        const PluginxxScopeRef*                agent,
         const AgentxxPluginToolPermissionSpec* spec
     );
     /// 撤销工具权限声明 (工具注销/插件禁用/卸载时由主程序自动撤销, 一般无需手动调用)
     /// `return`: 0 成功, 非 0 不存在
     int32_t(PLUGINXX_CALL* unregister_tool_permission)(
         const PluginxxHost*       host,
+        const PluginxxScopeRef*   agent,
         const PluginxxStringView* tool_name
     );
 
@@ -302,6 +368,7 @@ typedef struct AgentxxPluginPermissionIface {
     /// `return`: 0 成功; 非 0 不支持或失败 (失败时调用方应跳过过滤, 按原行为处理)
     int32_t(PLUGINXX_CALL* check_paths)(
         const PluginxxHost*                     host,
+        const PluginxxScopeRef*                 agent,
         const AgentxxPluginPermissionPathQuery* query,
         int32_t*                                out_decisions
     );
@@ -310,8 +377,9 @@ typedef struct AgentxxPluginPermissionIface {
 /* ==================== 接口表: 中间件钩子 (agentxx.agent.hooks) ==================== */
 
 #define AGENTXX_PLUGIN_IFACE_AGENT_HOOKS             "agentxx.agent.hooks"
-#define AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_VERSION     1
-#define AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_MIN_VERSION 1
+/// v2: 全部成员增加 `agent` 参数; 基础/扩展双入口合并为句柄式一种
+#define AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_VERSION     2
+#define AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_MIN_VERSION 2
 /* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
 #define AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_BASELINE_SIZE sizeof(AgentxxPluginHooksIface)
 
@@ -320,57 +388,46 @@ typedef struct AgentxxPluginPermissionIface {
 /// 钩子 (7 个固定点) 是"核心在某一步通知所有关心的人"的机制: 载荷是
 /// `{sessionId, point}`、结果被丢弃、点固定 7 个。
 ///
-/// 两组能力:
-/// 1. **基础登记** ([register_hook] / [unregister_hook]): 一个实例在同一个点只有一个
-///    处理器 (重复登记覆盖);
-/// 2. **有序登记与清单** ([register_hook_ex] / [unregister_hook_ex] / [list_hooks]):
-///    同一实例在同一个点可以登记任意多个处理器, 每个给一根句柄, 顺序 = `plugin` 层
-///    (插件 / 嵌入方程序) 按 (priority 升序, 登记序号), 其后是 `core` 层; 并可以读出
-///    "这个点上有哪些处理器、谁的、什么顺序"。
-///
-/// 登记语义 (两组一致):
-/// - 不声明 `priority` (= 0) 时顺序就是登记顺序 (插件加载顺序) —— 与基础登记一致;
-/// - 处理器数量不设上限; 处理器跟着实例走: 禁用 → 不生效 (派发时跳过), 卸载 → 全部摘除,
-///   重新启用时由插件 `start` 重新登记。
-///
-/// 三成员同为 v1 布局的一部分, 不需要 `ifaceHas` 判定 (整表门槛已保证)。
+/// 登记语义:
+/// - 每个登记的处理器给一根句柄, 按句柄精确撤销;
+/// - 同一实例同一个点可以登记任意多个; 顺序 = `plugin` 层 (插件 / 嵌入方程序) 按
+///   `(priority 升序, 登记序号)`; 不声明 `priority` (= 0) 时顺序就是登记顺序;
+/// - 处理器跟着挂载走: 挂载卸载时由主程序自动摘除, 重新挂载时由插件在 `mount` 里重新登记。
 typedef struct AgentxxPluginHooksIface {
     int32_t  version; ///< 主程序填 AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_VERSION
     uint32_t struct_size;
 
-    /// 登记一个钩子处理器 (同一实例同一个点覆盖式, 一个点只有一个)
-    /// `return`: 0 成功; 非 0 失败 (point 越界 / hook_start 为空 / 实例已关闭或禁用)
-    int32_t(PLUGINXX_CALL* register_hook)(
-        const PluginxxHost*          host,
-        const AgentxxPluginHookSpec* spec
-    );
-    /// 撤销本实例在该点的基础登记
-    /// `return`: 0 成功; 非 0 失败 (该点没有本实例的基础登记)
-    int32_t(PLUGINXX_CALL* unregister_hook)(const PluginxxHost* host, int32_t point);
-
-    /// 登记一个钩子处理器 (同一实例同一个点可登记任意多个, 各自句柄)
+    /// 登记一个钩子处理器 (只在本挂载所属的 agent 的轮次里派发)
     /// - `priority` 越界裁剪到上下限并记一条警告 (不拒绝登记);
-    /// - 拒绝的情形只有: `point` 越界 / `hook_start` 为空 / 实例正在关闭或已禁用
+    /// - 拒绝的情形: `agent` 引用无效 (`AGENTXX_PLUGIN_ERR_NO_AGENT`)、`point` 越界、
+    ///   `hook_start` 为空、实例正在关闭或已禁用
     ///
     /// `return`: 0 成功 (`*out_handle` 收到句柄, 之后凭它精确撤销); 非 0 失败
-    int32_t(PLUGINXX_CALL* register_hook_ex)(
+    int32_t(PLUGINXX_CALL* register_hook)(
         const PluginxxHost*            host,
+        const PluginxxScopeRef*        agent,
         const AgentxxPluginHookSpecEx* spec,
         int64_t*                       out_handle
     );
-    /// 撤销本实例登记的一个处理器 (按句柄; 别人的句柄会被拒绝)
+    /// 撤销本挂载登记的一个处理器 (按句柄; 别人的句柄会被拒绝)
     ///
-    /// `return`: 0 成功; 非 0 失败 (句柄不存在 / 不属于本实例)
-    int32_t(PLUGINXX_CALL* unregister_hook_ex)(const PluginxxHost* host, int64_t handle);
+    /// `return`: 0 成功; 非 0 失败 (句柄不存在 / 不属于本挂载)
+    int32_t(PLUGINXX_CALL* unregister_hook)(const PluginxxHost* host, int64_t handle);
     /// 处理器清单 JSON (host->alloc; 形状见 docs/zh-cn/design/plugins.md §8)
-    int32_t(PLUGINXX_CALL* list_hooks)(const PluginxxHost* host, PluginxxString* out_json);
+    /// - `agent` 非空 = 本挂载视图; 空 = 全部挂载的合并视图 (诊断用)
+    int32_t(PLUGINXX_CALL* list_hooks)(
+        const PluginxxHost*     host,
+        const PluginxxScopeRef* agent,
+        PluginxxString*         out_json
+    );
 } AgentxxPluginHooksIface;
 
 /* ==================== 接口表: 会话访问 (agentxx.agent.session) ==================== */
 
 #define AGENTXX_PLUGIN_IFACE_AGENT_SESSION             "agentxx.agent.session"
-#define AGENTXX_PLUGIN_IFACE_AGENT_SESSION_VERSION     1
-#define AGENTXX_PLUGIN_IFACE_AGENT_SESSION_MIN_VERSION 1
+/// v2: 全部成员增加 `agent` 参数 (会话属于某个 agent)
+#define AGENTXX_PLUGIN_IFACE_AGENT_SESSION_VERSION     2
+#define AGENTXX_PLUGIN_IFACE_AGENT_SESSION_MIN_VERSION 2
 /* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
 #define AGENTXX_PLUGIN_IFACE_AGENT_SESSION_BASELINE_SIZE sizeof(AgentxxPluginSessionIface)
 
@@ -383,18 +440,21 @@ typedef struct AgentxxPluginSessionIface {
     ///   (out 不分配内存, 主程序不抛异常)
     int32_t(PLUGINXX_CALL* get_share_store)(
         const PluginxxHost*       host,
+        const PluginxxScopeRef*   agent,
         const PluginxxStringView* session_id,
         int64_t                   id,
         PluginxxString*           out
     );
     void(PLUGINXX_CALL* emit_message_tip)(
         const PluginxxHost*       host,
+        const PluginxxScopeRef*   agent,
         const PluginxxStringView* session_id,
         const PluginxxStringView* text,
         int32_t                   level
     );
     int64_t(PLUGINXX_CALL* add_share_store)(
         const PluginxxHost*       host,
+        const PluginxxScopeRef*   agent,
         const PluginxxStringView* session_id,
         const PluginxxStringView* content
     );
@@ -403,8 +463,9 @@ typedef struct AgentxxPluginSessionIface {
 /* ==================== 接口表: 会话上下文查询 (agentxx.agent.context) ==================== */
 
 #define AGENTXX_PLUGIN_IFACE_AGENT_CONTEXT             "agentxx.agent.context"
-#define AGENTXX_PLUGIN_IFACE_AGENT_CONTEXT_VERSION     1
-#define AGENTXX_PLUGIN_IFACE_AGENT_CONTEXT_MIN_VERSION 1
+/// v2: 全部成员增加 `agent` 参数
+#define AGENTXX_PLUGIN_IFACE_AGENT_CONTEXT_VERSION     2
+#define AGENTXX_PLUGIN_IFACE_AGENT_CONTEXT_MIN_VERSION 2
 /* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
 #define AGENTXX_PLUGIN_IFACE_AGENT_CONTEXT_BASELINE_SIZE sizeof(AgentxxPluginContextIface)
 
@@ -421,6 +482,7 @@ typedef struct AgentxxPluginContextIface {
     /// - 返回 0 成功 (out 为 ChatMessage JSON 数组文本), -1 失败/会话不存在
     int32_t(PLUGINXX_CALL* get_messages)(
         const PluginxxHost*       host,
+        const PluginxxScopeRef*   agent,
         const PluginxxStringView* session_id,
         PluginxxString*           out
     );
@@ -429,6 +491,7 @@ typedef struct AgentxxPluginContextIface {
     /// - 仅取数量时用它, 避免为读一个数字拉取整段上下文
     int64_t(PLUGINXX_CALL* messages_count)(
         const PluginxxHost*       host,
+        const PluginxxScopeRef*   agent,
         const PluginxxStringView* session_id
     );
 } AgentxxPluginContextIface;
@@ -436,23 +499,29 @@ typedef struct AgentxxPluginContextIface {
 /* ==================== 接口表: 主模型配置 (agentxx.agent.model) ==================== */
 
 #define AGENTXX_PLUGIN_IFACE_AGENT_MODEL             "agentxx.agent.model"
-#define AGENTXX_PLUGIN_IFACE_AGENT_MODEL_VERSION     1
-#define AGENTXX_PLUGIN_IFACE_AGENT_MODEL_MIN_VERSION 1
+/// v2: `get_config` 增加 `agent` 参数
+#define AGENTXX_PLUGIN_IFACE_AGENT_MODEL_VERSION     2
+#define AGENTXX_PLUGIN_IFACE_AGENT_MODEL_MIN_VERSION 2
 /* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
 #define AGENTXX_PLUGIN_IFACE_AGENT_MODEL_BASELINE_SIZE sizeof(AgentxxPluginModelIface)
 
 typedef struct AgentxxPluginModelIface {
     int32_t  version; ///< 主程序填 AGENTXX_PLUGIN_IFACE_AGENT_MODEL_VERSION
     uint32_t struct_size;
-    /// 主程序主模型及关联配置 JSON (io 线程; host->alloc; 未加载返回空串):
-    int32_t(PLUGINXX_CALL* get_config)(const PluginxxHost* host, PluginxxString* out);
+    /// 该 agent 的主模型及关联配置 JSON (io 线程; host->alloc; 未加载返回空串):
+    int32_t(PLUGINXX_CALL* get_config)(
+        const PluginxxHost*     host,
+        const PluginxxScopeRef* agent,
+        PluginxxString*         out
+    );
 } AgentxxPluginModelIface;
 
 /* ==================== 接口表: 主程序提示词读写 (agentxx.agent.prompt) ==================== */
 
 #define AGENTXX_PLUGIN_IFACE_AGENT_PROMPT             "agentxx.agent.prompt"
-#define AGENTXX_PLUGIN_IFACE_AGENT_PROMPT_VERSION     1
-#define AGENTXX_PLUGIN_IFACE_AGENT_PROMPT_MIN_VERSION 1
+/// v2: 全部成员增加 `agent` 参数 (提示词按 agent 贡献/合成)
+#define AGENTXX_PLUGIN_IFACE_AGENT_PROMPT_VERSION     2
+#define AGENTXX_PLUGIN_IFACE_AGENT_PROMPT_MIN_VERSION 2
 /* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
 #define AGENTXX_PLUGIN_IFACE_AGENT_PROMPT_BASELINE_SIZE sizeof(AgentxxPluginPromptIface)
 
@@ -460,9 +529,14 @@ typedef struct AgentxxPluginPromptIface {
     int32_t  version; ///< 主程序填 AGENTXX_PLUGIN_IFACE_AGENT_PROMPT_VERSION
     uint32_t struct_size;
 
-    int32_t(PLUGINXX_CALL* get_prompt)(const PluginxxHost* host, PluginxxString* out);
+    int32_t(PLUGINXX_CALL* get_prompt)(
+        const PluginxxHost*     host,
+        const PluginxxScopeRef* agent,
+        PluginxxString*         out
+    );
     int32_t(PLUGINXX_CALL* set_prompt)(
         const PluginxxHost*       host,
+        const PluginxxScopeRef*   agent,
         const PluginxxStringView* prompt_json
     );
 } AgentxxPluginPromptIface;
@@ -470,8 +544,9 @@ typedef struct AgentxxPluginPromptIface {
 /* ==================== 接口表: 会话资源贡献 (agentxx.agent.resources) ==================== */
 
 #define AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES             "agentxx.agent.resources"
-#define AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES_VERSION     1
-#define AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES_MIN_VERSION 1
+/// v2: 全部成员增加 `agent` 参数 (资源按挂载应用, 每个 agent 各一份)
+#define AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES_VERSION     2
+#define AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES_MIN_VERSION 2
 /* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
 #define AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES_BASELINE_SIZE sizeof(AgentxxPluginResourcesIface)
 
@@ -481,29 +556,39 @@ typedef struct AgentxxPluginResourcesIface {
 
     int32_t(PLUGINXX_CALL* register_skill_dir)(
         const PluginxxHost*       host,
+        const PluginxxScopeRef*   agent,
         const PluginxxStringView* path
     );
     int32_t(PLUGINXX_CALL* unregister_skill_dir)(
         const PluginxxHost*       host,
+        const PluginxxScopeRef*   agent,
         const PluginxxStringView* path
     );
     int32_t(PLUGINXX_CALL* register_memory_file)(
         const PluginxxHost*       host,
+        const PluginxxScopeRef*   agent,
         const PluginxxStringView* path
     );
     int32_t(PLUGINXX_CALL* unregister_memory_file)(
         const PluginxxHost*       host,
+        const PluginxxScopeRef*   agent,
         const PluginxxStringView* path
     );
     int32_t(PLUGINXX_CALL* register_mcp_server)(
         const PluginxxHost*       host,
+        const PluginxxScopeRef*   agent,
         const PluginxxStringView* spec_json
     );
     int32_t(PLUGINXX_CALL* unregister_mcp_server)(
         const PluginxxHost*       host,
+        const PluginxxScopeRef*   agent,
         const PluginxxStringView* name_space
     );
-    int32_t(PLUGINXX_CALL* get_own_resources)(const PluginxxHost* host, PluginxxString* out);
+    int32_t(PLUGINXX_CALL* get_own_resources)(
+        const PluginxxHost*     host,
+        const PluginxxScopeRef* agent,
+        PluginxxString*         out
+    );
 } AgentxxPluginResourcesIface;
 
 /* ==================== 接口表: 执行图 (agentxx.agent.graph) ==================== */
@@ -555,8 +640,9 @@ typedef struct AgentxxPluginGraphNodeTypeSpec {
 ///   修改后的 JSON 在主程序构建 engine 前生效 (插件须保证图合法性, 非法时主程序
 ///   回退默认图并记日志)
 #define AGENTXX_PLUGIN_IFACE_AGENT_GRAPH             "agentxx.agent.graph"
-#define AGENTXX_PLUGIN_IFACE_AGENT_GRAPH_VERSION     1
-#define AGENTXX_PLUGIN_IFACE_AGENT_GRAPH_MIN_VERSION 1
+/// v2: 全部成员增加 `agent` 参数 (图注册表与图定义都是 per-agent)
+#define AGENTXX_PLUGIN_IFACE_AGENT_GRAPH_VERSION     2
+#define AGENTXX_PLUGIN_IFACE_AGENT_GRAPH_MIN_VERSION 2
 /* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
 #define AGENTXX_PLUGIN_IFACE_AGENT_GRAPH_BASELINE_SIZE sizeof(AgentxxPluginGraphIface)
 
@@ -568,22 +654,33 @@ typedef struct AgentxxPluginGraphIface {
     /// `return`: 类型名冲突返回非 0
     int32_t(PLUGINXX_CALL* register_node_type)(
         const PluginxxHost*                   host,
+        const PluginxxScopeRef*               agent,
         const AgentxxPluginGraphNodeTypeSpec* spec
     );
-    /// 注销节点类型 (按类型名; 卸载时主程序自动清理)
+    /// 注销节点类型 (按类型名; 挂载卸载时主程序自动清理)
     /// `return`: 不存在返回非 0
     int32_t(PLUGINXX_CALL* unregister_node_type)(
         const PluginxxHost*       host,
+        const PluginxxScopeRef*   agent,
         const PluginxxStringView* type
     );
-    /// 获取当前执行图 JSON 定义 (host->alloc; 插件可基于此判断后 set 修改)
-    int32_t(PLUGINXX_CALL* get_graph_json)(const PluginxxHost* host, PluginxxString* out);
+    /// 获取该 agent 当前执行图 JSON 定义 (host->alloc; 插件可基于此判断后 set 修改)
+    int32_t(PLUGINXX_CALL* get_graph_json)(
+        const PluginxxHost*     host,
+        const PluginxxScopeRef* agent,
+        PluginxxString*         out
+    );
     /// 获取当前执行图名称 (host->alloc; 默认 "agentxx.default")
-    int32_t(PLUGINXX_CALL* get_graph_name)(const PluginxxHost* host, PluginxxString* out);
+    int32_t(PLUGINXX_CALL* get_graph_name)(
+        const PluginxxHost*     host,
+        const PluginxxScopeRef* agent,
+        PluginxxString*         out
+    );
     /// 设置执行图 JSON 定义 (覆盖; 主程序构建 engine 前生效)
     /// `return`: JSON 非法返回非 0 (host 侧解析失败)
     int32_t(PLUGINXX_CALL* set_graph_json)(
         const PluginxxHost*       host,
+        const PluginxxScopeRef*   agent,
         const PluginxxStringView* graph_json
     );
 } AgentxxPluginGraphIface;
@@ -608,8 +705,9 @@ typedef struct AgentxxPluginGraphIface {
 /// 超时: 点的声明方可以给自己的点设 `impl_timeout_ms` (等单个实现的上限); 实现方
 /// 可以自报 `default_timeout_ms`; 主程序取两者中非 0 的较小值, 都为 0 (默认) 表示不限。
 #define AGENTXX_PLUGIN_IFACE_AGENT_FEATURE             "agentxx.agent.feature"
-#define AGENTXX_PLUGIN_IFACE_AGENT_FEATURE_VERSION     1
-#define AGENTXX_PLUGIN_IFACE_AGENT_FEATURE_MIN_VERSION 1
+/// v2: 全部成员增加 `agent` 参数; 删除 `op_cancel` (统一用 `pluginxx.cancel` 的取消)
+#define AGENTXX_PLUGIN_IFACE_AGENT_FEATURE_VERSION     2
+#define AGENTXX_PLUGIN_IFACE_AGENT_FEATURE_MIN_VERSION 2
 /* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
 #define AGENTXX_PLUGIN_IFACE_AGENT_FEATURE_BASELINE_SIZE sizeof(AgentxxPluginFeatureIface)
 
@@ -685,18 +783,25 @@ typedef struct AgentxxPluginFeatureIface {
     uint32_t struct_size;
 
     /// 功能点清单 (JSON 文本; 出参经 host->alloc 分配, 失败返回非 0)
-    int32_t(PLUGINXX_CALL* list_points)(const PluginxxHost* host, PluginxxString* out_json);
+    /// - `agent` 非空 = 本挂载视图; 空 = 全部挂载的合并视图 (诊断用)
+    int32_t(PLUGINXX_CALL* list_points)(
+        const PluginxxHost*     host,
+        const PluginxxScopeRef* agent,
+        PluginxxString*         out_json
+    );
 
     /// 声明插件自己的功能点
-    /// `return`: 0 成功; 非 0 失败 (id 非法 / 类型不支持 / 与主程序点冲突)
+    /// `return`: 0 成功; 非 0 失败 (引用无效 / id 非法 / 类型不支持 / 与主程序点冲突)
     int32_t(PLUGINXX_CALL* define_point)(
         const PluginxxHost*                  host,
+        const PluginxxScopeRef*              agent,
         const AgentxxPluginFeaturePointSpec* spec
     );
     /// 撤销插件自己的点 (连带撤掉这些点上的全部实现; 禁用/卸载时主程序自动处理)
     /// `return`: 0 成功; 非 0 失败 (点不存在 / 不是本实例声明的点)
     int32_t(PLUGINXX_CALL* undefine_point)(
         const PluginxxHost*       host,
+        const PluginxxScopeRef*   agent,
         const PluginxxStringView* point_id
     );
 
@@ -704,12 +809,14 @@ typedef struct AgentxxPluginFeatureIface {
     /// `return`: 0 成功; 非 0 失败 (点未声明 / 回调为空)
     int32_t(PLUGINXX_CALL* register_impl)(
         const PluginxxHost*                 host,
+        const PluginxxScopeRef*             agent,
         const AgentxxPluginFeatureImplSpec* spec
     );
     /// 撤销实现 (按点 id)
     /// `return`: 0 成功; 非 0 不存在
     int32_t(PLUGINXX_CALL* unregister_impl)(
         const PluginxxHost*       host,
+        const PluginxxScopeRef*   agent,
         const PluginxxStringView* point_id
     );
 
@@ -719,17 +826,44 @@ typedef struct AgentxxPluginFeatureIface {
     ///   "ms":N}` 或 `{"ok":false,"id":...,"error":"not_callable|bad_args|no_impl|
     ///   disabled|busy|failed","message":"..."}`
     /// - 受理失败 (参数非法/主程序不支持) 返回 NULL 并写 error_out; 调用本身的失败经回调回
+    /// - 取消用 `pluginxx.cancel.op_cancel`
     PluginxxOperatorHandle*(PLUGINXX_CALL* call_point_async)(
         const PluginxxHost*       host,
+        const PluginxxScopeRef*   agent,
         const PluginxxStringView* point_id,
         const PluginxxStringView* args_json,
         PluginxxOperatorCallback  cb,
         void*                     ud,
         PluginxxString*           error_out
     );
-    /// 取消一次功能点调用 (协作式; 上一次调用没结束时同一 (点, 调用方) 的重入会被拒绝)
-    void(PLUGINXX_CALL* op_cancel)(PluginxxOperatorHandle* op);
 } AgentxxPluginFeatureIface;
+
+/* ==================== 接口表: 挂载查询 (agentxx.agent.mount) ==================== */
+
+/// 挂载查询: 让插件看清"我在这几个 agent 上挂好了"
+///
+/// 插件自己就拿着 agent 引用 (挂载时下发), 不需要问宿主"我在谁身上";
+/// 本表的用途是诊断与自查 (例如启动日志、测试断言)。
+#define AGENTXX_PLUGIN_IFACE_AGENT_MOUNT             "agentxx.agent.mount"
+#define AGENTXX_PLUGIN_IFACE_AGENT_MOUNT_VERSION     1
+#define AGENTXX_PLUGIN_IFACE_AGENT_MOUNT_MIN_VERSION 1
+/* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
+#define AGENTXX_PLUGIN_IFACE_AGENT_MOUNT_BASELINE_SIZE sizeof(AgentxxPluginMountIface)
+
+typedef struct AgentxxPluginMountIface {
+    int32_t  version; ///< 主程序填 AGENTXX_PLUGIN_IFACE_AGENT_MOUNT_VERSION
+    uint32_t struct_size;
+
+    /// 全部挂载的摘要 (JSON 数组; host->alloc)
+    /// 每项: {"agentId","agentName","workDir","language","mountSeq","plugins":[...]}
+    int32_t(PLUGINXX_CALL* list)(const PluginxxHost* host, PluginxxString* out);
+    /// 按 agentId 查一个挂载的摘要 (host->alloc); 没有这个挂载返回 -1
+    int32_t(PLUGINXX_CALL* get)(
+        const PluginxxHost*       host,
+        const PluginxxStringView* agent_id,
+        PluginxxString*           out
+    );
+} AgentxxPluginMountIface;
 
 #pragma pack(pop)
 
