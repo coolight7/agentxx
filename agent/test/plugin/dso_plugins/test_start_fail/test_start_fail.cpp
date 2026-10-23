@@ -157,12 +157,21 @@ extern "C" PLUGINXX_EXPORT int
     return 0;
 }
 
-extern "C" PLUGINXX_EXPORT void* agentxx_plugin_agent_start(
-    void*                         plugin_ctx,
-    const PluginxxOperatorNotify* notify,
-    PluginxxString*               error_out
+/// 挂载事务: 逐步注册 (任一步失败即返回, 主程序回滚已生效的注册)
+/// - v2 起 agent 级注册必须带引用, 因此整段从 start 搬到 mount
+static void* probeMount(
+    void*                              plugin_ctx,
+    const AgentxxPluginAgentMountSpec* spec,
+    const PluginxxOperatorNotify*      notify,
+    PluginxxString*                    error_out
 ) {
     (void)notify;
+    PluginxxScopeRef ref{};
+    ref.struct_size = sizeof(PluginxxScopeRef);
+    if (spec) {
+        ref.id  = spec->agent_id;
+        ref.seq = spec->mount_seq;
+    }
     auto* ctx = static_cast<ProbeCtx*>(plugin_ctx);
     if (!ctx || !ctx->host) {
         if (error_out) {
@@ -186,7 +195,7 @@ extern "C" PLUGINXX_EXPORT void* agentxx_plugin_agent_start(
     tool.description     = sv("rollback probe tool");
     tool.parameters_json = sv("{}");
     tool.execute_start   = &probeToolStart;
-    if (tools->register_tool(host, &tool) != 0) {
+    if (tools->register_tool(host, &ref, &tool) != 0) {
         setError(host, error_out, failStep(host, "tool"));
         return nullptr;
     }
@@ -203,7 +212,7 @@ extern "C" PLUGINXX_EXPORT void* agentxx_plugin_agent_start(
     node.type               = sv("dso_rollback_type");
     node.run_start          = &probeNodeRunStart;
     node.config_schema_json = sv("{}");
-    if (graph->register_node_type(host, &node) != 0) {
+    if (graph->register_node_type(host, &ref, &node) != 0) {
         setError(host, error_out, failStep(host, "graph"));
         return nullptr;
     }
@@ -216,7 +225,7 @@ extern "C" PLUGINXX_EXPORT void* agentxx_plugin_agent_start(
         return nullptr;
     }
     const auto watchTopic = sv("dso_rollback.watch");
-    if (!events->subscribe(host, &watchTopic, &onProbeEvent, ctx)) {
+    if (!events->subscribe(host, &ref, &watchTopic, &onProbeEvent, ctx)) {
         setError(host, error_out, failStep(host, "subscribe"));
         return nullptr;
     }
@@ -230,7 +239,7 @@ extern "C" PLUGINXX_EXPORT void* agentxx_plugin_agent_start(
         return nullptr;
     }
     const auto promptJson = sv(R"({"appendSystemPrompts":{"dso_rollback":"probe"}})");
-    if (prompt->set_prompt(host, &promptJson) != 0) {
+    if (prompt->set_prompt(host, &ref, &promptJson) != 0) {
         setError(host, error_out, failStep(host, "prompt"));
         return nullptr;
     }
@@ -243,11 +252,13 @@ extern "C" PLUGINXX_EXPORT void* agentxx_plugin_agent_start(
         setError(host, error_out, failStep(host, "hooks_iface"));
         return nullptr;
     }
-    AgentxxPluginHookSpec hookSpec{};
-    hookSpec.point      = AGENTXX_PLUGIN_HOOK_MODEL_START;
-    hookSpec.hook_start = &probeHookStart;
-    hookSpec.user_data  = ctx;
-    if (hooks->register_hook(host, &hookSpec) != 0) {
+    AgentxxPluginHookSpecEx hookSpec{};
+    hookSpec.struct_size = sizeof(AgentxxPluginHookSpecEx);
+    hookSpec.point       = AGENTXX_PLUGIN_HOOK_MODEL_START;
+    hookSpec.hook_start  = &probeHookStart;
+    hookSpec.user_data   = ctx;
+    int64_t hookHandle   = 0;
+    if (hooks->register_hook(host, &ref, &hookSpec, &hookHandle) != 0) {
         setError(host, error_out, failStep(host, "hook"));
         return nullptr;
     }
@@ -276,14 +287,51 @@ extern "C" PLUGINXX_EXPORT void* agentxx_plugin_agent_start(
         return nullptr;
     }
     const auto skillDir = sv("/tmp/agentxx_dso_rollback_skills");
-    if (resources->register_skill_dir(host, &skillDir) != 0) {
+    if (resources->register_skill_dir(host, &ref, &skillDir) != 0) {
         setError(host, error_out, failStep(host, "resource"));
         return nullptr;
     }
 
     // 8. 全部注册成功后主动失败 (触发主程序回滚)
     report(host, "all", true);
-    setError(host, error_out, "start failed on purpose after full registration");
+    setError(host, error_out, "mount failed on purpose after full registration");
+    return nullptr;
+}
+
+extern "C" PLUGINXX_EXPORT void* agentxx_plugin_agent_start(
+    void*                         plugin_ctx,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               error_out
+) {
+    (void)plugin_ctx;
+    (void)error_out;
+    // 进程级启动: 本探针的注册全部在 mount 里做
+    if (notify && notify->done) {
+        notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    }
+    return nullptr;
+}
+
+extern "C" PLUGINXX_EXPORT void* agentxx_plugin_agent_mount(
+    void*                              plugin_ctx,
+    const AgentxxPluginAgentMountSpec* spec,
+    const PluginxxOperatorNotify*      notify,
+    PluginxxString*                    error_out
+) {
+    return probeMount(plugin_ctx, spec, notify, error_out);
+}
+
+extern "C" PLUGINXX_EXPORT void* agentxx_plugin_agent_unmount(
+    void*                         plugin_ctx,
+    void*                         mount_ud,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*
+) {
+    (void)plugin_ctx;
+    (void)mount_ud;
+    if (notify && notify->done) {
+        notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    }
     return nullptr;
 }
 
