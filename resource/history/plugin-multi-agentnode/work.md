@@ -8,19 +8,17 @@
 
 | 阶段 | 内容 | 状态 |
 |---|---|---|
-| A | 契约基础（新类型/新表/新入口/版本基线/删旧分支） | **基本完成**（见 §1.1） |
-| C | agent 引用显式化（逐表加 `PluginxxScopeRef` 参数） | **契约与宿主完成，插件侧未迁** |
-| B | 宿主化与挂载（per-host 管理器 + `PluginMount`） | **未完成**（见 §3） |
+| A | 契约基础（新类型/新表/新入口/版本基线/删旧分支） | 完成 |
+| C | agent 引用显式化（逐表加 `PluginxxScopeRef` 参数） | 完成（契约/宿主/插件全迁） |
+| E | SDK（`AgentRef` / `MountStore` / 导出宏） | 完成（示例插件已迁） |
+| B | 宿主化与挂载（per-host 管理器 + `PluginMount`） | **未完成**（当前是「一份管理器服务一个 agent」） |
 | D | 宿主接线与配置（`AgentHost`、五处启动路径、`plugin.mount`） | 未开始 |
-| E | SDK 与示例（`AgentRef` / `MountStore` / 示例插件 / 端到端测试） | SDK 完成、示例/测试未做 |
 | F | 会话定位与诊断 | 未开始 |
 | G | 文档清理与最终核对 | 未开始 |
 
-**当前代码树状态：不可编译。** 原因见 §3「为什么停在这里」——本次是破坏性 ABI
-重构，签名改动一次性波及 22 个插件与 10+ 测试模块，中间态无法保持可编译。
+**当前代码树状态：lib + client + 21 个插件目标编译通过；测试模块（`agentxx_test`）未迁。**
 
-**下一步第一件事**：按 §3 的顺序继续（先插件迁移 → 测试模块 → 宿主上提），
-否则编译不通过。
+下一步：迁移测试模块（见 §2.2）→ 阶段 B → D → F → G。
 
 ## 1. 已完成
 
@@ -128,6 +126,32 @@
 
 **JS 引擎的已知限制**（记入 §2.3 后续项）：一份 JS 脚本目前只对应**一个**挂载作用域，
 再次 mount 会覆盖引用；真正的"每 agent 一份 JS 脚本实例"需要把 `JsPluginCtx` 按挂载拆开。
+
+### 1.5 宿主侧编译验证（lib + client）
+
+`agentxx_static` 与 `agentxx_cli` 均已编译通过。修掉的问题：
+
+- `PluginInstance` 补回 `uint64_t mountSeq`（`mountAgentAsync` 记录本次挂载序号）；
+- `plugin_manager_vtable.cpp` 删除重复定义的 `xx_unregister_node_type`；
+  `g_ifaceFeature` 去掉已删除的 `op_cancel` 项；
+- `pluginxx/runtime/op_driver.h`（框架）：`awaitPluginLifecycle` 的 `if (!hook || ...)`
+  对 lambda 非法（`!lambda` 无意义），改为只校验 `runtime`/`instance`；
+  该模板要求 `HookFn` 形如 `(void* ctx, notify, err)`，`mountAgentAsync` /
+  `unmountAgentAsync` 的 lambda 已补首个 `void* /*ctx*/` 参数。
+
+**改了 `cxx_pluginxx` 或 `agent/lib/include` 的头后，两处 install 都要重跑**，否则
+`agentxx_client_repo` / `agentxx_plugins_builtin` 用的是 `agentxx-project-install` 里的旧副本：
+
+```powershell
+cmake --build agent/build/windows-debug/cxx_pluginxx_repo-prefix/src/cxx_pluginxx_repo-build --target INSTALL
+cmake --build agent/build/windows-debug/agentxx_lib_repo-prefix/src/agentxx_lib_repo-build --target INSTALL
+```
+
+单独编译某个插件（比整树快很多）：
+
+```powershell
+cmake --build agent/build/windows-debug/agentxx_lib_repo-prefix/src/agentxx_lib_repo-build/agentxx_plugins_builtin/<插件目录> --target <插件目录>
+```
 
 ## 2. 待完成任务
 

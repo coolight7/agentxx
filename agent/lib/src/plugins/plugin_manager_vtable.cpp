@@ -613,19 +613,7 @@ static int32_t PLUGINXX_CALL
     });
 }
 
-static int32_t PLUGINXX_CALL xx_unregister_node_type(
-    const PluginxxHost*       host,
-    const PluginxxScopeRef*   agent,
-    const PluginxxStringView* type
-) {
-    if (agentxx::plugin::PluginStringView::empty(type)) {
-        return -1;
-    }
-    auto typeValCopy = *type;
-    return onScopedInstanceIo(host, agent, [typeValCopy](PluginInstance* inst, PluginManager* mgr) {
-        return mgr->unregisterGraphNodeType(inst, typeValCopy);
-    });
-}
+
 
 static int32_t PLUGINXX_CALL xx_get_graph_json(
     const PluginxxHost*     host,
@@ -1021,7 +1009,6 @@ static const AgentxxPluginFeatureIface g_ifaceFeature = {
     /* register_impl */ xx_feature_register_impl,
     /* unregister_impl */ xx_feature_unregister_impl,
     /* call_point_async */ xx_feature_call_point_async,
-    /* op_cancel */ xx_op_cancel,
 };
 
 const void* PLUGINXX_CALL xx_query_interface(const PluginxxHost*, const PluginxxStringView* iid);

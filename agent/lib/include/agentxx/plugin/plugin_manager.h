@@ -120,6 +120,8 @@ public:
     AgentxxPluginAgentUnmountFn unmountFn = nullptr;
     /// 插件 mount 返回的 per-agent 状态 (卸载时原样交回)
     void* mountUserData = nullptr;
+    /// 本次挂载的序号 (`PluginManager::mountSequence()`; 0 = 未挂载)
+    uint64_t mountSeq = 0;
     /// 插件 mount 是否已成功 (没有 mount 入口 = true)
     bool pluginMounted = false;
 

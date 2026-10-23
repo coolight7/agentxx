@@ -167,7 +167,11 @@ asio::awaitable<void> PluginManager::mountAgentAsync() {
             this->runtime(),
             instPtr,
             instPtr->pluginCtx,
-            [instPtr, &spec, &mountResult](const PluginxxOperatorNotify* notify, PluginxxString* err) {
+            [instPtr, &spec, &mountResult](
+                void*                         /*ctx*/,
+                const PluginxxOperatorNotify* notify,
+                PluginxxString*               err
+            ) {
                 mountResult = instPtr->mountFn(instPtr->pluginCtx, &spec, notify, err);
                 return mountResult;
             },
@@ -206,7 +210,11 @@ asio::awaitable<void> PluginManager::unmountAgentAsync() {
             this->runtime(),
             instPtr,
             instPtr->pluginCtx,
-            [instPtr, mountUd](const PluginxxOperatorNotify* notify, PluginxxString* err) {
+            [instPtr, mountUd](
+                void*                         /*ctx*/,
+                const PluginxxOperatorNotify* notify,
+                PluginxxString*               err
+            ) {
                 return instPtr->unmountFn(instPtr->pluginCtx, mountUd, notify, err);
             },
             "plugin unmount",
