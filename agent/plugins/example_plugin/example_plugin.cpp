@@ -137,11 +137,14 @@ extern "C" PLUGINXX_EXPORT int
 }
 
 /// 注册事务 (start 的实际内容): 任一步骤失败返回 -1, 由主程序回滚已生效的注册。
-static int exampleAgentSetup(AgentCtx& ctx) {
+/// 挂载事务 (mount): 工具/钩子/订阅/能力/提示词
+/// - `ref` 为本次挂载的 agent 引用, 全部登记都记在该 agent 名下
+static int exampleAgentSetup(AgentCtx& ctx, const agentxx::plugin::ScopeRef& ref) {
     const PluginxxHost* host = ctx.host;
     // 1.1 echo: 快同步内联工具 (fast_tool)
     agentxx::plugin::fast_tool(
-        ctx,
+         ctx,
+         ref,
         "example_echo",
         "Echo the input arguments back as JSON (example plugin tool).",
         R"({"type":"object","properties":{},"additionalProperties":true})",
@@ -156,25 +159,32 @@ static int exampleAgentSetup(AgentCtx& ctx) {
 
     // 1.2 caller: 锚定 Task 协程互调工具 (tool + call_tool)
     agentxx::plugin::tool(
-        ctx,
+         ctx,
+         ref,
         "example_caller",
         "Call example_echo via call_tool to demonstrate plugin interop.",
         R"({"type":"object","properties":{},"additionalProperties":true})",
-        [](AgentCtx& c, std::string_view args, agentxx::plugin::OpCtl ctl
+        [ref](AgentCtx& c, std::string_view args, agentxx::plugin::OpCtl ctl
         ) -> agentxx::plugin::Task<std::string> {
-            std::string resp
-                = co_await agentxx::plugin::call_tool(c, "example_echo", args, ctl.sessionId);
+            std::string resp = co_await agentxx::plugin::call_tool(
+                c,
+                ref,
+                "example_echo",
+                args,
+                ctl.sessionId
+            );
             co_return fmt::format(R"({{"via_call_tool": {}}})", resp);
         }
     );
 
     // 1.3 sleeper: 锚定 Task 协程 sleep 工具 (tool + sleep)
     agentxx::plugin::tool(
-        ctx,
+         ctx,
+         ref,
         "example_sleep",
         "Sleep duration_ms milliseconds then return (slow plugin tool).",
         R"({"type":"object","properties":{"durationMs":{"type":"integer"}}})",
-        [](AgentCtx& c, std::string_view args, agentxx::plugin::OpCtl ctl
+        [ref](AgentCtx& c, std::string_view args, agentxx::plugin::OpCtl ctl
         ) -> agentxx::plugin::Task<std::string> {
             int ms = 200;
             try {
@@ -198,11 +208,12 @@ static int exampleAgentSetup(AgentCtx& ctx) {
     //   2. 主程序回调式异步接口 (`co_await call_tool`) —— 完成回调同样不重入插件协程。
     // 因此这里的循环既不是轮询、也不占用额外线程: 每一步都对应一次主程序驱动。
     agentxx::plugin::tool(
-        ctx,
+         ctx,
+         ref,
         "example_bridge",
         "Report coroutine bridge diagnostics (driver tickets/steps, host IO thread).",
         R"({"type":"object","properties":{"ticks":{"type":"integer"}}})",
-        [](AgentCtx& c, std::string_view args, agentxx::plugin::OpCtl ctl
+        [ref](AgentCtx& c, std::string_view args, agentxx::plugin::OpCtl ctl
         ) -> agentxx::plugin::Task<std::string> {
             int ticks = 1;
             try {
@@ -228,6 +239,7 @@ static int exampleAgentSetup(AgentCtx& ctx) {
             // 主程序回调式互调: 完成回调同样只投递 + 唤醒
             std::string echo = co_await agentxx::plugin::call_tool(
                 c,
+                ref,
                 "example_echo",
                 R"({"from":"example_bridge"})",
                 ctl.sessionId
@@ -252,7 +264,8 @@ static int exampleAgentSetup(AgentCtx& ctx) {
     //   offload 工作线程 + 局部 io_context 跑完 (行为对业务体透明)。
     // 返回的 pumpOnStart 证明该协程确实以"受控轮询根"身份运行。
     agentxx::plugin::polled_tool(
-        ctx,
+         ctx,
+         ref,
         "example_polled_timer",
         "Wait ticks * intervalMs with an asio steady_timer on the plugin local reactor "
         "(controlled polling sample) and report the measured elapsed time.",
@@ -318,6 +331,7 @@ static int exampleAgentSetup(AgentCtx& ctx) {
     if (ctx.iface.hooks && ctx.iface.hooks->register_hook) {
         agentxx::plugin::hook(
             ctx,
+            ref,
             AGENTXX_PLUGIN_HOOK_AGENT_START,
             [](AgentCtx& c, AgentxxPluginHookPoint, std::string_view) {
                 c.log.info("example hook: agent_start fired");
@@ -327,9 +341,9 @@ static int exampleAgentSetup(AgentCtx& ctx) {
 
     // 3. 事件订阅
     auto topic1 = agentxx::plugin::PluginStringView::fromCstr("demo.topic");
-    ctx.iface.events->subscribe(host, &topic1, on_demo_event, &ctx);
+    ctx.iface.events->subscribe(host, ref.ptr(), &topic1, on_demo_event, &ctx);
     auto topic2 = agentxx::plugin::PluginStringView::fromCstr("client.example_plugin.hello");
-    ctx.iface.events->subscribe(host, &topic2, on_client_hello, &ctx);
+    ctx.iface.events->subscribe(host, ref.ptr(), &topic2, on_client_hello, &ctx);
 
     // 4. 能力
     if (ctx.iface.capabilities && ctx.iface.capabilities->register_capability) {
@@ -340,7 +354,7 @@ static int exampleAgentSetup(AgentCtx& ctx) {
     // 5. 提示词读写
     if (ctx.iface.prompt && ctx.iface.prompt->get_prompt && ctx.iface.prompt->set_prompt) {
         PluginxxString full{nullptr, 0};
-        ctx.iface.prompt->get_prompt(host, &full);
+        ctx.iface.prompt->get_prompt(host, ref.ptr(), &full);
         if (full.data) {
             std::string prompt(full.data, static_cast<size_t>(full.size));
             agentxx::plugin::PluginString::free(host, &full);
@@ -348,7 +362,7 @@ static int exampleAgentSetup(AgentCtx& ctx) {
                 const char* promptJson
                     = R"({"toolPrompt":{"example_echo":{"depict":"Echo the input arguments back as JSON (example plugin tool).","args":{}}}})";
                 auto promptSv = agentxx::plugin::PluginStringView::fromCstr(promptJson);
-                ctx.iface.prompt->set_prompt(host, &promptSv);
+                ctx.iface.prompt->set_prompt(host, ref.ptr(), &promptSv);
             }
         }
     }
@@ -368,17 +382,48 @@ static void*
         }
         return nullptr;
     }
-    if (exampleAgentSetup(ctx) != 0) {
+    // 进程级启动: 本插件没有自管线程/定时器, 注册全在挂载阶段做
+    ctx.log.info("example plugin started");
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+static void* exampleAgentMount(
+    AgentCtx&                          ctx,
+    const AgentxxPluginAgentMountSpec* spec,
+    const PluginxxOperatorNotify*      notify,
+    PluginxxString*                    error
+) {
+    if (!notify) {
         if (error) {
             agentxx::plugin::PluginString::set(
                 ctx.host,
                 error,
-                "example_plugin start: registration transaction failed"
+                "example_plugin mount: notify required"
             );
         }
         return nullptr;
     }
-    ctx.log.info("example plugin started");
+    const agentxx::plugin::AgentRef ref(*spec);
+    if (exampleAgentSetup(ctx, ref) != 0) {
+        if (error) {
+            agentxx::plugin::PluginString::set(
+                ctx.host,
+                error,
+                "example_plugin mount: registration transaction failed"
+            );
+        }
+        return nullptr;
+    }
+    ctx.log.info("example plugin mounted");
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+static void* exampleAgentUnmount(
+    AgentCtx&, void*, const PluginxxOperatorNotify* notify, PluginxxString*
+) {
+    // 工具/钩子/订阅/提示词由主程序按挂载记录撤销
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
@@ -391,7 +436,13 @@ static void* exampleAgentStop(AgentCtx&, const PluginxxOperatorNotify* notify, P
     return nullptr;
 }
 
-AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(AgentCtx, exampleAgentStart, exampleAgentStop)
+AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(
+    AgentCtx,
+    exampleAgentStart,
+    exampleAgentStop,
+    exampleAgentMount,
+    exampleAgentUnmount
+)
 
 extern "C" PLUGINXX_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
     auto* ctx = static_cast<AgentCtx*>(plugin_ctx);

@@ -373,8 +373,9 @@ extern "C" PLUGINXX_EXPORT const PluginxxInfo* PLUGINXX_CALL agentxx_plugin_agen
     );
 }
 
-/// 注册事务 (start 的实际内容): prompt 贡献 + 规划工具注册 + client_attached 订阅。
-static int planningSetup(PluginCtx* ctx) {
+/// 挂载事务 (mount 的实际内容): prompt 贡献 + 规划工具注册 + client_attached 订阅。
+/// - `ref` 为本次挂载的 agent 引用, 提示词/工具/订阅都记在该 agent 名下
+static int planningSetup(PluginCtx* ctx, const agentxx::plugin::ScopeRef& ref) {
     const PluginxxHost* host = ctx->host;
     // 注入 planning 附加提示词至主程序 (经通用 appendSystemPrompts 与 toolPrompt)
     if (ctx->iface.prompt && ctx->iface.prompt->set_prompt) {
@@ -396,7 +397,7 @@ static int planningSetup(PluginCtx* ctx) {
 
         std::string js       = j.dump();
         auto        promptSv = agentxx::plugin::PluginStringView::from(js.data(), js.size());
-        if (ctx->iface.prompt->set_prompt(host, &promptSv) != 0) {
+        if (ctx->iface.prompt->set_prompt(host, ref.ptr(), &promptSv) != 0) {
             pluginLog(ctx, 3, "agentxx_planning: set prompts failed");
         } else {
             pluginLog(
@@ -447,6 +448,7 @@ static int planningSetup(PluginCtx* ctx) {
 
         agentxx::plugin::fast_tool(
             *ctx,
+            ref,
             kNamePlanning,
             kDepictPlanning,
             schema,
@@ -536,7 +538,7 @@ static int planningSetup(PluginCtx* ctx) {
     // 主程序约定事件 client_attached 订阅: 客户端接入/重连时重发当前会话快照
     if (ctx->iface.events && ctx->iface.events->subscribe) {
         auto topicSv = agentxx::plugin::PluginStringView::fromCstr("agentxx_host.client_attached");
-        if (!ctx->iface.events->subscribe(host, &topicSv, on_client_attached, ctx)) {
+        if (!ctx->iface.events->subscribe(host, ref.ptr(), &topicSv, on_client_attached, ctx)) {
             pluginLog(
                 ctx,
                 3,
@@ -574,9 +576,28 @@ extern "C" PLUGINXX_EXPORT int32_t PLUGINXX_CALL
 }
 
 extern "C" PLUGINXX_EXPORT void* PLUGINXX_CALL agentxx_plugin_agent_start(
-    void*                         plugin_ctx,
+    void*,
     const PluginxxOperatorNotify* notify,
-    PluginxxString*               error_out
+    PluginxxString*
+) {
+    return agentxx::plugin::guardCall(
+        [](const char*) noexcept {},
+        static_cast<void*>(nullptr),
+        [&]() -> void* {
+            // 进程级启动: 本插件没有自管线程/定时器; 注册全在挂载阶段做
+            if (notify && notify->done) {
+                notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+            }
+            return nullptr;
+        }
+    );
+}
+
+extern "C" PLUGINXX_EXPORT void* PLUGINXX_CALL agentxx_plugin_agent_mount(
+    void*                              plugin_ctx,
+    const AgentxxPluginAgentMountSpec* spec,
+    const PluginxxOperatorNotify*      notify,
+    PluginxxString*                    error_out
 ) {
     return agentxx::plugin::guardCall(
         [](const char*) noexcept {},
@@ -584,30 +605,46 @@ extern "C" PLUGINXX_EXPORT void* PLUGINXX_CALL agentxx_plugin_agent_start(
         [&]() -> void* {
             auto* ctx = static_cast<PluginCtx*>(plugin_ctx);
             if (!ctx) {
-                agentxx::plugin::PluginString::set(
-                    nullptr,
-                    error_out,
-                    "planning start: null context"
-                );
+                agentxx::plugin::PluginString::set(nullptr, error_out, "planning mount: null context");
                 return nullptr;
             }
-            if (!notify) {
+            if (!notify || !spec) {
                 agentxx::plugin::PluginString::set(
                     ctx->host,
                     error_out,
-                    "agentxx_planning start: notify required"
+                    "agentxx_planning mount: notify and spec required"
                 );
                 return nullptr;
             }
-            if (planningSetup(ctx) != 0) {
+            const agentxx::plugin::AgentRef ref(*spec);
+            if (planningSetup(ctx, ref) != 0) {
                 agentxx::plugin::PluginString::set(
                     ctx->host,
                     error_out,
-                    "agentxx_planning start: registration failed"
+                    "agentxx_planning mount: registration failed"
                 );
                 return nullptr;
             }
             notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+            return nullptr;
+        }
+    );
+}
+
+extern "C" PLUGINXX_EXPORT void* PLUGINXX_CALL agentxx_plugin_agent_unmount(
+    void*,
+    void*,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*
+) {
+    return agentxx::plugin::guardCall(
+        [](const char*) noexcept {},
+        static_cast<void*>(nullptr),
+        [&]() -> void* {
+            // 无 per-agent 状态; 工具/提示词/订阅由主程序按挂载记录撤销
+            if (notify && notify->done) {
+                notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+            }
             return nullptr;
         }
     );

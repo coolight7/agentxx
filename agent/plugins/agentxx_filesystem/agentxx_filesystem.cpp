@@ -212,10 +212,15 @@ struct FsPluginCtx : public PluginBase {};
 /// 构造按模式参数展开后的路径权限过滤器 (读作用域; 见 filesystem_impl.h 的 PathFilterFn)
 /// - 已明确允许(Allow)才保留; 被拒绝(Deny)与未获批准(Ask)一律不进入结果 (fail-closed)
 /// - 主程序未加载权限中间件时查询不可用, 过滤器返回空标记 → 工具跳过过滤 (保持原行为)
-static PathFilterFn makeReadPathFilter(FsPluginCtx& ctx, std::string_view sessionId) {
-    return [&ctx, sid = std::string{sessionId}](const std::vector<std::string>& paths) {
+static PathFilterFn makeReadPathFilter(
+    FsPluginCtx&     ctx,
+    const ScopeRef&  ref,
+    std::string_view sessionId
+) {
+    return [&ctx, ref, sid = std::string{sessionId}](const std::vector<std::string>& paths) {
         return agentxx::plugin::filterPathPermissions(
             ctx,
+            ref,
             agentxx::plugin::PermissionScope::Read,
             sid,
             paths
@@ -229,6 +234,7 @@ static PathFilterFn makeReadPathFilter(FsPluginCtx& ctx, std::string_view sessio
 /// - 主程序未加载权限中间件时查询不可用 (返回空), 此时跳过复核保持原行为
 static bool destinationAllowed(
     FsPluginCtx&       ctx,
+    const ScopeRef&    ref,
     std::string_view   sessionId,
     std::string_view   workDir,
     const std::string& dst,
@@ -237,6 +243,7 @@ static bool destinationAllowed(
     auto dstAbs    = agentxx_fs_plugin::detail::wsAbs(std::string{workDir}, dst);
     auto decisions = agentxx::plugin::checkPathDecisions(
         ctx,
+        ref,
         agentxx::plugin::PermissionScope::Write,
         sessionId,
         std::vector<std::string>{std::move(dstAbs)}
@@ -251,8 +258,9 @@ static bool destinationAllowed(
     return false;
 }
 
-/// 注册事务 (start 的实际内容); 失败由主程序按拒绝处理并回滚。
-static int32_t fsSetup(FsPluginCtx& ctx) {
+/// 注册事务 (挂载的实际内容); 失败由主程序按拒绝处理并回滚。
+/// - `ref` 为本次挂载的 agent 引用, 工具注册与权限声明都记在该 agent 名下
+static int32_t fsSetup(FsPluginCtx& ctx, const ScopeRef& ref) {
     // 说明: 每个工具注册后立即声明其权限限制 (目标参数 `path`, 读/写作用域),
     // 具体判定 (白/黑名单、permission.mode、记住的选择、工作区隔离) 由主程序
     // 权限中间件执行; 未声明的工具不参与权限判定 (直接放行)
@@ -286,11 +294,12 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
               .build();
 
     blocking_tool(
-        ctx,
+         ctx,
+         ref,
         kNameList,
         kDepictList,
         listSchema,
-        [](FsPluginCtx&               c,
+        [ref](FsPluginCtx&               c,
            std::string_view           args_json,
            std::string_view           tid,
            std::string_view           workDir,
@@ -304,9 +313,9 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
                 args.raw(),
                 std::string(workDir),
                 [&] {
-                    return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCancelled(tid);
+                    return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCancelled(ref.ptr(), tid);
                 },
-                makeReadPathFilter(c, tid)
+                makeReadPathFilter(c, ref, tid)
             );
         },
         0,
@@ -314,7 +323,7 @@ static int32_t fsSetup(FsPluginCtx& ctx) {
     );
     // 列表按读取类工具处理: 声明 `path` (可为通配模式) 决定是否询问一次;
     // 列出的条目 (含 recursive 下钻结果) 在工具内逐项复核权限后才输出
-    registerReadPathPermission(ctx, kNameList, "path");
+    registerReadPathPermission(ctx, ref, kNameList, "path");
 
     // 2. Read
     auto readSchema
@@ -335,7 +344,8 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
 
     if (utilxx_base::isAsyncFileIoSupported()) {
         polled_tool(
-            ctx,
+             ctx,
+             ref,
             kNameRead,
             kDepictRead,
             readSchema,
@@ -358,11 +368,12 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
         );
     } else {
         blocking_tool(
-            ctx,
+             ctx,
+             ref,
             kNameRead,
             kDepictRead,
             readSchema,
-            [](FsPluginCtx&               c,
+            [ref](FsPluginCtx&               c,
                std::string_view           args_json,
                std::string_view           tid,
                std::string_view           workDir,
@@ -373,14 +384,14 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
                     return args.errorMessage();
                 }
                 return fileReadExecute(args.raw(), std::string(workDir), [&] {
-                    return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCancelled(tid);
+                    return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCancelled(ref.ptr(), tid);
                 });
             },
             0,
             kReadFlags
         );
     }
-    registerReadPathPermission(ctx, kNameRead, "path");
+    registerReadPathPermission(ctx, ref, kNameRead, "path");
 
     // 3. Write
     auto writeSchema
@@ -396,7 +407,8 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
 
     if (utilxx_base::isAsyncFileIoSupported()) {
         polled_tool(
-            ctx,
+             ctx,
+             ref,
             kNameWrite,
             kDepictWrite,
             writeSchema,
@@ -419,11 +431,12 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
         );
     } else {
         blocking_tool(
-            ctx,
+             ctx,
+             ref,
             kNameWrite,
             kDepictWrite,
             writeSchema,
-            [](FsPluginCtx&               c,
+            [ref](FsPluginCtx&               c,
                std::string_view           args_json,
                std::string_view           tid,
                std::string_view           workDir,
@@ -435,14 +448,14 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
                     return args.errorMessage();
                 }
                 return fileWriteExecute(args.raw(), std::string(workDir), [&] {
-                    return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCancelled(tid);
+                    return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCancelled(ref.ptr(), tid);
                 });
             },
             0,
             kWriteFlags
         );
     }
-    registerWritePathPermission(ctx, kNameWrite, "path");
+    registerWritePathPermission(ctx, ref, kNameWrite, "path");
 
     // 4. Edit
     // 两种写法: 多段 `edits: [{old_str,new_str}, ...]` (推荐, 一次改多处) 与
@@ -474,7 +487,8 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
 
     if (utilxx_base::isAsyncFileIoSupported()) {
         polled_tool(
-            ctx,
+             ctx,
+             ref,
             kNameEdit,
             kDepictEdit,
             editSchema,
@@ -494,11 +508,12 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
         );
     } else {
         blocking_tool(
-            ctx,
+             ctx,
+             ref,
             kNameEdit,
             kDepictEdit,
             editSchema,
-            [](FsPluginCtx&               c,
+            [ref](FsPluginCtx&               c,
                std::string_view           args_json,
                std::string_view           tid,
                std::string_view           workDir,
@@ -509,12 +524,12 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
                     return args.errorMessage();
                 }
                 return fileEditExecute(args.raw(), std::string(workDir), [&] {
-                    return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCancelled(tid);
+                    return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCancelled(ref.ptr(), tid);
                 });
             }
         );
     }
-    registerWritePathPermission(ctx, kNameEdit, "path");
+    registerWritePathPermission(ctx, ref, kNameEdit, "path");
 
     // 5. Glob
     // 权限限制: 先按 `file_patterns` (数组) 声明读权限 —— 这决定"是否询问用户一次"
@@ -536,11 +551,12 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
                           .build();
 
     blocking_tool(
-        ctx,
+         ctx,
+         ref,
         kNameGlob,
         kDepictGlob,
         globSchema,
-        [](FsPluginCtx&               c,
+        [ref](FsPluginCtx&               c,
            std::string_view           args_json,
            std::string_view           tid,
            std::string_view           workDir,
@@ -554,15 +570,15 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
                 args.raw(),
                 std::string(workDir),
                 [&] {
-                    return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCancelled(tid);
+                    return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCancelled(ref.ptr(), tid);
                 },
-                makeReadPathFilter(c, tid)
+                makeReadPathFilter(c, ref, tid)
             );
         },
         0,
         kReadOnlyFlags
     );
-    registerReadPathPermission(ctx, kNameGlob, "file_patterns");
+    registerReadPathPermission(ctx, ref, kNameGlob, "file_patterns");
 
     // 6. Grep
     auto grepSchema = ctx.schema(kNameGrep)
@@ -590,11 +606,12 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
                           .build();
 
     blocking_tool(
-        ctx,
+         ctx,
+         ref,
         kNameGrep,
         kDepictGrep,
         grepSchema,
-        [](FsPluginCtx&               c,
+        [ref](FsPluginCtx&               c,
            std::string_view           args_json,
            std::string_view           tid,
            std::string_view           workDir,
@@ -608,9 +625,9 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
                 args.raw(),
                 std::string(workDir),
                 [&] {
-                    return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCancelled(tid);
+                    return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCancelled(ref.ptr(), tid);
                 },
-                makeReadPathFilter(c, tid)
+                makeReadPathFilter(c, ref, tid)
             );
         },
         0,
@@ -618,7 +635,7 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
     );
     // 权限限制: 同 glob —— 按 `file_patterns` (数组) 声明读权限决定是否询问,
     // 扫描出的文件在工具内逐项复核后才读取 (被拒/未获批准的文件不读)
-    registerReadPathPermission(ctx, kNameGrep, "file_patterns");
+    registerReadPathPermission(ctx, ref, kNameGrep, "file_patterns");
 
     // 7. Move
     auto moveSchema = ctx.schema(kNameMove)
@@ -628,11 +645,12 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
                           .build();
 
     blocking_tool(
-        ctx,
+         ctx,
+         ref,
         kNameMove,
         kDepictMove,
         moveSchema,
-        [](FsPluginCtx&               c,
+        [ref](FsPluginCtx&               c,
            std::string_view           args_json,
            std::string_view           tid,
            std::string_view           workDir,
@@ -644,11 +662,11 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
                 return args.errorMessage();
             }
             std::string reason;
-            if (false == destinationAllowed(c, tid, workDir, dst, reason)) {
+            if (false == destinationAllowed(c, ref, tid, workDir, dst, reason)) {
                 return reason;
             }
             return fileMoveExecute(args.raw(), std::string(workDir), [&] {
-                return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCancelled(tid);
+                return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCancelled(ref.ptr(), tid);
             });
         },
         0,
@@ -656,7 +674,7 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
     );
     // 权限限制: 声明 `src` (被移动的路径) 为写入目标决定是否询问一次;
     // `dst` 在工具内用只读查询复核 (见 destinationAllowed)
-    registerWritePathPermission(ctx, kNameMove, "src");
+    registerWritePathPermission(ctx, ref, kNameMove, "src");
 
     // 8. Copy
     auto copySchema = ctx.schema(kNameCopy)
@@ -666,11 +684,12 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
                           .build();
 
     blocking_tool(
-        ctx,
+         ctx,
+         ref,
         kNameCopy,
         kDepictCopy,
         copySchema,
-        [](FsPluginCtx&               c,
+        [ref](FsPluginCtx&               c,
            std::string_view           args_json,
            std::string_view           tid,
            std::string_view           workDir,
@@ -682,18 +701,18 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
                 return args.errorMessage();
             }
             std::string reason;
-            if (false == destinationAllowed(c, tid, workDir, dst, reason)) {
+            if (false == destinationAllowed(c, ref, tid, workDir, dst, reason)) {
                 return reason;
             }
             return fileCopyExecute(args.raw(), std::string(workDir), [&] {
-                return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCancelled(tid);
+                return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCancelled(ref.ptr(), tid);
             });
         },
         0,
         kWriteFlags
     );
     // 权限限制: 同 move
-    registerWritePathPermission(ctx, kNameCopy, "src");
+    registerWritePathPermission(ctx, ref, kNameCopy, "src");
 
     // 9. Remove
     auto removeSchema = ctx.schema(kNameRemove)
@@ -702,11 +721,12 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
                             .build();
 
     blocking_tool(
-        ctx,
+         ctx,
+         ref,
         kNameRemove,
         kDepictRemove,
         removeSchema,
-        [](FsPluginCtx&               c,
+        [ref](FsPluginCtx&               c,
            std::string_view           args_json,
            std::string_view           tid,
            std::string_view           workDir,
@@ -717,29 +737,49 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
                 return args.errorMessage();
             }
             return fileRemoveExecute(args.raw(), std::string(workDir), [&] {
-                return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCancelled(tid);
+                return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCancelled(ref.ptr(), tid);
             });
         },
         0,
         kWriteFlags
     );
     // 删除是写操作: 声明 `path` 为写入目标 (同 write/edit)
-    registerWritePathPermission(ctx, kNameRemove, "path");
+    registerWritePathPermission(ctx, ref, kNameRemove, "path");
 
     return 0;
 }
 
+/// 进程级启动: 本插件没有自管线程/定时器/订阅, 工具注册全在挂载阶段做
 static void*
-    fsStart(FsPluginCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString* error) {
+    fsStart(FsPluginCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+static void* fsStop(FsPluginCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
+    // 无自管线程/定时器; 注册记录由主程序在卸载时统一撤销。
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+/// 挂载: 把 9 个文件系统工具与它们的权限声明注册到本 agent 名下
+/// - 返回值是本次挂载的用户数据 (无 per-agent 状态, 返回 nullptr)
+static void* fsMount(
+    FsPluginCtx&                       ctx,
+    const AgentxxPluginAgentMountSpec* spec,
+    const PluginxxOperatorNotify*      notify,
+    PluginxxString*                    error
+) {
     if (!notify) {
         if (error) {
-            PluginString::set(ctx.host, error, "agentxx_filesystem start: notify required");
+            PluginString::set(ctx.host, error, "agentxx_filesystem mount: notify required");
         }
         return nullptr;
     }
-    if (fsSetup(ctx) != 0) {
+    const AgentRef ref(*spec);
+    if (fsSetup(ctx, ref) != 0) {
         if (error) {
-            PluginString::set(ctx.host, error, "agentxx_filesystem start: registration failed");
+            PluginString::set(ctx.host, error, "agentxx_filesystem mount: registration failed");
         }
         return nullptr;
     }
@@ -747,8 +787,14 @@ static void*
     return nullptr;
 }
 
-static void* fsStop(FsPluginCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
-    // 无自管线程/定时器; 注册记录由主程序在 stop 后统一撤销。
+/// 卸载: 无 per-agent 状态需要释放 (工具与权限声明由主程序按记录撤销)
+static void* fsUnmount(
+    FsPluginCtx&,
+    void*                         userData,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*
+) {
+    (void)userData;
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
@@ -759,7 +805,9 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
     "1.0.0",
     "File system tools: list, read, write, edit, glob, grep",
     fsStart,
-    fsStop
+    fsStop,
+    fsMount,
+    fsUnmount
 );
 
 struct FsClientCtx : public ClientPluginBase {};

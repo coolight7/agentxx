@@ -50,7 +50,7 @@ struct ExecPluginCtx : public PluginBase {
 ///   自动撤销并恢复基础值; 同一工具由多个插件实例贡献时互不覆盖
 /// - 主程序未提供 prompt 接口表 (精简主程序) 时跳过: 描述文本仍随工具注册直接生效
 static void
-    publishToolPrompt(ExecPluginCtx& ctx, std::string_view toolName, const ExecPromptText& prompt) {
+    publishToolPrompt(ExecPluginCtx& ctx, const ScopeRef& ref, std::string_view toolName, const ExecPromptText& prompt) {
     if (!ctx.host || !ctx.iface.prompt || !ctx.iface.prompt->set_prompt) {
         pluginLog(
             &ctx,
@@ -75,7 +75,8 @@ static void
 
     const std::string js   = patch.dump();
     const auto        jsSv = PluginStringView::from(js.data(), js.size());
-    if (ctx.iface.prompt->set_prompt(ctx.host, &jsSv) != 0) {
+    auto              agentRef = ref.raw();
+    if (ctx.iface.prompt->set_prompt(ctx.host, &agentRef, &jsSv) != 0) {
         pluginLog(&ctx, 3, fmt::format("agentxx_execute_command: set_prompt({}) failed", toolName));
         return;
     }
@@ -86,22 +87,11 @@ static void
     );
 }
 
-static int32_t setupExecPlugin(ExecPluginCtx& ctx) {
-    // 环境探测 (python/node 可用性与版本, Windows 侧含 PowerShell 版本):
-    // - 阻塞式子进程探测, 每次 start 只执行一次, 结果存实例上下文
-    // - 必须在工具注册前完成: 工具 definition 的 description/parameters 在注册时
-    //   由主程序固化, 之后无法再刷新 (提示词注入了也只能改主程序提示词表)
-    ctx.env = detectExecEnv();
-
-    // 记录本次运行实际生效的子进程环境策略 (排查"为什么工具里跑命令的输出
-    // 与手敲不同": 输出编码 / PWD / NO_COLOR/TERM/PAGER 固定下发, POSIX 侧 locale
-    // 按环境选择, Windows 侧不动 locale; 见 execute_command_impl.h 的
-    // resolveExecEnvPolicy; 这里不带参数 = 按主程序当前目录记录, 实际每条命令的
-    // PWD 取该命令的运行目录)
-    XX_LOGI(
-        "agentxx_execute_command: child env policy: {}",
-        agentxx_execmd_plugin::detail::resolveExecEnvPolicy().describe
-    );
+static int32_t setupExecPlugin(ExecPluginCtx& ctx, const ScopeRef& ref) {
+    // 环境/提示词/工具注册全部是 agent 级工作 (提示词按 agent 贡献, 工具进该 agent
+    // 的工具表)。环境探测本身与 agent 无关, 但只在首次挂载时做一次即可, 这里仍按
+    // 挂载做, 保证多 agent 不会共享一份过期结果。
+    // 环境探测结果已由 start 写入 ctx.env; 这里只做与它相关的提示词与工具注册
 
 #if XX_IS_WIN_D
     // Windows 侧命令的语法指引随实际执行路径变化: boost.process v2 直传 argv
@@ -116,7 +106,7 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx) {
     const auto winPrompt = windowsToolPrompt(ctx.env, viaProcessSpawn);
     // 先注入提示词再注册: polled_tool/blocking_tool 注册时经 ctx.toolPrompt(name)
     // 读取主程序提示词的 depict 作为工具描述, 注册后无法再改
-    publishToolPrompt(ctx, kNameWindows, winPrompt);
+    publishToolPrompt(ctx, ref, kNameWindows, winPrompt);
 
     auto winSchema
         = ctx.schema(kNameWindows)
@@ -137,10 +127,11 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx) {
 #if defined(BOOST_PROCESS_V2_PROCESS_HPP)
     polled_tool(
         ctx,
+        ref,
         kNameWindows,
         winPrompt.depict,
         winSchema,
-        [](ExecPluginCtx&             c,
+        [ref](ExecPluginCtx&             c,
            std::string_view           args_json,
            std::string_view           tid,
            std::string_view           workDir,
@@ -158,8 +149,8 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx) {
             };
             StoreFn storeFn = nullptr;
             if (!tidStr.empty() && c.iface.session && c.iface.session->add_share_store) {
-                storeFn = [&c, tidStr](std::string_view content) -> long long {
-                    return c.addShareStore(tidStr, content);
+                storeFn = [&c, ref, tidStr](std::string_view content) -> long long {
+                    return c.addShareStore(ref, tidStr, content);
                 };
             }
             // 子进程管道/计时器绑定到本协程的 executor (= 插件本地 reactor),
@@ -178,10 +169,11 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx) {
 #else
     blocking_tool(
         ctx,
+        ref,
         kNameWindows,
         winPrompt.depict,
         winSchema,
-        [](ExecPluginCtx&             c,
+        [ref](ExecPluginCtx&             c,
            std::string_view           args_json,
            std::string_view           tid,
            std::string_view           workDir,
@@ -240,10 +232,11 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx) {
 #if defined(BOOST_PROCESS_V2_PROCESS_HPP)
     polled_tool(
         ctx,
+        ref,
         kNameBash,
         bashPrompt.depict,
         bashSchema,
-        [](ExecPluginCtx&             c,
+        [ref](ExecPluginCtx&             c,
            std::string_view           args_json,
            std::string_view           tid,
            std::string_view           workDir,
@@ -281,10 +274,11 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx) {
 #else
     blocking_tool(
         ctx,
+        ref,
         kNameBash,
         bashPrompt.depict,
         bashSchema,
-        [](ExecPluginCtx&             c,
+        [ref](ExecPluginCtx&             c,
            std::string_view           args_json,
            std::string_view           tid,
            std::string_view           workDir,
@@ -322,23 +316,46 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx) {
 }
 
 static void*
-    execStart(ExecPluginCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString* error) {
+    execStart(ExecPluginCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
+    // 进程级只做环境探测 (与 agent 无关); 提示词与工具注册在 mount 里
+    ctx.env = detectExecEnv();
+    XX_LOGI(
+        "agentxx_execute_command: child env policy: {}",
+        agentxx_execmd_plugin::detail::resolveExecEnvPolicy().describe
+    );
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+static void* execMount(
+    ExecPluginCtx&                     ctx,
+    const AgentxxPluginAgentMountSpec* spec,
+    const PluginxxOperatorNotify*      notify,
+    PluginxxString*                    error
+) {
     if (!notify) {
         if (error) {
-            PluginString::set(ctx.host, error, "agentxx_execute_command start: notify required");
+            PluginString::set(ctx.host, error, "agentxx_execute_command mount: notify required");
         }
         return nullptr;
     }
-    if (setupExecPlugin(ctx) != 0) {
+    const AgentRef ref(*spec);
+    if (setupExecPlugin(ctx, ref) != 0) {
         if (error) {
             PluginString::set(
                 ctx.host,
                 error,
-                "agentxx_execute_command start: registration failed"
+                "agentxx_execute_command mount: registration failed"
             );
         }
         return nullptr;
     }
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+static void*
+    execUnmount(ExecPluginCtx&, void*, const PluginxxOperatorNotify* notify, PluginxxString*) {
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
@@ -355,7 +372,9 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
     "1.0.0",
     "Execute system commands (bash/windows terminal) with timeout/cancellation",
     execStart,
-    execStop
+    execStop,
+    execMount,
+    execUnmount
 );
 
 struct ExecClientCtx : public ClientPluginBase {};

@@ -136,25 +136,38 @@ extern "C" PLUGINXX_EXPORT int
 ///
 /// 入口语义 (见 docs/zh-cn/design/plugins.md 第 15 节):
 /// - `create`: 只分配上下文、查询接口, 不提交运行时注册。
-/// - `start`: 注册事务 (运行时 skill 目录); 失败返回 NULL + error, 主程序按拒绝
-///   处理并回滚本次已生效的注册与声明式资源。
+/// - `start`: 进程级启动, 本插件没有自管线程/定时器, 只给出完成信号。
+/// - `mount`: 挂载事务 (运行时 skill 目录等 agent 级注册); 失败返回 NULL + error,
+///   主程序按拒绝处理并回滚本次已生效的注册与声明式资源。
+/// - `unmount`: 本插件的运行时资源由主程序按 owner 记录统一摘除, 这里只给完成信号。
 /// - `stop`: 本插件没有自管线程/定时器, 只给出完成信号; 资源由主程序在 stop 后
 ///   统一摘除 (skills/memory/mcp 的 owner 记录), 这里不重复反注册。
 /// - `destroy`: 只释放本地内存, 不创建异步工作、不调用主程序注册接口。
 
 static void*
-    resAgentStart(ResCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString* error) {
+    resAgentStart(ResCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+static void* resAgentMount(
+    ResCtx&                            ctx,
+    const AgentxxPluginAgentMountSpec* spec,
+    const PluginxxOperatorNotify*      notify,
+    PluginxxString*                    error
+) {
     if (!notify) {
         if (error) {
             agentxx::plugin::PluginString::set(
                 ctx.host,
                 error,
-                "example_resources start: notify required"
+                "example_resources mount: notify required"
             );
         }
         return nullptr;
     }
-    const PluginxxHost* host = ctx.host;
+    const agentxx::plugin::AgentRef ref(*spec);
+    const PluginxxHost*          host = ctx.host;
 
     // ---- 运行时注册: 追加 skill 目录 (声明式段见 plugin.yaml) ----
     // - 与 yaml 主配置或其他插件冲突时返回非 0 (yaml 优先, 此处仅告警不失败);
@@ -167,7 +180,7 @@ static void*
             runtimeSkillDir.data(),
             runtimeSkillDir.size()
         );
-        if (ctx.iface.resources->register_skill_dir(host, &skillDirSv) != 0) {
+        if (ctx.iface.resources->register_skill_dir(host, ref.ptr(), &skillDirSv) != 0) {
             auto warnSv = agentxx::plugin::PluginStringView::fromCstr(
                 "[example_resources] register runtime skill dir failed"
             );
@@ -200,7 +213,20 @@ static void* resAgentStop(ResCtx&, const PluginxxOperatorNotify* notify, Pluginx
     return nullptr;
 }
 
-AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(ResCtx, resAgentStart, resAgentStop)
+static void* resAgentUnmount(
+    ResCtx&, void*, const PluginxxOperatorNotify* notify, PluginxxString*
+) {
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(
+    ResCtx,
+    resAgentStart,
+    resAgentStop,
+    resAgentMount,
+    resAgentUnmount
+)
 
 extern "C" PLUGINXX_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
     // C ABI 边界异常守卫: 销毁回调异常不得外泄。

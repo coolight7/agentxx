@@ -96,23 +96,37 @@ using namespace agentxx_computer_use_plugin;
 
 struct ComputerUsePluginCtx : public agentxx::plugin::PluginBase {};
 
-/// ==================== 生命周期 (create 只构造, start 注册, stop 撤销) ====================
+/// ==================== 生命周期 (create 只构造, start 进程级, mount 注册, stop 撤销) ====================
 
 static void* computerUseAgentStart(
     ComputerUsePluginCtx&         ctx,
     const PluginxxOperatorNotify* notify,
-    PluginxxString*               err
+    PluginxxString*
+) {
+    // 本插件没有进程级工作 (无连接/线程/定时器)
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    (void)ctx;
+    return nullptr;
+}
+
+static void* computerUseAgentMount(
+    ComputerUsePluginCtx&              ctx,
+    const AgentxxPluginAgentMountSpec* spec,
+    const PluginxxOperatorNotify*      notify,
+    PluginxxString*                    err
 ) {
     if (!ctx.iface.tools || !ctx.iface.tools->register_tool) {
         agentxx::plugin::PluginString::set(ctx.host, err, "tools iface unavailable");
         return nullptr;
     }
+    const agentxx::plugin::AgentRef ref(*spec);
 
     auto        p      = ctx.toolPrompt("agentxx_ui_control_keyboard_mouse");
     std::string depict = p.depict.empty() ? kUiControlDefaultDepict : p.depict;
 
     agentxx::plugin::blocking_tool(
         ctx,
+        ref,
         "agentxx_ui_control_keyboard_mouse",
         depict,
         makeUiControlSchema(),
@@ -125,6 +139,16 @@ static void* computerUseAgentStart(
         }
     );
 
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+static void* computerUseAgentUnmount(
+    ComputerUsePluginCtx&,
+    void*,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*
+) {
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
@@ -142,5 +166,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
     "1.0.0",
     "Computer control on Windows: mouse, keyboard, and scroll input (SendInput based)",
     computerUseAgentStart,
-    computerUseAgentStop
+    computerUseAgentStop,
+    computerUseAgentMount,
+    computerUseAgentUnmount
 );

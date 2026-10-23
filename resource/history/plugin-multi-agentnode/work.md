@@ -100,9 +100,38 @@
 - 内置插件清单生成（`agent/plugins/CMakeLists.txt`）：内置描述表补 `mount`/`unmount`；
   22 个插件子目录 `CMakeLists.txt` 补两个符号改名定义。
 
+### 1.4 插件迁移（全部 21 个 Windows 目标编译通过）
+
+`agent/plugins/**` 全部按"start 只做进程级工作 + mount 做 agent 级注册"改完，
+逐个 target 编译通过（`agentxx_audio_stream` 在 Windows 不参与编译）：
+
+| 插件 | mount 做的事 | per-agent 状态 |
+|---|---|---|
+| `agentxx_math` / `agentxx_string` / `agentxx_system` | 工具注册 | 无 |
+| `agentxx_filesystem` | 9 个工具 + 权限声明；`makeReadPathFilter` / `destinationAllowed` 带引用 | 无 |
+| `agentxx_execute_command` | 提示词注入 + 4 个工具；`storeFn` 捕获引用 | 无 |
+| `agentxx_codegraph` | 5 个工具 + 提示词 + `client_attached` 订阅（索引预热留在 start，索引数据实例级） | 无 |
+| `agentxx_planning` | 提示词 + 规划工具 + `client_attached` 订阅 | 无 |
+| `agentxx_system_monitor` | 系统信息工具（能力/事件订阅/采样任务留在 start） | 无 |
+| `agentxx_computer_use` / `agentxx_rag_search` / `agentxx_websearch` / `agentxx_llm_uncensored` / `agentxx_screen_capture` / `agentxx_text_selection_monitor` | 工具注册 | rag 用 `AgentRef` 存挂载状态 |
+| `agentxx_javascript_engine` | `setMountScope(spec)`：之后脚本注册的工具/钩子/订阅都带该引用 | 引擎内 `mountAgentId_` + `mountRef_` |
+| `example_*`（6 个） | 工具/钩子/功能点/节点类型/资源 | 无 |
+
+同时改了 SDK（`agent/lib/include/agentxx/plugin/api/plugin_kit.h`）：
+
+- 新增 `using pluginxx::ScopeRef;`（此前缺失，插件侧写不出 `ScopeRef`）；
+- `provideFeature` / `unprovideFeature` / `listFeaturePoints` 增加 `const ScopeRef& agent`；
+- `PluginBase::onHostReady` 的 `round_start` 订阅显式传 `nullptr`（基类不知道挂载引用，
+  订阅主程序总线；会话事件一并到达）；
+- 导出宏的空指针判定由 `if (!(MountFn))` 改为 `if ((MountFn) == nullptr)`
+  （前者对函数名会触发 MSVC C4551 警告）。
+
+**JS 引擎的已知限制**（记入 §2.3 后续项）：一份 JS 脚本目前只对应**一个**挂载作用域，
+再次 mount 会覆盖引用；真正的"每 agent 一份 JS 脚本实例"需要把 `JsPluginCtx` 按挂载拆开。
+
 ## 2. 待完成任务
 
-### 2.1 插件迁移（阻塞编译，先做）
+### 2.1 插件迁移（已完成，见 §1.4）
 
 22 个插件全部要改（`agent/plugins/**`）：
 

@@ -143,7 +143,8 @@ Workflow: use `search` to resolve the exact symbol name, then `context`/`callers
 
 static void injectCodegraphSystemPrompt(
     const PluginxxHost*                 host,
-    const agentxx::plugin::AgentIfaces& iface
+    const agentxx::plugin::AgentIfaces& iface,
+    const PluginxxScopeRef*             agent
 ) {
     if (!host || !iface.prompt || !iface.prompt->set_prompt) {
         return;
@@ -154,7 +155,7 @@ static void injectCodegraphSystemPrompt(
     j["appendSystemPrompts"] = append;
     std::string payload      = j.dump();
     auto        payloadSv = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
-    if (iface.prompt->set_prompt(host, &payloadSv) != 0) {
+    if (iface.prompt->set_prompt(host, agent, &payloadSv) != 0) {
         pluginLog(
             host,
             iface.log,
@@ -172,12 +173,16 @@ static void injectCodegraphSystemPrompt(
 }
 
 static void
-    ensureToolPromptsInHost(const PluginxxHost* host, const agentxx::plugin::AgentIfaces& iface) {
+    ensureToolPromptsInHost(
+        const PluginxxHost*                 host,
+        const agentxx::plugin::AgentIfaces& iface,
+        const PluginxxScopeRef*             agent
+    ) {
     if (!host || !iface.prompt || !iface.prompt->get_prompt || !iface.prompt->set_prompt) {
         return;
     }
     PluginxxString json{nullptr, 0};
-    iface.prompt->get_prompt(host, &json);
+    iface.prompt->get_prompt(host, agent, &json);
     if (!json.data) {
         return;
     }
@@ -237,7 +242,7 @@ static void
     patch["toolPrompt"]   = tools;
     std::string payload   = patch.dump();
     auto        payloadSv = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
-    if (iface.prompt->set_prompt(host, &payloadSv) != 0) {
+    if (iface.prompt->set_prompt(host, agent, &payloadSv) != 0) {
         pluginLog(host, iface.log, 3, "agentxx_codegraph: set_prompt failed");
     }
 }
@@ -382,7 +387,7 @@ struct SchemaBuilder {
     }
 };
 
-static void registerAllTools(PluginCtx& ctx) {
+static void registerAllTools(PluginCtx& ctx, const agentxx::plugin::ScopeRef& ref) {
     constexpr int kAutoSummary = AGENTXX_PLUGIN_TOOL_FLAG_AUTO_SUMMARY;
 
     // agentxx_codegraph_search
@@ -394,7 +399,8 @@ static void registerAllTools(PluginCtx& ctx) {
         b.str("query", p.args.contains("query") ? p.args["query"] : def.query);
         b.integer("limit", p.args.contains("limit") ? p.args["limit"] : def.limit, 20);
         agentxx::plugin::blocking_tool(
-            ctx,
+             ctx,
+             ref,
             "agentxx_codegraph_search",
             depict,
             b.dump({"query"}),
@@ -455,7 +461,8 @@ static void registerAllTools(PluginCtx& ctx) {
             3
         );
         agentxx::plugin::blocking_tool(
-            ctx,
+             ctx,
+             ref,
             "agentxx_codegraph_context",
             depict,
             b.dump({"symbol"}),
@@ -497,7 +504,8 @@ static void registerAllTools(PluginCtx& ctx) {
             3
         );
         agentxx::plugin::blocking_tool(
-            ctx,
+             ctx,
+             ref,
             "agentxx_codegraph_callers",
             depict,
             b.dump({"symbol"}),
@@ -534,7 +542,8 @@ static void registerAllTools(PluginCtx& ctx) {
             3
         );
         agentxx::plugin::blocking_tool(
-            ctx,
+             ctx,
+             ref,
             "agentxx_codegraph_callees",
             depict,
             b.dump({"symbol"}),
@@ -572,7 +581,8 @@ static void registerAllTools(PluginCtx& ctx) {
             10
         );
         agentxx::plugin::blocking_tool(
-            ctx,
+             ctx,
+             ref,
             "agentxx_codegraph_path",
             depict,
             b.dump({"from", "to"}),
@@ -821,23 +831,33 @@ extern "C" PLUGINXX_EXPORT int
     });
 }
 
-/// 注册事务 (start 的实际内容): 工具/prompt/事件订阅/后台索引预热。
-/// - dataDir 缺失或 initialize 失败时 mgr 为空: 保持降级加载, start 直接完成
+/// 挂载事务 (mount 的实际内容): 工具/prompt/事件订阅。
+/// - `ref` 为本次挂载的 agent 引用, 提示词/工具/订阅都记在该 agent 名下
+/// - dataDir 缺失或 initialize 失败时 mgr 为空: 保持降级加载, mount 直接完成
 ///   (与迁移前 create 的降级行为一致)。
-/// - 后台 warmup 由 std::thread 改为主程序托管任务 (ctx.spawn): 卸载时可取消,
-///   且 offload 期间持有实例 lease, destroy/dlclose 前必然等待索引代码返回。
-static int codegraphAgentSetup(PluginCtx& ctx) {
+static int codegraphAgentMountSetup(PluginCtx& ctx, const agentxx::plugin::ScopeRef& ref) {
     if (!ctx.mgr) {
         return 0;
     }
-    ensureToolPromptsInHost(ctx.host, ctx.iface);
-    injectCodegraphSystemPrompt(ctx.host, ctx.iface);
-    registerAllTools(ctx);
+    ensureToolPromptsInHost(ctx.host, ctx.iface, ref.ptr());
+    injectCodegraphSystemPrompt(ctx.host, ctx.iface, ref.ptr());
+    registerAllTools(ctx, ref);
 
     if (ctx.iface.events && ctx.iface.events->subscribe) {
         auto attachTopic
             = agentxx::plugin::PluginStringView::fromCstr("agentxx_host.client_attached");
-        ctx.iface.events->subscribe(ctx.host, &attachTopic, on_client_attached, &ctx);
+        ctx.iface.events->subscribe(ctx.host, ref.ptr(), &attachTopic, on_client_attached, &ctx);
+    }
+    return 0;
+}
+
+/// 进程级启动工作: 后台索引预热 + 状态事件。
+/// - 索引数据在实例上下文中, 与挂载数无关, 因此只在 start 做一次
+/// - 后台 warmup 由 std::thread 改为主程序托管任务 (ctx.spawn): 卸载时可取消,
+///   且 offload 期间持有实例 lease, destroy/dlclose 前必然等待索引代码返回。
+static int codegraphAgentStartSetup(PluginCtx& ctx) {
+    if (!ctx.mgr) {
+        return 0;
     }
 
     ctx.spawn([](PluginCtx& c, agentxx::plugin::OpCtl ctl) -> agentxx::plugin::Task<void> {
@@ -889,7 +909,7 @@ static void* codegraphAgentStart(
         }
         return nullptr;
     }
-    if (codegraphAgentSetup(ctx) != 0) {
+    if (codegraphAgentStartSetup(ctx) != 0) {
         if (error) {
             agentxx::plugin::PluginString::set(
                 ctx.host,
@@ -903,6 +923,45 @@ static void* codegraphAgentStart(
     return nullptr;
 }
 
+static void* codegraphAgentMount(
+    PluginCtx&                         ctx,
+    const AgentxxPluginAgentMountSpec* spec,
+    const PluginxxOperatorNotify*      notify,
+    PluginxxString*                    error
+) {
+    if (!notify) {
+        if (error) {
+            agentxx::plugin::PluginString::set(
+                ctx.host,
+                error,
+                "agentxx_codegraph mount: notify required"
+            );
+        }
+        return nullptr;
+    }
+    const agentxx::plugin::AgentRef ref(*spec);
+    if (codegraphAgentMountSetup(ctx, ref) != 0) {
+        if (error) {
+            agentxx::plugin::PluginString::set(
+                ctx.host,
+                error,
+                "agentxx_codegraph mount: setup failed"
+            );
+        }
+        return nullptr;
+    }
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+static void* codegraphAgentUnmount(
+    PluginCtx&, void*, const PluginxxOperatorNotify* notify, PluginxxString*
+) {
+    // 无 per-agent 状态; 工具/提示词/订阅由主程序按挂载记录撤销, 索引数据保留
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
 static void* codegraphAgentStop(PluginCtx&, const PluginxxOperatorNotify* notify, PluginxxString*) {
     // 注册记录与后台任务句柄由主程序在 stop 后统一撤销/取消; 索引数据保留在
     // 实例上下文中, 下次 start 直接复用。
@@ -910,7 +969,13 @@ static void* codegraphAgentStop(PluginCtx&, const PluginxxOperatorNotify* notify
     return nullptr;
 }
 
-AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(PluginCtx, codegraphAgentStart, codegraphAgentStop)
+AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(
+    PluginCtx,
+    codegraphAgentStart,
+    codegraphAgentStop,
+    codegraphAgentMount,
+    codegraphAgentUnmount
+)
 
 extern "C" PLUGINXX_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
     auto* ctx = static_cast<PluginCtx*>(plugin_ctx);

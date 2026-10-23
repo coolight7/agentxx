@@ -157,7 +157,7 @@ static const char* kScreenCaptureDefaultDepict
       "the result only contains frame metadata (size/offset/screen) plus the image file path — "
       "pixel data never enters the conversation.";
 
-static void registerScreenCaptureTool(ScreenCapturePluginCtx& ctx) {
+static void registerScreenCaptureTool(ScreenCapturePluginCtx& ctx, const agentxx::plugin::ScopeRef& ref) {
     auto schema
         = ctx.schema("agentxx_screen_capture")
               .enumString(
@@ -193,6 +193,7 @@ static void registerScreenCaptureTool(ScreenCapturePluginCtx& ctx) {
 
     agentxx::plugin::blocking_tool(
         ctx,
+        ref,
         "agentxx_screen_capture",
         depict,
         schema,
@@ -269,12 +270,12 @@ static void registerScreenCaptureTool(ScreenCapturePluginCtx& ctx) {
 
 } // namespace agentxx_screen_capture_plugin
 
-/// ==================== 生命周期 (create 只构造, start 注册, stop 撤销) ====================
+/// ==================== 生命周期 (create 只构造, start 进程级, mount 注册, stop 撤销) ====================
 
 static void* screenCaptureAgentStart(
     ScreenCapturePluginCtx&       ctx,
     const PluginxxOperatorNotify* notify,
-    PluginxxString*               err
+    PluginxxString*
 ) {
     ctx.holder      = std::make_unique<ScreenCaptureHolder>();
     ctx.holder->ctx = &ctx;
@@ -296,13 +297,32 @@ static void* screenCaptureAgentStart(
         } catch (...) {
         }
     }
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    return nullptr;
+}
 
+static void* screenCaptureAgentMount(
+    ScreenCapturePluginCtx&            ctx,
+    const AgentxxPluginAgentMountSpec* spec,
+    const PluginxxOperatorNotify*      notify,
+    PluginxxString*                    err
+) {
     if (!ctx.iface.tools || !ctx.iface.tools->register_tool) {
         agentxx::plugin::PluginString::set(ctx.host, err, "tools iface unavailable");
         return nullptr;
     }
+    const agentxx::plugin::AgentRef ref(*spec);
+    registerScreenCaptureTool(ctx, ref);
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    return nullptr;
+}
 
-    registerScreenCaptureTool(ctx);
+static void* screenCaptureAgentUnmount(
+    ScreenCapturePluginCtx&,
+    void*,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*
+) {
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
@@ -320,5 +340,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
     "1.0.0",
     "Screen capture and streaming on Windows (DXGI Desktop Duplication with GDI fallback)",
     screenCaptureAgentStart,
-    screenCaptureAgentStop
+    screenCaptureAgentStop,
+    screenCaptureAgentMount,
+    screenCaptureAgentUnmount
 );

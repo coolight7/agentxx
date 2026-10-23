@@ -95,6 +95,7 @@ using pluginxx::PluginString;
 using pluginxx::PluginStringView;
 using pluginxx::queryInterface;
 using pluginxx::RootRequest;
+using pluginxx::ScopeRef;
 using pluginxx::sleep;
 using pluginxx::spawn;
 using pluginxx::Task;
@@ -525,6 +526,7 @@ protected:
         auto topicSv   = PluginStringView::fromCstr("plugin.agentxx.round_start");
         roundStartSub_ = iface.events->subscribe(
             host,
+            nullptr, ///< 基类不知道 agent 引用: 订阅主程序总线 (会话事件一并到达)
             &topicSv,
             [](const PluginxxStringView* ev, void* ud) {
                 auto* self = static_cast<PluginBase*>(ud);
@@ -1095,8 +1097,13 @@ inline std::string featureAnswer(std::string_view raw) {
 }
 
 template<typename Ctx, typename Fn>
-inline int32_t
-    provideFeature(Ctx& ctx, std::string_view pointId, Fn&& fn, FeatureImplOptions opts = {}) {
+inline int32_t provideFeature(
+    Ctx&                      ctx,
+    const ScopeRef&           agent,
+    std::string_view          pointId,
+    Fn&&                      fn,
+    FeatureImplOptions        opts = {}
+) {
     if (!ctx.iface.feature || !ctx.iface.feature->register_impl) {
         return -1;
     }
@@ -1202,25 +1209,26 @@ inline int32_t
         }
     };
 
-    return ctx.iface.feature->register_impl(ctx.host, &spec);
+    return ctx.iface.feature->register_impl(ctx.host, agent.ptr(), &spec);
 }
 
 /// 撤销本实例在某点上的实现
-inline int32_t unprovideFeature(const PluginBase& ctx, std::string_view pointId) {
+inline int32_t
+    unprovideFeature(const PluginBase& ctx, const ScopeRef& agent, std::string_view pointId) {
     if (!ctx.iface.feature || !ctx.iface.feature->unregister_impl) {
         return -1;
     }
     auto idSv = PluginStringView::from(pointId.data(), pointId.size());
-    return ctx.iface.feature->unregister_impl(ctx.host, &idSv);
+    return ctx.iface.feature->unregister_impl(ctx.host, agent.ptr(), &idSv);
 }
 
 /// 读功能点清单 (JSON 文本; 主程序不支持或查询失败返回空串)
-inline std::string listFeaturePoints(const PluginBase& ctx) {
+inline std::string listFeaturePoints(const PluginBase& ctx, const ScopeRef& agent) {
     if (!ctx.iface.feature || !ctx.iface.feature->list_points) {
         return {};
     }
     PluginxxString out{nullptr, 0};
-    if (ctx.iface.feature->list_points(ctx.host, &out) != 0 || !out.data) {
+    if (ctx.iface.feature->list_points(ctx.host, agent.ptr(), &out) != 0 || !out.data) {
         if (out.data) {
             PluginString::free(ctx.host, &out);
         }
@@ -3793,7 +3801,7 @@ inline void logClientCreateFailure(
          const AgentxxPluginAgentMountSpec* spec,                                              \
          const PluginxxOperatorNotify*      notify,                                            \
          PluginxxString*                    err) {                                              \
-        if (!(MountFn)) {                                                                      \
+        if ((MountFn) == nullptr) {                                                                      \
             return nullptr; /* 无挂载入口 = 本插件无 agent 侧能力 */                          \
         }                                                                                      \
         auto* ctx = static_cast<CtxType*>(plugin_ctx);                                          \
@@ -3813,7 +3821,7 @@ inline void logClientCreateFailure(
          void*                         mount_ud,                                               \
          const PluginxxOperatorNotify* notify,                                                 \
          PluginxxString*               err) {                                                   \
-        if (!(UnmountFn)) {                                                                    \
+        if ((UnmountFn) == nullptr) {                                                                    \
             if (notify && notify->done) {                                                      \
                 notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);                   \
             }                                                                                  \

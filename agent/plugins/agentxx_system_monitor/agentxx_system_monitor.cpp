@@ -224,12 +224,14 @@ struct SysMonCtx : public PluginBase {
     }
 };
 
-/// 注册事务 (start 的实际内容); 失败由主程序按拒绝处理并回滚。
-static int32_t sysMonSetup(SysMonCtx& ctx) {
+/// 挂载事务 (mount 的实际内容); 失败由主程序按拒绝处理并回滚。
+/// - `ref` 为本次挂载的 agent 引用, 工具注册记在该 agent 名下
+static int32_t sysMonMountSetup(SysMonCtx& ctx, const ScopeRef& ref) {
     // 1. 工具
     auto schema = ctx.schema("agentxx_get_system_core_info").build();
     blocking_tool(
-        ctx,
+         ctx,
+         ref,
         "agentxx_get_system_core_info",
         "Get system resource usage: CPU utilization and core count, memory usage, GPU utilization, and GPU memory usage.",
         schema,
@@ -239,6 +241,11 @@ static int32_t sysMonSetup(SysMonCtx& ctx) {
         }
     );
 
+    return 0;
+}
+
+/// 进程级启动工作: 能力、事件订阅与后台采样任务 (与挂载数无关)
+static int32_t sysMonStartSetup(SysMonCtx& ctx) {
     // 2. 能力: agentxx.system_usage —— 读取当前系统负担 (cpu/gpu 占用、内存与显存占用)
     //    - 其他插件经 `agentxx.agent.capabilities` 的 invoke (kit: invoke_cap /
     //      invoke_capability_blocking) 调用; 主程序/FFI 侧经
@@ -264,6 +271,7 @@ static int32_t sysMonSetup(SysMonCtx& ctx) {
         auto t1 = PluginStringView::fromCstr("client.agentxx_system_monitor.usage_enabled");
         ctx.iface.events->subscribe(
             ctx.host,
+            nullptr, ///< 进程级订阅 (客户端开关事件走主程序总线)
             &t1,
             [](const PluginxxStringView* event_json, void* ud) {
                 auto* c = static_cast<SysMonCtx*>(ud);
@@ -286,6 +294,7 @@ static int32_t sysMonSetup(SysMonCtx& ctx) {
         auto t2 = PluginStringView::fromCstr("agentxx_host.client_attached");
         ctx.iface.events->subscribe(
             ctx.host,
+            nullptr, ///< 进程级订阅 (客户端接入事件走主程序总线)
             &t2,
             [](const PluginxxStringView*, void* ud) {
                 auto* c = static_cast<SysMonCtx*>(ud);
@@ -357,12 +366,44 @@ static void*
         }
         return nullptr;
     }
-    if (sysMonSetup(ctx) != 0) {
+    if (sysMonStartSetup(ctx) != 0) {
         if (error) {
             PluginString::set(ctx.host, error, "agentxx_system_monitor start: registration failed");
         }
         return nullptr;
     }
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+/// 挂载: 把系统信息工具注册到本 agent 名下
+static void* sysMonMount(
+    SysMonCtx&                         ctx,
+    const AgentxxPluginAgentMountSpec* spec,
+    const PluginxxOperatorNotify*      notify,
+    PluginxxString*                    error
+) {
+    if (!notify) {
+        if (error) {
+            PluginString::set(ctx.host, error, "agentxx_system_monitor mount: notify required");
+        }
+        return nullptr;
+    }
+    const AgentRef ref(*spec);
+    if (sysMonMountSetup(ctx, ref) != 0) {
+        if (error) {
+            PluginString::set(ctx.host, error, "agentxx_system_monitor mount: registration failed");
+        }
+        return nullptr;
+    }
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+/// 卸载: 无 per-agent 状态 (工具由主程序按挂载记录撤销)
+static void* sysMonUnmount(
+    SysMonCtx&, void*, const PluginxxOperatorNotify* notify, PluginxxString*
+) {
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
@@ -380,7 +421,9 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
     "System resource monitor: CPU/memory/GPU usage tool; capability agentxx.system_usage "
     "returns the current system load (usage + memory/vram total and available)",
     sysMonStart,
-    sysMonStop
+    sysMonStop,
+    sysMonMount,
+    sysMonUnmount
 );
 
 struct SysMonClientCtx : public ClientPluginBase {

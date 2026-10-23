@@ -85,7 +85,9 @@ extern "C" PLUGINXX_EXPORT int
     );
 }
 
-static int featureAgentSetup(FeatureCtx& ctx) {
+/// 挂载事务 (mount): 声明功能点、登记实现与有序钩子
+/// - `ref` 为本次挂载的 agent 引用, 全部登记都记在该 agent 名下
+static int featureAgentSetup(FeatureCtx& ctx, const agentxx::plugin::ScopeRef& ref) {
     using namespace agentxx::plugin;
 
     // 功能点接口表缺失 (主程序太旧 / 清单未声明): 按"功能不可用"降级, 不影响加载
@@ -102,7 +104,7 @@ static int featureAgentSetup(FeatureCtx& ctx) {
         spec.depict    = "算出这段音频的 BPM 与节拍时刻";
         spec.argsDoc   = "path (本地文件路径), 可选 minBpm / maxBpm";
         spec.resultDoc = "{bpm, beats:[ms], confident}";
-        if (defineFeaturePoint(ctx, spec) != 0) {
+        if (defineFeaturePoint(ctx, ref, spec) != 0) {
             return -1; // start 事务失败: 主程序按拒绝处理并回滚
         }
     }
@@ -114,7 +116,7 @@ static int featureAgentSetup(FeatureCtx& ctx) {
         spec.depict    = "等待一小段时间后给出一个数值 (演示异步实现)";
         spec.argsDoc   = "{input} (可选, 缺省 1)";
         spec.resultDoc = "{counter, input}";
-        if (defineFeaturePoint(ctx, spec) != 0) {
+        if (defineFeaturePoint(ctx, ref, spec) != 0) {
             return -1;
         }
     }
@@ -128,7 +130,7 @@ static int featureAgentSetup(FeatureCtx& ctx) {
         spec.argsDoc       = "无";
         spec.resultDoc     = "{} (正常路径下拿不到值: 实现会被超时取消)";
         spec.implTimeoutMs = 50;
-        if (defineFeaturePoint(ctx, spec) != 0) {
+        if (defineFeaturePoint(ctx, ref, spec) != 0) {
             return -1;
         }
     }
@@ -138,6 +140,7 @@ static int featureAgentSetup(FeatureCtx& ctx) {
     //    - 返回文本会被 kit 包成回答: 返回完整 JSON 对象时按 `{"value": ...}` 处理
     if (provideFeature(
             ctx,
+            ref,
             "plugin.example_feature.beat",
             [](FeatureCtx& c, std::string_view call) {
                 ++c.counter;
@@ -162,6 +165,7 @@ static int featureAgentSetup(FeatureCtx& ctx) {
     //      时自己包一层 `{"value": <数据>}` (这里改用 `input` 避开)
     if (provideFeature(
             ctx,
+            ref,
             "plugin.example_feature.slow",
             [](FeatureCtx& c, std::string_view call) -> agentxx::plugin::Task<std::string> {
                 const auto in   = utilxx_base::Json::parse(call);
@@ -181,6 +185,7 @@ static int featureAgentSetup(FeatureCtx& ctx) {
     // 4. 为"超时演示"点登记异步实现 (等 400ms; 点声明的时限只有 50ms)
     if (provideFeature(
             ctx,
+            ref,
             "plugin.example_feature.tooslow",
             [](FeatureCtx& c, std::string_view) -> agentxx::plugin::Task<std::string> {
                 co_await sleep(c, 400);
@@ -195,6 +200,7 @@ static int featureAgentSetup(FeatureCtx& ctx) {
     // 5. 为主程序点登记实现 (覆盖核心 token 估算: 固定值, 便于测试断言)
     if (provideFeature(
             ctx,
+            ref,
             "agentxx.context.countTokens",
             [](FeatureCtx&, std::string_view) {
                 return std::string{R"({"tokens":424242})"};
@@ -210,13 +216,14 @@ static int featureAgentSetup(FeatureCtx& ctx) {
     //    - 同一个点可以登记多个 (各持一根句柄, 用 unhookEx 精确撤销); 不撤销也行:
     //      处理器跟着实例走, 禁用/卸载时由主程序自动摘除
     //    - 主程序不支持时返回 0, 这里按"功能不可用"降级 (加载照常成功)
-    if (ctx.iface.hooks && ctx.iface.hooks->register_hook_ex) {
+    if (ctx.iface.hooks && ctx.iface.hooks->register_hook) {
         HookOptions opts;
         opts.priority        = -10;
         opts.ownerTag        = "example_feature";
         opts.depict          = "演示有序登记: 排在其它插件的钩子之前";
         const int64_t handle = hookEx(
             ctx,
+            ref,
             AGENTXX_PLUGIN_HOOK_AGENT_START,
             [](FeatureCtx& c, AgentxxPluginHookPoint point, std::string_view) {
                 // 载荷固定为 {sessionId, point}: 钩子只做通知, 需要更多信息请用功能点
@@ -253,17 +260,48 @@ static void* featureAgentStart(
         }
         return nullptr;
     }
-    if (featureAgentSetup(ctx) != 0) {
+    // 进程级启动: 本插件没有自管线程/定时器, 注册全在挂载阶段做
+    ctx.log.info("example_feature started");
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+static void* featureAgentMount(
+    FeatureCtx&                        ctx,
+    const AgentxxPluginAgentMountSpec* spec,
+    const PluginxxOperatorNotify*      notify,
+    PluginxxString*                    error
+) {
+    if (!notify) {
         if (error) {
             agentxx::plugin::PluginString::set(
                 ctx.host,
                 error,
-                "example_feature start: registration transaction failed"
+                "example_feature mount: notify required"
             );
         }
         return nullptr;
     }
-    ctx.log.info("example_feature started");
+    const agentxx::plugin::AgentRef ref(*spec);
+    if (featureAgentSetup(ctx, ref) != 0) {
+        if (error) {
+            agentxx::plugin::PluginString::set(
+                ctx.host,
+                error,
+                "example_feature mount: registration transaction failed"
+            );
+        }
+        return nullptr;
+    }
+    ctx.log.info("example_feature mounted");
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+static void* featureAgentUnmount(
+    FeatureCtx&, void*, const PluginxxOperatorNotify* notify, PluginxxString*
+) {
+    // 实现/点/钩子由主程序按挂载记录撤销
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
@@ -276,7 +314,13 @@ static void*
     return nullptr;
 }
 
-AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(FeatureCtx, featureAgentStart, featureAgentStop)
+AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(
+    FeatureCtx,
+    featureAgentStart,
+    featureAgentStop,
+    featureAgentMount,
+    featureAgentUnmount
+)
 
 extern "C" PLUGINXX_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
     auto* ctx = static_cast<FeatureCtx*>(plugin_ctx);

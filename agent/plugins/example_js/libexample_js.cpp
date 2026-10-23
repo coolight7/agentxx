@@ -131,6 +131,7 @@ void dispatchScriptUnload(ShellCtx& ctx) {
     PluginxxString err{nullptr, 0};
     auto*          h = ctx.iface.capabilities->invoke_capability_async(
         ctx.host,
+        nullptr,
         &capSv,
         &unloadSv,
         &argsSv,
@@ -279,6 +280,7 @@ static void*
     auto*          state = new std::pair<ShellCtx*, PluginxxOperatorNotify>(&ctx, *notify);
     auto*          h     = ctx.iface.capabilities->invoke_capability_async(
         ctx.host,
+        nullptr,
         &capSv,
         &loadSv,
         &argsSv,
@@ -316,7 +318,7 @@ static void*
     return nullptr;
 }
 
-AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(ShellCtx, jsShellAgentStart, jsShellAgentStop)
+AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(ShellCtx, jsShellAgentStart, jsShellAgentStop, nullptr, nullptr)
 
 extern "C" PLUGINXX_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
     auto* ctx = static_cast<ShellCtx*>(plugin_ctx);

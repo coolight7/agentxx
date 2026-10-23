@@ -95,8 +95,12 @@ std::string normalizeIntent(std::string_view s) {
 ///
 /// - 上下文由会话持有 (唯一权威), 经 agentxx.agent.context 接口表查询;
 ///   接口不可用/查询失败时返回空数组 (老主程序降级: 路由退化为 fallback)
-utilxx_base::Json sessionMessages(const AgentCtx& ctx, const agentxx::plugin::RootRequest& req) {
-    const auto text = ctx.getSessionMessages(req.session());
+utilxx_base::Json sessionMessages(
+    const AgentCtx&                    ctx,
+    const agentxx::plugin::ScopeRef&   ref,
+    const agentxx::plugin::RootRequest& req
+) {
+    const auto text = ctx.getSessionMessages(ref, req.session());
     if (text.empty()) {
         return utilxx_base::Json::array();
     }
@@ -155,10 +159,14 @@ bool lastAssistantHasToolCalls(const utilxx_base::Json& messages) {
 /// - 后续轮次: 按 "最后一条 assistant 是否带 tool_calls" 写 __route__ (tools/end), 保持原
 ///   agent loop 行为
 /// - config: {"intents": ["datetime", "normal"], "fallback": "normal"}
-std::string intentRouterRun(AgentCtx& ctx, const agentxx::plugin::RootRequest& req) {
+std::string intentRouterRun(
+    AgentCtx&                          ctx,
+    const agentxx::plugin::ScopeRef&   ref,
+    const agentxx::plugin::RootRequest& req
+) {
     const std::string_view config_json = req.config();
     auto                   state       = utilxx_base::Json::parse(req.state());
-    auto                   messages    = sessionMessages(ctx, req);
+    auto                   messages    = sessionMessages(ctx, ref, req);
 
     // 解析 config: intents 枚举 + fallback
     std::vector<std::string> intents;
@@ -204,7 +212,7 @@ std::string intentRouterRun(AgentCtx& ctx, const agentxx::plugin::RootRequest& r
         // - 对 messages 通道的 overwrite 写由主程序转成会话上下文替换
         //   (图状态不再持有上下文), 语义与旧版一致
         if (route != fallback && messages.is_array() && !messages.empty()) {
-            const auto origin    = sessionMessages(ctx, req);
+            const auto origin    = sessionMessages(ctx, ref, req);
             messages             = utilxx_base::Json::array();
             const size_t n       = origin.size();
             bool         removed = false;
@@ -291,13 +299,17 @@ std::string datetimeNodeRun(AgentCtx& ctx, const agentxx::plugin::RootRequest& r
 ///     default   → agent_end                          (兜底结束)
 ///
 /// channels: messages / savedGraphData / __route__ / __intent_checked
-static int modifyGraphToIntentFlow(AgentCtx& ctx, std::string& errOut) {
+static int modifyGraphToIntentFlow(
+    AgentCtx&                        ctx,
+    const agentxx::plugin::ScopeRef& agent,
+    std::string&                     errOut
+) {
     if (!ctx.iface.graph || !ctx.iface.graph->get_graph_json || !ctx.iface.graph->set_graph_json) {
         errOut = "graph iface not available";
         return -1;
     }
     PluginxxString graphJson{nullptr, 0};
-    ctx.iface.graph->get_graph_json(ctx.host, &graphJson);
+    ctx.iface.graph->get_graph_json(ctx.host, agent.ptr(), &graphJson);
     if (!graphJson.data) {
         errOut = "get_graph_json returned null";
         return -1;
@@ -411,7 +423,7 @@ static int modifyGraphToIntentFlow(AgentCtx& ctx, std::string& errOut) {
 
     const std::string newJson = graph.dump();
     auto newJsonSv = agentxx::plugin::PluginStringView::from(newJson.data(), newJson.size());
-    if (ctx.iface.graph->set_graph_json(ctx.host, &newJsonSv) != 0) {
+    if (ctx.iface.graph->set_graph_json(ctx.host, agent.ptr(), &newJsonSv) != 0) {
         errOut = "set_graph_json failed";
         return -1;
     }
@@ -454,13 +466,18 @@ extern "C" PLUGINXX_EXPORT int
 }
 
 /// 注册事务 (start 的实际内容); 任一步失败由主程序回滚已生效的注册。
-static int exampleGraphAgentSetup(AgentCtx& ctx) {
+/// 挂载事务 (mount): 登记自定义节点类型并改写执行图
+/// - `ref` 为本次挂载的 agent 引用, 节点类型与该 agent 的图定义都记在它名下
+static int exampleGraphAgentSetup(AgentCtx& ctx, const agentxx::plugin::ScopeRef& ref) {
     // 1. 注册意图识别节点类型 (统一 root adapter: 输入拥有化 + provider 句柄)
     if (agentxx::plugin::graph_node(
             ctx,
+            ref,
             "example_intent_router",
             R"({"type":"object","properties":{"intents":{"type":"array","items":{"type":"string"}},"fallback":{"type":"string"}}})",
-            intentRouterRun
+            [ref](AgentCtx& c, const agentxx::plugin::RootRequest& req) {
+                return intentRouterRun(c, ref, req);
+            }
         )
         != 0) {
         return -1;
@@ -468,6 +485,7 @@ static int exampleGraphAgentSetup(AgentCtx& ctx) {
     // 2. 注册时间输出节点类型
     if (agentxx::plugin::graph_node(
             ctx,
+            ref,
             "example_datetime",
             R"({"type":"object"})",
             datetimeNodeRun
@@ -478,7 +496,7 @@ static int exampleGraphAgentSetup(AgentCtx& ctx) {
 
     // 3. 修改执行图: 默认图 → 意图路由流程
     std::string err;
-    if (modifyGraphToIntentFlow(ctx, err) != 0) {
+    if (modifyGraphToIntentFlow(ctx, ref, err) != 0) {
         ctx.log.warn("modify graph failed: " + err);
         // 节点已注册, 图修改失败不阻止插件加载 (主程序回退默认图)
     }
@@ -500,17 +518,48 @@ static void* exampleGraphAgentStart(
         }
         return nullptr;
     }
-    if (exampleGraphAgentSetup(ctx) != 0) {
+    // 进程级启动: 本插件没有自管线程/定时器, 注册全在挂载阶段做
+    ctx.log.info("example_graph_node started");
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+static void* exampleGraphAgentMount(
+    AgentCtx&                          ctx,
+    const AgentxxPluginAgentMountSpec* spec,
+    const PluginxxOperatorNotify*      notify,
+    PluginxxString*                    error
+) {
+    if (!notify) {
         if (error) {
             agentxx::plugin::PluginString::set(
                 ctx.host,
                 error,
-                "example_graph_node start: registration transaction failed"
+                "example_graph_node mount: notify required"
             );
         }
         return nullptr;
     }
-    ctx.log.info("example_graph_node started, graph modified");
+    const agentxx::plugin::AgentRef ref(*spec);
+    if (exampleGraphAgentSetup(ctx, ref) != 0) {
+        if (error) {
+            agentxx::plugin::PluginString::set(
+                ctx.host,
+                error,
+                "example_graph_node mount: registration transaction failed"
+            );
+        }
+        return nullptr;
+    }
+    ctx.log.info("example_graph_node mounted, graph modified");
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+static void* exampleGraphAgentUnmount(
+    AgentCtx&, void*, const PluginxxOperatorNotify* notify, PluginxxString*
+) {
+    // 节点类型与图定义由主程序按挂载记录撤销
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
@@ -522,7 +571,13 @@ static void*
     return nullptr;
 }
 
-AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(AgentCtx, exampleGraphAgentStart, exampleGraphAgentStop)
+AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(
+    AgentCtx,
+    exampleGraphAgentStart,
+    exampleGraphAgentStop,
+    exampleGraphAgentMount,
+    exampleGraphAgentUnmount
+)
 
 extern "C" PLUGINXX_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
     auto* ctx = static_cast<AgentCtx*>(plugin_ctx);

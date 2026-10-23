@@ -134,15 +134,27 @@ void AudioStreamHolder::stop() {
 
 } // namespace
 
-/// ==================== 生命周期 (create 只构造, start 注册, stop 撤销) ====================
+/// ==================== 生命周期 (create 只构造, start 进程级, mount 注册, stop 撤销) ====================
 
 static void* audioStreamAgentStart(
     AudioStreamPluginCtx&         ctx,
     const PluginxxOperatorNotify* notify,
-    PluginxxString*               err
+    PluginxxString*
 ) {
+    // 采集器是进程级资源 (一个进程只有一套音频设备): 在 start 建立
     ctx.holder      = std::make_unique<AudioStreamHolder>();
     ctx.holder->ctx = &ctx;
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+static void* audioStreamAgentMount(
+    AudioStreamPluginCtx&              ctx,
+    const AgentxxPluginAgentMountSpec* spec,
+    const PluginxxOperatorNotify*      notify,
+    PluginxxString*                    err
+) {
+    const agentxx::plugin::AgentRef ref(*spec);
 
     auto schema
         = ctx.schema("agentxx_audio_stream")
@@ -169,6 +181,7 @@ static void* audioStreamAgentStart(
 
     agentxx::plugin::blocking_tool(
         ctx,
+        ref,
         "agentxx_audio_stream",
         "Capture system audio or microphone stream on Windows (WASAPI). Audio frames are pushed as plugin events to topic 'agentxx_audio_stream.audio'. Supports start, stop, and status query.",
         schema,
@@ -216,6 +229,16 @@ static void* audioStreamAgentStart(
     return nullptr;
 }
 
+static void* audioStreamAgentUnmount(
+    AudioStreamPluginCtx&,
+    void*,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*
+) {
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
 /// stop: 停止采集并摘除监听器 (可重复调用), 之后主程序才会调用 destroy
 static void*
     audioStreamAgentStop(AudioStreamPluginCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
@@ -235,5 +258,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
     "1.0.0",
     "System audio stream capture event stream (WASAPI loopback/mic on Windows)",
     audioStreamAgentStart,
-    audioStreamAgentStop
+    audioStreamAgentStop,
+    audioStreamAgentMount,
+    audioStreamAgentUnmount
 );

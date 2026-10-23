@@ -38,8 +38,8 @@ constexpr int32_t kRepeatCheck = AGENTXX_PLUGIN_TOOL_FLAG_REPEAT_CALL_CHECK;
 
 struct StringPluginCtx : public PluginBase {};
 
-/// 注册事务 (start 的实际内容)。
-static int32_t stringSetup(StringPluginCtx& ctx) {
+/// 注册事务 (mount 的实际内容; 每个 agent 各自一份)。
+static int32_t stringSetup(StringPluginCtx& ctx, const ScopeRef& ref) {
     // 1. html_to_markdown
     auto html2mdSchema = ctx.schema(kNameHtml2Md)
                              .string("content", "The HTML string to convert.", /*required=*/true)
@@ -47,6 +47,7 @@ static int32_t stringSetup(StringPluginCtx& ctx) {
 
     blocking_tool(
         ctx,
+        ref,
         kNameHtml2Md,
         kDepictHtml2Md,
         html2mdSchema,
@@ -85,6 +86,7 @@ static int32_t stringSetup(StringPluginCtx& ctx) {
 
     blocking_tool(
         ctx,
+        ref,
         kNameRegexp,
         kDepictRegexp,
         regexpSchema,
@@ -107,27 +109,42 @@ static int32_t stringSetup(StringPluginCtx& ctx) {
 }
 
 static void*
-    stringStart(StringPluginCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString* error) {
+    stringStart(StringPluginCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
+    // 无进程级工作 (无连接/线程/定时器)。
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    (void)ctx;
+    return nullptr;
+}
+
+static void* stringMount(
+    StringPluginCtx&                   ctx,
+    const AgentxxPluginAgentMountSpec* spec,
+    const PluginxxOperatorNotify*      notify,
+    PluginxxString*                    error
+) {
     if (!notify) {
         if (error) {
-            agentxx::plugin::PluginString::set(
-                ctx.host,
-                error,
-                "agentxx_string start: notify required"
-            );
+            PluginString::set(ctx.host, error, "agentxx_string mount: notify required");
         }
         return nullptr;
     }
-    if (stringSetup(ctx) != 0) {
+    const AgentRef ref(*spec);
+    if (stringSetup(ctx, ref) != 0) {
         if (error) {
-            agentxx::plugin::PluginString::set(
-                ctx.host,
-                error,
-                "agentxx_string start: registration failed"
-            );
+            PluginString::set(ctx.host, error, "agentxx_string mount: registration failed");
         }
         return nullptr;
     }
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+static void* stringUnmount(
+    StringPluginCtx&,
+    void*,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*
+) {
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
@@ -143,5 +160,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
     "1.0.0",
     "String tools: regex operations and html to markdown conversion",
     stringStart,
-    stringStop
+    stringStop,
+    stringMount,
+    stringUnmount
 );

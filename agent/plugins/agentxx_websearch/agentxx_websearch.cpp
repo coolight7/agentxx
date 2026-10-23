@@ -63,10 +63,11 @@ struct WebsearchPluginCtx : public PluginBase {
 /// 插件本地 reactor 上的 socket 就绪事件, 因此注册为**声明式受控轮询**工具
 /// (`polled_tool`): 网络等待不再占用主程序工作线程池, 同一实例的并发请求共享
 /// 一个本地 reactor 与 HTTP keep-alive 连接池。
-static int32_t websearchSetup(WebsearchPluginCtx& ctx) {
+static int32_t websearchSetup(WebsearchPluginCtx& ctx, const agentxx::plugin::ScopeRef& ref) {
     if (ctx.iface.model && ctx.iface.model->get_config) {
+        auto           modelRef = ref.raw();
         PluginxxString json{nullptr, 0};
-        ctx.iface.model->get_config(ctx.host, &json);
+        ctx.iface.model->get_config(ctx.host, &modelRef, &json);
         if (json.data) {
             std::string cfgJson(json.data, static_cast<size_t>(json.size));
             PluginString::free(ctx.host, &json);
@@ -100,6 +101,7 @@ static int32_t websearchSetup(WebsearchPluginCtx& ctx) {
 
     polled_tool(
         ctx,
+        ref,
         kNameFetch,
         kDepictFetch,
         fetchSchema,
@@ -133,6 +135,7 @@ static int32_t websearchSetup(WebsearchPluginCtx& ctx) {
 
         polled_tool(
             ctx,
+            ref,
             kNameSearch,
             kDepictSearch,
             searchSchema,
@@ -172,28 +175,46 @@ static int32_t websearchSetup(WebsearchPluginCtx& ctx) {
 static void* websearchStart(
     WebsearchPluginCtx&           ctx,
     const PluginxxOperatorNotify* notify,
-    PluginxxString*               error
+    PluginxxString*
+) {
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    (void)ctx;
+    return nullptr;
+}
+
+static void* websearchMount(
+    WebsearchPluginCtx&                ctx,
+    const AgentxxPluginAgentMountSpec* spec,
+    const PluginxxOperatorNotify*      notify,
+    PluginxxString*                    error
 ) {
     if (!notify) {
         if (error) {
             agentxx::plugin::PluginString::set(
                 ctx.host,
                 error,
-                "agentxx_websearch start: notify required"
+                "agentxx_websearch mount: notify required"
             );
         }
         return nullptr;
     }
-    if (websearchSetup(ctx) != 0) {
+    const agentxx::plugin::AgentRef ref(*spec);
+    if (websearchSetup(ctx, ref) != 0) {
         if (error) {
             agentxx::plugin::PluginString::set(
                 ctx.host,
                 error,
-                "agentxx_websearch start: registration failed"
+                "agentxx_websearch mount: registration failed"
             );
         }
         return nullptr;
     }
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+static void*
+    websearchUnmount(WebsearchPluginCtx&, void*, const PluginxxOperatorNotify* notify, PluginxxString*) {
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }
@@ -210,7 +231,9 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
     "1.0.0",
     "Web access tools: HTTP fetch (raw or Markdown) and web search",
     websearchStart,
-    websearchStop
+    websearchStop,
+    websearchMount,
+    websearchUnmount
 );
 
 struct WebsearchClientCtx : public ClientPluginBase {};

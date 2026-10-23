@@ -235,7 +235,8 @@ struct JsToolBinding {
 struct JsHookBinding {
     JsEngine*   engine = nullptr;
     std::string plugin;
-    int         point = -1; ///< 事件订阅时为 -1
+    int         point = -1;  ///< 事件订阅时为 -1
+    int64_t     hook  = 0;   ///< 主程序钩子句柄 (0 = 未登记; 事件订阅恒为 0)
 };
 
 /// JS 内 callTool 的跨线程完成桥:
@@ -311,6 +312,38 @@ public:
     }
 
     // ==================== 生命周期 (start / stop) ====================
+
+    // ==================== 挂载作用域 (agent 引用) ====================
+
+    /// 设置脚本注册所属的 agent 挂载 (mount 时在 io 线程调用一次)
+    /// - 引用拷进本对象自有存储, `agentRef()` 的返回值有效期同本对象
+    /// - 说明: JS 运行时目前一份脚本只对应一个挂载作用域, 再次 mount 会覆盖它;
+    ///   真正的"每个 agent 一份 JS 脚本实例"属于后续项 (见 work.md)
+    void setMountScope(const AgentxxPluginAgentMountSpec* spec) {
+        mountAgentId_.assign(
+            spec && spec->agent_id.data && spec->agent_id.size > 0
+                ? std::string(spec->agent_id.data, static_cast<size_t>(spec->agent_id.size))
+                : std::string{}
+        );
+        mountAgentSeq_  = spec ? spec->mount_seq : 0;
+        mountRef_       = PluginxxScopeRef{};
+        mountRef_.struct_size = static_cast<uint32_t>(sizeof(PluginxxScopeRef));
+        mountRef_.flags       = 0;
+        mountRef_.id = agentxx::plugin::PluginStringView::from(mountAgentId_.data(), mountAgentId_.size());
+        mountRef_.seq         = mountAgentSeq_;
+    }
+
+    /// 清除挂载作用域 (unmount 时调用)
+    void clearMountScope() {
+        mountAgentId_.clear();
+        mountAgentSeq_ = 0;
+        mountRef_      = PluginxxScopeRef{};
+    }
+
+    /// 当前挂载引用 (未挂载时为 nullptr); 脚本注册工具/钩子/订阅时使用
+    const PluginxxScopeRef* agentRef() const {
+        return mountAgentId_.empty() ? nullptr : &mountRef_;
+    }
 
     /// 引擎是否运行中 (JS 线程存活, 接受新任务)
     bool running() const {
@@ -1530,6 +1563,10 @@ private:
 
     /// JS 插件表 (JS 线程访问)
     std::map<std::string, std::shared_ptr<JsPluginCtx>, std::less<>> plugins_;
+    /// 当前挂载作用域 (见 setMountScope; 自管存储, mountRef_ 借用 mountAgentId_)
+    std::string      mountAgentId_;
+    uint64_t         mountAgentSeq_ = 0;
+    PluginxxScopeRef mountRef_{};
     /// 跨线程镜像 <name, weak_ptr> (互斥锁保护)
     std::mutex                                                     mirrorMtx_;
     std::map<std::string, std::weak_ptr<JsPluginCtx>, std::less<>> mirror_;
@@ -1821,7 +1858,7 @@ JSValue JsEngine::bridgeCall(
             spec.execute_start  = &JsEngine::toolExecuteStart;
             spec.execute_cancel = nullptr;
             spec.user_data      = binding.get();
-            int rc              = iface.tools->register_tool(host, &spec);
+            int rc              = iface.tools->register_tool(host, engine->agentRef(), &spec);
             if (rc != 0) {
                 JS_FreeValue(ctx, execFn);
                 return throwJsError(
@@ -1839,9 +1876,9 @@ JSValue JsEngine::bridgeCall(
             JS_FreeValue(ctx, execFn);
 
             // 脚本初始化事务: 注册成功登记撤销动作 (顶层失败/脚本卸载时回滚)
-            pctx->rollbackActions.push_back([host, toolsIface = iface.tools, name]() {
+            pctx->rollbackActions.push_back([host, toolsIface = iface.tools, engine, name]() {
                 auto nameSv = agentxx::plugin::PluginStringView::from(name.data(), name.size());
-                toolsIface->unregister_tool(host, &nameSv);
+                toolsIface->unregister_tool(host, engine->agentRef(), &nameSv);
             });
             pctx->toolBindings.push_back(std::move(binding));
             return JS_UNDEFINED;
@@ -1853,7 +1890,7 @@ JSValue JsEngine::bridgeCall(
                 return JS_ThrowTypeError(ctx, "unregisterTool: name required");
             }
             auto nameSv = agentxx::plugin::PluginStringView::from(name.data(), name.size());
-            iface.tools->unregister_tool(host, &nameSv);
+            iface.tools->unregister_tool(host, engine->agentRef(), &nameSv);
             JS_SetPropertyStr(ctx, pctx->tools, name.c_str(), JS_UNDEFINED);
             return JS_UNDEFINED;
         }
@@ -1939,6 +1976,7 @@ JSValue JsEngine::bridgeCall(
             PluginxxString err{nullptr, 0};
             auto*          handle = iface.tools->call_tool_async(
                 host,
+                engine->agentRef(),
                 &nameSv,
                 &argsSv,
                 &sidSv,
@@ -1969,7 +2007,7 @@ JSValue JsEngine::bridgeCall(
             PluginxxString resp{nullptr, 0};
             auto           sidSv
                 = agentxx::plugin::PluginStringView::from(sessionId.data(), sessionId.size());
-            iface.session->get_share_store(host, &sidSv, id, &resp);
+            iface.session->get_share_store(host, engine->agentRef(), &sidSv, id, &resp);
             if (!resp.data) {
                 return JS_NULL;
             }
@@ -1990,7 +2028,7 @@ JSValue JsEngine::bridgeCall(
             auto sidSv
                 = agentxx::plugin::PluginStringView::from(sessionId.data(), sessionId.size());
             auto txtSv = agentxx::plugin::PluginStringView::from(text.data(), text.size());
-            iface.session->emit_message_tip(host, &sidSv, &txtSv, level);
+            iface.session->emit_message_tip(host, engine->agentRef(), &sidSv, &txtSv, level);
             return JS_UNDEFINED;
         }
 
@@ -2016,35 +2054,42 @@ JSValue JsEngine::bridgeCall(
             if (point < 0 || point >= 7) {
                 return JS_ThrowTypeError(ctx, "onHook: point out of range");
             }
-            // 覆盖语义: 注销同点旧钩子 (每插件每钩子点至多一个)
-            JSValue oldFn = JS_GetPropertyUint32(ctx, pctx->hooks, static_cast<uint32_t>(point));
-            if (JS_IsFunction(ctx, oldFn)) {
-                iface.hooks->unregister_hook(host, static_cast<AgentxxPluginHookPoint>(point));
+            // 覆盖语义: 注销同点旧钩子 (每插件每钩子点至多一个; 按句柄精确撤销)
+            for (auto& old : pctx->hookBindings) {
+                if (old && old->point == point && old->hook != 0) {
+                    iface.hooks->unregister_hook(host, old->hook);
+                    old->hook = 0;
+                }
             }
+            JSValue oldFn = JS_GetPropertyUint32(ctx, pctx->hooks, static_cast<uint32_t>(point));
             JS_FreeValue(ctx, oldFn);
 
             auto binding    = std::make_unique<JsHookBinding>();
             binding->engine = engine;
             binding->plugin = pctx->name;
             binding->point  = point;
-            AgentxxPluginHookSpec hspec{};
-            hspec.struct_size = sizeof(AgentxxPluginHookSpec);
+            AgentxxPluginHookSpecEx hspec{};
+            hspec.struct_size = sizeof(AgentxxPluginHookSpecEx);
             hspec.point       = static_cast<AgentxxPluginHookPoint>(point);
             hspec.hook_start  = &JsEngine::hookStart;
             hspec.hook_cancel = nullptr;
             hspec.user_data   = binding.get();
-            int rc            = iface.hooks->register_hook(host, &hspec);
-            if (rc != 0) {
+            int64_t handle    = 0;
+            int     rc = iface.hooks->register_hook(host, engine->agentRef(), &hspec, &handle);
+            if (rc != 0 || handle == 0) {
                 return throwJsError(ctx, "onHook: host registration failed");
             }
+            binding->hook = handle;
             JS_SetPropertyUint32(
                 ctx,
                 pctx->hooks,
                 static_cast<uint32_t>(point),
                 JS_DupValue(ctx, argv[1])
             );
-            pctx->rollbackActions.push_back([host, hooksIface = iface.hooks, point]() {
-                hooksIface->unregister_hook(host, static_cast<AgentxxPluginHookPoint>(point));
+            pctx->rollbackActions.push_back([host, hooksIface = iface.hooks, handle]() {
+                if (handle != 0) {
+                    hooksIface->unregister_hook(host, handle);
+                }
             });
             pctx->hookBindings.push_back(std::move(binding));
             return JS_UNDEFINED;
@@ -2056,7 +2101,12 @@ JSValue JsEngine::bridgeCall(
             }
             int32_t point = 0;
             JS_ToInt32(ctx, &point, argv[0]);
-            iface.hooks->unregister_hook(host, static_cast<AgentxxPluginHookPoint>(point));
+            for (auto& old : pctx->hookBindings) {
+                if (old && old->point == point && old->hook != 0) {
+                    iface.hooks->unregister_hook(host, old->hook);
+                    old->hook = 0;
+                }
+            }
             JS_SetPropertyUint32(ctx, pctx->hooks, static_cast<uint32_t>(point), JS_NULL);
             return JS_UNDEFINED;
         }
@@ -2072,7 +2122,13 @@ JSValue JsEngine::bridgeCall(
             binding->point      = -1;
             auto  topicSv = agentxx::plugin::PluginStringView::from(topic.data(), topic.size());
             auto* sub
-                = iface.events->subscribe(host, &topicSv, &JsEngine::eventFire, binding.get());
+                = iface.events->subscribe(
+                    host,
+                    engine->agentRef(),
+                    &topicSv,
+                    &JsEngine::eventFire,
+                    binding.get()
+                );
             if (!sub) {
                 return throwJsError(
                     ctx,
@@ -2239,8 +2295,8 @@ JSValue JsEngine::bridgeCall(
             }
             std::string p   = jsToCppString(ctx, argv[0]);
             auto        pSv = agentxx::plugin::PluginStringView::fromCstr(p.c_str());
-            int rc = (magic == B_ADD_SKILL_DIR) ? iface.resources->register_skill_dir(host, &pSv)
-                                                : iface.resources->register_memory_file(host, &pSv);
+            int rc = (magic == B_ADD_SKILL_DIR) ? iface.resources->register_skill_dir(host, engine->agentRef(), &pSv)
+                                                : iface.resources->register_memory_file(host, engine->agentRef(), &pSv);
             if (rc != 0) {
                 return throwJsError(
                     ctx,
@@ -2248,12 +2304,12 @@ JSValue JsEngine::bridgeCall(
                 );
             }
             const bool isSkillDir = (magic == B_ADD_SKILL_DIR);
-            pctx->rollbackActions.push_back([host, resIface = iface.resources, p, isSkillDir]() {
+            pctx->rollbackActions.push_back([host, resIface = iface.resources, engine, p, isSkillDir]() {
                 auto pSv2 = agentxx::plugin::PluginStringView::from(p.data(), p.size());
                 if (isSkillDir) {
-                    resIface->unregister_skill_dir(host, &pSv2);
+                    resIface->unregister_skill_dir(host, engine->agentRef(), &pSv2);
                 } else {
-                    resIface->unregister_memory_file(host, &pSv2);
+                    resIface->unregister_memory_file(host, engine->agentRef(), &pSv2);
                 }
             });
             return JS_TRUE;
@@ -2267,8 +2323,8 @@ JSValue JsEngine::bridgeCall(
             std::string p   = jsToCppString(ctx, argv[0]);
             auto        pSv = agentxx::plugin::PluginStringView::fromCstr(p.c_str());
             bool        ok  = (magic == B_REMOVE_SKILL_DIR)
-                                  ? (iface.resources->unregister_skill_dir(host, &pSv) == 0)
-                                  : (iface.resources->unregister_memory_file(host, &pSv) == 0);
+                                  ? (iface.resources->unregister_skill_dir(host, engine->agentRef(), &pSv) == 0)
+                                  : (iface.resources->unregister_memory_file(host, engine->agentRef(), &pSv) == 0);
             return ok ? JS_TRUE : JS_FALSE;
         }
 
@@ -2306,15 +2362,15 @@ JSValue JsEngine::bridgeCall(
                 t
             );
             auto specSv = agentxx::plugin::PluginStringView::fromCstr(spec.c_str());
-            if (iface.resources->register_mcp_server(host, &specSv) != 0) {
+            if (iface.resources->register_mcp_server(host, engine->agentRef(), &specSv) != 0) {
                 return throwJsError(
                     ctx,
                     fmt::format("addMcpServer register failed (conflict?): {}", ns)
                 );
             }
-            pctx->rollbackActions.push_back([host, resIface = iface.resources, ns]() {
+            pctx->rollbackActions.push_back([host, resIface = iface.resources, engine, ns]() {
                 auto nsSv2 = agentxx::plugin::PluginStringView::from(ns.data(), ns.size());
-                resIface->unregister_mcp_server(host, &nsSv2);
+                resIface->unregister_mcp_server(host, engine->agentRef(), &nsSv2);
             });
             return JS_TRUE;
         }
@@ -2325,7 +2381,7 @@ JSValue JsEngine::bridgeCall(
             }
             std::string ns   = jsToCppString(ctx, argv[0]);
             auto        nsSv = agentxx::plugin::PluginStringView::from(ns.data(), ns.size());
-            return iface.resources->unregister_mcp_server(host, &nsSv) == 0 ? JS_TRUE : JS_FALSE;
+            return iface.resources->unregister_mcp_server(host, engine->agentRef(), &nsSv) == 0 ? JS_TRUE : JS_FALSE;
         }
 
         default:
@@ -2683,6 +2739,70 @@ extern "C" PLUGINXX_EXPORT void* agentxx_plugin_agent_stop(
     PluginxxString*               err
 ) {
     return jsEngineStop(plugin_ctx, notify, err);
+}
+
+extern "C" PLUGINXX_EXPORT void* agentxx_plugin_agent_mount(
+    void*                              plugin_ctx,
+    const AgentxxPluginAgentMountSpec* spec,
+    const PluginxxOperatorNotify*      notify,
+    PluginxxString*                    err
+) {
+    return agentxx::plugin::guardCall(
+        [](const char* m) noexcept {
+            (void)m;
+        },
+        static_cast<void*>(nullptr),
+        [&]() -> void* {
+            auto* engine = static_cast<JsEngine*>(plugin_ctx);
+            if (!engine) {
+                agentxx::plugin::PluginString::set(
+                    nullptr,
+                    err,
+                    "interpreter.js mount: null context"
+                );
+                return nullptr;
+            }
+            if (!notify) {
+                agentxx::plugin::PluginString::set(
+                    engine->host(),
+                    err,
+                    "interpreter.js mount: notify required"
+                );
+                return nullptr;
+            }
+            // 脚本注册的归属 agent: 之后加载/登记的 JS 工具与钩子挂在它名下
+            engine->setMountScope(spec);
+            notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+            return nullptr;
+        }
+    );
+}
+
+extern "C" PLUGINXX_EXPORT void* agentxx_plugin_agent_unmount(
+    void*                         plugin_ctx,
+    void*                         mount_ud,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*
+) {
+    (void)mount_ud;
+    return agentxx::plugin::guardCall(
+        [](const char* m) noexcept {
+            (void)m;
+        },
+        static_cast<void*>(nullptr),
+        [&]() -> void* {
+            // 说明: 脚本本身不随挂载销毁 (一份脚本目前对应一个挂载作用域);
+            // 工具/钩子/订阅由主程序按挂载记录撤销, 这里只清掉作用域引用
+            auto* engine = static_cast<JsEngine*>(plugin_ctx);
+            if (engine) {
+                engine->clearMountScope();
+            }
+            if (notify && notify->done) {
+                notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+            }
+            return nullptr;
+        }
+    );
 }
 
 extern "C" PLUGINXX_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {

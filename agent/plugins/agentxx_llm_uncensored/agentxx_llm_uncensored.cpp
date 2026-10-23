@@ -74,8 +74,8 @@ void readArgs(UncensoredCtx& ctx) {
     }
 }
 
-/// 注册事务 (start 的实际内容): 注入一段附加系统提示词
-static int uncensoredSetup(UncensoredCtx& ctx) {
+/// 注册事务 (mount 的实际内容): 为**该 agent** 注入一段附加系统提示词
+static int uncensoredSetup(UncensoredCtx& ctx, const agentxx::plugin::ScopeRef& ref) {
     using namespace agentxx::plugin;
 
     readArgs(ctx);
@@ -95,7 +95,8 @@ static int uncensoredSetup(UncensoredCtx& ctx) {
 
     const std::string js       = payload.dump();
     const auto        promptSv = PluginStringView::from(js.data(), js.size());
-    if (ctx.iface.prompt->set_prompt(ctx.host, &promptSv) != 0) {
+    auto              agentRef = ref.raw();
+    if (ctx.iface.prompt->set_prompt(ctx.host, &agentRef, &promptSv) != 0) {
         ctx.log.error(prefix + "set_prompt(appendSystemPrompts) rejected by host");
         return -1;
     }
@@ -157,30 +158,51 @@ extern "C" PLUGINXX_EXPORT int32_t PLUGINXX_CALL
 static void* uncensoredAgentStart(
     UncensoredCtx&                ctx,
     const PluginxxOperatorNotify* notify,
-    PluginxxString*               error
+    PluginxxString*
+) {
+    // 本插件没有进程级工作: 提示词注入是 agent 级, 放到 mount
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    (void)ctx;
+    return nullptr;
+}
+
+static void* uncensoredAgentMount(
+    UncensoredCtx&                     ctx,
+    const AgentxxPluginAgentMountSpec* spec,
+    const PluginxxOperatorNotify*      notify,
+    PluginxxString*                    error
 ) {
     if (!notify) {
         if (error) {
-            // 请求方必须给出完成通知器, 否则主程序无法判定操作终态
             agentxx::plugin::PluginString::set(
                 ctx.host,
                 error,
-                "agentxx_llm_uncensored start: notify required"
+                "agentxx_llm_uncensored mount: notify required"
             );
         }
         return nullptr;
     }
-    if (uncensoredSetup(ctx) != 0) {
+    const agentxx::plugin::AgentRef ref(*spec);
+    if (uncensoredSetup(ctx, ref) != 0) {
         if (error) {
             agentxx::plugin::PluginString::set(
                 ctx.host,
                 error,
-                "agentxx_llm_uncensored start: prompt injection failed"
+                "agentxx_llm_uncensored mount: prompt injection failed"
             );
         }
         return nullptr;
     }
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    return nullptr;
+}
+
+static void*
+    uncensoredAgentUnmount(UncensoredCtx&, void*, const PluginxxOperatorNotify* notify, PluginxxString*) {
+    // 提示词是贡献型注册: 主程序在挂载卸载/禁用路径上按 owner 摘除
+    if (notify) {
+        notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    }
     return nullptr;
 }
 
@@ -194,7 +216,13 @@ static void*
     return nullptr;
 }
 
-AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(UncensoredCtx, uncensoredAgentStart, uncensoredAgentStop)
+AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT(
+    UncensoredCtx,
+    uncensoredAgentStart,
+    uncensoredAgentStop,
+    uncensoredAgentMount,
+    uncensoredAgentUnmount
+)
 
 extern "C" PLUGINXX_EXPORT void PLUGINXX_CALL agentxx_plugin_agent_destroy(void* plugin_ctx) {
     // C ABI 边界异常守卫: 销毁回调异常不得外泄
