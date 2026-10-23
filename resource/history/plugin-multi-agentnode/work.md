@@ -211,7 +211,18 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
   → 注册时传 `st->ref` → `return st;`；`unmount` 里 `delete static_cast<State*>(ud);`。
   多挂载共用一个 `plugin_ctx` 时用 `MountStore<State>`（已在 SDK 里）。
 
-### 2.2 测试模块（阻塞编译）
+### 2.2 测试模块与测试插件（阻塞 `agentxx_test` 编译）
+
+先做测试插件（`agent/test/plugin/dso_plugins/**`）：
+
+- `test_start_fail/test_start_fail.cpp`：把工具/图节点/订阅/prompt/hook/资源/能力
+  注册从 `start` 搬到新的 `mount` 入口（导出 `agentxx_plugin_agent_mount` /
+  `_unmount`），全部调用补 agent 引用；hook 改句柄式（`register_hook(host, agent,
+  &specEx, &handle)`）。该夹具用于“某一步失败 → 主程序回滚已生效注册”，失败点
+  会从 start 事务变成 mount 事务，`test_plugin_runtime` 里对应的断言要同步改。
+- `test_client_start_fail`：client 侧只需版本号（已提）与入口不变，检查是否编译通过。
+
+然后改测试模块：
 
 | 模块 | 要做 |
 |---|---|
