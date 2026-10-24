@@ -76,7 +76,8 @@ static asio::awaitable<void> sleepMsMI(int64_t ms) {
 }
 
 /// 构造最小 AgentContext (与 run_plugin_tests 相同加载)
-static std::shared_ptr<agent::AgentContext> makeAgentCtx(asio::any_io_executor ex) {
+static asio::awaitable<std::shared_ptr<agent::AgentContext>>
+    makeAgentCtx(asio::any_io_executor ex) {
     auto ctx                     = std::make_shared<agent::AgentContext>();
     ctx->agentConfig             = std::make_shared<agent::AgentConfig>();
     ctx->middlewareHandleContext = std::make_shared<middleware::MiddlewareContext>();
@@ -84,7 +85,9 @@ static std::shared_ptr<agent::AgentContext> makeAgentCtx(asio::any_io_executor e
     ctx->toolRegistry            = std::make_shared<plugin::ToolRegistry>();
     ctx->pluginManager           = std::make_shared<plugin::PluginManager>(ctx);
     ctx->pluginManager->setIoExecutor(ex);
-    return ctx;
+    // 建立挂载: 之后加载的插件挂到本 agent (运行期新加载的自动挂上)
+    co_await ctx->pluginManager->mountAgentAsync();
+    co_return ctx;
 }
 
 asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
@@ -100,8 +103,8 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
 
     // ---- 1. 双主程序并存加载同一插件 ----
     auto ex   = co_await asio::this_coro::executor;
-    auto ctxA = makeAgentCtx(ex);
-    auto ctxB = makeAgentCtx(ex);
+    auto ctxA = co_await makeAgentCtx(ex);
+    auto ctxB = co_await makeAgentCtx(ex);
 
     auto instA = co_await ctxA->pluginManager->loadPluginAsync(path);
     auto instB = co_await ctxB->pluginManager->loadPluginAsync(path);

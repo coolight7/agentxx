@@ -565,7 +565,7 @@ public:
 
     AgentRef() = default;
 
-    /// 从挂载入参构造 (自动拷 id 并带上序号)
+    /// 从挂载参数构造 (自动拷 id 并带上序号)
     explicit AgentRef(const AgentxxPluginAgentMountSpec& spec) :
         ScopeRef(
             spec.agent_id.data && spec.agent_id.size > 0
@@ -575,7 +575,7 @@ public:
         ) {}
 };
 
-/// per-agent 状态表 (放在 plugin_ctx 里; 只在宿主 io 线程访问, 无需加锁)
+/// per-agent 状态表 (放在 plugin_ctx 里; 只在主程序 io 线程访问, 无需加锁)
 ///
 /// `T` 需要有一个可赋值的 `AgentRef ref` 成员 (或自己持有 `AgentRef`)。
 /// 键 = agentId, 但命中需要 **id 与 seq 都匹配** —— 旧挂载留下的引用会被拒绝。
@@ -706,8 +706,8 @@ using pluginxx::detail::YieldAwaiter;
 struct CallToolState {
     const PluginxxHost*            host  = nullptr;
     const AgentxxPluginToolsIface* tools = nullptr;
-    /// 目标 agent 引用 (借用视图指向调用方 AgentRef; 仅本次调用期间有效)
-    const PluginxxScopeRef* agent = nullptr;
+    /// 目标 agent 引用 (值类型: 自己持有 id 字符串, 调用时再取借用视图)
+    ScopeRef agent{};
     /// 取消句柄用的表 (操作取消统一收拢到 `pluginxx.cancel`)
     const PluginxxCancelIface* cancel = nullptr;
     /// 协程驱动桥 (可空): 完成回调经它投递 continuation 并唤醒 driver。
@@ -733,7 +733,7 @@ struct CallToolAwaiter {
         std::string_view               in_args,
         std::string_view               in_tid,
         PollOneBridge*                 in_bridge = nullptr,
-        const PluginxxScopeRef*        in_agent  = nullptr,
+        ScopeRef                       in_agent  = {},
         const PluginxxCancelIface*     in_cancel = nullptr
     ) :
         st(std::make_shared<CallToolState>()) {
@@ -743,7 +743,7 @@ struct CallToolAwaiter {
         st->argsJson  = std::string(in_args);
         st->sessionId = std::string(in_tid);
         st->bridge    = in_bridge;
-        st->agent     = in_agent;
+        st->agent     = std::move(in_agent);
         st->cancel    = in_cancel;
     }
 
@@ -764,7 +764,7 @@ struct CallToolAwaiter {
 
         st->opHandle = st->tools->call_tool_async(
             st->host,
-            st->agent,
+            st->agent.ptr(),
             &nameSv,
             &argsSv,
             &tidSv,
@@ -845,7 +845,6 @@ inline detail::CallToolAwaiter call_tool(
     std::string_view   argsJson,
     std::string_view   sessionId = {}
 ) {
-    auto ref = agent.raw();
     return detail::CallToolAwaiter{
         ctx.host,
         ctx.iface.tools,
@@ -853,7 +852,7 @@ inline detail::CallToolAwaiter call_tool(
         argsJson,
         sessionId,
         &ctx.bridge(),
-        &ref,
+        agent,
         ctx.iface.cancel
     };
 }
@@ -913,8 +912,8 @@ inline std::string wrapFeatureAnswer(std::string_view raw) {
 struct FeatureCallState {
     const PluginxxHost*              host    = nullptr;
     const AgentxxPluginFeatureIface* feature = nullptr;
-    /// 目标 agent 引用 (借用视图; 仅本次调用期间有效)
-    const PluginxxScopeRef* agent = nullptr;
+    /// 目标 agent 引用 (值类型: 自己持有 id 字符串, 调用时再取借用视图)
+    ScopeRef agent{};
     /// 取消句柄用的表 (操作取消统一收拢到 `pluginxx.cancel`)
     const PluginxxCancelIface* cancel = nullptr;
     /// 协程驱动桥 (可空): 完成回调经它投递 continuation 并唤醒 driver。
@@ -939,7 +938,7 @@ struct FeatureCallAwaiter {
         std::string_view                 in_pointId,
         std::string_view                 in_args,
         PollOneBridge*                   in_bridge = nullptr,
-        const PluginxxScopeRef*          in_agent  = nullptr,
+        ScopeRef                         in_agent  = {},
         const PluginxxCancelIface*       in_cancel = nullptr
     ) :
         st(std::make_shared<FeatureCallState>()) {
@@ -968,7 +967,7 @@ struct FeatureCallAwaiter {
 
         st->opHandle = st->feature->call_point_async(
             st->host,
-            st->agent,
+            st->agent.ptr(),
             &idSv,
             &argsSv,
             [](void* ud, int32_t cbSt, const PluginxxStringView* pl) {
@@ -1245,14 +1244,19 @@ inline std::string listFeaturePoints(const PluginBase& ctx, const ScopeRef& agen
 ///   在结果的 `ok:false` + `error` 里, 不是异常; 受理失败 (参数非法 / 主程序不支持) 抛异常
 /// - **本实例自己的实现不会被问到** (避免无用往返): 同一插件内部要取值请直接调本地函数;
 ///   没有其它实现时结果是 `no_impl`
-inline detail::FeatureCallAwaiter
-    callFeature(const PluginBase& ctx, std::string_view pointId, std::string_view argsJson = "{}") {
+inline detail::FeatureCallAwaiter callFeature(
+    const PluginBase& ctx,
+    const ScopeRef&   agent,
+    std::string_view  pointId,
+    std::string_view  argsJson = "{}"
+) {
     return detail::FeatureCallAwaiter{
         ctx.host,
         ctx.iface.feature,
         pointId,
         argsJson,
-        &ctx.bridge()
+        &ctx.bridge(),
+        agent
     };
 }
 
@@ -3797,25 +3801,29 @@ inline void logClientCreateFailure(
 /// 只生成挂载/卸载两个入口 (与 [AGENTXX_PLUGIN_AGENT_LIFECYCLE_EXPORT] 配套)
 #define AGENTXX_PLUGIN_AGENT_MOUNT_EXPORT(CtxType, MountFn, UnmountFn)                         \
     extern "C" PLUGINXX_EXPORT void* PLUGINXX_CALL agentxx_plugin_agent_mount                \
-        (void*                              plugin_ctx,                                        \
-         const AgentxxPluginAgentMountSpec* spec,                                              \
-         const PluginxxOperatorNotify*      notify,                                            \
-         PluginxxString*                    err) {                                              \
-        if ((MountFn) == nullptr) {                                                                      \
-            return nullptr; /* 无挂载入口 = 本插件无 agent 侧能力 */                          \
-        }                                                                                      \
-        auto* ctx = static_cast<CtxType*>(plugin_ctx);                                          \
-        return agentxx::plugin::detail::callLifecycleEntry(                                     \
-            ctx ? ctx->host : nullptr,                                                          \
-            plugin_ctx,                                                                        \
-            notify,                                                                            \
-            err,                                                                               \
+        (void*                              plugin_ctx,                                       \
+         const AgentxxPluginAgentMountSpec* spec,                                             \
+         const PluginxxOperatorNotify*      notify,                                           \
+         PluginxxString*                    err) {                                             \
+        if ((MountFn) == nullptr) {                                                           \
+            /* 无挂载入口 = 本插件无 agent 侧能力, 仍要给出完成信号 */                           \
+            if (notify && notify->done) {                                                     \
+                notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);                \
+            }                                                                                 \
+            return nullptr;                                                                   \
+        }                                                                                     \
+        auto* ctx = static_cast<CtxType*>(plugin_ctx);                                        \
+        return agentxx::plugin::detail::callLifecycleEntry(                                   \
+            ctx ? ctx->host : nullptr,                                                        \
+            plugin_ctx,                                                                       \
+            notify,                                                                           \
+            err,                                                                              \
             "plugin mount",                                                                   \
-            [&]() -> void* {                                                                   \
-                return (MountFn)(*ctx, spec, notify, err);                                     \
-            }                                                                                  \
-        );                                                                                     \
-    }                                                                                          \
+            [&]() -> void* {                                                                  \
+                return (MountFn)(*ctx, spec, notify, err);                                    \
+            }                                                                                 \
+        );                                                                                    \
+    }                                                                                         \
     extern "C" PLUGINXX_EXPORT void* PLUGINXX_CALL agentxx_plugin_agent_unmount               \
         (void*                         plugin_ctx,                                             \
          void*                         mount_ud,                                               \
@@ -3823,7 +3831,7 @@ inline void logClientCreateFailure(
          PluginxxString*               err) {                                                   \
         if ((UnmountFn) == nullptr) {                                                                    \
             if (notify && notify->done) {                                                      \
-                notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);                   \
+                notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);                 \
             }                                                                                  \
             return nullptr;                                                                    \
         }                                                                                      \

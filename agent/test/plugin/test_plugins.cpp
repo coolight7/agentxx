@@ -87,6 +87,11 @@ static std::string findExamplePluginPath() {
     return findPluginDir("example_plugin");
 }
 
+/// 由管理器造一份指向本挂载的引用 (值类型, 自带 id 字符串)
+agentxx::plugin::ScopeRef scopeRefOf(const agentxx::plugin::PluginManager& mgr) {
+    return agentxx::plugin::ScopeRef{mgr.agentId(), mgr.mountSequence()};
+}
+
 static asio::awaitable<void> sleepMs(int ms) {
     auto timer
         = asio::steady_timer(co_await asio::this_coro::executor, std::chrono::milliseconds{ms});
@@ -107,6 +112,8 @@ asio::awaitable<TestResult> run_plugin_tests() {
     // 加载 io executor (与 BaseAgent::init 一致): 跨线程 (JS 线程/线程池) 的
     // vtable 调用经真实 post 到 io 线程执行, 而非测试默认的"伪 io 线程"直连
     ctx->pluginManager->setIoExecutor(co_await asio::this_coro::executor);
+    // 建立挂载: 之后加载的插件挂到本 agent (运行期新加载的自动挂上)
+    co_await ctx->pluginManager->mountAgentAsync();
 
     // ---- 2. 加载示例插件 (目录 + plugin.yaml 清单分派) ----
     auto path = findExamplePluginPath();
@@ -670,6 +677,7 @@ throw new Error("top-level rollback probe");
             XX_TEST_EXPECT_TRUE(jsInst != nullptr);
             auto* op = ctx->pluginManager->invokeCapabilityAsync(
                 jsInst,
+                nullptr, ///< 主程序外部发起 (不归因到某个 agent)
                 "interpreter.js",
                 "load",
                 args,
@@ -837,8 +845,10 @@ throw new Error("top-level rollback probe");
 
             static SlowCtx slowCtx;
             slowCtx.init(inst23->hostView());
+            const auto slowRef = scopeRefOf(*ctx->pluginManager);
             agentxx::plugin::blocking_tool(
                 slowCtx,
+                slowRef,
                 "slow_timeout_tool",
                 "slow tool for unload race test",
                 "{}",
@@ -1488,8 +1498,10 @@ throw new Error("top-level rollback probe");
 
             static BoomCtx boomCtx;
             boomCtx.init(inst31->hostView());
+            const auto boomRef = scopeRefOf(*ctx->pluginManager);
             agentxx::plugin::blocking_tool(
                 boomCtx,
+                boomRef,
                 "boom_tool",
                 "boom test",
                 "{}",
@@ -1519,6 +1531,7 @@ throw new Error("top-level rollback probe");
             s_goodHandlerRan             = false;
             auto* subBad                 = ctx->pluginManager->subscribe(
                 inst31.get(),
+                nullptr, ///< 主程序总线（进程级事件）
                 "guard_throw.topic",
                 +[](const PluginxxStringView*, void*) {
                     throw std::runtime_error("bad handler boom");
@@ -1527,6 +1540,7 @@ throw new Error("top-level rollback probe");
             );
             auto* subGood = ctx->pluginManager->subscribe(
                 inst31.get(),
+                nullptr, ///< 主程序总线（进程级事件）
                 "guard_throw.topic",
                 +[](const PluginxxStringView*, void* ud) {
                     *static_cast<bool*>(ud) = true;
@@ -1776,6 +1790,8 @@ throw new Error("top-level rollback probe");
         gctx->toolRegistry  = std::make_shared<agentxx::plugin::ToolRegistry>();
         gctx->pluginManager = std::make_shared<agentxx::plugin::PluginManager>(gctx);
         gctx->pluginManager->setIoExecutor(co_await asio::this_coro::executor);
+        // 建立挂载: 之后加载的插件挂到本 agent (运行期新加载的自动挂上)
+        co_await gctx->pluginManager->mountAgentAsync();
         gctx->graphRegistry = std::make_shared<neograph::graph::GraphRegistry>();
         // agentxx 图条件 (与 BaseAgent::initRegisterNodes 一致; 自建 registry 需显式注册,
         // 否则图定义引用的 xx_has_tool_calls 编译报"Unknown condition")
@@ -2214,12 +2230,13 @@ throw new Error("top-level rollback probe");
             struct DummyPlugin : public agentxx::plugin::PluginBase {};
 
             DummyPlugin plug;
-            XX_TEST_EXPECT_FALSE(plug.sessionCancelled("test_sess"));
+            // 引用为空 = 只能读本地登记 (不问主程序); 会话取消由主程序侧轮次状态给出
+            XX_TEST_EXPECT_FALSE(plug.sessionCancelled(nullptr, "test_sess"));
 
             // 主程序 execute_cancel 或本地登记取消
             plug.cancelRegistry.cancel("test_sess");
             // 本地直接命中, 零跨线程 host 交互
-            XX_TEST_EXPECT_TRUE(plug.sessionCancelled("test_sess"));
+            XX_TEST_EXPECT_TRUE(plug.sessionCancelled(nullptr, "test_sess"));
         }
     }
 
@@ -2234,6 +2251,8 @@ throw new Error("top-level rollback probe");
         rollbackCtx->toolRegistry  = std::make_shared<agentxx::plugin::ToolRegistry>();
         rollbackCtx->pluginManager = std::make_shared<agentxx::plugin::PluginManager>(rollbackCtx);
         rollbackCtx->pluginManager->setIoExecutor(co_await asio::this_coro::executor);
+        // 建立挂载: 之后加载的插件挂到本 agent (运行期新加载的自动挂上)
+        co_await rollbackCtx->pluginManager->mountAgentAsync();
 
         auto fakeInst = std::make_shared<agentxx::plugin::PluginInstance>("fake_rollback_plugin");
         fakeInst->manager     = rollbackCtx->pluginManager;
@@ -2249,9 +2268,17 @@ throw new Error("top-level rollback probe");
 
         FakeCtx fctx;
         fctx.init(fakeInst->hostView());
-        agentxx::plugin::fast_tool(fctx, "fake_rollback_tool", "desc", "{}", [](std::string_view) {
-            return "ok";
-        });
+        const auto fakeRef = scopeRefOf(*rollbackCtx->pluginManager);
+        agentxx::plugin::fast_tool(
+            fctx,
+            fakeRef,
+            "fake_rollback_tool",
+            "desc",
+            "{}",
+            [](std::string_view) {
+                return "ok";
+            }
+        );
         XX_TEST_EXPECT_TRUE(rollbackCtx->toolRegistry->contains("fake_rollback_tool"));
 
         // 验证 detachAll 完全拔除工具与订阅
@@ -2723,7 +2750,8 @@ throw new Error("top-level rollback probe");
                     ifacePermission->version,
                     AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION_VERSION
                 );
-                auto argSv = agentxx::plugin::PluginStringView::fromCstr("path");
+                const auto permRef = scopeRefOf(*ctx->pluginManager);
+                auto       argSv   = agentxx::plugin::PluginStringView::fromCstr("path");
                 AgentxxPluginToolPermissionSpec spec{};
                 spec.scope       = AGENTXX_PLUGIN_PERMISSION_SCOPE_WRITE;
                 spec.target_kind = AGENTXX_PLUGIN_PERMISSION_TARGET_PATH;
@@ -2732,7 +2760,12 @@ throw new Error("top-level rollback probe");
                 // 非本插件工具 (内置工具名)
                 spec.tool_name = agentxx::plugin::PluginStringView::fromCstr("agentxx_share_store");
                 XX_TEST_EXPECT_TRUE(
-                    ifacePermission->register_tool_permission(fsInst->hostView(), &spec) != 0
+                    ifacePermission->register_tool_permission(
+                        fsInst->hostView(),
+                        permRef.ptr(),
+                        &spec
+                    )
+                    != 0
                 );
 
                 // 本插件工具 + 未知作用域取值
@@ -2740,7 +2773,12 @@ throw new Error("top-level rollback probe");
                     = agentxx::plugin::PluginStringView::fromCstr("agentxx_filesystem_write");
                 spec.scope = 999;
                 XX_TEST_EXPECT_TRUE(
-                    ifacePermission->register_tool_permission(fsInst->hostView(), &spec) != 0
+                    ifacePermission->register_tool_permission(
+                        fsInst->hostView(),
+                        permRef.ptr(),
+                        &spec
+                    )
+                    != 0
                 );
                 // 非法声明不得改变已生效的声明 (作用域仍为写)
                 const auto* specAfterBad = permission->toolPermission("agentxx_filesystem_write");
@@ -2910,8 +2948,15 @@ throw new Error("top-level rollback probe");
                     query.path_count  = static_cast<int32_t>(views.size());
                     query.paths       = views.data();
                     std::vector<int32_t> decisions(views.size(), -1);
+                    const auto           pathRef = scopeRefOf(*ctx->pluginManager);
                     XX_TEST_EXPECT_EQ(
-                        ifacePermission->check_paths(fsInst->hostView(), &query, decisions.data()),
+                        ifacePermission
+                            ->check_paths(
+                                fsInst->hostView(),
+                                pathRef.ptr(),
+                                &query,
+                                decisions.data()
+                            ),
                         0
                     );
                     XX_TEST_EXPECT_EQ(decisions[0], AGENTXX_PLUGIN_PERMISSION_DECISION_ALLOW);
@@ -2922,7 +2967,13 @@ throw new Error("top-level rollback probe");
                     // 非法入参: 空数组 / 空指针 → 失败 (调用方跳过过滤)
                     query.path_count = 0;
                     XX_TEST_EXPECT_TRUE(
-                        ifacePermission->check_paths(fsInst->hostView(), &query, decisions.data())
+                        ifacePermission
+                            ->check_paths(
+                                fsInst->hostView(),
+                                pathRef.ptr(),
+                                &query,
+                                decisions.data()
+                            )
                         != 0
                     );
                 }
@@ -2966,9 +3017,12 @@ throw new Error("top-level rollback probe");
                     query.scope       = AGENTXX_PLUGIN_PERMISSION_SCOPE_READ;
                     query.path_count  = 1;
                     query.paths       = views.data();
-                    int32_t decision  = -1;
+                    int32_t    decision = -1;
+                    const auto pathRef  = scopeRefOf(*ctx->pluginManager);
                     XX_TEST_EXPECT_TRUE(
-                        ifacePermission->check_paths(fsInst->hostView(), &query, &decision) != 0
+                        ifacePermission
+                            ->check_paths(fsInst->hostView(), pathRef.ptr(), &query, &decision)
+                        != 0
                     );
                 }
             }
@@ -3193,6 +3247,8 @@ throw new Error("top-level rollback probe");
                 c->toolRegistry            = std::make_shared<plugin::ToolRegistry>();
                 c->pluginManager           = std::make_shared<plugin::PluginManager>(c);
                 c->pluginManager->setIoExecutor(ex);
+                // 建立挂载: 之后加载的插件挂到本 agent (运行期新加载的自动挂上)
+                co_await c->pluginManager->mountAgentAsync();
 
                 auto inst = co_await c->pluginManager->loadPluginAsync(sysMonPath);
                 XX_TEST_EXPECT_TRUE(inst != nullptr);
@@ -3222,9 +3278,10 @@ throw new Error("top-level rollback probe");
         }
     }
 
-    // ---- 40. 加载期 start 失败的真实 DSO 回滚 ----
-    // 测试插件 start 依次注册 工具/图类型/订阅/prompt/hook/能力/资源 后主动失败:
-    // - 主程序必须回滚全部已生效注册 (工具/图类型/订阅/prompt/hook 中间件/能力/资源);
+    // ---- 40. 挂载期 (mount) 失败的真实 DSO 回滚 ----
+    // 测试插件在 mount 里依次注册 工具/图类型/订阅/prompt/hook/能力/资源 后主动失败:
+    // - v2 起 agent 级注册只能在 mount 里做, 因此"加载成功"之后才有这次失败事务;
+    //   主程序必须回滚该 agent 上全部已生效注册 (工具/图类型/订阅/prompt/hook/能力/资源);
     // - 再次加载同一 DSO, 同名注册必须全部重新成功 (插件经 probe 事件
     //   `{"step":"all","ok":true}` 证明走到了最后一步)。
     {
@@ -3237,6 +3294,8 @@ throw new Error("top-level rollback probe");
         sctx->toolRegistry  = std::make_shared<plugin::ToolRegistry>();
         sctx->pluginManager = std::make_shared<plugin::PluginManager>(sctx);
         sctx->pluginManager->setIoExecutor(co_await asio::this_coro::executor);
+        // 建立挂载: 之后加载的插件挂到本 agent (运行期新加载的自动挂上)
+        co_await sctx->pluginManager->mountAgentAsync();
         sctx->graphRegistry = std::make_shared<neograph::graph::GraphRegistry>();
         // 资源应用器 (skill/memory 中间件): 插件 start 经 vtable 注册 skill 目录,
         // 回滚后所有权记录必须为空。
@@ -3268,10 +3327,11 @@ throw new Error("top-level rollback probe");
             }
         };
 
-        // 第一次加载: 全注册后失败, 主程序回滚
+        // 第一次挂载: 全注册后失败, 主程序回滚 (加载本身成功: 实例在, 挂载失败)
         auto fail1
             = co_await sctx->pluginManager->loadPluginAsync(AGENTXX_TEST_START_FAIL_PLUGIN_PATH);
-        XX_TEST_EXPECT_TRUE(fail1 == nullptr);
+        XX_TEST_EXPECT_TRUE(fail1 != nullptr);
+        XX_TEST_EXPECT_FALSE(fail1 && fail1->pluginMounted);
         co_await waitReports(1);
         XX_TEST_EXPECT_EQ(reports.size(), size_t{1});
         XX_TEST_EXPECT_TRUE(
@@ -3306,9 +3366,12 @@ throw new Error("top-level rollback probe");
         XX_TEST_EXPECT_EQ(reports.size(), size_t{1});
 
         // 第二次加载: 同名注册必须全部重新成功 (无残留冲突)
+        // - 先卸载上一次的实例 (它的 mount 已经失败, 但实例本身仍然加载着)
+        XX_TEST_EXPECT_TRUE(co_await sctx->pluginManager->unloadAsync("test_start_fail_plugin"));
         auto fail2
             = co_await sctx->pluginManager->loadPluginAsync(AGENTXX_TEST_START_FAIL_PLUGIN_PATH);
-        XX_TEST_EXPECT_TRUE(fail2 == nullptr);
+        XX_TEST_EXPECT_TRUE(fail2 != nullptr);
+        XX_TEST_EXPECT_FALSE(fail2 && fail2->pluginMounted);
         co_await waitReports(2);
         XX_TEST_EXPECT_EQ(reports.size(), size_t{2});
         XX_TEST_EXPECT_TRUE(
@@ -3338,6 +3401,8 @@ throw new Error("top-level rollback probe");
         planCtx->toolRegistry  = std::make_shared<plugin::ToolRegistry>();
         planCtx->pluginManager = std::make_shared<plugin::PluginManager>(planCtx);
         planCtx->pluginManager->setIoExecutor(co_await asio::this_coro::executor);
+        // 建立挂载: 之后加载的插件挂到本 agent (运行期新加载的自动挂上)
+        co_await planCtx->pluginManager->mountAgentAsync();
 
         XX_TEST_EXPECT_TRUE(
             planCtx->agentConfig->prompt.appendSystemPrompts.find("planning")

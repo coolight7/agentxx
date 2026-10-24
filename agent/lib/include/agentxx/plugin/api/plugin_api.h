@@ -58,9 +58,9 @@ extern "C" {
 
 #pragma pack(push, 8)
 
-/* ==================== 挂载入参 (每个 agent 一次) ==================== */
+/* ==================== 挂载参数 (每个 agent 一次) ==================== */
 
-/// 引擎侧 agent 挂载入参
+/// 主程序侧 agent 挂载参数
 ///
 /// - 字符串均为**借用视图**, 仅在本次调用期间有效; 需要就自己拷进 per-agent 状态;
 /// - `config_json` 是本挂载的配置 (加载表 args 与 `plugin.mount[].args` 的合并结果);
@@ -82,7 +82,7 @@ typedef struct AgentxxPluginAgentMountSpec {
     PluginxxStringView model_json;
     /// 本挂载的插件配置 JSON (加载 args ⊕ plugin.mount[].args)
     PluginxxStringView config_json;
-    /// 宿主内单调递增的挂载序号 (防 id 复用)
+    /// 主程序内单调递增的挂载序号 (防 id 复用)
     uint64_t mount_seq;
 } AgentxxPluginAgentMountSpec;
 
@@ -99,7 +99,7 @@ typedef void*(PLUGINXX_CALL* AgentxxPluginAgentMountFn)(
 );
 
 /// 卸载入口: `mount_ud` 就是 mount 的返回值; 只释放该 agent 的状态,
-/// 宿主会自动撤销注册 (工具/权限/钩子/提示词/功能点/图/资源/事件)。
+/// 主程序会自动撤销注册 (工具/权限/钩子/提示词/功能点/图/资源/事件)。
 typedef void*(PLUGINXX_CALL* AgentxxPluginAgentUnmountFn)(
     void*                         plugin_ctx,
     void*                         mount_ud,
@@ -842,7 +842,7 @@ typedef struct AgentxxPluginFeatureIface {
 
 /// 挂载查询: 让插件看清"我在这几个 agent 上挂好了"
 ///
-/// 插件自己就拿着 agent 引用 (挂载时下发), 不需要问宿主"我在谁身上";
+/// 插件自己就拿着 agent 引用 (挂载时下发), 不需要问主程序"我在谁身上";
 /// 本表的用途是诊断与自查 (例如启动日志、测试断言)。
 #define AGENTXX_PLUGIN_IFACE_AGENT_MOUNT             "agentxx.agent.mount"
 #define AGENTXX_PLUGIN_IFACE_AGENT_MOUNT_VERSION     1

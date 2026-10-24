@@ -40,8 +40,29 @@ static HostCall enterHost(const PluginxxHost* host, bool allowClosing = false) {
 /// 校验作用域引用 (agent 级接口的公共门槛)
 /// - 引用为空 / 长度不足 / id 不匹配 / seq 不匹配 → false
 /// - 本主程序当前是一份管理器服务一个 agent, 所以只有一份可命中的引用
+/// - 失败记一条警告: 带插件给的 `agent_id` / `seq` 与本程序期望的值, 便于定位
+///   "在 start 里注册"或"旧引用"这类错误
 static bool scopeOk(const PluginManager* mgr, const PluginxxScopeRef* agent) {
-    return mgr != nullptr && mgr->mountOf(agent);
+    if (mgr != nullptr && mgr->mountOf(agent)) {
+        return true;
+    }
+    std::string gotId;
+    uint64_t    gotSeq = 0;
+    if (pluginxx_scope_ref_ok(agent) && agent != nullptr) {
+        if (agent->id.data != nullptr && agent->id.size > 0) {
+            gotId.assign(agent->id.data, static_cast<size_t>(agent->id.size));
+        }
+        gotSeq = agent->seq;
+    }
+    XX_LOGW(
+        "agent 引用无效 (收到 agent_id=`{}` seq={}; 本程序期望 agent_id=`{}` seq={}); "
+        "agent 级接口请在插件的 mount 回调里调用, 并给它本挂载的引用",
+        gotId.empty() ? std::string_view{"<empty>"} : std::string_view{gotId},
+        gotSeq,
+        mgr ? std::string_view{mgr->agentId()} : std::string_view{"<no manager>"},
+        mgr ? mgr->mountSequence() : 0
+    );
+    return false;
 }
 
 /// 注册/写入类入口的公共骨架: 解析 host 上下文 → 把业务逻辑投递到 IO 线程执行。
@@ -1305,9 +1326,13 @@ void PluginManager::applyDeclaredResources(
     PluginInstance&                        inst,
     const plugin::PluginManifestResources& resources
 ) {
-    // 初始化收尾即冻结资源声明: 之后固定不可变以防上下文变化
-    // (仅 yaml 声明与初始化阶段追加生效; 见 PluginInstance::resourcesFrozen)
-    inst.resourcesFrozen = true;
+    // 加载阶段只记下来: 资源是 agent 级实体, 由 [mountOneAsync] 在每个挂载上应用一次
+    // (MCP 每个挂载各一条连接), 拆挂载时由同一路径摘除
+    inst.manifestResources = resources;
+}
+
+void PluginManager::applyManifestResourcesNow(PluginInstance& inst) {
+    const auto& resources = inst.manifestResources;
     if (resources.skillDirs.empty() && resources.memoryFiles.empty()
         && resources.mcpServers.empty()) {
         return;

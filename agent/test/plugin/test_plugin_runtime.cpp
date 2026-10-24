@@ -343,6 +343,9 @@ struct LifecycleProbe {
     /// start 失败前是否真的登记过图节点类型（证明图注册同样回滚）。
     bool                  partialGraphRegistration = false;
     AgentxxPluginToolSpec spec{};
+    /// 接口调用用的挂载引用（`id` 借用 [agentId] 的内存）
+    std::string       agentId;
+    PluginxxScopeRef  ref{};
 };
 
 void* PLUGINXX_CALL
@@ -350,7 +353,7 @@ void* PLUGINXX_CALL
     auto& probe = *static_cast<LifecycleProbe*>(ud);
     ++probe.starts;
     if (probe.tools && probe.host) {
-        const int32_t rc          = probe.tools->register_tool(probe.host, &probe.spec);
+        const int32_t rc          = probe.tools->register_tool(probe.host, &probe.ref, &probe.spec);
         probe.partialRegistration = (rc == 0);
     }
     if (probe.graph && probe.host && probe.graph->register_node_type) {
@@ -358,7 +361,7 @@ void* PLUGINXX_CALL
         gspec.type       = agentxx::plugin::PluginStringView::fromCstr("probe_graph_type");
         gspec.run_start  = &probeGraphRunStart;
         gspec.user_data  = &probe;
-        const int32_t rc = probe.graph->register_node_type(probe.host, &gspec);
+        const int32_t rc = probe.graph->register_node_type(probe.host, &probe.ref, &gspec);
         probe.partialGraphRegistration = (rc == 0);
     }
     if (probe.failStart) {
@@ -375,7 +378,7 @@ void* PLUGINXX_CALL
     auto& probe = *static_cast<LifecycleProbe*>(ud);
     ++probe.stops;
     if (probe.tools && probe.host) {
-        probe.tools->unregister_tool(probe.host, &probe.spec.name);
+        probe.tools->unregister_tool(probe.host, &probe.ref, &probe.spec.name);
     }
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
@@ -1386,11 +1389,11 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_EQ(prompt.appendSystemPrompts["demo"], std::string{"B"});
 
         // 2) 先卸载写 "A" 的 owner：只剩 caller 的贡献
-        f.manager->restorePromptBackup(f.provider.get());
+        f.manager->removePromptContributions(f.provider->name);
         XX_TEST_EXPECT_EQ(prompt.appendSystemPrompts["demo"], std::string{"B"});
 
         // 3) 再卸载 caller：回到基础值（原本不存在 -> 键删除），不写回已离开的 "A"
-        f.manager->restorePromptBackup(f.caller.get());
+        f.manager->removePromptContributions(f.caller->name);
         XX_TEST_EXPECT_TRUE(
             prompt.appendSystemPrompts.find("demo") == prompt.appendSystemPrompts.end()
         );
@@ -1401,7 +1404,7 @@ TestResult testPluginRuntime() {
             0
         );
         prompt.appendSystemPrompts["u"] = "user";
-        f.manager->restorePromptBackup(f.provider.get());
+        f.manager->removePromptContributions(f.provider->name);
         XX_TEST_EXPECT_EQ(prompt.appendSystemPrompts["u"], std::string{"user"});
         prompt.appendSystemPrompts.erase("u");
 
@@ -1411,7 +1414,7 @@ TestResult testPluginRuntime() {
             0
         );
         XX_TEST_EXPECT_EQ(prompt.systemPrompt, std::string{"plugin system"});
-        f.manager->restorePromptBackup(f.provider.get());
+        f.manager->removePromptContributions(f.provider->name);
         XX_TEST_EXPECT_EQ(prompt.systemPrompt, baseSys);
 
         // 6) toolPrompt：部分覆盖语义 + 卸载删除新增键
@@ -1433,7 +1436,7 @@ TestResult testPluginRuntime() {
         );
         XX_TEST_EXPECT_EQ(prompt.toolPrompt["demo_tool"].depict, std::string{"D"});
         XX_TEST_EXPECT_EQ(prompt.toolPrompt["demo_tool"].args["b"], std::string{"2"});
-        f.manager->restorePromptBackup(f.provider.get());
+        f.manager->removePromptContributions(f.provider->name);
         XX_TEST_EXPECT_TRUE(prompt.toolPrompt.find("demo_tool") == prompt.toolPrompt.end());
     }
 
@@ -1451,6 +1454,10 @@ TestResult testPluginRuntime() {
         probe->tools       = AgentIfaces::query(probe->host).tools;
         probe->graph       = AgentIfaces::query(probe->host).graph;
         probe->spec        = fakeTool(nullptr, false);
+        probe->agentId     = f.manager->agentId();
+        probe->ref.struct_size = sizeof(PluginxxScopeRef);
+        probe->ref.id          = PluginStringView::from(probe->agentId);
+        probe->ref.seq         = f.manager->mountSequence();
         XX_TEST_EXPECT_TRUE(probe->tools != nullptr);
         if (!probe->tools) {
             return result;
@@ -1670,9 +1677,11 @@ TestResult testPluginRuntime() {
         auto        entered   = std::make_shared<std::promise<void>>();
         auto        rcPromise = std::make_shared<std::promise<int>>();
         auto        rcFuture  = rcPromise->get_future();
-        std::thread pluginThread([host, ifaces, spec, entered, rcPromise] {
+        // 挂载引用由值捕获带入工作线程 (raw() 指向自身, 因此不能捕指针)
+        const agentxx::plugin::ScopeRef ref{"root", 0};
+        std::thread pluginThread([host, ifaces, spec, entered, rcPromise, ref] {
             entered->set_value();
-            rcPromise->set_value(ifaces.tools->register_tool(host, spec.get()));
+            rcPromise->set_value(ifaces.tools->register_tool(host, ref.ptr(), spec.get()));
         });
         entered->get_future().wait();
         f.provider->lifetime->requestClose();
@@ -2063,6 +2072,7 @@ TestResult testPluginRuntime() {
         };
         auto* sub = ifaces.events->subscribe(
             host,
+            nullptr, ///< 主程序总线 (与 agent 无关的进程级事件)
             &topicSv,
             +[](const PluginxxStringView*, void* ud) {
                 ++*static_cast<int*>(ud);
@@ -2087,6 +2097,7 @@ TestResult testPluginRuntime() {
         // 卸载实例 (detachAll 统一退订) 后, 对插件保存的旧句柄再次退订必须安全。
         auto* late = ifaces.events->subscribe(
             host,
+            nullptr, ///< 主程序总线
             &topicSv,
             +[](const PluginxxStringView*, void* ud) {
                 ++*static_cast<int*>(ud);

@@ -11,14 +11,16 @@
 | A | 契约基础（新类型/新表/新入口/版本基线/删旧分支） | 完成 |
 | C | agent 引用显式化（逐表加 `PluginxxScopeRef` 参数） | 完成（契约/宿主/插件全迁） |
 | E | SDK（`AgentRef` / `MountStore` / 导出宏） | 完成（示例插件已迁） |
+| T | 测试模块与测试插件迁移（`agentxx_test`） | 完成（全部模块通过） |
 | B | 宿主化与挂载（per-host 管理器 + `PluginMount`） | **未完成**（当前是「一份管理器服务一个 agent」） |
 | D | 宿主接线与配置（`AgentHost`、五处启动路径、`plugin.mount`） | 未开始 |
 | F | 会话定位与诊断 | 未开始 |
 | G | 文档清理与最终核对 | 未开始 |
 
-**当前代码树状态：lib + client + 21 个插件目标编译通过；测试模块（`agentxx_test`）未迁。**
+**当前代码树状态：lib + client + 21 个插件目标 + `agentxx_test` 全部编译通过；
+插件相关测试模块与 `boundaries` / `config_keys` / `assembly_snapshot` 全绿。**
 
-下一步：迁移测试模块（见 §2.2）→ 阶段 B → D → F → G。
+下一步：阶段 B（插件管理器上提到宿主、把 agent 级注册收进 `PluginMount`）→ D → F → G。
 
 ## 1. 已完成
 
@@ -153,6 +155,60 @@ cmake --build agent/build/windows-debug/agentxx_lib_repo-prefix/src/agentxx_lib_
 cmake --build agent/build/windows-debug/agentxx_lib_repo-prefix/src/agentxx_lib_repo-build/agentxx_plugins_builtin/<插件目录> --target <插件目录>
 ```
 
+### 1.6 测试迁移与宿主挂载行为补齐
+
+测试模块（`agent/test`）从「不可编译」迁到全绿，过程中把宿主侧的挂载/拆挂载行为
+补成了真实可用的增量实现（原来只有「一次性挂载、不能重挂」）。
+
+#### 测试侧
+
+| 文件 | 改动 |
+|---|---|
+| `test_plugin_sdk.cpp` | `CapturedRegistration.hook` 改用 `AgentxxPluginHookSpecEx`; fake 表函数补 `agent` 参; 工具表去 `op_cancel`、hooks 表改三成员; kit 调用补 `g_agentRef` |
+| `test_plugin_bridge.cpp` | `fakeIsCancelled(host, agent, sid)` / `fakeRegisterTool(host, agent, spec)`; `op_cancel` 从工具表挪到 cancel 表 |
+| `test_plugin_runtime.cpp` | `LifecycleProbe` 记 `agentId` + `PluginxxScopeRef`; `restorePromptBackup` → `removePromptContributions(inst->name)`; 订阅/工作线程补引用 |
+| `test_plugins.cpp` | 新增 `scopeRefOf(const PluginManager&)`; 工具/权限/能力/钩子调用逐处补引用 |
+| `test_plugin_hooks.cpp` | 用例改为「同点多个独立句柄 + 优先级越界裁剪 + 逐句柄撤销」 |
+| `test_plugin_abi_c17.c` | 断言全局与各表 API 版本 = 2 |
+| 各 fixture | `setIoExecutor` 后补 `mountAgentAsync()`（未挂载时 agent 级注册一律被拒） |
+
+#### 宿主侧（`plugin_manager_lifecycle.cpp` / `plugin_manager_vtable.cpp`）
+
+- `mountAgentAsync()`：改为**增量 + 幂等** —— 只补挂尚未挂载的实例，`mountSeq_`
+  只在首次（`==0`）自增；
+- 新增 `mountOneAsync` / `unmountOneAsync`：挂载时解冻 + 应用清单资源 → 驱动
+  `mountFn` → 成功后置 `pluginMounted`/`mountUserData` 并**重新冻结**；失败逐项回滚；
+  拆挂载时先解冻 → 调 `unmountFn` → 摘除 agent 级注册与清单资源
+  （**不动**能力声明与主程序总线订阅 —— 它们属于 `start`/`stop`）；
+- `loadPluginAsync()`：已挂载时新加载的插件自动补挂当前 agent；
+- 禁用 / 启用新增 `onInstanceDisabledAsync` / `onInstanceEnabledAsync` 扩展点
+  （框架 `pluginxx::host::lifecycle.h`），保证 disable/enable 交错后恰好挂载一次；
+- `scopeOk()` 失败时记 WARN，带收到的 `agent_id`/`seq` 与期望值（便于插件自查）；
+- `detachDomainRegistrations` 的提示词 owner 键从 `plugin:<名>` 改回实例名（旧写法
+  导致提示词贡献撤不掉）。
+
+#### SDK 修正
+
+- `plugin_kit.h`：`CallToolState` / `FeatureCallState` 改存 `ScopeRef` 值
+  （原来存 `raw()` 临时量的指针 → 悬垂，表现为 `call_tool_async: agent reference is invalid`）；
+- `AGENTXX_PLUGIN_AGENT_MOUNT_EXPORT`：没有 `mountFn` 时按契约 `notify->done(OK)` 后返回
+  （原来直接返回 `nullptr`，主程序判为 `protocol violation: null operation without
+  done/error`，导致无 per-agent 状态的 JS 壳插件全部挂载失败）。
+
+#### 边界/文档同步
+
+- `boundaries`：接口表数量 20 → **21**（新增 `agentxx.agent.mount`，通用 10 + 业务 11），
+  成员台账同步四张 v2 表的成员变化（tools/feature 去 `op_cancel`、cancel 表加
+  `op_cancel`、hooks 合三成员）；词表规则新增「行内例外」，并把新写注释里的
+  `宿主`/`载入`/`口径`/老`内核` 改回项目统一用词；
+- `docs/zh-cn/design/plugins.md`：§8 表数改 21、补 `mount` 表、版本列改 v2；
+- 根 `AGENTS.md`：接口表数量与版本基线说明同步。
+
+#### 已知限制
+
+- 一份 JS 脚本目前只对应一个挂载作用域：`plugins` 模块与其他模块串跑时，
+  `example_js` 偶发钩子/订阅登记失败（单跑全绿），阶段 B/D 处理。
+
 ## 2. 待完成任务
 
 ### 2.1 插件迁移（已完成，见 §1.4）
@@ -211,7 +267,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
   → 注册时传 `st->ref` → `return st;`；`unmount` 里 `delete static_cast<State*>(ud);`。
   多挂载共用一个 `plugin_ctx` 时用 `MountStore<State>`（已在 SDK 里）。
 
-### 2.2 测试模块与测试插件（阻塞 `agentxx_test` 编译）
+### 2.2 测试模块与测试插件（已完成，见 §1.6）
 
 先做测试插件（`agent/test/plugin/dso_plugins/**`）：
 
@@ -299,15 +355,15 @@ ref.seq         = mgr->mountSequence();   // 未挂载时为 0 = 不校验
   `plugins_agent` 段；日志补 `agent_id` / `seq`。
 - 阶段 G：`docs/zh-cn/design/plugins.md` §2/§8/§17/§18、`index.md` §6/§7、根 `AGENTS.md`。
 
-## 3. 为什么停在这里（重要）
+## 3. 当前进度说明
 
-本次重构是**破坏性 ABI 换代**：表结构体新增了 `agent` 参数位置，C 函数指针的
-类型随之改变。只要插件源码不跟着改，编译一定失败；而 22 个插件 + 10 个测试模块
-的迁移量远大于契约与宿主侧。
+契约、插件、测试三个阶段都已迁完（§2.1 / §2.2 是机械改动，已完成）。
+接下来是唯一有设计取舍的**阶段 B**：把插件实例表上提到宿主（`AgentHost`）、
+把 agent 级注册收进 `PluginMount`，并按 §2.3 的六步改造；之后再接 D / F / G。
 
-因此当前提交是一个**契约/宿主侧完成、插件与测试未迁**的中间态，**不可编译**。
-继续做时按 §2.1 → §2.2 → §2.3 的顺序推进即可（§2.1/§2.2 是机械改动，
-§2.3 才有设计取舍）。
+在阶段 B 完成前，`PluginManager` 仍是「一份管理器服务一个 agent」，因此同进程
+内两个 agent 共用插件时仍需各自建管理器（测试里的多实例场景）。此中间态可编译、
+测试全绿。
 
 ## 4. 注意事项
 

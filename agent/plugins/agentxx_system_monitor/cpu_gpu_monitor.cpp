@@ -732,7 +732,7 @@ protected:
             }
         }
 
-        /// 老内核 (3.14 之前) 没有 MemAvailable: 用 MemFree 兜底 —— 它不含可回收的
+        /// Linux 3.14 之前的系统没有 MemAvailable: 用 MemFree 兜底 —— 它不含可回收的
         /// 文件页缓存, 数值偏小, 但仍是当前可用量的下界, 比上报 0 有用
         if (memAvailableKB == 0) {
             memAvailableKB = memFreeKB;

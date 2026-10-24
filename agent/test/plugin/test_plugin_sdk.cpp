@@ -26,11 +26,14 @@ namespace agentxx::test {
 namespace {
 using namespace agentxx::plugin;
 
+/// 伪主程序的挂载引用 (本模块不需要真实挂载: `seq` = 0 表示不校验)
+const ScopeRef g_agentRef{"root", 0};
+
 /// SDK helper 注册出来的 spec 捕获（替代真实主程序的注册表）。
 struct CapturedRegistration {
     AgentxxPluginToolSpec           tool{};
     bool                            hasTool = false;
-    AgentxxPluginHookSpec           hook{};
+    AgentxxPluginHookSpecEx         hook{};
     bool                            hasHook       = false;
     PluginxxCapabilityStartFunction capStart      = nullptr;
     PluginxxOperatorCancelFunction  capCancel     = nullptr;
@@ -42,8 +45,10 @@ struct CapturedRegistration {
 
 CapturedRegistration g_captured;
 
-int32_t PLUGINXX_CALL fakeRegisterTool(const PluginxxHost*, const AgentxxPluginToolSpec* spec) {
-    if (!spec) {
+int32_t PLUGINXX_CALL fakeRegisterTool(
+    const PluginxxHost*, const PluginxxScopeRef* agent, const AgentxxPluginToolSpec* spec
+) {
+    if (!agent || !spec) {
         return -1;
     }
     g_captured.tool    = *spec;
@@ -51,12 +56,20 @@ int32_t PLUGINXX_CALL fakeRegisterTool(const PluginxxHost*, const AgentxxPluginT
     return 0;
 }
 
-int32_t PLUGINXX_CALL fakeRegisterHook(const PluginxxHost*, const AgentxxPluginHookSpec* spec) {
-    if (!spec) {
+int32_t PLUGINXX_CALL fakeRegisterHook(
+    const PluginxxHost*,
+    const PluginxxScopeRef*        agent,
+    const AgentxxPluginHookSpecEx* spec,
+    int64_t*                       outHandle
+) {
+    if (!agent || !spec) {
         return -1;
     }
     g_captured.hook    = *spec;
     g_captured.hasHook = true;
+    if (outHandle) {
+        *outHandle = 1;
+    }
     return 0;
 }
 
@@ -74,9 +87,10 @@ int32_t PLUGINXX_CALL fakeRegisterCapabilityEx(
     return 0;
 }
 
-int32_t PLUGINXX_CALL
-    fakeRegisterGraphNodeType(const PluginxxHost*, const AgentxxPluginGraphNodeTypeSpec* spec) {
-    if (!spec) {
+int32_t PLUGINXX_CALL fakeRegisterGraphNodeType(
+    const PluginxxHost*, const PluginxxScopeRef* agent, const AgentxxPluginGraphNodeTypeSpec* spec
+) {
+    if (!agent || !spec) {
         return -1;
     }
     g_captured.graphNode    = *spec;
@@ -90,7 +104,6 @@ const AgentxxPluginToolsIface g_fakeTools = {
     /* register_tool */ fakeRegisterTool,
     /* unregister_tool */ nullptr,
     /* call_tool_async */ nullptr,
-    /* op_cancel */ nullptr,
 };
 
 const AgentxxPluginHooksIface g_fakeHooks = {
@@ -98,6 +111,7 @@ const AgentxxPluginHooksIface g_fakeHooks = {
     /* struct_size */ sizeof(AgentxxPluginHooksIface),
     /* register_hook */ fakeRegisterHook,
     /* unregister_hook */ nullptr,
+    /* list_hooks */ nullptr,
 };
 
 const PluginxxCapabilitiesIface g_fakeCapabilities = {
@@ -408,6 +422,7 @@ TestResult testPluginSdk() {
         g_captured = CapturedRegistration{};
         agentxx::plugin::tool(
             ctx,
+            g_agentRef,
             "sdk_owns_args",
             "depict",
             "{}",
@@ -463,6 +478,7 @@ TestResult testPluginSdk() {
         g_captured = CapturedRegistration{};
         agentxx::plugin::hook(
             okCtx,
+            g_agentRef,
             AGENTXX_PLUGIN_HOOK_AGENT_START,
             [](SdkCtx&, AgentxxPluginHookPoint, std::string_view) {}
         );
@@ -483,6 +499,7 @@ TestResult testPluginSdk() {
         g_captured = CapturedRegistration{};
         agentxx::plugin::hook(
             throwCtx,
+            g_agentRef,
             AGENTXX_PLUGIN_HOOK_AGENT_START,
             [](SdkCtx&, std::string_view) {
                 throw std::runtime_error("hook boom");
@@ -522,6 +539,7 @@ TestResult testPluginSdk() {
         g_captured = CapturedRegistration{};
         agentxx::plugin::hook(
             ctx,
+            g_agentRef,
             AGENTXX_PLUGIN_HOOK_TOOL_START,
             [&box](SdkCtx&, AgentxxPluginHookPoint, std::string_view input) -> Task<void> {
                 box.input->assign(input.data(), input.size());
@@ -633,6 +651,7 @@ TestResult testPluginSdk() {
         g_captured       = CapturedRegistration{};
         const int32_t rc = agentxx::plugin::graph_node(
             ctx,
+            g_agentRef,
             "test.node.sync",
             R"({"type":"object"})",
             [](SdkCtx&, const RootRequest& req) -> std::string {
@@ -673,6 +692,7 @@ TestResult testPluginSdk() {
         g_captured       = CapturedRegistration{};
         const int32_t rc = agentxx::plugin::graph_node(
             ctx,
+            g_agentRef,
             "test.node.throw",
             "{}",
             [](SdkCtx&, const RootRequest&) -> std::string {
@@ -710,6 +730,7 @@ TestResult testPluginSdk() {
         g_captured       = CapturedRegistration{};
         const int32_t rc = agentxx::plugin::graph_node(
             ctx,
+            g_agentRef,
             "test.node.async",
             "{}",
             [&box](SdkCtx&, const RootRequest& req, OpCtl ctl) -> Task<std::string> {

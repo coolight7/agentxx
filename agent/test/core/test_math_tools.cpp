@@ -614,6 +614,8 @@ static asio::awaitable<void>
     if (!ctx->pluginManager) {
         ctx->pluginManager = std::make_shared<agentxx::plugin::PluginManager>(ctx);
         ctx->pluginManager->setIoExecutor(co_await asio::this_coro::executor);
+        // 建立挂载: 之后加载的插件挂到本 agent (运行期新加载的自动挂上)
+        co_await ctx->pluginManager->mountAgentAsync();
     }
 
     auto path = findMathPluginPath();

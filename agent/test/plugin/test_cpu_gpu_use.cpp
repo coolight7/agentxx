@@ -116,6 +116,8 @@ asio::awaitable<TestResult>
     ctx->toolRegistry            = std::make_shared<agentxx::plugin::ToolRegistry>();
     ctx->pluginManager           = std::make_shared<agentxx::plugin::PluginManager>(ctx);
     ctx->pluginManager->setIoExecutor(co_await asio::this_coro::executor);
+    // 建立挂载: 之后加载的插件挂到本 agent (运行期新加载的自动挂上)
+    co_await ctx->pluginManager->mountAgentAsync();
 
     // ---- 2. 加载 agentxx_system_monitor 插件 ----
     auto path = findSystemMonitorPluginPath();

@@ -47,7 +47,7 @@ const char* vramSourceName(VramSource source) {
     }
 }
 
-/// 可用量 = 总量 - 已用; 已用可能因驱动取整/统计口径略大于总量, 此时按 0 处理
+/// 可用量 = 总量 - 已用; 已用可能因驱动取整/统计规则略大于总量, 此时按 0 处理
 uint64_t availableOf(uint64_t totalMB, uint64_t usedMB) {
     return usedMB < totalMB ? totalMB - usedMB : 0;
 }
@@ -62,7 +62,7 @@ struct VramView {
 
 /// 选一张卡的显存: 有独立显存就用独立显存; 统一内存 GPU 与核显没有独立显存,
 /// 退回共享显存; 两者都没有时 source = None (总量/可用量为 0)
-/// - 工具文本与能力载荷都经这里取值, 两处显示不会出现口径差异
+/// - 工具文本与能力载荷都经这里取值, 两处显示不会出现规则差异
 VramView vramOf(const GpuInfo& gpu) {
     VramView view;
     if (gpu.dedicatedVramMB > 0) {

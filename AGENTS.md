@@ -444,13 +444,14 @@ path/to/agentxx_test string_util regex
   `agentxx::util::buildDiagnosticsText` + CLI `--dump-diagnostics` 导出
   环境/指标/加载(含配置 JSON)/会话摘要/日志尾部, 默认不含消息正文、不含凭据取值
   (内容过 `redactSecrets`); 日志尾部经 `enableLogCapture` 的进程内环形缓冲捕获
-- 接口表数量: agent 侧 20 张 (10 张通用表 `pluginxx.*` + 10 张业务表 `agentxx.agent.*`;
+- 接口表数量: agent 侧 21 张 (10 张通用表 `pluginxx.*` + 11 张业务表 `agentxx.agent.*`;
   业务表含 `agentxx.agent.context` 会话 LLM 上下文查询 `get_messages`/`messages_count`
   与 `agentxx.agent.feature` 功能点: `list_points`/`define_point`/`undefine_point`/
-  `register_impl`/`unregister_impl`/`call_point_async`/`op_cancel`),
+  `register_impl`/`unregister_impl`/`call_point_async`/`op_cancel`, 以及
+  `agentxx.agent.mount` 挂载查询 `list`/`get`),
   client 侧 9 张 (ui/events/session/wire/self/json/log + timer/keybind)
-- 接口表版本与基线 (2026-10 一次性重置: 全部表 `version` = `MIN_VERSION` = 1, 基线 = 当时
-  完整布局; 重置前的二进制不再支持):
+- 接口表版本与基线 (多 agent 挂载换代: 全局 API 版本 = 2, 需区分 agent 的业务表
+  `version` = `MIN_VERSION` = 2, 其余表仍为 1, 基线 = 重置时的完整布局):
   - 每张表**四件套齐全**: IID + `struct_size` + `version`/`_VERSION` + `_MIN_VERSION` +
     `_BASELINE_SIZE`; `plugin_iface_meta.h` 各一条 `IfaceMeta` 特化
   - 整表判定 `IID 命中 && version >= MIN_VERSION && struct_size >= BASELINE_SIZE`

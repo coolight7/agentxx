@@ -8,10 +8,9 @@
 /// 覆盖:
 /// 1. 顺序: `(层, priority 升序, 登记序号)`; 不声明优先级时 = 登记顺序;
 ///    `core` 层排在 `plugin` 层之后
-/// 2. 一个点多个处理器: 同一实例同一个点可以登记多个 (各自句柄), 按句柄精确撤销;
+/// 2. 一个点多个处理器: 同一实例同一个点可以登记多个 (各自独立句柄), 按句柄精确撤销;
 ///    别的实例的句柄被拒绝
-/// 3. 基础登记 (`register_hook`) 与扩展登记 (`register_hook_ex`) 互相独立:
-///    基础登记覆盖式 (一个点一个), 撤销基础登记不影响扩展登记的处理器
+/// 3. 优先级越界裁剪到上下限 (不拒绝登记); 逐个撤销只影响被撤销的那一个
 /// 4. 优先级越界裁剪到上下限 (不拒绝登记)
 /// 5. 主程序级单派发器: 首次登记挂到中间件链上, 没有处理器时摘除
 ///    (轮次执行中先停用, 轮末 flush 摘除)
@@ -19,7 +18,7 @@
 ///    core 层处理器必须是同步的 (返回操作句柄会被请求取消并记警告)
 /// 7. 清单: `hooksJson()` 的字段与顺序、加载快照同源, 开发者模式控制 `stat` 段
 /// 8. 生命周期: 禁用摘除处理器 (记录保留)、启用按 start 重新登记、卸载后回到基线
-/// 9. 插件面: kit 的 `hookEx` / `listHooks` / `unhookEx` 经真实主程序走一遍
+/// 9. 插件面: kit 的 `hookEx` / `listHooks` / `unhook` 经真实主程序走一遍
 #include "agentxx-test/plugin/test_plugin_hooks.h"
 
 #include "agentxx/agent/config_static.h"
@@ -106,6 +105,8 @@ struct Fixture {
     std::shared_ptr<agentxx::agent::AgentContext>   ctx;
     std::shared_ptr<agentxx::plugin::PluginManager> mgr;
     agentxx::feature::ContextPoints                 points;
+    /// 本挂载的接口引用 (`id` 借用管理器的 agentId 字符串; seq = 0 = 不校验)
+    PluginxxScopeRef ref{};
 };
 
 asio::awaitable<Fixture> makeFixture() {
@@ -125,6 +126,14 @@ asio::awaitable<Fixture> makeFixture() {
     f.ctx->pluginManager = f.mgr;
     // 加载 io executor (与 BaseAgent::init 一致): 跨线程 vtable 调用经真实 post
     f.mgr->setIoExecutor(co_await asio::this_coro::executor);
+    // 建立挂载: 之后加载的插件挂到本 agent (运行期新加载的自动挂上)
+    co_await f.mgr->mountAgentAsync();
+    f.ref.struct_size = sizeof(PluginxxScopeRef);
+    f.ref.id          = agentxx::plugin::PluginStringView::from(
+        f.mgr->agentId().data(),
+        f.mgr->agentId().size()
+    );
+    f.ref.seq = f.mgr->mountSequence();
     co_return f;
 }
 
@@ -272,7 +281,7 @@ int64_t addPluginHook(
     };
     spec.hook_cancel = nullptr;
     int64_t   handle = 0;
-    const int rc     = f.mgr->registerHookEx(inst, &spec, &handle);
+    const int rc     = f.mgr->registerHook(inst, &spec, &handle);
     return rc == 0 ? handle : 0;
 }
 
@@ -311,12 +320,9 @@ asio::awaitable<void> test_order_by_layer_priority_seq() {
     }
 
     // 同优先级 → 按登记序号: 再给 example_plugin 登记一个优先级 0 的处理器 (句柄更大)
-    int64_t baseHandleA = 0;
-    for (const auto& record : instA->hookRegistrations) {
-        if (record.base) {
-            baseHandleA = record.handle;
-        }
-    }
+    XX_TEST_EXPECT_EQ(instA->hookRegistrations.size(), size_t{1});
+    const int64_t baseHandleA
+        = instA->hookRegistrations.empty() ? 0 : instA->hookRegistrations.front().handle;
     XX_TEST_EXPECT_GE(baseHandleA, int64_t{1});
     const int64_t extra = addPluginHook(f, instA.get(), 0, "test", "第二个处理器 (同优先级)");
     XX_TEST_EXPECT_GE(extra, int64_t{1});
@@ -381,42 +387,33 @@ asio::awaitable<void> test_multiple_handlers_and_owner_check() {
     // 同一实例在注册表里出现三次 (插件自己 1 + 本用例 2), 实例记录同数
     XX_TEST_EXPECT_EQ(f.mgr->registrationInventory(*instB).hooks, size_t{3});
     XX_TEST_EXPECT_EQ(instB->hookRegistrations.size(), size_t{3});
-    // example_feature 只走扩展入口登记 (没有基础登记记录)
+    // 每个登记都有自己的句柄, 互不覆盖
+    std::vector<int64_t> handlesB;
+    handlesB.reserve(instB->hookRegistrations.size());
+    for (const auto& record : instB->hookRegistrations) {
+        handlesB.push_back(record.handle);
+    }
+    std::sort(handlesB.begin(), handlesB.end());
     XX_TEST_EXPECT_EQ(
-        std::count_if(
-            instB->hookRegistrations.begin(),
-            instB->hookRegistrations.end(),
-            [](const agentxx::plugin::PluginInstance::HookRegistration& r) {
-                return r.base;
-            }
-        ),
-        ptrdiff_t{0}
+        static_cast<size_t>(std::unique(handlesB.begin(), handlesB.end()) - handlesB.begin()),
+        size_t{3}
     );
-    XX_TEST_EXPECT_EQ(
-        std::count_if(
-            instA->hookRegistrations.begin(),
-            instA->hookRegistrations.end(),
-            [](const agentxx::plugin::PluginInstance::HookRegistration& r) {
-                return r.base;
-            }
-        ),
-        ptrdiff_t{1}
-    );
+    XX_TEST_EXPECT_EQ(instA->hookRegistrations.size(), size_t{1});
 
     // 别人的句柄: 拒绝撤销, 处理器仍在
-    XX_TEST_EXPECT_EQ(f.mgr->unregisterHookEx(instA.get(), h1), -1);
+    XX_TEST_EXPECT_EQ(f.mgr->unregisterHook(instA.get(), h1), -1);
     XX_TEST_EXPECT_EQ(f.mgr->handlersOf(AGENTXX_PLUGIN_HOOK_AGENT_START).size(), base + 2);
     // 不存在的句柄
-    XX_TEST_EXPECT_EQ(f.mgr->unregisterHookEx(instB.get(), 99999), -1);
+    XX_TEST_EXPECT_EQ(f.mgr->unregisterHook(instB.get(), 99999), -1);
 
     // 自己的句柄: 精确撤销其中一个, 另一个不受影响
-    XX_TEST_EXPECT_EQ(f.mgr->unregisterHookEx(instB.get(), h1), 0);
+    XX_TEST_EXPECT_EQ(f.mgr->unregisterHook(instB.get(), h1), 0);
     handlers = f.mgr->handlersOf(AGENTXX_PLUGIN_HOOK_AGENT_START);
     XX_TEST_EXPECT_EQ(handlers.size(), base + 1);
     XX_TEST_EXPECT_TRUE(std::any_of(handlers.begin(), handlers.end(), [h2](const auto& h) {
         return h.handle == h2;
     }));
-    XX_TEST_EXPECT_EQ(f.mgr->unregisterHookEx(instB.get(), h2), 0);
+    XX_TEST_EXPECT_EQ(f.mgr->unregisterHook(instB.get(), h2), 0);
     XX_TEST_EXPECT_EQ(f.mgr->handlersOf(AGENTXX_PLUGIN_HOOK_AGENT_START).size(), base);
     XX_TEST_EXPECT_EQ(
         instB->hookRegistrations.size(),
@@ -430,11 +427,11 @@ asio::awaitable<void> test_multiple_handlers_and_owner_check() {
 } // namespace
 
 // ===========================================================================
-// 3. 基础登记与扩展登记互相独立 + 优先级越界裁剪
+// 3. 一个点可登记多个处理器 + 优先级越界裁剪 (不拒绝登记)
 // ===========================================================================
 namespace {
 
-asio::awaitable<void> test_base_and_ex_independent_and_clamp() {
+asio::awaitable<void> test_multiple_registrations_and_clamp() {
     auto f    = co_await makeFixture();
     auto inst = co_await f.mgr->loadPluginAsync(findPluginDir("example_plugin"));
     XX_TEST_EXPECT_TRUE(inst != nullptr);
@@ -461,66 +458,34 @@ asio::awaitable<void> test_base_and_ex_independent_and_clamp() {
         XX_TEST_EXPECT_EQ(handlers[0].handle, low);
     }
 
-    // 基础登记重复 (覆盖式): 仍是 1 条基础记录, 句柄换新
-    const int64_t baseHandleBefore = [&]() -> int64_t {
-        for (const auto& r : inst->hookRegistrations) {
-            if (r.base) {
-                return r.handle;
-            }
-        }
-        return 0;
-    }();
-    const int64_t extra = addPluginHook(f, inst.get(), 1, "test", "先登记一个扩展处理器");
-    AgentxxPluginHookSpec baseSpec{};
-    baseSpec.struct_size = sizeof(AgentxxPluginHookSpec);
-    baseSpec.point       = AGENTXX_PLUGIN_HOOK_AGENT_START;
-    baseSpec.user_data   = nullptr;
-    baseSpec.hook_start  = [](void*,
-                             int32_t,
-                             const PluginxxStringView*,
-                             const PluginxxOperatorNotify* notify,
-                             PluginxxString*) -> void* {
-        if (notify != nullptr && notify->done != nullptr) {
-            notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-        }
-        return nullptr;
-    };
-    baseSpec.hook_cancel = nullptr;
-    XX_TEST_EXPECT_EQ(f.mgr->registerHook(inst.get(), &baseSpec), 0);
-    // 记录: 基础登记仍是 1 条 (覆盖), 扩展登记各自 1 条 (high / low / extra)
-    size_t baseRecords = 0;
-    size_t exRecords   = 0;
-    for (const auto& r : inst->hookRegistrations) {
-        if (r.base) {
-            ++baseRecords;
-        } else {
-            ++exRecords;
-        }
-    }
-    XX_TEST_EXPECT_EQ(baseRecords, size_t{1});
-    XX_TEST_EXPECT_EQ(exRecords, size_t{3});
-    const int64_t baseHandleAfter = [&]() -> int64_t {
-        for (const auto& r : inst->hookRegistrations) {
-            if (r.base) {
-                return r.handle;
-            }
-        }
-        return 0;
-    }();
-    XX_TEST_EXPECT_TRUE(baseHandleAfter != baseHandleBefore);
-    XX_TEST_EXPECT_EQ(f.mgr->handlersOf(AGENTXX_PLUGIN_HOOK_AGENT_START).size(), size_t{4});
-
-    // 撤销基础登记: 只摘基础那条, 扩展登记的处理器还在
-    XX_TEST_EXPECT_EQ(f.mgr->unregisterHook(inst.get(), AGENTXX_PLUGIN_HOOK_AGENT_START), 0);
+    // 同优先级再登记两个: 各自独立句柄 (不再有"覆盖式基础登记")
+    const int64_t first  = addPluginHook(f, inst.get(), 1, "test", "同优先级处理器 1");
+    const int64_t second = addPluginHook(f, inst.get(), 1, "test", "同优先级处理器 2");
+    XX_TEST_EXPECT_GE(first, int64_t{1});
+    XX_TEST_EXPECT_GE(second, int64_t{1});
+    XX_TEST_EXPECT_TRUE(first != second);
+    XX_TEST_EXPECT_EQ(inst->hookRegistrations.size(), size_t{5}); ///< 自己 1 + 本用例 4
     handlers = f.mgr->handlersOf(AGENTXX_PLUGIN_HOOK_AGENT_START);
-    XX_TEST_EXPECT_EQ(handlers.size(), size_t{3}); ///< high / low / extra 三个扩展处理器
-    XX_TEST_EXPECT_TRUE(std::any_of(handlers.begin(), handlers.end(), [extra](const auto& h) {
-        return h.handle == extra;
-    }));
-    XX_TEST_EXPECT_EQ(
-        f.mgr->unregisterHook(inst.get(), AGENTXX_PLUGIN_HOOK_AGENT_START),
-        -1
-    ); ///< 基础登记已没有
+    XX_TEST_EXPECT_EQ(handlers.size(), size_t{5});
+    // 同优先级按登记序号: first 在 second 之前
+    if (handlers.size() == 5) {
+        XX_TEST_EXPECT_TRUE(
+            std::find_if(handlers.begin(), handlers.end(), [first](const auto& h) {
+                return h.handle == first;
+            })
+            < std::find_if(handlers.begin(), handlers.end(), [second](const auto& h) {
+                  return h.handle == second;
+              })
+        );
+    }
+
+    // 按句柄逐个撤销: 只影响被撤销的那一个, 重复撤销返回失败
+    XX_TEST_EXPECT_EQ(f.mgr->unregisterHook(inst.get(), first), 0);
+    XX_TEST_EXPECT_EQ(f.mgr->handlersOf(AGENTXX_PLUGIN_HOOK_AGENT_START).size(), size_t{4});
+    XX_TEST_EXPECT_EQ(f.mgr->unregisterHook(inst.get(), first), -1);
+    XX_TEST_EXPECT_EQ(inst->hookRegistrations.size(), size_t{4});
+    XX_TEST_EXPECT_EQ(f.mgr->unregisterHook(inst.get(), second), 0);
+    XX_TEST_EXPECT_EQ(f.mgr->handlersOf(AGENTXX_PLUGIN_HOOK_AGENT_START).size(), size_t{3});
 
     XX_TEST_EXPECT_TRUE(co_await f.mgr->unloadAsync("example_plugin", std::chrono::seconds{5}));
 }
@@ -793,7 +758,7 @@ asio::awaitable<void> test_lifecycle_disable_enable_unload() {
 } // namespace
 
 // ===========================================================================
-// 8. 插件面: kit 的 hookEx / listHooks / unhookEx
+// 8. 插件面: kit 的 hookEx / listHooks / unhook
 // ===========================================================================
 namespace {
 
@@ -816,15 +781,18 @@ asio::awaitable<void> test_plugin_side_kit() {
     HookSdkCtx sdk;
     sdk.init(host);
     XX_TEST_EXPECT_TRUE(sdk.iface.hooks != nullptr);
-    XX_TEST_EXPECT_TRUE(sdk.iface.hooks->register_hook_ex != nullptr); ///< 主程序提供有序登记三成员
+    XX_TEST_EXPECT_TRUE(sdk.iface.hooks->register_hook != nullptr); ///< 主程序提供句柄式登记
+    // 引用用本挂载的那一份 (kit 不做任何隐式推断)
+    const agentxx::plugin::ScopeRef ref{f.mgr->agentId(), f.mgr->mountSequence()};
 
-    // 经 kit 登记 (优先级 -5 -> 排在基础登记之前)
+    // 经 kit 登记 (优先级 -5 -> 排在插件自己的登记之前)
     agentxx::plugin::HookOptions opts;
     opts.priority        = -5;
     opts.ownerTag        = "kit";
     opts.depict          = "kit 登记的处理器";
     const int64_t handle = agentxx::plugin::hookEx(
         sdk,
+        ref,
         AGENTXX_PLUGIN_HOOK_AGENT_START,
         [](HookSdkCtx&, AgentxxPluginHookPoint, std::string_view) {},
         opts
@@ -840,15 +808,15 @@ asio::awaitable<void> test_plugin_side_kit() {
         }
     }
 
-    // 清单 (kit 读主程序 list_hooks)
-    const auto text = agentxx::plugin::listHooks(sdk);
+    // 清单 (kit 读主程序 list_hooks; 带引用 = 本挂载视图)
+    const auto text = agentxx::plugin::listHooks(sdk, &ref);
     XX_TEST_EXPECT_TRUE(text.find("\"count\":7") != std::string::npos);
     XX_TEST_EXPECT_TRUE(text.find("\"ownerTag\":\"kit\"") != std::string::npos);
 
     // 按句柄撤销
-    XX_TEST_EXPECT_EQ(agentxx::plugin::unhookEx(sdk, handle), 0);
+    XX_TEST_EXPECT_EQ(agentxx::plugin::unhook(sdk, handle), 0);
     XX_TEST_EXPECT_EQ(f.mgr->handlersOf(AGENTXX_PLUGIN_HOOK_AGENT_START).size(), size_t{1});
-    XX_TEST_EXPECT_EQ(agentxx::plugin::unhookEx(sdk, handle), -1);
+    XX_TEST_EXPECT_EQ(agentxx::plugin::unhook(sdk, handle), -1);
 
     // 卸载: 无残留
     XX_TEST_EXPECT_TRUE(co_await f.mgr->unloadAsync("example_plugin", std::chrono::seconds{5}));
@@ -866,7 +834,7 @@ asio::awaitable<TestResult> run_plugin_hooks_tests() {
     try {
         co_await test_order_by_layer_priority_seq();
         co_await test_multiple_handlers_and_owner_check();
-        co_await test_base_and_ex_independent_and_clamp();
+        co_await test_multiple_registrations_and_clamp();
         co_await test_single_dispatcher_lifecycle();
         co_await test_dispatch_order_and_failure_isolation();
         co_await test_manifest_and_dev_mode();

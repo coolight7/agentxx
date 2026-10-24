@@ -119,90 +119,114 @@ std::string mountViewToStr(const PluginxxStringView& sv) {
 
 } // namespace
 
-asio::awaitable<void> PluginManager::mountAgentAsync() {
-    if (hasMount_) {
-        co_return; // 幂等
+asio::awaitable<bool> PluginManager::mountOneAsync(std::shared_ptr<PluginInstance> inst) {
+    if (!inst) {
+        co_return false;
+    }
+    if (inst->pluginMounted) {
+        co_return true; // 幂等
+    }
+    // 实例已在关闭流程里 (卸载/主程序关闭): 不再挂载, 否则会把刚摘掉的注册又加回去
+    if (inst->lifetime && inst->lifetime->closeRequested()) {
+        co_return false;
+    }
+    // 挂载期间允许登记资源 (skill/memory/mcp): 它们属于 agent 级注册,
+    // 与工具/钩子一样只能在 mount 里声明; 挂载完成后才冻结
+    inst->resourcesFrozen = false;
+    if (!inst->mountFn) {
+        // 无挂载入口 = 本插件无 agent 侧能力; 清单资源仍然按挂载应用
+        applyManifestResourcesNow(*inst);
+        inst->pluginMounted   = true;
+        inst->resourcesFrozen = true;
+        co_return true;
     }
     auto ctx = agentContext_.lock();
     if (!ctx) {
-        co_return;
+        co_return false;
     }
 
-    ++mountSeq_;
+    // 挂载序号在第一次建立挂载时分配; 之后运行期新加载的插件沿用同一个序号
+    // (它们是同一个 agent 的挂载, 引用里的 seq 必须一致才能通过校验)
+    if (mountSeq_ == 0) {
+        ++mountSeq_;
+    }
 
-    // 挂载入参: agent 标识/工作目录/语言/模型/挂载配置
-    std::string workDir   = getSessionWorkDir();
-    std::string language  = getLanguage();
-    std::string modelJson = getModelConfigJson();
+    // 挂载参数: agent 标识/工作目录/语言/模型/挂载配置
+    const std::string workDir   = getSessionWorkDir();
+    const std::string language  = getLanguage();
+    const std::string modelJson = getModelConfigJson();
     const std::string agentName = ctx->agentConfig ? ctx->agentConfig->agentName : std::string{};
 
-    for (auto& [name, inst] : this->plugins_) {
-        (void)name;
-        if (!inst) {
-            continue;
-        }
-        if (!inst->mountFn) {
-            inst->pluginMounted = true; // 无挂载入口 = 本插件无 agent 侧能力
-            continue;
-        }
-        inst->mountSeq      = mountSeq_;
-        inst->mountUserData = nullptr;
+    inst->mountSeq      = mountSeq_;
+    inst->mountUserData = nullptr;
 
-        const std::string configJson = inst->args.dump();
-        AgentxxPluginAgentMountSpec spec{};
-        spec.struct_size = sizeof(AgentxxPluginAgentMountSpec);
-        spec.flags       = 0;
-        spec.agent_id    = PluginStringView::from(agentId_);
-        spec.agent_name  = PluginStringView::from(agentName);
-        spec.work_dir    = PluginStringView::from(workDir);
-        spec.language    = PluginStringView::from(language);
-        spec.model_json  = PluginStringView::from(modelJson);
-        spec.config_json = PluginStringView::from(configJson);
-        spec.mount_seq   = mountSeq_;
+    // 清单声明的资源 (skill/memory/mcp) 属于本挂载: 先应用, 插件的 mount 回调里
+    // 还能继续声明 (资源声明在挂载收尾才冻结)
+    applyManifestResourcesNow(*inst);
 
-        std::string mountError;
-        auto        instPtr     = inst;
-        void*       mountResult = nullptr;
-        const bool  ok          = co_await pluginxx::awaitPluginLifecycle(
-            this->runtime(),
-            instPtr,
-            instPtr->pluginCtx,
-            [instPtr, &spec, &mountResult](
-                void*                         /*ctx*/,
-                const PluginxxOperatorNotify* notify,
-                PluginxxString*               err
-            ) {
-                mountResult = instPtr->mountFn(instPtr->pluginCtx, &spec, notify, err);
-                return mountResult;
-            },
-            "plugin mount",
-            mountError
-        );
-        if (!ok) {
-            XX_LOGE("agent '{}' 挂载插件 `{}` 失败: {}", agentId_, inst->name, mountError);
-            inst->mountUserData = nullptr;
-            inst->pluginMounted = false;
-            continue;
+    const std::string           configJson = inst->args.dump();
+    AgentxxPluginAgentMountSpec spec{};
+    spec.struct_size = sizeof(AgentxxPluginAgentMountSpec);
+    spec.flags       = 0;
+    spec.agent_id    = PluginStringView::from(agentId_);
+    spec.agent_name  = PluginStringView::from(agentName);
+    spec.work_dir    = PluginStringView::from(workDir);
+    spec.language    = PluginStringView::from(language);
+    spec.model_json  = PluginStringView::from(modelJson);
+    spec.config_json = PluginStringView::from(configJson);
+    spec.mount_seq   = mountSeq_;
+
+    std::string mountError;
+    auto        instPtr     = inst;
+    void*       mountResult = nullptr;
+    const bool  ok          = co_await pluginxx::awaitPluginLifecycle(
+        this->runtime(),
+        instPtr,
+        instPtr->pluginCtx,
+        [instPtr, &spec, &mountResult](
+            void*                         /*ctx*/,
+            const PluginxxOperatorNotify* notify,
+            PluginxxString*               err
+        ) {
+            mountResult = instPtr->mountFn(instPtr->pluginCtx, &spec, notify, err);
+            return mountResult;
+        },
+        "plugin mount",
+        mountError
+    );
+    if (!ok) {
+        XX_LOGE("agent '{}' 挂载插件 `{}` 失败: {}", agentId_, inst->name, mountError);
+        // 回滚该插件在本 agent 上已经生效的注册 (工具/权限/钩子/提示词/功能点/
+        // 图类型/订阅/能力/事件订阅), 不影响其他实例与其他 agent
+        this->detachInstanceRegistrations(inst.get());
+        // 资源 (skill/memory/mcp) 的所有权记录一并清掉: 这不是"禁用", 是根本没有挂上
+        if (auto c = agentContext_.lock(); c && c->resourceApplier) {
+            c->resourceApplier->removeAllOwned(inst->name);
         }
-        inst->mountUserData = mountResult;
-        inst->pluginMounted = true;
+        inst->mountUserData   = nullptr;
+        inst->pluginMounted   = false;
+        inst->resourcesFrozen = false; // 允许重新挂载时再次声明
+        co_return false;
     }
-
-    hasMount_ = true;
-    XX_LOGI("agent '{}' 完成插件挂载 (seq {})", agentId_, mountSeq_);
-    co_return;
+    inst->mountUserData   = mountResult;
+    inst->pluginMounted   = true;
+    inst->resourcesFrozen = true; // 挂载收尾: 资源声明固定 (运行时注册会被拒)
+    // 挂载期间实例被请求关闭: 立刻拆掉, 否则注册会在关闭流程之后残留
+    if (inst->lifetime && inst->lifetime->closeRequested()) {
+        co_await unmountOneAsync(inst);
+        co_return false;
+    }
+    co_return true;
 }
 
-asio::awaitable<void> PluginManager::unmountAgentAsync() {
-    if (!hasMount_) {
+asio::awaitable<void> PluginManager::unmountOneAsync(std::shared_ptr<PluginInstance> inst) {
+    if (!inst || !inst->pluginMounted) {
         co_return;
     }
-    // 逆序卸载
-    for (auto it = this->plugins_.rbegin(); it != this->plugins_.rend(); ++it) {
-        auto inst = it->second;
-        if (!inst || !inst->unmountFn || !inst->pluginMounted) {
-            continue;
-        }
+    // 拆挂载后该 agent 上的资源声明也一并撤销 (记录由挂载撤销路径摘除);
+    // 重新挂载时插件会再次声明, 因此这里解除冻结
+    inst->resourcesFrozen = false;
+    if (inst->unmountFn) {
         std::string unmountError;
         auto        instPtr = inst;
         void*       mountUd = inst->mountUserData;
@@ -223,11 +247,89 @@ asio::awaitable<void> PluginManager::unmountAgentAsync() {
         if (!ok) {
             XX_LOGW("agent '{}' 卸载插件 `{}` 失败: {}", agentId_, inst->name, unmountError);
         }
-        inst->pluginMounted = false;
-        inst->mountUserData = nullptr;
+    }
+    // 摘掉本 agent 上的实体: 业务注册 (工具/权限/钩子/提示词/功能点/图类型)
+    // 与资源 (skill/memory/mcp) 所有权记录。
+    // - **不**动能力声明与主程序总线订阅: 它们属于进程级 (`start`/`stop`), 拆挂载时
+    //   仍然存活 (否则重新启用后能力就丢了)
+    this->detachDomainRegistrations(inst.get());
+    this->detachDomainOwnedResources(inst.get());
+    if (auto c = agentContext_.lock(); c && c->resourceApplier) {
+        c->resourceApplier->removeAllOwned(inst->name);
+    }
+    inst->pluginMounted = false;
+    inst->mountUserData = nullptr;
+    co_return;
+}
+
+asio::awaitable<void> PluginManager::mountAgentAsync() {
+    if (!agentContext_.lock()) {
+        co_return;
+    }
+    for (auto& [name, inst] : this->plugins_) {
+        (void)name;
+        if (!inst || inst->pluginMounted) {
+            continue; // 幂等: 本次调用只挂新加入的实例
+        }
+        co_await mountOneAsync(inst);
+    }
+    hasMount_ = true;
+    XX_LOGI(
+        "agent '{}' 完成插件挂载 (seq {}, {} 个实例)",
+        agentId_,
+        mountSeq_,
+        this->plugins_.size()
+    );
+    co_return;
+}
+
+asio::awaitable<void> PluginManager::unmountAgentAsync() {
+    if (!hasMount_) {
+        co_return;
+    }
+    // 逆序卸载
+    for (auto it = this->plugins_.rbegin(); it != this->plugins_.rend(); ++it) {
+        co_await unmountOneAsync(it->second);
     }
     hasMount_ = false;
     XX_LOGI("agent '{}' 已拆全部插件挂载", agentId_);
+    co_return;
+}
+
+// =====================================================================
+// 禁用/启用与挂载的联动 (骨架完成 stop/start 后由本类补齐挂载动作)
+// =====================================================================
+
+asio::awaitable<void> PluginManager::onInstanceDisabledAsync(
+    const std::shared_ptr<PluginInstance>& inst
+) {
+    // 禁用 = 该 agent 不再挂这个插件: 先拆挂载 (调插件 unmount 释放 per-agent 状态),
+    // 实例本身不销毁、不卸载; 注册已由骨架的 detachInstanceRegistrations 摘除。
+    //
+    // 等待期间用户又启用了它 (disable/enable 紧邻): 本次卸载作废 —— 否则会把
+    // 启用事务刚刚重建的注册与能力又摘一遍。
+    if (!inst || inst->enabled) {
+        co_return;
+    }
+    co_await unmountOneAsync(inst);
+    co_return;
+}
+
+asio::awaitable<void> PluginManager::onInstanceEnabledAsync(
+    const std::shared_ptr<PluginInstance>& inst
+) {
+    // 启用 = 重新挂到本 agent: 注册全部由插件在自己的 mount 回调里重新声明
+    //
+    // 先幂等地拆一次挂载: `disable` 的拆挂载事务可能与本次启用交错 (它发现实例
+    // 已重新启用时会跳过), 这样无论两者谁先完成, 最后都恰好挂载一次。
+    if (!inst || !inst->enabled || !hasMount_) {
+        co_return;
+    }
+    co_await unmountOneAsync(inst);
+    if (!inst->enabled) {
+        co_return; // 拆挂载期间又被禁用了
+    }
+    co_await mountOneAsync(inst);
     co_return;
 }
 
@@ -344,7 +446,8 @@ void PluginManager::detachDomainRegistrations(PluginInstance* inst) {
     releaseGraphDefinitionSlot(inst);
 
     // 提示词: 删除本实例的全部贡献并重新合成受影响键 (不写回旧值, 不顶掉别人)
-    removePromptContributions(fmt::format("plugin:{}", inst->name));
+    // - 贡献的 owner 键就是实例名 (见 setPromptJson 的 record)
+    removePromptContributions(inst->name);
 
     // 钩子处理器: 从注册表摘除本实例的全部处理器 (记录保留, 句柄置 0);
     // 没有处理器时派发器按需摘除 (轮次执行中先停用, 轮末真正摘除)
@@ -713,6 +816,11 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadPluginAsync(
     notePluginLoaded(inst, begin);
     if (!inst && !allowClientOnlySkip) {
         logLoadAdvice(*this, pathForAdvice);
+    }
+    // 本 agent 已经建立挂载时, 运行期新加载的插件直接挂到它身上
+    // (先加载后挂载的正常路径由 init 的 `plugin_mount` 步骤统一驱动)
+    if (inst && hasMount_) {
+        co_await mountAgentAsync();
     }
     co_return inst;
 }

@@ -235,7 +235,9 @@ void PLUGINXX_CALL fakeOpCancel(PluginxxOperatorHandle* op) {
     }
 }
 
-int32_t PLUGINXX_CALL fakeIsCancelled(const PluginxxHost*, const PluginxxStringView*) {
+int32_t PLUGINXX_CALL fakeIsCancelled(
+    const PluginxxHost*, const PluginxxScopeRef*, const PluginxxStringView*
+) {
     return 0;
 }
 
@@ -281,7 +283,9 @@ void PLUGINXX_CALL fakeLog(const PluginxxHost* host, int32_t, const PluginxxStri
     }
 }
 
-int32_t PLUGINXX_CALL fakeRegisterTool(const PluginxxHost*, const AgentxxPluginToolSpec* spec);
+int32_t PLUGINXX_CALL fakeRegisterTool(
+    const PluginxxHost*, const PluginxxScopeRef*, const AgentxxPluginToolSpec* spec
+);
 
 const PluginxxCoroutineRuntimeIface g_fakeRuntime = {
     /* version */ PLUGINXX_IFACE_COROUTINE_RUNTIME_VERSION,
@@ -305,6 +309,7 @@ const PluginxxCancelIface g_fakeCancel = {
     /* version */ PLUGINXX_IFACE_CANCEL_VERSION,
     /* struct_size */ sizeof(PluginxxCancelIface),
     /* is_cancelled */ fakeIsCancelled,
+    /* op_cancel */ nullptr,
 };
 
 const PluginxxLogIface g_fakeLog = {
@@ -319,7 +324,6 @@ const AgentxxPluginToolsIface g_fakeTools = {
     /* register_tool */ fakeRegisterTool,
     /* unregister_tool */ nullptr,
     /* call_tool_async */ nullptr,
-    /* op_cancel */ nullptr,
 };
 
 /// 用例可临时置空来验证"主程序不提供驱动时"的回退路径。
@@ -372,8 +376,15 @@ struct CapturedTool {
 
 CapturedTool g_capturedTool;
 
-int32_t PLUGINXX_CALL fakeRegisterTool(const PluginxxHost*, const AgentxxPluginToolSpec* spec) {
-    if (!spec) {
+/// 伪主程序的挂载引用 (`seq` = 0 = 不校验; 本模块不需要真实挂载)
+const agentxx::plugin::ScopeRef g_agentRef{"root", 0};
+const agentxx::plugin::ScopeRef g_agentRefA{"root", 0};
+const agentxx::plugin::ScopeRef g_agentRefB{"root", 0};
+
+int32_t PLUGINXX_CALL fakeRegisterTool(
+    const PluginxxHost*, const PluginxxScopeRef* agent, const AgentxxPluginToolSpec* spec
+) {
+    if (!agent || !spec) {
         return -1;
     }
     g_capturedTool.spec = *spec;
@@ -465,6 +476,7 @@ TestResult testPluginBridge() {
         int steps = 0;
         agentxx::plugin::tool(
             ctx,
+            g_agentRef,
             "bridge_once",
             "depict",
             "{}",
@@ -522,6 +534,7 @@ TestResult testPluginBridge() {
 
         agentxx::plugin::tool(
             ctx,
+            g_agentRef,
             "bridge_callbacks",
             "depict",
             "{}",
@@ -567,6 +580,7 @@ TestResult testPluginBridge() {
         bool wokeDuringDriver = false;
         agentxx::plugin::tool(
             ctx,
+            g_agentRef,
             "bridge_wake_during",
             "depict",
             "{}",
@@ -610,6 +624,7 @@ TestResult testPluginBridge() {
         int steps = 0;
         agentxx::plugin::tool(
             ctx,
+            g_agentRef,
             "bridge_wake_before",
             "depict",
             "{}",
@@ -656,6 +671,7 @@ TestResult testPluginBridge() {
         bool resumed = false;
         agentxx::plugin::tool(
             ctx,
+            g_agentRef,
             "bridge_sleep",
             "depict",
             "{}",
@@ -701,6 +717,7 @@ TestResult testPluginBridge() {
 
         agentxx::plugin::tool(
             ctx,
+            g_agentRef,
             "bridge_cancel",
             "depict",
             "{}",
@@ -745,6 +762,7 @@ TestResult testPluginBridge() {
         bool bodyRan = false;
         agentxx::plugin::tool(
             ctx,
+            g_agentRef,
             "bridge_refuse",
             "depict",
             "{}",
@@ -780,6 +798,7 @@ TestResult testPluginBridge() {
         bool sleepStarted = false;
         agentxx::plugin::tool(
             ctx,
+            g_agentRef,
             "bridge_stop",
             "depict",
             "{}",
@@ -834,6 +853,7 @@ TestResult testPluginBridge() {
         bool bodyRan = false;
         agentxx::plugin::tool(
             ctx,
+            g_agentRef,
             "bridge_stop_queued",
             "depict",
             "{}",
@@ -869,6 +889,7 @@ TestResult testPluginBridge() {
         g_capturedTool = CapturedTool{};
         agentxx::plugin::tool(
             ctxA,
+            g_agentRefA,
             "bridge_multi_a",
             "depict",
             "{}",
@@ -883,6 +904,7 @@ TestResult testPluginBridge() {
         g_capturedTool = CapturedTool{};
         agentxx::plugin::tool(
             ctxB,
+            g_agentRefB,
             "bridge_multi_b",
             "depict",
             "{}",
@@ -933,6 +955,7 @@ TestResult testPluginBridge() {
         bool sawPumping = false;
         agentxx::plugin::polled_tool(
             ctx,
+            g_agentRef,
             "polled_timer",
             "depict",
             "{}",
@@ -1029,6 +1052,7 @@ TestResult testPluginBridge() {
 
         agentxx::plugin::polled_tool(
             ctx,
+            g_agentRef,
             "polled_cancel",
             "depict",
             "{}",
@@ -1116,6 +1140,7 @@ TestResult testPluginBridge() {
         int bodyRuns = 0;
         agentxx::plugin::polled_tool(
             ctx,
+            g_agentRef,
             "polled_stop",
             "depict",
             "{}",
@@ -1171,6 +1196,7 @@ TestResult testPluginBridge() {
         constexpr int kSteps = agentxx::plugin::detail::PollOneBridge::kPollBurstMax + 40;
         agentxx::plugin::polled_tool(
             ctx,
+            g_agentRef,
             "polled_burst",
             "depict",
             "{}",

@@ -110,6 +110,8 @@ asio::awaitable<Fixture> makeFixture() {
     f.ctx->pluginManager = f.mgr;
     // 加载 io executor (与 BaseAgent::init 一致): 跨线程 vtable 调用经真实 post
     f.mgr->setIoExecutor(co_await asio::this_coro::executor);
+    // 建立挂载: 之后加载的插件挂到本 agent (运行期新加载的自动挂上)
+    co_await f.mgr->mountAgentAsync();
     co_return f;
 }
 

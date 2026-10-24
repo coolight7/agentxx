@@ -80,9 +80,13 @@ public:
     /// 接口声明 (plugin.yaml `interfaces`; 加载时随 manifest 解析传入,
     /// 直连库路径为空) —— 经 list() 暴露供展示/排查
     PluginManifestInterfaces interfaces;
-    /// 资源冻结标志: 插件初始化阶段 (create 内) 允许注册 skill/memory/mcp,
-    /// 初始化完成后冻结，后续固定不可变以防上下文变化 (仅 yaml 声明与初始化追加生效)
+    /// 资源冻结标志: 挂载期间允许注册 skill/memory/mcp (它们属于 agent 级注册),
+    /// 挂载完成后冻结; 拆挂载后解冻以便重新挂载时再次声明
     bool resourcesFrozen = false;
+
+    /// 清单声明的资源 (plugin.yaml 的 skill/memory/mcp)
+    /// - 由加载阶段记下来, 在**每次挂载**时应用到该 agent 的资源应用器 (每挂载一份)
+    plugin::PluginManifestResources manifestResources;
 
     struct HookRegistration {
         int32_t point = 0; ///< 钩子点 (AgentxxPluginHookPoint)
@@ -391,9 +395,9 @@ public:
     // =====================================================================
     //
     // 本主程序当前的实现粒度: **一份 PluginManager 服务一个 agent**; 因此这里只有
-    // 一个挂载 (agentId + mountSeq)。接口形状与"一宿主多挂载"完全一致
-    // (mountOf / mountAgentAsync / unmountAgentAsync / mount 表), 后续把实例表
-    // 上提到 AgentHost 时调用点不需要再改。
+    // 一个挂载 (agentId + mountSeq)。接口形状与"插件加载一份、可挂到多个 agent"
+    // 完全一致 (mountOf / mountAgentAsync / unmountAgentAsync / mount 表), 后续把
+    // 实例表上提到 AgentHost 时调用点不需要再改。
 
     /// 本挂载的 agent 标识 (`root` / `sub:<n>`); 未初始化时为空串
     const std::string& agentId() const noexcept {
@@ -417,6 +421,12 @@ public:
 
     /// 建立挂载: 依次对已加载实例驱动插件 `mount` 回调 (清单资源已先应用)
     asio::awaitable<void> mountAgentAsync();
+
+    /// 挂载一个实例 (幂等: 已挂过直接返回 true; 无 mount 入口视为成功)
+    asio::awaitable<bool> mountOneAsync(std::shared_ptr<PluginInstance> inst);
+
+    /// 卸载一个实例 (调插件 unmount, 清空它的 per-agent 状态)
+    asio::awaitable<void> unmountOneAsync(std::shared_ptr<PluginInstance> inst);
 
     /// 拆除挂载: 逆序驱动插件 `unmount` 回调 (注册由 stop/卸载路径撤销)
     asio::awaitable<void> unmountAgentAsync();
@@ -897,11 +907,14 @@ protected:
     /// 清空由插件 start 事务重新声明的业务记录 (工具/权限/hook/图)
     void clearDomainRegistrations(PluginInstance* inst) override;
 
-    /// 应用清单声明的资源 (skill/memory/mcp) 并冻结资源声明
+    /// 加载阶段记录清单声明的资源 (不立即应用: 每个挂载各应用一次)
     void applyDeclaredResources(
         PluginInstance&                        inst,
         const plugin::PluginManifestResources& resources
     ) override;
+
+    /// 把实例记录的清单资源应用到本 agent (挂载时调用; 已应用则不重复)
+    void applyManifestResourcesNow(PluginInstance& inst);
 
     /// 卸载时释放实例级资源: 工具对象列表 + 清单资源所有权
     void releaseInstanceResources(PluginInstance& inst) override;
@@ -913,6 +926,12 @@ protected:
 
     /// 启用状态变化通知 (资源应用器的启用标记)
     void onInstanceEnabledChanged(PluginInstance& inst, bool enabled) override;
+
+    /// 禁用事务完成后拆掉该实例的挂载 (调插件 unmount, 释放 per-agent 状态)
+    asio::awaitable<void> onInstanceDisabledAsync(const std::shared_ptr<PluginInstance>& inst) override;
+
+    /// 启用事务完成后重新挂载该实例 (agent 级注册都在插件的 mount 回调里)
+    asio::awaitable<void> onInstanceEnabledAsync(const std::shared_ptr<PluginInstance>& inst) override;
 
 private:
 

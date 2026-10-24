@@ -18,8 +18,14 @@
 
 /* ==================== 全局版本 ==================== */
 
-_Static_assert(PLUGINXX_API_VERSION == 1, "agent 侧 ABI 版本必须为 1");
-_Static_assert(AGENTXX_CLIENT_PLUGIN_API_VERSION == 1, "client 侧 ABI 版本必须为 1");
+/* v2: 两侧 API 与最低兼容版本一起抬到 2 (旧插件被拒, 必须重编) */
+_Static_assert(PLUGINXX_API_VERSION == 2, "agent 侧 ABI 版本必须为 2");
+_Static_assert(PLUGINXX_MIN_API_VERSION == 2, "agent 侧最低兼容 ABI 版本必须为 2");
+_Static_assert(AGENTXX_CLIENT_PLUGIN_API_VERSION == 2, "client 侧 ABI 版本必须为 2");
+_Static_assert(
+    AGENTXX_CLIENT_PLUGIN_MIN_API_VERSION == 2,
+    "client 侧最低兼容 ABI 版本必须为 2"
+);
 
 /* ==================== 8 字节对齐（全部跨边界结构体） ==================== */
 
@@ -232,8 +238,8 @@ int32_t agentxx_test_abi_c_probe(void) {
     if (sizeof(PluginxxCoroutineRuntimeIface) % 8 != 0) {
         return 91;
     }
-    /* 工具权限声明: 结构体 8 字节对齐 + 版本 1 */
-    if (AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION_VERSION != 1) {
+    /* 工具权限声明: 结构体 8 字节对齐 + 版本 2 (v2 起全部成员带 agent 引用) */
+    if (AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION_VERSION != 2) {
         return 92;
     }
     if (sizeof(AgentxxPluginToolPermissionSpec) % 8 != 0

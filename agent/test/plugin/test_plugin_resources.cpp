@@ -142,6 +142,8 @@ asio::awaitable<TestResult> run_plugin_resource_tests() {
     ctx->toolRegistry  = std::make_shared<agentxx::plugin::ToolRegistry>();
     ctx->pluginManager = std::make_shared<agentxx::plugin::PluginManager>(ctx);
     ctx->pluginManager->setIoExecutor(co_await asio::this_coro::executor);
+    // 建立挂载: 之后加载的插件挂到本 agent (运行期新加载的自动挂上)
+    co_await ctx->pluginManager->mountAgentAsync();
 
     auto skillMw = std::make_shared<agentxx::middleware::SkillMiddlewareHandle>(
         std::vector<std::string>{},
@@ -481,16 +483,19 @@ mcp:
         XX_TEST_EXPECT_TRUE(contains(ctx->appendComponentInfo.skills, absSkill));
         XX_TEST_EXPECT_TRUE(contains(ctx->appendComponentInfo.memoryFiles, absMem));
 
-        // ---- disable: 摘生效, 留记录 ----
+        // ---- disable: 拆挂载 → 资源与所有权记录一并摘除 ----
+        // (v2: 资源是挂载级实体; 重新启用时由插件 mount 过程按清单/回调重新声明)
         ctx->pluginManager->disable(ownerName);
+        for (int i = 0; i < 200 && !applier->ownedBy(ownerName).skillDirs.empty(); ++i) {
+            co_await sleepMs(5); ///< 拆挂载投递到 IO 线程执行 (记录随之摘除)
+        }
         XX_TEST_EXPECT_FALSE(contains(skillMw->skillDirPathList(), absSkill));
         XX_TEST_EXPECT_FALSE(contains(memMw->memoryFilePathList(), absMem));
         snap = applier->ownedBy(ownerName);
-        XX_TEST_EXPECT_TRUE(contains(snap.skillDirs, absSkill));
+        XX_TEST_EXPECT_TRUE(snap.skillDirs.empty());
 
-        // ---- enable: 恢复生效 ----
+        // ---- enable: 重新挂载 → 资源按清单重新生效 ----
         ctx->pluginManager->enable(ownerName);
-        // 启用走 start 事务 (IO 线程异步执行): 等主程序侧资源重新生效
         for (int i = 0; i < 200 && !contains(skillMw->skillDirPathList(), absSkill); ++i) {
             co_await sleepMs(5);
         }
