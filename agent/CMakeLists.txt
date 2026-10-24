@@ -616,6 +616,16 @@ if (CMAKE_CROSSCOMPILING AND XX_IS_WIN_D)
   add_compile_definitions(_WIN32_WINNT=0x0A00 WINVER=0x0A00 NTDDI_VERSION=0x0A000000 _WIN32_IE=0x0A00)
 endif()
 
+# 插件 API 契约版本 (v2): 插件一次加载、可挂到多个作用域, 作用域级接口带引用
+# - cxx_pluginxx 的代码默认值是 1 (该库被多个主程序共用, 不跟随 agentxx 的契约);
+# - 这里在本机构建的全局 FLAGS 里定义 2: 嵌套构建 (cxx_pluginxx / 插件 / 测试 / 客户端)
+#   都经 _AGENTXX_COMMON_CMAKE_ARGS 继承同一份 FLAGS, 因此框架、使用方与插件
+#   看到的值一致; 插件不链接框架库也能拿到 (插件只用头文件)
+if (NOT CMAKE_CXX_FLAGS MATCHES "PLUGINXX_API_VERSION")
+  set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS} -DPLUGINXX_API_VERSION=2 -DPLUGINXX_MIN_API_VERSION=2"   CACHE STRING "" FORCE)
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DPLUGINXX_API_VERSION=2 -DPLUGINXX_MIN_API_VERSION=2" CACHE STRING "" FORCE)
+endif()
+
 # 快速链接器 (GCC/Clang): mold > gold > 默认 bfd，大幅减少大体积二进制链接时间
 # - auto: 自动检测 mold / ld.gold，均未安装时使用默认链接器
 # - 也可通过 -DAGENTXX_LINKER=mold|gold|bfd 显式指定
@@ -1533,6 +1543,8 @@ ExternalProject_Add(
   INSTALL_ALWAYS TRUE
   CMAKE_ARGS
     ${_AGENTXX_COMMON_CMAKE_ARGS}
+    -DPLUGINXX_API_VERSION=2
+    -DPLUGINXX_MIN_API_VERSION=2
   CMAKE_CACHE_ARGS
     ${_AGENTXX_COMMON_CMAKE_CACHE_ARGS}
   TEST_COMMAND ""

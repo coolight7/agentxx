@@ -381,10 +381,10 @@ void PluginMount::revokeEntry(Entry& entry) {
     }
     auto ctx = agent_.lock();
 
-    // ① 事件订阅: 只撤销订阅在本挂载总线上的那些 (空 agentId = 主程序总线, 保留)
+    // ① 事件订阅: 只撤销订阅在本挂载总线上的那些 (空 scopeId = 主程序总线, 保留)
     std::vector<PluginxxSubscription*> mine;
     for (const auto& handle : inst->subscriptions) {
-        if (handle && handle->agentId == agentId_) {
+        if (handle && handle->scopeId == agentId_) {
             mine.push_back(handle.get());
         }
     }

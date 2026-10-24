@@ -421,6 +421,16 @@ ref.seq         = mgr->mountSequence();   // 未挂载时为 0 = 不校验
   `AgentContext` 在构造结束时析构并关掉宿主上的全部实例 —— 改名 `existingCtx`；
 - 若干夹具改为显式 `mountAgentAsync` / `attachMountSync` 后再断言实例级记录。
 
+- 插件契约版本由 cmake 覆盖：`cxx_pluginxx` 代码里的 `PLUGINXX_API_VERSION` /
+  `PLUGINXX_MIN_API_VERSION` 默认是 1（该库被多个主程序共用，不跟随某个主程序的契约），
+  agentxx 在顶层 `CMakeLists.txt` 往全局 `CMAKE_C_FLAGS/CMAKE_CXX_FLAGS` 追加
+  `-DPLUGINXX_API_VERSION=2 -DPLUGINXX_MIN_API_VERSION=2`；嵌套构建（框架/插件/测试/
+  客户端）都经 `_AGENTXX_COMMON_CMAKE_ARGS` 继承同一份 FLAGS，插件只用头文件也能拿到。
+  改完必须让嵌套工程重新配置，否则旧 cache 里没有这两个定义，插件会报
+  `API version too old`（同时发现该报错分支会崩，见下）。
+- 订阅句柄的 `agentId` 字段在 `cxx_pluginxx` 里已改名 `scopeId`（框架不能出现
+  agentxx 专有命名），agentxx 侧使用点同步改。
+
 已知遗留（下一阶段处理）：
 
 - 进程退出时若仍有协程持有 `AgentContext`（MCP 连接收尾）会走到
