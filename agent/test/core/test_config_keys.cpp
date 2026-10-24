@@ -821,6 +821,44 @@ std::vector<ConfigKeyEntry> configKeyEntries() {
          )}
     );
 
+    // ---- plugin.mount 段 (本会话挂哪些插件) ----
+    out.push_back(
+        {"plugin.mount.policy",
+         "string (all/none/listed; 默认 all)",
+         "all",
+         "plugin:\n  mount:\n    policy: listed\n",
+         kMinimalPluginYaml,
+         false,
+         "0",
+         "2",
+         [](const YamlAppConfig& cfg) {
+             return std::to_string(static_cast<int>(cfg.pluginMountPolicy));
+         }}
+    );
+    out.push_back(
+        {"plugin.mount.list[]",
+         "string (policy=listed 时挂的插件名)",
+         "空",
+         "plugin:\n  mount:\n    policy: listed\n    list: [example_plugin]\n",
+         kMinimalPluginYaml,
+         false,
+         "<empty>",
+         "example_plugin",
+         [](const YamlAppConfig& cfg) {
+             if (cfg.pluginMountList.empty()) {
+                 return std::string{"<empty>"};
+             }
+             std::string joined;
+             for (const auto& name : cfg.pluginMountList) {
+                 if (!joined.empty()) {
+                     joined += ',';
+                 }
+                 joined += name;
+             }
+             return joined;
+         }}
+    );
+
     // ---- mcp 段 ----
     out.push_back(
         {"mcp.list[].namespace",

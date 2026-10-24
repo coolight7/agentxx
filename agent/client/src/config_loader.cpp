@@ -886,6 +886,82 @@ static YamlAppConfig parseYamlConfigNode(
         }
     }
 
+    // 挂载策略 (yaml `plugin.mount`): 本 agent 挂哪些插件、各自的挂载级参数
+    // - 列表写法 `mount: [{name, args}]`: 只挂列出的插件 (= policy listed)
+    // - 映射写法 `mount: {policy: all|none|listed, list: [名字], plugins: [{name, args}]}`
+    // 子代理 / 插件创建的头默认 none, 由创建方显式给 listed / all
+    const auto mountNode = mapChild(mapChild(root, "plugin"), "mount");
+    if (isNodePresent(mountNode)) {
+        auto readMountEntry = [&](const YAML::Node& node) {
+            if (!node.IsMap()) {
+                return;
+            }
+            const auto name = resolveEnvVars(node["name"].as<std::string>(""), dotEnvVars, overrideEnvVars);
+            if (name.empty()) {
+                return;
+            }
+            if (std::find(cfg.pluginMountList.begin(), cfg.pluginMountList.end(), name)
+                == cfg.pluginMountList.end()) {
+                cfg.pluginMountList.push_back(name);
+            }
+            if (node["args"] && node["args"].IsMap()) {
+                cfg.pluginMountArgs[name]
+                    = yamlToJsonResolveEnv(node["args"], dotEnvVars, overrideEnvVars);
+            }
+        };
+        if (mountNode.IsSequence()) {
+            cfg.pluginMountPolicy = agent::PluginMountPolicy::Listed;
+            for (const auto& node : mountNode) {
+                readMountEntry(node);
+            }
+        } else if (mountNode.IsMap()) {
+            if (mountNode["policy"]) {
+                const auto val = resolveEnvVars(
+                    mountNode["policy"].as<std::string>("all"),
+                    dotEnvVars,
+                    overrideEnvVars
+                );
+                if (utilxx_base::isIgnoreCaseEqual(val, "none")) {
+                    cfg.pluginMountPolicy = agent::PluginMountPolicy::None;
+                } else if (utilxx_base::isIgnoreCaseEqual(val, "listed")) {
+                    cfg.pluginMountPolicy = agent::PluginMountPolicy::Listed;
+                } else if (utilxx_base::isIgnoreCaseEqual(val, "all")) {
+                    cfg.pluginMountPolicy = agent::PluginMountPolicy::All;
+                } else {
+                    XX_LOGW(
+                        R"([Config] Warning: plugin.mount invalid policy `{}`, fallback to all)",
+                        val
+                    );
+                }
+            }
+            const auto listNode = mountNode["list"];
+            if (listNode && listNode.IsSequence()) {
+                for (const auto& node : listNode) {
+                    const auto name = resolveEnvVars(
+                        node.as<std::string>(""),
+                        dotEnvVars,
+                        overrideEnvVars
+                    );
+                    if (!name.empty()
+                        && std::find(
+                               cfg.pluginMountList.begin(),
+                               cfg.pluginMountList.end(),
+                               name
+                           )
+                               == cfg.pluginMountList.end()) {
+                        cfg.pluginMountList.push_back(name);
+                    }
+                }
+            }
+            const auto entries = mountNode["plugins"];
+            if (entries && entries.IsSequence()) {
+                for (const auto& node : entries) {
+                    readMountEntry(node);
+                }
+            }
+        }
+    }
+
     return cfg;
 }
 
@@ -1346,7 +1422,17 @@ static YAML::Node
         return mergeModelSection(base, overlay);
     }
     if (key == "plugin") {
-        return mergeListSectionNode(base, overlay, {"path"}, true, "plugin");
+        // 列表段 (`list`) + 挂载策略 (`mount`): 后者按通用规则逐键合并
+        auto merged = mergeListSectionNode(base, overlay, {"path"}, true, "plugin");
+        if (!merged.IsMap()) {
+            merged = YAML::Node{YAML::NodeType::Map};
+        }
+        const auto mergedMount
+            = mergeGenericNode(mapChild(base, "mount"), mapChild(overlay, "mount"));
+        if (isNodePresent(mergedMount)) {
+            merged["mount"] = mergedMount;
+        }
+        return merged;
     }
     if (key == "mcp") {
         return mergeListSectionNode(base, overlay, {"namespace"}, false, "mcp");

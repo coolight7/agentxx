@@ -279,6 +279,18 @@ static void applySharedRuntimeConfig(
     if (!config->plugins.empty()) {
         XX_LOGI("[Config] plugins: {}", config->plugins.size());
     }
+
+    // 插件挂载策略 (yaml `plugin.mount`): 本会话挂哪些插件、各自的挂载级参数
+    config->pluginMountPolicy = yamlCfg.pluginMountPolicy;
+    config->pluginMountList   = yamlCfg.pluginMountList;
+    config->pluginMountArgs   = yamlCfg.pluginMountArgs;
+    if (config->pluginMountPolicy != agentxx::agent::PluginMountPolicy::All) {
+        XX_LOGI(
+            "[Config] plugin.mount: policy={} list={}",
+            static_cast<int>(config->pluginMountPolicy),
+            config->pluginMountList.size()
+        );
+    }
 }
 
 /// 打印生效加载快照

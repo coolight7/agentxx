@@ -87,6 +87,10 @@ struct YamlAppConfig {
     ///   args: 自定义参数 (预留, 存留供查询);
     ///   config: 插件配置文件所在目录或文件路径 (可指向文件/目录)
     std::vector<agent::PluginConfig>          plugins;
+    /// 本会话的插件挂载策略 (yaml `plugin.mount`; 默认 all = 挂载全部已加载插件)
+    agent::PluginMountPolicy        pluginMountPolicy = agent::PluginMountPolicy::All;
+    std::vector<std::string>        pluginMountList;
+    utilxx_base::Json               pluginMountArgs;
     std::map<std::string, agent::ModelConfig> models;
     /// MCP 服务器配置 (yaml `mcp` 列表项, key 为命名空间)
     /// - timeout 字段按秒配置, 0 = 不限制, 未配置默认 120 秒

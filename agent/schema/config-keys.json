@@ -2,7 +2,7 @@
   "version": 1,
   "note": "生成物, 请勿手工编辑; 重新生成: AGENTXX_UPDATE_CONFIG_KEYS=1 agentxx_test config_keys",
   "source": "agent/client/src/config_loader.cpp",
-  "count": 52,
+  "count": 54,
   "keys": [
     {
       "path": "data_dir",
@@ -273,6 +273,18 @@
       "type": "string (插件配置文件/目录; 支持 ~ 与 ${VAR})",
       "default": "空",
       "sample": "plugin:\n  list:\n    - path: \"builtin://agentxx_filesystem\"\n      config: \"./conf\""
+    },
+    {
+      "path": "plugin.mount.policy",
+      "type": "string (all/none/listed; 默认 all)",
+      "default": "all",
+      "sample": "plugin:\n  mount:\n    policy: listed"
+    },
+    {
+      "path": "plugin.mount.list[]",
+      "type": "string (policy=listed 时挂的插件名)",
+      "default": "空",
+      "sample": "plugin:\n  mount:\n    policy: listed\n    list: [example_plugin]"
     },
     {
       "path": "mcp.list[].namespace",

@@ -11,7 +11,7 @@
 >
 > 相关文档: [index.md](index.md) · [配置与设置边界](configuration.md)
 
-键数: 52
+键数: 54
 
 | 键路径 | 类型 | 默认值 |
 |---|---|---|
@@ -60,6 +60,8 @@
 | `plugin.list[].sides` | enum (auto | agent | client) | auto |
 | `plugin.list[].args` | map<string, any> (原样传给插件, 标量递归展开 ${VAR}) | 空 |
 | `plugin.list[].config` | string (插件配置文件/目录; 支持 ~ 与 ${VAR}) | 空 |
+| `plugin.mount.policy` | string (all/none/listed; 默认 all) | all |
+| `plugin.mount.list[]` | string (policy=listed 时挂的插件名) | 空 |
 | `mcp.list[].namespace` | string (必填; 命名空间) | 无 (缺 namespace/url 的条目被跳过) |
 | `mcp.list[].url` | string | 空 (缺 url 的条目被跳过) |
 | `mcp.list[].timeout` | int (秒; 0 = 不限制) | 120 (秒) |
@@ -447,6 +449,23 @@ plugin:
   list:
     - path: "builtin://agentxx_filesystem"
       config: "./conf"
+```
+
+### `plugin.mount.policy`
+
+```yaml
+plugin:
+  mount:
+    policy: listed
+```
+
+### `plugin.mount.list[]`
+
+```yaml
+plugin:
+  mount:
+    policy: listed
+    list: [example_plugin]
 ```
 
 ### `mcp.list[].namespace`

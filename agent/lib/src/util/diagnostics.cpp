@@ -394,6 +394,28 @@ std::string buildDiagnosticsText(
                 ctx.pluginMount->graphDefinitionOwner()
             ));
         }
+        // 挂载表 (会话定位靠 agentId + 挂载序号; 同一个 agentId 重挂会拿到新序号)
+        lines.push_back("");
+        lines.push_back("## plugin mounts");
+        for (const auto& mount : ctx.pluginManager->mounts()) {
+            if (!mount) {
+                continue;
+            }
+            std::string names;
+            for (const auto& name : mount->mountedNames()) {
+                if (!names.empty()) {
+                    names += ", ";
+                }
+                names += name;
+            }
+            lines.push_back(fmt::format(
+                "- agent `{}` seq={} mounted={} plugins=[{}]",
+                mount->agentId(),
+                mount->mountSeq(),
+                mount->mountedCount(),
+                names
+            ));
+        }
     }
 
     // ---- 日志尾部 (屏蔽凭据) ----
