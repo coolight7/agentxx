@@ -1593,7 +1593,7 @@ Windows Debug + ASan, 临时 `data_dir` (会话库 `{data}/sqlite/sessions/<sess
 - **该轮压缩请求的缓存命中是 0** (父请求 0.914), 与测试内模拟器 (0.969) 不一致;
   当时的最可疑项是压缩请求多出的 `tool_choice: "none"`. 该猜测在第三轮被证伪, 见下节。
 - 压缩后父会话第一条: `5248 / 5720 = 0.917` —— 上下文已换成
-  `system | [Please compact context to save space] | 摘要 | [Please continue]`,
+  `system | [Please describe previous conversation] | 摘要 | [Please continue]`,
   命中的 5248 token 就是 system + 工具定义, 说明压缩没有破坏后续请求的前缀对齐 (A5/A7)。
 
 #### 压缩请求缓存不命中: 定位与修复 (第三轮)
@@ -1656,7 +1656,7 @@ Windows Debug + ASan, 临时 `data_dir` (会话库 `{data}/sqlite/sessions/<sess
 - 压缩请求命中 = 父请求的 token 数 (19071 → 18944, 差值是上游缓存块对齐), 也就是整段前缀
   都被复用; 修复前同一位置是 `6784/24915 = 0.272` (只剩 system + 工具段)。
 - 压缩后父会话第一条 `5248/6130 = 0.856`: 上下文已换成
-  `system | [Please compact context to save space] | 摘要`, 命中的正是 system + 工具段。
+  `system | [Please describe previous conversation] | 摘要`, 命中的正是 system + 工具段。
 - 剩余没命中的部分都是"本次请求新增的内容"(末尾指令 / 新增消息), 属于必然。
 - 该结论与测试内模拟器一致 (0.969 vs 实测 0.905), 差距来自上游缓存块对齐与网关分流。
 

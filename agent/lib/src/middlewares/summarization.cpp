@@ -1069,13 +1069,13 @@ asio::awaitable<void>
                 //   追加会让刚压下去的上下文立刻被最近消息重新填满
                 compressedMessages.push_back(neograph::ChatMessage{
                     .role    = "user",
-                    .content = "[Please compact context to save space]",
+                    .content = "[Please describe previous conversation]",
                     .flags
                     = neograph::MessageFlag::AutoInserted | neograph::MessageFlag::Summarized,
                 });
                 compressedMessages.push_back(neograph::ChatMessage{
                     .role    = "assistant",
-                    .content = fmt::format("[Previous conversation summary]: \n{}", summary),
+                    .content = fmt::format("[Previous conversation]: \n{}", summary),
                     .flags
                     = neograph::MessageFlag::AutoInserted | neograph::MessageFlag::Summarized,
                 });
@@ -1283,12 +1283,12 @@ asio::awaitable<bool>
             // system | user | assistant (不追加最近消息, 同自动压缩)
             compressedMessages.push_back(neograph::ChatMessage{
                 .role    = "user",
-                .content = "[Please compact context to save space]",
+                .content = "[Please describe previous conversation]",
                 .flags   = neograph::MessageFlag::AutoInserted | neograph::MessageFlag::Summarized,
             });
             compressedMessages.push_back(neograph::ChatMessage{
                 .role    = "assistant",
-                .content = fmt::format("[Previous conversation summary]: \n{}", summary),
+                .content = fmt::format("[Previous conversation]: \n{}", summary),
                 .flags   = neograph::MessageFlag::AutoInserted | neograph::MessageFlag::Summarized,
             });
         } else {

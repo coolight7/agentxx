@@ -1112,7 +1112,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
         // 没有出现总结消息
         bool hasSummary = false;
         for (const auto& m : res) {
-            if (m.content.find("[Please compact context to save space]") != std::string::npos) {
+            if (m.content.find("[Please describe previous conversation]") != std::string::npos) {
                 hasSummary = true;
             }
         }
@@ -1151,12 +1151,12 @@ asio::awaitable<TestResult> run_summarization_tests() {
         XX_TEST_EXPECT_EQ(res[0].content, std::string{"sys"});
         // 压缩提示 user 消息
         XX_TEST_EXPECT_EQ(res[1].role, std::string{"user"});
-        XX_TEST_EXPECT_EQ(res[1].content, std::string{"[Please compact context to save space]"});
+        XX_TEST_EXPECT_EQ(res[1].content, std::string{"[Please describe previous conversation]"});
         XX_TEST_EXPECT_TRUE(msgHasFlag(res[1], neograph::MessageFlag::AutoInserted));
         XX_TEST_EXPECT_TRUE(msgHasFlag(res[1], neograph::MessageFlag::Summarized));
         // 摘要 assistant 消息
         XX_TEST_EXPECT_EQ(res[2].role, std::string{"assistant"});
-        XX_TEST_EXPECT_EQ(res[2].content, std::string{"[Previous conversation summary]: \nS1"});
+        XX_TEST_EXPECT_EQ(res[2].content, std::string{"[Previous conversation]: \nS1"});
         XX_TEST_EXPECT_TRUE(msgHasFlag(res[2], neograph::MessageFlag::AutoInserted));
         XX_TEST_EXPECT_TRUE(msgHasFlag(res[2], neograph::MessageFlag::Summarized));
         // 旧消息与最近消息都已消失 (末尾要点由摘要覆盖)
@@ -1262,9 +1262,9 @@ asio::awaitable<TestResult> run_summarization_tests() {
         // 压缩提示 + 摘要 = 2 条 (无 system)
         XX_TEST_EXPECT_EQ(res.size(), size_t{2});
         XX_TEST_EXPECT_EQ(res[0].role, std::string{"user"});
-        XX_TEST_EXPECT_EQ(res[0].content, std::string{"[Please compact context to save space]"});
+        XX_TEST_EXPECT_EQ(res[0].content, std::string{"[Please describe previous conversation]"});
         XX_TEST_EXPECT_EQ(res[1].role, std::string{"assistant"});
-        XX_TEST_EXPECT_EQ(res[1].content, std::string{"[Previous conversation summary]: \nS"});
+        XX_TEST_EXPECT_EQ(res[1].content, std::string{"[Previous conversation]: \nS"});
         // tool 交换整体进入压缩请求 (由模型决定保留哪些要点)
         XX_TEST_EXPECT_EQ(env->subagent->receivedArguments.size(), size_t{1});
         const auto& reqMsgs = env->subagent->receivedArguments[0]["messages"];
@@ -1409,11 +1409,11 @@ asio::awaitable<TestResult> run_summarization_tests() {
         // ② 压缩成功 → system | user(自动提示) | assistant(总结), 无最近消息
         XX_TEST_EXPECT_EQ(res.size(), size_t{3});
         XX_TEST_EXPECT_EQ(res[1].role, std::string{"user"});
-        XX_TEST_EXPECT_EQ(res[1].content, std::string{"[Please compact context to save space]"});
+        XX_TEST_EXPECT_EQ(res[1].content, std::string{"[Please describe previous conversation]"});
         XX_TEST_EXPECT_TRUE(msgHasFlag(res[1], neograph::MessageFlag::AutoInserted));
         XX_TEST_EXPECT_TRUE(msgHasFlag(res[1], neograph::MessageFlag::Summarized));
         XX_TEST_EXPECT_EQ(res[2].role, std::string{"assistant"});
-        XX_TEST_EXPECT_EQ(res[2].content, std::string{"[Previous conversation summary]: \nS1"});
+        XX_TEST_EXPECT_EQ(res[2].content, std::string{"[Previous conversation]: \nS1"});
         XX_TEST_EXPECT_TRUE(msgHasFlag(res[2], neograph::MessageFlag::AutoInserted));
         XX_TEST_EXPECT_TRUE(msgHasFlag(res[2], neograph::MessageFlag::Summarized));
 
@@ -1474,11 +1474,11 @@ asio::awaitable<TestResult> run_summarization_tests() {
         auto res = co_await runModelcall(env->handle, env->ctx, env->sessionId, msgs, 900);
         XX_TEST_EXPECT_EQ(res.size(), size_t{2});
         XX_TEST_EXPECT_EQ(res[0].role, std::string{"user"});
-        XX_TEST_EXPECT_EQ(res[0].content, std::string{"[Please compact context to save space]"});
+        XX_TEST_EXPECT_EQ(res[0].content, std::string{"[Please describe previous conversation]"});
         XX_TEST_EXPECT_TRUE(msgHasFlag(res[0], neograph::MessageFlag::AutoInserted));
         XX_TEST_EXPECT_TRUE(msgHasFlag(res[0], neograph::MessageFlag::Summarized));
         XX_TEST_EXPECT_EQ(res[1].role, std::string{"assistant"});
-        XX_TEST_EXPECT_EQ(res[1].content, std::string{"[Previous conversation summary]: \nS"});
+        XX_TEST_EXPECT_EQ(res[1].content, std::string{"[Previous conversation]: \nS"});
     }
 
     // --- T13. 整体上下文压缩为一段总结: 仅一条 assistant 总结消息, 仅 2 条
@@ -1506,8 +1506,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
             if (msgHasFlag(m, neograph::MessageFlag::Summarized)) {
                 ++summarizedFlags;
             }
-            if (m.role == "assistant"
-                && m.content.rfind("[Previous conversation summary]:", 0) == 0) {
+            if (m.role == "assistant" && m.content.rfind("[Previous conversation]:", 0) == 0) {
                 ++summaryCount;
                 summaryContent = m.content;
             }
@@ -1517,9 +1516,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
         // 多行总结整体保留在一条消息内 (一段总结)
         XX_TEST_EXPECT_EQ(
             summaryContent,
-            std::string{
-                "[Previous conversation summary]: \nKey decision: X\nFile: /a/b/c.cpp\nAction: Y"
-            }
+            std::string{"[Previous conversation]: \nKey decision: X\nFile: /a/b/c.cpp\nAction: Y"}
         );
         XX_TEST_EXPECT_EQ(env->subagent->receivedArguments.size(), size_t{1});
     }
@@ -1549,9 +1546,9 @@ asio::awaitable<TestResult> run_summarization_tests() {
         // 角色顺序: system | user(自动提示) | assistant(总结)
         XX_TEST_EXPECT_EQ(res.size(), size_t{3});
         XX_TEST_EXPECT_EQ(res[1].role, std::string{"user"});
-        XX_TEST_EXPECT_EQ(res[1].content, std::string{"[Please compact context to save space]"});
+        XX_TEST_EXPECT_EQ(res[1].content, std::string{"[Please describe previous conversation]"});
         XX_TEST_EXPECT_EQ(res[2].role, std::string{"assistant"});
-        XX_TEST_EXPECT_EQ(res[2].content, std::string{"[Previous conversation summary]: \nS"});
+        XX_TEST_EXPECT_EQ(res[2].content, std::string{"[Previous conversation]: \nS"});
     }
 
     // --- T15. 最近消息含 tool 交换: 压缩结果只有 system + 压缩提示 + 摘要;
@@ -1575,9 +1572,9 @@ asio::awaitable<TestResult> run_summarization_tests() {
         XX_TEST_EXPECT_EQ(res[0].role, std::string{"system"});
         XX_TEST_EXPECT_EQ(res[0].content, std::string{"sys"});
         XX_TEST_EXPECT_EQ(res[1].role, std::string{"user"});
-        XX_TEST_EXPECT_EQ(res[1].content, std::string{"[Please compact context to save space]"});
+        XX_TEST_EXPECT_EQ(res[1].content, std::string{"[Please describe previous conversation]"});
         XX_TEST_EXPECT_EQ(res[2].role, std::string{"assistant"});
-        XX_TEST_EXPECT_EQ(res[2].content, std::string{"[Previous conversation summary]: \nS"});
+        XX_TEST_EXPECT_EQ(res[2].content, std::string{"[Previous conversation]: \nS"});
         // 旧消息与 tool 交换都不再出现
         for (const auto& m : res) {
             XX_TEST_EXPECT_FALSE(m.content == "u1" || m.content == "a1");
@@ -2108,10 +2105,9 @@ asio::awaitable<TestResult> run_summarization_tests() {
         // 压缩结果中保留摘要消息 (最近一次成功压缩的产物仍在上下文中)
         bool hasSummaryNote = false;
         for (const auto& item : env->session()->llmMessagesJson()) {
-            if (item.value("content", std::string{}).starts_with("[Previous conversation summary]")
-                    == true
+            if (item.value("content", std::string{}).starts_with("[Previous conversation]") == true
                 || item.value("content", std::string{})
-                       == "[Please compact context to save space]") {
+                       == "[Please describe previous conversation]") {
                 hasSummaryNote = true;
                 break;
             }
@@ -2216,7 +2212,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
         bool hasSummaryNote = false;
         for (const auto& item : session->llmMessagesJson()) {
             if (item.value("content", std::string{})
-                    .starts_with("[Previous conversation summary]: \nresume summary")) {
+                    .starts_with("[Previous conversation]: \nresume summary")) {
                 hasSummaryNote = true;
                 break;
             }

@@ -1305,7 +1305,7 @@ if (tokenUsage < 75%) 直接返回
   ├─ 切分: recentBudget = 上限 × 0.20 → splitRecentByTokenBudget(轮次对齐)
   ├─ 待压缩段 = [system] + [systemCount, oldEnd)；多模态 data URL 降级为文本标签
   ├─ doSummarizeWithLLM(同 threadid 同模型, 直接给消息不走 share_store)
-  ├─ 成功 → Compact: [system] + user"请压缩" + assistant"[Previous conversation summary]" + recent
+  ├─ 成功 → Compact: [system] + user"请压缩" + assistant"[Previous conversation]" + recent
   │  失败 → failCount++；failCount>=2 或 tokenUsage>=95% → HardTruncate
   └─ 兜底: 压缩后仍 >=95% → HardTruncate（覆盖"摘要本身超长/单条消息超大"）
 写回: replaceMessages + updateMessagesMeta + 更新冷却基准 + 更新提示文本与 contextStats + 清 tip id
