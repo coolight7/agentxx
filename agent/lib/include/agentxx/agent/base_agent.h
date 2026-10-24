@@ -227,6 +227,11 @@ protected:
 
 private:
 
+    /// 插件管理器是否由本 agent 自建 (无外部管理器时的单 agent / 测试场景)
+    /// - true: init 时自己加载配置里的插件, 关闭时自己关管理器
+    /// - false: 由主程序注入 (进程一份), 本 agent 只挂载/拆挂载
+    bool ownsPluginHost_ = false;
+
     /// 执行图定义兜底存储 (agentContext 为空时使用; 正常情况下
     /// graphDefinitionJson 存于 AgentContext 供插件读写)
     neograph::json graphDefinitionJson_ = neograph::json::object();

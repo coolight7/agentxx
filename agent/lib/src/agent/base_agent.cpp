@@ -362,8 +362,14 @@ asio::awaitable<void> BaseAgent::init() {
             // - 配置插件的实际加载在 init 末尾 (engine 构建后, 见下方)
             notifyInitProgress("初始化插件系统 ...");
             agentContext->toolRegistry = std::make_shared<agentxx::plugin::ToolRegistry>();
-            agentContext->pluginManager
-                = std::make_shared<agentxx::plugin::PluginManager>(agentContext);
+            // 有主程序注入的管理器 (AgentHost) 时直接用它: 插件只加载一次, 本 agent 只挂载
+            if (agentContext->pluginManager) {
+                ownsPluginHost_ = false;
+            } else {
+                agentContext->pluginManager
+                    = std::make_shared<agentxx::plugin::PluginManager>(agentContext);
+                ownsPluginHost_ = true;
+            }
             // 加载 io executor: 插件 vtable 的跨线程调用 (JS 线程等) 经 post 到 io 线程
             // 执行并同步等待 (init 运行于 io 线程, 此处记录的线程 id 即 io 线程)
             agentContext->pluginManager->setIoExecutor(co_await asio::this_coro::executor);
@@ -371,7 +377,9 @@ asio::awaitable<void> BaseAgent::init() {
         },
         .rollback =
             [this]() {
-                agentContext->pluginManager.reset();
+                if (ownsPluginHost_) {
+                    agentContext->pluginManager.reset();
+                }
                 agentContext->toolRegistry.reset();
             },
     });
@@ -526,13 +534,16 @@ asio::awaitable<void> BaseAgent::init() {
             // 所有 agent 级注册 (工具/权限/钩子/提示词/功能点/图/资源/事件) 都在
             // 插件的 mount 回调里发生, 因此必须提前到 engine 构建之前。
             notifyInitProgress("加载插件 ...");
-            if (agentContext->pluginManager && !agentContext->agentConfig->plugins.empty()) {
+            // 只有自建管理器时才在这里加载 (外部注入时插件已加载好)
+            if (ownsPluginHost_ && agentContext->pluginManager
+                && !agentContext->agentConfig->plugins.empty()) {
                 co_await agentContext->pluginManager->loadConfiguredPlugins(
                     agentContext->agentConfig->plugins
                 );
             }
             notifyInitProgress("挂载插件 ...");
-            if (agentContext->pluginManager) {
+            if (agentContext->pluginManager
+                && agentContext->agentConfig->pluginMountPolicy != PluginMountPolicy::None) {
                 agentContext->pluginMount
                     = co_await agentContext->pluginManager->mountAgentAsync(agentContext);
             }
@@ -543,7 +554,7 @@ asio::awaitable<void> BaseAgent::init() {
                 // 插件在 start/mount 阶段可能已注册资源: 用同步关闭入口撤销
                 // (init 期间没有进行中的插件回调, 可安全调用 shutdownAll)
                 agentContext->pluginMount.reset();
-                if (agentContext->pluginManager) {
+                if (ownsPluginHost_ && agentContext->pluginManager) {
                     agentContext->pluginManager->shutdownAll();
                 }
             },

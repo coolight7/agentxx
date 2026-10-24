@@ -1,7 +1,10 @@
 #pragma once
 
 #include "agentxx/agent/base_agent.h"
+#include "agentxx/agent/config.h"
 #include "agentxx/event/event_host.h"
+#include "agentxx/plugin/plugin_manager.h"
+#include "asio/awaitable.hpp"
 #include "asio/io_context.hpp"
 #include <chrono>
 #include <functional>
@@ -82,6 +85,8 @@ public:
         /// agent 构造工厂 (默认 CodeAgent; 可注入自定义 BaseAgent 子类)
         std::function<std::shared_ptr<BaseAgent>(std::shared_ptr<AgentConfig>)> agentFactory
             = nullptr;
+        /// 插件加载表 (进程一份: 主程序在 [loadPluginsAsync] 里 create/start 各一次)
+        std::vector<agentxx::agent::PluginConfig> pluginList{};
     };
 
     /// 创建 agent 节点容器 (须经 shared_ptr 持有: 总线 handler 以 weak_ptr 捕获)
@@ -93,6 +98,16 @@ public:
     std::shared_ptr<agentxx::events::EventBus> hostBus();
     std::shared_ptr<asio::thread_pool>         threadPool();
     AgentRegistry&                             registry();
+
+    /// 本容器的插件管理器 (唯一实例; 未加载插件时为空)
+    /// - 各 agent 在 `init` 前把它放进 `AgentContext::pluginManager`, 由 agent 自己
+    ///   `mountAgentAsync` 挂载 (见 `BaseAgent::init` 的 `plugin_mount` 步骤)
+    std::shared_ptr<agentxx::plugin::PluginManager> pluginHost() const;
+
+    /// 加载插件加载表 (拓扑排序 + 依赖 + 内置/外置 + create + start)
+    /// - 必须在 agent `init` 之前完成: 插件只加载一次, 各 agent 只挂载
+    /// - 重复调用无副作用; 列表为空时直接返回
+    asio::awaitable<void> loadPluginsAsync();
 
     /// 注册根 agent (主 agent):
     /// - 注入共享 threadPool 与 agent 节点容器引用 (AgentContext::host)
@@ -163,19 +178,6 @@ public:
     /// 根 agent (attachRoot 设置; 未注册为空)
     std::shared_ptr<BaseAgent> rootAgent() const;
 
-    /// 为根 agent 一次完成"创建主程序 + 注册根 agent"
-    /// - 等价于 `create(Config{.ioCtx = rootAgent->ioCtx})` + `attachRoot(rootAgent)`
-    /// - **与 `AgentConfig::enableSubagent` 无关**: 该开关只决定是否把
-    ///   `agentxx_subagent` 工具注入给模型; 程序内部路径 (上下文压缩委派) 与
-    ///   subagent 工具都依赖 `service.subagent` 服务, 服务始终加载
-    ///
-    /// - `args`:
-    ///     - [rootAgent] 已 init 的根 agent (须非空)
-    ///
-    /// - `return` 主程序实例; 返回值必须由调用方持有到会话结束
-    ///   (总线 handler 只持 weak_ptr, 容器销毁后委派立即失效)
-    static std::shared_ptr<AgentHost> attachRootAgentHost(std::shared_ptr<BaseAgent> rootAgent);
-
 private:
 
     explicit AgentHost(Config cfg);
@@ -216,6 +218,9 @@ private:
     std::shared_ptr<asio::thread_pool>          threadPool_;
     std::shared_ptr<agentxx::events::EventBus>  hostBus_;
     AgentRegistry                               registry_;
+    /// 插件管理器 (进程一份; 由 [loadPluginsAsync] 建立)
+    /// - 声明在 rootAgent_ 之前: 成员逆序析构, 这样 agent 先释放 (拆挂载) 再关管理器
+    std::shared_ptr<agentxx::plugin::PluginManager> pluginHost_;
     std::shared_ptr<BaseAgent>                  rootAgent_;
     std::map<std::string, Mailbox, std::less<>> mailboxes_;
     /// 远程 agent (A2A 桥接): agentId -> A2A 客户端

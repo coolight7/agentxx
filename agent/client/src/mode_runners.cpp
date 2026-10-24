@@ -232,15 +232,24 @@ static std::shared_ptr<agent::SessionServerAgentIO> setupLocalUnifiedDirect(
     asio::co_spawn(
         *agent->ioCtx,
         [agent, serverIO, clientIO, sessionId]() -> asio::awaitable<void> {
+            // 插件管理器 (进程一份): 先加载插件, 再把它放进 agent 上下文 ——
+            // init 的 plugin_mount 步骤由各 agent 自己挂载 (加载只做一次)
+            auto host = agentxx::agent::AgentHost::create(
+                {.ioCtx      = agent->ioCtx,
+                 .pluginList = agent->getContext()->agentConfig->plugins}
+            );
+            co_await host->loadPluginsAsync();
+            if (auto pluginHost = host->pluginHost()) {
+                agent->getContext()->pluginManager = pluginHost;
+            }
             co_await agent->init();
             // 主程序 (进程级): 主 agent 与子代理平等注册, 经 HostBus 交互;
-            // attachRoot (内部完成) 在根 agent 总线上 registerServer 子代理委派
+            // attachRoot 在根 agent 总线上 registerServer 子代理委派
             // (service.subagent), 子代理由主程序派生独立 agent 运行
             // (独立 AgentContext/engine)
             // - 须经 shared_ptr 持有到会话结束: 总线 handler 以 weak_ptr 捕获,
             //   避免悬空 this; 局部变量随本协程帧存活
-            auto host = agentxx::agent::AgentHost::attachRootAgentHost(agent);
-            (void)host;
+            host->attachRoot(agent);
             // 拉取启动信息 (MCP/Skill/Memory): 须在 init 完成后发送 —— transport 接收循环
             // 已先于 init 启动, 若此时 (init 前) 发送会立即得到空列表 (组件尚未加载),
             // 客户端将永远显示不出已加载的组件

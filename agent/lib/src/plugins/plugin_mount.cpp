@@ -221,6 +221,19 @@ asio::awaitable<bool> PluginMount::mountOneAsync(std::shared_ptr<PluginInstance>
     entry->unmountPending  = false;
     entry->resourcesFrozen = false;
     entry->configJson      = inst->args.dump();
+    // 挂载级参数覆盖 (yaml `plugin.mount[].args`, 键 = 插件名): 与加载表 args 合并
+    if (ctx->agentConfig && ctx->agentConfig->pluginMountArgs.is_object()
+        && ctx->agentConfig->pluginMountArgs.contains(inst->name)) {
+        const auto& overrideArgs = ctx->agentConfig->pluginMountArgs[inst->name];
+        if (overrideArgs.is_object()) {
+            utilxx_base::Json merged = inst->args.is_object() ? inst->args
+                                                             : utilxx_base::Json::object();
+            for (const auto& [key, value] : overrideArgs.items()) {
+                merged[key] = value;
+            }
+            entry->configJson = merged.dump();
+        }
+    }
 
     // 清单声明的资源 (skill/memory/mcp) 属于本挂载: 先应用, 插件的 mount 回调里
     // 还能继续声明 (资源声明在挂载收尾才冻结)

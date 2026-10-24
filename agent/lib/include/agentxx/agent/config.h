@@ -171,6 +171,16 @@ enum class PluginSide : uint8_t {
     Client,
 };
 
+/// 插件挂载策略 (每个 agent 一份; yaml `plugin.mount`)
+/// - all: 把主程序已加载的插件全部挂到本 agent (默认, 与旧行为一致)
+/// - none: 不挂任何插件 (子代理 / 插件自己创建的根默认用这个)
+/// - listed: 只挂 `pluginMountList` 里列出的那些 (按插件名)
+enum class PluginMountPolicy : uint8_t {
+    All = 0,
+    None,
+    Listed,
+};
+
 /// 插件配置 (yaml `plugins` 列表项)
 struct PluginConfig {
     /// 插件动态库路径 或 插件目录 (目录含 plugin.yaml 时按清单解析)
@@ -305,12 +315,22 @@ public:
     /// - 与白名单同路径时黑名单优先 (后注册覆盖)
     std::vector<std::string> permissionDenyPaths;
 
-    /// 插件配置 (yaml `plugins` 列表; 启动时由 PluginManager 加载)
+    /// 插件加载表 (yaml `plugin.list`; 进程内由插件管理器加载一次)
     /// - 插件参数整体存放于 PluginConfig::args (主程序不解析字段语义,
     ///   由插件自行读取, 如 codegraph 插件的 loadPaths/ignorePaths/loadCwd/useGitignore)
-    /// - CodeAgent 按 plugins 段 path 统一加载插件; dataDir 未配置时
-    ///   codegraph 等依赖数据目录的插件自动跳过
+    /// - 主程序负责加载 (create/start 各一次); 每个 agent 只决定自己挂载哪些
+    ///   (见 [pluginMountPolicy]); dataDir 未配置时依赖数据目录的插件自动跳过
     std::vector<PluginConfig> plugins{};
+
+    /// 本 agent 的插件挂载策略 (yaml `plugin.mount.policy`; 默认 All)
+    PluginMountPolicy pluginMountPolicy = PluginMountPolicy::All;
+
+    /// `pluginMountPolicy == Listed` 时要挂的插件名 (yaml `plugin.mount.list`)
+    std::vector<std::string> pluginMountList{};
+
+    /// 本 agent 对某个插件的参数覆盖 (yaml `plugin.mount[].args`; 键 = 插件名)
+    /// - 与加载表里的 args 合并后交给插件的 `mount` 回调 (挂载级配置)
+    utilxx_base::Json pluginMountArgs{};
 
     /// share store 桥接 (运行时注入, 非配置项):
     /// - 非空时, 本 agent 的 `agentxx_share_store` 工具读写该 MiddlewareContext

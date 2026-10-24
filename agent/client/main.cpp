@@ -1036,8 +1036,18 @@ Options:
         asio::co_spawn(
             *agent->ioCtx,
             [agent, server, hostHolder]() -> asio::awaitable<void> {
+                // 插件管理器 (进程一份): 先加载插件再 init (init 内各 agent 自己挂载)
+                auto host = agentxx::agent::AgentHost::create(
+                    {.ioCtx      = agent->ioCtx,
+                     .pluginList = agent->getContext()->agentConfig->plugins}
+                );
+                co_await host->loadPluginsAsync();
+                if (auto pluginHost = host->pluginHost()) {
+                    agent->getContext()->pluginManager = pluginHost;
+                }
                 co_await agent->init();
-                *hostHolder = agentxx::agent::AgentHost::attachRootAgentHost(agent);
+                *hostHolder = host;
+                host->attachRoot(agent);
                 server->start(co_await asio::this_coro::executor);
                 co_return;
             },

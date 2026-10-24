@@ -173,24 +173,35 @@ AgentRegistry& AgentHost::registry() {
     return registry_;
 }
 
+std::shared_ptr<agentxx::plugin::PluginManager> AgentHost::pluginHost() const {
+    return pluginHost_;
+}
+
+asio::awaitable<void> AgentHost::loadPluginsAsync() {
+    if (pluginHost_) {
+        co_return; // 幂等: 插件只加载一次
+    }
+    if (cfg_.pluginList.empty()) {
+        co_return;
+    }
+    // 主程序级管理器: 加载阶段还没有 agent, 因此不持 agent 上下文
+    // (主程序级配置经 [PluginManager::setPrimaryAgent] 之类入口在 agent 建好后补)
+    pluginHost_ = std::make_shared<agentxx::plugin::PluginManager>(
+        std::weak_ptr<agentxx::agent::AgentContext>{}
+    );
+    pluginHost_->setIoExecutor(ioCtx_->get_executor());
+    XX_LOGI("Loading {} plugin(s) into the agent host", cfg_.pluginList.size());
+    co_await pluginHost_->loadConfiguredPlugins(cfg_.pluginList);
+    XX_LOGI("Plugin host ready: {} instance(s)", pluginHost_->list().size());
+    co_return;
+}
+
 size_t AgentHost::runningSubagents() const {
     return runningSubagentCount_;
 }
 
 std::shared_ptr<BaseAgent> AgentHost::rootAgent() const {
     return rootAgent_;
-}
-
-std::shared_ptr<AgentHost> AgentHost::attachRootAgentHost(std::shared_ptr<BaseAgent> rootAgent) {
-    if (!rootAgent) {
-        XX_LOGW("AgentHost::attachRootAgentHost: root agent is null");
-        return nullptr;
-    }
-    Config hostCfg;
-    hostCfg.ioCtx = rootAgent->ioCtx;
-    auto host     = AgentHost::create(hostCfg);
-    host->attachRoot(std::move(rootAgent));
-    return host;
 }
 
 void AgentHost::attachRoot(std::shared_ptr<BaseAgent> rootAgent) {
@@ -210,6 +221,12 @@ void AgentHost::attachRoot(std::shared_ptr<BaseAgent> rootAgent) {
     // host 引用 (供节点/工具经 AgentContext 感知 agent 节点容器)
     ctx->threadPool = threadPool_;
     ctx->host       = weak_from_this();
+    // 注入插件管理器: agent 自己不再建管理器/加载插件, 只在 init 时挂载
+    // (policy 为 None 的 agent 不挂任何插件)
+    if (pluginHost_ && !ctx->pluginManager
+        && ctx->agentConfig->pluginMountPolicy != PluginMountPolicy::None) {
+        ctx->pluginManager = pluginHost_;
+    }
 
     if (!ctx->bus) {
         XX_LOGW("AgentHost::attachRoot: root agent bus is null, subagent delegation unavailable");
@@ -265,6 +282,9 @@ std::shared_ptr<AgentConfig> AgentHost::makeSubagentConfig(std::shared_ptr<Agent
     // 不注入父级 Skill/Memory (子代理上下文独立), 一次性运行不持久化
     cfg->mcpServerUrls.clear();
     cfg->plugins.clear();
+    // 子代理默认不挂载任何插件 (最小权限; 要工具由调用方显式给 Listed)
+    cfg->pluginMountPolicy = PluginMountPolicy::None;
+    cfg->pluginMountList.clear();
     cfg->ragDocsPaths.clear();
     cfg->skillDirPaths.clear();
     cfg->memoryFilePaths.clear();
@@ -502,6 +522,11 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
     /// 注入共享基础设施与 agent 节点容器引用
     subCtx->threadPool = threadPool_;
     subCtx->host       = weak_from_this();
+    // 插件管理器: 子代理按自己的挂载策略走 (默认 None = 不挂载任何插件)
+    if (pluginHost_ && !subCtx->pluginManager
+        && subCtx->agentConfig->pluginMountPolicy != PluginMountPolicy::None) {
+        subCtx->pluginManager = pluginHost_;
+    }
 
     // 用量记账目标: 子代理的模型调用计入父会话 (用户看的会话与台账都是父会话)
     // - 子代理自己有独立 AgentContext/SessionsManager, 没有 sessionStore, 记不下来

@@ -247,9 +247,21 @@ asio::awaitable<std::shared_ptr<PluginMount>>
     }
 
     // 逐实例驱动插件的 mount 回调 (顺序 = 实例表顺序; 单个实例失败只影响它自己)
+    // 挂载范围由本 agent 的策略决定 (yaml `plugin.mount`)
+    const auto policy = ctx->agentConfig ? ctx->agentConfig->pluginMountPolicy
+                                         : agentxx::agent::PluginMountPolicy::All;
+    const auto& listed = ctx->agentConfig ? ctx->agentConfig->pluginMountList
+                                          : std::vector<std::string>{};
     for (const auto& [name, inst] : this->plugins_) {
         (void)name;
         if (!inst) {
+            continue;
+        }
+        if (policy == agentxx::agent::PluginMountPolicy::None) {
+            break;
+        }
+        if (policy == agentxx::agent::PluginMountPolicy::Listed
+            && std::find(listed.begin(), listed.end(), inst->name) == listed.end()) {
             continue;
         }
         co_await mount->mountOneAsync(inst);
