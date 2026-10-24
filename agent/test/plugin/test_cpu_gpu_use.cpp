@@ -155,6 +155,7 @@ asio::awaitable<TestResult>
 
         auto* op = ctx->pluginManager->invokeCapabilityAsync(
             inst.get(), ///< 能力调用必须携带 caller 实例 (租约保护)
+            nullptr,    ///< 调用方不在 agent 上下文 (测试进程级调用)
             "agentxx.system_usage",
             "query",
             "{}",
