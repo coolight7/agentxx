@@ -233,8 +233,9 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 | `test/plugin/test_plugin_bridge.cpp` | 18 | 接口表调用补 `agent` |
 | `test/plugin/test_plugin_runtime.cpp` | 15 | 删 `restorePromptBackup` 用例；表数量 21；v2 基线断言 |
 | `test/plugin/test_plugin_sdk.cpp` | 14 | kit 辅助函数新增的 `agent` 参数 |
-| `test/plugin/test_plugin_resources.cpp` | 9 | `register_skill_dir` / `get_own_resources` 等补 `agent` |
-| `test/plugin/test_cpu_gpu_use.cpp` | 5 | `invokeCapabilityAsync` 新增 `agent` 参数 |
+
+已迁完：`test_cpu_gpu_use.cpp`（`invokeCapabilityAsync` 补 `nullptr`）与
+`test_plugin_resources.cpp`（用管理器造 `PluginxxScopeRef`，9 处资源接口补引用）。
 
 做法建议：在测试公共头（`agent/test/include/agentxx-test/...`）里加一个小助手，
 从管理器造引用，避免每处手写：
