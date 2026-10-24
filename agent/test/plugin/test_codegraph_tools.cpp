@@ -315,7 +315,7 @@ asio::awaitable<TestResult>
     ctx->pluginManager           = std::make_shared<agentxx::plugin::PluginManager>(ctx);
     ctx->pluginManager->setIoExecutor(co_await asio::this_coro::executor);
     // 建立挂载: 之后加载的插件挂到本 agent (运行期新加载的自动挂上)
-    co_await ctx->pluginManager->mountAgentAsync();
+    ctx->pluginMount = co_await ctx->pluginManager->mountAgentAsync(ctx);
 
     auto inst = co_await ctx->pluginManager->loadPluginAsync(path, &pc);
     XX_TEST_EXPECT_TRUE(inst != nullptr);

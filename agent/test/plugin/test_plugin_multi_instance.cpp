@@ -86,7 +86,7 @@ static asio::awaitable<std::shared_ptr<agent::AgentContext>>
     ctx->pluginManager           = std::make_shared<plugin::PluginManager>(ctx);
     ctx->pluginManager->setIoExecutor(ex);
     // 建立挂载: 之后加载的插件挂到本 agent (运行期新加载的自动挂上)
-    co_await ctx->pluginManager->mountAgentAsync();
+    ctx->pluginMount = co_await ctx->pluginManager->mountAgentAsync(ctx);
     co_return ctx;
 }
 

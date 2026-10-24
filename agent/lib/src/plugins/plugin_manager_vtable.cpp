@@ -43,8 +43,20 @@ static HostCall enterHost(const PluginxxHost* host, bool allowClosing = false) {
 /// - 失败记一条警告: 带插件给的 `agent_id` / `seq` 与本程序期望的值, 便于定位
 ///   "在 start 里注册"或"旧引用"这类错误
 static bool scopeOk(const PluginManager* mgr, const PluginxxScopeRef* agent) {
-    if (mgr != nullptr && mgr->mountOf(agent)) {
+    if (mgr != nullptr && mgr->mountOf(agent) != nullptr) {
         return true;
+    }
+    std::string expected;
+    if (mgr != nullptr) {
+        for (const auto& mount : mgr->mounts()) {
+            if (!mount) {
+                continue;
+            }
+            if (!expected.empty()) {
+                expected += ", ";
+            }
+            expected += mount->agentId() + "#" + std::to_string(mount->mountSeq());
+        }
     }
     std::string gotId;
     uint64_t    gotSeq = 0;
@@ -55,14 +67,36 @@ static bool scopeOk(const PluginManager* mgr, const PluginxxScopeRef* agent) {
         gotSeq = agent->seq;
     }
     XX_LOGW(
-        "agent 引用无效 (收到 agent_id=`{}` seq={}; 本程序期望 agent_id=`{}` seq={}); "
+        "agent 引用无效 (收到 agent_id=`{}` seq={}; 本程序的挂载: {}); "
         "agent 级接口请在插件的 mount 回调里调用, 并给它本挂载的引用",
-        gotId.empty() ? std::string_view{"<empty>"} : std::string_view{gotId},
+        gotId.empty() ? std::string{"<empty>"} : gotId,
         gotSeq,
-        mgr ? std::string_view{mgr->agentId()} : std::string_view{"<no manager>"},
-        mgr ? mgr->mountSequence() : 0
+        expected.empty() ? std::string{"<none>"} : expected
     );
     return false;
+}
+
+/// 把作用域引用解析成挂载 (须在 IO 线程调用: 挂载表只在主程序 IO 线程变动)
+static PluginMount* mountIn(const PluginManager* mgr, const PluginxxScopeRef* agent) {
+    return mgr == nullptr ? nullptr : mgr->mountOf(agent);
+}
+
+/// 注册类入口解析失败时的统一返回值
+static int32_t noAgent() {
+    return AGENTXX_PLUGIN_ERR_NO_AGENT;
+}
+
+/// 解析挂载并执行; 解析失败时返回 `fail` 给出的失败值
+/// - 注册类传 [noAgent] (`AGENTXX_PLUGIN_ERR_NO_AGENT`)
+/// - 读取类传 `-1` / 空串 / 空句柄 (与"引用无效"的既有约定一致)
+template<typename Fail, typename Fn>
+static auto mountCall(const PluginManager* mgr, const PluginxxScopeRef* agent, Fail&& fail, Fn&& fn)
+    -> decltype(fn(std::declval<PluginMount&>())) {
+    auto* mount = mountIn(mgr, agent);
+    if (mount == nullptr) {
+        return fail();
+    }
+    return fn(*mount);
 }
 
 /// 注册/写入类入口的公共骨架: 解析 host 上下文 → 把业务逻辑投递到 IO 线程执行。
@@ -184,8 +218,10 @@ static int32_t PLUGINXX_CALL xx_register_tool(
         auto                  mgrPtr   = mgr;
         auto                  instPtr  = inst;
         AgentxxPluginToolSpec specCopy = *spec;
-        return ioCallSyncKeep<int32_t>(call, mgrPtr, [mgrPtr, instPtr, specCopy]() {
-            return mgrPtr->registerTool(instPtr, &specCopy);
+        return ioCallSyncKeep<int32_t>(call, mgrPtr, [mgrPtr, instPtr, specCopy, agent]() {
+            return mountCall(mgrPtr, agent, noAgent, [instPtr, specCopy](PluginMount& mount) {
+                return mount.registerTool(instPtr, &specCopy);
+            });
         });
     });
 }
@@ -203,7 +239,9 @@ static int32_t PLUGINXX_CALL xx_unregister_tool(
         if (!scopeOk(mgr, agent)) {
             return static_cast<int32_t>(AGENTXX_PLUGIN_ERR_NO_AGENT);
         }
-        return mgr->unregisterTool(inst, nameValCopy);
+        return mountCall(mgr, agent, noAgent, [inst, nameValCopy](PluginMount& mount) {
+            return mount.unregisterTool(inst, nameValCopy);
+        });
     });
 }
 
@@ -245,8 +283,10 @@ static int32_t PLUGINXX_CALL xx_register_tool_permission(
         return ioCallSyncKeep<int32_t>(
             call,
             mgrPtr,
-            [mgrPtr, instPtr, specCopy, toolName, targetArg, category]() {
-                return mgrPtr->registerToolPermission(instPtr, &specCopy);
+            [mgrPtr, instPtr, specCopy, toolName, targetArg, category, agent]() {
+                return mountCall(mgrPtr, agent, noAgent, [instPtr, specCopy](PluginMount& mount) {
+                    return mount.registerToolPermission(instPtr, &specCopy);
+                });
             }
         );
     });
@@ -265,7 +305,9 @@ static int32_t PLUGINXX_CALL xx_unregister_tool_permission(
         if (!scopeOk(mgr, agent)) {
             return static_cast<int32_t>(AGENTXX_PLUGIN_ERR_NO_AGENT);
         }
-        return mgr->unregisterToolPermission(inst, nameValCopy);
+        return mountCall(mgr, agent, noAgent, [inst, nameValCopy](PluginMount& mount) {
+            return mount.unregisterToolPermission(inst, nameValCopy);
+        });
     });
 }
 
@@ -318,8 +360,16 @@ static int32_t PLUGINXX_CALL xx_check_paths(
         auto                 rc = ioCallSyncKeep<int32_t>(
             call,
             mgrPtr,
-            [mgrPtr, instPtr, scope, sessionId, paths, &decisions]() {
-                return mgrPtr->checkPermissionPaths(instPtr, scope, *sessionId, *paths, decisions);
+            [mgrPtr, instPtr, scope, sessionId, paths, agent, &decisions]() {
+                return mountCall(mgrPtr, agent, noAgent, [&](PluginMount& mount) {
+                    return mount.checkPermissionPaths(
+                        instPtr,
+                        scope,
+                        *sessionId,
+                        *paths,
+                        decisions
+                    );
+                });
             }
         );
         if (rc != 0 || decisions.size() != paths->size()) {
@@ -383,7 +433,12 @@ static ::PluginxxOperatorHandle* PLUGINXX_CALL xx_call_tool_async(
             hostMemorySetString(error_out, "call_tool_async: agent reference is invalid");
             return static_cast<::PluginxxOperatorHandle*>(nullptr);
         }
-        return mgr->callToolAsync(
+        auto* mount = mountIn(mgr, agent);
+        if (mount == nullptr) {
+            hostMemorySetString(error_out, "call_tool_async: agent reference is invalid");
+            return static_cast<::PluginxxOperatorHandle*>(nullptr);
+        }
+        return mount->callToolAsync(
             inst,
             *name,
             args_json ? *args_json : PluginxxStringView{},
@@ -422,9 +477,15 @@ static int32_t PLUGINXX_CALL xx_register_hook(
         auto                    mgrPtr   = mgr;
         auto                    instPtr  = inst;
         AgentxxPluginHookSpecEx specCopy = *spec;
-        return ioCallSyncKeep<int32_t>(call, mgrPtr, [mgrPtr, instPtr, specCopy, out_handle]() {
-            return mgrPtr->registerHook(instPtr, &specCopy, out_handle);
-        });
+        return ioCallSyncKeep<int32_t>(
+            call,
+            mgrPtr,
+            [mgrPtr, instPtr, specCopy, out_handle, agent]() {
+                return mountCall(mgrPtr, agent, noAgent, [&](PluginMount& mount) {
+                    return mount.registerHook(instPtr, &specCopy, out_handle);
+                });
+            }
+        );
     });
 }
 
@@ -432,8 +493,14 @@ static int32_t PLUGINXX_CALL xx_unregister_hook(const PluginxxHost* host, int64_
     if (handle <= 0) {
         return -1;
     }
+    // 句柄由挂载分配 (唯一), 因此不需要引用: 逐个挂载试着撤销, 命中即返回
     return onInstanceIo(host, [handle](PluginInstance* inst, PluginManager* mgr) {
-        return mgr->unregisterHook(inst, handle);
+        for (const auto& mount : mgr->mounts()) {
+            if (mount && mount->unregisterHook(inst, handle) == 0) {
+                return int32_t{0};
+            }
+        }
+        return int32_t{-1};
     });
 }
 
@@ -443,11 +510,23 @@ static int32_t PLUGINXX_CALL xx_list_hooks(
     PluginxxString*         out
 ) {
     return queryStringIo(host, out, [agent](PluginInstance*, PluginManager* mgr) {
-        // 引用为空 = 全部挂载的合并视图 (当前只有一份挂载, 两者等价)
-        if (agent && !pluginxx_scope_ref_ok(agent)) {
+        if (agent != nullptr && !pluginxx_scope_ref_ok(agent)) {
             return std::string{};
         }
-        return mgr->hooksJson();
+        if (agent != nullptr) {
+            auto* mount = mountIn(mgr, agent);
+            return mount != nullptr ? mount->hooksJson() : std::string{};
+        }
+        // 引用为空 = 全部挂载的合并视图 (诊断用: 每个挂载一段)
+        auto              mounts = mgr->mounts();
+        utilxx_base::Json arr    = utilxx_base::Json::array();
+        for (const auto& mount : mounts) {
+            if (!mount) {
+                continue;
+            }
+            arr.push_back(utilxx_base::Json::parse(mount->hooksJson()));
+        }
+        return arr.dump();
     });
 }
 
@@ -477,8 +556,15 @@ static int32_t PLUGINXX_CALL xx_get_share_store(
         *out         = ioCallSyncKeep<PluginxxString>(
             call,
             mgrPtr,
-            [mgrPtr, instPtr, sid, id]() -> PluginxxString {
-                return mgrPtr->getShareStore(instPtr, sid, id);
+            [mgrPtr, instPtr, sid, id, agent]() -> PluginxxString {
+                return mountCall(
+                    mgrPtr,
+                    agent,
+                    [] { return PluginxxString{}; },
+                    [instPtr, sid, id](PluginMount& mount) {
+                        return mount.getShareStore(instPtr, sid, id);
+                    }
+                );
             }
         );
         return (out->data != nullptr) ? 0 : -1;
@@ -508,8 +594,15 @@ static int64_t PLUGINXX_CALL xx_add_share_store(
         return ioCallSyncKeep<int64_t>(
             call,
             mgrPtr,
-            [mgrPtr, instPtr, sid, contentVal]() -> int64_t {
-                return mgrPtr->addShareStore(instPtr, sid, contentVal);
+            [mgrPtr, instPtr, sid, contentVal, agent]() -> int64_t {
+                return mountCall(
+                    mgrPtr,
+                    agent,
+                    [] { return int64_t{-1}; },
+                    [instPtr, sid, contentVal](PluginMount& mount) {
+                        return mount.addShareStore(instPtr, sid, contentVal);
+                    }
+                );
             }
         );
     });
@@ -540,8 +633,13 @@ static int32_t PLUGINXX_CALL xx_context_get_messages(
         }
         auto mgrPtr = mgr;
         auto sid    = *session_id;
-        *out = ioCallSyncKeep<PluginxxString>(call, mgrPtr, [mgrPtr, sid]() -> PluginxxString {
-            return mgrPtr->getSessionMessages(sid);
+        *out = ioCallSyncKeep<PluginxxString>(call, mgrPtr, [mgrPtr, sid, agent]() -> PluginxxString {
+            return mountCall(
+                mgrPtr,
+                agent,
+                [] { return PluginxxString{}; },
+                [sid](PluginMount& mount) { return mount.getSessionMessages(sid); }
+            );
         });
         return (out->data != nullptr) ? 0 : -1;
     });
@@ -564,8 +662,13 @@ static int64_t PLUGINXX_CALL xx_context_messages_count(
         }
         auto mgrPtr = mgr;
         auto sid    = *session_id;
-        return ioCallSyncKeep<int64_t>(call, mgrPtr, [mgrPtr, sid]() -> int64_t {
-            return mgrPtr->sessionMessagesCount(sid);
+        return ioCallSyncKeep<int64_t>(call, mgrPtr, [mgrPtr, sid, agent]() -> int64_t {
+            return mountCall(
+                mgrPtr,
+                agent,
+                [] { return int64_t{-1}; },
+                [sid](PluginMount& mount) { return mount.sessionMessagesCount(sid); }
+            );
         });
     });
 }
@@ -598,8 +701,10 @@ static void PLUGINXX_CALL xx_emit_message_tip(
         auto instPtr = inst;
         auto sid     = *session_id;
         auto txt     = *text;
-        ioCallSyncVoidKeep(call, mgrPtr, [mgrPtr, instPtr, sid, txt, level]() {
-            mgrPtr->emitMessageTip(instPtr, sid, txt, level);
+        ioCallSyncVoidKeep(call, mgrPtr, [mgrPtr, instPtr, sid, txt, level, agent]() {
+            if (auto* mount = mountIn(mgrPtr, agent); mount != nullptr) {
+                mount->emitMessageTip(instPtr, sid, txt, level);
+            }
         });
     });
 }
@@ -628,8 +733,10 @@ static int32_t PLUGINXX_CALL
         auto                           mgrPtr   = mgr;
         auto                           instPtr  = inst;
         AgentxxPluginGraphNodeTypeSpec specCopy = *spec;
-        return ioCallSyncKeep<int32_t>(call, mgrPtr, [mgrPtr, instPtr, specCopy]() {
-            return mgrPtr->registerGraphNodeType(instPtr, &specCopy);
+        return ioCallSyncKeep<int32_t>(call, mgrPtr, [mgrPtr, instPtr, specCopy, agent]() {
+            return mountCall(mgrPtr, agent, noAgent, [instPtr, specCopy](PluginMount& mount) {
+                return mount.registerGraphNodeType(instPtr, &specCopy);
+            });
         });
     });
 }
@@ -655,8 +762,9 @@ static int32_t PLUGINXX_CALL xx_get_graph_json(
             return -1;
         }
         auto mgrPtr = mgr;
-        auto json   = ioCallSyncKeep<std::string>(call, mgrPtr, [mgrPtr]() -> std::string {
-            return mgrPtr->getGraphJson();
+        auto json   = ioCallSyncKeep<std::string>(call, mgrPtr, [mgrPtr, agent]() -> std::string {
+            auto* mount = mountIn(mgrPtr, agent);
+            return mount != nullptr ? mount->getGraphJson() : std::string{};
         });
         if (json.empty()) {
             return -1;
@@ -685,8 +793,9 @@ static int32_t PLUGINXX_CALL xx_get_graph_name(
             return -1;
         }
         auto mgrPtr = mgr;
-        auto name   = ioCallSyncKeep<std::string>(call, mgrPtr, [mgrPtr]() -> std::string {
-            auto        json   = mgrPtr->getGraphJson();
+        auto name   = ioCallSyncKeep<std::string>(call, mgrPtr, [mgrPtr, agent]() -> std::string {
+            auto*       mount  = mountIn(mgrPtr, agent);
+            auto        json   = mount != nullptr ? mount->getGraphJson() : std::string{};
             std::string result = "agentxx.default";
             if (!json.empty()) {
                 try {
@@ -713,8 +822,10 @@ static int32_t PLUGINXX_CALL xx_unregister_node_type(
         return -1;
     }
     auto typeCopy = *type;
-    return onScopedInstanceIo(host, agent, [typeCopy](PluginInstance* inst, PluginManager* mgr) {
-        return mgr->unregisterGraphNodeType(inst, typeCopy);
+    return onScopedInstanceIo(host, agent, [agent, typeCopy](PluginInstance* inst, PluginManager* mgr) {
+        return mountCall(mgr, agent, noAgent, [inst, typeCopy](PluginMount& mount) {
+            return mount.unregisterGraphNodeType(inst, typeCopy);
+        });
     });
 }
 
@@ -727,8 +838,10 @@ static int32_t PLUGINXX_CALL xx_set_graph_json(
         return -1;
     }
     auto jsonValCopy = *graph_json;
-    return onScopedInstanceIo(host, agent, [jsonValCopy](PluginInstance* inst, PluginManager* mgr) {
-        return mgr->setGraphJson(inst, jsonValCopy);
+    return onScopedInstanceIo(host, agent, [agent, jsonValCopy](PluginInstance* inst, PluginManager* mgr) {
+        return mountCall(mgr, agent, noAgent, [inst, jsonValCopy](PluginMount& mount) {
+            return mount.setGraphJson(inst, jsonValCopy);
+        });
     });
 }
 
@@ -739,8 +852,9 @@ static int32_t PLUGINXX_CALL xx_feature_list_points(
     const PluginxxScopeRef* agent,
     PluginxxString*         out
 ) {
-    return queryScopedStringIo(host, agent, out, [](PluginInstance*, PluginManager* mgr) {
-        return mgr->listFeaturePoints();
+    return queryScopedStringIo(host, agent, out, [agent](PluginInstance*, PluginManager* mgr) {
+        auto* mount = mountIn(mgr, agent);
+        return mount != nullptr ? mount->listFeaturePoints() : std::string{};
     });
 }
 
@@ -753,8 +867,10 @@ static int32_t PLUGINXX_CALL xx_feature_define_point(
         return -1;
     }
     auto specCopy = *spec;
-    return onScopedInstanceIo(host, agent, [specCopy](PluginInstance* inst, PluginManager* mgr) {
-        return mgr->defineFeaturePoint(inst, &specCopy);
+    return onScopedInstanceIo(host, agent, [agent, specCopy](PluginInstance* inst, PluginManager* mgr) {
+        return mountCall(mgr, agent, noAgent, [inst, specCopy](PluginMount& mount) {
+            return mount.defineFeaturePoint(inst, &specCopy);
+        });
     });
 }
 
@@ -767,8 +883,10 @@ static int32_t PLUGINXX_CALL xx_feature_undefine_point(
         return -1;
     }
     auto idCopy = *point_id;
-    return onScopedInstanceIo(host, agent, [idCopy](PluginInstance* inst, PluginManager* mgr) {
-        return mgr->undefineFeaturePoint(inst, idCopy);
+    return onScopedInstanceIo(host, agent, [agent, idCopy](PluginInstance* inst, PluginManager* mgr) {
+        return mountCall(mgr, agent, noAgent, [inst, idCopy](PluginMount& mount) {
+            return mount.undefineFeaturePoint(inst, idCopy);
+        });
     });
 }
 
@@ -781,8 +899,10 @@ static int32_t PLUGINXX_CALL xx_feature_register_impl(
         return -1;
     }
     auto specCopy = *spec;
-    return onScopedInstanceIo(host, agent, [specCopy](PluginInstance* inst, PluginManager* mgr) {
-        return mgr->registerFeatureImpl(inst, &specCopy);
+    return onScopedInstanceIo(host, agent, [agent, specCopy](PluginInstance* inst, PluginManager* mgr) {
+        return mountCall(mgr, agent, noAgent, [inst, specCopy](PluginMount& mount) {
+            return mount.registerFeatureImpl(inst, &specCopy);
+        });
     });
 }
 
@@ -795,8 +915,10 @@ static int32_t PLUGINXX_CALL xx_feature_unregister_impl(
         return -1;
     }
     auto idCopy = *point_id;
-    return onScopedInstanceIo(host, agent, [idCopy](PluginInstance* inst, PluginManager* mgr) {
-        return mgr->unregisterFeatureImpl(inst, idCopy);
+    return onScopedInstanceIo(host, agent, [agent, idCopy](PluginInstance* inst, PluginManager* mgr) {
+        return mountCall(mgr, agent, noAgent, [inst, idCopy](PluginMount& mount) {
+            return mount.unregisterFeatureImpl(inst, idCopy);
+        });
     });
 }
 
@@ -821,7 +943,12 @@ static ::PluginxxOperatorHandle* PLUGINXX_CALL xx_feature_call_point_async(
             hostMemorySetString(error_out, "call_point_async: agent reference is invalid");
             return static_cast<::PluginxxOperatorHandle*>(nullptr);
         }
-        return mgr->callFeatureAsync(
+        auto* mount = mountIn(mgr, agent);
+        if (mount == nullptr) {
+            hostMemorySetString(error_out, "call_point_async: agent reference is invalid");
+            return static_cast<::PluginxxOperatorHandle*>(nullptr);
+        }
+        return mount->callFeatureAsync(
             inst,
             *point_id,
             args_json ? *args_json : PluginxxStringView{},
@@ -834,8 +961,9 @@ static ::PluginxxOperatorHandle* PLUGINXX_CALL xx_feature_call_point_async(
 
 static int32_t PLUGINXX_CALL
     xx_get_prompt(const PluginxxHost* host, const PluginxxScopeRef* agent, PluginxxString* out) {
-    return queryScopedStringIo(host, agent, out, [](PluginInstance* inst, PluginManager* mgr) {
-        return mgr->getPromptJson();
+    return queryScopedStringIo(host, agent, out, [agent](PluginInstance* inst, PluginManager* mgr) {
+        auto* mount = mountIn(mgr, agent);
+        return mount != nullptr ? mount->getPromptJson() : std::string{};
     });
 }
 
@@ -848,14 +976,16 @@ static int32_t PLUGINXX_CALL xx_set_prompt(
         return -1;
     }
     auto pJsonCopy = *prompt_json;
-    return onScopedInstanceIo(host, agent, [pJsonCopy](PluginInstance* inst, PluginManager* mgr) {
-        return mgr->setPromptJson(inst, pJsonCopy);
+    return onScopedInstanceIo(host, agent, [agent, pJsonCopy](PluginInstance* inst, PluginManager* mgr) {
+        return mountCall(mgr, agent, noAgent, [inst, pJsonCopy](PluginMount& mount) {
+            return mount.setPromptJson(inst, pJsonCopy);
+        });
     });
 }
 
 static int32_t PLUGINXX_CALL
     xx_model_get_config(const PluginxxHost* host, const PluginxxScopeRef* agent, PluginxxString* out) {
-    return queryScopedStringIo(host, agent, out, [](PluginInstance* inst, PluginManager* mgr) {
+    return queryScopedStringIo(host, agent, out, [agent](PluginInstance* inst, PluginManager* mgr) {
         return mgr->getModelConfigJson();
     });
 }
@@ -869,8 +999,10 @@ static int32_t PLUGINXX_CALL xx_register_skill_dir(
         return -1;
     }
     auto pathValCopy = *path;
-    return onScopedInstanceIo(host, agent, [pathValCopy](PluginInstance* inst, PluginManager* mgr) {
-        return mgr->registerSkillDir(inst, pathValCopy);
+    return onScopedInstanceIo(host, agent, [agent, pathValCopy](PluginInstance* inst, PluginManager* mgr) {
+        return mountCall(mgr, agent, noAgent, [inst, pathValCopy](PluginMount& mount) {
+            return mount.registerSkillDir(inst, pathValCopy);
+        });
     });
 }
 
@@ -883,8 +1015,10 @@ static int32_t PLUGINXX_CALL xx_unregister_skill_dir(
         return -1;
     }
     auto pathValCopy = *path;
-    return onScopedInstanceIo(host, agent, [pathValCopy](PluginInstance* inst, PluginManager* mgr) {
-        return mgr->unregisterSkillDir(inst, pathValCopy);
+    return onScopedInstanceIo(host, agent, [agent, pathValCopy](PluginInstance* inst, PluginManager* mgr) {
+        return mountCall(mgr, agent, noAgent, [inst, pathValCopy](PluginMount& mount) {
+            return mount.unregisterSkillDir(inst, pathValCopy);
+        });
     });
 }
 
@@ -897,8 +1031,10 @@ static int32_t PLUGINXX_CALL xx_register_memory_file(
         return -1;
     }
     auto pathValCopy = *path;
-    return onScopedInstanceIo(host, agent, [pathValCopy](PluginInstance* inst, PluginManager* mgr) {
-        return mgr->registerMemoryFile(inst, pathValCopy);
+    return onScopedInstanceIo(host, agent, [agent, pathValCopy](PluginInstance* inst, PluginManager* mgr) {
+        return mountCall(mgr, agent, noAgent, [inst, pathValCopy](PluginMount& mount) {
+            return mount.registerMemoryFile(inst, pathValCopy);
+        });
     });
 }
 
@@ -911,8 +1047,10 @@ static int32_t PLUGINXX_CALL xx_unregister_memory_file(
         return -1;
     }
     auto pathValCopy = *path;
-    return onScopedInstanceIo(host, agent, [pathValCopy](PluginInstance* inst, PluginManager* mgr) {
-        return mgr->unregisterMemoryFile(inst, pathValCopy);
+    return onScopedInstanceIo(host, agent, [agent, pathValCopy](PluginInstance* inst, PluginManager* mgr) {
+        return mountCall(mgr, agent, noAgent, [inst, pathValCopy](PluginMount& mount) {
+            return mount.unregisterMemoryFile(inst, pathValCopy);
+        });
     });
 }
 
@@ -925,8 +1063,10 @@ static int32_t PLUGINXX_CALL xx_register_mcp_server(
         return -1;
     }
     auto specValCopy = *spec_json;
-    return onScopedInstanceIo(host, agent, [specValCopy](PluginInstance* inst, PluginManager* mgr) {
-        return mgr->registerMcpServer(inst, specValCopy);
+    return onScopedInstanceIo(host, agent, [agent, specValCopy](PluginInstance* inst, PluginManager* mgr) {
+        return mountCall(mgr, agent, noAgent, [inst, specValCopy](PluginMount& mount) {
+            return mount.registerMcpServer(inst, specValCopy);
+        });
     });
 }
 
@@ -939,8 +1079,10 @@ static int32_t PLUGINXX_CALL xx_unregister_mcp_server(
         return -1;
     }
     auto nsValCopy = *name_space;
-    return onScopedInstanceIo(host, agent, [nsValCopy](PluginInstance* inst, PluginManager* mgr) {
-        return mgr->unregisterMcpServer(inst, nsValCopy);
+    return onScopedInstanceIo(host, agent, [agent, nsValCopy](PluginInstance* inst, PluginManager* mgr) {
+        return mountCall(mgr, agent, noAgent, [inst, nsValCopy](PluginMount& mount) {
+            return mount.unregisterMcpServer(inst, nsValCopy);
+        });
     });
 }
 
@@ -949,8 +1091,9 @@ static int32_t PLUGINXX_CALL xx_get_own_resources(
     const PluginxxScopeRef* agent,
     PluginxxString*         out
 ) {
-    return queryScopedStringIo(host, agent, out, [](PluginInstance* inst, PluginManager* mgr) {
-        return mgr->ownResourcesJson(inst);
+    return queryScopedStringIo(host, agent, out, [agent](PluginInstance* inst, PluginManager* mgr) {
+        auto* mount = mountIn(mgr, agent);
+        return mount != nullptr ? mount->ownResourcesJson(inst) : std::string{};
     });
 }
 
@@ -1114,7 +1257,7 @@ static std::shared_ptr<agentxx::agent::AgentResourceApplier> getResourceApplier(
     return ctx->resourceApplier;
 }
 
-int PluginManager::registerSkillDir(PluginInstance* inst, PluginxxStringView path) {
+int PluginMount::registerSkillDir(PluginInstance* inst, PluginxxStringView path) {
     if (!inst || agentxx::plugin::PluginStringView::empty(&path)) {
         return -1;
     }
@@ -1125,14 +1268,14 @@ int PluginManager::registerSkillDir(PluginInstance* inst, PluginxxStringView pat
         );
         return -1;
     }
-    if (inst->resourcesFrozen) {
+    if (resourcesFrozen(inst)) {
         XX_LOGW(
             "Plugin `{}` registerSkillDir rejected: resources frozen (immutable after init)",
             inst->name
         );
         return -1;
     }
-    auto ap = getResourceApplier(agentContext_, "register_skill_dir");
+    auto ap = getResourceApplier(agent_, "register_skill_dir");
     if (!ap) {
         return -1;
     }
@@ -1146,18 +1289,18 @@ int PluginManager::registerSkillDir(PluginInstance* inst, PluginxxStringView pat
     return 0;
 }
 
-int PluginManager::unregisterSkillDir(PluginInstance* inst, PluginxxStringView path) {
+int PluginMount::unregisterSkillDir(PluginInstance* inst, PluginxxStringView path) {
     if (!inst || agentxx::plugin::PluginStringView::empty(&path)) {
         return -1;
     }
-    if (inst->resourcesFrozen) {
+    if (resourcesFrozen(inst)) {
         XX_LOGW(
             "Plugin `{}` unregisterSkillDir rejected: resources frozen (immutable after init)",
             inst->name
         );
         return -1;
     }
-    auto ap = getResourceApplier(agentContext_, "unregister_skill_dir");
+    auto ap = getResourceApplier(agent_, "unregister_skill_dir");
     if (!ap) {
         return -1;
     }
@@ -1169,7 +1312,7 @@ int PluginManager::unregisterSkillDir(PluginInstance* inst, PluginxxStringView p
     return 0;
 }
 
-int PluginManager::registerMemoryFile(PluginInstance* inst, PluginxxStringView path) {
+int PluginMount::registerMemoryFile(PluginInstance* inst, PluginxxStringView path) {
     if (!inst || agentxx::plugin::PluginStringView::empty(&path)) {
         return -1;
     }
@@ -1180,14 +1323,14 @@ int PluginManager::registerMemoryFile(PluginInstance* inst, PluginxxStringView p
         );
         return -1;
     }
-    if (inst->resourcesFrozen) {
+    if (resourcesFrozen(inst)) {
         XX_LOGW(
             "Plugin `{}` registerMemoryFile rejected: resources frozen (immutable after init)",
             inst->name
         );
         return -1;
     }
-    auto ap = getResourceApplier(agentContext_, "register_memory_file");
+    auto ap = getResourceApplier(agent_, "register_memory_file");
     if (!ap) {
         return -1;
     }
@@ -1201,18 +1344,18 @@ int PluginManager::registerMemoryFile(PluginInstance* inst, PluginxxStringView p
     return 0;
 }
 
-int PluginManager::unregisterMemoryFile(PluginInstance* inst, PluginxxStringView path) {
+int PluginMount::unregisterMemoryFile(PluginInstance* inst, PluginxxStringView path) {
     if (!inst || agentxx::plugin::PluginStringView::empty(&path)) {
         return -1;
     }
-    if (inst->resourcesFrozen) {
+    if (resourcesFrozen(inst)) {
         XX_LOGW(
             "Plugin `{}` unregisterMemoryFile rejected: resources frozen (immutable after init)",
             inst->name
         );
         return -1;
     }
-    auto ap = getResourceApplier(agentContext_, "unregister_memory_file");
+    auto ap = getResourceApplier(agent_, "unregister_memory_file");
     if (!ap) {
         return -1;
     }
@@ -1224,7 +1367,7 @@ int PluginManager::unregisterMemoryFile(PluginInstance* inst, PluginxxStringView
     return 0;
 }
 
-int PluginManager::registerMcpServer(PluginInstance* inst, PluginxxStringView specJson) {
+int PluginMount::registerMcpServer(PluginInstance* inst, PluginxxStringView specJson) {
     if (!inst || agentxx::plugin::PluginStringView::empty(&specJson)) {
         return -1;
     }
@@ -1235,14 +1378,14 @@ int PluginManager::registerMcpServer(PluginInstance* inst, PluginxxStringView sp
         );
         return -1;
     }
-    if (inst->resourcesFrozen) {
+    if (resourcesFrozen(inst)) {
         XX_LOGW(
             "Plugin `{}` registerMcpServer rejected: resources frozen (immutable after init)",
             inst->name
         );
         return -1;
     }
-    auto ap = getResourceApplier(agentContext_, "register_mcp_server");
+    auto ap = getResourceApplier(agent_, "register_mcp_server");
     if (!ap) {
         return -1;
     }
@@ -1276,18 +1419,18 @@ int PluginManager::registerMcpServer(PluginInstance* inst, PluginxxStringView sp
     }
 }
 
-int PluginManager::unregisterMcpServer(PluginInstance* inst, PluginxxStringView nameSpace) {
+int PluginMount::unregisterMcpServer(PluginInstance* inst, PluginxxStringView nameSpace) {
     if (!inst || agentxx::plugin::PluginStringView::empty(&nameSpace)) {
         return -1;
     }
-    if (inst->resourcesFrozen) {
+    if (resourcesFrozen(inst)) {
         XX_LOGW(
             "Plugin `{}` unregisterMcpServer rejected: resources frozen (immutable after init)",
             inst->name
         );
         return -1;
     }
-    auto ap = getResourceApplier(agentContext_, "unregister_mcp_server");
+    auto ap = getResourceApplier(agent_, "unregister_mcp_server");
     if (!ap) {
         return -1;
     }
@@ -1299,11 +1442,11 @@ int PluginManager::unregisterMcpServer(PluginInstance* inst, PluginxxStringView 
     return 0;
 }
 
-std::string PluginManager::ownResourcesJson(const PluginInstance* inst) {
+std::string PluginMount::ownResourcesJson(const PluginInstance* inst) {
     if (!inst) {
         return {};
     }
-    auto c = agentContext_.lock();
+    auto c = agent_.lock();
     if (!c || !c->resourceApplier) {
         return {};
     }
@@ -1331,31 +1474,8 @@ void PluginManager::applyDeclaredResources(
     inst.manifestResources = resources;
 }
 
-void PluginManager::applyManifestResourcesNow(PluginInstance& inst) {
-    const auto& resources = inst.manifestResources;
-    if (resources.skillDirs.empty() && resources.memoryFiles.empty()
-        && resources.mcpServers.empty()) {
-        return;
-    }
-    auto ctx = agentContext_.lock();
-    if (!ctx || !ctx->resourceApplier) {
-        XX_LOGW("Plugin `{}` declared resources skipped (no resource applier)", inst.name);
-        return;
-    }
-    agentxx::agent::PluginResourceDecls decls;
-    decls.skillDirs   = resources.skillDirs;
-    decls.memoryFiles = resources.memoryFiles;
-    for (const auto& [ns, d] : resources.mcpServers) {
-        agentxx::agent::McpServerConfig cfg;
-        cfg.url              = d.url;
-        cfg.toolTimeout      = std::chrono::milliseconds{d.timeoutMs};
-        decls.mcpServers[ns] = cfg;
-    }
-    ctx->resourceApplier->applyDecls(inst.name, decls);
-}
-
-std::string PluginManager::getPromptJson() {
-    auto c = agentContext_.lock();
+std::string PluginMount::getPromptJson() {
+    auto c = agent_.lock();
     if (!c || !c->agentConfig) {
         return {};
     }
@@ -1364,7 +1484,7 @@ std::string PluginManager::getPromptJson() {
 
 namespace {
 
-/// prompt 贡献模型内部工具（见 [PluginManager::PromptKeyState]）。
+/// prompt 贡献模型内部工具（见 [PluginMount::PromptKeyState]）。
 ///
 /// 键名约定：
 /// - `system`          -> agentConfig->prompt.systemPrompt
@@ -1383,9 +1503,9 @@ std::string promptToolKey(const std::string& toolName) {
 }
 
 /// 读取键当前值（`nullopt` = 键不存在）。
-std::optional<PluginManager::PromptValue>
+std::optional<PluginMount::PromptValue>
     readPromptKey(const agentxx::agent::AgentPrompt& prompt, const std::string& key) {
-    PluginManager::PromptValue value;
+    PluginMount::PromptValue value;
     if (key == promptSystemKey()) {
         // systemPrompt 始终存在（空串表示没有系统提示词）。
         value.isTool = false;
@@ -1419,7 +1539,7 @@ std::optional<PluginManager::PromptValue>
 void writePromptKey(
     agentxx::agent::AgentPrompt&                     prompt,
     const std::string&                               key,
-    const std::optional<PluginManager::PromptValue>& value
+    const std::optional<PluginMount::PromptValue>& value
 ) {
     if (key == promptSystemKey()) {
         prompt.systemPrompt = (value && !value->isTool) ? value->text : std::string{};
@@ -1446,8 +1566,8 @@ void writePromptKey(
 
 /// 两次取值是否相同（用于发现"主程序之外"的修改并 rebase 基础值）。
 bool samePromptValue(
-    const std::optional<PluginManager::PromptValue>& a,
-    const std::optional<PluginManager::PromptValue>& b
+    const std::optional<PluginMount::PromptValue>& a,
+    const std::optional<PluginMount::PromptValue>& b
 ) {
     if (a.has_value() != b.has_value()) {
         return false;
@@ -1472,11 +1592,11 @@ bool samePromptValue(
 
 /// 把 toolPrompt JSON 子对象合并到已有值上（与 AgentPrompt::mergeFromJson 的
 /// 部分覆盖语义一致：只覆盖出现的 depict/args 子字段）。
-PluginManager::PromptValue mergeToolPromptValue(
-    const std::optional<PluginManager::PromptValue>& current,
+PluginMount::PromptValue mergeToolPromptValue(
+    const std::optional<PluginMount::PromptValue>& current,
     const utilxx_base::Json&                         spec
 ) {
-    PluginManager::PromptValue value;
+    PluginMount::PromptValue value;
     value.isTool = true;
     agentxx::agent::ToolPrompt tool;
     if (current && current->isTool && current->tool.has_value()) {
@@ -1502,8 +1622,8 @@ PluginManager::PromptValue mergeToolPromptValue(
 
 /// 重新合成单个 prompt 键的有效值：
 ///   基础值（首次贡献前；被外部修改时 rebase）⊕ 按 sequence 顺序的全部存活贡献
-void PluginManager::recomposePromptKey(const std::string& key) {
-    auto c = agentContext_.lock();
+void PluginMount::recomposePromptKey(const std::string& key) {
+    auto c = agent_.lock();
     if (!c || !c->agentConfig) {
         return;
     }
@@ -1538,7 +1658,7 @@ void PluginManager::recomposePromptKey(const std::string& key) {
     state.applied = effective;
 }
 
-void PluginManager::removePromptContributions(std::string_view owner) {
+void PluginMount::removePromptContributions(std::string_view owner) {
     const std::string        ownerName{owner};
     std::vector<std::string> touched;
     for (auto& [key, state] : promptKeys_) {
@@ -1551,7 +1671,7 @@ void PluginManager::removePromptContributions(std::string_view owner) {
     }
 }
 
-int PluginManager::setPromptJson(PluginInstance* inst, PluginxxStringView prompt_json) {
+int PluginMount::setPromptJson(PluginInstance* inst, PluginxxStringView prompt_json) {
     if (!inst || agentxx::plugin::PluginStringView::empty(&prompt_json)) {
         return -1;
     }
@@ -1559,7 +1679,7 @@ int PluginManager::setPromptJson(PluginInstance* inst, PluginxxStringView prompt
         XX_LOGW("Plugin `{}` setPromptJson rejected: instance is closing or disabled", inst->name);
         return -1;
     }
-    auto c = agentContext_.lock();
+    auto c = agent_.lock();
     if (!c || !c->agentConfig) {
         return -1;
     }
@@ -1631,11 +1751,11 @@ std::string PluginManager::getPluginConfigPath(PluginInstance* inst) {
 }
 
 PluginxxString
-    PluginManager::getShareStore(PluginInstance* inst, PluginxxStringView session_id, int64_t id) {
+    PluginMount::getShareStore(PluginInstance* inst, PluginxxStringView session_id, int64_t id) {
     if (!inst || agentxx::plugin::PluginStringView::empty(&session_id) || id < 0) {
         return PluginxxString{nullptr, 0};
     }
-    auto ctx = agentContext_.lock();
+    auto ctx = agent_.lock();
     if (!ctx || !ctx->middlewareHandleContext) {
         return PluginxxString{nullptr, 0};
     }
@@ -1650,7 +1770,7 @@ PluginxxString
             );
         },
         [&](std::string errmsg) -> std::optional<std::string> {
-            XX_LOGD("PluginManager::getShareStore({}, {}) failed: {}", sid, id, errmsg);
+            XX_LOGD("PluginMount::getShareStore({}, {}) failed: {}", sid, id, errmsg);
             return std::nullopt;
         }
     );
@@ -1660,7 +1780,7 @@ PluginxxString
     return agentxx::plugin::hostMemoryCreateString(*val);
 }
 
-int64_t PluginManager::addShareStore(
+int64_t PluginMount::addShareStore(
     PluginInstance*    inst,
     PluginxxStringView session_id,
     PluginxxStringView content
@@ -1668,7 +1788,7 @@ int64_t PluginManager::addShareStore(
     if (!inst || agentxx::plugin::PluginStringView::empty(&session_id)) {
         return -1;
     }
-    auto ctx = agentContext_.lock();
+    auto ctx = agent_.lock();
     if (!ctx || !ctx->middlewareHandleContext) {
         return -1;
     }
@@ -1677,7 +1797,7 @@ int64_t PluginManager::addShareStore(
     return static_cast<int64_t>(ctx->middlewareHandleContext->addShareStoreItemValue(sid, text));
 }
 
-void PluginManager::emitMessageTip(
+void PluginMount::emitMessageTip(
     PluginInstance*    inst,
     PluginxxStringView session_id,
     PluginxxStringView text,
@@ -1687,7 +1807,7 @@ void PluginManager::emitMessageTip(
         || agentxx::plugin::PluginStringView::empty(&text)) {
         return;
     }
-    auto ctx = agentContext_.lock();
+    auto ctx = agent_.lock();
     if (!ctx) {
         return;
     }
@@ -1706,8 +1826,8 @@ void PluginManager::emitMessageTip(
     session->io->sendToPeer(delta);
 }
 
-PluginxxString PluginManager::getSessionMessages(PluginxxStringView session_id) {
-    auto ctx = agentContext_.lock();
+PluginxxString PluginMount::getSessionMessages(PluginxxStringView session_id) {
+    auto ctx = agent_.lock();
     if (!ctx || !ctx->sessions || agentxx::plugin::PluginStringView::empty(&session_id)) {
         return PluginxxString{nullptr, 0};
     }
@@ -1720,8 +1840,8 @@ PluginxxString PluginManager::getSessionMessages(PluginxxStringView session_id) 
     return agentxx::plugin::hostMemoryCreateString(jsonText);
 }
 
-int64_t PluginManager::sessionMessagesCount(PluginxxStringView session_id) {
-    auto ctx = agentContext_.lock();
+int64_t PluginMount::sessionMessagesCount(PluginxxStringView session_id) {
+    auto ctx = agent_.lock();
     if (!ctx || !ctx->sessions || agentxx::plugin::PluginStringView::empty(&session_id)) {
         return -1;
     }
@@ -1732,12 +1852,12 @@ int64_t PluginManager::sessionMessagesCount(PluginxxStringView session_id) {
     return static_cast<int64_t>(session->messagesCount());
 }
 
-size_t PluginManager::writeSessionMessages(
+size_t PluginMount::writeSessionMessages(
     std::string_view         session_id,
     const utilxx_base::Json& messages,
     bool                     overwrite
 ) {
-    auto ctx = agentContext_.lock();
+    auto ctx = agent_.lock();
     if (!ctx || !ctx->sessions || session_id.empty()) {
         return 0;
     }

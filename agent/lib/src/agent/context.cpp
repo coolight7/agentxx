@@ -130,11 +130,25 @@ asio::awaitable<bool> AgentContext::shutdownPluginsAsync(std::chrono::millisecon
     if (!pluginManager) {
         co_return true;
     }
+    // 先拆本 agent 的挂载 (驱动插件 unmount + 摘 agent 级注册 + 从主程序的挂载表移除)
+    if (pluginMount) {
+        co_await pluginManager->unmountAgentAsync(pluginMount->agentId());
+        pluginMount.reset();
+    }
     co_return co_await pluginManager->shutdownAsync(timeout);
 }
 
 AgentContext::~AgentContext() {
-    // 插件系统先卸载全部插件, 断开中间件↔实例循环引用
+    // 挂载必须随 agent 一起拆: 残留的挂载会让插件以为这个 agent 还在
+    if (pluginMount) {
+        XX_LOGW(
+            "AgentContext destroyed with plugin mount '{}' still attached; "
+            "the owner should await agent->shutdownAsync() first",
+            pluginMount->agentId()
+        );
+        pluginMount.reset();
+    }
+    // 插件管理器先卸载全部插件, 断开中间件↔实例循环引用
     // (handles 由 middlewareHandleContext 持有, 其析构晚于 pluginManager)
     if (pluginManager) {
         pluginManager->shutdownAll();

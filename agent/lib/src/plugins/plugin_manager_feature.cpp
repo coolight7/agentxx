@@ -142,7 +142,7 @@ struct ImplOps {
 // 实现登记
 // =====================================================================
 
-int PluginManager::registerFeatureImpl(
+int PluginMount::registerFeatureImpl(
     PluginInstance*                     inst,
     const AgentxxPluginFeatureImplSpec* spec
 ) {
@@ -154,7 +154,7 @@ int PluginManager::registerFeatureImpl(
         XX_LOGW("插件 `{}` 登记功能点实现被拒绝: struct_size 过小", inst->name);
         return -1;
     }
-    auto ctx = agentContext_.lock();
+    auto ctx = agent_.lock();
     if (!ctx || ctx->features == nullptr) {
         XX_LOGW("插件 `{}` 登记功能点实现被拒绝: 功能点注册表未加载", inst->name);
         return -1;
@@ -246,16 +246,16 @@ int PluginManager::registerFeatureImpl(
         return -1;
     }
     // 记账: 同一实例同一个点只保留一条记录 (重复登记 = 覆盖)
-    std::erase(inst->featurePointImpls, pointId);
-    inst->featurePointImpls.push_back(pointId);
+    std::erase(entryOf(inst).featureImpls, pointId);
+    entryOf(inst).featureImpls.push_back(pointId);
     return 0;
 }
 
-int PluginManager::unregisterFeatureImpl(PluginInstance* inst, PluginxxStringView pointId) {
+int PluginMount::unregisterFeatureImpl(PluginInstance* inst, PluginxxStringView pointId) {
     if (inst == nullptr) {
         return -1;
     }
-    auto ctx = agentContext_.lock();
+    auto ctx = agent_.lock();
     if (!ctx || ctx->features == nullptr) {
         return -1;
     }
@@ -264,7 +264,7 @@ int PluginManager::unregisterFeatureImpl(PluginInstance* inst, PluginxxStringVie
         return -1;
     }
     const size_t removed = ctx->features->removeImpl(id, featureOwnerOf(*inst));
-    std::erase(inst->featurePointImpls, id);
+    std::erase(entryOf(inst).featureImpls, id);
     return removed > 0 ? 0 : -1;
 }
 
@@ -272,7 +272,7 @@ int PluginManager::unregisterFeatureImpl(PluginInstance* inst, PluginxxStringVie
 // 插件点声明
 // =====================================================================
 
-int PluginManager::defineFeaturePoint(
+int PluginMount::defineFeaturePoint(
     PluginInstance*                      inst,
     const AgentxxPluginFeaturePointSpec* spec
 ) {
@@ -284,7 +284,7 @@ int PluginManager::defineFeaturePoint(
         XX_LOGW("插件 `{}` 声明功能点被拒绝: struct_size 过小", inst->name);
         return -1;
     }
-    auto ctx = agentContext_.lock();
+    auto ctx = agent_.lock();
     if (!ctx || ctx->features == nullptr) {
         return -1;
     }
@@ -302,16 +302,16 @@ int PluginManager::defineFeaturePoint(
     if (ctx->features->definePluginPoint(decl) != 0) {
         return -1;
     }
-    std::erase(inst->featurePoints, decl.id);
-    inst->featurePoints.push_back(decl.id);
+    std::erase(entryOf(inst).featurePoints, decl.id);
+    entryOf(inst).featurePoints.push_back(decl.id);
     return 0;
 }
 
-int PluginManager::undefineFeaturePoint(PluginInstance* inst, PluginxxStringView pointId) {
+int PluginMount::undefineFeaturePoint(PluginInstance* inst, PluginxxStringView pointId) {
     if (inst == nullptr) {
         return -1;
     }
-    auto ctx = agentContext_.lock();
+    auto ctx = agent_.lock();
     if (!ctx || ctx->features == nullptr) {
         return -1;
     }
@@ -328,14 +328,14 @@ int PluginManager::undefineFeaturePoint(PluginInstance* inst, PluginxxStringView
     if (ctx->features->undefinePluginPoint(id) != 0) {
         return -1;
     }
-    std::erase(inst->featurePoints, id);
+    std::erase(entryOf(inst).featurePoints, id);
     // 点没了, 它上面的实现记录一并失效
-    std::erase(inst->featurePointImpls, id);
+    std::erase(entryOf(inst).featureImpls, id);
     return 0;
 }
 
-std::string PluginManager::listFeaturePoints() {
-    auto ctx = agentContext_.lock();
+std::string PluginMount::listFeaturePoints() {
+    auto ctx = agent_.lock();
     if (!ctx || ctx->features == nullptr) {
         return utilxx_base::Json::object().dump();
     }
@@ -346,7 +346,7 @@ std::string PluginManager::listFeaturePoints() {
 // 调用
 // =====================================================================
 
-PluginxxOperatorHandle* PluginManager::callFeatureAsync(
+PluginxxOperatorHandle* PluginMount::callFeatureAsync(
     PluginInstance*          caller,
     PluginxxStringView       pointId,
     PluginxxStringView       argsJson,
@@ -358,14 +358,15 @@ PluginxxOperatorHandle* PluginManager::callFeatureAsync(
         setFeatureErrOut(caller, error_out, "call_point_async: invalid arguments");
         return nullptr;
     }
-    if (!isIoThread()) {
+    auto host = host_.lock();
+    if (!host || !host->isIoThread()) {
         // 非 IO 线程: 投递到 IO 线程再受理 (与工具互调同一条约定)
         auto self  = shared_from_this();
         auto owner = caller->self.lock();
         auto point = viewToStr(pointId);
         auto args  = viewToStr(argsJson);
         return ioCallSync<PluginxxOperatorHandle*>(
-            this,
+            host.get(),
             [self, owner, point, args, cb, ud, error_out] {
                 return self->callFeatureAsync(
                     owner.get(),
@@ -379,7 +380,7 @@ PluginxxOperatorHandle* PluginManager::callFeatureAsync(
         );
     }
 
-    auto ctx = agentContext_.lock();
+    auto ctx = agent_.lock();
     if (!ctx || ctx->features == nullptr) {
         setFeatureErrOut(caller, error_out, "call_point_async: feature registry unavailable");
         return nullptr;
@@ -434,7 +435,7 @@ PluginxxOperatorHandle* PluginManager::callFeatureAsync(
     // 跑实现链, 完成后经完成协议把结果 JSON 交给插件 (完成通知在 IO 线程发布)
     auto self = shared_from_this();
     asio::co_spawn(
-        ioExecutor(),
+        host->ioExecutor(),
         [jsonPoint, argsText, callerOwner, core]() -> asio::awaitable<void> {
             agentxx::feature::CallOptions opts;
             opts.caller = callerOwner;

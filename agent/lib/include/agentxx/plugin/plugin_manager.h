@@ -1,76 +1,47 @@
-#pragma once
+#ifndef AGENTXX_PLUGIN_PLUGIN_MANAGER_H
+#define AGENTXX_PLUGIN_PLUGIN_MANAGER_H
 
-#include "agentxx/middlewares/middleware.h"
 #include "agentxx/plugin/api/plugin_api.h"
 #include "agentxx/plugin/api/plugin_kit.h"
 #include "agentxx/plugin/plugin_framework.h"
 #include "agentxx/plugin/plugin_interfaces.h"
+#include "agentxx/plugin/plugin_mount.h"
 #include "agentxx/plugin/tool_registry.h"
 #include "agentxx/tools/tool.h"
 #include "asio/awaitable.hpp"
-#include "asio/steady_timer.hpp"
 #include "pluginxx/host/domain_hooks.h"
 #include "pluginxx/host/host_core.h"
 #include "pluginxx/host/manifest.h"
 #include "utilxx_base/json.h"
-#include <array>
-#include <atomic>
 #include <chrono>
 #include <functional>
-#include <map>
 #include <memory>
-#include <mutex>
-#include <optional>
 #include <string>
 #include <string_view>
-#include <unordered_map>
-#include <utility>
 #include <vector>
 
 namespace agentxx {
 namespace agent {
 class AgentContext;
-class AgentResourceApplier;
-} // namespace agent
-
-namespace feature {
-class Registry;
 }
-
-namespace events {
-class EventBus;
-}
-
-namespace middleware {
-class PermissionMiddlewareHandle;
-}
-
 namespace plugin {
 
-class PluginManager;
-// CapabilityRegistry 由 cxx_pluginxx 提供 (见 agentxx/plugin/plugin_framework.h 的 using 引入)
-class PluginHookDispatchHandle;
-class PluginTool;
 class PluginInstance;
+class PluginManager;
+class PluginMount;
+class PluginTool;
 struct GraphTypeSlot;
 
-} // namespace plugin
-} // namespace agentxx
-
-// 事件订阅句柄的实现体 (C ABI 不透明句柄 `PluginxxSubscription*`) 由
-// cxx_pluginxx 提供 (事件表是通用表): 见 `pluginxx/host/event_bus.h`。
-// 句柄字段为插件框架类型 (EventSource / 插件实例基类弱引用), 因此事件表的订阅与撤销
-// 实现整体位于插件框架; agentxx 只提供事件后端适配 (AgentEventBusSource, 见
-// plugin_manager_adapters.cpp) 与主题命名规则。
-
-namespace agentxx {
-namespace plugin {
-
 /* ==================== 内置插件清单 (跨 TU 导出声明, 保持 C 链接) ==================== */
-/// - 由 agent/plugins/builtin_plugins.cpp.in 编译时收集内置插件列表，并添加实现函数
+/// - 由 agent/plugins/builtin_plugins.cpp.in 编译时收集内置插件列表, 并添加实现函数
 const PluginxxBuiltinInfo*     get_builtin_plugins(uint64_t* count);
 const PluginxxBuiltinManifest* get_builtin_manifests(uint64_t* count);
 
+/// 一个已加载的插件实例 (进程一份)
+///
+/// 本类只放**与 agent 无关**的东西: 加载元信息、插件上下文、生命周期入口。
+/// 凡是落在某个 agent 上的东西 (工具/权限/钩子/提示词/功能点/图/资源/挂载状态)
+/// 都在 [PluginMount::Entry] 里 —— 同一个实例可以同时挂在多个 agent 上, 各自一份。
 class PluginInstance : public PluginInstanceBase {
 public:
 
@@ -80,62 +51,42 @@ public:
     /// 接口声明 (plugin.yaml `interfaces`; 加载时随 manifest 解析传入,
     /// 直连库路径为空) —— 经 list() 暴露供展示/排查
     PluginManifestInterfaces interfaces;
-    /// 资源冻结标志: 挂载期间允许注册 skill/memory/mcp (它们属于 agent 级注册),
-    /// 挂载完成后冻结; 拆挂载后解冻以便重新挂载时再次声明
-    bool resourcesFrozen = false;
 
     /// 清单声明的资源 (plugin.yaml 的 skill/memory/mcp)
     /// - 由加载阶段记下来, 在**每次挂载**时应用到该 agent 的资源应用器 (每挂载一份)
     plugin::PluginManifestResources manifestResources;
-
-    struct HookRegistration {
-        int32_t point = 0; ///< 钩子点 (AgentxxPluginHookPoint)
-        /// 钩子注册表里的处理器句柄; 0 = 已摘除 (挂载卸载中)
-        int64_t handle = 0;
-    };
 
     /// 已声明能力记录 (名称 / 启动回调 / 取消回调 / 上下文)
     /// - 类型本体在 cxx_pluginxx (能力表是通用表), 登记与撤销由主程序核心统一维护
     ///   (见 [pluginxx::PluginHostCore])
     using CapabilityRegistration = pluginxx::PluginCapabilityRegistration;
 
-    struct GraphNodeTypeRegistration {
-        std::string                       type;
-        AgentxxPluginGraphNodeRunStartFn  run_start  = nullptr;
-        AgentxxPluginGraphNodeRunCancelFn run_cancel = nullptr;
-        void*                             user_data  = nullptr;
-        std::string                       config_schema_json;
-        std::shared_ptr<GraphTypeSlot>    slot;
-    };
-
-    std::vector<std::string> toolNames;
-    /// 已声明权限限制的工具名 (随工具注销/实例禁用卸载一并撤销)
-    std::vector<std::string> permissionToolNames;
-    /// 本实例登记的钩子处理器 (句柄式; 顺序 = 登记顺序)
-    std::vector<HookRegistration>          hookRegistrations;
-    std::vector<GraphNodeTypeRegistration> graphNodeTypes;
-    /// 本实例声明的功能点 id (`plugin.<自己>.*`; 禁用摘生效, 卸载全摘)
-    std::vector<std::string> featurePoints;
-    /// 本实例登记的功能点实现所在点 id (同一实例同一个点只保留一个实现)
-    std::vector<std::string> featurePointImpls;
-
     /// 插件侧挂载入口 (加载时解析; 缺失 = 该插件无 agent 侧能力)
     AgentxxPluginAgentMountFn   mountFn   = nullptr;
     AgentxxPluginAgentUnmountFn unmountFn = nullptr;
-    /// 插件 mount 返回的 per-agent 状态 (卸载时原样交回)
-    void* mountUserData = nullptr;
-    /// 本次挂载的序号 (`PluginManager::mountSequence()`; 0 = 未挂载)
-    uint64_t mountSeq = 0;
-    /// 插件 mount 是否已成功 (没有 mount 入口 = true)
-    bool pluginMounted = false;
+
+    /// 本实例的全部挂载 (弱引用; 诊断与"这个插件挂在谁身上"用)
+    std::vector<std::weak_ptr<PluginMount>> mounts;
 
     /// 加载总耗时 (毫秒; 由 PluginManager 记录)
     uint64_t loadMs = 0;
 
-    /// 通用表相关登记 (事件订阅 / 睡眠句柄 / 能力声明) 由基类持有, 见
-    /// [pluginxx::PluginInstanceBase]: 通用表实现只依赖基类, 新增主程序无需重复实现。
+    // ---- 挂载记录的只读视图 (诊断 / 测试 / 清单用; 每次调用返回合并后的拷贝) ----
+    //
+    // 注册记录本身按挂载分开保存在 [PluginMount::Entry] 里 (同一实例挂到多个 agent
+    // 时各一份); 这些入口把全部挂载的记录合并成一份, 只适合展示与断言, 不要用它做
+    // 撤销判断。空 = 没有任何挂载记录。
 
-    std::vector<std::shared_ptr<PluginTool>> tools;
+    /// 是否至少有一个挂载成功了本实例
+    bool anyMounted() const;
+    /// 全部挂载上登记的工具名
+    std::vector<std::string> allToolNames() const;
+    /// 全部挂载上的工具对象
+    std::vector<std::shared_ptr<PluginTool>> allToolObjects() const;
+    /// 全部挂载上登记的钩子处理器句柄
+    std::vector<int64_t> allHookHandles() const;
+    /// 全部挂载上登记的图节点类型槽位
+    std::vector<std::shared_ptr<GraphTypeSlot>> allGraphSlots() const;
 
     std::weak_ptr<PluginInstance> self{};
     std::weak_ptr<PluginManager>  manager{};
@@ -151,6 +102,7 @@ public:
     }
 };
 
+/// 插件工具 (本挂载上注册的一个工具)
 class PluginTool : public agentxx::tools::XXToolBase {
 public:
 
@@ -182,66 +134,20 @@ private:
     std::weak_ptr<PluginInstance> instance_;
 };
 
-/// 主程序级钩子派发器 (中间件链上只挂这一个)
-///
-/// 挂钩子的中间件句柄从"每个插件一个"改成"主程序一个": 注册表 (见
-/// [PluginManager::hookHandlers_]) 按 `(层, priority, 登记序号)` 排序后由本句柄
-/// 依次执行处理器 —— 同一个点的处理器串行、都在主程序 io 线程、异常只记日志继续。
-///
-/// - 首次登记时插入中间件链, 没有处理器时移除 (轮次执行中先置 `disabled` 跳过,
-///   轮末由 [PluginManager::flushPendingCleanup] 摘除);
-/// - 处理器列表在派发开始时取快照: 处理器在派发过程中登记/撤销不影响本次派发
-///   (撤销后已快照的处理器仍会执行一次, 但每次执行前仍检查实例是否可用)。
-class PluginHookDispatchHandle
-    : public agentxx::middleware::BaseMiddlewareHandle<agentxx::middleware::BaseMiddlewareState> {
-public:
-
-    PluginHookDispatchHandle(
-        std::string_view                            name,
-        std::weak_ptr<agentxx::agent::AgentContext> agentContext,
-        std::weak_ptr<PluginManager>                manager
-    ) :
-        BaseMiddlewareHandle(name, std::move(agentContext)),
-        manager_(std::move(manager)) {}
-
-    PluginHookDispatchHandle(const PluginHookDispatchHandle&)            = delete;
-    PluginHookDispatchHandle& operator=(const PluginHookDispatchHandle&) = delete;
-
-    asio::awaitable<void> onAgentcallStartFunc(neograph::graph::NodeInput& in) override;
-    asio::awaitable<void> onAgentcallEndFunc(
-        const neograph::graph::NodeInput& in,
-        neograph::graph::NodeOutput&      result
-    ) override;
-    asio::awaitable<void> onModelcallStartFunc(neograph::graph::NodeInput& in) override;
-    asio::awaitable<void> onModelcallRunFunc(neograph::graph::NodeInput& in) override;
-    asio::awaitable<void> onModelcallEndFunc(
-        const neograph::graph::NodeInput& in,
-        neograph::graph::NodeOutput&      result
-    ) override;
-    asio::awaitable<void> onToolcallStartFunc(neograph::graph::NodeInput& in) override;
-    asio::awaitable<void> onToolcallEndFunc(
-        const neograph::graph::NodeInput& in,
-        neograph::graph::NodeOutput&      result
-    ) override;
-
-private:
-
-    std::weak_ptr<PluginManager> manager_;
-};
-
-/// 插件管理器 (agent 侧主程序)
+/// 插件管理器 (agent 侧主程序, 进程一份)
 ///
 /// - 通用部分 (log/json/config/plugins/events/scheduler/coroutine_runtime/tasks/
 ///   cancel/capabilities 十张通用表的状态与实现) 继承自
 ///   [pluginxx::PluginHostCore], 业务数据经 [pluginxx::DomainHooks] 提供;
 /// - 加载/启停/禁用启用/卸载/级联依赖骨架继承自
 ///   [pluginxx::PluginHostLifecycle] (与主程序业务无关, 见 pluginxx/host/lifecycle.h);
-/// - 本类只保留业务部分: 工具/权限/钩子/会话/模型/提示词/资源/图 的注册与实现,
-///   以及上面两层需要主程序数据的扩展点 (见下方 protected 段的扩展点覆写)。
+/// - 本类只保留**与 agent 无关**的部分: 实例表、挂载表、插件侧接口表的 vtable 分发、
+///   以及上面两层需要主程序数据的扩展点。落在某个 agent 上的注册与撤销全部在
+///   [PluginMount] 里。
 ///
 /// 因此 `unloadAsync` / `shutdownAsync` / `shutdownAll` / `disable` / `enable` /
 /// `detachAll` / `detachInstanceRegistrations` / `clearPluginOwnedRegistrations` /
-/// `stopForDisable` / `startForEnable` / `hasPendingClose` 都是继承来的, 调用点不变。
+/// `stopForDisable` / `startForEnable` / `hasPendingClose` 都是继承来的。
 class PluginManager : public pluginxx::PluginHostLifecycle<PluginInstance>,
                       public std::enable_shared_from_this<PluginManager>,
                       public pluginxx::DomainHooks {
@@ -256,6 +162,7 @@ public:
     ///   (测试模块 `boundaries` 会校验三者一致)
     inline static constexpr size_t kInterfaceTableCount = 10 + 11;
 
+    /// 清单行 (诊断与界面展示; 主程序视图)
     struct PluginListView {
         std::string              name;
         std::string              version;
@@ -301,64 +208,125 @@ public:
         size_t mcpNamespaceCount = 0;
         /// 是否占用执行图定义 (独占 slot)
         bool ownsGraphDefinition = false;
+        /// 该实例挂了哪些 agent (诊断: 一眼看出"装在进程里但没挂到本 agent")
+        std::vector<std::string> mountedAgents;
     };
 
-    explicit PluginManager(std::weak_ptr<agentxx::agent::AgentContext> agentContext);
+    /// 建立插件管理器
+    ///
+    /// - `primaryAgent`: 主程序级配置的来源 (语言 / 模型 / 工作目录这类**没有 agent
+    ///   参数**的接口取它的值)。多 agent 场景下由启动方传入根 agent;
+    /// - 单个 agent 自建管理器时也用它 (见 `BaseAgent` 的 `plugin_system` 步骤)。
+    explicit PluginManager(std::weak_ptr<agentxx::agent::AgentContext> primaryAgent);
     ~PluginManager();
 
     PluginManager(const PluginManager&)            = delete;
     PluginManager& operator=(const PluginManager&) = delete;
 
-    /// 统一注册清单
+    // =====================================================================
+    // 挂载表 (一个 agent 一个挂载)
+    // =====================================================================
+
+    /// 全部挂载 (快照; 顺序 = 建立顺序)
+    std::vector<std::shared_ptr<PluginMount>> mounts() const;
+
+    /// 按 agentId 找挂载 (没有返回 nullptr)
+    std::shared_ptr<PluginMount> findMountById(std::string_view agentId) const;
+
+    /// 把插件给的引用解析成挂载
+    /// - 引用为空 / 长度不足 / id 不匹配 / seq 不匹配 → nullptr
+    /// - 解析失败时调用方转成 `AGENTXX_PLUGIN_ERR_NO_AGENT` (注册类) 或 `-1` (读取类)
+    PluginMount* mountOf(const PluginxxScopeRef* ref) const;
+
+    /// 为某个 agent 建立挂载 (幂等: 同一 agentId 已有挂载时复用并补挂新实例)
     ///
-    /// 一个插件实例能向主程序贡献的东西分散在多处 (工具注册表、权限中间件、
-    /// 中间件链、图注册表、事件总线、能力表、提示词、资源应用器)。禁用/卸载后
-    /// "到底清干净了没有"需要一份可比较的基准, 因此这里把**主程序可撤销**的注册
-    /// 计数集中成一个结构: 全部为 0 = 已回到基线。
+    /// 顺序: 逐实例 [PluginMount::mountOneAsync] —— 先应用清单资源, 再驱动插件
+    /// 的 `mount` 回调。
+    asio::awaitable<std::shared_ptr<PluginMount>>
+        mountAgentAsync(std::shared_ptr<agentxx::agent::AgentContext> ctx);
+
+    /// 同步建立一份挂载 (只建挂载记录, **不驱动**插件 `mount` 回调)
     ///
-    /// - 只统计本实例名下的注册 (不统计内置工具/主配置资源);
-    /// - `graphTypeNameResidual`: `GraphRegistry` 没有删除类型名的 API, 注销后
-    ///   类型名仍留在注册表里 (工厂持弱引用, 实例释放后创建即失败)。这项恒为
-    ///   已注册的图节点类型数, 供诊断说明"残留的只是名字, 不会再创建实例"。
-    struct RegistrationInventory {
-        size_t tools               = 0; ///< 工具注册表内的工具
-        size_t permissionTools     = 0; ///< 已声明的工具权限限制
-        size_t hooks               = 0; ///< 钩子处理器 (注册表里本实例生效的条数)
-        size_t graphNodeTypes      = 0; ///< 自定义图节点类型 (激活中)
-        size_t eventSubscriptions  = 0; ///< 事件订阅
-        size_t capabilities        = 0; ///< 能力声明
-        size_t promptKeys          = 0; ///< 占用中的提示词键 (prompt 贡献)
-        size_t skillDirs           = 0; ///< skill 扫描目录 (资源应用器)
-        size_t memoryFiles         = 0; ///< memory 上下文文件 (资源应用器)
-        size_t mcpNamespaces       = 0; ///< MCP 命名空间 (资源应用器)
-        size_t featurePoints       = 0; ///< 本实例声明的功能点 (生效中)
-        size_t featureImpls        = 0; ///< 本实例登记的功能点实现 (生效中)
-        bool   ownsGraphDefinition = false; ///< 是否占用执行图定义 (独占 slot)
+    /// - 用途: 单元测试、以及"没有插件 mount 回调、只经主程序侧接口登记"的自建场景;
+    /// - 真实挂载一律走 [mountAgentAsync] (它会逐实例驱动插件的 `mount` 回调);
+    /// - 同一 agentId 已存在挂载时直接返回已有挂载 (幂等)。
+    std::shared_ptr<PluginMount> attachMountSync(std::shared_ptr<agentxx::agent::AgentContext> ctx);
 
-        /// 主程序可撤销注册的总数 (不含 [graphNodeTypes] 的注册表残留)
-        size_t total() const {
-            return tools + permissionTools + hooks + graphNodeTypes + eventSubscriptions
-                   + capabilities + promptKeys + skillDirs + memoryFiles + mcpNamespaces
-                   + featurePoints + featureImpls + (ownsGraphDefinition ? 1 : 0);
-        }
-    };
+    /// 拆掉某个 agent 的挂载 (调用方: agent 关闭 / 主程序关闭)
+    asio::awaitable<void> unmountAgentAsync(std::string_view agentId);
 
-    /// 统计实例当前"主程序侧生效"的注册 (禁用/卸载后的基线断言与诊断)
-    RegistrationInventory registrationInventory(const PluginInstance& inst) const;
+    /// 拆掉全部挂载 (主程序关闭; 返回后实例表仍在, 由 shutdownAsync 收尾)
+    asio::awaitable<void> unmountAllAgentsAsync();
 
-    /// 执行图定义的占用者 (独占 slot; 空 = 无插件占用, 使用内置/主程序定义)
-    /// - 见 [setGraphJson]: 同一时刻至多一个插件实例占用, 占用者卸载/禁用后
-    ///   自动恢复占用前的定义 ("回到内置")
-    const std::string& graphDefinitionOwner() const {
-        return graphDefinitionOwner_;
-    }
+    /// 挂载一个实例到指定挂载 (disable/enable 与运行期加载共用)
+    asio::awaitable<bool> mountOneAsync(
+        const std::shared_ptr<PluginMount>& mount,
+        std::shared_ptr<PluginInstance>     inst
+    );
+
+    /// 从指定挂载拆掉一个实例
+    asio::awaitable<void> unmountOneAsync(
+        const std::shared_ptr<PluginMount>& mount,
+        std::shared_ptr<PluginInstance>     inst
+    );
+
+    /// 单挂载场景的便捷入口 (测试 / 单 agent 程序 / 诊断)
+    ///
+    /// 多 agent 场景请直接用对应的 [PluginMount]: 这些入口把"本进程里所有挂载"
+    /// 看成一份 —— 恰有一个挂载时等价于那个挂载, 多个挂载时按注释说明汇总或取第一个。
+    /// 插件侧接口一律按引用精确落到单一挂载 (不会走这些入口)。
+    PluginMount* soleMount() const;
+
+    /// 单挂载便捷: 挂载标识 (没有挂载时返回空串)
+    std::string agentId() const;
+    /// 单挂载便捷: 挂载序号 (没有挂载时返回 0)
+    uint64_t mountSequence() const;
+
+    /// 主 agent 的工具注册表 (与 `primaryAgentContext()->toolRegistry` 同一份)
+    std::shared_ptr<ToolRegistry> registry() const;
+
+    /// 各挂载上该实例的生效注册汇总
+    PluginMount::RegistrationInventory registrationInventory(const PluginInstance& inst) const;
+
+    /// 执行图定义的占用者 (多挂载时取第一个非空占用者)
+    std::string graphDefinitionOwner() const;
+
+    /// 钩子处理器清单 (单挂载 = 该挂载; 多挂载 = 逐挂载一段的数组)
+    std::string hooksJson();
+
+    /// 某个点上的处理器 (多挂载时按挂载顺序拼接)
+    std::vector<PluginMount::HookHandlerView> handlersOf(AgentxxPluginHookPoint point) const;
+
+    /// 登记一个 core 层处理器 (单挂载时生效; 多挂载时投到第一个挂载并记警告)
+    int64_t addCoreHookHandler(
+        AgentxxPluginHookPoint point,
+        int32_t                priority,
+        std::string            module,
+        AgentxxPluginHookSpec  spec
+    );
+
+    /// 撤销一个 core 层处理器 (逐挂载尝试, 命中即返回)
+    bool removeCoreHookHandler(int64_t handle);
+
+    void onTurnBegin();
+    void onTurnEnd();
+    void flushPendingCleanup();
+
+    /// 功能点清单 (单挂载 = 该挂载; 多挂载 = 合并数组)
+    std::string listFeaturePoints();
+
+    /// 全部挂载的摘要 JSON 数组 (`agentxx.agent.mount.list`)
+    std::string listMountsJson();
+
+    /// 按 agentId 查一个挂载的摘要 (`agentxx.agent.mount.get`; 没有返回空串)
+    std::string mountInfoJson(std::string_view agentId);
 
     // =====================================================================
     // 加载 (旧签名; 内部转成插件框架的 PluginLoadOptions 后交给主程序生命周期骨架)
     // =====================================================================
     //
     // 注意: 这里声明的是"主程序配置类型 → 插件框架加载参数"的适配层, 因此与骨架里
-    // 同名但形参类型不同的加加载口是重载关系 (未加 using 引入, 骨架版本只在
+    // 同名但形参类型不同的加载入口是重载关系 (未加 using 引入, 骨架版本只在
     // 本类内部经限定名调用)。
 
     asio::awaitable<std::shared_ptr<PluginInstance>> loadNativeAsync(
@@ -388,281 +356,11 @@ public:
     asio::awaitable<void>
         loadConfiguredPlugins(const std::vector<agentxx::agent::PluginConfig>& plugins);
 
-    void flushPendingCleanup();
-
-    // =====================================================================
-    // 挂载 (每个 agent 一次)
-    // =====================================================================
-    //
-    // 本主程序当前的实现粒度: **一份 PluginManager 服务一个 agent**; 因此这里只有
-    // 一个挂载 (agentId + mountSeq)。接口形状与"插件加载一份、可挂到多个 agent"
-    // 完全一致 (mountOf / mountAgentAsync / unmountAgentAsync / mount 表), 后续把
-    // 实例表上提到 AgentHost 时调用点不需要再改。
-
-    /// 本挂载的 agent 标识 (`root` / `sub:<n>`); 未初始化时为空串
-    const std::string& agentId() const noexcept {
-        return agentId_;
-    }
-
-    /// 本挂载的挂载序号 (每次成功挂载 +1; 插件引用里的 seq 必须等于它)
-    uint64_t mountSequence() const noexcept {
-        return mountSeq_;
-    }
-
-    /// 是否已经建立挂载 (插件 `mount` 回调已依次驱动)
-    bool hasMount() const noexcept {
-        return hasMount_;
-    }
-
-    /// 把作用域引用解析为本管理器的挂载
-    /// - 为空 / 长度不足 / id 不匹配 / seq 不匹配 → nullptr (调用点转成
-    ///   `AGENTXX_PLUGIN_ERR_NO_AGENT` 或 `-1`)
-    bool mountOf(const PluginxxScopeRef* ref) const;
-
-    /// 建立挂载: 依次对已加载实例驱动插件 `mount` 回调 (清单资源已先应用)
-    asio::awaitable<void> mountAgentAsync();
-
-    /// 挂载一个实例 (幂等: 已挂过直接返回 true; 无 mount 入口视为成功)
-    asio::awaitable<bool> mountOneAsync(std::shared_ptr<PluginInstance> inst);
-
-    /// 卸载一个实例 (调插件 unmount, 清空它的 per-agent 状态)
-    asio::awaitable<void> unmountOneAsync(std::shared_ptr<PluginInstance> inst);
-
-    /// 拆除挂载: 逆序驱动插件 `unmount` 回调 (注册由 stop/卸载路径撤销)
-    asio::awaitable<void> unmountAgentAsync();
-
-    /// 全部挂载的摘要 JSON 数组 (`agentxx.agent.mount.list`)
-    std::string listMountsJson();
-
-    /// 按 agentId 查一个挂载的摘要 (`agentxx.agent.mount.get`; 没有返回空串)
-    std::string mountInfoJson(std::string_view agentId);
-
+    /// 实例清单 (主程序视图; 工具的 `tools` 字段取全部挂载的并集)
     std::vector<PluginListView> list() const;
 
-    bool hasRunningTurn() const {
-        return runningTurns_ > 0;
-    }
-
-    void onTurnBegin() {
-        ++runningTurns_;
-    }
-
-    void onTurnEnd() {
-        if (runningTurns_ > 0) {
-            --runningTurns_;
-        }
-    }
-
-    int registerTool(PluginInstance* inst, const AgentxxPluginToolSpec* spec);
-    int unregisterTool(PluginInstance* inst, PluginxxStringView name);
-
-    int unregisterTool(PluginInstance* inst, std::string_view name) {
-        return unregisterTool(inst, strToSv(name));
-    }
-
-    /// 声明工具权限限制 (插件在注册工具后调用)
-    /// - 声明内容: 权限作用域 (读/写)、目标参数名、目标类型 (路径/文本/无)
-    /// - 声明最终交给 agent 加载的权限中间件 ([PermissionMiddlewareHandle]):
-    ///   工具调用时的判定 (白/黑名单、permission.mode 默认、记住的选择、
-    ///   工作区隔离、完全授权) 全部由该中间件执行, 插件只声明"哪些参数受约束"
-    /// - 权限声明属于附加能力: 主程序未加载权限中间件时返回非 0, 插件可忽略
-    /// `return`: 0 成功, 非 0 失败 (工具非本实例所有 / 中间件不可用 / 声明非法)
-    int registerToolPermission(PluginInstance* inst, const AgentxxPluginToolPermissionSpec* spec);
-
-    /// 撤销工具权限声明 (按工具名; 工具注销、插件禁用/卸载时由主程序自动撤销)
-    /// `return`: 0 成功, 非 0 不存在
-    int unregisterToolPermission(PluginInstance* inst, PluginxxStringView toolName);
-
-    int unregisterToolPermission(PluginInstance* inst, std::string_view toolName) {
-        return unregisterToolPermission(inst, strToSv(toolName));
-    }
-
-    /// 批量查询路径权限判定 (只读; 不发起询问/不产生中断)
-    /// - 判定规则与工具调用权限检查一致, 仅把"应询问"以 ASK 返回 (见 agentxx.agent.permission)
-    /// - 供支持模式/前缀参数的插件工具在枚举出实际路径后逐项过滤 (glob/grep 等)
-    ///
-    /// - `args`:
-    ///     - [inst]  调用方插件实例 (仅用于日志/归属)
-    ///     - [scope] 权限作用域 (AGENTXX_PLUGIN_PERMISSION_SCOPE_*)
-    ///     - [sessionId] 会话 (取会话工作目录/隔离边界; 可为空)
-    ///     - [paths] 待判定路径 (绝对路径优先; 相对路径按会话工作目录解析)
-    ///     - [outDecisions] 等长出参 (AGENTXX_PLUGIN_PERMISSION_DECISION_*)
-    ///
-    /// `return`: 0 成功; 非 0 不支持或失败 (权限中间件未加载时调用方应跳过过滤)
-    int checkPermissionPaths(
-        PluginInstance*                 inst,
-        int32_t                         scope,
-        std::string_view                sessionId,
-        const std::vector<std::string>& paths,
-        std::vector<int32_t>&           outDecisions
-    );
-
-    int registerSkillDir(PluginInstance* inst, PluginxxStringView path);
-
-    int registerSkillDir(PluginInstance* inst, std::string_view path) {
-        return registerSkillDir(inst, strToSv(path));
-    }
-
-    int unregisterSkillDir(PluginInstance* inst, PluginxxStringView path);
-
-    int unregisterSkillDir(PluginInstance* inst, std::string_view path) {
-        return unregisterSkillDir(inst, strToSv(path));
-    }
-
-    int registerMemoryFile(PluginInstance* inst, PluginxxStringView path);
-
-    int registerMemoryFile(PluginInstance* inst, std::string_view path) {
-        return registerMemoryFile(inst, strToSv(path));
-    }
-
-    int unregisterMemoryFile(PluginInstance* inst, PluginxxStringView path);
-
-    int unregisterMemoryFile(PluginInstance* inst, std::string_view path) {
-        return unregisterMemoryFile(inst, strToSv(path));
-    }
-
-    int registerMcpServer(PluginInstance* inst, PluginxxStringView specJson);
-
-    int registerMcpServer(PluginInstance* inst, std::string_view specJson) {
-        return registerMcpServer(inst, strToSv(specJson));
-    }
-
-    int unregisterMcpServer(PluginInstance* inst, PluginxxStringView nameSpace);
-
-    int unregisterMcpServer(PluginInstance* inst, std::string_view nameSpace) {
-        return unregisterMcpServer(inst, strToSv(nameSpace));
-    }
-
-    std::string ownResourcesJson(const PluginInstance* inst);
-
-    // ==================== 钩子处理器 (agentxx.agent.hooks) ====================
-
-    /// 钩子清单里的一个处理器 (只读视图; 清单 JSON 与诊断共用同一份事实)
-    struct HookHandlerView {
-        int64_t     handle = 0; ///< 登记时分配的句柄
-        int32_t     point  = 0; ///< AgentxxPluginHookPoint
-        std::string layer;      ///< `plugin` / `core`
-        std::string owner;      ///< `plugin:<插件名>` / `core:<模块>`
-        std::string ownerTag;   ///< 展示归属标签 (可空)
-        std::string depict;     ///< 一句话说明 (可空)
-        std::string load;       ///< `dynamic` / `builtin` (只说明怎么加载, 不影响顺序)
-        int32_t     priority = 0;    ///< 生效优先级 (越界已裁剪到上下限)
-        uint64_t    seq      = 0;    ///< 登记序号 (同优先级时按它排)
-        bool        enabled  = true; ///< 派发时是否生效 (实例已禁用 -> false)
-    };
-
-    /// 登记一个钩子处理器 (单一入口: 同一点可登记任意多个, 各自句柄)
-    /// - `priority` 越界裁剪到上下限并记一条警告 (不拒绝登记)
-    ///
-    /// `return`: 0 成功 (`*outHandle` 收到句柄); 非 0 失败
-    int registerHook(
-        PluginInstance*                inst,
-        const AgentxxPluginHookSpecEx* spec,
-        int64_t*                       outHandle
-    );
-
-    /// 撤销一个处理器 (按句柄; 别人的句柄被拒绝)
-    ///
-    /// `return`: 0 成功; 非 0 失败 (句柄不存在 / 不属于本实例)
-    int unregisterHook(PluginInstance* inst, int64_t handle);
-
-    /// 登记一个 core 层处理器 (库内自用; 与功能点的 addCoreImpl 同一规则)
-    /// - `plugin` 层 (插件 / FFI 主程序) 之后才是 `core` 层, `priority` 只在层内比较
-    /// - 主程序用自己的实现补齐"没人管的点"时使用; 本轮库内没有使用者
-    /// - **必须是同步处理器** (在主程序 io 线程直接调用, 不走操作协议): 返回值
-    ///   非空视为"想异步", 派发时记一条警告并请求取消; 报错文本由主程序释放
-    ///
-    /// `return` 登记句柄 (> 0); 0 = 失败 (点越界 / 回调为空)
-    int64_t addCoreHookHandler(
-        AgentxxPluginHookPoint point,
-        int32_t                priority,
-        std::string            module,
-        AgentxxPluginHookSpec  spec
-    );
-
-    /// 撤销一个 core 层处理器 (按句柄)
-    ///
-    /// `return`: true 成功; false 不存在
-    bool removeCoreHookHandler(int64_t handle);
-
-    /// 钩子处理器清单 JSON
-    /// - 插件 `agentxx.agent.hooks` 的 `list_hooks`、加载快照 `hooks` 段与
-    ///   `--dump-diagnostics` 共用同一份实现 (形状见 docs/zh-cn/design/plugins.md §8)
-    /// - 派发记录 (`stat` 段) 只在开发者模式下出现
-    /// - 读的是注册表当前状态: 与登记/派发同一线程 (主程序 io 线程) 上调用
-    ///   (加载快照与诊断在这一生命周期阶段取数)
-    std::string hooksJson();
-    /// 某个点上当前生效的处理器 (按派发顺序: `plugin` 层 -> `core` 层, 层内
-    /// `(priority 升序, 登记序号)`)
-    std::vector<HookHandlerView> handlersOf(AgentxxPluginHookPoint point) const;
-
-    /// 派发一个钩子点 (中间件链上唯一派发器的入口)
-    /// - 处理器按注册表顺序串行执行, 都在主程序 io 线程; 单个处理器失败只记日志继续
-    /// - 处理器列表在开始派发时取快照 (派发过程中登记/撤销不影响本次),
-    ///   但每个处理器执行前仍检查实例是否可用 (派发中禁用 -> 跳过)
-    asio::awaitable<void>
-        dispatchHook(AgentxxPluginHookPoint point, const neograph::graph::NodeInput& in);
-
-    // ==================== 功能点 (agentxx.agent.feature) ====================
-
-    /// 为某个点登记实现 (插件的功能点表入口)
-    /// - 点必须已声明 (主程序点在加载期声明; 插件点先经 [defineFeaturePoint])
-    /// - 同一 `(点, 实例)` 重复登记 = 覆盖; 数量不设上限
-    /// - `priority` 越界裁剪到上下限并记一条警告 (不拒绝登记)
-    /// - 实现体经操作协议驱动 (与工具同一套), 完成回调在主程序 IO 线程发布
-    ///
-    /// `return`: 0 成功; 非 0 失败 (点未声明 / 回调为空 / 实例不可用)
-    int registerFeatureImpl(PluginInstance* inst, const AgentxxPluginFeatureImplSpec* spec);
-
-    /// 撤销本实例在某点上的实现
-    ///
-    /// `return`: 0 成功; 非 0 不存在
-    int unregisterFeatureImpl(PluginInstance* inst, PluginxxStringView pointId);
-
-    int unregisterFeatureImpl(PluginInstance* inst, std::string_view pointId) {
-        return unregisterFeatureImpl(inst, strToSv(pointId));
-    }
-
-    /// 声明本实例自己的功能点 (id 必须落在 `plugin.<本实例插件名>.*`)
-    /// - 本轮只允许 `provide` 类型; 重复声明 = 覆盖 (记一条日志)
-    /// - 声明期间恒可被调用; 值缓存固定不缓存 (调用方按结果里的 identity 自理)
-    ///
-    /// `return`: 0 成功; 非 0 失败 (id 非法 / 类型不支持 / 与主程序点冲突)
-    int defineFeaturePoint(PluginInstance* inst, const AgentxxPluginFeaturePointSpec* spec);
-
-    /// 撤销本实例声明的点 (连带撤掉这些点上的全部实现)
-    ///
-    /// `return`: 0 成功; 非 0 失败 (点不存在 / 不是本实例声明的点)
-    int undefineFeaturePoint(PluginInstance* inst, PluginxxStringView pointId);
-
-    int undefineFeaturePoint(PluginInstance* inst, std::string_view pointId) {
-        return undefineFeaturePoint(inst, strToSv(pointId));
-    }
-
-    /// 功能点清单 JSON (插件 `list_points`、加载快照与诊断共用同一份实现)
-    std::string listFeaturePoints();
-
-    /// 调用一个功能点 (异步; 完成回调经 notify 在主程序 IO 线程发布)
-    /// - 只拿数据: 只读值缓存、不记置空、不写调用方会话 / 不发提示 / 不落盘
-    /// - 受理失败返回 NULL 并写 error_out; 调用本身的失败 (not_callable / bad_args /
-    ///   no_impl / disabled / busy / failed) 经回调的结果 JSON 回
-    PluginxxOperatorHandle* callFeatureAsync(
-        PluginInstance*          caller,
-        PluginxxStringView       pointId,
-        PluginxxStringView       argsJson,
-        PluginxxOperatorCallback cb,
-        void*                    ud,
-        PluginxxString*          error_out
-    );
-
-    /// 注册插件节点类型到 per-agent GraphRegistry (插件 graph 接口表)
-    int registerGraphNodeType(PluginInstance* inst, const AgentxxPluginGraphNodeTypeSpec* spec);
-    /// 注销插件节点类型 (按类型名; 卸载时主程序自动清理)
-    int unregisterGraphNodeType(PluginInstance* inst, PluginxxStringView type);
-
-    int unregisterGraphNodeType(PluginInstance* inst, std::string_view type) {
-        return unregisterGraphNodeType(inst, strToSv(type));
-    }
+    /// 某个挂载上的插件行 (只列挂在本 agent 上的实例)
+    std::vector<PluginListView> listForMount(const PluginMount& mount) const;
 
     /// 加载失败时的"怎么改"提示
     ///
@@ -673,136 +371,19 @@ public:
     /// - 路径不存在 (相对路径按进程当前工作目录解析);
     /// - 目录下没有 `plugin.yaml` 清单 / 清单 YAML 语法错误 / 清单 `entry`
     ///   指向的库文件不存在;
-    /// - 库文件缺少主程序入口符号 (agent 侧 `agentxx_plugin_agent_{create,start,stop}`;
-    ///   `destroy` 由实例析构入口单独查找)。
-    ///
-    /// - 只读检查 (不改变任何状态); 需要读导出符号时会短暂打开库文件,
-    ///   失败路径上由加加载口调用, 正常加载不调用;
-    /// - 加加载口在失败后把这句建议记 WARN 日志, 便于插件作者定位。
+    /// - 库文件缺少主程序入口符号 (agent 侧 `agentxx_plugin_agent_{create,start,stop}`);
+    /// - 只读检查 (不改变任何状态)。
     std::string diagnosePluginPath(std::string_view path) const;
 
-    /// 获取当前执行图 JSON 定义 (host->alloc 语义由 vtable 层处理)
-    std::string getGraphJson();
-    /// 设置执行图 JSON 定义 (独占 slot; 见 [graphDefinitionOwner])
-    ///
-    /// - 无占用者时: 记录当前定义为"基础定义"并成为占用者;
-    /// - 本实例已是占用者: 允许继续修改 (插件热更新自己的图);
-    /// - 其他实例占用中: 拒绝 (返回非 0 并给出占用者), 避免两个插件交替覆盖
-    ///   彼此的图定义 —— 卸载其中一方时无法判断该恢复成哪一份;
-    /// - 占用者禁用/卸载时恢复基础定义 (内置或主程序自定义的图)。
-    int setGraphJson(PluginInstance* inst, PluginxxStringView graph_json);
-
-    int setGraphJson(PluginInstance* inst, std::string_view graph_json) {
-        return setGraphJson(inst, strToSv(graph_json));
-    }
-
-    PluginxxString getShareStore(PluginInstance* inst, PluginxxStringView session_id, int64_t id);
-
-    PluginxxString getShareStore(PluginInstance* inst, std::string_view session_id, int64_t id) {
-        return getShareStore(inst, strToSv(session_id), id);
-    }
-
-    int64_t addShareStore(
-        PluginInstance*    inst,
-        PluginxxStringView session_id,
-        PluginxxStringView content
-    );
-
-    int64_t
-        addShareStore(PluginInstance* inst, std::string_view session_id, std::string_view content) {
-        return addShareStore(inst, strToSv(session_id), strToSv(content));
-    }
-
-    void emitMessageTip(
-        PluginInstance*    inst,
-        PluginxxStringView session_id,
-        PluginxxStringView text,
-        int32_t            level
-    );
-
-    /// 会话 LLM 上下文 (Json 数组文本; 主程序 alloc, 失败返回空串)
-    /// - 上下文由会话持有 (图状态不含 messages 通道), 插件经 agentxx.agent.context 表查询
-    /// - 仅 io 线程调用 (vtable 经 ioCallSync 投递)
-    PluginxxString getSessionMessages(PluginxxStringView session_id);
-
-    /// 会话 LLM 上下文条数 (会话不存在返回 -1)
-    int64_t sessionMessagesCount(PluginxxStringView session_id);
-
-    /// 写会话 LLM 上下文 (插件图节点对 `messages` 通道的写入转发; 仅 io 线程)
-    /// - overwrite=false 追加, true 整体替换; 空的 overwrite 视为误写被忽略
-    ///   (按旧契约读不到消息的插件可能以为上下文为空, 直接覆盖会清空上下文)
-    /// - 返回本次写入的消息条数 (0 表示未写入)
-    size_t writeSessionMessages(
-        std::string_view         session_id,
-        const utilxx_base::Json& messages,
-        bool                     overwrite
-    );
-
-    void emitMessageTip(
-        PluginInstance*  inst,
-        std::string_view session_id,
-        std::string_view text,
-        int32_t          level
-    ) {
-        emitMessageTip(inst, strToSv(session_id), strToSv(text), level);
-    }
-
-    PluginxxOperatorHandle* callToolAsync(
-        PluginInstance*          caller,
-        PluginxxStringView       name,
-        PluginxxStringView       args_json,
-        PluginxxStringView       session_id,
-        PluginxxOperatorCallback cb,
-        void*                    ud,
-        PluginxxString*          error_out
-    );
-
-    PluginxxOperatorHandle* callToolAsync(
-        PluginInstance*          caller,
-        std::string_view         name,
-        std::string_view         args_json,
-        std::string_view         session_id,
-        PluginxxOperatorCallback cb,
-        void*                    ud,
-        PluginxxString*          error_out
-    ) {
-        return callToolAsync(
-            caller,
-            strToSv(name),
-            strToSv(args_json),
-            strToSv(session_id),
-            cb,
-            ud,
-            error_out
-        );
-    }
-
-    // ==================== 通用表方法 (继承自 pluginxx::PluginHostCore) ====================
-    //
-    // 以下方法由主程序核心提供, 本类不再重复声明 (调用点无需改动):
-    // - capabilities 表: registerCapability / registerCapabilityEx /
-    //   unregisterCapability / hasCapability / invokeCapabilityAsync / capabilities();
-    // - events 表: subscribe / unsubscribe / publish;
-    // - scheduler 表: postCallback / sleep / offload;
-    // - tasks 表: registerTask。
-
-    std::shared_ptr<ToolRegistry> registry() const {
-        return registry_;
-    }
+    // =====================================================================
+    // 主程序级查询 (没有 agent 参数的那些接口表项取主 agent)
+    // =====================================================================
 
     std::string listPluginsJson();
     std::string getPluginJson(const std::string& name);
 
     std::string getConfigJson();
     std::string getToolPromptJson(const std::string& toolName);
-    std::string getPromptJson();
-    int         setPromptJson(PluginInstance* inst, PluginxxStringView prompt_json);
-
-    int setPromptJson(PluginInstance* inst, std::string_view prompt_json) {
-        return setPromptJson(inst, strToSv(prompt_json));
-    }
-
-    void        restorePromptBackup(PluginInstance* inst) = delete;
     std::string getPluginArgsJson(PluginInstance* inst);
     std::string getPluginConfigPath(PluginInstance* inst);
     std::string getLanguage();
@@ -812,18 +393,19 @@ public:
     std::string getSessionWorkDir();
     std::string getSessionWorkDir(std::string_view sessionId);
     std::string getModelConfigJson();
-    bool isSessionCancelled(const PluginxxScopeRef* agent, std::string_view sessionId) override;
 
     // ==================== pluginxx::DomainHooks 实现 ====================
     // 通用表 (log/json/config/plugins/events/scheduler/coroutine_runtime/tasks/cancel/
     // capabilities) 的实现位于 cxx_pluginxx, 需要主程序数据的入口经这些方法取数
-    // (见 pluginxx/host/domain_hooks.h)。实现体在 plugin_manager_adapters.cpp。
+    // (见 pluginxx/host/domain_hooks.h)。实现体在 plugin_manager_domain_hooks.cpp。
 
     /// 事件后端 (包装 agentxx::events::EventBus; 无总线时返回 nullptr)
+    /// - 非空引用: 该挂载所属 agent 的总线 (会话/轮次事件)
+    /// - 空引用: 主 agent 的总线 (进程级事件)
     std::shared_ptr<pluginxx::EventSource> eventSource(const PluginxxScopeRef* agent) override;
     /// 事件主题命名空间补齐 (不以 `plugin.`/`client.` 开头时补 `plugin.`)
     std::string qualifyEventTopic(std::string_view topic) override;
-    /// 阻塞工作委托到 AgentContext 的工作线程池; 未加载时返回 false (offload 失败)
+    /// 阻塞工作委托到 agent 的工作线程池; 未加载时返回 false (offload 失败)
     bool postToWorkerThread(std::function<void()> fn) override;
 
     std::string configJson() override;
@@ -834,34 +416,13 @@ public:
     std::string pluginsJson() override;
     std::string pluginJson(std::string_view name) override;
 
-    // ==================== prompt 贡献模型 ====================
-    //
-    // 插件对 prompt 的修改不再用"备份后无条件写回"，而是记录为
-    // (owner, key, sequence, value) 贡献：
-    //   有效值 = 首次贡献前的基础值 ⊕ 按 sequence 顺序应用的全部存活贡献
-    // 卸载/禁用只删除该 owner 的贡献并重新合成，因此不会覆盖其他 owner 的贡献，
-    // 也不会把已卸载 owner 的旧值写回；用户或其他主程序代码之后写入的值通过
-    // "基础值 rebase"保留。键名：`system` / `append:<key>` / `tool:<toolName>`。
-    struct PromptValue {
-        bool                                      isTool = false;
-        std::string                               text; ///< isTool=false 时的值
-        std::optional<agentxx::agent::ToolPrompt> tool; ///< isTool=true 时的值
-    };
+    /// 会话是否已被取消 (cancel 表; 引用指定 agent)
+    bool isSessionCancelled(const PluginxxScopeRef* agent, std::string_view sessionId) override;
 
-    struct PromptKeyState {
-        /// 首次贡献前的基础值（`nullopt` = 原本不存在）
-        std::optional<PromptValue> base;
-        /// 主程序上次合成写入的值（用于发现外部修改并 rebase 基础值）
-        std::optional<PromptValue> applied;
-        /// owner -> (sequence, 贡献值)，按 sequence 升序应用
-        std::map<std::string, std::pair<uint64_t, PromptValue>, std::less<>> contributions;
-    };
-
-    /// 删除 `owner` 的全部 prompt 贡献并重新合成受影响键（卸载/禁用路径）。
-    void removePromptContributions(std::string_view owner);
-
-    /// 重新合成单个 prompt 键的有效值（内部使用；见 PromptKeyState 说明）。
-    void recomposePromptKey(const std::string& key);
+    /// 主 agent 的上下文 (主程序级配置来源)
+    std::shared_ptr<agentxx::agent::AgentContext> primaryAgentContext() const {
+        return primaryAgent_.lock();
+    }
 
 protected:
 
@@ -870,11 +431,10 @@ protected:
     // =====================================================================
     //
     // 加载/启停/禁用启用/卸载/级联依赖骨架在 cxx_pluginxx (见
-    // pluginxx/host/lifecycle.h); 插件框架不认识"工具/权限/钩子/图/提示词/资源"，
-    // 因此这些业务动作经下列覆写注入。实现体在 plugin_manager_lifecycle.cpp 与
-    // plugin_manager_vtable.cpp。
+    // pluginxx/host/lifecycle.h); 插件框架不认识"工具/权限/钩子/图/提示词/资源",
+    // 因此这些业务动作经下列覆写注入。
 
-    /// 管理器自引用 (骨架的异步事务与空闲收尾需要在此期间保活管理器)
+    /// 自引用 (插件框架的异步事务与空闲收尾需要在此期间保活)
     std::shared_ptr<pluginxx::PluginHostLifecycle<PluginInstance>> selfRef() override {
         return shared_from_this();
     }
@@ -898,13 +458,13 @@ protected:
         };
     }
 
-    /// 摘除业务注册: 工具/工具权限/图节点类型/prompt 贡献/中间件停用
+    /// 摘除业务注册: 让本实例从**全部挂载**上摘掉 (禁用 / 卸载路径)
     void detachDomainRegistrations(PluginInstance* inst) override;
 
-    /// 摘除实例专属资源所有权: 中间件句柄 + 资源应用器的启用标记
+    /// 摘除实例专属资源所有权: 各挂载资源应用器上的启用标记
     void detachDomainOwnedResources(PluginInstance* inst) override;
 
-    /// 清空由插件 start 事务重新声明的业务记录 (工具/权限/hook/图)
+    /// 清空由插件 start 事务重新声明的业务记录 (各挂载上的注册记录)
     void clearDomainRegistrations(PluginInstance* inst) override;
 
     /// 加载阶段记录清单声明的资源 (不立即应用: 每个挂载各应用一次)
@@ -913,10 +473,7 @@ protected:
         const plugin::PluginManifestResources& resources
     ) override;
 
-    /// 把实例记录的清单资源应用到本 agent (挂载时调用; 已应用则不重复)
-    void applyManifestResourcesNow(PluginInstance& inst);
-
-    /// 卸载时释放实例级资源: 工具对象列表 + 清单资源所有权
+    /// 卸载时释放实例级资源: 各挂载上的工具对象 + 清单资源所有权
     void releaseInstanceResources(PluginInstance& inst) override;
 
     /// 实例加载完成: 解析插件侧的挂载/卸载入口
@@ -924,118 +481,33 @@ protected:
     /// - 内置插件: 用框架下发的内置描述里的 `mount`/`unmount` 字段
     void onInstanceLoaded(PluginInstance& inst) override;
 
-    /// 启用状态变化通知 (资源应用器的启用标记)
+    /// 启用状态变化通知 (各挂载资源应用器的启用标记)
     void onInstanceEnabledChanged(PluginInstance& inst, bool enabled) override;
 
-    /// 禁用事务完成后拆掉该实例的挂载 (调插件 unmount, 释放 per-agent 状态)
-    asio::awaitable<void> onInstanceDisabledAsync(const std::shared_ptr<PluginInstance>& inst) override;
+    /// 禁用事务完成后: 从全部挂载上拆掉该实例 (调插件 unmount, 释放 per-agent 状态)
+    asio::awaitable<void>
+        onInstanceDisabledAsync(const std::shared_ptr<PluginInstance>& inst) override;
 
-    /// 启用事务完成后重新挂载该实例 (agent 级注册都在插件的 mount 回调里)
-    asio::awaitable<void> onInstanceEnabledAsync(const std::shared_ptr<PluginInstance>& inst) override;
+    /// 启用事务完成后: 重新挂到全部挂载 (agent 级注册都在插件的 mount 回调里)
+    asio::awaitable<void>
+        onInstanceEnabledAsync(const std::shared_ptr<PluginInstance>& inst) override;
 
 private:
 
     friend class PluginInstance;
+    friend class PluginMount;
 
-    void eraseHookDispatch(PluginHookDispatchHandle* handle);
+    /// 主 agent 上下文 (主程序级配置来源)
+    std::weak_ptr<agentxx::agent::AgentContext> primaryAgent_;
 
-    /// ==================== 钩子注册表 (主程序级单表) ====================
-    ///
-    /// 一个钩子点上的处理器按 `(层, priority 升序, 登记序号)` 排序执行:
-    /// - 层: `plugin` (插件 / FFI 主程序登记的) 在前, `core` (库自己登记的) 在后;
-    /// - 不声明 `priority` (= 0) 时顺序就是登记顺序 = 插件加载顺序 (与旧行为一致)。
-    struct HookHandlerEntry {
-        int64_t                       handle    = 0;
-        int32_t                       point     = 0;
-        int32_t                       priority  = 0;
-        uint64_t                      seq       = 0;
-        bool                          coreLayer = false; ///< core 层 (排在 plugin 层之后)
-        std::string                   owner;             ///< `plugin:<名>` / `core:<模块>`
-        std::string                   ownerTag;
-        std::string                   depict;
-        std::string                   load; ///< `dynamic` / `builtin`
-        std::weak_ptr<PluginInstance> inst; ///< plugin 层: 所属实例
-        AgentxxPluginHookSpec         spec; ///< 执行体 (start / cancel / user_data)
-    };
+    /// 全部挂载 (强引用: 由本管理器保活; agent 关闭时显式拆)
+    std::vector<std::shared_ptr<PluginMount>> mounts_;
 
-    /// 某点处理器的排序快照 (派发与清单都从它取数)
-    std::vector<HookHandlerEntry> orderedHandlers(AgentxxPluginHookPoint point) const;
-
-    /// 注册表里属于某实例的处理器条数 (注册清单 `hooks` 的规则: 生效中的条数)
-    size_t liveHookHandlersOf(const PluginInstance& inst) const;
-
-    /// 注册表里属于某实例的全部处理器 (按点号、再按该点的派发顺序; 诊断与列表用)
-    std::vector<HookHandlerView> allHookHandlersOf(const PluginInstance& inst) const;
-
-    /// 处理器视图 (清单 / 加载快照 / 测试共用)
-    HookHandlerView viewOf(const HookHandlerEntry& entry) const;
-
-    /// 插入一条处理器并挂上派发器 (登记入口的公共收尾)
-    int64_t insertHookHandler(HookHandlerEntry entry);
-
-    /// 从注册表移除一条 (按句柄)
-    /// - `ownerInst` 非空时校验归属 (`checkOwner = true` 时别人的句柄被拒绝);
-    /// - 移除后没有处理器时按需摘除派发器
-    bool removeHookHandler(int64_t handle, PluginInstance* ownerInst, bool checkOwner);
-
-    /// 摘除某个实例的全部处理器 (禁用 / 卸载; 实例记录里的句柄置 0)
-    void detachHookHandlers(PluginInstance* inst);
-
-    /// 确保派发器挂在中间件链上 (首次登记时插入)
-    void ensureHookDispatch();
-
-    /// 没有处理器时摘除派发器: 轮次执行中先置 `disabled` 跳过, 轮末由
-    /// [flushPendingCleanup] 真正摘除 (运行中修改中间件链与旧实现同一约定)
-    void retireHookDispatchIfIdle();
-
-    /// 一次派发的记录 (只在开发者模式下收集; 见 plan §11.4)
-    struct HookPointStat {
-        uint64_t    dispatches = 0; ///< 派发次数
-        uint64_t    handlers   = 0; ///< 上次派发的处理器数
-        uint64_t    lastMs     = 0; ///< 上次派发耗时 (毫秒)
-        std::string lastOrder;      ///< 上次派发的执行顺序 (`owner#handle`, ", " 分隔)
-    };
-
-    std::vector<HookHandlerEntry>                        hookHandlers_;
-    int64_t                                              nextHookHandle_ = 1;
-    uint64_t                                             hookSeq_        = 0;
-    std::shared_ptr<PluginHookDispatchHandle>            hookDispatch_;
-    std::array<HookPointStat, AGENTXX_PLUGIN_HOOK_COUNT> hookStats_{};
-
-    /// 释放执行图定义 slot (占用者禁用/卸载时调用): 恢复基础定义并清空占用者
-    void releaseGraphDefinitionSlot(PluginInstance* inst);
-
-    /// agent 加载的权限中间件 (插件工具权限声明实际生效处; 未加载返回 nullptr)
-    /// - 在中间件链中查找; 权限中间件由 BaseAgent::initMiddleware 加载, 插件
-    ///   加载 (create/start 事务) 在其后执行, 正常运行期可查到
-    agentxx::middleware::PermissionMiddlewareHandle* permissionMiddleware();
-
-    /// 本挂载的 agent 标识与序号 (见 [agentId] / [mountSequence])
-    std::string agentId_;
-    uint64_t    mountSeq_ = 0;
-    bool        hasMount_ = false;
-
-    struct PendingMiddlewareCleanup {
-        std::string                             name;
-        std::weak_ptr<PluginHookDispatchHandle> handle;
-    };
-
-    std::vector<PendingMiddlewareCleanup> pendingCleanups_;
-
-    std::weak_ptr<agentxx::agent::AgentContext>                        agentContext_;
-    std::shared_ptr<ToolRegistry>                                      registry_;
-    std::map<std::string, std::shared_ptr<GraphTypeSlot>, std::less<>> graphTypeSlots_;
-    size_t                                                             runningTurns_ = 0;
-    std::map<std::string, PromptKeyState, std::less<>>                 promptKeys_;
-    uint64_t                                                           promptSequence_ = 0;
-
-    /// 执行图定义独占 slot: 占用者 + 占用前的基础定义
-    /// - [graphDefinitionBase] 存 JSON 文本, 恢复时解析回 neograph json
-    ///   (避免在头文件里带 neograph 类型)
-    std::string graphDefinitionOwner_;
-    std::string graphDefinitionBase_;
-    bool        graphDefinitionBaseCaptured_ = false;
+    /// 挂载序号分配器 (每次成功建立挂载 +1)
+    uint64_t nextMountSeq_ = 1;
 };
 
 } // namespace plugin
 } // namespace agentxx
+
+#endif // AGENTXX_PLUGIN_PLUGIN_MANAGER_H

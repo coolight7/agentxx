@@ -94,7 +94,7 @@ private:
 // =====================================================================
 
 std::shared_ptr<EventSource> PluginManager::eventSource(const PluginxxScopeRef* agent) {
-    auto ctx = agentContext_.lock();
+    auto ctx = primaryAgent_.lock();
     if (!ctx || !ctx->bus) {
         return nullptr;
     }
@@ -125,7 +125,7 @@ bool PluginManager::postToWorkerThread(std::function<void()> fn) {
     if (!fn) {
         return false;
     }
-    auto ctx = agentContext_.lock();
+    auto ctx = primaryAgent_.lock();
     if (!ctx || !ctx->threadPool) {
         return false;
     }
@@ -146,7 +146,7 @@ bool PluginManager::postToWorkerThread(std::function<void()> fn) {
 // =====================================================================
 
 std::string PluginManager::configJson() {
-    auto c = agentContext_.lock();
+    auto c = primaryAgent_.lock();
     if (!c || !c->agentConfig) {
         return {};
     }
@@ -169,7 +169,7 @@ std::string PluginManager::configJson() {
 }
 
 std::string PluginManager::getLanguage() {
-    auto c = agentContext_.lock();
+    auto c = primaryAgent_.lock();
     if (!c) {
         return "en";
     }
@@ -181,14 +181,14 @@ std::string PluginManager::language() {
 }
 
 void PluginManager::setLanguage(std::string_view lang) {
-    auto c = agentContext_.lock();
+    auto c = primaryAgent_.lock();
     if (c) {
         c->setLanguage(lang);
     }
 }
 
 std::string PluginManager::getToolPromptJson(const std::string& toolName) {
-    auto c = agentContext_.lock();
+    auto c = primaryAgent_.lock();
     if (!c || !c->agentConfig) {
         return {};
     }
@@ -212,7 +212,7 @@ std::string PluginManager::toolPromptJson(std::string_view toolName) {
 }
 
 std::string PluginManager::getSessionWorkDir() {
-    auto c = agentContext_.lock();
+    auto c = primaryAgent_.lock();
     if (!c || !c->agentConfig) {
         return {};
     }
@@ -220,7 +220,7 @@ std::string PluginManager::getSessionWorkDir() {
 }
 
 std::string PluginManager::getSessionWorkDir(std::string_view sessionId) {
-    auto c = agentContext_.lock();
+    auto c = primaryAgent_.lock();
     if (!c) {
         return {};
     }
@@ -239,7 +239,7 @@ std::string PluginManager::sessionWorkDir(const PluginxxScopeRef* agent, std::st
 }
 
 std::string PluginManager::getModelConfigJson() {
-    auto c = agentContext_.lock();
+    auto c = primaryAgent_.lock();
     if (!c || !c->agentConfig) {
         return {};
     }
@@ -272,7 +272,7 @@ bool PluginManager::isSessionCancelled(const PluginxxScopeRef* agent, std::strin
     if (agent != nullptr && !mountOf(agent)) {
         return false;
     }
-    auto c = agentContext_.lock();
+    auto c = primaryAgent_.lock();
     if (!c || sessionId.empty()) {
         return false;
     }

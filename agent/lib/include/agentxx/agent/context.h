@@ -38,6 +38,7 @@ class SubagentManagerMiddlewareHandle;
 namespace plugin {
 class ToolRegistry;
 class PluginManager;
+class PluginMount;
 } // namespace plugin
 
 namespace feature {
@@ -763,9 +764,19 @@ public:
     /// 创建加载记录时优先取这里的值, 取不到再按插件/MCP/内置推断
     std::map<std::string, std::string, std::less<>> toolSourceHints;
 
-    /// 插件管理器 (生命周期/热插拔; 全局唯一)
-    /// - 由 BaseAgent::init 创建并注入
+    /// 插件管理器 (生命周期/热插拔; 进程内唯一)
+    /// - 由 BaseAgent::init 取得或自建并注入
     std::shared_ptr<plugin::PluginManager> pluginManager = nullptr;
+
+    /// 本 agent 的插件挂载 (agent 级注册实体都在这里)
+    /// - `plugin_mount` 步骤由主程序建立并赋值; 插件工具/钩子/提示词/功能点/图/资源
+    ///   都挂在这份挂载上, 关闭时随它一并拆掉
+    std::shared_ptr<plugin::PluginMount> pluginMount = nullptr;
+
+    /// agent 标识 (`root` / `sub:<n>` / `ext:<源>:<n>`)
+    /// - 由启动方 / AgentHost 指定; 插件引用里的 `agent_id` 就是它
+    /// - 为空时主程序按 `root` 处理
+    std::string agentId = "root";
 
     /// 后台任务登记表
     /// - fire-and-forget 的短后台任务 (事件发布 / 进度通知) 统一登记,

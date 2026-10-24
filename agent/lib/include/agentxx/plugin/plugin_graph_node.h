@@ -13,6 +13,7 @@ namespace agentxx {
 namespace plugin {
 
 class PluginInstance;
+class PluginMount;
 
 /// GraphRegistry 没有删除类型的接口时，主程序用 slot 间接管理插件工厂。
 /// 注册表中的 factory 只捕获 slot；卸载/重载通过代次切换使旧节点失效。
@@ -162,7 +163,8 @@ public:
         std::shared_ptr<PluginInstance> instance,
         AgentxxPluginGraphNodeTypeSpec  spec,
         std::shared_ptr<GraphTypeSlot>  slot       = {},
-        uint64_t                        generation = 0
+        uint64_t                        generation = 0,
+        std::weak_ptr<PluginMount>      mount      = {}
     );
 
     ~PluginGraphNode() override;
@@ -193,6 +195,8 @@ private:
     std::shared_ptr<PluginInstance> instance_;
     AgentxxPluginGraphNodeTypeSpec  spec_;
     std::shared_ptr<GraphTypeSlot>  slot_;
+    /// 本节点所属挂载 (写会话上下文时用它定位 agent; 空 = 挂载已拆)
+    std::weak_ptr<PluginMount>      mount_;
     uint64_t                        generation_ = 0;
 };
 

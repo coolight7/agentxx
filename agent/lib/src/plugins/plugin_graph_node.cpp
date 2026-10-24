@@ -18,7 +18,8 @@ PluginGraphNode::PluginGraphNode(
     std::shared_ptr<PluginInstance> instance,
     AgentxxPluginGraphNodeTypeSpec  spec,
     std::shared_ptr<GraphTypeSlot>  slot,
-    uint64_t                        generation
+    uint64_t                        generation,
+    std::weak_ptr<PluginMount>      mount
 ) :
     name_(name),
     configJson_(configJson),
@@ -31,7 +32,8 @@ PluginGraphNode::PluginGraphNode(
     instance_(std::move(instance)),
     spec_(spec),
     slot_(std::move(slot)),
-    generation_(generation) {
+    generation_(generation),
+    mount_(std::move(mount)) {
     spec_.type               = agentxx::plugin::PluginStringView::from(type_.data(), type_.size());
     spec_.config_schema_json = agentxx::plugin::PluginStringView::from(
         configSchemaJson_.data(),
@@ -50,18 +52,17 @@ void PluginGraphNode::applyMessagesWrite(
     const utilxx_base::Json&    value,
     bool                        overwrite
 ) {
-    auto inst = instance_;
-    auto mgr  = inst ? inst->manager.lock() : nullptr;
-    if (!mgr) {
+    auto mount = mount_.lock();
+    if (!mount) {
         XX_LOGW(
-            "Graph node `{}` (type {}) writes messages but the plugin manager is gone; write dropped",
+            "Graph node `{}` (type {}) writes messages but its plugin mount is gone; write dropped",
             name_,
             type_
         );
         return;
     }
 
-    const size_t written = mgr->writeSessionMessages(in.ctx.thread_id, value, overwrite);
+    const size_t written = mount->writeSessionMessages(in.ctx.thread_id, value, overwrite);
     if (written == 0) {
         return;
     }

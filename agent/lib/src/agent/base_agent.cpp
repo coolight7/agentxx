@@ -533,7 +533,8 @@ asio::awaitable<void> BaseAgent::init() {
             }
             notifyInitProgress("挂载插件 ...");
             if (agentContext->pluginManager) {
-                co_await agentContext->pluginManager->mountAgentAsync();
+                agentContext->pluginMount
+                    = co_await agentContext->pluginManager->mountAgentAsync(agentContext);
             }
             co_return;
         },
@@ -541,6 +542,7 @@ asio::awaitable<void> BaseAgent::init() {
             [this]() {
                 // 插件在 start/mount 阶段可能已注册资源: 用同步关闭入口撤销
                 // (init 期间没有进行中的插件回调, 可安全调用 shutdownAll)
+                agentContext->pluginMount.reset();
                 if (agentContext->pluginManager) {
                     agentContext->pluginManager->shutdownAll();
                 }
@@ -1216,8 +1218,8 @@ void BaseAgent::collectAppendComponentInfo(std::vector<AppendComponentNotificati
     }
 
     // Agent 侧加载的插件 (数量 + 列表; success 反映 enabled 状态)
-    if (agentContext->pluginManager) {
-        for (const auto& plugin : agentContext->pluginManager->list()) {
+    if (agentContext->pluginManager && agentContext->pluginMount) {
+        for (const auto& plugin : agentContext->pluginManager->listForMount(*agentContext->pluginMount)) {
             notifications.push_back(AppendComponentNotification{
                 .name         = plugin.name,
                 .errorMessage = plugin.enabled ? "" : "disabled",
@@ -1253,9 +1255,9 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
 
     // 插件轮次边界: 每轮开始先清理上一轮遗留的待摘除中间件 (异常路径残留自愈),
     // 再登记本轮进行中 (供 disable 立即/延迟生效判定)
-    if (agentContext->pluginManager) {
-        agentContext->pluginManager->flushPendingCleanup();
-        agentContext->pluginManager->onTurnBegin();
+    if (agentContext->pluginMount) {
+        agentContext->pluginMount->flushPendingCleanup();
+        agentContext->pluginMount->onTurnBegin();
     }
 
     if (!session->bus) {
@@ -1687,8 +1689,8 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
     // 该 session 的历史 checkpoint, 轮末无需额外裁剪
 
     // 插件轮次结束: 正常路径登记轮次退出 (异常路径下轮开始时自愈)
-    if (agentContext->pluginManager) {
-        agentContext->pluginManager->onTurnEnd();
+    if (agentContext->pluginMount) {
+        agentContext->pluginMount->onTurnEnd();
     }
 
     // 关键指标: 轮次终态 (正常/出错/取消/中断) 与总耗时

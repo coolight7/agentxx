@@ -39,7 +39,7 @@ void setErrOut(PluginInstance* caller, PluginxxString* error_out, const std::str
 
 } // namespace
 
-PluginxxOperatorHandle* PluginManager::callToolAsync(
+PluginxxOperatorHandle* PluginMount::callToolAsync(
     PluginInstance*          caller,
     PluginxxStringView       name,
     PluginxxStringView       args_json,
@@ -49,7 +49,12 @@ PluginxxOperatorHandle* PluginManager::callToolAsync(
     PluginxxString*          error_out
 ) {
     // 入参在当前调用内复制；查询、登记和完整 start 都在所属 IO 线程执行。
-    if (!isIoThread()) {
+    auto host = host_.lock();
+    if (!host) {
+        hostMemorySetString(error_out, "call_tool_async: plugin host released");
+        return nullptr;
+    }
+    if (!host->isIoThread()) {
         auto self  = shared_from_this();
         auto owner = caller ? caller->self.lock() : nullptr;
         /// 排队阶段也保护 caller；只有持有实例对象不能阻止 ctx/dlclose。
@@ -61,7 +66,7 @@ PluginxxOperatorHandle* PluginManager::callToolAsync(
         const std::string toolName = svToStr(name), args = svToStr(args_json),
                           sid = svToStr(thread_id);
         return ioCallSync<PluginxxOperatorHandle*>(
-            this,
+            host.get(),
             [self, owner, admission, toolName, args, sid, cb, ud, error_out] {
                 return self->callToolAsync(owner.get(), toolName, args, sid, cb, ud, error_out);
             }
@@ -70,11 +75,11 @@ PluginxxOperatorHandle* PluginManager::callToolAsync(
     std::shared_ptr<OpCore> core;
     try {
         auto owner = caller ? caller->self.lock() : nullptr;
-        if (!owner || !ioExecutor()) {
+        if (!owner || !host->ioExecutor()) {
             throw std::runtime_error("call_tool_async: missing caller or IO executor");
         }
         const auto toolName = svToStr(name);
-        auto       tool     = std::dynamic_pointer_cast<PluginTool>(registry_->find(toolName));
+        auto       tool     = std::dynamic_pointer_cast<PluginTool>(toolRegistry()->find(toolName));
         auto       provider = tool ? tool->instance() : nullptr;
         if (!provider || !provider->enabled
             || (provider->lifetime && !provider->lifetime->acceptsOperations())) {
@@ -91,7 +96,7 @@ PluginxxOperatorHandle* PluginManager::callToolAsync(
             throw std::runtime_error("call_tool_async: arguments must be a JSON object");
         }
         const auto session     = svToStr(thread_id);
-        core                   = OpCore::create(runtime(), provider, owner, toolName);
+        core                   = OpCore::create(host->runtime(), provider, owner, toolName);
         const auto callId      = fmt::format("plugin_call_{}", core->id());
         parsed["sessionId"]    = session;
         parsed["tool_call_id"] = callId;

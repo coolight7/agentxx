@@ -114,7 +114,7 @@ asio::awaitable<Fixture> makeFixture() {
     // 加载 io executor (与 BaseAgent::init 一致): 跨线程 vtable 调用经真实 post
     f.mgr->setIoExecutor(co_await asio::this_coro::executor);
     // 建立挂载: 之后加载的插件挂到本 agent (运行期新加载的自动挂上)
-    co_await f.mgr->mountAgentAsync();
+    f.ctx->pluginMount = co_await f.mgr->mountAgentAsync(f.ctx);
     co_return f;
 }
 
@@ -174,7 +174,7 @@ asio::awaitable<CallOutcome> callPoint(
     auto        idSv   = agentxx::plugin::PluginStringView::from(pointId.data(), pointId.size());
     auto        argsSv = agentxx::plugin::PluginStringView::from(argsJson.data(), argsJson.size());
     PluginxxString err{nullptr, 0};
-    auto* handle = f.mgr->callFeatureAsync(caller, idSv, argsSv, &onFeatureCall, &probe, &err);
+    auto* handle = f.ctx->pluginMount->callFeatureAsync(caller, idSv, argsSv, &onFeatureCall, &probe, &err);
     if (handle == nullptr) {
         out.accepted = false;
         if (err.data != nullptr && err.size > 0) {
@@ -585,14 +585,14 @@ asio::awaitable<void> test_call_busy_protection() {
     PluginxxString err2{nullptr, 0};
     auto           pointSv = agentxx::plugin::PluginStringView::from("host.test.gate");
     auto           argsSv  = agentxx::plugin::PluginStringView::from("{}");
-    auto* h1 = f.mgr->callFeatureAsync(inst.get(), pointSv, argsSv, &onFeatureCall, &first, &err1);
+    auto* h1 = f.ctx->pluginMount->callFeatureAsync(inst.get(), pointSv, argsSv, &onFeatureCall, &first, &err1);
     XX_TEST_EXPECT_TRUE(h1 != nullptr);
     XX_TEST_EXPECT_TRUE(co_await waitFor([&gate] {
         return gate->entered;
     }));
 
     // 同一调用方的第二次调用: 被拒为 busy (不排队, 也不并发跑第二份实现)
-    auto* h2 = f.mgr->callFeatureAsync(inst.get(), pointSv, argsSv, &onFeatureCall, &second, &err2);
+    auto* h2 = f.ctx->pluginMount->callFeatureAsync(inst.get(), pointSv, argsSv, &onFeatureCall, &second, &err2);
     XX_TEST_EXPECT_TRUE(h2 != nullptr);
     XX_TEST_EXPECT_TRUE(co_await waitFor([&second] {
         return second.done;
@@ -702,18 +702,18 @@ asio::awaitable<void> test_spec_size_gate() {
 
     // 低于基线: 拒绝, 点不落注册表
     point.struct_size = static_cast<uint32_t>(sizeof(AgentxxPluginFeaturePointSpec) - 1);
-    XX_TEST_EXPECT_EQ(f.mgr->defineFeaturePoint(inst.get(), &point), -1);
+    XX_TEST_EXPECT_EQ(f.ctx->pluginMount->defineFeaturePoint(inst.get(), &point), -1);
     XX_TEST_EXPECT_EQ(f.ctx->features->pointsCount(), pointsBefore);
     XX_TEST_EXPECT_TRUE(f.ctx->features->find("plugin.example_feature.gate_probe") == nullptr);
 
     // 0 = 基线布局: 接受
     point.struct_size = 0;
-    XX_TEST_EXPECT_EQ(f.mgr->defineFeaturePoint(inst.get(), &point), 0);
+    XX_TEST_EXPECT_EQ(f.ctx->pluginMount->defineFeaturePoint(inst.get(), &point), 0);
     XX_TEST_EXPECT_TRUE(f.ctx->features->find("plugin.example_feature.gate_probe") != nullptr);
 
     // sizeof: 接受
     point.struct_size = static_cast<uint32_t>(sizeof(AgentxxPluginFeaturePointSpec));
-    XX_TEST_EXPECT_EQ(f.mgr->defineFeaturePoint(inst.get(), &point), 0);
+    XX_TEST_EXPECT_EQ(f.ctx->pluginMount->defineFeaturePoint(inst.get(), &point), 0);
 
     // 实现登记: 低于基线 → 拒绝
     AgentxxPluginFeatureImplSpec impl{};
@@ -730,13 +730,13 @@ asio::awaitable<void> test_spec_size_gate() {
         return nullptr;
     };
     impl.struct_size = static_cast<uint32_t>(sizeof(AgentxxPluginFeatureImplSpec) - 1);
-    XX_TEST_EXPECT_EQ(f.mgr->registerFeatureImpl(inst.get(), &impl), -1);
+    XX_TEST_EXPECT_EQ(f.ctx->pluginMount->registerFeatureImpl(inst.get(), &impl), -1);
     impl.struct_size = 0;
-    XX_TEST_EXPECT_EQ(f.mgr->registerFeatureImpl(inst.get(), &impl), 0);
+    XX_TEST_EXPECT_EQ(f.ctx->pluginMount->registerFeatureImpl(inst.get(), &impl), 0);
 
     // 收尾: 撤掉探针点, 不留残余
     XX_TEST_EXPECT_EQ(
-        f.mgr->undefineFeaturePoint(
+        f.ctx->pluginMount->undefineFeaturePoint(
             inst.get(),
             agentxx::plugin::PluginStringView::fromCstr("plugin.example_feature.gate_probe")
         ),

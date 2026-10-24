@@ -71,229 +71,405 @@ PluginInstance::~PluginInstance() {
 }
 
 // =====================================================================
+// 实例的挂载记录视图
+// =====================================================================
+
+bool PluginInstance::anyMounted() const {
+    for (const auto& weak : mounts) {
+        auto mount = weak.lock();
+        if (mount == nullptr) {
+            continue;
+        }
+        if (const auto* entry = mount->findEntry(this); entry != nullptr && entry->pluginMounted) {
+            return true;
+        }
+    }
+    return false;
+}
+
+std::vector<std::string> PluginInstance::allToolNames() const {
+    std::vector<std::string> out;
+    for (const auto& weak : mounts) {
+        auto mount = weak.lock();
+        if (mount == nullptr) {
+            continue;
+        }
+        if (const auto* entry = mount->findEntry(this); entry != nullptr) {
+            out.insert(out.end(), entry->tools.begin(), entry->tools.end());
+        }
+    }
+    return out;
+}
+
+std::vector<std::shared_ptr<PluginTool>> PluginInstance::allToolObjects() const {
+    std::vector<std::shared_ptr<PluginTool>> out;
+    for (const auto& weak : mounts) {
+        auto mount = weak.lock();
+        if (mount == nullptr) {
+            continue;
+        }
+        if (const auto* entry = mount->findEntry(this); entry != nullptr) {
+            out.insert(out.end(), entry->toolObjects.begin(), entry->toolObjects.end());
+        }
+    }
+    return out;
+}
+
+std::vector<int64_t> PluginInstance::allHookHandles() const {
+    std::vector<int64_t> out;
+    for (const auto& weak : mounts) {
+        auto mount = weak.lock();
+        if (mount == nullptr) {
+            continue;
+        }
+        if (const auto* entry = mount->findEntry(this); entry != nullptr) {
+            out.insert(out.end(), entry->hookHandles.begin(), entry->hookHandles.end());
+        }
+    }
+    return out;
+}
+
+std::vector<std::shared_ptr<GraphTypeSlot>> PluginInstance::allGraphSlots() const {
+    std::vector<std::shared_ptr<GraphTypeSlot>> out;
+    for (const auto& weak : mounts) {
+        auto mount = weak.lock();
+        if (mount == nullptr) {
+            continue;
+        }
+        if (const auto* entry = mount->findEntry(this); entry != nullptr) {
+            for (const auto& graph : entry->graphNodes) {
+                out.push_back(graph.slot);
+            }
+        }
+    }
+    return out;
+}
+
+// =====================================================================
 // 管理器构造 / 析构
 // =====================================================================
 
-PluginManager::PluginManager(std::weak_ptr<agentxx::agent::AgentContext> agentContext) :
-    agentContext_(std::move(agentContext)) {
+PluginManager::PluginManager(std::weak_ptr<agentxx::agent::AgentContext> primaryAgent) :
+    primaryAgent_(std::move(primaryAgent)) {
     // 通用表 (events/scheduler/tasks/capabilities 等) 需要主程序数据的入口经本类取数
     // (见 pluginxx/host/domain_hooks.h): 在任何 vtable 入口被调用之前注入。
     setDomainHooks(this);
-    if (auto ctx = agentContext_.lock()) {
-        registry_ = ctx->toolRegistry ? ctx->toolRegistry : std::make_shared<ToolRegistry>();
-        // 本挂载的 agent 标识: 单根用法下就是 "root" (AgentHost 可覆写成 "sub:N")
-        agentId_ = "root";
-    } else {
-        registry_ = std::make_shared<ToolRegistry>();
-    }
 }
 
 // =====================================================================
-// 挂载 (本管理器 = 一个 agent 的挂载)
+// 挂载表 (一个 agent 一个挂载)
 // =====================================================================
 
-bool PluginManager::mountOf(const PluginxxScopeRef* ref) const {
+std::vector<std::shared_ptr<PluginMount>> PluginManager::mounts() const {
+    return mounts_;
+}
+
+std::shared_ptr<PluginMount> PluginManager::findMountById(std::string_view agentId) const {
+    if (agentId.empty()) {
+        return nullptr;
+    }
+    for (const auto& mount : mounts_) {
+        if (mount && mount->agentId() == agentId) {
+            return mount;
+        }
+    }
+    return nullptr;
+}
+
+PluginMount* PluginManager::mountOf(const PluginxxScopeRef* ref) const {
     if (!pluginxx_scope_ref_ok(ref) || ref == nullptr) {
-        return false;
+        return nullptr;
     }
-    if (ref->id.data == nullptr || ref->id.size == 0 || agentId_.empty()) {
-        return false;
+    if (ref->id.data == nullptr || ref->id.size == 0) {
+        return nullptr;
     }
-    if (agentId_.size() != static_cast<size_t>(ref->id.size)
-        || agentId_.compare(0, agentId_.size(), ref->id.data, agentId_.size()) != 0) {
-        return false;
+    const std::string_view agentId{ref->id.data, static_cast<size_t>(ref->id.size)};
+    auto                   mount = findMountById(agentId);
+    if (!mount) {
+        return nullptr;
     }
     // seq = 0 表示不校验 (FFI / 测试自行构造引用时可用)
-    return ref->seq == 0 || ref->seq == mountSeq_;
+    if (ref->seq != 0 && ref->seq != mount->mountSeq()) {
+        return nullptr;
+    }
+    return mount.get();
 }
 
-namespace {
-
-/// 把 C 字符串视图转成自有字符串
-std::string mountViewToStr(const PluginxxStringView& sv) {
-    if (sv.data == nullptr || sv.size == 0) {
-        return {};
-    }
-    return std::string{sv.data, static_cast<size_t>(sv.size)};
-}
-
-} // namespace
-
-asio::awaitable<bool> PluginManager::mountOneAsync(std::shared_ptr<PluginInstance> inst) {
-    if (!inst) {
-        co_return false;
-    }
-    if (inst->pluginMounted) {
-        co_return true; // 幂等
-    }
-    // 实例已在关闭流程里 (卸载/主程序关闭): 不再挂载, 否则会把刚摘掉的注册又加回去
-    if (inst->lifetime && inst->lifetime->closeRequested()) {
-        co_return false;
-    }
-    // 挂载期间允许登记资源 (skill/memory/mcp): 它们属于 agent 级注册,
-    // 与工具/钩子一样只能在 mount 里声明; 挂载完成后才冻结
-    inst->resourcesFrozen = false;
-    if (!inst->mountFn) {
-        // 无挂载入口 = 本插件无 agent 侧能力; 清单资源仍然按挂载应用
-        applyManifestResourcesNow(*inst);
-        inst->pluginMounted   = true;
-        inst->resourcesFrozen = true;
-        co_return true;
-    }
-    auto ctx = agentContext_.lock();
+std::shared_ptr<PluginMount>
+    PluginManager::attachMountSync(std::shared_ptr<agentxx::agent::AgentContext> ctx) {
     if (!ctx) {
-        co_return false;
+        return nullptr;
     }
-
-    // 挂载序号在第一次建立挂载时分配; 之后运行期新加载的插件沿用同一个序号
-    // (它们是同一个 agent 的挂载, 引用里的 seq 必须一致才能通过校验)
-    if (mountSeq_ == 0) {
-        ++mountSeq_;
+    const std::string agentId = ctx->agentId.empty() ? std::string{"root"} : ctx->agentId;
+    if (auto existing = findMountById(agentId); existing != nullptr) {
+        return existing;
     }
-
-    // 挂载参数: agent 标识/工作目录/语言/模型/挂载配置
-    const std::string workDir   = getSessionWorkDir();
-    const std::string language  = getLanguage();
-    const std::string modelJson = getModelConfigJson();
     const std::string agentName = ctx->agentConfig ? ctx->agentConfig->agentName : std::string{};
-
-    inst->mountSeq      = mountSeq_;
-    inst->mountUserData = nullptr;
-
-    // 清单声明的资源 (skill/memory/mcp) 属于本挂载: 先应用, 插件的 mount 回调里
-    // 还能继续声明 (资源声明在挂载收尾才冻结)
-    applyManifestResourcesNow(*inst);
-
-    const std::string           configJson = inst->args.dump();
-    AgentxxPluginAgentMountSpec spec{};
-    spec.struct_size = sizeof(AgentxxPluginAgentMountSpec);
-    spec.flags       = 0;
-    spec.agent_id    = PluginStringView::from(agentId_);
-    spec.agent_name  = PluginStringView::from(agentName);
-    spec.work_dir    = PluginStringView::from(workDir);
-    spec.language    = PluginStringView::from(language);
-    spec.model_json  = PluginStringView::from(modelJson);
-    spec.config_json = PluginStringView::from(configJson);
-    spec.mount_seq   = mountSeq_;
-
-    std::string mountError;
-    auto        instPtr     = inst;
-    void*       mountResult = nullptr;
-    const bool  ok          = co_await pluginxx::awaitPluginLifecycle(
-        this->runtime(),
-        instPtr,
-        instPtr->pluginCtx,
-        [instPtr, &spec, &mountResult](
-            void*                         /*ctx*/,
-            const PluginxxOperatorNotify* notify,
-            PluginxxString*               err
-        ) {
-            mountResult = instPtr->mountFn(instPtr->pluginCtx, &spec, notify, err);
-            return mountResult;
-        },
-        "plugin mount",
-        mountError
+    auto mount = std::make_shared<PluginMount>(
+        shared_from_this(),
+        ctx,
+        agentId,
+        agentName,
+        nextMountSeq_++
     );
-    if (!ok) {
-        XX_LOGE("agent '{}' 挂载插件 `{}` 失败: {}", agentId_, inst->name, mountError);
-        // 回滚该插件在本 agent 上已经生效的注册 (工具/权限/钩子/提示词/功能点/
-        // 图类型/订阅/能力/事件订阅), 不影响其他实例与其他 agent
-        this->detachInstanceRegistrations(inst.get());
-        // 资源 (skill/memory/mcp) 的所有权记录一并清掉: 这不是"禁用", 是根本没有挂上
-        if (auto c = agentContext_.lock(); c && c->resourceApplier) {
-            c->resourceApplier->removeAllOwned(inst->name);
-        }
-        inst->mountUserData   = nullptr;
-        inst->pluginMounted   = false;
-        inst->resourcesFrozen = false; // 允许重新挂载时再次声明
-        co_return false;
-    }
-    inst->mountUserData   = mountResult;
-    inst->pluginMounted   = true;
-    inst->resourcesFrozen = true; // 挂载收尾: 资源声明固定 (运行时注册会被拒)
-    // 挂载期间实例被请求关闭: 立刻拆掉, 否则注册会在关闭流程之后残留
-    if (inst->lifetime && inst->lifetime->closeRequested()) {
-        co_await unmountOneAsync(inst);
-        co_return false;
-    }
-    co_return true;
+    mounts_.push_back(mount);
+    return mount;
 }
 
-asio::awaitable<void> PluginManager::unmountOneAsync(std::shared_ptr<PluginInstance> inst) {
-    if (!inst || !inst->pluginMounted) {
-        co_return;
+asio::awaitable<std::shared_ptr<PluginMount>>
+    PluginManager::mountAgentAsync(std::shared_ptr<agentxx::agent::AgentContext> ctx) {
+    if (!ctx) {
+        co_return nullptr;
     }
-    // 拆挂载后该 agent 上的资源声明也一并撤销 (记录由挂载撤销路径摘除);
-    // 重新挂载时插件会再次声明, 因此这里解除冻结
-    inst->resourcesFrozen = false;
-    if (inst->unmountFn) {
-        std::string unmountError;
-        auto        instPtr = inst;
-        void*       mountUd = inst->mountUserData;
-        const bool  ok      = co_await pluginxx::awaitPluginLifecycle(
-            this->runtime(),
-            instPtr,
-            instPtr->pluginCtx,
-            [instPtr, mountUd](
-                void*                         /*ctx*/,
-                const PluginxxOperatorNotify* notify,
-                PluginxxString*               err
-            ) {
-                return instPtr->unmountFn(instPtr->pluginCtx, mountUd, notify, err);
-            },
-            "plugin unmount",
-            unmountError
+    // agent 标识: 由 AgentHost / 启动方在上下文里指定; 未指定时按根 agent 处理
+    const std::string agentId = ctx->agentId.empty() ? std::string{"root"} : ctx->agentId;
+    auto              mount   = findMountById(agentId);
+    if (mount) {
+        // 同一 agent 已经在挂载表里: 只补挂新加载的实例 (幂等)
+        if (mount->agentContext().get() != ctx.get()) {
+            XX_LOGE(
+                "agent '{}' 已有插件挂载, 但传入的上下文不是同一个 agent; 拒绝重复挂载",
+                agentId
+            );
+            co_return nullptr;
+        }
+    } else {
+        const std::string agentName
+            = ctx->agentConfig ? ctx->agentConfig->agentName : std::string{};
+        mount = std::make_shared<PluginMount>(
+            shared_from_this(),
+            ctx,
+            agentId,
+            agentName,
+            nextMountSeq_++
         );
-        if (!ok) {
-            XX_LOGW("agent '{}' 卸载插件 `{}` 失败: {}", agentId_, inst->name, unmountError);
-        }
+        mounts_.push_back(mount);
     }
-    // 摘掉本 agent 上的实体: 业务注册 (工具/权限/钩子/提示词/功能点/图类型)
-    // 与资源 (skill/memory/mcp) 所有权记录。
-    // - **不**动能力声明与主程序总线订阅: 它们属于进程级 (`start`/`stop`), 拆挂载时
-    //   仍然存活 (否则重新启用后能力就丢了)
-    this->detachDomainRegistrations(inst.get());
-    this->detachDomainOwnedResources(inst.get());
-    if (auto c = agentContext_.lock(); c && c->resourceApplier) {
-        c->resourceApplier->removeAllOwned(inst->name);
-    }
-    inst->pluginMounted = false;
-    inst->mountUserData = nullptr;
-    co_return;
-}
 
-asio::awaitable<void> PluginManager::mountAgentAsync() {
-    if (!agentContext_.lock()) {
-        co_return;
-    }
-    for (auto& [name, inst] : this->plugins_) {
+    // 逐实例驱动插件的 mount 回调 (顺序 = 实例表顺序; 单个实例失败只影响它自己)
+    for (const auto& [name, inst] : this->plugins_) {
         (void)name;
-        if (!inst || inst->pluginMounted) {
-            continue; // 幂等: 本次调用只挂新加入的实例
+        if (!inst) {
+            continue;
         }
-        co_await mountOneAsync(inst);
+        co_await mount->mountOneAsync(inst);
     }
-    hasMount_ = true;
     XX_LOGI(
         "agent '{}' 完成插件挂载 (seq {}, {} 个实例)",
-        agentId_,
-        mountSeq_,
-        this->plugins_.size()
+        mount->agentId(),
+        mount->mountSeq(),
+        mount->mountedCount()
     );
+    co_return mount;
+}
+
+asio::awaitable<void> PluginManager::unmountAgentAsync(std::string_view agentId) {
+    auto mount = findMountById(agentId);
+    if (!mount) {
+        co_return;
+    }
+    co_await mount->unmountAllAsync();
+    std::erase(mounts_, mount);
+    XX_LOGI("agent '{}' 已拆全部插件挂载", mount->agentId());
     co_return;
 }
 
-asio::awaitable<void> PluginManager::unmountAgentAsync() {
-    if (!hasMount_) {
+asio::awaitable<void> PluginManager::unmountAllAgentsAsync() {
+    auto snapshot = mounts_;
+    for (const auto& mount : snapshot) {
+        if (mount) {
+            co_await mount->unmountAllAsync();
+        }
+    }
+    mounts_.clear();
+    co_return;
+}
+
+asio::awaitable<bool> PluginManager::mountOneAsync(
+    const std::shared_ptr<PluginMount>& mount,
+    std::shared_ptr<PluginInstance>     inst
+) {
+    if (!mount) {
+        co_return false;
+    }
+    co_return co_await mount->mountOneAsync(std::move(inst));
+}
+
+asio::awaitable<void> PluginManager::unmountOneAsync(
+    const std::shared_ptr<PluginMount>& mount,
+    std::shared_ptr<PluginInstance>     inst
+) {
+    if (!mount) {
         co_return;
     }
-    // 逆序卸载
-    for (auto it = this->plugins_.rbegin(); it != this->plugins_.rend(); ++it) {
-        co_await unmountOneAsync(it->second);
-    }
-    hasMount_ = false;
-    XX_LOGI("agent '{}' 已拆全部插件挂载", agentId_);
+    co_await mount->unmountOneAsync(std::move(inst));
     co_return;
+}
+
+PluginMount* PluginManager::soleMount() const {
+    if (mounts_.size() != 1 || !mounts_.front()) {
+        return nullptr;
+    }
+    return mounts_.front().get();
+}
+
+std::string PluginManager::agentId() const {
+    auto* mount = soleMount();
+    return mount != nullptr ? mount->agentId() : std::string{};
+}
+
+uint64_t PluginManager::mountSequence() const {
+    auto* mount = soleMount();
+    return mount != nullptr ? mount->mountSeq() : 0;
+}
+
+std::shared_ptr<ToolRegistry> PluginManager::registry() const {
+    if (auto ctx = primaryAgent_.lock(); ctx && ctx->toolRegistry) {
+        return ctx->toolRegistry;
+    }
+    static const std::shared_ptr<ToolRegistry> kEmpty = std::make_shared<ToolRegistry>();
+    return kEmpty;
+}
+
+PluginMount::RegistrationInventory
+    PluginManager::registrationInventory(const PluginInstance& inst) const {
+    PluginMount::RegistrationInventory out;
+    for (const auto& mount : mounts_) {
+        if (!mount || mount->findEntry(&inst) == nullptr) {
+            continue;
+        }
+        const auto one = mount->registrationInventory(inst);
+        out.tools += one.tools;
+        out.permissionTools += one.permissionTools;
+        out.hooks += one.hooks;
+        out.graphNodeTypes += one.graphNodeTypes;
+        out.eventSubscriptions += one.eventSubscriptions;
+        out.capabilities += one.capabilities;
+        out.promptKeys += one.promptKeys;
+        out.skillDirs += one.skillDirs;
+        out.memoryFiles += one.memoryFiles;
+        out.mcpNamespaces += one.mcpNamespaces;
+        out.featurePoints += one.featurePoints;
+        out.featureImpls += one.featureImpls;
+        out.ownsGraphDefinition = out.ownsGraphDefinition || one.ownsGraphDefinition;
+    }
+    return out;
+}
+
+std::string PluginManager::graphDefinitionOwner() const {
+    for (const auto& mount : mounts_) {
+        if (mount && !mount->graphDefinitionOwner().empty()) {
+            return mount->graphDefinitionOwner();
+        }
+    }
+    return {};
+}
+
+std::string PluginManager::hooksJson() {
+    if (auto* mount = soleMount(); mount != nullptr) {
+        return mount->hooksJson();
+    }
+    utilxx_base::Json arr = utilxx_base::Json::array();
+    for (const auto& mount : mounts_) {
+        if (mount) {
+            arr.push_back(utilxx_base::Json::parse(mount->hooksJson()));
+        }
+    }
+    return arr.dump();
+}
+
+std::vector<PluginMount::HookHandlerView>
+    PluginManager::handlersOf(AgentxxPluginHookPoint point) const {
+    std::vector<PluginMount::HookHandlerView> out;
+    for (const auto& mount : mounts_) {
+        if (!mount) {
+            continue;
+        }
+        const auto one = mount->handlersOf(point);
+        out.insert(out.end(), one.begin(), one.end());
+    }
+    return out;
+}
+
+int64_t PluginManager::addCoreHookHandler(
+    AgentxxPluginHookPoint point,
+    int32_t                priority,
+    std::string            module,
+    AgentxxPluginHookSpec  spec
+) {
+    auto* mount = soleMount();
+    if (mount == nullptr) {
+        XX_LOGW(
+            "addCoreHookHandler: 需要恰好一份挂载 (当前 {} 份), 本次登记被忽略",
+            mounts_.size()
+        );
+        return 0;
+    }
+    return mount->addCoreHookHandler(point, priority, std::move(module), spec);
+}
+
+bool PluginManager::removeCoreHookHandler(int64_t handle) {
+    for (const auto& mount : mounts_) {
+        if (mount && mount->removeCoreHookHandler(handle)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void PluginManager::onTurnBegin() {
+    for (const auto& mount : mounts_) {
+        if (mount) {
+            mount->onTurnBegin();
+        }
+    }
+}
+
+void PluginManager::onTurnEnd() {
+    for (const auto& mount : mounts_) {
+        if (mount) {
+            mount->onTurnEnd();
+        }
+    }
+}
+
+void PluginManager::flushPendingCleanup() {
+    for (const auto& mount : mounts_) {
+        if (mount) {
+            mount->flushPendingCleanup();
+        }
+    }
+}
+
+std::string PluginManager::listFeaturePoints() {
+    if (auto* mount = soleMount(); mount != nullptr) {
+        return mount->listFeaturePoints();
+    }
+    utilxx_base::Json arr = utilxx_base::Json::array();
+    for (const auto& mount : mounts_) {
+        if (mount) {
+            arr.push_back(utilxx_base::Json::parse(mount->listFeaturePoints()));
+        }
+    }
+    return arr.dump();
+}
+
+std::string PluginManager::listMountsJson() {
+    utilxx_base::Json arr = utilxx_base::Json::array();
+    for (const auto& mount : mounts_) {
+        if (mount) {
+            arr.push_back(mount->infoJson());
+        }
+    }
+    return arr.dump();
+}
+
+std::string PluginManager::mountInfoJson(std::string_view agentId) {
+    auto mount = findMountById(agentId);
+    if (!mount) {
+        return {};
+    }
+    return mount->infoJson().dump();
 }
 
 // =====================================================================
@@ -303,93 +479,51 @@ asio::awaitable<void> PluginManager::unmountAgentAsync() {
 asio::awaitable<void> PluginManager::onInstanceDisabledAsync(
     const std::shared_ptr<PluginInstance>& inst
 ) {
-    // 禁用 = 该 agent 不再挂这个插件: 先拆挂载 (调插件 unmount 释放 per-agent 状态),
-    // 实例本身不销毁、不卸载; 注册已由骨架的 detachInstanceRegistrations 摘除。
+    // 禁用 = 所有 agent 都不再挂这个插件: 逐个挂载拆掉 (调插件 unmount 释放
+    // per-agent 状态), 实例本身不销毁、不卸载; 注册已由骨架的
+    // detachInstanceRegistrations 摘除。
     //
     // 等待期间用户又启用了它 (disable/enable 紧邻): 本次卸载作废 —— 否则会把
     // 启用事务刚刚重建的注册与能力又摘一遍。
     if (!inst || inst->enabled) {
         co_return;
     }
-    co_await unmountOneAsync(inst);
+    auto snapshot = mounts_;
+    for (const auto& mount : snapshot) {
+        if (mount) {
+            co_await mount->unmountOneAsync(inst);
+        }
+    }
     co_return;
 }
 
 asio::awaitable<void> PluginManager::onInstanceEnabledAsync(
     const std::shared_ptr<PluginInstance>& inst
 ) {
-    // 启用 = 重新挂到本 agent: 注册全部由插件在自己的 mount 回调里重新声明
+    // 启用 = 重新挂到全部挂载 (agent 级注册都在插件的 mount 回调里)
     //
-    // 先幂等地拆一次挂载: `disable` 的拆挂载事务可能与本次启用交错 (它发现实例
-    // 已重新启用时会跳过), 这样无论两者谁先完成, 最后都恰好挂载一次。
-    if (!inst || !inst->enabled || !hasMount_) {
+    // 只做"没挂就挂": 禁用时已经拆过挂载 (框架的 detachInstanceRegistrations →
+    // [PluginMount::detachInstance]), 这里再拆一次会把 start 事务刚登记的注册又摘掉。
+    if (!inst || !inst->enabled || mounts_.empty()) {
         co_return;
     }
-    co_await unmountOneAsync(inst);
-    if (!inst->enabled) {
-        co_return; // 拆挂载期间又被禁用了
+    auto snapshot = mounts_;
+    for (const auto& mount : snapshot) {
+        if (!mount) {
+            continue;
+        }
+        co_await mount->mountOneAsync(inst); // 幂等: 已挂载时直接返回
+        if (!inst->enabled) {
+            co_return; // 挂载期间又被禁用了
+        }
     }
-    co_await mountOneAsync(inst);
     co_return;
-}
-
-std::string PluginManager::listMountsJson() {
-    utilxx_base::Json arr = utilxx_base::Json::array();
-    if (!hasMount_ || agentId_.empty()) {
-        return arr.dump();
-    }
-    auto              ctx = agentContext_.lock();
-    utilxx_base::Json item;
-    item["agentId"]   = agentId_;
-    item["agentName"] = ctx && ctx->agentConfig ? ctx->agentConfig->agentName : std::string{};
-    item["workDir"]   = getSessionWorkDir();
-    item["language"]  = getLanguage();
-    item["mountSeq"]  = mountSeq_;
-    utilxx_base::Json names = utilxx_base::Json::array();
-    for (const auto& [name, inst] : this->plugins_) {
-        if (inst && inst->pluginMounted) {
-            names.push_back(name);
-        }
-    }
-    item["plugins"] = std::move(names);
-    arr.push_back(std::move(item));
-    return arr.dump();
-}
-
-std::string PluginManager::mountInfoJson(std::string_view agentId) {
-    if (agentId != agentId_ || !hasMount_) {
-        return {};
-    }
-    auto text = listMountsJson();
-    try {
-        auto arr = utilxx_base::Json::parse(text);
-        if (arr.is_array() && !arr.empty()) {
-            return arr[0].dump();
-        }
-    } catch (...) {
-    }
-    return {};
 }
 
 PluginManager::~PluginManager() {
     // 同步卸载全部实例 (骨架实现: 仍有 lease / 欠 stop 的实例保留上下文与 DSO)
     shutdownAll();
     warnPendingCloseOnDestroy("agent");
-}
-
-void PluginManager::flushPendingCleanup() {
-    for (auto& item : pendingCleanups_) {
-        auto handle = item.handle.lock();
-        if (!handle) {
-            continue;
-        }
-        eraseHookDispatch(handle.get());
-        // 排队摘除的句柄就是当前派发器时一并释放 (没有处理器才会排队, 这里再确认一次)
-        if (hookHandlers_.empty() && hookDispatch_.get() == handle.get()) {
-            hookDispatch_ = nullptr;
-        }
-    }
-    pendingCleanups_.clear();
 }
 
 // =====================================================================
@@ -407,97 +541,73 @@ std::shared_ptr<PluginInstance> PluginManager::createInstance(std::string name) 
     return inst;
 }
 
-/// 摘除实例的业务注册 (工具 / 工具权限 / 图节点类型 / 提示词贡献 / 功能点 / 钩子处理器)
-/// - 只摘除主程序侧生效的注册, 保留实例内的注册记录 (启用时由 start 事务重新声明);
-/// - 事件订阅与能力声明的撤销属通用部分, 由骨架的 detachAll 处理。
+/// 摘除实例的业务注册: 让本实例从**全部挂载**上摘掉
+///
+/// 禁用 / 卸载路径进入这里: 只摘除主程序侧生效的注册, 保留每个挂载上的记录
+/// (启用时插件会在自己的 mount 回调里重新登记);
+/// 事件订阅与能力声明的撤销属通用部分, 由骨架的 detachAll 处理。
 void PluginManager::detachDomainRegistrations(PluginInstance* inst) {
     if (!inst) {
         return;
     }
-    for (const auto& name : inst->toolNames) {
-        registry_->unregisterTool(name);
-    }
-    // 工具权限声明随工具一并撤销 (工具不再可调用, 声明无需保留)
-    if (auto* permission = permissionMiddleware()) {
-        for (const auto& name : inst->permissionToolNames) {
-            permission->unregisterToolPermission(name);
+    for (const auto& mount : mounts_) {
+        if (mount) {
+            mount->detachInstance(inst);
         }
     }
-    inst->permissionToolNames.clear();
-
-    // 功能点: 撤销本实例登记的实现, 并摘除它自己声明的点
-    if (auto ctx = agentContext_.lock(); ctx && ctx->features) {
-        const std::string owner = fmt::format("plugin:{}", inst->name);
-        for (const auto& pointId : inst->featurePointImpls) {
-            ctx->features->removeImpl(pointId, owner);
-        }
-        for (const auto& pointId : inst->featurePoints) {
-            ctx->features->undefinePluginPoint(pointId);
-        }
-    }
-
-    for (const auto& graph : inst->graphNodeTypes) {
-        if (graph.slot) {
-            graph.slot->invalidate(inst);
-        }
-    }
-
-    // 执行图定义独占 slot: 占用者卸载时恢复占用前的定义 ("回到内置")
-    releaseGraphDefinitionSlot(inst);
-
-    // 提示词: 删除本实例的全部贡献并重新合成受影响键 (不写回旧值, 不顶掉别人)
-    // - 贡献的 owner 键就是实例名 (见 setPromptJson 的 record)
-    removePromptContributions(inst->name);
-
-    // 钩子处理器: 从注册表摘除本实例的全部处理器 (记录保留, 句柄置 0);
-    // 没有处理器时派发器按需摘除 (轮次执行中先停用, 轮末真正摘除)
-    detachHookHandlers(inst);
 }
 
-/// 摘除实例专属资源的所有权: 资源应用器上的启用标记 (钩子派发器是主程序级单例,
-/// 不在实例名下, 处理器由 [detachHookHandlers] 从注册表摘除)
+/// 摘除实例专属资源的所有权: 各挂载资源应用器上的启用标记 (钩子派发器属于具体
+/// 挂载, 处理器由 [PluginMount::detachInstance] 从该挂载的注册表摘除)
 void PluginManager::detachDomainOwnedResources(PluginInstance* inst) {
     if (!inst) {
         return;
     }
-    if (auto c = agentContext_.lock()) {
-        if (c->resourceApplier) {
-            c->resourceApplier->setOwnerEnabled(inst->name, false);
+    for (const auto& mount : mounts_) {
+        if (!mount) {
+            continue;
+        }
+        if (auto ctx = mount->agentContext(); ctx && ctx->resourceApplier) {
+            ctx->resourceApplier->setOwnerEnabled(inst->name, false);
         }
     }
 }
 
-/// 清空"由插件 start 事务重新声明"的业务记录 (工具/权限/hook/图/功能点)
+/// 清空"由插件 start 事务重新声明"的业务记录 (各挂载上的注册记录)
 /// - 通用记录 (事件订阅/能力声明) 由骨架的 clearPluginOwnedRegistrations 清空;
 /// - stop 成功后调用, 避免下次 start 在旧记录上重复累积。
 void PluginManager::clearDomainRegistrations(PluginInstance* inst) {
     if (!inst) {
         return;
     }
-    inst->toolNames.clear();
-    inst->permissionToolNames.clear();
-    inst->tools.clear();
-    inst->hookRegistrations.clear();
-    inst->graphNodeTypes.clear();
-    inst->featurePoints.clear();
-    inst->featurePointImpls.clear();
-}
-
-/// 卸载时释放实例级资源: 工具对象列表 + 清单资源所有权
-void PluginManager::releaseInstanceResources(PluginInstance& inst) {
-    inst.tools.clear();
-    if (auto c = agentContext_.lock()) {
-        if (c->resourceApplier) {
-            c->resourceApplier->removeAllOwned(inst.name);
+    for (const auto& mount : mounts_) {
+        if (mount) {
+            mount->clearInstanceRecords(inst);
         }
     }
 }
 
-/// 启用状态变化通知: 同步资源应用器上的启用标记
+/// 卸载时释放实例级资源: 各挂载上的工具对象 + 清单资源所有权
+void PluginManager::releaseInstanceResources(PluginInstance& inst) {
+    for (const auto& mount : mounts_) {
+        if (!mount) {
+            continue;
+        }
+        mount->releaseInstanceInstances(inst);
+        if (auto ctx = mount->agentContext(); ctx && ctx->resourceApplier) {
+            ctx->resourceApplier->removeAllOwned(inst.name);
+        }
+    }
+}
+
+/// 启用状态变化通知: 同步各挂载资源应用器上的启用标记
 void PluginManager::onInstanceEnabledChanged(PluginInstance& inst, bool enabled) {
-    if (auto c = agentContext_.lock()) {
-        if (c->resourceApplier) {
-            c->resourceApplier->setOwnerEnabled(inst.name, enabled);
+    for (const auto& mount : mounts_) {
+        if (!mount) {
+            continue;
+        }
+        if (auto ctx = mount->agentContext(); ctx && ctx->resourceApplier) {
+            ctx->resourceApplier->setOwnerEnabled(inst.name, enabled);
         }
     }
 }
@@ -563,11 +673,11 @@ void toLoadOptions(
     }
 }
 
-/// 记录加载耗时与注册计数
+/// 记录加载耗时与进程级注册计数
 ///
-/// 在加加载口收尾时调用: 写回 [PluginInstance::loadMs] 并把"加载完成后到底注册了
-/// 什么"打到日志, 便于回答"插件装了但模型看不到工具"一类问题;
-/// 完整清单另见加载快照 (`--dump-config`)。
+/// 在加载入口收尾时调用: 写回 [PluginInstance::loadMs] 并把"加载完成后到底注册了
+/// 什么"打到日志 —— 此时还没有任何挂载, 因此只可能有事件订阅/能力这类进程级登记;
+/// agent 级注册 (工具/钩子/图/资源) 在插件 `mount` 回调里才发生。
 void notePluginLoaded(
     const std::shared_ptr<PluginInstance>& inst,
     std::chrono::steady_clock::time_point  begin
@@ -580,16 +690,12 @@ void notePluginLoaded(
     )
                                              .count());
     XX_LOGI(
-        "Plugin `{}` loaded in {} ms: tools={} hooks={} graphNodes={} events={} capabilities={} "
-        "permissionTools={} (enable={})",
+        "Plugin `{}` loaded in {} ms: events={} capabilities={} mount={} (enable={})",
         inst->name,
         inst->loadMs,
-        inst->toolNames.size(),
-        inst->hookRegistrations.size(),
-        inst->graphNodeTypes.size(),
         inst->subscriptions.size(),
         inst->capabilityRegistrations.size(),
-        inst->permissionToolNames.size(),
+        inst->mountFn != nullptr,
         inst->enabled
     );
 }
@@ -817,10 +923,15 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadPluginAsync(
     if (!inst && !allowClientOnlySkip) {
         logLoadAdvice(*this, pathForAdvice);
     }
-    // 本 agent 已经建立挂载时, 运行期新加载的插件直接挂到它身上
+    // 已经建立挂载时, 运行期新加载的插件直接挂到这些 agent 上
     // (先加载后挂载的正常路径由 init 的 `plugin_mount` 步骤统一驱动)
-    if (inst && hasMount_) {
-        co_await mountAgentAsync();
+    if (inst && !mounts_.empty()) {
+        auto snapshot = mounts_;
+        for (const auto& mount : snapshot) {
+            if (mount) {
+                co_await mount->mountOneAsync(inst);
+            }
+        }
     }
     co_return inst;
 }
@@ -829,48 +940,96 @@ asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadPluginAsync(
 // 查询
 // =====================================================================
 
+namespace {
+
+/// 与 agent 无关的清单字段 (加载元信息 + 进程级登记)
+void fillInstanceView(PluginManager::PluginListView& view, const PluginInstance& inst) {
+    view.name                  = inst.name;
+    view.version               = inst.version;
+    view.description           = inst.description;
+    view.path                  = inst.path;
+    view.configPath            = inst.configPath;
+    view.enabled               = inst.enabled;
+    view.inflight              = inst.lifetime ? inst.lifetime->leaseCount() : 0;
+    view.depends               = inst.depends;
+    view.optionalDepends       = inst.optionalDepends;
+    view.requiredInterfaces    = inst.interfaces.require;
+    view.optionalInterfaces    = inst.interfaces.optional;
+    view.userDisabled          = inst.userDisabled;
+    view.blockedByDependencies = inst.blockedByDependencies;
+    view.loadMs                = inst.loadMs;
+    view.eventSubCount         = inst.subscriptions.size();
+    for (const auto& cap : inst.capabilityRegistrations) {
+        view.capabilities.push_back(cap.name);
+    }
+}
+
+/// 把一个挂载上的计数并入清单行 (没有该挂载的记录 = 跳过)
+void mergeMountView(
+    PluginManager::PluginListView& view,
+    const PluginMount&            mount,
+    const PluginInstance&         inst
+) {
+    const auto* entry = mount.findEntry(&inst);
+    if (entry == nullptr) {
+        return;
+    }
+    view.mountedAgents.push_back(mount.agentId());
+    for (const auto& name : entry->tools) {
+        if (std::find(view.tools.begin(), view.tools.end(), name) == view.tools.end()) {
+            view.tools.push_back(name);
+        }
+    }
+    const auto handlers = mount.hookHandlersOf(inst);
+    view.hookCount += handlers.size();
+    for (const auto& handler : handlers) {
+        view.hookPriorities.push_back(handler.priority);
+    }
+    view.graphNodeCount += entry->graphNodes.size();
+    view.permissionToolCount += entry->permissionTools.size();
+    const auto inventory       = mount.registrationInventory(inst);
+    view.registrationTotal += inventory.total();
+    view.promptKeyCount += inventory.promptKeys;
+    view.skillDirCount += inventory.skillDirs;
+    view.memoryFileCount += inventory.memoryFiles;
+    view.mcpNamespaceCount += inventory.mcpNamespaces;
+    view.featurePointCount += inventory.featurePoints;
+    view.featureImplCount += inventory.featureImpls;
+    view.ownsGraphDefinition = view.ownsGraphDefinition || inventory.ownsGraphDefinition;
+}
+
+} // namespace
+
 std::vector<PluginManager::PluginListView> PluginManager::list() const {
     std::vector<PluginListView> out;
     out.reserve(plugins_.size());
     for (const auto& [name, inst] : plugins_) {
+        (void)name;
+        if (!inst) {
+            continue;
+        }
         PluginListView view;
-        view.name                  = inst->name;
-        view.version               = inst->version;
-        view.description           = inst->description;
-        view.path                  = inst->path;
-        view.configPath            = inst->configPath;
-        view.enabled               = inst->enabled;
-        view.inflight              = inst->lifetime ? inst->lifetime->leaseCount() : 0;
-        view.tools                 = inst->toolNames;
-        view.depends               = inst->depends;
-        view.optionalDepends       = inst->optionalDepends;
-        view.requiredInterfaces    = inst->interfaces.require;
-        view.optionalInterfaces    = inst->interfaces.optional;
-        view.userDisabled          = inst->userDisabled;
-        view.blockedByDependencies = inst->blockedByDependencies;
-        view.loadMs                = inst->loadMs;
-        // 钩子: 注册表里生效中的条数 + 各处理器优先级 (按派发顺序, 一眼看出谁先跑)
-        view.hookCount = liveHookHandlersOf(*inst);
-        for (const auto& handler : allHookHandlersOf(*inst)) {
-            view.hookPriorities.push_back(handler.priority);
+        fillInstanceView(view, *inst);
+        for (const auto& mount : mounts_) {
+            if (mount) {
+                mergeMountView(view, *mount, *inst);
+            }
         }
-        view.graphNodeCount      = inst->graphNodeTypes.size();
-        view.eventSubCount       = inst->subscriptions.size();
-        view.permissionToolCount = inst->permissionToolNames.size();
-        {
-            const auto inventory     = registrationInventory(*inst);
-            view.registrationTotal   = inventory.total();
-            view.promptKeyCount      = inventory.promptKeys;
-            view.skillDirCount       = inventory.skillDirs;
-            view.memoryFileCount     = inventory.memoryFiles;
-            view.mcpNamespaceCount   = inventory.mcpNamespaces;
-            view.ownsGraphDefinition = inventory.ownsGraphDefinition;
-            view.featurePointCount   = inventory.featurePoints;
-            view.featureImplCount    = inventory.featureImpls;
+        out.push_back(std::move(view));
+    }
+    return out;
+}
+
+std::vector<PluginManager::PluginListView> PluginManager::listForMount(const PluginMount& mount) const {
+    std::vector<PluginListView> out;
+    for (const auto& [name, inst] : plugins_) {
+        (void)name;
+        if (!inst || mount.findEntry(inst.get()) == nullptr) {
+            continue;
         }
-        for (const auto& cap : inst->capabilityRegistrations) {
-            view.capabilities.push_back(cap.name);
-        }
+        PluginListView view;
+        fillInstanceView(view, *inst);
+        mergeMountView(view, mount, *inst);
         out.push_back(std::move(view));
     }
     return out;
@@ -910,7 +1069,15 @@ std::string PluginManager::getPluginJson(const std::string& name) {
     item["path"]                = inst->path;
     item["config"]              = inst->configPath;
     item["enabled"]             = inst->enabled;
-    item["tools"]               = inst->toolNames;
+    // 工具按挂载汇总 (与 listPluginsJson 同一来源: 实例本身的只读视图不带工具)
+    PluginListView view;
+    fillInstanceView(view, *inst);
+    for (const auto& mount : mounts_) {
+        if (mount) {
+            mergeMountView(view, *mount, *inst);
+        }
+    }
+    item["tools"]               = view.tools;
     item["depends"]             = inst->depends;
     item["optional_depends"]    = inst->optionalDepends;
     item["required_interfaces"] = inst->interfaces.require;

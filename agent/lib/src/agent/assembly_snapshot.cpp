@@ -93,10 +93,10 @@ utilxx_base::Json modelSnapshotJson(const ModelConfig& mc) {
 /// 加载侧记录一次的插件条目 → 快照条目
 void appendPluginEntries(const AgentContext& ctx, utilxx_base::Json& pluginsOut) {
     pluginsOut = utilxx_base::Json::array();
-    if (!ctx.pluginManager) {
+    if (!ctx.pluginManager || !ctx.pluginMount) {
         return;
     }
-    for (const auto& v : ctx.pluginManager->list()) {
+    for (const auto& v : ctx.pluginManager->listForMount(*ctx.pluginMount)) {
         utilxx_base::Json item  = utilxx_base::Json::object();
         item["name"]            = v.name;
         item["version"]         = v.version;
@@ -164,8 +164,8 @@ std::string resolveToolSource(const AgentContext& ctx, std::string_view toolName
         return it->second;
     }
     // 插件工具 (动态注册表): 按插件实例登记的工具名反查
-    if (ctx.pluginManager) {
-        for (const auto& v : ctx.pluginManager->list()) {
+    if (ctx.pluginManager && ctx.pluginMount) {
+        for (const auto& v : ctx.pluginManager->listForMount(*ctx.pluginMount)) {
             if (std::find(v.tools.begin(), v.tools.end(), name) != v.tools.end()) {
                 return fmt::format("plugin:{}", v.name);
             }
@@ -382,7 +382,7 @@ utilxx_base::Json buildRuntimeSnapshot(const AgentContext& ctx) {
     }
     // 执行图定义的独占占用者: 非空表示当前图定义由某插件覆盖
     graph["definition_owner"]
-        = ctx.pluginManager ? ctx.pluginManager->graphDefinitionOwner() : std::string{};
+        = ctx.pluginMount ? ctx.pluginMount->graphDefinitionOwner() : std::string{};
     root["graph"] = std::move(graph);
 
     // ---- 持久化 ----
@@ -409,9 +409,9 @@ utilxx_base::Json buildRuntimeSnapshot(const AgentContext& ctx) {
 
     // ---- 钩子处理器 (清单: 各点处理器与顺序; 只读快照 —— 派发只看注册表当前状态) ----
     utilxx_base::Json hooksJson = utilxx_base::Json::object();
-    if (ctx.pluginManager) {
+    if (ctx.pluginMount) {
         try {
-            hooksJson = utilxx_base::Json::parse(ctx.pluginManager->hooksJson());
+            hooksJson = utilxx_base::Json::parse(ctx.pluginMount->hooksJson());
         } catch (const std::exception&) {
             hooksJson = utilxx_base::Json::object();
         }

@@ -143,7 +143,7 @@ asio::awaitable<TestResult> run_plugin_resource_tests() {
     ctx->pluginManager = std::make_shared<agentxx::plugin::PluginManager>(ctx);
     ctx->pluginManager->setIoExecutor(co_await asio::this_coro::executor);
     // 建立挂载: 之后加载的插件挂到本 agent (运行期新加载的自动挂上)
-    co_await ctx->pluginManager->mountAgentAsync();
+    ctx->pluginMount = co_await ctx->pluginManager->mountAgentAsync(ctx);
 
     auto skillMw = std::make_shared<agentxx::middleware::SkillMiddlewareHandle>(
         std::vector<std::string>{},
@@ -348,9 +348,9 @@ interfaces:
         PluginxxScopeRef scopeRef{};
         scopeRef.struct_size = sizeof(PluginxxScopeRef);
         scopeRef.id          = agentxx::plugin::PluginStringView::from(
-            ctx->pluginManager->agentId()
+            ctx->pluginMount->agentId()
         );
-        scopeRef.seq = ctx->pluginManager->mountSequence();
+        scopeRef.seq = ctx->pluginMount->mountSeq();
         const auto res3 = agentxx::plugin::AgentIfaces::query(inst->hostView()).resources;
         XX_TEST_EXPECT_TRUE(res3 != nullptr && res3->register_skill_dir != nullptr);
 

@@ -366,7 +366,9 @@ std::string buildDiagnosticsText(
             if (!instance) {
                 continue;
             }
-            const auto inv = ctx.pluginManager->registrationInventory(*instance);
+            const auto inv = ctx.pluginMount
+                                 ? ctx.pluginMount->registrationInventory(*instance)
+                                 : plugin::PluginMount::RegistrationInventory{};
             lines.push_back(fmt::format(
                 "- {} v{} [{}] tools={} hooks={} caps={} events={} prompt_keys={} resources="
                 "skill:{} mem:{} mcp:{} graph_owner={}",
@@ -384,12 +386,12 @@ std::string buildDiagnosticsText(
                 inv.ownsGraphDefinition ? "yes" : "no"
             ));
         }
-        if (ctx.pluginManager->graphDefinitionOwner().empty()) {
+        if (!ctx.pluginMount || ctx.pluginMount->graphDefinitionOwner().empty()) {
             lines.push_back("- graph definition: built-in");
         } else {
             lines.push_back(fmt::format(
                 "- graph definition: plugin `{}`",
-                ctx.pluginManager->graphDefinitionOwner()
+                ctx.pluginMount->graphDefinitionOwner()
             ));
         }
     }

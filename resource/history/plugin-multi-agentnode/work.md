@@ -379,3 +379,52 @@ ref.seq         = mgr->mountSequence();   // 未挂载时为 0 = 不校验
   失败（`agentxx_plugin_agent_builtin_mount_<name>` 未定义）。
 - 迁移插件时注意：`mount` 回调里**不能创建 root agent**（下一篇的约束 S5），当前
   未做该项校验。
+
+## 5. 阶段 B 完成记录（宿主上提 / 挂载拆分）
+
+代码：
+
+- 新增 `agentxx/plugin/plugin_mount.h` + `src/plugins/plugin_mount.cpp`：一个 agent 的
+  全部 `agent 级` 注册搬到 `PluginMount`（`Entry` 按实例分开记账：工具/权限声明/钩子
+  句柄/提示词贡献/功能点/图节点槽位/图定义占用/资源/配置 JSON/`mountUserData`）。
+- `PluginManager` 只留宿主侧：实例表 `plugins_`、挂载表 `mounts_`、挂载序号
+  `nextMountSeq_`、主 agent 上下文 `primaryAgent_`、vtable 分发与加载。
+  `mountAgentAsync(ctx)` / `attachMountSync(ctx)` / `unmountAgentAsync` /
+  `unmountAllAgentsAsync` 驱动挂载；`PluginInstance` 只剩加载元信息 + `mountFn/unmountFn`
+  + 弱引用挂载表，并提供只读视图 `anyMounted/allToolNames/allToolObjects/allHookHandles/allGraphSlots`。
+- `AgentContext` 增加 `pluginMount`（本 agent 的挂载）与 `agentId`；
+  `base_agent.cpp` 的 `plugin_mount` 步骤从 `pluginManager->mountAgentAsync(ctx)` 取挂载。
+- vtable 入口按 `PluginxxScopeRef` 解析挂载（`PluginManager::mountOf`），解析不到返回
+  `AGENTXX_PLUGIN_ERR_NO_AGENT`；无引用的宿主级表项取主 agent 的挂载。
+- 禁止在 `start` 里做 agent 级注册：此时没有挂载上下文，调用会被拒。
+
+禁用/启用语义（与设计文档一致，改动集中在 `detachInstance` / `mountOneAsync` / `unmountOneAsync`）：
+
+- `disable` = 每个挂载**同步**拆掉注册（`PluginMount::detachInstance` → `revokeEntry`），
+  并把插件的 `unmount` 回调记为"欠着"（`Entry::unmountPending`），实例本身不 `stop`；
+- 之后 `onInstanceDisabledAsync` 在 IO 线程补调插件 `unmount`（此前若又被启用并重新挂载，
+  这次补充自动作废）；
+- `enable` = 只做"没挂就挂"（`mountOneAsync`，幂等），插件在自己 `mount` 回调里重新声明，
+  `start` 事务照常跑（进程级资源）；
+- `unload` = 全部挂载 `unmountOneAsync` → `stop` → `destroy` → `dlclose`。
+
+同时修掉的两处真实缺陷：
+
+- `PluginMount::entryOf` 建记录时没登记反向引用（`inst->mounts`），导致实例侧只读视图
+  （`allToolNames/allGraphSlots`）看不到 `attachMountSync` 之后登记的项；
+- `PluginManager::getPluginJson` 的 `tools` 恒为空（未按挂载汇总），改为与
+  `listPluginsJson` 同一来源（`fillInstanceView` + `mergeMountView`）。
+
+测试侧修正：
+
+- `test_plugin_runtime` 夹具的构造参数曾与成员同名（`ctx`），成员恒为空、临时
+  `AgentContext` 在构造结束时析构并关掉宿主上的全部实例 —— 改名 `existingCtx`；
+- 若干夹具改为显式 `mountAgentAsync` / `attachMountSync` 后再断言实例级记录。
+
+已知遗留（下一阶段处理）：
+
+- 进程退出时若仍有协程持有 `AgentContext`（MCP 连接收尾）会走到
+  `~AgentContext` 的告警日志，此时日志子系统已析构，ASan 报 heap-use-after-free；
+  属退出期日志顺序问题，不影响功能；
+- `ffi_c_api` 模块在本机（搜狗输入法 + ASan）会被 IME 的 USE_AFTER_FREE 打断，与本项目无关。
+

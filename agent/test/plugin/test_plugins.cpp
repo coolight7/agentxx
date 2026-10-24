@@ -113,7 +113,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
     // vtable 调用经真实 post 到 io 线程执行, 而非测试默认的"伪 io 线程"直连
     ctx->pluginManager->setIoExecutor(co_await asio::this_coro::executor);
     // 建立挂载: 之后加载的插件挂到本 agent (运行期新加载的自动挂上)
-    co_await ctx->pluginManager->mountAgentAsync();
+    ctx->pluginMount = co_await ctx->pluginManager->mountAgentAsync(ctx);
 
     // ---- 2. 加载示例插件 (目录 + plugin.yaml 清单分派) ----
     auto path = findExamplePluginPath();
@@ -373,8 +373,8 @@ asio::awaitable<TestResult> run_plugin_tests() {
             return h->name == "plugin_hooks";
         });
         XX_TEST_EXPECT_TRUE(found); ///< 中间件链上只有一个主程序级派发器
-        XX_TEST_EXPECT_EQ(inst->hookRegistrations.size(), size_t{1});
-        XX_TEST_EXPECT_GE(inst->hookRegistrations.front().handle, int64_t{1});
+        XX_TEST_EXPECT_EQ(inst->allHookHandles().size(), size_t{1});
+        XX_TEST_EXPECT_GE(inst->allHookHandles().front(), int64_t{1});
         const auto handlers = ctx->pluginManager->handlersOf(AGENTXX_PLUGIN_HOOK_AGENT_START);
         XX_TEST_EXPECT_EQ(handlers.size(), size_t{1});
         if (!handlers.empty()) {
@@ -410,8 +410,8 @@ asio::awaitable<TestResult> run_plugin_tests() {
         // 无轮次执行时 disable 立即摘除派发器; 处理器随实例一起摘除 (记录保留, 句柄置 0)
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->handlersOf(AGENTXX_PLUGIN_HOOK_AGENT_START).empty()
         );
-        XX_TEST_EXPECT_EQ(inst->hookRegistrations.size(), size_t{1});
-        XX_TEST_EXPECT_EQ(inst->hookRegistrations.front().handle, int64_t{0});
+        XX_TEST_EXPECT_EQ(inst->allHookHandles().size(), size_t{1});
+        XX_TEST_EXPECT_EQ(inst->allHookHandles().front(), int64_t{0});
         XX_TEST_EXPECT_FALSE(inst->enabled);
 
         ctx->pluginManager->enable("example_plugin");
@@ -457,7 +457,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->handlersOf(AGENTXX_PLUGIN_HOOK_AGENT_START).empty()
         );
         // 工具对象应已释放 (inflight 归零后 dlclose)
-        XX_TEST_EXPECT_EQ(inst->tools.size(), size_t{0});
+        XX_TEST_EXPECT_EQ(inst->allToolObjects().size(), size_t{0});
     }
 
     // ---- 9. 重复卸载拒绝 ----
@@ -941,8 +941,8 @@ throw new Error("top-level rollback probe");
                 });
                 XX_TEST_EXPECT_FALSE(found); // 已物理摘除
             }
-            XX_TEST_EXPECT_TRUE(inst24->hookRegistrations.size() == size_t{1});
-            XX_TEST_EXPECT_EQ(inst24->hookRegistrations.front().handle, int64_t{0});
+            XX_TEST_EXPECT_TRUE(inst24->allHookHandles().size() == size_t{1});
+            XX_TEST_EXPECT_EQ(inst24->allHookHandles().front(), int64_t{0});
             // 启用: start 事务重新登记钩子 (派发器随首次登记回到链上)
             ctx->pluginManager->enable("example_plugin");
             for (int i = 0;
@@ -1158,7 +1158,7 @@ throw new Error("top-level rollback probe");
                 XX_TEST_EXPECT_TRUE(j["depict"].is_string());
             }
             // get_prompt 完整提示词含该条目
-            auto fullJson = ctx->pluginManager->getPromptJson();
+            auto fullJson = ctx->pluginMount->getPromptJson();
             XX_TEST_EXPECT_FALSE(fullJson.empty());
             if (!fullJson.empty()) {
                 auto j = utilxx_base::Json::parse(fullJson);
@@ -1171,7 +1171,7 @@ throw new Error("top-level rollback probe");
             // system 提示词写入 + 回滚 (set_prompt 直接调用路径)
             auto originalSystem = prompt.systemPrompt;
             XX_TEST_EXPECT_EQ(
-                ctx->pluginManager
+                ctx->pluginMount
                     ->setPromptJson(inst28.get(), R"({"systemPrompt":"modified by plugin"})"),
                 0
             );
@@ -1271,7 +1271,7 @@ throw new Error("top-level rollback probe");
             using StateTuple      = std::tuple<int*, std::string*, bool*>;
             StateTuple state{&cbStatus, &cbPayload, &cbDone};
 
-            auto* op = ctx->pluginManager->callToolAsync(
+            auto* op = ctx->pluginMount->callToolAsync(
                 inst31.get(),
                 "example_echo",
                 R"({"k":"v"})",
@@ -1299,7 +1299,7 @@ throw new Error("top-level rollback probe");
 
             // 不存在的工具: 加载失败返回 NULL 并带错误
             PluginxxString e2  = {nullptr, 0};
-            auto*          op2 = ctx->pluginManager->callToolAsync(
+            auto*          op2 = ctx->pluginMount->callToolAsync(
                 inst31.get(),
                 "not_registered_tool",
                 "{}",
@@ -1332,7 +1332,7 @@ throw new Error("top-level rollback probe");
                 notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, &emptySv);
                 return nullptr;
             };
-            XX_TEST_EXPECT_EQ(ctx->pluginManager->registerTool(inst31.get(), &asyncSpec), 0);
+            XX_TEST_EXPECT_EQ(ctx->pluginMount->registerTool(inst31.get(), &asyncSpec), 0);
             auto asyncTool = ctx->toolRegistry->find("async_notify_tool");
             XX_TEST_EXPECT_TRUE(asyncTool != nullptr);
             if (asyncTool) {
@@ -1341,7 +1341,7 @@ throw new Error("top-level rollback probe");
                 });
                 XX_TEST_EXPECT_EQ(out, "{}");
             }
-            ctx->pluginManager->unregisterTool(inst31.get(), "async_notify_tool");
+            ctx->pluginMount->unregisterTool(inst31.get(), "async_notify_tool");
         }
 
         // 31.3 会话取消传递: CancelToken 取消 → execute_cancel 被调用 →
@@ -1379,7 +1379,7 @@ throw new Error("top-level rollback probe");
                 delete o;
                 s_activeOp = nullptr;
             };
-            XX_TEST_EXPECT_EQ(ctx->pluginManager->registerTool(inst31.get(), &cSpec), 0);
+            XX_TEST_EXPECT_EQ(ctx->pluginMount->registerTool(inst31.get(), &cSpec), 0);
 
             // 会话加载取消令牌 (与 ToolCallNode 注入路径一致)
             auto sess = ctx->sessions->getOrCreate("t_plugin_cancel");
@@ -1417,7 +1417,7 @@ throw new Error("top-level rollback probe");
             }
             XX_TEST_EXPECT_TRUE(cancelledThrown);
             XX_TEST_EXPECT_TRUE(s_cancelCalled); ///< 底层 cancel 回调被调用
-            ctx->pluginManager->unregisterTool(inst31.get(), "async_cancel_tool");
+            ctx->pluginMount->unregisterTool(inst31.get(), "async_cancel_tool");
             ctx->sessions->remove("t_plugin_cancel");
         }
 
@@ -1437,7 +1437,7 @@ throw new Error("top-level rollback probe");
                                           PluginxxString*) -> void* {
                 throw std::runtime_error("boom from plugin start");
             };
-            XX_TEST_EXPECT_EQ(ctx->pluginManager->registerTool(inst31.get(), &throwSpec), 0);
+            XX_TEST_EXPECT_EQ(ctx->pluginMount->registerTool(inst31.get(), &throwSpec), 0);
             auto throwTool = ctx->toolRegistry->find("throwing_start_tool");
             XX_TEST_EXPECT_TRUE(throwTool != nullptr);
             if (throwTool) {
@@ -1454,7 +1454,7 @@ throw new Error("top-level rollback probe");
                 }
                 XX_TEST_EXPECT_TRUE(failedAsExpected);
             }
-            ctx->pluginManager->unregisterTool(inst31.get(), "throwing_start_tool");
+            ctx->pluginMount->unregisterTool(inst31.get(), "throwing_start_tool");
         }
 
         // 31.5 违约检测: start() 返回 NULL 且未 done 且无 error → 主程序按协议违约合成失败
@@ -1473,7 +1473,7 @@ throw new Error("top-level rollback probe");
                                          PluginxxString*) -> void* {
                 return nullptr; ///< 违约: 未 call notify->done 且未设 error_out
             };
-            XX_TEST_EXPECT_EQ(ctx->pluginManager->registerTool(inst31.get(), &nullSpec), 0);
+            XX_TEST_EXPECT_EQ(ctx->pluginMount->registerTool(inst31.get(), &nullSpec), 0);
             auto nullTool = ctx->toolRegistry->find("null_start_tool");
             XX_TEST_EXPECT_TRUE(nullTool != nullptr);
             if (nullTool) {
@@ -1488,7 +1488,7 @@ throw new Error("top-level rollback probe");
                 }
                 XX_TEST_EXPECT_TRUE(failedAsExpected);
             }
-            ctx->pluginManager->unregisterTool(inst31.get(), "null_start_tool");
+            ctx->pluginMount->unregisterTool(inst31.get(), "null_start_tool");
         }
 
         // 31.6 异常守卫: blocking_tool 异常守卫兜底 —— 用户 execute 抛异常时
@@ -1521,7 +1521,7 @@ throw new Error("top-level rollback probe");
                     );
                 }
             }
-            ctx->pluginManager->unregisterTool(inst31.get(), "boom_tool");
+            ctx->pluginMount->unregisterTool(inst31.get(), "boom_tool");
         }
 
         // 31.7 异常守卫: 事件 handler 违约抛异常 → 主程序派发兜底,
@@ -1588,7 +1588,7 @@ throw new Error("top-level rollback probe");
                 auto           t0 = std::chrono::steady_clock::now();
                 PluginxxString e  = {nullptr, 0};
                 AsyncRes       ares;
-                auto*          op = ctx->pluginManager->callToolAsync(
+                auto*          op = ctx->pluginMount->callToolAsync(
                     instExec.get(),
                     cmdToolName,
                     R"({"command":"echo repro_check"})",
@@ -1629,7 +1629,7 @@ throw new Error("top-level rollback probe");
                 auto           t0 = std::chrono::steady_clock::now();
                 PluginxxString e  = {nullptr, 0};
                 AsyncRes       ares;
-                auto*          op = ctx->pluginManager->callToolAsync(
+                auto*          op = ctx->pluginMount->callToolAsync(
                     instExec.get(),
                     cmdToolName,
                     R"({"command":"echo token_case"})",
@@ -1672,7 +1672,7 @@ throw new Error("top-level rollback probe");
 #else
                 const char* timeoutCmd = R"({"command":"sleep 5","timeout":1})";
 #endif
-                auto* op = ctx->pluginManager->callToolAsync(
+                auto* op = ctx->pluginMount->callToolAsync(
                     instExec.get(),
                     cmdToolName,
                     timeoutCmd,
@@ -1745,7 +1745,7 @@ throw new Error("top-level rollback probe");
                 std::atomic<bool> done = false;
             } cres;
 
-            auto* op = ctx->pluginManager->callToolAsync(
+            auto* op = ctx->pluginMount->callToolAsync(
                 instEx.get(),
                 "example_sleep",
                 R"({"durationMs":60000})",
@@ -1791,7 +1791,7 @@ throw new Error("top-level rollback probe");
         gctx->pluginManager = std::make_shared<agentxx::plugin::PluginManager>(gctx);
         gctx->pluginManager->setIoExecutor(co_await asio::this_coro::executor);
         // 建立挂载: 之后加载的插件挂到本 agent (运行期新加载的自动挂上)
-        co_await gctx->pluginManager->mountAgentAsync();
+        gctx->pluginMount = co_await gctx->pluginManager->mountAgentAsync(gctx);
         gctx->graphRegistry = std::make_shared<neograph::graph::GraphRegistry>();
         // agentxx 图条件 (与 BaseAgent::initRegisterNodes 一致; 自建 registry 需显式注册,
         // 否则图定义引用的 xx_has_tool_calls 编译报"Unknown condition")
@@ -2252,7 +2252,7 @@ throw new Error("top-level rollback probe");
         rollbackCtx->pluginManager = std::make_shared<agentxx::plugin::PluginManager>(rollbackCtx);
         rollbackCtx->pluginManager->setIoExecutor(co_await asio::this_coro::executor);
         // 建立挂载: 之后加载的插件挂到本 agent (运行期新加载的自动挂上)
-        co_await rollbackCtx->pluginManager->mountAgentAsync();
+        rollbackCtx->pluginMount = co_await rollbackCtx->pluginManager->mountAgentAsync(rollbackCtx);
 
         auto fakeInst = std::make_shared<agentxx::plugin::PluginInstance>("fake_rollback_plugin");
         fakeInst->manager     = rollbackCtx->pluginManager;
@@ -3187,7 +3187,7 @@ throw new Error("top-level rollback probe");
                 std::atomic<bool> done{false};
             } ures;
 
-            auto* op2 = ctx->pluginManager->callToolAsync(
+            auto* op2 = ctx->pluginMount->callToolAsync(
                 instExec2.get(),
                 cmdToolName2,
                 utilxx_base::Json{
@@ -3248,7 +3248,7 @@ throw new Error("top-level rollback probe");
                 c->pluginManager           = std::make_shared<plugin::PluginManager>(c);
                 c->pluginManager->setIoExecutor(ex);
                 // 建立挂载: 之后加载的插件挂到本 agent (运行期新加载的自动挂上)
-                co_await c->pluginManager->mountAgentAsync();
+                c->pluginMount = co_await c->pluginManager->mountAgentAsync(c);
 
                 auto inst = co_await c->pluginManager->loadPluginAsync(sysMonPath);
                 XX_TEST_EXPECT_TRUE(inst != nullptr);
@@ -3295,7 +3295,7 @@ throw new Error("top-level rollback probe");
         sctx->pluginManager = std::make_shared<plugin::PluginManager>(sctx);
         sctx->pluginManager->setIoExecutor(co_await asio::this_coro::executor);
         // 建立挂载: 之后加载的插件挂到本 agent (运行期新加载的自动挂上)
-        co_await sctx->pluginManager->mountAgentAsync();
+        sctx->pluginMount = co_await sctx->pluginManager->mountAgentAsync(sctx);
         sctx->graphRegistry = std::make_shared<neograph::graph::GraphRegistry>();
         // 资源应用器 (skill/memory 中间件): 插件 start 经 vtable 注册 skill 目录,
         // 回滚后所有权记录必须为空。
@@ -3320,7 +3320,7 @@ throw new Error("top-level rollback probe");
                 reports.push_back(data);
                 co_return;
             });
-        const std::string promptBefore = sctx->pluginManager->getPromptJson();
+        const std::string promptBefore = sctx->pluginMount->getPromptJson();
         auto              waitReports  = [&](size_t count) -> asio::awaitable<void> {
             for (int i = 0; i < 500 && reports.size() < count; ++i) {
                 co_await sleepMs(2);
@@ -3331,7 +3331,7 @@ throw new Error("top-level rollback probe");
         auto fail1
             = co_await sctx->pluginManager->loadPluginAsync(AGENTXX_TEST_START_FAIL_PLUGIN_PATH);
         XX_TEST_EXPECT_TRUE(fail1 != nullptr);
-        XX_TEST_EXPECT_FALSE(fail1 && fail1->pluginMounted);
+        XX_TEST_EXPECT_FALSE(fail1 && fail1->anyMounted());
         co_await waitReports(1);
         XX_TEST_EXPECT_EQ(reports.size(), size_t{1});
         XX_TEST_EXPECT_TRUE(
@@ -3343,7 +3343,7 @@ throw new Error("top-level rollback probe");
         XX_TEST_EXPECT_FALSE(sctx->toolRegistry->contains("dso_rollback_tool"));
         // 注: GraphRegistry 无删除类型接口 (设计如此), 类型名保留在注册表中;
         // 回滚语义由 GraphTypeSlot 失效 + 第二次加载能重新注册同名类型共同证明。
-        XX_TEST_EXPECT_EQ(sctx->pluginManager->getPromptJson(), promptBefore);
+        XX_TEST_EXPECT_EQ(sctx->pluginMount->getPromptJson(), promptBefore);
         // 订阅已撤销: 发布 watch 主题不得调用已卸载 DSO 的 handler (ASan 下泄漏即崩溃)
         XX_TEST_EXPECT_EQ(sctx->pluginManager->publish("dso_rollback.watch", "{}"), 0);
         // 能力已注销: 失败加载不得留下能力注册
@@ -3371,7 +3371,7 @@ throw new Error("top-level rollback probe");
         auto fail2
             = co_await sctx->pluginManager->loadPluginAsync(AGENTXX_TEST_START_FAIL_PLUGIN_PATH);
         XX_TEST_EXPECT_TRUE(fail2 != nullptr);
-        XX_TEST_EXPECT_FALSE(fail2 && fail2->pluginMounted);
+        XX_TEST_EXPECT_FALSE(fail2 && fail2->anyMounted());
         co_await waitReports(2);
         XX_TEST_EXPECT_EQ(reports.size(), size_t{2});
         XX_TEST_EXPECT_TRUE(
@@ -3382,7 +3382,7 @@ throw new Error("top-level rollback probe");
         XX_TEST_EXPECT_TRUE(
             reports.size() >= 2 && reports[1].find("\"ok\":true") != std::string::npos
         );
-        XX_TEST_EXPECT_EQ(sctx->pluginManager->getPromptJson(), promptBefore);
+        XX_TEST_EXPECT_EQ(sctx->pluginMount->getPromptJson(), promptBefore);
         XX_TEST_EXPECT_FALSE(sctx->pluginManager->hasCapability("dso.rollback.cap") != 0);
         XX_TEST_EXPECT_TRUE(applier->ownedBy("test_start_fail_plugin").skillDirs.empty());
         sctx->pluginManager->shutdownAll();
@@ -3402,7 +3402,7 @@ throw new Error("top-level rollback probe");
         planCtx->pluginManager = std::make_shared<plugin::PluginManager>(planCtx);
         planCtx->pluginManager->setIoExecutor(co_await asio::this_coro::executor);
         // 建立挂载: 之后加载的插件挂到本 agent (运行期新加载的自动挂上)
-        co_await planCtx->pluginManager->mountAgentAsync();
+        planCtx->pluginMount = co_await planCtx->pluginManager->mountAgentAsync(planCtx);
 
         XX_TEST_EXPECT_TRUE(
             planCtx->agentConfig->prompt.appendSystemPrompts.find("planning")

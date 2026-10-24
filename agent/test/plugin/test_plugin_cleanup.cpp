@@ -137,7 +137,7 @@ asio::awaitable<Fixture> makeFixture() {
     // 加载 io executor (与 BaseAgent::init 一致): 跨线程 vtable 调用经真实 post
     f.mgr->setIoExecutor(co_await asio::this_coro::executor);
     // 建立挂载: 之后加载的插件挂到本 agent (运行期新加载的自动挂上)
-    co_await f.mgr->mountAgentAsync();
+    f.ctx->pluginMount = co_await f.mgr->mountAgentAsync(f.ctx);
     co_return f;
 }
 
@@ -228,7 +228,9 @@ asio::awaitable<void> test_registration_inventory_baseline() {
     f.mgr->disable("example_plugin");
     XX_TEST_EXPECT_FALSE(inst->enabled);
     XX_TEST_EXPECT_FALSE(f.ctx->toolRegistry->contains("example_echo"));
-    XX_TEST_EXPECT_TRUE(inst->toolNames.size() >= 5); ///< 记录保留 (供 enable 重新声明)
+    // 新模型: 禁用 = 从挂载上拆下来, 挂载记录随之一并删除 (启用时由插件的
+    // mount 回调重新登记), 因此这里不再有工具记录
+    XX_TEST_EXPECT_TRUE(inst->allToolNames().empty());
     {
         const auto disabled = f.mgr->registrationInventory(*inst);
         XX_TEST_EXPECT_EQ(disabled.tools, size_t{0});
@@ -249,7 +251,7 @@ asio::awaitable<void> test_registration_inventory_baseline() {
     if (!enabledAgain) {
         TEST_INFO << "[plugin_cleanup] enable 后未恢复注册: enabled=" << inst->enabled
                   << " started=" << inst->lifecycleStarted << " stopped=" << inst->lifecycleStopped
-                  << " toolRecords=" << inst->toolNames.size() << std::endl;
+                  << " toolRecords=" << inst->allToolNames().size() << std::endl;
     }
     XX_TEST_EXPECT_TRUE(enabledAgain);
     {
@@ -297,7 +299,7 @@ asio::awaitable<void> test_prompt_contribution_recompute() {
 
     // A 先贡献
     XX_TEST_EXPECT_EQ(
-        f.mgr->setPromptJson(
+        f.ctx->pluginMount->setPromptJson(
             instA.get(),
             agentxx::plugin::PluginStringView::fromCstr(
                 R"({"appendSystemPrompts":{"plugin_cleanup_probe":"from-A"}})"
@@ -312,7 +314,7 @@ asio::awaitable<void> test_prompt_contribution_recompute() {
 
     // B 后贡献: 后写者生效 (贡献按 sequence 顺序应用)
     XX_TEST_EXPECT_EQ(
-        f.mgr->setPromptJson(
+        f.ctx->pluginMount->setPromptJson(
             instB.get(),
             agentxx::plugin::PluginStringView::fromCstr(
                 R"({"appendSystemPrompts":{"plugin_cleanup_probe":"from-B"}})"
@@ -348,7 +350,7 @@ asio::awaitable<void> test_prompt_contribution_recompute() {
 
     // B 再贡献一次: 触发合成 —— 外部值成为新基础值, B 的贡献在其上生效
     XX_TEST_EXPECT_EQ(
-        f.mgr->setPromptJson(
+        f.ctx->pluginMount->setPromptJson(
             instB.get(),
             agentxx::plugin::PluginStringView::fromCstr(
                 R"({"appendSystemPrompts":{"plugin_cleanup_probe":"from-B2"}})"
@@ -380,7 +382,7 @@ asio::awaitable<void> test_prompt_contribution_recompute() {
 asio::awaitable<void> test_graph_definition_slot() {
     auto f = co_await makeFixture();
 
-    const std::string baseJson = f.mgr->getGraphJson();
+    const std::string baseJson = f.ctx->pluginMount->getGraphJson();
     XX_TEST_EXPECT_EQ(f.mgr->graphDefinitionOwner(), std::string{});
 
     auto instA = co_await f.mgr->loadPluginAsync(findPluginDir("example_plugin"));
@@ -393,7 +395,7 @@ asio::awaitable<void> test_graph_definition_slot() {
 
     // A 占用: 记录基础定义并成为占用者
     XX_TEST_EXPECT_EQ(
-        f.mgr->setGraphJson(
+        f.ctx->pluginMount->setGraphJson(
             instA.get(),
             agentxx::plugin::PluginStringView::fromCstr(
                 R"({"name":"plugin-graph-a","nodes":{},"edges":[]})"
@@ -402,7 +404,7 @@ asio::awaitable<void> test_graph_definition_slot() {
         0
     );
     XX_TEST_EXPECT_EQ(f.mgr->graphDefinitionOwner(), std::string{"example_plugin"});
-    XX_TEST_EXPECT_TRUE(f.mgr->getGraphJson().find("plugin-graph-a") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(f.ctx->pluginMount->getGraphJson().find("plugin-graph-a") != std::string::npos);
     {
         const auto invA = f.mgr->registrationInventory(*instA);
         XX_TEST_EXPECT_TRUE(invA.ownsGraphDefinition);
@@ -412,7 +414,7 @@ asio::awaitable<void> test_graph_definition_slot() {
 
     // B 尝试占用: 被拒绝, 且不覆盖 A 的定义 (独占语义)
     XX_TEST_EXPECT_EQ(
-        f.mgr->setGraphJson(
+        f.ctx->pluginMount->setGraphJson(
             instB.get(),
             agentxx::plugin::PluginStringView::fromCstr(
                 R"({"name":"plugin-graph-b","nodes":{},"edges":[]})"
@@ -421,11 +423,11 @@ asio::awaitable<void> test_graph_definition_slot() {
         -1
     );
     XX_TEST_EXPECT_EQ(f.mgr->graphDefinitionOwner(), std::string{"example_plugin"});
-    XX_TEST_EXPECT_TRUE(f.mgr->getGraphJson().find("plugin-graph-b") == std::string::npos);
+    XX_TEST_EXPECT_TRUE(f.ctx->pluginMount->getGraphJson().find("plugin-graph-b") == std::string::npos);
 
     // 占用者自己可以继续修改
     XX_TEST_EXPECT_EQ(
-        f.mgr->setGraphJson(
+        f.ctx->pluginMount->setGraphJson(
             instA.get(),
             agentxx::plugin::PluginStringView::fromCstr(
                 R"({"name":"plugin-graph-a2","nodes":{},"edges":[]})"
@@ -433,16 +435,16 @@ asio::awaitable<void> test_graph_definition_slot() {
         ),
         0
     );
-    XX_TEST_EXPECT_TRUE(f.mgr->getGraphJson().find("plugin-graph-a2") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(f.ctx->pluginMount->getGraphJson().find("plugin-graph-a2") != std::string::npos);
 
     // 占用者卸载: 恢复到占用前的定义 (内置/主程序定义), slot 释放
     XX_TEST_EXPECT_TRUE(co_await f.mgr->unloadAsync("example_plugin", std::chrono::seconds{5}));
     XX_TEST_EXPECT_EQ(f.mgr->graphDefinitionOwner(), std::string{});
-    XX_TEST_EXPECT_EQ(f.mgr->getGraphJson(), baseJson);
+    XX_TEST_EXPECT_EQ(f.ctx->pluginMount->getGraphJson(), baseJson);
 
     // slot 释放后 B 可以占用
     XX_TEST_EXPECT_EQ(
-        f.mgr->setGraphJson(
+        f.ctx->pluginMount->setGraphJson(
             instB.get(),
             agentxx::plugin::PluginStringView::fromCstr(
                 R"({"name":"plugin-graph-b","nodes":{},"edges":[]})"
@@ -455,7 +457,7 @@ asio::awaitable<void> test_graph_definition_slot() {
     // 禁用也会释放 (与卸载同一路径), 恢复基础定义
     f.mgr->disable("agentxx_math");
     XX_TEST_EXPECT_EQ(f.mgr->graphDefinitionOwner(), std::string{});
-    XX_TEST_EXPECT_EQ(f.mgr->getGraphJson(), baseJson);
+    XX_TEST_EXPECT_EQ(f.ctx->pluginMount->getGraphJson(), baseJson);
     co_return;
 }
 
@@ -463,7 +465,7 @@ asio::awaitable<void> test_graph_definition_slot() {
 asio::awaitable<void> test_graph_slot_with_real_plugin() {
     auto f = co_await makeFixture();
 
-    const std::string baseJson = f.mgr->getGraphJson();
+    const std::string baseJson = f.ctx->pluginMount->getGraphJson();
     auto              inst = co_await f.mgr->loadPluginAsync(findPluginDir("example_graph_node"));
     XX_TEST_EXPECT_TRUE(inst != nullptr);
     if (!inst) {
@@ -471,11 +473,11 @@ asio::awaitable<void> test_graph_slot_with_real_plugin() {
     }
     // 插件 start 里设置了图: 占用者应当是它, 图定义已变更
     XX_TEST_EXPECT_EQ(f.mgr->graphDefinitionOwner(), std::string{"example_graph_node"});
-    XX_TEST_EXPECT_TRUE(f.mgr->getGraphJson() != baseJson);
+    XX_TEST_EXPECT_TRUE(f.ctx->pluginMount->getGraphJson() != baseJson);
 
     XX_TEST_EXPECT_TRUE(co_await f.mgr->unloadAsync("example_graph_node", std::chrono::seconds{5}));
     XX_TEST_EXPECT_EQ(f.mgr->graphDefinitionOwner(), std::string{});
-    XX_TEST_EXPECT_EQ(f.mgr->getGraphJson(), baseJson);
+    XX_TEST_EXPECT_EQ(f.ctx->pluginMount->getGraphJson(), baseJson);
     co_return;
 }
 

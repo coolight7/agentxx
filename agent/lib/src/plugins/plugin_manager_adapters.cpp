@@ -144,18 +144,25 @@ asio::awaitable<std::string> PluginTool::execute_async(const utilxx_base::Json& 
 // 注册与事件方法
 // =====================================================================
 
-int PluginManager::registerTool(PluginInstance* inst, const AgentxxPluginToolSpec* spec) {
+int PluginMount::registerTool(PluginInstance* inst, const AgentxxPluginToolSpec* spec) {
     if (!inst || !spec || agentxx::plugin::PluginStringView::empty(spec->name)) {
         return -1;
     }
     // 执行期复查：请求可能排在 IO 队列里，等执行时实例已进入 Closing/Disabled。
     if (!acceptsRegistration(inst)) {
-        XX_LOGW("Plugin `{}` registerTool rejected: instance is closing or disabled", inst->name);
+        XX_LOGW(
+            "Plugin `{}` registerTool rejected: instance is closing or disabled "
+            "(enabled={}, state={})",
+            inst->name,
+            inst->enabled,
+            inst->lifetime ? pluginxx::pluginInstanceStateName(inst->lifetime->state())
+                           : "no-lifetime"
+        );
         return -1;
     }
     std::string toolName{spec->name.data, spec->name.size};
 
-    if (registry_->contains(toolName)) {
+    if (toolRegistry()->contains(toolName)) {
         XX_LOGW("ToolRegistry: tool `{}` conflicts with built-in tool", toolName);
         return -1;
     }
@@ -164,59 +171,45 @@ int PluginManager::registerTool(PluginInstance* inst, const AgentxxPluginToolSpe
     if (!shared) {
         return -1;
     }
-    auto tool = std::make_shared<PluginTool>(agentContext_, shared, *spec);
-    if (!registry_->registerTool(toolName, tool)) {
+    auto tool = std::make_shared<PluginTool>(agent_, shared, *spec);
+    if (!toolRegistry()->registerTool(toolName, tool)) {
         return -1;
     }
-    inst->toolNames.push_back(toolName);
-    inst->tools.push_back(tool);
+    entryOf(inst).tools.push_back(toolName);
+    entryOf(inst).toolObjects.push_back(tool);
     XX_LOGI("Plugin `{}` registered tool `{}`", inst->name, toolName);
     return 0;
 }
 
-int PluginManager::unregisterTool(PluginInstance* inst, PluginxxStringView name) {
+int PluginMount::unregisterTool(PluginInstance* inst, PluginxxStringView name) {
     if (!inst || agentxx::plugin::PluginStringView::empty(name)) {
         return -1;
     }
     std::string toolName = svToStr(name);
-    auto        it       = std::find(inst->toolNames.begin(), inst->toolNames.end(), toolName);
-    if (it == inst->toolNames.end()) {
+    auto        it       = std::find(entryOf(inst).tools.begin(), entryOf(inst).tools.end(), toolName);
+    if (it == entryOf(inst).tools.end()) {
         XX_LOGW("Plugin `{}` unregister tool `{}` not owned by this plugin", inst->name, toolName);
         return -1;
     }
-    inst->toolNames.erase(it);
-    registry_->unregisterTool(toolName);
+    entryOf(inst).tools.erase(it);
+    toolRegistry()->unregisterTool(toolName);
     // 工具注销后其权限声明一并撤销: 避免残留声明影响后续同名工具
     unregisterToolPermission(inst, toolName);
-    inst->tools.erase(
+    entryOf(inst).toolObjects.erase(
         std::remove_if(
-            inst->tools.begin(),
-            inst->tools.end(),
+            entryOf(inst).toolObjects.begin(),
+            entryOf(inst).toolObjects.end(),
             [&toolName](const std::shared_ptr<PluginTool>& t) {
                 return t->get_definition().name == toolName;
             }
         ),
-        inst->tools.end()
+        entryOf(inst).toolObjects.end()
     );
     XX_LOGI("Plugin `{}` unregistered tool `{}`", inst->name, toolName);
     return 0;
 }
 
-agentxx::middleware::PermissionMiddlewareHandle* PluginManager::permissionMiddleware() {
-    auto ctx = agentContext_.lock();
-    if (!ctx || !ctx->middlewareHandleContext) {
-        return nullptr;
-    }
-    for (auto& handle : ctx->middlewareHandleContext->handles) {
-        if (auto* permission
-            = dynamic_cast<agentxx::middleware::PermissionMiddlewareHandle*>(handle.get())) {
-            return permission;
-        }
-    }
-    return nullptr;
-}
-
-int PluginManager::registerToolPermission(
+int PluginMount::registerToolPermission(
     PluginInstance*                        inst,
     const AgentxxPluginToolPermissionSpec* spec
 ) {
@@ -242,8 +235,8 @@ int PluginManager::registerToolPermission(
     }
     std::string toolName{spec->tool_name.data, spec->tool_name.size};
     // 只接受本实例注册过的工具: 防止插件为其他插件/内置工具声明权限
-    if (std::find(inst->toolNames.begin(), inst->toolNames.end(), toolName)
-        == inst->toolNames.end()) {
+    if (std::find(entryOf(inst).tools.begin(), entryOf(inst).tools.end(), toolName)
+        == entryOf(inst).tools.end()) {
         XX_LOGW(
             "Plugin `{}` register tool permission rejected: tool `{}` not owned by this plugin",
             inst->name,
@@ -305,24 +298,24 @@ int PluginManager::registerToolPermission(
         decl.category.assign(spec->category.data, spec->category.size);
     }
     permission->registerToolPermission(toolName, std::move(decl));
-    if (std::find(inst->permissionToolNames.begin(), inst->permissionToolNames.end(), toolName)
-        == inst->permissionToolNames.end()) {
-        inst->permissionToolNames.push_back(toolName);
+    if (std::find(entryOf(inst).permissionTools.begin(), entryOf(inst).permissionTools.end(), toolName)
+        == entryOf(inst).permissionTools.end()) {
+        entryOf(inst).permissionTools.push_back(toolName);
     }
     XX_LOGI("Plugin `{}` registered tool permission for `{}`", inst->name, toolName);
     return 0;
 }
 
-int PluginManager::unregisterToolPermission(PluginInstance* inst, PluginxxStringView toolName) {
+int PluginMount::unregisterToolPermission(PluginInstance* inst, PluginxxStringView toolName) {
     if (!inst || agentxx::plugin::PluginStringView::empty(toolName)) {
         return -1;
     }
     std::string name = svToStr(toolName);
-    auto it = std::find(inst->permissionToolNames.begin(), inst->permissionToolNames.end(), name);
-    if (it == inst->permissionToolNames.end()) {
+    auto it = std::find(entryOf(inst).permissionTools.begin(), entryOf(inst).permissionTools.end(), name);
+    if (it == entryOf(inst).permissionTools.end()) {
         return -1;
     }
-    inst->permissionToolNames.erase(it);
+    entryOf(inst).permissionTools.erase(it);
     // 中间件未加载时无声明可撤销 (禁用/卸载阶段始终调用本函数做收尾)
     if (auto* permission = permissionMiddleware()) {
         permission->unregisterToolPermission(name);
@@ -331,7 +324,7 @@ int PluginManager::unregisterToolPermission(PluginInstance* inst, PluginxxString
     return 0;
 }
 
-int PluginManager::checkPermissionPaths(
+int PluginMount::checkPermissionPaths(
     PluginInstance*                 inst,
     int32_t                         scope,
     std::string_view                sessionId,
@@ -387,7 +380,7 @@ int PluginManager::checkPermissionPaths(
 // 执行图节点类型注册 + 图定义读写 (插件 graph 接口表)
 // =====================================================================
 
-int PluginManager::registerGraphNodeType(
+int PluginMount::registerGraphNodeType(
     PluginInstance*                       inst,
     const AgentxxPluginGraphNodeTypeSpec* spec
 ) {
@@ -402,7 +395,7 @@ int PluginManager::registerGraphNodeType(
         );
         return -1;
     }
-    auto ctx = agentContext_.lock();
+    auto ctx = agent_.lock();
     if (!ctx || !ctx->graphRegistry) {
         XX_LOGW("Plugin `{}` register graph node type: graphRegistry not ready", inst->name);
         return -1;
@@ -440,17 +433,17 @@ int PluginManager::registerGraphNodeType(
     }
     // 记录注册 (卸载/禁用时清理; 注册表本身无法删除类型, 清理仅移出实例表,
     // 已编译 engine 不受影响 —— 节点工厂持有 weak_ptr, 实例释放后创建即失败)
-    inst->graphNodeTypes.erase(
+    entryOf(inst).graphNodes.erase(
         std::remove_if(
-            inst->graphNodeTypes.begin(),
-            inst->graphNodeTypes.end(),
-            [&type](const PluginInstance::GraphNodeTypeRegistration& r) {
+            entryOf(inst).graphNodes.begin(),
+            entryOf(inst).graphNodes.end(),
+            [&type](const Entry::GraphNodeRegistration& r) {
                 return r.type == type;
             }
         ),
-        inst->graphNodeTypes.end()
+        entryOf(inst).graphNodes.end()
     );
-    inst->graphNodeTypes.push_back(PluginInstance::GraphNodeTypeRegistration{
+    entryOf(inst).graphNodes.push_back(Entry::GraphNodeRegistration{
         type,
         spec->run_start,
         spec->run_cancel,
@@ -460,7 +453,7 @@ int PluginManager::registerGraphNodeType(
             : std::string{},
         slot,
     });
-    auto&                          registration = inst->graphNodeTypes.back();
+    auto&                          registration = entryOf(inst).graphNodes.back();
     AgentxxPluginGraphNodeTypeSpec slotSpec{};
     slotSpec.type = agentxx::plugin::PluginStringView::from(
         registration.type.data(),
@@ -478,10 +471,12 @@ int PluginManager::registerGraphNodeType(
     // 注册到 per-agent GraphRegistry: 工厂经 weak_ptr 保活, 实例释放后
     // create 抛错 (引擎不会在卸载后重新编译图, 防御性处理)
     if (!ctx->graphRegistry->contains_type(type)) {
+        const auto mountWeak = weak_from_this();
         ctx->graphRegistry->register_type(
             type,
             [slot,
-             type](const std::string& name, const neograph::json& config, const neograph::graph::NodeContext&) {
+             type,
+             mountWeak](const std::string& name, const neograph::json& config, const neograph::graph::NodeContext&) {
                 auto snapshot = slot->snapshot();
                 if (!snapshot.active || !snapshot.instance || !snapshot.instance->enabled
                     || !snapshot.spec.run_start) {
@@ -495,7 +490,8 @@ int PluginManager::registerGraphNodeType(
                     snapshot.instance,
                     snapshot.spec,
                     slot,
-                    snapshot.generation
+                    snapshot.generation,
+                    mountWeak
                 );
             }
         );
@@ -504,19 +500,19 @@ int PluginManager::registerGraphNodeType(
     return 0;
 }
 
-int PluginManager::unregisterGraphNodeType(PluginInstance* inst, PluginxxStringView type) {
+int PluginMount::unregisterGraphNodeType(PluginInstance* inst, PluginxxStringView type) {
     if (!inst || agentxx::plugin::PluginStringView::empty(type)) {
         return -1;
     }
     std::string typeStr = svToStr(type);
     auto        it      = std::find_if(
-        inst->graphNodeTypes.begin(),
-        inst->graphNodeTypes.end(),
-        [&typeStr](const PluginInstance::GraphNodeTypeRegistration& r) {
+        entryOf(inst).graphNodes.begin(),
+        entryOf(inst).graphNodes.end(),
+        [&typeStr](const Entry::GraphNodeRegistration& r) {
             return r.type == typeStr;
         }
     );
-    if (it == inst->graphNodeTypes.end()) {
+    if (it == entryOf(inst).graphNodes.end()) {
         XX_LOGW(
             "Plugin `{}` unregister graph node type `{}` not owned by this plugin",
             inst->name,
@@ -527,26 +523,26 @@ int PluginManager::unregisterGraphNodeType(PluginInstance* inst, PluginxxStringV
     if (it->slot) {
         it->slot->invalidate(inst);
     }
-    inst->graphNodeTypes.erase(it);
+    entryOf(inst).graphNodes.erase(it);
     // GraphRegistry 无删除 API: 仅移出实例注册表; 若引擎尚未编译 (插件加载
     // 阶段) 而类型已被替换/删除, 图编译引用该类型将失败 → 主程序回退默认图
     XX_LOGI("Plugin `{}` unregistered graph node type `{}`", inst->name, typeStr);
     return 0;
 }
 
-std::string PluginManager::getGraphJson() {
-    auto ctx = agentContext_.lock();
+std::string PluginMount::getGraphJson() {
+    auto ctx = agent_.lock();
     if (!ctx) {
         return {};
     }
     return ctx->graphDefinitionJson.dump();
 }
 
-int PluginManager::setGraphJson(PluginInstance* inst, PluginxxStringView graph_json) {
+int PluginMount::setGraphJson(PluginInstance* inst, PluginxxStringView graph_json) {
     if (!inst || agentxx::plugin::PluginStringView::empty(graph_json)) {
         return -1;
     }
-    auto ctx = agentContext_.lock();
+    auto ctx = agent_.lock();
     if (!ctx) {
         return -1;
     }
@@ -574,6 +570,7 @@ int PluginManager::setGraphJson(PluginInstance* inst, PluginxxStringView graph_j
             graphDefinitionBase_         = ctx->graphDefinitionJson.dump();
             graphDefinitionBaseCaptured_ = true;
             graphDefinitionOwner_        = inst->name;
+        entryOf(inst).ownsGraphDefinition = true;
         }
         ctx->graphDefinitionJson = agentxx::util::toNeographJson(j);
         XX_LOGI(
@@ -588,11 +585,11 @@ int PluginManager::setGraphJson(PluginInstance* inst, PluginxxStringView graph_j
     }
 }
 
-void PluginManager::releaseGraphDefinitionSlot(PluginInstance* inst) {
+void PluginMount::releaseGraphDefinitionSlot(PluginInstance* inst) {
     if (!inst || graphDefinitionOwner_ != inst->name) {
         return;
     }
-    auto ctx = agentContext_.lock();
+    auto ctx = agent_.lock();
     if (ctx && graphDefinitionBaseCaptured_) {
         try {
             auto base                = utilxx_base::Json::parse(graphDefinitionBase_);
@@ -606,33 +603,41 @@ void PluginManager::releaseGraphDefinitionSlot(PluginInstance* inst) {
         }
     }
     graphDefinitionOwner_.clear();
+    if (auto* entry = findEntry(inst); entry != nullptr) {
+        entry->ownsGraphDefinition = false;
+    }
     graphDefinitionBase_.clear();
     graphDefinitionBaseCaptured_ = false;
 }
 
-PluginManager::RegistrationInventory PluginManager::registrationInventory(const PluginInstance& inst
+PluginMount::RegistrationInventory PluginMount::registrationInventory(const PluginInstance& inst
 ) const {
     // 只统计"当前生效"的注册 (禁用/卸载后实例仍保留注册记录, 但那些记录不在
     // 主程序侧生效: 工具已被摘出注册表、钩子处理器已从注册表移除、图节点 slot 已失效)。
     // 因此每一项都按"生效事实"取数, 而不是按记录条数。
     RegistrationInventory out;
-    for (const auto& name : inst.toolNames) {
-        if (registry_ && registry_->contains(name)) {
+    const auto*           entry = findEntry(&inst);
+    if (entry == nullptr) {
+        return out;
+    }
+    for (const auto& name : entry->tools) {
+        if (toolRegistry() && toolRegistry()->contains(name)) {
             ++out.tools;
         }
     }
-    out.permissionTools    = inst.permissionToolNames.size();
+    out.permissionTools    = entry->permissionTools.size();
     out.eventSubscriptions = inst.subscriptions.size();
     // 钩子: 注册表里属于本实例的处理器条数 (禁用/卸载后为 0)
     out.hooks = liveHookHandlersOf(inst);
 
-    for (const auto& graph : inst.graphNodeTypes) {
+    for (const auto& graph : entry->graphNodes) {
         if (graph.slot && graph.slot->snapshot().active) {
             ++out.graphNodeTypes;
         }
     }
     for (const auto& cap : inst.capabilityRegistrations) {
-        if (hasCapability(cap.name) > 0) {
+        auto host = host_.lock();
+        if (host && host->hasCapability(cap.name) > 0) {
             ++out.capabilities;
         }
     }
@@ -645,7 +650,7 @@ PluginManager::RegistrationInventory PluginManager::registrationInventory(const 
     }
     // 清单/运行时资源: 应用器在禁用时摘生效、保留记录, 因此只在启用状态下计数
     if (inst.enabled) {
-        if (auto ctx = agentContext_.lock()) {
+        if (auto ctx = agent_.lock()) {
             if (ctx->resourceApplier) {
                 const auto owned  = ctx->resourceApplier->ownedBy(inst.name);
                 out.skillDirs     = owned.skillDirs.size();
@@ -659,15 +664,15 @@ PluginManager::RegistrationInventory PluginManager::registrationInventory(const 
 
     // 功能点: 只数"当前生效"的项 —— 实现按注册表里存在的归属计数, 点按注册表里
     // 来源等于本实例的点计数 (禁用/卸载时已被摘除)
-    if (auto ctx = agentContext_.lock(); ctx && ctx->features) {
+    if (auto ctx = agent_.lock(); ctx && ctx->features) {
         const std::string owner = fmt::format("plugin:{}", inst.name);
-        for (const auto& pointId : inst.featurePointImpls) {
+        for (const auto& pointId : entry->featureImpls) {
             if (auto* point = ctx->features->find(pointId);
                 point != nullptr && point->hasImplOf(owner)) {
                 ++out.featureImpls;
             }
         }
-        for (const auto& pointId : inst.featurePoints) {
+        for (const auto& pointId : entry->featurePoints) {
             if (auto* point = ctx->features->find(pointId);
                 point != nullptr && point->origin() == owner) {
                 ++out.featurePoints;

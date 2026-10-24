@@ -9,7 +9,7 @@
 /// 2. **单派发器**: 中间件链上只挂一个 [PluginHookDispatchHandle] —— 首次登记时
 ///    插入、没有处理器时摘除; 派发时按注册表顺序串行执行处理器, 都在主程序 io 线程,
 ///    单个处理器失败只记一条警告日志并继续 (与旧实现一致);
-/// 3. **清单**: [PluginManager::hooksJson] / [PluginManager::handlersOf] —— 插件
+/// 3. **清单**: [PluginMount::hooksJson] / [PluginMount::handlersOf] —— 插件
 ///    `list_hooks`、加载快照 `hooks` 段与 `--dump-diagnostics` 共用同一份实现;
 ///    派发记录只在开发者模式下收集 (见 plan §11.4)。
 ///
@@ -114,8 +114,8 @@ void PLUGINXX_CALL ignoreHookCompletion(void*, int32_t, const PluginxxStringView
 // 注册表
 // =====================================================================
 
-std::vector<PluginManager::HookHandlerEntry>
-    PluginManager::orderedHandlers(AgentxxPluginHookPoint point) const {
+std::vector<PluginMount::HookHandlerEntry>
+    PluginMount::orderedHandlers(AgentxxPluginHookPoint point) const {
     std::vector<HookHandlerEntry> out;
     out.reserve(hookHandlers_.size());
     for (const auto& entry : hookHandlers_) {
@@ -141,7 +141,7 @@ std::vector<PluginManager::HookHandlerEntry>
     return out;
 }
 
-PluginManager::HookHandlerView PluginManager::viewOf(const HookHandlerEntry& entry) const {
+PluginMount::HookHandlerView PluginMount::viewOf(const HookHandlerEntry& entry) const {
     HookHandlerView view;
     view.handle   = entry.handle;
     view.point    = entry.point;
@@ -156,7 +156,7 @@ PluginManager::HookHandlerView PluginManager::viewOf(const HookHandlerEntry& ent
     return view;
 }
 
-std::vector<PluginManager::HookHandlerView> PluginManager::handlersOf(AgentxxPluginHookPoint point
+std::vector<PluginMount::HookHandlerView> PluginMount::handlersOf(AgentxxPluginHookPoint point
 ) const {
     std::vector<HookHandlerView> out;
     for (const auto& entry : orderedHandlers(point)) {
@@ -165,7 +165,7 @@ std::vector<PluginManager::HookHandlerView> PluginManager::handlersOf(AgentxxPlu
     return out;
 }
 
-size_t PluginManager::liveHookHandlersOf(const PluginInstance& inst) const {
+size_t PluginMount::liveHookHandlersOf(const PluginInstance& inst) const {
     const std::string owner = fmt::format("plugin:{}", inst.name);
     size_t            count = 0;
     for (const auto& entry : hookHandlers_) {
@@ -176,8 +176,8 @@ size_t PluginManager::liveHookHandlersOf(const PluginInstance& inst) const {
     return count;
 }
 
-std::vector<PluginManager::HookHandlerView>
-    PluginManager::allHookHandlersOf(const PluginInstance& inst) const {
+std::vector<PluginMount::HookHandlerView>
+    PluginMount::allHookHandlersOf(const PluginInstance& inst) const {
     std::vector<HookHandlerView> out;
     const std::string            owner = fmt::format("plugin:{}", inst.name);
     for (int32_t p = 0; p < AGENTXX_PLUGIN_HOOK_COUNT; ++p) {
@@ -194,7 +194,7 @@ std::vector<PluginManager::HookHandlerView>
 // 登记 / 撤销
 // =====================================================================
 
-int64_t PluginManager::insertHookHandler(HookHandlerEntry entry) {
+int64_t PluginMount::insertHookHandler(HookHandlerEntry entry) {
     entry.handle = nextHookHandle_++;
     entry.seq    = hookSeq_++;
     hookHandlers_.push_back(std::move(entry));
@@ -202,7 +202,7 @@ int64_t PluginManager::insertHookHandler(HookHandlerEntry entry) {
     return hookHandlers_.back().handle;
 }
 
-bool PluginManager::removeHookHandler(int64_t handle, PluginInstance* ownerInst, bool checkOwner) {
+bool PluginMount::removeHookHandler(int64_t handle, PluginInstance* ownerInst, bool checkOwner) {
     if (handle <= 0) {
         return false;
     }
@@ -231,7 +231,7 @@ bool PluginManager::removeHookHandler(int64_t handle, PluginInstance* ownerInst,
     return true;
 }
 
-void PluginManager::detachHookHandlers(PluginInstance* inst) {
+void PluginMount::detachHookHandlers(PluginInstance* inst) {
     if (inst == nullptr) {
         return;
     }
@@ -245,15 +245,15 @@ void PluginManager::detachHookHandlers(PluginInstance* inst) {
         }
     }
     // 实例记录保留 (诊断与"本实例登记过什么"用), 句柄置 0 表示已从注册表摘除
-    for (auto& record : inst->hookRegistrations) {
-        record.handle = 0;
+    for (auto& handle : entryOf(inst).hookHandles) {
+        handle = 0;
     }
     if (removed > 0) {
         retireHookDispatchIfIdle();
     }
 }
 
-int PluginManager::registerHook(
+int PluginMount::registerHook(
     PluginInstance*                inst,
     const AgentxxPluginHookSpecEx* spec,
     int64_t*                       outHandle
@@ -289,32 +289,26 @@ int PluginManager::registerHook(
     entry.spec.user_data   = spec->user_data;
 
     const int64_t handle = insertHookHandler(std::move(entry));
-    inst->hookRegistrations.push_back(PluginInstance::HookRegistration{spec->point, handle});
+    entryOf(inst).hookHandles.push_back(handle);
     *outHandle = handle;
     return 0;
 }
 
-int PluginManager::unregisterHook(PluginInstance* inst, int64_t handle) {
+int PluginMount::unregisterHook(PluginInstance* inst, int64_t handle) {
     if (inst == nullptr || handle <= 0) {
         return -1;
     }
-    auto it = std::find_if(
-        inst->hookRegistrations.begin(),
-        inst->hookRegistrations.end(),
-        [handle](const PluginInstance::HookRegistration& record) {
-            return record.handle == handle;
-        }
-    );
-    if (it == inst->hookRegistrations.end()) {
+    auto it = std::find(entryOf(inst).hookHandles.begin(), entryOf(inst).hookHandles.end(), handle);
+    if (it == entryOf(inst).hookHandles.end()) {
         XX_LOGW("插件 `{}` 撤销钩子处理器 #{} 被拒绝: 句柄不属于本实例", inst->name, handle);
         return -1;
     }
     const bool removed = removeHookHandler(handle, inst, /*checkOwner=*/true);
-    inst->hookRegistrations.erase(it);
+    entryOf(inst).hookHandles.erase(it);
     return removed ? 0 : -1;
 }
 
-int64_t PluginManager::addCoreHookHandler(
+int64_t PluginMount::addCoreHookHandler(
     AgentxxPluginHookPoint point,
     int32_t                priority,
     std::string            module,
@@ -336,7 +330,7 @@ int64_t PluginManager::addCoreHookHandler(
     return insertHookHandler(std::move(entry));
 }
 
-bool PluginManager::removeCoreHookHandler(int64_t handle) {
+bool PluginMount::removeCoreHookHandler(int64_t handle) {
     return removeHookHandler(handle, nullptr, /*checkOwner=*/false);
 }
 
@@ -344,8 +338,8 @@ bool PluginManager::removeCoreHookHandler(int64_t handle) {
 // 单派发器 (中间件链)
 // =====================================================================
 
-void PluginManager::ensureHookDispatch() {
-    auto ctx = agentContext_.lock();
+void PluginMount::ensureHookDispatch() {
+    auto ctx = agent_.lock();
     if (!ctx || !ctx->middlewareHandleContext) {
         // 中间件链还没加载 (理论上不会: 插件在 initMiddleware 之后才加载)
         XX_LOGW("钩子派发器无法挂载: 中间件上下文尚未加载");
@@ -354,7 +348,7 @@ void PluginManager::ensureHookDispatch() {
     if (hookDispatch_ == nullptr) {
         hookDispatch_ = std::make_shared<PluginHookDispatchHandle>(
             "plugin_hooks",
-            agentContext_,
+            agent_,
             shared_from_this()
         );
     }
@@ -376,7 +370,7 @@ void PluginManager::ensureHookDispatch() {
     }
 }
 
-void PluginManager::retireHookDispatchIfIdle() {
+void PluginMount::retireHookDispatchIfIdle() {
     if (hookDispatch_ == nullptr || !hookHandlers_.empty()) {
         return;
     }
@@ -391,11 +385,11 @@ void PluginManager::retireHookDispatchIfIdle() {
     hookDispatch_ = nullptr;
 }
 
-void PluginManager::eraseHookDispatch(PluginHookDispatchHandle* handle) {
+void PluginMount::eraseHookDispatch(PluginHookDispatchHandle* handle) {
     if (handle == nullptr) {
         return;
     }
-    auto ctx = agentContext_.lock();
+    auto ctx = agent_.lock();
     if (!ctx || !ctx->middlewareHandleContext) {
         return;
     }
@@ -470,7 +464,7 @@ asio::awaitable<void> runPluginHookHandler(
 
 } // namespace
 
-asio::awaitable<void> PluginManager::dispatchHook(
+asio::awaitable<void> PluginMount::dispatchHook(
     AgentxxPluginHookPoint            point,
     const neograph::graph::NodeInput& in
 ) {
@@ -565,7 +559,7 @@ asio::awaitable<void> PluginManager::dispatchHook(
 // 清单
 // =====================================================================
 
-std::string PluginManager::hooksJson() {
+std::string PluginMount::hooksJson() {
     const bool        devMode = agentxx::agent::AgentConfigStatic::devMode;
     utilxx_base::Json points  = utilxx_base::Json::array();
     int64_t           total   = 0;
@@ -625,48 +619,48 @@ std::string PluginManager::hooksJson() {
 
 asio::awaitable<void> PluginHookDispatchHandle::onAgentcallStartFunc(neograph::graph::NodeInput& in
 ) {
-    if (auto mgr = manager_.lock()) {
+    if (auto mgr = mount_.lock()) {
         co_await mgr->dispatchHook(AGENTXX_PLUGIN_HOOK_AGENT_START, in);
     }
 }
 
 asio::awaitable<void> PluginHookDispatchHandle::
     onAgentcallEndFunc(const neograph::graph::NodeInput& in, neograph::graph::NodeOutput&) {
-    if (auto mgr = manager_.lock()) {
+    if (auto mgr = mount_.lock()) {
         co_await mgr->dispatchHook(AGENTXX_PLUGIN_HOOK_AGENT_END, in);
     }
 }
 
 asio::awaitable<void> PluginHookDispatchHandle::onModelcallStartFunc(neograph::graph::NodeInput& in
 ) {
-    if (auto mgr = manager_.lock()) {
+    if (auto mgr = mount_.lock()) {
         co_await mgr->dispatchHook(AGENTXX_PLUGIN_HOOK_MODEL_START, in);
     }
 }
 
 asio::awaitable<void> PluginHookDispatchHandle::onModelcallRunFunc(neograph::graph::NodeInput& in) {
-    if (auto mgr = manager_.lock()) {
+    if (auto mgr = mount_.lock()) {
         co_await mgr->dispatchHook(AGENTXX_PLUGIN_HOOK_MODEL_RUN, in);
     }
 }
 
 asio::awaitable<void> PluginHookDispatchHandle::
     onModelcallEndFunc(const neograph::graph::NodeInput& in, neograph::graph::NodeOutput&) {
-    if (auto mgr = manager_.lock()) {
+    if (auto mgr = mount_.lock()) {
         co_await mgr->dispatchHook(AGENTXX_PLUGIN_HOOK_MODEL_END, in);
     }
 }
 
 asio::awaitable<void> PluginHookDispatchHandle::onToolcallStartFunc(neograph::graph::NodeInput& in
 ) {
-    if (auto mgr = manager_.lock()) {
+    if (auto mgr = mount_.lock()) {
         co_await mgr->dispatchHook(AGENTXX_PLUGIN_HOOK_TOOL_START, in);
     }
 }
 
 asio::awaitable<void> PluginHookDispatchHandle::
     onToolcallEndFunc(const neograph::graph::NodeInput& in, neograph::graph::NodeOutput&) {
-    if (auto mgr = manager_.lock()) {
+    if (auto mgr = mount_.lock()) {
         co_await mgr->dispatchHook(AGENTXX_PLUGIN_HOOK_TOOL_END, in);
     }
 }

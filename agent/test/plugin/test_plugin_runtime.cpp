@@ -46,14 +46,26 @@ struct RuntimeFixture {
     asio::io_context               io;
     std::shared_ptr<PluginManager> manager
         = std::make_shared<PluginManager>(std::weak_ptr<agentxx::agent::AgentContext>{});
+    /// 本夹具的 agent 上下文与挂载 (登记记录落在挂载上)
+    std::shared_ptr<agentxx::agent::AgentContext> ctx;
+    std::shared_ptr<PluginMount>                 mount;
     std::shared_ptr<PluginInstance> provider;
     std::shared_ptr<PluginInstance> caller;
 
-    explicit RuntimeFixture(std::shared_ptr<agentxx::agent::AgentContext> ctx = {}) {
-        if (ctx) {
-            manager = std::make_shared<PluginManager>(ctx);
+    /// 注意: 参数不能与成员 `ctx` 同名 —— 同名时成员恒为空, 临时上下文在构造
+    /// 结束时释放, 其析构会关掉管理器上的全部实例。
+    explicit RuntimeFixture(std::shared_ptr<agentxx::agent::AgentContext> existingCtx = {}) {
+        if (existingCtx) {
+            manager = std::make_shared<PluginManager>(existingCtx);
         }
         manager->setIoExecutor(io.get_executor());
+        ctx = existingCtx ? std::move(existingCtx)
+                          : std::make_shared<agentxx::agent::AgentContext>();
+        // 挂载记录: 单元测试只走主程序侧接口, 不需要插件的 mount 回调
+        ctx->toolRegistry  = std::make_shared<agentxx::plugin::ToolRegistry>();
+        ctx->pluginManager = manager;
+        mount              = manager->attachMountSync(ctx);
+        ctx->pluginMount   = mount;
         provider = instance("provider", 1);
         caller   = instance("caller", 2);
     }
@@ -393,9 +405,9 @@ TestResult testPluginRuntime() {
         RuntimeFixture f;
         CallbackState  cb{.fixture = &f};
         auto           spec = fakeTool(nullptr, true);
-        XX_TEST_EXPECT_EQ(f.manager->registerTool(f.provider.get(), &spec), 0);
+        XX_TEST_EXPECT_EQ(f.mount->registerTool(f.provider.get(), &spec), 0);
         PluginxxString error{};
-        auto*          rejected = f.manager->callToolAsync(
+        auto*          rejected = f.mount->callToolAsync(
             f.caller.get(),
             "runtime_tool",
             "{}",
@@ -414,12 +426,12 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_TRUE(f.caller->outstandingOps.empty());
         XX_TEST_EXPECT_EQ(f.provider->lifetime->leaseCount(), size_t{0});
         XX_TEST_EXPECT_EQ(f.caller->lifetime->leaseCount(), size_t{0});
-        f.manager->unregisterTool(f.provider.get(), "runtime_tool");
+        f.mount->unregisterTool(f.provider.get(), "runtime_tool");
         bool started = false;
         spec         = fakeTool(&started, false);
-        XX_TEST_EXPECT_EQ(f.manager->registerTool(f.provider.get(), &spec), 0);
+        XX_TEST_EXPECT_EQ(f.mount->registerTool(f.provider.get(), &spec), 0);
         error          = {};
-        auto* accepted = f.manager->callToolAsync(
+        auto* accepted = f.mount->callToolAsync(
             f.caller.get(),
             "runtime_tool",
             R"({"hello":"world"})",
@@ -438,7 +450,7 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_TRUE(cb.payload.find("world") != std::string::npos);
         XX_TEST_EXPECT_TRUE(f.manager->runtime()->operations.empty());
         /// callback 可选，不允许因未提供 callback 将已接受请求改为拒绝。
-        accepted = f.manager->callToolAsync(
+        accepted = f.mount->callToolAsync(
             f.caller.get(),
             "runtime_tool",
             "{}",
@@ -568,12 +580,12 @@ TestResult testPluginRuntime() {
         CallbackState  cb{.fixture = &f};
         bool           started = false;
         auto           spec    = fakeTool(&started, false);
-        XX_TEST_EXPECT_EQ(f.manager->registerTool(f.provider.get(), &spec), 0);
+        XX_TEST_EXPECT_EQ(f.mount->registerTool(f.provider.get(), &spec), 0);
         auto               keepIo = asio::make_work_guard(f.io);
         std::promise<bool> returned;
         std::thread        worker([&] {
             PluginxxString error{};
-            auto*          handle = f.manager->callToolAsync(
+            auto*          handle = f.mount->callToolAsync(
                 f.caller.get(),
                 "runtime_tool",
                 "{}",
@@ -1378,48 +1390,48 @@ TestResult testPluginRuntime() {
 
         // 1) 两个 owner 依次写同一个 append 键：后者生效
         XX_TEST_EXPECT_EQ(
-            f.manager->setPromptJson(f.provider.get(), R"({"appendSystemPrompts":{"demo":"A"}})"),
+            f.mount->setPromptJson(f.provider.get(), R"({"appendSystemPrompts":{"demo":"A"}})"),
             0
         );
         XX_TEST_EXPECT_EQ(prompt.appendSystemPrompts["demo"], std::string{"A"});
         XX_TEST_EXPECT_EQ(
-            f.manager->setPromptJson(f.caller.get(), R"({"appendSystemPrompts":{"demo":"B"}})"),
+            f.mount->setPromptJson(f.caller.get(), R"({"appendSystemPrompts":{"demo":"B"}})"),
             0
         );
         XX_TEST_EXPECT_EQ(prompt.appendSystemPrompts["demo"], std::string{"B"});
 
         // 2) 先卸载写 "A" 的 owner：只剩 caller 的贡献
-        f.manager->removePromptContributions(f.provider->name);
+        f.mount->removePromptContributions(f.provider->name);
         XX_TEST_EXPECT_EQ(prompt.appendSystemPrompts["demo"], std::string{"B"});
 
         // 3) 再卸载 caller：回到基础值（原本不存在 -> 键删除），不写回已离开的 "A"
-        f.manager->removePromptContributions(f.caller->name);
+        f.mount->removePromptContributions(f.caller->name);
         XX_TEST_EXPECT_TRUE(
             prompt.appendSystemPrompts.find("demo") == prompt.appendSystemPrompts.end()
         );
 
         // 4) 外部（用户）修改后卸载：保留用户值
         XX_TEST_EXPECT_EQ(
-            f.manager->setPromptJson(f.provider.get(), R"({"appendSystemPrompts":{"u":"plugin"}})"),
+            f.mount->setPromptJson(f.provider.get(), R"({"appendSystemPrompts":{"u":"plugin"}})"),
             0
         );
         prompt.appendSystemPrompts["u"] = "user";
-        f.manager->removePromptContributions(f.provider->name);
+        f.mount->removePromptContributions(f.provider->name);
         XX_TEST_EXPECT_EQ(prompt.appendSystemPrompts["u"], std::string{"user"});
         prompt.appendSystemPrompts.erase("u");
 
         // 5) systemPrompt 卸载回到基础值
         XX_TEST_EXPECT_EQ(
-            f.manager->setPromptJson(f.provider.get(), R"({"systemPrompt":"plugin system"})"),
+            f.mount->setPromptJson(f.provider.get(), R"({"systemPrompt":"plugin system"})"),
             0
         );
         XX_TEST_EXPECT_EQ(prompt.systemPrompt, std::string{"plugin system"});
-        f.manager->removePromptContributions(f.provider->name);
+        f.mount->removePromptContributions(f.provider->name);
         XX_TEST_EXPECT_EQ(prompt.systemPrompt, baseSys);
 
         // 6) toolPrompt：部分覆盖语义 + 卸载删除新增键
         XX_TEST_EXPECT_EQ(
-            f.manager->setPromptJson(
+            f.mount->setPromptJson(
                 f.provider.get(),
                 R"({"toolPrompt":{"demo_tool":{"depict":"D","args":{"a":"1"}}}})"
             ),
@@ -1428,7 +1440,7 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_EQ(prompt.toolPrompt["demo_tool"].depict, std::string{"D"});
         XX_TEST_EXPECT_EQ(prompt.toolPrompt["demo_tool"].args["a"], std::string{"1"});
         XX_TEST_EXPECT_EQ(
-            f.manager->setPromptJson(
+            f.mount->setPromptJson(
                 f.provider.get(),
                 R"({"toolPrompt":{"demo_tool":{"args":{"b":"2"}}}})"
             ),
@@ -1436,7 +1448,7 @@ TestResult testPluginRuntime() {
         );
         XX_TEST_EXPECT_EQ(prompt.toolPrompt["demo_tool"].depict, std::string{"D"});
         XX_TEST_EXPECT_EQ(prompt.toolPrompt["demo_tool"].args["b"], std::string{"2"});
-        f.manager->removePromptContributions(f.provider->name);
+        f.mount->removePromptContributions(f.provider->name);
         XX_TEST_EXPECT_TRUE(prompt.toolPrompt.find("demo_tool") == prompt.toolPrompt.end());
     }
 
@@ -1472,7 +1484,7 @@ TestResult testPluginRuntime() {
         const int baseStops    = probe->stops;
 
         // 加载时的初始注册（模拟 create/start 已完成）
-        XX_TEST_EXPECT_EQ(f.manager->registerTool(inst.get(), &probe->spec), 0);
+        XX_TEST_EXPECT_EQ(f.mount->registerTool(inst.get(), &probe->spec), 0);
         XX_TEST_EXPECT_TRUE(f.manager->registry()->contains("runtime_tool"));
 
         // ---- disable: 主程序侧同步摘除；stop 事务投递到 IO 线程 ----
@@ -1489,7 +1501,7 @@ TestResult testPluginRuntime() {
         f.drainAll();
         XX_TEST_EXPECT_EQ(probe->stops, baseStops + 1);
         XX_TEST_EXPECT_TRUE(inst->lifecycleStopped);
-        XX_TEST_EXPECT_TRUE(inst->toolNames.empty()); // 记录已清空，等待 start 重新声明
+        XX_TEST_EXPECT_TRUE(inst->allToolNames().empty()); // 记录已清空，等待 start 重新声明
 
         // ---- enable: start 事务重新注册 ----
         f.manager->enable("lifecycle_plugin");
@@ -1503,10 +1515,10 @@ TestResult testPluginRuntime() {
             static_cast<int>(pluginxx::PluginInstanceState::Ready)
         );
         XX_TEST_EXPECT_TRUE(f.manager->registry()->contains("runtime_tool"));
-        XX_TEST_EXPECT_EQ(inst->toolNames.size(), size_t{1});
-        XX_TEST_EXPECT_EQ(inst->graphNodeTypes.size(), size_t{1});
-        auto graphSlot = inst->graphNodeTypes.empty() ? std::shared_ptr<GraphTypeSlot>{}
-                                                      : inst->graphNodeTypes.front().slot;
+        XX_TEST_EXPECT_EQ(inst->allToolNames().size(), size_t{1});
+        XX_TEST_EXPECT_EQ(inst->allGraphSlots().size(), size_t{1});
+        auto graphSlot = inst->allGraphSlots().empty() ? std::shared_ptr<GraphTypeSlot>{}
+                                                      : inst->allGraphSlots().front();
         XX_TEST_EXPECT_TRUE(graphSlot != nullptr);
         XX_TEST_EXPECT_TRUE(graphSlot && graphSlot->snapshot().active);
 
@@ -1519,8 +1531,8 @@ TestResult testPluginRuntime() {
         }
         XX_TEST_EXPECT_EQ(probe->starts, baseStarts + 4);
         XX_TEST_EXPECT_EQ(probe->stops, baseStops + 4);
-        XX_TEST_EXPECT_EQ(inst->toolNames.size(), size_t{1});
-        XX_TEST_EXPECT_EQ(inst->tools.size(), size_t{1});
+        XX_TEST_EXPECT_EQ(inst->allToolNames().size(), size_t{1});
+        XX_TEST_EXPECT_EQ(inst->allToolObjects().size(), size_t{1});
 
         // ---- 禁用后立刻启用（stop 事务仍在队列）: 先 stop 再 start ----
         f.manager->disable("lifecycle_plugin");
@@ -1529,7 +1541,7 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_TRUE(inst->enabled);
         XX_TEST_EXPECT_FALSE(inst->lifecycleStopped);
         XX_TEST_EXPECT_TRUE(f.manager->registry()->contains("runtime_tool"));
-        XX_TEST_EXPECT_EQ(inst->toolNames.size(), size_t{1});
+        XX_TEST_EXPECT_EQ(inst->allToolNames().size(), size_t{1});
         XX_TEST_EXPECT_EQ(probe->starts, baseStarts + 5);
 
         // ---- start 失败: 回到 Disabled、不留部分注册；再次启用可恢复 ----
@@ -1550,8 +1562,8 @@ TestResult testPluginRuntime() {
             static_cast<int>(pluginxx::PluginInstanceState::Disabled)
         );
         XX_TEST_EXPECT_FALSE(f.manager->registry()->contains("runtime_tool")); // 已回滚
-        XX_TEST_EXPECT_TRUE(inst->toolNames.empty());
-        XX_TEST_EXPECT_TRUE(inst->graphNodeTypes.empty()); // 图注册记录同样回滚
+        XX_TEST_EXPECT_TRUE(inst->allToolNames().empty());
+        XX_TEST_EXPECT_TRUE(inst->allGraphSlots().empty()); // 图注册记录同样回滚
         XX_TEST_EXPECT_TRUE(graphSlot && !graphSlot->snapshot().active); // 槽位失效
 
         probe->failStart = false;
@@ -1563,7 +1575,7 @@ TestResult testPluginRuntime() {
             static_cast<int>(pluginxx::PluginInstanceState::Ready)
         );
         XX_TEST_EXPECT_TRUE(f.manager->registry()->contains("runtime_tool"));
-        XX_TEST_EXPECT_EQ(inst->graphNodeTypes.size(), size_t{1});
+        XX_TEST_EXPECT_EQ(inst->allGraphSlots().size(), size_t{1});
         XX_TEST_EXPECT_TRUE(graphSlot && graphSlot->snapshot().active); // 重新激活
 
         // ---- 关闭流程中的实例不接受启用状态变化 ----
@@ -1652,14 +1664,14 @@ TestResult testPluginRuntime() {
     {
         RuntimeFixture f;
         auto           spec = fakeTool(nullptr, false);
-        XX_TEST_EXPECT_EQ(f.manager->registerTool(f.provider.get(), &spec), 0);
-        XX_TEST_EXPECT_EQ(f.manager->unregisterTool(f.provider.get(), "runtime_tool"), 0);
-        XX_TEST_EXPECT_TRUE(f.provider->toolNames.empty());
+        XX_TEST_EXPECT_EQ(f.mount->registerTool(f.provider.get(), &spec), 0);
+        XX_TEST_EXPECT_EQ(f.mount->unregisterTool(f.provider.get(), "runtime_tool"), 0);
+        XX_TEST_EXPECT_TRUE(f.provider->allToolNames().empty());
 
         f.provider->lifetime->requestClose();
-        XX_TEST_EXPECT_TRUE(f.manager->registerTool(f.provider.get(), &spec) != 0);
+        XX_TEST_EXPECT_TRUE(f.mount->registerTool(f.provider.get(), &spec) != 0);
         XX_TEST_EXPECT_FALSE(f.manager->registry()->contains("runtime_tool"));
-        XX_TEST_EXPECT_TRUE(f.provider->toolNames.empty());
+        XX_TEST_EXPECT_TRUE(f.provider->allToolNames().empty());
     }
 
     /// 完整 vtable 路径 —— 工作线程发起注册，随后实例开始关闭。请求要么在
@@ -1705,7 +1717,7 @@ TestResult testPluginRuntime() {
 
         XX_TEST_EXPECT_TRUE(rc != 0);
         XX_TEST_EXPECT_FALSE(f.manager->registry()->contains("runtime_tool"));
-        XX_TEST_EXPECT_TRUE(f.provider->toolNames.empty());
+        XX_TEST_EXPECT_TRUE(f.provider->allToolNames().empty());
         f.drain();
         XX_TEST_EXPECT_EQ(f.provider->lifetime->leaseCount(), size_t{0});
     }
