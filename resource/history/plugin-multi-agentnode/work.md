@@ -433,6 +433,35 @@ ref.seq         = mgr->mountSequence();   // 未挂载时为 0 = 不校验
 
 已知遗留（下一阶段处理）：
 
+- 阶段 D/F/G 已过一轮（见下节）。
+
+## 6. 阶段 D / F / G 记录
+
+**D. 管理器上提与配置**
+
+- `AgentHost::Config::pluginList` + `pluginHost()` + `loadPluginsAsync()`：进程一份管理器，
+  加载阶段不持 agent 上下文；成员声明在 `rootAgent_` 之前（逆序析构：先拆挂载再关管理器）。
+- 启动顺序统一为 `create → loadPluginsAsync → 注入 ctx->pluginManager → agent->init()`
+  （内部只挂载）`→ attachRoot`；`attachRootAgentHost` 删除。
+  已改：`mode_runners.cpp`（TUI/CLI）/`jsonl_mode.cpp`/`main.cpp`（server）/`ffi_runtime.cpp`。
+- `BaseAgent`：有注入时不自建、不重复加载（`ownsPluginHost_`）；无注入时自建自加载
+  （单 agent / 测试）。
+- `AgentConfig::pluginMountPolicy`（`All`/`None`/`Listed`，默认 All）+ `pluginMountList`
+  + `pluginMountArgs`；`mountAgentAsync` 按策略选区，`mountOneAsync` 合并挂载级 args；
+  子代理默认 `None`。
+- yaml 解析：`plugin.mount` 两种写法（`[{name,args}]` 或 `{policy,list,plugins[]}`）；
+  `plugin` 段合并时把 `mount` 一起并入（列表段合并会把它丢掉）；`config_keys` 增两条
+  并重生成 `agent/schema/config-keys.json` 与 `docs/zh-cn/design/config-keys.md`。
+
+**F. 诊断**
+
+- `--dump-diagnostics` 详细列表新增 `## plugin mounts`（agentId / seq / 已挂数量 / 插件名）。
+
+**G. 文档**
+
+- `AGENTS.md`、`docs/zh-cn/design/index.md`（架构第 7 小节）、`plugins.md`（§2 版本与
+  加载/挂载分离）已同步新顺序与 `plugin.mount`、版本宏的 cmake 覆盖方式。
+
 - 进程退出时若仍有协程持有 `AgentContext`（MCP 连接收尾）会走到
   `~AgentContext` 的告警日志，此时日志子系统已析构，ASan 报 heap-use-after-free；
   属退出期日志顺序问题，不影响功能；

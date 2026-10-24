@@ -28,8 +28,11 @@
   `requestToolsOverride` + `toolExecutionDisabled`), 命中率实测见
   [benchmark.md](docs/zh-cn/design/benchmark.md) 第 18 节; 详见
   [index.md](docs/zh-cn/design/index.md) 架构设计第 6 小节
-- 主程序加载与子代理记账 (本轮实施): 各运行形态 (`tui`/`cli`/`jsonl`/`server`/FFI) 都在
-  `agent->init()` 之后调 `AgentHost::attachRootAgentHost(rootAgent)`, **与
+- 主程序加载与子代理记账 (本轮实施): 各运行形态 (`tui`/`cli`/`jsonl`/`server`/FFI) 都先
+  `AgentHost::create({.ioCtx, .pluginList = agentConfig->plugins})` →
+  `co_await host->loadPluginsAsync()` → 把 `host->pluginHost()` 放进
+  `AgentContext::pluginManager` → `agent->init()`（内部只做挂载）→ `host->attachRoot(agent)`；
+  `attachRootAgentHost` 已删除。**与
   `AgentConfig::enableSubagent` 无关** (该开关只控制是否把 `agentxx_subagent` 工具注入模型;
   缺主程序时上下文压缩会报 `service.subagent ... no server registered` 并退化为硬截断),
   返回值必须活到会话结束; 子代理 (含压缩) 的模型用量经

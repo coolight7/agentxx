@@ -1641,10 +1641,13 @@ AgentContext
 
 #### 7. 主程序加载与子代理用量
 
-**加载入口统一**: `AgentHost::attachRootAgentHost(rootAgent)` = 创建 agent 节点容器
-(`AgentHost`) + `attachRoot` (在根 agent 总线上注册 `service.subagent` 委派服务)。
-各运行形态都在 `agent->init()` 之后调用它: 进程内 `tui`/`cli` (`mode_runners.cpp`)、
-`jsonl` 一次性运行 (`jsonl_mode.cpp`)、`server` 模式 (`main.cpp`)、FFI (`ffi_runtime.cpp`)。
+**加载入口统一**: `AgentHost` 持有插件管理器 (进程一份): 一次 `create` +
+`loadPluginsAsync()` (拓扑排序 + 依赖 + `create`/`start` 各一次), 每个 agent 在 `init` 时
+自己 `mountAgentAsync` (agent 级注册都在插件的 `mount` 回调里)。
+各运行形态的顺序都是 `create({ioCtx, pluginList})` → `co_await loadPluginsAsync()` →
+把 `pluginHost()` 放进 `AgentContext::pluginManager` → `agent->init()` →
+`attachRoot(agent)` (进程内 `tui`/`cli` 在 `mode_runners.cpp`, `jsonl` 在 `jsonl_mode.cpp`,
+`server` 在 `main.cpp`, FFI 在 `ffi_runtime.cpp`)。
 要点:
 
 - 加载**与 `AgentConfig::enableSubagent` 无关** —— 该开关只决定是否把
