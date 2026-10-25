@@ -370,7 +370,7 @@ void test_i18n_lookup_switches_with_language() {
     XX_TEST_EXPECT_EQ(i18n.t("msg.tipLevelInfo"), std::string_view("信息"));
     XX_TEST_EXPECT_EQ(i18n.t("msg.tipLevelWarn"), std::string_view("警告"));
     XX_TEST_EXPECT_EQ(i18n.t("msg.tipLevelError"), std::string_view("错误"));
-    XX_TEST_EXPECT_EQ(i18n.t("msg.tipPrefix", "警告"), std::string(" [提示] # 警告"));
+    XX_TEST_EXPECT_EQ(i18n.t("msg.tipPrefix", "警告"), std::string(" [提示] 警告"));
     // 未配置 key: 原样返回 key 本身
     XX_TEST_EXPECT_EQ(i18n.t("no.such.key"), std::string_view("no.such.key"));
 
@@ -382,7 +382,7 @@ void test_i18n_lookup_switches_with_language() {
     XX_TEST_EXPECT_EQ(i18n.t("msg.roleThink"), std::string_view(" [Think] "));
     XX_TEST_EXPECT_EQ(i18n.t("msg.roleTool"), std::string_view(" [Tool] "));
     XX_TEST_EXPECT_EQ(i18n.t("msg.roleSystem"), std::string_view(" [System] "));
-    XX_TEST_EXPECT_EQ(i18n.t("msg.tipPrefix", "Warn"), std::string(" [Tip] # Warn"));
+    XX_TEST_EXPECT_EQ(i18n.t("msg.tipPrefix", "Warn"), std::string(" [Tip] Warn"));
 
     // 恢复默认 (简体中文)
     settings.setLanguage(TUISettings::kDefaultLanguage);

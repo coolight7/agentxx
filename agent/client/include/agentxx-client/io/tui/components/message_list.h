@@ -383,10 +383,12 @@ private:
     /// 当前帧是否存在 "正在运行" 的条目 (runSpinner_ 的 isActive 判定):
     /// - 流式输出中且角色为 Think (流式区 [Think] 头部)
     /// - 存在未完成的 Tool 消息 (!toolFinished)
+    /// - 存在运行中的提示消息 (Tip 且 tip->running, 如 "正在压缩上下文")
     /// 仅在 UI 线程调用 (渲染/OnAnimation), 直接读取本帧快照
-    bool hasRunningToolOrThink() const;
+    bool hasRunningMessage() const;
 
-    /// 运行中条目头部的折叠标记字符 (原 "+/-" 静态标识的位置):
+    /// 运行中条目头部的折叠标记字符 (原 "+/-" 静态标识的位置; 作用于 Think/
+    /// Tool 头部与运行中的提示消息 Tip):
     /// - 动画等级 >= High: 返回 runSpinner_ 当前动画帧 (braille 点阵, 同输入框
     ///   前缀加载动画; 由调用方按消息角色着色并补后续文本)
     /// - 否则: 返回静态 +/- 字符 (expanded ? '-' : '+')

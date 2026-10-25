@@ -619,6 +619,7 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
   漏掉一项就会总高度偏低 -> 吸附底部的偏移偏小 -> 底部最新内容被推出视口
 - 加载动画的帧循环由 `hasRunningToolOrThink()` 维持, 占位提示出现时它必然为真 ——
   该时刻既没有流式思考输出也没有未完成的工具消息, 漏掉占位判定会让点阵停在首帧
+  (该判定现名 `hasRunningMessage()`, 同时覆盖运行中的提示消息, 见 §2.16)
 - 清除: 首个正文/思考 token、ToolStart、NodeEnd、TurnEnd 到达时由 client 线程清除
   (`TUIClientAgentIO::onDelta` 的 `clearGenPlaceholder`), 占位位置由真实内容接替 ——
   因此占位是**瞬态渲染态** (`TUIRenderState::genPhase` / `genToolName`), 不进消息列表、
@@ -672,6 +673,31 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
   消息内容宽度一致
 - 相关测试: `agentxx_test tui_scroll` 的跳转按钮场景 (布局与字符顺序、居中与间隔、
   四类点击、两条退化路径、同行折叠消息不被误折叠、空列表、消息区高度不足的两种退化)
+
+### 2.16 提示消息 (Tip)
+
+提示消息 ([ViewMessage::Role::Tip](/agent/lib/include/agentxx/agent/conversation_types.h)) 是
+agent 线程插入会话历史的展示条目: 轮次统计、错误/取消提示, 以及"正在压缩上下文"这类过程
+提示。渲染在
+[MessageListComponent::buildMessageBlock](/agent/client/src/io/tui/components/message_list.cpp)
+的 `Role::Tip` 分支:
+
+- 头部形态与 Think/System 一致: 角色标签 + 可折叠标记, 折叠态其后接 `· ` 与单行预览,
+  展开态下一行显示全文; 级别文本只对 Warning/Error 附加 (`[提示] 警告` / `[提示] 错误`),
+  Info 不附加 (i18n 键 `msg.tipPrefix`, 旧格式里的 `#` 分隔符已去掉)
+- 颜色: 折叠标记、级别文本与正文都按级别着色 (Info = `hintColor`, Warning =
+  `thinkingColor`, Error = `errorColor`); 折叠态的单行预览 (含分隔符 `· `) 再叠加 `theme.dim()`
+  弱化, 展开态全文不加 dim
+- 运行中动画: 提示可带 `tip->running` 标记 (如压缩开始时插入的那条), 此时折叠标记位置显示
+  加载点阵 (`runningHeaderMark`, 门槛动画等级 >= High; 等级不足退回静态 `+`/`-`),
+  该消息块不跨帧缓存 (缓存命中的旧元素是静止帧快照), 帧循环由 `hasRunningMessage()` 维持
+- 运行标记由发起方在**同一条消息** (同一 id) 的两次写入上置位/清除: 压缩开始插入时
+  `running = true`, 结果文本回填时 `running = false` 并写 `durationMs`; 中断续跑复用同一 id,
+  不会多出第二条提示
+- 从会话库读回的展示历史一律清掉该标记 (`SessionStore` 的 `clearRunningTipFlag`):
+  进程在工作结束前退出时库里留下的是带标记的副本, 重启后没有对应工作在跑, 不该一直转
+- 相关测试: `agentxx_test tui_scroll` 的场景 9 / 9b / 9c (前缀与级别文本、不再带 `#`、
+  运行中点阵推进、结束后回到静态标记)
 
 ---
 

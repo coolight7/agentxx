@@ -59,6 +59,18 @@ static bool isDisplayableViewMessage(const ViewMessage& msg) {
     return true;
 }
 
+/// 清掉从库里读回的提示消息的"运行中"标记
+///
+/// `running` 表示界面在该提示的折叠标记处显示加载动画 (如"正在压缩上下文")。
+/// 发起方在结束时用同一条消息 (同一 id) 的更新副本清除它; 但进程在结束前退出/
+/// 被杀死时, 库里留下的是带 `running` 的副本 —— 重启后没有任何工作在跑,
+/// 若照旧渲染, 加载动画会一直转。历史消息一律按"已结束"处理。
+static void clearRunningTipFlag(ViewMessage& msg) {
+    if (msg.tip) {
+        msg.tip->running = false;
+    }
+}
+
 /// FNV-1a 64 位哈希 (截断用低 32 位 hex 输出)
 /// - 统一使用 utilxx_base::hash::fnv1a64 算法
 using utilxx_base::hash::fnv1a64;
@@ -681,6 +693,7 @@ SessionStore::LoadedSession SessionStore::loadSession(std::string_view sessionId
                     [&]() -> bool {
                         auto j   = utilxx_base::Json::parse(jsonText);
                         auto msg = ViewMessage::fromJson(j);
+                        clearRunningTipFlag(msg); // 历史消息: 提示不可能还在运行中
                         // 解析成功的行都计入总数 (下面 msgIdCounter 兜底用:
                         // 消息 id 按追加顺序连续分配, 被过滤的消息也曾占一个 id)
                         ++parsedRows;
@@ -1233,6 +1246,7 @@ std::vector<SessionStore::ViewMessageRow> SessionStore::loadViewMessagesAfter(
                     [&]() -> bool {
                         auto j       = utilxx_base::Json::parse(jsonText);
                         row.message  = ViewMessage::fromJson(j);
+                        clearRunningTipFlag(row.message); // 同上: 历史消息不保留运行中标记
                         // 视觉为空的消息不进展示历史 (与 loadSession 同一规则):
                         // 翻页拉回旧数据时不应把空白消息带回来
                         if (!isDisplayableViewMessage(row.message)) {

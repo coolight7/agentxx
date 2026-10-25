@@ -222,7 +222,7 @@ inline uint64_t estimateAttachmentSizeBytes(const MediaAttachment& att) {
 /// optional 子结构, 避免单结构背负所有角色的字段:
 /// - Role::Tool:      tool (toolName/toolCallId/toolResult/toolFinished/diff)
 /// - Role::Interrupt: interrupt (中断 UI 描述 + 表单状态/结果)
-/// - Role::Tip:       tip (tipLevel)
+/// - Role::Tip:       tip (tipLevel/running)
 ///
 /// 注意: 纯 UI 交互状态 (输入框编辑文本/选中项/校验提示/结果回传通道等) 不属于
 /// 消息内容, 由渲染端 (如 TUI MessageListComponent) 独立维护, 不进入本结构。
@@ -272,6 +272,13 @@ struct ViewMessage {
     // ---- Role::Tip 专属 ----
     struct TipData {
         TipLevel tipLevel = TipLevel::Info;
+        /// 提示对应的工作仍在进行 (典型: "正在压缩上下文")
+        /// - 界面据此在折叠标记处显示加载动画; 动画等级不足时退回静态标记
+        /// - 由发起方在同一条消息 (同一 id) 的两次写入上置位/清除: 开始插入时
+        ///   置 true, 结束时随结果文本一起更新为 false
+        /// - 从会话库读回的历史消息一律按 false 处理 (见 SessionStore 加载),
+        ///   避免进程退出时未结束的提示重开后一直转动
+        bool running = false;
     };
 
     // ---- Role::Think 专属 ----
@@ -767,9 +774,12 @@ inline utilxx_base::Json ViewMessage::toJson() const {
         j["tool"] = std::move(t);
     }
     if (tip) {
-        j["tip"] = utilxx_base::Json{
-            {"tip_level", std::string(viewMessageTipLevelToString(tip->tipLevel))},
-        };
+        utilxx_base::Json t = utilxx_base::Json::object();
+        t["tip_level"]      = std::string(viewMessageTipLevelToString(tip->tipLevel));
+        if (tip->running) {
+            t["running"] = true;
+        }
+        j["tip"] = std::move(t);
     }
     if (think) {
         utilxx_base::Json th = utilxx_base::Json::object();
@@ -839,6 +849,7 @@ inline ViewMessage ViewMessage::fromJson(const utilxx_base::Json& j) {
             if (j.contains("tip")) {
                 s.tipLevel
                     = viewMessageTipLevelFromString(j["tip"].value("tip_level", std::string{}));
+                s.running = j["tip"].value("running", false);
             }
             m.tip = std::move(s);
             break;

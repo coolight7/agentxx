@@ -11,11 +11,9 @@
 - client 连接 server 时插入 tool、加载插件
 - 事件驱动触发 agent
 - 主动记忆 插件tool
-- tui 提示消息 dim, 移除开头的 #，支持加载中动画，压缩提示增加动画
 - 添加连续多次压缩检查
 - 框架处理支持 toolcall 参数采用变量取值，比如 edit、write 失败时可以将参数存入 share_store，减少下一次 edit 所需的token
 
-- 移除 summaryMaxTokens 和相关提示
 - 检查日志的保存是否符合环形缓存，避免内存中留存过多
 - tui 弹窗支持复制
 - 打开会话弹窗支持高亮当前会话

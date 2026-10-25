@@ -890,6 +890,8 @@ asio::awaitable<void>
             startTimeMs
         );
         vm.tip->tipLevel = agentxx::agent::ViewMessage::TipLevel::Info;
+        // 运行中标记: 界面在折叠标记处显示加载动画, 结束更新时清除
+        vm.tip->running = true;
         vm.collapsed     = true;
         if (session) {
             const std::string pendingTipId
@@ -1132,7 +1134,8 @@ asio::awaitable<void>
             modelContextMaxToken,
             utilxx_base::formatDurationMilliseconds(durationMs)
         );
-        vm.durationMs = durationMs;
+        vm.tip->running = false; // 压缩结束: 撤下加载动画
+        vm.durationMs   = durationMs;
         if (session) {
             session->updateViewMessage(vm);
             if (session->io) {
@@ -1216,6 +1219,8 @@ asio::awaitable<bool>
         startTimeMs
     );
     vm.tip->tipLevel = agentxx::agent::ViewMessage::TipLevel::Info;
+    // 运行中标记: 界面在折叠标记处显示加载动画, 结束更新时清除
+    vm.tip->running = true;
     vm.collapsed     = true;
     vm.id            = session->appendViewMessage(vm);
     if (session->io) {
@@ -1310,7 +1315,8 @@ asio::awaitable<bool>
         modelContextMaxToken,
         utilxx_base::formatDurationMilliseconds(durationMs)
     );
-    vm.durationMs = durationMs;
+    vm.tip->running = false; // 压缩结束: 撤下加载动画
+    vm.durationMs   = durationMs;
     session->updateViewMessage(vm);
     if (session->contextStats) {
         session->contextStats->contextTokens    = newTokens;

@@ -93,7 +93,9 @@ agentxx::agent::ViewMessage makeMsg(agentxx::agent::ViewMessage::Role role, std:
         case V::Role::Tip: {
             V::TipData s;
             s.tipLevel = V::TipLevel::Warning;
-            msg.tip    = std::move(s);
+            // 运行中标记 (界面显示加载动画): 随 JSON 往返保留, 但加载历史时清掉
+            s.running = true;
+            msg.tip   = std::move(s);
             break;
         }
         case V::Role::Interrupt: {
@@ -150,6 +152,14 @@ static TestResult testViewMessagesRoundtrip() {
         for (size_t i = 0; i < msgs.size(); ++i) {
             p->appendViewMessage("t1", msgs[i], i + 1);
         }
+        // running 标记随消息序列化往返 (wire 与落库共用 toJson/fromJson)
+        {
+            auto back = V::fromJson(msgs[3].toJson());
+            XX_TEST_EXPECT_TRUE(back.tip.has_value());
+            if (back.tip) {
+                XX_TEST_EXPECT_TRUE(back.tip->running);
+            }
+        }
         // 同一实例读回
         auto loaded = p->loadSession("t1");
         XX_TEST_EXPECT_EQ(loaded.viewMessages.size(), msgs.size());
@@ -175,6 +185,9 @@ static TestResult testViewMessagesRoundtrip() {
         XX_TEST_EXPECT_TRUE(sysMsg.tip.has_value());
         if (sysMsg.tip) {
             XX_TEST_EXPECT_EQ(sysMsg.tip->tipLevel, V::TipLevel::Warning);
+            // 读取历史时清掉运行中标记: 发起方若在工作结束前退出, 库里留下的是
+            // "运行中"副本, 重开后没有对应工作在跑, 加载动画不该一直转
+            XX_TEST_EXPECT_TRUE(!sysMsg.tip->running);
         }
         const auto& intMsg = loaded.viewMessages[5];
         XX_TEST_EXPECT_TRUE(intMsg.interrupt.has_value());

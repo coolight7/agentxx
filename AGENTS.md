@@ -701,4 +701,13 @@ sudo echo 3 > /proc/sys/vm/drop_caches
   注意 `msgIdCounter` 兜底要用**解析行数** (被过滤的消息也占过 id)。
   "思考"消息带耗时 (`durationMs > 0`) 或加密思考 token 统计时保留。
   详见 `resource/history/fix-tui-blank-message/index.md`
+- TUI 提示消息 (`ViewMessage::Role::Tip`) 的展示约定 (2026-10-25): 折叠标记、级别文本与正文都按
+  级别着色 (Info = `hintColor`, Warning = `thinkingColor`, Error = `errorColor`), 折叠态的单行
+  预览 (含分隔符 `· `) 再叠加 `theme.dim()`, 展开态全文不加 dim; 头部前缀 `msg.tipPrefix`
+  去掉了旧的 `#` 分隔符 (现为 ` [提示] ` / ` [提示] 警告`); 提示可带 `tip->running` 标记
+  (如"正在压缩上下文"),
+  此时折叠标记位置显示加载点阵 (门槛动画等级 High, 等级不足退回静态 +/-), 该消息块
+  不跨帧缓存, 帧循环由 `MessageListComponent::hasRunningMessage()` 维持; 运行标记由发起方
+  在同一条消息 (同一 id) 的两次写入上置位/清除 (见 `middlewares/summarization.cpp`),
+  从会话库读回历史时一律清掉 (`SessionStore` 的 `clearRunningTipFlag`), 避免重启后一直转
 - Android release (aarch64) 链接共享库时报 `relocation R_AARCH64_ADR_PREL_PG_HI21 cannot be used against symbol 'poly1305_blocks_sve2'`, 是 OpenSSL 4.0.1 aarch64 汇编的上游缺陷 (跨目标文件直接取全局符号地址、未写 `.hidden`, 静态 libcrypto.a 链进 .so 时该符号可抢占): 顶层 `agent/CMakeLists.txt` 已对 Android 共享库加 `-Wl,--exclude-libs=ALL` 处理, 详见 `resource/history/android-release-openssl-reloc/index.md`

@@ -489,8 +489,8 @@ static void testHistoryPrependAnchoring() {
 // 消息列表头部角色标签与 Tip 级别文本的界面语言切换
 // ---------------------------------------------------------------------------
 
-/// 头部角色标签 ("[Think]"/"[Tool]"/"[System]") 与 Tip 前缀 ("[Tip] # <级别> · ")
-/// 随界面语言切换; Tip 折叠态格式为 "+ [Tip] # Warn · <单行预览>"
+/// 头部角色标签 ("[Think]"/"[Tool]"/"[System]") 与 Tip 前缀 ("[Tip] <级别> · ")
+/// 随界面语言切换; Tip 折叠态格式为 "+ [Tip] Warn · <单行预览>"
 static void testRoleLabelLocalization() {
     auto&      settings  = TUISettings::instance();
     const auto savedLang = settings.language();
@@ -532,21 +532,23 @@ static void testRoleLabelLocalization() {
         });
 
         f.render();
-        std::string frame = f.render();
+        // 级别标签与正文颜色不同 (级别色 vs hint), 屏幕文本中间会夹 ANSI 转义,
+        // 故先剥离再按纯文本断言
+        std::string frame = stripAnsiCodes(f.render());
         XX_TEST_EXPECT_TRUE(frame.find("+ [思考]") != std::string::npos);
         XX_TEST_EXPECT_TRUE(frame.find("+ [工具]") != std::string::npos);
         XX_TEST_EXPECT_TRUE(frame.find("+ [系统]") != std::string::npos);
-        // Tip 折叠态: "+ [提示] # 警告 · <单行预览>"
-        XX_TEST_EXPECT_TRUE(frame.find("+ [提示] # 警告 · disk space low") != std::string::npos);
+        // Tip 折叠态: "+ [提示] 警告 · <单行预览>"
+        XX_TEST_EXPECT_TRUE(frame.find("+ [提示] 警告 · disk space low") != std::string::npos);
 
         // 语言切换 (与 agent_tui 的 onLanguageChange 一致: 清缓存后重建) -> 英文标签
         settings.setLanguage(TuiLanguage::EnUs);
         f.comp->invalidateCache();
-        std::string en = f.render();
+        std::string en = stripAnsiCodes(f.render());
         XX_TEST_EXPECT_TRUE(en.find("+ [Think]") != std::string::npos);
         XX_TEST_EXPECT_TRUE(en.find("+ [Tool]") != std::string::npos);
         XX_TEST_EXPECT_TRUE(en.find("+ [System]") != std::string::npos);
-        XX_TEST_EXPECT_TRUE(en.find("+ [Tip] # Warn · disk space low") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(en.find("+ [Tip] Warn · disk space low") != std::string::npos);
     }
 
     settings.setLanguage(savedLang);
@@ -1344,11 +1346,12 @@ TestResult testTuiScroll() {
         f.render();
         f.render();
 
-        // 折叠态: header 显示 "+" 折叠标记 + "[Tip] #" 前缀 + 单行预览,
+        // 折叠态: header 显示 "+" 折叠标记 + "[Tip]" 前缀 + 单行预览,
         // 正文尾部标记 (超出 preview 截断) 不显示;
-        // Info 级别不附加级别文本 (levelKey 为空), 故 "#" 后直接接预览分隔符 " · "
-        std::string collapsed1 = f.render();
-        XX_TEST_EXPECT_TRUE(collapsed1.find("+ [Tip] #  · ") != std::string::npos);
+        // Info 级别不附加级别文本 (levelKey 为空), 故 "[Tip]" 后直接接预览分隔符 "· ";
+        // 预览叠加了 dim 属性, 屏幕文本中间夹 ANSI 转义, 故先剥离再断言
+        std::string collapsed1 = stripAnsiCodes(f.render());
+        XX_TEST_EXPECT_TRUE(collapsed1.find("+ [Tip] · ") != std::string::npos);
         XX_TEST_EXPECT_TRUE(collapsed1.find("SYSM_TAIL_9XYZ") == std::string::npos);
 
         // 模拟点击 header → 展开 (处理事件, 且消息折叠状态翻转)
@@ -1367,9 +1370,9 @@ TestResult testTuiScroll() {
         }
         XX_TEST_EXPECT_TRUE(clicked);
 
-        // 展开态: "-" 展开标记 + "[Tip] #" 前缀 + 正文完整显示 (尾部标记可见)
-        std::string expanded = f.render();
-        XX_TEST_EXPECT_TRUE(expanded.find("- [Tip] # ") != std::string::npos);
+        // 展开态: "-" 展开标记 + "[Tip]" 前缀 + 正文完整显示 (尾部标记可见)
+        std::string expanded = stripAnsiCodes(f.render());
+        XX_TEST_EXPECT_TRUE(expanded.find("- [Tip] ") != std::string::npos);
         XX_TEST_EXPECT_TRUE(expanded.find("SYSM_TAIL_9XYZ") != std::string::npos);
 
         // 状态确实更新为展开
@@ -1392,8 +1395,8 @@ TestResult testTuiScroll() {
             break;
         }
         XX_TEST_EXPECT_TRUE(clicked);
-        std::string collapsed2 = f.render();
-        XX_TEST_EXPECT_TRUE(collapsed2.find("+ [Tip] #  · ") != std::string::npos);
+        std::string collapsed2 = stripAnsiCodes(f.render());
+        XX_TEST_EXPECT_TRUE(collapsed2.find("+ [Tip] · ") != std::string::npos);
         XX_TEST_EXPECT_TRUE(collapsed2.find("SYSM_TAIL_9XYZ") == std::string::npos);
         snap = f.sharedState.readSnapshot();
         XX_TEST_EXPECT_TRUE(!snap->messages.empty() && snap->messages[0]->collapsed);
@@ -1428,17 +1431,64 @@ TestResult testTuiScroll() {
         });
         f.render();
         f.render();
-        std::string frame = f.render();
-        XX_TEST_EXPECT_TRUE(frame.find("[Tip] # Warn · ") != std::string::npos);
-        XX_TEST_EXPECT_TRUE(frame.find("[Tip] # Error · ") != std::string::npos);
-        // Info 级别不附加级别文本 (levelKey 为空): 前缀为 "[Tip] #" 后直接接 " · ",
-        // 即 "#" 与 "·" 之间为两个空格 (前缀自带尾空格 + 分隔符首空格)
-        XX_TEST_EXPECT_TRUE(frame.find("[Tip] #  · ") != std::string::npos);
-        XX_TEST_EXPECT_TRUE(frame.find("[Tip] # Info") == std::string::npos);
+        // 头部前缀与正文颜色不同 (级别色 vs hint), 屏幕文本中间会夹 ANSI 转义,
+        // 故先剥离再按纯文本断言
+        std::string frame = stripAnsiCodes(f.render());
+        XX_TEST_EXPECT_TRUE(frame.find("[Tip] Warn · ") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(frame.find("[Tip] Error · ") != std::string::npos);
+        // Info 级别不附加级别文本 (levelKey 为空): 前缀为 "[Tip] " 后直接接 "· ",
+        // 即 "[Tip]" 与 "·" 之间只有前缀自带的一个空格 (井号分隔符已去掉)
+        XX_TEST_EXPECT_TRUE(frame.find("[Tip] · ") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(frame.find("[Tip] Info") == std::string::npos);
+        XX_TEST_EXPECT_TRUE(frame.find("[Tip] #") == std::string::npos);
         // 三条 System 消息均渲染 (折叠态预览含完整短文本 marker)
         XX_TEST_EXPECT_TRUE(frame.find("WRN_TAIL_7K") != std::string::npos);
         XX_TEST_EXPECT_TRUE(frame.find("ERR_TAIL_8M") != std::string::npos);
         XX_TEST_EXPECT_TRUE(frame.find("INF_TAIL_6N") != std::string::npos);
+    }
+
+    {
+        // 场景 9c: 运行中的提示消息 (如"正在压缩上下文") 折叠标记处显示加载动画
+        //
+        // 帧循环由 hasRunningMessage() 维持: 该判定原先只看流式思考与未完成的
+        // 工具消息, 提示消息运行期间两者都不存在, 点阵会停在首帧不动。
+        // 结束后 (更新消息带 running=false) 标记回到静态 +/-。
+        auto&      settings = TUISettings::instance();
+        const auto origAnim = settings.animationLevel();
+        settings.setAnimationLevel(AnimationLevel::High);
+
+        ScrollFixture f;
+        f.sharedState.mutate([&](TUIRenderState& st) {
+            auto m          = std::make_shared<TUIMessage>();
+            m->role         = TUIMessage::Role::Tip;
+            m->tip          = TUIMessage::TipData{};
+            m->tip->running = true;
+            m->collapsed    = true;
+            m->text         = "Summarizing LLM Context... RUN_TIP_1A";
+            st.messages.push_back(std::move(m));
+        });
+        // 首帧: 点阵为 spinner 首帧 (测试环境无帧循环, 帧索引停在首帧)
+        XX_TEST_EXPECT_TRUE(stripAnsiCodes(f.render()).find("⠋ [Tip] · ") != std::string::npos);
+
+        // 推进动画: 经组件树转发 OnAnimation 到 runSpinner_ (运行中的提示此时是
+        // 唯一的运行中条目, 帧循环由本判定维持)
+        advanceAnimation(*f.comp, 1);
+        XX_TEST_EXPECT_TRUE(stripAnsiCodes(f.render()).find("⠙ [Tip] · ") != std::string::npos);
+
+        // 压缩结束 (更新消息带 running=false): 折叠标记回到静态 "+" (折叠态)
+        f.sharedState.mutate([&](TUIRenderState& st) {
+            auto m         = std::make_shared<TUIMessage>();
+            m->role        = TUIMessage::Role::Tip;
+            m->tip         = TUIMessage::TipData{};
+            m->collapsed   = true;
+            m->text        = "Summarized LLM Context 100->50/200 · 0.8s";
+            st.messages[0] = std::move(m);
+        });
+        std::string done = stripAnsiCodes(f.render());
+        XX_TEST_EXPECT_TRUE(done.find("+ [Tip] · Summarized") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(done.find("⠙") == std::string::npos);
+
+        settings.setAnimationLevel(origAnim);
     }
 
     {
@@ -2717,7 +2767,7 @@ TestResult testTuiScroll() {
     {
         // 场景 22 (回归): 生成占位提示行首的加载动画必须随动画帧转动
         //
-        // isActive 判定 (hasRunningToolOrThink) 原先只看流式思考输出与未完成的
+        // isActive 判定 (现名 hasRunningMessage) 原先只看流式思考输出与未完成的
         // 工具消息: 占位提示出现时两者都不存在 (既无 token 也无工具消息), 帧循环
         // 从未启动 —— 该行点阵停在首帧不动 (用户报告"等待响应/正在调用工具的
         // 加载中动画卡住")。补上占位判定后帧循环正常推进

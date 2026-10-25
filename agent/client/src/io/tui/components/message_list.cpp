@@ -231,7 +231,7 @@ MessageListComponent::MessageListComponent(TUICtx& ctx) :
     SpinnerComponent::Config spinnerCfg;
     spinnerCfg.requiredLevel = AnimationLevel::High;
     spinnerCfg.isActive      = [this] {
-        return ctx_.frameState && hasRunningToolOrThink();
+        return ctx_.frameState && hasRunningMessage();
     };
     runSpinner_ = std::make_shared<SpinnerComponent>(std::move(spinnerCfg));
     Add(runSpinner_);
@@ -752,7 +752,7 @@ size_t MessageListComponent::genPlaceholderIndex(const TUIRenderState& st) const
     return n;
 }
 
-bool MessageListComponent::hasRunningToolOrThink() const {
+bool MessageListComponent::hasRunningMessage() const {
     if (!ctx_.frameState) {
         return false;
     }
@@ -768,9 +768,15 @@ bool MessageListComponent::hasRunningToolOrThink() const {
         return true;
     }
     // 存在未完成的 Tool 消息 (串行执行下即当前运行的工具; 全量扫描仅读标志位,
-    // 每帧一次成本可忽略)
+    // 每帧一次成本可忽略) 或运行中的提示消息 (如正在压缩上下文)
     for (const auto& m : st.messages) {
-        if (m && m->role == TUIMessage::Role::Tool && m->tool && !m->tool->toolFinished) {
+        if (!m) {
+            continue;
+        }
+        if (m->role == TUIMessage::Role::Tool && m->tool && !m->tool->toolFinished) {
+            return true;
+        }
+        if (m->role == TUIMessage::Role::Tip && m->tip && m->tip->running) {
             return true;
         }
     }
@@ -847,6 +853,9 @@ uint64_t MessageListComponent::itemKey(size_t index) {
         h             = combine(h, static_cast<uint64_t>(m.role));
         h             = combine(h, m.collapsed);
         h             = combine(h, m.tool ? m.tool->toolFinished : false);
+        // 提示消息的运行中标记: 影响头部形态 (加载动画 ↔ 静态 +/-, 动画等级不足时降级),
+        // 指针变更之外再计一次, 降低地址重用 (ABA) 带来的误命中风险
+        h             = combine(h, m.tip ? m.tip->running : false);
         h             = combine(h, static_cast<uint64_t>(m.durationMs));
         h             = combine(h, static_cast<uint64_t>(m.startTimeMs));
         h             = combine(h, m.text.size());
@@ -875,7 +884,8 @@ uint64_t MessageListComponent::itemKey(size_t index) {
         // Tool/Think 消息头部可能使用加载动画 (动画等级 >= High), 计入动画标志:
         // 运行期间热切换动画等级时使缓存失效重建 (静态 +/- ↔ spinner 点阵),
         // 避免缓存残留旧形态的渲染快照
-        if (m.role == TUIMessage::Role::Tool || m.role == TUIMessage::Role::Think) {
+        if (m.role == TUIMessage::Role::Tool || m.role == TUIMessage::Role::Think
+            || m.role == TUIMessage::Role::Tip) {
             h = combine(h, runSpinner_->animationEnabled() ? 1ULL : 0ULL);
         }
         // 工具消息装饰版本: 装饰在消息创建后由插件异步推送 (tool_start 事件
@@ -1305,8 +1315,12 @@ LazyBuiltItem MessageListComponent::buildMessageItem(const TUIMessage& msg, size
     // (动画等级不足时保持可缓存, 与原行为一致)
     const bool runToolAnimating = msg.role == TUIMessage::Role::Tool && msg.tool
                                   && !msg.tool->toolFinished && runSpinner_->animationEnabled();
+    // 运行中的提示消息 (如正在压缩上下文) 头部同样使用加载动画, 因同一原因不可缓存
+    const bool runTipAnimating = msg.role == TUIMessage::Role::Tip && msg.tip && msg.tip->running
+                                 && runSpinner_->animationEnabled();
     out.cacheable = (msg.role != TUIMessage::Role::Interrupt) && !hasInterruptHits
-                    && !runToolAnimating && !hasDecorHits && !hasAttachmentHits;
+                    && !runToolAnimating && !runTipAnimating && !hasDecorHits
+                    && !hasAttachmentHits;
     // markdown DomBuilder 生命周期与 Element 绑定
     // (Element 内 reflect 的链接 Box 指向 builder 内部容器)
     for (auto& b : builders) {
@@ -1726,48 +1740,66 @@ Element MessageListComponent::buildMessageBlock(
             return vbox(std::move(lines));
         }
         case TUIMessage::Role::Tip: {
-            // 按提示级别区分颜色与级别标签 (Info/Warning/Error; 标签随界面语言切换)
-            ftxui::Color     tipColor = theme.hintColor;
-            std::string_view levelKey = "";
-            const auto       tipLevel = msg.tip ? msg.tip->tipLevel : TUIMessage::TipLevel::Info;
+            // 提示消息: 折叠标记、级别标签与正文都按提示级别着色
+            // (Info = hint, Warning = thinking, Error = error; 标签随界面语言切换),
+            // 折叠态的单行预览再叠加 dim 弱化, 展开态全文保持原色
+            ftxui::Color     levelColor = theme.hintColor;
+            std::string_view levelKey   = "";
+            const auto       tipLevel   = msg.tip ? msg.tip->tipLevel : TUIMessage::TipLevel::Info;
             switch (tipLevel) {
                 case TUIMessage::TipLevel::Warning:
-                    tipColor = theme.thinkingColor;
-                    levelKey = "msg.tipLevelWarn";
+                    levelColor = theme.thinkingColor;
+                    levelKey   = "msg.tipLevelWarn";
                     break;
                 case TUIMessage::TipLevel::Error:
-                    tipColor = theme.errorColor;
-                    levelKey = "msg.tipLevelError";
+                    levelColor = theme.errorColor;
+                    levelKey   = "msg.tipLevelError";
                     break;
                 case TUIMessage::TipLevel::Info:
                     // 不增加提示
                     // levelKey = "msg.tipLevelInfo";
                     break;
             }
-            // 头部前缀 "[Tip] # <级别>" (例: "+ [Tip] # Warn"), 级别文本随语言切换;
-            // 折叠态在其后追加 " · " 与单行预览
-            const std::string prefix = trf("msg.tipPrefix", tr(levelKey));
+            // 正文颜色: 同级别色 (展开态直接用它; 折叠态再叠加 dim)
+            const ftxui::Color contentColor = levelColor;
+            // 头部前缀 " [Tip] " / " [Tip] Warn " (级别为空时不留多余空格;
+            // 级别文本随语言切换)。井号分隔符已去掉 (旧格式 " [Tip] # {}")
+            std::string prefix = trf("msg.tipPrefix", tr(levelKey));
+            while (!prefix.empty() && prefix.back() == ' ') {
+                prefix.pop_back();
+            }
+            prefix.push_back(' ');
             // 可折叠: header 行带 +/- 折叠标记与单行预览 (折叠态), 展开态显示全文
             // (与 Think 消息同一折叠模式; 默认折叠见创建处 makeText / onDelta)
             const bool expanded = !msg.collapsed;
             Elements   lines;
             Elements   header;
-            header.push_back(text(expanded ? "-" : "+") | color(tipColor));
-            header.push_back(text(prefix) | color(tipColor));
+            // 运行中的提示 (如正在压缩上下文): 折叠标记处显示加载动画;
+            // 动画等级不足或工作已结束时仍是静态 +/- 标记 (见 runningHeaderMark)
+            if (msg.tip && msg.tip->running) {
+                header.push_back(runningHeaderMark(expanded) | color(levelColor));
+            } else {
+                header.push_back(text(expanded ? "-" : "+") | color(levelColor));
+            }
+            header.push_back(text(prefix) | color(levelColor));
             if (!expanded) {
                 // 同 System: 预览自适应内容区剩余列宽, 超宽时右缘裁剪兜底
-                header.push_back(text(" · ") | color(tipColor));
-                const int prefixCols
-                    = 1 + static_cast<int>(markdown::utf8_display_width(prefix)) + 3; // " · "
+                // 前缀列数 = 折叠标记 (1 列) + 头部前缀 + 分隔符 ("· ")
+                // 折叠态的分隔符与预览同属正文区, 一并叠加 dim
+                std::string_view sep = "· ";
+                int              prefixCols
+                    = 1 + static_cast<int>(markdown::utf8_display_width(prefix))
+                      + static_cast<int>(markdown::utf8_display_width(sep));
+                header.push_back(text(sep) | color(contentColor) | theme.dim());
                 const int budget = collapsedPreviewBudget(maxWidth, prefixCols);
                 header.push_back(
-                    text(oneLinePreview(msg.text, static_cast<size_t>(budget))) | color(tipColor)
-                    | xflex_shrink
+                    text(oneLinePreview(msg.text, static_cast<size_t>(budget)))
+                    | color(contentColor) | theme.dim() | xflex_shrink
                 );
             }
             lines.push_back(hbox(std::move(header)));
             if (expanded) {
-                lines.push_back(paragraph(msg.text) | color(tipColor));
+                lines.push_back(paragraph(msg.text) | color(contentColor));
             }
             return vbox(std::move(lines));
         }

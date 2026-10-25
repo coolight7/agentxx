@@ -1828,6 +1828,8 @@ asio::awaitable<TestResult> run_summarization_tests() {
         // 验证格式: 包含 "压缩上下文 900->.../1000 · "
         XX_TEST_EXPECT_TRUE(vm.text.starts_with("Summarized LLM Context 900->"));
         XX_TEST_EXPECT_TRUE(vm.text.find("/1000 · ") != std::string::npos);
+        // 压缩结束的消息不再带运行中标记 (界面据此撤下加载动画)
+        XX_TEST_EXPECT_TRUE(vm.tip.has_value() && !vm.tip->running);
     }
 
     // --- T21. 手动触发 compactSessionContext 压缩 ---
