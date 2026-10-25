@@ -6,21 +6,25 @@
 
 ## 0. 状态总览
 
+> 2026-10-26 核对更新: 下表早前写成“B 未完成 / D F G 未开始”, 但 B/D/F/G 的代码提交
+> 实际已在本文 §5~§7 记录的几轮里做完。本轮补的是最后剩下的 E3/E4 (示例插件 + 两个
+> 测试模块)、F 的两项 (会话存储根独占、快照 `plugins_agent`) 与 G 的文档, 见 §8。
+
 | 阶段 | 内容 | 状态 |
 |---|---|---|
-| A | 契约基础（新类型/新表/新入口/版本基线/删旧分支） | 完成 |
-| C | agent 引用显式化（逐表加 `PluginxxScopeRef` 参数） | 完成（契约/宿主/插件全迁） |
-| E | SDK（`AgentRef` / `MountStore` / 导出宏） | 完成（示例插件已迁） |
-| T | 测试模块与测试插件迁移（`agentxx_test`） | 完成（全部模块通过） |
-| B | 宿主化与挂载（per-host 管理器 + `PluginMount`） | **未完成**（当前是「一份管理器服务一个 agent」） |
-| D | 宿主接线与配置（`AgentHost`、五处启动路径、`plugin.mount`） | 未开始 |
-| F | 会话定位与诊断 | 未开始 |
-| G | 文档清理与最终核对 | 未开始 |
+| A | 契约基础 (新类型/新表/新入口/版本基线/删旧分支) | 完成 |
+| C | agent 引用显式化 (逐表加 `PluginxxScopeRef` 参数) | 完成 (契约/主程序/插件全迁) |
+| E | SDK (`AgentRef` / `MountStore` / 导出宏) | 完成 (含示例插件 `example_multi_mount`, 见 §8) |
+| T | 测试模块与测试插件迁移 (`agentxx_test`) | 完成 (全部模块通过) |
+| B | 管理器上提与挂载拆分 | 完成 (§5) |
+| D | 主程序接线与配置 (`AgentHost`、五处启动路径、`plugin.mount`) | 完成 (§6) |
+| F | 会话定位与诊断 | 完成 (§6 + §8 补齐存储根独占与快照两段) |
+| G | 文档清理与最终核对 | 完成 (§6 + §8 补 `plugins.md` §18 与 §8 表成员校订) |
 
-**当前代码树状态：lib + client + 21 个插件目标 + `agentxx_test` 全部编译通过；
+**当前代码树状态: lib + client + 22 个插件目标 + `agentxx_test` 全部编译通过;
 插件相关测试模块与 `boundaries` / `config_keys` / `assembly_snapshot` 全绿。**
 
-下一步：阶段 B（插件管理器上提到宿主、把 agent 级注册收进 `PluginMount`）→ D → F → G。
+剩余只有一项设计性遗留 (不阻塞主路径): JS 引擎的一份脚本仍只对应一个挂载作用域 (§8.5)。
 
 ## 1. 已完成
 
@@ -358,12 +362,11 @@ ref.seq         = mgr->mountSequence();   // 未挂载时为 0 = 不校验
 ## 3. 当前进度说明
 
 契约、插件、测试三个阶段都已迁完（§2.1 / §2.2 是机械改动，已完成）。
-接下来是唯一有设计取舍的**阶段 B**：把插件实例表上提到宿主（`AgentHost`）、
-把 agent 级注册收进 `PluginMount`，并按 §2.3 的六步改造；之后再接 D / F / G。
+B / D / F / G 四个阶段分别落在 §5 / §6 / §6+§8 / §6+§8（本文早前写的“未开始”
+在 2026-10-26 核对时已过期，见 §0）。
 
-在阶段 B 完成前，`PluginManager` 仍是「一份管理器服务一个 agent」，因此同进程
-内两个 agent 共用插件时仍需各自建管理器（测试里的多实例场景）。此中间态可编译、
-测试全绿。
+同进程内多个 agent 共用一套插件是当前形态：一份管理器 + 每个 agent 一份
+`PluginMount`（用例 `plugin_host_mount` / `plugin_multi_mount`）。
 
 ## 4. 注意事项
 
@@ -492,3 +495,87 @@ FFI 差异（重要）：
   属退出期日志顺序问题，不影响功能；
 - `ffi_c_api` 模块在本机（搜狗输入法 + ASan）会被 IME 的 USE_AFTER_FREE 打断，与本项目无关。
 
+
+## 8. 本轮补齐（示例插件 / 两个测试模块 / 存储根独占 / 快照两段 / 文档）
+
+提交: `4437dca0` (示例插件 + 测试 + 两处多 agent 修复)、`96c888e2` (阶段 F 剩余)、
+`48a482ce` (阶段 G 文档)、cxx_pluginxx 子模块 `dd08091` (能力重复声明幂等)。
+
+### 8.1 新增示例插件 `example_multi_mount`（阶段 E3）
+
+`agent/plugins/example_multi_mount/`：进程级 `start` 什么都不注册；每份挂载建一份
+`MountState`（`AgentRef` + 计数 + 本挂载 `config_json`），注册两个工具
+(`multi_mount_incr` / `multi_mount_state`)，`unmount` 释放该挂载的状态。
+工具回调经 `shared_ptr` 共享状态：拆挂载后主程序可能还持有工具对象（在途调用），
+用引用计数保证不会用到已释放的状态。已登记进 `plugins/CMakeLists.txt`
+(`AGENTXX_ENABLE_PLUGIN_EXAMPLE`)，内置/动态库两种模式都能编译。
+
+### 8.2 新增测试模块（阶段 E4 / §3.1-3.2）
+
+| 模块 | 断言数 | 覆盖 |
+|---|---|---|
+| `plugin_host_mount` | 145 | 一管理器 + 多 agent：工具/提示词/钩子/事件订阅按挂载分开、重复挂载幂等、工具名冲突只影响本 agent、第三个 agent、挂载失败只回滚该 agent、无引用/未知 id/过期序号被拒（经插件侧接口表，且无副作用）、版本门槛 (`validateInterface`)、21 张表可查、挂载表 JSON、拆挂载与关闭收尾、加载快照两段 |
+| `plugin_multi_mount` | 47 | 真实示例插件端到端：只加载一次/两处各自挂载、计数与 `config_json` 按挂载隔离、拆一个不影响另一个、重挂计数归零且序号递增、旧序号引用被拒、关闭后实例表清空 |
+
+两个模块都只在 `agent/test/test.cpp` 注册，源码由 `plugin/*.cpp` 的 GLOB 自动收集。
+
+### 8.3 测试暴露并修掉的两处多 agent 缺陷
+
+- **事件/会话查询没按引用定位**（`plugin_manager_domain_hooks.cpp`）：
+  `eventSource(agent)` / `sessionWorkDir(agent, sid)` / `isSessionCancelled(agent, sid)`
+  一律取主 agent（`primaryAgent_`）的总线与会话 —— 多 agent 下 B 的事件与会话会串到 A；
+  主 agent 为空时订阅还会被直接拒绝（`subscribe rejected: no event source`）。
+  改为新增 `PluginManager::agentContextOf(ref)`：空引用取主 agent，非空与引用解析到的
+  挂载的 agent 上下文，解析不到就拒绝。
+- **能力重复声明报冲突**（`cxx_pluginxx/src/capability_registry.cpp`）：能力是进程级的，
+  而插件会被每个 agent 各挂载一次（每份挂载都声明一遍），第二个 agent 挂载时记
+  "already registered by" 警告并返回失败。改为同一 provider 重复声明按幂等成功
+  （保留首次登记的 `start/cancel/ctx`）。
+
+### 8.4 阶段 F 补齐
+
+- **会话存储根独占**（`AgentHost::claimSessionStoreRoot` / `releaseSessionStoreRoot` /
+  `sessionStoreOwnersJson`）：路径规范化（绝对路径 + 消解符号链接 + 去掉末尾分隔符；
+  Windows 统一小写）后比较，同一存储根已属于别的 agent → ERROR + 拒绝。
+  `attachRoot` 与 `spawnOneTask` 先登记，`destroyAgent` / `destroyAgentAsync` 释放。
+  注意 `std::filesystem::weakly_canonical` 会保留输入里的结尾分隔符，不剥掉会让
+  `.../a` 与 `.../a/` 变成两个键（已修）。
+- **加载快照两段**：`plugins` 改为进程角度（挂载数 / 挂载到哪些 agent / 清单资源 /
+  禁用原因），新增 `plugins_agent`（本 agent 的 `agentId` / `mount_seq` / `mount_policy` +
+  每个插件在本挂载上的实体计数）；渲染文本与 `--dump-diagnostics` 同步。
+- `PluginListView` 增加 `mountCount` / `manifestResourceCount`，`pluginxx.plugins.list`
+  输出 `mount_count` / `mount_agents`（"装了但没挂到谁身上"一眼可见）。
+- `--dump-diagnostics` 增加 `## session store roots`（存储根 → agent）。
+
+### 8.5 已知遗留（设计性，不阻塞主路径）
+
+- **JS 引擎的一份脚本仍只对应一个挂载作用域**：`agentxx_javascript_engine` 用
+  `mountAgentId_` / `mountRef_` 记"当前挂载"，第二次挂载会覆盖；脚本注册的工具/钩子
+  因此只落在最后一个挂载上。要做到"每 agent 一份脚本实例"需要把 `JsPluginCtx` 按挂载
+  拆开（每挂载一个 JS runtime + 一套注册），属下一篇的量级。
+  单 agent 场景与非 JS 插件不受影响。
+- `ffi_c_api` 模块在本机（搜狗输入法 + ASan）仍会被 IME 的 USE_AFTER_FREE 打断，
+  与本项目无关。
+
+### 8.6 文档（阶段 G）
+
+- `docs/zh-cn/design/plugins.md`：新增 **§18 主程序与多 agent 挂载**（两层结构、引用规则、
+  挂载建立/拆除时机、`plugin.list`/`plugin.mount` 写法、存储根独占、诊断入口、验证用例）；
+  §8 表一览按 v2 签名修正（`tools`/`feature` 的 `op_cancel` 收拢到 `pluginxx.cancel`、
+  `hooks` 三成员句柄式、`events`/`capabilities` 的引用语义、其余表的 `agent` 参数、
+  `plugins.list` 的挂载字段），并补引用失效错误码的说明。
+- `docs/zh-cn/design/index.md` 架构设计第 7 小节：补会话存储根独占与加载快照两段。
+- 根 `AGENTS.md`：补"一插件加载多 agent 挂载"要点（含 `agentContextOf`、能力幂等、
+  存储根独占、快照两段）与新增测试模块。
+- `docs/zh-cn/design/benchmark.md`：标注 `attachRootAgentHost` 已被
+  `create` / `loadPluginsAsync` / `attachRoot` 取代。
+
+### 8.7 本轮核对结论（给下次接手）
+
+- 本文 §0 的状态表原先过期（写的是 B 未完成 / D F G 未开始），实际代码早已完成；
+  以 `git log` 与 §5~§8 为准。
+- 跑测试按模块名：`agentxx_test plugin_host_mount plugin_multi_mount boundaries`。
+  `boundaries` 会查禁用词（`宿主` → `主程序`、`视角` → `角度`），新写的注释/文档
+  一律按项目用词。
+- 改 `agent/lib/include/agentxx/plugin/*` 或 `cxx_pluginxx` 头后，两处 install 目录
+  都要重跑（见 §1.5）。
