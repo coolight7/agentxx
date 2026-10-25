@@ -135,12 +135,13 @@
 
 | 编号 | 内容 | 状态 | 代码位置 / 验收 |
 |---|---|---|---|
-| PLG-1 | 注册可逆与清理审计 | 已实施 | `PluginManager::RegistrationInventory`（按生效事实计数）+ `registrationInventory()` + `PluginListView` 诊断字段；模块 `plugin_cleanup` |
+| PLG-1 | 注册可逆与清理审计 | 已实施 | `PluginMount::registrationInventory`（按生效事实计数; `PluginManager::registrationInventory` 逐挂载汇总）+ `PluginListView` 诊断字段；模块 `plugin_cleanup` |
 | PLG-2 | 声明式贡献集合与重算 | 已实施 | 提示词贡献模型（`PromptKeyState`：base + 按 sequence 的全部存活贡献，删除 owner 贡献后重新合成）+ `plugins.md` §15.7；模块 `plugin_cleanup` |
-| PLG-4 | 独占能力 slot（执行图定义） | 已实施 | `PluginManager::setGraphJson` / `releaseGraphDefinitionSlot`（占用者记载 + 他人占用被拒 + 禁用/卸载恢复占用前定义）；模块 `plugin_cleanup` |
-| PLG-6 | 加载树与域视图查询 | 已实施（限定：并入 ARC-6 快照） | `--dump-config` + 启动加载快照（插件/接口/依赖/能力/工具/图） |
+| PLG-4 | 独占能力 slot（执行图定义） | 已实施 | `PluginMount::setGraphJson` / `releaseGraphDefinitionSlot`（占用者记载 + 他人占用被拒 + 禁用/卸载恢复占用前定义; 独占按挂载算, 每个 agent 一份）；模块 `plugin_cleanup` |
+| PLG-6 | 加载树与域视图查询 | 已实施（限定：并入 ARC-6 快照） | `--dump-config` + 启动加载快照两段: `plugins`（进程角度: 挂载数/挂载到哪些 agent/清单资源）+ `plugins_agent`（本 agent 角度: 各插件实体计数）；`--dump-diagnostics` 含 `## plugin mounts` 与 `## session store roots` |
 | PLG-7 | 教学式错误与信任声明 | 已实施 | `PluginManager::diagnosePluginPath`（路径/清单/入口符号逐项给出怎么改）+ 加载失败 WARN + `plugins.md` §15.7 信任声明；模块 `plugin_cleanup`、`plugin_resources` |
-| PLG-8 | 文档分页与接口表数字校验 | 部分实施（拆分不做） | 接口表名称集合与数量常量（`PluginManager::kInterfaceTableCount` = 19 / `ClientPluginManager` = 9）由 `boundaries` 规则 8/10 校验；`plugins.md` §8 澄清通用表查询 IID；文档拆分经核定不做（纯重组、收益低于改动成本） |
+| PLG-8 | 文档分页与接口表数字校验 | 部分实施（拆分不做） | 接口表名称集合与数量常量（`PluginManager::kInterfaceTableCount` = 21 / `ClientPluginManager` = 9）由 `boundaries` 规则 8/10 校验；`plugins.md` §8 澄清通用表查询 IID；文档拆分经核定不做（纯重组、收益低于改动成本） |
+| PLG-12 | 一次加载 / 多 agent 挂载 | 已实施 | `PluginManager`（进程一份：实例表 + 挂载表）+ `PluginMount`（每 agent 一份: 工具/权限/钩子/提示词/功能点/图/资源）+ `AgentHost::loadPluginsAsync` + `plugin.mount` 策略；引用 `PluginxxScopeRef` 定位 agent, 会话存储根按 agent 独占；模块 `plugin_host_mount`、`plugin_multi_mount`；见 `plugins.md` §18 |
 | PLG-10 | 插件加载耗时与注册计数诊断 | 已实施（限定范围） | `plugin_manager.h`（`PluginListView` 诊断字段）+ `plugin_manager_lifecycle.cpp`（加载耗时 + 加载摘要日志）；模块 `assembly_snapshot_io` |
 | PLG-3 / PLG-5 / PLG-9 / PLG-11 | 细粒度变更事件 / manifest schema / 作用域过滤 / 加载许可 | 不做 | 无派生缓存；`args` 原样透传；子代理白名单已实现 schema 与执行同时不可见 |
 
