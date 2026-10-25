@@ -267,6 +267,10 @@ asio::awaitable<TestResult> run_plugin_host_mount_tests() {
             std::string{"agent_a"}
         );
         XX_TEST_EXPECT_EQ(snapshot["plugins_agent"].value("mount_seq", 0), 1);
+        XX_TEST_EXPECT_EQ(
+            snapshot["plugins_agent"].value("mount_policy", std::string{}),
+            std::string{"all"}
+        );
         XX_TEST_EXPECT_EQ(snapshot["plugins_agent"].value("count", 0), 1);
         const auto& mountPlugin = snapshot["plugins_agent"]["plugins"][0];
         XX_TEST_EXPECT_EQ(mountPlugin.value("name", std::string{}), std::string{"example_plugin"});

@@ -90,6 +90,19 @@ utilxx_base::Json modelSnapshotJson(const ModelConfig& mc) {
     return j;
 }
 
+/// 挂载策略的可读名 (快照与日志用; 与 yaml `plugin.mount.policy` 取值同名)
+const char* mountPolicyName(agentxx::agent::PluginMountPolicy policy) {
+    switch (policy) {
+    case agentxx::agent::PluginMountPolicy::None:
+        return "none";
+    case agentxx::agent::PluginMountPolicy::Listed:
+        return "listed";
+    case agentxx::agent::PluginMountPolicy::All:
+    default:
+        return "all";
+    }
+}
+
 /// 插件段（进程角度）: 每个已加载实例的元信息、挂载数/挂载到哪些 agent、清单资源
 ///
 /// - 这一份回答"进程里到底装了什么、装了几份、挂到谁身上了"；
@@ -380,8 +393,8 @@ utilxx_base::Json buildRuntimeSnapshot(const AgentContext& ctx) {
     pluginsAgent["agent_id"]          = ctx.pluginMount ? ctx.pluginMount->agentId() : std::string{};
     pluginsAgent["mount_seq"]         = ctx.pluginMount ? ctx.pluginMount->mountSeq() : 0;
     pluginsAgent["mount_policy"]      = ctx.agentConfig
-                                            ? static_cast<int>(ctx.agentConfig->pluginMountPolicy)
-                                            : 0;
+                                            ? mountPolicyName(ctx.agentConfig->pluginMountPolicy)
+                                            : std::string{"all"};
     pluginsAgent["count"]   = mountPlugins.size();
     pluginsAgent["plugins"] = std::move(mountPlugins);
     root["plugins_agent"]   = std::move(pluginsAgent);
@@ -688,7 +701,7 @@ std::vector<std::string> renderAssemblySnapshot(const utilxx_base::Json& snapsho
             "plugins_agent '{}' (seq {}, policy {}): {} plugin(s)",
             mount.value("agent_id", std::string{}),
             mount.value("mount_seq", 0),
-            mount.value("mount_policy", 0),
+            mount.value("mount_policy", std::string{"all"}),
             mount.value("count", 0)
         ));
         if (mount.contains("plugins") && mount["plugins"].is_array()) {
