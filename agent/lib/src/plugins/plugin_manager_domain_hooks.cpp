@@ -95,14 +95,23 @@ private:
 // 事件表
 // =====================================================================
 
-std::shared_ptr<EventSource> PluginManager::eventSource(const PluginxxScopeRef* agent) {
-    auto ctx = primaryAgent_.lock();
-    if (!ctx || !ctx->bus) {
+std::shared_ptr<agentxx::agent::AgentContext>
+    PluginManager::agentContextOf(const PluginxxScopeRef* agent) const {
+    if (agent == nullptr) {
+        // 空引用 = 主程序级调用: 取主 agent
+        return primaryAgent_.lock();
+    }
+    auto* mount = mountOf(agent);
+    if (mount == nullptr) {
         return nullptr;
     }
-    // 本管理器就是该 agent 的挂载: 带引用时必须命中, 否则视为无效引用
-    // (空引用 = 主程序级订阅, 也走同一份总线)
-    if (agent != nullptr && !mountOf(agent)) {
+    return mount->agentContext();
+}
+
+std::shared_ptr<EventSource> PluginManager::eventSource(const PluginxxScopeRef* agent) {
+    // 事件落在具体 agent 上: 带引用时用该挂载的总线, 空引用才用主 agent 的总线
+    auto ctx = agentContextOf(agent);
+    if (!ctx || !ctx->bus) {
         return nullptr;
     }
     // 发布走本管理器的 IO executor (与既有行为一致: publish 不阻塞插件调用线程);
@@ -271,10 +280,18 @@ std::string PluginManager::getSessionWorkDir(std::string_view sessionId) {
 }
 
 std::string PluginManager::sessionWorkDir(const PluginxxScopeRef* agent, std::string_view sessionId) {
-    if (agent != nullptr && !mountOf(agent)) {
+    // 会话属于具体 agent: 带引用时取该挂载的 agent (主 agent 的会话可能根本没有该 sessionId)
+    auto c = agentContextOf(agent);
+    if (!c || !c->agentConfig) {
         return {};
     }
-    return getSessionWorkDir(sessionId);
+    if (!sessionId.empty()) {
+        if (auto session = c->getSession(sessionId);
+            session && !session->getWorktreeBinding().path.empty()) {
+            return session->getWorktreeBinding().path;
+        }
+    }
+    return c->agentConfig->resolvedWorkDir();
 }
 
 std::string PluginManager::getModelConfigJson() {
@@ -308,11 +325,12 @@ std::string PluginManager::getModelConfigJson() {
 // =====================================================================
 
 bool PluginManager::isSessionCancelled(const PluginxxScopeRef* agent, std::string_view sessionId) {
-    if (agent != nullptr && !mountOf(agent)) {
+    if (sessionId.empty()) {
         return false;
     }
-    auto c = primaryAgent_.lock();
-    if (!c || sessionId.empty()) {
+    // 取消状态属于具体 agent 的会话: 带引用时取该挂载的 agent
+    auto c = agentContextOf(agent);
+    if (!c) {
         return false;
     }
     auto session = c->getSession(sessionId);

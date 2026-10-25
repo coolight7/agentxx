@@ -82,7 +82,9 @@
 #include "agentxx-test/plugin/test_plugin_cleanup.h"
 #include "agentxx-test/plugin/test_plugin_feature.h"
 #include "agentxx-test/plugin/test_plugin_hooks.h"
+#include "agentxx-test/plugin/test_plugin_host_mount.h"
 #include "agentxx-test/plugin/test_plugin_multi_instance.h"
+#include "agentxx-test/plugin/test_plugin_multi_mount.h"
 #include "agentxx-test/plugin/test_plugin_resources.h"
 #include "agentxx-test/plugin/test_plugin_runtime.h"
 #include "agentxx-test/plugin/test_plugin_sdk.h"
@@ -502,6 +504,8 @@ int main(int argn, char** argv) {
                 co_await run("plugin_feature", agentxx::test::run_plugin_feature_tests);
                 co_await run("plugin_hooks", agentxx::test::run_plugin_hooks_tests);
                 co_await run("plugin_resources", agentxx::test::run_plugin_resource_tests);
+                co_await run("plugin_host_mount", agentxx::test::run_plugin_host_mount_tests);
+                co_await run("plugin_multi_mount", agentxx::test::run_plugin_multi_mount_tests);
                 co_await run(
                     "plugin_multi_instance",
                     agentxx::test::run_plugin_multi_instance_tests

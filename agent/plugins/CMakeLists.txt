@@ -302,6 +302,8 @@ link_libraries(cxx_pluginxx_ui_static)
 #   由各插件 builtin 分支自行追加, 提前 return 时天然不会误登记
 # - [AGENTXX_PLUGIN_BUILTIN_LIST] 控制内嵌编译插件列表
 agentxx_load_plugin(example_plugin AGENTXX_ENABLE_PLUGIN_EXAMPLE)
+# 多挂载示例: 一次加载、多个 agent 各挂一份状态 (计数按挂载隔离)
+agentxx_load_plugin(example_multi_mount AGENTXX_ENABLE_PLUGIN_EXAMPLE)
 agentxx_load_plugin(example_resources AGENTXX_ENABLE_PLUGIN_EXAMPLE)
 agentxx_load_plugin(example_graph_node AGENTXX_ENABLE_PLUGIN_EXAMPLE)
 # 功能点示例插件 (声明点 / 登记实现 / 调用点)

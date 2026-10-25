@@ -506,6 +506,12 @@ private:
     friend class PluginInstance;
     friend class PluginMount;
 
+    /// 引用对应的 agent 上下文 (空引用 = 主 agent)
+    /// - 引用无效 (未知 id / 过期序号) 返回空: 调用方按"拒绝"处理
+    /// - 会话/事件这类**落在具体 agent 上**的查询必须用它, 否则多 agent 下会串到主 agent
+    std::shared_ptr<agentxx::agent::AgentContext>
+        agentContextOf(const PluginxxScopeRef* agent) const;
+
     /// 主 agent 上下文 (主程序级配置来源)
     std::weak_ptr<agentxx::agent::AgentContext> primaryAgent_;
 

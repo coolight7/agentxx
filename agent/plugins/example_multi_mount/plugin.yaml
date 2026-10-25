@@ -1,0 +1,9 @@
+name: example_multi_mount
+version: 1.0.0
+description: "Example plugin mounted by several agents, one state per mount"
+entry: libexample_multi_mount.so
+depends:
+# 只用 agent 业务表 (工具注册) 与通用 log 表: 声明核心能力, 不需要客户端交互面
+interfaces:
+  require:
+    - agentxx.agent.core
