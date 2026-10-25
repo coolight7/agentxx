@@ -404,6 +404,15 @@ path/to/agentxx_test string_util regex
   当前会话立即切换 → 回 `WireAddModelResult` + `WireModelInfo` (先落盘后注册,
   避免"能用但重启消失"); 回执成功客户端 setPendingModel + toast;
   见 tui.md §2.11
+- 配置归属 (2026-10-25): **每条配置只由真正使用它的那一侧读**, 界面进程不参与模型等
+  agent 决策。`agent/client/main.cpp` 拆成两个装配函数 —— `applyPluginListConfig` (两侧共用:
+  `plugin.list` 原样填进 `AgentConfig::plugins`, 由两个插件管理器按条目 `sides` 再过滤) 与
+  `applyServerRuntimeConfig` (MCP/Skill/Memory/权限/子代理/worktree/dev_mode/会话语言/插件挂载);
+  主分支用 `clientOnlyMode = !agentUrl.empty()` 分流: 远程 client 只填 `data_dir` +
+  `plugin.list`, 不装配模型、不设 `work_dir`、不调 `validateStartupConfig` (以前会因“没有可用模型”
+  直接拒绝启动), `--dump-config`/`--dump-diagnostics` 同样只导出本进程那部分并说明“其余在服务端看”;
+  归属清单与判定规则见 `docs/zh-cn/design/configuration.md` 第 5 节, `config-keys.md` 表格新增
+  「归属」列 (生成物, 由 `config_keys` 的 `keyOwnerOf` 出, 新增键没归类会让该模块失败)
 - 空列表 banner 艺术字 `AGENT++`: 右侧 `++` 由 `BannerArtComponent`
   (`agent/client/include/agentxx-client/io/tui/components/banner_art.h`, 门槛 `High`)
   在启动阶段播放一次变形动画 —— 先画成两个与 AGENT 同风格的大字 `+`, 再变形为机器人图案
@@ -521,6 +530,21 @@ path/to/agentxx_test string_util regex
   `cmd /c "net share > %TEMP%\ns.txt 2>&1"; [IO.File]::ReadAllText("$env:TEMP\ns.txt",[Text.Encoding]::GetEncoding([int]$env:AGENTXX_EXEC_OEM_CODEPAGE))`
   —— 两个提示词写法都已实测可用; 把原生输出接进 PowerShell 管道/变量会在 PowerShell 侧先解码
   (留下 U+FFFD, 无法还原)
+
+- offload 工作线程池 (2026-10-25): `PluginManager::setWorkerThreadPool()` 由创建方注入
+  (`AgentHost` 注入进程共享池 / `BaseAgent` 自建管理器注入 `agentContext->threadPool`);
+  `postToWorkerThread` 取值顺序 = 注入池 → 主 agent 上下文的池 → 管理器自建私有池 (只建一次),
+  因此 agent 上下文未挂载 / 已释放 / 池不可用时 `blocking_tool` 仍可执行, 不再统一报
+  `plugin offload: no thread pool`。同时: `~AgentContext` 只对**自建**管理器
+  (`AgentContext::pluginManagerOwned`) 调 `shutdownAll()` (共享管理器不随单个 agent 卸载);
+  `PluginMount::unmountAllAsync` 改取实例快照后逆序卸载 —— 原先在 `entries_` 上逆序迭代而
+  `unmountOneAsync` 会 erase 该项, 是失效迭代器 UB (Debug/ASan 下断言
+  `can't decrement invalidated vector iterator`)
+- 用途模型来源可见 (2026-10-25): 分层加载后逐个打印
+  `[Config] model.use.<键>: '<值>' (overlay|base[ overrides base '<旧值>'])`;
+  `AgentContext::getSessionCurrentModelName` 在 registry 未就绪时优先返回会话已选模型,
+  其次返回 `AgentConfig::currentModelName` (即 `model.use.*` 里的**条目名**, 与 registry 键一致),
+  最后才退回主模型的上游 `model_name` —— 客户端启动早期 (init 前) 拉取的模型名因此能对齐用户配置
 
 ## 编译
 - 平台/编译器宏: 顶层 `agent/CMakeLists.txt` 统一判定并经 `_AGENTXX_COMMON_CMAKE_ARGS`

@@ -209,11 +209,55 @@ static std::string extractTokenFromUrl(std::string& url) {
     return token;
 }
 
-/// 应用各模式共享的运行时加载 (MCP / Skill / Memory / 权限 / 子代理 / 插件)
-/// - tui / cli / server / acp 模式共用: 分离进程启动 agent (server/acp) 时
-///   同样需要完整加载, 否则 agent 侧不加载插件等扩展组件
+/// 应用运行侧共享的插件列表 (yaml `plugin.list`)
+/// - **两侧都用**: 同一个文件里写全部插件, 由条目的 `sides` 决定哪个进程去加载
+///   (`agent` = 服务端, `client` = 界面端, `auto` = 有对应入口就加载)
+/// - 本函数只做路径归一化, 不判断运行侧 (过滤发生在两个插件管理器里)
+static void applyPluginListConfig(
+    std::shared_ptr<agentxx::agent::AgentConfig>&            config,
+    const YamlAppConfig&                                     yamlCfg,
+    const std::function<std::string(std::string_view path)>& resolvePath
+) {
+    // 插件配置 (yaml `plugin.list` 段): 相对路径按程序工作目录解析为绝对路径
+    // (与 skill/memory 一致; BaseAgent::init 按此加载, 拓扑排序见 PluginManager)
+    // - path 前缀 `builtin://` 为内置插件简写, 保留原样不做文件路径解析
+    // - config 支持 `~` 展开与相对路径解析 (可指向文件或目录), 归一化后透传
+    auto resolvePluginPath = [&](std::string_view p) -> std::string {
+        if (p.starts_with("builtin://")) {
+            return std::string{p};
+        }
+        return resolvePath(p);
+    };
+    for (const auto& pc : yamlCfg.plugins) {
+        agentxx::agent::PluginConfig pluginCfg;
+        pluginCfg.path    = resolvePluginPath(pc.path);
+        pluginCfg.enabled = pc.enabled;
+        pluginCfg.sides   = pc.sides;
+        pluginCfg.args    = pc.args;
+        if (!pc.configPath.empty()) {
+            auto                  expanded = utilxx_base::expandUserHomePath(pc.configPath);
+            std::filesystem::path cp{expanded};
+            if (cp.is_absolute()) {
+                pluginCfg.configPath = cp.lexically_normal().generic_string();
+            } else {
+                pluginCfg.configPath
+                    = (std::filesystem::current_path() / cp).lexically_normal().generic_string();
+            }
+        }
+        config->plugins.push_back(std::move(pluginCfg));
+    }
+    if (!config->plugins.empty()) {
+        XX_LOGI("[Config] plugins: {}", config->plugins.size());
+    }
+}
+
+/// 应用**服务端 (agent 进程)** 专用的运行时加载 (MCP / Skill / Memory / 权限 /
+/// 子代理 / worktree / 会话语言 / 插件挂载策略)
+/// - 只有本进程真的跑 agent 时才调 (tui/cli/jsonl/server/acp/train);
+///   远程客户端 (`--agent`) 不调 —— 这些配置以服务端那份为准
+/// - 插件列表不在这里 (见 [applyPluginListConfig]: 两侧共用)
 /// - 相对路径按程序工作目录解析为绝对路径 (resolvePath 由 main 注入)
-static void applySharedRuntimeConfig(
+static void applyServerRuntimeConfig(
     std::shared_ptr<agentxx::agent::AgentConfig>&            config,
     const YamlAppConfig&                                     yamlCfg,
     const std::function<std::string(std::string_view path)>& resolvePath
@@ -248,37 +292,7 @@ static void applySharedRuntimeConfig(
         config->language         = agentxx::agent::normalizeLanguage(yamlCfg.language);
         config->languageExplicit = true;
     }
-    // 插件配置 (yaml `plugins` 段): 相对路径按程序工作目录解析为绝对路径
-    // (与 skill/memory 一致; BaseAgent::init 按此加载, 拓扑排序见 PluginManager)
-    // - path 前缀 `builtin://` 为内置插件简写, 保留原样不做文件路径解析
-    // - config 支持 `~` 展开与相对路径解析 (可指向文件或目录), 归一化后透传
-    auto resolvePluginPath = [&](std::string_view p) -> std::string {
-        if (p.starts_with("builtin://")) {
-            return std::string{p};
-        }
-        return resolvePath(p);
-    };
-    for (const auto& pc : yamlCfg.plugins) {
-        agentxx::agent::PluginConfig pluginCfg;
-        pluginCfg.path    = resolvePluginPath(pc.path);
-        pluginCfg.enabled = pc.enabled;
-        pluginCfg.sides   = pc.sides;
-        pluginCfg.args    = pc.args;
-        if (!pc.configPath.empty()) {
-            auto                  expanded = utilxx_base::expandUserHomePath(pc.configPath);
-            std::filesystem::path cp{expanded};
-            if (cp.is_absolute()) {
-                pluginCfg.configPath = cp.lexically_normal().generic_string();
-            } else {
-                pluginCfg.configPath
-                    = (std::filesystem::current_path() / cp).lexically_normal().generic_string();
-            }
-        }
-        config->plugins.push_back(std::move(pluginCfg));
-    }
-    if (!config->plugins.empty()) {
-        XX_LOGI("[Config] plugins: {}", config->plugins.size());
-    }
+    // 插件配置在 [applyPluginListConfig] 里填 (两侧共用, 按 sides 过滤)
 
     // 插件挂载策略 (yaml `plugin.mount`): 本会话挂哪些插件、各自的挂载级参数
     config->pluginMountPolicy = yamlCfg.pluginMountPolicy;
@@ -301,6 +315,8 @@ static void applySharedRuntimeConfig(
 /// 加载快照 (配置含"是否已设置 Key"、不含 Key 取值)、会话摘要、日志尾部 (脱敏)。
 /// - 不做任何网络请求、不进入交互模式, 打印完退出
 /// - 加载失败时仍会打印已生成的部分并附上失败原因, 依然有排查价值
+/// - `clientOnly` (远程 `--agent`): 本进程只有界面职责, 不装配/不校验服务端那部分
+///   配置, 也不构造 agent (没有模型); 只导出配置侧快照并说明分工
 static int dumpDiagnosticsAndExit(
     const std::string&                                       mode,
     const YamlAppConfig&                                     yamlCfg,
@@ -308,19 +324,21 @@ static int dumpDiagnosticsAndExit(
     const std::string&                                       resolvedWorkDir,
     const std::function<std::string(std::string_view path)>& resolvePath,
     std::string_view                                         configPath,
-    const std::string&                                       baseConfigPath
+    const std::string&                                       baseConfigPath,
+    bool                                                     clientOnly
 ) {
     auto config     = buildDefaultConfig();
     config->dataDir = resolvedDataDir;
-    config->workDir = resolvedWorkDir;
-    applyModelToConfig(config, yamlCfg.models, yamlCfg.useModelDefault);
-    applySubagentModelToConfig(config, yamlCfg.models, yamlCfg.useModelSubagent);
-    applyWebSearchModelToConfig(config, yamlCfg.models, yamlCfg.useModelWebSearch);
-    applyAvailableModelsToConfig(config, yamlCfg.models, yamlCfg.useModelDefault);
-    applySharedRuntimeConfig(config, yamlCfg, resolvePath);
-
-    // 日志尾部: 先装捕获再加载, 这样 init 期间的日志也进包
-    agentxx::util::enableLogCapture(200);
+    // 插件列表两侧共用 (按条目 sides 过滤)
+    applyPluginListConfig(config, yamlCfg, resolvePath);
+    if (!clientOnly) {
+        config->workDir = resolvedWorkDir;
+        applyModelToConfig(config, yamlCfg.models, yamlCfg.useModelDefault);
+        applySubagentModelToConfig(config, yamlCfg.models, yamlCfg.useModelSubagent);
+        applyWebSearchModelToConfig(config, yamlCfg.models, yamlCfg.useModelWebSearch);
+        applyAvailableModelsToConfig(config, yamlCfg.models, yamlCfg.useModelDefault);
+        applyServerRuntimeConfig(config, yamlCfg, resolvePath);
+    }
 
     XX_OUT("=== agentxx dump-diagnostics (mode={}) ===\n", mode);
     XX_OUT("config file : {}\n", configPath);
@@ -328,6 +346,27 @@ static int dumpDiagnosticsAndExit(
         XX_OUT("base config : {}\n", baseConfigPath);
     }
     XX_OUT("\n");
+
+    if (clientOnly) {
+        // 远程 client: 模型/MCP/技能/记忆/权限都以服务端那份为准, 本进程无 agent 可导出;
+        // 无模型配置时构造 CodeAgent 会断言, 故只给配置侧快照
+        XX_OUT(
+            "[client mode] remote client (--agent): model/mcp/skill/memory/permission/"
+            "subagent/worktree come from the server; the model lines below are placeholder "
+            "defaults, not read from yaml in this mode. Agent-side diagnostics must be "
+            "collected on the server - this process only uses data_dir and plugin.list "
+            "(client side entries).\n\n"
+        );
+        for (const auto& line : agentxx::agent::renderAssemblySnapshot(
+                 agentxx::agent::buildConfigSnapshot(*config)
+             )) {
+            XX_OUT("{}\n", line);
+        }
+        return 0;
+    }
+
+    // 日志尾部: 先装捕获再加载, 这样 init 期间的日志也进包
+    agentxx::util::enableLogCapture(200);
 
     auto agent     = std::make_shared<agentxx::agent::CodeAgent>(config);
     auto initError = std::make_shared<std::string>();
@@ -378,6 +417,8 @@ static int dumpDiagnosticsAndExit(
 /// 中间件顺序 / 工具清单与来源 / 插件加载结果 / 执行图 / 持久化)。
 /// - 不启动任何交互界面, 不监听端口, 打印完直接退出
 /// - 打印的是"实际加载结果", 与启动日志中的加载快照同源
+/// - `clientOnly` (远程 `--agent`): 只打印本进程真正读的那部分 (data_dir +
+///   plugin.list), 不冒充"缺模型配置"也不做服务端配置校验
 static int dumpConfigAndExit(
     const std::string&                                       mode,
     const YamlAppConfig&                                     yamlCfg,
@@ -385,17 +426,22 @@ static int dumpConfigAndExit(
     const std::string&                                       resolvedWorkDir,
     const std::function<std::string(std::string_view path)>& resolvePath,
     std::string_view                                         configPath,
-    const std::string&                                       baseConfigPath
+    const std::string&                                       baseConfigPath,
+    bool                                                     clientOnly
 ) {
     // 与正常启动一致地构建配置 (模式相关的日志开关不生效, 快照需要完整信息)
     auto config     = buildDefaultConfig();
     config->dataDir = resolvedDataDir;
-    config->workDir = resolvedWorkDir;
-    applyModelToConfig(config, yamlCfg.models, yamlCfg.useModelDefault);
-    applySubagentModelToConfig(config, yamlCfg.models, yamlCfg.useModelSubagent);
-    applyWebSearchModelToConfig(config, yamlCfg.models, yamlCfg.useModelWebSearch);
-    applyAvailableModelsToConfig(config, yamlCfg.models, yamlCfg.useModelDefault);
-    applySharedRuntimeConfig(config, yamlCfg, resolvePath);
+    // 插件列表两侧共用 (按条目 sides 过滤)
+    applyPluginListConfig(config, yamlCfg, resolvePath);
+    if (!clientOnly) {
+        config->workDir = resolvedWorkDir;
+        applyModelToConfig(config, yamlCfg.models, yamlCfg.useModelDefault);
+        applySubagentModelToConfig(config, yamlCfg.models, yamlCfg.useModelSubagent);
+        applyWebSearchModelToConfig(config, yamlCfg.models, yamlCfg.useModelWebSearch);
+        applyAvailableModelsToConfig(config, yamlCfg.models, yamlCfg.useModelDefault);
+        applyServerRuntimeConfig(config, yamlCfg, resolvePath);
+    }
 
     XX_OUT("=== agentxx dump-config (mode={}) ===\n", mode);
     XX_OUT("config file : {}", configPath);
@@ -404,9 +450,25 @@ static int dumpConfigAndExit(
     }
     XX_OUT("\n");
 
+    if (clientOnly) {
+        // 远程 client: 模型/MCP/技能/记忆/权限以服务端那份为准, 本进程不装配也不校验;
+        // 快照里的模型行只是 AgentConfig 的占位默认值, 不能当成"要用这个模型"
+        XX_OUT(
+            "[client mode] remote client (--agent): model/mcp/skill/memory/permission/"
+            "subagent/worktree come from the server; the model lines below are placeholder "
+            "defaults, not read from yaml in this mode. Server-side snapshots must be dumped "
+            "on the server - this process only uses data_dir and plugin.list (client side "
+            "entries).\n\n"
+        );
+    }
+
     auto configSnapshot = agentxx::agent::buildConfigSnapshot(*config);
     for (const auto& line : agentxx::agent::renderAssemblySnapshot(configSnapshot)) {
         XX_OUT("{}\n", line);
+    }
+
+    if (clientOnly) {
+        return 0;
     }
 
     // 配置校验结果: 键路径 + 严重级别, 配置排查时先看这一段
@@ -831,7 +893,8 @@ Options:
             resolvedWorkDir,
             resolvePath,
             configPath,
-            loadedCfg.baseConfigPath
+            loadedCfg.baseConfigPath,
+            !agentUrl.empty()
         );
     }
 
@@ -845,7 +908,8 @@ Options:
             resolvedWorkDir,
             resolvePath,
             configPath,
-            loadedCfg.baseConfigPath
+            loadedCfg.baseConfigPath,
+            !agentUrl.empty()
         );
     }
 
@@ -931,10 +995,11 @@ Options:
         applyModelToConfig(config, yamlCfg.models, yamlCfg.useModelAcp);
         applySubagentModelToConfig(config, yamlCfg.models, yamlCfg.useModelSubagent);
         applyWebSearchModelToConfig(config, yamlCfg.models, yamlCfg.useModelWebSearch);
-        // 共享运行时加载 (插件/MCP/Skill/Memory/权限/子代理): ACP 模式下 agent
-        // 运行在独立进程 (分离进程启动), 与 server/tui 模式一致需要完整加载;
+        // 服务端运行时加载 (MCP/Skill/Memory/权限/子代理) + 插件列表: ACP 模式下
+        // agent 运行在独立进程 (分离进程启动), 与 server/tui 模式一致需要完整加载;
         // 曾缺失导致 acp 启动的 agent 不加载任何插件
-        applySharedRuntimeConfig(config, yamlCfg, resolvePath);
+        applyPluginListConfig(config, yamlCfg, resolvePath);
+        applyServerRuntimeConfig(config, yamlCfg, resolvePath);
         // CodeGraph 参数经 plugins 配置传递 (主程序不解析 args 字段语义)
         if (!validateStartupConfig(config, configPath)) {
             return 1;
@@ -954,19 +1019,41 @@ Options:
         return 0;
     }
 
+    // ======================== 配置装配: 按运行侧分流 ========================
+    // 两侧读同一份 yaml, 各自只装配自己负责的那部分 (归属清单见
+    // docs/zh-cn/design/configuration.md 的"配置归属"一节):
+    // - agent 运行侧 (本地 tui/cli, jsonl, server, acp, train): 装配全部 —— 模型、
+    //   MCP、Skill、Memory、权限、子代理、worktree、会话语言、插件挂载策略
+    // - 界面运行侧 (远程 `--agent`): 只用 data_dir (界面设置库 global.db) 与
+    //   plugin.list 中能落到 client 侧的插件; 模型、工作目录、资源路径、权限都以
+    //   服务端为准, 本进程不装配也不校验 —— 否则远程客户端会被要求先配好模型
+    const bool clientOnlyMode = !agentUrl.empty();
+
     auto config     = buildDefaultConfig();
     config->dataDir = resolvedDataDir;
-    config->workDir = resolvedWorkDir;
-    applyModelToConfig(config, yamlCfg.models, yamlCfg.useModelDefault);
-    applySubagentModelToConfig(config, yamlCfg.models, yamlCfg.useModelSubagent);
-    applyWebSearchModelToConfig(config, yamlCfg.models, yamlCfg.useModelWebSearch);
-    applyAvailableModelsToConfig(config, yamlCfg.models, yamlCfg.useModelDefault);
-    applySharedRuntimeConfig(config, yamlCfg, resolvePath);
+    // 插件列表两侧共用 (按条目 sides 过滤, 见 applyPluginListConfig)
+    applyPluginListConfig(config, yamlCfg, resolvePath);
+    if (!clientOnlyMode) {
+        config->workDir = resolvedWorkDir;
+        applyModelToConfig(config, yamlCfg.models, yamlCfg.useModelDefault);
+        applySubagentModelToConfig(config, yamlCfg.models, yamlCfg.useModelSubagent);
+        applyWebSearchModelToConfig(config, yamlCfg.models, yamlCfg.useModelWebSearch);
+        applyAvailableModelsToConfig(config, yamlCfg.models, yamlCfg.useModelDefault);
+        applyServerRuntimeConfig(config, yamlCfg, resolvePath);
+    } else {
+        XX_LOGI(
+            "[Config] remote client mode ({}): model/mcp/skill/memory/permission/"
+            "subagent/worktree are taken from the server; this process only uses "
+            "data_dir and plugin.list (client side entries)",
+            agentUrl
+        );
+    }
 
     // 配置校验: 结构/语义 + 路径存在性与权限组合
     // - 致命问题 (无可用模型 / 必需绝对路径写错 / 持久化目录不可用) 在此终止启动
     // - 警告照常启动 (内存降级、会被夹取的取值、白黑名单重复等)
-    if (!validateStartupConfig(config, configPath)) {
+    // - 远程 client 不校验: 本进程没有模型与资源路径可校验 (服务端启动时已校验)
+    if (!clientOnlyMode && !validateStartupConfig(config, configPath)) {
         return 1;
     }
 
@@ -1056,7 +1143,8 @@ Options:
                 );
                 co_await host->loadPluginsAsync();
                 if (auto pluginHost = host->pluginHost()) {
-                    agent->getContext()->pluginManager = pluginHost;
+                    agent->getContext()->pluginManager      = pluginHost;
+                    agent->getContext()->pluginManagerOwned = false; // 进程共享管理器
                 }
                 co_await agent->init();
                 *hostHolder = host;

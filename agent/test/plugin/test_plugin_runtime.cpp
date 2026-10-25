@@ -6,6 +6,7 @@
 #include "agentxx/plugin/plugin_manager.h"
 #include "asio/co_spawn.hpp"
 #include "asio/io_context.hpp"
+#include "asio/thread_pool.hpp"
 #include "asio/use_future.hpp"
 #include "neograph/graph/registry.h"
 #include "neograph/graph/run_context.h"
@@ -14,8 +15,10 @@
 #include "pluginxx/runtime/op_driver.h"
 #include "utilxx_base/asio_error.h"
 
+#include <atomic>
 #include <barrier>
 #include <cstddef>
+#include <chrono>
 #include <future>
 #include <mutex>
 #include <optional>
@@ -807,14 +810,16 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_EQ(f.provider->lifetime->leaseCount(), size_t{0});
     }
 
-    /// 缺少 blocking pool 也必须通过一次异步失败完成，不允许静默挂起。
+    /// 未注入工作线程池时管理器自建一个: 主 agent 上下文缺失/未挂载也不能让
+    /// 插件阻塞工作全部失败 (否则阻塞工具全部报 offload 失败)。工作体仍执行
+    /// 一次, 经 IO 投递完成且无错误。
     {
         RuntimeFixture f;
 
         struct State {
-            int         work = 0;
-            int         done = 0;
-            std::string error;
+            std::atomic<int> work{0};
+            std::atomic<int> done{0};
+            std::string      error;
         } state;
 
         PluginxxString error{};
@@ -826,18 +831,61 @@ TestResult testPluginRuntime() {
             },
             +[](void* ud, int32_t, void*, const PluginxxStringView* error) {
                 auto& state = *static_cast<State*>(ud);
-                ++state.done;
                 state.error = svToStr(error);
+                ++state.done;
             },
             &state,
             &error
         );
-        XX_TEST_EXPECT_EQ(state.done, 0);
-        f.drain();
-        XX_TEST_EXPECT_EQ(state.work, 0);
-        XX_TEST_EXPECT_EQ(state.done, 1);
-        XX_TEST_EXPECT_TRUE(state.error.find("no thread pool") != std::string::npos);
+        // 工作体在线程池执行、完成后回投到本夹具 IO: 推进 IO 直到上报完成
+        const auto deadline = std::chrono::steady_clock::now() + 5s;
+        while (state.done.load() == 0 && std::chrono::steady_clock::now() < deadline) {
+            f.drain();
+            std::this_thread::sleep_for(1ms);
+        }
+        XX_TEST_EXPECT_EQ(state.work.load(), 1);
+        XX_TEST_EXPECT_EQ(state.done.load(), 1);
+        XX_TEST_EXPECT_TRUE(state.error.empty());
         XX_TEST_EXPECT_TRUE(f.manager->runtime()->operations.empty());
+    }
+
+    /// 主程序注入的工作线程池 (AgentHost / BaseAgent 的做法) 优先于上下文回查:
+    /// 没有主 agent 上下文时 offload 也走注入的池, 工作体照常执行。
+    {
+        RuntimeFixture f;
+        auto            pool = std::make_shared<asio::thread_pool>(2);
+        f.manager->setWorkerThreadPool(pool);
+
+        struct State {
+            std::atomic<int> work{0};
+            std::atomic<int> done{0};
+            std::string      error;
+        } state;
+
+        PluginxxString error{};
+        f.manager->offload(
+            f.provider.get(),
+            +[](void* ud, const PluginxxCancelToken*, PluginxxString*) -> void* {
+                ++static_cast<State*>(ud)->work;
+                return nullptr;
+            },
+            +[](void* ud, int32_t, void*, const PluginxxStringView* error) {
+                auto& state = *static_cast<State*>(ud);
+                state.error = svToStr(error);
+                ++state.done;
+            },
+            &state,
+            &error
+        );
+        const auto deadline = std::chrono::steady_clock::now() + 5s;
+        while (state.done.load() == 0 && std::chrono::steady_clock::now() < deadline) {
+            f.drain();
+            std::this_thread::sleep_for(1ms);
+        }
+        XX_TEST_EXPECT_EQ(state.work.load(), 1);
+        XX_TEST_EXPECT_EQ(state.done.load(), 1);
+        XX_TEST_EXPECT_TRUE(state.error.empty());
+        pool->join();
     }
 
     /// executor 停止期间完成包必须保留，恢复并重新绑定 executor 后只提交一次。

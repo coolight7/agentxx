@@ -241,7 +241,8 @@ static std::shared_ptr<agent::SessionServerAgentIO> setupLocalUnifiedDirect(
             );
             co_await host->loadPluginsAsync();
             if (auto pluginHost = host->pluginHost()) {
-                agent->getContext()->pluginManager = pluginHost;
+                agent->getContext()->pluginManager      = pluginHost;
+                agent->getContext()->pluginManagerOwned = false; // 进程共享管理器
             }
             co_await agent->init();
             // 主程序 (进程级): 主 agent 与子代理平等注册, 经 HostBus 交互;

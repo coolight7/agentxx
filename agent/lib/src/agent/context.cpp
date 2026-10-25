@@ -150,7 +150,9 @@ AgentContext::~AgentContext() {
     }
     // 插件管理器先卸载全部插件, 断开中间件↔实例循环引用
     // (handles 由 middlewareHandleContext 持有, 其析构晚于 pluginManager)
-    if (pluginManager) {
+    // - 只处理自建的管理器: 共享管理器 (AgentHost 注入) 属于主程序,
+    //   其它 agent 还在用它, 不能随本上下文卸掉全部插件
+    if (pluginManager && pluginManagerOwned) {
         pluginManager->shutdownAll();
         if (pluginManager->hasPendingClose()) {
             // 析构无法等待异步 stop 事务: 这些实例保持 CloseFailed 并保留
@@ -694,15 +696,28 @@ std::string AgentContext::sessionTempDir(std::string_view sessionId) {
 
 std::string AgentContext::getSessionCurrentModelName(std::string_view sessionId) const {
     std::string selected;
-    auto        session = sessions->get(sessionId);
+    auto        session = sessions ? sessions->get(sessionId) : nullptr;
     if (session) {
         selected = session->getModelName();
     }
     if (modelRegistry) {
         return modelRegistry->resolveModelName(selected);
-    } else {
+    }
+    // 未初始化 registry (init 前的查询 / 测试嵌入场景): 回退到配置选定的模型
+    // - 会话已选过模型 (从会话库恢复): 直接用该名称 (selectModel 只记 registry 内的条目名)
+    // - 否则用 `model.use.*` 解析出的**条目名** (与 registry 的键一致, 客户端启动时
+    //   显示的模型名就是用户在 yaml 里写的那一个, 而不是上游 model_name)
+    // - 都没有再退回主模型的上游名称
+    if (!selected.empty()) {
+        return selected;
+    }
+    if (agentConfig) {
+        if (!agentConfig->currentModelName.empty()) {
+            return agentConfig->currentModelName;
+        }
         return agentConfig->model.modelName;
     }
+    return {};
 }
 
 const ModelConfig& AgentContext::getSessionCurrentModelConfig(std::string_view sessionId) const {

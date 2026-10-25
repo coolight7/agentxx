@@ -9,6 +9,7 @@
 #include "agentxx/plugin/tool_registry.h"
 #include "agentxx/tools/tool.h"
 #include "asio/awaitable.hpp"
+#include "asio/thread_pool.hpp"
 #include "pluginxx/host/domain_hooks.h"
 #include "pluginxx/host/host_core.h"
 #include "pluginxx/host/manifest.h"
@@ -405,8 +406,16 @@ public:
     std::shared_ptr<pluginxx::EventSource> eventSource(const PluginxxScopeRef* agent) override;
     /// 事件主题命名空间补齐 (不以 `plugin.`/`client.` 开头时补 `plugin.`)
     std::string qualifyEventTopic(std::string_view topic) override;
-    /// 阻塞工作委托到 agent 的工作线程池; 未加载时返回 false (offload 失败)
+    /// 阻塞工作委托到工作线程池 (插件 offload: 阻塞工具 / 插件自己的耗时工作)
+    /// - 返回 false 表示没有任何可用的线程池 (插件侧据此报 offload 失败)
     bool postToWorkerThread(std::function<void()> fn) override;
+
+    /// 注入 offload 工作线程池 (**创建方注入, 不依赖主 agent 上下文**)
+    /// - AgentHost 创建管理器后注入进程共享池; BaseAgent 自建管理器时注入
+    ///   本 agent 的 [AgentContext::threadPool]
+    /// - 未注入时依次退化: 主 agent 上下文的池 -> 管理器自建池 (见 [postToWorkerThread]);
+    ///   这样 agent 上下文未挂载/已释放/其池已停止时, 插件阻塞工作仍能执行
+    void setWorkerThreadPool(std::shared_ptr<asio::thread_pool> pool);
 
     std::string configJson() override;
     std::string toolPromptJson(std::string_view toolName) override;
@@ -499,6 +508,12 @@ private:
 
     /// 主 agent 上下文 (主程序级配置来源)
     std::weak_ptr<agentxx::agent::AgentContext> primaryAgent_;
+
+    /// offload 工作线程池 (由创建方注入; 空时按需创建私有池)
+    std::shared_ptr<asio::thread_pool> workerPool_;
+
+    /// 保证 [workerPool_] 可用 (未注入/原有池不可用时的兜底; 只创建一次)
+    void ensureWorkerPool();
 
     /// 全部挂载 (强引用: 由本管理器保活; agent 关闭时显式拆)
     std::vector<std::shared_ptr<PluginMount>> mounts_;

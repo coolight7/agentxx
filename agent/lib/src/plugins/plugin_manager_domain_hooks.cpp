@@ -19,7 +19,9 @@
 #include "utilxx_base/json.h"
 #include "utilxx_base/log.h"
 
+#include <algorithm>
 #include <string>
+#include <thread>
 #include <utility>
 
 namespace agentxx {
@@ -121,24 +123,61 @@ std::string PluginManager::qualifyEventTopic(std::string_view topic) {
 // 调度表
 // =====================================================================
 
+void PluginManager::setWorkerThreadPool(std::shared_ptr<asio::thread_pool> pool) {
+    workerPool_ = std::move(pool);
+}
+
+/// 兜底线程池: 只在没有任何可用池时创建 (每次管理器一份, 不复用全局)
+void PluginManager::ensureWorkerPool() {
+    if (workerPool_) {
+        return;
+    }
+    auto workers = std::max(2u, std::thread::hardware_concurrency() / 2);
+    workerPool_  = std::make_shared<asio::thread_pool>(workers);
+    XX_LOGW(
+        "Plugin offload: no injected worker pool, created a private pool ({} thread(s))",
+        workers
+    );
+}
+
 bool PluginManager::postToWorkerThread(std::function<void()> fn) {
     if (!fn) {
         return false;
     }
-    auto ctx = primaryAgent_.lock();
-    if (!ctx || !ctx->threadPool) {
-        return false;
-    }
-    try {
-        asio::post(*ctx->threadPool, std::move(fn));
+    // 工作体包在 shared_ptr 里: 投递失败时不会被移走, 可以换下一个池重试
+    auto task   = std::make_shared<std::function<void()>>(std::move(fn));
+    auto submit = [&task](asio::thread_pool& pool) -> bool {
+        try {
+            asio::post(pool, [task]() { (*task)(); });
+            return true;
+        } catch (const std::exception& e) {
+            XX_LOGW("Plugin offload could not be queued: {}", e.what());
+            return false;
+        } catch (...) {
+            XX_LOGW("Plugin offload could not be queued: unknown exception");
+            return false;
+        }
+    };
+
+    // 1. 注入的池 (AgentHost 的进程共享池 / agent 自己的池)
+    if (workerPool_ && submit(*workerPool_)) {
         return true;
-    } catch (const std::exception& e) {
-        XX_LOGW("Plugin offload could not be queued: {}", e.what());
-        return false;
-    } catch (...) {
-        XX_LOGW("Plugin offload could not be queued: unknown exception");
-        return false;
     }
+    // 2. 主 agent 上下文的池 (未注入时的默认来源)
+    if (auto ctx = primaryAgent_.lock(); ctx && ctx->threadPool) {
+        if (submit(*ctx->threadPool)) {
+            return true;
+        }
+    }
+    // 3. 兜底: 管理器自建池
+    //    agent 上下文可能已释放、从未挂载, 或其池已停止; 插件阻塞工作仍应能执行
+    //    (否则阻塞工具全部报 offload 失败)
+    ensureWorkerPool();
+    if (workerPool_ && submit(*workerPool_)) {
+        return true;
+    }
+    XX_LOGW("Plugin offload is unavailable: no usable worker thread pool");
+    return false;
 }
 
 // =====================================================================

@@ -20,6 +20,9 @@ agentxx 有两处持久化配置，职责必须分开，避免同一件事两处
 - 涉及安全授权且应当每次运行都重新确认 → 内存，**不要**写进设置库，也**不要**写进 YAML 当作已授权；
 - 需要插件自己解释的配置 → 写在 `plugin.list[].args` / `plugin.list[].config`，由插件定义语义（主程序原样透传）。
 
+除"存在哪里"，还有第二个维度：**哪个进程读它**（跑 agent 的服务端，还是只做界面的
+客户端）—— 见第 5 节。
+
 ## 2. 语言：`language` 与 `tui.lang` 的分工
 
 两者同名但不是一件事，2026-10 起已明确分开：
@@ -57,3 +60,74 @@ agentxx 有两处持久化配置，职责必须分开，避免同一件事两处
 - **警告**：可回退到默认值继续运行的项（未知键、非法枚举取默认值、目录不存在但功能可降级）。
 
 详细实现与清单见 [roadmap.md](roadmap.md) 的配置校验与配置键目录条目。
+
+## 5. 配置归属：服务端 / 客户端 / 两侧
+
+同一份 `agentxx-config.yaml` 可能被两个进程读到：跑 agent 的**服务端**，和只做界面渲染的
+**客户端**。原则只有一条：
+
+> **每条配置只由真正使用它的那一侧读。** agent 行为（模型、工具、权限、资源、提示词）全部
+> 归服务端；客户端只读自己的界面偏好。客户端不参与决定模型，也不要求本地配好模型才能连接。
+
+| 运行形态 | 谁在跑 | 读哪些配置 |
+|---|---|---|
+| `agentxx_cli server` | 服务端 | 全部（见 5.1） |
+| `agentxx_cli tui` / `cli`（无 `--agent`） | 同一个进程同时是两端 | 全部；界面偏好另取本机设置库 |
+| `agentxx_cli jsonl` | 服务端 | 全部（模型 + 插件 + 运行时资源） |
+| `agentxx_cli acp` | 服务端 | 全部 |
+| `agentxx_cli train` | 服务端 | 只用模型段（`model.use.train*`） |
+| `agentxx_cli tui` / `cli --agent <url>` | 客户端 | **只有** `data_dir`（本机界面偏好 `{data_dir}/sqlite/global.db`）与 `plugin.list` 中 `sides` 允许 client 的条目（`cli` 不读设置库，`data_dir` 填了也不用） |
+
+### 5.1 按运行侧划分的键
+
+| 归属 | 键 | 说明 |
+|---|---|---|
+| 服务端 | `model.list`、`model.use.*`、`model.overwrite.*` | 模型属于 agent；客户端不知道也不发送配置里的模型 |
+| 服务端 | `mcp.list` | MCP 连接由 agent 建立 |
+| 服务端 | `skill.list`、`memory.list` | 提示词资源，相对路径按服务端工作目录解析 |
+| 服务端 | `permission.mode`、`permission.whitelist`、`permission.blacklist` | 权限判定在 agent 侧；客户端只展示询问并镜像"完全授权" |
+| 服务端 | `subagent.enable`、`worktree.enable` | 工具装配 |
+| 服务端 | `dev_mode` | 统计与诊断采集，启动期冻结 |
+| 服务端 | `plugin.mount.policy` / `.list` / `.args` | 本会话挂哪些插件 |
+| 服务端 | `work_dir` | 工具相对路径、子进程工作目录、权限名单的基准；远程客户端显示与选文件用服务端回报的 `hello_ack.workDir` |
+| 服务端 | `language` | 会话与提示词语言；远程客户端的界面语言是设置库的 `tui.lang` |
+| 两侧 | `data_dir` | 各进程读自己那份：服务端存会话库与索引，客户端只存界面偏好 `sqlite/global.db` |
+| 两侧 | `plugin.list`（含 `sides` / `args` / `config`） | 同一份清单，各进程按条目的 `sides` 决定加载谁 |
+
+`.env` 与 `${VAR}` 由各进程用**自己那份**文件展开（内置变量 `AGENTXX_WORK_DIR` /
+`AGENTXX_EXEC_DIR` 也按各自进程计算），所以同一个键在两侧可以解析出不同值；真正在两侧都
+生效的只有 `data_dir` 与 `plugin.list`。
+
+这张表与 [config-keys.md](config-keys.md) 的「归属」列同源：列由 `config_keys` 模块生成并
+校验（`agent/test/core/test_config_keys.cpp` 的 `keyOwnerOf`），新增键没归类会让该模块失败。
+
+### 5.2 客户端显示的东西全部来自服务端
+
+远程模式（`--agent`）下，界面上与服务端能力相关的显示项一律取自 Wire 消息，不读本地 yaml：
+
+| 显示项 | 来源消息 |
+|---|---|
+| 模型清单 / 当前模型名 | `hello_ack.models`、`model_info`（`get_model` 的应答） |
+| 会话工作目录 / 设备 id / 对端插件清单 | `hello_ack` 的 `workDir` / `deviceId` / `plugins` |
+| MCP / 技能 / 记忆文件清单 | `append_component_info`（`get_append_component_info` 的应答） |
+| 完全授权状态 | `permission_state`（`get_permission_state` / `set_full_auth`） |
+| 上下文用量 | `context_stats` |
+
+切换模型只能由用户显式动作触发：选择弹窗经 `select_model`，或 `--model` 记到
+`setPendingModel` 后随下一条 `user_input.model` 携带；接不接受由服务端决定。添加模型配置
+（弹窗）也是请求服务端写入**服务端**的 yaml（`add_model`），客户端不落盘。
+
+### 5.3 新增配置项该放哪
+
+1. 影响 agent 行为（模型、工具、提示词、权限、资源路径）→ 只归服务端：写进 yaml，由
+   `agent/client/main.cpp` 的 `applyServerRuntimeConfig` 装配，客户端代码不许读；
+2. 只影响界面观感（主题、动画、日志等级、界面语言、检查更新）→ 只归客户端：写进设置库
+   `{data_dir}/sqlite/global.db`，键名 `tui.*`（见第 1 节）；
+3. 两侧都要 → 要么按显式分流字段处理（`plugin.list[].sides`），要么拆成两个键（会话语言
+   `language` 与界面语言 `tui.lang`），**不要**一个键两处解释。
+
+远程客户端的实现约束（`agent/client/main.cpp` 的 `clientOnlyMode`）：
+
+- 不装配模型 / MCP / 技能 / 记忆 / 权限 / 子代理 / worktree，也不设置 `work_dir`；
+- 不调 `validateStartupConfig` —— 没有服务端配置可校验，因此远程客户端不需要本地模型配置；
+- `--dump-config` / `--dump-diagnostics` 也只导出本进程真正读的那部分，并说明"其余在服务端看"。

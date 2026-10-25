@@ -79,6 +79,39 @@ std::string boolText(bool v) {
     return v ? "true" : "false";
 }
 
+/// 运行侧归属 (文档里的"归属"列): 哪个进程会真的读这个键
+///
+/// - `server`: 跑 agent 的进程 (server / 本地 tui·cli / jsonl / acp / train)
+/// - `client`: 只做界面渲染的进程 (远程 `--agent`); 目前没有这样的 yaml 键 ——
+///   界面偏好走设置库 (`tui.*`), 列在这里是为了将来新增键时不必改渲染
+/// - `both`: 两侧各自读**自己那份**文件 (插件列表再按条目的 `sides` 分流)
+/// - `none`: 已废弃, 加载时只记警告不生效
+///
+/// 默认按服务端处理 —— 新增键若确实只有界面进程读, 必须在这里显式列出。
+/// 判定规则与完整清单见 docs/zh-cn/design/configuration.md 的"配置归属"一节
+struct KeyOwner {
+    std::string_view code;  ///< JSON 里的取值
+    std::string_view label; ///< 文档表格里的显示文本
+};
+
+KeyOwner keyOwnerOf(std::string_view keyPath) {
+    static constexpr KeyOwner server{"server", "服务端"};
+    static constexpr KeyOwner both{"both", "两侧"};
+    static constexpr KeyOwner none{"none", "— (不生效)"};
+    // 数据目录两侧都要用: 服务端存会话库/索引, 界面进程只存界面偏好 (global.db)
+    if (keyPath == "data_dir") {
+        return both;
+    }
+    // 插件列表是同一份, 两侧各自按 `sides` 决定加载哪些
+    if (keyPath.starts_with("plugin.list[]")) {
+        return both;
+    }
+    if (keyPath == "models" || keyPath == "plugins" || keyPath == "use_model") {
+        return none;
+    }
+    return server;
+}
+
 /// 去掉首尾空白 (生成物里嵌入样例 yaml 时用)
 std::string trimText(std::string_view text) {
     auto isBlank = [](char c) {
@@ -1130,6 +1163,7 @@ std::string buildKeysJson(const std::vector<ConfigKeyEntry>& entries) {
     for (const auto& entry : entries) {
         keys.push_back(utilxx_base::Json{
             {"path",    entry.keyPath                                                        },
+            {"owner",   std::string{keyOwnerOf(entry.keyPath).code}                          },
             {"type",    entry.type                                                           },
             {"default", entry.defaultValue                                                   },
             {"sample",  entry.sampleYaml.empty() ? std::string{} : trimText(entry.sampleYaml)},
@@ -1155,12 +1189,24 @@ std::string buildKeysDoc(const std::vector<ConfigKeyEntry>& entries) {
     out += "> 权威实现是 `agent/client/src/config_loader.cpp`; 本目录的每个键都由\n";
     out += "> `config_keys` 真实加载校验 (默认值与样例值各一次), 并且加载器里出现的新键\n";
     out += "> 若没登记进来, 该模块会直接失败。\n>\n";
+    out += "> **归属**列 = 哪个进程会真的读这个键: `服务端` 只有跑 agent 的进程\n";
+    out += "> (server / 本地 tui·cli / jsonl / acp / train) 读; `两侧` 两侧各自读自己那份\n";
+    out += "> 文件 (插件列表再按条目 `sides` 分流); `客户端` 只有界面进程读 (目前没有这样\n";
+    out += "> 的 yaml 键, 界面偏好走设置库的 `tui.*`)。远程 client (`--agent`) 只用\n";
+    out += "> `data_dir` 与 `plugin.list`, 其余一律以服务端那份为准 —— 详见\n";
+    out += "> [配置与设置边界](configuration.md) 的\"配置归属\"一节。\n\n";
     out += "> 相关文档: [index.md](index.md) · [配置与设置边界](configuration.md)\n\n";
     out += fmt::format("键数: {}\n\n", entries.size());
-    out += "| 键路径 | 类型 | 默认值 |\n";
-    out += "|---|---|---|\n";
+    out += "| 键路径 | 归属 | 类型 | 默认值 |\n";
+    out += "|---|---|---|---|\n";
     for (const auto& entry : entries) {
-        out += fmt::format("| `{}` | {} | {} |\n", entry.keyPath, entry.type, entry.defaultValue);
+        out += fmt::format(
+            "| `{}` | {} | {} | {} |\n",
+            entry.keyPath,
+            keyOwnerOf(entry.keyPath).label,
+            entry.type,
+            entry.defaultValue
+        );
     }
     out += "\n## 样例\n\n";
     out += "每个键的最小覆盖写法 (示例值仅用于说明形态):\n\n";
@@ -1282,7 +1328,11 @@ TestResult testConfigKeys() {
 
     // 生成内容本身的形状断言 (路径未注入时也校验)
     XX_TEST_EXPECT_TRUE(jsonText.find("\"keys\"") != std::string::npos);
-    XX_TEST_EXPECT_TRUE(docText.find("| 键路径 | 类型 | 默认值 |") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(docText.find("| 键路径 | 归属 | 类型 | 默认值 |") != std::string::npos);
+    // 归属列必须真在起作用 (全篇都是同一个值 = 分类失效)
+    XX_TEST_EXPECT_TRUE(docText.find("| `data_dir` | 两侧 |") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(docText.find("| `work_dir` | 服务端 |") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(jsonText.find("\"owner\": \"both\"") != std::string::npos);
 
     // 临时文件清理
     std::error_code ec;

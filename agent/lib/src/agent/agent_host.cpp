@@ -187,6 +187,8 @@ asio::awaitable<void> AgentHost::loadPluginsAsync() {
     // 管理器级: 加载阶段还没有挂载, 但插件 `start` 的进程级注册需要主 agent 的上下文
     // (总线 / 语言 / 模型), 所以由调用方把主 agent 交给管理器
     pluginHost_ = std::make_shared<agentxx::plugin::PluginManager>(cfg_.primaryAgent);
+    // offload 工作线程池直接注入: 插件阻塞工具不依赖主 agent 上下文是否已挂载
+    pluginHost_->setWorkerThreadPool(threadPool_);
     pluginHost_->setIoExecutor(ioCtx_->get_executor());
     XX_LOGI("Loading {} plugin(s) into the agent host", cfg_.pluginList.size());
     co_await pluginHost_->loadConfiguredPlugins(cfg_.pluginList);
@@ -223,7 +225,8 @@ void AgentHost::attachRoot(std::shared_ptr<BaseAgent> rootAgent) {
     // (policy 为 None 的 agent 不挂任何插件)
     if (pluginHost_ && !ctx->pluginManager
         && ctx->agentConfig->pluginMountPolicy != PluginMountPolicy::None) {
-        ctx->pluginManager = pluginHost_;
+        ctx->pluginManager      = pluginHost_;
+        ctx->pluginManagerOwned = false; // 进程共享管理器: 不随本 agent 析构卸载
     }
 
     if (!ctx->bus) {
@@ -523,7 +526,8 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
     // 插件管理器: 子代理按自己的挂载策略走 (默认 None = 不挂载任何插件)
     if (pluginHost_ && !subCtx->pluginManager
         && subCtx->agentConfig->pluginMountPolicy != PluginMountPolicy::None) {
-        subCtx->pluginManager = pluginHost_;
+        subCtx->pluginManager      = pluginHost_;
+        subCtx->pluginManagerOwned = false; // 进程共享管理器: 不随子代理析构卸载
     }
 
     // 用量记账目标: 子代理的模型调用计入父会话 (用户看的会话与台账都是父会话)

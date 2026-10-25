@@ -124,7 +124,8 @@ asio::awaitable<void> runJsonlStdioAsync(
     );
     co_await host->loadPluginsAsync();
     if (auto pluginHost = host->pluginHost()) {
-        agent->getContext()->pluginManager = pluginHost;
+        agent->getContext()->pluginManager      = pluginHost;
+        agent->getContext()->pluginManagerOwned = false; // 进程共享管理器
     }
     co_await agent->init();
 

@@ -1349,7 +1349,7 @@ polledRoots_ 归零
 | `sleep(ctx, ms)` | 主程序计时器适配：到期回调只 post + wake |
 | `call_tool` / `invoke_cap` | 主程序回调式互调：完成回调只 post + wake |
 | `yield(ctx)` | 让出一轮：投递 continuation 后由下一次请求推进 |
-| `offload(ctx, work)` | **工作体仍在主程序工作线程池**（显式例外），只有完成后的恢复回到 driver 序列 |
+| `offload(ctx, work)` | **工作体仍在主程序工作线程池**（显式例外），只有完成后的恢复回到 driver 序列；池由主程序在创建插件管理器时注入（见下方"offload 线程池来源"） |
 | `polled_tool(ctx, name, …)` | **声明式受控轮询**：业务体是 `asio::awaitable<std::string>`，跑在桥的本地执行器上，由"有进展立即续 + 无进展 10ms 退避 + 突发上限 256 后让出 1ms"推进（见 §16.5） |
 | `fast_tool` / 同步 hook / `blocking_tool` | 不变（同步路径本就不需要驱动） |
 
@@ -1357,6 +1357,13 @@ polledRoots_ 归零
 `asio::awaitable` 排进同一序列；这些 awaitable 需要等待"有主程序可见唤醒源"的操作
 （主程序回调适配器 / 主程序计时器 / 已 post 的 continuation），或者改用 `polled_tool`
 声明"该操作用受控轮询驱动"（见 §16.5）。
+
+**offload 线程池来源**：`PluginManager::setWorkerThreadPool()` 由创建方注入 ——
+`AgentHost` 注入进程共享池，`BaseAgent` 自建管理器时注入本 agent 的
+`AgentContext::threadPool`。`postToWorkerThread` 的取值顺序是 注入池 → 主 agent 上下文
+的池 → 管理器自建私有池（只建一次，记一条警告日志），因此 agent 上下文未挂载、
+已释放或原有池不可用时，插件阻塞工作（`blocking_tool`）仍能执行，不会统一报
+`plugin offload: no thread pool`。
 
 ### 16.5 受控轮询（`polled_tool`）与明确不支持
 

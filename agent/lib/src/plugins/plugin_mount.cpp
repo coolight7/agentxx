@@ -371,13 +371,19 @@ asio::awaitable<void> PluginMount::unmountAllAsync() {
     if (entries_.empty()) {
         co_return;
     }
-    // 逆序卸载 (后挂的先拆)
-    auto names = mountedNames();
-    for (auto it = entries_.rbegin(); it != entries_.rend(); ++it) {
-        auto inst = it->inst;
-        if (inst) {
-            co_await unmountOneAsync(inst);
+    // 先取实例快照再逐个卸载: unmountOneAsync 会从 entries_ 里删除自己的记录
+    // (std::erase_if), 直接拿 entries_ 的迭代器遍历会失效 —— Debug/ASan 下
+    // 触发 "can't decrement invalidated vector iterator" 断言, Release 下是未定义行为
+    std::vector<std::shared_ptr<PluginInstance>> snapshot;
+    snapshot.reserve(entries_.size());
+    for (const auto& entry : entries_) {
+        if (entry.inst) {
+            snapshot.push_back(entry.inst);
         }
+    }
+    // 逆序卸载 (后挂的先拆)
+    for (auto it = snapshot.rbegin(); it != snapshot.rend(); ++it) {
+        co_await unmountOneAsync(*it);
     }
     XX_LOGI("agent '{}' 已拆全部插件挂载", agentId_);
     co_return;

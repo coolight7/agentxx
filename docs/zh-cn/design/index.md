@@ -726,6 +726,7 @@ path/to/agentxx_test string_util regex agent
 配置文件为 YAML 格式 (默认 `{程序运行目录}/agentxx-config.yaml`, 支持 agentxx_cli --config 指定文件路径)，
 按 base + overlay 两层加载 (见下方"分层配置"; base 为数据目录下的 `agentxx-config.yaml`, overlay 覆盖 base)，
 其中部分变量支持 `${VAR}` 环境变量替换：
+> 每条键**由哪一侧读**（跑 agent 的服务端 / 只做界面的客户端 / 两侧各自读自己那份）见 [configuration.md](configuration.md) 第 5 节, 键清单与归属列见 [config-keys.md](config-keys.md)。
 
 ```yaml
 model:
@@ -1017,11 +1018,14 @@ plugin:
         - path: builtin://agentxx_planning
 ```
 
-启动日志会输出实际生效的两层路径与 `.env` 合并统计:
+启动日志会输出实际生效的两层路径与 `.env` 合并统计，并逐个给出 `model.use.*`
+的来源层（便于确认“改的是哪一层生效了”）:
 
 ```
 [Config] Loaded layered config: base=~/.agentxx/agentxx-config.yaml + overlay=agentxx-config.yaml (overlay overrides base)
 [Config] Loaded 2 variables from .env (base .env: 2, dropped by overlay: 1)
+[Config] model.use.default: 'gpt-5' (overlay overrides base 'gpt-4.1')
+[Config] model.use.subagent: 'gpt-5-mini' (base)
 ```
 
 ### 命令行使用

@@ -768,6 +768,11 @@ public:
     /// - 由 BaseAgent::init 取得或自建并注入
     std::shared_ptr<plugin::PluginManager> pluginManager = nullptr;
 
+    /// 本上下文是否"拥有"[pluginManager] (自建时为 true, 外部注入共享管理器时置 false)
+    /// - 只有拥有者才会在上下文析构时调 `shutdownAll()`; 共享管理器属于主程序,
+    ///   单个 agent 退出不能把全进程的插件都卸掉
+    bool pluginManagerOwned = true;
+
     /// 本 agent 的插件挂载 (agent 级注册实体都在这里)
     /// - `plugin_mount` 步骤由主程序建立并赋值; 插件工具/钩子/提示词/功能点/图/资源
     ///   都挂在这份挂载上, 关闭时随它一并拆掉

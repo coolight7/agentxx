@@ -1568,6 +1568,50 @@ std::string readYamlDataDirValue(
     return resolveEnvVars(root["data_dir"].as<std::string>(""), dotEnvVars, overrideEnvVars);
 }
 
+/// 记录 `model.use.*` 的**生效层** (overlay 优先, 未配置才用 base)
+/// - 只看两层原始节点, 与 `model.use` 的合并规则一致 (逐键 overlay 覆盖 base)
+/// - 用于回答"我改的那层到底生效了没有": 启动日志里直接能看到来源层与值
+static void logModelUseSources(const YAML::Node& base, const YAML::Node& overlay) {
+    const auto baseUse    = mapChild(mapChild(base, "model"), kSectionUseKey);
+    const auto overlayUse = mapChild(mapChild(overlay, "model"), kSectionUseKey);
+    if (!isNodePresent(baseUse) && !isNodePresent(overlayUse)) {
+        return;
+    }
+    std::vector<std::string> keys;
+    auto                     collect = [&keys](const YAML::Node& node) {
+        if (!isNodePresent(node) || !node.IsMap()) {
+            return;
+        }
+        for (const auto& kv : node) {
+            auto key = nodeScalarText(kv.first);
+            if (!key.empty() && std::find(keys.begin(), keys.end(), key) == keys.end()) {
+                keys.push_back(std::move(key));
+            }
+        }
+    };
+    collect(baseUse);
+    collect(overlayUse);
+
+    for (const auto& key : keys) {
+        const auto overlayValue = nodeScalarText(mapChild(overlayUse, key));
+        const auto baseValue    = nodeScalarText(mapChild(baseUse, key));
+        if (!overlayValue.empty()) {
+            if (!baseValue.empty() && baseValue != overlayValue) {
+                XX_LOGI(
+                    "[Config] model.use.{}: '{}' (overlay overrides base '{}')",
+                    key,
+                    overlayValue,
+                    baseValue
+                );
+            } else {
+                XX_LOGI("[Config] model.use.{}: '{}' (overlay)", key, overlayValue);
+            }
+        } else if (!baseValue.empty()) {
+            XX_LOGI("[Config] model.use.{}: '{}' (base)", key, baseValue);
+        }
+    }
+}
+
 LayeredConfigLoad loadLayeredConfig(const LayeredConfigOptions& opts) {
     LayeredConfigLoad out;
     out.overlayConfigPath = opts.overlayConfigPath;
@@ -1661,6 +1705,8 @@ LayeredConfigLoad loadLayeredConfig(const LayeredConfigOptions& opts) {
         out.dotEnvVars,
         out.overrideEnvVars
     );
+    // 用途模型的实际来源层 (overlay 优先): 启动日志可自查"改的是哪一层生效了"
+    logModelUseSources(baseNode, overlayNode);
     return out;
 }
 

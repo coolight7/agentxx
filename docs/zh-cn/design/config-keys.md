@@ -9,66 +9,73 @@
 > `config_keys` 真实加载校验 (默认值与样例值各一次), 并且加载器里出现的新键
 > 若没登记进来, 该模块会直接失败。
 >
+> **归属**列 = 哪个进程会真的读这个键: `服务端` 只有跑 agent 的进程
+> (server / 本地 tui·cli / jsonl / acp / train) 读; `两侧` 两侧各自读自己那份
+> 文件 (插件列表再按条目 `sides` 分流); `客户端` 只有界面进程读 (目前没有这样
+> 的 yaml 键, 界面偏好走设置库的 `tui.*`)。远程 client (`--agent`) 只用
+> `data_dir` 与 `plugin.list`, 其余一律以服务端那份为准 —— 详见
+> [配置与设置边界](configuration.md) 的"配置归属"一节。
+
 > 相关文档: [index.md](index.md) · [配置与设置边界](configuration.md)
 
 键数: 54
 
-| 键路径 | 类型 | 默认值 |
-|---|---|---|
-| `data_dir` | string | 空 (不持久化: 数据仅存内存) |
-| `work_dir` | string | 空 (用进程当前工作目录) |
-| `language` | string (zh-cn | en) | 空 (由客户端界面语言决定) |
-| `subagent.enable` | bool | true |
-| `worktree.enable` | bool | false |
-| `dev_mode` | bool | false |
-| `permission.mode` | enum (ask | all_ask | pass | deny) | ask |
-| `permission.whitelist.list` | list<string> | 空 |
-| `permission.blacklist.list` | list<string> | 空 |
-| `skill.list` | list<string> | 空 |
-| `memory.list` | list<string> | 空 |
-| `model.use.default` | string | 空 |
-| `model.use.subagent` | string | 空 |
-| `model.use.web_search` | string | 空 |
-| `model.use.acp` | string | 空 |
-| `model.use.train` | string | 空 |
-| `model.use.train_scorer` | string | 空 |
-| `model.use.train_optimizer` | string | 空 |
-| `model.list[].name` | string (必填) | 无 (缺 name 的条目被跳过) |
-| `model.list[].type` | string (openai | anthropic | openai-responses) | openai |
-| `model.list[].base_url` | string | 空 (用 provider 默认官方地址) |
-| `model.list[].api_key` | string (支持 ${VAR} 展开) | 空 |
-| `model.list[].model_name` | string | 空 |
-| `model.list[].api_path` | string | 空 (按 type 用默认路径) |
-| `model.list[].send_thinking` | bool | false |
-| `model.list[].request_reasoning_summary` | bool | true |
-| `model.list[].cache_control` | bool (仅 anthropic 生效) | false |
-| `model.list[].connect_timeout` | int (秒) | 16 |
-| `model.list[].read_chunk_timeout` | int (秒) | 60 |
-| `model.list[].ssl_verify` | bool (省略 = 未指定, 用全局默认策略) | 未指定 (nullopt) |
-| `model.list[].max_concurrent_connections` | int (0 = 不限制) | 5 |
-| `model.list[].model_context_max_token` | int (0 = 未指定) | 0 |
-| `model.list[].image_input` | bool | false |
-| `model.list[].audio_input` | bool | false |
-| `model.list[].video_input` | bool | false |
-| `model.list[].extra_headers` | map<string, string> | 空 |
-| `model.list[].extra_api_config` | map<string, any> (合并进请求体) | 空 |
-| `model.overwrite.mode` | enum (merge | replace) | merge (继承并叠加 base 层) |
-| `model.overwrite.remove` | list<string> (按 name 剔除 base 项) | 空 (不剔除) |
-| `plugin.list[].path` | string (必填; 支持 builtin://<名字>) | 无 (缺 path/name 的条目被跳过) |
-| `plugin.list[].name` | string (内置插件简写, 等价 builtin://<name>) | 空 (缺 path 时按内置名补齐) |
-| `plugin.list[].enabled` | bool | true |
-| `plugin.list[].sides` | enum (auto | agent | client) | auto |
-| `plugin.list[].args` | map<string, any> (原样传给插件, 标量递归展开 ${VAR}) | 空 |
-| `plugin.list[].config` | string (插件配置文件/目录; 支持 ~ 与 ${VAR}) | 空 |
-| `plugin.mount.policy` | string (all/none/listed; 默认 all) | all |
-| `plugin.mount.list[]` | string (policy=listed 时挂的插件名) | 空 |
-| `mcp.list[].namespace` | string (必填; 命名空间) | 无 (缺 namespace/url 的条目被跳过) |
-| `mcp.list[].url` | string | 空 (缺 url 的条目被跳过) |
-| `mcp.list[].timeout` | int (秒; 0 = 不限制) | 120 (秒) |
-| `mcp.list[].headers` | map<string, string> (HTTP 请求头; 支持 ${VAR} 展开) | 空 (不附加自定义请求头) |
-| `models` | 已废弃 (改名为 `model.list`) | 不生效 (整段忽略) |
-| `plugins` | 已废弃 (改名为 `plugin.list`) | 不生效 (整段忽略) |
-| `use_model` | 已废弃 (移到 `model.use`) | 不生效 (整段忽略) |
+| 键路径 | 归属 | 类型 | 默认值 |
+|---|---|---|---|
+| `data_dir` | 两侧 | string | 空 (不持久化: 数据仅存内存) |
+| `work_dir` | 服务端 | string | 空 (用进程当前工作目录) |
+| `language` | 服务端 | string (zh-cn | en) | 空 (由客户端界面语言决定) |
+| `subagent.enable` | 服务端 | bool | true |
+| `worktree.enable` | 服务端 | bool | false |
+| `dev_mode` | 服务端 | bool | false |
+| `permission.mode` | 服务端 | enum (ask | all_ask | pass | deny) | ask |
+| `permission.whitelist.list` | 服务端 | list<string> | 空 |
+| `permission.blacklist.list` | 服务端 | list<string> | 空 |
+| `skill.list` | 服务端 | list<string> | 空 |
+| `memory.list` | 服务端 | list<string> | 空 |
+| `model.use.default` | 服务端 | string | 空 |
+| `model.use.subagent` | 服务端 | string | 空 |
+| `model.use.web_search` | 服务端 | string | 空 |
+| `model.use.acp` | 服务端 | string | 空 |
+| `model.use.train` | 服务端 | string | 空 |
+| `model.use.train_scorer` | 服务端 | string | 空 |
+| `model.use.train_optimizer` | 服务端 | string | 空 |
+| `model.list[].name` | 服务端 | string (必填) | 无 (缺 name 的条目被跳过) |
+| `model.list[].type` | 服务端 | string (openai | anthropic | openai-responses) | openai |
+| `model.list[].base_url` | 服务端 | string | 空 (用 provider 默认官方地址) |
+| `model.list[].api_key` | 服务端 | string (支持 ${VAR} 展开) | 空 |
+| `model.list[].model_name` | 服务端 | string | 空 |
+| `model.list[].api_path` | 服务端 | string | 空 (按 type 用默认路径) |
+| `model.list[].send_thinking` | 服务端 | bool | false |
+| `model.list[].request_reasoning_summary` | 服务端 | bool | true |
+| `model.list[].cache_control` | 服务端 | bool (仅 anthropic 生效) | false |
+| `model.list[].connect_timeout` | 服务端 | int (秒) | 16 |
+| `model.list[].read_chunk_timeout` | 服务端 | int (秒) | 60 |
+| `model.list[].ssl_verify` | 服务端 | bool (省略 = 未指定, 用全局默认策略) | 未指定 (nullopt) |
+| `model.list[].max_concurrent_connections` | 服务端 | int (0 = 不限制) | 5 |
+| `model.list[].model_context_max_token` | 服务端 | int (0 = 未指定) | 0 |
+| `model.list[].image_input` | 服务端 | bool | false |
+| `model.list[].audio_input` | 服务端 | bool | false |
+| `model.list[].video_input` | 服务端 | bool | false |
+| `model.list[].extra_headers` | 服务端 | map<string, string> | 空 |
+| `model.list[].extra_api_config` | 服务端 | map<string, any> (合并进请求体) | 空 |
+| `model.overwrite.mode` | 服务端 | enum (merge | replace) | merge (继承并叠加 base 层) |
+| `model.overwrite.remove` | 服务端 | list<string> (按 name 剔除 base 项) | 空 (不剔除) |
+| `plugin.list[].path` | 两侧 | string (必填; 支持 builtin://<名字>) | 无 (缺 path/name 的条目被跳过) |
+| `plugin.list[].name` | 两侧 | string (内置插件简写, 等价 builtin://<name>) | 空 (缺 path 时按内置名补齐) |
+| `plugin.list[].enabled` | 两侧 | bool | true |
+| `plugin.list[].sides` | 两侧 | enum (auto | agent | client) | auto |
+| `plugin.list[].args` | 两侧 | map<string, any> (原样传给插件, 标量递归展开 ${VAR}) | 空 |
+| `plugin.list[].config` | 两侧 | string (插件配置文件/目录; 支持 ~ 与 ${VAR}) | 空 |
+| `plugin.mount.policy` | 服务端 | string (all/none/listed; 默认 all) | all |
+| `plugin.mount.list[]` | 服务端 | string (policy=listed 时挂的插件名) | 空 |
+| `mcp.list[].namespace` | 服务端 | string (必填; 命名空间) | 无 (缺 namespace/url 的条目被跳过) |
+| `mcp.list[].url` | 服务端 | string | 空 (缺 url 的条目被跳过) |
+| `mcp.list[].timeout` | 服务端 | int (秒; 0 = 不限制) | 120 (秒) |
+| `mcp.list[].headers` | 服务端 | map<string, string> (HTTP 请求头; 支持 ${VAR} 展开) | 空 (不附加自定义请求头) |
+| `models` | — (不生效) | 已废弃 (改名为 `model.list`) | 不生效 (整段忽略) |
+| `plugins` | — (不生效) | 已废弃 (改名为 `plugin.list`) | 不生效 (整段忽略) |
+| `use_model` | — (不生效) | 已废弃 (移到 `model.use`) | 不生效 (整段忽略) |
 
 ## 样例
 
