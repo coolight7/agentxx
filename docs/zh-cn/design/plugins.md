@@ -93,7 +93,7 @@ extern "C" PLUGINXX_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx);
 ## 5. 工具与框架复用 (`cxx_utilxx_base` / `cxx_utilxx` / `cxx_pluginxx`)
 
 面向项目内置插件，可通过独立静态库复用主程序的全部基础工具 (字符串/编码检测/UTF-8
-转换/路径规范化/Base64/日志/JSON + HTTP/正则/差异/worktree 等) 与**插件框架**
+转换/路径规范化/Base64/日志/JSON + HTTP/正则/差异 等) 与**插件框架**
 (C ABI 契约 / SDK 核心 / 主程序运行时 / 清单解析)。三者是 `agent/third_party/` 下本项目
 自研的独立 CMake 工程 (与 fmt/simdjson 同级)，经 superbuild 先构建安装，再由 libagentxx /
 各插件 `find_package` 引用其**静态变体**：
@@ -103,7 +103,7 @@ extern "C" PLUGINXX_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx);
 find_package(cxx_utilxx_base REQUIRED)
 target_link_libraries(${PLUGIN_NAME} PRIVATE cxx_utilxx_base_static)
 
-# 重依赖工具 (依赖基础件): HTTP/WS/正则/路由/差异/worktree/散列
+# 重依赖工具 (依赖基础件): HTTP/WS/正则/路由/差异/散列
 find_package(cxx_utilxx REQUIRED)
 target_link_libraries(${PLUGIN_NAME} PRIVATE cxx_utilxx_static)
 
@@ -180,7 +180,7 @@ auto b64 = utilxx_base::base64Encode(data);
   `agentxx/util/cancel_adapter.h` (图引擎令牌与统一取消抽象互适配)
 - 库归属与命名空间：`cxx_utilxx_base` → `utilxx_base` (另含跨库共享契约 `utilxx::CancelToken`
   与 `utilxx::offloadAsync*`, 定义在 `utilxx/cancel.h` / `utilxx/async_offload.h`)；
-  `cxx_utilxx` → `utilxx` (http/ws/regex/router/diff/worktree/crypto)
+  `cxx_utilxx` → `utilxx` (http/ws/regex/router/diff/crypto)
 - 每个库同时产出静态库与动态库，命名规则同 libagentxx
   (Release: `libcxx_utilxx.so` / `libcxx_utilxx_static.a`；Debug 追加 `d`)
 - **独立发布约束**: 三个库按独立工程对外发布, 库内不使用主程序专名 —— 构建变量统一

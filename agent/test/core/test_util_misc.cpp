@@ -5,11 +5,13 @@
 #include "agentxx/agent/io/wire_protocol.h"
 #include "agentxx/util/exception.h"
 #include "utilxx/crypto.h"
+#include "utilxx/http_client.h"
 #include "utilxx/http_header.h"
 #include "utilxx_base/container_util.h"
 #include "utilxx_base/path_sanitize.h"
 #include "utilxx_base/stream.h"
 #include "utilxx_base/system.h"
+#include "utilxx_base/version.h"
 #include <atomic>
 #include <chrono>
 #include <set>
@@ -462,6 +464,42 @@ void test_md5_and_device_id() {
     XX_TEST_EXPECT_EQ(getDeviceId(), devId);
 }
 
+/// 对外标识 (HTTP Server 头 / User-Agent) 的产品名与标识串
+/// - 工具库默认取库名, 主程序在启动时改成自己的名字
+/// - 改动后此用例也能捉住"默认值被写死成某个主程序名字"的回归
+void test_product_identity() {
+    const std::string kDefaultProduct{utilxx_base::kDefaultProductName};
+
+    // 1) 未设置时: 默认产品名 + 版本号
+    utilxx_base::setProductName("");
+    XX_TEST_EXPECT_EQ(utilxx_base::productName(), kDefaultProduct);
+    XX_TEST_EXPECT_EQ(
+        utilxx_base::productToken(),
+        kDefaultProduct + "/" + std::string{utilxx_base::kVersion}
+    );
+
+    // 2) 纯空白同样回退默认值 (避免出现 "/1.0.0" 这种空产品名)
+    utilxx_base::setProductName(" \t ");
+    XX_TEST_EXPECT_EQ(utilxx_base::productName(), kDefaultProduct);
+
+    // 3) 设置后标识串以产品名开头
+    utilxx_base::setProductName("Agentxx");
+    XX_TEST_EXPECT_EQ(utilxx_base::productName(), std::string("Agentxx"));
+    XX_TEST_EXPECT_EQ(
+        utilxx_base::productToken(),
+        std::string("Agentxx/") + std::string{utilxx_base::kVersion}
+    );
+
+    // 4) 默认请求头跟着产品名走 (缓存随产品名刷新)
+    XX_TEST_EXPECT_EQ(
+        std::string(utilxx::HttpClient::defaultHeaders().getSingle("User-Agent")),
+        utilxx_base::productToken()
+    );
+
+    // 收尾: 恢复本程序的产品名 (后续用例可能发 HTTP 请求)
+    utilxx_base::setProductName("Agentxx");
+}
+
 void test_wire_list_dir_protocol() {
     using namespace agentxx::agent;
     using namespace agentxx::agent::io;
@@ -766,6 +804,7 @@ TestResult testUtilMisc() {
     test_path_segment_sanitize();
     test_windows_reserved_name();
     test_md5_and_device_id();
+    test_product_identity();
     test_wire_list_dir_protocol();
     test_wire_permission_state_protocol();
     test_wire_add_model_protocol();

@@ -153,8 +153,11 @@ path/to/agentxx_test string_util regex
       容器/环境/系统探测/取消令牌/异步卸载), 命名空间 `utilxx_base` + 跨库契约 `utilxx::CancelToken`;
       产物 `libcxx_utilxx_base(.so|_static.a)` (Debug 加 `d`)
     - [cxx_utilxx](agent/third_party/cxx_utilxx/) 重依赖工具 (HTTP/WS/正则/路由/差异/
-      worktree/散列), 命名空间 `utilxx`, 依赖 cxx_utilxx_base; 产物 `libcxx_utilxx(.so|_static.a)`
-      (不含数据库依赖: sqlite 封装与设置库属于主程序, 见 `agentxx/util/`)
+      散列), 命名空间 `utilxx`, 依赖 cxx_utilxx_base; 产物 `libcxx_utilxx(.so|_static.a)`
+      (不含数据库依赖: sqlite 封装与设置库属于主程序, 见 `agentxx/util/`; git worktree
+      封装与项目专用标识 (数据目录/UA/Server 头/设备兜底串) 也不再属于该库,
+      git worktree 见 `agentxx/tools/worktree.h`, 对外标识产品名由主程序经
+      `utilxx_base::setProductName` 设置)
     - [cxx_pluginxx](agent/third_party/cxx_pluginxx/) 插件框架 (纯 C ABI 契约 pluginxx/api/、
       插件 SDK kit/{kit.h,guard.h}、运行时 runtime/、主程序实现 host/), 依赖 cxx_utilxx_base +
       fmt + yaml-cpp (仅 Boost 头); 产物 `libcxx_pluginxx(.so|_static.a)`
@@ -276,8 +279,9 @@ path/to/agentxx_test string_util regex
   (拆分自原 `agentxx_util`; 基础件 log/json/json_view/string_util/env/system/
   container_util/hash/lru_cache/path_sanitize/stream/async_mutex/asio_error +
   契约 utilxx/cancel.h、utilxx/async_offload.h; 重依赖 http_client/http_server/
-  ws_client/router/regex/aho_corasick/diff_util/worktree/crypto ——
+  ws_client/router/regex/aho_corasick/diff_util/crypto ——
   数据库封装 sqlite 与设置库 settings_db 已随本次调整迁回主程序 `agentxx/util/`,
+  git worktree 封装在 `agentxx/tools/worktree.h` (仅 libagentxx 工具与测试包含),
   不进入工具库);
   libagentxx 与插件各自静态链接一份 (符号经导出控制隐藏, 互不冲突);
   插件 CMakeLists: `find_package(cxx_utilxx_base|cxx_utilxx)` +
@@ -574,10 +578,16 @@ path/to/agentxx_test string_util regex
   (superbuild 由顶层 AGENTXX_LINUX_IO_URING_SUPPORTED 下发; cxx_utilxx_base 的
   构建开关 CXX_UTILXX_BASE_LINUX_IO_URING_SUPPORTED 与之同源, 一并下发)
 - 三个自研工具库 (cxx_utilxx_base/cxx_utilxx/cxx_pluginxx) 按独立发布维护:
-  库内不使用主程序专名, 构建变量统一 `XX_*` 前缀 (`XX_INSTALL_DIR` /
+  库内不使用主程序专名 (代码/注释/示例都不出现本项目名与仓库路径; 项目专用标识
+  一律留在主程序), 构建变量统一 `XX_*` 前缀 (`XX_INSTALL_DIR` /
   `XX_EXEC_INSTALL_PREFIX` / `XX_LINUX_IO_URING_SUPPORTED` + `XX_IS_*_D` 平台宏),
   未传入时各自回退默认值; superbuild 在公共参数里下发 XX_* 取值
   (见 agent/CMakeLists.txt 的 _AGENTXX_COMMON_CMAKE_ARGS)
+- 对外标识 (HTTP `Server` 头 / `User-Agent`) 的产品名: 工具库默认取库名, 主程序经
+  `utilxx_base::setProductName("Agentxx")` 覆盖。工具库以静态方式各自嵌入 libagentxx
+  与客户端, 产品名要**在用到它的那个模块里**各设一次: `BaseAgent` 构造 (agent 侧
+  的 HTTP/WS 服务与模型请求) 与 `client/main.cpp` (客户端自身的 WS/更新检查,
+  远端模式不建 agent); 两处调用幂等
 - Linux:
     - 使用 shell 脚本编译: [linux_debug_build.sh](agent/script/linux_debug_build.sh) 或 [linux_release_build.sh](agent/script/linux_release_build.sh)
 - Windows:

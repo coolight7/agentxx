@@ -160,8 +160,9 @@ git_worktree 及延迟加载加载 (`ToolSkillSearchSubAgentTask` 模板类, 当
 - **生命周期**: worktree 始终保留 (keep 策略), 不随会话结束删除; remove 操作
   经双层脏检查 (未提交变更/未跟踪文件/未合并提交, 无上游时回退统计分支全部提交),
   有工作成果时拒绝并提醒先 commit, 仅 force=true 可强制删除
-- 底层 git 封装见 `agent/third_party/cxx_utilxx/include/utilxx/worktree.h` (argv 直调不经
-  shell, 超时整组终止; 测试模块 `worktree`)
+- 底层 git 封装见 `agent/lib/include/agentxx/tools/worktree.h` (argv 直调不经
+  shell, 超时整组终止; 测试模块 `worktree`; 需 `AGENTXX_ENABLE_BOOST_PROCESS=ON`,
+  该开关同时决定 libagentxx 是否导出 git 子进程执行实现)
 
 ### 中间件系统
 
@@ -2000,7 +2001,8 @@ agent/
 │   │                             #   container_util/hash/lru_cache/path_sanitize/stream/
 │   │                             #   async_mutex/asio_error + utilxx::CancelToken 与 offload
 │   ├── cxx_utilxx/               # 重依赖工具: http_client/http_server/ws_client/router/
-│   │                             #   regex/aho_corasick/diff_util/worktree/crypto (无数据库依赖)
+│   │                             #   regex/aho_corasick/diff_util/crypto (无数据库依赖;
+│   │                             #   git 工作树封装属本项目, 见 lib/include/agentxx/tools/worktree.h)
 │   ├── cxx_pluginxx/             # 插件框架: api/(abi.h,tables.h) + kit/(kit.h,guard.h) +
 │   │                             #   runtime/(runtime,driver,instance_base,manager_base,op_driver) +
 │   │                             #   host/(loader,manifest,abi_util,capability_registry,

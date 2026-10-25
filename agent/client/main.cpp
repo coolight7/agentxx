@@ -23,6 +23,7 @@
 #include "utilxx/http_client.h"
 #include "utilxx_base/env.h"
 #include "utilxx_base/string_util.h"
+#include "utilxx_base/version.h"
 #include <cstdlib>
 #include <filesystem>
 #include <functional>
@@ -579,6 +580,11 @@ int main(int argn, char** argv) {
 #if XX_IS_DEBUG_D && (XX_IS_LINUX_D || XX_IS_WIN_D)
     utilxx_base::signalError(argv[0]);
 #endif
+
+    // 对外标识 (HTTP 服务端 Server 头 / 客户端 User-Agent) 统一为本项目产品名
+    // - 工具库只提供通用默认值; 客户端进程有自己的 utilxx 副本 (远端模式不建 agent),
+    //   因此这里也要设置一次; 幂等
+    utilxx_base::setProductName("Agentxx");
 
     // 注入程序内置环境变量 (启动后立即捕获, 供 yaml 配置 ${VAR} 展开使用)
     // - 预设环境变量经全局单例 ApplicationEnv 存储 (优先级高于系统环境变量),

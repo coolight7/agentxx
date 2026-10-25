@@ -18,6 +18,11 @@
 - tui 弹窗支持复制
 - 打开会话弹窗支持高亮当前会话
 - 日志侧边栏显示当前会话 session-id
+- agentxx_javascript_engine 的一份脚本仍只对应一个挂载作用域（mountAgentId_
+记“当前挂载”，第二次挂载会覆盖），要做到“每 agent 一份 JS 实例”需要把 JsPluginCtx
+按挂载拆开（每挂载一个 JS runtime + 一套注册），属下一篇量级。单 agent 场景与非 JS
+插件不受影响。
+- Store 特化渲染显示 id
 
 - SVG绘制支持
 - 链式 session 任务队列

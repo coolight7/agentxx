@@ -68,7 +68,7 @@ class AgentResourceApplier;
 
 /// 会话绑定的 git worktree (worktree 模式; 由 agentxx_git_worktree 工具维护)
 /// - 绑定后该会话的相对路径基准、权限隔离边界均切换到 worktree
-/// - 底层 git 操作封装见 [worktree.h](/agent/third_party/cxx_utilxx/include/utilxx/worktree.h),
+/// - 底层 git 操作封装见 [worktree.h](/agent/lib/include/agentxx/tools/worktree.h),
 ///   工具实现见 [git_worktree.h](/agent/lib/include/agentxx/tools/git_worktree.h)
 struct WorktreeBinding {
     /// worktree 名称 (目录名与自动分支名来源)

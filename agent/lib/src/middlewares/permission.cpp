@@ -468,7 +468,7 @@ PermissionDecision PermissionMiddlewareHandle::explainTarget(
     // worktree 会话隔离边界 (优先于一切已注册规则):
     // - worktree 子树 (allowPath) 内读写照常处理 (不参与下面的主检出写拒绝):
     //   该子树是本会话自己的工作区, 而真实 worktree 位于主检出的
-    //   `.agentxx/agent/worktrees/` 下 (见 utilxx::worktree::worktreesRoot),
+    //   `.agentxx/agent/worktrees/` 下 (见 agentxx::tools::worktree::worktreesRoot),
     //   即 allowPath 本身就在 denyWritePath 子树内 —— 必须先于 denyWritePath
     //   判定, 否则会话对自身工作区的写操作也会被命中, 表现为绑定 worktree 后
     //   无法写任何文件

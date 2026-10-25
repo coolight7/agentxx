@@ -969,7 +969,7 @@ asio::awaitable<void> test_permission_subdir_deny_over_wildcard_allow() {
 /// worktree 会话隔离边界: worktree 子树 (allowPath) 内读写放行, 主检出子树
 /// (denyWritePath) 内写操作拒绝 (读不受限)
 /// - 真实 worktree 位于主检出的 `.agentxx/agent/worktrees/{name}` 下 (见
-///   utilxx::worktree::worktreesRoot), 即 allowPath 本身就在 denyWritePath
+///   agentxx::tools::worktree::worktreesRoot), 即 allowPath 本身就在 denyWritePath
 ///   子树内; 因此 allowPath 必须先于 denyWritePath 判定, 否则会话对自身工作区的
 ///   写操作也会被"主检出写拒绝"命中 (表现为绑定 worktree 后无法写任何文件)
 asio::awaitable<void> test_permission_worktree_isolation_subtree() {

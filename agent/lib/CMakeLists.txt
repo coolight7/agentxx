@@ -190,7 +190,16 @@ unset(_agentxx_target)
 # 添加依赖库后应当同步更新 [packageProject:DEPENDENCIES]
 # (cxx_utilxx_base/cxx_utilxx/cxx_pluginxx/cxx_pluginxx_ui 为 libagentxx 的 PUBLIC 依赖:
 #  处理方 find_package agentxx_shared/agentxx_static 时经 find_dependency 传递解析)
-set (agentxx_DEPENDENCIES "iconv CONFIG;uchardet;fmt;simdjson;ZLIB CONFIG;OpenSSL;Boost CONFIG;yaml-cpp;CURL CONFIG;SQLite3 CONFIG;html2md;Glob;cxx_utilxx_base;cxx_utilxx;cxx_pluginxx;cxx_pluginxx_ui")
+# - 开启 AGENTXX_ENABLE_BOOST_PROCESS 时导出接口里会出现 Boost::process
+#   (mcp_client 与本项目侧的 git worktree 用), 因此须在这里声明该组件;
+#   工具库已不再提供 boost.process 依赖, 不能依赖它们的 config 顺带解析
+if (AGENTXX_ENABLE_BOOST_PROCESS)
+  set(_agentxx_boost_dependency "Boost CONFIG COMPONENTS process")
+else ()
+  set(_agentxx_boost_dependency "Boost CONFIG")
+endif ()
+set (agentxx_DEPENDENCIES "iconv CONFIG;uchardet;fmt;simdjson;ZLIB CONFIG;OpenSSL;${_agentxx_boost_dependency};yaml-cpp;CURL CONFIG;SQLite3 CONFIG;html2md;Glob;cxx_utilxx_base;cxx_utilxx;cxx_pluginxx;cxx_pluginxx_ui")
+unset(_agentxx_boost_dependency)
 # ===== 3) 第三方库 (本项目自编译/自带, 均安装于 AGENTXX_INSTALL_DIR 或 BOOST_ROOT,
 # 经 CMAKE_PREFIX_PATH 命中) =====
 # - iconv/ZLIB/SQLite3/CURL/Boost 必须显式 CONFIG 模式: 避免 CMake 内置

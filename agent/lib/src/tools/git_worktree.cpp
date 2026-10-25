@@ -5,7 +5,7 @@
 #include "agentxx/event/event_stream.h"
 #include "agentxx/event/events.h"
 #include "utilxx/async_offload.h"
-#include "utilxx/worktree.h"
+#include "agentxx/tools/worktree.h"
 #include "utilxx_base/string_util.h"
 #include <chrono>
 #include <filesystem>
@@ -16,7 +16,7 @@ namespace tools {
 
 namespace {
 
-using utilxx::worktree::GitResult;
+using agentxx::tools::worktree::GitResult;
 
 /// 读取工具参数中的字符串 (缺失/类型不符回退默认值)
 /// - utilxx_base::Json 的 contains/operator[] 不接受 string_view, 键统一用 std::string
@@ -30,7 +30,7 @@ std::string
 
 /// 生成自动 worktree 名称: wt-{unix秒}-{自增序号} (同秒冲突时递增序号)
 std::string generateWorktreeName(const std::string& repoRootDir) {
-    namespace fw = utilxx::worktree;
+    namespace fw = agentxx::tools::worktree;
     auto now     = std::chrono::duration_cast<std::chrono::seconds>(
                    std::chrono::system_clock::now().time_since_epoch()
     )
@@ -219,7 +219,7 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const utilxx_base::J
             agentxx::util::adaptCancelToken(cancelToken),
             [&, effectiveDir, knownRepoRoot](std::atomic<bool>& cancelFlag
             ) -> asio::awaitable<std::string> {
-                namespace fw     = utilxx::worktree;
+                namespace fw     = agentxx::tools::worktree;
                 std::string root = knownRepoRoot;
                 if (root.empty()) {
                     if (effectiveDir.empty() || !fw::isInsideWorkTree(effectiveDir)) {
@@ -297,7 +297,7 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const utilxx_base::J
 
         // 名称清洗/生成 (纯函数, io 线程可做); 冲突检查在 offload 内以最终状态为准
         std::string name
-            = userName.empty() ? std::string{} : utilxx::worktree::sanitizeWorktreeName(userName);
+            = userName.empty() ? std::string{} : worktree::sanitizeWorktreeName(userName);
         if (!userName.empty() && name.empty()) {
             throw std::invalid_argument{fmt::format(
                 "invalid worktree name '{}' (allowed chars: letters, digits, '.', '_', '-')",
@@ -321,7 +321,7 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const utilxx_base::J
             agentxx::util::adaptCancelToken(cancelToken),
             [effectiveDir, name, baseRef](std::atomic<bool>& cancelFlag
             ) -> asio::awaitable<CreateOutcome> {
-                namespace fw = utilxx::worktree;
+                namespace fw = agentxx::tools::worktree;
                 CreateOutcome out;
                 if (effectiveDir.empty() || !fw::isInsideWorkTree(effectiveDir)) {
                     out.error = "not inside a git repository";
@@ -417,7 +417,7 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const utilxx_base::J
             agentxx::util::adaptCancelToken(cancelToken),
             [&, targetName, targetPath, rootForList, effectiveDir](std::atomic<bool>&)
                 -> asio::awaitable<std::string> {
-                namespace fw     = utilxx::worktree;
+                namespace fw     = agentxx::tools::worktree;
                 std::string root = rootForList;
                 std::string path = targetPath;
                 if (path.empty()) {
@@ -491,7 +491,7 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const utilxx_base::J
             };
         }
         std::string name = targetName.empty() ? binding->name
-                                              : utilxx::worktree::sanitizeWorktreeName(targetName);
+                                              : worktree::sanitizeWorktreeName(targetName);
         if (name.empty()) {
             throw std::invalid_argument{fmt::format("invalid worktree name '{}'", targetName)};
         }
@@ -510,7 +510,7 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const utilxx_base::J
             // 图引擎取消令牌 -> utilxx::CancelToken (统一取消抽象)
             agentxx::util::adaptCancelToken(cancelToken),
             [&, name, force](std::atomic<bool>& cancelFlag) -> asio::awaitable<RemoveOutcome> {
-                namespace fw = utilxx::worktree;
+                namespace fw = agentxx::tools::worktree;
                 RemoveOutcome out;
                 std::string   root;
                 {

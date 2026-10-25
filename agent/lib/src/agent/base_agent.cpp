@@ -29,6 +29,7 @@
 #include "utilxx/async_offload.h"
 #include "utilxx/diff_util.h"
 #include "utilxx_base/string_util.h"
+#include "utilxx_base/version.h"
 #include <algorithm>
 #include <atomic>
 #include <cassert>
@@ -54,6 +55,11 @@ BaseAgent::BaseAgent(std::shared_ptr<agentxx::agent::AgentConfig> in_config) {
     agentContext->agentConfig = in_config;
     assert(nullptr != in_config);
     assert(in_config->model.isValid());
+
+    // 对外标识 (HTTP 服务端 Server 头 / 客户端 User-Agent) 统一为本项目产品名
+    // - 工具库只提供通用默认值, 产品名由主程序设置; 每份 utilxx 静态副本各自设置一次
+    // - 幂等, 嵌入场景 (FFI / 测试 / 基准) 也经本构造函数覆盖
+    utilxx_base::setProductName("Agentxx");
 
     // 会话 SQLite 持久化 (开启时): 消息上下文/展示历史/share store
     // 落库到 {root}/{sessionId}/, 供重启恢复; root 可经配置重定向
