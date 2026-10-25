@@ -6,6 +6,7 @@
 #include "agentxx/plugin/plugin_manager.h"
 #include "asio/awaitable.hpp"
 #include "asio/io_context.hpp"
+#include "utilxx_base/json.h"
 #include <chrono>
 #include <functional>
 #include <map>
@@ -179,6 +180,26 @@ public:
     /// 当前运行中的子代理数量
     size_t runningSubagents() const;
 
+    // =====================================================================
+    // 会话存储根占用 (同一份磁盘会话只能由一个 agent 写)
+    // =====================================================================
+    //
+    // 会话以 (存储根, sessionId) 定位: 不同存储根可以同名, 同一存储根必须独占
+    // (进程内的会话写租约是可重入的, 撞了不会报错, 只会静默串数据)。因此 agent
+    // 开始用某个存储根前先登记, 撞上就拒绝, 早失败而不是等写库时才发现。
+
+    /// 登记一个 agent 对规范化会话存储根独占
+    /// - 路径先规范化 (绝对路径 + 消解符号链接; Windows 统一小写) 再比较;
+    /// - agent 没有会话存储 (子代理默认) 或路径为空: 直接通过 (不占用);
+    /// - 同一存储根已属于别的 agent: 记 ERROR 并返回 false (调用方应拒绝该 agent)
+    bool claimSessionStoreRoot(agentxx::agent::AgentContext& ctx, std::string_view agentId);
+
+    /// 释放某个 agent 的会话存储根占用 (agent 关闭时)
+    void releaseSessionStoreRoot(std::string_view agentId);
+
+    /// 已被占用的会话存储根 (规范化路径 -> agentId; 诊断用)
+    utilxx_base::Json sessionStoreOwnersJson() const;
+
     /// 根 agent (attachRoot 设置; 未注册为空)
     std::shared_ptr<BaseAgent> rootAgent() const;
 
@@ -237,6 +258,8 @@ private:
     size_t runningSubagentCount_ = 0;
     /// subagent sessionId -> 嵌套深度 (根会话不在表内, 视为 0)
     std::map<std::string, size_t, std::less<>> sessionDepth_;
+    /// 已占用的会话存储根 (规范化路径 -> agentId)
+    std::map<std::string, std::string, std::less<>> storeRoots_;
 };
 
 } // namespace agent

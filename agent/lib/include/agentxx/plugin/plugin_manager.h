@@ -211,6 +211,10 @@ public:
         bool ownsGraphDefinition = false;
         /// 该实例挂了哪些 agent (诊断: 一眼看出"装在进程里但没挂到本 agent")
         std::vector<std::string> mountedAgents;
+        /// 当前已挂载的 agent 数 (= [mountedAgents] 的长度; 0 = 没有任何挂载)
+        size_t mountCount = 0;
+        /// 清单声明的资源条数 (skill 目录 + memory 文件 + MCP 服务)
+        size_t manifestResourceCount = 0;
     };
 
     /// 建立插件管理器

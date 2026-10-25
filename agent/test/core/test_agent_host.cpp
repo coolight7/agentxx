@@ -4,6 +4,7 @@
 
 #include "agentxx/agent/agent_host.h"
 #include "agentxx/agent/code_agent.h"
+#include "agentxx/agent/session_store.h"
 #include "agentxx/event/events.h"
 #include "agentxx/protocol/a2a_client.h"
 #include "agentxx/protocol/a2a_server.h"
@@ -1038,11 +1039,66 @@ asio::awaitable<void> test_host_remote_a2a() {
     co_return;
 }
 
+/// 验证: 会话存储根独占
+///
+/// 同一份磁盘会话只能由一个 agent 写（进程内的会话写租约可重入, 撞了不报错只会串数据），
+/// 所以第二个 agent 要开同一存储根时必须在开头就拒绝；规范化（相对路径/大小写/
+/// 末尾分隔符）后相同也算冲突。
+asio::awaitable<void> test_host_store_root_conflict() {
+    auto io = std::make_shared<asio::io_context>();
+    auto host = agentxx::agent::AgentHost::create({.ioCtx = io});
+
+    // 临时目录做存储根 (SessionStore 会在目录里建库文件)
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    const auto      base = fs::temp_directory_path(ec) / "agentxx_store_root_test";
+    fs::create_directories(base, ec);
+    const std::string rootA = (base / "a").string();
+    const std::string rootB = (base / "b").string();
+    const std::string rootATrailing = rootA + "/"; ///< 仅写法不同, 规范化后相同
+
+    auto makeCtxWithStore = [](std::string_view root) {
+        auto ctx = std::make_shared<agentxx::agent::AgentContext>();
+        ctx->sessions->sessionStore
+            = std::make_shared<agentxx::agent::SessionStore>(std::string{root});
+        return ctx;
+    };
+
+    auto ctxRoot = makeCtxWithStore(rootA);
+    auto ctxSub  = makeCtxWithStore(rootATrailing);
+
+    // 第一个 agent 占用成功并登记
+    XX_TEST_EXPECT_TRUE(host->claimSessionStoreRoot(*ctxRoot, "root"));
+    XX_TEST_EXPECT_EQ(host->sessionStoreOwnersJson().size(), size_t{1});
+    // 同一存储根给别的 agent: 拒绝 (相对/绝对写法规范化后相同也算冲突)
+    XX_TEST_EXPECT_FALSE(host->claimSessionStoreRoot(*ctxSub, "agent_2"));
+    XX_TEST_EXPECT_EQ(host->sessionStoreOwnersJson().size(), size_t{1});
+    // 同一 agent 重复占用 = 幂等
+    XX_TEST_EXPECT_TRUE(host->claimSessionStoreRoot(*ctxRoot, "root"));
+    // 没有会话存储的 agent: 不占用, 直接通过
+    {
+        auto bare = std::make_shared<agentxx::agent::AgentContext>();
+        XX_TEST_EXPECT_TRUE(host->claimSessionStoreRoot(*bare, "agent_3"));
+    }
+    // 不同存储根: 各自可用
+    auto ctxOther = makeCtxWithStore(rootB);
+    XX_TEST_EXPECT_TRUE(host->claimSessionStoreRoot(*ctxOther, "agent_4"));
+    XX_TEST_EXPECT_EQ(host->sessionStoreOwnersJson().size(), size_t{2});
+    // 释放后另一 agent 可以用同一存储根
+    host->releaseSessionStoreRoot("root");
+    XX_TEST_EXPECT_EQ(host->sessionStoreOwnersJson().size(), size_t{1});
+    XX_TEST_EXPECT_TRUE(host->claimSessionStoreRoot(*ctxSub, "agent_2"));
+    XX_TEST_EXPECT_EQ(host->sessionStoreOwnersJson().size(), size_t{2});
+    fs::remove_all(base, ec);
+    co_return;
+}
+
 asio::awaitable<TestResult> run_agent_host_tests() {
     g_host_passed = 0;
     g_host_failed = 0;
     try {
         co_await test_host_registry();
+        co_await test_host_store_root_conflict();
         co_await test_host_spawn_e2e();
         co_await test_host_spawn_same_context();
         co_await test_host_spawn_tool_policy();

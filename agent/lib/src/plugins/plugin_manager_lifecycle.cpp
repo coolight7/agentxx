@@ -971,6 +971,9 @@ void fillInstanceView(PluginManager::PluginListView& view, const PluginInstance&
     view.blockedByDependencies = inst.blockedByDependencies;
     view.loadMs                = inst.loadMs;
     view.eventSubCount         = inst.subscriptions.size();
+    view.manifestResourceCount = inst.manifestResources.skillDirs.size()
+                                 + inst.manifestResources.memoryFiles.size()
+                                 + inst.manifestResources.mcpServers.size();
     for (const auto& cap : inst.capabilityRegistrations) {
         view.capabilities.push_back(cap.name);
     }
@@ -1027,6 +1030,7 @@ std::vector<PluginManager::PluginListView> PluginManager::list() const {
                 mergeMountView(view, *mount, *inst);
             }
         }
+        view.mountCount = view.mountedAgents.size();
         out.push_back(std::move(view));
     }
     return out;
@@ -1042,6 +1046,7 @@ std::vector<PluginManager::PluginListView> PluginManager::listForMount(const Plu
         PluginListView view;
         fillInstanceView(view, *inst);
         mergeMountView(view, mount, *inst);
+        view.mountCount = view.mountedAgents.size();
         out.push_back(std::move(view));
     }
     return out;
@@ -1064,6 +1069,9 @@ std::string PluginManager::listPluginsJson() {
         item["optional_depends"]    = v.optionalDepends;
         item["required_interfaces"] = v.requiredInterfaces;
         item["optional_interfaces"] = v.optionalInterfaces;
+        // 挂载情况 (进程一份实例, 可以挂到多个 agent 上; 也为 0 表示尚未挂载)
+        item["mount_count"]  = v.mountCount;
+        item["mount_agents"] = v.mountedAgents;
         arr.push_back(std::move(item));
     }
     return arr.dump();

@@ -297,12 +297,19 @@ asio::awaitable<TestResult> run_assembly_snapshot_tests() {
             snapshot["graph"].value("name", std::string{}),
             std::string{"agentxx.default"}
         );
+        // 插件段: 进程角度 (`plugins`) 与本 agent 角度 (`plugins_agent`) 各一段;
+        // 没有插件管理器时两段都是空的 (但键始终存在, 界面/诊断不必判空)
+        XX_TEST_EXPECT_TRUE(snapshot.contains("plugins"));
+        XX_TEST_EXPECT_TRUE(snapshot["plugins"].is_array());
+        XX_TEST_EXPECT_EQ(snapshot["plugins"].size(), size_t{0});
+        XX_TEST_EXPECT_TRUE(snapshot.contains("plugins_agent"));
+        XX_TEST_EXPECT_TRUE(snapshot["plugins_agent"].is_object());
+        XX_TEST_EXPECT_EQ(snapshot["plugins_agent"].value("count", -1), 0);
         XX_TEST_EXPECT_GE(snapshot["graph"].value("nodes", 0), 4);
         XX_TEST_EXPECT_FALSE(snapshot["persistence"].value("enabled", true));
 
         // 钩子清单: 7 个固定点都在, 没有插件登记处理器时为 0 (派发器也不在链上)
-        XX_TEST_EXPECT_TRUE(snapshot.contains("hooks"));
-        XX_TEST_EXPECT_EQ(snapshot["hooks"].value("count", 0), 7);
+        XX_TEST_EXPECT_TRUE(snapshot.contains("hooks"));        XX_TEST_EXPECT_EQ(snapshot["hooks"].value("count", 0), 7);
         XX_TEST_EXPECT_EQ(snapshot["hooks"].value("handlers", 0), 0);
         XX_TEST_EXPECT_TRUE(snapshot["hooks"]["points"].is_array());
         XX_TEST_EXPECT_EQ(snapshot["hooks"]["points"].size(), size_t{7});

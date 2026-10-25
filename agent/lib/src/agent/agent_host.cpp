@@ -2,6 +2,7 @@
 
 #include "agentxx/agent/agent_runner.h"
 #include "agentxx/agent/code_agent.h"
+#include "agentxx/agent/session_store.h"
 #include "agentxx/event/event_stream.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/protocol/a2a_client.h"
@@ -18,9 +19,12 @@
 #include "fmt/format.h"
 #include "utilxx_base/container_util.h"
 #include "utilxx_base/log.h"
+#include "utilxx_base/string_util.h"
 #include <algorithm>
 #include <cassert>
+#include <cctype>
 #include <chrono>
+#include <filesystem>
 #include <sstream>
 
 namespace agentxx {
@@ -204,19 +208,99 @@ std::shared_ptr<BaseAgent> AgentHost::rootAgent() const {
     return rootAgent_;
 }
 
+namespace {
+
+/// 规范化会话存储根 (比较用): 绝对路径 + 消解符号链接; Windows 统一小写
+std::string normalizeStoreRoot(std::string_view root) {
+    namespace fs = std::filesystem;
+    if (root.empty()) {
+        return {};
+    }
+    std::error_code ec;
+    fs::path        path = utilxx_base::utf8ToPath(std::string{root});
+    fs::path        abs  = fs::absolute(path, ec);
+    if (ec) {
+        abs = path;
+    }
+    ec.clear();
+    fs::path canon = fs::weakly_canonical(abs, ec);
+    if (ec) {
+        canon = abs.lexically_normal();
+    }
+    std::string out = utilxx_base::pathToUtf8Generic(canon);
+    // 去掉末尾分隔符: `weakly_canonical` 会保留输入里的结尾分隔符,
+    // 否则 `.../a` 与 `.../a/` 会变成两个不同的键
+    while (out.size() > 1 && (out.back() == '/' || out.back() == '\\')) {
+        out.pop_back();
+    }
+#if XX_IS_WIN_D
+    // Windows 路径不区分大小写: 统一小写后再比较
+    std::transform(out.begin(), out.end(), out.begin(), [](unsigned char c) {
+        return static_cast<char>(std::tolower(c));
+    });
+#endif
+    return out;
+}
+
+} // namespace
+
+bool AgentHost::claimSessionStoreRoot(AgentContext& ctx, std::string_view agentId) {
+    if (!ctx.sessions || !ctx.sessions->sessionStore) {
+        // 没有会话存储 (子代理默认): 不占用存储根, 也就不用比较
+        return true;
+    }
+    const std::string root = normalizeStoreRoot(ctx.sessions->sessionStore->rootDir());
+    if (root.empty()) {
+        return true;
+    }
+    const std::string id{agentId.empty() ? std::string_view{"root"} : agentId};
+    auto              it = storeRoots_.find(root);
+    if (it != storeRoots_.end() && it->second != id) {
+        XX_LOGE(
+            "会话存储根 '{}' 已被 agent '{}' 打开, 拒绝 agent '{}' 再打开同一存储根 "
+            "(同一份磁盘会话只能由一个 agent 写)",
+            root,
+            it->second,
+            id
+        );
+        return false;
+    }
+    storeRoots_[root] = id;
+    return true;
+}
+
+void AgentHost::releaseSessionStoreRoot(std::string_view agentId) {
+    std::erase_if(storeRoots_, [agentId](const auto& item) {
+        return item.second == agentId;
+    });
+}
+
+utilxx_base::Json AgentHost::sessionStoreOwnersJson() const {
+    utilxx_base::Json out = utilxx_base::Json::object();
+    for (const auto& [root, agentId] : storeRoots_) {
+        out[root] = agentId;
+    }
+    return out;
+}
+
 void AgentHost::attachRoot(std::shared_ptr<BaseAgent> rootAgent) {
     assert(rootAgent && "attachRoot: root agent is null");
     if (rootAgent_) {
         XX_LOGW("AgentHost::attachRoot: root already attached, ignored");
         return;
     }
-    rootAgent_ = std::move(rootAgent);
-
-    auto ctx = rootAgent_->getContext();
+    auto ctx = rootAgent->getContext();
     assert(ctx && "attachRoot: root agent context is null");
     if (!ctx) {
         return;
     }
+    // 会话存储根必须先登记成功: 同一份磁盘会话只能由一个 agent 写
+    // (写租约在进程内可重入, 撞了不会报错, 只会静默串数据)
+    if (!claimSessionStoreRoot(*ctx, ctx->agentId.empty() ? "root" : ctx->agentId)) {
+        XX_LOGE("AgentHost::attachRoot: 拒绝挂载该 agent (会话存储根已被别的 agent 占用)");
+        return;
+    }
+    rootAgent_ = std::move(rootAgent);
     // 注入共享基础设施: threadPool 上提共享 (避免每 agent 一份线程池),
     // host 引用 (供节点/工具经 AgentContext 感知 agent 节点容器)
     ctx->threadPool = threadPool_;
@@ -561,6 +645,19 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
     // 唯一运行 id 与 session id
     const auto agentId  = nextAgentId();
     const auto parentId = std::string{parentSessionId};
+    // 会话存储根独占: 子代理默认没有会话存储 (直接通过); 调用方自己开了存储时
+    // 同一存储根已被别的 agent 占用就拒绝派生 (否则写库时才会静默串数据)
+    if (!claimSessionStoreRoot(*subCtx, agentId)) {
+        co_return events::RespSubagentBatchItem{
+            .resultId     = task.resultId,
+            .hasError     = true,
+            .errorMessage = fmt::format(
+                "AgentHost: session store root already opened by another agent, refusing "
+                "to spawn `{}`",
+                agentId
+            ),
+        };
+    }
     // 同上下文模式: 子代理直接运行在指定 session (与父会话同 session),
     // 共享上下文前缀; 默认模式使用独立 subagent 线程 id (上下文隔离)
     const auto subagentSessionId
@@ -1088,6 +1185,7 @@ void AgentHost::destroyAgent(std::string_view agentId) {
         // node->agent.reset() 释放独立 AgentContext / engine / SessionStore,
         // 该 agent 的全部会话与中间件状态随析构整体释放
         node->agent.reset();
+        releaseSessionStoreRoot(agentId);
     }
 }
 
@@ -1111,6 +1209,7 @@ asio::awaitable<bool>
     }
     registry_.remove(agentId);
     node->agent.reset();
+    releaseSessionStoreRoot(agentId);
     co_return true;
 }
 

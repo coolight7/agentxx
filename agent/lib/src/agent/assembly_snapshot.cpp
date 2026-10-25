@@ -90,51 +90,78 @@ utilxx_base::Json modelSnapshotJson(const ModelConfig& mc) {
     return j;
 }
 
-/// 加载侧记录一次的插件条目 → 快照条目
-void appendPluginEntries(const AgentContext& ctx, utilxx_base::Json& pluginsOut) {
+/// 插件段（进程角度）: 每个已加载实例的元信息、挂载数/挂载到哪些 agent、清单资源
+///
+/// - 这一份回答"进程里到底装了什么、装了几份、挂到谁身上了"；
+/// - 本 agent 上的实体计数在 [appendMountPluginEntries]（`plugins_agent` 段）。
+void appendHostPluginEntries(const AgentContext& ctx, utilxx_base::Json& pluginsOut) {
+    pluginsOut = utilxx_base::Json::array();
+    if (!ctx.pluginManager) {
+        return;
+    }
+    for (const auto& v : ctx.pluginManager->list()) {
+        utilxx_base::Json item = utilxx_base::Json::object();
+        item["name"]              = v.name;
+        item["version"]           = v.version;
+        item["path"]              = v.path;
+        item["config_path"]       = v.configPath;
+        item["enabled"]           = v.enabled;
+        item["user_disabled"]     = v.userDisabled;
+        item["blocked_by_deps"]   = v.blockedByDependencies;
+        item["inflight"]          = v.inflight;
+        item["load_ms"]           = v.loadMs;
+        item["mount_count"]       = v.mountCount;
+        item["mount_agents"]      = v.mountedAgents;
+        item["manifest_resources"] = v.manifestResourceCount;
+        item["capability_count"]  = v.capabilities.size();
+        item["capabilities"]      = v.capabilities;
+        item["event_sub_count"]   = v.eventSubCount;
+        item["depends"]           = v.depends;
+        item["optional_depends"]  = v.optionalDepends;
+        item["require_interfaces"]  = v.requiredInterfaces;
+        item["optional_interfaces"] = v.optionalInterfaces;
+        pluginsOut.push_back(std::move(item));
+    }
+}
+
+/// 插件段（本 agent 角度）: 本挂载上装了哪些插件、各自的实体计数
+///
+/// - 只列本挂载有记录的实例；实体计数取 [PluginMount::RegistrationInventory]
+///   （禁用/拆挂载后各项回到 0）；
+/// - `config_json` 是本挂载拿到的挂载级配置（加载表 args ⊕ `plugin.mount[].args`）。
+void appendMountPluginEntries(const AgentContext& ctx, utilxx_base::Json& pluginsOut) {
     pluginsOut = utilxx_base::Json::array();
     if (!ctx.pluginManager || !ctx.pluginMount) {
         return;
     }
     for (const auto& v : ctx.pluginManager->listForMount(*ctx.pluginMount)) {
-        utilxx_base::Json item  = utilxx_base::Json::object();
-        item["name"]            = v.name;
-        item["version"]         = v.version;
-        item["path"]            = v.path;
-        item["config_path"]     = v.configPath;
-        item["enabled"]         = v.enabled;
-        item["user_disabled"]   = v.userDisabled;
+        utilxx_base::Json item = utilxx_base::Json::object();
+        item["name"]           = v.name;
+        item["version"]        = v.version;
+        item["enabled"]        = v.enabled;
+        item["user_disabled"]  = v.userDisabled;
         item["blocked_by_deps"] = v.blockedByDependencies;
-        item["inflight"]        = v.inflight;
-        item["load_ms"]         = v.loadMs;
-        item["tools"]           = v.tools;
-        item["tool_count"]      = v.tools.size();
-        item["hook_count"]      = v.hookCount;
-        // 钩子处理器的生效优先级 (按派发顺序; 一眼看出谁先跑)
+        item["tools"]          = v.tools;
+        item["tool_count"]     = v.tools.size();
+        item["hook_count"]     = v.hookCount;
+        // 钩子处理器的生效优先级（按派发顺序; 一眼看出谁先跑）
         utilxx_base::Json hookPriorities = utilxx_base::Json::array();
         for (const auto priority : v.hookPriorities) {
             hookPriorities.push_back(priority);
         }
-        item["hook_priorities"]  = std::move(hookPriorities);
-        item["graph_node_count"] = v.graphNodeCount;
-        item["event_sub_count"]  = v.eventSubCount;
-        item["capability_count"] = v.capabilities.size();
-        item["capabilities"]     = v.capabilities;
-        item["permission_tools"] = v.permissionToolCount;
-        // 功能点: 本实例声明的点数 / 登记的实现数 (禁用/卸载后回 0)
-        item["feature_point_count"] = v.featurePointCount;
-        item["feature_impl_count"]  = v.featureImplCount;
-        // 统一注册清单合计: 0 = 该实例当前没有向主程序贡献任何注册
+        item["hook_priorities"]       = std::move(hookPriorities);
+        item["graph_node_count"]      = v.graphNodeCount;
+        item["permission_tools"]      = v.permissionToolCount;
+        // 功能点: 本实例在本挂载上声明的点数 / 登记的实现数（禁用/拆挂载后回 0）
+        item["feature_point_count"]   = v.featurePointCount;
+        item["feature_impl_count"]    = v.featureImplCount;
+        // 统一注册清单合计: 0 = 该实例当前没有向本 agent 贡献任何注册
         item["registration_total"]    = v.registrationTotal;
         item["prompt_key_count"]      = v.promptKeyCount;
         item["skill_dir_count"]       = v.skillDirCount;
         item["memory_file_count"]     = v.memoryFileCount;
         item["mcp_namespace_count"]   = v.mcpNamespaceCount;
         item["owns_graph_definition"] = v.ownsGraphDefinition;
-        item["depends"]               = v.depends;
-        item["optional_depends"]      = v.optionalDepends;
-        item["require_interfaces"]    = v.requiredInterfaces;
-        item["optional_interfaces"]   = v.optionalInterfaces;
         pluginsOut.push_back(std::move(item));
     }
 }
@@ -341,9 +368,23 @@ utilxx_base::Json buildRuntimeSnapshot(const AgentContext& ctx) {
     root["tools"]                  = std::move(toolSection);
 
     // ---- 插件 ----
+    // `plugins`: 进程角度 (装了哪些、挂到几个 agent 上)
+    // `plugins_agent`: 本 agent 角度 (本挂载装了哪些、各自的实体计数)
     utilxx_base::Json plugins = utilxx_base::Json::array();
-    appendPluginEntries(ctx, plugins);
+    appendHostPluginEntries(ctx, plugins);
     root["plugins"] = std::move(plugins);
+
+    utilxx_base::Json mountPlugins = utilxx_base::Json::array();
+    appendMountPluginEntries(ctx, mountPlugins);
+    utilxx_base::Json pluginsAgent    = utilxx_base::Json::object();
+    pluginsAgent["agent_id"]          = ctx.pluginMount ? ctx.pluginMount->agentId() : std::string{};
+    pluginsAgent["mount_seq"]         = ctx.pluginMount ? ctx.pluginMount->mountSeq() : 0;
+    pluginsAgent["mount_policy"]      = ctx.agentConfig
+                                            ? static_cast<int>(ctx.agentConfig->pluginMountPolicy)
+                                            : 0;
+    pluginsAgent["count"]   = mountPlugins.size();
+    pluginsAgent["plugins"] = std::move(mountPlugins);
+    root["plugins_agent"]   = std::move(pluginsAgent);
 
     // ---- 执行图 ----
     utilxx_base::Json graph = utilxx_base::Json::object();
@@ -617,23 +658,54 @@ std::vector<std::string> renderAssemblySnapshot(const utilxx_base::Json& snapsho
             if (p.value("blocked_by_deps", false)) {
                 state += "/blocked-by-deps";
             }
+            std::string mountAgents;
+            if (p.contains("mount_agents") && p["mount_agents"].is_array()) {
+                for (const auto& agentId : p["mount_agents"]) {
+                    if (!mountAgents.empty()) {
+                        mountAgents += ", ";
+                    }
+                    mountAgents += agentId.get<std::string>();
+                }
+            }
             add(fmt::format(
-                "  - {} v{} [{}] load={}ms tools={} hooks={} graphNodes={} events={} caps={} "
-                "permTools={} features={}/{}{}",
+                "  - {} v{} [{}] load={}ms mounts={}({}) resources={} events={} caps={}",
                 p.value("name", std::string{}),
                 p.value("version", std::string{}),
                 state,
                 p.value("load_ms", 0),
-                p.value("tool_count", 0),
-                p.value("hook_count", 0),
-                p.value("graph_node_count", 0),
+                p.value("mount_count", 0),
+                mountAgents,
+                p.value("manifest_resources", 0),
                 p.value("event_sub_count", 0),
-                p.value("capability_count", 0),
-                p.value("permission_tools", 0),
-                p.value("feature_point_count", 0),
-                p.value("feature_impl_count", 0),
-                hookPrioritiesText(p)
+                p.value("capability_count", 0)
             ));
+        }
+    }
+    // 本 agent 角度: 本挂载装了哪些插件、各自注册了多少东西
+    if (snapshot.contains("plugins_agent") && snapshot["plugins_agent"].is_object()) {
+        const auto& mount = snapshot["plugins_agent"];
+        add(fmt::format(
+            "plugins_agent '{}' (seq {}, policy {}): {} plugin(s)",
+            mount.value("agent_id", std::string{}),
+            mount.value("mount_seq", 0),
+            mount.value("mount_policy", 0),
+            mount.value("count", 0)
+        ));
+        if (mount.contains("plugins") && mount["plugins"].is_array()) {
+            for (const auto& p : mount["plugins"]) {
+                add(fmt::format(
+                    "  - {} tools={} hooks={} graphNodes={} permTools={} features={}/{} total={}{}",
+                    p.value("name", std::string{}),
+                    p.value("tool_count", 0),
+                    p.value("hook_count", 0),
+                    p.value("graph_node_count", 0),
+                    p.value("permission_tools", 0),
+                    p.value("feature_point_count", 0),
+                    p.value("feature_impl_count", 0),
+                    p.value("registration_total", 0),
+                    hookPrioritiesText(p)
+                ));
+            }
         }
     }
     // 功能点: 声明了几个点、每个点谁在生效 / 有几条实现 (排障时先看这里)

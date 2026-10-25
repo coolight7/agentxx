@@ -1,6 +1,7 @@
 #include "agentxx/util/diagnostics.h"
 
 #include "agentxx/agent/assembly_snapshot.h"
+#include "agentxx/agent/agent_host.h"
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/session_store.h"
 #include "agentxx/plugin/plugin_manager.h"
@@ -415,6 +416,21 @@ std::string buildDiagnosticsText(
                 mount->mountedCount(),
                 names
             ));
+        }
+        // 会话存储根占用 (同一份磁盘会话只能由一个 agent 写)
+        if (auto host = ctx.host.lock(); host != nullptr) {
+            const auto owners = host->sessionStoreOwnersJson();
+            lines.push_back("");
+            lines.push_back("## session store roots");
+            if (owners.empty()) {
+                lines.push_back("- (none claimed)");
+            } else {
+                for (const auto& [root, agentId] : owners.items()) {
+                    lines.push_back(
+                        fmt::format("- agent `{}`: {}", agentId.get<std::string>(), root)
+                    );
+                }
+            }
         }
     }
 

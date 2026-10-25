@@ -12,6 +12,7 @@
 #include "agentxx-test/plugin/test_plugin_host_mount.h"
 
 #include "agentxx/agent/context.h"
+#include "agentxx/agent/assembly_snapshot.h"
 #include "agentxx/event/event_stream.h"
 #include "agentxx/feature/points.h"
 #include "agentxx/feature/registry.h"
@@ -251,6 +252,27 @@ asio::awaitable<TestResult> run_plugin_host_mount_tests() {
     XX_TEST_EXPECT_EQ(agentB->pluginMount->mountedCount(), size_t{1});
     XX_TEST_EXPECT_TRUE(agentA->toolRegistry->contains("example_echo"));
     XX_TEST_EXPECT_TRUE(agentB->toolRegistry->contains("example_echo"));
+
+    // 加载快照: 进程角度 (`plugins`) 与本 agent 角度 (`plugins_agent`) 各报告自己的数字
+    {
+        const auto snapshot = agent::buildRuntimeSnapshot(*agentA);
+        XX_TEST_EXPECT_TRUE(snapshot["plugins"].is_array());
+        XX_TEST_EXPECT_EQ(snapshot["plugins"].size(), size_t{1});
+        XX_TEST_EXPECT_EQ(snapshot["plugins"][0].value("mount_count", 0), 2);
+        XX_TEST_EXPECT_EQ(snapshot["plugins"][0]["mount_agents"].size(), size_t{2});
+
+        XX_TEST_EXPECT_TRUE(snapshot["plugins_agent"].is_object());
+        XX_TEST_EXPECT_EQ(
+            snapshot["plugins_agent"].value("agent_id", std::string{}),
+            std::string{"agent_a"}
+        );
+        XX_TEST_EXPECT_EQ(snapshot["plugins_agent"].value("mount_seq", 0), 1);
+        XX_TEST_EXPECT_EQ(snapshot["plugins_agent"].value("count", 0), 1);
+        const auto& mountPlugin = snapshot["plugins_agent"]["plugins"][0];
+        XX_TEST_EXPECT_EQ(mountPlugin.value("name", std::string{}), std::string{"example_plugin"});
+        XX_TEST_EXPECT_GE(mountPlugin.value("tool_count", 0), 1);
+        XX_TEST_EXPECT_GE(mountPlugin.value("registration_total", 0), 1);
+    }
 
     // ================= 2. 工具状态隔离: 各调各的, 结果不串 =================
     {
