@@ -1669,6 +1669,8 @@ Windows Debug + ASan, 临时 `data_dir` (会话库 `{data}/sqlite/sessions/<sess
    `AgentHost::attachRootAgentHost()` 公共入口, 四种运行形态统一在 `agent::init()` 之后调用,
    且与 `enableSubagent` 无关 (该开关只控制是否把 subagent 工具注入给模型)。
    修完后 `jsonl` 里自动压缩不再报 `service.subagent ... no server registered`。
+   (该入口后来随着插件管理器上提拆分成了 `AgentHost::create` → `loadPluginsAsync` →
+   `attachRoot`, 见 index.md 架构设计第 7 小节; 这里的记录保留当时的形态。)
 
 复现方法 (对应上面表格):
 

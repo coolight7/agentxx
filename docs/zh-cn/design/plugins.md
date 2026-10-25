@@ -417,32 +417,36 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 
 | IID | 版本 | 能力 |
 |-----|------|------|
-| `agentxx.agent.tools` | 2 | `register_tool/unregister_tool`, `call_tool_async/op_cancel` (插件互调, cb 保证 IO 线程 post) |
+| `agentxx.agent.tools` | 2 | `register_tool/unregister_tool`, `call_tool_async` (插件互调, cb 保证 IO 线程 post; 取消统一用 `pluginxx.cancel.op_cancel`) |
 | `agentxx.agent.permission` | 2 | `register_tool_permission/unregister_tool_permission` (工具权限限制由工具来源方声明) + `check_paths` (批量路径权限三态查询, 不发起询问/中断; 见下方说明) |
-| `agentxx.agent.hooks` | 2 | `register_hook/unregister_hook` (7 钩子点, 操作) + 表尾三成员: 有序登记与清单 —— `register_hook_ex` (同一实例同一个点登记**任意多个**处理器, 每个一根句柄; `priority` 小的先跑, 相同按登记顺序) + `unregister_hook_ex` (按句柄精确撤销) + `list_hooks` (处理器清单 JSON) |
-| `agentxx.agent.events` | 2 | `subscribe/unsubscribe/publish` (topic 自动加 `plugin.` 前缀, 载荷 JSON) |
-| `agentxx.agent.capabilities` | 2 | `register_capability(_ex)/unregister/has_capability`, `invoke_capability_async/op_cancel` |
+| `agentxx.agent.hooks` | 2 | 句柄式三成员: `register_hook(agent, spec_ex, out_handle)` (同一实例同一个点可登记**任意多个**处理器, 每个一根句柄; `priority` 小的先跑, 相同按登记顺序) + `unregister_hook(handle)` (按句柄精确撤销) + `list_hooks(agent, out)` (处理器清单 JSON) |
+| `agentxx.agent.events` | 2 | `subscribe(agent 可空, topic, handler)` / `unsubscribe` / `publish` (topic 自动加 `plugin.` 前缀, 载荷 JSON)。带引用 = 订阅该 agent 的总线 (会话/轮次事件); 空引用 = 主程序总线 |
+| `agentxx.agent.capabilities` | 2 | `register_capability(_ex)/unregister/has_capability` (进程级, 同一实例重复声明按幂等成功), `invoke_capability_async(agent 可空)/op_cancel` (引用仅用于归因给哪个 agent) |
 | `agentxx.agent.scheduler` | 1 | `is_io_thread/post_to_io/sleep/op_cancel/offload` (sleep=主程序计时器; offload=阻塞池委托, 需 cancel_token) |
 | `agentxx.agent.coroutine_runtime` | 1 | 通用协程驱动: `request_driver/cancel_driver/is_io_thread` (driver ticket/wake 协议, 见 §16) |
 | `agentxx.agent.session` | 2 | `get_share_store/add_share_store/emit_message_tip` (IO 线程) |
 | `agentxx.agent.context` | 2 | 会话 LLM 上下文查询: `get_messages/messages_count` (IO 线程)。上下文由会话持有 (图状态不含 `messages` 通道), 插件需要上下文内容时经此按需查询; 只要数量用 `messages_count`, 避免拉取整段上下文 |
-| `agentxx.agent.plugins` | 1 | `list_plugins/get_plugin/get_own_info` (JSON) |
-| `agentxx.agent.config` | 2 | `get_config/get_plugin_args/get_tool_prompt/get_session_work_dir/get_plugin_config_path/get_language/set_language` (get_session_work_dir session_id 为空时返回默认会话工作目录；`get_plugin_config_path` 返回 yaml `config` 归一化绝对路径，可指向文件/目录；`get_language/set_language` 查询或指定运行时生效语言) |
-| `agentxx.agent.model` | 2 | `get_config` (主模型及关联配置 JSON) |
-| `agentxx.agent.cancel` | 2 | `is_cancelled(sessionId)` (advisory, 权威通知为 cancel 回调) |
+| `agentxx.agent.plugins` | 1 | `list_plugins/get_plugin/get_own_info` (JSON; `list_plugins` 每项带 `mount_count` / `mount_agents`, 一眼看出装了但没挂到谁身上) |
+| `agentxx.agent.config` | 2 | `get_config/get_plugin_args/get_tool_prompt/get_session_work_dir(agent)/get_plugin_config_path/get_language/set_language` (get_session_work_dir 带引用时取该 agent 的会话工作目录; session_id 为空时返回默认会话工作目录；`get_plugin_config_path` 返回 yaml `config` 归一化绝对路径，可指向文件/目录；`get_language/set_language` 查询或指定运行时生效语言) |
+| `agentxx.agent.model` | 2 | `get_config(agent)` (该 agent 的主模型及关联配置 JSON) |
+| `agentxx.agent.cancel` | 2 | `is_cancelled(agent, sessionId)` (advisory, 权威通知为 cancel 回调; 取消状态按该 agent 的会话查) + `op_cancel` (表尾追加: 取消一个操作句柄, 原先分散在 tools/feature 的同名成员已收拢到这里) |
 | `agentxx.agent.prompt` | 2 | `get_prompt/set_prompt` (主程序提示词读写) |
 | `agentxx.agent.json` | 1 | `json_get_string/json_escape` |
 | `agentxx.agent.log` | 1 | `log(level, msg)` (0 trace .. 4 error) |
 | `agentxx.agent.resources` | 2 | `register_skill_dir/memory_file/mcp_server` (仅初始化阶段) + `get_own_resources` (冻结后不可变) |
 | `agentxx.agent.graph` | 2 | 执行图扩展: `register_node_type/unregister_node_type` (插件自定义节点类型, 注入 per-agent GraphRegistry) + `get_graph_json/get_graph_name/set_graph_json` (查看/修改主程序执行图, 默认名 `agentxx.default`; 插件加载阶段生效, 主程序构建 engine 前处理)。**图状态不含对话上下文**: `state_json` 里没有 `messages` 通道 (LLM 上下文由会话持有), 只有控制类通道与只读影子通道 `xx_messagesMeta` (条数/版本/角色分布/末尾消息摘要, 载荷与上下文大小无关); 需要上下文内容用 `agentxx.agent.context` 查询。插件写 `{"channel":"messages", ...}` 的 writes 会被主程序改写成会话上下文写入 (默认 append, `"mode":"overwrite"` 整体替换; 空列表的 overwrite 忽略), 因此按旧契约写 `messages` 的插件仍可用。**条件边用 `xx_has_tool_calls`** (agentxx 注册, 语义 = 最后一条 assistant 是否带 tool_calls; 读 `xx_messagesMeta.last_assistant_tool_calls`, 缺该通道时回退扫描 `messages` 通道), 内置 `has_tool_calls` 在新架构下恒为 false, 不要使用 |
 | `agentxx.agent.tasks` | 1 | 后台任务主程序托管: `register_task/cancel_task` (kit `spawn` 自动注册; 主程序登记句柄 + 持 inflight + `notify.done` 完成通知 —— 卸载时 detachAll 统一取消 + `waitInflightZero` 精确等待, 无协程帧悬挂; `notify` 为出参, `notify.done` 可从插件任意线程回调) |
-| `agentxx.agent.feature` | 2 | 功能点 (扩展点) 体系: `list_points/define_point/undefine_point` (插件声明自己的点, id 须落在 `plugin.<插件名>.*`) + `register_impl/unregister_impl` (为任意已声明的点登记实现, 按层/优先级排序) + `call_point_async/op_cancel` (按名调用一个**通用 JSON 点**, 只拿数据: 不写值缓存/不记置空/不改调用方会话; 强类型核心点返回受理错误) |
+| `agentxx.agent.feature` | 2 | 功能点 (扩展点) 体系: `list_points/define_point/undefine_point` (插件声明自己的点, id 须落在 `plugin.<插件名>.*`) + `register_impl/unregister_impl` (为任意已声明的点登记实现, 按层/优先级排序) + `call_point_async` (按名调用一个**通用 JSON 点**, 只拿数据: 不写值缓存/不记置空/不改调用方会话; 强类型核心点返回受理错误; 取消用 `pluginxx.cancel.op_cancel`) |
 | `agentxx.agent.mount` | 1 | 挂载查询 (诊断用): `list` (全部挂载摘要 JSON 数组, 每项含 agentId/agentName/workDir/language/mountSeq/plugins) + `get` (按 agentId 查单个挂载摘要, 没有该挂载返回 -1) |
 
 > 表中"版本"列 = 表声明的 `X_VERSION`, 与 `X_MIN_VERSION` 一起构成版本对, 另有
 > `X_BASELINE_SIZE` (基线字节数); 需要按 agent 区分的业务表为 v2 (v1 只在本进程单 agent 下成立,
 > 已不再兼容), 其余表仍为 v1 (基线 = 完整表长)。
-> 四件套要求、判定规则与追加策略见 **§17**。
+>
+> **v2 表的 agent 级成员第一个参数是 `const PluginxxScopeRef* agent`** (挂载时下发的
+> `agent_id` + 挂载序号); 传空/未知 id/过期序号时注册类返回
+> `AGENTXX_PLUGIN_ERR_NO_AGENT`、读取类返回 `-1`, 且**不产生任何副作用**。
+> 四件套要求、判定规则与追加策略见 **§17**, 进程级容器与 agent 挂载的分工见 **§18**。
 
 > **内置能力 (供其他插件 / 主程序侧调用)**
 >
@@ -1573,3 +1577,125 @@ polled_tool(ctx, name, depict, schema,
 | 成员顺序 | `boundaries`：成员顺序台账逐表比对 (防重排 / 防删除) |
 | 长度门槛 | `plugin_feature`：声明点 / 登记实现两处 `specSizeOk` 的正反例 |
 | C ABI | `test_plugin_abi_c17.c` + `plugin_runtime`：C 与 C++ 两侧逐项对照 |
+
+---
+
+## 18. 主程序与多 agent 挂载
+
+一次加载是进程的事, 注册一次是 agent 的事: 插件只 `dlopen`/`create`/`start` 一次,
+每个 agent 各自"挂载"它, 挂载时插件才声明本 agent 要用的东西。这一节说明两侧职责、
+引用怎么传、挂载生命周期与配置写法。
+
+### 18.1 两层结构
+
+```
+AgentHost（进程级容器, 一份; FFI 每个句柄一份）
+└── PluginManager（插件管理器, 进程一份）
+     ├── 实例表: 每个插件一条 (dlopen + create + start 各一次)
+     └── 挂载表: 每个 agent 一条 PluginMount
+          ├── 记录: 本挂载上该实例注册了什么 (工具/权限/钩子/提示词/功能点/图/资源)
+          └── 该 agent 的实体: 工具注册表项 / 中间件链上的派发器 / 提示词贡献 …
+```
+
+- **进程级 (在 `start` 里做)**: 起线程、建连接、订阅主程序总线、声明能力
+  (`register_capability`)。能力是进程级的, 同一实例重复声明按幂等成功;
+- **agent 级 (在 `mount` 里做)**: 工具、工具权限、钩子、提示词贡献、功能点、
+  图节点类型、图定义、声明式资源 (skill/memory/mcp)。**在 `start` 里做这些会被拒绝**
+  (`AGENTXX_PLUGIN_ERR_NO_AGENT`, 无副作用);
+- 拆挂载只撤销该 agent 的实体, 插件实例与它的线程/连接留在进程里给别的 agent 用。
+  插件 `stop` 与 `destroy` 只在整个插件被卸载/主程序关闭时发生。
+
+### 18.2 agent 引用 (`PluginxxScopeRef`)
+
+挂载时主程序把 `agent_id` + 挂载序号交给插件的 `mount` 回调
+(`AgentxxPluginAgentMountSpec`, 含 `agent_id` / `agent_name` / `work_dir` / `language` /
+`model_json` / `config_json` / `mount_seq`)。插件把它存进自己的 per-agent 状态
+(SDK: `agentxx::plugin::AgentRef`, 多挂载用 `MountStore<T>` 按 id+seq 索引),
+之后每次 agent 级调用把它作为第一个参数传回:
+
+```cpp
+// per-agent 状态 (每个挂载一份; 拆挂载时释放)
+struct State { agentxx::plugin::AgentRef ref; int counter = 0; };
+
+static void* mountForAgent(MyCtx& ctx, const AgentxxPluginAgentMountSpec* spec,
+                           const PluginxxOperatorNotify* notify, PluginxxString* err) {
+    auto* st = new State{agentxx::plugin::AgentRef(*spec)};
+    ctx.iface.tools->register_tool(host, st->ref.ptr(), &toolspec);  // 只登记到本 agent
+    notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    return st;                                                     // 原样交回 unmount
+}
+```
+
+规则:
+- `raw()`/`ptr()` 是**借用视图** (指向 `AgentRef` 内部字符串), 只在对象存活期间有效,
+  不要保存返回值;
+- 同一个 `agent_id` 卸载后重新挂载会拿到**新序号**, 上一轮的引用自动失效 (注册被拒);
+  `seq == 0` 表示不校验 (仅 FFI / 测试自行构造引用时用);
+- 引用无效时: 注册类返回 `AGENTXX_PLUGIN_ERR_NO_AGENT` 并记一条 WARN
+  (带收到的 `agent_id`/`seq` 与本进程现有挂载), 读取类返回 `-1`;
+- 会话、事件、工作目录、取消状态这些**落在具体 agent 上**的查询都按引用定位,
+  多 agent 下不会串到主 agent。
+
+### 18.3 挂载的建立与拆除
+
+| 时机 | 动作 |
+|---|---|
+| 启动 | `AgentHost::create` → `loadPluginsAsync()` (逐个 create + start) → 各 agent `init()` 的 `plugin_mount` 步骤 `mountAgentAsync(ctx)` |
+| 运行期加载插件 | 已建立的挂载会**自动补挂**该实例 |
+| 禁用插件 | 各挂载同步摘掉注册 (记录保留), 插件 `unmount` 回调稍后在 IO 线程补调, 实例不 `stop` |
+| 启用插件 | 只做"没挂就挂": 插件在 `mount` 回调里重新声明, `start` 事务照常跑 |
+| agent 关闭 | `AgentContext::shutdownPluginsAsync()`: 拆本 agent 的挂载 → 管理器关闭 |
+| 插件卸载 | 全部挂载拆干净 → `stop` → `destroy` → `dlclose` |
+
+挂载是**幂等**的: 同一个 agent 重复 `mountAgentAsync` 不会重新登记, 序号也不变。
+挂载失败只回滚该 agent 上的注册 (插件实例保留, 可以给别的 agent 用)。
+
+### 18.4 配置: `plugin.list` 与 `plugin.mount`
+
+```yaml
+plugin:
+  list:                       # 加载 (进程一次): 路径 / 启用 / args
+    - path: builtin://agentxx_filesystem
+    - path: ./plugins/my_plugin
+      args: { level: 2 }      # 加载级参数 (进程级)
+  mount:                      # 挂载 (每个 agent 各一份)
+    policy: all               # all | none | listed
+    list: [agentxx_filesystem]  # policy=listed 时挂哪些
+    plugins:
+      - name: my_plugin
+        args: { mode: strict }  # 挂载级参数 (与加载 args 合并后交给 mount 回调)
+```
+
+- 子代理与插件自己创建的根默认 `policy: none` (最小权限);
+- 挂载级参数合并结果就是 `mount` 回调里的 `config_json`;
+- 挂载策略与参数属于**真正跑 agent 的那一侧** (服务端), 界面进程不参与。
+
+### 18.5 会话存储根独占
+
+会话以 `(存储根, sessionId)` 定位: 不同存储根可以同名, 同一存储根必须独占
+(进程内的会话写租约可重入, 撞了不报错只会静默串数据)。所以 agent 开始用某个存储根前
+先登记 (`AgentHost::claimSessionStoreRoot`), 路径规范化 (绝对路径 + 消解符号链接 +
+去掉末尾分隔符; Windows 统一小写) 后相同即冲突: 记 ERROR 并拒绝该 agent,
+而不是等到写库时才发现。
+
+### 18.6 诊断
+
+| 入口 | 内容 |
+|---|---|
+| `agentxx.agent.mount.list` / `.get` | 挂载摘要 (agentId / agentName / workDir / language / mountSeq / 已挂插件) |
+| `pluginxx.plugins.list` | 每项带 `mount_count` / `mount_agents` (装了但没挂到谁身上一眼可见) |
+| 加载快照 `plugins` | 进程角度: 每插件挂载数、挂到哪些 agent、清单资源、禁用原因 |
+| 加载快照 `plugins_agent` | 本 agent 角度: 本挂载装了哪些插件、各自实体计数 (`registration_total` 为 0 = 已回到基线) |
+| `--dump-diagnostics` | `## plugin mounts` (挂载矩阵) 与 `## session store roots` (存储根 -> agent) |
+| 日志 | 挂载完成 INFO (agent/序号/实例数); 引用无效与注册冲突 WARN (带 agent_id/seq) |
+
+### 18.7 验证
+
+| 用例 | 覆盖 |
+|---|---|
+| `plugin_host_mount` | 一份管理器 + 多个 agent: 工具/提示词/钩子/事件按挂载分开, 重复挂载幂等, 工具名冲突, 挂载失败只回滚该 agent, 引用校验, 21 张表可查, 拆挂载与关闭收尾 |
+| `plugin_multi_mount` | 真实示例插件 `example_multi_mount`: 计数与 `config_json` 按挂载隔离、重挂归零、旧引用失效 |
+| `plugin_multi_instance` | 多实例三铁律 (两个管理器各一实例) |
+| `plugin_runtime` / `plugin_cleanup` / `plugin_hooks` / `plugin_feature` / `plugin_resources` | 挂载语义下的注册可逆与清单 |
+| `agent_host` | 会话存储根独占 (冲突拒绝 / 幂等 / 释放后可复用) |
+

@@ -1658,6 +1658,13 @@ AgentContext
   `agentxx_subagent` 工具注入给模型; 程序内部路径 (上下文压缩) 同样依赖
   `service.subagent`, 缺主程序时会报 `no server registered` 并退化为硬截断
 - 返回值必须由调用方持有到会话结束 (总线 handler 只持 `weak_ptr`)
+- **会话存储根独占**: agent 开始用某个存储根前先登记
+  (`AgentHost::claimSessionStoreRoot`), 路径规范化后相同即冲突 (同一份磁盘会话只能由
+  一个 agent 写), 记 ERROR 并拒绝该 agent, 不等写库时才发现; 子代理默认没有会话存储
+  (不占用), agent 关闭时释放
+- **加载快照分两段**: `plugins` 是进程角度 (每插件挂载数 / 挂载到哪些 agent / 清单资源 /
+  禁用原因), `plugins_agent` 是本 agent 角度 (本挂载装了哪些插件 + 各插件实体计数),
+  界面与诊断不必自己拼这两份事实
 
 **子代理用量计入父会话**: 子代理有自己的 `AgentContext` / `SessionsManager`, 但没有
 `sessionStore`, 直接记账会丢掉。`AgentHost::spawnOneTask` 派生时把父上下文的记账目标

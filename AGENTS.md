@@ -38,6 +38,16 @@
   返回值必须活到会话结束; 子代理 (含压缩) 的模型用量经
   `AgentContext::usageAccountSessions` + `usageAccountSessionId` 记到父会话台账, 自动压缩
   经总线到达 (`spawnBatch(req)` 不带父上下文) 时回退根会话, 详见 index.md 架构设计第 7 小节
+- **一插件加载多 agent 挂载** (本轮补齐): 插件只 `create`/`start` 一次, 每个 agent 各一份
+  `PluginMount`; agent 级注册 (工具/权限/钩子/提示词/功能点/图/资源) 只能在插件 `mount`
+  回调里做, 在 `start` 里做返回 `AGENTXX_PLUGIN_ERR_NO_AGENT` 且无副作用。会话、事件、
+  工作目录、取消状态都按引用 (`PluginxxScopeRef` = agentId + 挂载序号) 落到对应 agent
+  (事件源/会话查询都走 `PluginManager::agentContextOf`), 能力声明是进程级的 (同一实例
+  重复声明按幂等成功)。会话存储根按 agent 独占 (`AgentHost::claimSessionStoreRoot`,
+  规范化后相同即拒绝第二个 agent); 加载快照分 `plugins` (进程角度: 挂载数/挂载到哪些
+  agent/清单资源) 与 `plugins_agent` (本 agent 角度: 每个插件的实体计数) 两段; 用例
+  `plugin_host_mount` / `plugin_multi_mount` (示例插件 `example_multi_mount`), 详见
+  [plugins.md](docs/zh-cn/design/plugins.md) §18
 - **编写代码注释**: 
     - 编写注释时，统一使用 markdown 风格，多行注释使用 `///` 开头, 示例(其中的 args 和 return 不必每一个都详细说明，尽量对需要注意、不容易从名称了解含义的进行说明):
 ```c++
@@ -515,7 +525,8 @@ path/to/agentxx_test string_util regex
     (自建 GraphRegistry 的主程序需自行调用 `registerAgentGraphConditions`)
   - 中断/异常不再需要"整份上下文快照 + 回灌": 会话不随图状态回滚, 节点抛出前已写入的消息保留
 - 测试模块: client 侧 19 个 (含 `banner_art` `update_check` `tui_form` `tui_surface` `tui_theme` `tui_ui_items` `tui_widget`),
-  同步组另有 `json` `json_view` `json_reflection` `interrupt_ui` `ui_items` `plugin_runtime` `plugin_sdk` `plugin_bridge`
+  同步组另有 `json` `json_view` `json_reflection` `interrupt_ui` `ui_items` `plugin_runtime` `plugin_sdk` `plugin_bridge`,
+  插件挂载组另有 `plugin_host_mount` (一管理器 + 多 agent) `plugin_multi_mount` (示例插件端到端)
 - 命令执行环境与输出编码 (2026-10-18, 插件 `agentxx_execute_command`): 子进程固定下发
   `PYTHONIOENCODING=utf-8` / `PYTHONUTF8=1` / `JAVA_TOOL_OPTIONS` (stdout/stderr 编码 +
   `-Dfile.encoding=UTF-8`, JDK 17 及以前默认字符集也是 GBK) / `NO_COLOR` / `TERM=dumb` /
