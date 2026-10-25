@@ -184,11 +184,9 @@ asio::awaitable<void> AgentHost::loadPluginsAsync() {
     if (cfg_.pluginList.empty()) {
         co_return;
     }
-    // 主程序级管理器: 加载阶段还没有 agent, 因此不持 agent 上下文
-    // (主程序级配置经 [PluginManager::setPrimaryAgent] 之类入口在 agent 建好后补)
-    pluginHost_ = std::make_shared<agentxx::plugin::PluginManager>(
-        std::weak_ptr<agentxx::agent::AgentContext>{}
-    );
+    // 管理器级: 加载阶段还没有挂载, 但插件 `start` 的进程级注册需要主 agent 的上下文
+    // (总线 / 语言 / 模型), 所以由调用方把主 agent 交给管理器
+    pluginHost_ = std::make_shared<agentxx::plugin::PluginManager>(cfg_.primaryAgent);
     pluginHost_->setIoExecutor(ioCtx_->get_executor());
     XX_LOGI("Loading {} plugin(s) into the agent host", cfg_.pluginList.size());
     co_await pluginHost_->loadConfiguredPlugins(cfg_.pluginList);

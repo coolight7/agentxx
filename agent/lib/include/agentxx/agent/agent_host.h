@@ -87,6 +87,10 @@ public:
             = nullptr;
         /// 插件加载表 (进程一份: 主程序在 [loadPluginsAsync] 里 create/start 各一次)
         std::vector<agentxx::agent::PluginConfig> pluginList{};
+        /// 主 agent 上下文 (主程序级配置来源: 总线 / 语言 / 模型 / 工作目录)
+        /// - 加载阶段还没有挂载, 但插件 `start` 里的进程级注册 (订阅主程序总线等)
+        ///   需要它能作答; 不传时这些注册会被拒 (记警告后继续)
+        std::weak_ptr<agentxx::agent::AgentContext> primaryAgent{};
     };
 
     /// 创建 agent 节点容器 (须经 shared_ptr 持有: 总线 handler 以 weak_ptr 捕获)

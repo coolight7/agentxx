@@ -425,30 +425,10 @@ int FfiAgentRuntime::start(std::string& err) {
 }
 
 asio::awaitable<void> FfiAgentRuntime::runAgentMain() {
-    // 插件管理器 (进程内每句柄一份): 先加载插件再 init (init 内本 agent 只挂载)
-    agentxx::agent::AgentHost::Config hostCfg;
-    hostCfg.ioCtx      = agent_->ioCtx;
-    hostCfg.pluginList = agent_->getContext()->agentConfig->plugins;
-    host_              = agentxx::agent::AgentHost::create(hostCfg);
-    // 插件加载失败不阻断会话 (与进程内模式一致: 仅记日志)
-    const bool pluginsOk = co_await agentxx::util::catchErrorAsync<bool>(
-        [self = shared_from_this()]() -> asio::awaitable<bool> {
-            co_await self->host_->loadPluginsAsync();
-            co_return true;
-        },
-        [](std::string errmsg) -> asio::awaitable<bool> {
-            XX_LOGE("[ffi] plugin load failed: {}", errmsg);
-            co_return false;
-        }
-    );
-    if (!pluginsOk) {
-        XX_LOGW("[ffi] continuing without plugins");
-    }
-    if (auto pluginHost = host_->pluginHost()) {
-        agent_->getContext()->pluginManager = pluginHost;
-    }
-
-    // init (含启动组件加载; 失败经 EVT_ERROR 上报并置 Failed 状态)
+    // init (含启动组件加载与插件加载; 失败经 EVT_ERROR 上报并置 Failed 状态)
+    // 注: FFI 侧不让主程序代劳加载插件 —— 加载要 co_await 插件的 start/挂载事务, 而本协程
+    // 跑在调用方驱动的 io 上 (主程序 io 线程可能还没开始). 交给 agent 自己在 init 里加载,
+    // 与单 agent 模式同一路径 (AgentContext::pluginManager 由 BaseAgent 自建).
     const bool initOk = co_await agentxx::util::catchErrorAsync<bool>(
         [self = shared_from_this()]() -> asio::awaitable<bool> {
             co_await self->agent_->init();
@@ -470,6 +450,9 @@ asio::awaitable<void> FfiAgentRuntime::runAgentMain() {
     }
 
     // 嵌入方程序 (进程级): 子代理委派 (service.subagent 总线服务) 与根 agent 注册
+    agentxx::agent::AgentHost::Config hostCfg;
+    hostCfg.ioCtx = agent_->ioCtx;
+    host_         = agentxx::agent::AgentHost::create(hostCfg);
     host_->attachRoot(agent_);
 
     // 启动组件信息 (跨线程请求 Client 端点发送 WireAppendComponentInfo)

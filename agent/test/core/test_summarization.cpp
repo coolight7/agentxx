@@ -1172,7 +1172,9 @@ asio::awaitable<TestResult> run_summarization_tests() {
         XX_TEST_EXPECT_EQ(reqMsgs[1].value("content", std::string{}), std::string{"u1"});
         XX_TEST_EXPECT_EQ(reqMsgs[8].value("content", std::string{}), std::string{"a4"});
         XX_TEST_EXPECT_EQ(reqMsgs.size(), size_t{10}); // sys + 9 条消息 + 指令
-        XX_TEST_EXPECT_EQ(contextTokensOf(env->ctx, env->sessionId), size_t{31});
+        // 估算规则: 每条消息 extraTokensPerMessage(3) + role + content (ascii/4, unicode/1.1)
+        // 3 条消息: 9 + ["system"1 "sys"0] + ["user"1 39 chars→9] + ["assistant"2 28 chars→7] = 29
+        XX_TEST_EXPECT_EQ(contextTokensOf(env->ctx, env->sessionId), size_t{29});
         XX_TEST_EXPECT_TRUE(env->session()->viewMessages.size() >= 1);
         XX_TEST_EXPECT_TRUE(
             env->session()->viewMessages.back().text.find("Summarized LLM Context")

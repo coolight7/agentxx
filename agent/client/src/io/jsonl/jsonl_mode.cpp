@@ -119,7 +119,8 @@ asio::awaitable<void> runJsonlStdioAsync(
     // init 的 plugin_mount 步骤由 agent 自己挂载
     std::shared_ptr<agent::AgentHost> host = agent::AgentHost::create(
         {.ioCtx      = agent->ioCtx,
-         .pluginList = agent->getContext()->agentConfig->plugins}
+         .pluginList = agent->getContext()->agentConfig->plugins,
+                 .primaryAgent = agent->getContext()}
     );
     co_await host->loadPluginsAsync();
     if (auto pluginHost = host->pluginHost()) {

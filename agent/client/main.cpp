@@ -1051,7 +1051,8 @@ Options:
                 // 插件管理器 (进程一份): 先加载插件再 init (init 内各 agent 自己挂载)
                 auto host = agentxx::agent::AgentHost::create(
                     {.ioCtx      = agent->ioCtx,
-                     .pluginList = agent->getContext()->agentConfig->plugins}
+                     .pluginList = agent->getContext()->agentConfig->plugins,
+                 .primaryAgent = agent->getContext()}
                 );
                 co_await host->loadPluginsAsync();
                 if (auto pluginHost = host->pluginHost()) {

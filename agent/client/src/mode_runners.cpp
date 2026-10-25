@@ -236,7 +236,8 @@ static std::shared_ptr<agent::SessionServerAgentIO> setupLocalUnifiedDirect(
             // init 的 plugin_mount 步骤由各 agent 自己挂载 (加载只做一次)
             auto host = agentxx::agent::AgentHost::create(
                 {.ioCtx      = agent->ioCtx,
-                 .pluginList = agent->getContext()->agentConfig->plugins}
+                 .pluginList = agent->getContext()->agentConfig->plugins,
+                 .primaryAgent = agent->getContext()}
             );
             co_await host->loadPluginsAsync();
             if (auto pluginHost = host->pluginHost()) {

@@ -462,6 +462,31 @@ ref.seq         = mgr->mountSequence();   // 未挂载时为 0 = 不校验
 - `AGENTS.md`、`docs/zh-cn/design/index.md`（架构第 7 小节）、`plugins.md`（§2 版本与
   加载/挂载分离）已同步新顺序与 `plugin.mount`、版本宏的 cmake 覆盖方式。
 
+## 7. 遗留问题修复与 FFI 差异
+
+已修（均已重建并验证）：
+
+- **退出期日志 UAF**：`LogDispatcher::instance()` 改为故意不析构（`static auto* = new`）——
+  进程退出阶段仍可能有游离协程打日志，析构后访问接收器表就是 heap-use-after-free
+  （`cxx_utilxx_base`）；修后手工运行各模块 exit code 为 0。
+- **版本拒绝分支读已卸载内存**：`lifecycle.h` 先 `NativeLoader::close(dl)` 再读
+  `info->api_version`（`info` 指向插件内部）；改为先取值再关库。
+- **压缩测试 token 期望值**：T5 从 31 改为 29（规则 = 每条 3 + role/content，
+  ascii/4、unicode/1.1），已把算式写进断言上方。
+- **`AgentHost::Config::primaryAgent`**：插件在 `start` 里的进程级注册（订阅主程序总线）
+  需要主 agent 上下文，否则会被拒（`subscribe rejected: no event source`）；
+  客户端三处启动路径已传入。
+
+FFI 差异（重要）：
+
+- FFI 侧**不让主程序代劳加载插件**：`loadPluginsAsync` 要 await 插件的 start/挂载事务，
+  而 FFI 的加载协程跑在调用方驱动的 io 上，宿主 io 线程可能还没开始 → 实测会卡住。
+  FFI 继续走 `BaseAgent` 自建管理器 + init 内加载（与单 agent 模式同一路径）。
+- 遗留：`ffi_c_api` 模块在 `agent_->shutdownAsync(20s)` 上超时
+  （`[ffi] stop: plugin shutdown did not finish within 25s`），模块卡住不结束 ——
+  需分清是插件 `stop` 的 lease 未归零，还是先停了 io 再等关闭。
+  该模块此前在本机先被搜狗输入法的 ASan 报错打断（同样的“从来没跑完”）。
+
 - 进程退出时若仍有协程持有 `AgentContext`（MCP 连接收尾）会走到
   `~AgentContext` 的告警日志，此时日志子系统已析构，ASan 报 heap-use-after-free；
   属退出期日志顺序问题，不影响功能；
