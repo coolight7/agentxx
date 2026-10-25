@@ -607,10 +607,14 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
 - 子项间距的统一约定: 列表内**所有**子项都自带尾部空行 (消息块 `buildMessageItem`、
   增量稳定块 `buildStreamingStable`、流式区末尾项 `buildStreamingFrontier`/降级
   `buildStreamingItem`、占位项本身), 因此下一项直接接排即可, 渲染与高度估算都不必
-  再判断"上方是哪类子项"。唯一不带尾部空行的是流式 thinking 的头部行 (`buildStreamingHeader`
-  的 `[Think]` 行): 它是紧随其后的正文的标题行, 加了空行会把标签与正文分开; 该行只在
-  增量模式下出现, 而增量模式成立要求 token 非空 -> 渲染器文本非空 -> 其后必有尾部块或
-  稳定块, 故它不会是列表最后一项
+  再判断"上方是哪类子项"。两个例外都不带尾部空行: 流式 thinking 的头部行
+  (`buildStreamingHeader` 的 `[Think]` 行, 它是紧随其后的正文的标题行, 加了空行会把
+  标签与正文分开) 与**视觉为空的消息** (`isBlankMessage`: 正文不含任何可见字符) ——
+  后者本身已是一行空白, 再补一行就让相邻消息之间多出一整行
+- 视觉为空的消息 (模型把 U+200B 之类的零宽占位符当正文输出) 一并从源头处理:
+  `EventBridge` 不把这样的正文当成一条 assistant 消息写进展示历史, `SessionStore`
+  加载/翻页时也不返回它 (判据见 `agentxx/util/invisible_text.h`); 渲染层的
+  `isBlankMessage` 是对已加载内存消息的兜底
 - `quickHeight` 的流式估算必须与实测一致: 上述尾部空行都要计入 (尾部块 +1、降级整段 +1),
   漏掉一项就会总高度偏低 -> 吸附底部的偏移偏小 -> 底部最新内容被推出视口
 - 加载动画的帧循环由 `hasRunningToolOrThink()` 维持, 占位提示出现时它必然为真 ——
@@ -839,6 +843,33 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
   element+builder (源码文本保留, 需要时按块重建), 渲染树内存与流长解耦。
 - 每帧只查一次终端尺寸 (`ctx_.terminalSize()`), 不直接调用 `ftxui::Terminal::Size()`
   (Linux 上是 `ioctl` 系统调用), 同时保证同帧内布局方式一致。
+
+#### 3.3.4 控制台状态自检 (Windows)
+
+FTXUI 的帧首定位是**相对**的 (`Screen::ResetPosition`: `\r` + 光标上移 `dimy-1` 行),
+它假设终端按 FTXUI 算出的列宽换行。控制台输出代码页一旦被外部改掉 (子进程执行
+`chcp` / 调用 `SetConsoleOutputCP`; 控制台是**共享**状态, 子进程退出后不恢复),
+UTF-8 字节按旧代码页解码 —— 中文整屏乱码, 且一个中文字从 2 列变成约 3 列,
+行宽溢出触发终端折行, 相对定位逐帧落错行: 画面持续下移并在底部累积空白
+(看起来像"最新消息间距异常"), 表现成界面卡住, 重启才恢复。
+
+因此:
+- `agentxx-client/util/console_state.h` 的 `ConsoleStateGuard::check()` (实现在
+  `client/src/util/console_state.cpp`) 每帧开头自检 (一次 `GetConsoleOutputCP`):
+  代码页不是 UTF-8 就改回; 控制台模式只检查 TUI 正常工作**必需的位** ——
+  输出 `ENABLE_VIRTUAL_TERMINAL_PROCESSING`, 输入
+  `ENABLE_VIRTUAL_TERMINAL_INPUT|ENABLE_WINDOW_INPUT`, 缺了就补。
+  **不要**把 `ENABLE_LINE_INPUT`/`ENABLE_ECHO_INPUT`/`ENABLE_WRAP_AT_EOL_OUTPUT`
+  当判据: conhost 在开启 VT 输入后仍保持前两位为 1 并自行维护 WRAP 位, 当判据会每帧
+  误报 -> 每帧清屏 -> 画面持续闪烁 (启动动画期间尤其明显)。
+  写回失败时记"放弃重试"标记, 避免反复清屏。
+- 成功写回 (`needResync`) 时先写 `consoleRealignSequence()` (清屏 + 回原点) 再画本帧,
+  否则漂移后的相对定位自己回不来。`cli` (stdio) 模式在每次输出前做同一自检
+  (行式输出无需重新对齐)。
+- 从源头避免: 工具子进程 (`agentxx_execute_command`) 与 MCP server 在 Windows 用
+  `CREATE_NO_WINDOW` 启动, 不共享 agent 进程的控制台 (输出仍走管道)。
+- 回归保护: 测试模块 `console_state` (含"行输入/回显位变化不算被改动"的用例); 详见
+  [fix-tui-console-codepage/index.md](../../../resource/history/fix-tui-console-codepage/index.md)。
 
 ### 3.4 文案与样式
 

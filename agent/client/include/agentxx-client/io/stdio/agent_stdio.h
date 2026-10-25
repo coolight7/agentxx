@@ -1,6 +1,7 @@
 #pragma once
 
 #include "agentxx/agent/io/agent_io.h"
+#include "agentxx-client/util/console_state.h"
 #include "asio/awaitable.hpp"
 #include "utilxx_base/json.h"
 #include <iostream>
@@ -30,6 +31,8 @@ private:
 
     std::shared_ptr<StderrLogSink> logSink_;
     bool                           isThinking_ = false;
+    /// 控制台代码页/模式的周期自检器 (Windows 下子进程会改掉共享控制台状态)
+    ConsoleStateGuard consoleStateGuard_;
     /// 当前会话 sessionId (mode_runners 加载时设置; 插件代发消息用)
     std::string sessionId_;
 

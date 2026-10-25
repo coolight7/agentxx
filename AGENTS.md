@@ -650,4 +650,31 @@ sudo echo 2 > /proc/sys/vm/drop_caches
 sudo echo 3 > /proc/sys/vm/drop_caches
 ```
 - 编译如果警告`不应忽略函数返回值`时，如果函数返回值是协程值(比如asio::awaitable<>)则必须处理，需要 co_await，否则该协程函数没有启动执行，相当于没调用
+- Windows 控制台状态是**共享的**, 不是进程私有的 (TUI 乱码/画面漂移的已知来源):
+  子进程默认继承 agent 进程的控制台, 其中任何调用 `SetConsoleOutputCP` 的程序
+  (`chcp`、批处理脚本、部分原生工具) 会改掉父进程所在控制台的代码页, 退出后不恢复。
+  代码页一变, TUI 的 UTF-8 输出整屏乱码, 且列宽假设失效 (中文 3 字节按 936 解码约 3 列,
+  而 FTXUI 按 2 列排版) -> 行宽溢出触发终端折行 -> FTXUI 每帧"光标上移 dimy-1 行"的
+  **相对**帧首定位落错行, 画面逐帧下移并在底部累积空白 (看起来像最新消息边距异常),
+  表现成"界面卡住", 重启即恢复。对策 (两层, 都要保留):
+  ① 创建子进程时不让它共享控制台 —— `agentxx_execute_command` 与 MCP client 在 Windows
+  用 `CREATE_NO_WINDOW` (`boost::process v2` 的 `process_creation_flags<CREATE_NO_WINDOW>`);
+  ② 输出侧自检 `agentxx-client/util/console_state.h` 的 `ConsoleStateGuard::check()`
+  (TUI 每帧开头 + CLI 每次输出前): 代码页与必需的模式位被改就改回来, TUI 还要写
+  `consoleRealignSequence()` 清屏回原点重新对齐 (相对定位自己回不来)。
+  **判据只取"缺了就一定坏"的位** (输出 VT 处理; 输入 VT 输入 + 窗口事件);
+  不要管 `ENABLE_LINE_INPUT`/`ENABLE_ECHO_INPUT`/WRAP —— conhost 开 VT 输入后仍保持
+  前两位为 1, 当判据会每帧误报 -> 每帧清屏 -> 启动动画持续闪烁 (已踩过);
+  写回失败要停止重试。
+  详见 `resource/history/fix-tui-console-codepage/index.md`
+- TUI 消息列表出现"一整段空白/间距被撑大", 先查是不是**视觉为空的消息**
+  (2026-10-25): 模型偶尔把 U+200B 之类的零宽占位符当正文输出, 独占一条 assistant
+  消息 —— 每条消息自带一行尾部空行, 这种消息就渲染成 2 行纯空白, 相邻 tool 消息之间
+  看起来像"边距非常大"; 拖选复制出来就是"只含一个零宽字符的行"。
+  判据在 `agent/lib/include/agentxx/util/invisible_text.h` 的 `isVisuallyBlank`:
+  写入侧 (`EventBridge` 的 assistant content)、读取侧 (`SessionStore::loadSession` /
+  `loadViewMessagesAfter`) 都过滤, 渲染侧 `isBlankMessage` 不再给这种消息加尾部空行。
+  注意 `msgIdCounter` 兜底要用**解析行数** (被过滤的消息也占过 id)。
+  "思考"消息带耗时 (`durationMs > 0`) 或加密思考 token 统计时保留。
+  详见 `resource/history/fix-tui-blank-message/index.md`
 - Android release (aarch64) 链接共享库时报 `relocation R_AARCH64_ADR_PREL_PG_HI21 cannot be used against symbol 'poly1305_blocks_sve2'`, 是 OpenSSL 4.0.1 aarch64 汇编的上游缺陷 (跨目标文件直接取全局符号地址、未写 `.hidden`, 静态 libcrypto.a 链进 .so 时该符号可抢占): 顶层 `agent/CMakeLists.txt` 已对 Android 共享库加 `-Wl,--exclude-libs=ALL` 处理, 详见 `resource/history/android-release-openssl-reloc/index.md`

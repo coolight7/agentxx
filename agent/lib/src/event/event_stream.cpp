@@ -1,4 +1,5 @@
 #include "agentxx/event/event_stream.h"
+#include "agentxx/util/invisible_text.h"
 #include "agentxx/util/neograph_json_bridge.h"
 
 #include "agentxx/agent/io/agent_io_transport.h"
@@ -350,7 +351,11 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
                 lastThinkSegDurationMs_ = 0;
             }
             auto content = jm.value("content", std::string{});
-            if (!content.empty()) {
+            // 只含空白/零宽占位符的正文不当成一条消息 (模型偶尔把 U+200B 当成
+            // 正文输出, 独占一条 assistant 消息): 否则展示历史里会多出一条
+            // 看不见内容的消息, 列表里就是多出来的空白 (见 invisible_text.h)
+            const bool contentVisible = !content.empty() && !agentxx::util::isVisuallyBlank(content);
+            if (contentVisible) {
                 int64_t assistantStartTimeMs = jm.value("startTimeMs", int64_t{0});
                 int64_t assistantDurationMs  = jm.value("durationMs", int64_t{0});
                 if (assistantStartTimeMs == 0) {

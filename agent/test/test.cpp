@@ -60,6 +60,7 @@
 #include "agentxx-test/core/test_storage_consistency.h"
 #include "agentxx-test/core/test_string_tools.h"
 #include "agentxx-test/core/test_string_util.h"
+#include "agentxx-test/core/test_invisible_text.h"
 #include "agentxx-test/core/test_subagent_bus.h"
 #include "agentxx-test/core/test_subagent_tool.h"
 #include "agentxx-test/core/test_summarization.h"
@@ -101,6 +102,7 @@
 #ifdef AGENTXX_BUILD_CLIENT
 #include "agentxx-test/client/test_banner_art.h"
 #include "agentxx-test/client/test_config_loader.h"
+#include "agentxx-test/client/test_console_state.h"
 #include "agentxx-test/client/test_ftxui_text.h"
 #include "agentxx-test/client/test_jsonl_runner.h"
 #include "agentxx-test/client/test_markdown_block.h"
@@ -270,6 +272,7 @@ int main(int argn, char** argv) {
         runSync("log_modules", agentxx::test::testLogModuleLevels);
         runSync("task_scope", agentxx::test::testTaskScopeSemantics);
         runSync("string_util", agentxx::test::testStringUtil);
+        runSync("invisible_text", agentxx::test::testInvisibleText);
         runSync("regex", agentxx::test::testRegex);
         runSync("json", agentxx::test::testJson);
         runSync("persist_semantics", agentxx::test::testPersistSemantics);
@@ -315,6 +318,7 @@ int main(int argn, char** argv) {
         runSync("tui_form", agentxx::test::testTuiForm);
         runSync("tui_stream", agentxx::test::testTuiStream);
         runSync("tui_surface", agentxx::test::testTuiSurface);
+        runSync("console_state", agentxx::test::testConsoleState);
         runSync("tui_theme", agentxx::test::testTuiTheme);
         runSync("tui_tool_header", agentxx::test::testTuiToolHeader);
         runSync("tui_ui_items", agentxx::test::testTuiUiItems);

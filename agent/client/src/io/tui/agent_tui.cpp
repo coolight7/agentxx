@@ -12,6 +12,7 @@
 #include "agentxx-client/mode_runners.h"
 #include "agentxx-client/update_check.h"
 #include "agentxx-client/util/clipboard.h"
+#include "agentxx-client/util/console_state.h"
 #include "agentxx-client/util/open_url.h"
 #include "agentxx/agent/config_static.h"
 #include "agentxx/agent/config_writer.h"
@@ -674,6 +675,28 @@ void TUIClientAgentIO::start() {
             // 关闭时 (正常使用) 不读时钟、不累加计数, 渲染路径零额外开销
             const auto frameBegin = collectFrameStats ? std::chrono::steady_clock::now()
                                                                  : std::chrono::steady_clock::time_point{};
+            // 控制台状态自检 (见 util/console_state.h): 工具子进程 (`chcp` 等)
+            // 会改掉共享控制台的输出代码页/控制台模式 —— 一旦被改, 本 TUI 的
+            // UTF-8 输出会整屏乱码, 且列宽假设失效导致画面逐帧错位、底部累积
+            // 空白 (看起来像最新消息间距异常)。改动过就现场改回来, 并先清屏 +
+            // 回原点让本帧重新对齐 (FTXUI 的帧首定位是相对上移, 漂移后只能靠
+            // 全清恢复)。正常运行时只多一次 GetConsoleOutputCP 查询。
+            // 只在真正写回成功 (needResync) 时清屏: 写不回去时自检器会停止重试,
+            // 不会每帧清屏闪烁。
+            if (const auto consoleFix = consoleStateGuard_.check(); consoleFix.needResync) {
+                std::cout << consoleRealignSequence() << std::flush;
+                // 日志限频: 首次 + 每 100 次记一条 (脚本里反复 chcp 时不刷屏)
+                if (consoleStateRepairCount_++ % 100 == 0) {
+                    XX_LOGW(
+                        "[tui] 控制台状态被外部改动 (输出代码页={}, 改写了控制台模式={}), "
+                        "已恢复 UTF-8 并重绘画面; 子进程继承控制台时 chcp 等会改掉共享状态 "
+                        "(累计 {} 次)",
+                        consoleFix.previousOutputCodePage,
+                        consoleFix.modeRepaired,
+                        consoleStateRepairCount_
+                    );
+                }
+            }
             // 本帧状态快照 + client 插件 UI 注册表快照 (渲染期无锁读)
             refreshRenderContext();
             // 本帧终端尺寸: 同帧内所有组件读同一尺寸 (避免帧中途 resize 造成布局错位),

@@ -2826,6 +2826,35 @@ TestResult testTuiScroll() {
         XX_TEST_EXPECT_TRUE(waiting.find("List ") == std::string::npos);
     }
 
+    // 视觉为空的消息 (模型把零宽占位符当正文输出) 不追加尾部空行:
+    // 一条看不见内容的消息只占 1 行, 不会让相邻消息之间多出一整行空白
+    {
+        ScrollFixture f;
+        auto          blank = std::make_shared<TUIMessage>();
+        blank->role         = TUIMessage::Role::Assistant;
+        blank->text         = "\xE2\x80\x8B"; // U+200B 零宽空格
+        f.sharedState.mutate([&](TUIRenderState& st) { st.messages.push_back(blank); });
+        (void)f.render();
+        XX_TEST_EXPECT_EQ(f.comp->totalHeight(), 1);
+
+        auto normal = std::make_shared<TUIMessage>();
+        normal->role = TUIMessage::Role::Assistant;
+        normal->text = "hello";
+        f.sharedState.mutate([&](TUIRenderState& st) { st.messages.push_back(normal); });
+        (void)f.render();
+        XX_TEST_EXPECT_EQ(f.comp->totalHeight(), 3); // 空消息 1 行 + 普通消息 2 行
+
+        // 只有耗时的思考消息: 头部仍展示耗时信息, 只是不再追加尾部空行
+        auto think        = std::make_shared<TUIMessage>();
+        think->role        = TUIMessage::Role::Think;
+        think->text        = " ";
+        think->durationMs  = 10900;
+        think->collapsed   = true;
+        f.sharedState.mutate([&](TUIRenderState& st) { st.messages.push_back(think); });
+        (void)f.render();
+        XX_TEST_EXPECT_EQ(f.comp->totalHeight(), 4); // 3 + 思考消息 1 行
+    }
+
     // 恢复原始界面语言
     tuiSettings.setLanguage(savedLang);
 

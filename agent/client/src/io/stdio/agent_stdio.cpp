@@ -1,6 +1,7 @@
 #include "agentxx-client/io/stdio/agent_stdio.h"
 
 #include "agentxx-client/io/stdio/stdin_reader.h"
+#include "agentxx-client/util/console_state.h"
 #include "agentxx/agent/conversation_types.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/util/exception.h"
@@ -39,6 +40,10 @@ StdIOClientAgentIO::~StdIOClientAgentIO() {
 
 void StdIOClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
     using Type = agentxx::agent::WireDelta::Type;
+    // 输出前自检控制台代码页: 工具子进程 (chcp 等) 会改掉共享控制台的输出代码页,
+    // 之后本进程写的 UTF-8 中文会被按旧代码页解码成乱码 (见 util/console_state.h)。
+    // 这里逐次检查 (只多一次 GetConsoleOutputCP), 行式输出无需重新对齐画面
+    (void)consoleStateGuard_.check();
     switch (delta.type) {
         case Type::TextToken:
             if (isThinking_) {
@@ -158,6 +163,8 @@ void StdIOClientAgentIO::onSync(const agentxx::agent::WireSyncPayload& payload) 
 }
 
 void StdIOClientAgentIO::onPeerMessage(agentxx::agent::WireMessage msg) {
+    // 同上: 控制台代码页可能被工具子进程改掉 (消息/提示均为 UTF-8 文本)
+    (void)consoleStateGuard_.check();
     // 拦截启动信息响应: 整批统计 MCP/Skill/Memory, 其余消息委托基类分发
     if (auto* info = std::get_if<agentxx::agent::WireAppendComponentInfo>(&msg)) {
         using Type = agentxx::agent::AppendComponentNotification::Type;

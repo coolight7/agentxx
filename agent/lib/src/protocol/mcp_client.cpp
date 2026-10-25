@@ -420,7 +420,12 @@ struct McpClient::StdioTransport {
                 nullptr,
                 nullptr,
                 TRUE,
-                0,
+                // CREATE_NO_WINDOW: MCP server 不共享 agent 进程的控制台 ——
+                // 继承控制台时它可以改掉共享的输出代码页/VT 模式 (chcp 等),
+                // 使同一进程里的 TUI 输出变乱码、画面定位错位 (见
+                // agentxx-client/util/console_state.h);
+                // 服务本身只经管道通信, 不需要控制台
+                CREATE_NO_WINDOW,
                 nullptr,
                 nullptr,
                 &si,

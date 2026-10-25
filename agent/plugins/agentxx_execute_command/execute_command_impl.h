@@ -77,6 +77,7 @@
 #define NOMINMAX
 #endif
 #include <windows.h>
+#include "boost/process/v2/windows/creation_flags.hpp"
 #endif
 
 #if !XX_IS_WIN_D
@@ -498,6 +499,23 @@ struct NewProcessGroup {
         return {};
     }
 };
+#endif
+
+#if XX_IS_WIN_D
+/// Windows: 子进程不共享 agent 进程的控制台 (CREATE_NO_WINDOW)
+///
+/// 默认情况下子进程继承父进程的控制台 (这里只重定向了 std 句柄, 控制台仍共享),
+/// 于是命令里任何改控制台状态的程序都会改到 agent 自己:
+/// - `chcp` / 自带 SetConsoleOutputCP 的原生工具会改掉**共享**输出代码页,
+///   子进程退出后不恢复 -> TUI 输出的 UTF-8 被按旧代码页解码, 中文整屏乱码,
+///   同时宽字符列宽不再与 FTXUI 的排版假设一致 (行宽溢出触发终端折行),
+///   FTXUI 每帧靠"光标上移 dimy-1 行"回到帧首的相对定位随之错位,
+///   画面逐帧漂移、底部不断留下空白;
+/// - 关掉 VT 处理/输入模式的程序还会让 TUI 的鼠标与按键事件失效 (界面卡住)。
+/// CREATE_NO_WINDOW 让子进程使用独立的 (无窗口) 控制台, 命令输出仍经管道返回。
+/// 注: popen 回退路径无法指定创建标志 (仅 AGENTXX_ENABLE_BOOST_PROCESS 关闭时编译),
+/// TUI 侧另有每帧自检 see agentxx-client/util/console_state.h。
+using WinNoConsole = boost::process::v2::windows::process_creation_flags<CREATE_NO_WINDOW>;
 #endif
 
 // 前置声明 (定义在下方 WinJobGuard/killProcGroup 之后; procCancelWatchLoop
@@ -990,6 +1008,11 @@ inline asio::awaitable<std::string> bashExecuteAsync(
         // stdin 重定向到 null 设备 (Windows: NUL / POSIX: /dev/null),
         // 避免子进程 (如交互式命令) 抢读 agent 进程的终端输入
         boost::process::process_stdio{.in = nullptr, .out = outpip, .err = errpip},
+#if XX_IS_WIN_D
+        // 不继承 agent 的控制台 (否则命令里的 chcp 会改掉 TUI 的输出代码页/列宽
+        // 假设, 见 [WinNoConsole] 说明)
+        detail::WinNoConsole{},
+#endif
 #if XX_IS_MACOS_D || XX_IS_IOS_D
         detail::NewProcessGroup{},
 #endif
@@ -1076,7 +1099,10 @@ inline asio::awaitable<std::string> windowsExecuteAsync(
         // 子进程初始工作目录: 会话工作目录 (未配置时显式取进程 cwd, 行为等价继承)
         boost::process::process_start_dir{detail::subprocessWorkDir(workDir)},
         // stdin 重定向到 null 设备, 避免子进程抢读 agent 进程的终端输入
-        boost::process::process_stdio{.in = nullptr, .out = outpip, .err = errpip}
+        boost::process::process_stdio{.in = nullptr, .out = outpip, .err = errpip},
+        // 不继承 agent 的控制台: 命令里的 chcp 等会改掉共享的输出代码页,
+        // 使 TUI 的中文变乱码且画面定位漂移 (见 [WinNoConsole] 说明)
+        detail::WinNoConsole{}
     };
 
     // CreateProcess 返回后立即挂入 job。这里不做 CREATE_SUSPENDED + 挂起期

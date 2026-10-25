@@ -2,6 +2,7 @@
 
 #include "agentxx/agent/config_static.h"
 #include "agentxx/util/exception.h"
+#include "agentxx/util/invisible_text.h"
 #include "utilxx_base/container_util.h"
 #include "utilxx_base/hash.h"
 #include "utilxx_base/log.h"
@@ -23,6 +24,40 @@ namespace {
 /// 单个 sessionId 目录段最大长度 (截断后含分隔符与 hash 尾缀)
 /// - Windows 默认 MAX_PATH=260, 需控制单段长度
 static constexpr size_t kMaxSessionDataDirLen = 96;
+
+/// 加载展示历史时是否保留该消息
+///
+/// 只含空白/零宽占位符的正文 (典型: 模型把 U+200B 当正文输出, 独占一条
+/// assistant 消息) 不进展示历史 —— 客户端每条消息都带一行尾部空行, 这种
+/// 看不见内容的消息就变成一块多余空白 (看起来像消息间距异常变大)。
+///
+/// 与客户端渲染层的判据不完全相同: 这里还可以凭"有无信息可展示"保下来
+/// (思考耗时、加密思考的 token 统计), 而渲染层只决定是否追加尾部空行。
+static bool isDisplayableViewMessage(const ViewMessage& msg) {
+    using Role = ViewMessage::Role;
+    switch (msg.role) {
+        case Role::Assistant:
+        case Role::User:
+            // 附件卡片本身始终有可见内容
+            return !(msg.attachments.empty() && agentxx::util::isVisuallyBlank(msg.text));
+        case Role::System:
+        case Role::Tip:
+            return !agentxx::util::isVisuallyBlank(msg.text);
+        case Role::Think:
+            if (msg.durationMs > 0) {
+                return true; // 折叠头部会展示思考耗时
+            }
+            if (msg.think && (msg.think->isEncrypted || msg.think->reasoningTokens > 0)) {
+                return true; // 加密思考/token 统计仍有信息
+            }
+            return !agentxx::util::isVisuallyBlank(msg.text);
+        case Role::Tool:
+        case Role::Interrupt:
+            // 工具头部 (名称/参数摘要) 与中断表单控件始终有可见内容
+            return true;
+    }
+    return true;
+}
 
 /// FNV-1a 64 位哈希 (截断用低 32 位 hex 输出)
 /// - 统一使用 utilxx_base::hash::fnv1a64 算法
@@ -634,6 +669,8 @@ SessionStore::LoadedSession SessionStore::loadSession(std::string_view sessionId
     //   丢失", 且后续 saveLlmMessages 会用新上下文覆盖库内旧数据 (不可恢复)
     // - 展示历史 / LLM 上下文 / meta 三段各自独立捕获, 一段失败不影响其余
     //   (三段共用上面打开的只读连接 [db])
+    /// 解析成功的展示消息行数 (含因视觉为空被过滤掉的; msgIdCounter 兜底用)
+    size_t parsedRows = 0;
     agentxx::util::catchError<bool>(
         [&]() -> bool {
             // 展示历史 (按追加顺序)
@@ -642,8 +679,15 @@ SessionStore::LoadedSession SessionStore::loadSession(std::string_view sessionId
                 const auto jsonText = stmt.columnText(1);
                 agentxx::util::catchError<bool>(
                     [&]() -> bool {
-                        auto j = utilxx_base::Json::parse(jsonText);
-                        out.viewMessages.push_back(ViewMessage::fromJson(j));
+                        auto j   = utilxx_base::Json::parse(jsonText);
+                        auto msg = ViewMessage::fromJson(j);
+                        // 解析成功的行都计入总数 (下面 msgIdCounter 兜底用:
+                        // 消息 id 按追加顺序连续分配, 被过滤的消息也曾占一个 id)
+                        ++parsedRows;
+                        if (!isDisplayableViewMessage(msg)) {
+                            return true;
+                        }
+                        out.viewMessages.push_back(std::move(msg));
                         return true;
                     },
                     [&](std::string errmsg) -> bool {
@@ -699,9 +743,10 @@ SessionStore::LoadedSession SessionStore::loadSession(std::string_view sessionId
         }
     );
     // 兜底: 老数据无 msgIdCounter 记录时按历史条数恢复
-    // (历史 append-only, id 连续分配, 条数即最后序号)
+    // (历史 append-only, id 连续分配, 条数即最后序号;
+    //  用解析行数而非保留条数 —— 视觉为空而被过滤的消息也占过一个 id)
     if (out.msgIdCounter == 0) {
-        out.msgIdCounter = out.viewMessages.size();
+        out.msgIdCounter = parsedRows > 0 ? parsedRows : out.viewMessages.size();
     }
     // 兜底: 老数据无 viewSeqCounter 记录时取库内最大行序号 (Session::restore 亦会
     // 按历史条数兜底, 二者一致: 老库行序号即追加顺序 1..N)
@@ -1186,7 +1231,13 @@ std::vector<SessionStore::ViewMessageRow> SessionStore::loadViewMessagesAfter(
                 const auto jsonText = stmt.columnText(1);
                 agentxx::util::catchError<bool>(
                     [&]() -> bool {
-                        row.message = ViewMessage::fromJson(utilxx_base::Json::parse(jsonText));
+                        auto j       = utilxx_base::Json::parse(jsonText);
+                        row.message  = ViewMessage::fromJson(j);
+                        // 视觉为空的消息不进展示历史 (与 loadSession 同一规则):
+                        // 翻页拉回旧数据时不应把空白消息带回来
+                        if (!isDisplayableViewMessage(row.message)) {
+                            return true;
+                        }
                         out.push_back(std::move(row));
                         return true;
                     },

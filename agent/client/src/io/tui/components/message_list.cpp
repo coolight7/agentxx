@@ -9,6 +9,7 @@
 #include "agentxx-client/io/tui/ui_components.h"
 #include "agentxx/plugin/client_plugin_manager.h" // ClientToolDecor 完整定义 (头文件中仅前置声明)
 #include "agentxx/util/exception.h"
+#include "agentxx/util/invisible_text.h"
 #include "ftxui/component/event.hpp"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/terminal.hpp"
@@ -32,6 +33,35 @@ namespace {
 
 /// 插件装饰 items 的基础缩进列数 (与历史渲染 "    " 一致)
 constexpr int kDecorItemIndent = 4;
+
+/// 消息正文是否"只有空白" (不含任何可见字符)
+///
+/// 用途: 决定该消息是否还追加尾部空行。模型偶尔把 U+200B 之类的零宽占位符
+/// 当成正文输出并独占一条消息 —— 这种消息渲染出来只有一行空白, 再补一行尾部空行
+/// 就让相邻两条消息之间多出一整行 (表现为消息间距异常变大)。
+///
+/// - 工具消息 (头部有名称/参数摘要) 与中断消息 (控件需要交互) 恒为 false
+bool isBlankMessage(const TUIMessage& msg) {
+    switch (msg.role) {
+        case TUIMessage::Role::Assistant:
+        case TUIMessage::Role::User:
+            // 附件卡片本身始终有可见内容
+            return msg.attachments.empty() && agentxx::util::isVisuallyBlank(msg.text);
+        case TUIMessage::Role::System:
+        case TUIMessage::Role::Tip:
+            // header 行 (折叠标记 + 角色标签) 仍在, 只是不再追加尾部空行
+            return agentxx::util::isVisuallyBlank(msg.text);
+        case TUIMessage::Role::Think:
+            if (msg.think && (msg.think->isEncrypted || msg.think->reasoningTokens > 0)) {
+                return false; // 加密思考/token 统计仍有信息要展示
+            }
+            return agentxx::util::isVisuallyBlank(msg.text);
+        case TUIMessage::Role::Tool:
+        case TUIMessage::Role::Interrupt:
+            return false;
+    }
+    return false;
+}
 
 /// 查找工具调用装饰 (client 插件经 update_tool_decor 推送的语义层渲染声明;
 /// 每帧快照 pluginRegistry, 无锁读取; 无插件管理器/无装饰返回空)
@@ -1238,7 +1268,6 @@ Element MessageListComponent::buildBanner() {
 
 LazyBuiltItem MessageListComponent::buildMessageItem(const TUIMessage& msg, size_t index) {
     const int maxWidth = std::max(1, scrollable_->contentWidth());
-
     std::vector<std::unique_ptr<markdown::DomBuilder>> builders;
     const size_t                                       decorHitsBefore = decorHits_.size();
     const size_t interruptHitsBefore  = interruptView_.hitBoxes().size();
@@ -1249,7 +1278,14 @@ LazyBuiltItem MessageListComponent::buildMessageItem(const TUIMessage& msg, size
     const bool   hasAttachmentHits    = (attachmentHits_.size() > attachmentHitsBefore);
 
     LazyBuiltItem out;
-    out.element           = vbox({std::move(block), text("")});
+    // 尾部空行 = 消息之间的固定间距。视觉为空的消息 (模型输出的零宽占位符等) 不再追加:
+    // 它本身已经是一行空白, 再补一行就让相邻两条消息之间多出一整行 (看起来像
+    // "消息间距突然变大")。工具/中断消息不计入 (头部与控件始终有可见内容)
+    if (isBlankMessage(msg)) {
+        out.element = vbox({std::move(block)});
+    } else {
+        out.element = vbox({std::move(block), text("")});
+    }
     const size_t srcBytes = msg.text.size() + (msg.tool ? msg.tool->toolResult.size() : 0)
                             + (msg.tool ? msg.tool->toolName.size() : 0);
     // 渲染树内存估算: 由实测标定 (见 test_ftxui_text 的 "markdown render tree"

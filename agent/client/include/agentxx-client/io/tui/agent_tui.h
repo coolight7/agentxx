@@ -12,6 +12,7 @@
 #include "agentxx-client/io/tui/tui_theme.h"
 #include "agentxx-client/io/tui/ui_components.h"
 #include "agentxx-client/update_check.h"
+#include "agentxx-client/util/console_state.h"
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/io/agent_io.h"
 #include "agentxx/plugin/client_plugin_manager.h"
@@ -812,6 +813,12 @@ private:
     /// 判定为一次拖选完成 -> 自动复制选中文本并 toast 提示。
     /// 单击 (无拖动) 不复制, 保持原有点击交互 (按钮/折叠/拖拽条等)
     bool mouseDragged_ = false;
+
+    // ---- 控制台状态自检 (UI 线程独占; 见 util/console_state.h) ----
+    /// 控制台代码页/模式外部被改时的自检器 (含"放弃重试"标记)
+    ConsoleStateGuard consoleStateGuard_;
+    /// 累计修复次数 (工具子进程改掉共享控制台代码页/模式时 +1; 用于日志限频)
+    uint64_t consoleStateRepairCount_ = 0;
 
     // ---- UI 线程动作队列 ----
     /// client 线程投递、UI 线程 (帧循环开头) 消费的组件操作队列;
