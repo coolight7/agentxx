@@ -34,8 +34,7 @@ namespace points {
 inline constexpr std::string_view kContextCountTokens = "agentxx.context.countTokens";
 
 /// 上下文压缩 (provide)
-/// - 请求: `{sessionId}` 或 `{messages}`, 可带 `model` / `targetTokens` /
-///   `maxSummaryTokens` / `language`
+/// - 请求: `{sessionId}` 或 `{messages}`, 可带 `model` / `targetTokens` / `language`
 /// - 结果: `{summary, truncated}`; 实现只产出摘要文本, 不写回会话
 /// - 身份: `sessionId|messagesVersion|model`
 inline constexpr std::string_view kContextSummarize = "agentxx.context.summarize";
@@ -124,9 +123,7 @@ struct SummarizeRequest {
     std::vector<neograph::ChatMessage> messages;
     std::string                        model;
     /// 压缩目标 (可选, 0 = 不指定)
-    int64_t targetTokens = 0;
-    /// 摘要长度上限 (可选, 0 = 用实现内置值)
-    int64_t     maxSummaryTokens = 0;
+    int64_t     targetTokens = 0;
     std::string language;
     /// 手动触发 (agent 空闲时调用):
     /// - true: 核心实现直接派生压缩子代理并等待完成, 不抛中断 (与轮次无关)

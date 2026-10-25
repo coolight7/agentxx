@@ -40,6 +40,30 @@ bool isNoiseMessage(const neograph::ChatMessage& m) {
            || c == "[Empty]" || c.empty();
 }
 
+/// 用给定文本替换模板里的全部占位符 (如 `{omitted_note}`)
+/// - 不走 fmt::format: 压缩模板可被用户经 `prompt.summarizePrompt` 覆盖, 模板里
+///   可能留着已废弃的占位符或成对花括号 (JSON/代码示例), fmt 遇到未知参数或
+///   未配对花括号会抛异常, 整次压缩会因此失败
+std::string replacePlaceholder(
+    std::string_view tpl,
+    std::string_view placeholder,
+    std::string_view value
+) {
+    std::string out;
+    out.reserve(tpl.size() + value.size());
+    size_t pos = 0;
+    while (true) {
+        const size_t hit = tpl.find(placeholder, pos);
+        if (hit == std::string_view::npos) {
+            out.append(tpl.substr(pos));
+            return out;
+        }
+        out.append(tpl.substr(pos, hit - pos));
+        out.append(value);
+        pos = hit + placeholder.size();
+    }
+}
+
 /// 将消息中的多模态 data URL (Base64) 降级为文本标记, 避免大量 Base64 消耗上下文 Token
 void downgradeMultimodalUrlsToText(std::vector<neograph::ChatMessage>& messages) {
     for (auto& msg : messages) {
@@ -96,8 +120,7 @@ SummarizationMiddlewareHandle::SummarizationMiddlewareHandle(
     double                                      in_asciiCharsPerToken,
     double                                      in_unicodeCharsPerToken,
     double                                      in_tokensPerImage,
-    double                                      in_extraTokensPerMessage,
-    size_t                                      in_summaryMaxTokens
+    double                                      in_extraTokensPerMessage
 ) :
     BaseMiddlewareHandle<_SummarizationMiddlewareState>(
         "SummarizationMiddlewareHandle",
@@ -107,8 +130,7 @@ SummarizationMiddlewareHandle::SummarizationMiddlewareHandle(
     asciiCharsPerToken(in_asciiCharsPerToken),
     unicodeCharsPerToken(in_unicodeCharsPerToken),
     tokensPerImage(in_tokensPerImage),
-    extraTokensPerMessage(in_extraTokensPerMessage),
-    summaryMaxTokens(in_summaryMaxTokens) {
+    extraTokensPerMessage(in_extraTokensPerMessage) {
     assert(asciiCharsPerToken >= 0);
     assert(unicodeCharsPerToken >= 0);
     assert(tokensPerImage >= 0);
@@ -204,7 +226,6 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::summarizeViaPoint(
     agentxx::feature::SummarizeRequest req;
     req.sessionId        = std::string{sessionId};
     req.messages         = messages;
-    req.maxSummaryTokens = static_cast<int64_t>(summaryMaxTokens);
     req.manual           = direct;
     if (auto ctx = agentContext.lock(); ctx != nullptr) {
         req.model    = ctx->getSessionCurrentModelName(sessionId);
@@ -273,49 +294,6 @@ void SummarizationMiddlewareHandle::cleanNoiseMessages(std::vector<neograph::Cha
         }
     }
     messages = std::move(out2);
-}
-
-std::string SummarizationMiddlewareHandle::fitSummaryMaxTokens(std::string summary) const {
-    if (summary.empty()) {
-        return summary;
-    }
-    const size_t summaryTokens = countTokensForUtf8Str(summary);
-    if (summaryTokens <= summaryMaxTokens) {
-        return summary;
-    }
-    // 截断说明 (放在摘要末尾, 让模型知道后面还有内容被省略)
-    static constexpr std::string_view kTruncatedNote
-        = "\n[Summary truncated to fit the context limit.]";
-    // 二分: 找满足上限的最大前缀 (与 hardTruncate 的单条内容截断同一思路)
-    // - 探测时把截断说明一起算进去: 前缀与说明分别计数后相加, 整数取整可能多出
-    //   1 个 token, 合并计数才能保证最终结果不超上限
-    const auto countPrefixWithNote = [&](size_t prefixBytes) -> size_t {
-        std::string probe = summary.substr(0, prefixBytes);
-        probe.append(kTruncatedNote);
-        return countTokensForUtf8Str(probe);
-    };
-    size_t lo = 0, hi = summary.size();
-    while (lo < hi) {
-        const size_t mid = (lo + hi + 1) / 2;
-        if (countPrefixWithNote(mid) <= summaryMaxTokens) {
-            lo = mid;
-        } else {
-            hi = mid - 1;
-        }
-    }
-    std::string out = summary.substr(0, lo);
-    // 回退到 UTF-8 字符边界: 避免末尾留下半个字符 (按字节切分可能切断多字节字符)
-    while (!out.empty() && (static_cast<unsigned char>(out.back()) & 0xC0) == 0x80) {
-        out.pop_back();
-    }
-    out.append(kTruncatedNote);
-    XX_LOGW(
-        "SummarizationMiddlewareHandle: 摘要超长 ({} -> {} token, 上限 {}), 已截断",
-        summaryTokens,
-        countTokensForUtf8Str(out),
-        summaryMaxTokens
-    );
-    return out;
 }
 
 void SummarizationMiddlewareHandle::foldExploratoryToolcalls(
@@ -603,14 +581,10 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
     }
 
     neograph::ChatMessage promptMsg;
-    promptMsg.role = "user";
-    // 模板来自 AgentPrompt (运行时字符串), 经 fmt::runtime 动态解析
-    promptMsg.content = fmt::format(
-        fmt::runtime(summarizePrompt),
-        fmt::arg("omitted_note", omittedNote),
-        fmt::arg("max_words", summaryMaxTokens / 4)
-    );
-    promptMsg.flags = neograph::MessageFlag::AutoInserted;
+    promptMsg.role    = "user";
+    // 模板来自 AgentPrompt (运行时字符串): 只替换 {omitted_note} 占位符
+    promptMsg.content = replacePlaceholder(summarizePrompt, "{omitted_note}", omittedNote);
+    promptMsg.flags   = neograph::MessageFlag::AutoInserted;
     reqMsgs.push_back(std::move(promptMsg));
 
     // 通过 subagent 完成压缩 (同上下文模式):
@@ -696,9 +670,7 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
                 );
                 co_return "";
             }
-            // 摘要超长 (模型不遵守指令里的字数要求): 截断后写回, 避免刚压下去的
-            // 上下文被摘要重新撑大
-            co_return fitSummaryMaxTokens(item.content);
+            co_return item.content;
         }
         // 无 host 时 (如单测 mock 环境), 降级走总线请求
     }
@@ -746,8 +718,7 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
             );
             co_return "";
         }
-        // 摘要超长 (模型不遵守指令里的字数要求): 截断后写回
-        co_return fitSummaryMaxTokens(resp->result);
+        co_return resp->result;
     };
 
     if (direct) {
@@ -1089,7 +1060,7 @@ asio::awaitable<void>
         }
 
         // ---- 兜底: 压缩后仍超限 (>= 95%) → 降级硬截断, 保证请求能发出 ----
-        // 场景: system 本身很大, 或摘要超长 (截断后仍超), 压缩结果仍 >= 95% 上限;
+        // 场景: system 本身很大, 或摘要本身很长, 压缩结果仍 >= 95% 上限;
         // 硬截断 (system + 截断说明 + 最近消息 30% 预算 + 单条二分截断) 是最终兜底
         // - 与触发判定用同一个取数入口 (功能点), 避免两条规则混用
         const size_t compressedTokens

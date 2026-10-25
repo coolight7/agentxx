@@ -181,7 +181,6 @@ std::string Codec<SummarizeRequest>::toJson(const SummarizeRequest& req) {
     }
     json["model"]            = req.model;
     json["targetTokens"]     = req.targetTokens;
-    json["maxSummaryTokens"] = req.maxSummaryTokens;
     json["language"]         = req.language;
     json["manual"]           = req.manual;
     return json.dump();
@@ -198,7 +197,6 @@ std::optional<SummarizeRequest> Codec<SummarizeRequest>::fromJson(std::string_vi
             req.sessionId        = json.value<std::string>("sessionId", "");
             req.model            = json.value<std::string>("model", "");
             req.targetTokens     = json.value<int64_t>("targetTokens", 0);
-            req.maxSummaryTokens = json.value<int64_t>("maxSummaryTokens", 0);
             req.language         = json.value<std::string>("language", "");
             req.manual           = json.value<bool>("manual", false);
             if (auto it = json.find("messages"); it != json.end() && it->is_array()) {

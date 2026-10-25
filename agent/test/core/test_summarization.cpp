@@ -638,22 +638,21 @@ asio::awaitable<TestResult> run_summarization_tests() {
             XX_TEST_EXPECT_FALSE(p.summarizePrompt.empty());
             XX_TEST_EXPECT_TRUE(p.summarizePrompt.find("Summarize") != std::string::npos);
             XX_TEST_EXPECT_TRUE(p.summarizePrompt.find("{omitted_note}") != std::string::npos);
-            XX_TEST_EXPECT_TRUE(p.summarizePrompt.find("{max_words}") != std::string::npos);
             // 最近消息不再原样保留: 模板要求摘要覆盖末尾要点
             XX_TEST_EXPECT_TRUE(p.summarizePrompt.find("Latest exchange") != std::string::npos);
 
             // 定制模板 (prompt.summarizePrompt 优先)
             env->ctx->agentConfig->prompt.summarizePrompt
-                = "CUSTOM SUMMARIZE PROMPT {omitted_note}max {max_words}";
+                = "CUSTOM SUMMARIZE PROMPT {omitted_note}custom body";
             std::vector<neograph::ChatMessage> msgs{makeMsg("user", "u1")};
             auto r = co_await env->handle->doSummarizeWithLLM(env->sessionId, msgs);
             XX_TEST_EXPECT_EQ(r, std::string{"S"});
             XX_TEST_EXPECT_EQ(env->subagent->receivedArguments.size(), size_t{1});
-            // 定制模板生效: 占位符被替换 (omitted_note 为空, max_words=64K/4=16384)
+            // 定制模板生效: 占位符被替换 (omitted_note 为空)
             const auto& reqMsgs = env->subagent->receivedArguments[0]["messages"];
             XX_TEST_EXPECT_EQ(
                 reqMsgs.back().value("content", std::string{}),
-                std::string{"CUSTOM SUMMARIZE PROMPT max 16384"}
+                std::string{"CUSTOM SUMMARIZE PROMPT custom body"}
             );
         }
 
@@ -663,7 +662,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
             env->subagent->summary = "S";
             env->ctx->agentConfig->prompt.summarizePrompt.clear();
             env->ctx->agentConfig->prompt.appendSystemPrompts["summarization"]
-                = "FALLBACK SUMMARIZE PROMPT {omitted_note}max {max_words}";
+                = "FALLBACK SUMMARIZE PROMPT {omitted_note}fallback body";
             std::vector<neograph::ChatMessage> msgs{makeMsg("user", "u1")};
             auto r = co_await env->handle->doSummarizeWithLLM(env->sessionId, msgs);
             XX_TEST_EXPECT_EQ(r, std::string{"S"});
@@ -671,7 +670,25 @@ asio::awaitable<TestResult> run_summarization_tests() {
             const auto& reqMsgs = env->subagent->receivedArguments[0]["messages"];
             XX_TEST_EXPECT_EQ(
                 reqMsgs.back().value("content", std::string{}),
-                std::string{"FALLBACK SUMMARIZE PROMPT max 16384"}
+                std::string{"FALLBACK SUMMARIZE PROMPT fallback body"}
+            );
+        }
+
+        // --- F3. 模板里留着已废弃的占位符 / 成对花括号: 只替换 {omitted_note},
+        //        其余原样保留 (模板替换不走 fmt, 未知占位符不会让压缩失败) ---
+        {
+            auto env               = std::make_shared<SummarizationTestEnv>();
+            env->subagent->summary = "S";
+            env->ctx->agentConfig->prompt.summarizePrompt
+                = R"(STALE {omitted_note}limit {max_words} and json {"a":1})";
+            std::vector<neograph::ChatMessage> msgs{makeMsg("user", "u1")};
+            auto r = co_await env->handle->doSummarizeWithLLM(env->sessionId, msgs);
+            XX_TEST_EXPECT_EQ(r, std::string{"S"});
+            XX_TEST_EXPECT_EQ(env->subagent->receivedArguments.size(), size_t{1});
+            const auto& reqMsgs = env->subagent->receivedArguments[0]["messages"];
+            XX_TEST_EXPECT_EQ(
+                reqMsgs.back().value("content", std::string{}),
+                std::string{R"(STALE limit {max_words} and json {"a":1})"}
             );
         }
 
@@ -1348,25 +1365,6 @@ asio::awaitable<TestResult> run_summarization_tests() {
     // 说明: 压缩请求不再清理 thinking —— send_thinking 打开时请求体里每条
     // assistant 都带 reasoning_content, 只清一部分会让请求前缀与父会话分叉,
     // 上游前缀缓存从第一条 assistant 起失效 (见 T11 的 ⑤ 断言)
-
-    // --- T11b. fitSummaryMaxTokens: 摘要超长按内置上限 (64K token) 截断 ---
-    {
-        auto  env = std::make_shared<SummarizationTestEnv>();
-        auto& h   = env->handle;
-        // 内置上限 64K token (不暴露配置)
-        constexpr size_t kSummaryLimit = 64 * 1024;
-        // 未超限: 原样返回
-        const std::string shortSummary = "short summary";
-        XX_TEST_EXPECT_EQ(h->fitSummaryMaxTokens(shortSummary), shortSummary);
-        XX_TEST_EXPECT_EQ(h->fitSummaryMaxTokens(std::string{}), std::string{});
-        // 超限: 截断到上限内, 保留开头, 末尾带截断说明
-        const std::string longSummary{makeLongContent(kSummaryLimit * 4 + 4096)}; // 'x' * n
-        const auto        fitted = h->fitSummaryMaxTokens(longSummary);
-        XX_TEST_EXPECT_TRUE(h->countTokensForUtf8Str(fitted) <= kSummaryLimit);
-        XX_TEST_EXPECT_TRUE(fitted.size() < longSummary.size());
-        XX_TEST_EXPECT_TRUE(fitted.starts_with(std::string(64, 'x')));
-        XX_TEST_EXPECT_TRUE(fitted.find("[Summary truncated") != std::string::npos);
-    }
 
     // --- T11. 完整流程: 确定性压缩先行, LLM 同上下文压缩成一段总结;
     //            system 不能动; 角色顺序 = system | user(自动提示) | assistant(总结) | 最近消息;

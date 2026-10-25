@@ -143,7 +143,7 @@ Rules:
 - MAY discard: exploratory read/search process details (keep file names and conclusions), retry noise, verbose or superseded tool outputs, details of reasoning/thinking content.
 - The recent messages are NOT kept after compaction: anything missing from the summary is lost, so write the Latest exchange section carefully.
 
-{omitted_note}Output ONLY the summary text in the user's language, no meta commentary; keep it as short as possible while keeping the work continuable (at most about {max_words} words).
+{omitted_note}Output ONLY the summary text in the user's language, no meta commentary; keep it as short as possible while keeping the work continuable.
 )_"),
     toolPrompt{
       {

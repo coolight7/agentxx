@@ -35,21 +35,12 @@ public:
 ///   重新填满, 压缩等于没做)
 /// - 压缩请求中的 thinking 只保留最新一条, 其余清空: 旧轮 thinking 对续写没有价值
 ///   (结论已写在 content / tool 结果里), 加密 thinking 也无法按字符估算 token
-/// - 摘要有内置长度上限 [summaryMaxTokensDefault]: 超过时截断后写回, 避免模型写出
-///   超长摘要把刚压下去的上下文重新撑大
 /// - 压缩完成即把压缩结果写回会话上下文并落盘: 进程在压缩后到轮末之间退出
 ///   (崩溃/被杀) 时不丢压缩结果, 重启后不会因上下文重新超限而反复压缩
 /// - 自动压缩经 NodeInterrupt 派生压缩子代理, resume 后本中间件从头重新执行:
 ///   压缩提示消息按挂起 id 复用 (更新而非追加), 不产生重复提示
 /// - 压缩失败 >= 2 次 (同一轮内) 或 token >= 95% 上限: 硬截断兜底, 保证请求能发出
 class SummarizationMiddlewareHandle : public BaseMiddlewareHandle<_SummarizationMiddlewareState> {
-protected:
-
-    /// 摘要 (写回的 assistant 压缩结果) 的最大 token 数, 内置值不暴露配置
-    /// - 上限而非目标: 正常摘要远小于它, 这里只拦住模型写出的超长摘要
-    /// - 同时作为压缩指令里 {max_words} 的来源 ([summaryMaxTokens] / 4)
-    static constexpr size_t summaryMaxTokensDefault = 64 * 1024;
-
 public:
 
     /// 模型支持的最大 token 默认值 (256k)
@@ -66,10 +57,6 @@ protected:
     const double unicodeCharsPerToken;
     const double tokensPerImage;
     const double extraTokensPerMessage;
-    /// 摘要 (assistant 压缩结果) 的最大 token 数
-    /// - 经 {max_words} (= [summaryMaxTokens] / 4) 注入压缩指令
-    /// - 写回前超长时按它截断, 见 [fitSummaryMaxTokens]
-    const size_t summaryMaxTokens;
 
     /// token 估算规则 (功能点 `agentxx.context.countTokens` 的核心实现与
     /// 同步快路径共用同一份实例: 规则只写一次, 两个入口结果必然一致)
@@ -103,8 +90,7 @@ public:
         double in_asciiCharsPerToken          = 4.0,
         double in_unicodeCharsPerToken        = 1.1,
         double in_tokensPerImage              = 400.0,
-        double in_extraTokensPerMessage       = 3.0,
-        size_t in_summaryMaxTokens            = summaryMaxTokensDefault
+        double in_extraTokensPerMessage       = 3.0
     );
 
     size_t countTokensForUtf8Str(std::string_view in_str) const;
@@ -137,12 +123,6 @@ public:
     /// - 连续出现的 AutoInserted 提示噪音 ([Please continue] 等) 只保留最后一条
     /// - 对全部消息执行 (语义上保留最新)
     void cleanNoiseMessages(std::vector<neograph::ChatMessage>& messages);
-
-    /// 摘要超过 [summaryMaxTokens] 时按估算 token 截断后返回 (保留开头 + 截断说明)
-    /// - 压缩指令里的长度要求不保证被模型遵守, 这里保证写回的摘要不会把
-    ///   刚压下去的上下文重新撑大
-    /// - 未超限时原样返回
-    std::string fitSummaryMaxTokens(std::string summary) const;
 
     /// 工具调用压缩: 去重截断 (现有) + 探索型调用序列折叠    /// - 连续 >= 3 次的同工具单工具调用段
     /// (中间无 user/system 打断, 且工具注册了
