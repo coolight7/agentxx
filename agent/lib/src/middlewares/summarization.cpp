@@ -639,7 +639,7 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
             // 超时保护: 手动压缩无父轮次取消令牌可级联, 子代理 LLM 卡住时不能
             // 无限等待 (占用 io 线程); 超时放弃等待 (子代理后台完成自回收),
             // 返回空串由调用方走 hardTruncate 回退
-            constexpr std::chrono::milliseconds kManualCompactTimeout{std::chrono::minutes{2}};
+            constexpr std::chrono::milliseconds kManualCompactTimeout{std::chrono::minutes{5}};
             auto batchResp = co_await utilxx::asyncWithTimeout<events::RespSubagentBatch>(
                 [&]() -> asio::awaitable<events::RespSubagentBatch> {
                     co_return co_await host->spawnBatch(batchReq, agentCtxPtr);
