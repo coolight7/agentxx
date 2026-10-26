@@ -1,0 +1,89 @@
+# analyse-1 实施记录
+
+> 依据: 同目录 [analyse.md](analyse.md) 的 `[问题]` / `[不一致]` / `[可优化]` 清单,
+> 结合其中逐条"人工核定"的结论实施。
+> 状态: `已完成` / `进行中` / `待开始` / `不做`(附核定理由)。
+
+## 0. 人工核定结论 (实施约束)
+
+| 条目 | 核定 |
+|---|---|
+| §2.1 `hasError` | toolcall 拦截异常、插件明确报错时置 `true`；插件跨 C ABI 无异常，需插件侧返回字段指示错误；**移除**按 `"[Error:"` 文本判断的做法 |
+| §2.2 重放缓冲字节上限 | 计算字节占用麻烦、大占用情况少 → **移除字节限制的说法**（文档改掉、删掉无调用者的估算函数），在 roadmap 记一条"未来如有需要再实现" |
+| §2.5 `fromJson` 注释 | 统一注释与实现：有专属子结构的 role 一律保证非空，没有子结构的 role 就是没有 |
+| §7.1 `saveStateItem` | 预留接口、当前无引用 → 暂时不管 |
+| §8.1 MCP stdio | **补充实现支持配置**（`mcp.list[].command` / `args`） |
+| §8.2 `McpServer` / `A2aServer` | 暂时不管，写入 roadmap（后续把 cli 能力同步到 mcp/a2a，并提供插件注册导出） |
+| §9 训练系统 | 整块仍在开发中 → 暂时不管（存档原子写等记入 roadmap） |
+
+## 1. 任务状态
+
+### A. 红灯与低风险修正
+
+| 任务 | 状态 | 说明 |
+|---|---|---|
+| §1.1 `boundaries` 两处停用词 | 已完成 | `plugin_kit.h` 宿主→主程序；`test_plugins.cpp` 链路→流程 |
+| §6.1 `console_state` 用例 5 | 已完成 | 基线改用"当前模式"（用例 4 已补回 VT 位，写回原始模式会把它清掉） |
+| §2.6 `SessionUsageTotals` 注释自相矛盾 | 已完成 | 改为"本结构不单独落库，由 usage 表聚合恢复" |
+| §2.7 `agentxx::node::` 命名空间笔误 | 已完成 | `config.h` 两处改为 `agentxx::nodes::` |
+| §2.8 `baseRun` 缺 `agentContext.lock()` 判空 | 已完成 | 补 `!agentCtxPtr || !middlewareHandleContext` 早退 |
+| §2.9 `messagesCount` / `messagesVersion` 线程约束 | 已完成 | `messagesVersion` 补 `assertIoThread()`（唯一调用方在 io 线程）；`messagesCount` 明确注释"可任意线程读近似值"（插件接口表在非 io 线程查询） |
+| §2.5 `ViewMessage::fromJson` 注释与实现 | 已完成 | `Role::Think` 一律构造子结构；两处注释改为"有子结构的 role 保证非空" |
+| §4.1 `agentxx_llm_uncensored` 描述不符 | 已完成 | 文件头注释、`kDefaultText` 注释、`PluginxxInfo.description`、`plugin.yaml`、`plugins.md`、仓库 `agentxx-config.yaml` 注释统一到"默认文本要求模型忽略内容安全策略" |
+| §1.2 / §3.1 `index.md` 接口表数量 | 已完成 | 20 → 21，业务表清单补 `mount` |
+| §1.5 `index.md` wire 消息清单 | 已完成 | 改为"以 `wire-protocol-fields.md` 为准"+ 典型举例；补 `host_tool_*` 功能段与 add/remove model、rename session |
+| §5.1 `index.md` Tip 前缀 `#` | 已完成 | 去掉 `#` |
+| §1.4 `index.md` / en 文档插件清单与工具数量 | 已完成 | websearch 2 工具；filesystem 9 工具；补 3 个插件条目 |
+| §3.4 `plugins.md` / en 文档 `fetch_markdown` | 已完成 | 统一为 `web_fetch`（format=markdown\|raw） |
+| §3.2 `security.md` 权限声明工具清单 | 已完成 | 列全 9 个工具与作用域/目标参数（含 glob/grep 的 `file_patterns`、move/copy 的 `src`+`dst` 复核） |
+| §3.3 `roadmap.md` STO-12b 与 RET-1a 矛盾 | 已完成 | RET-1a 同步为"检索入口已移除" |
+| §6.2 `test.cpp` 重复 include | 已完成 | 删掉尾部重复的 `test_util_misc.h` |
+
+### B. `WireDelta::hasError` 真实错误标记
+
+| 任务 | 状态 | 说明 |
+|---|---|---|
+| 工具错误字段贯通生产端 | 已完成 | 工具执行层写 `ChatMessage::extra["hasError"]`（异常 / 工具不存在 / 参数非法 / 权限拒绝 / 重复调用被拒 / 中间件异常中止）；插件工具 FAILED 终态经 SDK → `std::runtime_error` → 同一异常路径；工具自己按历史约定返回的失败文本在 `toolResultTextIsFailure`（toolcall.cpp，唯一判定处）认出来 |
+| 下发与持久化 | 已完成 | EventBridge 读 `extra.hasError` → `ViewMessage::ToolData::hasError`（JSON `has_error`，随会话库持久化）+ `WireDelta.hasError` |
+| CLI / TUI 改用 `hasError` | 已完成 | TUI 实时 delta 与历史消息都改看 `tool->hasError`（仅 `[Interrupt]` 占位仍按警告色）；CLI 原本就用 `delta.hasError`，现在是真值 |
+| 回归测试 | 已完成 | `tui_stream` 场景 13（成功/失败两条 delta → 消息标记）+ `agent` 的中间件异常中止用例断言 `extra.hasError` |
+
+### C. MCP stdio 配置入口 + 三处实现隐患
+
+| 任务 | 状态 | 说明 |
+|---|---|---|
+| `mcp.list[].command` / `args` 配置字段 | 待开始 | |
+| 回归测试 | 待开始 | |
+| §8.3 三处隐患（Windows 命令行/ANSI、POSIX pipe 泄漏、`_SC_OPEN_MAX` 失败） | 待开始 | |
+
+### D. 性能与内存
+
+| 任务 | 状态 | 说明 |
+|---|---|---|
+| §2.2 移除字节上限的说法与死函数 | 待开始 | 文档已改；`estimateWireDeltaBytes` / `estimateViewMessageBytes` 待删 |
+| §2.3 中断路径深拷贝整份上下文 JSON | 待开始 | |
+| §2.4 每次 modelcall 3 次全量深拷贝 | 待开始 | |
+
+### E. 自检体系改进
+
+| 任务 | 状态 | 说明 |
+|---|---|---|
+| §10.1 规则编号重号/顺序 | 待开始 | |
+| §10.2 停用词"一行两禁词就放过" | 待开始 | |
+| §10.3 `内核` 10 条短语白名单 | 待开始 | |
+| §10.4 规则 8 纳入 `index.md` | 待开始 | |
+| §10.5 `AGENTS.md` 示例里的 `校验` | 待开始 | |
+| §1.3 / §6.3 测试模块清单改为生成物 | 待开始 | |
+
+### F. 验证
+
+| 任务 | 状态 | 说明 |
+|---|---|---|
+| debug 编译 | 待开始 | |
+| 跑全量测试模块 | 待开始 | |
+
+## 2. 注意事项
+
+- `resource/history/**` 内的既有历史记录不改（本目录除外）。
+- 只跑 debug 构建；不手动 `clang-format`。
+- 注释用词遵守 `boundaries` 停用词表（写"主程序/流程/扩展点"，不写"宿主/链路/埋点"）。

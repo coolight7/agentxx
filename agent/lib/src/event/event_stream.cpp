@@ -429,9 +429,12 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
             }
             int64_t toolStartTimeMs = 0;
             int64_t toolDurationMs  = 0;
+            // 失败标记由工具执行层写入 (见 nodes/toolcall.cpp): 不再由界面看结果文本前缀
+            bool toolHasError = false;
             if (jm.contains("extra") && jm["extra"].is_object()) {
-                toolStartTimeMs = jm["extra"].value("startTimeMs", int64_t{0});
-                toolDurationMs  = jm["extra"].value("durationMs", int64_t{0});
+                toolStartTimeMs   = jm["extra"].value("startTimeMs", int64_t{0});
+                toolDurationMs    = jm["extra"].value("durationMs", int64_t{0});
+                toolHasError      = jm["extra"].value("hasError", false);
             }
             if (toolStartTimeMs == 0) {
                 toolStartTimeMs = jm.value("startTimeMs", int64_t{0});
@@ -464,6 +467,7 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
                 }
                 target->tool->toolResult   = content;
                 target->tool->toolFinished = true;
+                target->tool->hasError     = toolHasError;
                 target->collapsed          = true;
                 if (toolDurationMs > 0) {
                     target->durationMs = toolDurationMs;
@@ -497,7 +501,7 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
                 .startTimeMs = target ? target->startTimeMs : toolStartTimeMs,
                 .durationMs  = target ? target->durationMs : toolDurationMs,
                 .type        = WireDelta::Type::ToolEnd,
-                .hasError    = false,
+                .hasError    = toolHasError,
             });
         }
     }

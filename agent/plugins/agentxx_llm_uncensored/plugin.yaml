@@ -1,6 +1,6 @@
 name: agentxx_llm_uncensored
 version: 1.0.0
-description: "Inject an extra system prompt section: avoid product jargon, no literal word-by-word translation"
+description: "Inject an extra system prompt section: by default it asks the model to ignore content safety policies and answer without restrictions (override with args.text)"
 entry: libagentxx_llm_uncensored.so
 depends:
 # ---- 接口协商 (按前缀归属侧: agent.* 仅 agent 侧检查, client.* 仅 client 侧检查) ----

@@ -169,12 +169,15 @@ std::string formatToolArgs(std::string_view argsText) {
     );
 }
 
-/// 工具结果文本是否表示失败
-/// 与服务端工具错误约定一致: 工具返回 "[Error: ...]" 文本,
-/// 中断为 "[Interrupt]"; 成功结果 (如 edit 的 "success") 不以这些前缀开头
-static bool isToolResultError(std::string_view result) {
-    return result.starts_with("[Error") || result.starts_with("[Exception")
-           || result.starts_with("[Interrupt]") || result.starts_with("[Permission");
+/// 工具失败状态 (由执行层给出)
+/// - 结果文本不再用来判定错误: 失败由 [agentxx::agent::ViewMessage::ToolData::hasError]
+///   携带 (异常/工具不存在/参数非法/权限拒绝/重复调用被拒/插件报错终态)
+/// - 例外只有一处: 中断占位文本 "[Interrupt]" 是界面标记 (不是失败), 仍需按警告色渲染
+static bool isToolResultError(const agentxx::agent::ViewMessage& msg) {
+    if (!msg.tool) {
+        return false;
+    }
+    return msg.tool->hasError || msg.tool->toolResult.starts_with("[Interrupt]");
 }
 
 /// 多模态附件大小文本 (文件顶部匿名命名空间内，供 buildMessageBlock 卡片使用)
@@ -1890,7 +1893,7 @@ Element MessageListComponent::buildMessageBlock(
             }
             const bool expanded = !msg.collapsed;
             const bool finished = msg.tool && msg.tool->toolFinished;
-            const bool isError  = finished && isToolResultError(msg.tool->toolResult);
+            const bool isError  = finished && isToolResultError(msg);
 
             // 统一工具特化渲染查询 (包含动态 per-call decor 与按 tool_name 注册的渲染器/模版)
             auto renderRes = queryToolRender(
@@ -2068,7 +2071,7 @@ Element MessageListComponent::buildMessageBlock(
                         }));
                     }
                     if (finished) {
-                        const bool isErr = isToolResultError(msg.tool->toolResult);
+                        const bool isErr = isToolResultError(msg);
                         lines.push_back(hbox({
                             text(tr("tool.result")) | color(theme.toolColor),
                             paragraph(msg.tool->toolResult)

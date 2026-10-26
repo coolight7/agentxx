@@ -2825,6 +2825,7 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
                         auto& m              = sharedState_.mutableMessage(st, i - 1);
                         m.tool->toolResult   = delta.result;
                         m.tool->toolFinished = true;
+                        m.tool->hasError     = delta.hasError;
                         m.collapsed          = true;
                         if (delta.startTimeMs > 0) {
                             m.startTimeMs = delta.startTimeMs;
@@ -2852,6 +2853,7 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
                     m->tool->toolCallId   = delta.toolCallId;
                     m->tool->toolResult   = delta.result;
                     m->tool->toolFinished = true;
+                    m->tool->hasError     = delta.hasError;
                     m->startTimeMs        = delta.startTimeMs;
                     m->durationMs         = delta.durationMs;
                     m->collapsed          = true;

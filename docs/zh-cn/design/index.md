@@ -358,16 +358,28 @@ TUI [F3] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
 ### 远程通信
 
 - **WebSocket 服务**: AgentServer 提供 WS 服务，支持 token 鉴权
-- **Wire Protocol**: 双向 JSON 消息协议 (Hello/HelloAck/UserInput/Cancel/SelectModel/GetModel/Delta/Sync/InterruptRequest/InterruptResponse/InterruptExpired/TurnResult/ContextStats/Error/Log/ModelInfo/GetAppendComponentInfo/AppendComponentInfo/GetContext/ContextMessages/Ping/Pong/CompactContext/ListSessions/SessionList/SwitchSession/GetViewMessages/ViewMessagesPage/ClearMessageQueue/RemoveQueueItem/InterruptAndRunNext/MessageQueueUpdate/PluginData/PluginDataUp/ListDir/ListDirResult/GetPermissionState/SetFullAuth/PermissionState);
+- **Wire Protocol**: 双向 JSON 消息协议。**完整消息类型与字段表以
+  [wire-protocol-fields.md](wire-protocol-fields.md) 为准** (生成物, 由测试模块
+  `wire_schema` 逐字节校验); 这里只举典型: Hello/HelloAck/UserInput/Delta/Sync/
+  TurnResult/ContextStats/InterruptRequest/InterruptResponse/GetViewMessages/
+  ListSessions/SessionList/PluginData/PluginDataUp
   排队消息管理: 执行中排队由服务端按会话维护并经 MessageQueueUpdate 同步,
   客户端可删除单条 (RemoveQueueItem) / 清空队列 (ClearMessageQueue) /
   打断当前轮次立即执行队列首条 (InterruptAndRunNext); 插件事件经
   PluginData (agent→client 下行) / PluginDataUp (client→agent 上行) 原样转发;
-  两处"服务端状态查询"类消息:
+  服务端状态查询与切换类消息:
   - ListDir / ListDirResult: 列举服务端目录 (跨设备附件选择的数据源;
     目录扫描卸载到线程池, 路径一律以 UTF-8 在两端传递)
   - GetPermissionState / SetFullAuth / PermissionState: 查询与切换"完全授权所有权限"
     (状态源在服务端权限中间件, 客户端只持镜像; 切换后服务端向全部接入端点广播新状态)
+  - GetModel / ModelInfo、RemoveModel / RemoveModelResult、AddModel / AddModelResult:
+    查询当前模型、删除与新增模型配置 (新增走 `{data_dir}/agentxx-config.yaml` 落盘)
+  - RenameSession / RenameSessionResult: 会话改名 (会话弹窗 `Ctrl+R`)
+- **客户端注册工具 (反向调用)**: 客户端经 HostToolRegister / HostToolUnregister
+  在服务端注册/注销本机工具 (名称/描述/JSON Schema/超时), 模型调用该工具时服务端发
+  HostToolCall 给客户端, 客户端执行后回 HostToolResult; 服务端侧以 `HostTool`
+  (继承 XXToolBase, 见 `agentxx/tools/host_tool.h`) 接入统一工具调度。FFI 外部注册
+  工具走同一套结构 (见 [ffi.md](ffi.md))
 - **上行多模态附件**: `UserInput.attachments` 携带附件列表 (字段见
   [wire-protocol-fields.md](wire-protocol-fields.md)); 服务端受理前校验大小
   (图片 10MB / 音频 25MB / 视频 50MB) 与条数 (单条 ≤5), 超限回
@@ -576,9 +588,9 @@ TUI [F3] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
     远程模式由 mode_runners 连接协程驱动 (ConnState 存于 TUIRenderState::connState)
   - 多语言与国际化 (TuiI18n): 界面显示语言已完全与 YAML 解耦，统一由 TUI 设置窗口直接切换并持久化到 `{dataDir}/sqlite/global.db` 的 `tui.lang` (支持 Auto 自动识别系统语言 / ZhCn 简体中文 / EnUs 英文)，运行时无锁查表且支持格式化占位符。会话与模型提示词语言则由 Agent 端独立支持 `getLanguage/setLanguage`
     消息列表的角色标签与 Tip 级别文本同样随语言切换 (折叠态形如
-    `+ [Think] ...` / `+ [Tip] # Warn · ...`，中文为 `+ [思考] ...` /
-    `+ [提示] # 警告 · ...`；展开态只显示 `- [Tip] # Warn` 前缀, 正文在下一行;
-    Warning/Error 才附加级别文本, Info 级别不附加 (前缀为 `[Tip] #` 后直接接预览分隔符))，
+    `+ [Think] ...` / `+ [Tip] Warn · ...`，中文为 `+ [思考] ...` /
+    `+ [提示] 警告 · ...`；展开态只显示 `- [Tip] Warn` 前缀, 正文在下一行;
+    Warning/Error 才附加级别文本, Info 级别不附加 (前缀为 `[Tip]` 后直接接预览分隔符))，
     头部前缀的列宽预算按标签实际显示宽度计算 (markdown::utf8_display_width),
     不按英文宽度写死; 切换语言时消息列表渲染缓存整体失效重建
     (agent_tui 的 onLanguageChange → MessageListComponent::invalidateCache)
@@ -1433,11 +1445,9 @@ AgentIOBase (客户端端点: TUIClientAgentIO / StdIOClientAgentIO)
 AgentIOBase (服务端端点: SessionServerAgentIO)
     ├── sendToPeer()       → 覆写: 新产出的 Delta (seq 单调守卫) 先写入重放缓冲再转发,
     │                          重放 delta (seq <= 缓冲尾) 不重复入缓冲
-    │                          缓冲按"条数 (deltaBufferCap=4096) + 估算字节
-    │                          (deltaBufferBytesCap=4MB)"双重上限裁剪: 带完整消息
-    │                          载荷的增量 (InsertMessage/UpdateMessage) 单条可达
-    │                          几十 KB, 仅按条数限制最坏可保留数百 MB; 超限丢最旧,
-    │                          客户端按 seq 缺口回退完整 sync (deltasSince 返回空)
+    │                          缓冲按条数上限裁剪 (deltaBufferCap=4096), 超限
+    │                          丢最旧 → 客户端按 seq 缺口回退完整 sync
+    │                          (deltasSince 返回空)
     ├── onDelta/onSync     → protected 空实现 (server 不会从 client 收到, 满足纯虚契约)
     ├── getInput()         → 从 inputChannel_ 等待客户端输入
     ├── handleInterrupt()  → 发送 InterruptRequest，等待客户端响应 (超时/过期通知)
@@ -1845,8 +1855,8 @@ Client                              Server
     明显增加 mmap/munmap 系统调用 (服务端系统态时间 +60%, 场景耗时 +15%),
     而内存收益与"轮末主动归还"基本重合
 - **会话消息持久化队列不持有消息副本**: 见上文"持久化节流" (`PendingViewOp.index`)
-- **服务端重连重放缓冲双重上限**: 见"连接与重连机制" (`deltaBufferCap` +
-  `deltaBufferBytesCap`)
+- **服务端重连重放缓冲上限**: 只按条数 (`deltaBufferCap`=4096) 裁剪, 超限丢最旧
+  (字节上限未实现, 见 [roadmap.md](roadmap.md))
 - 优化前后的基准数据 (RSS/VmSize/体积) 见 [benchmark.md](benchmark.md) 第 8 节
 
 ### 依赖注入容器
@@ -1931,7 +1941,7 @@ agent/
 │   │   │   ├── modelcall.h       # ModelCallWrapNode (LLM 调用, 动态模型切换)
 │   │   │   ├── toolcall.h        # ToolcallWrapNode (工具分发, 自动压缩)
 │   │   │   └── agentcall.h       # AgentStart/EndCallWrapNode (会话生命周期)
-│   │   ├── plugin/               # 插件系统 (热插拔原生 C++ 插件, 纯 C ABI, API v1 —— 冻结核心 vtable + 20 张 agent 接口表 + 9 张 client 接口表)
+│   │   ├── plugin/               # 插件系统 (热插拔原生 C++ 插件, 纯 C ABI, API v1 —— 冻结核心 vtable + 21 张 agent 接口表 + 9 张 client 接口表)
 │   │   │   │                     #   插件框架 (C ABI 契约 / SDK 核心 / 主程序运行时 / 加载 / 清单解析) 已拆为
 │   │   │   │                     #   agent/third_party/cxx_pluginxx (命名空间 pluginxx); 本目录只保留主程序业务实现
 │   │   │   ├── api/              # 插件 API 头 (插件/主程序共用 C ABI 契约 + 插件 SDK; 主程序侧引用也走 api/ 前缀)
@@ -2224,12 +2234,14 @@ agent/
 │   ├── example_js/               # JS 示例插件 (C++ 壳 + plugin.js; depends: javascript_engine)
 │   ├── example_js_execute_command/ # JS 代码执行工具插件 (example_js_execute_command; depends: javascript_engine)
 │   ├── example_resources/        # 会话资源贡献示例 (声明式与编程式 MCP/Skill/规则)
+│   ├── example_feature/          # 功能点示例插件 (声明自己的点 + 为任意点登记实现)
+│   ├── example_multi_mount/      # 一插件多 agent 挂载示例插件 (挂载作用域/会话/事件)
 │   ├── agentxx_javascript_engine/ # QuickJS JS 运行时插件 (能力 interpreter.js; 专用 JS 线程+沙箱)
 │   ├── agentxx_codegraph/        # CodeGraph 代码分析插件 (search/context/callers/callees/path 共 5 工具 + client Info 栏段落)
-│   ├── agentxx_filesystem/       # 文件系统 6 工具 (list/read/write/edit/glob/grep)
+│   ├── agentxx_filesystem/       # 文件系统 9 工具 (list/read/write/edit/glob/grep/move/copy/remove)
 │   ├── agentxx_execute_command/  # 命令执行 2 工具 (bash/windows)
 │   ├── agentxx_math/             # 数学计算工具 (agentxx_math_calculate)
-│   ├── agentxx_websearch/        # 网络搜索 3 工具 (search/fetch/fetch_markdown)
+│   ├── agentxx_websearch/        # 网络搜索 2 工具 (web_search / web_fetch, format=markdown|raw)
 │   ├── agentxx_rag_search/       # 向量语义搜索
 │   ├── agentxx_string/           # 字符串 2 工具 (html_to_markdown/regexp)
 │   ├── agentxx_system/           # 系统时间 (get_current_datetime)
@@ -2237,6 +2249,7 @@ agent/
 │   ├── agentxx_screen_capture/   # 屏幕捕获插件 (仅 Windows)
 │   ├── agentxx_computer_use/     # 键鼠控制插件 (仅 Windows; depends: screen_capture)
 │   ├── agentxx_system_monitor/   # 系统资源监控插件 (工具 + 周期采集 + client 状态栏渲染)
+│   ├── agentxx_llm_uncensored/   # 附加系统提示词注入插件 (追加一段说话方式/内容要求的系统提示词段落)
 │   ├── agentxx_audio_stream/     # 音频流捕获插件 (全平台跳过构建: 实现未启用)
 │   └── agentxx_text_selection_monitor/ # 文本选择监听插件 (仅 Windows UIAutomation)
 │
@@ -2324,6 +2337,7 @@ EventBus (事件总线)
 ### Delta (流式增量事件, 统一 seq)
 - Type: TextToken / ThinkToken / ToolStart / ToolEnd / TurnStart / TurnEnd / NodeStart / NodeEnd / MessageUITip / GenStatus / InsertMessage / UpdateMessage
 - 公共字段: seq (会话级单调递增, EventBridge 与 SessionServerAgentIO 共用 Session::nextDeltaSeq 分配), text, msgId, toolName/toolCallId/arguments/result/hasError, nodeName, think (ThinkData), tipType (MessageUITip 时), genPhase (GenStatus 时), message (InsertMessage/UpdateMessage 时携带完整 ViewMessage 指针), historyCount/tailHash, startTimeMs/durationMs, tps (TurnEnd 轮级平均速度)
+- ToolEnd 的 hasError: 工具失败标记, **只由执行层给出** (异常 / 工具不存在 / 参数非法 / 权限拒绝 / 重复调用被拒 / 插件工具 FAILED 终态 / 结果文本以 `[Error: ...]` 等约定前缀开头); 客户端 (TUI/CLI) 只看该字段决定是否按错误渲染, 不再解析结果文本
 - MessageUITip: 瞬态提示, 仅 UI 展示不入 viewMessages; InsertMessage: 原子插入完整 ViewMessage (如 Tip/统计), 入历史并同步; UpdateMessage: 按 msgId 原地更新已插入消息 (如 tool 结果回填)
 - GenStatus: 模型生成阶段占位提示 (Waiting 等待响应 / ToolCall 正在调用工具, toolName 为已解析出的工具名 / Done 清除), 仅 UI 展示不入历史。
   agent 侧在模型节点发出请求后发 Waiting, Provider 收到首个 tool_call 分片时发 ToolCall (参数未接收完, 内容不完整无法展示), 节点结束/出错发 Done;
@@ -2350,7 +2364,7 @@ EventBus (事件总线)
 ## 附录 B: 插件系统 v1 要点 (详见 plugins.md)
 
 - COM 风格接口表查询: 核心 vtable 冻结 (alloc/free + query_interface; 原 strdup 槽位已移出 vtable, 改为基于 alloc 的头文件内联 `pluginxx_strdup`), 能力按 IID 字符串查询独立接口表 (每张表四件套: IID + `struct_size` + `version`/`_VERSION` + `_MIN_VERSION` + `_BASELINE_SIZE`; 判定 = `version >= MIN_VERSION` 且 `struct_size >= BASELINE_SIZE`); 插件级要求 `api_version >= PLUGINXX_MIN_API_VERSION`
-- Agent 侧 20 张接口表: 10 张通用表 (`pluginxx.*`: events / capabilities / scheduler / coroutine_runtime / plugins / config / cancel / json / log / tasks) + 10 张业务表 (`agentxx.agent.*`: tools / permission / hooks / session / context / model / prompt / resources / graph / feature)
+- Agent 侧 21 张接口表: 10 张通用表 (`pluginxx.*`: events / capabilities / scheduler / coroutine_runtime / plugins / config / cancel / json / log / tasks) + 11 张业务表 (`agentxx.agent.*`: tools / permission / hooks / session / context / model / prompt / resources / graph / feature / mount)
 - Client 侧 9 张接口表: ui / events / session / wire / self / json / log / timer / keybind (详见 client_plugin_api.h)
 - 附加成员与结构体规则: 表成员只能追加在表尾 (基线不变 + `ifaceHas` 判定), 重排/改签名/删成员要换 IID; 跨边界结构体 (spec/input) 统一带 `struct_size` (填充方填长度, 读取方 `specSizeOk`/`specHas` 判定) —— 见 plugins.md §17
 - 现代 SDK (plugin_kit.h): 

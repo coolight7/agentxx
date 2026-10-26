@@ -1551,7 +1551,7 @@ agent/
 │   ├── agentxx_filesystem/       # Filesystem tools plugin (6 tools: list/read/write/edit/glob/grep)
 │   ├── agentxx_execute_command/  # Command execution plugin (2 tools: bash/windows)
 │   ├── agentxx_math/             # Math computation plugin (agentxx_math_calculate)
-│   ├── agentxx_websearch/        # Web search plugin (3 tools: search/fetch/fetch_markdown)
+│   ├── agentxx_websearch/        # Web search plugin (2 tools: web_search / web_fetch)
 │   ├── agentxx_rag_search/       # Vector semantic search plugin
 │   ├── agentxx_string/           # String processing plugin (2 tools: html_to_markdown/regexp)
 │   ├── agentxx_system/           # System clock plugin (get_current_datetime)

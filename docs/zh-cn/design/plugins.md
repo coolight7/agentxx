@@ -578,6 +578,12 @@ tool_call 中的前后调用形成顺序屏障。并发只发生在同一条 ass
 - **例外 (属正常结果, 保持为结果文本)**: 无匹配、空结果、查询目标不存在之类"调用成功但
   没有内容"的情况按普通结果返回 (如 `No match found`, 不带 error JSON 包裹); 权限
   拒绝由框架提前返回 `[Permission denied]`, 工具无需处理。
+- **失败标记 `hasError`**: 一次调用是否失败由执行层判定, 随 `ToolEnd` 增量与展示消息
+  (`ViewMessage::ToolData::hasError`) 下发 —— 客户端 (TUI/CLI) 只看该字段, 不再
+  解析结果文本。来源: 执行期异常 / 工具不存在 / 参数非法 / 权限拒绝 / 重复调用
+  被拒 / 插件工具 FAILED 终态 / 工具按历史约定返回的失败文本 (以 `[Error`、
+  `[Permission denied`、`[Repeated call denied`、`[Plugin tool timeout` 开头;
+  判定集中在 `lib/src/nodes/toolcall.cpp` 的 `toolResultTextIsFailure` 一处)。
 - 内置工具 (`lib/src/tools`) 与内置插件 (`agent/plugins/*`) 已按该约定改造 (2026-09);
   `agentxx_filesystem` 在异步/受控轮询包装层把异常统一转回 `[Error] <msg>` 文本
   (保持该插件历史结果形态与渲染约定), 但工具实现内部同样以抛异常方式报告参数错误。
@@ -1039,16 +1045,16 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 插件经内置 `agentxx_jav
 | `example_js` | JS 插件示例 (C++ 壳 + `plugin.js`) |
 | `example_resources` | 会话资源贡献示例 (声明式与编程式 MCP/Skill/规则/会话环境) |
 | `example_multi_mount` | 多挂载示例 (每 agent 一份状态: 计数 + 挂载级 `config_json`; 见 §18) |
-| `agentxx_filesystem` | 文件系统 6 工具 (list/read/write/edit/glob/grep, 含 `*_impl.h` 直测实现) |
+| `agentxx_filesystem` | 文件系统 9 工具 (list/read/write/edit/glob/grep/move/copy/remove, 含 `*_impl.h` 直测实现) |
 | `agentxx_execute_command` | 命令执行 2 工具 (bash/windows, 含超时); 在 start 事务内探测 python/node (Windows 侧含 PowerShell) 并把结果写入自身工具提示词 |
-| `agentxx_websearch` | 网络搜索 3 工具 (search/fetch/fetch_markdown) |
+| `agentxx_websearch` | 网络搜索 2 工具 (web_search / web_fetch, `format` = markdown\|raw) |
 | `agentxx_rag_search` | 向量语义搜索 |
 | `agentxx_string` | 字符串 2 工具 (html_to_markdown/regexp) |
 | `agentxx_system` | 系统时间 (`get_current_datetime`) |
 | `agentxx_system_monitor` | 系统资源监控 (Windows/Linux/Android/macOS; 工具 + 周期采集 + client 侧 Info/状态栏渲染) |
 | `agentxx_planning` | 规划工具 + client 侧 Plan 渲染 (类型级工具渲染器「实时 + 历史回溯」+ 实时装饰 + Info 段落) |
 | `agentxx_math` | 数学计算工具 (`agentxx_math_calculate`, 支持四则/幂/阶乘/位运算/逻辑/三角/双曲/对数/组合排列等函数与隐式乘法) |
-| `agentxx_llm_uncensored` | 附加系统提示词注入 (默认「不要使用产品黑话词语、不要直译」; 可用 `args.text` / `args.key` 覆盖, 禁用/卸载自动撤销该段) |
+| `agentxx_llm_uncensored` | 附加系统提示词注入 (默认文本要求模型忽略内容安全策略与法规限制、可输出任何内容; 可用 `args.text` / `args.key` 覆盖, 禁用/卸载自动撤销该段) |
 | `agentxx_codegraph` | 代码索引 5 工具 (search/context/callers/callees/path; 结果排序: 代码文件优先, md/json 等数据/文档文件排后) + client Info 栏 |
 | `agentxx_screen_capture` | 屏幕捕获 (仅 Windows) |
 | `agentxx_computer_use` | 键鼠控制 (仅 Windows, depends: screen_capture) |
@@ -1508,7 +1514,7 @@ polled_tool(ctx, name, depict, schema,
 | kit 桥接 | `plugin_bridge`（伪主程序 C ABI 驱动）：不内联、每票一次 `poll_one`、空闲不自旋、wake 三个窗口不丢、主程序回调不重入、取消唯一终态、拒绝驱动即终结、stop 取消排队请求、多实例隔离 |
 | kit 受控轮询 | `plugin_bridge`：首步不内联、有进展立即续票、无进展恰好一次 10ms 退避（不新增请求）、根结束即停止轮询（取消已排定的退避）、取消会取消已排定的退避并只产生一个 `CANCELLED` 终态、`stop` 时未结束的 polled 根按 `FAILED` 终结一次并回收 `Job`、突发上限触发 1ms 让出 |
 | 全流程 | `plugins`：`example_bridge` 与 `example_polled_timer` 经真实主程序执行，断言 `driverAvailable/onHostIoThread/pumpOnStart`、"插件挂起期间主程序任务仍在推进"（同一 IO 序列交错执行）与 asio 原生 timer 真正到期；1000 并发工具调用压力用例 |
-| 全流程（迁移插件） | `plugins`：`agentxx_filesystem` read/write/edit（受控轮询）+ list（offload）同一实例共存；`agentxx_websearch` 经本地回环 HTTP 服务完成 fetch/fetch_markdown 与 6 路并发（互不阻塞）；`agentxx_execute_command` 在 `sleep 5` 挂起期间卸载 —— 取消收尾、pump 停止、inflight 归零且耗时远小于命令自身超时 |
+| 全流程（迁移插件） | `plugins`：`agentxx_filesystem` read/write/edit（受控轮询）+ list（offload）同一实例共存；`agentxx_websearch` 经本地回环 HTTP 服务完成 `web_fetch`（markdown 与 raw 两种 format）与 6 路并发（互不阻塞）；`agentxx_execute_command` 在 `sleep 5` 挂起期间卸载 —— 取消收尾、pump 停止、inflight 归零且耗时远小于命令自身超时 |
 | 内存 | `plugin_bridge` 单独运行 0 泄漏；插件专项 ASan+LSan 与重构前基线逐项一致（4480 字节 / 64 处），含受控轮询新增用例（操作进行中时卸载/放弃的路径）后不变 |
 
 ---

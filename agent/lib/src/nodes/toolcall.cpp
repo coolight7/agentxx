@@ -42,6 +42,26 @@ namespace agentxx {
 namespace nodes {
 namespace {
 
+/// 工具结果文本的失败标记 (全项目唯一判定处)
+///
+/// 既有约定: 工具自身把一个"执行完成但失败"的结果直接写成文本 (见 AgentPrompt 的
+/// Context Markers 段), 常见前缀为:
+/// - `[Error: ...]`: 主机侧异常/参数错误 (由本节点拼出), 插件工具内部错误
+/// - `[Permission denied] ...` / `[Repeated call denied by user: ...]`: 权限与重复调用拒绝
+/// - `[Plugin tool timeout]`: 插件工具超时
+///
+/// 客户端 (TUI/CLI) 不再看这些前缀: 失败状态经 ToolData::hasError /
+/// WireDelta::hasError 传递, 而标记就在这里一次判定。
+///
+/// - `args`:
+///     - [text] 工具结果文本
+///
+/// - `return` 结果文本是否表示失败
+bool toolResultTextIsFailure(std::string_view text) {
+    return text.starts_with("[Error") || text.starts_with("[Permission denied")
+           || text.starts_with("[Repeated call denied") || text.starts_with("[Plugin tool timeout");
+}
+
 /// 解析字符串为数值: 容忍首尾空白与一个前导 '+', 要求整个字符串被完整解析
 /// (std::from_chars 不接受空白与前导 '+', 且允许部分解析, 这里做严格校验)
 template<typename T>
@@ -619,6 +639,8 @@ void insertAbortedToolResults(
                 .tool_name    = tool.name,
                 .flags        = neograph::MessageFlag::AutoInserted,
             };
+            // 失败标记: 因中间件异常而中止的调用属于失败 (界面/CLI 只看该字段)
+            msg.extra["hasError"] = true;
             aborted.push_back(std::move(msg));
         }
         agentxx::nodes::appendSessionMessages(agentCtxPtr, in, std::move(aborted));
@@ -1048,6 +1070,10 @@ asio::awaitable<std::optional<neograph::ChatMessage>> ToolcallWrapNode::runPrepa
         tool_msg.content = *prepared.shortCircuit;
         if (prepared.interrupted) {
             tool_msg.flags |= neograph::MessageFlag::Interrupt;
+        } else {
+            // 未执行就定案 = 本次调用失败: 显式标错, 供界面按 hasError 渲染
+            // (不再让界面去猜结果文本的前缀)
+            tool_msg.extra["hasError"] = true;
         }
         tool_msg.extra["durationMs"] = 0;
         // 关键指标: 未执行即定案 (中断占位记 Interrupted, 其余记 Failed)
@@ -1095,6 +1121,9 @@ asio::awaitable<std::optional<neograph::ChatMessage>> ToolcallWrapNode::runPrepa
         },
         [&](std::string errinfo) -> asio::awaitable<bool> {
             content = fmt::format("[Error: {}]", errinfo);
+            // 执行期异常 = 本次调用失败: 显式标错 (插件工具以 FAILED 终态报错时
+            // 在插件边界同样转为异常, 走到这里)
+            tool_msg.extra["hasError"] = true;
             ok      = true;
             if (auto ctx = agentContext.lock(); ctx && ctx->metrics) {
                 ctx->metrics->noteToolCall(agentxx::util::KeyMetrics::ToolOutcome::Failed);
@@ -1121,6 +1150,12 @@ asio::awaitable<std::optional<neograph::ChatMessage>> ToolcallWrapNode::runPrepa
     }
     if (tool_msg.content.empty()) {
         tool_msg.content = std::move(content);
+    }
+    // 失败标记: ① 执行期异常 / 未执行即定案已在上面置位;
+    // ② 工具把失败写成结果文本 (含插件工具内部错误) 时在这里统一认出来
+    // (置位是幂等的, 前面已置位时重复写同一个值没有副作用)
+    if (toolResultTextIsFailure(tool_msg.content)) {
+        tool_msg.extra["hasError"] = true;
     }
     if (ok) {
         // 关键指标: 执行体产出结果 (工具自身的错误文本也算执行成功, 与结果规则一致)
@@ -1349,6 +1384,12 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
     neograph::graph::NodeOutput&                                                      out
 ) {
     auto agentCtxPtr = agentContext.lock();
+    if (!agentCtxPtr || !agentCtxPtr->middlewareHandleContext) {
+        // agent 上下文已释放 (主程序销毁/会话卸载过程中): 没有可用的中间件上下文,
+        // 直接结束本节点, 与同文件其它位置的防御保持一致
+        out = {};
+        co_return;
+    }
 
     auto toolcallsCache = std::map<std::string, std::string>{};
     {

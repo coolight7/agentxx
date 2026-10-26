@@ -22,7 +22,11 @@
 记“当前挂载”，第二次挂载会覆盖），要做到“每 agent 一份 JS 实例”需要把 JsPluginCtx
 按挂载拆开（每挂载一个 JS runtime + 一套注册），属下一篇量级。单 agent 场景与非 JS
 插件不受影响。
-- Store 特化渲染显示 id
+- Store 折叠特化渲染，更改未 [start, end] opt #id
+- 修复日志警告 [W] Plugin `agentxx_filesystem`
+subscribe rejected: no event
+source (scope ref absent)
+- tui 信息侧边栏顶部增加显示当前session标题
 
 - SVG绘制支持
 - 链式 session 任务队列

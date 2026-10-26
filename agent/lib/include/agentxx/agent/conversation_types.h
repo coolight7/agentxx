@@ -267,6 +267,11 @@ struct ViewMessage {
         /// edit 工具参数 unified diff (server 生成预留; 当前渲染端自行计算, 未处理)
         std::string diff;
         bool        toolFinished = false;
+        /// 本次工具调用是否失败 (由执行层给出, 不再看结果文本前缀)
+        /// - 来源: 工具执行抛异常 / 工具不存在 / 参数非法 / 权限拒绝 / 重复调用被拒 /
+        ///   插件工具报错终态 (PLUGINXX_OPERATOR_FAILED)
+        /// - 结果文本以 `[Error: ...]` 开头的中断占位 / 用户取消不算失败
+        bool hasError = false;
     };
 
     // ---- Role::Tip 专属 ----
@@ -345,7 +350,9 @@ struct ViewMessage {
     /// 序列化为 wire/哈希 JSON (角色专属字段按 role 输出)
     utilxx_base::Json toJson() const;
     /// 从 wire/哈希 JSON 解析; 非法 role 或缺省字段时按默认值解析。
-    /// 保证 role 专属子结构在对应 role 下非空 (Tool/System/Interrupt)
+    /// - 有专属子结构的 role (Tool/Tip/Interrupt/Think) 在该 role 下保证子结构非空
+    ///   (JSON 里缺字段就按默认值构造)
+    /// - User/System/Assistant 没有专属子结构, 对应成员保持为空
     static ViewMessage fromJson(const utilxx_base::Json& j);
 };
 
@@ -771,6 +778,9 @@ inline utilxx_base::Json ViewMessage::toJson() const {
         if (tool->toolFinished) {
             t["tool_finished"] = true;
         }
+        if (tool->hasError) {
+            t["has_error"] = true;
+        }
         j["tool"] = std::move(t);
     }
     if (tip) {
@@ -829,7 +839,8 @@ inline ViewMessage ViewMessage::fromJson(const utilxx_base::Json& j) {
     } else {
         m.role = ViewMessage::Role::User;
     }
-    // 角色专属子结构: 对应 role 下保证非空 (渲染端可直接解引用)
+    // 角色专属子结构: 有子结构的 role 在该 role 下保证非空 (渲染端可直接解引用),
+    // 缺字段按默认值构造; User/System/Assistant 没有子结构, 不构造
     switch (m.role) {
         case ViewMessage::Role::Tool: {
             ViewMessage::ToolData t;
@@ -840,6 +851,7 @@ inline ViewMessage ViewMessage::fromJson(const utilxx_base::Json& j) {
                 t.toolResult   = tj.value("tool_result", std::string{});
                 t.diff         = tj.value("diff", std::string{});
                 t.toolFinished = tj.value("tool_finished", false);
+                t.hasError     = tj.value("has_error", false);
             }
             m.tool = std::move(t);
             break;
@@ -871,12 +883,13 @@ inline ViewMessage ViewMessage::fromJson(const utilxx_base::Json& j) {
             break;
         }
         case ViewMessage::Role::Think: {
+            // 无 token 且非加密的思考消息也要有子结构 (保证非空), 字段取默认值
+            ViewMessage::ThinkData th;
             if (j.contains("think") && j["think"].is_object()) {
-                ViewMessage::ThinkData th;
                 th.reasoningTokens = j["think"].value("reasoning_tokens", 0);
                 th.isEncrypted     = j["think"].value("is_encrypted", false);
-                m.think            = std::move(th);
             }
+            m.think = std::move(th);
             break;
         }
         case ViewMessage::Role::User:

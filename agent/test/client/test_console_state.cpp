@@ -175,7 +175,11 @@ TestResult testConsoleState() {
 
     // 5) 行输入/回显位的变化不算"被外部改动" (回归: 曾把它当判据, 导致每帧清屏闪烁)
     if (hasInMode) {
-        ::SetConsoleMode(hIn, savedInMode | ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT);
+        // 基线取**当前**模式: 用例 4 刚把 VT 输入位补回, 若这里写回测试开始前的原始模式,
+        // 等于又把那一位清掉, 自检会如实报告 "被外部改动" —— 与本用例要验证的判据无关。
+        DWORD currentInMode = 0;
+        XX_TEST_EXPECT_TRUE(consoleModeOf(hIn, currentInMode));
+        ::SetConsoleMode(hIn, currentInMode | ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT);
         ConsoleStateGuard guard;
         const auto        fix = guard.check();
         XX_TEST_EXPECT_FALSE(fix.repaired);

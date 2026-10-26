@@ -76,7 +76,11 @@
 
 声明权限目标的工具（走权限判定）：
 
-- `agentxx_filesystem` 插件的 `read` / `list` / `write` / `edit`（路径目标，读写作用域）。
+- `agentxx_filesystem` 插件的 9 个工具（路径目标）：
+  - 读作用域：`list` / `read`（目标 `path`）、`glob` / `grep`（目标 `file_patterns`，
+    声明的是模式参数，实际产生的路径再由工具逐项复核后才读）
+  - 写作用域：`write` / `edit` / `remove`（目标 `path`）、`move` / `copy`（目标 `src`，
+    另一个目标 `dst` 在工具内按只读方式逐项复核通过后才动）
 
 未声明权限的工具（直接放行）：
 

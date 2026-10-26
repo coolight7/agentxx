@@ -352,7 +352,7 @@ public:
     size_t llmMaxRetry = 5;
     /// - 当 toolcall 启用了 [agentxx::tools::XXToolBase::autoSummaryOutput]
     /// 且输出超过限制值 [toolcallSummaryLimitOutputLength] 时压缩
-    /// - 功能实现见 [agentxx::node::ToolcallWrapNode::execTool]
+    /// - 功能实现见 [agentxx::nodes::ToolcallWrapNode::execTool]
     size_t toolcallSummaryLimitOutputLength = 2 * 1024;
 
     /// 队列输入 (用户发来的消息) 单条过长时的压缩阈值, 单位为 utf8 字符数 (默认 8K)
@@ -371,7 +371,7 @@ public:
     ///   达到该次数时, ToolcallNode 经 permission 总线发起询问警告用户,
     ///   用户确认后才继续执行, 拒绝则中止本次调用
     /// - 0 表示禁用检查 (即使 tool 启用了 repeatCallCheck)
-    /// - 功能实现见 [agentxx::node::ToolcallWrapNode::execTool]
+    /// - 功能实现见 [agentxx::nodes::ToolcallWrapNode::execTool]
     size_t toolcallRepeatCheckThreshold = 5;
 
     /// 同一条 assistant 消息内**并行安全工具**的最大并发数 (默认 4)

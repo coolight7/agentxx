@@ -2063,7 +2063,7 @@ inline void polled_tool(
         // 会话级取消标记只对"取消发生时正在运行的操作"有效: 新操作开始时先清掉上一次
         // 留下的标记。只靠轮次开始事件清理不够 —— 该事件不经 agent_start 的路径
         // (中断恢复/取消后重跑) 不会触发, 残留标记会让该会话之后的每次调用都被判为
-        // 已取消 (命令工具直接被杀, 宿主侧表现为 [User canceled])。
+        // 已取消 (命令工具直接被杀, 主程序侧表现为 [User canceled])。
         if (!request.scopeKey.empty()) {
             c.cancelRegistry.clearCancelled(request.scopeKey);
         }

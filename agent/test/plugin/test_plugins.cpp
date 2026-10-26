@@ -3584,7 +3584,7 @@ throw new Error("top-level rollback probe");
         );
         XX_TEST_EXPECT_TRUE(evIface != nullptr);
 
-        // 2) round_start 事件能经总线送达订阅者 (验证发布/订阅链路本身)
+        // 2) round_start 事件能经总线送达订阅者 (验证发布/订阅流程本身)
         std::atomic<int>  hits{0};
         PluginxxStringView topicSv{"plugin.agentxx.round_start",
                                    sizeof("plugin.agentxx.round_start") - 1};

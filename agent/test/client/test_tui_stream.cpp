@@ -1192,6 +1192,64 @@ void testTuiStreamScenario12(asio::io_context& ioCtx) {
 
 } // namespace
 
+// 场景 13: 工具失败标记跟随 delta 的 hasError (界面不再看结果文本前缀)
+// - ToolEnd 的 hasError 应写进 TUIMessage 的工具子结构
+// - 成功的结果保持 hasError = false (文本里出现 "error" 字样也不影响)
+void testTuiStreamScenario13(asio::io_context& ioCtx) {
+    TestTUIClientIO client(ioCtx);
+
+    {
+        WireDelta start;
+        start.type       = WireDelta::Type::ToolStart;
+        start.toolName   = "agentxx_filesystem_read";
+        start.toolCallId = "call_ok";
+        start.arguments  = "{\"path\":\"a.txt\"}";
+        client.testOnDelta(start);
+    }
+    {
+        WireDelta end;
+        end.type       = WireDelta::Type::ToolEnd;
+        end.toolName   = "agentxx_filesystem_read";
+        end.toolCallId = "call_ok";
+        end.result     = "no error here, just text";
+        end.hasError   = false;
+        client.testOnDelta(end);
+    }
+    {
+        WireDelta start;
+        start.type       = WireDelta::Type::ToolStart;
+        start.toolName   = "agentxx_filesystem_read";
+        start.toolCallId = "call_bad";
+        start.arguments  = "{\"path\":\"missing.txt\"}";
+        client.testOnDelta(start);
+    }
+    {
+        WireDelta end;
+        end.type       = WireDelta::Type::ToolEnd;
+        end.toolName   = "agentxx_filesystem_read";
+        end.toolCallId = "call_bad";
+        end.result     = "[Error: path does not exist]";
+        end.hasError   = true;
+        client.testOnDelta(end);
+    }
+
+    auto snap = client.sharedState().snapshot();
+    XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)2);
+    if (snap->messages.size() == 2) {
+        XX_TEST_EXPECT_TRUE(snap->messages[0]->role == TUIMessage::Role::Tool);
+        XX_TEST_EXPECT_TRUE(snap->messages[0]->tool.has_value());
+        if (snap->messages[0]->tool) {
+            XX_TEST_EXPECT_FALSE(snap->messages[0]->tool->hasError);
+        }
+        XX_TEST_EXPECT_TRUE(snap->messages[1]->role == TUIMessage::Role::Tool);
+        XX_TEST_EXPECT_TRUE(snap->messages[1]->tool.has_value());
+        if (snap->messages[1]->tool) {
+            XX_TEST_EXPECT_TRUE(snap->messages[1]->tool->hasError);
+            XX_TEST_EXPECT_TRUE(snap->messages[1]->tool->toolFinished);
+        }
+    }
+}
+
 TestResult testTuiStream() {
     testTuiStreamMarkdown();
 
@@ -1208,6 +1266,7 @@ TestResult testTuiStream() {
     testTuiStreamScenario10(ioCtx);
     testTuiStreamScenario11(ioCtx);
     testTuiStreamScenario12(ioCtx);
+    testTuiStreamScenario13(ioCtx);
 
     return TestResult{g_tui_stream_passed, g_tui_stream_failed};
 }

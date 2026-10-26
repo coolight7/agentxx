@@ -159,7 +159,7 @@
 
 | 编号 | 内容 | 状态 | 代码位置 / 验收 |
 |---|---|---|---|
-| RET-1a | 会话搜索/改名的协议与 TUI 入口 | 已实施 | `WireListSessions.keyword`、`WireRenameSession`/`WireRenameSessionResult`、`SessionInfo.snippet`；TUI 会话弹窗检索行（直接输入）+ `Ctrl+R` 改名；模块 `session_admin`、`tui_surface` |
+| RET-1a | 会话搜索/改名的协议与 TUI 入口 | 已实施（TUI 检索入口已移除） | `WireListSessions.keyword`、`WireRenameSession`/`WireRenameSessionResult`、`SessionInfo.snippet`；TUI 会话弹窗保留 `Ctrl+R` 改名（检索行已删除，关键词检索能力仍在协议与存储层）；模块 `session_admin`、`tui_surface` |
 | OBS-3 | 关键指标（首 token / 轮次耗时 / 压缩次数等） | 已实施 | `util/observability.*`（`KeyMetrics`：轮次终态/TTFT/轮次耗时/模型调用与用量（含缓存读+写）/工具四终态/压缩前后 token）+ 加载快照 `metrics` 段；模块 `observability`、`fake_provider` |
 | OBS-4 | 诊断包导出 | 已实施 | `util/diagnostics.*`（`buildDiagnosticsText` + `redactSecrets` + 日志环形捕获）+ CLI `--dump-diagnostics`；模块 `observability` |
 | OBS-5 | 模块级日志开关 | 已实施 | `utilxx_base/log.h`（`LogEntry::module` + `logModuleOf` + `LogDispatcher::setModuleLevel/clearModuleLevels` + `applyLogModuleLevelSpec`）、主程序插件日志记为 `plugin.<名字>`（`pluginxx/host/tables_impl.h`）、CLI `AGENTXX_LOG_MODULES=前缀=级别,...`；模块 `log_modules`；见 [index.md](index.md) §按模块调日志级别 |
@@ -194,11 +194,13 @@
 | TOOL-14 | 延迟工具暴露级别 | 延迟加载实现完善后 |
 | JOB-1 ~ JOB-12 | 作业表、进度、后台命令、子代理记录、配额车道、fork 上下文、可继续子代理、定时任务、跨会话观察者 | 子代理改造排期时整体设计 |
 | OBS-2 | telemetry 内容边界（设计约束） | 出现 telemetry 出口时 |
+| PRO-13 | 重连重放缓冲的字节上限（现为只有条数上限 `deltaBufferCap`） | 单条增量载荷变大、或实测出现重放缓冲占用异常时；估算函数 `estimateWireDeltaBytes` / `estimateViewMessageBytes` 已删除，需要时按当时的数据结构重写 |
+| PRO-14 | MCP / A2A 运行入口与插件导出 | 把 cli 入口的能力同步一份到 `McpServer` / `A2aServer`（当前只有库调用面与测试），并提供插件的注册/导出功能 |
+| TRN-1 | 训练存档原子写与续训 | 训练系统完善时：`savePopulationToFile` 去掉“先删后改名”（直接 rename 覆盖）、加载时按 `.1 → .2 → .3` 回退备份、CLI 使用固定存档路径以支持续训 |
 
 ## 16. 修订记录
 
-- 2026-10-05：建立本清单，按 §1~§15 汇总六篇比较文档的裁定结果与代码位置。
-- 2026-10-05：TOOL-1 / TOOL-2 / TOOL-3 / TOOL-17 标记为已实施（工具三段式执行 + 受限并行 + 命令执行环境加固）。
+- 2026-10-05：建立本清单，按 §1~§15 汇总六篇比较文档的裁定结果与代码位置。- 2026-10-05：TOOL-1 / TOOL-2 / TOOL-3 / TOOL-17 标记为已实施（工具三段式执行 + 受限并行 + 命令执行环境加固）。
 - 2026-10-06：按实施记录同步状态：LOOP-1/2/3/4/11、STO-4/5/9、PRM-1/2/4/5/7、SEC-2/5/9、
   TST-10、PRO-1/7/11、LLM-2/3、TOOL-1/2/3/12/17、CFG-8 与 UI-3/4 均已完成（详见
   `resource/history/compare-agent/work.md`）。
@@ -257,3 +259,4 @@
   `JAVA_TOOL_OPTIONS`（`sun.stdout/stderr.encoding` + `stdout/stderr.encoding`,
   不动用户已有选项）；`PWD` 取命令实际运行目录（会话工作目录, 默认即主程序运行目录,
   与子进程 cwd 一致）；`command` 模块新增子进程 UTF-8 编码、中文往返与 `PWD` 用例。
+- 2026-10-26: 按代码/文档/测试一致性精读（`resource/history/analyse-1/analyse.md`）同步: 接口表数量 20→21、Tip 前缀去 `#`、wire 消息清单改为以 `wire-protocol-fields.md` 为准并补 `host_tool_*`、插件目录与工具数量、权限声明工具清单; 新增 PRO-13 / PRO-14 / TRN-1 三条未来计划。

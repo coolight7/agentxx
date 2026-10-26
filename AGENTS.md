@@ -458,7 +458,10 @@ path/to/agentxx_test string_util regex
   `string_regexp` 增加 `ignore_case`; `web_fetch` 的 `header` 声明为 object
 - 工具错误约定: 参数检查失败抛 `std::invalid_argument`、运行期错误抛 `std::runtime_error`,
   由 `ToolcallWrapNode` 统一格式化为 `[Error: <msg>]` 结果文本 (工具自身裁剪输出时同样用该前缀);
-  插件侧在 SDK 边界捕获并上报 FAILED (取消上报 CANCELLED); 不要返回 `{"error": ...}` 形态
+  插件侧在 SDK 边界捕获并上报 FAILED (取消上报 CANCELLED); 不要返回 `{"error": ...}` 形态;
+  **失败标记** `hasError` 由执行层给出 (异常/工具不存在/参数非法/权限拒绝/重复调用被拒/
+  插件 FAILED 终态/上述失败文本), 随 `ToolEnd` 与 `ViewMessage::ToolData::hasError` 下发,
+  **客户端只看该字段**, 不再自行解析结果文本 (文本判定集中在 toolcall.cpp 一处)
 - 输入分页 (2026-10): 单条输入达到 `AgentConfig::userInputSummaryLimitLength` (默认 8K utf8 字符,
   0=关闭) 即把原文经 share store 卸载, 上下文/请求只留开头片段 + `agentxx_share_store` 取回提示
   (模型按行取回); 覆盖两处入口 —— 队列里的用户消息进入轮次时 (`BaseAgent::runTurnAsync`)

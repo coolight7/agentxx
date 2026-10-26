@@ -472,9 +472,9 @@ Agentxx maintains a single unified C++ plugin infrastructure. JavaScript script 
 | `example_graph_node` | Graph extension sample (custom node types + set_graph_json; requires `agentxx.agent.graph`). |
 | `example_js` | JavaScript script plugin example (C++ shell wrapper + `plugin.js`). |
 | `example_resources` | Session resource contribution example (declarative & programmatic MCP, Skills, rules, session environments). |
-| `agentxx_filesystem` | Filesystem tools (list, read, write, edit, glob, grep; includes unit-tested `*_impl.h`). |
+| `agentxx_filesystem` | Filesystem tools (list, read, write, edit, glob, grep, move, copy, remove; includes unit-tested `*_impl.h`). |
 | `agentxx_execute_command` | Command execution tools (bash, windows; includes timeout handling); probes python/node (plus PowerShell on Windows) in its start transaction and writes the results into its own tool prompts. |
-| `agentxx_websearch` | Web search and retrieval tools (search, fetch, fetch_markdown). |
+| `agentxx_websearch` | Web search and retrieval tools (web_search, web_fetch; `format` = markdown\|raw). |
 | `agentxx_rag_search` | Vector semantic search. |
 | `agentxx_string` | String tools (html_to_markdown, regexp). |
 | `agentxx_system` | System clock tool (`get_current_datetime`). |

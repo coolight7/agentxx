@@ -105,7 +105,7 @@ struct SessionStoreHooks {
 ///   这里是"累计花掉多少", 只增不减
 /// - 每次模型调用结算时累加 (见 nodes/modelcall.cpp 的用量记账)
 /// - 会话第一次加载时由用量台账 (SessionStore 的 usage 表聚合) 恢复, 因此跨进程
-///   重启后继续累计; 不持久化在本进程内存之外的地方
+///   重启后继续累计; 本结构自身不单独落库, 重启后的数值由台账重新聚合得到
 /// - 字段含义与 wire 协议 [agentxx::agent::WireContextStats] 的用量段一致
 struct SessionUsageTotals {
     /// 输入 (prompt) token 累计; 含命中缓存与写入缓存的输入
@@ -294,11 +294,17 @@ public:
 
     /// 上下文版本号 (每次变更 +1, 单调递增)
     /// - 供中断/异常路径记录 O(1) 快照 (版本 + 条数), 回滚时按条数截断
+    /// - 仅 ioContext 线程调用 (与 messages() 同一约束, assertIoThread 强制校验)
     uint64_t messagesVersion() const noexcept {
+        assertIoThread();
         return messagesVersion_;
     }
 
     /// 上下文条数
+    /// - **可在任意线程读** (与同族其它访问器不同): 插件接口表的会话查询
+    ///   (agentxx.agent.context 的 messages_count) 与诊断导出会在非 io 线程调用;
+    ///   并发写入期间读到的是近似值 (可能比实际少一两条), 只用于展示/估算,
+    ///   不要据此做写入决策
     size_t messagesCount() const noexcept {
         return messages_.size();
     }

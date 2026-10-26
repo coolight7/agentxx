@@ -1812,16 +1812,22 @@ asio::awaitable<void> test_agent_toolcall_intercept_exception() {
     XX_TEST_EXPECT_TRUE(session != nullptr);
     auto msgs = session->llmMessagesJson();
     XX_TEST_EXPECT_TRUE(msgs.is_array());
-    bool hasErrorMsg = false;
+    bool hasErrorMsg  = false;
+    bool hasErrorFlag = false;
     for (const auto& m : msgs) {
         // 匹配 "aborted at Start phase": 实际插入格式为
         // "[Error: {exceptionStr} (tool call aborted at Start phase)]" (带错误详情)
         if (m["role"] == "tool"
             && m["content"].dump().find("aborted at Start phase") != std::string::npos) {
             hasErrorMsg = true;
+            // 失败标记: 由工具执行层写入消息的 extra, 界面/CLI 只看这个字段
+            // (不再看结果文本前缀)
+            hasErrorFlag = m.contains("extra") && m["extra"].is_object()
+                           && m["extra"].value("hasError", false);
         }
     }
     XX_TEST_EXPECT_TRUE(hasErrorMsg);
+    XX_TEST_EXPECT_TRUE(hasErrorFlag);
     const auto& last = msgs.back();
     XX_TEST_EXPECT_TRUE(last["role"] == "assistant");
     XX_TEST_EXPECT_TRUE(last["content"].dump().find("Final answer") != std::string::npos);
