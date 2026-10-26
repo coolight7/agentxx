@@ -3538,6 +3538,82 @@ throw new Error("top-level rollback probe");
         planCtx->pluginManager->shutdownAll();
     }
 
+    // ---- 42. 轮次开始事件清理会话级取消标记 (plugin.agentxx.round_start) ----
+    //
+    // 背景: 会话取消发生时框架把会话键写进实例 CancelRegistry; 该标记必须在下一轮
+    // 开始时清掉, 否则该会话之后的每次工具调用都会被判为"已取消" (命令工具直接
+    // 被杀, 表现为 [User canceled])。
+    {
+        auto roundCtx                     = std::make_shared<agentxx::agent::AgentContext>();
+        roundCtx->agentConfig             = std::make_shared<agentxx::agent::AgentConfig>();
+        roundCtx->middlewareHandleContext
+            = std::make_shared<agentxx::middleware::MiddlewareContext>();
+        roundCtx->bus
+            = std::make_shared<agentxx::events::EventBus>(co_await asio::this_coro::executor);
+        roundCtx->toolRegistry  = std::make_shared<agentxx::plugin::ToolRegistry>();
+        roundCtx->pluginManager = std::make_shared<agentxx::plugin::PluginManager>(roundCtx);
+        roundCtx->pluginManager->setIoExecutor(co_await asio::this_coro::executor);
+        roundCtx->pluginMount = co_await roundCtx->pluginManager->mountAgentAsync(roundCtx);
+
+        auto probeInst    = std::make_shared<agentxx::plugin::PluginInstance>("round_start_probe");
+        probeInst->manager  = roundCtx->pluginManager;
+        probeInst->self     = probeInst;
+        probeInst->ownerSelf = probeInst;
+        // 事件投递会校验实例处于 Ready (acceptsOperations): 手工构造的实例需要显式给
+        // 出生周期与 Ready 状态, 否则回调被静默丢弃
+        probeInst->lifetime = std::make_shared<pluginxx::InstanceLifetime>(
+            co_await asio::this_coro::executor,
+            probeInst->name,
+            uint64_t{1}
+        );
+        probeInst->lifetime->setState(pluginxx::PluginInstanceState::Ready);
+        auto vtableSv      = agentxx::plugin::PluginStringView::fromCstr("__vtable");
+        probeInst->hostControl = agentxx::plugin::PluginHostControl::create(
+            probeInst,
+            (const PluginxxHostVtable*)agentxx::plugin::xx_query_interface(nullptr, &vtableSv)
+        );
+
+        struct RoundProbeCtx : public agentxx::plugin::PluginBase {};
+        RoundProbeCtx probe;
+        probe.init(probeInst->hostView());
+
+        // 1) 事件表可用
+        auto* evIface = agentxx::plugin::queryInterface<PluginxxEventsIface>(
+            probeInst->hostView(),
+            PLUGINXX_IFACE_EVENTS
+        );
+        XX_TEST_EXPECT_TRUE(evIface != nullptr);
+
+        // 2) round_start 事件能经总线送达订阅者 (验证发布/订阅链路本身)
+        std::atomic<int>  hits{0};
+        PluginxxStringView topicSv{"plugin.agentxx.round_start",
+                                   sizeof("plugin.agentxx.round_start") - 1};
+        auto*              sub = (evIface && evIface->subscribe)
+                                     ? evIface->subscribe(
+                                           probeInst->hostView(),
+                                           nullptr,
+                                           &topicSv,
+                                           [](const PluginxxStringView*, void* ud) {
+                                               static_cast<std::atomic<int>*>(ud)->fetch_add(1);
+                                           },
+                                           &hits
+                                       )
+                                     : nullptr;
+        XX_TEST_EXPECT_TRUE(sub != nullptr);
+
+        // 3) PluginBase 订阅的清理回调生效: 已取消标记在轮次开始后被清掉
+        const std::string sid = "sess-round-start";
+        probe.cancelRegistry.cancel(sid);
+        XX_TEST_EXPECT_TRUE(probe.cancelRegistry.isCancelled(sid));
+
+        auto payload = utilxx_base::Json{{"sessionId", sid}}.dump();
+        co_await roundCtx->bus->publish("plugin.agentxx.round_start", payload);
+        XX_TEST_EXPECT_EQ(hits.load(), 1);
+        XX_TEST_EXPECT_FALSE(probe.cancelRegistry.isCancelled(sid));
+
+        roundCtx->pluginManager->shutdownAll();
+    }
+
     ctx->pluginManager->shutdownAll();
 
     co_return TestResult{g_plugin_passed, g_plugin_failed};

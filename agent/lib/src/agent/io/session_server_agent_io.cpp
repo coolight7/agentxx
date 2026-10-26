@@ -522,7 +522,7 @@ void SessionServerAgentIO::interruptAndRunNext() {
     );
     if (turnActive_.load(std::memory_order_acquire)) {
         pendingInsert_ = true;
-        onCancel();
+        onCancel("interrupt_and_run_next");
     } else {
         wakeChannel_->try_send(ErrorCode{}, 1);
     }
@@ -1194,7 +1194,7 @@ void SessionServerAgentIO::onPeerMessage(
                 if (turnActive_.load(std::memory_order_acquire)) {
                     setQueueState(SessionQueueState::Paused, "cancel");
                 }
-                onCancel();
+                onCancel("wire_cancel");
             } else if constexpr (std::is_same_v<T, WireInterruptAndRunNext>) {
                 if (!acceptSessionScope(m.sessionId, sender, "interrupt_and_run_next")) {
                     return;
@@ -1992,10 +1992,18 @@ void SessionServerAgentIO::resolveInterrupt(int64_t id, utilxx_base::Json result
     }
 }
 
-void SessionServerAgentIO::onCancel() {
+void SessionServerAgentIO::onCancel(std::string_view reason) {
     auto sess = session();
     if (sess) {
         auto token = sess->getCancelToken();
+        if (token && !token->is_cancelled()) {
+            // 排查"没有用户操作但轮次被取消"时直接看出发起方
+            XX_LOGI(
+                "[session_ctrl] session cancel requested ({}; session={})",
+                reason,
+                config_.sessionId
+            );
+        }
         if (token) {
             token->cancel();
         }
@@ -2302,7 +2310,7 @@ void SessionServerAgentIO::stopImpl() {
     // 切换会话期间暂存的消息一并丢弃 (端点已停止, 不再重放)
     switchTargetId_.clear();
     stashedWhileSwitching_.clear();
-    onCancel();
+    onCancel("endpoint_stop");
     // 退订插件事件前缀 (防止端点析构后回调悬垂)
     if (pluginSubId_ != 0) {
         if (auto agent = agent_.lock(); agent && agent->agentContext && agent->agentContext->bus) {
@@ -2979,7 +2987,7 @@ std::shared_ptr<Session> SessionServerAgentIO::session() {
 
 void SessionServerAgentIO::startGraceTimer() {
     if (config_.gracePeriod.count() <= 0) {
-        onCancel();
+        onCancel("grace_period_disabled");
         failAllPending();
         return;
     }
@@ -3005,7 +3013,7 @@ void SessionServerAgentIO::startGraceTimer() {
                     "[session_ctrl] grace period expired, cancelling turn (thread={})",
                     self->config_.sessionId
                 );
-                self->onCancel();
+                self->onCancel("grace_period_expired");
                 self->failAllPending();
             }
             co_return;

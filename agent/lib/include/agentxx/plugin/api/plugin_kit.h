@@ -591,6 +591,14 @@ protected:
             },
             this
         );
+        if (!roundStartSub_) {
+            // 订阅失败时取消标记只能靠每个工具根开始时自清 (见 polled_tool/blocking_tool),
+            // 这里明确提示一次, 避免以后排查只能靠现象
+            log.warn(
+                "plugin kit: subscribe `plugin.agentxx.round_start` failed; session cancel "
+                "marks will only be cleared when the next tool root starts"
+            );
+        }
     }
 
 private:
@@ -1433,8 +1441,9 @@ inline void tool(
             cancelReg = &shim->ctx->cancelRegistry;
         }
         auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
-        if (cancelReg && !request.scopeKey.empty() && cancelReg->isCancelled(request.scopeKey)) {
-            cancelFlag->store(true, std::memory_order_release);
+        // 同 polled_tool: 新操作开始先清掉上一次会话取消留下的标记
+        if (cancelReg && !request.scopeKey.empty()) {
+            cancelReg->clearCancelled(request.scopeKey);
         }
 
         OpCtl ctl{cancelFlag, cancelReg, request.scopeKey, shim->agent};
@@ -1659,8 +1668,10 @@ inline void blocking_tool(
             auto agentRaw = shim->agent.raw();
             workDirCache  = shim->ctx->workDir(&agentRaw, tidStr);
             argsJsonCache = shim->ctx->argsJson();
-            if (!tidStr.empty() && shim->ctx->cancelRegistry.isCancelled(tidStr)) {
-                shim->ctx->cancelRegistry.cancel(tidStr);
+            // 新操作开始先清掉上一次会话取消留下的标记: 该标记只对取消发生时正在跑
+            // 的操作有效, 残留会让该会话之后的所有调用都被当成已取消
+            if (!tidStr.empty()) {
+                shim->ctx->cancelRegistry.clearCancelled(tidStr);
             }
         }
         auto* job = new Job{
@@ -2049,8 +2060,12 @@ inline void polled_tool(
         // (协程会挂起并继续读取它们)。
         auto request    = detail::toolRootRequest(c.host, args_json, thread_id, tool_call_id);
         auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
-        if (!request.scopeKey.empty() && c.cancelRegistry.isCancelled(request.scopeKey)) {
-            cancelFlag->store(true, std::memory_order_release);
+        // 会话级取消标记只对"取消发生时正在运行的操作"有效: 新操作开始时先清掉上一次
+        // 留下的标记。只靠轮次开始事件清理不够 —— 该事件不经 agent_start 的路径
+        // (中断恢复/取消后重跑) 不会触发, 残留标记会让该会话之后的每次调用都被判为
+        // 已取消 (命令工具直接被杀, 宿主侧表现为 [User canceled])。
+        if (!request.scopeKey.empty()) {
+            c.cancelRegistry.clearCancelled(request.scopeKey);
         }
 
         auto* job       = new Job();

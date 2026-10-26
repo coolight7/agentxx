@@ -432,7 +432,9 @@ private:
     void stopImpl();
 
     void resolveInterrupt(int64_t id, utilxx_base::Json result);
-    void onCancel();
+    /// 取消会话当前轮次 (取消令牌级联到正在跑的 LLM 请求 / 工具 / HIL 等待)
+    /// - `reason` 只用于日志: 排查"没有用户操作但轮次被取消"时能直接看出是谁发起的
+    void onCancel(std::string_view reason = "unspecified");
 
     // ----- 插件事件转发 (仅 ex_ 线程访问) -----
 
