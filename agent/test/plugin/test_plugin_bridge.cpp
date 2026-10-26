@@ -235,12 +235,6 @@ void PLUGINXX_CALL fakeOpCancel(PluginxxOperatorHandle* op) {
     }
 }
 
-int32_t PLUGINXX_CALL fakeIsCancelled(
-    const PluginxxHost*, const PluginxxScopeRef*, const PluginxxStringView*
-) {
-    return 0;
-}
-
 int32_t PLUGINXX_CALL fakeOffloadIsCancelled(const PluginxxCancelToken*) {
     return 0;
 }
@@ -308,7 +302,6 @@ const PluginxxSchedulerIface g_fakeScheduler = {
 const PluginxxCancelIface g_fakeCancel = {
     /* version */ PLUGINXX_IFACE_CANCEL_VERSION,
     /* struct_size */ sizeof(PluginxxCancelIface),
-    /* is_cancelled */ fakeIsCancelled,
     /* op_cancel */ nullptr,
 };
 

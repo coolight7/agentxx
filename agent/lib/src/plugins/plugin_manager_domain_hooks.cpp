@@ -235,65 +235,6 @@ void PluginManager::setLanguage(std::string_view lang) {
     }
 }
 
-std::string PluginManager::getToolPromptJson(const std::string& toolName) {
-    auto c = primaryAgent_.lock();
-    if (!c || !c->agentConfig) {
-        return {};
-    }
-    const auto& prompts = c->agentConfig->prompt.toolPrompt;
-    auto        it      = prompts.find(toolName);
-    if (it == prompts.end()) {
-        return {};
-    }
-    utilxx_base::Json out;
-    out["depict"]          = it->second.depict;
-    utilxx_base::Json args = utilxx_base::Json::object();
-    for (const auto& [k, v] : it->second.args) {
-        args[k] = v;
-    }
-    out["args"] = std::move(args);
-    return out.dump();
-}
-
-std::string PluginManager::toolPromptJson(std::string_view toolName) {
-    return getToolPromptJson(std::string{toolName});
-}
-
-std::string PluginManager::getSessionWorkDir() {
-    auto c = primaryAgent_.lock();
-    if (!c || !c->agentConfig) {
-        return {};
-    }
-    return c->agentConfig->resolvedWorkDir();
-}
-
-std::string PluginManager::getSessionWorkDir(std::string_view sessionId) {
-    auto c = primaryAgent_.lock();
-    if (!c) {
-        return {};
-    }
-    auto session = c->getSession(sessionId);
-    if (session && !session->getWorktreeBinding().path.empty()) {
-        return session->getWorktreeBinding().path;
-    }
-    return getSessionWorkDir();
-}
-
-std::string PluginManager::sessionWorkDir(const PluginxxScopeRef* agent, std::string_view sessionId) {
-    // 会话属于具体 agent: 带引用时取该挂载的 agent (主 agent 的会话可能根本没有该 sessionId)
-    auto c = agentContextOf(agent);
-    if (!c || !c->agentConfig) {
-        return {};
-    }
-    if (!sessionId.empty()) {
-        if (auto session = c->getSession(sessionId);
-            session && !session->getWorktreeBinding().path.empty()) {
-            return session->getWorktreeBinding().path;
-        }
-    }
-    return c->agentConfig->resolvedWorkDir();
-}
-
 std::string PluginManager::getModelConfigJson() {
     auto c = primaryAgent_.lock();
     if (!c || !c->agentConfig) {
@@ -321,8 +262,27 @@ std::string PluginManager::getModelConfigJson() {
 }
 
 // =====================================================================
-// cancel 表
+// agentxx 业务表的数据来源 (会话工作目录 / 取消查询 / 工具提示词)
 // =====================================================================
+// 这三项都是主程序业务概念 (会话、轮次取消、工具提示词), 不属于插件框架的
+// 通用能力, 因此由 agentxx 自己的接口表对外提供:
+// - 会话工作目录 / 取消查询 -> agentxx.agent.session (见 plugin_manager_vtable.cpp)
+// - 工具提示词 -> agentxx.agent.prompt
+
+std::string PluginManager::sessionWorkDir(const PluginxxScopeRef* agent, std::string_view sessionId) {
+    // 会话属于具体 agent: 带引用时取该挂载的 agent (主 agent 的会话可能根本没有该 sessionId)
+    auto c = agentContextOf(agent);
+    if (!c || !c->agentConfig) {
+        return {};
+    }
+    if (!sessionId.empty()) {
+        if (auto session = c->getSession(sessionId);
+            session && !session->getWorktreeBinding().path.empty()) {
+            return session->getWorktreeBinding().path;
+        }
+    }
+    return c->agentConfig->resolvedWorkDir();
+}
 
 bool PluginManager::isSessionCancelled(const PluginxxScopeRef* agent, std::string_view sessionId) {
     if (sessionId.empty()) {
@@ -338,6 +298,30 @@ bool PluginManager::isSessionCancelled(const PluginxxScopeRef* agent, std::strin
         return false;
     }
     return session->getCancelToken()->is_cancelled();
+}
+
+std::string PluginManager::getToolPromptJson(const std::string& toolName) {
+    auto c = primaryAgent_.lock();
+    if (!c || !c->agentConfig) {
+        return {};
+    }
+    const auto& prompts = c->agentConfig->prompt.toolPrompt;
+    auto        it      = prompts.find(toolName);
+    if (it == prompts.end()) {
+        return {};
+    }
+    utilxx_base::Json out;
+    out["depict"]          = it->second.depict;
+    utilxx_base::Json args = utilxx_base::Json::object();
+    for (const auto& [k, v] : it->second.args) {
+        args[k] = v;
+    }
+    out["args"] = std::move(args);
+    return out.dump();
+}
+
+std::string PluginManager::toolPromptJson(std::string_view toolName) {
+    return getToolPromptJson(std::string{toolName});
 }
 
 // =====================================================================

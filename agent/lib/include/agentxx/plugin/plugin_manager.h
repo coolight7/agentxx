@@ -395,8 +395,6 @@ public:
     /// 指定语言 (pluginxx::DomainHooks 要求; 同时服务 config 表的 set_language)
     void setLanguage(std::string_view lang) override;
 
-    std::string getSessionWorkDir();
-    std::string getSessionWorkDir(std::string_view sessionId);
     std::string getModelConfigJson();
 
     // ==================== pluginxx::DomainHooks 实现 ====================
@@ -422,15 +420,21 @@ public:
     void setWorkerThreadPool(std::shared_ptr<asio::thread_pool> pool);
 
     std::string configJson() override;
-    std::string toolPromptJson(std::string_view toolName) override;
-    std::string sessionWorkDir(const PluginxxScopeRef* agent, std::string_view sessionId) override;
     std::string language() override;
 
     std::string pluginsJson() override;
     std::string pluginJson(std::string_view name) override;
 
-    /// 会话是否已被取消 (cancel 表; 引用指定 agent)
-    bool isSessionCancelled(const PluginxxScopeRef* agent, std::string_view sessionId) override;
+    // ==================== agentxx 业务表的数据来源 ====================
+    // 会话工作目录、取消查询、工具提示词属主程序业务, 由 agentxx 自己的接口表
+    // (agentxx.agent.session / agentxx.agent.prompt) 提供, 不再进通用表。
+
+    /// 指定 agent 的会话工作目录 (会话有 worktree 绑定时优先; 未加载返回空串)
+    std::string sessionWorkDir(const PluginxxScopeRef* agent, std::string_view sessionId);
+    /// 指定 agent 的会话是否已取消 (advisory 查询; 无会话/无取消令牌返回 false)
+    bool isSessionCancelled(const PluginxxScopeRef* agent, std::string_view sessionId);
+    /// 工具提示词配置 JSON (`{"depict": ..., "args": {...}}`; 未配置返回空串)
+    std::string toolPromptJson(std::string_view toolName);
 
     /// 主 agent 的上下文 (主程序级配置来源)
     std::shared_ptr<agentxx::agent::AgentContext> primaryAgentContext() const {

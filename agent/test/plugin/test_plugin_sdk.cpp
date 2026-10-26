@@ -431,7 +431,7 @@ TestResult testPluginSdk() {
                 auto argsView = args;
                 co_await Gate{box.released, box.handle};
                 box.seen->assign(argsView.data(), argsView.size());
-                box.session->assign(ctl.sessionId.data(), ctl.sessionId.size());
+                box.session->assign(ctl.scopeKey.data(), ctl.scopeKey.size());
                 co_return *box.seen;
             }
         );
@@ -657,9 +657,9 @@ TestResult testPluginSdk() {
             [](SdkCtx&, const RootRequest& req) -> std::string {
                 return fmt::format(
                     R"({{"node":"{}","thread":"{}","state":{}}})",
-                    req.node(),
-                    req.session(),
-                    req.state()
+                    agentxx::plugin::nodeNameOf(req),
+                    req.scope(),
+                    agentxx::plugin::nodeStateOf(req)
                 );
             }
         );
@@ -734,8 +734,8 @@ TestResult testPluginSdk() {
             "test.node.async",
             "{}",
             [&box](SdkCtx&, const RootRequest& req, OpCtl ctl) -> Task<std::string> {
-                std::string node{req.node()};
-                std::string state{req.state()};
+                std::string node{agentxx::plugin::nodeNameOf(req)};
+                std::string state{agentxx::plugin::nodeStateOf(req)};
                 co_await Gate{box.released, box.handle};
                 if (ctl.cancelled()) {
                     co_return std::string{"cancelled"};

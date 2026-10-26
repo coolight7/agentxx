@@ -18,13 +18,14 @@
 
 /* ==================== 全局版本 ==================== */
 
-/* v2: 两侧 API 与最低兼容版本一起抬到 2 (旧插件被拒, 必须重编) */
-_Static_assert(PLUGINXX_API_VERSION == 2, "agent 侧 ABI 版本必须为 2");
-_Static_assert(PLUGINXX_MIN_API_VERSION == 2, "agent 侧最低兼容 ABI 版本必须为 2");
-_Static_assert(AGENTXX_CLIENT_PLUGIN_API_VERSION == 2, "client 侧 ABI 版本必须为 2");
+/* v3: 两侧 API 与最低兼容版本一起抬到 3 (旧插件被拒, 必须重编);
+   本代把通用表里的业务成员迁到主程序业务表, 通用根请求字段名泛化 */
+_Static_assert(PLUGINXX_API_VERSION == 3, "agent 侧 ABI 版本必须为 3");
+_Static_assert(PLUGINXX_MIN_API_VERSION == 3, "agent 侧最低兼容 ABI 版本必须为 3");
+_Static_assert(AGENTXX_CLIENT_PLUGIN_API_VERSION == 3, "client 侧 ABI 版本必须为 3");
 _Static_assert(
-    AGENTXX_CLIENT_PLUGIN_MIN_API_VERSION == 2,
-    "client 侧最低兼容 ABI 版本必须为 2"
+    AGENTXX_CLIENT_PLUGIN_MIN_API_VERSION == 3,
+    "client 侧最低兼容 ABI 版本必须为 3"
 );
 
 /* ==================== 8 字节对齐（全部跨边界结构体） ==================== */

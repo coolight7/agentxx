@@ -609,6 +609,63 @@ static int64_t PLUGINXX_CALL xx_add_share_store(
 }
 
 // =====================================================================
+// 接口表: 会话访问的追加成员 (v3: 工作目录 / 取消查询)
+// =====================================================================
+
+/// `agentxx.agent.session.get_session_work_dir`
+/// - `agent` 必须有效 (引用无效返回 -1 并记一条警告)
+/// - `session_id` 可为空: 空 = 取解析后的默认会话工作目录
+static int32_t PLUGINXX_CALL xx_session_work_dir(
+    const PluginxxHost*       host,
+    const PluginxxScopeRef*   agent,
+    const PluginxxStringView* session_id,
+    PluginxxString*           out
+) {
+    return queryScopedStringIo(
+        host,
+        agent,
+        out,
+        [agent, session_id](PluginInstance*, PluginManager* mgr) -> std::string {
+            // session_id 允许为空 (空 = 默认工作目录)
+            return mgr->sessionWorkDir(agent, svToSv(session_id));
+        }
+    );
+}
+
+/// `agentxx.agent.session.is_cancelled`
+/// - `agent` 必须有效: 引用无效返回 0 (未取消) 并记一条警告
+/// - 只是主动查询: 权威的取消通知始终是取消回调
+static int32_t PLUGINXX_CALL xx_session_cancelled(
+    const PluginxxHost*       host,
+    const PluginxxScopeRef*   agent,
+    const PluginxxStringView* thread_id
+) {
+    return agentxx::plugin::guardVtableCall<int32_t>(0, [&]() -> int32_t {
+        auto call = enterHost(host, /*allowClosing=*/true);
+        auto mgr  = call.manager();
+        auto inst = call.instance();
+        if (!mgr || !inst || agentxx::plugin::PluginStringView::empty(thread_id)) {
+            return 0;
+        }
+        if (!scopeOk(mgr, agent)) {
+            return 0;
+        }
+        auto mgrPtr = mgr;
+        auto tid    = svToStr(thread_id);
+        return ioCallSyncKeep<int32_t>(call, mgrPtr, [mgrPtr, agent, tid]() -> int32_t {
+            return mountCall(
+                mgrPtr,
+                agent,
+                [] { return int32_t{0}; },
+                [mgrPtr, agent, tid](PluginMount&) {
+                    return mgrPtr->isSessionCancelled(agent, tid) ? 1 : 0;
+                }
+            );
+        });
+    });
+}
+
+// =====================================================================
 // 接口表: 会话上下文查询 (agentxx.agent.context)
 // =====================================================================
 
@@ -983,6 +1040,21 @@ static int32_t PLUGINXX_CALL xx_set_prompt(
     });
 }
 
+static int32_t PLUGINXX_CALL xx_prompt_tool(
+    const PluginxxHost*       host,
+    const PluginxxStringView* tool_name,
+    PluginxxString*           out
+) {
+    if (agentxx::plugin::PluginStringView::empty(tool_name)) {
+        return -1;
+    }
+    // 工具提示词是主程序级配置 (与具体 agent 无关), 不取作用域引用
+    auto name = svToStr(tool_name);
+    return queryStringIo(host, out, [name](PluginInstance*, PluginManager* mgr) -> std::string {
+        return mgr->toolPromptJson(name);
+    });
+}
+
 static int32_t PLUGINXX_CALL
     xx_model_get_config(const PluginxxHost* host, const PluginxxScopeRef* agent, PluginxxString* out) {
     return queryScopedStringIo(host, agent, out, [agent](PluginInstance* inst, PluginManager* mgr) {
@@ -1127,6 +1199,8 @@ static const AgentxxPluginSessionIface g_ifaceSession = {
     /* get_share_store */ xx_get_share_store,
     /* emit_message_tip */ xx_emit_message_tip,
     /* add_share_store */ xx_add_share_store,
+    /* get_session_work_dir */ xx_session_work_dir,
+    /* is_cancelled */ xx_session_cancelled,
 };
 
 static const AgentxxPluginPromptIface g_ifacePrompt = {
@@ -1134,6 +1208,7 @@ static const AgentxxPluginPromptIface g_ifacePrompt = {
     /* struct_size */ sizeof(AgentxxPluginPromptIface),
     /* get_prompt */ xx_get_prompt,
     /* set_prompt */ xx_set_prompt,
+    /* get_tool_prompt */ xx_prompt_tool,
 };
 
 static const AgentxxPluginResourcesIface g_ifaceResources = {

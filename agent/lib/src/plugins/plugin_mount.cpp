@@ -20,6 +20,7 @@
 #include "fmt/format.h"
 #include "pluginxx/host/event_bus.h"
 #include "pluginxx/runtime/op_driver.h"
+#include "utilxx_base/json.h"
 #include "utilxx_base/log.h"
 
 #include <algorithm>
@@ -520,8 +521,7 @@ void PluginMount::releaseInstanceInstances(PluginInstance& inst) {
 
 void PluginMount::applyManifestResourcesNow(PluginInstance& inst) {
     const auto& resources = inst.manifestResources;
-    if (resources.skillDirs.empty() && resources.memoryFiles.empty()
-        && resources.mcpServers.empty()) {
+    if (resources.entries.empty()) {
         return;
     }
     auto ctx = agent_.lock();
@@ -529,14 +529,65 @@ void PluginMount::applyManifestResourcesNow(PluginInstance& inst) {
         XX_LOGW("Plugin `{}` declared resources skipped (no resource applier)", inst.name);
         return;
     }
+    // 资源种类由主程序定义 (框架只解析 `type` / `path` / `args`):
+    //   skill  → path 是 skill 扫描目录
+    //   memory → path 是 memory 上下文文件
+    //   mcp    → args 里带 {namespace, url, timeout(秒, 默认 120)}
+    // 未知种类只记一条警告, 不影响其它条目。
     agentxx::agent::PluginResourceDecls decls;
-    decls.skillDirs   = resources.skillDirs;
-    decls.memoryFiles = resources.memoryFiles;
-    for (const auto& [ns, d] : resources.mcpServers) {
-        agentxx::agent::McpServerConfig cfg;
-        cfg.url              = d.url;
-        cfg.toolTimeout      = std::chrono::milliseconds{d.timeoutMs};
-        decls.mcpServers[ns] = cfg;
+    for (const auto& entry : resources.entries) {
+        if (entry.type == "skill") {
+            if (!entry.path.empty()) {
+                decls.skillDirs.push_back(entry.path);
+            }
+            continue;
+        }
+        if (entry.type == "memory") {
+            if (!entry.path.empty()) {
+                decls.memoryFiles.push_back(entry.path);
+            }
+            continue;
+        }
+        if (entry.type == "mcp") {
+            std::string ns;
+            std::string url;
+            long long   timeoutSec = 120; // 与主配置默认一致
+            if (!entry.argsJson.empty()) {
+                try {
+                    auto args = utilxx_base::Json::parse(entry.argsJson);
+                    if (args.contains("namespace") && args["namespace"].is_string()) {
+                        ns = args["namespace"].get<std::string>();
+                    }
+                    if (args.contains("url") && args["url"].is_string()) {
+                        url = args["url"].get<std::string>();
+                    }
+                    if (args.contains("timeout") && args["timeout"].is_number()) {
+                        timeoutSec = args["timeout"].get<long long>();
+                    }
+                } catch (const std::exception& e) {
+                    XX_LOGW(
+                        "Plugin `{}` mcp resource args are not valid JSON ({}), skipped",
+                        inst.name,
+                        e.what()
+                    );
+                    continue;
+                }
+            }
+            if (ns.empty() || url.empty()) {
+                XX_LOGW("Plugin `{}` mcp resource missing `namespace`/`url`, skipped", inst.name);
+                continue;
+            }
+            agentxx::agent::McpServerConfig cfg;
+            cfg.url              = url;
+            cfg.toolTimeout      = std::chrono::seconds{timeoutSec < 0 ? 0 : timeoutSec};
+            decls.mcpServers[ns] = cfg;
+            continue;
+        }
+        XX_LOGW(
+            "Plugin `{}` declares unknown resource type `{}`, skipped",
+            inst.name,
+            entry.type
+        );
     }
     ctx->resourceApplier->applyDecls(inst.name, decls);
 }

@@ -188,14 +188,16 @@ asio::awaitable<TestResult> run_plugin_resource_tests() {
             R"yaml(name: mres
 entry: libmres.so
 depends:
-skill:
-  - skills
-memory:
-  - notes.md
-mcp:
-  - namespace: mt
-    url: https://a.example.com/sse
-    timeout: 7
+resources:
+  - type: skill
+    path: skills
+  - type: memory
+    path: notes.md
+  - type: mcp
+    args:
+      namespace: mt
+      url: https://a.example.com/sse
+      timeout: 7
 interfaces:
   require:
     - agentxx.agent.core
@@ -212,18 +214,65 @@ interfaces:
             plugin::parsePluginManifest(dir, name, entry, depends, optDepends, &res, &ifaces)
         );
         XX_TEST_EXPECT_EQ(name, "mres");
-        XX_TEST_EXPECT_TRUE(res.skillDirs.size() == 1);
-        if (res.skillDirs.size() == 1) {
-            XX_TEST_EXPECT_EQ(res.skillDirs[0], (dir / "skills").lexically_normal().string());
+        // 条目按书写顺序保留; path 已按插件目录解析为绝对路径, 其余字段进 argsJson
+        XX_TEST_EXPECT_TRUE(res.entries.size() == 3);
+        if (res.entries.size() == 3) {
+            XX_TEST_EXPECT_EQ(res.entries[0].type, std::string{"skill"});
+            XX_TEST_EXPECT_EQ(res.entries[0].path, (dir / "skills").lexically_normal().string());
+            XX_TEST_EXPECT_TRUE(res.entries[0].argsJson.empty());
+            XX_TEST_EXPECT_EQ(res.entries[1].type, std::string{"memory"});
+            XX_TEST_EXPECT_EQ(res.entries[1].path, (dir / "notes.md").lexically_normal().string());
+            XX_TEST_EXPECT_EQ(res.entries[2].type, std::string{"mcp"});
+            XX_TEST_EXPECT_TRUE(res.entries[2].path.empty());
+            XX_TEST_EXPECT_TRUE(
+                res.entries[2].argsJson.find("\"namespace\":\"mt\"") != std::string::npos
+            );
+            XX_TEST_EXPECT_TRUE(
+                res.entries[2].argsJson.find("https://a.example.com/sse") != std::string::npos
+            );
+            XX_TEST_EXPECT_TRUE(res.entries[2].argsJson.find("\"timeout\":7") != std::string::npos);
         }
-        XX_TEST_EXPECT_TRUE(res.memoryFiles.size() == 1);
-        if (res.memoryFiles.size() == 1) {
-            XX_TEST_EXPECT_EQ(res.memoryFiles[0], (dir / "notes.md").lexically_normal().string());
-        }
-        XX_TEST_EXPECT_TRUE(res.mcpServers.contains("mt"));
-        if (res.mcpServers.contains("mt")) {
-            XX_TEST_EXPECT_EQ(res.mcpServers["mt"].url, std::string{"https://a.example.com/sse"});
-            XX_TEST_EXPECT_TRUE(res.mcpServers["mt"].timeoutMs == 7000);
+
+        // ---- 兼容旧写法: 顶层 skill/memory/mcp 段归一成同 type 条目 ----
+        {
+            auto legacyDir = tmpRoot / "manifest_legacy";
+            fs::create_directories(legacyDir / "skills", ec);
+            writeTextFile(legacyDir / "notes.md", "x");
+            writeTextFile(
+                legacyDir / "plugin.yaml",
+                R"yaml(name: mlegacy
+entry: libmlegacy.so
+skill:
+  - skills
+memory:
+  - notes.md
+mcp:
+  - namespace: lt
+    url: https://b.example.com/sse
+    timeout: 3
+)yaml"
+            );
+            std::string                     lname, lentry;
+            std::vector<std::string>        ldep, lopt;
+            plugin::PluginManifestResources lres;
+            XX_TEST_EXPECT_TRUE(
+                plugin::parsePluginManifest(legacyDir, lname, lentry, ldep, lopt, &lres, nullptr)
+            );
+            XX_TEST_EXPECT_TRUE(lres.entries.size() == 3);
+            if (lres.entries.size() == 3) {
+                XX_TEST_EXPECT_EQ(lres.entries[0].type, std::string{"skill"});
+                XX_TEST_EXPECT_EQ(
+                    lres.entries[1].type,
+                    std::string{"memory"}
+                );
+                XX_TEST_EXPECT_EQ(lres.entries[2].type, std::string{"mcp"});
+                XX_TEST_EXPECT_TRUE(
+                    lres.entries[2].argsJson.find("\"namespace\":\"lt\"") != std::string::npos
+                );
+                XX_TEST_EXPECT_TRUE(
+                    lres.entries[2].argsJson.find("\"timeout\":3") != std::string::npos
+                );
+            }
         }
         // ---- 接口声明段解析 (接口协商; 见
         //      [plugin_interfaces.h](/agent/lib/include/agentxx/plugin/plugin_interfaces.h)) ----

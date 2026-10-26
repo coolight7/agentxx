@@ -43,8 +43,8 @@ Agentxx 插件系统采用 **纯 C ABI + COM 风格接口表查询**：
   - 核心 vtable 精简：移除原 `strdup` 槽位，改为基于 `alloc` 的头文件内联实现 `pluginxx_strdup`
   - C++ 辅助便捷层：`PluginxxStringView` 与 `PluginxxString` 内置 `operator const T*()` 隐式取址转换与 `empty()` 方法，文件尾部提供值传兼容重载与 `pluginxx_string_free` 重载
 - **接口表独立演进**：每张表首字段 `int32_t version` 独立版本号；表内函数指针可能为 `NULL` (主程序未实现该子能力，调用前判空)
-- **版本限制**：全局 `PLUGINXX_API_VERSION` / `AGENTXX_CLIENT_PLUGIN_API_VERSION` 均为 2（多作用域挂载换代），加载时要求 `>=` 主程序版本否则拒绝；新增能力 = 新增接口表或表内追加成员并递增该表版本，全局版本号不动
-- **v2 契约的实施方式**：`cxx_pluginxx` 代码里的 `PLUGINXX_API_VERSION` / `PLUGINXX_MIN_API_VERSION` 默认是 1（该库被多个主程序共用），agentxx 在顶层 `CMakeLists.txt` 经全局 `CMAKE_C_FLAGS/CMAKE_CXX_FLAGS` 传 `-DPLUGINXX_API_VERSION=2 -DPLUGINXX_MIN_API_VERSION=2`，嵌套构建（插件框架 / 插件 / 测试 / 客户端）继承同一份值，插件只用头文件也能拿到；改完需要让嵌套工程重新配置
+- **版本限制**：全局 `PLUGINXX_API_VERSION` / `AGENTXX_CLIENT_PLUGIN_API_VERSION` 均为 3（通用表去业务成员换代），加载时要求 `>=` 主程序版本否则拒绝；新增能力 = 新增接口表或表内追加成员并递增该表版本，全局版本号不动
+- **v3 契约的实施方式（不改库）**: `cxx_pluginxx` 的 `abi.h` 里 `PLUGINXX_API_VERSION` / `PLUGINXX_MIN_API_VERSION` 默认**恒为 1**（该库被多个主程序共用，默认值不跟随任一主程序的契约）；agentxx 在 `agent/CMakeLists.txt` 用选项 `AGENTXX_PLUGIN_API_VERSION`（当前 3）向全局 `CMAKE_C_FLAGS/CMAKE_CXX_FLAGS` **宏覆盖**，并同时传给 `cxx_pluginxx` 的嵌套构建（它的 PUBLIC `INTERFACE_COMPILE_DEFINITIONS` 也跟着变成 3），嵌套构建（插件 / 测试 / 客户端）继承同一份 FLAGS，因此框架、使用方与插件看到的值一致；插件不链接框架库也能拿到（只用头文件）。覆盖时**先剔除旧值再追加**，否则缓存里的上一代 `-DPLUGINXX_API_VERSION=2` 会一直留着，插件与主程序编译到不同代次；改完需要让嵌套工程重新配置
 - **加载与挂载分离**：`AgentHost` 持有插件管理器（进程一份，一次 `create`/`start`），每个 agent 在 `init` 的 `plugin_mount` 步骤 `mountAgentAsync` 挂载；加载表见 yaml `plugin.list`，本会话挂哪些由 `plugin.mount` 决定 (`policy: all|none|listed` + `list` + 每插件 `args`)，子代理与插件自己创建的根默认 `none`
 - **线程约定**：`query_interface/alloc` 任意线程；注册类与 session/config/prompt 等 IO 约束操作由主程序内部投递同步等待；操作 `start/cancel` 由主程序在 IO 线程驱动 (单次 <~1ms)；`PluginxxOperatorNotify.done` 可任意线程回调；主程序派发给插件的完成回调 (`AgentxxOpCb`/sleep/offload done) 保证在 IO 线程 `post` 入队
 - **实例生命周期、Operation 终态与租约**：见第 15 节（实例生命周期契约，所有插件必须遵守）
@@ -292,7 +292,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
             [](MyPluginCtx& c, std::string_view args_json, OpCtl ctl) -> Task<std::string> {
                 co_await sleep(c, 100);
                 ctl.throw_if_cancelled();
-                // 跨插件互调: co_await call_tool(c, "other_tool", "{}", ctl.sessionId());
+                // 跨插件互调: co_await call_tool(c, ref, "other_tool", "{}", ctl.scopeKey);
                 co_return R"({"status":"ok"})";
             }
         );
@@ -424,13 +424,13 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 | `agentxx.agent.capabilities` | 2 | `register_capability(_ex)/unregister/has_capability` (进程级, 同一实例重复声明按幂等成功), `invoke_capability_async(agent 可空)/op_cancel` (引用仅用于归因给哪个 agent) |
 | `agentxx.agent.scheduler` | 1 | `is_io_thread/post_to_io/sleep/op_cancel/offload` (sleep=主程序计时器; offload=阻塞池委托, 需 cancel_token) |
 | `agentxx.agent.coroutine_runtime` | 1 | 通用协程驱动: `request_driver/cancel_driver/is_io_thread` (driver ticket/wake 协议, 见 §16) |
-| `agentxx.agent.session` | 2 | `get_share_store/add_share_store/emit_message_tip` (IO 线程) |
+| `agentxx.agent.session` | 3 | `get_share_store/add_share_store/emit_message_tip` (IO 线程) + `get_session_work_dir(agent, session_id)` (会话生效工作目录: worktree 绑定优先, session_id 为空返回默认工作目录) + `is_cancelled(agent, thread_id)` (advisory 查询, 权威通知仍是取消回调)。后两项 v3 从插件框架通用表迁入 |
 | `agentxx.agent.context` | 2 | 会话 LLM 上下文查询: `get_messages/messages_count` (IO 线程)。上下文由会话持有 (图状态不含 `messages` 通道), 插件需要上下文内容时经此按需查询; 只要数量用 `messages_count`, 避免拉取整段上下文 |
 | `agentxx.agent.plugins` | 1 | `list_plugins/get_plugin/get_own_info` (JSON; `list_plugins` 每项带 `mount_count` / `mount_agents`, 一眼看出装了但没挂到谁身上) |
-| `agentxx.agent.config` | 2 | `get_config/get_plugin_args/get_tool_prompt/get_session_work_dir(agent)/get_plugin_config_path/get_language/set_language` (get_session_work_dir 带引用时取该 agent 的会话工作目录; session_id 为空时返回默认会话工作目录；`get_plugin_config_path` 返回 yaml `config` 归一化绝对路径，可指向文件/目录；`get_language/set_language` 查询或指定运行时生效语言) |
+| `agentxx.agent.config` | 3 | `get_config/get_plugin_args/get_plugin_config_path/get_language/set_language` (`get_plugin_config_path` 返回 yaml `config` 归一化绝对路径，可指向文件/目录；`get_language/set_language` 查询或指定运行时生效语言)。v3 起不再含业务成员 (`get_tool_prompt`/`get_session_work_dir` 已分别迁到 `agentxx.agent.prompt` / `agentxx.agent.session`) |
 | `agentxx.agent.model` | 2 | `get_config(agent)` (该 agent 的主模型及关联配置 JSON) |
-| `agentxx.agent.cancel` | 2 | `is_cancelled(agent, sessionId)` (advisory, 权威通知为 cancel 回调; 取消状态按该 agent 的会话查) + `op_cancel` (表尾追加: 取消一个操作句柄, 原先分散在 tools/feature 的同名成员已收拢到这里) |
-| `agentxx.agent.prompt` | 2 | `get_prompt/set_prompt` (主程序提示词读写) |
+| `agentxx.agent.cancel` | 3 | `op_cancel` (取消一个操作句柄; 原先分散在 tools/feature 的同名成员已收拢到这里)。v3 起 `is_cancelled` 迁到 `agentxx.agent.session` (会话是业务概念, 框架表只管通用取消句柄) |
+| `agentxx.agent.prompt` | 3 | `get_prompt/set_prompt` (主程序提示词读写) + `get_tool_prompt(tool_name)` (工具提示词配置 JSON `{depict, args}`, 主程序级配置; v3 从插件框架通用表迁入) |
 | `agentxx.agent.json` | 1 | `json_get_string/json_escape` |
 | `agentxx.agent.log` | 1 | `log(level, msg)` (0 trace .. 4 error) |
 | `agentxx.agent.resources` | 2 | `register_skill_dir/memory_file/mcp_server` (仅初始化阶段) + `get_own_resources` (冻结后不可变) |
@@ -440,10 +440,17 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 | `agentxx.agent.mount` | 1 | 挂载查询 (诊断用): `list` (全部挂载摘要 JSON 数组, 每项含 agentId/agentName/workDir/language/mountSeq/plugins) + `get` (按 agentId 查单个挂载摘要, 没有该挂载返回 -1) |
 
 > 表中"版本"列 = 表声明的 `X_VERSION`, 与 `X_MIN_VERSION` 一起构成版本对, 另有
-> `X_BASELINE_SIZE` (基线字节数); 需要按 agent 区分的业务表为 v2 (v1 只在本进程单 agent 下成立,
-> 已不再兼容), 其余表仍为 v1 (基线 = 完整表长)。
+> `X_BASELINE_SIZE` (基线字节数); 需要按 agent 区分的业务表为 v2 起 (v1 只在本进程单 agent
+> 下成立, 已不再兼容), 其余表为 v1 (基线 = 完整表长)。
 >
-> **v2 表的 agent 级成员第一个参数是 `const PluginxxScopeRef* agent`** (挂载时下发的
+> **v3 换代 (当前)**: 全局 API 版本 = 3。通用表不再带有主程序业务概念 ——
+> `pluginxx.config` 去掉 `get_tool_prompt` / `get_session_work_dir`, `pluginxx.cancel` 去掉
+> `is_cancelled` (只剩 `op_cancel`), 三者分别迁到 agentxx 的 `prompt` / `session` 表;
+> 同时把 "agent" 用词泛化为 "作用域" (`PluginxxScopeRef` 参数名 `scope`,
+> 通用根请求 `RootRequest` 的 `sessionId` → `scopeKey`、图节点专用字段改为主程序自定义
+> `extraFields`)。插件需与主程序同一代头文件重编 (旧插件被拒)。
+>
+> **业务表的 agent 级成员第一个参数是 `const PluginxxScopeRef* agent`** (挂载时下发的
 > `agent_id` + 挂载序号); 传空/未知 id/过期序号时注册类返回
 > `AGENTXX_PLUGIN_ERR_NO_AGENT`、读取类返回 `-1`, 且**不产生任何副作用**。
 > 四件套要求、判定规则与追加策略见 **§17**, 进程级容器与 agent 挂载的分工见 **§18**。
@@ -961,6 +968,23 @@ Agentxx 客户端采用统一的分层工具特化渲染机制，TUI 核心层�
 ## 10. 会话资源贡献 (Skill / Memory / MCP)
 
 - **声明式**：插件目录随 `plugin.yaml` 声明资源 (框架在 entry 成功后经 `AgentResourceApplier` 统一 `applyDecls` 应用，卸载/禁用时摘除)
+
+  ```yaml
+  resources:            # 列表项: type 由主程序定义, 框架只解析 type/path/args
+    - type: skill
+      path: skills      # 相对插件目录, 解析为绝对路径
+    - type: memory
+      path: assets/NOTES.md
+    - type: mcp
+      args:             # path/type 之外的字段原样转成 JSON 交给主程序
+        namespace: time
+        url: https://mcp.example.com/sse
+        timeout: 10     # 秒, 0 = 不限制, 默认 120
+  ```
+
+  `PluginManifestResources` 与插件框架都不认识具体种类: agentxx 认 `skill` / `memory` /
+  `mcp` 三种 (`plugin_mount.cpp` 按 `type` 分发), 未知种类只记一条警告。旧的顶层
+  `skill:` / `memory:` / `mcp:` 段仍会被解析并归一成同 type 的条目, 老清单无需改动。
 - **编程式**：运行时经 `agentxx.agent.resources` 接口表动态注册/注销 (如 `agentxx_codegraph` 按 args 动态注册索引路径)
 - 主程序对声明式+编程式资源做去重与生命周期管理 (所有权语义见 `resource_applier.h`)；失败项经 `AppendComponentNotification` 单独统计 (供客户端 Failed 组展示)
 
@@ -974,7 +998,8 @@ Agentxx 客户端采用统一的分层工具特化渲染机制，TUI 核心层�
 
 ## 11. Worktree 与会话工作目录
 
-- 插件经 `AgentxxConfigIface::get_session_work_dir(host, thread_id)` 取当前会话生效工作目录 (worktree 绑定优先；thread_id 为空时返回默认会话工作目录)
+- 插件经 `AgentxxPluginSessionIface::get_session_work_dir(host, agent, thread_id)` 取当前会话生效工作目录 (worktree 绑定优先；thread_id 为空时返回默认会话工作目录), SDK 封装为 `PluginBase::workDir(scope, key)`
+- 会话取消查询 `AgentxxPluginSessionIface::is_cancelled(host, agent, thread_id)` (SDK: `PluginBase::sessionCancelled`; 先看本地登记, 未命中才询主程序)
 - `blocking_tool` 的 `workDir` 参数由 SDK 在 IO 线程预取并注入，避免 worker 线程跨线程 `ioCallSync`
 - 文件系统 / 命令执行插件每次 `execute` 按注入 `sessionId` 动态解析路径，会话绑定后基准即时切换
 

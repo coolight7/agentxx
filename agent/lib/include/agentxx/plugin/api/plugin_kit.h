@@ -113,7 +113,7 @@ struct AgentIfaces {
     const PluginxxEventsIface*       events       = nullptr; ///< "pluginxx.events"
     const PluginxxCapabilitiesIface* capabilities = nullptr; ///< "pluginxx.capabilities"
     const PluginxxSchedulerIface*    scheduler    = nullptr; ///< "pluginxx.scheduler"
-    /// "agentxx.agent.session": 会话共享存储与提示
+    /// "agentxx.agent.session": 会话共享存储 / 提示 / 工作目录 / 取消查询
     const AgentxxPluginSessionIface* session = nullptr; ///< "agentxx.agent.session"
     /// "agentxx.agent.context": 会话 LLM 上下文查询 (图状态不含上下文内容)
     const AgentxxPluginContextIface*   context   = nullptr; ///< "agentxx.agent.context"
@@ -421,11 +421,12 @@ private:
 
 /// agentxx 插件实例上下文基类
 ///
-/// 通用能力 (host / iface / log / config / workDir / language / strdup / jsonEscape /
+/// 通用能力 (host / iface / log / config / language / strdup / jsonEscape /
 /// cancelRegistry / 协程驱动桥 / 后台协作任务) 全部继承自 [pluginxx::PluginBaseT],
 /// 以 agent 侧接口表聚合 [AgentIfaces] 作为其模板实参;
 /// 本类只补齐 agent 业务 helper: 工具模式构建 (schema)、工具提示词描述 (toolPrompt)、
-/// 会话共享存储 (addShareStore), 并在 [onHostReady] 中挂钩业务事件。
+/// 会话工作目录 (workDir)、会话取消查询 (sessionCancelled)、会话共享存储
+/// (addShareStore), 并在 [onHostReady] 中挂钩业务事件。
 class PluginBase : public pluginxx::PluginBaseT<AgentIfaces> {
 public:
 
@@ -434,15 +435,15 @@ public:
         return ToolSchemaBuilder(toolPrompt(toolName));
     }
 
-    /// 工具提示词描述 (经主程序 agentxx.agent.config 接口表查询; 缺失时返回空描述)
+    /// 工具提示词描述 (经主程序 agentxx.agent.prompt 接口表查询; 缺失时返回空描述)
     ToolPromptText toolPrompt(std::string_view tool) const {
         ToolPromptText res;
-        if (!host || !iface.config || !iface.config->get_tool_prompt) {
+        if (!host || !iface.prompt || !iface.prompt->get_tool_prompt) {
             return res;
         }
         auto           toolSv = PluginStringView::from(tool.data(), tool.size());
         PluginxxString s{nullptr, 0};
-        iface.config->get_tool_prompt(host, &toolSv, &s);
+        iface.prompt->get_tool_prompt(host, &toolSv, &s);
         if (!s.data) {
             return res;
         }
@@ -485,6 +486,50 @@ public:
         std::string_view content
     ) const {
         return addShareStore(agent, PluginStringView::from(tid.data(), tid.size()), content);
+    }
+
+    /// 会话生效的工作目录 (经主程序 agentxx.agent.session 接口表)
+    /// - `scope` 是本挂载的作用域引用 (mount 时存下来的那份); 会话属于某个作用域
+    /// - `key` 为空 = 该作用域的默认会话工作目录
+    /// - 主程序未实现该能力或查询失败时返回空串
+    std::string workDir(const PluginxxScopeRef* scope, PluginxxStringView key = {}) const {
+        if (!host || !iface.session || !iface.session->get_session_work_dir) {
+            return {};
+        }
+        PluginxxString out{nullptr, 0};
+        if (iface.session->get_session_work_dir(host, scope, &key, &out) != 0 || !out.data) {
+            return {};
+        }
+        std::string text{out.data, static_cast<size_t>(out.size)};
+        PluginString::free(host, &out);
+        return text;
+    }
+
+    std::string workDir(const PluginxxScopeRef* scope, std::string_view key) const {
+        return workDir(scope, PluginStringView::from(key.data(), key.size()));
+    }
+
+    /// 会话当前轮次是否已取消 (经主程序 agentxx.agent.session 接口表)
+    /// - 先查本地登记: 主程序下发取消时已写入 [cancelRegistry], 命中即可返回,
+    ///   不做跨线程查询;
+    /// - 只是主动查询, 权威的取消通知始终是取消回调;
+    /// - `scope` 是本挂载的作用域引用 (会话属于某个作用域)
+    bool sessionCancelled(const PluginxxScopeRef* scope, PluginxxStringView key) const {
+        if (!key.data || key.size == 0) {
+            return false;
+        }
+        std::string_view keySv{key.data, static_cast<size_t>(key.size)};
+        if (cancelRegistry.isCancelled(keySv)) {
+            return true;
+        }
+        if (!host || !iface.session || !iface.session->is_cancelled) {
+            return false;
+        }
+        return iface.session->is_cancelled(host, scope, &key) != 0;
+    }
+
+    bool sessionCancelled(const PluginxxScopeRef* scope, std::string_view key) const {
+        return sessionCancelled(scope, PluginStringView::from(key.data(), key.size()));
     }
 
     /// 读取会话 LLM 上下文 (经主程序 agentxx.agent.context 接口表)
@@ -702,6 +747,52 @@ using pluginxx::detail::SleepAwaiter;
 using pluginxx::detail::spawnTaskImpl;
 using pluginxx::detail::startBridgedRoot;
 using pluginxx::detail::YieldAwaiter;
+
+/// 图节点操作的输入键 (kit 写进 `RootRequest::extraFields`, 业务侧用下面的
+/// [nodeNameOf] / [nodeConfigOf] / [nodeStateOf] 读取)
+inline constexpr std::string_view kGraphNodeNameKey   = "node_name";
+inline constexpr std::string_view kGraphNodeConfigKey = "config_json";
+inline constexpr std::string_view kGraphNodeStateKey  = "state_json";
+
+/// 工具操作的根请求 (args / 作用域键 (= thread_id) / 工具调用 id)
+inline RootRequest toolRootRequest(
+    const PluginxxHost*       host,
+    const PluginxxStringView* argsJson,
+    const PluginxxStringView* scopeKey,
+    const PluginxxStringView* callId
+) {
+    RootRequest req;
+    req.host      = host;
+    req.argsJson  = RootRequest::copyView(argsJson, "{}");
+    req.scopeKey  = RootRequest::copyView(scopeKey);
+    req.callId    = RootRequest::copyView(callId);
+    return req;
+}
+
+/// 钩子操作的根请求 (载荷 JSON)
+inline RootRequest hookRootRequest(const PluginxxHost* host, const PluginxxStringView* inputJson) {
+    RootRequest req;
+    req.host     = host;
+    req.argsJson = RootRequest::copyView(inputJson, "{}");
+    return req;
+}
+
+/// 图节点操作的根请求 (节点名 / config / 只读 state 快照 / 作用域键)
+inline RootRequest graphNodeRootRequest(
+    const PluginxxHost*       host,
+    const PluginxxStringView* nodeName,
+    const PluginxxStringView* configJson,
+    const PluginxxStringView* stateJson,
+    const PluginxxStringView* scopeKey
+) {
+    RootRequest req;
+    req.host     = host;
+    req.scopeKey = RootRequest::copyView(scopeKey);
+    req.setExtra(std::string{kGraphNodeNameKey}, RootRequest::copyView(nodeName));
+    req.setExtra(std::string{kGraphNodeConfigKey}, RootRequest::copyView(configJson, "{}"));
+    req.setExtra(std::string{kGraphNodeStateKey}, RootRequest::copyView(stateJson, "{}"));
+    return req;
+}
 
 struct CallToolState {
     const PluginxxHost*            host  = nullptr;
@@ -1164,7 +1255,7 @@ inline int32_t provideFeature(
                 shimPtr,
                 std::make_shared<std::atomic<bool>>(false),
                 nullptr,
-                detail::RootRequest::forHook(shimPtr->ctx->host, call_json)
+                detail::hookRootRequest(shimPtr->ctx->host, call_json)
             };
             auto task = shimPtr->fn(*shimPtr->ctx, job->request.args());
             if (!task.handle_) {
@@ -1331,7 +1422,7 @@ inline void tool(
         (void)error_out;
         // 先建立拥有型 Request，再把视图交给业务代码：协程挂起期间 args/
         // session/tool_call_id 由 Job 持有，不再指向主程序借用缓冲区。
-        auto request = detail::RootRequest::forTool(
+        auto request = detail::toolRootRequest(
             shim && shim->ctx ? shim->ctx->host : nullptr,
             args_json,
             thread_id,
@@ -1342,18 +1433,11 @@ inline void tool(
             cancelReg = &shim->ctx->cancelRegistry;
         }
         auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
-        if (cancelReg && !request.sessionId.empty() && cancelReg->isCancelled(request.sessionId)) {
+        if (cancelReg && !request.scopeKey.empty() && cancelReg->isCancelled(request.scopeKey)) {
             cancelFlag->store(true, std::memory_order_release);
         }
 
-        OpCtl ctl{
-            cancelFlag,
-            shim->ctx ? shim->ctx->host : nullptr,
-            shim->ctx ? shim->ctx->iface.cancel : nullptr,
-            request.sessionId,
-            cancelReg,
-            shim->agent
-        };
+        OpCtl ctl{cancelFlag, cancelReg, request.scopeKey, shim->agent};
 
         auto* job = new Job{shim, cancelFlag, nullptr, std::move(request), std::move(ctl)};
 
@@ -1389,8 +1473,8 @@ inline void tool(
         if (job->cancelFlag) {
             job->cancelFlag->store(true, std::memory_order_release);
         }
-        if (job->shim && job->shim->ctx && !job->request.sessionId.empty()) {
-            job->shim->ctx->cancelRegistry.cancel(job->request.sessionId);
+        if (job->shim && job->shim->ctx && !job->request.scopeKey.empty()) {
+            job->shim->ctx->cancelRegistry.cancel(job->request.scopeKey);
         }
         if (job->coroAddr) {
             auto handle
@@ -1908,7 +1992,7 @@ inline void polled_tool(
         std::shared_ptr<detail::PolledRoot> root;
         PluginxxOperatorNotify              notify{};
         detail::RootRequest                 request;
-        std::string                         tid;     ///< 会话标识 (= request.sessionId)
+        std::string                         tid;     ///< 作用域键 (= request.scopeKey)
         std::string                         args;    ///< 工具参数 JSON
         std::string                         workDir; ///< 会话工作目录 (IO 线程预取)
         std::shared_ptr<std::atomic<bool>>  cancelFlag;
@@ -1963,9 +2047,9 @@ inline void polled_tool(
         auto& c = *s->ctx;
         // 拥有型 Request: args/session/tool_call_id 在整个 polled 根期间有效
         // (协程会挂起并继续读取它们)。
-        auto request    = detail::RootRequest::forTool(c.host, args_json, thread_id, tool_call_id);
+        auto request    = detail::toolRootRequest(c.host, args_json, thread_id, tool_call_id);
         auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
-        if (!request.sessionId.empty() && c.cancelRegistry.isCancelled(request.sessionId)) {
+        if (!request.scopeKey.empty() && c.cancelRegistry.isCancelled(request.scopeKey)) {
             cancelFlag->store(true, std::memory_order_release);
         }
 
@@ -1973,7 +2057,7 @@ inline void polled_tool(
         job->shim       = s;
         job->notify     = notify ? *notify : PluginxxOperatorNotify{nullptr, nullptr};
         job->request    = std::move(request);
-        job->tid        = job->request.sessionId;
+        job->tid        = job->request.scopeKey;
         job->args       = job->request.argsJson;
         auto agentRaw = s->agent.raw();
         job->workDir  = c.workDir(&agentRaw, job->tid);
@@ -2108,7 +2192,7 @@ inline void* hookStart(
 
     /// 输入纳入拥有型 Request：同步钩子在调用期间有效，异步 Task 由 Job 持有到
     /// 协程真正结束。
-    auto request = RootRequest::forHook(shim->ctx->host, node_input_json);
+    auto request = hookRootRequest(shim->ctx->host, node_input_json);
 
     using HookRet = decltype(invokeHook(shim->fn, *shim->ctx, pt, std::string_view{}));
     if constexpr (std::is_void_v<HookRet>) {
@@ -2302,6 +2386,21 @@ inline decltype(auto) invokeGraphNode(NodeFn& fn, Ctx& ctx, const RootRequest& r
 
 } // namespace detail
 
+/// 图节点实例名 (非图节点操作为空)
+inline std::string_view nodeNameOf(const RootRequest& req) noexcept {
+    return req.extra(detail::kGraphNodeNameKey);
+}
+
+/// 图节点 config JSON (缺省 `"{}"`)
+inline std::string_view nodeConfigOf(const RootRequest& req) noexcept {
+    return req.extra(detail::kGraphNodeConfigKey);
+}
+
+/// 图节点 state 只读快照 JSON (缺省 `"{}"`)
+inline std::string_view nodeStateOf(const RootRequest& req) noexcept {
+    return req.extra(detail::kGraphNodeStateKey);
+}
+
 /// 注册插件自定义图节点类型（统一 root adapter）。
 ///
 /// 与 tool/hook/capability 使用同一套生命周期与完成协议：
@@ -2364,7 +2463,7 @@ inline int32_t graph_node(
         }
         // 输入纳入拥有型 Request：快同步节点在调用期间有效，异步节点由 Job
         // 持有到协程真正结束。
-        auto request = detail::RootRequest::forGraphNode(
+        auto request = detail::graphNodeRootRequest(
             shim->ctx->host,
             node_name,
             config_json,
@@ -2372,14 +2471,7 @@ inline int32_t graph_node(
             thread_id
         );
         auto  cancelFlag = std::make_shared<std::atomic<bool>>(false);
-        OpCtl ctl{
-            cancelFlag,
-            shim->ctx->host,
-            shim->ctx->iface.cancel,
-            request.sessionId,
-            &shim->ctx->cancelRegistry,
-            shim->agent
-        };
+        OpCtl ctl{cancelFlag, &shim->ctx->cancelRegistry, request.scopeKey, shim->agent};
 
         using NodeRet = decltype(detail::invokeGraphNode(shim->fn, *shim->ctx, request, ctl));
         if constexpr (std::is_void_v<NodeRet> || std::is_convertible_v<NodeRet, std::string_view>) {

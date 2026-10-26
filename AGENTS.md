@@ -476,8 +476,19 @@ path/to/agentxx_test string_util regex
   `register_impl`/`unregister_impl`/`call_point_async`/`op_cancel`, 以及
   `agentxx.agent.mount` 挂载查询 `list`/`get`),
   client 侧 9 张 (ui/events/session/wire/self/json/log + timer/keybind)
-- 接口表版本与基线 (多 agent 挂载换代: 全局 API 版本 = 2, 需区分 agent 的业务表
-  `version` = `MIN_VERSION` = 2, 其余表仍为 1, 基线 = 重置时的完整布局):
+- 接口表版本与基线 (**当前代次 3**, 全局 API 版本 = 3: v2 是多 agent 挂载换代,
+  v3 把通用表里的业务成员 (会话工作目录 / 取消查询 / 工具提示词) 迁回 agentxx 业务表
+  并把 "agent" 用词泛化为 "作用域"; 需区分 agent 的业务表 `version` = `MIN_VERSION` = 2 或 3,
+  其余表仍为 1 或 3, 基线 = 重置时的完整布局):
+  - **库里的默认值不改**: cxx_pluginxx 的 `abi.h` 中 `PLUGINXX_API_VERSION` /
+    `PLUGINXX_MIN_API_VERSION` 恒保持 1 (多主程序共用); agentxx 在 `agent/CMakeLists.txt`
+    用 `AGENTXX_PLUGIN_API_VERSION` 选项向全局 FLAGS 追 `-D...=3` 覆盖, 并随 `CMAKE_ARGS`
+    传给 cxx_pluginxx 的嵌套构建 (installed targets 的 INTERFACE 定义随之变成 3)
+  - 改代次时注意构建缓存: 覆盖时必须**先剔旧值再追加** (否则嵌套 ExternalProject
+    会一直用缓存里的上一代值编译)
+  - `pluginxx.config` 现有 `get_config/get_plugin_args/get_plugin_config_path/get_language/set_language`,
+    `pluginxx.cancel` 只有 `op_cancel`; `get_session_work_dir`/`is_cancelled` 在
+    `agentxx.agent.session`, `get_tool_prompt` 在 `agentxx.agent.prompt`
   - 每张表**四件套齐全**: IID + `struct_size` + `version`/`_VERSION` + `_MIN_VERSION` +
     `_BASELINE_SIZE`; `plugin_iface_meta.h` 各一条 `IfaceMeta` 特化
   - 整表判定 `IID 命中 && version >= MIN_VERSION && struct_size >= BASELINE_SIZE`

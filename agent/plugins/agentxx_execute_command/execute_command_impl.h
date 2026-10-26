@@ -4,8 +4,8 @@
 /// - 头文件-only: 插件入口与测试共同包含, 保证插件行为与测试覆盖一致
 /// - 与原实现的差异点:
 ///   - 会话工作目录/取消令牌经参数注入 (workDir / isCancelled 回调),
-///     由插件入口从主程序接口表取值 (agentxx.agent.config.get_session_work_dir /
-///     agentxx.agent.cancel.is_cancelled), 便于测试直测纯逻辑
+///     由插件入口从主程序接口表取值 (agentxx.agent.session.get_session_work_dir /
+///     agentxx.agent.session.is_cancelled), 便于测试直测纯逻辑
 ///   - 统一异步操作模型 (受控轮询): 协程版执行体 *ExecuteAsync 由插件入口经
 ///     `plugin_kit::polled_tool` 注册 —— 协程跑在插件实例本地 reactor (桥的
 ///     local_executor) 上, 管道/子进程/计时器都绑定到该 executor, 由主程序 IO

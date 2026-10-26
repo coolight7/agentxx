@@ -616,14 +616,34 @@ if (CMAKE_CROSSCOMPILING AND XX_IS_WIN_D)
   add_compile_definitions(_WIN32_WINNT=0x0A00 WINVER=0x0A00 NTDDI_VERSION=0x0A000000 _WIN32_IE=0x0A00)
 endif()
 
-# 插件 API 契约版本 (v2): 插件一次加载、可挂到多个作用域, 作用域级接口带引用
-# - cxx_pluginxx 的代码默认值是 1 (该库被多个主程序共用, 不跟随 agentxx 的契约);
-# - 这里在本机构建的全局 FLAGS 里定义 2: 嵌套构建 (cxx_pluginxx / 插件 / 测试 / 客户端)
-#   都经 _AGENTXX_COMMON_CMAKE_ARGS 继承同一份 FLAGS, 因此框架、使用方与插件
-#   看到的值一致; 插件不链接框架库也能拿到 (插件只用头文件)
-if (NOT CMAKE_CXX_FLAGS MATCHES "PLUGINXX_API_VERSION")
-  set(CMAKE_C_FLAGS   "${CMAKE_C_FLAGS} -DPLUGINXX_API_VERSION=2 -DPLUGINXX_MIN_API_VERSION=2"   CACHE STRING "" FORCE)
-  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DPLUGINXX_API_VERSION=2 -DPLUGINXX_MIN_API_VERSION=2" CACHE STRING "" FORCE)
+# 插件 API 契约代次 (v3): 通用表去掉业务成员 (会话工作目录/取消查询/工具提示词
+# 已迁到 agentxx 自己的业务表), 作用域引用与通用根请求的字段名泛化
+# - **库代码里的默认值不改**: cxx_pluginxx 被多个主程序共用, `abi.h` 的
+#   `PLUGINXX_API_VERSION` / `PLUGINXX_MIN_API_VERSION` 默认恒为 1, 不跟随任一主程序;
+# - agentxx 在自己的构建里用宏覆盖成 3 (这里是唯一改代次的地方): 嵌套构建
+#   (cxx_pluginxx / 插件 / 测试 / 客户端) 都经 _AGENTXX_COMMON_CMAKE_ARGS 继承同一份
+#   FLAGS, 因此框架、使用方与插件看到的值一致; 插件不链接框架库也能拿到 (只用头文件)
+set(
+  AGENTXX_PLUGIN_API_VERSION "3"
+  CACHE STRING "agentxx 使用的插件 API 契约代次 (宏覆盖 cxx_pluginxx 的默认值 1)"
+)
+if (NOT(CMAKE_CXX_FLAGS MATCHES "-DPLUGINXX_API_VERSION=${AGENTXX_PLUGIN_API_VERSION}"
+        AND CMAKE_CXX_FLAGS MATCHES
+            "-DPLUGINXX_MIN_API_VERSION=${AGENTXX_PLUGIN_API_VERSION}"))
+  # 先清掉缓存/上层传入的旧代次取值再追加: 只判断"是否出现过"会把上一代的
+  # `-DPLUGINXX_API_VERSION=2` 一直留在 CMAKE_*_FLAGS 里 (配置缓存不会自动过期),
+  # 插件与主程序于是编译到不同代次
+  foreach(_agentxx_flags_var CMAKE_C_FLAGS CMAKE_CXX_FLAGS)
+    foreach(_agentxx_sep "" "_MIN")
+      string(REGEX REPLACE " *-DPLUGINXX${_agentxx_sep}_API_VERSION=[0-9]+" ""
+        ${_agentxx_flags_var} "${${_agentxx_flags_var}}")
+    endforeach()
+    set(${_agentxx_flags_var}
+      "${${_agentxx_flags_var}} -DPLUGINXX_API_VERSION=${AGENTXX_PLUGIN_API_VERSION} -DPLUGINXX_MIN_API_VERSION=${AGENTXX_PLUGIN_API_VERSION}"
+      CACHE STRING "" FORCE)
+  endforeach()
+  unset(_agentxx_flags_var)
+  unset(_agentxx_sep)
 endif()
 
 # 快速链接器 (GCC/Clang): mold > gold > 默认 bfd，大幅减少大体积二进制链接时间
@@ -1542,8 +1562,8 @@ ExternalProject_Add(
   INSTALL_ALWAYS TRUE
   CMAKE_ARGS
     ${_AGENTXX_COMMON_CMAKE_ARGS}
-    -DPLUGINXX_API_VERSION=2
-    -DPLUGINXX_MIN_API_VERSION=2
+    -DPLUGINXX_API_VERSION=${AGENTXX_PLUGIN_API_VERSION}
+    -DPLUGINXX_MIN_API_VERSION=${AGENTXX_PLUGIN_API_VERSION}
   CMAKE_CACHE_ARGS
     ${_AGENTXX_COMMON_CMAKE_CACHE_ARGS}
   TEST_COMMAND ""

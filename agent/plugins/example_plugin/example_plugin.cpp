@@ -171,7 +171,7 @@ static int exampleAgentSetup(AgentCtx& ctx, const agentxx::plugin::ScopeRef& ref
                 ref,
                 "example_echo",
                 args,
-                ctl.sessionId
+                ctl.scopeKey
             );
             co_return fmt::format(R"({{"via_call_tool": {}}})", resp);
         }
@@ -242,7 +242,7 @@ static int exampleAgentSetup(AgentCtx& ctx, const agentxx::plugin::ScopeRef& ref
                 ref,
                 "example_echo",
                 R"({"from":"example_bridge"})",
-                ctl.sessionId
+                ctl.scopeKey
             );
             co_return fmt::format(
                 R"({{"driverAvailable": {},"onHostIoThread": {},"ticks": {},"calls": {}}})",

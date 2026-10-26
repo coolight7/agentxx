@@ -150,8 +150,8 @@ git_worktree 及延迟加载加载 (`ToolSkillSearchSubAgentTask` 模板类, 当
   `.agentxx/agent/worktrees/` 内, 其读写按已注册规则照常处理 (否则会话对自身工作区
   的写操作也会被拒绝); filesystem 工具的相对路径经 `normalizePermissionPath(path,
   sessionId)` 按 worktree 解析, 权限规则与实际访问路径稳定匹配
-- **插件流程跟随**: 插件接口表 `agentxx.agent.config` 的
-  `get_session_work_dir(host, session_id)` (worktree 绑定优先, 为空回退默认会话工作目录); filesystem 插件
+- **插件流程跟随**: 插件接口表 `agentxx.agent.session` 的
+  `get_session_work_dir(host, agent, session_id)` (worktree 绑定优先, 为空回退默认会话工作目录; v3 之前挂在通用表 `pluginxx.config` 上); filesystem 插件
   改为每次 execute 按注入的 sessionId 动态解析 (原 entry 时静态缓存),
   execute_command 插件同语义 —— 会话绑定后两个插件的路径基准即时切换
 - **子代理继承**: AgentHost 派生子代理时继承父会话绑定 (子代理 config.workDir

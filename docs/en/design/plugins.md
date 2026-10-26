@@ -202,7 +202,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
             [](MyPluginCtx& c, std::string_view args_json, OpCtl ctl) -> Task<std::string> {
                 co_await sleep(c, 100);
                 ctl.throw_if_cancelled();
-                // Cross-plugin call: co_await call_tool(c, "other_tool", "{}", ctl.sessionId());
+                // Cross-plugin call: co_await call_tool(c, ref, "other_tool", "{}", ctl.scopeKey);
                 co_return R"({"status":"ok"})";
             }
         );
@@ -321,12 +321,12 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 | `agentxx.agent.capabilities` | 1 | `register_capability(_ex)/unregister/has_capability`, `invoke_capability_async/op_cancel`. |
 | `agentxx.agent.scheduler` | 1 | `is_io_thread/post_to_io/sleep/op_cancel/offload` (`sleep` = host timer; `offload` = blocking-pool delegation, requires a `cancel_token`). |
 | `agentxx.agent.coroutine_runtime` | 1 | Generic coroutine driver: `request_driver/cancel_driver/is_io_thread` (driver-ticket / wake protocol, see §15). |
-| `agentxx.agent.session` | 1 | `get_share_store/add_share_store/emit_message_tip` (IO thread). |
+| `agentxx.agent.session` | 1 | `get_share_store/add_share_store/emit_message_tip` (IO thread) + `get_session_work_dir(agent, session_id)` (effective session workdir: worktree binding wins, empty session ID returns the default) + `is_cancelled(agent, thread_id)` (advisory; the authoritative notification is still the cancel callback). The last two moved here from the framework tables in v3. |
 | `agentxx.agent.plugins` | 1 | `list_plugins/get_plugin/get_own_info` (JSON). |
-| `agentxx.agent.config` | 1 | `get_config/get_plugin_args/get_tool_prompt/get_session_work_dir/get_plugin_config_path/get_language/set_language` (`get_session_work_dir` returns default workdir when session ID is empty; `get_plugin_config_path` returns normalized absolute path configured via YAML `config`, pointing to a file or directory; `get_language/set_language` queries/overrides runtime language). |
+| `agentxx.agent.config` | 3 | `get_config/get_plugin_args/get_plugin_config_path/get_language/set_language` (`get_plugin_config_path` returns normalized absolute path configured via YAML `config`, pointing to a file or directory; `get_language/set_language` queries/overrides runtime language). Since v3 it carries no business members (`get_tool_prompt`/`get_session_work_dir` moved to `agentxx.agent.prompt` / `agentxx.agent.session`). |
 | `agentxx.agent.model` | 1 | `get_config` (Active model and associated config JSON). |
-| `agentxx.agent.cancel` | 1 | `is_cancelled(sessionId)` (Advisory polling; authoritative notification comes via cancel callback). |
-| `agentxx.agent.prompt` | 1 | `get_prompt/set_prompt` (Host prompt read/write access). |
+| `agentxx.agent.cancel` | 3 | `op_cancel` (cancel one operation handle). Since v3 `is_cancelled` moved to `agentxx.agent.session`: sessions are a business concept, the framework table only handles generic cancel handles. |
+| `agentxx.agent.prompt` | 3 | `get_prompt/set_prompt` (Host prompt read/write access) + `get_tool_prompt(tool_name)` (per-tool prompt config JSON `{depict, args}`, host-level; moved here from the framework table in v3). |
 | `agentxx.agent.json` | 1 | `json_get_string/json_escape`. |
 | `agentxx.agent.log` | 1 | `log(level, msg)` (0: trace .. 4: error). |
 | `agentxx.agent.resources` | 1 | `register_skill_dir/memory_file/mcp_server` (Initialization phase only) + `get_own_resources` (Immutable after freeze). |
@@ -447,7 +447,8 @@ The Agentxx client adopts a unified, layered tool-specialized rendering mechanis
 
 ## 11. Worktrees & Session Working Directories
 
-- Plugins query the currently active session working directory via `AgentxxConfigIface::get_session_work_dir(host, thread_id)` (session worktree binding takes precedence; returns default working directory when `thread_id` is empty).
+- Plugins query the currently active session working directory via `AgentxxPluginSessionIface::get_session_work_dir(host, agent, thread_id)` (session worktree binding takes precedence; returns default working directory when `thread_id` is empty). SDK wrapper: `PluginBase::workDir(scope, key)`.
+- Session cancel polling: `AgentxxPluginSessionIface::is_cancelled(host, agent, thread_id)` (SDK: `PluginBase::sessionCancelled` — checks the local registry first, only asks the host when it misses).
 - The `workDir` argument for `blocking_tool` is prefetched and injected on the IO thread by the SDK, avoiding cross-thread `ioCallSync` in worker threads.
 - Filesystem and command execution plugins dynamically resolve paths using the injected `sessionId` on each invocation; relative path references switch immediately upon session binding.
 

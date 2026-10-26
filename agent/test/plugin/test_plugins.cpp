@@ -173,6 +173,73 @@ asio::awaitable<TestResult> run_plugin_tests() {
         }
     }
 
+    // ---- 2.6 接口表: v3 追加的会话/提示词成员 (从通用表迁入的业务能力) ----
+    {
+        const auto ref = scopeRefOf(*ctx->pluginManager);
+        auto makeSv = [](std::string_view s) {
+            return PluginxxStringView{s.data(), static_cast<uint64_t>(s.size())};
+        };
+
+        auto ifaceSession = agentxx::plugin::queryInterface<AgentxxPluginSessionIface>(
+            inst->hostView(),
+            AGENTXX_PLUGIN_IFACE_AGENT_SESSION
+        );
+        XX_TEST_EXPECT_TRUE(ifaceSession != nullptr);
+        if (ifaceSession) {
+            XX_TEST_EXPECT_EQ(ifaceSession->version, AGENTXX_PLUGIN_IFACE_AGENT_SESSION_VERSION);
+            XX_TEST_EXPECT_TRUE(ifaceSession->get_session_work_dir != nullptr);
+            XX_TEST_EXPECT_TRUE(ifaceSession->is_cancelled != nullptr);
+
+            // 会话工作目录: 空 session_id = 默认会话工作目录 (经 AgentContext 解析)
+            auto scopeRaw   = ref.raw();
+            auto emptyKeySv = makeSv("");
+            PluginxxString workDirOut{nullptr, 0};
+            XX_TEST_EXPECT_EQ(
+                ifaceSession->get_session_work_dir(
+                    inst->hostView(),
+                    &scopeRaw,
+                    &emptyKeySv,
+                    &workDirOut
+                ),
+                0
+            );
+            XX_TEST_EXPECT_TRUE(workDirOut.data != nullptr);
+            if (workDirOut.data) {
+                XX_TEST_EXPECT_EQ(
+                    std::string(workDirOut.data, workDirOut.size),
+                    ctx->getSessionWorkDir("")
+                );
+                agentxx::plugin::PluginString::free(inst->hostView(), &workDirOut);
+            }
+
+            // 取消查询: 新会话未取消 = 0; 空引用按失败处理也是 0
+            auto tidSv = makeSv("no_such_session");
+            XX_TEST_EXPECT_EQ(
+                ifaceSession->is_cancelled(inst->hostView(), &scopeRaw, &tidSv),
+                0
+            );
+            XX_TEST_EXPECT_EQ(ifaceSession->is_cancelled(inst->hostView(), nullptr, &tidSv), 0);
+        }
+
+        auto ifacePrompt = agentxx::plugin::queryInterface<AgentxxPluginPromptIface>(
+            inst->hostView(),
+            AGENTXX_PLUGIN_IFACE_AGENT_PROMPT
+        );
+        XX_TEST_EXPECT_TRUE(ifacePrompt != nullptr);
+        if (ifacePrompt) {
+            XX_TEST_EXPECT_EQ(ifacePrompt->version, AGENTXX_PLUGIN_IFACE_AGENT_PROMPT_VERSION);
+            XX_TEST_EXPECT_TRUE(ifacePrompt->get_tool_prompt != nullptr);
+            // 未配置的工具 → -1 且不分配
+            auto unknownSv = makeSv("no_such_tool");
+            PluginxxString noneOut{nullptr, 0};
+            XX_TEST_EXPECT_EQ(
+                ifacePrompt->get_tool_prompt(inst->hostView(), &unknownSv, &noneOut),
+                -1
+            );
+            XX_TEST_EXPECT_TRUE(noneOut.data == nullptr);
+        }
+    }
+
     // ---- 3. 工具执行 (同步 C 回调经线程池卸载) ----
     {
         auto tool = ctx->toolRegistry->find("example_echo");

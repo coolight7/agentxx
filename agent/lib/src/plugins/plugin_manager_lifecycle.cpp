@@ -971,9 +971,7 @@ void fillInstanceView(PluginManager::PluginListView& view, const PluginInstance&
     view.blockedByDependencies = inst.blockedByDependencies;
     view.loadMs                = inst.loadMs;
     view.eventSubCount         = inst.subscriptions.size();
-    view.manifestResourceCount = inst.manifestResources.skillDirs.size()
-                                 + inst.manifestResources.memoryFiles.size()
-                                 + inst.manifestResources.mcpServers.size();
+    view.manifestResourceCount = inst.manifestResources.entries.size();
     for (const auto& cap : inst.capabilityRegistrations) {
         view.capabilities.push_back(cap.name);
     }

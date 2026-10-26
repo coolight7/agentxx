@@ -426,8 +426,10 @@ typedef struct AgentxxPluginHooksIface {
 
 #define AGENTXX_PLUGIN_IFACE_AGENT_SESSION             "agentxx.agent.session"
 /// v2: 全部成员增加 `agent` 参数 (会话属于某个 agent)
-#define AGENTXX_PLUGIN_IFACE_AGENT_SESSION_VERSION     2
-#define AGENTXX_PLUGIN_IFACE_AGENT_SESSION_MIN_VERSION 2
+/// v3: 表尾追加会话工作目录与"是否已取消"查询 (原在插件框架通用表里的业务成员);
+///     基线随本代重置为完整布局
+#define AGENTXX_PLUGIN_IFACE_AGENT_SESSION_VERSION     3
+#define AGENTXX_PLUGIN_IFACE_AGENT_SESSION_MIN_VERSION 3
 /* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
 #define AGENTXX_PLUGIN_IFACE_AGENT_SESSION_BASELINE_SIZE sizeof(AgentxxPluginSessionIface)
 
@@ -457,6 +459,24 @@ typedef struct AgentxxPluginSessionIface {
         const PluginxxScopeRef*   agent,
         const PluginxxStringView* session_id,
         const PluginxxStringView* content
+    );
+    /// (v3) 指定会话生效的工作目录 (io 线程; host->alloc; 失败/未加载返回 -1):
+    /// - `agent` 必须非空 (引用无效返回 -1 并记警告): 会话属于某个 agent
+    /// - session_id 非空: 会话级覆写优先 (worktree 绑定), 未设置时回退主程序默认工作目录
+    /// - session_id 为空: 返回解析后的默认会话工作目录
+    int32_t(PLUGINXX_CALL* get_session_work_dir)(
+        const PluginxxHost*       host,
+        const PluginxxScopeRef*   agent,
+        const PluginxxStringView* session_id,
+        PluginxxString*           out
+    );
+    /// (v3) 查询会话当前轮次是否已取消 (advisory 定位; 权威通知始终是取消回调):
+    /// - `agent` 必须非空 (引用无效返回 0 并记警告)
+    /// - 返回 1 已取消 / 0 未取消
+    int32_t(PLUGINXX_CALL* is_cancelled)(
+        const PluginxxHost*       host,
+        const PluginxxScopeRef*   agent,
+        const PluginxxStringView* thread_id
     );
 } AgentxxPluginSessionIface;
 
@@ -520,8 +540,10 @@ typedef struct AgentxxPluginModelIface {
 
 #define AGENTXX_PLUGIN_IFACE_AGENT_PROMPT             "agentxx.agent.prompt"
 /// v2: 全部成员增加 `agent` 参数 (提示词按 agent 贡献/合成)
-#define AGENTXX_PLUGIN_IFACE_AGENT_PROMPT_VERSION     2
-#define AGENTXX_PLUGIN_IFACE_AGENT_PROMPT_MIN_VERSION 2
+/// v3: 表尾追加工具提示词查询 (原在插件框架通用表里的业务成员);
+///     基线随本代重置为完整布局
+#define AGENTXX_PLUGIN_IFACE_AGENT_PROMPT_VERSION     3
+#define AGENTXX_PLUGIN_IFACE_AGENT_PROMPT_MIN_VERSION 3
 /* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
 #define AGENTXX_PLUGIN_IFACE_AGENT_PROMPT_BASELINE_SIZE sizeof(AgentxxPluginPromptIface)
 
@@ -538,6 +560,14 @@ typedef struct AgentxxPluginPromptIface {
         const PluginxxHost*       host,
         const PluginxxScopeRef*   agent,
         const PluginxxStringView* prompt_json
+    );
+    /// (v3) 指定工具的提示词配置 JSON (主程序级配置; io 线程; host->alloc):
+    /// {"depict": "...", "args": {"参数名": "参数说明", ...}}
+    /// - 未配置该工具时返回 -1 (不分配 out)
+    int32_t(PLUGINXX_CALL* get_tool_prompt)(
+        const PluginxxHost*       host,
+        const PluginxxStringView* tool_name,
+        PluginxxString*           out
     );
 } AgentxxPluginPromptIface;
 

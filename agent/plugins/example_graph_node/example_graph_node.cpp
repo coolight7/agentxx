@@ -100,7 +100,7 @@ utilxx_base::Json sessionMessages(
     const agentxx::plugin::ScopeRef&   ref,
     const agentxx::plugin::RootRequest& req
 ) {
-    const auto text = ctx.getSessionMessages(ref, req.session());
+    const auto text = ctx.getSessionMessages(ref, req.scope());
     if (text.empty()) {
         return utilxx_base::Json::array();
     }
@@ -164,8 +164,8 @@ std::string intentRouterRun(
     const agentxx::plugin::ScopeRef&   ref,
     const agentxx::plugin::RootRequest& req
 ) {
-    const std::string_view config_json = req.config();
-    auto                   state       = utilxx_base::Json::parse(req.state());
+    const std::string_view config_json = agentxx::plugin::nodeConfigOf(req);
+    auto                   state       = utilxx_base::Json::parse(agentxx::plugin::nodeStateOf(req));
     auto                   messages    = sessionMessages(ctx, ref, req);
 
     // 解析 config: intents 枚举 + fallback
