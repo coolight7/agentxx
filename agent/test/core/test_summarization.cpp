@@ -5,7 +5,7 @@
 // - 超过 75% 上限 时自动压缩: 确定性压缩先行 (toolcall 去重/探索折叠 + 噪音清理,
 //   不做 offload), 再由 LLM 同上下文总结压缩
 // - LLM 压缩通过 subagent 完成 (同上下文模式, FakeSubAgentManagerTool 模拟):
-//   messages 结构化透传 (当前完整上下文 system + 全部消息 + 末尾 user 压缩指令),
+//   messages 结构化原样转发 (当前完整上下文 system + 全部消息 + 末尾 user 压缩指令),
 //   指定父线程 thread_id, 不传入任何工具 (无 share_store, subagent 仅对当前上下文
 //   原样压缩), 禁用 enable_summarization (禁止二次压缩)
 // - 压缩请求只保留最新一条 thinking (旧轮 thinking 无续用价值, 且加密 thinking
@@ -13,12 +13,12 @@
 // - 压缩结果覆盖回: [system] | [user 压缩指令] | [assistant 摘要]
 //   (不再追加最近消息: 末尾要点由摘要覆盖)
 // - 摘要超过内置上限 (64K token) 时截断后写回
-// - 压缩失败 >= 2 次 (同一轮内) 或 >= 95% 上限: 硬截断兜底
-// - 压缩后仍超限 (>= 95%): 降级硬截断兜底 (含单条超大消息二分截断)
+// - 压缩失败 >= 2 次 (同一轮内) 或 >= 95% 上限: 硬截断回退
+// - 压缩后仍超限 (>= 95%): 降级硬截断回退 (含单条超大消息二分截断)
 //
 // 完整语义验证:
 // - system 消息不能动: 不参与 tool 压缩 / 噪音清理 / LLM 总结, 原样保留
-// - 按顺序先进行确定性压缩, 再由同上下文 subagent 压缩成一段总结
+// - 按顺序先做确定性压缩, 再由同上下文 subagent 压缩成一段总结
 // - 消息角色顺序正确: 压缩后 = system | user(自动插入提示) | assistant(压缩总结)
 // - 压缩 subagent 不传入任何工具: 无 share_store, 仅对当前上下文原样压缩
 
@@ -569,7 +569,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
             XX_TEST_EXPECT_TRUE(args["enable_summarization"].is_boolean());
             XX_TEST_EXPECT_FALSE(args["enable_summarization"].get<bool>());
 
-            // 结构化消息透传: system + 原消息 + 末尾追加 user 压缩指令 (无文本转录)
+            // 结构化消息原样转发: system + 原消息 + 末尾追加 user 压缩指令 (无文本转录)
             const auto& reqMsgs = args["messages"];
             XX_TEST_EXPECT_TRUE(reqMsgs.is_array());
             XX_TEST_EXPECT_EQ(reqMsgs.size(), msgs.size() + 1);
@@ -1229,7 +1229,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
         XX_TEST_EXPECT_EQ(failCount, size_t{1});
     }
 
-    // --- T7. 连续第 2 次失败 → 硬截断兜底 ---
+    // --- T7. 连续第 2 次失败 → 硬截断回退 ---
     {
         auto env = std::make_shared<SummarizationTestEnv>();
         env->session()->setModelName("small");
@@ -1355,7 +1355,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
     // ==================== 新增: 用户要求的完整语义验证 ====================
     // 预期效果:
     //   1. system 消息不能动 (不参与 tool 压缩 / 噪音清理 / LLM 总结)
-    //   2. 按顺序先进行确定性压缩 (去重/折叠/噪音清理), 再由同上下文 LLM 将
+    //   2. 按顺序先做确定性压缩 (去重/折叠/噪音清理), 再由同上下文 LLM 将
     //      整体上下文压缩成一段总结
     //   3. 消息角色顺序正确: 压缩后 = system | user(自动插入提示) |
     //      assistant(压缩总结), 紧接着是未压缩的最近消息 (保留原角色与顺序)
@@ -1363,7 +1363,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
 
     // --- T11a. 压缩请求保留全部 thinking (与父会话请求逐字节一致) ---
     // 说明: 压缩请求不再清理 thinking —— send_thinking 打开时请求体里每条
-    // assistant 都带 reasoning_content, 只清一部分会让请求前缀与父会话分叉,
+    // assistant 都带 reasoning_content, 只清一部分会让请求前缀与父会话不一致,
     // 上游前缀缓存从第一条 assistant 起失效 (见 T11 的 ⑤ 断言)
 
     // --- T11. 完整流程: 确定性压缩先行, LLM 同上下文压缩成一段总结;
@@ -1679,7 +1679,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
                   );
         XX_TEST_EXPECT_EQ(stored.size(), size_t{1});
         XX_TEST_EXPECT_EQ(stored[0].name, std::string{"subagent"});
-        // 压缩直接调用无 tool_call_id: resultId 为空 (读取端按序号兜底)
+        // 压缩直接调用无 tool_call_id: resultId 为空 (读取端按序号回退)
         XX_TEST_EXPECT_EQ(stored[0].resultId, std::string{""});
         const auto& tasksJson = stored[0].arg["tasks"];
         XX_TEST_EXPECT_TRUE(tasksJson.is_array());
@@ -1693,14 +1693,14 @@ asio::awaitable<TestResult> run_summarization_tests() {
         XX_TEST_EXPECT_FALSE(tasksJson[0]["enable_summarization"].get<bool>());
         // 不传入任何工具 (subagent 仅对当前上下文原样压缩)
         XX_TEST_EXPECT_FALSE(tasksJson[0].contains("tools"));
-        // 结构化透传: system + 压缩段 + 末尾压缩指令
+        // 结构化原样转发: system + 压缩段 + 末尾压缩指令
         const auto& reqMsgs = tasksJson[0]["messages"];
         XX_TEST_EXPECT_TRUE(reqMsgs.is_array());
         XX_TEST_EXPECT_EQ(reqMsgs.size(), msgs.size() + 1);
         XX_TEST_EXPECT_EQ(reqMsgs[0].value("role", std::string{}), std::string{"system"});
         XX_TEST_EXPECT_EQ(reqMsgs.back().value("role", std::string{}), std::string{"user"});
 
-        // ② resume: 按 key 规则回填结果 ("1" = 无 resultId 时按序号兜底),
+        // ② resume: 按 key 规则回填结果 ("1" = 无 resultId 时按序号回退),
         //    再次调用返回摘要文本, 不再抛中断
         ctx->middlewareHandleContext->setGraphDataItemValue<utilxx_base::Json>(
             sid,
@@ -1857,7 +1857,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
         XX_TEST_EXPECT_TRUE(vm.text.starts_with("Summarized LLM Context "));
     }
 
-    // ==================== 新增: 无工具压缩 + 压缩后仍超限兜底 ====================
+    // ==================== 新增: 无工具压缩 + 压缩后仍超限回退 ====================
 
     // --- T22. 完整流程: 压缩 subagent 不传入任何工具 (无 tools 字段),
     //           仅对当前上下文原样压缩; 压缩指令不含 share_store 提示 ---
@@ -1885,7 +1885,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
         const auto& args = env->subagent->receivedArguments[0];
         XX_TEST_EXPECT_FALSE(args.contains("tools"));
         XX_TEST_EXPECT_FALSE(args["enable_summarization"].get<bool>());
-        // 原样透传: system + 全部消息 + 末尾压缩指令
+        // 原样转发: system + 全部消息 + 末尾压缩指令
         const auto& reqMsgs = args["messages"];
         XX_TEST_EXPECT_EQ(reqMsgs.size(), size_t{10}); // sys + 9 条消息 + 指令
         XX_TEST_EXPECT_EQ(reqMsgs[0].value("content", std::string{}), std::string{"sys"});
@@ -1904,7 +1904,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
         );
     }
 
-    // --- T23. 压缩后仍超限 (LLM 摘要本身超长) → 降级硬截断兜底, 保证请求能发出 ---
+    // --- T23. 压缩后仍超限 (LLM 摘要本身超长) → 降级硬截断回退, 保证请求能发出 ---
     {
         auto env = std::make_shared<SummarizationTestEnv>();
         env->session()->setModelName("small"); // max=1000, 95% = 950
@@ -1941,11 +1941,11 @@ asio::awaitable<TestResult> run_summarization_tests() {
         // recent 原样保留
         XX_TEST_EXPECT_EQ(res[2].content, std::string{"u1"});
         XX_TEST_EXPECT_EQ(res[9].content, std::string{"a4"});
-        // 兜底后不超 95% 上限
+        // 回退后不超 95% 上限
         XX_TEST_EXPECT_TRUE(env->handle->countTokens({}, res, false) < size_t{950});
     }
 
-    // --- T24. hardTruncate 兜底: 大 system + 多条 recent 仍超限 → 从最旧 recent
+    // --- T24. hardTruncate 回退: 大 system + 多条 recent 仍超限 → 从最旧 recent
     //           开始丢弃 (保留最后 1 条); 单条超大消息 → 二分截断文本内容 ---
     {
         auto  env = std::make_shared<SummarizationTestEnv>();
@@ -1965,7 +1965,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
             XX_TEST_EXPECT_EQ(res[0].content, std::string(3200, 's'));
             XX_TEST_EXPECT_TRUE(res[1].content.find("truncated") != std::string::npos);
             XX_TEST_EXPECT_EQ(res[2].content, std::string(400, 'w'));
-            // 兜底后不超 95% 上限 (800+note+100 ≈ 930 < 950)
+            // 回退后不超 95% 上限 (800+note+100 ≈ 930 < 950)
             XX_TEST_EXPECT_TRUE(h->countTokens({}, res, false) < size_t{950});
         }
 
@@ -1987,7 +1987,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
             );
             // 截断后仍保留语义开头 (非空)
             XX_TEST_EXPECT_TRUE(res[2].content.size() > 0);
-            // 兜底后不超 95% 上限 (二分按 budget 收敛, 可能恰好等于 950)
+            // 回退后不超 95% 上限 (二分按 budget 逼近, 可能恰好等于 950)
             XX_TEST_EXPECT_TRUE(h->countTokens({}, res, false) <= size_t{950});
         }
 
@@ -2007,7 +2007,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
         }
     }
 
-    // --- T25. onModelcallRunFunc 压缩后仍超限兜底: 手动压缩 (compactSessionContext)
+    // --- T25. onModelcallRunFunc 压缩后仍超限回退: 手动压缩 (compactSessionContext)
     //           同样降级硬截断 ---
     {
         auto env = std::make_shared<SummarizationTestEnv>();
@@ -2044,7 +2044,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
         XX_TEST_EXPECT_TRUE(res[1].content.find("truncated") != std::string::npos);
         XX_TEST_EXPECT_EQ(res[2].content, std::string{"u1"});
         XX_TEST_EXPECT_EQ(res[9].content, std::string{"a4"});
-        // 兜底后不超 95% 上限
+        // 回退后不超 95% 上限
         XX_TEST_EXPECT_TRUE(env->handle->countTokens({}, res, false) < size_t{950});
     }
 

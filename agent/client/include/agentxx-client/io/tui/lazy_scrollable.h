@@ -32,7 +32,7 @@ struct LazyBuiltItem {
 
 /// 懒构建可滚动容器 (仿照 Flutter ListView.builder)
 ///
-/// 与全量构建的 Scrollable 不同, 本组件采用惰性构建 + 局部缓存:
+/// 与一次性构建的 Scrollable 不同, 本组件采用惰性构建 + 局部缓存:
 ///
 /// - [懒构建] 通过 itemCount()/itemKey()/quickHeight()/buildItem() 回调描述列表,
 ///   仅按需构建子项 Element; 每帧只对与视口相交的子项调用 buildItem
@@ -195,7 +195,7 @@ public:
     /// 头部插入子项后的滚动锚定 (历史分页前插场景; UI 线程, 帧间调用)
     ///
     /// 在并行数组头部插入 count 个新条目 —— 既有条目的缓存 Element 与实测
-    /// 高度随索引整体平移而保留 (key 对齐校验通过, 不失效重建), 锚点索引同步
+    /// 高度随索引整体平移而保留 (key 一致性检查通过, 不失效重建), 锚点索引同步
     /// 平移: 视口顶行仍指向同一条内容, **零校正**。
     /// 新增区高度暂记未知 (-1), 由下一次 prepareLayout 按新快照补齐粗略
     /// 高度 (调用时刻状态快照尚未刷新, 此刻经 quickHeight 读到的是旧快照内容,
@@ -295,7 +295,7 @@ private:
     void removeCacheAt(size_t index);
     /// 按条数/字节预算从 LRU 尾部淘汰
     void evictIfNeeded();
-    /// 未实测子项的粗略高度 (行; 调 quickHeight 回调并缓存, 兜底 >= 1)
+    /// 未实测子项的粗略高度 (行; 调 quickHeight 回调并缓存, 下限 >= 1)
     size_t quickHeightFor(size_t index);
     /// 设置子项高度 (行), 增量维护 totalHeight_ 与 rowsAboveAnchor_
     void setItemHeight(size_t index, int height);
@@ -392,7 +392,7 @@ private:
     /// 待落实的滚轮行数 (负=上滚; 由 OnEvent 累积, prepareLayout 开头落实)
     int pendingScrollRows_ = 0;
 
-    int  totalHeight_ = 0; // 全部子项有效高度和 (增量维护, 不再每帧全量求和)
+    int  totalHeight_ = 0; // 全部子项有效高度和 (增量维护, 不再每帧全部求和)
     int  viewportHeight_ = 0;
     int  measuredWidth_  = -1; // 上次布局所用内容宽度 (变化时缓存整体失效)
     int  contentXMax_    = 0;  // 内容区右边界 (已扣除 gutter)

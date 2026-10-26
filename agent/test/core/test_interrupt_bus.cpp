@@ -1239,7 +1239,7 @@ void test_interrupt_arg_ui_roundtrip() {
     XX_TEST_EXPECT_TRUE(InterruptUi::fromJson(j["ui"]).empty());
 
     // 预设模板 (inputForm): 类型化输入展开为"标签 + 说明 + 控件 + 提交行",
-    // 控件形态与结果 id 由预设决定 (客户端不感知类型)
+    // 控件形态与结果 id 由预设决定 (客户端不关心类型)
     agentxx::middleware::preset::InputSpec mode;
     mode.label        = "Mode";
     mode.depict       = "pick one";
@@ -1476,7 +1476,7 @@ asio::awaitable<void> test_permission_full_auth_rule() {
 }
 
 /// HIL 中断结果对象形态: 结果 {"values": {控件 id: 值}} 只取 values 对象写回
-/// resume 值 (消费端按控件 id 取值)
+/// resume 值 (处理方按控件 id 取值)
 asio::awaitable<void> test_hil_interrupt_result_object_values_only() {
     auto sessionBus
         = std::make_shared<agentxx::events::EventBus>(co_await asio::this_coro::executor);

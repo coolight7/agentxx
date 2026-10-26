@@ -2673,7 +2673,7 @@ void test_mcp_server_2026_modern_results() {
         );
         XX_TEST_EXPECT_TRUE(responses[0]["result"].contains("ttlMs"));
         XX_TEST_EXPECT_TRUE(responses[0]["result"].contains("cacheScope"));
-        // 请求 _meta 透传 (progressToken)
+        // 请求 _meta 原样转发 (progressToken)
         XX_TEST_EXPECT_EQ(
             responses[0]["result"]["_meta"]["progressToken"].get<std::string>(),
             "tok-1"

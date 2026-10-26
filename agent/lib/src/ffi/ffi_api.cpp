@@ -1,5 +1,5 @@
 /// 本文件是唯一允许跨语言 (FFI) 调用的导出面: 全部函数为 extern "C" + 纯 C
-/// 参数/返回 (无 STL/异常出界), 内部统一 catchError 兜底并转错误码; 每个
+/// 参数/返回 (无 STL/异常出界), 内部统一交给 catchError 处理并转错误码; 每个
 /// 函数可选的 AgentxxString* log 参数用于向调用方回传执行过程中的错误/日志详情 (嵌入方程序
 /// 用后必须 agentxx_ffi_string_free 释放)。符号导出白名单见 lib/ffi_symbols.map。
 
@@ -18,7 +18,7 @@ using agentxx::ffi::toSv;
 
 namespace {
 
-/// 捕获当前异常为可读文本 (仅供 C 边界兜底)
+/// 捕获当前异常为可读文本 (仅供 C 边界保护)
 std::string cxxErrText() {
     try {
         throw;

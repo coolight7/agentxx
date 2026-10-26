@@ -302,7 +302,7 @@ void AgentHost::attachRoot(std::shared_ptr<BaseAgent> rootAgent) {
     }
     rootAgent_ = std::move(rootAgent);
     // 注入共享基础设施: threadPool 上提共享 (避免每 agent 一份线程池),
-    // host 引用 (供节点/工具经 AgentContext 感知 agent 节点容器)
+    // host 引用 (供节点/工具经 AgentContext 知道 agent 节点容器)
     ctx->threadPool = threadPool_;
     ctx->host       = weak_from_this();
     // 注入插件管理器: agent 自己不再建管理器/加载插件, 只在 init 时挂载
@@ -491,7 +491,7 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
     // ---- worktree 绑定继承 (worktree 模式) ----
     // - 父会话已绑定 worktree 时, 子代理的工作目录预置为同一 worktree:
     //   resolvedWorkDir()/permission Ask 默认放行规则/子进程 cwd 一并跟随,
-    //   无需子代理再感知绑定机制; inheritedWorktreePath 供提示词中间件注入
+    //   无需子代理再了解绑定机制; inheritedWorktreePath 供提示词中间件注入
     //   "继承隔离" 提醒 (避免子代理再创建嵌套 worktree 或改写主检出)
     if (parentAgentCtx) {
         auto parentSession = parentAgentCtx->sessions->get(parentSessionId);
@@ -512,7 +512,7 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
                 XX_LOGD("spawnOneTask `{}`: tool policy = none", subagentName);
             } else if (task.tools->size() == 1 && (*task.tools)[0].is_string()
                        && (*task.tools)[0].get<std::string>() == "*") {
-                // ["*"]: 全量继承父 agent 工具 (解析为父工具名白名单;
+                // ["*"]: 全部继承父 agent 工具 (解析为父工具名白名单;
                 // 子代理未创建的父工具名自然跳过, 不报错)
                 if (rootAgent_ && rootAgent_->getContext()) {
                     subCfg->toolWhitelist = rootAgent_->getContext()->toolNames;
@@ -552,9 +552,9 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
 
     // ---- 同上下文运行: 前缀复用与工具执行策略 ----
     // - keepProvidedSystemMessage: 保留调用方给的 system 消息 (子代理按自己的配置
-    //   重建时会缺少运行时提示词段落, 前缀在 system 内部就分叉)
+    //   重建时会缺少运行时提示词段落, 前缀在 system 内部就不一致)
     // - inheritRequestTools: 继承父会话上一次请求的工具定义 (请求前缀一致)
-    // - toolExecutionDisabled: 本次运行不执行任何工具 (工具定义只用于对齐前缀)
+    // - toolExecutionDisabled: 本次运行不执行任何工具 (工具定义只用于保持前缀一致)
     if (sameContext) {
         subCfg->keepProvidedSystemMessage = task.keepProvidedSystemMessage;
         subCfg->toolExecutionDisabled     = task.toolExecutionDisabled;
@@ -714,7 +714,7 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
         [&]() -> asio::awaitable<events::RespSubagentBatchItem> {
             co_await subagent->init();
 
-            // 同上下文模式 + messages 透传: 初始上下文由调用方原样给出
+            // 同上下文模式 + messages 原样转发: 初始上下文由调用方原样给出
             // (须含 system, 或为空时由 llm 节点按父 system prompt 补齐),
             // 不再插入子代理默认提示, 保证消息前缀与父会话一致
             std::string sysPrompt{task.systemPrompt};
@@ -786,7 +786,7 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
 
             XX_LOGD("    ## AgentHost spawned subagent `{}` (agentId={})", subagentName, agentId);
 
-            // 初始消息: messages 结构化透传优先 (可含 system, 原样透传);
+            // 初始消息: messages 结构化原样转发优先 (可含 system, 原样转发);
             // 否则回退 systemPrompt + message 文本 (默认独立行为)
             // - 上下文以会话为唯一权威: 直接写入子会话的上下文, 不再经
             //   RunConfig.input 播种 (图状态不再持有 messages 通道)

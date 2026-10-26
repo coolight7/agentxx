@@ -26,7 +26,7 @@ template<typename T>
 concept BaseGraphNodeType = std::same_as<T, neograph::graph::GraphNode>
                             || std::derived_from<T, neograph::graph::GraphNode>;
 
-/// 节点包装基类: 提供默认 run 透传 (不包装时直接调用 T::run)
+/// 节点包装基类: 提供默认 run 原样转发 (不包装时直接调用 T::run)
 /// - 内部实现 start -> baseRun -> end 的栈式调用与异常分发框架
 /// - 各 virtual 钩子由子类覆写以插入中间件行为
 class WrapBaseNodeInterface : public neograph::graph::GraphNode {
@@ -263,7 +263,7 @@ public:
             // - 业务层错误 (如工具执行失败) 由节点内部捕获消息化, 不会抛到这里
             //
             // 上下文安全: 消息以会话为唯一权威, 不随图状态回滚 —— 节点在抛出前
-            // 已写入会话的消息 (如部分完成的 tool 结果/兜底提示) 依然保留,
+            // 已写入会话的消息 (如部分完成的 tool 结果/回退提示) 依然保留,
             // 因此不再需要"重抛前快照整份上下文、轮末再恢复"的对账逻辑
             std::rethrow_exception(errorPtr);
         }

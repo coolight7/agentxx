@@ -66,7 +66,7 @@ public:
     std::string getCurrentModelName(std::string_view sessionId) const;
 
     /// 获取当前使用的语言 (若指定 sessionId 且该会话有独立设置则优先返回, 否则返回
-    /// agentConfig->language, 兜底 "en")
+    /// agentConfig->language, 回退 "en")
     std::string getLanguage(std::string_view sessionId = "") const;
 
     /// 指定使用的语言 (不支持 auto, 为空或 auto 设为 "en")
@@ -162,7 +162,7 @@ protected:
 
     /// 创建工具列表
     /// - 在 init() 中于 initMiddleware() 之后调用
-    /// - 返回的工具将被注册到 GraphEngine
+    /// - 返回的工具会被注册到 GraphEngine
     virtual asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> initTools();
 
     /// 构建图定义 JSON
@@ -232,7 +232,7 @@ private:
     /// - false: 由主程序注入 (进程一份), 本 agent 只挂载/拆挂载
     bool ownsPluginHost_ = false;
 
-    /// 执行图定义兜底存储 (agentContext 为空时使用; 正常情况下
+    /// 执行图定义备用存储 (agentContext 为空时使用; 正常情况下
     /// graphDefinitionJson 存于 AgentContext 供插件读写)
     neograph::json graphDefinitionJson_ = neograph::json::object();
 };

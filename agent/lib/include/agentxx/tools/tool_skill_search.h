@@ -14,7 +14,7 @@ namespace tools {
 /// 中未找到可以解决用户需求的方法时，可以尝试调用`tool_skill_search`查找可能可用的
 /// tool 或 skill
 /// - 需要实现区分 tool 是可延迟加载的，并区分已加载、未加载，未加载的 tool
-/// 只需要在主模型的上下文中保留 toolname/skillname 即可
+/// 只需在主模型上下文里保留 toolname/skillname 即可
 /// - 搜索实现:
 ///   - 当 tool 和 skill < 30 个时，不延迟加载
 ///   - 子模型搜索可用的 tool和skill 时，可以预先加载可能需要的 skill

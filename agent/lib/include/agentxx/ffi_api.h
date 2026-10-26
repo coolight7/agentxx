@@ -202,7 +202,7 @@ AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL
 /// agent 事件种类
 typedef enum AgentxxFFIEventType {
     AGENTXX_FFI_EVT_READY = 0,     ///< 服务端就绪, 可开始发送输入: {"sessionId"}
-    AGENTXX_FFI_EVT_SYNC,          ///< 全量/部分历史同步: wire sync JSON
+    AGENTXX_FFI_EVT_SYNC,          ///< 完整/部分历史同步: wire sync JSON
     AGENTXX_FFI_EVT_DELTA,         ///< 流式增量: wire delta JSON (kind=text_token/...)
     AGENTXX_FFI_EVT_TURN_END,      ///< 轮次结束: wire turn_result JSON
     AGENTXX_FFI_EVT_CONTEXT_STATS, ///< 上下文统计: wire context_stats JSON
@@ -213,7 +213,7 @@ typedef enum AgentxxFFIEventType {
     AGENTXX_FFI_EVT_INTERRUPT_EXPIRED,   ///< 中断已过期/已取消: {"interruptId"}
     AGENTXX_FFI_EVT_PLUGIN_DATA,         ///< 插件事件转发: wire plugin_data JSON
     AGENTXX_FFI_EVT_ERROR,               ///< 内部错误: {"code","message"}
-    AGENTXX_FFI_EVT_WIRE,                ///< 下行 Wire 消息透传: 原始 JSON
+    AGENTXX_FFI_EVT_WIRE,                ///< 下行 Wire 消息原样转发: 原始 JSON
     AGENTXX_FFI_EVT_HOST_TOOL_CALL,      ///< 嵌入方程序工具调用请求
     AGENTXX_FFI_EVT_HOST_TOOL_CANCELLED, ///< 嵌入方程序工具调用取消
     AGENTXX_FFI_EVT_DELTA_TEXT_BATCH,    ///< 文本/思考增量合批
@@ -223,7 +223,7 @@ typedef struct AgentxxFFICallbacks {
     /// 事件回调 (client io 线程; payload_json 仅回调期间有效)
     void(AGENTXX_FFI_CALL*
              on_event)(int32_t type, const AgentxxStringView* payload_json, void* user_data);
-    /// 嵌入方程序上下文 (原样透传给 on_event)
+    /// 嵌入方程序上下文 (原样转给 on_event)
     void* user_data;
 } AgentxxFFICallbacks;
 
@@ -275,7 +275,7 @@ AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL
 /// 25MB (音频) / 50MB (视频)。`dataUrl` 为空且 `path_or_url` 为本地路径时,
 /// 由服务端读取并编码 (嵌入方程序无需自行读文件)。
 ///
-/// 受理结果经 `EVT_WIRE` 透出 `input_ack` (`{type:"input_ack", requestId, status,
+/// 受理结果经 `EVT_WIRE` 上报 `input_ack` (`{type:"input_ack", requestId, status,
 /// reason, detail, itemId}`): `status` 为 `started` / `queued` / `steered` / `rejected`,
 /// 被拒绝时 `reason` 给出结构化原因 (`empty_content` / `attachment_too_large` /
 /// `too_many_attachments` 等)。嵌入方程序据此展示"已开始 / 已排队 / 被拒绝"。
@@ -315,7 +315,7 @@ AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL agentxx_ffi_set_language(
 AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL
     agentxx_ffi_get_language(AgentxxFFIAgent* a, AgentxxString* out, AgentxxString* log);
 
-/* ==================== 模型管理与 Wire 透传 ==================== */
+/* ==================== 模型管理与 Wire 原样转发 ==================== */
 
 /// 动态添加模型配置 (同步等待 10s): model_json 与 create 时模型配置同构
 AGENTXX_FFI_EXPORT int32_t AGENTXX_FFI_CALL agentxx_ffi_add_model(

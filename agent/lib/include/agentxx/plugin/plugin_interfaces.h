@@ -130,14 +130,14 @@ inline constexpr std::string_view ClientCommand     = "agentxx.client.command";
 inline constexpr std::string_view ClientAction = "agentxx.client.action";
 /// 通用 overlay (ui 表 v3 open/close; TUI 声明, CLI 不声明)
 inline constexpr std::string_view ClientOverlay = "agentxx.client.overlay";
-/// 组件描述能力: 主程序能渲染 `agentxx.ui.item` 全量组件 (横排/分组/折叠/表格/树/键值/
+/// 组件描述能力: 主程序能渲染 `agentxx.ui.item` 全部组件 (横排/分组/折叠/表格/树/键值/
 /// 趋势图/计量条/控件/提交行); 未声明时插件应只推旧 kind (text/button/progress 等)
 /// 或改用 `fallback`。与 ui 表成员无关, 只作能力协商用。
 inline constexpr std::string_view ClientComponents = "agentxx.client.components";
 /// 插件表单: 主程序支持控件交互与结果回传 (`__submit`/`__cancel`/`commitOnPick`
 /// 经动作通道回传 `{"values":{控件 id: 值}}`); 未声明时控件只作展示
 inline constexpr std::string_view ClientForm = "agentxx.client.form";
-/// 区域尺寸感知: 主程序在布局后把可用宽高告知插件 (`AGENTXX_CLIENT_EVT_UI_LAYOUT`
+/// 区域尺寸通知: 主程序在布局后把可用宽高告知插件 (`AGENTXX_CLIENT_EVT_UI_LAYOUT`
 /// 事件 + `get_client_state().regions` 快照); 未声明时插件按固定宽度排版
 inline constexpr std::string_view ClientLayout = "agentxx.client.layout";
 } // namespace plugin_interfaces

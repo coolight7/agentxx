@@ -281,7 +281,7 @@ inline GitResult runGit(
 #else
 
 /// 无 boost.process 编译配置时的降级实现: 所有 git 操作不可用, 直接报错。
-/// (libagentxx 在 AGENTXX_ENABLE_BOOST_PROCESS=ON 时定义该宏, 此分支兜底保证可编译)
+/// (libagentxx 在 AGENTXX_ENABLE_BOOST_PROCESS=ON 时定义该宏, 此分支保证可编译)
 inline GitResult runGit(
     const std::vector<std::string>&,
     const std::string&       = {},
@@ -632,7 +632,7 @@ inline GitResult createWorktree(
     }
     auto r = runGit(args, repoRootDir);
     if (!r.ok()) {
-        // 失败时清理可能的残留空目录 (git 失败一般不留目录, 兜底)
+        // 失败时清理可能的残留空目录 (git 失败一般不留目录, 这里仍清理一次)
         std::filesystem::remove(wtPath, ec);
         return r;
     }

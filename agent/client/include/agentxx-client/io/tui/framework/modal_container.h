@@ -79,7 +79,7 @@ public:
             // 这里保证模态对象至少存活到本次事件分发结束。
             auto keepAlive = activeModal_;
             keepAlive->OnEvent(event);
-            // 模态是阻塞层: 无论模态是否消费该事件, 都不再下发给 main
+            // 模态是阻塞层: 无论模态是否处理该事件, 都不再下发给 main
             // (全局快捷键由外层 CatchEvent 在主界面之前处理, 不受影响)
             return true;
         }

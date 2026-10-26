@@ -47,7 +47,7 @@
 2. **配置显式拒绝**（`permission.blacklist` / `permissionDenyPaths`）：无论是否完全授权，始终拒绝且不询问；
 3. **完全授权**（用户在询问卡片里勾选，或客户端 `WireSetFullAuth` 切换）：允许；
 4. **规则表命中**：最长前缀匹配（`permission.whitelist`、记住的选择、工作目录规则）；
-5. **兜底**：`noRuleOperator`（由 `permission.mode` 决定：`ask`/`all_ask` → 询问，`pass` → 允许，`deny` → 拒绝）。
+5. **回退**：`noRuleOperator`（由 `permission.mode` 决定：`ask`/`all_ask` → 询问，`pass` → 允许，`deny` → 拒绝）。
 
 `permission.mode` 的默认值 `ask` 表示"当前会话工作目录内允许读写，其他路径询问用户"。
 

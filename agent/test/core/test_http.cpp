@@ -2078,7 +2078,7 @@ asio::awaitable<void> test_http_client_connection_pool() {
 }
 
 // ---------------------------------------------------------------------------
-// 启动更新检查 (agentxx-client/update_check.h): 本地服务端到端
+// 启动更新检查 (agentxx-client/update_check.h): 本地服务端全流程
 //  1) 302 + Location (GitHub /releases/latest 的真实行为) -> 取标签与发布页 URL,
 //     并与当前版本比较得出 hasUpdate
 //  2) 直接返回 JSON (GitHub API) -> 取 tag_name / html_url

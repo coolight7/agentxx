@@ -439,9 +439,9 @@ asio::awaitable<int> runScenario(
 asio::awaitable<TestResult> run_memgrowth_tests() {
     TestResult r;
 
-    // 默认轻量参数: 全量测试须在数分钟内完成。
-    // 原默认 60turns×16KB×3场景 在 Windows debug 下单轮可达数秒、全量超 5 分钟,
-    // 导致全量测试超时挂死。历史重压场景仍可经环境变量恢复:
+    // 默认轻量参数: 全部测试须在数分钟内完成。
+    // 原默认 60turns×16KB×3场景 在 Windows debug 下单轮可达数秒、全部超 5 分钟,
+    // 导致全部测试超时挂死。历史重压场景仍可经环境变量恢复:
     // MEM_TURNS / MEM_RESP_KB / MEM_HUGE_LIMIT / MEM_SCENARIOS(逗号分隔 0/1/2)。
     size_t turns      = 5;
     size_t responseKB = 2;

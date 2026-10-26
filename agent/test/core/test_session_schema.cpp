@@ -645,7 +645,7 @@ TestResult testSessionSchema() {
         }
         XX_TEST_EXPECT_EQ(store.loadViewMessagesAfter(seqSession, 0).size(), size_t{3});
         XX_TEST_EXPECT_EQ(store.loadViewMessagesAfter(seqSession, 12).size(), size_t{0});
-        // limit: 只取前 N 条 (调用方据此判断"差量过大, 回退全量同步")
+        // limit: 只取前 N 条 (调用方据此判断"差量过大, 回退完整同步")
         XX_TEST_EXPECT_EQ(store.loadViewMessagesAfter(seqSession, 10, 1).size(), size_t{1});
         // 不存在的会话不创建目录
         XX_TEST_EXPECT_EQ(store.loadViewMessagesAfter("s-seq-missing", 0).size(), size_t{0});
@@ -660,7 +660,7 @@ TestResult testSessionSchema() {
             XX_TEST_EXPECT_EQ(rows[0].message.text, std::string{"third (updated)"});
         }
 
-        // 老库 (无 viewSeqCounter 记录) 兜底: 取库内最大行序号
+        // 老库 (无 viewSeqCounter 记录) 回退: 取库内最大行序号
         {
             const auto dbFile
                 = fs::path(utilxx_base::utf8ToPath(root))

@@ -41,7 +41,7 @@ utilxx_base::Json mergeAssemblySnapshot(
 );
 
 /// 渲染为人工可读的文本行
-/// - 启动日志与 `--dump-config` 使用同一份渲染实现, 两者不会漂移
+/// - 启动日志与 `--dump-config` 使用同一份渲染实现, 两者不会出现差异
 std::vector<std::string> renderAssemblySnapshot(const utilxx_base::Json& snapshot);
 
 /// 启动期记录加载快照

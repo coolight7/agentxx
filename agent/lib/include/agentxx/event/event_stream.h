@@ -372,7 +372,7 @@ public:
     /// 获取或创建一个单向事件流; 同 topic 同类型复用
     /// - 同 topic 被两处用不同类型注册/发布属调用方笔误: Debug 下断言暴露,
     ///   Release 下**不可** static_cast (类型双关 UB) —— 记录错误并返回进程级
-    ///   兜底空流 (无订阅者, publish 直接返回, 不会破坏内存)
+    ///   占位空流 (无订阅者, publish 直接返回, 不会破坏内存)
     template<typename _DATA_TYPE>
     EventStream<_DATA_TYPE>& get(std::string_view topic) {
         auto it = streams_.find(topic);
@@ -404,7 +404,7 @@ public:
     }
 
     /// 获取或创建一个请求-响应事件流
-    /// - 类型不一致处理同 [get] (Release 下返回兜底空流而非 UB 强转)
+    /// - 类型不一致处理同 [get] (Release 下返回占位空流而非 UB 强转)
     template<typename _REQ_TYPE, typename _RESP_TYPE>
     RequestResponseStream<_REQ_TYPE, _RESP_TYPE>& getRR(std::string_view topic) {
         auto it = streams_.find(topic);
@@ -542,7 +542,7 @@ public:
 
 private:
 
-    /// 类型不匹配 topic 的进程级兜底空流 (按类型各一份)
+    /// 类型不匹配 topic 的进程级占位空流 (按类型各一份)
     /// - 函数局部 static: 线程安全初始化, 引用长期有效
     /// - 用于替代 Release 下不安全的 static_cast 类型双关: 该流无订阅者,
     ///   publish 立即返回; 订阅到它的回调收不到事件 (类型不一致本身就是笔误,
@@ -707,7 +707,7 @@ private:
 
     /// toolCallId → viewMessages 索引 映射 (加速 tool 结果回填 O(1) 定位)
     /// - assistant(tool_calls) 消息登记, tool 结果按 id O(1) 定位, 避免每结果
-    ///   从历史末尾线性回扫 O(n²); 未命中时回扫兜底 (如历史来自更早轮次)
+    ///   从历史末尾线性回扫 O(n²); 未命中时回扫补充 (如历史来自更早轮次)
     /// - viewMessages append-only, 索引不失效
     std::unordered_map<std::string, size_t> toolCallHistoryIndex_;
 

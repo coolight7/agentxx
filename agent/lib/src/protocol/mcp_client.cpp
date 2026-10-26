@@ -2305,7 +2305,7 @@ neograph::ChatTool McpClientTool::get_definition() const {
 
 asio::awaitable<std::string> McpClientTool::execute_async(const utilxx_base::Json& arguments) {
     // 工具调用整体超时 (配置项 toolCallTimeout, 毫秒; 0 = 不限制):
-    // - 覆盖 callTool 的完整流程 (含 HeaderMismatch 重试等), 是总超时兜底
+    // - 覆盖 callTool 的完整流程 (含 HeaderMismatch 重试等), 是最后的总超时保护
     // - 超时时取消底层请求 (HTTP/stdio), 返回超时错误; 外部取消按原语义传播
     // - 内部请求级超时 (requestTimeout) 仍独立生效, 默认 60s < 120s
     auto callWithTimeout = [&]() -> asio::awaitable<std::expected<json, std::string>> {

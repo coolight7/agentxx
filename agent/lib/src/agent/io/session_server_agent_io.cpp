@@ -33,7 +33,7 @@ namespace agentxx {
 namespace agent {
 
 /// 增量补拉单次最多回补的展示消息条数
-/// - 超过该值说明客户端离线时间很长, 回退全量/尾窗同步, 避免一次传输过大
+/// - 超过该值说明客户端离线时间很长, 回退完整/尾窗同步, 避免一次传输过大
 static constexpr size_t kIncrementalReplayMaxMessages = 512;
 
 /// 会话切换期间最多暂存的消息条数 (见 [SessionServerAgentIO::stashWhileSwitching])
@@ -82,7 +82,7 @@ static std::string normalizeSessionTitle(std::string_view raw) {
 /// 三种形态共用同一条消息 (`WireListSessions`):
 /// - 关键词非空: 按标题/展示历史正文检索 (忽略游标字段), 命中片段随条目回传
 /// - limit > 0:  keyset 游标分页, 只返回一页 + 总数/续取标志
-/// - 其余:        旧行为全量列举
+/// - 其余:        旧行为全部列举
 ///
 /// 目录扫描与 SQLite 读取属阻塞 I/O, 调用方负责把它卸载到线程池执行。
 static WireSessionList
@@ -106,7 +106,7 @@ static WireSessionList
         const auto p = store.listSessionsPage(req.beforeMs, req.beforeId, req.limit);
         return WireSessionList{std::move(p.sessions), p.totalCount, p.hasMore};
     }
-    // 旧行为全量列举 (totalCount/hasMore 旧客户端不处理)
+    // 旧行为全部列举 (totalCount/hasMore 旧客户端不处理)
     auto sessions = store.listSessions();
     return WireSessionList{std::move(sessions), 0, false};
 }
@@ -134,7 +134,7 @@ static WireSessionList
 //   上报 (ClientPluginManager::onReady); controller 与 client 是 1:N (同
 //   会话可多 client 接入/重连), 服务端不存储, 仅在 WirePluginDataUp 分支
 //   拦截并发布到 agent 总线 —— agent 侧插件订阅
-//   "agentxx_host.client_interfaces" 按事件到达感知各 client 快照, 据此
+//   "agentxx_host.client_interfaces" 按事件到达知道各 client 快照, 据此
 //   自适应 (如 emit_message_tip 在无 toast 接口的主程序上降级)。
 //
 // 注意: server_plugins/client_interfaces 会转发到对端 (不以 "client." 开头,
@@ -482,7 +482,7 @@ std::string SessionServerAgentIO::pushMessageQueueItem(
     // 注意: 空闲状态下收到用户新输入时, 无论队列是否已有积压消息, 均解除暂停并唤醒执行:
     // - 暂停态来自上一轮的异常/取消/中断 (run() 轮末按结果置位), 用于阻止
     //   "积压消息"自动继续执行; 此刻用户主动发送了新输入, 视为明确的新轮次指令
-    // - 若空闲且队列为空: 本条消息将被驱动循环立即弹出执行, 此时不向客户端推送中间的
+    // - 若空闲且队列为空: 本条消息会被驱动循环立即弹出执行, 此时不向客户端推送中间的
     //   1->0 队列状态, 避免 UI 闪烁
     // - 若空闲且队列已有积压消息: 解除暂停并唤醒驱动循环, 驱动循环从队首依次恢复执行,
     //   同时向客户端推送包含全部排队项的最新队列状态
@@ -1329,7 +1329,7 @@ void SessionServerAgentIO::onPeerMessage(
                 // 目录扫描 + SQLite 读取属阻塞 I/O, 卸载到 threadPool 执行,
                 // 避免阻塞 agent io 线程; 完成后经 shared_from_this 回填响应。
                 // 分页: limit > 0 时走 keyset 游标分页查询 (仅返回一页),
-                // limit == 0 为全量列举
+                // limit == 0 为全部列举
                 auto agent = agent_.lock();
                 if (!agent || !agent->agentContext
                     || !agent->agentContext->sessions->sessionStore) {
@@ -1561,7 +1561,7 @@ void SessionServerAgentIO::onPeerMessage(
                 // 上报, 三期6) —— controller 与 client 是 1:N (同会话可多
                 // client 接入/重连), 不做单值存储; 仅向 agent 总线转发
                 // (topic plugin.agentxx_host.client_interfaces, 订阅方按事件
-                // 到达感知各 client 快照), agent 侧插件据此自适应 (如无
+                // 到达知道各 client 快照), agent 侧插件据此自适应 (如无
                 // toast 接口的主程序上降级提示)
                 if (m.plugin == kHostPluginName && m.event == kEvtClientInterfaces) {
                     if (auto agt = agent_.lock(); agt && agt->agentContext) {
@@ -1692,7 +1692,7 @@ void SessionServerAgentIO::handleHello(
 
     std::vector<WireDelta>         replayDeltas;
     std::optional<WireSyncPayload> replaySync;
-    /// 客户端 lastSeq 已超出 delta 缓冲: 必须下发一份快照 (全量或增量补拉)
+    /// 客户端 lastSeq 已超出 delta 缓冲: 必须下发一份快照 (全部或增量补拉)
     bool                              deltaBufferMissed = false;
     std::string                       tailHash;
     std::vector<WireInterruptRequest> pendingInterrupts;
@@ -1703,7 +1703,7 @@ void SessionServerAgentIO::handleHello(
     // 同步策略 (按代价从低到高, 先满足者胜出):
     // ① delta 重放: 实时重连 (客户端 lastSeq 仍在缓冲内) 时传输量最小
     // ② 增量补拉: 客户端给出已持有的展示历史序号时只补差量
-    // ③ 全量/尾窗同步: 首次接入或序列不匹配时的兜底
+    // ③ 完整/尾窗同步: 首次接入或序列不匹配时的回退
     if (hello.lastSeq > 0) {
         auto deltas = deltasSince(hello.lastSeq);
         if (deltas.has_value()) {
@@ -1711,12 +1711,12 @@ void SessionServerAgentIO::handleHello(
         } else {
             deltaBufferMissed = true;
         }
-        // 缓冲溢出 (客户端离线过久): 落到 ②/③ 处理, 不再无条件下发全量
-        // 但必须给出快照 (客户端在等): 由下方兜底保证
+        // 缓冲溢出 (客户端离线过久): 落到 ②/③ 处理, 不再无条件下发全部
+        // 但必须给出快照 (客户端在等): 由下方的处理保证
     }
 
     // 增量补拉: 客户端给出已持有的展示历史序号时只补差量
-    // - 优先于全量/尾窗同步, 但只有在序号落在服务端历史范围内时可用
+    // - 优先于完整/尾窗同步, 但只有在序号落在服务端历史范围内时可用
     //   (序号超前说明客户端持有的是另一份历史, 如服务端会话被重建/换会话)
     // - 差量条数超过 [kIncrementalReplayMaxMessages] 时回退常规同步,
     //   避免长时间离线后一次传输过大
@@ -1750,11 +1750,11 @@ void SessionServerAgentIO::handleHello(
         }
     }
 
-    // 兜底: 首次接入或 ①/② 均不可用 → 按 initialSyncTailCount 决定全量或尾窗同步。
+    // 回退: 首次接入或 ①/② 均不可用 → 按 initialSyncTailCount 决定全部或尾窗同步。
     // 尾窗同步时客户端仅持有末尾窗口, 上方更早历史由其分页拉取
-    // (WireGetViewMessages), 避免长会话恢复时全量传输
+    // (WireGetViewMessages), 避免长会话恢复时整份传输
     // - delta 缓冲溢出 (deltaBufferMissed) 时客户端在等一份快照, 即使当前没有
-    //   消息也必须下发 (空全量), 否则客户端握手后一直等不到同步
+    //   消息也必须下发 (空快照), 否则客户端握手后一直等不到同步
     if (!replaySync.has_value() && replayDeltas.empty()
         && (deltaBufferMissed || hello.lastSeq == 0)) {
         if (sess && sess->viewMessageCount() > 0) {
@@ -1775,7 +1775,7 @@ void SessionServerAgentIO::handleHello(
     }
 
     // 先发送 HelloAck 再重放: 客户端 connect() 握手循环会丢弃 HelloAck 之前的消息,
-    // 若先重放后 HelloAck, 全量 Sync/增量 WireDelta 会被客户端丢弃 → 重连后历史丢失。
+    // 若先重放后 HelloAck, 完整 Sync/增量 WireDelta 会被客户端丢弃 → 重连后历史丢失。
     // HelloAck 之后发送的重放消息经客户端 recvQueue 缓冲, 由 runTransportLoop 正常处理。
     // ack.plugins: 服务端已加载 agent 侧插件结构化信息 (名字+版本+声明接口;
     // client 插件判断对端可用性与能力的正式通道; 与下方 server_plugins 约定
@@ -1934,7 +1934,7 @@ void SessionServerAgentIO::onDisconnect(const std::shared_ptr<AgentIOTransportBa
 
 void SessionServerAgentIO::switchSession(std::string newThreadId) {
     if (newThreadId.empty() || newThreadId == config_.sessionId) {
-        // 空 id 非法; 同一会话无需切换 (历史已同步, 重复全量 Sync 反而闪烁)
+        // 空 id 非法; 同一会话无需切换 (历史已同步, 重复完整 Sync 反而闪烁)
         if (newThreadId == config_.sessionId) {
             // 仍回推一次 Sync 校准客户端 (本地状态异常时); 与首次接入一致
             // 按尾窗配置分页, 客户端整体重置窗口后可再分页拉取更早历史
@@ -1945,7 +1945,7 @@ void SessionServerAgentIO::switchSession(std::string newThreadId) {
         return;
     }
     if (turnActive_.load(std::memory_order_acquire)) {
-        // 双重保护: 客户端已拦截运行态切换, 此处再兜底拒绝,
+        // 双重保护: 客户端已拦截运行态切换, 此处再拦一次,
         // 避免轮次进行中被换走导致 WireDelta/输入错投到新会话
         XX_LOGW(
             "[session_ctrl] switchSession rejected: turn active (thread={})",
@@ -2190,7 +2190,7 @@ asio::awaitable<void> SessionServerAgentIO::run() {
         // 一致转为错误消息通知客户端 (onRethrow), 避免异常逃逸 co_spawn 完成处理器;
         // 其余异常同样转为错误消息
         // 错误提示: agent 线程插入会话历史并发送 MessageTip WireDelta (覆盖
-        // runTurnAsync 自身抛异常的兜底路径, 与主路径提示一致)
+        // runTurnAsync 自身抛异常的回退路径, 与主路径提示一致)
         auto sendErrorTip = [&](std::string_view errmsg) {
             auto sess = session();
             if (!sess) {
@@ -2346,7 +2346,7 @@ std::optional<std::vector<WireDelta>> SessionServerAgentIO::deltasSince(uint64_t
     }
     // 客户端记录的序号超过服务端当前 seq: 服务端进程重启/会话重建后 seq 从 0 重新
     // 计数, 按增量续传只能得到空列表 (客户端将永远收不到新增量, 界面不再刷新),
-    // 故回退全量 sync (客户端据 sync 的 deltaSeq 重置序号)
+    // 故回退完整 Sync (客户端据 sync 的 deltaSeq 重置序号)
     if (seq > newest) {
         XX_LOGI(
             "[session_ctrl] delta seq regressed (client={}, server={}), fallback to full sync "
@@ -2395,7 +2395,7 @@ WireSyncPayload SessionServerAgentIO::buildTailSync(size_t tailCount) {
         return p;
     }
     const size_t total = sess->viewMessageCount();
-    // 窗口起始下标: 总数不足窗口大小时从 0 开始 (此时等价全量)
+    // 窗口起始下标: 总数不足窗口大小时从 0 开始 (此时等同于完整同步)
     const size_t start = (total > tailCount) ? (total - tailCount) : 0;
     p.fromIndex        = start;
     p.totalMessages    = total;
@@ -2417,10 +2417,10 @@ WireSyncPayload SessionServerAgentIO::buildIncrementalSync(
     p.incremental = true;
     auto sess     = session();
     if (!sess) {
-        // 会话不可用 (已释放): 回退全量同步语义 (客户端整体重置)
+        // 会话不可用 (已释放): 回退完整同步语义 (客户端整体重置)
         return buildFullSync();
     }
-    // 老数据 (无 msg id) 无法在客户端去重: 回退全量同步
+    // 老数据 (无 msg id) 无法在客户端去重: 回退完整同步
     for (const auto& row : rows) {
         if (row.message.id.empty()) {
             XX_LOGD(
@@ -2587,7 +2587,7 @@ void SessionServerAgentIO::handleGetViewMessages(
     const WireGetViewMessages&                   req,
     const std::shared_ptr<AgentIOTransportBase>& target
 ) {
-    // 默认页大小: 客户端 count==0 时的兜底 (与 TUI 端请求页大小一致)
+    // 默认页大小: 客户端 count==0 时的回退 (与 TUI 端请求页大小一致)
     static constexpr uint32_t kDefaultHistoryPageSize = 100;
 
     WireViewMessagesPage page;
@@ -2607,7 +2607,7 @@ void SessionServerAgentIO::handleGetViewMessages(
     }
     const size_t total = sess->viewMessageCount();
     page.totalCount    = total;
-    // beforeIndex == 0 视为"从末尾向前取" (客户端首次加载兜底);
+    // beforeIndex == 0 视为"从末尾向前取" (客户端首次加载时的默认请求);
     // 正常分页流程窗口顶部为 0 时客户端不应再发起请求
     const uint64_t before
         = (req.beforeIndex == 0) ? total : std::min<uint64_t>(req.beforeIndex, total);

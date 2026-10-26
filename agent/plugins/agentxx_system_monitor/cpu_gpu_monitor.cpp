@@ -675,7 +675,7 @@ protected:
             co_return data;
         }
 #endif
-        /// 同步兜底读取 (文件异步 I/O 不可用)
+        /// 同步回退读取 (文件异步 I/O 不可用)
         std::ifstream stream;
         stream.open(std::string{path});
         if (!stream) {
@@ -732,7 +732,7 @@ protected:
             }
         }
 
-        /// Linux 3.14 之前的系统没有 MemAvailable: 用 MemFree 兜底 —— 它不含可回收的
+        /// Linux 3.14 之前的系统没有 MemAvailable: 用 MemFree 代替 —— 它不含可回收的
         /// 文件页缓存, 数值偏小, 但仍是当前可用量的下界, 比上报 0 有用
         if (memAvailableKB == 0) {
             memAvailableKB = memFreeKB;
@@ -1249,7 +1249,7 @@ protected:
             return;
         }
 
-        /// 匹配字典由 IOServiceGetMatchingServices 消费 (成功/失败都由 IOKit 释放)
+        /// 匹配字典由 IOServiceGetMatchingServices 处理 (成功/失败都由 IOKit 释放)
         io_iterator_t serviceIter = IO_OBJECT_NULL;
         kern_return_t kr
             = IOServiceGetMatchingServices(macIokitMainPort(), matchDict, &serviceIter);

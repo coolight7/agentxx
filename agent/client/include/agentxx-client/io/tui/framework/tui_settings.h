@@ -80,7 +80,7 @@ TuiLanguage detectSystemLanguage();
 /// (ask/all_ask/pass/deny, 见
 /// [config.h](/agent/lib/include/agentxx/agent/config.h) 的
 /// agentxx::agent::PermissionMode),
-/// 服务端 CodeAgent 按模式注册规则, 客户端仅兜底处理到达的询问;
+/// 服务端 CodeAgent 按模式注册规则, 客户端只对到达的询问补充处理;
 /// 启动时经 TUIClientAgentIO 构造参数注入, 不再作为 TUI 全局设置项。
 
 /// TUI 全局设置存储 (进程级单例)

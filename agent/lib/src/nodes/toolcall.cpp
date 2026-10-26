@@ -790,7 +790,7 @@ asio::awaitable<std::optional<std::string>> prepareToolInvocation(
                 // 解析用户响应: agent_runner 把结果 values 对象 (控件 id → 值)
                 // 按 resultId (工具调用 id) 写回 interruptResult, 形如
                 // {"<tool_call_id>": {"allow": "true"}}; 未应答/取消 = 空对象 → 拒绝
-                // - 必须先按自身 resultId 下钻取值 (与 subagent 工具一致):
+                // - 必须先按自身 resultId 逐层展开取值 (与 subagent 工具一致):
                 //   直接对顶层对象取 "allow" 恒取不到, 会使用户点"允许"也被拒绝
                 const auto  toolCallId = args.value("tool_call_id", std::string{});
                 const auto* valuesPtr  = &result;
@@ -959,7 +959,7 @@ asio::awaitable<std::string> ToolcallWrapNode::runToolCallBody(const PreparedToo
             if (auto* xxTool = dynamic_cast<agentxx::tools::XXToolBase*>(tool)) {
                 result = co_await xxTool->execute_async(args);
             } else {
-                // 原生 neograph::Tool (如未包装的 MCP 透传工具): 经桥接调用
+                // 原生 neograph::Tool (如未包装的 MCP 原样转发工具): 经桥接调用
                 auto neoArgs = agentxx::util::toNeographJson(args);
                 result       = co_await tool->execute_async(neoArgs);
             }
@@ -1101,7 +1101,7 @@ asio::awaitable<std::optional<neograph::ChatMessage>> ToolcallWrapNode::runPrepa
             }
             co_return true;
         },
-        // 控制流异常兜底 (取消/中断): 不由本函数向外抛 —— 派生协程里逃逸的异常
+        // 控制流异常保护 (取消/中断): 不由本函数向外抛 —— 派生协程里逃逸的异常
         // 会走到 detached 处理器并终止进程; 顺序路径也会跳过调用方的取消收尾。
         // 这里统一记为"本次调用被取消", 由调用方补 [User canceled] 占位
         [&](std::string& errinfo) -> std::optional<bool> {
@@ -1506,7 +1506,7 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
                 prepared.shortCircuit = fmt::format("[Error: {}]", errinfo);
                 co_return true;
             },
-            // 控制流异常兜底 (取消/中断): 记为取消, 由调用方按取消路径收尾
+            // 控制流异常保护 (取消/中断): 记为取消, 由调用方按取消路径收尾
             [&](std::string& errinfo) -> std::optional<bool> {
                 prepError = std::make_exception_ptr(neograph::graph::CancelledException(errinfo));
                 return std::optional<bool>{true};

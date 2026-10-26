@@ -227,12 +227,12 @@ std::string resolveEnvVars(
 // YAML → JSON
 // ---------------------------------------------------------------------------
 
-/// 解析数字标量: 要求**完整消费**文本
+/// 解析数字标量: 要求**完整读取**文本
 ///
-/// `std::from_chars` 对 "0.7" / "16abc" 这类文本会成功消费前缀 (整数分支得到 0 /
+/// `std::from_chars` 对 "0.7" / "16abc" 这类文本会成功读取前缀 (整数分支得到 0 /
 /// 16) 并返回空 `ec`, 只判 `ec` 会把小数截断成整数、把带后缀的值当合法值
 /// (例如 `extra_api_config: {temperature: 0.7}` 会被写成 0)。这里同时要求
-/// 消费到字符串末尾, 不满足即视为非法 (调用方回退默认值并告警)。
+/// 读到字符串末尾, 不满足即视为非法 (调用方改用默认值并告警)。
 template<typename T>
 static bool parseFullNumber(std::string_view text, T& out) {
     const auto result = utilxx_base::parseNumberFromString(text, out);
@@ -814,7 +814,7 @@ static YamlAppConfig parseYamlConfigNode(
     // - enabled: 默认 true; sides: 运行侧 (auto/agent/client, 默认 auto)
     // - args: 插件参数 (整体传递给插件, 主程序不解析)
     // - config: 插件配置文件所在目录或文件路径 (可指向文件/目录;
-    //   支持 `~`/`${VAR}`/相对路径, 由加载侧解析为绝对路径后透传给插件)
+    //   支持 `~`/`${VAR}`/相对路径, 由加载侧解析为绝对路径后原样转给插件)
     // 插件列表 (归一化形状: `plugin.list`)
     const auto pluginItems = mapChild(mapChild(root, "plugin"), kSectionItemsKey);
     if (pluginItems.IsSequence()) {

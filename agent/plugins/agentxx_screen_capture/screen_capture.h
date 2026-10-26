@@ -50,7 +50,7 @@ public:
     ///   DLL 卸载时的静态析构中释放, 会在 Windows loader lock 下执行
     ///   D3D11 设备销毁 —— 显卡驱动 (如 AMD atidxx64) 的内部工作线程此时无法
     ///   获取 loader lock 退出, 主线程在 GetExitCodeThread 上无限自旋 (实测挂死)
-    /// - 重复调用安全; 析构函数会再次兜底 (此时已无资源可释放)
+    /// - 重复调用安全; 析构函数会再清理一次 (此时已无资源可释放)
     void shutdown();
 
     bool isStreaming() const;

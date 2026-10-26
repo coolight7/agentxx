@@ -136,7 +136,7 @@ public:
     std::string listModels(std::string& err);
 
     // -------------------------------------------------------------------
-    // Wire 透传 (A2)
+    // Wire 原样转发 (A2)
     // -------------------------------------------------------------------
     int sendWire(std::string_view wireJson, std::string& err);
 

@@ -520,7 +520,7 @@ void AgentResourceApplier::spawnMcpConnect(
             );
             co_return;
         },
-        // 完成处理器兜底: catchErrorAsync 已捕获普通异常, 此处防御异常逃逸 detached 协程
+        // 完成处理器的保护措施: catchErrorAsync 已捕获普通异常, 此处防御异常逃逸 detached 协程
         [](std::exception_ptr ep) {
             if (ep) {
                 agentxx::util::catchError<bool>(

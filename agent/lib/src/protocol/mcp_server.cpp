@@ -356,7 +356,7 @@ json McpServer::decorateModernResult(json result, std::string_view method, const
     const {
     result["resultType"] = "complete";
     json meta            = serverInfoMeta();
-    // 保留请求 _meta 中的透传字段 (如 progressToken / OTel traceparent)
+    // 保留请求 _meta 中的原样转发的字段 (如 progressToken / OTel traceparent)
     if (requestMeta.is_object()) {
         for (const auto& item : requestMeta.items()) {
             if (!meta.contains(item.first)) {
@@ -558,7 +558,7 @@ json McpServer::processJsonRpc(const json& requestJson, const RequestContext& ct
                     // 2026-07-28: resultType + serverInfo + 缓存字段
                     response["result"] = decorateModernResult(response["result"], method, meta);
                 } else if (!meta.is_null()) {
-                    // legacy: _meta 透传 (2025-03-26+)
+                    // legacy: _meta 原样转发 (2025-03-26+)
                     if (!response["result"].contains("_meta")) {
                         response["result"]["_meta"] = meta;
                     }
@@ -1126,7 +1126,7 @@ json McpServer::handleResourcesRead(const json& id, const json& params) {
         std::shared_lock lock(resourcesMutex_);
         auto             it = resourcesByUri_.find(uri);
         if (it == resourcesByUri_.end()) {
-            // 2026-07-28: 资源不存在 → -32602 (Invalid Params), 与 JSON-RPC 对齐
+            // 2026-07-28: 资源不存在 → -32602 (Invalid Params), 与 JSON-RPC 一致
             return jsonRpcErrorResponse(
                 id,
                 jsonRpcError(kJsonRpcInvalidParams, std::string("Resource not found: ") + uri)

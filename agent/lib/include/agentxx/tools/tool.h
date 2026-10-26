@@ -31,7 +31,7 @@ std::shared_ptr<neograph::graph::CancelToken> getSessionCancelToken(
 
 /// - 封装原始的 [neograph::Tool] 类型，添加额外功能
 /// - 部分函数 (如 MCP) 返回的 tool 类型是原始的 [neograph::Tool]，可以用
-/// [XXToolWrap] 进行封装扩展功能
+/// [XXToolWrap] 封装扩展功能
 ///
 /// 图兼容说明:
 /// - 本类同时继承 `neograph::Tool` (图引擎 `ToolDispatchNode` 仅识别该类型):
@@ -49,14 +49,14 @@ public:
 
     /// - 自动压缩 tool 输出，当长度超过限制值
     /// [agentxx::agent::AgentConfig::toolcallSummaryLimitOutputLength] 时，且该
-    /// tool 启用 [autoSummaryOutput] 则进行压缩
+    /// tool 启用 [autoSummaryOutput] 则压缩
     const bool autoSummaryOutput;
     /// - 延迟加载
     /// - `true`: 该 tool 在初始时仅记录名称等简短信息在 system prompt，由
-    /// `tool_skill_search` 检索查找合适的 tool 后才加载全量信息并支持LLM调用
+    /// `tool_skill_search` 检索查找合适的 tool 后才加载全部信息并支持LLM调用
     const bool canDelayLoad;
     /// - 最大重试次数
-    /// - 如果 [maxRetry] > 0，当 tool 执行抛出异常时，进行重试
+    /// - 如果 [maxRetry] > 0，当 tool 执行抛出异常时，重试
     /// - 最多执行 1 + maxRetry(retry) 次
     const size_t maxRetry;
     /// - 连续相同调用重复检查开关 (默认 false 关闭)
@@ -114,7 +114,7 @@ public:
 
 /// - 封装原始的 [neograph::Tool] 类型，添加额外功能
 /// - 部分函数 (如 MCP) 返回的 tool 类型是原始的 [neograph::Tool]，可以用
-/// [XXToolWrap] 进行封装扩展功能
+/// [XXToolWrap] 封装扩展功能
 class XXToolWrap : public XXToolBase {
 protected:
 

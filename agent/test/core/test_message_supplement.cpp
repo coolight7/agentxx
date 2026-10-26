@@ -176,7 +176,7 @@ public:
         // interruptResult 存储的是 {resultId: value} map; 按自身 resultId 提取
         // - 客户端结果恒为对象形态 {"values": {控件 id: 值}}: 服务端取 values
         //   写回 resume 值, 故此处按控件值对象解析 (取首个控件值, 与 toolcall
-        //   重复调用检查等生产消费者一致)
+        //   重复调用检查等与生产方一致)
         if (result.is_object() && !resultId.empty() && result.contains(resultId)) {
             auto val = result[resultId];
             if (val.is_string()) {
@@ -239,7 +239,7 @@ public:
     asio::awaitable<std::string> execute_async(const utilxx_base::Json&) override {
         started_->store(true, std::memory_order_release);
         // 模拟耗时异步 IO: 最长等待 5s (取消时被取消语义中断, 未完成
-        // → 自动补充 [User canceled]; 5s 避免全量测试高负载下 2s 偶发自然完成)
+        // → 自动补充 [User canceled]; 5s 避免全部测试高负载下 2s 偶发自然完成)
         asio::steady_timer timer(co_await asio::this_coro::executor, std::chrono::seconds(5));
         co_await timer.async_wait(asio::use_awaitable);
         co_return "slow done";
@@ -546,7 +546,7 @@ asio::awaitable<void> test_cancel_auto_supplement() {
         utilxx_base::Json  im;
         const auto         deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
         while (std::chrono::steady_clock::now() < deadline) {
-            // 轮末错误路径已把 tempMessages 快照收敛进 llmMessages 并清理
+            // 轮末错误路径已把 tempMessages 快照并入 llmMessages 并清理
             // graphData, 断言权威面 (llmMessages) 即可
             auto sess = agent.agentContext->sessions->get("cancel_msg_test");
             im        = sess ? sess->llmMessagesJson() : utilxx_base::Json{};

@@ -33,7 +33,7 @@ public:
     using EvolutionTrainingAgent::promptVariantToJson;        // 序列化往返
     using EvolutionTrainingAgent::promptVariantFromJson;
     using EvolutionTrainingAgent::filterDuplicateCandidates;  // 预去重
-    using EvolutionTrainingAgent::deduplicatePopulation;      // 全量去重
+    using EvolutionTrainingAgent::deduplicatePopulation;      // 全部去重
     using EvolutionTrainingAgent::cancelRequested;            // 取消轮询
     // clang-format on
 };

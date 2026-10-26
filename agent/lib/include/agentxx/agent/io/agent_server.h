@@ -40,9 +40,9 @@ public:
         std::chrono::milliseconds interruptTimeout{0};
         std::chrono::seconds      gracePeriod{30}; // 断线重挂等待期
         size_t                    deltaBufferCap = 4096;
-        /// 历史分页尾窗: 首次接入/切换会话时仅同步末尾 N 条 (0 = 全量, 默认)。
+        /// 历史分页尾窗: 首次接入/切换会话时仅同步末尾 N 条 (0 = 全部, 默认)。
         /// 面向 TUI 客户端的 server 部署可开启 (客户端向上滚动时分页拉取
-        /// 更早历史); 经 getOrCreateController 透传给 SessionServerAgentIO
+        /// 更早历史); 经 getOrCreateController 原样转给 SessionServerAgentIO
         size_t initialSyncTailCount = 0;
     };
 

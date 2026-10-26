@@ -35,7 +35,7 @@ inline static constexpr std::string_view defaultContinueTip{"[Please continue]"}
 // 生成唯一的 tool_call id: 毫秒时间戳 + 32 位随机数
 // - 无需与已有 id 比较, 碰撞概率 ~2^-32 (同一毫秒内), 跨毫秒必然不同
 // - 相比按下标回填 call_{i}, 不会与 LLM 返回的 call_N 形式 id 冲突
-// - 实现与各 Provider 共用 (见 provider_common.h), 避免多处拷贝漂移
+// - 实现与各 Provider 共用 (见 provider_common.h), 避免多处拷贝不一致
 using agentxx::protocol::makeUniqueToolCallId;
 
 ModelCallWrapNode::ModelCallWrapNode(
@@ -386,7 +386,7 @@ neograph::CompletionParams ModelCallWrapNode::build_params(std::string_view sess
     }
 
     if (ctxPtr && ctxPtr->agentConfig) {
-        // 捕获本次请求的工具定义: 供同上下文子代理 (上下文对齐) 使用
+        // 捕获本次请求的工具定义: 供同上下文子代理 (保持上下文一致) 使用
         // - 工具定义只与 agent 配置相关、与会话无关, 一份即可
         // - 空列表不覆盖 (子代理取不到时会退回"不继承"的旧行为)
         if (!params.tools.empty()) {
@@ -398,7 +398,7 @@ neograph::CompletionParams ModelCallWrapNode::build_params(std::string_view sess
         //   不需要额外的"关闭工具选择"字段
         // - 该字段与父请求不同会改变请求体, 实测有网关因此不再复用前缀缓存
         //   (见 docs/zh-cn/design/benchmark.md 第 18.4 节)
-        // - 确实需要时由模型配置的 `extra_api_config` 显式给出 (通用透传)
+        // - 确实需要时由模型配置的 `extra_api_config` 显式给出 (通用原样转发)
     }
 
     // 稳定段指纹: system 消息 + 工具 schema
@@ -453,7 +453,7 @@ neograph::CompletionParams ModelCallWrapNode::build_params(std::string_view sess
                 fmt::format("{:016x}|{}|{}", toolsHash, tool.name, tool.description)
             );
         }
-        // 逐条消息指纹: 对比相邻请求时用它在开头几条里找出前缀分叉的位置
+        // 逐条消息指纹: 对比相邻请求时用它在开头几条里找出前缀开始不同的位置
         // (只取消息条数/角色/长度/哈希, 不含正文; 哈希覆盖正文 + thinking + 工具调用,
         //  因为这三者都会进请求体)
         std::string  msgDigests;
@@ -512,7 +512,7 @@ asio::awaitable<neograph::graph::NodeOutput>
         nodeName
     );
     auto params = build_params(in.ctx.thread_id);
-    // 单次调用的取消域: 运行取消照常级联, 消费方放弃时只中止本次调用
+    // 单次调用的取消域: 运行取消照常级联, 处理方放弃时只中止本次调用
     // (正在进行的 HTTP/SSE 请求立即结束, 不必等响应读完或套接字超时)
     agentxx::nodes::ProviderCallScope callScope{in.ctx.cancel_token};
     params.cancel_token = callScope.token();
@@ -523,11 +523,11 @@ asio::awaitable<neograph::graph::NodeOutput>
     neograph::ChatCompletion completion;
     try {
         completion = co_await onReceiveToken(params, in);
-        // 调用已收尾 (含 provider 抛错后由上层重试/结束): 不再视为"消费方放弃"
+        // 调用已收尾 (含 provider 抛错后由上层重试/结束): 不再视为"处理方放弃"
         callScope.markDone();
     } catch (...) {
         // provider 抛错时调用同样已经结束 (上层负责分类/重试): 标记完成后原样抛出,
-        // 避免把"错误路径"误当成"消费方放弃"再取消一次
+        // 避免把"错误路径"误当成"处理方放弃"再取消一次
         callScope.markDone();
         throw;
     }
@@ -559,7 +559,7 @@ asio::awaitable<neograph::graph::NodeOutput>
             );
             if (completion.message.content.empty()) {
                 // 只有 tool_calls 没有正文: 本次生成没有可用结果 (上层按空结果
-                // 走压缩失败/重试兜底), 这里只把 tool_calls 清掉, 不改错误语义
+                // 走压缩失败/重试回退), 这里只把 tool_calls 清掉, 不改错误语义
                 XX_LOGW("[modelcall] tool execution disabled but model returned only tool_calls "
                         "(no content); result will be empty");
             }
@@ -633,7 +633,7 @@ void ModelCallWrapNode::repairMessages(neograph::graph::NodeInput& in) {
     }
 
     if (agentCtxPtr->agentConfig->repairMessages) {
-        // - 最终兜底处理，一般生成 message 的代码应该自己处理异常、补充消息
+        // - 最终回退处理，一般生成 message 的代码应该自己处理异常、补充消息
         // - 这里作为最终的预防处理
         auto msgs = session->messages(); // 拷贝一份: 修复过程需要就地改写
 
@@ -1021,7 +1021,7 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
         // - 该文本就是父会话本次请求发出的 system (父会话 modelcall 刚重建过),
         //   保留它请求前缀才与父会话一致, 上游前缀缓存才命中
         // - 子代理自己的配置里没有记忆文件/技能目录, 重建会缺运行时段落,
-        //   system 内部就分叉, 后面整段对话都命中不了
+        //   system 内部就不一致, 后面整段对话都命中不了
         const bool keepProvidedSystem = haveSystemMsg && agentCtxPtr && agentCtxPtr->agentConfig
                                         && agentCtxPtr->agentConfig->keepProvidedSystemMessage;
         if (agentCtxPtr && !keepProvidedSystem) {
@@ -1049,7 +1049,7 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
     /// 每次溢出只压缩一次, 再次溢出直接按失败处理, 避免反复压缩
     bool overflowCompactUsed = false;
 
-    // 插入 assistant 兜底消息 (保留部分输出, 或插入异常/取消提示):
+    // 插入 assistant 回退消息 (保留部分输出, 或插入异常/取消提示):
     // - 保证消息上下文完整, 用户能看到本次 LLM 调用失败
     // - 保证末尾消息角色为 assistant 且无 tool_calls, 使重试耗尽/取消路径
     //   直接以 agent_end 结束本轮, 而不是把悬挂的 tool_calls 误路由回 tools
@@ -1154,7 +1154,7 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
         if (isCancel || !retryable || (overflow && overflowCompactUsed && retry > 0)
             || retry >= agentCtxPtr->agentConfig->llmMaxRetry) {
             // 抛出前检查末尾消息角色: 若末尾不是 assistant, 或末尾 assistant
-            // 仍带 tool_calls (悬挂), 插入兜底提示消息
+            // 仍带 tool_calls (悬挂), 插入回退提示消息
             // - 覆盖 无输出/短输出 失败的情况 (上轮未插入过)
             // - 已有 ≥512 部分输出时, 上轮已插入 assistant 保留消息, 无需重复插入
             // - 保证本轮以错误结束而不是把悬挂的 tool_calls 误路由回 tools 节点

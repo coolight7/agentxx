@@ -992,7 +992,7 @@ asio::awaitable<void>
         XX_TEST_EXPECT_TRUE(result.find("val=v1") != std::string::npos);
     }
     {
-        // 脚本 exit 码透传
+        // 脚本 exit 码原样转发
         auto args = utilxx_base::Json{
             {"command", "Write-Output 'before_exit'; exit 42"},
             {"timeout", 60                                   },
@@ -1031,7 +1031,7 @@ asio::awaitable<void>
 ///   如果超时只 TerminateProcess(pwsh), ping 孙进程仍持 stdout 管道写端,
 ///   导致 async_read 永不 EOF、工具永久挂起 (用户复现: timeout=5 不返回)
 /// - 修复: 子进程挂入 Job Object (KILL_ON_JOB_CLOSE), 超时 TerminateJobObject
-///   整树终止; 且 kill 后关闭管道读端 (方案 B) 兜底保证到点返回
+///   整树终止; 且 kill 后关闭管道读端 (方案 B) 保证到点返回
 asio::awaitable<void>
     test_windows_timeout_kills_descendants(std::weak_ptr<agentxx::agent::AgentContext> agentContext
     ) {
@@ -1039,7 +1039,7 @@ asio::awaitable<void>
 
     auto start = std::chrono::steady_clock::now();
     // ping -t 无限 ping, 若进程树未被整树终止则本调用永不返回 (测试框架
-    // 会挂死 → 用 2s 超时 + 总耗时断言兜底, 不依赖框架看门狗)
+    // 会挂死 → 用 2s 超时 + 总耗时断言作为最后保护, 不依赖框架看门狗)
     auto args = utilxx_base::Json{
         {"command", "ping -t 127.0.0.1"},
         {"timeout", 2                  },

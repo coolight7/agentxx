@@ -61,7 +61,7 @@
 | `resource_split_tui` | 真实 server + 连接客户端 | server 子进程 + bench 进程内 headless TUI 端点 (WS) |
 | `resource_ffi` | 动态库调用 | `dlopen(libagentxx.so)` + C ABI 驱动轮次 (对照组) |
 | `resource_real_tui` | 同进程 + **真实 TUI** | `TUIClientAgentIO::start()` 启动 FTXUI 界面线程, 采集帧耗时/帧数/渲染字节 |
-| `resource_server_only` | 真实 server 单独运行 | 无客户端常驻; 空载漂移、真实 WS 轮次负载、客户端断开后回收 |
+| `resource_server_only` | 真实 server 单独运行 | 无客户端常驻; 空载波动、真实 WS 轮次负载、客户端断开后回收 |
 | `resource_real_tui_child` | 真实 TUI 子进程 + 真实 server | 客户端经**伪终端 (PTY)** 启动, 用"打字"驱动轮次 (仅 POSIX) |
 | `resource_plugin_attrib` | 同进程 | 逐个加载/卸载 5 个常用插件, 量化每个插件的边际内存与回收量 |
 
@@ -76,7 +76,7 @@
 
 `resource_cli` 末段是**真实逐轮往返** (采样点 `rounds<N>x<bytes>`): 每轮都走完整流程
 (用户输入 → LLM 请求/SSE → 工具调用与结果回写 → 消息落库 → 事件回传), 与真实对话
-一致, 用于观察长上下文下的每轮固定开销与稳态漂移 (此前的 P1/P2 是直接注入历史,
+一致, 用于观察长上下文下的每轮固定开销与稳态波动 (此前的 P1/P2 是直接注入历史,
 序列化/事件次数少于真实逐轮)。相关环境变量:
 
 | 变量 | 默认 | 说明 |
@@ -187,7 +187,7 @@ process_base → agent_constructed → tui_started → agent_init_done
 对照数值时应以提交量为主, 见 10.2 与 11 节。)
 
 跨批对比还要多一层: 同一台机器、同一套脚本下, 进程内生场景 (cli/tui/plugin_attrib)
-批间差 ≤0.4 MB, 是可靠的判据; 而真实轮次与真实 server 场景的批间漂移可达 ±3~5 MB
+批间差 ≤0.4 MB, 是可靠的判据; 而真实轮次与真实 server 场景的批间波动可达 ±3~5 MB
 (RSS) 与 ±20% (每轮耗时) —— 因此**不要只看相邻两批**, 至少取三批 (看是否回到更早
 那一批的水平), 判读方法见第 15.4 节。
 
@@ -602,7 +602,7 @@ cmake --build agent/build/windows-release --config Release --parallel 6
 来源分析 (代码位置, 2026-09-26 复核后更正): 图状态确实每步都在整段序列化, 但**位置与占比与初版分析不同**
 agentxx 路径上真正每步执行的是 `neograph/src/core/graph_engine.cpp:1503-1505`
 (VALUES 事件 `state.serialize()`, 而 agentxx 侧 `EventBridge::handleChannelWrite`
-不消费 `__state__`, 载荷作废) 与 coordinator 的 checkpoint
+不处理 `__state__`, 载荷作废) 与 coordinator 的 checkpoint
 (`graph_coordinator.cpp:258 / 290`, 由 `graph_engine.cpp:1615` 每 super-step 调用);
 `graph_executor.cpp:222` (`hash_state_for_cache`) 与 `graph_executor.cpp:772`
 (`state_snapshot`) 在 agentxx 上**不会执行** (节点缓存未启用, 图里没有 Send)。
@@ -694,7 +694,7 @@ Linux 侧同批重测 (完整表见第 5 节; 与上一轮对照 RSS, MB):
 2. **长会话与真实 server 侧常驻增长最明显**: `server_only` 235 轮 +5.0 MB,
    `real_tui_child` 客户端 +2.9 MB, 而同进程短场景基本持平 (cli startup 反而略降);
 3. **方向上先动"每步整段序列化"与"逐条消息正文拷贝"**: ①去掉 `StreamMode::VALUES`
-   (`base_agent.cpp:986`, agentxx 侧不消费 `__state__`, 属零风险项) 与 checkpoint
+   (`base_agent.cpp:986`, agentxx 侧不处理 `__state__`, 属零风险项) 与 checkpoint
    序列化指纹化; ②收敛逐条消息正文拷贝 (10 KiB 档 ≈8.6 次/条) 与 32/128/384 B 小对象档;
    `huge` 已定位为 Windows/MSVC 的 asio 协程帧开销 (与上下文无关, Linux 上不存在),
    见本节前文
@@ -848,7 +848,7 @@ Windows 上只有 RSS (工作集) / 峰值 / 线程 / 句柄可用, PSS/私脏/�
 3. **巨帧问题独立于本轮重构**: `huge` 档 (asio 协程帧) 与静态扫描数字逐项一致,
    即第 11 节定位的 "MSVC + 全程序 LTO 下的巨帧" 与本次重构无关; 该问题已在同批
    后续工作中定位到机制并处置 (第 13 节: 生产路径的 MB 级帧消除)。
-4. **下一步的收益点**: ①继续收敛 10 KiB 档 (逐条消息正文, 现 ≈430 块/轮) 与
+4. **下一步的收益点**: ①继续缩小 10 KiB 档 (逐条消息正文, 现 ≈430 块/轮) 与
    32/128/384 B 小对象档 (现约 1/3); ②`huge` 巨帧 (≈22 MB/轮, 只在链接 mimalloc
    时变成内存账, 但也会抬高 CPU 侧的分配/清零成本); ③插件静态依赖与线程栈
    (第 8 节"后续可优化方向")。其中 ② 已在本批后续工作中解决, 见第 13 节。
@@ -1414,7 +1414,7 @@ token 估算与压缩改走功能点; `104d5c79`: 启用重复调用检查), 基
 
 ### 17.2 两条每轮 O(上下文) 的临时内存路径
 
-按上面的画像去查"每轮都按上下文大小分配一次"的位置, 找到两条, 都在一轮的首尾:
+按上面的特征去查"每轮都按上下文大小分配一次"的位置, 找到两条, 都在一轮的首尾:
 
 | # | 位置 | 优化前每轮发生的事 |
 |---|---|---|
@@ -1470,7 +1470,7 @@ token 估算与压缩改走功能点; `104d5c79`: 启用重复调用检查), 基
 - 峰值提交 / 峰值工作集四组几乎一样 (77~79 / 56~61 MB): 这两条路径抬高的是
   **每轮分配与释放的规模**, 不是瞬时峰值 —— 与 17.1 的峰值/碎片结论互证;
 - 组内分散仍大 (同配置 5~6 次的最大差可达 15~30 MB, 双峰), 判定只用中位与区间;
-  不同时段的同变体也会漂移 (同为"都走文本"的 150 轮, 17.4 第一张表 32.56 对第二张
+  不同时段的同变体也会波动 (同为"都走文本"的 150 轮, 17.4 第一张表 32.56 对第二张
   表 19.11) —— 所以结论只取**同批、同轮数、交替顺序**内的分层, 不跨时段比绝对值。
 
 ### 17.5 改动前后对照 (跨二进制, 作参考)
@@ -1483,7 +1483,7 @@ token 估算与压缩改走功能点; `104d5c79`: 启用重复调用检查), 基
 | 100 × 8KB | 中位 25.83 (n=6) | 中位 19.86 (n=9) | 中位 19.00 (n=6) | **-6.83 (-26%)** |
 | 150 × 8KB | 中位 41.23 (n=3) | 中位 37.52 (n=9) | 中位 18.98 (n=6) | **-22.25 (-54%)** |
 
-跨二进制比较含时间漂移 (本机非空载), 结论以 17.4 的同二进制 A/B 为准; 这一组的方向与
+跨二进制比较含时间波动 (本机非空载), 结论以 17.4 的同二进制 A/B 为准; 这一组的方向与
 量级与之吻合 (100 轮降 1/4, 150 轮降一半)。50 轮档上下文只有 400 KB, 优化量与噪声同量级,
 按持平看。
 
@@ -1496,7 +1496,7 @@ token 估算与压缩改走功能点; `104d5c79`: 启用重复调用检查), 基
   `llmMessagesJsonText() == llmMessagesJson().dump()`, 覆盖空上下文 / 各类消息形态
   (转义字符 / 图片 / tool_calls / 思考 / flags / extra) 与追加 / 截断 / 整批替换后的
   缓存刷新;
-- `agentxx_test.exe` 全量: **passed=37617 failed=0** (Release, 含
+- `agentxx_test.exe` 全部用例: **passed=37617 failed=0** (Release, 含
   `openai_provider` / `session_persistence` / `persist_semantics` / `session_schema`);
 - 落库内容不变: `onSaveLlmMessages` 传的是与旧路径逐字节相同的 JSON 文本,
   非法 UTF-8 仍按原规则修复。
@@ -1508,7 +1508,7 @@ token 估算与压缩改走功能点; `104d5c79`: 启用重复调用检查), 基
    碎片越高 —— 这是"200K 档增幅远高于 100K 档"的直接原因 (每轮临时量翻倍 **且**
    轮数翻倍), 而**不是泄漏** (每轮成本随轮数递减: 137.9 → 59.8 KB);
 2. **优化**: 两条路径改成逐条追加文本, 输出逐字节不变; 同二进制 100 轮 -52%
-   (32.44 → 15.60), 150 轮 -30% (46.66 → 32.56), 归因顺序为落盘 > 请求体;
+   (32.44 → 15.60), 150 轮 -30% (46.66 → 32.56), 按影响从大到小为落盘 > 请求体;
 3. **不影响的**: 瞬时峰值提交/峰值工作集不变 (77~79 MB), CPU 无可见变化
    (每轮耗时仍 59~67 ms, 见第 16 节);
 4. **遗留**: ①长上下文档仍存在"少数运行偏高 8~30 MB"的双峰 (分配器归还时机),
@@ -1622,7 +1622,7 @@ Windows Debug + ASan, 临时 `data_dir` (会话库 `{data}/sqlite/sessions/<sess
    `inherit_request_tools` / `disable_tool_execution` —— 三个开关在中断参数里就被丢掉了,
    到 `AgentHost` 时一律按 false 处理: 子代理没保留调用方的 system 消息、也没继承父请求的
    工具定义, 退回自己的工具集 (`agentxx_fileshare` 过滤后 middleware 追加的
-   `agentxx_share_store`, 共 1 个)。工具段因此从请求开头就与父请求分叉, 整段前缀命中不了。
+   `agentxx_share_store`, 共 1 个)。工具段因此从请求开头就与父请求不一致, 整段前缀命中不了。
    实测指纹: 父请求 `tools=a84e86f99e5bc928(8)`, 压缩请求 `tools=e3cbf1e7b0d61e04(1)`。
    修复: 工具侧解析并原样写回中断参数 (缺省不写 = false, 保持旧行为), 回归用例见
    `subagent_tool` 的 S3.C。
@@ -1630,9 +1630,9 @@ Windows Debug + ASan, 临时 `data_dir` (会话库 `{data}/sqlite/sessions/<sess
    末尾一条指令, 但裁剪判断用 `countTokens(...) > modelMaxToken * 0.95`, 而本项目的 token
    估算在这类中英混排负载上比上游实际计费**高约 25%**: 自动压缩在 75% 上限处触发时,
    估算值已越过 0.95 线, 于是每次都"先丢掉最旧一条消息"。丢最旧消息会让前缀从第一条起
-   分叉 (实测压缩请求的消息列表少了第 1 条 user 消息), 命中率只剩 system + 工具段。
+   不一致 (实测压缩请求的消息列表少了第 1 条 user 消息), 命中率只剩 system + 工具段。
    修复: 裁剪上限用模型上下文上限本身 (不再乘 0.95), 真超限由上游报错后按失败计数走
-   硬截断兜底 (见 `summarization.cpp` 的注释)。
+   硬截断回退 (见 `summarization.cpp` 的注释)。
 3. **压缩前清理 thinking** (第三个原因, 也是最后一块)。模型配置 `send_thinking: true` 时,
    请求体里**每条** assistant 消息都带 `reasoning_content`
    (`chatMessagesToOpenAIJson` 逐条写入)。而压缩前会调

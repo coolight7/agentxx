@@ -188,7 +188,7 @@ stateDiagram-v2
 }
 
 void test_render_fork() {
-    // 1 个宽源分叉到左右 2 个目标: 分叉 junction '┴'
+    // 1 个宽源分支到左右 2 个目标: 分支 junction '┴'
     auto dg  = parseMermaidStateDiagram(R"(
 stateDiagram-v2
     [*] --> A
@@ -200,7 +200,7 @@ stateDiagram-v2
     C --> [*]
 )");
     auto out = renderToString(dg);
-    XX_TEST_EXPECT_TRUE(contains(out, "┴")); // 分叉
+    XX_TEST_EXPECT_TRUE(contains(out, "┴")); // 分支
     XX_TEST_EXPECT_TRUE(contains(out, "center node"));
     XX_TEST_EXPECT_TRUE(contains(out, "B")); // 未带标签, 显示 id
     XX_TEST_EXPECT_TRUE(contains(out, "right side node"));

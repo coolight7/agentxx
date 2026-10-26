@@ -17,7 +17,7 @@ namespace agent {
 // ---------------------------------------------------------------------------
 // WireMessage: 两个 AgentIOBase 端点之间传递的结构化消息
 // - Channel 传输: 直接传递 C++ 对象 (免序列化)
-// - WS 传输: 内部负责 JSON 编解码, 调用方无感知
+// - WS 传输: 内部负责 JSON 编解码, 调用方不需要关心
 // ---------------------------------------------------------------------------
 
 /// 输入受理状态 (`WireInputAck.status`)
@@ -146,7 +146,7 @@ struct WireHello {
     std::string model;
     std::string language = "en"; ///< 界面/客户端指定使用的语言 (默认 "en", 不支持 auto)
     /// 已持有的展示历史序号: >0 时服务端按"该序号之后的消息"增量补拉
-    /// (见 WireSyncPayload::incremental), 0 = 未提供 (全量/尾窗同步)
+    /// (见 WireSyncPayload::incremental), 0 = 未提供 (完整/尾窗同步)
     uint64_t afterViewSeq = 0;
     /// 协议版本: 客户端按自身实现上报; 老客户端缺字段 → 0
     int protocolVersion = WireProtocol::kVersion;
@@ -171,7 +171,7 @@ struct WireHelloAck {
         std::string version;
         /// 插件清单声明的接口名 (interfaces.require ∪ optional; 见
         /// [plugin_interfaces.h](/agent/lib/include/agentxx/plugin/plugin_interfaces.h)
-        /// 接口协商节), client 插件据此感知对端能力
+        /// 接口协商节), client 插件据此知道对端能力
         std::vector<std::string> interfaces;
     };
 
@@ -280,7 +280,7 @@ struct WireContextStats {
 /// (客户端按码决定"重试 / 提示 / 忽略")。**未知码按 [Internal] 处理**, 不要因为
 /// 对端新增了码就报错或丢弃消息。
 struct WireErrorCode {
-    /// 其他内部错误 (未知码的兜底)
+    /// 其他内部错误 (未知码按默认处理)
     inline static constexpr int Internal = 0;
     /// 当前状态不允许该请求 (如未完成握手就发业务消息)
     inline static constexpr int InvalidState = 1;
@@ -306,7 +306,7 @@ enum class WireConnectionStage : uint8_t {
     Unbound = 1,
     /// 可正常收发业务消息
     Ready = 2,
-    /// 断线重连中: 实时片段可能丢失, 由增量补拉/全量同步补齐后回到 Ready
+    /// 断线重连中: 实时片段可能丢失, 由增量补拉/完整同步补齐后回到 Ready
     Reconnecting = 3,
     /// 正在关闭: 不再受理新请求
     Draining = 4,
@@ -330,7 +330,7 @@ inline std::string_view wireConnectionStageText(WireConnectionStage stage) noexc
     return "unhandshaken";
 }
 
-/// 连接阶段文本 -> 枚举 (未知文本返回 nullopt, 由调用方决定兜底取值)
+/// 连接阶段文本 -> 枚举 (未知文本返回 nullopt, 由调用方决定默认取值)
 inline std::optional<WireConnectionStage> wireConnectionStageFromText(std::string_view text) {
     if (text == "unhandshaken") {
         return WireConnectionStage::Unhandshaken;
@@ -413,14 +413,14 @@ struct WireCompactContext {
 /// 客户端请求持久化会话列表 (Client -> Server): 会话选择弹窗数据源
 /// - 不携带 sessionId: 列举全部持久化会话, 与当前连接会话无关
 /// - 支持分页 (keyset 游标): 客户端先请求最新一页, 浏览到末尾时按游标续取,
-///   避免会话很多时一次性扫描/传输/渲染全量; limit == 0 为全量
+///   避免会话很多时一次性扫描/传输/渲染全部; limit == 0 为全部
 struct WireListSessions {
     /// 游标: 仅返回排序位于该时间点之后的会话 (毫秒时间戳); <= 0 = 从最新开始
     int64_t beforeMs = 0;
     /// 游标平局裁决: 与 beforeMs 相同时间戳的会话按 sessionId 升序排列,
     /// 游标取"上一页最后一条"的 (lastActiveMs, sessionId)
     std::string beforeId;
-    /// 页大小; 0 = 全量列举 (旧行为)
+    /// 页大小; 0 = 全部列举 (旧行为)
     uint32_t limit = 0;
     /// 关键词: 非空时按标题/展示历史正文的子串检索
     /// - 检索模式下忽略游标字段, 服务端按最近活动降序返回命中项 (含命中片段)
@@ -434,7 +434,7 @@ struct WireSessionList {
     std::vector<SessionInfo> sessions;
     /// 持久化会话总数 (供客户端展示 x/y 与判断加载完成); 旧版服务端无此字段 → 0
     uint64_t totalCount = 0;
-    /// 是否还有未加载的更早会话; 旧版服务端无此字段 → false (视为全量响应)
+    /// 是否还有未加载的更早会话; 旧版服务端无此字段 → false (视为完整响应)
     bool hasMore = false;
 };
 
@@ -505,7 +505,7 @@ struct WireInterruptAndRunNext {
 /// 分页拉取更早历史, 服务端以 WireViewMessagesPage 回应。
 /// - 语义: 请求绝对下标区间 [max(0, beforeIndex - count), beforeIndex) 的消息
 ///   (viewMessages 为 append-only, 绝对下标恒定, 无竞态)
-/// - beforeIndex == 0 视为 "从末尾向前取 count 条" (客户端首次加载兜底;
+/// - beforeIndex == 0 视为 "从末尾向前取 count 条" (客户端首次加载时的默认请求;
 ///   正常分页流程中窗口顶部为 0 时已无更早消息, 客户端不应再请求)
 struct WireGetViewMessages {
     std::string sessionId;
@@ -556,7 +556,7 @@ struct WireListDirResult {
 
 /// 客户端查询当前权限状态 (Client -> Server; 无载荷)
 ///
-/// 界面 (TUI Info 侧边栏) 需要展示"完全授权"状态并允许用户切换, 而该状态
+/// 界面 (TUI Info 侧边栏) 需要展示"完全授权"状态且用户可以切换, 而该状态
 /// 由 agent 侧权限中间件持有, 因此客户端经本消息主动查询一次
 /// (接入握手后 + 用户点击切换后), 服务端以 [WirePermissionState] 回应。
 struct WireGetPermissionState {};
@@ -759,7 +759,7 @@ public:
 
     /// 接收对端发来的下一条消息 (协程阻塞直到有消息)
     /// - 返回 nullopt 表示传输已关闭/对端断开 (不可恢复)
-    /// - WS 实现内部处理重连; 重连成功时调用方无感知, 重连失败才返回 nullopt
+    /// - WS 实现内部处理重连; 重连成功时调用方不需要关心, 重连失败才返回 nullopt
     virtual asio::awaitable<std::optional<WireMessage>> recv() = 0;
 
     /// 建立连接 (WS: TCP+握手+hello; Channel: 构造时已连通, 此为 no-op)

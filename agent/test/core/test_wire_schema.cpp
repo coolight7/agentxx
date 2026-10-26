@@ -113,7 +113,7 @@ struct WireSample {
     WireMessage message;
 };
 
-/// JSON 值的类型描述 (供其他语言实现参考; 只展开两层, 更深的嵌套收敛为 `object`)
+/// JSON 值的类型描述 (供其他语言实现参考; 只展开两层, 更深的嵌套统一为 `object`)
 std::string jsonTypeOf(const utilxx_base::Json& value, int depth = 0) {
     if (value.is_null()) {
         return "null";
@@ -274,7 +274,7 @@ std::vector<WireSample> wireSamples() {
         );
         out.push_back({"delta", WireMessage{std::move(m)}});
     }
-    // 11) 会话全量/增量同步快照
+    // 11) 会话完整/增量同步快照
     {
         WireSyncPayload m;
         m.fromIndex     = 0;

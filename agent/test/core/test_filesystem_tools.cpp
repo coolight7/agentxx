@@ -2058,7 +2058,7 @@ asio::awaitable<void>
     };
     auto result = co_await tool.execute_async(args);
     // content 模式现在返回按文件分组的文本格式: 每文件组头 "{filepath}:" 仅出现一次,
-    // 之后每行为 "行号:整行内容" (对齐 grep -n 且减少文件路径重复)
+    // 之后每行为 "行号:整行内容" (同 grep -n 且减少文件路径重复)
     // test2.txt 第 1 行是 "hello world", 应输出组头 ".../test2.txt:" 与行 "1:hello world"
     bool hasFileHeader = result.find("test2.txt:\n") != std::string::npos;
     bool hasMatchLine  = result.find("\n1:hello world\n") != std::string::npos;
@@ -2191,7 +2191,7 @@ asio::awaitable<void>
     };
     auto result = co_await tool.execute_async(args);
     // 分组格式下组头 "{filepath}:" 仅一次; 匹配行用 `:` 分隔, 上下文行用 `-` 分隔
-    // (对齐 grep -C), 行前缀不再重复文件路径
+    // (同 grep -C), 行前缀不再重复文件路径
     bool hasFileHeader  = result.find("test1.txt:\n") != std::string::npos;
     bool hasMatchLine   = result.find("\n3:line3") != std::string::npos;
     bool hasContextPrev = result.find("\n2-line2") != std::string::npos;
@@ -2588,7 +2588,7 @@ asio::awaitable<void>
     co_return;
 }
 
-/// 中文/UTF-8 路径测试: read 工具读取含中文路径的文本文件 (全量 + offset/limit)
+/// 中文/UTF-8 路径测试: read 工具读取含中文路径的文本文件 (全部 + offset/limit)
 asio::awaitable<void>
     test_read_text_file_chinese_path(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     namespace fs    = std::filesystem;
@@ -2602,7 +2602,7 @@ asio::awaitable<void>
 
     auto tool = agentxx::tools::FilesystemReadTextFileTool{agentContext};
 
-    // 1) 全量读取 (异步/stream_file)
+    // 1) 全部读取 (异步/stream_file)
     auto argsFull = utilxx_base::Json{
         {"path", filePath}
     };
@@ -2711,7 +2711,7 @@ asio::awaitable<void>
     co_return;
 }
 
-/// 中文/UTF-8 路径测试: edit 工具在中文路径下进行单处/多处替换
+/// 中文/UTF-8 路径测试: edit 工具在中文路径下做单处/多处替换
 asio::awaitable<void>
     test_edit_text_file_chinese_path(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     namespace fs    = std::filesystem;
@@ -2870,7 +2870,7 @@ asio::awaitable<void>
     co_return;
 }
 
-/// 同步兜底路径测试: 模拟"文件异步 I/O 不可用"的环境 —— 经
+/// 同步回退路径测试: 模拟"文件异步 I/O 不可用"的环境 —— 经
 /// utilxx_base::setAsyncFileIoSupported(false) 强制关闭后, read/write/edit 的
 /// 协程执行体应回退同步实现 (编译期无 asio 文件 I/O, 或运行环境 io_uring 被
 /// seccomp 拦截时的实际路径), 且产出与自动探测路径完全一致。
@@ -2949,7 +2949,7 @@ asio::awaitable<void> test_sync_fallback_without_async_file_io(
     // 作用域结束恢复自动探测: 判断结果回到探测值, 不再被强制关闭
     XX_TEST_EXPECT_EQ(utilxx_base::isAsyncFileIoSupported(), autoDetected);
 
-    // 同步兜底路径本身必须可用且行为正确
+    // 同步回退路径本身必须可用且行为正确
     bool syncOk = syncRun.writeRes.find("success") != std::string::npos
                   && syncRun.readRes.find("同步兜底第一行") != std::string::npos
                   && syncRun.readPartRes.find("目标旧字符串") != std::string::npos
@@ -2957,7 +2957,7 @@ asio::awaitable<void> test_sync_fallback_without_async_file_io(
                   && syncRun.finalContent.find("已替换新字符串") != std::string::npos
                   && syncRun.finalContent.find("目标旧字符串") == std::string::npos;
 
-    // 自动探测路径 (本机可用则为真异步实现) 与同步兜底路径产出应完全一致
+    // 自动探测路径 (本机可用则为真异步实现) 与同步回退路径产出应完全一致
     auto autoRun = co_await runOnce();
     bool sameOk  = autoRun.writeRes == syncRun.writeRes && autoRun.readRes == syncRun.readRes
                   && autoRun.readPartRes == syncRun.readPartRes
@@ -3719,7 +3719,7 @@ asio::awaitable<void> test_path_queue_serializes_read_modify_write(
         XX_TEST_EXPECT_TRUE(secondAcquired);
     }
 
-    // 端到端: 两次并发 edit 抢同一文件 -> 一次成功、一次报未命中; 内容只被替换一次
+    // 全流程: 两次并发 edit 抢同一文件 -> 一次成功、一次报未命中; 内容只被替换一次
     {
         auto writeTool = agentxx::tools::FilesystemWriteFileTool{agentContext};
         auto editTool  = agentxx::tools::FilesystemEditTextFileTool{agentContext};
@@ -4489,7 +4489,7 @@ asio::awaitable<TestResult>
     co_await run(test_glob_chinese_paths);
     co_await run(test_grep_chinese_path_and_content);
 
-    // 同步兜底路径 (强制关闭文件异步 I/O 后 read/write/edit 走同步实现)
+    // 同步回退路径 (强制关闭文件异步 I/O 后 read/write/edit 走同步实现)
     co_await run(test_sync_fallback_without_async_file_io);
 
     // 按规范化路径排队执行
@@ -4516,7 +4516,7 @@ asio::awaitable<TestResult>
     co_await run(test_write_overwrite_omitted);
 
     // 插件真实调用基本功能检查 (dlopen + 主程序 op_driver 完整流程; 插件未构建时跳过)
-    // - 无 agentContext 形参, 不经 run 适配器直调 (异常兜底语义一致)
+    // - 无 agentContext 形参, 不经 run 适配器直调 (异常默认语义一致)
     try {
         co_await test_plugin_real_link();
     } catch (const std::exception& e) {

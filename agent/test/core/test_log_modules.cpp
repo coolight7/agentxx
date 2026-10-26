@@ -113,7 +113,7 @@ TestResult testLogModuleLevels() {
     LogDispatcher::instance().clearModuleLevels();
     XX_TEST_EXPECT_EQ(LogDispatcher::instance().moduleLevelCount(), size_t{0});
 
-    // ---- 3. 过滤行为 (经捕获 sink 端到端) ----
+    // ---- 3. 过滤行为 (经捕获 sink 全流程) ----
     agentxx::util::enableLogCapture(128);
     agentxx::util::clearCapturedLogs();
 
@@ -168,7 +168,7 @@ TestResult testLogModuleLevels() {
         XX_TEST_EXPECT_FALSE(containsLine(lines, "lm-longest-quiet-info"));
     }
 
-    // 3.5 清空后恢复全量输出
+    // 3.5 清空后恢复全部输出
     LogDispatcher::instance().clearModuleLevels();
     agentxx::util::clearCapturedLogs();
     logWithModule(LogLevel::Trace, "plugin.quiet", "lm-cleared-quiet-trace");

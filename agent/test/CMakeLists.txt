@@ -130,7 +130,7 @@ target_include_directories(agentxx_test PRIVATE
 )
 
 # 注意: 不要添加 /FS /MP 编译选项 —— 顶层已统一管理; 命令行出现重复 /FS 时
-# VS18 FileTracker 失效，每次构建都会全量重编 (勿删此注释)
+# VS18 FileTracker 失效，每次构建都会全部重编 (勿删此注释)
 
 if (AGENTXX_BUILD_CLIENT)
   # build client test

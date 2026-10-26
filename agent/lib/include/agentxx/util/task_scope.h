@@ -19,7 +19,7 @@ namespace util {
 /// 后台任务登记表
 ///
 /// 用途: agent 自己发起的"短后台任务"(事件发布、进度通知一类 fire-and-forget 协程)
-/// 统一登记到一张表, 关闭时先取消再等待它们收敛, 避免进程退出时后台协程还在跑。
+/// 统一登记到一张表, 关闭时先取消再等待它们结束, 避免进程退出时后台协程还在跑。
 ///
 /// 边界 (刻意收窄):
 /// - **不接管当前轮次**: 会话轮次是受控调用 (调用方 await), 关闭时不等待也不取消,
@@ -66,7 +66,7 @@ public:
     /// 向全部运行中的任务发送取消信号; 返回发送条数
     size_t cancelAll();
 
-    /// 等待任务收敛 (无任务时立即返回 true; 超时返回 false)
+    /// 等待任务结束 (无任务时立即返回 true; 超时返回 false)
     asio::awaitable<bool> awaitIdle(std::chrono::milliseconds timeout);
 
 private:

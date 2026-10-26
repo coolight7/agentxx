@@ -105,7 +105,7 @@ struct ViewFixture {
                 ++buildCalls;
                 maxBuilt = std::max(maxBuilt, i);
                 // 内容由**身份 id** 决定 (与索引无关): 前插时 id 随条目一起后移,
-                // 因此"视口画面不变"可以直接逐行比较 (与真实消息按内容对齐一致)
+                // 因此"视口画面不变"可以直接逐行比较 (与真实消息按内容保持一致时的结果一致)
                 const std::string label = (i < ids.size()) ? std::to_string(ids[i]) : "?";
                 const size_t      rowsOf
                     = heightOf ? heightOf((i < ids.size()) ? ids[i] : 0) : itemHeight;

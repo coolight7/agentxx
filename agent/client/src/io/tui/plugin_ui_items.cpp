@@ -36,7 +36,7 @@ bool hasPluginBindingFor(
             return true;
         }
     }
-    // 回落实例级兜底 ("")
+    // 回落实例级的默认绑定 ("")
     for (const auto& b : reg->actionBindings) {
         if (b.plugin == plugin && b.targetId.empty() && b.cb) {
             return true;

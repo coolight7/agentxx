@@ -48,11 +48,11 @@ public:
             std::string{pi::ClientAction},
             // 通用 overlay (ui 表 v3 open/close)
             std::string{pi::ClientOverlay},
-            // 组件描述能力: 能渲染 agentxx.ui.item 全量组件 (布局/结构化/图表/控件)
+            // 组件描述能力: 能渲染 agentxx.ui.item 全部组件 (布局/结构化/图表/控件)
             std::string{pi::ClientComponents},
             // 插件表单: 控件状态由主程序维护, 提交结果经动作通道回传
             std::string{pi::ClientForm},
-            // 区域尺寸感知: 布局后把可用宽高告知插件 (事件 + 快照)
+            // 区域尺寸通知: 布局后把可用宽高告知插件 (事件 + 快照)
             std::string{pi::ClientLayout},
             // 定时器: 主程序驱动 (asio steady_timer, 回调在 client io 线程);
             // 面板/Info 不可见时可暂停, 动画等级 Disabled 时拒绝注册
@@ -65,7 +65,7 @@ public:
     /// 客户端界面能力段 (`get_client_state()` 的 `ui` 段): 终端如实上报自己能画的
     /// 组件/控件、每格相当于多少 u 与默认行距。内容由界面描述层的
     /// `capabilitiesToJson` 生成, 与渲染前 `adaptItems` 使用的是同一份
-    /// [tuiUiCapabilities] —— 插件读到的能力与本端实际能力不会分叉。
+    /// [tuiUiCapabilities] —— 插件读到的能力与本端实际能力不会出现差异。
     ///
     /// 另外补一段**体验级别**字段: 描述层的能力段只表达"能画哪些
     /// 组件/控件", 而插件在选择交互形态时还需要知道表单提交方式、尺寸形态与终端

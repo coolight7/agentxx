@@ -25,7 +25,7 @@
 | 描述层（库） | `agent/third_party/cxx_pluginxx_ui`（submodule） | 模型 / 解析 / 适配 / 纯文本降级 / 构建器 / kit / 能力段 |
 | 插件 SDK | `agent/lib/include/agentxx/plugin/api/plugin_kit.h` | 业务 helper + `agentxx::ui`（描述层）+ `agentxx::ui::kit`（扩展 kit）+ 提交入口 |
 | 扩展 kit（生成物） | `agent/lib/include/agentxx/plugin/api/agentxx_ui_kit.g.h`、`agent/js/agentxx_ui_kit.js` | agentxx 的留白规则与常用组合（定义在 `agent/schema/agentxx-ui-kit.def.json`） |
-| TUI 渲染 | `agent/client/{include,src}/agentxx-client/io/tui/ui_components.*` | 消费**适配后**的模型；`measureItem` 与渲染同源 |
+| TUI 渲染 | `agent/client/{include,src}/agentxx-client/io/tui/ui_components.*` | 处理**适配后**的模型；`measureItem` 与渲染同源 |
 | 中断桥接 | `agent/lib/include/agentxx/middlewares/interrupt_ui.h` | 中断描述块 ↔ 组件项（域内词汇与描述层词汇的映射） |
 | 能力上报 | `agent/client/include/agentxx-client/io/tui/tui_plugin_adapter.h` | `uiCapabilitiesJson()` → 客户端状态快照 `ui` 段 |
 
@@ -100,8 +100,8 @@ std::vector<pluginxx::ui::Item> adaptItems(const std::vector<pluginxx::ui::Item>
 ```
 
 - 适配规则表在库的 `schema/ui.def.json` 的 `adapt` 段，由生成器产出，两个绑定同一份；
-- 渲染层**不要**再写"这个组件终端画不了"的判断——那是第二套实现，早晚与规则表分叉；
-- 适配保证收敛：最多降到 `Text`（`Text` 是所有客户端的收敛终点）；
+- 渲染层**不要**再写"这个组件终端画不了"的判断——那是第二套实现，早晚与规则表不一致；
+- 适配保证最终落到 Text：最多降到 `Text`（`Text` 是所有客户端的最终降级目标）；
 - `ParseReport` / `AdaptReport` 的提示记日志（`XX_LOGW("[tui] ui adapt: …")`），是排障第一手线索。
 
 ## 6. kit：插件侧的加载便利

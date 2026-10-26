@@ -3,7 +3,7 @@
 /// HTTP 录制/回放夹具
 ///
 /// 目的: 让 provider 层的行为 (请求加载 + 响应/SSE 解析) 能在**没有真实上游、
-/// 也没有手工写死响应**的情况下重复验证:
+/// 也没有手工写死响应**时重复验证:
 ///
 /// ```
 ///   录制: provider ──▶ HttpRecorder (本地服务) ──▶ 真实/模拟上游
@@ -268,7 +268,7 @@ class HttpRecorder {
 public:
 
     struct Options {
-        /// 上游来源 (只取 origin, 如 `http://127.0.0.1:1234`; 路径按对端原样透传)
+        /// 上游来源 (只取 origin, 如 `http://127.0.0.1:1234`; 路径按对端原样转发)
         std::string upstreamOrigin;
         /// 额外需要屏掉的取值 (如测试用的 API key 文本)
         std::vector<std::string> secrets;
@@ -373,7 +373,7 @@ private:
         it.requestBody    = detail::sanitizeText(body, options_.secrets);
         it.requestHeaders = detail::sanitizeHeaders(req);
 
-        // 转发: 头逐一透传 (排除逐跳头), 路径按对端原样
+        // 转发: 头逐一原样转发 (排除逐跳头), 路径按对端原样
         utilxx::HeaderMap headers;
         for (const auto& field : req) {
             const std::string name = utilxx_base::toLower(std::string{field.name_string()});

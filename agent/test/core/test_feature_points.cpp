@@ -188,7 +188,7 @@ asio::awaitable<void> test_order_and_priority_band() {
         "test.order",
         pingOptions("顺序测试", agentxx::feature::CacheMode::None)
     );
-    // 核心兜底实现 (层 core)
+    // 核心备用实现 (层 core)
     point.addCoreImpl(
         "core:test:fallback",
         0,
@@ -259,7 +259,7 @@ asio::awaitable<void> test_order_and_priority_band() {
     }
     XX_TEST_EXPECT_TRUE(found);
 
-    // 全部实现摘除 -> 回到 core 兜底值
+    // 全部实现摘除 -> 回到 core 的默认值
     registry.removeImplsByOwner("plugin:b");
     registry.removeImplsByOwner("plugin:c");
     registry.removeImplsByOwner("host:h1");
@@ -396,7 +396,7 @@ asio::awaitable<void> test_disable_marker() {
                          return std::string{R"({"disable":true,"reason":"维护中"})"};
                      }));
 
-    // ask: 记置空标记, 且不再问后面的实现 (拿不到 core 兜底值)
+    // ask: 记置空标记, 且不再问后面的实现 (拿不到 core 回退值)
     auto r = co_await point.ask(PingRequest{"k"});
     XX_TEST_EXPECT_EQ(static_cast<int>(r.error), static_cast<int>(CallError::Disabled));
     XX_TEST_EXPECT_EQ(point.disabledBy(), std::string{"plugin:off"});

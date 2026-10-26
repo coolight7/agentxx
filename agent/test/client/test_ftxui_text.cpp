@@ -272,7 +272,7 @@ TestResult testFtxuiText() {
             selectText(text("hello world"), 11, 1, 6, 0, 10, 0),
             std::string{"world"}
         );
-        // 选择区间超出盒宽时按盒宽收敛 (SaturateHorizontal)
+        // 选择区间超出盒宽时按盒宽截断 (SaturateHorizontal)
         XX_TEST_EXPECT_EQ(
             selectText(text("hello world"), 11, 1, 0, 0, 99, 0),
             std::string{"hello world"}

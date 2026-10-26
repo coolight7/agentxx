@@ -698,7 +698,7 @@ static const std::unordered_map<std::string_view, DeserializerFn>& getDeserializ
 
 std::optional<WireMessage> deserialize(std::string_view jsonText) {
     // 高频路径: 先经 JsonView 零拷贝路由 type (§4.3), 未知类型直接丢弃不物化;
-    // 命中后再全量物化一次走既有 fromJson (各消息体需完整 DOM, 物化一次不可避免)
+    // 命中后再完整解析一次走既有 fromJson (各消息体需完整 DOM, 物化一次不可避免)
     utilxx_base::JsonView jv;
     try {
         jv = utilxx_base::JsonView::parse(jsonText);

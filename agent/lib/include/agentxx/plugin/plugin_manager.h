@@ -526,7 +526,7 @@ private:
     /// offload 工作线程池 (由创建方注入; 空时按需创建私有池)
     std::shared_ptr<asio::thread_pool> workerPool_;
 
-    /// 保证 [workerPool_] 可用 (未注入/原有池不可用时的兜底; 只创建一次)
+    /// 保证 [workerPool_] 可用 (未注入/原有池不可用时的备用池; 只创建一次)
     void ensureWorkerPool();
 
     /// 全部挂载 (强引用: 由本管理器保活; agent 关闭时显式拆)

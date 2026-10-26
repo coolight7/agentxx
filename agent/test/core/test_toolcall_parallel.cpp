@@ -240,7 +240,7 @@ void declareToolCalls(const std::vector<std::pair<std::string, std::string>>& id
     g_da_sim_tool_calls = std::move(calls);
 }
 
-/// 等待会话上下文里出现 [count] 条 tool 结果 (取消路径由轮末收敛, 需轮询)
+/// 等待会话上下文里出现 [count] 条 tool 结果 (取消路径由轮末收尾, 需轮询)
 asio::awaitable<bool> waitToolResults(
     const std::shared_ptr<agentxx::agent::Session>& session,
     size_t                                          count,

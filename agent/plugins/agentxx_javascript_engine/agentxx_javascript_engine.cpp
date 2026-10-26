@@ -242,7 +242,7 @@ struct JsHookBinding {
 /// JS 内 callTool 的跨线程完成桥:
 /// - 主程序工具完成回调运行在主程序 io 线程, 只复制结果并向 JS 线程投递 settle 任务
 /// - resolve/reject 均为 JS 线程所属的 JSValue, 只在 JS 线程 Free
-/// - settled 原子标志保证 exactly-once (主程序协议已保证, 这里兜底)
+/// - settled 原子标志保证 exactly-once (主程序协议已保证, 这里补充处理)
 struct JsCallBridge {
     JsEngine*         engine  = nullptr;
     JSContext*        ctx     = nullptr;
@@ -927,7 +927,7 @@ private:
             }
         }
         // ---- 线程退出前清理 (JS 线程, 安全释放 JSValue) ----
-        // 1. 残余定时器 (正常卸载路径 doUnloadScript 已清各插件定时器, 此处兜底)
+        // 1. 残余定时器 (正常卸载路径 doUnloadScript 已清各插件定时器, 此处补充处理)
         for (auto& [id, t] : timers_) {
             (void)id;
             auto pctx = findPlugin(t.plugin);
@@ -936,7 +936,7 @@ private:
             }
         }
         timers_.clear();
-        // 2. 残余插件上下文 (正常路径引擎卸载前JS 插件已级联卸载; 兜底释放,
+        // 2. 残余插件上下文 (正常路径引擎卸载前JS 插件已级联卸载; 补充释放,
         //    保证 JS_FreeRuntime 前所有 JSContext 已 Free, 无 gc 断言)
         for (auto& [name, pctx] : plugins_) {
             (void)name;
@@ -1270,7 +1270,7 @@ private:
     /// 驱动 Promise 直至 settle (JS 线程内调用)
     /// - 非 Promise/普通值原样 Dup 为 Value;
     /// - JS 异常值统一归一为 Rejected (拒绝原因已取出, 不再留在 context 上);
-    /// - 用 steady_clock 绝对截止时间兜底 (interrupt handler 负责打断 CPU 长任务),
+    /// - 另用 steady_clock 绝对截止时间判超时 (interrupt handler 负责打断 CPU 长任务),
     ///   等待点是"队列任务/下一个定时器/截止时间"三者中最近的一个, 不忙轮询。
     PromiseOutcome drivePromise(JSContext* ctx, JSValue value) {
         PromiseOutcome out;
@@ -1612,7 +1612,7 @@ void* JsEngine::toolExecuteStart(
         auto*                  op      = new int(0);
         PluginxxOperatorNotify ntfCopy = *notify;
         if (!engine->post([engine, binding, req, ntfCopy, op]() {
-                // ---- JS 线程: 执行并上报 (RAII 兜底释放句柄) ----
+                // ---- JS 线程: 执行并上报 (RAII 补充释放句柄) ----
                 struct OpReleaser {
                     int* p;
                     ~OpReleaser() {

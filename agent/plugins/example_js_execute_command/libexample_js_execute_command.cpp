@@ -248,8 +248,8 @@ extern "C" PLUGINXX_EXPORT int
                     }
                 }
             }
-            // 开发期兜底：若按 get_own_info 推导的 plugin.js 不存在，尝试源码目录
-            // (host 传入的 path 在内置模式下可能为虚路径，此分支仅为本地调试兜底)
+            // 开发期回退：若按 get_own_info 推导的 plugin.js 不存在，尝试源码目录
+            // (host 传入的 path 在内置模式下可能为虚路径，此分支仅为本地调试保留)
             if (!fileExists(ctx->scriptPath)) {
                 std::string fallback = "agent/plugins/example_js_execute_command/plugin.js";
                 if (fileExists(fallback)) {

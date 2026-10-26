@@ -652,7 +652,7 @@ static TestResult testSessionStoreIntegration() {
 }
 
 // ---------------------------------------------------------------------------
-// 持久化节流: 首次触发立即落盘, 窗口内合并, 轮末强制补存收敛
+// 持久化节流: 首次触发立即落盘, 窗口内合并, 轮末强制补存收尾
 // ---------------------------------------------------------------------------
 
 static TestResult testPersistThrottle() {
@@ -680,7 +680,7 @@ static TestResult testPersistThrottle() {
             SessionStore probe(root);
             auto         loaded = probe.loadSession("throttle");
             XX_TEST_EXPECT_EQ(loaded.viewMessages.size(), size_t{1});
-            // msgIdCounter 与已落库条数一致 (兜底恢复语义)
+            // msgIdCounter 与已落库条数一致 (回退恢复语义)
             XX_TEST_EXPECT_EQ(loaded.msgIdCounter, uint64_t{1});
         }
         // ---- llm 节流: 首次结算立即落盘 ----
@@ -707,7 +707,7 @@ static TestResult testPersistThrottle() {
             SessionStore probe(root);
             XX_TEST_EXPECT_EQ(probe.loadSession("throttle").llmMessages.size(), size_t{1});
         }
-        // ---- 强制补存后全部收敛 (轮末 saveLlmMessages + flushViewMessages 语义) ----
+        // ---- 强制补存后全部结束 (轮末 saveLlmMessages + flushViewMessages 语义) ----
         s1->flushViewMessages();
         s1->saveLlmMessages();
         {
@@ -929,7 +929,7 @@ static TestResult testSessionListPagination() {
         addSession("t6", 400);
         addSession("t7", 200);
 
-        // ---- 全量基准: 降序 + 同毫秒按 id 升序 ----
+        // ---- 完整基准: 降序 + 同毫秒按 id 升序 ----
         const auto all = store.listSessions();
         XX_TEST_EXPECT_EQ(all.size(), size_t{7});
         if (all.size() == 7) {
@@ -1011,7 +1011,7 @@ static TestResult testSessionListPagination() {
             }
         }
 
-        // ---- limit=0 全量路径等价 listSessions ----
+        // ---- limit=0 全部返回路径等价 listSessions ----
         auto pall = store.listSessionsPage(0, "", 0);
         XX_TEST_EXPECT_FALSE(pall.hasMore);
         XX_TEST_EXPECT_EQ(pall.totalCount, uint64_t{7});
@@ -1043,7 +1043,7 @@ static TestResult testSessionListPagination() {
 }
 
 // ---------------------------------------------------------------------------
-// 端到端: 真实 BaseAgent (模拟 LLM Server) + 持久化, 重启后恢复会话
+// 全流程: 真实 BaseAgent (模拟 LLM Server) + 持久化, 重启后恢复会话
 // ---------------------------------------------------------------------------
 
 static asio::awaitable<void> testSessionPersistenceE2E() {
@@ -1293,7 +1293,7 @@ static void testPersistenceResilience() {
     {
         auto p = std::make_shared<SessionStore>(root);
 
-        // ① 非法 UTF-8 正文: 落库前按 U+FFFD 修复 (Json::dump 原样透传非法字节,
+        // ① 非法 UTF-8 正文: 落库前按 U+FFFD 修复 (Json::dump 原样转发非法字节,
         //    读取端 simdjson 解析会抛异常 -> 原实现表现为会话整体丢失)
         std::string dirty = "GBK: ";
         dirty.push_back(static_cast<char>(0xB2));
@@ -1658,7 +1658,7 @@ static TestResult testPendingViewOpsIndexReplay() {
         sess->appendViewMessage(makeMsg(V::Role::User, "queued"));
         XX_TEST_EXPECT_EQ(appendCalls, 1);
 
-        // 还原全量历史 (模拟会话重载): 队列被丢弃
+        // 还原完整历史 (模拟会话重载): 队列被丢弃
         sess->restore({makeMsg(V::Role::User, "restored")}, 1);
         sess->flushViewMessages();
         XX_TEST_EXPECT_EQ(appendCalls, 1); // 未回放被丢弃的排队操作

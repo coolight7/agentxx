@@ -504,7 +504,7 @@ TestResult testPluginBridge() {
         XX_TEST_EXPECT_EQ(probe.status, PLUGINXX_OPERATOR_OK);
         XX_TEST_EXPECT_EQ(probe.payload, std::string{"ok"});
         XX_TEST_EXPECT_EQ(bridge->driverSteps(), uint64_t{1});
-        XX_TEST_EXPECT_FALSE(bridge->isDriverQueued()); // 请求已消费, 无新工作
+        XX_TEST_EXPECT_FALSE(bridge->isDriverQueued()); // 请求已处理, 无新工作
         XX_TEST_EXPECT_EQ(bridge->readySteps(), uint64_t{0});
 
         // 空闲不自旋: 无新工作就不再申请请求

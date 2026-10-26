@@ -12,7 +12,7 @@
 namespace agentxx {
 namespace middleware {
 
-/// 预设模板与块构造 helper (生产者侧使用; 客户端只消费生成出的描述)
+/// 预设模板与块构造 helper (生产者侧使用; 客户端只处理生成出的描述)
 ///
 /// 设计意图: 中断描述本身**不含** "参数类型" 概念 (控件形态即语义), 但很多
 /// 询问只需要 "若干类型化输入 + 确认" 这种常见形态 —— 该形态由本命名空间内的
@@ -203,7 +203,7 @@ InterruptUiBlock pathControl(
 // 预设模板
 // ---------------------------------------------------------------------------
 
-/// 类型化输入表单 (预设模板: 类型 → 控件形态的映射收敛在此)
+/// 类型化输入表单 (预设模板: 类型 → 控件形态的映射集中在此)
 ///
 /// - 每个输入项: 标签行 (accent, bold) + 说明行 (hint, 硬折行) + 控件
 ///   (bool→buttons 是/否且点击即提交 / enum→select / int|double→number /
@@ -227,7 +227,7 @@ struct ConfirmCardOptions {
     std::string noLabel;
     /// "否"按钮标签的 i18n 键 (空且 [noLabel] 也为空时取 i18n `interrupt.no`)
     std::string noLabelKey;
-    /// 结果控件 id (取值 "true"/"false"; 消费端按该 id 读结果)
+    /// 结果控件 id (取值 "true"/"false"; 处理方按该 id 读结果)
     std::string controlId = "allow";
     /// 默认选中项 (false = 默认 "否", 安全语义)
     bool defaultValue = false;
@@ -237,7 +237,7 @@ struct ConfirmCardOptions {
 
 InterruptUi confirmCard(const ConfirmCardOptions& opts);
 
-/// 权限询问卡片 (预设模板; 由权限服务端构造, 客户端不感知 permission 语义)
+/// 权限询问卡片 (预设模板; 由权限服务端构造, 客户端不关心 permission 语义)
 ///
 /// - 头行: 权限标记 (i18n `interrupt.permissionBadge`) + 工具名 (accent) +
 ///   权限分类 (hint)

@@ -1,9 +1,9 @@
 #pragma once
-/// 单次 provider 调用的取消域 (消费端退出时取消 provider)
+/// 单次 provider 调用的取消域 (处理方退出时取消 provider)
 ///
 /// 为什么需要独立一层取消令牌:
 /// - 运行级令牌 (`NodeInput::ctx.cancel_token`) 是**整个轮次**的取消域: 用户点"取消"
-///   或主程序关停时会取消它。若直接把运行令牌交给 provider, 消费方 (本节点) 中途放弃
+///   或主程序关停时会取消它。若直接把运行令牌交给 provider, 处理方 (本节点) 中途放弃
 ///   一次调用时就没有办法只中止这一次未完成的请求 —— 要么继续读完整段响应 (白花额度),
 ///   要么把整轮都取消。
 /// - 本类用 `CancelToken::fork()` 建立**子令牌**: 父令牌取消时照常级联到子令牌
@@ -36,14 +36,14 @@ public:
     ProviderCallScope& operator=(const ProviderCallScope&) = delete;
 
     ~ProviderCallScope() {
-        // 消费方放弃 (未 markDone): 只取消本次调用, 不影响运行级令牌
+        // 处理方放弃 (未 markDone): 只取消本次调用, 不影响运行级令牌
         if (!done_ && token_) {
             token_->cancel();
         }
     }
 
     /// 标记本次调用已正常结束 (成功或已按错误路径收尾)
-    /// - 调用方应在 `co_await` 返回后立即调用; 未调用即析构会被视为"消费方放弃"
+    /// - 调用方应在 `co_await` 返回后立即调用; 未调用即析构会被视为"处理方放弃"
     void markDone() noexcept {
         done_ = true;
     }

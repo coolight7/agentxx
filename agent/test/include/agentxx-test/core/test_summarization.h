@@ -12,7 +12,7 @@ namespace test {
 
 /// 上下文压缩中间件 (SummarizationMiddlewareHandle) 单元测试
 /// - 覆盖: token 估算 / 文本转换 / 噪音清理 / toolcall 去重与探索折叠 /
-///   token 预算切分 / 硬截断兜底 / 同上下文 LLM 压缩 (FakeProvider) /
+///   token 预算切分 / 硬截断回退 / 同上下文 LLM 压缩 (FakeProvider) /
 ///   onModelcallRunFunc 压缩流程与上下文统计 / 压缩后仍超限降级硬截断
 /// - 完整语义: system 消息不可变 / 确定性压缩先行 / 同上下文 LLM 压缩为一段总结
 ///   (thinking 保留, 压缩 subagent 不传任何工具, 原样压缩) /

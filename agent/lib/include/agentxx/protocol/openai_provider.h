@@ -70,7 +70,7 @@ public:
         neograph::FormatDataStreamCallback on_chunk = nullptr
     ) override;
 
-    /// 从 content 文本中提取嵌入的 tool call（LLM 未正确使用 tool_calls API 时的兜底）
+    /// 从 content 文本中提取嵌入的 tool call（LLM 未正确使用 tool_calls API 时的回退）
     /// - 支持 ```json 代码块和行内 JSON 两种格式
     /// - 兼容 llama.cpp 等本地模型的 XML 风格输出:
     ///   <tool_call><function=name>args</function></tool_call> (含缺失参数/未闭合标签场景)
@@ -79,7 +79,7 @@ public:
     static void extractToolCalls(std::string& content, std::vector<neograph::ToolCall>& toolCalls);
 
     /// 处理 Chat Completions API 的 SSE 缓冲区 (public 以便单测)
-    /// - finalFlush: 连接关闭时对末尾未以 "\n" 结尾的最后一行也进行解析
+    /// - finalFlush: 连接关闭时对末尾未以 "\n" 结尾的最后一行也解析
     /// - 返回本次调用是否处理到了 "data: [DONE]" 结束标记 (用于检测流截断)
     static bool processSseBuffer(
         std::string&                       buf,

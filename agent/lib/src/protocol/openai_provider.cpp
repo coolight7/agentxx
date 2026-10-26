@@ -460,7 +460,7 @@ static CachedUsage parseCachedUsageView(const utilxx_base::JsonView& u) {
 /// View 版 usage 提取 (与 parseUsage 同语义, 高频 SSE 路径零拷贝路由)
 /// - 细节分支与原实现一致: 仅 `contains(key)` 命中且为对象时取值,
 ///   非对象 (如字符串) 视为未命中而尝试下一分支 (与原 contains() 检查一致,
-///   避免 operator[] 越界兜底语义差异)
+///   避免 operator[] 越界默认语义差异)
 static void parseUsageView(const utilxx_base::JsonView& u, neograph::ChatCompletion& completion) {
     if (!u.is_object()) {
         return;
@@ -872,7 +872,7 @@ utilxx_base::Json OpenAIProvider::buildResponsesBody(const neograph::CompletionP
                     });
                 }
                 // Responses API 的 input_audio 只接受 base64 data + format,
-                // data URL 解析后转换; HTTP URL 以 url 扩展字段透传 (兼容网关)
+                // data URL 解析后转换; HTTP URL 以 url 扩展字段原样转发 (兼容网关)
                 for (const auto& url : msg.audio_urls) {
                     if (auto parsed = neograph::parse_data_url(url)) {
                         parts.push_back({
@@ -1241,7 +1241,7 @@ asio::awaitable<neograph::ChatCompletion>
                         if (ptype == "output_text") {
                             completion.message.content += jsonStrField(part, "text");
                         } else if (ptype == "refusal") {
-                            // 模型拒绝回答: 将 refusal 文本透出, 避免静默丢失
+                            // 模型拒绝回答: 将 refusal 文本上报, 避免静默丢失
                             completion.message.content += jsonStrField(part, "refusal");
                         }
                     }
@@ -2285,7 +2285,7 @@ void OpenAIProvider::extractToolCalls(
                 } else if (j.is_string()) {
                     tc.arguments = j.get<std::string>();
                 } else {
-                    // 非 JSON 内容原样保留, 由下游解析报错兜底
+                    // 非 JSON 内容原样保留, 由下游解析报错回退处理
                     tc.arguments = std::move(body);
                 }
             }

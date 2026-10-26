@@ -35,7 +35,7 @@ namespace {
 ///   5) 匹配中文 -> ZhCn;
 ///   6) 匹配英文 -> EnUs;
 ///   7) 匹配其他非中文系统语言 (如 ja, ko, fr, de, es, ru 等) -> 回退到国际通用语言 EnUs;
-///   8) 无法识别返回 nullopt (由调用方进一步处理或兜底)。
+///   8) 无法识别返回 nullopt (由调用方进一步处理或回退)。
 std::optional<TuiLanguage> matchSingleLocale(std::string_view raw) noexcept {
     // 1. 去除首尾空白
     while (!raw.empty() && (raw.front() == ' ' || raw.front() == '\t')) {
@@ -155,7 +155,7 @@ std::string detectSystemLocale() {
             return localeName;
         }
     }
-    // 兜底: GetUserDefaultUILanguage
+    // 备用来源: GetUserDefaultUILanguage
     const LANGID langId  = ::GetUserDefaultUILanguage();
     const WORD   priLang = PRIMARYLANGID(langId);
     if (priLang == LANG_CHINESE) {
@@ -164,7 +164,7 @@ std::string detectSystemLocale() {
         return "en-US";
     }
 #else
-    // 3. POSIX 系统兜底: 尝试 std::setlocale 查询系统默认配置
+    // 3. POSIX 系统的备用来源: 尝试 std::setlocale 查询系统默认配置
     const char* cur = std::setlocale(LC_MESSAGES, "");
     if (!cur || std::string_view(cur).empty() || std::string_view(cur) == "C"
         || std::string_view(cur) == "POSIX") {

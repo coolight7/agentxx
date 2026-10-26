@@ -531,7 +531,7 @@ void EvolutionTrainingAgent::savePopulationToFile(std::string_view filePath, int
             root["savedAt"]           = std::chrono::system_clock::now().time_since_epoch().count();
 
             // 原子写: 先写临时文件再替换主文件,
-            // 写入中途崩溃/断电不会损坏已有的完整数据 (备份 .1~.N 兜底更早版本)
+            // 写入中途崩溃/断电不会损坏已有的完整数据 (备份 .1~.N 保存更早版本)
             fs::path targetPath(std::string{filePath});
             fs::path tmpPath(std::string{filePath} + ".tmp");
             {
@@ -665,7 +665,7 @@ asio::awaitable<TrainingScore> EvolutionTrainingAgent::defaultScoringWithSubAgen
     TrainingScore result;
     result.iteration = iteration;
 
-    // 若设置了 equalOutput，则优先进行精确匹配判断
+    // 若设置了 equalOutput，则优先做精确匹配判断
     if (!testCase.equalOutput.empty()) {
         if (agentOutput == testCase.equalOutput) {
             result.score    = 1.0;
@@ -704,7 +704,7 @@ asio::awaitable<TrainingScore> EvolutionTrainingAgent::defaultScoringWithSubAgen
             if (parsed.is_object()) {
                 result.score    = parsed.value("score", 0.0);
                 result.feedback = parsed.value("feedback", std::string{});
-                // passed 不信任评分模型自报 (阈值语义可能漂移),
+                // passed 不信任评分模型自报 (阈值语义可能变化),
                 // 按收敛阈值本地判定, 保证与 score 数值始终一致
                 result.passed = result.score >= cfg.convergenceThreshold;
                 if (parsed.contains("extra") && parsed["extra"].is_object()) {
@@ -1367,7 +1367,7 @@ asio::awaitable<void> EvolutionTrainingAgent::runEvolutionLoop(const EvolutionTr
             );
         }
 
-        // 2a. 从当前 population 中选取 top 变体进行变异
+        // 2a. 从当前 population 中选取 top 变体做变异
         int mutateFrom = std::min(cfg.mutateCount, static_cast<int>(population.size()));
         std::vector<PromptVariant> newGeneration;
         newGeneration.reserve(static_cast<size_t>(mutateFrom) * cfg.childrenPerParent);

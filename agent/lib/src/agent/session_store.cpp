@@ -81,7 +81,7 @@ static std::string defaultRootDir() {
     return agentxx::agent::AgentConfigStatic::getSessionsDir("");
 }
 
-/// 会话全量状态 SQL (session.db: view_message/llm_context/meta/store/usage 单库)
+/// 会话完整状态 SQL (session.db: view_message/llm_context/meta/store/usage 单库)
 /// 表结构 (幂等)
 /// - view_message: seq 自增主键 + json; msg_id 为消息 id 的独立列 (带索引),
 ///   供 updateViewMessage 走索引定位 (如果用 json_extract(json,'$.id') 全表
@@ -149,7 +149,7 @@ static constexpr std::string_view kMetaTitleSource = "titleSource";
 /// 展示历史持久化序号计数 (见 SessionStore::LoadedSession::lastViewSeq)
 static constexpr std::string_view kMetaViewSeqCounter = "viewSeqCounter";
 
-/// 读取会话用量聚合 (usage 表全量汇总)
+/// 读取会话用量聚合 (usage 表全部汇总)
 ///
 /// - [usageSummary] 与 [loadSession] 共用: 会话加载时顺着同一只读连接一并读出用量
 ///   (供界面显示已消耗 token), 不必再另外开一个写连接 (也就不会在加载阶段取写租约)
@@ -224,7 +224,7 @@ ViewMessage stripAttachmentDataUrl(const ViewMessage& msg) {
 }
 
 /// 序列化 JSON 文本并保证其 UTF-8 合法 (入库前统一入口):
-/// - Json::dump 对 >= 0x80 的字节原样透传 (仅转义控制字符/引号/反斜杠), 若字符串
+/// - Json::dump 对 >= 0x80 的字节原样转发 (仅转义控制字符/引号/反斜杠), 若字符串
 ///   内容含非法 UTF-8 (如工具输出的 GBK/二进制文本), 落库文本即为非法 UTF-8 JSON;
 ///   读取端 (simdjson) 要求 UTF-8, 解析该行会抛异常 —— 表现为会话历史/上下文
 ///   部分乃至整体无法恢复 (数据丢失)
@@ -265,7 +265,7 @@ void SessionStore::updateViewMessage(std::string_view sessionId, const ViewMessa
                 }
             }
             if (affected == 0) {
-                // 兜底: 历史行 msg_id 为空 (老库迁移前写入且 json 中无 id) ——
+                // 回退: 历史行 msg_id 为空 (老库迁移前写入且 json 中无 id) ——
                 // 用 json_extract 定位并顺带回填 msg_id (下次即走索引)
                 auto update = db.prepare("UPDATE view_message SET json = ?, msg_id = ? "
                                          "WHERE msg_id IS NULL AND json_extract(json, '$.id') = ?");
@@ -681,7 +681,7 @@ SessionStore::LoadedSession SessionStore::loadSession(std::string_view sessionId
     //   丢失", 且后续 saveLlmMessages 会用新上下文覆盖库内旧数据 (不可恢复)
     // - 展示历史 / LLM 上下文 / meta 三段各自独立捕获, 一段失败不影响其余
     //   (三段共用上面打开的只读连接 [db])
-    /// 解析成功的展示消息行数 (含因视觉为空被过滤掉的; msgIdCounter 兜底用)
+    /// 解析成功的展示消息行数 (含因视觉为空被过滤掉的; msgIdCounter 的默认值)
     size_t parsedRows = 0;
     agentxx::util::catchError<bool>(
         [&]() -> bool {
@@ -694,7 +694,7 @@ SessionStore::LoadedSession SessionStore::loadSession(std::string_view sessionId
                         auto j   = utilxx_base::Json::parse(jsonText);
                         auto msg = ViewMessage::fromJson(j);
                         clearRunningTipFlag(msg); // 历史消息: 提示不可能还在运行中
-                        // 解析成功的行都计入总数 (下面 msgIdCounter 兜底用:
+                        // 解析成功的行都计入总数 (下面 msgIdCounter 的默认值:
                         // 消息 id 按追加顺序连续分配, 被过滤的消息也曾占一个 id)
                         ++parsedRows;
                         if (!isDisplayableViewMessage(msg)) {
@@ -725,7 +725,7 @@ SessionStore::LoadedSession SessionStore::loadSession(std::string_view sessionId
             return false;
         }
     );
-    // meta: msgIdCounter (失败时按历史条数兜底, 不丢弃历史)
+    // meta: msgIdCounter (失败时按历史条数推算, 不丢弃历史)
     agentxx::util::catchError<bool>(
         [&]() -> bool {
             auto stmt = db.prepare("SELECT key, value FROM meta");
@@ -755,14 +755,14 @@ SessionStore::LoadedSession SessionStore::loadSession(std::string_view sessionId
             return false;
         }
     );
-    // 兜底: 老数据无 msgIdCounter 记录时按历史条数恢复
+    // 回退: 老数据无 msgIdCounter 记录时按历史条数恢复
     // (历史 append-only, id 连续分配, 条数即最后序号;
     //  用解析行数而非保留条数 —— 视觉为空而被过滤的消息也占过一个 id)
     if (out.msgIdCounter == 0) {
         out.msgIdCounter = parsedRows > 0 ? parsedRows : out.viewMessages.size();
     }
-    // 兜底: 老数据无 viewSeqCounter 记录时取库内最大行序号 (Session::restore 亦会
-    // 按历史条数兜底, 二者一致: 老库行序号即追加顺序 1..N)
+    // 回退: 老数据无 viewSeqCounter 记录时取库内最大行序号 (Session::restore 亦会
+    // 按历史条数推算, 二者一致: 老库行序号即追加顺序 1..N)
     if (out.lastViewSeq == 0) {
         agentxx::util::catchError<bool>(
             [&]() -> bool {
@@ -865,7 +865,7 @@ static bool readSessionDirMeta(const fs::path& dir, SessionInfo& info) {
                     info.lastActiveMs = stmt.columnInt64(1);
                 }
             }
-            // 兜底: 老数据无 lastActiveMs meta 时, 取最新一条
+            // 回退: 老数据无 lastActiveMs meta 时, 取最新一条
             // view_message 的开始时间戳 (json1 json_extract); 仍为 0
             // (历史消息均无时间戳) 时回退 session.db 文件修改时间,
             // 保证会话列表时间列不为空 (展示端对 0 显示 "-")
@@ -927,7 +927,7 @@ std::vector<SessionInfo> SessionStore::listSessions() {
 
 SessionStore::SessionListPage
     SessionStore::listSessionsPage(int64_t beforeMs, std::string_view beforeId, uint32_t limit) {
-    // limit == 0 全量路径: 复用 listSessions (其自行加锁, 须在取锁前调用避免重入)
+    // limit == 0 全部返回路径: 复用 listSessions (其自行加锁, 须在取锁前调用避免重入)
     if (limit == 0) {
         SessionListPage page;
         page.sessions   = listSessions();

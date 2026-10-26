@@ -483,7 +483,7 @@ asio::awaitable<std::shared_ptr<ClientPluginInstance>> ClientPluginManager::load
     if (auto getInfo = reinterpret_cast<AgentxxClientPluginGetInfoFn>(
             NativeLoader::sym(handle, AGENTXX_PLUGIN_CLIENT_SYMBOL_GET_INFO, err)
         )) {
-        // C ABI 回调异常兜底: 插件违约按"未导出"处理 (名字从库名推导)
+        // C ABI 回调异常保护: 插件违约按"未导出"处理 (名字从库名推导)
         const AgentxxClientPluginInfo* info = nullptr;
         try {
             info = getInfo();
@@ -777,7 +777,7 @@ asio::awaitable<void>
                     continue;
                 }
             } else {
-                // 与 agent 侧行为对齐 (agent 侧会走 dlopen 失败报错):
+                // 与 agent 侧行为一致 (agent 侧会走 dlopen 失败报错):
                 // 目录存在但 plugin.yaml 缺失/非法时明确报错, 避免静默跳过
                 // 造成"为什么 client 没加载该插件"无从排查
                 XX_LOGE("[client_plugin] `{}` missing/invalid plugin.yaml, skipped", pc.path);
@@ -1605,7 +1605,7 @@ void ClientPluginManager::dispatchEvent(int event, const std::string& payloadJso
         if (!guard || !ref.sub->alive || !inst->enabled || !inst->lifetime->acceptsOperations()) {
             continue;
         }
-        // C ABI 回调异常兜底: 单个插件 handler 违约不得打断整轮派发
+        // C ABI 回调异常保护: 单个插件 handler 违约不得打断整轮派发
         // (影响其他订阅者与 client io 事件循环)
         try {
             auto payloadSv
@@ -2375,7 +2375,7 @@ int32_t PLUGINXX_CALL xx_clist_keybinds(const PluginxxHost* host, PluginxxString
 /// "agentxx.client.ui" 展示接口表访问器: 表内成员恒非空 (函数实现存在), 子能力是否
 /// 可用由各 register 入口的 hostSupportedInterfaces 限制决定 (拒绝时返回
 /// NULL/非 0) —— 与接口表 "NULL = 不支持" 契约的分工: 表级 NULL 用于主程序
-/// 整体缺失某子能力入口的场景 (当前主程序全量加载, 保留判空语义供第三方精简
+/// 整体缺失某子能力入口的场景 (当前主程序全部加载, 保留判空语义供第三方精简
 /// 主程序使用)。以函数内静态表实现 (前向引用无需 extern 声明)
 static const AgentxxClientUiIface* clientUiIface() {
     static const AgentxxClientUiIface table = {
@@ -3157,7 +3157,7 @@ int ClientPluginManager::unregisterCommand(ClientPluginInstance* inst, PluginxxS
 
 namespace {
 
-/// 定时器间隔下限 (更小值按此收敛, 避免插件把 io 线程打满)
+/// 定时器间隔下限 (更小值按此限制, 避免插件把 io 线程打满)
 constexpr int32_t kTimerMinIntervalMs = 50;
 /// 单实例定时器数量上限
 constexpr size_t kTimerMaxPerInstance = 8;
@@ -3217,7 +3217,7 @@ void fireTimerTick(
                 XX_LOGW("[client_plugin] timer callback threw unknown exception");
             }
         }
-        // 次数递减: 一次性定时器触发后结束, 周期定时器按 repeat 上限收敛
+        // 次数递减: 一次性定时器触发后结束, 周期定时器按 repeat 上限限制
         if (timer->repeatMode) {
             if (timer->repeat > 0) {
                 --timer->repeat;
@@ -3627,7 +3627,7 @@ void ClientPluginManager::sendUserInputToPeer(
     PluginxxStringView    sessionId,
     PluginxxStringView    text
 ) {
-    (void)sessionId; // 会话以当前绑定为准 (sessionId 不符时由端点兜底)
+    (void)sessionId; // 会话以当前绑定为准 (sessionId 不符时由端点处理)
     if (!inst || !uiAdapter_) {
         return;
     }
@@ -4015,7 +4015,7 @@ void ClientPluginManager::dispatchAction(
         ctx.action_args = agentxx::plugin::PluginStringView::from(argsJson.data(), argsJson.size());
         auto cb         = hit->cb;
         auto ud         = hit->ud;
-        // C ABI 回调异常兜底: 单个插件违约不得打断 io 事件循环
+        // C ABI 回调异常保护: 单个插件违约不得打断 io 事件循环
         try {
             cb(&ctx, ud);
         } catch (const std::exception& e) {

@@ -65,7 +65,7 @@ bool isBlankMessage(const TUIMessage& msg) {
 
 /// 查找工具调用装饰 (client 插件经 update_tool_decor 推送的语义层渲染声明;
 /// 每帧快照 pluginRegistry, 无锁读取; 无插件管理器/无装饰返回空)
-/// - TUI 不感知任何具体工具: 装饰内容 (显示名/摘要/items) 完全由插件定义
+/// - TUI 不关心任何具体工具: 装饰内容 (显示名/摘要/items) 完全由插件定义
 const agentxx::plugin::ClientToolDecor*
     findToolDecor(const TUIRenderState& st, std::string_view toolCallId) {
     if (!st.pluginRegistry || toolCallId.empty()) {
@@ -190,7 +190,7 @@ MessageListComponent::MessageListComponent(TUICtx& ctx) :
     LazyScrollable::CacheBudget budget;
     // 渲染树内存放大: FTXUI text()/paragraph() 按 glyph/词拆对象, 实测渲染树
     // 为源文本 30~70 倍 (memprof 实测: 1MB 英文 -> text() 30.7MB, markdown
-    // 全量渲染 173MB)。因此 sourceBytes 按"渲染树估算字节"(源 × 64 系数) 上报
+    // 整篇渲染 173MB)。因此 sourceBytes 按"渲染树估算字节"(源 × 64 系数) 上报
     // (见 buildMessageItem), 使 maxBytes 直接约束真实驻留内存 —— 实测 100K/200K
     // 上下文时消息列表渲染树缓存即占 10+ MB。
     budget.maxItems = 64; // 条数预算: 可见 ~30 条 + 少量滚动余量
@@ -767,7 +767,7 @@ bool MessageListComponent::hasRunningMessage() const {
     if (hasStreamingToken(st) && st.currentTokenRole == TUIMessage::Role::Think) {
         return true;
     }
-    // 存在未完成的 Tool 消息 (串行执行下即当前运行的工具; 全量扫描仅读标志位,
+    // 存在未完成的 Tool 消息 (串行执行下即当前运行的工具; 全部扫描仅读标志位,
     // 每帧一次成本可忽略) 或运行中的提示消息 (如正在压缩上下文)
     for (const auto& m : st.messages) {
         if (!m) {
@@ -996,7 +996,7 @@ size_t MessageListComponent::quickHeight(size_t index, int width) {
         // 若估算漏掉该空行, 不可见项 (未测量) 高度恒偏低 1 行/条, 总高度偏低
         // -> stickToBottom 滚动偏移偏小, 底部最新消息被推出视口 (整行不显示
         // 但滚动条/总高度仍存在)。此偏差还使"估算==实测"恒不成立, 每帧触发
-        // corrected 重算, 浪费且无法收敛到精确总高度。
+        // corrected 重算, 浪费且无法稳定到精确总高度。
         switch (msg.role) {
             case TUIMessage::Role::User:
                 // 纯文本折行 (不解析 markdown): 按行计数即可 (段内换行就是硬换行)
@@ -1035,7 +1035,7 @@ size_t MessageListComponent::quickHeight(size_t index, int width) {
                 // 这里只给一个"头行 + 描述若干行"的量级估计 (不 layoutForm 实测)
                 return roughRows(msg.text.size()) + 5 + 1; // +1: 尾部空行
         }
-        return 2; // 未知角色兜底: 内容 1 行 + 空行
+        return 2; // 未知角色按默认处理: 内容 1 行 + 空行
     }
     // ---- 流式区 ----
     // 生成占位提示项先判定 (判定顺序必须与 itemKey/buildItem 一致): 占位提示出现
@@ -1052,7 +1052,7 @@ size_t MessageListComponent::quickHeight(size_t index, int width) {
             return 2;
         }
         // 降级路径: 单个子项 (think 展开态为头部行 + 整段正文) + 尾部空行。
-        // 无流式 token 时按 1 行兜底: 占位项已在上方返回, 走到这里的无 token
+        // 无流式 token 时按 1 行估算: 占位项已在上方返回, 走到这里的无 token
         // 分支只用于防御异常状态
         if (!st.currentToken) {
             return 1;
@@ -1080,7 +1080,7 @@ size_t MessageListComponent::quickHeight(size_t index, int width) {
             return std::max(static_cast<size_t>(1), estimateMarkdownLines(t.substr(f), width)) + 1;
         }
     }
-    return 1; // 无渲染器的兜底项 (buildStreamingFrontier 的防御分支: 1 行空项)
+    return 1; // 无渲染器的默认项 (buildStreamingFrontier 的防御分支: 1 行空项)
 }
 
 bool MessageListComponent::fillViewport(size_t index) {
@@ -1093,7 +1093,7 @@ void MessageListComponent::maybeRequestMoreHistory() {
         return; // 未加载历史分页钩子 (如测试环境)
     }
     if (!ctx_.frameState || !ctx_.frameState->hasMoreHistory()) {
-        return; // 无更早历史 (全量同步 / 已加载到会话开头)
+        return; // 无更早历史 (完整同步 / 已加载到会话开头)
     }
     // 首帧布局前视口未测量 (高度/偏移未就绪), 不触发
     if (scrollable_->viewportHeight() <= 0) {
@@ -1568,7 +1568,7 @@ LazyBuiltItem MessageListComponent::buildStreamingFrontier(const TUIRenderState&
         // "上方是哪类子项"
         out.element = vbox({el | color(c), text("")});
     } else {
-        // 防御分支 (无渲染器): 1 行空项, 与 quickHeight 的兜底估算一致
+        // 防御分支 (无渲染器): 1 行空项, 与 quickHeight 的估算一致
         out.element = text("");
     }
     return out;
@@ -1585,8 +1585,8 @@ void MessageListComponent::syncStream(const TUIRenderState& st) {
             ++streamGen_;
         }
         streamFedLen_ = 0;
-        // 下一流强制全量重建 (防御: 即使 future 代码在重建 currentToken 时
-        // 忘记递增 epoch, 此处兜底也能保证渲染器不与新流串用)
+        // 下一流强制全部重建 (防御: 即使 future 代码在重建 currentToken 时
+        // 忘记递增 epoch, 此处补充处理也能保证渲染器不与新流串用)
         streamEpoch_ = ~0ULL;
         // 流结束: 清除流式折叠的用户点击覆盖态 (已提交的 Think 消息由
         // msg.collapsed 管理 —— 手动展开过的流已在提交时落盘为展开),
@@ -1621,7 +1621,7 @@ void MessageListComponent::syncStream(const TUIRenderState& st) {
     }
     const auto& tok = *st.currentToken;
     if (st.currentTokenEpoch != streamEpoch_) {
-        // 新流 (token 被重置/更换): 重建渲染器并全量 feed。
+        // 新流 (token 被重置/更换): 重建渲染器并整段 feed。
         // 判定依据: client 线程仅在新建 currentToken 时递增 epoch (COW 复制
         // 不递增, 内容仍是同一流延续), 故 epoch 相同即"同一流", 无需再对
         // 整段累积文本做前缀比较
@@ -1724,7 +1724,7 @@ Element MessageListComponent::buildMessageBlock(
             header.push_back(text(roleLabel) | color(tipColor));
             if (!expanded) {
                 // 预览自适应宽度: 按内容区剩余列数截断 (宽字符按 2 列计),
-                // 不再固定 60 字符; 超出部分仍由 xflex_shrink 右缘裁剪兜底
+                // 不再固定 60 字符; 超出部分仍由 xflex_shrink 右缘裁剪处理
                 const int prefixCols
                     = 1 + static_cast<int>(markdown::utf8_display_width(roleLabel));
                 const int budget = collapsedPreviewBudget(maxWidth, prefixCols);
@@ -1783,7 +1783,7 @@ Element MessageListComponent::buildMessageBlock(
             }
             header.push_back(text(prefix) | color(levelColor));
             if (!expanded) {
-                // 同 System: 预览自适应内容区剩余列宽, 超宽时右缘裁剪兜底
+                // 同 System: 预览自适应内容区剩余列宽, 超宽时右缘裁剪处理
                 // 前缀列数 = 折叠标记 (1 列) + 头部前缀 + 分隔符 ("· ")
                 // 折叠态的分隔符与预览同属正文区, 一并叠加 dim
                 std::string_view sep = "· ";
@@ -2084,7 +2084,7 @@ Element MessageListComponent::buildMessageBlock(
         case TUIMessage::Role::Interrupt:
             // 中断输入消息: 渲染/交互完全由消息携带的 UI 描述数据决定
             // (InterruptView 通用实现: 头行 + 描述块 (内容块共享块渲染层,
-            // 控件块/提交行由中断视图实现)), 本组件不感知任何具体询问类型 (含权限)
+            // 控件块/提交行由中断视图实现)), 本组件不关心任何具体询问类型 (含权限)
             return interruptView_.build(msg, msgIndex, maxWidth, mdBuilders);
     }
     return text("");
@@ -2332,7 +2332,7 @@ std::string attachmentSizeText(uint64_t bytes) {
 
 bool MessageListComponent::handleAttachmentClick(const Mouse& mouse) {
     // 仅支持鼠标点击打开 (无 Enter 等键盘绑定: OnEvent 键盘分支仅处理
-    // 中断输入, 此处不消费任何键盘事件)
+    // 中断输入, 此处不处理任何键盘事件)
     if (mouse.button != Mouse::Left || mouse.motion != Mouse::Released) {
         return false;
     }

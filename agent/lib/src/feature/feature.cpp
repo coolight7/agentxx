@@ -713,7 +713,7 @@ asio::awaitable<ResolvedValue> PointBase::runResolve(ResolveRequest req) {
     }
 
     // 6) 发起方: 跑实现链; 无论正常结束还是被取消, 都要发布结果唤醒等待者
-    /// 作用域退出时若还没发布, 用"失败"兜底发布 (避免等待者永远挂着)
+    /// 作用域退出时若还没发布, 用"失败"作为回退值发布 (避免等待者永远挂着)
     struct PublishGuard {
         PointBase*                self = nullptr;
         std::string               identity;

@@ -18,7 +18,7 @@ namespace client {
 /// `layoutAndMeasure` 为调用方)。
 ///
 /// 本节点把 Box 的所有权绑在元素上: 移动/缓存元素即等于带走 Box, 接入点无需额外
-/// 保存。语义与 FTXUI 的 `Reflect` 完全一致 (ComputeRequirement 透传子项需求,
+/// 保存。语义与 FTXUI 的 `Reflect` 完全一致 (ComputeRequirement 原样转发子项需求,
 /// SetBox 写回坐标并向下传递, Render 与屏幕 stencil 求交), 命中也仍按同一个 Box
 /// 读取坐标 —— 唯一区别是 Box 由 shared_ptr 持有, 生命周期不短于元素。
 ///

@@ -151,7 +151,7 @@ Element StatusBarComponent::OnRender() {
         modelChildren.push_back(text("·") | color(theme.hintColor) | theme.dim());
         modelChildren.push_back(text(fmt::format("{}t/s", tps)) | color(theme.hintColor));
     }
-    // 外层 hbox 也需感知 modelInfo 可收缩, 否则整块被按比例压缩 (见
+    // 外层 hbox 也需知道 modelInfo 可收缩, 否则整块被按比例压缩 (见
     // ftxui box_helper::ComputeShrinkHard: 不可收缩元素同样被缩减)
     auto modelInfo
         = hits_.add(hbox(std::move(modelChildren)) | xflex_shrink, std::string{kModelHitId});

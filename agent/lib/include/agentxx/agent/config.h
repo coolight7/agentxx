@@ -33,7 +33,7 @@ inline std::string normalizeLanguage(std::string_view lang) noexcept {
 /// 服务端 CodeAgent 按模式注册文件系统读写默认规则 (见
 /// [code_agent.cpp](/agent/lib/src/agent/code_agent.cpp) initMiddleware),
 /// 白名单/黑名单路径始终优先于模式默认规则;
-/// 客户端 (TUI/CLI) 仅对仍到达的权限 INTERRUPT 询问作兜底处理。
+/// 客户端 (TUI/CLI) 仅对仍到达的权限 INTERRUPT 询问作回退处理。
 ///
 /// - Ask:    当前工作目录内允许读写, 其他路径询问用户
 /// - AllAsk: 所有路径读写均询问用户
@@ -82,7 +82,7 @@ public:
     /// - 用于适配各种 OpenAI 兼容服务 (DeepSeek/Moonshot/Ollama/Azure 等) 的不同端点路径
     std::string apiPath;
 
-    /// 额外 HTTP 请求头 (如自定义鉴权头/网关透传头)
+    /// 额外 HTTP 请求头 (如自定义鉴权头/网关原样转发头)
     std::map<std::string, std::string> extraHeaders;
 
     /// LLM API 连接池: 该模型端点 (baseUrl) 的最大并发连接数 (yaml `max_concurrent_connections`)
@@ -202,7 +202,7 @@ struct PluginConfig {
 
     /// 插件配置文件所在目录或文件路径 (yaml `config`)
     /// - 可指向文件或目录; 支持 `~` 与 ${VAR} 展开, 相对路径按工作目录解析
-    /// - 主程序归一化为绝对路径后保存并透传给插件 (经
+    /// - 主程序归一化为绝对路径后保存并原样转给插件 (经
     ///   `agentxx.agent.config` / `agentxx.client.self` 的
     ///   `get_plugin_config_path` 查询)
     /// - 为空表示未指定 (插件使用默认配置加载逻辑)
@@ -217,7 +217,7 @@ public:
     /// subagent 模型配置
     /// - 未指定时默认使用主模型 [model]
     std::optional<ModelConfig> subagentModel;
-    /// 使用模型进行网络搜索的配置
+    /// 用模型做网络搜索的配置
     /// - 指定后将使用模型搜索替代传统 websearchApiUrl 方式
     /// - 未指定时按 websearchApiUrl 判断是否启用传统搜索
     std::optional<ModelConfig> websearchModel;
@@ -237,7 +237,7 @@ public:
 
     /// `language` 是否由配置显式指定 (yaml / FFI 配置 JSON)
     /// - true 时不再被客户端连接时的界面语言覆盖: 会话语言属于可分发配置,
-    ///   客户端界面语言只在本机偏好未配置时兜底 (见 docs/zh-cn/design/configuration.md)
+    ///   客户端界面语言只在本机偏好未配置时回退 (见 docs/zh-cn/design/configuration.md)
     bool languageExplicit = false;
 
     /// 开发者模式 (yaml `dev_mode` / FFI 配置 JSON `devMode` / 命令行 `--dev`)
@@ -351,7 +351,7 @@ public:
     /// - 最多执行 1 + 5(retry) = 6 次
     size_t llmMaxRetry = 5;
     /// - 当 toolcall 启用了 [agentxx::tools::XXToolBase::autoSummaryOutput]
-    /// 且输出超过限制值 [toolcallSummaryLimitOutputLength] 时进行压缩
+    /// 且输出超过限制值 [toolcallSummaryLimitOutputLength] 时压缩
     /// - 功能实现见 [agentxx::node::ToolcallWrapNode::execTool]
     size_t toolcallSummaryLimitOutputLength = 2 * 1024;
 
@@ -396,11 +396,11 @@ public:
 
     /// 保留调用方给的首条 system 消息 (不按本 agent 的提示词重建)
     /// - 用于"复用父会话可缓存前缀"的场合 (上下文压缩): 子代理按自己的配置重建
-    ///   system 时缺少运行时段落 (记忆文件/技能清单), 请求前缀在 system 内部就分叉,
+    ///   system 时缺少运行时段落 (记忆文件/技能清单), 请求前缀在 system 内部就不一致,
     ///   后面整段对话都命中不了缓存
     bool keepProvidedSystemMessage = false;
 
-    /// 继承父会话上一次请求的工具定义 (只用于对齐请求前缀)
+    /// 继承父会话上一次请求的工具定义 (只用于保持请求前缀一致)
     /// - 子代理自身可能没有工具 (压缩子代理 tools=[]), 但请求里必须带上与父会话
     ///   完全相同的工具定义, provider 的前缀缓存才会命中
     /// - 保持为空表示"用本 agent 自己的工具定义"; 捕获不到 (如进程刚启动、没有历史
@@ -416,7 +416,7 @@ public:
 
     /// 上下文压缩 (summarization) 中间件开关 (默认 true)
     /// - 子代理默认继承父配置; summarization 发起的压缩子代理显式关闭,
-    ///   避免对透传的上下文前缀二次压缩 (破坏 KV/prefix cache 一致性)
+    ///   避免对原样转发的上下文前缀二次压缩 (破坏 KV/prefix cache 一致性)
     bool enableSummarization = true;
 
     /// 是否启用 subagent 委派 (默认 true)
@@ -464,7 +464,7 @@ public:
     /// 解析后的会话工作目录 (各使用点统一经此取值, 不直接读 workDir)
     /// - workDir 非空: 原样返回 (加载侧负责解析为绝对路径)
     /// - workDir 为空: 回退进程当前工作目录 (旧行为); 获取失败返回空串
-    ///   (调用方对空串的兜底语义与原 getCurrentWorkPath 一致, 如 permission
+    ///   (调用方对空串的默认语义与原 getCurrentWorkPath 一致, 如 permission
     ///   Ask 模式获取失败时不注册默认放行规则)
     std::string resolvedWorkDir() const noexcept;
 };

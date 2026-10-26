@@ -306,7 +306,7 @@ asio::awaitable<void> BaseAgent::init() {
             notifyInitProgress("初始化事件总线 ...");
             initEventBus();
             // 后台任务登记表: 与事件总线同一生命周期 —— 事件发布
-            // 与进度通知这类 fire-and-forget 任务登记在此, 关闭时先取消再等待收敛
+            // 与进度通知这类 fire-and-forget 任务登记在此, 关闭时先取消再等待结束
             agentContext->taskScope
                 = std::make_shared<agentxx::util::TaskScope>(co_await asio::this_coro::executor);
             // 关键指标: 与总线同一生命周期, 诊断包/快照可读
@@ -512,7 +512,7 @@ asio::awaitable<void> BaseAgent::init() {
                     );
                 }
 
-                // - parameters 缺失/null 时兜底为空对象 schema (部分严格网关如 SCNet 会因
+                // - parameters 缺失/null 时回退为空对象 schema (部分严格网关如 SCNet 会因
                 // "parameters": null 返回 400 "Format Error")
                 assert(def.parameters.is_object());
                 // - 递归校验 parameters JSON Schema (enum 扁平标量数组等),
@@ -643,7 +643,7 @@ asio::awaitable<void> BaseAgent::init() {
                 );
                 agentContext->graphDefinitionJson = initGraphDefinition();
                 graphDef                          = agentContext->graphDefinitionJson;
-                // 默认图构建失败属实现错误: 异常继续上抛 (不再兜底)
+                // 默认图构建失败属实现错误: 异常继续上抛 (不再回退)
                 engine = buildEngine(graphDef);
             }
             assert(nullptr != engine);
@@ -670,7 +670,7 @@ asio::awaitable<void> BaseAgent::init() {
                 }
                 agentContext->toolRegistry->setStaticToolNames(std::move(staticNames));
             }
-            // 记录本 agent 加载的工具名列表 (供子代理"全量继承父工具"使用)
+            // 记录本 agent 加载的工具名列表 (供子代理"全部继承父工具"使用)
             agentContext->toolNames.clear();
             agentContext->toolNames.reserve(tools.size());
             for (auto& tool : tools) {
@@ -710,7 +710,7 @@ asio::awaitable<void> BaseAgent::init() {
     verifyStartupAssembly();
 
     // 启动加载快照: 记录本次启动实际加载成了什么
-    // - 计数摘要走 Info, 完整 JSON 走 Debug (常规启动不打全量, 排查时按需打开)
+    // - 计数摘要走 Info, 完整 JSON 走 Debug (常规启动不打印全部内容, 排查时按需打开)
     // - `agentxx_cli --dump-config` 用同一份实现打印到标准输出
     logAssemblySnapshot(buildRuntimeSnapshot(*agentContext), "startup");
 
@@ -1035,7 +1035,7 @@ asio::awaitable<void> BaseAgent::initMiddleware() {
     {
         // 上下文压缩 (summarization) 中间件: 由 AgentConfig::enableSummarization 控制
         // - 子代理默认继承父配置; summarization 发起的压缩子代理显式关闭,
-        //   避免对透传的上下文前缀二次压缩 (破坏 KV/prefix cache 一致性)
+        //   避免对原样转发的上下文前缀二次压缩 (破坏 KV/prefix cache 一致性)
         if (config->enableSummarization) {
             auto summarizationMiddleware
                 = std::make_shared<agentxx::middleware::SummarizationMiddlewareHandle>(agentContext
@@ -1053,10 +1053,10 @@ asio::awaitable<void> BaseAgent::initMiddleware() {
         // - 白名单: 始终放行 (最长前缀匹配, 支持 * 通配符)
         // - 黑名单: 始终拒绝 (与白名单同路径时后注册覆盖白名单, 优先生效)
         // - 模式默认规则经 noRuleOperator 生效 (未命中任何已注册规则时的
-        //   兜底处理, 见 PermissionMiddlewareHandle::noRuleOperator):
+        //   回退处理, 见 PermissionMiddlewareHandle::noRuleOperator):
         //   ask=工作目录内 ALLOW + 其余 INTERRUPT / all_ask=INTERRUPT /
         //   pass=ALLOW / deny=DENY
-        // 注: 不依赖 "/*" 兜底规则 — 路由最长前缀回退到深层注册子树 (如白名单
+        // 注: 不依赖 "/*" 默认规则 — 路由最长前缀回退到深层注册子树 (如白名单
         // 目录) 时不会命中根节点 "/*" 规则, 必须由 noRuleOperator 保证语义
         for (const auto& p : config->permissionAllowPaths) {
             permission->setFilesystemPermission(
@@ -1093,7 +1093,7 @@ asio::awaitable<void> BaseAgent::initMiddleware() {
                 //   cwd), 使嵌入多实例/远程 server 场景下权限边界跟随会话配置而非
                 //   进程启动目录
                 // - 工作目录获取失败 (返回空串) 时不注册默认放行规则, 所有路径
-                //   均询问 (安全兜底: 注册根目录 "/" 会退化为放行所有路径)
+                //   均询问 (出于安全考量: 注册根目录 "/" 会退化为放行所有路径)
                 {
                     const auto workPath = config->resolvedWorkDir();
                     if (workPath.empty()) {
@@ -1516,7 +1516,7 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
 
     // TurnStart 即时回显附件元数据（不含 dataUrl，防大包）：
     // 客户端据此在 user 消息首屏即渲染附件卡片；dataUrl 经后续 Sync 补齐
-    // （Sync/SessionStore 保留 dataUrl 元数据以外的全量由服务端权威持有）
+    // （Sync/SessionStore 保留 dataUrl 元数据以外的全部由服务端权威持有）
     WireDelta turnStartDelta{
         .text        = processedInput,
         .msgId       = userMsgId,
@@ -1544,7 +1544,7 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
                   .input     = neograph::json::object(),
                   .max_steps = 1 << 30,
         // StreamMode 说明:
-        // - VALUES (每 super-step `__state__` 全量状态事件) 无人消费: EventBridge
+        // - VALUES (每 super-step `__state__` 完整状态事件) 无人处理: EventBridge
         //   只处理 message_tip / messages, 而上下文已不在图状态里, 去掉后每步
         //   少一次整段状态序列化
                   .stream_mode = neograph::graph::StreamMode::EVENTS | neograph::graph::StreamMode::TOKENS
@@ -1639,7 +1639,7 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
 
     if (turnResult.hasError) {
         // 出现异常/取消时: 上下文以会话为唯一权威, 不随图状态回滚 —— 节点在抛出前
-        // 已写入会话的消息 (部分完成的 tool 结果 / 兜底提示) 依然保留, 这里只需
+        // 已写入会话的消息 (部分完成的 tool 结果 / 回退提示) 依然保留, 这里只需
         // 把当前上下文落盘 (轮末权威保存), 不再需要从快照写回的恢复逻辑
         XX_LOGD(
             "Turn ended with error; keep session LLM context ({}) as authoritative",
@@ -1735,7 +1735,7 @@ BaseAgent::~BaseAgent() {
 
 /// 分阶段关闭
 ///
-/// 顺序: ① 停止受理新输入 → ② 取消并等待后台任务收敛 → ③ 关闭插件 → ④ 刷盘。
+/// 顺序: ① 停止受理新输入 → ② 取消并等待后台任务结束 → ③ 关闭插件 → ④ 刷盘。
 /// - **不等待当前轮次结束**: 轮次是调用方 await 的受控工作, 等待会把退出时间拖到
 ///   工具执行结束 (人工核定的结论);
 /// - ② 只等"短后台任务"(事件发布/进度通知一类), 它们通常已经结束, 实际等待接近 0;
@@ -1758,7 +1758,7 @@ asio::awaitable<bool> BaseAgent::shutdownAsync(std::chrono::milliseconds timeout
     agentContext->markShuttingDown();
     XX_LOGI("shutdown stage 1/4: stop accepting new input");
 
-    // ---- ② 取消并等待后台任务收敛 ----
+    // ---- ② 取消并等待后台任务结束 ----
     if (agentContext->taskScope) {
         const size_t pendingBefore = agentContext->taskScope->pending();
         const size_t cancelled     = agentContext->taskScope->cancelAll();
@@ -1873,7 +1873,7 @@ asio::awaitable<BaseAgent::SimpleRunResult> BaseAgent::runInternalAsync(
         .resume_if_exists = false,
     };
     std::string oss;
-    // 统一的 LLM_TOKEN 收集 + 透传 callback
+    // 统一的 LLM_TOKEN 收集 + 原样转发 callback
     auto wrappedCb = [callback, &oss](const neograph::graph::GraphEvent& ev) {
         if (ev.type == neograph::graph::GraphEvent::Type::LLM_TOKEN) {
             try {

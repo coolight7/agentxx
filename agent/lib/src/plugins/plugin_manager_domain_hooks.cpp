@@ -136,7 +136,7 @@ void PluginManager::setWorkerThreadPool(std::shared_ptr<asio::thread_pool> pool)
     workerPool_ = std::move(pool);
 }
 
-/// 兜底线程池: 只在没有任何可用池时创建 (每次管理器一份, 不复用全局)
+/// 备用线程池: 只在没有任何可用池时创建 (每次管理器一份, 不复用全局)
 void PluginManager::ensureWorkerPool() {
     if (workerPool_) {
         return;
@@ -178,7 +178,7 @@ bool PluginManager::postToWorkerThread(std::function<void()> fn) {
             return true;
         }
     }
-    // 3. 兜底: 管理器自建池
+    // 3. 备用: 管理器自建池
     //    agent 上下文可能已释放、从未挂载, 或其池已停止; 插件阻塞工作仍应能执行
     //    (否则阻塞工具全部报 offload 失败)
     ensureWorkerPool();

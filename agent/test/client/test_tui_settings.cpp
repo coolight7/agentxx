@@ -432,7 +432,7 @@ void test_tail_line_preview() {
     XX_TEST_EXPECT_EQ(tailLinePreview(zh, 7), "...测试");
 
     // 换行与空白压缩; 极小预算 (max=4 -> 预算 1 列) 至少保留最后一个码点,
-    // 宽字符宁可溢出预算也不返回空内容 (渲染层 xflex_shrink 兜底裁剪)
+    // 宽字符宁可溢出预算也不返回空内容 (渲染层 xflex_shrink 裁剪处理)
     std::string multiline = "思考过程第一行\n\n思考过程第二行  \n  思考完成";
     XX_TEST_EXPECT_EQ(tailLinePreview(multiline, 4), "...成");
 
@@ -801,7 +801,7 @@ void test_tui_model_retention_on_wire_model_info_and_switch_session() {
 }
 
 /// 暴露受保护回调的 TUI 端点 (测试用): onSync 由服务端回推 (会话切换/重连),
-/// 生产路径经 onPeerMessage 分发, 测试直接调用以模拟"服务端回推全量 Sync"
+/// 生产路径经 onPeerMessage 分发, 测试直接调用以模拟"服务端回推完整 Sync"
 class TestableTuiClientIO : public TUIClientAgentIO {
 public:
 
@@ -814,7 +814,7 @@ public:
 
 /// 回归: 切换会话后输入栏的 [+ 📎 附件] 按钮不消失
 ///
-/// 服务端切换会话时先回推新会话的全量 Sync (onSync 整体重建 TUIRenderState),
+/// 服务端切换会话时先回推新会话的完整 Sync (onSync 整体重建 TUIRenderState),
 /// 再回推模型信息。模型能力表来自 agent 配置 (与会话无关), 必须跨 Sync 保留:
 /// 否则能力表变空 -> currentModelCapability() 无多模态能力 ->
 /// inputCfg.canAttach 返回 false -> 输入栏的附件按钮消失 (点击弹窗也无法打开)。
@@ -847,7 +847,7 @@ void test_tui_multimodal_capability_survives_session_sync() {
         XX_TEST_EXPECT_TRUE(snap->currentModelCapability().hasMultimodalInput());
     }
 
-    // 2. 切换会话: 服务端回推新会话的全量 Sync (onSync 整体重建渲染状态)
+    // 2. 切换会话: 服务端回推新会话的完整 Sync (onSync 整体重建渲染状态)
     agentxx::agent::WireSyncPayload payload;
     payload.messages.push_back(
         agentxx::agent::ViewMessage::makeText(agentxx::agent::ViewMessage::Role::User, "hi")
@@ -1360,7 +1360,7 @@ bool hasScrollbarThumb(const std::string& text) {
            || text.find("╻") != std::string::npos;
 }
 
-/// 渲染一帧 (固定视口, 不随物理终端尺寸漂移)
+/// 渲染一帧 (固定视口, 不随物理终端尺寸变化)
 ftxui::Screen renderOnce(const ftxui::Component& comp, int width, int height) {
     auto screen
         = ftxui::Screen::Create(ftxui::Dimension::Fixed(width), ftxui::Dimension::Fixed(height));

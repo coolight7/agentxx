@@ -203,7 +203,7 @@ void benchResourceCli() {
 
     agent::SessionServerAgentIO::Config scCfg;
     scCfg.sessionId            = sessionId;
-    scCfg.initialSyncTailCount = 0; // CLI: 全量同步
+    scCfg.initialSyncTailCount = 0; // CLI: 完整同步
     auto serverIO = std::make_shared<agent::SessionServerAgentIO>(agentEx, agent, scCfg);
     serverIO->setTransport(std::shared_ptr<agent::AgentIOTransportBase>(std::move(serverTransport))
     );
@@ -368,7 +368,7 @@ void benchResourceCli() {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 
-    // CLI 全量 Sync
+    // CLI 完整 Sync
     io->sendToPeer(agent::WireHello{sessionId, "", 0, ""});
     std::this_thread::sleep_for(std::chrono::milliseconds(300));
     double busyCpu1 = cpuEnd(busyWin1);
@@ -445,7 +445,7 @@ void benchResourceCli() {
         std::this_thread::sleep_for(std::chrono::milliseconds(10));
     }
 
-    // CLI 全量 Sync
+    // CLI 完整 Sync
     io->sendToPeer(agent::WireHello{sessionId, "", 0, ""});
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
     double busyCpu2 = cpuEnd(busyWin2);
@@ -487,7 +487,7 @@ void benchResourceCli() {
     // ---------------- P3: 真实逐轮往返 (长上下文下的每轮开销) ----------------
     // 与 P1/P2 的"注入历史"不同: 这里每轮都走完整流程 —— 用户输入 → LLM 请求
     // (SSE) → 工具调用与结果回写 → 消息落库 → 事件回传, 与真实对话一致。
-    // 用于观察长上下文下的每轮固定开销、稳态漂移与单轮耗时; 轮数与消息字节数
+    // 用于观察长上下文下的每轮固定开销、稳态波动与单轮耗时; 轮数与消息字节数
     // 由 AGENTXX_BENCH_ROUNDS / AGENTXX_BENCH_ROUND_BYTES 控制 (默认 20 轮 × 8 KB)。
     {
         const size_t roundCount = envSize("AGENTXX_BENCH_ROUNDS", 20);
@@ -1634,7 +1634,7 @@ void benchResourceFfi() {
 #endif
 
     // 函数指针定义: 类型取自 ffi_api.h 的声明 (decltype(&::...)), 不手写签名 ——
-    // 手写容易与头文件漂移 (曾把 stop/destroy 的 log 出参漏掉: 声明成一参后调用
+    // 手写容易与头文件不一致 (曾把 stop/destroy 的 log 出参漏掉: 声明成一参后调用
     // 依然编译通过, 但被调函数仍会写这个出参, 于是写到寄存器里的野指针上,
     // Windows 上表现为访问违例); 同时保留头文件里的调用约定 (Win32 上是 __stdcall)
     decltype(&::agentxx_ffi_create)               agentxx_ffi_create               = nullptr;
@@ -2065,7 +2065,7 @@ void benchResourceAll() {
             {"AGENTXX_BENCH_CHILD",      "1"              },
             {"AGENTXX_BENCH_OUTPUT_DIR", sceneDir.string()},
         };
-        // 透传负载缩放系数 (若有)
+        // 原样转发负载缩放系数 (若有)
         if (auto scale = utilxx_base::ApplicationEnv::instance().get("AGENTXX_BENCH_SCALE")) {
             opts.env.emplace_back("AGENTXX_BENCH_SCALE", *scale);
         }

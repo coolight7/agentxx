@@ -473,7 +473,7 @@ asio::awaitable<utilxx_base::Json> StdIOClientAgentIO::handleInterrupt(
     }
     std::cout << "  ┗━━━━━━ Input ━━━━━━┛\n\n" << std::flush;
     // 结果恒为对象形态 {"values": {控件 id: 值}} (与客户端契约一致;
-    // 空对象 = 未提交/取消, 消费端按未应答处理)
+    // 空对象 = 未提交/取消, 处理方按未应答处理)
     co_return agentxx::middleware::makeInterruptResult(values);
 }
 

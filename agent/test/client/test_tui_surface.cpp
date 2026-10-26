@@ -287,7 +287,7 @@ void checkNoFrameGlyphs(const ProbeResult& r, int line) {
     XX_TEST_PASSED++;
 }
 
-/// 测试夹具: 最小 TUICtx (视图尺寸固定, 避免随真实终端漂移)
+/// 测试夹具: 最小 TUICtx (视图尺寸固定, 避免随真实终端变化)
 struct SurfaceFixture {
     TUISharedState sharedState;
     TUITheme       theme = TUITheme::darkTheme();

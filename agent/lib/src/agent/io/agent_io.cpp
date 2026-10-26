@@ -196,7 +196,7 @@ void AgentIOBase::registerOnBus(std::shared_ptr<agentxx::events::EventBus> sessi
                 co_return events::RespInterrupt{.handled = false, .resultJson = result.dump()};
             }
             // 结果恒为对象形态 {"values": {控件 id: 值}} (见 makeInterruptResult):
-            // 图状态 resume 只接收值对象, 故取 values 写回 (消费端按控件 id 取值)
+            // 图状态 resume 只接收值对象, 故取 values 写回 (处理方按控件 id 取值)
             if (!result.is_object() || !result.contains("values")) {
                 // 契约违规 (非对象形态): 按中断未应答处理并告警
                 XX_LOGW(
@@ -223,7 +223,7 @@ void AgentIOBase::registerOnBus(std::shared_ptr<agentxx::events::EventBus> sessi
             auto arg     = agentxx::middleware::InterruptHandleArg{};
             arg.name     = "permission";
             arg.resultId = "";
-            // 透传权限上下文给客户端 (记住权限选择时使用):
+            // 原样转发权限上下文给客户端 (记住权限选择时使用):
             // - category: 权限分类 ("filesystem_read" / "filesystem_write")
             // - target:   受约束目标 (已标准化的绝对路径, 与中间件与规则匹配时一致)
             arg.arg = utilxx_base::Json{
@@ -246,7 +246,7 @@ void AgentIOBase::registerOnBus(std::shared_ptr<agentxx::events::EventBus> sessi
                 arg.toJson().dump()
             );
 
-            // 取消透传: HIL 等待被 WireCancel 打断时 handleInterrupt 返回
+            // 取消传递: HIL 等待被 WireCancel 打断时 handleInterrupt 返回
             // {"__cancelled__":true}, 此处必须抛取消而非判为拒绝,
             // 否则取消权限弹窗会被当成"[Permission denied]"正常继续执行
             if (result.is_object() && result.value("__cancelled__", false)) {

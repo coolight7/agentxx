@@ -454,9 +454,9 @@ private:
     std::shared_ptr<BannerArtComponent> bannerArt_;
 
     // ---- 流式增量 markdown 渲染器 ----
-    // 流式输出期间避免每帧对整段累积文本全量重解析 (O(n^2) -> 稳定块缓存 O(n)):
+    // 流式输出期间避免每帧对整段累积文本全部重解析 (O(n^2) -> 稳定块缓存 O(n)):
     // 已闭合的顶层块作为独立可缓存子项 (LazyScrollable 仅布局可见子项, 避免
-    // 每帧对整篇内容全量布局), 每帧仅重建末尾仍在增长的块。
+    // 每帧对整篇内容全部布局), 每帧仅重建末尾仍在增长的块。
     std::unique_ptr<markdown::IncrementalRenderer> streamRenderer_;
     /// 当前流式渲染模式: true=增量 (稳定块拆分为多个可缓存子项);
     /// false=降级 (动画等级不足, 整段 paragraph 单子项)

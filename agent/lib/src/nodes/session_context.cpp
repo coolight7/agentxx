@@ -15,7 +15,7 @@ namespace nodes {
 
 namespace {
 
-/// 空的会话上下文 (会话不存在时的只读兜底; 避免为读一次就创建会话)
+/// 空的会话上下文 (会话不存在时的只读回退; 避免为读一次就创建会话)
 const std::vector<neograph::ChatMessage>& emptyMessages() {
     static const std::vector<neograph::ChatMessage> kEmpty{};
     return kEmpty;

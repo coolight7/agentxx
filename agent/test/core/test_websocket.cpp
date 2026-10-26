@@ -1034,7 +1034,7 @@ static asio::awaitable<void> test_ws_send_after_close() {
     serverThread.join();
 }
 
-/// 对端 close 帧的 code/reason 应透传给调用方
+/// 对端 close 帧的 code/reason 应原样转给调用方
 static asio::awaitable<void> test_ws_close_code_reason() {
     HttpServer server({.address = "127.0.0.1", .port = 0, .ioThreads = 1});
 

@@ -679,7 +679,7 @@ void TUIClientAgentIO::start() {
             // 会改掉共享控制台的输出代码页/控制台模式 —— 一旦被改, 本 TUI 的
             // UTF-8 输出会整屏乱码, 且列宽假设失效导致画面逐帧错位、底部累积
             // 空白 (看起来像最新消息间距异常)。改动过就现场改回来, 并先清屏 +
-            // 回原点让本帧重新对齐 (FTXUI 的帧首定位是相对上移, 漂移后只能靠
+            // 回原点让本帧重新对齐 (FTXUI 的帧首定位是相对上移, 错位后只能靠
             // 全清恢复)。正常运行时只多一次 GetConsoleOutputCP 查询。
             // 只在真正写回成功 (needResync) 时清屏: 写不回去时自检器会停止重试,
             // 不会每帧清屏闪烁。
@@ -842,7 +842,7 @@ void TUIClientAgentIO::start() {
                 }
             }
             // 侧边栏表单焦点 (面板/Info 段落内的控件): 有焦点时输入先进入表单,
-            // 避免字符被输入栏抢走; 未消费再走全局快捷键与输入栏
+            // 避免字符被输入栏抢走; 未处理再走全局快捷键与输入栏
             if (formFocusedOwner_.size() > 0 && handleSidebarFormKey(event)) {
                 return true;
             }
@@ -916,7 +916,7 @@ void TUIClientAgentIO::start() {
                 // 整帧渲染/事件处理完成: 释放本帧状态快照。
                 // 关键性能点: 若帧间隙持续持有快照, client 线程 (onDelta 流式追加)
                 // 每次 mutableState() 都会 COW 深拷贝整个 TUIRenderState (use_count>1),
-                // 每 token 一次全量拷贝; 释放后渲染间隙 use_count==1,
+                // 每 token 一次整份拷贝; 释放后渲染间隙 use_count==1,
                 // client 线程可原地修改 state, 拷贝成本降为零。
                 // Element 树在 OnRender 中已自包含 (文本已复制), 布局/绘制不依赖快照。
                 ctx_.frameState.reset();
@@ -1083,7 +1083,7 @@ void TUIClientAgentIO::requestRetry() {
 
 asio::awaitable<void> TUIClientAgentIO::waitRetry() {
     // 轮询等待用户点击 banner 的"重试"按钮 (requestRetry 置 retryRequested_):
-    // - 100ms 轮询间隔, 点击延迟不可感知
+    // - 100ms 轮询间隔, 点击延迟察觉不到
     // - 每次轮询检查 running_: 连接失败期间用户可能退出 TUI, 等待协程须尽快
     //   返回, 否则 runner 协程永久挂起会阻塞 client io_context 的 run() 使进程无法退出
     asio::steady_timer timer(ex_);
@@ -1382,7 +1382,7 @@ void TUIClientAgentIO::toggleLogWindow() {
 
 void TUIClientAgentIO::refreshLanguage() {
     // 界面语言切换: 静态文本按语言缓存的位置逐项刷新 (语言切换频率极低,
-    // 全量清理成本可忽略; 其余组件文本在渲染时实时查翻译表, 无需处理)
+    // 全部清理成本可忽略; 其余组件文本在渲染时实时查翻译表, 无需处理)
     if (messageList_) {
         // banner (空状态) 文本随语言缓存: 失效后下次渲染按新语言重建
         messageList_->invalidateCache();
@@ -1776,17 +1776,17 @@ void TUIClientAgentIO::switchToSession(std::string newThreadId) {
     // 更新组件共享上下文: 状态栏/会话弹窗据此标记 current 会话
     ctx_.sessionId = newThreadId;
     // 注意: TUI 不持有 Session (属于 server-io 线程), 切换后服务端回推
-    // 新会话的全量 Sync + WireModelInfo + WireContextStats (WireSwitchSession
+    // 新会话的完整 Sync + WireModelInfo + WireContextStats (WireSwitchSession
     // 处理路径), 客户端界面 (消息历史/模型名/上下文统计) 随之整体更新
     // 清理上一会话遗留的消息列表吸附/中断 UI 状态;
-    // 消息历史由服务端回推的全量 Sync 整体替换 (onSync)
+    // 消息历史由服务端回推的完整 Sync 整体替换 (onSync)
     if (messageList_) {
         messageList_->setStickToBottom(true);
         messageList_->clearInterruptUiState();
     }
     awaitingInterruptInput_.store(false, std::memory_order_release);
     // 清理上一会话遗留的排队输入与上下文弹窗数据 (正常路径下切换前
-    // isStreaming == false 时排队输入已清空, 此处兜底防御), 避免串扰新会话;
+    // isStreaming == false 时排队输入已清空, 此处补充防御), 避免串扰新会话;
     // 保持当前选定模型不变 (不随会话切换自动重置), 记录为新会话的 pendingModel
     std::string currentModel;
     sharedState_.mutate([&](TUIRenderState& st) {
@@ -2580,7 +2580,7 @@ void TUIClientAgentIO::requestServerListDir(
 //
 // 会话选择弹窗数据源按 keyset 游标分页加载: 打开弹窗时请求最新一页, 用户浏览
 // 到已加载列表末尾时以上一页最后一条为游标续取 (SessionSelectorOverlay 经
-// ctx_.requestMoreSessions 触发), 避免会话很多时一次性加载/渲染全量。
+// ctx_.requestMoreSessions 触发), 避免会话很多时一次性加载/渲染全部。
 // ---------------------------------------------------------------------------
 
 void TUIClientAgentIO::onSessionListPage(const agentxx::agent::WireSessionList& resp) {
@@ -2590,10 +2590,10 @@ void TUIClientAgentIO::onSessionListPage(const agentxx::agent::WireSessionList& 
         // 加载标志复位 (无论本页是否可用, 请求生命周期已结束)
         st.sessionListLoadingMore = false;
         // 兼容: 响应无分页元数据 (totalCount==0 && !hasMore) 时视为
-        // 全量列表, 直接替换本地列表
+        // 完整列表, 直接替换本地列表
         const bool legacyFullList = (resp.totalCount == 0 && !resp.hasMore);
         if (!st.sessionListLoaded || legacyFullList || st.sessionList.empty()) {
-            // 首页 / 全量响应: 替换
+            // 首页 / 完整响应: 替换
             st.sessionList = resp.sessions;
         } else {
             // 后续页: 追加 (服务端保证不与已收页重叠; 双重防御跳过重复项)
@@ -2615,7 +2615,7 @@ void TUIClientAgentIO::onSessionListPage(const agentxx::agent::WireSessionList& 
             st.sessionListTotalCount = resp.totalCount;
         }
         // hasMore 边界: 服务端标志 + 空页防御 (keyset 边界处可能多给一页空响应,
-        // 此时终止续取) + 已加载数达到总数时收敛
+        // 此时终止续取) + 已加载数达到总数时停止
         st.sessionListHasMore = resp.hasMore && !resp.sessions.empty()
                                 && (st.sessionListTotalCount == 0
                                     || st.sessionList.size() < st.sessionListTotalCount);
@@ -2783,7 +2783,7 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
                     // 新流开始: 递增流身份 (COW 复制不递增, 见 currentTokenEpoch 注释)
                     ++st.currentTokenEpoch;
                     // 同时清除上一流的思考折叠覆盖态 (流提交落盘时已生效过;
-                    // 此处兜底覆盖未走提交的流结束路径): 新流回到设置模式默认展示
+                    // 此处补充覆盖未走提交的流结束路径): 新流回到设置模式默认展示
                     st.streamThinkOverride = -1;
                 } else if (st.currentToken.use_count() > 1) {
                     st.currentToken = std::make_shared<std::string>(*st.currentToken);
@@ -2862,7 +2862,7 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
                 st.currentNodeName = delta.nodeName;
             } break;
             case Type::NodeEnd: {
-                // 节点结束即该节点的生成结束: 兜底清除占位提示 (正常已由首个
+                // 节点结束即该节点的生成结束: 补充清除占位提示 (正常已由首个
                 // 正文/思考 token 或工具消息清除; agent 侧同时会下发 GenStatus::Done)
                 clearGenPlaceholder();
                 if (st.currentNodeName == delta.nodeName) {
@@ -3018,7 +3018,7 @@ void TUIClientAgentIO::onSync(const agentxx::agent::WireSyncPayload& payload) {
             st->modelCapabilities = prev->modelCapabilities;
             // 模型列表加载标志同理: 已收到过服务端模型信息就不应退回"加载中"
             st->modelInfoLoaded = prev->modelInfoLoaded;
-            // 连接状态不随 Sync 重置: 握手后服务端回推全量 Sync 时若被重置回
+            // 连接状态不随 Sync 重置: 握手后服务端回推完整 Sync 时若被重置回
             // Connecting (默认值), banner 会错误地回到"启动中"
             st->connState = prev->connState;
             // 启动进度不随 Sync 重置: 本地模式下握手后 init 仍在进行,
@@ -3051,7 +3051,7 @@ void TUIClientAgentIO::onSync(const agentxx::agent::WireSyncPayload& payload) {
                 st->messages.push_back(std::move(msg));
             }
             // 历史分页窗口元数据: fromIndex = 本批消息的起始绝对下标
-            // (尾窗同步时 > 0, 上方还有更早历史待分页拉取; 全量同步时为 0);
+            // (尾窗同步时 > 0, 上方还有更早历史待分页拉取; 完整同步时为 0);
             // 未返回的分页请求随整体替换作废 (loading 复位), 尾部序号作为新基线
             st->history.resetForSession(std::string{currentSessionId()});
             st->history.reset(
@@ -3209,7 +3209,7 @@ void TUIClientAgentIO::onContextStats(const agentxx::agent::WireContextStats& st
 //   (值按钮/输入框/枚举/勾选项/确认行) 完全由描述数据决定, 客户端不含任何
 //   具体询问 (含权限) 的特化分支
 // - UI 线程提交/取消后经通道回传 InterruptFormSubmit {cancelled, values, options};
-//   规则注册等业务语义由 agent 侧消费结果完成 (客户端只回传表单值/选项)
+//   规则注册等业务语义由 agent 侧处理结果完成 (客户端只回传表单值/选项)
 // - 本协程等待一次提交或取消; 通道关闭 (server 过期通知 / TUI 退出) 时终止,
 //   返回已收集结果 (空 values = 未应答)
 // ---------------------------------------------------------------------------
@@ -3285,14 +3285,14 @@ asio::awaitable<utilxx_base::Json> TUIClientAgentIO::handleInterrupt(
     auto gotSubmit = std::move(std::get<1>(received));
     if (!ec && !gotSubmit.cancelled) {
         // 一次提交: values 为控件 id → 值 的对象 (控件形态决定值类型);
-        // 语义由 agent 侧消费 (客户端只回传表单值, 不解释业务含义)
+        // 语义由 agent 侧处理 (客户端只回传表单值, 不解释业务含义)
         if (gotSubmit.values.is_object()) {
             values = std::move(gotSubmit.values);
         }
     }
 
     // 结果形态: 恒为对象 {"values": {控件 id: 值}} (见 makeInterruptResult;
-    // 未提交/取消 = 空对象 —— 消费端按未应答处理)
+    // 未提交/取消 = 空对象 —— 处理方按未应答处理)
     const utilxx_base::Json result = agentxx::middleware::makeInterruptResult(values);
 
     activeInterrupts_.erase(wireId);

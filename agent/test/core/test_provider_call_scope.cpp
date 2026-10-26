@@ -4,7 +4,7 @@
 /// - 父令牌取消 → 级联到调用域 (运行取消仍然中止进行中的调用)
 /// - 调用域单独取消 → 父令牌不受影响 (只中止本次调用, 不取消整轮)
 /// - `markDone()` 后析构不取消 (调用已正常收尾)
-/// - 未 `markDone()` 就析构 (消费方放弃) → 调用域被取消
+/// - 未 `markDone()` 就析构 (处理方放弃) → 调用域被取消
 /// - 父令牌为空时使用独立令牌 (不被外部取消)
 #include "agentxx-test/core/test_provider_call_scope.h"
 
@@ -80,7 +80,7 @@ void testScopeRaiiSemantics() {
         XX_TEST_EXPECT_FALSE(run->is_cancelled());
     }
 
-    // 2) 未 markDone 就析构 (消费方放弃): 调用域被取消, 父令牌不受影响
+    // 2) 未 markDone 就析构 (处理方放弃): 调用域被取消, 父令牌不受影响
     {
         auto run   = std::make_shared<neograph::graph::CancelToken>();
         auto child = std::shared_ptr<neograph::graph::CancelToken>{};

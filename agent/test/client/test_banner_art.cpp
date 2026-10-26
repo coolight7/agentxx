@@ -3,7 +3,7 @@
 // 覆盖场景:
 // - 帧序列结构: 每帧 6 行、各帧每行等宽 (居中的艺术字在动画中不左右跳动)、
 //   "AGENT" 前缀在所有帧中保持不变、末帧与原机器人图案逐字符一致、
-//   与末帧的差异随帧递减 (动画一定收敛到末帧)
+//   与末帧的差异随帧递减 (动画一定逼近末帧)
 // - 播放组件 BannerArtComponent: 首次渲染开始播放、按累计时长推进、到末帧后停止
 //   且不再续约、未渲染前不推进、动画等级不足时直接展示末帧
 // - 消息列表空状态接入: 首帧展示大字 "+", 不发任何事件也随动画推进为机器人图案
@@ -108,7 +108,7 @@ ArtGrid gridOf(std::string_view text) {
     return grid;
 }
 
-/// 与末帧不同的字符数 (动画收敛性判定: 该值必须随帧递减, 末帧为 0)
+/// 与末帧不同的字符数 (逐帧逼近程度判定: 该值必须随帧递减, 末帧为 0)
 size_t diffToFinal(const ArtGrid& grid, const ArtGrid& finalGrid) {
     size_t diff = 0;
     for (size_t y = 0; y < grid.size(); ++y) {
@@ -229,7 +229,7 @@ struct BannerFixture {
 };
 
 // ---------------------------------------------------------------------------
-// 帧序列结构: 每帧 6 行等宽, "AGENT" 前缀不变, 逐帧收敛到原机器人图案
+// 帧序列结构: 每帧 6 行等宽, "AGENT" 前缀不变, 逐帧逼近原机器人图案
 // ---------------------------------------------------------------------------
 
 void testFrameSequence() {
@@ -299,7 +299,7 @@ void testFrameSequence() {
         XX_TEST_EXPECT_EQ(finalLines[y], std::string{kRobotArt[y]});
     }
 
-    // 收敛性: 与末帧的差异逐帧递减, 末帧为 0 (加号收回后机器人图案逐格补齐)
+    // 逐帧逼近: 与末帧的差异逐帧递减, 末帧为 0 (加号收回后机器人图案逐格补齐)
     const auto finalGrid = gridOf(bannerArtFinalFrame());
     size_t     prevDiff  = diffToFinal(gridOf(frames.front()), finalGrid);
     for (size_t i = 1; i < frames.size(); ++i) {

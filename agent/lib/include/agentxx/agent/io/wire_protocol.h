@@ -409,7 +409,7 @@ inline utilxx_base::Json syncToJson(const WireSyncPayload& p) {
     // 快照对应的服务端增量序号 (0 = 未提供): 客户端据此重置去重用的序号,
     // 避免服务端 seq 重新计数后客户端旧序号把新增量全部判为重复 (见结构体注释)
     j["deltaSeq"] = p.deltaSeq;
-    // 历史分页元数据 (尾窗同步时 fromIndex>0 / totalMessages>0; 全量同步
+    // 历史分页元数据 (尾窗同步时 fromIndex>0 / totalMessages>0; 完整同步
     // 时 totalMessages == messages.size(), 字段冗余但便于客户端统一判断)
     j["totalMessages"] = p.totalMessages;
     // 展示历史序号: lastViewSeq = 本快照最后一条消息的持久化序号,
@@ -894,7 +894,7 @@ inline utilxx_base::Json makeContextMessages(const utilxx_base::Json& messages) 
 // ---------------------------------------------------------------------------
 
 /// 客户端请求持久化会话列表 (无载荷; 列举全部持久化会话)
-/// - 分页字段可选: beforeMs/beforeId/limit 均缺省时为旧行为 (全量列举),
+/// - 分页字段可选: beforeMs/beforeId/limit 均缺省时为旧行为 (全部列举),
 ///   与旧版服务端互通
 /// - keyword 非空时按关键词检索 (标题或展示历史正文的子串):
 ///   服务端忽略分页字段, 按最近活动降序返回命中项 (数量上限见服务端)
@@ -1010,7 +1010,7 @@ inline utilxx_base::Json makeSessionList(
         arr.push_back(sessionInfoToJson(s));
     }
     j["sessions"] = std::move(arr);
-    // 分页元数据 (可选携带; 缺省时旧版客户端按全量列表处理)
+    // 分页元数据 (可选携带; 缺省时旧版客户端按完整列表处理)
     if (totalCount > 0) {
         j["totalCount"] = totalCount;
     }
@@ -1028,7 +1028,7 @@ inline WireSessionList sessionListFromJson(const utilxx_base::Json& j) {
             out.sessions.push_back(sessionInfoFromJson(item));
         }
     }
-    // 分页元数据 (旧版服务端不携带 → 0/false, 客户端按全量响应处理)
+    // 分页元数据 (旧版服务端不携带 → 0/false, 客户端按完整响应处理)
     out.totalCount = j.value("totalCount", uint64_t{0});
     out.hasMore    = j.value("hasMore", false);
     return out;
@@ -1074,7 +1074,7 @@ inline WirePluginData pluginDataFromJson(const utilxx_base::Json& j) {
 }
 
 /// client 插件事件上行 (Client -> Server): WirePluginDataUp
-/// - 载荷 JSON 原样透传 (语义由插件定义); 服务端发布到事件总线
+/// - 载荷 JSON 原样转发 (语义由插件定义); 服务端发布到事件总线
 ///   topic `client.{插件名}.{事件名}`
 inline utilxx_base::Json makePluginDataUp(const WirePluginDataUp& p) {
     utilxx_base::Json j = {

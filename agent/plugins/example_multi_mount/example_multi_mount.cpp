@@ -25,7 +25,7 @@ struct MultiMountCtx : public agentxx::plugin::PluginBase {};
 /// 一份挂载的状态
 ///
 /// 工具回调经 `shared_ptr` 共享它: 拆挂载时主程序可能还持着工具对象
-/// (在途调用), 用引用计数保证回调里不会用到已释放的状态。
+/// (进行中调用), 用引用计数保证回调里不会用到已释放的状态。
 struct MountState {
     agentxx::plugin::AgentRef ref;
     std::string               configJson = "{}";

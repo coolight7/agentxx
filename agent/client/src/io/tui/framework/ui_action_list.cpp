@@ -72,7 +72,7 @@ void UiActionList::setItems(std::vector<UiActionItem> items) {
         selectedId_.clear();
         return;
     }
-    // 原选中项已消失: 原下标收敛到有效范围
+    // 原选中项已消失: 原下标限制到有效范围
     selectedIndex_ = std::clamp(selectedIndex_, 0, static_cast<int>(items_.size()) - 1);
     selectedId_    = items_[static_cast<size_t>(selectedIndex_)].id;
 }

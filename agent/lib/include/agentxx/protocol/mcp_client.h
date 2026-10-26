@@ -331,7 +331,7 @@ private:
     // stdio 传输状态 (平台差异细节隐藏在 .cpp)
     struct StdioTransport;
     std::unique_ptr<StdioTransport> stdio_;
-    /// stdio 写序列化: 协程感知锁, 持锁跨越 co_await async_write 也不死锁 (见 AsyncMutex)
+    /// stdio 写序列化: 协程安全的锁, 持锁跨越 co_await async_write 也不死锁 (见 AsyncMutex)
     std::unique_ptr<utilxx_base::AsyncMutex>                     stdioWriteMutex_;
     std::mutex                                                   pendingMutex_;
     std::unordered_map<int64_t, std::shared_ptr<PendingRequest>> pending_;

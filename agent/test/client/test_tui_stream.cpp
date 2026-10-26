@@ -1,15 +1,15 @@
 // 流式增量 markdown 渲染器 (markdown::IncrementalRenderer) 测试
 //
-// 背景: 流式输出时若每帧对整段累积文本全量 cmark 解析 + DomBuilder 构建,
+// 背景: 流式输出时若每帧对整段累积文本全部 cmark 解析 + DomBuilder 构建,
 // 总成本为 O(n^2) (n = 最终文本长度), 大消息时占满帧预算。增量渲染器只缓存
 // 已闭合 (稳定) 的顶层块, 每帧仅重建末尾仍增长的块, 总成本 O(n)。
 //
 // 覆盖点:
-// - [增量==全量] 逐字节 feed 过程中任意时刻的渲染结果, 必须与对同一前缀做
-//   一次性全量解析的结果完全一致 (块间空行分隔与整篇解析一致)
+// - [增量==一次性解析] 逐字节 feed 过程中任意时刻的渲染结果, 必须与对同一前缀做
+//   一次性完整解析的结果完全一致 (块间空行分隔与整篇解析一致)
 // - [稳定块缓存] stableBlockCount 随文档增长单调不减, 且闭合块被识别为稳定
 // - [reset] 重置后从零开始, 渲染结果与全新解析一致
-// - [边界前缀] setext 标题/表格/代码块/列表等块类型在增量下与全量一致
+// - [边界前缀] setext 标题/表格/代码块/列表等块类型在增量下与完整解析一致
 #include "agentxx-test/client/test_tui_stream.h"
 
 #include "agentxx-client/io/tui/agent_tui.h"
@@ -44,7 +44,7 @@ namespace {
 
 using namespace ftxui;
 
-/// 一次性全量解析 + 构建 (O(n), 作为“期望结果”基线)
+/// 一次性完整解析 + 构建 (O(n), 作为“期望结果”基线)
 Element fullRender(
     std::string_view                                    text,
     markdown::Theme const&                              theme,
@@ -106,11 +106,11 @@ std::string toScreen(Element el, int w, int h) {
     return screen.ToString();
 }
 
-/// 断言: 增量渲染器在给定文本的渲染结果与一次性全量解析一致
+/// 断言: 增量渲染器在给定文本的渲染结果与一次性完整解析一致
 void expectIncrementalEqualsFull(std::string_view text, int width, std::string const& tag) {
     auto const& theme = markdown::theme_default();
 
-    // 期望值: 一次性全量解析
+    // 期望值: 一次性完整解析
     std::vector<std::unique_ptr<markdown::DomBuilder>> keepFull;
     auto full = fullRender(text, theme, width, keepFull) | color(Color::White);
 
@@ -136,7 +136,7 @@ void expectIncrementalEqualsFull(std::string_view text, int width, std::string c
     }
 }
 
-/// 断言: 逐字节 feed 过程中每个中间前缀的增量渲染都与全量一致
+/// 断言: 逐字节 feed 过程中每个中间前缀的增量渲染都与完整解析一致
 void expectIncrementalPrefixesEqualFull(std::string_view text, int width) {
     auto const& theme = markdown::theme_default();
 
@@ -818,7 +818,7 @@ void testTuiStreamScenario9(asio::io_context& ioCtx) {
 // - 流式正文全空白: 不生成 Assistant 消息
 // - MessageUITip / InsertMessage 空文本: 不入列表
 // - UpdateMessage 更新为空 content: 移除已存在的同名消息
-// - onSync / Sync 全量历史中的空 content 消息: 过滤
+// - onSync / Sync 完整历史中的空 content 消息: 过滤
 void testTuiStreamScenario10(asio::io_context& ioCtx) {
     // ①② TurnStart 空文本 (无附件不入列表; 有附件入列表)
     {
@@ -970,7 +970,7 @@ void testTuiStreamScenario10(asio::io_context& ioCtx) {
         }
     }
 
-    // ⑧ onSync 全量历史: 空 content 消息过滤, 非空消息保留
+    // ⑧ onSync 完整历史: 空 content 消息过滤, 非空消息保留
     {
         TestTUIClientIO client(ioCtx);
 

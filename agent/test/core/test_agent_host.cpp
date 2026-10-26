@@ -100,7 +100,7 @@ asio::awaitable<void> test_host_registry() {
     co_return;
 }
 
-/// 验证: agent 节点容器派生子代理端到端 (根 agent 总线 service.subagent → agent 节点容器 → 独立
+/// 验证: agent 节点容器派生子代理全流程 (根 agent 总线 service.subagent → agent 节点容器 → 独立
 /// agent)
 /// - 子代理使用独立 AgentContext (配置为轻量: 不建 MCP 连接)
 /// - 输出 = 模拟 LLM 响应; 子代理节点运行后回收 (registry 仅剩 root)
@@ -196,8 +196,8 @@ asio::awaitable<void> test_host_spawn_e2e() {
     co_return;
 }
 
-/// 验证: 同上下文模式派生子代理 (messages 结构化透传 + sessionId 指定)
-/// - messages 原样透传为子代理初始上下文 (含 system, 不做文本转录,
+/// 验证: 同上下文模式派生子代理 (messages 结构化原样转发 + sessionId 指定)
+/// - messages 原样转发为子代理初始上下文 (含 system, 不做文本转录,
 ///   不插入子代理默认提示)
 /// - 子代理运行在指定 thread, 强制使用父会话当前模型 (忽略子代理 config 默认)
 /// - 对照: 默认模式使用独立 subagent 线程 + config 默认模型 (不受父会话
@@ -235,7 +235,7 @@ asio::awaitable<void> test_host_spawn_same_context() {
     std::expected<agentxx::events::RespSubagentBatch, std::string> normalResp;
     std::atomic<bool>                                              finished{false};
 
-    // 透传的结构化消息前缀 (模拟压缩场景: 父 system + 历史消息)
+    // 原样转发的结构化消息前缀 (模拟压缩场景: 父 system + 历史消息)
     const utilxx_base::Json prefix = utilxx_base::Json::array({
         {{"role", "system"},    {"content", "PARENT SYSTEM PROMPT"}},
         {{"role", "user"},      {"content", "user old msg"}        },
@@ -264,7 +264,7 @@ asio::awaitable<void> test_host_spawn_same_context() {
                         .subagentName = "subagent_task",
                         .systemPrompt = "",
                         .message      = "",
-                        // 结构化消息透传 (可含 system, 原样透传)
+                        // 结构化消息原样转发 (可含 system, 原样转发)
                         .messages = prefix,
                         // 同上下文: 运行在父线程, 共享上下文前缀
                         .sessionId = "parent-session",
@@ -331,8 +331,8 @@ asio::awaitable<void> test_host_spawn_same_context() {
 
     // ③ 消息前缀: system 由引擎统一替换为 (子 config 拷贝自父的) systemPrompt,
     //    与父会话请求前缀一致 (这正是 KV cache 前缀一致的关键);
-    //    其余消息原样透传 (无默认提示插入, 无文本转录);
-    //    透传段以 assistant 结尾时, 引擎按与父会话相同的 repairMessages 规则
+    //    其余消息原样转发 (无默认提示插入, 无文本转录);
+    //    原样转发段以 assistant 结尾时, 引擎按与父会话相同的 repairMessages 规则
     //    补充 user "[Please continue]" (两边一致, 前缀仍命中)
     {
         const auto& reqMsgs = sameCtxReqBody["messages"];
@@ -344,7 +344,7 @@ asio::awaitable<void> test_host_spawn_same_context() {
             reqMsgs[0].value("content", std::string{}).find("You are a helpful assistant.")
             != std::string::npos
         );
-        // 其余消息原样透传
+        // 其余消息原样转发
         for (size_t i = 1; i < prefix.size(); ++i) {
             XX_TEST_EXPECT_EQ(
                 reqMsgs[i].value("role", std::string{}),
@@ -394,7 +394,7 @@ asio::awaitable<void> test_host_spawn_same_context() {
 
 /// 验证: 子代理工具策略 (tools 参数)
 /// - [] = 无工具; ["agentxx_share_store"] = 自定义白名单;
-///   ["*"] = 全量继承父 agent 工具; 缺省 = 子代理默认全量
+///   ["*"] = 全部继承父 agent 工具; 缺省 = 子代理默认全部
 asio::awaitable<void> test_host_spawn_tool_policy() {
     auto sim     = startDaSimServer();
     auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
@@ -460,9 +460,9 @@ asio::awaitable<void> test_host_spawn_tool_policy() {
             co_await spawnOne(utilxx_base::Json::array(), "none");
             // ② 自定义白名单
             co_await spawnOne(utilxx_base::Json::array({"agentxx_share_store"}), "custom");
-            // ③ 全量继承父工具
+            // ③ 全部继承父工具
             co_await spawnOne(utilxx_base::Json::array({"*"}), "inherit");
-            // ④ 缺省 (子代理默认全量)
+            // ④ 缺省 (子代理默认全部)
             co_await spawnOne(std::nullopt, "default");
             finished = true;
         }),

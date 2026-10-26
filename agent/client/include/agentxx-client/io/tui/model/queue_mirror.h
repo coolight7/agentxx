@@ -36,7 +36,7 @@ public:
         int64_t                                      createdAtMs = 0;
     };
 
-    /// 投递结果 (与 `agentxx::agent::InputStatus` 同取值, 用文本保存以便透传)
+    /// 投递结果 (与 `agentxx::agent::InputStatus` 同取值, 用文本保存以便原样转发)
     struct AckRecord {
         uint64_t    requestId = 0;
         std::string status; ///< started / queued / steered / rejected

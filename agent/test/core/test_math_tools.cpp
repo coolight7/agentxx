@@ -573,7 +573,7 @@ static asio::awaitable<void> test_error_handling(std::weak_ptr<agentxx::agent::A
     co_return;
 }
 
-// 10. 插件动态加载与端到端测试
+// 10. 插件动态加载与全流程测试
 static std::string findMathPluginPath() {
     namespace fs = std::filesystem;
     std::error_code       ec;

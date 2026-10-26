@@ -51,7 +51,7 @@ public:
     ) override;
 
     /// 一次工具调用的执行阶段划分 (prepare → run → finalize)
-    /// - prepare 与 finalize 按声明顺序串行; 只有 run 阶段可以被并发执行,
+    /// - prepare 与 finalize 按声明顺序串行; 只有 run 阶段可以并发执行,
     ///   因此并发安全 (只读) 的工具必须在 [supportsParallel] 上声明
     /// - 结构在单轮 toolcall 的协程内使用, 不跨轮次保存
     struct PreparedToolCall {
@@ -158,7 +158,7 @@ public:
     /// 执行单条已准备的调用并把结果写入槽位, 所有异常在此统一处理 (不向外抛)
     /// - 取消 (含 asio 取消导致的 operation_aborted): 记为 `outError`, 槽位保持空
     /// - 中断 (NodeInterrupt): 置 `outInterrupted`, 槽位写 `[Interrupt]` 结果
-    /// - 其余异常: 兜底按取消处理 (普通工具错误已在 [runPreparedToolCall] 内转为结果文本)
+    /// - 其余异常: 默认按取消处理 (普通工具错误已在 [runPreparedToolCall] 内转为结果文本)
     /// - 派生协程调用它时不得让异常逃逸 (detached 处理器的未捕获异常会终止进程)
     asio::awaitable<void> runPreparedToolCallGuarded(
         const PreparedToolCall&               prepared,

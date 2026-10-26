@@ -3,9 +3,9 @@
 // 背景 (见 plan §3.7 / §4):
 // - 上下文压缩派生的子代理与父会话"同上下文", 期望命中父会话已缓存的前缀
 // - 此前它有两条不一致: ① 子代理按自己的配置重建 system (缺记忆文件/技能清单等
-//   运行时段落) ② 子代理没有工具定义; 两者都让请求前缀在很早的位置分叉
+//   运行时段落) ② 子代理没有工具定义; 两者都让请求前缀在很早的位置就不同
 // - 修复后: 保留调用方给的 system 消息 + 继承父会话上一次请求的工具定义,
-//   并且在本次运行内不执行任何工具 (工具定义只用于对齐前缀)
+//   并且在本次运行内不执行任何工具 (工具定义只用于保持前缀一致)
 //
 // 本模块用模拟器的"模拟前缀缓存"度量命中比例 (主程序侧缓存用量解析会把
 // cached_tokens 记入用量台账), 因此断言的是真实的请求前缀一致性。
@@ -259,7 +259,7 @@ asio::awaitable<void> run_prefix_body(
               << g_da_sim_last_prompt_tokens << " (ratio " << g_da_sim_last_cache_ratio << ")"
               << std::endl;
     XX_TEST_EXPECT_TRUE(g_da_sim_last_cache_ratio >= 0.9);
-    // ⑤ 不执行工具: 工具定义仍在请求里 (对齐前缀), 且不改写 tool_choice ——
+    // ⑤ 不执行工具: 工具定义仍在请求里 (保持前缀一致), 且不改写 tool_choice ——
     //    真实网关实测表明该字段与父请求不同会让前缀缓存不再命中,
     //    因此压缩请求与父请求的 tool_choice 必须完全一致
     XX_TEST_EXPECT_EQ(compactRequest.value("tool_choice", std::string{}), parentToolChoice);

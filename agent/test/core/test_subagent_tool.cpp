@@ -12,7 +12,7 @@
 //      (interruptArgs: name="subagent", tasks 数组字段完整映射, resultId)
 //   4) resume 结果提取: 预置 interruptResult 后按 makeSubagentResumeKey 规则
 //      提取; 单任务返回纯文本 / 多任务返回 json 数组 / 缺失 key 的任务跳过 /
-//      resultId 为空按任务序号兜底 (summarization 直接调用路径)
+//      resultId 为空时按任务序号生成默认值 (summarization 直接调用路径)
 //   5) parseSubagentBatchFromInterrupt: 统一批量语义解析 + 旧单发格式兼容
 //   6) 写入侧 buildSubagentResumeValues 与读取侧 execute_async 的 key 规则
 //      一致 (含 hasError 任务写 {"error": ...})
@@ -392,7 +392,7 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
             const auto& tasks = arg.arg["tasks"];
             XX_TEST_EXPECT_TRUE(tasks.is_array());
             XX_TEST_EXPECT_EQ(tasks.size(), size_t{2});
-            // 任务 1: 全字段透传
+            // 任务 1: 全字段原样转发
             XX_TEST_EXPECT_EQ(tasks[0].value("subagent", std::string{}), std::string{"worker"});
             XX_TEST_EXPECT_EQ(tasks[0].value("system_prompt", std::string{}), std::string{"sp-1"});
             XX_TEST_EXPECT_EQ(tasks[0].value("message", std::string{}), std::string{"task one"});
@@ -443,7 +443,7 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
         // --- C. 前缀复用开关 (压缩等内部调用方) 必须原样进中断参数 ---
         // 这三个开关只有经中断参数传到 AgentHost 才生效; 早期只解析了
         // sessionId/tools/enable_summarization, 压缩请求的工具段因此与父会话
-        // 分叉 (上游前缀缓存不命中), 此处锁定传递过程
+        // 分支 (上游前缀缓存不命中), 此处锁定传递过程
         {
             env->resetInterruptState();
             utilxx_base::Json args{
@@ -580,7 +580,7 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
             XX_TEST_EXPECT_EQ(parsed[1].get<std::string>(), std::string{"second result"});
         }
 
-        // --- C. resultId 全空 (summarization 直接调用路径): 按任务序号兜底编号 ---
+        // --- C. resultId 全空 (summarization 直接调用路径): 按任务序号生成默认编号 ---
         {
             env->resetInterruptState();
             utilxx_base::Json args{
@@ -669,7 +669,7 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
             XX_TEST_EXPECT_EQ(r, std::string{"only second"});
         }
 
-        // --- F. resultId 为空且按序号未命中: 兜底取 map 第一个字符串值 ---
+        // --- F. resultId 为空且按序号未命中: 回退取 map 第一个字符串值 ---
         {
             env->resetInterruptState();
             utilxx_base::Json args{
@@ -685,7 +685,7 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
             env->ctx->middlewareHandleContext->setGraphDataItemValue<utilxx_base::Json>(
                 env->sessionId,
                 agentxx::middleware::MiddlewareContext::graphDataKey_interruptResult,
-                // 序号 key "1" 缺失 (如旧版写入方以其他规则命名), 兜底逻辑生效
+                // 序号 key "1" 缺失 (如旧版写入方以其他规则命名), 回退逻辑生效
                 utilxx_base::Json{
                     {"legacy_key", "fallback string"}
             }
@@ -700,7 +700,7 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
     {
         // --- A. 统一批量语义: 全字段解析 ---
         {
-            // 结构化透传消息 (逐层构造, 避免深层内联嵌套初始化)
+            // 结构化原样转发消息 (逐层构造, 避免深层内联嵌套初始化)
             utilxx_base::Json passthroughMsg;
             passthroughMsg["role"]    = "system";
             passthroughMsg["content"] = "sys";
@@ -834,7 +834,7 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
                 .content  = "payload-one",
             });
             resp.results.push_back(agentxx::events::RespSubagentBatchItem{
-                .resultId = "", // 无 result_id → 按序号兜底 (第 2 个任务)
+                .resultId = "", // 无 result_id → 按序号回退 (第 2 个任务)
                 .content  = "payload-two",
             });
             utilxx_base::Json resumeValues;
@@ -876,7 +876,7 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
             XX_TEST_EXPECT_EQ(parsed[1].get<std::string>(), std::string{"payload-two"});
         }
 
-        // --- B. 失败任务: hasError → 写入 {"error": errorMessage}, 读取端原样透传 ---
+        // --- B. 失败任务: hasError → 写入 {"error": errorMessage}, 读取端原样转发 ---
         {
             agentxx::events::RespSubagentBatch resp;
             resp.results.push_back(agentxx::events::RespSubagentBatchItem{

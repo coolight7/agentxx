@@ -785,7 +785,7 @@ static std::string buildTodosSummary(const utilxx_base::Json& plan) {
 }
 
 /// 追加 Todo 列表与 Note 备忘 items (消息装饰/类型级渲染器/Info 段落共用,
-/// 避免多处渲染漂移; 调用方见 [buildPlanItems])
+/// 避免多处渲染不一致; 调用方见 [buildPlanItems])
 /// - 组件项用描述层与 kit 组装: 文本行是 Text (tone 空 = 普通文本色)
 static void
     appendTodoAndNoteItems(const utilxx_base::Json& plan, std::vector<pluginxx::ui::Item>& items) {
@@ -838,7 +838,7 @@ static void
 ///   dispatch 动作 planning.open_graph 弹窗; owner_id 由主程序组装)。
 ///   前缀与按钮是**相邻两项**: 客户端把相邻的 Text + Button 渲染成同一行
 ///   (按钮紧跟文本之后, 见 [renderItems] 的合并说明)
-/// - plan 显式带 items 数组时直接透传 (read 模式占位提示等自定义内容)
+/// - plan 显式带 items 数组时直接原样转发 (read 模式占位提示等自定义内容)
 static utilxx_base::Json buildPlanItems(const utilxx_base::Json& plan, bool graphAsButton) {
     if (plan.contains("items") && plan["items"].is_array()) {
         return plan["items"];
@@ -1235,7 +1235,7 @@ static int planningClientSetup(ClientCtx* ctx) {
             }
         }
     }
-    // 通用交互绑定 (方案 A fallback: target_id="" 本实例兜底, 一次永久生效):
+    // 通用交互绑定 (方案 A fallback: target_id="" 本实例默认绑定, 一次永久生效):
     // - Info 段 / decor 按钮均以 action_id="planning.open_graph" 声明,
     //   owner_id 由主程序组装 (section_id / tool_call_id), 此处无需逐个 bind
     // - ui 缺失或 bind 为 NULL (CLI/老主程序) 时静默降级: 内容仍推送, 按钮不可点

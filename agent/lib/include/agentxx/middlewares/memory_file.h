@@ -75,7 +75,7 @@ protected:
     asio::awaitable<std::optional<std::string>>
         buildSectionAsync(const agentxx::agent::PromptRefreshContext& ctx);
 
-    /// 读取单个文件 (异步 I/O 可用时异步读, 否则同步兜底)
+    /// 读取单个文件 (异步 I/O 可用时异步读, 否则同步回退)
     /// - `return` 读到的内容 (已转 UTF-8); 失败返回 nullopt 并写入错误文本
     asio::awaitable<std::optional<std::string>>
         readFileAsync(const std::string& absolutePath, std::string& errorOut);

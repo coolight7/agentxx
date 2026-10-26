@@ -71,7 +71,7 @@ private:
 
 /// 子代理委派共享逻辑 (中断处理循环写入侧 与 SubAgentManagerTool 读取侧共用)
 /// - 消除 BaseAgent / AgentHost / SubAgentManagerTool 三处重复的 key 规则
-///   与参数组装, 防止规则漂移
+///   与参数组装, 防止规则不一致
 /// - 中断参数格式: {tasks: [...]} 数组 (SubAgentManagerTool 构造);
 ///   兼容单发格式 (直接含 subagent 字段时包装为 1 个 task)
 

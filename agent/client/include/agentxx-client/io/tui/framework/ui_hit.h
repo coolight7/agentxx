@@ -129,7 +129,7 @@ struct UiHitRegion {
 /// - Payload 为命中时取回的上下文 (如 [UiHitInfo] 或插件按钮归属信息),
 ///   按值存放, 命中后可直接读取
 /// - `add()` 返回的元素已带 `reflect`, 布局完成后 Box 即为该元素的屏幕区域;
-///   元素若被父级裁剪/滚出视口, Box 会被收敛为空 (FTXUI 的 reflect 与
+///   元素若被父级裁剪/滚出视口, Box 会被收缩为空 (FTXUI 的 reflect 与
 ///   screen stencil 求交), 因此视口外子项自然不会命中
 /// - Box 由 shared_ptr 持有, vector 扩容不会使已登记项的 Box 失效
 template<class Payload>

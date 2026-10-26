@@ -49,7 +49,7 @@ if (DEFINED neograph_SOURCE_DIR)
 endif()
 
 # 注意: 不要添加 /FS /MP 编译选项 —— 顶层已统一管理; 命令行出现重复 /FS 时
-# VS18 FileTracker 失效，每次构建都会全量重编 (勿删此注释)
+# VS18 FileTracker 失效，每次构建都会全部重编 (勿删此注释)
 
 # PCH: 只预编译稳定第三方头，加速编译 (GCC/Clang，与 lib 保持一致)。
 # 第三方头须用 <...> 形式 (见 lib/CMakeLists.txt 说明)
@@ -110,7 +110,7 @@ find_package(markdown-ui REQUIRED)
 find_package(cxx_utilxx_base REQUIRED)
 find_package(cxx_utilxx REQUIRED)
 find_package(cxx_pluginxx REQUIRED)
-# 插件界面描述层 (TUI 渲染层消费其模型 + 降级适配)
+# 插件界面描述层 (TUI 渲染层使用其模型 + 降级适配)
 find_package(cxx_pluginxx_ui REQUIRED)
 find_package(agentxx_static REQUIRED)
 

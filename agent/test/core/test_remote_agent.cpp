@@ -408,7 +408,7 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
             = WsAgentIOTransport::deserialize(WsAgentIOTransport::serialize(WireMessage{legacy}));
         XX_TEST_EXPECT_TRUE(back.has_value());
         if (back) {
-            // 缺省请求 (全量列举): 分页字段序列化时省略, 反序列化为默认值
+            // 缺省请求 (全部列举): 分页字段序列化时省略, 反序列化为默认值
             auto* r = std::get_if<agentxx::agent::WireListSessions>(&*back);
             XX_TEST_EXPECT_TRUE(r != nullptr);
             if (r) {
@@ -459,7 +459,7 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
     }
     {
         // 插件事件转发: WirePluginData 序列化往返 (载荷为插件定义 schema 的
-        // JSON 字符串, 主程序只透传; 系统资源占用数据通道 (agentxx_system_monitor
+        // JSON 字符串, 主程序只原样转发; 系统资源占用数据通道 (agentxx_system_monitor
         // 周期采集) 与 codegraph 索引状态均走本通道)
         agentxx::agent::WirePluginData pd;
         pd.plugin = "agentxx_system_monitor";
@@ -951,7 +951,7 @@ static asio::awaitable<void> test_session_controller_replay() {
 }
 
 // ---------------------------------------------------------------------------
-// 5. SessionServerAgentIO: 缓冲过旧 -> 回退全量 sync
+// 5. SessionServerAgentIO: 缓冲过旧 -> 回退完整 Sync
 // ---------------------------------------------------------------------------
 
 static asio::awaitable<void> test_session_controller_replay_fallback() {
@@ -980,7 +980,7 @@ static asio::awaitable<void> test_session_controller_replay_fallback() {
         sc->sendToPeer(d);
     }
 
-    // lastSeq=2 -> 缓冲保留 8,9,10; 2+1=3 < 8 -> 全量 sync
+    // lastSeq=2 -> 缓冲保留 8,9,10; 2+1=3 < 8 -> 完整 Sync
     agentxx::agent::WireHello hello{"session", "", 2, ""};
     sc->handleHello(hello);
 
@@ -990,7 +990,7 @@ static asio::awaitable<void> test_session_controller_replay_fallback() {
         XX_TEST_EXPECT_TRUE(liveMsg.has_value());
     }
 
-    // HelloAck 须最先到达, 随后全量 WireSyncPayload
+    // HelloAck 须最先到达, 随后全部 WireSyncPayload
     auto ackMsg = co_await clientT->recv();
     XX_TEST_EXPECT_TRUE(ackMsg.has_value());
     if (ackMsg) {
@@ -1009,11 +1009,11 @@ static asio::awaitable<void> test_session_controller_replay_fallback() {
 }
 
 // ---------------------------------------------------------------------------
-// SessionServerAgentIO: 客户端记录的序号超过服务端当前 seq -> 回退全量 sync
+// SessionServerAgentIO: 客户端记录的序号超过服务端当前 seq -> 回退完整 Sync
 //   - 服务端进程重启/会话重建后 seq 从 0 重新计数, 而客户端仍带旧序号 (如 100)
 //   - 如果只判 "缓冲最旧序号 > 客户端序号" 才回退: 客户端序号高于缓冲尾时返回**空增量**,
 //     客户端既收不到 sync 也收不到 delta → 重连成功后界面永不刷新
-//   - 当前设计: 客户端序号超过缓冲尾 -> 回退全量 sync (客户端据 sync.deltaSeq 重置序号)
+//   - 当前设计: 客户端序号超过缓冲尾 -> 回退完整 Sync (客户端据 sync.deltaSeq 重置序号)
 // ---------------------------------------------------------------------------
 
 static asio::awaitable<void> test_session_controller_seq_regression_fallback() {
@@ -1051,7 +1051,7 @@ static asio::awaitable<void> test_session_controller_seq_regression_fallback() {
         XX_TEST_EXPECT_TRUE(live.has_value());
     }
 
-    // HelloAck 后必须收到**全量 sync** (而非空增量): 否则客户端永远停在旧状态
+    // HelloAck 后必须收到**完整 Sync** (而非空增量): 否则客户端永远停在旧状态
     auto ackMsg = co_await clientT->recv();
     XX_TEST_EXPECT_TRUE(ackMsg.has_value());
     if (ackMsg) {
@@ -1888,7 +1888,7 @@ static asio::awaitable<void> test_remote_cancel() {
 }
 
 // ---------------------------------------------------------------------------
-// 16. 重连 sync: 重连时 server 下发全量 sync, 客户端 onSync 被调用
+// 16. 重连 sync: 重连时 server 下发完整 Sync, 客户端 onSync 被调用
 // ---------------------------------------------------------------------------
 
 static asio::awaitable<void> test_remote_reconnect_sync() {
@@ -2024,7 +2024,7 @@ static asio::awaitable<void> test_remote_reconnect_sync_watermark() {
             co_return;
         }
         // 服务端重启后: 会话重建, delta seq 从 0 重新计数
-        // 1) 全量 sync (快照序号 = 0) 之后的新增量必须被投递
+        // 1) 完整 Sync (快照序号 = 0) 之后的新增量必须被投递
         {
             agentxx::agent::WireSyncPayload sp;
             sp.deltaSeq = 0;
@@ -2234,7 +2234,7 @@ static asio::awaitable<void> test_remote_auth_rejected() {
 
 // ---------------------------------------------------------------------------
 // 19. SessionServerAgentIO: switchSession 切换会话
-//     (回推全量 Sync + 模型信息 + 上下文统计; 运行态拒绝切换; 同会话校准)
+//     (回推完整 Sync + 模型信息 + 上下文统计; 运行态拒绝切换; 同会话校准)
 // ---------------------------------------------------------------------------
 
 static asio::awaitable<void> test_session_controller_switch_session() {
@@ -2272,7 +2272,7 @@ static asio::awaitable<void> test_session_controller_switch_session() {
     auto sc         = std::make_shared<SessionServerAgentIO>(ex, agent, scCfg);
     sc->setTransport(std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT)));
 
-    // ---- 正常切换: 回推全量 Sync + 模型信息 + 上下文统计 ----
+    // ---- 正常切换: 回推完整 Sync + 模型信息 + 上下文统计 ----
     sc->switchSession("target-session");
     XX_TEST_EXPECT_EQ(std::string{sc->sessionId()}, std::string("target-session"));
 
@@ -2334,7 +2334,7 @@ static asio::awaitable<void> test_session_controller_switch_session() {
         }
     }
 
-    // ---- 运行态拒绝切换 (客户端已前置拦截, 服务端兜底; 不产生任何消息) ----
+    // ---- 运行态拒绝切换 (客户端已前置拦截, 服务端再拦一次; 不产生任何消息) ----
     sc->setTurnActiveForTest(true);
     sc->switchSession("another-session");
     XX_TEST_EXPECT_EQ(std::string{sc->sessionId()}, std::string("target-session"));
@@ -2653,7 +2653,7 @@ static asio::awaitable<void> test_model_switch_with_next_input() {
     clientT->close();
     sc->stop();
     sim.stop();
-    // 让分离协程 (clientLoop 的挂起 recv / 传输循环) 在函数返回前收敛:
+    // 让分离协程 (clientLoop 的挂起 recv / 传输循环) 在函数返回前结束:
     // 它们按值捕获了传输对象, 但 turnResults/mu 仍按引用捕获, 提前返回会让
     // "晚到的唤醒"访问已析构的栈上对象
     co_await testSleep(ex, std::chrono::milliseconds{50});
@@ -2854,7 +2854,7 @@ static asio::awaitable<void> test_session_controller_one_to_many() {
     }
     sc->setTurnActiveForTest(false);
 
-    // 6. 中断协同测试: 控制器发起中断，两个客户端都收到请求，客户端 1 答复后双方结束
+    // 6. 中断配合测试: 控制器发起中断，两个客户端都收到请求，客户端 1 答复后双方结束
     auto interruptDone = std::make_shared<bool>(false);
     asio::co_spawn(
         ex,
@@ -2934,7 +2934,7 @@ static asio::awaitable<void> test_session_controller_one_to_many() {
         asio::detached
     );
 
-    // 消费掉客户端 1 和 2 上的 handleInterrupt 弹窗请求消息
+    // 处理掉客户端 1 和 2 上的 handleInterrupt 弹窗请求消息
     co_await client1->recv();
     co_await client2->recv();
 
@@ -3088,7 +3088,7 @@ static asio::awaitable<void> test_agent_server_multi_client() {
 // ---------------------------------------------------------------------------
 // 22. viewMessages 历史分页: 尾窗 hello 同步 + WireGetViewMessages 分页拉取
 //     (initialSyncTailCount>0 时首次接入仅同步末尾窗口; 客户端按绝对下标
-//      向上分页拉取更早历史; beforeIndex==0 兜底从末尾取; count==0 用默认页大小;
+//      向上分页拉取更早历史; beforeIndex==0 回退从末尾取; count==0 用默认页大小;
 //      viewMessages append-only 保证绝对下标恒定)
 // ---------------------------------------------------------------------------
 
@@ -3201,7 +3201,7 @@ static asio::awaitable<void> test_view_messages_pagination() {
         }
     }
 
-    // ---- beforeIndex == 0 兜底语义: 从末尾向前取 count 条 ----
+    // ---- beforeIndex == 0 默认语义: 从末尾向前取 count 条 ----
     sc->onPeerMessage(agentxx::agent::WireMessage{
         agentxx::agent::WireGetViewMessages{"pag-session", 0, 3}
     });
@@ -3234,7 +3234,7 @@ static asio::awaitable<void> test_view_messages_pagination() {
         }
     }
 
-    // ---- 越界 beforeIndex 收敛到总数; 不存在的会话回空页 ----
+    // ---- 越界 beforeIndex 限制到总数; 不存在的会话回空页 ----
     sc->onPeerMessage(agentxx::agent::WireMessage{
         agentxx::agent::WireGetViewMessages{"pag-session", 99999, 10}
     });

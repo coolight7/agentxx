@@ -508,7 +508,7 @@ struct ToolHeaderFixture {
         height(h) {
         // 颜色断言依赖真彩色 ANSI 序列 (如 "102;204;255"); FTXUI 会按运行
         // 环境检测色彩能力, 无 COLORTERM=truecolor 时降级 256 色 (38;5;N)
-        // 导致断言随环境漂移 —— 测试内强制声明 TrueColor 支持
+        // 导致断言随环境变化 —— 测试内强制声明 TrueColor 支持
         ftxui::Terminal::SetColorSupport(ftxui::Terminal::Color::TrueColor);
         sharedState.mutate([&](TUIRenderState& st) {
             st.pluginRegistry = makeTestToolRegistry();
@@ -1137,7 +1137,7 @@ void testTuiToolHeaderPendingRender() {
         );
     }
 
-    // 7. 端到端 (主程序内置渲染器): 未就绪帧不展示原始参数, 请求执行后切到特化摘要
+    // 7. 全流程 (主程序内置渲染器): 未就绪帧不展示原始参数, 请求执行后切到特化摘要
     {
         ToolHeaderFixture f;
         f.usePendingPluginManager();
@@ -1145,7 +1145,7 @@ void testTuiToolHeaderPendingRender() {
         const std::string pending = f.plainRender();
         XX_TEST_EXPECT_TRUE(pending.find("agentxx_share_store") == std::string::npos);
         XX_TEST_EXPECT_TRUE(pending.find("\"opt\"") == std::string::npos);
-        // 次帧: 内容区宽度经实测收敛后重新查询一次 (输入特征含宽度, 首帧宽度尚未
+        // 次帧: 内容区宽度经实测稳定后重新查询一次 (输入特征含宽度, 首帧宽度尚未
         // 测量, 请求的输入特征与后续帧不同)
         XX_TEST_EXPECT_TRUE(f.plainRender().find("\"opt\"") == std::string::npos);
 
@@ -1175,7 +1175,7 @@ void testTuiToolHeaderPendingRender() {
             R"({"opt":"new","text":"a\nb"})",
             false // 运行中
         );
-        // 逐帧驱动 io 直到运行中的特化摘要上屏 (布局宽度经实测收敛后才稳定)
+        // 逐帧驱动 io 直到运行中的特化摘要上屏 (布局宽度实测稳定后才定稿)
         std::string running;
         for (int i = 0; i < 8; ++i) {
             running = f.plainRender();

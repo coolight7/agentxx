@@ -24,7 +24,7 @@ constexpr size_t kPrefetchItems = 4;
 
 /// 视口布局节点: SetBox/Render 委托给 LazyScrollable 组件。
 ///
-/// 与 ftxui 内置 yframe+focusPositionRelative 方案 (需全量布局整列表) 不同:
+/// 与 ftxui 内置 yframe+focusPositionRelative 方案 (需全部布局整列表) 不同:
 /// - ComputeRequirement 不递归子项 (父级以 |flex 撑满, 不依赖 min_x/min_y)
 /// - SetBox 阶段只构建/定位"锚点到视口底部"这一段的子项 (懒构建 + 高度缓存),
 ///   锚点以上子项本帧零成本; 局部超出视口的部分由 screen.stencil 裁剪
@@ -165,7 +165,7 @@ void LazyScrollable::resetSelectionHighlight() {
 
 size_t LazyScrollable::quickHeightFor(size_t index) {
     // 粗略估算必须 O(1) (不解析文本/不渲染); measuredWidth_ 首帧布局前为 -1,
-    // 由回调自行兜底默认宽度
+    // 由回调自行给出默认宽度
     const size_t h = quickHeight_ ? quickHeight_(index, measuredWidth_) : 1;
     return std::max(static_cast<size_t>(1), h);
 }
@@ -291,7 +291,7 @@ void LazyScrollable::syncItemArrays(size_t count) {
     }
 
     // 头部前插区 (notifyPrepended 设置: 那时状态快照尚未刷新, 不能估算)
-    // 在此按新快照补齐粗略高度 —— 只补前插区这一段前缀, 不做全量扫描。
+    // 在此按新快照补齐粗略高度 —— 只补前插区这一段前缀, 不做全部扫描。
     // 前插区全部位于锚点上方: 补齐只改变 totalHeight_/rowsAboveAnchor_ (滚动条),
     // 视口内容不受影响 (不变量 1)
     if (unknownPrefix_ > 0) {
@@ -314,7 +314,7 @@ ftxui::Element& LazyScrollable::elementAt(size_t index) {
             return entry.item.element;
         }
     }
-    // 理论上不可达 (调用前必已 ensureElement); 兜底避免空指针崩溃
+    // 理论上不可达 (调用前必已 ensureElement); 这里补一次判断, 避免空指针崩溃
     static ftxui::Element fallback = ftxui::text("");
     return fallback;
 }
@@ -327,7 +327,7 @@ void LazyScrollable::ensureElement(size_t index) {
         markEnsured(index);
         return;
     }
-    // 不可缓存项按帧复用: 同一帧内多次布局迭代 (layoutAndMeasure 收敛循环)
+    // 不可缓存项按帧复用: 同一帧内多次布局迭代 (layoutAndMeasure 稳定循环)
     // 不重复调用 buildItem (如流式 markdown 解析开销大); 跨帧复用由
     // prepareLayout 开头的帧边界清理保证
     for (auto& entry : transientItems_) {
@@ -668,7 +668,7 @@ size_t LazyScrollable::layoutViewportFromAnchor(int contentWidth, size_t count, 
         const int  screenY = box_.y_min + cum;
         Box        itemBox{box_.x_min, contentXMax_, screenY, screenY + itemH - 1};
         if (fresh) {
-            // 测量时同宽度布局已收敛, 仅 SetBox 重定位
+            // 测量时同宽度布局已稳定, 仅 SetBox 重定位
             elementAt(i)->SetBox(itemBox);
         } else {
             // 跳过布局优化: 缓存命中 (key 未变 -> 内容未变) 且 box 与上帧一致时,
@@ -695,7 +695,7 @@ void LazyScrollable::prepareLayout(const ftxui::Box& box) {
     box_ = box;
     ++prepareSeq_;
 
-    // 上一帧的可见/已确保记录复位: 只处理上一帧记录过的条目, 不做 O(n) 全量填充
+    // 上一帧的可见/已确保记录复位: 只处理上一帧记录过的条目, 不做 O(n) 全部填充
     for (size_t i : visibleIndices_) {
         if (i < visibleBoxes_.size()) {
             visibleBoxes_[i] = kInvalidBox;

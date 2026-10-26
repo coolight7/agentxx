@@ -655,7 +655,7 @@ typedef struct AgentxxPluginGraphNodeTypeSpec {
     PluginxxStringView                type;       ///< 节点类型名 (须全局唯一)
     AgentxxPluginGraphNodeRunStartFn  run_start;  ///< 节点执行 (操作契约)
     AgentxxPluginGraphNodeRunCancelFn run_cancel; ///< 可空
-    void*                             user_data;  ///< 透传给 run_start/run_cancel
+    void*                             user_data;  ///< 原样转给 run_start/run_cancel
     /// 可选节点 config JSON Schema (Draft 2020-12 片段; 仅供导出/文档, 引擎不校验)
     PluginxxStringView config_schema_json;
 } AgentxxPluginGraphNodeTypeSpec;
@@ -727,7 +727,7 @@ typedef struct AgentxxPluginGraphIface {
 /// 3. **调用点** (call_point_async): 只拿数据 —— 不写值缓存、不记置空、不改调用方
 ///    会话与上下文、不发界面提示、不落盘。
 ///
-/// 实现链顺序: `plugin` 层 (插件 / FFI 主程序) → `core` 层 (libagentxx 自身兜底);
+/// 实现链顺序: `plugin` 层 (插件 / FFI 主程序) → `core` 层 (libagentxx 自身的实现);
 /// 层内按 `(priority 升序, 登记顺序)`, 默认优先级带为插件 `0` / FFI 主程序 `1000`。
 /// 每个实现返回 `{"value": ...}` 给出值、`{"disable": true}` 显式置空 (不再问后面的
 /// 实现)、`{}` 表示没意见 (继续问下一个)。

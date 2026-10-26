@@ -24,7 +24,7 @@ struct ShareStoreOffload {
 
 /// 单条文本过长时截断, 并把原文存入会话 share store
 ///
-/// 同一套判定与提示格式的三处用途 (共用本实现, 避免规则漂移):
+/// 同一套判定与提示格式的三处用途 (共用本实现, 避免规则不一致):
 /// - toolcall 输出压缩: 见 [agentxx::nodes::ToolcallWrapNode::finalizeToolCall]
 /// - agent 队列输入进入轮次时: 见 [agentxx::agent::BaseAgent::runTurnAsync]
 /// - next-step / inject 注入进入上下文/请求时: 见
@@ -34,7 +34,7 @@ struct ShareStoreOffload {
 /// 返回的文本只保留开头片段与一行提示 —— 提示里给出 id、总行数与可见行范围,
 /// 模型据此用 `agentxx_share_store` 工具按行取回剩余内容。
 ///
-/// 截断分两种 (与 share store 按行分页的能力对齐):
+/// 截断分两种 (与 share store 按行分页的方式一致):
 /// - 按行截断后还剩得下内容 (最后一个换行符落在片段的前 1/3 之后): 截到最后一条
 ///   完整行, 提示给出 `show [1, N], hide [N+1, 总行数]`
 /// - 内容集中在少数行 (例如只有一行但特别长, 按行截断几乎不剩内容): 按字符截断,

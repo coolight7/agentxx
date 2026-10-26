@@ -60,7 +60,7 @@ void test_json_ctor_scalar() {
     Json f(false);
     XX_TEST_EXPECT_EQ(f.get<bool>(), false);
 
-    // 整数族 (全部收敛到 NumberInt/NumberUint)
+    // 整数族 (统一放进 NumberInt/NumberUint)
     Json i(-7);
     XX_TEST_EXPECT_TRUE(i.is_number() && i.is_number_integer());
     XX_TEST_EXPECT_EQ(i.get<long long>(), (long long)-7);
@@ -252,7 +252,7 @@ void test_json_access() {
     // 只读 [] 缺失返回全局 Null (不抛)
     const Json& co = o;
     XX_TEST_EXPECT_TRUE(co["absent"].is_null());
-    // 非对象可写 [] 走 oob 兜底 (不崩溃; 写入丢失)
+    // 非对象可写 [] 走 oob 默认路径 (不崩溃; 写入丢失)
     Json num(1);
     (void)num["k"];
     // 越界下标只读返回 Null
@@ -499,7 +499,7 @@ void test_json_get_string_array() {
     }
 }
 
-/// Json::value 宽松读取 (宽松读取收敛后的共用入口)
+/// Json::value 宽松读取 (宽松读取统一后的共用入口)
 void test_json_value_loose_read() {
     auto j = Json::parse(R"({"s":"x","n":7,"f":1.5,"b":true,"z":null,"arr":[1]})");
     // 命中类型: 取实际值

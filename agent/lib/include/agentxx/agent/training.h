@@ -180,7 +180,7 @@ struct EvolutionTrainingConfig {
     /// 保留的 top N 个 prompt 变体
     int topK = 100;
 
-    /// 每轮从 top 中选取多少个进行变异生成新变体
+    /// 每轮从 top 中选取多少个做变异生成新变体
     int mutateCount = 10;
 
     /// 每个选中的变体生成几个子代
@@ -206,7 +206,7 @@ struct EvolutionTrainingConfig {
     /// 连续 N 代最佳分数无提升则停止训练（0 表示不自动停止）
     int maxGenerationsWithoutImprovement = 5;
 
-    /// 是否使用 LLM 进行语义变异；false 则使用字符级随机变异
+    /// 是否用 LLM 做语义变异；false 则使用字符级随机变异
     bool useLLMMutation = true;
 
     /// 评估前随机打乱用例顺序：早终检查基于前 k 例均分，
@@ -288,13 +288,13 @@ protected:
 
     std::string generateId();
 
-    /// 对字符串进行随机变异：以 mutationRate 概率对每个字符进行插入/删除/替换
+    /// 对字符串做随机变异：以 mutationRate 概率对每个字符进行插入/删除/替换
     /// 注意: 字符级变异会破坏 prompt 语义，仅作为 LLM 变异不可用时的降级手段
     std::string mutateString(std::string_view input, double mutationRate);
 
     PromptVariant createChildVariantCharMut(const PromptVariant& parent, double mutationRate);
 
-    /// 使用 LLM 对 prompt 进行语义级变异，生成多样化的探索变体
+    /// 用 LLM 对 prompt 做语义级变异，生成多样化的探索变体
     asio::awaitable<PromptVariant>
         createChildVariantLLMMut(const PromptVariant& parent, const EvolutionTrainingConfig& cfg);
 

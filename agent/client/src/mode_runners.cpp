@@ -47,7 +47,7 @@ namespace client {
 // 会话 sessionId 生成
 // ---------------------------------------------------------------------------
 
-/// 随机数兜底: random_device 在极端环境 (部分旧 Android/嵌入式) 可能抛异常,
+/// 随机数的备用方案: random_device 在极端环境 (部分旧 Android/嵌入式) 可能抛异常,
 /// 退回以时钟为种子, 保证生成函数绝不失败
 static uint32_t randomSeed() {
     return agentxx::util::catchError<uint32_t>(
@@ -191,7 +191,7 @@ static std::shared_ptr<agent::SessionServerAgentIO> setupLocalUnifiedDirect(
     // 历史分页尾窗: 仅对 TUI 客户端启用 —— 恢复长会话时服务端只回推末尾
     // 100 条 (与 TUIClientAgentIO::kHistoryPageSize 分页页大小一致), 用户
     // 向上滚动到窗口顶部时经 WireGetViewMessages 分页拉取更早历史;
-    // stdio 客户端无滚动交互, 保持全量同步 (initialSyncTailCount=0)
+    // stdio 客户端无滚动交互, 保持完整同步 (initialSyncTailCount=0)
     if (dynamic_cast<TUIClientAgentIO*>(clientIO.get()) != nullptr) {
         scCfg.initialSyncTailCount = kTuiInitialSyncTailCount;
     }
@@ -216,7 +216,7 @@ static std::shared_ptr<agent::SessionServerAgentIO> setupLocalUnifiedDirect(
     // 一直排队, 导致弹窗首次打开要等 init 完成才有数据。
     // 各 Wire 消息处理在 init 前均安全:
     // - WireGetModel: getCurrentModelName 在 modelRegistry 为空时回退 agentConfig
-    // - WireHello: 历史为空时全量同步为空; Session 未绑定 io 线程时 assertIoThread 为 no-op
+    // - WireHello: 历史为空时完整同步为空; Session 未绑定 io 线程时 assertIoThread 为 no-op
     // - WireUserInput: 仅入队, 由 init 之后启动的 run() 循环处理 (run 依赖 engine)
     asio::co_spawn(
         *agent->ioCtx,

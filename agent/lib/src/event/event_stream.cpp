@@ -306,8 +306,8 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
             if (thinkDurationMs == 0) {
                 thinkDurationMs = lastThinkSegDurationMs_;
             }
-            // 兜底: 若为非流式或无独立 THINKING chunk 的思考 (如仅返回 reasoning_tokens / encrypted
-            // reasoning), 但有节点计时, 则以节点运行耗时兜底
+            // 回退: 若为非流式或无独立 THINKING chunk 的思考 (如仅返回 reasoning_tokens / encrypted
+            // reasoning), 但有节点计时, 则以节点运行耗时作为回退值
             if (thinkDurationMs == 0
                 && (isEncrypted || reasoningTokens > 0 || !reasoning.empty())) {
                 if (nodeStartTimeMs_ > 0) {
@@ -441,7 +441,7 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
             }
             // 回填对应的 Tool 消息 (assistant tool_calls 展开时已登记索引):
             // - 优先 O(1) 索引定位 (本轮已登记)
-            // - 未命中时回扫兜底 (如历史来自更早轮次/恢复中断场景)
+            // - 未命中时回扫补充 (如历史来自更早轮次/恢复中断场景)
             ViewMessage* target = nullptr;
             if (auto idxIt = toolCallHistoryIndex_.find(toolCallId);
                 idxIt != toolCallHistoryIndex_.end()
@@ -508,7 +508,7 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
     // (Session::kPersistThrottleMs), 而非整轮。
     // - 上下文写入 (含系统提示词更新 / 压缩回写) 不产生本事件, 因此不会重复落盘
     // - 分级: 工具结算立即落盘 (结果体积大且是后续推理的输入),
-    //   纯模型输出保持节流 (窗口内合并, 轮末权威保存兜底)
+    //   纯模型输出保持节流 (窗口内合并, 轮末权威保存作为保证)
     if (hasToolResult) {
         session_->persistNow("tool-settle");
     } else {
@@ -605,7 +605,7 @@ void EventBridge::handleNodeEnd(const neograph::graph::GraphEvent& event) {
     // 结算包先于 NodeEnd WireDelta 发送, client 先回填 Think 时长再收节点结束事件
     finalizeThinkSegment();
     // 生成阶段提示收尾: 节点结束即生成结束, 清除 client 侧占位提示
-    // (正常路径下正文/工具消息已先到达并让 client 清除; 此处兜底无输出即结束的场景)
+    // (正常路径下正文/工具消息已先到达并让 client 清除; 此处补充处理无输出即结束的场景)
     if (genStatusActive_) {
         emitGenStatus(agentxx::agent::WireDelta::GenPhase::Done);
     }
@@ -722,7 +722,7 @@ void EventBridge::publishModelToken(const std::string& token, std::string_view k
             }
         );
     };
-    // 后台任务登记: 有登记表时由它统一在关闭阶段取消并等待收敛
+    // 后台任务登记: 有登记表时由它统一在关闭阶段取消并等待结束
     if (ctxPtr->taskScope) {
         ctxPtr->taskScope->spawn("event-publish", std::move(task));
         return;

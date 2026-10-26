@@ -1,9 +1,9 @@
 /// 分阶段关闭测试
 ///
 /// 覆盖:
-/// - `TaskScope` 语义: 登记/取消/等待收敛/超时返回 false/累计计数
+/// - `TaskScope` 语义: 登记/取消/等待结束/超时返回 false/累计计数
 /// - `BaseAgent::shutdownAsync` 四个阶段: ① 停止受理新输入 (端点回
-///   `rejected` + `server_stopped`) ② 后台任务取消收敛 ③ 关闭插件 ④ 会话刷盘
+///   `rejected` + `server_stopped`) ② 后台任务取消并结束 ③ 关闭插件 ④ 会话刷盘
 /// - **不等待当前轮次结束**: 模型响应延迟期间调用 shutdown, 它在超时内返回,
 ///   此时轮次尚未产出结果 (轮次随后自行结束)
 #include "agentxx-test/core/test_shutdown_stages.h"
@@ -283,7 +283,7 @@ TestResult testTaskScopeSemantics() {
     XX_TEST_EXPECT_TRUE(cancelledObserved);
     XX_TEST_EXPECT_EQ(scope->totalSpawned(), uint64_t{2});
 
-    // 等待收敛: 全部结束返回 true; 超时返回 false
+    // 等待结束: 全部结束返回 true; 超时返回 false
     bool idle = true;
     asio::co_spawn(
         io,

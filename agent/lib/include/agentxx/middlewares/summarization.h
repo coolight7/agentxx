@@ -39,7 +39,7 @@ public:
 ///   (崩溃/被杀) 时不丢压缩结果, 重启后不会因上下文重新超限而反复压缩
 /// - 自动压缩经 NodeInterrupt 派生压缩子代理, resume 后本中间件从头重新执行:
 ///   压缩提示消息按挂起 id 复用 (更新而非追加), 不产生重复提示
-/// - 压缩失败 >= 2 次 (同一轮内) 或 token >= 95% 上限: 硬截断兜底, 保证请求能发出
+/// - 压缩失败 >= 2 次 (同一轮内) 或 token >= 95% 上限: 硬截断回退, 保证请求能发出
 class SummarizationMiddlewareHandle : public BaseMiddlewareHandle<_SummarizationMiddlewareState> {
 public:
 
@@ -133,9 +133,9 @@ public:
     /// 探索型调用序列折叠 (见 doSummarizeToolcall)
     void foldExploratoryToolcalls(std::vector<neograph::ChatMessage>& messages);
 
-    /// 按 token 预算 + 轮次对齐切分消息, 返回最近消息段的起始索引 (oldEnd)
+    /// 按 token 预算与轮次边界切分消息, 返回最近消息段的起始索引 (oldEnd)
     /// - [systemCount, oldEnd) 为可压缩段; [oldEnd, size) 为 recent (预算内, 至少 1 条)
-    /// - 对齐规则:
+    /// - 切分规则:
     ///   1. recent 开头为 tool 消息 → 回退到发起这组 toolcall 的 assistant (整组纳入 recent)
     ///   2. 压缩段末尾为 assistant(tool_calls) 且其 tool 结果在 recent 内 → 整组划入 recent,
     ///      避免压缩段以悬挂 tool_calls 结尾
@@ -151,7 +151,7 @@ public:
     /// 写回由调度方 (本中间件) 做。内部派生"用完即弃"的压缩子代理属于实现细节。
     ///
     /// - 请求参数: subagent="subagent_task", messages=当前完整上下文(含 system)
-    ///   + 末尾追加 user 压缩指令 (结构化透传, 无文本转录),
+    ///   + 末尾追加 user 压缩指令 (结构化原样转发, 无文本转录),
     ///   sessionId=父线程 (与父会话相同 threadid + 相同模型 → 命中 KV cache),
     ///   tools=[] (子代理无任何工具, 仅对当前上下文原样做压缩, 不经过
     ///   share_store 外置), enable_summarization=false (禁止二次压缩)
@@ -176,7 +176,7 @@ public:
 
     /// 经功能点 `agentxx.context.summarize` 取摘要文本 (调度方入口)
     /// - 插件 / FFI 主程序为该点登记的实现会在这里生效; 拿不到值时返回空串
-    ///   (调用方走硬截断兜底)
+    ///   (调用方走硬截断回退)
     /// - 本轮该点声明为不可对外开放调用 (`callable = false`), 只由本中间件取用
     asio::awaitable<std::string> summarizeViaPoint(
         std::string_view                          sessionId,
@@ -184,7 +184,7 @@ public:
         bool                                      direct = false
     );
 
-    /// 硬截断兜底: 保留 system + 截断说明 + 最近消息 (30% 预算)
+    /// 硬截断回退: 保留 system + 截断说明 + 最近消息 (30% 预算)
     std::vector<neograph::ChatMessage> hardTruncate(
         const std::vector<neograph::ChatMessage>& messages,
         size_t                                    systemCount,

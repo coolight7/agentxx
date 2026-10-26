@@ -461,7 +461,7 @@ public:
 
 private:
 
-    /// 触发"前往下载" (记下事件已消费; 打开动作由外部回调执行)
+    /// 触发"前往下载" (记下事件已处理; 打开动作由外部回调执行)
     void activateDownload();
 
     TUICtx&               ctx_;
@@ -594,7 +594,7 @@ private:
         std::string itemId;
     };
 
-    /// 处理左键释放命中 (返回是否消费)
+    /// 处理左键释放命中 (返回是否处理)
     bool handleClick(const ftxui::Mouse& mouse);
 
     /// 测试辅助: 取指定命中项的屏幕区域 (不存在返回空区域)

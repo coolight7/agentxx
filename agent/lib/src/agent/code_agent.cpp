@@ -319,7 +319,7 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
                     co_await loadOneMcp(ns, cfg);
                 },
                 // 完成处理器: 捕获协程内部未捕获的异常 (loadOneMcp 已捕获普通异常,
-                // 此处兜底防止异常逃逸 detached 协程 → terminate), 并保证无论如何
+                // 此处补充处理防止异常逃逸 detached 协程 → terminate), 并保证无论如何
                 // 都发送一次完成信号, 避免主协程收不满 n 个信号死锁
                 [doneCh](std::exception_ptr ep) {
                     if (ep) {

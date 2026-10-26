@@ -274,10 +274,10 @@ void Session::restore(
     }
     viewMessages  = std::move(messages);
     msgIdCounter_ = msgIdCounter;
-    // 展示历史序号: 库内最大值优先; 老数据无记录时按历史条数兜底, 保证后续
+    // 展示历史序号: 库内最大值优先; 老数据无记录时按历史条数推算, 保证后续
     // 追加的序号严格大于已存在的历史 (重连增量补拉不会漏消息)
     viewSeqCounter_ = std::max(lastViewSeq, static_cast<uint64_t>(viewMessages.size()));
-    // 重建 msgId → 下标索引 (与 viewMessages 同步; 恢复的历史全量建索引)
+    // 重建 msgId → 下标索引 (与 viewMessages 同步; 恢复的历史全部建索引)
     msgIndex_.clear();
     msgIndex_.reserve(viewMessages.size());
     for (size_t i = 0; i < viewMessages.size(); ++i) {
@@ -460,7 +460,7 @@ void Session::flushPendingViewOps() {
     }
     for (const auto& op : pendingViewOps_) {
         // 下标越界防御: restore() 整体替换 viewMessages 时会先清空队列, 正常路径
-        // 不会命中; 此处兜底避免异常路径把错误数据写库
+        // 不会命中; 此处先做一次判断, 避免异常路径把错误数据写库
         if (op.index >= viewMessages.size()) {
             XX_LOGW(
                 "Session::flushPendingViewOps: stale view index {} (size={})",
@@ -658,7 +658,7 @@ std::string AgentContext::getSessionBaseWorkDir(std::string_view sessionId) cons
             return it->second;
         }
     }
-    // 回退 agent 级配置 (yaml work_dir / 进程 cwd), 保持旧行为兜底
+    // 回退 agent 级配置 (yaml work_dir / 进程 cwd), 沿用旧行为
     if (agentConfig) {
         auto wd = agentConfig->resolvedWorkDir();
         if (!wd.empty()) {

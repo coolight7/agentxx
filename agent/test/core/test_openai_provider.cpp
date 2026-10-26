@@ -918,7 +918,7 @@ void test_messages_to_json_multimodal() {
     XX_TEST_EXPECT_EQ(parts[2]["type"].get<std::string>(), "input_audio");
     XX_TEST_EXPECT_EQ(parts[2]["input_audio"]["data"].get<std::string>(), "UklGRg==");
     XX_TEST_EXPECT_EQ(parts[2]["input_audio"]["format"].get<std::string>(), "wav");
-    // audio (HTTP URL → url 透传)
+    // audio (HTTP URL → url 原样转发)
     XX_TEST_EXPECT_EQ(parts[3]["type"].get<std::string>(), "input_audio");
     XX_TEST_EXPECT_EQ(
         parts[3]["input_audio"]["url"].get<std::string>(),
@@ -1061,7 +1061,7 @@ void test_request_body_tools_json_matches_legacy_path() {
 /// 请求体"文本路径"与"DOM 路径"必须产出逐字节相同的线上请求体
 ///
 /// - 文本路径逐条追加 messages / tools, 不先构造整段 DOM (长上下文下每轮请求都会
-///   发全量消息, 整段 DOM + 整段文本会在请求期间同时占两份 O(上下文) 临时内存)
+///   发完整消息, 整段 DOM + 整段文本会在请求期间同时占两份 O(上下文) 临时内存)
 /// - 这里校验真实发出去的请求体: 与"旧实现拼法"(`buildBody()` 的键序 + 参考
 ///   `chatMessagesToOpenAIJson` / `chatToolsToOpenAIJson`) 逐字节比对, 一旦不一致
 ///   就是请求体变了, 属于静默行为变化
@@ -3213,7 +3213,7 @@ void test_responses_sse_parsing_edge_cases() {
         XX_TEST_EXPECT_EQ(completion.usage.total_tokens, 19);
     }
 
-    // usage 官方格式: 嵌套 usage 缺 total_tokens 时按 input+output 兜底
+    // usage 官方格式: 嵌套 usage 缺 total_tokens 时按 input+output 回退
     {
         std::string buf = "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_x\","
                           "\"status\":\"completed\",\"usage\":{\"input_tokens\":3,"
@@ -4411,7 +4411,7 @@ asio::awaitable<void>
                 }
             }
             XX_TEST_EXPECT_FALSE(hasEmptyThinking);
-            // 明文思考增量正常透传
+            // 明文思考增量正常原样转发
             bool hasPlainThinking = false;
             for (const auto& ch : receivedChunks) {
                 if (ch.type == neograph::ChatStreamChunk::TYPE_THINKING && !ch.data.empty()) {

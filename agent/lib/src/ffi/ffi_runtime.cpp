@@ -303,7 +303,7 @@ bool FfiAgentRuntime::buildConfigs(
 }
 
 FfiAgentRuntime::~FfiAgentRuntime() {
-    // 兜底: 若未显式 stop, 保证内部线程与所有资源安全退出与释放
+    // 保护: 若未显式 stop, 保证内部线程与所有资源安全退出与释放
     if (state() != State::Stopped && state() != State::Created) {
         if (!isOnAnyIoThread()) {
             stopInternal();
@@ -509,7 +509,7 @@ void FfiAgentRuntime::stopInternal() {
     // 5) 停止并 join Server-IO 线程
     //    插件关闭必须先于此完成: shutdownAsync 在 agent IO 线程上 stop →
     //    等 lease 归零 → destroy/dlclose。executor 一旦停止就只能走同步析构
-    //    兜底 (实例保留 CloseFailed, 动态库不卸载)。
+    //    保护 (实例保留 CloseFailed, 动态库不卸载)。
     if (agent_ && serverIoCtx_ && !serverIoCtx_->stopped()) {
         try {
             auto closed = asio::co_spawn(
@@ -639,7 +639,7 @@ int FfiAgentRuntime::sendInput(std::string_view inputJson, std::string& err) {
     input.model     = j.value("model", std::string{});
     input.delivery  = j.value("delivery", std::string{});
     input.sessionId = sessionId_;
-    // 受理回执照样经 EVT_WIRE 透出: 服务端只在 requestId > 0 时回 input_ack
+    // 受理回执照样经 EVT_WIRE 上报: 服务端只在 requestId > 0 时回 input_ack
     input.requestId = nextInputRequestId_.fetch_add(1, std::memory_order_relaxed) + 1;
 
     if (j.contains("attachments") && j["attachments"].is_array()) {
@@ -962,7 +962,7 @@ std::string FfiAgentRuntime::listModels(std::string& err) {
 }
 
 // -------------------------------------------------------------------
-// Wire 透传 (A2)
+// Wire 原样转发 (A2)
 // -------------------------------------------------------------------
 
 int FfiAgentRuntime::sendWire(std::string_view wireJson, std::string& err) {

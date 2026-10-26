@@ -8,7 +8,7 @@
 ///   持有实现列表、值缓存、统计与说明; 用哪个类由代码决定, `type` 只用于展示与日志;
 /// - **实现 (Impl)**: 分两层 —— `plugin` (插件与 FFI 主程序登记的实现) → `core`
 ///   (libagentxx 自身实现); 层内按 `(priority 升序, 登记顺序)`。扩展点天生接受外部
-///   实现 (没有"只允许核心实现"这类开关), `core` 实现只是"没人给值时的兜底";
+///   实现 (没有"只允许核心实现"这类开关), `core` 实现只是"没人给值时的默认值";
 /// - **调用 (Call)**: 应用自己用 [ProvidePoint::ask] (读值缓存、记置空), 外部
 ///   (插件 / FFI 主程序 / 命令行) 用 [ProvidePoint::call] (只读值缓存、不记置空、
 ///   不写调用方会话、不发界面提示、不落盘)。
@@ -68,7 +68,7 @@ enum class PointType : int32_t {
 /// 实现所在的层 (排序时 `plugin` 恒在 `core` 之前)
 enum class ImplLayer : int32_t {
     Plugin = 0, ///< 插件与 FFI 主程序登记的实现
-    Core   = 1, ///< libagentxx 自身实现 (没人给值时的兜底)
+    Core   = 1, ///< libagentxx 自身实现 (没人给值时的默认值)
 };
 
 /// 调用结果错误码 (对外字符串见 [callErrorKey], 改动即改契约)

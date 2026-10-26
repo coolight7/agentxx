@@ -86,7 +86,7 @@ inline std::string toUtf8(const std::filesystem::path& p) {
 
 /// 基于 workDir 的会话工作目录解析绝对路径
 /// - workDir 非空时以其为相对路径基准 (会话工作目录与进程 cwd 解耦);
-///   为空时回退进程 cwd (resolvedWorkDir 兜底, 与单参 toCurrentSystemAbsolutePath 一致)
+///   为空时回退进程 cwd (resolvedWorkDir 的默认值, 与单参 toCurrentSystemAbsolutePath 一致)
 inline std::string wsAbs(const std::string& workDir, const std::string& path) {
     return utilxx_base::toCurrentSystemAbsolutePath(path, workDir);
 }
@@ -527,7 +527,7 @@ inline std::string fileListExecuteImpl(
                     typeStr = "lrwxrwxrwx";
                 }
 
-                // 路径列: 目录加 `/` 后缀, 符号链接附加指向目标 (对齐 ls -l)
+                // 路径列: 目录加 `/` 后缀, 符号链接附加指向目标 (同 ls -l)
                 auto pathStr = detail::toUtf8(entity.path());
                 if (entity.is_directory()) {
                     pathStr += "/";
@@ -573,7 +573,7 @@ inline std::string fileListExecuteImpl(
         return limit > 0 && static_cast<int64_t>(lines.size()) >= limit;
     };
 
-    // 通配模式下 recursive 的目录下钻结果可能与 `**` 匹配结果重叠 (如 `src/**` 已含
+    // 通配模式下 recursive 的目录逐层展开结果可能与 `**` 匹配结果重叠 (如 `src/**` 已含
     // 全部后代, 再叠加 recursive 会重复列出), 此时按路径去重; 普通路径模式不去重
     bool                  dedupByPath = false;
     std::set<std::string> listedPaths;
@@ -664,7 +664,7 @@ inline std::string fileListExecuteImpl(
     // ---- 通配模式展开 (`*` `?` `[`) ----
     // path 含 shell 通配符时按 bash 语义展开 (与 agentxx_filesystem_glob 同一 glob
     // 实现: 大小写敏感、不匹配 `.` 开头的隐藏条目、`**` 表示递归任意层级),
-    // 输出匹配到的条目本身; recursive 为 true 时再下钻匹配到的目录
+    // 输出匹配到的条目本身; recursive 为 true 时再逐层展开匹配到的目录
     // (recursive 始终表示"展开子目录", 与普通目录路径的语义一致)
     std::vector<std::filesystem::path> matched;
     if (detail::hasGlobMagic(targetPath)) {
@@ -714,7 +714,7 @@ inline std::string fileListExecuteImpl(
                 matched.resize(static_cast<size_t>(maxFiles));
             }
 
-            // 只有 recursive 下的目录下钻才可能与 `**` 匹配结果重叠, 故仅此时去重
+            // 只有 recursive 下的目录逐层展开才可能与 `**` 匹配结果重叠, 故仅此时去重
             dedupByPath = recursive;
             for (const auto& item : matched) {
                 if (checkStop() || limitReached()) {
@@ -1262,7 +1262,7 @@ inline std::string fileGlobExecuteImpl(
     glob::WalkPolicy walkPolicy = detail::makeWalkPolicy(excludePatterns, maxFiles);
 
     // 智能选择 glob/rglob: 含 `**` 的模式使用 rglob (递归), 否则使用 glob (仅当前目录)
-    // 对齐 shell globstar 行为: `*.txt` 只匹配当前目录, `**/*.txt` 才递归
+    // 同 shell globstar 行为: `*.txt` 只匹配当前目录, `**/*.txt` 才递归
     std::vector<std::filesystem::path> resultList;
     for (const auto& pattern : file_patterns) {
         if (checkCancel() || deadline.expired()) {
@@ -1302,7 +1302,7 @@ inline std::string fileGlobExecuteImpl(
     std::sort(resultList.begin(), resultList.end());
     resultList.erase(std::unique(resultList.begin(), resultList.end()), resultList.end());
 
-    // 类型过滤 (对齐 find -type): file / dir / symlink / other / any
+    // 类型过滤 (同 find -type): file / dir / symlink / other / any
     if (!typeFilter.empty()) {
         std::vector<std::filesystem::path> filtered;
         filtered.reserve(resultList.size());
@@ -1332,7 +1332,7 @@ inline std::string fileGlobExecuteImpl(
         }
     }
 
-    // max_depth 过滤 (对齐 find -maxdepth):
+    // max_depth 过滤 (同 find -maxdepth):
     // 计算匹配路径相对于模式静态前缀目录的深度, 超出则排除
     if (maxDepth >= 0) {
         std::vector<std::filesystem::path> filtered;
@@ -1409,8 +1409,8 @@ inline std::string fileGrepExecuteImpl(
     const PathFilterFn&      pathFilter  = nullptr
 ) {
     // 搜索模式参数 (两者均可省略, 但至少指定其一; 同时指定时结果为两者并集):
-    // - text_patterns  : 纯文本字面量匹配 (对齐 grep -F, 不经正则解释)
-    // - regex_patterns : 正则表达式匹配 (对齐 grep -E)
+    // - text_patterns  : 纯文本字面量匹配 (同 grep -F, 不经正则解释)
+    // - regex_patterns : 正则表达式匹配 (同 grep -E)
     auto text_patterns  = arguments.value("text_patterns", std::vector<std::string>{});
     auto regex_patterns = arguments.value("regex_patterns", std::vector<std::string>{});
     if (text_patterns.empty() && regex_patterns.empty()) {
@@ -1453,7 +1453,7 @@ inline std::string fileGrepExecuteImpl(
     auto maxFiles      = arguments.value<int64_t>("max_files", 1000);
     auto maxFileSizeMb = arguments.value<double>("max_file_size_mb", 32.0);
 
-    // 新增参数 (对齐 Linux grep 行为)
+    // 新增参数 (同 Linux grep 行为)
     auto caseSensitive   = arguments.value<bool>("case_sensitive", true);
     auto maxCountPerFile = arguments.value<int64_t>("max_count_per_file", 0); // 0 = 不限
     auto contextLines    = arguments.value<int64_t>("context_lines", 0);
@@ -1659,9 +1659,9 @@ inline std::string fileGrepExecuteImpl(
     /// content 模式输出辅助: 将单个文件的匹配结果以"按文件分组"格式写入输出流。
     /// 格式设计 (减少每行的文件路径重复):
     ///   {filepath}:          <- 组头, 每个文件仅输出一次
-    ///   {line}:{content}     <- 匹配行 (对齐 grep -n)
-    ///   {line}-{content}     <- 上下文行 (对齐 grep -n -C)
-    ///   --                   <- 同一文件内不连续的上下文块之间 (对齐 grep -C)
+    ///   {line}:{content}     <- 匹配行 (同 grep -n)
+    ///   {line}-{content}     <- 上下文行 (同 grep -n -C)
+    ///   --                   <- 同一文件内不连续的上下文块之间 (同 grep -C)
     auto appendGroupedContent = [&](std::ostringstream&        out,
                                     const std::string&         filepath,
                                     std::string_view           filetext,
@@ -1698,21 +1698,21 @@ inline std::string fileGrepExecuteImpl(
         size_t prevLine = 0;
         bool   first    = true;
         for (size_t lineIdx : allLines) {
-            // 对齐 grep -C: 不连续的上下文块之间用 -- 分隔
+            // 同 grep -C: 不连续的上下文块之间用 -- 分隔
             if (!first && contextLines > 0 && lineIdx > prevLine + 1) {
                 out << "--\n";
             }
             first = false;
 
             auto lineContent = extractLine(filetext, lineStarts, lineIdx);
-            // 匹配行用 `:` 分隔, 上下文行用 `-` 分隔 (对齐 grep -n -C)
+            // 匹配行用 `:` 分隔, 上下文行用 `-` 分隔 (同 grep -n -C)
             char sep = matchLineSet.count(lineIdx) ? ':' : '-';
             out << (lineIdx + 1) << sep << lineContent << "\n";
             prevLine = lineIdx;
         }
     };
 
-    // 应用 max_count_per_file 限制 (对齐 grep -m) 并按 output_mode 输出。
+    // 应用 max_count_per_file 限制 (同 grep -m) 并按 output_mode 输出。
     // MatchT 需提供 start 成员 (MatchRange / XXRegexMatchResult /
     // AhoCorasick 匹配结构); 以模板 lambda 实现 (块作用域内不允许
     // template 函数声明)。调用前区间已并集去重, 单文件只会输出一次
@@ -1721,7 +1721,7 @@ inline std::string fileGrepExecuteImpl(
                            const std::string&         filetext,
                            const std::vector<MatchT>& matchRanges
                        ) -> void {
-        // 应用 max_count_per_file 限制 (对齐 grep -m)
+        // 应用 max_count_per_file 限制 (同 grep -m)
         size_t effectiveCount = matchRanges.size();
         if (maxCountPerFile > 0 && static_cast<size_t>(maxCountPerFile) < effectiveCount) {
             effectiveCount = static_cast<size_t>(maxCountPerFile);
@@ -1735,7 +1735,7 @@ inline std::string fileGrepExecuteImpl(
             // files_with_matches 模式: 输出 file:match_count
             resultStr << filepath << ":" << effectiveCount << "\n";
         } else {
-            // content 模式: 输出匹配整行, 按文件分组格式 (对齐 grep -n);
+            // content 模式: 输出匹配整行, 按文件分组格式 (同 grep -n);
             // 行索引构建 + 行号查询 O(log n)
             std::vector<size_t> matchStarts;
             matchStarts.reserve(effectiveCount);
@@ -1757,7 +1757,7 @@ inline std::string fileGrepExecuteImpl(
         size_t end;
     };
 
-    // 文本轮: 纯文本精确匹配 (对齐 grep -F, AhoCorasick 多模式同时扫描)
+    // 文本轮: 纯文本精确匹配 (同 grep -F, AhoCorasick 多模式同时扫描)
     auto textSearch
         = text_patterns.empty()
               ? nullptr
@@ -2397,7 +2397,7 @@ inline asio::awaitable<std::string>
 
 /// agentxx_filesystem_write 执行体协程版 (原 FilesystemWriteFileTool::execute_async)
 /// - overwrite=false 且目标存在时报错; 自动创建缺失的父目录;
-///   stream_file create|truncate 打开后 async_write 全量写入
+///   stream_file create|truncate 打开后 async_write 全部写入
 inline asio::awaitable<std::string>
     fileWriteExecuteAsyncImpl(const utilxx_base::Json& arguments, const std::string& workDir) {
     auto filepath = detail::wsAbs(workDir, arguments.value("path", std::string{}));

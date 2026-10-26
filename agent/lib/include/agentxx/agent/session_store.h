@@ -18,7 +18,7 @@ namespace agent {
 /// 会话数据 SQLite 持久化 (按 sessionId 分目录)
 ///
 /// 目录结构: {root}/{sanitizedSessionId}/
-///   - session.db  会话全量状态 (单库):
+///   - session.db  会话完整状态 (单库):
 ///                   view_message 表  展示历史 (append-only, 每消息一行 JSON)
 ///                   llm_context 表  LLM 上下文消息 (单行整体替换, 每轮结束保存)
 ///                   meta 表          msgIdCounter / schema_version / session 元数据
@@ -88,8 +88,8 @@ public:
     /// 读取展示历史中序号大于 [afterSeq] 的消息 (断线增量补拉)
     ///
     /// - 返回 `{seq, ViewMessage}` 列表, 按 seq 升序; 消息 id 为空的老数据也返回
-    ///   (调用方按需回退全量同步)
-    /// - `limit > 0` 时最多返回 limit 条 (超出时调用方应回退全量/尾窗同步,
+    ///   (调用方按需改走完整同步)
+    /// - `limit > 0` 时最多返回 limit 条 (超出时调用方应回退完整/尾窗同步,
     ///   避免一次补拉过大)
     /// - 只读连接 (不取写租约); 无数据/打开失败返回空
     using ViewMessageRow = SequencedViewMessage;
@@ -105,13 +105,13 @@ public:
 
     /// 分页列举持久化会话摘要 (keyset 游标分页, 按最近活动时间降序, 最新在前)
     ///
-    /// 背景: 会话数量可能很大, 一次性扫描/传输/渲染全量列表开销高; 客户端
+    /// 背景: 会话数量可能很大, 一次性扫描/传输/渲染完整列表开销高; 客户端
     /// (TUI 会话弹窗) 先加载最新一页, 用户浏览到末尾时按游标继续拉取。
     /// - 游标语义: 返回排序位置严格位于 (beforeMs, beforeId) 之后的至多 limit 条
     ///   (排序: lastActiveMs 降序, 相同时间按 sessionId 升序; 与 listSessions 一致),
     ///   即把游标视为"上一页最后一条", 天然规避服务端活跃会话位移导致的
     ///   offset 分页重复/遗漏问题
-    /// - beforeMs <= 0 表示从最新开始 (首页); limit == 0 等价 listSessions 全量
+    /// - beforeMs <= 0 表示从最新开始 (首页); limit == 0 等价 listSessions 全部
     /// - 实现: 两阶段扫描 —— 阶段 1 仅 stat 各目录 session.db/-wal 的修改时间
     ///   (不打开数据库) 获得近似活动顺序与总数; 阶段 2 按该顺序逐个打开 DB 读
     ///   精确 meta 收集。mtime 与 lastActiveMs 强相关 (提交时刻恒 ≥ 消息开始

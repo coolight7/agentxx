@@ -49,14 +49,14 @@
 - `App::HandleTask` 在事件分发前把鼠标坐标从"终端绝对坐标"换算为"屏幕坐标"
   (减去 `cursor_x_/cursor_y_`), 并在 `handled == false` 时把左键事件转入**文本选择**
   (`HandleSelection`): 因此"未被任何组件处理的左键拖动"会成为屏幕选中;
-  反之, 组件一旦返回 `true` 表示消费事件, 该次拖动不会产生选择。
+  反之, 组件一旦返回 `true` 表示处理事件, 该次拖动不会产生选择。
 
 ### 1.3 坐标与命中检测
 
 - `ftxui::Box{x_min, x_max, y_min, y_max}` 为**闭区间**的屏幕绝对坐标。
 - `reflect(Box&)`: 一个装饰器; 布局 (`SetBox`) 时把该元素的区域写回 `Box`, 绘制时再与
   `screen.stencil` 求交 (`Box::Intersection`)。注意求交发生在**绘制**阶段: 只有本帧真正
-  `Render()` 到的元素才会被收敛为空区域 —— 本项目自实现的滚动容器
+  `Render()` 到的元素才会被收缩为空区域 —— 本项目自实现的滚动容器
   ([Scrollable](/agent/client/include/agentxx-client/io/tui/scrollable.h) /
   [LazyScrollable](/agent/client/include/agentxx-client/io/tui/lazy_scrollable.h))
   只为视口内的子项做定位与绘制, 视口外子项的 Box 会停在测量阶段写入的"测量用临时大框"
@@ -94,7 +94,7 @@
   [ModalContainer](/agent/client/include/agentxx-client/io/tui/framework/modal_container.h):
   打开弹窗时**只**把事件给弹窗 (不再下发给被遮挡的主界面), 渲染时也只渲染弹窗。
 - 滚动容器为项目自实现 (FTXUI 的 `frame` 是"焦点跟随"式滚动, 不适用于会话记录):
-  - [Scrollable](/agent/client/include/agentxx-client/io/tui/scrollable.h): 全量构建子项 + 视口局部布局/绘制
+  - [Scrollable](/agent/client/include/agentxx-client/io/tui/scrollable.h): 一次性构建子项 + 视口局部布局/绘制
   - [LazyScrollable](/agent/client/include/agentxx-client/io/tui/lazy_scrollable.h): 懒构建 + LRU 缓存 (消息列表用),
     支持字节预算淘汰、`stickToBottom` 吸附、头部插入; 滚动状态为**锚点**
     (视口顶行所在条目 + 条目内行偏移), 每帧只处理"锚点到视口底部"这一段,
@@ -222,7 +222,7 @@ bool XxxComponent::OnEvent(ftxui::Event event) {
 ### 2.4 声明式条目列表
 
 [framework/ui_action_list.h](/agent/client/include/agentxx-client/io/tui/framework/ui_action_list.h) 把
-"若干可选项 + 上下键 + Enter + 鼠标点击 + 选中高亮" 收敛为一张数据表:
+"若干可选项 + 上下键 + Enter + 鼠标点击 + 选中高亮" 统一为一张数据表:
 
 ```c++
 struct UiActionItem {
@@ -320,7 +320,7 @@ struct UiActionItem {
     冲突记录一起从快照消失
   - 可见性快照由 UI 每帧上报 (`reportSidebarRegionVisibility`: 面板 = 当前激活 tab,
     Info 段落 = Info tab 激活), 经 `is_visible` 查询
-- 尺寸感知: 主程序布局后把面板/Info 段落的可用宽高记入快照, 值变化时投递
+- 尺寸通知: 主程序布局后把面板/Info 段落的可用宽高记入快照, 值变化时投递
   `AGENTXX_CLIENT_EVT_UI_LAYOUT` 事件 (载荷 `{"regions":[{id,w,h}]}`), 并可经
   `get_client_state().regions` 查询; 插件据此按可用宽度重排内容。
 - 相关 schema 与约束见 [plugins.md](plugins.md) §9.1~§9.6 与
@@ -444,7 +444,7 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
   链接未通过校验 (非 http/https 或含可注入 shell 的字符) 时保留弹窗并 toast。
   与"关于"弹窗一样是**替换**当前模态 (打开时设置弹窗关闭, 关闭后回到主界面)。
 - 测试: 版本解析/比较、失败路径与链接校验 `agentxx_test update_check`; 本地 HTTP
-  服务端到端 (302 / JSON / 404 / 旧版本) 在 `agentxx_test http`; 设置条目、更新提示
+  服务端全流程 (302 / JSON / 404 / 旧版本) 在 `agentxx_test http`; 设置条目、更新提示
   弹窗 (版式/点击/Enter/Esc/窄终端换行) 与结果状态在 `agentxx_test tui_settings`。
 
 ### 2.10 文件选择弹窗 (跨设备附件)
@@ -492,7 +492,7 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
   等级不足时组件内部直接渲染末帧, 不进入动画。
 - 播放期间 banner 子项**不可跨帧缓存** (`MessageListComponent::buildItem` 置
   `cacheable = false`): 缓存命中的旧 Element 会停在动画中的某一帧, 不再随帧推进。
-- 测试: `agentxx_test banner_art` (帧结构/前缀不变/末帧一致/逐帧收敛 + 播放与空列表接入)。
+- 测试: `agentxx_test banner_art` (帧结构/前缀不变/末帧一致/逐帧稳定 + 播放与空列表接入)。
 
 ### 2.12 添加模型配置 (选择模型弹窗 → 表单 → 线消息 → 服务端落盘)
 
@@ -538,7 +538,7 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
   列表与当前模型不变。
 - 测试: `agentxx_test config_loader` (写回/校验规则/CRLF/重名与不支持结构)、
   `tui_settings` (顶部条目与表单取值映射)、`util_misc` (线消息往返)、
-  `remote_agent` (端到端: 校验 → 落盘 → 注册 → 立即切换 + 非法/重名分支)。
+  `remote_agent` (全流程: 校验 → 落盘 → 注册 → 立即切换 + 非法/重名分支)。
 
 ### 2.13 客户端模型层 (历史窗口 / 本地上限 / 队列镜像) 与输入栏光标
 
@@ -557,7 +557,7 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
 
 - 历史窗口: 页响应必须紧贴当前窗口首条 (`startIndex + count == windowStart`) 才被接受,
   否则视为窗口已被整体替换后的过期响应; `windowStart == 0` 表示上方没有更早历史
-  (全量同步、或已拉到会话开头)。切换会话时 `resetForSession` 使旧会话的迟到响应失效。
+  (完整同步、或已拉到会话开头)。切换会话时 `resetForSession` 使旧会话的迟到响应失效。
 - 本地条数上限: 见 §3.5 (只限条数不限字节; 仅末尾追加消息时判定, 头部插入 (历史分页)
   不触发清理)。
 - 队列镜像: 快照应用时保留**界面展开态** (按条目 id/文本为键), 队列整体刷新不会把用户
@@ -571,7 +571,7 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
 终端会把光标下的字符吃掉) 时, 本端**不请求**硬件光标, 由输入栏自绘的光标格 (反色空格)
 承担指示作用: 功能不受影响, 只是看不到系统光标。该判定是能力段
 `terminal.hardware_cursor` 的唯一来源 (`tuiHardwareCursorSupported()`), 插件读到的值与
-本端实际行为不会分叉。
+本端实际行为不会出现差异。
 
 ### 2.14 生成占位提示 (等待响应 / 正在调用工具)
 
@@ -587,7 +587,7 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
     `toolName` 为已解析出的工具名 (可能为空)。工具调用参数按增量分片传输, 接收完成前
     JSON 不完整、无法展示, 因此该阶段只提示"正在调用工具"; 接收完成后照常发
     `ToolStart` (完整参数 + 工具消息)
-  - `Done`: 节点结束/出错时下发 (兜底清除)
+  - `Done`: 节点结束/出错时下发 (补充清除)
 - 渲染: [MessageListComponent::buildGenPlaceholderItem](/agent/client/include/agentxx-client/io/tui/components/message_list.h)
   在列表末尾渲染单行占位项 (`- [思考] 等待响应...` / `- [工具] read_file 正在调用工具...`),
   位置 = 消息与流式内容之后 (`genPlaceholderIndex`); 生成中头部用加载动画, 该子项不跨帧缓存
@@ -614,7 +614,7 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
 - 视觉为空的消息 (模型把 U+200B 之类的零宽占位符当正文输出) 一并从源头处理:
   `EventBridge` 不把这样的正文当成一条 assistant 消息写进展示历史, `SessionStore`
   加载/翻页时也不返回它 (判据见 `agentxx/util/invisible_text.h`); 渲染层的
-  `isBlankMessage` 是对已加载内存消息的兜底
+  `isBlankMessage` 是对已加载内存消息的额外保护
 - `quickHeight` 的流式估算必须与实测一致: 上述尾部空行都要计入 (尾部块 +1、降级整段 +1),
   漏掉一项就会总高度偏低 -> 吸附底部的偏移偏小 -> 底部最新内容被推出视口
 - 加载动画的帧循环由 `hasRunningToolOrThink()` 维持, 占位提示出现时它必然为真 ——
@@ -733,20 +733,20 @@ agent 线程插入会话历史的展示条目: 轮次统计、错误/取消提�
   [ContextOverlay](/agent/client/src/io/tui/components/overlays.cpp) 的 `headerMessageAt`
   与 `MessageListComponent` 的可见区域命中登记是同一做法的其它形态。
 - **测量与渲染必须同源**: 组件描述的行数由 `ui_components.cpp` 的 `measureItem` 得出
-  (内部渲染一次统计行数), 不要另写一套"估算行数"的判定 —— 两套判定漂移会让滚动位置与
+  (内部渲染一次统计行数), 不要另写一套"估算行数"的判定 —— 两套判定不一致会让滚动位置与
   高度计算错位。回归保护见 `agentxx_test tui_ui_items` (估算行数 == 元素真实布局高度)。
 - 滚动定位一律以**实测高度**为准 (`layoutAndMeasure`): 未进入视口的条目用
   `MessageListComponent::quickHeight` 的粗略值 (O(1) 或轻量文本扫描, 不做任何渲染/
   插件查询), 进入视口后由布局实测修正; 因此估算偏差只影响滚动条长度, 不影响
   视口内内容 (见 3.3.2)。
 
-### 3.2 事件消费
+### 3.2 事件处理
 
 - 组件只在**真正处理**了事件时返回 `true`; 鼠标事件未命中任何登记项时应返回 `false`,
   让其它组件或全局处理继续 (否则会吞掉别人/全局的点击)。
 - 弹窗组件例外: 作为遮挡层, 未处理的事件也应 `return true` 吞掉 (见 2.5)。
 - **拖选复制与高亮**: 左键拖动由 FTXUI 的 `Selection` 处理 (`App` 只在没有任何组件
-  消费事件时把它转入选择); 每个文本节点在 `Select(selection)` 里既取走选中文本, 也
+  处理事件时把它转入选择); 每个文本节点在 `Select(selection)` 里既取走选中文本, 也
   记录"哪些单元格被选中"用于绘制高亮 —— 自绘节点 (`FlowText`/`FlowCodeBlock`) 必须
   两者都做, 否则表现为"能复制但拖动时没有反色高亮"。`Select` 只在选择非空时被调用,
   所以高亮状态由 `ComputeRequirement` 复位; 懒构建列表跳过每帧 `ComputeRequirement`,
@@ -774,7 +774,7 @@ agent 线程插入会话历史的展示条目: 轮次统计、错误/取消提�
   并补画高亮, 复制结果与所见一致 (续行保留与正文对齐的缩进)。
   纯版面留白 (消息列表左右各 3 列) 相反: 它们用 `filler()` 而不是 `text("   ")`
   表达 —— 留白不是内容, 用文本节点会让它进入复制结果, 且只有一个节点行的高度
-  (即消息在视口内的位置) 会让结果随滚动漂移。
+  (即消息在视口内的位置) 会让结果随滚动变化。
 
 ### 3.3 渲染性能
 
@@ -828,7 +828,7 @@ agent 线程插入会话历史的展示条目: 轮次统计、错误/取消提�
   内容推出视口或让视口空白 (实测用例: 估算少报 4 倍时顶行/末行仍严格正确, 只有总高
   与滚动条长度不同)。
 - **高度和增量维护**: `totalHeight_` 与锚点以上高度和由 `setItemHeight` 增量更新,
-  不做每帧全量求和; 宽度变化时按 O(1) 粗略值全部重算 (不触发渲染), 锚点条目保持不变
+  不做每帧全部求和; 宽度变化时按 O(1) 粗略值全部重算 (不触发渲染), 锚点条目保持不变
   (行偏移按新高度夹取)。
 - **key 惰性校验**: 条目内容变化经 `itemKey` 体现; 每帧只校验窗口 + 下方预取带内
   的条目 (按帧标记), 视口外条目的失效延迟到它重新进入窗口时 —— 避免每帧对全列表
@@ -890,7 +890,7 @@ UTF-8 字节按旧代码页解码 —— 中文整屏乱码, 且一个中文字�
   误报 -> 每帧清屏 -> 画面持续闪烁 (启动动画期间尤其明显)。
   写回失败时记"放弃重试"标记, 避免反复清屏。
 - 成功写回 (`needResync`) 时先写 `consoleRealignSequence()` (清屏 + 回原点) 再画本帧,
-  否则漂移后的相对定位自己回不来。`cli` (stdio) 模式在每次输出前做同一自检
+  否则错位后的相对定位自己回不来。`cli` (stdio) 模式在每次输出前做同一自检
   (行式输出无需重新对齐)。
 - 从源头避免: 工具子进程 (`agentxx_execute_command`) 与 MCP server 在 Windows 用
   `CREATE_NO_WINDOW` 启动, 不共享 agent 进程的控制台 (输出仍走管道)。
@@ -907,7 +907,7 @@ UTF-8 字节按旧代码页解码 —— 中文整屏乱码, 且一个中文字�
 ### 3.5 客户端本地消息条数上限
 
 客户端只保留最近 `kLocalMessageLimit` (100) 条展示消息, 避免长会话把整段历史一直留在
-内存里 (服务端 `Session::viewMessages` 与会话历史同增, 客户端不必镜像全量)。
+内存里 (服务端 `Session::viewMessages` 与会话历史同增, 客户端不必镜像全部)。
 
 - **只限条数, 不限字节**: 单条消息本体的体积不参与判定, 渲染结果的内存仍由
   `LazyScrollable` 的缓存预算 (条数 + 字节双预算) 约束 —— 两者管的是不同的内存。
@@ -939,7 +939,7 @@ UTF-8 字节按旧代码页解码 —— 中文整屏乱码, 且一个中文字�
 |------|------|------|
 | "未显示的按钮仍能点中" | 各弹窗/状态栏/输入栏的成员 `Box` | 改为命中登记表: 帧首清空 + 渲染时登记 |
 | `Box{}` 被当成"无命中区域" | 输入栏"待发队列"、banner 重试按钮等 | 空区域统一用 `kNoBox`/`IsEmpty()`, 并加回归测试 |
-| 每个按钮一个成员变量 + `OnEvent` 里逐项 `Contain` | 设置/日志菜单/模型/会话/待发队列/文件选择弹窗 | 收敛到 `UiActionList` (条目表) 与 `UiHitMap` |
+| 每个按钮一个成员变量 + `OnEvent` 里逐项 `Contain` | 设置/日志菜单/模型/会话/待发队列/文件选择弹窗 | 统一到 `UiActionList` (条目表) 与 `UiHitMap` |
 | 条目索引魔法数字 (`selectedIndex_ == 2` 之类) 与 4 处同步修改 | 设置弹窗等 | 条目即数据 (`id/label/value/onActivate`), 新增条目只改一处 |
 | 模态打开时事件漏到被遮挡的主界面 (字符落进输入框、滚轮滚动消息列表) | `ModalContainer` + `FilePickerOverlay` | 模态阻塞事件; 弹窗自身也吞掉未处理事件 |
 | 模态打开时仍每帧渲染主界面整棵树 | `ModalContainer` | 弹窗打开时不渲染主界面 |

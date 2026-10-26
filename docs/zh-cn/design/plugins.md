@@ -132,7 +132,7 @@ auto b64 = utilxx_base::base64Encode(data);
 | `pluginxx/api/` | 纯 C (`Agentxx*`) | 跨边界契约: `abi.h` (导出宏/调用约定/字符串/操作原语/主程序 vtable/入口符号)、`tables.h` (通用接口表: events/capabilities/scheduler/coroutine_runtime/plugins/config/cancel/json/log/tasks) |
 | `pluginxx/kit/` | `pluginxx` | 插件侧 C++ SDK (header-only): `kit.h` (通用部分: 跨边界字符串工具 `PluginStringView`/`PluginString`、通用接口表聚合 `PluginIfaceCore`、实例级 `Logger`、`Task<T>` 锚定协程与锚定原语 `sleep`/`yield`/`offload`/`invoke_cap`、`CancelRegistry`/`OpCtl`/`ArgReader`、后台任务 `spawn`、能力注册 `capability`、实例上下文基类 `PluginBaseT<IfacesT>`、通用导出宏)、`guard.h` (C ABI 边界异常守卫 `guardCall`/`guardCallVoid`/`logTo`) |
 | `pluginxx/runtime/` | `pluginxx` | 主程序侧运行时: `runtime.h` (实例状态机/执行 lease/投递通道)、`driver.h` (协程驱动 ticket)、`instance_base.h` (实例基类 + 主程序控制块 + C ABI 内存 + 通用表相关登记: 事件订阅/睡眠句柄/能力声明)、`manager_base.h` (管理器基类 + vtable 入口上下文)、`op_driver.h` (统一 Operation 驱动器) |
-| `pluginxx/host/` | `pluginxx` | 主程序侧通用设施: `loader.h` (dlopen/LoadLibrary 封装)、`manifest.h` (plugin.yaml 解析/名称推导/拓扑排序)、`abi_util.h` (C 串转换/异常兜底/io 线程同步投递)、`capability_registry.h` (能力注册表: 能力名 → 提供者插件 + 启动/取消回调)、`event_bus.h` (事件表的事件后端抽象 `EventSource` + 订阅句柄实现体 `PluginxxSubscription` + 幂等撤销)、`domain_hooks.h` (业务数据入口 `DomainHooks`: 通用表需要主程序数据的入口)、`host_core.h` (主程序核心 `PluginHostCore<InstanceT>`: 通用表的状态与方法实现)、`tables_impl.h` (十张通用表的 vtable 入口 trampoline + `queryGenericPluginIface<I, M>(iid)`)、`lifecycle.h` (主程序生命周期骨架 `PluginHostLifecycle<InstanceT>`: 加载/启停/禁用启用/卸载/级联依赖) |
+| `pluginxx/host/` | `pluginxx` | 主程序侧通用设施: `loader.h` (dlopen/LoadLibrary 封装)、`manifest.h` (plugin.yaml 解析/名称推导/拓扑排序)、`abi_util.h` (C 串转换/异常保护/io 线程同步投递)、`capability_registry.h` (能力注册表: 能力名 → 提供者插件 + 启动/取消回调)、`event_bus.h` (事件表的事件后端抽象 `EventSource` + 订阅句柄实现体 `PluginxxSubscription` + 幂等撤销)、`domain_hooks.h` (业务数据入口 `DomainHooks`: 通用表需要主程序数据的入口)、`host_core.h` (主程序核心 `PluginHostCore<InstanceT>`: 通用表的状态与方法实现)、`tables_impl.h` (十张通用表的 vtable 入口 trampoline + `queryGenericPluginIface<I, M>(iid)`)、`lifecycle.h` (主程序生命周期骨架 `PluginHostLifecycle<InstanceT>`: 加载/启停/禁用启用/卸载/级联依赖) |
 
 - **通用表实现整体在 `cxx_pluginxx`**: log/json/config/plugins/events/scheduler/
   coroutine_runtime/tasks/cancel/capabilities 十张表的**定义与实现**都在插件框架 ——
@@ -370,7 +370,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
    - `polled_tool`（受控轮询）与 `blocking_tool`/`fast_tool` 并列：业务体是 `asio::awaitable`，
      等待插件本地 reactor 上的内核就绪事件，由桥按声明式受控轮询推进（§16.5）
    - hook / capability 的 SDK helper 按**返回类型严格分发**：返回 `void`/字符串的同步业务在
-     调用内完成；返回 `Task<T>` 的异步业务由统一 root adapter 收束（provider 句柄可取消，
+     调用内完成；返回 `Task<T>` 的异步业务由统一 root adapter 收尾（provider 句柄可取消，
      完成通知在协程真正结束后发出，输入视图由拥有型 `Request` 保证跨挂起点有效）
    - `graph_node` 使用同一 root adapter 注册自定义图节点类型：快同步节点返回节点输出
      JSON（`std::string`），异步节点返回 `Task<std::string>`；node/config/state/thread_id
@@ -421,7 +421,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 | `agentxx.agent.permission` | 2 | `register_tool_permission/unregister_tool_permission` (工具权限限制由工具来源方声明) + `check_paths` (批量路径权限三态查询, 不发起询问/中断; 见下方说明) |
 | `agentxx.agent.hooks` | 2 | 句柄式三成员: `register_hook(agent, spec_ex, out_handle)` (同一实例同一个点可登记**任意多个**处理器, 每个一根句柄; `priority` 小的先跑, 相同按登记顺序) + `unregister_hook(handle)` (按句柄精确撤销) + `list_hooks(agent, out)` (处理器清单 JSON) |
 | `agentxx.agent.events` | 2 | `subscribe(agent 可空, topic, handler)` / `unsubscribe` / `publish` (topic 自动加 `plugin.` 前缀, 载荷 JSON)。带引用 = 订阅该 agent 的总线 (会话/轮次事件); 空引用 = 主程序总线 |
-| `agentxx.agent.capabilities` | 2 | `register_capability(_ex)/unregister/has_capability` (进程级, 同一实例重复声明按幂等成功), `invoke_capability_async(agent 可空)/op_cancel` (引用仅用于归因给哪个 agent) |
+| `agentxx.agent.capabilities` | 2 | `register_capability(_ex)/unregister/has_capability` (进程级, 同一实例重复声明按幂等成功), `invoke_capability_async(agent 可空)/op_cancel` (引用仅用于标明是哪个 agent 发起的) |
 | `agentxx.agent.scheduler` | 1 | `is_io_thread/post_to_io/sleep/op_cancel/offload` (sleep=主程序计时器; offload=阻塞池委托, 需 cancel_token) |
 | `agentxx.agent.coroutine_runtime` | 1 | 通用协程驱动: `request_driver/cancel_driver/is_io_thread` (driver ticket/wake 协议, 见 §16) |
 | `agentxx.agent.session` | 3 | `get_share_store/add_share_store/emit_message_tip` (IO 线程) + `get_session_work_dir(agent, session_id)` (会话生效工作目录: worktree 绑定优先, session_id 为空返回默认工作目录) + `is_cancelled(agent, thread_id)` (advisory 查询, 权威通知仍是取消回调)。后两项 v3 从插件框架通用表迁入 |
@@ -504,7 +504,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
   `offset`/`limit`): 主程序再截断一次会与工具自身的分页重复, 摘要后的行号也会与源内容对不上;
 - 自带裁剪逻辑的工具 (例如 `agentxx_execute_windows_command` / `agentxx_execute_bash_command`
   按 stdout/stderr 两路各自裁剪到 30k 字符): 主程序按整段结果压缩时, 过长的 `[StdOut]` 会把
-  `[StdErr]` 一起裁进隐藏区, 模型必须读回全量才能判断 stderr 是否有内容。
+  `[StdErr]` 一起裁进隐藏区, 模型必须读回全部才能判断 stderr 是否有内容。
 
 `PARALLEL_SAFE` 只应给"只读、不写会话、不改插件内部共享状态"的工具置位 (文件读 / list /
 glob / grep / 网络查询等); 写文件、命令执行、交互询问类工具保持不置位, 它们与同一批
@@ -613,7 +613,7 @@ tool_call 中的前后调用形成顺序屏障。并发只发生在同一条 ass
   `agentxx.client.msg_decor`, 而不是表整体 —— 否则会被误报为"缺少 agentxx.client.ui,
   相关功能停用"
 - 展示扩展表另有细粒度能力名用于"组件集合"判断 (与表成员无关, 只作能力协商用):
-  `agentxx.client.components` = 主程序能渲染 `agentxx.ui.item` 全量组件 (含表格/树/图表/
+  `agentxx.client.components` = 主程序能渲染 `agentxx.ui.item` 全部组件 (含表格/树/图表/
   容器), `agentxx.client.form` = 主程序支持插件表单 (控件 + 提交回传),
   `agentxx.client.layout` = 主程序会上报展示区域尺寸 (事件 + 快照)。插件在
   `get_client_state().interfaces` 里查这些名字决定推送"新组件"还是降级为旧 kind;
@@ -706,9 +706,9 @@ tool_call 中的前后调用形成顺序屏障。并发只发生在同一条 ass
   - `buttons`：`←`/`→` 循环切换选中项；`select`：`↑`/`↓` 移动选中项；
     `number`：`↑`/`↓` 按 `step` 步进（受 `min`/`max` 约束）；`checkbox`：空格翻转
   - 输入框（`text`/`number`）：首次输入替换缺省值，`Backspace` 删除一个字符，
-    `Delete` 清空；数值框只接受数字与小数点/正负号（其余按键消费但不改动）
+    `Delete` 清空；数值框只接受数字与小数点/正负号（其余按键处理但不改动）
 - 中断表单（`interrupt_ui.h`）使用同一套控件语义与外观，只是结果去向不同
-  （回传中断结果 `{"values":{...}}`，由 agent 侧中间件消费）：描述里的控件与提交行
+  （回传中断结果 `{"values":{...}}`，由 agent 侧中间件处理）：描述里的控件与提交行
   由 `ui_components` 渲染（标签/说明的 i18n 键在转换时解析），点击/键盘/校验/取值
   全部复用同一实现；命中为"行元素框 + 行内区域"两级判定
   （提交行缺省文案沿用中断词表 `确认` / `✕`，与插件表单的 `提交` / `取消` 区分）
@@ -746,7 +746,7 @@ tool_call 中的前后调用形成顺序屏障。并发只发生在同一条 ass
   动作通道回传 `__submit`, 取消回传 `__cancel` (owner 固定 `__overlay`, 由实例级
   动作绑定接住)。
 
-### 9.4 展示区域尺寸感知
+### 9.4 展示区域尺寸通知
 
 面板与 Info 段落由主程序布局, 插件默认拿不到可用宽度。主程序 (声明能力名
 `agentxx.client.layout`) 提供两件套:
@@ -761,7 +761,7 @@ tool_call 中的前后调用形成顺序屏障。并发只发生在同一条 ass
 ### 9.5 定时器 (`agentxx.client.timer`)
 
 插件不能自己起线程/定时器 (`agentxx.agent.scheduler` 的 sleep 只在 agent 侧);
-client 侧需要"每隔一段时间刷新面板"的能力时用本表 (能力名
+client 侧需要"每隔一段时间刷新面板"时用本表 (能力名
 `agentxx.client.timer`, 表 IID 同名):
 
 ```c
@@ -895,8 +895,8 @@ Agentxx 客户端采用统一的分层工具特化渲染机制，TUI 核心层�
      (见第 1 条; `agentxx_planning` 因此同时注册类型级渲染器与实时装饰, 两条路径共用同一内容构建函数)。
 4. **优先级与降级路径**：
    - 渲染时查询顺序：`toolDecors` (按 `tool_call_id`) > `toolRenderers` (按 `tool_name`, 插件注册) >
-     `builtinToolRenderers` (按 `tool_name`, 主程序内置) > 通用兜底展示 (原始 `toolName` + 参数/结果文本)。
-   - 插件卸载/禁用时主程序自动摘除注册并还原兜底展示，启用时无损恢复 (主程序内置渲染器不受影响)。
+     `builtinToolRenderers` (按 `tool_name`, 主程序内置) > 通用降级展示 (原始 `toolName` + 参数/结果文本)。
+   - 插件卸载/禁用时主程序自动摘除注册并还原降级展示，启用时无损恢复 (主程序内置渲染器不受影响)。
 
 5. **items 渲染与中断内容的复用边界 (重构后)**：
    - **同一份描述层**：插件的 `items` (面板/Info 段/工具装饰/overlay) 与中断描述
@@ -912,7 +912,7 @@ Agentxx 客户端采用统一的分层工具特化渲染机制，TUI 核心层�
      见 [interrupt_presets.h](/agent/lib/include/agentxx/middlewares/interrupt_presets.h));
      `itemOf` / `blockOf` 负责中断的域内词汇 (`text`/`markdown`/`diff`/`separator`/`gap`/
      `control`/`submit`) 与描述层组件 (PascalCase) 的互转。
-     **插件自带中断 UI 的能力暂未开放**。
+     **暂不支持插件自带的中断 UI**。
    - **协议内没有"参数类型"概念** (bool/int/enum 等已删除): 需要类型化输入时由
      生产者调用预设模板生成描述 (类型→控件的映射只存在于预设内)。
    - **已丢弃的旧写法**（不留解析分支）：`indent`（用 `Padding`）/ `color`↔`role` 双名
@@ -990,7 +990,7 @@ Agentxx 客户端采用统一的分层工具特化渲染机制，TUI 核心层�
 
 ### 插件配置文件 (`config` 字段)
 
-- `agentxx-config.yaml` 中每个 `plugins` 条目可通过 `config` 指定插件的配置文件所在目录或文件路径 (可指向文件或目录；支持 `~`/`${VAR}`/相对路径，主程序归一化为绝对路径后透传)
+- `agentxx-config.yaml` 中每个 `plugins` 条目可通过 `config` 指定插件的配置文件所在目录或文件路径 (可指向文件或目录；支持 `~`/`${VAR}`/相对路径，主程序归一化为绝对路径后原样转发)
 - 插件经 `agentxx.agent.config` (agent 侧) / `agentxx.client.self` (client 侧) 的 `get_plugin_config_path` 查询该路径 (返回 `NULL` 表示未配置)，自行判断类型并加载 (如目录下扫描 `*.yaml`、读取单个文件等)
 - 典型用法：`config: ${AGENTXX_WORK_DIR}/config/my_plugin.yaml` 或 `config: ./my_plugin_config/` (相对工作目录)；SDK 中 `PluginBase::configPath()` 提供便捷封装
 
@@ -1097,7 +1097,7 @@ Closing → CloseFailed → Closing (可重试)
 - `start`：在主程序 IO 线程执行注册事务；同步 `notify.done` 返回即视为成功。
   失败时返回 `NULL + error`（视为拒绝，主程序回滚本次已生效的注册并撤销实例）。
   回滚范围覆盖工具、hook、能力、事件订阅、资源、prompt 贡献、图类型槽位与
-  Client UI 项/命令/订阅（回归含真实 DSO 双端：全量注册后失败 → 无残留 →
+  Client UI 项/命令/订阅（回归含真实 DSO 双端：全部注册后失败 → 无残留 →
   再次加载同名注册全部成功）。
 - `stop`：实例停用或关闭时调用，用于撤销插件自管的线程/定时器/订阅；
   可重复尝试，失败时实例保持 `Disabled`/`CloseFailed` 且保留上下文与动态库。
@@ -1108,7 +1108,7 @@ Closing → CloseFailed → Closing (可重试)
   加载路径不再支持"create 期注册、无生命周期入口"的旧形态。
 - SDK：`AGENTXX_PLUGIN_AGENT_EXPORT(Ctx, Name, Ver, Desc, StartFn, StopFn)` /
   `AGENTXX_PLUGIN_CLIENT_EXPORT(...)` 一次生成 `get_info/create/start/stop/destroy`
-  五个入口符号 (带异常兜底)；手写 `create/destroy` 的插件用
+  五个入口符号 (带异常保护)；手写 `create/destroy` 的插件用
   `AGENTXX_PLUGIN_{AGENT,CLIENT}_LIFECYCLE_EXPORT(Ctx, StartFn, StopFn)` 只生成
   `start/stop` trampoline。
 
@@ -1284,7 +1284,7 @@ typedef struct PluginxxCoroutineRuntimeIface {
 3. 插件侧适配器**自行合并 wake**（同一实例同时只登记一次请求）；主程序仍会做去重
    （同一时刻只保留一次已登记的请求）与关闭救援作为最后防线。
 4. `cancel_driver` **幂等、非阻塞**：尚未开始的请求之后不再执行回调；正在执行的
-   回调不会被强行中断，由插件自己的 root 收束协议收尾。
+   回调不会被强行中断，由插件自己的 root 收尾协议处理。
 5. 请求在**排队与执行期间持有实例执行 lease**，因此 `dlclose` 不会越过仍在排队或
    正在执行的插件代码（卸载的 idle 等待必然覆盖它）。
 6. 失败语义：`request_driver` 返回 `NULL + error_out` 表示主程序不再提供驱动；插件必须
@@ -1295,10 +1295,10 @@ typedef struct PluginxxCoroutineRuntimeIface {
 - **请求状态机**：`Idle → Running → Finished` 或 `Idle → Finished`（取消），迁移由
   一次 CAS 仲裁，保证"取消后不再执行回调"与"lease 恰好释放一次"。
 - **句柄校验**：`cancel_driver` 的 ABI 形态不含 host 参数，主程序无法从实例反查合法
-  句柄，因此请求在创建时登记进**进程级地址注册表**（只存 `weak_ptr`，收束时按地址
+  句柄，因此请求在创建时登记进**进程级地址注册表**（只存 `weak_ptr`，收尾时按地址
   摘除）。伪造/过期指针只会被安全忽略并记日志，**绝不解引用**。
 - **admission 模式**：请求采用 `lifecycle` 模式的实例 lease —— 实例进入 `Closing`
-  后仍允许驱动。这是必需的：关闭的第一步是取消全部 Operation，而插件的取消收束
+  后仍允许驱动。这是必需的：关闭的第一步是取消全部 Operation，而插件的取消收尾
   （取消回调 → 唤醒 → 下一个有限步骤）必须能继续跑完，否则关闭必然超时。
   `Disabled`/`Closed` 一律拒绝。
 - **关闭救援**：主程序只在**已判定关闭失败**（`waitInflightZero` 超时）时调用
@@ -1317,7 +1317,7 @@ typedef struct PluginxxCoroutineRuntimeIface {
 | `readySteps_` | 已投递但尚未执行的本地步骤数（每一步需要一次 `poll_one`） |
 | `wakePending_` | 一次显式 `wake` 尚未被请求覆盖（兼容"插件直接向 `local_executor` 投递"） |
 | `driverQueued_` / `driverRunning_` | 已申请请求（含 `request_driver` 正在返回的窗口）/ 回调正在执行 |
-| `pendingEpoch_` / `nextEpoch_` | 请求世代，用于识别"回调已消费本轮请求"的窗口 |
+| `pendingEpoch_` / `nextEpoch_` | 请求世代，用于识别"回调已处理本轮请求"的窗口 |
 | `polledRoots_` | 进行中**受控轮询根**数（声明式 `polled_tool`；0 = 不轮询、不建定时器） |
 | `pumpPending_` | 受控轮询判定"该继续驱动"（第二类申请请求理由） |
 | `pumpWaitScheduled_` / `pumpWaitOp_` | 已排定的退避定时器（主程序 `scheduler.sleep`）与其句柄 |
@@ -1411,7 +1411,7 @@ polledRoots_ 归零
 | 有进展 | 立即续票 | 本轮 `poll_one` 执行到了 handler（就绪事件被收走） |
 | 无进展 | 退避 10ms | `PollOneBridge::kPollIntervalMs`，经主程序 `scheduler.sleep`；到期回调只 `request_driver` |
 | 突发上限 | 连续 256 步后让出 1ms | `kPollBurstMax` / `kPollBurstYieldMs`，避免同实例自循环独占 IO 线程 |
-| 取消 | 置取消标志 + 取消已排定的退避 + 取消写入 `CancelRegistry` | 插件不必等满一个退避量子即可看到取消并收束根 |
+| 取消 | 置取消标志 + 取消已排定的退避 + 取消写入 `CancelRegistry` | 插件不必等满一个退避时间片即可看到取消并结束根 |
 | 无 driver 的主程序 | 不支持 | `coroutine_runtime` 是主程序必备能力：缺失时 kit 无法推进协程（驱动请求失败会终结未结束的根并记日志），不再有 offload 降级路径 |
 
 业务签名与 `blocking_tool` 同形（只是返回 `asio::awaitable<std::string>`），因此迁移
@@ -1474,7 +1474,7 @@ polled_tool(ctx, name, depict, schema,
     或 Linux/Android 上运行时无法创建 io_uring 环（容器/虚拟化的 seccomp 过滤
     ——`/proc/self/status` 的 `Seccomp: 2`——会拦截 `io_uring_setup`，内核过旧返回
     `ENOSYS`）；判断结果按进程缓存，测试可经 `setAsyncFileIoSupported(false)` 强制
-    关闭以覆盖同步兜底路径；
+    关闭以覆盖同步回退路径；
   - `agentxx_rag_search`：embedding 网络段先把实现体恢复为协程形态（其注释记录了
     "原版 asio 协程接口改为同步实现"）再迁移；分块/相似度等 CPU 段继续 offload（**二期**）。
 - **保持现状（无私有 reactor 等待）**：codegraph / planning / system_monitor / math /
@@ -1496,8 +1496,8 @@ polled_tool(ctx, name, depict, schema,
 | 主程序请求 | `plugin_runtime`：恒异步、每票至多一次、取消后不再执行、排队持 lease、幂等取消、伪造句柄安全忽略、Closing 允许 / Closed 拒绝、空回调返回 `NULL + error_out` |
 | kit 桥接 | `plugin_bridge`（伪主程序 C ABI 驱动）：不内联、每票一次 `poll_one`、空闲不自旋、wake 三个窗口不丢、主程序回调不重入、取消唯一终态、拒绝驱动即终结、stop 取消排队请求、多实例隔离 |
 | kit 受控轮询 | `plugin_bridge`：首步不内联、有进展立即续票、无进展恰好一次 10ms 退避（不新增请求）、根结束即停止轮询（取消已排定的退避）、取消会取消已排定的退避并只产生一个 `CANCELLED` 终态、`stop` 时未结束的 polled 根按 `FAILED` 终结一次并回收 `Job`、突发上限触发 1ms 让出 |
-| 端到端 | `plugins`：`example_bridge` 与 `example_polled_timer` 经真实主程序执行，断言 `driverAvailable/onHostIoThread/pumpOnStart`、"插件挂起期间主程序任务仍在推进"（同一 IO 序列交错执行）与 asio 原生 timer 真正到期；1000 并发工具调用压力用例 |
-| 端到端（迁移插件） | `plugins`：`agentxx_filesystem` read/write/edit（受控轮询）+ list（offload）同一实例共存；`agentxx_websearch` 经本地回环 HTTP 服务完成 fetch/fetch_markdown 与 6 路并发（互不阻塞）；`agentxx_execute_command` 在 `sleep 5` 挂起期间卸载 —— 取消收束、pump 停止、inflight 归零且耗时远小于命令自身超时 |
+| 全流程 | `plugins`：`example_bridge` 与 `example_polled_timer` 经真实主程序执行，断言 `driverAvailable/onHostIoThread/pumpOnStart`、"插件挂起期间主程序任务仍在推进"（同一 IO 序列交错执行）与 asio 原生 timer 真正到期；1000 并发工具调用压力用例 |
+| 全流程（迁移插件） | `plugins`：`agentxx_filesystem` read/write/edit（受控轮询）+ list（offload）同一实例共存；`agentxx_websearch` 经本地回环 HTTP 服务完成 fetch/fetch_markdown 与 6 路并发（互不阻塞）；`agentxx_execute_command` 在 `sleep 5` 挂起期间卸载 —— 取消收尾、pump 停止、inflight 归零且耗时远小于命令自身超时 |
 | 内存 | `plugin_bridge` 单独运行 0 泄漏；插件专项 ASan+LSan 与重构前基线逐项一致（4480 字节 / 64 处），含受控轮询新增用例（操作进行中时卸载/放弃的路径）后不变 |
 
 ---
@@ -1528,7 +1528,7 @@ polled_tool(ctx, name, depict, schema,
 | **IID** | `#define X_IFACE_<名> "命名空间.名字"` | 人 | `query_interface` 的键 |
 | **`struct_size`** | 表头第 2 个字段 | 主程序加载时填 `sizeof(表)` | 能安全读多少字节 |
 | **`version`** | 表头第 1 个字段 + `X_VERSION` | 主程序填 `X_VERSION` | 语义档位 |
-| **`MIN_VERSION`** | `#define X_MIN_VERSION` | 人 (当前恒为 1) | 本头能协同工作的最低表版本 |
+| **`MIN_VERSION`** | `#define X_MIN_VERSION` | 人 (当前恒为 1) | 本头能配合工作的最低表版本 |
 | **`BASELINE_SIZE`** | `#define X_BASELINE_SIZE sizeof(表)` | 人 (追加时改成 `offsetof`) | 所有提供该表的主程序都应具备的字节数 |
 
 `pluginxx::IfaceMeta<表>` 特化 (在 `agentxx/plugin/api/plugin_iface_meta.h` 与

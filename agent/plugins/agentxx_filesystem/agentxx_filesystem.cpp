@@ -322,7 +322,7 @@ static int32_t fsSetup(FsPluginCtx& ctx, const ScopeRef& ref) {
         kReadOnlyFlags
     );
     // 列表按读取类工具处理: 声明 `path` (可为通配模式) 决定是否询问一次;
-    // 列出的条目 (含 recursive 下钻结果) 在工具内逐项复核权限后才输出
+    // 列出的条目 (含 recursive 逐层展开结果) 在工具内逐项复核权限后才输出
     registerReadPathPermission(ctx, ref, kNameList, "path");
 
     // 2. Read

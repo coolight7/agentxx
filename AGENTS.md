@@ -63,7 +63,7 @@ int charToLower(int c) {
     return (c >= 'A' && c <= 'Z') ? static_cast<char>(c + ('a' - 'A')) : c;
 }
 ```
-- 合适的情况下，尽量使用`std::string_view`替代`const std::string&`
+- 合适时，尽量使用`std::string_view`替代`const std::string&`
 - **协程帧**: MSVC + 全程序 LTO 下, 外层协程帧会**把每个被 `co_await` 的内层协程
   帧尺寸再加一遍** (内层帧本身仍单独分配), 于是 MB 级帧沿调用链翻倍 —— 实测
   `AgentRunner::run` 的 2.5 MB 帧 ≈ 内层引擎两个协程帧 (825 KB + 1.66 MB) + 自身,
@@ -155,7 +155,7 @@ path/to/agentxx_test string_util regex
     - [cxx_utilxx](agent/third_party/cxx_utilxx/) 重依赖工具 (HTTP/WS/正则/路由/差异/
       散列), 命名空间 `utilxx`, 依赖 cxx_utilxx_base; 产物 `libcxx_utilxx(.so|_static.a)`
       (不含数据库依赖: sqlite 封装与设置库属于主程序, 见 `agentxx/util/`; git worktree
-      封装与项目专用标识 (数据目录/UA/Server 头/设备兜底串) 也不再属于该库,
+      封装与项目专用标识 (数据目录/UA/Server 头/设备默认串) 也不再属于该库,
       git worktree 见 `agentxx/tools/worktree.h`, 对外标识产品名由主程序经
       `utilxx_base::setProductName` 设置)
     - [cxx_pluginxx](agent/third_party/cxx_pluginxx/) 插件框架 (纯 C ABI 契约 pluginxx/api/、
@@ -328,7 +328,7 @@ path/to/agentxx_test string_util regex
   `plugin_kit.h` 的 `defineFeaturePoint`/`provideFeature`/`featureAnswer`/`callFeature`/
   `listFeaturePoints`; 压缩中间件已改用功能点取 token 与摘要 (见 `middlewares/summarization.cpp`)。
   统计只在开发者模式 (`dev_mode`, 启动期冻结) 收集。测试: `feature_points` (核心侧),
-  `plugin_feature` (插件面端到端), 示例插件 `agent/plugins/example_feature`
+  `plugin_feature` (插件面全流程), 示例插件 `agent/plugins/example_feature`
 - 注册可逆与独占 slot (2026-10-07): 插件贡献分三类 —— **叠加型** (工具/权限声明/钩子/
   图节点类型/事件订阅/能力/功能点声明与实现/清单资源 skill·memory·mcp) 按 owner 记账: 禁用摘生效留记录,
   启用由 `start` 重新声明, 卸载全摘; **贡献型** (提示词) 记 `(owner,key,sequence,value)`
@@ -368,7 +368,7 @@ path/to/agentxx_test string_util regex
   `ClientKeybindConflict` 记录列在"键位冲突"段)
 - 补充约定 (2026-09-22): 单条 UI 描述 **1 MiB 上限** (`kUiJsonMaxBytes`; 入口拒绝整条更新
   并记日志, 注册表保持上次成功内容)、注册表条目带内容 `version`、通用字段 `when` 仅解析
-  与往返保留 (渲染不消费)、树节点在有 `collapseExpanded` 时按"节点路径"键支持主程序管理
+  与往返保留 (渲染不处理)、树节点在有 `collapseExpanded` 时按"节点路径"键支持主程序管理
   折叠; 行元素内的 `reflect` 框由元素自有节点 (`OwnedReflect`, 见
   `agent/client/include/agentxx-client/io/tui/framework/owned_reflect.h`) 持有 —— 接入点只搬
   元素也不会悬空 (行渲染 `renderItem`/`mergeTextButton` 与命中登记
@@ -376,7 +376,7 @@ path/to/agentxx_test string_util regex
   `middleware::itemOf/blockOf` + `preset::blocksOf`;
   SDK 便捷方法另有 `panelItems`(就地构建自动提交)/`setToolDecor`/`Items::form`
 - 测试: 组件层解析/渲染/命中 `ui_items` + `tui_ui_items`; 表单 `tui_form`;
-  接入点 (面板/Info/overlay) `tui_widget`·`tui_form`, 装饰 `tui_tool_header`; 插件端到端
+  接入点 (面板/Info/overlay) `tui_widget`·`tui_form`, 装饰 `tui_tool_header`; 插件全流程
   (含老主程序降级) `plugin_sdk`·`client_plugins`
 
 客户端 UI 与远程交互补充 (2026-09):
@@ -541,13 +541,13 @@ path/to/agentxx_test string_util regex
   - 中断/异常不再需要"整份上下文快照 + 回灌": 会话不随图状态回滚, 节点抛出前已写入的消息保留
 - 测试模块: client 侧 19 个 (含 `banner_art` `update_check` `tui_form` `tui_surface` `tui_theme` `tui_ui_items` `tui_widget`),
   同步组另有 `json` `json_view` `json_reflection` `interrupt_ui` `ui_items` `plugin_runtime` `plugin_sdk` `plugin_bridge`,
-  插件挂载组另有 `plugin_host_mount` (一管理器 + 多 agent) `plugin_multi_mount` (示例插件端到端)
+  插件挂载组另有 `plugin_host_mount` (一管理器 + 多 agent) `plugin_multi_mount` (示例插件全流程)
 - 命令执行环境与输出编码 (2026-10-18, 插件 `agentxx_execute_command`): 子进程固定下发
   `PYTHONIOENCODING=utf-8` / `PYTHONUTF8=1` / `JAVA_TOOL_OPTIONS` (stdout/stderr 编码 +
   `-Dfile.encoding=UTF-8`, JDK 17 及以前默认字符集也是 GBK) / `NO_COLOR` / `TERM=dumb` /
   `PAGER=cat` / `GIT_PAGER=cat` / `PWD`, Windows 另有系统代码页变量
   `AGENTXX_EXEC_OEM_CODEPAGE` / `AGENTXX_EXEC_ANSI_CODEPAGE`;
-  **原生工具的混合编码输出工具侧不改写** (整段本地编码仍由 `autoConvertToUtf8` 兜底;
+  **原生工具的混合编码输出工具侧不改写** (整段本地编码仍由 `autoConvertToUtf8` 统一处理;
   按行/按段猜测样本太短、uchardet 易认错, 会把正常 UTF-8 文本弄坏), 由提示词引导模型自行处理:
   ① 命令开头切控制台解码
   `[Console]::OutputEncoding=[Text.Encoding]::GetEncoding([int]$env:AGENTXX_EXEC_OEM_CODEPAGE); <命令>`
@@ -686,7 +686,7 @@ path/to/agentxx_test string_util regex
 ## 常见问题
 - Windows/MSVC 禁止添加 `/FS` `/MP` 编译选项: 命令行出现重复 `/FS` 时
   VS18/MSVC 14.51 的 FileTracker 会失效 (子编译进程不写 per-file 跟踪记录),
-  导致每次构建都全量重编 (增量编译完全失效)。参数经 superbuild 多层 CMake
+  导致每次构建都全部重编 (增量编译完全失效)。参数经 superbuild 多层 CMake
   传递极易重复叠加, 故项目统一不使用这两个选项, 各 CMakeLists 中已有注释标记
 - Windows 增量编译还会被 **vcpkg 用户级集成**的开关切换破坏 (2026-10-10): 由
   `vcpkg integrate install` 装在 `%LOCALAPPDATA%\vcpkg\vcpkg.user.props` / `.targets`,
@@ -694,7 +694,7 @@ path/to/agentxx_test string_util regex
   `vcpkg.targets` 会给每个工程补 `...\vcpkg\installed\<triplet>\include` 等编译/链接参数,
   于是"构建脚本 (script/windows_*_build.bat 里清了这两个变量) 编译的产物"与
   "终端/IDE 直接 `cmake --build` (未清) 编译的产物"命令行不同, MSVC FileTracker
-  判源文件过期 → 每次都从依赖库开始全量重编 (实测单个依赖库 12/14 个源文件重编,
+  判源文件过期 → 每次都从依赖库开始全部重编 (实测单个依赖库 12/14 个源文件重编,
   全树小时级)。顶层 `agent/CMakeLists.txt` 现在会在 `{build}/Directory.Build.props`
   固定关闭 vcpkg (`VCPkgLocalAppDataDisabled=1` / `VcpkgEnabled=false`),
   脚本/终端/IDE 各入口命令行一致, 无需再手工切换环境变量
@@ -730,7 +730,7 @@ sudo echo 3 > /proc/sys/vm/drop_caches
   判据在 `agent/lib/include/agentxx/util/invisible_text.h` 的 `isVisuallyBlank`:
   写入侧 (`EventBridge` 的 assistant content)、读取侧 (`SessionStore::loadSession` /
   `loadViewMessagesAfter`) 都过滤, 渲染侧 `isBlankMessage` 不再给这种消息加尾部空行。
-  注意 `msgIdCounter` 兜底要用**解析行数** (被过滤的消息也占过 id)。
+  注意 `msgIdCounter` 缺失时要用**解析行数**推算 (被过滤的消息也占过 id)。
   "思考"消息带耗时 (`durationMs > 0`) 或加密思考 token 统计时保留。
   详见 `resource/history/fix-tui-blank-message/index.md`
 - TUI 提示消息 (`ViewMessage::Role::Tip`) 的展示约定 (2026-10-25): 折叠标记、级别文本与正文都按

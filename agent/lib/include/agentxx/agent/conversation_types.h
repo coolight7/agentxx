@@ -43,7 +43,7 @@ inline MediaType mediaTypeFromString(std::string_view s) noexcept {
     return MediaType::Image;
 }
 
-/// 多模态单文件/单次限额 (与 TUI 预检/服务端收敛一致)
+/// 多模态单文件/单次限额 (与 TUI 预检/服务端保持一致)
 inline constexpr uint64_t kMaxImageBytes            = 10ULL * 1024 * 1024;
 inline constexpr uint64_t kMaxAudioBytes            = 25ULL * 1024 * 1024;
 inline constexpr uint64_t kMaxVideoBytes            = 50ULL * 1024 * 1024;
@@ -478,7 +478,7 @@ struct WireDelta {
     /// TurnStart 即时回显附件 (服务端 viewMessages 权威副本经 Sync 补齐):
     /// - TurnStart 历史上仅 text+msgId，附件会丢失导致首屏 user 消息无卡片
     /// - 此处仅传元数据（displayName/mimeType/pathOrUrl/sizeBytes/type），
-    ///   不传 dataUrl（Base64 体积大，走 Sync 全量时再补齐）
+    ///   不传 dataUrl（Base64 体积大，走 Sync 全部时再补齐）
     std::vector<MediaAttachment> attachments;
 
     // Think 结构体 (Role::Think 消息专属, 如加密思考/token统计)
@@ -604,13 +604,13 @@ struct SequencedViewMessage {
 
 struct WireSyncPayload {
     /// 本批 messages 首条在服务端完整 viewMessages 中的绝对下标
-    /// - 全量同步: 0
+    /// - 完整同步: 0
     /// - 尾窗同步 (历史分页, initialSyncTailCount>0): 窗口起始下标 (>0 表示
     ///   上方还有更早消息未同步), 客户端据此支持"向上滚动加载更早历史"
     uint64_t                 fromIndex = 0;
     std::vector<ViewMessage> messages;
     std::string              tailHash;
-    /// 服务端会话总消息数 (0 = 未提供/未知; 全量同步时 == messages.size())
+    /// 服务端会话总消息数 (0 = 未提供/未知; 完整同步时 == messages.size())
     uint64_t                      totalMessages = 0;
     std::vector<MessageQueueItem> messageQueue;
 
@@ -632,7 +632,7 @@ struct WireSyncPayload {
     /// 本批消息是否为**增量补拉**
     /// - true: `messages` 是既有历史尾部的追加内容, 客户端应按 msg.id 去重后追加,
     ///   不得整体替换本地历史
-    /// - false (默认): 全量或尾窗快照, 客户端整体替换本地历史
+    /// - false (默认): 全部或尾窗快照, 客户端整体替换本地历史
     bool incremental = false;
 };
 

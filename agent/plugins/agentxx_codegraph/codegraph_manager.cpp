@@ -1266,7 +1266,7 @@ public:
 
             // 每批文件提交后 WAL checkpoint: 已提交数据及时合并进主库文件,
             // 缩小"索引中途进程被强杀 -> 数据丢失"的窗口 (-wal 文件保留时
-            // sqlite 会自动恢复, checkpoint 是防止 -wal 被外部清理的兜底)
+            // sqlite 会自动恢复, checkpoint 是防止 -wal 被外部清理的保险)
             if (processed % kCheckpointFileBatch == 0) {
                 std::unique_lock<std::shared_mutex> lock(mutex_);
                 runWithRetry("WAL checkpoint", 3, [&]() {
@@ -1313,8 +1313,8 @@ public:
         //   与规则匹配不占锁
         // - 引用解析: 内部两阶段 (shared_lock 只读计算与查询并发 ->
         //   unique_lock 事务写)
-        // - FTS 重建: 仅全量索引执行 (单条 insert/delete 走触发器同步,
-        //   增量时 FTS 已一致, 重建冗余; 全量保留作兜底)
+        // - FTS 重建: 仅完整索引执行 (单条 insert/delete 走触发器同步,
+        //   增量时 FTS 已一致, 重建冗余; 完整重建留作保险)
         // - WAL checkpoint: 短暂独占锁
         cleanupRemovedFiles(path);
 
@@ -1373,10 +1373,10 @@ public:
 
     /// 单次索引收尾最多解析的未解析引用条数
     /// - 引用解析是"每条引用一次名字查询"(含 LIKE 全表扫描), 大库
-    ///   (数千~数万条未解析引用) 下单次全量可达分钟级; 预热索引/手动索引
+    ///   (数千~数万条未解析引用) 下单次完整索引可达分钟级; 预热索引/手动索引
     ///   会长时间不发送完成信号 (TUI 状态栏一直显示 "ready"/"indexing")。
-    ///   限制单次处理量, 剩余引用下次启动/下次索引继续, 每次收敛一部分。
-    /// - 配合不可解析引用的删除 (见 resolveReferences), 多启动几次后收敛。
+    ///   限制单次处理量, 剩余引用下次启动/下次索引继续, 每次处理一部分。
+    /// - 配合不可解析引用的删除 (见 resolveReferences), 多启动几次后处理完。
     static constexpr int kMaxResolveRefsPerRun = 2000;
 
     /// 单次引用解析中每个名字的最大候选节点数 (与原 find_nodes_by_name
@@ -1392,7 +1392,7 @@ public:
     ///   索引完成信号 (剩余引用下次继续)
     /// - 无法解析的引用 (源节点已消失 / 目标符号不存在) 直接删除:
     ///   多为提取器噪音或目标被过滤的残留, 不删除会每次启动重复处理
-    ///   同一批引用 (永不收敛); 源文件重索引时会重新提取生成
+    ///   同一批引用 (永远处理不完); 源文件重索引时会重新提取生成
     /// - 解析阶段发送进度回调 (processed, 0, "resolve refs"): 使 TUI 在
     ///   收尾阶段仍有进度反馈, 不传完成信号 (完成信号由 indexDirectory
     ///   收尾统一发送)
@@ -1437,7 +1437,7 @@ public:
             refs_to_delete.reserve(unresolved.size() / 4);
 
             // ── 节点内存快照 ─────────────────────────────────────────────
-            // 一次 SQL 全量加载节点, 在内存建立 name/qualified_name/尾段/ID
+            // 一次 SQL 全部加载节点, 在内存建立 name/qualified_name/尾段/ID
             // 哈希索引, 替代每条引用 1~2 次 SQL 查询。此前每条引用经
             // find_nodes_by_name 触发全表 LIKE 扫描 (万级节点库 ~10ms/次),
             // 数千条引用时是主要耗时来源; 且同一名字 (如测试宏上千条引用)
@@ -2000,7 +2000,7 @@ public:
                             return;
                         }
                         std::string lang = codegraph::detect_language(std::string{path});
-                        // 与全量/增量索引一致的过滤: 内置过滤 + ignorePaths + gitignore
+                        // 与完整/增量索引一致的过滤: 内置过滤 + ignorePaths + gitignore
                         if (!lang.empty() && !this->isFileIgnored(std::string{path})) {
                             this->indexFile(path, lang);
                         }
@@ -2108,7 +2108,7 @@ public:
     }
 
     /// 单文件是否应被过滤 (内置过滤 + ignorePaths 正则 + gitignore 缓存)
-    /// - 供文件监听增量索引与收尾清理使用; 全量/增量索引走
+    /// - 供文件监听增量索引与收尾清理使用; 完整/增量索引走
     ///   traverse_source_files 的遍历过滤 (gitignore 按层级加载),
     ///   两者过滤规则保持一致
     bool isFileIgnored(std::string_view file_path) {
@@ -2268,7 +2268,7 @@ public:
 
     /// 索引进度通知间隔: 每间隔该时长推送一次进度回调 (遍历阶段文件总数未知)
     /// - 流式遍历时每文件一次回调的 post/字符串拷贝开销对大目录 (数万文件)
-    ///   可感知, 定时通知既保持 UI 进度平滑增长又控制开销;
+    ///   能被发现, 定时通知既保持 UI 进度平滑增长又控制开销;
     ///   首个文件仍立即通知 (UI 尽快显示"已发现文件"), 完成信号不受间隔约束
     static constexpr auto kProgressNotifyInterval = std::chrono::seconds{5};
 

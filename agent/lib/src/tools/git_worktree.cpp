@@ -42,7 +42,7 @@ std::string generateWorktreeName(const std::string& repoRootDir) {
             return name;
         }
     }
-    // 兜底: 理论不可达 (同秒 100 个), 时间戳进位后重试一次
+    // 回退: 理论不可达 (同秒 100 个), 时间戳进位后重试一次
     return fmt::format("wt-{:x}-{}", now + 1, 0);
 }
 

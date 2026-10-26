@@ -64,7 +64,7 @@ protected:
 public:
 
     /// 谨慎存储/修改 middleware 中的变量，
-    /// 这是一个agent中所有会话共享的，单会话变量应该放 state 内
+    /// 这里放 agent 中所有会话共享的状态, 单会话变量应该放 state 内
 
     /// 名称
     std::string                                 name;
@@ -466,7 +466,7 @@ public:
     inline static const std::string graphDataKey_LLMTokenUsage{"xx_ModelCallWrap_LLMTokenUsage"};
     /// LLM 压缩 (summarization) 连续失败计数
     /// - 每次 agent 轮执行清理; 同一轮内重试/多轮 modelcall 累积,
-    ///   达到上限 (或超限严重) 时触发硬截断兜底
+    ///   达到上限 (或超限严重) 时触发硬截断回退
     inline static const std::string graphDataKey_summarizationFailCount{"xx_summarizationFailCount"
     };
     /// 上次成功压缩后的消息数量

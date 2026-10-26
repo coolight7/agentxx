@@ -113,7 +113,7 @@ std::string toGeneric(const fs::path& p) {
 }
 
 /// 截断违规列表, 只打印前若干条, 末尾附总数
-/// - 边界破坏往往成片出现 (一次误加头文件会牵出多处引用), 全量打印会淹没测试输出
+/// - 边界破坏往往成片出现 (一次误加头文件会牵出多处引用), 全部打印会淹没测试输出
 void reportViolations(std::string_view rule, const Violations& v, size_t maxPrint = 20) {
     XX_TEST_EXPECT_EQ(v.size(), size_t{0});
     if (v.empty()) {
@@ -530,7 +530,7 @@ void checkInterfaceTableNames(const fs::path& root, Violations& v) {
 /// - **IID** (`X_IFACE_<名>` 字符串常量): `query_interface` 的键;
 /// - **`struct_size`** 字段: 主程序加载时填 `sizeof(表)`;
 /// - **`version`** 字段 + `X_VERSION`: 语义档位;
-/// - **`X_MIN_VERSION`**: 本头能协同工作的最低表版本;
+/// - **`X_MIN_VERSION`**: 本头能配合工作的最低表版本;
 /// - **`X_BASELINE_SIZE`**: 所有提供本表的主程序都应具备的字节数。
 ///
 /// 还检查:

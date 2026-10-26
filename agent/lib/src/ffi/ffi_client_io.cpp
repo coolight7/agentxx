@@ -317,7 +317,7 @@ void FfiClientAgentIO::onPeerMessage(agent::WireMessage msg) {
                 emitEvent(AGENTXX_FFI_EVT_HOST_TOOL_CALL, dump(j));
             } else if constexpr (std::is_same_v<T, agent::WireAddModelResult>) {
                 // 模型增删回执: 走同步查询应答路由 (嵌入方程序 agentxx_ffi_add_model/
-                // remove_model 在等待), 同时作为 EVT_WIRE 透传给嵌入方程序
+                // remove_model 在等待), 同时作为 EVT_WIRE 原样转给嵌入方程序
                 auto j = agent::io::toJson(m);
                 if (onSyncReply) {
                     onSyncReply(SyncKind::AddModelResult, j);

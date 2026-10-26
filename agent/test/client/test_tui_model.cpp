@@ -6,7 +6,7 @@
 ///
 /// 覆盖:
 /// 1. 历史分页窗口:
-///    - 全量/尾窗同步后的窗口边界与"上方是否还有更早历史"
+///    - 完整/尾窗同步后的窗口边界与"上方是否还有更早历史"
 ///    - 分页请求的去重 (请求未完成期间不重复发) 与边界 (上方无历史时不发)
 ///    - 页响应判定: 接受 / 空页 / 迟到会话 / 不连续页 / 无未完成的请求
 ///    - 前插与尾部追加对窗口起点/条数的影响
@@ -100,7 +100,7 @@ void testHistoryWindow() {
     XX_TEST_EXPECT_FALSE(win.hasMore());
     XX_TEST_EXPECT_FALSE(win.beginOlderPageRequest());
 
-    // 全量同步: windowStart == 0, 总数与条数一并更新
+    // 完整同步: windowStart == 0, 总数与条数一并更新
     win.reset(0, 30, 30);
     XX_TEST_EXPECT_EQ(win.windowStart(), uint64_t{0});
     XX_TEST_EXPECT_EQ(win.totalCount(), uint64_t{30});

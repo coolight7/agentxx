@@ -31,7 +31,7 @@ namespace {
 // 日志捕获 (进程级环形缓冲)
 // ---------------------------------------------------------------------------
 
-/// 只保留最近 [capacity] 行: 诊断包要的是"刚刚发生了什么", 不是全量日志
+/// 只保留最近 [capacity] 行: 诊断包要的是"刚刚发生了什么", 不是全部日志
 /// - 用 [ThreadedLogSink] (自带后台线程 pump): 普通 LogSink 需要主程序线程主动
 ///   pump, 而诊断包是"随时可能被调用"的只读导出, 不该要求调用方先驱动日志管线;
 /// - [recentLogLines] 会先 flush 再取快照, 保证刚写入的日志能出现在诊断包里
@@ -344,7 +344,7 @@ std::string buildDiagnosticsText(
         }
     }
 
-    // ---- 后台任务 (关闭/收敛诊断) ----
+    // ---- 后台任务 (关闭/收尾诊断) ----
     if (ctx.taskScope) {
         lines.push_back("");
         lines.push_back("## background tasks");

@@ -32,7 +32,7 @@ public:
 
 /// 工具权限目标来源 (工具权限声明的一部分; 见 [ToolPermissionSpec])
 enum class ToolPermissionTargetKind {
-    /// 无目标: 仅做工具级判定 (目标为空, 命中不到规则表, 由 noRuleOperator 兜底)
+    /// 无目标: 仅做工具级判定 (目标为空, 命中不到规则表, 由 noRuleOperator 决定)
     None,
 
     /// 路径: 参数值按会话工作目录规范化为绝对路径后匹配规则 (最长前缀匹配)
@@ -95,7 +95,7 @@ enum class PermissionReason {
     FullAuth,
     /// 命中已注册规则 (白名单/黑名单/记住的选择/工作目录规则)
     Rule,
-    /// 未命中任何规则, 按模式默认动作兜底
+    /// 未命中任何规则, 按模式默认动作决定
     NoRuleDefault,
 };
 
@@ -107,7 +107,7 @@ struct PermissionDecision {
     PathDecision decision = PathDecision::Allow;
     /// 判定理由 (见 PermissionReason)
     PermissionReason reason = PermissionReason::Unresolved;
-    /// 命中的规则 (路径前缀; 未命中规则/按默认兜底时为空)
+    /// 命中的规则 (路径前缀; 未命中规则/按默认动作时为空)
     std::string rule;
     /// 判定目标 (已规范化; 空目标时为空)
     std::string target;
@@ -185,7 +185,7 @@ public:
 
     /// 判定单个目标是否允许 (权限规则统一入口)
     /// - 依次: 工作区隔离写拒绝 → 配置拒绝路径 → 完全授权 → 规则表命中
-    ///   (ALLOW/DENY/INTERRUPT) → [noRuleOperator] 兜底
+    ///   (ALLOW/DENY/INTERRUPT) → [noRuleOperator] 决定
     /// - INTERRUPT 时经会话总线询问 (target 为空表示工具级询问)
     ///
     /// - `args`:
@@ -207,7 +207,7 @@ public:
 
     /// 判定单个路径目标 (纯只读判定: 不发起询问、不产生中断、不修改任何状态)
     /// - 依次: 工作区隔离写拒绝 → 配置拒绝路径 → 完全授权 → 规则表命中
-    ///   (ALLOW/DENY/INTERRUPT) → [noRuleOperator] 兜底; INTERRUPT 场合返回
+    ///   (ALLOW/DENY/INTERRUPT) → [noRuleOperator] 决定; INTERRUPT 场合返回
     ///   [PathDecision::Ask] 而不询问
     /// - `path` 须为已规范化的绝对路径 (见 [normalizePermissionPath])
     PathDecision

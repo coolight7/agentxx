@@ -132,7 +132,7 @@ private:
     /// 防止结束标记丢失时后续输入被吞入粘贴缓冲区
     static constexpr auto kPasteTimeout = std::chrono::milliseconds(2000);
 
-    /// 处理左键释放命中 (返回是否消费)
+    /// 处理左键释放命中 (返回是否处理)
     bool handleClick(const ftxui::Mouse& mouse);
     /// 取指定命中 id 的屏幕区域 (不存在返回空区域)
     ftxui::Box hitBox(std::string_view id) const;

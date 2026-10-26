@@ -177,7 +177,7 @@ utilxx_base::Json KeyMetrics::toJson() const {
     turns["max_ms"]         = turnMaxMs_.load(std::memory_order_relaxed);
     j["turns"]              = std::move(turns);
 
-    // 首 token 延迟 (TTFT): 用户感知的"开始有反应"的时间
+    // 首 token 延迟 (TTFT): 用户知道的"开始有反应"的时间
     utilxx_base::Json ttft = utilxx_base::Json::object();
     ttft["samples"]        = firstTokenSamples_.load(std::memory_order_relaxed);
     ttft["avg_ms"]         = avgOf(

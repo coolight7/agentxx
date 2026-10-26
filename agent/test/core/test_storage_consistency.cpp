@@ -12,7 +12,7 @@
 ///   ③ 多条互不影响 (顺序读 + 逆序读, 覆盖缓存淘汰场景)
 ///   ④ 大值往返 (256 KB, 覆盖 spill 场景)
 ///   ⑤ 重开 (= 进程重启): 持久化后端保留数据; 纯内存替身明确丢弃
-///   ⑥ 写失败可感知: 后端无法写入时, 要么 put 返回 false / 读回看不到该值,
+///   ⑥ 写失败能被发现: 后端无法写入时, 要么 put 返回 false / 读回看不到该值,
 ///      要么提供非空失败原因; 恢复可写后继续正常工作
 ///
 /// 已知语义差异 (写进断言, 不是漏测):
@@ -219,7 +219,7 @@ void runKvContract(const KvBackend& bk) {
         XX_TEST_EXPECT_NULLOPT(bk.get("multi-3"));
     }
 
-    // ⑥ 写失败可感知
+    // ⑥ 写失败能被发现
     if (!bk.makeWritesFail) {
         TEST_INFO << "[storage-consistency] " << bk.name
                   << ": 写失败步骤不适用 (该后端无法人为制造写入失败)" << std::endl;

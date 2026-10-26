@@ -2,7 +2,7 @@
 /// 模型调用节点共用的工具函数
 ///
 /// - 这些函数原先在 openai_provider.cpp / anthropic_provider.cpp /
-///   modelcall.cpp 各存一份拷贝, 收敛到这里避免实现细节漂移
+///   modelcall.cpp 各存一份拷贝, 统一到这里避免实现细节不一致
 /// - 只放与具体协议无关的通用逻辑; 协议特化 (请求体组装/SSE 解析/错误提取等)
 ///   仍留在各自 provider 内
 #pragma once
@@ -32,7 +32,7 @@ namespace protocol {
 /// 这些 chunk **不是模型输出文本**, 只用于把"生成阶段变化"通知 UI (占位提示),
 /// 因此不参与正文/思考累积与 tps 统计:
 /// - 发出方: 各 Provider 的 SSE 解析 (工具调用开始)、模型调用节点 (请求已发出)
-/// - 消费方: `ModelCallWrapNode::onReceiveToken` 的 token 回调 (原样转发) →
+/// - 处理方: `ModelCallWrapNode::onReceiveToken` 的 token 回调 (原样转发) →
 ///   `EventBridge::handleLLMToken` (映射为 `WireDelta::Type::GenStatus`)
 namespace chunk_type {
 
@@ -259,7 +259,7 @@ inline utilxx_base::Json chatMessagesToOpenAIJson(
 /// 与 `chatMessagesToOpenAIJson(messages, sendThinking).dump()` **逐字节一致**的流式版本
 ///
 /// - 用途: 请求体组装时把消息数组直接写成 JSON 文本, 不先构造整段消息数组的 DOM。
-///   长上下文下每轮都要发一次全量消息, 构造整段 DOM 会同时留下"DOM 一份 + dump 一份"
+///   长上下文下每轮都要发一次完整消息, 构造整段 DOM 会同时留下"DOM 一份 + dump 一份"
 ///   两块 O(上下文) 的临时内存, 逐条追加把临时内存压到单条消息量级
 ///   (最终请求体字符串本身仍是 O(上下文), 无法避免)
 /// - 实现复用 [chatMessagesToOpenAIJson]: 逐条消息走同一份转换逻辑, 因此输出与

@@ -158,7 +158,7 @@ SummarizationMiddlewareHandle::SummarizationMiddlewareHandle(
             // 核心实现: 只产出摘要文本, 不写回会话 (调度在中间件)
             auto summary = co_await doSummarizeWithLLM(req.sessionId, req.messages, req.manual);
             if (summary.empty()) {
-                co_return std::nullopt; // 失败按"没意见"处理, 由调度方兜底
+                co_return std::nullopt; // 失败按"没意见"处理, 由调度方决定
             }
             agentxx::feature::SummarizeValue value;
             value.summary   = std::move(summary);
@@ -478,12 +478,12 @@ size_t SummarizationMiddlewareHandle::splitRecentByTokenBudget(
         --end;
     }
 
-    // 对齐 1: recent 开头为 tool 消息 → 回退到发起这组 toolcall 的 assistant,
+    // 边界修正 1: recent 开头为 tool 消息 → 回退到发起这组 toolcall 的 assistant,
     // 把整组纳入 recent, 避免产生孤儿 tool 结果 / 悬空 tool_calls
     while (end > systemCount && end < messages.size() && "tool" == messages[end].role) {
         --end;
     }
-    // 对齐 2: 压缩段末尾为 assistant(tool_calls) 且其 tool 结果在 recent 内 →
+    // 边界修正 2: 压缩段末尾为 assistant(tool_calls) 且其 tool 结果在 recent 内 →
     // 整组划入 recent, 避免压缩段以悬挂 tool_calls 结尾
     while (end > systemCount) {
         const auto& last = messages[end - 1];
@@ -558,9 +558,9 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
     // - 上限用模型上下文上限本身, 不再乘 0.95 的余量: 这份载荷就是父会话
     //   刚才成功发出的同一批消息 + 末尾一条指令, 只有指令 (几百 token) 是新增的,
     //   余量只会造成"明明发得出去却先丢掉最旧消息" —— 而丢最旧消息会让请求前缀
-    //   从第一条起与父会话分叉, 上游前缀缓存整段失效 (实测压缩请求缓存命中
+    //   从第一条起与父会话不一致, 上游前缀缓存整段失效 (实测压缩请求缓存命中
     //   从 ~90% 掉到只剩 system + 工具段)
-    // - 真超限时上游会按上下文超限报错, 由调用方按失败计数走硬截断兜底
+    // - 真超限时上游会按上下文超限报错, 由调用方按失败计数走硬截断回退
     size_t droppedCount = 0;
     while (reqMsgs.size() > 1 && countTokens({}, reqMsgs, false) > modelMaxToken) {
         size_t dropIdx = ("system" == reqMsgs[0].role) ? 1 : 0;
@@ -588,13 +588,13 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
     reqMsgs.push_back(std::move(promptMsg));
 
     // 通过 subagent 完成压缩 (同上下文模式):
-    // - messages: 结构化透传 (system + 压缩段 + 压缩指令), 无文本转录
+    // - messages: 结构化原样转发 (system + 压缩段 + 压缩指令), 无文本转录
     // - sessionId: 父线程 → 子代理与父会话相同 session_id + 相同模型,
     //   命中 provider KV/prefix cache
     // - tools: 不传入 → 子代理无任何工具, 仅对当前上下文原样做压缩
     //   (不再提供 agentxx_share_store, 长内容由模型直接写进摘要;
     //   避免 subagent 侧工具执行成本与父会话 store 的跨会话耦合)
-    // - enable_summarization: false → 禁止对透传前缀二次压缩
+    // - enable_summarization: false → 禁止对原样转发前缀二次压缩
     // - subagent 内部完成"阅读上下文 → 输出摘要"的完整 agent 循环,
     //   最终纯文本输出即为摘要
     // - 首次调用抛 NodeInterrupt 暂停父轮次, Session 派生 subagent,
@@ -615,7 +615,7 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
         auto host = agentCtxPtr->host.lock();
         if (host != nullptr) {
             // 单任务批量请求; tools=[] 显式无工具 (与压缩注释意图一致, 避免
-            // 子代理默认全量工具的执行成本与副作用), enable_summarization=false
+            // 子代理默认全部工具的执行成本与副作用), enable_summarization=false
             // 禁止二次压缩, sessionId=父线程 (同上下文模式)
             // 另有 keepProvidedSystemMessage / inheritRequestTools /
             // toolExecutionDisabled: 请求前缀与父会话一致 (缓存命中) 且不执行工具
@@ -625,7 +625,7 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
             batchReq.parentSessionId = std::string{sessionId};
             batchReq.tasks.push_back(events::SubagentBatchItem{
                 .subagentName = "subagent_task",
-                .messages     = reqMsgsJson, // 结构化透传 (含压缩指令), 无文本转录
+                .messages     = reqMsgsJson, // 结构化原样转发 (含压缩指令), 无文本转录
                 .sessionId    = std::string{sessionId},
                 .tools        = utilxx_base::Json::array(), // []: 无工具
                 .enableSummarization = false,
@@ -638,7 +638,7 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
 
             // 超时保护: 手动压缩无父轮次取消令牌可级联, 子代理 LLM 卡住时不能
             // 无限等待 (占用 io 线程); 超时放弃等待 (子代理后台完成自回收),
-            // 返回空串由调用方走 hardTruncate 兜底
+            // 返回空串由调用方走 hardTruncate 回退
             constexpr std::chrono::milliseconds kManualCompactTimeout{std::chrono::minutes{2}};
             auto batchResp = co_await utilxx::asyncWithTimeout<events::RespSubagentBatch>(
                 [&]() -> asio::awaitable<events::RespSubagentBatch> {
@@ -661,7 +661,7 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
                 );
                 co_return "";
             }
-            // 错误串透传防护 (与中断路径一致): 不得把错误串当摘要写回
+            // 错误串转发防护 (与中断路径一致): 不得把错误串当摘要写回
             if (item.content.size() >= 2 && item.content.front() == '{'
                 && item.content.find("\"error\"") != std::string::npos) {
                 XX_LOGW(
@@ -684,7 +684,7 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
   // (请求前缀与父会话逐字节一致, 上游前缀缓存才命中)
         {"keep_provided_system",   true                  },
         {"inherit_request_tools",  true                  },
- // 本次运行不执行工具: 工具定义只用于对齐前缀, 模型返回 tool_calls 时忽略
+ // 本次运行不执行工具: 工具定义只用于保持前缀一致, 模型返回 tool_calls 时忽略
         {"disable_tool_execution", true                  },
     };
 
@@ -706,9 +706,9 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
             XX_LOGE("SummarizationMiddlewareHandle 压缩 subagent 执行失败: {}", resp->errorMessage);
             co_return "";
         }
-        // 取消/错误串透传防护: 子代理被取消时主程序返回
+        // 取消/错误串转发防护: 子代理被取消时主程序返回
         // `{"error":"Sub-agent cancelled..."}` (AgentRunner 已优先按取消
-        // 抛, 此处为直接调用路径的兜底), 不得当作有效摘要写回上下文,
+        // 抛, 此处为直接调用路径的处理), 不得当作有效摘要写回上下文,
         // 否则表现为"压缩成功 + 继续执行", 取消形同虚设
         if (resp->result.size() >= 2 && resp->result.front() == '{'
             && resp->result.find("\"error\"") != std::string::npos) {
@@ -726,7 +726,7 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
         // 手动压缩的调用方 (事件订阅协程) 不在中断循环里, 逃逸的中断会让
         // 压缩静默失败; 溢出压缩更是运行在轮次内, 会造成本轮以"中断未完成"
         // 静默结束。故此处把控制流异常 (中断/取消) 转成"压缩失败"返回空串,
-        // 由调用方走硬截断兜底 (见 summarization.h 说明)
+        // 由调用方走硬截断回退 (见 summarization.h 说明)
         co_return co_await agentxx::util::catchErrorAsync<std::string>(
             requestViaBus,
             [](std::string errmsg) -> asio::awaitable<std::string> {
@@ -776,7 +776,7 @@ std::vector<neograph::ChatMessage> SummarizationMiddlewareHandle::hardTruncate(
         out.push_back(messages[i]);
     }
 
-    // ---- 兜底: 仍超限时保证请求能发出 ----
+    // ---- 回退: 仍超限时保证请求能发出 ----
     // 场景: recent 中存在单条超大消息 (如超大附件/长日志), 即使切分已收至最少
     // 1 条, 或 system 本身很大, 结果仍可能 >= 95% 上限。
     // 1) 优先从最旧 recent 开始丢弃, 至少保留最后 1 条消息 (会话不能为空)
@@ -988,7 +988,7 @@ asio::awaitable<void>
 
             /// llm 压缩 (同上下文 subagent, 中断后由 Session 派生并 resume)
             /// - 经功能点取摘要文本: 插件 / FFI 主程序的实现可在这里替换核心压缩;
-            ///   调度 (提示消息 / 写回 / 兜底) 仍在本中间件
+            ///   调度 (提示消息 / 写回 / 回退) 仍在本中间件
             auto summary = co_await summarizeViaPoint(sessionId, toSummarize, /*direct=*/false);
 
             enum class ReplaceAction {
@@ -1007,7 +1007,7 @@ asio::awaitable<void>
                 );
             } else {
                 // 压缩失败: 计数 (同一轮内重试/多轮 modelcall 累积);
-                // 连续失败 >= 2 次或超限严重 (>= 95%) 时硬截断兜底
+                // 连续失败 >= 2 次或超限严重 (>= 95%) 时硬截断回退
                 size_t failCount
                     = agentCtxPtr->middlewareHandleContext->getGraphDataItemValue<size_t>(
                           sessionId,
@@ -1061,9 +1061,9 @@ asio::awaitable<void>
             compressedMessages = messages;
         }
 
-        // ---- 兜底: 压缩后仍超限 (>= 95%) → 降级硬截断, 保证请求能发出 ----
+        // ---- 回退: 压缩后仍超限 (>= 95%) → 降级硬截断, 保证请求能发出 ----
         // 场景: system 本身很大, 或摘要本身很长, 压缩结果仍 >= 95% 上限;
-        // 硬截断 (system + 截断说明 + 最近消息 30% 预算 + 单条二分截断) 是最终兜底
+        // 硬截断 (system + 截断说明 + 最近消息 30% 预算 + 单条二分截断) 是最后回退
         // - 与触发判定用同一个取数入口 (功能点), 避免两条规则混用
         const size_t compressedTokens
             = co_await countTokensViaPoint(sessionId, compressedMessages, enableCountThinking);
@@ -1246,7 +1246,7 @@ asio::awaitable<bool>
 
         // 压缩前清洗消息中的多模态 data URL (Base64) 降级为纯文本标签
         downgradeMultimodalUrlsToText(toSummarize);
-        // 不清理 thinking (同自动压缩: 会让请求前缀与父会话分叉)
+        // 不清理 thinking (同自动压缩: 会让请求前缀与父会话不一致)
 
         // 手动压缩在 agent 空闲时触发 (无 AgentRunner 中断循环), 不能走
         // NodeInterrupt 中断委派 (无人处理会逃逸 detached 被吞), 直派模式
@@ -1274,7 +1274,7 @@ asio::awaitable<bool>
         compressedMessages = messages;
     }
 
-    // ---- 兜底: 压缩后仍超限 (>= 95%) → 降级硬截断, 保证请求能发出 ----
+    // ---- 回退: 压缩后仍超限 (>= 95%) → 降级硬截断, 保证请求能发出 ----
     // (与 onModelcallRunFunc 相同语义; 手动压缩也保证结果不超限)
     if (countTokens({}, compressedMessages, enableCountThinking) >= modelContextMaxToken * 0.95) {
         XX_LOGW(
@@ -1288,7 +1288,7 @@ asio::awaitable<bool>
     const auto newTokens
         = co_await countTokensViaPoint(sessionId, compressedMessages, enableCountThinking);
     session->replaceMessages(std::move(compressedMessages));
-    // 手动压缩在轮次外执行: 立即落盘 (无轮末权威保存兜底)
+    // 手动压缩在轮次外执行: 立即落盘 (无轮末权威保存作为保证)
     session->persistNow("manual-compaction");
     // 压缩完成: 标记提示词来源需要重取 (只置位, 下一次 model call 的 start 钩子读盘)
     if (agentCtxPtr->promptSources) {

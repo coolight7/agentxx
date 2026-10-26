@@ -25,7 +25,7 @@ namespace agentxx::client {
 /// - `cancelled == false`: `values` 为 **控件 id → 值** 的对象
 ///   (`{"decision": "true", "remember": false}`; 值类型随控件形态:
 ///   checkbox=布尔 / number=数值 / buttons|select=候选项原始值 / text=字符串),
-///   语义由 agent 侧消费 (客户端只回传表单值, 不解释业务含义)
+///   语义由 agent 侧处理 (客户端只回传表单值, 不解释业务含义)
 /// - `cancelled == true`: 用户取消整份表单, values 无意义 (空对象)
 ///
 /// 一次中断请求 (一份表单 = 一条消息) 对应一个 channel: client 线程
@@ -75,7 +75,7 @@ enum class ConnState : uint8_t {
 /// 跨线程共享的渲染状态 (COW 语义)
 ///
 /// 所有被 client 线程 (onDelta/onSync) 和 UI 线程 (渲染/事件) 并发访问的数据
-/// 收敛于此结构, 经 shared_ptr + mutex 保护:
+/// 集中在此结构, 经 shared_ptr + mutex 保护:
 /// - 写方: 短锁 + COW (mutableState) 后修改
 /// - 读方: 短锁拷贝 shared_ptr 快照, 之后无锁渲染
 ///
@@ -83,7 +83,7 @@ enum class ConnState : uint8_t {
 /// - currentToken 为 shared_ptr<string>: 流式追加 token 时按需 COW 字符串本体,
 ///   避免每 token 深拷贝整个已累积文本 (O(n²) -> O(n))
 /// - contextMessages 为 shared_ptr<json>: utilxx_base::Json 拷贝是深拷贝
-///   (yyjson_mut_val_mut_copy 全树复制), 若放在 COW 全量拷贝内,
+///   (yyjson_mut_val_mut_copy 全树复制), 若放在 COW 整份拷贝内,
 ///   每 token 都会复制整个上下文 JSON; 指针化后 COW 拷贝仅 O(1)
 struct TUIRenderState {
     // 成员按对齐/尺寸从大到小排列, 减少结构体内填充字节
@@ -146,7 +146,7 @@ struct TUIRenderState {
     // ---- 历史分页窗口状态 (服务端 viewMessages 尾窗同步 + 分页拉取) ----
     /// 已加载窗口首条消息在服务端完整 viewMessages 中的绝对下标
     /// 历史分页窗口 (上下边界/未完成的请求/序号连续性都在模型内,
-    /// 见 [HistoryWindow]); 全量同步后 windowStart()==0, 尾窗同步后 > 0
+    /// 见 [HistoryWindow]); 完整同步后 windowStart()==0, 尾窗同步后 > 0
     HistoryWindow history;
     /// 流式代次 (client 线程在**新建** currentToken 时递增; COW 复制不递增):
     /// - 语义 = 流身份: 同一流内 currentToken 只会被原地 append (或 COW 复制,
@@ -229,7 +229,7 @@ struct TUIRenderState {
 
     bool showContextOverlay = false;
     bool sessionListLoaded  = false;
-    /// 是否还有未加载的更早会话 (WireSessionList.hasMore; 旧版服务端全量响应
+    /// 是否还有未加载的更早会话 (WireSessionList.hasMore; 旧版服务端完整响应
     /// 时恒为 false); 末尾空页防御: 收到空页即置 false 终止续取
     bool sessionListHasMore = false;
     /// 是否有未返回的会话列表分页请求 (预取去重, 防止滚动事件高频重复请求)

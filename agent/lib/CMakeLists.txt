@@ -116,7 +116,7 @@ else ()
   set(_AGENTXX_USAGE_TARGETS agentxx_obj agentxx_shared agentxx_static)
 
   # PCH: 只预编译稳定第三方头 (std/fmt/asio/boost.exception)，项目自身头不参与，
-  # 避免项目头文件改动时触发全量重编。
+  # 避免项目头文件改动时触发全部重编。
   # 第三方头须用 <...> 形式: 非 <> 形式会被 CMake 当作源目录相对路径解析，
   # 而 fmt/asio/boost 位于 SYSTEM 安装目录 (install/include)，会解析失败
   if (AGENTXX_ENABLE_PCH)
@@ -130,7 +130,7 @@ else ()
       <boost/exception/exception.hpp>
     )
     # ccache + PCH 兼容 (GCC 特有): 不加 -fpch-preprocess 时 ccache 无法预处理
-    # 含 -include PCH 的源文件，全部标记 uncacheable，改动即全量重编。
+    # 含 -include PCH 的源文件，全部标记 uncacheable，改动即全部重编。
     # 仅对本目标生效，不影响第三方依赖的缓存
     if (CCACHE_PROGRAM AND XX_IS_GCC_D)
       target_compile_options(agentxx_obj PRIVATE -fpch-preprocess)
@@ -144,7 +144,7 @@ target_compile_definitions(agentxx_shared PUBLIC AGENTXX_EXPORTS)
 if (XX_IS_MSVC_D)
   # 注意: 禁止在此添加 /FS /MP 等参数 ——
   # VS18/MSVC 14.51 的 FileTracker 在命令行出现重复 /FS 时会失效 (子编译进程
-  # 不写 per-file 跟踪记录)，导致每次构建都判定全部源文件过期而全量重编;
+  # 不写 per-file 跟踪记录)，导致每次构建都判定全部源文件过期而全部重编;
   # 且参数经 superbuild 多层传递极易重复叠加，故统一不使用这两个选项
   target_compile_definitions(agentxx_shared PUBLIC
     strdup=_strdup

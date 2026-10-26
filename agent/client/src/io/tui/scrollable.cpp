@@ -30,7 +30,7 @@ struct ListViewState {
 
 /// 仿 Flutter ListView 的 viewport 布局节点。
 ///
-/// 与 ftxui 内置 yframe+focusPositionRelative 方案 (需全量布局整列表) 不同,
+/// 与 ftxui 内置 yframe+focusPositionRelative 方案 (需全部布局整列表) 不同,
 /// 本节点:
 /// - ComputeRequirement 不递归子项 (父级以 |flex 撑满, 不依赖 min_x/min_y)
 /// - SetBox 阶段仅布局与可见区域相交的子项 (按缓存高度绝对定位), 其余跳过
@@ -75,7 +75,7 @@ public:
         }
 
         // === Pass 1: 测量所有待测高度 (惰性: 仅子项变化/宽度变化时) ===
-        // 记录本帧刚完成测量的子项索引; 这些子项的布局已收敛 (同宽度),
+        // 记录本帧刚完成测量的子项索引; 这些子项的布局已稳定 (同宽度),
         // Pass 2 中仅需 SetBox 重定位, 无需再次完整迭代布局
         std::vector<size_t> freshlyMeasured;
         for (size_t i = 0; i < items.size(); ++i) {
@@ -138,7 +138,7 @@ public:
             itemBox.x_max = contentXMax;
             itemBox.y_min = screenY;
             itemBox.y_max = screenY + h - 1;
-            // 本帧刚完成测量的子项: 布局已收敛 (同宽度), 仅 SetBox 重定位即可,
+            // 本帧刚完成测量的子项: 布局已稳定 (同宽度), 仅 SetBox 重定位即可,
             // 避免重复完整迭代布局; 其余 (上帧已测/缓存命中) 需完整布局
             if (justMeasured[i]) {
                 items[i].element->SetBox(itemBox);
@@ -243,7 +243,7 @@ ftxui::Element Scrollable::OnRender() {
     const size_t n     = items.size();
 
     // 同步缓存大小: resize 保留已有条目 (仅新增项置空/待测),
-    // 避免列表增长时把全部子项误判为变化而全量重测高度
+    // 避免列表增长时把全部子项误判为变化而全部重测高度
     cachedElements_.resize(n);
     cachedFill_.resize(n);
     heights_.resize(n, -1);

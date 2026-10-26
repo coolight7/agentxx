@@ -173,7 +173,7 @@ void test_jv_parser_reuse() {
         auto v2 = JsonView::parse("{\"t\":2}", parser);
         XX_TEST_EXPECT_EQ(v2["t"].get_int64(), (int64_t)2);
     }
-    // SSE 高频 chunk 路由范式 (§4.3): 先 View 路由命中后物化
+    // SSE 高频 chunk 写法 (§4.3): 先 View 路由命中后物化
     auto chunk = JsonView::parse(
         "{\"type\":\"content_block_delta\",\"delta\":{\"text\":\"hel\"}}",
         parser

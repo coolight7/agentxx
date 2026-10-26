@@ -143,7 +143,7 @@ namespace {
 
 /// 测试期日志 sink: 仅把 Warn/Error 输出到 stderr
 /// - 库内错误 (如插件 LoadLibrary 失败 / entry 返回非零) 经 XX_LOGE 上报,
-///   测试进程默认无 sink 时会被静默丢弃, 失败原因不可见; 此处透出便于诊断
+///   测试进程默认无 sink 时会被静默丢弃, 失败原因不可见; 此处打印便于诊断
 class TestWarnErrorLogSink : public utilxx_base::ThreadedLogSink {
 public:
 

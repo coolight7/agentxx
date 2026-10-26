@@ -116,7 +116,7 @@ asio::awaitable<std::optional<std::string>> MemoryFileMiddlewareHandle::readFile
                 co_return true;
             }
 #endif
-            /// 同步阻塞读取文件 (兜底实现)
+            /// 同步阻塞读取文件 (备用实现)
             std::ifstream stream(absolutePath);
             if (!stream.is_open()) {
                 errorOut = "open failed";

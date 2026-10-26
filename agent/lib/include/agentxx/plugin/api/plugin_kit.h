@@ -1985,7 +1985,7 @@ inline void polled_tool(
 
     /// 一次 polled 根操作的拥有型状态。
     /// 生命周期: 业务协程帧 + [detail::runPolledPumpJob] 的收尾;
-    /// 回收由 [detail::PolledRoot] 的 cleanup 兜底 (停止/关闭时会提前接管)。
+    /// 回收由 [detail::PolledRoot] 的 cleanup 处理 (停止/关闭时会提前接管)。
     struct Job {
         PolledShim*                         shim   = nullptr;
         detail::PollOneBridge*              bridge = nullptr;
@@ -2065,7 +2065,7 @@ inline void polled_tool(
         job->root       = std::make_shared<detail::PolledRoot>(job->notify);
         job->token      = PluginxxCancelToken{kTokenIsRequested, job};
         {
-            // 兜底回收: 停止/关闭路径 (failAllPolledRoots) 会执行它; 正常完成时
+            // 补充回收: 停止/关闭路径 (failAllPolledRoots) 会执行它; 正常完成时
             // 由各自的上报方先执行, 这里保持幂等。
             auto* jobPtr = job;
             job->root->setCleanup([jobPtr] {
@@ -3122,7 +3122,7 @@ public:
             }
             it->second(args);
         } catch (...) {
-            // handler 异常不外泄 C 边界 (主程序另有兜底, 此处静默吞掉)
+            // handler 异常不外泄 C 边界 (主程序另有保护, 此处静默吞掉)
         }
     }
 

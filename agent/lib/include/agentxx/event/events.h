@@ -268,35 +268,35 @@ struct SubagentBatchItem {
     std::string systemPrompt;
     /// 派给 subagent 的任务消息 (user role)
     std::string message;
-    /// 结构化消息透传 (可选): 提供时作为子代理初始上下文 (可含 system),
+    /// 结构化消息原样转发 (可选): 提供时作为子代理初始上下文 (可含 system),
     /// 与 message 二选一 (messages 优先); 用于同上下文压缩等需要完整
     /// 消息前缀的场景
     std::optional<utilxx_base::Json> messages;
     /// 指定子代理运行的 thread id (可选): 为空时使用独立 subagent 线程 id;
     /// 指定时进入"同上下文模式": 运行在指定 thread + 使用父会话当前模型 +
-    /// 消息前缀原样透传, 三者共同保证与父会话命中 provider KV/prefix cache
+    /// 消息前缀原样转发, 三者共同保证与父会话命中 provider KV/prefix cache
     std::string sessionId;
-    /// 子代理工具策略 (可选 json 数组, 缺省 = 子代理默认全量工具):
+    /// 子代理工具策略 (可选 json 数组, 缺省 = 子代理默认全部工具):
     /// - `[]`: 无工具
-    /// - `["*"]`: 全量继承父 agent 的工具 (AgentHost 解析为父工具名白名单)
+    /// - `["*"]`: 全部继承父 agent 的工具 (AgentHost 解析为父工具名白名单)
     /// - `["name1", ...]`: 仅保留列表中的工具
     std::optional<utilxx_base::Json> tools;
     /// 子代理上下文压缩 (summarization) 中间件开关 (可选):
     /// - 缺省: 继承子代理 config 默认 (即父 config 拷贝)
     /// - false: 显式禁用 (summarization 发起的压缩子代理必须禁用,
-    ///   避免对透传的上下文前缀二次压缩破坏 KV/prefix cache 一致性)
+    ///   避免对原样转发的上下文前缀二次压缩破坏 KV/prefix cache 一致性)
     /// - true: 显式启用
     std::optional<bool> enableSummarization;
     /// 同上下文运行: 保留调用方给出的 system 消息 (不按子代理自身配置重建)
     /// - 用于"复用父会话可缓存前缀"的场景 (上下文压缩)
     bool keepProvidedSystemMessage = false;
-    /// 同上下文运行: 继承父会话上一次请求的工具定义 (只用于对齐请求前缀)
+    /// 同上下文运行: 继承父会话上一次请求的工具定义 (只用于保持请求前缀一致)
     bool inheritRequestTools = false;
     /// 本次运行不执行工具: 模型若仍返回 tool_calls, 忽略它们并结束本轮
     /// - 工具定义仍在请求里 (前缀一致), 但不会调用任何工具
     bool toolExecutionDisabled = false;
     /// 任务结果标识: 回填到父 toolcall 的 tool_call_id 或自定义 id;
-    /// 为空时按任务序号 (1-based) 兜底编号
+    /// 为空时按任务序号 (1-based) 默认编号
     std::string resultId;
 };
 

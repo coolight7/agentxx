@@ -26,7 +26,7 @@
 /// xxx
 ///
 /// - 这是为了方便 LLM 判断是否存在 [StdErr] 内容，由 ToolcallNode 压缩时如果 [StdOut] 过长，
-/// 可能导致 [StdErr] 全部被裁剪隐藏，LLM 需要额外读取全量才能判断是否存在 [StdErr] 内容
+/// 可能导致 [StdErr] 全部被裁剪隐藏，LLM 需要额外读取全部才能判断是否存在 [StdErr] 内容
 #pragma once
 
 #include "agentxx/plugin/api/plugin_kit.h"
@@ -252,7 +252,7 @@ inline std::string truncateStdErr(const std::string& s, long long storeId = -1) 
 // 值为 `/utf-8`); 它会改变用户工程的编译语义 —— 老的 GBK 源文件被当成 UTF-8 读,
 // 中文字面量会静默变化, 因此不作为默认预设下发, 需要时由用户在工程里传 `/utf-8`。
 // MSVC 诊断信息本身的编码跟随控制台代码页 (chcp), LC_ALL/LANG/VSLANG 都无效,
-// 控制台是 UTF-8 时输出即为 UTF-8; 整段都是本地编码时由 autoConvertToUtf8 兜底,
+// 控制台是 UTF-8 时输出即为 UTF-8; 整段都是本地编码时由 autoConvertToUtf8 统一处理,
 // 混合编码不做猜测 (见下方"命令输出编码: 工具侧不做猜测")。
 //
 // 两条执行路径都要覆盖: boost.process 路径经 [applyExecEnvPolicy] 改写子进程环境表,
@@ -264,7 +264,7 @@ inline std::string truncateStdErr(const std::string& s, long long storeId = -1) 
 /// - 两条执行路径共用同一判定: boost.process 路径作为子进程初始目录
 ///   (process_start_dir) 与 `PWD` 预设取值; popen 回退路径无法改目录 (workDir 传空),
 ///   此时它只决定 `PWD` 取值 (进程当前目录)
-/// - 始终返回非空串 (兜底 "." 等价于继承当前目录), 使 process_start_dir 可无条件传入
+/// - 始终返回非空串 (默认 "." 等价于继承当前目录), 使 process_start_dir 可无条件传入
 inline std::string subprocessWorkDir(std::string_view workDir) {
     if (false == workDir.empty()) {
         return std::string{workDir};
@@ -274,7 +274,7 @@ inline std::string subprocessWorkDir(std::string_view workDir) {
     if (!ec && !cwd.empty()) {
         return cwd.generic_string();
     }
-    // 兜底: chdir(".") / current_directory="." 等价于继承 agent 进程当前目录
+    // 回退: chdir(".") / current_directory="." 等价于继承 agent 进程当前目录
     return ".";
 }
 
@@ -474,9 +474,9 @@ inline std::string execEnvCommandPrefix(const ExecEnvPolicy& policy) {
 //
 // 一次命令的输出可能是混合编码: 主程序侧文本 (PowerShell 自身输出) 是 UTF-8, 而原生
 // Windows 工具 (net / tasklist / ipconfig ...) 的中文按系统代码页写出原始字节 ——
-// PowerShell 在输出重定向时原样透传这些字节, 两者混在同一段缓冲区里。这种混合无法
+// PowerShell 在输出重定向时原样转发这些字节, 两者混在同一段缓冲区里。这种混合无法
 // 可靠判定: 按行/按段切分时样本太短, 字符集判定 (uchardet) 经常认错, 误转会把本来
-// 正常的 UTF-8 部分也弄坏, 因此工具侧只保留原有的整段 [autoConvertToUtf8] 兜底
+// 正常的 UTF-8 部分也弄坏, 因此工具侧只保留原有的整段 [autoConvertToUtf8] 回退
 // (整段都是本地编码时有效), 混合输出交给提示词引导模型自行处理:
 // - 需要读到正确中文时, 在命令内切换控制台解码 (见 execute_command_env.h 的
 //   [consoleEncodingSection]), 或把输出重定向到文件后用显式编码读回。
@@ -510,7 +510,7 @@ struct NewProcessGroup {
 ///   子进程退出后不恢复 -> TUI 输出的 UTF-8 被按旧代码页解码, 中文整屏乱码,
 ///   同时宽字符列宽不再与 FTXUI 的排版假设一致 (行宽溢出触发终端折行),
 ///   FTXUI 每帧靠"光标上移 dimy-1 行"回到帧首的相对定位随之错位,
-///   画面逐帧漂移、底部不断留下空白;
+///   画面逐帧错位、底部不断留下空白;
 /// - 关掉 VT 处理/输入模式的程序还会让 TUI 的鼠标与按键事件失效 (界面卡住)。
 /// CREATE_NO_WINDOW 让子进程使用独立的 (无窗口) 控制台, 命令输出仍经管道返回。
 /// 注: popen 回退路径无法指定创建标志 (仅 AGENTXX_ENABLE_BOOST_PROCESS 关闭时编译),
@@ -607,7 +607,7 @@ inline asio::awaitable<void> procCancelWatchLoop(
 
     // 如果未触发取消，说明主工作正常完成，并行组取消了本协程
     if (!cancelled->load(std::memory_order_acquire)) {
-        // 退化兜底：若未提供 cancelRegistry 但提供了 isCancelled 回调 (旧单测适配)
+        // 退化回退：若未提供 cancelRegistry 但提供了 isCancelled 回调 (旧单测适配)
         if (!cancelRegistry && isCancelled && isCancelled()) {
             detail::killProcGroup(proc, winJob);
             detail::closePipesAfterKill(outpip, errpip);
@@ -651,7 +651,7 @@ struct WinJobGuard {
 
     ~WinJobGuard() {
         if (job) {
-            // 兜底整树终止 (正常路径 runProcPipeline 已 TerminateJobObject,
+            // 补充整树终止 (正常路径 runProcPipeline 已 TerminateJobObject,
             // 此处幂等; 主要覆盖异常/提前返回路径防孤儿)
             ::TerminateJobObject(static_cast<HANDLE>(job), 260);
             ::CloseHandle(static_cast<HANDLE>(job));
@@ -745,7 +745,7 @@ Command timed out after {} seconds. If this command is expected to take longer a
 
 /// 构造 Windows tool 的子进程启动参数: 可执行文件 + argv 列表
 /// - PowerShell 可用 (默认): {exeName, -NoProfile, -NonInteractive, -Command, <包装后的脚本>}
-///   脚本包装为 try/catch, 强制 UTF-8 输出并透传脚本退出码;
+///   脚本包装为 try/catch, 强制 UTF-8 输出并原样转发脚本退出码;
 ///   整段脚本作为单个 argv 元素直传, 不经 cmd/sh 解析, 根治引号/$ 转义问题
 /// - PowerShell 不可用 (回退): {cmd.exe, /c, command} (cmd 语法, 由提示词引导 LLM)
 struct WinProcLaunch {
@@ -759,7 +759,7 @@ inline WinProcLaunch buildWinProcLaunch(std::string_view command) {
         // -Command 后的多个 argv 元素会被 PowerShell 用空格拼接成一条命令串,
         // 因此必须作为单个元素传入 (脚本内可含换行, PowerShell 按语句解析)
         // - try/catch 把脚本错误 (异常) 转为 stdout 文本 + 退出码 1, 避免错误只进 stderr
-        //   且丢失详情; `exit $LASTEXITCODE` 透传脚本/外部程序的退出码
+        //   且丢失详情; `exit $LASTEXITCODE` 原样转发脚本/外部程序的退出码
         // - UTF8 输出编码仅对 Windows PowerShell 5.1 必要 (7+ 默认 UTF-8), 统一设置无害
         auto wrapped = fmt::format(
             "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; "
@@ -782,7 +782,7 @@ inline WinProcLaunch buildWinProcLaunch(std::string_view command) {
 /// 三路并行等待 stdout/stderr/退出并组装结果 (bash/windows 两执行体共用):
 /// - mainWork / timeoutGuard / procCancelWatchLoop 三路并行, 只有主工作完成能
 ///   终结整体 (后两者动作后挂起, 见 procCancelWatchLoop 注释)
-/// - 返回组装后的结果文本; 组合协程异常原样传播 (调用方 C ABI 边界兜底)
+/// - 返回组装后的结果文本; 组合协程异常原样传播 (调用方 C ABI 边界保护)
 /// - winJob: Windows 下子进程挂入的 Job Object (HANDLE); 超时/取消时经
 ///   TerminateJobObject 整树终止。Linux 恒为 nullptr (进程组已覆盖)
 inline asio::awaitable<std::string> runProcPipeline(
@@ -1101,7 +1101,7 @@ inline asio::awaitable<std::string> windowsExecuteAsync(
         // stdin 重定向到 null 设备, 避免子进程抢读 agent 进程的终端输入
         boost::process::process_stdio{.in = nullptr, .out = outpip, .err = errpip},
         // 不继承 agent 的控制台: 命令里的 chcp 等会改掉共享的输出代码页,
-        // 使 TUI 的中文变乱码且画面定位漂移 (见 [WinNoConsole] 说明)
+        // 使 TUI 的中文变乱码且画面定位错位 (见 [WinNoConsole] 说明)
         detail::WinNoConsole{}
     };
 

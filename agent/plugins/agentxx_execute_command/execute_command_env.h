@@ -283,7 +283,7 @@ inline InterpreterInfo
 }
 
 /// 探测运行环境 (python / node, Windows 侧含 PowerShell 与系统名)
-/// - 阻塞式: 每个候选 spawn 一次子进程 (`--version`), 由 [runProbeCommand] 超时看门狗兜底
+/// - 阻塞式: 每个候选 spawn 一次子进程 (`--version`), 由 [runProbeCommand] 超时看门狗保护
 /// - PowerShell 探测结果与执行期选择执行器共用 (utilxx_base::detectPowerShell 按进程缓存同一结果);
 ///   Linux/macOS 不需要 PowerShell, 直接跳过探测, 避免 WSL 下无谓的 interop 调用
 inline ExecEnvInfo detectExecEnv() {
@@ -343,7 +343,7 @@ inline constexpr std::string_view kTimeoutArgDesc
 inline constexpr std::string_view kBashToolDepict
     = "Execute a shell/bash command and return its output.";
 
-/// Windows 命令工具 `command` 参数的兜底描述 (提示词/探测结果不可用时使用;
+/// Windows 命令工具 `command` 参数的回退描述 (提示词/探测结果不可用时使用;
 /// 正常路径由 [windowsToolPrompt] 生成的描述覆盖)
 inline constexpr std::string_view kWindowsCommandArgDescFallback
     = "The Windows command to execute.";

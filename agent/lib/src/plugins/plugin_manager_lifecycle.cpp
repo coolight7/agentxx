@@ -485,7 +485,7 @@ std::string PluginManager::mountInfoJson(std::string_view agentId) {
 }
 
 // =====================================================================
-// 禁用/启用与挂载的联动 (骨架完成 stop/start 后由本类补齐挂载动作)
+// 禁用/启用与挂载的关联 (骨架完成 stop/start 后由本类补齐挂载动作)
 // =====================================================================
 
 asio::awaitable<void> PluginManager::onInstanceDisabledAsync(

@@ -28,7 +28,7 @@ namespace agent {
 
 /// 统一的 "引擎运行 + 中断处理 + 恢复" 循环 (主 agent 与子代理共用)
 /// - 语义与旧 BaseAgent::runTurnAsync / AgentHost::spawnOneTask
-///   内联的中断循环完全一致, 消除两份复制与行为漂移
+///   内联的中断循环完全一致, 消除两份复制与行为差异
 /// - 中断分派 (按 interrupt handle name):
 ///   - "subagent": 经 ctx->bus 请求 service.subagent (主程序在根与子代理总线上
 ///     统一 registerServer; 嵌套委派与根委派完全同路径, 不需要主程序函数直调)
@@ -42,7 +42,7 @@ namespace agent {
 class AgentRunner {
 public:
 
-    /// 调用方差异 (主 agent 与子代理的行为差异点, 全部收敛为 hook)
+    /// 调用方差异 (主 agent 与子代理的行为差异点, 全部统一为 hook)
     struct Hooks {
         /// 引擎事件回调 (run/resume 共用; 根: EventBridge,
         /// 子代理: token 收集 + hostBus 进度发布)

@@ -102,7 +102,7 @@ struct YamlAppConfig {
     /// - pass:    全部放行, 不询问
     /// - deny:    全部拒绝, 不询问
     /// 服务端 CodeAgent 按模式注册文件系统读写规则; 客户端仅对仍到达的
-    /// 权限 INTERRUPT 作兜底 (pass 放行 / deny 拒绝 / ask、all_ask 询问)
+    /// 权限 INTERRUPT 作回退 (pass 放行 / deny 拒绝 / ask、all_ask 询问)
     agent::PermissionMode permissionMode = agent::PermissionMode::Ask;
     /// subagent 总开关 (yaml `subagent.enable`, 默认 true)
     bool enableSubagent = true;

@@ -86,7 +86,7 @@ endif ()
 #     污染主程序动态符号表、多插件同名符号冲突、以及主程序符号误绑定到插件副本
 # - Linux/Android (ELF): 编译期 -fvisibility=hidden + 链接期 version script
 #   (--version-script, global 白名单 + local: *); 两者都需, 前者隐藏插件
-#   自身符号, 后者兜底隐藏静态库中按默认可见性编译的符号
+#   自身符号, 后者负责隐藏静态库中按默认可见性编译的符号
 # - macOS: -exported_symbols_list (符号带 _ 前缀)
 # - Windows/MSVC: 不自动导出 (CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS 默认 OFF),
 #   仅 AGENTXX_PLUGIN_EXPORT (__declspec(dllexport)) 标记的入口符号导出;
@@ -116,7 +116,7 @@ local: *;
   unset(_AGENTXX_EXPORT_SYMS_FILE)
 elseif (XX_IS_MACOS_D OR XX_IS_IOS_D)
   # Mach-O (macOS/iOS): -fvisibility=hidden 隐藏插件自身 C++ 符号, 链接期再用
-  # -exported_symbols_list 白名单兜底隐藏静态链接进来的第三方库符号
+  # -exported_symbols_list 白名单负责隐藏静态链接进来的第三方库符号
   # (与 ELF 的 -fvisibility + version script 组合对应)。
   # 注意: ld64 的 -exported_symbols_list 不支持通配符, 且列表中未定义的符号会被
   # 当作 <initial-undefines> 直接报错 (ELF version script 通配符可容忍缺失) ——

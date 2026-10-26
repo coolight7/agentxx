@@ -908,7 +908,7 @@ void test_parseNumberFromString() {
 
     // 浮点边界 (回归: libc++ 回退实现曾按 errno 判定失败, 导致下溢的
     // 极小值 (1e-320) 被误判为非法 —— 下溢返回的仍是可用数值, 只有上溢
-    // (±inf) 与无法完整消费的输入才算失败)
+    // (±inf) 与无法完整读取的输入才算失败)
     double tiny = 0.0;
     auto   r9   = utilxx_base::parseNumberFromString("1e-320", tiny);
     XX_TEST_EXPECT_EQ(r9.ec, std::errc{});
@@ -1058,12 +1058,12 @@ void test_toCurrentSystemAbsolutePathBaseDir() {
         utilxx_base::toCurrentSystemAbsolutePath("a/b", "/base"),
         std::string("/base/a/b")
     );
-    // `..` 收敛
+    // `..` 折叠
     XX_TEST_EXPECT_EQ(
         utilxx_base::toCurrentSystemAbsolutePath("sub/../c.txt", "/base"),
         std::string("/base/c.txt")
     );
-    // `./` 收敛
+    // `./` 折叠
     XX_TEST_EXPECT_EQ(
         utilxx_base::toCurrentSystemAbsolutePath("./d", "/base"),
         std::string("/base/d")

@@ -777,7 +777,7 @@ TestResult testPluginSdk() {
     // ---- client 侧 SDK 便捷方法: 组件构建器 → 面板/装饰/overlay 提交 ----
     //
     // 用伪 client UI 表捕获提交的 JSON: 覆盖"构建器 → JSON → 接口调用"这条
-    // 端到端路径 (含老主程序缺失该表时的降级)。
+    // 全流程路径 (含老主程序缺失该表时的降级)。
     {
         ClientPluginBase client;
         client.host  = &host;
@@ -900,7 +900,7 @@ TestResult testPluginSdk() {
             XX_TEST_EXPECT_TRUE(g_clientUiCapture.decorJson.empty());
         }
 
-        // 6) overlay: 组件树作为 payload + 尺寸选项透传
+        // 6) overlay: 组件树作为 payload + 尺寸选项原样转发
         {
             g_clientUiCapture               = ClientUiCapture{};
             pluginxx::ui::Item overlayTable = pluginxx::ui::build::node("Table");
@@ -925,7 +925,7 @@ TestResult testPluginSdk() {
             XX_TEST_EXPECT_EQ(g_clientUiCapture.overlayExtra, std::string{"{\"size\":\"large\"}"});
         }
 
-        // 7) 未知 kind 原样透传 (老主程序忽略, 数据层向前兼容)
+        // 7) 未知 kind 原样转发 (老主程序忽略, 数据层向前兼容)
         {
             pluginxx::ui::Item future = pluginxx::ui::build::node("future_widget");
             future.fallback           = "n/a";

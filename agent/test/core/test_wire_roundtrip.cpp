@@ -36,7 +36,7 @@ namespace {
 
 /// 往返一次并断言结果 (失败时计入本模块失败数)
 /// - 序列化 → 反序列化 → 再序列化, 断言两份 JSON 完全一致 (字段稳定, 便于对端缓存)
-/// - 反序列化结果必须回到同一变体成员 (消息类型不漂移)
+/// - 反序列化结果必须回到同一变体成员 (消息类型不变)
 template<typename T>
 T roundTrip(const T& msg) {
     const auto j1   = WsAgentIOTransport::serialize(WireMessage{msg});
@@ -206,7 +206,7 @@ TestResult testWireRoundtrip() {
         auto back = roundTrip(e);
         XX_TEST_EXPECT_EQ(back.code, WireErrorCode::SessionMismatch);
         XX_TEST_EXPECT_EQ(back.message, e.message);
-        // 未知码按 Internal 处理的约定: 码值本身照原样传递 (客户端负责兜底)
+        // 未知码按 Internal 处理的约定: 码值本身照原样传递 (客户端负责处理)
         XX_TEST_EXPECT_EQ(WireErrorCode::Internal, 0);
     }
 

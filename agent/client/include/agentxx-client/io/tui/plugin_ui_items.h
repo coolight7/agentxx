@@ -1,16 +1,16 @@
 #pragma once
 
-/// 插件 UI items 共享渲染 helper (TUI 零特化的收敛点)
+/// 插件 UI items 共享渲染 helper (TUI 零特化的统一入口)
 ///
 /// 背景: sidebar / panel / message decor 三处曾各写一份 button 样式,
-/// 导致一处改动别处漂移。本文件是唯一的按钮样式实现, 三处强制复用,
+/// 导致一处改动别处不一致。本文件是唯一的按钮样式实现, 三处强制复用,
 /// 禁止各自独立实现。
 ///
 /// 组件**描述**的解析与渲染在 [ui_components.h] (界面描述层 `pluginxx::ui`) ——
 /// 本文件只保留渲染样式与绑定判定这类共享小件:
 /// - PluginButtonDesc: 按钮样式参数 (label/动作/样式/配色)
 /// - renderPluginButton: 按 role 配色渲染按钮 Element
-/// - hasPluginBinding: 快照中是否存在该 plugin 的绑定 (精确或 "" 兜底)
+/// - hasPluginBinding: 快照中是否存在该 plugin 的绑定 (精确匹配优先, 否则用 "")
 /// - renderPluginDiff: diff 内容渲染 (message decor 与 DiffOverlay 共用;
 ///   复用 computeLineDiff + side-by-side/统一双样式, 避免双份实现)
 /// - parsePluginDiffPayload: diff overlay 的 payload 解析 (单段/多段)
@@ -41,9 +41,9 @@ enum class PluginButtonRole : uint8_t {
 struct PluginButtonDesc {
     std::string      label;    ///< 按钮文字 (已 strip; 渲染时自动左右补空格)
     std::string      actionId; ///< 可点动作 id (空 = 纯静态)
-    std::string      argsJson; ///< 点击透传参数 dump (无参 = "{}")
+    std::string      argsJson; ///< 点击原样转发的参数 dump (无参 = "{}")
     PluginButtonRole role = PluginButtonRole::Normal;
-    /// 是否可点: actionId 非空 && 快照有该 plugin 绑定 (精确或 "" 兜底)
+    /// 是否可点: actionId 非空 && 快照有该 plugin 绑定 (精确匹配优先, 否则用 "")
     bool clickable = false;
 };
 
@@ -94,10 +94,10 @@ struct PluginDiffPayload {
 ///   (调用方按"打不开弹窗"处理); 解析成功但没有任何可用段时 `segments` 为空
 std::optional<PluginDiffPayload> parsePluginDiffPayload(std::string_view payloadJson);
 
-/// 快照中是否存在该 plugin 的绑定 (精确 target 或 "" 兜底任一)
+/// 快照中是否存在该 plugin 的绑定 (精确匹配 target 或 "" 任一)
 bool hasPluginBinding(std::string_view plugin, const agentxx::plugin::ClientUiRegistry* reg);
 
-/// 快照中是否存在该 plugin 在指定 owner 下的绑定 (精确 owner 优先, 否则 "" 兜底)
+/// 快照中是否存在该 plugin 在指定 owner 下的绑定 (精确 owner 优先, 否则用 "")
 bool hasPluginBindingFor(
     std::string_view                         plugin,
     std::string_view                         ownerId,

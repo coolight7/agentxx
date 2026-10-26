@@ -10,7 +10,7 @@ namespace agentxx {
 namespace test {
 
 /// 会话同步测试:
-/// 断线重连增量补拉 (hello.afterViewSeq)、序号范围校验与全量/尾窗回退
+/// 断线重连增量补拉 (hello.afterViewSeq)、序号范围校验与完整/尾窗回退
 asio::awaitable<TestResult> run_session_sync_tests();
 
 } // namespace test

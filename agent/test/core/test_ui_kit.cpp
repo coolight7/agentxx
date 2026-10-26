@@ -3,8 +3,8 @@
 // 描述层本身 (解析/上限/序列化/纯文本/适配规则/基础 kit) 的用例在库仓库
 // (cxx_pluginxx_ui) 的单测里; 本模块覆盖 agentxx 这一侧:
 // - 扩展 kit 组件 (agentxx::ui::kit) 的加载结果与留白
-// - 带 env (客户端能力摘要) 时的变体选择: 目标未知用第一个变体, 目标不支持时走兜底
-// - 同一份描述在不同能力下 adapt 的收敛结果 (只含声明支持的组件, 最多降到 Text)
+// - 带 env (客户端能力摘要) 时的变体选择: 目标未知用第一个变体, 目标不支持时走回退
+// - 同一份描述在不同能力下 adapt 的降级结果 (只含声明支持的组件, 最多降到 Text)
 // - kit 产出 → dumpItem → parseBlock 的往返
 #include "agentxx-test/core/test_ui_kit.h"
 
@@ -77,7 +77,7 @@ const Item* findTextContaining(const Item& node, std::string_view needle) {
     return nullptr;
 }
 
-/// 一组组件项 (含嵌套子节点) 是否全在当前能力里 (适配收敛的判据)
+/// 一组组件项 (含嵌套子节点) 是否全在当前能力里 (适配降级的判据)
 bool allSupported(const std::vector<Item>& items, const Capabilities& caps) {
     for (const auto& item : items) {
         if (!item.known) {
@@ -328,7 +328,7 @@ TestResult testUiKit() {
         XX_TEST_EXPECT_TRUE(findItem(titled, "Text") != nullptr);
     }
     {
-        // pathDiffRow: 目标未知 → 第一个变体 (Diff); 目标不支持 Diff → 等宽文本兜底
+        // pathDiffRow: 目标未知 → 第一个变体 (Diff); 目标不支持 Diff → 等宽文本回退
         const Item  diff     = agentxx::ui::kit::pathDiffRow({
             {"path",   "src/main.cpp"},
             {"oldStr", "old"         },
@@ -422,7 +422,7 @@ TestResult testUiKit() {
         }
     }
 
-    // ---------------- 同一份描述在不同能力下的收敛 ----------------
+    // ---------------- 同一份描述在不同能力下的降级结果 ----------------
     {
         const Json description = Json::parse(R"([
             {"kind":"Text","text":"封面与图标"},

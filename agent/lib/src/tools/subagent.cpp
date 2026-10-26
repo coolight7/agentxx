@@ -37,13 +37,13 @@ events::ReqSubagentBatch parseSubagentBatchFromInterrupt(
                 .subagentName = t.value("subagent", std::string{}),
                 .systemPrompt = t.value("system_prompt", std::string{}),
                 .message      = t.value("message", std::string{}),
-                // 结构化消息透传 (同上下文模式): 中断参数携带完整消息前缀
+                // 结构化消息原样转发 (同上下文模式): 中断参数携带完整消息前缀
                 .messages = (t.contains("messages") && t["messages"].is_array())
                                 ? std::optional<utilxx_base::Json>{t["messages"]}
                                 : std::nullopt,
                 // 指定运行 session (同上下文模式): 空时保持默认独立 subagent 线程
                 .sessionId = t.value("sessionId", std::string{}),
-                // 工具策略 (无工具/继承父/自定义): 缺省不设置 (子代理默认全量)
+                // 工具策略 (无工具/继承父/自定义): 缺省不设置 (子代理默认全部)
                 .tools = (t.contains("tools") && t["tools"].is_array())
                              ? std::optional<utilxx_base::Json>{t["tools"]}
                              : std::nullopt,
@@ -56,7 +56,7 @@ events::ReqSubagentBatch parseSubagentBatchFromInterrupt(
                 .keepProvidedSystemMessage = t.value("keep_provided_system", false),
                 .inheritRequestTools       = t.value("inherit_request_tools", false),
                 .toolExecutionDisabled     = t.value("disable_tool_execution", false),
-                // 任务结果标识: 缺省按任务序号兜底
+                // 任务结果标识: 缺省按任务序号生成默认值
                 .resultId = t.value("result_id", std::string{}),
             });
         }
@@ -344,7 +344,7 @@ asio::awaitable<std::string> SubAgentManagerTool::execute_async(const utilxx_bas
             task.enableSummarization = t["enable_summarization"].get<bool>();
         }
         // 压缩等内部调用方靠这三个开关让请求前缀与父会话一致 (缓存命中),
-        // 必须经中断参数原样带给 AgentHost, 否则前缀在 system/工具段就分叉
+        // 必须经中断参数原样带给 AgentHost, 否则前缀在 system/工具段就不一致
         task.keepProvidedSystemMessage = t.value("keep_provided_system", false);
         task.inheritRequestTools       = t.value("inherit_request_tools", false);
         task.toolExecutionDisabled     = t.value("disable_tool_execution", false);
@@ -413,7 +413,7 @@ asio::awaitable<std::string> SubAgentManagerTool::execute_async(const utilxx_bas
                     {"system_prompt", task.systemPrompt},
                     {"message",       task.message     },
                 };
-                // 结构化消息透传 (同上下文模式): 中断参数携带完整消息前缀
+                // 结构化消息原样转发 (同上下文模式): 中断参数携带完整消息前缀
                 if (task.messages.has_value()) {
                     t["messages"] = *task.messages;
                 }
@@ -421,7 +421,7 @@ asio::awaitable<std::string> SubAgentManagerTool::execute_async(const utilxx_bas
                 if (!task.sessionId.empty()) {
                     t["sessionId"] = task.sessionId;
                 }
-                // 工具策略 (无工具/继承父/自定义): 缺省不设置 (子代理默认全量)
+                // 工具策略 (无工具/继承父/自定义): 缺省不设置 (子代理默认全部)
                 if (task.tools.has_value()) {
                     t["tools"] = *task.tools;
                 }
@@ -439,7 +439,7 @@ asio::awaitable<std::string> SubAgentManagerTool::execute_async(const utilxx_bas
                 if (task.toolExecutionDisabled) {
                     t["disable_tool_execution"] = true;
                 }
-                // 任务结果标识: 缺省按任务序号兜底
+                // 任务结果标识: 缺省按任务序号生成默认值
                 if (!task.resultId.empty()) {
                     t["result_id"] = task.resultId;
                 }
@@ -482,8 +482,8 @@ asio::awaitable<std::string> SubAgentManagerTool::execute_async(const utilxx_bas
         // 多任务: 返回 json 数组 (按任务顺序)
         co_return outputs.dump();
     }
-    // 兜底: 非 toolcall 路径直接调用 (如上下文压缩中间件): resultId 为空,
-    // 单中断场景下取 map 中的第一个字符串值 (中断处理以 argIndex 兜底编号)
+    // 回退: 非 toolcall 路径直接调用 (如上下文压缩中间件): resultId 为空,
+    // 单中断场景下取 map 中的第一个字符串值 (中断处理以 argIndex 默认编号)
     if (result.is_object() && resultId.empty()) {
         for (const auto& [key, val] : result.items()) {
             if (val.is_string()) {

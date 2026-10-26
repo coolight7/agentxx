@@ -132,10 +132,10 @@ struct ClientToolRenderReg {
 inline constexpr std::string_view kBuiltinRendererOwner = "agentxx.core";
 
 /// 通用动作绑定记录 (UI 注册表快照条目; bind_action_handler 写入)
-/// - targetId 空串 = 本实例兜底 (方案 A fallback: 精确匹配优先, 未命中回落 "")
+/// - targetId 空串 = 本实例的默认绑定 (方案 A fallback: 精确匹配优先, 未命中回落 "")
 /// - 内容与绑定正交: 按钮可先渲染后绑定, 渲染时按快照有无绑定决定是否可点
 struct ClientActionBinding {
-    std::string       targetId; ///< 归属键 (section_id/panel_id/tool_call_id); "" = 兜底
+    std::string       targetId; ///< 归属键 (section_id/panel_id/tool_call_id); "" = 默认绑定
     std::string       plugin;   ///< 所属插件名
     AgentxxUiActionFn cb = nullptr;
     void*             ud = nullptr;
@@ -414,7 +414,7 @@ struct ClientTimerImpl {
     /// 归属实例 (弱引用: 回调前升级, 实例已卸载则丢弃本次触发)
     std::weak_ptr<ClientPluginInstance> inst{};
     std::string                         ownerId; ///< 关联展示区域 id (可空)
-    int32_t intervalMs  = 50;                    ///< 触发间隔 (已按主程序下限收敛)
+    int32_t intervalMs  = 50;                    ///< 触发间隔 (已按主程序下限限制)
     int32_t repeat      = 0;                     ///< 剩余触发次数 (0 = 一次性)
     bool    repeatMode  = false;                 ///< true = 周期 (按 repeat 计数)
     bool    pauseHidden = false;                 ///< 关联区域不可见时跳过回调
@@ -493,7 +493,7 @@ public:
 
     /// 管理器弱引用 (host vtable 回调取用)
     std::weak_ptr<ClientPluginManager> manager{};
-    /// 与公共实例控制块对齐，供 Client 裸指针回调升级 owner。
+    /// 与公共实例控制块保持一致，供 Client 裸指针回调升级 owner。
     std::weak_ptr<ClientPluginInstance> self{};
 
     explicit ClientPluginInstance(std::string in_name) :
@@ -818,7 +818,7 @@ public:
     );
 
     /// 绑定动作处理器 (io 线程; cb 空则失败; 同 (plugin,targetId) 覆盖)
-    /// - targetId 空串 = 本实例兜底 (方案 A fallback)
+    /// - targetId 空串 = 本实例的默认绑定 (方案 A fallback)
     /// - 同步写 uiRegistry_ (COW) + inst->actionRegs (disable/enable 恢复用)
     /// 返回 0 成功
     int bindActionHandler(
@@ -1105,7 +1105,7 @@ private:
     utilxx_base::Json uiCapabilitiesJson_ = utilxx_base::Json::object();
 
     /// 工具消息装饰版本号序列 (io 线程递增; 计入 ClientToolDecor.version,
-    /// 供 TUI 块缓存 key 感知装饰更新)
+    /// 供 TUI 块缓存 key 知道装饰更新)
     uint64_t toolDecorVersionSeq_ = 1;
 
     /// UI 注册表 (COW: io 线程写, 任意线程快照读)
@@ -1114,7 +1114,7 @@ private:
 
     /// 工具语义渲染缓存 (client io 线程写, UI 线程读; 见
     /// [ClientToolRenderCache])。自定义 renderer 的插件回调只在 client io
-    /// 线程执行, UI 线程只消费这里已经拷成主程序对象的语义结果。
+    /// 线程执行, UI 线程只处理这里已经拷成主程序对象的语义结果。
     std::shared_ptr<ClientToolRenderCache> toolRenderCache_
         = std::make_shared<ClientToolRenderCache>();
 

@@ -1,4 +1,4 @@
-/// test_plugin_multi_mount —— 多挂载端到端 (真实插件 `example_multi_mount`)
+/// test_plugin_multi_mount —— 多挂载全流程 (真实插件 `example_multi_mount`)
 ///
 /// 场景:
 /// 1. 一份主程序 (PluginManager) + 两个 agent 各建一份挂载, 插件只加载一次

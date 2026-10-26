@@ -820,7 +820,7 @@ void test_keybind_event_mapping() {
         XX_TEST_EXPECT_TRUE(keybindOfEvent(ftxui::Event::Mouse("", m)).empty());
     }
 
-    // 与主程序规范化结果对齐: 界面产物必须能被主程序原样接受 (往返一致)
+    // 与主程序规范化结果保持一致: 界面产物必须能被主程序原样接受 (往返一致)
     const ftxui::Event samples[] = {
         ftxui::Event::CtrlAltK,
         ftxui::Event::AltA,

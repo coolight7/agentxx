@@ -89,7 +89,7 @@ std::string findPluginDir(std::string_view pluginName) {
             return c.string();
         }
     }
-    // 异常兜底: 返回相对目录路径, loadPluginAsync 解析失败时日志暴露原因
+    // 异常保护: 返回相对目录路径, loadPluginAsync 解析失败时日志暴露原因
     return std::string{"plugins/"} + name;
 }
 

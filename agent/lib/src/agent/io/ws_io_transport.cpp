@@ -200,7 +200,7 @@ void WsAgentIOTransport::updateReconnectSessionId(std::string newSessionId) {
     // helloSessionId_/lastDeltaSeq_/lastTailHash_ 仅由 ex_ 线程访问
     // (connect() 与 readLoop 重连路径), 投递回 ex_ 线程更新避免数据竞争。
     // 会话切换后新会话的 delta seq 独立编号, 旧的 seq/tailHash 不再适用,
-    // 一并复位: 重连时 lastSeq=0 使服务端回退全量 sync
+    // 一并复位: 重连时 lastSeq=0 使服务端回退完整 Sync
     auto self = shared_from_this();
     asio::dispatch(ex_, [self, tid = std::move(newSessionId)]() {
         if (self->stopped_.load(std::memory_order_acquire)) {
@@ -359,12 +359,12 @@ asio::awaitable<void> WsAgentIOTransport::readLoop() {
                 if (sync->lastViewSeq > 0) {
                     lastViewSeq_.store(sync->lastViewSeq, std::memory_order_release);
                 }
-                // 快照序号: 全量/尾窗 Sync 已包含 seq <= deltaSeq 的全部增量,
+                // 快照序号: 完整/尾窗 Sync 已包含 seq <= deltaSeq 的全部增量,
                 // 据此**覆盖**去重用的序号 (而非取较大值)。
                 // - 服务端进程重启/会话重建后 seq 从 0 重新计数, 客户端保留的旧序号
                 //   (可能上千) 会把新 delta 全部判为重复而丢弃 —— 表现为重连
                 //   成功、历史快照也拿到了, 但界面再也不刷新
-                // - 缓冲溢出回退全量 sync 时同样需要: 该快照已含全部增量, 旧
+                // - 缓冲溢出回退完整 Sync 时同样需要: 该快照已含全部增量, 旧
                 //   序号会让快照后的重放序列被误判为重复
                 // - deltaSeq == 0 (旧服务端未提供/无会话): 复位为 0, 放行后续增量
                 lastDeltaSeq_.store(sync->deltaSeq, std::memory_order_release);
@@ -447,7 +447,7 @@ asio::awaitable<void> WsAgentIOTransport::readLoop() {
             );
             writeQueue_->try_send(ErrorCode{}, helloJson.dump());
             reconnected = true;
-            // 重连只恢复了传输: 会话内容仍靠随后的 Sync(全量/增量) 补齐,
+            // 重连只恢复了传输: 会话内容仍靠随后的 Sync(完整/增量) 补齐,
             // 因此在收到 HelloAck 之前保持 reconnecting 阶段
             setStage(WireConnectionStage::Reconnecting, "reconnected, waiting for hello ack");
             break;

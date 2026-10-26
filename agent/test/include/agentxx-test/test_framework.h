@@ -74,7 +74,7 @@ inline std::optional<std::filesystem::path> executableDir() {
 /// 2. `__FILE__` 推导 —— 没有该宏时的回退, 要求编译器收到的是绝对路径; 构建脚本
 ///    打开的 ccache 归一化 (`CCACHE_BASEDIR`) 会把源文件参数改写成相对路径,
 ///    此时 `__FILE__` 相对**当前工作目录**, 从构建产物目录运行推不出源码树;
-/// 3. 当前工作目录向上回溯 —— 手工在源码树内运行的兜底。
+/// 3. 当前工作目录向上回溯 —— 手工在源码树内运行时的备用手段。
 ///
 /// - `return` 找不到返回空路径, 调用方按"跳过"或"环境未就绪"处理, 不误报失败
 inline std::filesystem::path sourceRootDir() {

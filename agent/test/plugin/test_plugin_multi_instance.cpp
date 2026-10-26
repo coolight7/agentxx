@@ -4,7 +4,7 @@
 // - 两个 AgentContext 各持独立 PluginManager, 加载同一 example_plugin
 // - 工具执行路由正确: A 实例的回调打到 A 的主程序 (echo 回显 sessionId 可区分)
 // - 状态隔离: 卸载 A 后 B 的工具仍可用; B 重新加载亦正常
-// - 反复 load/unload 循环不泄漏 (LeakSanitizer 兜底)
+// - 反复 load/unload 循环不泄漏 (LeakSanitizer 检测)
 #include "agentxx-test/plugin/test_plugin_multi_instance.h"
 
 #include "agentxx/agent/context.h"

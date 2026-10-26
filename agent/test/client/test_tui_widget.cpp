@@ -158,7 +158,7 @@ void test_hit_registry_unrendered_item_never_hits() {
     hits.beginFrame();
 
     // 只登记不渲染 (元素被丢弃): Box 保持空区域, 不参与命中
-    // (这是"未显示的按钮占那块区域"问题的根因 —— 登记表用帧首清空 + 空 Box 兜底)
+    // (这是"未显示的按钮占那块区域"问题的根因 —— 登记表用帧首清空 + 空 Box 占位)
     (void)hits.add(ftxui::text("hidden"), "hidden", std::string{});
     XX_TEST_EXPECT_TRUE(hits.size() == 1);
     XX_TEST_EXPECT_TRUE(hits.find(5, 0) == nullptr);
@@ -268,7 +268,7 @@ void test_action_list_selection_keeps_by_id() {
     list.setItems(std::move(reordered));
     XX_TEST_EXPECT_EQ(list.selectedIndex(), 0); // "c" 现在在第 0 项
 
-    // 选中项消失: 下标收敛到有效范围
+    // 选中项消失: 下标限制到有效范围
     list.setItems({
         UiActionItem{.id = "x", .label = "X"},
     });
@@ -296,7 +296,7 @@ void test_action_list_keyboard_activate() {
     // 不可用项: activateIndex 直接调用不触发回调
     XX_TEST_EXPECT_FALSE(list.activateIndex(1));
 
-    // 未消费的键 (Esc) 由调用方处理
+    // 未处理的键 (Esc) 由调用方处理
     XX_TEST_EXPECT_FALSE(list.onKeyEvent(ftxui::Event::Escape));
 
     // 空列表: Enter 不崩溃且无可激活项
@@ -333,7 +333,7 @@ void test_action_list_mouse_click() {
     XX_TEST_EXPECT_EQ(activated.size(), size_t{1});
     XX_TEST_EXPECT_EQ(list.selectedIndex(), 2);
 
-    // 未命中任何条目: 不消费 (调用方仍可处理该点击)
+    // 未命中任何条目: 不处理 (调用方仍可处理该点击)
     XX_TEST_EXPECT_FALSE(list.onMouseEvent(leftClickMouse(999, 999), hits));
 
     // 选中项整行高亮: 重新渲染后选中行 (C 在第 2 行) 覆盖整行背景色
@@ -412,7 +412,7 @@ void test_action_list_group_headers() {
         const int titleX = boxA.x_min;     // 标题行与条目同行起点
         const int titleY = boxA.y_min - 1; // 条目上一行即标题行
         XX_TEST_EXPECT_TRUE(hits.findClick(leftClickMouse(titleX, titleY)) == nullptr);
-        XX_TEST_EXPECT_FALSE(list.onMouseEvent(leftClickMouse(titleX, titleY), hits)); // 未消费
+        XX_TEST_EXPECT_FALSE(list.onMouseEvent(leftClickMouse(titleX, titleY), hits)); // 未处理
         XX_TEST_EXPECT_EQ(list.selectedIndex(), 0);
         XX_TEST_EXPECT_TRUE(activated.empty());
     }
@@ -610,9 +610,9 @@ void test_status_bar_click_actions() {
         );
     }
 
-    // 键盘事件不被状态栏消费 (由外层集中处理 F2/F3/F4)
+    // 键盘事件不被状态栏处理 (由外层集中处理 F2/F3/F4)
     XX_TEST_EXPECT_FALSE(comp->OnEvent(ftxui::Event::F2));
-    // 未命中任何区域的鼠标事件同样不消费 (交给其它组件)
+    // 未命中任何区域的鼠标事件同样不处理 (交给其它组件)
     XX_TEST_EXPECT_FALSE(comp->OnEvent(leftClickAt(0, 0)));
 }
 

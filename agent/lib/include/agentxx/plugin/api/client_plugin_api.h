@@ -151,7 +151,7 @@ typedef struct AgentxxUiActionContext {
 /* 基线: 重置时 = 完整布局; 以后追加字段保持不变 (改为 offsetof(第一个追加字段)) */
 #define AGENTXX_UI_ACTION_CONTEXT_BASELINE_SIZE sizeof(AgentxxUiActionContext)
 
-/// 动作处理器 (client io 线程同步调用; 不得抛异常出边界, 主程序兜底)
+/// 动作处理器 (client io 线程同步调用; 不得抛异常出边界, 主程序统一保护)
 typedef void(PLUGINXX_CALL* AgentxxUiActionFn)(const AgentxxUiActionContext* ctx, void* user_data);
 
 /// 通用 overlay 类型 (首版四种, 一次实现)
@@ -363,7 +363,7 @@ typedef struct AgentxxClientUiIface {
      */
     /// 绑定动作处理器 (client io 线程约束):
     /// - target_id: 归属键 (section_id / panel_id / tool_call_id); 空串 = 本实例
-    ///   兜底 (方案 A fallback: 精确匹配优先, 未命中回落到 "")
+    ///   默认绑定 (方案 A fallback: 精确匹配优先, 未命中回落到 "")
     /// - 同一 (plugin, target_id) 重复绑定覆盖; on_action 为 NULL 时返回非 0
     /// - 返回 0 成功
     int32_t(PLUGINXX_CALL* bind_action_handler)(
@@ -465,7 +465,7 @@ typedef struct AgentxxClientWireIface {
     uint32_t struct_size;
 
     /// 发送事件到 agent 侧: 服务端发布到事件总线 topic `client.{插件名}.{event}`
-    /// (agent 侧同名插件可订阅; 载荷 JSON 原样透传, 语义由插件定义)
+    /// (agent 侧同名插件可订阅; 载荷 JSON 原样转发, 语义由插件定义)
     /// - 返回 0 成功; 非 0 表示未连接或载荷非法
     int32_t(PLUGINXX_CALL* send_plugin_data)(
         const PluginxxHost*       host,
@@ -579,7 +579,7 @@ typedef struct AgentxxTimerSpec {
     /// - 可取值: 面板 id / Info 段落 id / 通用 overlay (`"__overlay"`) /
     ///   工具消息装饰的 `tool_call_id` (主程序按该消息是否在消息列表角度内判定)
     PluginxxStringView owner_id;
-    /// 超时回调 (client io 线程同步调用; 不得抛异常出边界, 主程序兜底)
+    /// 超时回调 (client io 线程同步调用; 不得抛异常出边界, 主程序统一保护)
     void(PLUGINXX_CALL* on_timer)(void* user_data);
     /// 回调上下文 (建议 = 插件实例上下文; 可为 NULL)
     void* user_data;
@@ -633,7 +633,7 @@ typedef struct AgentxxKeybindSpec {
     PluginxxStringView keys;
     /// 说明文本 (界面/帮助展示; 可空)
     PluginxxStringView description;
-    /// 触发回调 (client io 线程同步调用; 不得抛异常出边界, 主程序兜底)
+    /// 触发回调 (client io 线程同步调用; 不得抛异常出边界, 主程序统一保护)
     void(PLUGINXX_CALL* on_keybind)(void* user_data);
     /// 回调上下文 (建议 = 插件实例上下文; 可为 NULL)
     void* user_data;
@@ -673,7 +673,7 @@ typedef const AgentxxClientPluginInfo*(PLUGINXX_CALL* AgentxxClientPluginGetInfo
 /// 存于 *plugin_ctx 指向的堆块 (禁止可变全局/函数级 static 缓存); 一切注册
 /// 回调必须设置 user_data = 实例上下文。
 /// - host: 本实例专属主程序句柄 (opaque 已关联本实例)
-/// - plugin_ctx: 输出本实例私有上下文 (透传给 destroy)
+/// - plugin_ctx: 输出本实例私有上下文 (原样转给 destroy)
 /// - 返回 0 成功; 非 0 创建失败 (主程序走失败清理路径并报告错误)
 typedef int32_t(PLUGINXX_CALL* AgentxxClientPluginCreateFn)(
     const PluginxxHost* host,

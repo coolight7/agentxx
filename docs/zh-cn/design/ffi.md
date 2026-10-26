@@ -1,7 +1,7 @@
 # libagentxx FFI C API 导出层
 
 > 已实现并测试通过 (`agentxx_test ffi_c_api`)
-> 相关文档: [design](index.md) (主程序架构) · [plugins.md](plugins.md) (纯 C ABI 插件范式)
+> 相关文档: [design](index.md) (主程序架构) · [plugins.md](plugins.md) (纯 C ABI 写法)
 - 修改了 ffi 源码、设计后，应当更新当前文档，如果ffi接口变动，应当同步更新 [其他编程语言导出接口](/agent/ffi/) 和 [示例](/agent/example/ffi/)
 
 ## 1. 概述与目标
@@ -13,7 +13,7 @@
 
 核心规范与目标:
 
-1. **导出符号收敛**: 共享库导出面从 ~17 万 C++ 符号 (默认全导出) 收敛为
+1. **导出符号收敛**: 共享库导出面从 ~17 万 C++ 符号 (默认全导出) 统一为
    仅 26 个顶层 C 符号, 满足 "导出符号必须是 C Api" 的硬约束 (libstdc++
    等运行库依赖仍为 DT_NEEDED, 属正常动态依赖)。
 2. **严格 C ABI 规约**:
@@ -59,7 +59,7 @@
 └─────────────────────────────────────────────────────────────┘
 ```
 
-加载时序 (双线程协同, clientEx ↔ agentEx):
+加载时序 (双线程配合, clientEx ↔ agentEx):
 
 1. `ChannelAgentIOTransport::makePair(clientEx, agentEx)` → 双端点 `setTransport`
 2. **在 agent 线程**: 先 `co_spawn(serverIO->runTransportLoop())`: init 期间客户端请求
@@ -68,7 +68,7 @@
    (子代理委派) → 跨线程请求组件信息 → `notifyServerReady` (触发 `EVT_READY`) → `serverIO->run()`
    (会话驱动循环)
 4. **在 client 线程**: `co_spawn(clientIO->runTransportLoop())`: 事件分发 → C 回调
-5. `sendToPeer(WireHello)` 触发全量 Sync/增量重放; `WireGetModel` 预取模型信息
+5. `sendToPeer(WireHello)` 触发完整 Sync/增量重放; `WireGetModel` 预取模型信息
 
 安全停止 (`stopInternal`, 调用方线程执行):
 
@@ -156,7 +156,7 @@ agentxx_ffi_event_queue_free(q);
 | 生命周期 | `agentxx_ffi_create` / `agentxx_ffi_start` / `agentxx_ffi_stop` / `agentxx_ffi_destroy` | 创建(不启动线程)/异步启动(EVT_READY)/同步停止(幂等)/销毁(未 stop 自动 stop) |
 | 会话交互 (异步) | `agentxx_ffi_send_input` / `agentxx_ffi_cancel` / `agentxx_ffi_select_model` / `agentxx_ffi_switch_session` | 投递 io 线程串行执行; READY 前发送的输入自动缓存; `send_input` 参数为**输入 JSON** (`{"text","attachments","model","delivery"}`, 支持多模态附件), 见 4.11 |
 | 模型管理 | `agentxx_ffi_add_model` / `agentxx_ffi_remove_model` / `agentxx_ffi_list_models` | 动态增删查模型配置; 与服务端 wire 侧同一套实现 (投递请求 + 等回执), 先落盘后注册; 删除当前正在使用的模型被拒绝; 见 4.7 |
-| Wire 透传 | `agentxx_ffi_send_wire` | 低频操作走透传 (黑名单拦截核心连接消息, 白名单放行其余 client→server 消息); 见 4.8 |
+| Wire 原样转发 | `agentxx_ffi_send_wire` | 低频操作走原样转发 (黑名单拦截核心连接消息, 白名单放行其余 client→server 消息); 见 4.8 |
 | 嵌入方程序工具 | `agentxx_ffi_tool_register` / `agentxx_ffi_tool_unregister` / `agentxx_ffi_tool_respond` | 嵌入方程序注册动态工具 → 服务端注册进 ToolRegistry → 命中时发 EVT_HOST_TOOL_CALL → 嵌入方程序应答; 见 4.9 |
 | 文本合批 | `agentxx_ffi_set_delta_batch` | 设置文本/思考增量合批窗口 (ms; <=0 关闭); 见 4.10 |
 | 同步查询 | `agentxx_ffi_get_model_info` / `agentxx_ffi_get_context_messages` / `agentxx_ffi_list_sessions` | 阻塞等待服务端响应 (最长 10s), 结果写入 `AgentxxString* out` 出参 (`agentxx_ffi_string_free` 释放); 同一句柄同一时刻仅允许一个未完成的请求 |
@@ -174,7 +174,7 @@ agentxx_ffi_event_queue_free(q);
 | 事件 | payload | 说明 |
 |------|---------|------|
 | `EVT_READY` | `{"sessionId"}` | 服务端就绪, 可开始发送输入 |
-| `EVT_SYNC` | wire sync JSON | 全量/部分历史同步 (含 fromIndex 尾窗语义) |
+| `EVT_SYNC` | wire sync JSON | 完整/部分历史同步 (含 fromIndex 尾窗语义) |
 | `EVT_DELTA` | wire delta JSON | 流式增量 (kind=text_token/thinking_token/tool_start/tool_end/turn_end/...) |
 | `EVT_DELTA_TEXT_BATCH` | `{"kind":"text"｜"thinking","text":"自上次事件以来的新增文本"}` | 合批后的文本/思考增量 (仅 `set_delta_batch(>0)` 时产出); 嵌入方程序直接追加, 不必解析 wire delta 全部字段; 工具/轮次事件不受合批影响, 仍严格有序 |
 | `EVT_TURN_END` | wire turn_result JSON | 轮次结束 (`has_error` 字段报告异步错误) |
@@ -184,7 +184,7 @@ agentxx_ffi_event_queue_free(q);
 | `EVT_INTERRUPT_REQ` | `{"interruptId","sessionId","node","value","argJson"}` | HIL 中断询问 (权限确认/输入收集); argJson 为 InterruptHandleArg 序列化 (`{name,arg,resultId,ui}`): **`ui` 为必填的中断 UI 描述** (声明式表单: 头行分段 + 有序块列表 text/markdown/diff/image/progress/separator/gap/control/submit + 预留 custom); 渲染指引见 4.6 |
 | `EVT_INTERRUPT_EXPIRED` | `{"interruptId"}` | 中断已过期/取消, 不再可应答 |
 | `EVT_PLUGIN_DATA` | wire plugin_data JSON | agent 侧插件事件转发 (`{plugin,event,data}`) |
-| `EVT_WIRE` | 原始下行 wire JSON | 低频下行消息透传 (白名单外的结构性消息): `input_ack` (输入受理回执, 见 4.11) / `list_dir_result` / `view_messages_page` / `message_queue_update` / `permission_state` / `rename_session_result` / `add_model_result` / `remove_model_result`; 嵌入方程序按 `type` 自行分派 |
+| `EVT_WIRE` | 原始下行 wire JSON | 低频下行消息原样转发 (白名单外的结构性消息): `input_ack` (输入受理回执, 见 4.11) / `list_dir_result` / `view_messages_page` / `message_queue_update` / `permission_state` / `rename_session_result` / `add_model_result` / `remove_model_result`; 嵌入方程序按 `type` 自行分派 |
 | `EVT_HOST_TOOL_CALL` | `{"callId","name","argsJson","sessionId","timeoutSec"}` | 服务端请求嵌入方程序执行已注册的嵌入方程序工具 (见 4.9); `argsJson` 为 JSON 文本 |
 | `EVT_HOST_TOOL_CANCELLED` | `{"callId","reason"}` | 嵌入方程序工具调用被取消 (停止/销毁时未应答的调用统一上报), 嵌入方程序可据此释放本地资源 |
 | `EVT_ERROR` | `{"code","message"}` | 内部错误 |
@@ -277,7 +277,7 @@ ui = { "version": 1,
 (缺省 "取消")。点击确认 = 提交整份表单; 点击取消 = 取消整个中断请求。
 
 - `color` 取值 `error`/`accent`/`hint`/`normal`/`thinking`/`tool`, 嵌入方程序按自身主题映射
-- 结果恒为对象 `{"values": {"<控件 id>": 值}}`; **空对象 = 未提交/取消** (消费端按
+- 结果恒为对象 `{"values": {"<控件 id>": 值}}`; **空对象 = 未提交/取消** (处理方按
   未应答处理, 与 HTTP/权限语义一致)
 - 内容块与控件块可任意混排 (版式完全由生产者决定); 未知块类型忽略
 
@@ -350,14 +350,14 @@ GUI 需要"模型列表 + 新增 + 删除 + 切换"，而 `create` 只接收单�
 - `list_models(out)`: 与 `EVT_MODEL_INFO` 同形态 (`{currentModel, models[], capabilities[]}`)
 - 三者与其余同步查询共享同一条约束: 同一句柄同一时刻只允许一个未完成请求
 
-### 4.8 Wire 透传 (`agentxx_ffi_send_wire` + `EVT_WIRE`)
+### 4.8 Wire 原样转发 (`agentxx_ffi_send_wire` + `EVT_WIRE`)
 
 远程模式能做的操作, 本地模式也要能做, 否则同一套界面要按连接类型写两套逻辑。
 按"用得多少"和"是否要马上拿到错误"划分:
 
 - **专用符号**: 模型增删查、嵌入方程序工具注册与应答、中断应答、三个同步查询 ——
   天天要用, 参数写错要同步报错, 嵌入方程序按"符号在不在"就能判断能不能用;
-- **透传入口**: 队列 4 项、`compact_context`、`rename_session`、`get_permission_state`、
+- **原样转发入口**: 队列 4 项、`compact_context`、`rename_session`、`get_permission_state`、
   `set_full_auth`、`list_dir`、`plugin_data_up`, 以及以后新加的 wire 消息 ——
   用得少、协议还在改, 不值得为每条加一个符号、等一个新版本。
 
@@ -368,13 +368,13 @@ GUI 需要"模型列表 + 新增 + 删除 + 切换"，而 `create` 只接收单�
 - **黑名单** (返回 `ERR_INVALID` 并在 log 里指出该用哪个符号): `hello`/`ping`/`pong`、
   `user_input`、`cancel`、`select_model`、`switch_session`、`interrupt_response`、
   `add_model`、`remove_model`、`get_model`/`get_context`/`list_sessions`
-  (端点需要维护状态或已有专用符号的, 不走透传)
+  (端点需要维护状态或已有专用符号的, 不走原样转发)
 - **白名单放行**: `compact_context` / `get_view_messages` / `list_dir` / `rename_session` /
   `set_full_auth` / `get_permission_state` / `clear_message_queue` / `remove_queue_item` /
   `interrupt_and_run_next` / `plugin_data_up` / `host_tool_register` / `host_tool_unregister` /
   `host_tool_result`; 其余类型返回 `ERR_INVALID`
 - 未带 `sessionId` 时自动补齐为当前绑定会话
-- 这类消息的下行应答经 `EVT_WIRE` 透传 (payload 为原始 wire JSON, 嵌入方程序按 `type` 分派):
+- 这类消息的下行应答经 `EVT_WIRE` 原样转发 (payload 为原始 wire JSON, 嵌入方程序按 `type` 分派):
   `list_dir_result` / `view_messages_page` / `message_queue_update` / `permission_state` /
   `rename_session_result` / `add_model_result` / `remove_model_result`
 
@@ -451,7 +451,7 @@ set_delta_batch(0)                    → 关闭, 行为与现在完全一致 (�
 - 附件最终按类型汇入 `ChatMessage` 的 `image_urls` / `audio_urls` / `video_urls`,
   由各 Provider 组装成请求体内容段 (OpenAI: `content` 数组里的
   `image_url` / `input_audio` / `video_url` 分片)
-- 受理结果经 `EVT_WIRE` 透出 `input_ack` (见 4.8), 嵌入方程序据此展示"已开始 / 已排队 / 被拒绝":
+- 受理结果经 `EVT_WIRE` 上报 `input_ack` (见 4.8), 嵌入方程序据此展示"已开始 / 已排队 / 被拒绝":
   `{"type":"input_ack","requestId":1,"status":"started|queued|steered|rejected",
     "reason":"...","detail":"...","itemId":"..."}`;
   拒绝原因取值见 `InputRejectReason`(`empty_content` / `attachment_too_large` /
@@ -477,7 +477,7 @@ set_delta_batch(0)                    → 关闭, 行为与现在完全一致 (�
 ## 6. 测试
 
 - `agent/test/test_ffi_c_api.cpp` (模块名 `ffi_c_api`): 生命周期/交互/HIL/
-  事件队列/同步查询全覆盖, 内置 mock LLM Server 端到端验证
+  事件队列/同步查询全覆盖, 内置 mock LLM Server 全流程验证
 
 ---
 

@@ -962,7 +962,7 @@ asio::awaitable<void> test_connection_stage_guard() {
     }
     XX_TEST_EXPECT_TRUE(foundNotFound);
 
-    // 5) 阶段文本往返 (未知文本返回 nullopt, 由调用方兜底)
+    // 5) 阶段文本往返 (未知文本返回 nullopt, 由调用方处理)
     for (auto s :
          {agentxx::agent::WireConnectionStage::Unhandshaken,
           agentxx::agent::WireConnectionStage::Unbound,

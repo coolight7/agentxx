@@ -17,10 +17,10 @@
 | ARC-1 | 核心边界可执行检查 | 已实施 | `agent/test/core/test_boundaries.cpp`（测试模块 `boundaries`） |
 | ARC-2 | 目录级规则文件 | 已实施 | `agent/{lib,client,plugins,test}/AGENTS.md` |
 | ARC-3 | 加载清单和启动断言 | 已实施 | `agent/lib/src/agent/base_agent.cpp`（`InitStep` 清单 + `verifyStartupAssembly`） |
-| ARC-5 | 分阶段关闭与后台任务收敛 | 已实施（不等待轮次） | `util/task_scope.{h,cpp}` + `BaseAgent::shutdownAsync`（停止输入 → 后台任务取消收敛 → 关插件 → 刷盘）+ `AgentContext::markShuttingDown`；模块 `task_scope`、`shutdown_stages` |
+| ARC-5 | 分阶段关闭与后台任务结束 | 已实施（不等待轮次） | `util/task_scope.{h,cpp}` + `BaseAgent::shutdownAsync`（停止输入 → 后台任务取消收敛 → 关插件 → 刷盘）+ `AgentContext::markShuttingDown`；模块 `task_scope`、`shutdown_stages` |
 | ARC-6 | 生效加载快照（启动日志 + `--dump-config`） | 已实施（限定范围） | `agent/lib/{include/agentxx/agent,src/agent}/assembly_snapshot.*`（配置侧 + 运行侧快照、渲染、启动日志）+ `agent/client/main.cpp` 的 `--dump-config`；模块 `assembly_snapshot`、`assembly_snapshot_io` |
 | ARC-7 | 新能力不进入核心骨架 | 已实施（纪律） | `agent/lib/AGENTS.md` |
-| ARC-8 | 消费者使用窄接口（试点） | 部分实施（试点结论：不新增一层） | 现有等价窄接口：上下文 `nodes/session_context.h`（读/写入口 + 影子通道刷新）、权限走总线服务 `service.permission.check/reverify`、工具注册 `agentxx.agent.tools` 表 + `ToolAssemblyRecord`、子代理 `service.subagent`（`AgentHost::spawnBatch`）；四处都有测试替身用例（`prompt_stability_io` / `permission` / `assembly_snapshot_io` / `subagent_bus`），再包一层 C++ 窄视图属重复抽象，故不新增 |
+| ARC-8 | 处理方使用窄接口（试点） | 部分实施（试点结论：不新增一层） | 现有等价窄接口：上下文 `nodes/session_context.h`（读/写入口 + 影子通道刷新）、权限走总线服务 `service.permission.check/reverify`、工具注册 `agentxx.agent.tools` 表 + `ToolAssemblyRecord`、子代理 `service.subagent`（`AgentHost::spawnBatch`）；四处都有测试替身用例（`prompt_stability_io` / `permission` / `assembly_snapshot_io` / `subagent_bus`），再包一层 C++ 窄视图属重复抽象，故不新增 |
 | ARC-4 / ARC-7b / ARC-9 | 子系统配置视图 / 千行文件拆分 / 业务与策略分离 | 不做 | 提高内聚、无功能收益 |
 
 ## 2. 轮次与输入投递
@@ -82,7 +82,7 @@
 | LLM-2 | 错误分类与重试策略 | 已实施 | `nodes/llm_error.{h,cpp}`（分类 + 有界指数退避 + `retry-after`；网络/传输层故障单列一类，一律可重试，类别只影响等待基数）+ `nodes/modelcall.cpp`（不可重试类直接结束）；模块 `llm_error`、`agent` |
 | LLM-3 | 溢出一次性压缩重试 | 已实施 | `nodes/modelcall.cpp`（首个溢出触发 `service.summarization.compact` 后立即重试，每轮仅一次）；模块 `agent` |
 | LLM-5 | 假 provider | 已实施 | `agent/test/include/agentxx-test/core/fake_provider.h`（脚本化固定流/错误/延迟/工具调用 + 请求记录）+ 模块 `fake_provider`；本地 HTTP 模拟器继续覆盖 provider 内部解析 |
-| LLM-7 | 消费端退出取消 | 已实施 | `agentxx/nodes/provider_call_scope.h`（`ProviderCallScope`：`fork` 出单次调用取消域，RAII 在消费方放弃时只中止本次调用）+ `nodes/modelcall.cpp` 接线；模块 `provider_call_scope` |
+| LLM-7 | 处理方退出取消 | 已实施 | `agentxx/nodes/provider_call_scope.h`（`ProviderCallScope`：`fork` 出单次调用取消域，RAII 在处理方放弃时只中止本次调用）+ `nodes/modelcall.cpp` 接线；模块 `provider_call_scope` |
 | LLM-8 | 缓存断点与缓存用量 | 已实施 | Anthropic 请求加载（`ModelConfig::cacheControl` + `AnthropicProvider::applyCacheBreakpoints`：系统提示/工具定义/最后一条正文消息加 `cache_control` 断点，跳过末尾动态段）+ 用量换算（`input_tokens + cache_read + cache_creation` → `prompt_tokens`，缓存写入量经 `provider_common.h` 额外字段进用量记录 `usage.cache_write_prompt_tokens`，schema v3）；模块 `anthropic_provider`、`fake_provider`、`session_schema`、`config_loader` |
 | LLM-13 | HTTP 录制回放 | 已实施 | `agent/test/include/agentxx-test/core/http_recorder.h`（`HttpRecorder` 录制器 / `HttpPlayer` 回放器 / `HttpFixture` 固定装置 + 脱敏）；模块 `http_recorder` |
 | LLM-4 / LLM-6 | 静默看门狗 / 流式组装唯一实现 | 已实施 | provider 内组装 + 看门狗（`index.md` 协议支持一节有说明） |
@@ -143,7 +143,7 @@
 | PLG-8 | 文档分页与接口表数字校验 | 部分实施（拆分不做） | 接口表名称集合与数量常量（`PluginManager::kInterfaceTableCount` = 21 / `ClientPluginManager` = 9）由 `boundaries` 规则 8/10 校验；`plugins.md` §8 澄清通用表查询 IID；文档拆分经核定不做（纯重组、收益低于改动成本） |
 | PLG-12 | 一次加载 / 多 agent 挂载 | 已实施 | `PluginManager`（进程一份：实例表 + 挂载表）+ `PluginMount`（每 agent 一份: 工具/权限/钩子/提示词/功能点/图/资源）+ `AgentHost::loadPluginsAsync` + `plugin.mount` 策略；引用 `PluginxxScopeRef` 定位 agent, 会话存储根按 agent 独占；模块 `plugin_host_mount`、`plugin_multi_mount`；见 `plugins.md` §18 |
 | PLG-10 | 插件加载耗时与注册计数诊断 | 已实施（限定范围） | `plugin_manager.h`（`PluginListView` 诊断字段）+ `plugin_manager_lifecycle.cpp`（加载耗时 + 加载摘要日志）；模块 `assembly_snapshot_io` |
-| PLG-3 / PLG-5 / PLG-9 / PLG-11 | 细粒度变更事件 / manifest schema / 作用域过滤 / 加载许可 | 不做 | 无派生缓存；`args` 原样透传；子代理白名单已实现 schema 与执行同时不可见 |
+| PLG-3 / PLG-5 / PLG-9 / PLG-11 | 细粒度变更事件 / manifest schema / 作用域过滤 / 加载许可 | 不做 | 无派生缓存；`args` 原样转发；子代理白名单已实现 schema 与执行同时不可见 |
 
 ## 12. 配置
 
@@ -246,13 +246,13 @@
     - OBS-5（按模块日志级别）已实施：`LogEntry::module` + `logModuleOf(__FILE__)` +
       `LogDispatcher::setModuleLevel/clearModuleLevels` + `applyLogModuleLevelSpec`
       （CLI 读 `AGENTXX_LOG_MODULES`，主程序日志记为 `plugin.<名字>`）；模块 `log_modules`。
-    - ARC-8（消费者窄接口试点）结论：**不新增一层窄视图** —— 四处等价窄接口已存在
+    - ARC-8（处理方窄接口试点）结论：**不新增一层窄视图** —— 四处等价窄接口已存在
       （`nodes/session_context.h`、`service.permission.*`、`agentxx.agent.tools` 表 +
       `ToolAssemblyRecord`、`service.subagent`），且都有测试替身用例；再包一层属重复抽象。
     - PLG-8 文档拆分经核定不做（保留数量/名称校验与 §8 澄清）。
-    - 全量回归（Debug + ASan/UBSan）：**36,438 项断言 0 失败**（上一轮 35,985）。
+    - 全部回归（Debug + ASan/UBSan）：**36,438 项断言 0 失败**（上一轮 35,985）。
 - 2026-10-18：TOOL-17 扩展为"输出编码统一 UTF-8 + `PWD`"：命令执行插件把预设项
-  收敛成一张表 `kEnvPresets`（boost.process 路径写子进程环境表, popen 回退路径生成
+  整理成一张表 `kEnvPresets`（boost.process 路径写子进程环境表, popen 回退路径生成
   等价赋值前缀），新增 `PYTHONIOENCODING=utf-8` / `PYTHONUTF8=1` 与追加式
   `JAVA_TOOL_OPTIONS`（`sun.stdout/stderr.encoding` + `stdout/stderr.encoding`,
   不动用户已有选项）；`PWD` 取命令实际运行目录（会话工作目录, 默认即主程序运行目录,

@@ -79,7 +79,7 @@ static std::string findPluginDir(const char* pluginName) {
             return c.string();
         }
     }
-    // 异常兜底: 返回相对目录路径, loadPluginAsync 解析失败时日志暴露原因
+    // 异常保护: 返回相对目录路径, loadPluginAsync 解析失败时日志暴露原因
     return std::string{"plugins/"} + pluginName;
 }
 
@@ -269,7 +269,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
         }
     }
 
-    // ---- 4.5 真实插件端到端 (agentxx_execute_command 插件) ----
+    // ---- 4.5 真实插件全流程 (agentxx_execute_command 插件) ----
     {
         auto& prompt   = ctx->agentConfig->prompt;
         auto  execPath = findPluginDir("agentxx_execute_command");
@@ -330,7 +330,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
         }
     }
 
-    // ---- 4.6 example_js_execute_command 插件端到端 (仿 execute_command 的 JS 实现) ----
+    // ---- 4.6 example_js_execute_command 插件全流程 (仿 execute_command 的 JS 实现) ----
     {
         auto jsEnginePath = findPluginDir("agentxx_javascript_engine");
         if (!ctx->pluginManager->hasCapability("interpreter.js")) {
@@ -610,7 +610,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
         // 统一模型: 所有插件都是 C++ 插件, 无 type 概念; 脚本能力由壳经
         // 能力调用委派给引擎 (主程序不参与)。内置合并编译模式下, 插件是否无
         // 动态库句柄 (dlHandle 为空) 取决于其是否在 AGENTXX_PLUGIN_BUILTIN_LIST:
-        // - 全量内置 ("all"): 无句柄; 名单外插件仍为动态库 (混合模式)
+        // - 全部内置 ("all"): 无句柄; 名单外插件仍为动态库 (混合模式)
         // - 全动态 (BUILTIN=OFF): 有句柄
         // 两种形态均为正确行为, 此处仅记录不强制断言
         TEST_INFO << "example_js dlHandle present = " << (jsInst->dlHandle != nullptr) << std::endl;
@@ -744,7 +744,7 @@ throw new Error("top-level rollback probe");
             XX_TEST_EXPECT_TRUE(jsInst != nullptr);
             auto* op = ctx->pluginManager->invokeCapabilityAsync(
                 jsInst,
-                nullptr, ///< 主程序外部发起 (不归因到某个 agent)
+                nullptr, ///< 主程序外部发起 (不归属于某个 agent)
                 "interpreter.js",
                 "load",
                 args,
@@ -1558,7 +1558,7 @@ throw new Error("top-level rollback probe");
             ctx->pluginMount->unregisterTool(inst31.get(), "null_start_tool");
         }
 
-        // 31.6 异常守卫: blocking_tool 异常守卫兜底 —— 用户 execute 抛异常时
+        // 31.6 异常守卫: blocking_tool 异常守卫保护 —— 用户 execute 抛异常时
         //      适配层转 PLUGINXX_OPERATOR_FAILED, 异常不穿越 C ABI
         {
             struct BoomCtx : public agentxx::plugin::PluginBase {};
@@ -1591,7 +1591,7 @@ throw new Error("top-level rollback probe");
             ctx->pluginMount->unregisterTool(inst31.get(), "boom_tool");
         }
 
-        // 31.7 异常守卫: 事件 handler 违约抛异常 → 主程序派发兜底,
+        // 31.7 异常守卫: 事件 handler 违约抛异常 → 主程序在派发时统一保护,
         //      同 topic 其他订阅者仍正常收到
         {
             static bool s_goodHandlerRan = false;
@@ -2397,7 +2397,7 @@ throw new Error("top-level rollback probe");
         co_await ctx->pluginManager->unloadAsync("example_plugin");
     }
 
-    // ---- 38b. 协程驱动桥端到端: 真实主程序下 driver/wake 交错执行 (plugin.md 6/10) ----
+    // ---- 38b. 协程驱动桥全流程: 真实主程序下 driver/wake 交错执行 (plugin.md 6/10) ----
     //
     // `example_bridge` 每步都经"主程序 timer 回调 -> 投递 continuation + wake -> 下一次
     // driver"推进, 因此:
@@ -2444,7 +2444,7 @@ throw new Error("top-level rollback probe");
         co_await ctx->pluginManager->unloadAsync("example_plugin");
     }
 
-    // ---- 38c. 受控轮询端到端: 插件本地 reactor 上的 asio 等待由 pump 推进 ----
+    // ---- 38c. 受控轮询全流程: 插件本地 reactor 上的 asio 等待由 pump 推进 ----
     //
     // `example_polled_timer` 的等待是插件本地 reactor 上的 asio::steady_timer
     // (没有主程序可见唤醒源), 只能由声明式受控轮询推进。因此:
@@ -2500,7 +2500,7 @@ throw new Error("top-level rollback probe");
         XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains("example_polled_timer"));
     }
 
-    // ---- 38d. agentxx_filesystem 端到端: read/write/edit 走受控轮询 (asio::stream_file),
+    // ---- 38d. agentxx_filesystem 全流程: read/write/edit 走受控轮询 (asio::stream_file),
     //          list 仍走 offload 阻塞池 —— 两类工具在同一实例内共存 ----
     {
         auto fsPath = findPluginDir("agentxx_filesystem");
@@ -2605,7 +2605,7 @@ throw new Error("top-level rollback probe");
         }
     }
 
-    // ---- 38d-2. agentxx_filesystem 兜底注册: 关闭文件异步 I/O 后重新加载插件,
+    // ---- 38d-2. agentxx_filesystem 备用注册: 关闭文件异步 I/O 后重新加载插件,
     //          read/write/edit 应改注册 blocking_tool (offload 阻塞池) 且功能不变
     //          (对应容器/虚拟化下 io_uring 被 seccomp 拦截的部署环境) ----
     {
@@ -2640,7 +2640,7 @@ throw new Error("top-level rollback probe");
             XX_TEST_EXPECT_TRUE(editTool != nullptr);
 
             if (writeTool && readTool && editTool) {
-                // write / read / edit 全程走同步兜底实现 (blocking_tool)
+                // write / read / edit 全程走同步备用实现 (blocking_tool)
                 auto w = co_await writeTool->execute_async(utilxx_base::Json{
                     {"path",      file                           },
                     {"content",   "hello fallback\nsecond line\n"},
@@ -2767,7 +2767,7 @@ throw new Error("top-level rollback probe");
                 }
             }
 
-            // 3. 判定: 已声明工具按规则表兜底 (无规则 = noRuleOperator); 未声明工具直接放行
+            // 3. 判定: 已声明工具按规则表回退 (无规则 = noRuleOperator); 未声明工具直接放行
             permission->noRuleOperator = agentxx::middleware::PermissionOperator::DENY;
             auto writeArgs             = utilxx_base::Json{
                             {"path", "/tmp/agentxx_permission_decl/x.txt"}
@@ -2959,7 +2959,7 @@ throw new Error("top-level rollback probe");
                 XX_TEST_EXPECT_TRUE(grepOut.find("needle_secret") == std::string::npos);
             }
 
-            // (4b) list: 条目实时过滤 (recursive 下钻 + limit 只统计真正输出的条目)
+            // (4b) list: 条目实时过滤 (recursive 逐层展开 + limit 只统计真正输出的条目)
             {
                 const auto listRoot = root / "listed";
                 fsx::create_directories(listRoot / "deny_dir", ec);
@@ -3099,7 +3099,7 @@ throw new Error("top-level rollback probe");
         fsx::remove_all(root, ec);
     }
 
-    // ---- 38e. agentxx_websearch 端到端: 网络等待走受控轮询 (本地回环 HTTP 服务) ----
+    // ---- 38e. agentxx_websearch 全流程: 网络等待走受控轮询 (本地回环 HTTP 服务) ----
     //
     // 覆盖: 单请求完成、并发多请求 (共享同一 polled 驱动序列与 HTTP keep-alive 池,
     // 互不阻塞)、插件等待期间主程序 IO 线程仍在推进。
@@ -3136,7 +3136,7 @@ throw new Error("top-level rollback probe");
         auto webPath = findPluginDir("agentxx_websearch");
         auto webInst = co_await ctx->pluginManager->loadPluginAsync(webPath);
         XX_TEST_EXPECT_TRUE(webInst != nullptr);
-        /// 并发 fetch 是否已全部收束 (仍有挂起协程时不得卸载插件, 否则与其交错)
+        /// 并发 fetch 是否已全部结束 (仍有挂起协程时不得卸载插件, 否则与其交错)
         bool webFetchesSettled = false;
         if (webInst && port != 0) {
             const std::string baseUrl   = "http://127.0.0.1:" + std::to_string(port);
@@ -3221,7 +3221,7 @@ throw new Error("top-level rollback probe");
                 }
             }
             // 卸载: 无未完成操作 -> pump 已停止, 无残留
-            // (仅在上面的并发 fetch 已全部收束时执行; 仍有挂起协程时卸载会与其交错)
+            // (仅在上面的并发 fetch 已全部结束时执行; 仍有挂起协程时卸载会与其交错)
             if (webFetchesSettled) {
                 XX_TEST_EXPECT_TRUE(co_await ctx->pluginManager->unloadAsync("agentxx_websearch"));
                 XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains("agentxx_web_fetch"));

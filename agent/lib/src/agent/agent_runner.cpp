@@ -50,7 +50,7 @@ asio::awaitable<AgentRunner::Outcome> AgentRunner::run(
     auto session = ctx->getSession(sessionId);
 
     // 首跑 cfg 已被 move 进 engine, 提前保存 resume 需要沿用的运行参数
-    // (resume 必须与首跑同 stream_mode/max_steps, 否则事件回调/步数预算漂移)
+    // (resume 必须与首跑同 stream_mode/max_steps, 否则事件回调/步数预算变化)
     const auto resumeStreamMode = cfg.stream_mode;
     const auto resumeMaxSteps   = cfg.max_steps;
 
@@ -143,7 +143,7 @@ asio::awaitable<AgentRunner::Outcome> AgentRunner::run(
             ++argIndex;
 
             if (interruptArg.name == "subagent") {
-                // 统一批量委派: 参数解析收敛到共享实现 (parseSubagentBatchFromInterrupt +
+                // 统一批量委派: 参数解析统一到共享实现 (parseSubagentBatchFromInterrupt +
                 // buildSubagentResumeValues, 与 SubAgentManagerTool 提取规则一致)
                 // - 经 ctx->bus 请求 service.subagent: 主程序在根与每个子代理的
                 //   总线上统一 registerServer, 嵌套委派与根委派完全同路径 (扁平化)

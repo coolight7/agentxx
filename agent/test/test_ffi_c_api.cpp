@@ -806,7 +806,7 @@ void testMultipleRuntimesConcurrent() {
     mock.stop();
 }
 
-/// 7) send_input 的 JSON 参数: 附件透传、本地限额校验、拒绝回执
+/// 7) send_input 的 JSON 参数: 附件原样转发、本地限额校验、拒绝回执
 void testSendInputJsonAndAttachments() {
     FfiMockLLM mock;
     uint16_t   port = 0;
@@ -891,7 +891,7 @@ void testSendInputJsonAndAttachments() {
     XX_TEST_EXPECT_EQ(agentxx_ffi_send_input(a, &inputSv, &log), AGENTXX_FFI_OK);
     XX_TEST_EXPECT_TRUE(rec.wait(AGENTXX_FFI_EVT_TURN_END, 30000));
 
-    // 受理回执 (input_ack) 经 EVT_WIRE 透出: 嵌入方程序据此展示受理状态与拒绝原因
+    // 受理回执 (input_ack) 经 EVT_WIRE 上报: 嵌入方程序据此展示受理状态与拒绝原因
     {
         bool sawAck = false;
         for (const auto& [type, payload] : [&]() {
@@ -1274,7 +1274,7 @@ void testModelManagement() {
     fs::remove_all(tmpDataDir, cleanupEc);
 }
 
-/// 11) Wire 透传: agentxx_ffi_send_wire (黑白名单校验)
+/// 11) Wire 原样转发: agentxx_ffi_send_wire (黑白名单校验)
 void testSendWire() {
     FfiMockLLM mock;
     uint16_t   port = 0;

@@ -27,7 +27,7 @@ void benchResourceFfi();
 void benchResourceRealTui();
 
 /// 场景 2: 真实 server 子进程单独运行 (无客户端常驻)
-/// - 覆盖: 空载稳态/空载漂移/真实 WS 轮次驱动/客户端断开后的回收情况
+/// - 覆盖: 空载稳态/空载波动/真实 WS 轮次驱动/客户端断开后的回收情况
 void benchResourceServerOnly();
 
 /// 场景 3: 真实 TUI 子进程 (伪终端驱动, 等同用户敲键盘) + 真实 server 子进程

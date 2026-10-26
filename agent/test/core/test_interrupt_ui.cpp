@@ -878,7 +878,7 @@ void test_component_bridge() {
         XX_TEST_EXPECT_EQ(tableItem->rows[0][0].text.fallback, std::string{"a.txt"});
     }
 
-    // 3) 端到端: 含扩展组件的中断描述在行式前端 (CLI/日志) 上也有内容
+    // 3) 全流程: 含扩展组件的中断描述在行式前端 (CLI/日志) 上也有内容
     InterruptUi desc;
     desc.blocks     = blocks;
     const auto text = interruptUiPlainText(desc, 80);

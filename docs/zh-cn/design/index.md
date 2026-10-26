@@ -1,6 +1,6 @@
 # Agentxx 整体设计文档
 
-> 相关文档: [plugins.md](plugins.md) (纯 C ABI 插件范式) · [ffi.md](ffi.md) (FFI 接口设计) · [tui.md](tui.md) (TUI 实现与架构) · [ui-layer.md](ui-layer.md) (界面描述层/适配/kit) · [agentxx-ui-kit.md](agentxx-ui-kit.md) (扩展 kit 生成物) · [benchmark.md](benchmark.md) (资源与性能基准) · [security.md](security.md) (安全责任与边界) · [configuration.md](configuration.md) (配置与设置边界) · [config-keys.md](config-keys.md) (配置键目录, 生成物) · [wire-protocol-fields.md](wire-protocol-fields.md) (Wire 协议字段清单, 生成物) · [roadmap.md](roadmap.md) (实施状态清单)
+> 相关文档: [plugins.md](plugins.md) (纯 C ABI 写法) · [ffi.md](ffi.md) (FFI 接口设计) · [tui.md](tui.md) (TUI 实现与架构) · [ui-layer.md](ui-layer.md) (界面描述层/适配/kit) · [agentxx-ui-kit.md](agentxx-ui-kit.md) (扩展 kit 生成物) · [benchmark.md](benchmark.md) (资源与性能基准) · [security.md](security.md) (安全责任与边界) · [configuration.md](configuration.md) (配置与设置边界) · [config-keys.md](config-keys.md) (配置键目录, 生成物) · [wire-protocol-fields.md](wire-protocol-fields.md) (Wire 协议字段清单, 生成物) · [roadmap.md](roadmap.md) (实施状态清单)
 
 ## 目录
 
@@ -63,7 +63,7 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
   - ReAct 循环路由由 `llm` 节点按"本轮是否有 tool_calls"返回 `Command.goto_node` (tools / agent_end) 给出, 不再依赖读上下文的条件边; 节点级 `xx_autoRoute=false` 可关闭, 交由图定义/自定义路由节点接管
 - **流式输出**: LLM 响应以增量 Delta 事件推送 (TextToken / ThinkToken / ToolStart / ToolEnd / TurnStart / TurnEnd / NodeStart / NodeEnd / MessageUITip / InsertMessage / UpdateMessage)，每个 Delta 携带单调递增 seq 用于重放与同步; 轮次统计/错误/取消提示/中断头消息由 agent 线程构造为完整 ViewMessage 经 InsertMessage 插入会话历史并推送 (携带 msgId), 保证 viewMessages 与 UI 展示一致
 - **多模型支持**: 运行时按会话 (sessionId) 动态切换模型，支持 OpenAI Chat Completions、Anthropic Messages、OpenAI Responses (Codex) 三种 Provider 协议
-- **上下文压缩**: SummarizationMiddleware 在上下文接近模型 token 上限时自动压缩历史消息，支持 toolcall 输出去重与截断; 压缩请求带上**当前完整上下文** (system + 全部消息) 与末尾压缩指令, 由压缩子代理决定哪些信息必须保留 (模板要求写清末尾要点: 进行中的动作、最近一次工具调用与其结果、下一步), 压缩结果覆盖回 `[system] | [user 压缩指令] | [assistant 摘要]` —— **不再原样保留最近消息** (否则刚压完的上下文立刻被最近消息重新填满); 压缩请求中的 thinking 只保留最新一条 (旧轮 thinking 对续写没有价值, 加密 thinking 也无法按字符估算 token); 压缩完成后**立即**把压缩结果写回会话上下文并请求节流落盘 (崩溃/被杀时不丢压缩结果, 重启后不会因上下文重新超限而反复压缩), 同一会话压缩互斥 (手动 Summy Context 与轮内自动压缩不并发), 压缩提示消息按挂起 id 复用 (中断续跑不产生重复提示), 提示带 `tip->running` 标记: 开始时置位 (界面在折叠标记处显示加载动画), 结果回填时清除; 失败与冷却处理: 压缩失败按轮内计数累积 (`graphDataKey_summarizationFailCount`), 连续失败 >= 2 次或 token 占用 >= 95% 上限时降级**硬截断** (按 token 预算丢弃最旧消息) 兜底; "上次压缩后消息增长不足 2 条" 视为冷却期 (`graphDataKey_summarizationLastMsgCount`), 跳过重复的 LLM 压缩 (避免每轮派生无效的压缩子代理); 手动压缩等待上限 2 分钟 (子代理卡住时不无限占用 io 线程, 超时走硬截断); 队列输入 (用户消息) 与 next-step/inject 注入输入单条达到 `userInputSummaryLimitLength` (默认 8K 字符, 0=关闭) 时原文经 share store 卸载, 上下文/请求里只留开头片段与取回提示 (模型用 `agentxx_share_store` 按行取回), 展示历史与轮次回显仍是完整原文 —— 与 toolcall 输出压缩共用同一套判定与提示格式 (见 `agentxx::util::offloadShareStoreIfOversized`)
+- **上下文压缩**: SummarizationMiddleware 在上下文接近模型 token 上限时自动压缩历史消息，支持 toolcall 输出去重与截断; 压缩请求带上**当前完整上下文** (system + 全部消息) 与末尾压缩指令, 由压缩子代理决定哪些信息必须保留 (模板要求写清末尾要点: 进行中的动作、最近一次工具调用与其结果、下一步), 压缩结果覆盖回 `[system] | [user 压缩指令] | [assistant 摘要]` —— **不再原样保留最近消息** (否则刚压完的上下文立刻被最近消息重新填满); 压缩请求中的 thinking 只保留最新一条 (旧轮 thinking 对续写没有价值, 加密 thinking 也无法按字符估算 token); 压缩完成后**立即**把压缩结果写回会话上下文并请求节流落盘 (崩溃/被杀时不丢压缩结果, 重启后不会因上下文重新超限而反复压缩), 同一会话压缩互斥 (手动 Summy Context 与轮内自动压缩不并发), 压缩提示消息按挂起 id 复用 (中断续跑不产生重复提示), 提示带 `tip->running` 标记: 开始时置位 (界面在折叠标记处显示加载动画), 结果回填时清除; 失败与冷却处理: 压缩失败按轮内计数累积 (`graphDataKey_summarizationFailCount`), 连续失败 >= 2 次或 token 占用 >= 95% 上限时降级**硬截断** (按 token 预算丢弃最旧消息) 回退; "上次压缩后消息增长不足 2 条" 视为冷却期 (`graphDataKey_summarizationLastMsgCount`), 跳过重复的 LLM 压缩 (避免每轮派生无效的压缩子代理); 手动压缩等待上限 2 分钟 (子代理卡住时不无限占用 io 线程, 超时走硬截断); 队列输入 (用户消息) 与 next-step/inject 注入输入单条达到 `userInputSummaryLimitLength` (默认 8K 字符, 0=关闭) 时原文经 share store 卸载, 上下文/请求里只留开头片段与取回提示 (模型用 `agentxx_share_store` 按行取回), 展示历史与轮次回显仍是完整原文 —— 与 toolcall 输出压缩共用同一套判定与提示格式 (见 `agentxx::util::offloadShareStoreIfOversized`)
 - **思维链展示**: 支持 LLM 的 thinking/reasoning_content 流式输出与展示
 - **节点级事件**: NodeStart/NodeEnd 事件标记 Graph 节点执行生命周期，便于 UI 展示进度
 
@@ -78,7 +78,7 @@ git_worktree 及延迟加载加载 (`ToolSkillSearchSubAgentTask` 模板类, 当
 
 | 分类 | 工具 | 说明 |
 |------|------|------|
-| **文件系统** | `agentxx_filesystem_list` | 列出文件/文件夹信息 (大小、类型、修改时间)，支持递归与 `path` 通配 (`*` / `?` / `[...]` / `**`：含通配符时展开模式并列出匹配条目本身，`recursive` 再下钻匹配到的目录) |
+| **文件系统** | `agentxx_filesystem_list` | 列出文件/文件夹信息 (大小、类型、修改时间)，支持递归与 `path` 通配 (`*` / `?` / `[...]` / `**`：含通配符时展开模式并列出匹配条目本身，`recursive` 再逐层展开匹配到的目录) |
 | | `agentxx_filesystem_read` | 按行读取文本文件，支持 `offset`/`limit`；单次调用输出上限 2000 行 / 256 KiB，超过直接报错（不截断，读大文件用分页或先 grep 定位） |
 | | `agentxx_filesystem_write` | 创建/覆盖文本文件 |
 | | `agentxx_filesystem_edit` | 精确字符串替换编辑文本文件 (一次性改多处: `edits` 数组按顺序生效, 每段只替换第一处匹配; 任一段匹配不到则整次调用不写盘) |
@@ -170,7 +170,7 @@ git_worktree 及延迟加载加载 (`ToolSkillSearchSubAgentTask` 模板类, 当
 
 | 中间件 | 功能 |
 |--------|------|
-| **PermissionMiddleware** | 工具调用权限控制，经事件总线向用户请求授权 (HIL)。**工具权限限制由工具来源方声明**: 插件在注册工具后经 `agentxx.agent.permission` 接口表声明 (作用域 读/写、目标参数名、目标类型 路径/文本/无, 见 [plugins.md](plugins.md) §8)，未声明的工具不参与权限判定 (直接放行)；中间件内不再硬编码任何工具名。文件系统权限按最长前缀匹配文件夹规则，支持 `*` 通配符：`/data/projects` 的规则对其下任意子路径生效，且父链规则可回退 (见 `XXRouter::get` 的 `prefix_fallback`)。默认规则由 yaml `permission.mode` 决定 (Ask=工作目录内 ALLOW + 其余 INTERRUPT / AllAsk=全部 INTERRUPT / Pass=全部 ALLOW / Deny=全部 DENY)，白名单 (whitelist) 始终放行、黑名单 (blacklist) 始终拒绝 (同路径黑名单优先)，未命中任何规则时由 `noRuleOperator` 兜底。客户端可"记住本次选择"：权限询问卡片由声明式 UI 描述渲染 (见 [interrupt_ui.h](/agent/lib/include/agentxx/middlewares/interrupt_ui.h) 与预设模板 `preset::permissionCard`)，勾选值经中断结果 `values.remember` 回传，IO 端点据此在应答 (`RespPermission.remember`) 中带回用户意图，由权限中间件注册路径规则 (后续直接放行/拒绝不再询问；客户端与端点都不参与权限语义，规则表归中间件所有)。记住目录时该规则自动覆盖其全部子目录与文件 (同一最长前缀匹配语义)，读、写各自一套规则互不影响 |
+| **PermissionMiddleware** | 工具调用权限控制，经事件总线向用户请求授权 (HIL)。**工具权限限制由工具来源方声明**: 插件在注册工具后经 `agentxx.agent.permission` 接口表声明 (作用域 读/写、目标参数名、目标类型 路径/文本/无, 见 [plugins.md](plugins.md) §8)，未声明的工具不参与权限判定 (直接放行)；中间件内不再硬编码任何工具名。文件系统权限按最长前缀匹配文件夹规则，支持 `*` 通配符：`/data/projects` 的规则对其下任意子路径生效，且父链规则可回退 (见 `XXRouter::get` 的 `prefix_fallback`)。默认规则由 yaml `permission.mode` 决定 (Ask=工作目录内 ALLOW + 其余 INTERRUPT / AllAsk=全部 INTERRUPT / Pass=全部 ALLOW / Deny=全部 DENY)，白名单 (whitelist) 始终放行、黑名单 (blacklist) 始终拒绝 (同路径黑名单优先)，未命中任何规则时由 `noRuleOperator` 回退。客户端可"记住本次选择"：权限询问卡片由声明式 UI 描述渲染 (见 [interrupt_ui.h](/agent/lib/include/agentxx/middlewares/interrupt_ui.h) 与预设模板 `preset::permissionCard`)，勾选值经中断结果 `values.remember` 回传，IO 端点据此在应答 (`RespPermission.remember`) 中带回用户意图，由权限中间件注册路径规则 (后续直接放行/拒绝不再询问；客户端与端点都不参与权限语义，规则表归中间件所有)。记住目录时该规则自动覆盖其全部子目录与文件 (同一最长前缀匹配语义)，读、写各自一套规则互不影响 |
 | **SkillMiddleware** | 技能文件 (SKILL.md) 的渐进式发现与加载 |
 | **MemoryFileMiddleware** | 上下文文件 (Memory) 读取与缓存，内容拼接到 system 消息末尾（稳定前缀，可被上游 KV/前缀缓存命中） |
 | **SummarizationMiddleware** | 上下文 token 统计与自动压缩，防止超出模型上下文窗口 |
@@ -198,11 +198,11 @@ git_worktree 及延迟加载加载 (`ToolSkillSearchSubAgentTask` 模板类, 当
   存储开销从 O(super-steps) 降为 O(threads), 轮末无需手动裁剪
 - **活动状态**: Idle / Streaming / ExecutingTool / WaitingInput 四种状态
   (注: 目前仅 ExecutingTool/Idle 被 LogPrint 中间件实际写入, Streaming/WaitingInput
-  为预留; UI 活动感知实际经 Delta 事件流完成)
+  为预留; UI 活动状态实际经 Delta 事件流完成)
 - **链式哈希**: viewMessages 使用 FNV-1a 链式哈希校验一致性
 - **线程绑定 (单线程读写)**: Session 通过 `bindIoThread()` 绑定 io 线程，`assertIoThread()` 强制校验可变状态 (viewMessages/上下文消息/chainHash) 仅在 io 线程读写；client/UI 不直接读取，需要时由 io 线程拷贝后经 Wire 消息 (Sync/Delta) 传输，因此无需快照/锁同步
 - **取消/切模型**: UI 线程的取消/切模型操作通过 Wire 消息 (WireCancel/WireSelectModel) 发往 agent 线程处理，避免跨线程竞争
-- **异步互斥锁**: `AsyncMutex` 基于 asio concurrent_channel 实现协程感知互斥，不会阻塞线程，适用于协程跨越 co_await 临界区
+- **异步互斥锁**: `AsyncMutex` 基于 asio concurrent_channel 实现协程安全的互斥，不会阻塞线程，适用于协程跨越 co_await 临界区
 
 #### 会话 SQLite 持久化 (消息上下文 / viewMessages / share_store)
 
@@ -279,7 +279,7 @@ TUI [F3] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
   → SessionServerAgentIO::switchSession:
       重绑定 config_.sessionId → 清空 delta 重放缓冲 (新会话 seq 独立编号)
       → 重置 firstTurn_ (首条输入走 resume_if_exists=true 恢复路径)
-      → 回推新会话 Sync (按 initialSyncTailCount 尾窗分页; 0=全量)
+      → 回推新会话 Sync (按 initialSyncTailCount 尾窗分页; 0=完整同步)
         + WireModelInfo + WireContextStats
   → 客户端 (TUI) 更新本地 sessionId 绑定; WS 模式同时
     transport->updateReconnectSessionId() (复位重连握手的 sessionId/lastSeq/tailHash)
@@ -326,7 +326,7 @@ TUI [F3] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
         是上一级子代理而非根
       → 子代理由同一 AgentRunner 驱动中断循环 (无 checkpoint 持久化 /
         无 MessageTip; 中断未完成时才报错)
-      → 取消令牌透传: 父取消级联中止子代理 (engine run 取消)
+      → 取消令牌传递: 父取消级联中止子代理 (engine run 取消)
       → 进度经 hostBus agent.progress 发布, 结束经 agent.done 通知
       → 运行结束 (成功/错误/取消) 主程序立即回收 AgentNode: 会话与中间件状态
         随 AgentContext 析构整体释放, 无按 thread 累积泄漏
@@ -337,11 +337,11 @@ TUI [F3] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
 ```
 
 - 子代理是独立 agent: 与根 agent 同构 (AgentNode), 消息上下文完全隔离
-- 中断处理循环唯一实现 (AgentRunner): 主 agent 与子代理共用, 差异收敛为
+- 中断处理循环唯一实现 (AgentRunner): 主 agent 与子代理共用, 差异统一为
   hooks (checkpoint 持久化 / 中断头消息 / 事件回调 / resume 前后处理);
   委派超时不限制 (子代理可能长时间运行), 否则可能导致根 agent 总线请求
   默认 30s 截断长任务的问题
-- 中断结果 key 规则 (tool_call_id + "_") + (result_id | 任务序号) 收敛到
+- 中断结果 key 规则 (tool_call_id + "_") + (result_id | 任务序号) 统一到
   共享实现 (makeSubagentResumeKey / buildSubagentResumeValues), 写入侧
   (AgentRunner) 与读取侧 (SubAgentManagerTool) 同一函数, 前缀避免同一轮
   多个中断的序号 key 互相覆盖, 支持同轮多任务并发
@@ -374,12 +374,12 @@ TUI [F3] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
   `InputAck{status:"rejected", reason:"attachment_too_large"|"too_many_attachments"}`
   并附一条 `Error{code:4}`; 附件的 `dataUrl` 直接可用, 只给 `pathOrUrl` 时由服务端
   自行读取编码 (跨设备选服务端文件的情形)
-- **断线重连**: 客户端自动重连，携带 lastSeq 供增量 Delta 重放，seq 不连续时回退全量 Sync;
-  客户端记录的序号高于服务端当前 seq (服务端进程重启/会话重建后 seq 从 0 重新计数) 时同样回退全量 Sync,
+- **断线重连**: 客户端自动重连，携带 lastSeq 供增量 Delta 重放，seq 不连续时回退完整 Sync;
+  客户端记录的序号高于服务端当前 seq (服务端进程重启/会话重建后 seq 从 0 重新计数) 时同样回退完整 Sync,
   SyncPayload.deltaSeq 携带快照序号 (快照已含 seq <= deltaSeq 的全部增量), 客户端据此重置去重序号
 - **历史分页 (viewMessages 尾窗同步)**: 长会话恢复时服务端仅同步末尾窗口
   (SessionServerAgentIO::Config::initialSyncTailCount, 本地 TUI 模式 =100,
-  远程经 AgentServer::Config 透传, 0=全量); SyncPayload.fromIndex 携带窗口
+  远程经 AgentServer::Config 原样转发, 0=全部); SyncPayload.fromIndex 携带窗口
   起始绝对下标、totalMessages 携带会话总消息数。客户端 (TUI) 向上滚动接近
   窗口顶部时发送 GetViewMessages(beforeIndex, count) 分页拉取更早历史, 服务端
   以 ViewMessagesPage(startIndex, totalCount, messages) 回应; viewMessages 为
@@ -506,7 +506,7 @@ TUI [F3] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
       描述缺失/非法按契约错误处理 (诊断行且不可交互); 未知块类型忽略/降级
       (向前兼容); **不保留历史版本兼容**
     - 命中区域按**描述块下标** + 控件 id + 子序号定位; 渲染与估算同源: 单一布局
-      过程 (行模型) 同时产出渲染元素与行数, 避免布局与估算两处漂移
+      过程 (行模型) 同时产出渲染元素与行数, 避免布局与估算两处不一致
       (见 [interrupt_view.h](/agent/client/include/agentxx-client/io/tui/components/interrupt_view.h));
       内容块渲染与插件工具装饰 items 复用同一实现
       ([ui_components.h](/agent/client/include/agentxx-client/io/tui/ui_components.h))
@@ -712,7 +712,7 @@ path/to/agentxx_test string_util regex agent
 - 同步模块: `string_util` `regex` `json` `json_view` `json_reflection` `diff_util` `events` `concurrency` `misc_fixes` `graph_data` `aho_corasick` `util_misc` `training` `settings_db` `toolcall_args` `interrupt_ui` `ui_items` `ui_kit` `ffi_c_api` `plugin_runtime` `plugin_sdk` `plugin_bridge`
 - 同步模块 (client 侧, 仅 `AGENTXX_BUILD_CLIENT`): `config_loader` `tui_settings` `update_check` `tui_input` `tui_interrupt` `tui_scroll` `tui_sidebar` `tui_context_overlay` `tui_form` `tui_stream` `tui_surface` `tui_theme` `tui_tool_header` `tui_ui_items` `tui_widget` `sessionId` `mermaid_state`
 - 异步模块: `event_stream` `event_bridge` `interrupt_bus` `subagent_bus` `subagent_tool` `agent_host` `string_tools` `math_tools` `share_store` `session_persistence` `rag_search` `datetime` `filesystem` `command` `worktree` `web_search` `codegraph` `screen_capture` `cpu_gpu` `text_selection` `http` `network_timeout` `websocket` `remote_agent` `mcp` `acp` `a2a` `openai_provider` `anthropic_provider` `plugins` `plugin_resources` `plugin_multi_instance` `client_plugins` `cancel` `message_supplement` `summarization` `checkpoint_store` `agent` `memgrowth`
-- 平台限定: `screen_capture` / `text_selection` 仅 Windows 有真实实现 (其余平台跳过); 测试入口另有 Warn/Error 透出 sink (`TestWarnErrorLogSink`), 插件加载失败等库内错误不再静默丢失
+- 平台限定: `screen_capture` / `text_selection` 仅 Windows 有真实实现 (其余平台跳过); 测试入口另有 Warn/Error 输出 sink (`TestWarnErrorLogSink`), 插件加载失败等库内错误不再静默丢失
 
 测试源目录划分: 根目录 (入口 `test.cpp`) / `core/` (lib 核心) / `plugin/` (插件系统与具体插件集成) / `client/` (TUI/CLI, 仅 `AGENTXX_BUILD_CLIENT` 编译);
 测试头文件统一放在 `include/agentxx-test/` 下与源码同名的子目录 (`core/` `plugin/` `client/`), 源码一律以
@@ -775,7 +775,7 @@ model:
                                       # cache_control 断点, 上游把这些内容缓存下来供后续
                                       # 请求命中 (费用与首 token 延迟都更低);
                                       # 默认关闭: 部分 Anthropic 兼容网关不认识该字段
-      extra_headers:              # 额外 HTTP 请求头 (如自定义鉴权/网关透传)
+      extra_headers:              # 额外 HTTP 请求头 (如自定义鉴权/网关原样转发)
         x-custom-header: "value"
       extra_api_config:           # 合并到请求 body 的扩展配置
         temperature: 0.7
@@ -858,7 +858,7 @@ plugin:
       enabled: true                        # 默认 true
       sides: auto                          # auto|agent|client (双端插件用; 默认 auto 按导出符号自动决定)
       config: ""                           # 插件配置文件路径或目录 (可选; 支持 ~ 与 ${VAR}, 相对路径按工作目录解析;
-                                           # 主程序归一化为绝对路径后经 get_plugin_config_path 透传给插件)
+                                           # 主程序归一化为绝对路径后经 get_plugin_config_path 原样转给插件)
       args:                                # 插件参数 (主程序原样保存并整体传递, 字段语义由插件定义)
         # ---- agentxx_codegraph 参数 ----
         paths:                             # 加载(索引)路径列表 (可选, 可多个目录)
@@ -1414,7 +1414,7 @@ AgentIOBase (公共契约)
     └── (protected)
         ├── onPeerMessage() [双向] → 收消息分发 (默认分发到下面四个回调, 子类覆写扩展)
         ├── onDelta() [client]     ← 增量事件 (仅由 onPeerMessage 分发, 外部不得直调)
-        ├── onSync() [client]      ← 全量同步 (校准)
+        ├── onSync() [client]      ← 完整同步 (校准)
         ├── onTurnResult() [client] ← 轮次结束通知
         └── onContextStats() [client] ← 上下文统计更新
 
@@ -1432,7 +1432,7 @@ AgentIOBase (服务端端点: SessionServerAgentIO)
     │                          (deltaBufferBytesCap=4MB)"双重上限裁剪: 带完整消息
     │                          载荷的增量 (InsertMessage/UpdateMessage) 单条可达
     │                          几十 KB, 仅按条数限制最坏可保留数百 MB; 超限丢最旧,
-    │                          客户端按 seq 缺口回退全量 sync (deltasSince 返回空)
+    │                          客户端按 seq 缺口回退完整 sync (deltasSince 返回空)
     ├── onDelta/onSync     → protected 空实现 (server 不会从 client 收到, 满足纯虚契约)
     ├── getInput()         → 从 inputChannel_ 等待客户端输入
     ├── handleInterrupt()  → 发送 InterruptRequest，等待客户端响应 (超时/过期通知)
@@ -1460,7 +1460,7 @@ AgentIOTransportBase (传输层抽象)
 
 事件产出路径: `BaseAgent` 进程内直调其驱动的端点 (server 端点) ——
 增量事件经 `io->sendToPeer(Delta)` 推送 (server 端点缓冲并经 transport 转发
-client), 上下文统计经 `io->sendToPeer(WireContextStats)`; BaseAgent 不感知
+client), 上下文统计经 `io->sendToPeer(WireContextStats)`; BaseAgent 不关心
 transport 细节。`runTurnAsync(io=nullptr)` 为 headless 模式, 不产出事件。
 
 ##### EventBridge: GraphEvent → 会话增量 Delta + EventBus 适配层
@@ -1601,7 +1601,7 @@ AgentContext
   - 取消/切模型: 经 Wire 消息发往 agent 线程处理
   - SessionsManager: 仅在 agent io_context 线程访问, 无需锁
   - contextStats: std::atomic 字段, 跨线程可读 (Summarization 写, IO 经 Wire 推送)
-  - AsyncMutex: 协程感知互斥锁, 用于跨越 co_await 的临界区保护
+  - AsyncMutex: 协程安全的互斥锁, 用于跨越 co_await 的临界区保护
 ```
 
 #### 6. 系统提示词加载: 来源注册与按需刷新
@@ -1639,7 +1639,7 @@ AgentContext
 
 这三项开关必须经**中断参数**完整传递 (自动压缩走
 `SubAgentManagerTool` → 中断参数 → `AgentRunner` → `AgentHost`): 工具侧漏解析会让子代理
-退回自己的工具集与 system, 前缀从工具段就分叉 (曾经发生过, 见 benchmark.md 18.4);
+退回自己的工具集与 system, 前缀从工具段就不一致 (曾经发生过, 见 benchmark.md 18.4);
 压缩载荷也不要"顺手清理" —— 裁剪阈值别加余量、别清理 thinking
 (`send_thinking` 打开时每条 assistant 的 `reasoning_content` 都进请求体),
 否则一次无谓的改动就让整段前缀失效。
@@ -1687,7 +1687,7 @@ AgentContext
   ├── readLoop():     ws recv → 反序列化 → recvQueue (concurrent_channel, cap=256)
   │                     → recv() 处理; 断线后进入自动重连循环:
   │                       重连 → 重建 writeQueue → 发送 Hello(lastSeq, tailHash)
-  │                       → 服务端增量重放 (seq 不连续时回退全量 Sync)
+  │                       → 服务端增量重放 (seq 不连续时回退完整 Sync)
   ├── heartbeatLoop(): 每 heartbeatInterval 发送 Ping
   └── Delta 去重: 收到 delta 时更新 lastDeltaSeq_, 重放重复投递的
       seq <= last 直接丢弃, 避免 UI 重复渲染
@@ -1723,9 +1723,9 @@ Client                              Server
   │  [连接断开]                         │ 启动 grace 定时器
   │                                    │
   │──── Hello (seq=3, tailHash) ─────→│ 增量重放 seq>3 的 delta
-  │←── HelloAck + Delta replay ───────│ seq 不连续时回退全量 Sync;
+  │←── HelloAck + Delta replay ───────│ seq 不连续时回退完整 Sync;
   │                                    │ 客户端序号 > 服务端当前 seq
-  │                                    │ (进程重启) 同样回退全量 Sync,
+  │                                    │ (进程重启) 同样回退完整 Sync,
   │                                    │ 客户端按 Sync.deltaSeq 重置记录的序号
   │                                    │
   │──── Cancel ──────────────────────→│ 取消当前轮次
@@ -2025,7 +2025,7 @@ agent/
 │   │   │   └── tui/
 │   │   │       ├── agent_tui.h   # TUIClientAgentIO (FTXUI 终端 UI, 接收/显示/排队/权限/日志)
 │   │   │       ├── tui_plugin_adapter.h # TUI 插件适配器 (UI 注册表/命令管线/client 事件转发)
-│   │   │       ├── scrollable.h  # Scrollable (全量构建的可滚动容器, 侧边栏等短列表用)
+│   │   │       ├── scrollable.h  # Scrollable (一次性构建的可滚动容器, 侧边栏等短列表用)
 │   │   │       ├── lazy_scrollable.h # LazyScrollable (懒构建+LRU有界缓存+视口局部渲染)
 │   │   │       ├── scroll_common.h # 两个滚动容器共用逻辑 (元素布局测量/滚轮事件)
 │   │   │       ├── markdown_block.h # Markdown 块渲染缓存 (按块缓存, 配合 LazyScrollable)
@@ -2167,7 +2167,7 @@ agent/
 │           ├── test_tui_surface.h             # 弹窗面性外框/留白/角标测试
 │           ├── test_tui_theme.h               # 主题配色与 dim 分流测试
 │           ├── test_tui_ui_items.h            # 组件描述渲染/测量/命中区域测试
-│           ├── test_tui_widget.h              # 弹窗/状态栏/输入栏命中与事件消费测试
+│           ├── test_tui_widget.h              # 弹窗/状态栏/输入栏命中与事件处理测试
 │           └── test_tui_tool_header.h         # TUI 工具消息头部渲染测试
 │
 ├── benchmark/                    # 性能与资源基准 (一般仅 release 编译)
@@ -2326,7 +2326,7 @@ EventBus (事件总线)
 
 ### SyncPayload / MessageQueueItem
 - SyncPayload {fromIndex (窗口首条绝对下标), messages[], tailHash, totalMessages, deltaSeq, messageQueue[]}
-  - 全量同步: fromIndex=0, totalMessages==messages.size()
+  - 完整同步: fromIndex=0, totalMessages==messages.size()
   - 尾窗同步: fromIndex=窗口起始下标 (>0 表示上方还有更早消息), totalMessages=会话总消息数, 客户端按 WireGetViewMessages 分页拉取
   - deltaSeq: 快照序号 (= Session::deltaSeq, 即快照已包含 seq <= deltaSeq 的全部增量);
     客户端据此**覆盖**去重序号 —— 服务端进程重启/会话重建后 seq 从 0 重新计数,
@@ -2370,7 +2370,7 @@ EventBus (事件总线)
 2. AgentContext::sessionWorkDirs_[sessionId] (会话级覆写, 如 ACP session/new 携带的客户端 cwd, mutex 保护任意线程注入)
 3. AgentConfig::resolvedWorkDir() (yaml work_dir / 进程 cwd)
 - 调用方统一经 getSessionWorkDir(sessionId) 取值, 不直接读进程 cwd / workDir
-- 失效时返回空串由调用方兜底 (如 Permission Ask 模式无 workDir 时不注册默认放行规则)
+- 失效时返回空串由调用方处理 (如 Permission Ask 模式无 workDir 时不注册默认放行规则)
 
 `AgentContext::getSessionBaseWorkDir(sessionId)` 取同一回退链去掉第 1 项 (不含 worktree 绑定) 的
 结果, 即会话"真实所在目录" (会话覆写 > agent 配置 / 进程 cwd), 供展示类用途取值:
@@ -2397,4 +2397,4 @@ worktree 绑定是运行期经 `agentxx_git_worktree` 工具切换的临时状�
   `prompt.h` 只声明成员与取值方式, 改提示词文本不会牵连所有包含该头文件的编译单元
   - 表中**只放内置工具** (share_store / subagent / git_worktree); 插件工具的提示词写在插件自身字面量里
     (少数插件经 `agentxx.agent.prompt` 接口表注入, 如 execute_command / codegraph / planning),
-    表里仍保留“同名条目存在时覆盖插件提示词”的能力 (定制/本地化时可用)
+    表里仍保留“同名条目存在时覆盖插件提示词” (定制/本地化时可用)

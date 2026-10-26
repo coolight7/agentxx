@@ -348,7 +348,7 @@ asio::awaitable<TestResult>
             // 轮询等待索引落库后再断言命中符号 (搜索缓存 30s TTL, 但索引
             // 完成后 CodeGraphManager 会 invalidate 使缓存失效, 下次查询
             // 即按新数据重算; 临时项目仅 5 个小文件, 索引 <1s, 轮询间隔
-            // 500ms, 20s 超时兜底)。
+            // 500ms, 20s 超时保护)。
             // 三个夹具文件 (main.cpp/notes.md/config.json) 都要已入库: 排序
             // 断言需要代码与数据/文档条目同时出现
             auto hasAllFixtures = [](const std::string& text) {

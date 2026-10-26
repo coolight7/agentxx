@@ -122,7 +122,7 @@ inline std::string tailLinePreview(std::string_view s, size_t max = 60) {
     }
     // 反向找出保留区间的起始字节: 从尾部回溯逐码点累计列宽, 超出预算停止;
     // 至少强制保留最后一个码点 (极小预算下宁可溢出 1 列也不返回空 "...",
-    // 溢出由渲染层 xflex_shrink 右缘裁剪兜底)
+    // 溢出由渲染层 xflex_shrink 右缘裁剪处理)
     size_t startByte = line.size();
     size_t col       = 0;
     size_t i         = line.size();
@@ -465,7 +465,7 @@ public:
         std::vector<pluginxx::ui::Item> items
     );
 
-    /// 侧边栏表单键盘输入 (UI 线程; 有焦点且已消费返回 true)
+    /// 侧边栏表单键盘输入 (UI 线程; 有焦点且已处理返回 true)
     bool handleSidebarFormKey(const ftxui::Event& event);
 
     /// 提交表单 (校验 → 组装 `{"values":{...}}` → 动作通道回传 __submit)
@@ -545,7 +545,7 @@ public:
 
     /// 会话选择弹窗确认后的切换逻辑 (UI 线程):
     /// - 更新本地 sessionId 绑定与重连握手 sessionId (WS 模式)
-    /// - 发送 WireSwitchSession, 服务端回推全量 Sync/模型/上下文统计 (WireModelInfo
+    /// - 发送 WireSwitchSession, 服务端回推完整 Sync/模型/上下文统计 (WireModelInfo
     ///   / WireContextStats) 恢复界面; TUI 不持有 Session (属于 server-io 线程)
     void switchToSession(std::string newSessionId);
 
@@ -602,9 +602,9 @@ private:
     void onViewMessagesPage(const agentxx::agent::WireViewMessagesPage& page);
     /// 请求更早历史 (ctx_.requestMoreHistory 入口; UI 线程触发):
     /// - 已有请求未返回时直接忽略 (historyLoading 去重); hasMoreHistory 边界判断
-    /// - 页大小 kHistoryPageSize 与服务端默认兜底一致
+    /// - 页大小 kHistoryPageSize 与服务端的默认值一致
     void requestOlderHistory();
-    /// 历史分页每页条数 (与服务端 SessionServerAgentIO 的默认兜底一致)
+    /// 历史分页每页条数 (与服务端 SessionServerAgentIO 的默认值一致)
     static constexpr uint32_t kHistoryPageSize = 100;
 
     // ---- 本地消息条数上限 (只保留最近 kLocalMessageLimit 条, 见 model/message_window.h) ----
@@ -632,8 +632,8 @@ private:
         std::function<void(const agentxx::agent::WireListDirResult&)> callback
     );
 
-    /// 会话列表页响应处理 (client 线程): 首页/全量响应替换本地列表, 后续页追加,
-    /// 更新 totalCount/hasMore 分页元数据 (旧版服务端全量响应按替换处理)
+    /// 会话列表页响应处理 (client 线程): 首页/完整响应替换本地列表, 后续页追加,
+    /// 更新 totalCount/hasMore 分页元数据 (旧版服务端完整响应按替换处理)
     void onSessionListPage(const agentxx::agent::WireSessionList& resp);
     /// 请求下一页会话列表 (ctx_.requestMoreSessions 入口; UI 线程触发):
     /// - 已有请求未返回时直接忽略 (sessionListLoadingMore 去重); sessionListHasMore 边界判断
@@ -759,7 +759,7 @@ private:
     /// 日志行缓存 (UI 线程, 供 renderLogWindow 使用)
     std::vector<ftxui::Element> logLineCache_;
     uint64_t                    logCachePoppedCount_ = 0;
-    /// 上次快照的日志行数 (用于判断日志是否新增, 避免每帧全量 snapshot 拷贝)
+    /// 上次快照的日志行数 (用于判断日志是否新增, 避免每帧全部 snapshot 拷贝)
     size_t logCacheLineCount_ = 0;
 
     // ---- 渲染帧统计 (基准测试/诊断用; UI 线程写入, 任意线程读取) ----
@@ -821,8 +821,8 @@ private:
     uint64_t consoleStateRepairCount_ = 0;
 
     // ---- UI 线程动作队列 ----
-    /// client 线程投递、UI 线程 (帧循环开头) 消费的组件操作队列;
-    /// 与 sharedState_ 无关, 独立加锁 (消费方仅短暂持有, 不嵌套 sharedState 锁)
+    /// client 线程投递、UI 线程 (帧循环开头) 处理的组件操作队列;
+    /// 与 sharedState_ 无关, 独立加锁 (处理方仅短暂持有, 不嵌套 sharedState 锁)
     std::mutex                         uiActionsMutex_;
     std::vector<std::function<void()>> uiActions_;
 
@@ -836,7 +836,7 @@ private:
 
     // ---- 连接失败重试 (跨线程原子标志) ----
     /// 用户点击 banner"重试"按钮的标志 (UI 线程 requestRetry 置位;
-    /// 连接协程 waitRetry 轮询消费并据此返回重试连接)
+    /// 连接协程 waitRetry 轮询处理并据此返回重试连接)
     std::atomic<bool> retryRequested_{false};
 
     /// 主界面零散按钮的命中登记表 (跨组件、动作实现在 TUIClientAgentIO 内):

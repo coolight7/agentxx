@@ -7,9 +7,9 @@
 /// 4. 命令执行: /example (send 动作) / example_toast (toast 动作)
 /// 5. 跨端数据: send_plugin_data → adapter sendPluginData (WirePluginDataUp 路径)
 /// 6. disable/enable 恢复与 unload 清理 (含 Info 栏段落注册/摘除信号)
-/// 18. 通用交互: bind/unbind 覆盖 + 精确优先 vs fallback + 上下文透传
+/// 18. 通用交互: bind/unbind 覆盖 + 精确优先 vs fallback + 上下文原样转发
 /// 19. 通用 overlay: open/close 参数校验 + 适配器信号
-/// 20. planning 端到端: dispatch(open_graph) → open_overlay(MERMAID)
+/// 20. planning 全流程: dispatch(open_graph) → open_overlay(MERMAID)
 /// 21. kit::ActionController 单测 (header-only, 无主程序)
 /// 28. 主程序内置工具特化渲染: agentxx_share_store / agentxx_subagent
 ///     (lib 内置工具无对应插件, 由主程序注册内置渲染器)
@@ -584,7 +584,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
     // ---- 3. 事件分发 ----
     // READY: 插件回调更新状态栏 + 跨端 send_plugin_data("hello");
     //        插件事件分发完成后主程序上报 client_interfaces (三期6, 镜像
-    //        server_plugins —— agent 侧插件据此感知 client 接口集)
+    //        server_plugins —— agent 侧插件据此知道 client 接口集)
     mgr->onReady();
     XX_TEST_EXPECT_TRUE(adapter->dataUpCount() >= 2);
     // 主程序接口集上报最后发出 (插件 READY 处理器先行)
@@ -1995,7 +1995,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     XX_TEST_EXPECT_TRUE(any);
                 }
 
-                // dispatch 上下文内容校验 (owner/action/args 透传)
+                // dispatch 上下文内容校验 (owner/action/args 原样转发)
                 struct CtxCap {
                     std::string owner, action, args;
                 };
@@ -2089,7 +2089,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 // close → 适配器收到信号 (不崩溃)
                 ui->close_overlay(exInst->hostView());
                 XX_TEST_EXPECT_EQ(adapter->overlayCloseCount(), 1);
-                // DIFF payload 透传 (主程序不解析, 仅校验类型)
+                // DIFF payload 原样转发 (主程序不解析, 仅校验类型)
                 AgentxxOverlaySpec diffSpec{};
                 diffSpec.version = 1;
                 diffSpec.type    = AGENTXX_OVERLAY_DIFF;
@@ -2162,7 +2162,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         }
     }
 
-    // ---- 20. planning 端到端: dispatch(open_graph) → open_overlay(MERMAID) ----
+    // ---- 20. planning 全流程: dispatch(open_graph) → open_overlay(MERMAID) ----
     {
         auto plPath = findPluginPath("agentxx_planning");
         auto plInst = co_await mgr->loadNativeAsync(plPath);
@@ -2223,7 +2223,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         ctxA.action_args = emptyArgs;
         agentxx::plugin::kit::ActionController::dispatch(&ctxA, &ctl);
         XX_TEST_EXPECT_EQ(hitsA, 1);
-        // dispatch 自增 id (args 透传)
+        // dispatch 自增 id (args 原样转发)
         AgentxxUiActionContext ctxB{};
         ctxB.version         = 1;
         std::string bIdStr   = btn.action.name;
@@ -2268,7 +2268,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         b.targetId = "call_x";
         reg.actionBindings.push_back(b);
         XX_TEST_EXPECT_TRUE(hasPluginBindingFor("agentxx_planning", "call_x", &reg));
-        // owner=other 时精确未命中且无 "" 兜底 → false
+        // owner=other 时精确未命中且无 "" 绑定 → false
         XX_TEST_EXPECT_FALSE(hasPluginBindingFor("agentxx_planning", "other_owner", &reg));
         XX_TEST_EXPECT_FALSE(hasPluginBinding("other_plugin", &reg));
         // tone → 主题色映射 (组件层与中断项共用)

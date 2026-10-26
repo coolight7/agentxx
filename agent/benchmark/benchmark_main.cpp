@@ -33,7 +33,7 @@ struct BenchModule {
     std::string           name;
     std::string           description;
     std::function<void()> run;
-    bool isSubResource = false; ///< 是否为 resource 的子模块 (全量时由 resource 代替)
+    bool isSubResource = false; ///< 是否为 resource 的子模块 (resource 汇总运行时由它代替)
 };
 
 } // namespace
@@ -200,7 +200,7 @@ int main(int argn, char** argv) {
     bool runAll    = selectedModules.empty();
     auto shouldRun = [&](const BenchModule& mod) {
         if (runAll) {
-            // 全量运行时: 运行非子模块 (resource 会覆盖所有 resource_* 细分)
+            // resource 汇总运行时: 只跑非子模块 (resource 会覆盖所有 resource_* 细分)
             return !mod.isSubResource;
         }
         for (const auto& sel : selectedModules) {

@@ -3,7 +3,7 @@
 /// markdown 块渲染 (消息正文/思考内容与中断 markdown 块共用)
 ///
 /// 从 message_list.cpp 抽出为共享实现: 中断描述块的 markdown 内容与
-/// Assistant/Think 消息正文使用同一套渲染与行数估算, 避免两处漂移。
+/// Assistant/Think 消息正文使用同一套渲染与行数估算, 避免两处不一致。
 #include "ftxui/dom/elements.hpp"
 #include "markdown/dom_builder.hpp"
 #include "markdown/flow.hpp"

@@ -24,7 +24,7 @@
 #include <utility>
 
 struct AgentxxFFIEventQueue {
-    /// 队列积压上限 (超限丢最旧): 流式 delta 高频场景下嵌入方程序停轮询的兜底,
+    /// 队列积压上限 (超限丢最旧): 流式 delta 高频场景下嵌入方程序停轮询时的保护,
     /// 防止无界增长 OOM; 正常 CLI/GUI 嵌入方程序轮询间隔 << 1s, 远达不到该量级
     static constexpr size_t kMaxQueued = 16384;
 
@@ -87,7 +87,7 @@ void AGENTXX_FFI_CALL agentxx_ffi_event_queue_on_event(
             return; // 队列已销毁/正在销毁: 丢弃 (嵌入方程序已停止处理)
         }
         if (q->items.size() >= AgentxxFFIEventQueue::kMaxQueued) {
-            // 超限丢最旧, 并补发一条错误提示让嵌入方程序可感知丢失
+            // 超限丢最旧, 并补发一条错误提示让嵌入方程序能被发现丢失
             q->items.pop_front();
             q->items.emplace_back(
                 static_cast<int32_t>(AGENTXX_FFI_EVT_ERROR),

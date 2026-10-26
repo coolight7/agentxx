@@ -977,7 +977,7 @@ void benchResourceServerOnly() {
     reporter.addResource(resIdle);
     printResourceResult(resIdle);
 
-    // 空载漂移观测 (15s 内是否有后台自发增长)
+    // 空载波动观测 (15s 内是否有后台自发增长)
     auto idleCpuWin = cpuBegin(serverProc.pid);
     auto idleRss    = resIdle.rssMB;
     std::this_thread::sleep_for(std::chrono::seconds(5));

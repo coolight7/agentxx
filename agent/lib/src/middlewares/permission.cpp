@@ -351,7 +351,7 @@ asio::awaitable<bool> PermissionMiddlewareHandle::checkToolPermission(
     const ToolPermissionSpec& spec,
     std::string*              reasonOut
 ) {
-    // 无目标声明的工具: 工具级判定 (目标为空, 命中不到规则表, 由 noRuleOperator 兜底)
+    // 无目标声明的工具: 工具级判定 (目标为空, 命中不到规则表, 由 noRuleOperator 决定)
     if (spec.targetKind == ToolPermissionTargetKind::None || spec.targetArgs.empty()) {
         const bool allow
             = co_await checkTargetPermission(toolName, args, spec.scope, {}, spec.category);

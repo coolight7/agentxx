@@ -207,7 +207,7 @@ struct InterruptUiBlock {
 /// 结果契约 (`{"values": {控件 id: 值}}`, 见 [makeInterruptResult]):
 /// - 键 = 描述中 `control` 块的 id; 值 = 控件当前值
 ///   (checkbox = 布尔 / number = 数值 / buttons|select = 候选项 value / text = 字符串)
-/// - 空对象 = 用户未提交 (取消/中断过期): 消费端按未应答处理
+/// - 空对象 = 用户未提交 (取消/中断过期): 处理方按未应答处理
 ///
 /// **无历史版本兼容**: 本结构即 schema 首版 (`version = 1`), 客户端不检测版本;
 /// 描述缺失/非法按契约错误处理 (渲染诊断行, 不可交互)。
@@ -235,7 +235,7 @@ utilxx_base::Json makeInterruptResult(const utilxx_base::Json& values);
 
 /// 结果值容错读取 (结果对象或其内层 `values` 对象均可传入)
 ///
-/// - 对象含 `values` 对象时自动下钻 (兼容整体结果对象与纯 values 对象两种形式)
+/// - 对象含 `values` 对象时自动逐层展开 (兼容整体结果对象与纯 values 对象两种形式)
 /// - 未命中 id / 类型不符时返回 defaultValue
 /// - 布尔值规则: 布尔值直取; 字符串 "true"/"yes"/"y"/"1" 视为 true
 ///   (与 [preset::inputForm] 生成的 bool 控件取值规则一致)

@@ -86,8 +86,8 @@ public:
     /// - keyset 游标语义: 返回按最近活动时间降序排列中、排序位置严格位于游标
     ///   (beforeMs, beforeId) 之后的至多 count 条; beforeMs <= 0 表示从最新开始
     /// - 客户端先加载最新一页, 用户浏览到列表末尾时以上一页最后一条为游标续取,
-    ///   避免一次性加载全量会话; 服务端以 WireSessionList 回应 (携带
-    ///   totalCount/hasMore 分页元数据; 旧版服务端忽略分页参数返回全量列表)
+    ///   避免一次性加载全部会话; 服务端以 WireSessionList 回应 (携带
+    ///   totalCount/hasMore 分页元数据; 旧版服务端忽略分页参数返回完整列表)
     /// - `keyword` 非空时按关键词检索 (标题或正文子串): 服务端忽略
     ///   游标字段, 一次返回命中项 (含命中片段), 客户端按"检索结果"整体替换列表
     virtual void requestSessionListPage(
@@ -201,7 +201,7 @@ protected:
     /// 增量事件推送 (流式 token、tool 生命周期、轮次边界)
     virtual void onDelta(const WireDelta& delta) = 0;
 
-    /// 全量/部分同步 (从 viewMessages 校准 client 状态)
+    /// 完整/部分同步 (从 viewMessages 校准 client 状态)
     virtual void onSync(const WireSyncPayload& payload) = 0;
 
     /// 轮次结束通知

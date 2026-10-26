@@ -296,7 +296,7 @@ json AcpProtocolHandler::handleSessionNew(const json& params, const json& id) {
         auto ctx = agent_ ? agent_->getContext() : nullptr;
         if (ctx) {
             // 归一为绝对路径 (~ 展开与相对路径按进程 cwd 解析; ACP 客户端
-            // 通常直接发送绝对路径, 此处仅兜底非规范输入)
+            // 通常直接发送绝对路径, 此处仅兼容非规范输入)
             auto absCwd = utilxx_base::toCurrentSystemAbsolutePath(cwd);
             // 词法规范化对以 '.'/'..' 结尾的路径保留尾部分隔符 (".../dir/"
             // 形式); 工作目录基准统一去除尾斜杠 (根目录 "/" 除外),
@@ -750,7 +750,7 @@ asio::awaitable<void> HttpAcpServer::handleAcpRequest(
         }
     }
 
-    // 协程感知的异步等待: 周期性挂起(让出线程)检查 future, 直到就绪或超时。
+    // 协程安全的异步等待: 周期性挂起(让出线程)检查 future, 直到就绪或超时。
     // 直接 future.wait_for 会阻塞整个 executor 线程, 卡死同线程上的其他协程/请求。
     const auto         deadline = std::chrono::steady_clock::now() + config_.asyncTimeout;
     std::future_status status   = future.wait_for(std::chrono::milliseconds(0));

@@ -179,7 +179,7 @@ void ModelSelectorOverlay::close() {
 
 namespace {
 
-/// 未消费的上/下方向键用于滚动弹窗内容区
+/// 未处理的上/下方向键用于滚动弹窗内容区
 /// (定义在本文件后面的弹窗辅助区; 这里先用前置声明, 便于本组件就近使用)
 bool overlayScrollByKey(TUICtx& ctx, const std::shared_ptr<Scrollable>& scrollable, Event event);
 
@@ -649,7 +649,7 @@ bool ModelConfigOverlay::OnEvent(Event event) {
         ctx_.postRedraw();
         return true;
     }
-    // 未被控件消费的方向键用于滚动内容区 (字段较多, 需要滚动查看/操作)
+    // 控件未处理的方向键用于滚动内容区 (字段较多, 需要滚动查看/操作)
     if (overlayScrollByKey(ctx_, scrollable_, event)) {
         return true;
     }
@@ -1664,7 +1664,7 @@ bool KeybindListOverlay::OnEvent(Event event) {
         return true;
     }
     if (event == Event::End) {
-        // 偏移越界由滚动容器在下次布局时收敛到"内容底部"
+        // 偏移越界由滚动容器在下次布局时校正到"内容底部"
         scrollable_->setScrollOffset(scrollable_->totalHeight());
         scrollable_->setStickToBottom(true);
         ctx_.postRedraw();
@@ -2185,7 +2185,7 @@ ftxui::Element ContextOverlay::buildMessageHeader(
     const auto  toolNames = ctxMsgToolNames(m);
 
     // 前缀列数: "+ " + "[role] " + 可选 "tool_calls: N " 标记 (窄屏时
-    // 预览预算保底, 超出部分由 xflex_shrink 右缘裁剪兜底)
+    // 预览预算保底, 超出部分由 xflex_shrink 右缘裁剪处理)
     int prefixCols = 3 + static_cast<int>(markdown::utf8_display_width(role));
     if (!toolNames.empty()) {
         prefixCols += 12; // "tool_calls: N " 粗估列数

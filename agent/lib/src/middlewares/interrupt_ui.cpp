@@ -385,7 +385,7 @@ Json InterruptUi::toJson() const {
 
 Json makeInterruptResult(const Json& values) {
     // 结果恒为对象形态 {"values": {...}}; 非对象 values 归一化为空对象
-    // (空对象 = 用户未提交/取消, 消费端按未应答处理)
+    // (空对象 = 用户未提交/取消, 处理方按未应答处理)
     return Json{
         {"values", values.is_object() ? values : Json::object()},
     };
@@ -393,7 +393,7 @@ Json makeInterruptResult(const Json& values) {
 
 namespace {
 
-/// 取结果值对象: 传入整体结果对象时下钻其 `values`; 传入 values 对象时原样返回
+/// 取结果值对象: 传入整体结果对象时逐层展开其 `values`; 传入 values 对象时原样返回
 const Json* valuesObjectOf(const Json& j) {
     if (!j.is_object()) {
         return nullptr;

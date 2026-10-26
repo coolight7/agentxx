@@ -53,7 +53,7 @@ ftxui::Element buildLogLine(const TUILogSink::Line& line, const TUITheme& theme)
     return paragraph(prefix + line.text) | color(c);
 }
 
-/// 渲染插件段落/面板 items 为一组子项 (通用, 零特化; 共享组件层收敛点)
+/// 渲染插件段落/面板 items 为一组子项 (通用, 零特化; 共享组件层统一入口)
 /// - 全部组件 kind 走 [ui_components.h] 的唯一实现 (与面板/装饰/overlay/中断一致)
 /// - 含可点区域的子项在 [ScrollItem::hits] 内登记局部坐标区域, 点击经
 ///   [Scrollable::hitTestItem] 定位子项后按区域判定 (不使用子项内 reflect)
@@ -108,7 +108,7 @@ std::vector<ScrollItem> TUIClientAgentIO::renderLogWindow() {
         };
     }
     // 仅当日志内容有变化时才重新 snapshot + 重建缓存:
-    // 日志行可能高达 2000 行, 每帧全量拷贝字符串是浪费 (日志 tab 打开时每帧渲染都触发)
+    // 日志行可能高达 2000 行, 每帧整份拷贝字符串是浪费 (日志 tab 打开时每帧渲染都触发)
     const size_t   curCount  = logSink_->lineCount();
     const uint64_t curPopped = logSink_->poppedCount();
     if (curCount != logCacheLineCount_ || curPopped != logCachePoppedCount_) {
@@ -328,7 +328,7 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
         elements.push_back(text(""));
     }
 
-    // 兜底: 连 Context 段都没有内容时提示 (Context 段恒渲染, 因此当前只在
+    // 补充提示: 连 Context 段都没有内容时提示 (Context 段恒渲染, 因此当前只在
     // 未来把该段改为条件渲染后才会走到这里)
     if (elements.empty() && items.empty()) {
         pushPlain(text(tr("info.empty")) | color(theme_.hintColor));

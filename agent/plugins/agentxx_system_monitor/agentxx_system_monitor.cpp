@@ -78,7 +78,7 @@ VramView vramOf(const GpuInfo& gpu) {
     return view;
 }
 
-/// 可用内存 MB: 优先用平台直接报的可用量; 平台未提供 (0) 时按"总量 - 已用"兜底
+/// 可用内存 MB: 优先用平台直接报的可用量; 平台未提供 (0) 时按"总量 - 已用"估算
 uint64_t availableMemoryMB(const MemoryInfo& memory) {
     if (memory.availablePhysicalMB > 0 || memory.usedPhysicalMB == 0) {
         return memory.availablePhysicalMB;

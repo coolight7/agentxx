@@ -296,7 +296,7 @@ std::string datetimeNodeRun(AgentCtx& ctx, const agentxx::plugin::RootRequest& r
 ///     normal    → llm                               (回到 agent loop)
 ///     tools     → tools → llm                        (原 loop: 工具分发后回 llm)
 ///     end       → agent_end → __end__
-///     default   → agent_end                          (兜底结束)
+///     default   → agent_end                          (默认结束)
 ///
 /// channels: messages / savedGraphData / __route__ / __intent_checked
 static int modifyGraphToIntentFlow(

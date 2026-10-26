@@ -194,7 +194,7 @@ public:
     ///   依赖 seq 单调性; 除重放路径外, 新产出的 WireDelta 必须经 nextDeltaSeq 分配
     uint64_t deltaSeq = 0;
 
-    /// 当前活动状态 (io 通过此字段感知状态变化)
+    /// 当前活动状态 (io 通过此字段知道状态变化)
     SessionActivity activity = SessionActivity::Idle;
 
     // -------------------------------------------------------------------
@@ -254,9 +254,9 @@ public:
 
     /// 获取 [start, end) 区间的历史消息副本 (历史分页同步用)
     /// - 仅 io 线程调用 (assertIoThread 强制校验)
-    /// - start/end 自动收敛到有效区间 (end <= start 时返回空), 避免调用方
+    /// - start/end 自动限制到有效区间 (end <= start 时返回空), 避免调用方
     ///   重复做边界裁剪; 相比 getFullViewMessagesCopy 避免了每页请求的
-    ///   全量拷贝 (长会话分页热路径)
+    ///   整份拷贝 (长会话分页热路径)
     std::vector<ViewMessage> getViewMessagesRange(size_t start, size_t end) const {
         assertIoThread();
         if (end > viewMessages.size()) {
@@ -437,7 +437,7 @@ public:
     void persistThrottled(std::string_view reason);
 
     /// 立即补存节流窗口内未落盘的 viewMessages 操作 (轮末统一调用)
-    /// - 保证正常结束的轮次其 view 消息全部落库, 与旧有逐条即时落盘语义收敛一致;
+    /// - 保证正常结束的轮次其 view 消息全部落库, 与旧有逐条即时落盘语义保持一致;
     ///   仅进程异常退出时才可能丢失窗口内 (<3s) 的尾部消息
     void flushViewMessages();
 
@@ -619,7 +619,7 @@ class SessionsManager {
 public:
 
     /// 获取或创建指定 sessionId 的会话 (同步版本: 若未加载且有 sessionStore 则同步加载,
-    /// 供非协程上下文兜底)
+    /// 供非协程上下文使用)
     std::shared_ptr<Session> getOrCreate(std::string_view sessionId);
 
     /// 获取或创建指定 sessionId 的会话 (异步版本: 若未加载且有 pool, 卸载 loadSession 到线程池,
@@ -752,7 +752,7 @@ public:
     std::shared_ptr<plugin::ToolRegistry> toolRegistry = nullptr;
 
     /// 本 agent 实际加载的工具名列表 (BaseAgent::init 构建执行图时填充)
-    /// - 供子代理"全量继承父 agent 工具" (tools=["*"]) 使用:
+    /// - 供子代理"全部继承父 agent 工具" (tools=["*"]) 使用:
     ///   AgentHost 据此填充子代理的 toolWhitelist
     std::vector<std::string> toolNames;
 
@@ -785,7 +785,7 @@ public:
 
     /// 后台任务登记表
     /// - fire-and-forget 的短后台任务 (事件发布 / 进度通知) 统一登记,
-    ///   关闭时先取消再等待收敛 (见 [agentxx::util::TaskScope])
+    ///   关闭时先取消再等待结束 (见 [agentxx::util::TaskScope])
     /// - 由 BaseAgent::init 创建并注入; 未创建时这些调用点退化为直接 co_spawn
     std::shared_ptr<agentxx::util::TaskScope> taskScope = nullptr;
 
@@ -809,7 +809,7 @@ public:
     std::shared_ptr<PromptSourceRegistry> promptSources = std::make_shared<PromptSourceRegistry>();
 
     /// 本 agent 上一次请求实际发送的工具定义
-    /// - 由 modelcall 加载请求时写入; 供"同上下文子代理"对齐请求前缀
+    /// - 由 modelcall 加载请求时写入; 供"同上下文子代理"保持请求前缀一致
     ///   (上下文压缩: 工具定义一致, 上游前缀缓存才命中)
     /// - 工具定义只与 agent 配置相关、与会话无关, 因此一份即可; 子代理经
     ///   shared_ptr 共享, 零拷贝
@@ -837,7 +837,7 @@ public:
     std::shared_ptr<AgentResourceApplier> resourceApplier = nullptr;
 
     /// agent 节点容器引用 (由 AgentHost attachRoot/派生时注入; 无容器时为空)
-    /// - 节点/工具可经此感知主程序 (如查询子代理模板、发起跨 agent 消息)
+    /// - 节点/工具可经此访问主程序 (如查询子代理模板、发起跨 agent 消息)
     std::weak_ptr<AgentHost> host;
 
     /// 线程安全的启动进度通知器包装:
@@ -910,7 +910,7 @@ public:
     /// 不直接读进程 cwd / AgentConfig::workDir):
     /// - 会话已绑定 worktree 时返回 worktree 路径 (worktree 模式)
     /// - 否则同 [getSessionBaseWorkDir] (会话覆写 > agent 配置 / 进程 cwd)
-    /// - 均不可用时返回空串 (调用方自行兜底)
+    /// - 均不可用时返回空串 (调用方自行处理)
     /// - 线程约束: worktree 绑定读取沿用 Session 的 io 线程约定 (插件主程序侧
     ///   经 ioCallSync 投递); 覆写表经 mutex 保护, 任意线程可读写
     /// - const: 只读取状态 (覆写表/互斥量按 mutable 处理), 供只读场景使用
@@ -920,8 +920,8 @@ public:
     /// - 会话工作目录覆写 (setSessionWorkDir 注入, 如 ACP session/new 携带的
     ///   客户端 cwd) —— 各会话可绑定不同项目目录, 彼此独立
     /// - 未设置时回退 AgentConfig::resolvedWorkDir() (yaml work_dir / 进程
-    ///   cwd); 兜底语义: 未做任何配置时与旧版行为完全一致
-    /// - 均不可用时返回空串 (调用方自行兜底)
+    ///   cwd); 默认语义: 未做任何配置时与旧版行为完全一致
+    /// - 均不可用时返回空串 (调用方自行处理)
     /// - 用途: 展示会话"真实所在目录"的位置 —— 系统提示词的工作目录占位符
     ///   (${work_dir}) 取此值: worktree 绑定是运行期经工具切换的临时状态,
     ///   进出 worktree 时该值不变, 系统提示词也就不会跟着反复变化
@@ -945,7 +945,7 @@ public:
     /// 清除会话工作目录覆写 (该会话回退 AgentConfig::resolvedWorkDir)
     void clearSessionWorkDir(std::string_view sessionId);
 
-    /// 获取语言: 优先返回指定 session 的语言, 若为空回退到 agentConfig->language, 最终兜底 "en"
+    /// 获取语言: 优先返回指定 session 的语言, 若为空改用 agentConfig->language, 最后用 "en"
     std::string getLanguage(std::string_view sessionId = "") const {
         if (!sessionId.empty() && sessions) {
             auto sess = sessions->get(sessionId);

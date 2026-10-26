@@ -309,7 +309,7 @@ private:
             boost::system::error_code ec;
             co_await timer.async_wait(asio::redirect_error(asio::use_awaitable, ec));
             if (ec) {
-                // 协程被取消 (运行取消 / 消费方放弃): 与网络中断同语义
+                // 协程被取消 (运行取消 / 处理方放弃): 与网络中断同语义
                 co_return false;
             }
         }

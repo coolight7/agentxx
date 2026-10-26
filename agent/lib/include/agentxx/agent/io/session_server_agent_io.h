@@ -48,7 +48,7 @@ class Session;
 ///     中断结束 (WireInterruptExpired)、插件数据 (WirePluginData) 面向所有客户端广播
 ///   - 单播: 客户端握手重放/初始化 (HelloAck/Replay)、历史分页请求 (WireGetViewMessages)、
 ///     会话列表 (WireListSessions)、模型查询等仅发回给发起请求的具体客户端 transport
-/// - 持有 delta 环形缓冲, 供重连时增量重放 (seq 连续则重放, 否则回退全量 sync)
+/// - 持有 delta 环形缓冲, 供重连时增量重放 (seq 连续则重放, 否则回退完整 Sync)
 /// - 多客户端断开与宽限期: 只要有至少一个客户端在线，就不会触发宽限期;
 ///   仅当所有客户端均断开且轮次活动时才进入 gracePeriod 宽限期; 期间任意客户端接入即取消宽限期
 /// - 线程模型: 所有成员状态 (clients_/deltaBuffer_/pending_/graceTimer_) 仅在 ex_ 线程访问，
@@ -66,10 +66,10 @@ public:
         /// delta 环形缓冲容量 (按消息数)
         size_t deltaBufferCap = 4096;
         /// 首次接入/切换会话时同步的历史消息窗口大小 (历史分页)
-        /// - 0 = 全量同步 (旧行为)
+        /// - 0 = 完整同步 (旧行为)
         /// - N > 0 = 仅同步末尾 N 条 (fromIndex=窗口起始下标), 客户端
         ///   (TUI) 向上滚动到窗口顶部时经 WireGetViewMessages 分页拉取
-        ///   更早历史, 避免长会话恢复时全量传输
+        ///   更早历史, 避免长会话恢复时整份传输
         size_t initialSyncTailCount = 0;
         /// `collect` 投递模式的静默合并窗口
         /// - 窗口内同一客户端的连续输入合并为一条, 窗口结束后按 next-turn 提交
@@ -140,7 +140,7 @@ public:
 
     // ----- 连接管理 -----
 
-    /// 处理客户端 hello: 按需重放 delta 或全量 sync, 发送 helloAck (仅定向回复给 sender 客户端)
+    /// 处理客户端 hello: 按需重放 delta 或完整 Sync, 发送 helloAck (仅定向回复给 sender 客户端)
     void handleHello(
         const WireHello&                             hello,
         std::vector<std::string>                     models = {},
@@ -197,7 +197,7 @@ public:
     /// 切换本端点绑定的会话 (会话选择弹窗确认后由客户端经 WireSwitchSession 请求)
     /// - 重新绑定 config_.sessionId 到目标会话 (不存在时由 SessionStore 从持久化恢复创建)
     /// - 清空 delta 重放缓冲 (新会话 delta seq 独立编号)
-    /// - 回推新会话的全量 Sync + 模型信息 + 上下文统计, 客户端据此恢复界面
+    /// - 回推新会话的完整 Sync + 模型信息 + 上下文统计, 客户端据此恢复界面
     /// - 仅当无进行中轮次时生效 (客户端已做前置拦截, 此处双重保护)
     void switchSession(std::string newSessionId);
 
@@ -223,18 +223,18 @@ private:
     using RespChannel = asio::experimental::concurrent_channel<void(ErrorCode, utilxx_base::Json)>;
     using WakeChannel = asio::experimental::concurrent_channel<void(ErrorCode, int)>;
 
-    /// 取 seq 之后的 delta; nullopt 表示需全量 sync
+    /// 取 seq 之后的 delta; nullopt 表示需完整 Sync
     std::optional<std::vector<WireDelta>> deltasSince(uint64_t seq);
 
     WireSyncPayload buildFullSync();
     /// 构建同步载荷; tailCount>0 时仅取末尾 tailCount 条 (历史分页尾窗)
     /// - fromIndex = 窗口起始绝对下标, totalMessages = 会话总消息数;
     ///   客户端据此展示"上方还有更早消息"并按 WireGetViewMessages 分页拉取
-    /// - tailCount==0 时等价 buildFullSync() (全量, fromIndex=0)
+    /// - tailCount==0 时等价 buildFullSync() (全部, fromIndex=0)
     WireSyncPayload buildTailSync(size_t tailCount);
     /// 构建增量补拉载荷: 仅含 [afterSeq] 之后的展示消息
     /// - `incremental = true`: 客户端按 msg.id 去重后追加到本地历史尾部
-    /// - 消息 id 为空的老数据不可去重: 此时返回全量同步 (调用方回退)
+    /// - 消息 id 为空的老数据不可去重: 此时返回完整同步 (调用方回退)
     WireSyncPayload buildIncrementalSync(std::vector<SequencedViewMessage> rows, uint64_t afterSeq);
     std::shared_ptr<Session> session();
 
@@ -536,7 +536,7 @@ private:
     std::map<std::string, std::chrono::steady_clock::time_point> uplinkWarnAt_;
     // 注: 同一 controller 可被多个 client 连接/重连 (1:N), 因此不在此存储
     // 各 client 的接口集上报 —— 收到 client_interfaces 约定事件时仅向 agent
-    // 总线转发 (订阅方按事件到达感知各 client 快照), 不做单值缓存避免覆盖
+    // 总线转发 (订阅方按事件到达知道各 client 快照), 不做单值缓存避免覆盖
 
     std::atomic<bool> running_{false};
     std::atomic<bool> turnActive_{false};

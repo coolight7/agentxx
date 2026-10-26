@@ -367,7 +367,7 @@ static void testHistoryPrependAnchoring() {
         XX_TEST_EXPECT_TRUE(f.comp->totalHeight() > total);
     }
 
-    // ---- 场景 B: 前插后继续上滑到顶部区域, 实测校正收敛不破坏视口 ----
+    // ---- 场景 B: 前插后继续上滑到顶部区域, 实测校正稳定后不破坏视口 ----
     {
         ScrollFixture f;
         f.addHistory(8);
@@ -1514,7 +1514,7 @@ TestResult testTuiScroll() {
                 st.messages.push_back(std::move(m));
             }
         });
-        // 多渲染几帧: stickToBottom 下底部可见项被实测修正, 总高度收敛到
+        // 多渲染几帧: stickToBottom 下底部可见项被实测修正, 总高度逼近
         // 真实值附近 ((40 行 x ~27 字符 / 97 列 ≈ 12 行 + 1 空行) x 10 条
         // ≈ 130 行); 修复前按 \n 计数 ≈ 40*10 = 400+ 行
         for (int i = 0; i < 5; ++i) {
@@ -1736,7 +1736,7 @@ TestResult testTuiScroll() {
         });
 
         for (int i = 0; i < 8; ++i) {
-            f.render(); // stickToBottom 收敛
+            f.render(); // stickToBottom 贴底稳定
         }
         std::string frame = f.render();
         // mermaid 状态图必须渲染在视口中 (修复前整图缺失 -> 视口内一段空白;
@@ -1889,7 +1889,7 @@ TestResult testTuiScroll() {
         });
 
         for (int i = 0; i < 8; ++i) {
-            f.render(); // stickToBottom 收敛
+            f.render(); // stickToBottom 贴底稳定
         }
         std::string frame = f.render();
         // filesystem_edit 的 diff 内容必须渲染在视口中 (修复前整块丢失 -> 空白)

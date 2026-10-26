@@ -663,7 +663,7 @@ void test_model_cache_control() {
 // ---------------------------------------------------------------------------
 
 void test_model_numeric_and_extra_config() {
-    // extra_api_config 的小数必须保留 (from_chars 的整数分支会部分消费 "0.7" 得到 0,
+    // extra_api_config 的小数必须保留 (from_chars 的整数分支会部分读取 "0.7" 得到 0,
     // 只判 ec 会把温度写成 0)
     auto cfg = loadYaml(R"(model:
   list:

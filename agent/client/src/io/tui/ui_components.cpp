@@ -359,7 +359,7 @@ Element buttonElement(
     return disabled ? el | theme.dim() : el;
 }
 
-/// 行为动作 id (TUI 只把动作透传给动作通道: dispatch 用名字, route/command 用目标)
+/// 行为动作 id (TUI 只把动作原样转给动作通道: dispatch 用名字, route/command 用目标)
 std::string actionIdOf(const pluginxx::ui::Action& action) {
     if (action.empty()) {
         return {};
@@ -950,7 +950,7 @@ bool controlChecked(const Item& item, const UiFormState* form) {
     return value.is_boolean() && value.get<bool>();
 }
 
-/// 输入框显示宽度 (" " + 值 + 右侧补齐 + " "; 最小 4 列; 仅用于宽度不可知时的兜底命中区域)
+/// 输入框显示宽度 (" " + 值 + 右侧补齐 + " "; 最小 4 列; 仅用于宽度不可知时的默认命中区域)
 int inputFieldWidth(std::string_view value) {
     return std::max(4, pluginxx::ui::displayWidth(value) + 2);
 }
@@ -1040,7 +1040,7 @@ UiRenderCtx childCtx(const UiRenderCtx& ctx, int width, int indent) {
     return sub;
 }
 
-/// 文本类降级行 (fallback / 描述层未支持的组件兜底)
+/// 文本类降级行 (fallback / 描述层未支持的组件降级)
 Rows fallbackRows(
     const Item&        item,
     const UiRenderCtx& ctx,
@@ -1708,7 +1708,7 @@ Rows renderItemRows(const Item& item, const UiRenderCtx& ctx, UiRenderResult& ou
                     addControlRegion(regions, ctx, item, rowW - kStepW, 0, kStepW, 1);
                     addControlRegion(regions, ctx, item, kStepW, 0, 0, 2);
                 } else {
-                    // 宽度未知 (不限宽渲染): 按内容宽度兜底
+                    // 宽度未知 (不限宽渲染): 按内容宽度估算
                     const int valueW = inputFieldWidth(value.empty() ? help : value);
                     addControlRegion(regions, ctx, item, kStepW, 0, valueW, 2);
                     addControlRegion(regions, ctx, item, kStepW + valueW, 0, kStepW, 1);
@@ -2183,7 +2183,7 @@ bool handleFormKeyInput(
         ++form.version;
         return true;
     }
-    // 单行输入框无光标定位: 左右方向键消费掉, 避免落到其他组件 (如滚动)
+    // 单行输入框无光标定位: 左右方向键处理掉, 避免落到其他组件 (如滚动)
     if (event == ftxui::Event::ArrowLeft || event == ftxui::Event::ArrowRight) {
         return true;
     }
@@ -2195,7 +2195,7 @@ bool handleFormKeyInput(
                 const bool ok = std::isdigit(static_cast<unsigned char>(c)) != 0 || c == '.'
                                 || c == '-' || c == '+';
                 if (!ok) {
-                    return true; // 消费但忽略
+                    return true; // 处理但忽略
                 }
             }
         }
@@ -2368,7 +2368,7 @@ void renderItemJson(const utilxx_base::Json& json, const UiRenderCtx& ctx, UiRen
 }
 
 size_t measureItem(const pluginxx::ui::Item& item, const UiRenderCtx& ctx) {
-    // 与渲染同源: 渲染一次并统计行数 (不做第二套判定, 避免估算与渲染漂移)
+    // 与渲染同源: 渲染一次并统计行数 (不做第二套判定, 避免估算与渲染不一致)
     UiRenderResult out;
     renderItem(adaptItem(item), ctx, out);
     size_t lines = 0;

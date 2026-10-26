@@ -125,7 +125,7 @@ public:
     /// - 事件分隔符同时支持 "\n\n" 与 "\r\n\r\n" (SSE 规范允许 \r\n 行结尾)
     /// - thinkingTexts/blockSignatures: 按 block index 累积 thinking 文本与 signature,
     ///   content_block_stop 时组装为带 signature 的 thinking 块存入 completion.message.extra
-    /// - finalFlush: 连接关闭时对末尾未以 "\n\n" 结尾的最后一个事件块也进行解析
+    /// - finalFlush: 连接关闭时对末尾未以 "\n\n" 结尾的最后一个事件块也解析
     /// - 返回本次调用是否处理到了 "message_stop" 结束事件 (用于检测流截断)
     static bool processSseBuffer(
         std::string&                       buf,

@@ -170,7 +170,7 @@ struct RuntimeFixture {
     /// 因此这里在等待期间持续 `poll()` 并让出 CPU，直到结果就绪或超时。
     ///
     /// - `timeout` 超时即返回 false：测试宁可失败也不允许永久挂起
-    /// - 不消费 future；调用方在返回 true 后再 `get()`（异常语义不变）
+    /// - 不处理 future；调用方在返回 true 后再 `get()`（异常语义不变）
     template<typename T>
     bool waitFutureReady(std::future<T>& fut, std::chrono::milliseconds timeout = 10s) {
         const auto deadline = std::chrono::steady_clock::now() + timeout;
@@ -1156,7 +1156,7 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_FALSE(f.manager->hasPendingClose());
     }
 
-    /// 析构兜底: stop 从未执行时绝不调用插件 destroy。
+    /// 析构保护: stop 从未执行时绝不调用插件 destroy。
     {
         gLifecycleDestroys     = 0;
         auto inst              = std::make_shared<PluginInstance>("dtor_pending_stop");

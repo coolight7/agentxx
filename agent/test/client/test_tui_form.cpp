@@ -8,7 +8,7 @@
 //
 // 本模块因此只覆盖两件事:
 // 1) 共享控件状态机本身 (初始化/点击/键盘/校验/取值) —— 与具体接入点无关
-// 2) 插件面板与 overlay 接入点的"结果回传"端到端 (经动作通道)
+// 2) 插件面板与 overlay 接入点的"结果回传"全流程 (经动作通道)
 #include "agentxx-test/client/test_tui_form.h"
 
 #include "agentxx-client/io/tui/agent_tui.h"
@@ -242,7 +242,7 @@ void test_form_keyboard() {
     );
     XX_TEST_EXPECT_EQ(form.ensure("num").editText, std::string{"7"});
 
-    // 方向键被消费 (单行无光标定位, 不落到滚动)
+    // 方向键被处理 (单行无光标定位, 不落到滚动)
     XX_TEST_EXPECT_TRUE(agentxx::client::handleFormKeyInput(items, form, ftxui::Event::ArrowLeft));
     XX_TEST_EXPECT_EQ(form.ensure("num").editText, std::string{"7"});
 
@@ -385,7 +385,7 @@ void test_overlay_form_submit_through_action_channel() {
     ctx.theme         = &theme();
     ctx.pluginManager = mgr;
     ctx.postRedraw    = [] {};
-    // 固定视口: 弹窗尺寸 (宽高比例) 由此确定, 不随物理终端漂移
+    // 固定视口: 弹窗尺寸 (宽高比例) 由此确定, 不随物理终端变化
     ctx.viewportWidth  = 100;
     ctx.viewportHeight = 30;
     ctx.refreshFrameSize();

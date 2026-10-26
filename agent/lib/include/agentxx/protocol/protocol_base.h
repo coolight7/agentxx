@@ -1,5 +1,5 @@
 #pragma once
-// 协议公共基类/工具, 收敛 A2A/ACP/MCP 重复的 JSON-RPC/路由/Http 逻辑
+// 协议公共基类/工具, 统一 A2A/ACP/MCP 重复的 JSON-RPC/路由/Http 逻辑
 #include "utilxx/http_server.h"
 #include "utilxx_base/json.h"
 #include "utilxx_base/log.h"

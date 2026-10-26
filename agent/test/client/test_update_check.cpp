@@ -6,7 +6,7 @@
 // - 设置项"启动时检查更新": 默认开、切换持久化 (TUI 侧开关)
 // - 请求失败路径: 不可达端点返回 ok=false 且带原因 (不抛异常)
 // - "前往下载"链接校验 (open_url.h): 只放行 http/https 且字符安全
-// - 本地 HTTP 服务端到端 (302 Location / JSON / 404) 见 `agentxx_test http`
+// - 本地 HTTP 服务端全流程 (302 Location / JSON / 404) 见 `agentxx_test http`
 #include "agentxx-test/client/test_update_check.h"
 #include "agentxx-test/test_coro_util.h"
 

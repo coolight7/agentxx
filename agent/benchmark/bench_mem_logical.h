@@ -166,7 +166,7 @@ inline std::vector<LogicalMemRow> collectAgentLogicalMem(
             }
             shareBytes += kv.first.size() + 64; // 会话键 + map 节点开销
             // 内容本体在会话 SQLite 的 store 表中, 内存只有 LRU 缓存 (有条数上限)
-            // 或未注入持久化时的全量 map; 两者都按条目节点开销估算
+            // 或未注入持久化时的完整 map; 两者都按条目节点开销估算
             shareCount += kv.second.cache.size() + kv.second.items.size();
             shareBytes += (kv.second.cache.size() + kv.second.items.size()) * 48;
         }

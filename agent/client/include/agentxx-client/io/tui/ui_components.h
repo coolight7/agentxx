@@ -72,7 +72,7 @@ const pluginxx::ui::Capabilities& tuiUiCapabilities();
 ///   部分老终端会把光标下的字符吃掉), 本端不请求硬件光标: 输入栏自己绘制的
 ///   光标格 (反色空格) 承担指示作用, 功能不受影响, 只是看不到系统光标;
 /// - 结果同时是能力段 `terminal.hardware_cursor` 的取值来源 (单一来源, 插件读到
-///   的值与本端实际行为不会分叉)。
+///   的值与本端实际行为不会出现差异)。
 bool tuiHardwareCursorSupported();
 
 /// 按本客户端能力适配组件 (渲染前调用; 结果只含本客户端支持的组件)
@@ -233,12 +233,12 @@ UiFormAction handleFormControlHit(
 /// 处理提交行命中 (id 为 `__submit` / `__cancel`)
 UiFormAction handleFormSubmitHit(std::string_view actionId);
 
-/// 键盘输入作用于当前焦点控件 (返回 true 表示已消费该事件)
+/// 键盘输入作用于当前焦点控件 (返回 true 表示已处理该事件)
 /// - 可打印字符追加到输入框 (首次输入替换缺省值); Backspace 删除一个字符;
 ///   Delete 清空输入框; Tab / Shift+Tab 在控件间移动焦点; Escape 释放焦点
 /// - checkbox/switch 空格翻转; buttons 左右切换选中项; select 上下切换; number 上下步进
-///   (受 min/max 约束); text / number 的左右方向键被消费 (单行输入无光标定位)
-/// - 回车与提交由调用方处理 (本方法不消费回车)
+///   (受 min/max 约束); text / number 的左右方向键被处理 (单行输入无光标定位)
+/// - 回车与提交由调用方处理 (本方法不处理回车)
 bool handleFormKeyInput(
     const std::vector<pluginxx::ui::Item>& items,
     UiFormState&                           form,

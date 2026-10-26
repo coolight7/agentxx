@@ -571,7 +571,7 @@ asio::awaitable<void> test_eventbridge_tps() {
     if (io->stats.size() == 1) {
         // "Hello" ≈ 5 个 ascii 字符 / 4 ≈ 1.25 token, 80ms 内 → tps 约 15.6
         XX_TEST_EXPECT_TRUE(io->stats[0].tps > 0.0);
-        // 上下文统计字段透传 (默认 0)
+        // 上下文统计字段原样转发 (默认 0)
         XX_TEST_EXPECT_EQ(io->stats[0].contextTokens, uint64_t{0});
         // 会话累计用量随同一条消息下发 (界面显示已消耗/输入/输出/缓存 token)
         XX_TEST_EXPECT_EQ(io->stats[0].promptTokens, uint64_t{800});

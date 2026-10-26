@@ -197,7 +197,7 @@ void test_async_file_io_support() {
     XX_TEST_EXPECT_EQ(utilxx_base::isAsyncFileIoSupported(), detected);
     XX_TEST_EXPECT_EQ(utilxx_base::isAsyncFileIoSupported(), detected);
 
-    // 强制关闭: 判断结果直接为 false (测试据此覆盖同步兜底实现)
+    // 强制关闭: 判断结果直接为 false (测试据此覆盖同步备用实现)
     utilxx_base::setAsyncFileIoSupported(false);
     XX_TEST_EXPECT_FALSE(utilxx_base::isAsyncFileIoSupported());
 
@@ -627,7 +627,7 @@ void test_wire_permission_state_protocol() {
         if (p) {
             XX_TEST_EXPECT_FALSE(p->fullAuth);
         }
-        // 缺省值: 未携带 fullAuth 时按"未完全授权"处理 (安全兜底)
+        // 缺省值: 未携带 fullAuth 时按"未完全授权"处理 (安全考虑)
         auto missing
             = permissionStateFromJson(utilxx_base::Json::parse(R"({"type":"permission_state"})"));
         XX_TEST_EXPECT_FALSE(missing.fullAuth);

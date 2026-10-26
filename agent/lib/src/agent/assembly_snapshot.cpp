@@ -902,7 +902,7 @@ std::vector<std::string> renderAssemblySnapshot(const utilxx_base::Json& snapsho
 }
 
 void logAssemblySnapshot(const utilxx_base::Json& snapshot, std::string_view stage) {
-    // 一行计数摘要 (Info) + 完整 JSON (Debug): 常规启动不打全量, 排查时按需打开
+    // 一行计数摘要 (Info) + 完整 JSON (Debug): 常规启动不打印全部内容, 排查时按需打开
     std::string summary = "assembly snapshot";
     if (!stage.empty()) {
         summary += fmt::format(" ({})", stage);
