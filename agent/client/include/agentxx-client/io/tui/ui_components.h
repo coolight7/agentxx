@@ -61,7 +61,10 @@ inline constexpr std::string_view kFormCancelActionId = middleware::kInterruptCa
 /// `adaptItems` 也按它做降级。
 /// - 不支持的组件: `Stack` (叠放, 降级为最后一个子节点)、`Image` (图片, 降级为
 ///   `alt` 文本)、`musicxx.Shader` (其他客户端专属块, 跳过)
-/// - 支持的控件形态: buttons / select / checkbox / switch / text / number
+/// - 支持的控件形态: buttons / select / checkbox / switch / text / number / password
+///   (password 与 text 同一套输入与派发, 只是显示文本打码)
+/// - 列表块 `ListViewBase` / `ListView` 按终端形式渲染 (项、菜单与列表动作排成可点
+///   行/按钮; 封面与图标不画, 详见 `renderListBlock`)
 const pluginxx::ui::Capabilities& tuiUiCapabilities();
 
 /// 输入栏是否使用终端自身的光标显示输入位置

@@ -633,9 +633,18 @@ tool_call 中的前后调用形成顺序屏障。并发只发生在同一条 ass
 本项目 (TUI) 实际支持的组件（`ui_components.cpp` 的 `kTuiBlockNames`）:
 `Text` / `Divider` / `Gap` / `Button` / `Block` / `Row` / `Column` / `Expanded` / `Spacer` /
 `SizedBox` / `Padding` / `Align` / `Collapse` / `KV` / `Table` / `Tree` / `Progress` / `Badge` /
-`Control` / `Markdown` / `Icon` / `Diff` / `Sparkline` / `Diagram`。
+`Control` / `Markdown` / `Icon` / `Diff` / `Sparkline` / `Diagram` / `ListViewBase` / `ListView`。
 本端没实现的可选块（`Stack` / `Image` / `musicxx.Shader`）**不列进去**，由适配自动降级
 （`Stack` → 最后一个子节点、`Image` → `alt` 文本、专属块 → 跳过）。
+
+列表块（`ListViewBase` / `ListView`）在终端的形态（详见 [ui-layer.md](ui-layer.md) §2）:
+
+- `items` 里一项一行（或网格里一格），点它派发该项的 `action`（没写就用 `itemAction`），
+  参数里额外带 `index` 与 `itemId`（= 该项的 `id`）；
+- `layout` = `list` / `grid` / `multiList` / `auto`；`variant` = `card`（带边框）/ `plain`；
+- `menu` 是列表上方的一排按钮；`itemMenu` 只在 `selected` 的项下面展开；
+  编辑/加删/定位/刷新/加载更多是列表下方的一排按钮（声明了才出现）；
+- 封面 `image` / 图标 `icon` 终端不画；`height` 限高，超出补一行 “还有 N 项”。
 
 写法要点（完整字段见库文档）:
 
@@ -649,8 +658,8 @@ tool_call 中的前后调用形成顺序屏障。并发只发生在同一条 ass
 
 约束与降级:
 
-- 解析上限: 嵌套深度 8 / 单层元素 512 / 表格 512 行 16 列 / 树 1024 节点 /
-  趋势图 4096 点 / 单项文本 64 KiB; 越界按"截断或丢弃"处理, 不使整份描述失效
+- 解析规模**不设上限**（早期版本的嵌套深度/元素数/表格行列/文本字节点数等限制已移除）；
+  只有结构性错误（JSON 非法、字段类型不符、组件不认识）才按规则跳过或降级
 - **单条描述体积上限 1 MiB** (`agentxx::plugin::kUiJsonMaxBytes`): 面板/Info/状态栏/
   装饰/overlay/工具渲染结果的入口在越界时**拒绝整条更新** (返回非 0) 并记日志 ——
   注册表保持上一次成功内容, 不会留下半截状态
@@ -689,7 +698,7 @@ tool_call 中的前后调用形成顺序屏障。并发只发生在同一条 ass
 
 ### 9.2 控件与结果回传（本项目的域内约定）
 
-- 控件是描述层的 `Control`（形态 `buttons`/`select`/`checkbox`/`switch`/`text`/`number`），
+- 控件是描述层的 `Control`（形态 `buttons`/`select`/`checkbox`/`switch`/`text`/`number`/`password`），
   面板 / Info 段落 / 自定义 overlay / 工具装饰里都能放；
   **控件状态由主程序维护**（值、勾选、选中项、校验提示、焦点），插件代码不进入 UI 线程。
 - **值变化即派发**：勾选、输入完成、候选项点击都会派发控件自己的 `action`，
@@ -697,7 +706,8 @@ tool_call 中的前后调用形成顺序屏障。并发只发生在同一条 ass
   用下面的域内约定（描述层不提供表单提交语义）。
 - 结果经既有的动作通道回传（`bind_action_handler` 绑定的回调）：
   - 提交：`action_id = "__submit"`，`action_args = {"values": {控件 id: 值}}`
-    (checkbox/switch→布尔 / select|buttons→候选项 `value` / number→数值 / text→字符串)
+    (checkbox/switch→布尔 / select|buttons→候选项 `value` / number→数值 /
+    text|password→字符串; password 的明文只出现在提交值里, 界面上始终打码)
   - 取消：`action_id = "__cancel"`（无参数）
   - 点击候选项即提交（`UiRenderCtx::commitOnPick`，域内上下文提供）：`action_id = 控件 id`，参数同上
 - 交互：点击控件即聚焦（字符键进入输入框），`Tab`/`Shift+Tab` 在控件间移动，
@@ -705,8 +715,9 @@ tool_call 中的前后调用形成顺序屏障。并发只发生在同一条 ass
 - 键盘（焦点控件上的按键，面板/Info/overlay 与中断表单完全一致）：
   - `buttons`：`←`/`→` 循环切换选中项；`select`：`↑`/`↓` 移动选中项；
     `number`：`↑`/`↓` 按 `step` 步进（受 `min`/`max` 约束）；`checkbox`：空格翻转
-  - 输入框（`text`/`number`）：首次输入替换缺省值，`Backspace` 删除一个字符，
-    `Delete` 清空；数值框只接受数字与小数点/正负号（其余按键处理但不改动）
+  - 输入框（`text`/`number`/`password`）：首次输入替换缺省值，`Backspace` 删除一个字符，
+    `Delete` 清空；数值框只接受数字与小数点/正负号（其余按键处理但不改动）；
+    密码框与文本框行为一致，只是显示成圆点（`help` 仍作为空值时的占位说明）
 - 中断表单（`interrupt_ui.h`）使用同一套控件语义与外观，只是结果去向不同
   （回传中断结果 `{"values":{...}}`，由 agent 侧中间件处理）：描述里的控件与提交行
   由 `ui_components` 渲染（标签/说明的 i18n 键在转换时解析），点击/键盘/校验/取值

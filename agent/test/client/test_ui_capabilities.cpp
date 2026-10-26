@@ -53,6 +53,11 @@ TestResult testUiCapabilities() {
     // 终端换算方式一致: 固定 8u 换算出的列数与能力段自身算法一致
     XX_TEST_EXPECT_EQ(caps.colsOf(8.0, true), static_cast<int>(8.0 / caps.cell.width + 0.5));
 
+    // ---- 声明了支持的组件/控件必须真的能画 (多声明会画出诊断行) ----
+    XX_TEST_EXPECT_TRUE(caps.supportsBlock("ListViewBase"));
+    XX_TEST_EXPECT_TRUE(caps.supportsBlock("ListView"));
+    XX_TEST_EXPECT_TRUE(caps.supportsControl("password"));
+
     // ---- 体验级别字段 ----
     XX_TEST_EXPECT_TRUE(json.contains("form"));
     XX_TEST_EXPECT_TRUE(json["form"].value("multi_field", false));

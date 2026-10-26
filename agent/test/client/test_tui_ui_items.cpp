@@ -1133,6 +1133,242 @@ TestResult testTuiUiItems() {
         XX_TEST_EXPECT_TRUE(scroll->hitTestItem(1, 0, index, localX, localY));
     }
 
+    // ---------------- 列表块 (ListViewBase / ListView) ----------------
+    {
+        // 列表布局: 一行一项 (标记 + 标题 + 副标题 + 右侧文字), 选中项带标记
+        auto res = renderJson(
+            R"([{"kind":"ListViewBase","variant":"plain",
+                 "items":[
+                   {"id":"weekly","title":"每周新歌","subtitle":"每周一更新",
+                    "trailing":"12 首","action":"open:weekly"},
+                   {"id":"fav","title":"我的收藏","trailing":"38 首","selected":true}
+                 ]}])",
+            ctxFor(40)
+        );
+        // 文本存在性用 renderToText (renderToGrid 会把宽字符的第二格补成空格,
+        // 汉字串中间会多出空格, 子串匹配不上)
+        const auto text = renderToText(res, 40);
+        XX_TEST_EXPECT_TRUE(screenHas(text, "每周新歌"));
+        XX_TEST_EXPECT_TRUE(screenHas(text, "每周一更新"));
+        XX_TEST_EXPECT_TRUE(screenHas(text, "12 首"));
+        XX_TEST_EXPECT_TRUE(screenHas(text, "▸ 我的收藏")); // 选中标记
+        // 右侧文字靠右: 首行末列就是该项 trailing 的末字 (40 - 2 = 38 列起 "首")
+        {
+            auto screen = renderScreen(res, 40, 4);
+            XX_TEST_EXPECT_EQ(screen.CellAt(38, 0).character, std::string{"首"});
+            XX_TEST_EXPECT_EQ(screen.CellAt(37, 0).character, std::string{" "});
+        }
+        XX_TEST_EXPECT_EQ(measuredLines(res), size_t{2});
+        XX_TEST_EXPECT_EQ(layoutLines(res, 40), 2);
+        // 项动作: 标识来自 action, 参数补 index / itemId; 没动作的项不登记区域
+        const auto* region = findRegion(res, "open:weekly");
+        XX_TEST_EXPECT_TRUE(region != nullptr);
+        if (region != nullptr) {
+            XX_TEST_EXPECT_EQ(region->kind, UiHitRegionKind::Action);
+            XX_TEST_EXPECT_EQ(region->w, 0); // 整行可点
+            XX_TEST_EXPECT_TRUE(region->arg.find("\"itemId\":\"weekly\"") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(region->arg.find("\"index\":0") != std::string::npos);
+        }
+        XX_TEST_EXPECT_EQ(allRegions(res).size(), size_t{1});
+    }
+    {
+        // 网格布局 + 工具条/菜单/动作按钮: 格子按格宽横向排开, 按钮在列表上下成行
+        std::string json = R"([{"kind":"ListView","layout":"grid","variant":"plain",
+             "showCount":true,
+             "menu":[{"title":"全部刷新","action":"refreshAll"}],
+             "editAction":"beginEdit","addAction":"addItem",
+             "items":[)";
+        for (int i = 0; i < 8; ++i) {
+            if (i > 0) {
+                json += ",";
+            }
+            json += "{\"title\":\"item" + std::to_string(i) + "\",\"action\":\"open\"}";
+        }
+        json += "]}]";
+
+        auto       res     = renderJson(json.c_str(), ctxFor(48));
+        const auto regions = allRegions(res);
+        // 8 项 + 菜单 1 个 + 动作按钮 2 个
+        XX_TEST_EXPECT_EQ(regions.size(), size_t{11});
+        // 行序: 菜单按钮 (y=0) / 计数行 (y=1) / 3 行格子 (y=2..4) / 动作按钮 (y=5)
+        XX_TEST_EXPECT_EQ(measuredLines(res), size_t{6});
+        XX_TEST_EXPECT_EQ(layoutLines(res, 48), 6);
+        if (regions.size() == 11) {
+            XX_TEST_EXPECT_EQ(regions[0].id, std::string{"refreshAll"});
+            XX_TEST_EXPECT_EQ(regions[0].y, 0);
+            // 每行 3 格, 格宽 16 列 (48 / 3)
+            XX_TEST_EXPECT_EQ(regions[1].id, std::string{"open"});
+            XX_TEST_EXPECT_EQ(regions[1].x, 0);
+            XX_TEST_EXPECT_EQ(regions[1].y, 2);
+            XX_TEST_EXPECT_EQ(regions[1].w, 16);
+            XX_TEST_EXPECT_EQ(regions[2].x, 16);
+            XX_TEST_EXPECT_EQ(regions[3].x, 32);
+            XX_TEST_EXPECT_EQ(regions[4].y, 3); // 第二行格子
+            XX_TEST_EXPECT_EQ(regions[9].id, std::string{"beginEdit"});
+            XX_TEST_EXPECT_EQ(regions[9].y, 5);
+            XX_TEST_EXPECT_EQ(regions[10].id, std::string{"addItem"});
+            XX_TEST_EXPECT_EQ(regions[10].y, 5);
+        }
+        const auto text = renderToText(res, 48);
+        XX_TEST_EXPECT_TRUE(screenHas(text, "全部刷新"));
+        XX_TEST_EXPECT_TRUE(screenHas(text, "item0"));
+        XX_TEST_EXPECT_TRUE(screenHas(text, agentxx::client::trf("ui.listCount", size_t{8})));
+        XX_TEST_EXPECT_TRUE(screenHas(text, agentxx::client::tr("ui.edit")));
+        XX_TEST_EXPECT_TRUE(screenHas(text, agentxx::client::tr("ui.add")));
+    }
+    {
+        // 选中项的每项菜单 (终端没有右键): 展开成缩进的一排按钮, 参数带该项 itemId
+        auto res = renderJson(
+            R"([{"kind":"ListView","layout":"list","variant":"plain","itemAction":"open",
+                 "itemMenu":[{"title":"重命名","action":"rename"}],
+                 "items":[{"id":"a","title":"A","selected":true},
+                          {"id":"b","title":"B"}]}])",
+            ctxFor(40)
+        );
+        const auto text = renderToText(res, 40);
+        XX_TEST_EXPECT_TRUE(screenHas(text, "重命名"));
+        XX_TEST_EXPECT_EQ(measuredLines(res), size_t{3}); // 项 A + 菜单行 + 项 B
+        const auto* rename = findRegion(res, "rename");
+        XX_TEST_EXPECT_TRUE(rename != nullptr);
+        if (rename != nullptr) {
+            XX_TEST_EXPECT_EQ(rename->x, 2); // 与该项标题对齐的缩进
+            XX_TEST_EXPECT_EQ(rename->y, 1); // 在选中项 A 的下一行
+            XX_TEST_EXPECT_TRUE(rename->arg.find("\"itemId\":\"a\"") != std::string::npos);
+        }
+        size_t openCount = 0;
+        for (const auto& region : allRegions(res)) {
+            if (region.id == "open") {
+                ++openCount;
+            }
+        }
+        XX_TEST_EXPECT_EQ(openCount, size_t{2}); // 两项都走列表的 itemAction
+    }
+    {
+        // 空列表: 插件给的 emptyText 优先, 没给用本端文案
+        auto res = renderJson(
+            R"([{"kind":"ListViewBase","variant":"plain","items":[],
+                 "emptyText":"还没有订阅"}])",
+            ctxFor(40)
+        );
+        XX_TEST_EXPECT_TRUE(screenHas(renderToText(res, 40), "还没有订阅"));
+        XX_TEST_EXPECT_EQ(measuredLines(res), size_t{1});
+
+        auto fallback = renderJson(
+            R"([{"kind":"ListViewBase","variant":"plain","items":[]}])",
+            ctxFor(40)
+        );
+        XX_TEST_EXPECT_TRUE(
+            screenHas(renderToText(fallback, 40), agentxx::client::tr("ui.listEmpty"))
+        );
+    }
+    {
+        // height 限高: 超出时截断并补一行 "还有 N 项" (需预留一行放提示)
+        std::string json = R"([{"kind":"ListViewBase","layout":"list","variant":"plain",
+             "height":100,"items":[)";
+        for (int i = 0; i < 8; ++i) {
+            if (i > 0) {
+                json += ",";
+            }
+            json += "{\"title\":\"row" + std::to_string(i) + "\"}";
+        }
+        json += "]}]";
+
+        auto res = renderJson(json.c_str(), ctxFor(40));
+        // 100u = 5 行 (每格 20u): 4 项 + 一行 "还有 4 项"
+        XX_TEST_EXPECT_EQ(measuredLines(res), size_t{5});
+        XX_TEST_EXPECT_EQ(layoutLines(res, 40), 5);
+        const auto text = renderToText(res, 40);
+        XX_TEST_EXPECT_TRUE(screenHas(text, "row3"));
+        XX_TEST_EXPECT_FALSE(screenHas(text, "row4"));
+        XX_TEST_EXPECT_TRUE(screenHas(text, agentxx::client::trf("ui.listMore", size_t{4})));
+    }
+
+    {
+        // 卡片形态 + 内边距: 边框占 1 行/1 列, 命中区域随内容偏移 (与 Block 一致)
+        auto res = renderJson(
+            R"([{"kind":"ListViewBase","variant":"card",
+                 "padding":{"horizontal":8,"vertical":4},
+                 "items":[{"title":"only","action":"pick"}]}])",
+            ctxFor(30)
+        );
+        const auto text = renderToText(res, 30);
+        XX_TEST_EXPECT_TRUE(screenHas(text, "┌")); // 卡片边框
+        XX_TEST_EXPECT_TRUE(screenHas(text, "only"));
+        // 边框 1 行/1 列 + 左内边距 1 列 (8u); 纵向 4u 换算成 0 行
+        XX_TEST_EXPECT_EQ(measuredLines(res), size_t{3});
+        const auto* region = findRegion(res, "pick");
+        XX_TEST_EXPECT_TRUE(region != nullptr);
+        if (region != nullptr) {
+            XX_TEST_EXPECT_EQ(region->x, 2);
+            XX_TEST_EXPECT_EQ(region->y, 1);
+        }
+    }
+
+    {
+        // 头部/尾部里的块也按本端能力适配 (库的 adapt 只下探 children):
+        // Image → alt 文本, 而不是当成渲染不了的块被跳过
+        auto res = renderJson(
+            R"([{"kind":"ListViewBase","variant":"plain","items":[],
+                 "header":[{"kind":"Image","src":"cover.png","alt":"封面"}],
+                 "footer":[{"kind":"Text","text":"尾部"}]}])",
+            ctxFor(30)
+        );
+        const auto text = renderToText(res, 30);
+        XX_TEST_EXPECT_TRUE(screenHas(text, "封面"));
+        XX_TEST_EXPECT_TRUE(screenHas(text, "尾部"));
+    }
+
+    // ---------------- 密码控件 (打码显示, 不回显明文) ----------------
+    {
+        auto ctx   = ctxFor(40);
+        auto form  = std::make_shared<agentxx::client::UiFormState>();
+        ctx.form   = form.get();
+        auto items = pluginxx::ui::parseBlocks(Json::parse(
+            R"({"items":[{"kind":"Control","id":"pwd","control":"password",
+                "label":"密码","help":"请输入密码"}]})"
+        ));
+        agentxx::client::initFormState(*form, items);
+
+        // 空值: help 作为输入框内的占位文本 (与文本控件一致), 不单起一行
+        agentxx::client::UiRenderResult res;
+        agentxx::client::renderItems(items, ctx, res);
+        XX_TEST_EXPECT_TRUE(screenHas(renderToText(res, 40), "请输入密码"));
+        XX_TEST_EXPECT_EQ(measuredLines(res), size_t{2}); // 标签行 + 输入框行
+        const auto* region = findRegion(res, "pwd");
+        XX_TEST_EXPECT_TRUE(region != nullptr);
+        if (region != nullptr) {
+            XX_TEST_EXPECT_EQ(region->kind, UiHitRegionKind::Form);
+            XX_TEST_EXPECT_EQ(region->w, 0); // 整行可点
+        }
+
+        // 有值时: 只显示打码圆点, 不出现明文
+        form->ensure("pwd").initialized = true;
+        form->ensure("pwd").edited      = true;
+        form->ensure("pwd").editText    = "s3cret";
+        agentxx::client::UiRenderResult res2;
+        agentxx::client::renderItems(items, ctx, res2);
+        const auto grid = renderToGrid(res2, 40, 4);
+        XX_TEST_EXPECT_FALSE(screenHas(grid, "s3cret"));
+        XX_TEST_EXPECT_TRUE(screenHas(grid, "••••••"));
+
+        // 键盘输入照常作用于输入框; 提交值回传明文 (插件需要真值)
+        XX_TEST_EXPECT_EQ(
+            agentxx::client::handleFormControlHit(items, *form, "pwd", 0, ctx),
+            agentxx::client::UiFormAction::Changed
+        );
+        XX_TEST_EXPECT_EQ(form->focusedId, std::string{"pwd"});
+        XX_TEST_EXPECT_TRUE(
+            agentxx::client::handleFormKeyInput(items, *form, ftxui::Event::Character('x'))
+        );
+        XX_TEST_EXPECT_TRUE(agentxx::client::handleFormKeyInput(items, *form, ftxui::Event::Backspace)
+        );
+        XX_TEST_EXPECT_TRUE(agentxx::client::handleFormKeyInput(items, *form, ftxui::Event::Character('y'))
+        );
+        XX_TEST_EXPECT_EQ(form->ensure("pwd").editText, std::string{"s3crety"});
+        auto values = agentxx::client::formValues(items, *form);
+        XX_TEST_EXPECT_EQ(values["values"].value("pwd", std::string{}), std::string{"s3crety"});
+    }
+
     // ---------------- 面积型分隔线 (面性弹窗) ----------------
     {
         auto ctx           = ctxFor(20);

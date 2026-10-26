@@ -419,7 +419,12 @@ TUI [F3] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
   - 本项目 TUI 支持的组件: `Text` / `Divider` / `Gap` / `Button` / `Block` / `Row` / `Column` /
     `Expanded` / `Spacer` / `SizedBox` / `Padding` / `Align` / `Collapse` / `KV` / `Table` /
     `Tree` / `Progress` / `Badge` / `Control` / `Markdown` / `Icon` / `Diff` / `Sparkline` /
-    `Diagram`；未实现的可选块（`Stack` / `Image` / `musicxx.Shader`）由适配降级
+    `Diagram` / `ListViewBase` / `ListView`；未实现的可选块（`Stack` / `Image` /
+    `musicxx.Shader`）由适配降级；控件形态支持 `buttons` / `select` / `checkbox` /
+    `switch` / `text` / `number` / `password`（password 与 text 同一套输入与派发,
+    界面打码、提交值仍为明文）
+  - 列表块 (`ListViewBase` / `ListView`) 在终端按项渲染（`list`/`grid`/`multiList` 三种布局,
+    项点击参数带 `index`/`itemId`，`menu`/`itemMenu` 与编辑动作排成按钮行，`height` 限高并提示剩余项）
   - 尺寸只有一个单位 u（GUI 1u = 1 逻辑像素；终端按能力段的 `cell` 换算成列/行），
     另有 `{"percent": n}` 与 `"auto"`；文本可带 i18n（`TextValue{key,fallback,args}`）
   - 降级: 未知 kind 渲染 `fallback`；行式前端 (CLI/日志) 用描述层的 `plainText` 输出纯文本

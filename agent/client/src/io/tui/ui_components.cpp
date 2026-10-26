@@ -14,6 +14,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <functional>
+#include <limits>
 #include <string>
 #include <tuple>
 #include <utility>
@@ -38,9 +39,10 @@ using utilxx_base::Json;
 /// TUI 实际支持的组件 (未列出的由 adapt 降级: Stack → 最后一个子节点 /
 /// Image → alt 文本 / musicxx.Shader → 跳过)
 constexpr std::string_view kTuiBlockNames[] = {
-    "Text",     "Divider",  "Gap",     "Button",   "Block",    "Row",  "Column",    "Expanded",
-    "Spacer",   "SizedBox", "Padding", "Align",    "Collapse", "KV",   "Table",     "Tree",
-    "Progress", "Badge",    "Control", "Markdown", "Icon",     "Diff", "Sparkline", "Diagram",
+    "Text",     "Divider",  "Gap",     "Button",  "Block",    "Row",   "Column",
+    "Expanded", "Spacer",   "SizedBox", "Padding", "Align",    "Collapse", "KV",
+    "Table",    "Tree",     "Progress", "Badge",   "Control",  "Markdown", "Icon",
+    "Diff",     "Sparkline", "Diagram", "ListViewBase", "ListView",
 };
 
 // ---------------------------------------------------------------------------
@@ -955,6 +957,23 @@ int inputFieldWidth(std::string_view value) {
     return std::max(4, pluginxx::ui::displayWidth(value) + 2);
 }
 
+/// 密码控件的显示文本: 每个码点换成一个圆点 (不回显内容, 与纯文本降级的打码意图一致)
+std::string maskedText(std::string_view text) {
+    size_t count = 0;
+    for (size_t i = 0; i < text.size(); ++i) {
+        // 非 UTF-8 继续字节 (0b10xxxxxx) 不计入字符数
+        if ((static_cast<unsigned char>(text[i]) & 0xC0U) != 0x80U) {
+            ++count;
+        }
+    }
+    std::string out;
+    out.reserve(count * 3U); // "•" 在 UTF-8 里是 3 字节
+    for (size_t i = 0; i < count; ++i) {
+        out += "•";
+    }
+    return out;
+}
+
 /// 输入框行 (整行: 左右各 1 格内边距 + 输入框底色, 与主消息输入框同一形态)
 ///
 /// - 占位文本取控件 help: 与主消息输入框一致 —— 值为空时显示, 一输入就隐藏
@@ -1010,6 +1029,20 @@ void addControlRegion(
 /// 点击语义仍是"提交/取消整份表单", 命中类型要按提交行登记)
 bool isFormSubmitAction(std::string_view id) {
     return id == kFormSubmitActionId || id == kFormCancelActionId;
+}
+
+/// 动作是否可点 (按钮、可点文本、列表项与菜单项共用同一判据)
+/// - 域内的提交/取消由主程序处理, 只要求提供了表单状态 (插件不必绑定动作处理器)
+/// - 其余动作要求快照里存在该插件的绑定; 未提供注册表快照时按可点处理
+///   (离屏渲染 / 测试场景没有快照)
+bool isActionable(std::string_view actionId, bool disabled, const UiRenderCtx& ctx) {
+    if (actionId.empty() || disabled) {
+        return false;
+    }
+    if (isFormSubmitAction(actionId)) {
+        return ctx.form != nullptr;
+    }
+    return ctx.registry == nullptr || hasPluginBinding(ctx.plugin, ctx.registry);
 }
 
 // ---------------------------------------------------------------------------
@@ -1105,6 +1138,444 @@ bool mergeTextButton(
     }
     out.rows.push_back(std::move(row));
     return true;
+}
+
+// ---------------------------------------------------------------------------
+// 列表块 (ListViewBase / ListView)
+// ---------------------------------------------------------------------------
+
+/// 列表项的点击参数: 在插件声明的 `args` 上补 `index` / `itemId` (端侧约定)
+/// - `itemId` 取 `ListItem.id` (为空时不写); 插件据此认出点了哪一项
+std::string listItemArgs(
+    const pluginxx::ui::Action&   action,
+    const pluginxx::ui::ListItem& entry,
+    size_t                        index
+) {
+    Json args = jsonOf(action.argsJson);
+    if (!args.is_object()) {
+        args = Json::object();
+    }
+    args["index"] = static_cast<int64_t>(index);
+    if (!entry.id.empty()) {
+        args["itemId"] = entry.id;
+    }
+    return args.dump();
+}
+
+/// 一排按钮的条目 (标签 + 动作; 动作 id 为空 = 只看不能点)
+struct ListButton {
+    std::string label;
+    std::string actionId;
+    std::string argsJson;
+};
+
+/// 渲染一排小按钮 (列表的菜单项 / 列表动作): 宽度不够时换行, 每行登记命中区域
+/// - `indentCols`: 每行左侧缩进 (选中项的"每项菜单"与该项标题对齐)
+Rows listButtonRows(
+    const std::vector<ListButton>& buttons,
+    const UiRenderCtx&             ctx,
+    int                            avail,
+    int                            indentCols = 0
+) {
+    Rows rows;
+    if (buttons.empty() || ctx.theme == nullptr) {
+        return rows;
+    }
+    const auto&              theme = *ctx.theme;
+    const int                lead  = std::max(0, indentCols);
+    std::vector<Element>     els;
+    std::vector<UiHitRegion> regions;
+    int                      x = lead;
+
+    auto flush = [&]() {
+        if (els.empty()) {
+            return;
+        }
+        Row row;
+        row.element = hbox(std::move(els));
+        row.lines   = 1;
+        row.regions = std::move(regions);
+        rows.push_back(std::move(row));
+        els     = {};
+        regions = {};
+        x       = lead;
+        if (lead > 0) {
+            els.push_back(text(spaces(lead)));
+        }
+    };
+    if (lead > 0) {
+        els.push_back(text(spaces(lead)));
+    }
+
+    for (const auto& button : buttons) {
+        const std::string& label = button.label;
+        const int          w     = buttonWidth(label);
+        // 换行判定: 本行已有按钮且放不下 (avail <= 0 = 不限宽, 不换行)
+        if (avail > 0 && x > lead && x + 1 + w > avail) {
+            flush();
+        }
+        if (x > lead) {
+            els.push_back(text(" "));
+            ++x;
+        }
+        els.push_back(buttonElement(label, "", "secondary", theme, false));
+        if (isActionable(button.actionId, false, ctx)) {
+            UiHitRegion region;
+            region.kind    = UiHitRegionKind::Action;
+            region.x       = x;
+            region.y       = 0;
+            region.w       = w;
+            region.h       = 1;
+            region.id      = button.actionId;
+            region.arg     = button.argsJson.empty() ? "{}" : button.argsJson;
+            region.plugin  = ctx.plugin;
+            region.ownerId = ctx.ownerId;
+            regions.push_back(std::move(region));
+        }
+        x += w;
+    }
+    flush();
+    return rows;
+}
+
+/// 列表布局
+enum class ListLayoutKind : uint8_t {
+    List      = 0, ///< 每项一行: 标记 + 标题 + 副标题 + 右侧文字
+    Grid      = 1, ///< 横向排格: 一格一项标题
+    MultiList = 2, ///< 多列列表: 列优先排列 (先填满第一列)
+};
+
+/// 布局取值: 显式声明的直接用, `auto` 按内容挑
+/// - 有副标题或右侧文字 → 列表 (一行一项才放得下)
+/// - 否则项够多且宽度够 → 网格; 其余为列表
+ListLayoutKind resolveListLayout(const Item& item, int avail, size_t count) {
+    if (item.layout == "grid") {
+        return ListLayoutKind::Grid;
+    }
+    if (item.layout == "multiList") {
+        return ListLayoutKind::MultiList;
+    }
+    if (item.layout == "list") {
+        return ListLayoutKind::List;
+    }
+    for (const auto& entry : item.items) {
+        if (!entry.subtitle.empty() || !entry.trailing.empty()) {
+            return ListLayoutKind::List;
+        }
+    }
+    if (count >= 6 && avail >= 40) {
+        return ListLayoutKind::Grid;
+    }
+    return ListLayoutKind::List;
+}
+
+/// 列表块 (ListViewBase / ListView) 的渲染
+///
+/// 终端表达方式 (与 GUI 的差别都在这里):
+/// - 项的 `image` / `icon` 是封面与 svg 图标, 终端不画 (插件应把要显示的信息写进
+///   `title` / `subtitle` / `trailing`)
+/// - `menu` 没有弹出层: 排成列表上方的一排按钮
+/// - `itemMenu` 只在 `selected` 的项下面展开成一排按钮 (终端没有长按/右键)
+/// - 编辑 / 加删 / 定位 / 刷新 / 加载更多 排成列表下方的一排按钮 (声明了才出现):
+///   终端不维护"编辑态", 点击只派发动作 (插件按自己的状态决定数据变化)
+/// - `height` = 列表最多占几行: 超出时截断并补一行 "还有 N 项"
+/// - `enableCheck` / `enableDrop` (多选与拖拽排序) 终端无法表达, 选中态只按
+///   `ListItem.selected` 的配色显示
+Row renderListBlock(const Item& item, const UiRenderCtx& ctx, UiRenderResult& out) {
+    const auto&       theme      = *ctx.theme;
+    const int         avail      = std::max(1, contentWidth(ctx));
+    const bool        card       = (item.variant != "plain");
+    const Insets      pad        = item.hasPadding ? insetsOf(item.padding) : Insets{};
+    const int         frame      = (card ? 2 : 0) + pad.left + pad.right;
+    const int         innerW     = std::max(1, avail - frame);
+    const bool        isListView = (item.kind == "ListView");
+    const UiRenderCtx childView  = childCtx(ctx, innerW, 0);
+
+    Rows body;
+    auto append = [&body](Rows sub) {
+        for (auto& row : sub) {
+            body.push_back(std::move(row));
+        }
+    };
+    // 子块适配: 库的 adapt 只下探 `children`, 列表的 header/footer/toolbar 在这里补一次
+    // (重复适配是幂等的; 保证渲染层只处理本端声明支持的组件)
+    auto adaptedBlocks = [](const std::vector<Item>& blocks) {
+        return blocks.empty() ? std::vector<Item>{} : adaptItems(blocks);
+    };
+
+    // 头部块 (任意组件; 逐行渲染)
+    append(renderChildren(adaptedBlocks(item.headerBlocks), childView, out));
+
+    // 工具条: 自定义块逐行显示, 菜单排成一排按钮 (终端没有"更多"弹出层)
+    if (isListView) {
+        append(renderChildren(adaptedBlocks(item.toolbar), childView, out));
+        std::vector<ListButton> menuButtons;
+        for (const auto& entry : item.menu) {
+            const std::string label = textOf(entry.title, ctx);
+            if (label.empty()) {
+                continue;
+            }
+            menuButtons.push_back(
+                ListButton{label, actionIdOf(entry.action), entry.action.argsJson}
+            );
+        }
+        append(listButtonRows(menuButtons, ctx, innerW));
+        if (item.showCount) {
+            Row row;
+            row.element = text(trf("ui.listCount", item.items.size())) | color(theme.hintColor)
+                          | theme.dim();
+            body.push_back(std::move(row));
+        }
+    }
+
+    if (item.items.empty()) {
+        std::string hint = textOf(item.emptyText, ctx);
+        if (hint.empty()) {
+            hint = std::string{tr("ui.listEmpty")};
+        }
+        Row row;
+        row.element = text(hint) | color(theme.hintColor) | theme.dim();
+        body.push_back(std::move(row));
+    } else {
+        // 一项的动作: 自己的优先, 否则用列表声明的 itemAction
+        auto actionOfItem = [&item](size_t index) -> const pluginxx::ui::Action& {
+            const auto& entry = item.items[index];
+            return entry.action.empty() ? item.itemAction : entry.action;
+        };
+        // 一项的命中区域 (w <= 0 = 延伸到行右边界)
+        auto itemRegions = [&](size_t index, int x, int w) {
+            std::vector<UiHitRegion> regions;
+            const auto&              action   = actionOfItem(index);
+            const std::string        actionId = actionIdOf(action);
+            if (!isActionable(actionId, false, ctx)) {
+                return regions;
+            }
+            UiHitRegion region;
+            region.kind    = UiHitRegionKind::Action;
+            region.x       = x;
+            region.y       = 0;
+            region.w       = w;
+            region.h       = 1;
+            region.id      = actionId;
+            region.arg     = listItemArgs(action, item.items[index], index);
+            region.plugin  = ctx.plugin;
+            region.ownerId = ctx.ownerId;
+            regions.push_back(std::move(region));
+            return regions;
+        };
+        // 列表布局: 一行一项
+        auto listLine = [&](size_t index) {
+            const auto&       entry = item.items[index];
+            const bool        sel   = entry.selected;
+            const std::string title = textOf(entry.title, ctx);
+            const std::string sub   = textOf(entry.subtitle, ctx);
+            const std::string trail = textOf(entry.trailing, ctx);
+            Elements          chunks;
+            chunks.push_back(
+                text(sel ? "▸ " : "  ") | color(sel ? theme.accentColor : theme.hintColor)
+            );
+            // 没有主标题时用副标题顶上 (终端不画封面)
+            Element head = text(title.empty() ? sub : title)
+                           | color(itemColor(sel ? "accent" : entry.tone, theme));
+            if (sel) {
+                head = head | bold;
+            }
+            chunks.push_back(std::move(head));
+            if (!title.empty() && !sub.empty()) {
+                chunks.push_back(text("  " + sub) | color(theme.hintColor) | theme.dim());
+            }
+            if (!trail.empty()) {
+                chunks.push_back(filler());
+                chunks.push_back(text(trail) | color(theme.hintColor));
+            }
+            Row row;
+            row.element = hbox(std::move(chunks));
+            row.lines   = 1;
+            row.regions = itemRegions(index, 0, 0);
+            return row;
+        };
+        // 网格/多列的一行: `indices` 按从左到右排
+        auto cellLine = [&](const std::vector<size_t>& indices, int cols) {
+            const int                cellW = std::max(4, innerW / std::max(1, cols));
+            Elements                 cells;
+            std::vector<UiHitRegion> regions;
+            int                      x = 0;
+            for (int c = 0; c < cols; ++c) {
+                const int w = (c + 1 == cols) ? std::max(1, innerW - x) : cellW;
+                if (c >= static_cast<int>(indices.size())) {
+                    cells.push_back(text(spaces(static_cast<size_t>(std::max(1, w)))));
+                    x += w;
+                    continue;
+                }
+                const size_t index   = indices[static_cast<size_t>(c)];
+                const auto&  entry   = item.items[index];
+                std::string  content = textOf(entry.title, ctx);
+                if (content.empty()) {
+                    content = textOf(entry.subtitle, ctx);
+                }
+                Element el = text(cellPadded(content, std::max(1, w - 1), "start"))
+                             | color(itemColor(entry.selected ? "accent" : entry.tone, theme));
+                if (entry.selected) {
+                    el = el | bold;
+                }
+                cells.push_back(std::move(el));
+                cells.push_back(text(" "));
+                for (auto& region : itemRegions(index, x, w)) {
+                    regions.push_back(std::move(region));
+                }
+                x += w;
+            }
+            Row row;
+            row.element = hbox(std::move(cells));
+            row.lines   = 1;
+            row.regions = std::move(regions);
+            return row;
+        };
+
+        // 每行显示的项数 (`items = 0` 表示菜单行等不占项的位置)
+        struct ItemLine {
+            Row    row;
+            size_t items = 0;
+        };
+        std::vector<ItemLine> itemLines;
+        const ListLayoutKind  layout = resolveListLayout(item, innerW, item.items.size());
+        if (layout == ListLayoutKind::List) {
+            for (size_t i = 0; i < item.items.size(); ++i) {
+                itemLines.push_back(ItemLine{listLine(i), 1});
+                // 选中项的每项菜单 (终端没有长按/右键, 只在选中项下面展开)
+                if (!isListView || item.itemMenu.empty() || !item.items[i].selected) {
+                    continue;
+                }
+                std::vector<ListButton> menuButtons;
+                for (const auto& entry : item.itemMenu) {
+                    const std::string label = textOf(entry.title, ctx);
+                    if (label.empty()) {
+                        continue;
+                    }
+                    menuButtons.push_back(ListButton{
+                        label,
+                        actionIdOf(entry.action),
+                        listItemArgs(entry.action, item.items[i], i)
+                    });
+                }
+                for (auto& row : listButtonRows(menuButtons, ctx, innerW, 2)) {
+                    itemLines.push_back(ItemLine{std::move(row), 0});
+                }
+            }
+        } else {
+            const size_t count = item.items.size();
+            if (layout == ListLayoutKind::Grid) {
+                const int maxCols = std::max(1, innerW / 16);
+                const int cols
+                    = static_cast<int>(std::min<size_t>(count, static_cast<size_t>(maxCols)));
+                for (size_t start = 0; start < count; start += static_cast<size_t>(cols)) {
+                    std::vector<size_t> indices;
+                    for (int c = 0; c < cols && start + static_cast<size_t>(c) < count; ++c) {
+                        indices.push_back(start + static_cast<size_t>(c));
+                    }
+                    itemLines.push_back(ItemLine{cellLine(indices, cols), indices.size()});
+                }
+            } else {
+                const int maxCols = std::max(1, innerW / 20);
+                const int cols
+                    = static_cast<int>(std::min<size_t>(count, static_cast<size_t>(maxCols)));
+                const size_t perCol
+                    = (count + static_cast<size_t>(cols) - 1) / static_cast<size_t>(cols);
+                for (size_t r = 0; r < perCol; ++r) {
+                    std::vector<size_t> indices;
+                    for (int c = 0; c < cols; ++c) {
+                        const size_t index = static_cast<size_t>(c) * perCol + r;
+                        if (index < count) {
+                            indices.push_back(index);
+                        }
+                    }
+                    if (indices.empty()) {
+                        continue;
+                    }
+                    itemLines.push_back(ItemLine{cellLine(indices, cols), indices.size()});
+                }
+            }
+        }
+
+        // 高度上限: height 表示列表最多占几行, 超出时截断 (预留一行放提示)
+        size_t capacity = std::numeric_limits<size_t>::max();
+        if (!item.height.isAuto()) {
+            const int declared = rowsOf(item.height, true);
+            if (declared > 0) {
+                capacity = static_cast<size_t>(declared);
+            }
+        }
+        const size_t budget
+            = (capacity != std::numeric_limits<size_t>::max() && capacity > 1) ? capacity - 1
+                                                                              : capacity;
+        size_t used       = 0;
+        size_t shownItems = 0;
+        for (auto& line : itemLines) {
+            const size_t lines = std::max<size_t>(1, line.row.lines);
+            if (used + lines > budget) {
+                break;
+            }
+            used += lines;
+            shownItems += line.items;
+            body.push_back(std::move(line.row));
+        }
+        if (shownItems < item.items.size() && used + 1 <= capacity) {
+            Row row;
+            row.element = text(trf("ui.listMore", item.items.size() - shownItems))
+                          | color(theme.hintColor) | theme.dim();
+            body.push_back(std::move(row));
+        }
+    }
+
+    // 列表动作按钮 (声明了哪个出现哪个): 终端不维护"编辑态", 点击只派发动作
+    if (isListView) {
+        std::vector<ListButton> actions;
+        auto addAction = [&](const pluginxx::ui::Action& action, std::string_view labelKey) {
+            const std::string actionId = actionIdOf(action);
+            if (actionId.empty()) {
+                return;
+            }
+            actions.push_back(ListButton{std::string{tr(labelKey)}, actionId, action.argsJson});
+        };
+        addAction(item.editAction, "ui.edit");
+        addAction(item.saveAction, "ui.save");
+        addAction(item.addAction, "ui.add");
+        addAction(item.removeAction, "ui.remove");
+        addAction(item.removeCheckedAction, "ui.removeChecked");
+        addAction(item.positionAction, "ui.locate");
+        addAction(item.refreshAction, "ui.refresh");
+        addAction(item.loadMoreAction, "ui.loadMore");
+        append(listButtonRows(actions, ctx, innerW));
+    }
+
+    // 尾部块
+    append(renderChildren(adaptedBlocks(item.footerBlocks), childView, out));
+
+    // 组合: 内边距 + 卡片边框 (与 Block 同一形态)
+    Row     inner = stackRows(body);
+    Element el    = std::move(inner.element);
+    if (pad.left > 0 || pad.right > 0) {
+        el = hbox({text(spaces(pad.left)), std::move(el), text(spaces(pad.right))});
+    }
+    for (int i = 0; i < pad.top; ++i) {
+        el = vbox({text(" "), std::move(el)});
+    }
+    for (int i = 0; i < pad.bottom; ++i) {
+        el = vbox({std::move(el), text(" ")});
+    }
+    if (card) {
+        el = std::move(el) | borderStyled(BorderStyle::LIGHT) | color(theme.hintColor);
+    }
+
+    Row row;
+    row.element = std::move(el);
+    row.lines   = inner.lines + static_cast<size_t>(pad.top + pad.bottom) + (card ? 2U : 0U);
+    const int dx = (card ? 1 : 0) + pad.left;
+    const int dy = (card ? 1 : 0) + pad.top;
+    for (const auto& region : inner.regions) {
+        row.regions.push_back(region.offsetBy(dx, dy));
+    }
+    return row;
 }
 
 Rows renderItemRows(const Item& item, const UiRenderCtx& ctx, UiRenderResult& out) {
@@ -1301,10 +1772,7 @@ Rows renderItemRows(const Item& item, const UiRenderCtx& ctx, UiRenderResult& ou
         // 域内的表单提交/取消动作由主程序处理 (插件不需要绑定动作处理器), 其余动作要求
         // 快照里存在该插件的绑定; 未提供表单状态时提交行只是展示, 不登记命中区域
         const bool formSubmit = isFormSubmitAction(actionId);
-        const bool actionable = !actionId.empty() && !item.disabled
-                                && (formSubmit ? (ctx.form != nullptr)
-                                               : (ctx.registry == nullptr
-                                                  || hasPluginBinding(ctx.plugin, ctx.registry)));
+        const bool actionable = isActionable(actionId, item.disabled, ctx);
         if (actionable) {
             UiHitRegion region;
             region.kind    = formSubmit ? UiHitRegionKind::FormSubmit : UiHitRegionKind::Action;
@@ -1345,6 +1813,11 @@ Rows renderItemRows(const Item& item, const UiRenderCtx& ctx, UiRenderResult& ou
     if (item.kind == "Tree") {
         auto row = renderTree(item, ctx);
         pushPlain(row.element, row.lines, std::move(row.regions));
+        return rows;
+    }
+    if (item.kind == "ListViewBase" || item.kind == "ListView") {
+        auto row = renderListBlock(item, ctx, out);
+        pushPlain(std::move(row.element), row.lines, std::move(row.regions));
         return rows;
     }
 
@@ -1652,9 +2125,10 @@ Rows renderItemRows(const Item& item, const UiRenderCtx& ctx, UiRenderResult& ou
         const std::string label       = textOf(item.label, ctx);
         const std::string help        = textOf(item.help, ctx);
         const bool        inlineLabel = (item.control == "checkbox" || item.control == "switch");
-        // 输入类控件 (text/number): help 作为输入框内的占位文本 (空值时显示),
+        // 输入类控件 (text/number/password): help 作为输入框内的占位文本 (空值时显示),
         // 不再单起一行说明 (与主消息输入框的占位行为一致)
-        const bool inputLike = (item.control == "text" || item.control == "number");
+        const bool inputLike
+            = (item.control == "text" || item.control == "number" || item.control == "password");
         if (!label.empty() && !inlineLabel) {
             pushPlain(text(label) | color(theme.accentColor) | bold, 1);
         }
@@ -1678,14 +2152,21 @@ Rows renderItemRows(const Item& item, const UiRenderCtx& ctx, UiRenderResult& ou
                 addControlRegion(regions, ctx, item, 0, 0, 0, 0);
             }
             pushPlain(std::move(el), 1, std::move(regions));
-        } else if (item.control == "text") {
+        } else if (item.control == "text" || item.control == "password") {
             // 整行输入框: 点击行内任意位置聚焦输入 (w = 0 表示延伸到行右边界)
+            // 密码控件同样是输入框, 只是显示文本打码 (占位文本仍用 help)
+            const std::string        value = controlEditText(item, ctx.form);
             std::vector<UiHitRegion> regions;
             if (interactive && !item.id.empty()) {
                 addControlRegion(regions, ctx, item, 0, 0, 0, 0);
             }
             pushPlain(
-                inputFieldRow(controlEditText(item, ctx.form), help, item, ctx),
+                inputFieldRow(
+                    item.control == "password" ? maskedText(value) : value,
+                    help,
+                    item,
+                    ctx
+                ),
                 1,
                 std::move(regions)
             );
@@ -2050,7 +2531,7 @@ UiFormAction handleFormControlHit(
         ++form.version;
         return UiFormAction::Changed;
     }
-    if (item->control == "text") {
+    if (item->control == "text" || item->control == "password") {
         if (!state.edited) {
             state.editText = defaultEditText(*item);
         }
@@ -2158,8 +2639,8 @@ bool handleFormKeyInput(
         }
         return false;
     }
-    // 输入类控件 (text / number)
-    if (item->control != "text" && item->control != "number") {
+    // 输入类控件 (text / number / password)
+    if (item->control != "text" && item->control != "number" && item->control != "password") {
         return false;
     }
     if (item->control == "number"
@@ -2290,7 +2771,7 @@ utilxx_base::Json formValues(const std::vector<pluginxx::ui::Item>& items, UiFor
                           } else {
                               values[item.id] = utilxx_base::Json(v);
                           }
-                      } else if (item.control == "text") {
+                      } else if (item.control == "text" || item.control == "password") {
                           values[item.id] = state.edited ? state.editText : defaultEditText(item);
                       }
                       // 未知控件形态不参与结果 (渲染为不可交互的诊断行)

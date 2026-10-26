@@ -38,14 +38,25 @@
 ## 2. 组件词汇与渲染支持
 
 组件全集、字段与枚举见库生成的 `docs/ui-schema.md`；本项目 TUI 实际支持的组件是
-`ui_components.cpp` 的 `kTuiBlockNames`（24 个）：
+`ui_components.cpp` 的 `kTuiBlockNames`（26 个）：
 
 `Text` / `Divider` / `Gap` / `Button` / `Block` / `Row` / `Column` / `Expanded` / `Spacer` /
 `SizedBox` / `Padding` / `Align` / `Collapse` / `KV` / `Table` / `Tree` / `Progress` / `Badge` /
-`Control` / `Markdown` / `Icon` / `Diff` / `Sparkline` / `Diagram`。
+`Control` / `Markdown` / `Icon` / `Diff` / `Sparkline` / `Diagram` / `ListViewBase` / `ListView`。
 
 客户端**没实现**的可选块不列进去，由适配自动降级：`Stack` → 最后一个子节点、
 `Image` → `alt` 文本、`musicxx.Shader`（musicxx 专属块）→ 跳过。
+
+列表块（`ListViewBase` / `ListView`）在终端的方式（`renderListBlock`，与 GUI 的差别都在这里）：
+
+- 项的 `image` / `icon` 是封面与 svg 图标，终端不画（要点信息应写进 `title` / `subtitle` / `trailing`）；
+- `layout`：`list` 一行一项（`▸ ` 标记 + 标题 + 副标题 + 右对齐的 trailing）、`grid` 横向排格、
+  `multiList` 多列且列优先；`auto` 按内容挑（有副标题或 trailing → 列表，否则项多且够宽 → 网格）；
+- `menu` 排成列表上方的一排按钮；`itemMenu` 只在 `selected` 的项下面展开（终端没有长按/右键）；
+  编辑/加删/定位/刷新/加载更多排成列表下方的一排按钮（声明了才出现）；
+- `height` = 列表最多占几行：超出时截断并补一行 “还有 N 项”；
+- 点某一项时参数里带 `index` 与该项的 `id`（`itemId`），插件不必自己维护序号对照表；
+- `enableCheck` / `enableDrop`（多选、拖拽排序）终端不表达，选中态只看 `ListItem.selected` 的配色。
 
 新增客户端只需要在渲染层加分支、**把组件名加进 `kTuiBlockNames`**（或将来 GUI 客户端的
 同名清单）——少声明只会让内容被降级，多声明会画不出来。
@@ -68,14 +79,14 @@ TUI 客户端上报的能力（`tuiUiCapabilities()`）与渲染前 `adaptItems`
 
 ```jsonc
 {
-  "apiVersion": 1,
+  "apiVersion": 2,
   "kind": "tui",
   "blocks": ["Text", "Divider", "…"],     // 实际支持（<= kTuiBlockNames）
-  "controls": ["buttons", "select", "checkbox", "switch", "text", "number"],
+  "controls": ["buttons", "select", "checkbox", "switch", "text", "number", "password"],
   "cell": { "width": 8, "height": 20 },   // 每个字符格相当于多少 u
   "gap": 12,                              // 默认行距
   "percent": true, "aspect": true,
-  "limits": { "maxDepth": 8, "maxItems": 512, "…": 0 }
+  "limits": { "maxDepth": 0, "maxItems": 0, "…": 0 }   // 0 = 不限制
 }
 ```
 
@@ -127,8 +138,8 @@ std::vector<pluginxx::ui::Item> adaptItems(const std::vector<pluginxx::ui::Item>
 - **库不提供"表单 + 提交"这一层**：控件只在**值变化时**派发自己的 `action`，
   客户端把 `{id, value}` 合并进参数（插件自己写的 `args` 保留，冲突以客户端补的为准）；
 - 动作 kind：`dispatch`（字符串短写即它）/ `route` / `command` / `none`；
-- 控件值类型：`checkbox`/`switch` → 布尔；`text` → 字符串；`number` → 数值；
-  `buttons`/`select` → 候选项原值；
+- 控件值类型：`checkbox`/`switch` → 布尔；`text`/`password` → 字符串（**password 只影响显示**：
+  输入框里打码成圆点，提交值仍是明文）；`number` → 数值；`buttons`/`select` → 候选项原值；
 - 控件状态由客户端维护（焦点、编辑中的文本、本地覆盖值、校验提示），不属于描述；
 - **本项目域内的"一起提交"**（面板 / overlay / 中断表单）由客户端自己实现：
   提交动作 id 是域内约定 `__submit` / `__cancel`（`middleware::kInterruptSubmitActionId`
@@ -164,7 +175,7 @@ CLI / 日志 / FFI 文本主程序走库的 `plainText`（`interruptUiPlainText`
 |---|---|
 | `ui_kit` | 扩展 kit 各组件加载结果、`env` 变体选择、能力矩阵下的适配收敛、dump→parse 往返 |
 | `ui_items` | 中断块 ↔ 组件项桥接、预设结构、纯文本降级、显示列宽 |
-| `tui_ui_items` | 组件渲染（含 `percent` / `aspect` / `Align` / `Spacer` / 折叠嵌套 / 表格自动列宽）、测量与布局一致、命中区域 |
+| `tui_ui_items` | 组件渲染（含 `percent` / `aspect` / `Align` / `Spacer` / 折叠嵌套 / 表格自动列宽 / 列表块三种布局与项动作 / 密码控件打码）、测量与布局一致、命中区域 |
 | 库自带单测 | 解析/往返/上限/适配规则/纯文本金文件（在库仓库跑） |
 
 ```bash
@@ -186,7 +197,9 @@ CLI / 日志 / FFI 文本主程序走库的 `plainText`（`interruptUiPlainText`
 `Progress` / `Badge` / `Control` / `Markdown`。
 
 可选（不实现就别写进 `blocks`，由适配降级）：`Icon`（GUI 用 `name`，不认识就用 `glyph`）、
-`Image`（取不到源用 `alt`）、`Stack`、`Diff`、`Sparkline`、`Diagram` 与客户端专属块。
+`Image`（取不到源用 `alt`）、`Stack`、`Diff`、`Sparkline`、`Diagram`、
+`ListViewBase` / `ListView`（列表块，GUI 里就是应用的列表组件：`layout` 四种形态、
+项点击传 `index`/`itemId`、`height`/`padding`、`menu`/`itemMenu` 与编辑动作）与客户端专属块。
 
 实现要点（与 TUI 一致，只是量纲换成像素）：
 

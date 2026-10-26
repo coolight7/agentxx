@@ -148,7 +148,10 @@
 本端声明支持的组件; 新增一种组件要改三处: 描述层库的 `schema/ui.def.json`
 (字段与适配规则) → 本端 `ui_components.cpp` (渲染 + 测量) → 能力表 `kTuiBlockNames`;
 行数估算走同一条渲染路径 (`measureItem`), 与真实布局高度一致 (见 3.1)。
-详见 [ui-layer.md](ui-layer.md)。
+列表块 (`ListViewBase` / `ListView`) 在终端按项渲染 (`list` / `grid` / `multiList` 三种布局,
+封面与图标不画, 菜单与编辑动作排成按钮行, `height` 超限时补一行“还有 N 项”); 控件 `password`
+与文本框共用输入与取值, 只是显示打码。两处的终端取舍与其余细节都记在
+[ui-layer.md](ui-layer.md) §2 / §7。
 
 - 行元素内的 `reflect` 反射框由元素的**自有节点** `OwnedReflect` 持有: 元素被搬进
   滚动容器/消息块缓存 (可能跨帧存活) 时 Box 不会随局部渲染结果析构而悬空;

@@ -226,7 +226,13 @@ path/to/agentxx_test string_util regex
 - **不要在渲染层写"我不支持谁"**: 由库的 `adapt(caps)` 统一降级（最多降到 `Text`）；未知 kind 走
   `fallback` 或跳过；超上限截断
 - 控件**值变化即派发**（客户端把 `{id, value}` 合并进参数）；"一组值一起提交"是本项目域内约定
-  (`__submit` / `__cancel`), 库不提供表单提交层
+  (`__submit` / `__cancel`), 库不提供表单提交层; 控件形态 `buttons`/`select`/`checkbox`/
+  `switch`/`text`/`number`/`password`（password 与 text 同一套输入与取值, 只显示打码）
+- 列表块 `ListViewBase` / `ListView`（库 2026-10 新增, 同时新增 `password` 控件）已在本端支持:
+  `layout` = list/grid/multiList/auto, 项点击动作参数补 `index` + `itemId`, `menu` 排成按钮行,
+  `itemMenu` 只在 `selected` 项下展开, 编辑/加删/刷新等动作排成按钮行, `height` 超限补"还有 N 项",
+  封面/图标终端不画（实现: `ui_components.cpp` 的 `renderListBlock`/`listButtonRows`）;
+  扩展 kit 已重生成, 插件可直接用 `agentxx::ui::kit::listItem/menuItem`
 - 相关测试模块: `ui_kit`（扩展 kit + 能力矩阵适配）、`ui_items`（中断桥接/纯文本）、
   `tui_ui_items`（渲染/测量/命中）
 - 将来的 GUI 客户端只需实现渲染 + 上报能力, 复用描述层/适配/kit; 清单见
