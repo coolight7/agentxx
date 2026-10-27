@@ -29,7 +29,7 @@
 | §2.8 `baseRun` 缺 `agentContext.lock()` 判空 | 已完成 | 补 `!agentCtxPtr || !middlewareHandleContext` 早退 |
 | §2.9 `messagesCount` / `messagesVersion` 线程约束 | 已完成 | `messagesVersion` 补 `assertIoThread()`（唯一调用方在 io 线程）；`messagesCount` 明确注释"可任意线程读近似值"（插件接口表在非 io 线程查询） |
 | §2.5 `ViewMessage::fromJson` 注释与实现 | 已完成 | `Role::Think` 一律构造子结构；两处注释改为"有子结构的 role 保证非空" |
-| §4.1 `agentxx_llm_uncensored` 描述不符 | 已完成 | 文件头注释、`kDefaultText` 注释、`PluginxxInfo.description`、`plugin.yaml`、`plugins.md`、仓库 `agentxx-config.yaml` 注释统一到"默认文本要求模型忽略内容安全策略" |
+| §4.1 `agentxx_llm_uncensored` 描述不符 | 已完成 | 文件头注释、`kDefaultText` 注释、`PluginxxInfo.description`、`plugin.yaml`、`plugins.md`、仓库 `agentxx-config.yaml` 注释统一到"默认文本要求模型忽略内容安全策略"；仓库配置里的 `enabled: true` 未改（属本机运行配置，改了会影响当前运行） |
 | §1.2 / §3.1 `index.md` 接口表数量 | 已完成 | 20 → 21，业务表清单补 `mount` |
 | §1.5 `index.md` wire 消息清单 | 已完成 | 改为"以 `wire-protocol-fields.md` 为准"+ 典型举例；补 `host_tool_*` 功能段与 add/remove model、rename session |
 | §5.1 `index.md` Tip 前缀 `#` | 已完成 | 去掉 `#` |
