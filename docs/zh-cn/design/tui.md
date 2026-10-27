@@ -906,6 +906,12 @@ UTF-8 字节按旧代码页解码 —— 中文整屏乱码, 且一个中文字�
 - 弹窗一律用 `tuiSurfacePopup/tuiSurfaceFrame/tuiSurfaceToast` 组装; 不要自行拼边框。
 - `bgcolor(ftxui::Color::Default)` 会把单元格背景重置为终端默认色 (抹掉父级背景),
   需要"不着色"时用 `UiActionStyle` 的默认值语义 (框架内部已跳过 Default)。
+- **工具失败只看 `ViewMessage::ToolData::hasError`**: 折叠头在失败时显示
+  `动词 · <失败结果首行>` 并用 `errorColor`, 展开时装饰/特化体回退为参数 + 结果
+  (结果用 `errorColor`); 唯一例外是中断占位文本 `[Interrupt]` (界面标记, 不是失败,
+  仍按警告色)。结果文本里出现 `[Error]` 字样但 `hasError` 为 false 时不变色
+  ([message_list.cpp](/agent/client/src/io/tui/components/message_list.cpp) 的
+  `isToolResultError`, 回归测试 `agentxx_test tui_tool_header`)。
 
 ### 3.5 客户端本地消息条数上限
 
