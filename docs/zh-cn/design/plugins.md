@@ -900,9 +900,11 @@ Agentxx 客户端采用统一的分层工具特化渲染机制，TUI 核心层�
      语义渲染缓存), 展开体保持主程序通用展示 (不提供 items)。
    - 匹配优先级低于插件注册项 (插件可为同名工具注册渲染器覆盖内置渲染)；
      内置项与进程同生命周期，不随插件禁用/卸载失效。
-   - 当前覆盖：`agentxx_share_store` → `Store` (`insert 152 lines → #7` / `get #7 [0, 100]` /
-     `set #7` / `delete #7`)、`agentxx_subagent` → `Subagent`
-     (`explorer · <任务首行>` / `4 tasks: explorer, coder, planner, ...`)。
+   - 当前覆盖：`agentxx_share_store` → `Store`，摘要形态 ` · [start, end] opt #id`，
+     其中**区间只有 `get` 展示**（`offset`/`limit` 只对它生效，如 `[0, 100] get #12` /
+     仅给 offset 时 `[40, ~] get #12`），`new`/`update` 为 `opt #id`（`new #7` / `update #3`；
+     `new` 的 id 取自结果 JSON，完成后才有，运行中只有 `new`）、`agentxx_subagent` →
+     `Subagent` (`explorer · <任务首行>` / `4 tasks: explorer, coder, planner, ...`)。
 3. **实例级工具装饰 (`update_tool_decor`)**：
    - 订阅 `EVT_DELTA` 的 `tool_start`/`tool_end` 后，按特定调用 `tool_call_id` 推送语义 JSON (优先级高于类型级渲染器)；
      典型实现见 `agentxx_planning` (Mermaid 状态图 + 动态待办列表)。

@@ -3035,7 +3035,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         agentxx::plugin::registerBuiltinToolRenderers(*mgr2);
         XX_TEST_EXPECT_EQ(mgr2->uiRegistrySnapshot()->builtinToolRenderers.size(), size_t{2});
 
-        // 28.3 share_store new: 操作 + 行数 + 新增 id (取自结果 JSON)
+        // 28.3 share_store new: 操作 + 新增 id (取自结果 JSON; 区间只有 get 才有)
         {
             auto res = co_await renderToolAsync(
                 mgr2,
@@ -3049,7 +3049,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             );
             XX_TEST_EXPECT_TRUE(res.matched);
             XX_TEST_EXPECT_EQ(res.displayName, "Store");
-            XX_TEST_EXPECT_EQ(res.summary, " · new 3 lines → #7");
+            XX_TEST_EXPECT_EQ(res.summary, " · new #7");
             XX_TEST_EXPECT_TRUE(res.items.empty()); ///< 展开体保持通用展示 (无 items)
         }
 
@@ -3066,10 +3066,10 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 100
             );
             XX_TEST_EXPECT_TRUE(res.matched);
-            XX_TEST_EXPECT_EQ(res.summary, " · new 2 lines");
+            XX_TEST_EXPECT_EQ(res.summary, " · new");
         }
 
-        // 28.5 get/set/delete: id 与行区间 (仅一侧时另一侧开放)
+        // 28.5 get/set/delete: 区间只有 get 展示; 操作与 id 依次排列 (仅一侧分页参数时另一侧开放)
         {
             auto getRes = co_await renderToolAsync(
                 mgr2,
@@ -3082,7 +3082,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 100
             );
             XX_TEST_EXPECT_EQ(getRes.displayName, "Store");
-            XX_TEST_EXPECT_EQ(getRes.summary, " · get #12 [0, 100]");
+            XX_TEST_EXPECT_EQ(getRes.summary, " · [0, 100] get #12");
 
             auto getOpen = co_await renderToolAsync(
                 mgr2,
@@ -3094,7 +3094,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 false,
                 100
             );
-            XX_TEST_EXPECT_EQ(getOpen.summary, " · get #12 [40, ~]");
+            XX_TEST_EXPECT_EQ(getOpen.summary, " · [40, ~] get #12");
 
             auto setRes = co_await renderToolAsync(
                 mgr2,
@@ -3106,7 +3106,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 false,
                 100
             );
-            XX_TEST_EXPECT_EQ(setRes.summary, " · update #3 2 lines");
+            XX_TEST_EXPECT_EQ(setRes.summary, " · update #3");
 
             // `delete` 操作已移除: 与其它未识别的 opt 一样原样展示 (不带 id 摘要)
             auto delRes = co_await renderToolAsync(
@@ -3281,7 +3281,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             );
             XX_TEST_EXPECT_TRUE(builtinOnly.matched);
             XX_TEST_EXPECT_EQ(builtinOnly.displayName, "Store");
-            XX_TEST_EXPECT_EQ(builtinOnly.summary, " · new 2 lines");
+            XX_TEST_EXPECT_EQ(builtinOnly.summary, " · new");
         }
 
         // 28.11 内置渲染器不受插件禁用/卸载影响 (进程级注册, 与插件生命周期无关)
@@ -3303,7 +3303,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 100
             );
             XX_TEST_EXPECT_TRUE(afterUnload.matched);
-            XX_TEST_EXPECT_EQ(afterUnload.summary, " · new 2 lines → #9");
+            XX_TEST_EXPECT_EQ(afterUnload.summary, " · new #9");
             XX_TEST_EXPECT_EQ(mgr2->uiRegistrySnapshot()->builtinToolRenderers.size(), size_t{2});
         }
     }

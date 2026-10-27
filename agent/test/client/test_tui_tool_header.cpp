@@ -1169,12 +1169,12 @@ void testTuiToolHeaderPendingRender() {
         std::string ready;
         for (int i = 0; i < 8; ++i) {
             ready = f.plainRender();
-            if (ready.find("Store · new 2 lines") != std::string::npos) {
+            if (ready.find("Store · new") != std::string::npos) {
                 break;
             }
             f.drainIo();
         }
-        XX_TEST_EXPECT_TRUE(ready.find("Store · new 2 lines") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(ready.find("Store · new") != std::string::npos);
         XX_TEST_EXPECT_TRUE(ready.find("agentxx_share_store") == std::string::npos);
     }
 
@@ -1194,24 +1194,24 @@ void testTuiToolHeaderPendingRender() {
         std::string running;
         for (int i = 0; i < 8; ++i) {
             running = f.plainRender();
-            if (running.find("Store · new 2 lines") != std::string::npos) {
+            if (running.find("Store · new") != std::string::npos) {
                 break;
             }
             f.drainIo();
         }
-        XX_TEST_EXPECT_TRUE(running.find("Store · new 2 lines") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(running.find("Store · new") != std::string::npos);
 
         // 结果到达, 本帧特化结果尚未算出 (不驱动 io): 头部保持上一份摘要
         f.finishLastTool(R"({"id":7})");
         const std::string endFrame = f.plainRender();
-        XX_TEST_EXPECT_TRUE(endFrame.find("Store · new 2 lines") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(endFrame.find("Store · new") != std::string::npos);
         XX_TEST_EXPECT_TRUE(endFrame.find("\"id\"") == std::string::npos);
         XX_TEST_EXPECT_TRUE(endFrame.find("agentxx_share_store") == std::string::npos);
 
         // 完成态的特化结果上屏: 摘要补上结果里的新 id (正常的内容更新, 不是空白帧)
         f.drainIo();
         const std::string done = f.plainRender();
-        XX_TEST_EXPECT_TRUE(done.find("Store · new 2 lines → #7") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(done.find("Store · new #7") != std::string::npos);
         XX_TEST_EXPECT_TRUE(done.find("agentxx_share_store") == std::string::npos);
     }
 
@@ -1601,7 +1601,7 @@ void testTuiToolHeaderDuration() {
 void testTuiToolHeaderBuiltin() {
     ToolHeaderFixture f;
 
-    // share_store new: 操作 + 行数 + 新增 id (取自结果 JSON)
+    // share_store new: 操作 + 新增 id (取自结果 JSON; 区间只有 get 才有)
     f.pushTool(
         "agentxx_share_store",
         R"({"opt":"new","text":"line1\nline2\nline3"})",
@@ -1609,9 +1609,9 @@ void testTuiToolHeaderBuiltin() {
         true,
         R"({"id":7})"
     );
-    XX_TEST_EXPECT_TRUE(f.render().find("Store · new 3 lines → #7") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(f.render().find("Store · new #7") != std::string::npos);
 
-    // share_store get: id + 行区间
+    // share_store get: 行区间 + 操作 + id
     f.pushTool(
         "agentxx_share_store",
         R"({"opt":"get","id":12,"offset":0,"limit":100})",
@@ -1619,7 +1619,7 @@ void testTuiToolHeaderBuiltin() {
         true,
         "content"
     );
-    XX_TEST_EXPECT_TRUE(f.render().find("Store · get #12 [0, 100]") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(f.render().find("Store · [0, 100] get #12") != std::string::npos);
 
     // share_store update
     f.pushTool(
@@ -1629,7 +1629,7 @@ void testTuiToolHeaderBuiltin() {
         true,
         "success"
     );
-    XX_TEST_EXPECT_TRUE(f.render().find("Store · update #3 2 lines") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(f.render().find("Store · update #3") != std::string::npos);
     // 已移除的 `delete` 与其它未识别的 opt 一样原样展示 (不带 id/行区间摘要)
     f.pushTool("agentxx_share_store", R"({"opt":"delete","id":3})", true, true, "success");
     XX_TEST_EXPECT_TRUE(f.render().find("Store · delete") != std::string::npos);
@@ -1661,7 +1661,8 @@ void testTuiToolHeaderBuiltin() {
     // 运行中 (未完成) 的 share_store: 无新增 id 后缀, 且显示名保持运行态高亮
     ToolHeaderFixture g;
     g.pushTool("agentxx_share_store", R"({"opt":"new","text":"a\nb"})", false);
-    XX_TEST_EXPECT_TRUE(g.plainRender().find("Store · new 2 lines") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(g.plainRender().find("Store · new") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(g.plainRender().find('#') == std::string::npos);
     XX_TEST_EXPECT_TRUE(g.render().find("102;204;255") != std::string::npos);
 }
 

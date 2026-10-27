@@ -98,12 +98,6 @@ std::string lineRangeText(int64_t offset, int64_t limit) {
     return fmt::format("[{}, {}]", offset, offset + limit);
 }
 
-/// 文本行数摘要 ("152 lines"; 空文本返回空串)
-std::string linesText(std::string_view text) {
-    const size_t lines = utilxx_base::countLines(text);
-    return (lines > 0) ? fmt::format("{} lines", lines) : std::string{};
-}
-
 /// 解析 `agentxx_share_store` insert 结果中的新内容 id (结果形如 {"id":3})
 /// - 非该形态/解析失败返回 0
 uint64_t shareStoreResultId(std::string_view result) {
@@ -136,10 +130,12 @@ std::string subagentTaskText(const utilxx_base::Json& args) {
     return messages[messages.size() - 1].value("content", std::string{});
 }
 
-/// `agentxx_share_store` 渲染: 显示名 "Store" + 操作摘要
-/// - new:    " · new 152 lines → #7" (id 取自结果 JSON, 完成后才有)
-/// - update: " · update #7 152 lines"
-/// - get:    " · get #7 [0, 100]" (offset/limit 只对 get 有效, 仅它展示区间)
+/// `agentxx_share_store` 渲染: 显示名 "Store" + 一行摘要, 形态 " · [start, end] opt #id"
+/// - get:    " · [0, 100] get #12" (仅给 offset 时 " · [40, ~] get #12";
+///           未给分页参数时 " · get #12")
+/// - new:    " · new" (运行中); 完成后补结果里的新 id → " · new #7"
+/// - update: " · update #3"
+/// - 区间只由 get 展示 (offset/limit 只对 get 生效; new/update 整段原样存储, 不带区间)
 /// - 未识别的 opt (协议扩展) 原样展示, 参数未就绪时仅提供显示名
 int32_t renderShareStore(const AgentxxToolRenderInput& in, RenderText& out) {
     out.displayName = std::string{kNameShareStore};
@@ -152,7 +148,6 @@ int32_t renderShareStore(const AgentxxToolRenderInput& in, RenderText& out) {
     const int64_t     id     = args->value<int64_t>("id", 0);
     const int64_t     offset = args->value<int64_t>("offset", -1);
     const int64_t     limit  = args->value<int64_t>("limit", -1);
-    const std::string text   = args->value("text", std::string{});
 
     std::string summary = " ·";
     auto        addPart = [&summary](std::string_view part) {
@@ -162,25 +157,19 @@ int32_t renderShareStore(const AgentxxToolRenderInput& in, RenderText& out) {
         }
     };
 
-    if (opt == "new") {
-        addPart("new");
-        addPart(linesText(text));
-        // new 的新增 id 只在结果里 (参数无 id), 完成后补 " → #7"
-        if (in.is_finished != 0) {
-            const uint64_t newId = shareStoreResultId(PluginStringView::str(in.result_text));
-            if (newId > 0) {
-                addPart(fmt::format("→ #{}", newId));
-            }
-        }
-    } else if (opt == "get" || opt == "update") {
-        addPart(opt);
-        if (id > 0) {
-            addPart(fmt::format("#{}", id));
-        }
+    if (opt == "new" || opt == "get" || opt == "update") {
         if (opt == "get") {
             addPart(lineRangeText(offset, limit));
-        } else {
-            addPart(linesText(text));
+        }
+        addPart(opt);
+
+        // id: get/update 来自参数; new 的新增 id 只在结果里 (参数无 id), 完成后才有
+        uint64_t shownId = (id > 0) ? static_cast<uint64_t>(id) : uint64_t{0};
+        if (opt == "new" && in.is_finished != 0) {
+            shownId = shareStoreResultId(PluginStringView::str(in.result_text));
+        }
+        if (shownId > 0) {
+            addPart(fmt::format("#{}", shownId));
         }
     } else if (!opt.empty()) {
         addPart(opt);
