@@ -895,6 +895,299 @@ typedef struct AgentxxPluginMountIface {
     );
 } AgentxxPluginMountIface;
 
+/* ==================== 接口表: 会话运行时 (agentxx.agent.runtime) ==================== */
+
+/// 会话运行时: 让插件挂载自己的根 agent, 并在上面开关会话通道
+///
+/// 为什么需要这张表: 插件要"换一整套人设/工具集/插件挂载"只能在 `AgentConfig`
+/// 级说, 会话级表达不了; 而插件实例全程只有一份 (`create`/`start` 各一次),
+/// 所以它不是"再加载一次插件", 而是**把自己的根挂到现有容器上**。
+///
+/// 概念的三个层次:
+/// - **根 (root)**: 挂到容器的根 agent, 各自一份 `AgentConfig` (提示词/白名单/挂载);
+/// - **通道 (channel)**: 一个 `sessionId` 的驱动通道 (输入/事件/中断/状态);
+/// - **触发器 (trigger) / 定时器 (timer)**: 把事件或时间转成通道输入。
+///
+/// 边界: 本表用句柄寻址 (`root_id` / `channel_id`), 因此**不带** agent 引用参数 ——
+/// 它是容器级接口, 不是"当前 agent"接口。`root_id` 与该根的 `agentId` 是同一个值,
+/// 需要 agent 级操作 (查挂了哪些插件等) 时直接当 agentId 用。
+#define AGENTXX_PLUGIN_IFACE_AGENT_RUNTIME             "agentxx.agent.runtime"
+#define AGENTXX_PLUGIN_IFACE_AGENT_RUNTIME_VERSION     1
+#define AGENTXX_PLUGIN_IFACE_AGENT_RUNTIME_MIN_VERSION 1
+/* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
+#define AGENTXX_PLUGIN_IFACE_AGENT_RUNTIME_BASELINE_SIZE sizeof(AgentxxPluginRuntimeIface)
+
+/* ---- 返回码 (本表全部入口) ---- */
+#define AGENTXX_PLUGIN_RUNTIME_OK              0
+#define AGENTXX_PLUGIN_RUNTIME_ERR_ARG        (-1) ///< 参数非法 (配置派生失败/字段越界)
+#define AGENTXX_PLUGIN_RUNTIME_ERR_STATE      (-2) ///< 状态错误 (未就绪/关闭中/挂载中)
+#define AGENTXX_PLUGIN_RUNTIME_ERR_NOT_FOUND  (-3) ///< root/channel/trigger id 不存在
+#define AGENTXX_PLUGIN_RUNTIME_ERR_BUDGET     (-4) ///< 超预算 (根数/通道数/触发器数)
+#define AGENTXX_PLUGIN_RUNTIME_ERR_CONFLICT   (-5) ///< (存储根, sessionId) 已被占用
+#define AGENTXX_PLUGIN_RUNTIME_ERR_UNSUPPORTED (-6) ///< 主程序未提供运行时能力
+#define AGENTXX_PLUGIN_RUNTIME_ERR_FAILED     (-7) ///< 执行失败 (init 失败/内部错误)
+
+/// 通道事件类型 (回调的 `kind` 取值)
+///
+/// 顺序是有意义的: 新增类型只能追加在 `AGENTXX_PLUGIN_CHANNEL_EVT_COUNT` 之前。
+typedef enum AgentxxPluginChannelEventKind {
+    AGENTXX_PLUGIN_CHANNEL_EVT_READY = 0, ///< 通道可用 (payload 带 rootId/sessionId/model)
+    AGENTXX_PLUGIN_CHANNEL_EVT_TURN_START, ///< 一轮开始 (text = 用户输入回显)
+    AGENTXX_PLUGIN_CHANNEL_EVT_DELTA_TEXT, ///< 正文增量 (text)
+    AGENTXX_PLUGIN_CHANNEL_EVT_DELTA_THINKING, ///< 思考增量 (text)
+    AGENTXX_PLUGIN_CHANNEL_EVT_TOOL_START,     ///< 工具开始
+    AGENTXX_PLUGIN_CHANNEL_EVT_TOOL_END,       ///< 工具结束
+    AGENTXX_PLUGIN_CHANNEL_EVT_GEN_STATUS,     ///< 生成阶段 (waiting/tool_call/done)
+    AGENTXX_PLUGIN_CHANNEL_EVT_TURN_END,       ///< 一轮结束 (text = 最终回答)
+    AGENTXX_PLUGIN_CHANNEL_EVT_CONTEXT_STATS,  ///< 上下文统计与累计用量
+    AGENTXX_PLUGIN_CHANNEL_EVT_INPUT_ACK,      ///< 输入受理回执
+    AGENTXX_PLUGIN_CHANNEL_EVT_QUEUE_STATE,    ///< 队列状态
+    AGENTXX_PLUGIN_CHANNEL_EVT_INTERRUPT,      ///< 需要人工答复 (interrupt_id + payload)
+    AGENTXX_PLUGIN_CHANNEL_EVT_INTERRUPT_EXPIRED, ///< 询问已过期
+    AGENTXX_PLUGIN_CHANNEL_EVT_TIP,               ///< 提示 (错误/警告文本)
+    AGENTXX_PLUGIN_CHANNEL_EVT_ERROR,             ///< 运行时错误 (payload.code/message)
+    AGENTXX_PLUGIN_CHANNEL_EVT_CLOSED,            ///< 通道已关闭 (回调的最后一条)
+    AGENTXX_PLUGIN_CHANNEL_EVT_COUNT
+} AgentxxPluginChannelEventKind;
+
+/// 一条通道事件
+///
+/// - 字符串都是**借用视图**, 只在回调期间有效; 要留着就自己拷
+/// - `payload_json` 的形状见插件设计文档"通道事件载荷"一节
+/// - `struct_size` 由主程序填 `sizeof(...)`; 以后追加字段时插件先判长度
+typedef struct AgentxxPluginChannelEvent {
+    uint32_t struct_size; ///< 本结构体字节数; 0 = 基线布局
+    int32_t  kind;        ///< AgentxxPluginChannelEventKind
+    int64_t  channel_id;
+    int64_t  interrupt_id;         ///< 仅 INTERRUPT / INTERRUPT_EXPIRED 有效
+    PluginxxStringView text;         ///< 增量 / 回显 / 最终回答 / 提示
+    PluginxxStringView payload_json; ///< 结构化载荷
+} AgentxxPluginChannelEvent;
+
+/* 基线: 重置时 = 完整布局; 以后追加字段保持不变 (改为 offsetof(第一个追加字段)) */
+#define AGENTXX_PLUGIN_CHANNEL_EVENT_BASELINE_SIZE sizeof(AgentxxPluginChannelEvent)
+
+/// 通道事件回调 (**在该根所属 io 线程上调用, 必须快速返回**)
+/// - 不得在此同步阻塞 (等待网络/人工答复): 整个进程的会话都在这条线程上
+/// - 事件只在回调期间有效
+/// - 通道关闭时最后一条必为 `AGENTXX_PLUGIN_CHANNEL_EVT_CLOSED`
+/// - `user_data` 为 [AgentxxPluginChannelSpec::user_data]
+typedef void(PLUGINXX_CALL* AgentxxPluginChannelEventFn)(
+    void*                            user_data,
+    const AgentxxPluginChannelEvent* event
+);
+
+/// 挂载一个根 agent (带自己的配置)
+typedef struct AgentxxPluginMountRootSpec {
+    uint32_t struct_size; ///< sizeof(AgentxxPluginMountRootSpec); 0 = 基线布局
+    /// 展示名 (也用于生成 root id: "qq" → "ext:qq:1")
+    PluginxxStringView name;
+    /// `AgentConfig` 覆盖 JSON (字段与规则见设计文档"根配置"一节)
+    /// - 空 = 只用派生默认值 (输出为 coding 人设)
+    /// - 应在里面显式给 `prompt.systemPrompt`
+    PluginxxStringView config_json;
+    /// 该根的插件挂载策略 JSON (与 yaml `plugin.mount` 同构):
+    /// `{"mode":"none|all|listed","list":["agentxx_filesystem"],"args":{...}}`
+    /// - 空 = `none`: 根只有内置工具 (share_store / subagent / git_worktree)
+    /// - 要文件/命令工具就必须给 `listed` (或 `all`)
+    PluginxxStringView mount_plugins;
+    /// 0 = 创建者插件**不**挂到该根 (默认, 切断递归);
+    /// 1 = 挂 (想让根也能调本插件的工具时, 配合 `mount_plugins` 使用)
+    int32_t include_creator;
+    int32_t _reserved;
+} AgentxxPluginMountRootSpec;
+
+/* 基线: 重置时 = 完整布局; 以后追加字段保持不变 (改为 offsetof(第一个追加字段)) */
+#define AGENTXX_PLUGIN_MOUNT_ROOT_SPEC_BASELINE_SIZE sizeof(AgentxxPluginMountRootSpec)
+
+/// 打开一个会话通道 (绑定某个根)
+typedef struct AgentxxPluginChannelSpec {
+    uint32_t struct_size; ///< sizeof(AgentxxPluginChannelSpec); 0 = 基线布局
+    int32_t  _reserved;
+    /// 根 id (必需; `mount_root` 返回的那个)
+    PluginxxStringView root_id;
+    /// 会话 id
+    /// - 空 = 框架生成
+    /// - 非空时 **(会话存储根, sessionId)** 在进程内必须唯一: 两个通道驱动同一个
+    ///   会话会静默互盖数据, 因此撞了直接拒
+    PluginxxStringView session_id;
+    /// 会话标题 (可空)
+    PluginxxStringView title;
+    /// 初始模型 (可空 = 用根的默认模型)
+    PluginxxStringView model;
+    /// 输入队列上限 (0 = 默认 100)
+    int32_t max_queue;
+    int32_t _reserved2;
+    /// 中断等待上限 (毫秒; 0 = 不限; >0 = 到点按取消应答)
+    int64_t interrupt_timeout_ms;
+    /// 事件回调 (必需)
+    AgentxxPluginChannelEventFn on_event;
+    void*                        user_data;
+} AgentxxPluginChannelSpec;
+
+/* 基线: 重置时 = 完整布局; 以后追加字段保持不变 (改为 offsetof(第一个追加字段)) */
+#define AGENTXX_PLUGIN_CHANNEL_SPEC_BASELINE_SIZE sizeof(AgentxxPluginChannelSpec)
+
+/* ---- 触发器投递策略 ---- */
+#define AGENTXX_PLUGIN_TRIGGER_POLICY_QUEUE        0 ///< 每条立即投 (会话队列保证串行)
+#define AGENTXX_PLUGIN_TRIGGER_POLICY_COALESCE     1 ///< 窗口内合并成一条
+#define AGENTXX_PLUGIN_TRIGGER_POLICY_DROP_IF_BUSY 2 ///< 通道在忙时丢弃
+
+/// 登记一个触发器 (订阅一个主题, 按策略转成通道输入)
+typedef struct AgentxxPluginTriggerSpec {
+    uint32_t struct_size; ///< sizeof(AgentxxPluginTriggerSpec); 0 = 基线布局
+    int32_t  policy;      ///< AGENTXX_PLUGIN_TRIGGER_POLICY_*
+    /// COALESCE 的合并窗口 (毫秒; 0 = 默认 300)
+    int32_t debounce_ms;
+    /// 合并后待投递上限 (0 = 默认 20)
+    int32_t max_queue;
+    int32_t _reserved;
+    /// 主题 (不以 `plugin.` / `client.` 开头时自动补 `plugin.`)
+    PluginxxStringView topic;
+    int64_t            channel_id;
+    /// 投递模式 (空 = next-turn; 另见 next-step / inject / collect)
+    PluginxxStringView delivery;
+} AgentxxPluginTriggerSpec;
+
+/* 基线: 重置时 = 完整布局; 以后追加字段保持不变 (改为 offsetof(第一个追加字段)) */
+#define AGENTXX_PLUGIN_TRIGGER_SPEC_BASELINE_SIZE sizeof(AgentxxPluginTriggerSpec)
+
+/// 登记一个定时触发 (一次性或周期)
+typedef struct AgentxxPluginTimerSpec {
+    uint32_t struct_size; ///< sizeof(AgentxxPluginTimerSpec); 0 = 基线布局
+    int32_t  policy;      ///< AGENTXX_PLUGIN_TRIGGER_POLICY_* (默认 DROP_IF_BUSY)
+    int64_t  channel_id;
+    /// 首次触发延迟 (毫秒; 相对时间, 不用绝对时间戳以免各进程时钟不一致)
+    int64_t first_delay_ms;
+    /// 周期间隔 (毫秒; 0 = 一次性)
+    int64_t interval_ms;
+    /// 投递的输入 JSON (形状同 `send_input`)
+    PluginxxStringView input_json;
+} AgentxxPluginTimerSpec;
+
+/* 基线: 重置时 = 完整布局; 以后追加字段保持不变 (改为 offsetof(第一个追加字段)) */
+#define AGENTXX_PLUGIN_TIMER_SPEC_BASELINE_SIZE sizeof(AgentxxPluginTimerSpec)
+
+typedef struct AgentxxPluginRuntimeIface {
+    int32_t  version; ///< 主程序填 AGENTXX_PLUGIN_IFACE_AGENT_RUNTIME_VERSION
+    uint32_t struct_size;
+
+    /* ---- 根 agent ---- */
+
+    /// 挂载一个带自己配置的根 (异步 init, 返回即拿到 id)
+    ///
+    /// - 只能在 `start` (或其它容器级时机) 调用; **在 `mount` 回调里调用返回
+    ///   `ERR_STATE`** —— 否则新根又要挂载一次, 形成无限嵌套
+    /// - 配置非法返回 `ERR_ARG` (日志给出具体字段); 超根数上限返回 `ERR_BUDGET`;
+    ///   主程序没有容器 (未 attach) 返回 `ERR_UNSUPPORTED`
+    /// - 新根由主程序强注入容器那份插件管理器, 按 `mount_plugins` 策略挂载已加载的插件
+    /// - init 完成前对该根 `open_channel` 会排队, 就绪后自动继续
+    /// - `out_root_id`: 框架分配的 id (= 该根的 agentId; `host->alloc`)
+    int32_t(PLUGINXX_CALL* mount_root)(
+        const PluginxxHost*               host,
+        const AgentxxPluginMountRootSpec* spec,
+        PluginxxString*                   out_root_id
+    );
+
+    /// 卸载根 (其下通道先全部关闭, 不等待收尾)
+    /// - 内置根、别的实例的根、已卸载的 id 都返回 `ERR_NOT_FOUND`
+    int32_t(PLUGINXX_CALL* unmount_root)(
+        const PluginxxHost*       host,
+        const PluginxxStringView* root_id
+    );
+
+    /* ---- 会话通道 ---- */
+
+    /// 打开通道 (异步就绪; 就绪后回调收到 `EVENT_READY`)
+    /// - 同一个 `sessionId` 开两个通道返回 `ERR_CONFLICT`
+    /// - 超每根通道数上限返回 `ERR_BUDGET`
+    int32_t(PLUGINXX_CALL* open_channel)(
+        const PluginxxHost*             host,
+        const AgentxxPluginChannelSpec* spec,
+        int64_t*                        out_channel_id
+    );
+
+    /// 关闭通道 (不等待; 回调最后一条是 `EVENT_CLOSED`)
+    int32_t(PLUGINXX_CALL* close_channel)(const PluginxxHost* host, int64_t channel_id);
+
+    /* ---- 输入与控制 ---- */
+
+    /// 投递一条输入 (输入 JSON: `{"text","attachments","model","delivery"}`)
+    int32_t(PLUGINXX_CALL* send_input)(
+        const PluginxxHost*       host,
+        int64_t                   channel_id,
+        const PluginxxStringView* input_json
+    );
+
+    /// 取消通道当前轮次
+    int32_t(PLUGINXX_CALL* cancel)(const PluginxxHost* host, int64_t channel_id);
+
+    /// 切换通道的模型
+    int32_t(PLUGINXX_CALL* select_model)(
+        const PluginxxHost*       host,
+        int64_t                   channel_id,
+        const PluginxxStringView* model_name
+    );
+
+    /// 应答一个中断 (values_json 必须是 `{"values":{...}}` 对象形态)
+    int32_t(PLUGINXX_CALL* respond_interrupt)(
+        const PluginxxHost*       host,
+        int64_t                   channel_id,
+        int64_t                   interrupt_id,
+        const PluginxxStringView* values_json
+    );
+
+    /* ---- 查询 ---- */
+
+    /// 通道状态 JSON (不含消息正文)
+    int32_t(PLUGINXX_CALL* get_channel_state)(
+        const PluginxxHost* host,
+        int64_t             channel_id,
+        PluginxxString*     out_json
+    );
+
+    /// 通道会话的 LLM 上下文 (JSON 数组文本; `host->alloc`)
+    int32_t(PLUGINXX_CALL* get_context_messages)(
+        const PluginxxHost* host,
+        int64_t             channel_id,
+        PluginxxString*     out_json
+    );
+
+    /// 运行时清单: `[{"rootId","name","state","configSummary":{...},"channels":[...]}]`
+    int32_t(PLUGINXX_CALL* list_runtime)(const PluginxxHost* host, PluginxxString* out_json);
+
+    /* ---- 事件驱动 ---- */
+
+    /// 登记触发器
+    int32_t(PLUGINXX_CALL* register_trigger)(
+        const PluginxxHost*             host,
+        const AgentxxPluginTriggerSpec* spec,
+        int64_t*                        out_trigger_id
+    );
+
+    /// 注销触发器
+    int32_t(PLUGINXX_CALL* unregister_trigger)(const PluginxxHost* host, int64_t trigger_id);
+
+    /// 发布一条事件 (任意线程, 立即返回)
+    int32_t(PLUGINXX_CALL* emit_event)(
+        const PluginxxHost*       host,
+        const PluginxxStringView* topic,
+        const PluginxxStringView* payload_json
+    );
+
+    /* ---- 定时触发 ---- */
+
+    /// 登记定时器
+    int32_t(PLUGINXX_CALL* register_timer)(
+        const PluginxxHost*           host,
+        const AgentxxPluginTimerSpec* spec,
+        int64_t*                      out_timer_id
+    );
+
+    /// 注销定时器
+    int32_t(PLUGINXX_CALL* unregister_timer)(const PluginxxHost* host, int64_t timer_id);
+} AgentxxPluginRuntimeIface;
+
 #pragma pack(pop)
 
 #ifdef __cplusplus

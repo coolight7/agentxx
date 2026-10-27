@@ -9,8 +9,8 @@
 |---|---|---|
 | 一 | 统一启动壳 `AgentSessionRuntime`（FFI 先接，CLI 第二步） + `parseUserInputJson` + `EmbeddedClientAgentIO` | **已完成** |
 | 二 | `AgentHost` 多根（内置根 + 挂载根）+ 会话占用表 | **已完成** |
-| 三 | 运行时接口表 `agentxx.agent.runtime`（挂根 / 通道 / 输入 / 事件 / 中断） | 进行中 |
-| 四 | 事件驱动：触发器（QUEUE/COALESCE/DROP_IF_BUSY） + 定时器 | 未开始 |
+| 三 | 运行时接口表 `agentxx.agent.runtime`（挂根 / 通道 / 输入 / 事件 / 中断） | **已完成** |
+| 四 | 事件驱动：触发器（QUEUE/COALESCE/DROP_IF_BUSY） + 定时器 | **已完成** |
 | 五 | 会话级提示词来源（`PromptSectionSlot::Base`，可选） | 未开始 |
 | 六 | 文档与示例插件 `agent/plugins/example_runtime` | 未开始 |
 
@@ -70,27 +70,63 @@
 
 回归：`plugin_host_mount` 146 / `plugin_multi_mount` 47 / `plugin_multi_instance` 80 / `plugin_cleanup` 99 / `plugin_runtime` 736 / `boundaries` 19 / `session_runtime` 55，全部 failed=0。
 
-## 阶段三：运行时接口表
+## 阶段三：运行时接口表（已完成）
 
 | 文件 | 动作 | 状态 |
 |---|---|---|
-| `agent/lib/include/agentxx/plugin/api/plugin_api.h` | `agentxx.agent.runtime` 表 + 错误码 + 通道事件 + spec | 未开始 |
-| `agent/lib/include/agentxx/plugin/api/plugin_iface_meta.h` | `IfaceMeta<AgentxxPluginRuntimeIface>` | 未开始 |
-| `agent/lib/include/agentxx/plugin/api/plugin_kit.h` | `AgentIfaces.runtime` + SDK（mountRoot/openChannel/sendInput/…） | 未开始 |
-| `agent/lib/include/agentxx/plugin/runtime_state.h` | 新增：根 / 通道 / 触发器记账 | 未开始 |
-| `agent/lib/src/plugins/plugin_manager_runtime.cpp` | 挂根 / 开关通道 / 输入 / 查询 / 事件汇 | 未开始 |
-| `agent/lib/src/plugins/plugin_manager_runtime_config.cpp` | `config_json` → `AgentConfig` 派生 + `mount_plugins` 解析 | 未开始 |
-| `agent/lib/src/plugins/plugin_manager_vtable.cpp` | 16 个入口 + `query_interface` 分支 | 未开始 |
-| `agent/lib/src/plugins/plugin_manager_lifecycle.cpp` | 禁用/卸载摘运行时 | 未开始 |
-| `agent/test/core/test_boundaries.cpp` | 表数量 21 → 22 + 成员顺序台账 | 未开始 |
-| `agent/test/plugin/test_plugin_agent_runtime.cpp` | 新增模块（04 §4.4 的 12 条） | 未开始 |
+| `agent/lib/include/agentxx/plugin/api/plugin_api.h` | `agentxx.agent.runtime`（v1/min1/基线 sizeof）+ 8 个错误码 + 16 类通道事件 + 4 个 spec + 3 个策略常量 + 16 个入口 | 完成 |
+| `agent/lib/include/agentxx/plugin/api/plugin_iface_meta.h` | `IfaceMeta<AgentxxPluginRuntimeIface>` + 两条 static_assert | 完成 |
+| `agent/lib/include/agentxx/plugin/api/plugin_spec.h` | 4 个 spec 的 `AGENTXX_DECLARE_SPEC_BASELINE` | 完成 |
+| `agent/lib/include/agentxx/plugin/runtime_state.h` | 新增：`RuntimeRoot`/`RuntimeChannel`/`RuntimeTrigger`/`RuntimeTimer` + 预算常量；`RuntimeRoot::sessionKey()` | 完成 |
+| `agent/lib/src/plugins/plugin_manager_runtime.cpp` | 挂根 / 卸载根 / 开通道 / 启动通道 / 排队冲刷 / 关通道 / 输入与控制 / 查询 / 按归属回收 | 完成 |
+| `agent/lib/src/plugins/plugin_manager_runtime_config.cpp` | `config_json` → `AgentConfig` 派生（继承开关 + 会话目录 `{宿主根}/{rootId}`）+ `mount_plugins` 解析 | 完成 |
+| `agent/lib/src/plugins/plugin_channel_agent_io.{h,cpp}` | 通道端点：wire 事件 → 通道事件（正文/思考/工具/生成阶段/提示/中断/回执/队列）+ 60ms 正文合批 | 完成 |
+| `agent/lib/src/plugins/plugin_manager_runtime_trigger.cpp` | 触发器（QUEUE/COALESCE/DROP_IF_BUSY）+ 定时器（一次性/周期）+ 背压上限 | 完成 |
+| `agent/lib/src/plugins/plugin_manager_vtable.cpp` | 16 个 `xx_runtime_*` 入口 + `query_interface` 分支（字符串视图拷成拥有型再投递） | 完成 |
+| `agent/lib/src/plugins/plugin_manager.h` | `kInterfaceTableCount = 10 + 12`；运行时段开放；`mountingDepth_`；前向声明 | 完成 |
+| `agent/lib/src/plugins/plugin_manager_lifecycle.cpp` | `mountAgentAsync` 里加 `MountDepthGuard`；禁用/卸载调 `releaseRuntimeOfOwner` | 完成 |
+| `agent/lib/src/agent/agent_host.cpp` | `createAgent` 把新建根的 `ioCtx` 换成容器这一条（否则根的 IO 线程没人 run）并重建总线 | 完成 |
+| `agent/test/core/test_boundaries.cpp` | 表数量 21 → 22 + 成员顺序台账 + 两处 Group expect 改 12 | 完成 |
+| `agent/test/plugin/test_plugin_agent_runtime.cpp` + 头 | 新增模块 `plugin_agent_runtime`（177 条断言） | 完成 |
 
-## 阶段四：事件驱动
+### 实现中发现并修掉的问题
+
+| 问题 | 原因 | 处理 |
+|---|---|---|
+| 根部会话卡死（READY 等不到） | `BaseAgent` 自建 `ioCtx`，容器只 run 自己那条；根的驱动循环没人推进 | `AgentHost::createAgent` 把根的 `ioCtx` 换成容器这一条并重建总线 |
+| `mount_root` 返回 OK 但 `out_root_id` 空 | vtable 入口用 `onInstanceIo`，没把 id 写回主程序堆字符串 | 改为 `ioCallSyncKeep` + `hostMemorySetString` |
+| 插件收不到 `EVENT_CLOSED` | `runtimeCloseChannelNow` 先把 `closed = true` 再交付，交付处对已关闭通道直接丢弃 | 先交付再置位 |
+| 通道没有正文增量（`DELTA_TEXT` 恒 0） | 合批关闭时 `TextToken` 落到 `emitDeltaEvent` 的 `default` 分支 | `emitDeltaEvent` 增加 `TextToken`/`ThinkToken` 分支；通道打开 60ms 合批 |
+| 触发器投递不生效 | `runtimeSendInput` 要求 `inst` 非空，内部投递传的是 `nullptr` | `inst` 为空视为内部投递（不做归属校验） |
+| 内存会话下不同根同名被误判冲突 | 无会话存储时 `storeRoot` 空，占用键退化成全局同名 | `RuntimeRoot::sessionKey()`：无存储时用根 id |
+| ASan heap-use-after-free（通道关闭后回调） | `notifyReady/notifyError/notifyClosed` 投递的闭包只捕 `this` | 改捕 `shared_from_this()` |
+
+### 验收（`plugin_agent_runtime`，177 条断言全绿）
+
+| 编号 | 用例 | 结果 |
+|---|---|---|
+| 1 | 表头版本/基线门槛；16 个入口存在 | 通过 |
+| 2 | 没有容器时 `mount_root` = `ERR_UNSUPPORTED` | 通过 |
+| 3 | 配置非法（非 JSON / 模型不存在 / 混入 `pluginMount` / `mount_plugins` 取值非法）逐条 `ERR_ARG`，容器不留根 | 通过 |
+| 4 | 挂根 → 开通道 → `READY`（payload 带 rootId/sessionId） | 通过 |
+| 5 | 根的提示词/工具白名单生效，内置会话配置一字未动 | 通过 |
+| 6 | 同 sessionId 第二通道 `ERR_CONFLICT`；换 id 可开；缺 `on_event`/未知根分别 `ERR_ARG`/`ERR_NOT_FOUND` | 通过 |
+| 7 | 输入 → `TURN_START`/`DELTA_TEXT`/`TURN_END`/`INPUT_ACK`；四类参数错误 | 通过 |
+| 8 | `list_runtime` / `get_channel_state` / `get_context_messages` 内容正确，缺通道返回失败 | 通过 |
+| 9 | 两根两通道事件互不串，各自提示词独立 | 通过 |
+| 10 | 超 `maxRoots` = `ERR_BUDGET` | 通过 |
+| 11 | 触发器 QUEUE / COALESCE（三条并一条）/ DROP_IF_BUSY（忙时丢弃 + 计数）；注销后不再投递 | 通过 |
+| 12 | 定时器一次性（触发后自动注销）/ 周期（多次触发，注销即停）；四类参数错误 | 通过 |
+| 13 | 关通道：`CLOSED` 恰一条、连带注销其触发器与定时器、会话占用释放可重开 | 通过 |
+| 14 | 卸载根：其通道全部关闭、根从容器消失、重复卸载 `ERR_NOT_FOUND` | 通过 |
+| 15 | 禁用插件：通道收到 `CLOSED`、根被回收、运行时清单清零 | 通过 |
+
+## 阶段四：事件驱动（已完成，随阶段三一起落地）
 
 | 文件 | 动作 | 状态 |
 |---|---|---|
-| `agent/lib/src/plugins/plugin_manager_runtime_trigger.cpp` | 触发器（队列/合并/丢弃）+ 定时器 | 未开始 |
-| `agent/test/plugin/test_plugin_agent_trigger.cpp` | 策略、窗口、定时器、禁用撤销 | 未开始 |
+| `agent/lib/src/plugins/plugin_manager_runtime_trigger.cpp` | 触发器三种策略 + 背压（64 条 / 8 KB）+ 定时器（一次性/周期，通道关闭即注销） | 完成 |
+| `agent/test/plugin/test_plugin_agent_runtime.cpp`（第 11、12 组） | 策略、合并窗口、忙时丢弃计数、一次性/周期定时器、参数校验 | 完成 |
 
 ## 阶段五：会话级提示词来源（可选）
 
@@ -111,6 +147,7 @@
 - 插件实例永远只有一份（`create`/`start` 各一次）；根只是"再挂载一次"，`mountRoot` 必须强注入宿主 `pluginHost_`。
 - 建根只能在 `start`；`mount` 回调期间调 `mount_root` → `ERR_STATE`；`include_creator` 默认 false。
 - 入口函数体不能 `co_await`（`ioCallSyncKeep` 在 io 线程直接执行），建/停一律"发起协程后返回"，结果走事件。
-- `(存储根, sessionId)` 独占是进程级：占用表挂 `AgentHost`，不能按插件实例建。
-- 通道 delta 重放缓冲设 0（`deltaBufferCap`），transport 队列容量保持默认。
+- `(存储根, sessionId)` 独占是进程级：占用表挂 `AgentHost`，不能按插件实例建；内存会话按根 id 区分（`RuntimeRoot::sessionKey`）。
+- 通道 delta 重放缓冲设 0（`deltaBufferCap`），transport 队列容量保持默认；正文回调按 60ms 合批。
 - FFI 侧保持"不让主程序代劳加载插件"的现有行为（`loadPluginsInHost=false`），避免启动顺序回归。
+- 新建根的 `ioCtx` 必须与容器一致（`AgentHost::createAgent` 已统一），否则根的 IO 线程无人 `run()`，通道永远等不到 `READY`。

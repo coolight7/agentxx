@@ -6,6 +6,7 @@
 #include "agentxx/plugin/plugin_framework.h"
 #include "agentxx/plugin/plugin_interfaces.h"
 #include "agentxx/plugin/plugin_mount.h"
+#include "agentxx/plugin/runtime_state.h"
 #include "agentxx/plugin/tool_registry.h"
 #include "agentxx/tools/tool.h"
 #include "asio/awaitable.hpp"
@@ -24,7 +25,9 @@
 namespace agentxx {
 namespace agent {
 class AgentContext;
-}
+class AgentHost;
+class BaseAgent;
+} // namespace agent
 namespace plugin {
 
 class PluginInstance;
@@ -157,11 +160,11 @@ public:
     /// 本主程序向插件提供的接口表数量 (文档里的数字有常量可校验)
     /// - 10 张通用表 (`pluginxx.*`, 由插件框架实现: log/json/config/plugins/events/
     ///   scheduler/coroutine_runtime/tasks/cancel/capabilities)
-    /// - 11 张 agent 业务表 (`agentxx.agent.*`: tools/permission/hooks/session/
-    ///   context/model/prompt/resources/graph/feature/mount)
+    /// - 12 张 agent 业务表 (`agentxx.agent.*`: tools/permission/hooks/session/
+    ///   context/model/prompt/resources/graph/feature/mount/runtime)
     /// - 增删接口表时同时更新本常量与 `docs/zh-cn/design/plugins.md` §8 与根 `AGENTS.md`
     ///   (测试模块 `boundaries` 会校验三者一致)
-    inline static constexpr size_t kInterfaceTableCount = 10 + 11;
+    inline static constexpr size_t kInterfaceTableCount = 10 + 12;
 
     /// 清单行 (诊断与界面展示; 主程序视图)
     struct PluginListView {
@@ -511,8 +514,167 @@ protected:
 
 private:
 
+    // 运行时入口由 vtable 层调用 (plugin_manager_vtable.cpp 里的 xx_runtime_*):
+    // 它们是自由函数, 因此这一段开放为 public, 但只对本文件所在库有意义 ——
+    // 插件拿不到 PluginManager 类型 (跨边界只有 C ABI)。
     friend class PluginInstance;
     friend class PluginMount;
+
+public:
+
+    // =====================================================================
+    // 会话运行时 (agentxx.agent.runtime): 根 / 通道 / 触发器 / 定时器
+    // =====================================================================
+    //
+    // 全部入口都在主程序 IO 线程执行 (vtable 层经 ioCallSyncKeep 投递), 因此
+    // 下面的记录不需要锁。插件禁用/卸载时按 owner 整批回收。
+    //
+    // 取容器的方式: 经主 agent 上下文里的 `host` 弱引用拿到 AgentHost (启动方
+    // 建容器时写入)。拿不到就是"本进程没有容器", 入口返回 ERR_UNSUPPORTED。
+
+    /// 本进程的 agent 容器 (没有则空)
+    std::shared_ptr<agent::AgentHost> runtimeHost() const;
+
+    // ---------------- 根 ----------------
+
+    /// 挂载一个带自己配置的根 (异步 init; 返回即拿到 id)
+    int32_t runtimeMountRoot(
+        PluginInstance*                   inst,
+        const AgentxxPluginMountRootSpec* spec,
+        std::string&                      outRootId,
+        std::string&                      err
+    );
+
+    /// 卸载根 (连带关闭其通道)
+    int32_t runtimeUnmountRoot(PluginInstance* inst, std::string_view rootId);
+
+    /// 把手里的根 id 解析成记录 (不存在或不是本实例的返回空)
+    RuntimeRoot* runtimeRootOf(const PluginInstance* inst, std::string_view rootId);
+
+    /// 建一个会话通道的记录 (尚未启动)
+    int32_t runtimeOpenChannel(
+        PluginInstance*                 inst,
+        const AgentxxPluginChannelSpec* spec,
+        int64_t*                        outChannelId,
+        std::string&                    err
+    );
+
+    /// 关闭通道 (不等待收尾)
+    int32_t runtimeCloseChannel(PluginInstance* inst, int64_t channelId);
+
+    RuntimeChannel* runtimeChannelOf(const PluginInstance* inst, int64_t channelId);
+
+    /// 在容器上卸载根并释放记录 (根 init 失败与 stop 共用)
+    void runtimeDropRoot(RuntimeRoot& root, bool unmountFromHost);
+
+    /// 关闭一个通道: 先通知端点, 再停驱动壳, 最后释放记录里的对象
+    void runtimeCloseChannelNow(RuntimeChannel& channel, std::string_view reason);
+
+    /// 根就绪后把等待中的通道全部启动 (失败时给它们发错误事件)
+    void runtimeFlushWaitingChannels(RuntimeRoot& root);
+
+    /// 启动一个通道 (建驱动壳 + 登记会话占用; 根未就绪时先排队)
+    /// - `return` 0 成功 (已启动或已排队)
+    int32_t runtimeStartChannel(RuntimeRoot& root, RuntimeChannel& channel, std::string& err);
+
+    /// 派生根配置 (`config_json` + `mount_plugins`)
+    std::shared_ptr<agentxx::agent::AgentConfig> deriveRootConfig(
+        const AgentxxPluginMountRootSpec& spec,
+        const std::string&                rootId,
+        const PluginInstance&             inst,
+        std::string&                      err
+    );
+
+    /// 按 owner 回收全部运行时对象 (禁用/卸载/关闭时调用; 幂等)
+    void releaseRuntimeOfOwner(std::string_view owner);
+
+    /// 回收指定实例建立的通道与触发器/定时器 (根按实例名称回收)
+    void releaseRuntimeChannelsOf(PluginInstance* inst);
+
+    /// 运行时清单 JSON (诊断/`list_runtime`)
+    std::string listRuntimeJson(PluginInstance* inst) const;
+
+    /// 通道状态 JSON (诊断/`get_channel_state`)
+    std::string runtimeChannelStateJson(PluginInstance* inst, int64_t channelId) const;
+
+    /// 通道会话的 LLM 上下文 (JSON 数组文本)
+    std::string channelContextMessages(PluginInstance* inst, int64_t channelId) const;
+
+    /// 投递一条输入 (输入 JSON 形状同 `send_input`)
+    int32_t runtimeSendInput(
+        PluginInstance*  inst,
+        int64_t          channelId,
+        std::string_view inputJson,
+        std::string&     err
+    );
+
+    /// 取消通道当前轮次
+    int32_t runtimeCancel(PluginInstance* inst, int64_t channelId);
+
+    /// 切换通道的模型
+    int32_t runtimeSelectModel(PluginInstance* inst, int64_t channelId, std::string_view model);
+
+    /// 应答一个中断
+    int32_t runtimeRespondInterrupt(
+        PluginInstance*  inst,
+        int64_t          channelId,
+        int64_t          interruptId,
+        std::string_view valuesJson,
+        std::string&     err
+    );
+
+    // 触发器 / 定时器 (阶段四)
+    // ----------------
+    int32_t runtimeRegisterTrigger(
+        PluginInstance*                 inst,
+        const AgentxxPluginTriggerSpec* spec,
+        int64_t*                        outTriggerId,
+        std::string&                    err
+    );
+    int32_t runtimeUnregisterTrigger(PluginInstance* inst, int64_t triggerId);
+    int32_t runtimeEmitEvent(PluginInstance* inst, std::string_view topic, std::string_view payload);
+
+    /// 一条事件到达 (触发器订阅回调; 在主程序事件线程 = IO 线程)
+    void onTriggerEvent(int64_t triggerId, std::string_view payload);
+
+    /// 合并窗口到期 / 背压触发: 把缓冲拼成一条投出去
+    void flushTrigger(int64_t triggerId);
+
+    int32_t runtimeRegisterTimer(
+        PluginInstance*               inst,
+        const AgentxxPluginTimerSpec* spec,
+        int64_t*                      outTimerId,
+        std::string&                  err
+    );
+    int32_t runtimeUnregisterTimer(PluginInstance* inst, int64_t timerId);
+
+    /// 给定时器排下一次触发 (delay 到期后调 [fireTimer])
+    void scheduleTimer(int64_t timerId, std::chrono::milliseconds delay);
+
+    /// 定时器到期: 按策略投递, 周期性的再排下一次
+    void fireTimer(int64_t timerId);
+
+    /// 把一个通道事件交给插件 (填 C 结构并调用回调; 通道已关时丢弃)
+    void deliverChannelEvent(
+        const RuntimeChannel& channel,
+        int32_t               kind,
+        int64_t               interruptId,
+        std::string_view      text,
+        const utilxx_base::Json* payload
+    );
+
+    /// 本实例建立的根 / 通道 / 触发器 / 定时器 (只在 IO 线程读写)
+    std::vector<std::shared_ptr<RuntimeRoot>>    runtimeRoots_;
+    std::vector<std::shared_ptr<RuntimeChannel>> runtimeChannels_;
+    std::vector<std::shared_ptr<RuntimeTrigger>> runtimeTriggers_;
+    std::vector<std::shared_ptr<RuntimeTimer>>   runtimeTimers_;
+    /// 运行时句柄自增序号 (根用 agentId, 其余用数字句柄; 不复用已分配值)
+    int64_t nextRuntimeHandle_ = 1;
+
+    /// 本管理器是否正在驱动插件 `mount` 回调 (期间挂根会被拒)
+    int mountingDepth_ = 0;
+
+private:
 
     /// 引用对应的 agent 上下文 (空引用 = 主 agent)
     /// - 引用无效 (未知 id / 过期序号) 返回空: 调用方按"拒绝"处理

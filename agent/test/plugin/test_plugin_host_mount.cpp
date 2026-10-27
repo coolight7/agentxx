@@ -8,7 +8,7 @@
 /// 1 一主程序两 agent / 2 工具隔离 / 3 提示词只影响本 agent / 4 钩子只在本 agent 派发 /
 /// 5 卸载一个 agent / 6 主程序关闭 / 7 挂载失败只回滚该 agent / 8 事件订阅按挂载分开 /
 /// 9 无引用的注册被拒 / 10 重复挂载幂等 / 11 工具名冲突 / 12 第三个 agent /
-/// 13 版本门槛 / 14 引用校验 (空 / 未知 id / 过期序号) / 15 21 张表与挂载表查询
+/// 13 版本门槛 / 14 引用校验 (空 / 未知 id / 过期序号) / 15 22 张表与挂载表查询
 #include "agentxx-test/plugin/test_plugin_host_mount.h"
 
 #include "agentxx/agent/context.h"
@@ -500,9 +500,9 @@ asio::awaitable<TestResult> run_plugin_host_mount_tests() {
         );
     }
 
-    // ================= 15. 21 张表可查 + 挂载表内容 =================
+    // ================= 15. 22 张表可查 + 挂载表内容 =================
     {
-        XX_TEST_EXPECT_EQ(plugin::PluginManager::kInterfaceTableCount, size_t{21});
+        XX_TEST_EXPECT_EQ(plugin::PluginManager::kInterfaceTableCount, size_t{22});
         const PluginxxHost* hostView = inst->hostView();
         const char*         iids[]   = {
             PLUGINXX_IFACE_LOG,
@@ -526,6 +526,7 @@ asio::awaitable<TestResult> run_plugin_host_mount_tests() {
             AGENTXX_PLUGIN_IFACE_AGENT_GRAPH,
             AGENTXX_PLUGIN_IFACE_AGENT_FEATURE,
             AGENTXX_PLUGIN_IFACE_AGENT_MOUNT,
+            AGENTXX_PLUGIN_IFACE_AGENT_RUNTIME,
         };
         XX_TEST_EXPECT_EQ(sizeof(iids) / sizeof(iids[0]), plugin::PluginManager::kInterfaceTableCount);
         for (const char* iid : iids) {

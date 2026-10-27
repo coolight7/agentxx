@@ -248,6 +248,19 @@ asio::awaitable<std::shared_ptr<PluginMount>>
 
     // 逐实例驱动插件的 mount 回调 (顺序 = 实例表顺序; 单个实例失败只影响它自己)
     // 挂载范围由本 agent 的策略决定 (yaml `plugin.mount`)
+    //
+    // mountingDepth_ 在驱动期间 +1: 插件此时调 `runtime.mount_root` 会被拒
+    // (否则每个 agent 建根一次 → 无限嵌套)
+    struct MountDepthGuard {
+        int& depth;
+        explicit MountDepthGuard(int& d) : depth(d) {
+            ++depth;
+        }
+        ~MountDepthGuard() {
+            --depth;
+        }
+    } depthGuard{mountingDepth_};
+
     const auto policy = ctx->agentConfig ? ctx->agentConfig->pluginMountPolicy
                                          : agentxx::agent::PluginMountPolicy::All;
     const auto& listed = ctx->agentConfig ? ctx->agentConfig->pluginMountList
@@ -562,6 +575,10 @@ void PluginManager::detachDomainRegistrations(PluginInstance* inst) {
     if (!inst) {
         return;
     }
+    // 运行时对象也属"本实例在主程序侧的注册": 触发器/定时器/通道/根一并回收
+    // (禁用后插件不再驱动那个会话, 留着只会继续跑; 启用时插件在自己的 start 里
+    // 重新挂根, 与其它注册项的建回方式一致)
+    releaseRuntimeOfOwner(inst->name);
     for (const auto& mount : mounts_) {
         if (mount) {
             mount->detachInstance(inst);
@@ -599,8 +616,10 @@ void PluginManager::clearDomainRegistrations(PluginInstance* inst) {
     }
 }
 
-/// 卸载时释放实例级资源: 各挂载上的工具对象 + 清单资源所有权
+/// 卸载时释放实例级资源: 各挂载上的工具对象 + 清单资源所有权 + 运行时对象
 void PluginManager::releaseInstanceResources(PluginInstance& inst) {
+    // 运行时对象 (根/通道/触发器/定时器) 按实例名整批回收: 不依赖插件在 stop 里记得清
+    releaseRuntimeOfOwner(inst.name);
     for (const auto& mount : mounts_) {
         if (!mount) {
             continue;

@@ -27,7 +27,7 @@ Agentxx 插件系统采用 **纯 C ABI + COM 风格接口表查询**：
   核心 vtable (冻结) ── alloc / free / query_interface (IID → 接口表)
                        │
          ┌─────────────┼─────────────┬──────────────┬─────────────┐
-         │ tools       │ hooks       │ events       │ scheduler   │  ...21 张 agent + 9 张 client
+         │ tools       │ hooks       │ events       │ scheduler   │  ...22 张 agent + 9 张 client
          │ register/   │ 7 钩子点     │ publish/     │ sleep/      │  capabilities/
          │ call_tool   │             │ subscribe    │ offload     │  session/plugins/
          └─────────────┘             └──────────────┘             │  config/model/cancel/...
@@ -410,7 +410,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 
 ## 8. Agent 侧接口表一览
 
-> 共 21 张 agent 侧接口表: 11 张业务表 (`agentxx.agent.*`) + 10 张通用表
+> 共 22 张 agent 侧接口表: 12 张业务表 (`agentxx.agent.*`) + 10 张通用表
 > (`pluginxx.*`, 由插件框架实现, 表内其余行)。**通用表的查询 IID 就是 `pluginxx.<名>`**
 > (如 `pluginxx.log`), `pluginxx.kit` 正在用这组名字查询; 下表把它们写在主程序命名空间下
 > 只是为了与业务表并列阅读 —— 按 `agentxx.agent.log` 查询不会命中。
@@ -438,6 +438,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 | `agentxx.agent.tasks` | 1 | 后台任务主程序托管: `register_task/cancel_task` (kit `spawn` 自动注册; 主程序登记句柄 + 持 inflight + `notify.done` 完成通知 —— 卸载时 detachAll 统一取消 + `waitInflightZero` 精确等待, 无协程帧悬挂; `notify` 为出参, `notify.done` 可从插件任意线程回调) |
 | `agentxx.agent.feature` | 2 | 功能点 (扩展点) 体系: `list_points/define_point/undefine_point` (插件声明自己的点, id 须落在 `plugin.<插件名>.*`) + `register_impl/unregister_impl` (为任意已声明的点登记实现, 按层/优先级排序) + `call_point_async` (按名调用一个**通用 JSON 点**, 只拿数据: 不写值缓存/不记置空/不改调用方会话; 强类型核心点返回受理错误; 取消用 `pluginxx.cancel.op_cancel`) |
 | `agentxx.agent.mount` | 1 | 挂载查询 (诊断用): `list` (全部挂载摘要 JSON 数组, 每项含 agentId/agentName/workDir/language/mountSeq/plugins) + `get` (按 agentId 查单个挂载摘要, 没有该挂载返回 -1) |
+| `agentxx.agent.runtime` | 1 | 会话运行时 (插件挂自己的根并驱动会话): `mount_root/unmount_root` (带自己的 `AgentConfig` 覆盖与插件挂载策略) + `open_channel/close_channel` (一个 sessionId 一条通道, 事件经回调交付) + `send_input/cancel/select_model/respond_interrupt` + `get_channel_state/get_context_messages/list_runtime` (只读查询) + `register_trigger/unregister_trigger/emit_event/register_timer/unregister_timer` (事件驱动)。入口用 `root_id` / `channel_id` 句柄寻址, 不带 agent 引用 —— 它看的是整个容器。详见 §19 |
 
 > 表中"版本"列 = 表声明的 `X_VERSION`, 与 `X_MIN_VERSION` 一起构成版本对, 另有
 > `X_BASELINE_SIZE` (基线字节数); 需要按 agent 区分的业务表为 v2 起 (v1 只在本进程单 agent
@@ -1738,9 +1739,152 @@ plugin:
 
 | 用例 | 覆盖 |
 |---|---|
-| `plugin_host_mount` | 一份管理器 + 多个 agent: 工具/提示词/钩子/事件按挂载分开, 重复挂载幂等, 工具名冲突, 挂载失败只回滚该 agent, 引用校验, 21 张表可查, 拆挂载与关闭收尾 |
+| `plugin_host_mount` | 一份管理器 + 多个 agent: 工具/提示词/钩子/事件按挂载分开, 重复挂载幂等, 工具名冲突, 挂载失败只回滚该 agent, 引用校验, 22 张表可查, 拆挂载与关闭收尾 |
 | `plugin_multi_mount` | 真实示例插件 `example_multi_mount`: 计数与 `config_json` 按挂载隔离、重挂归零、旧引用失效 |
 | `plugin_multi_instance` | 多实例三铁律 (两个管理器各一实例) |
 | `plugin_runtime` / `plugin_cleanup` / `plugin_hooks` / `plugin_feature` / `plugin_resources` | 挂载语义下的注册可逆与清单 |
 | `agent_host` | 会话存储根独占 (冲突拒绝 / 幂等 / 释放后可复用) |
 
+
+---
+
+## 19. 会话运行时 (`agentxx.agent.runtime`)
+
+### 19.1 为什么需要一张新表
+
+插件的 `create`/`start` 全程各一次 (§18), 所以插件做"QQ 群机器人"这类应用时,
+不能靠"再加载一个自己"; 它需要的是**一个自己的根 agent**:
+
+| 想换的东西 | 只能表达在 |
+|---|---|
+| 系统提示词、工具白名单、插件挂载、模型 | `AgentConfig` (agent 级) |
+| 上下文、模型选择、工作目录、权限边界、share_store | `sessionId` (会话级) |
+
+会话级表达不了第一类, 因此本表把"挂根 + 在根上开会话通道"做成插件可用的入口。
+
+三个概念:
+
+| 概念 | 职责 | 不管 |
+|---|---|---|
+| **根 (root)** | 挂到容器上的 agent, 一份 `AgentConfig` | 不持有会话 |
+| **通道 (channel)** | 一个 `sessionId` 的驱动壳: 输入 / 事件 / 中断 / 查询 | 不建 agent |
+| **触发器 / 定时器** | 把事件或时间转成某条通道的输入 | 不解析业务语义 |
+
+### 19.2 入口
+
+| 分组 | 入口 | 说明 |
+|---|---|---|
+| 根 | `mount_root(spec, out_id)` | 建根 (异步 init; 立即返回 id); **只能在 `start` 调用** |
+| | `unmount_root(root_id)` | 摘根 (先关其通道) |
+| 通道 | `open_channel(spec, out_id)` | 一个 `sessionId` 一条通道; 根未就绪时自动排队 |
+| | `close_channel(id)` | 关通道 (最后一条事件固定 `CLOSED`) |
+| 输入 | `send_input(id, input_json)` | 输入 JSON 与 FFI 同构 (`text`/`attachments`/`model`/`delivery`) |
+| | `cancel(id)` / `select_model(id, model)` | 取消当前轮次 / 换模型 |
+| | `respond_interrupt(id, interrupt_id, values_json)` | 应答 HIL 询问 (`{"values":{...}}`) |
+| 查询 | `get_channel_state(id)` | 通道状态 JSON (不含消息正文) |
+| | `get_context_messages(id)` | 通道会话的 LLM 上下文 (JSON 数组文本) |
+| | `list_runtime()` | `{roots:[{rootId,name,state,configSummary,channels}], triggers, timers}` |
+| 事件驱动 | `register_trigger(spec, out_id)` | 订阅主题 → 按策略投递 |
+| | `unregister_trigger(id)` | 注销触发器 |
+| | `emit_event(topic, payload)` | 发一条 `std::string` 事件 (任意线程, 立即返回) |
+| 定时 | `register_timer(spec, out_id)` | 一次性 / 周期 |
+| | `unregister_timer(id)` | 注销定时器 |
+
+错误码 (`AGENTXX_PLUGIN_RUNTIME_*`): `OK(0)` / `ERR_ARG` / `ERR_STATE` / `ERR_NOT_FOUND` /
+`ERR_BUDGET` / `ERR_CONFLICT` / `ERR_UNSUPPORTED` / `ERR_FAILED`。具体原因写日志
+(这张表的入口没有 `error_out` 参数)。
+
+### 19.3 根配置 (`config_json`)
+
+字段与派生规则:
+
+| 字段 | 默认 | 说明 |
+|---|---|---|
+| `agentName` | `"{name}-{插件名}"` | 展示名 |
+| `prompt.systemPrompt` | 不继承 (用内置人设) | 插件应显式给 |
+| `prompt.append` / `prompt.toolPrompt` | 空 | 按 key 写附加段 / 覆盖工具描述 |
+| `toolWhitelist` + `enableToolFiltering` | 不继承 | 工具白名单只影响这个根 |
+| `model` | 继承 | 取值必须是可用模型列表里的键 |
+| `language` / `workDir` / 权限路径 | 继承 (`inherit.*` 可关) | |
+| `mcpServers` / `skills` / `memoryFiles` | 清空 | `inherit.mcp/skill/memory` 为 true 才拷贝 |
+| `enableSessionStore` | 跟随主程序 | 会话目录固定为 `{主程序会话根}/{rootId}` (每根独占) |
+| `enableSubagent` | `false` | 对外应答的根通常不需要子代理 |
+| `pluginMount*` | **不要给** | 插件挂载用 `spec.mount_plugins`, 两处都给 → `ERR_ARG` |
+
+`spec.mount_plugins` 与 yaml `plugin.mount` 同构:
+`{"mode":"none|all|listed","list":[...],"args":{...}}`; 空 = `none` (只有内置工具)。
+
+递归切断三道防护: ① 建根只能在 `start` (进程级时机); ② 驱动任何插件 `mount` 回调期间
+调 `mount_root` 返回 `ERR_STATE`; ③ `include_creator = 0` (默认) 时创建者插件不挂到自己的
+根上 (mode=all 自动退化为"除它以外全部"的名单)。
+
+### 19.4 通道事件
+
+回调在该根所属 io 线程上调用, **必须快速返回** (整进程的会话都在这条线程)。
+
+| kind | text | payload |
+|---|---|---|
+| `READY` | — | `rootId` / `sessionId` / `model` |
+| `TURN_START` | 用户输入回显 | `msgId` / `startTimeMs` / `attachments` (无 dataUrl) |
+| `DELTA_TEXT` / `DELTA_THINKING` | token | — |
+| `TOOL_START` / `TOOL_END` | — | `toolName` / `toolCallId` / `arguments` 或 `result` + `hasError` |
+| `GEN_STATUS` | — | `phase` (waiting/tool_call/done) / `toolName` |
+| `TURN_END` | **本轮最后一个非空正文段** | `hasError` / `errorMessage` / `interrupted` / `startTimeMs` / `durationMs` / `tps` / `fullText` |
+| `CONTEXT_STATS` | — | `contextTokens` / `maxContextTokens` / `tps` / `usage{...}` |
+| `INPUT_ACK` | — | 输入受理回执 (同 wire 形态) |
+| `QUEUE_STATE` | — | `state` / `items[{id,text,createdAtMs}]` |
+| `INTERRUPT` | — | `id` / `node` / `value` / `argJson` (带 `interrupt_id`) |
+| `INTERRUPT_EXPIRED` | — | `id` |
+| `TIP` | 提示文本 | `level` (info/warning/error) |
+| `ERROR` | 错误文本 | `code` / `message` |
+| `CLOSED` | — | `reason` (closed / root_unmounted / plugin_stopped / 错误原因) |
+
+事件里的字符串都是**借用视图**, 只在回调期间有效。
+
+### 19.5 事件驱动
+
+| 策略 | 语义 | 适用 |
+|---|---|---|
+| `QUEUE` (默认) | 每条立即投, 会话队列保证串行 | 私聊、逐条必须处理的事件 |
+| `COALESCE` | 窗口 (`debounce_ms`, 默认 300) 内合并成一条 | 群聊刷屏、连续状态更新 |
+| `DROP_IF_BUSY` | 通道在跑一轮时丢弃并计数 | 定时巡检、状态刷新 |
+
+- 载荷约定: 有 `text` / `attachments` 时按输入同构取 (也认 `input` 作 `text` 别名);
+  都没有时把整条事件文本当输入;
+- 合并背压: 单条 8 KB 文本 / 累计 64 条 / `max_queue` 条, 达到先投再开新窗口;
+- 定时器: `first_delay_ms` 相对时间 (不用绝对时间戳, 避免时钟不一致), `interval_ms = 0`
+  为一次性; 通道关闭时定时器与触发器一并注销。
+
+### 19.6 预算与归属
+
+| 项 | 上限 |
+|---|---|
+| 进程内根 | `AgentHost::Config::maxRoots` (默认 8, 含内置根) |
+| 每根通道 | 64 |
+| 每实例触发器 + 定时器 | 256 |
+| 通道 delta 重放缓冲 | 0 (不重连重放) |
+
+归属者是插件实例名: 插件**禁用 / 卸载 / 关闭**时按它在主程序侧整批回收根、通道、
+触发器、定时器 (不依赖插件自己记得清)。
+
+`(存储根, sessionId)` 的独占是**进程级** (`AgentHost::claimSession`): 两个通道驱动同一份
+磁盘会话会静默互盖数据, 所以撞了直接 `ERR_CONFLICT`。
+
+### 19.7 线程与限制
+
+| 动作 | 线程 |
+|---|---|
+| 表入口 | 任意线程, 内部投递到主程序 io 线程后同步返回 |
+| 事件回调 | 该根所属 io 线程 |
+| `mount_root` 的 init | 主程序 io 线程 (协程, 入口不等它) |
+| 触发器事件回调 / 定时器到期 | 主程序 io 线程 |
+
+入口是同步函数 (不能 `co_await`): 建根、开通道、关通道都是"发起后返回", 结果经事件体现
+(`READY` / `ERROR` / `CLOSED`)。
+
+### 19.8 验证
+
+| 用例 | 覆盖 |
+|---|---|
+| `plugin_agent_runtime` | 挂根 → 开通道 → `READY`; 自定义提示词与工具白名单生效; 输入 → `TURN_START`/`DELTA_TEXT`/`TURN_END`; 同 `sessionId` 两通道冲突; 关闭与根卸载连带关闭; 禁用回收; 预算; 中断应答与超时; 两根/两通道互不串话; `mount` 里建根被拒; 配置非法报错 |
+| `plugin_agent_trigger` | 三种策略、合并窗口内外、定时器一次性/周期、通道关闭撤销、背压 |

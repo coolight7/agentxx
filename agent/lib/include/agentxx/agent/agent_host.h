@@ -177,6 +177,11 @@ public:
     /// (插件自建的根在挂载前就已 init 完成)。
     std::string mountRoot(std::shared_ptr<BaseAgent> agent, MountSpec spec);
 
+    /// 按本容器的工厂建一个 agent 实例 (插件挂根用)
+    /// - 与子代理同一套工厂: 默认 CodeAgent, 可通过 [Config::agentFactory] 换实现
+    /// - 只建对象, 不 init、不挂载: 调用方负责 `co_await agent->init()` 再 [mountRoot]
+    std::shared_ptr<BaseAgent> createAgent(std::shared_ptr<AgentConfig> config);
+
     /// 按 agentId 卸载一个根
     /// - 先注销子代理服务与节点, 再释放 agent;
     /// - 内置根 (`primary=true`) 与不存在的 id 都返回 false (内置根不随插件卸载);
@@ -293,6 +298,11 @@ public:
 
     /// 当前被占用的会话 (规范化 `存储根|sessionId` -> owner; 诊断用)
     utilxx_base::Json sessionOccupancyJson() const;
+
+    /// 根数上限 (诊断与预算判定用; 含内置根)
+    size_t maxRoots() const {
+        return cfg_.maxRoots;
+    }
 
     /// 根 agent (内置根; 未注册为空)
     std::shared_ptr<BaseAgent> rootAgent() const;

@@ -480,11 +480,17 @@ path/to/agentxx_test string_util regex
   环境/指标/加载(含配置 JSON)/会话摘要/日志尾部, 默认不含消息正文、不含凭据取值
   (内容过 `redactSecrets`); 日志尾部经 `enableLogCapture` 的进程内环形缓冲捕获
   (只保留最近 512 行: 诊断捕获、TUI `TUILogSink`、FFI 日志环同一个上限)
-- 接口表数量: agent 侧 21 张 (10 张通用表 `pluginxx.*` + 11 张业务表 `agentxx.agent.*`;
+- 接口表数量: agent 侧 22 张 (10 张通用表 `pluginxx.*` + 12 张业务表 `agentxx.agent.*`;
   业务表含 `agentxx.agent.context` 会话 LLM 上下文查询 `get_messages`/`messages_count`
   与 `agentxx.agent.feature` 功能点: `list_points`/`define_point`/`undefine_point`/
-  `register_impl`/`unregister_impl`/`call_point_async`/`op_cancel`, 以及
-  `agentxx.agent.mount` 挂载查询 `list`/`get`),
+  `register_impl`/`unregister_impl`/`call_point_async`/`op_cancel`,
+  `agentxx.agent.mount` 挂载查询 `list`/`get`,
+  以及 `agentxx.agent.runtime` 会话运行时 —— 插件挂自己的根 agent
+  (`mount_root`/`unmount_root`)、在上面开关会话通道 (`open_channel`/`close_channel`/
+  `send_input`/`cancel`/`select_model`/`respond_interrupt`)、查询
+  (`get_channel_state`/`get_context_messages`/`list_runtime`) 与事件驱动
+  (`register_trigger`/`emit_event`/`register_timer`, 详见
+  [plugins.md](docs/zh-cn/design/plugins.md) §19),
   client 侧 9 张 (ui/events/session/wire/self/json/log + timer/keybind)
 - 接口表版本与基线 (**当前代次 3**, 全局 API 版本 = 3: v2 是多 agent 挂载换代,
   v3 把通用表里的业务成员 (会话工作目录 / 取消查询 / 工具提示词) 迁回 agentxx 业务表

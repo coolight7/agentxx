@@ -1250,6 +1250,369 @@ static const AgentxxPluginFeatureIface g_ifaceFeature = {
     /* call_point_async */ xx_feature_call_point_async,
 };
 
+// ==================== 运行时表 (agentxx.agent.runtime) ====================
+//
+// 16 个入口全部落在主程序 IO 线程 (经 onInstanceIo 投递): 根/通道/触发器记录
+// 只在那一线程读写, 因此不需要锁。
+// 参数校验与业务错误经两个通道回给插件: 入口返回值只给错误码, 具体原因写
+// 日志 (插件侧拿到的接口没有 error_out, 这是与工具/功能点表的一处差别)。
+
+/// 取参数里的字符串 (空视图 = 空串)
+static std::string svText(const PluginxxStringView* value) {
+    return pluginxx::svToStr(value);
+}
+
+static int32_t PLUGINXX_CALL xx_runtime_mount_root(
+    const PluginxxHost*               host,
+    const AgentxxPluginMountRootSpec* spec,
+    PluginxxString*                   out_root_id
+) {
+    if (!spec || !out_root_id
+        || !agentxx::plugin::specSizeOk<AgentxxPluginMountRootSpec>(spec->struct_size)) {
+        return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+    }
+    // 入参按值拷一份: 跨边界视图只在本次调用期间有效, 投递到 IO 线程后原视图可能已失效
+    AgentxxPluginMountRootSpec specCopy = *spec;
+    // spec 里的字符串视图指向调用方内存: 只有 name/config_json/mount_plugins 三个
+    // 可能被 IO 线程读取, 因此把它们的文本拷成拥有型对象后重新指向
+    struct OwnedSpec {
+        std::string                name;
+        std::string                config;
+        std::string                mounts;
+        AgentxxPluginMountRootSpec spec{};
+    };
+    auto owned         = std::make_shared<OwnedSpec>();
+    owned->name        = svText(&specCopy.name);
+    owned->config      = svText(&specCopy.config_json);
+    owned->mounts      = svText(&specCopy.mount_plugins);
+    owned->spec        = specCopy;
+    owned->spec.name         = PluginStringView::from(std::string_view{owned->name});
+    owned->spec.config_json  = PluginStringView::from(std::string_view{owned->config});
+    owned->spec.mount_plugins = PluginStringView::from(std::string_view{owned->mounts});
+
+    return agentxx::plugin::guardVtableCall(AGENTXX_PLUGIN_RUNTIME_ERR_STATE, [&]() -> int32_t {
+        auto call = enterHost(host);
+        if (!call.ok()) {
+            return AGENTXX_PLUGIN_RUNTIME_ERR_STATE;
+        }
+        auto       keep  = call;
+        std::string rootId;
+        const auto rc = ioCallSyncKeep<int32_t>(keep, keep.manager(), [keep, owned, &rootId]() {
+            std::string err;
+            const auto  value = keep.manager()->runtimeMountRoot(keep.instance(), &owned->spec, rootId, err);
+            if (value != AGENTXX_PLUGIN_RUNTIME_OK) {
+                XX_LOGW("[runtime] mount_root 被拒 ({}): {}", value, err);
+            }
+            return value;
+        });
+        if (rc == AGENTXX_PLUGIN_RUNTIME_OK) {
+            // 主程序堆字符串: 插件侧用完由 PluginString::free 释放
+            hostMemorySetString(out_root_id, rootId);
+        }
+        return rc;
+    });
+}
+
+static int32_t PLUGINXX_CALL xx_runtime_unmount_root(
+    const PluginxxHost*       host,
+    const PluginxxStringView* root_id
+) {
+    if (agentxx::plugin::PluginStringView::empty(root_id)) {
+        return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+    }
+    auto id = svText(root_id);
+    return onInstanceIo(host, [id](PluginInstance* inst, PluginManager* mgr) -> int32_t {
+        return mgr->runtimeUnmountRoot(inst, id);
+    });
+}
+
+static int32_t PLUGINXX_CALL xx_runtime_open_channel(
+    const PluginxxHost*             host,
+    const AgentxxPluginChannelSpec* spec,
+    int64_t*                        out_channel_id
+) {
+    if (!spec || !out_channel_id
+        || !agentxx::plugin::specSizeOk<AgentxxPluginChannelSpec>(spec->struct_size)) {
+        return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+    }
+    // 拷贝字符串视图 (投递到 IO 线程后调用方内存可能已失效)
+    struct OwnedChannelSpec {
+        std::string             rootId;
+        std::string             sessionId;
+        std::string             title;
+        std::string             model;
+        AgentxxPluginChannelSpec spec{};
+    };
+    auto owned            = std::make_shared<OwnedChannelSpec>();
+    owned->rootId         = svText(&spec->root_id);
+    owned->sessionId      = svText(&spec->session_id);
+    owned->title          = svText(&spec->title);
+    owned->model          = svText(&spec->model);
+    owned->spec           = *spec;
+    owned->spec.root_id   = PluginStringView::from(std::string_view{owned->rootId});
+    owned->spec.session_id = PluginStringView::from(std::string_view{owned->sessionId});
+    owned->spec.title     = PluginStringView::from(std::string_view{owned->title});
+    owned->spec.model     = PluginStringView::from(std::string_view{owned->model});
+
+    return agentxx::plugin::guardVtableCall(AGENTXX_PLUGIN_RUNTIME_ERR_STATE, [&]() -> int32_t {
+        auto call = enterHost(host);
+        if (!call.ok()) {
+            return AGENTXX_PLUGIN_RUNTIME_ERR_STATE;
+        }
+        auto keep = call;
+        int64_t channelId = 0;
+        const auto rc = ioCallSyncKeep<int32_t>(keep, keep.manager(), [keep, owned, &channelId]() {
+            std::string err;
+            const auto  value = keep.manager()->runtimeOpenChannel(
+                keep.instance(),
+                &owned->spec,
+                &channelId,
+                err
+            );
+            if (value != AGENTXX_PLUGIN_RUNTIME_OK) {
+                XX_LOGW("[runtime] open_channel 被拒 ({}): {}", value, err);
+            }
+            return value;
+        });
+        if (rc == AGENTXX_PLUGIN_RUNTIME_OK) {
+            *out_channel_id = channelId;
+        }
+        return rc;
+    });
+}
+
+static int32_t PLUGINXX_CALL xx_runtime_close_channel(const PluginxxHost* host, int64_t channel_id) {
+    return onInstanceIo(host, [channel_id](PluginInstance* inst, PluginManager* mgr) -> int32_t {
+        return mgr->runtimeCloseChannel(inst, channel_id);
+    });
+}
+
+static int32_t PLUGINXX_CALL xx_runtime_send_input(
+    const PluginxxHost*       host,
+    int64_t                   channel_id,
+    const PluginxxStringView* input_json
+) {
+    auto input = svText(input_json);
+    return onInstanceIo(
+        host,
+        [channel_id, input = std::move(input)](PluginInstance* inst, PluginManager* mgr) -> int32_t {
+            std::string err;
+            const auto  rc = mgr->runtimeSendInput(inst, channel_id, input, err);
+            if (rc != AGENTXX_PLUGIN_RUNTIME_OK) {
+                XX_LOGW("[runtime] send_input 被拒 ({}): {}", rc, err);
+            }
+            return rc;
+        }
+    );
+}
+
+static int32_t PLUGINXX_CALL xx_runtime_cancel(const PluginxxHost* host, int64_t channel_id) {
+    return onInstanceIo(host, [channel_id](PluginInstance* inst, PluginManager* mgr) -> int32_t {
+        return mgr->runtimeCancel(inst, channel_id);
+    });
+}
+
+static int32_t PLUGINXX_CALL xx_runtime_select_model(
+    const PluginxxHost*       host,
+    int64_t                   channel_id,
+    const PluginxxStringView* model_name
+) {
+    auto model = svText(model_name);
+    return onInstanceIo(
+        host,
+        [channel_id, model = std::move(model)](PluginInstance* inst, PluginManager* mgr) -> int32_t {
+            return mgr->runtimeSelectModel(inst, channel_id, model);
+        }
+    );
+}
+
+static int32_t PLUGINXX_CALL xx_runtime_respond_interrupt(
+    const PluginxxHost*       host,
+    int64_t                   channel_id,
+    int64_t                   interrupt_id,
+    const PluginxxStringView* values_json
+) {
+    auto values = svText(values_json);
+    return onInstanceIo(
+        host,
+        [channel_id, interrupt_id, values = std::move(values)](
+            PluginInstance* inst,
+            PluginManager*  mgr
+        ) -> int32_t {
+            std::string err;
+            const auto  rc = mgr->runtimeRespondInterrupt(inst, channel_id, interrupt_id, values, err);
+            if (rc != AGENTXX_PLUGIN_RUNTIME_OK) {
+                XX_LOGW("[runtime] respond_interrupt 被拒 ({}): {}", rc, err);
+            }
+            return rc;
+        }
+    );
+}
+
+/// 只读查询: 通道状态 / 上下文 / 运行时清单
+static int32_t PLUGINXX_CALL
+    xx_runtime_get_channel_state(const PluginxxHost* host, int64_t channel_id, PluginxxString* out) {
+    return queryStringIo(host, out, [channel_id](PluginInstance* inst, PluginManager* mgr) {
+        return mgr->runtimeChannelStateJson(inst, channel_id);
+    });
+}
+
+static int32_t PLUGINXX_CALL xx_runtime_get_context_messages(
+    const PluginxxHost* host,
+    int64_t             channel_id,
+    PluginxxString*     out
+) {
+    return queryStringIo(host, out, [channel_id](PluginInstance* inst, PluginManager* mgr) {
+        return mgr->channelContextMessages(inst, channel_id);
+    });
+}
+
+static int32_t PLUGINXX_CALL xx_runtime_list(const PluginxxHost* host, PluginxxString* out) {
+    return queryStringIo(host, out, [](PluginInstance* inst, PluginManager* mgr) {
+        return mgr->listRuntimeJson(inst);
+    });
+}
+
+static int32_t PLUGINXX_CALL xx_runtime_register_trigger(
+    const PluginxxHost*             host,
+    const AgentxxPluginTriggerSpec* spec,
+    int64_t*                        out_trigger_id
+) {
+    if (!spec || !out_trigger_id
+        || !agentxx::plugin::specSizeOk<AgentxxPluginTriggerSpec>(spec->struct_size)) {
+        return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+    }
+    struct OwnedTriggerSpec {
+        std::string             topic;
+        std::string             delivery;
+        AgentxxPluginTriggerSpec spec{};
+    };
+    auto owned           = std::make_shared<OwnedTriggerSpec>();
+    owned->topic         = svText(&spec->topic);
+    owned->delivery      = svText(&spec->delivery);
+    owned->spec          = *spec;
+    owned->spec.topic    = PluginStringView::from(std::string_view{owned->topic});
+    owned->spec.delivery = PluginStringView::from(std::string_view{owned->delivery});
+
+    return agentxx::plugin::guardVtableCall(AGENTXX_PLUGIN_RUNTIME_ERR_STATE, [&]() -> int32_t {
+        auto call = enterHost(host);
+        if (!call.ok()) {
+            return AGENTXX_PLUGIN_RUNTIME_ERR_STATE;
+        }
+        auto     keep      = call;
+        int64_t  triggerId = 0;
+        const auto rc      = ioCallSyncKeep<int32_t>(keep, keep.manager(), [keep, owned, &triggerId]() {
+            std::string err;
+            const auto  value = keep.manager()->runtimeRegisterTrigger(
+                keep.instance(),
+                &owned->spec,
+                &triggerId,
+                err
+            );
+            if (value != AGENTXX_PLUGIN_RUNTIME_OK) {
+                XX_LOGW("[runtime] register_trigger 被拒 ({}): {}", value, err);
+            }
+            return value;
+        });
+        if (rc == AGENTXX_PLUGIN_RUNTIME_OK) {
+            *out_trigger_id = triggerId;
+        }
+        return rc;
+    });
+}
+
+static int32_t
+    PLUGINXX_CALL xx_runtime_unregister_trigger(const PluginxxHost* host, int64_t trigger_id) {
+    return onInstanceIo(host, [trigger_id](PluginInstance* inst, PluginManager* mgr) -> int32_t {
+        return mgr->runtimeUnregisterTrigger(inst, trigger_id);
+    });
+}
+
+static int32_t PLUGINXX_CALL xx_runtime_emit_event(
+    const PluginxxHost*       host,
+    const PluginxxStringView* topic,
+    const PluginxxStringView* payload_json
+) {
+    auto topicText   = svText(topic);
+    auto payloadText = svText(payload_json);
+    return onInstanceIo(
+        host,
+        [topicText = std::move(topicText), payloadText = std::move(payloadText)](
+            PluginInstance* inst,
+            PluginManager*  mgr
+        ) -> int32_t { return mgr->runtimeEmitEvent(inst, topicText, payloadText); }
+    );
+}
+
+static int32_t PLUGINXX_CALL xx_runtime_register_timer(
+    const PluginxxHost*           host,
+    const AgentxxPluginTimerSpec* spec,
+    int64_t*                      out_timer_id
+) {
+    if (!spec || !out_timer_id
+        || !agentxx::plugin::specSizeOk<AgentxxPluginTimerSpec>(spec->struct_size)) {
+        return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+    }
+    struct OwnedTimerSpec {
+        std::string           input;
+        AgentxxPluginTimerSpec spec{};
+    };
+    auto owned         = std::make_shared<OwnedTimerSpec>();
+    owned->input       = svText(&spec->input_json);
+    owned->spec        = *spec;
+    owned->spec.input_json = PluginStringView::from(std::string_view{owned->input});
+
+    return agentxx::plugin::guardVtableCall(AGENTXX_PLUGIN_RUNTIME_ERR_STATE, [&]() -> int32_t {
+        auto call = enterHost(host);
+        if (!call.ok()) {
+            return AGENTXX_PLUGIN_RUNTIME_ERR_STATE;
+        }
+        auto      keep    = call;
+        int64_t   timerId = 0;
+        const auto rc     = ioCallSyncKeep<int32_t>(keep, keep.manager(), [keep, owned, &timerId]() {
+            std::string err;
+            const auto  value
+                = keep.manager()->runtimeRegisterTimer(keep.instance(), &owned->spec, &timerId, err);
+            if (value != AGENTXX_PLUGIN_RUNTIME_OK) {
+                XX_LOGW("[runtime] register_timer 被拒 ({}): {}", value, err);
+            }
+            return value;
+        });
+        if (rc == AGENTXX_PLUGIN_RUNTIME_OK) {
+            *out_timer_id = timerId;
+        }
+        return rc;
+    });
+}
+
+static int32_t
+    PLUGINXX_CALL xx_runtime_unregister_timer(const PluginxxHost* host, int64_t timer_id) {
+    return onInstanceIo(host, [timer_id](PluginInstance* inst, PluginManager* mgr) -> int32_t {
+        return mgr->runtimeUnregisterTimer(inst, timer_id);
+    });
+}
+
+static const AgentxxPluginRuntimeIface g_ifaceRuntime = {
+    /* version */ AGENTXX_PLUGIN_IFACE_AGENT_RUNTIME_VERSION,
+    /* struct_size */ sizeof(AgentxxPluginRuntimeIface),
+    /* mount_root */ xx_runtime_mount_root,
+    /* unmount_root */ xx_runtime_unmount_root,
+    /* open_channel */ xx_runtime_open_channel,
+    /* close_channel */ xx_runtime_close_channel,
+    /* send_input */ xx_runtime_send_input,
+    /* cancel */ xx_runtime_cancel,
+    /* select_model */ xx_runtime_select_model,
+    /* respond_interrupt */ xx_runtime_respond_interrupt,
+    /* get_channel_state */ xx_runtime_get_channel_state,
+    /* get_context_messages */ xx_runtime_get_context_messages,
+    /* list_runtime */ xx_runtime_list,
+    /* register_trigger */ xx_runtime_register_trigger,
+    /* unregister_trigger */ xx_runtime_unregister_trigger,
+    /* emit_event */ xx_runtime_emit_event,
+    /* register_timer */ xx_runtime_register_timer,
+    /* unregister_timer */ xx_runtime_unregister_timer,
+};
+
 const void* PLUGINXX_CALL xx_query_interface(const PluginxxHost*, const PluginxxStringView* iid);
 
 static const PluginxxHostVtable g_hostVtable = {
@@ -1308,6 +1671,9 @@ const void* PLUGINXX_CALL xx_query_interface(const PluginxxHost*, const Pluginxx
     }
     if (n == AGENTXX_PLUGIN_IFACE_AGENT_MOUNT) {
         return &g_ifaceMount;
+    }
+    if (n == AGENTXX_PLUGIN_IFACE_AGENT_RUNTIME) {
+        return &g_ifaceRuntime;
     }
     return nullptr;
 }

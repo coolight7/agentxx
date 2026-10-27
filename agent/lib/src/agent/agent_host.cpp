@@ -449,6 +449,28 @@ std::string AgentHost::mountRoot(std::shared_ptr<BaseAgent> agent, MountSpec spe
     return agentId;
 }
 
+std::shared_ptr<BaseAgent> AgentHost::createAgent(std::shared_ptr<AgentConfig> config) {
+    auto agent = createAgentInstance(std::move(config));
+    if (!agent) {
+        return nullptr;
+    }
+    // 根与容器共用同一条 IO 线程
+    //
+    // `BaseAgent` 构造时会自建一个 io_context, 那条线程只有人主动 run() 才会动。
+    // 子代理无所谓 (它的引擎在调用方 executor 上直跑), 但根不是: 会话驱动循环、
+    // 事件总线、通道的收发协程全在这条线程上, 没有线程 run 就永远卡住。
+    // 因此这里把新建根的 ioCtx 换成容器这一条, 并把总线重建到同一执行器上
+    // (构造期建的总线挂在旧执行器上; 此刻还没有任何订阅, 重建是安全的)。
+    if (agent->ioCtx.get() != ioCtx_.get()) {
+        agent->ioCtx = ioCtx_;
+        if (agent->agentContext) {
+            agent->agentContext->bus
+                = std::make_shared<agentxx::events::EventBus>(ioCtx_->get_executor());
+        }
+    }
+    return agent;
+}
+
 MountedRoot* AgentHost::findMountedRoot(std::string_view agentId) {
     for (auto& item : roots_) {
         if (item.agentId == agentId) {

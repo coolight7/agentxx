@@ -1941,7 +1941,7 @@ agent/
 │   │   │   ├── modelcall.h       # ModelCallWrapNode (LLM 调用, 动态模型切换)
 │   │   │   ├── toolcall.h        # ToolcallWrapNode (工具分发, 自动压缩)
 │   │   │   └── agentcall.h       # AgentStart/EndCallWrapNode (会话生命周期)
-│   │   ├── plugin/               # 插件系统 (热插拔原生 C++ 插件, 纯 C ABI, API v1 —— 冻结核心 vtable + 21 张 agent 接口表 + 9 张 client 接口表)
+│   │   ├── plugin/               # 插件系统 (热插拔原生 C++ 插件, 纯 C ABI, API v1 —— 冻结核心 vtable + 22 张 agent 接口表 + 9 张 client 接口表)
 │   │   │   │                     #   插件框架 (C ABI 契约 / SDK 核心 / 主程序运行时 / 加载 / 清单解析) 已拆为
 │   │   │   │                     #   agent/third_party/cxx_pluginxx (命名空间 pluginxx); 本目录只保留主程序业务实现
 │   │   │   ├── api/              # 插件 API 头 (插件/主程序共用 C ABI 契约 + 插件 SDK; 主程序侧引用也走 api/ 前缀)
@@ -2364,7 +2364,7 @@ EventBus (事件总线)
 ## 附录 B: 插件系统 v1 要点 (详见 plugins.md)
 
 - COM 风格接口表查询: 核心 vtable 冻结 (alloc/free + query_interface; 原 strdup 槽位已移出 vtable, 改为基于 alloc 的头文件内联 `pluginxx_strdup`), 能力按 IID 字符串查询独立接口表 (每张表四件套: IID + `struct_size` + `version`/`_VERSION` + `_MIN_VERSION` + `_BASELINE_SIZE`; 判定 = `version >= MIN_VERSION` 且 `struct_size >= BASELINE_SIZE`); 插件级要求 `api_version >= PLUGINXX_MIN_API_VERSION`
-- Agent 侧 21 张接口表: 10 张通用表 (`pluginxx.*`: events / capabilities / scheduler / coroutine_runtime / plugins / config / cancel / json / log / tasks) + 11 张业务表 (`agentxx.agent.*`: tools / permission / hooks / session / context / model / prompt / resources / graph / feature / mount)
+- Agent 侧 22 张接口表: 10 张通用表 (`pluginxx.*`: events / capabilities / scheduler / coroutine_runtime / plugins / config / cancel / json / log / tasks) + 12 张业务表 (`agentxx.agent.*`: tools / permission / hooks / session / context / model / prompt / resources / graph / feature / mount / runtime)
 - Client 侧 9 张接口表: ui / events / session / wire / self / json / log / timer / keybind (详见 client_plugin_api.h)
 - 附加成员与结构体规则: 表成员只能追加在表尾 (基线不变 + `ifaceHas` 判定), 重排/改签名/删成员要换 IID; 跨边界结构体 (spec/input) 统一带 `struct_size` (填充方填长度, 读取方 `specSizeOk`/`specHas` 判定) —— 见 plugins.md §17
 - 现代 SDK (plugin_kit.h): 
