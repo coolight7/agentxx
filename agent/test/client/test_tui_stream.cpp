@@ -1250,6 +1250,78 @@ void testTuiStreamScenario13(asio::io_context& ioCtx) {
     }
 }
 
+// 场景 14: 工具执行中被用户中断 -> 后到的取消结果覆盖原工具消息
+// - 中断时 client 侧先把运行中的工具消息标为已结束 (cancelCurrentRunLocked ->
+//   resetTrailingRunningToolsLocked), 取消结果由 agent 端稍后才补
+//   ("[User canceled]" 的 ToolEnd)
+// - 期望: 这条结果回填到原工具消息上 (同一个工具只有一条消息), 而不是另插一条
+void testTuiStreamScenario14(asio::io_context& ioCtx) {
+    TestTUIClientIO client(ioCtx);
+
+    // 1. 工具开始执行 (消息处于运行中)
+    {
+        WireDelta start;
+        start.type        = WireDelta::Type::ToolStart;
+        start.toolName    = "agentxx_execute_command";
+        start.toolCallId  = "call_cancel";
+        start.arguments   = "{\"command\":\"Start-Sleep -Seconds 5\"}";
+        start.startTimeMs = 1000;
+        client.testOnDelta(start);
+    }
+    // 2. 中断瞬间的重置: 用一条提示消息触发与取消相同的"末尾运行中工具标为结束"
+    //    逻辑 (取消本身由界面按键路径发起, 测试里不驱动按键)
+    {
+        WireDelta tip;
+        tip.type    = WireDelta::Type::MessageUITip;
+        tip.text    = "[Cancel Request]";
+        tip.tipType = WireDelta::TipType::Info;
+        client.testOnDelta(tip);
+    }
+    {
+        auto snap = client.sharedState().snapshot();
+        XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)2);
+        if (snap->messages.size() == 2) {
+            XX_TEST_EXPECT_TRUE(snap->messages[0]->role == TUIMessage::Role::Tool);
+            XX_TEST_EXPECT_TRUE(snap->messages[0]->tool.has_value());
+            if (snap->messages[0]->tool) {
+                XX_TEST_EXPECT_TRUE(snap->messages[0]->tool->toolFinished);
+                XX_TEST_EXPECT_TRUE(snap->messages[0]->tool->toolResult.empty());
+            }
+        }
+    }
+    // 3. agent 端补的取消结果
+    {
+        WireDelta end;
+        end.type       = WireDelta::Type::ToolEnd;
+        end.toolName   = "agentxx_execute_command";
+        end.toolCallId = "call_cancel";
+        end.result     = "[User canceled]";
+        end.durationMs = 2000;
+        client.testOnDelta(end);
+    }
+
+    auto snap = client.sharedState().snapshot();
+    // 工具消息 + 取消提示 (没有多出第二条工具消息)
+    XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)2);
+    if (snap->messages.size() == 2) {
+        const auto& toolMsg = snap->messages[0];
+        XX_TEST_EXPECT_TRUE(toolMsg->role == TUIMessage::Role::Tool);
+        XX_TEST_EXPECT_TRUE(toolMsg->tool.has_value());
+        if (toolMsg->tool) {
+            XX_TEST_EXPECT_TRUE(toolMsg->tool->toolFinished);
+            XX_TEST_EXPECT_EQ(toolMsg->tool->toolResult, std::string{"[User canceled]"});
+            XX_TEST_EXPECT_EQ(toolMsg->tool->toolCallId, std::string{"call_cancel"});
+            XX_TEST_EXPECT_EQ(toolMsg->durationMs, (int64_t)2000);
+        }
+        // 原消息里的参数保留 (覆盖结果时不清参数)
+        XX_TEST_EXPECT_EQ(
+            toolMsg->text,
+            std::string{"{\"command\":\"Start-Sleep -Seconds 5\"}"}
+        );
+        XX_TEST_EXPECT_TRUE(snap->messages[1]->role == TUIMessage::Role::Tip);
+    }
+}
+
 TestResult testTuiStream() {
     testTuiStreamMarkdown();
 
@@ -1267,6 +1339,7 @@ TestResult testTuiStream() {
     testTuiStreamScenario11(ioCtx);
     testTuiStreamScenario12(ioCtx);
     testTuiStreamScenario13(ioCtx);
+    testTuiStreamScenario14(ioCtx);
 
     return TestResult{g_tui_stream_passed, g_tui_stream_failed};
 }

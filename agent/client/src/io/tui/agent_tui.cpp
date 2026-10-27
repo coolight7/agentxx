@@ -2826,35 +2826,57 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
                 st.isStreaming = true;
             } break;
             case Type::ToolEnd: {
-                bool found = false;
-                for (size_t i = st.messages.size(); i > 0; --i) {
-                    auto& msg = *st.messages[i - 1];
-                    if (msg.role == TUIMessage::Role::Tool && msg.tool
-                        && msg.tool->toolCallId == delta.toolCallId && !msg.tool->toolFinished) {
-                        auto& m              = sharedState_.mutableMessage(st, i - 1);
-                        m.tool->toolResult   = delta.result;
-                        m.tool->toolFinished = true;
-                        m.tool->hasError     = delta.hasError;
-                        m.collapsed          = true;
-                        if (delta.startTimeMs > 0) {
-                            m.startTimeMs = delta.startTimeMs;
+                // 回填目标: 同一个 tool_call_id 的工具消息
+                // - 优先还在运行的那条 (正常执行路径)
+                // - 其次已结束但还没有结果的那条: 用户中断时 client 侧先把运行中的
+                //   工具消息标为已结束 (见 cancelCurrentRunLocked), agent 端随后才
+                //   补 "[User canceled]" 结果; 只认"还在运行"会找不到目标, 于是新增
+                //   一条同工具消息 —— 界面上同一个工具出现两条 (原消息 + [User
+                //   canceled]) 而不是覆盖原消息
+                constexpr size_t kNoTarget = static_cast<size_t>(-1);
+                auto             findTarget = [&](bool onlyRunning) -> size_t {
+                    for (size_t i = st.messages.size(); i > 0; --i) {
+                        const auto& msg = *st.messages[i - 1];
+                        if (msg.role != TUIMessage::Role::Tool || !msg.tool
+                            || msg.tool->toolCallId != delta.toolCallId) {
+                            continue;
                         }
-                        if (delta.durationMs > 0) {
-                            m.durationMs = delta.durationMs;
-                        } else if (m.startTimeMs > 0) {
-                            const int64_t nowMs = static_cast<int64_t>(
-                                std::chrono::duration_cast<std::chrono::milliseconds>(
-                                    std::chrono::system_clock::now().time_since_epoch()
-                                )
-                                    .count()
-                            );
-                            m.durationMs = std::max(int64_t{0}, nowMs - m.startTimeMs);
+                        if (onlyRunning) {
+                            if (!msg.tool->toolFinished) {
+                                return i - 1;
+                            }
+                        } else if (msg.tool->toolResult.empty()) {
+                            return i - 1;
                         }
-                        found = true;
-                        break;
                     }
+                    return kNoTarget;
+                };
+                size_t hit = findTarget(true);
+                if (hit == kNoTarget && !delta.toolCallId.empty()) {
+                    // 已结束且结果为空 = 先前被取消/重置过、结果尚未回填的那条
+                    hit = findTarget(false);
                 }
-                if (!found) {
+                if (hit != kNoTarget) {
+                    auto& m              = sharedState_.mutableMessage(st, hit);
+                    m.tool->toolResult   = delta.result;
+                    m.tool->toolFinished = true;
+                    m.tool->hasError     = delta.hasError;
+                    m.collapsed          = true;
+                    if (delta.startTimeMs > 0) {
+                        m.startTimeMs = delta.startTimeMs;
+                    }
+                    if (delta.durationMs > 0) {
+                        m.durationMs = delta.durationMs;
+                    } else if (m.startTimeMs > 0) {
+                        const int64_t nowMs = static_cast<int64_t>(
+                            std::chrono::duration_cast<std::chrono::milliseconds>(
+                                std::chrono::system_clock::now().time_since_epoch()
+                            )
+                                .count()
+                        );
+                        m.durationMs = std::max(int64_t{0}, nowMs - m.startTimeMs);
+                    }
+                } else {
                     auto m                = std::make_shared<TUIMessage>();
                     m->role               = TUIMessage::Role::Tool;
                     m->tool               = TUIMessage::ToolData{};
