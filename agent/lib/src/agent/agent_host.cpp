@@ -45,7 +45,19 @@ bool AgentRegistry::contains(std::string_view agentId) const {
 
 void AgentRegistry::insert(std::shared_ptr<AgentNode> node) {
     assert(node && !node->agentId.empty());
-    utilxx_base::insertOrAssignHeterogeneous(nodes_, node->agentId, std::move(node));
+    if (!node || node->agentId.empty()) {
+        return;
+    }
+    // 重复 id 一律拒绝 (不覆盖): 覆盖会让旧节点成为孤儿 ——
+    // 它的总线服务、子代理、会话仍在, 但谁也找不到它了
+    if (nodes_.contains(node->agentId)) {
+        XX_LOGE(
+            "AgentRegistry::insert: agentId '{}' already registered, insert rejected",
+            node->agentId
+        );
+        return;
+    }
+    nodes_.emplace(node->agentId, std::move(node));
 }
 
 void AgentRegistry::remove(std::string_view agentId) {
@@ -289,66 +301,288 @@ void AgentHost::attachRoot(std::shared_ptr<BaseAgent> rootAgent) {
         XX_LOGW("AgentHost::attachRoot: root already attached, ignored");
         return;
     }
-    auto ctx = rootAgent->getContext();
-    assert(ctx && "attachRoot: root agent context is null");
+    MountSpec spec;
+    spec.agentId  = "root";
+    spec.primary  = true;
+    spec.owner    = {};
+    if (mountRoot(std::move(rootAgent), std::move(spec)).empty()) {
+        XX_LOGE("AgentHost::attachRoot: 拒绝挂载该 agent (见上方原因)");
+    }
+}
+
+void AgentHost::injectShared(std::shared_ptr<agentxx::agent::AgentContext> ctx) {
     if (!ctx) {
         return;
     }
-    // 会话存储根必须先登记成功: 同一份磁盘会话只能由一个 agent 写
-    // (写租约在进程内可重入, 撞了不会报错, 只会静默串数据)
-    if (!claimSessionStoreRoot(*ctx, ctx->agentId.empty() ? "root" : ctx->agentId)) {
-        XX_LOGE("AgentHost::attachRoot: 拒绝挂载该 agent (会话存储根已被别的 agent 占用)");
-        return;
-    }
-    rootAgent_ = std::move(rootAgent);
-    // 注入共享基础设施: threadPool 上提共享 (避免每 agent 一份线程池),
+    // 共享基础设施: threadPool 上提共享 (避免每 agent 一份线程池),
     // host 引用 (供节点/工具经 AgentContext 知道 agent 节点容器)
     ctx->threadPool = threadPool_;
     ctx->host       = weak_from_this();
-    // 注入插件管理器: agent 自己不再建管理器/加载插件, 只在 init 时挂载
-    // (policy 为 None 的 agent 不挂任何插件)
+    // 插件管理器: 一律用容器这一份 (进程唯一)。
+    // 不注入的话 BaseAgent::init 会自建一份管理器 (ownsPluginHost_=true),
+    // 那就又跑了一份插件实例 —— 插件的根也因此会跟着建第二份管理器。
+    // policy 为 None 的 agent 不挂任何插件, 也不注管理器。
     if (pluginHost_ && !ctx->pluginManager
         && ctx->agentConfig->pluginMountPolicy != PluginMountPolicy::None) {
         ctx->pluginManager      = pluginHost_;
         ctx->pluginManagerOwned = false; // 进程共享管理器: 不随本 agent 析构卸载
     }
+}
 
-    if (!ctx->bus) {
-        XX_LOGW("AgentHost::attachRoot: root agent bus is null, subagent delegation unavailable");
-        return;
+size_t AgentHost::registerSubagentService(std::shared_ptr<BaseAgent> rootAgent) {
+    if (!rootAgent) {
+        return 0;
     }
-
-    // 根 agent 全局总线上 registerServer 子代理委派 (中断路径, 统一批量语义):
+    auto ctx = rootAgent->getContext();
+    if (!ctx || !ctx->bus) {
+        XX_LOGW("AgentHost: root agent bus is null, subagent delegation unavailable for it");
+        return 0;
+    }
+    // 根的全局总线上 registerServer 子代理委派 (中断路径, 统一批量语义):
     // - SubAgentManagerTool 抛 NodeInterrupt → BaseAgent 中断循环 →
-    //   agentContext->bus->request(service.subagent, ReqSubagentBatch) → 到达 agent 节点容器
-    // - agent 节点容器派生独立 agent 运行 (单任务 = 1 个 task), 结果经 interruptResult
-    //   channel 回填
-    std::weak_ptr<AgentHost> self = weak_from_this();
-
-    // 根 agent 也注册为节点 (平等成员; 由 agent 节点容器持有, 不随 destroyAgent 回收)
-    {
-        auto rootNode     = std::make_shared<AgentNode>();
-        rootNode->agentId = "root";
-        rootNode->name    = ctx->agentConfig ? ctx->agentConfig->agentName : std::string{"root"};
-        rootNode->parentAgentId = "";
-        rootNode->depth         = 0;
-        rootNode->agent         = rootAgent_;
-        registry_.insert(std::move(rootNode));
-    }
-
-    auto& rr = ctx->bus->getRR<events::ReqSubagentBatch, events::RespSubagentBatch>(
+    //   agentContext->bus->request(service.subagent, ReqSubagentBatch) → 到达本容器
+    // - 容器派生独立 agent 运行 (单任务 = 1 个 task), 结果经 interruptResult 回填
+    // - 闭包把该根的上下文带进 spawnBatch: 派生配置/工具继承/用量记账
+    //   都落到那一个根 (多根场景下不能串到内置根)
+    std::weak_ptr<AgentHost>    self = weak_from_this();
+    std::weak_ptr<AgentContext> rootCtx = ctx;
+    auto&                       rr = ctx->bus->getRR<events::ReqSubagentBatch, events::RespSubagentBatch>(
         events::Topic::Subagent
     );
-    subagentServerId_ = rr.registerServer(
-        [self](const events::ReqSubagentBatch& req, size_t)
+    return rr.registerServer(
+        [self, rootCtx](const events::ReqSubagentBatch& req, size_t)
             -> asio::awaitable<events::RespSubagentBatch> {
             auto ptr = self.lock();
             if (!ptr) {
                 co_return events::RespSubagentBatch{};
             }
-            co_return co_await ptr->spawnBatch(req);
+            co_return co_await ptr->spawnBatch(req, rootCtx.lock());
         }
     );
+}
+
+std::string AgentHost::mountRoot(std::shared_ptr<BaseAgent> agent, MountSpec spec) {
+    assert(agent && "mountRoot: agent is null");
+    if (!agent) {
+        return {};
+    }
+    auto ctx = agent->getContext();
+    assert(ctx && "mountRoot: agent context is null");
+    if (!ctx) {
+        return {};
+    }
+
+    // ---- 预算: 根数上限 ----
+    if (roots_.size() >= cfg_.maxRoots) {
+        XX_LOGE(
+            "AgentHost::mountRoot: 拒绝挂载, 根数已达上限 {} (AgentHost::Config::maxRoots)",
+            cfg_.maxRoots
+        );
+        return {};
+    }
+
+    // ---- agentId: 空则生成 `ext:<owner>:<n>` ----
+    std::string agentId = spec.agentId;
+    if (agentId.empty()) {
+        const std::string owner = spec.owner.empty() ? std::string{"host"} : spec.owner;
+        agentId                 = fmt::format("ext:{}:{}", owner, ++rootSeq_);
+    }
+    // 重复 id 一律拒绝: 覆盖会让旧节点成为孤儿 (它的总线服务还在, 但谁也找不到)
+    if (registry_.contains(agentId) || findMountedRoot(agentId) != nullptr) {
+        XX_LOGE(
+            "AgentHost::mountRoot: 拒绝挂载, agentId '{}' 已被占用 (不覆盖现有节点)",
+            agentId
+        );
+        return {};
+    }
+    if (!ctx->agentId.empty() && ctx->agentId != "root" && ctx->agentId != agentId) {
+        // 上下文里的 agentId 是插件引用的身份, 与容器的登记 id 必须一致
+        XX_LOGW(
+            "AgentHost::mountRoot: 上下文 agentId '{}' 与挂载 id '{}' 不一致, 以挂载 id 为准",
+            ctx->agentId,
+            agentId
+        );
+    }
+    ctx->agentId = agentId;
+
+    // ---- 会话存储根: 同一份磁盘会话只能由一个 agent 写 ----
+    if (!claimSessionStoreRoot(*ctx, agentId)) {
+        XX_LOGE("AgentHost::mountRoot: 拒绝挂载 '{}' (会话存储根已被别的 agent 占用)", agentId);
+        return {};
+    }
+
+    // ---- 共享基础设施 + 插件管理器 ----
+    injectShared(ctx);
+
+    // ---- 节点登记: 根一律 depth=0 / 无父节点 ----
+    auto node               = std::make_shared<AgentNode>();
+    node->agentId           = agentId;
+    node->name              = ctx->agentConfig ? ctx->agentConfig->agentName : agentId;
+    node->parentAgentId     = "";
+    node->depth             = 0;
+    node->agent             = agent;
+    registry_.insert(std::move(node));
+
+    // ---- 子代理委派服务 (每根一个) ----
+    MountedRoot mounted;
+    mounted.agentId = agentId;
+    mounted.owner   = spec.owner;
+    mounted.primary = spec.primary;
+    mounted.agent   = agent;
+    if (spec.registerSubagentService) {
+        mounted.subagentServerId = registerSubagentService(agent);
+    }
+    if (spec.primary) {
+        rootAgent_ = agent;
+    }
+    roots_.push_back(std::move(mounted));
+
+    XX_LOGI(
+        "AgentHost: mounted root '{}' (owner='{}', primary={}, subagentService={}, roots={}/{})",
+        agentId,
+        spec.owner,
+        spec.primary,
+        roots_.back().subagentServerId != 0,
+        roots_.size(),
+        cfg_.maxRoots
+    );
+    return agentId;
+}
+
+MountedRoot* AgentHost::findMountedRoot(std::string_view agentId) {
+    for (auto& item : roots_) {
+        if (item.agentId == agentId) {
+            return &item;
+        }
+    }
+    return nullptr;
+}
+
+bool AgentHost::unmountRoot(std::string_view agentId) {
+    auto it = std::find_if(roots_.begin(), roots_.end(), [agentId](const MountedRoot& item) {
+        return item.agentId == agentId;
+    });
+    if (it == roots_.end()) {
+        return false;
+    }
+    if (it->primary) {
+        // 内置根不随外部请求卸载: 它是进程自己的会话入口
+        XX_LOGW("AgentHost::unmountRoot: 内置根 '{}' 不能卸载", agentId);
+        return false;
+    }
+    // 先撤子代理服务: 服务句柄属于该根的总线, 根释放后总线就没了
+    // (destroyAgent 里也会幂等地再做一次, 这里提前是因为卸载语义就是"先断接再释放")
+    unregisterSubagentService(agentId);
+    // 节点与根表项由 destroyAgent 一并回收 (它会递归子节点并抹掉 roots_ 里这一项)
+    destroyAgent(agentId);
+    XX_LOGI("AgentHost: unmounted root '{}'", agentId);
+    return true;
+}
+
+size_t AgentHost::unmountRootsByOwner(std::string_view owner) {
+    // 先取 id 快照: unmountRoot 会改 roots_
+    std::vector<std::string> ids;
+    for (const auto& item : roots_) {
+        if (!item.primary && item.owner == owner) {
+            ids.push_back(item.agentId);
+        }
+    }
+    size_t removed = 0;
+    for (const auto& id : ids) {
+        if (unmountRoot(id)) {
+            ++removed;
+        }
+    }
+    return removed;
+}
+
+void AgentHost::unregisterSubagentService(std::string_view agentId) {
+    auto* mounted = findMountedRoot(agentId);
+    if (!mounted || mounted->subagentServerId == 0) {
+        return;
+    }
+    if (auto ctx = mounted->agent ? mounted->agent->getContext() : nullptr; ctx && ctx->bus) {
+        ctx->bus->getRR<events::ReqSubagentBatch, events::RespSubagentBatch>(
+                      events::Topic::Subagent
+        )
+            .unregisterServer(mounted->subagentServerId);
+    }
+    mounted->subagentServerId = 0;
+}
+
+std::shared_ptr<BaseAgent> AgentHost::findRoot(std::string_view agentId) const {    for (const auto& item : roots_) {
+        if (item.agentId == agentId) {
+            return item.agent;
+        }
+    }
+    return nullptr;
+}
+
+std::vector<MountedRoot> AgentHost::roots() const {
+    return roots_;
+}
+
+bool AgentHost::claimSession(
+    std::string_view storeRoot,
+    std::string_view sessionId,
+    std::string_view owner
+) {
+    if (sessionId.empty()) {
+        return false;
+    }
+    const std::string key = normalizeStoreRoot(storeRoot) + "|" + std::string{sessionId};
+    std::lock_guard<std::mutex> lock(sessionOccupancyMutex_);
+    auto                        it = sessionOccupancy_.find(key);
+    if (it != sessionOccupancy_.end()) {
+        if (it->second == owner) {
+            return true; // 同一归属者重复占用: 幂等
+        }
+        XX_LOGE(
+            "AgentHost::claimSession: 会话 '{}' (存储根 '{}') 已被 '{}' 占用, 拒绝 '{}' 驱动同一会话",
+            sessionId,
+            storeRoot,
+            it->second,
+            owner
+        );
+        return false;
+    }
+    sessionOccupancy_.emplace(key, std::string{owner});
+    return true;
+}
+
+void AgentHost::releaseSession(
+    std::string_view storeRoot,
+    std::string_view sessionId,
+    std::string_view owner
+) {
+    if (sessionId.empty()) {
+        return;
+    }
+    const std::string           key = normalizeStoreRoot(storeRoot) + "|" + std::string{sessionId};
+    std::lock_guard<std::mutex> lock(sessionOccupancyMutex_);
+    auto                        it = sessionOccupancy_.find(key);
+    if (it == sessionOccupancy_.end()) {
+        return;
+    }
+    if (it->second != owner) {
+        XX_LOGW(
+            "AgentHost::releaseSession: 会话 '{}' 属于 '{}', 拒绝 '{}' 释放 (防误释放别人的会话)",
+            sessionId,
+            it->second,
+            owner
+        );
+        return;
+    }
+    sessionOccupancy_.erase(it);
+}
+
+utilxx_base::Json AgentHost::sessionOccupancyJson() const {
+    utilxx_base::Json out = utilxx_base::Json::object();
+    std::lock_guard<std::mutex> lock(sessionOccupancyMutex_);
+    for (const auto& [key, owner] : sessionOccupancy_) {
+        out[key] = owner;
+    }
+    return out;
 }
 
 std::shared_ptr<BaseAgent> AgentHost::createAgentInstance(std::shared_ptr<AgentConfig> config) {
@@ -410,12 +644,8 @@ void AgentHost::publishProgress(
             }
         );
     };
-    // 后台任务登记: 根 agent 有登记表时由它统一取消/等待
-    if (rootAgent_ && rootAgent_->agentContext && rootAgent_->agentContext->taskScope) {
-        // 传可调用对象 (不内联调用): co_spawn 会把闭包复制进任务帧, 生命周期与任务一致
-        rootAgent_->agentContext->taskScope->spawn("host-progress", std::move(task));
-        return;
-    }
+    // 直接投到容器总线上 (不借某个根的 taskScope): 多根时进度不该挂在某一个根上,
+    // 根的关闭也不能把别的根的进度任务一并取消
     asio::co_spawn(hostBus_->executor(), std::move(task), asio::detached);
 }
 
@@ -476,7 +706,10 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
     }
 
     // ---- 独立 agent 构造 (与根 agent 平等) ----
-    auto parentConfig = rootAgent_ ? rootAgent_->getContext()->agentConfig : nullptr;
+    // 父配置取**发起请求那一个根**的: 多根时子代理的工具继承/记账/提示词
+    // 都该跟随它所在的根, 不能一律用内置根
+    auto requestCtx = parentAgentCtx ? parentAgentCtx : (rootAgent_ ? rootAgent_->getContext() : nullptr);
+    auto parentConfig = requestCtx ? requestCtx->agentConfig : nullptr;
     if (!parentConfig) {
         co_return events::RespSubagentBatchItem{
             .resultId     = task.resultId,
@@ -514,8 +747,9 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
                        && (*task.tools)[0].get<std::string>() == "*") {
                 // ["*"]: 全部继承父 agent 工具 (解析为父工具名白名单;
                 // 子代理未创建的父工具名自然跳过, 不报错)
-                if (rootAgent_ && rootAgent_->getContext()) {
-                    subCfg->toolWhitelist = rootAgent_->getContext()->toolNames;
+                // 父 = 发起请求那个根 (多根时不能一律取内置根)
+                if (requestCtx) {
+                    subCfg->toolWhitelist = requestCtx->toolNames;
                 }
                 XX_LOGD(
                     "spawnOneTask `{}`: tool policy = inherit parent ({} tools)",
@@ -564,8 +798,8 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
             std::shared_ptr<const std::vector<neograph::ChatTool>> parentTools = nullptr;
             if (parentAgentCtx && parentAgentCtx->lastRequestTools) {
                 parentTools = parentAgentCtx->lastRequestTools;
-            } else if (rootAgent_ && rootAgent_->getContext()) {
-                parentTools = rootAgent_->getContext()->lastRequestTools;
+            } else if (requestCtx) {
+                parentTools = requestCtx->lastRequestTools;
             }
             if (parentTools && !parentTools->empty()) {
                 // 继承时父工具定义必须原样出现在请求里 (数量/顺序/内容逐字节一致),
@@ -618,7 +852,8 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
     // - 子代理自己有独立 AgentContext/SessionsManager, 没有 sessionStore, 记不下来
     // - 嵌套委派沿用最外层已确定的目标, 保证一次调用只记一笔 (不重复计数)
     // - 自动压缩这类内部委派经总线到达 (`spawnBatch(req)` 不带父上下文),
-    //   此时回退到根 agent 的会话存储: 请求里的 parentSessionId 就是发起方会话
+    //   此时回退到**发起方所在根**的会话存储 (多根时必须按根回退,
+    //   否则挂载根的用量会被记到内置根上)
     if (parentAgentCtx) {
         if (parentAgentCtx->usageAccountSessions) {
             subCtx->usageAccountSessions  = parentAgentCtx->usageAccountSessions;
@@ -628,18 +863,15 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
             subCtx->usageAccountSessionId = std::string{parentSessionId};
         }
     }
-    if (!subCtx->usageAccountSessions && rootAgent_ && rootAgent_->getContext()
-        && rootAgent_->getContext()->sessions) {
-        subCtx->usageAccountSessions  = rootAgent_->getContext()->sessions;
+    if (!subCtx->usageAccountSessions && requestCtx && requestCtx->sessions) {
+        subCtx->usageAccountSessions  = requestCtx->sessions;
         subCtx->usageAccountSessionId = std::string{parentSessionId};
     }
 
     // 同上下文模式: 子代理的 share_store 工具桥接到父会话的 store
     // (id 空间一致: 子代理写入的长内容, 父会话按摘要中的 id 可直接读取)
-    if (sameContext && rootAgent_ && rootAgent_->getContext()
-        && rootAgent_->getContext()->middlewareHandleContext) {
-        subCtx->agentConfig->sharedShareStoreContext
-            = rootAgent_->getContext()->middlewareHandleContext;
+    if (sameContext && requestCtx && requestCtx->middlewareHandleContext) {
+        subCtx->agentConfig->sharedShareStoreContext = requestCtx->middlewareHandleContext;
     }
 
     // 唯一运行 id 与 session id
@@ -730,10 +962,8 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
             //   的 HIL 都能找到正确的父会话链
             auto subSession = subCtx->getSession(subagentSessionId);
             if (!parentId.empty()) {
-                auto parentCtx = parentAgentCtx;
-                if (!parentCtx && rootAgent_) {
-                    parentCtx = rootAgent_->getContext();
-                }
+                // 父上下文优先 (嵌套委派时是上一级子代理), 否则用发起请求那个根
+                auto parentCtx = parentAgentCtx ? parentAgentCtx : requestCtx;
                 if (parentCtx) {
                     auto parentSession = parentCtx->sessions->get(parentId);
                     if (parentSession) {
@@ -1171,6 +1401,8 @@ void AgentHost::destroyAgent(std::string_view agentId) {
     for (auto& child : registry_.childrenOf(agentId)) {
         destroyAgent(child->agentId);
     }
+    // 若是根: 先注销它的子代理服务 (服务句柄属于该根的总线, 根释放后就找不到了)
+    unregisterSubagentService(agentId);
     if (auto node = registry_.get(agentId)) {
         if (node->agent && node->agent->agentContext && node->agent->agentContext->pluginManager
             && node->agent->agentContext->pluginManager->hasPendingClose()) {
@@ -1187,6 +1419,13 @@ void AgentHost::destroyAgent(std::string_view agentId) {
         node->agent.reset();
         releaseSessionStoreRoot(agentId);
     }
+    // 若是根, 把它从根表里摘掉 (内置根不在这里摘: unmountRoot 会拒绍)
+    if (rootAgent_ && rootAgent_->getContext() && rootAgent_->getContext()->agentId == agentId) {
+        rootAgent_.reset();
+    }
+    std::erase_if(roots_, [agentId](const MountedRoot& item) {
+        return item.agentId == agentId;
+    });
 }
 
 asio::awaitable<bool>
@@ -1207,9 +1446,17 @@ asio::awaitable<bool>
         XX_LOGE("AgentHost: plugin shutdown failed for agent `{}`", agentId);
         co_return false;
     }
+    unregisterSubagentService(agentId);
     registry_.remove(agentId);
     node->agent.reset();
     releaseSessionStoreRoot(agentId);
+    // 若是根, 把它从根表里摘掉 (调用方显式销毁就尊重它)
+    if (rootAgent_ && rootAgent_->getContext() && rootAgent_->getContext()->agentId == agentId) {
+        rootAgent_.reset();
+    }
+    std::erase_if(roots_, [agentId](const MountedRoot& item) {
+        return item.agentId == agentId;
+    });
     co_return true;
 }
 

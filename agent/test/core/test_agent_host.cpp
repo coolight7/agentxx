@@ -1093,8 +1093,219 @@ asio::awaitable<void> test_host_store_root_conflict() {
     co_return;
 }
 
-asio::awaitable<TestResult> run_agent_host_tests() {
-    g_host_passed = 0;
+/// 验证: 多根并存 (内置根 + 两个挂载根)
+///
+/// 每根一份独立 `AgentConfig` (提示词/工具/模型), 互不影响; 节点均为 depth=0
+/// 且没有父节点; 根可各自种上/卸下, 内置根不可卸载; 归属者批量卸载与根数预算
+/// 也在这里一起验。
+asio::awaitable<void> test_host_multi_root() {
+    auto sim     = startDaSimServer();
+    auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
+
+    g_da_sim_response_content = "multi-root answer";
+    g_da_sim_tool_calls       = utilxx_base::Json::array();
+    g_da_sim_delay_ms         = 0;
+
+    auto io = std::make_shared<asio::io_context>();
+    // 根数上限 3 (内置 1 + 挂载 2)
+    auto host = agentxx::agent::AgentHost::create({.ioCtx = io, .maxRoots = 3});
+
+    std::string primaryId;   // 内置根 id (`root`)
+    std::string qqRootId;    // 第一个挂载根
+    std::string opsRootId;   // 第二个挂载根
+    std::string autoRootId;  // agentId 留空时自动生成
+    std::string owner2Id;    // 第二个归属者的根 (预算拒绝前的那一个)
+    std::atomic<bool> finished{false};
+
+    asio::co_spawn(
+        *io,
+        keepAliveRun([&]() -> asio::awaitable<void> {
+            // ---- 内置根 ----
+            auto primaryCfg      = makeSimConfig(baseUrl);
+            primaryCfg->agentName = "内置";
+            auto primary          = std::make_shared<agentxx::agent::CodeAgent>(primaryCfg);
+            primary->getContext()->agentId = "root";
+            co_await primary->init();
+            host->attachRoot(primary);
+            primaryId = "root";
+
+            // ---- 挂载根 1: 自己的提示词与工具白名单 ----
+            auto qqCfg                 = makeSimConfig(baseUrl);
+            qqCfg->agentName           = "QQ群助手";
+            qqCfg->prompt.systemPrompt = "你只在 QQ 群里回答问题。";
+            qqCfg->enableToolFiltering = true;
+            qqCfg->toolWhitelist       = {"agentxx_share_store"};
+            qqCfg->pluginMountPolicy   = agentxx::agent::PluginMountPolicy::None;
+            auto qq                    = std::make_shared<agentxx::agent::CodeAgent>(qqCfg);
+            qq->getContext()->agentId  = "ext:qq:1";
+            co_await qq->init();
+            qqRootId = host->mountRoot(
+                qq,
+                {.agentId = "ext:qq:1", .owner = "qq", .registerSubagentService = true}
+            );
+
+            // ---- 挂载根 2: agentId 留空 (自动生成 `ext:<owner>:<n>`) ----
+            auto opsCfg               = makeSimConfig(baseUrl);
+            opsCfg->agentName         = "运维助手";
+            opsCfg->pluginMountPolicy = agentxx::agent::PluginMountPolicy::None;
+            auto ops                  = std::make_shared<agentxx::agent::CodeAgent>(opsCfg);
+            co_await ops->init();
+            autoRootId = host->mountRoot(ops, {.owner = "ops"});
+
+            // ---- 重复 id 拒绝 (不覆盖现有节点) ----
+            {
+                auto dupCfg               = makeSimConfig(baseUrl);
+                dupCfg->pluginMountPolicy = agentxx::agent::PluginMountPolicy::None;
+                auto dup                  = std::make_shared<agentxx::agent::CodeAgent>(dupCfg);
+                co_await dup->init();
+                auto rejected = host->mountRoot(dup, {.agentId = "ext:qq:1", .owner = "qq"});
+                XX_TEST_EXPECT_TRUE(rejected.empty());
+            }
+
+            // ---- 超预算拒绝 (maxRoots=3 已满) ----
+            {
+                auto overCfg               = makeSimConfig(baseUrl);
+                overCfg->pluginMountPolicy = agentxx::agent::PluginMountPolicy::None;
+                auto over                  = std::make_shared<agentxx::agent::CodeAgent>(overCfg);
+                co_await over->init();
+                auto rejected = host->mountRoot(over, {.agentId = "ext:over:1", .owner = "over"});
+                XX_TEST_EXPECT_TRUE(rejected.empty());
+                // 被拒的根不应留下任何记录
+                XX_TEST_EXPECT_FALSE(host->registry().contains("ext:over:1"));
+                XX_TEST_EXPECT_TRUE(host->findRoot("ext:over:1") == nullptr);
+            }
+
+            // ---- 第二个归属者的根 (给批量卸载用) ----
+            // 先把 ops 根卸掉腾出一个位置, 再种一个同归属者的根
+            XX_TEST_EXPECT_TRUE(host->unmountRoot(autoRootId));
+            XX_TEST_EXPECT_TRUE(host->findRoot(autoRootId) == nullptr);
+            {
+                auto o2Cfg               = makeSimConfig(baseUrl);
+                o2Cfg->pluginMountPolicy = agentxx::agent::PluginMountPolicy::None;
+                auto o2                  = std::make_shared<agentxx::agent::CodeAgent>(o2Cfg);
+                co_await o2->init();
+                owner2Id = host->mountRoot(o2, {.owner = "qq"});
+                XX_TEST_EXPECT_TRUE(owner2Id.rfind("ext:qq:", 0) == 0);
+            }
+
+            // ---- 挂载根委派: 子节点父 id 指向该根, 用量记到该根的会话 ----
+            auto qqAgent = host->findRoot(qqRootId);
+            XX_TEST_EXPECT_TRUE(qqAgent != nullptr);
+            XX_TEST_EXPECT_EQ(
+                qqAgent->getContext()->agentConfig->prompt.systemPrompt,
+                std::string{"你只在 QQ 群里回答问题。"}
+            );
+            if (qqAgent) {
+                auto parentSession = qqAgent->getContext()->getSession("qq_group_1");
+                parentSession->bus = std::make_shared<agentxx::events::EventBus>(
+                    co_await asio::this_coro::executor
+                );
+                auto resp = co_await qqAgent->getContext()
+                                ->bus->request<
+                                    agentxx::events::ReqSubagentBatch,
+                                    agentxx::events::RespSubagentBatch>(
+                                    agentxx::events::Topic::Subagent,
+                                    agentxx::events::ReqSubagentBatch{
+                                        .parentAgentName = qqRootId,
+                                        .parentSessionId = "qq_group_1",
+                                        .cancelToken     = nullptr,
+                                        .tasks           = {agentxx::events::SubagentBatchItem{
+                                            .subagentName = "qq_worker",
+                                            .systemPrompt = "You are a QQ worker.",
+                                            .message      = "do it",
+                                            .resultId     = "c1",
+                                        }},
+                                    },
+                                    std::chrono::seconds(30)
+                                );
+                finished = true;
+                XX_TEST_EXPECT_TRUE(resp.has_value());
+                if (resp.has_value() && !resp->results.empty()) {
+                    XX_TEST_EXPECT_FALSE(resp->results[0].hasError);
+                    XX_TEST_EXPECT_FALSE(resp->results[0].agentId.empty());
+                }
+            } else {
+                finished = true;
+            }
+            co_return;
+        }),
+        asio::detached
+    );
+    pumpIoUntil(io, finished);
+
+    // ---- 节点结构: 三个根都登记且 depth=0 / 无父节点 ----
+    XX_TEST_EXPECT_EQ(host->roots().size(), size_t{3});
+    XX_TEST_EXPECT_EQ(host->rootCount(), size_t{3});
+    XX_TEST_EXPECT_TRUE(host->findRoot(primaryId) != nullptr);
+    XX_TEST_EXPECT_TRUE(host->findRoot(qqRootId) != nullptr);
+    XX_TEST_EXPECT_EQ(host->rootAgent()->getContext()->agentId, std::string{"root"});
+    for (const auto& id : {primaryId, qqRootId, owner2Id}) {
+        auto node = host->registry().get(id);
+        XX_TEST_EXPECT_TRUE(node != nullptr);
+        if (node) {
+            XX_TEST_EXPECT_TRUE(node->parentAgentId.empty());
+            XX_TEST_EXPECT_EQ(node->depth, size_t{0});
+        }
+    }
+    // 子代理运行完已回收 (只剩三个根)
+    XX_TEST_EXPECT_EQ(host->registry().size(), size_t{3});
+    XX_TEST_EXPECT_EQ(host->runningSubagents(), size_t{0});
+
+    // ---- 内置根不可卸载; 未知 id 也不可 ----
+    XX_TEST_EXPECT_FALSE(host->unmountRoot(primaryId));
+    XX_TEST_EXPECT_FALSE(host->unmountRoot("no-such-root"));
+    XX_TEST_EXPECT_TRUE(host->findRoot(primaryId) != nullptr);
+
+    // ---- 释放内建根以便后续用例; 按归属者批量卸载 ----
+    size_t removed = host->unmountRootsByOwner("qq");
+    XX_TEST_EXPECT_EQ(removed, size_t{2});
+    XX_TEST_EXPECT_TRUE(host->findRoot(qqRootId) == nullptr);
+    XX_TEST_EXPECT_TRUE(host->findRoot(owner2Id) == nullptr);
+    XX_TEST_EXPECT_FALSE(host->registry().contains(qqRootId));
+    XX_TEST_EXPECT_EQ(host->roots().size(), size_t{1});
+    // 再卸一次: 已经没了, 返回 0
+    XX_TEST_EXPECT_EQ(host->unmountRootsByOwner("qq"), size_t{0});
+    co_return;
+}
+
+/// 验证: 会话占用表 (跨通道互斥)
+///
+/// 会话以 (存储根, sessionId) 定位: 不同存储根下的同名会话是两份, 不该互相拒绍;
+/// 同存储根下的同名会话只能有一个驱动者 (另一个通道会静默互盖数据)。
+asio::awaitable<void> test_host_session_claim() {
+    auto io   = std::make_shared<asio::io_context>();
+    auto host = agentxx::agent::AgentHost::create({.ioCtx = io});
+
+    // ---- 同存储根 + 同名会话: 第二个被拒 ----
+    XX_TEST_EXPECT_TRUE(host->claimSession("D:/sessions", "qq_group_1", "plugin:qq"));
+    XX_TEST_EXPECT_FALSE(host->claimSession("D:/sessions", "qq_group_1", "plugin:wx"));
+    // 同一归属者重复占用 = 幂等
+    XX_TEST_EXPECT_TRUE(host->claimSession("D:/sessions", "qq_group_1", "plugin:qq"));
+    XX_TEST_EXPECT_EQ(host->sessionOccupancyJson().size(), size_t{1});
+
+    // ---- 不同存储根 + 同名会话: 两份, 都成功 ----
+    XX_TEST_EXPECT_TRUE(host->claimSession("D:/sessions_b", "qq_group_1", "plugin:wx"));
+    XX_TEST_EXPECT_EQ(host->sessionOccupancyJson().size(), size_t{2});
+
+    // ---- 不同会话名: 都成功 ----
+    XX_TEST_EXPECT_TRUE(host->claimSession("D:/sessions", "qq_group_2", "plugin:qq"));
+    XX_TEST_EXPECT_EQ(host->sessionOccupancyJson().size(), size_t{3});
+
+    // ---- 空会话 id: 拒绢 ----
+    XX_TEST_EXPECT_FALSE(host->claimSession("D:/sessions", "", "plugin:qq"));
+
+    // ---- 只有占用者能释放 ----
+    host->releaseSession("D:/sessions", "qq_group_1", "plugin:wx");
+    XX_TEST_EXPECT_EQ(host->sessionOccupancyJson().size(), size_t{3}); // 没被误释放
+    host->releaseSession("D:/sessions", "qq_group_1", "plugin:qq");
+    XX_TEST_EXPECT_EQ(host->sessionOccupancyJson().size(), size_t{2});
+    // 释放后可被另一个占用
+    XX_TEST_EXPECT_TRUE(host->claimSession("D:/sessions", "qq_group_1", "plugin:wx"));
+    XX_TEST_EXPECT_EQ(host->sessionOccupancyJson().size(), size_t{3});
+    co_return;
+}
+
+asio::awaitable<TestResult> run_agent_host_tests() {    g_host_passed = 0;
     g_host_failed = 0;
     try {
         co_await test_host_registry();
@@ -1109,6 +1320,8 @@ asio::awaitable<TestResult> run_agent_host_tests() {
         co_await test_host_spawn_batch();
         co_await test_host_mailbox_message();
         co_await test_host_remote_a2a();
+        co_await test_host_multi_root();
+        co_await test_host_session_claim();
     } catch (const std::exception& e) {
         TEST_FAIL << "agent_host suite exception: " << e.what() << std::endl;
         g_host_failed++;

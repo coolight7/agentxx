@@ -8,8 +8,8 @@
 | 阶段 | 内容 | 状态 |
 |---|---|---|
 | 一 | 统一启动壳 `AgentSessionRuntime`（FFI 先接，CLI 第二步） + `parseUserInputJson` + `EmbeddedClientAgentIO` | **已完成** |
-| 二 | `AgentHost` 多根（内置根 + 挂载根）+ 会话占用表 | 进行中 |
-| 三 | 运行时接口表 `agentxx.agent.runtime`（挂根 / 通道 / 输入 / 事件 / 中断） | 未开始 |
+| 二 | `AgentHost` 多根（内置根 + 挂载根）+ 会话占用表 | **已完成** |
+| 三 | 运行时接口表 `agentxx.agent.runtime`（挂根 / 通道 / 输入 / 事件 / 中断） | 进行中 |
 | 四 | 事件驱动：触发器（QUEUE/COALESCE/DROP_IF_BUSY） + 定时器 | 未开始 |
 | 五 | 会话级提示词来源（`PromptSectionSlot::Base`，可选） | 未开始 |
 | 六 | 文档与示例插件 `agent/plugins/example_runtime` | 未开始 |
@@ -46,6 +46,29 @@
 | `agent/test/core/test_agent_host.cpp` | 多根用例（节点/委派/记账/卸载/预算/存储根） | 未开始 |
 
 验收（04 §4.3 的 8 条）：三根节点并存、挂载根委派、用量记账、卸载后释放、超预算拒绝、现有子代理测试全绿、`pluginMountPolicy` 生效、`(存储根, sessionId)` 冲突。
+
+## 阶段二：AgentHost 多根（已完成）
+
+| 文件 | 动作 | 状态 |
+|---|---|---|
+| `agent/lib/include/agentxx/agent/agent_host.h` | 新增 `MountedRoot` / `MountSpec`（agentId/owner/primary/registerSubagentService）、`mountRoot` / `unmountRoot` / `unmountRootsByOwner` / `findRoot` / `roots()` / `rootCount()`、`Config::maxRoots`（默认 8）、`claimSession` / `releaseSession` / `sessionOccupancyJson`；`injectShared` / `registerSubagentService` / `unregisterSubagentService` 私有辅助 | 完成 |
+| `agent/lib/src/agent/agent_host.cpp` | `attachRoot` 转调 `mountRoot({agentId="root", primary=true})`；每根一个子代理服务（闭包捕获该根上下文，`spawnBatch(req, rootCtx)`）；`spawnOneTask` 的父配置/工具继承/用量记账/share_store/HIL 全改用发起方上下文；`publishProgress` 改走 hostBus 直接 co_spawn；`AgentRegistry::insert` 重复 id 拒绝；`destroyAgent`/`destroyAgentAsync` 一并摘根与子代理服务；会话占用表（`存储根 + sessionId`，带锁，跨插件实例） | 完成 |
+| `agent/test/core/test_agent_host.cpp` | 新增 `test_host_multi_root`（三根并存/节点结构/重复 id/超预算/委派/卸载/归属者批量卸载）与 `test_host_session_claim`（同根同名互斥、不同根同名共存、非占用者不能释放） | 完成 |
+
+验收结果（04 §4.3 的 8 条）：
+
+| 编号 | 用例 | 结果 |
+|---|---|---|
+| 1 | 内置根 + 两个挂载根：`roots().size()==3`，节点 `parentAgentId` 空 / `depth=0` | 通过 |
+| 2 | 挂载根里的子代理委派：节点父 id 指向该根，结果正常回收 | 通过 |
+| 3 | 用量记账：`spawnOneTask` 用发起方上下文（`usageAccountSessions` 取该根的 sessions） | 通过 |
+| 4 | `unmountRoot` 后节点与服务消失 | 通过 |
+| 5 | 超 `maxRoots` 拒绝（无节点/无根表残留） | 通过 |
+| 6 | 现有子代理测试全绿（`subagent_bus` 21、`subagent_tool` 143、`agent` 199、`summarization` 454） | 通过 |
+| 7 | `pluginMountPolicy` 生效（`injectShared` 按策略注管理器；None 不注） | 通过（插件挂载组全绿） |
+| 8 | `claimSession` 同存储根同名失败 / 不同存储根同名成功 / 非占用者不能释放 | 通过 |
+
+回归：`plugin_host_mount` 146 / `plugin_multi_mount` 47 / `plugin_multi_instance` 80 / `plugin_cleanup` 99 / `plugin_runtime` 736 / `boundaries` 19 / `session_runtime` 55，全部 failed=0。
 
 ## 阶段三：运行时接口表
 
