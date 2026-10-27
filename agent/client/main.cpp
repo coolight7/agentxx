@@ -367,7 +367,8 @@ static int dumpDiagnosticsAndExit(
     }
 
     // 日志尾部: 先装捕获再加载, 这样 init 期间的日志也进包
-    agentxx::util::enableLogCapture(200);
+    // (行数上限用默认值, 与 TUI / FFI 的日志环一致, 都是 512 行)
+    agentxx::util::enableLogCapture();
 
     auto agent     = std::make_shared<agentxx::agent::CodeAgent>(config);
     auto initError = std::make_shared<std::string>();

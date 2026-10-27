@@ -4,7 +4,7 @@
 /// 1. KeyMetrics: 轮次起止与终态分类、首 token 延迟只记一次、模型调用用量与错误
 ///    分类、工具终态 (成功/失败/取消/中断)、压缩、JSON/summary 字段、reset
 /// 2. 凭据脱敏: key=value / Bearer / 裸 token / URL userinfo / 查询参数
-/// 3. 日志捕获: 环形缓冲容量、启停、清空
+/// 3. 日志捕获: 环形缓冲容量 (默认 512 行)、启停、清空
 /// 4. 诊断包: 段落齐全 (版本/环境、指标、加载、会话、日志尾部), 不含 API Key 取值,
 ///    默认不含消息正文、显式打开时含截断正文, 日志尾部经脱敏
 #include "agentxx-test/core/test_observability.h"
@@ -211,6 +211,32 @@ void testLogCapture() {
     XX_TEST_EXPECT_TRUE(agentxx::util::recentLogLines().empty());
 }
 
+void testLogCaptureDefaultCapacity() {
+    using agentxx::util::disableLogCapture;
+    using agentxx::util::enableLogCapture;
+    using agentxx::util::recentLogLines;
+
+    disableLogCapture();
+
+    // 默认容量与 TUI 日志视图、FFI 日志环一致: 只留 512 行
+    enableLogCapture();
+    for (int i = 0; i < 600; ++i) {
+        XX_LOGI("[observability-test] cap-{}", i);
+    }
+    {
+        const auto lines = recentLogLines();
+        XX_TEST_EXPECT_EQ(lines.size(), size_t{512});
+        XX_TEST_EXPECT_FALSE(lines.empty());
+        if (lines.size() == 512) {
+            XX_TEST_EXPECT_TRUE(lines.front().find("cap-88") != std::string::npos); ///< 更早的被淘汰
+            XX_TEST_EXPECT_TRUE(lines.back().find("cap-599") != std::string::npos); ///< 最新一行
+        }
+    }
+
+    disableLogCapture();
+    XX_TEST_EXPECT_TRUE(recentLogLines().empty());
+}
+
 void testDiagnosticsPackage() {
     // ---- 夹具: 配置 (含 API Key) + 指标 + 持久化会话 ----
     auto dir = fs::temp_directory_path()
@@ -372,6 +398,7 @@ TestResult testObservability() {
     testKeyMetrics();
     testRedactSecrets();
     testLogCapture();
+    testLogCaptureDefaultCapacity();
     testDiagnosticsPackage();
     return TestResult{g_ob_passed, g_ob_failed};
 }

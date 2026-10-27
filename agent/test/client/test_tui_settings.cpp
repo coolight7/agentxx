@@ -516,6 +516,56 @@ void test_log_sink_level_filter() {
     settings.setLogLevel(TUISettings::kDefaultLogLevel);
 }
 
+// TUILogSink 环形留存: 只保留最近 512 行 (超出淘汰最旧的)
+void test_log_sink_ring_limits() {
+    auto& settings = TUISettings::instance();
+    auto  sink     = std::make_shared<TUILogSink>();
+
+    auto makeEntry = [](utilxx_base::LogLevel level, std::string msg) {
+        return std::make_shared<const utilxx_base::LogEntry>(utilxx_base::LogEntry{
+            level,
+            0,
+            0,
+            "test_module",
+            std::move(msg),
+        });
+    };
+
+    settings.setLogLevel(utilxx_base::LogLevel::Trace);
+
+    // ---- 行数上限: 超过 512 行淘汰最旧的 ----
+    for (int i = 0; i < 900; ++i) {
+        sink->enqueue(makeEntry(utilxx_base::LogLevel::Info, std::to_string(i)));
+    }
+    sink->pump();
+    XX_TEST_EXPECT_EQ(sink->lineCount(), size_t{512});
+    XX_TEST_EXPECT_EQ(sink->poppedCount(), uint64_t{388});
+    {
+        auto lines = sink->snapshot();
+        XX_TEST_EXPECT_EQ(lines.size(), size_t{512});
+        if (lines.size() == 512) {
+            XX_TEST_EXPECT_EQ(lines.front().text, std::string{"388"});
+            XX_TEST_EXPECT_EQ(lines.back().text, std::string{"899"});
+        }
+    }
+
+    // 清空后可重新从空环开始收集
+    sink->clear();
+    XX_TEST_EXPECT_EQ(sink->lineCount(), size_t{0});
+    sink->enqueue(makeEntry(utilxx_base::LogLevel::Info, "after-clear"));
+    sink->pump();
+    {
+        auto lines = sink->snapshot();
+        XX_TEST_EXPECT_EQ(lines.size(), size_t{1});
+        if (!lines.empty()) {
+            XX_TEST_EXPECT_EQ(lines[0].text, std::string{"after-clear"});
+        }
+    }
+
+    // 恢复默认, 避免影响其他用例
+    settings.setLogLevel(TUISettings::kDefaultLogLevel);
+}
+
 void test_concurrent_access() {
     // 多线程并发读写不应崩溃, 且读到的等级值始终合法
     auto&         settings    = TUISettings::instance();
@@ -2243,6 +2293,7 @@ TestResult testTuiSettings() {
     test_tail_thinking_names_table();
     test_tail_line_preview();
     test_log_sink_level_filter();
+    test_log_sink_ring_limits();
     test_concurrent_access();
     test_persist_to_db();
     test_model_selector_overlay_esc_and_confirm();

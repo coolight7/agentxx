@@ -148,6 +148,9 @@ inline std::string tailLinePreview(std::string_view s, size_t max = 60) {
 }
 
 /// TUI 日志接收器
+///
+/// 环形留存: 只保留最近 512 行, 超出后淘汰最旧的行
+/// (与诊断包的日志捕获、FFI 日志环同一个行数上限)
 class TUILogSink : public utilxx_base::LogSink {
 public:
 
@@ -171,10 +174,18 @@ protected:
 
     void onLog(const utilxx_base::LogEntry& entry) override;
 
+    /// 队列满丢弃时在日志里记一行提示
+    /// - 不写 stderr: TUI 是全屏渲染, 往 stderr 写会打乱画面
+    void onDropped(uint64_t count) override;
+
 private:
 
+    /// 超过 [maxLines_] 时淘汰最旧的行
+    void trim();
+
     std::deque<Line> lines_;
-    size_t           maxLines_    = 2000;
+    /// 最多留存的行数 (与诊断捕获、FFI 日志环统一为 512)
+    size_t           maxLines_    = 512;
     uint64_t         poppedCount_ = 0;
 };
 

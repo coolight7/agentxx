@@ -44,9 +44,10 @@ std::string buildDiagnosticsText(
 );
 
 /// 安装日志环形缓冲 (进程级; 重复调用只更新容量)
+/// - 只保留最近 [capacity] 行 (默认 512 行, 与 TUI 日志视图、FFI 日志环一致)
 /// - 诊断包要能带上"最近的日志", 但日志文件路径/滚动策略属于客户端配置,
 ///   因此这里提供进程内的最近日志捕获 (默认不安装, 不占内存)
-void enableLogCapture(size_t capacity = 500);
+void enableLogCapture(size_t capacity = 512);
 /// 关闭日志捕获并释放缓冲
 void disableLogCapture();
 /// 最近的日志行 (按时间顺序; limit == 0 返回全部已捕获行)

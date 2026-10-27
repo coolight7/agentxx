@@ -912,6 +912,15 @@ void TUIClientAgentIO::start() {
                     && sidebar_->isTabActive(kLogTabId)) {
                     screen->Post(Event::Custom);
                 }
+                // 日志不是当前 tab 时释放已构建的渲染树 (每行一个 Element):
+                // 不看日志时没必要占这份内存, 重新打开时按需重建 (行数/淘汰计数清零
+                // 后, renderLogWindow 会重新 snapshot)
+                if (logSink_ && sidebar_ && !sidebar_->isTabActive(kLogTabId)
+                    && (!logLineCache_.empty() || logCacheLineCount_ != 0)) {
+                    logLineCache_.clear();
+                    logCacheLineCount_   = 0;
+                    logCachePoppedCount_ = 0;
+                }
                 loop.RunOnceBlocking();
                 // 整帧渲染/事件处理完成: 释放本帧状态快照。
                 // 关键性能点: 若帧间隙持续持有快照, client 线程 (onDelta 流式追加)

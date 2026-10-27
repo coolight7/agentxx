@@ -108,7 +108,7 @@ std::vector<ScrollItem> TUIClientAgentIO::renderLogWindow() {
         };
     }
     // 仅当日志内容有变化时才重新 snapshot + 重建缓存:
-    // 日志行可能高达 2000 行, 每帧整份拷贝字符串是浪费 (日志 tab 打开时每帧渲染都触发)
+    // 日志行可能多达 512 行, 每帧整份拷贝字符串是浪费 (日志 tab 打开时每帧渲染都触发)
     const size_t   curCount  = logSink_->lineCount();
     const uint64_t curPopped = logSink_->poppedCount();
     if (curCount != logCacheLineCount_ || curPopped != logCachePoppedCount_) {

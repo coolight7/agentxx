@@ -14,6 +14,20 @@ void TUILogSink::onLog(const utilxx_base::LogEntry& entry) {
         return;
     }
     lines_.push_back(Line{entry.level, entry.message});
+    trim();
+}
+
+void TUILogSink::onDropped(const uint64_t count) {
+    // 队列满丢掉的是最新日志: 记一行提示, 让日志视图里能看到"有丢失"
+    // (基类默认写 stderr, 在 TUI 全屏界面里会打乱画面)
+    std::string text = "[log] queue full: dropped ";
+    text += std::to_string(count);
+    text += " entries";
+    lines_.push_back(Line{utilxx_base::LogLevel::Warn, std::move(text)});
+    trim();
+}
+
+void TUILogSink::trim() {
     while (lines_.size() > maxLines_) {
         lines_.pop_front();
         ++poppedCount_;

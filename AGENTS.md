@@ -479,6 +479,7 @@ path/to/agentxx_test string_util regex
   `agentxx::util::buildDiagnosticsText` + CLI `--dump-diagnostics` 导出
   环境/指标/加载(含配置 JSON)/会话摘要/日志尾部, 默认不含消息正文、不含凭据取值
   (内容过 `redactSecrets`); 日志尾部经 `enableLogCapture` 的进程内环形缓冲捕获
+  (只保留最近 512 行: 诊断捕获、TUI `TUILogSink`、FFI 日志环同一个上限)
 - 接口表数量: agent 侧 21 张 (10 张通用表 `pluginxx.*` + 11 张业务表 `agentxx.agent.*`;
   业务表含 `agentxx.agent.context` 会话 LLM 上下文查询 `get_messages`/`messages_count`
   与 `agentxx.agent.feature` 功能点: `list_points`/`define_point`/`undefine_point`/

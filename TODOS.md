@@ -14,7 +14,7 @@
 - 添加连续多次压缩检查
 - 框架处理支持 toolcall 参数采用变量取值，比如 edit、write 失败时可以将参数存入 share_store，减少下一次 edit 所需的token
 
-- 检查日志的保存是否符合环形缓存，避免内存中留存过多
+- tui 信息侧边栏顶部增加显示当前session标题
 - tui 弹窗支持复制
 - 打开会话弹窗支持高亮当前会话
 - 日志侧边栏显示当前会话 session-id
@@ -25,7 +25,6 @@
 - 修复日志警告 [W] Plugin `agentxx_filesystem`
 subscribe rejected: no event
 source (scope ref absent)
-- tui 信息侧边栏顶部增加显示当前session标题
 
 - SVG绘制支持
 - 链式 session 任务队列
