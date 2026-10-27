@@ -56,6 +56,12 @@ BaseAgent::BaseAgent(std::shared_ptr<agentxx::agent::AgentConfig> in_config) {
     assert(nullptr != in_config);
     assert(in_config->model.isValid());
 
+    // 事件总线在构造时就建好: 插件 `start` (插件加载阶段, 早于本 agent 的 init())
+    // 会以进程级引用订阅事件 (如 `plugin.agentxx.round_start`), 那时上下文里没有
+    // 总线, 主程序只能拒绝订阅并记警告 (subscribe rejected: no event source)。
+    // 总线只依赖 ioCtx, 这里建好不影响 init 的其余步骤 (见 [initEventBus])
+    initEventBus();
+
     // 对外标识 (HTTP 服务端 Server 头 / 客户端 User-Agent) 统一为本项目产品名
     // - 工具库只提供通用默认值, 产品名由主程序设置; 每份 utilxx 静态副本各自设置一次
     // - 幂等, 嵌入场景 (FFI / 测试 / 基准) 也经本构造函数覆盖
@@ -862,6 +868,10 @@ void BaseAgent::initModelRegistry() {
 }
 
 void BaseAgent::initEventBus() {
+    // 已存在时保持原对象: 插件在 init() 之前已挂上的订阅不能因为换总线而失效
+    if (agentContext->bus) {
+        return;
+    }
     agentContext->bus = std::make_shared<agentxx::events::EventBus>(ioCtx->get_executor());
 }
 

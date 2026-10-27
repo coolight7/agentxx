@@ -202,6 +202,8 @@ protected:
     void initModelRegistry();
 
     /// 创建事件总线并注入 AgentContext
+    /// - 构造函数里已调用一次 (插件加载阶段就需要总线, 见调用点的说明)
+    /// - 幂等: 总线已存在时保留原对象, 插件早先挂上的订阅不失效
     void initEventBus();
 
     /// 收集中间件自带的 toolcalls 到工具列表

@@ -737,8 +737,8 @@ public:
     std::shared_ptr<agentxx::middleware::MiddlewareContext> middlewareHandleContext = nullptr;
 
     /// 事件总线
-    /// - 由 BaseAgent 在 init() 中创建并注入; 节点/middleware/tool 经
-    ///   weak_ptr<AgentContext> 取用
+    /// - 由 BaseAgent 构造时创建 (插件加载阶段就要订阅进程级事件), init() 只确认
+    ///   存在; 节点/middleware/tool 经 weak_ptr<AgentContext> 取用
     /// - 完整定义在使用点 ([base_agent.h](/agent/lib/include/agentxx/agent/base_agent.h)) 引入
     std::shared_ptr<agentxx::events::EventBus> bus = nullptr;
 

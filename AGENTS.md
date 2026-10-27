@@ -752,4 +752,5 @@ sudo echo 3 > /proc/sys/vm/drop_caches
   不跨帧缓存, 帧循环由 `MessageListComponent::hasRunningMessage()` 维持; 运行标记由发起方
   在同一条消息 (同一 id) 的两次写入上置位/清除 (见 `middlewares/summarization.cpp`),
   从会话库读回历史时一律清掉 (`SessionStore` 的 `clearRunningTipFlag`), 避免重启后一直转
+- 启动日志出现 `Plugin `xxx` subscribe rejected: no event source (scope ref absent)`: 插件在 `start` 里以**空引用**订阅主程序总线 (kit 基类自动订阅 `plugin.agentxx.round_start`), 而主 agent 的事件总线当时还没建 —— 旧实现把总线建在 `init()` 的 `event_bus` 步骤, 晚于插件加载 (`loadPluginsAsync`)。现在 `BaseAgent` 构造函数就调 `initEventBus()` (幂等, `init()` 只确认存在), 插件在 `start` 里就能订阅; 看到这条警告说明总线那一侧又退回了延迟创建 (现象: 插件收不到轮次事件, 加载日志 `events=0`)
 - Android release (aarch64) 链接共享库时报 `relocation R_AARCH64_ADR_PREL_PG_HI21 cannot be used against symbol 'poly1305_blocks_sve2'`, 是 OpenSSL 4.0.1 aarch64 汇编的上游缺陷 (跨目标文件直接取全局符号地址、未写 `.hidden`, 静态 libcrypto.a 链进 .so 时该符号可抢占): 顶层 `agent/CMakeLists.txt` 已对 Android 共享库加 `-Wl,--exclude-libs=ALL` 处理, 详见 `resource/history/android-release-openssl-reloc/index.md`
