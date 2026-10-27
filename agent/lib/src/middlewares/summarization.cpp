@@ -826,8 +826,9 @@ asio::awaitable<void>
     if (session->messages().empty()) {
         co_return;
     }
-    // 上下文以会话为唯一权威: 压缩过程需要就地改写, 取一份拷贝
-    auto messages = session->messages();
+    // 上下文以会话为唯一权威: 常规路径只读它算 token, 真进入压缩分支才拷一份
+    // (压缩需要就地改写; 长会话下每次 modelcall 都拷 MB 级内容没有意义)
+    const auto& messages = session->messages();
 
     const auto& sessionId = in.ctx.thread_id;
 
@@ -928,6 +929,8 @@ asio::awaitable<void>
         }
 
         // 确定性压缩 (toolcall 去重/探索折叠 + 噪音清理)
+        // - 从这里开始需要就地改写: 拷一份会话上下文再改, 最后整体写回
+        auto messages = std::vector<neograph::ChatMessage>{session->messages()};
         doSummarizeToolcall(messages);
         cleanNoiseMessages(messages);
 

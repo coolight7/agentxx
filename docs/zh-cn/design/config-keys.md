@@ -18,7 +18,7 @@
 
 > 相关文档: [index.md](index.md) · [配置与设置边界](configuration.md)
 
-键数: 54
+键数: 56
 
 | 键路径 | 归属 | 类型 | 默认值 |
 |---|---|---|---|
@@ -71,6 +71,8 @@
 | `plugin.mount.list[]` | 服务端 | string (policy=listed 时挂的插件名) | 空 |
 | `mcp.list[].namespace` | 服务端 | string (必填; 命名空间) | 无 (缺 namespace/url 的条目被跳过) |
 | `mcp.list[].url` | 服务端 | string | 空 (缺 url 的条目被跳过) |
+| `mcp.list[].command` | 服务端 | string (stdio 传输的子进程命令; 与 url 二选一) | 空 (只有 url 时走 HTTP 传输) |
+| `mcp.list[].args` | 服务端 | list<string> (stdio 传输的子进程参数; 逐项传给子进程, 不用自己加引号) | 空 |
 | `mcp.list[].timeout` | 服务端 | int (秒; 0 = 不限制) | 120 (秒) |
 | `mcp.list[].headers` | 服务端 | map<string, string> (HTTP 请求头; 支持 ${VAR} 展开) | 空 (不附加自定义请求头) |
 | `models` | — (不生效) | 已废弃 (改名为 `model.list`) | 不生效 (整段忽略) |
@@ -491,6 +493,28 @@ mcp:
   list:
     - namespace: "tools"
       url: "http://127.0.0.1:9/sse"
+```
+
+### `mcp.list[].command`
+
+```yaml
+mcp:
+  overwrite: {mode: replace}
+  list:
+    - namespace: "tools"
+      command: "node"
+      args: ["server.js"]
+```
+
+### `mcp.list[].args`
+
+```yaml
+mcp:
+  overwrite: {mode: replace}
+  list:
+    - namespace: "tools"
+      command: "node"
+      args: ["server.js", "--port", "0"]
 ```
 
 ### `mcp.list[].timeout`

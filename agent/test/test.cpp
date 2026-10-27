@@ -101,6 +101,7 @@
 #include "asio/io_context.hpp"
 #include "asio/use_awaitable.hpp"
 #include "utilxx_base/log.h"
+#include "utilxx_base/string_util.h"
 #ifdef AGENTXX_BUILD_CLIENT
 #include "agentxx-test/client/test_banner_art.h"
 #include "agentxx-test/client/test_config_loader.h"
@@ -135,8 +136,10 @@
 #include "agentxx-test/test_coro_util.h"
 #include <chrono>
 #include <cstring>
+#include <filesystem>
 #include <iostream>
 #include <map>
+#include <string>
 
 namespace {
 
@@ -185,6 +188,24 @@ int main(int argn, char** argv) {
 #if XX_IS_WIN_D
     SetConsoleOutputCP(CP_UTF8);
 #endif
+    // 隐藏模式: 当子进程跑一个最小 MCP stdio 服务器
+    // (mcp 模块的 stdio 传输入口用例把本程序当子进程启动, 不依赖 python/node)
+    for (int i = 1; i < argn; ++i) {
+        if (strcmp(argv[i], "--mcp-stdio-server") == 0) {
+            agentxx::test::runMcpStdioServerProcess();
+            return 0;
+        }
+    }
+    // 子进程用例要启动本程序自身: 先取绝对路径 (相对路径在切换工作目录后会失效)
+    if (argn > 0 && argv[0] != nullptr) {
+        std::error_code ec;
+        auto abs = std::filesystem::absolute(
+            utilxx_base::utf8ToPath(argv[0]),
+            ec
+        );
+        agentxx::test::g_testExecutablePath
+            = ec ? std::string{argv[0]} : utilxx_base::pathToUtf8Generic(abs);
+    }
 #if XX_IS_DEBUG_D && (XX_IS_LINUX_D || XX_IS_WIN_D)
     utilxx_base::signalError(argv[0]);
 #endif

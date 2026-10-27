@@ -453,8 +453,7 @@ asio::awaitable<std::string> SubAgentManagerTool::execute_async(const utilxx_bas
                 // service.subagent 交主程序执行子代理, **不进入客户端渲染路径**
                 // (客户端 HIL 中断才需要描述, 见 InterruptHandleArg::ui)
             };
-        },
-        nullptr
+        }
     );
 
     // 提取结果: key = (tool_call_id + "_") + (task.result_id | 任务序号)

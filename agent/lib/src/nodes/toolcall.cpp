@@ -806,8 +806,7 @@ asio::awaitable<std::optional<std::string>> prepareToolInvocation(
                         );
                         arg.ui = agentxx::middleware::preset::confirmCard(card);
                         return arg;
-                    },
-                    nullptr
+                    }
                 );
                 // 解析用户响应: agent_runner 把结果 values 对象 (控件 id → 值)
                 // 按 resultId (工具调用 id) 写回 interruptResult, 形如
@@ -1651,10 +1650,9 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
             agentxx::middleware::MiddlewareContext::graphDataKey_interruptToolcallCache,
             results
         );
-        // 保存当前上下文，供 handler 恢复 (会话为权威, 取 Json 形态)
-        auto messages = session->llmMessagesJson();
-        // 重新抛出异常
-        agentCtxPtr->middlewareHandleContext->throwNodeInterruptBase(in.ctx.thread_id, messages);
+        // 重新抛出异常 (中断恢复不靠上下文快照: 会话是唯一权威, 节点已写入
+        // 的结果与消息都留在会话里)
+        agentCtxPtr->middlewareHandleContext->throwNodeInterruptBase(in.ctx.thread_id);
     }
 
     // 工具结果定稿: 追加到会话上下文并发出与旧 messages 通道写入同形的事件

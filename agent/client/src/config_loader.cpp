@@ -602,12 +602,44 @@ static YamlAppConfig parseYamlConfigNode(
                 overrideEnvVars
             );
             auto url = resolveEnvVars(node["url"].as<std::string>(""), dotEnvVars, overrideEnvVars);
-            if (ns.empty() || url.empty()) {
-                XX_LOGW(R"([Config] Warning: mcp entry missing `namespace` or `url`, skipped)");
+            // stdio 传输: command (可执行文件) + args (参数列表)
+            auto command = resolveEnvVars(
+                node["command"].as<std::string>(""),
+                dotEnvVars,
+                overrideEnvVars
+            );
+            if (ns.empty() || (url.empty() && command.empty())) {
+                XX_LOGW(
+                    R"([Config] Warning: mcp entry missing `namespace`, or both `url` and `command`, skipped)"
+                );
                 continue;
+            }
+            if (!url.empty() && !command.empty()) {
+                XX_LOGW(
+                    R"([Config] Warning: mcp entry has both `url` and `command` (namespace `{}`), `url` wins (HTTP transport)",
+                    ns
+                );
             }
             agent::McpServerConfig mcpCfg;
             mcpCfg.url = url;
+            if (url.empty()) {
+                mcpCfg.command = command;
+                // args: 字符串列表 (逐项展开环境变量); 非列表时忽略并告警
+                if (node["args"] && node["args"].IsSequence()) {
+                    for (const auto& argNode : node["args"]) {
+                        mcpCfg.args.push_back(resolveEnvVars(
+                            argNode.as<std::string>(""),
+                            dotEnvVars,
+                            overrideEnvVars
+                        ));
+                    }
+                } else if (node["args"]) {
+                    XX_LOGW(
+                        R"([Config] Warning: mcp `args` must be a list of strings (namespace `{}`), ignored)",
+                        ns
+                    );
+                }
+            }
             // 自定义 HTTP 请求头 (仅 http/sse 传输时发送, 如 Authorization 等)
             if (node["headers"] && node["headers"].IsMap()) {
                 for (const auto& kv : node["headers"]) {

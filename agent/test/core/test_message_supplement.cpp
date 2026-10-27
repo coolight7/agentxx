@@ -169,8 +169,7 @@ public:
                     .arg      = utilxx_base::Json{{"question", "approve?"}},
                     .resultId = resultId,
                 };
-            },
-            nullptr
+            }
         );
 
         // interruptResult 存储的是 {resultId: value} map; 按自身 resultId 提取

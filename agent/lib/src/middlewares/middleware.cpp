@@ -391,21 +391,16 @@ void MiddlewareContext::cleanupSession(std::string_view sessionId) {
     }
 }
 
-void MiddlewareContext::throwNodeInterruptBase(
-    std::string_view         sessionId,
-    const utilxx_base::Json& msgs
-) {
+void MiddlewareContext::throwNodeInterruptBase(std::string_view sessionId) {
     // 上下文无需在此保存: LLM 上下文由会话持有 (唯一权威), 不随图状态回滚,
     // 节点在抛出前已写入会话的消息依然保留 (见 Session::messages 系列接口)
     (void)sessionId;
-    (void)msgs;
     throw neograph::graph::NodeInterrupt{"xx-NodeInterrupt"};
 }
 
 asio::awaitable<utilxx_base::Json> MiddlewareContext::requestInterrupt(
     std::string_view                           sessionId,
-    const std::function<InterruptHandleArg()>& onCreateArg,
-    const utilxx_base::Json&                   msgs
+    const std::function<InterruptHandleArg()>& onCreateArg
 ) {
     auto result = std::move(getGraphDataItemValue<utilxx_base::Json>(
         sessionId,
@@ -424,7 +419,7 @@ asio::awaitable<utilxx_base::Json> MiddlewareContext::requestInterrupt(
             args.push_back(arg);
         }
     );
-    throwNodeInterruptBase(sessionId, msgs);
+    throwNodeInterruptBase(sessionId);
 }
 
 neograph::json MiddlewareContext::getGraphDataToState(

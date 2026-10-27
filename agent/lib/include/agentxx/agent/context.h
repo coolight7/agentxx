@@ -316,6 +316,16 @@ public:
     /// 整体替换上下文 (压缩回写 / 会话播种 / 恢复)
     void replaceMessages(std::vector<neograph::ChatMessage> msgs, bool persistThrottled = true);
 
+    /// 设置/替换首条 system 消息 (每轮重建系统提示词的快路径)
+    /// - 首条已是 system: 就地改内容 (不搬整个上下文); 否则插到开头
+    /// - 内容未变化时什么都不做 (版本号不递增, 落盘缓存不失效)
+    /// - 只在 io 线程调用 (与其它上下文写入接口一致)
+    ///
+    /// - `args`:
+    ///     - [msg] 新的 system 消息 (role 应为 "system"; 其余字段保留旧的/new 的均可)
+    ///     - [persistThrottled] 是否请求一次节流落盘 (系统提示词属派生内容, 通常 false)
+    void setSystemMessage(neograph::ChatMessage msg, bool persistThrottled = false);
+
     /// 用 Json 形态整体替换上下文 (sqlite 加载 / Wire 边界形态)
     void replaceMessagesFromJson(const utilxx_base::Json& msgs);
 

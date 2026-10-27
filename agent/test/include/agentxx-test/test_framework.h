@@ -197,6 +197,11 @@ struct TestResult {
 
 inline bool g_failFast = false;
 
+/// 本测试进程的可执行文件路径 (由 main 填入绝对路径)
+/// - 供需要启动子进程的用例使用 (如 MCP stdio 传输把测试程序自身当 server 子进程)
+/// - 为空时相关用例只跳过 (不当作失败)
+inline std::string g_testExecutablePath;
+
 inline std::ostream& passStream() {
     return std::cout << "[PASS] ";
 }

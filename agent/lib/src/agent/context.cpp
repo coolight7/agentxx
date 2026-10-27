@@ -337,6 +337,24 @@ void Session::appendSettledLlmMessages(const utilxx_base::Json& settledMsgs) {
     appendMessages(messagesFromJson(settledMsgs));
 }
 
+void Session::setSystemMessage(neograph::ChatMessage msg, bool persistThrottled) {
+    assertIoThread();
+    if (!messages_.empty() && messages_.front().role == "system") {
+        // 内容相同 (每轮重建的系统提示词大多数时候不变) 就不动版本号,
+        // 避免无谓的缓存失效与落盘
+        if (messages_.front().content == msg.content) {
+            return;
+        }
+        messages_.front() = std::move(msg);
+    } else {
+        messages_.insert(messages_.begin(), std::move(msg));
+    }
+    markMessagesChanged();
+    if (persistThrottled) {
+        requestSaveLlmMessages();
+    }
+}
+
 void Session::truncateMessages(size_t count, bool persistThrottled) {
     assertIoThread();
     if (count >= messages_.size()) {

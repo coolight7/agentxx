@@ -185,8 +185,7 @@ public:
                              .arg      = utilxx_base::Json{{"question", "approve?"}},
                              .resultId = resultId,
                 };
-            },
-            nullptr
+            }
         );
         if (result.is_object() && !resultId.empty() && result.contains(resultId)) {
             auto val = result[resultId];

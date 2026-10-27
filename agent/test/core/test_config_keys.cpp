@@ -924,6 +924,45 @@ std::vector<ConfigKeyEntry> configKeyEntries() {
          )}
     );
     out.push_back(
+        {"mcp.list[].command",
+         "string (stdio 传输的子进程命令; 与 url 二选一)",
+         "空 (只有 url 时走 HTTP 传输)",
+         "mcp:\n  overwrite: {mode: replace}\n  list:\n    - namespace: \"tools\"\n      command: \"node\"\n      args: [\"server.js\"]\n",
+         kMinimalMcpYaml,
+         false,
+         "",
+         "node",
+         mcpProbe(
+             "tools",
+             [](const agentxx::agent::McpServerConfig& m) {
+                 return m.command;
+             }
+         )}
+    );
+    out.push_back(
+        {"mcp.list[].args",
+         "list<string> (stdio 传输的子进程参数; 逐项传给子进程, 不用自己加引号)",
+         "空",
+         "mcp:\n  overwrite: {mode: replace}\n  list:\n    - namespace: \"tools\"\n      command: \"node\"\n      args: [\"server.js\", \"--port\", \"0\"]\n",
+         kMinimalMcpYaml,
+         false,
+         "",
+         "server.js --port 0",
+         mcpProbe(
+             "tools",
+             [](const agentxx::agent::McpServerConfig& m) {
+                 std::string joined;
+                 for (const auto& arg : m.args) {
+                     if (!joined.empty()) {
+                         joined += ' ';
+                     }
+                     joined += arg;
+                 }
+                 return joined;
+             }
+         )}
+    );
+    out.push_back(
         {"mcp.list[].timeout",
          "int (秒; 0 = 不限制)",
          "120 (秒)",

@@ -149,8 +149,17 @@ public:
 
 /// MCP 服务器配置 (yaml `mcp` 列表项; key 为命名空间)
 struct McpServerConfig {
-    /// MCP 服务器 URL
+    /// MCP 服务器 URL (HTTP/SSE 传输; 与 [command] 二选一)
     std::string url;
+
+    /// stdio 传输: 子进程命令 (yaml `command`; 与 [url] 二选一)
+    /// - 填了它就是 stdio 传输: 由主程序启动该子进程, 经 stdin/stdout 收发 JSON-RPC
+    ///   (行分隔); 此时 [headers] 不生效
+    /// - 命令行按单个参数传入 ([args] 逐项传), 不需要自己加引号
+    std::string command;
+
+    /// stdio 传输: 命令参数 (yaml `args`, 字符串列表)
+    std::vector<std::string> args;
 
     /// HTTP 请求头 (仅 http 传输时有效, 如 Authorization: "Bearer ...")
     std::map<std::string, std::string> headers;
@@ -159,6 +168,11 @@ struct McpServerConfig {
     /// - 0 表示不限制
     /// - 默认 120 秒; yaml 中按秒配置 (timeout 字段, 0=不限制)
     std::chrono::milliseconds toolTimeout{std::chrono::seconds{120}};
+
+    /// 是否走 stdio 传输 (command 非空且 url 为空)
+    bool isStdio() const {
+        return !command.empty() && url.empty();
+    }
 };
 
 /// 插件运行侧 (yaml `plugins` 条目 sides)

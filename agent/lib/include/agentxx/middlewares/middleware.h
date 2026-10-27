@@ -685,13 +685,14 @@ public:
     }
 
     /// 一般用于捕获到 NodeInterrupt 后重新抛出，而不能作为首次抛出使用
-    void throwNodeInterruptBase(std::string_view sessionId, const utilxx_base::Json& msgs);
+    /// - 上下文无需在此保存: LLM 上下文由会话持有 (唯一权威), 不随图状态回滚,
+    ///   节点在抛出前已写入会话的消息依然保留
+    void throwNodeInterruptBase(std::string_view sessionId);
 
     /// 工具请求中断：检查已有结果（resume 后）或存储参数并抛异常
     asio::awaitable<utilxx_base::Json> requestInterrupt(
         std::string_view                           sessionId,
-        const std::function<InterruptHandleArg()>& onCreateArg,
-        const utilxx_base::Json&                   msgs
+        const std::function<InterruptHandleArg()>& onCreateArg
     );
 
     /// 将 graphData 中 JSON 兼容条目序列化到 state channel

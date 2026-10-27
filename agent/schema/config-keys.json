@@ -2,7 +2,7 @@
   "version": 1,
   "note": "生成物, 请勿手工编辑; 重新生成: AGENTXX_UPDATE_CONFIG_KEYS=1 agentxx_test config_keys",
   "source": "agent/client/src/config_loader.cpp",
-  "count": 54,
+  "count": 56,
   "keys": [
     {
       "path": "data_dir",
@@ -346,6 +346,20 @@
       "type": "string",
       "default": "空 (缺 url 的条目被跳过)",
       "sample": "mcp:\n  list:\n    - namespace: \"tools\"\n      url: \"http://127.0.0.1:9/sse\""
+    },
+    {
+      "path": "mcp.list[].command",
+      "owner": "server",
+      "type": "string (stdio 传输的子进程命令; 与 url 二选一)",
+      "default": "空 (只有 url 时走 HTTP 传输)",
+      "sample": "mcp:\n  overwrite: {mode: replace}\n  list:\n    - namespace: \"tools\"\n      command: \"node\"\n      args: [\"server.js\"]"
+    },
+    {
+      "path": "mcp.list[].args",
+      "owner": "server",
+      "type": "list<string> (stdio 传输的子进程参数; 逐项传给子进程, 不用自己加引号)",
+      "default": "空",
+      "sample": "mcp:\n  overwrite: {mode: replace}\n  list:\n    - namespace: \"tools\"\n      command: \"node\"\n      args: [\"server.js\", \"--port\", \"0\"]"
     },
     {
       "path": "mcp.list[].timeout",

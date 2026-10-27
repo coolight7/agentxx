@@ -171,6 +171,46 @@ bool isLegacyProbeFailure(std::string_view errmsg) {
     }
     return false;
 }
+
+#if !defined(BOOST_PROCESS_V2_PROCESS_HPP) && XX_IS_WIN_D
+/// 按 Windows 命令行解析规则包一个参数 (CommandLineToArgvW / MSVC CRT 规则)
+/// - 含空格/制表符/引号 (或为空) 时加双引号
+/// - 引号前的反斜杠双写, 结尾反斜杠也要转义 (否则会把结束引号转义掉)
+///
+/// 背景: 回退路径手工拼 CreateProcess 命令行, 直接空格拼接会把带空格的路径
+/// (`C:\Program Files\...`) 拆成多个参数
+std::string quoteWindowsArgument(std::string_view arg) {
+    const bool needQuote = arg.empty()
+                           || arg.find_first_of(" \t\"") != std::string_view::npos;
+    if (!needQuote) {
+        return std::string{arg};
+    }
+    std::string out;
+    out.reserve(arg.size() + 2);
+    out.push_back('"');
+    size_t backslashes = 0;
+    for (char ch : arg) {
+        if (ch == '\\') {
+            ++backslashes;
+            continue;
+        }
+        if (ch == '"') {
+            // 引号前的反斜杠双写, 再补一个反斜杠转义引号
+            out.append(backslashes * 2 + 1, '\\');
+            out.push_back('"');
+            backslashes = 0;
+            continue;
+        }
+        out.append(backslashes, '\\');
+        backslashes = 0;
+        out.push_back(ch);
+    }
+    // 结尾反斜杠双写: 避免与收尾引号组成转义序列
+    out.append(backslashes * 2, '\\');
+    out.push_back('"');
+    return out;
+}
+#endif
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -332,7 +372,14 @@ struct McpClient::StdioTransport {
         int stdinPipe[2]  = {-1, -1};
         int stdoutPipe[2] = {-1, -1};
 
-        if (::pipe(stdinPipe) != 0 || ::pipe(stdoutPipe) != 0) {
+        // 两个 pipe 分别建: 第二个失败时把第一个已开的两端都关掉,
+        // 否则父进程会泄漏一对文件描述符
+        if (::pipe(stdinPipe) != 0) {
+            return false;
+        }
+        if (::pipe(stdoutPipe) != 0) {
+            ::close(stdinPipe[0]);
+            ::close(stdinPipe[1]);
             return false;
         }
 
@@ -350,7 +397,11 @@ struct McpClient::StdioTransport {
             ::close(stdoutPipe[0]);
             ::dup2(stdinPipe[0], STDIN_FILENO);
             ::dup2(stdoutPipe[1], STDOUT_FILENO);
-            int maxFd = static_cast<int>(::sysconf(_SC_OPEN_MAX));
+            // 子进程关掉继承来的其它描述符。sysconf 失败 (-1) 时用固定上界:
+            // 直接拿 -1 当前界会让循环一次也不执行, 子进程会把父进程的 fd 全继承下去
+            const long openMax = ::sysconf(_SC_OPEN_MAX);
+            const int  maxFd   = (openMax > 0) ? static_cast<int>(std::min<long>(openMax, 65536))
+                                              : 1024;
             for (int i = 3; i < maxFd; i++) {
                 if (i != stdinPipe[0] && i != stdoutPipe[1]) {
                     ::close(i);
@@ -402,11 +453,15 @@ struct McpClient::StdioTransport {
             if (i > 0) {
                 cmdLine += " ";
             }
-            cmdLine += cmd[i];
+            // 逐项按 Windows 规则加引号: 带空格/引号的路径不会被拆成多个参数
+            cmdLine += quoteWindowsArgument(cmd[i]);
         }
+        // 宽字符 API: 命令行里的中文路径得经 UTF-8 -> UTF-16 转换
+        // (CreateProcessA 走 ANSI 代码页, UTF-8 中文会变乱码)
+        std::wstring cmdLineW = utilxx_base::utf8ToPath(cmdLine).wstring();
 
         PROCESS_INFORMATION pi;
-        STARTUPINFOA        si;
+        STARTUPINFOW        si;
         ZeroMemory(&si, sizeof(si));
         si.cb          = sizeof(si);
         si.hStdError   = parentStdoutWr;
@@ -414,9 +469,9 @@ struct McpClient::StdioTransport {
         si.hStdInput   = parentStdinRd;
         si.dwFlags    |= STARTF_USESTDHANDLES;
 
-        if (!CreateProcessA(
+        if (!CreateProcessW(
                 nullptr,
-                cmdLine.data(),
+                cmdLineW.data(),
                 nullptr,
                 nullptr,
                 TRUE,

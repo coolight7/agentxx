@@ -40,6 +40,34 @@ using namespace agentxx::protocol;
 using namespace utilxx_base;
 using namespace utilxx;
 
+// -----------------------------------------------------------------------
+// stdio 传输入口: 用本程序自身当 MCP 服务器子进程
+// -----------------------------------------------------------------------
+//
+// 背景: McpClient 的 stdio 通道以前只能手动填 serverCommand (配置层没有入口),
+// 也没有任何回归。这里把 agentxx_test 自身当子进程跑一个最小 MCP server
+// (`McpServer::runStdio()`), 这样不需要 python/node 等外部依赖。
+//
+// 子进程模式由 test.cpp 的 `--mcp-stdio-server` 参数触发, 只跑 JSON-RPC 不回测试。
+void runMcpStdioServerProcess() {
+    McpServer server;
+    McpToolDefinition tool;
+    tool.name        = "echo";
+    tool.description = "echo back the `text` argument";
+    tool.inputSchema = json::parse(R"({"type":"object","properties":{"text":{"type":"string"}}})");
+    server.addTool(tool, [](const json& args) -> json {
+        json result = json::object();
+        json content = json::array();
+        json item    = json::object();
+        item["type"] = "text";
+        item["text"] = args.value("text", std::string{"pong"});
+        content.push_back(std::move(item));
+        result["content"] = std::move(content);
+        return result;
+    });
+    server.runStdio();
+}
+
 // Unit test for version negotiation logic (doesn't require a server instance)
 void test_mcp_version_negotiation_unit() {
     // Directly test the version negotiation algorithm
@@ -3933,6 +3961,76 @@ asio::awaitable<void> test_mcp_client_session_rebuild() {
     server.stop();
 }
 
+/// stdio 传输端到端: 把本测试程序自身当 MCP 服务器子进程
+/// - 覆盖配置入的 `command`/`args` 路径 (McpClient::Config::serverCommand)
+/// - 完整走一遍 initialize → listTools → 调用工具 → close (含子进程启动/管道收尾)
+asio::awaitable<void> test_mcp_client_stdio_subprocess() {
+    if (agentxx::test::g_testExecutablePath.empty()) {
+        TEST_INFO << "[mcp] stdio subprocess skipped: test executable path unknown"
+                  << std::endl;
+        co_return;
+    }
+
+    McpClient::Config cfg;
+    cfg.serverCommand   = {agentxx::test::g_testExecutablePath, "--mcp-stdio-server"};
+    cfg.protocolVersion = std::string{McpClient::kProtocol2026_07_28};
+    cfg.requestTimeout  = std::chrono::seconds(10);
+    cfg.initTimeout     = std::chrono::seconds(10);
+
+    // 配置形态校验: 只有 command 时属于 stdio 传输
+    XX_TEST_EXPECT_TRUE(cfg.isStdio());
+    XX_TEST_EXPECT_FALSE(cfg.isHttp());
+    XX_TEST_EXPECT_TRUE(cfg.isValid());
+
+    auto client = std::make_shared<McpClient>(std::move(cfg));
+    auto init   = co_await client->initialize();
+    XX_TEST_EXPECT_TRUE(init.has_value());
+    if (!init.has_value()) {
+        TEST_FAIL << "[mcp] stdio initialize failed: " << init.error() << std::endl;
+        co_await client->close();
+        co_return;
+    }
+
+    auto tools = co_await client->listTools();
+    XX_TEST_EXPECT_TRUE(tools.has_value());
+    struct EchoTool {
+        bool                found = false;
+        McpToolDefinition   def{};
+    } echo;
+    if (tools.has_value()) {
+        for (const auto& t : *tools) {
+            if (t.name == "echo") {
+                echo.found = true;
+                echo.def   = t;
+            }
+        }
+    }
+    XX_TEST_EXPECT_TRUE(echo.found);
+
+    if (echo.found) {
+        auto tool     = client->createTool(echo.def, {});
+        auto args     = json::object();
+        args["text"] = "stdio-roundtrip";
+        auto result   = co_await tool->execute_async(args);
+        XX_TEST_EXPECT_TRUE(result.find("stdio-roundtrip") != std::string::npos);
+    }
+
+    co_await client->close();
+}
+
+/// stdio 传输的错误路径: 子进程命令不存在时初始化失败且不崩
+asio::awaitable<void> test_mcp_client_stdio_bad_command() {
+    McpClient::Config cfg;
+    cfg.serverCommand = {"agentxx-definitely-missing-mcp-server-xyz"};
+    cfg.initTimeout   = std::chrono::seconds(3);
+    cfg.requestTimeout = std::chrono::seconds(3);
+
+    auto client = std::make_shared<McpClient>(std::move(cfg));
+    auto init   = co_await client->initialize();
+    XX_TEST_EXPECT_FALSE(init.has_value());
+    co_await client->close();
+}
+
 asio::awaitable<TestResult> run_mcp_tests() {
     std::cout << "  [mcp] version_negotiation_unit..." << std::endl;
     test_mcp_version_negotiation_unit();
@@ -3997,6 +4095,10 @@ asio::awaitable<TestResult> run_mcp_tests() {
     co_await test_mcp_client_truncated_retry();
     std::cout << "  [mcp] client_session_rebuild..." << std::endl;
     co_await test_mcp_client_session_rebuild();
+    std::cout << "  [mcp] client_stdio_subprocess..." << std::endl;
+    co_await test_mcp_client_stdio_subprocess();
+    std::cout << "  [mcp] client_stdio_bad_command..." << std::endl;
+    co_await test_mcp_client_stdio_bad_command();
     co_return TestResult{g_mcp_passed, g_mcp_failed};
 }
 

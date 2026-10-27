@@ -38,6 +38,113 @@ inline static constexpr std::string_view defaultContinueTip{"[Please continue]"}
 // - 实现与各 Provider 共用 (见 provider_common.h), 避免多处拷贝不一致
 using agentxx::protocol::makeUniqueToolCallId;
 
+namespace {
+
+/// 上下文是否需要修复 (只读体检)
+///
+/// 修复会把整份上下文拷一份再改; 长会话下每次 modelcall 拷 MB 级内容没有意义,
+/// 所以先用本函数扫一遍, 只有真有问题才走修复流程。判定项目与修复动作一一对应:
+/// - 悬挂的 assistant tool_calls (声明的 id 未全部在第 1 组 tool 结果里回复)
+/// - 重复的 tool_call_id (assistant 声明里重复出现)
+/// - 连续的 user 消息 (部分 provider 要求 user/assistant 交替)
+/// - 空消息 (正文/思考/工具调用全空)
+/// - 非法 utf8 (正文/思考/工具调用参数)
+bool repairNeeded(const std::vector<neograph::ChatMessage>& msgs) {
+    for (size_t i = 0; i < msgs.size(); ++i) {
+        const auto& msg = msgs[i];
+        if (msg.reasoning_content.empty() && msg.content.empty() && msg.tool_calls.empty()) {
+            return true; // 空消息
+        }
+        if (utilxx_base::utf8GetLengthCheckAvail(msg.content) != 0
+            || utilxx_base::utf8GetLengthCheckAvail(msg.reasoning_content) != 0) {
+            return true; // 非法 utf8
+        }
+        for (const auto& tc : msg.tool_calls) {
+            if (utilxx_base::utf8GetLengthCheckAvail(tc.arguments) != 0) {
+                return true;
+            }
+        }
+        if (i > 0 && msg.role == "user" && msgs[i - 1].role == "user") {
+            return true; // 连续 user
+        }
+        if (msg.role != "assistant" || msg.tool_calls.empty()) {
+            continue;
+        }
+        // 悬挂的 tool_calls: 本组声明的 id 必须在下一个非 tool 消息之前全部回复
+        std::set<std::string> ids;
+        for (const auto& tc : msg.tool_calls) {
+            if (!tc.id.empty() && !ids.insert(tc.id).second) {
+                return true; // 重复 id
+            }
+        }
+        if (ids.empty()) {
+            continue;
+        }
+        std::set<std::string> replied;
+        for (size_t j = i + 1; j < msgs.size() && msgs[j].role == "tool"; ++j) {
+            if (!msgs[j].tool_call_id.empty()) {
+                replied.insert(msgs[j].tool_call_id);
+            }
+        }
+        for (const auto& id : ids) {
+            if (replied.count(id) == 0) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+/// 上下文健康时只更新诊断信息 (不拷上下文)
+/// - 与修复流程里的诊断部分保持一致: 条数缩减告警 + system 提示词哈希变化告警
+void updateMessageCheckInfo(
+    const std::vector<neograph::ChatMessage>&              msgs,
+    std::string_view                                       threadId,
+    agentxx::middleware::MiddlewareContext*                mwCtx
+) {
+    if (mwCtx == nullptr) {
+        return;
+    }
+    using agentxx::middleware::MiddlewareContext;
+    auto checkInfo = mwCtx->getGraphDataItemValue<utilxx_base::Json>(
+        threadId,
+        MiddlewareContext::graphDataKey_messageCheckInfo
+    );
+    if (checkInfo.contains("message_length") && checkInfo["message_length"].is_number_integer()
+        && checkInfo.value<size_t>("message_length", 0) > msgs.size()) {
+        XX_LOGW(
+            "LLM Messages length reduce: old({}) -> current({})",
+            checkInfo.value<size_t>("message_length", 0),
+            msgs.size()
+        );
+    }
+    checkInfo["message_length"] = msgs.size();
+    for (const auto& msg : msgs) {
+        if (msg.role != "system") {
+            continue;
+        }
+        const auto sysPromptHash = utilxx_base::hash::fnv1a64(msg.content);
+        if (checkInfo.contains("system_prompt_hash")
+            && checkInfo["system_prompt_hash"].is_number_integer()
+            && checkInfo.value<uint64_t>("system_prompt_hash", 0) != sysPromptHash) {
+            XX_LOGE(
+                "LLM System-Prompt content hash changed: old({:016x}) -> current({:016x}) (length: {})",
+                checkInfo.value<uint64_t>("system_prompt_hash", 0),
+                sysPromptHash,
+                msg.content.size()
+            );
+        }
+        checkInfo["system_prompt_hash"] = sysPromptHash;
+    }
+    mwCtx->setGraphDataItemValue<utilxx_base::Json>(
+        threadId,
+        MiddlewareContext::graphDataKey_messageCheckInfo,
+        std::move(checkInfo)
+    );
+}
+
+} // namespace
+
 ModelCallWrapNode::ModelCallWrapNode(
     std::string_view                            name,
     const neograph::graph::NodeContext&         ctx,
@@ -632,7 +739,9 @@ void ModelCallWrapNode::repairMessages(neograph::graph::NodeInput& in) {
         }
     }
 
-    if (agentCtxPtr->agentConfig->repairMessages) {
+    // - 修复前先做只读体检 (repairNeeded): 长会话下每次 modelcall 都拷一整份
+    //   上下文来查问题没有意义, 健康时只刷新诊断信息
+    if (agentCtxPtr->agentConfig->repairMessages && repairNeeded(session->messages())) {
         // - 最终回退处理，一般生成 message 的代码应该自己处理异常、补充消息
         // - 这里作为最终的预防处理
         auto msgs = session->messages(); // 拷贝一份: 修复过程需要就地改写
@@ -993,6 +1102,13 @@ void ModelCallWrapNode::repairMessages(neograph::graph::NodeInput& in) {
             session->replaceMessages(std::move(msgs));
             agentxx::nodes::updateMessagesMeta(agentCtxPtr, in.state, in.ctx.thread_id);
         }
+    } else if (agentCtxPtr->agentConfig->repairMessages) {
+        // 上下文健康: 只刷新诊断信息 (条数缩减告警 + system 提示词哈希变化告警)
+        updateMessageCheckInfo(
+            session->messages(),
+            in.ctx.thread_id,
+            agentCtxPtr->middlewareHandleContext.get()
+        );
     }
 }
 
@@ -1008,14 +1124,14 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
         // 添加/更新 system Msg (上下文以会话为唯一权威)
         // - 首条已是 system 消息: 保留其余字段, 就地更新内容 (每轮重建的系统提示词)
         // - 否则在开头插入一条
-        std::vector<neograph::ChatMessage> msgs = session->messages(); // 拷贝一份后改写
-        bool                               haveSystemMsg = false;
-        if (!msgs.empty() && msgs.front().role == "system") {
-            haveSystemMsg = true;
-        }
+        // - 走 Session::setSystemMessage 而不是先拷整份上下文再整体替换:
+        //   长会话下每次 modelcall 拷一份 MB 级上下文没有实际作用
+        const auto& messages = session->messages();
+        const bool  haveSystemMsg = !messages.empty() && messages.front().role == "system";
+
         neograph::ChatMessage newSystemMsg{.role = "system"};
         if (haveSystemMsg) {
-            newSystemMsg = msgs.front();
+            newSystemMsg = messages.front();
         }
         // 同上下文运行 (上下文压缩的子代理): 保留调用方给的 system 消息
         // - 该文本就是父会话本次请求发出的 system (父会话 modelcall 刚重建过),
@@ -1030,13 +1146,8 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
             // 独立消息附加, 不写进 system 消息
             newSystemMsg.content = agentCtxPtr->buildSystemPromptStable(in.ctx.thread_id);
         }
-        if (haveSystemMsg) {
-            msgs.front() = std::move(newSystemMsg);
-        } else {
-            msgs.insert(msgs.begin(), std::move(newSystemMsg));
-        }
         // 不请求节流落盘: 系统提示词属每轮重建的派生内容, 由轮末权威保存落库
-        session->replaceMessages(std::move(msgs), false);
+        session->setSystemMessage(std::move(newSystemMsg), false);
         agentxx::nodes::updateMessagesMeta(agentCtxPtr, in.state, in.ctx.thread_id);
     }
 

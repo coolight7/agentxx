@@ -330,8 +330,18 @@ bool AgentResourceApplier::addMcpServer(
         mcpHeaders.set(k, v);
     }
 
+    // stdio 传输入口: command + args 逐项组装成子进程命令行
+    std::vector<std::string> serverCommand;
+    if (cfg.isStdio()) {
+        serverCommand.push_back(cfg.command);
+        for (const auto& a : cfg.args) {
+            serverCommand.push_back(a);
+        }
+    }
+
     auto client = std::make_shared<protocol::McpClient>(protocol::McpClient::Config{
         .serverUrl       = cfg.url,
+        .serverCommand   = std::move(serverCommand),
         .protocolVersion = std::string{protocol::McpClient::kProtocol2026_07_28},
         .toolNamespace   = ns,
         .initTimeout

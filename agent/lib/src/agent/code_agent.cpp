@@ -220,15 +220,28 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> CodeAg
             co_await agentxx::util::catchErrorAsync<bool>(
                 [&]() -> asio::awaitable<bool> {
                     // 逐步上报启动进度: MCP 网络连接较慢, 逐 server 报告名称+地址
-                    notifyInitProgress(fmt::format("加载 MCP: {} ({})", ns, mcpCfg.url));
-                    XX_LOGD("load mcp tool: {} | {}", ns, mcpCfg.url);
+                    // (stdio 传输没有地址, 报告子进程命令)
+                    const bool stdio = mcpCfg.isStdio();
+                    const auto target = stdio ? fmt::format("stdio: {}", mcpCfg.command)
+                                              : mcpCfg.url;
+                    notifyInitProgress(fmt::format("加载 MCP: {} ({})", ns, target));
+                    XX_LOGD("load mcp tool: {} | {}", ns, target);
                     utilxx::HeaderMap mcpHeaders;
                     for (const auto& [k, v] : mcpCfg.headers) {
                         mcpHeaders.set(k, v);
                     }
+                    // stdio 传输入口: command + args 逐项组装成子进程命令行
+                    std::vector<std::string> serverCommand;
+                    if (stdio) {
+                        serverCommand.push_back(mcpCfg.command);
+                        for (const auto& a : mcpCfg.args) {
+                            serverCommand.push_back(a);
+                        }
+                    }
                     auto mcpClient = std::make_shared<agentxx::protocol::McpClient>(
                         agentxx::protocol::McpClient::Config{
                             .serverUrl = mcpCfg.url,
+                            .serverCommand = std::move(serverCommand),
                             .protocolVersion
                             = std::string{agentxx::protocol::McpClient::kProtocol2026_07_28},
                             .toolNamespace   = ns,
