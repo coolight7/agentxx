@@ -53,6 +53,7 @@
 #include "agentxx-test/core/test_session_admin.h"
 #include "agentxx-test/core/test_session_persistence.h"
 #include "agentxx-test/core/test_session_schema.h"
+#include "agentxx-test/core/test_session_runtime.h"
 #include "agentxx-test/core/test_session_sync.h"
 #include "agentxx-test/core/test_settings_db.h"
 #include "agentxx-test/core/test_share_store.h"
@@ -466,6 +467,7 @@ int main(int argn, char** argv) {
                 co_await runCtx("math_tools", agentxx::test::run_math_tools_tests, agentContext);
                 co_await run("share_store", agentxx::test::run_share_store_tests);
                 co_await run("session_persistence", agentxx::test::run_session_persistence_tests);
+                co_await run("session_runtime", agentxx::test::run_session_runtime_tests);
                 co_await runCtx(
                     "rag_search",
                     agentxx::test::run_rag_search_tools_tests,

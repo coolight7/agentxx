@@ -11,6 +11,7 @@
 #include "agentxx/agent/io/session_server_agent_io.h"
 #include "agentxx/agent/io/ws_io_transport.h"
 #include "agentxx/agent/model_registry.h"
+#include "agentxx/agent/session_runtime.h"
 #include "agentxx/plugin/builtin_tool_renderers.h"
 #include "agentxx/plugin/client_plugin_manager.h"
 #include "agentxx/util/exception.h"
@@ -169,129 +170,44 @@ static asio::awaitable<void> shutdownAgentPlugins(std::shared_ptr<agent::CodeAge
 /// (与会话分页页大小 TUIClientAgentIO::kHistoryPageSize 保持一致量级)
 static constexpr size_t kTuiInitialSyncTailCount = 100;
 
-/// TUI 持有 client transport, SessionServerAgentIO 持有 server transport
-/// 两端点经 Channel 直连, 无中间包装层
-static std::shared_ptr<agent::SessionServerAgentIO> setupLocalUnifiedDirect(
+/// 把客户端端点与 agent 接起来并启动会话 (两端经 Channel 直连, 无中间包装层)
+/// - 装配顺序 (建传输对 / 建服务端点 / init / 挂根 / 就绪 / 驱动循环 / hello) 全部
+///   在 [agent::AgentSessionRuntime] 里, 这里只给出本模式的差异参数
+static std::shared_ptr<agent::AgentSessionRuntime> setupLocalUnifiedDirect(
     asio::any_io_executor               clientEx,
     std::shared_ptr<agent::CodeAgent>   agent,
     std::shared_ptr<agent::AgentIOBase> clientIO,
     const std::string&                  sessionId
 ) {
-    auto agentEx = agent->ioCtx->get_executor();
-    auto [clientTransport, serverTransport]
-        = agent::ChannelAgentIOTransport::makePair(clientEx, agentEx);
+    const bool isTui = dynamic_cast<TUIClientAgentIO*>(clientIO.get()) != nullptr;
 
-    // 客户端 IO 持有 client transport
-    clientIO->setTransport(std::shared_ptr<agent::AgentIOTransportBase>(std::move(clientTransport))
-    );
-
-    // 服务端: SessionServerAgentIO 持有 server transport
-    agent::SessionServerAgentIO::Config scCfg;
-    scCfg.sessionId = sessionId;
-    // 历史分页尾窗: 仅对 TUI 客户端启用 —— 恢复长会话时服务端只回推末尾
-    // 100 条 (与 TUIClientAgentIO::kHistoryPageSize 分页页大小一致), 用户
-    // 向上滚动到窗口顶部时经 WireGetViewMessages 分页拉取更早历史;
+    agent::AgentSessionRuntime::Config cfg;
+    cfg.sessionId         = sessionId;
+    cfg.clientExecutor    = clientEx;
+    cfg.loadPluginsInHost = true; // 主程序代劳加载插件 (进程一份), 各 agent 只在 init 里挂载
+    cfg.deltaBufferCap    = 4096; // 终端界面支持断线重连重放
+    // 历史分页尾窗: 仅对 TUI 客户端启用 —— 恢复长会话时服务端只回推末尾 100 条,
+    // 用户向上滚动到窗口顶部时经 WireGetViewMessages 分页拉取更早历史;
     // stdio 客户端无滚动交互, 保持完整同步 (initialSyncTailCount=0)
-    if (dynamic_cast<TUIClientAgentIO*>(clientIO.get()) != nullptr) {
-        scCfg.initialSyncTailCount = kTuiInitialSyncTailCount;
+    if (isTui) {
+        cfg.initialSyncTailCount = kTuiInitialSyncTailCount;
+        // 客户端界面语言: hello 带它对齐会话语言 (配置已显式指定语言时不生效)
+        cfg.language = TUISettings::instance().languageCode();
     }
-    auto serverIO = std::make_shared<agent::SessionServerAgentIO>(agentEx, agent, scCfg);
-    serverIO->setTransport(std::shared_ptr<agent::AgentIOTransportBase>(std::move(serverTransport))
-    );
-
-    // 注册 agent 启动进度通知: init() 各启动阶段 (agent 线程) → 客户端端点
-    // (TUI 在"启动中"banner 逐步展示当前执行的操作, 如加载 MCP/Skill/RAG 等)
-    // - 必须在 init() 协程启动前注册, 否则 init 前期的步骤会丢失
-    // - 回调内 clientIO 为 shared_ptr 捕获 (TUI 存活期安全); StdIO 端点
-    //   不覆写 onServerProgress, 回调为 no-op
-    if (auto ctx = agent->agentContext) {
-        ctx->initNotifier = [clientIO](std::string_view step) {
-            clientIO->onServerProgress(step);
+    if (auto tui = dynamic_cast<TUIClientAgentIO*>(clientIO.get())) {
+        // 本地模式无上下文可解析默认模型, 必须显式请求一次: WireModelInfo 回填
+        // 状态标模型名与弹窗列表 (init 前处理 WireGetModel 安全)
+        cfg.onTransportStarted = [tui, sessionId]() {
+            tui->sendToPeer(agent::WireGetModel{sessionId});
         };
     }
 
-    // transport 接收循环先于 init() 启动:
-    // init() 中 MCP 连接等网络操作可能耗时数秒, 若等 init 完成才启动接收循环,
-    // 客户端在 init 期间发出的请求 (如模型选择弹窗的 WireGetModel / WireHello) 会
-    // 一直排队, 导致弹窗首次打开要等 init 完成才有数据。
-    // 各 Wire 消息处理在 init 前均安全:
-    // - WireGetModel: getCurrentModelName 在 modelRegistry 为空时回退 agentConfig
-    // - WireHello: 历史为空时完整同步为空; Session 未绑定 io 线程时 assertIoThread 为 no-op
-    // - WireUserInput: 仅入队, 由 init 之后启动的 run() 循环处理 (run 依赖 engine)
-    asio::co_spawn(
-        *agent->ioCtx,
-        [serverIO]() -> asio::awaitable<void> {
-            co_await serverIO->runTransportLoop();
-        },
-        asio::detached
-    );
-
-    // 在 agent 线程启动: init -> supervisor -> 会话驱动循环
-    // (run 依赖 init 产出的 engine, 须在 init 完成之后启动;
-    //   init 前的用户输入会先缓存在 inputChannel, run 启动后正常处理)
-    asio::co_spawn(
-        *agent->ioCtx,
-        [agent, serverIO, clientIO, sessionId]() -> asio::awaitable<void> {
-            // 插件管理器 (进程一份): 先加载插件, 再把它放进 agent 上下文 ——
-            // init 的 plugin_mount 步骤由各 agent 自己挂载 (加载只做一次)
-            auto host = agentxx::agent::AgentHost::create(
-                {.ioCtx      = agent->ioCtx,
-                 .pluginList = agent->getContext()->agentConfig->plugins,
-                 .primaryAgent = agent->getContext()}
-            );
-            co_await host->loadPluginsAsync();
-            if (auto pluginHost = host->pluginHost()) {
-                agent->getContext()->pluginManager      = pluginHost;
-                agent->getContext()->pluginManagerOwned = false; // 进程共享管理器
-            }
-            co_await agent->init();
-            // 主程序 (进程级): 主 agent 与子代理平等注册, 经 HostBus 交互;
-            // attachRoot 在根 agent 总线上 registerServer 子代理委派
-            // (service.subagent), 子代理由主程序派生独立 agent 运行
-            // (独立 AgentContext/engine)
-            // - 须经 shared_ptr 持有到会话结束: 总线 handler 以 weak_ptr 捕获,
-            //   避免悬空 this; 局部变量随本协程帧存活
-            host->attachRoot(agent);
-            // 拉取启动信息 (MCP/Skill/Memory): 须在 init 完成后发送 —— transport 接收循环
-            // 已先于 init 启动, 若此时 (init 前) 发送会立即得到空列表 (组件尚未加载),
-            // 客户端将永远显示不出已加载的组件
-            clientIO->requestAppendComponentInfo(sessionId);
-            // 通知客户端: server-io 就绪 (init/组件加载完成, 会话驱动循环即将
-            // 启动并开始处理用户输入)。客户端 (TUI) 据此解除"启动中"输入限制,
-            // 刷新连接前排队输入 (此时发送的输入由 server-io 端 inputChannel 缓存,
-            // run() 启动后正常处理)
-            clientIO->onServerReady();
-            co_await serverIO->run();
-        },
-        asio::detached
-    );
-
-    // 客户端: 启动 transport 接收循环 (在 client 线程)
-    asio::co_spawn(
-        clientEx,
-        [clientIO]() -> asio::awaitable<void> {
-            co_await clientIO->runTransportLoop();
-        },
-        asio::detached
-    );
-
-    // 发送 hello 触发服务端重放/同步 (传入客户端界面语言)
-    std::string clientLang = "en";
-    if (dynamic_cast<TUIClientAgentIO*>(clientIO.get()) != nullptr) {
-        clientLang = TUISettings::instance().languageCode();
+    auto runtime = agent::AgentSessionRuntime::create(agent, clientIO, std::move(cfg));
+    if (runtime) {
+        runtime->start();
     }
-    clientIO->sendToPeer(agent::WireHello{
-        .sessionId = sessionId,
-        .token     = "",
-        .lastSeq   = 0,
-        .tailHash  = "",
-        .model     = "",
-        .language  = clientLang,
-    });
-
-    return serverIO;
+    return runtime;
 }
-
 template<typename Coro>
 static void runLocalUnifiedMain(std::shared_ptr<agent::CodeAgent> agent, Coro coro) {
     auto        work = asio::make_work_guard(*agent->ioCtx);
@@ -327,7 +243,7 @@ static asio::awaitable<void>
     co_await pluginMgr->loadConfiguredClientPlugins(plugins);
 
     XX_LOGI("======= Agentxx Client (CLI, in-process unified) =======");
-    auto serverIO = setupLocalUnifiedDirect(clientEx, agent, io, sessionId);
+    auto runtime = setupLocalUnifiedDirect(clientEx, agent, io, sessionId);
     // CLI 输入循环: 从 stdin 读取并发送 (插件命令先拦截)
     std::cout << "\n>>> " << std::flush;
     for (;;) {
@@ -344,12 +260,14 @@ static asio::awaitable<void>
         }
         io->sendToPeer(agent::WireUserInput{sessionId, *input});
     }
-    // 停止服务端点并等待驱动循环退出 (避免 io_context 析构时销毁其协程导致 use-after-free)
-    serverIO->stop();
-    while (serverIO->running()) {
-        asio::steady_timer timer(clientEx);
-        timer.expires_after(std::chrono::milliseconds(20));
-        co_await timer.async_wait(asio::use_awaitable);
+    // 停止会话并等待驱动循环退出 (避免 io_context 析构时销毁其协程导致 use-after-free)
+    if (runtime) {
+        runtime->stop();
+        while (runtime->running()) {
+            asio::steady_timer timer(clientEx);
+            timer.expires_after(std::chrono::milliseconds(20));
+            co_await timer.async_wait(asio::use_awaitable);
+        }
     }
     co_await shutdownAgentPlugins(agent);
     co_await pluginMgr->shutdownAsync();
@@ -382,12 +300,7 @@ static asio::awaitable<void>
     tui->start();
     co_await pluginMgr->loadConfiguredClientPlugins(plugins);
 
-    auto serverIO = setupLocalUnifiedDirect(clientEx, agent, tui, sessionId);
-
-    // 请求服务端当前模型信息 (WireModelInfo 回填状态栏模型名/弹窗列表):
-    // 本地模式无上下文可解析默认模型, 必须显式请求; 发送时机在 transport 就绪后
-    // 即可 (init 前处理 WireGetModel 安全: modelRegistry 为空时回退 agentConfig)
-    tui->sendToPeer(agent::WireGetModel{sessionId});
+    auto runtime = setupLocalUnifiedDirect(clientEx, agent, tui, sessionId);
 
     // TUI 模式下输入由 FTXUI 事件循环驱动 (sendUserInputLocked 经 transport 发送)
     // 此处等待 TUI 停止
@@ -398,14 +311,16 @@ static asio::awaitable<void>
     }
     tui->stop();
 
-    // 停止服务端点并等待其驱动循环退出, 使其协程释放对 serverIO 的持有,
-    // 避免 serverIO(及其 channel transport) 在 agent io_context 析构时才被销毁
+    // 停止会话并等待其驱动循环退出, 使协程释放对服务端点的持有,
+    // 避免服务端点(及其 channel transport) 在 agent io_context 析构时才被销毁
     // 而触发 channel 的 use-after-free
-    serverIO->stop();
-    while (serverIO->running()) {
-        asio::steady_timer timer(clientEx);
-        timer.expires_after(std::chrono::milliseconds(20));
-        co_await timer.async_wait(asio::use_awaitable);
+    if (runtime) {
+        runtime->stop();
+        while (runtime->running()) {
+            asio::steady_timer timer(clientEx);
+            timer.expires_after(std::chrono::milliseconds(20));
+            co_await timer.async_wait(asio::use_awaitable);
+        }
     }
     co_await shutdownAgentPlugins(agent);
     co_await pluginMgr->shutdownAsync();

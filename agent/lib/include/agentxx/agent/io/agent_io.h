@@ -115,6 +115,12 @@ public:
     ///   基类实现 (或自行 emitEventSink)
     virtual void onServerReady();
 
+    /// 运行壳即将关闭 [client] (默认空实现, 客户端端点按需覆写):
+    /// - 由启动壳 ([AgentSessionRuntime]) 在发起关闭时、关闭 transport 之前调用
+    /// - 客户端端点在此处理"还挂着的交互": 失败待应答的中断、冲刷增量合批、
+    ///   通知上层不再有事件 —— 关掉 transport 之后这些动作都发不出去
+    virtual void onRuntimeStopping() {}
+
     /// 服务端启动进度通知 [client] (默认空实现, 客户端端点按需覆写):
     /// - 本地模式: server-io 的 init() 各启动阶段 (加载 MCP/Skill/Memory/
     ///   RAG/CodeGraph 等) 经 AgentContext::initNotifier → 本接口逐步上报,

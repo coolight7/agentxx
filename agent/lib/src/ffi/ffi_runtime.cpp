@@ -3,9 +3,10 @@
 #include "agentxx/agent/agent_host.h"
 #include "agentxx/agent/code_agent.h"
 #include "agentxx/agent/config.h"
-#include "agentxx/agent/io/channel_io_transport.h"
 #include "agentxx/agent/io/session_server_agent_io.h"
+#include "agentxx/agent/io/user_input_json.h"
 #include "agentxx/agent/io/wire_protocol.h"
+#include "agentxx/agent/session_runtime.h"
 #include "agentxx/util/exception.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -309,10 +310,9 @@ FfiAgentRuntime::~FfiAgentRuntime() {
             stopInternal();
         }
     } else {
-        // Created 状态直接清理对象
+        // Created 状态直接清理对象 (启动壳未建, 端点也未必建过)
         clientIO_.reset();
-        serverIO_.reset();
-        host_.reset();
+        runtime_.reset();
         agent_.reset();
     }
 }
@@ -338,26 +338,14 @@ int FfiAgentRuntime::start(std::string& err) {
         return AGENTXX_FFI_ERR_STATE;
     }
 
-    clientIoCtx_        = std::make_shared<asio::io_context>();
-    const auto agentEx  = serverIoCtx_->get_executor();
-    const auto clientEx = clientIoCtx_->get_executor();
+    clientIoCtx_ = std::make_shared<asio::io_context>();
 
-    // 进程内传输对 (跨 Client-IO 线程与 Server-IO 线程)
-    auto [clientTrans, serverTrans] = agent::ChannelAgentIOTransport::makePair(clientEx, agentEx);
-
-    // FFI client 端点 (绑定 clientEx)
-    clientIO_ = std::make_shared<FfiClientAgentIO>(clientEx, callbacks_);
+    // FFI client 端点 (绑定 client io 线程; 端点自带合批/中断等待)
+    clientIO_ = std::make_shared<FfiClientAgentIO>(clientIoCtx_->get_executor(), callbacks_);
     clientIO_->setSessionId(sessionId_);
-    clientIO_->setTransport(std::move(clientTrans));
+    clientIO_->initSelf(clientIO_);
 
-    // 服务端点 (绑定 agentEx, 被 BaseAgent 驱动)
-    agent::SessionServerAgentIO::Config scCfg;
-    scCfg.sessionId        = sessionId_;
-    scCfg.interruptTimeout = interruptTimeout_;
-    serverIO_              = std::make_shared<agent::SessionServerAgentIO>(agentEx, agent_, scCfg);
-    serverIO_->setTransport(std::move(serverTrans));
-
-    // 启动进度 → 日志环形缓冲
+    // 启动进度 → 日志环形缓冲 (FFI 不用端点进度通道, 自己接管)
     agent_->agentContext->initNotifier = [this](std::string_view step) {
         pushLogItem(LogItem{2, fmt::format("[startup] {}", step)});
     };
@@ -388,84 +376,51 @@ int FfiAgentRuntime::start(std::string& err) {
     clientIO_->setAgentThreadId(serverThread_.get_id());
     clientIO_->setClientThreadId(clientThread_.get_id());
 
-    // 1) Server-IO 线程协程: server 接收循环 + init / main
-    asio::post(*serverIoCtx_, [self = shared_from_this()]() {
-        // 先启动 server 接收循环 (init 期间请求如 WireHello/WireGetModel 不排队)
-        asio::co_spawn(*self->serverIoCtx_, self->serverIO_->runTransportLoop(), asio::detached);
-        // 主协程: init → host → ready → serverIO->run()
-        asio::co_spawn(
-            *self->serverIoCtx_,
-            [self]() -> asio::awaitable<void> {
-                co_await self->runAgentMain();
-            },
-            asio::detached
-        );
-    });
-
-    // 2) Client-IO 线程协程: client 接收循环 + hello
-    asio::post(*clientIoCtx_, [self = shared_from_this()]() {
-        asio::co_spawn(*self->clientIoCtx_, self->clientIO_->runTransportLoop(), asio::detached);
-        std::string curLang;
-        {
-            std::lock_guard<std::mutex> lock(self->langMutex_);
-            curLang = self->language_;
-        }
-        self->clientIO_->sendToPeer(agent::WireHello{
-            .sessionId = self->sessionId_,
-            .token     = "",
-            .lastSeq   = 0,
-            .tailHash  = "",
-            .model     = "",
-            .language  = curLang,
-        });
+    // 统一启动壳: 两端接起来 + init/驱动/关闭的顺序全部交给它
+    // - loadPluginsInHost=false: FFI 不让主程序代劳加载插件 (加载要 co_await 插件的
+    //   start/挂载事务, 这里交给 agent 自己在 init 里加载, 与单 agent 模式同一路径)
+    // - forwardInitProgress=false: 进度已经写进本类的日志环形缓冲
+    agent::AgentSessionRuntime::Config rtCfg;
+    rtCfg.sessionId             = sessionId_;
+    rtCfg.clientExecutor        = clientIoCtx_->get_executor();
+    rtCfg.interruptTimeout      = interruptTimeout_;
+    rtCfg.deltaBufferCap        = 0; // 嵌入方程序不重连重放: 不占缓冲内存
+    rtCfg.initialSyncTailCount  = 0; // 完整同步
+    rtCfg.loadPluginsInHost     = false;
+    rtCfg.forwardInitProgress   = false;
+    rtCfg.autoRequestComponents = true;
+    {
+        std::lock_guard<std::mutex> lock(langMutex_);
+        rtCfg.language = language_;
+    }
+    rtCfg.onTransportStarted = [self = shared_from_this()]() {
+        // 握手后立即拉一次模型信息 (EVT_MODEL_INFO 回填嵌入方程序的模型选择 UI)
         self->clientIO_->sendToPeer(agent::WireGetModel{self->sessionId_});
-    });
+    };
+    rtCfg.onInitError = [self = shared_from_this()](std::string_view errmsg) {
+        self->clientIO_->notifyError(
+            AGENTXX_FFI_ERR_INIT,
+            fmt::format("agent init failed: {}", errmsg)
+        );
+        self->state_ = State::Failed;
+    };
+    rtCfg.onServerReady = [self = shared_from_this()]() {
+        // 先置 Ready 再通知: 就绪回调里嵌入方程序可能立刻操作, 不能遇到 ERR_STATE
+        self->state_ = State::Ready;
+    };
+
+    runtime_ = agent::AgentSessionRuntime::create(agent_, clientIO_, std::move(rtCfg));
+    if (!runtime_) {
+        err = "启动壳装配失败 (参数不完整)";
+        return AGENTXX_FFI_ERR_INTERNAL;
+    }
+    runtime_->start();
 
     return AGENTXX_FFI_OK;
 }
 
-asio::awaitable<void> FfiAgentRuntime::runAgentMain() {
-    // init (含启动组件加载与插件加载; 失败经 EVT_ERROR 上报并置 Failed 状态)
-    // 注: FFI 侧不让主程序代劳加载插件 —— 加载要 co_await 插件的 start/挂载事务, 而本协程
-    // 跑在调用方驱动的 io 上 (主程序 io 线程可能还没开始). 交给 agent 自己在 init 里加载,
-    // 与单 agent 模式同一路径 (AgentContext::pluginManager 由 BaseAgent 自建).
-    const bool initOk = co_await agentxx::util::catchErrorAsync<bool>(
-        [self = shared_from_this()]() -> asio::awaitable<bool> {
-            co_await self->agent_->init();
-            co_return true;
-        },
-        [self = shared_from_this()](std::string errmsg) -> asio::awaitable<bool> {
-            XX_LOGE("[ffi] agent init failed: {}", errmsg);
-            self->clientIO_->notifyError(
-                AGENTXX_FFI_ERR_INIT,
-                fmt::format("agent init failed: {}", errmsg)
-            );
-            self->state_ = State::Failed;
-            self->serverIO_->stop();
-            co_return false;
-        }
-    );
-    if (!initOk) {
-        co_return;
-    }
-
-    // 嵌入方程序 (进程级): 子代理委派 (service.subagent 总线服务) 与根 agent 注册
-    agentxx::agent::AgentHost::Config hostCfg;
-    hostCfg.ioCtx = agent_->ioCtx;
-    host_         = agentxx::agent::AgentHost::create(hostCfg);
-    host_->attachRoot(agent_);
-
-    // 启动组件信息 (跨线程请求 Client 端点发送 WireAppendComponentInfo)
-    asio::post(*clientIoCtx_, [clientIO = clientIO_, sid = sessionId_]() {
-        clientIO->requestAppendComponentInfo(sid);
-    });
-
-    // 通知客户端: 服务端就绪 (EVT_READY; 先置 Ready 状态避免回调内操作遇到 ERR_STATE)
-    state_ = State::Ready;
-    clientIO_->notifyServerReady();
-
-    // 会话驱动循环: 处理用户输入 → runTurnAsync → 推送事件
-    co_await serverIO_->run();
+std::shared_ptr<agent::SessionServerAgentIO> FfiAgentRuntime::serverIO() const {
+    return runtime_ ? runtime_->serverIO() : nullptr;
 }
 
 void FfiAgentRuntime::stopInternal() {
@@ -479,34 +434,27 @@ void FfiAgentRuntime::stopInternal() {
     }
     state_ = State::Stopping;
 
-    // 1) Client 侧: 中止挂起中断并关闭 client transport
-    if (clientIO_) {
-        clientIO_->failAllPendingInterrupts();
-        if (clientIO_->transport()) {
-            clientIO_->transport()->close();
-        }
+    // 1) Client 侧与 Server 侧: 交给启动壳按固定顺序收 (先失败挂起中断 + 关 client 传输,
+    //    再停服务端点)
+    if (runtime_) {
+        runtime_->stop();
     }
 
-    // 2) Server 侧: 停止服务端点 (dispatch 到 agent io 线程执行 stopImpl)
-    if (serverIO_) {
-        serverIO_->stop();
-    }
-
-    // 3) 等待 serverIO run() 退出 (最长 20s)
-    if (serverIO_) {
+    // 2) 等待服务端点驱动循环退出 (最长 20s)
+    if (auto server = serverIO()) {
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{20};
-        while (serverIO_->running() && std::chrono::steady_clock::now() < deadline) {
+        while (server->running() && std::chrono::steady_clock::now() < deadline) {
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
-        if (serverIO_->running()) {
+        if (server->running()) {
             XX_LOGW("[ffi] stop: serverIO run loop did not exit within 20s, forcing stop");
         }
     }
 
-    // 4) 摘除日志 sink
+    // 3) 摘除日志 sink
     utilxx_base::LogDispatcher::instance().removeSink(logSink_);
 
-    // 5) 停止并 join Server-IO 线程
+    // 4) 停止并 join Server-IO 线程
     //    插件关闭必须先于此完成: shutdownAsync 在 agent IO 线程上 stop →
     //    等 lease 归零 → destroy/dlclose。executor 一旦停止就只能走同步析构
     //    保护 (实例保留 CloseFailed, 动态库不卸载)。
@@ -534,7 +482,7 @@ void FfiAgentRuntime::stopInternal() {
         serverThread_.join();
     }
 
-    // 6) 停止并 join Client-IO 线程
+    // 5) 停止并 join Client-IO 线程
     if (clientIoCtx_) {
         clientWorkGuard_.reset();
         clientIoCtx_->stop();
@@ -543,7 +491,7 @@ void FfiAgentRuntime::stopInternal() {
         clientThread_.join();
     }
 
-    // 7) 取消所有残留的同步查询等待
+    // 6) 取消所有残留的同步查询等待
     {
         std::lock_guard<std::mutex> lock(syncMutex_);
         for (auto& [kind, q] : syncWaits_) {
@@ -557,10 +505,9 @@ void FfiAgentRuntime::stopInternal() {
         }
     }
 
-    // 8) 显式释放所有持有 transport/channel 的对象, 确保它们在 ioCtx 析构前完成清理
+    // 7) 显式释放所有持有 transport/channel 的对象, 确保它们在 ioCtx 析构前完成清理
     clientIO_.reset();
-    serverIO_.reset();
-    host_.reset();
+    runtime_.reset();
     agent_.reset();
 
     state_ = State::Stopped;
@@ -594,25 +541,6 @@ bool stateUsable(FfiAgentRuntime::State s) {
     return s == FfiAgentRuntime::State::Starting || s == FfiAgentRuntime::State::Ready;
 }
 
-/// 检查附件是否超出单文件限额; 超限时返回可读原因 (哪一项、多大、上限多少)
-std::string attachmentLimitError(const agentxx::agent::MediaAttachment& att) {
-    const uint64_t maxSize = agentxx::agent::maxBytesForMediaType(att.type);
-    const uint64_t estSize = agentxx::agent::estimateAttachmentSizeBytes(att);
-    if (estSize <= maxSize) {
-        return {};
-    }
-    std::string name = !att.displayName.empty()
-                           ? att.displayName
-                           : (!att.pathOrUrl.empty() ? att.pathOrUrl : "attachment");
-    return fmt::format(
-        "附件 '{}' 超出 {} 类型的大小上限 ({} 字节 > {} 字节)",
-        name,
-        agentxx::agent::mediaTypeToString(att.type),
-        estSize,
-        maxSize
-    );
-}
-
 } // namespace
 
 int FfiAgentRuntime::sendInput(std::string_view inputJson, std::string& err) {
@@ -621,58 +549,16 @@ int FfiAgentRuntime::sendInput(std::string_view inputJson, std::string& err) {
         return AGENTXX_FFI_ERR_STATE;
     }
 
-    // 输入 JSON 解析: text 与 attachments 至少有一个非空 (附件走服务端加载/编码路径)
-    utilxx_base::Json j;
-    try {
-        j = utilxx_base::Json::parse(inputJson);
-    } catch (const std::exception& e) {
-        err = fmt::format("input_json JSON 解析失败: {}", e.what());
-        return AGENTXX_FFI_ERR_JSON;
+    // 输入 JSON 解析与参数校验走公共实现 (CLI/FFI/插件同一套规则)
+    auto parsed = agent::parseUserInputJson(inputJson);
+    if (!parsed.has_value()) {
+        err = std::move(parsed.error().message);
+        return parsed.error().badJson ? AGENTXX_FFI_ERR_JSON : AGENTXX_FFI_ERR_INVALID;
     }
-    if (!j.is_object()) {
-        err = "input_json 必须是 JSON 对象, 形如 {\"text\":\"...\",\"attachments\":[...]}";
-        return AGENTXX_FFI_ERR_INVALID;
-    }
-
-    agent::WireUserInput input;
-    input.text      = j.value("text", std::string{});
-    input.model     = j.value("model", std::string{});
-    input.delivery  = j.value("delivery", std::string{});
+    auto input      = std::move(*parsed);
     input.sessionId = sessionId_;
     // 受理回执照样经 EVT_WIRE 上报: 服务端只在 requestId > 0 时回 input_ack
     input.requestId = nextInputRequestId_.fetch_add(1, std::memory_order_relaxed) + 1;
-
-    if (j.contains("attachments") && j["attachments"].is_array()) {
-        for (const auto& item : j["attachments"]) {
-            // fromJson 同时认下划线与驼峰/别名写法 (与 wire user_input.attachments 一致)
-            input.attachments.push_back(agent::MediaAttachment::fromJson(item));
-        }
-    } else if (j.contains("attachments") && !j["attachments"].is_null()) {
-        err = "input_json.attachments 必须是数组";
-        return AGENTXX_FFI_ERR_INVALID;
-    }
-
-    if (input.text.empty() && input.attachments.empty()) {
-        err = "输入为空: text 与 attachments 至少需要一个非空";
-        return AGENTXX_FFI_ERR_INVALID;
-    }
-    // 条数与大小在本地先拦一次 (与 wire 服务端同一套约定): 参数写错立刻同步报错,
-    // 不让嵌入方程序等到 input_ack(rejected) 才发现
-    if (input.attachments.size() > agent::kMaxAttachmentsPerMessage) {
-        err = fmt::format(
-            "附件条数超出上限: {} > {} (单条消息)",
-            input.attachments.size(),
-            agent::kMaxAttachmentsPerMessage
-        );
-        return AGENTXX_FFI_ERR_INVALID;
-    }
-    for (const auto& att : input.attachments) {
-        auto limitErr = attachmentLimitError(att);
-        if (!limitErr.empty()) {
-            err = std::move(limitErr);
-            return AGENTXX_FFI_ERR_INVALID;
-        }
-    }
 
     auto clientIO = clientIO_;
     asio::post(*clientIoCtx_, [clientIO, input = std::move(input)]() mutable {

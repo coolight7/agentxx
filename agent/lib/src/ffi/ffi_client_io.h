@@ -1,14 +1,11 @@
 #pragma once
 
-#include "agentxx/agent/io/agent_io.h"
+#include "agentxx/agent/io/embedded_client_agent_io.h"
 #include "agentxx/agent/io/wire_protocol.h"
 #include "agentxx/ffi_api.h"
 #include "asio/any_io_executor.hpp"
-#include "asio/experimental/concurrent_channel.hpp"
-#include "asio/steady_timer.hpp"
 #include "utilxx_base/json.h"
 #include <atomic>
-#include <chrono>
 #include <functional>
 #include <map>
 #include <memory>
@@ -23,12 +20,15 @@ namespace ffi {
 /// StdIOClientAgentIO 同级), 将 agent 服务端产出的事件转为 C 回调 (JSON
 /// payload), 并将 FFI 侧的输入/取消/模型切换等 C API 转为 Wire 消息。
 ///
+/// 中断应答、文本合批与线程判定来自 [EmbeddedClientAgentIO] (与插件通道端点共用);
+/// 本类只负责"把事件变成 C 回调"和 FFI 专有的消息 (嵌入方程序工具/模型管理/同步应答)。
+///
 /// 线程约定 (方案 A: 独立 Client-IO 线程, 完全无锁设计):
 /// - 本端点状态 (pending_、sessionId_、callbacks_ 等) 仅在 client io 线程读写
 /// - 所有被动回调 (onDelta/onSync/onPeerMessage 等) 及对外事件回调 (on_event) 均在此线程执行
 /// - 中断状态使用 lock-free std::atomic 维护, 任意线程无锁秒级校验
 /// - submitInterruptResponse / onSyncReply / failAllPendingInterrupts 均在 client io 线程执行
-class FfiClientAgentIO : public agent::AgentIOBase,
+class FfiClientAgentIO : public agent::EmbeddedClientAgentIO,
                          public std::enable_shared_from_this<FfiClientAgentIO> {
 public:
 
@@ -36,69 +36,18 @@ public:
 
     ~FfiClientAgentIO() override;
 
-    /// 设置本端点绑定会话 sessionId (运行层在加载时设置)
-    void setSessionId(std::string sessionId);
-
-    /// 设置 client io 线程 id (运行层注入; 判 stop/destroy 调用方)
-    void setClientThreadId(std::thread::id tid);
-
-    /// 设置 agent io 线程 id (运行层注入; 判 stop/destroy 调用方)
-    void setAgentThreadId(std::thread::id tid);
-
-    /// 是否当前线程为 client io 线程 (即事件回调执行线程)
-    bool isOnClientThread() const;
-
-    /// 是否当前线程为 agent io 线程
-    bool isOnAgentThread() const;
-
-    /// 是否当前线程为任意内部 io 线程
-    bool isOnAnyIoThread() const {
-        return isOnClientThread() || isOnAgentThread();
-    }
-
-    /// 上报内部错误事件 (EVT_ERROR); 任意线程可调用 (自动 post 到 client io 线程)
+    /// 上报内部错误事件 (EVT_ERROR); 任意线程可调用 (自动投递到 client io 线程)
     void notifyError(int code, std::string message);
 
-    /// 服务端就绪通知 (触发 EVT_READY; 任意线程可调用, 自动 post 到 client io 线程)
+    /// 服务端就绪通知 (触发 EVT_READY; 任意线程可调用, 自动投递到 client io 线程)
     void notifyServerReady();
 
-    // -----------------------------------------------------------------------
-    // AgentIOBase 纯虚实现 (client 端点)
-    // -----------------------------------------------------------------------
-
-    asio::awaitable<std::optional<std::string>> getInput() override;
-
-    /// 本 client 端点不注册会话总线, 此纯虚实现仅满足契约 (返回值未使用);
-    /// 真实 HIL 流程: onPeerMessage(WireInterruptRequest) → waitHostInterrupt()
-    asio::awaitable<utilxx_base::Json> handleInterrupt(
-        std::string_view sessionId,
-        std::string_view interruptNode,
-        std::string_view interruptValue,
-        std::string_view interruptArgJson
-    ) override;
-
-    // -----------------------------------------------------------------------
-    // FFI 应答通道 (Lock-Free 无锁设计)
-    // -----------------------------------------------------------------------
-
-    /// 是否仍有指定 id 的中断在等待应答 (任意线程, atomic 无锁读取)
-    bool hasPendingInterrupt(int64_t interruptId) const;
-
-    /// 提交中断应答 (client io 线程): 完成挂起的等待并触发回送 WireInterruptResponse;
-    /// id 无效返回 false
-    bool submitInterruptResponse(int64_t interruptId, utilxx_base::Json values);
-
     /// 失败全部挂起中断 (client io 线程调用; 停止或析构时清理)
-    void failAllPendingInterrupts();
-
-    /// 设置文本合批窗口 (ms; <= 0 关闭合批)
-    void setDeltaBatch(int32_t maxDelayMs);
+    /// - 在基类清理之上, 额外为尚未应答的嵌入方程序工具调用上报取消事件
+    void failAllPendingInterrupts() override;
 
     /// 提交嵌入方程序工具调用应答 (client io 线程)
     bool submitHostToolResponse(int64_t callId, int32_t isError, std::string resultJson);
-
-    /// 刷新积压的文本合批 (client io 线程)
-    void flushDeltaBatch();
 
     // -----------------------------------------------------------------------
     // 同步应答路由 (由运行层注入; 收到对应 Wire 响应时在 client io 线程调用)
@@ -118,8 +67,7 @@ public:
 protected:
 
     // ---- AgentIOBase 被动接收回调 (均在 client io 线程执行) ----
-    void onDelta(const agent::WireDelta& delta) override;
-
+    /// 完整/部分同步: FFI 把历史同步载荷原样转给嵌入方程序 (EVT_SYNC)
     void onSync(const agent::WireSyncPayload& payload) override;
 
     void onTurnResult(const agent::WireTurnResult& result) override;
@@ -134,49 +82,22 @@ protected:
 
 private:
 
-    using ErrorCode   = utilxx_base::AsioErrorCode;
-    using RespChannel = asio::experimental::concurrent_channel<void(ErrorCode, utilxx_base::Json)>;
+    /// 合批后的增量文本交付 (EVT_DELTA_TEXT_BATCH)
+    void emitDeltaText(std::string_view kind, std::string_view text) override;
 
-    /// client io 线程: 挂起等待嵌入方程序应答 (agentxx_ffi_interrupt_respond 经
-    /// submitInterruptResponse 完成 channel); 返回 {answered=false} 表示通道被关闭 (过期/停止,
-    /// 不回送响应)
-    asio::awaitable<std::pair<bool, utilxx_base::Json>>
-        waitHostInterrupt(int64_t id, std::shared_ptr<RespChannel> ch);
+    /// 非合批的增量交付 (EVT_DELTA)
+    void emitDeltaEvent(const agent::WireDelta& delta) override;
 
-    /// client io 线程: 发事件到 C 回调 (异常不外泄)
+    /// 发事件到 C 回调 (异常不外泄)
     void emitEvent(AgentxxFFIEventType type, std::string json);
 
     static std::string dump(const utilxx_base::Json& j);
 
-    asio::any_io_executor ex_;
-
     /// 事件回调 (值拷贝, 保持有效)
     AgentxxFFICallbacks callbacks_;
-    /// 本端点绑定的会话 sessionId (EVT_READY payload 使用)
-    std::string sessionId_;
-
-    /// 当前挂起等待的中断 ID (0 表示无; atomic 无锁跨线程安全查询)
-    std::atomic<int64_t> currentPendingInterruptId_{0};
-
-    /// 挂起的中断应答通道 (wire id → channel; 仅 client io 线程访问，无锁)
-    std::map<int64_t, std::shared_ptr<RespChannel>> pending_;
-
-    // ---- 文本增量合批 (A11; 仅 client io 线程访问) ----
-
-    /// 合批窗口毫秒数 (<=0 = 关闭合批, 逐条发 EVT_DELTA)
-    int32_t deltaBatchMs_ = 0;
-    /// 合批到期定时器 (首次开启合批时创建)
-    std::shared_ptr<asio::steady_timer> deltaBatchTimer_;
-    /// 积压的增量文本与类别 (text/thinking; 类别变化时先冲刷再累积)
-    std::string pendingDeltaText_;
-    std::string pendingDeltaKind_;
 
     /// 已下发 EVT_HOST_TOOL_CALL 但嵌入方程序尚未应答的调用 id (用于停止时上报取消)
     std::set<int64_t> pendingHostToolCalls_;
-
-    /// client io 线程 id 与 agent io 线程 id (判 stop/destroy 调用方)
-    std::thread::id clientThreadId_;
-    std::thread::id agentThreadId_;
 };
 
 } // namespace ffi

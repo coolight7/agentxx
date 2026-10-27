@@ -23,6 +23,7 @@ namespace agent {
 class CodeAgent;
 class AgentHost;
 class SessionServerAgentIO;
+class AgentSessionRuntime;
 } // namespace agent
 
 namespace ffi {
@@ -227,11 +228,11 @@ private:
         std::string&             err
     );
 
-    /// agent io 线程: 主协程 (init → host → ready → serverIO->run())
-    asio::awaitable<void> runAgentMain();
-
     /// 停止实装 (调用方线程执行; 幂等)
     void stopInternal();
+
+    /// 服务端点 (未启动时为空; 所有权在启动壳)
+    std::shared_ptr<agent::SessionServerAgentIO> serverIO() const;
 
     /// client io 线程: 处理同步应答 (完成对应 SyncWait)
     void onSyncReplyOnClientThread(FfiClientAgentIO::SyncKind kind, utilxx_base::Json j);
@@ -255,10 +256,11 @@ private:
     std::thread                                                               clientThread_;
 
     // ---- 2. 依赖 io_context 的实体对象 (后声明，先析构) ----
-    std::shared_ptr<agent::CodeAgent>            agent_;
-    std::shared_ptr<agent::AgentHost>            host_;
-    std::shared_ptr<agent::SessionServerAgentIO> serverIO_;
-    std::shared_ptr<FfiClientAgentIO>            clientIO_;
+    std::shared_ptr<agent::CodeAgent>           agent_;
+    /// 统一启动壳 (两端点装配 / init 与驱动顺序 / 关闭顺序)
+    std::shared_ptr<agent::AgentSessionRuntime> runtime_;
+    /// client 端点 (仅作为便捷引用; 所有权在 [runtime_])
+    std::shared_ptr<FfiClientAgentIO> clientIO_;
 
     // ---- 3. 状态与会话 ----
     std::string        sessionId_;

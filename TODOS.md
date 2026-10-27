@@ -22,9 +22,6 @@
 记“当前挂载”，第二次挂载会覆盖），要做到“每 agent 一份 JS 实例”需要把 JsPluginCtx
 按挂载拆开（每挂载一个 JS runtime + 一套注册），属下一篇量级。单 agent 场景与非 JS
 插件不受影响。
-- 修复日志警告 [W] Plugin `agentxx_filesystem`
-subscribe rejected: no event
-source (scope ref absent)
 
 - SVG绘制支持
 - 链式 session 任务队列
