@@ -1159,8 +1159,8 @@ protected:
     }
 
     /// 读取整机 CPU 累计时间片 (host_statistics 的 HOST_CPU_LOAD_INFO)
-    /// - cpu_ticks 是内核累计的调度时间片计数 (单位与秒不直接对应, 只用于求比值)
-    /// - 该 flavor 由内核把固定大小结构拷入调用方缓冲区, 调用方无需释放额外内存
+    /// - cpu_ticks 是操作系统内核累计的调度时间片计数 (单位与秒不直接对应, 只用于求比值)
+    /// - 该 flavor 由操作系统内核把固定大小结构拷入调用方缓冲区, 调用方无需释放额外内存
     bool readCpuTicks(MacCpuTicks& out) const {
         if (host_ == MACH_PORT_NULL) {
             return false;
@@ -1207,7 +1207,7 @@ protected:
 
         const uint64_t totalBytes = totalPhysicalMemoryMB_ * 1024 * 1024;
         /// 可用内存 (近似 Linux /proc/meminfo 的 MemAvailable): 空闲页 + 非活跃页
-        /// + 推测页 + 可清除页 —— 这些页在被新的分配申请到时都可由内核直接回收
+        /// + 推测页 + 可清除页 —— 这些页在被新的分配申请到时都可由操作系统内核直接回收
         const uint64_t availableBytes = (static_cast<uint64_t>(vmStat.free_count)
                                          + static_cast<uint64_t>(vmStat.inactive_count)
                                          + static_cast<uint64_t>(vmStat.speculative_count)

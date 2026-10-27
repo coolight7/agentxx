@@ -52,17 +52,18 @@
 
 | 任务 | 状态 | 说明 |
 |---|---|---|
-| `mcp.list[].command` / `args` 配置字段 | 待开始 | |
-| 回归测试 | 待开始 | |
-| §8.3 三处隐患（Windows 命令行/ANSI、POSIX pipe 泄漏、`_SC_OPEN_MAX` 失败） | 待开始 | |
+| `mcp.list[].command` / `args` 配置字段 | 已完成 | `McpServerConfig` 新增 `command` / `args` + `isStdio()`；`config_loader.cpp` 解析（与 `url` 二选一，都填时 url 胜并告警；`args` 非列表时告警忽略）；`code_agent.cpp` / `resource_applier.cpp` 组装 `serverCommand` |
+| 配置文档与生成物 | 已完成 | `config_keys` 新增两条键（归属=服务端），`AGENTXX_UPDATE_CONFIG_KEYS=1` 重生 `config-keys.md` / `config-keys.json` |
+| 回归测试 | 已完成 | `mcp` 模块新增 `client_stdio_subprocess`（把 `agentxx_test --mcp-stdio-server` 当子进程，完整跑 initialize → listTools → 调用 echo 工具 → close）与 `client_stdio_bad_command`（命令不存在时初始化失败不崩） |
+| §8.3 三处隐患 | 已完成 | Windows 回退路径改为 `CreateProcessW` + 参数逐个引号转义（UTF-8 → UTF-16）；POSIX 第二个 `pipe()` 失败时关掉已开的两个 fd；`_SC_OPEN_MAX` 失败时用固定上界 1024 |
 
 ### D. 性能与内存
 
 | 任务 | 状态 | 说明 |
 |---|---|---|
-| §2.2 移除字节上限的说法与死函数 | 待开始 | 文档已改；`estimateWireDeltaBytes` / `estimateViewMessageBytes` 待删 |
-| §2.3 中断路径深拷贝整份上下文 JSON | 待开始 | |
-| §2.4 每次 modelcall 3 次全量深拷贝 | 待开始 | |
+| §2.2 移除字节上限的说法与死函数 | 已完成 | 删 `estimateWireDeltaBytes` / `estimateViewMessageBytes`（无调用者）；文档与 roadmap 已同步 |
+| §2.3 中断路径深拷贝整份上下文 JSON | 已完成 | `throwNodeInterruptBase` / `requestInterrupt` 去掉 `msgs` 参数，四个调用点同步；toolcall 中断分支不再序列化整份上下文 |
+| §2.4 每次 modelcall 3 次全量深拷贝 | 已完成 | ① system 消息改走新增的 `Session::setSystemMessage`（就地改，内容不变则不动版本号）；② `repairMessages` 前加只读体检 `repairNeeded` + 健康时只走 `updateMessageCheckInfo`；③ `summarization` 常规路径用 `const&`，进入压缩分支才拷一份 |
 
 ### E. 自检体系改进
 

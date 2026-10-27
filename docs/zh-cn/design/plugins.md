@@ -297,7 +297,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
             }
         );
 
-        // 4b. 受控轮询工具: 业务体是 asio 协程, 等待插件本地 reactor 上的内核就绪事件
+        // 4b. 受控轮询工具: 业务体是 asio 协程, 等待插件本地 reactor 上的 I/O 就绪通知
         //     (socket/子进程管道/文件/本地 timer)。插件注册时声明"需要受控轮询驱动",
         //     桥据此在有操作进行中时继续申请请求 (有进展立即续 / 无进展退避 10ms /
         //     空闲零开销), 不占主程序工作线程。详见 §16.5。
@@ -368,7 +368,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
    - 工具/钩子/能力均为 `start` (IO 线程非阻塞启动) + `cancel` (协作式) 操作，终结经 `PluginxxOperatorNotify.done(status,payload)` 恰好一次上报
    - `Task` 协程帧先销毁后 `done` 上报，支持 `offload` 阻塞池委托与 `call_tool`/`invoke_cap` 锚定互调
    - `polled_tool`（受控轮询）与 `blocking_tool`/`fast_tool` 并列：业务体是 `asio::awaitable`，
-     等待插件本地 reactor 上的内核就绪事件，由桥按声明式受控轮询推进（§16.5）
+     等待插件本地 reactor 上的 I/O 就绪通知，由桥按声明式受控轮询推进（§16.5）
    - hook / capability 的 SDK helper 按**返回类型严格分发**：返回 `void`/字符串的同步业务在
      调用内完成；返回 `Task<T>` 的异步业务由统一 root adapter 收尾（provider 句柄可取消，
      完成通知在协程真正结束后发出，输入视图由拥有型 `Request` 保证跨挂起点有效）
@@ -1248,7 +1248,7 @@ Closing → CloseFailed → Closing (可重试)
 
 > 本节描述**协程驱动协议**：插件协程与主程序协程在同一主程序 IO 执行
 > 序列中交错推进，不额外开线程、不阻塞 IO；等待以"主程序可见唤醒源"为主，插件本地 reactor 上的
-> 内核就绪等待由**声明式受控轮询**（`polled_tool`）驱动，见 §16.5。方案与阶段划分见
+> I/O 就绪等待由**声明式受控轮询**（`polled_tool`）驱动，见 §16.5。方案与阶段划分见
 > `resource/history/plugin-refactor-3/plugin.md`，实施记录见
 > `resource/history/plugin-refactor-3/work.md`。
 
@@ -1416,7 +1416,7 @@ polledRoots_ 归零
 
 **为什么需要它**：`poll_one()` 只能"执行已就绪的 handler"，不会让**插件本地 reactor**
 上的等待对象到期。因此"业务体本来就是 asio 协程、等待的是 socket/管道/文件/本地 timer
-的内核就绪事件"这类工具（websearch 的 HTTP、execute_command 的子进程管道、filesystem
+的 I/O 就绪通知"这类工具（websearch 的 HTTP、execute_command 的子进程管道、filesystem
 的 `asio::stream_file`），在没有 wake source 时无法被推进。
 
 **方案：声明式受控轮询（`polled_tool`）**。插件在注册时就**声明**"该工具需要受控轮询
@@ -1489,7 +1489,7 @@ polled_tool(ctx, name, depict, schema,
     `blocking_tool`）—— 可用性统一经 `utilxx_base::isAsyncFileIoSupported()` 判断：
     编译期未启用 asio 文件 I/O（`ASIO_HAS_FILE` / `BOOST_ASIO_HAS_FILE` 均未定义），
     或 Linux/Android 上运行时无法创建 io_uring 环（容器/虚拟化的 seccomp 过滤
-    ——`/proc/self/status` 的 `Seccomp: 2`——会拦截 `io_uring_setup`，内核过旧返回
+    ——`/proc/self/status` 的 `Seccomp: 2`——会拦截 `io_uring_setup`，操作系统内核版本过旧时返回
     `ENOSYS`）；判断结果按进程缓存，测试可经 `setAsyncFileIoSupported(false)` 强制
     关闭以覆盖同步回退路径；
   - `agentxx_rag_search`：embedding 网络段先把实现体恢复为协程形态（其注释记录了

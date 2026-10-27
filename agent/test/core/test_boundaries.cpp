@@ -140,7 +140,7 @@ fs::path agentSourceRoot() {
 // 规则实现
 // ---------------------------------------------------------------------------
 
-/// 规则 1/2: client 不得引用 lib 私有实现, 且 `agentxx/*` 引用必须落在公开 include 根
+/// 规则 1: client 依赖边界 —— 不得引用 lib 私有实现, 且 `agentxx/*` 引用必须落在公开 include 根
 void checkClientIncludes(const fs::path& root, Violations& v, size_t& scanned) {
     std::vector<fs::path> files;
     collectSources(root / "client" / "include", files);
@@ -173,7 +173,7 @@ void checkClientIncludes(const fs::path& root, Violations& v, size_t& scanned) {
     }
 }
 
-/// 规则 3: 插件只引用 SDK 公开头与工具库公开头
+/// 规则 2: 插件依赖边界 —— 只引用 SDK 公开头与工具库公开头
 ///
 /// 允许的主程序公开头 (插件 SDK 边界):
 /// - `agentxx/plugin/api/*`: 插件 C ABI 头与主程序侧 kit (umbrella 为 plugin_kit.h)
@@ -211,7 +211,7 @@ void checkPluginIncludes(const fs::path& root, Violations& v, size_t& scanned) {
     }
 }
 
-/// 规则 4: lib 不得反向依赖 client (含 `agentxx-client/*` 与 client 目录内路径)
+/// 规则 3: lib 反向依赖 —— 不得依赖 client (含 `agentxx-client/*` 与 client 目录内路径)
 void checkLibIncludes(const fs::path& root, Violations& v, size_t& scanned) {
     std::vector<fs::path> files;
     collectSources(root / "lib", files);
@@ -231,7 +231,7 @@ void checkLibIncludes(const fs::path& root, Violations& v, size_t& scanned) {
     }
 }
 
-/// 规则 5: 插件动态库导出仍是入口白名单 (构建配置侧)
+/// 规则 4: 插件导出白名单 —— 插件动态库导出仍是入口白名单 (构建配置侧)
 /// - ELF: -fvisibility=hidden + version script (global 白名单 + `local: *`)
 /// - Mach-O: -exported_symbols_list
 /// - MSVC: 不自动导出 (CMAKE_WINDOWS_EXPORT_ALL_SYMBOLS 必须保持关闭)
@@ -257,7 +257,7 @@ void checkPluginExportConfig(const fs::path& root, Violations& v) {
     }
 }
 
-/// 规则 6: 插件源码不得手写平台导出属性 (必须经 SDK 的 PLUGINXX_EXPORT / AGENTXX_PLUGIN_*_EXPORT)
+/// 规则 5: 插件源码导出属性 —— 不得手写平台导出属性 (必须经 SDK 的 PLUGINXX_EXPORT / AGENTXX_PLUGIN_*_EXPORT)
 void checkPluginRawExport(const fs::path& root, Violations& v, size_t& scanned) {
     std::vector<fs::path> files;
     collectSources(root / "plugins", files);
@@ -293,7 +293,7 @@ void checkPluginRawExport(const fs::path& root, Violations& v, size_t& scanned) 
     }
 }
 
-/// 规则 7: 组件渲染层只依赖"描述 + 渲染上下文"
+/// 规则 6: 渲染层依赖边界 —— 组件渲染层只依赖"描述 + 渲染上下文"
 /// - 渲染层 ([UiRenderCtx] / [renderItems] / 命中) 不得直接依赖连接、会话、
 ///   端点或插件管理器实现: 数据来源与连接状态由调用方组装后传入
 /// - 只检查**直接** `#include` (间接引用由各自模块的规则约束: 插件管理器类型
@@ -338,7 +338,7 @@ void checkRenderLayerIncludes(const fs::path& root, Violations& v) {
     }
 }
 
-/// 规则 9: 客户端声明的 UI 组件名与描述层组件表一致
+/// 规则 11: UI 组件名 —— 客户端声明的组件名与描述层组件表一致
 ///
 /// 背景: 客户端只声明自己真的能画的组件 (能力段), 声明错名字的后果是三层
 /// 静默失效 —— `adapt()` 认为客户端不支持该组件而提前降级, 渲染器里那条分支
@@ -426,7 +426,7 @@ void checkTuiBlockNames(const fs::path& root, Violations& v) {
     }
 }
 
-/// 规则 10: 接口表名集合
+/// 规则 8: 接口表名集合
 ///
 /// 数量常量 (`kInterfaceTableCount`) 只能发现"少了一张表", 发现不了"名字写错"或
 /// "换了名字": 插件按 IID 查询, 名字错一个字就是查询失败。因此这里从 SDK 头文件
@@ -524,7 +524,7 @@ void checkInterfaceTableNames(const fs::path& root, Violations& v) {
     }
 }
 
-/// 规则 13: 接口表四件套齐全
+/// 规则 9: 接口表四件套齐全
 ///
 /// 每张接口表必须同时具备四项, 缺一不可 (新增表同样):
 /// - **IID** (`X_IFACE_<名>` 字符串常量): `query_interface` 的键;
@@ -721,7 +721,7 @@ void checkInterfaceTableQuadruple(const fs::path& root, Violations& v) {
     }
 }
 
-/// 规则 14: 接口表成员顺序台账
+/// 规则 10: 接口表成员顺序台账
 ///
 /// 重排成员、改成员签名、删除成员都**可能不改变结构体大小** —— 版本号与
 /// `struct_size` 都拦不住, 旧调用方会静默调到隔壁函数。唯一可行的防线是把"成员顺序"
@@ -881,14 +881,17 @@ void checkInterfaceTableLayout(const fs::path& root, Violations& v) {
 /// - 含糊称呼: `宿主` / `应用侧` / `基座`;
 /// - 直译词 (中文读者要先回译成英文才懂的词): `装载` / `载入` / `承载` / `载体` /
 ///   `编排` / `接缝` / `链路` / `视角` / `口径` / `落地` / `埋点` / `门禁` / `颗粒度`;
-/// - `内核`: 只允许操作系统内核含义 (`内核对象` / `内核级` / `内核就绪事件`);
+/// - `内核`: 只允许操作系统内核含义 (后面紧跟技术名词: `内核级` / `内核态` /
+///   `内核时间` / `内核对象` / `内核接口` / `内核线程` / `内核模块` / `内核栈` /
+///   `内核日志` / `内核版本` 等; 指插件框架时写'插件框架');
 /// - `领域`: 只允许出现在标识符所在行 (`DomainHooks` /
 ///   `plugin_manager_domain_hooks` 一类);
 /// - `拓扑`: 只允许 `拓扑排序` (算法名)。
 ///
-/// 豁免:
-/// - 一行里出现两个及以上禁用词时判为"禁用词表本身" (AGENTS.md 与
-///   `prompt.cpp` 里列出这些词的那两处);
+/// 豁免 (只保留两条明确规则, 不再靠"一行里禁用词个数"猜):
+/// - 行内带 `term-table` 标记 (本检查表自身的词表行);
+/// - 词表文件白名单 (`kTermListFiles`): 运行时系统提示词里那句"不要借用这些词"
+///   的示例行 —— 只对同时出现两个以上禁用词的行生效, 该文件其它注释照常检查;
 /// - `resource/history/**` 是历史记录, 整体不检查;
 /// - 第三方上游库不检查 (只查自研的 cxx_* 与 agentxx 自己的代码/文档)。
 void checkTerminology(const fs::path& root, Violations& v) {
@@ -969,6 +972,12 @@ void checkTerminology(const fs::path& root, Violations& v) {
         files.push_back(agentsMd);
     }
 
+    // 词表文件白名单: 只豁免"同时出现两个及以上禁用词"的词表行
+    // (运行时系统提示词里给模型看的"不要借用这些词"示例)
+    static constexpr std::string_view kTermListFiles[] = {
+        "agent/lib/src/agent/prompt.cpp",
+    };
+
     size_t scanned = 0;
     for (const auto& file : files) {
         // 历史记录与构建产物不检查
@@ -994,14 +1003,25 @@ void checkTerminology(const fs::path& root, Violations& v) {
             const auto line = std::string{rest.substr(pos, end - pos)};
             ++lineNo;
 
-            // 禁用词表本身 (一行里列了多个禁词) 与检查表自身 (带 `term-table` 标记) 不判违规
+            // 豁免: 本检查表的词表行 (带 `term-table` 标记), 以及白名单文件里的
+            // 词表示例行 (该文件里同时出现两个以上禁用词的行)
             size_t bannedInLine = 0;
             for (const auto& rule : kRules) {
                 if (line.find(rule.term) != std::string::npos) {
                     ++bannedInLine;
                 }
             }
-            if (bannedInLine < 2 && line.find("term-table") == std::string::npos) {
+            bool termListFile = false;
+            for (auto name : kTermListFiles) {
+                if (genericPath == name) {
+                    termListFile = true;
+                    break;
+                }
+            }
+            const bool exemptLine
+                = line.find("term-table") != std::string::npos
+                  || (termListFile && bannedInLine >= 2);
+            if (!exemptLine) {
                 for (const auto& rule : kRules) {
                     if (rule.exceptInLine != nullptr
                         && line.find(rule.exceptInLine) != std::string::npos) {
@@ -1014,23 +1034,44 @@ void checkTerminology(const fs::path& root, Violations& v) {
                         );
                     }
                 }
-                // `内核` 只允许操作系统内核含义
-                if (line.find("内核") != std::string::npos
-                    && line.find("内核对象") == std::string::npos
-                    && line.find("内核级") == std::string::npos
-                    && line.find("内核态") == std::string::npos
-                    && line.find("内核时间") == std::string::npos
-                    && line.find("内核接口") == std::string::npos
-                    && line.find("内核累计") == std::string::npos
-                    && line.find("内核过旧") == std::string::npos
-                    && line.find("内核把") == std::string::npos
-                    && line.find("内核直接回收") == std::string::npos
-                    && line.find("内核就绪") == std::string::npos) {
-                    v.push_back(
-                        genericPath + ":" + std::to_string(lineNo)
-                        + ": `内核` 只用于操作系统内核含义 (指插件框架时写'插件框架')\n      "
-                        + line
-                    );
+                // `内核` 只允许操作系统内核含义: 后面紧跟技术名词
+                {
+                    static constexpr std::string_view kKernelSuffixes[] = {
+                        "对象", "级",   "态",   "时间", "接口", "线程", "模块", "栈",
+                        "日志", "版本", "就绪", "占用", "参数", "崩溃", "代码",
+                    };
+                    bool badKernel = false;
+                    size_t at = 0;
+                    constexpr std::string_view kernel{"内核"};       // 6 字节 UTF-8
+                    constexpr std::string_view osPrefix{"操作系统"}; // 12 字节 UTF-8
+                    while ((at = line.find(kernel.data(), at, kernel.size())) != std::string::npos) {
+                        // "操作系统内核" 是明确用法, 后面的词不受限
+                        if (at >= osPrefix.size()
+                            && line.compare(at - osPrefix.size(), osPrefix.size(), osPrefix) == 0) {
+                            at += kernel.size();
+                            continue;
+                        }
+                        const auto rest = std::string_view{line}.substr(at + kernel.size());
+                        bool ok = false;
+                        for (auto suffix : kKernelSuffixes) {
+                            if (rest.starts_with(suffix)) {
+                                ok = true;
+                                break;
+                            }
+                        }
+                        if (!ok) {
+                            badKernel = true;
+                            break;
+                        }
+                        at += kernel.size();
+                    }
+                    if (badKernel) {
+                        v.push_back(
+                            genericPath + ":" + std::to_string(lineNo)
+                            + ": `内核` 只用于操作系统内核含义 (指插件框架时写'插件框架')\n      "
+                            + line
+                        );
+                    }
                 }
                 // `领域` 只允许出现在标识符行
                 if (line.find("领域") != std::string::npos
@@ -1063,7 +1104,7 @@ void checkTerminology(const fs::path& root, Violations& v) {
     }
 }
 
-/// 规则 11: 文档路径存在
+/// 规则 12: 文档路径存在
 ///
 /// `AGENTS.md` 是给人和 AI 看的入口, 里面引用的 `docs/zh-cn/**.md` 一旦改名或
 /// 搬走就会变成死链 (读者点不开, 模型按旧路径找文档)。这里把根 `AGENTS.md` 与
@@ -1101,7 +1142,7 @@ void checkDocumentedPaths(const fs::path& root, Violations& v) {
     }
 }
 
-/// 规则 12: 客户端模型层只依赖数据与标准库
+/// 规则 13: 客户端模型层边界 —— 只依赖数据与标准库
 ///
 /// 背景: 历史分页窗口与消息队列镜像被抽成独立模型 (client/.../tui/model/),
 /// 目的之一是**脱离终端可单测**。若模型里混进 FTXUI / 端点 / 传输 / 插件管理器
@@ -1157,7 +1198,7 @@ void checkModelLayerIncludes(const fs::path& root, Violations& v) {
     }
 }
 
-/// 规则 13: JSONL 一次性运行模式的 stdout 纪律
+/// 规则 14: JSONL 模式的 stdout 纪律
 ///
 /// 背景: `agentxx_cli jsonl` 的 stdout 就是对外协议 (每行一条 Wire 消息), 外部脚本按行
 /// 解析。运行器里若混进直接打印 (调试输出/进度提示), stdout 会被污染, 脚本解析随之失败。
@@ -1199,13 +1240,15 @@ void checkJsonlModeStdoutDiscipline(const fs::path& root, Violations& v) {
 
 } // namespace
 
-/// 规则 8: 接口表数量与文档一致
+/// 规则 7: 接口表数量 —— 与文档一致
 /// - 数量常量在 `PluginManager::kInterfaceTableCount` / `ClientPluginManager::kInterfaceTableCount`
-/// - 文档: `docs/zh-cn/design/plugins.md` 与仓库根 `AGENTS.md` 都写明两侧数量;
-///   增删接口表却忘记同步文档时本规则失败 (数字对不上就是漏更新)
+/// - 文档: `docs/zh-cn/design/plugins.md`、`docs/zh-cn/design/index.md` 与仓库根
+///   `AGENTS.md` 都写明两侧数量; 增删接口表却忘记同步文档时本规则失败
+///   (数字对不上就是漏更新)
 void checkInterfaceTableCount(const fs::path& root, Violations& v) {
     const auto repoRoot  = root.parent_path();
     const auto pluginsMd = repoRoot / "docs" / "zh-cn" / "design" / "plugins.md";
+    const auto indexMd   = repoRoot / "docs" / "zh-cn" / "design" / "index.md";
     const auto agentsMd  = repoRoot / "AGENTS.md";
 
     const size_t agentCount  = agentxx::plugin::PluginManager::kInterfaceTableCount;
@@ -1253,6 +1296,22 @@ void checkInterfaceTableCount(const fs::path& root, Violations& v) {
         }
     }
 
+    // index.md 的架构章节目录树与接口表小节同样写明两侧数量 (以前漏掉, 导致
+    // 它落后一代还无人发现)
+    const auto indexText = readAll(indexMd);
+    if (!indexText.has_value()) {
+        v.push_back("缺少文档 `docs/zh-cn/design/index.md` (接口表数量校验依赖它)");
+    } else {
+        const std::string agentNeedle  = std::to_string(agentCount) + " 张 agent";
+        const std::string clientNeedle = std::to_string(clientCount) + " 张 client";
+        if (!contains(*indexText, agentNeedle)) {
+            v.push_back("index.md 未写明 `" + agentNeedle + "` (接口表数量已变化?)");
+        }
+        if (!contains(*indexText, clientNeedle)) {
+            v.push_back("index.md 未写明 `" + clientNeedle + "` (接口表数量已变化?)");
+        }
+    }
+
     const auto agentsText = readAll(agentsMd);
     if (!agentsText.has_value()) {
         v.push_back("缺少根 `AGENTS.md` (接口表数量校验依赖它)");
@@ -1268,6 +1327,47 @@ void checkInterfaceTableCount(const fs::path& root, Violations& v) {
             );
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// 规则台账
+// ---------------------------------------------------------------------------
+
+/// 一条边界规则的名称 (编号 = 本表下标 + 1)
+struct BoundaryRule {
+    const char* name;
+};
+
+/// 规则表: **编号只由本表顺序决定**
+/// - 新增规则时在本表末尾追加, 并在 `testBoundaries` 里按相同顺序调用检查;
+///   两处数量不一致会让本模块失败 (见 `testBoundaries` 末尾的校验)
+/// - 以前每个检查函数在注释里手写"规则 N", 曾出现两个"规则 13", 编号与
+///   执行顺序也对不上; 现在失败输出里的编号与名称都来自这里
+constexpr BoundaryRule kRuleTable[] = {
+    {"client 依赖边界"      }, // 1
+    {"插件依赖边界"        }, // 2
+    {"lib 反向依赖"        }, // 3
+    {"插件导出白名单"      }, // 4
+    {"插件源码导出属性"    }, // 5
+    {"渲染层依赖边界"      }, // 6
+    {"接口表数量"          }, // 7
+    {"接口表名集合"        }, // 8
+    {"接口表四件套"        }, // 9
+    {"接口表成员顺序"      }, // 10
+    {"UI 组件名"            }, // 11
+    {"文档路径"            }, // 12
+    {"客户端模型层边界"    }, // 13
+    {"JSONL 模式 stdout 纪律"}, // 14
+    {"称呼与用词"          }, // 15
+};
+
+/// 规则的报告标签 (形如 `规则 9: 接口表四件套`)
+/// - [index] 从 1 开始; 越界时返回序号本身, 保证报告永远可打印
+std::string ruleLabel(size_t index) {
+    if (index == 0 || index > std::size(kRuleTable)) {
+        return "规则 " + std::to_string(index);
+    }
+    return "规则 " + std::to_string(index) + ": " + kRuleTable[index - 1].name;
 }
 
 // ---------------------------------------------------------------------------
@@ -1297,8 +1397,9 @@ TestResult testBoundaries() {
     checkLibIncludes(root, libViolations, scannedLib);
 
     Violations exportViolations;
+    Violations exportRawViolations;
     checkPluginExportConfig(root, exportViolations);
-    checkPluginRawExport(root, exportViolations, scannedPlugin);
+    checkPluginRawExport(root, exportRawViolations, scannedPlugin);
 
     Violations renderViolations;
     checkRenderLayerIncludes(root, renderViolations);
@@ -1330,17 +1431,25 @@ TestResult testBoundaries() {
     XX_TEST_EXPECT_GE(scannedPlugin, size_t{50});
     XX_TEST_EXPECT_GE(scannedLib, size_t{100});
 
-    reportViolations("client 边界", clientViolations);
-    reportViolations("插件边界", pluginViolations);
-    reportViolations("lib 边界", libViolations);
-    reportViolations("插件导出白名单", exportViolations);
-    reportViolations("渲染层边界", renderViolations);
-    reportViolations("接口表数量", ifaceViolations);
-    reportViolations("UI 组件名", uiBlockViolations);
-    reportViolations("文档路径", docPathViolations);
-    reportViolations("客户端模型层边界", modelViolations);
-    reportViolations("JSONL 模式 stdout 纪律", jsonlViolations);
-    reportViolations("称呼与用词", termViolations);
+    // 规则表与调用顺序必须一一对应: 数量不符或编号重复时本模块失败
+    XX_TEST_EXPECT_EQ(std::size(kRuleTable), size_t{15});
+
+    // 报告标签带规则编号 (编号来自 kRuleTable 顺序, 不再手写)
+    reportViolations(ruleLabel(1), clientViolations);
+    reportViolations(ruleLabel(2), pluginViolations);
+    reportViolations(ruleLabel(3), libViolations);
+    reportViolations(ruleLabel(4), exportViolations);
+    reportViolations(ruleLabel(5), exportRawViolations);
+    reportViolations(ruleLabel(6), renderViolations);
+    reportViolations(ruleLabel(7), ifaceViolations);
+    reportViolations(ruleLabel(8), ifaceViolations);
+    reportViolations(ruleLabel(9), ifaceViolations);
+    reportViolations(ruleLabel(10), ifaceViolations);
+    reportViolations(ruleLabel(11), uiBlockViolations);
+    reportViolations(ruleLabel(12), docPathViolations);
+    reportViolations(ruleLabel(13), modelViolations);
+    reportViolations(ruleLabel(14), jsonlViolations);
+    reportViolations(ruleLabel(15), termViolations);
 
     TEST_INFO << "boundaries: scanned client=" << scannedClient << " plugin=" << scannedPlugin
               << " lib=" << scannedLib << " files" << std::endl;

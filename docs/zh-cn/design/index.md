@@ -725,10 +725,10 @@ path/to/agentxx_test --fail-fast
 path/to/agentxx_test string_util regex agent
 ```
 
-可用测试模块 (与 `agent/test/test.cpp` 注册列表一致):
-- 同步模块: `string_util` `regex` `json` `json_view` `json_reflection` `diff_util` `events` `concurrency` `misc_fixes` `graph_data` `aho_corasick` `util_misc` `training` `settings_db` `toolcall_args` `interrupt_ui` `ui_items` `ui_kit` `ffi_c_api` `plugin_runtime` `plugin_sdk` `plugin_bridge`
-- 同步模块 (client 侧, 仅 `AGENTXX_BUILD_CLIENT`): `config_loader` `tui_settings` `update_check` `tui_input` `tui_interrupt` `tui_scroll` `tui_sidebar` `tui_context_overlay` `tui_form` `tui_stream` `tui_surface` `tui_theme` `tui_tool_header` `tui_ui_items` `tui_widget` `sessionId` `mermaid_state`
-- 异步模块: `event_stream` `event_bridge` `interrupt_bus` `subagent_bus` `subagent_tool` `agent_host` `string_tools` `math_tools` `share_store` `session_persistence` `rag_search` `datetime` `filesystem` `command` `worktree` `web_search` `codegraph` `screen_capture` `cpu_gpu` `text_selection` `http` `network_timeout` `websocket` `remote_agent` `mcp` `acp` `a2a` `openai_provider` `anthropic_provider` `plugins` `plugin_resources` `plugin_multi_instance` `client_plugins` `cancel` `message_supplement` `summarization` `checkpoint_store` `agent` `memgrowth`
+可用测试模块: **完整清单见 [test-modules.md](test-modules.md)** (生成物, 由测试模块 `test_modules`
+逐字节校验; 重新生成: `AGENTXX_UPDATE_TEST_MODULES=1 path/to/agentxx_test test_modules`)。
+常用模块举例: `boundaries` (分层/用词/接口表自检) `config_keys` (配置键目录) `wire_schema`
+(Wire 字段表) `string_util` `regex` `agent` `mcp` `plugins` `tui_stream` `tui_form`。
 - 平台限定: `screen_capture` / `text_selection` 仅 Windows 有真实实现 (其余平台跳过); 测试入口另有 Warn/Error 输出 sink (`TestWarnErrorLogSink`), 插件加载失败等库内错误不再静默丢失
 
 测试源目录划分: 根目录 (入口 `test.cpp`) / `core/` (lib 核心) / `plugin/` (插件系统与具体插件集成) / `client/` (TUI/CLI, 仅 `AGENTXX_BUILD_CLIENT` 编译);
