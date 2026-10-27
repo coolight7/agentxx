@@ -523,13 +523,16 @@ struct ToolHeaderFixture {
     }
 
     /// 追加一条 Tool 消息 (text 为工具参数 JSON, 与 server 端约定一致)
+    /// - `hasError`: 失败标记, 由执行层给出 (异常/工具不存在/参数非法/权限拒绝等);
+    ///   界面只按它选错误色与"失败回退通用展示"分支, 不再看结果文本前缀
     void pushTool(
         std::string name,
         std::string args,
         bool        finished   = true,
         bool        collapsed  = true,
         std::string result     = "",
-        int64_t     durationMs = 0
+        int64_t     durationMs = 0,
+        bool        hasError   = false
     ) {
         sharedState.mutate([&](TUIRenderState& st) {
             auto m                = std::make_shared<TUIMessage>();
@@ -539,6 +542,7 @@ struct ToolHeaderFixture {
             m->tool->toolCallId   = "call_1";
             m->tool->toolFinished = finished;
             m->tool->toolResult   = std::move(result);
+            m->tool->hasError     = hasError;
             m->durationMs         = durationMs;
             // Tool 消息默认折叠展示 (与真实 TUI 流一致, 见
             // [agent_tui.cpp](/agent/client/src/io/tui/agent_tui.cpp));
@@ -547,6 +551,17 @@ struct ToolHeaderFixture {
             m->text      = std::move(args);
             st.messages.push_back(std::move(m));
         });
+    }
+
+    /// 追加一条执行失败的 Tool 消息 (失败标记见
+    /// [agentxx::agent::ViewMessage::ToolData::hasError])
+    void pushFailedTool(
+        std::string name,
+        std::string args,
+        std::string result,
+        bool        collapsed = true
+    ) {
+        pushTool(std::move(name), std::move(args), true, collapsed, std::move(result), 0, true);
     }
 
     /// 把最后一条 Tool 消息置为已完成 (模拟 ToolEnd: 结果文本到达)。
@@ -1295,14 +1310,13 @@ void testTuiToolHeaderDecor() {
     XX_TEST_EXPECT_TRUE(expanded.find("Notes:") != std::string::npos);
     XX_TEST_EXPECT_TRUE(expanded.find("my notes content") != std::string::npos);
 
-    // 装饰失败回退: 结果错误时展开体回退通用 result 错误展示
+    // 装饰失败回退: 失败标记 (hasError) 到达时展开体回退通用 result 错误展示
     ToolHeaderFixture f3(120, 16);
-    f3.pushTool(
+    f3.pushFailedTool(
         "agentxx_planning",
         R"({"mode":"read"})",
-        true,
-        false,
-        "[Error] No saved planning in this session."
+        "[Error] No saved planning in this session.",
+        false
     );
     f3.pushDecor();
     std::string errBody = f3.plainRender();
@@ -1365,14 +1379,13 @@ void testTuiToolHeaderDecorButtonMultiFrame() {
 // 1. 折叠时保持特化 toolName (如 "Read", "Write", "Bash" 等), 异常结果显示在后面并标红
 // 2. 未知工具折叠时显示原始 toolName + 异常结果并标红
 // 3. 展开时 result 显示为红色
+// 失败一律由执行层给出的 hasError 标记驱动 (界面不看结果文本前缀, 反方向用例见函数末尾)
 void testTuiToolHeaderFailed() {
     // 已知工具 (Read) 执行失败折叠展示: 保持 "Read", 后面紧随异常结果
     ToolHeaderFixture fRead;
-    fRead.pushTool(
+    fRead.pushFailedTool(
         "agentxx_filesystem_read",
         R"({"path":"/nonexistent/file.txt"})",
-        true,
-        true,
         "[Error] Path not exist"
     );
     XX_TEST_EXPECT_TRUE(
@@ -1383,11 +1396,9 @@ void testTuiToolHeaderFailed() {
 
     // 已知工具 (Edit) 执行失败折叠展示
     ToolHeaderFixture fEdit;
-    fEdit.pushTool(
+    fEdit.pushFailedTool(
         "agentxx_filesystem_edit",
         R"({"path":"/a.cpp","old_str":"","new_str":"b"})",
-        true,
-        true,
         "[Error] Arg old_str is empty"
     );
     XX_TEST_EXPECT_TRUE(
@@ -1397,11 +1408,9 @@ void testTuiToolHeaderFailed() {
 
     // 已知工具 (Bash) 执行失败折叠展示
     ToolHeaderFixture fBash;
-    fBash.pushTool(
+    fBash.pushFailedTool(
         "agentxx_execute_bash_command",
         R"({"command":"invalid_cmd"})",
-        true,
-        true,
         "[Error] Command failed with code 127"
     );
     XX_TEST_EXPECT_TRUE(
@@ -1411,11 +1420,9 @@ void testTuiToolHeaderFailed() {
 
     // 异常中止 ([Exception aborted: ...])
     ToolHeaderFixture fExcept;
-    fExcept.pushTool(
+    fExcept.pushFailedTool(
         "agentxx_web_fetch",
         R"({"url":"https://example.com"})",
-        true,
-        true,
         "[Exception aborted: connection timeout]"
     );
     XX_TEST_EXPECT_TRUE(
@@ -1426,8 +1433,11 @@ void testTuiToolHeaderFailed() {
 
     // 未知工具执行失败折叠展示: 保持原始 toolName + 异常结果
     ToolHeaderFixture fUnknown;
-    fUnknown
-        .pushTool("custom_plugin_tool", R"({"foo":"bar"})", true, true, "[Error] Custom failure");
+    fUnknown.pushFailedTool(
+        "custom_plugin_tool",
+        R"({"foo":"bar"})",
+        "[Error] Custom failure"
+    );
     XX_TEST_EXPECT_TRUE(
         fUnknown.plainRender().find("custom_plugin_tool · [Error] Custom failure")
         != std::string::npos
@@ -1436,18 +1446,36 @@ void testTuiToolHeaderFailed() {
 
     // 展开状态下普通工具的 result: 同样使用 errorColor 标红
     ToolHeaderFixture fExpanded;
-    fExpanded.pushTool(
+    fExpanded.pushFailedTool(
         "agentxx_execute_bash_command",
         R"({"command":"ls"})",
-        true,
-        false, // 展开
-        "[Error] exit code 1"
+        "[Error] exit code 1",
+        false // 展开
     );
     XX_TEST_EXPECT_TRUE(
         fExpanded.plainRender().find(TuiI18n::instance().t("tool.result")) != std::string::npos
     );
     XX_TEST_EXPECT_TRUE(fExpanded.plainRender().find("[Error] exit code 1") != std::string::npos);
     XX_TEST_EXPECT_TRUE(fExpanded.render().find("255;85;85") != std::string::npos);
+
+    // 反向用例: 同样的结果文本, 执行层未标失败 (hasError = false)
+    // —— 界面不按文本判错: 不加 " · " 失败后缀, 也不用错误色
+    ToolHeaderFixture fTextOnly;
+    fTextOnly.pushTool(
+        "custom_plugin_tool",
+        R"({"foo":"bar"})",
+        true,
+        true,
+        "[Error] this line is log content, not a failure"
+    );
+    XX_TEST_EXPECT_TRUE(
+        fTextOnly.plainRender().find("custom_plugin_tool [Error] this line is log content")
+        != std::string::npos
+    );
+    XX_TEST_EXPECT_TRUE(
+        fTextOnly.plainRender().find("custom_plugin_tool · [Error]") == std::string::npos
+    );
+    XX_TEST_EXPECT_TRUE(fTextOnly.render().find("255;85;85") == std::string::npos);
 }
 
 // 展开 Tool 消息时显示耗时

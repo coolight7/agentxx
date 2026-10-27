@@ -80,11 +80,33 @@
 
 | 任务 | 状态 | 说明 |
 |---|---|---|
-| debug 编译 | 待开始 | |
-| 跑全量测试模块 | 待开始 | |
+| debug 编译 | 已完成 | `agent\script\windows_debug_build.bat` 通过 (无 error C/LNK)；Release/其它平台未跑 |
+| 跑全量测试模块 | 已完成 | `agentxx_test.exe` 全量: `Total: passed=38968 failed=0` (127 个模块, 无失败) |
+
+### G. 实施过程中另外发现的既有缺陷 (已修)
+
+| 位置 | 状态 | 说明 |
+|---|---|---|
+| `test_input_delivery.cpp` `contextHasText()` | 已完成 | 原本搜全部消息, 会误命中系统提示词里的 `[Content offloaded. ...]` 示例文本 → 改为跳过 `role == "system"` |
+| `test_screen_capture.cpp` / `test_text_selection_monitor.cpp` | 已完成 | 插件工具只在 `mount` 回调里注册, 用例只 `load` 未 `mount`, 工具始终缺失 → 补 `mountAgentAsync` |
+| `test_tui_tool_header.cpp` 夹具 | 已完成 | `hasError` 改造后界面只看 `tool->hasError`, 而夹具只填结果文本 → 12 条断言失败。夹具新增 `hasError` 参数与 `pushFailedTool()`, 失败用例改用它; 并补反向用例 (文本带 `[Error]` 但 `hasError=false` → 不加 ` · ` 失败后缀、不用错误色) |
+
+### H. 未处理项 (已写入 roadmap)
+
+| 条目 | roadmap 编号 | 说明 |
+|---|---|---|
+| 重放缓冲的字节上限 | PRO-13 | 当前只有条数上限; 未来确需字节上限再实现估算 |
+| `McpServer` / `A2aServer` 与 cli 能力对齐 | PRO-14 | 后续把 cli 能力同步到 mcp/a2a, 并提供插件注册导出 |
+| 训练系统存档原子写等 | TRN-1 | 整块仍在开发中, 稳定后再改 |
+| `saveStateItem` 跨进程持久化 | — | 预留接口, 当前无引用; 注释已写明"当前不做跨进程持久化" |
 
 ## 2. 注意事项
 
 - `resource/history/**` 内的既有历史记录不改（本目录除外）。
 - 只跑 debug 构建；不手动 `clang-format`。
 - 注释用词遵守 `boundaries` 停用词表（写"主程序/流程/扩展点"，不写"宿主/链路/埋点"）。
+- 界面不再按结果文本判错：新增/修改客户端用例时，模拟失败的工具消息必须显式给
+  `hasError`（`ToolHeaderFixture::pushFailedTool`），只写 `[Error] ...` 文本不会变红。
+- `git add` 一律给显式路径：工作区里 `TODOS.md` 是用户自己的改动，
+  `agent/third_party/*` 是子模块指针差异，都不应随本任务提交
+  （注：`0d11357f` 曾把 `TODOS.md` 的改动一并带上，后续提交已避开）。
