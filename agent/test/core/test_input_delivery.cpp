@@ -311,6 +311,11 @@ bool contextHasText(
         return false;
     }
     for (const auto& m : session->messages()) {
+        // 只看非 system 消息: 内置系统提示词里就描述了这些标记的含义
+        // (`[Content offloaded. ...]` 等), 一并搜会恒为真
+        if (m.role == "system") {
+            continue;
+        }
         if (m.content.find(text) != std::string::npos) {
             return true;
         }

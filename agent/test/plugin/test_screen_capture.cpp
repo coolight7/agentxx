@@ -152,6 +152,9 @@ asio::awaitable<agentxx::test::TestResult>
         co_return TestResult{g_sc_passed, g_sc_failed};
     }
     XX_TEST_EXPECT_EQ(inst->name, "agentxx_screen_capture");
+    // 工具注册在挂载回调里做 (一插件加载多 agent 挂载): 加载后必须挂载本 agent
+    ctx->pluginMount = co_await ctx->pluginManager->mountAgentAsync(ctx);
+    XX_TEST_EXPECT_TRUE(ctx->pluginMount != nullptr);
     XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("agentxx_screen_capture"));
     XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains("agentxx_get_screen_frames"));
     // 独立插件不注册 ui_control 工具 (已从 computer_use 拆分)
@@ -263,6 +266,8 @@ asio::awaitable<agentxx::test::TestResult>
         XX_TEST_EXPECT_TRUE(cuInst != nullptr);
         if (cuInst) {
             XX_TEST_EXPECT_EQ(cuInst->name, "agentxx_computer_use");
+            // 新加载的插件同样要靠挂载才会注册工具
+            ctx->pluginMount = co_await ctx->pluginManager->mountAgentAsync(ctx);
             XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("agentxx_ui_control_keyboard_mouse"));
         }
         // 卸载 screen_capture 时级联卸载依赖它的 computer_use (依赖方先卸载)

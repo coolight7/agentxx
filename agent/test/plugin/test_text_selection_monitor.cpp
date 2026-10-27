@@ -77,6 +77,9 @@ asio::awaitable<TestResult>
         co_return TestResult{g_ts_passed, g_ts_failed};
     }
     XX_TEST_EXPECT_EQ(inst->name, "agentxx_text_selection_monitor");
+    // 工具注册在挂载回调里做 (一插件加载多 agent 挂载): 加载后必须挂载本 agent
+    ctx->pluginMount = co_await ctx->pluginManager->mountAgentAsync(ctx);
+    XX_TEST_EXPECT_TRUE(ctx->pluginMount != nullptr);
     XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("agentxx_text_selection_monitor"));
 
     // ---- 3. 工具 status (未启动: running=false) ----

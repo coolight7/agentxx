@@ -198,9 +198,10 @@ public:
     }
 
     /// 延迟加载 state
-    /// - 如果 thread 很多，可以等需要时从硬盘加载进内存
+    /// - 设计上预留给"线程很多时按需从磁盘加载"的场景
+    /// - **当前实现不做跳进程持久化**: 恒为新建空 state, 中间件状态只存内存
+    ///   (`Session` 的上下文与展示历史才有落盘, 见 index.md 的持久化小节)
     virtual asio::awaitable<std::shared_ptr<T>> loadStateItem(std::string_view sessionId) {
-        // TODO: 从磁盘读取
         auto ptr = std::make_shared<T>();
         utilxx_base::insertOrAssignHeterogeneous(states, sessionId, ptr);
         co_return ptr;
@@ -216,6 +217,10 @@ public:
         co_return co_await loadStateItem(sessionId);
     }
 
+    /// 卸出/保留 state
+    /// - `offload = true` 表示"想先存盘再卸出内存", 但**当前没有磁盘存储**:
+    ///   这个接口目前没有调用者, 将来的存储实现必须在这里真正写盘, 否则
+    ///   默认参数会直接丢掉内存里的状态
     virtual asio::awaitable<void> saveStateItem(std::string_view sessionId, bool offload = true) {
         std::shared_ptr<agentxx::middleware::BaseMiddlewareState> oldEntity = nullptr;
         bool                                                      doSave    = false;
@@ -235,7 +240,7 @@ public:
             }
         }
         if (doSave && nullptr != oldEntity) {
-            // TODO: old 写入磁盘
+            // 预留: 将来接入磁盘存储时在这里写入 oldEntity (当前无存储实现)
         }
         co_return;
     }

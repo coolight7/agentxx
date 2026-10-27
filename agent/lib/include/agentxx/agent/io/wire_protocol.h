@@ -52,6 +52,10 @@ struct MsgType { // ===== Client -> Server =====
 
     /// 客户端重命名会话 (会话标题 + 检索入口)
     inline static constexpr std::string_view RenameSession = "rename_session";
+    /// 客户端查询当前会话上下文 (服务端回 ContextMessages)
+    inline static constexpr std::string_view GetContext = "get_context";
+    /// 客户端请求删除模型配置 (服务端回 RemoveModelResult)
+    inline static constexpr std::string_view RemoveModel = "remove_model";
 
     // ===== Server -> Client =====
     inline static constexpr std::string_view HelloAck         = "hello_ack";
@@ -66,7 +70,6 @@ struct MsgType { // ===== Client -> Server =====
     inline static constexpr std::string_view LogMsg              = "log";
     inline static constexpr std::string_view ModelInfo           = "model_info";
     inline static constexpr std::string_view AppendComponentInfo = "append_component_info";
-    inline static constexpr std::string_view GetContext          = "get_context";
     inline static constexpr std::string_view ContextMessages     = "context_messages";
     /// 服务端持久化会话列表响应 (ListSessions 的结果)
     inline static constexpr std::string_view SessionList = "session_list";
@@ -90,9 +93,7 @@ struct MsgType { // ===== Client -> Server =====
     inline static constexpr std::string_view InputAck = "input_ack";
     /// 服务端会话重命名结果 (RenameSession 回执)
     inline static constexpr std::string_view RenameSessionResult = "rename_session_result";
-    /// 客户端请求删除模型配置
-    inline static constexpr std::string_view RemoveModel = "remove_model";
-    /// 服务端删除模型配置的结果
+    /// 服务端删除模型配置的结果 (RemoveModel 回执)
     inline static constexpr std::string_view RemoveModelResult = "remove_model_result";
     /// 客户端注册 host tool
     inline static constexpr std::string_view HostToolRegister = "host_tool_register";
