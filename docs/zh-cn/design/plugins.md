@@ -1065,6 +1065,7 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 插件经内置 `agentxx_jav
 | `agentxx_text_selection_monitor` | 文本选择监听 (仅 Windows UIAutomation) |
 | `agentxx_javascript_engine` | QuickJS 引擎 (能力 `interpreter.js`) |
 | `example_js_execute_command` | JS 代码执行工具 (`example_js_execute_command`, 依赖 `agentxx_javascript_engine`) |
+| `agentxx_chatbot` | 聊天平台桥接 (QQ, 结构化预留其它平台): 每账号 + 每群/私聊一个独立会话, 每个人设一个根 agent; 工具 `chatbot_send_message` / `_history` / `_chat_info` / `_status` / `_set_mode` (见 §13.1) |
 
 > **插件自管工具提示词 (含运行环境探测)**：工具定义 (`description` / `parameters`) 在
 > `register_tool` 时固化，因此插件必须在自己注册工具**之前**完成一切探测/决策
@@ -1073,6 +1074,42 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 插件经内置 `agentxx_jav
 > 版本），随后把生成好的 depict 与参数描述经 `agentxx.agent.prompt` 接口表作为本实例贡献注入
 > 主程序；`disable` / 卸载时该贡献自动撤销并恢复基础值（见 §15.4）。
 > 探测结果只存实例上下文 (`ExecPluginCtx::env`)，不使用进程级可变静态量（多实例约束，见 §4）。
+
+### 13.1 `agentxx_chatbot`：把人设接到聊天平台
+
+设计文档：[resource/history/chatbot/plan.md](../../../resource/history/chatbot/plan.md)；
+实施记录与已知问题：[work.md](../../../resource/history/chatbot/work.md)。
+
+**它做什么**：把 QQ 群聊/私聊消息投给一个 agent 会话，再把模型的回复发回平台。
+
+- **每个人设一个根 agent**：插件在 `start` 里对自己 `mount_root`，提示词、模型、工具白名单
+  都由人设配置给出，与人设根上的会话一一对应；
+- **每个「平台账号 + 群 或 私聊」一个会话**：会话 id 形如
+  `chatbot_<人设>_<账号>_<群|私聊>_<chatId 的 16 位散列>`，跨重启稳定，同一个群永远是同一个
+  上下文；
+- **回复只有一个出口**：agent 的正文输出不会自动发到群里，模型必须显式调
+  `chatbot_send_message`（不调 = 不说话）；`behavior.fallbackReply` 可让插件在模型漏调
+  工具时兜底发出最后一段正文；
+- **一轮里多条消息一起带上去**：被 @ 立即唤醒；`always` 模式按静默窗口聚合并投递；通道正在
+  跑一轮时新消息继续缓冲，本轮结束（`TURN_END`）后一次性带上；
+- **关键词命令**（`/axx-info` 等）由插件直接处理，`mode` = `local`（插件自己回）/ `model`
+  （构造一条输入投给 agent）/ `action`（执行 `cancel` 等动作），不进聚合缓冲。
+
+**配置**在 `plugin.list[]` 的 `args` 里，四段：`accounts`（每平台账号一份凭证）/
+`personas`（人设 + 对接哪些账号与会话）/ `behavior`（聚合窗口、切分上限、被动回复溢出策略等）/
+`commands`（关键词命令）。凭证建议用 `appIdFile` / `appSecretFile` 从 `.env` 形态的文件读，
+避免写进版本库。
+
+**线程**：插件自建 io_context 与线程。主程序的通道事件回调（在根所属 io 线程）里只做
+「拷贝 → post 到插件 io 线程」，不在回调里阻塞。
+
+**调试**：`behavior.debugTools`（默认关）打开后注册两个工具 —— `chatbot_debug_inject`
+（直接向调度层投一条假消息，不碰平台网络）与 `chatbot_debug_outbox`（回看假平台收到的出站，
+含被动回复 id / 引用句柄）。生产环境不要打开。
+
+**已知限制**：当前只实现 QQ（`accounts[].type = "qq"`）与内存假平台（`"fake"`，测试与本地
+演示用）；平台差异走 `IPlatform` + `PlatformCaps` 数据表，加平台只需实现接口并把事件归一化
+成 `InboundEvent`。
 
 ---
 
