@@ -358,5 +358,69 @@ std::string toolSetMode(
     return out.dump();
 }
 
+std::string toolDebugInject(const ChatbotToolDeps& deps, std::string_view argsJson) {
+    const auto args = parseArgsOrThrow(argsJson);
+    if (deps.engine == nullptr) {
+        throw std::runtime_error("chatbot 插件状态不可用");
+    }
+    InboundEvent event;
+    event.accountId         = stringArg(args, "account");
+    event.chatId            = stringArg(args, "chatId");
+    event.chatName          = stringArg(args, "chatName", event.chatId);
+    event.senderName        = stringArg(args, "sender", "tester");
+    event.senderId          = event.senderName;
+    event.senderRole        = stringArg(args, "role", "member");
+    event.text              = stringArg(args, "text");
+    event.platformMessageId = stringArg(args, "msgId");
+    event.mentionedMe       = boolArg(args, "mentionedMe", false);
+    event.timestampMs       = intArg(args, "timestampMs", 0);
+    const std::string typeText = stringArg(args, "type", "group");
+    if (!chatTypeFromString(typeText, event.type)) {
+        throw std::invalid_argument("type 只能是 group / private");
+    }
+    if (event.accountId.empty() || event.chatId.empty()) {
+        throw std::invalid_argument("account 与 chatId 必填");
+    }
+    deps.engine->onInbound(event);
+    Json out = Json::object();
+    out["accepted"] = true;
+    out["chat"]     = ChatKey{event.accountId, event.type, event.chatId}.key();
+    return out.dump();
+}
+
+std::string toolDebugOutbox(const ChatbotToolDeps& deps, std::string_view argsJson) {
+    const auto args       = parseArgsOrThrow(argsJson);
+    const auto limit      = static_cast<size_t>(std::max<int64_t>(0, intArg(args, "limit", 50)));
+    const bool clear      = boolArg(args, "clear", false);
+    const auto accountId  = stringArg(args, "account");
+    if (!deps.platformOf) {
+        throw std::runtime_error("chatbot 插件状态不可用");
+    }
+    if (!accountId.empty()) {
+        auto* platform = deps.platformOf(accountId);
+        if (platform == nullptr) {
+            throw std::runtime_error("账号 '" + accountId + "' 没有可用连接");
+        }
+        return platform->debugOutbox(limit, clear);
+    }
+    Json all = Json::array();
+    if (deps.engine != nullptr) {
+        for (const auto& account : deps.engine->config().accounts) {
+            auto* platform = deps.platformOf(account.id);
+            if (platform == nullptr) {
+                continue;
+            }
+            try {
+                Json one = Json::parse(platform->debugOutbox(limit, clear));
+                for (auto& item : one) {
+                    all.push_back(std::move(item));
+                }
+            } catch (const std::exception&) {
+            }
+        }
+    }
+    return all.dump();
+}
+
 } // namespace chatbot
 } // namespace agentxx

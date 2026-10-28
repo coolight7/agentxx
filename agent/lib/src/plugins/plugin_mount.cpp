@@ -202,8 +202,15 @@ asio::awaitable<bool> PluginMount::mountOneAsync(std::shared_ptr<PluginInstance>
     if (!inst) {
         co_return false;
     }
-    if (auto* existing = findEntry(inst.get()); existing != nullptr && existing->pluginMounted) {
-        co_return true; // 幂等
+    if (auto* existing = findEntry(inst.get()); existing != nullptr) {
+        if (existing->pluginMounted) {
+            co_return true; // 幂等: 已经挂好
+        }
+        if (existing->mountInFlight) {
+            // 同一个根被并发调用了两次 (根 init 的 plugin_mount 与运行时挂载驱动):
+            // 后到者不重复回调插件 —— 前一次会把它做完
+            co_return true;
+        }
     }
     // 实例已在关闭流程里 (卸载/主程序关闭): 不再挂载, 否则会把刚摘掉的注册又加回去
     if (inst->lifetime && inst->lifetime->closeRequested()) {
@@ -219,6 +226,7 @@ asio::awaitable<bool> PluginMount::mountOneAsync(std::shared_ptr<PluginInstance>
     auto* entry            = &entryOf(inst.get());
     entry->mountUserData   = nullptr;
     entry->pluginMounted   = false;
+    entry->mountInFlight   = true;
     entry->unmountPending  = false;
     entry->resourcesFrozen = false;
     entry->configJson      = inst->args.dump();
@@ -243,6 +251,7 @@ asio::awaitable<bool> PluginMount::mountOneAsync(std::shared_ptr<PluginInstance>
     if (!inst->mountFn) {
         // 无挂载入口 = 本插件无 agent 侧能力; 清单资源仍然按挂载应用
         entry->pluginMounted   = true;
+        entry->mountInFlight   = false;
         entry->resourcesFrozen = true;
         co_return true;
     }
@@ -301,10 +310,12 @@ asio::awaitable<bool> PluginMount::mountOneAsync(std::shared_ptr<PluginInstance>
                 }
             }
         }
+        entry->mountInFlight = false;
         co_return false;
     }
     entry->mountUserData   = mountResult;
     entry->pluginMounted   = true;
+    entry->mountInFlight   = false;
     entry->resourcesFrozen = true; // 挂载收尾: 资源声明固定 (运行时注册会被拒)
     // 挂载期间实例被请求关闭: 立刻拆掉, 否则注册会在关闭流程之后残留
     if (inst->lifetime && inst->lifetime->closeRequested()) {

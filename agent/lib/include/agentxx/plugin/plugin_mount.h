@@ -131,6 +131,8 @@ public:
         void* mountUserData = nullptr;
         /// 插件 `mount` 是否已成功 (没有 mount 入口 = true)
         bool pluginMounted = false;
+        /// 插件 `mount` 正在执行 (并发重复调用时后到者直接返回成功, 不重复回调)
+        bool mountInFlight = false;
         /// 插件 `unmount` 回调还欠着 (禁用时同步拆记录, 回调稍后在 IO 线程补)
         bool unmountPending = false;
         /// 资源声明是否已冻结: 挂载期间允许登记 skill/memory/mcp, 挂载收尾冻结

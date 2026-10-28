@@ -209,6 +209,38 @@ void FakePlatform::setOnline(bool online) {
     }
 }
 
+std::string FakePlatform::debugOutbox(size_t limit, bool clear) {
+    std::vector<FakeSentRecord> taken;
+    {
+        std::lock_guard lock(mutex_);
+        if (limit == 0 || limit >= sent_.size()) {
+            taken = sent_;
+        } else {
+            taken.assign(sent_.end() - static_cast<std::ptrdiff_t>(limit), sent_.end());
+        }
+        if (clear) {
+            sent_.clear();
+        }
+    }
+    utilxx_base::Json out = utilxx_base::Json::array();
+    for (const auto& record : taken) {
+        utilxx_base::Json item = utilxx_base::Json::object();
+        item["account"]    = record.message.accountId;
+        item["type"]       = chatTypeName(record.message.type);
+        item["chatId"]     = record.message.chatId;
+        item["text"]       = record.message.text;
+        item["passiveTo"]  = record.message.passiveReplyTo;
+        item["passiveSeq"] = record.message.passiveSeq;
+        item["replyToRef"] = record.message.replyToRef;
+        item["markdown"]   = record.message.markdown;
+        item["messageId"]  = record.platformMessageId;
+        item["refIdx"]     = record.refIdx;
+        item["attachments"] = static_cast<int64_t>(record.message.attachments.size());
+        out.push_back(std::move(item));
+    }
+    return out.dump();
+}
+
 std::shared_ptr<FakePlatform> makeFakePlatform(asio::any_io_executor ex) {
     return std::make_shared<FakePlatform>(std::move(ex));
 }

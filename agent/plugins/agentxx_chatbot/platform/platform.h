@@ -69,6 +69,16 @@ public:
     /// 连接状态与计数 JSON (`chatbot_status` 的数据源之一)
     virtual std::string statusJson() const = 0;
 
+    /// 测试用: 已发出的出站记录 (JSON 数组文本; 不支持时返回 `[]`)
+    ///
+    /// - `clear`: 取完后清空
+    /// - 真平台不实现 (没有可回看的记录); 假平台用它给测试与本地演示看结果
+    virtual std::string debugOutbox(size_t limit, bool clear) {
+        (void)limit;
+        (void)clear;
+        return "[]";
+    }
+
     /// 主动发一条健康检查 (仅假平台/调试用, 默认空实现)
     virtual void poke() {}
 };

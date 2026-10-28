@@ -54,6 +54,9 @@ public:
 
     std::string statusJson() const override;
 
+    /// 已发出的出站记录 (JSON 数组; 供测试/本地演示核对)
+    std::string debugOutbox(size_t limit, bool clear) override;
+
     /* ---------- 测试/演示用 ---------- */
 
     /// 注入一条入站消息 (归一化后直接交给 sink)
@@ -87,7 +90,6 @@ public:
 
     /// 手动改连接状态 (测试状态机用)
     void setOnline(bool online);
-
 private:
 
     asio::any_io_executor  ex_;

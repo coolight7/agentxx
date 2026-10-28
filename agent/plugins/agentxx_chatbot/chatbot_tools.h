@@ -86,5 +86,22 @@ inline constexpr const char* kChatbotToolNames[] = {
     "chatbot_set_mode",
 };
 
+/// `chatbot_debug_inject` (仅 `behavior.debugTools` 打开时注册)
+///
+/// 把一个假消息包直接投给调度层 (不经过平台连接), 用来在测试或本地演示里
+/// 隔离平台网络验证「去重 → 路由 → 聚合 → 投递」这条流程。
+std::string toolDebugInject(const ChatbotToolDeps& deps, std::string_view argsJson);
+
+/// `chatbot_debug_outbox` (仅 `behavior.debugTools` 打开时注册)
+///
+/// 回看平台侧收到的出站 (只有假平台会记录; 真平台返回空表)。
+std::string toolDebugOutbox(const ChatbotToolDeps& deps, std::string_view argsJson);
+
+/// 调试工具名清单
+inline constexpr const char* kChatbotDebugToolNames[] = {
+    "chatbot_debug_inject",
+    "chatbot_debug_outbox",
+};
+
 } // namespace chatbot
 } // namespace agentxx

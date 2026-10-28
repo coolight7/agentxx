@@ -269,6 +269,17 @@ int32_t PluginManager::runtimeMountRoot(
         err = "mount_root: 新建 agent 没有上下文";
         return AGENTXX_PLUGIN_RUNTIME_ERR_FAILED;
     }
+    // 先认身份再 init: `init` 的 plugin_mount 步骤会拿 `ctx->agentId` 找/建挂载表项,
+    // 空值会被当成内置根 `root` —— 那样创建者插件挂自己时会撞上内置根的挂载
+    // ("不是同一个 agent"), 而真正的人设根反而没有工具。容器登记用的是同一个 id。
+    ctx->agentId = rootId;
+    // 插件可能在自己的 `start` 里就调 `mount_root` (本函数), 那时本次加载尚未收尾,
+    // 实例的 mount/unmount 入口还没解析 (`onInstanceLoaded` 在 `finishLoad` 里才跑)。
+    // 不解析就拿不到 `mountFn`, 新建的根会被当成"无 agent 侧能力"而**不回调插件**
+    // —— 结果是人设根上一个工具也没有。因此这里补一次解析 (幂等)。
+    if (inst->mountFn == nullptr && inst->unmountFn == nullptr) {
+        onInstanceLoaded(*inst);
+    }
     // 挂载前先把容器这份插件管理器注入: init 的 plugin_mount 步骤要按策略挂载
     if (auto pluginHost = host->pluginHost()) {
         ctx->pluginManager      = pluginHost;

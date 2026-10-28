@@ -58,9 +58,37 @@
 - `agent/plugins` 独立构建通过：`libagentxx_chatbot.dll` 正常产出到
   `agent/build/windows-debug/exec/plugins/agentxx_chatbot/`。
 
+### 阶段 2 收尾：端到端用例与被动回复修复（完成）
+
+- `agent/test/plugin/test_plugin_example_chatbot.cpp` + `include/agentxx-test/plugin/`：
+  用真实插件 DLL（假平台账号）跑完整流程 —— 人设 root 上的工具清单、私聊一条 → 一轮 →
+  工具发送、`mention` 模式缓冲与合并投递、去重、切分多条、被动回复配额、命令、状态查询，
+  共 **52 项检查全部通过**。
+- 调试辅助（`behavior.debugTools` 默认关，只在测试/本地演示打开）：
+  - `chatbot_debug_inject`：把一条假消息包直接投给调度层，不经过平台网络；
+  - `chatbot_debug_outbox`：回看平台侧收到的出站（含 `passiveTo` / `passiveSeq` / `replyToRef`），
+    由 `IPlatform::debugOutbox` 提供（真平台返回空表）。
+- **被动回复 id 丢失的真实原因**（本次修掉）：`ChatbotOutbound::submit` 构造 `Job` 时只拷了
+  `replyToRef` / `markdown`，**没拷 `req.passiveMsgId`**，于是工具路径的出站永远没有
+  `passiveReplyTo`（`enqueueDirect` 直接传 `OutboundMessage`，所以那条路径正常）。
+  现象是 `passiveTo` 空、`passiveSeq = 0`。
+
+### 主程序框架修复（`agent/lib`，阶段 2 暴露的问题）
+
+插件在自己的 `start` 里调 `runtime.mount_root` 时，本次加载还没收尾，`onInstanceLoaded`
+（解析 `agentxx_plugin_agent_mount` / `_unmount`）尚未执行 —— 于是 `inst->mountFn == nullptr`，
+新建的人设根被当成「无 agent 侧能力」，插件 `mount` 回调不执行，人设根上一个工具都没有。两处修：
+
+1. `plugin_manager_runtime.cpp` 的 `runtimeMountRoot`：**init 之前**就把 `ctx->agentId` 设成
+   `rootId`（否则 `init` 的 plugin_mount 步骤拿空 id 会落到内置根 `root` 的挂载表项上），
+   并在 `mountFn`/`unmountFn` 都为空时补一次 `onInstanceLoaded(*inst)`（幂等）。
+2. `plugin_mount.{h,cpp}`：表项新增 `mountInFlight`。同一个根被并发调用两次
+   （根 init 的 plugin_mount 与运行时挂载驱动）时，后到者直接返回成功、**不重复回调插件**；
+   各返回路径都会清回 `false`。
+
 ## 待完成
 
-- [ ] 阶段 2 收尾：`plugin_example_chatbot` 端到端用例（假平台注入 → 聚合 → 工具回复 →
+- [x] 阶段 2 收尾：`plugin_example_chatbot` 端到端用例（假平台注入 → 聚合 → 工具回复 →
       切分多条 → 被动回复配额），以及「人设 root 上确有 `chatbot_*` 工具」的用例。
 - [ ] 阶段 3 收尾：真实账号联调（网关鉴权、群/私聊事件、被动回复配额、图片与文件收发）。
 - [ ] 阶段 4：打磨与配额（LRU 生效、计数统计、降级路径、文档补写）。
@@ -81,3 +109,12 @@
   继承），简化写法仍自带 `account`。
 - 运行期 `mode` 覆盖由 `RouterTable::route` 统一施加（`ChatbotRouter::route` 会再叠加一次
   `effectiveMode`，两处一致，改动时保持同步）。
+- **出站字段传递只有一个入口**：`OutboundRequest` → `ChatbotOutbound::submit` 里逐个拷进
+  `Job.message`。新增出站字段时两处都要加，否则工具路径静默丢字段（被动回复 id 就这样丢过），
+  而 `enqueueDirect` 路径（直接给 `OutboundMessage`）看不出问题。
+- 改 `agent/lib` 之后**必须重建 `agentxx_lib_repo` 与 `agentxx_test_repo` 两个目标**，
+  否则测试仍在用旧库（本阶段踩过）。
+- 插件独立构建（在 superbuild 之外单独编 `agent/plugins`）必须带上 `PLUGINXX_API_VERSION=3`
+  与静态 OpenSSL 指向，否则运行时是「API version too old」或 `LoadLibrary error 126`。
+- 调试探针别用 `XX_LOGW`：插件日志经 `pluginLog` 转发受模块/级别过滤，看不到时容易误判成
+  「代码没执行到」。改用测试可读的查询面（如 `statusJson()` / `debugOutbox`）或 `fprintf(stderr)`。

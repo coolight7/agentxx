@@ -316,6 +316,31 @@ const char* kSetModeSchema = R"JSON({
   "required": ["mode"]
 })JSON";
 
+const char* kDebugInjectSchema = R"JSON({
+  "type": "object",
+  "properties": {
+    "account": {"type": "string", "description": "账号 id (配置里的 accounts[].id)"},
+    "type": {"type": "string", "description": "group / private", "enum": ["group", "private"]},
+    "chatId": {"type": "string", "description": "群或用户的平台 openid"},
+    "chatName": {"type": "string", "description": "可选: 群名 / 昵称"},
+    "sender": {"type": "string", "description": "可选: 说话人名称"},
+    "text": {"type": "string", "description": "消息正文"},
+    "mentionedMe": {"type": "boolean", "description": "是否 @ 了机器人"},
+    "msgId": {"type": "string", "description": "可选: 平台消息 id (去重用)"}
+  },
+  "required": ["account", "chatId", "text"]
+})JSON";
+
+const char* kDebugOutboxSchema = R"JSON({
+  "type": "object",
+  "properties": {
+    "account": {"type": "string", "description": "可选: 只看某个账号"},
+    "limit": {"type": "integer", "description": "最近多少条 (默认 50)"},
+    "clear": {"type": "boolean", "description": "取完是否清空 (默认 false)"}
+  },
+  "required": []
+})JSON";
+
 /// 给一个 agent 注册 5 个 `chatbot_*` 工具
 ///
 /// 工作体统一 `blocking_tool` (要等插件 io 线程的结果); 内部把编译期已知的
@@ -471,6 +496,66 @@ void registerToolsOn(ChatbotCtx& ctx, const AgentRef& ref) {
         kSetModeSchema,
         [setMode](ChatbotCtx& c, std::string_view args, std::string_view tid) {
             return setMode(c, args, tid);
+        }
+    );
+
+    // 调试工具只在 `behavior.debugTools` 打开时注册 (测试与本地演示用)
+    if (!ctx.config.behavior.debugTools) {
+        return;
+    }
+    auto debugInject = [deps](ChatbotCtx& c, std::string_view args, std::string_view) {
+        std::string result;
+        std::string error;
+        const bool  ok = c.runOnIoBlocking([&]() {
+            try {
+                result = ac::toolDebugInject(*deps, args);
+            } catch (const std::exception& e) {
+                error = e.what();
+            }
+        });
+        if (!ok) {
+            throw std::runtime_error("chatbot 插件未就绪 (io 线程无响应)");
+        }
+        if (!error.empty()) {
+            throw std::runtime_error(error);
+        }
+        return result;
+    };
+    auto debugOutbox = [deps](ChatbotCtx& c, std::string_view args, std::string_view) {
+        std::string result;
+        std::string error;
+        const bool  ok = c.runOnIoBlocking([&]() {
+            try {
+                result = ac::toolDebugOutbox(*deps, args);
+            } catch (const std::exception& e) {
+                error = e.what();
+            }
+        });
+        if (!ok) {
+            throw std::runtime_error("chatbot 插件未就绪 (io 线程无响应)");
+        }
+        if (!error.empty()) {
+            throw std::runtime_error(error);
+        }
+        return result;
+    };
+    agentxx::plugin::blocking_tool(
+        ctx,
+        ref,
+        "chatbot_debug_inject",
+        "调试用: 直接向调度层投一条假平台消息 (不经过任何真实平台连接)。"
+        "只在 behavior.debugTools 打开时注册, 生产环境不会出现。",
+        kDebugInjectSchema,
+        debugInject
+    );
+    agentxx::plugin::fast_tool(
+        ctx,
+        ref,
+        "chatbot_debug_outbox",
+        "调试用: 回看假平台收到的出站消息 (真平台不记录, 返回空表)。",
+        kDebugOutboxSchema,
+        [debugOutbox](ChatbotCtx& c, std::string_view args, std::string_view tid) {
+            return debugOutbox(c, args, tid);
         }
     );
 }
@@ -898,20 +983,25 @@ void* chatbotForAgent(
                                           static_cast<size_t>(spec->agent_id.size)
                                       }
                                     : std::string{};
-    bool isPersonaRoot = false;
-    {
-        std::lock_guard lock(ctx.personaRootsMutex);
-        for (const auto& [name, id] : ctx.personaRoots) {
-            (void)name;
-            if (id == agentId) {
-                isPersonaRoot = true;
-                break;
-            }
-        }
-    }
-    // 内置 root (agentId == "root") 默认不注册: 那边的 thread_id 不是会话键,
-    // 工具只会回"这不是 chatbot 会话"; `exposeToolsOnHost` 打开时才注册 (调试)
-    const bool isHostRoot = agentId == "root";
+    const std::string agentName = spec->agent_name.data
+                                      ? std::string{
+                                            spec->agent_name.data,
+                                            static_cast<size_t>(spec->agent_name.size)
+                                        }
+                                      : std::string{};
+    // 识别人设根靠**展示名** (自己在 `config_json` 里设的 "chatbot:<人设名>"),
+    // 不靠 agent_id: 同一个插件会被多个 agent 挂载, 主程序侧的挂载表在根 init
+    // 期间可能还没按最终 id 建好 (回调里拿到的 id 不一定等于 mountRoot 返回值),
+    // 而挂载时会带的展示名始终来自本根自己的 `AgentConfig::agentName`。
+    // 识别人设根靠 `agent_name`: 它就是本根的 `AgentConfig::agentName`, 而我们在
+    // `personaRootConfig` 里把它设成了 "chatbot-<人设名>"。不用 `config_json`
+    // (那里是插件自己的 args) 也不用 `agent_id` (根 init 期间可能还没最终化)。
+    constexpr std::string_view kPersonaNamePrefix = "chatbot-";
+    const bool isPersonaRoot
+        = agentName.rfind(kPersonaNamePrefix, 0) == 0 && agentName.size() > kPersonaNamePrefix.size();
+    // 内置 root 默认不注册: 那边的 thread_id 不是会话键, 工具只会回
+    // "这不是 chatbot 会话"; `exposeToolsOnHost` 打开时才注册 (调试)
+    const bool isHostRoot = !isPersonaRoot && (agentId == "root" || agentId.empty());
     const bool shouldRegister
         = isPersonaRoot || (isHostRoot && ctx.config.behavior.exposeToolsOnHost);
     if (shouldRegister) {

@@ -131,6 +131,11 @@ struct BehaviorConfig {
     int32_t dedupeCapacity = 512;
     /// 单条入站原文超过多少码点就截断 (原文仍留在历史里)
     int32_t inboundMaxChars = 20000;
+    /// 是否注册调试工具 (`chatbot_debug_inject` / `chatbot_debug_outbox`)
+    ///
+    /// - 只给测试与本地演示用: 直接向调度层投一条假消息、回看平台收到了什么;
+    /// - 默认关 (生产环境不暴露这两个工具给模型)
+    bool debugTools = false;
 };
 
 /// 完整配置

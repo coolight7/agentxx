@@ -226,6 +226,8 @@ SubmitOutcome ChatbotOutbound::submit(
         job.message.chatId       = key.chatId;
         job.message.text         = std::move(parts[i]);
         job.message.replyToRef   = req.replyToRef;
+        // 被动回复 id 由调用方给出 (本轮被投递的那条消息); 序号在发送前统一分配
+        job.message.passiveReplyTo = req.passiveMsgId;
         job.message.markdown     = wantMarkdown;
         // 附件只跟最后一条走 (前面的分段只发文本, 附件放最后一条消息上)
         if (i + 1 == take) {

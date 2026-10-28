@@ -561,6 +561,7 @@ void parseBehavior(const Json& root, ChatbotConfig& out) {
     cfg.inboundMaxChars = static_cast<int32_t>(
         jsonIntOf(j, "inboundMaxChars", cfg.inboundMaxChars)
     );
+    cfg.debugTools = jsonBoolOf(j, "debugTools", cfg.debugTools);
 }
 
 void parseCommands(const Json& root, ChatbotConfig& out) {
@@ -758,13 +759,17 @@ bool validateConfig(ChatbotConfig& config, int32_t maxRoots, ConfigError& err) {
                 return false;
             }
         }
-        if (account.type != "qq") {
+        // 平台类型: `qq` 需要凭证, `fake` 是内存假平台 (测试与本地演示)
+        if (account.type != "qq" && account.type != "fake") {
             setError(
                 err,
                 where + ".type",
-                "暂不支持平台 '" + account.type + "' (当前只实现 qq)"
+                "暂不支持平台 '" + account.type + "' (当前只实现 qq / fake)"
             );
             return false;
+        }
+        if (account.type == "fake") {
+            continue; // 假平台不需要凭证
         }
         if (account.appId.empty()) {
             setError(err, where + ".appId", "取不到值 (可用 appId / appIdFile)");
