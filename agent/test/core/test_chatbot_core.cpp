@@ -13,6 +13,7 @@
 
 #include "agentxx_chatbot/chatbot_config.h"
 #include "agentxx_chatbot/chatbot_core.h"
+#include "agentxx_chatbot/chatbot_router.h"
 #include "agentxx_chatbot/chatbot_types.h"
 
 #include <map>
@@ -787,6 +788,143 @@ void testRouterTable() {
     XX_TEST_EXPECT_FALSE(wildcardTable.route(anyPrivate).found);
 }
 
+/// 路由器的额度与回收: 会话 id 稳定性 / 活跃计数 / LRU 挑最久未活动的那条
+void testRouterQuota() {
+    ConfigError err;
+    ChatbotConfig config;
+    parseConfig(
+        R"({"accounts": [{"id": "a", "type": "qq", "appId": "1", "appSecret": "s"}],
+            "personas": [{"name": "p", "bind": [{"account": "a", "chats": [
+                {"type":"group","id":"G1","mode":"mention"},
+                {"type":"group","id":"G2","mode":"always"},
+                {"type":"group","id":"G3","mode":"always"}]}]}]})",
+        config,
+        err
+    );
+    XX_TEST_EXPECT_TRUE(validateConfig(config, 8, err));
+
+    ChatbotRouter router;
+    // 每人设只允许 2 条活跃通道
+    router.build(config, 2, {});
+
+    // 会话 id: 同一个人设 + 同一个群永远算出同一个值, 不同群不同值
+    auto keyOf = [](std::string_view chatId) {
+        ChatKey key;
+        key.accountId = "a";
+        key.type      = ChatType::Group;
+        key.chatId    = std::string{chatId};
+        return key;
+    };
+    const ChatKey g1 = keyOf("G1");
+    const ChatKey g2 = keyOf("G2");
+    const ChatKey g3 = keyOf("G3");
+    const auto    id1 = router.sessionIdOf("p", g1);
+    XX_TEST_EXPECT_TRUE(id1.rfind("chatbot_p_a_group_", 0) == 0);
+    XX_TEST_EXPECT_EQ(id1, router.sessionIdOf("p", g1));
+    XX_TEST_EXPECT_TRUE(id1 != router.sessionIdOf("p", g2));
+    XX_TEST_EXPECT_TRUE(id1 != router.sessionIdOf("q", g1));
+
+    // 开通道走 hook: 递增 id, 记录开/关次数
+    int64_t nextChannel = 0;
+    int     opened      = 0;
+    int     closed      = 0;
+    ChatbotRouter::Hooks hooks;
+    hooks.open = [&nextChannel, &opened](
+                     std::string_view,
+                     std::string_view,
+                     std::string_view
+                 ) -> int64_t {
+        ++opened;
+        return ++nextChannel;
+    };
+    hooks.close = [&closed](int64_t) {
+        ++closed;
+    };
+    router.build(config, 2, hooks);
+
+    std::string openErr;
+    const int64_t channel1
+        = router.acquire(g1, router.route(g1), "G1", 10, openErr);
+    XX_TEST_EXPECT_TRUE(channel1 > 0);
+    XX_TEST_EXPECT_EQ(opened, 1);
+    XX_TEST_EXPECT_EQ(router.find(g1.key()), channel1);
+    XX_TEST_EXPECT_EQ(router.activeCount("p"), size_t{1});
+
+    // 同一个群再开: 复用原通道, 不重复建
+    const int64_t again = router.acquire(g1, router.route(g1), "G1", 11, openErr);
+    XX_TEST_EXPECT_EQ(again, channel1);
+    XX_TEST_EXPECT_EQ(opened, 1);
+
+    // 第二个群: 仍在上限内
+    const int64_t channel2 = router.acquire(g2, router.route(g2), "G2", 20, openErr);
+    XX_TEST_EXPECT_TRUE(channel2 > 0);
+    XX_TEST_EXPECT_EQ(router.activeCount("p"), size_t{2});
+
+    // 第三个群: 达上限, 回收最久未活动的 G1 (seq 11 < 20)
+    const int64_t channel3 = router.acquire(g3, router.route(g3), "G3", 30, openErr);
+    XX_TEST_EXPECT_TRUE(channel3 > 0);
+    XX_TEST_EXPECT_EQ(closed, 1);
+    XX_TEST_EXPECT_EQ(router.find(g1.key()), int64_t{0});
+    XX_TEST_EXPECT_EQ(router.find(g2.key()), channel2);
+    XX_TEST_EXPECT_EQ(router.activeCount("p"), size_t{2});
+
+    // 被回收的群再回来: 重新开一条 (会话库里上下文仍在)
+    const int64_t reopened = router.acquire(g1, router.route(g1), "G1", 40, openErr);
+    XX_TEST_EXPECT_TRUE(reopened > 0);
+    XX_TEST_EXPECT_TRUE(reopened != channel1);
+    XX_TEST_EXPECT_EQ(opened, 4);
+
+    // 反查: 通道 → 会话键, 会话 id → 会话键
+    XX_TEST_EXPECT_EQ(router.chatKeyOfChannel(reopened), g1.key());
+    XX_TEST_EXPECT_EQ(
+        router.chatKeyOfSession(router.sessionIdOf("p", g1)),
+        g1.key()
+    );
+    XX_TEST_EXPECT_TRUE(router.chatKeyOfChannel(9999).empty());
+    XX_TEST_EXPECT_TRUE(router.chatKeyOfSession("nope").empty());
+
+    // 就绪/忙状态按通道记
+    router.markReady(reopened, true);
+    XX_TEST_EXPECT_TRUE(router.isReady(reopened));
+    router.markBusy(reopened, true);
+    XX_TEST_EXPECT_TRUE(router.isBusy(reopened));
+    router.markBusy(reopened, false);
+    XX_TEST_EXPECT_FALSE(router.isBusy(reopened));
+
+    // 主动回收一条 / 全部回收
+    const int beforeAll = closed;
+    router.release(reopened, "test");
+    XX_TEST_EXPECT_EQ(closed, beforeAll + 1);
+    XX_TEST_EXPECT_FALSE(router.isReady(reopened));
+    XX_TEST_EXPECT_TRUE(router.releaseAll("shutdown") >= size_t{1});
+    XX_TEST_EXPECT_EQ(router.activeCount("p"), size_t{0});
+
+    // 不属于任何人设的会话: 拒开
+    ChatKey stranger;
+    stranger.accountId = "a";
+    stranger.type      = ChatType::Group;
+    stranger.chatId    = "G404";
+    XX_TEST_EXPECT_EQ(
+        router.acquire(stranger, router.route(stranger), "G404", 50, openErr),
+        int64_t{0}
+    );
+    XX_TEST_EXPECT_TRUE(!openErr.empty());
+
+    // 人设名清单与配置的会话键
+    XX_TEST_EXPECT_EQ(router.personaNames().size(), size_t{1});
+    XX_TEST_EXPECT_EQ(router.chatKeysOf("p").size(), size_t{3});
+    XX_TEST_EXPECT_TRUE(router.rootIdOf("p").empty());
+    router.setRootId("p", "root-1");
+    XX_TEST_EXPECT_EQ(router.rootIdOf("p"), std::string{"root-1"});
+    // 空 rootId 不覆盖已有值
+    router.setRootId("p", "");
+    XX_TEST_EXPECT_EQ(router.rootIdOf("p"), std::string{"root-1"});
+
+    // 标题: 有群名用群名, 没有就用「类型-尾号」
+    XX_TEST_EXPECT_EQ(ChatbotRouter::titleOf("技术群", g1), std::string{"技术群"});
+    XX_TEST_EXPECT_TRUE(ChatbotRouter::titleOf("", g1).rfind("group-", 0) == 0);
+}
+
 } // namespace
 
 TestResult testChatbotCore() {
@@ -805,6 +943,7 @@ TestResult testChatbotCore() {
     testConfigValidationFailures();
     testEnvFileParsing();
     testRouterTable();
+    testRouterQuota();
 
     return TestResult{g_cc_passed, g_cc_failed};
 }

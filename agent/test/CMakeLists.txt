@@ -137,6 +137,7 @@ target_sources(agentxx_test PRIVATE
   "${AGENTXX_CHATBOT_SOURCE_DIR}/chatbot_core.cpp"
   "${AGENTXX_CHATBOT_SOURCE_DIR}/chatbot_types.cpp"
   "${AGENTXX_CHATBOT_SOURCE_DIR}/chatbot_config.cpp"
+  "${AGENTXX_CHATBOT_SOURCE_DIR}/chatbot_router.cpp"
 )
 
 # 注意: 不要添加 /FS /MP 编译选项 —— 顶层已统一管理; 命令行出现重复 /FS 时
