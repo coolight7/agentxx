@@ -28,6 +28,7 @@ option(AGENTXX_ENABLE_PLUGIN_SYSTEM "Build agentxx_system plugin (current date/t
 option(AGENTXX_ENABLE_PLUGIN_WEBSEARCH "Build agentxx_websearch plugin (search/fetch url)." ON)
 option(AGENTXX_ENABLE_PLUGIN_RAG_SEARCH "Build agentxx_rag_search plugin (embedding based docs search)." ON)
 option(AGENTXX_ENABLE_PLUGIN_LLM_UNCENSORED "Build agentxx_llm_uncensored plugin (extra system prompt injection)." ON)
+option(AGENTXX_ENABLE_PLUGIN_CHATBOT "Build agentxx_chatbot plugin (chat platform bridge, QQ first)." ON)
 
 # ===== 插件平台支持 =====
 # 各插件并非全平台适配: 源码无对应平台的真实实现时 (仅有 "not supported/
@@ -334,6 +335,8 @@ agentxx_load_plugin(agentxx_execute_command AGENTXX_ENABLE_PLUGIN_EXECUTE_COMMAN
 agentxx_load_plugin(agentxx_system AGENTXX_ENABLE_PLUGIN_SYSTEM)
 agentxx_load_plugin(agentxx_websearch AGENTXX_ENABLE_PLUGIN_WEBSEARCH)
 agentxx_load_plugin(agentxx_rag_search AGENTXX_ENABLE_PLUGIN_RAG_SEARCH)
+# 聊天平台桥接 (QQ): 人设 = 插件自己的根, 每个群/私聊一个会话
+agentxx_load_plugin(agentxx_chatbot AGENTXX_ENABLE_PLUGIN_CHATBOT)
 # 附加系统提示词注入 (说话方式要求: 不搬产品黑话、不逐字直译)
 agentxx_load_plugin(agentxx_llm_uncensored AGENTXX_ENABLE_PLUGIN_LLM_UNCENSORED)
 

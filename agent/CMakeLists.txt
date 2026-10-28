@@ -73,6 +73,7 @@ option(AGENTXX_ENABLE_PLUGIN_SYSTEM "Build agentxx_system plugin (current date/t
 option(AGENTXX_ENABLE_PLUGIN_WEBSEARCH "Build agentxx_websearch plugin (search/fetch url)." ON)
 option(AGENTXX_ENABLE_PLUGIN_RAG_SEARCH "Build agentxx_rag_search plugin (embedding based docs search)." ON)
 option(AGENTXX_ENABLE_PLUGIN_LLM_UNCENSORED "Build agentxx_llm_uncensored plugin (extra system prompt injection)." ON)
+option(AGENTXX_ENABLE_PLUGIN_CHATBOT "Build agentxx_chatbot plugin (chat platform bridge, QQ first)." ON)
 # 可选内置合并编译: 启用的插件源文件直接编译进 libagentxx, 运行期无需插件
 # 动态库 (无 dlopen; 适合嵌入式/单文件分发)。
 # 
@@ -902,6 +903,7 @@ set(_AGENTXX_COMMON_CMAKE_ARGS
     -DAGENTXX_ENABLE_PLUGIN_WEBSEARCH=${AGENTXX_ENABLE_PLUGIN_WEBSEARCH}
     -DAGENTXX_ENABLE_PLUGIN_RAG_SEARCH=${AGENTXX_ENABLE_PLUGIN_RAG_SEARCH}
     -DAGENTXX_ENABLE_PLUGIN_LLM_UNCENSORED=${AGENTXX_ENABLE_PLUGIN_LLM_UNCENSORED}
+    -DAGENTXX_ENABLE_PLUGIN_CHATBOT=${AGENTXX_ENABLE_PLUGIN_CHATBOT}
     "-DAGENTXX_PLUGIN_BUILTIN_LIST=${AGENTXX_PLUGIN_BUILTIN_LIST}"
 
     "-DAGENTXX_EXEC_INSTALL_PREFIX=${AGENTXX_EXEC_INSTALL_PREFIX}"
