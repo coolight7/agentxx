@@ -116,7 +116,7 @@ QqPlatform::~QqPlatform() {
 
 PlatformCaps QqPlatform::caps() const {
     PlatformCaps caps;
-    // 群支持 markdown 发送, 单聊「可发不收」: 编排层按 chatType 再收一次
+    // 群支持 markdown 发送, 单聊「可发不收」: 调度层按 chatType 再收一次
     caps.markdown           = true;
     caps.passiveReply       = true;
     caps.quoteReply         = true;

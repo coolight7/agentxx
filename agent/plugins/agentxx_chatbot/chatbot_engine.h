@@ -1,6 +1,6 @@
 #pragma once
 
-/// 入站流水线 + 编排 (平台消息 → 会话输入)
+/// 入站流水线 + 调度 (平台消息 → 会话输入)
 ///
 /// 一条消息的完整路径 (见 `resource/history/chatbot/plan.md` §7.1):
 /// 归一化 → 去重 → 路由 → 关键词命令 → 聚合缓冲 → 组装输入 → `send_input`
@@ -95,7 +95,7 @@ struct ChatCounters {
     int64_t  lastTurnMs = 0;
 };
 
-/// 编排层
+/// 调度层
 class ChatbotEngine {
 public:
 
@@ -139,7 +139,7 @@ public:
         std::string_view reason
     );
 
-    /// 通道事件 (编排层内部调用; 已在插件 io 线程)
+    /// 通道事件 (调度层内部调用; 已在插件 io 线程)
     void onChannelReady(int64_t channelId);
     void onChannelTurnStart(int64_t channelId);
     void onChannelTurnEnd(int64_t channelId, std::string_view text, std::string_view payloadJson);

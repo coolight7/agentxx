@@ -3,13 +3,13 @@
 /// 整体结构 (设计见 `resource/history/chatbot/plan.md` §4):
 /// - **平台层** (`platform/`): 每个账号一条长连接, 把平台消息归一化成 `InboundEvent`,
 ///   把 `OutboundMessage` 发回平台;
-/// - **编排层** (`chatbot_engine` / `chatbot_router` / `chatbot_outbound`): 去重 / 路由 /
+/// - **调度层** (`chatbot_engine` / `chatbot_router` / `chatbot_outbound`): 去重 / 路由 /
 ///   关键词命令 / 聚合 / 切分 / 频控;
 /// - **主程序交互**: 只经 `agentxx.agent.runtime` 表 (挂根 / 开通道 / 投输入)
 ///   与 `agentxx.agent.tools` 表 (在人设 root 上注册 `chatbot_*` 工具)。
 ///
 /// 线程模型 (§4.2):
-/// - 平台网络与编排状态在**插件自己的 io 线程**上 (一条 `io_context` + 一个线程);
+/// - 平台网络与调度状态在**插件自己的 io 线程**上 (一条 `io_context` + 一个线程);
 /// - 通道事件回调在**主程序 io 线程**上, 只做「拷贝 → post 到插件 io 线程」;
 /// - 工具跑在主程序工作线程池, 工作体同样 post 到插件 io 线程再取结果。
 #include "agentxx/plugin/api/plugin_api.h"
@@ -67,7 +67,7 @@ struct AccountRuntime {
 
 /// 插件实例上下文
 struct ChatbotCtx : public PluginBase {
-    /// 插件自己的 io 线程 (平台网络 + 编排状态都在这条线程上)
+    /// 插件自己的 io 线程 (平台网络 + 调度状态都在这条线程上)
     std::shared_ptr<asio::io_context> io;
     std::shared_ptr<asio::executor_work_guard<asio::io_context::executor_type>> work;
     std::thread                       ioThread;
@@ -76,7 +76,7 @@ struct ChatbotCtx : public PluginBase {
 
     /// 解析并校验后的配置
     ac::ChatbotConfig config;
-    /// 编排对象 (只在插件 io 线程访问)
+    /// 调度对象 (只在插件 io 线程访问)
     ac::ChatbotRouter   router;
     ac::ChatbotOutbound outbound;
     ac::ChatbotEngine   engine;
@@ -215,7 +215,7 @@ auto guardLogger(ChatbotCtx* ctx) noexcept {
 /* ==================== 平台状态回填 ==================== */
 
 void updateAccountStatusJson(ChatbotCtx& ctx) {
-    // 账号连接状态写进编排层 (供 `chatbot_status`)
+    // 账号连接状态写进调度层 (供 `chatbot_status`)
     for (const auto& [id, runtime] : ctx.accounts) {
         if (!runtime || !runtime->platform) {
             continue;
@@ -617,7 +617,7 @@ void* chatbotStart(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, Plugin
     const std::string mainConfigJson = ctx.PluginBase::config();
     ctx.config                       = std::move(config);
 
-    // ---- 2. 校验通过: 起插件 io 线程 + 初始化编排 ----
+    // ---- 2. 校验通过: 起插件 io 线程 + 初始化调度层 ----
     ctx.startIo();
     const auto ex      = ctx.io->get_executor();
     const auto dataDir = [&mainConfigJson]() {
@@ -630,7 +630,7 @@ void* chatbotStart(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, Plugin
     }();
 
     // ---- 3. 挂人设根 ----
-    // 顺序: 先在插件 io 线程上初始化编排对象 (不涉及主程序), 再在主程序 io 线程上挂根。
+    // 顺序: 先在插件 io 线程上初始化调度对象 (不涉及主程序), 再在主程序 io 线程上挂根。
     {
         std::string mountError;
         bool        mountOk = false;
@@ -770,7 +770,7 @@ void* chatbotStart(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, Plugin
         }
     }
 
-    // ---- 6. 编排层初始化 (注入运行时入口) ----
+    // ---- 6. 调度层初始化 (注入运行时入口) ----
     ctx.runOnIoBlocking([&]() {
         ac::ChatbotEngine::Runtime runtime;
         runtime.sendInput = [&ctx](int64_t channelId, std::string_view inputJson) -> int32_t {

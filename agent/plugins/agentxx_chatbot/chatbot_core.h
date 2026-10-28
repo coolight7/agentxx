@@ -3,7 +3,7 @@
 /// chatbot 纯逻辑: 切分 / 命令解析 / 输入块渲染 / 去重环 / 引用编号
 ///
 /// 这一层**不碰网络、不碰主程序**, 全部是可直接单测的纯函数 (测试模块 `chatbot_core`
-/// 直接 include 本头)。编排层负责把它们串起来。
+/// 直接 include 本头)。调度层负责把它们串起来。
 ///
 /// 设计见 `resource/history/chatbot/plan.md` §10.2 / §9 / §7.4 / §7.5。
 #include "chatbot_types.h"

@@ -1,6 +1,6 @@
 #pragma once
 
-/// chatbot 归一化数据结构 (平台层与编排层之间只交换这些类型)
+/// chatbot 归一化数据结构 (平台层与调度层之间只交换这些类型)
 ///
 /// 设计见 `resource/history/chatbot/plan.md` §13.1: 加一个新平台只需实现
 /// `IPlatform` 并把事件归一化成 [InboundEvent], 把回复收敛成 [OutboundMessage]。

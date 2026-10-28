@@ -74,7 +74,7 @@ struct PassiveUsage {
 class ChatbotOutbound {
 public:
 
-    /// 发送一条 (由平台实现落地); 完成时回调结果
+    /// 发送一条 (由平台实现完成); 完成时回调结果
     using SendFn = std::function<void(OutboundMessage, SendResultFn)>;
 
     /// 平台能力 (决定 markdown / 引用 / 被动回复是否可用)

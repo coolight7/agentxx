@@ -9,7 +9,7 @@
 /// - 通道**懒创建** (第一条要投递的消息才开), 活跃数达到 `maxChatsPerPersona`
 ///   时按「最久没有新消息」回收一条 (会话上下文在会话库里, 重开无损)。
 ///
-/// 线程: 全部入口只在插件 io 线程调用 (编排层与平台层共用同一条), 因此本类不加锁。
+/// 线程: 全部入口只在插件 io 线程调用 (调度层与平台层共用同一条), 因此本类不加锁。
 #include "chatbot_config.h"
 #include "chatbot_types.h"
 
@@ -40,7 +40,7 @@ struct ChannelEntry {
 class ChatbotRouter {
 public:
 
-    /// 运行时回调 (由编排层提供; 转发到 `agentxx.agent.runtime` 的 SDK 调用)
+    /// 运行时回调 (由调度层提供; 转发到 `agentxx.agent.runtime` 的 SDK 调用)
     struct Hooks {
         /// 打开一个会话通道; 失败返回 0
         std::function<int64_t(std::string_view personaName, std::string_view sessionId,

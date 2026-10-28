@@ -2,12 +2,12 @@
 
 /// 平台适配层接口 (`IPlatform`)
 ///
-/// 编排层与平台层之间只有两个数据结构: [InboundEvent] (平台 → 编排) 与
-/// [OutboundMessage] (编排 → 平台)。加新平台只需实现本接口, 编排层一行不改
+/// 调度层与平台层之间只有两个数据结构: [InboundEvent] (平台 → 调度层) 与
+/// [OutboundMessage] (调度层 → 平台)。加新平台只需实现本接口, 调度层一行不改
 /// (见 `resource/history/chatbot/plan.md` §4.1 / §13)。
 ///
-/// 线程约定: 平台实现与编排层共用**同一条插件 io 线程** (见 `ChatbotEngine`),
-/// 因此回调可以直接改编排状态; 唯一需要 post 的是主程序 io 线程上的通道事件回调。
+/// 线程约定: 平台实现与调度层共用**同一条插件 io 线程** (见 `ChatbotEngine`),
+/// 因此回调可以直接改调度状态; 唯一需要 post 的是主程序 io 线程上的通道事件回调。
 #include "../chatbot_config.h"
 #include "../chatbot_types.h"
 
@@ -23,7 +23,7 @@ namespace asio = ::boost::asio;
 namespace agentxx {
 namespace chatbot {
 
-/// 平台回调入口 (由编排层实现, 平台实现持有引用)
+/// 平台回调入口 (由调度层实现, 平台实现持有引用)
 struct PlatformEventSink {
     /// 收到一条已归一化的消息
     std::function<void(InboundEvent)> onInbound;
@@ -53,7 +53,7 @@ public:
     /// 断开并释放自管资源 (幂等)
     virtual void stop() = 0;
 
-    /// 串行提交一条出站 (同会话顺序由编排层保证)
+    /// 串行提交一条出站 (同会话顺序由调度层保证)
     ///
     /// - `done` 可能同步调用, 也可能稍后在该 io 线程上调用
     virtual void send(OutboundMessage msg, SendResultFn done) = 0;
