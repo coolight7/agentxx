@@ -133,6 +133,8 @@ struct AgentIfaces {
     const PluginxxCoroutineRuntimeIface* coroutineRuntime = nullptr;
     /// "agentxx.agent.mount": 挂载查询 (诊断与自查)
     const AgentxxPluginMountIface* mount = nullptr;
+    /// "agentxx.agent.runtime": 会话运行时 (挂自己的根 / 开会话通道 / 事件驱动)
+    const AgentxxPluginRuntimeIface* runtime = nullptr;
 
     /// 从主程序查询全部已知 agent 侧接口表 (host 为空时返回全 NULL 聚合)
     static AgentIfaces query(const PluginxxHost* host) {
@@ -173,6 +175,8 @@ struct AgentIfaces {
         f.coroutineRuntime
             = queryInterface<PluginxxCoroutineRuntimeIface>(host, PLUGINXX_IFACE_COROUTINE_RUNTIME);
         f.mount = queryInterface<AgentxxPluginMountIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_MOUNT);
+        f.runtime
+            = queryInterface<AgentxxPluginRuntimeIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_RUNTIME);
         return f;
     }
 };
@@ -223,6 +227,39 @@ inline std::string
     }
     return std::string{fallback};
 }
+
+/* ==================== 会话运行时的通道转接 (提前定义: 实例上下文要持有它) ====================
+ *
+ * 通道事件回调是 C ABI 函数指针 + `user_data`; 实例上下文里按通道 id 存一份转接对象,
+ * 关通道时释放。定义放在此处是因为 [PluginBase] 需要它作为成员类型。
+ */
+
+/// 一条通道事件 (`kind` 取 `AGENTXX_PLUGIN_CHANNEL_EVT_*`)
+///
+/// 字符串是**借用视图**, 只在回调期间有效; 要留到回调之后必须自己拷成 `std::string`。
+struct ChannelEvent {
+    int32_t          kind        = AGENTXX_PLUGIN_CHANNEL_EVT_READY;
+    int64_t          channelId   = 0;
+    int64_t          interruptId = 0; ///< 仅中断类事件有效
+    std::string_view text;
+    std::string_view payloadJson;
+
+    bool is(int32_t k) const noexcept {
+        return kind == k;
+    }
+};
+
+namespace detail {
+
+/// 通道事件回调的转接 (堆上对象, 生命周期 = 通道)
+///
+/// 回调目标放在 `shared_ptr` 里: 插件可能在事件回调内部关通道 (关通道会释放本对象),
+/// 转接处先拷一份 `shared_ptr` 再调用, 因此这种重入是安全的。
+struct RuntimeChannelShim {
+    std::shared_ptr<const std::function<void(const ChannelEvent&)>> fn;
+};
+
+} // namespace detail
 
 /* ==================== 声明式模式构建器 ToolSchemaBuilder ==================== */
 
@@ -605,6 +642,12 @@ private:
 
     /// 会话轮次开始事件的订阅句柄 (实例销毁时由主程序随实例一并清理)
     PluginxxSubscription* roundStartSub_ = nullptr;
+
+public:
+
+    /// 会话运行时的通道回调转接对象 (键 = 通道 id; `openChannel` 写入, `closeChannel` 擦除)
+    /// - 只在主程序 io 线程访问 (开/关通道本身就只在那里执行), 无需加锁
+    std::map<int64_t, std::unique_ptr<detail::RuntimeChannelShim>> runtimeChannelShims;
 };
 
 /* ==================== per-agent 引用与状态表 ==================== */
@@ -723,6 +766,386 @@ inline std::string mountInfoOf(const PluginBase& ctx, std::string_view agentId) 
     std::string text{out.data, static_cast<size_t>(out.size)};
     PluginString::free(ctx.host, &out);
     return text;
+}
+
+/* ==================== 会话运行时 (agentxx.agent.runtime) ====================
+ *
+ * 三层的便捷封装 (C ABI 见 plugin_api.h 的同名表):
+ * - **根 (root)**: 挂到容器上的根 agent, 一份 `AgentConfig` (提示词/工具白名单/插件挂载);
+ *   只能在 `start` 这类进程级时机挂, 在 `mount` 回调里挂会被主程序拒绝;
+ * - **通道 (channel)**: 一个 `sessionId` 的驱动壳 (输入 / 事件 / 中断 / 查询);
+ * - **触发器 (trigger) / 定时器 (timer)**: 把事件或时间转成通道输入。
+ *
+ * 全部入口是同步调用 (内部投递到主程序 io 线程后返回), 建根/开通道/关通道都只是
+ * "发起", 结果经通道事件体现 (`READY` / `ERROR` / `CLOSED`)。
+ * 主程序没有这张表时 (老版本) 全部返回失败值, 不抛异常。
+ */
+
+/// 挂载根的参数
+struct MountRootOptions {
+    /// 展示名 (也用于生成根 id: "qq" → "ext:qq:1")
+    std::string name;
+    /// `AgentConfig` 覆盖 (字段见插件设计文档"根配置"一节)
+    /// - 建议至少给 `prompt.systemPrompt`; 空 = 只用派生默认值 (coding 人设)
+    utilxx_base::Json config = utilxx_base::Json::object();
+    /// 该根的插件挂载策略 (与 yaml `plugin.mount` 同构):
+    /// `{"mode":"none|all|listed","list":[...],"args":{...}}`
+    /// - 空 = `none`: 该根只有内置工具 (share_store / subagent / git_worktree)
+    std::string mountPlugins;
+    /// 创建者插件是否也挂到该根 (默认 false = 切断递归)
+    bool includeCreator = false;
+};
+
+/// 打开会话通道的参数
+struct ChannelOptions {
+    std::string rootId;    ///< `mountRoot` 返回的根 id (必填)
+    std::string sessionId; ///< 空 = 由主程序生成
+    std::string title;     ///< 会话标题 (可空)
+    std::string model;     ///< 初始模型 (空 = 用根的默认模型)
+    /// 中断等待上限 (0 = 不限; 到点按取消应答)
+    std::chrono::milliseconds interruptTimeout{0};
+    /// 输入队列上限 (0 = 默认)
+    int32_t maxQueue = 0;
+};
+
+/// 一条通道事件: 见本头开头的 [ChannelEvent] (因实例上下文要持有转接对象而前移)
+
+/// 触发器参数
+struct TriggerOptions {
+    /// 主题 (不以 `plugin.` / `client.` 开头时自动补 `plugin.`)
+    std::string topic;
+    int64_t     channelId = 0;
+    /// `AGENTXX_PLUGIN_TRIGGER_POLICY_*` (默认 QUEUE)
+    int32_t policy = AGENTXX_PLUGIN_TRIGGER_POLICY_QUEUE;
+    /// COALESCE 的合并窗口 (毫秒; 0 = 默认 300)
+    int32_t debounceMs = 0;
+    /// 合并后待投递上限 (0 = 默认 20)
+    int32_t maxQueue = 0;
+    /// 投递模式 (空 = next-turn; 另见 next-step / inject / collect)
+    std::string delivery;
+};
+
+/// 定时器参数
+struct RuntimeTimerOptions {
+    int64_t     channelId = 0;
+    /// 投递的输入 JSON (形状同 `send_input`)
+    std::string inputJson;
+    /// 首次触发延迟 (毫秒; 相对时间)
+    int64_t firstDelayMs = 0;
+    /// 周期间隔 (毫秒; 0 = 一次性)
+    int64_t intervalMs = 0;
+    /// `AGENTXX_PLUGIN_TRIGGER_POLICY_*` (默认 DROP_IF_BUSY)
+    int32_t policy = AGENTXX_PLUGIN_TRIGGER_POLICY_DROP_IF_BUSY;
+};
+
+/// 主程序是否提供会话运行时 (老主程序没有这张表)
+template<typename Ctx>
+inline bool hasRuntime(const Ctx& ctx) {
+    return ctx.iface.runtime != nullptr && ctx.iface.runtime->mount_root != nullptr;
+}
+
+namespace detail {
+
+/// C ABI 回调 → `std::function<void(const ChannelEvent&)>`
+/// - 先拷一份转接对象持有的 `shared_ptr`: 回调里可能关通道 (那会释放转接对象本身)
+inline void PLUGINXX_CALL
+    runtimeChannelEventThunk(void* user_data, const AgentxxPluginChannelEvent* event) {
+    auto* shim = static_cast<RuntimeChannelShim*>(user_data);
+    if (!shim || !event || !shim->fn) {
+        return;
+    }
+    auto fn = shim->fn; // 拷一份: 回调里可能关通道 (那会释放 shim 本身)
+    ChannelEvent ev;
+    ev.kind        = event->kind;
+    ev.channelId   = event->channel_id;
+    ev.interruptId = event->interrupt_id;
+    ev.text        = event->text.data
+                         ? std::string_view{event->text.data, static_cast<size_t>(event->text.size)}
+                         : std::string_view{};
+    ev.payloadJson = event->payload_json.data
+                         ? std::string_view{
+                               event->payload_json.data,
+                               static_cast<size_t>(event->payload_json.size)
+                         }
+                         : std::string_view{};
+    try {
+        (*fn)(ev);
+    } catch (...) {
+        // 插件回调抛出的异常不得跨边界: 主程序那边只记日志
+    }
+}
+
+} // namespace detail
+
+/// 挂载一个根 (带自己的配置); 返回根 id, 失败返回空串
+///
+/// - **只能在 `start` 里调用**: 在 `mount` 回调里调用会被拒 (否则每个 agent 再建一根)
+/// - 返回 id 时 init 尚未完成; 就绪前开的通道会排队, 就绪后自动继续
+template<typename Ctx>
+inline std::string mountRoot(Ctx& ctx, const MountRootOptions& opt) {
+    if (!hasRuntime(ctx)) {
+        return {};
+    }
+    auto configJson = opt.config.is_null() ? std::string{"{}"} : opt.config.dump();
+    AgentxxPluginMountRootSpec spec{};
+    spec.struct_size     = sizeof(AgentxxPluginMountRootSpec);
+    spec.name            = PluginStringView::from(opt.name);
+    spec.config_json     = PluginStringView::from(configJson);
+    spec.mount_plugins   = PluginStringView::from(opt.mountPlugins);
+    spec.include_creator = opt.includeCreator ? 1 : 0;
+    PluginxxString out{nullptr, 0};
+    const auto     rc = ctx.iface.runtime->mount_root(ctx.host, &spec, &out);
+    if (rc != AGENTXX_PLUGIN_RUNTIME_OK || !out.data) {
+        if (out.data) {
+            PluginString::free(ctx.host, &out);
+        }
+        return {};
+    }
+    std::string rootId{out.data, static_cast<size_t>(out.size)};
+    PluginString::free(ctx.host, &out);
+    return rootId;
+}
+
+/// 卸载一个根 (其下通道先全部关闭)
+template<typename Ctx>
+inline int32_t unmountRoot(Ctx& ctx, std::string_view rootId) {
+    if (!hasRuntime(ctx) || !ctx.iface.runtime->unmount_root || rootId.empty()) {
+        return AGENTXX_PLUGIN_RUNTIME_ERR_UNSUPPORTED;
+    }
+    auto idSv = PluginStringView::from(rootId);
+    return ctx.iface.runtime->unmount_root(ctx.host, &idSv);
+}
+
+/// 打开一个会话通道; 返回通道 id, 失败返回 0
+///
+/// - `onEvent` 在该根所属 io 线程上调用, **必须快速返回** (整个进程的会话都在这条线程);
+/// - 通道关闭时最后一条事件必为 `AGENTXX_PLUGIN_CHANNEL_EVT_CLOSED`, 之后不再回调;
+/// - 同一个 (会话存储根, sessionId) 在同进程内只能有一个通道, 撞了返回 0 (日志给出原因)。
+template<typename Ctx, typename Fn>
+inline int64_t openChannel(Ctx& ctx, const ChannelOptions& opt, Fn&& onEvent) {
+    if (!hasRuntime(ctx) || !ctx.iface.runtime->open_channel || opt.rootId.empty()) {
+        return 0;
+    }
+    auto shim = std::make_unique<detail::RuntimeChannelShim>();
+    shim->fn  = std::make_shared<const std::function<void(const ChannelEvent&)>>(
+        std::function<void(const ChannelEvent&)>(std::forward<Fn>(onEvent))
+    );
+    AgentxxPluginChannelSpec spec{};
+    spec.struct_size         = sizeof(AgentxxPluginChannelSpec);
+    spec.root_id             = PluginStringView::from(opt.rootId);
+    spec.session_id          = PluginStringView::from(opt.sessionId);
+    spec.title               = PluginStringView::from(opt.title);
+    spec.model               = PluginStringView::from(opt.model);
+    spec.max_queue           = opt.maxQueue;
+    spec.interrupt_timeout_ms = static_cast<int64_t>(opt.interruptTimeout.count());
+    spec.on_event            = &detail::runtimeChannelEventThunk;
+    spec.user_data           = shim.get();
+    int64_t channelId        = 0;
+    const auto rc            = ctx.iface.runtime->open_channel(ctx.host, &spec, &channelId);
+    if (rc != AGENTXX_PLUGIN_RUNTIME_OK || channelId <= 0) {
+        return 0;
+    }
+    ctx.runtimeChannelShims[channelId] = std::move(shim);
+    return channelId;
+}
+
+/// 关闭一个通道 (不等待收尾; 结果经最后一条 `CLOSED` 事件体现)
+template<typename Ctx>
+inline int32_t closeChannel(Ctx& ctx, int64_t channelId) {
+    if (!hasRuntime(ctx) || !ctx.iface.runtime->close_channel || channelId <= 0) {
+        return AGENTXX_PLUGIN_RUNTIME_ERR_UNSUPPORTED;
+    }
+    const auto rc = ctx.iface.runtime->close_channel(ctx.host, channelId);
+    // 通道已废弃: 回调转接对象随之释放 (主程序保证此后不再回调)
+    ctx.runtimeChannelShims.erase(channelId);
+    return rc;
+}
+
+/// 投递一条输入 (`{"text": ...}` / `{"attachments": [...]}` / `delivery`)
+template<typename Ctx>
+inline int32_t sendInput(Ctx& ctx, int64_t channelId, std::string_view inputJson) {
+    if (!hasRuntime(ctx) || !ctx.iface.runtime->send_input || channelId <= 0) {
+        return AGENTXX_PLUGIN_RUNTIME_ERR_UNSUPPORTED;
+    }
+    auto jsonSv = PluginStringView::from(inputJson);
+    return ctx.iface.runtime->send_input(ctx.host, channelId, &jsonSv);
+}
+
+/// 投递一段文本 (`delivery` 空 = next-turn)
+template<typename Ctx>
+inline int32_t sendText(
+    Ctx&             ctx,
+    int64_t          channelId,
+    std::string_view text,
+    std::string_view delivery = {}
+) {
+    utilxx_base::Json input = utilxx_base::Json::object();
+    input["text"]           = std::string{text};
+    if (!delivery.empty()) {
+        input["delivery"] = std::string{delivery};
+    }
+    return sendInput(ctx, channelId, input.dump());
+}
+
+/// 取消通道当前轮次
+template<typename Ctx>
+inline int32_t cancelChannel(Ctx& ctx, int64_t channelId) {
+    if (!hasRuntime(ctx) || !ctx.iface.runtime->cancel || channelId <= 0) {
+        return AGENTXX_PLUGIN_RUNTIME_ERR_UNSUPPORTED;
+    }
+    return ctx.iface.runtime->cancel(ctx.host, channelId);
+}
+
+/// 切换通道的模型
+template<typename Ctx>
+inline int32_t selectChannelModel(Ctx& ctx, int64_t channelId, std::string_view model) {
+    if (!hasRuntime(ctx) || !ctx.iface.runtime->select_model || channelId <= 0 || model.empty()) {
+        return AGENTXX_PLUGIN_RUNTIME_ERR_UNSUPPORTED;
+    }
+    auto modelSv = PluginStringView::from(model);
+    return ctx.iface.runtime->select_model(ctx.host, channelId, &modelSv);
+}
+
+/// 应答一个中断询问 (值对象形态 `{"values":{...}}`; 空对象 = 取消)
+template<typename Ctx>
+inline int32_t respondInterrupt(
+    Ctx&             ctx,
+    int64_t          channelId,
+    int64_t          interruptId,
+    std::string_view valuesJson
+) {
+    if (!hasRuntime(ctx) || !ctx.iface.runtime->respond_interrupt || channelId <= 0
+        || interruptId <= 0) {
+        return AGENTXX_PLUGIN_RUNTIME_ERR_UNSUPPORTED;
+    }
+    auto valuesSv = PluginStringView::from(valuesJson);
+    return ctx.iface.runtime->respond_interrupt(ctx.host, channelId, interruptId, &valuesSv);
+}
+
+/// 通道状态 JSON (不含消息正文; 失败返回空串)
+template<typename Ctx>
+inline std::string channelStateJson(Ctx& ctx, int64_t channelId) {
+    if (!hasRuntime(ctx) || !ctx.iface.runtime->get_channel_state || channelId <= 0) {
+        return {};
+    }
+    PluginxxString out{nullptr, 0};
+    if (ctx.iface.runtime->get_channel_state(ctx.host, channelId, &out) != 0 || !out.data) {
+        if (out.data) {
+            PluginString::free(ctx.host, &out);
+        }
+        return {};
+    }
+    std::string text{out.data, static_cast<size_t>(out.size)};
+    PluginString::free(ctx.host, &out);
+    return text;
+}
+
+/// 通道会话的 LLM 上下文 (JSON 数组文本; 失败返回空串)
+template<typename Ctx>
+inline std::string channelContextMessages(Ctx& ctx, int64_t channelId) {
+    if (!hasRuntime(ctx) || !ctx.iface.runtime->get_context_messages || channelId <= 0) {
+        return {};
+    }
+    PluginxxString out{nullptr, 0};
+    if (ctx.iface.runtime->get_context_messages(ctx.host, channelId, &out) != 0 || !out.data) {
+        if (out.data) {
+            PluginString::free(ctx.host, &out);
+        }
+        return {};
+    }
+    std::string text{out.data, static_cast<size_t>(out.size)};
+    PluginString::free(ctx.host, &out);
+    return text;
+}
+
+/// 运行时清单 JSON: `{roots:[{rootId,name,ready,configSummary,channels}],triggers,timers}`
+template<typename Ctx>
+inline std::string listRuntimeJson(Ctx& ctx) {
+    if (!hasRuntime(ctx) || !ctx.iface.runtime->list_runtime) {
+        return "{}";
+    }
+    PluginxxString out{nullptr, 0};
+    if (ctx.iface.runtime->list_runtime(ctx.host, &out) != 0 || !out.data) {
+        if (out.data) {
+            PluginString::free(ctx.host, &out);
+        }
+        return "{}";
+    }
+    std::string text{out.data, static_cast<size_t>(out.size)};
+    PluginString::free(ctx.host, &out);
+    return text;
+}
+
+/// 登记触发器 (订阅主题 → 按策略投递到通道); 返回触发器 id, 失败返回 0
+template<typename Ctx>
+inline int64_t addTrigger(Ctx& ctx, const TriggerOptions& opt) {
+    if (!hasRuntime(ctx) || !ctx.iface.runtime->register_trigger || opt.topic.empty()
+        || opt.channelId <= 0) {
+        return 0;
+    }
+    AgentxxPluginTriggerSpec spec{};
+    spec.struct_size = sizeof(AgentxxPluginTriggerSpec);
+    spec.policy      = opt.policy;
+    spec.debounce_ms = opt.debounceMs;
+    spec.max_queue   = opt.maxQueue;
+    spec.topic       = PluginStringView::from(opt.topic);
+    spec.channel_id  = opt.channelId;
+    spec.delivery    = PluginStringView::from(opt.delivery);
+    int64_t id       = 0;
+    if (ctx.iface.runtime->register_trigger(ctx.host, &spec, &id) != AGENTXX_PLUGIN_RUNTIME_OK) {
+        return 0;
+    }
+    return id;
+}
+
+/// 注销触发器
+template<typename Ctx>
+inline int32_t removeTrigger(Ctx& ctx, int64_t triggerId) {
+    if (!hasRuntime(ctx) || !ctx.iface.runtime->unregister_trigger || triggerId <= 0) {
+        return AGENTXX_PLUGIN_RUNTIME_ERR_UNSUPPORTED;
+    }
+    return ctx.iface.runtime->unregister_trigger(ctx.host, triggerId);
+}
+
+/// 发一条事件 (任意线程, 立即返回)
+template<typename Ctx>
+inline int32_t emitEvent(Ctx& ctx, std::string_view topic, std::string_view payloadJson = {}) {
+    if (!hasRuntime(ctx) || !ctx.iface.runtime->emit_event || topic.empty()) {
+        return AGENTXX_PLUGIN_RUNTIME_ERR_UNSUPPORTED;
+    }
+    auto topicSv = PluginStringView::from(topic);
+    auto paySv   = PluginStringView::from(payloadJson);
+    return ctx.iface.runtime->emit_event(ctx.host, &topicSv, &paySv);
+}
+
+/// 登记定时器 (一次性或周期); 返回定时器 id, 失败返回 0
+template<typename Ctx>
+inline int64_t addRuntimeTimer(Ctx& ctx, const RuntimeTimerOptions& opt) {
+    if (!hasRuntime(ctx) || !ctx.iface.runtime->register_timer || opt.channelId <= 0
+        || opt.inputJson.empty() || opt.firstDelayMs < 0 || opt.intervalMs < 0) {
+        return 0;
+    }
+    AgentxxPluginTimerSpec spec{};
+    spec.struct_size    = sizeof(AgentxxPluginTimerSpec);
+    spec.policy         = opt.policy;
+    spec.channel_id     = opt.channelId;
+    spec.first_delay_ms = opt.firstDelayMs;
+    spec.interval_ms    = opt.intervalMs;
+    spec.input_json     = PluginStringView::from(opt.inputJson);
+    int64_t id          = 0;
+    if (ctx.iface.runtime->register_timer(ctx.host, &spec, &id) != AGENTXX_PLUGIN_RUNTIME_OK) {
+        return 0;
+    }
+    return id;
+}
+
+/// 注销定时器
+template<typename Ctx>
+inline int32_t removeRuntimeTimer(Ctx& ctx, int64_t timerId) {
+    if (!hasRuntime(ctx) || !ctx.iface.runtime->unregister_timer || timerId <= 0) {
+        return AGENTXX_PLUGIN_RUNTIME_ERR_UNSUPPORTED;
+    }
+    return ctx.iface.runtime->unregister_timer(ctx.host, timerId);
 }
 
 /* ==================== 插件框架 detail 名的引入 (pluginxx/kit/kit.h) ====================

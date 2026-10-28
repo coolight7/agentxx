@@ -33,9 +33,30 @@
   否则权限中间件不会对它们生效。
 - 每个插件目录的 `CMakeLists.txt` 开头声明支持的平台；无该平台实现时跳过编译
   （经 `cmake/plugin_platform_support.cmake`）。跨平台插件默认放行。
+- 主程序堆字符串 (`host->alloc`) 用完必须释放（SDK 的 `PluginString::free` 已封装）。
+
+## 插件内驱动 agent 会话 (`agentxx.agent.runtime`)
+
+写"聊天平台机器人"这类插件时, 插件需要**一个自己的根 agent** —— 提示词 / 工具白名单 /
+插件挂载 / 模型只能在 `AgentConfig` 级说, 而"再加载一个自己"不成立 (实例全程只一份)。
+完整示例见 `example_runtime`, 设计见 [plugins.md](../../docs/zh-cn/design/plugins.md) §19。
+
+- 建根只能在 `start`: 在 `mount` 回调里调 `mount_root` 返回 `ERR_STATE`
+  (否则每个 agent 再建一根, 嵌套没有终点)。
+- 建根 / 开通道 / 关通道都是**发起后返回**; 要"确实可用"就等 `READY` 事件。
+- 通道事件回调在该根所属 io 线程上执行, **必须快速返回**: 整个进程的会话都在这条线程,
+  不要在这里等网络收发或人工答复, 把内容交给自己管理的线程后立即返回。
+- 事件里的字符串是借用视图, 回调结束后要用就自己拷成 `std::string`。
+- 在事件回调里关通道是安全的 (SDK 的转接对象先拷一份目标函数再调用)。
+- 插件禁用 / 卸载 / 关闭时主程序按实例名整批回收根、通道、触发器、定时器;
+  自己在 `stop` 里再收一次也无妨 (入口幂等)。
+- 数量级按"一个根 64 通道"规划: 多个群共用一个根, 人设在根配置里;
+  真需要"一群一套人设"时才拆成多个根 (每根一次 init, 启动与内存线性增长)。
 
 ## 测试
 
 - 插件相关改动跑 `plugins`、`plugin_resources`、`plugin_multi_instance`、
   `client_plugins`、`plugin_sdk`、`plugin_bridge` 模块；测试源码在
   `agent/test/plugin`。
+- 搭根开通道类插件另跑 `plugin_agent_runtime`（表语义）与
+  `plugin_example_runtime`（真实插件全流程）。

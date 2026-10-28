@@ -1887,4 +1887,27 @@ plugin:
 | 用例 | 覆盖 |
 |---|---|
 | `plugin_agent_runtime` | 挂根 → 开通道 → `READY`; 自定义提示词与工具白名单生效; 输入 → `TURN_START`/`DELTA_TEXT`/`TURN_END`; 同 `sessionId` 两通道冲突; 关闭与根卸载连带关闭; 禁用回收; 预算; 中断应答与超时; 两根/两通道互不串话; `mount` 里建根被拒; 配置非法报错 |
+| `plugin_example_runtime` | 真实插件全流程: 加载 → `start` 里挂根开通道 → `READY` → 插件注册的工具可用 → 投输入跑一轮 → 连发合并成一轮 → 卸载后通道关闭、根回收、清单清零 |
 | `plugin_agent_trigger` | 三种策略、合并窗口内外、定时器一次性/周期、通道关闭撤销、背压 |
+
+### 19.9 SDK 便捷层
+
+`plugin_kit.h` 把这张表的 16 个入口封成按语义组织的函数（`AgentIfaces::runtime` 为表指针）:
+
+| 分组 | 函数 |
+|---|---|
+| 能力判断 | `hasRuntime(ctx)` |
+| 根 | `mountRoot(ctx, MountRootOptions)` → 根 id (空 = 失败); `unmountRoot(ctx, id)` |
+| 通道 | `openChannel(ctx, ChannelOptions, 回调)` → 通道 id (0 = 失败); `closeChannel(ctx, id)` |
+| 输入 | `sendInput(ctx, id, json)`; `sendText(ctx, id, text, delivery)`; `cancelChannel`; `selectChannelModel`; `respondInterrupt` |
+| 查询 | `channelStateJson`; `channelContextMessages`; `listRuntimeJson` |
+| 事件 | `addTrigger(ctx, TriggerOptions)`; `removeTrigger`; `emitEvent(ctx, topic, payload)` |
+| 定时 | `addRuntimeTimer(ctx, RuntimeTimerOptions)`; `removeRuntimeTimer` |
+
+通道回调收到的是 `ChannelEvent`（`kind` / `channelId` / `interruptId` / `text` / `payloadJson`），
+字符串仍是借用视图。转接对象由 SDk 存在实例上下文（`PluginBase::runtimeChannelShims`），
+且回调前先拷一份目标函数，因此**在事件回调里关通道是安全的**（真实插件常在
+`CLOSED` 回调里释放自己的状态）。
+
+完整示例见 `agent/plugins/example_runtime`（挂根 + 开通道 + COALESCE 触发器 + 定时器 +
+三个在 agent 上注册的工具），端到端用例 `plugin_example_runtime`。

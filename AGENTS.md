@@ -480,6 +480,20 @@ path/to/agentxx_test string_util regex
   环境/指标/加载(含配置 JSON)/会话摘要/日志尾部, 默认不含消息正文、不含凭据取值
   (内容过 `redactSecrets`); 日志尾部经 `enableLogCapture` 的进程内环形缓冲捕获
   (只保留最近 512 行: 诊断捕获、TUI `TUILogSink`、FFI 日志环同一个上限)
+- 会话运行时 (2026-10): `agentxx.agent.runtime` 表让插件挂自己的**根 agent**
+  (`mount_root`: 只能放 `start`, `config_json` 给提示词/工具白名单, `mount_plugins` 给挂载策略,
+  默认 `include_creator=false` 切断递归) 并在上面开**会话通道** (`open_channel` 一个
+  `sessionId` 一条; 事件 `READY`/`TURN_*/DELTA_*`/`INTERRUPT`/`CLOSED`; 输入/取消/换模型/
+  应答中断; 查询状态/上下文/清单), 另有**触发器** (QUEUE/COALESCE/DROP_IF_BUSY, 背压
+  64 条/8 KB) 与**定时器**。预算: 根数 = `AgentHost::Config::maxRoots` (默认 8, 含内置根),
+  每根 64 通道, 每实例 256 触发器+定时器; 禁用/卸载按 owner 整批回收。
+  通道事件回调在根所属 io 线程,**不得同步阻塞**。SDK 便捷层在
+  `plugin_kit.h` (`AgentIfaces::runtime` + `mountRoot`/`openChannel`/`sendText`/`addTrigger`
+  等), 示例插件 `agent/plugins/example_runtime`, 测试 `plugin_agent_runtime` (177 条,
+  主程序侧语义) 与 `plugin_example_runtime` (49 条, 真实插件全流程); 详见
+  [plugins.md](docs/zh-cn/design/plugins.md) §19。
+  注: 提示词只按 **agent 级** 支持修改 (根 `config_json` 的 `prompt`), **不做**会话级
+  提示词来源 —— 一个 agent 管理的会话、提示词、插件等保持一致
 - 接口表数量: agent 侧 22 张 (10 张通用表 `pluginxx.*` + 12 张业务表 `agentxx.agent.*`;
   业务表含 `agentxx.agent.context` 会话 LLM 上下文查询 `get_messages`/`messages_count`
   与 `agentxx.agent.feature` 功能点: `list_points`/`define_point`/`undefine_point`/

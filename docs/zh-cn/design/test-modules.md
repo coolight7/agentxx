@@ -11,7 +11,7 @@ path/to/agentxx_test --fail-fast        # 遇到失败立即终止
 path/to/agentxx_test string_util regex  # 只跑指定模块
 ```
 
-模块总数: 127 (同步 67 / 异步 60)
+模块总数: 128 (同步 67 / 异步 61)
 
 | 模块 | 调度 | 构建 |
 |---|---|---|
@@ -93,6 +93,7 @@ path/to/agentxx_test string_util regex  # 只跑指定模块
 | `math_tools` | 异步 | 通用 |
 | `share_store` | 异步 | 通用 |
 | `session_persistence` | 异步 | 通用 |
+| `session_runtime` | 异步 | 通用 |
 | `rag_search` | 异步 | 通用 |
 | `datetime` | 异步 | 通用 |
 | `filesystem` | 异步 | 通用 |

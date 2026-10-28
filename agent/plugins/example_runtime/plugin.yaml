@@ -1,0 +1,8 @@
+name: example_runtime
+version: 1.0.0
+description: "Example runtime plugin: mounts its own root agent, drives a chat channel with a trigger and a timer"
+entry: libexample_runtime.so
+interfaces:
+  require:
+    # 会话运行时表: 挂自己的根 / 开会话通道 / 触发器与定时器 / 收发事件
+    - agentxx.agent.runtime

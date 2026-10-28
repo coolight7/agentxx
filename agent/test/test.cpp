@@ -80,6 +80,7 @@
 #include "agentxx-test/plugin/test_codegraph_tools.h"
 #include "agentxx-test/plugin/test_cpu_gpu_use.h"
 #include "agentxx-test/plugin/test_llm_uncensored.h"
+#include "agentxx-test/plugin/test_plugin_example_runtime.h"
 #include "agentxx-test/plugin/test_plugin_agent_runtime.h"
 #include "agentxx-test/plugin/test_plugin_bridge.h"
 #include "agentxx-test/plugin/test_plugin_cleanup.h"
@@ -533,6 +534,10 @@ int main(int argn, char** argv) {
                 co_await run(
                     "plugin_agent_runtime",
                     agentxx::test::run_plugin_agent_runtime_tests
+                );
+                co_await run(
+                    "plugin_example_runtime",
+                    agentxx::test::run_plugin_example_runtime_tests
                 );
                 co_await run("plugin_multi_mount", agentxx::test::run_plugin_multi_mount_tests);
                 co_await run(

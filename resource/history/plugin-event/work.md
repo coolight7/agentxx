@@ -11,8 +11,8 @@
 | 二 | `AgentHost` 多根（内置根 + 挂载根）+ 会话占用表 | **已完成** |
 | 三 | 运行时接口表 `agentxx.agent.runtime`（挂根 / 通道 / 输入 / 事件 / 中断） | **已完成** |
 | 四 | 事件驱动：触发器（QUEUE/COALESCE/DROP_IF_BUSY） + 定时器 | **已完成** |
-| 五 | 会话级提示词来源（`PromptSectionSlot::Base`，可选） | 未开始 |
-| 六 | 文档与示例插件 `agent/plugins/example_runtime` | 未开始 |
+| ~~五~~ | ~~会话级提示词来源~~ | **不做**: 按 agent 级支持修改提示词即可（一个 agent 管理的会话、提示词、插件保持一致），根配置已覆盖 |
+| 六 | 文档与示例插件 `agent/plugins/example_runtime` | **已完成** |
 
 ## 阶段一：统一启动壳（已完成）
 
@@ -128,19 +128,43 @@
 | `agent/lib/src/plugins/plugin_manager_runtime_trigger.cpp` | 触发器三种策略 + 背压（64 条 / 8 KB）+ 定时器（一次性/周期，通道关闭即注销） | 完成 |
 | `agent/test/plugin/test_plugin_agent_runtime.cpp`（第 11、12 组） | 策略、合并窗口、忙时丢弃计数、一次性/周期定时器、参数校验 | 完成 |
 
-## 阶段五：会话级提示词来源（可选）
+## 阶段五：会话级提示词来源（不做）
+
+原设计经 `PromptSourceRegistry` 加 `PromptSectionSlot::Base`，让它按 `sessionId` 替换基础系统提示词。
+**本期不做**：需求改为「按 **agent 级**支持修改提示词即可」—— 一个 agent 管理的会话、提示词、插件等大部分内容保持一致，这已经由 `mount_root` 的 `config_json`
+（`prompt.systemPrompt` / `prompt.append` / `prompt.toolPrompt`）+ `mount_plugins` 完全覆盖。
+
+同根下不同会话要不同群规这类需求，可用「一个群一个根」实现（每根一份独立配置），
+代价是每根一次 init（见设计文档 §11 成本对照）；群里数量大时更推荐共用一个根。
+
+## 阶段六：文档与示例插件（已完成）
 
 | 文件 | 动作 | 状态 |
 |---|---|---|
-| `agent/lib/.../prompt_sources.{h,cpp}` | `PromptSectionSlot::Base` + 按会话基础段 | 未开始 |
-| prompt 接口表 | 表尾追加 `register_source` / `unregister_source`（v2 → v3） | 未开始 |
+| `agent/lib/include/agentxx/plugin/api/plugin_kit.h` | `AgentIfaces.runtime` + SDK 便捷层（`MountRootOptions` / `ChannelOptions` / `ChannelEvent` / `TriggerOptions` / `RuntimeTimerOptions` + `mountRoot`/`openChannel`/`closeChannel`/`sendInput`/`sendText`/`cancelChannel`/`selectChannelModel`/`respondInterrupt`/`channelStateJson`/`channelContextMessages`/`listRuntimeJson`/`addTrigger`/`removeTrigger`/`emitEvent`/`addRuntimeTimer`/`removeRuntimeTimer`）；通道回调转接表（`PluginBase::runtimeChannelShims`，回调与关通道重入安全） | 完成 |
+| `agent/plugins/example_runtime/{example_runtime.cpp,plugin.yaml,CMakeLists.txt}` | 新增示例插件：`start` 里挂根（自定义提示词 + 工具白名单）→ 开通道 → 配 COALESCE 触发器 → 可选定时器；`mount` 里注册 `example_runtime_say/_ping/_status` 三个工具 | 完成 |
+| `agent/plugins/CMakeLists.txt` | 注册 `example_runtime` | 完成 |
+| `agent/test/plugin/test_plugin_example_runtime.cpp` + 头 | 新增模块 `plugin_example_runtime`（49 条断言） | 完成 |
+| `agent/test/test.cpp` | 注册 `plugin_example_runtime` | 完成 |
 
-## 阶段六：文档与示例
+验收（Debug）：
 
-| 对象 | 状态 |
+| 模块 | 结果 |
 |---|---|
-| `docs/zh-cn/design/plugins.md`、`index.md`、`ffi.md`、`agent/plugins/AGENTS.md`、根 `AGENTS.md` | 未开始 |
-| `agent/plugins/example_runtime/` | 未开始 |
+| `plugin_example_runtime` | passed=49 failed=0 |
+| `plugin_agent_runtime` / `plugin_host_mount` / `plugin_multi_mount` / `plugin_multi_instance` | 177 / 147 / 47 / 80 全绿 |
+| `plugins` / `plugin_cleanup` / `boundaries` | 600 / 99 / 19 全绿 |
+
+示例插件演示的完整路径（写聊天平台机器人插件时照拄）:
+
+| 步 | 入口 | 说明 |
+|---|---|---|
+| 1 | `mountRoot(ctx, {.name, .config, .mountPlugins})` | 只能放 `start`；返回即拿到 id（init 异步） |
+| 2 | `openChannel(ctx, {.rootId, .sessionId}, 回调)` | 根未就绪时自动排队；就绪后收到 `READY` |
+| 3 | `addTrigger(ctx, {.topic, .channelId, .policy=COALESCE})` | 连发合并，避免一群刷屏把上下文打满 |
+| 4 | `addRuntimeTimer(ctx, {.channelId, .inputJson, .firstDelayMs})` | 可选；到点投一条输入 |
+| 5 | 回调里处理 `READY`/`TURN_END`/`INTERRUPT`/`CLOSED` | 文本是借用视图，要留就自己拷 |
+| 6 | `stop` 里按 定时器 → 触发器 → 通道 → 根 顺序收尾 | 入口幂等；主程序也会按归属整批回收 |
 
 ## 实施注意
 
@@ -151,3 +175,18 @@
 - 通道 delta 重放缓冲设 0（`deltaBufferCap`），transport 队列容量保持默认；正文回调按 60ms 合批。
 - FFI 侧保持"不让主程序代劳加载插件"的现有行为（`loadPluginsInHost=false`），避免启动顺序回归。
 - 新建根的 `ioCtx` 必须与容器一致（`AgentHost::createAgent` 已统一），否则根的 IO 线程无人 `run()`，通道永远等不到 `READY`。
+
+## 阶段六实施中补充的注意事项
+
+- **SDK 但利入口是同步的**：`mountRoot`/`openChannel`/`closeChannel` 都是“发起后返回”，
+  插件不能在这个入口上等结果；要“确实就绪了”就靠 `READY` 事件。
+- **通道回调与关通道的重入**：插件常会在 `CLOSED` 回调里释放自己的状态，而在
+  其它事件回调里也可能主动关通道；SDK 的转接对象在堆上，且回调前先拷一份
+  `shared_ptr`，所以这种重入是安全的。
+- **`host->alloc` 出来的字符串必须由插件释放**：返回 id / JSON 文本的入口（`mount_root` /
+  `get_channel_state` / `get_context_messages` / `list_runtime`）都经 `PluginString::free`；
+  SDK 已封装，直接调 C ABI 时别忘了。
+- **通道数量级按“一个根 64 通道”规划**：QQ/微信群共用一个根，人设在根配置里；
+  真需要“一群一套人设”时才拆成多个根（每根一次 init，启动与内存线性增长）。
+- **示例插件的定时器默认关闭**：它到点会跑一轮（产生一次模型调用），默认打开会让
+  只装了示例插件的进程莫名其妙开始花钱。
