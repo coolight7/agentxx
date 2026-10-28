@@ -791,12 +791,13 @@ void ChatbotEngine::onChannelTurnEnd(
         state.turn.active = false;
     }
 
+    // 本轮正文先落到记账里: 兜底发送要用它 (`text` 是本轮最后一段正文)
+    if (!text.empty()) {
+        state.turn.lastAssistantText.assign(text);
+    }
     // 兜底发送: 模型一次都没调工具时按 fallbackReply 发最后一段正文
     if (state.turn.active && !state.turn.modelSent && !interrupted && !hasError) {
         fallbackSend(chatKey, state.turn);
-    }
-    if (!text.empty()) {
-        state.turn.lastAssistantText.assign(text);
     }
     state.turn.active = false;
 

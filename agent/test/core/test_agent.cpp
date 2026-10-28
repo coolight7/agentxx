@@ -464,22 +464,44 @@ DaSimServer startDaSimServer() {
                         append(d, "");
                         append(utilxx_base::Json::object(), "tool_calls");
                     } else {
+                        // 逐字符分片推送正文
+                        // 必须按 **UTF-8 码点** 边界切: 按字节切会把多字节字符切在中间,
+                        // 上游解析时整段变成非法文本 (实测表现为 "empty response"),
+                        // 之前的 ASCII 短文本用例察觉不到这个问题
                         const auto& content = respContent;
                         std::string acc;
-                        for (size_t i = 0; i < content.size(); ++i) {
-                            acc += content[i];
-                            if (content[i] == ' ' || acc.size() >= 10 || i == content.size() - 1) {
-                                auto d       = utilxx_base::Json::object();
-                                d["content"] = acc;
-                                append(d, "");
-                                acc.clear();
+                        auto        flushAcc = [&]() {
+                            if (acc.empty()) {
+                                return;
                             }
-                        }
-                        if (!acc.empty()) {
                             auto d       = utilxx_base::Json::object();
                             d["content"] = acc;
                             append(d, "");
+                            acc.clear();
+                        };
+                        size_t i = 0;
+                        while (i < content.size()) {
+                            const auto lead = static_cast<unsigned char>(content[i]);
+                            size_t     len  = 1;
+                            if ((lead & 0x80u) == 0) {
+                                len = 1;
+                            } else if ((lead & 0xE0u) == 0xC0u) {
+                                len = 2;
+                            } else if ((lead & 0xF0u) == 0xE0u) {
+                                len = 3;
+                            } else if ((lead & 0xF8u) == 0xF0u) {
+                                len = 4;
+                            }
+                            if (i + len > content.size()) {
+                                len = 1; // 截断的尾字节: 原样推过去
+                            }
+                            acc.append(content, i, len);
+                            i += len;
+                            if (content[i - 1] == ' ' || acc.size() >= 10) {
+                                flushAcc();
+                            }
                         }
+                        flushAcc();
                         append(utilxx_base::Json::object(), "stop");
                     }
 

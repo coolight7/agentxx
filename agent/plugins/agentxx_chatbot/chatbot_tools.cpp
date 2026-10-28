@@ -358,6 +358,47 @@ std::string toolSetMode(
     return out.dump();
 }
 
+namespace {
+
+/// 解析注入参数里的 `attachments` 数组 (每项形如
+/// `{"kind":"image","url":"http://…","localPath":"C:\\…","fileName":"a.png","sizeBytes":12}`)
+void applyDebugAttachments(const Json& args, InboundEvent& event) {
+    if (!args.contains("attachments") || !args["attachments"].is_array()) {
+        return;
+    }
+    for (const auto& item : args["attachments"]) {
+        if (!item.is_object()) {
+            continue;
+        }
+        MediaRef ref;
+        const std::string kindText = stringArg(item, "kind", "file");
+        if (kindText == "image") {
+            ref.kind = MediaKind::Image;
+        } else if (kindText == "audio") {
+            ref.kind = MediaKind::Audio;
+        } else if (kindText == "video") {
+            ref.kind = MediaKind::Video;
+        } else {
+            ref.kind = MediaKind::File;
+        }
+        ref.url       = stringArg(item, "url");
+        ref.localPath = stringArg(item, "localPath");
+        ref.fileName  = stringArg(item, "fileName");
+        ref.mimeType  = stringArg(item, "mimeType");
+        ref.asrText   = stringArg(item, "asrText");
+        const auto size = intArg(item, "sizeBytes", 0);
+        ref.sizeBytes   = size > 0 ? static_cast<uint64_t>(size) : 0;
+        if (ref.fileName.empty() && !ref.localPath.empty()) {
+            const auto slash = ref.localPath.find_last_of("/\\");
+            ref.fileName = slash == std::string::npos ? ref.localPath
+                                                      : ref.localPath.substr(slash + 1);
+        }
+        event.attachments.push_back(std::move(ref));
+    }
+}
+
+} // namespace
+
 std::string toolDebugInject(const ChatbotToolDeps& deps, std::string_view argsJson) {
     const auto args = parseArgsOrThrow(argsJson);
     if (deps.engine == nullptr) {
@@ -374,6 +415,10 @@ std::string toolDebugInject(const ChatbotToolDeps& deps, std::string_view argsJs
     event.platformMessageId = stringArg(args, "msgId");
     event.mentionedMe       = boolArg(args, "mentionedMe", false);
     event.timestampMs       = intArg(args, "timestampMs", 0);
+    event.quotedText        = stringArg(args, "quotedText");
+    event.quotedSender      = stringArg(args, "quotedSender");
+    event.replyRef          = stringArg(args, "replyRef");
+    applyDebugAttachments(args, event);
     const std::string typeText = stringArg(args, "type", "group");
     if (!chatTypeFromString(typeText, event.type)) {
         throw std::invalid_argument("type 只能是 group / private");

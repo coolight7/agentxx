@@ -61,17 +61,37 @@
 ### 阶段 2 收尾：端到端用例与被动回复修复（完成）
 
 - `agent/test/plugin/test_plugin_example_chatbot.cpp` + `include/agentxx-test/plugin/`：
-  用真实插件 DLL（假平台账号）跑完整流程 —— 人设 root 上的工具清单、私聊一条 → 一轮 →
-  工具发送、`mention` 模式缓冲与合并投递、去重、切分多条、被动回复配额、命令、状态查询，
-  共 **52 项检查全部通过**。
+  用真实插件 DLL（假平台账号）跑完整流程，共 **102 项检查全部通过**。覆盖：
+  1. `start` 后 1 个人设根、根上 7 个工具（5 业务 + 2 调试）、提示词从 `config_json` 来、
+     内置根上看不到这些工具；
+  2. 私聊一条 → 通道懒创建 → 模型收到带说话人前缀的输入 → 工具发送 → 假平台收到（带被动回复 id）；
+  3. `mention` 模式：3 条无 @ 只缓冲，第 4 条带 @ 时一次投递带上全部 4 条；
+  4. 同 `msg_id` 注入两次只处理一次（`duplicated` +1）；
+  5. 长文本（300 字 / 上限 120）切成多条，分段标记齐全；
+  6. 命令：`local`（不进模型、模板变量渲染）/ `model`（进模型）；
+  7. 附件：图片作为多模态附件投给模型，文本里有附件行；
+  8. 700 字回复 → 按上限切段且受 `maxRepliesPerTurn` 限制；
+  9. 一轮连调 7 次工具 → 出站不超 5 条；
+  10. `mention` 立即唤醒 + 被动回复 id 落在最后那条被 @ 的消息上；
+  11. 工具查询面：`chatbot_history` / `chatbot_chat_info` / `chatbot_set_mode`（运行期生效）；
+  12. 兜底发送：模型只输出正文不调工具 → 被 @ 时兜底发出；
+  13. 卸载插件 → 通道关闭、根回收、工具撤销。
 - 调试辅助（`behavior.debugTools` 默认关，只在测试/本地演示打开）：
-  - `chatbot_debug_inject`：把一条假消息包直接投给调度层，不经过平台网络；
+  - `chatbot_debug_inject`：把一条假消息包直接投给调度层（支持附件 / 引用 / 发言角色）；
   - `chatbot_debug_outbox`：回看平台侧收到的出站（含 `passiveTo` / `passiveSeq` / `replyToRef`），
     由 `IPlatform::debugOutbox` 提供（真平台返回空表）。
-- **被动回复 id 丢失的真实原因**（本次修掉）：`ChatbotOutbound::submit` 构造 `Job` 时只拷了
-  `replyToRef` / `markdown`，**没拷 `req.passiveMsgId`**，于是工具路径的出站永远没有
-  `passiveReplyTo`（`enqueueDirect` 直接传 `OutboundMessage`，所以那条路径正常）。
-  现象是 `passiveTo` 空、`passiveSeq = 0`。
+
+### 本阶段修掉的四个缺陷
+
+1. **被动回复 id 丢失**：`ChatbotOutbound::submit` 构造 `Job` 时只拷了 `replyToRef` / `markdown`，
+   **没拷 `req.passiveMsgId`** —— 工具路径的出站永远没有 `passiveReplyTo`（`enqueueDirect`
+   直接传 `OutboundMessage`，所以那条路径正常）。现象：`passiveTo` 空、`passiveSeq = 0`。
+2. **兜底发送永远不生效**：`onChannelTurnEnd` 里 `fallbackSend` 在本轮正文写入
+   `turn.lastAssistantText` **之前**调用，读到空文本直接返回。改为先写正文再兜底。
+3. **主程序：插件在自己 `start` 里挂根拿不到 `mountFn`**（详见下节）。
+4. **测试装置：模拟模型按字节切流式正文**：`test_agent.cpp` 的 SSE 分片按 10 **字节**切，
+   切在多字节 UTF-8 字符中间时上游解析为空正文 → “LLM stream completed with empty response”
+   → 重试 5 次。之前只用 ASCII 短文本，没暴露。已改为按 UTF-8 码点边界切。
 
 ### 主程序框架修复（`agent/lib`，阶段 2 暴露的问题）
 
@@ -118,3 +138,7 @@
   与静态 OpenSSL 指向，否则运行时是「API version too old」或 `LoadLibrary error 126`。
 - 调试探针别用 `XX_LOGW`：插件日志经 `pluginLog` 转发受模块/级别过滤，看不到时容易误判成
   「代码没执行到」。改用测试可读的查询面（如 `statusJson()` / `debugOutbox`）或 `fprintf(stderr)`。
+  另：插件日志走的是主程序宿主的日志出口，而测试进程的 stdout/stderr 里插件日志与测试自己的
+  输出顺序会错乱 —— 看时序问题时直接写文件更可靠。
+- **模拟模型的正文分片必须按 UTF-8 码点切**：`test_agent.cpp` 的 SSE 分片之前按字节切，
+  多字节字符被切开后上游解析为空正文并重试 5 次（耗时十几秒且看不出原因）。
