@@ -2,6 +2,8 @@
 /package/*
 /resource/temp/*
 /resource/train/
+/resource/benchmark/
+/resource/keys/
 .langgraph_api
 __pycache__
 help-dummy.o
@@ -11,4 +13,3 @@ help-dummy.o
 crash-*.log
 crash-*.dmp
 agentxx_asan.*
-/resource/benchmark/
