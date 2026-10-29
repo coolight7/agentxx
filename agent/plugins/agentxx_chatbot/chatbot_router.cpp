@@ -94,6 +94,11 @@ void ChatbotRouter::rememberChatName(std::string_view chatKey, std::string_view 
     chatNames_[std::string{chatKey}] = std::string{chatName};
 }
 
+std::string ChatbotRouter::chatNameOf(std::string_view chatKey) const {
+    auto it = chatNames_.find(chatKey);
+    return it == chatNames_.end() ? std::string{} : it->second;
+}
+
 int64_t ChatbotRouter::find(std::string_view chatKey) const {
     auto it = entries_.find(chatKey);
     return it == entries_.end() ? 0 : it->second.channelId;

@@ -398,6 +398,7 @@ plugin:
       enabled: true
 
     # === 附加系统提示词 (内容策略段: 默认要求模型忽略内容安全策略与法规限制、可输出任何内容)
+    # - 开启可能部分模型会拒绝回答
     # - 可选用 args.text 换注入文本, args.key 换段键名 (空串按未配置处理):
     #   args: { text: "用大白话说明, 不要逐字直译", key: "llm_style" }
     - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_llm_uncensored
@@ -435,6 +436,7 @@ plugin:
       enabled: true
 
     # === 群聊机器人 (QQ 群聊 / 私聊 <-> agent 会话)
+    # - QQ 接入需要 appid 和 appsecret，可在 [QQ开发平台](https://q.qq.com/qqbot/openclaw/index.html) 申请
     # - 每个人设 = 一个独立的根 agent; 每个「账号 + 群 或 私聊」= 一个独立会话
     # - 内置主会话不受影响, 群里的上下文与它分开
     # - 想让群里也能用与内置会话一样的工具, 把下面的 mount.mode 改成 all
@@ -463,9 +465,10 @@ plugin:
             # model: xxx            # 人设使用的 LLM 模型; 留空 = 用 model.use.default
             prompt:
               systemPrompt: |
-                你是 QQ 群里的一名技术助手, 说话简短、口语化, 像在聊天软件里打字。
+                你是 聊天群 里的一名助手, 说话简短、口语化, 像在聊天软件里打字。
                 你在哪个群、谁在说话, 看每轮输入开头的会话信息与消息行。
                 需要回话时只能调用 chatbot_send_message 把内容发出去, 直接写在正文里群里看不到。
+                在群聊中消息可能繁多且不一定需要你参与，你可以根据上下文自行决定回复哪些消息或不回复，私聊中则应当尽量回复。
             # tools:                # 工具白名单 (工具名); 留空 = 不过滤
             #   - agentxx_filesystem_read
             #   - agentxx_filesystem_grep

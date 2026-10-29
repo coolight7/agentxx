@@ -1065,7 +1065,7 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 插件经内置 `agentxx_jav
 | `agentxx_text_selection_monitor` | 文本选择监听 (仅 Windows UIAutomation) |
 | `agentxx_javascript_engine` | QuickJS 引擎 (能力 `interpreter.js`) |
 | `example_js_execute_command` | JS 代码执行工具 (`example_js_execute_command`, 依赖 `agentxx_javascript_engine`) |
-| `agentxx_chatbot` | 聊天平台桥接 (QQ, 结构化预留其它平台): 每账号 + 每群/私聊一个独立会话, 每个人设一个根 agent; 工具 `chatbot_send_message` / `_history` / `_chat_info` / `_status` / `_set_mode` / `_recall_message` (见 §13.1) |
+| `agentxx_chatbot` | 聊天平台桥接 (QQ, 结构化预留其它平台): 每账号 + 每群/私聊一个独立会话, 每个人设一个根 agent; 工具 `chatbot_send_message` / `_history` / `_chat_info` / `_status` / `_set_mode` / `_recall_message`; client 侧「机器人」侧边栏面板 (会话/排队数/人设, 见 §13.1) |
 
 > **插件自管工具提示词 (含运行环境探测)**：工具定义 (`description` / `parameters`) 在
 > `register_tool` 时固化，因此插件必须在自己注册工具**之前**完成一切探测/决策
@@ -1108,6 +1108,64 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 插件经内置 `agentxx_jav
 
 **线程**：插件自建 io_context 与线程。主程序的通道事件回调（在根所属 io 线程）里只做
 「拷贝 → post 到插件 io 线程」，不在回调里阻塞。
+
+**侧边栏「机器人」栏（client 侧）**：插件同时实现 client 端入口，注册一个名为「机器人」的
+侧边栏 tab（面板 id `agentxx_chatbot.bots`），分三段显示，段标题统一写成 `标题: 数量`
+（`会话: 2` / `人设: 1` / `账号: 1`），段与段之间留一行空白（不画分隔线），列表项统一
+`|- 内容` 的前缀，辅助内容一律用 hint 色（和内容的默认色区分开）：
+
+- **会话列表**：每行 = `|- ` + 状态标记 + 群名/昵称，下面一行小字是 `人设 · 群聊 · always`，
+  行尾右对齐显示还在排队、还没投给模型的消息条数（有积压才用强调色）；正在跑一轮的会话的
+  状态标记是与消息列表同一套 braille 点阵（`⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`，帧号取快照里的
+  `tick % 10`），空闲时用一个 `·` 占位，让各行标题从同一列开始；
+- **人设**：`|- ` + 名字，下面两行小字分别是 `模型 · 会话 2/64 · 绑定 3`（模型空时写
+  `默认模型`，没挂上根时追加 `· 未挂载`）与提示词第一行摘录；
+- **账号**：一个账号一行（`|- qq_main online`，平台给了原因时附在括号里），最后一行小字是
+  全局计数 `收 x · 发 y [· 失败 z]`。
+
+```
+会话: 2
+|- ⠧ 技术群                    3
+     assistant · 群聊 · always
+|- · 张三(私聊)                0
+     assistant · 私聊 · mention
+
+人设: 1
+|- assistant
+   gpt-x · 会话 2/64 · 绑定 3
+   你是 QQ 群里的助手
+
+账号: 1
+|- qq_main online
+
+收 12 · 发 5 · 失败 1
+```
+
+数据只有一条来源：agent 侧把运行态整理成 `PanelSnapshot`（`chatbot_panel.h`，结构版本
+`kPanelSnapshotVersion = 1`），按主题 `agentxx_chatbot.panel` 发布；主程序把它转成
+`WirePluginData{plugin,event,data}` 下发（`data` 是快照 JSON 文本），client 侧在
+`AGENTXX_CLIENT_EVT_PLUGIN_DATA` 里认领 `plugin=agentxx_chatbot` / `event=panel` 的那条。
+解析失败或结构版本更高时只记一条警告（含字节数与前 120 字），面板保留上一次的内容。
+
+- **推送节拍**：agent 侧 `kPanelTickMs = 120` 的定时器。只有存在正在跑一轮的会话时才持续推
+  （加载帧要逐帧走），否则由 `engine.setChangeHook` 的变更钩子（收消息 / 平台状态 / 通道就绪 /
+  轮起止 / 模式切换 / 发消息都会触发）推一份就停；
+- **晚接入兜底**：client 侧在 `EVT_READY` 与 `EVT_CONN_STATE`（`connState == "connected"`）时
+  各发一次 `send_plugin_data("refresh")`。agent 侧订阅的主题要写全
+  `plugin.client.agentxx_chatbot.refresh`（总线会给 `client.*` 补 `plugin.` 前缀，写 `client.xxx`
+  收不到），另订阅 `plugin.agentxx_host.client_attached`，有客户端接上就补一份；
+- **必须在主程序 IO 线程上发布**（实现时踩过的坑）：插件接口表的 `publish` / `subscribe` /
+  `post_to_io` 都是"投到主程序 IO 线程并等它执行完"的同步调用，而工具执行期间主程序 IO 线程
+  正在等插件 io 线程的 `runOnIoBlocking` 结果 —— 在插件 io 线程里直接 `publish` 就会互等
+  （实测双向死锁，随后踩到已释放的栈）。现在插件 io 线程只把快照 JSON 放进 `PanelOutbox`，
+  再调 `coroutineRuntime->request_driver`（任意线程可调、不阻塞），主程序在它自己的 IO 线程上
+  回调 `onPanelDrive()`，那里 `publish` 是就地执行；`stop` 时 `cancel_driver` 取消在途的票；
+- 清单里 client 侧声明的可选能力用真实能力名 `agentxx.client.panel`（不能写接口表名
+  `agentxx.client.events`），否则接口协商会判定缺失。
+
+面板文案与组件是纯逻辑（`chatbot_panel.cpp` 的格式化函数 + `chatbot_panel_ui.cpp` 的
+`panelItemsOf`），不引用主程序头，`chatbot_core` 模块直测；真实插件全流程（面板注册、
+快照渲染、坏载荷不清空、refresh 请求、卸载后面板消失）在 `client_plugins` 模块第 13b 节。
 
 **调试**：`behavior.debugTools`（默认关）打开后注册两个工具 —— `chatbot_debug_inject`
 （直接向调度层投一条假消息，不碰平台网络）与 `chatbot_debug_outbox`（回看假平台收到的出站，

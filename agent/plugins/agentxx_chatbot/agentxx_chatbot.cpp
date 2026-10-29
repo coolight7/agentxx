@@ -1,4 +1,4 @@
-/// agentxx_chatbot —— 把人设接到聊天平台 (先做 QQ)
+/// agentxx_chatbot —— 把人设接到聊天平台
 ///
 /// 整体结构 (设计见 `resource/history/chatbot/plan.md` §4):
 /// - **平台层** (`platform/`): 每个账号一条长连接, 把平台消息归一化成 `InboundEvent`,
@@ -8,7 +8,7 @@
 /// - **主程序交互**: 只经 `agentxx.agent.runtime` 表 (挂根 / 开通道 / 投输入)
 ///   与 `agentxx.agent.tools` 表 (在人设 root 上注册 `chatbot_*` 工具)。
 ///
-/// 线程模型 (§4.2):
+/// 线程模型:
 /// - 平台网络与调度状态在**插件自己的 io 线程**上 (一条 `io_context` + 一个线程);
 /// - 通道事件回调在**主程序 io 线程**上, 只做「拷贝 → post 到插件 io 线程」;
 /// - 工具跑在主程序工作线程池, 工作体同样 post 到插件 io 线程再取结果。
@@ -20,6 +20,7 @@
 #include "chatbot_core.h"
 #include "chatbot_engine.h"
 #include "chatbot_outbound.h"
+#include "chatbot_panel.h"
 #include "chatbot_router.h"
 #include "chatbot_tools.h"
 #include "platform/platform.h"
@@ -29,6 +30,7 @@
 #include "asio/executor_work_guard.hpp"
 #include "asio/io_context.hpp"
 #include "asio/post.hpp"
+#include "asio/steady_timer.hpp"
 #include "fmt/format.h"
 #include "utilxx_base/json.h"
 #include "utilxx_base/log.h"
@@ -55,6 +57,29 @@ namespace {
 
 constexpr const char* kPluginName = "agentxx_chatbot";
 constexpr const char* kLogTag     = "chatbot";
+
+/// 侧边栏面板事件的刷新节拍 (毫秒)
+///
+/// 有会话正在执行时按这个间隔推快照: 客户端每收到一份就取下一帧点阵, 看起来就是
+/// 消息列表里那种"加载中"; 同时排队条数也跟着实时刷新。没有会话在跑时只推一次
+/// (状态变化时) 就停, 不空转。
+constexpr int32_t kPanelTickMs = 120;
+
+/// 面板快照的主题 (主程序给总线主题补 `plugin.` 前缀再转发给客户端,
+/// 客户端拿到的就是 `{plugin: "agentxx_chatbot", event: "panel"}`)
+constexpr const char* kPanelTopic = "agentxx_chatbot.panel";
+
+/// 客户端插件请求重发快照 (client → agent)
+///
+/// 主程序把上行事件发布到 `plugin.client.{插件名}.{事件名}`, 所以**订阅时必须带上
+/// `plugin.client.` 前缀**: 主题补齐只看开头有没有 `plugin.` / `client.`, 写
+/// `client.xxx` 不会被再加前缀, 与总线上实际的 `plugin.client.xxx` 对不上, 收不到事件。
+constexpr const char* kPanelRefreshTopic = "plugin.client.agentxx_chatbot.refresh";
+
+/// 主程序在有客户端接入时发布的事件 (总线主题 `plugin.agentxx_host.client_attached`)
+///
+/// 晚接入/重连的客户端据此拿到一份当前快照, 不用等下一次状态变化。
+constexpr const char* kClientAttachedTopic = "agentxx_host.client_attached";
 
 /* ==================== 插件日志转发 ==================== */
 
@@ -85,19 +110,19 @@ private:
 
 /// 一个账号在运行期的全部对象
 struct AccountRuntime {
-    std::unique_ptr<ac::IPlatform>          platform;
-    std::optional<ac::AccountConfig>        config;
-    ac::PlatformEventSink                   sink;
+    std::unique_ptr<ac::IPlatform>   platform;
+    std::optional<ac::AccountConfig> config;
+    ac::PlatformEventSink            sink;
 };
 
 /// 插件实例上下文
 struct ChatbotCtx : public PluginBase {
     /// 插件自己的 io 线程 (平台网络 + 调度状态都在这条线程上)
-    std::shared_ptr<asio::io_context> io;
+    std::shared_ptr<asio::io_context>                                           io;
     std::shared_ptr<asio::executor_work_guard<asio::io_context::executor_type>> work;
-    std::thread                       ioThread;
+    std::thread                                                                 ioThread;
     /// 插件 io 线程 id (判断"是否已在正确线程")
-    std::atomic<std::thread::id>      ioThreadId{std::thread::id{}};
+    std::atomic<std::thread::id> ioThreadId{std::thread::id{}};
 
     /// 解析并校验后的配置
     ac::ChatbotConfig config;
@@ -109,7 +134,7 @@ struct ChatbotCtx : public PluginBase {
     /// 账号 → 平台对象 (只在插件 io 线程访问; 工具线程通过 `platformOf` 读取时
     /// 用一把锁护住 map 结构本身)
     std::map<std::string, std::unique_ptr<AccountRuntime>, std::less<>> accounts;
-    mutable std::mutex                                                 accountsMutex;
+    mutable std::mutex                                                  accountsMutex;
 
     /// 人设名 → root id (start 时写入, 之后只读)
     std::map<std::string, std::string, std::less<>> personaRoots;
@@ -125,6 +150,46 @@ struct ChatbotCtx : public PluginBase {
 
     /// 本实例的日志转发 sink (把插件内 `XX_LOG*` 转给主程序日志; 见 [HostLogSink])
     std::shared_ptr<HostLogSink> hostLogSink;
+
+    /* ---------- 侧边栏「机器人」栏的快照发布 ---------- */
+
+    /// 刷新节拍定时器 (只在插件 io 线程访问)
+    std::shared_ptr<asio::steady_timer> panelTimer;
+    /// 节拍循环是否在跑 (只在插件 io 线程访问)
+    bool panelLoopActive = false;
+    /// 快照刷新计数 (客户端用它取加载动画的当前帧)
+    uint32_t panelTick = 0;
+
+    /// 待发布的快照
+    ///
+    /// 为什么要绕一道: 插件接口表的 `publish` 是"投到主程序 IO 线程并等它执行"的同步
+    /// 调用。工具工作体期间主程序 IO 线程正等着插件 io 线程交结果 —— 直接在那条线程上
+    /// 发布就是两边互等 (实测死锁 25 秒后工具超时, 随后用已释放的栈崩溃)。
+    /// 因此: 快照 JSON 由插件 io 线程生成放这里, 再向主程序要一张驱动票
+    /// (`request_driver`, 任意线程可调且**不阻塞**), 由主程序在它自己的 IO 线程上回调
+    /// 时直接发布 (IO 线程上 publish 是就地执行, 不等任何线程)。
+    struct PanelOutbox {
+        std::mutex  mutex;
+        std::string json;
+        bool        hasData = false;
+        /// 已有一张驱动票在路上 (不重复要票)
+        std::atomic<bool> driverPending{false};
+        /// 在途的票 (stop 时取消, 保证回调不会再落到已销毁的实例上)
+        std::atomic<PluginxxDriver*> driver{nullptr};
+    };
+
+    PanelOutbox panelOutbox;
+
+    /// 发布一份当前状态的快照 (插件 io 线程生成 + 要票)
+    void publishPanel();
+    /// 向主程序要一张驱动票 (非阻塞; 已有票时不重复要)
+    void requestPanelDrive();
+    /// 驱动票回调 (主程序 IO 线程): 发布待发快照
+    void onPanelDrive();
+    /// 安排下一拍
+    void schedulePanelTick();
+    /// 状态变了: 需要推一份快照 (短时间内的多次变化合并成一次)
+    void panelChanged();
 
     /* ---------- 跨线程执行 ---------- */
 
@@ -208,12 +273,14 @@ struct ChatbotCtx : public PluginBase {
             fn();
             return true;
         }
+
         struct State {
             std::mutex              mutex;
             std::condition_variable cv;
             bool                    done = false;
             bool                    ran  = false;
         };
+
         auto state = std::make_shared<State>();
         asio::post(*io, [state, fn = std::forward<Fn>(fn)]() mutable {
             {
@@ -232,7 +299,9 @@ struct ChatbotCtx : public PluginBase {
             state->cv.notify_all();
         });
         std::unique_lock lock(state->mutex);
-        if (!state->cv.wait_for(lock, timeout, [&state]() { return state->done; })) {
+        if (!state->cv.wait_for(lock, timeout, [&state]() {
+                return state->done;
+            })) {
             return false;
         }
         return state->ran;
@@ -244,14 +313,137 @@ struct ChatbotCtx : public PluginBase {
         if (onIo) {
             auto it = accounts.find(accountId);
             return it == accounts.end() || !it->second->platform ? nullptr
-                                                                : it->second->platform.get();
+                                                                 : it->second->platform.get();
         }
         std::lock_guard lock(accountsMutex);
         auto            it = accounts.find(accountId);
-        return it == accounts.end() || !it->second->platform ? nullptr
-                                                            : it->second->platform.get();
+        return it == accounts.end() || !it->second->platform ? nullptr : it->second->platform.get();
     }
 };
+
+/* ==================== 侧边栏「机器人」栏的快照发布 ==================== */
+
+/// 驱动票回调 (主程序 IO 线程; 不抛异常出边界)
+void PLUGINXX_CALL onPanelDriveTicket(void* ud) {
+    auto* ctx = static_cast<ChatbotCtx*>(ud);
+    if (ctx == nullptr) {
+        return;
+    }
+    try {
+        ctx->onPanelDrive();
+    } catch (...) {
+        // 面板刷新失败不影响会话收发
+    }
+}
+
+void ChatbotCtx::requestPanelDrive() {
+    if (!host || !iface.coroutineRuntime || !iface.coroutineRuntime->request_driver) {
+        return;
+    }
+    if (panelOutbox.driverPending.exchange(true, std::memory_order_acq_rel)) {
+        return; // 已经有一张票: 它跑到时会取走最新一份
+    }
+    PluginxxString err{nullptr, 0};
+    auto* driver = iface.coroutineRuntime->request_driver(host, &onPanelDriveTicket, this, &err);
+    if (err.data != nullptr) {
+        // 主程序给了失败原因: 记一次就够 (面板会停在上一份快照上)
+        log.warn(
+            std::string{"panel publish ticket rejected: "}
+            + std::string{err.data, static_cast<size_t>(err.size)}
+        );
+        PluginString::free(host, &err);
+    }
+    if (driver == nullptr) {
+        panelOutbox.driverPending.store(false, std::memory_order_release);
+        return;
+    }
+    panelOutbox.driver.store(driver, std::memory_order_release);
+}
+
+void ChatbotCtx::onPanelDrive() {
+    // 主程序 IO 线程: 取走一份待发快照
+    std::string json;
+    {
+        std::lock_guard lock(panelOutbox.mutex);
+        json.swap(panelOutbox.json);
+        panelOutbox.hasData = false;
+    }
+    panelOutbox.driver.store(nullptr, std::memory_order_release);
+    panelOutbox.driverPending.store(false, std::memory_order_release);
+
+    // 在 IO 线程上 publish 是就地执行 (不再等线程), 不会与工具互等
+    if (!json.empty() && iface.events && iface.events->publish && host) {
+        auto topicSv = PluginStringView::fromCstr(kPanelTopic);
+        auto jsonSv  = PluginStringView::from(json.data(), json.size());
+        iface.events->publish(host, &topicSv, &jsonSv);
+    }
+
+    // 发布期间插件 io 线程可能又攒了一份: 再要一张票
+    bool again = false;
+    {
+        std::lock_guard lock(panelOutbox.mutex);
+        again = panelOutbox.hasData;
+    }
+    if (again && started.load(std::memory_order_acquire)) {
+        requestPanelDrive();
+    }
+}
+
+void ChatbotCtx::publishPanel() {
+    if (!started.load(std::memory_order_acquire)) {
+        return;
+    }
+    ac::PanelSnapshot snapshot = engine.panelSnapshot();
+    snapshot.tick              = ++panelTick;
+    {
+        std::lock_guard lock(panelOutbox.mutex);
+        panelOutbox.json    = ac::panelSnapshotJson(snapshot);
+        panelOutbox.hasData = true;
+    }
+    requestPanelDrive();
+}
+
+void ChatbotCtx::schedulePanelTick() {
+    if (!io) {
+        panelLoopActive = false;
+        return;
+    }
+    if (!panelTimer) {
+        panelTimer = std::make_shared<asio::steady_timer>(*io);
+    }
+    panelTimer->expires_after(std::chrono::milliseconds(kPanelTickMs));
+    panelTimer->async_wait([this](const auto& ec) {
+        if (ec) {
+            // 定时器被取消 (stop/卸载): 不要继续排下一拍
+            panelLoopActive = false;
+            return;
+        }
+        publishPanel();
+        if (started.load(std::memory_order_acquire) && engine.hasRunningSession()) {
+            schedulePanelTick();
+            return;
+        }
+        panelLoopActive = false;
+    });
+}
+
+void ChatbotCtx::panelChanged() {
+    if (!started.load(std::memory_order_acquire) || !io) {
+        return;
+    }
+    if (!onIoThread()) {
+        // 调度层的状态只在本线程变; 这里只是兜底 (不持有 this 以外的东西)
+        runOnIo([this]() {
+            panelChanged();
+        });
+        return;
+    }
+    if (panelLoopActive) {
+        return; // 节拍在跑: 下一拍就带上这次变化, 不必立刻再推一份
+    }
+    panelLoopActive = true;
+    schedulePanelTick();
+}
 
 auto guardLogger(ChatbotCtx* ctx) noexcept {
     return [ctx](const char* msg) noexcept {
@@ -277,43 +469,41 @@ void updateAccountStatusJson(ChatbotCtx& ctx) {
 
 void onChannelEventImpl(ChatbotCtx& ctx, const ChannelEvent& ev) {
     // 回调必须快速返回: 只拷需要的数据, 再 post 到插件 io 线程
-    const int32_t     kind        = ev.kind;
-    const int64_t     channelId   = ev.channelId;
-    const int64_t     interruptId = ev.interruptId;
-    std::string       text{ev.text};
-    std::string       payload{ev.payloadJson};
-    ctx.runOnIo([&ctx, kind, channelId, interruptId, text = std::move(text),
-                 payload = std::move(payload)]() {
-        switch (kind) {
-            case AGENTXX_PLUGIN_CHANNEL_EVT_READY:
-                ctx.engine.onChannelReady(channelId);
-                break;
-            case AGENTXX_PLUGIN_CHANNEL_EVT_TURN_START:
-                ctx.engine.onChannelTurnStart(channelId);
-                break;
-            case AGENTXX_PLUGIN_CHANNEL_EVT_TURN_END:
-                ctx.engine.onChannelTurnEnd(channelId, text, payload);
-                break;
-            case AGENTXX_PLUGIN_CHANNEL_EVT_CLOSED:
-                ctx.engine.onChannelClosed(channelId, payload);
-                break;
-            case AGENTXX_PLUGIN_CHANNEL_EVT_INTERRUPT:
-                ctx.engine.onChannelInterrupt(channelId, interruptId, payload);
-                break;
-            case AGENTXX_PLUGIN_CHANNEL_EVT_DELTA_TEXT:
-                ctx.engine.onChannelDeltaText(channelId, text);
-                break;
-            case AGENTXX_PLUGIN_CHANNEL_EVT_ERROR:
-                ctx.log.warn(fmt::format(
-                    "channel {} error: {}",
-                    channelId,
-                    text
-                ));
-                break;
-            default:
-                break;
+    const int32_t kind        = ev.kind;
+    const int64_t channelId   = ev.channelId;
+    const int64_t interruptId = ev.interruptId;
+    std::string   text{ev.text};
+    std::string   payload{ev.payloadJson};
+    ctx.runOnIo(
+        [&ctx, kind, channelId, interruptId, text = std::move(text), payload = std::move(payload)](
+        ) {
+            switch (kind) {
+                case AGENTXX_PLUGIN_CHANNEL_EVT_READY:
+                    ctx.engine.onChannelReady(channelId);
+                    break;
+                case AGENTXX_PLUGIN_CHANNEL_EVT_TURN_START:
+                    ctx.engine.onChannelTurnStart(channelId);
+                    break;
+                case AGENTXX_PLUGIN_CHANNEL_EVT_TURN_END:
+                    ctx.engine.onChannelTurnEnd(channelId, text, payload);
+                    break;
+                case AGENTXX_PLUGIN_CHANNEL_EVT_CLOSED:
+                    ctx.engine.onChannelClosed(channelId, payload);
+                    break;
+                case AGENTXX_PLUGIN_CHANNEL_EVT_INTERRUPT:
+                    ctx.engine.onChannelInterrupt(channelId, interruptId, payload);
+                    break;
+                case AGENTXX_PLUGIN_CHANNEL_EVT_DELTA_TEXT:
+                    ctx.engine.onChannelDeltaText(channelId, text);
+                    break;
+                case AGENTXX_PLUGIN_CHANNEL_EVT_ERROR:
+                    ctx.log.warn(fmt::format("channel {} error: {}", channelId, text));
+                    break;
+                default:
+                    break;
+            }
         }
-    });
+    );
 }
 
 /* ==================== 工具注册 ==================== */
@@ -682,7 +872,8 @@ Json personaRootConfig(const ac::PersonaConfig& persona) {
     if (!persona.prompt.systemPrompt.empty()) {
         prompt["systemPrompt"] = persona.prompt.systemPrompt;
     } else {
-        prompt["systemPrompt"] = defaultPersonaPrompt(persona.name, "群聊/私聊", "见每轮输入的标题");
+        prompt["systemPrompt"]
+            = defaultPersonaPrompt(persona.name, "群聊/私聊", "见每轮输入的标题");
     }
     if (!persona.prompt.append.empty()) {
         Json append = Json::object();
@@ -692,7 +883,7 @@ Json personaRootConfig(const ac::PersonaConfig& persona) {
         prompt["append"] = std::move(append);
     }
 
-    Json cfg = Json::object();
+    Json cfg         = Json::object();
     cfg["agentName"] = "chatbot-" + persona.name;
     cfg["prompt"]    = std::move(prompt);
     // 对外应答的根不需要子代理
@@ -717,9 +908,9 @@ Json personaRootConfig(const ac::PersonaConfig& persona) {
 /// 工具是在 `mount` 回调里注册到「被挂载的 agent」上的; 不把自己挂到人设 root 上,
 /// 那个 root 就**没有** `chatbot_*` 工具 (设计文档 §8.5)。
 Json personaMountPlugins(const ac::PersonaConfig& persona) {
-    Json mount = Json::object();
-    const std::string mode = persona.mount.mode;
-    std::vector<std::string> list = persona.mount.list;
+    Json                     mount = Json::object();
+    const std::string        mode  = persona.mount.mode;
+    std::vector<std::string> list  = persona.mount.list;
     if (mode == "listed") {
         if (std::find(list.begin(), list.end(), std::string{kPluginName}) == list.end()) {
             list.insert(list.begin(), std::string{kPluginName});
@@ -744,6 +935,32 @@ Json personaMountPlugins(const ac::PersonaConfig& persona) {
 }
 
 /* ==================== 生命周期 ==================== */
+
+/// 订阅两件与侧边栏面板有关的事件 (调用时已在主程序 io 线程)
+///
+/// - 客户端插件请求重发快照 (client → agent, 见 [kPanelRefreshTopic]);
+/// - 主程序有客户端接入/重连: 新来的客户端立刻拿到一份当前状态。
+void subscribePanelEvents(ChatbotCtx& ctx) {
+    if (!ctx.iface.events || !ctx.iface.events->subscribe || !ctx.host) {
+        return;
+    }
+    auto handler = [](const PluginxxStringView*, void* ud) {
+        auto* c = static_cast<ChatbotCtx*>(ud);
+        if (c == nullptr) {
+            return;
+        }
+        // 回调在主程序 io 线程: 调度状态只能在本插件 io 线程读
+        c->runOnIo([c]() {
+            c->publishPanel();
+        });
+    };
+    for (const char* topic : {kPanelRefreshTopic, kClientAttachedTopic}) {
+        auto topicSv = PluginStringView::fromCstr(topic);
+        if (ctx.iface.events->subscribe(ctx.host, nullptr, &topicSv, handler, &ctx) == nullptr) {
+            ctx.log.warn(fmt::format("订阅面板事件 '{}' 失败 (侧边栏面板可能不会自动刷新)", topic));
+        }
+    }
+}
 
 /// 进程级启动: 校验配置 → 挂人设根 → 起平台连接
 void* chatbotStart(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString* error) {
@@ -774,7 +991,8 @@ void* chatbotStart(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, Plugin
     ac::ChatbotConfig config;
     ac::ConfigError   configErr;
     if (!ac::parseConfig(argsJson, config, configErr)) {
-        const auto message = fmt::format("start: 配置错误 {}: {}", configErr.where, configErr.message);
+        const auto message
+            = fmt::format("start: 配置错误 {}: {}", configErr.where, configErr.message);
         ctx.log.error(message);
         PluginString::set(ctx.host, error, message);
         return nullptr;
@@ -782,7 +1000,8 @@ void* chatbotStart(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, Plugin
     // 根预算: 主程序侧上限由运行时表把关 (超出时 mountRoot 会返回失败), 这里用 8 作为
     // 缺省的保守值参与校验 (AgentHost::Config::maxRoots 的默认值)
     if (!ac::validateConfig(config, 8, configErr)) {
-        const auto message = fmt::format("start: 配置错误 {}: {}", configErr.where, configErr.message);
+        const auto message
+            = fmt::format("start: 配置错误 {}: {}", configErr.where, configErr.message);
         ctx.log.error(message);
         PluginString::set(ctx.host, error, message);
         return nullptr;
@@ -815,8 +1034,8 @@ void* chatbotStart(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, Plugin
                 ex,
                 &ctx.config.behavior,
                 [&ctx](ac::OutboundMessage msg, ac::SendResultFn done) {
-                    auto accountId = msg.accountId;
-                    ac::IPlatform* platform = ctx.platformOf(accountId);
+                    auto           accountId = msg.accountId;
+                    ac::IPlatform* platform  = ctx.platformOf(accountId);
                     if (platform == nullptr) {
                         ac::SendResult failed;
                         failed.ok     = false;
@@ -844,8 +1063,8 @@ void* chatbotStart(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, Plugin
 
     // ---- 4. 给每个账号起平台连接 ----
     for (const auto& account : ctx.config.accounts) {
-        auto runtime  = std::make_unique<AccountRuntime>();
-        runtime->config = account;
+        auto runtime      = std::make_unique<AccountRuntime>();
+        runtime->config   = account;
         runtime->platform = ac::createPlatform(account.type, ex, dataDir);
         if (!runtime->platform) {
             const auto message = fmt::format(
@@ -862,15 +1081,13 @@ void* chatbotStart(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, Plugin
             // 平台回调已经在插件 io 线程上 (平台对象由本线程驱动)
             ctx.engine.onInbound(event);
         };
-        runtime->sink.onStateChanged = [&ctx, accountId = account.id](
-                                           ac::PlatformState state,
-                                           std::string       reason
-                                       ) {
-            ctx.engine.onPlatformState(accountId, state, reason);
-        };
+        runtime->sink.onStateChanged
+            = [&ctx, accountId = account.id](ac::PlatformState state, std::string reason) {
+                  ctx.engine.onPlatformState(accountId, state, reason);
+              };
         std::string accountId = account.id;
         ctx.runOnIoBlocking([&]() {
-            auto* raw = runtime.get();
+            auto* raw               = runtime.get();
             ctx.accounts[accountId] = std::move(runtime);
             if (!raw->platform->start(account, raw->sink)) {
                 ctx.log.warn(
@@ -881,16 +1098,16 @@ void* chatbotStart(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, Plugin
     }
 
     // ---- 5. 挂人设根 (必须在主程序 io 线程上; 本函数就在那里) ----
-    ctx.toolDeps.engine   = &ctx.engine;
-    ctx.toolDeps.outbound = &ctx.outbound;
-    ctx.toolDeps.router   = &ctx.router;
+    ctx.toolDeps.engine     = &ctx.engine;
+    ctx.toolDeps.outbound   = &ctx.outbound;
+    ctx.toolDeps.router     = &ctx.router;
     ctx.toolDeps.platformOf = [&ctx](const std::string& accountId) -> ac::IPlatform* {
         return ctx.platformOf(accountId);
     };
 
     for (const auto& persona : ctx.config.personas) {
         agentxx::plugin::MountRootOptions rootOpt;
-        rootOpt.name  = "chatbot:" + persona.name;
+        rootOpt.name   = "chatbot:" + persona.name;
         rootOpt.config = personaRootConfig(persona);
         // 挂载名单必须含本插件: 否则人设 root 上没有 chatbot_* 工具
         Json mount = personaMountPlugins(persona);
@@ -900,11 +1117,11 @@ void* chatbotStart(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, Plugin
             rootOpt.mountPlugins = mount.dump();
         } else {
             // mode=none: 仍然要挂本插件 (只有它有 send_message 工具)
-            Json selfMount = Json::object();
+            Json selfMount    = Json::object();
             selfMount["mode"] = "listed";
             Json list         = Json::array();
             list.push_back(kPluginName);
-            selfMount["list"] = std::move(list);
+            selfMount["list"]    = std::move(list);
             rootOpt.mountPlugins = selfMount.dump();
         }
         rootOpt.includeCreator = true;
@@ -982,11 +1199,9 @@ void* chatbotStart(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, Plugin
             channelOpt.rootId    = rootId;
             channelOpt.sessionId = std::string{sessionId};
             channelOpt.title     = std::string{title};
-            return agentxx::plugin::openChannel(
-                ctx,
-                channelOpt,
-                [&ctx](const ChannelEvent& ev) { onChannelEventImpl(ctx, ev); }
-            );
+            return agentxx::plugin::openChannel(ctx, channelOpt, [&ctx](const ChannelEvent& ev) {
+                onChannelEventImpl(ctx, ev);
+            });
         };
         runtime.closeChannel = [&ctx](int64_t channelId) {
             agentxx::plugin::closeChannel(ctx, channelId);
@@ -996,11 +1211,27 @@ void* chatbotStart(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, Plugin
                 platform->downloadAttachment(accountId, ref);
             }
         };
-        ctx.engine.init(ctx.io->get_executor(), ctx.config, &ctx.router, &ctx.outbound, std::move(runtime));
+        ctx.engine.init(
+            ctx.io->get_executor(),
+            ctx.config,
+            &ctx.router,
+            &ctx.outbound,
+            std::move(runtime)
+        );
         ctx.engine.buildRoutes();
+        // 调度状态一变就要重画侧边栏面板 (通知在插件 io 线程发出)
+        ctx.engine.setChangeHook([&ctx]() {
+            ctx.panelChanged();
+        });
     });
 
     ctx.started.store(true, std::memory_order_release);
+
+    // ---- 7. 侧边栏「机器人」栏: 订阅刷新请求 + 推一份当前快照 ----
+    subscribePanelEvents(ctx);
+    ctx.runOnIoBlocking([&]() {
+        ctx.publishPanel();
+    });
     ctx.log.info(fmt::format(
         "已启动: {} 个账号, {} 个人设, {} 条命令",
         ctx.config.accounts.size(),
@@ -1016,6 +1247,11 @@ void* chatbotStop(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, Pluginx
     if (ctx.started.exchange(false, std::memory_order_acq_rel)) {
         // 1. 停平台连接 (不再收新消息)
         ctx.runOnIoBlocking([&]() {
+            // 面板刷新节拍先停: 停止后不再推快照
+            if (ctx.panelTimer) {
+                ctx.panelTimer->cancel();
+            }
+            ctx.panelLoopActive = false;
             for (auto& [id, runtime] : ctx.accounts) {
                 if (runtime && runtime->platform) {
                     runtime->platform->stop();
@@ -1026,7 +1262,9 @@ void* chatbotStop(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, Pluginx
         });
         // 2. 关全部通道
         size_t closed = 0;
-        ctx.runOnIoBlocking([&]() { closed = ctx.router.releaseAll("plugin_stopped"); });
+        ctx.runOnIoBlocking([&]() {
+            closed = ctx.router.releaseAll("plugin_stopped");
+        });
         // 3. 卸根 (逆序)
         std::map<std::string, std::string, std::less<>> roots;
         {
@@ -1038,14 +1276,20 @@ void* chatbotStop(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, Pluginx
             agentxx::plugin::unmountRoot(ctx, it->second);
         }
         // 4. 清账号对象 (平台析构会 abort 挂起的收包)
-        ctx.runOnIoBlocking([&]() { ctx.accounts.clear(); });
-        ctx.log.info(fmt::format(
-            "已停止 (关闭 {} 个通道, 卸载 {} 个人设根)",
-            closed,
-            roots.size()
-        ));
+        ctx.runOnIoBlocking([&]() {
+            ctx.accounts.clear();
+        });
+        ctx.log.info(fmt::format("已停止 (关闭 {} 个通道, 卸载 {} 个人设根)", closed, roots.size())
+        );
     }
     ctx.stopIo();
+    // 面板驱动票收尾: 取消还没跑的票 (之后回调不会再落到本实例上)
+    if (auto* driver = ctx.panelOutbox.driver.exchange(nullptr); driver != nullptr) {
+        if (ctx.iface.coroutineRuntime && ctx.iface.coroutineRuntime->cancel_driver) {
+            ctx.iface.coroutineRuntime->cancel_driver(driver);
+        }
+    }
+    ctx.panelOutbox.driverPending.store(false, std::memory_order_release);
     if (notify && notify->done) {
         notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     }
@@ -1067,18 +1311,14 @@ void* chatbotForAgent(
         PluginString::set(ctx.host, error, "mount: spec is null");
         return nullptr;
     }
-    const std::string agentId = spec->agent_id.data
-                                    ? std::string{
-                                          spec->agent_id.data,
-                                          static_cast<size_t>(spec->agent_id.size)
-                                      }
-                                    : std::string{};
-    const std::string agentName = spec->agent_name.data
-                                      ? std::string{
-                                            spec->agent_name.data,
-                                            static_cast<size_t>(spec->agent_name.size)
-                                        }
-                                      : std::string{};
+    const std::string agentId
+        = spec->agent_id.data
+              ? std::string{spec->agent_id.data, static_cast<size_t>(spec->agent_id.size)}
+              : std::string{};
+    const std::string agentName
+        = spec->agent_name.data
+              ? std::string{spec->agent_name.data, static_cast<size_t>(spec->agent_name.size)}
+              : std::string{};
     // 识别人设根靠**展示名** (自己在 `config_json` 里设的 "chatbot:<人设名>"),
     // 不靠 agent_id: 同一个插件会被多个 agent 挂载, 主程序侧的挂载表在根 init
     // 期间可能还没按最终 id 建好 (回调里拿到的 id 不一定等于 mountRoot 返回值),
@@ -1087,8 +1327,8 @@ void* chatbotForAgent(
     // `personaRootConfig` 里把它设成了 "chatbot-<人设名>"。不用 `config_json`
     // (那里是插件自己的 args) 也不用 `agent_id` (根 init 期间可能还没最终化)。
     constexpr std::string_view kPersonaNamePrefix = "chatbot-";
-    const bool isPersonaRoot
-        = agentName.rfind(kPersonaNamePrefix, 0) == 0 && agentName.size() > kPersonaNamePrefix.size();
+    const bool                 isPersonaRoot      = agentName.rfind(kPersonaNamePrefix, 0) == 0
+                               && agentName.size() > kPersonaNamePrefix.size();
     // 内置 root 默认不注册: 那边的 thread_id 不是会话键, 工具只会回
     // "这不是 chatbot 会话"; `exposeToolsOnHost` 打开时才注册 (调试)
     const bool isHostRoot = !isPersonaRoot && (agentId == "root" || agentId.empty());
@@ -1160,16 +1400,12 @@ extern "C" PLUGINXX_EXPORT int
             ctx->hostLogSink = std::make_shared<HostLogSink>(ctx->log);
             utilxx_base::LogDispatcher::instance().addSink(ctx->hostLogSink);
             if (!agentxx::plugin::hasRuntime(*ctx)) {
-                ctx->log.error(
-                    "agentxx_chatbot requires the agentxx.agent.runtime interface "
-                    "(main program does not provide it)"
-                );
+                ctx->log.error("agentxx_chatbot requires the agentxx.agent.runtime interface "
+                               "(main program does not provide it)");
                 return -1;
             }
             if (!ctx->iface.tools || !ctx->iface.tools->register_tool) {
-                ctx->log.error(
-                    "agentxx_chatbot requires the agentxx.agent.tools interface"
-                );
+                ctx->log.error("agentxx_chatbot requires the agentxx.agent.tools interface");
                 return -1;
             }
             *plugin_ctx = ctx.release();

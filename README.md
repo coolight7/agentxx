@@ -274,6 +274,10 @@
     - 仿照`agentxx_javascript_engine`实现编程语言的执行引擎, 然后新建插件项目, 指定依赖它, 运行时把代码片段发给执行引擎执行即可; 实际上不一定需要由 执行引擎插件 本身来执行代码, 也可以接收代码片段后调用系统安装的 `nodejs、python3` 等直接执行也是可以的
     - ✅`agentxx_javascript_engine`由 c++插件实现 js 扩展插件开发支持; [JS插件示例](/agent/plugins/example_js/)
     - ⬜`agentxx_python_engine`
+- ✅`agentxx_chatbot`
+    - 聊天机器人
+    - ✅接入QQ，可在私聊、群聊中通过@、自动回复等触发模型回复，已实现引用消息、图片输入输出、文件接收、引用消息、撤回消息等
+    - ⬜接入微信
 - ✅`agentxx_codegraph`
     - 分析代码符号、查找定位
     - 保存分析结果到 sqlite

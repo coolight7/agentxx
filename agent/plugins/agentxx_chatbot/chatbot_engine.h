@@ -16,6 +16,7 @@
 #include "chatbot_config.h"
 #include "chatbot_core.h"
 #include "chatbot_outbound.h"
+#include "chatbot_panel.h"
 #include "chatbot_router.h"
 #include "chatbot_types.h"
 #include "platform/platform.h"
@@ -175,6 +176,22 @@ public:
     /// 停止: 清空缓冲与定时器
     void shutdown();
 
+    /// 侧边栏「机器人」栏用的快照 (只在插件 io 线程调用)
+    ///
+    /// - 会话按「正在执行 → 最近有活动」排序;
+    /// - 只列真的在用的会话 (有通道, 或收到过消息但通道还没建起来);
+    /// - 人设/账号取自配置与当前状态, 与 `chatbot_status` 同源。
+    PanelSnapshot panelSnapshot() const;
+
+    /// 是否有会话正在执行一轮 (面板刷新节拍据此决定要不要继续转动加载动画)
+    bool hasRunningSession() const;
+
+    /// 状态变化回调 (入口文件据此安排一次面板快照发布)
+    ///
+    /// 只在可见状态真的会变的地方调 ([notifyChanged]), 进度类高频入口
+    /// (`onChannelDeltaText`) 不调; 入口文件自己负责合并短时间内的多次通知。
+    void setChangeHook(std::function<void()> hook);
+
     /// 全局计数与状态 (JSON)
     std::string statusJson() const;
 
@@ -207,7 +224,12 @@ private:
         TurnContext        turn;
         /// 上一条投递失败的原因 (写进下一轮元信息)
         std::string        pendingNotice;
+        /// 最近一次活动时间 (本机时钟毫秒; 面板排序用)
+        int64_t            lastActiveMs = 0;
     };
+
+    /// 通知状态变化 (面板快照发布)
+    void notifyChanged();
 
     SessionState& stateOf(const std::string& chatKey);
 
@@ -251,6 +273,7 @@ private:
     std::map<std::string, DedupeRing, std::less<>> dedupe_;
     uint64_t                   activitySeq_ = 0;
     bool                       stopped_     = false;
+    std::function<void()>      changeHook_;
     ChatCounters               globalCounters_;
     std::string                startupTimeText_;
 };

@@ -26,6 +26,10 @@ set(_CHATBOT_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/chatbot_engine.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/chatbot_outbound.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/chatbot_tools.cpp
+  # 侧边栏「机器人」栏: 快照数据 (agent 侧发布) + 组件渲染 + client 侧入口
+  ${CMAKE_CURRENT_SOURCE_DIR}/chatbot_panel.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/chatbot_panel_ui.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/chatbot_client.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/platform/platform.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/platform/fake/fake_platform.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/platform/qq/qq_api.cpp
@@ -48,6 +52,12 @@ if (_AGENTXX_ADD_AS_BUILTIN)
     "agentxx_plugin_agent_stop=agentxx_plugin_agent_builtin_stop_${PLUGIN_NAME}"
     "agentxx_plugin_agent_mount=agentxx_plugin_agent_builtin_mount_${PLUGIN_NAME}"
     "agentxx_plugin_agent_unmount=agentxx_plugin_agent_builtin_unmount_${PLUGIN_NAME}"
+    # client 侧入口 (侧边栏「机器人」栏) 同样改名, 避免多插件合并编译时符号冲突
+    "agentxx_plugin_client_create=agentxx_plugin_client_builtin_create_${PLUGIN_NAME}"
+    "agentxx_plugin_client_get_info=agentxx_plugin_client_builtin_get_info_${PLUGIN_NAME}"
+    "agentxx_plugin_client_destroy=agentxx_plugin_client_builtin_destroy_${PLUGIN_NAME}"
+    "agentxx_plugin_client_start=agentxx_plugin_client_builtin_start_${PLUGIN_NAME}"
+    "agentxx_plugin_client_stop=agentxx_plugin_client_builtin_stop_${PLUGIN_NAME}"
   )
   target_include_directories(${_target} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"          # chatbot_*.h / platform/*.h

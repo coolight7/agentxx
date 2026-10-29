@@ -138,6 +138,9 @@ target_sources(agentxx_test PRIVATE
   "${AGENTXX_CHATBOT_SOURCE_DIR}/chatbot_types.cpp"
   "${AGENTXX_CHATBOT_SOURCE_DIR}/chatbot_config.cpp"
   "${AGENTXX_CHATBOT_SOURCE_DIR}/chatbot_router.cpp"
+  # 侧边栏「机器人」栏: 快照 JSON (panel) 与组件树 (panel_ui) 也是纯逻辑
+  "${AGENTXX_CHATBOT_SOURCE_DIR}/chatbot_panel.cpp"
+  "${AGENTXX_CHATBOT_SOURCE_DIR}/chatbot_panel_ui.cpp"
   "${AGENTXX_CHATBOT_SOURCE_DIR}/platform/qq/qq_normalize.cpp"
 )
 

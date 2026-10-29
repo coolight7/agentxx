@@ -98,6 +98,34 @@ bool shouldInlineTextFile(const MediaRef& attachment, int32_t limitBytes) {
     return true;
 }
 
+/// 取提示词的第一段非空行 (侧边栏面板只显示一行摘录)
+std::string firstLineOf(std::string_view text, size_t maxCodePoints = 60) {
+    std::string line;
+    size_t      begin = 0;
+    while (begin <= text.size()) {
+        const size_t end  = text.find('\n', begin);
+        std::string  part = trimCopy(text.substr(
+            begin,
+            end == std::string_view::npos ? std::string_view::npos : end - begin
+        ));
+        if (!part.empty()) {
+            line = std::move(part);
+            break;
+        }
+        if (end == std::string_view::npos) {
+            break;
+        }
+        begin = end + 1;
+    }
+    if (line.empty()) {
+        return {};
+    }
+    if (utf8CodePointCount(line) > maxCodePoints) {
+        return std::string{utf8Truncate(line, maxCodePoints)} + "…";
+    }
+    return line;
+}
+
 } // namespace
 
 int64_t ChatbotEngine::nowMs() {
@@ -174,6 +202,18 @@ void ChatbotEngine::shutdown() {
     }
 }
 
+/* ==================== 状态变化通知 ==================== */
+
+void ChatbotEngine::setChangeHook(std::function<void()> hook) {
+    changeHook_ = std::move(hook);
+}
+
+void ChatbotEngine::notifyChanged() {
+    if (changeHook_) {
+        changeHook_();
+    }
+}
+
 /* ==================== 平台事件 ==================== */
 
 void ChatbotEngine::onPlatformState(
@@ -185,6 +225,8 @@ void ChatbotEngine::onPlatformState(
     item["state"]  = platformStateName(state);
     item["reason"] = std::string{reason};
     setAccountStatus(accountId, item.dump());
+    // 面板上的账号状态随之变化
+    notifyChanged();
     XX_LOGI(
         "[{}] 账号 '{}' 连接状态: {}{}{}",
         kLogTag,
@@ -317,11 +359,14 @@ void ChatbotEngine::onInbound(const InboundEvent& rawEvent) {
     prepareAttachments(chatKeyText, event);
     const size_t chars = utf8CodePointCount(event.text);
     state.items.push_back(std::move(event));
-    state.chars += chars;
+    state.chars        += chars;
+    state.lastActiveMs  = nowMs();
     if (state.items.size() > 1) {
         ++state.counters.aggregated;
         ++globalCounters_.aggregated;
     }
+    // 排队条数变了: 侧边栏面板要重画
+    notifyChanged();
 
     // 私聊里 `mention` 等同 `always` (单聊消息本来就是直接发给机器人的)
     ChatMode mode = route.mode;
@@ -555,6 +600,7 @@ void ChatbotEngine::flush(const std::string& chatKeyText, std::string_view reaso
     if (!route.found || route.mode == ChatMode::Off) {
         state.items.clear();
         state.chars = 0;
+        notifyChanged();
         return;
     }
 
@@ -597,6 +643,7 @@ void ChatbotEngine::flush(const std::string& chatKeyText, std::string_view reaso
         if (state.items.empty()) {
             state.chars = 0;
         }
+        notifyChanged();
         return;
     }
 
@@ -606,6 +653,8 @@ void ChatbotEngine::flush(const std::string& chatKeyText, std::string_view reaso
     state.stale = false;
     ++state.counters.woken;
     ++globalCounters_.woken;
+    // 排队被取走: 面板上的条数要归零
+    notifyChanged();
 
     const std::string inputJson = assembleInput(chatKeyText, batch);
     const int32_t     rc        = runtime_.sendInput ? runtime_.sendInput(channelId, inputJson) : -1;
@@ -631,6 +680,7 @@ void ChatbotEngine::flush(const std::string& chatKeyText, std::string_view reaso
         channelId,
         std::string{reason}
     );
+    notifyChanged();
 }
 
 /* ==================== 命令 ==================== */
@@ -724,6 +774,7 @@ bool ChatbotEngine::handleCommand(
         if (outbound_ != nullptr) {
             outbound_->enqueueDirect(key, std::move(message));
         }
+        notifyChanged();
         return true;
     }
 
@@ -744,10 +795,12 @@ bool ChatbotEngine::handleCommand(
                     outbound_->enqueueDirect(key, std::move(message));
                 }
             }
+            notifyChanged();
             return true;
         }
         // clear (本期未实现: 只提示)
         XX_LOGW("[{}] 命令动作 '{}' 本期未实现", kLogTag, def->action);
+        notifyChanged();
         return true;
     }
 
@@ -800,6 +853,7 @@ bool ChatbotEngine::handleCommand(
         true,
         event.timestampMs,
     });
+    notifyChanged();
     return true;
 }
 
@@ -812,6 +866,7 @@ void ChatbotEngine::onChannelReady(int64_t channelId) {
     router_->markReady(channelId, true);
     const auto chatKey = router_->chatKeyOfChannel(channelId);
     if (chatKey.empty()) {
+        notifyChanged();
         return;
     }
     // 通道就绪时如果有积压, 立刻投 (例如首条消息在 root init 期间到达)
@@ -819,6 +874,7 @@ void ChatbotEngine::onChannelReady(int64_t channelId) {
     if (!state.items.empty()) {
         flush(chatKey, "channel_ready");
     }
+    notifyChanged();
 }
 
 void ChatbotEngine::onChannelTurnStart(int64_t channelId) {
@@ -828,15 +884,19 @@ void ChatbotEngine::onChannelTurnStart(int64_t channelId) {
     router_->markBusy(channelId, true);
     const auto chatKey = router_->chatKeyOfChannel(channelId);
     if (chatKey.empty()) {
+        notifyChanged();
         return;
     }
     auto& state      = stateOf(chatKey);
     state.turn.active = true;
+    state.lastActiveMs = nowMs();
     if (state.turn.startedAtMs == 0) {
         state.turn.startedAtMs = nowMs();
     }
     ++state.counters.turns;
     ++globalCounters_.turns;
+    // 面板左侧的加载动画靠这次变化启动
+    notifyChanged();
 }
 
 void ChatbotEngine::onChannelTurnEnd(
@@ -883,6 +943,8 @@ void ChatbotEngine::onChannelTurnEnd(
     if (!state.items.empty()) {
         flush(chatKey, "turn_end");
     }
+    // 一轮结束: 面板左侧的加载动画停下 (flush 内部也会通知一次, 由入口合并)
+    notifyChanged();
 }
 
 void ChatbotEngine::onChannelClosed(int64_t channelId, std::string_view payloadJson) {
@@ -899,6 +961,7 @@ void ChatbotEngine::onChannelClosed(int64_t channelId, std::string_view payloadJ
         std::string{payloadJson},
         chatKey
     );
+    notifyChanged();
 }
 
 void ChatbotEngine::onChannelInterrupt(
@@ -984,6 +1047,7 @@ void ChatbotEngine::fallbackSend(const std::string& chatKey, TurnContext& turn) 
         ++state.counters.sent;
         ++globalCounters_.sent;
         outbound_->noteFallback(chatKey);
+        notifyChanged();
         XX_LOGI("[{}] 模型未调用发送工具, 已兜底发出最后一段正文 (会话 '{}')", kLogTag, chatKey);
     } else if (!outcome.reason.empty()) {
         XX_LOGW("[{}] 兜底发送失败: {}", kLogTag, outcome.reason);
@@ -1064,6 +1128,7 @@ bool ChatbotEngine::setMode(std::string_view chatKey, ChatMode mode, std::string
             state.timer->cancel();
         }
     }
+    notifyChanged();
     return true;
 }
 
@@ -1076,6 +1141,7 @@ void ChatbotEngine::noteToolSend(std::string_view chatKey) {
     ++it->second.turn.sentCount;
     ++it->second.counters.sent;
     ++globalCounters_.sent;
+    notifyChanged();
 }
 
 std::string ChatbotEngine::defaultPassiveMsgId(std::string_view chatKey) const {
@@ -1098,6 +1164,118 @@ void ChatbotEngine::noteAssistantText(std::string_view chatKey, std::string_view
         return;
     }
     it->second.turn.lastAssistantText.assign(text);
+}
+
+/* ==================== 侧边栏面板快照 ==================== */
+
+bool ChatbotEngine::hasRunningSession() const {
+    for (const auto& [chatKeyText, state] : sessions_) {
+        if (state.turn.active) {
+            return true;
+        }
+        if (router_ == nullptr) {
+            continue;
+        }
+        const auto* entry = router_->entry(chatKeyText);
+        if (entry != nullptr && entry->busy) {
+            return true;
+        }
+    }
+    return false;
+}
+
+PanelSnapshot ChatbotEngine::panelSnapshot() const {
+    PanelSnapshot snapshot;
+    snapshot.startupTime = startupTimeText_;
+    snapshot.received    = globalCounters_.received;
+    snapshot.sent        = globalCounters_.sent;
+    snapshot.failed      = globalCounters_.failed;
+
+    // ---- 账号连接状态 ----
+    for (const auto& account : config_.accounts) {
+        PanelAccountView view;
+        view.id   = account.id;
+        view.type = account.type;
+        auto it   = accountStatus_.find(account.id);
+        if (it == accountStatus_.end()) {
+            view.state = "unknown";
+        } else {
+            try {
+                const auto parsed = Json::parse(it->second);
+                view.state        = parsed.value("state", std::string{"unknown"});
+                view.reason       = parsed.value("reason", std::string{});
+            } catch (const std::exception&) {
+                view.state = "unknown";
+            }
+        }
+        snapshot.accounts.push_back(std::move(view));
+    }
+
+    // ---- 人设 ----
+    for (const auto& persona : config_.personas) {
+        PanelPersonaView view;
+        view.name   = persona.name;
+        view.model  = persona.model;
+        view.rootId = router_ != nullptr ? router_->rootIdOf(persona.name) : std::string{};
+        view.mounted = !view.rootId.empty();
+        view.chats      = router_ != nullptr ? router_->activeCount(persona.name) : 0;
+        view.chatBudget = static_cast<size_t>(std::max(0, config_.behavior.maxChatsPerPersona));
+        view.binds      = persona.binds.size();
+        view.tools      = persona.tools.size();
+        view.promptHead = firstLineOf(persona.prompt.systemPrompt);
+        snapshot.personas.push_back(std::move(view));
+    }
+
+    // ---- 会话 ----
+    std::vector<PanelSessionView> sessions;
+    sessions.reserve(sessions_.size());
+    for (const auto& [chatKeyText, state] : sessions_) {
+        const ChannelEntry* entry = router_ != nullptr ? router_->entry(chatKeyText) : nullptr;
+        const int64_t       channelId = entry != nullptr ? entry->channelId : 0;
+        // 通道没建起来、也没收过消息的条目不算「已创建的会话」
+        if (channelId <= 0 && state.counters.received == 0) {
+            continue;
+        }
+        const ChatKey key   = parseChatKey(chatKeyText);
+        const auto    route = router_ != nullptr ? router_->route(key) : RouteResult{};
+
+        PanelSessionView view;
+        view.chatKey = chatKeyText;
+        view.title   = ChatbotRouter::titleOf(
+            router_ != nullptr ? router_->chatNameOf(chatKeyText) : std::string{},
+            key
+        );
+        view.persona   = route.personaName;
+        view.account   = key.accountId;
+        view.chatType  = chatTypeName(key.type);
+        view.mode      = chatModeName(route.mode);
+        view.sessionId = entry != nullptr ? entry->sessionId : std::string{};
+        view.channelId = channelId;
+        view.ready     = entry != nullptr && entry->ready;
+        view.running   = state.turn.active || (entry != nullptr && entry->busy);
+        view.queued    = state.items.size();
+        view.turns     = state.counters.turns;
+        view.sent      = state.counters.sent;
+        view.lastTurnMs   = state.counters.lastTurnMs;
+        view.lastActiveMs = state.lastActiveMs;
+        sessions.push_back(std::move(view));
+    }
+    // 正在执行的排最前 (用户最关心), 其余按最近活动时间倒序
+    std::sort(
+        sessions.begin(),
+        sessions.end(),
+        [](const PanelSessionView& a, const PanelSessionView& b) {
+            if (a.running != b.running) {
+                return a.running;
+            }
+            if (a.lastActiveMs != b.lastActiveMs) {
+                return a.lastActiveMs > b.lastActiveMs;
+            }
+            return a.chatKey < b.chatKey;
+        }
+    );
+    snapshot.sessions = std::move(sessions);
+    return snapshot;
 }
 
 /* ==================== 状态输出 ==================== */

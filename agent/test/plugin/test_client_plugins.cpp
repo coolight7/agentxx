@@ -7,6 +7,8 @@
 /// 4. 命令执行: /example (send 动作) / example_toast (toast 动作)
 /// 5. 跨端数据: send_plugin_data → adapter sendPluginData (WirePluginDataUp 路径)
 /// 6. disable/enable 恢复与 unload 清理 (含 Info 栏段落注册/摘除信号)
+/// 13b. agentxx_chatbot client 插件: 侧边栏「机器人」栏 (面板注册 / 快照渲染 /
+///      刷新请求 / 坏载荷容错 / 卸载清理)
 /// 18. 通用交互: bind/unbind 覆盖 + 精确优先 vs fallback + 上下文原样转发
 /// 19. 通用 overlay: open/close 参数校验 + 适配器信号
 /// 20. planning 全流程: dispatch(open_graph) → open_overlay(MERMAID)
@@ -1308,6 +1310,111 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         }
     }
 #endif // XX_IS_WIN_D || XX_IS_LINUX_D || XX_IS_ANDROID_D || XX_IS_MACOS_D
+
+    // ---- 13b. agentxx_chatbot client 插件: 侧边栏「机器人」栏 ----
+    //  面板数据只来自 agent 侧发布的快照 (topic agentxx_chatbot.panel 经
+    //  WirePluginData 下发), 所以这里直接投一条快照事件断言渲染结果。
+    {
+        auto cbPath = findPluginPath("agentxx_chatbot");
+        if (!cbPath.empty()) {
+            auto cbInst = co_await mgr->loadNativeAsync(cbPath);
+            XX_TEST_EXPECT_TRUE(cbInst != nullptr);
+            if (cbInst) {
+                // 面板注册: id / 标题
+                auto reg      = mgr->uiRegistrySnapshot();
+                bool hasPanel = false;
+                utilxx_base::Json placeholder = utilxx_base::Json::array();
+                for (const auto& p : reg->panels) {
+                    if (p.id == "agentxx_chatbot.bots") {
+                        hasPanel    = true;
+                        placeholder = p.items;
+                        XX_TEST_EXPECT_EQ(p.title, std::string{"机器人"});
+                    }
+                }
+                XX_TEST_EXPECT_TRUE(hasPanel);
+                // 还没收到快照: 一行提示 (不留空白栏)
+                XX_TEST_EXPECT_TRUE(
+                    placeholder.dump().find("等待服务端数据") != std::string::npos
+                );
+
+                // 快照事件: 一个在线账号 + 一个人设 + 一条正在执行且排队 3 条的群会话
+                const auto snapshot = std::string{
+                    R"({"v":1,"tick":7,"startupTime":"2026-10-29 20:00:00",)"
+                    R"("accounts":[{"id":"qq_main","type":"qq","state":"online"}],)"
+                    R"("personas":[{"name":"assistant","model":"gpt-x","promptHead":"你是 QQ 群里的助手","rootId":"root-1","mounted":true,"chats":2,"budget":64,"binds":3}],)"
+                    R"("sessions":[{"key":"qq_main|group|G1","title":"技术群","persona":"assistant","account":"qq_main","type":"group","mode":"always","channelId":7,"ready":true,"running":true,"queued":3,"turns":4,"sent":6}],)"
+                    R"("stats":{"received":12,"sent":5,"failed":1}})"
+                };
+                agentxx::agent::WirePluginData panelData;
+                panelData.plugin = "agentxx_chatbot";
+                panelData.event  = "panel";
+                panelData.data   = snapshot;
+                mgr->onPluginData(panelData);
+
+                reg = mgr->uiRegistrySnapshot();
+                bool checkedPanel = false;
+                for (const auto& p : reg->panels) {
+                    if (p.id != "agentxx_chatbot.bots") {
+                        continue;
+                    }
+                    checkedPanel         = true;
+                    const std::string dump = p.items.dump();
+                    // 段标题 `标题: 数量` + 列表项 `|- 内容`, 段之间是一行空白
+                    XX_TEST_EXPECT_TRUE(dump.find("会话: 1") != std::string::npos);
+                    XX_TEST_EXPECT_TRUE(dump.find("|- ") != std::string::npos);
+                    XX_TEST_EXPECT_TRUE(dump.find("账号: 1") != std::string::npos);
+                    XX_TEST_EXPECT_TRUE(dump.find("Gap") != std::string::npos);
+                    XX_TEST_EXPECT_TRUE(dump.find("Divider") == std::string::npos);
+                    // 副标题/说明等减淡内容走 hint 色 (与 `|- ` 前缀一致, 不再叠加 dim)
+                    XX_TEST_EXPECT_TRUE(dump.find("\"tone\":\"hint\"") != std::string::npos);
+                    // 会话行: 标题 + 副标题 + 左侧加载帧 (tick 7 -> 第 8 帧 ⠧)
+                    XX_TEST_EXPECT_TRUE(dump.find("技术群") != std::string::npos);
+                    XX_TEST_EXPECT_TRUE(dump.find("assistant · 群聊 · always") != std::string::npos);
+                    XX_TEST_EXPECT_TRUE(dump.find("⠧") != std::string::npos);
+                    // 右侧排队条数
+                    XX_TEST_EXPECT_TRUE(dump.find("\"text\":\"3\"") != std::string::npos);
+                    // 人设段
+                    XX_TEST_EXPECT_TRUE(dump.find("会话 2/64 · 绑定 3") != std::string::npos);
+                    XX_TEST_EXPECT_TRUE(dump.find("gpt-x") != std::string::npos);
+                    XX_TEST_EXPECT_TRUE(dump.find("你是 QQ 群里的助手") != std::string::npos);
+                    // 底部: 账号状态与收发计数
+                    XX_TEST_EXPECT_TRUE(dump.find("qq_main online") != std::string::npos);
+                    XX_TEST_EXPECT_TRUE(dump.find("失败 1") != std::string::npos);
+                }
+                XX_TEST_EXPECT_TRUE(checkedPanel);
+
+                // 坏载荷不能清掉已有内容 (面板停在上一份快照)
+                agentxx::agent::WirePluginData broken;
+                broken.plugin = "agentxx_chatbot";
+                broken.event  = "panel";
+                broken.data   = "not-json";
+                mgr->onPluginData(broken);
+                reg = mgr->uiRegistrySnapshot();
+                for (const auto& p : reg->panels) {
+                    if (p.id == "agentxx_chatbot.bots") {
+                        XX_TEST_EXPECT_TRUE(p.items.dump().find("技术群") != std::string::npos);
+                    }
+                }
+
+                // 连接就绪: 插件向上要一份快照 (send_plugin_data("refresh"))
+                // 注: 用连接状态事件而不是 onReady —— onReady 末尾主程序自己还会发
+                // client_interfaces, 会把 adapter 记的"最后一条"盖掉
+                const int upBefore = adapter->dataUpCount();
+                mgr->onConnStateChanged("connected", "100%");
+                XX_TEST_EXPECT_TRUE(adapter->dataUpCount() > upBefore);
+                XX_TEST_EXPECT_EQ(adapter->lastDataPlugin(), std::string{"agentxx_chatbot"});
+                XX_TEST_EXPECT_EQ(adapter->lastDataEvent(), std::string{"refresh"});
+
+                // 卸载: 面板随之撤销
+                co_await mgr->unloadAsync("agentxx_chatbot");
+                XX_TEST_EXPECT_TRUE(mgr->find("agentxx_chatbot") == nullptr);
+                reg = mgr->uiRegistrySnapshot();
+                for (const auto& p : reg->panels) {
+                    XX_TEST_EXPECT_TRUE(p.id != "agentxx_chatbot.bots");
+                }
+            }
+        }
+    }
 
     // ---- 14. agentxx_planning client 插件: 工具消息装饰与侧边栏概览 ----
     {

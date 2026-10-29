@@ -1,6 +1,6 @@
 name: agentxx_chatbot
-version: 1.0.0
-description: "Chat platform bridge (QQ first): routes group/private messages into agent sessions and sends replies back (chatbot_send_message / history / chat_info / status / set_mode)"
+version: 1.1.0
+description: "Chat platform bridge (QQ first): routes group/private messages into agent sessions and sends replies back (chatbot_send_message / history / chat_info / status / set_mode); client side adds a sidebar panel listing bot sessions, their pending queue and personas"
 entry: libagentxx_chatbot.so
 interfaces:
   require:
@@ -8,3 +8,7 @@ interfaces:
     - agentxx.agent.runtime
     # 工具表: 往人设 root 上注册 chatbot_* 工具
     - agentxx.agent.tools
+  optional:
+    # client 侧「机器人」栏: 没有侧边栏的精简主程序上只少一个面板, 不影响收发消息
+    # (事件订阅与跨端数据通道是 client 侧基础表, 不单独声明)
+    - agentxx.client.panel

@@ -128,6 +128,9 @@ public:
     /// 记录一份会话信息 (chatName 等, 供 `chatbot_chat_info`)
     void rememberChatName(std::string_view chatKey, std::string_view chatName);
 
+    /// 记录的会话名 (群名 / 昵称; 没记录过返回空)
+    std::string chatNameOf(std::string_view chatKey) const;
+
     /// 取记录 (没有返回 nullptr)
     ChannelEntry*       entry(std::string_view chatKey);
     const ChannelEntry* entry(std::string_view chatKey) const;

@@ -7,12 +7,15 @@
 /// - 去重环: 重复 / 容量 / 顺序
 /// - 引用编号映射
 /// - 配置校验: 每种非法配置给出预期错误
+/// - 侧边栏「机器人」栏: 快照 JSON 往返 / 展示文案 / 组件树 (加载帧与排队数)
 ///
 /// 这些函数不碰网络也不碰主程序, 因此本模块是同步的 (不 co_await)。
 #include "agentxx-test/core/test_chatbot_core.h"
 
 #include "agentxx_chatbot/chatbot_config.h"
 #include "agentxx_chatbot/chatbot_core.h"
+#include "agentxx_chatbot/chatbot_panel.h"
+#include "agentxx_chatbot/chatbot_panel_ui.h"
 #include "agentxx_chatbot/chatbot_router.h"
 #include "agentxx_chatbot/chatbot_types.h"
 
@@ -991,6 +994,410 @@ void testRouterQuota() {
     // 标题: 有群名用群名, 没有就用「类型-尾号」
     XX_TEST_EXPECT_EQ(ChatbotRouter::titleOf("技术群", g1), std::string{"技术群"});
     XX_TEST_EXPECT_TRUE(ChatbotRouter::titleOf("", g1).rfind("group-", 0) == 0);
+
+    // 记住的会话名: 面板靠它显示群名
+    XX_TEST_EXPECT_TRUE(router.chatNameOf("a|group|G1").empty());
+    router.rememberChatName("a|group|G1", "技术群");
+    XX_TEST_EXPECT_EQ(router.chatNameOf("a|group|G1"), std::string{"技术群"});
+    // 空名字不覆盖已有值
+    router.rememberChatName("a|group|G1", "");
+    XX_TEST_EXPECT_EQ(router.chatNameOf("a|group|G1"), std::string{"技术群"});
+}
+
+/* ==================== 侧边栏「机器人」栏 ==================== */
+
+/// 组件树里全部可见文本 (面板断言用; 递归)
+void collectTexts(const pluginxx::ui::Item& item, std::vector<std::string>& out) {
+    if (item.kind == "Text") {
+        const std::string text = item.text.resolve();
+        if (!text.empty()) {
+            out.push_back(text);
+        }
+    }
+    for (const auto& child : item.children) {
+        collectTexts(child, out);
+    }
+}
+
+/// 组件树里有没有包含某段文字的文本
+bool anyTextContains(const std::vector<pluginxx::ui::Item>& items, std::string_view needle) {
+    std::vector<std::string> texts;
+    for (const auto& item : items) {
+        collectTexts(item, texts);
+    }
+    for (const auto& text : texts) {
+        if (contains(text, needle)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// 组件树里有没有某种组件 (面板样式断言用; 递归)
+bool anyKindOf(const pluginxx::ui::Item& item, std::string_view kind) {
+    if (item.kind == kind) {
+        return true;
+    }
+    for (const auto& child : item.children) {
+        if (anyKindOf(child, kind)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool anyKindOf(const std::vector<pluginxx::ui::Item>& items, std::string_view kind) {
+    for (const auto& item : items) {
+        if (anyKindOf(item, kind)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// 文本完全等于 `text` 的文本项 (没找到返回 nullptr)
+const pluginxx::ui::Item* findTextEqual(const pluginxx::ui::Item& item, std::string_view text) {
+    if (item.kind == "Text" && item.text.resolve() == text) {
+        return &item;
+    }
+    for (const auto& child : item.children) {
+        if (const auto* hit = findTextEqual(child, text)) {
+            return hit;
+        }
+    }
+    return nullptr;
+}
+
+const pluginxx::ui::Item* findTextEqual(
+    const std::vector<pluginxx::ui::Item>& items,
+    std::string_view                       text
+) {
+    for (const auto& item : items) {
+        if (const auto* hit = findTextEqual(item, text)) {
+            return hit;
+        }
+    }
+    return nullptr;
+}
+
+/// 包含某段文字的文本项 (没找到返回 nullptr; 指针指向传入的组件树)
+const pluginxx::ui::Item* findTextContaining(
+    const pluginxx::ui::Item& item,
+    std::string_view          needle
+) {
+    if (item.kind == "Text" && contains(item.text.resolve(), needle)) {
+        return &item;
+    }
+    for (const auto& child : item.children) {
+        if (const auto* hit = findTextContaining(child, needle)) {
+            return hit;
+        }
+    }
+    return nullptr;
+}
+
+const pluginxx::ui::Item* findTextContaining(
+    const std::vector<pluginxx::ui::Item>& items,
+    std::string_view                       needle
+) {
+    for (const auto& item : items) {
+        if (const auto* hit = findTextContaining(item, needle)) {
+            return hit;
+        }
+    }
+    return nullptr;
+}
+
+/// 造一份典型快照: 一个在线账号 + 一个人设 + 一条正在执行且有积压的群会话
+PanelSnapshot samplePanelSnapshot() {
+    PanelSnapshot snap;
+    snap.tick        = 7;
+    snap.startupTime = "2026-10-29 20:00:00";
+    snap.received    = 12;
+    snap.sent        = 5;
+    snap.failed      = 1;
+
+    PanelAccountView account;
+    account.id    = "qq_main";
+    account.type  = "qq";
+    account.state = "online";
+    snap.accounts.push_back(account);
+
+    PanelPersonaView persona;
+    persona.name       = "assistant";
+    persona.model      = "gpt-x";
+    persona.rootId     = "root-1";
+    persona.mounted    = true;
+    persona.chats      = 2;
+    persona.chatBudget = 64;
+    persona.binds      = 3;
+    persona.tools      = 5;
+    persona.promptHead = "你是 QQ 群里的助手";
+    snap.personas.push_back(persona);
+
+    PanelSessionView session;
+    session.chatKey      = "qq_main|group|G1";
+    session.title        = "技术群";
+    session.persona      = "assistant";
+    session.account      = "qq_main";
+    session.chatType     = "group";
+    session.mode         = "always";
+    session.sessionId    = "chatbot_assistant_qq_main_group_0123456789abcdef";
+    session.channelId    = 7;
+    session.ready        = true;
+    session.running      = true;
+    session.queued       = 3;
+    session.turns        = 4;
+    session.sent         = 6;
+    session.lastTurnMs   = 1200;
+    session.lastActiveMs = 99;
+    snap.sessions.push_back(session);
+    return snap;
+}
+
+void testPanelSnapshot() {
+    const PanelSnapshot snap = samplePanelSnapshot();
+    const std::string   json = panelSnapshotJson(snap);
+
+    PanelSnapshot back;
+    XX_TEST_EXPECT_TRUE(parsePanelSnapshot(json, back));
+    XX_TEST_EXPECT_EQ(back.tick, uint32_t{7});
+    XX_TEST_EXPECT_EQ(back.startupTime, std::string{"2026-10-29 20:00:00"});
+    XX_TEST_EXPECT_EQ(back.received, uint64_t{12});
+    XX_TEST_EXPECT_EQ(back.sent, uint64_t{5});
+    XX_TEST_EXPECT_EQ(back.failed, uint64_t{1});
+
+    XX_TEST_EXPECT_EQ(back.accounts.size(), size_t{1});
+    if (!back.accounts.empty()) {
+        XX_TEST_EXPECT_EQ(back.accounts[0].id, std::string{"qq_main"});
+        XX_TEST_EXPECT_EQ(back.accounts[0].state, std::string{"online"});
+    }
+
+    XX_TEST_EXPECT_EQ(back.personas.size(), size_t{1});
+    if (!back.personas.empty()) {
+        const auto& persona = back.personas[0];
+        XX_TEST_EXPECT_EQ(persona.name, std::string{"assistant"});
+        XX_TEST_EXPECT_EQ(persona.model, std::string{"gpt-x"});
+        XX_TEST_EXPECT_TRUE(persona.mounted);
+        XX_TEST_EXPECT_EQ(persona.chatBudget, size_t{64});
+        XX_TEST_EXPECT_EQ(persona.binds, size_t{3});
+        XX_TEST_EXPECT_EQ(persona.promptHead, std::string{"你是 QQ 群里的助手"});
+    }
+
+    XX_TEST_EXPECT_EQ(back.sessions.size(), size_t{1});
+    if (!back.sessions.empty()) {
+        const auto& session = back.sessions[0];
+        XX_TEST_EXPECT_EQ(session.title, std::string{"技术群"});
+        XX_TEST_EXPECT_EQ(session.persona, std::string{"assistant"});
+        XX_TEST_EXPECT_EQ(session.chatType, std::string{"group"});
+        XX_TEST_EXPECT_EQ(session.mode, std::string{"always"});
+        XX_TEST_EXPECT_EQ(session.channelId, int64_t{7});
+        XX_TEST_EXPECT_TRUE(session.running);
+        XX_TEST_EXPECT_TRUE(session.ready);
+        XX_TEST_EXPECT_EQ(session.queued, size_t{3});
+        XX_TEST_EXPECT_EQ(session.turns, uint64_t{4});
+        XX_TEST_EXPECT_EQ(session.lastTurnMs, int64_t{1200});
+    }
+
+    // 非法 / 不兼容的载荷不能改掉调用方旧数据
+    PanelSnapshot keep = samplePanelSnapshot();
+    XX_TEST_EXPECT_FALSE(parsePanelSnapshot("", keep));
+    XX_TEST_EXPECT_FALSE(parsePanelSnapshot("not-json", keep));
+    XX_TEST_EXPECT_FALSE(parsePanelSnapshot("[1,2,3]", keep));
+    XX_TEST_EXPECT_FALSE(parsePanelSnapshot(R"({"v":99,"tick":123})", keep));
+    XX_TEST_EXPECT_EQ(keep.tick, uint32_t{7});
+
+    // 只有版本号的最小快照: 通过且各段为空
+    PanelSnapshot minimal;
+    XX_TEST_EXPECT_TRUE(parsePanelSnapshot(R"({"v":1})", minimal));
+    XX_TEST_EXPECT_TRUE(minimal.sessions.empty());
+    XX_TEST_EXPECT_TRUE(minimal.personas.empty());
+    XX_TEST_EXPECT_EQ(minimal.tick, uint32_t{0});
+}
+
+void testPanelWirePayload() {
+    // client 侧从 WirePluginData 的 `data` 字段收到的原样文本 (与 client_plugins
+    // 里投递的那份完全一致): 必须能被解析, 否则面板停在占位提示上
+    const std::string payload = std::string{
+        R"({"v":1,"tick":7,"startupTime":"2026-10-29 20:00:00",)"
+        R"("accounts":[{"id":"qq_main","type":"qq","state":"online"}],)"
+        R"("personas":[{"name":"assistant","model":"gpt-x",)"
+        R"("promptHead":"你是 QQ 群里的助手","rootId":"root-1","mounted":true,)"
+        R"("chats":2,"budget":64,"binds":3}],)"
+        R"("sessions":[{"key":"qq_main|group|G1","title":"技术群","persona":"assistant",)"
+        R"("account":"qq_main","type":"group","mode":"always","channelId":7,)"
+        R"("ready":true,"running":true,"queued":3,"turns":4,"sent":6}],)"
+        R"("stats":{"received":12,"sent":5,"failed":1}})"
+    };
+    PanelSnapshot parsed;
+    XX_TEST_EXPECT_TRUE(parsePanelSnapshot(payload, parsed));
+    XX_TEST_EXPECT_EQ(parsed.tick, uint32_t{7});
+    XX_TEST_EXPECT_EQ(parsed.sessions.size(), size_t{1});
+    if (!parsed.sessions.empty()) {
+        XX_TEST_EXPECT_EQ(parsed.sessions[0].title, std::string{"技术群"});
+        XX_TEST_EXPECT_EQ(parsed.sessions[0].queued, size_t{3});
+        XX_TEST_EXPECT_TRUE(parsed.sessions[0].running);
+        XX_TEST_EXPECT_EQ(parsed.sessions[0].channelId, int64_t{7});
+    }
+    XX_TEST_EXPECT_EQ(parsed.personas.size(), size_t{1});
+    XX_TEST_EXPECT_EQ(parsed.accounts.size(), size_t{1});
+}
+
+void testPanelTexts() {
+    PanelSessionView session;
+    session.persona  = "assistant";
+    session.chatType = "group";
+    session.mode     = "always";
+    XX_TEST_EXPECT_EQ(
+        panelSessionSubtitle(session),
+        std::string{"assistant · 群聊 · always"}
+    );
+    session.chatType = "private";
+    XX_TEST_EXPECT_TRUE(contains(panelSessionSubtitle(session), "私聊"));
+    session.persona.clear();
+    XX_TEST_EXPECT_TRUE(contains(panelSessionSubtitle(session), "未归属人设"));
+
+    PanelPersonaView persona;
+    persona.chats      = 2;
+    persona.chatBudget = 64;
+    persona.binds      = 3;
+    persona.mounted    = true;
+    XX_TEST_EXPECT_EQ(panelPersonaSubtitle(persona), std::string{"会话 2/64 · 绑定 3"});
+    persona.mounted = false;
+    XX_TEST_EXPECT_TRUE(contains(panelPersonaSubtitle(persona), "未挂载"));
+
+    XX_TEST_EXPECT_EQ(panelPersonaModelText(persona), std::string{"默认模型"});
+    persona.model = "gpt-x";
+    XX_TEST_EXPECT_EQ(panelPersonaModelText(persona), std::string{"gpt-x"});
+    persona.mounted = true;
+    XX_TEST_EXPECT_EQ(panelPersonaDetail(persona), std::string{"gpt-x · 会话 2/64 · 绑定 3"});
+
+    PanelSessionView queued;
+    queued.queued = 0;
+    XX_TEST_EXPECT_EQ(panelSessionQueueText(queued), std::string{"0"});
+    queued.queued = 12;
+    XX_TEST_EXPECT_EQ(panelSessionQueueText(queued), std::string{"12"});
+
+    PanelAccountView account;
+    account.id       = "qq_main";
+    account.state    = "online";
+    XX_TEST_EXPECT_EQ(panelAccountItemText(account), std::string{"qq_main online"});
+    account.state  = "reconnecting";
+    account.reason = "网络抖动";
+    XX_TEST_EXPECT_EQ(
+        panelAccountItemText(account),
+        std::string{"qq_main reconnecting (网络抖动)"}
+    );
+    account.id.clear();
+    XX_TEST_EXPECT_TRUE(contains(panelAccountItemText(account), "?"));
+
+    // 截断不切断多字节序列 (面板窄栏靠它保住右侧的排队数)
+    XX_TEST_EXPECT_EQ(panelTruncate("技术群", 3), std::string{"技术群"});
+    XX_TEST_EXPECT_EQ(panelTruncate("技术交流群", 3), std::string{"技术…"});
+    XX_TEST_EXPECT_EQ(panelTruncate("", 3), std::string{});
+    XX_TEST_EXPECT_EQ(utf8CodePointCount(panelTruncate("技術群聊天", 4)), size_t{4});
+}
+
+void testPanelItems() {
+    // 没有数据: 只给一行提示, 不留空白栏
+    PanelSnapshot empty;
+    auto           placeholder = panelItemsOf(empty);
+    XX_TEST_EXPECT_EQ(placeholder.size(), size_t{1});
+    XX_TEST_EXPECT_TRUE(anyTextContains(placeholder, "等待服务端数据"));
+    const auto* placeholderItem = findTextContaining(placeholder, "等待服务端数据");
+    XX_TEST_EXPECT_TRUE(placeholderItem != nullptr);
+    if (placeholderItem != nullptr) {
+        XX_TEST_EXPECT_EQ(placeholderItem->tone, std::string{"hint"});
+    }
+
+    const PanelSnapshot snap = samplePanelSnapshot();
+    const auto          items = panelItemsOf(snap);
+    XX_TEST_EXPECT_TRUE(items.size() >= size_t{4});
+
+    // 会话段: 段标题 `标题: 数量`, 正在执行的一行左侧是加载帧 (tick % 10), 右侧是排队数
+    XX_TEST_EXPECT_TRUE(anyTextContains(items, "会话: 1"));
+    XX_TEST_EXPECT_TRUE(anyTextContains(items, std::string{panelSpinnerFrame(snap.tick)}));
+    XX_TEST_EXPECT_TRUE(anyTextContains(items, "技术群"));
+    XX_TEST_EXPECT_TRUE(anyTextContains(items, "assistant · 群聊 · always"));
+    XX_TEST_EXPECT_TRUE(anyTextContains(items, "3"));
+
+    // 列表项 `|- 内容`, 段之间是一行空白而不是分隔线
+    XX_TEST_EXPECT_TRUE(anyTextContains(items, "|- "));
+    XX_TEST_EXPECT_TRUE(anyKindOf(items, "Gap"));
+    XX_TEST_EXPECT_FALSE(anyKindOf(items, "Divider"));
+
+    // 减淡的内容统一用 hint 色 (标题/强调状态除外)
+    const auto* bulletItem = findTextContaining(items, "|- ");
+    XX_TEST_EXPECT_TRUE(bulletItem != nullptr);
+    if (bulletItem != nullptr) {
+        XX_TEST_EXPECT_EQ(bulletItem->tone, std::string{"hint"});
+    }
+    const auto* subtitleItem = findTextContaining(items, "assistant · 群聊 · always");
+    XX_TEST_EXPECT_TRUE(subtitleItem != nullptr);
+    if (subtitleItem != nullptr) {
+        XX_TEST_EXPECT_EQ(subtitleItem->tone, std::string{"hint"});
+        // 只 hint 色, 不再叠加 dim —— caption 会让副标题比 `|- ` 前缀还暗一档
+        XX_TEST_EXPECT_TRUE(subtitleItem->textType != std::string{"caption"});
+    }
+    // 排队数靠右对齐 (贴在栏的右边), 有积压用强调色
+    const auto* queueItem = findTextEqual(items, "3");
+    XX_TEST_EXPECT_TRUE(queueItem != nullptr);
+    if (queueItem != nullptr) {
+        XX_TEST_EXPECT_EQ(queueItem->align, std::string{"end"});
+        XX_TEST_EXPECT_EQ(queueItem->tone, std::string{"accent"});
+    }
+
+    // 人设段: 名字 / 模型 / 用量 / 提示词摘录
+    XX_TEST_EXPECT_TRUE(anyTextContains(items, "人设: 1"));
+    XX_TEST_EXPECT_TRUE(anyTextContains(items, "会话 2/64 · 绑定 3"));
+    XX_TEST_EXPECT_TRUE(anyTextContains(items, "gpt-x"));
+    XX_TEST_EXPECT_TRUE(anyTextContains(items, "你是 QQ 群里的助手"));
+    const auto* personaDetail = findTextContaining(items, "会话 2/64 · 绑定 3");
+    XX_TEST_EXPECT_TRUE(personaDetail != nullptr);
+    if (personaDetail != nullptr) {
+        XX_TEST_EXPECT_EQ(personaDetail->tone, std::string{"hint"});
+        XX_TEST_EXPECT_TRUE(personaDetail->textType != std::string{"caption"});
+    }
+    const auto* promptItem = findTextContaining(items, "你是 QQ 群里的助手");
+    XX_TEST_EXPECT_TRUE(promptItem != nullptr);
+    if (promptItem != nullptr) {
+        XX_TEST_EXPECT_EQ(promptItem->tone, std::string{"hint"});
+        XX_TEST_EXPECT_TRUE(promptItem->textType != std::string{"caption"});
+    }
+
+    // 账号段: 每行一个账号, 标题同样是 `标题: 数量`
+    XX_TEST_EXPECT_TRUE(anyTextContains(items, "账号: 1"));
+    XX_TEST_EXPECT_TRUE(anyTextContains(items, "qq_main online"));
+
+    // 底部: 收发计数
+    XX_TEST_EXPECT_TRUE(anyTextContains(items, "失败 1"));
+    const auto* statsItem = findTextContaining(items, "失败 1");
+    XX_TEST_EXPECT_TRUE(statsItem != nullptr);
+    if (statsItem != nullptr) {
+        XX_TEST_EXPECT_EQ(statsItem->tone, std::string{"hint"});
+        XX_TEST_EXPECT_TRUE(statsItem->textType != std::string{"caption"});
+    }
+
+    // 空闲会话不转圈: 左侧用占位点, 右侧排队数为 0
+    PanelSnapshot idle = samplePanelSnapshot();
+    idle.sessions[0].running = false;
+    idle.sessions[0].queued  = 0;
+    const auto idleItems     = panelItemsOf(idle);
+    XX_TEST_EXPECT_FALSE(anyTextContains(idleItems, std::string{panelSpinnerFrame(idle.tick)}));
+    XX_TEST_EXPECT_TRUE(anyTextContains(idleItems, "·"));
+
+    // 会话为空但人设已加载: 给一行说明而不是空白
+    PanelSnapshot noSession = samplePanelSnapshot();
+    noSession.sessions.clear();
+    const auto noSessionItems = panelItemsOf(noSession);
+    XX_TEST_EXPECT_TRUE(anyTextContains(noSessionItems, "会话"));
+    XX_TEST_EXPECT_TRUE(anyTextContains(noSessionItems, "还没有会话"));
+
+    // 加载帧序列与 TUI 消息列表的加载中一致 (10 帧 braille 点阵)
+    XX_TEST_EXPECT_EQ(panelSpinnerFrames().size(), size_t{10});
+    XX_TEST_EXPECT_EQ(panelSpinnerFrame(0), std::string_view{"⠋"});
+    XX_TEST_EXPECT_EQ(panelSpinnerFrame(10), std::string_view{"⠋"});
+    XX_TEST_EXPECT_EQ(panelSpinnerFrame(11), std::string_view{"⠙"});
 }
 
 } // namespace
@@ -1013,6 +1420,10 @@ TestResult testChatbotCore() {
     testEnvFileParsing();
     testRouterTable();
     testRouterQuota();
+    testPanelSnapshot();
+    testPanelWirePayload();
+    testPanelTexts();
+    testPanelItems();
 
     return TestResult{g_cc_passed, g_cc_failed};
 }
