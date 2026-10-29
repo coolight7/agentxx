@@ -1083,7 +1083,8 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 插件经内置 `agentxx_jav
 **它做什么**：把 QQ 群聊/私聊消息投给一个 agent 会话，再把模型的回复发回平台。
 
 - **每个人设一个根 agent**：插件在 `start` 里对自己 `mount_root`，提示词、模型、工具白名单
-  都由人设配置给出，与人设根上的会话一一对应；
+  都由人设配置给出，与人设根上的会话一一对应；根上还需要哪些插件（文件/命令/联网等）由
+  `personas[].mount` 决定（`none` / `listed` / `all`，与被挂插件自己的 `mount` 回调同一套语义）；
 - **每个「平台账号 + 群 或 私聊」一个会话**：会话 id 形如
   `chatbot_<人设>_<账号>_<群|私聊>_<chatId 的 16 位散列>`，跨重启稳定，同一个群永远是同一个
   上下文；
@@ -1116,6 +1117,12 @@ MediaType 只有 image/audio/video），而是把本地路径写进输入 ——
 的小文本文件会把正文**直接内联**进输入（`[#n:附件内容开始]` … `[#n:附件内容结束]`），
 更大或二进制的才只给路径。群文件在**被引用消息**的 `msg_elements[].attachments` 里，
 不在顶层 `attachments`。
+
+**人设根能用哪些工具**：由 `personas[].mount` 决定 —— `none` 只有 `chatbot_*` 工具；
+`listed` + `list: [插件名, …]` 只挂这几个（chatbot 自己会自动补进名单）；`all` 与实际加载的
+全部插件一致（与内置主会话相同）。被挂插件在根上有自己的实例与 args（`mount.args` 里按插件名
+覆盖），登记的工具/权限/钩子都只对这个根生效。权限沿用主配置的 `permission` 段；群里没人点
+弹窗，需要批准的操作按 `behavior.humanInLoop`（`auto-allow` / `auto-deny`）自动处理。
 
 **已知限制**：当前只实现 QQ（`accounts[].type = "qq"`）与内存假平台（`"fake"`，测试与本地
 演示用）；平台差异走 `IPlatform` + `PlatformCaps` 数据表，加平台只需实现接口并把事件归一化

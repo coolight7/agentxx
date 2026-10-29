@@ -21,6 +21,8 @@ QQ 群/私聊 ──► IPlatform (qq) ──► ChatbotEngine ──► 会话�
 
 1. **每个人设 = 一个根 agent**。插件在自己的 `start` 里对人设调 `mount_root`，提示词、模型、
    工具白名单都来自人设配置。内置的那个主会话与它无关。
+   要给这个根**更多工具**（文件读写、执行命令、联网……），用 `personas[].mount` 把对应插件
+   挂上去，见 §2；不配就只有 `chatbot_*` 这一套。
 2. **每个「账号 + 群 或 私聊」= 一个独立会话**。会话 id 形如
    `chatbot_<人设>_<账号>_<group|private>_<chatId 的 16 位散列>`，跨重启稳定 —— 同一个群永远
    是同一段上下文。
@@ -62,9 +64,14 @@ plugin:
               systemPrompt: |
                 你是群里的一个技术助手, 说话简短口语化。
             # tools: [agentxx_share_store]   # 工具白名单 (工具名); 留空 = 不过滤
-            mount:                       # 这个根上除此之外还挂哪些插件
+            mount:                       # 这个根上除此之外还挂哪些插件 (决定模型能用哪些工具)
               mode: none                 # none | all | listed
-              # list: [agentxx_filesystem, agentxx_websearch]
+              # - none:   只有 chatbot_* 工具
+              # - all:    挂进程里加载的全部插件 (与内置主会话看到的工具一致)
+              # - listed: 只挂 list 里的; chatbot 自己会被自动补进名单
+              list: [agentxx_filesystem, agentxx_execute_command, agentxx_websearch]
+              # args:                    # 给被挂插件一份专属配置 (键 = 插件名, 覆盖主配置)
+              #   agentxx_filesystem: { ... }
             bind:
               - account: qq_main
                 chats:
