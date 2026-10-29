@@ -1096,13 +1096,15 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 插件经内置 `agentxx_jav
   id（撤成功后从记录里去掉，同一条不会被反复选中）；
 - **一轮里多条消息一起带上去**：被 @ 立即唤醒；`always` 模式按静默窗口聚合并投递；通道正在
   跑一轮时新消息继续缓冲，本轮结束（`TURN_END`）后一次性带上；
-- **关键词命令**（`/axx-info` 等）由插件直接处理，`mode` = `local`（插件自己回）/ `model`
-  （构造一条输入投给 agent）/ `action`（执行 `cancel` 等动作），不进聚合缓冲。
+- **关键词命令写死在插件里**：`/axx-help`（列命令）/ `/axx-info`（会话状态）/ `/axx-hello`
+  （构造一条输入投给 agent）/ `/axx-stop`（打断当前一轮），见 `chatbot_core.cpp` 的
+  `builtinCommands()`；命令不进聚合缓冲，也没有配置项 —— 命令名与文案属于插件自己的交互
+  约定，开成配置只会让文档、用例、排错说法对不上。
 
-**配置**在 `plugin.list[]` 的 `args` 里，四段：`accounts`（每平台账号一份凭证）/
-`personas`（人设 + 对接哪些账号与会话）/ `behavior`（聚合窗口、切分上限、被动回复溢出策略等）/
-`commands`（关键词命令）。凭证建议用 `appIdFile` / `appSecretFile` 从 `.env` 形态的文件读，
-避免写进版本库。
+**配置**在 `plugin.list[]` 的 `args` 里，三段：`accounts`（每平台账号一份凭证）/
+`personas`（人设 + 对接哪些账号与会话）/ `behavior`（聚合窗口、切分上限、被动回复溢出策略等）。
+凭证建议用 `appIdFile` / `appSecretFile` 从 `.env` 形态的文件读，
+避免写进版本库
 
 **线程**：插件自建 io_context 与线程。主程序的通道事件回调（在根所属 io 线程）里只做
 「拷贝 → post 到插件 io 线程」，不在回调里阻塞。

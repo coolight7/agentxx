@@ -581,25 +581,24 @@ void parseBehavior(const Json& root, ChatbotConfig& out) {
     cfg.debugTools = jsonBoolOf(j, "debugTools", cfg.debugTools);
 }
 
-void parseCommands(const Json& root, ChatbotConfig& out) {
-    if (!root.contains("commands") || !root["commands"].is_array()) {
+/// 装上插件内置的命令表
+///
+/// 命令是插件自己的交互约定 (名字、回复文案、要不要进模型), 写死在
+/// [builtinCommands] 里, 不从配置读 —— 每个部署各写一套只会让文档与排查对不上。
+/// 配置里还留着的 `commands` 段不再生效, 提一句免得"改了配置却没反应"。
+void applyBuiltinCommands(const Json& root, ChatbotConfig& out) {
+    out.commands = builtinCommands();
+    if (!root.contains("commands")) {
         return;
     }
-    for (const auto& item : root["commands"]) {
-        if (!item.is_object()) {
-            continue;
+    std::string names;
+    for (const auto& command : out.commands) {
+        if (!names.empty()) {
+            names += ", ";
         }
-        CommandDef def;
-        def.name = jsonStringOf(item, "name");
-        CommandMode mode = CommandMode::Local;
-        if (commandModeFromString(jsonStringOf(item, "mode", "local"), mode)) {
-            def.mode = mode;
-        }
-        def.reply  = jsonStringOf(item, "reply");
-        def.prompt = jsonStringOf(item, "prompt");
-        def.action = jsonStringOf(item, "action");
-        out.commands.push_back(std::move(def));
+        names += command.name;
     }
+    XX_LOGW("[{}] 配置里的 commands 段已不再生效: 命令由插件内置 ({})", kLogTag, names);
 }
 
 } // namespace
@@ -696,7 +695,7 @@ bool parseConfig(std::string_view argsJson, ChatbotConfig& out, ConfigError& err
         return false;
     }
     parseBehavior(root, out);
-    parseCommands(root, out);
+    applyBuiltinCommands(root, out);
     return true;
 }
 
@@ -711,7 +710,7 @@ bool mergeConfigFile(std::string_view filePath, std::string& argsJsonInOut, Conf
     }
     Json fileJson;
     bool parsed = false;
-    // 先按 JSON 试 (便于用 .json 写同一份四段), 失败再按 YAML
+    // 先按 JSON 试 (便于用 .json 写同一份三段), 失败再按 YAML
     try {
         fileJson = Json::parse(text);
         parsed   = fileJson.is_object();
@@ -888,7 +887,8 @@ bool validateConfig(ChatbotConfig& config, int32_t maxRoots, ConfigError& err) {
         return false;
     }
 
-    // ---- commands ----
+    // ---- commands: 内置表的自检 ----
+    // 表在插件里写死, 正常部署不会出问题; 这里保留是为了改表时启动就能看到写错的地方
     for (size_t i = 0; i < config.commands.size(); ++i) {
         auto&             command = config.commands[i];
         const std::string where   = "commands[" + std::to_string(i) + "]";

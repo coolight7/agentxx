@@ -1,8 +1,9 @@
 #pragma once
 
-/// chatbot 配置: 四段 (accounts / personas / behavior / commands) → 强类型结构 + 校验
+/// chatbot 配置: 三段 (accounts / personas / behavior) → 强类型结构 + 校验
 ///
 /// 写法与 `model.list` / `model.use` 同构, 详见 `resource/history/chatbot/plan.md` §5。
+/// 关键词命令不在配置里: 由插件内置, 见 [builtinCommands]。
 ///
 /// 两个入口:
 /// - [parseConfig]: 从 `plugin.list[].args` 的 JSON 解析 (主程序原样转交);
@@ -149,6 +150,7 @@ struct ChatbotConfig {
     std::vector<AccountConfig> accounts;
     std::vector<PersonaConfig> personas;
     BehaviorConfig             behavior;
+    /// 命令表 (插件内置, 由 [builtinCommands] 填; 不从配置读)
     std::vector<CommandDef>    commands;
 
     /// 按 id 找账号 (找不到返回空指针)

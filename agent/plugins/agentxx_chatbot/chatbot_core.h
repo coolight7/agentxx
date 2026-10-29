@@ -92,9 +92,10 @@ enum class CommandMode : uint8_t {
 };
 
 const char* commandModeName(CommandMode mode) noexcept;
-bool        commandModeFromString(std::string_view text, CommandMode& out) noexcept;
 
-/// 一条命令定义 (来自配置)
+/// 一条命令定义
+/// - 表在插件里写死 (见 [builtinCommands]), 不从配置读: 命令是插件自己的交互约定,
+///   让每个部署各写一套只会让文档与排查对不上
 struct CommandDef {
     /// 命令名 (`/axx-info`), 必须以 `/` 开头
     std::string name;
@@ -106,6 +107,12 @@ struct CommandDef {
     /// `Action` 的动作名 (`cancel` / `clear`)
     std::string action;
 };
+
+/// 插件内置的命令表
+/// - 名字统一以 `/axx-` 开头 (测试与文档都按这张表写)
+/// - `/axx-help` 本地列命令, `/axx-info` 本地报会话状态, `/axx-hello` 让模型说一句,
+///   `/axx-stop` 打断当前一轮
+std::vector<CommandDef> builtinCommands();
 
 /// 命令匹配结果
 struct ParsedCommand {

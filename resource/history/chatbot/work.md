@@ -339,6 +339,33 @@ AgentHost: mounted root 'ext:agentxx_chatbot:1' (owner='agentxx_chatbot', ..., r
 **连一次平台**（日志里有 `账号 'qq_main' 已启动 (appId ***1230, ...)`），跑完就退出。
 不想连平台时把账号 `type` 临时改成 `fake` 再 dump。
 
+### 命令改成插件内置，去掉 `commands` 配置段（2026-10-30）
+
+原来的 `commands` 段让每个部署自己写命令名、`mode`、回复模板。想法是灵活，实际代价是：
+命令名与文案一旦可配置，README 的示例、`plugin_example_chatbot` 的用例、排错说法
+（"发 `/axx-info` 看状态"）都得跟着配置走，谁改了都不同步。命令本来就是插件自己的
+交互约定，改成写死：
+
+- `chatbot_core.{h,cpp}` 新增 `builtinCommands()`，四条：`/axx-help`（local，列命令）、
+  `/axx-info`（local，会话状态）、`/axx-hello`（model，让模型说一句）、
+  `/axx-stop`（action cancel，不回复文本）。
+- `chatbot_config.cpp` 的 `parseCommands` 换成 `applyBuiltinCommands`：装配内置表，并且
+  配置里若还留着 `commands` 段就记一条警告（"已不再生效: 命令由插件内置 (…)"），避免
+  "改了配置却没反应"。`commandModeFromString` 随解析一起删掉（只有它用过）。
+- `validateConfig` 里那段命令校验保留，改成对内置表的自检 —— 以后改表写错名字/动作，
+  启动时就能看到。
+- 配置从"四段"回到"三段"（`accounts` / `personas` / `behavior`）。
+
+用例：新增 `chatbot_core` 的 `testBuiltinCommands`（名字前缀/去重/各模式必填项/四条都在/
+`{commandList}`/能被匹配器吃下），另加"配置里写 `/custom-cmd` 不生效、表仍是内置那几条"；
+删掉两个只对配置生效的校验用例。`plugin_example_chatbot` 的测试配置去掉了 `commands` 段，
+但它对 `/axx-info`（要含 "人设 assistant"、`{chat}` 渲染成会话 id）与 `/axx-hello`
+（要含 "请向" 与 `{args}`）的断言**没动** —— 内置文案就是按这两条断言写的。
+
+实测：`chatbot_core` + `chatbot_qq` + `plugin_example_chatbot` 792 项全过，
+`boundaries` + `test_modules` 24 项全过；fake 平台起 server 日志为
+`已启动: 1 个账号, 1 个人设, 4 条命令`。
+
 ## 待完成
 
 - [x] 阶段 2 收尾：`plugin_example_chatbot` 端到端用例（假平台注入 → 聚合 → 工具回复 →

@@ -17,6 +17,7 @@
 #include "agentxx_chatbot/chatbot_types.h"
 
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -237,6 +238,45 @@ void testSplit() {
 }
 
 /* ==================== 命令 ==================== */
+
+void testBuiltinCommands() {
+    const auto defs = builtinCommands();
+    XX_TEST_EXPECT_TRUE(!defs.empty());
+
+    // 名字都得以 `/axx-` 开头 (文档与用例都按这个前缀写), 且不重复
+    std::set<std::string> names;
+    for (const auto& def : defs) {
+        XX_TEST_EXPECT_TRUE(def.name.rfind("/axx-", 0) == 0);
+        XX_TEST_EXPECT_TRUE(names.insert(def.name).second);
+        if (def.mode == CommandMode::Local) {
+            XX_TEST_EXPECT_TRUE(!def.reply.empty());
+        } else if (def.mode == CommandMode::Model) {
+            XX_TEST_EXPECT_TRUE(!def.prompt.empty());
+        } else {
+            XX_TEST_EXPECT_TRUE(def.action == "cancel" || def.action == "clear");
+        }
+    }
+
+    // 四个命令都在, 且各自是预期形态
+    XX_TEST_EXPECT_TRUE(names.count("/axx-help") == 1);
+    XX_TEST_EXPECT_TRUE(names.count("/axx-info") == 1);
+    XX_TEST_EXPECT_TRUE(names.count("/axx-hello") == 1);
+    XX_TEST_EXPECT_TRUE(names.count("/axx-stop") == 1);
+
+    // `{commandList}` 由引擎按同一张表拼出来, 帮助命令必须带上它
+    bool helpUsesList = false;
+    for (const auto& def : defs) {
+        if (def.name == "/axx-help") {
+            helpUsesList = def.reply.find("{commandList}") != std::string::npos;
+        }
+    }
+    XX_TEST_EXPECT_TRUE(helpUsesList);
+
+    // 内置表能直接喂给匹配器
+    const auto hit = parseCommand("/axx-info", defs);
+    XX_TEST_EXPECT_TRUE(hit.matched);
+    XX_TEST_EXPECT_EQ(hit.name, std::string{"/axx-info"});
+}
 
 void testCommand() {
     std::vector<CommandDef> defs;
@@ -563,6 +603,26 @@ void testConfigParseAndValidate() {
         ConfigError   err;
         XX_TEST_EXPECT_FALSE(parseConfig("[]", config, err));
     }
+    // 命令表来自插件内置: 配置里的 `commands` 段不生效, 表始终是内置那四条
+    {
+        ChatbotConfig config;
+        ConfigError   err;
+        XX_TEST_EXPECT_TRUE(parseConfig(
+            R"({"accounts": [{"id": "a", "type": "qq", "appId": "1", "appSecret": "s"}],
+                "personas": [{"name": "p", "bind": [{"account": "a", "chats": [{"type":"group","id":"G"}]}]}],
+                "commands": [{"name": "/custom-cmd", "mode": "local", "reply": "x"}]})",
+            config,
+            err
+        ));
+        XX_TEST_EXPECT_EQ(config.commands.size(), builtinCommands().size());
+        bool hasCustom = false;
+        for (const auto& command : config.commands) {
+            if (command.name == "/custom-cmd") {
+                hasCustom = true;
+            }
+        }
+        XX_TEST_EXPECT_FALSE(hasCustom);
+    }
 }
 
 void testConfigValidationFailures() {
@@ -690,34 +750,6 @@ void testConfigValidationFailures() {
         );
         XX_TEST_EXPECT_FALSE(validateConfig(config, 3, err));
         XX_TEST_EXPECT_TRUE(contains(err.message, "根数上限"));
-    }
-    // 命令名不以 / 开头
-    {
-        ChatbotConfig config;
-        ConfigError   err;
-        parseConfig(
-            R"({"accounts": [{"id": "a", "type": "qq", "appId": "1", "appSecret": "s"}],
-                "personas": [{"name": "p", "bind": [{"account": "a", "chats": [{"type":"group","id":"G"}]}]}],
-                "commands": [{"name": "axx-info", "mode": "local", "reply": "x"}]})",
-            config,
-            err
-        );
-        XX_TEST_EXPECT_FALSE(validateConfig(config, 8, err));
-        XX_TEST_EXPECT_TRUE(contains(err.message, "/"));
-    }
-    // action 取值非法
-    {
-        ChatbotConfig config;
-        ConfigError   err;
-        parseConfig(
-            R"({"accounts": [{"id": "a", "type": "qq", "appId": "1", "appSecret": "s"}],
-                "personas": [{"name": "p", "bind": [{"account": "a", "chats": [{"type":"group","id":"G"}]}]}],
-                "commands": [{"name": "/axx-x", "mode": "action", "action": "restart"}]})",
-            config,
-            err
-        );
-        XX_TEST_EXPECT_FALSE(validateConfig(config, 8, err));
-        XX_TEST_EXPECT_TRUE(contains(err.message, "cancel"));
     }
     // behavior 越界裁剪不失败
     {
@@ -969,6 +1001,7 @@ TestResult testChatbotCore() {
 
     testUtf8Basics();
     testSplit();
+    testBuiltinCommands();
     testCommand();
     testTemplate();
     testInputBlock();

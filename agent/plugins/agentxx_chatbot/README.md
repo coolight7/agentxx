@@ -97,21 +97,11 @@ plugin:
             inlineTextMaxBytes: 65536   # 小文本文件正文直接内联进输入 (0 = 关闭)
           exposeToolsOnHost: false      # 是否把 chatbot_* 工具也注册到内置主会话
           debugTools: false             # 是否注册 chatbot_debug_* 调试工具
-
-        # ---------- 第四段: 关键词命令 ----------
-        commands:
-          - name: /axx-info
-            mode: local                 # 插件自己回, 不进模型
-            reply: |
-              账号 {account} · 会话 {chat} · 人设 {persona} · 模式 {mode}
-              收到 {received} 条 · 回复 {sent} 条 · 丢弃 {dropped} 条
-          - name: /axx-hello
-            mode: model                 # 构造一条输入投给 agent
-            prompt: "请向 {sender} 打个招呼, 一句话即可。"
-          - name: /axx-stop
-            mode: action                # 执行动作
-            action: cancel              # 目前只实现 cancel (取消当前一轮); clear 尚未实现
 ```
+
+配置只有三段：`accounts`（账号）/ `personas`（人设）/ `behavior`（通用行为）。
+关键词命令**不在配置里**，由插件内置（见 §2.3）；
+启动时只在日志里提一句「命令由插件内置」。
 
 ### 2.1 三种触发模式（`bind.chats[].mode`）
 
@@ -132,6 +122,22 @@ plugin:
 - `appIdFile: resource/keys/qq_bot.env`（从 `.env` 形态的文件读 `QQBOT_APPID`）。
 
 `appSecretFile` 同理，键名是 `QQBOT_APPSECR(S)ET`（两种拼写都接受，平台文档里两种都出现过）。
+
+### 2.3 内置命令
+
+命令写在 `chatbot_core.cpp` 的 `builtinCommands()` 里，名字统一 `/axx-` 开头，
+直接发命令名即可（大小写不敏感，命令名后面可以跟一段文字，作为 `{args}` 用）：
+
+| 命令 | 行为 |
+|------|------|
+| `/axx-help` | 列出全部命令（`{commandList}` 由同一张表拼出来） |
+| `/axx-info` | 当前会话的人设 / 模式 / 通道 / 计数，排查「为什么不回复」先看它 |
+| `/axx-hello` | 让模型向发言人打个招呼（`model` 模式：走一轮模型） |
+| `/axx-stop` | 打断当前这一轮（`action: cancel`；不回复任何文本） |
+
+**命令是插件自己的交互约定**，所以没有做配置项：每个部署各写一套名字与文案，
+文档、用例、排错说法就对不上了。要改命令请改 `builtinCommands()`（改完补
+`chatbot_core` 的 `builtinCommands` 用例）。
 
 ## 3. 模型看到的输入
 

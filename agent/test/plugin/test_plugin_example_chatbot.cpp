@@ -313,13 +313,7 @@ asio::awaitable<void> runBody(
     "maxSplitParts": 8,
     "maxRepliesPerTurn": 5,
     "debugTools": true
-  }},
-  "commands": [
-    {{"name": "/axx-info", "mode": "local",
-      "reply": "会话 {{chat}} 人设 {{persona}} 模式 {{mode}} 收到 {{received}} 条"}},
-    {{"name": "/axx-hello", "mode": "model", "prompt": "请向 {{sender}} 打招呼: {{args}}"}},
-    {{"name": "/axx-stop", "mode": "action", "action": "cancel"}}
-  ]
+  }}
 }})JSON",
         prompt
     );

@@ -435,7 +435,7 @@ plugin:
       enabled: true
 
     # === 群聊机器人 (QQ 群聊 / 私聊 <-> agent 会话)
-    # - 每个人设 = 一个独立的根 agent; 每个「账号 + 群 或 私聊」= 一个独立会话 (跨重启稳定)
+    # - 每个人设 = 一个独立的根 agent; 每个「账号 + 群 或 私聊」= 一个独立会话
     # - 内置主会话不受影响, 群里的上下文与它分开
     # - 想让群里也能用与内置会话一样的工具, 把下面的 mount.mode 改成 all
     # - 同一个 appId 不要在多处同时连 (两台机器/两个进程), 平台会把先连的挤掉
@@ -503,20 +503,7 @@ plugin:
             inlineTextMaxBytes: 65536  # 小文本文件正文直接内联进输入 (0 = 关闭, 只给路径)
           exposeToolsOnHost: false  # 是否把 chatbot_* 也注册到内置主会话 (调试用)
           debugTools: false         # 是否注册 chatbot_debug_* (注入假消息/回看假平台)
-
-        # ---------- 第四段: 关键词命令 ----------
-        commands:
-          - name: /axx-info
-            mode: local             # 插件自己回, 不进模型
-            reply: |
-              账号 {account} · 会话 {chat} · 人设 {persona} · 模式 {mode}
-              收到 {received} 条 · 回复 {sent} 条 · 丢弃 {dropped} 条
-          - name: /axx-ping
-            mode: local
-            reply: "pong (通道 {channelId})"
-          - name: /axx-stop
-            mode: action            # 执行动作
-            action: cancel          # 目前只实现 cancel(取消当前一轮); clear 尚未实现
+        # 关键词命令: 插件内置 /axx-help /axx-info /axx-hello /axx-stop
 
     # === 数学计算工具 ===
     # - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_math/

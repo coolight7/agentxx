@@ -438,20 +438,45 @@ const char* commandModeName(CommandMode mode) noexcept {
     return "local";
 }
 
-bool commandModeFromString(std::string_view text, CommandMode& out) noexcept {
-    if (text == "local") {
-        out = CommandMode::Local;
-        return true;
+std::vector<CommandDef> builtinCommands() {
+    std::vector<CommandDef> defs;
+
+    // 帮助: 命令清单由引擎按这张表拼成 {commandList}
+    {
+        CommandDef def;
+        def.name  = "/axx-help";
+        def.mode  = CommandMode::Local;
+        def.reply = "可用命令: {commandList}\n"
+                    "直接发命令名即可, 不进模型; 命令后面可以跟一段文字, 作为 {args} 交给模型命令。";
+        defs.push_back(std::move(def));
     }
-    if (text == "model") {
-        out = CommandMode::Model;
-        return true;
+    // 会话信息: 排查「为什么不回复」先看这里
+    {
+        CommandDef def;
+        def.name  = "/axx-info";
+        def.mode  = CommandMode::Local;
+        def.reply = "人设 {persona} · 模式 {mode} · 通道 {channelId}\n"
+                    "会话 {chat} ({chatType}) · 账号 {account} · 已运行 {uptime}\n"
+                    "收到 {received} 条 · 回复 {sent} 条 · 丢弃 {dropped} 条 · 重复 {duplicated} 条";
+        defs.push_back(std::move(def));
     }
-    if (text == "action") {
-        out = CommandMode::Action;
-        return true;
+    // 让模型说一句: 不打字也能确认「模型 → 出站」这一段是通的
+    {
+        CommandDef def;
+        def.name   = "/axx-hello";
+        def.mode   = CommandMode::Model;
+        def.prompt = "请向 {sender} 打个招呼, 一句话即可。{args}";
+        defs.push_back(std::move(def));
     }
-    return false;
+    // 打断当前一轮 (没有回复: 没有正在跑的轮次时也没什么好说的)
+    {
+        CommandDef def;
+        def.name   = "/axx-stop";
+        def.mode   = CommandMode::Action;
+        def.action = "cancel";
+        defs.push_back(std::move(def));
+    }
+    return defs;
 }
 
 ParsedCommand parseCommand(std::string_view text, const std::vector<CommandDef>& defs) {
