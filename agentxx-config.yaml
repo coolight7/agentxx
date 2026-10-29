@@ -441,7 +441,7 @@ plugin:
     # - 同一个 appId 不要在多处同时连 (两台机器/两个进程), 平台会把先连的挤掉
     # - 配置细节与排错见 agent/plugins/agentxx_chatbot/README.md
     - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_chatbot/
-      enabled: true
+      enabled: false
       args:
         # ---------- 第一段: 平台账号 ----------
         accounts:
@@ -460,7 +460,7 @@ plugin:
         # ---------- 第二段: 人设 ----------
         personas:
           - name: assistant         # 会话 id 前缀; 只能用 [A-Za-z0-9_-]
-            # model: xxx            # 留空 = 用 model.use.default
+            # model: xxx            # 人设使用的 LLM 模型; 留空 = 用 model.use.default
             prompt:
               systemPrompt: |
                 你是 QQ 群里的一名技术助手, 说话简短、口语化, 像在聊天软件里打字。
