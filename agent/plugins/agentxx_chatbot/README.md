@@ -89,7 +89,12 @@ plugin:
           maxChatsPerPersona: 64        # 每人设活跃会话上限 (超了回收最久没动的)
           fallbackReply: mention        # 模型没调工具时: mention | always | never
           overflowPolicy: active        # 被动回复次数用尽后: active | truncate | fail
-          attachmentsMaxPerMessage: 5
+          humanInLoop: auto-allow       # 群里的权限询问弹不出来: auto-allow | auto-deny
+          injectContextHint: true       # 每轮输入开头带「你在哪个群」
+          attachments:                  # 附件策略 (注意这层嵌套: 平铺写在 behavior 下不生效)
+            fetch: auto                 # auto | url | download
+            maxPerMessage: 5            # 单条消息最多处理几个附件 (主程序上限 5)
+            inlineTextMaxBytes: 65536   # 小文本文件正文直接内联进输入 (0 = 关闭)
           exposeToolsOnHost: false      # 是否把 chatbot_* 工具也注册到内置主会话
           debugTools: false             # 是否注册 chatbot_debug_* 调试工具
 
@@ -105,7 +110,7 @@ plugin:
             prompt: "请向 {sender} 打个招呼, 一句话即可。"
           - name: /axx-stop
             mode: action                # 执行动作
-            action: cancel              # cancel | clear
+            action: cancel              # 目前只实现 cancel (取消当前一轮); clear 尚未实现
 ```
 
 ### 2.1 三种触发模式（`bind.chats[].mode`）

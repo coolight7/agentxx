@@ -288,6 +288,57 @@
   `agentxx_chatbot` 一行，并新增 §13.1 概述（人设根 / 会话划分 / 回复出口 / 聚合 / 命令 /
   线程与调试工具）。
 
+### 仓库配置补齐 chatbot 四段（2026-10-30）
+
+`agentxx-config.yaml` 里原来只有一行 `path: .../agentxx_chatbot/` + `enabled: true`，
+账号段是空的，`start` 会在校验阶段直接失败（`accounts 不能为空`），也就是说开箱即用的
+配置其实开不起来。本轮把四段写全：
+
+- **账号**：`qq_main` / `type: qq`，凭证走 `${QQBOT_APPID}` / `${QQBOT_APPSERCRET}`
+  （本仓库 `.env` 用的是带 "S" 的那种拼写，`appSecretFile` 两种都认），注释里给了
+  `appIdFile` 的替代写法。
+- **人设**：`assistant`，`mount.mode: listed` + `[agentxx_filesystem, agentxx_websearch]`
+  （不挂 `execute_command`，注释说明群里任何人能执行命令的风险；也不给 `all`，
+  避免每个根各建一份 codegraph 索引），`bind` 用通配把"所有群被 @ 才回 / 所有私聊每条都回"
+  都接上，`tools` 白名单以注释形式给了只读示例。
+- **行为**：聚合窗口、发送间隔、切分上限、一轮回复数、`humanInLoop: auto-allow`
+  （群里弹不出权限询问）、`attachments.{fetch,maxPerMessage,inlineTextMaxBytes}`。
+- **命令**：`/axx-info`（local）、`/axx-ping`（local，带 `{channelId}`）、
+  `/axx-stop`（action cancel）。
+
+顺带修掉两处会误导的文档/示例：
+
+- README 的行为段示例把附件策略写成平铺的 `attachmentsMaxPerMessage`，而解析只看
+  `behavior.attachments.maxPerMessage`（平铺键会被**静默忽略**）。已改成嵌套写法，
+  并补上 `humanInLoop` / `injectContextHint`。
+- README 与配置示例都写着 `action: clear`，但 `clear` 目前只打一行"本期未实现"的日志，
+  实际不生效。已在两处注明，只保留 `cancel`。
+
+另外记一条验证经验：**`--dump-config` 不能验证人设根**。这条路径里插件确实会被加载并
+`start`，但主程序此时没有 `AgentHost` 容器，`mount_root` 一律被拒：
+
+```
+[runtime] mount_root 被拒 (-6): mount_root: 本进程没有 agent 容器 (插件管理器未挂到 AgentHost 上)
+start: 人设 'assistant' 的根挂载失败 (见主程序日志: 配置非法或根预算用尽)
+Plugin `agentxx_chatbot` start failed: ...
+```
+
+看到这条不用怀疑配置写法；用 `server`（或把账号改成 `type: fake` 避免连真实平台）
+起一次，日志里出现下面三行才算通：
+
+```
+人设 'assistant' 的根已挂载: ext:agentxx_chatbot:1
+已启动: 1 个账号, 1 个人设, 3 条命令
+AgentHost: mounted root 'ext:agentxx_chatbot:1' (owner='agentxx_chatbot', ..., roots=1/8)
+```
+
+本轮实测：`roots=1/8`、人设根 3 个实例（chatbot + filesystem + websearch）、16 个工具、
+`config issues[0]`。
+
+还要记住 `--dump-config` 有副作用：它是真的把插件加载并 `start` 了一遍，所以 chatbot 会
+**连一次平台**（日志里有 `账号 'qq_main' 已启动 (appId ***1230, ...)`），跑完就退出。
+不想连平台时把账号 `type` 临时改成 `fake` 再 dump。
+
 ## 待完成
 
 - [x] 阶段 2 收尾：`plugin_example_chatbot` 端到端用例（假平台注入 → 聚合 → 工具回复 →

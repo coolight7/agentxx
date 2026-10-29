@@ -434,6 +434,90 @@ plugin:
     - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_system_monitor/
       enabled: true
 
+    # === 群聊机器人 (QQ 群聊 / 私聊 <-> agent 会话)
+    # - 每个人设 = 一个独立的根 agent; 每个「账号 + 群 或 私聊」= 一个独立会话 (跨重启稳定)
+    # - 内置主会话不受影响, 群里的上下文与它分开
+    # - 想让群里也能用与内置会话一样的工具, 把下面的 mount.mode 改成 all
+    # - 同一个 appId 不要在多处同时连 (两台机器/两个进程), 平台会把先连的挤掉
+    # - 配置细节与排错见 agent/plugins/agentxx_chatbot/README.md
+    - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_chatbot/
+      enabled: true
+      args:
+        # ---------- 第一段: 平台账号 ----------
+        accounts:
+          - id: qq_main             # 人设按这个 id 对接; 只能用 [A-Za-z0-9_-]
+            type: qq                # qq | fake (fake = 内存假平台, 本地演示用)
+            # 凭证建议放 .env, 这里只引用, 不进版本库
+            # 也可以改成 appIdFile/appSecretFile 指向一个 KEY=VALUE 形态的文件
+            # (如 resource/keys/qq_bot.env; appSecretFile 认 QQBOT_APPSERCRET 与
+            #  QQBOT_APPSECRET 两种拼写, 本仓库 .env 用的是前者)
+            appId: "${QQBOT_APPID}"
+            appSecret: "${QQBOT_APPSERCRET}"
+            sandbox: false
+            groupPerMinute: 0       # 主动消息频控覆盖 (0 = 用平台默认值)
+            singlePerMinute: 0
+
+        # ---------- 第二段: 人设 ----------
+        personas:
+          - name: assistant         # 会话 id 前缀; 只能用 [A-Za-z0-9_-]
+            # model: xxx            # 留空 = 用 model.use.default
+            prompt:
+              systemPrompt: |
+                你是 QQ 群里的一名技术助手, 说话简短、口语化, 像在聊天软件里打字。
+                你在哪个群、谁在说话, 看每轮输入开头的会话信息与消息行。
+                需要回话时只能调用 chatbot_send_message 把内容发出去, 直接写在正文里群里看不到。
+            # tools:                # 工具白名单 (工具名); 留空 = 不过滤
+            #   - agentxx_filesystem_read
+            #   - agentxx_filesystem_grep
+            #   - chatbot_send_message
+            mount:                  # 这个根上除 chatbot_* 之外还挂哪些插件 (决定模型能用哪些工具)
+              mode: listed          # none | all | listed; listed 时 chatbot 自己会被自动补进名单
+              list: [agentxx_filesystem, agentxx_websearch]
+              # - 每个根各有一份插件实例, 挂得越多内存越高 (codegraph/system_monitor 较重)
+              # - all: 与内置主会话看到的工具一致 (含 codegraph 索引, 内存占用明显)
+              # - agentxx_execute_command 会让群里任何人能在这台机器上执行命令, 需要时再打开
+            bind:                   # 对接范围: 不给 bind 就不会处理任何会话
+              - account: qq_main
+                chats:
+                  - { type: group, id: "*", mode: mention }   # 所有群: 被 @ 才回
+                  - { type: private, id: "*", mode: always }   # 所有私聊: 每条都回
+                  # - { type: group, id: "123456789", mode: always }  # 指定群: 每条都回
+                  # 模式: mention(被 @ 才唤醒, 期间其它消息攒着一起带上去) |
+                  #       always(每条都投) | off(该会话不处理)
+
+        # ---------- 第三段: 通用行为 ----------
+        behavior:
+          aggregateWindowMs: 800    # always 模式的静默窗口 (毫秒): 多条消息合并成一次输入
+          sendIntervalMs: 400       # 一轮内多条回复之间的发送间隔
+          messageSplitLimit: 1500   # 单条文本上限 (UTF-8 码点; 超出自动切段并带 (i/n))
+          maxSplitParts: 8          # 单条最多切成几段
+          maxRepliesPerTurn: 3      # 一轮最多发几条
+          maxChatsPerPersona: 64    # 每人设活跃会话上限 (超了回收最久没动的)
+          fallbackReply: mention    # 模型没调 chatbot_send_message 时: mention | always | never
+          overflowPolicy: active    # 被动回复次数用尽后: active(转主动) | truncate | fail
+          humanInLoop: auto-allow   # 权限询问在群里弹不出来: auto-allow 自动同意 | auto-deny 拒绝
+          injectContextHint: true   # 每轮输入开头带「你在哪个群」
+          attachments:
+            fetch: auto             # auto | url | download
+            maxPerMessage: 5        # 单条消息最多处理几个附件 (主程序上限就是 5)
+            inlineTextMaxBytes: 65536  # 小文本文件正文直接内联进输入 (0 = 关闭, 只给路径)
+          exposeToolsOnHost: false  # 是否把 chatbot_* 也注册到内置主会话 (调试用)
+          debugTools: false         # 是否注册 chatbot_debug_* (注入假消息/回看假平台)
+
+        # ---------- 第四段: 关键词命令 ----------
+        commands:
+          - name: /axx-info
+            mode: local             # 插件自己回, 不进模型
+            reply: |
+              账号 {account} · 会话 {chat} · 人设 {persona} · 模式 {mode}
+              收到 {received} 条 · 回复 {sent} 条 · 丢弃 {dropped} 条
+          - name: /axx-ping
+            mode: local
+            reply: "pong (通道 {channelId})"
+          - name: /axx-stop
+            mode: action            # 执行动作
+            action: cancel          # 目前只实现 cancel(取消当前一轮); clear 尚未实现
+
     # === 数学计算工具 ===
     # - path: ${AGENTXX_EXEC_DIR}/plugins/agentxx_math/
     #   enabled: false
