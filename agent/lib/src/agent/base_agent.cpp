@@ -1446,7 +1446,7 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
                     utilxx_base::base64Encode(fileData)
                 );
                 att.sizeBytes = fileSize;
-                XX_LOGI(
+                XX_LOGD(
                     "[base_agent] server attachment loaded: {} ({} bytes, {})",
                     att.pathOrUrl,
                     fileSize,

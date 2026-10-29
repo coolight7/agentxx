@@ -440,15 +440,6 @@ std::string ChatbotEngine::assembleInput(
     if (!attachments.empty()) {
         input["attachments"] = std::move(attachments);
     }
-    // 附件调试: 确认投给主程序的附件里带的是本地路径还是远端地址
-    if (input.contains("attachments")) {
-        XX_LOGI(
-            "[{}] 投递附件 {} 个: {}",
-            kLogTag,
-            input["attachments"].size(),
-            input["attachments"].dump().substr(0, 400)
-        );
-    }
 
     // 一轮记账: 工具据此定位被动回复 id 与「回哪条」
     auto& turn       = state.turn;

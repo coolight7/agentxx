@@ -131,6 +131,53 @@
 修完后真账号链路打通：token 获取 → 网关 Hello（心跳 41250 ms）→ Identify → `ready`，
 日志可见 `网关已就绪 (session ...)`。
 
+首次真实会话又暴露两处网关问题：
+
+5. **`RESUMED` 被当成普通事件忽略**：重连时服务端回 `RESUMED`（一条 Dispatch），代码只对
+   `READY` 置在线，于是状态永远停在 `reconnecting`；上层"在线才发"的判断会把后续出站全挡掉。
+   现在收到 `RESUMED` 也置 `online`、清零重连计数并触发 `onReady`。
+6. **重连计数恒为 0**：只有"连接失败"那条路径在调 `backoffMs(++reconnectCount_)`，`op 7`/`op 9`
+   给常量延迟，日志永远显示"第 0 次"。计数改为在 `scheduleReconnect` 内统一递增，
+   传 `delayMs < 0` 表示按当前次数算指数退避（`op 7`/`op 9` 保持固定 1 秒）。
+
+另：命令回复里的 `{channelId}` 以前渲染成孤立的 `-`（本地命令不建通道，首条命令必然如此，
+`-` 看不出原因），改为 `未建`。
+
+### 图片消息：三个叠加缺陷（真机联调最后一块）
+
+发图片后模型完全没有回复，请求报 `HTTP 400 media[0].url must use the http or https scheme`。
+是三个独立缺陷叠加，且**第三个会让会话永久坏掉**，值得单独记：
+
+1. **附件路径在文件写完前就填上了**：`QqPlatform::downloadAttachment` 用 `co_spawn` 异步下载，
+   但函数返回时立刻写 `ref.localPath`。消息马上投给模型 → 主程序读文件报
+   `cannot get file size for server attachment ... system cannot find the file specified`
+   → `dataUrl` 为空 → 回退把本地路径当 URL。改为同步下载（一次性 io_context 跑到完成），
+   落盘成功后才回填路径。
+2. **加载失败被当成"用本地路径当 URL"**（`base_agent.cpp`）：这类值会被上游整轮拒绝，
+   连文字回复一起丢。改为跳过该附件并记警告，文字部分照常发送。
+3. **脏数据永久残留**（最关键）：某一轮把本地路径写进会话的 `llm_context` 之后，
+   该会话**此后每一轮请求都带着它**，与端点/provider 都无关 —— 换 `/responses` 或
+   `/chat/completions`、换模型类型都照报同样的错，而拿同一个 data URL 直连上游却成功。
+   排查时差点误判成"上游网关不支持 data URL"（实测 `openai-responses` 的 TUI 发图是正常的，
+   这个对照是决定性线索）。现在 `modelcall` 在组请求前剔除 `image_urls`/`audio_urls`/
+   `video_urls` 里非 `data:`、非 `http(s)` 的值并记条数，老会话可自行恢复。
+
+另外补了一条"附件加载成功"的日志：以前只在失败时打日志，成功时无从判断到底转换没有，
+排查走了不少弯路。
+
+### 真账号联调结论（2026-10-29）
+
+实测通过（日志可查）：
+
+| 项 | 结果 |
+|----|------|
+| token 获取 / 自动刷新 | ✅ 剩余不足 90 秒时刷新，实测拿到 7200 秒有效期 |
+| 网关 Hello / Identify / READY | ✅ 心跳间隔 41250 ms |
+| 私聊普通消息 → 模型 → 工具回复 | ✅ 通道 lazily 创建（`通道 2`），投递给 人设根会话，模型调 `chatbot_send_message`，被动回复 81 字符送达 |
+| 图片消息 → 模型看图 → 回复 | ✅ 下载落盘 → 转 Base64 Data URL → 模型正确描述图片内容 → 回复 150 字符 |
+| 命令 `local`（`/axx-ping` / `/axx-info`） | ✅ 命中即回，不进模型，带被动回复 id |
+| 会话统计 | ✅ `/axx-info` 的接收计数随消息递增 |
+
 ### 主程序框架修复（第二处：插件建根时机）
 
 `AgentHost::create` 之前不给 `primaryAgent->host` 赋值，容器引用只在
