@@ -298,7 +298,8 @@ asio::awaitable<void> runBody(
           {{"type": "private", "id": "U1", "mode": "always"}},
           {{"type": "private", "id": "U2", "mode": "always"}},
           {{"type": "private", "id": "U3", "mode": "always"}},
-          {{"type": "private", "id": "U4", "mode": "always"}}
+          {{"type": "private", "id": "U4", "mode": "always"}},
+          {{"type": "private", "id": "U9", "mode": "always"}}
         ]}}
       ]
     }}
@@ -350,12 +351,13 @@ asio::awaitable<void> runBody(
     if (!rootCtx) {
         co_return;
     }
-    // 5 个业务工具 + 2 个调试工具都在人设根上
+    // 6 个业务工具 + 2 个调试工具都在人设根上
     for (const auto* name : {"chatbot_send_message",
                              "chatbot_history",
                              "chatbot_chat_info",
                              "chatbot_status",
                              "chatbot_set_mode",
+                             "chatbot_recall_message",
                              "chatbot_debug_inject",
                              "chatbot_debug_outbox"}) {
         XX_TEST_EXPECT_TRUE(rootCtx->toolRegistry->contains(name));
@@ -631,6 +633,78 @@ asio::awaitable<void> runBody(
             }
         }
         XX_TEST_EXPECT_TRUE(hasMarker);
+    }
+
+    // ===================== 5b. 撤回自己发出的消息 =====================
+    {
+        XX_TEST_EXPECT_TRUE(co_await drain());
+
+        // 让模型真的调工具发一条 (工具路径才会把平台消息 id 记进可撤回表)
+        const std::string marker = "recall-me-marker";
+        g_da_sim_tool_calls_remaining = 1;
+        g_da_sim_tool_calls           = Json::array(
+            {Json{
+                {"index", 0},
+                {"id", "call_chatbot_recall_target"},
+                {"type", "function"},
+                {"function",
+                 Json{
+                     {"name", "chatbot_send_message"},
+                     {"arguments", Json{{"text", marker}}.dump()},
+                 }},
+            }}
+        );
+        const int requestsBefore = g_da_sim_request_count.load();
+        XX_TEST_EXPECT_TRUE(
+            co_await inject("private", "U9", "回一句待会要撤回的话", false, "msg-recall-1")
+        );
+        XX_TEST_EXPECT_TRUE(co_await waitUntil(ex, 60s, [&]() {
+            return g_da_sim_request_count.load() > requestsBefore;
+        }));
+        // 等这条真的发出去 (按标记文本定位, 避免把别的会话的出站当成自己的)
+        XX_TEST_EXPECT_TRUE(co_await waitOutbox(ex, 30s, rootCtx, [&](const Json& outbox) {
+            for (const auto& item : outbox) {
+                if (item.value("chatId", std::string{}) == "U9"
+                    && item.value("text", std::string{}) == marker) {
+                    return true;
+                }
+            }
+            return false;
+        }));
+        XX_TEST_EXPECT_TRUE(co_await drain());
+
+        // 撤最近 1 条: 应成功并回显被撤的 id
+        const auto recallResult = co_await callTool(
+            rootCtx,
+            "chatbot_recall_message",
+            R"({"chat":"fake_main|private|U9","count":1})"
+        );
+        if (recallResult.rfind("[Error", 0) == 0) {
+            TEST_FAIL << "recall failed: " << recallResult << std::endl;
+        }
+        XX_TEST_EXPECT_TRUE(recallResult.rfind("[Error", 0) != 0);
+        const auto recalled = Json::parse(recallResult);
+        XX_TEST_EXPECT_TRUE(recalled.contains("recalled"));
+        XX_TEST_EXPECT_EQ(recalled["recalled"].size(), size_t{1});
+
+        // 再撤一次: 最近记录里已经没有可撤的了 (假平台只认自己发过的 id),
+        // 结果应当是"失败"而不是静默成功; 具体是"没有可撤回的记录"还是
+        // "平台找不到该消息"取决于内部记录是否还有, 两者都算正确拒绝
+        const auto second = co_await callTool(
+            rootCtx,
+            "chatbot_recall_message",
+            R"({"chat":"fake_main|private|U9","count":1})"
+        );
+        XX_TEST_EXPECT_TRUE(second.rfind("[Error", 0) == 0);
+
+        // 不存在的消息 id: 平台拒绝并给出可读原因
+        const auto unknown = co_await callTool(
+            rootCtx,
+            "chatbot_recall_message",
+            R"({"chat":"fake_main|private|U9","messageId":"fake-does-not-exist"})"
+        );
+        XX_TEST_EXPECT_TRUE(unknown.rfind("[Error", 0) == 0);
+        XX_TEST_EXPECT_TRUE(unknown.find("找不到") != std::string::npos);
     }
 
     // ===================== 6. 命令: local 直回 / model 进模型 =====================

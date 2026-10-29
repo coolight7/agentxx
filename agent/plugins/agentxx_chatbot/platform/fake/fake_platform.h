@@ -57,6 +57,14 @@ public:
     /// 已发出的出站记录 (JSON 数组; 供测试/本地演示核对)
     std::string debugOutbox(size_t limit, bool clear) override;
 
+    /// 撤回 (测试用: 只把 id 从已发记录里标记为撤销)
+    RecallResult recallMessage(
+        const std::string& accountId,
+        ChatType           type,
+        const std::string& chatId,
+        const std::string& messageId
+    ) override;
+
     /* ---------- 测试/演示用 ---------- */
 
     /// 注入一条入站消息 (归一化后直接交给 sink)

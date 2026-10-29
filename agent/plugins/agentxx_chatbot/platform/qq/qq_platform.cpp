@@ -424,6 +424,67 @@ void QqPlatform::downloadAttachment(const std::string& accountId, MediaRef& ref)
     dlCtx.run();
 }
 
+RecallResult QqPlatform::recallMessage(
+    const std::string& accountId,
+    ChatType           type,
+    const std::string& chatId,
+    const std::string& messageId
+) {
+    (void)accountId;
+    RecallResult result;
+    if (chatId.empty() || messageId.empty()) {
+        result.reason = "撤回需要会话 id 与消息 id";
+        return result;
+    }
+    QqApi* api = nullptr;
+    {
+        std::lock_guard lock(mutex_);
+        api = api_.get();
+    }
+    if (api == nullptr) {
+        result.reason = "账号未连接, 无法撤回";
+        return result;
+    }
+
+    // 与附件下载同一套做法: 用一次性 io_context 在本线程跑到完成。
+    // 撤销接口要拿到结果才能回给模型, 不能像发送那样"提交后就不管"。
+    asio::io_context rlCtx;
+    auto             rlWork = asio::make_work_guard(rlCtx);
+    asio::co_spawn(
+        rlCtx,
+        [&]() -> asio::awaitable<void> {
+            auto response = co_await api->recallMessage(type, chatId, messageId);
+            if (response.ok()) {
+                result.ok = true;
+                XX_LOGI("[{}] 已撤回消息 {}", kLogTag, messageId);
+                co_return;
+            }
+            if (response.status == 0) {
+                result.reason = "撤回请求失败: " + response.error;
+            } else {
+                // 平台对超时/无权限都返回 4xx, 正文里通常带可读原因
+                result.reason = "撤回失败 (HTTP " + std::to_string(response.status) + "): "
+                                + (response.body.empty() ? response.error : response.body.substr(0, 200));
+            }
+            XX_LOGW("[{}] 撤回消息 {} 失败: {}", kLogTag, messageId, result.reason);
+        },
+        [&rlWork](const std::exception_ptr& ep) {
+            if (ep) {
+                try {
+                    std::rethrow_exception(ep);
+                } catch (const std::exception& e) {
+                    XX_LOGW("[{}] 撤回协程异常: {}", kLogTag, e.what());
+                } catch (...) {
+                    XX_LOGW("[{}] 撤回协程异常 (未知)", kLogTag);
+                }
+            }
+            rlWork.reset();
+        }
+    );
+    rlCtx.run();
+    return result;
+}
+
 std::string QqPlatform::roleOf(const utilxx_base::Json& author) {
     if (!author.is_object()) {
         return {};

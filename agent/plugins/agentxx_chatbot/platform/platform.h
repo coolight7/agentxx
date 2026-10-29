@@ -66,6 +66,28 @@ public:
         (void)ref;
     }
 
+    /// 撤回一条自己发出的消息 (平台不支持时返回"不支持", 不抛异常)
+    ///
+    /// - `messageId`: 平台消息 id (`SendResult::platformMessageId`)
+    /// - 多数平台有撤回时限 (QQ 为发送后 2 分钟内), 超时由平台拒绝
+    /// - 默认实现返回不支持, 由具体平台覆写
+    virtual RecallResult recallMessage(
+        const std::string& accountId,
+        ChatType           type,
+        const std::string& chatId,
+        const std::string& messageId
+    ) {
+        (void)accountId;
+        (void)type;
+        (void)chatId;
+        (void)messageId;
+        return RecallResult{
+            .ok      = false,
+            .reason  = "当前平台不支持撤回消息",
+            .skipped = true,
+        };
+    }
+
     /// 连接状态与计数 JSON (`chatbot_status` 的数据源之一)
     virtual std::string statusJson() const = 0;
 

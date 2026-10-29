@@ -1,6 +1,6 @@
 #pragma once
 
-/// `chatbot_*` 工具的**纯逻辑实现** (5 个动作)
+/// `chatbot_*` 工具的**纯逻辑实现** (6 个动作)
 ///
 /// 工具是**回复的唯一出口** (见 `resource/history/chatbot/plan.md` §8.1):
 /// agent 的正文输出默认不自动发到群里, 发消息必须显式调 `chatbot_send_message`。
@@ -77,6 +77,17 @@ std::string toolSetMode(
     std::string_view       argsJson
 );
 
+/// `chatbot_recall_message`
+///
+/// 撤回本进程自己发出、且仍在平台时限内的消息 (QQ: 2 分钟)。
+/// - 不给 `messageId` 时按 `count` 撤最近的 N 条 (只覆盖最近若干条)
+/// - 平台不支持撤回报错, 由模型转告用户
+std::string toolRecallMessage(
+    const ChatbotToolDeps& deps,
+    std::string_view       threadId,
+    std::string_view       argsJson
+);
+
 /// 工具名清单 (测试断言与文档用)
 inline constexpr const char* kChatbotToolNames[] = {
     "chatbot_send_message",
@@ -84,6 +95,7 @@ inline constexpr const char* kChatbotToolNames[] = {
     "chatbot_chat_info",
     "chatbot_status",
     "chatbot_set_mode",
+    "chatbot_recall_message",
 };
 
 /// `chatbot_debug_inject` (仅 `behavior.debugTools` 打开时注册)

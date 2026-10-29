@@ -131,6 +131,18 @@ struct SendResult {
 /// 出站结果回调
 using SendResultFn = std::function<void(const SendResult&)>;
 
+/// 一次撤回的结果
+struct RecallResult {
+    bool ok = false;
+    /// 失败原因 (可直接给模型看)
+    std::string reason;
+    /// 平台不提供该能力 (与"调用失败"区分: 前者不必重试)
+    bool skipped = false;
+};
+
+/// 撤回结果回调
+using RecallResultFn = std::function<void(const RecallResult&)>;
+
 /// 一个会话的唯一身份
 ///
 /// `key()` 是路由表 / 去重 / 会话 id 的原料, 形如 `qq_main|group|B2C3…`。

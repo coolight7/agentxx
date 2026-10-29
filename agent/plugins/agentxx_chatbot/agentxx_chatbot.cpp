@@ -365,6 +365,16 @@ const char* kSetModeSchema = R"JSON({
   "required": ["mode"]
 })JSON";
 
+const char* kRecallMessageSchema = R"JSON({
+  "type": "object",
+  "properties": {
+    "count": {"type": "integer", "description": "撤最近多少条自己发的消息 (默认 1; 最多 8)。与 messageId 二选一"},
+    "messageId": {"type": "string", "description": "要撤回的平台消息 id (通常不用填, 按 count 撤即可)"},
+    "chat": {"type": "string", "description": "可选: 指定会话 (默认当前会话)"}
+  },
+  "required": []
+})JSON";
+
 const char* kDebugInjectSchema = R"JSON({
   "type": "object",
   "properties": {
@@ -390,7 +400,7 @@ const char* kDebugOutboxSchema = R"JSON({
   "required": []
 })JSON";
 
-/// 给一个 agent 注册 5 个 `chatbot_*` 工具
+/// 给一个 agent 注册 6 个 `chatbot_*` 工具
 ///
 /// 工作体统一 `blocking_tool` (要等插件 io 线程的结果); 内部把编译期已知的
 /// 处理函数包成 lambda, 这样 SDK 不需要知道 `ChatbotToolDeps` 的类型。
@@ -546,6 +556,34 @@ void registerToolsOn(ChatbotCtx& ctx, const AgentRef& ref) {
         [setMode](ChatbotCtx& c, std::string_view args, std::string_view tid) {
             return setMode(c, args, tid);
         }
+    );
+
+    auto recall = [deps](ChatbotCtx& c, std::string_view args, std::string_view tid) {
+        std::string result;
+        std::string error;
+        const bool  ok = c.runOnIoBlocking([&]() {
+            try {
+                result = ac::toolRecallMessage(*deps, tid, args);
+            } catch (const std::exception& e) {
+                error = e.what();
+            }
+        });
+        if (!ok) {
+            throw std::runtime_error("chatbot 插件未就绪 (io 线程无响应)");
+        }
+        if (!error.empty()) {
+            throw std::runtime_error(error);
+        }
+        return result;
+    };
+    agentxx::plugin::blocking_tool(
+        ctx,
+        ref,
+        "chatbot_recall_message",
+        "撤回自己刚发出去的消息 (只对发送后 2 分钟内的有效)。默认撤最近 1 条, "
+        "用 count 可撤更早的 (最多 8 条)。发错了、说重复了、内容不合适时用它。",
+        kRecallMessageSchema,
+        recall
     );
 
     // 调试工具只在 `behavior.debugTools` 打开时注册 (测试与本地演示用)
@@ -1056,7 +1094,7 @@ void* chatbotForAgent(
     if (shouldRegister) {
         registerToolsOn(ctx, AgentRef(*spec));
         ctx.log.info(fmt::format(
-            "已在 agent '{}' 上注册 5 个 chatbot_* 工具 ({})",
+            "已在 agent '{}' 上注册 6 个 chatbot_* 工具 ({})",
             agentId,
             isPersonaRoot ? "人设根" : "内置根 (调试)"
         ));

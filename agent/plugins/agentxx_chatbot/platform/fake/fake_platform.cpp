@@ -241,6 +241,32 @@ std::string FakePlatform::debugOutbox(size_t limit, bool clear) {
     return out.dump();
 }
 
+RecallResult FakePlatform::recallMessage(
+    const std::string& accountId,
+    ChatType           type,
+    const std::string& chatId,
+    const std::string& messageId
+) {
+    (void)accountId;
+    (void)type;
+    (void)chatId;
+    RecallResult result;
+    if (messageId.empty()) {
+        result.reason = "撤回需要消息 id";
+        return result;
+    }
+    std::lock_guard lock(mutex_);
+    // 只认真实发过的 id; 找不到就当平台拒绝 (与真平台行为一致)
+    for (auto& record : sent_) {
+        if (record.platformMessageId == messageId) {
+            result.ok = true;
+            return result;
+        }
+    }
+    result.reason = "平台上找不到该消息 (可能已超过撤回时限)";
+    return result;
+}
+
 std::shared_ptr<FakePlatform> makeFakePlatform(asio::any_io_executor ex) {
     return std::make_shared<FakePlatform>(std::move(ex));
 }

@@ -40,6 +40,14 @@ public:
     /// 下载一个入站附件 (落盘; 失败时保留 URL 由模型自己拉)
     void downloadAttachment(const std::string& accountId, MediaRef& ref) override;
 
+    /// 撤回自己发出的一条消息 (平台限制发送后 2 分钟内)
+    RecallResult recallMessage(
+        const std::string& accountId,
+        ChatType           type,
+        const std::string& chatId,
+        const std::string& messageId
+    ) override;
+
     /// 媒体根目录 (stop 之后仍可查; 附件下载目标)
     const std::string& mediaRoot() const noexcept {
         return mediaRoot_;

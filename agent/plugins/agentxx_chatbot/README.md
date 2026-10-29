@@ -144,6 +144,7 @@ QQ群「技术交流群」(群 id 尾号 6789); 下面是最近收到的消息�
 | `chatbot_chat_info` | 会话状态：路由到哪个人设、当前模式、通道 id、计数、缓冲条数 |
 | `chatbot_status` | 插件全局状态：账号连接、人设、出站队列、计数 |
 | `chatbot_set_mode` | 运行期改触发模式（不写回配置） |
+| `chatbot_recall_message` | 撤回自己刚发出的消息（平台时限内，QQ 为 2 分钟）。参数：`count`（撤最近几条，默认 1、最多 8）或 `messageId`、`chat` |
 | `chatbot_debug_inject` / `chatbot_debug_outbox` | 仅 `behavior.debugTools: true` 时注册：直接注入假消息 / 回看假平台收到了什么 |
 
 工具只注册在**人设根**上。内置主会话默认看不到它们（`exposeToolsOnHost: true` 才会注册）。

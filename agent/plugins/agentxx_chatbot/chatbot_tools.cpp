@@ -13,6 +13,11 @@ namespace {
 
 constexpr const char* kLogTag = "chatbot";
 
+/// 可撤回的最近消息条数上限
+/// - 必须与 [ChatbotOutbound] 内部保留的 `kMaxRecentIds` 一致: 那边只记最近 8 条
+///   发出去的消息 id (撤回只能作用于本进程发出的、且仍在平台时限内的消息)
+constexpr size_t kRecallLookback = 8;
+
 using utilxx_base::Json;
 
 Json parseArgsOrThrow(std::string_view argsJson) {
@@ -465,6 +470,100 @@ std::string toolDebugOutbox(const ChatbotToolDeps& deps, std::string_view argsJs
         }
     }
     return all.dump();
+}
+
+std::string toolRecallMessage(
+    const ChatbotToolDeps& deps,
+    std::string_view       threadId,
+    std::string_view       argsJson
+) {
+    const auto args = parseArgsOrThrow(argsJson);
+    if (deps.outbound == nullptr) {
+        throw std::runtime_error("chatbot 插件状态不可用");
+    }
+    std::string       err;
+    const std::string chatKey = resolveChat(deps, threadId, stringArg(args, "chat"), err);
+    if (chatKey.empty()) {
+        throw std::runtime_error(err);
+    }
+    if (!deps.platformOf) {
+        throw std::runtime_error("没有可用的平台连接, 无法撤回");
+    }
+    const ChatKey key = parseChatKey(chatKey);
+
+    // 最近发过的消息 id (新→旧), 用于按序号撤回
+    const auto recent = deps.outbound->recentMessageIds(chatKey, kRecallLookback);
+
+    // 目标: `messageId` 直接给 id, 否则按 `count` 撤最近 N 条
+    std::string       explicitId = stringArg(args, "messageId");
+    const std::string targetArg  = stringArg(args, "target");
+    if (explicitId.empty() && !targetArg.empty() && targetArg.front() != '#') {
+        explicitId = targetArg; // 兼容直接写 id 的写法
+    }
+
+    std::vector<std::string> targets;
+    std::string              targetErr;
+    if (!explicitId.empty()) {
+        targets.push_back(explicitId);
+    } else {
+        const int64_t rawCount = intArg(args, "count", 1);
+        if (rawCount < 1) {
+            targetErr = "count 必须 >= 1";
+        } else if (rawCount > static_cast<int64_t>(kRecallLookback)) {
+            targetErr = "count 最多 " + std::to_string(kRecallLookback) + " (只记录最近这么多条)";
+        } else if (recent.empty()) {
+            targetErr = "本会话没有可撤回的记录 (只能撤回本进程自己发出且已成功的消息)";
+        } else {
+            const size_t take
+                = std::min<size_t>(static_cast<size_t>(rawCount), recent.size());
+            for (size_t i = 0; i < take; ++i) {
+                targets.push_back(recent[recent.size() - 1 - i]);
+            }
+        }
+    }
+    if (!targetErr.empty()) {
+        throw std::invalid_argument(targetErr);
+    }
+
+    auto* platform = deps.platformOf(key.accountId);
+    if (platform == nullptr) {
+        throw std::runtime_error("账号 '" + key.accountId + "' 的平台连接不可用");
+    }
+
+    Json   recalled = Json::array();
+    Json   failed   = Json::array();
+    size_t skipped  = 0;
+    for (const auto& id : targets) {
+        const auto result = platform->recallMessage(key.accountId, key.type, key.chatId, id);
+        if (result.ok) {
+            recalled.push_back(id);
+            // 撤掉的 id 从可撤回列表移除, 否则同一句会被反复选中
+            deps.outbound->forgetMessageId(chatKey, id);
+            continue;
+        }
+        if (result.skipped) {
+            ++skipped;
+            continue;
+        }
+        failed.push_back(Json{{"messageId", id}, {"reason", result.reason}});
+    }
+
+    if (recalled.empty() && failed.empty() && skipped == targets.size()) {
+        throw std::runtime_error("当前平台不支持撤回消息");
+    }
+    if (recalled.empty() && !failed.empty()) {
+        // 全部失败: 把第一条原因抛给模型 (通常是超过 2 分钟或已撤回)
+        throw std::runtime_error(failed[0].value("reason", std::string{"撤回失败"}));
+    }
+
+    Json out = Json::object();
+    out["chat"]     = chatKey;
+    out["recalled"] = std::move(recalled);
+    if (!failed.empty()) {
+        out["failed"] = std::move(failed);
+    }
+    out["note"] = "撤回只对发送后 2 分钟内的消息有效";
+    return out.dump();
 }
 
 } // namespace chatbot

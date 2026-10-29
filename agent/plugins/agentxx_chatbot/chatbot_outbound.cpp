@@ -115,6 +115,18 @@ std::vector<std::string>
     return out;
 }
 
+void ChatbotOutbound::forgetMessageId(std::string_view chatKey, std::string_view messageId) {
+    if (messageId.empty()) {
+        return;
+    }
+    auto it = sessions_.find(std::string{chatKey});
+    if (it == sessions_.end()) {
+        return;
+    }
+    auto& ids = it->second.recentIds;
+    std::erase(ids, std::string{messageId});
+}
+
 std::vector<PassiveUsage> ChatbotOutbound::passiveUsageOf(std::string_view chatKey) const {
     auto it = sessions_.find(std::string{chatKey});
     return it == sessions_.end() ? std::vector<PassiveUsage>{} : it->second.passive;

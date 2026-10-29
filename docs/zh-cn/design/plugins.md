@@ -1065,7 +1065,7 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 插件经内置 `agentxx_jav
 | `agentxx_text_selection_monitor` | 文本选择监听 (仅 Windows UIAutomation) |
 | `agentxx_javascript_engine` | QuickJS 引擎 (能力 `interpreter.js`) |
 | `example_js_execute_command` | JS 代码执行工具 (`example_js_execute_command`, 依赖 `agentxx_javascript_engine`) |
-| `agentxx_chatbot` | 聊天平台桥接 (QQ, 结构化预留其它平台): 每账号 + 每群/私聊一个独立会话, 每个人设一个根 agent; 工具 `chatbot_send_message` / `_history` / `_chat_info` / `_status` / `_set_mode` (见 §13.1) |
+| `agentxx_chatbot` | 聊天平台桥接 (QQ, 结构化预留其它平台): 每账号 + 每群/私聊一个独立会话, 每个人设一个根 agent; 工具 `chatbot_send_message` / `_history` / `_chat_info` / `_status` / `_set_mode` / `_recall_message` (见 §13.1) |
 
 > **插件自管工具提示词 (含运行环境探测)**：工具定义 (`description` / `parameters`) 在
 > `register_tool` 时固化，因此插件必须在自己注册工具**之前**完成一切探测/决策

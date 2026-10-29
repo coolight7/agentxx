@@ -131,6 +131,12 @@ public:
     /// 该会话最近一次发送的平台消息 id (诊断/撤回用)
     std::vector<std::string> recentMessageIds(std::string_view chatKey, size_t limit) const;
 
+    /// 撤回成功后调用: 把该 id 从可撤回列表里移除
+    ///
+    /// 不去掉的话, 同一个 id 会被反复撤回 (平台侧是幂等失败或误报成功),
+    /// 撤回工具按 `count` 取"最近 N 条"时会一直选到已撤回的那条。
+    void forgetMessageId(std::string_view chatKey, std::string_view messageId);
+
     /// 该会话的被动回复用量 (诊断)
     std::vector<PassiveUsage> passiveUsageOf(std::string_view chatKey) const;
 
