@@ -486,6 +486,32 @@ neograph::CompletionParams ModelCallWrapNode::build_params(std::string_view sess
     neograph::CompletionParams params;
     params.model    = resolveCurrentModelName(sessionId);
     params.messages = std::move(messages);
+    // 多模态 URL 兜底过滤: 上游只接受 `data:` 或 http(s), 本地路径会被整轮拒绝
+    // (HTTP 400 "media[0].url must use the http or https scheme")。
+    // 写入侧已不再产生这类值, 但历史会话里可能残留 (某轮附件加载失败时写入过),
+    // 那种脏数据会让该会话此后每一轮都失败 —— 在这里剔掉, 保证老会话能继续用。
+    for (auto& m : params.messages) {
+        auto keepOnlyUpstreamUrls = [](std::vector<std::string>& urls) {
+            const size_t before = urls.size();
+            std::erase_if(urls, [](const std::string& u) {
+                return !u.starts_with("data:") && !u.starts_with("http://")
+                       && !u.starts_with("https://");
+            });
+            return before - urls.size();
+        };
+        size_t dropped = 0;
+        dropped += keepOnlyUpstreamUrls(m.image_urls);
+        dropped += keepOnlyUpstreamUrls(m.audio_urls);
+        dropped += keepOnlyUpstreamUrls(m.video_urls);
+        if (dropped > 0) {
+            XX_LOGW(
+                "[modelcall] 会话 {} 的上下文里有 {} 个本地路径形式的附件地址, 已跳过 "
+                "(上游只接受 data: 或 http(s); 该值通常来自旧版本写入)",
+                sessionId,
+                dropped
+            );
+        }
+    }
     params.tools    = std::move(tool_defs);
     if (!sessionId.empty()) {
         params.extra_fields[std::string(agentxx::protocol::kExtraFieldSessionId)]

@@ -1446,6 +1446,12 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
                     utilxx_base::base64Encode(fileData)
                 );
                 att.sizeBytes = fileSize;
+                XX_LOGI(
+                    "[base_agent] server attachment loaded: {} ({} bytes, {})",
+                    att.pathOrUrl,
+                    fileSize,
+                    att.mimeType
+                );
                 return att;
             };
 
@@ -1474,10 +1480,26 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
         utilxx_base::Json audioUrls = utilxx_base::Json::array();
         utilxx_base::Json videoUrls = utilxx_base::Json::array();
         for (const auto& att : attachments) {
-            const auto& url = !att.dataUrl.empty() ? att.dataUrl : att.pathOrUrl;
-            if (url.empty()) {
+            // 只接受能直接给上游的形式: Base64 Data URL 或 http(s) 地址。
+            // 本地路径原样塞进 image_urls 会被上游直接拒 (HTTP 400
+            // "media[0].url must use the http or https scheme"), 整轮失败;
+            // 而这条路正是"本地文件读取失败"的落点 (文件不存在/太大/无权限),
+            // 此时应当跳过这个附件, 让文字说明继续可用。
+            const bool hasDataUrl = !att.dataUrl.empty();
+            const bool isRemote   = att.pathOrUrl.starts_with("http://")
+                                  || att.pathOrUrl.starts_with("https://");
+            if (!hasDataUrl && !isRemote) {
+                if (!att.pathOrUrl.empty()) {
+                    XX_LOGW(
+                        "[base_agent] attachment '{}' 无法转成 Base64 且不是 http(s) 地址, "
+                        "本条请求跳过 ({} 字节)",
+                        !att.displayName.empty() ? att.displayName : att.pathOrUrl,
+                        att.sizeBytes
+                    );
+                }
                 continue;
             }
+            const auto& url = hasDataUrl ? att.dataUrl : att.pathOrUrl;
             switch (att.type) {
                 case MediaType::Image:
                     imgUrls.push_back(url);

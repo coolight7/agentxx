@@ -6,6 +6,10 @@
 #include "utilxx_base/log.h"
 #include "utilxx_base/string_util.h"
 
+#include "asio/co_spawn.hpp"
+#include "asio/executor_work_guard.hpp"
+#include "asio/io_context.hpp"
+
 #include <chrono>
 #include <ctime>
 #include <filesystem>
@@ -361,9 +365,19 @@ void QqPlatform::downloadAttachment(const std::string& accountId, MediaRef& ref)
     const std::string targetUtf8 = utilxx_base::pathToUtf8Generic(target);
 
     const auto& url = ref.url;
+    // 下载必须**同步**完成后再回填 `localPath`:
+    // - 调用方 (prepareAttachments) 紧接着就会把这条消息投给模型, 附件路径必须是
+    //   已经落盘的文件; 之前提前填路径, 主程序读文件时报
+    //   `cannot get file size ... The system cannot find the file specified`,
+    //   模型请求直接 400 (media url 不是 http/https), 用户看到"加载一下就没了"
+    // - 这里不开在 plugin io 线程上: 用一次性的 io_context 在本线程跑到完成,
+    //   不阻塞插件 io 线程的其它协程 (附件通常几百 KB, 单次等待可接受)
+    asio::io_context dlCtx;
+    // work guard: 协程在被调度起来之前 run() 不能"因为没有工作"就返回
+    auto             dlWork = asio::make_work_guard(dlCtx);
     asio::co_spawn(
-        ex_,
-        [this, url, target, targetUtf8, fileName]() -> asio::awaitable<void> {
+        dlCtx,
+        [&]() -> asio::awaitable<void> {
             utilxx::RequestConfig config;
             config.connectTimeout   = std::chrono::seconds{20};
             config.readChunkTimeout = std::chrono::seconds{60};
@@ -385,6 +399,7 @@ void QqPlatform::downloadAttachment(const std::string& accountId, MediaRef& ref)
             }
             out.write(response->body.data(), static_cast<std::streamsize>(response->body.size()));
             out.close();
+            ref.localPath = targetUtf8;
             XX_LOGD(
                 "[{}] 附件 '{}' 已下载到 {} ({} 字节)",
                 kLogTag,
@@ -393,11 +408,20 @@ void QqPlatform::downloadAttachment(const std::string& accountId, MediaRef& ref)
                 response->body.size()
             );
         },
-        asio::detached
+        [&dlWork](const std::exception_ptr& ep) {
+            if (ep) {
+                try {
+                    std::rethrow_exception(ep);
+                } catch (const std::exception& e) {
+                    XX_LOGW("[{}] 附件下载协程异常: {}", kLogTag, e.what());
+                } catch (...) {
+                    XX_LOGW("[{}] 附件下载协程异常 (未知)", kLogTag);
+                }
+            }
+            dlWork.reset(); // 协程结束: 让 run() 可以返回
+        }
     );
-    // 发起下载时就把目标路径写上: 模型读文件时若还没落盘, 会读到"文件不存在",
-    // 但比"给一个需要鉴权的平台 URL"更可用 (平台 URL 带有效期内签名)
-    ref.localPath = targetUtf8;
+    dlCtx.run();
 }
 
 std::string QqPlatform::roleOf(const utilxx_base::Json& author) {
