@@ -7,7 +7,6 @@
 #include "utilxx_base/string_util.h"
 
 #include <chrono>
-#include <cstdio>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -32,31 +31,39 @@ int64_t unixNowMs() {
         .count();
 }
 
-/// RFC3339 时间 → 毫秒 (解析失败返回 0)
+/// 从 `text[pos, pos+len)` 读十进制数字 (不足 len 位或含非数字返回 -1)
+int parseFixedDigits(std::string_view text, size_t pos, size_t len) {
+    if (pos + len > text.size()) {
+        return -1;
+    }
+    int value = 0;
+    for (size_t i = 0; i < len; ++i) {
+        const char c = text[pos + i];
+        if (c < '0' || c > '9') {
+            return -1;
+        }
+        value = value * 10 + (c - '0');
+    }
+    return value;
+}
+
+/// RFC3339 时间 ("2026-10-29T07:03:09+08:00") → 毫秒 (解析失败返回 0)
+/// - 只认前 19 个字符的 `YYYY-MM-DDTHH:MM:SS`, 时区后缀一律按 UTC 处理
+///   (QQ 推送的时间只用于消息排序与去重, 差几个时区不影响结果)
 int64_t parseRfc3339Ms(std::string_view text) {
     if (text.size() < 19) {
         return 0;
     }
-    std::tm tmBuf{};
-    int     year = 0;
-    int     month = 0;
-    int     day = 0;
-    int     hour = 0;
-    int     minute = 0;
-    int     second = 0;
-    if (std::sscanf(
-            std::string{text}.c_str(),
-            "%d-%d-%dT%d:%d:%d",
-            &year,
-            &month,
-            &day,
-            &hour,
-            &minute,
-            &second
-        )
-        != 6) {
+    const int year   = parseFixedDigits(text, 0, 4);
+    const int month  = parseFixedDigits(text, 5, 2);
+    const int day    = parseFixedDigits(text, 8, 2);
+    const int hour   = parseFixedDigits(text, 11, 2);
+    const int minute = parseFixedDigits(text, 14, 2);
+    const int second = parseFixedDigits(text, 17, 2);
+    if (year < 0 || month < 0 || day < 0 || hour < 0 || minute < 0 || second < 0) {
         return 0;
     }
+    std::tm tmBuf{};
     tmBuf.tm_year = year - 1900;
     tmBuf.tm_mon  = month - 1;
     tmBuf.tm_mday = day;
@@ -128,44 +135,48 @@ PlatformCaps QqPlatform::caps() const {
 }
 
 bool QqPlatform::start(const AccountConfig& cfg, PlatformEventSink& sink) {
-    std::lock_guard lock(mutex_);
-    config_  = cfg;
-    sink_    = &sink;
-    stopped_ = false;
-    state_   = PlatformState::Connecting;
-    if (cfg.appId.empty() || cfg.appSecret.empty()) {
-        state_       = PlatformState::Disabled;
-        stateReason_ = "缺少 appId / appSecret";
-        XX_LOGE("[{}] 账号 '{}' 启动失败: {}", kLogTag, cfg.id, stateReason_);
-        return false;
-    }
-    api_ = std::make_unique<QqApi>(ex_, cfg.appId, cfg.appSecret, cfg.apiBase);
-
-    // 媒体目录: {data_dir}/chatbot/media/{accountId}
-    if (!dataDir_.empty()) {
-        const fs::path root = utilxx_base::utf8ToPath(dataDir_) / "chatbot" / "media" / cfg.id;
-        std::error_code ec;
-        fs::create_directories(root, ec);
-        if (!ec) {
-            mediaRoot_ = utilxx_base::pathToUtf8Generic(root);
+    // 锁只护住本对象的成员读写: 下面调网关 / 回调调度层时**不能**持锁 ——
+    // 网关 start 会同步回调 `onState`, 那个回调要在本对象上再拿一次锁;
+    // 非递归 mutex 在同一线程上重入会直接抛 std::system_error (实测进程 abort)。
+    {
+        std::lock_guard lock(mutex_);
+        config_  = cfg;
+        sink_    = &sink;
+        stopped_ = false;
+        state_   = PlatformState::Connecting;
+        stateReason_.clear();
+        if (cfg.appId.empty() || cfg.appSecret.empty()) {
+            state_       = PlatformState::Disabled;
+            stateReason_ = "缺少 appId / appSecret";
+            XX_LOGE("[{}] 账号 '{}' 启动失败: {}", kLogTag, cfg.id, stateReason_);
+            return false;
         }
-    }
-    uploader_ = std::make_unique<QqMediaUploader>(*api_, cfg.id);
+        api_ = std::make_unique<QqApi>(ex_, cfg.appId, cfg.appSecret, cfg.apiBase);
 
-    gateway_ = std::make_unique<QqGateway>(ex_, *api_);
+        // 媒体目录: {data_dir}/chatbot/media/{accountId}
+        if (!dataDir_.empty()) {
+            const fs::path root = utilxx_base::utf8ToPath(dataDir_) / "chatbot" / "media" / cfg.id;
+            std::error_code ec;
+            fs::create_directories(root, ec);
+            if (!ec) {
+                mediaRoot_ = utilxx_base::pathToUtf8Generic(root);
+            }
+        }
+        uploader_ = std::make_unique<QqMediaUploader>(*api_, cfg.id);
+        gateway_  = std::make_unique<QqGateway>(ex_, *api_);
+    }
+
     QqGatewayHooks hooks;
     hooks.onState = [this](PlatformState state, std::string reason) {
+        PlatformEventSink* sinkPtr = nullptr;
         {
             std::lock_guard guard(mutex_);
             state_       = state;
             stateReason_ = reason;
-        }
-        PlatformEventSink* sinkPtr = nullptr;
-        {
-            std::lock_guard guard(mutex_);
-            sinkPtr = sink_;
+            sinkPtr      = sink_;
         }
         if (sinkPtr != nullptr && sinkPtr->onStateChanged) {
+            // 回调调度层必须在锁外: 那边可能同步回查本对象 (如 statusJson)
             sinkPtr->onStateChanged(state, std::move(reason));
         }
     };
@@ -197,7 +208,9 @@ bool QqPlatform::start(const AccountConfig& cfg, PlatformEventSink& sink) {
             sinkPtr->onInbound(std::move(event));
         }
     };
-    gateway_->start(cfg, std::move(hooks));
+    if (auto* gateway = gateway_.get(); gateway != nullptr) {
+        gateway->start(cfg, std::move(hooks));
+    }
     XX_LOGI(
         "[{}] 账号 '{}' 已启动 (appId {}, sandbox={})",
         kLogTag,
@@ -209,20 +222,27 @@ bool QqPlatform::start(const AccountConfig& cfg, PlatformEventSink& sink) {
 }
 
 void QqPlatform::stop() {
+    std::unique_ptr<QqGateway> gateway;
+    {
+        std::lock_guard lock(mutex_);
+        if (stopped_) {
+            return;
+        }
+        stopped_ = true;
+        sink_    = nullptr;
+        gateway  = std::move(gateway_);
+        state_       = PlatformState::Disabled;
+        stateReason_ = "stopped";
+    }
+    // 网关 stop 会在本对象上回调状态 (onState), 因此同样放在锁外
+    if (gateway) {
+        gateway->stop();
+        // 网关按引用持有 api_, 必须先销毁网关再释放 api_
+        gateway.reset();
+    }
     std::lock_guard lock(mutex_);
-    if (stopped_) {
-        return;
-    }
-    stopped_ = true;
-    sink_    = nullptr;
-    if (gateway_) {
-        gateway_->stop();
-    }
     api_.reset();
-    gateway_.reset();
     uploader_.reset();
-    state_       = PlatformState::Disabled;
-    stateReason_ = "stopped";
 }
 
 void QqPlatform::send(OutboundMessage msg, SendResultFn done) {

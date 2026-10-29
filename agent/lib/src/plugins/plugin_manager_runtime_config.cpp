@@ -50,6 +50,23 @@ std::vector<std::string> stringArrayOf(const utilxx_base::Json& j, std::string_v
     return utilxx_base::jsonGetStringArray(j, std::string{key});
 }
 
+/// 根 id 转成能直接当目录名的形式
+/// - 根 id 形如 `ext:<来源>:<序号>` 或 `sub:<序号>`, 其中的 `:` 在 Windows 上是
+///   非法文件名字符 (会话库以它为子目录名, 打不开会让根 init 直接失败)
+/// - 保留字母数字与 `_-`, 其余字符 (含冒号) 一律换成 `_`; 序号部分不动,
+///   因此不同根仍然落到不同目录
+std::string sessionDirNameOf(std::string_view rootId) {
+    std::string out;
+    out.reserve(rootId.size());
+    for (char c : rootId) {
+        const auto uc = static_cast<unsigned char>(c);
+        const bool safe = (uc >= 'a' && uc <= 'z') || (uc >= 'A' && uc <= 'Z')
+                          || (uc >= '0' && uc <= '9') || c == '_' || c == '-';
+        out.push_back(safe ? c : '_');
+    }
+    return out.empty() ? std::string{"root"} : out;
+}
+
 /// 解析 `mount_plugins`: 与 yaml `plugin.mount` 同构
 /// - `{"mode":"none|all|listed","list":[...],"args":{...}}`
 /// - 空串 = `none` (根只有内置工具)
@@ -380,11 +397,15 @@ std::shared_ptr<agentxx::agent::AgentConfig> PluginManager::deriveRootConfig(
     }
     if (cfg->sessionStoreDirectory.empty() && cfg->enableSessionStore) {
         if (!cfg->dataDir.empty()) {
+            // 目录名不能直接用 rootId: 它形如 `ext:<来源>:<n>`, 冒号在 Windows 上
+            // 是非法字符 (会报 "文件名、目录名或卷标语法不正确"), 于是会话库打不开、
+            // 根 init 直接失败。这里换成文件系统安全的写法, 序号部分不动,
+            // 不同根仍落到不同目录
             cfg->sessionStoreDirectory = (
                 std::filesystem::path(
                     agentxx::agent::AgentConfigStatic::getSessionsDir(cfg->dataDir)
                 )
-                / rootId
+                / sessionDirNameOf(rootId)
             ).generic_string();
         } else {
             // 没有数据目录就没有可共享的会话根: 根退化为内存会话

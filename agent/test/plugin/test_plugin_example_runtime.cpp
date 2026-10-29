@@ -216,6 +216,8 @@ asio::awaitable<void> runBody(
     agent::AgentHost::Config hostCfg;
     hostCfg.ioCtx    = io;
     hostCfg.maxRoots = 4;
+    // 主上下文交给容器: 容器在 create 里就把它挂上, 插件 start 建根时需要
+    hostCfg.primaryAgent = primaryCtx;
     hostCfg.agentFactory = [mgr](std::shared_ptr<agent::AgentConfig> cfg)
         -> std::shared_ptr<agent::BaseAgent> {
         auto agent = std::make_shared<agent::CodeAgent>(std::move(cfg));
@@ -225,8 +227,9 @@ asio::awaitable<void> runBody(
         }
         return agent;
     };
-    auto host         = agent::AgentHost::create(hostCfg);
-    primaryCtx->host  = host;
+    auto host = agent::AgentHost::create(hostCfg);
+    // 容器自己把引用挂到主上下文上 (插件 start 建根时就要用到, 早于 attachRoot)
+    XX_TEST_EXPECT_TRUE(primaryCtx->host.lock() == host);
 
     // ---- 主会话先建立挂载: 之后加载的插件挂到它身上 (工具才注册得进来) ----
     primaryCtx->pluginMount = co_await mgr->mountAgentAsync(primaryCtx);

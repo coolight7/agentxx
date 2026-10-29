@@ -93,6 +93,16 @@ std::shared_ptr<AgentHost> AgentHost::create(Config cfg) {
     // agent 节点容器总线: 派生与跨 agent 消息服务
     std::weak_ptr<AgentHost> self = host;
 
+    // 主 agent 上下文先挂上容器与共享线程池 (不等到 attachRoot):
+    // 插件在 `start` 里就会建自己的根 (`agentxx.agent.runtime` 的 mount_root),
+    // 而 start 发生在 attachRoot 之前 —— 容器引用只在 attachRoot 的 injectShared
+    // 里给的话, 那时插件已经因为"本进程没有 agent 容器"被拒。
+    // 两处赋值同一个值, 后到的 injectShared 不产生变化。
+    if (auto primary = host->cfg_.primaryAgent.lock(); primary != nullptr) {
+        primary->host       = self;
+        primary->threadPool = host->threadPool_;
+    }
+
     // agent.spawn (RR): 任意调用方经 agent 节点容器总线派生独立子代理
     // (包装为单任务批量请求, 统一走 spawnBatch 路径)
     host->hostBus_

@@ -106,6 +106,52 @@
    （根 init 的 plugin_mount 与运行时挂载驱动）时，后到者直接返回成功、**不重复回调插件**；
    各返回路径都会清回 `false`。
 
+### 阶段 3 真机联调：启动崩溃与四个联调阻塞（本轮修复）
+
+真账号首次联调时 `agentxx_cli server` 在插件 `start` 里直接 abort，随后又连不上网关。四处缺陷：
+
+1. **锁重入导致进程 abort**（`qq_platform.cpp`）：`QqPlatform::start` 全程持 `mutex_`，
+   里面调 `gateway_->start()`，而网关 `start` 同步回调 `hooks.onState`，那个回调又去锁同一把
+   `mutex_`。MSVC 的 `std::mutex` 对同线程重入直接 `_Throw_Cpp_error`，异常从 asio handler
+   冲出 `io->run()`，那条线程没有外层 catch → `std::terminate`（实测信号 22）。
+   改为「锁只护对象成员、回调与网关启动都放到锁外」，`stop` 同样先 move 出网关再在锁外销毁。
+2. **io 线程异常直接杀进程**（`agentxx_chatbot.cpp`）：`startIo()` 的线程体与
+   `runOnIoBlocking` 的 posted lambda 之前都没有异常保护。前者改为 `run()` 外层 try/catch 循环，
+   后者保证 `done` 一定置位。
+3. **插件内 `XX_LOG*` 全部被丢弃**：插件静态链接自己那份 `cxx_utilxx_base`，`LogDispatcher`
+   是**插件本地**单例、且没有任何 sink —— 平台层与调度层全用 `XX_LOG*`，于是网关连接、
+   状态变化这些关键日志一条都看不到（现象：`server` 起来了但完全看不出 QQ 在做什么）。
+   装一个 `HostLogSink`（`ThreadedLogSink` 派生）把本地 dispatcher 的记录转给主程序
+   `pluginxx.log` 接口，`destroy` 时先摘 sink 再释放实例。
+4. **`wsConnect` 不支持不带端口的 URL**（`agent/third_party/cxx_utilxx/src/ws_client.cpp`）：
+   解析 host 时只在 `rfind(':')` 命中分支赋值，没写端口（`wss://api.sgroup.qq.com/websocket`，
+   QQ 网关就是这种形式）时 `host` 留空，直接报 `empty host in ws url`。所有既有测试都用
+   `ws://127.0.0.1:<port>/ws`，所以一直没暴露。补上无端口分支 + `test_ws_url_without_port` 回归用例。
+
+修完后真账号链路打通：token 获取 → 网关 Hello（心跳 41250 ms）→ Identify → `ready`，
+日志可见 `网关已就绪 (session ...)`。
+
+### 主程序框架修复（第二处：插件建根时机）
+
+`AgentHost::create` 之前不给 `primaryAgent->host` 赋值，容器引用只在
+`attachRoot → mountRoot → injectShared` 里给；但 `attachRoot` 在 `loadPluginsAsync` **之后**才调，
+于是插件在 `start` 里 `mount_root` 必然拿到空容器
+（`[runtime] mount_root 被拒 (-6): 本进程没有 agent 容器`）。
+`AgentHost::create` 现在在创建后立刻把容器与共享线程池挂到 `primaryAgent` 上
+（两处赋值同一个值，后到的 `injectShared` 不产生变化）。
+三个用例因此把原先手写的 `primaryCtx->host = host` 改成传 `hostCfg.primaryAgent`
+并断言容器自己挂上了引用。
+
+### 根 id 不能直接当目录名
+
+人设根 id 形如 `ext:<来源>:<n>`，被直接拼成会话库目录
+（`{sessions}/{rootId}`）。冒号在 Windows 上是非法文件名字符，实测报
+`session root ... is not usable: The filename, directory name, or volume label syntax is incorrect`，
+根 init 失败、整个插件起不来。改为经 `sessionDirNameOf` 转成安全名
+（只留字母数字与 `_`/`-`，其余换 `_`；序号部分不动，不同根仍落不同目录）。
+用例：`plugin_example_chatbot` 现在给人设开 `enableSessionStore` + 主配置临时 `dataDir`，
+断言目录名不含冒号且目录真的建得出来。
+
 ### 阶段 4：打磨与文档（进行中）
 
 - 路由器的额度与回收现在有直接用例（`chatbot_core`）：会话 id 稳定性、活跃计数、
@@ -122,7 +168,7 @@
 - [x] 阶段 2 收尾：`plugin_example_chatbot` 端到端用例（假平台注入 → 聚合 → 工具回复 →
       切分多条 → 被动回复配额），以及「人设 root 上确有 `chatbot_*` 工具」的用例。
 - [ ] 阶段 3 收尾：真实账号联调（网关鉴权、群/私聊事件、被动回复配额、图片与文件收发）。
-      需要 `resource/keys/qq_bot.env` 里的凭证，仓库内暂无该文件。
+      网关鉴权与连接已打通（见上节），还剩收发消息的实测。
 - [ ] 阶段 4：还剩「被动→主动降级」与「sendIntervalMs 频控」的真实时序验证（假平台可以测，
       但需要模拟平台侧返回主动消息被拒）。
 - [ ] 阶段 5：可选（TTS / 微信等其它平台）。
@@ -132,9 +178,11 @@
 | 模块 | 项数 |
 |------|------|
 | `chatbot_core`（纯逻辑 + 路由/额度） | 545 |
-| `plugin_example_chatbot`（真实插件 + 假平台 + 模拟模型） | 102 |
+| `plugin_example_chatbot`（真实插件 + 假平台 + 模拟模型） | 109 |
+| `plugin_agent_runtime` / `plugin_example_runtime` | 178 / 50 |
+| `websocket`（含无端口 URL 回归） | 242 |
 | `boundaries` / `test_modules` | 19 / 5 |
-| 全量 `agentxx_test` | 39979 项全通过 |
+| 本轮相关模块合计 | 919 项全通过 |
 
 ## 注意事项
 

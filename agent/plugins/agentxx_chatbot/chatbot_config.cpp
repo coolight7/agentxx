@@ -56,12 +56,26 @@ std::string expandEnv(std::string_view text) {
             const auto close = text.find('}', i + 2);
             if (close != std::string_view::npos) {
                 const std::string name{text.substr(i + 2, close - i - 2)};
-                const char*       value = name.empty() ? nullptr : std::getenv(name.c_str());
+#if XX_IS_WIN_D
+                // Windows: MSVC 把 getenv 标为不安全 (C4996); _dupenv_s 需要自己释放
+                char*  raw   = nullptr;
+                size_t rawSz = 0;
+                const bool got
+                    = !name.empty() && _dupenv_s(&raw, &rawSz, name.c_str()) == 0 && raw != nullptr;
+                if (got) {
+                    out += raw;
+                    std::free(raw);
+                    i = close + 1;
+                    continue;
+                }
+#else
+                const char* value = name.empty() ? nullptr : std::getenv(name.c_str());
                 if (value != nullptr) {
                     out += value;
                     i = close + 1;
                     continue;
                 }
+#endif
             }
         }
         out.push_back(text[i]);

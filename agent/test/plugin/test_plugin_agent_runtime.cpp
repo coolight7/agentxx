@@ -347,6 +347,8 @@ asio::awaitable<void> runBody(
     agentxx::agent::AgentHost::Config hostCfg;
     hostCfg.ioCtx    = io;
     hostCfg.maxRoots = 2; ///< 本模块只给插件根留两个位置 (预算用例要够用)
+    // 主上下文交给容器: 容器在 create 里就把它挂上, 插件 start 建根时需要
+    hostCfg.primaryAgent = primaryCtx;
     hostCfg.agentFactory = [mgr](std::shared_ptr<agentxx::agent::AgentConfig> cfg)
         -> std::shared_ptr<agentxx::agent::BaseAgent> {
         auto agent = std::make_shared<agentxx::agent::CodeAgent>(std::move(cfg));
@@ -357,8 +359,10 @@ asio::awaitable<void> runBody(
         }
         return agent;
     };
-    auto host        = agentxx::agent::AgentHost::create(hostCfg);
-    primaryCtx->host = host;
+    auto host = agentxx::agent::AgentHost::create(hostCfg);
+    // 容器必须在这一步就把自己挂到主上下文上: 插件在 `start` 里就会建根,
+    // 而 start 早于 attachRoot —— 这里不加任何手写注入, 用它验证容器自己做了这件事
+    XX_TEST_EXPECT_TRUE(primaryCtx->host.lock() == host);
 
     auto                       inst = makeInstance(mgr, ex, "runtime_probe");
     const PluginxxHost*        hostView = inst->hostView();

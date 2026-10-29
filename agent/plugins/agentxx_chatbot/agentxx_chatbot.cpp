@@ -56,6 +56,31 @@ namespace {
 constexpr const char* kPluginName = "agentxx_chatbot";
 constexpr const char* kLogTag     = "chatbot";
 
+/* ==================== 插件日志转发 ==================== */
+
+/// 把插件内 `XX_LOG*` 的日志送到主程序日志
+///
+/// 插件静态链接了自己那份 `cxx_utilxx_base`, 它的 `LogDispatcher` 是**插件本地**的
+/// 单例, 与主程序那份互不相干; 本地 dispatcher 没有任何 sink, 于是插件里直接
+/// `XX_LOGI(...)` 的内容会被静默丢弃 (平台层/调度层全用 `XX_LOG*`, 联调时看不到
+/// 网关连接、状态变化等关键信息)。
+/// 本 sink 挂在本地 dispatcher 上, 把每条记录转给主程序的 `pluginxx.log` 接口。
+class HostLogSink : public utilxx_base::ThreadedLogSink {
+public:
+
+    explicit HostLogSink(agentxx::plugin::Logger logger) :
+        logger_(std::move(logger)) {}
+
+    void onLog(const utilxx_base::LogEntry& entry) override {
+        // utilxx_base::LogLevel 与主程序日志等级一一对应 (Trace/Debug/Info/Warn/Error)
+        logger_.log(static_cast<int32_t>(entry.level), entry.message);
+    }
+
+private:
+
+    agentxx::plugin::Logger logger_;
+};
+
 /* ==================== 每实例上下文 ==================== */
 
 /// 一个账号在运行期的全部对象
@@ -98,6 +123,9 @@ struct ChatbotCtx : public PluginBase {
     /// 运行期计数
     std::atomic<uint64_t> toolCalls{0};
 
+    /// 本实例的日志转发 sink (把插件内 `XX_LOG*` 转给主程序日志; 见 [HostLogSink])
+    std::shared_ptr<HostLogSink> hostLogSink;
+
     /* ---------- 跨线程执行 ---------- */
 
     bool onIoThread() const noexcept {
@@ -114,7 +142,24 @@ struct ChatbotCtx : public PluginBase {
         ioThreadId.store(std::thread::id{}, std::memory_order_release);
         ioThread = std::thread([this, weak]() {
             ioThreadId.store(std::this_thread::get_id(), std::memory_order_release);
-            io->run();
+            // 任何 handler 抛出的异常都会从 run() 冲出来; 这条线程没有外层 catch,
+            // 一旦逃出去就是 std::terminate。平台网络与调度层必须在这里活下来。
+            for (;;) {
+                try {
+                    io->run();
+                    break;
+                } catch (const std::exception& e) {
+                    XX_LOGE("[{}] 插件 io 线程收到异常并继续: {}", kLogTag, e.what());
+                    if (io->stopped()) {
+                        break;
+                    }
+                } catch (...) {
+                    XX_LOGE("[{}] 插件 io 线程收到未知异常并继续", kLogTag);
+                    if (io->stopped()) {
+                        break;
+                    }
+                }
+            }
         });
         // 等到线程真正跑起来 (ioThreadId 非空), 避免首条 post 落在"还没记录 id"的窗口
         for (int i = 0; i < 1000; ++i) {
@@ -175,7 +220,11 @@ struct ChatbotCtx : public PluginBase {
                 std::lock_guard lock(state->mutex);
                 state->ran = true;
             }
-            fn();
+            // 异常不得穿透到 io_context::run(): 这里只会被通知"已跑过", 结果由 fn 自己填
+            try {
+                fn();
+            } catch (...) {
+            }
             {
                 std::lock_guard lock(state->mutex);
                 state->done = true;
@@ -1066,6 +1115,9 @@ extern "C" PLUGINXX_EXPORT int
             auto ctx = std::make_unique<ChatbotCtx>();
             ctx->init(host);
             raw = ctx.get();
+            // 插件本地 dispatcher 默认没有 sink: 不接的话 `XX_LOG*` 的内容全部丢弃
+            ctx->hostLogSink = std::make_shared<HostLogSink>(ctx->log);
+            utilxx_base::LogDispatcher::instance().addSink(ctx->hostLogSink);
             if (!agentxx::plugin::hasRuntime(*ctx)) {
                 ctx->log.error(
                     "agentxx_chatbot requires the agentxx.agent.runtime interface "
@@ -1098,6 +1150,12 @@ extern "C" PLUGINXX_EXPORT void agentxx_plugin_agent_destroy(void* plugin_ctx) {
     agentxx::plugin::guardCallVoid(guardLogger(ctx), [&] {
         if (!ctx) {
             return;
+        }
+        // 先摘掉日志 sink 再释放实例: sink 持有实例的 logger, 反过来实例析构后
+        // 若 sink 仍在表里, 后续日志会打到已销毁的实例上
+        if (ctx->hostLogSink) {
+            utilxx_base::LogDispatcher::instance().removeSink(ctx->hostLogSink);
+            ctx->hostLogSink.reset();
         }
         delete ctx;
     });

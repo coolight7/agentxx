@@ -2123,6 +2123,8 @@ inline void blocking_tool(
                 shim->ctx->host,
                 [](void* ud, const PluginxxCancelToken* token, PluginxxString* err_out) -> void* {
                     (void)err_out;
+                    // 插件工具不接受取消令牌时该参数无人读取, 显式置空避免 C4100
+                    (void)token;
                     auto* j = static_cast<Job*>(ud);
                     try {
                         if constexpr (std::is_invocable_v<

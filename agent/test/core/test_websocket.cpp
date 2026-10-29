@@ -488,6 +488,29 @@ static asio::awaitable<void> test_ws_invalid_url() {
     }
 }
 
+/// 不带端口的 URL 必须能解析出 host (回归: 曾把 host 留空, 一律报 "empty host
+/// in ws url", 于是 `wss://api.example.com/websocket` 这类真实地址完全连不上)
+///
+/// - 用不可达的地址, 只验证"失败原因不是 empty host"
+static asio::awaitable<void> test_ws_url_without_port() {
+    const WsClientConfig fastFail{
+        .connectTimeout = std::chrono::milliseconds{300},
+    };
+    for (const std::string url :
+         {"ws://127.0.0.1/ws",
+          "wss://127.0.0.1/websocket",
+          "ws://ws-no-port.invalid/ws",
+          "wss://ws-no-port.invalid/websocket"}) {
+        auto result = co_await wsConnect(co_await asio::this_coro::executor, url, {}, fastFail);
+        XX_TEST_EXPECT_FALSE(result.has_value());
+        if (!result.has_value()) {
+            const auto& err = result.error();
+            XX_TEST_EXPECT_TRUE(err.find("empty host") == std::string::npos);
+            XX_TEST_EXPECT_TRUE(err.find("invalid port") == std::string::npos);
+        }
+    }
+}
+
 static asio::awaitable<void> test_ws_concurrent_clients() {
     HttpServer server({.address = "127.0.0.1", .port = 0, .ioThreads = 2});
 
@@ -1350,6 +1373,9 @@ asio::awaitable<TestResult> run_websocket_tests() {
 
     std::cout << "  [ws] invalid url..." << std::endl;
     co_await test_ws_invalid_url();
+
+    std::cout << "  [ws] url without port..." << std::endl;
+    co_await test_ws_url_without_port();
 
     std::cout << "  [ws] concurrent clients..." << std::endl;
     co_await test_ws_concurrent_clients();

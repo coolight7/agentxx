@@ -243,7 +243,11 @@ asio::awaitable<void> runBody(
         cfg.prompt.systemPrompt         = "You are the built-in assistant.";
         cfg.permissionMode              = agent::PermissionMode::Pass;
         cfg.pluginMountPolicy           = agent::PluginMountPolicy::None;
-        cfg.enableSessionStore          = false;
+        // 人设根开了会话持久化 → 必须有 dataDir, 否则根会退化成内存会话
+        // (用临时目录, 不污染用户数据目录; 用例结束由系统清理)
+        cfg.dataDir = (
+            std::filesystem::temp_directory_path() / "agentxx-chatbot-test-data"
+        ).generic_string();
         cfg.enableSubagent              = false;
     }
     primaryCtx->bus                     = std::make_shared<events::EventBus>(ex);
@@ -260,6 +264,8 @@ asio::awaitable<void> runBody(
     agent::AgentHost::Config hostCfg;
     hostCfg.ioCtx        = io;
     hostCfg.maxRoots     = 4;
+    // 主上下文交给容器: 容器在 create 里就把它挂上, 插件 start 建根时需要
+    hostCfg.primaryAgent = primaryCtx;
     hostCfg.agentFactory = [mgr](std::shared_ptr<agent::AgentConfig> cfg)
         -> std::shared_ptr<agent::BaseAgent> {
         auto agent = std::make_shared<agent::CodeAgent>(std::move(cfg));
@@ -269,8 +275,9 @@ asio::awaitable<void> runBody(
         }
         return agent;
     };
-    auto host        = agent::AgentHost::create(hostCfg);
-    primaryCtx->host = host;
+    auto host = agent::AgentHost::create(hostCfg);
+    // 容器自己把引用挂到主上下文上 (插件 start 建根时就要用到, 早于 attachRoot)
+    XX_TEST_EXPECT_TRUE(primaryCtx->host.lock() == host);
 
     primaryCtx->pluginMount = co_await mgr->mountAgentAsync(primaryCtx);
 
@@ -284,6 +291,7 @@ asio::awaitable<void> runBody(
     {{
       "name": "assistant",
       "prompt": {{"systemPrompt": "{}"}},
+      "enableSessionStore": true,
       "bind": [
         {{"account": "fake_main", "chats": [
           {{"type": "group", "id": "G1", "mode": "mention"}},
@@ -359,6 +367,23 @@ asio::awaitable<void> runBody(
     }
     // 内置 root 上看不到这些工具 (`exposeToolsOnHost` 默认关)
     XX_TEST_EXPECT_FALSE(primaryCtx->toolRegistry->contains("chatbot_send_message"));
+
+    // 会话目录名: 根 id 形如 `ext:<来源>:<n>`, 冒号在 Windows 上是非法文件名字符,
+    // 直接当目录名会让会话库打不开、根 init 失败 (人设根起不来, 整条流程不通)。
+    // 本用例给主配置配了 dataDir 且人设开了会话持久化, 因此这里必须是安全目录名。
+    XX_TEST_EXPECT_TRUE(rootCtx->agentConfig != nullptr);
+    if (rootCtx->agentConfig) {
+        XX_TEST_EXPECT_TRUE(rootCtx->agentConfig->enableSessionStore);
+        const auto sessionDir = rootCtx->agentConfig->sessionStoreDirectory;
+        XX_TEST_EXPECT_FALSE(sessionDir.empty());
+        if (!sessionDir.empty()) {
+            const auto dirName = std::filesystem::path(sessionDir).filename().string();
+            XX_TEST_EXPECT_FALSE(dirName.empty());
+            XX_TEST_EXPECT_TRUE(dirName.find(':') == std::string::npos);
+            // 目录真的能建出来 (Windows 上非法名字会在这一步失败)
+            XX_TEST_EXPECT_TRUE(std::filesystem::exists(sessionDir));
+        }
+    }
 
     // 注入一条消息 (经调试工具, 不碰平台网络)
     // 直接用 Json 构造参数 (文本里带引号/换行也不会破坏报文)
