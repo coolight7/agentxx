@@ -589,7 +589,9 @@ std::map<std::string, std::string, std::less<>> ChatbotEngine::commandVars(
     vars["duplicated"] = std::to_string(counters.duplicated);
     if (router_ != nullptr) {
         const int64_t channelId = router_->find(chatKeyText);
-        vars["channelId"]       = channelId > 0 ? std::to_string(channelId) : std::string{"-"};
+        // 没有通道时不要显示一个孤立的 `-`: 用户看不出这是"会话还没建"还是"取不到"。
+        // 本地命令不建通道, 所以首条命令必然是未建状态。
+        vars["channelId"] = channelId > 0 ? std::to_string(channelId) : std::string{"未建"};
         if (!route.personaName.empty()) {
             const auto* persona = config_.findPersona(route.personaName);
             vars["model"]       = persona != nullptr ? persona->model : std::string{};

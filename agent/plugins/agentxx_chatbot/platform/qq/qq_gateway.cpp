@@ -126,19 +126,19 @@ void QqGateway::connect() {
             if (!response.ok()) {
                 self->lastError_ = "取网关地址失败 (status " + std::to_string(response.status)
                                    + " " + response.error + ")";
-                self->scheduleReconnect(self->lastError_, backoffMs(++self->reconnectCount_));
+                self->scheduleReconnect(self->lastError_, -1);
                 co_return;
             }
             auto json = response.json();
             if (!json.has_value() || !json->is_object()) {
                 self->lastError_ = "网关地址响应不是 JSON";
-                self->scheduleReconnect(self->lastError_, backoffMs(++self->reconnectCount_));
+                self->scheduleReconnect(self->lastError_, -1);
                 co_return;
             }
             std::string url = json->value("url", std::string{});
             if (url.empty()) {
                 self->lastError_ = "网关地址为空 (账号未开通或 token 无权限)";
-                self->scheduleReconnect(self->lastError_, backoffMs(++self->reconnectCount_));
+                self->scheduleReconnect(self->lastError_, -1);
                 co_return;
             }
             XX_LOGI("[{}] 连接网关: {}", kLogTag, url);
@@ -153,7 +153,7 @@ void QqGateway::connect() {
             auto client = co_await utilxx::wsConnect(self->ex_, url, {}, wsConfig);
             if (!client.has_value()) {
                 self->lastError_ = "连接网关失败: " + client.error();
-                self->scheduleReconnect(self->lastError_, backoffMs(++self->reconnectCount_));
+                self->scheduleReconnect(self->lastError_, -1);
                 co_return;
             }
             if (self->stopped_ || self->generation_ != generation) {
@@ -190,13 +190,13 @@ void QqGateway::readLoop() {
                         co_return;
                     }
                     self->lastError_ = "网关接收失败: " + reason;
-                    self->scheduleReconnect(self->lastError_, backoffMs(++self->reconnectCount_));
+                    self->scheduleReconnect(self->lastError_, -1);
                     co_return;
                 }
                 if (message->type == utilxx::WsMessage::Type::Close) {
                     self->lastError_ = "网关对端关闭连接 (code " + std::to_string(message->closeCode)
                                        + " " + message->closeReason + ")";
-                    self->scheduleReconnect(self->lastError_, backoffMs(++self->reconnectCount_));
+                    self->scheduleReconnect(self->lastError_, -1);
                     co_return;
                 }
                 self->onFrame(message->payload);
@@ -300,6 +300,18 @@ void QqGateway::onFrame(std::string_view payload) {
                 XX_LOGI("[{}] 网关已就绪 (session '{}')", kLogTag, sessionId_);
                 break;
             }
+            if (eventName == "RESUMED") {
+                // 断线恢复成功: 会话接续, 状态要回到 online —— 否则一直停在
+                // reconnecting, 上层的"在线才发"判断会把后面的出站全部挡掉
+                identifying_ = false;
+                reconnectCount_ = 0;
+                setState(PlatformState::Online, "resumed");
+                if (hooks_.onReady) {
+                    hooks_.onReady(sessionId_, sequence_);
+                }
+                XX_LOGI("[{}] 网关会话已恢复 (session '{}', seq {})", kLogTag, sessionId_, sequence_);
+                break;
+            }
             if (hooks_.onDispatch) {
                 hooks_.onDispatch(eventName, data);
             }
@@ -376,6 +388,13 @@ void QqGateway::scheduleReconnect(std::string reason, int64_t delayMs) {
     stopHeartbeat();
     closeSocket();
     setState(PlatformState::Reconnecting, reason);
+    // 次数统一在这里递增: 之前只有"连接失败"那条路径在调 backoffMs(++reconnectCount_),
+    // op 7 / op 9 直接给常量延迟, 计数就一直是 0 (日志看着像没重连过)。
+    // 调用方传 `delayMs < 0` 表示"按当前次数算指数退避"。
+    ++reconnectCount_;
+    if (delayMs < 0) {
+        delayMs = backoffMs(reconnectCount_);
+    }
     XX_LOGW(
         "[{}] 网关将重连 (第 {} 次, {} ms 后): {}",
         kLogTag,
