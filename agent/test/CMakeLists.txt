@@ -129,7 +129,7 @@ target_include_directories(agentxx_test PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/"
 )
 
-# chatbot 插件的纯逻辑部分 (切分/命令解析/配置解析与校验/路由表) 直接编进测试:
+# chatbot 插件的纯逻辑部分 (切分/命令解析/配置解析与校验/路由表/QQ 事件归一化) 直接编进测试:
 # 这些源文件不碰网络也不碰主程序, 与其他内置工具的 *_impl.h 同一思路 ——
 # 测的是插件真实实现 (源码始终在仓库里, 与插件是否启用编译无关)
 set(AGENTXX_CHATBOT_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/agentxx_chatbot")
@@ -138,6 +138,7 @@ target_sources(agentxx_test PRIVATE
   "${AGENTXX_CHATBOT_SOURCE_DIR}/chatbot_types.cpp"
   "${AGENTXX_CHATBOT_SOURCE_DIR}/chatbot_config.cpp"
   "${AGENTXX_CHATBOT_SOURCE_DIR}/chatbot_router.cpp"
+  "${AGENTXX_CHATBOT_SOURCE_DIR}/platform/qq/qq_normalize.cpp"
 )
 
 # 注意: 不要添加 /FS /MP 编译选项 —— 顶层已统一管理; 命令行出现重复 /FS 时

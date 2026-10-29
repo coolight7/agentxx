@@ -1110,6 +1110,13 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 插件经内置 `agentxx_jav
 （直接向调度层投一条假消息，不碰平台网络）与 `chatbot_debug_outbox`（回看假平台收到的出站，
 含被动回复 id / 引用句柄）。生产环境不要打开。
 
+**附件**：图片/语音/视频作为多模态附件投给会话；普通文件（`file`）不作为附件（框架的
+MediaType 只有 image/audio/video），而是把本地路径写进输入 —— 但人设根常常没挂文件系统
+插件（`mount.mode: none`），所以小于 `behavior.attachments.inlineTextMaxBytes`（默认 64 KiB）
+的小文本文件会把正文**直接内联**进输入（`[#n:附件内容开始]` … `[#n:附件内容结束]`），
+更大或二进制的才只给路径。群文件在**被引用消息**的 `msg_elements[].attachments` 里，
+不在顶层 `attachments`。
+
 **已知限制**：当前只实现 QQ（`accounts[].type = "qq"`）与内存假平台（`"fake"`，测试与本地
 演示用）；平台差异走 `IPlatform` + `PlatformCaps` 数据表，加平台只需实现接口并把事件归一化
 成 `InboundEvent`。

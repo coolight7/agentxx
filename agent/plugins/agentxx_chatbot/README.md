@@ -167,6 +167,12 @@ QQ群「技术交流群」(群 id 尾号 6789); 下面是最近收到的消息�
 **凭证泄露。** 用 `appIdFile` / `appSecretFile` 指向 `.env` 文件，并把那个文件加进 `.gitignore`。
 日志里不会打印凭证取值。
 
+**群里发文件给它看，它说看不到。** 群文件的附件挂在**被引用那条消息**的
+`msg_elements[].attachments` 里（不是顶层 `attachments`），插件已按这个结构解析。
+落盘后小文本文件（默认 ≤ 64 KiB，`behavior.attachments.inlineTextMaxBytes`）的正文会
+**直接内联进输入**，所以人设根没挂文件系统插件也能读；更大的或二进制文件只在输入里给路径，
+要靠人设根挂了 `agentxx_filesystem` 才能读。
+
 **想在不连平台的情况下试一遍。** 把账号 `type` 改成 `fake`、打开 `behavior.debugTools`，
 然后用工具 `chatbot_debug_inject` 注入消息、`chatbot_debug_outbox` 看回复。
 

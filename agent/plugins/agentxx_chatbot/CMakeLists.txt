@@ -31,6 +31,7 @@ set(_CHATBOT_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/platform/qq/qq_api.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/platform/qq/qq_gateway.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/platform/qq/qq_media.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/platform/qq/qq_normalize.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/platform/qq/qq_platform.cpp
 )
 

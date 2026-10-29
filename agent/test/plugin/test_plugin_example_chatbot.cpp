@@ -37,6 +37,7 @@
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <future>
 #include <memory>
@@ -906,6 +907,101 @@ asio::awaitable<void> runBody(
         XX_TEST_EXPECT_TRUE(request.find("image/png") != std::string::npos
                             || request.find("a.png") != std::string::npos);
         XX_TEST_EXPECT_TRUE(request.find("看这张图") != std::string::npos);
+    }
+
+    // ===================== 7c. 普通文件: 内容直接内联进输入 =====================
+    //
+    // 人设根不一定挂了文件系统插件 (实测常见的 mount.mode: none), 只给本地路径
+    // 模型根本读不到。小文本文件必须把正文一起送上去。
+    {
+        XX_TEST_EXPECT_TRUE(co_await drain());
+        g_da_sim_tool_calls_remaining = 0;
+        g_da_sim_tool_calls           = Json::array();
+        g_da_sim_response_content     = "";
+        const int requestsBefore      = g_da_sim_request_count.load();
+
+        // 造一个真实的本地文本文件
+        std::error_code ec;
+        const auto dir = std::filesystem::temp_directory_path(ec) / "agentxx-chatbot-inline";
+        std::filesystem::create_directories(dir, ec);
+        const auto filePath = dir / "note.txt";
+        {
+            std::ofstream out(filePath, std::ios::binary);
+            out << "# inline-marker-title\ninline-marker-body\n";
+        }
+        const auto  fileSize = std::filesystem::file_size(filePath, ec);
+        XX_TEST_EXPECT_TRUE(!ec);
+        XX_TEST_EXPECT_TRUE(fileSize > 0);
+
+        Json args = Json::object();
+        args["account"] = "fake_main";
+        args["type"]    = "private";
+        args["chatId"]  = "U2";
+        args["text"]    = "这个文件写了什么";
+        args["sender"]  = "小张";
+        args["msgId"]   = "msg-file-inline";
+        args["attachments"] = Json::array(
+            {Json{{"kind", "file"},
+                  {"localPath", filePath.generic_string()},
+                  {"fileName", "note.txt"},
+                  {"mimeType", "text/plain"},
+                  {"sizeBytes", static_cast<int64_t>(fileSize)}}}
+        );
+        XX_TEST_EXPECT_TRUE(co_await injectJson(args));
+        XX_TEST_EXPECT_TRUE(co_await waitUntil(ex, 60s, [&]() {
+            return g_da_sim_request_count.load() > requestsBefore;
+        }));
+        const auto request = lastRequestText();
+        // 文件正文进了模型输入, 而不是只给一个本地路径
+        XX_TEST_EXPECT_TRUE(request.find("inline-marker-title") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(request.find("inline-marker-body") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(request.find("附件内容开始") != std::string::npos);
+        // 普通文件永远不作为多模态附件投递 (框架的 MediaType 只有图/音/视)
+        XX_TEST_EXPECT_TRUE(request.find("\"type\":\"file\"") == std::string::npos);
+    }
+
+    // ===================== 7d. 二进制文件: 不内联, 只给路径 =====================
+    {
+        XX_TEST_EXPECT_TRUE(co_await drain());
+        g_da_sim_tool_calls_remaining = 0;
+        g_da_sim_tool_calls           = Json::array();
+        const int requestsBefore      = g_da_sim_request_count.load();
+
+        std::error_code ec;
+        const auto dir = std::filesystem::temp_directory_path(ec) / "agentxx-chatbot-inline";
+        std::filesystem::create_directories(dir, ec);
+        const auto binPath = dir / "blob.bin";
+        {
+            // 含 NUL 字节 → 判定为二进制, 不能当文本塞进输入
+            std::ofstream out(binPath, std::ios::binary);
+            const char    raw[] = {'B', 'I', 'N', '\0', 'D', 'A', 'T', 'A'};
+            out.write(raw, sizeof(raw));
+        }
+        const auto binSize = std::filesystem::file_size(binPath, ec);
+        XX_TEST_EXPECT_TRUE(!ec);
+
+        Json args = Json::object();
+        args["account"] = "fake_main";
+        args["type"]    = "private";
+        args["chatId"]  = "U3";
+        args["text"]    = "这个二进制文件是什么";
+        args["sender"]  = "小张";
+        args["msgId"]   = "msg-file-binary";
+        args["attachments"] = Json::array(
+            {Json{{"kind", "file"},
+                  {"localPath", binPath.generic_string()},
+                  {"fileName", "blob.bin"},
+                  {"mimeType", "application/octet-stream"},
+                  {"sizeBytes", static_cast<int64_t>(binSize)}}}
+        );
+        XX_TEST_EXPECT_TRUE(co_await injectJson(args));
+        XX_TEST_EXPECT_TRUE(co_await waitUntil(ex, 60s, [&]() {
+            return g_da_sim_request_count.load() > requestsBefore;
+        }));
+        const auto request = lastRequestText();
+        // 正文没被塞进输入, 但路径给了 (模型可以自己用工具读)
+        XX_TEST_EXPECT_TRUE(request.find("附件内容开始") == std::string::npos);
+        XX_TEST_EXPECT_TRUE(request.find("blob.bin") != std::string::npos);
     }
 
     // ===================== 8. 一条回复超长 → 按上限切成多条 =====================

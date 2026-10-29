@@ -1,6 +1,7 @@
 #include "qq_platform.h"
 
 #include "../../chatbot_core.h"
+#include "qq_normalize.h"
 #include "utilxx/http_client.h"
 #include "utilxx_base/json.h"
 #include "utilxx_base/log.h"
@@ -33,86 +34,6 @@ int64_t unixNowMs() {
                std::chrono::system_clock::now().time_since_epoch()
     )
         .count();
-}
-
-/// 从 `text[pos, pos+len)` 读十进制数字 (不足 len 位或含非数字返回 -1)
-int parseFixedDigits(std::string_view text, size_t pos, size_t len) {
-    if (pos + len > text.size()) {
-        return -1;
-    }
-    int value = 0;
-    for (size_t i = 0; i < len; ++i) {
-        const char c = text[pos + i];
-        if (c < '0' || c > '9') {
-            return -1;
-        }
-        value = value * 10 + (c - '0');
-    }
-    return value;
-}
-
-/// RFC3339 时间 ("2026-10-29T07:03:09+08:00") → 毫秒 (解析失败返回 0)
-/// - 只认前 19 个字符的 `YYYY-MM-DDTHH:MM:SS`, 时区后缀一律按 UTC 处理
-///   (QQ 推送的时间只用于消息排序与去重, 差几个时区不影响结果)
-int64_t parseRfc3339Ms(std::string_view text) {
-    if (text.size() < 19) {
-        return 0;
-    }
-    const int year   = parseFixedDigits(text, 0, 4);
-    const int month  = parseFixedDigits(text, 5, 2);
-    const int day    = parseFixedDigits(text, 8, 2);
-    const int hour   = parseFixedDigits(text, 11, 2);
-    const int minute = parseFixedDigits(text, 14, 2);
-    const int second = parseFixedDigits(text, 17, 2);
-    if (year < 0 || month < 0 || day < 0 || hour < 0 || minute < 0 || second < 0) {
-        return 0;
-    }
-    std::tm tmBuf{};
-    tmBuf.tm_year = year - 1900;
-    tmBuf.tm_mon  = month - 1;
-    tmBuf.tm_mday = day;
-    tmBuf.tm_hour = hour;
-    tmBuf.tm_min  = minute;
-    tmBuf.tm_sec  = second;
-#if XX_IS_WIN_D
-    const std::time_t seconds = _mkgmtime(&tmBuf);
-#else
-    const std::time_t seconds = timegm(&tmBuf);
-#endif
-    if (seconds <= 0) {
-        return 0;
-    }
-    return static_cast<int64_t>(seconds) * 1000;
-}
-
-/// `message_scene.ext` 里的 `key=value` 串解析 (`msg_idx=REFIDX_...\tref_msg_idx=...`)
-std::string sceneExtValue(std::string_view ext, std::string_view key) {
-    size_t pos = 0;
-    while (pos < ext.size()) {
-        auto       end = ext.find_first_of("\t;&", pos);
-        const auto item = ext.substr(pos, end == std::string_view::npos ? std::string_view::npos
-                                                                        : end - pos);
-        const auto eq   = item.find('=');
-        if (eq != std::string_view::npos && item.substr(0, eq) == key) {
-            return std::string{item.substr(eq + 1)};
-        }
-        if (end == std::string_view::npos) {
-            break;
-        }
-        pos = end + 1;
-    }
-    return {};
-}
-
-std::string fileNameOfUrl(std::string_view url) {
-    auto path = url;
-    const auto query = path.find('?');
-    if (query != std::string_view::npos) {
-        path = path.substr(0, query);
-    }
-    const auto slash = path.find_last_of('/');
-    return slash == std::string_view::npos ? std::string{"attachment"}
-                                           : std::string{path.substr(slash + 1)};
 }
 
 } // namespace
@@ -356,7 +277,8 @@ void QqPlatform::downloadAttachment(const std::string& accountId, MediaRef& ref)
     if (mediaRoot_.empty()) {
         return; // 没有数据目录: 直给 URL
     }
-    const std::string fileName = ref.fileName.empty() ? fileNameOfUrl(ref.url) : ref.fileName;
+    const std::string fileName
+        = ref.fileName.empty() ? qqFileNameOfUrl(ref.url) : ref.fileName;
     // 落盘目录: {data_dir}/chatbot/media/{accountId}/ (按附件大类分子目录, 便于排查)
     const fs::path dir = utilxx_base::utf8ToPath(mediaRoot_) / mediaKindName(ref.kind);
     std::error_code ec;
@@ -485,175 +407,13 @@ RecallResult QqPlatform::recallMessage(
     return result;
 }
 
-std::string QqPlatform::roleOf(const utilxx_base::Json& author) {
-    if (!author.is_object()) {
-        return {};
-    }
-    const auto role = author.value("member_role", std::string{});
-    if (role == "owner" || role == "admin" || role == "member") {
-        return role;
-    }
-    return {};
-}
-
 bool QqPlatform::normalize(
     std::string_view         eventName,
     const utilxx_base::Json& data,
     InboundEvent&            out
 ) const {
-    if (eventName != "GROUP_AT_MESSAGE_CREATE" && eventName != "GROUP_MESSAGE_CREATE"
-        && eventName != "C2C_MESSAGE_CREATE") {
-        // 其它事件 (成员增删/消息接收回执等) 只记 debug
-        XX_LOGD("[{}] 忽略事件 {}", kLogTag, std::string{eventName});
-        return false;
-    }
-    if (!data.is_object()) {
-        return false;
-    }
-    out = InboundEvent{};
-    // @ 判定只看事件类型 (设计文档 §7.2): 全量消息事件不带 @ 语义
-    out.mentionedMe  = (eventName == "GROUP_AT_MESSAGE_CREATE" || eventName == "C2C_MESSAGE_CREATE");
-    out.fromFullMode = (eventName == "GROUP_MESSAGE_CREATE");
-    out.type = (eventName == "C2C_MESSAGE_CREATE") ? ChatType::Private : ChatType::Group;
-
-    out.platformMessageId = data.value("id", std::string{});
-    const auto& author    = data.contains("author") ? data["author"] : utilxx_base::Json::object();
-    if (author.is_object()) {
-        out.senderId = author.value("id", std::string{});
-        if (out.senderId.empty()) {
-            out.senderId = author.value("member_openid", std::string{});
-        }
-        if (out.senderId.empty()) {
-            out.senderId = author.value("user_openid", std::string{});
-        }
-        out.senderName = author.value("username", std::string{});
-        out.senderRole = roleOf(author);
-        if (author.value("bot", false)) {
-            // 机器人自己发的消息不再进流程 (平台也可能推回来)
-            return false;
-        }
-    }
-    if (out.type == ChatType::Group) {
-        out.chatId = data.value("group_openid", std::string{});
-    } else {
-        out.chatId = out.senderId;
-    }
-    if (out.chatId.empty()) {
-        XX_LOGW("[{}] 事件 {} 缺少会话 id, 已丢弃", kLogTag, std::string{eventName});
-        return false;
-    }
-
-    out.text = data.value("content", std::string{});
-
-    // 诊断: 带附件的消息把原始事件打出来
-    // - 平台对不同附件 (图片/文件/语音) 的字段布局不一致, 只靠猜测容易漏掉整类
-    // - 只在事件里出现 attachments / msg_elements / 富媒体 key 时打, 不刷平常消息
-    if (data.contains("attachments") || data.contains("msg_elements")
-        || data.contains("attachment") || data.contains("ark_data")
-        || data.contains("file_info")) {
-        std::string compact = data.dump();
-        if (compact.size() > 3000) {
-            compact.resize(3000);
-            compact += "...(truncated)";
-        }
-        XX_LOGI("[{}] 附件事件原始结构 ({}): {}", kLogTag, std::string{eventName}, compact);
-    }
-
-    // 引用消息 (message_type=103): 把被引用内容拼到正文前面
-    const int messageType = static_cast<int>(data.value("message_type", int64_t{0}));
-    if (data.contains("msg_elements") && data["msg_elements"].is_array()
-        && !data["msg_elements"].empty()) {
-        const auto& quoted = data["msg_elements"][0];
-        if (quoted.is_object()) {
-            if (quoted.contains("author") && quoted["author"].is_object()) {
-                out.quotedSender = quoted["author"].value("username", std::string{});
-            }
-            out.quotedText = quoted.value("content", std::string{});
-        }
-    } else if (messageType == 3) {
-        // 卡片消息: 用 ark_data 拼一行文本
-        const auto& ark = data.contains("ark_data") ? data["ark_data"] : utilxx_base::Json{};
-        if (ark.is_object()) {
-            std::string joined = ark.value("prompt", std::string{});
-            if (ark.contains("fields") && ark["fields"].is_array()) {
-                for (const auto& field : ark["fields"]) {
-                    if (!field.is_object()) {
-                        continue;
-                    }
-                    const auto title = field.value("title", std::string{});
-                    const auto desc  = field.value("desc", std::string{});
-                    if (!title.empty()) {
-                        joined += (joined.empty() ? "" : " | ") + title + ": " + desc;
-                    }
-                }
-            }
-            if (!joined.empty()) {
-                out.text = joined;
-            }
-        }
-    }
-
-    // `message_scene.ext`: msg_idx (引用回复用) / ref_msg_idx
-    if (data.contains("message_scene") && data["message_scene"].is_object()) {
-        const auto& scene = data["message_scene"];
-        const auto  ext   = scene.value("ext", std::string{});
-        if (!ext.empty()) {
-            out.replyRef = sceneExtValue(ext, "msg_idx");
-        }
-    }
-
-    // 附件
-    if (data.contains("attachments") && data["attachments"].is_array()) {
-        for (const auto& item : data["attachments"]) {
-            if (!item.is_object()) {
-                continue;
-            }
-            MediaRef ref;
-            ref.url       = item.value("url", std::string{});
-            ref.fileName  = item.value("filename", std::string{});
-            ref.mimeType  = item.value("content_type", std::string{});
-            ref.asrText   = item.value("asr_refer_text", std::string{});
-            ref.sizeBytes = static_cast<uint64_t>(
-                item.value("size", static_cast<int64_t>(0))
-            );
-            const auto contentType = ref.mimeType;
-            if (contentType.rfind("image/", 0) == 0) {
-                ref.kind = MediaKind::Image;
-            } else if (contentType.rfind("video/", 0) == 0) {
-                ref.kind = MediaKind::Video;
-            } else if (contentType == "voice" || contentType.rfind("audio/", 0) == 0) {
-                ref.kind = MediaKind::Audio;
-                if (!item.value("voice_wav_url", std::string{}).empty()) {
-                    ref.url = item.value("voice_wav_url", std::string{});
-                }
-                // 语音优先用平台识别文本 (不必让模型听音频)
-                if (!ref.asrText.empty()) {
-                    if (!out.text.empty()) {
-                        out.text += " ";
-                    }
-                    out.text += ref.asrText;
-                }
-            } else {
-                ref.kind = MediaKind::File;
-            }
-            if (ref.fileName.empty()) {
-                ref.fileName = fileNameOfUrl(ref.url);
-            }
-            if (!ref.url.empty()) {
-                out.attachments.push_back(std::move(ref));
-            }
-        }
-    }
-
-    out.timestampMs = parseRfc3339Ms(data.value("timestamp", std::string{}));
-    if (out.timestampMs <= 0) {
-        out.timestampMs = unixNowMs();
-    }
-    if (out.text.empty() && out.attachments.empty()) {
-        // 纯空消息 (表情/系统提示): 不值得叫醒模型
-        return false;
-    }
-    return true;
+    // 字段解析全部在 qq_normalize.cpp (纯函数, 可以用真实事件做回归)
+    return normalizeQqEvent(eventName, data, out);
 }
 
 std::string QqPlatform::statusJson() const {

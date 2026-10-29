@@ -145,6 +145,8 @@ struct AttachmentLine {
     bool local = true;
     /// 附加说明 ("未随消息传递" / "下载失败(原因)")
     std::string note;
+    /// 文件内容 (小文本文件直接内联; 空 = 只给路径)
+    std::string inlineText;
 };
 
 /// 一条消息在输入文本里的展示形态

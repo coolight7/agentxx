@@ -227,20 +227,55 @@
 （报超出范围，不会退回去撤最近那条）→ `#2` 报错并给出正确写法 →
 `target="-1"` 撤掉始终没被动过的最近那条。
 
-### 群文件附件：字段布局待确认（未完成）
+### 群文件附件：真实结构拿到后修掉（2026-10-29）
 
-真机现象：群里发文件后引用该消息让它描述内容，模型答"看不到文件"；
-日志里**没有任何附件下载记录**，说明文件消息在 `QqPlatform::normalize` 里连
-`attachments` 都没解析出来。
+真机现象：群里发文件后引用该消息让它描述内容，模型答"看不到文件"；日志里连附件下载
+记录都没有。
 
-已知 `normalize` 只在事件含 `attachments` 数组时构造附件（图片/语音走的就是这条路），
-群文件很可能是另一种事件形态 —— 可能不经 `attachments`，也可能文件本体在
-`ark_data` / 卡片字段里，需要看真实事件才能定。
+拿到真实事件后（诊断日志打出来的原文，已原样存进 `chatbot_qq` 用例）：
 
-当前处理：在 `normalize` 里加了一条**只在事件含附件类 key 时才打**的原始事件日志
-（`attachments` / `msg_elements` / `attachment` / `ark_data` / `file_info` 任一命中，
-截断 3000 字符）。这条日志同时能确认 `message_scene.ext` 里 `msg_idx` 是否有值
-（引用回复没生效的另一个疑点）。拿到真实结构后再补解析。
+```json
+{
+  "content": "  看看这个文件的内容是什么",
+  "message_type": 103,
+  "message_scene": {"ext": ["ref_msg_idx=REFIDX_…", "msg_idx=REFIDX_…", "auth_token=…"]},
+  "msg_elements": [{
+    "content": "",
+    "message_type": 103,
+    "msg_idx": "REFIDX_…",
+    "attachments": [{"content_type": "file", "filename": "README.md", "size": 1700,
+                     "url": "https://gzc-download.ftn.qq.com/ftn_handler/…?fname=README.md"}]
+  }],
+  "parallel_message": {"msg_nodes": [{"content": "[文件]", "message_type": 7}]}
+}
+```
+
+三个结论，全部改掉：
+
+1. **群文件不在顶层 `attachments`，在被引用消息的 `msg_elements[].attachments` 里**。
+   原实现只读 `msg_elements[0].content`（文件消息没有正文 → 空串），永远看不到附件。
+   现在把被引用消息的附件并入本条消息的附件（模型才能真正拿到文件）。
+2. **引用内容为空时用附件描述顶上**：否则渲染出来是 `(回复 寒光: )`，模型只知道
+   "有人引用了什么"却不知道是文件。现在拼成 `(回复 寒光: [文件] README.md)`。
+3. **`message_scene.ext` 是字符串数组**（`["ref_msg_idx=…","msg_idx=…","auth_token=…"]`），
+   原实现 `scene.value("ext", std::string{})` 对数组取到空值 → `replyRef` 永远为空。
+   这正是之前"引用回复没生效"的原因。现在数组形态与字符串形态都解析；
+   `msg_idx`（本条自己的索引）用于回复时引用，`ref_msg_idx` 是被引用的那条，别弄反。
+
+另外两件事：
+
+- **文件内容不只是给路径**：`file` 类附件按设计不作为多模态附件投递（框架的 MediaType
+  只有 image/audio/video），只在输入里给路径 —— 而人设根常见 `mount.mode: none`
+  （没挂 `agentxx_filesystem`），模型根本读不到路径。现在小文本文件（默认 ≤ 64 KiB，
+  `behavior.attachments.inlineTextMaxBytes`，0 = 关）的正文直接**内联进输入**，
+  用 `[#n:附件内容开始]` / `[#n:附件内容结束]` 围起来；判文本的规则是"不含 NUL 且是合法
+  UTF-8"，二进制或超限仍旧只给路径。
+- **归一化拆成纯函数** `platform/qq/qq_normalize.{h,cpp}`（不碰网络、不碰连接状态），
+  这样真实事件可以直接进测试。新增测试模块 `chatbot_qq`：用上面那份真机 JSON 逐字段断言
+  （附件类型/文件名/大小/URL、`quotedText`、`replyRef` 取的是 `msg_idx`），另覆盖
+  ext 两种形态、全量消息不算 @、图片/视频/文件分类、语音识别文本进正文、引用图片消息、
+  引用有正文的消息、私聊会话 id、该丢的事件（机器人自己/缺群号/空内容）、卡片消息、
+  文件名兜底。
 
 ### 阶段 4：打磨与文档（进行中）
 
@@ -259,8 +294,9 @@
       切分多条 → 被动回复配额），以及「人设 root 上确有 `chatbot_*` 工具」的用例。
 - [x] 阶段 3 收尾：真实账号联调（网关鉴权、群/私聊事件、被动回复配额、图片收发、撤回）。
       私聊与群聊文字、图片收发、被动回复序号、命令、撤回都已实测通过。
-- [ ] 群文件附件：等真实事件结构确认后补解析（见上节"群文件附件：字段布局待确认"）。
-- [ ] 引用回复没生效：`ext_info.ref_idx` / `message_scene.ext` 的取值待日志确认。
+- [x] 群文件附件：已按真实事件结构解析（见上节"群文件附件：真实结构拿到后修掉"）。
+- [x] 引用回复没生效：根因是 `message_scene.ext` 为字符串数组，已修并进 `chatbot_qq` 用例；
+      真机上"引用哪条"的实际效果待下一次联调确认。
 - [ ] 阶段 4：还剩「被动→主动降级」与「sendIntervalMs 频控」的真实时序验证（假平台可以测，
       但需要模拟平台侧返回主动消息被拒）。
 - [ ] 阶段 5：可选（TTS / 微信等其它平台）。
@@ -269,12 +305,13 @@
 
 | 模块 | 项数 |
 |------|------|
-| `chatbot_core`（纯逻辑 + 路由/额度） | 545 |
-| `plugin_example_chatbot`（真实插件 + 假平台 + 模拟模型） | 138 |
+| `chatbot_core`（纯逻辑 + 路由/额度） | 557 |
+| `chatbot_qq`（QQ 事件归一化，真实事件回归） | 63 |
+| `plugin_example_chatbot`（真实插件 + 假平台 + 模拟模型） | 153 |
 | `plugin_agent_runtime` / `plugin_example_runtime` | 178 / 50 |
 | `websocket`（含无端口 URL 回归） | 242 |
 | `boundaries` / `test_modules` | 19 / 5 |
-| 本轮相关模块合计 | 949 项全通过 |
+| 本轮相关模块合计 | 1044 项全通过 |
 
 ## 注意事项
 
@@ -291,7 +328,12 @@
   继承），简化写法仍自带 `account`。
 - 运行期 `mode` 覆盖由 `RouterTable::route` 统一施加（`ChatbotRouter::route` 会再叠加一次
   `effectiveMode`，两处一致，改动时保持同步）。
-- **出站字段传递只有一个入口**：`OutboundRequest` → `ChatbotOutbound::submit` 里逐个拷进
+- **平台事件的字段解析集中在 `platform/qq/qq_normalize.{h,cpp}`**（纯函数，不碰网络）。
+  平台对不同附件的字段布局并不一致，改这里必须同时补 `chatbot_qq` 用例 ——
+  该模块用的就是真机抓到的事件 JSON，别用自己编的结构替换它。
+- **普通文件的正文要么内联、要么没用**：人设根常见 `mount.mode: none`（没挂文件系统插件），
+  只给本地路径模型读不到。加新附件类型时想清楚"模型最终看到什么"。
+- 出站字段传递只有一个入口：`OutboundRequest` → `ChatbotOutbound::submit` 里逐个拷进
   `Job.message`。新增出站字段时两处都要加，否则工具路径静默丢字段（被动回复 id 就这样丢过），
   而 `enqueueDirect` 路径（直接给 `OutboundMessage`）看不出问题。
 - 改 `agent/lib` 之后**必须重建 `agentxx_lib_repo` 与 `agentxx_test_repo` 两个目标**，

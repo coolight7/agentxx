@@ -2,10 +2,13 @@
 
 #include "utilxx_base/json.h"
 #include "utilxx_base/log.h"
+#include "utilxx_base/string_util.h"
 
 #include <algorithm>
 #include <chrono>
 #include <ctime>
+#include <filesystem>
+#include <fstream>
 
 namespace agentxx {
 namespace chatbot {
@@ -13,6 +16,8 @@ namespace chatbot {
 namespace {
 
 constexpr const char* kLogTag = "chatbot";
+
+namespace fs = std::filesystem;
 
 using utilxx_base::Json;
 
@@ -39,6 +44,58 @@ std::string formatClockText(int64_t timestampMs) {
         return {};
     }
     return std::string{buf};
+}
+
+/// 小文本文件读取: 成功把内容写进 `out` 并返回 true
+///
+/// - 只读**已经落盘**的本地路径 (远端 URL 不读)
+/// - 上限由 `behavior.attachments.inlineTextMaxBytes` 给 (0 = 关)
+/// - 判文本: 不含 NUL 字节且是合法 UTF-8 (二进制文件塞进输入会把后面的内容搅乱)
+/// - 读失败 (权限/文件没了) 一律当"不能内联", 调用方退回只给路径
+bool inlineTextFile(const MediaRef& attachment, std::string& out) {
+    if (attachment.localPath.empty() || attachment.sizeBytes == 0) {
+        return false;
+    }
+    const fs::path path = utilxx_base::utf8ToPath(attachment.localPath);
+    std::error_code ec;
+    const auto      size = fs::file_size(path, ec);
+    if (ec || size == 0) {
+        return false;
+    }
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        return false;
+    }
+    std::string content(static_cast<size_t>(size), '\0');
+    in.read(content.data(), static_cast<std::streamsize>(size));
+    const auto read = static_cast<size_t>(in.gcount());
+    content.resize(read);
+    if (content.empty()) {
+        return false;
+    }
+    // 含 NUL 的一律当二进制 (文本可能是任意编码, 但不会是 UTF-8 + NUL)
+    if (content.find('\0') != std::string::npos) {
+        return false;
+    }
+    if (!utilxx_base::utf8IsAvail(content)) {
+        return false;
+    }
+    out = std::move(content);
+    return true;
+}
+
+/// 该附件是否值得内联 (大小与配置允许)
+bool shouldInlineTextFile(const MediaRef& attachment, int32_t limitBytes) {
+    if (limitBytes <= 0) {
+        return false;
+    }
+    if (attachment.localPath.empty()) {
+        return false;
+    }
+    if (attachment.sizeBytes > static_cast<uint64_t>(limitBytes)) {
+        return false;
+    }
+    return true;
 }
 
 } // namespace
@@ -427,8 +484,27 @@ std::string ChatbotEngine::assembleInput(
                 line.note = "未随消息传递 (附件数已达上限)";
                 view.attachments.push_back(std::move(line));
             } else {
-                line.note = "普通文件, 可用 agentxx_filesystem_read 读取";
-                view.attachments.push_back(std::move(line));
+                // 普通文件: 能内联就把内容给模型, 否则只给路径
+                //
+                // 只给路径时模型要靠文件系统工具才能读到, 人设根没挂那个插件就
+                // 彻底读不到 (实测: 群里引用一个 README 问内容, 模型答"看不到文件")。
+                // 小文本文件直接内联, 不依赖任何工具。
+                std::string inlined;
+                const bool  canInline = shouldInlineTextFile(
+                    attachment,
+                    config_.behavior.attachmentsInlineTextMaxBytes
+                );
+                if (canInline && inlineTextFile(attachment, inlined)) {
+                    line.note = "内容已内联在下面";
+                    view.attachments.push_back(std::move(line));
+                    view.attachments.back().inlineText = std::move(inlined);
+                } else {
+                    line.note = canInline
+                                    ? std::string{"普通文件, 可用 agentxx_filesystem_read 读取"}
+                                    : std::string{"文件较大或不是文本, 可用 "
+                                                  "agentxx_filesystem_read 读取"};
+                    view.attachments.push_back(std::move(line));
+                }
             }
         }
         views.push_back(std::move(view));

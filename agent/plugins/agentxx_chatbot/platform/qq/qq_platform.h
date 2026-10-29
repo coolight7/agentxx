@@ -56,14 +56,13 @@ public:
 private:
 
     /// 一条网关事件 → 归一化; 解析失败返回 false
+    ///
+    /// 真正的字段解析在 `qq_normalize.cpp` (纯函数, 不碰网络, 便于用真实事件做回归)
     bool normalize(
         std::string_view           eventName,
         const utilxx_base::Json&   data,
         InboundEvent&              out
     ) const;
-
-    /// 群成员角色 (`member_role`); 平台不提供返回空
-    static std::string roleOf(const utilxx_base::Json& author);
 
     /// 一次实际发送 (含附件上传; 协程)
     asio::awaitable<void> doSend(OutboundMessage msg, SendResultFn done);

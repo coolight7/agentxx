@@ -8,6 +8,7 @@
 #include "agentxx-test/core/test_boundaries.h"
 #include "agentxx-test/core/test_cancel.h"
 #include "agentxx-test/core/test_chatbot_core.h"
+#include "agentxx-test/core/test_chatbot_qq.h"
 #include "agentxx-test/core/test_checkpoint_store.h"
 #include "agentxx-test/core/test_command_tools.h"
 #include "agentxx-test/core/test_concurrency.h"
@@ -302,6 +303,7 @@ int main(int argn, char** argv) {
         runSync("string_util", agentxx::test::testStringUtil);
         runSync("invisible_text", agentxx::test::testInvisibleText);
         runSync("chatbot_core", agentxx::test::testChatbotCore);
+        runSync("chatbot_qq", agentxx::test::testChatbotQq);
         runSync("regex", agentxx::test::testRegex);
         runSync("json", agentxx::test::testJson);
         runSync("persist_semantics", agentxx::test::testPersistSemantics);

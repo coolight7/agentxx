@@ -584,6 +584,14 @@ std::string renderInputBlock(
             attLine += ")";
             out += attLine;
             out.push_back('\n');
+            if (!att.inlineText.empty()) {
+                out += "[#" + std::to_string(msg.index) + ":附件内容开始] " + att.fileName + "\n";
+                out += att.inlineText;
+                if (att.inlineText.back() != '\n') {
+                    out.push_back('\n');
+                }
+                out += "[#" + std::to_string(msg.index) + ":附件内容结束]\n";
+            }
         }
     }
     return rtrimCopy(out);

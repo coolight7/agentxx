@@ -554,6 +554,9 @@ void parseBehavior(const Json& root, ChatbotConfig& out) {
         cfg.attachmentsMaxPerMessage = static_cast<int32_t>(
             jsonIntOf(att, "maxPerMessage", cfg.attachmentsMaxPerMessage)
         );
+        cfg.attachmentsInlineTextMaxBytes = static_cast<int32_t>(
+            jsonIntOf(att, "inlineTextMaxBytes", cfg.attachmentsInlineTextMaxBytes)
+        );
     }
     cfg.exposeToolsOnHost = jsonBoolOf(j, "exposeToolsOnHost", cfg.exposeToolsOnHost);
     cfg.overflowPolicy    = jsonStringOf(j, "overflowPolicy", cfg.overflowPolicy);
@@ -952,6 +955,12 @@ bool validateConfig(ChatbotConfig& config, int32_t maxRoots, ConfigError& err) {
     clampInt(behavior.maxChatsPerPersona, 1, 64, "maxChatsPerPersona");
     clampInt(behavior.historyKeep, 0, 1000, "historyKeep");
     clampInt(behavior.attachmentsMaxPerMessage, 0, 5, "attachmentsMaxPerMessage");
+    clampInt(
+        behavior.attachmentsInlineTextMaxBytes,
+        0,
+        4 * 1024 * 1024,
+        "attachmentsInlineTextMaxBytes"
+    );
     clampInt(behavior.aggregateMaxItems, 1, 500, "aggregateMaxItems");
     clampInt(behavior.aggregateMaxChars, 100, 2000000, "aggregateMaxChars");
     clampInt(behavior.outboundQueueMax, 1, 10000, "outboundQueueMax");

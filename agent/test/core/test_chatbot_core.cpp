@@ -375,6 +375,42 @@ void testInputBlock() {
     unnamed.chatId = "A1B2C3D4E5F6";
     const auto unnamedBlock = renderInputBlock(unnamed, messages);
     XX_TEST_EXPECT_TRUE(contains(unnamedBlock, "A1B2C3D4"));
+
+    // 内联的普通文件正文: 用开始/结束标记围起来, 模型才知道哪段是文件内容
+    {
+        InputMessageView withFile;
+        withFile.index      = 1;
+        withFile.senderName = "小张";
+        withFile.text       = "看看这个文件的内容是什么";
+        AttachmentLine file;
+        file.fileName   = "README.md";
+        file.location   = "C:/tmp/README.md";
+        file.local      = true;
+        file.note       = "内容已内联在下面";
+        file.inlineText = "# 标题\n正文一行\n";
+        withFile.attachments.push_back(file);
+
+        InputBlockOptions plain;
+        plain.includeContextHint = false;
+        const auto fileBlock     = renderInputBlock(plain, {withFile});
+        XX_TEST_EXPECT_TRUE(contains(fileBlock, "[#1:附件] README.md"));
+        XX_TEST_EXPECT_TRUE(contains(fileBlock, "[#1:附件内容开始] README.md"));
+        XX_TEST_EXPECT_TRUE(contains(fileBlock, "# 标题"));
+        XX_TEST_EXPECT_TRUE(contains(fileBlock, "正文一行"));
+        XX_TEST_EXPECT_TRUE(contains(fileBlock, "[#1:附件内容结束]"));
+        // 顺序: 附件说明行 → 内容开始 → 内容 → 内容结束
+        const auto fileLineAt  = fileBlock.find("[#1:附件] README.md");
+        const auto beginAt     = fileBlock.find("[#1:附件内容开始]");
+        const auto bodyAt      = fileBlock.find("# 标题");
+        const auto endAt       = fileBlock.find("[#1:附件内容结束]");
+        XX_TEST_EXPECT_TRUE(fileLineAt != std::string::npos);
+        XX_TEST_EXPECT_TRUE(beginAt != std::string::npos);
+        XX_TEST_EXPECT_TRUE(bodyAt != std::string::npos);
+        XX_TEST_EXPECT_TRUE(endAt != std::string::npos);
+        XX_TEST_EXPECT_TRUE(fileLineAt < beginAt);
+        XX_TEST_EXPECT_TRUE(beginAt < bodyAt);
+        XX_TEST_EXPECT_TRUE(bodyAt < endAt);
+    }
 }
 
 /* ==================== 引用编号 ==================== */

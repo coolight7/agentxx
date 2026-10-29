@@ -110,6 +110,12 @@ struct BehaviorConfig {
     std::string attachmentsFetch = "auto";
     /// 单次投给会话的附件上限 (主程序上限就是 5)
     int32_t attachmentsMaxPerMessage = 5;
+    /// 普通文件多大以内把内容直接内联进输入 (字节; 0 = 不内联)
+    ///
+    /// - 文本文件 (UTF-8, 不含 NUL) 超限或不是文本时只在输入里给路径,
+    ///   由模型用文件系统工具自己读 —— 而人设根没挂文件系统插件时就读不到,
+    ///   所以小文件默认内联, 让"看看这个文件是什么"这种问法开箱即用
+    int32_t attachmentsInlineTextMaxBytes = 64 * 1024;
     /// 是否把 `chatbot_*` 工具也注册到内置 root (调试用)
     bool exposeToolsOnHost = false;
     /// 被动回复次数用尽后: `active`(转主动) / `truncate`(放弃) / `fail`(报错给模型)
