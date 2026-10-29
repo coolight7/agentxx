@@ -491,33 +491,53 @@ std::string toolRecallMessage(
     }
     const ChatKey key = parseChatKey(chatKey);
 
-    // 最近发过的消息 id (新→旧), 用于按序号撤回
+    // 最近发过的消息 id (旧→新), 用于按序号撤回: 末尾就是刚发的那条
     const auto recent = deps.outbound->recentMessageIds(chatKey, kRecallLookback);
 
-    // 目标: `messageId` 直接给 id, 否则按 `count` 撤最近 N 条
+    // 目标: `messageId` 直接给 id; `target: "-2"` 撤"倒数第 2 条";
+    // 否则按 `skip` + `count`: 从最近一条往前跳过 skip 条, 再撤 count 条
     std::string       explicitId = stringArg(args, "messageId");
     const std::string targetArg  = stringArg(args, "target");
-    if (explicitId.empty() && !targetArg.empty() && targetArg.front() != '#') {
-        explicitId = targetArg; // 兼容直接写 id 的写法
+    int64_t           skipCount  = intArg(args, "skip", 0);
+    std::string       targetErr;
+    if (explicitId.empty() && !targetArg.empty()) {
+        if (targetArg.front() == '#') {
+            // `#N` 表示"本轮输入里的第 N 条", 这里不支持 (那是 send 的 replyTo 语义);
+            // 撤回要的是"自己发的第几条", 用 `-#N` 明确区分
+            targetErr = "撤回请用 target=\"-2\" 表示倒数第 2 条 (不是 #N; #N 是引用入站消息)";
+        } else if (targetArg.front() == '-') {
+            // -1 = 最近一条, -2 = 倒数第二条 ...
+            skipCount = std::max<int64_t>(0, std::stoll(targetArg.substr(1)) - 1);
+        } else {
+            explicitId = targetArg; // 兼容直接写 id 的写法
+        }
     }
 
     std::vector<std::string> targets;
-    std::string              targetErr;
+    if (!targetErr.empty()) {
+        throw std::invalid_argument(targetErr);
+    }
     if (!explicitId.empty()) {
         targets.push_back(explicitId);
     } else {
         const int64_t rawCount = intArg(args, "count", 1);
         if (rawCount < 1) {
             targetErr = "count 必须 >= 1";
-        } else if (rawCount > static_cast<int64_t>(kRecallLookback)) {
-            targetErr = "count 最多 " + std::to_string(kRecallLookback) + " (只记录最近这么多条)";
+        } else if (skipCount < 0) {
+            targetErr = "skip 必须 >= 0";
         } else if (recent.empty()) {
             targetErr = "本会话没有可撤回的记录 (只能撤回本进程自己发出且已成功的消息)";
+        } else if (static_cast<size_t>(skipCount) >= recent.size()) {
+            targetErr = "要跳过的条数超出可撤回范围 (本会话只记录了 "
+                        + std::to_string(recent.size()) + " 条)";
         } else {
-            const size_t take
-                = std::min<size_t>(static_cast<size_t>(rawCount), recent.size());
+            const size_t avail = recent.size() - static_cast<size_t>(skipCount);
+            const size_t take  = std::min<size_t>(static_cast<size_t>(rawCount), avail);
             for (size_t i = 0; i < take; ++i) {
-                targets.push_back(recent[recent.size() - 1 - i]);
+                // `recent` 是旧→新; 末尾往前跳过 skip 条 (最近的那几条不动), 再连着取
+                targets.push_back(
+                    recent[recent.size() - 1 - static_cast<size_t>(skipCount) - i]
+                );
             }
         }
     }

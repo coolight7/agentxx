@@ -5,7 +5,7 @@
 /// 用例不连 QQ 也不消耗真实账号。
 ///
 /// 覆盖 (对应 `resource/history/chatbot/plan.md` §16.1 的 `plugin_example_chatbot`):
-/// 1. `start` 成功 → 人设根建好, 根上有 5 个 `chatbot_*` 工具 (靠 `includeCreator`);
+/// 1. `start` 成功 → 人设根建好, 根上有 6 个 `chatbot_*` 工具 (靠 `includeCreator`);
 /// 2. 私聊注入一条 → 通道懒创建 → 模型收到带说话人前缀的输入 → 工具发送 → 假平台收到
 ///    (带被动回复 id);
 /// 3. `mention` 模式: 3 条无 @ 只进缓冲, 第 4 条带 @ 时一次投递带上全部 4 条;
@@ -299,7 +299,8 @@ asio::awaitable<void> runBody(
           {{"type": "private", "id": "U2", "mode": "always"}},
           {{"type": "private", "id": "U3", "mode": "always"}},
           {{"type": "private", "id": "U4", "mode": "always"}},
-          {{"type": "private", "id": "U9", "mode": "always"}}
+          {{"type": "private", "id": "U9", "mode": "always"}},
+          {{"type": "private", "id": "U10", "mode": "always"}}
         ]}}
       ]
     }}
@@ -435,7 +436,9 @@ asio::awaitable<void> runBody(
                                        "fake_main|private|U1",
                                        "fake_main|private|U2",
                                        "fake_main|private|U3",
-                                       "fake_main|private|U4"}) {
+                                       "fake_main|private|U4",
+                                       "fake_main|private|U9",
+                                       "fake_main|private|U10"}) {
                     const auto info = Json::parse(fmt::format(
                         "{}",
                         co_await callTool(
@@ -705,6 +708,124 @@ asio::awaitable<void> runBody(
         );
         XX_TEST_EXPECT_TRUE(unknown.rfind("[Error", 0) == 0);
         XX_TEST_EXPECT_TRUE(unknown.find("找不到") != std::string::npos);
+    }
+
+    // ===================== 5c. 按"倒数第几条"撤回 (跳过最近的那几条) =====================
+    //
+    // 用户说"把倒数第二条撤回"时, 不能连最近那条一起带走。这里一轮连发 3 条,
+    // 再按 `target` / `skip` 逐个撤回, 保证每次都只选中中间那条。
+    {
+        XX_TEST_EXPECT_TRUE(co_await drain());
+
+        Json calls = Json::array();
+        for (int i = 1; i <= 3; ++i) {
+            calls.push_back(Json{
+                {"index", i - 1},
+                {"id", fmt::format("call_chatbot_skip_{}", i)},
+                {"type", "function"},
+                {"function",
+                 Json{{"name", "chatbot_send_message"},
+                      {"arguments",
+                       Json{{"text", fmt::format("skip-target-{}", i)}}.dump()}}},
+            });
+        }
+        g_da_sim_tool_calls_remaining = 1;
+        g_da_sim_tool_calls           = calls;
+        const int requestsBefore      = g_da_sim_request_count.load();
+        XX_TEST_EXPECT_TRUE(co_await inject("private", "U10", "连发三条", false, "msg-skip-1"));
+        XX_TEST_EXPECT_TRUE(co_await waitUntil(ex, 60s, [&]() {
+            return g_da_sim_request_count.load() > requestsBefore;
+        }));
+
+        // 取本会话三条出站记录的平台 id (旧→新), 后面按它核对撤的是哪一条
+        auto skipSentIds = [](const Json& outbox) {
+            std::vector<std::string> ids;
+            for (const auto& item : outbox) {
+                if (item.value("chatId", std::string{}) != "U10") {
+                    continue;
+                }
+                if (item.value("text", std::string{}).rfind("skip-target-", 0) != 0) {
+                    continue;
+                }
+                ids.push_back(item.value("messageId", std::string{}));
+            }
+            return ids;
+        };
+        XX_TEST_EXPECT_TRUE(co_await waitOutbox(ex, 30s, rootCtx, [&](const Json& outbox) {
+            return skipSentIds(outbox).size() >= 3;
+        }));
+        const auto ids = skipSentIds(
+            outboxOf(co_await callTool(rootCtx, "chatbot_debug_outbox", R"({"limit":50})"))
+        );
+        XX_TEST_EXPECT_EQ(ids.size(), size_t{3});
+        if (ids.size() != 3) {
+            co_return;
+        }
+        const std::string& middleId = ids[1];
+        const std::string& oldestId = ids[0];
+        const std::string& newestId = ids[2];
+
+        // `target="-2"`: 倒数第二条 = 中间那条
+        const auto second = co_await callTool(
+            rootCtx,
+            "chatbot_recall_message",
+            R"({"chat":"fake_main|private|U10","target":"-2"})"
+        );
+        if (second.rfind("[Error", 0) == 0) {
+            TEST_FAIL << "recall target=-2 failed: " << second << std::endl;
+        }
+        XX_TEST_EXPECT_TRUE(second.rfind("[Error", 0) != 0);
+        {
+            const auto json = Json::parse(second);
+            XX_TEST_EXPECT_EQ(json["recalled"].size(), size_t{1});
+            XX_TEST_EXPECT_EQ(json["recalled"][0].get<std::string>(), middleId);
+        }
+
+        // `skip=1` (跳过最近一条) 等价写法: 现在剩 [最旧, 最新], 跳过最新 → 最旧
+        const auto skipped = co_await callTool(
+            rootCtx,
+            "chatbot_recall_message",
+            R"({"chat":"fake_main|private|U10","skip":1,"count":1})"
+        );
+        if (skipped.rfind("[Error", 0) == 0) {
+            TEST_FAIL << "recall skip=1 failed: " << skipped << std::endl;
+        }
+        XX_TEST_EXPECT_TRUE(skipped.rfind("[Error", 0) != 0);
+        {
+            const auto json = Json::parse(skipped);
+            XX_TEST_EXPECT_EQ(json["recalled"].size(), size_t{1});
+            XX_TEST_EXPECT_EQ(json["recalled"][0].get<std::string>(), oldestId);
+        }
+
+        // 剩最后一条: 再要求"倒数第二条"必须被拒绝 (不能退回去撤最近那条)
+        const auto tooFar = co_await callTool(
+            rootCtx,
+            "chatbot_recall_message",
+            R"({"chat":"fake_main|private|U10","target":"-2"})"
+        );
+        XX_TEST_EXPECT_TRUE(tooFar.rfind("[Error", 0) == 0);
+        XX_TEST_EXPECT_TRUE(tooFar.find("超出可撤回范围") != std::string::npos);
+
+        // `#N` 是引用入站消息的写法, 用来撤回要明确报错并给出正确写法
+        const auto hash = co_await callTool(
+            rootCtx,
+            "chatbot_recall_message",
+            R"({"chat":"fake_main|private|U10","target":"#2"})"
+        );
+        XX_TEST_EXPECT_TRUE(hash.rfind("[Error", 0) == 0);
+        XX_TEST_EXPECT_TRUE(hash.find("target=\"-2\"") != std::string::npos);
+
+        // 最近那条一直没被动过: 最后按默认 (target="-1") 撤掉它
+        const auto last = co_await callTool(
+            rootCtx,
+            "chatbot_recall_message",
+            R"({"chat":"fake_main|private|U10","target":"-1"})"
+        );
+        XX_TEST_EXPECT_TRUE(last.rfind("[Error", 0) != 0);
+        XX_TEST_EXPECT_EQ(
+            Json::parse(last)["recalled"][0].get<std::string>(),
+            newestId
+        );
     }
 
     // ===================== 6. 命令: local 直回 / model 进模型 =====================

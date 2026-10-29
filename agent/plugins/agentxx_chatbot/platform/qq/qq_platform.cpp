@@ -545,6 +545,20 @@ bool QqPlatform::normalize(
 
     out.text = data.value("content", std::string{});
 
+    // 诊断: 带附件的消息把原始事件打出来
+    // - 平台对不同附件 (图片/文件/语音) 的字段布局不一致, 只靠猜测容易漏掉整类
+    // - 只在事件里出现 attachments / msg_elements / 富媒体 key 时打, 不刷平常消息
+    if (data.contains("attachments") || data.contains("msg_elements")
+        || data.contains("attachment") || data.contains("ark_data")
+        || data.contains("file_info")) {
+        std::string compact = data.dump();
+        if (compact.size() > 3000) {
+            compact.resize(3000);
+            compact += "...(truncated)";
+        }
+        XX_LOGI("[{}] 附件事件原始结构 ({}): {}", kLogTag, std::string{eventName}, compact);
+    }
+
     // 引用消息 (message_type=103): 把被引用内容拼到正文前面
     const int messageType = static_cast<int>(data.value("message_type", int64_t{0}));
     if (data.contains("msg_elements") && data["msg_elements"].is_array()

@@ -368,8 +368,10 @@ const char* kSetModeSchema = R"JSON({
 const char* kRecallMessageSchema = R"JSON({
   "type": "object",
   "properties": {
-    "count": {"type": "integer", "description": "撤最近多少条自己发的消息 (默认 1; 最多 8)。与 messageId 二选一"},
-    "messageId": {"type": "string", "description": "要撤回的平台消息 id (通常不用填, 按 count 撤即可)"},
+    "target": {"type": "string", "description": "撤哪一条: \"-1\"=最后一条(默认), \"-2\"=倒数第二条, \"-3\"=倒数第三条…。要与用户说的\"倒数第几条\"对应"},
+    "count": {"type": "integer", "description": "连着撤几条 (默认 1)。与 target 二选一"},
+    "skip": {"type": "integer", "description": "跳过最近的几条再开始撤 (默认 0)。例如跳过最后一条、撤它前面那条时用 skip=1"},
+    "messageId": {"type": "string", "description": "要撤回的平台消息 id (通常不用填)"},
     "chat": {"type": "string", "description": "可选: 指定会话 (默认当前会话)"}
   },
   "required": []
@@ -580,8 +582,9 @@ void registerToolsOn(ChatbotCtx& ctx, const AgentRef& ref) {
         ctx,
         ref,
         "chatbot_recall_message",
-        "撤回自己刚发出去的消息 (只对发送后 2 分钟内的有效)。默认撤最近 1 条, "
-        "用 count 可撤更早的 (最多 8 条)。发错了、说重复了、内容不合适时用它。",
+        "撤回自己刚发出去的消息 (只对发送后 2 分钟内的有效)。"
+        "用户说\"撤回刚才那条\"用 target=\"-1\"; 说\"倒数第二条\"用 target=\"-2\"; "
+        "说\"最后两条都撤\"用 count=2。发错了、说重复了、内容不合适时用它。",
         kRecallMessageSchema,
         recall
     );

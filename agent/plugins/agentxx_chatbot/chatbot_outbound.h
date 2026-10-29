@@ -129,6 +129,9 @@ public:
     OutboundCounters countersOf(std::string_view chatKey) const;
 
     /// 该会话最近一次发送的平台消息 id (诊断/撤回用)
+    ///
+    /// - 按发送顺序 (旧→新) 返回最近 `limit` 条; `limit = 0` 表示全部
+    /// - 因此最后一条是自己刚发的那条, 往前翻就是"倒数第二条"
     std::vector<std::string> recentMessageIds(std::string_view chatKey, size_t limit) const;
 
     /// 撤回成功后调用: 把该 id 从可撤回列表里移除

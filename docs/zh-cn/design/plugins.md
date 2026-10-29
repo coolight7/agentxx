@@ -1090,6 +1090,9 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 插件经内置 `agentxx_jav
 - **回复只有一个出口**：agent 的正文输出不会自动发到群里，模型必须显式调
   `chatbot_send_message`（不调 = 不说话）；`behavior.fallbackReply` 可让插件在模型漏调
   工具时兜底发出最后一段正文；
+- **撤回也走工具**：`chatbot_recall_message` 按"倒数第几条"（`target: "-2"`）、
+  `skip` + `count` 或 `messageId` 撤回自己刚发的消息，插件自己记着最近 8 条发出去的平台
+  id（撤成功后从记录里去掉，同一条不会被反复选中）；
 - **一轮里多条消息一起带上去**：被 @ 立即唤醒；`always` 模式按静默窗口聚合并投递；通道正在
   跑一轮时新消息继续缓冲，本轮结束（`TURN_END`）后一次性带上；
 - **关键词命令**（`/axx-info` 等）由插件直接处理，`mode` = `local`（插件自己回）/ `model`
