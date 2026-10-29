@@ -507,7 +507,20 @@ std::string toolRecallMessage(
             targetErr = "撤回请用 target=\"-2\" 表示倒数第 2 条 (不是 #N; #N 是引用入站消息)";
         } else if (targetArg.front() == '-') {
             // -1 = 最近一条, -2 = 倒数第二条 ...
-            skipCount = std::max<int64_t>(0, std::stoll(targetArg.substr(1)) - 1);
+            const std::string ordinal = targetArg.substr(1);
+            bool              digitsOnly = !ordinal.empty();
+            for (const char c : ordinal) {
+                if (c < '0' || c > '9') {
+                    digitsOnly = false;
+                    break;
+                }
+            }
+            if (!digitsOnly) {
+                targetErr = "target 只接受 \"-1\" / \"-2\" 这类写法 (倒数第几条), 收到的是 '"
+                            + targetArg + "'";
+            } else {
+                skipCount = std::max<int64_t>(0, std::stoll(ordinal) - 1);
+            }
         } else {
             explicitId = targetArg; // 兼容直接写 id 的写法
         }
