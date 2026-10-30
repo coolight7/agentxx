@@ -43,6 +43,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace ac = agentxx::chatbot;
@@ -123,6 +124,8 @@ struct ChatbotCtx : public PluginBase {
     std::thread                                                                 ioThread;
     /// 插件 io 线程 id (判断"是否已在正确线程")
     std::atomic<std::thread::id> ioThreadId{std::thread::id{}};
+    /// io 线程是否已停 (见 [stopIo]): 停后不再投递工作, 平台对象才可安全析构
+    std::atomic<bool> ioStopped{false};
 
     /// 解析并校验后的配置
     ac::ChatbotConfig config;
@@ -191,6 +194,13 @@ struct ChatbotCtx : public PluginBase {
     /// 状态变了: 需要推一份快照 (短时间内的多次变化合并成一次)
     void panelChanged();
 
+    ~ChatbotCtx() override {
+        // 防御: 宿主若跳过 stop 直接销毁实例, 这里必须先把 io 线程收掉
+        // (std::thread 仍可 join 时析构会 std::terminate), 并保证平台对象在
+        // io_context 之前析构 (成员逆序析构已经如此, 只要线程先停)
+        stopIo();
+    }
+
     /* ---------- 跨线程执行 ---------- */
 
     bool onIoThread() const noexcept {
@@ -199,6 +209,7 @@ struct ChatbotCtx : public PluginBase {
 
     /// 启动插件 io 线程
     void startIo() {
+        ioStopped.store(false, std::memory_order_release);
         io   = std::make_shared<asio::io_context>();
         work = std::make_shared<asio::executor_work_guard<asio::io_context::executor_type>>(
             io->get_executor()
@@ -236,6 +247,11 @@ struct ChatbotCtx : public PluginBase {
     }
 
     /// 停止插件 io 线程 (顺序不能颠倒: 先放 work, 再 stop, 最后 join)
+    ///
+    /// - 只停线程, **不释放** io_context: 账号/平台/面板定时器都存着它的 executor,
+    ///   驱动它们的对象销毁后 io_context 才能析构。所以保留在 `io` 成员里,
+    ///   由 `ChatbotCtx` 析构按声明逆序释放 (io 声明在最前, 最后才死)
+    /// - 停完线程就不会再有任何 handler / 协程恢复, 此后析构平台对象才是安全的
     void stopIo() {
         if (!io) {
             return;
@@ -245,13 +261,13 @@ struct ChatbotCtx : public PluginBase {
         if (ioThread.joinable()) {
             ioThread.join();
         }
-        io.reset();
+        ioStopped.store(true, std::memory_order_release);
     }
 
     /// 在插件 io 线程上执行一段工作 (已在则直接跑)
     template<typename Fn>
     void runOnIo(Fn&& fn) {
-        if (!io) {
+        if (!io || ioStopped.load(std::memory_order_acquire)) {
             return;
         }
         if (onIoThread()) {
@@ -266,7 +282,7 @@ struct ChatbotCtx : public PluginBase {
     /// - 返回 false 表示超时或插件已停止
     template<typename Fn>
     bool runOnIoBlocking(Fn&& fn, std::chrono::milliseconds timeout = std::chrono::seconds{25}) {
-        if (!io) {
+        if (!io || ioStopped.load(std::memory_order_acquire)) {
             return false;
         }
         if (onIoThread()) {
@@ -592,6 +608,42 @@ const char* kDebugOutboxSchema = R"JSON({
   "required": []
 })JSON";
 
+/// 在插件 io 线程上跑一个工具工作体, 拿回结果串
+///
+/// 为什么要绕这一层: 工具工作体要跳到插件 io 线程执行, 而 `args` / `tid` 只是宿主在
+/// 这次调用里给的视图, 调用方栈上的 `result` / `error` 也只在调用方等待期间有效。
+/// 一旦 `runOnIoBlocking` 超时返回, 调用方就收摊了, 已排队的 lambda 再去读那些内存
+/// 就是悬空读 (实测: 超时后执行到工具体时读到垃圾长度, ASan 报
+/// `allocation-size-too-big`; 写回结果则往已释放的栈上写)。
+/// 因此输入拷一份、输出放堆上, 超时后也不会跳崩。
+///
+/// - `args`:
+///     - [c] 插件上下文
+///     - [args] / [tid] 宿主给的参数与通道 id (两者都会被拷贝一份)
+///     - [body] 工作体: `(tid, args) -> 结果串`; 抛出的异常会转成工具错误
+/// - `return` 工具结果串
+/// - 相关: [ChatbotCtx::runOnIoBlocking]
+template<typename Fn>
+std::string
+    runToolOnIo(ChatbotCtx& c, std::string_view args, std::string_view tid, Fn&& body) {
+    auto in = std::make_shared<std::pair<std::string, std::string>>(args, tid);
+    auto out = std::make_shared<std::pair<std::string, std::string>>();
+    const bool ok = c.runOnIoBlocking([in, out, body = std::forward<Fn>(body)]() mutable {
+        try {
+            out->first = body(in->second, in->first);
+        } catch (const std::exception& e) {
+            out->second = e.what();
+        }
+    });
+    if (!ok) {
+        throw std::runtime_error("chatbot 插件未就绪 (io 线程无响应)");
+    }
+    if (!out->second.empty()) {
+        throw std::runtime_error(out->second);
+    }
+    return std::move(out->first);
+}
+
 /// 给一个 agent 注册 6 个 `chatbot_*` 工具
 ///
 /// 工作体统一 `blocking_tool` (要等插件 io 线程的结果); 内部把编译期已知的
@@ -601,98 +653,33 @@ void registerToolsOn(ChatbotCtx& ctx, const AgentRef& ref) {
 
     auto sendMessage = [deps](ChatbotCtx& c, std::string_view args, std::string_view tid) {
         c.toolCalls.fetch_add(1, std::memory_order_relaxed);
-        std::string result;
-        std::string error;
-        const bool  ok = c.runOnIoBlocking([&]() {
-            try {
-                result = ac::toolSendMessage(*deps, tid, args);
-            } catch (const std::exception& e) {
-                error = e.what();
-            }
+        return runToolOnIo(c, args, tid, [deps](std::string_view t, std::string_view a) {
+            return ac::toolSendMessage(*deps, t, a);
         });
-        if (!ok) {
-            throw std::runtime_error("chatbot 插件未就绪 (io 线程无响应)");
-        }
-        if (!error.empty()) {
-            throw std::runtime_error(error);
-        }
-        return result;
     };
 
     auto history = [deps](ChatbotCtx& c, std::string_view args, std::string_view tid) {
-        std::string result;
-        std::string error;
-        const bool  ok = c.runOnIoBlocking([&]() {
-            try {
-                result = ac::toolHistory(*deps, tid, args);
-            } catch (const std::exception& e) {
-                error = e.what();
-            }
+        return runToolOnIo(c, args, tid, [deps](std::string_view t, std::string_view a) {
+            return ac::toolHistory(*deps, t, a);
         });
-        if (!ok) {
-            throw std::runtime_error("chatbot 插件未就绪 (io 线程无响应)");
-        }
-        if (!error.empty()) {
-            throw std::runtime_error(error);
-        }
-        return result;
     };
 
     auto chatInfo = [deps](ChatbotCtx& c, std::string_view args, std::string_view tid) {
-        std::string result;
-        std::string error;
-        const bool  ok = c.runOnIoBlocking([&]() {
-            try {
-                result = ac::toolChatInfo(*deps, tid, args);
-            } catch (const std::exception& e) {
-                error = e.what();
-            }
+        return runToolOnIo(c, args, tid, [deps](std::string_view t, std::string_view a) {
+            return ac::toolChatInfo(*deps, t, a);
         });
-        if (!ok) {
-            throw std::runtime_error("chatbot 插件未就绪 (io 线程无响应)");
-        }
-        if (!error.empty()) {
-            throw std::runtime_error(error);
-        }
-        return result;
     };
 
     auto status = [deps](ChatbotCtx& c, std::string_view args, std::string_view tid) {
-        std::string result;
-        std::string error;
-        const bool  ok = c.runOnIoBlocking([&]() {
-            try {
-                result = ac::toolStatus(*deps, tid, args);
-            } catch (const std::exception& e) {
-                error = e.what();
-            }
+        return runToolOnIo(c, args, tid, [deps](std::string_view t, std::string_view a) {
+            return ac::toolStatus(*deps, t, a);
         });
-        if (!ok) {
-            throw std::runtime_error("chatbot 插件未就绪 (io 线程无响应)");
-        }
-        if (!error.empty()) {
-            throw std::runtime_error(error);
-        }
-        return result;
     };
 
     auto setMode = [deps](ChatbotCtx& c, std::string_view args, std::string_view tid) {
-        std::string result;
-        std::string error;
-        const bool  ok = c.runOnIoBlocking([&]() {
-            try {
-                result = ac::toolSetMode(*deps, tid, args);
-            } catch (const std::exception& e) {
-                error = e.what();
-            }
+        return runToolOnIo(c, args, tid, [deps](std::string_view t, std::string_view a) {
+            return ac::toolSetMode(*deps, t, a);
         });
-        if (!ok) {
-            throw std::runtime_error("chatbot 插件未就绪 (io 线程无响应)");
-        }
-        if (!error.empty()) {
-            throw std::runtime_error(error);
-        }
-        return result;
     };
 
     agentxx::plugin::blocking_tool(
@@ -751,22 +738,9 @@ void registerToolsOn(ChatbotCtx& ctx, const AgentRef& ref) {
     );
 
     auto recall = [deps](ChatbotCtx& c, std::string_view args, std::string_view tid) {
-        std::string result;
-        std::string error;
-        const bool  ok = c.runOnIoBlocking([&]() {
-            try {
-                result = ac::toolRecallMessage(*deps, tid, args);
-            } catch (const std::exception& e) {
-                error = e.what();
-            }
+        return runToolOnIo(c, args, tid, [deps](std::string_view t, std::string_view a) {
+            return ac::toolRecallMessage(*deps, t, a);
         });
-        if (!ok) {
-            throw std::runtime_error("chatbot 插件未就绪 (io 线程无响应)");
-        }
-        if (!error.empty()) {
-            throw std::runtime_error(error);
-        }
-        return result;
     };
     agentxx::plugin::blocking_tool(
         ctx,
@@ -783,41 +757,15 @@ void registerToolsOn(ChatbotCtx& ctx, const AgentRef& ref) {
     if (!ctx.config.behavior.debugTools) {
         return;
     }
-    auto debugInject = [deps](ChatbotCtx& c, std::string_view args, std::string_view) {
-        std::string result;
-        std::string error;
-        const bool  ok = c.runOnIoBlocking([&]() {
-            try {
-                result = ac::toolDebugInject(*deps, args);
-            } catch (const std::exception& e) {
-                error = e.what();
-            }
+    auto debugInject = [deps](ChatbotCtx& c, std::string_view args, std::string_view tid) {
+        return runToolOnIo(c, args, tid, [deps](std::string_view, std::string_view a) {
+            return ac::toolDebugInject(*deps, a);
         });
-        if (!ok) {
-            throw std::runtime_error("chatbot 插件未就绪 (io 线程无响应)");
-        }
-        if (!error.empty()) {
-            throw std::runtime_error(error);
-        }
-        return result;
     };
-    auto debugOutbox = [deps](ChatbotCtx& c, std::string_view args, std::string_view) {
-        std::string result;
-        std::string error;
-        const bool  ok = c.runOnIoBlocking([&]() {
-            try {
-                result = ac::toolDebugOutbox(*deps, args);
-            } catch (const std::exception& e) {
-                error = e.what();
-            }
+    auto debugOutbox = [deps](ChatbotCtx& c, std::string_view args, std::string_view tid) {
+        return runToolOnIo(c, args, tid, [deps](std::string_view, std::string_view a) {
+            return ac::toolDebugOutbox(*deps, a);
         });
-        if (!ok) {
-            throw std::runtime_error("chatbot 插件未就绪 (io 线程无响应)");
-        }
-        if (!error.empty()) {
-            throw std::runtime_error(error);
-        }
-        return result;
     };
     agentxx::plugin::blocking_tool(
         ctx,
@@ -1145,11 +1093,15 @@ void* chatbotStart(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, Plugin
                         runtime->platform->stop();
                     }
                 }
-                ctx.accounts.clear();
                 ctx.outbound.shutdown();
                 ctx.engine.shutdown();
             });
+            // 先停线程再清账号: 平台对象里还挂着排队的 handler / 挂起的协程
             ctx.stopIo();
+            {
+                std::lock_guard lock(ctx.accountsMutex);
+                ctx.accounts.clear();
+            }
             return nullptr;
         }
         ctx.personaRoots[persona.name] = rootId;
@@ -1275,13 +1227,22 @@ void* chatbotStop(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, Pluginx
         for (auto it = roots.rbegin(); it != roots.rend(); ++it) {
             agentxx::plugin::unmountRoot(ctx, it->second);
         }
-        // 4. 清账号对象 (平台析构会 abort 挂起的收包)
-        ctx.runOnIoBlocking([&]() {
+        // 4. 先停 io 线程: 停完就不会再有平台回调 / 挂起的协程恢复
+        ctx.stopIo();
+        // 5. 再清账号对象 (平台析构会 abort 挂起的收包)
+        //    以前是在 io 线程上 clear: 析构返回后该线程仍会继续派发已排队的 handler,
+        //    挂起的 connect()/doSend() 协程若在那时恢复, 碰到的是已释放的平台对象
+        {
+            std::lock_guard lock(ctx.accountsMutex);
             ctx.accounts.clear();
-        });
+        }
+        // 6. 面板定时器同样带着 io 的 executor: 停完线程就放掉
+        //    (下次 start 会换新的 io_context, 留着它就是指着旧的那个)
+        ctx.panelTimer.reset();
         ctx.log.info(fmt::format("已停止 (关闭 {} 个通道, 卸载 {} 个人设根)", closed, roots.size())
         );
     }
+    // 幂等: 上面已停过 (未启动时也走到这里, io 为空则直接返回)
     ctx.stopIo();
     // 面板驱动票收尾: 取消还没跑的票 (之后回调不会再落到本实例上)
     if (auto* driver = ctx.panelOutbox.driver.exchange(nullptr); driver != nullptr) {

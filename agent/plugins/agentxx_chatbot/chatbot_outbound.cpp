@@ -91,6 +91,8 @@ void ChatbotOutbound::shutdown() {
         (void)key;
         if (state.timer) {
             state.timer->cancel();
+            // 同 ChatbotEngine::shutdown: 不把定时器留到 io_context 析构之后
+            state.timer.reset();
         }
     }
 }

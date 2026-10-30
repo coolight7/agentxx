@@ -196,6 +196,9 @@ void ChatbotEngine::shutdown() {
         (void)key;
         if (state.timer) {
             state.timer->cancel();
+            // 连对象一起放掉: 插件 io 线程随后会停, 定时器不能留到它的 io_context
+            // 析构之后 (那时 service 已失效, 再析构就是读已释放内存)
+            state.timer.reset();
         }
         state.items.clear();
         state.chars = 0;

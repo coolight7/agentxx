@@ -10,6 +10,7 @@
 #include <asio/use_awaitable.hpp>
 #include <chrono>
 #include <iostream>
+#include <memory>
 #include <string>
 #include <thread>
 #include <vector>
@@ -30,6 +31,38 @@ namespace test {
 // 原 agentxx::util 已拆分: 基础件在 utilxx_base, 重依赖工具在 utilxx
 using namespace utilxx_base;
 using namespace utilxx;
+
+namespace {
+
+/// 收发操作的完成情况 (协程内填, 测试侧读; 同一 io 线程, 不需要锁)
+struct WsPendingOp {
+    bool        started = false;
+    bool        done    = false;
+    bool        ok      = false;
+    std::string error;
+};
+
+/// 协程内暂停 (制造"操作已经挂起"的窗口)
+asio::awaitable<void> wsSleep(asio::any_io_executor ex, std::chrono::milliseconds ms) {
+    asio::steady_timer timer(ex, ms);
+    utilxx_base::AsioErrorCode ec;
+    co_await timer.async_wait(asio::redirect_error(asio::use_awaitable, ec));
+}
+
+/// 等挂起操作收尾 (轮询到 `done` 或超时); 返回是否已收尾
+asio::awaitable<bool> wsWaitDone(
+    asio::any_io_executor        ex,
+    std::shared_ptr<WsPendingOp> op,
+    std::chrono::milliseconds    timeout
+) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (!op->done && std::chrono::steady_clock::now() < deadline) {
+        co_await wsSleep(ex, std::chrono::milliseconds{10});
+    }
+    co_return op->done;
+}
+
+} // namespace
 
 static asio::awaitable<void> test_ws_echo() {
     HttpServer server({.address = "127.0.0.1", .port = 0, .ioThreads = 1});
@@ -1346,6 +1379,116 @@ static asio::awaitable<void> test_ws_custom_headers() {
     serverThread.join();
 }
 
+/// 连接对象在"收发挂起期间"被 abort + 析构
+///
+/// 回归用例: 插件判定连接失效时是 `abort()` 紧接 `reset()`, 而 abort() 只是
+/// 关掉 socket —— 挂起的收发要等回到 io_context 才拿到错误。之前收发协程把
+/// `this` 和 `impl_` 带到挂起点之后, 恢复时读到的是已释放的 WsClient
+/// (ASan: heap-use-after-free, ws_client.cpp 的 `impl_->closed_ = true`)。
+/// 现在收发协程在调用当刻就把实现体的强引用拿进自己的帧里, 因此可以先析构
+/// 连接对象, 挂起的操作仍会以错误收尾。
+asio::awaitable<void> test_ws_destroy_with_pending_op() {
+    HttpServer server({.address = "127.0.0.1", .port = 0, .ioThreads = 1});
+
+    // 服务端只完成握手, 之后既不读也不写:
+    // - 客户端发送会堵在 socket 缓冲区 (16 MiB 远超缓冲区), 停在 async_write_some
+    // - 客户端接收会一直等下一条消息
+    server.enableWebSocket("/ws", [](HttpServer::WsStream& /*ws*/) -> asio::awaitable<void> {
+        asio::steady_timer timer(co_await asio::this_coro::executor, std::chrono::seconds{30});
+        utilxx_base::AsioErrorCode ec;
+        co_await timer.async_wait(asio::redirect_error(asio::use_awaitable, ec));
+    });
+
+    std::thread serverThread([&server]() {
+        server.start();
+    });
+    uint16_t    port = 0;
+    for (int i = 0; i < 100; ++i) {
+        port = server.port();
+        if (port != 0) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    if (port == 0) {
+        g_websocket_failed++;
+        server.stop();
+        serverThread.join();
+        co_return;
+    }
+
+    std::string wsUrl = "ws://127.0.0.1:" + std::to_string(port) + "/ws";
+    auto        ex    = co_await asio::this_coro::executor;
+
+    // 场景 1: 发送仍挂起时销毁连接
+    {
+        auto connected = co_await wsConnect(ex, wsUrl);
+        XX_TEST_EXPECT_TRUE(connected.has_value());
+        if (connected.has_value()) {
+            auto client = std::move(connected.value());
+            auto state  = std::make_shared<WsPendingOp>();
+            asio::co_spawn(
+                ex,
+                [raw = client.get(), state]() -> asio::awaitable<void> {
+                    // payload 是本协程的局部量: 挂起期间一直有效
+                    std::string payload(16 * 1024 * 1024, 'x');
+                    state->started = true;
+                    auto res       = co_await raw->sendText(payload);
+                    state->done    = true;
+                    state->ok      = res.has_value();
+                    state->error   = res.has_value() ? std::string{} : res.error();
+                },
+                asio::detached
+            );
+            // 等发送真正停到 async_write_some 上, 再销毁连接
+            co_await wsSleep(ex, std::chrono::milliseconds{200});
+            XX_TEST_EXPECT_TRUE(state->started);
+            XX_TEST_EXPECT_FALSE(state->done);
+
+            client->abort();
+            client.reset(); // 挂起的发送仍持有实现体: 不得读已释放内存
+
+            XX_TEST_EXPECT_TRUE(co_await wsWaitDone(ex, state, std::chrono::seconds{5}));
+            XX_TEST_EXPECT_FALSE(state->ok);
+            XX_TEST_EXPECT_FALSE(state->error.empty());
+        }
+    }
+
+    // 场景 2: 接收仍挂起时销毁连接
+    {
+        auto connected = co_await wsConnect(ex, wsUrl);
+        XX_TEST_EXPECT_TRUE(connected.has_value());
+        if (connected.has_value()) {
+            auto client = std::move(connected.value());
+            auto state  = std::make_shared<WsPendingOp>();
+            asio::co_spawn(
+                ex,
+                [raw = client.get(), state]() -> asio::awaitable<void> {
+                    state->started = true;
+                    auto msg       = co_await raw->recv();
+                    state->done    = true;
+                    state->ok      = msg.has_value();
+                    state->error   = msg.has_value() ? std::string{} : msg.error();
+                },
+                asio::detached
+            );
+            co_await wsSleep(ex, std::chrono::milliseconds{200});
+            XX_TEST_EXPECT_TRUE(state->started);
+            XX_TEST_EXPECT_FALSE(state->done);
+
+            client->abort();
+            client.reset();
+
+            XX_TEST_EXPECT_TRUE(co_await wsWaitDone(ex, state, std::chrono::seconds{5}));
+            XX_TEST_EXPECT_FALSE(state->ok);
+            XX_TEST_EXPECT_FALSE(state->error.empty());
+        }
+    }
+
+    server.stop();
+    serverThread.join();
+}
+
 asio::awaitable<TestResult> run_websocket_tests() {
     std::cout << "  [ws] echo..." << std::endl;
     co_await test_ws_echo();
@@ -1415,6 +1558,9 @@ asio::awaitable<TestResult> run_websocket_tests() {
 
     std::cout << "  [ws] custom headers..." << std::endl;
     co_await test_ws_custom_headers();
+
+    std::cout << "  [ws] destroy with pending op..." << std::endl;
+    co_await test_ws_destroy_with_pending_op();
 
     co_return TestResult{g_websocket_passed, g_websocket_failed};
 }

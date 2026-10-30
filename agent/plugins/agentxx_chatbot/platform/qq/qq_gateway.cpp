@@ -73,33 +73,39 @@ void QqGateway::stop() {
     stopHeartbeat();
     if (reconnectTimer_) {
         reconnectTimer_->cancel();
+        // 定时器带着 io 的 executor: 插件 io 线程停后不能再留着它
+        reconnectTimer_.reset();
     }
     closeSocket();
     online_ = false;
 }
 
 void QqGateway::closeSocket() {
-    // 顺序不能颠倒: 先 abort 让挂起的 recv 以错误返回, 再释放对象
-    if (ws_) {
-        ws_->abort();
-        ws_.reset();
+    if (!ws_) {
+        return;
     }
+    // 先 abort 关掉底层 socket, 挂起的收发会以错误收尾; 对象本身的释放交给强引用
+    // (发送/接收协程各持一份), 所以这里放开引用不会让协程读到已释放的连接
+    ws_->abort();
+    ws_.reset();
 }
 
 void QqGateway::sendFrame(const utilxx_base::Json& frame) {
     if (!ws_ || !ws_->isOpen()) {
         return;
     }
-    const auto text = frame.dump();
-    auto       self = this;
+    // 发送期间持有连接: 重连/停止会换掉 ws_, 但这次发送仍然走完 (以错误或成功收尾)
+    auto       client     = ws_;
+    const auto text       = frame.dump();
+    auto       self       = this;
     const auto generation = generation_;
     asio::co_spawn(
         ex_,
-        [self, text, generation]() -> asio::awaitable<void> {
-            if (self->generation_ != generation || !self->ws_) {
+        [self, client, text, generation]() -> asio::awaitable<void> {
+            if (self->generation_ != generation || self->ws_ != client) {
                 co_return;
             }
-            auto result = co_await self->ws_->sendText(text);
+            auto result = co_await client->sendText(text);
             if (!result.has_value()) {
                 XX_LOGW("[{}] 网关发送失败: {}", kLogTag, result.error());
             }
@@ -162,7 +168,7 @@ void QqGateway::connect() {
                 }
                 co_return;
             }
-            self->ws_    = std::move(*client);
+            self->ws_     = std::shared_ptr<utilxx::WsClient>(std::move(*client));
             self->online_ = true;
             self->readLoop();
         },
@@ -175,12 +181,14 @@ void QqGateway::readLoop() {
         return;
     }
     const auto generation = generation_;
-    auto       self       = this;
+    // 与发送同理: 手里持一份强引用, 重连换掉 ws_ 后本循环也能安全收尾
+    auto client = ws_;
+    auto self   = this;
     asio::co_spawn(
         ex_,
-        [self, generation]() -> asio::awaitable<void> {
-            while (!self->stopped_ && self->generation_ == generation && self->ws_) {
-                auto message = co_await self->ws_->recv();
+        [self, client, generation]() -> asio::awaitable<void> {
+            while (!self->stopped_ && self->generation_ == generation && self->ws_ == client) {
+                auto message = co_await client->recv();
                 if (self->generation_ != generation || self->stopped_) {
                     co_return;
                 }

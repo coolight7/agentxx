@@ -147,7 +147,7 @@ bool QqPlatform::start(const AccountConfig& cfg, PlatformEventSink& sink) {
 }
 
 void QqPlatform::stop() {
-    std::unique_ptr<QqGateway> gateway;
+    QqGateway* gateway = nullptr;
     {
         std::lock_guard lock(mutex_);
         if (stopped_) {
@@ -155,19 +155,20 @@ void QqPlatform::stop() {
         }
         stopped_ = true;
         sink_    = nullptr;
-        gateway  = std::move(gateway_);
+        gateway  = gateway_.get();
         state_       = PlatformState::Disabled;
         stateReason_ = "stopped";
     }
-    // 网关 stop 会在本对象上回调状态 (onState), 因此同样放在锁外
-    if (gateway) {
+    // 网关 stop 会在本对象上回调状态 (onState), 因此放在锁外
+    if (gateway != nullptr) {
+        // 只停: 关心跳/定时器、abort 挂起的收包
         gateway->stop();
-        // 网关按引用持有 api_, 必须先销毁网关再释放 api_
-        gateway.reset();
     }
-    std::lock_guard lock(mutex_);
-    api_.reset();
-    uploader_.reset();
+    // gateway_ / api_ / uploader_ 在这里**不释放**: 仍可能有协程挂在它们的请求上
+    // (connect() 的 api_.gatewayUrl()、doSend() 的 uploader_/api_->sendMessage()),
+    // 此时释放就是给那些协程一个悬空的对象。它们随本对象析构一起释放
+    // (声明顺序 api_/gateway_/uploader_ → 逆序析构, 网关先于 api_ 死),
+    // 而调用方必须在析构本对象之前先停下驱动它们的 io 线程 (见 chatbotStop)。
 }
 
 void QqPlatform::send(OutboundMessage msg, SendResultFn done) {
@@ -220,6 +221,16 @@ asio::awaitable<void> QqPlatform::doSend(OutboundMessage msg, SendResultFn done)
             extraText += "\n(另有附件 '" + rest.fileName + "' 未随本条发送: "
                          + (rest.localPath.empty() ? rest.url : rest.localPath) + ")";
         }
+    }
+
+    // 上传可能耗时, 期间平台可能已被停: 停了就不再往外发
+    if (stopped_) {
+        result.ok     = false;
+        result.reason = "平台已停止";
+        if (done) {
+            done(result);
+        }
+        co_return;
     }
 
     auto response = co_await api_->sendMessage(

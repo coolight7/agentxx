@@ -110,7 +110,7 @@ private:
     QqApi&                         api_;
     AccountConfig                  config_;
     QqGatewayHooks                 hooks_;
-    std::unique_ptr<utilxx::WsClient> ws_;
+    std::shared_ptr<utilxx::WsClient> ws_;
     std::shared_ptr<asio::steady_timer> heartbeatTimer_;
     std::shared_ptr<asio::steady_timer> reconnectTimer_;
     std::string                    sessionId_;
