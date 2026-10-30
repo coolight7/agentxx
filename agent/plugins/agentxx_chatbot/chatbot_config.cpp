@@ -896,6 +896,22 @@ bool validateConfig(ChatbotConfig& config, int32_t maxRoots, ConfigError& err) {
             setError(err, where + ".name", "必须以 '/' 开头");
             return false;
         }
+        // 名字只能是根命令本身或 "根命令 子命令" (与 [parseCommand] 的匹配规则一致);
+        // 改表时写错前缀/漏空格在这里就能看到
+        const std::string& name     = command.name;
+        const bool         isRoot   = name == kCommandRoot;
+        const bool         hasChild = name.size() > kCommandRoot.size()
+                              && name.compare(0, kCommandRoot.size(), kCommandRoot) == 0
+                              && name[kCommandRoot.size()] == ' ';
+        if (!isRoot && !hasChild) {
+            setError(
+                err,
+                where + ".name",
+                "必须是 '" + std::string{kCommandRoot} + "' 或 '" + std::string{kCommandRoot}
+                    + " <子命令>'"
+            );
+            return false;
+        }
         for (size_t k = 0; k < i; ++k) {
             if (config.commands[k].name == command.name) {
                 setError(err, where + ".name", "重复的命令名 '" + command.name + "'");

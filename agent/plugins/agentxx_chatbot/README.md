@@ -125,15 +125,17 @@ plugin:
 
 ### 2.3 内置命令
 
-命令写在 `chatbot_core.cpp` 的 `builtinCommands()` 里，名字统一 `/axx-` 开头，
-直接发命令名即可（大小写不敏感，命令名后面可以跟一段文字，作为 `{args}` 用）：
+命令写在 `chatbot_core.cpp` 的 `builtinCommands()` 里，统一格式 `/agentxx-cmd <子命令>`
+（单独发 `/agentxx-cmd` 等同于 `help`；大小写不敏感，子命令后面可以跟一段文字，作为 `{args}` 用）：
 
 | 命令 | 行为 |
 |------|------|
-| `/axx-help` | 列出全部命令（`{commandList}` 由同一张表拼出来） |
-| `/axx-info` | 当前会话的人设 / 模式 / 通道 / 计数，排查「为什么不回复」先看它 |
-| `/axx-hello` | 让模型向发言人打个招呼（`model` 模式：走一轮模型） |
-| `/axx-stop` | 打断当前这一轮（`action: cancel`；不回复任何文本） |
+| `/agentxx-cmd` / `/agentxx-cmd help` | 列出全部命令（`{commandList}` 由同一张表拼出来） |
+| `/agentxx-cmd info` | 当前会话的人设 / 模式 / 通道 / 计数，排查「为什么不回复」先看它 |
+| `/agentxx-cmd hello` | 让模型向发言人打个招呼（`model` 模式：走一轮模型） |
+| `/agentxx-cmd stop` | 打断当前这一轮（`action: cancel`；不回复任何文本） |
+
+未知子命令由根命令接住回帮助（不会当成聊天内容投给模型）。
 
 **命令是插件自己的交互约定**，所以没有做配置项：每个部署各写一套名字与文案，
 文档、用例、排错说法就对不上了。要改命令请改 `builtinCommands()`（改完补

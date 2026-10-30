@@ -441,19 +441,32 @@ const char* commandModeName(CommandMode mode) noexcept {
 std::vector<CommandDef> builtinCommands() {
     std::vector<CommandDef> defs;
 
-    // 帮助: 命令清单由引擎按这张表拼成 {commandList}
+    const std::string root{kCommandRoot};
+    // 帮助正文: 命令清单由引擎按这张表拼成 {commandList}
+    const std::string helpReply =
+        "可用命令: {commandList}\n"
+        "命令不进模型; 命令后面可以跟一段文字, 作为 {args} 交给模型命令。";
+
+    // 根命令本身: 只发 `/agentxx-cmd` 时当帮助用 (少记一个词)
     {
         CommandDef def;
-        def.name  = "/axx-help";
+        def.name  = root;
         def.mode  = CommandMode::Local;
-        def.reply = "可用命令: {commandList}\n"
-                    "直接发命令名即可, 不进模型; 命令后面可以跟一段文字, 作为 {args} 交给模型命令。";
+        def.reply = helpReply;
+        defs.push_back(std::move(def));
+    }
+    // 帮助
+    {
+        CommandDef def;
+        def.name  = root + " help";
+        def.mode  = CommandMode::Local;
+        def.reply = helpReply;
         defs.push_back(std::move(def));
     }
     // 会话信息: 排查「为什么不回复」先看这里
     {
         CommandDef def;
-        def.name  = "/axx-info";
+        def.name  = root + " info";
         def.mode  = CommandMode::Local;
         def.reply = "人设 {persona} · 模式 {mode} · 通道 {channelId}\n"
                     "会话 {chat} ({chatType}) · 账号 {account} · 已运行 {uptime}\n"
@@ -463,7 +476,7 @@ std::vector<CommandDef> builtinCommands() {
     // 让模型说一句: 不打字也能确认「模型 → 出站」这一段是通的
     {
         CommandDef def;
-        def.name   = "/axx-hello";
+        def.name   = root + " hello";
         def.mode   = CommandMode::Model;
         def.prompt = "请向 {sender} 打个招呼, 一句话即可。{args}";
         defs.push_back(std::move(def));
@@ -471,7 +484,7 @@ std::vector<CommandDef> builtinCommands() {
     // 打断当前一轮 (没有回复: 没有正在跑的轮次时也没什么好说的)
     {
         CommandDef def;
-        def.name   = "/axx-stop";
+        def.name   = root + " stop";
         def.mode   = CommandMode::Action;
         def.action = "cancel";
         defs.push_back(std::move(def));
@@ -499,7 +512,7 @@ ParsedCommand parseCommand(std::string_view text, const std::vector<CommandDef>&
             || bodyLower.compare(0, nameLower.size(), nameLower) != 0) {
             continue;
         }
-        // 命令名后必须是空白或行尾, 否则 `/axx-information` 会被 `/axx-info` 命中
+        // 命令名后必须是空白或行尾, 否则 `/agentxx-cmd information` 会被 `... info` 命中
         const bool atEnd = bodyLower.size() == nameLower.size();
         if (!atEnd && !isSpaceChar(bodyLower[nameLower.size()])) {
             continue;

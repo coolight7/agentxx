@@ -725,6 +725,10 @@ std::map<std::string, std::string, std::less<>> ChatbotEngine::commandVars(
     }
     std::string commandList;
     for (const auto& command : config_.commands) {
+        // 根命令本身等同 help, 列表里只列带子命令的写法 (不然会重复一项)
+        if (command.name == kCommandRoot) {
+            continue;
+        }
         if (!commandList.empty()) {
             commandList += ", ";
         }

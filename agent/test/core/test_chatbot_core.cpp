@@ -2,7 +2,7 @@
 ///
 /// 覆盖 (对应 `resource/history/chatbot/plan.md` §16.1 的 `chatbot_core` 一行):
 /// - 长文本切分: 段落 / 句子 / 硬切 / 围栏代码 / emoji / 恰好等于上限 / 上限 0
-/// - 命令解析: 前缀 / 大小写 / 长名优先 / 模板变量
+/// - 命令解析: 根命令 `/agentxx-cmd` 与子命令 (`help` / `info` / `hello` / `stop`)
 /// - 输入块渲染: 群 / 私聊 / 引用 / 附件
 /// - 去重环: 重复 / 容量 / 顺序
 /// - 引用编号映射
@@ -246,10 +246,11 @@ void testBuiltinCommands() {
     const auto defs = builtinCommands();
     XX_TEST_EXPECT_TRUE(!defs.empty());
 
-    // 名字都得以 `/axx-` 开头 (文档与用例都按这个前缀写), 且不重复
+    // 名字都以根命令开头 (文档与用例都按这个格式写), 且不重复
+    const std::string root{kCommandRoot};
     std::set<std::string> names;
     for (const auto& def : defs) {
-        XX_TEST_EXPECT_TRUE(def.name.rfind("/axx-", 0) == 0);
+        XX_TEST_EXPECT_TRUE(def.name.rfind(root, 0) == 0);
         XX_TEST_EXPECT_TRUE(names.insert(def.name).second);
         if (def.mode == CommandMode::Local) {
             XX_TEST_EXPECT_TRUE(!def.reply.empty());
@@ -260,76 +261,95 @@ void testBuiltinCommands() {
         }
     }
 
-    // 四个命令都在, 且各自是预期形态
-    XX_TEST_EXPECT_TRUE(names.count("/axx-help") == 1);
-    XX_TEST_EXPECT_TRUE(names.count("/axx-info") == 1);
-    XX_TEST_EXPECT_TRUE(names.count("/axx-hello") == 1);
-    XX_TEST_EXPECT_TRUE(names.count("/axx-stop") == 1);
+    // 根命令 + 四个子命令都在, 且各自是预期形态
+    XX_TEST_EXPECT_TRUE(names.count(root) == 1);
+    XX_TEST_EXPECT_TRUE(names.count(root + " help") == 1);
+    XX_TEST_EXPECT_TRUE(names.count(root + " info") == 1);
+    XX_TEST_EXPECT_TRUE(names.count(root + " hello") == 1);
+    XX_TEST_EXPECT_TRUE(names.count(root + " stop") == 1);
 
-    // `{commandList}` 由引擎按同一张表拼出来, 帮助命令必须带上它
+    // `{commandList}` 由引擎按同一张表拼出来, 帮助 (含根命令本身) 必须带上它
     bool helpUsesList = false;
     for (const auto& def : defs) {
-        if (def.name == "/axx-help") {
-            helpUsesList = def.reply.find("{commandList}") != std::string::npos;
+        if (def.name == root || def.name == root + " help") {
+            helpUsesList
+                = helpUsesList || def.reply.find("{commandList}") != std::string::npos;
         }
     }
     XX_TEST_EXPECT_TRUE(helpUsesList);
 
-    // 内置表能直接喂给匹配器
-    const auto hit = parseCommand("/axx-info", defs);
+    // 内置表能直接喂给匹配器: 只发根命令 / 跟子命令 + 参数
+    const auto rootHit = parseCommand("/agentxx-cmd", defs);
+    XX_TEST_EXPECT_TRUE(rootHit.matched);
+    XX_TEST_EXPECT_EQ(rootHit.name, root);
+    const auto hit = parseCommand("/agentxx-cmd info", defs);
     XX_TEST_EXPECT_TRUE(hit.matched);
-    XX_TEST_EXPECT_EQ(hit.name, std::string{"/axx-info"});
+    XX_TEST_EXPECT_EQ(hit.name, root + " info");
+    const auto withArgs = parseCommand("  /agentxx-cmd hello 你好呀 ", defs);
+    XX_TEST_EXPECT_TRUE(withArgs.matched);
+    XX_TEST_EXPECT_EQ(withArgs.name, root + " hello");
+    XX_TEST_EXPECT_EQ(withArgs.args, std::string{"你好呀"});
+    // 未知子命令由根命令接住 (回帮助), 不会落到模型
+    const auto unknown = parseCommand("/agentxx-cmd whatever", defs);
+    XX_TEST_EXPECT_TRUE(unknown.matched);
+    XX_TEST_EXPECT_EQ(unknown.name, root);
 }
 
 void testCommand() {
+    const std::string       root{kCommandRoot};
     std::vector<CommandDef> defs;
-    defs.push_back(CommandDef{"/axx-info", CommandMode::Local, "info", {}, {}});
-    defs.push_back(CommandDef{"/axx-information", CommandMode::Local, "info2", {}, {}});
-    defs.push_back(CommandDef{"/axx-hello", CommandMode::Model, {}, "hello", {}});
-    defs.push_back(CommandDef{"/axx-stop", CommandMode::Action, {}, {}, "cancel"});
+    defs.push_back(CommandDef{root + " info", CommandMode::Local, "info", {}, {}});
+    defs.push_back(CommandDef{root + " information", CommandMode::Local, "info2", {}, {}});
+    defs.push_back(CommandDef{root + " hello", CommandMode::Model, {}, "hello", {}});
+    defs.push_back(CommandDef{root + " stop", CommandMode::Action, {}, {}, "cancel"});
 
     // 命中 + 参数
     {
-        auto result = parseCommand("/axx-info", defs);
+        auto result = parseCommand("/agentxx-cmd info", defs);
         XX_TEST_EXPECT_TRUE(result.matched);
-        XX_TEST_EXPECT_EQ(result.name, std::string{"/axx-info"});
+        XX_TEST_EXPECT_EQ(result.name, root + " info");
         XX_TEST_EXPECT_EQ(result.args, std::string{});
     }
     {
-        auto result = parseCommand("  /axx-hello  世界 ", defs);
+        auto result = parseCommand("  /agentxx-cmd hello  世界 ", defs);
         XX_TEST_EXPECT_TRUE(result.matched);
-        XX_TEST_EXPECT_EQ(result.name, std::string{"/axx-hello"});
+        XX_TEST_EXPECT_EQ(result.name, root + " hello");
         XX_TEST_EXPECT_EQ(result.args, std::string{"世界"});
     }
     // 大小写不敏感, 命中的名字保留配置里的大小写
     {
-        auto result = parseCommand("/AXX-INFO", defs);
+        auto result = parseCommand("/Agentxx-Cmd INFO", defs);
         XX_TEST_EXPECT_TRUE(result.matched);
-        XX_TEST_EXPECT_EQ(result.name, std::string{"/axx-info"});
+        XX_TEST_EXPECT_EQ(result.name, root + " info");
     }
-    // 长名优先 (`/axx-information` 不应被 `/axx-info` 吃掉)
+    // 长名优先 (`information` 不应被 `info` 吃掉)
     {
-        auto result = parseCommand("/axx-information", defs);
+        auto result = parseCommand("/agentxx-cmd information", defs);
         XX_TEST_EXPECT_TRUE(result.matched);
-        XX_TEST_EXPECT_EQ(result.name, std::string{"/axx-information"});
+        XX_TEST_EXPECT_EQ(result.name, root + " information");
     }
     // 命令名后不是空白: 不命中
     {
-        auto result = parseCommand("/axx-infoo", defs);
+        auto result = parseCommand("/agentxx-cmd infoo", defs);
+        XX_TEST_EXPECT_FALSE(result.matched);
+    }
+    // 根命令后直接接字符: 不命中 (`/agentxx-cmdx`)
+    {
+        auto result = parseCommand("/agentxx-cmdx info", defs);
         XX_TEST_EXPECT_FALSE(result.matched);
     }
     // 不以 `/` 开头: 不命中
     {
-        auto result = parseCommand("axx-info", defs);
+        auto result = parseCommand("agentxx-cmd info", defs);
         XX_TEST_EXPECT_FALSE(result.matched);
     }
     {
-        auto result = parseCommand("你好 /axx-info", defs);
+        auto result = parseCommand("你好 /agentxx-cmd info", defs);
         XX_TEST_EXPECT_FALSE(result.matched);
     }
     // 空配置: 不命中
     {
-        auto result = parseCommand("/axx-info", {});
+        auto result = parseCommand("/agentxx-cmd info", {});
         XX_TEST_EXPECT_FALSE(result.matched);
     }
 }

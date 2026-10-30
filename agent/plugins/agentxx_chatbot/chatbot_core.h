@@ -93,11 +93,16 @@ enum class CommandMode : uint8_t {
 
 const char* commandModeName(CommandMode mode) noexcept;
 
+/// 命令根: 所有内置命令都写在它下面 (`/agentxx-cmd help` 这类)
+/// - 单独发根命令 (`/agentxx-cmd`) 等同于 help
+/// - 子命令名小写, 匹配时大小写不敏感
+inline constexpr std::string_view kCommandRoot = "/agentxx-cmd";
+
 /// 一条命令定义
 /// - 表在插件里写死 (见 [builtinCommands]), 不从配置读: 命令是插件自己的交互约定,
 ///   让每个部署各写一套只会让文档与排查对不上
 struct CommandDef {
-    /// 命令名 (`/axx-info`), 必须以 `/` 开头
+    /// 完整命令名 (`/agentxx-cmd info`), 必须是根命令或 `根命令 子命令`
     std::string name;
     CommandMode mode = CommandMode::Local;
     /// `Local` 的回复模板
@@ -109,9 +114,9 @@ struct CommandDef {
 };
 
 /// 插件内置的命令表
-/// - 名字统一以 `/axx-` 开头 (测试与文档都按这张表写)
-/// - `/axx-help` 本地列命令, `/axx-info` 本地报会话状态, `/axx-hello` 让模型说一句,
-///   `/axx-stop` 打断当前一轮
+/// - 名字都以 [kCommandRoot] 开头 (测试与文档都按这张表写)
+/// - `/agentxx-cmd`(或 `... help`) 本地列命令, `... info` 本地报会话状态,
+///   `... hello` 让模型说一句, `... stop` 打断当前一轮
 std::vector<CommandDef> builtinCommands();
 
 /// 命令匹配结果
@@ -126,7 +131,8 @@ struct ParsedCommand {
 /// 在一条消息里匹配命令
 ///
 /// - 命令名必须以 `/` 开头, 允许前置空白
-/// - 大小写不敏感, 命令名后必须是空白或行尾 (`/axx-info` 命中, `/axx-information` 不命中)
+/// - 大小写不敏感, 命令名后必须是空白或行尾 (`/agentxx-cmd info` 命中,
+///   `/agentxx-cmd information` 不命中)
 /// - 同一条消息只匹配一个命令, 取**最长**命中
 ParsedCommand parseCommand(std::string_view text, const std::vector<CommandDef>& defs);
 

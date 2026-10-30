@@ -1096,9 +1096,11 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 插件经内置 `agentxx_jav
   id（撤成功后从记录里去掉，同一条不会被反复选中）；
 - **一轮里多条消息一起带上去**：被 @ 立即唤醒；`always` 模式按静默窗口聚合并投递；通道正在
   跑一轮时新消息继续缓冲，本轮结束（`TURN_END`）后一次性带上；
-- **关键词命令写死在插件里**：`/axx-help`（列命令）/ `/axx-info`（会话状态）/ `/axx-hello`
-  （构造一条输入投给 agent）/ `/axx-stop`（打断当前一轮），见 `chatbot_core.cpp` 的
-  `builtinCommands()`；命令不进聚合缓冲，也没有配置项 —— 命令名与文案属于插件自己的交互
+- **关键词命令写死在插件里**：统一格式 `/agentxx-cmd <子命令>`（单独发 `/agentxx-cmd`
+  等同于 help）：`help`（列命令）/ `info`（会话状态）/ `hello`（构造一条输入投给 agent）/
+  `stop`（打断当前一轮），见 `chatbot_core.cpp` 的 `builtinCommands()` 与
+  `chatbot_core.h` 的 `kCommandRoot`；未知子命令由根命令接住回帮助，不会当成聊天内容投给模型。
+  命令不进聚合缓冲，也没有配置项 —— 命令名与文案属于插件自己的交互
   约定，开成配置只会让文档、用例、排错说法对不上。
 
 **配置**在 `plugin.list[]` 的 `args` 里，三段：`accounts`（每平台账号一份凭证）/

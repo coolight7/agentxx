@@ -81,7 +81,7 @@ struct TurnContext {
     int64_t                  startedAtMs = 0;
 };
 
-/// 会话计数 (供 `chatbot_status` / `/axx-info`)
+/// 会话计数 (供 `chatbot_status` / `/agentxx-cmd info`)
 struct ChatCounters {
     uint64_t received   = 0;
     uint64_t duplicated = 0;
@@ -195,7 +195,7 @@ public:
     /// 全局计数与状态 (JSON)
     std::string statusJson() const;
 
-    /// 会话状态摘要 (JSON; `/axx-info` 用)
+    /// 会话状态摘要 (JSON; `/agentxx-cmd info` 用)
     std::string chatInfoJson(std::string_view chatKey) const;
 
     /// 平台状态的 JSON (按账号)

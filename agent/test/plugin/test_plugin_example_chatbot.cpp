@@ -833,7 +833,7 @@ asio::awaitable<void> runBody(
         g_da_sim_response_content     = "";
         const int requestsBefore      = g_da_sim_request_count.load();
 
-        XX_TEST_EXPECT_TRUE(co_await inject("private", "U1", "/axx-info", false, "msg-cmd1"));
+        XX_TEST_EXPECT_TRUE(co_await inject("private", "U1", "/agentxx-cmd info", false, "msg-cmd1"));
         XX_TEST_EXPECT_TRUE(co_await waitOutbox(ex, 30s, rootCtx, [](const Json& outbox) {
             return concatSentText(outbox).find("人设 assistant") != std::string::npos;
         }));
@@ -858,10 +858,24 @@ asio::awaitable<void> runBody(
             XX_TEST_EXPECT_TRUE(rendered);
         }
 
+        // 只发根命令 = 帮助: 回一份带命令清单的本地消息, 同样不进模型
+        const int beforeHelp = g_da_sim_request_count.load();
+        XX_TEST_EXPECT_TRUE(
+            co_await inject("private", "U1", "/agentxx-cmd", false, "msg-cmd-help")
+        );
+        XX_TEST_EXPECT_TRUE(co_await waitOutbox(ex, 30s, rootCtx, [](const Json& outbox) {
+            const auto text = concatSentText(outbox);
+            return text.find("可用命令") != std::string::npos
+                   && text.find("/agentxx-cmd info") != std::string::npos;
+        }));
+        XX_TEST_EXPECT_EQ(g_da_sim_request_count.load(), beforeHelp);
+
         // model: 产生一轮模型调用, 输入是 prompt 渲染结果
         g_da_sim_response_content = "你好呀";
         const int beforeModel     = g_da_sim_request_count.load();
-        XX_TEST_EXPECT_TRUE(co_await inject("private", "U1", "/axx-hello 请简短", false, "msg-cmd2"));
+        XX_TEST_EXPECT_TRUE(
+            co_await inject("private", "U1", "/agentxx-cmd hello 请简短", false, "msg-cmd2")
+        );
         XX_TEST_EXPECT_TRUE(co_await waitUntil(ex, 60s, [&]() {
             return g_da_sim_request_count.load() > beforeModel;
         }));
