@@ -502,13 +502,81 @@ bool AgentHost::unmountRoot(std::string_view agentId) {
         XX_LOGW("AgentHost::unmountRoot: 内置根 '{}' 不能卸载", agentId);
         return false;
     }
-    // 先撤子代理服务: 服务句柄属于该根的总线, 根释放后总线就没了
-    // (destroyAgent 里也会幂等地再做一次, 这里提前是因为卸载语义就是"先断接再释放")
-    unregisterSubagentService(agentId);
-    // 节点与根表项由 destroyAgent 一并回收 (它会递归子节点并抹掉 roots_ 里这一项)
-    destroyAgent(agentId);
+    // 调用方看到的结果立即生效: 子代理服务注销、根表与节点表摘掉、会话目录占用释放。
+    // 之后 rootCount() / findRoot() / registry().contains() / 挂根预算都不再算这个根。
+    std::string id{agentId};
+    unregisterSubagentService(id);
+    roots_.erase(it);
+    if (rootAgent_ && rootAgent_->getContext() && rootAgent_->getContext()->agentId == id) {
+        rootAgent_.reset();
+    }
+    auto pending = detachNodeForClose(id);
+    releaseSessionStoreRoot(id);
+    // 真正的销毁要等该 agent 的插件 stop 与 session 落盘 (agent->shutdownAsync), 只能是
+    // 协程: 投递到容器 io 线程保活执行, 不在当前调用栈同步做 —— 插件在自己的 stop 里
+    // 卸根时, 实例还挂在该根的挂载上 (实例未进入 Closed, 插件 unmount 回调还能跑),
+    // 同步打掉 agent 会留下"实例已关但挂载记录还在"的残局。
+    if (!pending.empty()) {
+        scheduleShutdownAsync(std::move(pending));
+    }
     XX_LOGI("AgentHost: unmounted root '{}'", agentId);
     return true;
+}
+
+std::vector<AgentHost::PendingClose> AgentHost::detachNodeForClose(std::string_view agentId) {
+    std::vector<PendingClose> out;
+    // 先子后父: 父上下文不能在子节点关闭完成前释放 (与 destroyAgentAsync 同一顺序)
+    for (auto& child : registry_.childrenOf(agentId)) {
+        if (!child) {
+            continue;
+        }
+        auto sub = detachNodeForClose(child->agentId);
+        out.insert(
+            out.end(),
+            std::make_move_iterator(sub.begin()),
+            std::make_move_iterator(sub.end())
+        );
+    }
+    if (auto node = registry_.get(agentId)) {
+        auto agent = node->agent;
+        registry_.remove(agentId);
+        if (agent) {
+            out.push_back(PendingClose{std::move(agent), std::string{agentId}});
+        }
+    }
+    return out;
+}
+
+void AgentHost::scheduleShutdownAsync(std::vector<PendingClose> pending) {
+    auto self = weak_from_this().lock();
+    if (!self) {
+        // 容器已在销毁: 节点留给 pending 按引用计数释放
+        XX_LOGW("AgentHost: cannot schedule shutdown ({} agent(s)); host is going away", pending.size());
+        return;
+    }
+    auto ex = ioCtx_->get_executor();
+    asio::post(
+        ex,
+        [self, pending = std::move(pending)]() mutable {
+            asio::co_spawn(
+                self->ioCtx_->get_executor(),
+                [self, pending = std::move(pending)]() mutable -> asio::awaitable<void> {
+                    for (auto& item : pending) {
+                        if (!item.agent) {
+                            continue;
+                        }
+                        if (!co_await item.agent->shutdownAsync(std::chrono::seconds{30})) {
+                            XX_LOGE(
+                                "AgentHost: deferred shutdown failed for agent `{}`",
+                                item.agentId
+                            );
+                        }
+                    }
+                },
+                asio::detached
+            );
+        }
+    );
 }
 
 size_t AgentHost::unmountRootsByOwner(std::string_view owner) {
@@ -1426,38 +1494,6 @@ void AgentHost::setMailbox(std::string_view agentId, Mailbox mailbox) {
     } else {
         utilxx_base::eraseHeterogeneous(mailboxes_, agentId); // 异构删除免拷贝
     }
-}
-
-void AgentHost::destroyAgent(std::string_view agentId) {
-    // 递归移除全部子节点 (子树整体回收)
-    for (auto& child : registry_.childrenOf(agentId)) {
-        destroyAgent(child->agentId);
-    }
-    // 若是根: 先注销它的子代理服务 (服务句柄属于该根的总线, 根释放后就找不到了)
-    unregisterSubagentService(agentId);
-    if (auto node = registry_.get(agentId)) {
-        if (node->agent && node->agent->agentContext && node->agent->agentContext->pluginManager
-            && node->agent->agentContext->pluginManager->hasPendingClose()) {
-            // 同步路径无法等待 stop 事务: 实例会保留 CloseFailed, 不 dlclose。
-            XX_LOGW(
-                "AgentHost: destroying agent `{}` with pending plugin shutdown; prefer "
-                "co_await destroyAgentAsync()",
-                agentId
-            );
-        }
-        registry_.remove(agentId);
-        // node->agent.reset() 释放独立 AgentContext / engine / SessionStore,
-        // 该 agent 的全部会话与中间件状态随析构整体释放
-        node->agent.reset();
-        releaseSessionStoreRoot(agentId);
-    }
-    // 若是根, 把它从根表里摘掉 (内置根不在这里摘: unmountRoot 会拒绍)
-    if (rootAgent_ && rootAgent_->getContext() && rootAgent_->getContext()->agentId == agentId) {
-        rootAgent_.reset();
-    }
-    std::erase_if(roots_, [agentId](const MountedRoot& item) {
-        return item.agentId == agentId;
-    });
 }
 
 asio::awaitable<bool>

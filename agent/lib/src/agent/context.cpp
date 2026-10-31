@@ -135,6 +135,13 @@ asio::awaitable<bool> AgentContext::shutdownPluginsAsync(std::chrono::millisecon
         co_await pluginManager->unmountAgentAsync(pluginMount->agentId());
         pluginMount.reset();
     }
+    // 管理器是共享的 (容器/主程序注入, pluginManagerOwned=false) 时到此为止:
+    // `shutdownAsync` 是把管理器里的**全部**插件实例卸掉, 一旦对共享管理器调用,
+    // 销毁任何一个 agent (包括插件自己建的人设根) 都会把创建它的插件一起卸掉。
+    // 共享管理器的关闭由它的主人负责 (AgentHost / 主程序调用 shutdownAsync)。
+    if (!pluginManagerOwned) {
+        co_return true;
+    }
     co_return co_await pluginManager->shutdownAsync(timeout);
 }
 

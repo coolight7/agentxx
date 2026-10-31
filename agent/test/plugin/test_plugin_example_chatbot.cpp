@@ -426,6 +426,15 @@ asio::awaitable<void> runBody(
                 }
             }
             if (!busy) {
+                // 每次取**当前**人设根的上下文: 禁用→启用后人设根是新建的, 旧上下文
+                // 里的 chatbot_* 工具已摘除 (拿旧上下文取工具只会得到"工具不存在")
+                std::shared_ptr<agent::AgentContext> ctx;
+                if (auto root = rootOf(host, kOwner)) {
+                    ctx = root->getContext();
+                }
+                if (!ctx) {
+                    co_return true; // 没有人设根 = 没有会话在攒待投消息
+                }
                 bool buffered = false;
                 for (const auto* key : {"fake_main|group|G1",
                                        "fake_main|private|U1",
@@ -434,14 +443,18 @@ asio::awaitable<void> runBody(
                                        "fake_main|private|U4",
                                        "fake_main|private|U9",
                                        "fake_main|private|U10"}) {
-                    const auto info = Json::parse(fmt::format(
-                        "{}",
-                        co_await callTool(
-                            rootCtx,
-                            "chatbot_chat_info",
-                            fmt::format(R"({{"chat":"{}"}})", key)
-                        )
-                    ));
+                    const auto text = co_await callTool(
+                        ctx,
+                        "chatbot_chat_info",
+                        fmt::format(R"({{"chat":"{}"}})", key)
+                    );
+                    Json info;
+                    try {
+                        info = Json::parse(text);
+                    } catch (const std::exception&) {
+                        // 工具不在/插件刚停: 当成"没有攒着的消息"继续等下一轮
+                        continue;
+                    }
                     if (info.value("buffered", int64_t{0}) > 0) {
                         buffered = true;
                         break;

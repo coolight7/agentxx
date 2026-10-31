@@ -183,9 +183,12 @@ public:
     std::shared_ptr<BaseAgent> createAgent(std::shared_ptr<AgentConfig> config);
 
     /// 按 agentId 卸载一个根
-    /// - 先注销子代理服务与节点, 再释放 agent;
+    /// - 调用方看到的结果**立即**生效: 注销子代理服务、从根表摘掉、释放会话存储根
+    ///   占用 (之后 `rootCount()` / `findRoot()` / 挂根预算都不再算它);
+    /// - 真正的销毁 (等插件 `stop`/会话落盘) 是协程, 投递到容器 io 线程执行 ——
+    ///   插件在自己的 `stop` 里卸根时, 实例还挂在该根的挂载上 (实例没进入 Closed,
+    ///   插件 `unmount` 回调还能正常跑), 同步销毁会留下"实例已关但挂载记录还在";
     /// - 内置根 (`primary=true`) 与不存在的 id 都返回 false (内置根不随插件卸载);
-    /// - 若该根有会话存储根占用则一并释放;
     /// - 插件禁用/卸载时用 [unmountRootsByOwner] 批量卸载
     bool unmountRoot(std::string_view agentId);
 
@@ -244,9 +247,16 @@ public:
     void unregisterRemoteAgent(std::string_view agentId);
 
     /// 移除 agent 节点 (递归移除其全部子节点), 释放独立 AgentContext
-    void destroyAgent(std::string_view agentId);
+    ///
+    /// 已删除同步版本: 同步销毁无法等 agent 的插件 `stop` 事务收尾, 会在实例仍挂
+    /// 在该 agent 的挂载上时就把 agent 打掉 (日志里的"仍有实例未拆挂载"、
+    /// `provider is closing` 都出自这条路径)。需要销毁节点的地方一律用
+    /// [destroyAgentAsync], 插件卸载根用 [unmountRoot] (它内部投递异步销毁)。
 
     /// 等待 agent 所属 IO executor 完成插件关闭后再移除节点。
+    /// - 先递归子节点再自身, 子节点关闭完成后父节点才释放 (回调看不到已销毁的父上下文);
+    /// - 插件 `unmount` 回调、中间件摘除、会话落盘都在 `agent->shutdownAsync` 里完成;
+    /// - `return`: false = 插件 stop 事务未在 `timeout` 内完成 (节点保留, 可重试)。
     asio::awaitable<bool> destroyAgentAsync(
         std::string_view          agentId,
         std::chrono::milliseconds timeout = std::chrono::seconds{30}
@@ -333,6 +343,22 @@ private:
 
     /// 注销某个根的子代理委派服务 (根卸载/销毁时; 幂等)
     void unregisterSubagentService(std::string_view agentId);
+
+    /// 待异步关闭的 agent (节点已从注册表摘掉, 只剩 agent 对象等插件 stop 收尾)
+    struct PendingClose {
+        std::shared_ptr<BaseAgent> agent;
+        std::string                agentId;
+    };
+
+    /// 摘下 agentId 及其子树节点 (先子后父), 返回待关闭列表
+    /// - 节点立即从注册表消失 (调用方 unmountRoot 返回后 registry/findRoot 都查不到),
+    ///   agent 对象由返回的列表保活
+    std::vector<PendingClose> detachNodeForClose(std::string_view agentId);
+
+    /// 把"异步关闭待关闭列表"投递到容器 io 线程执行
+    /// - 用于不能等协程的入口 (插件在自己的 `stop` 里卸根);
+    /// - 任务自己持容器强引用: 插件 stop / 会话落盘走完才释放节点。
+    void scheduleShutdownAsync(std::vector<PendingClose> pending);
 
     /// 派生单个子代理并等待其完成 (spawnBatch 内部按任务逐个调用)
     /// - 深度/并发预算检查, 独立 agent 构造, 运行边界 RAII 回收

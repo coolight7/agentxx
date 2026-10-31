@@ -239,6 +239,39 @@ const bool ok = c.runOnIoBlocking([&]() {
 **等禁用完成再启用**; 面板上连点的情况由上面"补欠着的 unmount"与
 `startForEnable` 里"先补 stop 再 start"应付。
 
+### 10. 卸根不再同步销毁 agent (`agent_host.{h,cpp}` / `context.cpp`)
+
+§9 之后还剩一类告警: `destroying agent ... with pending plugin shutdown` 与
+`AgentContext destroyed with plugin mount ... still attached` —— 插件在自己 `stop`
+里卸根时, 根的 agent 是被**同步**销毁的, 那时实例还挂在该根的挂载上。尝试把卸根
+改成"先拆挂载再 stop"会把 `chatbotStop` 的 `stopIo()` 卡在 `ioThread.join()`
+(插件 io 线程正等主程序 io 线程), 所以改了另一头: **卸根不再同步销毁**。
+
+- `AgentHost::destroyAgent` (同步) 删除: 它唯一的非递归调用者就是 `unmountRoot`,
+  而 `~AgentHost` 是 `= default` (节点靠引用计数释放)。同步销毁无法等插件 `stop`,
+  只能在实例还挂着时打掉 agent;
+- `unmountRoot` 现在只做同步的"断开": 注销子代理服务、从根表与节点表摘掉节点
+  (含递归子节点, 先子后父)、释放会话存储根占用 —— 调用方返回后 `rootCount()` /
+  `findRoot()` / `registry().contains()` / 挂根预算都已生效;
+- 真正的关闭交给异步任务 (`scheduleShutdownAsync`): 任务自己持容器与 agent 的强引用,
+  在容器 io 线程依次 `co_await agent->shutdownAsync()`, 插件 `stop`/`unmount` 回调、
+  会话落盘都在那里跑完;
+- 顺带修了一个被这次改动暴露出来的真 bug: `AgentContext::shutdownPluginsAsync` 原先
+  在拆完**本 agent** 的挂载后无条件调 `pluginManager->shutdownAsync()` —— 对共享管理器
+  (= 容器/主程序注入那唯一一份) 来说等于把**进程里所有插件实例**卸掉。之前没人发现
+  是因为同步销毁根本不调 `shutdownAsync`; 改成异步销毁后, 一卸人设根就把创建它的
+  chatbot 插件连带卸载了 (测试里表现为"工具不恢复 + 插件未就绪")。现在只在
+  `pluginManagerOwned == true` (agent 自建的管理器) 时才关闭管理器。
+- 测试侧随之修一处: `plugin_example_chatbot` 的 `drain()` 原先写死了最初的人设根上下文,
+  禁用后那个上下文里的 `chatbot_*` 工具已摘除, 取工具只得 `[Error: 工具…不存在]`,
+  再被 `Json::parse` 抛出 (即 `TAPE_ERROR ... input 45 bytes`)。改为每次取**当前**
+  人设根, 解析失败当作"没有攒着的消息"。
+
+效果 (同一批模块): `provider is closing` 与 chatbot 的
+`pending plugin shutdown` / `still attached` 告警归零; 剩下 `still attached` 只出现在
+`agent_host` / `plugins` / `plugin_cleanup` / `plugin_hooks` 这些模块 —— 它们的用例自己
+建 `AgentContext` 后直接释放 (与本次改动无关, 属于测试写法)。
+
 ## 验证
 
 - `agentxx_test websocket` → passed=254 failed=0
@@ -252,18 +285,18 @@ const bool ok = c.runOnIoBlocking([&]() {
   plugin_resources plugin_host_mount plugin_multi_mount plugin_multi_instance
   plugin_runtime plugin_agent_runtime plugin_example_runtime plugin_llm_uncensored
   client_plugins` → passed=3141 failed=0
+- `agentxx_test plugin_example_chatbot agent_host plugin_agent_runtime plugin_example_runtime
+  plugins plugin_cleanup plugin_multi_mount plugin_multi_instance plugin_hooks client_plugins`
+  → passed=2300 failed=0 (`plugin_example_chatbot` 185 / `agent_host` 156 /
+  `plugin_agent_runtime` 178), `provider is closing` 与 chatbot 的挂载告警均为 0
+- 全量 `agentxx_test` → **passed=40329 failed=0** (993 s)
 
 ## 剩余已知问题
 
-- **插件在自己的 `stop` 里同步卸根时仍会打"挂载未拆"告警**: chatbot 的 `chatbotStop`
-  用 `unmountRoot` 卸人设根, 那是同步销毁 agent 的路径 (`destroyAgent`), 而实例当时
-  还挂在那个根上, 于是日志出现
-  `destroying agent ... with pending plugin shutdown` 与
-  `AgentContext destroyed with plugin mount ... still attached`。
-  验证过另一种顺序 (先拆挂载再调 stop) 会让 `chatbotStop` 的 `stopIo()` 卡在
-  `ioThread.join()` 上 (插件 io 线程此时正等主程序 io 线程, 而后者正阻塞在 join),
-  已回退。要彻底消掉这两条告警, 需要 `AgentHost::unmountRoot` 走异步销毁
-  (`destroyAgentAsync`) 或给 `PluginMount` 增加"不调插件回调的同步拆全部"。
+- **同步卸根已取消, 但仍有少数写法会告警**: `agent_host` / `plugins` / `plugin_cleanup` /
+  `plugin_hooks` 等模块的用例自己建 `AgentContext` 后直接释放, 依旧会打
+  `AgentContext destroyed with plugin mount ... still attached` (与卸根路径无关,
+  要消掉得让这些用例 `co_await agent->shutdownAsync()` 后再释放)。
 - **`test_agent_host.cpp` 一类文件的写点仍未包成块**: 包装量保证单次读写无竞争, 但
   "连续写 4~5 个量"仍可能被服务线程看到中间态 (断言据此对比同一轮请求时不受影响)。
 
