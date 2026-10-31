@@ -81,7 +81,7 @@ git_worktree 及延迟加载加载 (`ToolSkillSearchSubAgentTask` 模板类, 当
 | **文件系统** | `agentxx_filesystem_list` | 列出文件/文件夹信息 (大小、类型、修改时间)，支持递归与 `path` 通配 (`*` / `?` / `[...]` / `**`：含通配符时展开模式并列出匹配条目本身，`recursive` 再逐层展开匹配到的目录) |
 | | `agentxx_filesystem_read` | 按行读取文本文件，支持 `offset`/`limit`；单次调用输出上限 2000 行 / 256 KiB，超过直接报错（不截断，读大文件用分页或先 grep 定位） |
 | | `agentxx_filesystem_write` | 创建/覆盖文本文件 |
-| | `agentxx_filesystem_edit` | 精确字符串替换编辑文本文件 (一次性改多处: `edits` 数组按顺序生效, 每段只替换第一处匹配; 任一段匹配不到则整次调用不写盘) |
+| | `agentxx_filesystem_edit` | 精确字符串替换编辑文本文件 (一次性改多处: `edits` 数组按顺序生效, 每段只替换第一处匹配; 任一段匹配不到则整次调用不写盘; 某段 `old_str` 与 `new_str` 相同只在结果里给警告并跳过该段, 不当作错误) |
 | | `agentxx_filesystem_glob` | 按 glob 模式搜索文件 (`type` 可按文件类型过滤，取值为字符串或字符串数组) |
 | | `agentxx_filesystem_grep` | 按纯文本 (text_patterns) / 正则 (regex_patterns) 搜索文件内容 (可同时指定取并集)；`output_mode` 取 `files_with_matches` / `content` / `count` (count 只给命中文件数与命中总数) |
 | | `agentxx_filesystem_move` | 移动/重命名文件或目录 (同文件系统内为移动，跨设备回退为复制后删源；目标已存在时需 `overwrite`) |

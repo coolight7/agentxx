@@ -996,6 +996,9 @@ namespace detail {
 struct EditSegment {
     std::string oldStr;
     std::string newStr;
+    /// 该段新旧文本相同 (不改动任何字符): 只记警告并跳过, 不当作错误
+    /// (在换行符归一化之后判定, 因此 CRLF/LF 写法差异导致的"看起来不同"也归入此类)
+    bool unchanged = false;
 };
 
 /// 段数上限: 只用于拦住畸形的超大参数 (正常调用不会接近这个数量)
@@ -1017,8 +1020,9 @@ inline std::string editOldStrExcerpt(std::string_view oldStr) {
 /// - `edits` 数组 (推荐写法): 逐项取 `old_str`/`new_str`
 /// - `edits` 为单个对象: 按单段处理 (等价于只写一段的数组)
 /// - 未给 `edits`: 按 `old_str`/`new_str` 取单段 (与旧写法兼容)
-/// 每段要求 `old_str` 非空且与 `new_str` 不同; 两处写法同时给出时拒绝
-/// (避免调用方以为两处都会生效)
+/// 每段要求 `old_str` 非空; 两处写法同时给出时拒绝 (避免调用方以为两处都会生效)
+/// - `old_str` 与 `new_str` 相同**不算错误**: 由执行体按警告跳过该段
+///   (见 [EditSegment::unchanged]), 其余段照常应用
 ///
 /// - `return` 至少一段的替换列表 (顺序即应用顺序)
 inline std::vector<EditSegment> parseEditSegments(const utilxx_base::Json& arguments) {
@@ -1100,23 +1104,77 @@ inline std::vector<EditSegment> parseEditSegments(const utilxx_base::Json& argum
             throw std::invalid_argument{fmt::format(R"(Arg `old_str` of edit #{} is empty)", i + 1)
             };
         }
-        if (seg.newStr == seg.oldStr) {
-            throw std::invalid_argument{fmt::format(
-                R"(Arg `old_str` and `new_str` of edit #{} are equal and unchanged.)",
-                i + 1
-            )};
-        }
     }
     return segments;
 }
 
+/// 标出 `old_str` 与 `new_str` 相同的段 ([EditSegment::unchanged])
+/// - 参数应当是已做好换行符归一化的段 (CRLF/LF 写法差异也归入"未改动")
+/// - `unchangedSegments` 依次收到这些段的 1 基段号 (结果文本的警告用)
+///
+/// - `return` 真正会改动文本的段数 (0 = 不需读盘/写盘)
+///
+/// - `args`:
+///     - [segments] 待应用的替换段 (就地打上 unchanged 标记)
+///     - [unchangedSegments] 输出: 未改动段的段号
+inline size_t
+    markUnchangedSegments(std::vector<EditSegment>& segments, std::vector<size_t>& unchangedSegments) {
+    size_t appliedCount = 0;
+    for (size_t i = 0; i < segments.size(); ++i) {
+        auto& seg = segments[i];
+        if (seg.newStr == seg.oldStr) {
+            seg.unchanged = true;
+            unchangedSegments.push_back(i + 1);
+            continue;
+        }
+        ++appliedCount;
+    }
+    return appliedCount;
+}
+
+/// 结果文本里的"未改动段"警告 (空列表返回空串)
+/// - 只提示, 不当作失败: 该段不改动任何文本, 其余段照常写入
+inline std::string editUnchangedWarning(const std::vector<size_t>& unchangedSegments) {
+    if (unchangedSegments.empty()) {
+        return {};
+    }
+    std::string list;
+    for (size_t i = 0; i < unchangedSegments.size(); ++i) {
+        if (i > 0) {
+            list += (i + 1 == unchangedSegments.size()) ? " and " : ", ";
+        }
+        list += fmt::format("#{}", unchangedSegments[i]);
+    }
+    return fmt::format(
+        "[Warning: `old_str` and `new_str` are equal in edit {} (that segment changes nothing and "
+        "was skipped)]",
+        list
+    );
+}
+
+/// 组装 edit 结果文本: `success` 首行 + (可选) 未改动段警告行
+/// - `appliedCount == 0` 时仍为 `success` (调用本身合法), 由警告行说明没有实际修改
+inline std::string editResultText(size_t appliedCount, const std::vector<size_t>& unchangedSegments) {
+    std::string text = appliedCount > 0 ? std::string{"success"} : std::string{"success (no change)"};
+    if (auto warning = editUnchangedWarning(unchangedSegments); !warning.empty()) {
+        text += "\n";
+        text += warning;
+    }
+    return text;
+}
+
 /// 按顺序把各段应用到 content: 后一段作用于前一段改完的内容 (可用前一段写入的文本)
 /// - 每段只替换**第一处**匹配 (要改多处就写多段)
+/// - 未改动段 ([EditSegment::unchanged]) 直接跳过: 它本来就不改文本, 也不要求
+///   在文件里能匹配到
 /// - 某段匹配不到时抛 std::runtime_error (调用方据此整体放弃, 不落盘)
 inline void applyEditSegments(std::string& content, const std::vector<EditSegment>& segments) {
     for (size_t i = 0; i < segments.size(); ++i) {
         const auto& seg = segments[i];
-        const auto  pos = content.find(seg.oldStr);
+        if (seg.unchanged) {
+            continue;
+        }
+        const auto pos = content.find(seg.oldStr);
         if (pos == std::string::npos) {
             throw std::runtime_error{fmt::format(
                 R"(No match `old_str` of edit #{} (`{}`) found, no change was written; try re-reading to get the latest file content.)",
@@ -1147,6 +1205,14 @@ inline std::string fileEditExecuteImpl(
     for (auto& seg : segments) {
         detail::normalizeCrlfToLf(seg.oldStr);
         detail::normalizeCrlfToLf(seg.newStr);
+    }
+
+    // 未改动段 (`old_str` 与 `new_str` 相同) 只给警告并跳过; 全部段都未改动时
+    // 不读盘/不写盘, 直接返回带警告的成功结果
+    std::vector<size_t> unchangedSegments;
+    const auto appliedCount = detail::markUnchangedSegments(segments, unchangedSegments);
+    if (appliedCount == 0) {
+        return detail::editResultText(0, unchangedSegments);
     }
 
     auto path = utilxx_base::utf8ToPath(filepath);
@@ -1210,7 +1276,7 @@ inline std::string fileEditExecuteImpl(
         };
     }
 
-    return "success";
+    return detail::editResultText(appliedCount, unchangedSegments);
 }
 
 // =====================================================================
@@ -2471,7 +2537,15 @@ inline asio::awaitable<std::string>
         detail::normalizeCrlfToLf(seg.newStr);
     }
 
-    auto path = utilxx_base::utf8ToPath(filepath);
+    // 未改动段 (`old_str` 与 `new_str` 相同) 只给警告并跳过; 全部段都未改动时
+    // 不读盘/不写盘, 直接返回带警告的成功结果 (与同步版行为一致)
+    std::vector<size_t> unchangedSegments;
+    const auto          appliedCount = detail::markUnchangedSegments(segments, unchangedSegments);
+    if (appliedCount == 0) {
+        co_return detail::editResultText(0, unchangedSegments);
+    }
+
+    auto            path      = utilxx_base::utf8ToPath(filepath);
     // 按规范化路径排队: 读-改-写整段相对其它写者原子
     auto            pathLease = co_await detail::lockPathAsync(filepath);
     std::error_code fsEc;
@@ -2539,7 +2613,7 @@ inline asio::awaitable<std::string>
         };
     }
 
-    co_return "success";
+    co_return detail::editResultText(appliedCount, unchangedSegments);
 }
 
 #else // !ASIO_HAS_FILE && !BOOST_ASIO_HAS_FILE

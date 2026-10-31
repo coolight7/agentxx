@@ -1664,14 +1664,6 @@ asio::awaitable<void>
     }
     );
     co_await expectError(
-        "edits item unchanged",
-        utilxx_base::Json{
-            {"path",  filePath                                                                },
-            {"edits",
-             utilxx_base::Json::array({utilxx_base::Json{{"old_str", "a"}, {"new_str", "a"}}})}
-    }
-    );
-    co_await expectError(
         "both edits and old_str",
         utilxx_base::Json{
             {"path",    filePath                                                              },
@@ -1688,6 +1680,20 @@ asio::awaitable<void>
     }
     );
 
+    // `old_str` 与 `new_str` 相同的段不再是错误 (只给警告并跳过):
+    // 全部段都相同时不读不写, 文件字节保持不变, 结果以 success 开头且带警告
+    {
+        auto result = co_await tool.execute_async(utilxx_base::Json{
+            {"path",  filePath                                                                },
+            {"edits",
+             utilxx_base::Json::array({utilxx_base::Json{{"old_str", "a"}, {"new_str", "a"}}})}
+        });
+        XX_TEST_EXPECT_TRUE(result.starts_with("success"));
+        XX_TEST_EXPECT_TRUE(result.find("[Warning:") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(result.find("#1") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(readAllBytes(filePath) == "abc\n");
+    }
+
     // 单个对象写法 (少写一层数组) 按单段处理: 与数组形态等价
     auto single = co_await tool.execute_async(utilxx_base::Json{
         {"path",  filePath                                                 },
@@ -1699,6 +1705,73 @@ asio::awaitable<void>
     } else {
         g_fs_failed++;
         TEST_FAIL << "edit_text_file single object `edits` failed: '" << single << "'" << std::endl;
+    }
+    co_return;
+}
+
+/// `old_str` 与 `new_str` 相同的段只给警告, 不当作错误:
+/// - 混合场景: 其余段照常应用, 警告指明未改动的是第几段
+/// - 未改动段不要求在文件里能匹配到 (不报 `No match` 错误)
+/// - 换行符归一化后才比较 (CRLF/LF 写法差异也算未改动)
+/// - 单段旧写法 (old_str/new_str) 与数组写法一致
+/// - 全部段都未改动时结果首行是 `success (no change)`, 文件字节保持原样
+asio::awaitable<void> test_edit_text_file_unchanged_segment_warns(
+    std::weak_ptr<agentxx::agent::AgentContext> agentContext
+) {
+    auto filePath = testDir + "/edit_unchanged_segment_test.txt";
+    {
+        std::ofstream f(filePath, std::ios::binary);
+        f << "one\ntwo\nthree\n";
+    }
+    auto tool = agentxx::tools::FilesystemEditTextFileTool{agentContext};
+
+    // 混合: #1 新旧相同 (且文件里根本没有 `zzz`), #2 真正替换
+    {
+        auto result = co_await tool.execute_async(utilxx_base::Json{
+            {"path",  filePath                                                               },
+            {"edits",
+             utilxx_base::Json::array(
+                 {
+                     utilxx_base::Json{{"old_str", "zzz"}, {"new_str", "zzz"}},
+                     utilxx_base::Json{{"old_str", "two"}, {"new_str", "TWO"}},
+                 }
+             )                                                                            }
+        });
+        XX_TEST_EXPECT_TRUE(result.starts_with("success"));
+        XX_TEST_EXPECT_TRUE(result.find("[Error:") == std::string::npos);
+        XX_TEST_EXPECT_TRUE(result.find("[Warning:") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(result.find("#1") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(result.find("#2") == std::string::npos);
+        XX_TEST_EXPECT_EQ(readAllBytes(filePath), std::string{"one\nTWO\nthree\n"});
+    }
+
+    // CRLF 的 old_str 与 LF 的 new_str: 归一化后相同 → 只警告, 文件不改写
+    {
+        auto result = co_await tool.execute_async(utilxx_base::Json{
+            {"path",    filePath    },
+            {"old_str", "one\r\n"},
+            {"new_str", "one\n"  },
+        });
+        XX_TEST_EXPECT_TRUE(result.starts_with("success"));
+        XX_TEST_EXPECT_TRUE(result.find("[Warning:") != std::string::npos);
+        XX_TEST_EXPECT_EQ(readAllBytes(filePath), std::string{"one\nTWO\nthree\n"});
+    }
+
+    // 全部段都未改动: 首行标明没有实际修改, 警告列出全部段号
+    {
+        auto result = co_await tool.execute_async(utilxx_base::Json{
+            {"path",  filePath                                                               },
+            {"edits",
+             utilxx_base::Json::array(
+                 {
+                     utilxx_base::Json{{"old_str", "one"}, {"new_str", "one"}},
+                     utilxx_base::Json{{"old_str", "TWO"}, {"new_str", "TWO"}},
+                 }
+             )                                                                            }
+        });
+        XX_TEST_EXPECT_TRUE(result.starts_with("success (no change)"));
+        XX_TEST_EXPECT_TRUE(result.find("#1 and #2") != std::string::npos);
+        XX_TEST_EXPECT_EQ(readAllBytes(filePath), std::string{"one\nTWO\nthree\n"});
     }
     co_return;
 }
@@ -4446,6 +4519,7 @@ asio::awaitable<TestResult>
     co_await run(test_edit_text_file_multi_segments_atomic);
     co_await run(test_edit_text_file_multi_segments_first_match);
     co_await run(test_edit_text_file_edits_invalid_args);
+    co_await run(test_edit_text_file_unchanged_segment_warns);
     co_await run(test_edit_text_file_multi_segments_sync_async_parity);
     co_await run(test_edit_segments_arg_parsing);
 

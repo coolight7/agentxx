@@ -170,12 +170,13 @@ constexpr std::string_view kEditEditsDesc
     = R"(A list of replacements applied in order, each item is `{"old_str": "...", "new_str": "..."}`.
 Every `old_str` must be non-empty and match the file content exactly (including whitespace and indentation); each item replaces the first match, and item N is matched against the content produced by items 1..N-1, so a later item may target text written by an earlier one.
 All items must match: when any item does not match, nothing is written and the error names that item.
+An item whose `old_str` equals `new_str` changes nothing: it is skipped with a warning in the result (not an error) while the other items are still applied.
 Pass this instead of `old_str`/`new_str` to change several places in one file; do not pass both forms in one call.)";
 constexpr std::string_view kEditOldStrDesc
     = R"(Single-replacement shorthand of `edits`: the exact string to find and replace (the first match is replaced). Must be non-empty and match precisely (including whitespace and indentation).
 Note! The replacement is done only when `edits` is not given.)";
 constexpr std::string_view kEditNewStrDesc
-    = "Single-replacement shorthand of `edits`: the replacement string.";
+    = R"(Single-replacement shorthand of `edits`: the replacement string (an equal `old_str` only produces a warning: nothing is changed).)";
 
 constexpr int32_t kAutoSummary = AGENTXX_PLUGIN_TOOL_FLAG_AUTO_SUMMARY;
 
