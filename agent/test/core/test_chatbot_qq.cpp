@@ -125,7 +125,8 @@ TestResult testChatbotQq() {
         XX_TEST_EXPECT_EQ(out.senderName, std::string{"寒光"});
         XX_TEST_EXPECT_EQ(out.senderRole, std::string{"owner"});
         XX_TEST_EXPECT_EQ(out.senderId, std::string{"BFD86A0EA982C29C0ACC9F1F0EA38E00"});
-        XX_TEST_EXPECT_TRUE(out.mentionedMe);
+        XX_TEST_EXPECT_TRUE(out.mentionedMe());
+        XX_TEST_EXPECT_EQ(out.mentionSelf, MentionSelfSource::EventType);
         XX_TEST_EXPECT_FALSE(out.fromFullMode);
         XX_TEST_EXPECT_TRUE(out.platformMessageId.rfind("ROBOT1.0_", 0) == 0);
         XX_TEST_EXPECT_TRUE(out.timestampMs > 0);
@@ -166,7 +167,7 @@ TestResult testChatbotQq() {
         XX_TEST_EXPECT_TRUE(out.attachments.empty());
         XX_TEST_EXPECT_TRUE(out.quotedText.empty());
         // @ 判定只看事件类型
-        XX_TEST_EXPECT_TRUE(out.mentionedMe);
+        XX_TEST_EXPECT_TRUE(out.mentionedMe());
     }
 
     // ===================== 3. 全量消息事件: 不算 @ =====================
@@ -174,7 +175,7 @@ TestResult testChatbotQq() {
         InboundEvent out;
         const auto   data = Json::parse(kRealPlainGroupEvent);
         XX_TEST_EXPECT_TRUE(normalizeQqEvent("GROUP_MESSAGE_CREATE", data, out));
-        XX_TEST_EXPECT_FALSE(out.mentionedMe);
+        XX_TEST_EXPECT_FALSE(out.mentionedMe());
         XX_TEST_EXPECT_TRUE(out.fromFullMode);
     }
 
@@ -284,7 +285,7 @@ TestResult testChatbotQq() {
         XX_TEST_EXPECT_TRUE(normalizeQqEvent("C2C_MESSAGE_CREATE", data, out));
         XX_TEST_EXPECT_EQ(out.type, ChatType::Private);
         XX_TEST_EXPECT_EQ(out.chatId, std::string{"PRIVATE-1"});
-        XX_TEST_EXPECT_TRUE(out.mentionedMe);
+        XX_TEST_EXPECT_TRUE(out.mentionedMe());
     }
 
     // ===================== 9. 该丢的事件 =====================
@@ -376,13 +377,13 @@ TestResult testChatbotQq() {
         XX_TEST_EXPECT_EQ(qqFileNameOfUrl(""), std::string{"attachment"});
     }
 
-    // ===================== 12. 全量消息: mentions 里有 bot=true 算 @ 了我 =====================
-    // 全量模式下事件名不带 @ 语义, 只能看 `mentions[]` 与正文标记。
-    // 官方文档: 正文把 @ 写成 `<@成员openid>`, 机器人自己那项 `bot` 为 true。
+    // ===================== 12. 全量消息: `bot:true` 不等于“@ 了我” =====================
+    // 群里可能还有别的机器人 (元宝之类), @ 它的时候平台同样报 `bot: true`。
+    // 以前就是拿 `bot: true` 当依据, 结果“@ 别人”全被当成“@ 我”, 模型抢着回。
     {
         const auto data = Json::parse(R"JSON({
           "author": {"bot": false, "id": "U-9", "username": "小刘"},
-          "content": "<@BOT-OPENID> 在吗",
+          "content": "<@U-9> 在吗",
           "group_openid": "G-OPENID",
           "id": "ROBOT1.0_full_at",
           "timestamp": "2026-10-29T10:00:00+08:00",
@@ -390,14 +391,101 @@ TestResult testChatbotQq() {
             {"bot": true, "id": "BOT-OPENID", "username": "小助手"}
           ]
         })JSON");
+        // 身份表空: 认不出是自己, 就不算 (旧行为会把这条当成 @ 了我)
+        InboundEvent blind;
+        XX_TEST_EXPECT_TRUE(normalizeQqEvent("GROUP_MESSAGE_CREATE", data, blind));
+        XX_TEST_EXPECT_TRUE(blind.fromFullMode);
+        XX_TEST_EXPECT_FALSE(blind.mentionedMe());
+        XX_TEST_EXPECT_EQ(blind.mentionSelf, MentionSelfSource::None);
+        // 不是自己这个机器人, 但项信息要完整留在 mentionBots 里 (模型要知道这条在 @ 谁)
+        XX_TEST_EXPECT_EQ(blind.mentionBots.size(), size_t{1});
+        XX_TEST_EXPECT_TRUE(blind.mentionOthers.empty());
+
+        // 知道自己 openid 时才算 @ 了我
+        QqSelfIdentity self;
+        XX_TEST_EXPECT_TRUE(self.add("BOT-OPENID"));
         InboundEvent out;
-        XX_TEST_EXPECT_TRUE(normalizeQqEvent("GROUP_MESSAGE_CREATE", data, out));
-        XX_TEST_EXPECT_TRUE(out.fromFullMode);
-        XX_TEST_EXPECT_TRUE(out.mentionedMe);
+        XX_TEST_EXPECT_TRUE(normalizeQqEvent("GROUP_MESSAGE_CREATE", data, out, &self));
+        XX_TEST_EXPECT_TRUE(out.mentionedMe());
+        XX_TEST_EXPECT_EQ(out.mentionSelf, MentionSelfSource::Openid);
         XX_TEST_EXPECT_EQ(out.mentionIds.size(), size_t{1});
-        // 正文里的 openid 换成昵称, 免得模型念出一串 id
-        XX_TEST_EXPECT_EQ(out.text, std::string{"@小助手 在吗"});
+        XX_TEST_EXPECT_TRUE(out.mentionOthers.empty());
+        XX_TEST_EXPECT_TRUE(out.mentionBots.empty());
         XX_TEST_EXPECT_FALSE(out.mentionAll);
+    }
+
+    // ===================== 12b. 全量消息: @ 的是别的机器人 → 不算, 但要标出来 =====================
+    {
+        const auto data = Json::parse(R"JSON({
+          "author": {"bot": false, "id": "U-20", "username": "小刘"},
+          "content": "<@BOT-OTHER>你看下",
+          "group_openid": "G-OPENID",
+          "id": "ROBOT1.0_full_otherbot",
+          "timestamp": "2026-10-29T10:00:00+08:00",
+          "mentions": [
+            {"bot": true, "id": "BOT-OTHER", "username": "小亮"}
+          ]
+        })JSON");
+        QqSelfIdentity self;
+        XX_TEST_EXPECT_TRUE(self.add("BOT-OPENID"));
+        self.username = "小助手";
+        InboundEvent out;
+        XX_TEST_EXPECT_TRUE(normalizeQqEvent("GROUP_MESSAGE_CREATE", data, out, &self));
+        XX_TEST_EXPECT_FALSE(out.mentionedMe());
+        XX_TEST_EXPECT_EQ(out.mentionBots.size(), size_t{1});
+        if (out.mentionBots.size() == 1) {
+            XX_TEST_EXPECT_EQ(out.mentionBots.front(), std::string{"小亮"});
+        }
+        XX_TEST_EXPECT_TRUE(out.mentionOthers.empty());
+        // 正文里的 openid 换成昵称
+        XX_TEST_EXPECT_EQ(out.text, std::string{"@小亮你看下"});
+    }
+
+    // ===================== 12c. 全量消息: 自身 openid 未知时靠机器人昵称认 =====================
+    {
+        const auto data = Json::parse(R"JSON({
+          "author": {"bot": false, "id": "U-21", "username": "小刘"},
+          "content": "<@BOT-ME-IN-GROUP> 在吗",
+          "group_openid": "G-OPENID",
+          "id": "ROBOT1.0_full_nick",
+          "timestamp": "2026-10-29T10:00:00+08:00",
+          "mentions": [
+            {"bot": true, "id": "BOT-ME-IN-GROUP", "username": "小助手"}
+          ]
+        })JSON");
+        QqSelfIdentity self;
+        self.username = "小助手";
+        InboundEvent out;
+        XX_TEST_EXPECT_TRUE(normalizeQqEvent("GROUP_MESSAGE_CREATE", data, out, &self));
+        XX_TEST_EXPECT_TRUE(out.mentionedMe());
+        XX_TEST_EXPECT_EQ(out.mentionSelf, MentionSelfSource::Nickname);
+        // 昵称命中时把这个群里的 openid 学进来, 下次就是精确判定
+        XX_TEST_EXPECT_EQ(self.openids.size(), size_t{1});
+        XX_TEST_EXPECT_EQ(self.groupOpenids.size(), size_t{1});
+        XX_TEST_EXPECT_EQ(self.groupOpenidOf("G-OPENID"), std::string{"BOT-ME-IN-GROUP"});
+    }
+
+    // ===================== 12d. 同名的人类成员不能把自己的 id 学进身份表 =====================
+    {
+        const auto data = Json::parse(R"JSON({
+          "author": {"bot": false, "id": "U-22", "username": "小刘"},
+          "content": "<@U-HUMAN> 小助手你看",
+          "group_openid": "G-OPENID2",
+          "id": "ROBOT1.0_full_same_name",
+          "timestamp": "2026-10-29T10:00:00+08:00",
+          "mentions": [
+            {"bot": false, "id": "U-HUMAN", "username": "小助手"}
+          ]
+        })JSON");
+        QqSelfIdentity self;
+        self.username = "小助手";
+        InboundEvent out;
+        XX_TEST_EXPECT_TRUE(normalizeQqEvent("GROUP_MESSAGE_CREATE", data, out, &self));
+        // 昵称一样就按“可能是我”处理 (宁可多回一次, 也别漏掉真的 @)
+        XX_TEST_EXPECT_EQ(out.mentionSelf, MentionSelfSource::Nickname);
+        // 但 openid 不学: 它不是机器人 (否则以后 @ 这个人类成员都会被当成 @ 我)
+        XX_TEST_EXPECT_TRUE(self.groupOpenids.empty());
+        XX_TEST_EXPECT_TRUE(self.openids.empty());
     }
 
     // ===================== 13. 全量消息: 只靠正文标记 + 已知自身 openid 也要认出来 =====================
@@ -418,7 +506,8 @@ TestResult testChatbotQq() {
 
         InboundEvent out;
         XX_TEST_EXPECT_TRUE(normalizeQqEvent("GROUP_MESSAGE_CREATE", data, out, &self));
-        XX_TEST_EXPECT_TRUE(out.mentionedMe);
+        XX_TEST_EXPECT_TRUE(out.mentionedMe());
+        XX_TEST_EXPECT_EQ(out.mentionSelf, MentionSelfSource::Openid);
         // 标记被替换掉, 正文里不留 openid
         XX_TEST_EXPECT_FALSE(contains(out.text, "BOT-OPENID"));
         XX_TEST_EXPECT_TRUE(contains(out.text, "帮看下"));
@@ -426,7 +515,16 @@ TestResult testChatbotQq() {
         // 同一份事件在“不知道自己 openid”时不算 @ (这就是需要 `selfOpenid` 的原因)
         InboundEvent blind;
         XX_TEST_EXPECT_TRUE(normalizeQqEvent("GROUP_MESSAGE_CREATE", data, blind));
-        XX_TEST_EXPECT_FALSE(blind.mentionedMe);
+        XX_TEST_EXPECT_FALSE(blind.mentionedMe());
+        // 认不出昵称时正文写成 `@其他成员`, 不写含糊的“@成员”
+        XX_TEST_EXPECT_EQ(blind.text, std::string{"@其他成员 帮看下"});
+
+        // 知道自己 openid 但不知道昵称: 正文写成 `@你`, 不能写成别人
+        QqSelfIdentity nameless;
+        XX_TEST_EXPECT_TRUE(nameless.add("BOT-OPENID"));
+        InboundEvent mine;
+        XX_TEST_EXPECT_TRUE(normalizeQqEvent("GROUP_MESSAGE_CREATE", data, mine, &nameless));
+        XX_TEST_EXPECT_EQ(mine.text, std::string{"@你 帮看下"});
     }
 
     // ===================== 14. 全量消息: @全体成员 不算 @ 了我 =====================
@@ -441,8 +539,26 @@ TestResult testChatbotQq() {
         InboundEvent out;
         XX_TEST_EXPECT_TRUE(normalizeQqEvent("GROUP_MESSAGE_CREATE", data, out));
         XX_TEST_EXPECT_TRUE(out.mentionAll);
-        XX_TEST_EXPECT_FALSE(out.mentionedMe);
+        XX_TEST_EXPECT_FALSE(out.mentionedMe());
         XX_TEST_EXPECT_EQ(out.text, std::string{"@全体成员 今晚开会"});
+    }
+
+    // ===================== 14b. 全量消息: mentions 里的 all 同样不算 =====================
+    {
+        const auto data = Json::parse(R"JSON({
+          "author": {"bot": false, "id": "U-14", "username": "小周"},
+          "content": "今晚开会",
+          "group_openid": "G-OPENID",
+          "id": "ROBOT1.0_full_all2",
+          "timestamp": "2026-10-29T10:00:00+08:00",
+          "mentions": [{"bot": false, "id": "all", "username": "全体成员"}]
+        })JSON");
+        InboundEvent out;
+        XX_TEST_EXPECT_TRUE(normalizeQqEvent("GROUP_MESSAGE_CREATE", data, out));
+        XX_TEST_EXPECT_TRUE(out.mentionAll);
+        XX_TEST_EXPECT_FALSE(out.mentionedMe());
+        // `all` 不进 mentionIds (它不是一个人)
+        XX_TEST_EXPECT_TRUE(out.mentionIds.empty());
     }
 
     // ===================== 15. 全量消息: @ 的是别人 → 不算 @ 了我 =====================
@@ -459,9 +575,15 @@ TestResult testChatbotQq() {
         })JSON");
         InboundEvent out;
         XX_TEST_EXPECT_TRUE(normalizeQqEvent("GROUP_MESSAGE_CREATE", data, out));
-        XX_TEST_EXPECT_FALSE(out.mentionedMe);
+        XX_TEST_EXPECT_FALSE(out.mentionedMe());
         XX_TEST_EXPECT_EQ(out.mentionIds.size(), size_t{1});
         XX_TEST_EXPECT_EQ(out.text, std::string{"@小郑 你来看"});
+        // 被 @ 的是谁要能传给模型 (渲染成 `@别人(小郑)`)
+        XX_TEST_EXPECT_EQ(out.mentionOthers.size(), size_t{1});
+        if (out.mentionOthers.size() == 1) {
+            XX_TEST_EXPECT_EQ(out.mentionOthers.front(), std::string{"小郑"});
+        }
+        XX_TEST_EXPECT_TRUE(out.mentionBots.empty());
     }
 
     return TestResult{g_cq_passed, g_cq_failed};

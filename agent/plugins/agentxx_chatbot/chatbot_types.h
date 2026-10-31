@@ -33,6 +33,22 @@ enum class ChatMode : uint8_t {
     Off     = 2,
 };
 
+/// 「这条消息 @ 了谁」里，判定「@ 的是机器人自己」的依据
+///
+/// 值越大越可靠: 合并两份同 msgId 的事件 ([mergeSameMessage]) 时取较大的那个。
+/// 只认这三种来源 —— 「`mentions[]` 里有人 `bot: true`」**不是**依据: 群里通常还有
+/// 别的机器人 (元宝之类), @ 它的时候平台同样报 `bot: true`。
+enum class MentionSelfSource : uint8_t {
+    /// 没 @ 机器人
+    None = 0,
+    /// `mentions[]` 里的昵称等于机器人昵称 (自身 openid 还没学到时的兜底)
+    Nickname = 1,
+    /// `mentions[]` / 正文 `<@openid>` 里的 id 命中已知的自身 openid
+    Openid = 2,
+    /// 平台「@机器人」事件本身 (`GROUP_AT_MESSAGE_CREATE` / 单聊)
+    EventType = 3,
+};
+
 /// 附件大类
 /// - 主程序的多模态类型只有 image / audio / video, 普通文件不作为附件投递,
 ///   只把本地路径写进文本 (见 plan.md §11.1)
@@ -53,6 +69,7 @@ enum class PlatformState : uint8_t {
 
 const char* chatTypeName(ChatType type) noexcept;
 const char* chatModeName(ChatMode mode) noexcept;
+const char* mentionSelfSourceName(MentionSelfSource source) noexcept;
 const char* mediaKindName(MediaKind kind) noexcept;
 const char* platformStateName(PlatformState state) noexcept;
 
@@ -102,18 +119,31 @@ struct InboundEvent {
     /// 也记住这个偏移: `behavior.timezone: auto` 用它把时间点显示成用户所在地区的钟点,
     /// 服务器本身跑在哪个时区都不影响。平台没给时区 = [kUnknownTzOffset]。
     int32_t     timestampOffsetMinutes = kUnknownTzOffset;
-    /// 明确 @ 了机器人
+    /// 「@ 的是不是机器人自己」及其判定依据
     ///
-    /// - 平台给「@机器人」单独事件时由事件类型决定;
+    /// - 平台给「@机器人」单独事件时由事件类型决定 (最可靠);
     /// - 全量消息事件没有 @ 语义, 由平台层从 `mentions[]` 与正文里的 @ 标记补判
-    ///   (见 `qq_normalize.cpp` 的 `renderMentionMarkup`)。
-    bool mentionedMe = false;
+    ///   (见 `qq_normalize.cpp` 的 `collectMentions` / `renderMentionMarkup`)。
+    MentionSelfSource mentionSelf = MentionSelfSource::None;
     /// 来自「全量消息」事件 (群里每条消息都推, 不限于 @ 机器人)
     bool fromFullMode = false;
     /// @ 了全体成员 (`<@all>`)
+    ///
+    /// 只作为信息给模型看, **不算**「@ 了我」(沉默的大群会天天被 @全体成员 叫醒)。
     bool mentionAll = false;
     /// 本条消息里被 @ 的成员 id (不含 `all`; 含机器人自己时同样列出)
     std::vector<std::string> mentionIds;
+    /// 被 @ 的其他成员 (昵称; 不含机器人、不含机器人自己、不含 `all`)
+    ///
+    /// 给模型看「这条 @ 的是谁」, 免得它把「@某某」当成 @ 自己。
+    std::vector<std::string> mentionOthers;
+    /// 被 @ 的其它机器人 (昵称; 与 [mentionOthers] 不重叠, 单独一份便于诊断)
+    std::vector<std::string> mentionBots;
+
+    /// 是否明确 @ 了机器人 (等价于 `mentionSelf != MentionSelfSource::None`)
+    bool mentionedMe() const noexcept {
+        return mentionSelf != MentionSelfSource::None;
+    }
 };
 
 /// 一次出站请求 (切分之后的一条)

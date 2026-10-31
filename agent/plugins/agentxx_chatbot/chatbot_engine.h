@@ -45,6 +45,8 @@ struct HistoryItem {
     std::string senderName;
     std::string senderRole;
     std::string text;
+    /// 平台消息 id (同一条消息两种事件都推时用来在历史里找到它)
+    std::string platformMessageId;
     bool        mentionedMe = false;
     int         attachmentCount = 0;
     /// 是否真的投给了模型 (没有被路由过滤掉的标记)
@@ -78,6 +80,8 @@ struct TurnContext {
     std::string              lastPassiveMsgId;
     /// 本轮是否被 @ (兜底策略 `mention` 用)
     bool                     hadMention = false;
+    /// 本轮的唤醒原因码 (`mentioned` / `window_expired` / `buffer_full` ...)
+    std::string              wakeReason;
     /// 本轮按什么模式跑 (`mention` / `always`)
     ///
     /// 兜底策略 `mention` 不只看 `hadMention`: `always` 会话本来就不需要 @,
@@ -98,6 +102,8 @@ struct ChatCounters {
     uint64_t dropped    = 0;
     uint64_t failed     = 0;
     uint64_t woken      = 0;
+    /// 其中因为「被 @ 立刻唤醒」的次数 (always 会话里为 0)
+    uint64_t wakeMentioned = 0;
     uint64_t aggregated = 0;
     uint64_t turns      = 0;
     /// 其中来自群「全量消息」事件的条数 (平台没开「接收所有消息」时恒为 0)
@@ -264,7 +270,23 @@ private:
     void flush(const std::string& chatKey, std::string_view reason);
 
     /// 组装一次输入 JSON
-    std::string assembleInput(const std::string& chatKey, const std::vector<InboundEvent>& batch);
+    ///
+    /// - `args`:
+    ///     - [reason] 唤醒原因码 (写进输入块, 见 [wakeReasonNote])
+    std::string assembleInput(
+        const std::string&               chatKey,
+        const std::vector<InboundEvent>& batch,
+        std::string_view                 reason
+    );
+
+    /// 把重复到达的同 msgId 事件合并进缓冲/历史
+    ///
+    /// - `return` true = 这条消息因此从「没 @ 我」变成「@ 了我」(调用方要立刻唤醒)
+    bool mergeDuplicateInto(
+        const std::string&  chatKey,
+        SessionState&       state,
+        const InboundEvent& event
+    );
 
     /// 处理关键词命令; 返回 true = 已被命令消费 (不进模型)
     bool handleCommand(

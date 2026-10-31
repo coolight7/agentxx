@@ -190,6 +190,10 @@ struct InputMessageView {
     /// `owner` / `admin` / `member` / 空
     std::string senderRole;
     bool        mentionedMe = false;
+    /// 被 @ 的其他成员昵称 (渲染成 `@别人(名字)`)
+    std::vector<std::string> mentionedOthers;
+    /// 被 @ 的其它机器人昵称 (渲染成 `@别的机器人(名字)`)
+    std::vector<std::string> mentionedBots;
     bool        hasQuote    = false;
     std::string quotedSender;
     std::string text;
@@ -214,12 +218,46 @@ struct InputBlockOptions {
     /// 由调度层填: 写清当前时间与消息前的 `[MM-DD HH:MM]` 用的是哪个时区,
     /// 模型才不会把消息时间当成别的时区的钟点去推断"现在"。
     std::string currentTimeNote;
+    /// 本轮唤醒原因一行 (空 = 不渲染)
+    ///
+    /// 由 [wakeReasonNote] 生成: 模型据此知道这一轮是因为被 @、还是 always 窗口到期、
+    /// 还是缓冲攒满才开始, 而不是一概把最后一句话当问题回答。
+    std::string wakeReason;
 };
 
 /// 渲染一次会话输入 (模型看到的那段文本)
 std::string renderInputBlock(
     const InputBlockOptions&          opt,
     const std::vector<InputMessageView>& messages
+);
+
+/* ==================== 重复事件合并 / 唤醒原因 ==================== */
+
+/// 把同一 msgId 的第二份事件合并进已进缓冲的那条
+///
+/// 平台在全量模式下会把「@ 了我」的消息按「全量消息」与「@机器人」两个事件各推一次,
+/// 两份携带的信息不一样 (一份有正文/附件, 另一份一定带 @ 语义)。直接把后到的那份丢掉,
+/// 就会出现「该唤醒的没唤醒」; 所以这里只补空、不覆盖已有内容, @ 判定取更可靠的来源。
+///
+/// - `args`:
+///     - [target] 已在缓冲里的那条 (就地修改)
+///     - [incoming] 后到的同 msgId 事件
+///
+/// - `return` true = 这条消息本次从「没 @ 我」变成了「@ 了我」(调用方据此立刻唤醒)
+bool mergeSameMessage(InboundEvent& target, const InboundEvent& incoming);
+
+/// 组输入块里的「本轮唤醒原因」一行
+///
+/// - `args`:
+///     - [reasonCode] 调度层的唤醒原因码 (`mentioned` / `window_expired` / `buffer_full` ...)
+///     - [batchSize] 本轮一共带几条消息
+///     - [mentionIndexes] 本轮里 @ 了机器人的消息编号 (`[#n]` 的 n)
+///
+/// - `return` 一句话 (不含换行); 永远非空
+std::string wakeReasonNote(
+    std::string_view      reasonCode,
+    size_t                batchSize,
+    const std::vector<int>& mentionIndexes
 );
 
 /* ==================== 引用编号 ==================== */

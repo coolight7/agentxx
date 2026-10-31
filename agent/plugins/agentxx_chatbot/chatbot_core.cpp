@@ -31,6 +31,41 @@ std::string rtrimCopy(std::string_view text) {
     return std::string{text.substr(0, end)};
 }
 
+/// 昵称列表拼成 `小郑、小刘` (最多 4 个, 再多用“等”收尾)
+///
+/// 名字来自平台, 长度不受控; 输入块里这一行不能因此变长。
+std::string joinNames(const std::vector<std::string>& names) {
+    std::string out;
+    size_t      used = 0;
+    for (const auto& one : names) {
+        if (one.empty()) {
+            continue;
+        }
+        if (used == 4) {
+            out += "等";
+            break;
+        }
+        if (!out.empty()) {
+            out += "、";
+        }
+        out += one;
+        ++used;
+    }
+    return out;
+}
+
+/// 往列表里追加不重复项 (保持原顺序)
+void appendUnique(std::vector<std::string>& target, const std::vector<std::string>& extra) {
+    for (const auto& one : extra) {
+        if (one.empty()) {
+            continue;
+        }
+        if (std::find(target.begin(), target.end(), one) == target.end()) {
+            target.push_back(one);
+        }
+    }
+}
+
 /// 围栏代码块的分隔行 (``` 或 ~~~ 开头的行)
 bool isFenceDelimiter(std::string_view line) noexcept {
     size_t i = 0;
@@ -737,14 +772,34 @@ std::string renderInputBlock(
         out += opt.currentTimeNote;
         out.push_back('\n');
     }
+    // 唤醒原因放在消息前面: 模型先知道“这轮为什么开始”, 再读消息内容
+    if (!opt.wakeReason.empty()) {
+        out += "本轮唤醒原因: " + opt.wakeReason;
+        out.push_back('\n');
+    }
     for (const auto& msg : messages) {
         const std::string sender = displayNameOf(msg.senderName, std::string{}, 64);
         std::string       line   = "[#" + std::to_string(msg.index) + "] " + sender;
         if (!msg.senderRole.empty()) {
             line += "(" + msg.senderRole + ")";
         }
+        // 「这条 @ 了谁」写在发送者后面: 模型不必从正文里的 `@名字` 去猜是不是自己
         if (msg.mentionedMe) {
             line += " @机器人";
+        }
+        if (!msg.mentionedOthers.empty()) {
+            line += " @别人";
+            const std::string names = joinNames(msg.mentionedOthers);
+            if (!names.empty()) {
+                line += "(" + names + ")";
+            }
+        }
+        if (!msg.mentionedBots.empty()) {
+            line += " @别的机器人";
+            const std::string names = joinNames(msg.mentionedBots);
+            if (!names.empty()) {
+                line += "(" + names + ")";
+            }
         }
         if (msg.hasQuote) {
             line += " (引用了 " + displayNameOf(msg.quotedSender, std::string{}, 64) + " 的消息)";
@@ -778,6 +833,96 @@ std::string renderInputBlock(
         }
     }
     return rtrimCopy(out);
+}
+
+/* ==================== 重复事件合并 / 唤醒原因 ==================== */
+
+bool mergeSameMessage(InboundEvent& target, const InboundEvent& incoming) {
+    const bool wasMentioned = target.mentionedMe();
+    // @ 判定取更可靠的来源: 事件类型 > 命中自身 openid > 命中自身昵称
+    if (static_cast<uint8_t>(incoming.mentionSelf)
+        > static_cast<uint8_t>(target.mentionSelf)) {
+        target.mentionSelf = incoming.mentionSelf;
+    }
+    target.mentionAll   = target.mentionAll || incoming.mentionAll;
+    // 同一 msgId 两种事件都来过: 后续判断只看“是不是全量消息”的地方不能因此退化
+    target.fromFullMode = target.fromFullMode || incoming.fromFullMode;
+    appendUnique(target.mentionIds, incoming.mentionIds);
+    appendUnique(target.mentionOthers, incoming.mentionOthers);
+    appendUnique(target.mentionBots, incoming.mentionBots);
+    // 其余字段只补空, 不覆盖: 先到的那份一般带正文与附件
+    if (target.text.empty()) {
+        target.text = incoming.text;
+    }
+    if (target.quotedText.empty()) {
+        target.quotedText   = incoming.quotedText;
+        target.quotedSender = incoming.quotedSender;
+    }
+    if (target.replyRef.empty()) {
+        target.replyRef = incoming.replyRef;
+    }
+    if (target.timestampMs <= 0) {
+        target.timestampMs            = incoming.timestampMs;
+        target.timestampOffsetMinutes = incoming.timestampOffsetMinutes;
+    }
+    if (target.chatName.empty()) {
+        target.chatName = incoming.chatName;
+    }
+    if (target.senderName.empty()) {
+        target.senderName = incoming.senderName;
+    }
+    if (target.senderRole.empty()) {
+        target.senderRole = incoming.senderRole;
+    }
+    if (target.attachments.empty() && !incoming.attachments.empty()) {
+        target.attachments = incoming.attachments;
+    }
+    return !wasMentioned && target.mentionedMe();
+}
+
+std::string wakeReasonNote(
+    std::string_view        reasonCode,
+    size_t                  batchSize,
+    const std::vector<int>& mentionIndexes
+) {
+    std::string mentionList;
+    for (size_t i = 0; i < mentionIndexes.size() && i < 4; ++i) {
+        if (!mentionList.empty()) {
+            mentionList += "、";
+        }
+        mentionList += "[#" + std::to_string(mentionIndexes[i]) + "]";
+    }
+    if (mentionIndexes.size() > 4) {
+        mentionList += "等";
+    }
+    const std::string count = std::to_string(batchSize);
+    std::string       out;
+    if (reasonCode == "mentioned") {
+        out = "有人 @ 了你";
+        if (!mentionList.empty()) {
+            out += " (" + mentionList + ")";
+        }
+        out += ", 这一轮是给你看的";
+        if (batchSize > 1) {
+            out += "; 其余 " + std::to_string(batchSize - 1) + " 条是同一时间段的上下文";
+        }
+        return out;
+    }
+    if (reasonCode == "window_expired" || reasonCode == "always_immediate") {
+        out = "这个会话是 always 模式 (新消息都投), 这次带来 " + count + " 条";
+    } else if (reasonCode == "buffer_full") {
+        out = "缓冲攒到上限, 先投 " + count + " 条";
+    } else if (reasonCode == "channel_ready") {
+        out = "会话通道刚就绪, 补投积压的 " + count + " 条";
+    } else if (reasonCode == "turn_end") {
+        out = "上一轮结束, 继续投积压的 " + count + " 条";
+    } else {
+        out = "本次投递 " + count + " 条消息";
+    }
+    if (!mentionList.empty()) {
+        out += "; 其中 " + mentionList + " @ 了你";
+    }
+    return out;
 }
 
 /* ==================== 引用编号 ==================== */

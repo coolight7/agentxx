@@ -593,6 +593,8 @@ const char* kDebugInjectSchema = R"JSON({
     "sender": {"type": "string", "description": "可选: 说话人名称"},
     "text": {"type": "string", "description": "消息正文"},
     "mentionedMe": {"type": "boolean", "description": "是否 @ 了机器人"},
+    "mentionOthers": {"type": "array", "items": {"type": "string"}, "description": "可选: 这条消息 @ 的其他人昵称 (渲染成 @别人(…))"},
+    "mentionBots": {"type": "array", "items": {"type": "string"}, "description": "可选: 这条消息 @ 的其它机器人昵称 (渲染成 @别的机器人(…))"},
     "msgId": {"type": "string", "description": "可选: 平台消息 id (去重用)"}
   },
   "required": ["account", "chatId", "text"]
@@ -835,6 +837,25 @@ constexpr std::string_view kSilencePromptSection
       "并且让正文只有一个 [静默] 标记 (不要写「保持安静」「收到, 不回复」这类说明, "
       "没被调用的正文可能被插件兜底当成回复发出去)。";
 
+/// 输入格式说明 (作为独立的提示词段追加)
+///
+/// 为什么要有这一段: 每轮输入是拼好的文本, 模型只能从行内标记判断“这条是不是在叫我”。
+/// 标记没解释时, 群里的「@某某」容易被当成叫自己 —— 表现为“@ 别人也抢着回”。
+/// 所以把标记的含义写进系统提示词 (每轮都靠模型自己推是不稳的)。
+/// 用户想改文案时, 在 `prompt.append` 里用同名键 `chatbot-input-guide` 覆盖即可。
+constexpr std::string_view kInputGuideSection
+    = "每轮输入是一段聊天记录, 每条一行, 格式:\n"
+      "[#n] 发送者(角色) 被@的人: [时间] 正文\n"
+      "「被@的人」只有下面几种写法, 判断谁被 @ 了以它为准:\n"
+      "- 「@机器人」: 这条消息 @ 了你, 只有这种确定在叫你;\n"
+      "- 「@别人(名字)」/「@别的机器人(名字)」: 这条 @ 的是群里的其他人 / 其他机器人,\n"
+      "  不是叫你; 内容里明明在问别人时不要抢话;\n"
+      "- 正文里的「@名字」只是原文里出现的 @ (平台的真 @ 已换成昵称),\n"
+      "  「@其他成员」是平台没给昵称的人;\n"
+      "- 「@全体成员」: @ 所有人(也包含你), 但它多数时候只是通知, 确实需要你出力再回。\n"
+      "「本轮唤醒原因」那一行说明这轮为什么开始: 被 @、always 模式的静默窗口到期、\n"
+      "还是缓冲攒满; 不是被 @ 叫起来的轮次别急着接话, 决定不说就按静默约定只写 [静默]。";
+
 /// 人设 → `mountRoot` 的 `config_json`
 ///
 /// - `args`:
@@ -850,7 +871,9 @@ Json personaRootConfig(const ac::PersonaConfig& persona, std::string_view fallba
     }
     {
         Json append = Json::object();
-        // 先放插件自己的静默约定, 再放用户段: 同名键被用户覆盖
+        // 先放插件自己的约定, 再放用户段: 同名键被用户覆盖
+        // (输入格式说明与兜底策略无关, 任何配置下都要给: 模型靠它判断“是不是叫我”)
+        append["chatbot-input-guide"] = kInputGuideSection;
         if (fallbackReply != "never") {
             append["chatbot-silence"] = kSilencePromptSection;
         }

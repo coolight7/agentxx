@@ -82,7 +82,7 @@ void FakePlatform::injectText(
     event.senderName = std::move(senderName);
     event.senderRole = "member";
     event.text      = std::move(text);
-    event.mentionedMe = mentionedMe;
+    event.mentionSelf  = mentionedMe ? MentionSelfSource::EventType : MentionSelfSource::None;
     event.fromFullMode = !mentionedMe;
     // 假平台没有平台的时区信息: 没给时间就用本机时钟, 时区未知 (显示时按配置兜底)
     event.timestampMs            = timestampMs > 0 ? timestampMs : systemNowMs();

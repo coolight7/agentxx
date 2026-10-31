@@ -453,6 +453,25 @@ void testInputBlock() {
         two.attachments.push_back(attachment);
         messages.push_back(two);
     }
+    {
+        // @ 别人 / @ 别的机器人: 必须与 @机器人 区别开, 否则模型会抢着回
+        InputMessageView three;
+        three.index      = 3;
+        three.senderName = "小秦";
+        three.senderRole = "member";
+        three.mentionedOthers = {"小郑", "小刘"};
+        three.text       = "@小郑 你来看";
+        messages.push_back(three);
+    }
+    {
+        InputMessageView four;
+        four.index           = 4;
+        four.senderName      = "小许";
+        four.senderRole      = "member";
+        four.mentionedBots   = {"元宝"};
+        four.text            = "@元宝 你怎么看";
+        messages.push_back(four);
+    }
 
     const auto block = renderInputBlock(opt, messages);
     XX_TEST_EXPECT_TRUE(contains(block, "QQ群「后端讨论组」"));
@@ -461,6 +480,23 @@ void testInputBlock() {
     XX_TEST_EXPECT_TRUE(contains(block, "[#2] 小红(member) @机器人"));
     XX_TEST_EXPECT_TRUE(contains(block, "引用了 小明 的消息"));
     XX_TEST_EXPECT_TRUE(contains(block, "[#2:附件] photo.png (本地: C:/tmp/photo.png)"));
+    XX_TEST_EXPECT_TRUE(contains(block, "[#3] 小秦(member) @别人(小郑、小刘):"));
+    XX_TEST_EXPECT_TRUE(contains(block, "[#4] 小许(member) @别的机器人(元宝):"));
+    // 没被 @ 的消息不能带「@机器人」标记
+    XX_TEST_EXPECT_FALSE(contains(block, "[#3] 小秦(member) @机器人"));
+
+    // 唤醒原因: 写在消息之前, 模型先知道“这轮为什么开始”
+    {
+        InputBlockOptions withWake = opt;
+        withWake.wakeReason        = wakeReasonNote("mentioned", 2, {2});
+        const auto wakeBlock       = renderInputBlock(withWake, messages);
+        XX_TEST_EXPECT_TRUE(contains(wakeBlock, "本轮唤醒原因: 有人 @ 了你 ([#2])"));
+        const size_t wakePos = wakeBlock.find("本轮唤醒原因");
+        const size_t msgPos  = wakeBlock.find("[#1] 小明");
+        XX_TEST_EXPECT_TRUE(wakePos != std::string::npos);
+        XX_TEST_EXPECT_TRUE(msgPos != std::string::npos);
+        XX_TEST_EXPECT_TRUE(wakePos < msgPos);
+    }
 
     // 私聊形态
     InputBlockOptions privateOpt;
@@ -518,6 +554,110 @@ void testInputBlock() {
         XX_TEST_EXPECT_TRUE(fileLineAt < beginAt);
         XX_TEST_EXPECT_TRUE(beginAt < bodyAt);
         XX_TEST_EXPECT_TRUE(bodyAt < endAt);
+    }
+}
+
+/* ==================== 重复事件合并 ==================== */
+
+void testMergeSameMessage() {
+    // 全量消息先到 (有正文与附件, 但没有 @ 语义), @机器人 事件后到
+    {
+        InboundEvent target;
+        target.platformMessageId = "M1";
+        target.text              = "帮看下这个报错";
+        target.mentionSelf       = MentionSelfSource::None;
+        target.fromFullMode      = true;
+        target.timestampMs       = 1000;
+        MediaRef file;
+        file.fileName = "log.txt";
+        target.attachments.push_back(file);
+
+        InboundEvent incoming;
+        incoming.platformMessageId = "M1";
+        incoming.mentionSelf       = MentionSelfSource::EventType;
+        incoming.fromFullMode      = false;
+
+        const bool upgraded = mergeSameMessage(target, incoming);
+        XX_TEST_EXPECT_TRUE(upgraded);
+        XX_TEST_EXPECT_TRUE(target.mentionedMe());
+        XX_TEST_EXPECT_EQ(target.mentionSelf, MentionSelfSource::EventType);
+        // 先到的那份的正文/附件/时间不能被顶掉
+        XX_TEST_EXPECT_EQ(target.text, std::string{"帮看下这个报错"});
+        XX_TEST_EXPECT_EQ(target.attachments.size(), size_t{1});
+        XX_TEST_EXPECT_EQ(target.timestampMs, int64_t{1000});
+        // “全量消息”标记取并集: 后续别的判断不能因此退化
+        XX_TEST_EXPECT_TRUE(target.fromFullMode);
+        // 已经是 @ 我了, 再合并一份不会重复唤醒
+        XX_TEST_EXPECT_FALSE(mergeSameMessage(target, incoming));
+    }
+
+    // 反过来: 先到的那份已经 @ 了我, 后到的全量副本只补正文
+    {
+        InboundEvent target;
+        target.platformMessageId = "M2";
+        target.mentionSelf       = MentionSelfSource::Openid;
+        InboundEvent incoming;
+        incoming.platformMessageId = "M2";
+        incoming.text              = "在吗";
+        incoming.mentionSelf       = MentionSelfSource::None;
+        incoming.mentionOthers     = {"小郑"};
+        XX_TEST_EXPECT_FALSE(mergeSameMessage(target, incoming));
+        XX_TEST_EXPECT_TRUE(target.mentionedMe());
+        // @ 判定不被掠过的弱依据降级
+        XX_TEST_EXPECT_EQ(target.mentionSelf, MentionSelfSource::Openid);
+        XX_TEST_EXPECT_EQ(target.text, std::string{"在吗"});
+        XX_TEST_EXPECT_EQ(target.mentionOthers.size(), size_t{1});
+    }
+
+    // 两份都带 @ 信息: 取更可靠的那个, 列表去重
+    {
+        InboundEvent target;
+        target.platformMessageId = "M3";
+        target.mentionSelf       = MentionSelfSource::Nickname;
+        target.mentionOthers     = {"小郑"};
+        target.mentionIds        = {"U-1"};
+        InboundEvent incoming;
+        incoming.platformMessageId = "M3";
+        incoming.mentionSelf       = MentionSelfSource::Openid;
+        incoming.mentionOthers     = {"小郑", "小刘"};
+        incoming.mentionIds        = {"U-1", "U-2"};
+        XX_TEST_EXPECT_FALSE(mergeSameMessage(target, incoming));
+        XX_TEST_EXPECT_EQ(target.mentionSelf, MentionSelfSource::Openid);
+        XX_TEST_EXPECT_EQ(target.mentionOthers.size(), size_t{2});
+        XX_TEST_EXPECT_EQ(target.mentionIds.size(), size_t{2});
+    }
+}
+
+/* ==================== 唤醒原因 ==================== */
+
+void testWakeReasonNote() {
+    {
+        const auto note = wakeReasonNote("mentioned", 1, {1});
+        XX_TEST_EXPECT_TRUE(note.find("有人 @ 了你") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(note.find("[#1]") != std::string::npos);
+    }
+    {
+        // 被 @ 的那条只是批次里的一条: 要说清“其余是上下文”
+        const auto note = wakeReasonNote("mentioned", 3, {2});
+        XX_TEST_EXPECT_TRUE(note.find("[#2]") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(note.find("其余 2 条") != std::string::npos);
+    }
+    {
+        const auto note = wakeReasonNote("window_expired", 4, {});
+        XX_TEST_EXPECT_TRUE(note.find("always") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(note.find("4 条") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(note.find("@ 了你") == std::string::npos);
+    }
+    {
+        // 批次里夹着一条 @ 我 的消息: always 窗口也要点名
+        const auto note = wakeReasonNote("buffer_full", 5, {3});
+        XX_TEST_EXPECT_TRUE(note.find("缓冲") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(note.find("其中 [#3] @ 了你") != std::string::npos);
+    }
+    {
+        // 未知原因码也不能产出空行
+        const auto note = wakeReasonNote("whatever", 2, {});
+        XX_TEST_EXPECT_FALSE(note.empty());
     }
 }
 
@@ -1691,6 +1831,8 @@ TestResult testChatbotCore() {
     testCommand();
     testTemplate();
     testInputBlock();
+    testMergeSameMessage();
+    testWakeReasonNote();
     testReplyTo();
     testDedupe();
     testTypes();

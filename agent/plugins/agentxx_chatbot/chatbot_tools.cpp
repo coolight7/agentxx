@@ -433,7 +433,26 @@ std::string toolDebugInject(const ChatbotToolDeps& deps, std::string_view argsJs
     event.senderRole        = stringArg(args, "role", "member");
     event.text              = stringArg(args, "text");
     event.platformMessageId = stringArg(args, "msgId");
-    event.mentionedMe       = boolArg(args, "mentionedMe", false);
+    // 调试注入没有平台事件名可言: 显式声明“@ 了我”就按事件类型那一档记录
+    event.mentionSelf       = boolArg(args, "mentionedMe", false) ? MentionSelfSource::EventType
+                                                                  : MentionSelfSource::None;
+    for (const char* key : {"mentionOthers", "mentionBots"}) {
+        if (!args.contains(key) || !args[key].is_array()) {
+            continue;
+        }
+        for (const auto& one : args[key]) {
+            if (!one.is_string()) {
+                continue;
+            }
+            const std::string name = one.get<std::string>();
+            if (name.empty()) {
+                continue;
+            }
+            (std::string_view{key} == "mentionOthers" ? event.mentionOthers
+                                                       : event.mentionBots)
+                .push_back(name);
+        }
+    }
     event.timestampMs       = intArg(args, "timestampMs", 0);
     event.quotedText        = stringArg(args, "quotedText");
     event.quotedSender      = stringArg(args, "quotedSender");

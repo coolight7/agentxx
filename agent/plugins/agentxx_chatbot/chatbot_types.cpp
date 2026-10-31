@@ -41,6 +41,20 @@ const char* chatModeName(ChatMode mode) noexcept {
     return "mention";
 }
 
+const char* mentionSelfSourceName(MentionSelfSource source) noexcept {
+    switch (source) {
+        case MentionSelfSource::None:
+            return "none";
+        case MentionSelfSource::Nickname:
+            return "nickname";
+        case MentionSelfSource::Openid:
+            return "openid";
+        case MentionSelfSource::EventType:
+            return "event";
+    }
+    return "none";
+}
+
 const char* mediaKindName(MediaKind kind) noexcept {
     switch (kind) {
         case MediaKind::Image:

@@ -58,12 +58,13 @@ private:
 
     /// 一条网关事件 → 归一化; 解析失败返回 false
     ///
-    /// 真正的字段解析在 `qq_normalize.cpp` (纯函数, 不碰网络, 便于用真实事件做回归)
+    /// 真正的字段解析在 `qq_normalize.cpp` (纯函数, 不碰网络, 便于用真实事件做回归);
+    /// 本方法负责提供/写回自己的身份表并统计 @ 判定依据 (因此不是 const)
     bool normalize(
         std::string_view           eventName,
         const utilxx_base::Json&   data,
         InboundEvent&              out
-    ) const;
+    );
 
     /// 按事件名计数 (判断平台到底有没有推“非 @ 消息”)
     void noteDispatchEvent(std::string_view eventName);
@@ -94,6 +95,16 @@ private:
     uint64_t               c2cMessageCount_ = 0;
     /// 机器人自己的身份 (全量消息里判定“@ 的是不是我”; 随 READY / 回声逐步攒)
     QqSelfIdentity         selfIdentity_;
+    /// @ 判定依据的计数器 (排查“@ 别人却回了一句”用)
+    ///
+    /// - `mentionByEventType_`: 平台直接给了「@机器人」事件
+    /// - `mentionByOpenid_`: `mentions[]` / 正文标记命中已知自身 openid
+    /// - `mentionByNickname_`: 比不到 openid, 但 `mentions[]` 里的昵称就是机器人昵称
+    /// - `mentionSelfUnknown_`: 全量消息里 @ 了机器人但还没法认出来 (身份表空)
+    uint64_t               mentionByEventType_  = 0;
+    uint64_t               mentionByOpenid_     = 0;
+    uint64_t               mentionByNickname_   = 0;
+    uint64_t               mentionSelfUnknown_ = 0;
     bool                   stopped_ = false;
 };
 

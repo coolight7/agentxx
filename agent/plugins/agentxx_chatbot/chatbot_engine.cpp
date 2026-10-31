@@ -331,7 +331,8 @@ void ChatbotEngine::appendHistory(const std::string& chatKey, const InboundEvent
     item.senderName             = displayNameOf(event.senderName, event.senderId, 64);
     item.senderRole             = event.senderRole;
     item.text                   = event.text;
-    item.mentionedMe            = event.mentionedMe;
+    item.platformMessageId      = event.platformMessageId;
+    item.mentionedMe            = event.mentionedMe();
     item.attachmentCount        = static_cast<int>(event.attachments.size());
     item.delivered              = false;
     state.history.push_back(std::move(item));
@@ -342,6 +343,47 @@ void ChatbotEngine::appendHistory(const std::string& chatKey, const InboundEvent
     if (keep == 0) {
         state.history.clear();
     }
+}
+
+bool ChatbotEngine::mergeDuplicateInto(
+    const std::string&  chatKeyText,
+    SessionState&       state,
+    const InboundEvent& event
+) {
+    bool upgraded = false;
+    // 1) 还在缓冲里: 合并 (补空 + @ 取更可靠的来源)
+    for (auto it = state.items.rbegin(); it != state.items.rend(); ++it) {
+        if (it->platformMessageId != event.platformMessageId) {
+            continue;
+        }
+        const size_t beforeChars = utf8CodePointCount(it->text);
+        upgraded                 = mergeSameMessage(*it, event);
+        const size_t afterChars  = utf8CodePointCount(it->text);
+        if (afterChars > beforeChars) {
+            state.chars += afterChars - beforeChars;
+        }
+        break;
+    }
+    // 2) 历史里那条也补一下 (`chatbot_history` 看到的是它)
+    for (auto it = state.history.rbegin(); it != state.history.rend(); ++it) {
+        if (it->platformMessageId != event.platformMessageId) {
+            continue;
+        }
+        it->mentionedMe = it->mentionedMe || event.mentionedMe();
+        if (it->text.empty()) {
+            it->text = event.text;
+        }
+        break;
+    }
+    XX_LOGD(
+        "[{}] 重复消息已合并 (会话 '{}', msgId={}, @判定={}, 立刻唤醒={})",
+        kLogTag,
+        chatKeyText,
+        event.platformMessageId,
+        mentionSelfSourceName(event.mentionSelf),
+        upgraded
+    );
+    return upgraded;
 }
 
 void ChatbotEngine::onInbound(const InboundEvent& rawEvent) {
@@ -383,12 +425,13 @@ void ChatbotEngine::onInbound(const InboundEvent& rawEvent) {
         if (it->second.seenOrAdd(event.platformMessageId)) {
             ++state.counters.duplicated;
             ++globalCounters_.duplicated;
-            XX_LOGD(
-                "[{}] 重复消息已忽略 (会话 '{}', msgId={})",
-                kLogTag,
-                chatKeyText,
-                event.platformMessageId
-            );
+            // 全量模式下「@ 了我」的消息会按 `GROUP_MESSAGE_CREATE` 与
+            // `GROUP_AT_MESSAGE_CREATE` 各推一次: 两份携带的信息不一样 (一份有正文与附件,
+            // 另一份一定带 @ 语义)。直接丢掉后到的那份会让「该唤醒的没唤醒」,
+            // 所以把新信息并进缓冲里那条, 若因此变成「@ 了我」就立刻唤醒。
+            if (mergeDuplicateInto(chatKeyText, state, event)) {
+                flush(chatKeyText, "mentioned");
+            }
             return;
         }
     }
@@ -461,7 +504,7 @@ void ChatbotEngine::onInbound(const InboundEvent& rawEvent) {
     if (key.type == ChatType::Private && mode == ChatMode::Mention) {
         mode = ChatMode::Always;
     }
-    const bool mentioned = state.items.back().mentionedMe;
+    const bool mentioned = state.items.back().mentionedMe();
 
     // 背压: 达到上限先投再开新窗口
     const size_t maxItems = static_cast<size_t>(std::max(1, config_.behavior.aggregateMaxItems));
@@ -508,8 +551,9 @@ void ChatbotEngine::onInbound(const InboundEvent& rawEvent) {
 /* ==================== 组装与投递 ==================== */
 
 std::string ChatbotEngine::assembleInput(
-    const std::string&                 chatKeyText,
-    const std::vector<InboundEvent>&   batch
+    const std::string&               chatKeyText,
+    const std::vector<InboundEvent>& batch,
+    std::string_view                 reason
 ) {
     const ChatKey key        = parseChatKey(chatKeyText);
     auto&         state      = stateOf(chatKeyText);
@@ -563,6 +607,8 @@ std::string ChatbotEngine::assembleInput(
     std::string lastPassiveMsgId;
     std::string lastMentionMsgId;
     bool        hadMention = false;
+    /// 本轮里 @ 了机器人的消息编号 (`[#n]` 的 n), 用来写「唤醒原因」
+    std::vector<int> mentionIndexes;
 
     int index = 0;
     for (const auto& item : ordered) {
@@ -570,7 +616,9 @@ std::string ChatbotEngine::assembleInput(
         view.index         = ++index;
         view.senderName    = displayNameOf(item.senderName, item.senderId, 64);
         view.senderRole    = item.senderRole;
-        view.mentionedMe   = item.mentionedMe;
+        view.mentionedMe   = item.mentionedMe();
+        view.mentionedOthers = item.mentionOthers;
+        view.mentionedBots   = item.mentionBots;
         view.hasQuote      = !item.quotedText.empty();
         view.quotedSender  = item.quotedSender;
         view.text          = item.text;
@@ -588,17 +636,20 @@ std::string ChatbotEngine::assembleInput(
         turnMessage.index             = view.index;
         turnMessage.platformMessageId = item.platformMessageId;
         turnMessage.replyRef          = item.replyRef;
-        turnMessage.mentionedMe       = item.mentionedMe;
+        turnMessage.mentionedMe       = item.mentionedMe();
         turnMessage.timestampMs       = item.timestampMs;
         turnMessages.push_back(turnMessage);
 
         if (!item.platformMessageId.empty()) {
             lastPassiveMsgId = item.platformMessageId;
-            if (item.mentionedMe) {
+            if (item.mentionedMe()) {
                 lastMentionMsgId = item.platformMessageId;
             }
         }
-        hadMention = hadMention || item.mentionedMe;
+        if (item.mentionedMe()) {
+            hadMention = true;
+            mentionIndexes.push_back(view.index);
+        }
 
         for (const auto& attachment : item.attachments) {
             AttachmentLine line;
@@ -657,6 +708,9 @@ std::string ChatbotEngine::assembleInput(
     }
 
     Json input = Json::object();
+    // 「本轮为什么开始」写进输入块: 模型据此知道该不该接话
+    // (被 @ / always 窗口到期 / 缓冲攒满), 而不是一概把最后一句话当问题回答
+    blockOpt.wakeReason = wakeReasonNote(reason, ordered.size(), mentionIndexes);
     input["text"]    = renderInputBlock(blockOpt, views);
     input["delivery"] = "next-turn";
     if (!attachments.empty()) {
@@ -673,6 +727,7 @@ std::string ChatbotEngine::assembleInput(
     turn.modelSent   = false;
     turn.messages    = std::move(turnMessages);
     turn.hadMention  = hadMention;
+    turn.wakeReason  = std::string{reason};
     // 兜底策略 `mention` 也要看本轮模式: 私聊的 `mention` 已按 `always` 算
     turn.mode = (key.type == ChatType::Private && route.mode == ChatMode::Mention)
                     ? ChatMode::Always
@@ -758,10 +813,14 @@ void ChatbotEngine::flush(const std::string& chatKeyText, std::string_view reaso
     state.stale = false;
     ++state.counters.woken;
     ++globalCounters_.woken;
+    if (reason == "mentioned") {
+        ++state.counters.wakeMentioned;
+        ++globalCounters_.wakeMentioned;
+    }
     // 排队被取走: 面板上的条数要归零
     notifyChanged();
 
-    const std::string inputJson = assembleInput(chatKeyText, batch);
+    const std::string inputJson = assembleInput(chatKeyText, batch, reason);
     const int32_t     rc        = runtime_.sendInput ? runtime_.sendInput(channelId, inputJson) : -1;
     if (rc != 0) {
         // 投递失败: 把原文标进下一轮元信息, 并计数 (不重投, 避免重复上下文)
@@ -954,6 +1013,7 @@ bool ChatbotEngine::handleCommand(
     turn.sentCount        = 0;
     turn.modelSent        = false;
     turn.hadMention       = true;
+    turn.wakeReason       = "command";
     turn.mode             = (key.type == ChatType::Private && route.mode == ChatMode::Mention)
                                 ? ChatMode::Always
                                 : route.mode;
@@ -1460,6 +1520,7 @@ std::string ChatbotEngine::statusJson() const {
     countersJson["routed"]     = static_cast<int64_t>(globalCounters_.routed);
     countersJson["ignored"]    = static_cast<int64_t>(globalCounters_.ignored);
     countersJson["woken"]      = static_cast<int64_t>(globalCounters_.woken);
+    countersJson["wakeMentioned"] = static_cast<int64_t>(globalCounters_.wakeMentioned);
     countersJson["aggregated"] = static_cast<int64_t>(globalCounters_.aggregated);
     countersJson["turns"]      = static_cast<int64_t>(globalCounters_.turns);
     // 群里“非 @ 消息”的条数: 一直为 0 就说明平台没给「接收所有消息」权限
@@ -1499,6 +1560,7 @@ std::string ChatbotEngine::chatInfoJson(std::string_view chatKey) const {
     countersJson["dropped"]    = static_cast<int64_t>(counters.dropped);
     countersJson["failed"]     = static_cast<int64_t>(counters.failed);
     countersJson["duplicated"] = static_cast<int64_t>(counters.duplicated);
+    countersJson["wakeMentioned"] = static_cast<int64_t>(counters.wakeMentioned);
     countersJson["turns"]      = static_cast<int64_t>(counters.turns);
     countersJson["lastTurnMs"] = counters.lastTurnMs;
     // 本会话里来自群「全量消息」事件的条数 (`always` 会话靠它判断平台权限)
@@ -1508,6 +1570,8 @@ std::string ChatbotEngine::chatInfoJson(std::string_view chatKey) const {
     out["buffered"] = it == sessions_.end()
                           ? 0
                           : static_cast<int64_t>(it->second.items.size());
+    // 上一轮为什么开始 (`mentioned` / `window_expired` / `buffer_full` ...)
+    out["lastWakeReason"] = it == sessions_.end() ? std::string{} : it->second.turn.wakeReason;
     return out.dump();
 }
 

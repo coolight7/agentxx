@@ -456,15 +456,46 @@ bool QqPlatform::normalize(
     std::string_view         eventName,
     const utilxx_base::Json& data,
     InboundEvent&            out
-) const {
+) {
     // 字段解析全部在 qq_normalize.cpp (纯函数, 可以用真实事件做回归)
-    // 自己的身份是随 READY / 自己消息的回声逐步攒的, 拷一份再去解析 (不持锁跑解析)
+    // 自己的身份是随 READY / 自己消息的回声 / mentions 逐步攒的: 拷一份去解
+    // 解析 (不持锁跑解析), 解析里新学到的 openid 再合回身份表
     QqSelfIdentity self;
     {
         std::lock_guard guard(mutex_);
         self = selfIdentity_;
     }
-    return normalizeQqEvent(eventName, data, out, &self);
+    const bool ok = normalizeQqEvent(eventName, data, out, &self);
+    {
+        std::lock_guard guard(mutex_);
+        // 只加不减: 别的地方 (READY / 自己消息回声) 刚学到的条目不能被这次拷贝顶掉
+        for (const auto& one : self.openids) {
+            selfIdentity_.add(one);
+        }
+        for (const auto& [group, openid] : self.groupOpenids) {
+            selfIdentity_.addGroup(group, openid);
+        }
+        switch (out.mentionSelf) {
+            case MentionSelfSource::EventType:
+                ++mentionByEventType_;
+                break;
+            case MentionSelfSource::Openid:
+                ++mentionByOpenid_;
+                break;
+            case MentionSelfSource::Nickname:
+                ++mentionByNickname_;
+                break;
+            case MentionSelfSource::None:
+                // 全量消息里 @ 的是一个机器人, 而身份表还是空的: 认不出谁是自己,
+                // 这一条可能就是叫我的 (配 accounts[].selfOpenid 可解决)
+                if (out.fromFullMode && !out.mentionBots.empty()
+                    && selfIdentity_.openids.empty() && selfIdentity_.username.empty()) {
+                    ++mentionSelfUnknown_;
+                }
+                break;
+        }
+    }
+    return ok;
 }
 
 void QqPlatform::noteDispatchEvent(std::string_view eventName) {
@@ -490,6 +521,8 @@ void QqPlatform::learnSelfIdentity(const utilxx_base::Json& data) {
         return;
     }
     const std::string name = author.value("username", std::string{});
+    // 群 openid: 学到的是“我在**这个群**里的 openid”, 所以按群记
+    const std::string groupId = data.value("group_openid", std::string{});
     bool              learned = false;
     {
         std::lock_guard guard(mutex_);
@@ -499,7 +532,7 @@ void QqPlatform::learnSelfIdentity(const utilxx_base::Json& data) {
         }
         for (const char* key : {"member_openid", "id", "union_openid"}) {
             const std::string id = author.value(key, std::string{});
-            if (selfIdentity_.add(id)) {
+            if (selfIdentity_.addGroup(groupId, id)) {
                 learned = true;
             }
         }
@@ -535,6 +568,21 @@ std::string QqPlatform::statusJson() const {
         selfIds.push_back(one);
     }
     out["selfOpenid"] = std::move(selfIds);
+    // 按群记的自身 openid: 「@ 判定在某个群里不准」时先看这里有没有这个群
+    utilxx_base::Json selfByGroup = utilxx_base::Json::array();
+    for (const auto& [group, openid] : selfIdentity_.groupOpenids) {
+        selfByGroup.push_back(
+            utilxx_base::Json{{"group", chatIdTail(group, 8)}, {"openid", openid}}
+        );
+    }
+    out["selfOpenidByGroup"] = std::move(selfByGroup);
+    // @ 判定的依据分布: 只有 `event` / `openid` 才是硬证据, `nickname` 是兜底
+    out["mention"] = utilxx_base::Json{
+        {"byEventType", static_cast<int64_t>(mentionByEventType_)},
+        {"byOpenid", static_cast<int64_t>(mentionByOpenid_)},
+        {"byNickname", static_cast<int64_t>(mentionByNickname_)},
+        {"selfUnknown", static_cast<int64_t>(mentionSelfUnknown_)},
+    };
     out["reconnects"]   = gateway_ != nullptr ? gateway_->reconnectCount() : 0;
     out["sequence"]     = gateway_ != nullptr ? gateway_->sequence() : 0;
     if (gateway_ != nullptr && !gateway_->lastError().empty()) {
