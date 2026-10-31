@@ -79,6 +79,49 @@ void testUtf8Basics() {
     );
 }
 
+/* ==================== 静默标记 ==================== */
+
+/// 「本轮不发言」的标记: 兜底发送据此决定不发 (模型写了「（保持安静）」这类说明时也认)
+void testSilenceReply() {
+    // 1. 整段只有一个标记词 (中英文 / 大小写 / 括号 / 空白标点都不敏感)
+    XX_TEST_EXPECT_TRUE(isSilenceReply("[静默]"));
+    XX_TEST_EXPECT_TRUE(isSilenceReply("【静默】"));
+    XX_TEST_EXPECT_TRUE(isSilenceReply("  静默  "));
+    XX_TEST_EXPECT_TRUE(isSilenceReply("保持安静"));
+    XX_TEST_EXPECT_TRUE(isSilenceReply("（保持安静）"));
+    XX_TEST_EXPECT_TRUE(isSilenceReply("(SILENT)"));
+    XX_TEST_EXPECT_TRUE(isSilenceReply("［silent］"));
+    XX_TEST_EXPECT_TRUE(isSilenceReply("silence."));
+    XX_TEST_EXPECT_TRUE(isSilenceReply("NO_REPLY"));
+    XX_TEST_EXPECT_TRUE(isSilenceReply("（略）"));
+    XX_TEST_EXPECT_TRUE(isSilenceReply("（已读不回）"));
+
+    // 2. 整段是一句短的括号备注, 备注里说了不发言 (实测里模型最常见的写法)
+    XX_TEST_EXPECT_TRUE(isSilenceReply("（收到，这条不回复）"));
+    XX_TEST_EXPECT_TRUE(isSilenceReply("（这次真的不发了，什么都没有）"));
+    XX_TEST_EXPECT_TRUE(isSilenceReply("(保持安静，不插话)"));
+    XX_TEST_EXPECT_TRUE(isSilenceReply("（这轮我不发言）"));
+    XX_TEST_EXPECT_TRUE(isSilenceReply("(staying quiet here)"));
+
+    // 3. 不是静默: 正常回复, 空正文, 括号里但没有不发言的说法
+    XX_TEST_EXPECT_FALSE(isSilenceReply(""));
+    XX_TEST_EXPECT_FALSE(isSilenceReply("   "));
+    XX_TEST_EXPECT_FALSE(isSilenceReply("好的，我看一下"));
+    XX_TEST_EXPECT_FALSE(isSilenceReply("（笑）"));
+    XX_TEST_EXPECT_FALSE(isSilenceReply("（收到）"));
+    XX_TEST_EXPECT_FALSE(isSilenceReply("[1/2] 先说结论"));
+    // 标记词与正文混在一起 = 有内容要发, 不能当静默
+    XX_TEST_EXPECT_FALSE(isSilenceReply("静默模式怎么关"));
+    XX_TEST_EXPECT_FALSE(isSilenceReply("保持安静的话就用 [静默] 这个标记"));
+    // 长括号备注更可能是真要说的话
+    std::string longAside = "（";
+    for (int i = 0; i < 60; ++i) {
+        longAside += "这次不回复因为大家在聊别的。";
+    }
+    longAside += "）";
+    XX_TEST_EXPECT_FALSE(isSilenceReply(longAside));
+}
+
 /* ==================== 切分 ==================== */
 
 void testSplit() {
@@ -1427,6 +1470,7 @@ TestResult testChatbotCore() {
     g_cc_failed = 0;
 
     testUtf8Basics();
+    testSilenceReply();
     testSplit();
     testBuiltinCommands();
     testCommand();

@@ -26,8 +26,12 @@ QQ 群/私聊 ──► IPlatform (qq) ──► ChatbotEngine ──► 会话�
 2. **每个「账号 + 群 或 私聊」= 一个独立会话**。会话 id 形如
    `chatbot_<人设>_<账号>_<group|private>_<chatId 的 16 位散列>`，跨重启稳定 —— 同一个群永远
    是同一段上下文。
-3. **回复只有一个出口：`chatbot_send_message`**。模型不调这个工具就等于「不说话」，
-   agent 的正文不会自动发到群里。`behavior.fallbackReply` 可以让插件在模型漏调时兜底。
+3. **回复只有一个出口：`chatbot_send_message`**。想让对方看到的话必须调这个工具。
+   模型不调工具就等于「不说话」，但注意 `behavior.fallbackReply`（默认 `mention`）会在
+   模型漏调时把**本轮最后一段正文**兜底发出去 —— 所以「不发言」要表达清楚：**正文只写
+   `[静默]` 这一个标记**（插件认这个标记，见 §3）。不写标记又写在正文里的东西（例如
+   `（保持安静）`）在兜底生效的会话里会被当成回复发出去；`fallbackReply: never` 时
+   正文一律不发。
 
 ## 2. 配置
 
@@ -87,7 +91,7 @@ plugin:
           maxSplitParts: 8              # 单条最多切成几段
           maxRepliesPerTurn: 5          # 一轮最多发几条
           maxChatsPerPersona: 64        # 每人设活跃会话上限 (超了回收最久没动的)
-          fallbackReply: mention        # 模型没调工具时: mention (被 @ 或 always 会话) | always | never
+          fallbackReply: mention        # 模型没调工具时: mention (被 @ 或 always 会话) | always | never; 正文只有 [静默] 时不发 (见 §3.1)
           overflowPolicy: active        # 被动回复次数用尽后: active | truncate | fail
           humanInLoop: auto-allow       # 群里的权限询问弹不出来: auto-allow | auto-deny
           injectContextHint: true       # 每轮输入开头带「你在哪个群」
@@ -232,11 +236,33 @@ QQ群「技术交流群」(群 id 尾号 6789); 下面是最近收到的消息�
 - 图片 / 音频 / 视频作为多模态附件随输入投给模型，文本里另有对应行；普通文件只给本地路径
   （模型可以自己用文件工具读）。
 
+### 3.1 让它「这轮不说话」
+
+模型的正文有两个去处：调 `chatbot_send_message` 才真正发出；没调用时由
+`behavior.fallbackReply` 把**本轮最后一段正文**兜底发出去（`mention` = 被 @ 或 `always`
+会话才兜底，`always` = 都兜底，`never` = 正文一律不发）。兜底是为了救「忘了调工具」的轮次，
+代价是正文变成了隐式出口 —— 模型想表达「不说话」时写的备注（`（保持安静）`、
+`（收到，这条不回复）`）会被当成回复发到群里。
+
+所以插件给了一个明确的约定：**这轮不发言 = 不调工具 + 正文只有 `[静默]` 这一个标记**。
+不用模型记，插件自己把这句话作为独立提示词段 `chatbot-silence` 追加进人设根（要改文案就在
+`prompt.append` 里用同名键覆盖；`fallbackReply: never` 时不追加，因为那时正文本来就不发）。
+插件识别（`agent/plugins/agentxx_chatbot/chatbot_core.cpp` 的 `isSilenceReply`）两种写法：
+
+1. 整段只有一个标记词：`静默` / `保持安静` / `沉默` / `不回复` / `已读` / `略` /
+   `silent` / `silence` / `no_reply` / `skip` / `quiet` ……（允许外面套一层括号，大小写、
+   空白、标点不敏感，`[静默]` / `（SILENT）` / `NO_REPLY.` 都算）；
+2. 整段就是一句**不超过 100 字**的括号备注，且备注里出现了「不发言」的说法
+   （`（收到，这条不回复）`、`（这次真的不发了）`）—— 实测模型想沉默时最常这么写。
+
+命中后插件什么都不发（兜底跳过、`chatbot_send_message` 也不发，工具结果里说明「静默标记，
+没有发送」）。混合了正文的不算标记：`静默模式怎么关` 这种正常消息照常发。
+
 ## 4. 工具
 
 | 工具 | 用途 |
 |------|------|
-| `chatbot_send_message` | **唯一的回复出口**。参数：`text`（正文）、`attachments`（本地路径或 http(s) 地址数组）、`replyTo`（引用本轮第 n 条）、`markdown`、`chat`（跨会话时必须显式给） |
+| `chatbot_send_message` | **唯一的回复出口**。参数：`text`（正文）、`attachments`（本地路径或 http(s) 地址数组）、`replyTo`（引用本轮第 n 条）、`markdown`、`chat`（跨会话时必须显式给）。正文只有 `[静默]` 时不发送（见 §3.1） |
 | `chatbot_history` | 取该会话最近 N 条原始消息（含被 mode 过滤掉的） |
 | `chatbot_chat_info` | 会话状态：路由到哪个人设、当前模式、通道 id、计数、缓冲条数 |
 | `chatbot_status` | 插件全局状态：账号连接、人设、出站队列、计数 |
@@ -257,6 +283,17 @@ QQ群「技术交流群」(群 id 尾号 6789); 下面是最近收到的消息�
 
 **回复被切成好几条。** 正文超过 `messageSplitLimit` 会自动切段并带 `(i/n)` 标记；
 一轮超过 `maxRepliesPerTurn` 的部分会丢弃，工具结果里会说明「已发满」。
+
+**让它别说话，它还是发了一条 `（保持安静）` / `（收到，这条不回复）`。** 这是兜底发送
+（`behavior.fallbackReply`）把本轮正文当回复发了出去。插件已按 §3.1 的约定处理：正文只有
+静默标记（`[静默]` 或一句短的括号备注，例如 `（这条不回复）`）时不发送。仍然出现时按顺序查：
+
+1. `chatbot_status` 的 `fallback` 计数有没有涨 —— 涨了说明是兜底发的，看正文是不是长备注
+   （超过 100 字不算标记，因为那更可能是真要说的话）；
+2. 人设在自己 `prompt.append` 里用了 `chatbot-silence` 这个键，把插件自动追加的「不发言只写
+   `[静默]`」那段顶掉了（键相同以用户的为准）；
+3. 模型这轮其实调了 `chatbot_send_message`（工具结果里没有「静默标记」字样），那是模型主动发的，
+   从提示词/人设上让它少说话。
 
 **回复发不出去，日志里有「被动回复次数用尽」。** 同一条消息平台允许的被动回复次数有限，
 用尽后按 `overflowPolicy` 处理（默认降级为主动消息；`truncate` 放弃、`fail` 报给模型）。

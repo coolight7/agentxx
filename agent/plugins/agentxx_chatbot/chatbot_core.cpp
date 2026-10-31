@@ -366,6 +366,145 @@ std::string normalizeOutboundText(std::string_view text) {
     return trimCopy(out);
 }
 
+/* ==================== 静默标记 ==================== */
+
+namespace {
+
+/// 比对标记用的紧凑形式: 去掉空白(含全角空格)与常见标点, ASCII 转小写
+///
+/// 只用于和标记表比对, 不改变真正发出去的文本。
+std::string compactForMarker(std::string_view text) {
+    std::string out;
+    out.reserve(text.size());
+    for (size_t i = 0; i < text.size(); ++i) {
+        const char c = text[i];
+        if (isSpaceChar(c)) {
+            continue;
+        }
+        // 全角空格 (U+3000 = E3 80 80) 与全角/半角标点都不参与比对
+        if (static_cast<unsigned char>(c) == 0xE3 && i + 2 < text.size()
+            && static_cast<unsigned char>(text[i + 1]) == 0x80
+            && static_cast<unsigned char>(text[i + 2]) == 0x80) {
+            i += 2;
+            continue;
+        }
+        if (c == '.' || c == ',' || c == '!' || c == '?' || c == '~' || c == ';'
+            || c == ':' || c == '_' || c == '-' || c == '*') {
+            continue;
+        }
+        // 全角标点都在 U+FF00 段 (EF BC xx): ！＂，＜：；？
+        if (static_cast<unsigned char>(c) == 0xEF && i + 2 < text.size()
+            && static_cast<unsigned char>(text[i + 1]) == 0xBC) {
+            const auto tail = static_cast<unsigned char>(text[i + 2]);
+            if (tail == 0x81 || tail == 0x82 || tail == 0x9F || tail == 0x9B || tail == 0x9A
+                || tail == 0x9C || tail == 0x8C) {
+                i += 2;
+                continue;
+            }
+        }
+        // 、。在 U+3000 段 (E3 80 81 / E3 80 82)
+        if (static_cast<unsigned char>(c) == 0xE3 && i + 2 < text.size()
+            && static_cast<unsigned char>(text[i + 1]) == 0x80
+            && (static_cast<unsigned char>(text[i + 2]) == 0x81
+                || static_cast<unsigned char>(text[i + 2]) == 0x82)) {
+            i += 2;
+            continue;
+        }
+        const auto uc = static_cast<unsigned char>(c);
+        out.push_back(uc >= 'A' && uc <= 'Z' ? static_cast<char>(uc + ('a' - 'A')) : c);
+    }
+    return out;
+}
+
+/// 整段只有一个标记词时认可的说法 (已是紧凑形式: 无空白/无标点/小写)
+constexpr std::string_view kSilenceMarkers[] = {
+    "静默",     "保持安静", "安静",     "沉默",     "不回复",   "不回",   "不说话",
+    "不发言",   "无需回复", "不作回复", "已读",     "已读不回", "略",     "略过",
+    "跳过",     "silent",   "silence",  "noreply",  "skip",     "pass",   "quiet",
+    "nothing",
+};
+
+/// 括号备注里出现这些说法就当作「这轮不发言」
+constexpr std::string_view kSilencePhrases[] = {
+    "静默",   "保持安静", "安静",   "沉默",     "不回复", "不回",   "不说话",
+    "不发言", "不发啦",   "不发了", "不说啦",   "不吭声", "已读",   "略过",
+    "不发",   "silent",   "silence", "noreply", "stayquiet", "stayingquiet",
+    "nothingtosay",
+};
+
+/// 括号备注的长度上限 (码点): 更长的备注更可能是真要说的话, 不当静默处理
+constexpr size_t kSilenceAsideMaxCodePoints = 100;
+
+/// 成对括号 (全角半角都收)
+struct BracketPair {
+    std::string_view open;
+    std::string_view close;
+};
+
+constexpr BracketPair kBracketPairs[] = {
+    {"（", "）"},
+    {"(", ")"},
+    {"[", "]"},
+    {"［", "］"},
+    {"【", "】"},
+    {"〔", "〕"},
+    {"{", "}"},
+};
+
+/// 整段被一对括号包住时取出内层 (`（保持安静）` → `保持安静`)
+///
+/// 全角半角允许混用; 其余情况返回 false 并保持 `inner` 不动。
+bool stripOneBracketLayer(std::string_view text, std::string_view& inner) noexcept {
+    size_t openLen  = 0;
+    size_t closeLen = 0;
+    for (const auto& pair : kBracketPairs) {
+        if (openLen == 0 && text.starts_with(pair.open)) {
+            openLen = pair.open.size();
+        }
+        if (closeLen == 0 && text.ends_with(pair.close)) {
+            closeLen = pair.close.size();
+        }
+    }
+    if (openLen == 0 || closeLen == 0 || text.size() <= openLen + closeLen) {
+        return false;
+    }
+    inner = text.substr(openLen, text.size() - openLen - closeLen);
+    return true;
+}
+
+} // namespace
+
+bool isSilenceReply(std::string_view text) {
+    const std::string body = trimCopy(text);
+    if (body.empty()) {
+        // 空正文本来就不会发出去, 不算「用了标记」
+        return false;
+    }
+    std::string_view inner;
+    const bool       bracketed = stripOneBracketLayer(body, inner);
+    const std::string marker
+        = compactForMarker(bracketed ? inner : std::string_view{body});
+    if (marker.empty()) {
+        return false;
+    }
+    // 1. 整段只有一个标记词
+    for (const auto known : kSilenceMarkers) {
+        if (marker == known) {
+            return true;
+        }
+    }
+    // 2. 整段是一句短括号备注, 备注里说了「不发言」
+    if (!bracketed || utf8CodePointCount(inner) > kSilenceAsideMaxCodePoints) {
+        return false;
+    }
+    for (const auto phrase : kSilencePhrases) {
+        if (marker.find(phrase) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /* ==================== 切分 ==================== */
 
 std::vector<SplitPart> splitText(std::string_view text, const SplitOptions& opt) {

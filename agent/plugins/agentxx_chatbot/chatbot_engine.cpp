@@ -1121,6 +1121,11 @@ void ChatbotEngine::fallbackSend(const std::string& chatKey, TurnContext& turn) 
     if (text.empty()) {
         return;
     }
+    // 模型这轮明确表示不说话 (正文只有「保持安静」这类标记): 兜底也不能把它发出去
+    if (isSilenceReply(text)) {
+        XX_LOGI("[{}] 本轮正文是静默标记, 不兜底发送 (会话 '{}'): {}", kLogTag, chatKey, text);
+        return;
+    }
     const ChatKey key = parseChatKey(chatKey);
     OutboundRequest request;
     request.text         = text;

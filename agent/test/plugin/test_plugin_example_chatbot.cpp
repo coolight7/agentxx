@@ -1292,6 +1292,50 @@ asio::awaitable<void> runBody(
         );
     }
 
+    // ===================== 12c. 静默标记: 正文只是「（保持安静）」时什么都不发 =====================
+    //
+    // 被要求「这轮别说话」时, 模型常常不调工具、只在正文写一句括号备注。兜底发送会把
+    // 这句当回复发到群里 (群里看到「（保持安静）」)。插件认静默标记, 命中就跳过兜底。
+    {
+        XX_TEST_EXPECT_TRUE(co_await drain());
+        auto sentOf = [](const std::string& info) {
+            try {
+                return Json::parse(info)
+                    .value("counters", Json::object())
+                    .value("sent", int64_t{0});
+            } catch (const std::exception&) {
+                return int64_t{-1};
+            }
+        };
+        const int64_t sentBefore
+            = sentOf(co_await callTool(rootCtx, "chatbot_chat_info", R"({"chat":"fake_main|group|G1"})"));
+
+        daSimSetToolCalls(Json::array(), 0);
+        daSimSetResponseContent("（保持安静）");
+        const int requestsBefore = g_da_sim_request_count.load();
+        XX_TEST_EXPECT_TRUE(co_await inject("group", "G1", "@机器人 我们在聊别的", true, "msg-fb3"));
+        XX_TEST_EXPECT_TRUE(co_await waitUntil(ex, 60s, [&]() {
+            return g_da_sim_request_count.load() > requestsBefore;
+        }));
+        XX_TEST_EXPECT_TRUE(co_await drain());
+
+        // 没有发出任何东西: 会话的 sent 计数不变, 出站记录里也没有这句
+        const int64_t sentAfter
+            = sentOf(co_await callTool(rootCtx, "chatbot_chat_info", R"({"chat":"fake_main|group|G1"})"));
+        XX_TEST_EXPECT_EQ(sentAfter, sentBefore);
+        XX_TEST_EXPECT_TRUE(
+            concatSentText(outboxOf(co_await callTool(rootCtx, "chatbot_debug_outbox", R"({"limit":50})")))
+                .find("保持安静") == std::string::npos
+        );
+        // 显式调工具、但正文就是标记: 同样不发, 工具结果里说明一句
+        const auto toolResult = co_await callTool(
+            rootCtx,
+            "chatbot_send_message",
+            R"({"text":"[静默]","chat":"fake_main|group|G1"})"
+        );
+        XX_TEST_EXPECT_TRUE(toolResult.find("静默标记") != std::string::npos);
+    }
+
     // ===================== 13. 禁用 → 启用: 工具与人设根恢复 =====================
     //
     // 禁用 = 骨架摘除注册 + 拆挂载 + 投递 stop (插件在自己 stop 里卸人设根);

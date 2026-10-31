@@ -692,7 +692,9 @@ void registerToolsOn(ChatbotCtx& ctx, const AgentRef& ref) {
         ctx,
         ref,
         "chatbot_send_message",
-        "往当前聊天会话 (或指定会话) 发一条消息。这是你说话的唯一方式: 不调用它就不会有任何回复。"
+        "往当前聊天会话 (或指定会话) 发一条消息。这是你说话的唯一出口: 想让对方看到的话"
+        "必须调用它。不想说话就不要调用, 并且让正文只写 [静默] 这一个标记 (不要写别的)——"
+        "没被调用的正文可能被插件兜底当成回复发出去。"
         "一次可以调用多次 (不同话题分别回), 也可以用 replyTo 引用某条消息。",
         kSendMessageSchema,
         sendMessage
@@ -806,7 +808,9 @@ std::string defaultPersonaPrompt(
         "你正在 QQ 上以「{}」的身份和用户聊天（当前会话: {}「{}」）。\n"
         "\n"
         "规则:\n"
-        "1. 想说话就调用 chatbot_send_message；不想说话就不调用。什么都不说也是允许的。\n"
+        "1. 想说话就调用 chatbot_send_message；不想说话就不调用, 并且让正文只写 [静默] 这一个"
+        "标记 (不要写别的)。没被调用的正文可能被插件兜底发出去, 所以「保持安静」这类备注"
+        "不能写在正文里。\n"
         "2. 一次可能收到多条消息：不同话题分别回复（多次调用工具，各自用 replyTo 引用对应消息），\n"
         "   同一话题合并成一条回复。\n"
         "3. 说话像在聊天软件里打字：短句、口语、不用标题和编号列表；除非用户要求，不要贴大段代码。\n"
@@ -820,8 +824,23 @@ std::string defaultPersonaPrompt(
     );
 }
 
+/// 静默约定 (作为独立的提示词段追加)
+///
+/// 为什么不写死进 [defaultPersonaPrompt]: 用户换了自己的 `systemPrompt` 后仍然需要知道
+/// 「这轮不发言」怎么写 —— 兜底发送(见 `behavior.fallbackReply`)会把没调用工具的正文
+/// 发出去, 没有这个标记模型只能写「（保持安静）」, 那句话就会被当成回复发到群里。
+/// 用户想改文案时, 在 `prompt.append` 里用同名键 `chatbot-silence` 覆盖即可。
+constexpr std::string_view kSilencePromptSection
+    = "你发言只有 chatbot_send_message 一个出口。这轮你决定不发言时, 不要调用它, "
+      "并且让正文只有一个 [静默] 标记 (不要写「保持安静」「收到, 不回复」这类说明, "
+      "没被调用的正文可能被插件兜底当成回复发出去)。";
+
 /// 人设 → `mountRoot` 的 `config_json`
-Json personaRootConfig(const ac::PersonaConfig& persona) {
+///
+/// - `args`:
+///     - [persona] 人设配置
+///     - [fallbackReply] 行为配置里的兜底策略; 不是 `never` 时才追加静默约定段
+Json personaRootConfig(const ac::PersonaConfig& persona, std::string_view fallbackReply) {
     Json prompt = Json::object();
     if (!persona.prompt.systemPrompt.empty()) {
         prompt["systemPrompt"] = persona.prompt.systemPrompt;
@@ -829,8 +848,12 @@ Json personaRootConfig(const ac::PersonaConfig& persona) {
         prompt["systemPrompt"]
             = defaultPersonaPrompt(persona.name, "群聊/私聊", "见每轮输入的标题");
     }
-    if (!persona.prompt.append.empty()) {
+    {
         Json append = Json::object();
+        // 先放插件自己的静默约定, 再放用户段: 同名键被用户覆盖
+        if (fallbackReply != "never") {
+            append["chatbot-silence"] = kSilencePromptSection;
+        }
         for (const auto& [key, value] : persona.prompt.append) {
             append[key] = value;
         }
@@ -1062,7 +1085,7 @@ void* chatbotStart(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, Plugin
     for (const auto& persona : ctx.config.personas) {
         agentxx::plugin::MountRootOptions rootOpt;
         rootOpt.name   = "chatbot:" + persona.name;
-        rootOpt.config = personaRootConfig(persona);
+        rootOpt.config = personaRootConfig(persona, ctx.config.behavior.fallbackReply);
         // 挂载名单必须含本插件: 否则人设 root 上没有 chatbot_* 工具
         Json mount = personaMountPlugins(persona);
         if (mount.value("mode", std::string{"none"}) == "listed") {

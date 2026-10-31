@@ -201,6 +201,15 @@ std::string toolSendMessage(
     if (deps.engine == nullptr || deps.outbound == nullptr) {
         throw std::runtime_error("chatbot 插件状态不可用");
     }
+    // 正文是「这轮不说话」的标记: 按模型意愿什么都不发, 工具结果里说明一句
+    if (attachments.empty() && isSilenceReply(text)) {
+        Json skipped      = Json::object();
+        skipped["queued"] = int64_t{0};
+        skipped["parts"]  = int64_t{0};
+        skipped["chat"]   = chatKey;
+        skipped["note"]   = "正文是静默标记, 已按「这轮不发言」处理, 没有发送任何消息";
+        return skipped.dump();
+    }
     const ChatKey key = parseChatKey(chatKey);
 
     // 引用哪条: `replyTo` 是本轮输入里的 `#n`
