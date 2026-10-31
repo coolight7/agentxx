@@ -495,7 +495,8 @@ plugin:
                   #         或配 id: "*" 在该群发 /agentxx-cmd info 抄回复里的 chat,
                   #         或看日志里「没有匹配的 bind ... 要接它就加一项」那条 info
                   # - 会话标题「群聊(尾号 xxxxxxxx)」只是显示名, 不是 id
-                  - { type: group, id: "*", mode: mention }   # 所有群: 被 @ 才回
+                  - { type: group, id: "*", mode: always }   # 所有群: 被 @ 才回
+                  - { type: group, id: "0D5F5A2F37EFDF78CD830538C4D1B0F8", mode: always }
                   - { type: private, id: "*", mode: always }   # 所有私聊: 每条都回
                   # - { type: group, id: "3F2A1B9C8D7E4F5A6B0C1D2E3F4A5B6C", mode: always }
                   # 模式: mention(被 @ 才唤醒, 期间其它消息攒着一起带上去) |
@@ -515,10 +516,10 @@ plugin:
           overflowPolicy: active    # 被动回复次数用尽后: active(转主动) | truncate | fail
           humanInLoop: auto-allow   # 权限询问在群里弹不出来: auto-allow 自动同意 | auto-deny 拒绝
           injectContextHint: true   # 每轮输入开头带「你在哪个群」
-          attachments:
-            fetch: auto             # auto | url | download
-            maxPerMessage: 5        # 单条消息最多处理几个附件 (主程序上限就是 5)
-            inlineTextMaxBytes: 65536  # 小文本文件正文直接内联进输入 (0 = 关闭, 只给路径)
+          attachments:              # 消息附件处理
+            fetch: auto             # - auto | url | download
+            maxPerMessage: 5        # - 单条消息最多处理几个附件 (主程序上限就是 5)
+            inlineTextMaxBytes: 65536  # - 小文本文件正文直接内联进输入 (0 = 关闭, 只给路径)
           exposeToolsOnHost: false  # 是否把 chatbot_* 也注册到内置主会话 (调试用)
           debugTools: false         # 是否注册 chatbot_debug_* (注入假消息/回看假平台)
         # 关键词命令: 插件内置 /axx-help /axx-info /axx-hello /axx-stop

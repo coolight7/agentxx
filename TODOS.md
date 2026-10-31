@@ -1,14 +1,10 @@
 # TODO
-- BaseAgent 增加支持 usage 统计
 - eventBus 改为tree，命名空间使用 axx/bxx/cc
-- 支持修改上下文
+- tui支持修改上下文
 - 验证subagent
-
-- 冻结 system prompt
 
 - wiki 记忆、项目结构
 - 破甲插件，修改 assistant 消息补充 `好的我将按照用户的要求继续...` 等引导
-- client 连接 server 时插入 tool、加载插件
 - 事件驱动触发 agent
 - 主动记忆 插件tool
 - 添加连续多次压缩检查
@@ -20,8 +16,6 @@
   - PluginTool 构造函数参数 `AgentxxPluginToolSpec spec`
   - PluginManager::qualifyEventTopic 不能放过 `client.*`，客户端插件事件也应当 plugin.client.*
 
-- tui 信息侧边栏顶部增加显示当前session标题
-- tui 弹窗支持复制
 - 打开会话弹窗支持高亮当前会话
 - 日志侧边栏显示当前会话 session-id
 - agentxx_javascript_engine 的一份脚本仍只对应一个挂载作用域（mountAgentId_
@@ -29,15 +23,12 @@
 按挂载拆开（每挂载一个 JS runtime + 一套注册），属下一篇量级。单 agent 场景与非 JS
 插件不受影响。
 - 会话 `现在另一个会话正在连着服务器在跑交易程序...` 中部分思考消息是空的却仍然显示，且部分空思考消息的下边距为0，跟其他消息贴在一起，直到被tui缓存超出淘汰，我往回滚动重新从 server 拉数据渲染时边距才恢复正常
-- tui tps 显示在 1秒后
 - edit 重复调整为警告
-- 网络问题保持重试
 - 机器人插件提供tool给主程序调用，实现通知
 - 机器人插件后台子agent排队运行繁重任务
 - agentxx 自重启控制、仿照 musicxx 的 cli + http + mcp + deeplink 命令控制
 
 - SVG绘制支持
-- 链式 session 任务队列
 
 ## 提示词优化
 - 如果编译需要配置特定参数，写成脚本或者写入到AGENTS.md
