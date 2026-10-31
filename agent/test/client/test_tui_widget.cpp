@@ -16,9 +16,11 @@
 #include "agentxx-client/io/tui/framework/ui_action_list.h"
 #include "agentxx-client/io/tui/framework/ui_hit.h"
 #include "agentxx-client/io/tui/tui_theme.h"
+#include "ftxui/component/component.hpp"
 #include "ftxui/component/event.hpp"
 #include "ftxui/component/mouse.hpp"
 #include "ftxui/dom/elements.hpp"
+#include "ftxui/dom/selection.hpp"
 #include "ftxui/screen/screen.hpp"
 #include <memory>
 #include <string>
@@ -848,6 +850,132 @@ void test_info_sidebar_context_section() {
     TUISettings::instance().setLanguage(savedLang);
 }
 
+/// 记录收到的鼠标事件、固定返回指定"是否处理"的模态组件 (测试模态层的事件契约)
+class ProbeModal : public ftxui::ComponentBase {
+public:
+
+    explicit ProbeModal(bool handled) : handled_(handled) {}
+
+    ftxui::Element OnRender() override {
+        return ftxui::text("modal body");
+    }
+
+    bool OnEvent(ftxui::Event event) override {
+        if (event.is_mouse()) {
+            motions.push_back(event.mouse().motion);
+        } else {
+            keys.push_back(event.input());
+        }
+        return handled_;
+    }
+
+    bool                              handled_ = true;
+    std::vector<ftxui::Mouse::Motion> motions;
+    std::vector<std::string>          keys;
+};
+
+/// 构造鼠标事件 (指定动作)
+ftxui::Event mouseEvent(ftxui::Mouse::Motion motion, int x, int y) {
+    ftxui::Mouse m;
+    m.button = ftxui::Mouse::Left;
+    m.motion = motion;
+    m.x      = x;
+    m.y      = y;
+    return ftxui::Event::Mouse("", m);
+}
+
+/// 滚轮向下事件 (非选择跟踪关心的按键)
+ftxui::Event wheelDownAt(int x, int y) {
+    ftxui::Mouse m;
+    m.button = ftxui::Mouse::WheelDown;
+    m.motion = ftxui::Mouse::Moved;
+    m.x      = x;
+    m.y      = y;
+    return ftxui::Event::Mouse("", m);
+}
+
+/// 模态层事件契约 (弹窗内容拖选复制的前提):
+/// - 弹窗打开时事件只给弹窗, 主界面收不到 (阻塞层)
+/// - 左键按下/移动对外报"未处理": FTXUI 只在未处理时记录拖选 (见 App::HandleSelection),
+///   如原样返回 true, 弹窗内永远无法选中文本
+/// - 左键松开仍回报弹窗的处理结果 (单击未拖动时不残留选择)
+/// - 非左键 (滚轮) 与键盘维持原语义 (按弹窗处理结果返回)
+void test_modal_container_mouse_contract() {
+    int  mainEvents = 0;
+    auto mainComp   = ftxui::CatchEvent(ftxui::Renderer([] { return ftxui::text("main body"); }),
+                                      [&](ftxui::Event) {
+                                          ++mainEvents;
+                                          return false;
+                                      });
+    auto container  = ModalContainer::Create(mainComp);
+
+    // 无模态: 事件下发给主界面
+    XX_TEST_EXPECT_FALSE(container->OnEvent(mouseEvent(ftxui::Mouse::Pressed, 1, 1)));
+    XX_TEST_EXPECT_EQ(mainEvents, 1);
+
+    // 弹窗固定返回"已处理" (与多数弹窗组件一致)
+    auto modal = std::make_shared<ProbeModal>(true);
+    container->pushModal(modal);
+    XX_TEST_EXPECT_TRUE(container->hasModal());
+
+    // 左键按下/移动: 报"未处理"供 FTXUI 记录拖选, 但弹窗自己仍收到事件
+    XX_TEST_EXPECT_FALSE(container->OnEvent(mouseEvent(ftxui::Mouse::Pressed, 3, 2)));
+    XX_TEST_EXPECT_FALSE(container->OnEvent(mouseEvent(ftxui::Mouse::Moved, 6, 2)));
+    XX_TEST_EXPECT_EQ(modal->motions.size(), size_t{2});
+    if (modal->motions.size() == 2) {
+        XX_TEST_EXPECT_TRUE(modal->motions[0] == ftxui::Mouse::Pressed);
+        XX_TEST_EXPECT_TRUE(modal->motions[1] == ftxui::Mouse::Moved);
+    }
+
+    // 左键松开: 回报弹窗的处理结果 (弹窗处理 -> true, 不再下发给 main)
+    XX_TEST_EXPECT_TRUE(container->OnEvent(mouseEvent(ftxui::Mouse::Released, 6, 2)));
+
+    // 滚轮与键盘: 按弹窗处理结果返回 (阻塞层语义不变), main 始终收不到
+    XX_TEST_EXPECT_TRUE(container->OnEvent(wheelDownAt(3, 2)));
+    XX_TEST_EXPECT_TRUE(container->OnEvent(ftxui::Event::Escape));
+    XX_TEST_EXPECT_EQ(modal->keys.size(), size_t{1});
+    XX_TEST_EXPECT_EQ(mainEvents, 1);
+
+    // 弹窗未处理滚轮时, 同样不会被误当成"主界面可用"而下发
+    auto passive = std::make_shared<ProbeModal>(false);
+    container->pushModal(passive);
+    XX_TEST_EXPECT_FALSE(container->OnEvent(wheelDownAt(3, 2)));
+    XX_TEST_EXPECT_EQ(mainEvents, 1);
+
+    // 关闭弹窗后事件重新下发给主界面
+    container->popModal();
+    XX_TEST_EXPECT_FALSE(container->hasModal());
+    XX_TEST_EXPECT_FALSE(container->OnEvent(mouseEvent(ftxui::Mouse::Released, 1, 1)));
+    XX_TEST_EXPECT_EQ(mainEvents, 2);
+}
+
+/// 弹窗内容参与文本选择: 对弹窗整屏取选择能取出弹窗内的文本 (拖选复制的数据源),
+/// 且取不到被遮挡的主界面文本 (弹窗打开时主界面不参与渲染)
+void test_modal_overlay_text_selectable() {
+    const std::string body = "popup selectable text";
+
+    auto container = ModalContainer::Create(
+        ftxui::Renderer([] { return ftxui::text("main body"); })
+    );
+    container->pushModal(ftxui::Renderer([&] {
+        return ftxui::vbox({
+            ftxui::text("Popup Title"),
+            ftxui::text(body),
+        });
+    }));
+
+    auto element = container->Render();
+    auto screen  = ftxui::Screen::Create(ftxui::Dimension::Fixed(60), ftxui::Dimension::Fixed(12));
+    // 整屏选择: 弹窗内容居中, 选择范围覆盖全部可见文本
+    ftxui::Selection selection(0, 0, 59, 11);
+    ftxui::Render(screen, element.get(), selection);
+    // 选中文本由各文本节点在 Select 时累回 Selection (与 App::GetSelection 同一数据源)
+    const std::string picked = selection.GetParts();
+    XX_TEST_EXPECT_TRUE(picked.find(body) != std::string::npos);
+    XX_TEST_EXPECT_TRUE(picked.find("Popup Title") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(picked.find("main body") == std::string::npos);
+}
+
 TestResult testTuiWidget() {
     g_tui_widget_passed = 0;
     g_tui_widget_failed = 0;
@@ -868,6 +996,8 @@ TestResult testTuiWidget() {
     test_panel_access_point_extended_components();
     test_info_access_point_extended_components();
     test_info_sidebar_context_section();
+    test_modal_container_mouse_contract();
+    test_modal_overlay_text_selectable();
 
     return TestResult{g_tui_widget_passed, g_tui_widget_failed};
 }

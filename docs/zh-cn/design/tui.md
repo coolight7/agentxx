@@ -50,6 +50,10 @@
   (减去 `cursor_x_/cursor_y_`), 并在 `handled == false` 时把左键事件转入**文本选择**
   (`HandleSelection`): 因此"未被任何组件处理的左键拖动"会成为屏幕选中;
   反之, 组件一旦返回 `true` 表示处理事件, 该次拖动不会产生选择。
+  弹窗内容同样能拖选复制: 弹窗组件对鼠标事件多数一律返回 `true`, 所以
+  [ModalContainer](/agent/client/include/agentxx-client/io/tui/framework/modal_container.h)
+  对左键按下/移动固定对外报 `false` (事件本身仍先交给弹窗处理, 交互不变),
+  松开才回报弹窗的处理结果; 拖选松开由外层 `CatchEvent` 先行复制并吃掉事件。
 
 ### 1.3 坐标与命中检测
 
@@ -92,7 +96,8 @@
 
 - 内置 `Modal(main, modal, bool*)` 只是 `dbox` 叠加, 不阻塞事件; 本项目使用自实现的
   [ModalContainer](/agent/client/include/agentxx-client/io/tui/framework/modal_container.h):
-  打开弹窗时**只**把事件给弹窗 (不再下发给被遮挡的主界面), 渲染时也只渲染弹窗。
+  打开弹窗时**只**把事件给弹窗 (不再下发给被遮挡的主界面), 渲染时也只渲染弹窗;
+  左键按下/移动对外报"未处理"以便 FTXUI 记录拖选 (见 1.2), 其余事件维持阻塞语义。
 - 滚动容器为项目自实现 (FTXUI 的 `frame` 是"焦点跟随"式滚动, 不适用于会话记录):
   - [Scrollable](/agent/client/include/agentxx-client/io/tui/scrollable.h): 一次性构建子项 + 视口局部布局/绘制
   - [LazyScrollable](/agent/client/include/agentxx-client/io/tui/lazy_scrollable.h): 懒构建 + LRU 缓存 (消息列表用),

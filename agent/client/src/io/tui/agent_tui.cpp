@@ -788,9 +788,11 @@ void TUIClientAgentIO::start() {
                         const bool wasDrag = mouseDragged_;
                         mouseDown_         = false;
                         mouseDragged_      = false;
-                        if (wasDrag && copySelectionToClipboard()) {
-                            // 清除选中高亮: 复制已完成; 懒加载列表跳过 FTXUI
-                            // 每帧 ComputeRequirement, Text 节点的选中反色不会
+                        if (wasDrag) {
+                            // 拖选松开即复制 (无选中文本时该函数自己跳过, 不弹提示)
+                            copySelectionToClipboard();
+                            // 清除选中高亮: 懒加载列表跳过 FTXUI 每帧
+                            // ComputeRequirement, Text 节点的选中反色不会
                             // 自动复位, 需显式清除 (见 resetSelectionHighlight)
                             if (messageList_) {
                                 messageList_->clearSelectionHighlight();
@@ -798,9 +800,10 @@ void TUIClientAgentIO::start() {
                             if (sidebar_) {
                                 sidebar_->clearSelectionHighlight();
                             }
-                            // 处理事件: 拖选释放不应触发下方按钮/折叠点击;
-                            // (handleSelection(handled=true) 将清除选择高亮,
-                            // 复制已完成, 符合"松开即复制"语义)
+                            // 拖选释放一律吃掉事件: 不应触发下方按钮/折叠点击;
+                            // 返回 true 后 FTXUI 会清空选择状态 (弹窗内容同样走这里),
+                            // 因此补一次重绘让高亮随本帧消失
+                            postRedraw();
                             return true;
                         }
                     }
