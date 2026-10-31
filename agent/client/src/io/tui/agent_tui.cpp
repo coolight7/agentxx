@@ -54,33 +54,13 @@ using namespace ftxui;
 
 namespace {
 
-/// 文本消息的正文是否无可见内容 (空串或仅空白字符, 如 `""` / `" "` / `"\n"`)
+/// 消息是否没有可展示的内容 (正文为空/只有空白或零宽占位符)
 ///
-/// 用于过滤"空 content 消息": 这类消息在列表中渲染为一个空块 (只占一行空白),
-/// 直接不进入消息列表 (TUI 忽略其渲染)。
-/// - 仅适用于正文类角色 (User/Assistant/System/Tip): Tool 消息的正文是工具参数、
-///   Think 消息可为空思考内容 (仍有 "[Think] 时长" 头部)、Interrupt 消息内嵌
-///   交互控件, 均不按正文过滤
-/// - 带附件的消息视为有内容 (纯附件消息无正文但需渲染附件卡片)
+/// 判定统一在 [ViewMessage::hasVisibleContent] —— 服务端写入 (事件桥)、会话库
+/// 加载、客户端插入与渲染层用同一份规则。曾经这里是只处理正文类角色的局部版
+/// 本, 于是空的思考消息在实况下会显示、重新拉历史后又消失 (两边规则不一致)。
 bool isBlankContentMessage(const TUIMessage& msg) {
-    if (!msg.attachments.empty()) {
-        return false;
-    }
-    switch (msg.role) {
-        case TUIMessage::Role::User:
-        case TUIMessage::Role::Assistant:
-        case TUIMessage::Role::System:
-        case TUIMessage::Role::Tip:
-            break;
-        default:
-            return false;
-    }
-    for (char c : msg.text) {
-        if (!utilxx_base::charIsSpace(c)) {
-            return false;
-        }
-    }
-    return true;
+    return !msg.hasVisibleContent();
 }
 
 } // namespace
@@ -2765,7 +2745,8 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
                         break;
                     }
                     // 当前轮次/步骤尚无 Think 消息 (如加密思考首包): 开始思考时立即在消息列表中创建
-                    // Think 消息展示
+                    // Think 消息展示 —— 但只限"有信息可展示"的情况 (加密思考 / token 统计);
+                    // 单纯的结算包 (只剩一个耗时) 不为它新建一条空思考消息
                     pushCurrentTokenLocked(st);
                     resetTrailingRunningToolsLocked(st);
                     auto msg       = std::make_shared<TUIMessage>();
@@ -2773,16 +2754,13 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
                     msg->collapsed = true;
                     if (delta.think) {
                         msg->think = *delta.think;
-                    } else {
-                        msg->think = TUIMessage::ThinkData{
-                            .reasoningTokens = 0,
-                            .isEncrypted     = true,
-                        };
                     }
                     msg->startTimeMs
                         = delta.startTimeMs > 0 ? delta.startTimeMs : st.pendingTokenStartTimeMs;
                     msg->durationMs = delta.durationMs;
-                    pushLocalMessageLocked(st, std::move(msg));
+                    if (!isBlankContentMessage(*msg)) {
+                        pushLocalMessageLocked(st, std::move(msg));
+                    }
                     st.currentTokenRole = TUIMessage::Role::Assistant;
                     st.isStreaming      = true;
                     break;

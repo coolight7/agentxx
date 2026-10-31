@@ -1322,6 +1322,65 @@ void testTuiStreamScenario14(asio::io_context& ioCtx) {
     }
 }
 
+/// 场景 15: 没有可展示内容的思考不再落成消息
+///
+/// - 思考流只吐出空白/零宽占位符: 切到正文时提交, 但不进入消息列表
+///   (否则界面上只剩一个 `[思考]` 头部行, 看上去是一条空消息,
+///   而且它不追加尾部空行, 会和后面的消息贴在一起)
+/// - 只有耗时的思考结算包 (无加密思考/token 统计): 不为其新建空思考消息
+/// - 带加密信息的思考包仍新建消息 (头部有 token 统计可展示)
+void testTuiStreamScenario15(asio::io_context& ioCtx) {
+    TestTUIClientIO client(ioCtx);
+
+    // 1. 思考流只吐出空白/零宽占位符
+    {
+        WireDelta think;
+        think.type        = WireDelta::Type::ThinkToken;
+        think.text        = " \xE2\x80\x8B \n";
+        think.startTimeMs = 1000;
+        client.testOnDelta(think);
+    }
+    // 2. 接着来正文: 思考流被提交, 但全为空白所以不入列表
+    {
+        WireDelta text;
+        text.type        = WireDelta::Type::TextToken;
+        text.text        = "Hello";
+        text.startTimeMs = 1200;
+        client.testOnDelta(text);
+    }
+    // 3. 只有耗时的思考结算包: 不新建空思考消息
+    {
+        WireDelta settle;
+        settle.type        = WireDelta::Type::ThinkToken;
+        settle.text        = "";
+        settle.startTimeMs = 1300;
+        settle.durationMs  = 2400;
+        client.testOnDelta(settle);
+    }
+    // 4. 带加密思考/token 统计的包: 仍然新建消息
+    {
+        WireDelta enc;
+        enc.type        = WireDelta::Type::ThinkToken;
+        enc.text        = "";
+        enc.think       = ViewMessage::ThinkData{.reasoningTokens = 128, .isEncrypted = true};
+        enc.startTimeMs = 1400;
+        enc.durationMs  = 500;
+        client.testOnDelta(enc);
+    }
+
+    auto snap = client.sharedState().snapshot();
+    XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)2);
+    if (snap->messages.size() == 2) {
+        XX_TEST_EXPECT_TRUE(snap->messages[0]->role == TUIMessage::Role::Assistant);
+        XX_TEST_EXPECT_EQ(snap->messages[0]->text, std::string{"Hello"});
+        XX_TEST_EXPECT_TRUE(snap->messages[1]->role == TUIMessage::Role::Think);
+        if (snap->messages[1]->think) {
+            XX_TEST_EXPECT_EQ(snap->messages[1]->think->reasoningTokens, 128);
+            XX_TEST_EXPECT_TRUE(snap->messages[1]->think->isEncrypted);
+        }
+    }
+}
+
 TestResult testTuiStream() {
     testTuiStreamMarkdown();
 
@@ -1340,6 +1399,7 @@ TestResult testTuiStream() {
     testTuiStreamScenario12(ioCtx);
     testTuiStreamScenario13(ioCtx);
     testTuiStreamScenario14(ioCtx);
+    testTuiStreamScenario15(ioCtx);
 
     return TestResult{g_tui_stream_passed, g_tui_stream_failed};
 }

@@ -320,21 +320,26 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
                     thinkDurationMs = std::max(int64_t{0}, nowMs - nodeStartTimeMs_);
                 }
             }
-            if (!reasoning.empty() || isEncrypted || reasoningTokens > 0) {
-                auto m = ViewMessage::makeText(
-                    ViewMessage::Role::Think,
-                    reasoning,
-                    thinkStartTimeMs,
-                    thinkDurationMs
-                );
-                if (isEncrypted || reasoningTokens > 0) {
-                    m.think = ViewMessage::ThinkData{
-                        .reasoningTokens = reasoningTokens,
-                        .isEncrypted     = isEncrypted,
-                    };
-                }
-                m.collapsed = true;
-                session_->appendViewMessage(std::move(m));
+            // 思考消息只在"有内容可看"时才创建: 正文可见, 或带加密思考/token 统计。
+            // 只含空白/零宽占位符的思考 (模型偶尔只吐出 \n、U+200B 之类) 不建消息 ——
+            // 否则展示历史里会多出一条只剩 `[思考]` 头部、下面什么都没有的空消息,
+            // 而且它不追加尾部空行, 看上去和后面的消息贴在一起 (判定与服务端加载 /
+            // 客户端插入层共用 [ViewMessage::hasVisibleContent])
+            auto thinkMsg = ViewMessage::makeText(
+                ViewMessage::Role::Think,
+                reasoning,
+                thinkStartTimeMs,
+                thinkDurationMs
+            );
+            if (isEncrypted || reasoningTokens > 0) {
+                thinkMsg.think = ViewMessage::ThinkData{
+                    .reasoningTokens = reasoningTokens,
+                    .isEncrypted     = isEncrypted,
+                };
+            }
+            if (thinkMsg.hasVisibleContent()) {
+                thinkMsg.collapsed = true;
+                session_->appendViewMessage(std::move(thinkMsg));
                 if (isEncrypted || reasoningTokens > 0) {
                     emitDelta(WireDelta{
                         .text        = "",

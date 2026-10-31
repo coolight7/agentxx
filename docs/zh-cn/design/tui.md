@@ -637,12 +637,21 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
   `buildStreamingItem`、占位项本身), 因此下一项直接接排即可, 渲染与高度估算都不必
   再判断"上方是哪类子项"。两个例外都不带尾部空行: 流式 thinking 的头部行
   (`buildStreamingHeader` 的 `[Think]` 行, 它是紧随其后的正文的标题行, 加了空行会把
-  标签与正文分开) 与**视觉为空的消息** (`isBlankMessage`: 正文不含任何可见字符) ——
-  后者本身已是一行空白, 再补一行就让相邻消息之间多出一整行
+  标签与正文分开) 与**视觉为空的消息** (`isBlankMessage`: 该消息渲染后整块只有一行
+  空白, 即 Assistant/User 且正文不含任何可见字符、也没有附件) —— 后者本身已是一行
+  空白, 再补一行就让相邻消息之间多出一整行
+- `isBlankMessage` 的判据是"这一块渲染出来有没有可见内容", 因此 Think/System/Tip
+  恒为 false (它们的头部行总会渲染): 早期这三种角色一度按正文判空白, 结果是只有耗时
+  的空思考消息头部行不跟尾部空行, 和下一条消息贴在一起 (看起来像"边距为 0"),
+  直到该消息被缓存淘汰/重拉历史后才变正常
 - 视觉为空的消息 (模型把 U+200B 之类的零宽占位符当正文输出) 一并从源头处理:
-  `EventBridge` 不把这样的正文当成一条 assistant 消息写进展示历史, `SessionStore`
-  加载/翻页时也不返回它 (判据见 `agentxx/util/invisible_text.h`); 渲染层的
-  `isBlankMessage` 是对已加载内存消息的额外保护
+  `EventBridge` 不把这样的正文当成一条 assistant/思考消息写进展示历史, `SessionStore`
+  加载/翻页时也不返回它; 渲染层的 `isBlankMessage` 是对已加载内存消息的额外保护。
+  判据统一在消息模型上 ([ViewMessage::hasVisibleContent](/agent/lib/include/agentxx/agent/conversation_types.h)):
+  服务端写入 (事件桥)、会话库加载、客户端插入 (`isBlankContentMessage`) 与渲染层用
+  同一份规则, 不会出现"实况里看得到、重拉历史后消失"的差异。思考消息的"有内容"
+  = 正文含可见字符, 或带加密思考/token 统计; **只有耗时的空思考不算** (它渲染出来
+  只剩一个 `[思考]` 头部行, 就是一条空消息)
 - `quickHeight` 的流式估算必须与实测一致: 上述尾部空行都要计入 (尾部块 +1、降级整段 +1),
   漏掉一项就会总高度偏低 -> 吸附底部的偏移偏小 -> 底部最新内容被推出视口
 - 加载动画的帧循环由 `hasRunningToolOrThink()` 维持, 占位提示出现时它必然为真 ——

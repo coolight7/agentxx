@@ -2,7 +2,6 @@
 
 #include "agentxx/agent/config_static.h"
 #include "agentxx/util/exception.h"
-#include "agentxx/util/invisible_text.h"
 #include "utilxx_base/container_util.h"
 #include "utilxx_base/hash.h"
 #include "utilxx_base/log.h"
@@ -30,33 +29,11 @@ static constexpr size_t kMaxSessionDataDirLen = 96;
 /// 只含空白/零宽占位符的正文 (典型: 模型把 U+200B 当正文输出, 独占一条
 /// assistant 消息) 不进展示历史 —— 客户端每条消息都带一行尾部空行, 这种
 /// 看不见内容的消息就变成一块多余空白 (看起来像消息间距异常变大)。
-///
-/// 与客户端渲染层的判据不完全相同: 这里还可以凭"有无信息可展示"保下来
-/// (思考耗时、加密思考的 token 统计), 而渲染层只决定是否追加尾部空行。
+/// 同一判定在消息模型上 (see [ViewMessage::hasVisibleContent]): 写入侧
+/// (事件桥)、客户端插入侧与渲染层共用同一份规则, 两边不会出现"实况显示、
+/// 重拉历史后消失"的差异。
 static bool isDisplayableViewMessage(const ViewMessage& msg) {
-    using Role = ViewMessage::Role;
-    switch (msg.role) {
-        case Role::Assistant:
-        case Role::User:
-            // 附件卡片本身始终有可见内容
-            return !(msg.attachments.empty() && agentxx::util::isVisuallyBlank(msg.text));
-        case Role::System:
-        case Role::Tip:
-            return !agentxx::util::isVisuallyBlank(msg.text);
-        case Role::Think:
-            if (msg.durationMs > 0) {
-                return true; // 折叠头部会展示思考耗时
-            }
-            if (msg.think && (msg.think->isEncrypted || msg.think->reasoningTokens > 0)) {
-                return true; // 加密思考/token 统计仍有信息
-            }
-            return !agentxx::util::isVisuallyBlank(msg.text);
-        case Role::Tool:
-        case Role::Interrupt:
-            // 工具头部 (名称/参数摘要) 与中断表单控件始终有可见内容
-            return true;
-    }
-    return true;
+    return msg.hasVisibleContent();
 }
 
 /// 清掉从库里读回的提示消息的"运行中"标记

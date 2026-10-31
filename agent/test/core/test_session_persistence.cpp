@@ -238,31 +238,49 @@ static TestResult testViewMessagesRoundtrip() {
         p->appendViewMessage("t-blank", makeMsg(V::Role::Assistant, "hello"), 2);
         // 只有空格的思考消息 (且无耗时可展示) 同样不展示
         {
-            V think         = makeMsg(V::Role::Think, " ");
-            think.collapsed = true;
-            think.durationMs = 0; // makeMsg 默认带 123ms, 这里置 0 才是真的没信息
+            V think           = makeMsg(V::Role::Think, " ");
+            think.collapsed   = true;
+            think.durationMs  = 0; // makeMsg 默认带 123ms, 这里置 0 才是真的没信息
             p->appendViewMessage("t-blank", think, 3);
         }
-        // 带耗时的思考消息保留 (折叠头部会展示耗时)
+        // 只有耗时、没有任何思考正文的空思考消息也不展示: 它渲染出来只剩一个
+        // `[思考]` 头部行, 看上去就是一条空消息并和后面的消息粘在一起
         {
             V think          = makeMsg(V::Role::Think, " ");
             think.collapsed  = true;
             think.durationMs = 10900;
             p->appendViewMessage("t-blank", think, 4);
         }
+        // 加密思考 (无明文但有 token 统计) 保留: 头部会展示这些信息
+        {
+            V think          = makeMsg(V::Role::Think, "");
+            think.collapsed  = true;
+            think.durationMs = 1200;
+            think.think      = V::ThinkData{.reasoningTokens = 42, .isEncrypted = true};
+            p->appendViewMessage("t-blank", think, 5);
+        }
+        // 有正文的思考消息保留 (带耗时+正文)
+        {
+            V think           = makeMsg(V::Role::Think, "real thought");
+            think.collapsed   = true;
+            think.durationMs  = 3300;
+            p->appendViewMessage("t-blank", think, 6);
+        }
 
         auto loaded = std::make_shared<SessionStore>(root3)->loadSession("t-blank");
-        XX_TEST_EXPECT_EQ(loaded.viewMessages.size(), size_t{2});
-        if (loaded.viewMessages.size() == 2) {
+        XX_TEST_EXPECT_EQ(loaded.viewMessages.size(), size_t{3});
+        if (loaded.viewMessages.size() == 3) {
             XX_TEST_EXPECT_EQ(loaded.viewMessages[0].text, "hello");
-            XX_TEST_EXPECT_EQ(loaded.viewMessages[1].durationMs, int64_t{10900});
+            XX_TEST_EXPECT_EQ(loaded.viewMessages[1].think->reasoningTokens, 42);
+            XX_TEST_EXPECT_EQ(loaded.viewMessages[2].text, "real thought");
+            XX_TEST_EXPECT_EQ(loaded.viewMessages[2].durationMs, int64_t{3300});
         }
         // 被过滤的消息也占过 id: 计数不能小于实际分配过的数量
-        XX_TEST_EXPECT_TRUE(loaded.msgIdCounter >= uint64_t{4});
+        XX_TEST_EXPECT_TRUE(loaded.msgIdCounter >= uint64_t{6});
 
         // 增量补拉 (翻页) 走同一过滤规则
         auto rows = std::make_shared<SessionStore>(root3)->loadViewMessagesAfter("t-blank", 0);
-        XX_TEST_EXPECT_EQ(rows.size(), size_t{2});
+        XX_TEST_EXPECT_EQ(rows.size(), size_t{3});
         for (const auto& row : rows) {
             XX_TEST_EXPECT_FALSE(row.message.text == "\xE2\x80\x8B");
         }

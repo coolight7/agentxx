@@ -3,6 +3,7 @@
 #include <filesystem>
 #include <memory>
 
+#include "agentxx/util/invisible_text.h"
 #include "utilxx_base/json.h"
 #include "utilxx_base/string_util.h"
 #include <cstdint>
@@ -345,6 +346,39 @@ struct ViewMessage {
             m.collapsed = true;
         }
         return m;
+    }
+
+    /// 该消息是否有可展示的内容 (写入/加载/客户端插入时用它过滤"看不见"的消息)
+    ///
+    /// 判据 (只含空白/零宽占位符的正文视为无内容):
+    /// - 带附件的消息恒为有内容 (附件卡片本身可见)
+    /// - Think: 正文可见, 或带有加密思考/token 统计 (头部会展示这些信息);
+    ///   **只有耗时的空思考不算** —— 它渲染出来只剩一个 `[思考]` 头部行,
+    ///   看上去就是一条空消息
+    /// - Tool / Interrupt: 恒为有内容 (工具头部名称/参数与中断控件始终可见)
+    /// - 其余角色 (User/Assistant/System/Tip): 正文可见即算有内容
+    ///
+    /// - `return` 该消息值得出现在展示历史里时为 true
+    bool hasVisibleContent() const {
+        if (!attachments.empty()) {
+            return true;
+        }
+        switch (role) {
+            case Role::Tool:
+            case Role::Interrupt:
+                return true;
+            case Role::Think:
+                if (think && (think->isEncrypted || think->reasoningTokens > 0)) {
+                    return true;
+                }
+                return !agentxx::util::isVisuallyBlank(text);
+            case Role::User:
+            case Role::Assistant:
+            case Role::System:
+            case Role::Tip:
+                return !agentxx::util::isVisuallyBlank(text);
+        }
+        return true;
     }
 
     /// 序列化为 wire/哈希 JSON (角色专属字段按 role 输出)

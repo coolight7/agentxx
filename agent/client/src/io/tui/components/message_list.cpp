@@ -40,22 +40,22 @@ constexpr int kDecorItemIndent = 4;
 /// 当成正文输出并独占一条消息 —— 这种消息渲染出来只有一行空白, 再补一行尾部空行
 /// 就让相邻两条消息之间多出一整行 (表现为消息间距异常变大)。
 ///
-/// - 工具消息 (头部有名称/参数摘要) 与中断消息 (控件需要交互) 恒为 false
+/// 判据 = "该消息渲染后有没有可见内容":
+/// - Assistant/User: 正文无可见字符且无附件 (纯附件消息的附件卡片本身可见) 时为空白
+/// - Think/System/Tip: 头部行 (折叠标记 + 角色标签 + 可能的耗时/预览) 始终渲染,
+///   所以恒为 false —— 否则头部行不跟随尾部空行, 会和下一条消息贴在一起
+/// - Tool/Interrupt: 工具头部与交互控件始终可见
 bool isBlankMessage(const TUIMessage& msg) {
     switch (msg.role) {
         case TUIMessage::Role::Assistant:
         case TUIMessage::Role::User:
             // 附件卡片本身始终有可见内容
             return msg.attachments.empty() && agentxx::util::isVisuallyBlank(msg.text);
+        case TUIMessage::Role::Think:
         case TUIMessage::Role::System:
         case TUIMessage::Role::Tip:
-            // header 行 (折叠标记 + 角色标签) 仍在, 只是不再追加尾部空行
-            return agentxx::util::isVisuallyBlank(msg.text);
-        case TUIMessage::Role::Think:
-            if (msg.think && (msg.think->isEncrypted || msg.think->reasoningTokens > 0)) {
-                return false; // 加密思考/token 统计仍有信息要展示
-            }
-            return agentxx::util::isVisuallyBlank(msg.text);
+            // 头部行始终存在 (见上), 不再按正文判空白
+            return false;
         case TUIMessage::Role::Tool:
         case TUIMessage::Role::Interrupt:
             return false;

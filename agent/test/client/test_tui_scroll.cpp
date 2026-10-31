@@ -2894,15 +2894,17 @@ TestResult testTuiScroll() {
         (void)f.render();
         XX_TEST_EXPECT_EQ(f.comp->totalHeight(), 3); // 空消息 1 行 + 普通消息 2 行
 
-        // 只有耗时的思考消息: 头部仍展示耗时信息, 只是不再追加尾部空行
-        auto think        = std::make_shared<TUIMessage>();
-        think->role        = TUIMessage::Role::Think;
-        think->text        = " ";
-        think->durationMs  = 10900;
-        think->collapsed   = true;
+        // 只有耗时的思考消息: 头部行始终渲染 (折叠标记 + 角色标签 + 耗时),
+        // 因此仍跟着一行尾部空行 —— 否则这条头部会和下一条消息贴在一起
+        // (这正是"部分消息下边距为 0"的由来)
+        auto think       = std::make_shared<TUIMessage>();
+        think->role      = TUIMessage::Role::Think;
+        think->text      = " ";
+        think->durationMs = 10900;
+        think->collapsed  = true;
         f.sharedState.mutate([&](TUIRenderState& st) { st.messages.push_back(think); });
         (void)f.render();
-        XX_TEST_EXPECT_EQ(f.comp->totalHeight(), 4); // 3 + 思考消息 1 行
+        XX_TEST_EXPECT_EQ(f.comp->totalHeight(), 5); // 4 + 思考消息 2 行 (头部 + 尾部空行)
     }
 
     // 恢复原始界面语言

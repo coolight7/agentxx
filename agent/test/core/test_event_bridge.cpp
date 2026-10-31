@@ -484,6 +484,33 @@ asio::awaitable<void> test_eventbridge_channel_write_thinking() {
         XX_TEST_EXPECT_EQ(assistant.text, std::string{"answer"});
     }
 
+    // ---- 5. 思考内容只有空白/零宽占位符: 不生成空的 Think 消息 ----
+    // 这种消息渲染出来只剩一个 `[思考]` 头部行, 看上去就是一条空消息,
+    // 而且它不追加尾部空行, 会和后面的消息贴在一起 (实况与会话重拉历史两种情况
+    // 原先不一致, 现在写入侧就不生成)
+    bridgeCb(neograph::graph::GraphEvent{
+        neograph::graph::GraphEvent::Type::CHANNEL_WRITE,
+        "llm",
+        neograph::json{
+                       {"channel", "messages"},
+                       {"value",
+             neograph::json::array({
+                 neograph::json{
+                     {"role", "assistant"},
+                     {"content", "after blank think"},
+                     {"reasoning_content", "\xE2\x80\x8B \n"},
+                 },
+             })},
+                       }
+    });
+    XX_TEST_EXPECT_EQ(session->viewMessages.size(), size_t{8});
+    if (session->viewMessages.size() == 8) {
+        XX_TEST_EXPECT_TRUE(
+            session->viewMessages[7].role == agentxx::agent::ViewMessage::Role::Assistant
+        );
+        XX_TEST_EXPECT_EQ(session->viewMessages[7].text, std::string{"after blank think"});
+    }
+
     co_return;
 }
 
