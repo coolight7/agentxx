@@ -159,6 +159,26 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
     // Plan 段落已拆分至 agentxx_planning 插件 client 侧 (经 register_info_section
     // 注入, 见 agent/plugins/agentxx_planning), TUI 不再硬编码渲染
 
+    // 当前会话标题 (信息侧边栏第一段): 标题来自会话库 meta.title
+    // (首条用户消息预览或用户改名), 由服务端随 WireContextStats.sessionTitle 下发
+    // (见 TUIClientAgentIO::onContextStats); 尚未取得标题时显式提示"未命名",
+    // 避免空白首行看起来像渲染缺失
+    {
+        Elements sessionEls;
+        sessionEls.push_back(text(tr("info.session")) | color(theme_.accentColor));
+        if (st.sessionTitle.empty()) {
+            sessionEls.push_back(
+                hbox({text("|- "), text(tr("info.sessionUntitled"))}) | color(theme_.hintColor)
+            );
+        } else {
+            // 长标题按可用宽度折行 (不用 text: 侧边栏较窄时标题会直接被裁掉)
+            sessionEls.push_back(paragraph(fmt::format("|- {}", st.sessionTitle))
+                                 | color(theme_.normalColor));
+        }
+        pushPlain(vbox(std::move(sessionEls)));
+        pushPlain(text(""));
+    }
+
     // 插件扩展的 Info 段落 (插件经 register_info_section 注入; UI 线程渲染,
     // 每帧从 client 插件注册表快照读取, 无需缓存):
     // - 段落在 Append 之后按注册顺序展示 (标题 + items, items schema 同面板)

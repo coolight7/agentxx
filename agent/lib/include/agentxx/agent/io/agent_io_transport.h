@@ -272,6 +272,12 @@ struct WireContextStats {
     uint64_t totalTokens = 0;
     /// 其中命中 prompt 缓存的 token 累计 (缓存命中率 = 它与 promptTokens 之比)
     uint64_t cachedPromptTokens = 0;
+
+    // ---- 会话标识 (追加在末尾; 老对端不认识时按空串处理) ----
+
+    /// 当前会话标题 (空 = 未命名/老对端未提供)
+    /// - 界面 (TUI 信息侧边栏) 据此显示当前会话标题; 内容与改名/自动标题同步
+    std::string sessionTitle;
 };
 
 /// Wire 层错误码 (`WireError::code`)

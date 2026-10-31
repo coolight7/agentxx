@@ -138,6 +138,12 @@ struct ContextStats {
 
     /// 本会话已消耗的 token 累计量
     SessionUsageTotals usage;
+
+    /// 会话标题 (空 = 未命名/尚未写入)
+    /// - 来源是会话库的 `meta.title`: 首条用户消息的预览 (自动) 或用户改名
+    /// - 随上下文统计一并发给界面 (WireContextStats::sessionTitle), 界面的信息
+    ///   侧边栏据此显示当前会话标题; 会话加载时从会话库恢复, 自动标题/改名后刷新
+    std::string title;
 };
 
 /// 会话当前活动状态

@@ -176,6 +176,13 @@ struct TUIRenderState {
     size_t maxContextTokens = 0;
     double tps              = 0.0;
 
+    /// 当前会话标题 (WireContextStats.sessionTitle 下发; 空 = 未命名/老服务端)
+    /// - 信息侧边栏顶部显示当前会话标题; 标题来自会话库 meta.title
+    ///   (首条用户消息预览或用户改名), 会话加载/自动命名/改名后会随统计推送更新
+    /// - 服务端未提供标题 (老服务端/新会话首条消息未落盘) 时保持原值不清空;
+    ///   会话切换时清空, 避免短暂显示上一个会话的标题
+    std::string sessionTitle;
+
     /// 本会话已消耗的 token 累计量 (WireContextStats 同一条消息下发)
     /// - 与 contextTokens 的区别: 后者是"当前装了多少" (随压缩回落), 这里是
     ///   "累计花掉多少", 只增不减; Info 侧边栏的 Context 段据此显示

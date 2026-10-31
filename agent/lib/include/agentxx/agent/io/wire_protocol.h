@@ -763,6 +763,10 @@ inline utilxx_base::Json makeContextStats(const WireContextStats& msg) {
     j["completionTokens"]   = msg.completionTokens;
     j["totalTokens"]        = msg.totalTokens;
     j["cachedPromptTokens"] = msg.cachedPromptTokens;
+    // 会话标题: 空串不发, 对端保持原有显示 (老服务端同样不发该字段)
+    if (!msg.sessionTitle.empty()) {
+        j["sessionTitle"] = msg.sessionTitle;
+    }
     return j;
 }
 

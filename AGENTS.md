@@ -396,7 +396,13 @@ path/to/agentxx_test string_util regex
 - 完全授权状态: `GetPermissionState` / `SetFullAuth` / `PermissionState` 三消息
   (状态源在权限中间件 `PermissionMiddlewareHandle::isFullAuthorized`, 客户端只持镜像; 点击先乐观更新,
   服务端广播回来校准); TUI Info 侧边栏底部工作目录行显示/切换该状态 (见 tui.md §2.8)
-- Info 面板 Context 段 (2026-10): Info tab 内容区**第一段**显示本会话累计消耗的 token
+- Info 面板会话标题段 (2026-11): Info tab 内容区**第一段**显示当前会话标题
+  (来自会话库 `meta.title`: 首条用户消息预览或用户改名; 无标题时显示"( 未命名 )"),
+  Append/Context 段与插件段落排在它之后; 下发通道 `WireContextStats.sessionTitle`
+  (空串不发, 客户端只接受非空值且切换会话时清空), 服务端缓存 `ContextStats::title`
+  (加载时由 `LoadedSession::title` 恢复、首条用户消息落盘时经 `onAppendViewMessage`
+  同步、改名后由 `handleRenameSession` 写入), 见 tui.md §2.7
+- Info 面板 Context 段 (2026-10): 显示本会话累计消耗的 token
   (已消耗/缓存/输入/输出 + 缓存命中率), Append 段与插件段落排在它之后 (见 tui.md §2.7);
   数据源 = 会话累计用量 `SessionUsageTotals` (`Session::contextStats->usage`, 与用量台账
   `SessionStore` 的 `usage` 表在同一处结算 —— modelcall.cpp 的 `recordUsage`), 经

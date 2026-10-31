@@ -178,7 +178,17 @@ static SessionStore::UsageSummary readUsageSummary(agentxx::util::SqliteDb& db) 
 }
 
 /// 会话名称预览: 取首行并截断到 max 个 UTF-8 字符 (避免弹窗展示过宽)
-static std::string titlePreview(std::string_view s, size_t max = 60) {
+///
+/// - 自动标题 (会话落盘时取首条用户消息的预览) 与界面显示当前会话标题共用同一规则
+///   (对内实现; 对外声明见 session_store.h)
+/// - 只取首行并去掉行尾回车/空格; 超过 max 个字符时截断并追加 "..."
+///
+/// - `args`:
+///     - [s] 原文 (可含换行)
+///     - [max] 最多保留的 UTF-8 字符数 (按字符而非字节截断)
+///
+/// - `return` 单行预览; 输入为空/纯空白时返回空串
+std::string previewOfTitle(std::string_view s, size_t max) {
     const auto  nl = s.find('\n');
     std::string line{(nl == std::string_view::npos) ? s : s.substr(0, nl)};
     // 去除行尾回车 (Windows 换行符 \r\n)
@@ -240,6 +250,10 @@ std::string dumpJsonUtf8(const utilxx_base::Json& j) {
 }
 
 } // namespace
+
+std::string sessionTitlePreview(std::string_view text, size_t max) {
+    return previewOfTitle(text, max);
+}
 
 void SessionStore::updateViewMessage(std::string_view sessionId, const ViewMessage& msg) {
     if (msg.id.empty()) {
@@ -734,6 +748,9 @@ SessionStore::LoadedSession SessionStore::loadSession(std::string_view sessionId
                     out.msgIdCounter = static_cast<uint64_t>(stmt.columnInt64(1));
                 } else if (stmt.columnText(0) == kMetaViewSeqCounter) {
                     out.lastViewSeq = static_cast<uint64_t>(stmt.columnInt64(1));
+                } else if (stmt.columnText(0) == kMetaTitle) {
+                    // 会话标题 (界面显示用; 与历史同一次读取, 不额外开连接)
+                    out.title = stmt.columnText(1);
                 }
             }
             return true;
@@ -1091,7 +1108,7 @@ void SessionStore::appendViewMessage(
                 }
                 // 会话名称: 首条用户消息的单行预览 (仅首次写入, 不覆盖)
                 if (msg.role == ViewMessage::Role::User && !msg.text.empty()) {
-                    auto title = titlePreview(msg.text);
+                    auto title = previewOfTitle(msg.text, 60);
                     if (!title.empty()) {
                         auto titleStmt = db.prepare("INSERT INTO meta(key, value) VALUES (?, ?) "
                                                     "ON CONFLICT(key) DO NOTHING");

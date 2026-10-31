@@ -2517,6 +2517,15 @@ void SessionServerAgentIO::handleRenameSession(
     result.ok    = true;
     result.title = title;
     reply(std::move(result));
+
+    // 当前会话的标题缓存同步: 界面 (信息侧边栏) 从上下文统计里的标题显示
+    // (改其他会话时本项不变)
+    if (sessionId == config_.sessionId) {
+        if (auto sess = session(); sess && sess->contextStats) {
+            sess->contextStats->title = title;
+        }
+        sendContextStats();
+    }
 }
 
 bool SessionServerAgentIO::acceptSessionScope(
@@ -2636,6 +2645,17 @@ void SessionServerAgentIO::sendContextStats(const std::shared_ptr<AgentIOTranspo
     auto sess = session();
     if (!sess || !sess->contextStats) {
         return;
+    }
+    // 会话标题缓存尚未取得时向会话库要一次: 自动标题 (首条用户消息预览) 是
+    // 会话落盘时写的, 本端的缓存无法提前知道; 拿到即缓存, 之后不再读库
+    // (改名路径由 handleRenameSession 直接写入缓存)
+    if (sess->contextStats->title.empty()) {
+        auto agent = agent_.lock();
+        if (agent && agent->agentContext && agent->agentContext->sessions) {
+            if (auto store = agent->agentContext->sessions->sessionStore) {
+                sess->contextStats->title = store->sessionTitle(config_.sessionId);
+            }
+        }
     }
     // 上下文占用 + 会话累计用量 (界面显示已消耗/输入/输出/缓存 token) 统一组装
     WireContextStats stats = io::toWireContextStats(*sess->contextStats);

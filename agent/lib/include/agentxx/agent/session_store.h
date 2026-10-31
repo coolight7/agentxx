@@ -15,6 +15,18 @@
 namespace agentxx {
 namespace agent {
 
+/// 会话标题预览: 首条用户消息的单行预览 (自动标题的生成规则)
+/// - 写库 (appendViewMessage 的首条用户消息) 与内存里的标题缓存同步共用同一实现,
+///   不各自再写一份截断规则
+/// - 只取首行并去掉行尾回车/空格; 超过 [max] 个 UTF-8 字符时截断并追加 "..."
+///
+/// - `args`:
+///     - [text] 原始输入文本 (可含换行)
+///     - [max]  最多保留的 UTF-8 字符数 (按字符而非字节截断)
+///
+/// - `return` 单行预览; 输入为空/纯空白时返回空串
+std::string sessionTitlePreview(std::string_view text, size_t max = 60);
+
 /// 会话数据 SQLite 持久化 (按 sessionId 分目录)
 ///
 /// 目录结构: {root}/{sanitizedSessionId}/
@@ -80,6 +92,9 @@ public:
         uint64_t lastViewSeq = 0;
         /// 该会话历史累计用量 (usage 表聚合; 无记录/读取失败时为全 0)
         UsageSummary usage;
+        /// 会话标题 (meta.title): 自动标题 (首条用户消息预览) 或用户改名;
+        /// 无记录/读取失败时为空串 (供界面显示当前会话标题)
+        std::string title;
     };
 
     /// 加载指定 session 的会话消息状态; 无数据/打开失败时返回空结构 (仅记日志)

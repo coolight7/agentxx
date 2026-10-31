@@ -16,6 +16,9 @@ namespace io {
 /// - `handleNodeEnd` / `sendContextStats` 只报占用与用量, `tps` 取 0
 /// - 流式期间的定时推送 (EventBridge::pushTpsIfDue) 额外带上当前窗口的生成速度
 ///
+/// 会话标题 (ContextStats::title) 于所有推送点一并下发 —— 界面据此显示当前会话标题,
+/// 标题在会话加载/自动命名/改名后才变, 取不到时为空串 (界面保留原显示)。
+///
 /// - `args`:
 ///     - [stats] 会话持有的统计 (Session::contextStats; 必须非空)
 ///     - [tps]   当前 ModelCall 的平均生成速度 (token/s); 0 表示本次不报速度
@@ -26,6 +29,7 @@ inline WireContextStats toWireContextStats(const ContextStats& stats, double tps
     out.contextTokens    = static_cast<uint64_t>(stats.contextTokens);
     out.maxContextTokens = static_cast<uint64_t>(stats.maxContextTokens);
     out.tps              = tps;
+    out.sessionTitle     = stats.title;
     // 累计用量按非负值下发 (统计本身只增, 负数只可能来自脏数据)
     out.promptTokens = static_cast<uint64_t>(std::max<int64_t>(0, stats.usage.promptTokens));
     out.completionTokens

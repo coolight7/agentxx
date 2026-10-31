@@ -380,6 +380,8 @@ WireContextStats contextStatsFromJson(const utilxx_base::Json& j) {
     stats.completionTokens   = j.value("completionTokens", uint64_t{0});
     stats.totalTokens        = j.value("totalTokens", uint64_t{0});
     stats.cachedPromptTokens = j.value("cachedPromptTokens", uint64_t{0});
+    // 会话标题: 老服务端不带该字段时为空串 (界面保留/不显示标题)
+    stats.sessionTitle = j.value("sessionTitle", std::string{});
     return stats;
 }
 

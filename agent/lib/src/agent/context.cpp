@@ -75,6 +75,19 @@ SessionStoreHooks makeSessionStoreHooks(
              sessionId,
              weakSession](const ViewMessage& msg, uint64_t counter, uint64_t seq) {
                 store->appendViewMessage(sessionId, msg, counter, seq);
+                // 自动标题 (首条用户消息预览) 上一步已随消息写入会话库: 同步到会话统计,
+                // 使界面 (信息侧边栏) 无需等下次从库里取就能显示标题
+                // (已有标题时不覆盖: 改名优先, 且缓存已非空)
+                if (msg.role == ViewMessage::Role::User && !msg.text.empty()) {
+                    if (auto sessionPtr = weakSession.lock();
+                        sessionPtr && sessionPtr->contextStats
+                        && sessionPtr->contextStats->title.empty()) {
+                        auto title = sessionTitlePreview(msg.text);
+                        if (!title.empty()) {
+                            sessionPtr->contextStats->title = std::move(title);
+                        }
+                    }
+                }
                 reportPersistFailure(weakSession.lock(), store);
             },
         .onUpdateViewMessage =
@@ -581,6 +594,8 @@ std::shared_ptr<Session> SessionsManager::getOrCreate(std::string_view sessionId
         // 界面显示"本会话已消耗多少 token"跨进程重启连续
         if (session->contextStats) {
             session->contextStats->usage = usageTotalsOf(loaded.usage);
+            // 会话标题一并恢复: 界面 (信息侧边栏) 启动即有标题可显示
+            session->contextStats->title = loaded.title;
         }
     }
     utilxx_base::insertHeterogeneous(sessions_, std::string{sessionId}, session);
@@ -624,6 +639,7 @@ asio::awaitable<std::shared_ptr<Session>>
         // 累计用量从台账恢复 (与 getOrCreate 同一处理)
         if (session->contextStats) {
             session->contextStats->usage = usageTotalsOf(loaded.usage);
+            session->contextStats->title = loaded.title;
         }
     }
     utilxx_base::insertHeterogeneous(sessions_, std::string{sessionId}, session);

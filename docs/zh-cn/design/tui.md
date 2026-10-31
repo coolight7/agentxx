@@ -334,12 +334,32 @@ struct UiActionItem {
 - 相关 schema 与约束见 [plugins.md](plugins.md) §9.1~§9.6 与
   [ui_components.h](/agent/client/include/agentxx-client/io/tui/ui_components.h)。
 
-### 2.7 Info 面板: Context 段 (已消耗 token 用量)
+### 2.7 Info 面板: 会话标题段与 Context 段 (已消耗 token 用量)
 
 Info tab 内容区 (`renderInfoSidebar()`, 见
-[tui_sidebar_content.cpp](/agent/client/src/io/tui/tui_sidebar_content.cpp)) 的**第一段**是
-Context 段, 显示本会话累计消耗的 token 用量; Append 段 (已加载组件) 与插件 Info 段落
-都排在它之后:
+[tui_sidebar_content.cpp](/agent/client/src/io/tui/tui_sidebar_content.cpp)) 自上而下是:
+**会话标题段** → 插件 Info 段落 → Context 段 → Append 段。
+
+会话标题段显示当前会话的名称:
+
+```
+会话
+|- 修复 TUI 弹窗拖选复制
+```
+
+- 标题来自会话库的 `meta.title`: 首条用户消息的单行预览 (自动标题) 或用户改名
+  (`sessionTitlePreview` 是两处共用的截断规则)。
+- 下发通道与 Context 段相同 (`WireContextStats.sessionTitle`, 空串时不发):
+  会话加载时从库里恢复进 `ContextStats::title` (`LoadedSession::title`), 自动标题在
+  首条用户消息落盘时同步 (`onAppendViewMessage` 回调), 用户改名在
+  `handleRenameSession` 里写入并补发一次统计。
+- 客户端 `onContextStats` **只接受非空标题** —— 流式期间每秒一次的 tps 推送、
+  老服务端都不带这个字段, 不能把已显示的标题抹掉; 切换会话时先清空, 避免
+  短暂显示上一个会话的标题。
+- 尚未有标题 (全新会话还没发过消息 / 服务端未提供) 时显示 `( 未命名 )`
+  (`info.sessionUntitled`), 不留空白首行。
+
+Context 段显示本会话累计消耗的 token 用量:
 
 ```
 Context

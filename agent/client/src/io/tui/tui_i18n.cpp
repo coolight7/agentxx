@@ -354,6 +354,9 @@ constexpr Entry kTable[] = {
 
     // ---- 日志/Info 侧边栏内容 ----
     {"info.empty",                      "( Empty )",                                                                     "( 空 )"                                                                                                  },
+    // Info 侧边栏顶部: 当前会话标题 (信息侧边栏第一段)
+    {"info.session",                    "Session",                                                                       "会话"                                                                                                   },
+    {"info.sessionUntitled",            "( untitled )",                                                                  "( 未命名 )"                                                                                              },
     {"info.context",                    "Context",                                                                       "上下文"                                                                                                },
     {"info.usedTokens",                 "Used: {}",                                                                      "已消耗: {}"                                                                                            },
     {"info.cacheTokens",                "Cached: {}",                                                                    "缓存: {}"                                                                                               },

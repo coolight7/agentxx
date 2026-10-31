@@ -70,6 +70,9 @@ public:
     std::atomic<uint64_t>                  lastCompletionTokens{0};
     std::atomic<uint64_t>                  lastTotalTokens{0};
     std::atomic<uint64_t>                  lastCachedTokens{0};
+    /// 最近一次推送的会话标题 (WireContextStats::sessionTitle)
+    std::mutex                             titleMu;
+    std::string                            lastSessionTitle;
     std::mutex                             mu;
 
     void onDelta(const agentxx::agent::WireDelta& delta) override {
@@ -94,6 +97,15 @@ public:
         lastCompletionTokens.store(s.completionTokens);
         lastTotalTokens.store(s.totalTokens);
         lastCachedTokens.store(s.cachedPromptTokens);
+        {
+            std::lock_guard<std::mutex> lock(titleMu);
+            lastSessionTitle = s.sessionTitle;
+        }
+    }
+
+    std::string sessionTitle() {
+        std::lock_guard<std::mutex> lock(titleMu);
+        return lastSessionTitle;
     }
 
     asio::awaitable<std::optional<std::string>> getInput() override {
@@ -1441,6 +1453,7 @@ static asio::awaitable<void> test_remote_client_context_stats() {
         wireStats.completionTokens   = 100;
         wireStats.totalTokens        = 1000;
         wireStats.cachedPromptTokens = 600;
+        wireStats.sessionTitle      = "demo session";
         co_await wsSendJson(ws, io::makeContextStats(wireStats));
         for (;;) {
             auto j = co_await wsRecvJson(ws);
@@ -1494,6 +1507,8 @@ static asio::awaitable<void> test_remote_client_context_stats() {
         XX_TEST_EXPECT_EQ(io->lastCompletionTokens.load(), uint64_t{100});
         XX_TEST_EXPECT_EQ(io->lastTotalTokens.load(), uint64_t{1000});
         XX_TEST_EXPECT_EQ(io->lastCachedTokens.load(), uint64_t{600});
+        // 会话标题字段 round-trip (信息侧边栏顶部显示当前会话标题)
+        XX_TEST_EXPECT_EQ(io->sessionTitle(), std::string{"demo session"});
     }
     transport->close();
 

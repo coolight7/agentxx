@@ -294,12 +294,79 @@ void test_persist_degradation_tip() {
     removeTempRoot(root);
 }
 
+// ---------------------------------------------------------------------------
+// 4. 会话标题: 首条用户消息落盘时生成自动标题并同步到会话统计, 重新加载时恢复
+// ---------------------------------------------------------------------------
+
+void test_session_title_sync() {
+    const auto        root = makeTempRoot();
+    const std::string sid  = "ps-title";
+
+    std::string expected;
+    {
+        SessionsManager mgr;
+        mgr.sessionStore = std::make_shared<SessionStore>(root);
+        auto session     = mgr.getOrCreate(sid);
+        XX_TEST_EXPECT_TRUE(session->contextStats->title.empty());
+
+        // 首条用户消息: 落盘时写自动标题 (单行预览), 并同步到会话统计
+        // (界面 Info 侧边栏顶部显示当前会话标题)
+        session->appendViewMessage(makeMsg("t1", "first line of the request\nsecond line"));
+        session->persistNow("test");
+        XX_TEST_EXPECT_EQ(
+            session->contextStats->title,
+            std::string{"first line of the request"}
+        );
+
+        // 后续消息不覆盖已生成的标题
+        session->appendViewMessage(makeMsg("t2", "another message"));
+        session->persistNow("test");
+        XX_TEST_EXPECT_EQ(
+            session->contextStats->title,
+            std::string{"first line of the request"}
+        );
+        expected = session->contextStats->title;
+
+        // 会话库加载时一并恢复标题 (同一只读连接, 不额外开库里连接)
+        auto loaded = mgr.sessionStore->loadSession(sid);
+        XX_TEST_EXPECT_EQ(loaded.title, expected);
+    }
+
+    // 重新加载会话: 标题从会话库回到会话统计 (界面启动即有标题可显示)
+    {
+        SessionsManager mgr;
+        mgr.sessionStore = std::make_shared<SessionStore>(root);
+        auto session     = mgr.getOrCreate(sid);
+        XX_TEST_EXPECT_EQ(session->contextStats->title, expected);
+    }
+
+    // 标题预览规则: 取首行/去行尾回车与空格/超长截断并追加 "..."
+    XX_TEST_EXPECT_EQ(agentxx::agent::sessionTitlePreview("", 60), std::string{});
+    XX_TEST_EXPECT_EQ(agentxx::agent::sessionTitlePreview("\nnext", 60), std::string{});
+    XX_TEST_EXPECT_EQ(
+        agentxx::agent::sessionTitlePreview("a\r\n b", 60),
+        std::string{"a"}
+    );
+    XX_TEST_EXPECT_EQ(
+        agentxx::agent::sessionTitlePreview("abcdef", 3),
+        std::string{"abc..."}
+    );
+    // 中文按字符截断 (不能切在多字节中间)
+    XX_TEST_EXPECT_EQ(
+        agentxx::agent::sessionTitlePreview("一二三", 2),
+        std::string{"一二..."}
+    );
+
+    removeTempRoot(root);
+}
+
 } // namespace
 
 TestResult testPersistSemantics() {
     test_persist_levels();
     test_view_seq_recovery();
     test_persist_degradation_tip();
+    test_session_title_sync();
     return TestResult{g_ps_passed, g_ps_failed};
 }
 

@@ -1808,7 +1808,9 @@ void TUIClientAgentIO::switchToSession(std::string newThreadId) {
         st.pendingInputs.clear();
         st.contextMessages.reset();
         st.showContextOverlay = false;
-        currentModel          = st.cachedModelName;
+        // 新会话标题随服务端回推的 WireContextStats 到达; 先清空避免显示旧标题
+        st.sessionTitle.clear();
+        currentModel = st.cachedModelName;
         if (!currentModel.empty()) {
             st.pendingModel = currentModel;
         }
@@ -2666,6 +2668,11 @@ void TUIClientAgentIO::onSessionRenameResult(const agentxx::agent::WireRenameSes
                     break;
                 }
             }
+            // 改的是当前会话: 信息侧边栏顶部的标题同步更新
+            // (服务端也会回推一次统计, 这里让界面先跟随, 不依赖对端实现)
+            if (resp.sessionId == currentSessionId()) {
+                st.sessionTitle = resp.title;
+            }
         }
     }
     if (!resp.ok) {
@@ -3231,6 +3238,11 @@ void TUIClientAgentIO::onContextStats(const agentxx::agent::WireContextStats& st
         st.sessionUsageKnown
             = (stats.promptTokens > 0 || stats.completionTokens > 0 || stats.totalTokens > 0
                || stats.cachedPromptTokens > 0);
+        // 当前会话标题: 服务端取不到标题时不带该字段 (空串), 此时保留已有显示
+        // (不清空 —— 流式期间的 tps 推送也走同一通道, 不该把标题抹掉)
+        if (!stats.sessionTitle.empty()) {
+            st.sessionTitle = stats.sessionTitle;
+        }
     }
     postRedraw();
 }

@@ -850,6 +850,59 @@ void test_info_sidebar_context_section() {
     TUISettings::instance().setLanguage(savedLang);
 }
 
+/// Info 侧边栏顶部会话标题段:
+/// - 服务端尚未推送标题时显示"未命名" (不留空白首行)
+/// - WireContextStats.sessionTitle 下发后显示标题, 且排在 Context / Append 段之上
+/// - 后续推送不带标题 (流式中的 tps 推送、老服务端) 时不清空已显示的标题
+void test_info_sidebar_session_title() {
+    const auto savedLang = TUISettings::instance().language();
+    TUISettings::instance().setLanguage(TuiLanguage::EnUs);
+
+    asio::io_context io;
+    auto             tui = std::make_shared<TUIClientAgentIO>(io.get_executor(), "session");
+    tui->refreshRenderContext();
+
+    // 1) 尚未收到标题: 显示"( untitled )"
+    {
+        const auto text = renderScrollItems(tui->renderInfoSidebar(), 60, 12);
+        XX_TEST_EXPECT_TRUE(text.find("Session") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(text.find("( untitled )") != std::string::npos);
+    }
+
+    // 2) 收到标题: 顶部显示标题 (位于 Context 段之上)
+    {
+        agentxx::agent::WireContextStats stats;
+        stats.contextTokens    = 100;
+        stats.maxContextTokens = 1000;
+        stats.sessionTitle     = "first user message";
+        tui->onPeerMessage(agentxx::agent::WireMessage{stats});
+        tui->refreshRenderContext();
+
+        const auto text = renderScrollItems(tui->renderInfoSidebar(), 60, 12);
+        XX_TEST_EXPECT_TRUE(text.find("first user message") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(text.find("( untitled )") == std::string::npos);
+        // 标题段在最上面 (Context / Append 之前)
+        const auto posSession = text.find("Session");
+        const auto posContext = text.find("Context");
+        XX_TEST_EXPECT_TRUE(posSession != std::string::npos);
+        XX_TEST_EXPECT_TRUE(posContext != std::string::npos);
+        XX_TEST_EXPECT_TRUE(posSession < posContext);
+    }
+
+    // 3) 后续推送不带标题 (tps 推送/老服务端): 已显示的标题不被清空
+    {
+        agentxx::agent::WireContextStats stats;
+        stats.tps = 12.5;
+        tui->onPeerMessage(agentxx::agent::WireMessage{stats});
+        tui->refreshRenderContext();
+        const auto text = renderScrollItems(tui->renderInfoSidebar(), 60, 12);
+        XX_TEST_EXPECT_TRUE(text.find("first user message") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(text.find("( untitled )") == std::string::npos);
+    }
+
+    TUISettings::instance().setLanguage(savedLang);
+}
+
 /// 记录收到的鼠标事件、固定返回指定"是否处理"的模态组件 (测试模态层的事件契约)
 class ProbeModal : public ftxui::ComponentBase {
 public:
@@ -996,6 +1049,7 @@ TestResult testTuiWidget() {
     test_panel_access_point_extended_components();
     test_info_access_point_extended_components();
     test_info_sidebar_context_section();
+    test_info_sidebar_session_title();
     test_modal_container_mouse_contract();
     test_modal_overlay_text_selectable();
 
