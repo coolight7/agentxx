@@ -1332,6 +1332,20 @@ void TUIClientAgentIO::handleShellHit(std::string_view id) {
         openLogsMenu();
         return;
     }
+    if (id == kLogsSessionIdHitId) {
+        // 点击日志侧边栏底部的 session-id: 复制到剪贴板 (便于在日志/报告里引用会话)
+        const std::string sessionId = currentSessionId();
+        if (sessionId.empty()) {
+            return;
+        }
+        if (agentxx::client::copyTextToSystemClipboard(sessionId)) {
+            showToast(trf("toast.copied", sessionId));
+        } else {
+            showToast(std::string(tr("toast.copyFailed")));
+        }
+        postRedraw();
+        return;
+    }
     if (id == kAuthToggleHitId) {
         toggleFullAuth();
         return;

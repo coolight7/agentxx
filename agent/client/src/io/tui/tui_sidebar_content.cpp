@@ -429,6 +429,22 @@ ftxui::Element TUIClientAgentIO::renderInfoSidebarFooter() {
 ftxui::Element TUIClientAgentIO::renderLogSidebarFooter() {
     const auto& st = *ctx_.frameState;
 
+    Elements elements;
+
+    // 第一行: 当前会话 session-id (排查问题时需要知道日志属于哪个会话);
+    // 侧边栏宽度有限, 超宽时由 xflex_shrink 压缩
+    const std::string sessionId = currentSessionId();
+    if (!sessionId.empty()) {
+        elements.push_back(
+            shellHits_.add(
+                text(trf("info.sessionId", sessionId)) | xflex_shrink,
+                std::string{kLogsSessionIdHitId}
+            )
+            | color(theme_.hintColor)
+        );
+    }
+
+    // 第二行: 当前执行节点 (空闲时显示 idle) + [Menu] 按钮
     Elements row;
     if (st.currentNodeName.empty()) {
         row.push_back(text(tr("info.idle")) | color(theme_.hintColor));
@@ -444,7 +460,8 @@ ftxui::Element TUIClientAgentIO::renderLogSidebarFooter() {
         std::string{kLogsMenuHitId}
     ));
 
-    return hbox(std::move(row));
+    elements.push_back(hbox(std::move(row)));
+    return vbox(std::move(elements));
 }
 
 } // namespace agentxx::client

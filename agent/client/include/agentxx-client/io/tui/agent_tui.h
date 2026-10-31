@@ -853,6 +853,7 @@ private:
     /// 主界面零散按钮的命中登记表 (跨组件、动作实现在 TUIClientAgentIO 内):
     /// - Info 侧边栏 Append "Failed" 组 [view] 按钮 → 打开加载失败组件列表
     /// - Logs 侧边栏底部 [Menu] 按钮 → 打开日志菜单
+    /// - Logs 侧边栏底部当前会话 session-id → 复制到系统剪贴板
     /// 由对应渲染函数在渲染期登记, 每帧渲染入口清空 (见 mainRenderer):
     /// 按钮未渲染 (侧边栏 tab 未激活 / 无失败项) 时不会命中。
     agentxx::client::UiHitMap shellHits_;
@@ -864,6 +865,8 @@ private:
     static constexpr std::string_view kAuthToggleHitId = "shell/info-auth-toggle";
     /// Info 侧边栏底部"发现新版本"提示行 (点击复制发布页链接)
     static constexpr std::string_view kUpdateNoticeHitId = "shell/info-update-notice";
+    /// Logs 侧边栏底部当前会话 session-id 行 (点击复制 session-id)
+    static constexpr std::string_view kLogsSessionIdHitId = "shell/logs-session-id";
 
     /// 处理 shell 级按钮命中 (UI 线程; 由全局鼠标事件经 shellHits_ 分发)
     void handleShellHit(std::string_view id);

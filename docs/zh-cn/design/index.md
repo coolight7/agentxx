@@ -565,6 +565,8 @@ TUI [F3] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
     当前"完全授权 / 询问授权"状态并可点击切换; 状态属 agent 侧权限中间件, 客户端只持镜像,
     握手/查询取初值、服务端变更广播校准)、`Agentxx <版本> · 连接方式` 行、发现新版本时的
     更新提示行 (点击复制发布页链接)
+  - Logs 侧边栏底部两行: 当前会话 session-id 行 (`Session <id>`, 点击复制到系统剪贴板 ——
+    便于把日志对应到具体会话) 与 `{当前节点} [ Menu ]` 行 (点击打开日志菜单)
   - 更新检查 (可选): 启动时延迟 3 秒查询 GitHub Release (`/releases/latest` 的 302 Location
     或 JSON `tag_name`, 超时各 8 秒, 失败只记日志), 仅当最新版本大于当前编译版本才提示;
     受设置项 `tui.checkUpdateOnStartup` 控制; 即时检查经设置条目触发, 结果以弹窗

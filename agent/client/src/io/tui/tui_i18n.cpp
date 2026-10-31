@@ -376,6 +376,8 @@ constexpr Entry kTable[] = {
     {"info.updateNotice",               "[ New Version {} ]",                                                            "[ 新版本 {} ]"                                                                                         },
     {"info.updateHint",                 "click to copy the release link",                                                "点击复制发布链接"                                                                                 },
     {"info.idle",                       "idle",                                                                          "空闲"                                                                                                   },
+    // 日志侧边栏底部: 当前会话 session-id (点击复制)
+    {"info.sessionId",                  "Session {}",                                                                    "会话 {}"                                                                                                },
     {"footer.menu",                     "[ Menu ]",                                                                      "[ 菜单 ]"                                                                                               },
 };
 
