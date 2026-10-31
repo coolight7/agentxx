@@ -1214,10 +1214,12 @@ void* chatbotStart(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, Plugin
         ctx.publishPanel();
     });
     ctx.log.info(fmt::format(
-        "已启动: {} 个账号, {} 个人设, {} 条命令",
+        "已启动: {} 个账号, {} 个人设, {} 条命令; 消息时区 {} (behavior.timezone = '{}')",
         ctx.config.accounts.size(),
         ctx.config.personas.size(),
-        ctx.config.commands.size()
+        ctx.config.commands.size(),
+        ac::timezoneLabel(ctx.config.behavior.timezoneSpec, ac::systemNowMs()),
+        ctx.config.behavior.timezone
     ));
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;

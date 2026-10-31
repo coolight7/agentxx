@@ -27,27 +27,6 @@ constexpr const char* kTruncatedNotice = "…（本条内容过长已截断）";
 /// 账号上线后多久仍没收到群全量消息就提示“去开平台权限”
 constexpr int64_t kFullModeHintDelayMs = 180000;
 
-std::string formatClockText(int64_t timestampMs) {
-    if (timestampMs <= 0) {
-        return {};
-    }
-    const std::time_t seconds = static_cast<std::time_t>(timestampMs / 1000);
-    std::tm           tmBuf{};
-#if XX_IS_WIN_D
-    if (localtime_s(&tmBuf, &seconds) != 0) {
-        return {};
-    }
-#else
-    if (localtime_r(&seconds, &tmBuf) == nullptr) {
-        return {};
-    }
-#endif
-    char buf[32];
-    if (std::strftime(buf, sizeof(buf), "%m-%d %H:%M", &tmBuf) == 0) {
-        return {};
-    }
-    return std::string{buf};
-}
 
 /// 小文本文件读取: 成功把内容写进 `out` 并返回 true
 ///
@@ -138,6 +117,31 @@ int64_t ChatbotEngine::nowMs() {
         .count();
 }
 
+std::string ChatbotEngine::messageClockText(
+    int64_t timestampMs,
+    int32_t timestampOffsetMinutes
+) const {
+    return formatTimeInZone(
+        config_.behavior.timezoneSpec,
+        timestampMs,
+        timestampOffsetMinutes,
+        "%m-%d %H:%M"
+    );
+}
+
+std::string ChatbotEngine::currentTimeText(std::string_view pattern) const {
+    return formatTimeInZone(
+        config_.behavior.timezoneSpec,
+        systemNowMs(),
+        kUnknownTzOffset,
+        pattern
+    );
+}
+
+std::string ChatbotEngine::timezoneText() const {
+    return timezoneLabel(config_.behavior.timezoneSpec, systemNowMs());
+}
+
 void ChatbotEngine::init(
     asio::any_io_executor ex,
     ChatbotConfig         config,
@@ -151,19 +155,8 @@ void ChatbotEngine::init(
     outbound_ = outbound;
     runtime_  = std::move(runtime);
     stopped_  = false;
-    {
-        const std::time_t seconds = std::time(nullptr);
-        std::tm           tmBuf{};
-#if XX_IS_WIN_D
-        localtime_s(&tmBuf, &seconds);
-#else
-        localtime_r(&seconds, &tmBuf);
-#endif
-        char buf[32];
-        if (std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", &tmBuf) != 0) {
-            startupTimeText_ = std::string{buf};
-        }
-    }
+    // 启动时间也按配置的时区显示: 命令模板里给人看的“启动于”与消息时间用同一个时区
+    startupTimeText_ = currentTimeText("%Y-%m-%d %H:%M:%S");
 }
 
 void ChatbotEngine::buildRoutes() {
@@ -332,14 +325,15 @@ void ChatbotEngine::prepareAttachments(const std::string& chatKey, InboundEvent&
 void ChatbotEngine::appendHistory(const std::string& chatKey, const InboundEvent& event) {
     auto& state = stateOf(chatKey);
     HistoryItem item;
-    item.index           = ++state.historyIndex;
-    item.timestampMs     = event.timestampMs;
-    item.senderName      = displayNameOf(event.senderName, event.senderId, 64);
-    item.senderRole      = event.senderRole;
-    item.text            = event.text;
-    item.mentionedMe     = event.mentionedMe;
-    item.attachmentCount = static_cast<int>(event.attachments.size());
-    item.delivered       = false;
+    item.index                  = ++state.historyIndex;
+    item.timestampMs            = event.timestampMs;
+    item.timestampOffsetMinutes = event.timestampOffsetMinutes;
+    item.senderName             = displayNameOf(event.senderName, event.senderId, 64);
+    item.senderRole             = event.senderRole;
+    item.text                   = event.text;
+    item.mentionedMe            = event.mentionedMe;
+    item.attachmentCount        = static_cast<int>(event.attachments.size());
+    item.delivered              = false;
     state.history.push_back(std::move(item));
     const size_t keep = static_cast<size_t>(std::max(0, config_.behavior.historyKeep));
     while (state.history.size() > keep && keep > 0) {
@@ -357,6 +351,11 @@ void ChatbotEngine::onInbound(const InboundEvent& rawEvent) {
     InboundEvent event = rawEvent;
     if (event.accountId.empty() || event.chatId.empty()) {
         return;
+    }
+    if (event.timestampMs <= 0) {
+        // 平台没给时间 (调试注入也常不填): 用本机时钟顶上, 否则这条消息既不能参与
+        // 排序, 也拿不到显示用的钟点
+        event.timestampMs = systemNowMs();
     }
     ++activitySeq_;
 
@@ -538,6 +537,19 @@ std::string ChatbotEngine::assembleInput(
     blockOpt.chatId             = key.chatId;
     blockOpt.includeContextHint = config_.behavior.injectContextHint;
     blockOpt.platformLabel      = "QQ";
+    // 当前时间 + 时区一起告诉模型: 消息前的 `[MM-DD HH:MM]` 与它是什么关系,
+    // 否则模型会拿自己假设的时区去对时间 (总觉得与所在地区对不上)
+    {
+        const std::string nowClock = currentTimeText("%Y-%m-%d %H:%M");
+        if (!nowClock.empty()) {
+            const bool followPlatform
+                = config_.behavior.timezoneSpec.kind == TimezoneSpec::Kind::Auto;
+            blockOpt.currentTimeNote = "当前时间 " + nowClock + " (" + timezoneText()
+                                       + "); 每条消息前的 [MM-DD HH:MM] 是平台给的发送时间"
+                                       + (followPlatform ? ", 时区取自平台时间戳"
+                                                        : ", 与它同一时区");
+        }
+    }
     if (!state.pendingNotice.empty()) {
         blockOpt.hintExtra = state.pendingNotice;
         state.pendingNotice.clear();
@@ -567,7 +579,7 @@ std::string ChatbotEngine::assembleInput(
             view.text = "(回复 " + displayNameOf(item.quotedSender, std::string{}, 64) + ": "
                         + quoted + ") " + view.text;
         }
-        const std::string clock = formatClockText(item.timestampMs);
+        const std::string clock = messageClockText(item.timestampMs, item.timestampOffsetMinutes);
         if (!clock.empty()) {
             view.text = "[" + clock + "] " + view.text;
         }
@@ -799,8 +811,10 @@ std::map<std::string, std::string, std::less<>> ChatbotEngine::commandVars(
     vars["sender"]     = displayNameOf(event.senderName, event.senderId, 64);
     vars["senderRole"] = event.senderRole;
     vars["text"]       = event.text;
-    vars["now"]        = startupTimeText_;
+    // `now` 是真正的当前时间 (以前给的也是启动时间, “当前”与“启动于”就分不开了)
+    vars["now"]        = currentTimeText("%Y-%m-%d %H:%M:%S");
     vars["uptime"]     = startupTimeText_;
+    vars["timezone"]   = timezoneText();
     vars["received"]   = std::to_string(counters.received);
     vars["sent"]       = std::to_string(counters.sent);
     vars["dropped"]    = std::to_string(counters.dropped);
@@ -1391,6 +1405,10 @@ PanelSnapshot ChatbotEngine::panelSnapshot() const {
 std::string ChatbotEngine::statusJson() const {
     Json out = Json::object();
     out["startupTime"] = startupTimeText_;
+    // 消息时间按哪个时区显示 (排查“时间对不上”先看这两项)
+    out["timezone"] = timezoneText();
+    out["configTimezone"] = config_.behavior.timezone;
+    out["now"] = currentTimeText("%Y-%m-%d %H:%M:%S");
 
     Json accounts = Json::array();
     for (const auto& account : config_.accounts) {
@@ -1459,6 +1477,7 @@ std::string ChatbotEngine::chatInfoJson(std::string_view chatKey) const {
     out["account"]    = key.accountId;
     out["chat"]       = key.chatId;
     out["chatType"]   = chatTypeName(key.type);
+    out["timezone"]   = timezoneText();
     if (router_ == nullptr) {
         return out.dump();
     }

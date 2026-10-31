@@ -6,6 +6,8 @@
 /// `IPlatform` 并把事件归一化成 [InboundEvent], 把回复收敛成 [OutboundMessage]。
 ///
 /// 注意: 本头不引用任何主程序内部头 (插件边界), 只用标准库。
+#include "chatbot_time.h"
+
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -92,7 +94,14 @@ struct InboundEvent {
     std::string replyRef;
     /// 平台消息 id (被动回复与去重都用它)
     std::string platformMessageId;
+    /// 消息发送时间 (epoch 毫秒)
     int64_t     timestampMs = 0;
+    /// `timestampMs` 自带的 UTC 偏移 (分钟)
+    ///
+    /// 平台时间戳通常带时区 (`2026-10-29T12:03:09+08:00`), 解析时既得到时间点,
+    /// 也记住这个偏移: `behavior.timezone: auto` 用它把时间点显示成用户所在地区的钟点,
+    /// 服务器本身跑在哪个时区都不影响。平台没给时区 = [kUnknownTzOffset]。
+    int32_t     timestampOffsetMinutes = kUnknownTzOffset;
     /// 明确 @ 了机器人
     ///
     /// - 平台给「@机器人」单独事件时由事件类型决定;

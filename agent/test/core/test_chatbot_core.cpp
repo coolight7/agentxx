@@ -3,7 +3,8 @@
 /// 覆盖 (对应 `resource/history/chatbot/plan.md` §16.1 的 `chatbot_core` 一行):
 /// - 长文本切分: 段落 / 句子 / 硬切 / 围栏代码 / emoji / 恰好等于上限 / 上限 0
 /// - 命令解析: 根命令 `/agentxx-cmd` 与子命令 (`help` / `info` / `hello` / `stop`)
-/// - 输入块渲染: 群 / 私聊 / 引用 / 附件
+/// - 输入块渲染: 群 / 私聊 / 引用 / 附件 / 当前时间一行
+/// - 时间与时区: RFC3339 带时区后缀的解析 / 时区写法 / 按配置时区格式化
 /// - 去重环: 重复 / 容量 / 顺序
 /// - 引用编号映射
 /// - 配置校验: 每种非法配置给出预期错误
@@ -17,6 +18,7 @@
 #include "agentxx_chatbot/chatbot_panel.h"
 #include "agentxx_chatbot/chatbot_panel_ui.h"
 #include "agentxx_chatbot/chatbot_router.h"
+#include "agentxx_chatbot/chatbot_time.h"
 #include "agentxx_chatbot/chatbot_types.h"
 
 #include <map>
@@ -1498,6 +1500,184 @@ void testPanelItems() {
     XX_TEST_EXPECT_EQ(panelSpinnerFrame(11), std::string_view{"⠙"});
 }
 
+/* ==================== 时间与时区 ==================== */
+
+void testTimeZone() {
+    // ---- 1. RFC3339: 时区后缀必须真的用上 ----
+    {
+        const auto east = parseRfc3339Time("2026-10-29T12:03:09+08:00");
+        const auto utc  = parseRfc3339Time("2026-10-29T04:03:09Z");
+        XX_TEST_EXPECT_TRUE(east.ok());
+        XX_TEST_EXPECT_TRUE(utc.ok());
+        XX_TEST_EXPECT_EQ(east.offsetMinutes, int32_t{480});
+        XX_TEST_EXPECT_EQ(utc.offsetMinutes, int32_t{0});
+        // 东八区 12:03 就是 UTC 04:03: 以前把 `+08:00` 当 UTC, 时间点会早 8 小时
+        XX_TEST_EXPECT_EQ(east.ms, utc.ms);
+
+        // `+0800` / `+08` / 小数秒
+        XX_TEST_EXPECT_EQ(parseRfc3339Time("2026-10-29T12:03:09+0800").ms, utc.ms);
+        XX_TEST_EXPECT_EQ(parseRfc3339Time("2026-10-29T12:03:09+08").ms, utc.ms);
+        const auto withMillis = parseRfc3339Time("2026-10-29T04:03:09.123Z");
+        XX_TEST_EXPECT_EQ(withMillis.ms - utc.ms, int64_t{123});
+
+        // 西区: UTC-05:00 的 12:03 = UTC 17:03
+        XX_TEST_EXPECT_EQ(
+            parseRfc3339Time("2026-10-29T12:03:09-05:00").ms,
+            parseRfc3339Time("2026-10-29T17:03:09Z").ms
+        );
+        XX_TEST_EXPECT_EQ(parseRfc3339Time("2026-10-29T12:03:09-05:00").offsetMinutes,
+                          int32_t{-300});
+
+        // 没带时区: 按调用方给的偏移解释, 且偏移记为未知
+        const auto assumed = parseRfc3339Time("2026-10-29T12:03:09", 480);
+        XX_TEST_EXPECT_EQ(assumed.ms, utc.ms);
+        XX_TEST_EXPECT_EQ(assumed.offsetMinutes, int32_t{kUnknownTzOffset});
+
+        // 非法时间不当成“有效但错误”的时间点
+        XX_TEST_EXPECT_FALSE(parseRfc3339Time("2026-13-29T12:03:09Z").ok());
+        XX_TEST_EXPECT_FALSE(parseRfc3339Time("2026-10-29 25:03:09Z").ok());
+        XX_TEST_EXPECT_FALSE(parseRfc3339Time("not-a-time").ok());
+        XX_TEST_EXPECT_FALSE(parseRfc3339Time("").ok());
+    }
+
+    // ---- 2. 时区写法 ----
+    {
+        TimezoneSpec spec;
+        std::string  err;
+        XX_TEST_EXPECT_TRUE(parseTimezoneSpec("", spec, err));
+        XX_TEST_EXPECT_TRUE(spec.kind == TimezoneSpec::Kind::Auto);
+        XX_TEST_EXPECT_TRUE(parseTimezoneSpec("auto", spec, err));
+        XX_TEST_EXPECT_TRUE(spec.kind == TimezoneSpec::Kind::Auto);
+        XX_TEST_EXPECT_TRUE(parseTimezoneSpec("System", spec, err));
+        XX_TEST_EXPECT_TRUE(spec.kind == TimezoneSpec::Kind::System);
+        XX_TEST_EXPECT_TRUE(parseTimezoneSpec("+08:00", spec, err));
+        XX_TEST_EXPECT_TRUE(spec.kind == TimezoneSpec::Kind::FixedOffset);
+        XX_TEST_EXPECT_EQ(spec.offsetMinutes, int32_t{480});
+        XX_TEST_EXPECT_TRUE(parseTimezoneSpec("+0800", spec, err));
+        XX_TEST_EXPECT_EQ(spec.offsetMinutes, int32_t{480});
+        XX_TEST_EXPECT_TRUE(parseTimezoneSpec("UTC+8", spec, err));
+        XX_TEST_EXPECT_EQ(spec.offsetMinutes, int32_t{480});
+        XX_TEST_EXPECT_TRUE(parseTimezoneSpec("8", spec, err));
+        XX_TEST_EXPECT_EQ(spec.offsetMinutes, int32_t{480});
+        XX_TEST_EXPECT_TRUE(parseTimezoneSpec("utc", spec, err));
+        XX_TEST_EXPECT_EQ(spec.offsetMinutes, int32_t{0});
+        XX_TEST_EXPECT_TRUE(parseTimezoneSpec("-05:30", spec, err));
+        XX_TEST_EXPECT_EQ(spec.offsetMinutes, int32_t{-330});
+
+        // 越界 / 写法不认识: 启动时就报错, 不要运行期静默按系统时区
+        XX_TEST_EXPECT_FALSE(parseTimezoneSpec("+25:00", spec, err));
+        XX_TEST_EXPECT_FALSE(parseTimezoneSpec("8:00", spec, err));
+        XX_TEST_EXPECT_FALSE(parseTimezoneSpec("+08:70", spec, err));
+        XX_TEST_EXPECT_TRUE(contains(err, "时区"));
+
+        if (timezoneNameSupported()) {
+            XX_TEST_EXPECT_TRUE(parseTimezoneSpec("Asia/Shanghai", spec, err));
+            XX_TEST_EXPECT_TRUE(spec.kind == TimezoneSpec::Kind::Zone);
+            XX_TEST_EXPECT_EQ(spec.zoneName, std::string{"Asia/Shanghai"});
+            XX_TEST_EXPECT_FALSE(parseTimezoneSpec("Mars/Olympus", spec, err));
+        }
+    }
+
+    // ---- 3. 偏移选择与格式化 ----
+    {
+        const auto base = parseRfc3339Time("2026-10-29T04:03:09Z");
+        XX_TEST_EXPECT_TRUE(base.ok());
+        XX_TEST_EXPECT_EQ(formatTimeAt(base.ms, 480, "%m-%d %H:%M"), std::string{"10-29 12:03"});
+        XX_TEST_EXPECT_EQ(formatTimeAt(base.ms, 0, "%m-%d %H:%M"), std::string{"10-29 04:03"});
+        XX_TEST_EXPECT_EQ(formatTimeAt(base.ms, -300, "%m-%d %H:%M"),
+                          std::string{"10-28 23:03"});
+        XX_TEST_EXPECT_TRUE(formatTimeAt(0, 480, "%H:%M").empty());
+
+        XX_TEST_EXPECT_EQ(tzOffsetLabel(480), std::string{"UTC+08:00"});
+        XX_TEST_EXPECT_EQ(tzOffsetLabel(0), std::string{"UTC"});
+        XX_TEST_EXPECT_EQ(tzOffsetLabel(-330), std::string{"UTC-05:30"});
+
+        TimezoneSpec fixed;
+        fixed.kind          = TimezoneSpec::Kind::FixedOffset;
+        fixed.offsetMinutes = 480;
+        XX_TEST_EXPECT_EQ(resolveTzOffsetMinutes(fixed, base.ms, 0), int32_t{480});
+        XX_TEST_EXPECT_EQ(formatTimeInZone(fixed, base.ms, 0, "%H:%M"), std::string{"12:03"});
+        XX_TEST_EXPECT_EQ(timezoneLabel(fixed, base.ms), std::string{"UTC+08:00"});
+
+        // `auto`: 平台给了时区就用平台的, 没给就用系统时区
+        TimezoneSpec autoSpec;
+        XX_TEST_EXPECT_EQ(resolveTzOffsetMinutes(autoSpec, base.ms, -300), int32_t{-300});
+        XX_TEST_EXPECT_EQ(
+            resolveTzOffsetMinutes(autoSpec, base.ms, kUnknownTzOffset),
+            systemTzOffsetMinutesAt(base.ms)
+        );
+        XX_TEST_EXPECT_EQ(formatTimeInZone(autoSpec, base.ms, -300, "%H:%M"),
+                          std::string{"23:03"});
+    }
+
+    // ---- 4. 输入块的“当前时间”一行 ----
+    {
+        InputMessageView msg;
+        msg.index      = 1;
+        msg.senderName = "小明";
+        msg.text       = "[10-29 12:03] 在吗";
+
+        InputBlockOptions withNote;
+        withNote.chatId          = "G1";
+        withNote.currentTimeNote = "当前时间 2026-10-29 12:05 (UTC+08:00)";
+        const auto block         = renderInputBlock(withNote, {msg});
+        XX_TEST_EXPECT_TRUE(contains(block, "当前时间 2026-10-29 12:05 (UTC+08:00)"));
+        // 在标题行之后、消息行之前
+        const auto noteAt = block.find("当前时间");
+        const auto msgAt  = block.find("[#1] 小明");
+        XX_TEST_EXPECT_TRUE(noteAt != std::string::npos && msgAt != std::string::npos);
+        XX_TEST_EXPECT_TRUE(noteAt < msgAt);
+
+        // 关掉元信息段也要给 (消息前面的时间需要解释)
+        InputBlockOptions noHint;
+        noHint.includeContextHint = false;
+        noHint.currentTimeNote    = "当前时间 X";
+        const auto noHintBlock    = renderInputBlock(noHint, {msg});
+        XX_TEST_EXPECT_TRUE(contains(noHintBlock, "当前时间 X"));
+        XX_TEST_EXPECT_FALSE(contains(noHintBlock, "下面是最近收到的消息"));
+
+        // 不给就不渲染
+        InputBlockOptions plain;
+        XX_TEST_EXPECT_FALSE(contains(renderInputBlock(plain, {msg}), "当前时间"));
+    }
+
+    // ---- 5. 配置项 `behavior.timezone` ----
+    {
+        ChatbotConfig config;
+        ConfigError   err;
+        XX_TEST_EXPECT_TRUE(parseConfig(minimalConfigJson(), config, err));
+        XX_TEST_EXPECT_TRUE(validateConfig(config, 8, err));
+        // 默认 auto: 跟平台消息时间戳走
+        XX_TEST_EXPECT_EQ(config.behavior.timezone, std::string{"auto"});
+        XX_TEST_EXPECT_TRUE(config.behavior.timezoneSpec.kind == TimezoneSpec::Kind::Auto);
+
+        ChatbotConfig fixedConfig;
+        XX_TEST_EXPECT_TRUE(parseConfig(
+            R"({"accounts": [{"id": "qq_main", "type": "qq", "appId": "1", "appSecret": "s"}],
+                "personas": [{"name": "p", "bind": [{"account": "qq_main", "chats": [{"type":"group","id":"G"}]}]}],
+                "behavior": {"timezone": "+08:00"}})",
+            fixedConfig,
+            err
+        ));
+        XX_TEST_EXPECT_TRUE(validateConfig(fixedConfig, 8, err));
+        XX_TEST_EXPECT_TRUE(fixedConfig.behavior.timezoneSpec.kind
+                            == TimezoneSpec::Kind::FixedOffset);
+        XX_TEST_EXPECT_EQ(fixedConfig.behavior.timezoneSpec.offsetMinutes, int32_t{480});
+
+        // 写错时区必须是启动失败, 而不是静默按系统时区显示
+        ChatbotConfig badConfig;
+        XX_TEST_EXPECT_TRUE(parseConfig(
+            R"({"accounts": [{"id": "qq_main", "type": "qq", "appId": "1", "appSecret": "s"}],
+                "personas": [{"name": "p", "bind": [{"account": "qq_main", "chats": [{"type":"group","id":"G"}]}]}],
+                "behavior": {"timezone": "+25:00"}})",
+            badConfig,
+            err
+        ));
+        XX_TEST_EXPECT_FALSE(validateConfig(badConfig, 8, err));
+        XX_TEST_EXPECT_EQ(err.where, std::string{"behavior.timezone"});
+    }
+}
+
 } // namespace
 
 TestResult testChatbotCore() {
@@ -1523,6 +1703,7 @@ TestResult testChatbotCore() {
     testPanelWirePayload();
     testPanelTexts();
     testPanelItems();
+    testTimeZone();
 
     return TestResult{g_cc_passed, g_cc_failed};
 }

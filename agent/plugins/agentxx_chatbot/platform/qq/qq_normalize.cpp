@@ -1,9 +1,9 @@
 #include "qq_normalize.h"
 
+#include "../../chatbot_time.h"
+
 #include "utilxx_base/log.h"
 
-#include <chrono>
-#include <ctime>
 #include <map>
 #include <string>
 #include <string_view>
@@ -14,63 +14,6 @@ namespace chatbot {
 namespace {
 
 constexpr const char* kLogTag = "chatbot";
-
-int64_t unixNowMs() {
-    return std::chrono::duration_cast<std::chrono::milliseconds>(
-               std::chrono::system_clock::now().time_since_epoch()
-    )
-        .count();
-}
-
-/// 从 `text[pos, pos+len)` 读十进制数字 (不足 len 位或含非数字返回 -1)
-int parseFixedDigits(std::string_view text, size_t pos, size_t len) {
-    if (pos + len > text.size()) {
-        return -1;
-    }
-    int value = 0;
-    for (size_t i = 0; i < len; ++i) {
-        const char c = text[pos + i];
-        if (c < '0' || c > '9') {
-            return -1;
-        }
-        value = value * 10 + (c - '0');
-    }
-    return value;
-}
-
-/// RFC3339 时间 ("2026-10-29T07:03:09+08:00") → 毫秒 (解析失败返回 0)
-/// - 只认前 19 个字符的 `YYYY-MM-DDTHH:MM:SS`, 时区后缀一律按 UTC 处理
-///   (QQ 推送的时间只用于消息排序与去重, 差几个时区不影响结果)
-int64_t parseRfc3339Ms(std::string_view text) {
-    if (text.size() < 19) {
-        return 0;
-    }
-    const int year   = parseFixedDigits(text, 0, 4);
-    const int month  = parseFixedDigits(text, 5, 2);
-    const int day    = parseFixedDigits(text, 8, 2);
-    const int hour   = parseFixedDigits(text, 11, 2);
-    const int minute = parseFixedDigits(text, 14, 2);
-    const int second = parseFixedDigits(text, 17, 2);
-    if (year < 0 || month < 0 || day < 0 || hour < 0 || minute < 0 || second < 0) {
-        return 0;
-    }
-    std::tm tmBuf{};
-    tmBuf.tm_year = year - 1900;
-    tmBuf.tm_mon  = month - 1;
-    tmBuf.tm_mday = day;
-    tmBuf.tm_hour = hour;
-    tmBuf.tm_min  = minute;
-    tmBuf.tm_sec  = second;
-#if XX_IS_WIN_D
-    const std::time_t seconds = _mkgmtime(&tmBuf);
-#else
-    const std::time_t seconds = timegm(&tmBuf);
-#endif
-    if (seconds <= 0) {
-        return 0;
-    }
-    return static_cast<int64_t>(seconds) * 1000;
-}
 
 /// `message_scene.ext` 里的 `key=value` 串解析 (`msg_idx=REFIDX_...\tref_msg_idx=...`)
 std::string sceneExtValue(std::string_view ext, std::string_view key) {
@@ -508,9 +451,17 @@ bool normalizeQqEvent(
         appendAttachments(data["attachments"], out.attachments, &out.text);
     }
 
-    out.timestampMs = parseRfc3339Ms(data.value("timestamp", std::string{}));
+    // 时间戳按平台自带的时区后缀解析成真正的时间点 (以前把 `+08:00` 当 UTC,
+    // 消息显示钟点会整体偏一个时区, 模型据此谈时间就对不上了)。
+    // 平台没给时间戳时退回本机时钟 (此时时区未知, 显示按配置的时区兜底)。
+    if (data.contains("timestamp")) {
+        const auto parsed = parseRfc3339Time(data.value("timestamp", std::string{}));
+        out.timestampMs            = parsed.ms;
+        out.timestampOffsetMinutes = parsed.offsetMinutes;
+    }
     if (out.timestampMs <= 0) {
-        out.timestampMs = unixNowMs();
+        out.timestampMs            = systemNowMs();
+        out.timestampOffsetMinutes = kUnknownTzOffset;
     }
     if (out.text.empty() && out.attachments.empty()) {
         // 纯空消息 (表情/系统提示): 不值得叫醒模型

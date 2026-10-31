@@ -136,6 +136,8 @@ target_include_directories(agentxx_test PRIVATE
 set(AGENTXX_CHATBOT_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/agentxx_chatbot")
 target_sources(agentxx_test PRIVATE
   "${AGENTXX_CHATBOT_SOURCE_DIR}/chatbot_core.cpp"
+  # 时间与时区: 时间戳解析 (带时区后缀) + 按配置时区显示, 纯逻辑
+  "${AGENTXX_CHATBOT_SOURCE_DIR}/chatbot_time.cpp"
   "${AGENTXX_CHATBOT_SOURCE_DIR}/chatbot_types.cpp"
   "${AGENTXX_CHATBOT_SOURCE_DIR}/chatbot_config.cpp"
   "${AGENTXX_CHATBOT_SOURCE_DIR}/chatbot_router.cpp"

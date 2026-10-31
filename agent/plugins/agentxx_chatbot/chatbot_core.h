@@ -209,6 +209,11 @@ struct InputBlockOptions {
     bool includeContextHint = true;
     /// 追加在元信息段之后的一句话 (如"上一条消息投递失败")
     std::string hintExtra;
+    /// 当前时间一行 (空 = 不渲染)
+    ///
+    /// 由调度层填: 写清当前时间与消息前的 `[MM-DD HH:MM]` 用的是哪个时区,
+    /// 模型才不会把消息时间当成别的时区的钟点去推断"现在"。
+    std::string currentTimeNote;
 };
 
 /// 渲染一次会话输入 (模型看到的那段文本)

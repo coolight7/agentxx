@@ -40,6 +40,8 @@ namespace chatbot {
 struct HistoryItem {
     int64_t     index = 0;
     int64_t     timestampMs = 0;
+    /// 平台时间戳自带的 UTC 偏移 (分钟; 见 [InboundEvent::timestampOffsetMinutes])
+    int32_t     timestampOffsetMinutes = kUnknownTzOffset;
     std::string senderName;
     std::string senderRole;
     std::string text;
@@ -214,8 +216,24 @@ public:
         return config_;
     }
 
-    /// 当前时间毫秒 (与出站同一时钟)
+    /// 当前时间毫秒 (同 `steady_clock`: 只用来算间隔与“最近活动”, 不是墙上时间)
     static int64_t nowMs();
+
+    /// 一条消息的时间显示 (`MM-DD HH:MM`; 按 `behavior.timezone`, 见 `chatbot_time.h`)
+    ///
+    /// - `args`:
+    ///     - [timestampMs] 消息时间点; <= 0 返回空串
+    ///     - [timestampOffsetMinutes] 消息时间戳自带的偏移 ([kUnknownTzOffset] = 没有)
+    std::string messageClockText(int64_t timestampMs, int32_t timestampOffsetMinutes) const;
+
+    /// 按配置的时区格式化当前时间 (命令模板的`{now}`)
+    ///
+    /// - `args`:
+    ///     - [pattern] `strftime` 格式串, 如 `%Y-%m-%d %H:%M:%S`
+    std::string currentTimeText(std::string_view pattern) const;
+
+    /// 配置的时区展示名 (如 `UTC+08:00` / `Asia/Shanghai UTC+08:00`)
+    std::string timezoneText() const;
 
 private:
 

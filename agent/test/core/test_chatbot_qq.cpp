@@ -10,8 +10,10 @@
 ///   只读 `msg_elements[0].content` (空串) 就永远读不到文件;
 /// - `message_scene.ext` 既可能是字符串也可能是**字符串数组**, 按字符串取会拿到空值,
 ///   于是引用回复 (`replyRef`) 一直是空的。
+/// - `timestamp` 里的时区后缀 (`+08:00`) 早先被当成 UTC, 显示出来的消息时间会偏一个时区。
 #include "agentxx-test/core/test_chatbot_qq.h"
 
+#include "agentxx_chatbot/chatbot_time.h"
 #include "agentxx_chatbot/chatbot_types.h"
 #include "agentxx_chatbot/platform/qq/qq_normalize.h"
 
@@ -127,6 +129,9 @@ TestResult testChatbotQq() {
         XX_TEST_EXPECT_FALSE(out.fromFullMode);
         XX_TEST_EXPECT_TRUE(out.platformMessageId.rfind("ROBOT1.0_", 0) == 0);
         XX_TEST_EXPECT_TRUE(out.timestampMs > 0);
+        // 时间戳里的 `+08:00` 要真的用上 (以前当 UTC 处理, 显示时再转本地就偏了 8 小时)
+        XX_TEST_EXPECT_EQ(out.timestampOffsetMinutes, int32_t{480});
+        XX_TEST_EXPECT_EQ(out.timestampMs, parseRfc3339Time("2026-10-29T09:55:24Z").ms);
 
         // 用户打的那句话 (首尾空格原样保留, 由上层裁剪)
         XX_TEST_EXPECT_TRUE(contains(out.text, "看看这个文件的内容是什么"));
@@ -324,6 +329,24 @@ TestResult testChatbotQq() {
             })JSON"),
             out
         ));
+    }
+
+    // ===================== 9.5 缺 timestamp: 用本机时钟, 时区未知 ====================
+    {
+        InboundEvent out;
+        XX_TEST_EXPECT_TRUE(normalizeQqEvent(
+            "GROUP_AT_MESSAGE_CREATE",
+            Json::parse(R"JSON({
+              "author": {"bot": false, "id": "U-T", "username": "小无时间"},
+              "content": "这条没有时间戳",
+              "group_openid": "G-OPENID",
+              "id": "ROBOT1.0_notime"
+            })JSON"),
+            out
+        ));
+        XX_TEST_EXPECT_TRUE(out.timestampMs > 0);
+        // 时区未知 = 显示时按配置的时区兜底
+        XX_TEST_EXPECT_EQ(out.timestampOffsetMinutes, int32_t{kUnknownTzOffset});
     }
 
     // ===================== 10. 卡片消息 (message_type=3): 用 ark_data 拼一行 =====================

@@ -219,6 +219,28 @@ std::string lastRequestText() {
     return daSimLastRequestText();
 }
 
+/// 文本里是否出现过消息时间前缀 `[MM-DD HH:MM]`
+///
+/// 不比对具体日期: 用例跑在不同月份都会成立, 只要格式在就说明消息带上了发送时间。
+bool hasClockPrefix(const std::string& text) {
+    auto digit = [](char c) {
+        return c >= '0' && c <= '9';
+    };
+    for (size_t i = 0; i + 12 < text.size(); ++i) {
+        if (text[i] != '[') {
+            continue;
+        }
+        const bool match = digit(text[i + 1]) && digit(text[i + 2]) && text[i + 3] == '-'
+                           && digit(text[i + 4]) && digit(text[i + 5]) && text[i + 6] == ' '
+                           && digit(text[i + 7]) && digit(text[i + 8]) && text[i + 9] == ':'
+                           && digit(text[i + 10]) && digit(text[i + 11]) && text[i + 12] == ']';
+        if (match) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // ===========================================================================
 // 用例主体 (全部在容器 io 线程上跑)
 // ===========================================================================
@@ -509,6 +531,20 @@ asio::awaitable<void> runBody(
         // 输入里有说话人前缀 (模型看到的不是裸正文)
         XX_TEST_EXPECT_TRUE(lastRequestText().find("小张") != std::string::npos);
         XX_TEST_EXPECT_TRUE(lastRequestText().find("你好") != std::string::npos);
+
+        // 时间信息: 「当前时间」一行带时区说明, 每条消息前带平台发送时间
+        // (`[MM-DD HH:MM]`; 以前只写钟点不说时区, 模型会自己猜时区)
+        {
+            const auto request = lastRequestText();
+            XX_TEST_EXPECT_TRUE(request.find("当前时间 ") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(request.find("每条消息前的 [MM-DD HH:MM]") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(
+                request.find("(自动 ") != std::string::npos
+                || request.find("(系统本地 ") != std::string::npos
+                || request.find("(UTC") != std::string::npos
+            );
+            XX_TEST_EXPECT_TRUE(hasClockPrefix(request));
+        }
 
         // 假平台收到了出站, 且带被动回复 id (来自被投递的那条消息)
         XX_TEST_EXPECT_TRUE(co_await waitOutbox(

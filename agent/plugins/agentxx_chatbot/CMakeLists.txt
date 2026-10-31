@@ -21,6 +21,7 @@ set(_CHATBOT_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/agentxx_chatbot.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/chatbot_types.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/chatbot_core.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/chatbot_time.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/chatbot_config.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/chatbot_router.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/chatbot_engine.cpp

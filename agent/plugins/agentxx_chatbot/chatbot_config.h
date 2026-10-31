@@ -12,6 +12,7 @@
 ///
 /// 校验在 `start` 里、建根之前做完: 任何一条不过就拒绝启动 (不留半启动状态)。
 #include "chatbot_core.h"
+#include "chatbot_time.h"
 #include "chatbot_types.h"
 
 #include <cstdint>
@@ -149,6 +150,16 @@ struct BehaviorConfig {
     /// - 只给测试与本地演示用: 直接向调度层投一条假消息、回看平台收到了什么;
     /// - 默认关 (生产环境不暴露这两个工具给模型)
     bool debugTools = false;
+    /// 消息时间显示用的时区 (写法见 `chatbot_time.h`)
+    ///
+    /// - `auto` (默认): 用平台消息时间戳自带的偏移, 拿不到时用系统时区 ——
+    ///   服务器跑在异地/UTC、而用户在别的时区时, 消息时间仍与平台客户端一致;
+    /// - `system` / `local`: 系统时区;
+    /// - `+08:00` / `UTC+8` / `8`: 固定偏移;
+    /// - `Asia/Shanghai`: IANA 时区名 (运行平台没有时区库时退回系统时区)
+    std::string timezone = "auto";
+    /// `timezone` 解析后的结果 (由 [validateConfig] 填, 运行期只读)
+    TimezoneSpec timezoneSpec;
 };
 
 /// 完整配置

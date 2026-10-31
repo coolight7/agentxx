@@ -602,6 +602,7 @@ void parseBehavior(const Json& root, ChatbotConfig& out) {
         jsonIntOf(j, "inboundMaxChars", cfg.inboundMaxChars)
     );
     cfg.debugTools = jsonBoolOf(j, "debugTools", cfg.debugTools);
+    cfg.timezone   = jsonStringOf(j, "timezone", cfg.timezone);
 }
 
 /// 装上插件内置的命令表
@@ -1024,6 +1025,29 @@ bool validateConfig(ChatbotConfig& config, int32_t maxRoots, ConfigError& err) {
     if (behavior.humanInLoop != "auto-allow" && behavior.humanInLoop != "auto-deny") {
         setError(err, "behavior.humanInLoop", "只能是 auto-allow / auto-deny");
         return false;
+    }
+    // 时区写法在启动时就解析定: 让写错的配置直接报错, 而不是运行期静默按系统时区
+    {
+        std::string tzErr;
+        if (!parseTimezoneSpec(behavior.timezone, behavior.timezoneSpec, tzErr)) {
+            setError(err, "behavior.timezone", tzErr);
+            return false;
+        }
+        if (behavior.timezoneSpec.kind == TimezoneSpec::Kind::Zone
+            && !timezoneNameSupported()) {
+            XX_LOGW(
+                "[{}] behavior.timezone = '{}': 当前平台没有 chrono 时区库, "
+                "消息时间按系统时区显示 (要固定钟点就写 +08:00)",
+                kLogTag,
+                behavior.timezone
+            );
+        }
+        XX_LOGI(
+            "[{}] 消息时区: behavior.timezone = '{}' → {}",
+            kLogTag,
+            behavior.timezone,
+            timezoneLabel(behavior.timezoneSpec, systemNowMs())
+        );
     }
     err = ConfigError{};
     return true;

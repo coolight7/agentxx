@@ -84,7 +84,9 @@ void FakePlatform::injectText(
     event.text      = std::move(text);
     event.mentionedMe = mentionedMe;
     event.fromFullMode = !mentionedMe;
-    event.timestampMs = timestampMs;
+    // 假平台没有平台的时区信息: 没给时间就用本机时钟, 时区未知 (显示时按配置兜底)
+    event.timestampMs            = timestampMs > 0 ? timestampMs : systemNowMs();
+    event.timestampOffsetMinutes = kUnknownTzOffset;
     {
         std::lock_guard lock(mutex_);
         event.platformMessageId

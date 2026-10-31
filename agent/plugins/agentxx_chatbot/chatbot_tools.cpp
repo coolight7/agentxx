@@ -278,9 +278,15 @@ std::string toolHistory(
         return "（这个会话还没有收到过消息）";
     }
     std::string out;
-    out += "会话 " + chatKey + " 最近 " + std::to_string(items.size()) + " 条原始消息:\n";
+    out += "会话 " + chatKey + " 最近 " + std::to_string(items.size()) + " 条原始消息 (时间 "
+           + deps.engine->timezoneText() + "):\n";
     for (const auto& item : items) {
         std::string line = "[" + std::to_string(item.index) + "] ";
+        const std::string clock
+            = deps.engine->messageClockText(item.timestampMs, item.timestampOffsetMinutes);
+        if (!clock.empty()) {
+            line += "[" + clock + "] ";
+        }
         line += item.senderName.empty() ? std::string{"(未知)"} : item.senderName;
         if (!item.senderRole.empty()) {
             line += "(" + item.senderRole + ")";

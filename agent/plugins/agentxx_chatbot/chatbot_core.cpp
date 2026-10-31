@@ -608,7 +608,8 @@ std::vector<CommandDef> builtinCommands() {
         def.name  = root + " info";
         def.mode  = CommandMode::Local;
         def.reply = "人设 {persona} · 模式 {mode} · 通道 {channelId}\n"
-                    "会话 {chat} ({chatType}) · 账号 {account} · 已运行 {uptime}\n"
+                    "会话 {chat} ({chatType}) · 账号 {account} · 启动于 {uptime}\n"
+                    "当前 {now} ({timezone})\n"
                     "收到 {received} 条 · 回复 {sent} 条 · 丢弃 {dropped} 条 · 重复 {duplicated} 条";
         defs.push_back(std::move(def));
     }
@@ -730,6 +731,11 @@ std::string renderInputBlock(
             out += "\n" + opt.hintExtra;
         }
         out += "\n";
+    }
+    // 当前时间与消息时间用同一个时区: 开关元信息段时也要给 (消息前面的时间需要解释)
+    if (!opt.currentTimeNote.empty()) {
+        out += opt.currentTimeNote;
+        out.push_back('\n');
     }
     for (const auto& msg : messages) {
         const std::string sender = displayNameOf(msg.senderName, std::string{}, 64);
