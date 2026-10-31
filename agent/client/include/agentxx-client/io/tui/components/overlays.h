@@ -220,6 +220,9 @@ private:
 /// 会话选择弹窗组件 (F3 / 状态栏 [F3] Sessions 按钮)
 /// - 列表顶部固定一项 "新会话" (选中确认后创建全新会话, 不切换历史)
 /// - 列表项两行: 第一行会话名称 (title, 空时回退 sessionId), 第二行最近活动日期
+/// - 当前会话高亮: 名称行标注 "( 当前 )" 并用强调色加粗显示 (选中时按选中配色);
+///   首页列表到达后自动把选中项落到当前会话上 (用户未移动选择时), 便于确认
+///   自己正在哪个会话里
 /// - 交互: Up/Down 选择, Enter/鼠标点击切换会话, Esc 关闭
 ///   - Ctrl+R = 重命名选中会话 (编辑态: 输入标题, Enter 提交, Esc 取消)
 /// - 列表分页加载: 打开弹窗先加载最新一页; 选择项下移接近已加载列表末尾时
@@ -299,6 +302,9 @@ private:
     std::function<void(std::string)>              onSelect_;
     std::function<void()>                         onNewSession_;
     std::function<void(std::string, std::string)> onRename_;
+
+    /// 是否已经为当前会话自动移动过选中项 (只做一次: 之后用户的选择不再被打断)
+    bool currentSessionAutoSelected_ = false;
 
     /// 条目 id: "新会话" 入口固定为 [kNewSessionId], 会话项为 kSessionIdPrefix + sessionId
     static constexpr const char* kNewSessionId    = "new-session";

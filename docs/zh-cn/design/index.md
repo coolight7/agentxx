@@ -554,7 +554,9 @@ TUI [F3] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
     (`TuiSurfaceStyle` + `tuiSurfacePopup`/`tuiSurfaceFrame`),
     配色定义见 [tui_theme.h](/agent/client/include/agentxx-client/io/tui/tui_theme.h)
   - 会话选择弹窗 (F3): 列出持久化会话 (WireListSessions, keyset 游标分页按最近活动降序),
-    确认后经 WireSwitchSession 切换, 服务端回推新会话 Sync (尾窗分页)/模型/上下文统计
+    确认后经 WireSwitchSession 切换, 服务端回推新会话 Sync (尾窗分页)/模型/上下文统计;
+    当前会话在列表里高亮 (名称行标注 `( 当前 )` 并用强调色加粗, 选中时按选中配色),
+    首页到达后自动把选中项落到当前会话上 (用户尚未自己移动选择时)
   - 设置弹窗: 条目按 界面/显示/更新/其他 分组 (条目表驱动, 见
     [tui.md](tui.md) §2.4), 内容超出终端可用高度时内容区限高并可滚动
     (选中项自动滚入视口, 滚轮 = 上/下移动选中项); "更新"组含「启动时检查更新」开关与

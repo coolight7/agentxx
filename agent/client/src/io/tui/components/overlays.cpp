@@ -896,6 +896,20 @@ void SessionSelectorOverlay::buildItems() {
         });
     }
     list_.setItems(std::move(items));
+
+    // 当前会话高亮: 首页列表异步到达, 因此每次重建都试一次 —— 选中项还停在顶部
+    // "新会话" 入口时 (说明用户尚未自己移动选择) 自动选中当前会话, 打开弹窗即可
+    // 看到自己正在哪个会话里; 当前会话不在已加载列表里 (更早期的会话) 时不动
+    if (!currentSessionAutoSelected_ && !ctx_.sessionId.empty() && list_.selectedIndex() == 0) {
+        const std::string target = std::string{kSessionIdPrefix} + ctx_.sessionId;
+        for (const auto& item : list_.items()) {
+            if (item.id == target) {
+                list_.selectById(target);
+                currentSessionAutoSelected_ = true;
+                break;
+            }
+        }
+    }
 }
 
 void SessionSelectorOverlay::beginRename() {
@@ -931,10 +945,17 @@ Element SessionSelectorOverlay::OnRender() {
     hits_.beginFrame();
     buildItems();
 
-    // 条目版式: 两行 (名称 / 最近活动时间)
-    auto rowBuilder = [&](const UiActionItem& item, bool selected, size_t) -> Element {
+    // 条目版式: 两行 (名称 / 最近活动时间); 当前会话的名称行用强调色加粗
+    // (选中项的配色由下面的 bgcolor/color 统一覆盖, 因此仅在未选中时叠加)
+    const std::string currentItemId = std::string{kSessionIdPrefix} + ctx_.sessionId;
+    auto              rowBuilder
+        = [&](const UiActionItem& item, bool selected, size_t) -> Element {
+        Element name = text(item.label);
+        if (!selected && item.id == currentItemId) {
+            name = std::move(name) | bold | color(theme.accentColor);
+        }
         Element row = vbox({
-            text(item.label),
+            std::move(name),
             text(item.hint) | theme.dim(),
         });
         if (selected) {

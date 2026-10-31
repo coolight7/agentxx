@@ -422,6 +422,49 @@ TestResult testTuiSurface() {
         }
     }
 
+    // ---- 会话选择弹窗: 当前会话标出 (自动选中 + 强调色) ----
+    {
+        SurfaceFixture fx;
+        fx.sharedState.mutate([](TUIRenderState& st) {
+            st.sessionListLoaded = true;
+            st.sessionList       = {
+                {"s1", "当前会话标题", 1700000000000},
+                {"s2", "另一个会话", 1700000001000},
+            };
+        });
+        auto comp = std::make_shared<SessionSelectorOverlay>(fx.ctx);
+        auto r    = fx.probe(comp);
+
+        // 首页到达后自动把选中项落到当前会话 (0 号是 "新会话" 入口)
+        XX_TEST_EXPECT_EQ(comp->selectedIndex(), 1);
+        XX_TEST_EXPECT_TRUE(r.text.find("( 当前 )") != std::string::npos);
+
+        // 其他会话未选中时用普通色
+        int        ox = -1, oy = -1;
+        const bool otherFound = r.findText("另一个会话", ox, oy);
+        XX_TEST_EXPECT_TRUE(otherFound);
+        if (otherFound) {
+            XX_TEST_EXPECT_EQ(
+                r.screen.CellAt(ox, oy).foreground_color,
+                fx.theme.normalColor
+            );
+        }
+
+        // 选中项移到其他会话后: 当前会话名称行仍以强调色加粗标出
+        comp->OnEvent(ftxui::Event::ArrowDown);
+        XX_TEST_EXPECT_EQ(comp->selectedIndex(), 2);
+        auto r2       = fx.probe(comp);
+        int  cx = -1, cy = -1;
+        const bool currentFound = r2.findText("当前会话标题", cx, cy);
+        XX_TEST_EXPECT_TRUE(currentFound);
+        if (currentFound) {
+            XX_TEST_EXPECT_EQ(
+                r2.screen.CellAt(cx, cy).foreground_color,
+                fx.theme.accentColor
+            );
+        }
+    }
+
     // ---- 会话选择弹窗: 改名 (Ctrl+R) 与关闭 (弹窗已无搜索行) ----
     {
         SurfaceFixture fx;
@@ -451,8 +494,8 @@ TestResult testTuiSurface() {
         XX_TEST_EXPECT_FALSE(comp->renameMode());
         XX_TEST_EXPECT_FALSE(closed);
 
-        // Ctrl+R: 重命名选中会话 (先 Down 选中第一个会话项, 0 号是 "新会话" 入口)
-        comp->OnEvent(ftxui::Event::ArrowDown);
+        // 重命名当前选中会话: 当前会话 (s1) 在首页到达后已自动选中 (下标 1;
+        // 0 号是 "新会话" 入口), 不再需要先 Down 一次
         XX_TEST_EXPECT_EQ(comp->selectedIndex(), 1);
         comp->OnEvent(ftxui::Event::CtrlR);
         XX_TEST_EXPECT_TRUE(comp->renameMode());
