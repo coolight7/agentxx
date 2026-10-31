@@ -504,15 +504,25 @@ protected:
     /// 启用状态变化通知 (各挂载资源应用器的启用标记)
     void onInstanceEnabledChanged(PluginInstance& inst, bool enabled) override;
 
-    /// 禁用事务完成后: 从全部挂载上拆掉该实例 (调插件 unmount, 释放 per-agent 状态)
+    /// 禁用事务开始后: 从全部挂载上拆掉该实例 (调插件 unmount, 释放 per-agent 状态)
     asio::awaitable<void>
         onInstanceDisabledAsync(const std::shared_ptr<PluginInstance>& inst) override;
+
+    /// 卸载事务开始时: 同样从全部挂载上拆掉该实例
+    /// - 在插件 stop 与 `releaseInstanceResources` 之前, 插件自管的根此时还在,
+    ///   实例也还没进入 Closed, 插件 unmount 回调能正常执行
+    asio::awaitable<void>
+        onInstanceUnloadingAsync(const std::shared_ptr<PluginInstance>& inst) override;
 
     /// 启用事务完成后: 重新挂到全部挂载 (agent 级注册都在插件的 mount 回调里)
     asio::awaitable<void>
         onInstanceEnabledAsync(const std::shared_ptr<PluginInstance>& inst) override;
 
 private:
+
+    /// 把实例从**全部挂载**上拆下来 (禁用 / 卸载共用)
+    asio::awaitable<void>
+        detachInstanceFromMountsAsync(const std::shared_ptr<PluginInstance>& inst);
 
     // 运行时入口由 vtable 层调用 (plugin_manager_vtable.cpp 里的 xx_runtime_*):
     // 它们是自由函数, 因此这一段开放为 public, 但只对本文件所在库有意义 ——

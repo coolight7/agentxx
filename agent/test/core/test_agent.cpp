@@ -22,6 +22,7 @@
 #include <atomic>
 #include <filesystem>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -176,37 +177,72 @@ public:
 // ===========================================================================
 // Enhanced LLM Simulator Implementation
 // ===========================================================================
-std::string       g_da_sim_response_content  = "Hello! I am a simulated LLM response for testing.";
-int               g_da_sim_prompt_tokens     = 100;
-int               g_da_sim_completion_tokens = 50;
-utilxx_base::Json g_da_sim_tool_calls        = utilxx_base::Json::array();
-std::string       g_da_sim_reasoning_content = "";
-int               g_da_sim_delay_ms          = 0;
-utilxx_base::Json g_da_sim_last_request      = utilxx_base::Json::object();
+// 所有量的读写都在包装内部加锁 (说明见 test_agent.h 的 DaSimValue)
+DaSimValue<std::string> g_da_sim_response_content{
+    std::string{"Hello! I am a simulated LLM response for testing."}
+};
+DaSimValue<int>               g_da_sim_prompt_tokens{100};
+DaSimValue<int>               g_da_sim_completion_tokens{50};
+DaSimValue<utilxx_base::Json> g_da_sim_tool_calls{utilxx_base::Json::array()};
+DaSimValue<std::string>       g_da_sim_reasoning_content{std::string{}};
+DaSimValue<int>               g_da_sim_delay_ms{0};
+DaSimValue<utilxx_base::Json> g_da_sim_last_request{utilxx_base::Json::object()};
 /// 按到达顺序记录所有 /chat/completions 请求 (供测试断言多次请求)
-std::vector<utilxx_base::Json> g_da_sim_requests;
+DaSimValue<std::vector<utilxx_base::Json>> g_da_sim_requests{};
 /// 累计请求计数 (每次 /chat/completions 请求递增, 含失败请求), 供测试验证调用次数
-/// - 原子量: 服务线程递增前已写入请求记录, 测试线程读到计数增长后才能读到记录
-std::atomic<int> g_da_sim_request_count = 0;
+/// - 原子量: 服务线程递增前已写入请求记录
+std::atomic<int> g_da_sim_request_count{0};
 /// 剩余失败次数: >0 时接下来的请求直接返回 HTTP 500 并递减, 用于模拟 LLM API 持续失败
-int g_da_sim_fail_count = 0;
+DaSimValue<int> g_da_sim_fail_count{0};
 /// 失败响应的 HTTP 状态码 (0 = 默认 500) 与响应体 (空 = 默认错误文本)
 /// - 供测试区分"可重试"与"不可重试"错误 (如 401 应立即停止重试,
 ///   400 + 上下文超限关键词应触发压缩后重试)
-int         g_da_sim_fail_status = 0;
-std::string g_da_sim_fail_body;
+DaSimValue<int>         g_da_sim_fail_status{0};
+DaSimValue<std::string> g_da_sim_fail_body{std::string{}};
 /// 前 N 次请求返回 tool_calls (之后返回纯文本); -1 = 不限制 (旧行为)
 /// - 供嵌套委派等"先工具后文本"的多请求序列测试; 由测试显式设置并在
 ///   结束时恢复 -1 (响应 handler 处理递减, 不自动重置)
-int g_da_sim_tool_calls_remaining = -1;
+DaSimValue<int> g_da_sim_tool_calls_remaining{-1};
 
 // 模拟前缀缓存 (见 test_agent.h 说明)
-bool   g_da_sim_prefix_cache_enabled = false;
-double g_da_sim_last_cache_ratio     = 0.0;
-int    g_da_sim_last_cached_tokens   = 0;
-int    g_da_sim_last_prompt_tokens   = 0;
+DaSimValue<bool>   g_da_sim_prefix_cache_enabled{false};
+DaSimValue<double> g_da_sim_last_cache_ratio{0.0};
+DaSimValue<int>    g_da_sim_last_cached_tokens{0};
+DaSimValue<int>    g_da_sim_last_prompt_tokens{0};
 /// 上一条成功请求 (模拟缓存的前缀基准)
 static utilxx_base::Json g_da_sim_prev_for_cache = utilxx_base::Json::object();
+
+/// 模拟器共享量的锁 (说明见 test_agent.h)
+std::recursive_mutex& daSimMutex() {
+    // 函数内静态量: 不引入跨翻译单元的静态初始化顺序问题
+    static std::recursive_mutex mutex;
+    return mutex;
+}
+
+std::string daSimLastRequestText() {
+    // 一次锁内取整份快照: "先判空再 back()" 分两次加锁时被追加过也不会出错
+    const auto requests = g_da_sim_requests.get();
+    return requests.empty() ? std::string{} : requests.back().dump();
+}
+
+std::vector<utilxx_base::Json> daSimRequestsSnapshot() {
+    return g_da_sim_requests.get();
+}
+
+void daSimSetToolCalls(utilxx_base::Json calls, int remaining) {
+    // 两个量要一起改: 分开加锁可能出现"新 tool_calls 配旧次数"
+    std::lock_guard<std::recursive_mutex> lock(daSimMutex());
+    g_da_sim_tool_calls           = std::move(calls);
+    g_da_sim_tool_calls_remaining = remaining;
+}
+
+void daSimSetResponseContent(std::string content) {
+    g_da_sim_response_content = std::move(content);
+}
+
+void daSimSetDelayMs(int ms) {
+    g_da_sim_delay_ms = ms;
+}
 
 /// 默认模拟器配置
 static DaSimConfig g_defaultSimConfig;
@@ -241,35 +277,43 @@ void DaSimServer::stop() {
         thr.join();
     }
     svr.reset();
-    port                 = 0;
-    g_da_sim_delay_ms    = 0;
-    g_da_sim_fail_count  = 0;
-    g_da_sim_fail_status = 0;
-    g_da_sim_fail_body.clear();
-    g_da_sim_tool_calls           = utilxx_base::Json::array();
-    g_da_sim_tool_calls_remaining = -1;
+    port = 0;
+    {
+        // 服务线程已 join, 这里仍加锁: 其他位置可能正在读这些全局量
+        std::lock_guard<std::recursive_mutex> lock(daSimMutex());
+        g_da_sim_delay_ms    = 0;
+        g_da_sim_fail_count  = 0;
+        g_da_sim_fail_status = 0;
+        g_da_sim_fail_body.clear();
+        g_da_sim_tool_calls           = utilxx_base::Json::array();
+        g_da_sim_tool_calls_remaining = -1;
+    }
 }
 
 DaSimServer startDaSimServer() {
     // 重置全局模拟状态与连接池, 避免跨用例/跨模块测试污染
-    g_da_sim_response_content  = "Hello! I am a simulated LLM response for testing.";
-    g_da_sim_prompt_tokens     = 100;
-    g_da_sim_completion_tokens = 50;
-    g_da_sim_tool_calls        = utilxx_base::Json::array();
-    g_da_sim_reasoning_content = "";
-    g_da_sim_delay_ms          = 0;
-    g_da_sim_last_request      = utilxx_base::Json::object();
-    g_da_sim_requests.clear();
-    g_da_sim_request_count = 0;
-    g_da_sim_fail_count    = 0;
-    g_da_sim_fail_status   = 0;
-    g_da_sim_fail_body.clear();
-    g_da_sim_tool_calls_remaining = -1;
-    g_da_sim_prefix_cache_enabled = false;
-    g_da_sim_last_cache_ratio     = 0.0;
-    g_da_sim_last_cached_tokens   = 0;
-    g_da_sim_last_prompt_tokens   = 0;
-    g_da_sim_prev_for_cache       = utilxx_base::Json::object();
+    // (上一个用例的服务线程可能刚退出, 也可能仍在收尾: 统一在锁内重置)
+    {
+        std::lock_guard<std::recursive_mutex> lock(daSimMutex());
+        g_da_sim_response_content  = "Hello! I am a simulated LLM response for testing.";
+        g_da_sim_prompt_tokens     = 100;
+        g_da_sim_completion_tokens = 50;
+        g_da_sim_tool_calls        = utilxx_base::Json::array();
+        g_da_sim_reasoning_content = "";
+        g_da_sim_delay_ms          = 0;
+        g_da_sim_last_request      = utilxx_base::Json::object();
+        g_da_sim_requests.clear();
+        g_da_sim_request_count = 0;
+        g_da_sim_fail_count    = 0;
+        g_da_sim_fail_status   = 0;
+        g_da_sim_fail_body.clear();
+        g_da_sim_tool_calls_remaining = -1;
+        g_da_sim_prefix_cache_enabled = false;
+        g_da_sim_last_cache_ratio     = 0.0;
+        g_da_sim_last_cached_tokens   = 0;
+        g_da_sim_last_prompt_tokens   = 0;
+        g_da_sim_prev_for_cache       = utilxx_base::Json::object();
+    }
     utilxx::HttpClient::clearConnectionPool();
 
     DaSimServer sim;
@@ -298,37 +342,79 @@ DaSimServer startDaSimServer() {
                 // - 必须先记录再递增计数: 计数由本服务线程递增、测试线程轮询读取,
                 //   若先递增计数, 测试可能在记录写入前就观察到计数增长, 读到上一轮的
                 //   记录 (表现为随机的"模型名不符"断言失败)
-                auto       j       = utilxx_base::Json::parse(req.body());
-                const bool failing = g_da_sim_fail_count > 0;
-                if (failing) {
-                    // 模拟 LLM API 持续失败: 直接返回 HTTP 500 (失败请求不记录)
-                    g_da_sim_fail_count--;
-                } else {
-                    g_da_sim_last_request = j;
-                    g_da_sim_requests.push_back(j);
-                }
-                g_da_sim_request_count++; // 含失败请求
+                auto j = utilxx_base::Json::parse(req.body());
 
-                if (failing) {
+                // 全局模拟状态由本服务线程与测试线程共用, 本次响应用到的值**一次性**
+                // 在锁内拷成局部量 (后面有 co_await, 不能一直持锁)
+                struct SimSnapshot {
+                    bool              failing          = false;
+                    int               failStatus       = 0;
+                    std::string       failBody;
+                    int               delayMs          = 0;
+                    int               promptTokens     = 0;
+                    int               completionTokens = 0;
+                    bool              prefixCache      = false;
+                    bool              hasToolCalls     = false;
+                    utilxx_base::Json toolCalls;
+                    std::string       content;
+                    std::string       reasoning;
+                } snap;
+
+                {
+                    std::lock_guard<std::recursive_mutex> lock(daSimMutex());
+                    snap.failing = g_da_sim_fail_count > 0;
+                    if (snap.failing) {
+                        // 模拟 LLM API 持续失败: 直接返回 HTTP 500 (失败请求不记录)
+                        g_da_sim_fail_count--;
+                    } else {
+                        g_da_sim_last_request = j;
+                        g_da_sim_requests.push_back(j);
+                    }
+                    g_da_sim_request_count++; // 含失败请求
+
+                    snap.failStatus       = g_da_sim_fail_status;
+                    snap.failBody         = g_da_sim_fail_body;
+                    snap.delayMs          = g_da_sim_delay_ms;
+                    snap.promptTokens     = g_da_sim_prompt_tokens;
+                    snap.completionTokens = g_da_sim_completion_tokens;
+                    snap.prefixCache      = g_da_sim_prefix_cache_enabled;
+                    snap.toolCalls        = g_da_sim_tool_calls;
+                    snap.content          = g_da_sim_response_content;
+                    snap.reasoning        = g_da_sim_reasoning_content;
+
+                    // tool_calls 次数控制: g_da_sim_tool_calls_remaining >= 0 时,
+                    // 前 N 次请求返回 tool_calls, 之后返回纯文本 (供嵌套委派等
+                    // 需要"先工具后文本"的多请求序列测试); 默认 -1 保持旧行为
+                    snap.hasToolCalls = !g_da_sim_tool_calls.empty();
+                    if (g_da_sim_tool_calls_remaining >= 0) {
+                        if (g_da_sim_tool_calls_remaining <= 0) {
+                            snap.hasToolCalls = false;
+                        } else {
+                            --g_da_sim_tool_calls_remaining;
+                        }
+                    }
+                }
+
+                if (snap.failing) {
                     const auto status = static_cast<http::status>(
-                        g_da_sim_fail_status > 0
-                            ? g_da_sim_fail_status
+                        snap.failStatus > 0
+                            ? snap.failStatus
                             : static_cast<int>(http::status::internal_server_error)
                     );
                     resp.result(status);
                     resp.set(http::field::content_type, "application/json");
-                    resp.body() = g_da_sim_fail_body.empty()
+                    resp.body() = snap.failBody.empty()
                                       ? std::string{R"({"error":{"message":"simulated failure"}})"}
-                                      : g_da_sim_fail_body;
+                                      : snap.failBody;
                     resp.prepare_payload();
                     co_return;
                 }
 
-                if (g_da_sim_delay_ms > 0) {
+                if (snap.delayMs > 0) {
                     // 模拟慢速 LLM: 延迟后再响应, 供取消测试中断尚未完成的请求
                     asio::steady_timer delayTimer(
                         co_await asio::this_coro::executor,
-                        std::chrono::milliseconds(g_da_sim_delay_ms)
+                        std::chrono::milliseconds(snap.delayMs)
                     );
                     auto [ec] = co_await delayTimer.async_wait(asio::as_tuple(asio::use_awaitable));
                     if (ec) {
@@ -340,9 +426,11 @@ DaSimServer startDaSimServer() {
                 // 与上一条成功请求逐字节比较: 工具定义 -> 消息前缀; 命中的部分按
                 // 每 4 字节 1 token 估算, 写进 usage.prompt_tokens_details.cached_tokens
                 // (主程序侧 parseCachedUsage 会记入用量台账与关键指标)
-                int respPromptTokens = g_da_sim_prompt_tokens;
+                int respPromptTokens = snap.promptTokens;
                 int respCachedTokens = 0;
-                if (g_da_sim_prefix_cache_enabled) {
+                if (snap.prefixCache) {
+                    // 前缀基准 (prev) 是全局量: 读它、回写它都在锁内完成
+                    std::lock_guard<std::recursive_mutex> lock(daSimMutex());
                     auto estimateTokens = [](const utilxx_base::Json& value) -> int {
                         const std::string text
                             = value.is_string() ? value.get<std::string>() : value.dump();
@@ -396,26 +484,17 @@ DaSimServer startDaSimServer() {
                     g_da_sim_prev_for_cache = j;
                 }
 
-                bool stream = j.value("stream", false);
-                // tool_calls 次数控制: g_da_sim_tool_calls_remaining >= 0 时,
-                // 前 N 次请求返回 tool_calls, 之后返回纯文本 (供嵌套委派等
-                // 需要"先工具后文本"的多请求序列测试); 默认 -1 保持旧行为
-                bool hasToolCalls = !g_da_sim_tool_calls.empty();
-                if (g_da_sim_tool_calls_remaining >= 0) {
-                    if (g_da_sim_tool_calls_remaining <= 0) {
-                        hasToolCalls = false;
-                    } else {
-                        --g_da_sim_tool_calls_remaining;
-                    }
-                }
+                const bool stream = j.value("stream", false);
+                // tool_calls 是否生效已在 snapshot 里算好
+                const bool hasToolCalls = snap.hasToolCalls;
 
                 // provider 层现在把"完全无输出"的成功响应当作生成失败 (抛异常交由
                 // modelcall 重试流程处理), 模拟器遵循同一契约: 未设置内容时使用占位
                 // 文本, 不再产生真正的空响应 (历史用例将 content 设为 "" 仅表示最小
                 // 回复, 并非在测试空响应语义)
-                const std::string respContent = g_da_sim_response_content.empty()
+                const std::string respContent = snap.content.empty()
                                                     ? std::string{"done"}
-                                                    : g_da_sim_response_content;
+                                                    : snap.content;
 
                 if (stream) {
                     std::string sseBody;
@@ -452,15 +531,15 @@ DaSimServer startDaSimServer() {
                     }
 
                     // 模拟 thinking 模型: 先推送 reasoning_content 增量 (TYPE_THINKING)
-                    if (!g_da_sim_reasoning_content.empty()) {
+                    if (!snap.reasoning.empty()) {
                         auto d                 = utilxx_base::Json::object();
-                        d["reasoning_content"] = g_da_sim_reasoning_content;
+                        d["reasoning_content"] = snap.reasoning;
                         append(d, "");
                     }
 
                     if (hasToolCalls) {
                         auto d          = utilxx_base::Json::object();
-                        d["tool_calls"] = g_da_sim_tool_calls;
+                        d["tool_calls"] = snap.toolCalls;
                         append(d, "");
                         append(utilxx_base::Json::object(), "tool_calls");
                     } else {
@@ -515,11 +594,11 @@ DaSimServer startDaSimServer() {
                         ev["object"]  = "chat.completion.chunk";
                         ev["choices"] = utilxx_base::Json::array();
                         ev["usage"]   = utilxx_base::Json{
-                              {"prompt_tokens",     respPromptTokens                             },
-                              {"completion_tokens", g_da_sim_completion_tokens                   },
-                              {"total_tokens",      respPromptTokens + g_da_sim_completion_tokens},
+                              {"prompt_tokens",     respPromptTokens            },
+                              {"completion_tokens", snap.completionTokens       },
+                              {"total_tokens",      respPromptTokens + snap.completionTokens},
                         };
-                        if (g_da_sim_prefix_cache_enabled) {
+                        if (snap.prefixCache) {
                             ev["usage"]["prompt_tokens_details"] = utilxx_base::Json{
                                 {"cached_tokens", respCachedTokens}
                             };
@@ -537,12 +616,12 @@ DaSimServer startDaSimServer() {
                 } else {
                     auto msg    = utilxx_base::Json::object();
                     msg["role"] = "assistant";
-                    if (!g_da_sim_reasoning_content.empty()) {
-                        msg["reasoning_content"] = g_da_sim_reasoning_content;
+                    if (!snap.reasoning.empty()) {
+                        msg["reasoning_content"] = snap.reasoning;
                     }
                     if (hasToolCalls) {
                         msg["content"]    = nullptr;
-                        msg["tool_calls"] = g_da_sim_tool_calls;
+                        msg["tool_calls"] = snap.toolCalls;
                     } else {
                         msg["content"] = respContent;
                     }
@@ -554,9 +633,9 @@ DaSimServer startDaSimServer() {
 
                     auto usage                 = utilxx_base::Json::object();
                     usage["prompt_tokens"]     = respPromptTokens;
-                    usage["completion_tokens"] = g_da_sim_completion_tokens;
-                    usage["total_tokens"]      = respPromptTokens + g_da_sim_completion_tokens;
-                    if (g_da_sim_prefix_cache_enabled) {
+                    usage["completion_tokens"] = snap.completionTokens;
+                    usage["total_tokens"]      = respPromptTokens + snap.completionTokens;
+                    if (snap.prefixCache) {
                         usage["prompt_tokens_details"] = utilxx_base::Json{
                             {"cached_tokens", respCachedTokens}
                         };
@@ -579,10 +658,13 @@ DaSimServer startDaSimServer() {
                 // 数组仅在"未按次数控制"时清空: 未设置 remaining 时 tool_calls 只作用于
                 // 第 1 次响应 (旧行为); 显式设置 remaining >= 0 时保留数组, 使"前 N 次响应
                 // 返回 tool_calls"真正生效 (否则第 2 次起数组已空, N > 1 无意义)
-                if (g_da_sim_tool_calls_remaining < 0) {
-                    g_da_sim_tool_calls = utilxx_base::Json::array();
+                {
+                    std::lock_guard<std::recursive_mutex> lock(daSimMutex());
+                    if (g_da_sim_tool_calls_remaining < 0) {
+                        g_da_sim_tool_calls = utilxx_base::Json::array();
+                    }
+                    g_da_sim_reasoning_content.clear();
                 }
-                g_da_sim_reasoning_content = "";
                 co_return;
             }
         )

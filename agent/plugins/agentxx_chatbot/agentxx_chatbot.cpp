@@ -195,7 +195,7 @@ struct ChatbotCtx : public PluginBase {
     void panelChanged();
 
     ~ChatbotCtx() override {
-        // 防御: 宿主若跳过 stop 直接销毁实例, 这里必须先把 io 线程收掉
+        // 防御: 主程序若跳过 stop 直接销毁实例, 这里必须先把 io 线程收掉
         // (std::thread 仍可 join 时析构会 std::terminate), 并保证平台对象在
         // io_context 之前析构 (成员逆序析构已经如此, 只要线程先停)
         stopIo();
@@ -610,7 +610,7 @@ const char* kDebugOutboxSchema = R"JSON({
 
 /// 在插件 io 线程上跑一个工具工作体, 拿回结果串
 ///
-/// 为什么要绕这一层: 工具工作体要跳到插件 io 线程执行, 而 `args` / `tid` 只是宿主在
+/// 为什么要绕这一层: 工具工作体要跳到插件 io 线程执行, 而 `args` / `tid` 只是主程序在
 /// 这次调用里给的视图, 调用方栈上的 `result` / `error` 也只在调用方等待期间有效。
 /// 一旦 `runOnIoBlocking` 超时返回, 调用方就收摊了, 已排队的 lambda 再去读那些内存
 /// 就是悬空读 (实测: 超时后执行到工具体时读到垃圾长度, ASan 报
@@ -619,7 +619,7 @@ const char* kDebugOutboxSchema = R"JSON({
 ///
 /// - `args`:
 ///     - [c] 插件上下文
-///     - [args] / [tid] 宿主给的参数与通道 id (两者都会被拷贝一份)
+///     - [args] / [tid] 主程序给的参数与通道 id (两者都会被拷贝一份)
 ///     - [body] 工作体: `(tid, args) -> 结果串`; 抛出的异常会转成工具错误
 /// - `return` 工具结果串
 /// - 相关: [ChatbotCtx::runOnIoBlocking]
@@ -644,10 +644,16 @@ std::string
     return std::move(out->first);
 }
 
-/// 给一个 agent 注册 6 个 `chatbot_*` 工具
+/// 给一个 agent 注册 7 个 `chatbot_*` 工具
 ///
-/// 工作体统一 `blocking_tool` (要等插件 io 线程的结果); 内部把编译期已知的
-/// 处理函数包成 lambda, 这样 SDK 不需要知道 `ChatbotToolDeps` 的类型。
+/// 工作体**统一用 `blocking_tool`**: 它们都要 `runOnIoBlocking` 等插件 io 线程的结果,
+/// 而插件 io 线程反过来也会找主程序 IO 线程 (开通道 / 投输入 / 要面板驱动票)。
+/// 一旦当成 `fast_tool` (在主程序 IO 线程上就地执行), 两边就会互等 —— 实测表现为
+/// "Plugin operation `chatbot_status` start blocked IO for over 100ms", 极端情况一直
+/// 卡到 25 秒工具超时 (调用方看到 "chatbot 插件未就绪")。offload 到工作线程后两边
+/// 都只是等, 不会互相堵死。
+///
+/// 内部把编译期已知的处理函数包成 lambda, 这样 SDK 不需要知道 `ChatbotToolDeps` 的类型。
 void registerToolsOn(ChatbotCtx& ctx, const AgentRef& ref) {
     const auto deps = &ctx.toolDeps;
 
@@ -692,7 +698,7 @@ void registerToolsOn(ChatbotCtx& ctx, const AgentRef& ref) {
         sendMessage
     );
 
-    agentxx::plugin::fast_tool(
+    agentxx::plugin::blocking_tool(
         ctx,
         ref,
         "chatbot_chat_info",
@@ -703,7 +709,7 @@ void registerToolsOn(ChatbotCtx& ctx, const AgentRef& ref) {
         }
     );
 
-    agentxx::plugin::fast_tool(
+    agentxx::plugin::blocking_tool(
         ctx,
         ref,
         "chatbot_history",
@@ -714,7 +720,7 @@ void registerToolsOn(ChatbotCtx& ctx, const AgentRef& ref) {
         }
     );
 
-    agentxx::plugin::fast_tool(
+    agentxx::plugin::blocking_tool(
         ctx,
         ref,
         "chatbot_status",
@@ -725,7 +731,7 @@ void registerToolsOn(ChatbotCtx& ctx, const AgentRef& ref) {
         }
     );
 
-    agentxx::plugin::fast_tool(
+    agentxx::plugin::blocking_tool(
         ctx,
         ref,
         "chatbot_set_mode",
@@ -776,7 +782,7 @@ void registerToolsOn(ChatbotCtx& ctx, const AgentRef& ref) {
         kDebugInjectSchema,
         debugInject
     );
-    agentxx::plugin::fast_tool(
+    agentxx::plugin::blocking_tool(
         ctx,
         ref,
         "chatbot_debug_outbox",

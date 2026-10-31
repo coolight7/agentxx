@@ -13,6 +13,12 @@
 - 主动记忆 插件tool
 - 添加连续多次压缩检查
 - 框架处理支持 toolcall 参数采用变量取值，比如 edit、write 失败时可以将参数存入 share_store，减少下一次 edit 所需的token
+- 移除InterruptUi，统一使用 plugin::ui
+- 调整 PluginChannelAgentIO 头文件位置
+- 应当const &:
+  - PluginGraphNode 构造函数参数 `AgentxxPluginGraphNodeTypeSpec  spec`
+  - PluginTool 构造函数参数 `AgentxxPluginToolSpec spec`
+  - PluginManager::qualifyEventTopic 不能放过 `client.*`，客户端插件事件也应当 plugin.client.*
 
 - tui 信息侧边栏顶部增加显示当前session标题
 - tui 弹窗支持复制

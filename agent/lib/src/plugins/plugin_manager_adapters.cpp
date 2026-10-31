@@ -44,7 +44,7 @@ PluginTool::PluginTool(
         spec.parameters_json.size
     },
     parameters_(utilxx_base::Json::object()),
-    instance_(instance) {
+    instance_(std::move(instance)) {
     spec_      = spec;
     spec_.name = agentxx::plugin::PluginStringView::from(name_.data(), name_.size());
     spec_.description
@@ -186,7 +186,7 @@ int PluginMount::unregisterTool(PluginInstance* inst, PluginxxStringView name) {
         return -1;
     }
     std::string toolName = svToStr(name);
-    auto        it       = std::find(entryOf(inst).tools.begin(), entryOf(inst).tools.end(), toolName);
+    auto        it = std::find(entryOf(inst).tools.begin(), entryOf(inst).tools.end(), toolName);
     if (it == entryOf(inst).tools.end()) {
         XX_LOGW("Plugin `{}` unregister tool `{}` not owned by this plugin", inst->name, toolName);
         return -1;
@@ -298,7 +298,11 @@ int PluginMount::registerToolPermission(
         decl.category.assign(spec->category.data, spec->category.size);
     }
     permission->registerToolPermission(toolName, std::move(decl));
-    if (std::find(entryOf(inst).permissionTools.begin(), entryOf(inst).permissionTools.end(), toolName)
+    if (std::find(
+            entryOf(inst).permissionTools.begin(),
+            entryOf(inst).permissionTools.end(),
+            toolName
+        )
         == entryOf(inst).permissionTools.end()) {
         entryOf(inst).permissionTools.push_back(toolName);
     }
@@ -311,7 +315,11 @@ int PluginMount::unregisterToolPermission(PluginInstance* inst, PluginxxStringVi
         return -1;
     }
     std::string name = svToStr(toolName);
-    auto it = std::find(entryOf(inst).permissionTools.begin(), entryOf(inst).permissionTools.end(), name);
+    auto        it   = std::find(
+        entryOf(inst).permissionTools.begin(),
+        entryOf(inst).permissionTools.end(),
+        name
+    );
     if (it == entryOf(inst).permissionTools.end()) {
         return -1;
     }
@@ -567,10 +575,10 @@ int PluginMount::setGraphJson(PluginInstance* inst, PluginxxStringView graph_jso
         if (graphDefinitionOwner_.empty()) {
             // 首次占用: 记住当前定义 (内置图或主程序/前一个占用者留下的定义),
             // 释放时恢复它 = "回到内置"
-            graphDefinitionBase_         = ctx->graphDefinitionJson.dump();
-            graphDefinitionBaseCaptured_ = true;
-            graphDefinitionOwner_        = inst->name;
-        entryOf(inst).ownsGraphDefinition = true;
+            graphDefinitionBase_              = ctx->graphDefinitionJson.dump();
+            graphDefinitionBaseCaptured_      = true;
+            graphDefinitionOwner_             = inst->name;
+            entryOf(inst).ownsGraphDefinition = true;
         }
         ctx->graphDefinitionJson = agentxx::util::toNeographJson(j);
         XX_LOGI(

@@ -212,11 +212,11 @@ asio::awaitable<bool> waitOutbox(
 }
 
 /// 最近一次模型请求的完整文本 (查输入里带了什么)
+///
+/// 走 `daSimLastRequestText()`: 请求记录由模拟器服务线程追加, 这里直接读
+/// `g_da_sim_requests` 会与追加撞上 (vector 扩容时读到已释放内存)
 std::string lastRequestText() {
-    if (g_da_sim_requests.empty()) {
-        return {};
-    }
-    return g_da_sim_requests.back().dump();
+    return daSimLastRequestText();
 }
 
 // ===========================================================================
@@ -458,21 +458,23 @@ asio::awaitable<void> runBody(
 
     // ===================== 2. 私聊一条 → 跑一轮 → 工具发送 =====================
     {
-        g_da_sim_delay_ms             = 0;
-        g_da_sim_tool_calls_remaining = 1;
-        g_da_sim_response_content     = "";
+        daSimSetDelayMs(0);
+        daSimSetResponseContent("");
         // 第一轮模型就调 chatbot_send_message
-        g_da_sim_tool_calls = Json::array(
-            {Json{
-                {"index", 0},
-                {"id", "call_chatbot_1"},
-                {"type", "function"},
-                {"function",
-                 Json{
-                     {"name", "chatbot_send_message"},
-                     {"arguments", R"({"text":"收到, 我在。"})"},
-                 }},
-            }}
+        daSimSetToolCalls(
+            Json::array(
+                {Json{
+                    {"index", 0},
+                    {"id", "call_chatbot_1"},
+                    {"type", "function"},
+                    {"function",
+                     Json{
+                         {"name", "chatbot_send_message"},
+                         {"arguments", R"({"text":"收到, 我在。"})"},
+                     }},
+                }}
+            ),
+            1
         );
         const int requestsBefore = g_da_sim_request_count.load();
 
@@ -527,10 +529,9 @@ asio::awaitable<void> runBody(
     // ===================== 3. mention 模式: 无 @ 只缓冲 =====================
     {
         XX_TEST_EXPECT_TRUE(co_await drain());
-        g_da_sim_tool_calls_remaining = 0;
-        g_da_sim_tool_calls           = Json::array();
-        g_da_sim_response_content     = "";
-        const int requestsBefore      = g_da_sim_request_count.load();
+        daSimSetToolCalls(Json::array(), 0);
+        daSimSetResponseContent("");
+        const int requestsBefore = g_da_sim_request_count.load();
 
         XX_TEST_EXPECT_TRUE(co_await inject("group", "G1", "群里的第一句", false, "msg-g1"));
         XX_TEST_EXPECT_TRUE(co_await inject("group", "G1", "群里的第二句", false, "msg-g2"));
@@ -559,9 +560,8 @@ asio::awaitable<void> runBody(
 
     // ===================== 4. 去重: 同 msg_id 只处理一次 =====================
     {
-        g_da_sim_tool_calls_remaining = 0;
-        g_da_sim_tool_calls           = Json::array();
-        const auto statusBefore       = Json::parse(
+        daSimSetToolCalls(Json::array(), 0);
+        const auto statusBefore = Json::parse(
             co_await callTool(rootCtx, "chatbot_status")
         );
         const int64_t dupBefore
@@ -585,18 +585,20 @@ asio::awaitable<void> runBody(
         for (int i = 0; i < 300; ++i) {
             longText += "\u957f";
         }
-        g_da_sim_tool_calls_remaining = 1;
-        g_da_sim_tool_calls           = Json::array(
-            {Json{
-                {"index", 0},
-                {"id", "call_chatbot_long"},
-                {"type", "function"},
-                {"function",
-                 Json{
-                     {"name", "chatbot_send_message"},
-                     {"arguments", Json{{"text", longText}}.dump()},
-                 }},
-            }}
+        daSimSetToolCalls(
+            Json::array(
+                {Json{
+                    {"index", 0},
+                    {"id", "call_chatbot_long"},
+                    {"type", "function"},
+                    {"function",
+                     Json{
+                         {"name", "chatbot_send_message"},
+                         {"arguments", Json{{"text", longText}}.dump()},
+                     }},
+                }}
+            ),
+            1
         );
         const int requestsBefore = g_da_sim_request_count.load();
 
@@ -639,18 +641,20 @@ asio::awaitable<void> runBody(
 
         // 让模型真的调工具发一条 (工具路径才会把平台消息 id 记进可撤回表)
         const std::string marker = "recall-me-marker";
-        g_da_sim_tool_calls_remaining = 1;
-        g_da_sim_tool_calls           = Json::array(
-            {Json{
-                {"index", 0},
-                {"id", "call_chatbot_recall_target"},
-                {"type", "function"},
-                {"function",
-                 Json{
-                     {"name", "chatbot_send_message"},
-                     {"arguments", Json{{"text", marker}}.dump()},
-                 }},
-            }}
+        daSimSetToolCalls(
+            Json::array(
+                {Json{
+                    {"index", 0},
+                    {"id", "call_chatbot_recall_target"},
+                    {"type", "function"},
+                    {"function",
+                     Json{
+                         {"name", "chatbot_send_message"},
+                         {"arguments", Json{{"text", marker}}.dump()},
+                     }},
+                }}
+            ),
+            1
         );
         const int requestsBefore = g_da_sim_request_count.load();
         XX_TEST_EXPECT_TRUE(
@@ -724,9 +728,8 @@ asio::awaitable<void> runBody(
                        Json{{"text", fmt::format("skip-target-{}", i)}}.dump()}}},
             });
         }
-        g_da_sim_tool_calls_remaining = 1;
-        g_da_sim_tool_calls           = calls;
-        const int requestsBefore      = g_da_sim_request_count.load();
+        daSimSetToolCalls(calls, 1);
+        const int requestsBefore = g_da_sim_request_count.load();
         XX_TEST_EXPECT_TRUE(co_await inject("private", "U10", "连发三条", false, "msg-skip-1"));
         XX_TEST_EXPECT_TRUE(co_await waitUntil(ex, 60s, [&]() {
             return g_da_sim_request_count.load() > requestsBefore;
@@ -828,10 +831,9 @@ asio::awaitable<void> runBody(
         // 上一轮的第二次模型请求会吞掉本段设置的 tool_calls, 先等干净
         XX_TEST_EXPECT_TRUE(co_await drain());
         // local: 直接出站, 不产生模型调用
-        g_da_sim_tool_calls_remaining = 0;
-        g_da_sim_tool_calls           = Json::array();
-        g_da_sim_response_content     = "";
-        const int requestsBefore      = g_da_sim_request_count.load();
+        daSimSetToolCalls(Json::array(), 0);
+        daSimSetResponseContent("");
+        const int requestsBefore = g_da_sim_request_count.load();
 
         XX_TEST_EXPECT_TRUE(co_await inject("private", "U1", "/agentxx-cmd info", false, "msg-cmd1"));
         XX_TEST_EXPECT_TRUE(co_await waitOutbox(ex, 30s, rootCtx, [](const Json& outbox) {
@@ -871,8 +873,8 @@ asio::awaitable<void> runBody(
         XX_TEST_EXPECT_EQ(g_da_sim_request_count.load(), beforeHelp);
 
         // model: 产生一轮模型调用, 输入是 prompt 渲染结果
-        g_da_sim_response_content = "你好呀";
-        const int beforeModel     = g_da_sim_request_count.load();
+        daSimSetResponseContent("你好呀");
+        const int beforeModel = g_da_sim_request_count.load();
         XX_TEST_EXPECT_TRUE(
             co_await inject("private", "U1", "/agentxx-cmd hello 请简短", false, "msg-cmd2")
         );
@@ -887,10 +889,9 @@ asio::awaitable<void> runBody(
     // ===================== 7. 附件: 图片进输入 + 文本里有附件行 =====================
     {
         XX_TEST_EXPECT_TRUE(co_await drain());
-        g_da_sim_tool_calls_remaining = 0;
-        g_da_sim_tool_calls           = Json::array();
-        g_da_sim_response_content     = "";
-        const int requestsBefore      = g_da_sim_request_count.load();
+        daSimSetToolCalls(Json::array(), 0);
+        daSimSetResponseContent("");
+        const int requestsBefore = g_da_sim_request_count.load();
 
         Json args = Json::object();
         args["account"]     = "fake_main";
@@ -923,10 +924,9 @@ asio::awaitable<void> runBody(
     // 模型根本读不到。小文本文件必须把正文一起送上去。
     {
         XX_TEST_EXPECT_TRUE(co_await drain());
-        g_da_sim_tool_calls_remaining = 0;
-        g_da_sim_tool_calls           = Json::array();
-        g_da_sim_response_content     = "";
-        const int requestsBefore      = g_da_sim_request_count.load();
+        daSimSetToolCalls(Json::array(), 0);
+        daSimSetResponseContent("");
+        const int requestsBefore = g_da_sim_request_count.load();
 
         // 造一个真实的本地文本文件
         std::error_code ec;
@@ -971,9 +971,8 @@ asio::awaitable<void> runBody(
     // ===================== 7d. 二进制文件: 不内联, 只给路径 =====================
     {
         XX_TEST_EXPECT_TRUE(co_await drain());
-        g_da_sim_tool_calls_remaining = 0;
-        g_da_sim_tool_calls           = Json::array();
-        const int requestsBefore      = g_da_sim_request_count.load();
+        daSimSetToolCalls(Json::array(), 0);
+        const int requestsBefore = g_da_sim_request_count.load();
 
         std::error_code ec;
         const auto dir = std::filesystem::temp_directory_path(ec) / "agentxx-chatbot-inline";
@@ -1021,18 +1020,20 @@ asio::awaitable<void> runBody(
         for (int i = 0; i < 700; ++i) {
             longText += "\u5b57";
         }
-        g_da_sim_tool_calls_remaining = 1;
-        g_da_sim_tool_calls           = Json::array(
-            {Json{
-                {"index", 0},
-                {"id", "call_chatbot_huge"},
-                {"type", "function"},
-                {"function",
-                 Json{
-                     {"name", "chatbot_send_message"},
-                     {"arguments", Json{{"text", longText}}.dump()},
-                 }},
-            }}
+        daSimSetToolCalls(
+            Json::array(
+                {Json{
+                    {"index", 0},
+                    {"id", "call_chatbot_huge"},
+                    {"type", "function"},
+                    {"function",
+                     Json{
+                         {"name", "chatbot_send_message"},
+                         {"arguments", Json{{"text", longText}}.dump()},
+                     }},
+                }}
+            ),
+            1
         );
         const int requestsBefore = g_da_sim_request_count.load();
         XX_TEST_EXPECT_TRUE(co_await inject("private", "U3", "背课文", false, "msg-huge"));
@@ -1091,9 +1092,8 @@ asio::awaitable<void> runBody(
                       {"arguments", Json{{"text", fmt::format("第 {} 条", i + 1)}}.dump()}}},
             });
         }
-        g_da_sim_tool_calls_remaining = 1;
-        g_da_sim_tool_calls           = calls;
-        const int requestsBefore      = g_da_sim_request_count.load();
+        daSimSetToolCalls(calls, 1);
+        const int requestsBefore = g_da_sim_request_count.load();
 
         XX_TEST_EXPECT_TRUE(co_await inject("private", "U4", "说七件事", false, "msg-quota"));
         XX_TEST_EXPECT_TRUE(co_await waitUntil(ex, 60s, [&]() {
@@ -1126,16 +1126,18 @@ asio::awaitable<void> runBody(
     // ===================== 10. mention 立即唤醒 + 被动回复 id =====================
     {
         XX_TEST_EXPECT_TRUE(co_await drain());
-        g_da_sim_tool_calls_remaining = 1;
-        g_da_sim_tool_calls           = Json::array(
-            {Json{
-                {"index", 0},
-                {"id", "call_chatbot_group"},
-                {"type", "function"},
-                {"function",
-                 Json{{"name", "chatbot_send_message"},
-                      {"arguments", R"({"text":"群里收到, 回你一句。"})"}}},
-            }}
+        daSimSetToolCalls(
+            Json::array(
+                {Json{
+                    {"index", 0},
+                    {"id", "call_chatbot_group"},
+                    {"type", "function"},
+                    {"function",
+                     Json{{"name", "chatbot_send_message"},
+                          {"arguments", R"({"text":"群里收到, 回你一句。"})"}}},
+                }}
+            ),
+            1
         );
         const int requestsBefore = g_da_sim_request_count.load();
         XX_TEST_EXPECT_TRUE(co_await inject("group", "G1", "@机器人 在吗", true, "msg-g10"));
@@ -1207,10 +1209,9 @@ asio::awaitable<void> runBody(
         XX_TEST_EXPECT_EQ(infoAfter.value("mode", std::string{}), std::string{"always"});
 
         // always 生效: 无 @ 的新消息也会投递
-        g_da_sim_tool_calls_remaining = 0;
-        g_da_sim_tool_calls           = Json::array();
-        g_da_sim_response_content     = "";
-        const int requestsBefore      = g_da_sim_request_count.load();
+        daSimSetToolCalls(Json::array(), 0);
+        daSimSetResponseContent("");
+        const int requestsBefore = g_da_sim_request_count.load();
         XX_TEST_EXPECT_TRUE(co_await inject("group", "G1", "改成 always 之后的一句", false, "msg-always"));
         XX_TEST_EXPECT_TRUE(co_await waitUntil(ex, 60s, [&]() {
             return g_da_sim_request_count.load() > requestsBefore;
@@ -1227,10 +1228,9 @@ asio::awaitable<void> runBody(
     // ===================== 12. 兜底发送: 模型只输出正文不调工具 =====================
     {
         XX_TEST_EXPECT_TRUE(co_await drain());
-        g_da_sim_tool_calls_remaining = 0;
-        g_da_sim_tool_calls           = Json::array();
-        g_da_sim_response_content     = "这句是正文, 没有调工具。";
-        const int requestsBefore      = g_da_sim_request_count.load();
+        daSimSetToolCalls(Json::array(), 0);
+        daSimSetResponseContent("这句是正文, 没有调工具。");
+        const int requestsBefore = g_da_sim_request_count.load();
 
         XX_TEST_EXPECT_TRUE(co_await inject("group", "G1", "@机器人 直接说一句", true, "msg-fb1"));
         XX_TEST_EXPECT_TRUE(co_await waitUntil(ex, 60s, [&]() {
@@ -1249,7 +1249,116 @@ asio::awaitable<void> runBody(
         );
     }
 
-    // ===================== 13. 卸载插件 → 通道关闭、根回收 =====================
+    // ===================== 13. 禁用 → 启用: 工具与人设根恢复 =====================
+    //
+    // 禁用 = 骨架摘除注册 + 拆挂载 + 投递 stop (插件在自己 stop 里卸人设根);
+    // 启用 = 先补齐 stop 再投递 start (插件重新声明注册) + 重新挂载
+    // (agent 级注册都在插件的 mount 回调里)。
+    {
+        XX_TEST_EXPECT_TRUE(co_await drain());
+
+        // ---- 禁用: 工具、人设根、通道全部撤掉 ----
+        mgr->disable(kOwner);
+        XX_TEST_EXPECT_TRUE(co_await waitUntil(ex, 60s, [&]() {
+            return rootOf(host, kOwner) == nullptr && host->rootCount() == size_t{0};
+        }));
+        XX_TEST_EXPECT_FALSE(primaryCtx->toolRegistry->contains("chatbot_send_message"));
+        XX_TEST_EXPECT_TRUE(channelOfPrefix(mgr, "chatbot_assistant_") == nullptr);
+
+        // ---- 启用: 人设根与工具回来 ----
+        mgr->enable(kOwner);
+        XX_TEST_EXPECT_TRUE(co_await waitUntil(ex, 60s, [&]() {
+            auto root = rootOf(host, kOwner);
+            if (!root) {
+                return false;
+            }
+            auto ctx = root->getContext();
+            return ctx && ctx->toolRegistry && ctx->toolRegistry->contains("chatbot_send_message");
+        }));
+        auto restoredRoot = rootOf(host, kOwner);
+        XX_TEST_EXPECT_TRUE(restoredRoot != nullptr);
+        if (restoredRoot) {
+            auto restoredCtx = restoredRoot->getContext();
+            XX_TEST_EXPECT_TRUE(restoredCtx != nullptr);
+            if (restoredCtx) {
+                for (const auto* name : {"chatbot_send_message",
+                                         "chatbot_history",
+                                         "chatbot_chat_info",
+                                         "chatbot_status",
+                                         "chatbot_set_mode",
+                                         "chatbot_recall_message",
+                                         "chatbot_debug_inject",
+                                         "chatbot_debug_outbox"}) {
+                    XX_TEST_EXPECT_TRUE(restoredCtx->toolRegistry->contains(name));
+                }
+                // 恢复后确实还能跑一轮: 注入一条 → 模型请求 → 兜底发送
+                daSimSetToolCalls(Json::array(), 0);
+                daSimSetResponseContent("重启之后的回复");
+                const int requestsBefore = g_da_sim_request_count.load();
+                Json      args           = Json::object();
+                args["account"]          = "fake_main";
+                args["type"]             = "group";
+                args["chatId"]           = "G1";
+                args["text"]             = "@机器人 重启后还在吗";
+                args["sender"]           = "小张";
+                args["mentionedMe"]      = true;
+                args["msgId"]            = "msg-after-enable";
+                const auto injected
+                    = co_await callTool(restoredCtx, "chatbot_debug_inject", args.dump());
+                bool injectedOk = false;
+                try {
+                    injectedOk = Json::parse(injected).value("accepted", false);
+                } catch (const std::exception&) {
+                    injectedOk = false;
+                }
+                XX_TEST_EXPECT_TRUE(injectedOk);
+                XX_TEST_EXPECT_TRUE(co_await waitUntil(ex, 60s, [&]() {
+                    return g_da_sim_request_count.load() > requestsBefore;
+                }));
+                XX_TEST_EXPECT_TRUE(
+                    co_await waitOutbox(ex, 30s, restoredCtx, [](const Json& outbox) {
+                        return concatSentText(outbox).find("重启之后的回复") != std::string::npos;
+                    })
+                );
+            }
+        }
+    }
+
+    // ===================== 14. 快速往返: 禁用后不等完成就启用 =====================
+    //
+    // 面板/命令行上是"点了禁用又点启用": 两个入口都是同步的, stop 事务还在队列里
+    // 就被 enable 追上了。骨架会让这次 stop 作废 (实例已重新启用), 启用事务负责
+    // 先把欠着的 stop 补齐再 start, 这里确认工具与人设根都能回来。
+    {
+        XX_TEST_EXPECT_TRUE(co_await drain());
+
+        for (int round = 1; round <= 2; ++round) {
+            mgr->disable(kOwner);
+            mgr->enable(kOwner);
+            XX_TEST_EXPECT_TRUE(co_await waitUntil(ex, 60s, [&]() {
+                auto root = rootOf(host, kOwner);
+                if (!root) {
+                    return false;
+                }
+                auto ctx = root->getContext();
+                return ctx && ctx->toolRegistry
+                       && ctx->toolRegistry->contains("chatbot_send_message");
+            }));
+            auto root = rootOf(host, kOwner);
+            XX_TEST_EXPECT_TRUE(root != nullptr);
+            if (root) {
+                auto ctx = root->getContext();
+                XX_TEST_EXPECT_TRUE(ctx != nullptr);
+                if (ctx) {
+                    XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("chatbot_debug_inject"));
+                }
+            }
+            TEST_INFO << "快速往返第 " << round << " 轮: 根数=" << host->rootCount() << std::endl;
+            XX_TEST_EXPECT_EQ(host->rootCount(), size_t{1});
+        }
+    }
+
+    // ===================== 15. 卸载插件 → 通道关闭、根回收 =====================
     {
         XX_TEST_EXPECT_TRUE(co_await mgr->unloadAsync("agentxx_chatbot", 20s));
         XX_TEST_EXPECT_TRUE(channelOfPrefix(mgr, "chatbot_assistant_") == nullptr);
@@ -1282,12 +1391,11 @@ asio::awaitable<TestResult> run_plugin_example_chatbot_tests() {
         co_return TestResult{g_cb_passed, g_cb_failed};
     }
 
-    auto sim                      = startDaSimServer();
-    auto baseUrl                  = "http://127.0.0.1:" + std::to_string(sim.port);
-    g_da_sim_response_content     = "";
-    g_da_sim_tool_calls           = Json::array();
-    g_da_sim_tool_calls_remaining = 0;
-    g_da_sim_delay_ms             = 0;
+    auto sim     = startDaSimServer();
+    auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
+    daSimSetResponseContent("");
+    daSimSetToolCalls(Json::array(), 0);
+    daSimSetDelayMs(0);
 
     auto io   = std::make_shared<asio::io_context>();
     auto work = asio::make_work_guard(*io);

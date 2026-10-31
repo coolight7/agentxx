@@ -211,6 +211,15 @@ asio::awaitable<bool> PluginMount::mountOneAsync(std::shared_ptr<PluginInstance>
             // 后到者不重复回调插件 —— 前一次会把它做完
             co_return true;
         }
+        if (existing->unmountPending) {
+            // 上次禁用只摘了注册, 插件的 unmount 回调还欠着 (禁用后立刻启用时, 禁用
+            // 事务会主动作废): 先把欠的 unmount 补上再重新挂载, 否则旧挂载状态会丢,
+            // 插件的 per-agent 状态再也拿不到释放的机会。
+            co_await unmountOneAsync(inst);
+            if (!inst->enabled) {
+                co_return false; // 补 unmount 期间又被禁用了
+            }
+        }
     }
     // 实例已在关闭流程里 (卸载/主程序关闭): 不再挂载, 否则会把刚摘掉的注册又加回去
     if (inst->lifetime && inst->lifetime->closeRequested()) {

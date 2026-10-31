@@ -501,6 +501,22 @@ std::string PluginManager::mountInfoJson(std::string_view agentId) {
 // 禁用/启用与挂载的关联 (骨架完成 stop/start 后由本类补齐挂载动作)
 // =====================================================================
 
+asio::awaitable<void> PluginManager::detachInstanceFromMountsAsync(
+    const std::shared_ptr<PluginInstance>& inst
+) {
+    if (!inst) {
+        co_return;
+    }
+    // 逐个挂载拆 (调插件 unmount 释放 per-agent 状态), 拆完挂载记录一并删除
+    auto snapshot = mounts_;
+    for (const auto& mount : snapshot) {
+        if (mount) {
+            co_await mount->unmountOneAsync(inst);
+        }
+    }
+    co_return;
+}
+
 asio::awaitable<void> PluginManager::onInstanceDisabledAsync(
     const std::shared_ptr<PluginInstance>& inst
 ) {
@@ -508,17 +524,22 @@ asio::awaitable<void> PluginManager::onInstanceDisabledAsync(
     // per-agent 状态), 实例本身不销毁、不卸载; 注册已由骨架的
     // detachInstanceRegistrations 摘除。
     //
-    // 等待期间用户又启用了它 (disable/enable 紧邻): 本次卸载作废 —— 否则会把
-    // 启用事务刚刚重建的注册与能力又摘一遍。
+    // 等待期间用户又启用了它 (disable/enable 紧邻): 本次拆挂载作废 —— 启用事务
+    // 会先把欠着的 unmount 补齐再重新挂载 (见 [PluginMount::mountOneAsync]),
+    // 这里重复拆会把启用事务刚建的注册又摘一遍。
     if (!inst || inst->enabled) {
         co_return;
     }
-    auto snapshot = mounts_;
-    for (const auto& mount : snapshot) {
-        if (mount) {
-            co_await mount->unmountOneAsync(inst);
-        }
-    }
+    co_await detachInstanceFromMountsAsync(inst);
+    co_return;
+}
+
+asio::awaitable<void> PluginManager::onInstanceUnloadingAsync(
+    const std::shared_ptr<PluginInstance>& inst
+) {
+    // 卸载: 实例马上要 destroy, 挂载记录必须先拆干净 —— 留在挂载上会变成
+    // "实例已 Closed 但挂载记录还在", 之后谁再拆都只能报 `provider is closing`。
+    co_await detachInstanceFromMountsAsync(inst);
     co_return;
 }
 
