@@ -9,6 +9,7 @@
 #include "qq_api.h"
 #include "qq_gateway.h"
 #include "qq_media.h"
+#include "qq_normalize.h"
 
 #include <memory>
 #include <mutex>
@@ -64,6 +65,12 @@ private:
         InboundEvent&              out
     ) const;
 
+    /// 按事件名计数 (判断平台到底有没有推“非 @ 消息”)
+    void noteDispatchEvent(std::string_view eventName);
+
+    /// 从机器人自己消息的回声里学习它在当前群的 openid
+    void learnSelfIdentity(const utilxx_base::Json& data);
+
     /// 一次实际发送 (含附件上传; 协程)
     asio::awaitable<void> doSend(OutboundMessage msg, SendResultFn done);
 
@@ -81,6 +88,12 @@ private:
     uint64_t               inboundCount_ = 0;
     uint64_t               outboundCount_ = 0;
     uint64_t               sendFailCount_ = 0;
+    /// 按事件名统计的原始条数: 全量消息为 0 就说明平台没给“接收所有消息”权限
+    uint64_t               fullModeCount_   = 0;
+    uint64_t               atMessageCount_  = 0;
+    uint64_t               c2cMessageCount_ = 0;
+    /// 机器人自己的身份 (全量消息里判定“@ 的是不是我”; 随 READY / 回声逐步攒)
+    QqSelfIdentity         selfIdentity_;
     bool                   stopped_ = false;
 };
 

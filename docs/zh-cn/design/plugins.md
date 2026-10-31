@@ -1180,6 +1180,17 @@ MediaType 只有 image/audio/video），而是把本地路径写进输入 ——
 更大或二进制的才只给路径。群文件在**被引用消息**的 `msg_elements[].attachments` 里，
 不在顶层 `attachments`。
 
+**发附件（QQ 富媒体上传）**：一条消息只带一个附件（平台限制），其余在正文里给路径。
+上传先后是 `upload_prepare` → 逐片 `PUT` 预签名地址 → `upload_part_finish` →
+`POST .../files {upload_id}` 合并拿 `file_info`，再用 `msg_type=7` 发出；平台没给分片清单时
+小文件（≤ 5 MB）走 `file_data` 直传。**字段类型必须按文档**：`file_size` / `block_size` 是
+**字符串**数字，分片完成必须带该片的 `block_size`（实际字节数）与 `md5` —— 少给会被服务端
+当成坏请求，真机表现就是「附件上传失败: upload_part_finish 失败 (status 500)」。请求体与分片
+切法在 `platform/qq/qq_media_request.cpp`（纯逻辑），由 `chatbot_media` 用例覆盖；
+`upload()` 的完整流程由 `chatbot_media_io` 用例用本地模拟服务端跑（模拟服务端按文档校验分片
+完成请求）。5xx / 传输层失败按平台下发的 `upload_config.retry_delay` / `retry_timeout` 重试，
+4xx 不重试。
+
 **人设根能用哪些工具**：由 `personas[].mount` 决定 —— `none` 只有 `chatbot_*` 工具；
 `listed` + `list: [插件名, …]` 只挂这几个（chatbot 自己会自动补进名单）；`all` 与实际加载的
 全部插件一致（与内置主会话相同）。被挂插件在根上有自己的实例与 args（`mount.args` 里按插件名

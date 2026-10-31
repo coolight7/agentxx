@@ -4,6 +4,9 @@
 
 #include <chrono>
 #include <ctime>
+#include <map>
+#include <string>
+#include <string_view>
 
 namespace agentxx {
 namespace chatbot {
@@ -222,6 +225,114 @@ std::string describeAttachments(const std::vector<MediaRef>& list) {
     return out;
 }
 
+/// 成员 id → 昵称 (正文里的 @ 标记换成昵称时查它)
+using MentionNames = std::map<std::string, std::string, std::less<>>;
+
+/// 读 `mentions[]`: 被 @ 的成员 id、昵称, 以及“里面有没有机器人”
+///
+/// - 机器人自己的群 openid 与 `id` 不一定是同一个值, 所以 `id` / `member_openid` /
+///   `union_openid` 都记一份 (正文标记用哪个都能对上)
+/// - `botMentioned` 对应 `User.bot = true` 的那项: 全量消息里最能说明
+///   “这条消息 @ 的是机器人”的信号 (群里通常只有本机器人一个)
+void collectMentions(
+    const utilxx_base::Json& data,
+    InboundEvent&            out,
+    MentionNames&            names,
+    bool&                    botMentioned
+) {
+    if (!data.contains("mentions") || !data["mentions"].is_array()) {
+        return;
+    }
+    for (const auto& item : data["mentions"]) {
+        if (!item.is_object()) {
+            continue;
+        }
+        const std::string name = item.value("username", std::string{});
+        std::string       id   = item.value("id", std::string{});
+        if (id.empty()) {
+            id = item.value("member_openid", std::string{});
+        }
+        if (id.empty()) {
+            id = item.value("user_openid", std::string{});
+        }
+        if (!id.empty()) {
+            out.mentionIds.push_back(id);
+            if (!name.empty()) {
+                names.emplace(id, name);
+            }
+        }
+        const std::string unionId = item.value("union_openid", std::string{});
+        if (!unionId.empty()) {
+            out.mentionIds.push_back(unionId);
+            if (!name.empty()) {
+                names.emplace(unionId, name);
+            }
+        }
+        if (item.value("bot", false)) {
+            botMentioned = true;
+        }
+    }
+}
+
+/// 正文里的 @ 标记渲染结果
+struct MentionMarkup {
+    std::string text;        ///< 渲染后的正文 (`<@openid>` → `@昵称`)
+    bool        all  = false; ///< 出现了 `<@all>` (@全体成员)
+    bool        self = false; ///< 出现了机器人自己的 openid
+};
+
+/// 把正文里的 `<@openid>` / `<@all>` 换成可读的 `@昵称`
+///
+/// 全量消息的正文把 @ 写成 `<@` + 成员 openid + `>` (官方文档 group_message_create)。
+/// 原样交给模型会变成“@7A3B9C1D…”这种 openid, 模型会当成正文念出来, 所以先换掉。
+MentionMarkup renderMentionMarkup(
+    std::string_view      text,
+    const QqSelfIdentity* self,
+    const MentionNames&   names
+) {
+    MentionMarkup out;
+    std::string   result;
+    result.reserve(text.size());
+    size_t pos     = 0;
+    bool   changed = false;
+    while (true) {
+        const size_t open = text.find("<@", pos);
+        if (open == std::string_view::npos) {
+            break;
+        }
+        const size_t close = text.find('>', open + 2);
+        if (close == std::string_view::npos) {
+            break;
+        }
+        result.append(text.substr(pos, open - pos));
+        // 少数客户端会写成 `<@!openid>`; 前导 `!` 不是 id 的一部分
+        std::string_view id = text.substr(open + 2, close - open - 2);
+        if (!id.empty() && id.front() == '!') {
+            id.remove_prefix(1);
+        }
+        changed = true;
+        if (id == "all") {
+            out.all = true;
+            result += "@全体成员";
+        } else {
+            if (self != nullptr && self->matches(id)) {
+                out.self = true;
+            }
+            result += "@";
+            const auto it = names.find(std::string{id});
+            result += (it != names.end() && !it->second.empty()) ? it->second : std::string{"成员"};
+        }
+        pos = close + 1;
+    }
+    if (!changed) {
+        out.text.assign(text);
+        return out;
+    }
+    result.append(text.substr(pos));
+    out.text = std::move(result);
+    return out;
+}
+
 } // namespace
 
 std::string qqFileNameOfUrl(std::string_view url) {
@@ -242,7 +353,8 @@ std::string qqFileNameOfUrl(std::string_view url) {
 bool normalizeQqEvent(
     std::string_view         eventName,
     const utilxx_base::Json& data,
-    InboundEvent&            out
+    InboundEvent&            out,
+    const QqSelfIdentity*    self
 ) {
     if (eventName != "GROUP_AT_MESSAGE_CREATE" && eventName != "GROUP_MESSAGE_CREATE"
         && eventName != "C2C_MESSAGE_CREATE") {
@@ -254,7 +366,9 @@ bool normalizeQqEvent(
         return false;
     }
     out = InboundEvent{};
-    // @ 判定只看事件类型 (设计文档 §7.2): 全量消息事件不带 @ 语义
+    // @ 判定: 「@机器人」事件与单聊天然算 @; 全量消息事件本身不带 @ 语义,
+    // 要到下面从 `mentions[]` 与正文标记里补判 (官方文档: GROUP_MESSAGE_CREATE
+    // 是群里每条消息都推, content 里的 @ 写成 `<@成员openid>`)
     out.mentionedMe = (eventName == "GROUP_AT_MESSAGE_CREATE"
                        || eventName == "C2C_MESSAGE_CREATE");
     out.fromFullMode = (eventName == "GROUP_MESSAGE_CREATE");
@@ -290,6 +404,27 @@ bool normalizeQqEvent(
 
     out.text = data.value("content", std::string{});
 
+    // ---- @ 相关: `mentions[]` (被 @ 的成员) 与正文里的 `<@openid>` 标记 ----
+    // 两种形态都要看: 全量模式下 @ 别人写成 `<@id>`, 而 @ 机器人自己既可能在
+    // `mentions[]` 里 (`bot=true`), 也可能只在正文标记里
+    MentionNames names;
+    bool         botMentioned = false;
+    collectMentions(data, out, names, botMentioned);
+    if (!out.text.empty()) {
+        const auto markup = renderMentionMarkup(out.text, self, names);
+        out.text          = markup.text;
+        out.mentionAll    = markup.all;
+        if (markup.self) {
+            out.mentionedMe = true;
+        }
+    }
+    // 全量消息里 `mentions[]` 出现 `bot=true` 的成员时算“@ 了我”: 机器人的群 openid
+    // 不一定能提前拿到 (按群不同), 而群里往往只有本机器人一个。要更准就配
+    // `accounts[].selfOpenid` 或在群里 @ 一次自己让平台把 openid 带回来。
+    if (out.fromFullMode && botMentioned) {
+        out.mentionedMe = true;
+    }
+
     // 引用消息: `msg_elements[]` 是被引用的那条 (可能带附件), `content` 是引用正文
     //
     // 实测群里"引用一个文件问它是什么"的事件里:
@@ -306,6 +441,14 @@ bool normalizeQqEvent(
                 out.quotedSender = quoted["author"].value("username", std::string{});
             }
             out.quotedText = quoted.value("content", std::string{});
+            // 被引用内容里的 @ 标记同样换成昵称 (只为了好读, 不算“@ 了我”)
+            if (!out.quotedText.empty()) {
+                MentionNames  quotedNames;
+                InboundEvent  quotedMentions;
+                bool          quotedBot = false;
+                collectMentions(quoted, quotedMentions, quotedNames, quotedBot);
+                out.quotedText = renderMentionMarkup(out.quotedText, nullptr, quotedNames).text;
+            }
             // 被引用消息的附件: 归到本条消息的附件里 (模型才能真正读到文件)
             std::string quotedAsr;
             if (quoted.contains("attachments")) {

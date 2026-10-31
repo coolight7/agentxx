@@ -1262,6 +1262,36 @@ asio::awaitable<void> runBody(
         );
     }
 
+    // ===================== 12b. 兜底发送: always 会话没被 @ 也要发 =====================
+    //
+    // 只按“本轮是否被 @”决定要不要兜底, 会把 always 会话里没 @ 的那一轮整段丢掉:
+    // 模型把回答写在正文里、没调工具时, 群里一个字都发不出去 (表现为“@ 了才回”)。
+    {
+        XX_TEST_EXPECT_TRUE(co_await drain());
+        co_await callTool(
+            rootCtx,
+            "chatbot_set_mode",
+            R"({"chat":"fake_main|group|G1","mode":"always"})"
+        );
+        daSimSetToolCalls(Json::array(), 0);
+        daSimSetResponseContent("always 模式下没被 @ 的正文。");
+        const int requestsBefore = g_da_sim_request_count.load();
+        XX_TEST_EXPECT_TRUE(co_await inject("group", "G1", "没 @ 的一句话", false, "msg-fb2"));
+        XX_TEST_EXPECT_TRUE(co_await waitUntil(ex, 60s, [&]() {
+            return g_da_sim_request_count.load() > requestsBefore;
+        }));
+        XX_TEST_EXPECT_TRUE(co_await waitOutbox(ex, 30s, rootCtx, [](const Json& outbox) {
+            return concatSentText(outbox).find("always 模式下没被 @ 的正文") != std::string::npos;
+        }));
+        XX_TEST_EXPECT_TRUE(co_await drain());
+        // 改回 mention (不影响后面的用例)
+        co_await callTool(
+            rootCtx,
+            "chatbot_set_mode",
+            R"({"chat":"fake_main|group|G1","mode":"mention"})"
+        );
+    }
+
     // ===================== 13. 禁用 → 启用: 工具与人设根恢复 =====================
     //
     // 禁用 = 骨架摘除注册 + 拆挂载 + 投递 stop (插件在自己 stop 里卸人设根);

@@ -308,6 +308,29 @@ bool parseAccounts(const Json& root, ChatbotConfig& out, ConfigError& err) {
         }
         account.shard = std::move(shard);
 
+        // 机器人自己的 openid: 字符串或字符串数组 (不同群里不一样)
+        if (item.contains("selfOpenid")) {
+            const auto& raw = item["selfOpenid"];
+            if (raw.is_string()) {
+                const std::string one = raw.get<std::string>();
+                if (!one.empty()) {
+                    account.selfOpenid.push_back(one);
+                }
+            } else if (raw.is_array()) {
+                for (const auto& one : raw) {
+                    if (one.is_string()) {
+                        const std::string id = one.get<std::string>();
+                        if (!id.empty()) {
+                            account.selfOpenid.push_back(id);
+                        }
+                    }
+                }
+            } else if (!raw.is_null()) {
+                setError(err, where + ".selfOpenid", "只能是字符串或字符串数组");
+                return false;
+            }
+        }
+
         if (item.contains("rateLimit") && item["rateLimit"].is_object()) {
             account.groupPerMinute  = static_cast<int32_t>(
                 jsonIntOf(item["rateLimit"], "groupPerMinute", account.groupPerMinute)

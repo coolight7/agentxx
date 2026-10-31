@@ -43,7 +43,11 @@ struct QqGatewayHooks {
     /// 连接状态变化
     std::function<void(PlatformState, std::string)> onState;
     /// 收到 Ready (`d.session_id`, 之后断线可 Resume)
-    std::function<void(std::string_view sessionId, int64_t sequence)> onReady;
+    ///
+    /// `user` 是事件里的 `d.user` (机器人自己: `id` / `union_openid` / `username`),
+    /// 平台层拿它判断全量消息里“@ 的是不是自己”。Resume 成功时没有这个字段, 传空对象。
+    std::function<void(std::string_view sessionId, int64_t sequence, const utilxx_base::Json& user)>
+        onReady;
 };
 
 /// 网关连接

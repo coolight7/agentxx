@@ -424,3 +424,46 @@ AgentHost: mounted root 'ext:agentxx_chatbot:1' (owner='agentxx_chatbot', ..., r
   输出顺序会错乱 —— 看时序问题时直接写文件更可靠。
 - **模拟模型的正文分片必须按 UTF-8 码点切**：`test_agent.cpp` 的 SSE 分片之前按字节切，
   多字节字符被切开后上游解析为空正文并重试 5 次（耗时十几秒且看不出原因）。
+
+## 修复（2026-10-31）：机器人主动发文件失败「upload_part_finish 失败 (status 500)」
+
+现象：主动发一个 `hello_test.txt`，消息里出现
+`(附件 'hello_test.txt' 上传失败: upload_part_finish 失败 (片 1, status 500))`。
+
+根因（都在 `platform/qq/qq_media.cpp`）：
+
+1. `upload_part_finish` 只发了 `upload_id` + `part_index`。官方文档要求四项：`upload_id` /
+   `part_index` / `block_size`（该片**实际字节数**，字符串）/ `md5`（该片内容的 md5）。
+   少给两项，服务端直接回 500（错误码 10000）。
+2. 平台把 64 位整数按**字符串**下发（`block_size` = `"10485760"`，`parts[].block_size` 同样是
+   字符串；`file_size` 也要求按字符串上报）。原来用 `Json::value<int64_t>` 取，遇到字符串会抛
+   类型错误并返回默认值 0 —— 分片大小变成 0，规划退化成「一片装下整个文件」；多片文件则除
+   第一片外全部跳过（分片完成也不调），合并必然失败。
+
+顺带修掉的三处：
+
+- 合并请求 `POST .../files` 补上 `file_type`（文档示例带它）；
+- 二进制直传（`file_data`）不再带 `upload_id`（带上服务端会走合并路径，与 `file_data` 冲突），
+  并补 `file_type`；文件超过 5 MB 而平台没给分片清单时直接报错说明，不再硬试；
+- `md5_10m` 取样长度按文档改成 10002432 字节（原为 10 MiB 整）；上传大小以实际读到的字节数为
+  准（调用方给的 `sizeBytes` 可能过期），空文件直接报错。
+
+改动：
+
+- 新增 `platform/qq/qq_media_request.{h,cpp}`：预上传 / 分片完成 / 合并 / 直传的请求体 +
+  分片规划（`qqPlanUploadParts` 按 `index` 升序算偏移、按文件长度裁剪），纯逻辑不碰网络；
+- `qq_media.cpp` 的 `upload()` 改用这些构建函数，逐片上报真实字节数与 md5；5xx / 传输层失败
+  按平台下发的 `upload_config.retry_delay` / `retry_timeout` 重试（单片与合并各最多 3 次，
+  4xx 不重试），失败原因带状态码与响应片段。
+
+用例：
+
+- `chatbot_media`（同步 69 项）：请求体字段与类型（`file_size` / `block_size` 必须是字符串）、
+  分片规划（字符串/数字两种 block_size、序号从 1 开始、乱序、越界裁剪、无 parts）；
+- `chatbot_media_io`（异步 53 项）：本地模拟服务端按文档校验分片完成请求（缺字段 / 大小不符 /
+  md5 不符都回 500），跑通分片上传、`file_info` 缓存命中、二进制直传、5xx 重试、4xx 不重试。
+  把 `qqBuildPartFinishBody` 改回只发两项时，该模块立刻复现真机那句 500；
+- 两个新文件编进 `agentxx_test`（`agent/test/CMakeLists.txt`），模块数 130 → 132。
+
+注意：这一层的请求体字段类型全部按官方文档写（这几处都是「发对了靠运气」的地方），
+加字段时同时补 `chatbot_media` 的断言；改到整条流程就补 `chatbot_media_io`。

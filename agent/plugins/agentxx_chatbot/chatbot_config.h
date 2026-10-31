@@ -39,6 +39,12 @@ struct AccountConfig {
     std::string apiBase;
     /// 网关分片 (QQ 的 Identify 报文里带, 默认 [0,1])
     std::vector<int32_t> shard{0, 1};
+    /// 机器人自己的 openid (可选; 填了就能在全量消息里准确判断“@ 的是不是我”)
+    ///
+    /// - `selfOpenid` 可以写字符串, 也可以写数组 (同一个机器人在不同群里的 openid 不同)
+    /// - 不填也能用: 插件会从网关 READY (`d.user`) 与自己消息的回声里自己攒
+    /// - 什么时候需要填: 开了「接收所有消息」后, @ 机器人的消息总是不立刻唤醒
+    std::vector<std::string> selfOpenid;
     /// 主动消息频控覆盖 (0 = 用平台默认值, 插件再按 70% 保守设)
     int32_t groupPerMinute  = 0;
     int32_t singlePerMinute = 0;

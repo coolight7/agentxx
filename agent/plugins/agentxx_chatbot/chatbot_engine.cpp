@@ -24,6 +24,9 @@ using utilxx_base::Json;
 /// 一轮输入里单条原文的截断说明 (原文仍在历史里, 模型可经 chatbot_history 取)
 constexpr const char* kTruncatedNotice = "…（本条内容过长已截断）";
 
+/// 账号上线后多久仍没收到群全量消息就提示“去开平台权限”
+constexpr int64_t kFullModeHintDelayMs = 180000;
+
 std::string formatClockText(int64_t timestampMs) {
     if (timestampMs <= 0) {
         return {};
@@ -203,6 +206,15 @@ void ChatbotEngine::shutdown() {
         state.items.clear();
         state.chars = 0;
     }
+    // 自检定时器同样不能留到插件 io 线程停止之后
+    for (auto& [accountId, timer] : fullModeHintTimers_) {
+        (void)accountId;
+        if (timer) {
+            timer->cancel();
+            timer.reset();
+        }
+    }
+    fullModeHintTimers_.clear();
 }
 
 /* ==================== 状态变化通知 ==================== */
@@ -238,6 +250,60 @@ void ChatbotEngine::onPlatformState(
         reason.empty() ? "" : " (",
         std::string{reason}
     );
+    // 上线后起一次自检: 群全量消息一直不来就提示去开平台权限
+    if (state == PlatformState::Online) {
+        scheduleFullModeHint(accountId);
+    }
+}
+
+bool ChatbotEngine::hasAlwaysGroupBind() const {
+    for (const auto& persona : config_.personas) {
+        for (const auto& bind : persona.binds) {
+            if (bind.type == ChatType::Group && bind.mode == ChatMode::Always) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+void ChatbotEngine::scheduleFullModeHint(std::string_view accountId) {
+    // 只对“群聊绑定成 always”的配置提示: 其它模式本来就不靠全量消息
+    if (!hasAlwaysGroupBind() || !ex_) {
+        return;
+    }
+    const std::string id{accountId};
+    const auto        seen = accountFullModeSeen_.find(id);
+    if (seen != accountFullModeSeen_.end() && seen->second) {
+        return; // 已经收到过全量消息, 平台权限是开的
+    }
+    if (fullModeHintTimers_.count(id) != 0) {
+        return; // 一次会话只提示一次
+    }
+    auto timer = std::make_shared<asio::steady_timer>(ex_);
+    timer->expires_after(std::chrono::milliseconds(kFullModeHintDelayMs));
+    fullModeHintTimers_[id] = timer;
+    timer->async_wait([this, id](const auto& ec) {
+        if (ec || stopped_) {
+            return;
+        }
+        const auto it = accountFullModeSeen_.find(id);
+        if (it != accountFullModeSeen_.end() && it->second) {
+            return;
+        }
+        XX_LOGW(
+            "[{}] 账号 '{}' 上线 {} 分钟后仍未收到任何群全量消息, 但配置里有群聊绑定为 "
+            "always: 平台没给机器人「接收所有消息」能力时, 群里只会推 @ 机器人的消息, "
+            "always 在群里实际等同 mention。这个开关要由**群主**操作: 群聊右上角 -> "
+            "群管理 -> 群成员 -> 点机器人头像 -> 资料页右上角「设置」->「机器人可获取的"
+            "群聊消息范围」设为「获取群内全部消息」; 若没有这一行就把机器人移出群再重新"
+            "添加 (开发者控制台里没有这一项), 授权后重连插件。用 chatbot_status 看 "
+            "accounts[].state.fullModeMessage / atMessage 可以确认平台到底推了什么",
+            kLogTag,
+            id,
+            kFullModeHintDelayMs / 60000
+        );
+    });
 }
 
 void ChatbotEngine::setAccountStatus(std::string_view accountId, std::string json) {
@@ -302,6 +368,12 @@ void ChatbotEngine::onInbound(const InboundEvent& rawEvent) {
     auto&             state       = stateOf(chatKeyText);
     ++state.counters.received;
     ++globalCounters_.received;
+    if (event.fromFullMode) {
+        // 群「全量消息」事件: 平台没开「接收所有消息」时这种事件恒为 0
+        ++state.counters.fullMode;
+        ++globalCounters_.fullMode;
+        accountFullModeSeen_[event.accountId] = true;
+    }
 
     // ---- 去重 (同一 msg_id 可能重复推送) ----
     if (!event.platformMessageId.empty()) {
@@ -575,6 +647,10 @@ std::string ChatbotEngine::assembleInput(
     turn.modelSent   = false;
     turn.messages    = std::move(turnMessages);
     turn.hadMention  = hadMention;
+    // 兜底策略 `mention` 也要看本轮模式: 私聊的 `mention` 已按 `always` 算
+    turn.mode = (key.type == ChatType::Private && route.mode == ChatMode::Mention)
+                    ? ChatMode::Always
+                    : route.mode;
     turn.lastAssistantText.clear();
     turn.startedAtMs = nowMs();
     turn.lastPassiveMsgId = lastMentionMsgId.empty() ? lastPassiveMsgId : lastMentionMsgId;
@@ -850,6 +926,9 @@ bool ChatbotEngine::handleCommand(
     turn.sentCount        = 0;
     turn.modelSent        = false;
     turn.hadMention       = true;
+    turn.mode             = (key.type == ChatType::Private && route.mode == ChatMode::Mention)
+                                ? ChatMode::Always
+                                : route.mode;
     turn.startedAtMs      = nowMs();
     turn.lastPassiveMsgId = event.platformMessageId;
     turn.messages.clear();
@@ -1032,7 +1111,10 @@ void ChatbotEngine::fallbackSend(const std::string& chatKey, TurnContext& turn) 
     if (policy == "never") {
         return;
     }
-    if (policy == "mention" && !turn.hadMention) {
+    // `mention`: 本轮被 @ 时兜底。`always` 会话本来就不需要 @, 所以模式也要算进来
+    // —— 只看 `hadMention` 会把 always 会话里“没被 @ 的那一轮”整段丢掉:
+    // 模型把回答写在正文里而没调工具时, 群里一个字都发不出去 (表现为“@ 了才回”)。
+    if (policy == "mention" && !turn.hadMention && turn.mode != ChatMode::Always) {
         return;
     }
     const std::string text = trimCopy(turn.lastAssistantText);
@@ -1343,6 +1425,8 @@ std::string ChatbotEngine::statusJson() const {
     countersJson["woken"]      = static_cast<int64_t>(globalCounters_.woken);
     countersJson["aggregated"] = static_cast<int64_t>(globalCounters_.aggregated);
     countersJson["turns"]      = static_cast<int64_t>(globalCounters_.turns);
+    // 群里“非 @ 消息”的条数: 一直为 0 就说明平台没给「接收所有消息」权限
+    countersJson["fullMode"]   = static_cast<int64_t>(globalCounters_.fullMode);
     out["counters"]            = std::move(countersJson);
 
     out["channels"] = static_cast<int64_t>(router_ != nullptr ? router_->channelCount() : 0);
@@ -1379,6 +1463,8 @@ std::string ChatbotEngine::chatInfoJson(std::string_view chatKey) const {
     countersJson["duplicated"] = static_cast<int64_t>(counters.duplicated);
     countersJson["turns"]      = static_cast<int64_t>(counters.turns);
     countersJson["lastTurnMs"] = counters.lastTurnMs;
+    // 本会话里来自群「全量消息」事件的条数 (`always` 会话靠它判断平台权限)
+    countersJson["fullMode"]   = static_cast<int64_t>(counters.fullMode);
     out["counters"]            = std::move(countersJson);
     auto it = sessions_.find(std::string{chatKey});
     out["buffered"] = it == sessions_.end()

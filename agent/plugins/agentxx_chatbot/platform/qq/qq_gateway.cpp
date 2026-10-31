@@ -302,10 +302,21 @@ void QqGateway::onFrame(std::string_view payload) {
                 identifying_ = false;
                 reconnectCount_ = 0;
                 setState(PlatformState::Online, "ready");
-                if (hooks_.onReady) {
-                    hooks_.onReady(sessionId_, sequence_);
+                // 机器人自己的身份在 `d.user` 里 (`id`/`union_openid`/`username`),
+                // 全量消息里要拿它判断「这条 @ 的是不是我」
+                utilxx_base::Json user = utilxx_base::Json::object();
+                if (data.contains("user") && data["user"].is_object()) {
+                    user = data["user"];
                 }
-                XX_LOGI("[{}] 网关已就绪 (session '{}')", kLogTag, sessionId_);
+                if (hooks_.onReady) {
+                    hooks_.onReady(sessionId_, sequence_, user);
+                }
+                XX_LOGI(
+                    "[{}] 网关已就绪 (session '{}', 机器人 '{}')",
+                    kLogTag,
+                    sessionId_,
+                    user.value("username", std::string{})
+                );
                 break;
             }
             if (eventName == "RESUMED") {
@@ -315,7 +326,8 @@ void QqGateway::onFrame(std::string_view payload) {
                 reconnectCount_ = 0;
                 setState(PlatformState::Online, "resumed");
                 if (hooks_.onReady) {
-                    hooks_.onReady(sessionId_, sequence_);
+                    // Resume 不会再给 `d.user`: 传空对象, 身份已经在 READY 时记下
+                    hooks_.onReady(sessionId_, sequence_, utilxx_base::Json::object());
                 }
                 XX_LOGI("[{}] 网关会话已恢复 (session '{}', seq {})", kLogTag, sessionId_, sequence_);
                 break;

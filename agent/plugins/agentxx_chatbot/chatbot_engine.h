@@ -76,6 +76,11 @@ struct TurnContext {
     std::string              lastPassiveMsgId;
     /// 本轮是否被 @ (兜底策略 `mention` 用)
     bool                     hadMention = false;
+    /// 本轮按什么模式跑 (`mention` / `always`)
+    ///
+    /// 兜底策略 `mention` 不只看 `hadMention`: `always` 会话本来就不需要 @,
+    /// 只看 @ 会把那一轮的正文直接丢掉 (群里表现为“@ 了才回”)。
+    ChatMode                 mode = ChatMode::Mention;
     /// 工具栏是否已经产出正文 (`fallbackReply` 用)
     std::string              lastAssistantText;
     int64_t                  startedAtMs = 0;
@@ -93,6 +98,8 @@ struct ChatCounters {
     uint64_t woken      = 0;
     uint64_t aggregated = 0;
     uint64_t turns      = 0;
+    /// 其中来自群「全量消息」事件的条数 (平台没开「接收所有消息」时恒为 0)
+    uint64_t fullMode   = 0;
     int64_t  lastTurnMs = 0;
 };
 
@@ -134,7 +141,9 @@ public:
     void buildRoutes();
 
     /// 平台事件入口 (平台层在插件 io 线程上调用)
-    void onInbound(const InboundEvent& event);    void onPlatformState(
+    void onInbound(const InboundEvent& event);
+
+    void onPlatformState(
         std::string_view accountId,
         PlatformState    state,
         std::string_view reason
@@ -258,6 +267,12 @@ private:
     /// 附件接收 (按 behavior.attachments.fetch 决定 URL 直给还是先落盘)
     void prepareAttachments(const std::string& chatKey, InboundEvent& event);
 
+    /// 配置里是否有群聊绑定成 `always` (只有这类会话才需要群全量消息)
+    bool hasAlwaysGroupBind() const;
+
+    /// 账号上线后起一个一次性自检: 一直收不到群全量消息就提示去开平台权限
+    void scheduleFullModeHint(std::string_view accountId);
+
     /// 追加历史 (含被过滤掉的)
     void appendHistory(const std::string& chatKey, const InboundEvent& event);
 
@@ -276,6 +291,11 @@ private:
     std::function<void()>      changeHook_;
     ChatCounters               globalCounters_;
     std::string                startupTimeText_;
+    /// 账号 → 是否收到过群「全量消息」事件 (平台是否真的推了非 @ 消息)
+    std::map<std::string, bool, std::less<>> accountFullModeSeen_;
+    /// 账号 → 上线后的一次性权限自检定时器
+    std::map<std::string, std::shared_ptr<asio::steady_timer>, std::less<>>
+        fullModeHintTimers_;
 };
 
 } // namespace chatbot

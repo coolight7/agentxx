@@ -87,7 +87,7 @@ plugin:
           maxSplitParts: 8              # 单条最多切成几段
           maxRepliesPerTurn: 5          # 一轮最多发几条
           maxChatsPerPersona: 64        # 每人设活跃会话上限 (超了回收最久没动的)
-          fallbackReply: mention        # 模型没调工具时: mention | always | never
+          fallbackReply: mention        # 模型没调工具时: mention (被 @ 或 always 会话) | always | never
           overflowPolicy: active        # 被动回复次数用尽后: active | truncate | fail
           humanInLoop: auto-allow       # 群里的权限询问弹不出来: auto-allow | auto-deny
           injectContextHint: true       # 每轮输入开头带「你在哪个群」
@@ -112,6 +112,58 @@ plugin:
 | `off` | 该会话完全不处理（也可以运行期用 `chatbot_set_mode` 切换） |
 
 私聊里 `mention` 按 `always` 处理（单聊消息本来就是直接发给机器人的）。
+
+#### `always` 的前置条件：平台要给机器人「接收所有消息」
+
+QQ 群里默认**只有 @ 机器人的消息**会推送（事件 `GROUP_AT_MESSAGE_CREATE`）。群里
+的普通消息走另一个事件（`GROUP_MESSAGE_CREATE`），必须先给机器人开「接收所有消息」
+（也叫「全量消息」）才会推。没开时，插件根本收不到非 @ 的消息，群里 `always`
+在效果上等同 `mention`，而且**插件这边改不了**。
+
+**这个开关不在开发者控制台**，而是**群主**在 QQ 里给机器人授的群内权限 —— 官方
+「Agent 接入」文档与 FAQ 两处都这么写（FAQ「在群里@机器人不回复，但私聊可以」：
+
+> 用 iOS 或 Android 手机升级最新版手机 QQ，使用**群主身份**在添加 QQBot 入群时，
+> 点击「设置权限」：①接收全量消息能力 ②主动推送消息能力 ③机器人撤回成员消息能力。
+
+已经进群的机器人，按官方「Agent 接入」文档给的路径改：
+
+1. 用**群主**账号（不是管理员、也不是机器人创建者账号）打开这个群；
+2. 群聊右上角「≡」→ **群管理** → **群成员** → 点机器人的头像进资料页；
+3. 资料页**右上角「设置」** → 把「**机器人可获取的群聊消息范围**」设为
+   「**获取群内全部消息**」，同页打开「允许主动发送消息」；
+4. 授权后让插件重连一次（或等网关重连），`chatbot_status` 的 `fullModeMessage`
+   就会开始增长。
+
+几个容易踩的地方：
+
+- 从聊天窗口点机器人头像弹出的是**资料卡**，不是上面说的「资料页 → 右上角设置」，
+  那里只显示「仅@回复」这类状态文字，改不了；
+- 那一项**只对群主显示**，管理员进去只能看到「允许主动发送消息」；
+- 如果群主进去也没有「机器人可获取的群聊消息范围」这一行：把这个机器人**移出群再
+  重新添加**（群主添加时会弹「设置权限」面板），或换一台装最新版手机 QQ 的设备再看
+  （客户端有灰度差异）；
+- 控制台里找不到是正常的：开放平台**旧版管理端**的「功能配置」已停止（官方 FAQ
+  明说），新版管理端管的是机器人本身（名称/头像/凭证/使用范围），群内权限只由群主授予。
+
+拿不到这项权限时也别把群聊绑成 `always`：群里用 `mention` 就好 —— 未被 @ 的消息
+仍会进缓冲，跟着下一次 @ 一起带上去（相当于「@ 一次就能看到前面所有对话」）；
+私聊不受这条限制，`always` 在私聊里照常生效。
+
+怎么确认是这种情况（不用翻日志）：
+
+1. 调 `chatbot_status`，看 `accounts[].state`：
+   - `fullModeMessage`：平台推过来的群全量消息条数；
+   - `atMessage` / `c2cMessage`：@ 机器人与单聊消息的条数。
+2. 群里发一条**不带 @** 的消息，再调一次 `chatbot_status`：
+   - `fullModeMessage` 不涨 → 平台没推，就是没开「接收所有消息」；
+   - 涨了但没回 → 看 `chatbot_chat_info` 的 `counters.fullMode` 与本轮日志里的投递原因。
+3. 插件上线 3 分钟后如果仍然没收到任何全量消息、而配置里有群聊绑定成 `always`，
+   启动日志会主动给一条 `W` 级提示（只提示一次）。
+
+开了「接收所有消息」以后，群里的 @ 也有变化：@ 人不再写成去掉前缀的正文，而是
+写成 `<@成员openid>`（@ 全体是 `<@all>`）。插件会把它们换成 `@昵称` 再给模型，
+并按 `mentions[]` / openid 判断「这条是不是 @ 了我」（详见 §2.4）。
 
 ### 2.2 凭证
 
@@ -140,6 +192,31 @@ plugin:
 **命令是插件自己的交互约定**，所以没有做配置项：每个部署各写一套名字与文案，
 文档、用例、排错说法就对不上了。要改命令请改 `builtinCommands()`（改完补
 `chatbot_core` 的 `builtinCommands` 用例）。
+
+### 2.4 被 @ 的判定（开了全量消息的群）
+
+开了「接收所有消息」后，@ 机器人不再单独成一个事件，而是混在 `GROUP_MESSAGE_CREATE`
+里。插件用两条线索判断这条是不是 @ 了自己：
+
+1. `mentions[]` 里有没有 `bot: true` 的成员（群里通常只有本机器人一个）——不能提前
+   知道机器人的群 openid 时靠它；
+2. 正文里的 `<@成员openid>` 标记是否等于自己的 openid。自己的 openid 按顺序攒：
+   - 网关 READY 的 `d.user`（`id` / `union_openid`）；
+   - 账号配置的 `selfOpenid`（可写字符串或数组，手工钉住）；
+   - 机器人自己消息的回声（`author.member_openid`，按群不同，看到一次就记住）。
+
+```yaml
+accounts:
+  - id: qq_main
+    type: qq
+    appId: "${QQBOT_APPID}"
+    selfOpenid: ["7A3B9C1D5E2F4A6B8C0D1E3F5A7B9C2D"]   # 可选
+```
+
+什么时候需要填 `selfOpenid`：开了全量消息后，@ 机器人的消息总是不立刻唤醒（只能等
+聚合窗口）。把日志里正文标记的 openid（或 `chatbot_status` 的 `selfOpenid` 里已经攒到
+的值）填进来即可。正文里的 `@` 标记一定会被换成 `@昵称` 再给模型，`<@all>` 记成
+`@全体成员` 且不算「@ 了我」。
 
 ## 3. 模型看到的输入
 
@@ -192,6 +269,13 @@ QQ群「技术交流群」(群 id 尾号 6789); 下面是最近收到的消息�
 落盘后小文本文件（默认 ≤ 64 KiB，`behavior.attachments.inlineTextMaxBytes`）的正文会
 **直接内联进输入**，所以人设根没挂文件系统插件也能读；更大的或二进制文件只在输入里给路径，
 要靠人设根挂了 `agentxx_filesystem` 才能读。
+
+**主动发文件失败，提示 `upload_part_finish 失败 (status 500)`。** 这是富媒体上传协议的问题，
+不是权限或频控。QQ 的 `upload_part_finish` 要求四项：`upload_id`、`part_index`、
+`block_size`（该片**实际字节数**，字符串）、`md5`（该片内容的 md5）；另外 `file_size` /
+`block_size` 是**字符串**数字（平台按字符串下发，也要求按字符串上报）。插件已按文档逐项给齐，
+对应的回归是用例 `chatbot_media`（请求体与分片切法）和 `chatbot_media_io`（本地模拟服务端
+跑完整流程，模拟服务端会像真机一样对缺字段回 500）。
 
 **想在不连平台的情况下试一遍。** 把账号 `type` 改成 `fake`、打开 `behavior.debugTools`，
 然后用工具 `chatbot_debug_inject` 注入消息、`chatbot_debug_outbox` 看回复。

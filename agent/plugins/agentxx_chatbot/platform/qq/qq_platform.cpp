@@ -55,7 +55,8 @@ PlatformCaps QqPlatform::caps() const {
     caps.multiReply         = true;
     caps.textLimit          = 0; ///< 平台没给出官方上限, 用 behavior.messageSplitLimit
     caps.maxAttachments     = 1; ///< 一条消息一个富媒体 (msg_type=7)
-    caps.mentionByEventType = true;
+    // 全量消息里能从 `mentions[]` / 正文 `<@openid>` 标记反推 @, 不是只能靠事件类型
+    caps.mentionByEventType = false;
     return caps;
 }
 
@@ -70,6 +71,10 @@ bool QqPlatform::start(const AccountConfig& cfg, PlatformEventSink& sink) {
         stopped_ = false;
         state_   = PlatformState::Connecting;
         stateReason_.clear();
+        // 配置里钉住的 openid 优先记上 (拿不到 READY 的 `d.user` 时也能判 @)
+        for (const auto& one : cfg.selfOpenid) {
+            selfIdentity_.add(one);
+        }
         if (cfg.appId.empty() || cfg.appSecret.empty()) {
             state_       = PlatformState::Disabled;
             stateReason_ = "缺少 appId / appSecret";
@@ -105,16 +110,45 @@ bool QqPlatform::start(const AccountConfig& cfg, PlatformEventSink& sink) {
             sinkPtr->onStateChanged(state, std::move(reason));
         }
     };
-    hooks.onReady = [this](std::string_view sessionId, int64_t sequence) {
+    hooks.onReady = [this](std::string_view sessionId, int64_t sequence, const utilxx_base::Json& user) {
+        // `user` 是机器人自己 (`d.user`): `id` / `union_openid` 是全量消息里
+        // 判断“@ 的是不是我”的依据; Resume 时为空对象, 不覆盖已有值
+        std::string botName;
+        if (user.is_object()) {
+            botName = user.value("username", std::string{});
+            bool learned = false;
+            {
+                std::lock_guard guard(mutex_);
+                if (!botName.empty()) {
+                    selfIdentity_.username = botName;
+                }
+                for (const char* key : {"id", "union_openid", "user_openid"}) {
+                    const std::string id = user.value(key, std::string{});
+                    if (selfIdentity_.add(id)) {
+                        learned = true;
+                    }
+                }
+            }
+            if (learned) {
+                XX_LOGI(
+                    "[{}] 账号 '{}' 记住了机器人自己的 openid (来源: 网关 READY)",
+                    kLogTag,
+                    config_.id
+                );
+            }
+        }
         XX_LOGI(
-            "[{}] 账号 '{}' 网关就绪 (session '{}', seq {})",
+            "[{}] 账号 '{}' 网关就绪 (session '{}', seq {}, 机器人 '{}')",
             kLogTag,
             config_.id,
             std::string{sessionId},
-            sequence
+            sequence,
+            botName
         );
     };
     hooks.onDispatch = [this](std::string_view eventName, const utilxx_base::Json& data) {
+        noteDispatchEvent(eventName);
+        learnSelfIdentity(data);
         InboundEvent event;
         if (!normalize(eventName, data, event)) {
             return;
@@ -424,7 +458,59 @@ bool QqPlatform::normalize(
     InboundEvent&            out
 ) const {
     // 字段解析全部在 qq_normalize.cpp (纯函数, 可以用真实事件做回归)
-    return normalizeQqEvent(eventName, data, out);
+    // 自己的身份是随 READY / 自己消息的回声逐步攒的, 拷一份再去解析 (不持锁跑解析)
+    QqSelfIdentity self;
+    {
+        std::lock_guard guard(mutex_);
+        self = selfIdentity_;
+    }
+    return normalizeQqEvent(eventName, data, out, &self);
+}
+
+void QqPlatform::noteDispatchEvent(std::string_view eventName) {
+    std::lock_guard guard(mutex_);
+    if (eventName == "GROUP_MESSAGE_CREATE") {
+        ++fullModeCount_;
+    } else if (eventName == "GROUP_AT_MESSAGE_CREATE") {
+        ++atMessageCount_;
+    } else if (eventName == "C2C_MESSAGE_CREATE") {
+        ++c2cMessageCount_;
+    }
+}
+
+void QqPlatform::learnSelfIdentity(const utilxx_base::Json& data) {
+    // 开了「接收所有消息」后, 机器人自己发的消息也会作为全量消息推回来;
+    // 其中的 `author.member_openid` 就是本群里的自己 (群 openid 按群不同,
+    // READY 给的 `id` 可能对不上), 拿到它就能精确判断「@ 的是不是我」
+    if (!data.contains("author") || !data["author"].is_object()) {
+        return;
+    }
+    const auto& author = data["author"];
+    if (!author.value("bot", false)) {
+        return;
+    }
+    const std::string name = author.value("username", std::string{});
+    bool              learned = false;
+    {
+        std::lock_guard guard(mutex_);
+        // 只能用昵称确认「这条机器人消息就是我自己」: 群里可能还有别的机器人
+        if (selfIdentity_.username.empty() || name != selfIdentity_.username) {
+            return;
+        }
+        for (const char* key : {"member_openid", "id", "union_openid"}) {
+            const std::string id = author.value(key, std::string{});
+            if (selfIdentity_.add(id)) {
+                learned = true;
+            }
+        }
+    }
+    if (learned) {
+        XX_LOGI(
+            "[{}] 账号 '{}' 记住了自己在群里的 openid (来源: 自己消息的回声)",
+            kLogTag,
+            config_.id
+        );
+    }
 }
 
 std::string QqPlatform::statusJson() const {
@@ -438,6 +524,17 @@ std::string QqPlatform::statusJson() const {
     out["inbound"]      = static_cast<int64_t>(inboundCount_);
     out["outbound"]     = static_cast<int64_t>(outboundCount_);
     out["sendFail"]     = static_cast<int64_t>(sendFailCount_);
+    // 按事件名的原始条数: 群里发了几条普通消息还是全是 @, 看这三个就清楚了
+    // (`fullModeMessage` 长期为 0 而 `atMessage` 在涨 = 平台没开「接收所有消息」)
+    out["fullModeMessage"] = static_cast<int64_t>(fullModeCount_);
+    out["atMessage"]       = static_cast<int64_t>(atMessageCount_);
+    out["c2cMessage"]      = static_cast<int64_t>(c2cMessageCount_);
+    out["botName"]         = selfIdentity_.username;
+    utilxx_base::Json selfIds = utilxx_base::Json::array();
+    for (const auto& one : selfIdentity_.openids) {
+        selfIds.push_back(one);
+    }
+    out["selfOpenid"] = std::move(selfIds);
     out["reconnects"]   = gateway_ != nullptr ? gateway_->reconnectCount() : 0;
     out["sequence"]     = gateway_ != nullptr ? gateway_->sequence() : 0;
     if (gateway_ != nullptr && !gateway_->lastError().empty()) {

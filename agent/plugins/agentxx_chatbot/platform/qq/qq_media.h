@@ -7,12 +7,15 @@
 /// - `file_type`: 1 图片 / 2 视频 / 3 语音 / 4 文件;
 ///   软限制 20/30/20/200 MB, 硬限制都是 200 MB; 超软限制降级成文件;
 /// - 分片上传: `upload_prepare` (给 md5/sha1/md5_10m) → 逐片 `PUT` 到预签名地址
-///   → `upload_part_finish` → `POST .../files {upload_id, file_name, srv_send_msg:false}`
-///   拿 `file_info`; `file_info` 带 ttl, 过期内重发不重传;
-/// - 群与单聊的上传结果**不互通** (缓存键里带 chatId 类型)。
+///   → `upload_part_finish` (要带该片的 `block_size` 与 `md5`)
+///   → `POST .../files {upload_id, file_name, file_type, srv_send_msg:false}` 拿 `file_info`;
+///   `file_info` 带 ttl, 过期内重发不重传;
+/// - 群与单聊的上传结果**不互通** (缓存键里带 chatId 类型);
+/// - 请求体与分片规划的纯逻辑在 [qq_media_request.h], 本文件只负责读文件与发请求。
 ///
 /// 线程: 全部在插件 io 线程上跑。
 #include "../../chatbot_types.h"
+#include "qq_media_request.h"
 
 #include "asio/awaitable.hpp"
 #include "utilxx_base/json.h"
@@ -31,14 +34,6 @@ namespace agentxx {
 namespace chatbot {
 
 class QqApi;
-
-/// 一个文件的三段校验值 (分片上传 prepare 要求)
-struct QqFileDigests {
-    std::string md5;
-    std::string sha1;
-    /// 前 10 MB 的 md5 (文件不足 10 MB 时等于全文 md5)
-    std::string md5_10m;
-};
 
 /// 上传结果
 struct QqUploadResult {
@@ -71,6 +66,7 @@ public:
     ///
     /// - `chatType` / `chatId`: 群与单聊的上传结果不互通, 缓存键里带上它们
     /// - `textContent`: 直接给内容 (测试与"内存里的附件"用; 为空时读 `localPath`)
+    /// - 失败原因写在 `reason` 里 (带状态码与响应片段, 方便照日志排查)
     asio::awaitable<QqUploadResult> upload(
         const MediaRef&  ref,
         ChatType         chatType,

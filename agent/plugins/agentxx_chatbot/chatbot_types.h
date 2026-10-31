@@ -94,9 +94,17 @@ struct InboundEvent {
     std::string platformMessageId;
     int64_t     timestampMs = 0;
     /// 明确 @ 了机器人
+    ///
+    /// - 平台给「@机器人」单独事件时由事件类型决定;
+    /// - 全量消息事件没有 @ 语义, 由平台层从 `mentions[]` 与正文里的 @ 标记补判
+    ///   (见 `qq_normalize.cpp` 的 `renderMentionMarkup`)。
     bool mentionedMe = false;
-    /// 全量模式下的普通消息 (非 @)
+    /// 来自「全量消息」事件 (群里每条消息都推, 不限于 @ 机器人)
     bool fromFullMode = false;
+    /// @ 了全体成员 (`<@all>`)
+    bool mentionAll = false;
+    /// 本条消息里被 @ 的成员 id (不含 `all`; 含机器人自己时同样列出)
+    std::vector<std::string> mentionIds;
 };
 
 /// 一次出站请求 (切分之后的一条)
@@ -177,7 +185,10 @@ struct PlatformCaps {
     size_t textLimit = 0;
     /// 单条消息最多几个附件
     size_t maxAttachments = 0;
-    /// 被 @ 判定是否依赖事件类型 (QQ 是: 全量消息事件不带 @ 语义)
+    /// 被 @ 判定是否只能靠事件类型
+    ///
+    /// `true` = 平台只有「@机器人」事件带 @ 语义, 全量消息里判不出来;
+    /// QQ 在全量消息里还能从 `mentions[]` / 正文 `<@openid>` 标记补判, 所以是 `false`。
     bool mentionByEventType = true;
 };
 

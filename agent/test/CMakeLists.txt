@@ -132,6 +132,7 @@ target_include_directories(agentxx_test PRIVATE
 # chatbot 插件的纯逻辑部分 (切分/命令解析/配置解析与校验/路由表/QQ 事件归一化) 直接编进测试:
 # 这些源文件不碰网络也不碰主程序, 与其他内置工具的 *_impl.h 同一思路 ——
 # 测的是插件真实实现 (源码始终在仓库里, 与插件是否启用编译无关)
+# 例外: qq_api.cpp / qq_media.cpp 会发 HTTP, 但只打本地模拟服务端 (见 chatbot_media_io)
 set(AGENTXX_CHATBOT_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/agentxx_chatbot")
 target_sources(agentxx_test PRIVATE
   "${AGENTXX_CHATBOT_SOURCE_DIR}/chatbot_core.cpp"
@@ -142,6 +143,12 @@ target_sources(agentxx_test PRIVATE
   "${AGENTXX_CHATBOT_SOURCE_DIR}/chatbot_panel.cpp"
   "${AGENTXX_CHATBOT_SOURCE_DIR}/chatbot_panel_ui.cpp"
   "${AGENTXX_CHATBOT_SOURCE_DIR}/platform/qq/qq_normalize.cpp"
+  # 富媒体上传的请求体与分片规划: 纯逻辑 (不碰网络), 见 `chatbot_media` 用例
+  "${AGENTXX_CHATBOT_SOURCE_DIR}/platform/qq/qq_media_request.cpp"
+  # 富媒体上传完整流程 (预上传/PUT/分片完成/合并/直传): 由本地模拟服务端驱动的
+  # `chatbot_media_io` 用例直测同一实现 (只起 127.0.0.1 本地服务, 不访问外网)
+  "${AGENTXX_CHATBOT_SOURCE_DIR}/platform/qq/qq_api.cpp"
+  "${AGENTXX_CHATBOT_SOURCE_DIR}/platform/qq/qq_media.cpp"
 )
 
 # 注意: 不要添加 /FS /MP 编译选项 —— 顶层已统一管理; 命令行出现重复 /FS 时

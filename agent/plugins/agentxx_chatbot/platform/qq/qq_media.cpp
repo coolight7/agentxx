@@ -5,6 +5,11 @@
 #include "utilxx_base/log.h"
 #include "utilxx_base/string_util.h"
 
+#include "asio/as_tuple.hpp"
+#include "asio/steady_timer.hpp"
+#include "asio/this_coro.hpp"
+#include "asio/use_awaitable.hpp"
+
 #include <openssl/evp.h>
 
 #include <algorithm>
@@ -23,8 +28,13 @@ constexpr const char* kLogTag = "chatbot";
 /// `file_info` 缓存时长 (ttl 也知道, 取 min(ttl, 5 分钟))
 constexpr int64_t kFileInfoCacheMs = 5 * 60 * 1000;
 
-/// 分片校验值的前缀长度 (10 MB)
-constexpr size_t kDigestHeadBytes = 10u * 1024u * 1024u;
+/// `md5_10m` 的取样长度: 官方文档写的是"文件前 10002432 字节 (约 10MB)"
+constexpr size_t kDigestHeadBytes = 10002432u;
+
+/// 单片的尝试次数 (含首次)
+constexpr int kPartAttempts = 3;
+/// 合并请求的尝试次数 (含首次)
+constexpr int kMergeAttempts = 3;
 
 int64_t steadyNowMs() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -83,6 +93,43 @@ bool readWholeFileBytes(const std::string& path, std::string& out) {
     buffer << in.rdbuf();
     out = buffer.str();
     return true;
+}
+
+/// 5xx 与传输层失败可以重试 (官方错误码 40093001"文件上传失败，请重试"就是这类瞬时故障);
+/// 4xx 是参数/权限/限额问题, 重试没有意义
+bool retryable(const QqResponse& response) {
+    if (!response.error.empty()) {
+        return true;
+    }
+    return response.status >= 500 && response.status < 600;
+}
+
+/// 把一次失败拼成能直接给模型看的一句话 (状态码 + 传输层错误 + 响应片段)
+std::string describeFailure(const std::string& what, const QqResponse& response) {
+    std::string text = what;
+    text += " (status ";
+    text += std::to_string(response.status);
+    if (!response.error.empty()) {
+        text += ", ";
+        text += response.error;
+    }
+    text += ")";
+    if (!response.body.empty()) {
+        text += ": ";
+        text += response.body.substr(0, 200);
+    }
+    return text;
+}
+
+/// 在协程里等一会儿 (取当前协程的 executor, 不额外占线程)
+asio::awaitable<void> sleepForMs(int64_t delayMs) {
+    if (delayMs <= 0) {
+        co_return;
+    }
+    auto               executor = co_await asio::this_coro::executor;
+    asio::steady_timer timer(executor);
+    timer.expires_after(std::chrono::milliseconds(delayMs));
+    co_await timer.async_wait(asio::as_tuple(asio::use_awaitable));
 }
 
 } // namespace
@@ -184,9 +231,14 @@ asio::awaitable<QqUploadResult> QqMediaUploader::upload(
     if (fileName.empty()) {
         fileName = "file";
     }
+    if (content.empty()) {
+        out.reason = "附件内容为空, 无法上传";
+        co_return out;
+    }
 
     int fileType = qqFileTypeOf(fileName, ref.mimeType);
-    const uint64_t size      = ref.sizeBytes > 0 ? ref.sizeBytes : content.size();
+    // 大小以**真正要上传的字节数**为准 (调用方给的 sizeBytes 可能过期)
+    const uint64_t size      = content.size();
     const uint64_t hardLimit = qqHardLimitOf(fileType);
     if (size > hardLimit) {
         out.reason = "附件超过平台硬限制 (" + std::to_string(size / (1024 * 1024)) + " MB > "
@@ -206,7 +258,13 @@ asio::awaitable<QqUploadResult> QqMediaUploader::upload(
     out.fileType = fileType;
 
     const int64_t mtimeMs = 0; // 缓存键只用路径 + 类型 (文件改动由 file_info ttl 兜住)
-    const auto    key     = cacheKeyOf(chatType, chatId, ref.localPath.empty() ? fileName : ref.localPath, mtimeMs, fileType);
+    const auto    key     = cacheKeyOf(
+        chatType,
+        chatId,
+        ref.localPath.empty() ? fileName : ref.localPath,
+        mtimeMs,
+        fileType
+    );
     if (auto it = cache_.find(key); it != cache_.end() && it->second.expireAtMs > steadyNowMs()) {
         out.ok       = true;
         out.fileInfo = it->second.fileInfo;
@@ -218,78 +276,66 @@ asio::awaitable<QqUploadResult> QqMediaUploader::upload(
     const auto base    = basePathOf(chatType, chatId);
 
     // ---- 1. upload_prepare ----
-    utilxx_base::Json prepareBody = utilxx_base::Json::object();
-    prepareBody["file_type"] = fileType;
-    prepareBody["file_size"] = static_cast<int64_t>(size);
-    prepareBody["file_name"] = fileName;
-    prepareBody["md5"]       = digests.md5;
-    prepareBody["sha1"]      = digests.sha1;
-    prepareBody["md5_10m"]   = digests.md5_10m;
-
-    auto prepare = co_await api_.request("POST", base + "/upload_prepare", prepareBody);
+    auto prepare = co_await api_.request(
+        "POST",
+        base + "/upload_prepare",
+        qqBuildPrepareBody(fileType, content.size(), fileName, digests)
+    );
     if (!prepare.ok()) {
-        out.reason = "upload_prepare 失败 (status " + std::to_string(prepare.status) + "): "
-                     + prepare.body.substr(0, 200);
+        out.reason = describeFailure("upload_prepare 失败", prepare);
         co_return out;
     }
     auto prepareJson = prepare.json();
     if (!prepareJson.has_value() || !prepareJson->is_object()) {
-        out.reason = "upload_prepare 响应不是 JSON";
+        out.reason = "upload_prepare 响应不是 JSON: " + prepare.body.substr(0, 200);
         co_return out;
     }
-    const std::string uploadId  = prepareJson->value("upload_id", std::string{});
-    int64_t           blockSize = prepareJson->value("block_size", int64_t{0});
+    const std::string uploadId = prepareJson->value("upload_id", std::string{});
     if (uploadId.empty()) {
-        out.reason = "upload_prepare 没有返回 upload_id";
+        out.reason = "upload_prepare 没有返回 upload_id: " + prepare.body.substr(0, 200);
         co_return out;
-    }
-    if (blockSize <= 0) {
-        blockSize = static_cast<int64_t>(content.size()); // 单片
-    }
-    if (blockSize <= 0) {
-        blockSize = 1;
     }
 
-    // ---- 2. 逐片 PUT + upload_part_finish ----
-    struct PartDesc {
-        int         index = 0;
-        std::string url;
-        int64_t     size = 0;
-    };
-    std::vector<PartDesc> parts;
-    if (prepareJson->contains("parts") && (*prepareJson)["parts"].is_array()) {
-        for (const auto& item : (*prepareJson)["parts"]) {
-            if (!item.is_object()) {
-                continue;
-            }
-            PartDesc part;
-            part.index = static_cast<int>(item.value("index", int64_t{0}));
-            part.url   = item.value("presigned_url", std::string{});
-            part.size  = item.value("block_size", blockSize);
-            if (!part.url.empty()) {
-                parts.push_back(std::move(part));
-            }
+    // 平台下发的重试策略 (缺省: 延迟 1 秒 / 总时长 5 分钟), 只用于逐片与合并的重试
+    int64_t retryDelayMs  = 1000;
+    int64_t retryBudgetMs = 300 * 1000;
+    if (prepareJson->contains("upload_config")) {
+        const auto& config = (*prepareJson)["upload_config"];
+        if (config.is_object()) {
+            retryDelayMs
+                = std::clamp<int64_t>(qqJsonInt64Of(config, "retry_delay", 1) * 1000, 200, 5000);
+            retryBudgetMs
+                = std::max<int64_t>(5000, qqJsonInt64Of(config, "retry_timeout", 300) * 1000);
         }
     }
+    const int64_t deadlineMs = steadyNowMs() + retryBudgetMs;
 
+    // ---- 2. 分片: 逐片 PUT + upload_part_finish ----
+    // 平台把 `block_size` / `parts[].block_size` 当字符串下发, 由 qqPlanUploadParts 统一解析;
+    // 返回空表示平台没给分片清单 (小文件走二进制直传)
+    const auto parts = qqPlanUploadParts(*prepareJson, content.size());
     if (parts.empty()) {
-        // 平台没给分片清单: 单片直传 (≤5MB 的二进制直传路径)
-        utilxx_base::Json finish = utilxx_base::Json::object();
-        finish["upload_id"]      = uploadId;
-        finish["file_name"]      = fileName;
-        finish["file_data"]      = utilxx_base::base64Encode(content);
-        finish["srv_send_msg"]   = false;
-        auto merged = co_await api_.request("POST", base + "/files", finish);
-        if (!merged.ok()) {
-            out.reason = "上传文件失败 (status " + std::to_string(merged.status) + "): "
-                         + merged.body.substr(0, 200);
+        if (content.size() > qqDirectUploadLimit) {
+            out.reason = "平台没有返回分片清单, 而附件 " + std::to_string(content.size())
+                         + " 字节超过直传上限 (" + std::to_string(qqDirectUploadLimit)
+                         + " 字节), 无法上传";
             co_return out;
         }
-        auto mergedJson = merged.json();
-        const std::string fileInfo
-            = mergedJson.has_value() ? mergedJson->value("file_info", std::string{}) : std::string{};
+        auto direct = co_await api_.request(
+            "POST",
+            base + "/files",
+            qqBuildDirectUploadBody(fileName, fileType, utilxx_base::base64Encode(content))
+        );
+        if (!direct.ok()) {
+            out.reason = describeFailure("上传文件失败", direct);
+            co_return out;
+        }
+        auto              directJson = direct.json();
+        const std::string fileInfo   = directJson.has_value()
+                                           ? directJson->value("file_info", std::string{})
+                                           : std::string{};
         if (fileInfo.empty()) {
-            out.reason = "上传成功但没有返回 file_info";
+            out.reason = "上传成功但没有返回 file_info: " + direct.body.substr(0, 200);
             co_return out;
         }
         out.ok       = true;
@@ -298,55 +344,93 @@ asio::awaitable<QqUploadResult> QqMediaUploader::upload(
         co_return out;
     }
 
-    // 按分片清单逐片上传 (顺序上传: 单文件通常 1~few 片, 并发收益有限且更易触发限流)
-    size_t offset = 0;
+    // 顺序上传: 单文件通常 1~few 片, 并发收益有限且更易触发限流
     for (const auto& part : parts) {
-        const size_t take = static_cast<size_t>(
-            std::min<int64_t>(part.size > 0 ? part.size : blockSize,
-                              static_cast<int64_t>(content.size() - std::min(offset, content.size())))
-        );
-        const auto chunk = content.substr(offset, take);
-        offset += take;
-        if (chunk.empty()) {
-            continue;
+        const auto chunk   = std::string_view{content}.substr(part.offset, part.sizeBytes);
+        const auto partMd5 = utilxx::md5Hex(chunk);
+        const auto what    = "片 " + std::to_string(part.index) + " ("
+                          + std::to_string(chunk.size()) + " 字节, 偏移 "
+                          + std::to_string(part.offset) + ")";
+        bool        uploaded   = false;
+        bool        putDone    = false;
+        std::string failReason;
+        for (int attempt = 1; attempt <= kPartAttempts; ++attempt) {
+            bool retry = false;
+            if (!putDone) {
+                auto put = co_await api_.putToPresignedUrl(part.url, chunk);
+                if (!put.ok()) {
+                    failReason = describeFailure("分片上传失败 (" + what + ")", put);
+                    retry      = retryable(put);
+                } else {
+                    putDone = true;
+                }
+            }
+            if (putDone) {
+                // 这一片的真实字节数与 md5 都要回给服务端, 少给会被当成坏请求
+                auto partFinish = co_await api_.request(
+                    "POST",
+                    base + "/upload_part_finish",
+                    qqBuildPartFinishBody(uploadId, part.index, chunk.size(), partMd5)
+                );
+                if (partFinish.ok()) {
+                    uploaded = true;
+                    break;
+                }
+                failReason = describeFailure("upload_part_finish 失败 (" + what + ")", partFinish);
+                retry      = retryable(partFinish);
+            }
+            const bool lastAttempt = attempt >= kPartAttempts;
+            if (!retry || lastAttempt || steadyNowMs() >= deadlineMs) {
+                break;
+            }
+            XX_LOGW(
+                "[{}] 附件 '{}' 第 {} 片第 {} 次失败, {} 毫秒后重试: {}",
+                kLogTag,
+                fileName,
+                part.index,
+                attempt,
+                retryDelayMs * attempt,
+                failReason
+            );
+            co_await sleepForMs(retryDelayMs * attempt);
         }
-        auto put = co_await api_.putToPresignedUrl(part.url, chunk);
-        if (!put.ok()) {
-            out.reason = "分片上传失败 (片 " + std::to_string(part.index) + ", status "
-                         + std::to_string(put.status) + "): " + put.body.substr(0, 160);
-            co_return out;
-        }
-        utilxx_base::Json finish = utilxx_base::Json::object();
-        finish["upload_id"]      = uploadId;
-        finish["part_index"]     = part.index;
-        auto partFinish = co_await api_.request(
-            "POST",
-            base + "/upload_part_finish",
-            finish
-        );
-        if (!partFinish.ok()) {
-            out.reason = "upload_part_finish 失败 (片 " + std::to_string(part.index)
-                         + ", status " + std::to_string(partFinish.status) + ")";
+        if (!uploaded) {
+            out.reason = std::move(failReason);
             co_return out;
         }
     }
 
     // ---- 3. 合并 ----
-    utilxx_base::Json mergeBody = utilxx_base::Json::object();
-    mergeBody["upload_id"]      = uploadId;
-    mergeBody["file_name"]      = fileName;
-    mergeBody["srv_send_msg"]   = false;
-    auto merged = co_await api_.request("POST", base + "/files", mergeBody);
+    QqResponse merged;
+    for (int attempt = 1; attempt <= kMergeAttempts; ++attempt) {
+        merged = co_await api_.request(
+            "POST",
+            base + "/files",
+            qqBuildMergeBody(uploadId, fileName, fileType)
+        );
+        if (merged.ok() || !retryable(merged) || attempt >= kMergeAttempts
+            || steadyNowMs() >= deadlineMs) {
+            break;
+        }
+        XX_LOGW(
+            "[{}] 附件 '{}' 合并第 {} 次失败, {} 毫秒后重试: {}",
+            kLogTag,
+            fileName,
+            attempt,
+            retryDelayMs * attempt,
+            describeFailure("合并文件失败", merged)
+        );
+        co_await sleepForMs(retryDelayMs * attempt);
+    }
     if (!merged.ok()) {
-        out.reason = "合并文件失败 (status " + std::to_string(merged.status) + "): "
-                     + merged.body.substr(0, 200);
+        out.reason = describeFailure("合并文件失败", merged);
         co_return out;
     }
-    auto mergedJson = merged.json();
+    auto              mergedJson = merged.json();
     const std::string fileInfo
         = mergedJson.has_value() ? mergedJson->value("file_info", std::string{}) : std::string{};
     if (fileInfo.empty()) {
-        out.reason = "合并成功但没有返回 file_info";
+        out.reason = "合并成功但没有返回 file_info: " + merged.body.substr(0, 200);
         co_return out;
     }
     int64_t ttlMs = kFileInfoCacheMs;
@@ -363,11 +447,12 @@ asio::awaitable<QqUploadResult> QqMediaUploader::upload(
     out.ok       = true;
     out.fileInfo = fileInfo;
     XX_LOGI(
-        "[{}] 附件 '{}' 上传完成 ({} 字节, file_type={})",
+        "[{}] 附件 '{}' 上传完成 ({} 字节, file_type={}, {} 片)",
         kLogTag,
         fileName,
         content.size(),
-        fileType
+        fileType,
+        parts.size()
     );
     co_return out;
 }

@@ -8,6 +8,8 @@
 #include "agentxx-test/core/test_boundaries.h"
 #include "agentxx-test/core/test_cancel.h"
 #include "agentxx-test/core/test_chatbot_core.h"
+#include "agentxx-test/core/test_chatbot_media.h"
+#include "agentxx-test/core/test_chatbot_media_io.h"
 #include "agentxx-test/core/test_chatbot_qq.h"
 #include "agentxx-test/core/test_checkpoint_store.h"
 #include "agentxx-test/core/test_command_tools.h"
@@ -304,6 +306,7 @@ int main(int argn, char** argv) {
         runSync("invisible_text", agentxx::test::testInvisibleText);
         runSync("chatbot_core", agentxx::test::testChatbotCore);
         runSync("chatbot_qq", agentxx::test::testChatbotQq);
+        runSync("chatbot_media", agentxx::test::testChatbotMedia);
         runSync("regex", agentxx::test::testRegex);
         runSync("json", agentxx::test::testJson);
         runSync("persist_semantics", agentxx::test::testPersistSemantics);
@@ -510,6 +513,7 @@ int main(int argn, char** argv) {
                     agentContext
                 );
                 co_await run("http", agentxx::test::run_http_client_tests);
+                co_await run("chatbot_media_io", agentxx::test::testChatbotMediaIo);
                 co_await run("network_timeout", agentxx::test::run_network_timeout_tests);
                 co_await run("websocket", agentxx::test::run_websocket_tests);
                 co_await run("remote_agent", agentxx::test::run_remote_agent_tests);
