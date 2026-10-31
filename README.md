@@ -38,9 +38,9 @@
 
 |-|-|
 |---|---|
-|![主页](/resource/doc-src/image-6-zh-cn.png)|![消息列表](/resource/doc-src/image-1-zh-cn.png)|
-|![Plan状态图绘制](/resource/doc-src/image-3-zh-cn.png)|![特化工具绘制](/resource/doc-src/image-4-zh-cn.png)|
-|![选择附件](/resource/doc-src/image-5-zh-cn.png)|![设置](/resource/doc-src/image-2-zh-cn.png)|
+|![主页](/resource/doc-src/image-1-zh-cn.jpg)|![消息列表](/resource/doc-src/image-2-zh-cn.jpg)|
+|![Plan状态图绘制](/resource/doc-src/image-3-zh-cn.jpg)|![特化工具绘制](/resource/doc-src/image-4-zh-cn.jpg)|
+|![选择附件](/resource/doc-src/image-5-zh-cn.jpg)|![设置](/resource/doc-src/image-6-zh-cn.jpg)|
 
 ## 特点
 - **体积小/内存占用少/高性能**; C++协程异步实现，程序体积和内存占用少且性能高，协程网络/文件读写支持不阻塞，可选添加 硬件加速Hyperscan 等扩展库

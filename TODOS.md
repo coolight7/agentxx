@@ -34,7 +34,7 @@
 - 网络问题保持重试
 - 机器人插件提供tool给主程序调用，实现通知
 - 机器人插件后台子agent排队运行繁重任务
-- agentxx 自重启控制
+- agentxx 自重启控制、仿照 musicxx 的 cli + http + mcp + deeplink 命令控制
 
 - SVG绘制支持
 - 链式 session 任务队列
