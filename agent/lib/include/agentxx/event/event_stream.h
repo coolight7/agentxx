@@ -612,9 +612,14 @@ public:
     /// 包装为 GraphStreamCallback (shared_from_this 持有, 回调期间本对象存活)
     neograph::graph::GraphStreamCallback makeCallback();
 
-    /// 设置 tps 推送间隔 (秒); 默认 5 秒, 测试可调小以缩短等待
+    /// 设置 tps 推送间隔 (秒); 默认 1 秒 (流式开始 1 秒后即开始显示), 测试可调小以缩短等待
     void setTpsPushInterval(double seconds) {
         tpsPushIntervalSec_ = seconds;
+    }
+
+    /// 当前 tps 推送间隔 (秒); 见 [setTpsPushInterval]
+    double tpsPushInterval() const {
+        return tpsPushIntervalSec_;
     }
 
     /// 记录一轮会话开始: 重置轮级 tps 统计
@@ -724,7 +729,9 @@ private:
     std::string                           tpsPendingText_{};    ///< 批量估算待折算文本
     double                                tpsLastPushSec_ = 0.0; ///< 上次推送时的累计秒数
     double tpsLastPushToken_   = 0.0; ///< 上次推送时的累计 token 数
-    double tpsPushIntervalSec_ = 3.0; ///< 推送间隔 (秒)
+    /// 推送间隔 (秒): 1 秒使界面在刚开始流式时 (1 秒后) 就能显示生成速度,
+    /// 而不是等整段生成结束或更长的固定周期; 窗口=该间隔, 速度反映最近 1 秒
+    double tpsPushIntervalSec_ = 1.0;
 
     /// 轮级 tps (token/s) 统计: 一轮会话内所有 ModelCall 的累计估算 token 与
     /// 累计流式耗时 (仅计 LLM 流式期间, 不含 tool 执行等间隔)

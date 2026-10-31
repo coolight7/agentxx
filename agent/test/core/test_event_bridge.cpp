@@ -520,6 +520,7 @@ asio::awaitable<void> test_eventbridge_node_delta() {
 
 /// 验证 ModelCall 流式期间 tps 统计:
 /// - 从首个 token (节点开始后) 计时, 每 [tpsPushIntervalSec_] 秒推送一次平均速度
+/// - 默认间隔 1 秒 (流式 token 到达 1 秒后界面即可显示 tps)
 /// - 间隔未到不推送; 新流 (NODE_START 后) 重新计时
 /// - token 估算复用 EventBus 上注册的 TokenCount 服务
 asio::awaitable<void> test_eventbridge_tps() {
@@ -540,9 +541,10 @@ asio::awaitable<void> test_eventbridge_tps() {
     session->contextStats->usage.cachedPromptTokens = 600;
 
     auto bridge = makeTestBridge(agentContext, session, io);
-    // 缩短推送间隔 (默认 5 秒), 测试无需真实等待
-    bridge->setTpsPushInterval(0.05);
+    // 默认推送间隔 = 1 秒 (界面在流式开始 1 秒后显示速度), 测试中不改动默认值
+    XX_TEST_EXPECT_EQ(bridge->tpsPushInterval(), 1.0);
     auto bridgeCb = bridge->makeCallback();
+    auto executor = co_await asio::this_coro::executor;
 
     // 节点开始: 重置 chunk 类型标记, 后续首个 token 作为新流计时起点
     bridgeCb(neograph::graph::GraphEvent{
@@ -551,7 +553,7 @@ asio::awaitable<void> test_eventbridge_tps() {
         neograph::json::object()
     });
 
-    // 首个 token: 流开始计时; 间隔未到 → 不推送
+    // 首个 token: 流开始计时; 默认 1 秒间隔未到 → 不推送 (界面此时还没有速度可显示)
     bridgeCb(neograph::graph::GraphEvent{
         neograph::graph::GraphEvent::Type::LLM_TOKEN,
         "llm",
@@ -559,8 +561,9 @@ asio::awaitable<void> test_eventbridge_tps() {
     });
     XX_TEST_EXPECT_EQ(io->stats.size(), size_t{0});
 
-    // 等待超过间隔后继续发 token → 触发推送, tps > 0
-    co_await asio::steady_timer(co_await asio::this_coro::executor, std::chrono::milliseconds(80))
+    // 等待超过默认间隔 (1 秒) 后继续发 token → 触发推送, 即"流式 token 到达 1 秒后
+    // 界面就能看到生成速度"
+    co_await asio::steady_timer(executor, std::chrono::milliseconds(1050))
         .async_wait(asio::use_awaitable);
     bridgeCb(neograph::graph::GraphEvent{
         neograph::graph::GraphEvent::Type::LLM_TOKEN,
@@ -569,7 +572,7 @@ asio::awaitable<void> test_eventbridge_tps() {
     });
     XX_TEST_EXPECT_EQ(io->stats.size(), size_t{1});
     if (io->stats.size() == 1) {
-        // "Hello" ≈ 5 个 ascii 字符 / 4 ≈ 1.25 token, 80ms 内 → tps 约 15.6
+        // "Hello World" ≈ 11 个 ascii 字符 / 4 ≈ 2.75 token, 窗口约 1.05 秒 → tps 约 2.6
         XX_TEST_EXPECT_TRUE(io->stats[0].tps > 0.0);
         // 上下文统计字段原样转发 (默认 0)
         XX_TEST_EXPECT_EQ(io->stats[0].contextTokens, uint64_t{0});
@@ -591,7 +594,7 @@ asio::awaitable<void> test_eventbridge_tps() {
         "llm",
         neograph::json(std::string{"new stream"})
     });
-    // 上一次推送时间戳已按新流重置: nowSec 重新从 0 起算, 未到 50ms 不推送
+    // 上一次推送时间戳已按新流重置: nowSec 重新从 0 起算, 未到 1 秒不推送
     XX_TEST_EXPECT_EQ(io->stats.size(), size_t{1});
 
     co_return;
