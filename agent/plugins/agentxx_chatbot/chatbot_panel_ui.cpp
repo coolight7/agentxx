@@ -98,6 +98,16 @@ std::vector<pluginxx::ui::Item> panelItemsOf(const PanelSnapshot& snapshot) {
 
         Item subtitle = hintText(panelSessionSubtitle(session));
 
+        // 会话 id 单独一行: 用户要把这一串抄进配置的 `bind.chats[].id`,
+        // 所以允许折行 (窄栏里宁可按两行显示, 也别截断成抄不全的半截)
+        std::vector<Item> lines{std::move(title), std::move(subtitle)};
+        const std::string idText = panelSessionIdText(session);
+        if (!idText.empty()) {
+            Item idLine = hintText(idText);
+            idLine.wrap = true;
+            lines.push_back(std::move(idLine));
+        }
+
         // 状态标记: 正在执行一轮就是加载中 (点阵逐帧转动), 空闲时用一个点占位,
         // 保证各行标题从同一列开始
         Item marker = build::text(
@@ -114,11 +124,14 @@ std::vector<pluginxx::ui::Item> panelItemsOf(const PanelSnapshot& snapshot) {
 
         // 固定宽度的三列 (前缀 / 状态 / 条数) 让每行标题落在同一列;
         // 中间的 Expanded 吃掉剩余宽度, 条数才会贴在最右边
+        Item block = build::node("Column");
+        block.children = std::move(lines);
+
         Item row = build::row(
             {
                 build::sizedBox(kBulletCols, 0.0, listBullet()),
                 build::sizedBox(kMarkerCols, 0.0, marker),
-                build::expanded(build::column({title, subtitle})),
+                build::expanded(std::move(block)),
                 build::sizedBox(kQueueCols, 0.0, queueText),
             }
         );

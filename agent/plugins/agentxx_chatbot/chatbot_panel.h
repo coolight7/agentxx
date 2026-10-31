@@ -23,6 +23,8 @@ namespace chatbot {
 ///
 /// 字段用途:
 /// - `title` / `persona` / `chatType` 给面板第二行做副标题;
+/// - `chatKey` 里的 chatId 单独占面板第三行 (见 [panelSessionIdText]), 用户要把它
+///   抄进配置的 `bind.chats[].id`;
 /// - `running` 决定左侧是否显示加载动画 (正在跑一轮);
 /// - `queued` 就是面板右侧那个数字 (还在聚合缓冲里等着的消息条数);
 /// - `sessionId` / `channelId` 只在排错时看 (面板不显示)。
@@ -96,6 +98,13 @@ bool parsePanelSnapshot(std::string_view json, PanelSnapshot& out);
 
 /// 会话一行的副标题: `assistant · 群聊 · always`
 std::string panelSessionSubtitle(const PanelSessionView& session);
+
+/// 会话那一行单独显示的会话 id: `id G1A2B3C4…`
+///
+/// 就是配置里 `bind.chats[].id` 要填的值 (群 `group_openid` / 私聊 `user_openid`),
+/// 从 `chatKey` 的第三段取。标题里的「群聊(尾号 …)」只是显示名, 抄不了。
+/// 拿不到 (chatKey 为空/格式不对) 时返回空串, 面板不占那一行。
+std::string panelSessionIdText(const PanelSessionView& session);
 
 /// 人设一行的副标题: `会话 2/64 · 绑定 3`, 没挂上时追加 `· 未挂载`
 std::string panelPersonaSubtitle(const PanelPersonaView& persona);

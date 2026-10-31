@@ -399,11 +399,25 @@ void ChatbotEngine::onInbound(const InboundEvent& rawEvent) {
     if (!route.found || route.mode == ChatMode::Off) {
         ++state.counters.ignored;
         ++globalCounters_.ignored;
-        XX_LOGD(
-            "[{}] 消息不属于任何启用的人设, 已丢弃 (会话 '{}')",
-            kLogTag,
-            chatKeyText
-        );
+        // 第一次碰到这个会话就打成 info 并给出可抄的配置行: 拿到平台 id 本身不容易
+        // (群号 / QQ 号都不对, 要用 openid), 这条日志里的 chatId 就是要填的值。
+        // 之后降为 debug, 免得没人管的群刷屏。
+        if (state.counters.ignored == 1) {
+            XX_LOGI(
+                "[{}] 会话 '{}' 没有匹配的 bind, 消息已丢弃; 要接它就在 personas[].bind.chats "
+                "里加一项: type={}, id=\"{}\" (mode 自选 mention/always)",
+                kLogTag,
+                chatKeyText,
+                chatTypeName(key.type),
+                key.chatId
+            );
+        } else {
+            XX_LOGD(
+                "[{}] 消息不属于任何启用的人设, 已丢弃 (会话 '{}')",
+                kLogTag,
+                chatKeyText
+            );
+        }
         return;
     }
     ++state.counters.routed;

@@ -1054,9 +1054,21 @@ void testRouterQuota() {
     router.setRootId("p", "");
     XX_TEST_EXPECT_EQ(router.rootIdOf("p"), std::string{"root-1"});
 
-    // 标题: 有群名用群名, 没有就用「类型-尾号」
+    // 标题: 有群名用群名, 没有就用「群聊(尾号 xxxxxxxx)」
+    // —— 尾号只是显示, 不是 bind.chats[].id 要填的会话 id (那个是平台 openid)
     XX_TEST_EXPECT_EQ(ChatbotRouter::titleOf("技术群", g1), std::string{"技术群"});
-    XX_TEST_EXPECT_TRUE(ChatbotRouter::titleOf("", g1).rfind("group-", 0) == 0);
+    XX_TEST_EXPECT_EQ(
+        ChatbotRouter::titleOf("", g1),
+        std::string{"群聊(尾号 " + chatIdTail(g1.chatId, 8) + ")"}
+    );
+    ChatKey privateKeyOfTitle;
+    privateKeyOfTitle.accountId = "a";
+    privateKeyOfTitle.type      = ChatType::Private;
+    privateKeyOfTitle.chatId    = "U0123456789";
+    XX_TEST_EXPECT_EQ(
+        ChatbotRouter::titleOf("", privateKeyOfTitle),
+        std::string{"私聊(尾号 23456789)"}
+    );
 
     // 记住的会话名: 面板靠它显示群名
     XX_TEST_EXPECT_TRUE(router.chatNameOf("a|group|G1").empty());
@@ -1320,6 +1332,21 @@ void testPanelTexts() {
     session.persona.clear();
     XX_TEST_EXPECT_TRUE(contains(panelSessionSubtitle(session), "未归属人设"));
 
+    // 会话 id 那一行: 从 chatKey 的第三段取 (用户要把它抄进 bind.chats[].id)
+    PanelSessionView idSession;
+    idSession.chatKey = "qq_main|group|3F2A1B9C8D7E4F5A6B0C1D2E3F4A5B6C";
+    XX_TEST_EXPECT_EQ(
+        panelSessionIdText(idSession),
+        std::string{"id 3F2A1B9C8D7E4F5A6B0C1D2E3F4A5B6C"}
+    );
+    idSession.chatKey = "qq_main|private|U9";
+    XX_TEST_EXPECT_EQ(panelSessionIdText(idSession), std::string{"id U9"});
+    // 拿不到就留空: 面板不占那一行
+    idSession.chatKey.clear();
+    XX_TEST_EXPECT_EQ(panelSessionIdText(idSession), std::string{});
+    idSession.chatKey = "bogus";
+    XX_TEST_EXPECT_EQ(panelSessionIdText(idSession), std::string{});
+
     PanelPersonaView persona;
     persona.chats      = 2;
     persona.chatBudget = 64;
@@ -1402,6 +1429,14 @@ void testPanelItems() {
         // 只 hint 色, 不再叠加 dim —— caption 会让副标题比 `|- ` 前缀还暗一档
         XX_TEST_EXPECT_TRUE(subtitleItem->textType != std::string{"caption"});
     }
+    // 会话 id 独占一行: hint 色且允许折行 (窄栏里按两行显示, 不能截成半截)
+    const auto* idItem = findTextEqual(items, "id G1");
+    XX_TEST_EXPECT_TRUE(idItem != nullptr);
+    if (idItem != nullptr) {
+        XX_TEST_EXPECT_EQ(idItem->tone, std::string{"hint"});
+        XX_TEST_EXPECT_TRUE(idItem->wrap);
+    }
+
     // 排队数靠右对齐 (贴在栏的右边), 有积压用强调色
     const auto* queueItem = findTextEqual(items, "3");
     XX_TEST_EXPECT_TRUE(queueItem != nullptr);

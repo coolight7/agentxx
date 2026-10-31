@@ -34,8 +34,11 @@ std::string ChatbotRouter::titleOf(std::string_view chatName, const ChatKey& key
     if (!chatName.empty()) {
         return std::string{chatName};
     }
+    // 只用于显示: 尾号 8 位**不是**会话 id (id 是平台的 openid, 见 README §2.2),
+    // 所以这里写明「尾号」, 免得被当成 bind.chats[].id 去填
     const std::string tail = chatIdTail(key.chatId, 8);
-    return std::string{chatTypeName(key.type)} + "-" + tail;
+    const char*       kind = key.type == ChatType::Group ? "群聊" : "私聊";
+    return std::string{kind} + "(尾号 " + tail + ")";
 }
 
 void ChatbotRouter::build(const ChatbotConfig& config, int32_t maxChatsPerPersona, Hooks hooks) {

@@ -79,8 +79,10 @@ plugin:
             bind:
               - account: qq_main
                 chats:
-                  - { type: group, id: "123456789", mode: mention }
-                  - { type: private, id: "ABCDEF...", mode: always }
+                  # id 是**平台侧的会话 id**, 不是群号也不是 QQ 号 (见 §2.2):
+                  #   群聊 = group_openid, 私聊 = 对方的 user_openid, 都是 32 位十六进制串
+                  - { type: group, id: "3F2A1B9C8D7E4F5A6B0C1D2E3F4A5B6C", mode: mention }
+                  - { type: private, id: "8C0D1E3F5A7B9C2D4E6F8A0B1C3D5E7F", mode: always }
                   - { type: group, id: "*", mode: mention }   # 通配: 该账号下所有群
 
         # ---------- 第三段: 通用行为 ----------
@@ -104,7 +106,7 @@ plugin:
 ```
 
 配置只有三段：`accounts`（账号）/ `personas`（人设）/ `behavior`（通用行为）。
-关键词命令**不在配置里**，由插件内置（见 §2.3）；
+关键词命令**不在配置里**，由插件内置（见 §2.4）；
 启动时只在日志里提一句「命令由插件内置」。
 
 ### 2.1 三种触发模式（`bind.chats[].mode`）
@@ -167,9 +169,43 @@ QQ 群里默认**只有 @ 机器人的消息**会推送（事件 `GROUP_AT_MESSA
 
 开了「接收所有消息」以后，群里的 @ 也有变化：@ 人不再写成去掉前缀的正文，而是
 写成 `<@成员openid>`（@ 全体是 `<@all>`）。插件会把它们换成 `@昵称` 再给模型，
-并按 `mentions[]` / openid 判断「这条是不是 @ 了我」（详见 §2.4）。
+并按 `mentions[]` / openid 判断「这条是不是 @ 了我」（详见 §2.5）。
 
-### 2.2 凭证
+### 2.2 会话 id 是什么（`bind.chats[].id`）
+
+`id` 是**平台侧的会话 id**，不是群号、也不是 QQ 号：
+
+| 会话 | `id` 取值 | 形如 |
+|------|-----------|------|
+| 群聊（`type: group`） | 事件里的 `group_openid` | `3F2A1B9C8D7E4F5A6B0C1D2E3F4A5B6C`（一串十六进制） |
+| 私聊（`type: private`） | 对方在这个机器人下的 `user_openid` | 同上，每个用户一个 |
+| 通配 | `"*"` | 该账号下同 `type` 的全部会话 |
+
+两点最容易踩：
+
+- **群号 / QQ 号填进来一定匹配不上**：平台推送里没有这两个数字，插件能拿到的只有 openid；
+- **侧边栏每行标题的 `群聊(尾号 xxxxxxxx)` 只是显示名**（群名拿不到时用 id 末 8 位凑的），
+  不是 id；紧挨着的下一行 `id …` 才是要抄的值。
+
+拿 id 的办法（任选一种）：
+
+1. **看侧边栏**（最快）：「机器人」栏里每个会话下面是三行 —— 标题、`人设 · 群聊/私聊 · 模式`、
+   `id <会话 id>`。那一行就是 `bind.chats[].id`，直接拖选复制（收过消息的会话都会列出来，
+   包括还没匹配到 bind 的）。窄栏放不下时长 id 会折成两行显示，仍可整串选中。
+2. **先通配、再收窄**：先配上 `- { type: group, id: "*", mode: mention }`，
+   在那个群 @ 机器人发一条 `/agentxx-cmd info`，它会本地回一句
+   `会话 3F2A1B9C… (group) · 账号 qq_main …` —— 那个 `chat` 就是要填的 `id`。
+   私聊同理（`type: private`，`info` 里的 `chat` 就是对方的 `user_openid`）。
+3. **看日志**：某个会话第一次收到消息却没有匹配的 `bind` 时，插件会打一条 info：
+   `会话 'qq_main|group|3F2A…' 没有匹配的 bind, 消息已丢弃; 要接它就在 personas[].bind.chats
+   里加一项: type=group, id="3F2A…"` —— 直接抄这行。之后同一会话降为 debug，不会刷屏。
+4. **会话已经能路由**时问模型 `chatbot_chat_info`：返回的 `chat` 是 chatId，`chatKey` 是
+   `账号|类型|chatId` 整串。
+
+openid 是平台按机器人（`appId`）分配的，换了 `appId` 之后这些绑定通常要重新取一遍。
+只想临时改某会话的行为时不必动配置：用 `chatbot_set_mode` 改（不写回 yaml）。
+
+### 2.3 凭证
 
 `appId` 是长数字，直接写进 yaml 容易被 YAML 解析成整数甚至浮点（精度丢失）。三种写法任选：
 
@@ -179,7 +215,7 @@ QQ 群里默认**只有 @ 机器人的消息**会推送（事件 `GROUP_AT_MESSA
 
 `appSecretFile` 同理，键名是 `QQBOT_APPSECR(S)ET`（两种拼写都接受，平台文档里两种都出现过）。
 
-### 2.3 内置命令
+### 2.4 内置命令
 
 命令写在 `chatbot_core.cpp` 的 `builtinCommands()` 里，统一格式 `/agentxx-cmd <子命令>`
 （单独发 `/agentxx-cmd` 等同于 `help`；大小写不敏感，子命令后面可以跟一段文字，作为 `{args}` 用）：
@@ -197,7 +233,7 @@ QQ 群里默认**只有 @ 机器人的消息**会推送（事件 `GROUP_AT_MESSA
 文档、用例、排错说法就对不上了。要改命令请改 `builtinCommands()`（改完补
 `chatbot_core` 的 `builtinCommands` 用例）。
 
-### 2.4 被 @ 的判定（开了全量消息的群）
+### 2.5 被 @ 的判定（开了全量消息的群）
 
 开了「接收所有消息」后，@ 机器人不再单独成一个事件，而是混在 `GROUP_MESSAGE_CREATE`
 里。插件用两条线索判断这条是不是 @ 了自己：
@@ -280,6 +316,12 @@ QQ群「技术交流群」(群 id 尾号 6789); 下面是最近收到的消息�
 2. 该群有没有在某个 `personas[].bind` 里（`chatbot_chat_info` 的 `persona` 为空就是没路由到）；
 3. 模式是不是 `mention` 而这条消息没 @ 机器人；或者被 `chatbot_set_mode` 改成了 `off`；
 4. 模型有没有调 `chatbot_send_message`（`fallbackReply: never` 时不调就真的不说话）。
+
+**不知道 `bind.chats[].id` 填什么 / 填了不生效。** `id` 是平台侧的会话 id（群聊
+`group_openid`、私聊 `user_openid`），**不是群号也不是 QQ 号**。最快的拿法是看侧边栏：
+「机器人」栏每个会话下面有一行 `id …`（标题里的 `群聊(尾号 xxxxxxxx)` 只是显示名，别抄）。
+其他办法见 §2.2：配 `- { type: group, id: "*", mode: mention }` 通配 → 在目标群发
+`/agentxx-cmd info` 抄 `chat`；或看日志里「没有匹配的 bind … 要接它就加一项」那条 info。
 
 **回复被切成好几条。** 正文超过 `messageSplitLimit` 会自动切段并带 `(i/n)` 标记；
 一轮超过 `maxRepliesPerTurn` 的部分会丢弃，工具结果里会说明「已发满」。

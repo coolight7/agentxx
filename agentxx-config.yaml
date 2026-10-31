@@ -436,6 +436,8 @@ plugin:
       enabled: true
 
     # === 群聊机器人 (QQ 群聊 / 私聊 <-> agent 会话)
+    # 该插件的配置比较多比较复杂，可以用主程序 agentxx 启动后让 AI 分析和自动修改实现你的需求
+    #
     # - QQ 接入需要 appid 和 appsecret，可在 [QQ开发平台](https://q.qq.com/qqbot/openclaw/index.html) 申请
     # - 每个人设 = 一个独立的根 agent; 每个「账号 + 群 或 私聊」= 一个独立会话
     # - 内置主会话不受影响, 群里的上下文与它分开
@@ -487,9 +489,15 @@ plugin:
             bind:                   # 对接范围: 不给 bind 就不会处理任何会话
               - account: qq_main
                 chats:
+                  # id = 平台侧会话 id: 群聊是 group_openid, 私聊是对方的 user_openid
+                  # (一串十六进制); **不是群号也不是 QQ 号**
+                  # - 拿法: 看侧边栏「机器人」栏每个会话下面的 `id ...` 那一行,
+                  #         或配 id: "*" 在该群发 /agentxx-cmd info 抄回复里的 chat,
+                  #         或看日志里「没有匹配的 bind ... 要接它就加一项」那条 info
+                  # - 会话标题「群聊(尾号 xxxxxxxx)」只是显示名, 不是 id
                   - { type: group, id: "*", mode: mention }   # 所有群: 被 @ 才回
                   - { type: private, id: "*", mode: always }   # 所有私聊: 每条都回
-                  # - { type: group, id: "123456789", mode: always }  # 指定群: 每条都回
+                  # - { type: group, id: "3F2A1B9C8D7E4F5A6B0C1D2E3F4A5B6C", mode: always }
                   # 模式: mention(被 @ 才唤醒, 期间其它消息攒着一起带上去) |
                   #       always(每条都投) | off(该会话不处理)
 

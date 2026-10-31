@@ -1367,9 +1367,11 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     XX_TEST_EXPECT_TRUE(dump.find("Divider") == std::string::npos);
                     // 副标题/说明等减淡内容走 hint 色 (与 `|- ` 前缀一致, 不再叠加 dim)
                     XX_TEST_EXPECT_TRUE(dump.find("\"tone\":\"hint\"") != std::string::npos);
-                    // 会话行: 标题 + 副标题 + 左侧加载帧 (tick 7 -> 第 8 帧 ⠧)
+                    // 会话行: 标题 + 副标题 + 会话 id + 左侧加载帧 (tick 7 -> 第 8 帧 ⠧)
                     XX_TEST_EXPECT_TRUE(dump.find("技术群") != std::string::npos);
                     XX_TEST_EXPECT_TRUE(dump.find("assistant · 群聊 · always") != std::string::npos);
+                    // 会话 id 单独一行 (从 chatKey 第三段取, 用户要抄进 bind.chats[].id)
+                    XX_TEST_EXPECT_TRUE(dump.find("\"text\":\"id G1\"") != std::string::npos);
                     XX_TEST_EXPECT_TRUE(dump.find("⠧") != std::string::npos);
                     // 右侧排队条数
                     XX_TEST_EXPECT_TRUE(dump.find("\"text\":\"3\"") != std::string::npos);

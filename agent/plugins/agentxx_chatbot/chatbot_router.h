@@ -106,7 +106,9 @@ public:
     /// 某会话键对应的 sessionId (未开通道也能算出来)
     std::string sessionIdOf(std::string_view personaName, const ChatKey& key) const;
 
-    /// 会话标题 (群名 / 用户名; 空则用 id 前 8 位)
+    /// 会话标题 (群名 / 昵称; 拿不到时退回「群聊(尾号 xxxxxxxx)」, 只用于显示)
+    ///
+    /// 尾号只是 id 的末 8 位, **不是** `bind.chats[].id` 要填的值 (那个是平台 openid)
     static std::string titleOf(std::string_view chatName, const ChatKey& key);
 
     /// 已建通道总数 (诊断)

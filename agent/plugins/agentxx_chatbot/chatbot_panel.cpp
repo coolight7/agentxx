@@ -238,6 +238,14 @@ std::string panelSessionSubtitle(const PanelSessionView& session) {
     return out;
 }
 
+std::string panelSessionIdText(const PanelSessionView& session) {
+    const ChatKey key = parseChatKey(session.chatKey);
+    if (!key.valid()) {
+        return {};
+    }
+    return "id " + key.chatId;
+}
+
 std::string panelPersonaSubtitle(const PanelPersonaView& persona) {
     std::string out = "会话 " + std::to_string(persona.chats) + "/"
                       + std::to_string(persona.chatBudget) + " · 绑定 "

@@ -1065,7 +1065,7 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 插件经内置 `agentxx_jav
 | `agentxx_text_selection_monitor` | 文本选择监听 (仅 Windows UIAutomation) |
 | `agentxx_javascript_engine` | QuickJS 引擎 (能力 `interpreter.js`) |
 | `example_js_execute_command` | JS 代码执行工具 (`example_js_execute_command`, 依赖 `agentxx_javascript_engine`) |
-| `agentxx_chatbot` | 聊天平台桥接 (QQ, 结构化预留其它平台): 每账号 + 每群/私聊一个独立会话, 每个人设一个根 agent; 工具 `chatbot_send_message` / `_history` / `_chat_info` / `_status` / `_set_mode` / `_recall_message`; client 侧「机器人」侧边栏面板 (会话/排队数/人设, 见 §13.1) |
+| `agentxx_chatbot` | 聊天平台桥接 (QQ, 结构化预留其它平台): 每账号 + 每群/私聊一个独立会话, 每个人设一个根 agent; 工具 `chatbot_send_message` / `_history` / `_chat_info` / `_status` / `_set_mode` / `_recall_message`; client 侧「机器人」侧边栏面板 (会话/会话 id/排队数/人设, 见 §13.1) |
 
 > **插件自管工具提示词 (含运行环境探测)**：工具定义 (`description` / `parameters`) 在
 > `register_tool` 时固化，因此插件必须在自己注册工具**之前**完成一切探测/决策
@@ -1120,8 +1120,10 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 插件经内置 `agentxx_jav
 （`会话: 2` / `人设: 1` / `账号: 1`），段与段之间留一行空白（不画分隔线），列表项统一
 `|- 内容` 的前缀，辅助内容一律用 hint 色（和内容的默认色区分开）：
 
-- **会话列表**：每行 = `|- ` + 状态标记 + 群名/昵称，下面一行小字是 `人设 · 群聊 · always`，
-  行尾右对齐显示还在排队、还没投给模型的消息条数（有积压才用强调色）；正在跑一轮的会话的
+- **会话列表**：每行 = `|- ` + 状态标记 + 群名/昵称，下面两行小字是 `人设 · 群聊 · always`
+  与 `id <会话 id>`（平台会话 id，就是配置里 `bind.chats[].id` 要填的值，从快照的
+  `chatKey` 第三段取；允许折行，保证窄栏里能整串拖选复制），行尾右对齐显示还在排队、
+  还没投给模型的消息条数（有积压才用强调色）；正在跑一轮的会话的
   状态标记是与消息列表同一套 braille 点阵（`⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`，帧号取快照里的
   `tick % 10`），空闲时用一个 `·` 占位，让各行标题从同一列开始；
 - **人设**：`|- ` + 名字，下面两行小字分别是 `模型 · 会话 2/64 · 绑定 3`（模型空时写
@@ -1133,8 +1135,10 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 插件经内置 `agentxx_jav
 会话: 2
 |- ⠧ 技术群                    3
      assistant · 群聊 · always
+     id 3F2A1B9C8D7E4F5A6B0C1D2E3F4A5B6C
 |- · 张三(私聊)                0
      assistant · 私聊 · mention
+     id 8C0D1E3F5A7B9C2D4E6F8A0B1C3D5E7F
 
 人设: 1
 |- assistant
