@@ -16,14 +16,10 @@
   - PluginTool 构造函数参数 `AgentxxPluginToolSpec spec`
   - PluginManager::qualifyEventTopic 不能放过 `client.*`，客户端插件事件也应当 plugin.client.*
 
-- 打开会话弹窗支持高亮当前会话
-- 日志侧边栏显示当前会话 session-id
 - agentxx_javascript_engine 的一份脚本仍只对应一个挂载作用域（mountAgentId_
 记“当前挂载”，第二次挂载会覆盖），要做到“每 agent 一份 JS 实例”需要把 JsPluginCtx
 按挂载拆开（每挂载一个 JS runtime + 一套注册），属下一篇量级。单 agent 场景与非 JS
 插件不受影响。
-- 会话 `现在另一个会话正在连着服务器在跑交易程序...` 中部分思考消息是空的却仍然显示，且部分空思考消息的下边距为0，跟其他消息贴在一起，直到被tui缓存超出淘汰，我往回滚动重新从 server 拉数据渲染时边距才恢复正常
-- edit 重复调整为警告
 - 机器人插件提供tool给主程序调用，实现通知
 - 机器人插件后台子agent排队运行繁重任务
 - agentxx 自重启控制、仿照 musicxx 的 cli + http + mcp + deeplink 命令控制

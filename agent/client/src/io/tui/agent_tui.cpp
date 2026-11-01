@@ -2081,7 +2081,9 @@ void TUIClientAgentIO::pushCurrentTokenLocked(TUIRenderState& st) {
     msg->durationMs  = st.pendingTokenDurationMs;
     msg->startTimeMs = st.pendingTokenStartTimeMs;
     // 空 content 消息过滤: 流式正文 (Assistant) 全为空白时不落入消息列表
-    // (如模型只输出了空格/换行); Think 消息仍保留 (头部显示思考时长)
+    // (如模型只输出了空格/换行); 思考消息同一判据 —— 全为空白且没有加密思考/
+    // token 统计时也不保留 (只剩一个 `[思考]` 头部行的空消息没有展示意义,
+    // 见 ViewMessage::hasVisibleContent)
     if (!isBlankContentMessage(*msg)) {
         pushLocalMessageLocked(st, std::move(msg));
     }
