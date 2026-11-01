@@ -11,6 +11,7 @@
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/model_registry.h"
 #include "agentxx/agent/session_store.h"
+#include "agentxx/event/hub.h"
 #include "agentxx/feature/registry.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/plugin/plugin_manager.h"
@@ -498,6 +499,11 @@ utilxx_base::Json buildRuntimeSnapshot(const AgentContext& ctx) {
         root["metrics"] = ctx.metrics->toJson();
     }
 
+    // ---- 事件中枢: 事件/等待/投递的现状 (不含值正文) ----
+    if (ctx.eventHub) {
+        root["event_hub"] = ctx.eventHub->statsJson();
+    }
+
     return root;
 }
 
@@ -877,6 +883,26 @@ std::vector<std::string> renderAssemblySnapshot(const utilxx_base::Json& snapsho
             m["compaction"].value("count", 0),
             m.contains("prompt_sources") ? m["prompt_sources"].value("refreshes", 0) : 0,
             m.contains("prompt_sources") ? m["prompt_sources"].value("changed_sections", 0) : 0
+        ));
+        if (m.contains("events")) {
+            add(fmt::format(
+                "  events: delivered={} dropped={} wait_timeouts={}",
+                m["events"].value("delivered", 0),
+                m["events"].value("dropped", 0),
+                m["events"].value("wait_timeouts", 0)
+            ));
+        }
+    }
+    if (snapshot.contains("event_hub") && snapshot["event_hub"].is_object()) {
+        const auto& h = snapshot["event_hub"];
+        add(fmt::format(
+            "event_hub: events={} waits={} delivered={} deferred={} dropped={} closed={}",
+            h.value("events", 0),
+            h.value("waits", 0),
+            h.value("delivered", 0),
+            h.value("deferred", 0),
+            h.value("dropped", 0),
+            h.value("closed", false)
         ));
     }
     if (snapshot.contains("components") && snapshot["components"].is_object()) {

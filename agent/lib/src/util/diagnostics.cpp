@@ -4,6 +4,7 @@
 #include "agentxx/agent/agent_host.h"
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/session_store.h"
+#include "agentxx/event/hub.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/util/observability.h"
 #include "agentxx/util/task_scope.h"
@@ -315,6 +316,13 @@ std::string buildDiagnosticsText(
         lines.push_back("## metrics (this process)");
         lines.push_back(fmt::format("- {}", ctx.metrics->summary()));
         lines.push_back(fmt::format("- json: {}", ctx.metrics->toJson().dump()));
+    }
+
+    // ---- 事件中枢 (事件/等待/投递统计; 不含值正文) ----
+    if (ctx.eventHub) {
+        lines.push_back("");
+        lines.push_back("## event hub");
+        lines.push_back(fmt::format("- {}", ctx.eventHub->statsJson().dump()));
     }
 
     // ---- 加载 (配置 + 运行侧: 已脱敏快照, 与 --dump-config 同源) ----

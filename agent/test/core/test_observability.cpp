@@ -103,6 +103,15 @@ void testKeyMetrics() {
     XX_TEST_EXPECT_EQ(m.compactionTokensBefore(), int64_t{1000});
     XX_TEST_EXPECT_EQ(m.compactionTokensAfter(), int64_t{300});
 
+    // ---- 事件中枢: 投递/丢弃/等待超时 ----
+    m.noteEventDelivered();
+    m.noteEventDelivered();
+    m.noteEventDropped();
+    m.noteEventWaitTimeout();
+    XX_TEST_EXPECT_EQ(m.eventDelivered(), uint64_t{2});
+    XX_TEST_EXPECT_EQ(m.eventDropped(), uint64_t{1});
+    XX_TEST_EXPECT_EQ(m.eventWaitTimeouts(), uint64_t{1});
+
     // ---- 导出 ----
     const auto json = m.toJson();
     XX_TEST_EXPECT_EQ(json["turns"]["total"].get<int>(), 4);
@@ -118,9 +127,13 @@ void testKeyMetrics() {
     XX_TEST_EXPECT_EQ(json["tools"]["total"].get<int>(), 5);
     XX_TEST_EXPECT_EQ(json["tools"]["failed"].get<int>(), 1);
     XX_TEST_EXPECT_EQ(json["compaction"]["count"].get<int>(), 1);
+    XX_TEST_EXPECT_EQ(json["events"]["delivered"].get<int>(), 2);
+    XX_TEST_EXPECT_EQ(json["events"]["dropped"].get<int>(), 1);
+    XX_TEST_EXPECT_EQ(json["events"]["wait_timeouts"].get<int>(), 1);
     const auto summary = m.summary();
     XX_TEST_EXPECT_TRUE(summary.find("turns=4") != std::string::npos);
     XX_TEST_EXPECT_TRUE(summary.find("compactions=1") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(summary.find("events_delivered=2") != std::string::npos);
 
     // ---- reset ----
     m.reset();
@@ -129,6 +142,8 @@ void testKeyMetrics() {
     XX_TEST_EXPECT_EQ(m.toolOk(), uint64_t{0});
     XX_TEST_EXPECT_EQ(m.lastModelErrorKind(), std::string{});
     XX_TEST_EXPECT_EQ(m.toJson()["tools"]["total"].get<int>(), 0);
+    XX_TEST_EXPECT_EQ(m.eventDelivered(), uint64_t{0});
+    XX_TEST_EXPECT_EQ(m.eventWaitTimeouts(), uint64_t{0});
 }
 
 void testRedactSecrets() {

@@ -159,13 +159,24 @@ void KeyMetrics::notePromptRefresh(
     promptSectionChars_.store(sectionChars, std::memory_order_relaxed);
 }
 
+void KeyMetrics::noteEventDelivered() {
+    eventDelivered_.fetch_add(1, std::memory_order_relaxed);
+}
+
+void KeyMetrics::noteEventDropped() {
+    eventDropped_.fetch_add(1, std::memory_order_relaxed);
+}
+
+void KeyMetrics::noteEventWaitTimeout() {
+    eventWaitTimeouts_.fetch_add(1, std::memory_order_relaxed);
+}
+
 std::string KeyMetrics::lastModelErrorKind() const {
     std::lock_guard<std::mutex> lock(errorMutex_);
     return lastModelErrorKind_;
 }
 
-utilxx_base::Json KeyMetrics::toJson() const {
-    utilxx_base::Json j = utilxx_base::Json::object();
+utilxx_base::Json KeyMetrics::toJson() const {    utilxx_base::Json j = utilxx_base::Json::object();
 
     utilxx_base::Json turns = utilxx_base::Json::object();
     turns["total"]          = turns_.load(std::memory_order_relaxed);
@@ -227,6 +238,13 @@ utilxx_base::Json KeyMetrics::toJson() const {
     prompt["section_chars"] = promptSectionChars_.load(std::memory_order_relaxed);
     j["prompt_sources"]     = std::move(prompt);
 
+    // 事件中枢: 投递是否真的到了会话 (丢失=没人接/背压/关停)
+    utilxx_base::Json events = utilxx_base::Json::object();
+    events["delivered"]     = eventDelivered_.load(std::memory_order_relaxed);
+    events["dropped"]       = eventDropped_.load(std::memory_order_relaxed);
+    events["wait_timeouts"] = eventWaitTimeouts_.load(std::memory_order_relaxed);
+    j["events"]             = std::move(events);
+
     return j;
 }
 
@@ -240,7 +258,7 @@ std::string KeyMetrics::summary() const {
     return fmt::format(
         "turns={} (ok={} failed={} cancelled={} interrupted={}) ttft_avg={:.1f}ms (n={}) "
         "model_calls={} errors={} tools={} (failed={}) compactions={} prompt_refreshes={} "
-        "prompt_changes={}",
+        "prompt_changes={} events_delivered={} events_dropped={} wait_timeouts={}",
         turns,
         turnsCompleted_.load(std::memory_order_relaxed),
         turnsFailed_.load(std::memory_order_relaxed),
@@ -254,7 +272,10 @@ std::string KeyMetrics::summary() const {
         toolFailed_.load(std::memory_order_relaxed),
         compactions_.load(std::memory_order_relaxed),
         promptRefreshes_.load(std::memory_order_relaxed),
-        promptChangedSections_.load(std::memory_order_relaxed)
+        promptChangedSections_.load(std::memory_order_relaxed),
+        eventDelivered_.load(std::memory_order_relaxed),
+        eventDropped_.load(std::memory_order_relaxed),
+        eventWaitTimeouts_.load(std::memory_order_relaxed)
     );
 }
 
@@ -287,6 +308,9 @@ void KeyMetrics::reset() {
     promptRefreshFailures_.store(0);
     promptRefreshMs_.store(0);
     promptSectionChars_.store(0);
+    eventDelivered_.store(0);
+    eventDropped_.store(0);
+    eventWaitTimeouts_.store(0);
     turnStartSteadyMs_.store(0);
     firstTokenSeen_.store(false);
     {

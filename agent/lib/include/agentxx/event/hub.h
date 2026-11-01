@@ -416,6 +416,9 @@ private:
     /// 丢弃计数
     DeliverResult drop(std::string_view reason);
 
+    /// 投递成功计数 (+ 关键指标 `events.delivered`)
+    void noteDelivered();
+
     /// 中止并清空全部等待 (closeAll 用)
     void cancelAllWaits(std::string_view reason);
 };

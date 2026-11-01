@@ -9,6 +9,7 @@
 #include "agentxx/agent/io/session_server_agent_io.h"
 #include "agentxx/agent/io/wire_protocol.h"
 #include "agentxx/event/hub.h"
+#include "agentxx/util/observability.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/redirect_error.hpp"
@@ -269,6 +270,10 @@ asio::awaitable<void> test_delivery_idle_starts_turn() {
     {
         auto session = fx->agent->agentContext->sessions->get(fx->sessionId);
         XX_TEST_EXPECT_TRUE(session->pendingInputCount() == 0);
+    }
+    // 关键指标: 投递计数随中枢投递增长
+    if (fx->agent->agentContext->metrics) {
+        XX_TEST_EXPECT_TRUE(fx->agent->agentContext->metrics->eventDelivered() >= 1);
     }
     co_return;
 }

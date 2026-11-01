@@ -82,6 +82,15 @@ public:
 
     // ---- 导出 ----
 
+    // ---- 事件中枢 ----
+
+    /// 一次事件投递已交给会话 (入队/写入待注入输入)
+    void noteEventDelivered();
+    /// 一次事件投递被丢弃 (无会话/无驱动端/背压/关停)
+    void noteEventDropped();
+    /// 一次事件等待超时 (`watch` 的 timeout 到点)
+    void noteEventWaitTimeout();
+
     /// 指标 JSON (字段稳定; 时间量为毫秒累计 + 计数, 便于外部求平均)
     utilxx_base::Json toJson() const;
 
@@ -206,6 +215,19 @@ public:
         return promptSectionChars_.load(std::memory_order_relaxed);
     }
 
+    /// 事件投递与超时计数 (与中枢自己的统计互补: 这里看总体趋势)
+    uint64_t eventDelivered() const noexcept {
+        return eventDelivered_.load(std::memory_order_relaxed);
+    }
+
+    uint64_t eventDropped() const noexcept {
+        return eventDropped_.load(std::memory_order_relaxed);
+    }
+
+    uint64_t eventWaitTimeouts() const noexcept {
+        return eventWaitTimeouts_.load(std::memory_order_relaxed);
+    }
+
     /// 最近一次模型错误分类 (空 = 无错误)
     std::string lastModelErrorKind() const;
 
@@ -244,6 +266,10 @@ private:
     std::atomic<uint64_t> promptRefreshFailures_{0};
     std::atomic<int64_t>  promptRefreshMs_{0};
     std::atomic<int64_t>  promptSectionChars_{0};
+
+    std::atomic<uint64_t> eventDelivered_{0};
+    std::atomic<uint64_t> eventDropped_{0};
+    std::atomic<uint64_t> eventWaitTimeouts_{0};
 
     /// 本轮的单调起点 (noteTurnStart 记录, noteFirstToken/noteTurnEnd 取值)
     std::atomic<int64_t> turnStartSteadyMs_{0};

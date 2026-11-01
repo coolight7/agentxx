@@ -4,6 +4,7 @@
 #include "agentxx/agent/session_input_sink.h"
 #include "agentxx/event/event_stream.h"
 #include "agentxx/util/exception.h"
+#include "agentxx/util/observability.h"
 #include "agentxx/util/share_store_offload.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -616,8 +617,19 @@ std::string EventHub::valueText(std::string_view sessionId, const Json& value) {
 DeliverResult EventHub::drop(std::string_view reason) {
     ++stats_.dropped;
     ++stats_.droppedByReason[std::string{reason}];
+    if (auto ctx = ctx_.lock(); ctx && ctx->metrics) {
+        ctx->metrics->noteEventDropped();
+    }
     XX_LOGW("[event_hub] event input dropped: {}", reason);
     return DeliverResult::Dropped;
+}
+
+/// 投递成功结算 (计数 + 关键指标)
+void EventHub::noteDelivered() {
+    ++stats_.delivered;
+    if (auto ctx = ctx_.lock(); ctx && ctx->metrics) {
+        ctx->metrics->noteEventDelivered();
+    }
 }
 
 DeliverResult EventHub::deliver(const EventDelivery& d, std::string* reasonOut) {
@@ -654,7 +666,7 @@ DeliverResult EventHub::deliver(const EventDelivery& d, std::string* reasonOut) 
             self->deliver(copy, &ignored);
         });
         setReason({});
-        ++stats_.delivered;
+        noteDelivered();
         return DeliverResult::Queued;
     }
     if (d.delivery == "none") {
@@ -692,7 +704,7 @@ DeliverResult EventHub::deliver(const EventDelivery& d, std::string* reasonOut) 
         if (sink) {
             if (sink->submitTurnInput(d.text, d.source, d.unpausePaused)) {
                 setReason({});
-                ++stats_.delivered;
+                noteDelivered();
                 return DeliverResult::Queued;
             }
             setReason("sink-rejected");
@@ -701,7 +713,7 @@ DeliverResult EventHub::deliver(const EventDelivery& d, std::string* reasonOut) 
         if (cfg_.allowHeadlessTurn && turnRunner_) {
             turnRunner_(d.sessionId, d.text);
             setReason({});
-            ++stats_.delivered;
+            noteDelivered();
             return DeliverResult::Queued;
         }
         if (enqueuePending(agentxx::agent::InputDelivery::NextStep)) {
@@ -718,12 +730,12 @@ DeliverResult EventHub::deliver(const EventDelivery& d, std::string* reasonOut) 
         // 排队等这一轮跑完
         if (sink && sink->submitTurnInput(d.text, d.source, d.unpausePaused)) {
             setReason({});
-            ++stats_.delivered;
+            noteDelivered();
             return DeliverResult::Queued;
         }
         if (enqueuePending(agentxx::agent::InputDelivery::NextStep)) {
             setReason({});
-            ++stats_.delivered;
+            noteDelivered();
             return DeliverResult::Queued;
         }
         setReason("backlog");
@@ -735,7 +747,7 @@ DeliverResult EventHub::deliver(const EventDelivery& d, std::string* reasonOut) 
                           : agentxx::agent::InputDelivery::NextStep;
     if (enqueuePending(mode)) {
         setReason({});
-        ++stats_.delivered;
+        noteDelivered();
         return DeliverResult::Queued;
     }
     setReason("backlog");
@@ -1198,6 +1210,9 @@ size_t EventHub::sweepExpired(int64_t steadyNowMs) {
             continue;
         }
         ++stats_.waitsTimedOut;
+        if (auto ctx = ctx_.lock(); ctx && ctx->metrics) {
+            ctx->metrics->noteEventWaitTimeout();
+        }
         if (entry.wait.spec.notifyOnTimeout) {
             entry.wait.values.clear();
             entry.wait.bytes = 0;
@@ -1308,6 +1323,9 @@ asio::awaitable<EventWait>
                 if (it->second.wait.state == WaitState::Armed) {
                     // 工具自己会把"超时"文本作为结果返回, 因此不投递超时提示
                     ++stats_.waitsTimedOut;
+    if (auto ctx = ctx_.lock(); ctx && ctx->metrics) {
+        ctx->metrics->noteEventWaitTimeout();
+    }
                     finishWait(it->second, WaitState::TimedOut, "timeout", false);
                 }
                 auto result = it->second.wait;

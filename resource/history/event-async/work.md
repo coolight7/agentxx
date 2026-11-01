@@ -88,7 +88,16 @@
 
 ### P4 展示与诊断
 
-- [ ] `KeyMetrics` 事件计数 / 诊断快照 `eventHub` 段
+- [x] `KeyMetrics`: `events.delivered` / `events.dropped` / `events.wait_timeouts` 三个计数
+      (hub 投递/丢弃/等待超时三处接入)
+- [x] 加载快照新增 `event_hub` 段 (`statsJson`), `renderAssemblySnapshot` 输出 `event_hub:` 与
+      `metrics` 下的 `events:` 行
+- [x] `--dump-diagnostics` 新增 `## event hub` 段 (JSON, 不含值正文)
+- [x] 测试: `observability` 补事件计数断言, `event_delivery` 断言投递后
+      `metrics->eventDelivered()` 增长
+
+计划中“TUI 给投递消息加来源标记”**未做**: 投递文本已带 `[Event] <名字>` 前缀 (模型与
+用户都能看出来), 加 `ViewMessage` 来源字段会动 wire 结构, 收益不值。
 
 ## 2. 测试现状 (2026-11-01)
 
@@ -98,7 +107,9 @@
 | `event_tools` | passed=80 failed=0 | 0.31 s |
 | `event_delivery` | passed=44 failed=0 | 17.4 s (每个用例起一次 HTTP 模拟服务 + 端点) |
 | `config_keys` | passed=196 failed=0 (生成物已重生成) | 0.8 s |
-| `event_subagent` | passed=52 failed=0 | 26.8 s (6 个用例各起一次模拟服务) |
+| `event_subagent` | passed=52 failed=0 | 26.2 s (6 个用例各起一次模拟服务) |
+| `observability` | passed=114 failed=0 (含新增事件计数) | 2.7 s |
+| `agent_host` | passed=158 failed=0 (回归: spawnBatch 改造) | 14.5 s |
 | `boundaries` | passed=18 failed=1 | 13 s |
 
 `boundaries` 的失败是**既有问题**, 与本期改动无关: 规则 15 (称呼与用词) 命中
@@ -132,3 +143,7 @@ include/pluginxx/ui/item.h)。该目录是**独立仓库** (嵌套 git 仓库, H
 11. **行尾**: 本仓库部分文件是 CRLF (`conversation_types.h` 原本 904 行 CRLF),
     `agentxx_filesystem_edit` 会把整文件转成 LF, 造成整文件 diff; 该文件已在 P1 提交里
     变为 LF (内容未变), 后续编辑不会再产生同样的噪声。
+12. **不要用“文本替换”把 `++stats_.delivered;` 换成函数调用**: 新写的 `noteDelivered()`
+    里也有一句 `++stats_.delivered;`, 脚本会把函数体自己换成 `noteDelivered();` ——
+    结果是无限递归, ASan 报 `stack-overflow` 且没有调用栈 (现象: 模块跑到某一用例
+    突然崩, 先以为是环境假阳性)。改成函数调用只能手工改, 或替换后立即回读函数体。
