@@ -3,6 +3,7 @@
 #include "agentxx/util/neograph_json_bridge.h"
 #include "agentxx/util/observability.h"
 #include "agentxx/util/share_store_offload.h"
+#include "agentxx/util/tool_result_text.h"
 
 #include "agentxx/event/event_stream.h"
 #include "agentxx/event/events.h"
@@ -122,10 +123,11 @@ asio::awaitable<void> publishToolEvent(
     co_return;
 }
 
-/// 工具结果文本的失败标记 (全项目唯一判定处)
+/// 工具结果文本的失败标记 (全项目唯一判定处, 前缀清单见
+/// [agentxx/util/tool_result_text.h](/agent/lib/include/agentxx/util/tool_result_text.h))
 ///
 /// 既有约定: 工具自身把一个"执行完成但失败"的结果直接写成文本 (见 AgentPrompt 的
-/// Context Markers 段), 常见前缀为:
+/// Context Markers 段), 首行用固定前缀表示失败:
 /// - `[Error: ...]`: 主机侧异常/参数错误 (由本节点拼出), 插件工具内部错误
 /// - `[Permission denied] ...` / `[Repeated call denied by user: ...]`: 权限与重复调用拒绝
 /// - `[Plugin tool timeout]`: 插件工具超时
@@ -133,14 +135,9 @@ asio::awaitable<void> publishToolEvent(
 /// 客户端 (TUI/CLI) 不再看这些前缀: 失败状态经 ToolData::hasError /
 /// WireDelta::hasError 传递, 而标记就在这里一次判定。
 ///
-/// - `args`:
-///     - [text] 工具结果文本
-///
-/// - `return` 结果文本是否表示失败
-bool toolResultTextIsFailure(std::string_view text) {
-    return text.starts_with("[Error") || text.starts_with("[Permission denied")
-           || text.starts_with("[Repeated call denied") || text.starts_with("[Plugin tool timeout");
-}
+/// 实施说明: 实现在 [agentxx/util/tool_result_text.h], 那边同时放着前缀清单 ——
+/// 任何把文本当工具结果返回的生产方 (如 `agentxx_event`) 都能直接复用它做自检。
+using agentxx::util::toolResultTextIsFailure;
 
 /// 解析字符串为数值: 容忍首尾空白与一个前导 '+', 要求整个字符串被完整解析
 /// (std::from_chars 不接受空白与前导 '+', 且允许部分解析, 这里做严格校验)
