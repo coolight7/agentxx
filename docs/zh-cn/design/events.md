@@ -254,7 +254,9 @@ Keep working, or end the turn — you do not need to poll. Use opt=status wait=w
 现在（不改接口表）：插件把值发到总线即可，中枢订阅了 `evt.` 与 `plugin.evt.` 两个前缀：
 
 ```text
-插件 emit_event("evt.chat.group42", {...})   -> 中枢收到事件名 chat.group42
+插件 emitEvent("evt.chat.group42", payload)        // agentxx.agent.runtime 表 / SDK kit
+  -> 插件管理器把主题原样发到该 agent 的总线 (`evt.chat.group42`)
+  -> 中枢前缀订阅收到, 记为事件 chat.group42
 模型  agentxx_event {opt:"watch", event:"chat.group42"}
 ```
 
