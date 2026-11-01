@@ -89,6 +89,12 @@ struct Topic {
 
     /// 上下文手动压缩 (单向事件): EventCompactContext
     inline static constexpr std::string_view SummarizationCompact{"service.summarization.compact"};
+
+    /// ===== 单向事件: 事件中枢生命周期 =====
+    /// 值到达 / 流结束: EventHubValue / EventHubEnded
+    /// - 不带 `evt.` 前缀 (见 agentxx::events::naming), hub 不会订阅到自己
+    inline static constexpr std::string_view HubValue{"agent.hub.value"};
+    inline static constexpr std::string_view HubEnded{"agent.hub.ended"};
 };
 
 /// ===== agent 生命周期 =====
@@ -417,6 +423,27 @@ struct RespSubagentExecute {
 /// 上下文手动压缩 (service.summarization.compact)
 struct EventCompactContext {
     std::string sessionId;
+};
+
+/// ===== 事件中枢 (EventHub) 生命周期 =====
+/// - 主题 `agent.hub.value` / `agent.hub.ended`, **不带** `evt.` 前缀,
+///   因此不会被 hub 自己的值前缀订阅再吃回去 (不会自激)
+/// - 想观测"谁发布了什么值"的插件/UI 订阅这两个主题即可
+struct EventHubValue {
+    /// 事件名 (`evt.` 之后的那个名字)
+    std::string name;
+    /// 值 (紧凑 JSON 文本)
+    std::string valueJson;
+    /// 该事件已发布的值总数
+    uint64_t valueCount = 0;
+};
+
+struct EventHubEnded {
+    std::string name;
+    /// `end` 时附带的摘要 (紧凑 JSON 文本, 无摘要时为空)
+    std::string summaryJson;
+    /// 该事件共发布的值数
+    uint64_t valueCount = 0;
 };
 
 } // namespace events

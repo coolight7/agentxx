@@ -1,6 +1,7 @@
 #include "agentxx-client/config_loader.h"
 
 #include "agentxx/agent/config_static.h"
+#include "agentxx/agent/conversation_types.h"
 #include "agentxx/util/exception.h"
 #include "utilxx_base/container_util.h"
 #include "utilxx_base/env.h"
@@ -775,6 +776,78 @@ static YamlAppConfig parseYamlConfigNode(
 
     // CodeGraph 参数已迁移到插件配置 (yaml `plugin.list` 段 agentxx_codegraph
     // 条目的 args): 主程序不解析其字段语义, 整体原样传递给插件
+
+    // 事件中枢 (yaml `event` 块)
+    // - enable:              是否启用事件中枢与 agentxx_event 工具 (默认 true)
+    // - value_max_bytes:     单值进入上下文的阈值 (字节, 超出转 share store; 默认 32768)
+    // - wait_timeout_ms:     watch 的默认超时 (毫秒, 0 = 不限; 默认 0)
+    // - max_waits_session:   每会话同时挂起的等待数上限 (默认 32)
+    // - allow_headless_turn: 无驱动端时是否允许事件自驱一轮 (默认 false)
+    // - delivery:            watch 的默认投递模式 (默认 next-step)
+    const auto eventNode = mapChild(root, "event");
+    if (isNodePresent(eventNode)) {
+        if (const auto node = mapChild(eventNode, "enable"); isNodePresent(node)) {
+            const auto val
+                = utilxx_base::toLower(resolveEnvVars(nodeScalarText(node), dotEnvVars, overrideEnvVars));
+            if (val == "true" || val == "1" || val == "yes" || val == "on") {
+                cfg.eventEnable = true;
+            } else if (val == "false" || val == "0" || val == "no" || val == "off" || val.empty()) {
+                cfg.eventEnable = false;
+            } else {
+                XX_LOGW("[Config] Warning: unknown event.enable '{}', fallback to true", val);
+            }
+        }
+        auto readNumber = [&](std::string_view key, int64_t& out, int64_t minValue) {
+            const auto node = mapChild(eventNode, key);
+            if (!isNodePresent(node)) {
+                return;
+            }
+            const auto val    = resolveEnvVars(nodeScalarText(node), dotEnvVars, overrideEnvVars);
+            int64_t    parsed = 0;
+            if (parseFullNumber(val, parsed) && parsed >= minValue) {
+                out = parsed;
+            } else {
+                XX_LOGW(
+                    "[Config] Warning: invalid event.{} '{}' (needs >= {}), keeping default {}",
+                    key,
+                    val,
+                    minValue,
+                    out
+                );
+            }
+        };
+        readNumber("value_max_bytes", cfg.eventValueMaxBytes, 0);
+        readNumber("wait_timeout_ms", cfg.eventWaitTimeoutMs, 0);
+        readNumber("max_waits_session", cfg.eventMaxWaitsSession, 0);
+        if (const auto node = mapChild(eventNode, "allow_headless_turn"); isNodePresent(node)) {
+            const auto val
+                = utilxx_base::toLower(resolveEnvVars(nodeScalarText(node), dotEnvVars, overrideEnvVars));
+            if (val == "true" || val == "1" || val == "yes" || val == "on") {
+                cfg.eventAllowHeadlessTurn = true;
+            } else if (val == "false" || val == "0" || val == "no" || val == "off" || val.empty()) {
+                cfg.eventAllowHeadlessTurn = false;
+            } else {
+                XX_LOGW(
+                    "[Config] Warning: unknown event.allow_headless_turn '{}', fallback to false",
+                    val
+                );
+            }
+        }
+        if (const auto node = mapChild(eventNode, "delivery"); isNodePresent(node)) {
+            const auto val
+                = utilxx_base::toLower(resolveEnvVars(nodeScalarText(node), dotEnvVars, overrideEnvVars));
+            if (agentxx::agent::InputDelivery::known(val) && val != "collect") {
+                cfg.eventDelivery = val;
+            } else {
+                XX_LOGW(
+                    "[Config] Warning: unknown event.delivery '{}' (next-step|inject|next-turn|none), "
+                    "keeping default {}",
+                    val,
+                    cfg.eventDelivery
+                );
+            }
+        }
+    }
 
     // 开发者模式 (yaml `dev_mode`, 默认 false; 顶层标量键)
     // - 开启时才收集"记录数据" (功能点调用统计 / 钩子派发记录 / 成功调用日志);

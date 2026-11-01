@@ -441,6 +441,36 @@ public:
     /// - 由 yaml `subagent.enable` 配置
     bool enableSubagent = true;
 
+    // -------------------------------------------------------------------
+    // 事件中枢 (`event.*`; 见 [hub.h](/agent/lib/include/agentxx/event/hub.h))
+    // -------------------------------------------------------------------
+
+    /// 是否启用事件中枢与 `agentxx_event` 工具 (yaml `event.enable`, 默认 true)
+    /// - 关闭后: 不注册工具, hub 不建记录也不接总线上的值; 其余行为与旧版一致
+    bool enableEvent = true;
+
+    /// 事件单值进入上下文前的阈值, 单位为**字节** (yaml `event.value_max_bytes`, 默认 32 KB)
+    /// - 超过时把值转存会话 share store, 文本里只留取回提示与开头片段
+    ///   (与工具输出压缩同一套实现, 见 [agentxx::util::offloadShareStoreIfOversized])
+    /// - 0 表示不限制
+    size_t eventValueMaxBytes = 32 * 1024;
+
+    /// `agentxx_event opt=watch` 未指定超时时的默认值, 单位毫秒
+    /// (yaml `event.wait_timeout_ms`, 默认 0 = 不限)
+    int64_t eventWaitTimeoutMs = 0;
+
+    /// 每个会话允许同时挂起的等待数上限 (yaml `event.max_waits_session`, 默认 32)
+    size_t eventMaxWaitsSession = 32;
+
+    /// 没有会话驱动端 (headless 嵌入方自己跑轮次) 时, 是否允许事件自驱一轮
+    /// (yaml `event.allow_headless_turn`, 默认 false)
+    /// - 默认关闭: 没有人看结果时不应该烧额度
+    bool eventAllowHeadlessTurn = false;
+
+    /// `watch` 未指定投递模式时的默认值 (yaml `event.delivery`, 默认 `next-step`)
+    /// - 取值 next-step / inject / next-turn / none
+    std::string eventDelivery = "next-step";
+
     /// 是否启用 git worktree 模式 (yaml `worktree.enable`, 默认关闭)
     /// - 开启后注册 `agentxx_git_worktree` 工具 + 程序初始化时一次性追加
     ///   worktree 行为提示词到 system prompt (提示模型在涉及代码修改的任务

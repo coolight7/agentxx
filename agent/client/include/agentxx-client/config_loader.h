@@ -106,6 +106,20 @@ struct YamlAppConfig {
     agent::PermissionMode permissionMode = agent::PermissionMode::Ask;
     /// subagent 总开关 (yaml `subagent.enable`, 默认 true)
     bool enableSubagent = true;
+    /// 事件中枢开关 (yaml `event.enable`, 默认 true)
+    /// - 关闭后不注册 `agentxx_event` 工具, 中枢也不接总线上的值
+    bool eventEnable = true;
+    /// 事件单值进入上下文的阈值 (字节; yaml `event.value_max_bytes`, 默认 32768)
+    /// - 超出时转存会话 share store, 文本里给 id 与取回提示
+    int64_t eventValueMaxBytes = 32 * 1024;
+    /// `watch` 的默认超时 (毫秒; yaml `event.wait_timeout_ms`, 0 = 不限)
+    int64_t eventWaitTimeoutMs = 0;
+    /// 每个会话的等待数上限 (yaml `event.max_waits_session`, 默认 32)
+    int64_t eventMaxWaitsSession = 32;
+    /// 无驱动端时是否允许事件自驱一轮 (yaml `event.allow_headless_turn`, 默认 false)
+    bool eventAllowHeadlessTurn = false;
+    /// `watch` 的默认投递模式 (yaml `event.delivery`, 默认 next-step)
+    std::string eventDelivery = "next-step";
     /// git worktree 模式开关 (yaml `worktree.enable`, 默认 false)
     /// - 开启后注册 agentxx_git_worktree 工具 + 注入行为提示词, 模型在代码
     ///   修改任务开始时创建独立 worktree 并绑定会话 (详见

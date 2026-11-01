@@ -574,6 +574,9 @@ struct MessageQueueItem {
     int64_t                      createdAtMs = 0; ///< 创建时间戳 (毫秒)
     /// 投递模式 (取值见 agentxx::agent::InputDelivery; 空 = next-turn)
     std::string delivery;
+    /// 来源标记 (`event:<名字>` 等; 用户输入为空)
+    /// - 只在服务端内部使用, **不进 wire 序列化** (客户端结构与协议不变)
+    std::string source;
     /// 是否为进程重启后恢复的待确认输入:
     /// 恢复项不会自动执行, 由用户确认 (发送新输入解除暂停) 或删除
     bool recovered = false;

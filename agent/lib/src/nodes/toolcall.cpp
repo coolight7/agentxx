@@ -6,6 +6,7 @@
 
 #include "agentxx/event/event_stream.h"
 #include "agentxx/event/events.h"
+#include "agentxx/event/hub.h"
 #include "agentxx/middlewares/interrupt_presets.h"
 #include "agentxx/nodes/session_context.h"
 #include "agentxx/plugin/tool_registry.h"
@@ -41,6 +42,85 @@
 namespace agentxx {
 namespace nodes {
 namespace {
+
+/// 工具执行事件 (总线 typed 事件 + 事件中枢的 `tool.end.<工具名>` 值)
+///
+/// - 两条路都是"先问有没有人关心再发": 没有订阅者/没人等时零开销 —— 工具调用是
+///   热路径 (一轮可能几十次), 不能每次都构造事件
+/// - 只带元信息 (工具名 / 调用 id / 是否有错 / 结果字节数), 不带结果正文: 一次工具
+///   输出可能很大, 需要正文的工具自己 `emit` 到指定事件
+///
+/// - `args`:
+///     - [ctx]          agent 上下文 (取总线与中枢)
+///     - [sessionId]    会话 id (空 = 未知, 只发不带会话信息的版本)
+///     - [isStart]      true = 开始, false = 结束
+///     - [hasError]     结束时有错 (取消/中断也算)
+///     - [resultBytes]  结果文本字节数
+asio::awaitable<void> publishToolEvent(
+    const std::shared_ptr<agentxx::agent::AgentContext>& ctx,
+    std::string_view                                     sessionId,
+    std::string_view                                     toolName,
+    std::string_view                                     toolCallId,
+    bool                                                 isStart,
+    bool                                                 hasError,
+    size_t                                               resultBytes
+) {
+    if (!ctx) {
+        co_return;
+    }
+    const auto agentName = ctx->agentConfig ? ctx->agentConfig->agentName : std::string{"Agentxx"};
+    if (isStart) {
+        if (ctx->bus
+            && ctx->bus->hasListeners<agentxx::events::EventToolCallStart>(
+                agentxx::events::Topic::ToolCallStart
+            )) {
+            co_await ctx->bus->publish(
+                agentxx::events::Topic::ToolCallStart,
+                agentxx::events::EventToolCallStart{
+                    .agentName  = agentName,
+                    .sessionId  = std::string{sessionId},
+                    .toolName   = std::string{toolName},
+                    .toolCallId = std::string{toolCallId},
+                }
+            );
+        }
+        co_return;
+    }
+    if (ctx->bus
+        && ctx->bus->hasListeners<agentxx::events::EventToolCallEnd>(
+            agentxx::events::Topic::ToolCallEnd
+        )) {
+        co_await ctx->bus->publish(
+            agentxx::events::Topic::ToolCallEnd,
+            agentxx::events::EventToolCallEnd{
+                .agentName  = agentName,
+                .sessionId  = std::string{sessionId},
+                .toolName   = std::string{toolName},
+                .toolCallId = std::string{toolCallId},
+                .hasError   = hasError,
+            }
+        );
+    }
+    if (ctx->eventHub) {
+        const auto hubEvent = fmt::format("tool.end.{}", toolName);
+        if (ctx->eventHub->wants(hubEvent)) {
+            std::string err;
+            if (!ctx->eventHub->publishValue(
+                    hubEvent,
+                    utilxx_base::Json{
+                        {"toolCallId",  std::string{toolCallId}},
+                        {"sessionId",   std::string{sessionId}},
+                        {"hasError",    hasError         },
+                        {"resultBytes", resultBytes      },
+                    },
+                    &err
+                )) {
+                XX_LOGW("[event_hub] publish `{}` failed: {}", hubEvent, err);
+            }
+        }
+    }
+    co_return;
+}
 
 /// 工具结果文本的失败标记 (全项目唯一判定处)
 ///
@@ -1181,6 +1261,22 @@ asio::awaitable<void> ToolcallWrapNode::runPreparedToolCallGuarded(
     std::exception_ptr&                   outError,
     bool&                                 outInterrupted
 ) const {
+    // 工具执行事件源: 每次调用开始/结束各发一次 (没人订阅/没人等时零开销,
+    // 见 publishToolEvent)。放在本函数而不是批处理循环里, 顺序与并发两条路径都能覆盖
+    const auto toolSessionId = prepared.args.is_object()
+                                   ? prepared.args.value("sessionId", std::string{})
+                                   : std::string{};
+    if (auto ctx = agentContext.lock()) {
+        co_await publishToolEvent(
+            ctx,
+            toolSessionId,
+            prepared.name,
+            prepared.id,
+            /*isStart=*/true,
+            /*hasError=*/false,
+            /*resultBytes=*/0
+        );
+    }
     try {
         auto msg = co_await runPreparedToolCall(prepared, &outError, &outInterrupted);
         if (msg.has_value()) {
@@ -1205,6 +1301,32 @@ asio::awaitable<void> ToolcallWrapNode::runPreparedToolCallGuarded(
             outError
                 = std::make_exception_ptr(neograph::graph::CancelledException("tool call aborted"));
         }
+    }
+
+    // 工具执行结束: 发布 `tool.end` / `tool.end.<工具名>`
+    // - 只带元信息 (是否有错 + 结果字节数), 不带结果正文: 一个工具的完整输出可能
+    //   很大, 需要正文就让它自己 emit 到指定事件
+    if (auto ctx = agentContext.lock()) {
+        bool   hasError = false;
+        size_t bytes    = 0;
+        if (outMsg.has_value()) {
+            bytes = outMsg->content.size();
+            if (outMsg->extra.is_object() && outMsg->extra.contains("hasError")) {
+                hasError = outMsg->extra["hasError"].get<bool>();
+            }
+        } else {
+            // 没有结果 = 取消/中断路径
+            hasError = true;
+        }
+        co_await publishToolEvent(
+            ctx,
+            toolSessionId,
+            prepared.name,
+            prepared.id,
+            /*isStart=*/false,
+            hasError,
+            bytes
+        );
     }
     co_return;
 }

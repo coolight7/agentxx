@@ -31,7 +31,7 @@ namespace agent {
 /// - 提供会话执行 (runTurnAsync) 与中断恢复
 /// - 子类通过 override 虚函数自定义 middleware / tool / 图结构
 /// - 支持多实例: 每个 BaseAgent 使用独立的 GraphRegistry, 不依赖全局 NodeFactory
-class BaseAgent {
+class BaseAgent : public std::enable_shared_from_this<BaseAgent> {
 public:
 
     /// 主协程调度器
@@ -205,6 +205,13 @@ protected:
     /// - 构造函数里已调用一次 (插件加载阶段就需要总线, 见调用点的说明)
     /// - 幂等: 总线已存在时保留原对象, 插件早先挂上的订阅不失效
     void initEventBus();
+
+    /// 创建事件中枢 (值 / 状态 / 等待 / 投递) 并挂到 agent 总线上
+    /// - 按 AgentConfig 的 `event.*` 填预算与默认值
+    /// - 注入"跑一轮"回调: 无驱动端 (headless) 且 `event.allow_headless_turn` 时
+    ///   由中枢自己开一轮 (否则只做延迟投递, 不烧额度)
+    /// - 注入后重启时经 shutdownAsync 的 closeAll 清空等待与定时器
+    void initEventHub(asio::any_io_executor executor);
 
     /// 收集中间件自带的 toolcalls 到工具列表
     void initMiddlewareTools(std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>& tools);

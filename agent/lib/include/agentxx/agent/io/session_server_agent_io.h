@@ -2,6 +2,7 @@
 
 #include "agentxx/agent/io/agent_io.h"
 #include "agentxx/agent/io/wire_protocol.h"
+#include "agentxx/agent/session_input_sink.h"
 #include "asio/any_io_executor.hpp"
 #include "asio/awaitable.hpp"
 #include "asio/experimental/concurrent_channel.hpp"
@@ -54,6 +55,7 @@ class Session;
 /// - 线程模型: 所有成员状态 (clients_/deltaBuffer_/pending_/graceTimer_) 仅在 ex_ 线程访问，
 ///   无需锁保护; stop() 通过 asio::dispatch(ex_) 保证在 ex_ 线程执行清理
 class SessionServerAgentIO : public AgentIOBase,
+                             public agentxx::agent::SessionInputSink,
                              public std::enable_shared_from_this<SessionServerAgentIO> {
 public:
 
@@ -162,9 +164,21 @@ public:
         return config_.interruptTimeout;
     }
 
-    bool turnActive() const noexcept {
-        return turnActive_.load(std::memory_order_acquire);
+    /// 会话是否还有待跑的轮次 (正在跑, 或队列里还有排队的输入)
+    /// - 队列里还有条目也算"忙": 事件投递据此决定"插进本次轮次"还是"排队"
+    /// - override [SessionInputSink::turnActive]
+    bool turnActive() const noexcept override {
+        return turnActive_.load(std::memory_order_acquire) || !messageQueue_.empty();
     }
+
+    /// 作为新一轮输入入队 ([SessionInputSink] 实现)
+    /// - 与用户输入走同一条队列, 但带上来源标记 (`event:<名字>`)
+    /// - 端点已停止时返回 false (调用方计丢弃)
+    bool submitTurnInput(
+        std::string_view text,
+        std::string_view source,
+        bool             unpausePaused
+    ) override;
 
     /// 驱动循环 run() 是否仍在运行 (用于停止时等待其退出)
     bool running() const noexcept {
@@ -306,13 +320,18 @@ private:
     void sendMessageQueueUpdate();
 
     /// 追加一条排队消息并同步客户端 (空闲时解除暂停并唤醒驱动循环)
+    /// - `source` 来源标记 (事件投递用 `event:<名字>`; 只在服务端内部使用)
+    /// - `unpauseHalted` 空闲且队列处于暂停态时是否解除暂停 (默认 true = 用户输入语义;
+    ///   事件投递默认 false, 保持"积压不自动继续")
     /// - `return` 分配的条目 id (内容为空时返回空串, 不追加)
     std::string pushMessageQueueItem(
         std::string                  text,
-        std::string                  model       = "",
-        std::vector<MediaAttachment> attachments = {},
-        std::string                  delivery    = std::string{InputDelivery::NextTurn},
-        bool                         recovered   = false
+        std::string                  model        = "",
+        std::vector<MediaAttachment> attachments  = {},
+        std::string                  delivery     = std::string{InputDelivery::NextTurn},
+        bool                         recovered    = false,
+        std::string                  source       = {},
+        bool                         unpauseHalted = true
     );
     void interruptAndRunNext();
     void clearMessageQueue();

@@ -282,6 +282,14 @@ static void applyServerRuntimeConfig(
 
     // 子代理开关 (yaml `subagent.enable`, 默认 true)
     config->enableSubagent = yamlCfg.enableSubagent;
+    // 事件中枢 (yaml `event.*`): 开关 / 单值阈值 / 默认超时 / 每会话等待上限 /
+    // 无驱动端自驱 / 默认投递模式
+    config->enableEvent             = yamlCfg.eventEnable;
+    config->eventValueMaxBytes      = static_cast<size_t>(std::max<int64_t>(0, yamlCfg.eventValueMaxBytes));
+    config->eventWaitTimeoutMs      = yamlCfg.eventWaitTimeoutMs;
+    config->eventMaxWaitsSession    = static_cast<size_t>(std::max<int64_t>(0, yamlCfg.eventMaxWaitsSession));
+    config->eventAllowHeadlessTurn  = yamlCfg.eventAllowHeadlessTurn;
+    config->eventDelivery           = yamlCfg.eventDelivery;
     // git worktree 模式 (yaml `worktree.enable`, 默认 false)
     config->enableWorktree = yamlCfg.worktreeEnable;
     // 开发者模式 (yaml `dev_mode`, 默认 false): 只控制"记录数据"的收集

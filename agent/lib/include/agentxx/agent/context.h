@@ -6,6 +6,7 @@
 #include "asio/awaitable.hpp"
 #include "asio/thread_pool.hpp"
 #include "utilxx_base/log.h"
+#include <algorithm>
 #include <atomic>
 #include <cassert>
 #include <chrono>
@@ -22,6 +23,9 @@
 
 namespace agentxx::events {
 class EventBus;
+/// 事件中枢 (值 / 状态 / 等待; 见
+/// [hub.h](/agent/lib/include/agentxx/event/hub.h))
+class EventHub;
 } // namespace agentxx::events
 
 namespace neograph::graph {
@@ -62,6 +66,8 @@ class AgentIOBase;
 class ModelProviderRegistry;
 class SessionStore;
 class AgentHost;
+/// 会话输入入口 (由当前驱动这个会话的端点实现)
+class SessionInputSink;
 /// 会话资源应用器 (Skill/Memory/MCP 扩展; 完整定义见
 /// [resource_applier.h](/agent/lib/include/agentxx/agent/resource_applier.h))
 class AgentResourceApplier;
@@ -177,6 +183,11 @@ public:
 
     /// 本会话的 IO
     std::shared_ptr<AgentIOBase> io = nullptr;
+
+    /// 当前驱动这个会话的端点的输入入口 (事件投递用它往会话里塞一轮输入)
+    /// - 弱引用: 端点停止时必须清空, 否则会话会握着已停的端点
+    /// - 仅 io 线程读写 (与 io/messages 同一约束)
+    std::weak_ptr<SessionInputSink> inputSink;
 
     /// 本会话的事件总线 (会话级事件: interrupt/permission/tool 等)
     std::shared_ptr<agentxx::events::EventBus> bus = nullptr;
@@ -502,9 +513,19 @@ public:
     std::vector<SessionPendingInput> takePendingInputs(std::string_view delivery);
 
     /// 待注入输入条数 (诊断/测试)
-    size_t pendingInputCount() const {
+    /// - `sourcePrefix` 非空时只数来源匹配的条目 (事件投递用 `event:` 统计背压)
+    size_t pendingInputCount(std::string_view sourcePrefix = {}) const {
         assertIoThread();
-        return pendingInputs_.size();
+        if (sourcePrefix.empty()) {
+            return pendingInputs_.size();
+        }
+        return static_cast<size_t>(std::count_if(
+            pendingInputs_.begin(),
+            pendingInputs_.end(),
+            [&](const SessionPendingInput& input) {
+                return std::string_view{input.source}.starts_with(sourcePrefix);
+            }
+        ));
     }
 
     // -------------------------------------------------------------------
@@ -747,6 +768,12 @@ public:
     ///   存在; 节点/middleware/tool 经 weak_ptr<AgentContext> 取用
     /// - 完整定义在使用点 ([base_agent.h](/agent/lib/include/agentxx/agent/base_agent.h)) 引入
     std::shared_ptr<agentxx::events::EventBus> bus = nullptr;
+
+    /// 事件中枢 (值 / 状态 / 等待句柄 / 投递)
+    /// - 由 BaseAgent::init 的 `event_hub` 步骤创建 (晚于 event_bus 与
+    ///   middleware_context: 投递超长值时要经中间件上下文取会话 share store)
+    /// - 订阅 agent 总线的 `evt.` / `plugin.evt.` 前缀; 关闭时随 agent 一并清空
+    std::shared_ptr<agentxx::events::EventHub> eventHub = nullptr;
 
     /// 模型 Provider 注册表 (共享)
     /// - 由 BaseAgent 在 init() 中创建并注入

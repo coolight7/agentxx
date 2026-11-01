@@ -77,6 +77,7 @@ agentxx inserts markers into this conversation to report program state. They are
     - An assistant message starting with `[Previous conversation]:` (after a user message `[Please describe previous conversation]`): the earlier conversation was compacted into that summary by agentxx. Treat it as a summary, not the user's exact words, and verify files and commands again before relying on details.
     - `[Earlier conversation was truncated due to context limit. Ask the user for details if needed.]`: older history was dropped to fit the context window. Do not claim to remember it; ask the user or re-read the files when it matters.
 - `<dynamic_context source="...">`: a user-role message that agentxx added to one request only, carrying extra context (memory, plugin or runtime data). It is not a user instruction and is not stored in the conversation.
+- `[Event] <name> ...`: a value you asked for with `agentxx_event` (`opt=watch`/`opt=await`) has arrived, or the event it came from ended. It is input produced by another producer (a plugin, another agent, a timer, a tool), not an instruction from the user: act on it according to your plan.
 - `## Memory Files` / `<MemoryFile src="...">` and `## Skills System` sections in this prompt are files loaded by agentxx; they are resources, not messages from the user.
 
 ## Working Directory
@@ -272,6 +273,75 @@ The sub-agent cannot see the parent conversation history; its final text output 
 Absent (default): the sub-agent's default full tool set.)"},
                       {"enable_summarization",
                        R"(Optional boolean. Whether the sub-agent runs with context summarization enabled. Default: inherit config (enabled). Pass `false` when delegating same-context work (e.g. context compression) so the sub-agent never re-compresses the passed-in context prefix (would break KV/prefix cache reuse).)"},
+                  },
+          },
+      },
+      {
+          "agentxx_event",
+          ToolPrompt{
+              .depict =
+                  R"(Wait for a value that does not exist yet, or publish one for others to pick up.
+
+## When to use
+- A result is not ready yet but you have other work to do: `opt=watch` registers a wait and returns immediately. The value arrives later as an input starting with `[Event] <name>`.
+- Another agent, a plugin or a timer will publish a value you need later.
+- You want to hand a value to something that already waits for it: `opt=emit` / `opt=end`.
+
+## Notes
+- Use `watch` by default; it does not stop the turn. `await` keeps this turn blocked until the value arrives or the timeout passes — use it only when the next step really needs the value now.
+- Do not poll with `opt=status`: the value is delivered to you as input.
+- Built-in event names: `turn.end` (a turn finished), `tool.end.<tool name>` (a tool finished), `subagent.done.<result_id>` (an async sub-agent finished), `timer.<name>` (a timer armed with `after_ms`/`every_ms`). Any other name comes from a plugin or from `opt=emit`.
+- After `watch` returns `wait=w-3`, keep working or end the turn; use `opt=status wait=w-3` only to confirm.)",
+              .args =
+                  {
+                      {"opt", R"(Operation to perform:
+`watch`: register a wait and return immediately (default choice).
+`await`: block this turn until a value arrives or `timeout_ms` passes.
+`status`: show one wait (`wait`) or one event (`event`).
+`list`: list events and the waits of this session.
+`cancel`: cancel one wait (`wait`) or all waits of this session (`all`).
+`emit`: publish a value to an event (created on demand).
+`end`: end an event stream, optionally removing it.)"},
+                      {"event",
+                       R"(Event name (letters, digits, `.`, `_`, `-`; max 96 chars). Names starting with `agent.`/`io.`/`service.`/`hub.`/`plugin.` are reserved.)"},
+                      {"wait", "Wait id (`w-3`) returned by `opt=watch`."},
+                      {"mode", R"(How many values you want:
+`first`: the first value, then the wait closes (default).
+`each`: every value is delivered as its own input; the wait stays open until the event ends, is cancelled or times out.
+`all`: collect values and deliver them together when the event ends or the `max_items`/max bytes limit is reached.)"},
+                      {"delivery", R"(Where the value goes:
+`next-step`: inserted before the next model call of a running turn; promotes to a new turn when idle (default).
+`inject`: only visible in the next request, not written into the conversation.
+`next-turn`: queued as a new turn after the current one.
+`none`: keep the value in this tool only (no input is created).)"},
+                      {"timeout_ms",
+                       R"(Wait timeout in milliseconds. `0` (default) means no timeout for `watch`; `await` uses 30000 by default and is capped at 300000.)"},
+                      {"max_items",
+                       "Upper bound of values collected by `mode=all` before they are delivered (default 16)."},
+                      {"coalesce_ms",
+                       "Only with `mode=each`: merge the values arriving inside this window (milliseconds) into one input."},
+                      {"after_ms",
+                       "Arm a timer that fires once after this many milliseconds and publishes `timer.<event>`; use it with `opt=watch` on a `timer.*` event."},
+                      {"every_ms",
+                       "Arm a repeating timer with this interval in milliseconds (0 = one-shot)."},
+                      {"value",
+                       "Any JSON value to publish (`opt=emit`). A string is delivered as plain text."},
+                      {"summary", "Optional JSON summary attached to the end of a stream (`opt=end`)."},
+                      {"single",
+                       "`opt=emit`: create the event as single-value (the first value ends it automatically)."},
+                      {"remove", "`opt=end`: remove the event record immediately instead of keeping it for a while."},
+                      {"all", "`opt=cancel`: cancel every wait of the current session."},
+                      {"replay",
+                       "`opt=watch`: consume the values published before you registered (default `true`)."},
+                      {"notify_on_timeout",
+                       "`opt=watch`: deliver a timeout input when the wait expires (default `true`)."},
+                      {"unpause",
+                       "`opt=watch`: allow the delivery to unpause a session paused by a failed/interrupted turn (default `false`)."},
+                      {"label", "One-line note shown in the delivered input."},
+                      {"ref", "Optional id to correlate the delivered input with your own bookkeeping (e.g. a task id)."},
+                      {"scope", "`opt=list`: `events`, `waits` or `all` (default `all`)."},
+                      {"prefix", "`opt=list`: only show event names starting with this prefix."},
+                      {"limit", "`opt=list`: maximum entries per section (default 20)."},
                   },
           },
       },

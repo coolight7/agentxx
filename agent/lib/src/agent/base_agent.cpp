@@ -6,7 +6,11 @@
 #include "agentxx/agent/checkpoint_store.h"
 #include "agentxx/agent/config_static.h"
 #include "agentxx/agent/io/session_server_agent_io.h"
+#include "agentxx/agent/session_input_sink.h"
 #include "agentxx/agent/session_store.h"
+#include "agentxx/event/event_stream.h"
+#include "agentxx/event/events.h"
+#include "agentxx/event/hub.h"
 #include "agentxx/feature/registry.h"
 #include "agentxx/middlewares/permission.h"
 #include "agentxx/middlewares/prompt_source_refresh.h"
@@ -15,6 +19,7 @@
 #include "agentxx/nodes/graph_conditions.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/protocol/provider_common.h"
+#include "agentxx/tools/event.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/observability.h"
 #include "agentxx/util/share_store_offload.h"
@@ -87,6 +92,80 @@ BaseAgent::BaseAgent(std::shared_ptr<agentxx::agent::AgentConfig> in_config) {
         }
     }
 }
+
+namespace {
+
+/// 事件中枢: 只在"有人等"时发布内建事件
+///
+/// `turn.*` / `tool.*` 每轮、每次工具调用都会产生; 没人等它们时建记录只会白占内存,
+/// 因此先问 hub 要不要 (已有记录或有挂起的等待才算要)。
+void publishHubValueIfWanted(
+    const std::shared_ptr<AgentContext>& ctx,
+    std::string_view                     event,
+    utilxx_base::Json                    value
+) {
+    if (!ctx || !ctx->eventHub || event.empty()) {
+        return;
+    }
+    if (!ctx->eventHub->wants(event)) {
+        return;
+    }
+    std::string err;
+    if (!ctx->eventHub->publishValue(event, std::move(value), &err)) {
+        XX_LOGW("[event_hub] publish `{}` failed: {}", event, err);
+    }
+}
+
+/// 轮末兜底: 把残留的 next-step 待注入输入提升为下一轮输入
+///
+/// next-step 只在 modelcall 开头被取用: 输入若落在"最后一次 modelcall 之后、轮次
+/// 结束之前", 它会一直躺在待注入队列里, 直到下一次有人开一轮 —— 而事件触发的场景
+/// 里可能永远不会有人开轮 (客户端用 delivery=next-step 发来的输入同理)。
+///
+/// - 只在有驱动端 (`Session::inputSink`) 时提升: 无驱动端时没人接, 留在原处
+/// - 提升后不再写回待注入队列 (避免自己又留在原地)
+void rolloverLeftoverNextStepInputs(
+    const std::shared_ptr<agentxx::agent::Session>& session,
+    std::string_view                                sessionId
+) {
+    if (!session || !session->isIoThread()) {
+        return;
+    }
+    auto sink = session->inputSink.lock();
+    if (!sink) {
+        return;
+    }
+    auto inputs = session->takePendingInputs(agentxx::agent::InputDelivery::NextStep);
+    if (inputs.empty()) {
+        return;
+    }
+    std::string text;
+    for (const auto& input : inputs) {
+        if (!text.empty()) {
+            text += "\n\n";
+        }
+        text += input.text;
+    }
+    if (!sink->submitTurnInput(text, "event:pending-rollover", false)) {
+        // 提交失败: 原样放回, 内容不丢
+        for (auto& input : inputs) {
+            session->enqueuePendingInput(std::move(input));
+        }
+        XX_LOGW(
+            "[event_hub] rollover of {} leftover next-step input(s) rejected (session={})",
+            inputs.size(),
+            sessionId
+        );
+        return;
+    }
+    XX_LOGI(
+        "[event_hub] rolled {} leftover next-step input(s) into the next turn (session={})",
+        inputs.size(),
+        sessionId
+    );
+}
+
+} // namespace
 
 /// 递归检查工具参数 JSON Schema 的合法性 (含 tool prompt 填充后的定义)
 /// - 背景: 严格网关 (SCNet / opencode Console Go / Gemini 等) 会校验 tools schema,
@@ -364,8 +443,27 @@ asio::awaitable<void> BaseAgent::init() {
     });
 
     steps.push_back(InitStep{
-        .name  = "plugin_system",
+        .name  = "event_hub",
         .after = "middleware_context",
+        .run   = [&]() -> asio::awaitable<void> {
+            // 事件中枢: 建在事件总线之上 (值从 `evt.` 前缀订阅进来), 晚于
+            // middleware_context 创建 —— 投递超长值时要经中间件上下文取会话 share store
+            // - 关闭 (event.enable=false) 时不创建: 工具不注册, 也没有任何行为变化
+            initEventHub(co_await asio::this_coro::executor);
+            co_return;
+        },
+        .rollback =
+            [this]() {
+                if (agentContext->eventHub) {
+                    agentContext->eventHub->closeAll("init-rollback");
+                    agentContext->eventHub.reset();
+                }
+            },
+    });
+
+    steps.push_back(InitStep{
+        .name  = "plugin_system",
+        .after = "event_hub",
         .run   = [&]() -> asio::awaitable<void> {
             // 插件系统加载: 工具注册表 + 插件管理器 (挂在 AgentContext, 供
             // ToolcallWrapNode/ModelCallWrapNode/中间件栈取用)
@@ -875,6 +973,65 @@ void BaseAgent::initEventBus() {
     agentContext->bus = std::make_shared<agentxx::events::EventBus>(ioCtx->get_executor());
 }
 
+void BaseAgent::initEventHub(asio::any_io_executor executor) {
+    const auto& config = agentContext->agentConfig;
+    if (config && !config->enableEvent) {
+        XX_LOGI("[event_hub] disabled by config (event.enable=false)");
+        return;
+    }
+    agentxx::events::EventHub::Config hubConfig;
+    if (config) {
+        if (config->eventValueMaxBytes > 0) {
+            hubConfig.valueBytes = config->eventValueMaxBytes;
+        }
+        if (config->eventMaxWaitsSession > 0) {
+            hubConfig.maxWaitsPerSession = config->eventMaxWaitsSession;
+        }
+        hubConfig.waitTimeoutDefault = std::chrono::milliseconds{config->eventWaitTimeoutMs};
+        hubConfig.allowHeadlessTurn  = config->eventAllowHeadlessTurn;
+        if (!config->eventDelivery.empty()) {
+            hubConfig.deliveryDefault = config->eventDelivery;
+        }
+    }
+    auto hub = std::make_shared<agentxx::events::EventHub>(executor, agentContext, hubConfig);
+    // 无驱动端 (嵌入方自己调 runTurnAsync) 时按配置决定是否由中枢自己开一轮。
+    // 这里只登记回调, 是否真的调用由 hub 的 allowHeadlessTurn 与"有无 sink"决定。
+    std::weak_ptr<BaseAgent> weakSelf = weak_from_this();
+    hub->setTurnRunner([weakSelf](std::string sessionId, std::string text) {
+        auto self = weakSelf.lock();
+        if (!self || !self->agentContext || self->agentContext->isShuttingDown()) {
+            return;
+        }
+        auto executor = self->agentContext->bus ? self->agentContext->bus->executor()
+                                                : self->ioCtx->get_executor();
+        asio::co_spawn(
+            executor,
+            [self, sessionId = std::move(sessionId), text = std::move(text)](
+            ) -> asio::awaitable<void> {
+                auto result = co_await self->runTurnAsync(sessionId, text, nullptr, {}, {});
+                XX_LOGD(
+                    "[event_hub] headless turn finished: session={} hasError={}",
+                    sessionId,
+                    result.hasError
+                );
+            },
+            asio::detached
+        );
+    });
+    hub->attachBus(agentContext->bus);
+    agentContext->eventHub = std::move(hub);
+    XX_LOGD(
+        "[event_hub] ready: maxEvents={} maxWaits={} maxWaitsPerSession={} valueBytes={} "
+        "delivery={} allowHeadlessTurn={}",
+        hubConfig.maxEvents,
+        hubConfig.maxWaits,
+        hubConfig.maxWaitsPerSession,
+        hubConfig.valueBytes,
+        hubConfig.deliveryDefault,
+        hubConfig.allowHeadlessTurn
+    );
+}
+
 void BaseAgent::initRegisterNodes(neograph::graph::GraphRegistry& registry) {
     // agentxx 图条件 (如 xx_has_tool_calls): 注册到本 agent 的 registry,
     // 并登记到进程级全局表 (自建 registry / 直接 GraphEngine::compile 的场景也能解析)
@@ -1142,6 +1299,11 @@ asio::awaitable<void> BaseAgent::initMiddleware() {
 asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> BaseAgent::initTools() {
     std::vector<std::unique_ptr<agentxx::tools::XXToolBase>> tools{};
     tools.push_back(std::make_unique<agentxx::tools::SessionShareStoreTool>(agentContext));
+    // 事件中枢工具: 挂起等待 / 阻塞等待 / 查状态 / 取消 / 发布
+    // - 只在 event.enable 打开且有事件中枢时注册 (关闭时模型看不到它)
+    if (agentContext->eventHub) {
+        tools.push_back(std::make_unique<agentxx::tools::EventTool>(agentContext));
+    }
     // agentxx_get_current_datetime 已迁移至 agentxx_system 插件 (同名同行为,
     // 经 PluginManager 注册)
     // subagent tool (`agentxx_subagent`) 由 SubagentManagerMiddlewareHandle
@@ -1311,6 +1473,31 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
     const auto startTimeMs = static_cast<int64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(startTime.time_since_epoch()).count()
     );
+
+    // 内建事件源: turn.start (给"等某一轮开始"的场景; 没人等就不建记录)
+    {
+        auto turnStartValue = utilxx_base::Json{
+            {"sessionId", std::string{sessionId}},
+            {"agentName", agentContext->agentConfig
+                              ? agentContext->agentConfig->agentName
+                              : std::string{"Agentxx"}},
+            {"startedAtMs", startTimeMs},
+        };
+        publishHubValueIfWanted(agentContext, "turn.start", std::move(turnStartValue));
+        if (agentContext->bus
+            && agentContext->bus->hasListeners<events::EventAgentTurnStart>(events::Topic::AgentTurnStart)) {
+            co_await agentContext->bus->publish(
+                events::Topic::AgentTurnStart,
+                events::EventAgentTurnStart{
+                    .agentName = agentContext->agentConfig
+                                     ? agentContext->agentConfig->agentName
+                                     : std::string{"Agentxx"},
+                    .sessionId = std::string{sessionId},
+                    .userInput = std::string{userInput},
+                }
+            );
+        }
+    }
     // 产出增量事件的唯一出口: 经 EventBridge 分配会话级递增 seq 后 ioPtr->sendToPeer
     // 发往对端 (server 端点会缓冲并经 transport 转发 client; io 为 nullptr 的
     // headless 场景则丢弃)
@@ -1720,6 +1907,41 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
         durationMs
     );
 
+    // 内建事件源: turn.end + 轮末兜底
+    // - turn.end: 等"某一轮结束"的场景 (串起多轮 / 主↔子协作)
+    // - 轮末兜底: 落在最后一次 modelcall 之后的 next-step 输入提升为下一轮输入,
+    //   否则它会一直躺在待注入队列里等人开轮 (见 rolloverLeftoverNextStepInputs)
+    {
+        std::string closeReason = turnResult.hasError
+                                      ? (turnResult.errorMessage.find("Cancelled") != std::string::npos
+                                             ? "cancelled"
+                                             : "failed")
+                                      : (turnResult.interrupted ? "interrupted" : "completed");
+        auto turnEndValue = utilxx_base::Json{
+            {"sessionId", std::string{sessionId}},
+            {"hasError", turnResult.hasError},
+            {"interrupted", turnResult.interrupted},
+            {"durationMs", durationMs},
+            {"reason", std::move(closeReason)},
+        };
+        publishHubValueIfWanted(agentContext, "turn.end", std::move(turnEndValue));
+        if (agentContext->bus
+            && agentContext->bus->hasListeners<events::EventAgentTurnEnd>(events::Topic::AgentTurnEnd)) {
+            co_await agentContext->bus->publish(
+                events::Topic::AgentTurnEnd,
+                events::EventAgentTurnEnd{
+                    .agentName = agentContext->agentConfig
+                                     ? agentContext->agentConfig->agentName
+                                     : std::string{"Agentxx"},
+                    .sessionId    = std::string{sessionId},
+                    .hasError     = turnResult.hasError,
+                    .errorMessage = turnResult.errorMessage,
+                }
+            );
+        }
+        rolloverLeftoverNextStepInputs(session, sessionId);
+    }
+
     // 持久化 LLM 上下文消息 (每轮结束时整表替换, 供重启恢复会话)
     // - 持久化回调内部捕获异常, 失败仅记日志, 不影响本轮结果
     // - 轮内已由 EventBridge 按消息结算节流落盘 (requestSaveLlmMessages),
@@ -1788,6 +2010,11 @@ asio::awaitable<bool> BaseAgent::shutdownAsync(std::chrono::milliseconds timeout
 
     // ---- ① 停止受理新输入 (不等待当前轮次) ----
     agentContext->markShuttingDown();
+    // 事件中枢: 取消全部等待与定时源; 关闭后投递一律丢弃并计数
+    // (事件记录不持久化, 生产者都绑在进程上)
+    if (agentContext->eventHub) {
+        agentContext->eventHub->closeAll("shutdown");
+    }
     XX_LOGI("shutdown stage 1/4: stop accepting new input");
 
     // ---- ② 取消并等待后台任务结束 ----

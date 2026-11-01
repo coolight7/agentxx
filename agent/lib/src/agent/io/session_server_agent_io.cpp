@@ -461,7 +461,9 @@ std::string SessionServerAgentIO::pushMessageQueueItem(
     std::string                  model,
     std::vector<MediaAttachment> attachments,
     std::string                  delivery,
-    bool                         recovered
+    bool                         recovered,
+    std::string                  source,
+    bool                         unpauseHalted
 ) {
     if (text.empty() && attachments.empty()) {
         return {};
@@ -478,6 +480,7 @@ std::string SessionServerAgentIO::pushMessageQueueItem(
     item.createdAtMs = nowMs;
     item.delivery    = std::move(delivery);
     item.recovered   = recovered;
+    item.source      = std::move(source);
 
     // 注意: 空闲状态下收到用户新输入时, 无论队列是否已有积压消息, 均解除暂停并唤醒执行:
     // - 暂停态来自上一轮的异常/取消/中断 (run() 轮末按结果置位), 用于阻止
@@ -494,7 +497,7 @@ std::string SessionServerAgentIO::pushMessageQueueItem(
     messageQueue_.push_back(std::move(item));
 
     if (isIdle) {
-        if (wasHalted) {
+        if (wasHalted && unpauseHalted) {
             setQueueState(
                 wasEmpty ? SessionQueueState::Idle : SessionQueueState::Draining,
                 "user input"
@@ -509,6 +512,37 @@ std::string SessionServerAgentIO::pushMessageQueueItem(
         sendMessageQueueUpdate();
     }
     return itemId;
+}
+
+bool SessionServerAgentIO::submitTurnInput(
+    std::string_view text,
+    std::string_view source,
+    bool             unpausePaused
+) {
+    if (stopped_.load(std::memory_order_acquire) || text.empty()) {
+        return false;
+    }
+    // 与用户输入同一条队列, 但带来源标记; 暂停态默认不解除
+    // (与"积压消息不自动继续"同一语义: 需要唤醒的场景由调用方显式要求)
+    const auto itemId = pushMessageQueueItem(
+        std::string{text},
+        "",
+        {},
+        std::string{InputDelivery::NextTurn},
+        false,
+        std::string{source},
+        unpausePaused
+    );
+    if (itemId.empty()) {
+        return false;
+    }
+    XX_LOGI(
+        "[session_ctrl] event input queued: item={} source={} session={}",
+        itemId,
+        source,
+        config_.sessionId
+    );
+    return true;
 }
 
 void SessionServerAgentIO::interruptAndRunNext() {
@@ -1960,6 +1994,13 @@ void SessionServerAgentIO::switchSession(std::string newThreadId) {
     }
 
     const std::string oldThreadId = config_.sessionId;
+    // 事件投递入口跟随会话: 旧会话不再指向本端点 (否则事件会被投给切走的会话)
+    if (auto oldSession = session(); oldSession) {
+        auto bound = oldSession->inputSink.lock();
+        if (bound && bound.get() == static_cast<SessionInputSink*>(this)) {
+            oldSession->inputSink.reset();
+        }
+    }
     config_.sessionId             = newThreadId;
     // delta 重放缓冲属于旧会话的 seq 空间, 新会话 seq 独立编号, 清空避免错配重放
     deltaBuffer_.clear();
@@ -1970,6 +2011,11 @@ void SessionServerAgentIO::switchSession(std::string newThreadId) {
     pendingInsert_ = false;
 
     XX_LOGI("[session_ctrl] switched session: {} -> {}", oldThreadId, config_.sessionId);
+
+    // 新会话同样以本端点为驱动者 (仅在当前线程缓存命中, 切换前已校验过)
+    if (auto newSession = session(); newSession) {
+        newSession->inputSink = weak_from_this();
+    }
 
     // 回推新会话状态: Sync (历史消息, 按尾窗配置分页) + 模型信息 + 上下文统计
     auto sync = buildTailSync(config_.initialSyncTailCount);
@@ -2152,6 +2198,11 @@ asio::awaitable<void> SessionServerAgentIO::run() {
     // 持久化收件箱恢复: 未投递的输入作为"待确认"回到队列并暂停,
     // 不自动执行 —— 进程重启后重放副作用的代价高于"少跑一轮"
     recoverPendingInputs();
+    // 事件投递入口: 登记本端点作为该会话的驱动者 (事件中枢据此选路:
+    // 轮次在跑 → 待注入输入, 空闲 → 开新轮)
+    if (auto sess = session()) {
+        sess->inputSink = weak_from_this();
+    }
     while (!stopped_.load(std::memory_order_acquire)) {
         if (pendingInsert_) {
             pendingInsert_ = false;
@@ -2300,6 +2351,15 @@ void SessionServerAgentIO::stopImpl() {
     bool expected = false;
     if (!stopped_.compare_exchange_strong(expected, true)) {
         return;
+    }
+    // 事件投递入口解绑: 停止后不再接事件输入 (投递方会看到 sink 已失效)
+    if (auto agent = agent_.lock(); agent && agent->agentContext && agent->agentContext->sessions) {
+        if (auto sess = agent->agentContext->sessions->get(config_.sessionId); sess) {
+            auto bound = sess->inputSink.lock();
+            if (bound && bound.get() == static_cast<SessionInputSink*>(this)) {
+                sess->inputSink.reset();
+            }
+        }
     }
     cancelGraceTimer();
     failAllPending();
