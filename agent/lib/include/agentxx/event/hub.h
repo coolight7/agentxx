@@ -195,7 +195,10 @@ public:
     };
 
     /// "跑一轮"回调 (由 BaseAgent 注入; 只在 `allowHeadlessTurn` 且没有驱动端时用)
-    using TurnRunner = std::function<void(std::string sessionId, std::string text)>;
+    /// - 末位参数是输入来源标记 (`event:<事件名>`), 与 `SessionPendingInput::source`
+    ///   同一套取值, 写进展示消息供界面区分事件输入与用户输入
+    using TurnRunner =
+        std::function<void(std::string sessionId, std::string text, std::string source)>;
 
     EventHub(
         asio::any_io_executor                   ex,

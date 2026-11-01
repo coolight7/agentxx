@@ -1002,7 +1002,7 @@ void BaseAgent::initEventHub(asio::any_io_executor executor) {
     // 无驱动端 (嵌入方自己调 runTurnAsync) 时按配置决定是否由中枢自己开一轮。
     // 这里只登记回调, 是否真的调用由 hub 的 allowHeadlessTurn 与"有无 sink"决定。
     std::weak_ptr<BaseAgent> weakSelf = weak_from_this();
-    hub->setTurnRunner([weakSelf](std::string sessionId, std::string text) {
+    hub->setTurnRunner([weakSelf](std::string sessionId, std::string text, std::string source) {
         auto self = weakSelf.lock();
         if (!self || !self->agentContext || self->agentContext->isShuttingDown()) {
             return;
@@ -1011,9 +1011,10 @@ void BaseAgent::initEventHub(asio::any_io_executor executor) {
                                                 : self->ioCtx->get_executor();
         asio::co_spawn(
             executor,
-            [self, sessionId = std::move(sessionId), text = std::move(text)](
+            [self, sessionId = std::move(sessionId), text = std::move(text), source = std::move(source)](
             ) -> asio::awaitable<void> {
-                auto result = co_await self->runTurnAsync(sessionId, text, nullptr, {}, {});
+                auto result
+                    = co_await self->runTurnAsync(sessionId, text, nullptr, {}, {}, source);
                 XX_LOGD(
                     "[event_hub] headless turn finished: session={} hasError={}",
                     sessionId,

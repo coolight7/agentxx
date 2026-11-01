@@ -714,7 +714,14 @@ DeliverResult EventHub::deliver(const EventDelivery& d, std::string* reasonOut) 
             return drop("sink-rejected");
         }
         if (cfg_.allowHeadlessTurn && turnRunner_) {
-            turnRunner_(d.sessionId, d.text);
+            // 无驱动端自起一轮: 来源标记一并下去, 展示历史与有驱动端时一致
+            turnRunner_(
+                d.sessionId,
+                d.text,
+                d.source.empty()
+                    ? (std::string{agentxx::agent::kInputSourceEventPrefix} + d.eventName)
+                    : d.source
+            );
             setReason({});
             noteDelivered();
             return DeliverResult::Queued;
