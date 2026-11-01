@@ -8,7 +8,7 @@
     - Windows 10+ x86_64
     - Android 5.0+
 
-## 设计 & 建议
+## 整体设计 & 建议
 - 详细主程序架构设计见[design](docs/zh-cn/design/index.md)，插件设计文档见[plugins.md](docs/zh-cn/design/plugins.md)，客户端界面层（描述层/适配/kit/GUI 接入）见[ui-layer.md](docs/zh-cn/design/ui-layer.md)，事件中枢与异步子代理见[events.md](docs/zh-cn/design/events.md)，当大幅修改代码时，请参考并更新
 - Agent 的设计支持:
     - 并发多会话，单线程/多协程交错执行会话，不需要线程锁
@@ -18,36 +18,6 @@
     - 支持 client 通过网络连接 agent server，此时两者在不同进程，通过网络传输交互（已支持 websocket）
     - 应当尽量统一抽象接口，分层屏蔽细节，降低复杂度，让架构设计更清晰
     - `会话 Agent_IO`、`CancelToken`、`上下文统计`、`模型选择` 应当独立记录，按 `thread_id` 取值
-- 系统提示词加载 (本期实施): 段落来源统一登记到 `PromptSourceRegistry`
-  (`agent/lib/include/agentxx/agent/prompt_sources.h`, 挂 `AgentContext::promptSources`);
-  静态附加段 (`Stable`) 与运行时文档段 (`Dynamic`) 分开存、只统一视图; 内置来源
-  `memory` (perSession, 压缩后刷新) / `skills`; 刷新唯一入口 =
-  `PromptSourceRefreshHandle::onModelcallStartFunc` (model call start 钩子), 脏标记来自
-  资源变更 / 压缩写回 / 显式请求; **不做文件监听与轮询** (mtime+size 只用于被要求刷新时
-  省去读盘); 压缩子代理按父会话前缀发请求 (`keepProvidedSystemMessage` +
-  `requestToolsOverride` + `toolExecutionDisabled`), 命中率实测见
-  [benchmark.md](docs/zh-cn/design/benchmark.md) 第 18 节; 详见
-  [index.md](docs/zh-cn/design/index.md) 架构设计第 6 小节
-- 主程序加载与子代理记账 (本轮实施): 各运行形态 (`tui`/`cli`/`jsonl`/`server`/FFI) 都先
-  `AgentHost::create({.ioCtx, .pluginList = agentConfig->plugins})` →
-  `co_await host->loadPluginsAsync()` → 把 `host->pluginHost()` 放进
-  `AgentContext::pluginManager` → `agent->init()`（内部只做挂载）→ `host->attachRoot(agent)`；
-  `attachRootAgentHost` 已删除。**与
-  `AgentConfig::enableSubagent` 无关** (该开关只控制是否把 `agentxx_subagent` 工具注入模型;
-  缺主程序时上下文压缩会报 `service.subagent ... no server registered` 并退化为硬截断),
-  返回值必须活到会话结束; 子代理 (含压缩) 的模型用量经
-  `AgentContext::usageAccountSessions` + `usageAccountSessionId` 记到父会话台账, 自动压缩
-  经总线到达 (`spawnBatch(req)` 不带父上下文) 时回退根会话, 详见 index.md 架构设计第 7 小节
-- **一插件加载多 agent 挂载** (本轮补齐): 插件只 `create`/`start` 一次, 每个 agent 各一份
-  `PluginMount`; agent 级注册 (工具/权限/钩子/提示词/功能点/图/资源) 只能在插件 `mount`
-  回调里做, 在 `start` 里做返回 `AGENTXX_PLUGIN_ERR_NO_AGENT` 且无副作用。会话、事件、
-  工作目录、取消状态都按引用 (`PluginxxScopeRef` = agentId + 挂载序号) 落到对应 agent
-  (事件源/会话查询都走 `PluginManager::agentContextOf`), 能力声明是进程级的 (同一实例
-  重复声明按幂等成功)。会话存储根按 agent 独占 (`AgentHost::claimSessionStoreRoot`,
-  规范化后相同即拒绝第二个 agent); 加载快照分 `plugins` (进程角度: 挂载数/挂载到哪些
-  agent/清单资源) 与 `plugins_agent` (本 agent 角度: 每个插件的实体计数) 两段; 用例
-  `plugin_host_mount` / `plugin_multi_mount` (示例插件 `example_multi_mount`), 详见
-  [plugins.md](docs/zh-cn/design/plugins.md) §18
 - **编写代码注释**: 
     - 编写注释时，统一使用 markdown 风格，多行注释使用 `///` 开头, 示例(其中的 args 和 return 不必每一个都详细说明，尽量对需要注意、不容易从名称了解含义的进行说明):
 ```c++
@@ -64,6 +34,32 @@ int charToLower(int c) {
 }
 ```
 - 合适时，尽量使用`std::string_view`替代`const std::string&`
+- 应当使用 [XX_LOG](agent/third_party/cxx_utilxx_base/include/utilxx_base/log.h) 输出日志，而不是 std::cout/cerr，避免影响 TUI 显示
+- 最终的代码实现目标要能稳定运行在生产环境，广泛服务于各种设备和用户，需要仔细思考实现方案、编写足量的常规使用方式测试+各种边界情况测试
+- 非必要不应修改 `agent/third_party/` 内的代码，尽量修改本项目的代码实现功能。如果修改了的话应当删除 build 内对应的目录，让 cmake 重新编译，否则可能不生效
+- 使用 grep、glob 等工具前参考以下代码结构缩小范围，非必要不应去搜索 `agent/**` 整个代码库，里面包含了 build、third_party 等文件夹太大
+- 需要捕获异常时，建议优先考虑 [agentxx::util::catchError 系列](D:\0Acoolight\Program\cpp\agentxx\agent\lib\include\agentxx\util\exception.h)，尤其是协程异常，不应 try {} catch(...) 捕获全部异常，应当使用 `agentxx::util::catchErrorAsync` 放行 取消和中断
+- 如果需要编译或运行测试，一般跑 debug 即可
+- 修改代码后无需自动执行 `clang-format` 等格式化处理
+- `resource/history/` 内是一些功能实现、修复历史记录，在修正文档、批量修改命名等操作时不要修改这个文件夹内的文件
+- 实现功能、插件接口、对外接口时，非必要的限制条件不用实现，可以先跟用户确认是否添加限制/检查，或是在实现后列出可选的一些限制和检查，询问用户是否增加实现
+
+## 文件编码与换行
+- 本项目自己编写的**所有**文件统一 **UTF-8 (无 BOM) + LF** 保存: 代码 (`agent/lib`
+  `agent/client` `agent/test` `agent/benchmark` `agent/plugins` `agent/tools`)、脚本
+  (`agent/script`、`tool`)、文档 (`docs`、`resource`)、配置 (`*.yaml`/`*.json`/`.env`)、
+  schema 与生成物 (`agent/schema`、`agent/client/schema`) 都一样
+- 原因: 同一份文件要跨 Linux/Windows/macOS 使用 —— CRLF 会让 shell 脚本的 shebang
+  失效、`git diff` 出现整文件噪声、字符串/哈希比对多出一个 `\r`
+- 例外: `agent/third_party/` 是上游仓库 (含子模块), 保留上游行尾与编码, 不强制改写;
+  我们只保证自己新增/修改的文件是 LF
+- 自检: `git ls-files --eol` 看工作区与索引的行尾, 自己改过的文件应为 `w/lf`
+- 注意 Windows 侧工具默认行尾: `Out-File`/`Set-Content`/`Add-Content` 与记事本都写 CRLF,
+  部分 IDE 新建文件也默认 CRLF; 写文件时显式选 LF, 中文按 UTF-8 直接存, 不加 BOM
+  (BOM 会进字符串字面量, 破坏 `starts_with` 一类判断)
+
+## 功能设计
+
 - **协程帧**: MSVC + 全程序 LTO 下, 外层协程帧会**把每个被 `co_await` 的内层协程
   帧尺寸再加一遍** (内层帧本身仍单独分配), 于是 MB 级帧沿调用链翻倍 —— 实测
   `AgentRunner::run` 的 2.5 MB 帧 ≈ 内层引擎两个协程帧 (825 KB + 1.66 MB) + 自身,
@@ -76,14 +72,36 @@ int charToLower(int c) {
   误报为 `-Wmaybe-uninitialized` (告警行指向函数末尾, 是绑定用的匿名对象) ——
   `-O0` 不报, 只在优化构建里出现; 这类位置改成具名变量再逐项取值
   (`auto v = ...; std::get<0>(v)` / `v.first` / `v.second`) 即可消除
-- 应当使用 [XX_LOG](agent/third_party/cxx_utilxx_base/include/utilxx_base/log.h) 输出日志，而不是 std::cout/cerr，避免影响 TUI 显示
-- 最终的代码实现目标要能稳定运行在生产环境，广泛服务于各种设备和用户，需要仔细思考实现方案、编写足量的常规使用方式测试+各种边界情况测试
-- 非必要不应修改 `agent/third_party/` 内的代码，尽量修改本项目的代码实现功能。如果修改了的话应当删除 build 内对应的目录，让 cmake 重新编译，否则可能不生效
-- 使用 grep、glob 等工具前参考以下代码结构缩小范围，非必要不应去搜索 `agent/**` 整个代码库，里面包含了 build、third_party 等文件夹太大
-- 需要捕获异常时，建议优先考虑 [agentxx::util::catchError 系列](D:\0Acoolight\Program\cpp\agentxx\agent\lib\include\agentxx\util\exception.h)，尤其是协程异常，不应 try {} catch(...) 捕获全部异常，应当使用 `agentxx::util::catchErrorAsync` 放行 取消和中断
-- 如果需要编译或运行测试，一般跑 debug 即可
-- 修改代码后无需自动执行 `clang-format` 等格式化处理
-- `resource/history/` 内是一些功能实现、修复历史记录，在修正文档、批量修改命名等操作时不要修改这个文件夹内的文件
+- 系统提示词加载: 段落来源统一登记到 `PromptSourceRegistry`
+  (`agent/lib/include/agentxx/agent/prompt_sources.h`, 挂 `AgentContext::promptSources`);
+  静态附加段 (`Stable`) 与运行时文档段 (`Dynamic`) 分开存、只统一视图; 内置来源
+  `memory` (perSession, 压缩后刷新) / `skills`; 刷新唯一入口 =
+  `PromptSourceRefreshHandle::onModelcallStartFunc` (model call start 钩子), 脏标记来自
+  资源变更 / 压缩写回 / 显式请求; **不做文件监听与轮询** (mtime+size 只用于被要求刷新时
+  省去读盘); 压缩子代理按父会话前缀发请求 (`keepProvidedSystemMessage` +
+  `requestToolsOverride` + `toolExecutionDisabled`), 命中率实测见
+  [benchmark.md](docs/zh-cn/design/benchmark.md) 第 18 节; 详见
+  [index.md](docs/zh-cn/design/index.md) 架构设计第 6 小节
+- 主程序加载与子代理记账: 各运行形态 (`tui`/`cli`/`jsonl`/`server`/FFI) 都先
+  `AgentHost::create({.ioCtx, .pluginList = agentConfig->plugins})` →
+  `co_await host->loadPluginsAsync()` → 把 `host->pluginHost()` 放进
+  `AgentContext::pluginManager` → `agent->init()`（内部只做挂载）→ `host->attachRoot(agent)`；
+  `attachRootAgentHost` 已删除。**与
+  `AgentConfig::enableSubagent` 无关** (该开关只控制是否把 `agentxx_subagent` 工具注入模型;
+  缺主程序时上下文压缩会报 `service.subagent ... no server registered` 并退化为硬截断),
+  返回值必须活到会话结束; 子代理 (含压缩) 的模型用量经
+  `AgentContext::usageAccountSessions` + `usageAccountSessionId` 记到父会话台账, 自动压缩
+  经总线到达 (`spawnBatch(req)` 不带父上下文) 时回退根会话, 详见 index.md 架构设计第 7 小节
+- **一插件加载多 agent 挂载**: 插件只 `create`/`start` 一次, 每个 agent 各一份
+  `PluginMount`; agent 级注册 (工具/权限/钩子/提示词/功能点/图/资源) 只能在插件 `mount`
+  回调里做, 在 `start` 里做返回 `AGENTXX_PLUGIN_ERR_NO_AGENT` 且无副作用。会话、事件、
+  工作目录、取消状态都按引用 (`PluginxxScopeRef` = agentId + 挂载序号) 落到对应 agent
+  (事件源/会话查询都走 `PluginManager::agentContextOf`), 能力声明是进程级的 (同一实例
+  重复声明按幂等成功)。会话存储根按 agent 独占 (`AgentHost::claimSessionStoreRoot`,
+  规范化后相同即拒绝第二个 agent); 加载快照分 `plugins` (进程角度: 挂载数/挂载到哪些
+  agent/清单资源) 与 `plugins_agent` (本 agent 角度: 每个插件的实体计数) 两段; 用例
+  `plugin_host_mount` / `plugin_multi_mount` (示例插件 `example_multi_mount`), 详见
+  [plugins.md](docs/zh-cn/design/plugins.md) §18
 
 ## 代码结构
 - `agent`: 
