@@ -4,6 +4,7 @@
 #include "agentxx/agent/session_input_sink.h"
 #include "agentxx/event/event_stream.h"
 #include "agentxx/event/hub.h"
+#include "agentxx/event/naming.h"
 #include "neograph/graph/cancel.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -785,6 +786,56 @@ asio::awaitable<void> test_hub_naming() {
     XX_TEST_EXPECT_TRUE(validateEventName(std::string(agentxx::events::naming::kMaxEventNameLength, 'a')));
     co_return;
 }
+
+/// 17. 总线桥接: 插件/节点往 `evt.<名字>` 或 `plugin.evt.<名字>` 发字符串, 中枢记成事件
+/// - 这是“插件不需要新接口表也能往中枢发值”的验证
+asio::awaitable<void> test_hub_bus_bridge() {
+    auto  fx  = co_await makeFixture();
+    auto& hub = *fx->hub;
+    auto  bus = std::make_shared<agentxx::events::EventBus>(co_await asio::this_coro::executor);
+    hub.attachBus(bus);
+
+    // JSON 载荷按结构化值存
+    co_await bus->publish(std::string{"evt.chat.ping"}, std::string{R"({"text":"hi"})"});
+    auto rec = hub.queryEvent("chat.ping");
+    XX_TEST_EXPECT_TRUE(rec.has_value());
+    if (rec.has_value()) {
+        XX_TEST_EXPECT_TRUE(rec->history.size() == 1);
+        XX_TEST_EXPECT_EQ(rec->history.front()["text"].get<std::string>(), std::string{"hi"});
+    }
+
+    // 插件事件经 qualifyEventTopic 补 `plugin.` 前缀后同样认; 非 JSON 按纯文本值
+    co_await bus->publish(std::string{"plugin.evt.chat.pong"}, std::string{"plain text"});
+    auto pong = hub.queryEvent("chat.pong");
+    XX_TEST_EXPECT_TRUE(pong.has_value());
+    if (pong.has_value() && !pong->history.empty()) {
+        XX_TEST_EXPECT_EQ(pong->history.front().get<std::string>(), std::string{"plain text"});
+    }
+
+    // 不是值主题: 不进中枢
+    co_await bus->publish(std::string{"agent.turn.start"}, std::string{"x"});
+    XX_TEST_EXPECT_FALSE(hub.queryEvent("agent.turn.start").has_value());
+    XX_TEST_EXPECT_TRUE(hub.eventCount() == 2);
+
+    // 注册的等待被总线来的值满足 (空闲 + 驱动端 → 直接开轮)
+    // - replay=false: 不吃上面已经发过的历史值, 只等新值, 断言才有确定性
+    auto watched = hub.watch(EventWaitSpec{
+        .event         = "chat.ping",
+        .mode          = "each",
+        .delivery      = "next-step",
+        .originSession = fx->sessionId,
+        .replay        = false,
+    });
+    XX_TEST_EXPECT_TRUE(watched.has_value());
+    XX_TEST_EXPECT_TRUE(fx->sink->texts.empty());
+    co_await bus->publish(std::string{"evt.chat.ping"}, std::string{R"({"text":"again"})"});
+    XX_TEST_EXPECT_EQ(fx->sink->texts.size(), size_t{1});
+    if (!fx->sink->texts.empty()) {
+        XX_TEST_EXPECT_TRUE(contains(fx->sink->texts.front(), "[Event] chat.ping (each)"));
+        XX_TEST_EXPECT_TRUE(contains(fx->sink->texts.front(), "again"));
+    }
+    co_return;
+}
 asio::awaitable<TestResult> run_event_hub_tests() {
     TestResult result;
 
@@ -804,6 +855,7 @@ asio::awaitable<TestResult> run_event_hub_tests() {
     co_await test_hub_ttl_and_linger();
     co_await test_hub_queries();
     co_await test_hub_naming();
+    co_await test_hub_bus_bridge();
 
     result.passed = g_eh_passed;
     result.failed = g_eh_failed;

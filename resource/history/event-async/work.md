@@ -51,8 +51,9 @@
 - [x] `ToolcallWrapNode` 发布 `tool.start` / `tool.end` (含 `tool.end.<工具名>` hub 事件)
 - [x] `agentxx_event` 工具 (watch/await/status/list/cancel/emit/end) + 提示词 + 系统提示词 Context Markers
 - [x] `event.*` 配置 (6 键) + `config_loader.cpp` + `test_config_keys.cpp` 目录 + 文档表 + 加载快照
-- [x] 测试模块 `event_hub` / `event_tools` / `event_delivery` (192 / 80 / 44 条断言全部通过)
-- [ ] 文档: `docs/zh-cn/design/events.md` (新) / index.md §4 / plugins.md / test-modules.md / AGENTS.md
+- [x] 测试模块 `event_hub` / `event_tools` / `event_delivery` (204 / 80 / 45 条断言全部通过)
+- [x] 文档: `docs/zh-cn/design/events.md` (新) + index.md / plugins.md / test-modules.md /
+      AGENTS.md / config-keys.md (生成物)
 
 ### P2 子代理异步派发 + 后台工具形态
 
@@ -84,6 +85,8 @@
 
 ### P3 插件接口表 `agentxx.agent.event`
 
+**本期未实施** (原因与替代方案见第 4 节)。
+
 - [ ] 新增接口表 + SDK + `boundaries` 台账 + 示例插件 + 文档
 
 ### P4 展示与诊断
@@ -103,7 +106,7 @@
 
 | 模块 | 结果 | 耗时 |
 |---|---|---|
-| `event_hub` | passed=192 failed=0 | 0.65 s |
+| `event_hub` | passed=204 failed=0 (含总线桥接) | 0.66 s |
 | `event_tools` | passed=80 failed=0 | 0.31 s |
 | `event_delivery` | passed=44 failed=0 | 17.4 s (每个用例起一次 HTTP 模拟服务 + 端点) |
 | `config_keys` | passed=196 failed=0 (生成物已重生成) | 0.8 s |
@@ -147,3 +150,51 @@ include/pluginxx/ui/item.h)。该目录是**独立仓库** (嵌套 git 仓库, H
     里也有一句 `++stats_.delivered;`, 脚本会把函数体自己换成 `noteDelivered();` ——
     结果是无限递归, ASan 报 `stack-overflow` 且没有调用栈 (现象: 模块跑到某一用例
     突然崩, 先以为是环境假阳性)。改成函数调用只能手工改, 或替换后立即回读函数体。
+13. **总线桥接用例可以写**: 早先删掉的 `test_hub_bus_prefix` 用的就是
+    `EventBus::publish` + 前缀订阅 (`std::any` 载荷), 后来以
+    `test_hub_bus_bridge` 重写 (`evt.` 与 `plugin.evt.` 两个前缀 + JSON/纯文本载荷 +
+    等待被总线值满足), 连续跑 3 次稳定通过 —— 当初的崩溃是环境干扰, 不是这段代码的问题。
+    注意 `mode=each` + `replay=true` 会先回放历史值 (两条投递), 只想看新值时用 `replay=false`。
+
+## 4. 未实施事项 (及后续建议)
+
+### 4.1 P3 插件接口表 `agentxx.agent.event`
+
+**没做**。插件“往中枢发值”今天已经可用, 而且有测试覆盖:
+
+- 插件用 `agentxx.agent.runtime` 的 `emit_event("evt.<名字>", payload)` (SDK `emitEvent`);
+  插件管理器把主题原样发到该 agent 的总线, 中枢订阅的 `evt.` 前缀就能收到;
+- 有 `plugin.evt.` 前缀兜底 (`qualifyEventTopic` 补前缀的场景);
+- 用例 `event_hub` 的 `test_hub_bus_bridge` 覆盖: `evt.` / `plugin.evt.` 两个前缀、
+  JSON 与纯文本载荷、以及“等待被总线值满足 → 变成会话输入”。
+
+缺的是**插件侧“定义事件/登记等待/查询等待”**（插件想被模型 emit 的事件叫醒时需要）。
+做它要按 `docs/zh-cn/design/plugins.md` §17 的接口表规则来:
+
+1. 新表 = 新 IID + `struct_size` + `version`/`_VERSION`/`_MIN_VERSION`/`_BASELINE_SIZE` 四件套;
+2. `plugin_iface_meta.h` 加一条 `IfaceMeta`;
+3. 主程序侧 vtable 实现 (`plugin_manager_vtable.cpp`) + SDK 便捷函数 (`plugin_kit.h`);
+4. `boundaries` 的**成员顺序台账**要同步加一行 (那个测试会逐表校验偏移);
+5. 示例插件 + `plugin_*` 测试模块 + 文档一节。
+
+### 4.2 插件 `agentxx_execute_command` 的 `background:true`
+
+**没做**。后台命令需要插件自己持子进程 + 进程收尾时往中枢发结果事件, 与 P3 的
+“插件能发值”相关 (现在可以经 `emit_event`, 但插件侧还要自己管进程生命周期、
+超时、输出截断、取消), 单独立项比塞在本期更安全。
+
+### 4.3 TUI 给事件输入加来源样式
+
+**没做**。投递文本已带 `[Event] <名字>` 前缀, 模型与用户都能分辨; 加
+`ViewMessage` 来源字段要动 wire 结构 (客户端结构体 + 同步负载), 收益不够。
+
+## 5. 提交记录
+
+| 提交 | 内容 |
+|---|---|
+| `3e2f6c9a` | P1 核心: EventHub/等待/投递 + `agentxx_event` 工具 + `event.*` 配置 |
+| `b955eef4` | P1 收尾: 三个测试模块全绿 + `event.*` 进配置键目录 |
+| `c2b0a26c` | P2: 异步子代理 (受理即返回, 结果经事件回到父会话) |
+| `67dab2a9` | P4: 关键指标与诊断段 |
+| `265eda49` | 文档: events.md + index/plugins/AGENTS/test-modules |
+
