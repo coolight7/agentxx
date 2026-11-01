@@ -17,5 +17,8 @@ asio::awaitable<TestResult> run_event_tools_tests();
 /// 事件投递路径 (会话端点 + 轮次状态)
 asio::awaitable<TestResult> run_event_delivery_tests();
 
+/// 异步子代理 (agentxx_subagent async) 的结果事件与取消
+asio::awaitable<TestResult> run_event_subagent_tests();
+
 } // namespace test
 } // namespace agentxx

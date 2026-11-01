@@ -304,6 +304,15 @@ struct SubagentBatchItem {
     /// 任务结果标识: 回填到父 toolcall 的 tool_call_id 或自定义 id;
     /// 为空时按任务序号 (1-based) 默认编号
     std::string resultId;
+    /// 异步派发: 派出去就继续, 结果以事件回到父会话
+    /// - 工具立即返回“[Subagent started] ...”文本, 不阻塞父轮次
+    /// - 完成后主程序向事件中枢发布值并 end 该事件 (失败/取消同样发布,
+    ///   否则父会话的等待只能等到超时)
+    /// - 仍受子代理并发数/嵌套深度预算限制
+    bool async = false;
+    /// 异步派发的结果事件名 (可选; 空 = `subagent.done.<result_id|任务序号>`)
+    /// - 需符合事件名规则 (字母/数字/`.`/`_`/`-`, 不占用保留前缀)
+    std::string eventName;
 };
 
 struct ReqSubagentBatch {
@@ -349,6 +358,12 @@ struct RespSubagentBatchItem {
     std::string errorMessage;
     /// agent 节点容器派生时的 agent 唯一 id (AgentHost 填充; 节点已回收, 仅用于日志/关联)
     std::string agentId;
+    /// 异步任务已受理 (started=true 时本次响应不含结果, 结果经事件到达)
+    bool started = false;
+    /// 异步任务的结果事件名 (started=true 时有效)
+    std::string eventName;
+    /// 异步任务的子代理名 (started=true 时用于生成提示文本)
+    std::string subagent;
 };
 
 struct RespSubagentBatch {

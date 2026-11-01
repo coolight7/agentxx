@@ -4,6 +4,8 @@
 #include "agentxx/agent/code_agent.h"
 #include "agentxx/agent/session_store.h"
 #include "agentxx/event/event_stream.h"
+#include "agentxx/event/hub.h"
+#include "agentxx/event/naming.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/protocol/a2a_client.h"
 #include "agentxx/protocol/provider_common.h"
@@ -25,10 +27,28 @@
 #include <cctype>
 #include <chrono>
 #include <filesystem>
+#include <set>
 #include <sstream>
 
 namespace agentxx {
 namespace agent {
+
+namespace {
+
+/// 事件名后缀: 只保留字母/数字/`.`/`_`/`-`
+/// - 工具调用 id 等外部标识可能带其它字符, 直接拼进事件名会被事件名校验拒掉
+std::string eventNameSuffix(std::string_view raw) {
+    std::string out;
+    out.reserve(raw.size());
+    for (const char ch : raw) {
+        const bool ok = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+                        || (ch >= '0' && ch <= '9') || ch == '.' || ch == '_' || ch == '-';
+        out.push_back(ok ? ch : '_');
+    }
+    return out;
+}
+
+} // namespace
 
 // ===========================================================================
 // AgentRegistry
@@ -224,6 +244,59 @@ asio::awaitable<void> AgentHost::loadPluginsAsync() {
 
 size_t AgentHost::runningSubagents() const {
     return runningSubagentCount_;
+}
+
+size_t AgentHost::runningAsyncJobs() const {
+    std::lock_guard<std::mutex> lock(asyncJobsMutex_);
+    return asyncJobs_.size();
+}
+
+size_t AgentHost::cancelAsyncJobs(const std::shared_ptr<AgentContext>& parentCtx) {
+    std::vector<std::shared_ptr<neograph::graph::CancelToken>> tokens;
+    {
+        std::lock_guard<std::mutex> lock(asyncJobsMutex_);
+        for (auto& entry : asyncJobs_) {
+            if (parentCtx) {
+                auto ctx = entry.second.parentCtx.lock();
+                // 父 agent 已释放的作业不再有意义; 只取消同一个上下文上的作业
+                // (多根共享一个容器时不能误伤别人)
+                if (!ctx || ctx != parentCtx) {
+                    continue;
+                }
+            }
+            tokens.push_back(entry.second.token);
+        }
+    }
+    for (auto& token : tokens) {
+        if (token) {
+            token->cancel();
+        }
+    }
+    if (!tokens.empty()) {
+        XX_LOGI("[subagent] cancel {} async job(s)", tokens.size());
+    }
+    return tokens.size();
+}
+
+size_t AgentHost::cancelAsyncJobsOfSession(std::string_view parentSessionId) {
+    std::vector<std::shared_ptr<neograph::graph::CancelToken>> tokens;
+    {
+        std::lock_guard<std::mutex> lock(asyncJobsMutex_);
+        for (auto& entry : asyncJobs_) {
+            if (entry.second.parentSessionId == parentSessionId) {
+                tokens.push_back(entry.second.token);
+            }
+        }
+    }
+    for (auto& token : tokens) {
+        if (token) {
+            token->cancel();
+        }
+    }
+    if (!tokens.empty()) {
+        XX_LOGI("[subagent] cancel {} async job(s) of session `{}`", tokens.size(), parentSessionId);
+    }
+    return tokens.size();
 }
 
 std::shared_ptr<BaseAgent> AgentHost::rootAgent() const {
@@ -948,6 +1021,13 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
         subCtx->pluginManagerOwned = false; // 进程共享管理器: 不随子代理析构卸载
     }
 
+    // 事件中枢: 子代理与父代理看同一张事件表 (主↔子协作靠事件名约定)
+    // - 只在父上下文有中枢且子代理还没有时注入: 嵌套委派沿用最外层那一份
+    //   (逐层覆盖会把内层子代理的 emit 关在外层看不到的地方)
+    if (parentAgentCtx && parentAgentCtx->eventHub && !subCtx->eventHub) {
+        subCtx->eventHub = parentAgentCtx->eventHub;
+    }
+
     // 用量记账目标: 子代理的模型调用计入父会话 (用户看的会话与台账都是父会话)
     // - 子代理自己有独立 AgentContext/SessionsManager, 没有 sessionStore, 记不下来
     // - 嵌套委派沿用最外层已确定的目标, 保证一次调用只记一笔 (不重复计数)
@@ -1310,14 +1390,79 @@ asio::awaitable<events::RespSubagentBatch> AgentHost::spawnBatch(
     // results 由 shared_ptr 持有, 避免 spawnBatch 协程取消析构后子协程 UAF
     auto results = std::make_shared<std::vector<ItemResult>>(n);
 
+    // ---- 异步任务: 立即受理, 结果经事件回到父会话 ----
+    // - 同一批里同步任务照旧等它跑完; 纯异步的一批立即返回 (父轮次不被占)
+    // - 事件名在同一批内不能重复: 两条任务同名时后者的值会把前者的等待提前满足
+    std::vector<size_t>   waitIndexes;
+    std::set<std::string> usedEvents;
+    for (size_t i = 0; i < n; ++i) {
+        const auto& task = req.tasks[i];
+        if (!task.async) {
+            waitIndexes.push_back(i);
+            continue;
+        }
+        // 结果事件名: 调用方指定 > `subagent.done.<result_id>` > `subagent.done.<序号>`
+        std::string eventName = task.eventName;
+        if (eventName.empty()) {
+            const auto suffix = task.resultId.empty()
+                                    ? std::to_string(i + 1)
+                                    : eventNameSuffix(task.resultId);
+            eventName = "subagent.done." + (suffix.empty() ? std::to_string(i + 1) : suffix);
+        }
+        std::string nameErr;
+        if (!agentxx::events::naming::validateEventName(eventName, &nameErr)) {
+            (*results)[i] = ItemResult{
+                .resultId     = task.resultId,
+                .hasError     = true,
+                .errorMessage = fmt::format(
+                    "async event name `{}` is invalid: {}",
+                    eventName,
+                    nameErr
+                ),
+            };
+            continue;
+        }
+        if (!usedEvents.insert(eventName).second) {
+            (*results)[i] = ItemResult{
+                .resultId     = task.resultId,
+                .hasError     = true,
+                .errorMessage = fmt::format(
+                    "async event name `{}` is used by another task of this call; give "
+                    "each task its own `event_name`",
+                    eventName
+                ),
+            };
+            continue;
+        }
+        if (!parentAgentCtx || !parentAgentCtx->eventHub) {
+            (*results)[i] = ItemResult{
+                .resultId     = task.resultId,
+                .hasError     = true,
+                .errorMessage = "async delegation needs the event hub (event.enable=false?)",
+            };
+            continue;
+        }
+        (*results)[i] = ItemResult{
+            .resultId  = task.resultId,
+            .started   = true,
+            .eventName = eventName,
+            .subagent  = task.subagentName,
+        };
+        startAsyncSubagentTask(task, req.parentSessionId, parentAgentCtx, std::move(eventName));
+    }
+    if (waitIndexes.empty()) {
+        batchResp.results = std::move(*results);
+        co_return batchResp;
+    }
+
     // 每个子代理 co_spawn 为独立协程, 完成后向 channel 发送 index (wait_for_all)
     auto doneChannel
         = std::make_shared<asio::experimental::channel<void(utilxx_base::AsioErrorCode, size_t)>>(
             ex,
-            static_cast<unsigned>(n)
+            static_cast<unsigned>(waitIndexes.size())
         );
 
-    for (size_t i = 0; i < n; ++i) {
+    for (const size_t i : waitIndexes) {
         const auto& task = req.tasks[i];
         asio::co_spawn(
             ex,
@@ -1381,13 +1526,135 @@ asio::awaitable<events::RespSubagentBatch> AgentHost::spawnBatch(
         );
     }
 
-    // 等待全部完成 (接收 n 次)
-    for (size_t i = 0; i < n; ++i) {
+    // 等全部同步任务完成 (接收 waitIndexes.size() 次)
+    for (size_t i = 0; i < waitIndexes.size(); ++i) {
         co_await doneChannel->async_receive(asio::as_tuple(asio::use_awaitable));
     }
 
     batchResp.results = std::move(*results);
     co_return batchResp;
+}
+
+void AgentHost::startAsyncSubagentTask(
+    const events::SubagentBatchItem& task,
+    std::string                      parentSessionId,
+    std::shared_ptr<AgentContext>    parentCtx,
+    std::string                      eventName
+) {
+    // 作业令牌独立于轮次: 异步任务的可能活过父轮次 (轮次令牌会随取消/轮末失效),
+    // 因此另建一个, 由 cancelAsyncJobs / cancelAsyncJobsOfSession 两处驱动。
+    auto token = std::make_shared<neograph::graph::CancelToken>();
+    std::string jobId;
+    {
+        std::lock_guard<std::mutex> lock(asyncJobsMutex_);
+        jobId                 = fmt::format("job-{}", ++asyncJobSeq_);
+        asyncJobs_[jobId]     = AsyncSubagentJob{
+            .parentCtx       = parentCtx,
+            .parentSessionId = parentSessionId,
+            .token           = token,
+        };
+    }
+    // 作业跑在中枢所在 executor 上: 收尾发布与中枢状态修改在同一线程,
+    // 且与父会话的节点运行方式一致 (子代理直跑在调用方 executor)。
+    auto executor = parentCtx && parentCtx->eventHub ? parentCtx->eventHub->executor()
+                                                    : ioCtx_->get_executor();
+    asio::co_spawn(
+        executor,
+        [this,
+         task,
+         parentSessionId = std::move(parentSessionId),
+         parentCtx       = std::move(parentCtx),
+         eventName       = std::move(eventName),
+         jobId           = std::move(jobId),
+         token]() mutable -> asio::awaitable<void> {
+            co_await runAsyncSubagentTask(
+                std::move(task),
+                std::move(parentSessionId),
+                std::move(parentCtx),
+                std::move(eventName),
+                std::move(jobId),
+                std::move(token)
+            );
+        },
+        asio::detached
+    );
+}
+
+asio::awaitable<void> AgentHost::runAsyncSubagentTask(
+    events::SubagentBatchItem                     task,
+    std::string                                   parentSessionId,
+    std::shared_ptr<AgentContext>                 parentCtx,
+    std::string                                   eventName,
+    std::string                                   jobId,
+    std::shared_ptr<neograph::graph::CancelToken> token
+) {
+    auto result = co_await agentxx::util::catchErrorAsync<events::RespSubagentBatchItem>(
+        [&]() -> asio::awaitable<events::RespSubagentBatchItem> {
+            co_return co_await spawnOneTask(task, parentSessionId, token, parentCtx);
+        },
+        [&task](std::string errmsg) -> asio::awaitable<events::RespSubagentBatchItem> {
+            co_return events::RespSubagentBatchItem{
+                .resultId     = task.resultId,
+                .hasError     = true,
+                .errorMessage = fmt::format("Sub-agent failed: {}", std::move(errmsg)),
+            };
+        },
+        [&task](std::string& errmsg) -> std::optional<events::RespSubagentBatchItem> {
+            return events::RespSubagentBatchItem{
+                .resultId  = task.resultId,
+                .hasError  = true,
+                .cancelled = true,
+                .errorMessage = fmt::format("Sub-agent cancelled: {}", std::move(errmsg)),
+            };
+        },
+        token
+    );
+
+    // 结果发布: 失败/取消也发 —— 否则父会话的等待只能等到超时才知道没结果
+    if (auto hub = parentCtx ? parentCtx->eventHub : nullptr; hub) {
+        auto value = utilxx_base::Json{
+            {"resultId", task.resultId},
+            {"subagent", task.subagentName},
+            {"agentId", result.agentId},
+            {"content", result.content},
+            {"hasError", result.hasError},
+            {"cancelled", result.cancelled},
+            {"errorMessage", result.errorMessage},
+        };
+        if (result.hasError || result.cancelled) {
+            value["content"] = result.content.empty() ? result.errorMessage : result.content;
+        }
+        const bool ok = result.cancelled ? false : !result.hasError;
+        hub->postValue(eventName, std::move(value));
+        hub->postEnd(
+            eventName,
+            utilxx_base::Json{
+                {"resultId", task.resultId},
+                {"ok", ok},
+                {"hasError", result.hasError},
+                {"cancelled", result.cancelled},
+            }
+        );
+        XX_LOGI(
+            "[subagent] async {} finished: event={} resultId={} hasError={} cancelled={}",
+            jobId,
+            eventName,
+            task.resultId,
+            result.hasError,
+            result.cancelled
+        );
+    } else {
+        XX_LOGW(
+            "[subagent] async {} finished but the parent has no event hub, result dropped "
+            "(event={} resultId={})",
+            jobId,
+            eventName,
+            task.resultId
+        );
+    }
+
+    std::lock_guard<std::mutex> lock(asyncJobsMutex_);
+    asyncJobs_.erase(jobId);
 }
 
 asio::awaitable<events::RespHostMessage> AgentHost::sendMessage(events::ReqHostMessage req) {

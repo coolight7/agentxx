@@ -3,6 +3,7 @@
 #include "agentxx/event/events.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/tools/tool.h"
+#include "fmt/format.h"
 #include "neograph/graph/cancel.h"
 #include "utilxx_base/json.h"
 #include <map>
@@ -100,8 +101,27 @@ inline std::string
     return key;
 }
 
+/// 异步派发的受理提示 (工具结果文本)
+/// - 以 `[Subagent started]` 开头 (不命中工具失败前缀), 并告诉模型结果会以
+///   `[Event] <event>` 输入到达, 不要轮询
+inline std::string renderSubagentStartedText(const events::RespSubagentBatchItem& item) {
+    const auto name = item.subagent.empty() ? std::string{"-"} : item.subagent;
+    return fmt::format(
+        "[Subagent started] subagent={} result={} event={}\n"
+        "The result will arrive later as an input starting with \"[Event] {}\".\n"
+        "Keep working (or finish the turn); use agentxx_event opt=watch event={} if you "
+        "need to be woken by it.",
+        name,
+        item.resultId.empty() ? std::string{"-"} : item.resultId,
+        item.eventName,
+        item.eventName,
+        item.eventName
+    );
+}
+
 /// 将批量委派响应写入中断结果 map (key 规则见 makeSubagentResumeKey)
 /// - 单任务返回纯文本, 多任务按任务顺序编号; 错误任务写入 {"error": ...}
+/// - 异步受理的任务写入 [renderSubagentStartedText] 的文本
 inline void buildSubagentResumeValues(
     utilxx_base::Json&               resumeValues,
     const events::RespSubagentBatch& batchResp,
@@ -114,9 +134,13 @@ inline void buildSubagentResumeValues(
         // 注意: 正常结果必须用圆括号直接初始化为标量字符串 (而非 {} 列表初始化,
         // 否则会命中 initializer_list 构造产生 ["content"] 数组包裹,
         // 破坏读取端 "单任务返回纯文本" 语义); 错误任务保持 {"error": ...} 对象
-        resumeValues[key] = r.hasError
-                                ? utilxx_base::Json{{"error", std::string{r.errorMessage}}}
-                                : utilxx_base::Json(r.content);
+        if (r.started) {
+            resumeValues[key] = renderSubagentStartedText(r);
+        } else if (r.hasError) {
+            resumeValues[key] = utilxx_base::Json{{"error", std::string{r.errorMessage}}};
+        } else {
+            resumeValues[key] = utilxx_base::Json(r.content);
+        }
     }
 }
 

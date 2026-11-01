@@ -225,6 +225,18 @@ public:
         std::shared_ptr<AgentContext>   parentAgentCtx = nullptr
     );
 
+    /// 还在跑的异步子代理作业数 (诊断/测试用)
+    size_t runningAsyncJobs() const;
+
+    /// 取消异步子代理作业 (只置取消标记: 作业收尾时照常发布 `{cancelled:true}` 值)
+    /// - parentCtx 为空 = 取消全部; 非空只取消该父 agent 上下文上的作业
+    ///   (agent 关停时传自己的上下文, 不误伤同一容器里别的根)
+    /// - `return` 被取消的作业数
+    size_t cancelAsyncJobs(const std::shared_ptr<AgentContext>& parentCtx = nullptr);
+
+    /// 取消某个父会话上的异步子代理作业 (会话被取消时用)
+    size_t cancelAsyncJobsOfSession(std::string_view parentSessionId);
+
     /// 跨 agent 消息 (hostBus agent.message RR)
     /// - 目标 agent 需注册 mailbox 或注册为远程 agent (A2A 桥接);
     ///   否则返回明确的 not-implemented 错误
@@ -350,6 +362,34 @@ private:
         std::string                agentId;
     };
 
+    /// 一个异步子代理作业 (取消/回收用)
+    struct AsyncSubagentJob {
+        std::weak_ptr<AgentContext>                   parentCtx;
+        std::string                                   parentSessionId;
+        std::shared_ptr<neograph::graph::CancelToken> token;
+    };
+
+    /// 受理一个异步子代理任务: 登记作业 + 启动真跑协程, 立即返回 (不等结果)
+    /// - 父会话事件中枢在任务完成时收到 `{resultId, subagent, agentId, content,
+    ///   hasError, cancelled, errorMessage}` 值, 随后该事件被 end
+    void startAsyncSubagentTask(
+        const events::SubagentBatchItem& task,
+        std::string                      parentSessionId,
+        std::shared_ptr<AgentContext>    parentCtx,
+        std::string                      eventName
+    );
+
+    /// 异步作业主体: 跑子代理, 结果/失败/取消三种终态都发布到父会话的事件中枢
+    /// - 发布经 `postValue`/`postEnd` (投递回中枢自己的线程), 作业跑在哪个线程都安全
+    asio::awaitable<void> runAsyncSubagentTask(
+        events::SubagentBatchItem                    task,
+        std::string                                  parentSessionId,
+        std::shared_ptr<AgentContext>                parentCtx,
+        std::string                                  eventName,
+        std::string                                  jobId,
+        std::shared_ptr<neograph::graph::CancelToken> token
+    );
+
     /// 摘下 agentId 及其子树节点 (先子后父), 返回待关闭列表
     /// - 节点立即从注册表消失 (调用方 unmountRoot 返回后 registry/findRoot 都查不到),
     ///   agent 对象由返回的列表保活
@@ -411,6 +451,11 @@ private:
     uint64_t rootSeq_ = 0;
     /// 当前运行中的子代理数 (并发预算)
     size_t runningSubagentCount_ = 0;
+    /// 异步子代理作业 (jobId -> 作业; 跨线程: 受理在总线线程, 收尾在中枢线程)
+    std::map<std::string, AsyncSubagentJob, std::less<>> asyncJobs_;
+    mutable std::mutex                                   asyncJobsMutex_;
+    /// 异步作业 id 自增序号
+    uint64_t asyncJobSeq_ = 0;
     /// subagent sessionId -> 嵌套深度 (根会话不在表内, 视为 0)
     std::map<std::string, size_t, std::less<>> sessionDepth_;
     /// 已占用的会话存储根 (规范化路径 -> agentId)

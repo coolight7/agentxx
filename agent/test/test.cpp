@@ -467,6 +467,7 @@ int main(int argn, char** argv) {
                 co_await run("event_hub", agentxx::test::run_event_hub_tests);
                 co_await run("event_tools", agentxx::test::run_event_tools_tests);
                 co_await run("event_delivery", agentxx::test::run_event_delivery_tests);
+                co_await run("event_subagent", agentxx::test::run_event_subagent_tests);
                 co_await run("feature_points", agentxx::test::run_feature_points_tests);
                 co_await run("event_bridge", agentxx::test::run_event_bridge_tests);
                 co_await run("interrupt_bus", agentxx::test::run_interrupt_bus_tests);

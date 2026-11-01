@@ -58,6 +58,9 @@ events::ReqSubagentBatch parseSubagentBatchFromInterrupt(
                 .toolExecutionDisabled     = t.value("disable_tool_execution", false),
                 // 任务结果标识: 缺省按任务序号生成默认值
                 .resultId = t.value("result_id", std::string{}),
+                // 异步派发: 派出去就继续, 结果经事件回到父会话
+                .async     = t.value("async", false),
+                .eventName = t.value("event_name", std::string{}),
             });
         }
     } else {
@@ -82,6 +85,8 @@ events::ReqSubagentBatch parseSubagentBatchFromInterrupt(
             .inheritRequestTools       = arg.value("inherit_request_tools", false),
             .toolExecutionDisabled     = arg.value("disable_tool_execution", false),
             .resultId                  = interruptArg.resultId,
+            .async                     = arg.value("async", false),
+            .eventName                 = arg.value("event_name", std::string{}),
         });
     }
     return batchReq;
@@ -207,6 +212,20 @@ neograph::ChatTool SubAgentManagerTool::get_definition() const {
                         },
                     },
                 },
+                {
+                    "async",
+                    {
+                        {"type", "boolean"},
+                        {"description", prompt.getArg("async")},
+                    },
+                },
+                {
+                    "event_name",
+                    {
+                        {"type", "string"},
+                        {"description", prompt.getArg("event_name")},
+                    },
+                },
             }, },
         {"required", utilxx_base::Json::array({"subagent", "message"})},
     };
@@ -223,7 +242,8 @@ neograph::ChatTool SubAgentManagerTool::get_definition() const {
                             "description",
                             "Optional batch of subagent tasks, each an object of "
                             "{subagent, system_prompt, message, messages, session_id, "
-                            "tools, enable_summarization, result_id}. When provided "
+                            "tools, enable_summarization, result_id, async, event_name}. "
+                            "When provided "
                             "(non-empty), the top-level single-task fields are ignored "
                             "and all tasks run in parallel.",
                         },
@@ -294,6 +314,20 @@ neograph::ChatTool SubAgentManagerTool::get_definition() const {
                         {"description", prompt.getArg("enable_summarization")},
                     },
                 },
+                {
+                    "async",
+                    {
+                        {"type", "boolean"},
+                        {"description", prompt.getArg("async")},
+                    },
+                },
+                {
+                    "event_name",
+                    {
+                        {"type", "string"},
+                        {"description", prompt.getArg("event_name")},
+                    },
+                },
             }, },
         {
          "required", utilxx_base::Json::array({"subagent", "message"}),
@@ -325,6 +359,9 @@ asio::awaitable<std::string> SubAgentManagerTool::execute_async(const utilxx_bas
         bool        inheritRequestTools       = false;
         bool        toolExecutionDisabled     = false;
         std::string resultId;
+        // 异步派发: 立即返回受理文本, 结果经事件回到父会话
+        bool        async     = false;
+        std::string eventName;
     };
 
     auto parseTask = [](const utilxx_base::Json& t) -> TaskArg {
@@ -348,6 +385,9 @@ asio::awaitable<std::string> SubAgentManagerTool::execute_async(const utilxx_bas
         task.keepProvidedSystemMessage = t.value("keep_provided_system", false);
         task.inheritRequestTools       = t.value("inherit_request_tools", false);
         task.toolExecutionDisabled     = t.value("disable_tool_execution", false);
+        // 异步派发 (可选): 缺省 false = 阻塞等结果 (旧行为)
+        task.async     = t.value("async", false);
+        task.eventName = t.value("event_name", std::string{});
         return task;
     };
 
@@ -400,6 +440,18 @@ asio::awaitable<std::string> SubAgentManagerTool::execute_async(const utilxx_bas
     auto sessionId = arguments.value("sessionId", std::string{});
     auto resultId  = arguments.value("tool_call_id", std::string{});
 
+    // 异步派发只支持 toolcall 路径: 内部直调 (上下文压缩等) 没有 tool_call_id,
+    // 受理文本会落到无人读取的结果里, 子代理跑完也没人能用上结果
+    if (resultId.empty()) {
+        for (const auto& task : tasks) {
+            if (task.async) {
+                throw std::invalid_argument{
+                    "Arg `async` is only supported for tool calls (no `tool_call_id`)"
+                };
+            }
+        }
+    }
+
     // 通过 requestInterrupt 触发/恢复中断
     // - 首次: 存储中断参数 (tasks 数组) 到 graphData, 抛出 NodeInterrupt
     // - 恢复: 从 graphData 读取中断结果, 按 resultId 提取
@@ -442,6 +494,13 @@ asio::awaitable<std::string> SubAgentManagerTool::execute_async(const utilxx_bas
                 // 任务结果标识: 缺省按任务序号生成默认值
                 if (!task.resultId.empty()) {
                     t["result_id"] = task.resultId;
+                }
+                // 异步派发: 缺省不设置 (= false, 阻塞等结果)
+                if (task.async) {
+                    t["async"] = true;
+                }
+                if (!task.eventName.empty()) {
+                    t["event_name"] = task.eventName;
                 }
                 tasksJson.push_back(std::move(t));
             }

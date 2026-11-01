@@ -1,6 +1,7 @@
 #include "agentxx/agent/base_agent.h"
 #include "agentxx/util/neograph_json_bridge.h"
 
+#include "agentxx/agent/agent_host.h"
 #include "agentxx/agent/agent_runner.h"
 #include "agentxx/agent/assembly_snapshot.h"
 #include "agentxx/agent/checkpoint_store.h"
@@ -2010,8 +2011,15 @@ asio::awaitable<bool> BaseAgent::shutdownAsync(std::chrono::milliseconds timeout
 
     // ---- ① 停止受理新输入 (不等待当前轮次) ----
     agentContext->markShuttingDown();
-    // 事件中枢: 取消全部等待与定时源; 关闭后投递一律丢弃并计数
-    // (事件记录不持久化, 生产者都绑在进程上)
+    // 事件中枢: 先取消本 agent 上的异步子代理作业 (它们收尾时还要发结果事件),
+    // 再关闭中枢 (关闭后投递一律丢弃并计数)
+    // - 事件记录不持久化, 生产者都绑在进程上
+    if (auto host = agentContext->host.lock(); host) {
+        const auto cancelled = host->cancelAsyncJobs(agentContext);
+        if (cancelled > 0) {
+            XX_LOGI("shutdown stage 1/4: cancel {} async sub-agent job(s)", cancelled);
+        }
+    }
     if (agentContext->eventHub) {
         agentContext->eventHub->closeAll("shutdown");
     }

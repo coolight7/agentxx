@@ -56,9 +56,31 @@
 
 ### P2 子代理异步派发 + 后台工具形态
 
-- [ ] `SubagentBatchItem` 追加 `async` / `eventName`
-- [ ] `agentxx_subagent` 工具解析 + `AgentRunner` 不等 + `AgentHost` 完成后发事件
-- [ ] 测试模块 `event_subagent`
+- [x] `SubagentBatchItem` 追加 `async` / `eventName`; `RespSubagentBatchItem` 追加
+      `started` / `eventName` / `subagent`
+- [x] `tools/subagent.cpp`: 解析 `async` / `event_name` + schema + 传给中断参数;
+      非 toolcall 路径 (压缩等) 用 `async` 直接报参数错误
+- [x] `agent_runner.cpp`: **无需改动** —— async 任务在 `spawnBatch` 里就被立即受理,
+      纯异步批次直接返回 (同步任务照旧等结果)
+- [x] `agent_host.cpp`: async 受理 + 作业登记/取消 + 完成后 `postValue`/`postEnd`;
+      子代理上下文继承父 hub (`subCtx->eventHub = parentCtx->eventHub`, 嵌套不覆盖)
+- [x] `BaseAgent::shutdownAsync`: 先 `host->cancelAsyncJobs(ctx)` 再 `hub->closeAll`
+- [x] 提示词 (`prompt.cpp`): `agentxx_subagent` 的 `async` / `event_name` 参数说明与
+      depict 补充; 工具结果文本 `[Subagent started] ...`
+- [x] 测试模块 `event_subagent` (52 条断言全部通过)
+- [ ] 插件 `agentxx_execute_command` 的 `background:true` (后台命令 → 事件)
+
+实现要点 (与 plan 的差异):
+
+- plan 写“AgentRunner 不等 spawnBatch”, 实际做在 `spawnBatch` 内部: 同一批里同步任务
+  照旧等, 异步任务立即返回 `{started:true, eventName}`。这样 `service.subagent` 只有
+  一条路径, 混合批次 (同步 + 异步) 也天然成立。
+- 异步作业的取消令牌**新建一个** (不复用轮次令牌): 轮次结束/取消不应带走后台任务;
+  由 `AgentHost::cancelAsyncJobs(ctx)` (agent 关停) 与 `cancelAsyncJobsOfSession` 驱动。
+- 作业跑在父事件中枢的 executor 上 (收尾发布与中枢状态同线程), 结果发布用
+  `postValue`/`postEnd` (任意线程安全)。
+- 事件名默认 `subagent.done.<result_id>` (非法字符换 `_`), 空 id 用任务序号; 同一批内
+  重名直接报错 (否则后到的值会把前一个等待提前满足)。
 
 ### P3 插件接口表 `agentxx.agent.event`
 
@@ -76,6 +98,7 @@
 | `event_tools` | passed=80 failed=0 | 0.31 s |
 | `event_delivery` | passed=44 failed=0 | 17.4 s (每个用例起一次 HTTP 模拟服务 + 端点) |
 | `config_keys` | passed=196 failed=0 (生成物已重生成) | 0.8 s |
+| `event_subagent` | passed=52 failed=0 | 26.8 s (6 个用例各起一次模拟服务) |
 | `boundaries` | passed=18 failed=1 | 13 s |
 
 `boundaries` 的失败是**既有问题**, 与本期改动无关: 规则 15 (称呼与用词) 命中

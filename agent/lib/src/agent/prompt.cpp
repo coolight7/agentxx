@@ -250,7 +250,8 @@ Useful for passing large content between tool calls without repeating it in mess
 The sub-agent cannot see the parent conversation history; its final text output is returned to the parent as this tool's result.
 
 ## Notes
-- The sub-agent runs synchronously: the parent agent pauses until the sub-agent finishes.
+- By default the sub-agent runs synchronously: the parent agent pauses until the sub-agent finishes.
+- `async: true` dispatches the task and returns immediately; the result arrives later as an input starting with `[Event] subagent.done.<result_id>` (or `event_name`). Failed and cancelled tasks also publish (with `hasError`/`cancelled`), so a wait never hangs.
 - Provide a clear, self-contained task description in `message`; the sub-agent has no access to the parent's conversation context.
 - `subagent` must be one of the registered sub-agent names (see the enum values in the parameter description).
 - `system_prompt` is optional; when `subagent` is not set, it is used as the sub-agent's system prompt.)",
@@ -273,6 +274,10 @@ The sub-agent cannot see the parent conversation history; its final text output 
 Absent (default): the sub-agent's default full tool set.)"},
                       {"enable_summarization",
                        R"(Optional boolean. Whether the sub-agent runs with context summarization enabled. Default: inherit config (enabled). Pass `false` when delegating same-context work (e.g. context compression) so the sub-agent never re-compresses the passed-in context prefix (would break KV/prefix cache reuse).)"},
+                      {"async",
+                       R"(Optional boolean. `true`: dispatch the task and return immediately; the result arrives later as an input starting with `[Event] subagent.done.<result_id>`. Use it when the task takes long and you have other work, then `agentxx_event opt=watch` the event name. Default `false` (block until the sub-agent finishes).)"},
+                      {"event_name",
+                       R"(Optional. Event name carrying the async result (default `subagent.done.<result_id>`; when both are empty, `subagent.done.<task index>`). Letters, digits, `.`, `_`, `-` only. Only used with `async: true`.)"},
                   },
           },
       },
