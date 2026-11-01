@@ -183,10 +183,10 @@ include/pluginxx/ui/item.h)。该目录是**独立仓库** (嵌套 git 仓库, H
 “插件能发值”相关 (现在可以经 `emit_event`, 但插件侧还要自己管进程生命周期、
 超时、输出截断、取消), 单独立项比塞在本期更安全。
 
-### 4.3 TUI 给事件输入加来源样式
+### 4.3 TUI 给事件输入加来源样式 (已实施, 见第 6.1 节)
 
-**没做**。投递文本已带 `[Event] <名字>` 前缀, 模型与用户都能分辨; 加
-`ViewMessage` 来源字段要动 wire 结构 (客户端结构体 + 同步负载), 收益不够。
+原先记为"没做": 投递文本已带 `[Event] <名字>` 前缀, 模型与用户都能分辨。后续按需求补上,
+wire 结构只在表尾追加一个字段 (老客户端读到空串即旧行为), 代价可接受。
 
 ## 5. 提交记录
 
@@ -197,4 +197,41 @@ include/pluginxx/ui/item.h)。该目录是**独立仓库** (嵌套 git 仓库, H
 | `c2b0a26c` | P2: 异步子代理 (受理即返回, 结果经事件回到父会话) |
 | `67dab2a9` | P4: 关键指标与诊断段 |
 | `265eda49` | 文档: events.md + index/plugins/AGENTS/test-modules |
+
+## 6. 后续补充 (2026-11-02)
+
+### 6.1 事件输入的来源样式
+
+- 数据面: `ViewMessage::source` + `WireDelta::source` (TurnStart 用), 取值 `event:<事件名>`,
+  用户自己输入时为空; 常量与前缀解析 `kInputSourceEventPrefix` /
+  `eventNameOfInputSource` 放在 `conversation_types.h`, 投递方 (中枢) 与展示方 (客户端)
+  共用一份, 不各记一套字符串
+- 写入口: `BaseAgent::runTurnAsync(..., inputSource)`; `SessionServerAgentIO` 把会话队列
+  条目的 `source` 原样传下去; 中枢投递写 `event:<事件名>`, 轮末提升 next-step 输入时写
+  `event:pending-rollover`
+- 展示: TUI `Role::User` 在正文前加一行 `| [事件] <事件名>` (i18n 键 `msg.eventSource`,
+  dim 色); 空来源不加标记, 也不写进 JSON (老库/老客户端照旧)
+- 测试: `tui_stream` (TurnStart 保留来源 / 空来源不写 JSON / JSON 往返)、`tui_scroll`
+  (渲染出标记且只出现一次)、`event_delivery` (投递后展示消息带来源)
+
+### 6.2 工具失败前缀收敛成一份清单
+
+原来 `toolResultTextIsFailure` 只写在 `nodes/toolcall.cpp` 里, 谁想确认"我的返回文本会不会
+被记成失败"都得回去翻它。现在清单与判定搬到
+`agent/lib/include/agentxx/util/tool_result_text.h`:
+
+- `kToolFailurePrefixes` 四条 (`[Error` / `[Permission denied` /
+  `[Repeated call denied` / `[Plugin tool timeout`), 判定 `toolResultTextIsFailure` 只有
+  这一份实现
+- `ToolcallWrapNode` 改成 `using` 复用, 行为不变 (判定点仍然只有一处)
+- `event_tools` 在 `execTool` 里对每次成功返回的文本断言
+  `!toolResultTextIsFailure(...)`, 改事件文案时第一时间报出来
+- 限制本身**只作用于工具结果文本**: 事件投递产生的用户消息不经过失败判定
+  (见 [events.md](/docs/zh-cn/design/events.md) 第 5.1 节)
+
+### 6.3 文件编码与换行约定
+
+项目自己编写的文件统一 UTF-8 (无 BOM) + LF, 写进了 [AGENTS.md](/AGENTS.md) 与
+[index.md](/docs/zh-cn/design/index.md) 的"文件编码与换行"一节; `agent/third_party/`
+保留上游行尾与编码, 不强制改写。
 
