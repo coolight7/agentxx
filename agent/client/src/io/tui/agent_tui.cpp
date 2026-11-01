@@ -2999,6 +2999,8 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
                     );
                     msg->id          = delta.msgId;
                     msg->attachments = delta.attachments;
+                    // 来源标记 (事件中枢投递的输入): 消息头显示来源, 与用户自己输入区分
+                    msg->source = delta.source;
                     if (false == isBlankContentMessage(*msg)) {
                         // 用户自己的新消息: 先恢复吸附底部, 再追加 (追加触发的
                         // 本地条数清理检查读到的是"跟随最新内容"的状态, 不被

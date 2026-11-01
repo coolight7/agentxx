@@ -1381,9 +1381,74 @@ void testTuiStreamScenario15(asio::io_context& ioCtx) {
     }
 }
 
+// 场景 16: TurnStart 的来源标记 (事件中枢投递的输入) 保留在消息上
+// - 服务端在 TurnStart 增量里给出 `source`, 客户端只存不解析正文
+// - 历史消息经 Sync (ViewMessage JSON) 重载时同样保留
+void testTuiStreamEventSource(asio::io_context& ioCtx) {
+    TestTUIClientIO client(ioCtx);
+
+    {
+        WireDelta d;
+        d.type        = WireDelta::Type::TurnStart;
+        d.text        = "[Event] chat.message (first)\nstatus: value\nvalue: hi";
+        d.msgId       = "m-1";
+        d.startTimeMs = 1000;
+        d.source = std::string{agentxx::agent::kInputSourceEventPrefix} + "chat.message";
+        client.testOnDelta(d);
+    }
+    {
+        WireDelta d;
+        d.type        = WireDelta::Type::TurnEnd;
+        client.testOnDelta(d);
+    }
+
+    auto snap = client.sharedState().snapshot();
+    XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)1);
+    if (snap->messages.size() == 1) {
+        XX_TEST_EXPECT_TRUE(snap->messages[0]->role == TUIMessage::Role::User);
+        XX_TEST_EXPECT_EQ(
+            snap->messages[0]->source,
+            std::string{agentxx::agent::kInputSourceEventPrefix} + "chat.message"
+        );
+        XX_TEST_EXPECT_EQ(
+            std::string{agentxx::agent::eventNameOfInputSource(snap->messages[0]->source)},
+            std::string{"chat.message"}
+        );
+    }
+
+    // 用户自己输入的一轮: 来源为空 (不加样式)
+    {
+        WireDelta d;
+        d.type        = WireDelta::Type::TurnStart;
+        d.text        = "typed by the user";
+        d.msgId       = "m-2";
+        d.startTimeMs = 2000;
+        client.testOnDelta(d);
+    }
+    snap = client.sharedState().snapshot();
+    XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)2);
+    if (snap->messages.size() == 2) {
+        XX_TEST_EXPECT_TRUE(snap->messages[1]->source.empty());
+        XX_TEST_EXPECT_TRUE(agentxx::agent::eventNameOfInputSource(snap->messages[1]->source).empty()
+        );
+    }
+
+    // ViewMessage JSON 往返也保留来源 (Sync 重载历史时靠它加样式)
+    {
+        ViewMessage original = ViewMessage::makeText(ViewMessage::Role::User, "[Event] a.b", 1);
+        original.source      = std::string{agentxx::agent::kInputSourceEventPrefix} + "a.b";
+        const auto json      = original.toJson();
+        XX_TEST_EXPECT_EQ(json.value("source", std::string{}), original.source);
+        const auto restored = ViewMessage::fromJson(json);
+        XX_TEST_EXPECT_EQ(restored.source, original.source);
+        // 空来源不写进 JSON (老客户端/老库无字段, 兼容)
+        ViewMessage plain = ViewMessage::makeText(ViewMessage::Role::User, "hi", 2);
+        XX_TEST_EXPECT_FALSE(plain.toJson().contains("source"));
+    }
+}
+
 TestResult testTuiStream() {
     testTuiStreamMarkdown();
-
     asio::io_context ioCtx;
     testTuiStreamScenario1(ioCtx);
     testTuiStreamScenario2(ioCtx);
@@ -1400,6 +1465,7 @@ TestResult testTuiStream() {
     testTuiStreamScenario13(ioCtx);
     testTuiStreamScenario14(ioCtx);
     testTuiStreamScenario15(ioCtx);
+    testTuiStreamEventSource(ioCtx);
 
     return TestResult{g_tui_stream_passed, g_tui_stream_failed};
 }

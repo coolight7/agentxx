@@ -269,6 +269,8 @@ std::vector<WireSample> wireSamples() {
         m.tps          = 12.5;
         m.tipType      = WireDelta::TipType::Warning;
         m.hasError     = false;
+        // 来源标记 (事件中枢投递的输入): 客户端据此加来源样式
+        m.source = "event:chat.message";
         m.message      = std::make_shared<ViewMessage>(
             ViewMessage::makeText(ViewMessage::Role::Assistant, "插入的完整消息")
         );
@@ -279,6 +281,8 @@ std::vector<WireSample> wireSamples() {
         WireSyncPayload m;
         m.fromIndex     = 0;
         m.messages      = {ViewMessage::makeText(ViewMessage::Role::User, "历史消息")};
+        // 事件输入的历史消息带来源标记 (重载会话后仍能加样式)
+        m.messages.front().source = "event:chat.message";
         m.tailHash      = "deadbeef";
         m.totalMessages = 1;
         m.messageQueue.push_back(MessageQueueItem{

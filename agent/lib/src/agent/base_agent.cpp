@@ -147,7 +147,11 @@ void rolloverLeftoverNextStepInputs(
         }
         text += input.text;
     }
-    if (!sink->submitTurnInput(text, "event:pending-rollover", false)) {
+    if (!sink->submitTurnInput(
+            text,
+            std::string{agentxx::agent::kInputSourceEventPrefix} + "pending-rollover",
+            false
+        )) {
         // 提交失败: 原样放回, 内容不丢
         for (auto& input : inputs) {
             session->enqueuePendingInput(std::move(input));
@@ -1438,7 +1442,8 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
     std::string_view             userInput,
     std::shared_ptr<AgentIOBase> io, // server-io
     std::string_view             modelName,
-    std::vector<MediaAttachment> attachments
+    std::vector<MediaAttachment> attachments,
+    std::string_view             inputSource
 ) {
     TurnResult turnResult;
     auto       session = co_await agentContext->getSessionAsync(sessionId);
@@ -1717,6 +1722,8 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
     //   无时间戳时列表无法显示活动时间
     auto userViewMsg = ViewMessage::makeText(ViewMessage::Role::User, processedInput, startTimeMs);
     userViewMsg.attachments = attachments;
+    // 来源标记 (事件中枢投递的事件输入): 只影响展示样式, 角色仍是 User
+    userViewMsg.source = std::string{inputSource};
     const auto userMsgId    = session->appendViewMessage(std::move(userViewMsg));
     {
         // 用户消息写入会话上下文 (唯一权威): 图状态不再持有 messages 通道,
@@ -1743,6 +1750,8 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
         .startTimeMs = startTimeMs,
         .type        = WireDelta::Type::TurnStart,
     };
+    // 事件输入: 客户端据此给这条用户消息加来源样式 (不解析正文)
+    turnStartDelta.source = std::string{inputSource};
     for (const auto& a : attachments) {
         MediaAttachment meta = a;
         meta.dataUrl.clear();

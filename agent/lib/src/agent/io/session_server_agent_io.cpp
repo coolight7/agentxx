@@ -2280,7 +2280,9 @@ asio::awaitable<void> SessionServerAgentIO::run() {
                     currentItem.text,
                     shared_from_this(),
                     turnModel,
-                    std::move(currentItem.attachments)
+                    std::move(currentItem.attachments),
+                    // 来源标记 (事件投递/用户输入): 传给展示消息与 TurnStart 增量
+                    currentItem.source
                 );
                 sendToPeer(WireTurnResult{
                     .sessionId    = config_.sessionId,

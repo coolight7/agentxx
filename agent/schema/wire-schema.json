@@ -235,6 +235,7 @@
         "durationMs": "integer",
         "tps": "number",
         "nodeName": "string",
+        "source": "string",
         "message": "object{role:string, text:string, startTimeMs:integer, durationMs:integer}",
         "kind": "string"
       },
@@ -253,6 +254,7 @@
         "durationMs": 456,
         "tps": 12.5,
         "nodeName": "llm",
+        "source": "event:chat.message",
         "message": {
           "role": "assistant",
           "text": "插入的完整消息",
@@ -273,7 +275,7 @@
         "totalMessages": "integer",
         "lastViewSeq": "integer",
         "incremental": "boolean",
-        "messages": "array<object{role:string, text:string, startTimeMs:integer, durationMs:integer}>",
+        "messages": "array<object{role:string, text:string, startTimeMs:integer, durationMs:integer, source:string}>",
         "message_queue": "array<object{id:string, text:string, createdAtMs:integer, model:string, delivery:string, recovered:boolean}>",
         "queue_state": "string",
         "type": "string"
@@ -290,7 +292,8 @@
             "role": "user",
             "text": "历史消息",
             "startTimeMs": 0,
-            "durationMs": 0
+            "durationMs": 0,
+            "source": "event:chat.message"
           }
         ],
         "message_queue": [

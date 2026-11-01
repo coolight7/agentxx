@@ -147,7 +147,39 @@ The value will arrive later as an input starting with "[Event] build.done".
 Keep working, or end the turn — you do not need to poll. Use opt=status wait=w-3 to check.
 ```
 
-两种文本都不以工具失败前缀开头，因此不会被执行层记成失败结果。
+两种文本都不以工具失败前缀开头，因此不会被执行层记成失败结果。这条不是风格选择，而是约束，
+原因与边界见下一小节。
+
+### 5.1 首行前缀的限制（只作用于工具结果文本）
+
+`await` 超时与 `watch` 回执这两段文本都会作为**工具结果**回到会话里，而“这次调用是否失败”
+除了执行层显式置位（异常 / 工具不存在 / 参数非法 / 权限拒绝 / 插件报错）之外，还允许工具
+自己把失败写成结果文本：首行命中 `[Error` / `[Permission denied` / `[Repeated call denied` /
+`[Plugin tool timeout` 即记成失败。清单与判定实现只有一份，在
+`agentxx/util/tool_result_text.h`（`kToolFailurePrefixes` + `toolResultTextIsFailure`），
+调用点只有 `ToolcallWrapNode` 一处。
+
+所以：
+
+- 这两个前缀是**约定**，改文本前先看那份清单；`event_tools` 会逐条断言返回文本
+  并校验 `toolResultTextIsFailure(...) == false`；
+- 限制**只落在工具结果文本上**。事件投递产生的输入是一条 `user` 消息（`[Event] ...`），
+  不经过失败判定，改它的正文不需要考虑这些前缀；
+- 工具结果文本以外的产物（提示、日志、Wire 消息、插件返回值）都不在判定范围内。
+
+### 5.2 来源标记（给界面看的，不参与判定）
+
+事件投递的输入在会话里就是一条 `user` 消息，角色与用户自己敲进去的一样。为了在界面上区分，
+服务端额外带上结构化来源：
+
+- `ViewMessage::source` 与 `WireDelta::source`（TurnStart 用）取值 `event:<事件名>`；
+  用户自己输入时为空字符串
+- 写入口：`BaseAgent::runTurnAsync(..., inputSource)` → 展示消息 + TurnStart 增量；
+  常量与前缀解析在 `conversation_types.h`（`kInputSourceEventPrefix` / `eventNameOfInputSource`），
+  投递方与展示方共用一份，不各记一套字符串
+- 客户端只拿它做展示（用户消息头部加一行 `| [事件] <事件名>`，i18n 键 `msg.eventSource`），
+  **不解析正文**；空值不写进 JSON，老客户端与老会话库照旧
+- 历史消息经 Sync（`ViewMessage` JSON）与会话库重载后仍带该字段
 
 ## 6. 工具 `agentxx_event`
 
@@ -269,17 +301,15 @@ Keep working, or end the turn — you do not need to poll. Use opt=status wait=w
   "定义事件/登记等待/查询等待"。需要它时应新增一张业务表（追加式，见
   [plugins.md](plugins.md) 的接口表规则），并补 `boundaries` 的成员台账与示例插件；
 - **后台命令**（`agentxx_execute_command` 的 `background:true`）未实现：命令长时间运行时
-  仍占一轮；
-- **TUI 来源标记**未做：投递消息已带 `[Event]` 前缀，加 `ViewMessage` 来源字段要动 wire 结构，
-  收益与代价不成比例。
+  仍占一轮。
 
 ## 14. 测试
 
 | 模块 | 覆盖 |
 |---|---|
 | `event_hub` | 记录状态机、回放、三种 `mode`、预算、名字校验、取消、`awaitOnce` 三种退出、定时源、ttl/linger |
-| `event_tools` | 七个 `opt` 的参数校验与返回文本（逐字段断言，作为对外约定）、工具注册与 `event.enable` 开关、schema |
-| `event_delivery` | 空闲/在跑/无驱动端/暂停态四种投递路径、轮末兜底、端点停止后解绑、关停丢弃 |
+| `event_tools` | 七个 `opt` 的参数校验与返回文本（逐字段断言，作为对外约定）、返回文本不命中工具失败前缀、工具注册与 `event.enable` 开关、schema |
+| `event_delivery` | 空闲/在跑/无驱动端/暂停态四种投递路径、轮末兜底、端点停止后解绑、关停丢弃、展示消息的来源标记 |
 | `event_subagent` | 异步派发立即受理、结果事件叫醒会话、工具返回文本、事件名冲突与非法名、无中枢时报错、取消后仍发终态 |
 
 `event_delivery` / `event_subagent` 每个用例都起一次本地模拟 LLM 服务，单模块耗时十几秒，

@@ -159,6 +159,24 @@ bool viewHasText(
     return false;
 }
 
+/// 展示历史里那条事件输入消息的来源字段 (找不到时返回空)
+std::string viewSourceOfEventMessage(
+    const std::shared_ptr<agentxx::agent::BaseAgent>& agent,
+    std::string_view                                  sessionId,
+    std::string_view                                  text
+) {
+    auto session = agent->agentContext->sessions->get(sessionId);
+    if (!session) {
+        return {};
+    }
+    for (const auto& m : session->viewMessages) {
+        if (m.role == agentxx::agent::ViewMessage::Role::User && contains(m.text, text)) {
+            return m.source;
+        }
+    }
+    return {};
+}
+
 asio::awaitable<std::shared_ptr<DeliveryFixture>>
     makeDeliveryFixture(std::string sessionId, bool startEndpoint = true) {
     auto fx                       = std::make_shared<DeliveryFixture>();
@@ -266,6 +284,11 @@ asio::awaitable<void> test_delivery_idle_starts_turn() {
     XX_TEST_EXPECT_TRUE(contextHasText(fx->agent, fx->sessionId, "hi there"));
     // 展示历史也有一条 (用户看得见事件把什么塞进了会话)
     XX_TEST_EXPECT_TRUE(viewHasText(fx->agent, fx->sessionId, "[Event] chat.message"));
+    // 展示消息带结构化来源标记 (界面据此加来源样式, 不解析正文)
+    XX_TEST_EXPECT_EQ(
+        viewSourceOfEventMessage(fx->agent, fx->sessionId, "[Event] chat.message"),
+        std::string{agentxx::agent::kInputSourceEventPrefix} + "chat.message"
+    );
     // 端点队列里的来源标记
     {
         auto session = fx->agent->agentContext->sessions->get(fx->sessionId);

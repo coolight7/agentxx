@@ -261,6 +261,10 @@ inline utilxx_base::Json deltaToJson(const WireDelta& d) {
     if (!d.nodeName.empty()) {
         j["nodeName"] = d.nodeName;
     }
+    // TurnStart 来源标记 (事件中枢投递的输入): 客户端据此加来源样式
+    if (!d.source.empty()) {
+        j["source"] = d.source;
+    }
     // TurnStart 即时回显附件元数据（不含 dataUrl，见 WireDelta::attachments 注释）
     if (d.type == WireDelta::Type::TurnStart && !d.attachments.empty()) {
         utilxx_base::Json arr = utilxx_base::Json::array();
@@ -327,6 +331,7 @@ inline std::optional<WireDelta> deltaFromJson(const utilxx_base::Json& j) {
     d.durationMs   = j.value("durationMs", int64_t{0});
     d.tps          = j.value("tps", 0.0);
     d.nodeName     = j.value("nodeName", std::string{});
+    d.source       = j.value("source", std::string{});
     if (j.contains("attachments") && j["attachments"].is_array()
         && d.type == WireDelta::Type::TurnStart) {
         for (const auto& a : j["attachments"]) {

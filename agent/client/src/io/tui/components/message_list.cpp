@@ -1698,6 +1698,17 @@ Element MessageListComponent::buildMessageBlock(
                 userElements.push_back(text("|") | color(theme.accentColor) | bold);
             }
 
+            // 事件中枢投递的输入: 正文前加一行来源标记 (事件名来自结构化来源字段,
+            // 不解析正文), 与用户自己输入的消息区分
+            if (auto eventName = agentxx::agent::eventNameOfInputSource(msg.source);
+                !eventName.empty()) {
+                userElements.push_back(text(fmt::format(
+                                               "|{}",
+                                               trf("msg.eventSource", std::string{eventName})
+                                           ))
+                                       | theme.dim());
+            }
+
             userElements.push_back(hbox({
                 text("> ") | color(theme.userColor),
                 // 正文按纯文本折行渲染 (不解析 markdown): 单节点包含整段文本,

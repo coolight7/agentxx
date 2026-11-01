@@ -736,6 +736,23 @@ agent 线程插入会话历史的展示条目: 轮次统计、错误/取消提�
 - 相关测试: `agentxx_test tui_scroll` 的场景 9 / 9b / 9c (前缀与级别文本、不再带 `#`、
   运行中点阵推进、结束后回到静态标记)
 
+### 2.17 事件输入的来源标记
+
+事件中枢投递的输入在会话里就是一条普通 `user` 消息 (正文是渲染好的 `[Event] ...` 文本,
+见 [events.md](events.md) 第 5 节)。为了让界面区分"事件塞进来的"和"用户敲的", 服务端额外
+下发结构化来源, 渲染在 `Role::User` 分支:
+
+- 字段: `ViewMessage::source` / `WireDelta::source` (TurnStart), 取值 `event:<事件名>`;
+  用户自己输入时为空串 (`kInputSourceEventPrefix` / `eventNameOfInputSource`, 见
+  [conversation_types.h](/agent/lib/include/agentxx/agent/conversation_types.h))
+- 显示: 正文前加一行 `| [事件] <事件名>` (i18n 键 `msg.eventSource`; 英文为 ` [Event] {}`;
+  颜色 `theme.dim()`), 正文照旧按纯文本渲染
+- **不解析正文**: 正文是给模型看的稳定文本, 会随 [events.md](events.md) 第 5 节调整;
+  从正文里再扒一次事件名等于把展示绑在文本格式上
+- 历史消息经 Sync (`ViewMessage` JSON) 与会话库重载后仍带该字段, 重启后同样有标记
+- 相关测试: `agentxx_test tui_scroll` 的来源标记场景 (出现标记且只出现一次),
+  `agentxx_test tui_stream` 的 TurnStart 场景 (来源保留、空来源不写 JSON、JSON 往返)
+
 ---
 
 ## 3. 必须遵守的约束

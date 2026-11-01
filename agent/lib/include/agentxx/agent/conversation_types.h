@@ -217,6 +217,24 @@ inline uint64_t estimateAttachmentSizeBytes(const MediaAttachment& att) {
     return 0;
 }
 
+/// 会话输入来源标记: 事件中枢投递的输入前缀 (`event:<事件名>`)
+///
+/// 投递方 (事件中枢) 拼来源、展示端 (TUI 等) 判断来源都用这一个常量, 避免两边
+/// 各记一套字符串。仅供**展示与诊断**使用: 消息角色仍是 User, 处理路径不变。
+inline constexpr std::string_view kInputSourceEventPrefix = "event:";
+
+/// 来源标记是否来自事件中枢
+/// - `args`:
+///     - [source] 来源标记 (如 `event:chat.message`)
+/// - `return` 是事件投递时返回事件名 (空串 = 不是事件输入)
+inline std::string_view eventNameOfInputSource(std::string_view source) noexcept {
+    if (source.size() <= kInputSourceEventPrefix.size()
+        || !source.starts_with(kInputSourceEventPrefix)) {
+        return {};
+    }
+    return source.substr(kInputSourceEventPrefix.size());
+}
+
 /// UI 展示消息 (server Session::viewMessages / wire Sync / client 渲染共用)
 ///
 /// 设计: 通用字段 (role/text/时间戳/折叠) 平铺, 角色专属字段按 role 放入
@@ -320,6 +338,12 @@ struct ViewMessage {
     /// 正文: User/Assistant/Think/System 消息文本; Tool 消息为工具参数
     /// (arguments JSON 字符串, 与渲染侧现有约定一致)
     std::string text;
+
+    /// 来源标记 (空 = 用户自己输入的)
+    /// - `event:<事件名>`: 事件中枢投递的事件输入 (见 [events.md](/docs/zh-cn/design/events.md))
+    /// - 只用于展示样式与诊断: 角色仍是 User, 处理路径不变; 正文已经是
+    ///   渲染好的 `[Event] ...` 文本, 带结构化来源是为了让渲染端不必解析正文
+    std::string source;
 
     /// 多模态媒体附件列表
     std::vector<MediaAttachment> attachments;
@@ -501,6 +525,11 @@ struct WireDelta {
 
     std::string nodeName;
     std::string tailHash;
+
+    /// 来源标记 (TurnStart 用): 空 = 用户自己输入的; `event:<事件名>` = 事件中枢投递
+    /// - 客户端据此给这条用户消息加来源样式 (不解析正文)
+    /// - 与 `ViewMessage::source` 同一套取值 (见 [kInputSourceEventPrefix])
+    std::string source;
 
     uint64_t seq          = 0;
     uint64_t historyCount = 0;
@@ -756,6 +785,9 @@ inline utilxx_base::Json ViewMessage::toJson() const {
     j["text"]        = text;
     j["startTimeMs"] = startTimeMs;
     j["durationMs"]  = durationMs;
+    if (!source.empty()) {
+        j["source"] = source;
+    }
     if (collapsed) {
         j["collapsed"] = true;
     }
@@ -829,6 +861,7 @@ inline ViewMessage ViewMessage::fromJson(const utilxx_base::Json& j) {
     ViewMessage m;
     m.id          = j.value("id", std::string{});
     m.text        = j.value("text", std::string{});
+    m.source      = j.value("source", std::string{});
     m.startTimeMs = j.value("startTimeMs", j.value("start_time_ms", int64_t{0}));
     m.durationMs  = j.value("durationMs", j.value("duration_ms", int64_t{0}));
     m.collapsed   = j.value("collapsed", false);

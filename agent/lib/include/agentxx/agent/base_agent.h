@@ -81,12 +81,15 @@ public:
     ///   上下文是唯一权威, 图状态不持有消息)
     /// - 增量事件经 io->sendToPeer(WireDelta) 推送 (io 端点须已设置 transport);
     ///   io 传 nullptr 时为 headless 模式, 不产出事件
+    /// - `inputSource`: 输入来源标记 (空 = 用户自己输入; `event:<事件名>` = 事件中枢投递),
+    ///   写进展示消息与 TurnStart 增量, 客户端只用于展示样式
     asio::awaitable<TurnResult> runTurnAsync(
         std::string_view             sessionId,
         std::string_view             userInput,
         std::shared_ptr<AgentIOBase> io,
         std::string_view             modelName   = "",
-        std::vector<MediaAttachment> attachments = {}
+        std::vector<MediaAttachment> attachments = {},
+        std::string_view             inputSource = ""
     );
 
     /// 收集会话启动时通知的信息 (MCP/Skill/Memory)

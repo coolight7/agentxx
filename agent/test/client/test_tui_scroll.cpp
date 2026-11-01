@@ -555,6 +555,52 @@ static void testRoleLabelLocalization() {
 }
 
 // ---------------------------------------------------------------------------
+// 事件中枢投递的输入: 用户消息头部带来源标记
+//
+// 来源是**结构化字段** (`ViewMessage::source`, 取值 `event:<事件名>`), 不是从正文
+// 里扒出来的: 正文已经是渲染好的 `[Event] ...` 文本, 再解析一遍会把展示逻辑
+// 绑在文本格式上。非事件来源 (空) 不加标记。
+// ---------------------------------------------------------------------------
+
+void testEventSourceBadge() {
+    auto&      settings  = TUISettings::instance();
+    const auto savedLang = settings.language();
+    settings.setLanguage(TuiLanguage::ZhCn);
+
+    ScrollFixture f;
+    f.sharedState.mutate([](TUIRenderState& st) {
+        auto eventMsg  = std::make_shared<TUIMessage>();
+        eventMsg->role = TUIMessage::Role::User;
+        eventMsg->text = "[Event] chat.message (first)\nstatus: value\nvalue: hi there";
+        eventMsg->source = std::string{agentxx::agent::kInputSourceEventPrefix} + "chat.message";
+        st.messages.push_back(std::move(eventMsg));
+
+        auto userMsg  = std::make_shared<TUIMessage>();
+        userMsg->role = TUIMessage::Role::User;
+        userMsg->text = "typed by the user";
+        st.messages.push_back(std::move(userMsg));
+    });
+
+    const auto        frame = stripAnsiCodes(f.render());
+    // 中文界面的来源标记文本 (i18n 键 msg.eventSource, 见 tui_i18n.cpp)
+    const std::string badge = " [事件] chat.message";
+    // 事件输入: 头部有来源标记, 正文照旧展示
+    XX_TEST_EXPECT_TRUE(frame.find(badge) != std::string::npos);
+    XX_TEST_EXPECT_TRUE(frame.find("value: hi there") != std::string::npos);
+    // 用户自己输入的消息: 正文里没有事件名字, 也不出现来源标记
+    XX_TEST_EXPECT_TRUE(frame.find("typed by the user") != std::string::npos);
+    {
+        // 来源标记只出现一次 (只有那条事件消息带)
+        size_t first = frame.find(badge);
+        size_t next  = first == std::string::npos ? std::string::npos : frame.find(badge, first + 1);
+        XX_TEST_EXPECT_TRUE(first != std::string::npos);
+        XX_TEST_EXPECT_TRUE(next == std::string::npos);
+    }
+
+    settings.setLanguage(savedLang);
+}
+
+// ---------------------------------------------------------------------------
 // 回归: 连接失败 banner 的 [重试] 按钮命中区域随状态出现/消失
 //
 // 背景: 如果用成员 Box 保存命中区域, 且以 `Box{}` (四个分量为 0) 表示"清空",
@@ -1058,6 +1104,9 @@ TestResult testTuiScroll() {
     testHistoryPrependAnchoring();
 
     testRoleLabelLocalization();
+
+    // 事件中枢投递的输入: 用户消息头部带来源标记
+    testEventSourceBadge();
 
     testBannerRetryButtonHitArea();
 

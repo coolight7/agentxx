@@ -547,7 +547,8 @@ void EventHub::flushWait(WaitEntry& entry, std::string_view status, bool resetVa
     EventDelivery delivery;
     delivery.sessionId     = wait.spec.originSession;
     delivery.text          = renderEventText(wait, status, texts, note);
-    delivery.source        = "event:" + wait.spec.event;
+    delivery.source        = std::string{agentxx::agent::kInputSourceEventPrefix}
+                             + wait.spec.event;
     delivery.delivery      = wait.spec.delivery;
     delivery.waitId        = wait.waitId;
     delivery.eventName     = wait.spec.event;
@@ -685,7 +686,9 @@ DeliverResult EventHub::deliver(const EventDelivery& d, std::string* reasonOut) 
         }
         agentxx::agent::SessionPendingInput input;
         input.text        = d.text;
-        input.source      = d.source.empty() ? std::string{"event"} : d.source;
+        input.source      = d.source.empty()
+                                ? (std::string{agentxx::agent::kInputSourceEventPrefix} + d.eventName)
+                                : d.source;
         input.delivery    = std::string{mode};
         input.createdAtMs = systemNowMs();
         session->enqueuePendingInput(std::move(input));
