@@ -1,6 +1,6 @@
 # Agentxx 整体设计文档
 
-> 相关文档: [plugins.md](plugins.md) (纯 C ABI 写法) · [ffi.md](ffi.md) (FFI 接口设计) · [tui.md](tui.md) (TUI 实现与架构) · [ui-layer.md](ui-layer.md) (界面描述层/适配/kit) · [agentxx-ui-kit.md](agentxx-ui-kit.md) (扩展 kit 生成物) · [benchmark.md](benchmark.md) (资源与性能基准) · [security.md](security.md) (安全责任与边界) · [configuration.md](configuration.md) (配置与设置边界) · [config-keys.md](config-keys.md) (配置键目录, 生成物) · [wire-protocol-fields.md](wire-protocol-fields.md) (Wire 协议字段清单, 生成物) · [roadmap.md](roadmap.md) (实施状态清单)
+> 相关文档: [plugins.md](plugins.md) (纯 C ABI 写法) · [ffi.md](ffi.md) (FFI 接口设计) · [tui.md](tui.md) (TUI 实现与架构) · [ui-layer.md](ui-layer.md) (界面描述层/适配/kit) · [agentxx-ui-kit.md](agentxx-ui-kit.md) (扩展 kit 生成物) · [benchmark.md](benchmark.md) (资源与性能基准) · [security.md](security.md) (安全责任与边界) · [configuration.md](configuration.md) (配置与设置边界) · [config-keys.md](config-keys.md) (配置键目录, 生成物) · [wire-protocol-fields.md](wire-protocol-fields.md) (Wire 协议字段清单, 生成物) · [events.md](events.md) (事件中枢与异步子代理) · [roadmap.md](roadmap.md) (实施状态清单)
 
 ## 目录
 
@@ -186,6 +186,27 @@ git_worktree 及延迟加载加载 (`ToolSkillSearchSubAgentTask` 模板类, 当
 - **订阅机制**: 支持常驻订阅和执行次数限制 (execHit) 的自动移除订阅
 - **HIL (Human-in-the-Loop)**: 中断/权限请求经 RequestResponseStream 派发到客户端 UI，支持超时
 - **定时器**: EventBus 内置定时器事件流，支持 once/repeat 模式
+
+#### 事件中枢 (EventHub) 与异步子代理
+
+总线只传递“通知”，不保存“值”：一次工具调用必须同步返回，所以“现在没有结果、有了再继续”只能靠反复查询。
+`agentxx::events::EventHub` 在总线之上补一层**有状态的记录 + 等待句柄 + 投递**：
+
+- 每个根一份中枢（`AgentContext::eventHub`，`BaseAgent::init` 的 `event_hub` 步骤建），
+  跑在该 agent 的 io 线程；同时订阅总线 `evt.` 与 `plugin.evt.` 两个前缀，
+  插件往总线发一个值就等于往中枢发值；
+- 模型用内置工具 `agentxx_event`（`watch`/`await`/`status`/`list`/`cancel`/`emit`/`end`）
+  登记等待或发布值；值到达时统一翻译成会话输入（空闲开新一轮，在跑则插到下一次模型调用前）；
+- “往会话塞一轮输入”统一经 `SessionInputSink`（由 `SessionServerAgentIO` 实现，
+  弱引用登记在 `Session::inputSink`），保证一个会话同一时刻只有一个驱动者；
+- 内置事件源：`turn.start` / `turn.end` / `tool.end.<工具名>` / `subagent.done.<result_id>` /
+  `timer.<名字>`，只在有人等时发布；
+- `agentxx_subagent` 的 `async:true`：派出去就继续，后台跑完后以
+  `[Event] subagent.done.<result_id>` 回到父会话；失败/取消同样发布（等待不会挂到超时），
+  取消令牌独立于轮次，并在 agent 关停时统一取消。
+
+细节（状态机、投递决策表、文本格式、预算、诊断、配置项）见 [events.md](events.md)；
+配置键 `event.*` 见 [config-keys.md](config-keys.md)。
 
 ### 多会话与并发
 

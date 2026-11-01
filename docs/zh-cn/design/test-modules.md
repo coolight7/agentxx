@@ -11,7 +11,7 @@ path/to/agentxx_test --fail-fast        # 遇到失败立即终止
 path/to/agentxx_test string_util regex  # 只跑指定模块
 ```
 
-模块总数: 132 (同步 70 / 异步 62)
+模块总数: 136 (同步 70 / 异步 66)
 
 | 模块 | 调度 | 构建 |
 |---|---|---|
@@ -86,6 +86,10 @@ path/to/agentxx_test string_util regex  # 只跑指定模块
 | `ftxui_text` | 同步 | 仅 client |
 | `markdown_flow` | 同步 | 仅 client |
 | `event_stream` | 异步 | 通用 |
+| `event_hub` | 异步 | 通用 |
+| `event_tools` | 异步 | 通用 |
+| `event_delivery` | 异步 | 通用 |
+| `event_subagent` | 异步 | 通用 |
 | `feature_points` | 异步 | 通用 |
 | `event_bridge` | 异步 | 通用 |
 | `interrupt_bus` | 异步 | 通用 |

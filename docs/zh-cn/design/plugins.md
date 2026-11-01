@@ -1938,6 +1938,15 @@ plugin:
 `ERR_BUDGET` / `ERR_CONFLICT` / `ERR_UNSUPPORTED` / `ERR_FAILED`。具体原因写日志
 (这张表的入口没有 `error_out` 参数)。
 
+**与事件中枢的关系**: 事件中枢 (`agentxx::events::EventHub`, 见 [events.md](events.md))
+订阅总线的 `evt.` 与 `plugin.evt.` 两个前缀，所以插件用
+`emit_event("evt.chat.group42", payload)` 发一条主题带 `evt.` 前缀的事件，就等于
+往中枢发了一个名为 `chat.group42` 的值：模型只要先
+`agentxx_event {opt:"watch", event:"chat.group42"}`，值到达时就会被唤醒。
+主题名与事件名的字符集/保留前缀规则见 `agentxx/event/naming.h`。
+目前**没有**插件专用的“定义事件/登记等待”接口表（计划中的 `agentxx.agent.event`），
+需要时应按追加式新增一张业务表并在 `boundaries` 的成员台账里登记。
+
 ### 19.3 根配置 (`config_json`)
 
 字段与派生规则:

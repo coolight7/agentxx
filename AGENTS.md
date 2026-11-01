@@ -9,7 +9,7 @@
     - Android 5.0+
 
 ## 设计 & 建议
-- 详细主程序架构设计见[design](docs/zh-cn/design/index.md)，插件设计文档见[plugins.md](docs/zh-cn/design/plugins.md)，客户端界面层（描述层/适配/kit/GUI 接入）见[ui-layer.md](docs/zh-cn/design/ui-layer.md)，当大幅修改代码时，请参考并更新
+- 详细主程序架构设计见[design](docs/zh-cn/design/index.md)，插件设计文档见[plugins.md](docs/zh-cn/design/plugins.md)，客户端界面层（描述层/适配/kit/GUI 接入）见[ui-layer.md](docs/zh-cn/design/ui-layer.md)，事件中枢与异步子代理见[events.md](docs/zh-cn/design/events.md)，当大幅修改代码时，请参考并更新
 - Agent 的设计支持:
     - 并发多会话，单线程/多协程交错执行会话，不需要线程锁
     - client (tui/cli) 主要负责UI渲染展示、用户交互；agent (BaseAgent/CodeAgent) 负责运行会话、调用 llm api、运行 toolcall 等
@@ -486,6 +486,26 @@ path/to/agentxx_test string_util regex
   环境/指标/加载(含配置 JSON)/会话摘要/日志尾部, 默认不含消息正文、不含凭据取值
   (内容过 `redactSecrets`); 日志尾部经 `enableLogCapture` 的进程内环形缓冲捕获
   (只保留最近 512 行: 诊断捕获、TUI `TUILogSink`、FFI 日志环同一个上限)
+- 事件中枢与异步挂起 (2026-11, 详见 [events.md](docs/zh-cn/design/events.md)):
+  `agentxx::events::EventHub` (`AgentContext::eventHub`, 每个根一份) = 有状态记录
+  (`EventRecord`: kind/state/历史值) + 等待句柄 (`EventWait`: mode first|each|all,
+  delivery next-step|inject|next-turn|none) + 投递; 它**建在总线之上** (订阅 `evt.` 与
+  `plugin.evt.` 两个前缀), 总线仍只做通知; 名字规则在 `agentxx/event/naming.h`
+  (字符集/长度 96/保留前缀), 投递文本固定以 `[Event] <名字> (<mode>)` 开头
+  (不命中工具失败前缀); 往会话塞输入统一经 `SessionInputSink`
+  (实现 = `SessionServerAgentIO`, 弱引用挂 `Session::inputSink`), 空闲开新一轮 / 在跑写
+  `Session::pendingInputs_`; 轮末把落在最后一次模型调用之后的 next-step 输入提升为下一轮
+  (`rolloverLeftoverNextStepInputs`, 仅在有驱动端时)。内置事件源 `turn.start`/`turn.end`/
+  `tool.end.<工具名>`/`subagent.done.<result_id>`/`timer.<名字>` 先问 `wants()` 再发。
+  模型工具 `agentxx_event` (watch/await/status/list/cancel/emit/end), 配置键 `event.*`
+  (enable/value_max_bytes/wait_timeout_ms/max_waits_session/allow_headless_turn/delivery)。
+  `agentxx_subagent` 的 `async:true` 在 `AgentHost::spawnBatch` 里**立即受理**
+  (同一批同步任务照旧等; 返回 `{started:true, eventName}`), 后台跑完 `postValue`+`postEnd`,
+  失败/取消也发; 作业令牌独立于轮次, 由 `cancelAsyncJobs(ctx)`/`cancelAsyncJobsOfSession`
+  取消; 子代理上下文继承父 hub。诊断: `KeyMetrics` 的 `events.*` 三计数 + 加载快照
+  `event_hub` 段 + `--dump-diagnostics` 的 `## event hub`; 测试模块 `event_hub` /
+  `event_tools` / `event_delivery` / `event_subagent`。**未做**: 插件专用
+  `agentxx.agent.event` 接口表、`execute_command` 的 `background:true`。
 - 会话运行时 (2026-10): `agentxx.agent.runtime` 表让插件挂自己的**根 agent**
   (`mount_root`: 只能放 `start`, `config_json` 给提示词/工具白名单, `mount_plugins` 给挂载策略,
   默认 `include_creator=false` 切断递归) 并在上面开**会话通道** (`open_channel` 一个
