@@ -23,6 +23,7 @@
 - 机器人插件提供tool给主程序调用，实现通知
 - 机器人插件后台子agent排队运行繁重任务
 - agentxx 自重启控制、仿照 musicxx 的 cli + http + mcp + deeplink 命令控制
+- 通过 mdns 互相发现，以便了解各自正在运行的会话内容
 
 - SVG绘制支持
 
