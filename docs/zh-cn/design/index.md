@@ -33,6 +33,7 @@
     - [内存占用与分配器调整](#内存占用与分配器调整)
     - [依赖注入容器](#依赖注入容器)
 - [代码结构](#代码结构)
+    - [文件编码与换行](#文件编码与换行)
     - [关键依赖关系](#关键依赖关系)
 - [附录 A: 核心数据模型 (conversation_types.h)](#附录-a-核心数据模型-conversation_typesh)
 - [附录 B: 插件系统 v1 要点 (详见 plugins.md)](#附录-b-插件系统-v1-要点-详见-pluginsmd)
@@ -2295,6 +2296,21 @@ agent/
     ├── cross_windows_release_build.sh
     └── cross_android_release_build.sh
 ```
+
+### 文件编码与换行
+
+- **本项目自己编写的文件统一 UTF-8 (无 BOM) + LF 行尾**: 代码 (`.h`/`.cpp`)、脚本
+  (`.sh`/`.bat`/`.ps1`/`.py`)、文档 (`.md`)、配置 (`.yaml`/`.json`/`.env`)、schema 与
+  生成物一律如此
+  - 原因: 同一份文件要跨 Linux/Windows/macOS 使用; CRLF 会让 shell 脚本的 shebang
+    失效、`git diff` 出现整文件噪声、字符串/哈希比对多出一个 `\r`
+  - 中文按 UTF-8 直接存, 不做转义也不用 GBK; 文件不写 BOM (`\xEF\xBB\xBF` 会进
+    字符串字面量, 破坏 `starts_with` 一类判断)
+- `agent/third_party/` 是上游仓库 (含子模块), 保留上游的行尾与编码, **不强制改写**;
+  我们只保证自己新增/修改的文件是 LF
+- Windows 侧注意: `Out-File`/`Set-Content`/`Add-Content` 与记事本默认写 CRLF, 部分 IDE
+  新建文件也默认 CRLF —— 写文件时显式选 LF
+- 自检: `git ls-files --eol` 看工作区与索引的行尾 (`w/lf` 为目标状态)
 
 ### 关键依赖关系
 
