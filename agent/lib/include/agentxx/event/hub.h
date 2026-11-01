@@ -399,7 +399,10 @@ private:
     void dispatchEnded(RecordEntry& rec);
 
     /// 投递一个等待的当前值 (渲染 → deliver → 更新计数)
-    void flushWait(WaitEntry& entry, std::string_view status);
+    /// - `args`:
+    ///     - [resetValues] 投递后是否清空已投递的值 (each/all 累积语义要清; first 保留,
+    ///       否则 `awaitOnce` 返回的等待拿不到值)
+    void flushWait(WaitEntry& entry, std::string_view status, bool resetValues = true);
 
     /// 把等待收尾 (状态 + 关闭原因 + 唤醒 awaitOnce)
     void finishWait(WaitEntry& entry, WaitState state, std::string_view reason, bool notify);

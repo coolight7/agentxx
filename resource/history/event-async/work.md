@@ -51,7 +51,7 @@
 - [x] `ToolcallWrapNode` 发布 `tool.start` / `tool.end` (含 `tool.end.<工具名>` hub 事件)
 - [x] `agentxx_event` 工具 (watch/await/status/list/cancel/emit/end) + 提示词 + 系统提示词 Context Markers
 - [x] `event.*` 配置 (6 键) + `config_loader.cpp` + `test_config_keys.cpp` 目录 + 文档表 + 加载快照
-- [x] 测试模块 `event_hub` / `event_tools` / `event_delivery`
+- [x] 测试模块 `event_hub` / `event_tools` / `event_delivery` (192 / 80 / 44 条断言全部通过)
 - [ ] 文档: `docs/zh-cn/design/events.md` (新) / index.md §4 / plugins.md / test-modules.md / AGENTS.md
 
 ### P2 子代理异步派发 + 后台工具形态
@@ -68,7 +68,22 @@
 
 - [ ] `KeyMetrics` 事件计数 / 诊断快照 `eventHub` 段
 
-## 2. 注意事项 (实施中记下的坑)
+## 2. 测试现状 (2026-11-01)
+
+| 模块 | 结果 | 耗时 |
+|---|---|---|
+| `event_hub` | passed=192 failed=0 | 0.65 s |
+| `event_tools` | passed=80 failed=0 | 0.31 s |
+| `event_delivery` | passed=44 failed=0 | 17.4 s (每个用例起一次 HTTP 模拟服务 + 端点) |
+| `config_keys` | passed=196 failed=0 (生成物已重生成) | 0.8 s |
+| `boundaries` | passed=18 failed=1 | 13 s |
+
+`boundaries` 的失败是**既有问题**, 与本期改动无关: 规则 15 (称呼与用词) 命中
+`agent/third_party/cxx_pluginxx_ui` 里 5 处 `载体` (README.md / docs/integration.md /
+include/pluginxx/ui/item.h)。该目录是**独立仓库** (嵌套 git 仓库, HEAD = c40759a),
+按约定不在本次修改; 如需片子干净, 应到那个仓库改文案后更新子模块指针。
+
+## 3. 注意事项 (实施中记下的坑)
 
 1. **投递文本前缀**: 必须 `[Event` 开头, 且不得命中 `toolResultTextIsFailure` 的四个失败前缀。
 2. **不让 hub 自激**: hub 自己的生命周期事件发布在 `agent.hub.*`, 不带 `evt.` 前缀,
@@ -81,3 +96,16 @@
 6. 事件值一律按 JSON 存; 非 JSON 文本按 `{"text": "<payload>"}` 处理。
 7. `Session::inputSink` 是 `weak_ptr`, 端点停止时必须清空, 否则会话会握着已停的端点
    (`submitTurnInput` 会被拒 + 计数丢弃)。
+8. **待注入输入只在 modelcall 开头被取用**: 想造出"轮末残留"来测轮末兜底, 不能
+   在开轮之前入队 (那样第一条 modelcall 就把它取走了), 必须等本轮请求已经发出
+   (等 `g_da_sim_request_count` 增长, 同时把 `g_da_sim_delay_ms` 调大保持请求在飞)
+   再入队。现象: 只跑一轮、`turnCount() == 1`。
+9. **`event.*` 键要进 `config_keys` 目录**: 加载器解析的键名若没登记到
+   `configKeyEntries()`, 该模块会直接失败 (`parses key(s) not registered`)。
+   新增后要 `AGENTXX_UPDATE_CONFIG_KEYS=1 agentxx_test config_keys` 重新生成
+   `agent/schema/config-keys.json` 与 `docs/zh-cn/design/config-keys.md` (生成物, 不改手写部分)。
+10. **列表文本断言看整段不看前缀**: `opt=list` 的事件列表行本身带 `waits=N`,
+    `scope=events` 时只能断言"没有 `[Event list] waits=` 段标题", 不能断言不含 `waits=`。
+11. **行尾**: 本仓库部分文件是 CRLF (`conversation_types.h` 原本 904 行 CRLF),
+    `agentxx_filesystem_edit` 会把整文件转成 LF, 造成整文件 diff; 该文件已在 P1 提交里
+    变为 LF (内容未变), 后续编辑不会再产生同样的噪声。

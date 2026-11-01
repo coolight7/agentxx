@@ -18,7 +18,7 @@
 
 > 相关文档: [index.md](index.md) · [配置与设置边界](configuration.md)
 
-键数: 56
+键数: 62
 
 | 键路径 | 归属 | 类型 | 默认值 |
 |---|---|---|---|
@@ -27,6 +27,12 @@
 | `language` | 服务端 | string (zh-cn | en) | 空 (由客户端界面语言决定) |
 | `subagent.enable` | 服务端 | bool | true |
 | `worktree.enable` | 服务端 | bool | false |
+| `event.enable` | 服务端 | bool | true |
+| `event.value_max_bytes` | 服务端 | int (字节) | 32768 |
+| `event.wait_timeout_ms` | 服务端 | int (毫秒, 0 = 不限) | 0 |
+| `event.max_waits_session` | 服务端 | int | 32 |
+| `event.allow_headless_turn` | 服务端 | bool | false |
+| `event.delivery` | 服务端 | enum (next-step | inject | next-turn | none) | next-step |
 | `dev_mode` | 服务端 | bool | false |
 | `permission.mode` | 服务端 | enum (ask | all_ask | pass | deny) | ask |
 | `permission.whitelist.list` | 服务端 | list<string> | 空 |
@@ -113,6 +119,48 @@ subagent:
 ```yaml
 worktree:
   enable: true
+```
+
+### `event.enable`
+
+```yaml
+event:
+  enable: false
+```
+
+### `event.value_max_bytes`
+
+```yaml
+event:
+  value_max_bytes: 4096
+```
+
+### `event.wait_timeout_ms`
+
+```yaml
+event:
+  wait_timeout_ms: 5000
+```
+
+### `event.max_waits_session`
+
+```yaml
+event:
+  max_waits_session: 8
+```
+
+### `event.allow_headless_turn`
+
+```yaml
+event:
+  allow_headless_turn: true
+```
+
+### `event.delivery`
+
+```yaml
+event:
+  delivery: inject
 ```
 
 ### `dev_mode`

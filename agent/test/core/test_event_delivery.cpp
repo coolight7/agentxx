@@ -1,0 +1,457 @@
+#include "agentxx-test/core/test_event_hub.h"
+#include "agentxx-test/core/test_agent.h" // 本地 LLM 模拟器 startDaSimServer/g_da_sim_*
+#include "agentxx-test/test_coro_util.h"
+
+#include "agentxx/agent/base_agent.h"
+#include "agentxx/agent/config.h"
+#include "agentxx/agent/context.h"
+#include "agentxx/agent/io/channel_io_transport.h"
+#include "agentxx/agent/io/session_server_agent_io.h"
+#include "agentxx/agent/io/wire_protocol.h"
+#include "agentxx/event/hub.h"
+#include "asio/co_spawn.hpp"
+#include "asio/detached.hpp"
+#include "asio/redirect_error.hpp"
+#include "asio/steady_timer.hpp"
+#include "asio/this_coro.hpp"
+#include "asio/use_awaitable.hpp"
+#include "utilxx_base/asio_error.h"
+#include <atomic>
+#include <chrono>
+#include <functional>
+#include <memory>
+#include <mutex>
+#include <string>
+#include <vector>
+
+namespace {
+// 本模块测试计数器 (仅本编译单元可见; 不经头文件 extern 导出)
+int g_ed_passed = 0;
+int g_ed_failed = 0;
+} // namespace
+
+#define XX_TEST_PASSED g_ed_passed
+#define XX_TEST_FAILED g_ed_failed
+
+namespace agentxx {
+namespace test {
+
+using namespace utilxx_base;
+using Json = utilxx_base::Json;
+
+namespace {
+
+/// 客户端侧只记录"轮次结束"与"队列状态", 用于等待时序
+struct DeliveryRecorder {
+    std::mutex                                       mu;
+    std::vector<agentxx::agent::WireTurnResult>      turns;
+    std::vector<agentxx::agent::WireMessageQueueUpdate> queues;
+
+    void handle(agentxx::agent::WireMessage msg) {
+        std::visit(
+            [this](auto&& m) {
+                using T = std::decay_t<decltype(m)>;
+                if constexpr (std::is_same_v<T, agentxx::agent::WireTurnResult>) {
+                    std::lock_guard<std::mutex> lock(mu);
+                    turns.push_back(m);
+                } else if constexpr (std::is_same_v<T, agentxx::agent::WireMessageQueueUpdate>) {
+                    std::lock_guard<std::mutex> lock(mu);
+                    queues.push_back(m);
+                }
+            },
+            std::move(msg)
+        );
+    }
+
+    int turnCount() {
+        std::lock_guard<std::mutex> lock(mu);
+        return static_cast<int>(turns.size());
+    }
+
+    std::string lastQueueState() {
+        std::lock_guard<std::mutex> lock(mu);
+        return queues.empty() ? std::string{} : queues.back().state;
+    }
+};
+
+struct DeliveryFixture {
+    DaSimServer                                              sim;
+    std::shared_ptr<agentxx::agent::AgentConfig>             cfg;
+    std::shared_ptr<agentxx::agent::BaseAgent>               agent;
+    std::shared_ptr<agentxx::agent::SessionServerAgentIO>    endpoint;
+    std::shared_ptr<DeliveryRecorder>                        recorder;
+    std::shared_ptr<agentxx::agent::ChannelAgentIOTransport> clientT;
+    std::string                                              sessionId;
+
+    ~DeliveryFixture() {
+        if (clientT) {
+            clientT->close();
+        }
+        if (endpoint) {
+            endpoint->stop();
+        }
+        sim.stop();
+    }
+
+    agentxx::events::EventHub* hub() const {
+        return agent && agent->agentContext ? agent->agentContext->eventHub.get() : nullptr;
+    }
+};
+
+asio::awaitable<void> sleepFor(int64_t ms) {
+    asio::steady_timer timer(co_await asio::this_coro::executor, std::chrono::milliseconds{ms});
+    AsioErrorCode      ec;
+    co_await timer.async_wait(asio::redirect_error(asio::use_awaitable, ec));
+}
+
+asio::awaitable<bool> waitFor(std::function<bool()> cond, int64_t timeoutMs = 8000) {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds{timeoutMs};
+    while (std::chrono::steady_clock::now() < deadline) {
+        if (cond()) {
+            co_return true;
+        }
+        co_await sleepFor(15);
+    }
+    co_return cond();
+}
+
+bool contains(std::string_view hay, std::string_view needle) {
+    return hay.find(needle) != std::string_view::npos;
+}
+
+/// 会话上下文里是否出现了指定文本 (跳过 system: 提示词里就有 `[Event]` 的说明)
+bool contextHasText(
+    const std::shared_ptr<agentxx::agent::BaseAgent>& agent,
+    std::string_view                                  sessionId,
+    std::string_view                                  text
+) {
+    auto session = agent->agentContext->sessions->get(sessionId);
+    if (!session) {
+        return false;
+    }
+    for (const auto& m : session->messages()) {
+        if (m.role == "system") {
+            continue;
+        }
+        if (contains(m.content, text)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/// 会话展示历史里是否出现了指定文本
+bool viewHasText(
+    const std::shared_ptr<agentxx::agent::BaseAgent>& agent,
+    std::string_view                                  sessionId,
+    std::string_view                                  text
+) {
+    auto session = agent->agentContext->sessions->get(sessionId);
+    if (!session) {
+        return false;
+    }
+    for (const auto& m : session->viewMessages) {
+        if (contains(m.text, text)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+asio::awaitable<std::shared_ptr<DeliveryFixture>>
+    makeDeliveryFixture(std::string sessionId, bool startEndpoint = true) {
+    auto fx                       = std::make_shared<DeliveryFixture>();
+    fx->sim                       = startDaSimServer();
+    g_da_sim_response_content     = "ok response";
+    g_da_sim_tool_calls           = Json::array();
+    g_da_sim_fail_count           = 0;
+    g_da_sim_delay_ms             = 0;
+    g_da_sim_tool_calls_remaining = -1;
+
+    const auto baseUrl       = "http://127.0.0.1:" + std::to_string(fx->sim.port);
+    fx->cfg                  = std::make_shared<agentxx::agent::AgentConfig>();
+    fx->cfg->model.baseUrl   = baseUrl;
+    fx->cfg->model.apiKey    = "EMPTY";
+    fx->cfg->model.modelName = "default-model";
+    fx->cfg->llmMaxRetry     = 1;
+
+    fx->agent = std::make_shared<agentxx::agent::BaseAgent>(fx->cfg);
+    co_await fx->agent->init();
+
+    // 先建出会话: 事件投递要求会话已存在 (不自动新建会话)
+    auto session = fx->agent->agentContext->getSession(sessionId);
+    XX_TEST_EXPECT_TRUE(session != nullptr);
+
+    auto ex = co_await asio::this_coro::executor;
+
+    agentxx::agent::SessionServerAgentIO::Config scCfg;
+    scCfg.sessionId = sessionId;
+    fx->sessionId   = sessionId;
+    fx->endpoint    = std::make_shared<agentxx::agent::SessionServerAgentIO>(ex, fx->agent, scCfg);
+
+    auto [clientOwn, serverT] = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+    fx->endpoint->setTransport(
+        std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT))
+    );
+
+    fx->recorder = std::make_shared<DeliveryRecorder>();
+    fx->clientT  = std::move(clientOwn);
+
+    asio::co_spawn(
+        ex,
+        keepAliveRun([clientT = fx->clientT, recorder = fx->recorder]() -> asio::awaitable<void> {
+            while (clientT->alive()) {
+                auto msg = co_await clientT->recv();
+                if (!msg) {
+                    break;
+                }
+                recorder->handle(std::move(*msg));
+            }
+        }),
+        asio::detached
+    );
+    asio::co_spawn(
+        ex,
+        keepAliveRun([ep = fx->endpoint]() -> asio::awaitable<void> {
+            co_await ep->runTransportLoop();
+        }),
+        asio::detached
+    );
+    if (startEndpoint) {
+        asio::co_spawn(
+            ex,
+            keepAliveRun([ep = fx->endpoint]() -> asio::awaitable<void> {
+                co_await ep->run();
+            }),
+            asio::detached
+        );
+    }
+    // 等端点把 sink 登记到会话上 (run() 预热会话后才登记)
+    if (startEndpoint) {
+        co_await waitFor([&] {
+            auto session = fx->agent->agentContext->sessions->get(sessionId);
+            return session && !session->inputSink.expired();
+        });
+    }
+    co_return fx;
+}
+
+} // namespace
+
+/// 1. 空闲 + next-step: 事件直接把会话唤醒成新一轮, 值作为 user 消息进入上下文与展示历史
+asio::awaitable<void> test_delivery_idle_starts_turn() {
+    auto fx = co_await makeDeliveryFixture("ev-idle");
+    auto hub = fx->hub();
+    XX_TEST_EXPECT_TRUE(hub != nullptr);
+
+    auto watched = hub->watch(agentxx::events::EventWaitSpec{
+        .event         = "chat.message",
+        .mode          = "first",
+        .delivery      = "next-step",
+        .originSession = fx->sessionId,
+    });
+    XX_TEST_EXPECT_TRUE(watched.has_value());
+    XX_TEST_EXPECT_TRUE(watched->state == agentxx::events::WaitState::Armed);
+
+    std::string err;
+    XX_TEST_EXPECT_TRUE(hub->publishValue("chat.message", Json{{"text", "hi there"}}, &err));
+    // 会话被唤醒并跑完一轮
+    XX_TEST_EXPECT_TRUE(co_await waitFor([&] {
+        return fx->recorder->turnCount() >= 1;
+    }));
+    XX_TEST_EXPECT_TRUE(co_await waitFor([&] {
+        return contextHasText(fx->agent, fx->sessionId, "[Event] chat.message");
+    }));
+    XX_TEST_EXPECT_TRUE(contextHasText(fx->agent, fx->sessionId, "hi there"));
+    // 展示历史也有一条 (用户看得见事件把什么塞进了会话)
+    XX_TEST_EXPECT_TRUE(viewHasText(fx->agent, fx->sessionId, "[Event] chat.message"));
+    // 端点队列里的来源标记
+    {
+        auto session = fx->agent->agentContext->sessions->get(fx->sessionId);
+        XX_TEST_EXPECT_TRUE(session->pendingInputCount() == 0);
+    }
+    co_return;
+}
+
+/// 2. 轮次在跑 + next-step: 值写入待注入输入, 不立刻开新轮
+asio::awaitable<void> test_delivery_busy_steps() {
+    auto fx = co_await makeDeliveryFixture("ev-busy");
+    auto hub = fx->hub();
+    fx->endpoint->setTurnActiveForTest(true);
+
+    auto watched = hub->watch(agentxx::events::EventWaitSpec{
+        .event         = "build.done",
+        .mode          = "first",
+        .delivery      = "next-step",
+        .originSession = fx->sessionId,
+    });
+    XX_TEST_EXPECT_TRUE(watched.has_value());
+    std::string err;
+    XX_TEST_EXPECT_TRUE(hub->publishValue("build.done", Json{{"ok", true}}, &err));
+
+    auto session = fx->agent->agentContext->sessions->get(fx->sessionId);
+    XX_TEST_EXPECT_TRUE(session->pendingInputCount("event:") == 1);
+    XX_TEST_EXPECT_TRUE(fx->endpoint->queueSizeForTest() == 0);
+    {
+        auto inputs = session->takePendingInputs(agentxx::agent::InputDelivery::NextStep);
+        XX_TEST_EXPECT_TRUE(inputs.size() == 1);
+        XX_TEST_EXPECT_TRUE(contains(inputs.front().text, "[Event] build.done (first)"));
+        XX_TEST_EXPECT_TRUE(inputs.front().source == "event:build.done");
+    }
+    fx->endpoint->setTurnActiveForTest(false);
+    co_return;
+}
+
+/// 3. inject 在轮次进行中只进请求, 不改写上下文
+asio::awaitable<void> test_delivery_busy_inject() {
+    auto fx = co_await makeDeliveryFixture("ev-inject");
+    auto hub = fx->hub();
+    fx->endpoint->setTurnActiveForTest(true);
+
+    auto watched = hub->watch(agentxx::events::EventWaitSpec{
+        .event         = "notice.item",
+        .mode          = "first",
+        .delivery      = "inject",
+        .originSession = fx->sessionId,
+    });
+    XX_TEST_EXPECT_TRUE(watched.has_value());
+    std::string err;
+    XX_TEST_EXPECT_TRUE(hub->publishValue("notice.item", Json("hello"), &err));
+
+    auto session = fx->agent->agentContext->sessions->get(fx->sessionId);
+    auto injects = session->takePendingInputs(agentxx::agent::InputDelivery::Inject);
+    XX_TEST_EXPECT_TRUE(injects.size() == 1);
+    XX_TEST_EXPECT_TRUE(contains(injects.front().text, "[Event] notice.item"));
+    fx->endpoint->setTurnActiveForTest(false);
+    co_return;
+}
+
+/// 4. 无驱动端 (端点未启动): 写待注入输入, 记 deferred, 不开轮
+asio::awaitable<void> test_delivery_no_driver() {
+    auto fx = co_await makeDeliveryFixture("ev-nodriver", /*startEndpoint=*/false);
+    auto hub = fx->hub();
+
+    auto watched = hub->watch(agentxx::events::EventWaitSpec{
+        .event         = "orphan.event",
+        .mode          = "first",
+        .delivery      = "next-step",
+        .originSession = fx->sessionId,
+    });
+    XX_TEST_EXPECT_TRUE(watched.has_value());
+    std::string err;
+    XX_TEST_EXPECT_TRUE(hub->publishValue("orphan.event", Json("x"), &err));
+    XX_TEST_EXPECT_TRUE(hub->stats().deferred >= 1);
+
+    auto session = fx->agent->agentContext->sessions->get(fx->sessionId);
+    XX_TEST_EXPECT_TRUE(session->pendingInputCount("event:") == 1);
+    (void)session->takePendingInputs(agentxx::agent::InputDelivery::NextStep);
+    co_return;
+}
+
+/// 5. 轮末兜底: 落在最后一次 modelcall 之后的 next-step 输入提升为下一轮
+asio::awaitable<void> test_delivery_rollover() {
+    auto fx      = co_await makeDeliveryFixture("ev-rollover");
+    auto session = fx->agent->agentContext->sessions->get(fx->sessionId);
+
+    // 待注入输入只在 modelcall 开头被取用: 要造出"轮末残留", 必须在本次请求
+    // 已经发出之后再塞进去, 否则它会在本轮开头就被取走, 测不到兜底逻辑。
+    // 让模型响应慢一点 (400 ms), 等请求到达模型侧后再入队 —— 此时本轮不会再
+    // 有 modelcall, 输入只能靠轮末提升才能被执行。
+    g_da_sim_delay_ms      = 400;
+    const int reqBeforeTurn = g_da_sim_request_count.load();
+
+    agentxx::agent::WireUserInput input;
+    input.sessionId = fx->sessionId;
+    input.text      = "do the work";
+    fx->clientT->send(agentxx::agent::WireMessage{std::move(input)});
+
+    XX_TEST_EXPECT_TRUE(co_await waitFor([&] {
+        return g_da_sim_request_count.load() > reqBeforeTurn;
+    }));
+
+    agentxx::agent::SessionPendingInput leftover;
+    leftover.text        = "[Event] late.arrival (first)\nstatus: value\nvalue: 1";
+    leftover.source      = "event:late.arrival";
+    leftover.delivery    = std::string{agentxx::agent::InputDelivery::NextStep};
+    leftover.createdAtMs = 1;
+    session->enqueuePendingInput(leftover);
+    XX_TEST_EXPECT_TRUE(session->pendingInputCount() == 1);
+
+    // 之后的轮次恢复默认延迟, 避免拖慢断言
+    g_da_sim_delay_ms = 0;
+
+    // 两轮: 第一轮把残留提升, 第二轮把它作为 user 消息写入上下文
+    XX_TEST_EXPECT_TRUE(co_await waitFor([&] {
+        return fx->recorder->turnCount() >= 2;
+    }));
+    XX_TEST_EXPECT_TRUE(co_await waitFor([&] {
+        return contextHasText(fx->agent, fx->sessionId, "[Event] late.arrival");
+    }));
+    XX_TEST_EXPECT_TRUE(session->pendingInputCount() == 0);
+    co_return;
+}
+
+/// 6. 端点停止后解绑 sink: 后续投递不再入队, 计 deferred
+asio::awaitable<void> test_delivery_after_stop() {
+    auto fx = co_await makeDeliveryFixture("ev-stop");
+    auto hub = fx->hub();
+    fx->endpoint->stop();
+    XX_TEST_EXPECT_TRUE(co_await waitFor([&] {
+        auto session = fx->agent->agentContext->sessions->get(fx->sessionId);
+        return session && session->inputSink.expired();
+    }));
+
+    const auto deferredBefore = hub->stats().deferred;
+    auto       watched        = hub->watch(agentxx::events::EventWaitSpec{
+        .event         = "after.stop",
+        .mode          = "first",
+        .delivery      = "next-step",
+        .originSession = fx->sessionId,
+    });
+    XX_TEST_EXPECT_TRUE(watched.has_value());
+    std::string err;
+    XX_TEST_EXPECT_TRUE(hub->publishValue("after.stop", Json("x"), &err));
+    XX_TEST_EXPECT_TRUE(hub->stats().deferred == deferredBefore + 1);
+    co_return;
+}
+
+/// 7. 关停: hub 关闭后投递一律丢弃, 等待被取消
+asio::awaitable<void> test_delivery_close_all() {
+    auto fx = co_await makeDeliveryFixture("ev-close");
+    auto hub = fx->hub();
+    auto watched = hub->watch(agentxx::events::EventWaitSpec{
+        .event         = "closing.event",
+        .mode          = "first",
+        .delivery      = "next-step",
+        .originSession = fx->sessionId,
+    });
+    XX_TEST_EXPECT_TRUE(watched.has_value());
+
+    hub->closeAll("test-shutdown");
+    XX_TEST_EXPECT_TRUE(hub->closed());
+    XX_TEST_EXPECT_TRUE(
+        hub->queryWait(watched->waitId)->state == agentxx::events::WaitState::Cancelled
+    );
+    std::string err;
+    XX_TEST_EXPECT_FALSE(hub->publishValue("closing.event", Json("x"), &err));
+    co_return;
+}
+
+asio::awaitable<TestResult> run_event_delivery_tests() {
+    TestResult result;
+
+    co_await test_delivery_idle_starts_turn();
+    co_await test_delivery_busy_steps();
+    co_await test_delivery_busy_inject();
+    co_await test_delivery_no_driver();
+    co_await test_delivery_rollover();
+    co_await test_delivery_after_stop();
+    co_await test_delivery_close_all();
+
+    result.passed = g_ed_passed;
+    result.failed = g_ed_failed;
+    co_return result;
+}
+
+} // namespace test
+} // namespace agentxx

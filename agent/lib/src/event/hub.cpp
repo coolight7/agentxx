@@ -117,7 +117,7 @@ void EventHub::attachBus(const std::shared_ptr<agentxx::events::EventBus>& bus) 
             return;
         }
         // 载荷不是合法 JSON 时按纯文本值处理 (插件可能发普通字符串)
-        Json       value     = Json{*payload};
+        Json       value     = Json(*payload);
         const bool looksJson = !payload->empty()
                                && (payload->front() == '{' || payload->front() == '['
                                    || payload->front() == '"');
@@ -460,7 +460,8 @@ void EventHub::dispatchValue(RecordEntry& rec, const Json& value) {
         if (spec.mode == "first") {
             wait.values = {value};
             wait.bytes  = bytes;
-            flushWait(entry, "value");
+            // 值保留在等待里: `opt=status` 与 `awaitOnce` 的返回值都靠它
+            flushWait(entry, "value", /*resetValues=*/false);
             finishWait(entry, WaitState::Satisfied, "delivered", true);
             continue;
         }
@@ -526,7 +527,7 @@ void EventHub::dispatchEnded(RecordEntry& rec) {
     }
 }
 
-void EventHub::flushWait(WaitEntry& entry, std::string_view status) {
+void EventHub::flushWait(WaitEntry& entry, std::string_view status, bool resetValues) {
     auto& wait = entry.wait;
     std::vector<std::string> texts;
     texts.reserve(wait.values.size());
@@ -569,8 +570,10 @@ void EventHub::flushWait(WaitEntry& entry, std::string_view status) {
         static_cast<int>(result),
         reason.empty() ? std::string{} : fmt::format(" reason={}", reason)
     );
-    wait.values.clear();
-    wait.bytes = 0;
+    if (resetValues) {
+        wait.values.clear();
+        wait.bytes = 0;
+    }
 }
 
 void EventHub::finishWait(
@@ -793,6 +796,18 @@ std::expected<EventWait, std::string> EventHub::watch(EventWaitSpec spec) {
         spec.maxItems = 1;
     }
 
+    // 有人在等这个事件: 建一条记录 (即使发布方还没 define), 否则 `opt=status` /
+    // `opt=list` 看不到它, 也回放不了先到的值
+    if (nullptr == ensureRecord(spec.event, spec.owner.empty() ? "watch" : spec.owner, spec.originSession)) {
+        return std::unexpected{fmt::format("too many events (limit {})", cfg_.maxEvents)};
+    }
+    XX_LOGI(
+        "[event_hub] watch {}: events={} waits={}",
+        spec.event,
+        records_.size(),
+        waits_.size()
+    );
+
     WaitEntry entry;
     entry.wait.waitId     = fmt::format("w-{}", ++waitSeq_);
     entry.wait.armedAtMs  = systemNowMs();
@@ -826,7 +841,7 @@ std::expected<EventWait, std::string> EventHub::watch(EventWaitSpec spec) {
                 stored.wait.values.push_back(replay.back());
                 stored.wait.bytes = valueBytesOf(replay.back());
                 if (stored.wait.spec.mode == "first") {
-                    flushWait(stored, "value");
+                    flushWait(stored, "value", /*resetValues=*/false);
                     finishWait(stored, WaitState::Satisfied, "delivered", true);
                 } else {
                     flushWait(stored, stored.wait.values.size() > 1 ? "values" : "value");
@@ -1016,6 +1031,10 @@ bool EventHub::armTimer(std::string_view name, int64_t afterMs, int64_t interval
     }
     auto shortName = timerShortName(name);
     std::string err;
+    if (shortName.empty()) {
+        XX_LOGW("[event_hub] armTimer: timer name is empty");
+        return false;
+    }
     if (!naming::validateEventName(std::string{"timer."} + shortName, &err)) {
         XX_LOGW("[event_hub] invalid timer name `{}`: {}", shortName, err);
         return false;

@@ -286,6 +286,85 @@ std::vector<ConfigKeyEntry> configKeyEntries() {
              return boolText(cfg.worktreeEnable);
          }}
     );
+    // ---- 事件中枢 (yaml `event` 块) ----
+    out.push_back(
+        {"event.enable",
+         "bool",
+         "true",
+         "event:\n  enable: false\n",
+         "",
+         false,
+         "true",
+         "false",
+         [](const YamlAppConfig& cfg) {
+             return boolText(cfg.eventEnable);
+         }}
+    );
+    out.push_back(
+        {"event.value_max_bytes",
+         "int (字节)",
+         "32768",
+         "event:\n  value_max_bytes: 4096\n",
+         "",
+         false,
+         "32768",
+         "4096",
+         [](const YamlAppConfig& cfg) {
+             return std::to_string(cfg.eventValueMaxBytes);
+         }}
+    );
+    out.push_back(
+        {"event.wait_timeout_ms",
+         "int (毫秒, 0 = 不限)",
+         "0",
+         "event:\n  wait_timeout_ms: 5000\n",
+         "",
+         false,
+         "0",
+         "5000",
+         [](const YamlAppConfig& cfg) {
+             return std::to_string(cfg.eventWaitTimeoutMs);
+         }}
+    );
+    out.push_back(
+        {"event.max_waits_session",
+         "int",
+         "32",
+         "event:\n  max_waits_session: 8\n",
+         "",
+         false,
+         "32",
+         "8",
+         [](const YamlAppConfig& cfg) {
+             return std::to_string(cfg.eventMaxWaitsSession);
+         }}
+    );
+    out.push_back(
+        {"event.allow_headless_turn",
+         "bool",
+         "false",
+         "event:\n  allow_headless_turn: true\n",
+         "",
+         false,
+         "false",
+         "true",
+         [](const YamlAppConfig& cfg) {
+             return boolText(cfg.eventAllowHeadlessTurn);
+         }}
+    );
+    out.push_back(
+        {"event.delivery",
+         "enum (next-step | inject | next-turn | none)",
+         "next-step",
+         "event:\n  delivery: inject\n",
+         "",
+         false,
+         "next-step",
+         "inject",
+         [](const YamlAppConfig& cfg) {
+             return cfg.eventDelivery;
+         }}
+    );
     out.push_back(
         {"dev_mode",
          "bool",
