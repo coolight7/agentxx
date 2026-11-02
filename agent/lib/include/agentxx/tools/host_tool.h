@@ -45,11 +45,17 @@ public:
         return def;
     }
 
-    asio::awaitable<std::string> execute_async(const utilxx_base::Json& arguments) override {
+    /// 委托外部注册工具执行
+    /// - 外部侧的状态位 (`WireHostToolResult.ok`) 含义为失败时抛异常, 由执行层统一
+    ///   转成 `Failed`; 这里的返回文本一律是成功结果
+    asio::awaitable<agentxx::util::ToolResult>
+        execute_async(const utilxx_base::Json& arguments) override {
         if (!handler_) {
             throw std::runtime_error("host tool handler not available");
         }
-        co_return co_await handler_(info_.name, arguments, info_.timeoutSec);
+        co_return agentxx::util::ToolResult::ok(
+            co_await handler_(info_.name, arguments, info_.timeoutSec)
+        );
     }
 
     const agent::WireHostToolInfo& info() const noexcept {

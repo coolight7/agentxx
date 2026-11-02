@@ -169,15 +169,29 @@ std::string formatToolArgs(std::string_view argsText) {
     );
 }
 
-/// 工具失败状态 (由执行层给出)
-/// - 结果文本不再用来判定错误: 失败由 [agentxx::agent::ViewMessage::ToolData::hasError]
-///   携带 (异常/工具不存在/参数非法/权限拒绝/重复调用被拒/插件报错终态)
-/// - 例外只有一处: 中断占位文本 "[Interrupt]" 是界面标记 (不是失败), 仍需按警告色渲染
-static bool isToolResultError(const agentxx::agent::ViewMessage& msg) {
+/// 工具结果的状态分类 (仅供渲染使用)
+/// - 完全取自 [agentxx::util::ToolStatus], **不看结果文本**
+/// - 不认识的取值由 `toolStatusFromName` 统一当成 `Ok` (向前兼容)
+enum class ToolVisual {
+    Normal,   ///< `Ok` / `Canceled`: 普通样式 (占位文本自己已经说明)
+    Error,    ///< `Failed`: 错误样式
+    Warning,  ///< `Interrupted`: 警告样式 (含 `[Interrupt]` 占位)
+};
+
+static ToolVisual toolVisualOf(const agentxx::agent::ViewMessage& msg) {
     if (!msg.tool) {
-        return false;
+        return ToolVisual::Normal;
     }
-    return msg.tool->hasError || msg.tool->toolResult.starts_with("[Interrupt]");
+    switch (msg.tool->status) {
+        case agentxx::util::ToolStatus::Failed:
+            return ToolVisual::Error;
+        case agentxx::util::ToolStatus::Interrupted:
+            return ToolVisual::Warning;
+        case agentxx::util::ToolStatus::Ok:
+        case agentxx::util::ToolStatus::Canceled:
+        default:
+            return ToolVisual::Normal;
+    }
 }
 
 /// 多模态附件大小文本 (文件顶部匿名命名空间内，供 buildMessageBlock 卡片使用)
@@ -1904,7 +1918,8 @@ Element MessageListComponent::buildMessageBlock(
             }
             const bool expanded = !msg.collapsed;
             const bool finished = msg.tool && msg.tool->toolFinished;
-            const bool isError  = finished && isToolResultError(msg);
+            const auto visual   = finished ? toolVisualOf(msg) : ToolVisual::Normal;
+            const bool isError  = visual == ToolVisual::Error;
 
             // 统一工具特化渲染查询 (包含动态 per-call decor 与按 tool_name 注册的渲染器/模版)
             auto renderRes = queryToolRender(
@@ -2082,11 +2097,22 @@ Element MessageListComponent::buildMessageBlock(
                         }));
                     }
                     if (finished) {
-                        const bool isErr = isToolResultError(msg);
+                        // 结果正文按终态配色: Failed = 错误色, Interrupted = 警告色,
+                        // Ok/Canceled = 普通色 (取消的情绪由占位文本自己表达)
+                        const auto bodyColor = [&]() {
+                            switch (toolVisualOf(msg)) {
+                                case ToolVisual::Error:
+                                    return theme.errorColor;
+                                case ToolVisual::Warning:
+                                    return theme.thinkingColor;
+                                case ToolVisual::Normal:
+                                default:
+                                    return theme.toolColor;
+                            }
+                        }();
                         lines.push_back(hbox({
                             text(tr("tool.result")) | color(theme.toolColor),
-                            paragraph(msg.tool->toolResult)
-                                | color(isErr ? theme.errorColor : theme.toolColor) | xflex_shrink,
+                            paragraph(msg.tool->toolResult) | color(bodyColor) | xflex_shrink,
                         }));
                     } else {
                         lines.push_back(text(tr("tool.running")) | color(theme.toolColor));

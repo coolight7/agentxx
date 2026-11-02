@@ -4,6 +4,7 @@
 #include <memory>
 
 #include "agentxx/util/invisible_text.h"
+#include "agentxx/util/tool_result.h"
 #include "utilxx_base/json.h"
 #include "utilxx_base/string_util.h"
 #include <cstdint>
@@ -286,11 +287,11 @@ struct ViewMessage {
         /// edit 工具参数 unified diff (server 生成预留; 当前渲染端自行计算, 未处理)
         std::string diff;
         bool        toolFinished = false;
-        /// 本次工具调用是否失败 (由执行层给出, 不再看结果文本前缀)
-        /// - 来源: 工具执行抛异常 / 工具不存在 / 参数非法 / 权限拒绝 / 重复调用被拒 /
-        ///   插件工具报错终态 (PLUGINXX_OPERATOR_FAILED)
-        /// - 结果文本以 `[Error: ...]` 开头的中断占位 / 用户取消不算失败
-        bool hasError = false;
+        /// 本次工具调用的终态 (由执行层给出, 不看结果文本)
+        /// - 来源: 工具返回的 `ToolResult.status` / 执行期异常 / 工具不存在 /
+        ///   参数非法 / 权限拒绝 / 重复调用被拒 / 插件终态 / 插件超时 / MCP isError
+        /// - 客户端**不认识的取值一律按 `Ok` 处理** (向前兼容)
+        agentxx::util::ToolStatus status = agentxx::util::ToolStatus::Ok;
     };
 
     // ---- Role::Tip 专属 ----
@@ -562,7 +563,8 @@ struct WireDelta {
     // GenStatus: 模型生成阶段 (占位提示)
     GenPhase genPhase = GenPhase::Done;
 
-    bool hasError = false;
+    /// ToolEnd 的终态 (其它增量不写); 客户端**不认识的取值一律按 `Ok` 处理**
+    agentxx::util::ToolStatus status = agentxx::util::ToolStatus::Ok;
 };
 
 /// 输入投递模式 (`WireUserInput.delivery`)
@@ -808,8 +810,9 @@ inline utilxx_base::Json ViewMessage::toJson() const {
         if (tool->toolFinished) {
             t["tool_finished"] = true;
         }
-        if (tool->hasError) {
-            t["has_error"] = true;
+        // 终态只在非 Ok 时写入 (键为字符串名, 客户端不认识的取值按 Ok 处理)
+        if (tool->status != agentxx::util::ToolStatus::Ok) {
+            t["status"] = std::string{agentxx::util::toolStatusName(tool->status)};
         }
         j["tool"] = std::move(t);
     }
@@ -882,7 +885,13 @@ inline ViewMessage ViewMessage::fromJson(const utilxx_base::Json& j) {
                 t.toolResult   = tj.value("tool_result", std::string{});
                 t.diff         = tj.value("diff", std::string{});
                 t.toolFinished = tj.value("tool_finished", false);
-                t.hasError     = tj.value("has_error", false);
+                t.status       = agentxx::util::toolStatusFromName(tj.value("status", std::string{}));
+                // 旧会话字段 (只有布尔): 没有 status 时按 has_error 生日映射, 只影响历史
+                // 消息的颜色; 新数据一律写入 status。待旧会话数据淘汰后可删。
+                if (t.status == agentxx::util::ToolStatus::Ok
+                    && tj.value("has_error", false)) {
+                    t.status = agentxx::util::ToolStatus::Failed;
+                }
             }
             m.tool = std::move(t);
             break;

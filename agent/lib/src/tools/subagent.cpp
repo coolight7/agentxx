@@ -336,7 +336,8 @@ neograph::ChatTool SubAgentManagerTool::get_definition() const {
     return {"agentxx_subagent", prompt.depict, agentxx::util::toNeographJson(params)};
 }
 
-asio::awaitable<std::string> SubAgentManagerTool::execute_async(const utilxx_base::Json& arguments
+asio::awaitable<agentxx::util::ToolResult>
+    SubAgentManagerTool::execute_async(const utilxx_base::Json& arguments
 ) {
     // 统一批量委派 (单发与批量合并):
     // - `tasks` 数组非空: 批量模式 (每项一个子代理任务, 并行运行)
@@ -535,25 +536,25 @@ asio::awaitable<std::string> SubAgentManagerTool::execute_async(const utilxx_bas
     if (false == outputs.empty()) {
         // 单任务: 返回纯文本 (与旧行为一致, LLM/压缩路径均期望文本)
         if (outputs.size() == 1) {
-            co_return outputs[0].get<std::string>();
+            co_return agentxx::util::ToolResult::ok(outputs[0].get<std::string>());
         }
         // 多任务: 返回 json 数组 (按任务顺序)
-        co_return outputs.dump();
+        co_return agentxx::util::ToolResult::ok(outputs.dump());
     }
     // 回退: 非 toolcall 路径直接调用 (如上下文压缩中间件): resultId 为空,
     // 单中断场景下取 map 中的第一个字符串值 (中断处理以 argIndex 默认编号)
     if (result.is_object() && resultId.empty()) {
         for (const auto& [key, val] : result.items()) {
             if (val.is_string()) {
-                co_return val.get<std::string>();
+                co_return agentxx::util::ToolResult::ok(val.get<std::string>());
             }
         }
-        co_return result.dump();
+        co_return agentxx::util::ToolResult::ok(result.dump());
     }
     if (result.is_string()) {
-        co_return result.get<std::string>();
+        co_return agentxx::util::ToolResult::ok(result.get<std::string>());
     }
-    co_return result.dump();
+    co_return agentxx::util::ToolResult::ok(result.dump());
 }
 
 SubAgentManagerTool::~SubAgentManagerTool() {
@@ -578,7 +579,15 @@ void SubAgentManagerTool::registerOnBus(const std::shared_ptr<agentxx::events::E
                           events::RespSubagentExecute>(
                           [&]() -> asio::awaitable<events::RespSubagentExecute> {
                               auto res = co_await this->execute_async(req.arguments);
-                              co_return events::RespSubagentExecute{.result = std::move(res)};
+                              if (res.status != agentxx::util::ToolStatus::Ok) {
+                                  // 非 Ok 终态对调用方是"这次子代理没成": 走错误分支
+                                  co_return events::RespSubagentExecute{
+                                      .result       = std::move(res.text),
+                                      .hasError     = true,
+                                      .errorMessage = std::string{},
+                                  };
+                              }
+                              co_return events::RespSubagentExecute{.result = std::move(res.text)};
                           },
                           [](std::string errmsg) -> asio::awaitable<events::RespSubagentExecute> {
                               co_return events::RespSubagentExecute{

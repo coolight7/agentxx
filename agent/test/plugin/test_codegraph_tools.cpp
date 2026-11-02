@@ -339,9 +339,9 @@ asio::awaitable<TestResult>
         auto tool = ctx->toolRegistry->find("agentxx_codegraph_search");
         XX_TEST_EXPECT_TRUE(tool != nullptr);
         if (tool) {
-            auto out = co_await tool->execute_async(utilxx_base::Json{
+            auto out = (co_await tool->execute_async(utilxx_base::Json{
                 {"query", "add"}
-            });
+            })).text;
             XX_TEST_EXPECT_TRUE(out.find("Symbols (") != std::string::npos);
             // 插件后台 warmup 索引延迟 2s 启动, 且索引在独立线程执行:
             // 加载完成立即查询只会得到空结果 ("Symbols (0):")。
@@ -364,9 +364,9 @@ asio::awaitable<TestResult>
                 timer.expires_after(std::chrono::milliseconds(500));
                 co_await timer.async_wait(asio::use_awaitable);
                 waitedMs += 500;
-                out       = co_await tool->execute_async(utilxx_base::Json{
+                out       = (co_await tool->execute_async(utilxx_base::Json{
                           {"query", "add"}
-                });
+                })).text;
             }
             if (!hasAllFixtures(out)) {
                 fprintf(
@@ -389,17 +389,17 @@ asio::awaitable<TestResult>
             auto hasSwiftFixture = [](const std::string& text) {
                 return text.find("widgets.swift") != std::string::npos;
             };
-            auto swiftOut      = co_await tool->execute_async(utilxx_base::Json{
+            auto swiftOut      = (co_await tool->execute_async(utilxx_base::Json{
                      {"query", "flockWidget"}
-            });
+            })).text;
             int  waitedSwiftMs = 0;
             while (!hasSwiftFixture(swiftOut) && waitedSwiftMs < kWaitTimeoutMs) {
                 timer.expires_after(std::chrono::milliseconds(500));
                 co_await timer.async_wait(asio::use_awaitable);
                 waitedSwiftMs += 500;
-                swiftOut       = co_await tool->execute_async(utilxx_base::Json{
+                swiftOut       = (co_await tool->execute_async(utilxx_base::Json{
                           {"query", "flockWidget"}
-                });
+                })).text;
             }
             if (!hasSwiftFixture(swiftOut)) {
                 fprintf(
@@ -432,9 +432,9 @@ asio::awaitable<TestResult>
         auto tool = ctx->toolRegistry->find("agentxx_codegraph_context");
         XX_TEST_EXPECT_TRUE(tool != nullptr);
         if (tool) {
-            auto out = co_await tool->execute_async(utilxx_base::Json{
+            auto out = (co_await tool->execute_async(utilxx_base::Json{
                 {"symbol", "add"}
-            });
+            })).text;
             XX_TEST_EXPECT_TRUE(
                 out.find("symbol:") != std::string::npos || out.find("error:") != std::string::npos
             );
@@ -446,9 +446,9 @@ asio::awaitable<TestResult>
         auto callers = ctx->toolRegistry->find("agentxx_codegraph_callers");
         XX_TEST_EXPECT_TRUE(callers != nullptr);
         if (callers) {
-            auto out = co_await callers->execute_async(utilxx_base::Json{
+            auto out = (co_await callers->execute_async(utilxx_base::Json{
                 {"symbol", "add"}
-            });
+            })).text;
             XX_TEST_EXPECT_TRUE(
                 out.find("Callers (") != std::string::npos
                 || out.find("error:") != std::string::npos
@@ -457,9 +457,9 @@ asio::awaitable<TestResult>
         auto callees = ctx->toolRegistry->find("agentxx_codegraph_callees");
         XX_TEST_EXPECT_TRUE(callees != nullptr);
         if (callees) {
-            auto out = co_await callees->execute_async(utilxx_base::Json{
+            auto out = (co_await callees->execute_async(utilxx_base::Json{
                 {"symbol", "main"}
-            });
+            })).text;
             XX_TEST_EXPECT_TRUE(
                 out.find("Callees (") != std::string::npos
                 || out.find("error:") != std::string::npos
@@ -468,10 +468,10 @@ asio::awaitable<TestResult>
         auto pathTool = ctx->toolRegistry->find("agentxx_codegraph_path");
         XX_TEST_EXPECT_TRUE(pathTool != nullptr);
         if (pathTool) {
-            auto out = co_await pathTool->execute_async(utilxx_base::Json{
+            auto out = (co_await pathTool->execute_async(utilxx_base::Json{
                 {"from", "main"    },
                 {"to",   "multiply"},
-            });
+            })).text;
             XX_TEST_EXPECT_TRUE(
                 out.find("Path (") != std::string::npos || out.find("error:") != std::string::npos
             );

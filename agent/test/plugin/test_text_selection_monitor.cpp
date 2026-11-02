@@ -87,9 +87,9 @@ asio::awaitable<TestResult>
         auto tool = ctx->toolRegistry->find("agentxx_text_selection_monitor");
         XX_TEST_EXPECT_TRUE(tool != nullptr);
         if (tool) {
-            auto out = co_await tool->execute_async(utilxx_base::Json{
+            auto out = (co_await tool->execute_async(utilxx_base::Json{
                 {"command", "status"}
-            });
+            })).text;
             auto j   = utilxx_base::Json::parse(out);
             XX_TEST_EXPECT_EQ(j["ok"].get<bool>(), true);
             XX_TEST_EXPECT_EQ(j["running"].get<bool>(), false);
@@ -100,17 +100,17 @@ asio::awaitable<TestResult>
     {
         auto tool = ctx->toolRegistry->find("agentxx_text_selection_monitor");
         if (tool) {
-            auto out = co_await tool->execute_async(utilxx_base::Json{
+            auto out = (co_await tool->execute_async(utilxx_base::Json{
                 {"command",     "start"},
                 {"debounce_ms", 300    },
-            });
+            })).text;
             auto j   = utilxx_base::Json::parse(out);
             XX_TEST_EXPECT_EQ(j["ok"].get<bool>(), true);
             XX_TEST_EXPECT_EQ(j["running"].get<bool>(), true);
 
-            auto out2 = co_await tool->execute_async(utilxx_base::Json{
+            auto out2 = (co_await tool->execute_async(utilxx_base::Json{
                 {"command", "stop"}
-            });
+            })).text;
             auto j2   = utilxx_base::Json::parse(out2);
             XX_TEST_EXPECT_EQ(j2["ok"].get<bool>(), true);
             XX_TEST_EXPECT_EQ(j2["running"].get<bool>(), false);

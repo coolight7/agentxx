@@ -1,5 +1,6 @@
 #pragma once
 
+#include "agentxx/util/tool_result.h"
 #include "neograph/graph/cancel.h"
 #include "utilxx_base/json.h"
 #include "utilxx_base/log.h"
@@ -153,7 +154,8 @@ struct EventToolCallEnd {
     std::string toolCallId;
     /// tool 执行结果 (已截断/摘要后的可见内容)
     std::string result;
-    bool        hasError = false;
+    /// 终态; 订阅方**不得**靠结果文本判断成败
+    agentxx::util::ToolStatus status = agentxx::util::ToolStatus::Ok;
 };
 
 /// ===== subagent =====

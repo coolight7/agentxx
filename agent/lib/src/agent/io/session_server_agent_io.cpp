@@ -1662,32 +1662,44 @@ void SessionServerAgentIO::handleHello(
 ) {
     cancelGraceTimer();
 
-    // 协议版本协商: 对端版本更高时明确拒绝, 不静默降级
-    // - 0 = 老客户端未声明版本: 按最低兼容版本继续 (向后兼容)
-    // - 高于本服务端版本: 新客户端可能依赖本端不认识的消息/字段, 继续跑会出现
-    //   难以排查的行为, 因此回 ok=false + 可读原因
-    if (hello.protocolVersion > agentxx::agent::WireProtocol::kVersion) {
+    // 协议版本协商: 两侧都可能过时, 都要明确拒绝, 不静默降级
+    // - 高于本服务端版本: 新客户端可能依赖本端不认识的消息/字段
+    // - 低于最低兼容版本 (`kMinVersion`): 老对端按旧规则理解数据 (例如只看结果文本
+    //   前缀判断工具成败), 继续跑会得到错误结论
+    // - 两者都回 ok=false + 可读原因, 并记日志便于排查
+    if (hello.protocolVersion > agentxx::agent::WireProtocol::kVersion
+        || hello.protocolVersion < agentxx::agent::WireProtocol::kMinVersion) {
+        const bool tooNew = hello.protocolVersion > agentxx::agent::WireProtocol::kVersion;
         XX_LOGW(
-            "[session_ctrl] hello rejected: client protocol version {} > server {}",
+            "[session_ctrl] hello rejected: client protocol version {} is {} server range [{}, {}]",
             hello.protocolVersion,
+            tooNew ? "newer than" : "older than",
+            agentxx::agent::WireProtocol::kMinVersion,
             agentxx::agent::WireProtocol::kVersion
         );
         WireHelloAck reject;
         reject.ok        = false;
         reject.sessionId = config_.sessionId;
-        reject.error     = fmt::format(
-            "client protocol version {} is newer than server version {}; "
-                "please update the server side",
-            hello.protocolVersion,
-            agentxx::agent::WireProtocol::kVersion
-        );
+        reject.error     = tooNew
+                               ? fmt::format(
+                                 "client protocol version {} is newer than server version {}; "
+                                     "please update the server side",
+                                 hello.protocolVersion,
+                                 agentxx::agent::WireProtocol::kVersion
+                             )
+                               : fmt::format(
+                                 "client protocol version {} is older than the minimum {}; "
+                                     "please update the client",
+                                 hello.protocolVersion,
+                                 agentxx::agent::WireProtocol::kMinVersion
+                             );
         reject.protocolVersion = agentxx::agent::WireProtocol::kVersion;
         reject.capabilities    = agentxx::agent::serverWireCapabilities();
         if (sender) {
             // 连接阶段保持"未握手": 该对端不能发业务消息 (见 onPeerMessage 的阶段校验)
             sender->setStage(
                 agentxx::agent::WireConnectionStage::Unhandshaken,
-                "hello rejected: protocol version newer than server"
+                "hello rejected: protocol version out of range"
             );
             sendToClient(sender, WireMessage{std::move(reject)});
         } else {
@@ -1696,7 +1708,7 @@ void SessionServerAgentIO::handleHello(
         return;
     }
     if (hello.protocolVersion == 0) {
-        // 老客户端: 按最低兼容版本处理 (能力按未声明降级)
+        // 0 = 极老客户端 (未声明版本): kMinVersion > 0 时上面已拒绝, 这里只是防御
         XX_LOGD("[session_ctrl] hello without protocol version: treating as legacy client");
     } else {
         XX_LOGD(

@@ -166,9 +166,9 @@ asio::awaitable<agentxx::test::TestResult>
         auto tool = ctx->toolRegistry->find("agentxx_screen_capture");
         XX_TEST_EXPECT_TRUE(tool != nullptr);
         if (tool) {
-            auto out = co_await tool->execute_async(utilxx_base::Json{
+            auto out = (co_await tool->execute_async(utilxx_base::Json{
                 {"command", "get_screen_count"}
-            });
+            })).text;
             auto j   = utilxx_base::Json::parse(out);
             XX_TEST_EXPECT_EQ(j["ok"].get<bool>(), true);
             screenCount = j["count"].get<int>();
@@ -180,10 +180,10 @@ asio::awaitable<agentxx::test::TestResult>
     {
         auto tool = ctx->toolRegistry->find("agentxx_screen_capture");
         if (tool) {
-            auto out = co_await tool->execute_async(utilxx_base::Json{
+            auto out = (co_await tool->execute_async(utilxx_base::Json{
                 {"command",     "capture_all"},
                 {"save_images", false        },
-            });
+            })).text;
             auto j   = utilxx_base::Json::parse(out);
             XX_TEST_EXPECT_EQ(j["ok"].get<bool>(), true);
             XX_TEST_EXPECT_TRUE(j["frames"].size() > 0);
@@ -200,9 +200,9 @@ asio::awaitable<agentxx::test::TestResult>
     {
         auto tool = ctx->toolRegistry->find("agentxx_screen_capture");
         if (tool) {
-            auto out = co_await tool->execute_async(utilxx_base::Json{
+            auto out = (co_await tool->execute_async(utilxx_base::Json{
                 {"save_images", true}
-            });
+            })).text;
             auto j   = utilxx_base::Json::parse(out);
             XX_TEST_EXPECT_EQ(j["ok"].get<bool>(), true);
             XX_TEST_EXPECT_EQ(j["frames"].size(), static_cast<size_t>(screenCount));
@@ -229,11 +229,11 @@ asio::awaitable<agentxx::test::TestResult>
     {
         auto tool = ctx->toolRegistry->find("agentxx_screen_capture");
         if (tool) {
-            auto out = co_await tool->execute_async(utilxx_base::Json{
+            auto out = (co_await tool->execute_async(utilxx_base::Json{
                 {"command",      "capture_screen"},
                 {"screen_index", 0               },
                 {"save_images",  false           },
-            });
+            })).text;
             auto j   = utilxx_base::Json::parse(out);
             XX_TEST_EXPECT_EQ(j["ok"].get<bool>(), true);
             XX_TEST_EXPECT_EQ(j["frames"].size(), 1u);
@@ -248,10 +248,10 @@ asio::awaitable<agentxx::test::TestResult>
     {
         auto tool = ctx->toolRegistry->find("agentxx_screen_capture");
         if (tool) {
-            auto out = co_await tool->execute_async(utilxx_base::Json{
+            auto out = (co_await tool->execute_async(utilxx_base::Json{
                 {"command",      "capture_screen"},
                 {"screen_index", 99999           }
-            });
+            })).text;
             auto j   = utilxx_base::Json::parse(out);
             XX_TEST_EXPECT_EQ(j["ok"].get<bool>(), false);
         }

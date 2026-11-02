@@ -535,7 +535,7 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
                     {"call_A_rid-A", "single result text"}
             }
             );
-            auto r = co_await env->tool->execute_async(args);
+            auto r = (co_await env->tool->execute_async(args)).text;
             XX_TEST_EXPECT_EQ(r, std::string{"single result text"});
         }
 
@@ -572,7 +572,7 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
                     {"call_B_r1", "first result" },
             }
             );
-            auto r      = co_await env->tool->execute_async(args);
+            auto r      = (co_await env->tool->execute_async(args)).text;
             auto parsed = utilxx_base::Json::parse(r);
             XX_TEST_EXPECT_TRUE(parsed.is_array());
             XX_TEST_EXPECT_EQ(parsed.size(), size_t{2});
@@ -604,7 +604,7 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
                     {"1", "summary text"}
             }
             );
-            auto r = co_await env->tool->execute_async(args);
+            auto r = (co_await env->tool->execute_async(args)).text;
             XX_TEST_EXPECT_EQ(r, std::string{"summary text"});
         }
 
@@ -628,7 +628,7 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
                     {"call_D_1", utilxx_base::Json{{"error", "subagent failed"}}},
             }
             );
-            auto r = co_await env->tool->execute_async(args);
+            auto r = (co_await env->tool->execute_async(args)).text;
             XX_TEST_EXPECT_EQ(r, std::string{R"({"error":"subagent failed"})"});
         }
 
@@ -664,7 +664,7 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
                     {"call_E_r2", "only second"}
             }
             );
-            auto r = co_await env->tool->execute_async(args);
+            auto r = (co_await env->tool->execute_async(args)).text;
             // outputs 只剩 1 个 → 返回纯文本
             XX_TEST_EXPECT_EQ(r, std::string{"only second"});
         }
@@ -690,7 +690,7 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
                     {"legacy_key", "fallback string"}
             }
             );
-            auto r = co_await env->tool->execute_async(args);
+            auto r = (co_await env->tool->execute_async(args)).text;
             XX_TEST_EXPECT_EQ(r, std::string{"fallback string"});
         }
     }
@@ -868,7 +868,7 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
                 agentxx::middleware::MiddlewareContext::graphDataKey_interruptResult,
                 resumeValues
             );
-            auto r      = co_await env->tool->execute_async(args);
+            auto r      = (co_await env->tool->execute_async(args)).text;
             auto parsed = utilxx_base::Json::parse(r);
             XX_TEST_EXPECT_TRUE(parsed.is_array());
             XX_TEST_EXPECT_EQ(parsed.size(), size_t{2});
@@ -913,7 +913,7 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
                 agentxx::middleware::MiddlewareContext::graphDataKey_interruptResult,
                 resumeValues
             );
-            auto r = co_await env->tool->execute_async(args);
+            auto r = (co_await env->tool->execute_async(args)).text;
             XX_TEST_EXPECT_EQ(r, std::string{R"({"error":"depth budget exhausted"})"});
         }
 

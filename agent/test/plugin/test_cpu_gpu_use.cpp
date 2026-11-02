@@ -135,7 +135,7 @@ asio::awaitable<TestResult>
         auto tool = ctx->toolRegistry->find("agentxx_get_system_core_info");
         XX_TEST_EXPECT_TRUE(tool != nullptr);
         if (tool) {
-            auto out = co_await tool->execute_async(utilxx_base::Json::object());
+            auto out = (co_await tool->execute_async(utilxx_base::Json::object())).text;
             TEST_INFO << "get_system_core_info output:\n" << out << std::endl;
             XX_TEST_EXPECT_TRUE(out.find("CPU Usage:") != std::string::npos);
             XX_TEST_EXPECT_TRUE(

@@ -36,7 +36,8 @@ public:
         return tool_->get_definition();
     }
 
-    asio::awaitable<std::string> execute_async(const utilxx_base::Json& arguments) override {
+    asio::awaitable<agentxx::util::ToolResult>
+        execute_async(const utilxx_base::Json& arguments) override {
         co_return co_await tool_->execute_async(arguments);
     }
 

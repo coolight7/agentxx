@@ -131,7 +131,7 @@ asio::awaitable<std::string> callTool(
     if (!argsJson.empty()) {
         args = utilxx_base::Json::parse(std::string{argsJson});
     }
-    co_return co_await tool->execute_async(args);
+    co_return (co_await tool->execute_async(args)).text;
 }
 
 /// 通道记录里的指定字段 (找不到通道返回空)

@@ -51,7 +51,7 @@ namespace test {
 //    - 中断处理并 resume 后, 该 tool 重新执行返回真实结果, 最终上下文
 //      角色顺序: system -> user -> assistant(tool_calls) -> tool -> assistant
 // 2. 取消 / 超时停止 (CancelToken 取消):
-//    - 串行 toolcall 下, 取消时未完成的 tool 全部自动补充 [User canceled]
+//    - 串行 toolcall 下, 取消时未完成的 tool 全部自动补充 [Canceled]
 //      tool 消息 (role=tool, flags=AutoInserted, 按 tool_calls 声明顺序)
 //    - 最终上下文角色顺序完整, 每条 assistant tool_call 都有 tool 回复
 // ===========================================================================
@@ -150,10 +150,10 @@ public:
         };
     }
 
-    asio::awaitable<std::string> execute_async(const utilxx_base::Json& arguments) override {
+    asio::awaitable<agentxx::util::ToolResult> execute_async(const utilxx_base::Json& arguments) override {
         auto agentCtxPtr = agentContext.lock();
         if (!agentCtxPtr || !agentCtxPtr->middlewareHandleContext) {
-            co_return R"({"error":"AgentContext not available"})";
+            co_return agentxx::util::ToolResult::fail("AgentContext not available");
         }
         auto sessionId = arguments.value("sessionId", std::string{});
         auto resultId  = arguments.value("tool_call_id", std::string{});
@@ -179,27 +179,27 @@ public:
         if (result.is_object() && !resultId.empty() && result.contains(resultId)) {
             auto val = result[resultId];
             if (val.is_string()) {
-                co_return val.get<std::string>();
+                co_return agentxx::util::ToolResult::ok(val.get<std::string>());
             }
             if (val.is_object() && val.size() == 1) {
                 for (auto it = val.begin(); it != val.end(); ++it) {
                     if (it->is_string()) {
-                        co_return it->get<std::string>();
+                        co_return agentxx::util::ToolResult::ok(it->get<std::string>());
                     }
-                    co_return it->dump();
+                    co_return agentxx::util::ToolResult::ok(it->dump());
                 }
             }
-            co_return val.dump();
+            co_return agentxx::util::ToolResult::ok(val.dump());
         }
         if (result.is_string()) {
-            co_return result.get<std::string>();
+            co_return agentxx::util::ToolResult::ok(result.get<std::string>());
         }
-        co_return result.dump();
+        co_return agentxx::util::ToolResult::ok(result.dump());
     }
 };
 
 /// 快速 tool: 排在 slow 之后声明 (串行 toolcall 下取消后不再执行,
-/// 同样被补充 [User canceled])
+/// 同样被补充 [Canceled])
 class FastDoneTool : public agentxx::tools::XXToolBase {
 public:
 
@@ -214,12 +214,12 @@ public:
         };
     }
 
-    asio::awaitable<std::string> execute_async(const utilxx_base::Json&) override {
-        co_return "fast done";
+    asio::awaitable<agentxx::util::ToolResult> execute_async(const utilxx_base::Json&) override {
+        co_return agentxx::util::ToolResult::ok("fast done");
     }
 };
 
-/// 慢速 tool: 模拟耗时 IO, 取消时未完成 → 应自动补充 [User canceled]
+/// 慢速 tool: 模拟耗时 IO, 取消时未完成 → 应自动补充 [Canceled]
 class SlowHangTool : public agentxx::tools::XXToolBase {
 public:
 
@@ -235,13 +235,13 @@ public:
         };
     }
 
-    asio::awaitable<std::string> execute_async(const utilxx_base::Json&) override {
+    asio::awaitable<agentxx::util::ToolResult> execute_async(const utilxx_base::Json&) override {
         started_->store(true, std::memory_order_release);
         // 模拟耗时异步 IO: 最长等待 5s (取消时被取消语义中断, 未完成
-        // → 自动补充 [User canceled]; 5s 避免全部测试高负载下 2s 偶发自然完成)
+        // → 自动补充 [Canceled]; 5s 避免全部测试高负载下 2s 偶发自然完成)
         asio::steady_timer timer(co_await asio::this_coro::executor, std::chrono::seconds(5));
         co_await timer.async_wait(asio::use_awaitable);
-        co_return "slow done";
+        co_return agentxx::util::ToolResult::ok("slow done");
     }
 
 private:
@@ -368,15 +368,15 @@ asio::awaitable<void> test_interrupt_auto_supplement() {
 // ===========================================================================
 // 取消/超时停止 E2E: tool 执行中取消
 // - 串行 toolcall: slow 先执行被取消中断, 后续 fast 不再执行
-// - 未完成的 tool 全部自动补充 [User canceled] (按声明顺序)
+// - 未完成的 tool 全部自动补充 [Canceled] (按声明顺序)
 // - 最终上下文角色顺序完整: 每条 assistant tool_call 都有对应 tool 回复
 // ===========================================================================
 
 /// 校验取消后的消息序列 (串行 toolcall 语义):
 /// [system, user, assistant(tool_calls=[call_slow_1, call_fast_1]),
-///  tool(call_slow_1=[User canceled] AutoInserted), tool(call_fast_1=[User canceled] AutoInserted)]
+///  tool(call_slow_1=[Canceled] AutoInserted), tool(call_fast_1=[Canceled] AutoInserted)]
 /// - 串行执行: slow 先执行, 取消中断 slow 后 fast 不再执行
-/// - 未完成的 tool 全部自动补充 [User canceled] (按声明顺序), 保证角色顺序完整
+/// - 未完成的 tool 全部自动补充 [Canceled] (按声明顺序), 保证角色顺序完整
 static bool checkCanceledMessageSequence(const utilxx_base::Json& msgs) {
     if (!msgs.is_array() || msgs.size() != 5) {
         return false;
@@ -407,15 +407,15 @@ static bool checkCanceledMessageSequence(const utilxx_base::Json& msgs) {
     if (msgs[2]["tool_calls"][1].value("id", std::string{}) != "call_fast_1") {
         return false;
     }
-    // 未完成的 tool 自动补充 [User canceled] (按 tool_calls 声明顺序):
-    // - slow 先执行, 取消时执行中未完成 → 补充 [User canceled]
+    // 未完成的 tool 自动补充 [Canceled] (按 tool_calls 声明顺序):
+    // - slow 先执行, 取消时执行中未完成 → 补充 [Canceled]
     if (msgs[3].value("tool_call_id", std::string{}) != "call_slow_1") {
         return false;
     }
     if (msgs[3].value("tool_name", std::string{}) != "test_slow") {
         return false;
     }
-    if (msgs[3].value("content", std::string{}) != "[User canceled]") {
+    if (msgs[3].value("content", std::string{}) != "[Canceled]") {
         return false;
     }
     {
@@ -425,14 +425,14 @@ static bool checkCanceledMessageSequence(const utilxx_base::Json& msgs) {
             return false;
         }
     }
-    // - fast 排在 slow 之后, 取消后未执行 → 同样补充 [User canceled]
+    // - fast 排在 slow 之后, 取消后未执行 → 同样补充 [Canceled]
     if (msgs[4].value("tool_call_id", std::string{}) != "call_fast_1") {
         return false;
     }
     if (msgs[4].value("tool_name", std::string{}) != "test_fast") {
         return false;
     }
-    if (msgs[4].value("content", std::string{}) != "[User canceled]") {
+    if (msgs[4].value("content", std::string{}) != "[Canceled]") {
         return false;
     }
     {
@@ -487,8 +487,8 @@ asio::awaitable<void> test_cancel_auto_supplement() {
     auto ex = co_await asio::this_coro::executor;
 
     // 串行 toolcall: 等待 slow 开始执行后再取消, 确保取消发生在 slow 执行期间:
-    // - slow (2s 执行中) 被取消信号立即中断, 未完成 → 补充 [User canceled]
-    // - fast 排在 slow 之后, 取消后不再执行 → 同样补充 [User canceled]
+    // - slow (2s 执行中) 被取消信号立即中断, 未完成 → 补充 [Canceled]
+    // - fast 排在 slow 之后, 取消后不再执行 → 同样补充 [Canceled]
     auto cancelWatcher = [&]() -> asio::awaitable<void> {
         asio::steady_timer timer(ex);
         for (int i = 0; i < 2000; ++i) {
@@ -1078,9 +1078,9 @@ public:
         };
     }
 
-    asio::awaitable<std::string> execute_async(const utilxx_base::Json&) override {
+    asio::awaitable<agentxx::util::ToolResult> execute_async(const utilxx_base::Json&) override {
         execCount_->fetch_add(1, std::memory_order_relaxed);
-        co_return "repeat tool executed";
+        co_return agentxx::util::ToolResult::ok("repeat tool executed");
     }
 
 private:

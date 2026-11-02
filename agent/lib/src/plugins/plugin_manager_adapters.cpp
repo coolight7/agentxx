@@ -19,6 +19,25 @@
 namespace agentxx {
 namespace plugin {
 
+namespace {
+
+/// 插件 Operation 终态 -> 工具结果
+/// - `OK` / `FAILED` / `CANCELED` 分别对应 `Ok` / `Failed` / `Canceled`
+/// - `FAILED` 的 payload 就是插件给的**错误内容**, 不加任何方括号前缀
+///   (给模型看的 `[Error: ...]` 由执行层统一加)
+agentxx::util::ToolResult mapPluginOpResult(pluginxx::PluginOpResult result) {
+    switch (result.status) {
+        case PLUGINXX_OPERATOR_OK:
+            return agentxx::util::ToolResult::ok(std::move(result.payload));
+        case PLUGINXX_OPERATOR_CANCELED:
+            return agentxx::util::ToolResult::canceled(std::move(result.payload));
+        default:
+            return agentxx::util::ToolResult::fail(std::move(result.payload));
+    }
+}
+
+} // namespace
+
 // =====================================================================
 // PluginTool
 // =====================================================================
@@ -72,7 +91,7 @@ neograph::ChatTool PluginTool::get_definition() const {
     return def;
 }
 
-asio::awaitable<std::string> PluginTool::execute_async(const utilxx_base::Json& arguments) {
+asio::awaitable<agentxx::util::ToolResult> PluginTool::execute_async(const utilxx_base::Json& arguments) {
     auto inst = instance_.lock();
     if (!inst) {
         throw std::runtime_error("plugin instance released");
@@ -127,21 +146,24 @@ asio::awaitable<std::string> PluginTool::execute_async(const utilxx_base::Json& 
 
     if (spec_.default_timeout_ms > 0) {
         auto timeout = std::chrono::milliseconds{spec_.default_timeout_ms};
-        co_return co_await utilxx::asyncWithTimeout<std::string>(
-            [a = std::move(awaitArgs)]() mutable -> asio::awaitable<std::string> {
-                co_return agentxx::util::requirePluginOpOk(
+        // 超时是普通失败: 文本只写原因, 不带方括号标记 (执行层会加 `[Error: ...]`)
+        const auto timeoutText = fmt::format(
+            "timed out after {} seconds",
+            static_cast<double>(spec_.default_timeout_ms) / 1000.0
+        );
+        co_return co_await utilxx::asyncWithTimeout<agentxx::util::ToolResult>(
+            [a = std::move(awaitArgs)]() mutable -> asio::awaitable<agentxx::util::ToolResult> {
+                co_return mapPluginOpResult(
                     co_await agentxx::util::awaitHostPluginOpResult(std::move(a))
                 );
             },
             timeout,
-            []() -> std::string {
-                return "[Plugin tool timeout]";
+            [timeoutText]() -> agentxx::util::ToolResult {
+                return agentxx::util::ToolResult::fail(timeoutText);
             }
         );
     }
-    co_return agentxx::util::requirePluginOpOk(
-        co_await agentxx::util::awaitHostPluginOpResult(std::move(awaitArgs))
-    );
+    co_return mapPluginOpResult(co_await agentxx::util::awaitHostPluginOpResult(std::move(awaitArgs)));
 }
 
 // =====================================================================

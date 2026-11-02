@@ -216,7 +216,7 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
         d.toolName   = "bash";
         d.toolCallId = "tc1";
         d.result     = "output";
-        d.hasError   = true;
+        d.status     = agentxx::util::ToolStatus::Failed;
         auto back = WsAgentIOTransport::deserialize(WsAgentIOTransport::serialize(WireMessage{d}));
         XX_TEST_EXPECT_TRUE(back.has_value());
         if (back) {
@@ -226,7 +226,7 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
                 XX_TEST_EXPECT_TRUE(bd->type == WireDelta::Type::ToolEnd);
                 XX_TEST_EXPECT_EQ(bd->toolName, std::string("bash"));
                 XX_TEST_EXPECT_EQ(bd->toolCallId, std::string("tc1"));
-                XX_TEST_EXPECT_TRUE(bd->hasError);
+                XX_TEST_EXPECT_TRUE(bd->status == agentxx::util::ToolStatus::Failed);
             }
         }
     }

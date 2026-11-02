@@ -147,6 +147,23 @@ asio::awaitable<bool> WsAgentIOTransport::connect(const WireHello& hello) {
                             "[ws_transport] hello rejected by server: {}",
                             ack->error.empty() ? std::string{"<no reason>"} : ack->error
                         );
+                        break;
+                    }
+                    // 服务端版本过者: 老服务端会按旧规则理解请求/数据 (例如只把
+                    // `hasError` 当作失败标记), 因此同样按握手失败处理, 并给出可读原因
+                    if (lastHelloAck_->protocolVersion < WireProtocol::kMinVersion) {
+                        handshakeRejected                = true;
+                        lastHelloAck_->ok                = false;
+                        lastHelloAck_->error             = fmt::format(
+                            "server protocol version {} is older than the minimum {}; "
+                                        "please update the server",
+                            ack->protocolVersion,
+                            WireProtocol::kMinVersion
+                        );
+                        XX_LOGE(
+                            "[ws_transport] hello rejected: {}",
+                            lastHelloAck_->error
+                        );
                     }
                     break;
                 }

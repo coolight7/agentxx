@@ -36,7 +36,7 @@ bool isNoiseMessage(const neograph::ChatMessage& m) {
         return false;
     }
     const std::string_view c = m.content;
-    return c == "[Please continue]" || c == "[User Canceled]" || c == "[Exception aborted]"
+    return c == "[Please continue]" || c == "[User canceled]" || c == "[Exception aborted]"
            || c == "[Empty]" || c.empty();
 }
 

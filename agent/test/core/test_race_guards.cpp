@@ -130,7 +130,7 @@ public:
         };
     }
 
-    asio::awaitable<std::string> execute_async(const utilxx_base::Json&) override {
+    asio::awaitable<agentxx::util::ToolResult> execute_async(const utilxx_base::Json&) override {
         if (execCount_) {
             execCount_->fetch_add(1, std::memory_order_relaxed);
         }
@@ -141,7 +141,7 @@ public:
             co_await timer.async_wait(asio::use_awaitable);
         }
         trace_->push_back(TraceEntry{name_, false});
-        co_return fmt::format("{} done", name_);
+        co_return agentxx::util::ToolResult::ok(fmt::format("{} done", name_));
     }
 
 private:
@@ -169,11 +169,11 @@ public:
         };
     }
 
-    asio::awaitable<std::string> execute_async(const utilxx_base::Json& arguments) override {
+    asio::awaitable<agentxx::util::ToolResult> execute_async(const utilxx_base::Json& arguments) override {
         execCount_->fetch_add(1, std::memory_order_relaxed);
         auto ctx = agentContext.lock();
         if (!ctx || !ctx->middlewareHandleContext) {
-            co_return "[no context]";
+            co_return agentxx::util::ToolResult::fail("AgentContext not available");
         }
         const auto sessionId = arguments.value("sessionId", std::string{});
         const auto resultId  = arguments.value("tool_call_id", std::string{});
@@ -520,8 +520,8 @@ asio::awaitable<void> test_cancel_vs_tool_settlement() {
         // 已结算的保留真实结果 (不能被取消占位顶掉)
         XX_TEST_EXPECT_EQ(results[0].second, std::string{"race_fast done"});
         // 执行中被取消的与未启动的都补取消占位
-        XX_TEST_EXPECT_EQ(results[1].second, std::string{"[User canceled]"});
-        XX_TEST_EXPECT_EQ(results[2].second, std::string{"[User canceled]"});
+        XX_TEST_EXPECT_EQ(results[1].second, std::string{"[Canceled]"});
+        XX_TEST_EXPECT_EQ(results[2].second, std::string{"[Canceled]"});
     }
 
     // 等被取消的执行体真正结束再退出 (它的内部计时器不随取消信号中止)

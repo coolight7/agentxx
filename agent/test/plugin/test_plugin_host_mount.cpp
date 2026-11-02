@@ -120,7 +120,7 @@ asio::awaitable<std::string> callTool(
     if (!argsJson.empty()) {
         args = utilxx_base::Json::parse(std::string{argsJson});
     }
-    co_return co_await tool->execute_async(args);
+    co_return (co_await tool->execute_async(args)).text;
 }
 
 /// 某个 agent 上注册表里的工具名出现次数 (验证重复登记)

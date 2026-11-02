@@ -235,8 +235,9 @@ inline utilxx_base::Json deltaToJson(const WireDelta& d) {
     if (!d.result.empty()) {
         j["result"] = d.result;
     }
-    if (d.hasError) {
-        j["hasError"] = d.hasError;
+    // ToolEnd 的终态: `ok` 不写 (缺省即成功); 客户端不认识的取值按 `ok` 处理
+    if (d.type == WireDelta::Type::ToolEnd && d.status != agentxx::util::ToolStatus::Ok) {
+        j["status"] = std::string{agentxx::util::toolStatusName(d.status)};
     }
     // GenStatus: 生成阶段 (占位提示; tool_name 复用同名字段)
     if (d.type == WireDelta::Type::GenStatus) {
@@ -324,7 +325,7 @@ inline std::optional<WireDelta> deltaFromJson(const utilxx_base::Json& j) {
     d.toolCallId   = j.value("tool_call_id", std::string{});
     d.arguments    = j.value("arguments", std::string{});
     d.result       = j.value("result", std::string{});
-    d.hasError     = j.value("hasError", false);
+    d.status       = agentxx::util::toolStatusFromName(j.value("status", std::string{}));
     d.historyCount = j.value("historyCount", uint64_t{0});
     d.tailHash     = j.value("tailHash", std::string{});
     d.startTimeMs  = j.value("startTimeMs", int64_t{0});

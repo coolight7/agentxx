@@ -1,5 +1,5 @@
 {
-  "protocolVersion": 1,
+  "protocolVersion": 2,
   "messageCount": 48,
   "note": "生成物, 请勿手工编辑; 重新生成: AGENTXX_UPDATE_WIRE_SCHEMA=1 agentxx_test wire_schema",
   "messages": [
@@ -26,7 +26,7 @@
         "tailHash": "deadbeef",
         "language": "zh-cn",
         "afterViewSeq": 128,
-        "protocolVersion": 1,
+        "protocolVersion": 2,
         "capabilities": [
           "input.delivery",
           "ui.form"
@@ -58,7 +58,7 @@
           "gpt-x",
           "claude-y"
         ],
-        "protocolVersion": 1,
+        "protocolVersion": 2,
         "capabilities": [
           "input.delivery",
           "input.ack",

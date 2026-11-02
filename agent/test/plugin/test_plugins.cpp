@@ -245,10 +245,10 @@ asio::awaitable<TestResult> run_plugin_tests() {
         auto tool = ctx->toolRegistry->find("example_echo");
         XX_TEST_EXPECT_TRUE(tool != nullptr);
         if (tool) {
-            auto out = co_await tool->execute_async(utilxx_base::Json{
+            auto out = (co_await tool->execute_async(utilxx_base::Json{
                 {"sessionId", "t1"   },
                 {"hello",     "world"},
-            });
+            })).text;
             auto j   = utilxx_base::Json::parse(out);
             XX_TEST_EXPECT_EQ(j["echo"]["hello"].get<std::string>(), "world");
             XX_TEST_EXPECT_EQ(j["sessionId"].get<std::string>(), "t1");
@@ -260,10 +260,10 @@ asio::awaitable<TestResult> run_plugin_tests() {
         auto tool = ctx->toolRegistry->find("example_caller");
         XX_TEST_EXPECT_TRUE(tool != nullptr);
         if (tool) {
-            auto out = co_await tool->execute_async(utilxx_base::Json{
+            auto out = (co_await tool->execute_async(utilxx_base::Json{
                 {"sessionId", "t1"},
                 {"x",         42  },
-            });
+            })).text;
             auto j   = utilxx_base::Json::parse(out);
             XX_TEST_EXPECT_EQ(j["via_call_tool"]["echo"]["x"].get<int>(), 42);
         }
@@ -316,10 +316,10 @@ asio::awaitable<TestResult> run_plugin_tests() {
                     );
                 }
 
-                auto out = co_await tool->execute_async(utilxx_base::Json{
+                auto out = (co_await tool->execute_async(utilxx_base::Json{
                     {"command", "echo polled_e2e_ok"},
                     {"timeout", 15                  },
-                });
+                })).text;
                 XX_TEST_EXPECT_TRUE(out.find("polled_e2e_ok") != std::string::npos);
                 XX_TEST_EXPECT_TRUE(out.find("[ExitCode]") != std::string::npos);
             }
@@ -354,55 +354,55 @@ asio::awaitable<TestResult> run_plugin_tests() {
             XX_TEST_EXPECT_TRUE(tool != nullptr);
             if (tool) {
                 // 1. 同步计算与返回值
-                auto out1 = co_await tool->execute_async(utilxx_base::Json{
+                auto out1 = (co_await tool->execute_async(utilxx_base::Json{
                     {"code", "return 2+3"},
-                });
+                })).text;
                 XX_TEST_EXPECT_TRUE(out1.find("5") != std::string::npos);
                 XX_TEST_EXPECT_TRUE(out1.find("[ExitCode]\n0") != std::string::npos);
 
                 // 2. 控制台输出与异常捕获
-                auto out2 = co_await tool->execute_async(utilxx_base::Json{
+                auto out2 = (co_await tool->execute_async(utilxx_base::Json{
                     {"code", "console.log('hi_js'); throw new Error('oops_js')"},
-                });
+                })).text;
                 XX_TEST_EXPECT_TRUE(out2.find("hi_js") != std::string::npos);
                 XX_TEST_EXPECT_TRUE(out2.find("oops_js") != std::string::npos);
                 XX_TEST_EXPECT_TRUE(out2.find("[StdErr]") != std::string::npos);
                 XX_TEST_EXPECT_TRUE(out2.find("[ExitCode]\n1") != std::string::npos);
 
                 // 3. 异步 Promise 等待与对象 JSON 返回
-                auto out3 = co_await tool->execute_async(utilxx_base::Json{
+                auto out3 = (co_await tool->execute_async(utilxx_base::Json{
                     {"code",
                      "await new Promise(r=>setTimeout(r,10)); return { status: 'async_ok', val: 42 };"
                     },
-                });
+                })).text;
                 XX_TEST_EXPECT_TRUE(out3.find("async_ok") != std::string::npos);
                 XX_TEST_EXPECT_TRUE(out3.find("42") != std::string::npos);
 
                 // 4. 超时场景处理 (1秒超时)
-                auto out4 = co_await tool->execute_async(utilxx_base::Json{
+                auto out4 = (co_await tool->execute_async(utilxx_base::Json{
                     {"code",    "await new Promise(r=>setTimeout(r,2000)); return 99"},
                     {"timeout", 1                                                    },
-                });
+                })).text;
                 XX_TEST_EXPECT_TRUE(out4.find("Command timed out") != std::string::npos);
 
                 // 5. full_output=false 策略 (成功不输出，失败输出)
-                auto out5 = co_await tool->execute_async(utilxx_base::Json{
+                auto out5 = (co_await tool->execute_async(utilxx_base::Json{
                     {"code",        "console.log('secret_log'); return 'hide_log';"},
                     {"full_output", false                                          },
-                });
+                })).text;
                 XX_TEST_EXPECT_TRUE(out5.find("secret_log") == std::string::npos);
                 XX_TEST_EXPECT_TRUE(out5.find("[ExitCode]\n0") != std::string::npos);
 
-                auto out5_err = co_await tool->execute_async(utilxx_base::Json{
+                auto out5_err = (co_await tool->execute_async(utilxx_base::Json{
                     {"code",        "console.log('err_log'); throw new Error('visible_on_fail');"},
                     {"full_output", false                                                        },
-                });
+                })).text;
                 XX_TEST_EXPECT_TRUE(out5_err.find("visible_on_fail") != std::string::npos);
 
                 // 6. 大文本截断
-                auto out6 = co_await tool->execute_async(utilxx_base::Json{
+                auto out6 = (co_await tool->execute_async(utilxx_base::Json{
                     {"code", "let s = 'x'.repeat(35000); console.log(s); return s.length;"},
-                });
+                })).text;
                 XX_TEST_EXPECT_TRUE(out6.find("[Content offloaded") != std::string::npos);
             }
 
@@ -410,17 +410,17 @@ asio::awaitable<TestResult> run_plugin_tests() {
             auto aliasTool = ctx->toolRegistry->find("agentxx_execute_js");
             XX_TEST_EXPECT_TRUE(aliasTool != nullptr);
             if (aliasTool) {
-                auto outAlias = co_await aliasTool->execute_async(utilxx_base::Json{
+                auto outAlias = (co_await aliasTool->execute_async(utilxx_base::Json{
                     {"code", "return 'alias_ok';"},
-                });
+                })).text;
                 XX_TEST_EXPECT_TRUE(outAlias.find("alias_ok") != std::string::npos);
             }
             auto aliasTool2 = ctx->toolRegistry->find("agentxx_execute_javascript");
             XX_TEST_EXPECT_TRUE(aliasTool2 != nullptr);
             if (aliasTool2) {
-                auto outAlias2 = co_await aliasTool2->execute_async(utilxx_base::Json{
+                auto outAlias2 = (co_await aliasTool2->execute_async(utilxx_base::Json{
                     {"code", "return 'alias2_ok';"},
-                });
+                })).text;
                 XX_TEST_EXPECT_TRUE(outAlias2.find("alias2_ok") != std::string::npos);
             }
 
@@ -543,8 +543,8 @@ asio::awaitable<TestResult> run_plugin_tests() {
                 return neograph::ChatTool{};
             }
 
-            asio::awaitable<std::string> execute_async(const utilxx_base::Json&) override {
-                co_return std::string{};
+            asio::awaitable<agentxx::util::ToolResult> execute_async(const utilxx_base::Json&) override {
+                co_return agentxx::util::ToolResult::ok(std::string{});
             }
         };
 
@@ -629,10 +629,10 @@ asio::awaitable<TestResult> run_plugin_tests() {
             auto tool = ctx->toolRegistry->find("js_hello");
             XX_TEST_EXPECT_TRUE(tool != nullptr);
             if (tool) {
-                auto out = co_await tool->execute_async(utilxx_base::Json{
+                auto out = (co_await tool->execute_async(utilxx_base::Json{
                     {"sessionId", "t1"     },
                     {"name",      "agentxx"},
-                });
+                })).text;
                 auto j   = utilxx_base::Json::parse(out);
                 XX_TEST_EXPECT_EQ(j["greeting"].get<std::string>(), "Hello, agentxx!");
                 XX_TEST_EXPECT_EQ(j["from"].get<std::string>(), "js plugin");
@@ -640,9 +640,9 @@ asio::awaitable<TestResult> run_plugin_tests() {
             auto asyncTool = ctx->toolRegistry->find("js_async_wait");
             XX_TEST_EXPECT_TRUE(asyncTool != nullptr);
             if (asyncTool) {
-                auto out = co_await asyncTool->execute_async(utilxx_base::Json{
+                auto out = (co_await asyncTool->execute_async(utilxx_base::Json{
                     {"sessionId", "t2"}
-                });
+                })).text;
                 auto j   = utilxx_base::Json::parse(out);
                 XX_TEST_EXPECT_EQ(j["waited"].get<bool>(), true);
                 XX_TEST_EXPECT_EQ(j["session"].get<std::string>(), "t2");
@@ -654,9 +654,9 @@ asio::awaitable<TestResult> run_plugin_tests() {
             auto tool = ctx->toolRegistry->find("js_call_js");
             XX_TEST_EXPECT_TRUE(tool != nullptr);
             if (tool) {
-                auto out = co_await tool->execute_async(utilxx_base::Json{
+                auto out = (co_await tool->execute_async(utilxx_base::Json{
                     {"name", "inner-x"}
-                });
+                })).text;
                 auto j   = utilxx_base::Json::parse(out);
                 XX_TEST_EXPECT_EQ(j["inner"]["greeting"].get<std::string>(), "Hello, inner-x!");
             }
@@ -687,9 +687,9 @@ asio::awaitable<TestResult> run_plugin_tests() {
             auto tool = ctx->toolRegistry->find("js_call_host");
             XX_TEST_EXPECT_TRUE(tool != nullptr);
             if (tool) {
-                auto out = co_await tool->execute_async(utilxx_base::Json{
+                auto out = (co_await tool->execute_async(utilxx_base::Json{
                     {"hello", "host"}
-                });
+                })).text;
                 auto j   = utilxx_base::Json::parse(out);
                 XX_TEST_EXPECT_EQ(j["host"]["echo"]["hello"].get<std::string>(), "host");
             }
@@ -700,7 +700,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
             auto tool = ctx->toolRegistry->find("js_calltool_kind");
             XX_TEST_EXPECT_TRUE(tool != nullptr);
             if (tool) {
-                auto out = co_await tool->execute_async(utilxx_base::Json::object());
+                auto out = (co_await tool->execute_async(utilxx_base::Json::object())).text;
                 auto j   = utilxx_base::Json::parse(out);
                 XX_TEST_EXPECT_EQ(j["kind"].get<std::string>(), "object");
             }
@@ -774,9 +774,9 @@ throw new Error("top-level rollback probe");
             XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("js_hello"));
             auto hello = ctx->toolRegistry->find("js_hello");
             if (hello) {
-                auto out = co_await hello->execute_async(utilxx_base::Json{
+                auto out = (co_await hello->execute_async(utilxx_base::Json{
                     {"name", "after-rollback"}
-                });
+                })).text;
                 XX_TEST_EXPECT_TRUE(out.find("after-rollback") != std::string::npos);
             }
             fs::remove(scriptPath, ec);
@@ -935,7 +935,7 @@ throw new Error("top-level rollback probe");
                 asio::co_spawn(
                     ex,
                     keepAliveRun([execDone, tool]() -> asio::awaitable<void> {
-                        auto out = co_await tool->execute_async(utilxx_base::Json{});
+                        auto out = (co_await tool->execute_async(utilxx_base::Json{})).text;
                         (void)out; // 超时返回 "[Plugin tool timeout]"
                         execDone->store(true);
                         co_return;
@@ -1095,9 +1095,9 @@ throw new Error("top-level rollback probe");
         auto hello25b = ctx->toolRegistry->find("js_hello");
         XX_TEST_EXPECT_TRUE(hello25b != nullptr);
         if (hello25b) {
-            auto out = co_await hello25b->execute_async(utilxx_base::Json{
+            auto out = (co_await hello25b->execute_async(utilxx_base::Json{
                 {"name", "reenabled"}
-            });
+            })).text;
             XX_TEST_EXPECT_TRUE(out.find("reenabled") != std::string::npos);
         }
 
@@ -1114,9 +1114,9 @@ throw new Error("top-level rollback probe");
         auto hello25b2 = ctx->toolRegistry->find("js_hello");
         XX_TEST_EXPECT_TRUE(hello25b2 != nullptr);
         if (hello25b2) {
-            auto out = co_await hello25b2->execute_async(utilxx_base::Json{
+            auto out = (co_await hello25b2->execute_async(utilxx_base::Json{
                 {"name", "storm"}
-            });
+            })).text;
             XX_TEST_EXPECT_TRUE(out.find("storm") != std::string::npos);
         }
 
@@ -1403,9 +1403,9 @@ throw new Error("top-level rollback probe");
             auto asyncTool = ctx->toolRegistry->find("async_notify_tool");
             XX_TEST_EXPECT_TRUE(asyncTool != nullptr);
             if (asyncTool) {
-                auto out = co_await asyncTool->execute_async(utilxx_base::Json{
+                auto out = (co_await asyncTool->execute_async(utilxx_base::Json{
                     {"sessionId", "t31"}
-                });
+                })).text;
                 XX_TEST_EXPECT_EQ(out, "{}");
             }
             ctx->pluginMount->unregisterTool(inst31.get(), "async_notify_tool");
@@ -1473,9 +1473,9 @@ throw new Error("top-level rollback probe");
 
             bool CanceledThrown = false;
             try {
-                auto out = co_await cancelTool->execute_async(utilxx_base::Json{
+                auto out = (co_await cancelTool->execute_async(utilxx_base::Json{
                     {"sessionId", "t_plugin_cancel"}
-                });
+                })).text;
                 (void)out;
             } catch (const neograph::graph::CancelledException&) {
                 CanceledThrown = true;
@@ -1510,9 +1510,9 @@ throw new Error("top-level rollback probe");
             if (throwTool) {
                 bool failedAsExpected = false;
                 try {
-                    auto out = co_await throwTool->execute_async(utilxx_base::Json{
+                    auto out = (co_await throwTool->execute_async(utilxx_base::Json{
                         {"sessionId", "t31"}
-                    });
+                    })).text;
                     (void)out;
                 } catch (const std::exception& e) {
                     failedAsExpected
@@ -1546,9 +1546,9 @@ throw new Error("top-level rollback probe");
             if (nullTool) {
                 bool failedAsExpected = false;
                 try {
-                    auto out = co_await nullTool->execute_async(utilxx_base::Json{
+                    auto out = (co_await nullTool->execute_async(utilxx_base::Json{
                         {"sessionId", "t31"}
-                    });
+                    })).text;
                     (void)out;
                 } catch (const std::exception&) {
                     failedAsExpected = true;
@@ -1580,7 +1580,7 @@ throw new Error("top-level rollback probe");
             XX_TEST_EXPECT_TRUE(tool != nullptr);
             if (tool) {
                 try {
-                    auto out = co_await tool->execute_async(utilxx_base::Json{});
+                    auto out = (co_await tool->execute_async(utilxx_base::Json{})).text;
                     XX_TEST_EXPECT_TRUE(false);
                 } catch (const std::exception& e) {
                     XX_TEST_EXPECT_TRUE(
@@ -1784,9 +1784,9 @@ throw new Error("top-level rollback probe");
             XX_TEST_EXPECT_TRUE(tool != nullptr);
             if (tool) {
                 auto t0  = std::chrono::steady_clock::now();
-                auto out = co_await tool->execute_async(utilxx_base::Json{
+                auto out = (co_await tool->execute_async(utilxx_base::Json{
                     {"durationMs", 50}
-                });
+                })).text;
                 auto ms  = std::chrono::duration_cast<std::chrono::milliseconds>(
                               std::chrono::steady_clock::now() - t0
                 )
@@ -2370,10 +2370,10 @@ throw new Error("top-level rollback probe");
                 asio::co_spawn(
                     ex,
                     keepAliveRun([tool, completed, i]() -> asio::awaitable<void> {
-                        auto out = co_await tool->execute_async(utilxx_base::Json{
+                        auto out = (co_await tool->execute_async(utilxx_base::Json{
                             {"sessionId", fmt::format("conc_{}", i)},
                             {"x", i},
-                        });
+                        })).text;
                         auto j   = utilxx_base::Json::parse(out);
                         if (j["via_call_tool"]["echo"]["x"].get<int>() == i) {
                             completed->fetch_add(1, std::memory_order_relaxed);
@@ -2425,10 +2425,10 @@ throw new Error("top-level rollback probe");
                 asio::detached
             );
 
-            auto out = co_await bridgeTool->execute_async(utilxx_base::Json{
+            auto out = (co_await bridgeTool->execute_async(utilxx_base::Json{
                 {"sessionId", "bridge_e2e"},
                 {"ticks",     3           }
-            });
+            })).text;
             pluginDone->store(true, std::memory_order_release);
             auto j = utilxx_base::Json::parse(out);
             XX_TEST_EXPECT_EQ(j["driverAvailable"].get<bool>(), true);
@@ -2474,11 +2474,11 @@ throw new Error("top-level rollback probe");
             );
 
             auto t0  = std::chrono::steady_clock::now();
-            auto out = co_await polledTool->execute_async(utilxx_base::Json{
+            auto out = (co_await polledTool->execute_async(utilxx_base::Json{
                 {"sessionId",  "polled_e2e"},
                 {"ticks",      3           },
                 {"intervalMs", 15          },
-            });
+            })).text;
             polledDone->store(true, std::memory_order_release);
             auto wallMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                               std::chrono::steady_clock::now() - t0
@@ -2526,31 +2526,31 @@ throw new Error("top-level rollback probe");
 
             if (writeTool && readTool && editTool && listTool) {
                 // 1. write (受控轮询 + stream_file)
-                auto w = co_await writeTool->execute_async(utilxx_base::Json{
+                auto w = (co_await writeTool->execute_async(utilxx_base::Json{
                     {"path",      file                         },
                     {"content",   "hello polled\nsecond line\n"},
                     {"overwrite", true                         },
-                });
+                })).text;
                 XX_TEST_EXPECT_TRUE(w.find("success") != std::string::npos);
 
                 // 2. read (受控轮询, 带行区间)
-                auto r = co_await readTool->execute_async(utilxx_base::Json{
+                auto r = (co_await readTool->execute_async(utilxx_base::Json{
                     {"path",   file},
                     {"offset", 0   },
                     {"limit",  2   },
-                });
+                })).text;
                 XX_TEST_EXPECT_TRUE(r.find("hello polled") != std::string::npos);
 
                 // 3. edit (受控轮询: 异步读 + 原子写)
-                auto e = co_await editTool->execute_async(utilxx_base::Json{
+                auto e = (co_await editTool->execute_async(utilxx_base::Json{
                     {"path",    file         },
                     {"old_str", "second line"},
                     {"new_str", "SECOND"     },
-                });
+                })).text;
                 XX_TEST_EXPECT_TRUE(e.find("success") != std::string::npos);
-                auto r2 = co_await readTool->execute_async(utilxx_base::Json{
+                auto r2 = (co_await readTool->execute_async(utilxx_base::Json{
                     {"path", file}
-                });
+                })).text;
                 XX_TEST_EXPECT_TRUE(r2.find("SECOND") != std::string::npos);
 
                 // 3b. edit 多段替换 (edits 数组) + 工具模式声明:
@@ -2579,25 +2579,25 @@ throw new Error("top-level rollback probe");
                     editArgs["properties"]["edits"]["items"]["properties"].contains("new_str")
                 );
 
-                auto eMul = co_await editTool->execute_async(utilxx_base::Json{
+                auto eMul = (co_await editTool->execute_async(utilxx_base::Json{
                     {"path",  file},
                     {"edits",
                      utilxx_base::Json::array(
                          {utilxx_base::Json{{"old_str", "hello"}, {"new_str", "HELLO"}},
                           utilxx_base::Json{{"old_str", "SECOND"}, {"new_str", "second"}}}
                      )            },
-                });
+                })).text;
                 XX_TEST_EXPECT_EQ(eMul, std::string{"success"});
-                auto r3 = co_await readTool->execute_async(utilxx_base::Json{
+                auto r3 = (co_await readTool->execute_async(utilxx_base::Json{
                     {"path", file}
-                });
+                })).text;
                 XX_TEST_EXPECT_TRUE(r3.find("HELLO") != std::string::npos);
                 XX_TEST_EXPECT_TRUE(r3.find("second") != std::string::npos);
 
                 // 4. list (仍走 offload 阻塞池): 两类工具在同一实例内共存
-                auto l = co_await listTool->execute_async(utilxx_base::Json{
+                auto l = (co_await listTool->execute_async(utilxx_base::Json{
                     {"path", dir.string()}
-                });
+                })).text;
                 XX_TEST_EXPECT_TRUE(l.find("polled.txt") != std::string::npos);
             }
             fsx::remove_all(dir, ec);
@@ -2641,45 +2641,45 @@ throw new Error("top-level rollback probe");
 
             if (writeTool && readTool && editTool) {
                 // write / read / edit 全程走同步备用实现 (blocking_tool)
-                auto w = co_await writeTool->execute_async(utilxx_base::Json{
+                auto w = (co_await writeTool->execute_async(utilxx_base::Json{
                     {"path",      file                           },
                     {"content",   "hello fallback\nsecond line\n"},
                     {"overwrite", true                           },
-                });
+                })).text;
                 XX_TEST_EXPECT_TRUE(w.find("success") != std::string::npos);
 
-                auto r = co_await readTool->execute_async(utilxx_base::Json{
+                auto r = (co_await readTool->execute_async(utilxx_base::Json{
                     {"path",   file},
                     {"offset", 0   },
                     {"limit",  2   },
-                });
+                })).text;
                 XX_TEST_EXPECT_TRUE(r.find("hello fallback") != std::string::npos);
 
-                auto e = co_await editTool->execute_async(utilxx_base::Json{
+                auto e = (co_await editTool->execute_async(utilxx_base::Json{
                     {"path",    file         },
                     {"old_str", "second line"},
                     {"new_str", "SECOND"     },
-                });
+                })).text;
                 XX_TEST_EXPECT_TRUE(e.find("success") != std::string::npos);
 
-                auto r2 = co_await readTool->execute_async(utilxx_base::Json{
+                auto r2 = (co_await readTool->execute_async(utilxx_base::Json{
                     {"path", file}
-                });
+                })).text;
                 XX_TEST_EXPECT_TRUE(r2.find("SECOND") != std::string::npos);
 
                 // 多段替换同样走同一实现 (edits 数组; 任一段不匹配时整次调用不写盘)
-                auto eMul = co_await editTool->execute_async(utilxx_base::Json{
+                auto eMul = (co_await editTool->execute_async(utilxx_base::Json{
                     {"path",  file},
                     {"edits",
                      utilxx_base::Json::array(
                          {utilxx_base::Json{{"old_str", "SECOND"}, {"new_str", "second"}},
                           utilxx_base::Json{{"old_str", "not_in_file"}, {"new_str", "x"}}}
                      )            },
-                });
+                })).text;
                 XX_TEST_EXPECT_TRUE(eMul.find("[Error:") != std::string::npos);
-                auto r3 = co_await readTool->execute_async(utilxx_base::Json{
+                auto r3 = (co_await readTool->execute_async(utilxx_base::Json{
                     {"path", file}
-                });
+                })).text;
                 XX_TEST_EXPECT_TRUE(r3.find("SECOND") != std::string::npos);
             }
             fsx::remove_all(dir, ec);
@@ -2913,25 +2913,25 @@ throw new Error("top-level rollback probe");
 
             // (1) 对照: 未配置拒绝规则 → 被扫目录的文件全部出现在结果中
             if (globTool && grepTool) {
-                auto globOut = co_await globTool->execute_async(utilxx_base::Json{
+                auto globOut = (co_await globTool->execute_async(utilxx_base::Json{
                     {"file_patterns", utilxx_base::Json::array({patternAll})},
-                });
+                })).text;
                 XX_TEST_EXPECT_TRUE(globOut.find("ok.txt") != std::string::npos);
                 XX_TEST_EXPECT_TRUE(globOut.find("hidden.txt") != std::string::npos);
                 XX_TEST_EXPECT_TRUE(globOut.find("hidden2.txt") != std::string::npos);
 
                 // 默认输出模式 (files_with_matches): 列出命中的文件路径与计数
-                auto grepOut = co_await grepTool->execute_async(utilxx_base::Json{
+                auto grepOut = (co_await grepTool->execute_async(utilxx_base::Json{
                     {"file_patterns", utilxx_base::Json::array({patternAll})},
                     {"text_patterns", utilxx_base::Json::array({"needle_"}) },
-                });
+                })).text;
                 XX_TEST_EXPECT_TRUE(grepOut.find("hidden.txt") != std::string::npos);
                 // content 模式: 命中行内容 (含被拒目录内的内容, 此时尚未配置拒绝规则)
-                auto grepContentOut = co_await grepTool->execute_async(utilxx_base::Json{
+                auto grepContentOut = (co_await grepTool->execute_async(utilxx_base::Json{
                     {"file_patterns", utilxx_base::Json::array({patternAll})},
                     {"text_patterns", utilxx_base::Json::array({"needle_"}) },
                     {"output_mode",   "content"                             },
-                });
+                })).text;
                 XX_TEST_EXPECT_TRUE(grepContentOut.find("needle_secret") != std::string::npos);
             }
 
@@ -2940,9 +2940,9 @@ throw new Error("top-level rollback probe");
 
             // (3) glob: 模式仍可匹配到 secret 下文件, 但逐路径过滤后不出现在结果里
             if (globTool) {
-                auto globOut = co_await globTool->execute_async(utilxx_base::Json{
+                auto globOut = (co_await globTool->execute_async(utilxx_base::Json{
                     {"file_patterns", utilxx_base::Json::array({patternAll})},
-                });
+                })).text;
                 XX_TEST_EXPECT_TRUE(globOut.find("ok.txt") != std::string::npos);
                 XX_TEST_EXPECT_TRUE(globOut.find("hidden.txt") == std::string::npos);
                 XX_TEST_EXPECT_TRUE(globOut.find("hidden2.txt") == std::string::npos);
@@ -2950,11 +2950,11 @@ throw new Error("top-level rollback probe");
 
             // (4) grep: 被拒目录的文件不读取, 命中行不出现在结果里 (keep 目录仍可搜索)
             if (grepTool) {
-                auto grepOut = co_await grepTool->execute_async(utilxx_base::Json{
+                auto grepOut = (co_await grepTool->execute_async(utilxx_base::Json{
                     {"file_patterns", utilxx_base::Json::array({patternAll})},
                     {"text_patterns", utilxx_base::Json::array({"needle_"}) },
                     {"output_mode",   "content"                             },
-                });
+                })).text;
                 XX_TEST_EXPECT_TRUE(grepOut.find("needle_keep") != std::string::npos);
                 XX_TEST_EXPECT_TRUE(grepOut.find("needle_secret") == std::string::npos);
             }
@@ -2972,11 +2972,11 @@ throw new Error("top-level rollback probe");
                 auto listTool = ctx->toolRegistry->find("agentxx_filesystem_list");
                 XX_TEST_EXPECT_TRUE(listTool != nullptr);
                 if (listTool) {
-                    auto listOut = co_await listTool->execute_async(utilxx_base::Json{
+                    auto listOut = (co_await listTool->execute_async(utilxx_base::Json{
                         {"path",      listRoot.generic_string()},
                         {"recursive", true                     },
                         {"limit",     5                        },
-                    });
+                    })).text;
                     // 被拒目录自身与其下条目都不输出
                     XX_TEST_EXPECT_TRUE(listOut.find("deny_dir") == std::string::npos);
                     XX_TEST_EXPECT_TRUE(listOut.find("d0.txt") == std::string::npos);
@@ -3049,9 +3049,9 @@ throw new Error("top-level rollback probe");
             // (6) 主程序未加载权限中间件: 查询返回失败 → 工具跳过过滤 (保持原行为)
             ctx->middlewareHandleContext->handles.pop_back();
             if (globTool) {
-                auto globOut = co_await globTool->execute_async(utilxx_base::Json{
+                auto globOut = (co_await globTool->execute_async(utilxx_base::Json{
                     {"file_patterns", utilxx_base::Json::array({patternAll})},
-                });
+                })).text;
                 XX_TEST_EXPECT_TRUE(globOut.find("ok.txt") != std::string::npos);
                 XX_TEST_EXPECT_TRUE(globOut.find("hidden.txt") != std::string::npos);
             }
@@ -3059,10 +3059,10 @@ throw new Error("top-level rollback probe");
                 // list 同样按"不过滤"处理 (查询不可用时不把条目当成拒绝)
                 auto listTool = ctx->toolRegistry->find("agentxx_filesystem_list");
                 if (listTool) {
-                    auto listOut = co_await listTool->execute_async(utilxx_base::Json{
+                    auto listOut = (co_await listTool->execute_async(utilxx_base::Json{
                         {"path",      root.generic_string()},
                         {"recursive", true                 },
-                    });
+                    })).text;
                     XX_TEST_EXPECT_TRUE(listOut.find("keep") != std::string::npos);
                     XX_TEST_EXPECT_TRUE(listOut.find("hidden.txt") != std::string::npos);
                 }
@@ -3164,19 +3164,19 @@ throw new Error("top-level rollback probe");
 
                 // 1. 单请求 (受控轮询驱动 socket 收发)
                 // 1. raw 路径
-                auto out1 = co_await fetchTool->execute_async(utilxx_base::Json{
+                auto out1 = (co_await fetchTool->execute_async(utilxx_base::Json{
                     {"url",     baseUrl + "/hello"},
                     {"timeout", 10                },
                     {"format",  "raw"             },
-                });
+                })).text;
                 XX_TEST_EXPECT_TRUE(out1.find("polled_web_ok") != std::string::npos);
 
                 // 2. markdown 路径
-                auto out2 = co_await fetchTool->execute_async(utilxx_base::Json{
+                auto out2 = (co_await fetchTool->execute_async(utilxx_base::Json{
                     {"url",     baseUrl + "/hello"},
                     {"timeout", 10                },
                     {"format",  "markdown"        },
-                });
+                })).text;
                 XX_TEST_EXPECT_TRUE(out2.find("polled_web_ok") != std::string::npos);
 
                 // 3. 并发 6 路请求: 共享同一实例的 polled 驱动序列, 互不阻塞
@@ -3188,10 +3188,10 @@ throw new Error("top-level rollback probe");
                         ex,
                         keepAliveRun(
                             [fetchTool, okCount, doneCount, baseUrl]() -> asio::awaitable<void> {
-                                auto out = co_await fetchTool->execute_async(utilxx_base::Json{
+                                auto out = (co_await fetchTool->execute_async(utilxx_base::Json{
                                     {"url",     baseUrl + "/hello"},
                                     {"timeout", 10                },
-                                });
+                                })).text;
                                 if (out.find("polled_web_ok") != std::string::npos) {
                                     okCount->fetch_add(1, std::memory_order_relaxed);
                                 }
@@ -3329,7 +3329,7 @@ throw new Error("top-level rollback probe");
                 auto tool = contexts[i]->toolRegistry->find("agentxx_get_system_core_info");
                 XX_TEST_EXPECT_TRUE(tool != nullptr);
                 if (tool) {
-                    auto out = co_await tool->execute_async(utilxx_base::Json{});
+                    auto out = (co_await tool->execute_async(utilxx_base::Json{})).text;
                     XX_TEST_EXPECT_TRUE(out.find("CPU Usage:") != std::string::npos);
                 }
             }

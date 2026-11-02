@@ -54,7 +54,7 @@ public:
 
     neograph::ChatTool get_definition() const override;
 
-    asio::awaitable<std::string> execute_async(const utilxx_base::Json& arguments) override;
+    asio::awaitable<agentxx::util::ToolResult> execute_async(const utilxx_base::Json& arguments) override;
 
     ~SubAgentManagerTool() override;
 

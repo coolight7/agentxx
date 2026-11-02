@@ -635,7 +635,7 @@ static asio::awaitable<void>
                     {"expression", "sin(pi / 6)"},
                     {"precision",  2            }
                 });
-                checkResult(out, "0.50", "dynamic plugin execute sin(pi/6)");
+                checkResult(out.text, "0.50", "dynamic plugin execute sin(pi/6)");
             }
         } else {
             g_math_failed++;

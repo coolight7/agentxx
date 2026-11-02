@@ -1924,10 +1924,10 @@ asio::awaitable<void> test_agent_toolcall_intercept_exception() {
         if (m["role"] == "tool"
             && m["content"].dump().find("aborted at Start phase") != std::string::npos) {
             hasErrorMsg = true;
-            // 失败标记: 由工具执行层写入消息的 extra, 界面/CLI 只看这个字段
+            // 终态: 由工具执行层写入消息的 extra, 界面/CLI 只看这个字段
             // (不再看结果文本前缀)
             hasErrorFlag = m.contains("extra") && m["extra"].is_object()
-                           && m["extra"].value("hasError", false);
+                           && m["extra"].value("status", std::string{}) == "failed";
         }
     }
     XX_TEST_EXPECT_TRUE(hasErrorMsg);

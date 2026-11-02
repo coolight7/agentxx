@@ -336,7 +336,7 @@ public:
         };
     }
 
-    asio::awaitable<std::string> execute_async(const utilxx_base::Json&) override {
+    asio::awaitable<agentxx::util::ToolResult> execute_async(const utilxx_base::Json&) override {
         std::fprintf(stderr, "[cancel-test-dbg] CancelSlowTool execute_async called!\n");
         executed_->store(true, std::memory_order_release);
         try {
@@ -350,7 +350,7 @@ public:
             std::fprintf(stderr, "[cancel-slow-dbg] timer threw: %s\n", e.what());
             throw;
         }
-        co_return "slow done";
+        co_return agentxx::util::ToolResult::ok("slow done");
     }
 
 private:
@@ -375,10 +375,10 @@ public:
         };
     }
 
-    asio::awaitable<std::string> execute_async(const utilxx_base::Json&) override {
+    asio::awaitable<agentxx::util::ToolResult> execute_async(const utilxx_base::Json&) override {
         // 标记 tool: 串行 toolcall 下排在 slow 之后, slow 被取消中断后不再执行
         executed_->store(true, std::memory_order_release);
-        co_return "marker";
+        co_return agentxx::util::ToolResult::ok("marker");
     }
 
 private:
@@ -452,7 +452,7 @@ asio::awaitable<void> test_agent_cancel_toolcall() {
     auto cancelWatcher = [&]() -> asio::awaitable<void> {
         asio::steady_timer timer(ex);
         // 串行 toolcall: 先执行 slow (2s 执行中), 取消发生在 slow 执行期间:
-        // - slow 被取消信号立即中断 (未自然完成) → 经取消检查点补 [User canceled]
+        // - slow 被取消信号立即中断 (未自然完成) → 经取消检查点补 [Canceled]
         // - marker 排在 slow 之后, 取消后不再执行
         bool foundSlow = false;
         for (int i = 0; i < 2000; ++i) {
@@ -525,7 +525,7 @@ asio::awaitable<void> test_agent_cancel_toolcall() {
     // 取消应立即中断会话轮次 (工具随 engine 取消立即中断, 不等待自然完成)
     XX_TEST_EXPECT_TRUE(elapsedMs < 3000);
 
-    // 取消语义: 未完成的 tool 结果丢弃并补 [User canceled], 后续 tool 不再执行
+    // 取消语义: 未完成的 tool 结果丢弃并补 [Canceled], 后续 tool 不再执行
     // - 取消时工具协程随 engine 信号立即中断退出, baseRun 等待循环收满完成信号后
     //   走 isCancel 分支保存完整上下文 (wrap_handle 在 rethrow 前写入 tempMessages),
     //   因此这里轮询等待保存完成
@@ -547,15 +547,15 @@ asio::awaitable<void> test_agent_cancel_toolcall() {
                 for (const auto& m : im) {
                     if (m.value("role", std::string{}) == "tool"
                         && m.value("tool_name", std::string{}) == "test_slow"
-                        && m.value("content", std::string{}) == "[User canceled]") {
+                        && m.value("content", std::string{}) == "[Canceled]") {
                         slowCanceled = true;
                     }
                     // 串行下取消发生在 slow 执行期间, marker 未执行, 同样补
-                    // [User canceled] 保证每条 assistant tool_call 都有结果消息;
+                    // [Canceled] 保证每条 assistant tool_call 都有结果消息;
                     // 不应出现真实执行结果 "marker"
                     if (m.value("role", std::string{}) == "tool"
                         && m.value("tool_name", std::string{}) == "test_marker"
-                        && m.value("content", std::string{}) == "[User canceled]") {
+                        && m.value("content", std::string{}) == "[Canceled]") {
                         markerCanceled = true;
                     }
                 }

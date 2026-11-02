@@ -136,7 +136,7 @@ asio::awaitable<std::string> callTool(
         args = Json::parse(std::string{argsJson});
     }
     try {
-        co_return co_await tool->execute_async(args);
+        co_return (co_await tool->execute_async(args)).text;
     } catch (const std::exception& e) {
         co_return fmt::format("[Error: {}]", e.what());
     }

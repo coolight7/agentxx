@@ -2358,7 +2358,8 @@ neograph::ChatTool McpClientTool::get_definition() const {
     return tool;
 }
 
-asio::awaitable<std::string> McpClientTool::execute_async(const utilxx_base::Json& arguments) {
+asio::awaitable<agentxx::util::ToolResult>
+    McpClientTool::execute_async(const utilxx_base::Json& arguments) {
     // 工具调用整体超时 (配置项 toolCallTimeout, 毫秒; 0 = 不限制):
     // - 覆盖 callTool 的完整流程 (含 HeaderMismatch 重试等), 是最后的总超时保护
     // - 超时时取消底层请求 (HTTP/stdio), 返回超时错误; 外部取消按原语义传播
@@ -2383,6 +2384,9 @@ asio::awaitable<std::string> McpClientTool::execute_async(const utilxx_base::Jso
         );
     }
     json resp = result.value();
+
+    // MCP 协议自带的成败位: `isError=true` 表示工具执行失败 (内容里就是错误说明)
+    const bool isError = resp.value("isError", false);
 
     if (resp.contains("content") && resp["content"].is_array()) {
         std::string combined;
@@ -2418,15 +2422,19 @@ asio::awaitable<std::string> McpClientTool::execute_async(const utilxx_base::Jso
             }
         }
         if (!combined.empty()) {
-            co_return combined;
+            co_return isError ? agentxx::util::ToolResult::fail(combined)
+                              : agentxx::util::ToolResult::ok(combined);
         }
     }
 
     if (resp.contains("structuredContent") && !resp["structuredContent"].is_null()) {
-        co_return fmt::format("[structuredContent]: {}", resp["structuredContent"].dump());
+        const auto text = fmt::format("[structuredContent]: {}", resp["structuredContent"].dump());
+        co_return isError ? agentxx::util::ToolResult::fail(text)
+                          : agentxx::util::ToolResult::ok(text);
     }
 
-    co_return resp.dump();
+    co_return isError ? agentxx::util::ToolResult::fail(resp.dump())
+                      : agentxx::util::ToolResult::ok(resp.dump());
 }
 
 std::string McpClientTool::get_name() const {

@@ -377,7 +377,8 @@ neograph::ChatTool EventTool::get_definition() const {
     return {get_name(), prompt.depict, agentxx::util::toNeographJson(params)};
 }
 
-asio::awaitable<std::string> EventTool::execute_async(const utilxx_base::Json& arguments) {
+asio::awaitable<agentxx::util::ToolResult>
+    EventTool::execute_async(const utilxx_base::Json& arguments) {
     auto agentContextPtr = agentContext.lock();
     if (!agentContextPtr) {
         throw std::runtime_error{"AgentContext not available"};
@@ -399,9 +400,9 @@ asio::awaitable<std::string> EventTool::execute_async(const utilxx_base::Json& a
             throw std::invalid_argument{result.error()};
         }
         if (result->state == WaitState::Satisfied) {
-            co_return renderSatisfiedText(*hub, *result);
+            co_return agentxx::util::ToolResult::ok(renderSatisfiedText(*hub, *result));
         }
-        co_return agentxx::events::renderWaitArmed(*result);
+        co_return agentxx::util::ToolResult::ok(agentxx::events::renderWaitArmed(*result));
     }
 
     if (opt == "await") {
@@ -423,12 +424,12 @@ asio::awaitable<std::string> EventTool::execute_async(const utilxx_base::Json& a
         auto cancelToken = getSessionCancelToken(agentContextPtr, arguments);
         auto result      = co_await hub->awaitOnce(std::move(spec), std::move(cancelToken));
         if (result.state == WaitState::TimedOut) {
-            co_return agentxx::events::renderAwaitTimeout(result.spec, timeoutMs);
+            co_return agentxx::util::ToolResult::ok(agentxx::events::renderAwaitTimeout(result.spec, timeoutMs));
         }
         if (result.state == WaitState::Canceled) {
             throw neograph::graph::CancelledException{"event await Canceled"};
         }
-        co_return renderSatisfiedText(*hub, result);
+        co_return agentxx::util::ToolResult::ok(renderSatisfiedText(*hub, result));
     }
 
     if (opt == "status") {
@@ -438,7 +439,7 @@ asio::awaitable<std::string> EventTool::execute_async(const utilxx_base::Json& a
             if (!wait.has_value()) {
                 throw std::invalid_argument{fmt::format("Wait not found: {}", waitId)};
             }
-            co_return agentxx::events::renderWaitStatus(*wait);
+            co_return agentxx::util::ToolResult::ok(agentxx::events::renderWaitStatus(*wait));
         }
         const auto eventName = arguments.value("event", std::string{});
         if (eventName.empty()) {
@@ -448,7 +449,7 @@ asio::awaitable<std::string> EventTool::execute_async(const utilxx_base::Json& a
         if (!record.has_value()) {
             throw std::invalid_argument{fmt::format("Event not found: {}", eventName)};
         }
-        co_return agentxx::events::renderEventStatus(*record);
+        co_return agentxx::util::ToolResult::ok(agentxx::events::renderEventStatus(*record));
     }
 
     if (opt == "list") {
@@ -469,19 +470,19 @@ asio::awaitable<std::string> EventTool::execute_async(const utilxx_base::Json& a
         if (!out.empty() && out.back() == '\n') {
             out.pop_back();
         }
-        co_return out;
+        co_return agentxx::util::ToolResult::ok(out);
     }
 
     if (opt == "cancel") {
         if (arguments.value("all", false)) {
             const auto count = hub->cancelWaitsOfSession(sessionId, "tool-cancel");
-            co_return fmt::format("[Event cancel] Canceled {} wait(s) of this session", count);
+            co_return agentxx::util::ToolResult::ok(fmt::format("[Event cancel] Canceled {} wait(s) of this session", count));
         }
         const auto waitId = requireString(arguments, "wait");
         if (!hub->cancelWait(waitId, "tool-cancel")) {
             throw std::invalid_argument{fmt::format("Wait not found or already closed: {}", waitId)};
         }
-        co_return fmt::format("[Event cancel] wait={} Canceled", waitId);
+        co_return agentxx::util::ToolResult::ok(fmt::format("[Event cancel] wait={} Canceled", waitId));
     }
 
     if (opt == "emit") {
@@ -514,13 +515,13 @@ asio::awaitable<std::string> EventTool::execute_async(const utilxx_base::Json& a
                                   : "unknown";
         const auto published = record.has_value() ? record->published : uint64_t{0};
         const auto waits     = record.has_value() ? record->waitCount : size_t{0};
-        co_return fmt::format(
+        co_return agentxx::util::ToolResult::ok(fmt::format(
             "[Event emit] event={} state={} published={} waits={}",
             eventName,
             state,
             published,
             waits
-        );
+        ));
     }
 
     if (opt == "end") {
@@ -537,13 +538,15 @@ asio::awaitable<std::string> EventTool::execute_async(const utilxx_base::Json& a
         }();
         if (arguments.value("remove", false)) {
             hub->removeEvent(eventName);
-            co_return fmt::format(
+            co_return agentxx::util::ToolResult::ok(fmt::format(
                 "[Event end] event={} published={} removed=true",
                 eventName,
                 published
-            );
+            ));
         }
-        co_return fmt::format("[Event end] event={} state=ended published={}", eventName, published);
+        co_return agentxx::util::ToolResult::ok(
+            fmt::format("[Event end] event={} state=ended published={}", eventName, published)
+        );
     }
 
     throw std::invalid_argument{fmt::format("Arg `opt` is invalid: {}", opt)};

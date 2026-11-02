@@ -1212,7 +1212,7 @@ void testTuiStreamScenario13(asio::io_context& ioCtx) {
         end.toolName   = "agentxx_filesystem_read";
         end.toolCallId = "call_ok";
         end.result     = "no error here, just text";
-        end.hasError   = false;
+        end.status     = agentxx::util::ToolStatus::Ok;
         client.testOnDelta(end);
     }
     {
@@ -1229,7 +1229,7 @@ void testTuiStreamScenario13(asio::io_context& ioCtx) {
         end.toolName   = "agentxx_filesystem_read";
         end.toolCallId = "call_bad";
         end.result     = "[Error: path does not exist]";
-        end.hasError   = true;
+        end.status     = agentxx::util::ToolStatus::Failed;
         client.testOnDelta(end);
     }
 
@@ -1239,12 +1239,12 @@ void testTuiStreamScenario13(asio::io_context& ioCtx) {
         XX_TEST_EXPECT_TRUE(snap->messages[0]->role == TUIMessage::Role::Tool);
         XX_TEST_EXPECT_TRUE(snap->messages[0]->tool.has_value());
         if (snap->messages[0]->tool) {
-            XX_TEST_EXPECT_FALSE(snap->messages[0]->tool->hasError);
+            XX_TEST_EXPECT_TRUE(snap->messages[0]->tool->status == agentxx::util::ToolStatus::Ok);
         }
         XX_TEST_EXPECT_TRUE(snap->messages[1]->role == TUIMessage::Role::Tool);
         XX_TEST_EXPECT_TRUE(snap->messages[1]->tool.has_value());
         if (snap->messages[1]->tool) {
-            XX_TEST_EXPECT_TRUE(snap->messages[1]->tool->hasError);
+            XX_TEST_EXPECT_TRUE(snap->messages[1]->tool->status == agentxx::util::ToolStatus::Failed);
             XX_TEST_EXPECT_TRUE(snap->messages[1]->tool->toolFinished);
         }
     }
@@ -1253,7 +1253,7 @@ void testTuiStreamScenario13(asio::io_context& ioCtx) {
 // 场景 14: 工具执行中被用户中断 -> 后到的取消结果覆盖原工具消息
 // - 中断时 client 侧先把运行中的工具消息标为已结束 (cancelCurrentRunLocked ->
 //   resetTrailingRunningToolsLocked), 取消结果由 agent 端稍后才补
-//   ("[User canceled]" 的 ToolEnd)
+//   ("[Canceled]" 的 ToolEnd)
 // - 期望: 这条结果回填到原工具消息上 (同一个工具只有一条消息), 而不是另插一条
 void testTuiStreamScenario14(asio::io_context& ioCtx) {
     TestTUIClientIO client(ioCtx);
@@ -1295,7 +1295,7 @@ void testTuiStreamScenario14(asio::io_context& ioCtx) {
         end.type       = WireDelta::Type::ToolEnd;
         end.toolName   = "agentxx_execute_command";
         end.toolCallId = "call_cancel";
-        end.result     = "[User canceled]";
+        end.result     = "[Canceled]";
         end.durationMs = 2000;
         client.testOnDelta(end);
     }
@@ -1309,7 +1309,7 @@ void testTuiStreamScenario14(asio::io_context& ioCtx) {
         XX_TEST_EXPECT_TRUE(toolMsg->tool.has_value());
         if (toolMsg->tool) {
             XX_TEST_EXPECT_TRUE(toolMsg->tool->toolFinished);
-            XX_TEST_EXPECT_EQ(toolMsg->tool->toolResult, std::string{"[User canceled]"});
+            XX_TEST_EXPECT_EQ(toolMsg->tool->toolResult, std::string{"[Canceled]"});
             XX_TEST_EXPECT_EQ(toolMsg->tool->toolCallId, std::string{"call_cancel"});
             XX_TEST_EXPECT_EQ(toolMsg->durationMs, (int64_t)2000);
         }

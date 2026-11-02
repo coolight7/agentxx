@@ -268,7 +268,7 @@ std::vector<WireSample> wireSamples() {
         m.durationMs   = 456;
         m.tps          = 12.5;
         m.tipType      = WireDelta::TipType::Warning;
-        m.hasError     = false;
+        m.status       = agentxx::util::ToolStatus::Ok;
         // 来源标记 (事件中枢投递的输入): 客户端据此加来源样式
         m.source = "event:chat.message";
         m.message      = std::make_shared<ViewMessage>(

@@ -81,8 +81,8 @@ public:
         return def;
     }
 
-    asio::awaitable<std::string> execute_async(const utilxx_base::Json& args) override {
-        co_return fmt::format("echo:{}", args.value("value", std::string{}));
+    asio::awaitable<agentxx::util::ToolResult> execute_async(const utilxx_base::Json& args) override {
+        co_return agentxx::util::ToolResult::ok(fmt::format("echo:{}", args.value("value", std::string{})));
     }
 };
 

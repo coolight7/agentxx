@@ -1,6 +1,7 @@
 #pragma once
 
 #include "agentxx/nodes/wrap_handle.h"
+#include "agentxx/util/tool_result.h"
 #include "utilxx_base/json.h"
 #include <set>
 #include <string>
@@ -69,9 +70,9 @@ public:
         /// 重复调用标识 key 与是否命中循环检测
         std::string repeatKey{};
         bool        repeatHit = false;
-        /// 无需执行执行体时的最终内容 (命中中断缓存 / 工具不存在 / 权限拒绝 /
-        /// 重复调用被用户拒绝); 有值即直接作为结果
-        std::optional<std::string> shortCircuit{};
+        /// 无需执行执行体时的最终结果 (命中中断缓存 / 工具不存在 / 权限拒绝 /
+        /// 重复调用被用户拒绝); 有值即直接作为结果 (状态由它自己的 status 表达)
+        std::optional<agentxx::util::ToolResult> shortCircuit{};
         /// 开始时间 (毫秒时间戳; 结果消息的 startTimeMs)
         int64_t startMs = 0;
         /// 是否允许与其他并行安全工具并发 (执行体显式声明)
@@ -102,14 +103,18 @@ public:
         PreparedToolCall&                                    out
     ) const;
 
-    /// run 阶段: 执行执行体 (含按 [XXToolBase::maxRetry] 的重试), 返回**原始**结果文本
+    /// run 阶段: 执行执行体 (含按 [XXToolBase::maxRetry] 的重试), 返回**原始**结果
     /// - 只做执行, 不写会话、不裁剪结果: 并发安全与否只取决于执行体本身
-    /// - 取消/中断/致命异常按原语义抛出
-    asio::awaitable<std::string> runToolCallBody(const PreparedToolCall& prepared) const;
+    /// - 成败由返回值的 [agentxx::util::ToolResult::status] 表达; 抛异常 = 失败
+    ///   (文本由 [runPreparedToolCall] 统一格式化), 取消/中断/致命异常按原语义抛出
+    /// - 重试只看异常: 返回 `ToolResult::fail(...)` 是"已完成的失败", 不重试
+    asio::awaitable<agentxx::util::ToolResult> runToolCallBody(const PreparedToolCall& prepared
+    ) const;
 
     /// finalize 阶段: 结果定稿 (超出限制时经 share_store 卸载并给出定位提示)
-    asio::awaitable<std::string>
-        finalizeToolCall(const PreparedToolCall& prepared, std::string rawResult) const;
+    /// - 只处理正文: 状态位原样保留
+    asio::awaitable<agentxx::util::ToolResult>
+        finalizeToolCall(const PreparedToolCall& prepared, agentxx::util::ToolResult rawResult) const;
 
     /// 执行单个 tool
     /// - [cancelToken] 当前轮次取消令牌: 传递给 ContextualAsyncTool 以便 tool
@@ -123,7 +128,7 @@ public:
     /// - 本函数是"单次调用"的完整路径 (prepare → run → finalize), 顺序执行时使用;
     ///   并发批次的各阶段由 [prepareToolCall] / [runToolCallBody] / [finalizeToolCall]
     ///   直接调度
-    asio::awaitable<std::string> execTool(
+    asio::awaitable<agentxx::util::ToolResult> execTool(
         neograph::Tool*                                      tool,
         utilxx_base::Json&                                   args,
         const std::shared_ptr<neograph::graph::CancelToken>& cancelToken,

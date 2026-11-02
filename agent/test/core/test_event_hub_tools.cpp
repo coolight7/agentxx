@@ -4,7 +4,6 @@
 #include "agentxx/agent/session_input_sink.h"
 #include "agentxx/event/hub.h"
 #include "agentxx/tools/event.h"
-#include "agentxx/util/tool_result_text.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/redirect_error.hpp"
@@ -87,20 +86,19 @@ asio::awaitable<void> toolSleepMs(int64_t ms) {
 
 /// 执行工具并把异常转成带前缀的文本 (断言只看文本, 保持用例线性)
 ///
-/// 这里同时守住一条跨模块的约定: 成功返回的文本不得命中工具失败前缀
-/// (`agentxx/util/tool_result_text.h`)。事件文本选 `[Event] ...` 前缀就是为了满足它,
-/// 改文案时这个断言会第一时间报出来。
+/// 同时守住新约定: 事件工具的**成功**结果状态位一定是 `Ok` ——
+/// 文本不再参与成败判定, 文案怎么改都不会被误认为失败。
 asio::awaitable<std::string>
     execTool(agentxx::tools::EventTool& tool, Json args) {
     std::string text;
     try {
-        text = co_await tool.execute_async(args);
+        auto result = co_await tool.execute_async(args);
+        XX_TEST_EXPECT_TRUE(result.status == agentxx::util::ToolStatus::Ok);
+        co_return std::move(result.text);
     } catch (const std::exception& e) {
         // 抛异常才是执行层记失败的路子, 这里转换成文本只是为了让用例保持线性
         co_return fmt::format("[threw] {}", e.what());
     }
-    XX_TEST_EXPECT_FALSE(agentxx::util::toolResultTextIsFailure(text));
-    co_return text;
 }
 
 bool contains(std::string_view hay, std::string_view needle) {

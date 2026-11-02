@@ -10,7 +10,7 @@
 /// - T2 结果按声明顺序写回 (完成顺序不影响提交顺序)
 /// - T3 未声明并行安全的工具形成屏障: 与前后调用互不重叠, 顺序严格
 /// - T4 并发上限 (AgentConfig::toolParallelMaxConcurrency) 生效
-/// - T5 取消: 已完成结果保留, 未完成补 [User canceled], 每条 tool_call 都有回复
+/// - T5 取消: 已完成结果保留, 未完成补 [Canceled], 每条 tool_call 都有回复
 #include "agentxx-test/core/test_toolcall_parallel.h"
 
 #include "agentxx-test/core/test_agent.h"
@@ -94,7 +94,7 @@ public:
         };
     }
 
-    asio::awaitable<std::string> execute_async(const utilxx_base::Json&) override {
+    asio::awaitable<agentxx::util::ToolResult> execute_async(const utilxx_base::Json&) override {
         trace_->push_back(TraceEntry{name_, true, steadyNowMs()});
         if (sleepMs_ > 0) {
             asio::steady_timer timer{co_await asio::this_coro::executor};
@@ -102,7 +102,7 @@ public:
             co_await timer.async_wait(asio::use_awaitable);
         }
         trace_->push_back(TraceEntry{name_, false, steadyNowMs()});
-        co_return fmt::format("{} done", name_);
+        co_return agentxx::util::ToolResult::ok(fmt::format("{} done", name_));
     }
 
 private:
@@ -438,7 +438,7 @@ asio::awaitable<void> test_parallel_concurrency_limit() {
 }
 
 // ===========================================================================
-// T5: 取消: 已完成结果保留, 未完成补 [User canceled], 顺序完整
+// T5: 取消: 已完成结果保留, 未完成补 [Canceled], 顺序完整
 // ===========================================================================
 asio::awaitable<void> test_parallel_cancel_keeps_completed() {
     auto sim     = startDaSimServer();
@@ -531,7 +531,7 @@ asio::awaitable<void> test_parallel_cancel_keeps_completed() {
     });
     XX_TEST_EXPECT_TRUE(neverRan);
 
-    // 已完成的快工具结果保留; 慢工具与未启动的独占工具补 [User canceled]
+    // 已完成的快工具结果保留; 慢工具与未启动的独占工具补 [Canceled]
     auto session = agent.agentContext->sessions->get("toolcall_par_4");
     XX_TEST_EXPECT_TRUE(co_await waitToolResults(session, 3));
     const auto results = toolResultsAfterLastAssistant(session);
@@ -540,9 +540,9 @@ asio::awaitable<void> test_parallel_cancel_keeps_completed() {
         XX_TEST_EXPECT_EQ(results[0].first, std::string{"call_fast"});
         XX_TEST_EXPECT_EQ(results[0].second, std::string{"test_can_fast done"});
         XX_TEST_EXPECT_EQ(results[1].first, std::string{"call_slow"});
-        XX_TEST_EXPECT_EQ(results[1].second, std::string{"[User canceled]"});
+        XX_TEST_EXPECT_EQ(results[1].second, std::string{"[Canceled]"});
         XX_TEST_EXPECT_EQ(results[2].first, std::string{"call_never"});
-        XX_TEST_EXPECT_EQ(results[2].second, std::string{"[User canceled]"});
+        XX_TEST_EXPECT_EQ(results[2].second, std::string{"[Canceled]"});
     }
 
     // 等待被取消的慢工具执行体真正结束 (其内部计时器不随取消信号中止):

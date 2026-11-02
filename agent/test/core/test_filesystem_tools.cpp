@@ -3191,7 +3191,7 @@ asio::awaitable<void> test_plugin_real_link() {
         }
         auto merged         = args;
         merged["sessionId"] = "t_fs_link";
-        co_return co_await tool->execute_async(merged);
+        co_return (co_await tool->execute_async(merged)).text;
     };
 
     // write (polled): 相对路径以主程序 workDir 为基准创建文件

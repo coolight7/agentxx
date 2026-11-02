@@ -100,15 +100,17 @@ inline SessionQueueState sessionQueueStateFromText(std::string_view text) noexce
 /// - 版本号只在**破坏性变更**时递增: 对端版本更高时明确拒绝 (回
 ///   `WireHelloAck{ok=false, error=…}`) 而不是静默降级 —— 静默降级会让新客户端
 ///   以为老服务端支持某能力, 行为难以排查;
-/// - 老客户端不带 `protocolVersion` (解析为 0): 服务端按"最低兼容版本"处理,
-///   不拒绝 (向后兼容);
+/// - 老客户端不带 `protocolVersion` (解析为 0): 低于 `kMinVersion` 时被拒绝
+///   (本版本不兼容按旧规则理解数据的对端);
 /// - 能力用字符串列表声明 (见下方常量); 未声明即"对端可能不支持", 调用方按最
 ///   保守方式降级。能力名只在双方都认识时才有意义, 未知名字忽略即可。
 struct WireProtocol {
     /// 当前协议版本
-    inline static constexpr int kVersion = 1;
-    /// 兼容的最低版本 (0 = 未声明版本的老客户端)
-    inline static constexpr int kMinVersion = 0;
+    /// - v2: 工具结果状态位 (`delta.status` 取代 `delta.hasError`)
+    inline static constexpr int kVersion = 2;
+    /// 兼容的最低版本
+    /// - 0 = 未声明版本的老客户端, 本版本不再接受 (它靠结果文本前缀判断成败)
+    inline static constexpr int kMinVersion = 2;
 
     /// 能力: 输入投递模式 `next-step` / `inject`
     inline static constexpr std::string_view kCapInputDelivery = "input.delivery";

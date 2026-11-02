@@ -2383,7 +2383,8 @@ asio::awaitable<void> test_mcp_client_tool_namespace() {
             auto result = co_await tool->execute_async({
                 {"text", "hello ns"}
             });
-            XX_TEST_EXPECT_EQ(result, "hello ns");
+            XX_TEST_EXPECT_TRUE(result.status == agentxx::util::ToolStatus::Ok);
+            XX_TEST_EXPECT_EQ(result.text, "hello ns");
         }
         co_await client->close();
     }
@@ -2495,7 +2496,7 @@ asio::awaitable<void> test_mcp_client_tool_timeout() {
             co_await agentxx::util::catchErrorAsync<bool>(
                 [&]() -> asio::awaitable<bool> {
                     auto r  = co_await tool->execute_async(json::object());
-                    success = (r == "done");
+                    success = (r.text == "done");
                     co_return true;
                 },
                 [&](std::string errmsg) -> asio::awaitable<bool> {
@@ -2527,7 +2528,7 @@ asio::awaitable<void> test_mcp_client_tool_timeout() {
         if (tools.has_value() && !tools->empty()) {
             auto tool   = client->createTool((*tools)[0], {});
             auto result = co_await tool->execute_async(json::object());
-            XX_TEST_EXPECT_EQ(result, "done");
+            XX_TEST_EXPECT_EQ(result.text, "done");
         }
         co_await client->close();
     }
@@ -4012,7 +4013,7 @@ asio::awaitable<void> test_mcp_client_stdio_subprocess() {
         auto args     = json::object();
         args["text"] = "stdio-roundtrip";
         auto result   = co_await tool->execute_async(args);
-        XX_TEST_EXPECT_TRUE(result.find("stdio-roundtrip") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(result.text.find("stdio-roundtrip") != std::string::npos);
     }
 
     co_await client->close();

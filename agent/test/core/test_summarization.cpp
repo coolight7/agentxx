@@ -81,15 +81,15 @@ public:
     ) :
         SubAgentManagerTool(in_nodeName, std::move(in_agentContext)) {}
 
-    asio::awaitable<std::string> execute_async(const utilxx_base::Json& arguments) override {
+    asio::awaitable<agentxx::util::ToolResult> execute_async(const utilxx_base::Json& arguments) override {
         receivedArguments.emplace_back(arguments);
         if (throwException) {
             throw std::runtime_error("fake subagent crashed");
         }
         if (failWithError) {
-            co_return R"({"error":"fake subagent failed"})";
+            co_return agentxx::util::ToolResult::fail("fake subagent failed");
         }
-        co_return summary;
+        co_return agentxx::util::ToolResult::ok(summary);
     }
 };
 
@@ -474,7 +474,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
                     return m;
                 }(),
                 [&]() {
-                    auto m  = makeMsg("assistant", "[User Canceled]");
+                    auto m  = makeMsg("assistant", "[User canceled]");
                     m.flags = neograph::MessageFlag::AutoInserted;
                     return m;
                 }(),
@@ -484,7 +484,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
             XX_TEST_EXPECT_EQ(msgs.size(), size_t{3});
             XX_TEST_EXPECT_EQ(msgs[0].content, std::string{"u1"});
             // 连续噪音段折叠为最后一条
-            XX_TEST_EXPECT_EQ(msgs[1].content, std::string{"[User Canceled]"});
+            XX_TEST_EXPECT_EQ(msgs[1].content, std::string{"[User canceled]"});
             XX_TEST_EXPECT_EQ(msgs[2].content, std::string{"u2"});
         }
 

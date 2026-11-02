@@ -72,12 +72,25 @@ void StdIOClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
             std::cout << std::endl
                       << fmt::format("[Tool] {} running...", delta.toolName) << std::endl;
             break;
-        case Type::ToolEnd:
-            std::cout
-                << std::endl
-                << fmt::format("[Tool] {} {}", delta.toolName, delta.hasError ? "error" : "done")
-                << std::endl;
+        case Type::ToolEnd: {
+            // 终态文案由状态给出, 不看结果文本
+            const auto state = [&]() -> std::string_view {
+                switch (delta.status) {
+                    case agentxx::util::ToolStatus::Failed:
+                        return "error";
+                    case agentxx::util::ToolStatus::Interrupted:
+                        return "interrupted";
+                    case agentxx::util::ToolStatus::Canceled:
+                        return "canceled";
+                    case agentxx::util::ToolStatus::Ok:
+                    default:
+                        return "done";
+                }
+            }();
+            std::cout << std::endl
+                      << fmt::format("[Tool] {} {}", delta.toolName, state) << std::endl;
             break;
+        }
         case Type::MessageUITip: {
             std::string prefix;
             using TipType = agentxx::agent::WireDelta::TipType;

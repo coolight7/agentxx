@@ -523,7 +523,7 @@ struct ToolHeaderFixture {
     }
 
     /// 追加一条 Tool 消息 (text 为工具参数 JSON, 与 server 端约定一致)
-    /// - `hasError`: 失败标记, 由执行层给出 (异常/工具不存在/参数非法/权限拒绝等);
+    /// - `failed`: 失败标记, 由执行层给出的终态 (ToolStatus::Failed) 映射而来
     ///   界面只按它选错误色与"失败回退通用展示"分支, 不再看结果文本前缀
     void pushTool(
         std::string name,
@@ -532,7 +532,7 @@ struct ToolHeaderFixture {
         bool        collapsed  = true,
         std::string result     = "",
         int64_t     durationMs = 0,
-        bool        hasError   = false
+        bool        failed     = false
     ) {
         sharedState.mutate([&](TUIRenderState& st) {
             auto m                = std::make_shared<TUIMessage>();
@@ -542,7 +542,8 @@ struct ToolHeaderFixture {
             m->tool->toolCallId   = "call_1";
             m->tool->toolFinished = finished;
             m->tool->toolResult   = std::move(result);
-            m->tool->hasError     = hasError;
+            m->tool->status       = failed ? agentxx::util::ToolStatus::Failed
+                                            : agentxx::util::ToolStatus::Ok;
             m->durationMs         = durationMs;
             // Tool 消息默认折叠展示 (与真实 TUI 流一致, 见
             // [agent_tui.cpp](/agent/client/src/io/tui/agent_tui.cpp));
@@ -554,7 +555,7 @@ struct ToolHeaderFixture {
     }
 
     /// 追加一条执行失败的 Tool 消息 (失败标记见
-    /// [agentxx::agent::ViewMessage::ToolData::hasError])
+    /// [agentxx::agent::ViewMessage::ToolData::status])
     void pushFailedTool(
         std::string name,
         std::string args,
@@ -1310,7 +1311,7 @@ void testTuiToolHeaderDecor() {
     XX_TEST_EXPECT_TRUE(expanded.find("Notes:") != std::string::npos);
     XX_TEST_EXPECT_TRUE(expanded.find("my notes content") != std::string::npos);
 
-    // 装饰失败回退: 失败标记 (hasError) 到达时展开体回退通用 result 错误展示
+    // 装饰失败回退: 失败终态 (status = failed) 到达时展开体回退通用 result 错误展示
     ToolHeaderFixture f3(120, 16);
     f3.pushFailedTool(
         "agentxx_planning",
@@ -1458,7 +1459,7 @@ void testTuiToolHeaderFailed() {
     XX_TEST_EXPECT_TRUE(fExpanded.plainRender().find("[Error] exit code 1") != std::string::npos);
     XX_TEST_EXPECT_TRUE(fExpanded.render().find("255;85;85") != std::string::npos);
 
-    // 反向用例: 同样的结果文本, 执行层未标失败 (hasError = false)
+    // 反向用例: 同样的结果文本, 执行层未标失败 (status = ok)
     // —— 界面不按文本判错: 不加 " · " 失败后缀, 也不用错误色
     ToolHeaderFixture fTextOnly;
     fTextOnly.pushTool(

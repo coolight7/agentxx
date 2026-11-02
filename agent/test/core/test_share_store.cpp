@@ -41,6 +41,12 @@ asio::awaitable<TestResult> run_share_store_tests() {
     auto ctx  = makeShareStoreCtx();
     auto tool = agentxx::tools::SessionShareStoreTool{ctx};
 
+    /// 执行工具并只取正文: 本模块断言的是取回内容, 终态由执行层统一处理
+    auto run = [&](const utilxx_base::Json& args) -> asio::awaitable<std::string> {
+        auto result = co_await tool.execute_async(args);
+        co_return std::move(result.text);
+    };
+
     // 会话 `t1` 已分配 id 的最大值 (各用例 insert 后累积, 用于非法 id 校验)
     size_t maxId = 0;
 
@@ -89,7 +95,7 @@ asio::awaitable<TestResult> run_share_store_tests() {
     auto insertThenGet
         = [&](std::string_view text, const utilxx_base::Json& getExtra = utilxx_base::Json::object()
           ) -> asio::awaitable<std::string> {
-        auto ins     = co_await tool.execute_async(utilxx_base::Json{
+        auto ins     = co_await run(utilxx_base::Json{
                 {"sessionId", "t1"             },
                 {"opt",       "new"            },
                 {"text",      std::string{text}},
@@ -103,7 +109,7 @@ asio::awaitable<TestResult> run_share_store_tests() {
         for (const auto& [k, v] : getExtra.items()) {
             getArgs[k] = v;
         }
-        co_return co_await tool.execute_async(getArgs);
+        co_return co_await run(getArgs);
     };
 
     // #2: 取回时的行切片必须保留换行符, 且结尾不多余追加换行
@@ -150,7 +156,7 @@ asio::awaitable<TestResult> run_share_store_tests() {
 
     // offset/limit 只对 `get` 有效: `new`/`update` 传入时按无效参数忽略, 文本原样存储
     {
-        auto ins = co_await tool.execute_async(utilxx_base::Json{
+        auto ins = co_await run(utilxx_base::Json{
             {"sessionId", "t1"          },
             {"opt",       "new"         },
             {"text",      "a\nb\nc\nd\n"},
@@ -158,14 +164,14 @@ asio::awaitable<TestResult> run_share_store_tests() {
             {"limit",     2             },
         });
         auto id  = utilxx_base::Json::parse(ins).value<size_t>("id", 0);
-        auto all = co_await tool.execute_async(utilxx_base::Json{
+        auto all = co_await run(utilxx_base::Json{
             {"sessionId", "t1" },
             {"opt",       "get"},
             {"id",        id   },
         });
         XX_TEST_EXPECT_EQ(all, "a\nb\nc\nd\n");
 
-        co_await tool.execute_async(utilxx_base::Json{
+        co_await run(utilxx_base::Json{
             {"sessionId", "t1"          },
             {"opt",       "update"      },
             {"id",        id            },
@@ -173,7 +179,7 @@ asio::awaitable<TestResult> run_share_store_tests() {
             {"offset",    2             },
             {"limit",     1             },
         });
-        auto updated = co_await tool.execute_async(utilxx_base::Json{
+        auto updated = co_await run(utilxx_base::Json{
             {"sessionId", "t1" },
             {"opt",       "get"},
             {"id",        id   },
@@ -183,27 +189,27 @@ asio::awaitable<TestResult> run_share_store_tests() {
 
     // update 生命周期: new → get → update → get
     {
-        auto ins = co_await tool.execute_async(utilxx_base::Json{
+        auto ins = co_await run(utilxx_base::Json{
             {"sessionId", "t1"   },
             {"opt",       "new"  },
             {"text",      "hello"},
         });
         auto id  = utilxx_base::Json::parse(ins).value<size_t>("id", 0);
 
-        auto get1 = co_await tool.execute_async(utilxx_base::Json{
+        auto get1 = co_await run(utilxx_base::Json{
             {"sessionId", "t1" },
             {"opt",       "get"},
             {"id",        id   }
         });
         XX_TEST_EXPECT_EQ(get1, "hello");
 
-        co_await tool.execute_async(utilxx_base::Json{
+        co_await run(utilxx_base::Json{
             {"sessionId", "t1"    },
             {"opt",       "update"},
             {"id",        id      },
             {"text",      "world" },
         });
-        auto get2 = co_await tool.execute_async(utilxx_base::Json{
+        auto get2 = co_await run(utilxx_base::Json{
             {"sessionId", "t1" },
             {"opt",       "get"},
             {"id",        id   }
@@ -219,7 +225,7 @@ asio::awaitable<TestResult> run_share_store_tests() {
         // 未用过的会话: 自增 id 为 0, 任何 id 都非法
         bool threwEmpty = false;
         try {
-            (void)co_await tool.execute_async(utilxx_base::Json{
+            (void)co_await run(utilxx_base::Json{
                 {"sessionId", "t-new"},
                 {"opt",       "get"  },
                 {"id",        1      }
@@ -235,7 +241,7 @@ asio::awaitable<TestResult> run_share_store_tests() {
         // get: 已分配 id 之后的下一个 id 未分配 → 抛异常
         bool threwGet = false;
         try {
-            (void)co_await tool.execute_async(utilxx_base::Json{
+            (void)co_await run(utilxx_base::Json{
                 {"sessionId", "t1"     },
                 {"opt",       "get"    },
                 {"id",        maxId + 1}
@@ -251,7 +257,7 @@ asio::awaitable<TestResult> run_share_store_tests() {
         // update: 同样拒绝未分配的 id (不能凭空写入新 id)
         bool threwSet = false;
         try {
-            (void)co_await tool.execute_async(utilxx_base::Json{
+            (void)co_await run(utilxx_base::Json{
                 {"sessionId", "t1"     },
                 {"opt",       "update" },
                 {"id",        maxId + 1},
@@ -270,7 +276,7 @@ asio::awaitable<TestResult> run_share_store_tests() {
     {
         bool threwDelete = false;
         try {
-            (void)co_await tool.execute_async(utilxx_base::Json{
+            (void)co_await run(utilxx_base::Json{
                 {"sessionId", "t1"    },
                 {"opt",       "delete"},
                 {"id",        maxId   },
@@ -289,7 +295,7 @@ asio::awaitable<TestResult> run_share_store_tests() {
     {
         bool threwNoSession = false;
         try {
-            (void)co_await tool.execute_async(utilxx_base::Json{
+            (void)co_await run(utilxx_base::Json{
                 {"opt", "get"},
                 {"id",  1    }
             });
@@ -301,7 +307,7 @@ asio::awaitable<TestResult> run_share_store_tests() {
 
         bool threwNoOpt = false;
         try {
-            (void)co_await tool.execute_async(utilxx_base::Json{
+            (void)co_await run(utilxx_base::Json{
                 {"sessionId", "t1"}
             });
         } catch (const std::invalid_argument& e) {
@@ -314,7 +320,7 @@ asio::awaitable<TestResult> run_share_store_tests() {
 
         bool threwNoId = false;
         try {
-            (void)co_await tool.execute_async(utilxx_base::Json{
+            (void)co_await run(utilxx_base::Json{
                 {"sessionId", "t1" },
                 {"opt",       "get"}
             });
@@ -328,7 +334,7 @@ asio::awaitable<TestResult> run_share_store_tests() {
 
         bool threwBadOpt = false;
         try {
-            (void)co_await tool.execute_async(utilxx_base::Json{
+            (void)co_await run(utilxx_base::Json{
                 {"sessionId", "t1"  },
                 {"opt",       "nope"},
                 {"id",        1     }
@@ -348,7 +354,7 @@ asio::awaitable<TestResult> run_share_store_tests() {
         bool        threwLegacy = false;
         std::string errText;
         try {
-            (void)co_await tool.execute_async(utilxx_base::Json{
+            (void)co_await run(utilxx_base::Json{
                 {"sessionId",   "t1" },
                 {"opt",         "get"},
                 {"id",          maxId},
@@ -460,13 +466,13 @@ asio::awaitable<TestResult> run_share_store_tests() {
 
     // `id` 按声明形态 (字符串) 传入: 与数字写法等价; 非数字字符串报参数错误
     {
-        auto ins    = co_await tool.execute_async(utilxx_base::Json{
+        auto ins    = co_await run(utilxx_base::Json{
                {"sessionId", "t1"                 },
                {"opt",       "new"                },
                {"text",      "string id content\n"},
         });
         auto idNum  = utilxx_base::Json::parse(ins).value<size_t>("id", 0);
-        auto getStr = co_await tool.execute_async(utilxx_base::Json{
+        auto getStr = co_await run(utilxx_base::Json{
             {"sessionId", "t1"                 },
             {"opt",       "get"                },
             {"id",        std::to_string(idNum)},
@@ -475,7 +481,7 @@ asio::awaitable<TestResult> run_share_store_tests() {
 
         bool threw = false;
         try {
-            (void)co_await tool.execute_async(utilxx_base::Json{
+            (void)co_await run(utilxx_base::Json{
                 {"sessionId", "t1" },
                 {"opt",       "get"},
                 {"id",        "abc"},

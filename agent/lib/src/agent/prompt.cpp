@@ -34,11 +34,10 @@ std::string_view orUnknown(const std::string& value) {
 /// 运行期自动插入上下文的标记说明 (systemPrompt 的 "Context Markers" 段)
 ///
 /// 标记由主程序写入, 改动下列位置时需要同步更新该段文字:
-/// - `[Exception aborted]` / `[User Canceled]` / `[Please continue]` / `[Empty]`:
+/// - `[Exception aborted]` / `[User canceled]` / `[Please continue]` / `[Empty]`:
 ///   nodes/modelcall.cpp (失败/取消回退消息、消息修复、空消息占位)
-/// - `[Error: ...]` / `[Permission denied]` / `[Repeated call denied by user: ...]` /
-///   `[User canceled]`: nodes/toolcall.cpp; `[Plugin tool timeout]` 见
-///   plugins/plugin_manager_adapters.cpp
+/// - `[Error: ...]` / `[Canceled]` / `[Interrupt]`: nodes/toolcall.cpp (执行层唯一的
+///   结果格式化处 —— 只有失败被套上 `[Error...]`, 其余标记仅为结构占位)
 /// - `[Content offloaded. ...]`: util/share_store_offload.cpp (工具输出与超长用户输入共用)
 /// - `[Please describe previous conversation]` / `[Previous conversation]:` /
 ///   `[Earlier conversation was truncated ...]`: middlewares/summarization.cpp
@@ -61,17 +60,16 @@ agentxx inserts markers into this conversation to report program state. They are
 
 - Status of a failed or interrupted turn (at the end of an assistant message):
     - `[Exception aborted]`: the last model API call failed (network, timeout, upstream error) even after automatic retries. It is not user feedback. When the conversation continues, resume the same task from the step whose result was lost; do not ask the user what the error means.
-    - `[User Canceled]`: the running turn was interrupted. This includes the case where the user only wanted to add a note and chose to send it immediately: agentxx interrupts the current turn first and then appends that message. It is an interruption marker, not the user's answer, consent, refusal or new instruction. In particular, never treat it as the user rejecting a pending question (requirement or plan confirmation, permission request) or as a reason to change the plan. The user's real intent is only in the user message that comes after the interruption; if no message follows, the user simply stopped the work, so wait instead of resuming on your own.
+    - `[User canceled]`: the running turn was interrupted. This includes the case where the user only wanted to add a note and chose to send it immediately: agentxx interrupts the current turn first and then appends that message. It is an interruption marker, not the user's answer, consent, refusal or new instruction. In particular, never treat it as the user rejecting a pending question (requirement or plan confirmation, permission request) or as a reason to change the plan. The user's real intent is only in the user message that comes after the interruption; if no message follows, the user simply stopped the work, so wait instead of resuming on your own.
     - `[Empty]`: a placeholder for a message that had no text, thinking and tool call; nothing was said.
 - `[Please continue]` (a user message with only this text): agentxx inserted it to keep the message roles alternating, typically after it recovered from a problem itself (for example a failed model call was retried, or the turn was resumed). It does not come from the user: it is not a request to continue, not approval, and not an answer to a question you asked. Go on with the last real request without replying to the marker, and never treat it as consent for a pending confirmation.
 - Start of a tool result:
-    - `[Error: ...]`: the tool did not run or failed (unknown tool, invalid arguments, runtime error, aborted phase). Fix the cause in the next call; do not repeat the same call unchanged.
-    - `[Permission denied] <reason>`: the call was blocked by the user or by the permission rules. Do not retry it unchanged; choose an allowed approach or ask the user for access.
-    - `[Repeated call denied by user: ...]`: the user rejected one more identical call. Change the arguments or the approach.
-    - `[Plugin tool timeout]`: the plugin tool ran past its time limit. Narrow the request or use another tool.
-    - `[User canceled]`: the call was Canceled by an interruption (not the user refusing the action), so its effect is unknown. Check the real state (re-read the file, re-run the check) when the outcome matters.
+    - `[Error: ...]`: the tool did not run or failed (unknown tool, invalid arguments, runtime error, permission denied, denied repeated call, timeout, aborted phase). Fix the cause in the next call; do not repeat the same call unchanged. When the error text spans several lines it starts with a single `[Error]` line and the rest follows verbatim.
+    - `[Canceled]`: the call was canceled by an interruption (not the user refusing the action), so its effect is unknown. Check the real state (re-read the file, re-run the check) when the outcome matters.
+    - `[Interrupt]`: the call stopped to ask the user something; it runs again after the answer. It is a structural placeholder, not a result.
     - `[Note] ...`: the result is partial because a limit was reached. Do not report the missing part as nonexistent; widen the query or raise the limit.
     - `[content type: ...]`, `[resource link: ...]`, `[embedded resource: ...]`, `[structuredContent]: ...`: labels for non-text parts of an MCP tool result, not errors.
+    - These markers are inserted by the program so you can tell result types apart. The success or failure of a call is decided by the program, not by reading the text: a result that merely looks like an error may still be a normal successful answer.
 - Content moved or dropped:
     - `[Content offloaded. ...]`: the full text was moved to the session store and only its beginning is shown; the header gives the id and the line range. Read the rest with `agentxx_share_store` (`opt=get`, that `id`, `offset`/`limit` in lines) before summarizing, editing or judging the content — in particular when this is a user message. Never assume the visible part is complete.
     - An assistant message starting with `[Previous conversation]:` (after a user message `[Please describe previous conversation]`): the earlier conversation was compacted into that summary by agentxx. Treat it as a summary, not the user's exact words, and verify files and commands again before relying on details.

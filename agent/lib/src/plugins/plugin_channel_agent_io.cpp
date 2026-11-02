@@ -163,7 +163,8 @@ void PluginChannelAgentIO::emitDeltaEvent(const agent::WireDelta& delta) {
             payload["toolName"]       = delta.toolName;
             payload["toolCallId"]     = delta.toolCallId;
             payload["result"]         = delta.result;
-            payload["hasError"]       = delta.hasError;
+            // 终态名 (ok/failed/interrupted/canceled), 不再传布尔 hasError
+            payload["status"] = std::string{agentxx::util::toolStatusName(delta.status)};
             emit(AGENTXX_PLUGIN_CHANNEL_EVT_TOOL_END, 0, {}, &payload);
             break;
         }

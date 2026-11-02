@@ -133,7 +133,8 @@ neograph::ChatTool SessionShareStoreTool::get_definition() const {
     return {get_name(), prompt.depict, agentxx::util::toNeographJson(params)};
 }
 
-asio::awaitable<std::string> SessionShareStoreTool::execute_async(const utilxx_base::Json& arguments
+asio::awaitable<agentxx::util::ToolResult>
+    SessionShareStoreTool::execute_async(const utilxx_base::Json& arguments
 ) {
     // 参数检查失败一律抛异常 (由 ToolcallWrapNode 统一转成工具错误结果),
     // 不再返回编码后的错误 JSON: 错误与正常结果不会混在同一形态里
@@ -217,10 +218,10 @@ asio::awaitable<std::string> SessionShareStoreTool::execute_async(const utilxx_b
     }
     if (text_opt == std::string_view{"new"}) {
         auto reId = mctx->addShareStoreItemValue(session_id, std::move(text));
-        co_return utilxx_base::Json{
+        co_return agentxx::util::ToolResult::ok(utilxx_base::Json{
             {"id", reId},
         }
-            .dump();
+                                                   .dump());
     } else if (text_opt == std::string_view{"get"}) {
         if (text_id <= 0) {
             throw std::invalid_argument{"Arg `id` is empty"};
@@ -231,13 +232,13 @@ asio::awaitable<std::string> SessionShareStoreTool::execute_async(const utilxx_b
             throw std::invalid_argument{fmt::format("Share store item not found: id={}", text_id)};
         }
         // 分页: 对存储的完整内容按行切片返回
-        co_return sliceByLine(std::move(result.value()));
+        co_return agentxx::util::ToolResult::ok(sliceByLine(std::move(result.value())));
     } else if (text_opt == std::string_view{"update"}) {
         if (text_id <= 0) {
             throw std::invalid_argument{"Arg `id` is empty"};
         }
         mctx->setShareStoreItemValue(session_id, text_id, std::move(text));
-        co_return "success";
+        co_return agentxx::util::ToolResult::ok("success");
     } else {
         throw std::invalid_argument{fmt::format("Arg `opt` is invalid: {}", text_opt)};
     }

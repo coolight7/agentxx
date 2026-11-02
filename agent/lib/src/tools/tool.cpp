@@ -57,14 +57,15 @@ std::string XXToolBase::get_name() const {
 }
 
 // 子类未覆写 Json 主接口时默认抛错 (基类无逻辑, 不应被直接调用)
-asio::awaitable<std::string> XXToolBase::execute_async(const utilxx_base::Json&) {
+asio::awaitable<agentxx::util::ToolResult> XXToolBase::execute_async(const utilxx_base::Json&) {
     throw std::runtime_error("XXToolBase::execute_async(Json) not implemented");
-    co_return "";
 }
 
 asio::awaitable<std::string> XXToolBase::execute_async(const neograph::json& arguments) {
+    // 图引擎没有状态通道: 只把正文交出去 (状态由本层丢弃)
     auto args = agentxx::util::fromNeographJson(arguments);
-    co_return co_await execute_async(args);
+    auto result = co_await execute_async(args);
+    co_return std::move(result.text);
 }
 
 std::string XXToolBase::execute(const neograph::json& arguments) {
@@ -77,7 +78,7 @@ std::string XXToolBase::execute(const neograph::json& arguments) {
         io,
         [&]() -> asio::awaitable<void> {
             try {
-                out = co_await execute_async(args);
+                out = (co_await execute_async(args)).text;
             } catch (...) {
                 eptr = std::current_exception();
             }
@@ -141,10 +142,12 @@ neograph::ChatTool XXToolWrap::get_definition() const {
     return inner->get_definition();
 }
 
-asio::awaitable<std::string> XXToolWrap::execute_async(const utilxx_base::Json& arguments) {
+asio::awaitable<agentxx::util::ToolResult>
+    XXToolWrap::execute_async(const utilxx_base::Json& arguments) {
     // 被包装的是原始 neograph::Tool: 经桥接把 Json 转回 neograph::json 后调用
+    // (原生工具没有状态通道, 文本一律按成功)
     auto neoArgs = agentxx::util::toNeographJson(arguments);
-    co_return co_await inner->execute_async(neoArgs);
+    co_return agentxx::util::ToolResult::ok(co_await inner->execute_async(neoArgs));
 }
 
 } // namespace tools

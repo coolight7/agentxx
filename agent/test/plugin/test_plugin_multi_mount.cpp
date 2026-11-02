@@ -108,7 +108,7 @@ asio::awaitable<std::string> callTool(
     if (!argsJson.empty()) {
         args = utilxx_base::Json::parse(std::string{argsJson});
     }
-    co_return co_await tool->execute_async(args);
+    co_return (co_await tool->execute_async(args)).text;
 }
 
 /// 解析工具结果里的一个整数字段 (解析失败返回 -1)

@@ -29,7 +29,7 @@ namespace agentxx {
 namespace nodes {
 
 inline static constexpr std::string_view defaultExceptionTip{"[Exception aborted]"};
-inline static constexpr std::string_view defaultUserCancelTip{"[User Canceled]"};
+inline static constexpr std::string_view defaultUserCancelTip{"[User canceled]"};
 inline static constexpr std::string_view defaultContinueTip{"[Please continue]"};
 
 // 生成唯一的 tool_call id: 毫秒时间戳 + 32 位随机数
@@ -778,7 +778,7 @@ void ModelCallWrapNode::repairMessages(neograph::graph::NodeInput& in) {
         //   "assistant(tool_calls) 但无对应 tool 结果" 结尾 (如 toolcall 节点执行前被
         //   取消), 悬挂的 tool_calls 会让 LLM 误以为工具已被调用, 这里清空其 tool_calls
         // - 若所有声明的 tool_call_id 都已有 tool 结果消息 (如 toolcall 内取消时已由
-        //   ToolcallWrapNode 补齐 [User canceled]), 则不清空
+        //   ToolcallWrapNode 补齐 [Canceled]), 则不清空
         // - 对全部 assistant 消息逐一检查 (不只最后一条): 历史中任意位置的悬挂组
         //   (中断/取消残留在中间轮次) 都会污染上下文, 一并修正
         {
@@ -830,7 +830,7 @@ void ModelCallWrapNode::repairMessages(neograph::graph::NodeInput& in) {
                 //   orphan tool result 400), 也破坏角色顺序
                 // - 正常路径 toolcall 节点会补齐 tool 结果, 走到这里说明该组确实
                 //   未完成, 这些结果要么是异常占位 ([Exception aborted]/
-                //   [User canceled]) 要么是过期残留, 全部删除是安全的
+                //   [Canceled]) 要么是过期残留, 全部删除是安全的
                 msgs[i].tool_calls.clear();
                 for (size_t j = static_cast<size_t>(i) + 1; j < nextAgentMsg; ++j) {
                     removeOrphan[j] = true;

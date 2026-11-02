@@ -179,7 +179,8 @@ Allowed chars: letters, digits, `.`, `_`, `-`. Required by `create` (a timestamp
 // 不再返回编码后的错误 JSON
 // ---------------------------------------------------------------------------
 
-asio::awaitable<std::string> GitWorktreeTool::execute_async(const utilxx_base::Json& arguments) {
+asio::awaitable<agentxx::util::ToolResult>
+    GitWorktreeTool::execute_async(const utilxx_base::Json& arguments) {
     auto ctxPtr = agentContext.lock();
     if (!ctxPtr || !ctxPtr->agentConfig) {
         throw std::runtime_error{"agent context unavailable"};
@@ -213,21 +214,25 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const utilxx_base::J
 
     // ---- info: 无需写操作, 但列举/状态探测涉及子进程, 卸载线程池执行 ----
     if (opt == "info") {
-        auto result = co_await utilxx::offloadCancellableAsync<std::string>(
+        auto result = co_await utilxx::offloadCancellableAsync<agentxx::util::ToolResult>(
             *ctxPtr->threadPool,
             // 图引擎取消令牌 -> utilxx::CancelToken (统一取消抽象)
             agentxx::util::adaptCancelToken(cancelToken),
             [&, effectiveDir, knownRepoRoot](std::atomic<bool>& cancelFlag
-            ) -> asio::awaitable<std::string> {
+            ) -> asio::awaitable<agentxx::util::ToolResult> {
                 namespace fw     = agentxx::tools::worktree;
                 std::string root = knownRepoRoot;
                 if (root.empty()) {
                     if (effectiveDir.empty() || !fw::isInsideWorkTree(effectiveDir)) {
-                        co_return R"({"error":"not inside a git repository","hint":"worktree mode requires a git repository with at least one commit"})";
+                        co_return agentxx::util::ToolResult::fail(
+                            R"({"error":"not inside a git repository","hint":"worktree mode requires a git repository with at least one commit"})"
+                        );
                     }
                     auto r = fw::repoRoot(effectiveDir);
                     if (!r) {
-                        co_return R"({"error":"cannot resolve repository root"})";
+                        co_return agentxx::util::ToolResult::fail(
+                            R"({"error":"cannot resolve repository root"})"
+                        );
                     }
                     root = *r;
                 }
@@ -239,7 +244,9 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const utilxx_base::J
                 }
                 for (const auto& e : entries) {
                     if (cancelFlag.load(std::memory_order_acquire)) {
-                        co_return R"({"error":"Canceled"})";
+                        co_return agentxx::util::ToolResult::canceled(
+                            "canceled while listing worktrees"
+                        );
                     }
                     auto st    = fw::statusSummary(e.path);
                     bool dirty = st ? st->dirtyFiles() : false;
@@ -273,7 +280,7 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const utilxx_base::J
                     out["hint"]
                         = "Not in a worktree yet. Call opt=create to start an isolated workspace for code-modifying tasks.";
                 }
-                co_return out.dump();
+                co_return agentxx::util::ToolResult::ok(out.dump());
             }
         );
         co_return result;
@@ -311,7 +318,8 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const utilxx_base::J
             std::string branch;
             std::string repoRoot; ///< 仓库根绝对路径 (绑定与权限隔离边界注册用)
             std::string error;
-            bool        ok = false;
+            bool        ok       = false;
+            bool        canceled = false; ///< 协作取消命中 (终止态为 Canceled)
         };
 
         // 仓库探测 + 创建全部卸载到线程池 (git 子进程调用不可在 io 线程阻塞)
@@ -343,7 +351,7 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const utilxx_base::J
                 // 同名已注册的 worktree 直接拒绝 (避免误删用户数据; 复用请换名)
                 for (const auto& e : fw::listWorktrees(repoRootDir)) {
                     if (cancelFlag.load(std::memory_order_acquire)) {
-                        out.error = "[Canceled]";
+                        out.canceled = true;
                         co_return out;
                     }
                     if (std::filesystem::path{e.path}.filename().generic_string() == out.name) {
@@ -366,10 +374,14 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const utilxx_base::J
             }
         );
 
+        if (outcome.canceled) {
+            co_return agentxx::util::ToolResult::canceled("canceled while creating worktree");
+        }
         if (!outcome.ok) {
-            co_return utilxx_base::Json{
+            co_return agentxx::util::ToolResult::fail(utilxx_base::Json{
                 {"error", outcome.error}
-            }.dump();
+            }
+                                                          .dump());
         }
         if (sessionId.empty()) {
             throw std::invalid_argument{
@@ -385,7 +397,7 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const utilxx_base::J
             outcome.branch,
             outcome.repoRoot
         );
-        co_return utilxx_base::Json{
+        co_return agentxx::util::ToolResult::ok(utilxx_base::Json{
             {"ok",       true                                                                        },
             {"op",       "create"                                                                    },
             {"name",     outcome.name                                                                },
@@ -398,7 +410,7 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const utilxx_base::J
              "to review/commit/merge. The worktree is kept after the task unless explicitly removed."
             },
         }
-            .dump();
+                                                  .dump());
     }
 
     // ---- status: 当前(或指定) worktree 的工作区摘要 ----
@@ -411,12 +423,12 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const utilxx_base::J
         } else if (session && !session->getWorktreeBinding().path.empty() && targetName.empty()) {
             targetPath = session->getWorktreeBinding().path;
         }
-        auto result = co_await utilxx::offloadCancellableAsync<std::string>(
+        auto result = co_await utilxx::offloadCancellableAsync<agentxx::util::ToolResult>(
             *ctxPtr->threadPool,
             // 图引擎取消令牌 -> utilxx::CancelToken (统一取消抽象)
             agentxx::util::adaptCancelToken(cancelToken),
             [&, targetName, targetPath, rootForList, effectiveDir](std::atomic<bool>&)
-                -> asio::awaitable<std::string> {
+                -> asio::awaitable<agentxx::util::ToolResult> {
                 namespace fw     = agentxx::tools::worktree;
                 std::string root = rootForList;
                 std::string path = targetPath;
@@ -424,11 +436,15 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const utilxx_base::J
                     // 按名称定位 (未绑定会话指定 name 的场景)
                     if (root.empty()) {
                         if (effectiveDir.empty() || !fw::isInsideWorkTree(effectiveDir)) {
-                            co_return R"({"error":"not inside a git repository"})";
+                            co_return agentxx::util::ToolResult::fail(
+                                R"({"error":"not inside a git repository"})"
+                            );
                         }
                         auto r = fw::repoRoot(effectiveDir);
                         if (!r) {
-                            co_return R"({"error":"cannot resolve repository root"})";
+                            co_return agentxx::util::ToolResult::fail(
+                                R"({"error":"cannot resolve repository root"})"
+                            );
                         }
                         root = *r;
                     }
@@ -443,19 +459,21 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const utilxx_base::J
                                .generic_string();
                 }
                 if (!std::filesystem::exists(path)) {
-                    co_return utilxx_base::Json{
-                        {"error", fmt::format("worktree directory not found: {}", path)},
+                    co_return agentxx::util::ToolResult::fail(utilxx_base::Json{
+                        {"error",
+                         fmt::format("worktree directory not found: {}", path)              },
                         {"hint", "it may have been removed; use opt=info to list existing worktrees"
                         },
                     }
-                        .dump();
+                                                                .dump());
                 }
                 auto st = fw::statusSummary(path);
                 if (!st) {
-                    co_return utilxx_base::Json{
+                    co_return agentxx::util::ToolResult::fail(utilxx_base::Json{
                         {"error", "git status failed"},
                         {"path",  path               }
-                    }.dump();
+                    }
+                                                                .dump());
                 }
                 utilxx_base::Json out{
                     {"path",           path         },
@@ -475,7 +493,7 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const utilxx_base::J
                           "and remind the user to review / commit / merge. Do NOT delete the worktree unless "
                           "the user explicitly confirms.";
                 }
-                co_return out.dump();
+                co_return agentxx::util::ToolResult::ok(out.dump());
             }
         );
         co_return result;
@@ -502,7 +520,8 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const utilxx_base::J
             std::string summary;
             size_t      modified = 0, added = 0, deleted = 0, renamed = 0;
             size_t      untracked = 0, ahead = 0, unmerged = 0;
-            bool        removed = false;
+            bool        removed  = false;
+            bool        canceled = false; ///< 协作取消命中 (终止态为 Canceled)
         };
 
         auto outcome = co_await utilxx::offloadCancellableAsync<RemoveOutcome>(
@@ -534,7 +553,7 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const utilxx_base::J
                 bool found = false;
                 for (const auto& e : fw::listWorktrees(root)) {
                     if (cancelFlag.load(std::memory_order_acquire)) {
-                        out.error = "[Canceled]";
+                        out.canceled = true;
                         co_return out;
                     }
                     if (std::filesystem::absolute(std::filesystem::path{e.path}).generic_string()
@@ -580,6 +599,9 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const utilxx_base::J
             }
         );
 
+        if (outcome.canceled) {
+            co_return agentxx::util::ToolResult::canceled("canceled while removing worktree");
+        }
         if (!outcome.removed) {
             utilxx_base::Json out{
                 {"error",   outcome.error},
@@ -598,18 +620,18 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const utilxx_base::J
                 out["reminder"]
                     = "Remind the user about these pending changes: they can commit/merge them, then call remove again (or force=true to discard).";
             }
-            co_return out.dump();
+            co_return agentxx::util::ToolResult::fail(out.dump());
         }
         if (removesCurrent && !sessionId.empty()) {
             unbindSession(ctxPtr, sessionId);
         }
-        co_return utilxx_base::Json{
+        co_return agentxx::util::ToolResult::ok(utilxx_base::Json{
             {"ok",      true          },
             {"op",      "remove"      },
             {"name",    name          },
             {"unbound", removesCurrent},
         }
-            .dump();
+                                                  .dump());
     }
 
     throw std::invalid_argument{

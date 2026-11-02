@@ -2,6 +2,7 @@
 
 #include "agentxx/agent/context.h"
 #include "agentxx/middlewares/middleware.h"
+#include "agentxx/util/tool_result.h"
 #include "asio/io_context.hpp"
 #include "fmt/base.h"
 #include "fmt/format.h"
@@ -36,7 +37,8 @@ std::shared_ptr<neograph::graph::CancelToken> getSessionCancelToken(
 /// 图兼容说明:
 /// - 本类同时继承 `neograph::Tool` (图引擎 `ToolDispatchNode` 仅识别该类型):
 ///   `execute_async(const neograph::json&)` 为桥接 override, 内部经
-///   `neograph_json_bridge` 转为 `Json` 后调用主接口 `execute_async(const Json&)`
+///   `neograph_json_bridge` 转为 `Json` 后调用主接口 `execute_async(const Json&)`,
+///   并把结果取 `.text` 丢给图引擎 (图引擎没有状态通道)
 /// - 业务层 (ToolcallWrapNode/测试/插件适配) 一律调用 `Json` 主接口,
 ///   不再触碰 `neograph::json`
 class XXToolBase : public neograph::Tool {
@@ -94,7 +96,10 @@ public:
     /// 业务主接口 (Json): 子类覆写此函数实现工具逻辑
     /// - 注意: 这不是 `neograph::Tool` 的虚覆盖 (签名不同), 而是本类新增虚函数;
     ///   子类用 `override` 关键字覆盖本函数 (如 GitWorktreeTool 等)
-    virtual asio::awaitable<std::string> execute_async(const utilxx_base::Json& arguments);
+    /// - 成败只由返回值里的 [agentxx::util::ToolResult::status] 表达: 抛异常算
+    ///   `Failed` (由执行层格式化), 也可以直接返回 `ToolResult::fail(...)` 表达
+    ///   "预期内的失败" (路径不存在 / 无匹配 / 语法错), 文本里不要写 `[Error]` 前缀
+    virtual asio::awaitable<agentxx::util::ToolResult> execute_async(const utilxx_base::Json& arguments);
 
     /// 图兼容桥接: `neograph::Tool::execute_async` 的 override,
     /// 经 `fromNeographJson` 转发到 Json 主接口
@@ -140,7 +145,10 @@ public:
     neograph::ChatTool get_definition() const override;
 
     /// 业务主接口: 转发到被包装的 inner tool (Json 经桥接转换)
-    asio::awaitable<std::string> execute_async(const utilxx_base::Json& arguments) override;
+    /// - 原生 `neograph::Tool` 没有状态通道: 返回的文本一律按 `Ok`
+    /// (需要状态请用 [XXToolWrap] 以外的自建 `XXToolBase` 子类)
+    asio::awaitable<agentxx::util::ToolResult>
+        execute_async(const utilxx_base::Json& arguments) override;
 };
 
 } // namespace tools

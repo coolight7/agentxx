@@ -138,13 +138,14 @@ struct GitResult {
         return exitCode == 0;
     }
 
-    /// 组合错误描述 (供工具结果文本直接使用)
+    /// 组合错误描述 (供工具结果正文使用; **不带** `[Error]` 包裹 —— 状态由
+    /// [agentxx::util::ToolResult::status] 表达, 展示文本由执行层统一加前缀)
     std::string errorText(std::string_view what) const {
         std::string e = err.empty() ? out : err;
         if (e.size() > 2000) {
             e.resize(2000);
         }
-        return fmt::format("[Error] {} failed (exit={}): {}", what, exitCode, e);
+        return fmt::format("{} failed (exit={}): {}", what, exitCode, e);
     }
 };
 
@@ -273,7 +274,7 @@ inline GitResult runGit(
     GitResult skipped;
     if (cancelFlag != nullptr && cancelFlag->load(std::memory_order_acquire)) {
         skipped.exitCode = -1;
-        skipped.err      = "[Canceled]";
+        skipped.err      = "canceled before running git";
         return skipped;
     }
     return detail::runGitImpl(args, cwd, timeoutSec);
