@@ -1666,33 +1666,27 @@ void SessionServerAgentIO::handleHello(
     // - 高于本服务端版本: 新客户端可能依赖本端不认识的消息/字段
     // - 低于最低兼容版本 (`kMinVersion`): 老对端按旧规则理解数据 (例如只看结果文本
     //   前缀判断工具成败), 继续跑会得到错误结论
-    // - 两者都回 ok=false + 可读原因, 并记日志便于排查
-    if (hello.protocolVersion > agentxx::agent::WireProtocol::kVersion
-        || hello.protocolVersion < agentxx::agent::WireProtocol::kMinVersion) {
-        const bool tooNew = hello.protocolVersion > agentxx::agent::WireProtocol::kVersion;
+    // - 判定与原因文案和客户端侧共用一份 (`WireProtocol::checkVersion` /
+    //   `versionRejectReason`), 避免一边放行一边拒绝
+    // - 拒绝时回 ok=false + 可读原因, 并记日志便于排查
+    const auto versionCheck = agentxx::agent::WireProtocol::checkVersion(hello.protocolVersion);
+    if (versionCheck != agentxx::agent::WireProtocol::VersionCheck::Ok) {
+        const std::string reason = agentxx::agent::WireProtocol::versionRejectReason(
+            versionCheck,
+            hello.protocolVersion
+        );
         XX_LOGW(
-            "[session_ctrl] hello rejected: client protocol version {} is {} server range [{}, {}]",
+            "[session_ctrl] hello rejected: client protocol version {} out of server range "
+            "[{}, {}] ({})",
             hello.protocolVersion,
-            tooNew ? "newer than" : "older than",
             agentxx::agent::WireProtocol::kMinVersion,
-            agentxx::agent::WireProtocol::kVersion
+            agentxx::agent::WireProtocol::kVersion,
+            reason
         );
         WireHelloAck reject;
-        reject.ok        = false;
-        reject.sessionId = config_.sessionId;
-        reject.error     = tooNew
-                               ? fmt::format(
-                                 "client protocol version {} is newer than server version {}; "
-                                     "please update the server side",
-                                 hello.protocolVersion,
-                                 agentxx::agent::WireProtocol::kVersion
-                             )
-                               : fmt::format(
-                                 "client protocol version {} is older than the minimum {}; "
-                                     "please update the client",
-                                 hello.protocolVersion,
-                                 agentxx::agent::WireProtocol::kMinVersion
-                             );
+        reject.ok              = false;
+        reject.sessionId       = config_.sessionId;
+        reject.error           = reason;
         reject.protocolVersion = agentxx::agent::WireProtocol::kVersion;
         reject.capabilities    = agentxx::agent::serverWireCapabilities();
         if (sender) {

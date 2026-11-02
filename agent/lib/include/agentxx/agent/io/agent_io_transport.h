@@ -112,6 +112,55 @@ struct WireProtocol {
     /// - 0 = 未声明版本的老客户端, 本版本不再接受 (它靠结果文本前缀判断成败)
     inline static constexpr int kMinVersion = 2;
 
+    /// 对端版本与本端可接受范围的关系
+    enum class VersionCheck {
+        Ok = 0,
+        TooNew, ///< 对端更新: 它可能依赖本端不认识的消息
+        TooOld, ///< 对端过老: 它可能按旧规则理解数据 (如只看结果文本判成败)
+    };
+
+    /// 检查对端声明的协议版本能否与本端通信
+    /// - 双方 (服务端收 Hello / 客户端收 HelloAck) 用同一份判定, 避免一边放行一边拒绕
+    /// - `args`:
+    ///     - [remoteVersion] 对端声明版本 (缺字段时解析为 0)
+    /// - `return` 判定结果
+    inline static VersionCheck checkVersion(int remoteVersion) noexcept {
+        if (remoteVersion > kVersion) {
+            return VersionCheck::TooNew;
+        }
+        if (remoteVersion < kMinVersion) {
+            return VersionCheck::TooOld;
+        }
+        return VersionCheck::Ok;
+    }
+
+    /// 版本不合格时给对端读的原因 (可直接写进 `WireHelloAck::error` 或日志)
+    /// - 两侧共用一句: 报出对端版本与本端范围, 并指出该更新哪一端 ——
+    ///   "this program" 是产生这句的一端, "remote program" 是对端
+    /// - `args`:
+    ///     - [check] 判定结果 (为 `Ok` 时返回空串)
+    ///     - [remoteVersion] 对端声明版本
+    /// - `return` 一句可执行的说明; `Ok` 时为空串
+    inline static std::string versionRejectReason(VersionCheck check, int remoteVersion) {
+        switch (check) {
+            case VersionCheck::TooNew:
+                return fmt::format(
+                    "protocol version {} is newer than the local {}; please update this program",
+                    remoteVersion,
+                    kVersion
+                );
+            case VersionCheck::TooOld:
+                return fmt::format(
+                    "protocol version {} is older than the minimum {}; please update the remote program",
+                    remoteVersion,
+                    kMinVersion
+                );
+            case VersionCheck::Ok:
+            default:
+                return {};
+        }
+    }
+
     /// 能力: 输入投递模式 `next-step` / `inject`
     inline static constexpr std::string_view kCapInputDelivery = "input.delivery";
     /// 能力: 输入受理回执 (`WireInputAck`)

@@ -669,10 +669,12 @@ static asio::awaitable<void> fakeAgentHandler(HttpServer::WsStream& ws) {
     if (!hello) {
         co_return;
     }
-    // 与真实服务端同语义: 版本更高明确拒绝, 并在回执里声明
-    // 本端版本与能力 —— 客户端据此判断可用功能
+    // 与真实服务端同语义: 版本不在 [kMinVersion, kVersion] 内明确拒绝 (判定与原因文案
+    // 和服务端共用一份 `WireProtocol::checkVersion`), 并在回执里声明本端版本与能力
+    // —— 客户端据此判断可用功能
     const auto clientVersion = static_cast<int>(hello->value("protocolVersion", int64_t{0}));
-    if (clientVersion > agentxx::agent::WireProtocol::kVersion) {
+    const auto versionCheck  = agentxx::agent::WireProtocol::checkVersion(clientVersion);
+    if (versionCheck != agentxx::agent::WireProtocol::VersionCheck::Ok) {
         co_await wsSendJson(
             ws,
             io::makeHelloAck(
@@ -683,11 +685,7 @@ static asio::awaitable<void> fakeAgentHandler(HttpServer::WsStream& ws) {
                 {},
                 "",
                 "",
-                fmt::format(
-                    "client protocol version {} is newer than server version {}",
-                    clientVersion,
-                    agentxx::agent::WireProtocol::kVersion
-                ),
+                agentxx::agent::WireProtocol::versionRejectReason(versionCheck, clientVersion),
                 agentxx::agent::WireProtocol::kVersion,
                 agentxx::agent::serverWireCapabilities()
             )
@@ -735,9 +733,37 @@ static asio::awaitable<void> fakeAgentHandler(HttpServer::WsStream& ws) {
     }
 }
 
+// 老服务端: 握手回 ok=true, 但声明一个低于 `kMinVersion` 的协议版本
+// (老版本服务端不做版本协商, 只会把自己的版本回过来)
+static asio::awaitable<void> fakeOldServerHandler(HttpServer::WsStream& ws) {
+    auto hello = co_await wsRecvJson(ws);
+    if (!hello) {
+        co_return;
+    }
+    co_await wsSendJson(
+        ws,
+        io::makeHelloAck(
+            true,
+            hello->value("sessionId", std::string{}),
+            "",
+            {},
+            {},
+            "",
+            "",
+            std::string{},
+            agentxx::agent::WireProtocol::kMinVersion - 1,
+            agentxx::agent::serverWireCapabilities()
+        )
+    );
+    co_return;
+}
+
 static asio::awaitable<void> test_remote_client_handshake() {
     HttpServer server({.address = "127.0.0.1", .port = 0, .ioThreads = 1});
     server.enableWebSocket("/agent", fakeAgentHandler);
+    // 老服务端: 接受握手, 但回执里声明一个低于 `kMinVersion` 的版本 ——
+    // 客户端必须自己拒绝 (老服务端会按旧规则理解请求/数据)
+    server.enableWebSocket("/agent-old", fakeOldServerHandler);
 
     std::thread th;
     uint16_t    port = startServerAndWait(server, th);
@@ -822,7 +848,8 @@ static asio::awaitable<void> test_remote_client_handshake() {
         transport->close();
     }
 
-    // ----- 老客户端 (未声明协议版本): 按最低兼容版本接受, 不拒绝 -----
+    // ----- 老客户端 (未声明协议版本, 解析为 0): 低于 kMinVersion, 明确拒绝 -----
+    // 老客户端按旧规则理解数据 (只看结果文本前缀判断工具成败), 继续跑会得到错误结论
     {
         agentxx::agent::WsAgentIOTransport::Config cfg;
         cfg.heartbeatInterval = std::chrono::seconds{60};
@@ -841,10 +868,11 @@ static asio::awaitable<void> test_remote_client_handshake() {
         hello.protocolVersion = 0; // 老客户端: 不带版本号
         hello.capabilities.clear();
         bool ok = co_await transport->connect(hello);
-        XX_TEST_EXPECT_TRUE(ok);
+        XX_TEST_EXPECT_FALSE(ok);
         if (auto ack = transport->lastHelloAck(); ack.has_value()) {
-            XX_TEST_EXPECT_TRUE(ack->ok);
-            XX_TEST_EXPECT_TRUE(ack->error.empty());
+            XX_TEST_EXPECT_FALSE(ack->ok);
+            XX_TEST_EXPECT_TRUE(ack->error.find("older") != std::string::npos);
+            XX_TEST_EXPECT_EQ(ack->protocolVersion, agentxx::agent::WireProtocol::kVersion);
             XX_TEST_EXPECT_GE(ack->capabilities.size(), size_t{1});
         } else {
             XX_TEST_EXPECT_TRUE(false);
@@ -875,6 +903,35 @@ static asio::awaitable<void> test_remote_client_handshake() {
             XX_TEST_EXPECT_FALSE(ack->ok);
             XX_TEST_EXPECT_TRUE(ack->error.find("newer") != std::string::npos);
             XX_TEST_EXPECT_EQ(ack->protocolVersion, agentxx::agent::WireProtocol::kVersion);
+        } else {
+            XX_TEST_EXPECT_TRUE(false);
+        }
+        transport->close();
+    }
+
+    // ----- 服务端版本过老: 客户端自己拒绝 (老服务端按旧规则理解数据) -----
+    {
+        agentxx::agent::WsAgentIOTransport::Config cfg;
+        cfg.heartbeatInterval = std::chrono::seconds{60};
+        cfg.authTimeout       = std::chrono::seconds{3};
+        utilxx::WsClientConfig wsCfg;
+        wsCfg.recvTimeout = std::chrono::seconds{5};
+
+        auto transport = std::make_shared<agentxx::agent::WsAgentIOTransport>(
+            ex,
+            "ws://127.0.0.1:" + std::to_string(port) + "/agent-old",
+            "test-token",
+            cfg,
+            wsCfg
+        );
+        agentxx::agent::WireHello hello{"session", "test-token", 0, ""};
+        bool                      ok = co_await transport->connect(hello);
+        // 服务端回 ok=true, 但版本低于 kMinVersion: 握手仍按失败处理
+        XX_TEST_EXPECT_FALSE(ok);
+        if (auto ack = transport->lastHelloAck(); ack.has_value()) {
+            XX_TEST_EXPECT_FALSE(ack->ok);
+            XX_TEST_EXPECT_TRUE(ack->error.find("older") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(ack->error.find("remote program") != std::string::npos);
         } else {
             XX_TEST_EXPECT_TRUE(false);
         }

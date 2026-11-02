@@ -65,6 +65,24 @@ void runMcpStdioServerProcess() {
         result["content"] = std::move(content);
         return result;
     });
+
+    // 报错的工具: 结果里带 `isError: true` (MCP 协议表达工具失败的方式)
+    // 主程序侧据此把工具终态定为失败 (不再当成功文本)
+    McpToolDefinition failTool;
+    failTool.name        = "fail";
+    failTool.description = "always reports isError (for the failure mapping test)";
+    failTool.inputSchema = json::parse(R"({"type":"object","properties":{}})");
+    server.addTool(failTool, [](const json&) -> json {
+        json result       = json::object();
+        json content      = json::array();
+        json item         = json::object();
+        item["type"]      = "text";
+        item["text"]      = "boom from mcp";
+        content.push_back(std::move(item));
+        result["content"] = std::move(content);
+        result["isError"] = true;
+        return result;
+    });
     server.runStdio();
 }
 
@@ -4014,6 +4032,24 @@ asio::awaitable<void> test_mcp_client_stdio_subprocess() {
         args["text"] = "stdio-roundtrip";
         auto result   = co_await tool->execute_async(args);
         XX_TEST_EXPECT_TRUE(result.text.find("stdio-roundtrip") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(result.status == agentxx::util::ToolStatus::Ok);
+    }
+
+    // isError -> 工具终态为失败 (文本仍是汇总后的 content)
+    {
+        McpToolDefinition failDef;
+        for (const auto& t : (tools.has_value() ? *tools : std::vector<McpToolDefinition>{})) {
+            if (t.name == "fail") {
+                failDef = t;
+            }
+        }
+        XX_TEST_EXPECT_EQ(failDef.name, std::string{"fail"});
+        if (!failDef.name.empty()) {
+            auto failTool = client->createTool(failDef, {});
+            auto out      = co_await failTool->execute_async(json::object());
+            XX_TEST_EXPECT_TRUE(out.status == agentxx::util::ToolStatus::Failed);
+            XX_TEST_EXPECT_TRUE(out.text.find("boom from mcp") != std::string::npos);
+        }
     }
 
     co_await client->close();

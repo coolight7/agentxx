@@ -159,6 +159,44 @@ TestResult testWireRoundtrip() {
         }
     }
 
+    // ---------------- 协议版本协商 (两侧共用一份判定) ----------------
+
+    {
+        // 可接受区间 [kMinVersion, kVersion]: 区间内放行, 两侧之外分别判"过新/过老";
+        // 未声明版本的老对端解析为 0, 同样落在"过老"一侧
+        XX_TEST_EXPECT_TRUE(WireProtocol::checkVersion(WireProtocol::kVersion)
+                            == WireProtocol::VersionCheck::Ok);
+        XX_TEST_EXPECT_TRUE(WireProtocol::checkVersion(WireProtocol::kMinVersion)
+                            == WireProtocol::VersionCheck::Ok);
+        XX_TEST_EXPECT_TRUE(WireProtocol::checkVersion(WireProtocol::kVersion + 1)
+                            == WireProtocol::VersionCheck::TooNew);
+        XX_TEST_EXPECT_TRUE(WireProtocol::checkVersion(WireProtocol::kMinVersion - 1)
+                            == WireProtocol::VersionCheck::TooOld);
+        XX_TEST_EXPECT_TRUE(WireProtocol::checkVersion(0) == WireProtocol::VersionCheck::TooOld);
+
+        // 原因文案: 报出对端版本, 并指出该更新哪一端 (本端/对端); 放行时没有原因
+        const auto tooNew = WireProtocol::versionRejectReason(
+            WireProtocol::VersionCheck::TooNew,
+            WireProtocol::kVersion + 1
+        );
+        XX_TEST_EXPECT_TRUE(tooNew.find("newer") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(
+            tooNew.find(std::to_string(WireProtocol::kVersion + 1)) != std::string::npos
+        );
+        XX_TEST_EXPECT_TRUE(tooNew.find("this program") != std::string::npos);
+        const auto tooOld = WireProtocol::versionRejectReason(
+            WireProtocol::VersionCheck::TooOld,
+            1
+        );
+        XX_TEST_EXPECT_TRUE(tooOld.find("older") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(tooOld.find("minimum") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(tooOld.find("remote program") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(
+            WireProtocol::versionRejectReason(WireProtocol::VersionCheck::Ok, WireProtocol::kVersion)
+                .empty()
+        );
+    }
+
     // ---------------- 轮次与统计 ----------------
 
     {

@@ -101,5 +101,40 @@ struct ToolResult {
     }
 };
 
+/// 状态 -> 给模型读的文本 (全项目唯一实现)
+///
+/// 只有 `Failed` 会改变文本, 其余状态一律原样透传:
+/// - `Ok`: 原样, 不做任何包裹
+/// - `Failed`: 单行 `[Error: <text>]`; 含换行时首行单独 `[Error]`, 其后原样接 `<text>`;
+///   `text` 为空时只有 `[Error]`
+/// - `Canceled`: 文本原样; 未产出结果时补占位 `[Canceled]`
+/// - `Interrupted`: 文本原样; 未产出结果时补占位 `[Interrupt]`
+///
+/// 调用方: 执行层写上下文时用它 (见 `nodes/toolcall.cpp`); 工具实现**不要**调它
+/// —— 工具只给正文与状态, 不用关心模型侧的标记格式
+///
+/// - `args`:
+///     - [result] 工具结果
+/// - `return` 写进会话上下文的工具消息正文
+inline std::string toolResultTextForModel(const ToolResult& result) {
+    switch (result.status) {
+        case ToolStatus::Failed:
+            if (result.text.empty()) {
+                return "[Error]";
+            }
+            if (result.text.find('\n') == std::string::npos) {
+                return "[Error: " + result.text + "]";
+            }
+            return "[Error]\n" + result.text;
+        case ToolStatus::Canceled:
+            return result.text.empty() ? std::string{"[Canceled]"} : result.text;
+        case ToolStatus::Interrupted:
+            return result.text.empty() ? std::string{"[Interrupt]"} : result.text;
+        case ToolStatus::Ok:
+        default:
+            return result.text;
+    }
+}
+
 } // namespace util
 } // namespace agentxx

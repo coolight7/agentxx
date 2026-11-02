@@ -667,18 +667,12 @@ asio::awaitable<TestResult> run_plugin_tests() {
             auto tool = ctx->toolRegistry->find("js_reject_demo");
             XX_TEST_EXPECT_TRUE(tool != nullptr);
             if (tool) {
-                bool        failed = false;
-                std::string message;
-                try {
-                    (void)co_await tool->execute_async(utilxx_base::Json{
-                        {"reason", "boom-demo"}
-                    });
-                } catch (const std::exception& e) {
-                    failed  = true;
-                    message = e.what();
-                }
-                XX_TEST_EXPECT_TRUE(failed);
-                XX_TEST_EXPECT_TRUE(message.find("boom-demo") != std::string::npos);
+                // Promise 被拒 → 工具终态为失败 (不再抛异常); 正文就是拒绝原因
+                const auto result = co_await tool->execute_async(utilxx_base::Json{
+                    {"reason", "boom-demo"}
+                });
+                XX_TEST_EXPECT_TRUE(result.status == agentxx::util::ToolStatus::Failed);
+                XX_TEST_EXPECT_TRUE(result.text.find("boom-demo") != std::string::npos);
             }
         }
 
@@ -1473,10 +1467,11 @@ throw new Error("top-level rollback probe");
 
             bool CanceledThrown = false;
             try {
-                auto out = (co_await cancelTool->execute_async(utilxx_base::Json{
+                // 取消: 插件侧上报 CANCELED → 工具终态为 Canceled (不抛异常)
+                const auto out = co_await cancelTool->execute_async(utilxx_base::Json{
                     {"sessionId", "t_plugin_cancel"}
-                })).text;
-                (void)out;
+                });
+                CanceledThrown = out.status == agentxx::util::ToolStatus::Canceled;
             } catch (const neograph::graph::CancelledException&) {
                 CanceledThrown = true;
             } catch (const std::exception& e) {
@@ -1558,6 +1553,40 @@ throw new Error("top-level rollback probe");
             ctx->pluginMount->unregisterTool(inst31.get(), "null_start_tool");
         }
 
+        // 31.5b 超时: 工具声明 `default_timeout_ms` 但业务体比它慢 → 终态为失败,
+        //       正文是 `timed out after <n> seconds` (不带 `[Plugin tool timeout]` 前缀)
+        {
+            struct SlowCtx : public agentxx::plugin::PluginBase {};
+
+            static SlowCtx slowCtx;
+            slowCtx.init(inst31->hostView());
+            const auto slowRef = scopeRefOf(*ctx->pluginManager);
+            agentxx::plugin::blocking_tool(
+                slowCtx,
+                slowRef,
+                "timeout_tool",
+                "tool slower than its own default timeout",
+                "{}",
+                [](SlowCtx&, std::string_view) -> std::string {
+                    // 业务体比 default_timeout_ms 慢: 主程序按超时给失败终态,
+                    // 插件侧照旧跑完并上报 (随后释放该次调用的占用)
+                    std::this_thread::sleep_for(std::chrono::milliseconds{250});
+                    return "slow body finished";
+                },
+                100 ///< default_timeout_ms
+            );
+            auto timeoutTool = ctx->toolRegistry->find("timeout_tool");
+            XX_TEST_EXPECT_TRUE(timeoutTool != nullptr);
+            if (timeoutTool) {
+                const auto result = co_await timeoutTool->execute_async(utilxx_base::Json{});
+                XX_TEST_EXPECT_TRUE(result.status == agentxx::util::ToolStatus::Failed);
+                XX_TEST_EXPECT_TRUE(result.text.find("timed out after") != std::string::npos);
+            }
+            // 等业务体自己跑完再注销, 免得卸载阶段还要等这一次未结算的调用
+            co_await sleepMs(300);
+            ctx->pluginMount->unregisterTool(inst31.get(), "timeout_tool");
+        }
+
         // 31.6 异常守卫: blocking_tool 异常守卫保护 —— 用户 execute 抛异常时
         //      适配层转 PLUGINXX_OPERATOR_FAILED, 异常不穿越 C ABI
         {
@@ -1579,16 +1608,48 @@ throw new Error("top-level rollback probe");
             auto tool = ctx->toolRegistry->find("boom_tool");
             XX_TEST_EXPECT_TRUE(tool != nullptr);
             if (tool) {
-                try {
-                    auto out = (co_await tool->execute_async(utilxx_base::Json{})).text;
-                    XX_TEST_EXPECT_TRUE(false);
-                } catch (const std::exception& e) {
-                    XX_TEST_EXPECT_TRUE(
-                        std::string(e.what()).find("shim boom") != std::string::npos
-                    );
-                }
+                // 插件工具抛异常 → 工具终态为失败, 正文是异常文本 (不再向调用方抛)
+                const auto result = co_await tool->execute_async(utilxx_base::Json{});
+                XX_TEST_EXPECT_TRUE(result.status == agentxx::util::ToolStatus::Failed);
+                XX_TEST_EXPECT_TRUE(result.text.find("shim boom") != std::string::npos);
             }
             ctx->pluginMount->unregisterTool(inst31.get(), "boom_tool");
+        }
+
+        // 31.6b 状态与文本分离: 工具返回 "看起来像错误" 的文本但状态是成功时,
+        //       终态仍为成功 (判断成败只看状态, 不看文本)
+        {
+            struct MsgCtx : public agentxx::plugin::PluginBase {};
+
+            static MsgCtx msgCtx;
+            msgCtx.init(inst31->hostView());
+            const auto msgRef = scopeRefOf(*ctx->pluginManager);
+            agentxx::plugin::blocking_tool(
+                msgCtx,
+                msgRef,
+                "error_looking_text_tool",
+                "returns text that looks like an error but reports success",
+                "{}",
+                [](MsgCtx&, std::string_view) -> std::string {
+                    return "[Error: this line only looks like a failure]";
+                }
+            );
+            auto tool = ctx->toolRegistry->find("error_looking_text_tool");
+            XX_TEST_EXPECT_TRUE(tool != nullptr);
+            if (tool) {
+                const auto result = co_await tool->execute_async(utilxx_base::Json{});
+                // 状态是成功: 文本原样透传 (不会被再包一层 `[Error: ...]`)
+                XX_TEST_EXPECT_TRUE(result.status == agentxx::util::ToolStatus::Ok);
+                XX_TEST_EXPECT_EQ(
+                    result.text,
+                    std::string{"[Error: this line only looks like a failure]"}
+                );
+                XX_TEST_EXPECT_EQ(
+                    agentxx::util::toolResultTextForModel(result),
+                    std::string{"[Error: this line only looks like a failure]"}
+                );
+            }
+            ctx->pluginMount->unregisterTool(inst31.get(), "error_looking_text_tool");
         }
 
         // 31.7 异常守卫: 事件 handler 违约抛异常 → 主程序在派发时统一保护,
@@ -2668,15 +2729,17 @@ throw new Error("top-level rollback probe");
                 XX_TEST_EXPECT_TRUE(r2.find("SECOND") != std::string::npos);
 
                 // 多段替换同样走同一实现 (edits 数组; 任一段不匹配时整次调用不写盘)
-                auto eMul = (co_await editTool->execute_async(utilxx_base::Json{
+                const auto eMul = co_await editTool->execute_async(utilxx_base::Json{
                     {"path",  file},
                     {"edits",
                      utilxx_base::Json::array(
                          {utilxx_base::Json{{"old_str", "SECOND"}, {"new_str", "second"}},
                           utilxx_base::Json{{"old_str", "not_in_file"}, {"new_str", "x"}}}
                      )            },
-                })).text;
-                XX_TEST_EXPECT_TRUE(eMul.find("[Error:") != std::string::npos);
+                });
+                // 失败由状态位表达; 正文是错误内容 (模型看到的 `[Error: ...]` 由执行层加)
+                XX_TEST_EXPECT_TRUE(eMul.status == agentxx::util::ToolStatus::Failed);
+                XX_TEST_EXPECT_TRUE(eMul.text.find("not_in_file") != std::string::npos);
                 auto r3 = (co_await readTool->execute_async(utilxx_base::Json{
                     {"path", file}
                 })).text;

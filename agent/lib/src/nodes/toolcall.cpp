@@ -139,36 +139,14 @@ asio::awaitable<void> publishToolEvent(
     co_return;
 }
 
-/// 把工具终态翻成给模型读的文本 (全项目唯一实现)
-///
-/// 只有 `Failed` 会改变文本, 其余状态一律原样透传:
-/// - `Ok`: 原样, 不做任何包裹
-/// - `Failed`: 单行 `[Error: <text>]`; 含换行时第一行单独 `[Error]`, 其后原样接 `<text>`;
-///   `text` 为空时只有 `[Error]`
-/// - `Canceled`: 文本原样; 未产出结果时补占位 `[Canceled]`
-/// - `Interrupted`: 文本原样; 占位 `[Interrupt]` (仅结构完整, 不参与判定)
+/// 把工具终态翻成给模型读的文本 (实现见 `agentxx/util/tool_result.h` 的
+/// [toolResultTextForModel]; 全项目就一份, 测试也用它断言文本)
 ///
 /// - `args`:
 ///     - [result] 执行层拿到的终态与正文
 /// - `return` 写进会话上下文的工具消息正文
 std::string formatToolResultText(const agentxx::util::ToolResult& result) {
-    switch (result.status) {
-        case agentxx::util::ToolStatus::Failed:
-            if (result.text.empty()) {
-                return "[Error]";
-            }
-            if (result.text.find('\n') == std::string::npos) {
-                return fmt::format("[Error: {}]", result.text);
-            }
-            return fmt::format("[Error]\n{}", result.text);
-        case agentxx::util::ToolStatus::Canceled:
-            return result.text.empty() ? std::string{"[Canceled]"} : result.text;
-        case agentxx::util::ToolStatus::Interrupted:
-            return result.text.empty() ? std::string{"[Interrupt]"} : result.text;
-        case agentxx::util::ToolStatus::Ok:
-        default:
-            return result.text;
-    }
+    return agentxx::util::toolResultTextForModel(result);
 }
 
 /// 消息级失败标记写入口: 只有非 `Ok` 才写 `extra["status"]`
