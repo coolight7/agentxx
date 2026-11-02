@@ -11,6 +11,8 @@
 /// - T3 未声明并行安全的工具形成屏障: 与前后调用互不重叠, 顺序严格
 /// - T4 并发上限 (AgentConfig::toolParallelMaxConcurrency) 生效
 /// - T5 取消: 已完成结果保留, 未完成补 [Canceled], 每条 tool_call 都有回复
+/// - T6 未执行即定案的失败 (工具不存在 / 参数 JSON 错) 正文带 `[Error: ...]`,
+///   成功的正文不加任何标记
 #include "agentxx-test/core/test_toolcall_parallel.h"
 
 #include "agentxx-test/core/test_agent.h"
@@ -238,6 +240,24 @@ void declareToolCalls(const std::vector<std::pair<std::string, std::string>>& id
         calls.push_back(makeToolCall(index++, id, name));
     }
     g_da_sim_tool_calls = std::move(calls);
+}
+
+/// 按 tool_call_id 取会话里最后一条 tool 结果消息 (取不到返回 nullptr)
+const neograph::ChatMessage* toolMessageOf(
+    const std::shared_ptr<agentxx::agent::Session>& session,
+    std::string_view                                toolCallId
+) {
+    if (!session) {
+        return nullptr;
+    }
+    const auto& messages = session->messages();
+    for (size_t i = messages.size(); i > 0; --i) {
+        const auto& msg = messages[i - 1];
+        if (msg.role == "tool" && msg.tool_call_id == toolCallId) {
+            return &msg;
+        }
+    }
+    return nullptr;
 }
 
 /// 等待会话上下文里出现 [count] 条 tool 结果 (取消路径由轮末收尾, 需轮询)
@@ -569,6 +589,80 @@ asio::awaitable<void> test_parallel_cancel_keeps_completed() {
     co_return;
 }
 
+// ===========================================================================
+// T6: 未执行即定案的失败 (工具不存在 / 参数 JSON 错) 正文带 `[Error: ...]`
+// - 回归背景: 短路径结果曾经直接拿裸错误内容当正文, 模型读不到 `[Error: ...]`
+//   标记 (与提示词的说明对不上); 状态位同时也丢失判定依据
+// - 同时校验: 成功结果的正文不加任何标记, 也不写 `extra.status` (缺省即 ok)
+asio::awaitable<void> test_short_circuit_failure_text() {
+    auto sim     = startDaSimServer();
+    auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
+
+    auto cfg                 = std::make_shared<agentxx::agent::AgentConfig>();
+    cfg->model.baseUrl       = baseUrl;
+    cfg->model.apiKey        = "EMPTY";
+    cfg->model.modelName     = "test-sim";
+    cfg->prompt.systemPrompt = "You are a helpful assistant.";
+
+    g_da_sim_response_content = "Done.";
+    g_da_sim_delay_ms         = 0;
+    // 三个调用: 工具不存在 / 参数不是合法 JSON / 正常执行
+    utilxx_base::Json calls = utilxx_base::Json::array();
+    calls.push_back(makeToolCall(0, "call_missing", "test_sc_missing"));
+    calls.push_back(utilxx_base::Json{
+        {"index", 1},
+        {"id", "call_badargs"},
+        {"type", "function"},
+        {"function",
+         utilxx_base::Json{{"name", "test_sc_ok"}, {"arguments", "{bad json"}}},
+    });
+    calls.push_back(makeToolCall(2, "call_okargs", "test_sc_ok"));
+    g_da_sim_tool_calls = std::move(calls);
+
+    auto trace = std::make_shared<std::vector<TraceEntry>>();
+    std::vector<std::unique_ptr<agentxx::tools::XXToolBase>> tools;
+    tools.push_back(std::make_unique<TraceTool>("test_sc_ok", trace, 0, /*parallelSafe=*/false));
+
+    ParallelTestAgent agent(cfg, std::move(tools));
+    co_await agent.init();
+
+    const auto turnResult = co_await agent.runTurnAsync("toolcall_sc_1", "Run tools", nullptr);
+    XX_TEST_EXPECT_FALSE(turnResult.hasError);
+
+    auto session = agent.agentContext->sessions->get("toolcall_sc_1");
+
+    // 1) 工具不存在: 正文是执行层排版的 `[Error: ...]`, 状态 failed
+    const auto* missing = toolMessageOf(session, "call_missing");
+    XX_TEST_EXPECT_TRUE(missing != nullptr);
+    if (missing) {
+        XX_TEST_EXPECT_EQ(
+            missing->content,
+            std::string{"[Error: tool not found: test_sc_missing]"}
+        );
+        XX_TEST_EXPECT_EQ(missing->extra.value("status", std::string{}), std::string{"failed"});
+    }
+
+    // 2) 参数 JSON 错: 同样带 `[Error: ` 前缀 (具体原因由 JSON 解析器给出) 且状态 failed
+    const auto* badArgs = toolMessageOf(session, "call_badargs");
+    XX_TEST_EXPECT_TRUE(badArgs != nullptr);
+    if (badArgs) {
+        XX_TEST_EXPECT_TRUE(std::string_view{badArgs->content}.starts_with("[Error: "));
+        XX_TEST_EXPECT_EQ(badArgs->extra.value("status", std::string{}), std::string{"failed"});
+    }
+
+    // 3) 正常执行: 正文原样 (不加标记), 也不写 extra.status
+    const auto* okArgs = toolMessageOf(session, "call_okargs");
+    XX_TEST_EXPECT_TRUE(okArgs != nullptr);
+    if (okArgs) {
+        XX_TEST_EXPECT_EQ(okArgs->content, std::string{"test_sc_ok done"});
+        XX_TEST_EXPECT_FALSE(okArgs->extra.contains("status"));
+    }
+
+    g_da_sim_tool_calls = utilxx_base::Json::array();
+    sim.stop();
+    co_return;
+}
+
 asio::awaitable<TestResult> run_toolcall_parallel_tests() {
     g_tp_passed = 0;
     g_tp_failed = 0;
@@ -578,6 +672,7 @@ asio::awaitable<TestResult> run_toolcall_parallel_tests() {
         co_await test_exclusive_tool_is_barrier();
         co_await test_parallel_concurrency_limit();
         co_await test_parallel_cancel_keeps_completed();
+        co_await test_short_circuit_failure_text();
     } catch (const std::exception& e) {
         TEST_FAIL << "toolcall_parallel suite exception: " << e.what() << std::endl;
         g_tp_failed++;

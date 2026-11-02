@@ -384,6 +384,30 @@ asio::awaitable<void> test_list_file_limit(std::weak_ptr<agentxx::agent::AgentCo
     co_return;
 }
 
+/// 取消: 列表工具给出 canceled 终态, 正文只写原因
+/// - 回归背景: 取消/超时曾作为 `[Error: ...]` 行拼进条目列表, 整次调用仍报"成功"
+asio::awaitable<void>
+    test_list_canceled_status(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
+    auto args = utilxx_base::Json{
+        {"path", testDir}
+    };
+    auto result = ::agentxx_fs_plugin::fileListExecute(
+        args,
+        agentxx::tools::testResolvedWorkDir(agentContext),
+        /*isCanceled=*/[]() -> bool { return true; }
+    );
+    if (result.status == agentxx::util::ToolStatus::Canceled
+        && result.text.starts_with("Canceled while listing")
+        && result.text.find("[Error") == std::string::npos) {
+        g_fs_passed++;
+        TEST_PASS << "FileSystemListTool reports canceled status" << std::endl;
+    } else {
+        g_fs_failed++;
+        TEST_FAIL << "FileSystemListTool canceled status wrong, text: " << result.text << std::endl;
+    }
+    co_return;
+}
+
 asio::awaitable<void>
     test_list_file_info_fields(std::weak_ptr<agentxx::agent::AgentContext> agentContext) {
     auto tool = agentxx::tools::FileSystemListTool{agentContext};
@@ -4574,6 +4598,7 @@ asio::awaitable<TestResult>
     co_await run(test_list_file_basic);
     co_await run(test_list_file_recursive);
     co_await run(test_list_file_limit);
+    co_await run(test_list_canceled_status);
     co_await run(test_list_file_info_fields);
     co_await run(test_list_file_relative_path);
     co_await run(test_resolved_workdir);

@@ -925,9 +925,16 @@ inline asio::awaitable<ToolResult> runProcPipeline(
             )
         );
     }
-    co_return timedOut.load(std::memory_order_acquire)
-                  ? ToolResult::fail(std::move(resultStr))
-                  : ToolResult::ok(std::move(resultStr));
+    // 终态: 超时为失败; 运行中被取消为 canceled (输出内容照样回给模型);
+    // 其余 (含非零退出码) 是成功正文 —— 命令本身的成败由模型读块内内容判断
+    if (timedOut.load(std::memory_order_acquire)) {
+        co_return ToolResult::fail(std::move(resultStr));
+    }
+    if ((cancelRegistry && !sessionKey.empty() && cancelRegistry->isCanceled(sessionKey))
+        || (isCanceled && isCanceled())) {
+        co_return ToolResult::canceled(std::move(resultStr));
+    }
+    co_return ToolResult::ok(std::move(resultStr));
 }
 
 #endif // BOOST_PROCESS_V2_PROCESS_HPP
@@ -969,13 +976,8 @@ inline asio::awaitable<ToolResult> bashExecuteAsync(
     if ((cancelRegistry && !effectiveSessionKey.empty()
          && cancelRegistry->isCanceled(effectiveSessionKey))
         || (isCanceled && isCanceled())) {
-        // 取消: 终态为 canceled (内容只写原因, 占位文本由执行层处理)\n        co_return ToolResult::canceled("Command canceled before execution.");
-    }
-
-    if ((cancelRegistry && !effectiveSessionKey.empty()
-         && cancelRegistry->isCanceled(effectiveSessionKey))
-        || (isCanceled && isCanceled())) {
-        // 取消: 终态为 canceled (内容只写原因, 占位文本由执行层处理)\n        co_return ToolResult::canceled("Command canceled before execution.");
+        // 已取消: 不启动子进程, 直接给取消终态 (内容只写原因, 占位文本由执行层处理)
+        co_return ToolResult::canceled("Command canceled before execution.");
     }
 
     // 受控轮询: 管道/进程绑定到当前协程的 executor (插件实例本地 reactor),

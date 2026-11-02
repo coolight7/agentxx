@@ -68,7 +68,7 @@
 |---|---|---|---|
 | TOOL-1 | 分阶段并行 prepare / dispatch / finalize | 已实施 | `nodes/toolcall.cpp`（prepare/run/finalize 三段）；模块 `toolcall_parallel` |
 | TOOL-2 | 并发分类与上限 | 已实施 | `tools/tool.h`（`supportsParallel`）+ `AgentConfig::toolParallelMaxConcurrency`；插件 flags `AGENTXX_PLUGIN_TOOL_FLAG_PARALLEL_SAFE` |
-| TOOL-3 | 并行取消与收尾 | 已实施 | `nodes/toolcall.cpp`（按声明顺序写回、已完成结果保留、未完成补 `[User canceled]`）；模块 `toolcall_parallel` |
+| TOOL-3 | 并行取消与收尾 | 已实施 | `nodes/toolcall.cpp`（按声明顺序写回、已完成结果保留、未完成补 `[Canceled]`）；模块 `toolcall_parallel` |
 | TOOL-16 | 按规范化文件路径排队执行 | 已实施 | `plugins/agentxx_filesystem/filesystem_impl.h`（`PathLockTable` / `lockPathBlocking` / `lockPathAsync`，写与读-改-写共用同一门闩）；模块 `filesystem` |
 | TOOL-17 | 执行环境加固（`NO_COLOR` / `TERM` / `PAGER` / locale / `PWD` / 输出编码 UTF-8：`PYTHONIOENCODING` / `PYTHONUTF8` / `JAVA_TOOL_OPTIONS`（含 `file.encoding`）；系统代码页变量 `AGENTXX_EXEC_*_CODEPAGE`；原生工具的混合编码输出**不改写**，由提示词引导模型自行切控制台解码或落文件后显式读回） | 已实施 | `plugins/agentxx_execute_command/execute_command_impl.h`（`kEnvPresets` + `resolveEnvPresets`）与 `execute_command_env.h`（`systemCodePages` / `consoleEncodingSection`）；模块 `command` |
 | TOOL-12 | 工具可用性诊断（并入 ARC-6 快照） | 已实施（限定范围） | `AgentContext::ToolAssemblyRecord` + `assembly_snapshot.cpp`（来源 / 开关 / 被白名单过滤原因）；模块 `assembly_snapshot_io` |

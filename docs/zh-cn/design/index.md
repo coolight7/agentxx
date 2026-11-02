@@ -126,7 +126,7 @@ git_worktree 及延迟加载加载 (`ToolSkillSearchSubAgentTask` 模板类, 当
   未声明的工具保持独占并形成顺序屏障 (写文件、命令执行、交互询问仍严格按声明顺序)；
   并发上限 `AgentConfig::toolParallelMaxConcurrency` (默认 4，夹到 [1, 32])；
   结果始终按原始 `tool_call_id` 顺序写回，完成顺序不影响提交顺序；取消时已完成结果保留、
-  未完成的补 `[User canceled]` 占位
+  未完成的补 `[Canceled]` 占位
 - **去重机制**: 文件读写等工具支持 SummarizationToolHandle，重复调用时截断旧结果
 - **上下文修复优化**: `ModelCallWrapNode::repairMessages` 在调用 LLM 前自动检查和修复上下文结构（合并连续同角色消息、规范化 tool_call 与 tool_result 配对），采用按需验证与最小拷贝优化，显著降低深轮次对话的开销
 - **事件驱动取消**: 命令执行等重型工具接入插件开发框架通用设施 `CancelRegistry`，支持跨线程排他防悬挂锁与即时回调通知，在 Windows 与 Linux/POSIX 下毫秒级即时终止子进程组与管道，而非单纯依赖休眠轮询

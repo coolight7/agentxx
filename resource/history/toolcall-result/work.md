@@ -313,3 +313,83 @@
   `throw_if_canceled()`、`ctl.cancelled()` -> `ctl.canceled()`、subagent.done 载荷键按代码写成
   `Canceled`; 指 neograph 的地方统一写成 `neograph::graph::CancelledException`
   (它的拼写按约定保留), 涉及 `index.md` / `develop.md` 的中英四份文档
+
+## 复查修复 (实施后代码审查发现的问题)
+
+对 P0~P6 的成品逐层核对后修掉 5 组问题 (都在原计划的验收标准范围内, 属实现没跟上设计)。
+
+### R1 短路径结果漏掉执行层排版 (模型可见的回归)
+
+现象: `tool not found: X` / `permission denied: R` / `repeated identical call denied ...` /
+参数 JSON 解析异常 / prepare 阶段异常, 模型读到的是**裸错误内容**, 没有 `[Error: ...]`。
+原因: `prepareToolCall` 产出的是纯内容 (`ToolResult::fail(...)`), 而写消息处按"缓存命中的
+正文已经排版过"的假设原样照抄 (`toolcall.cpp` 的 shortCircuit 分支)。中断缓存命中那条确实
+已排版, 新建的失败结果没有 —— 两者走了同一行。原计划 §2.3/§2.6 与 `prompt.cpp` 都写着这些
+情况带 `[Error: ...]`, 测试一个都没覆盖 (全测试目录搜 `permission denied` / `tool not found`
+无断言)。
+
+修法 (`nodes/toolcall.cpp`):
+- 新增 `formattedShortCircuit(ToolResult)`: 产生短路径结果时就套 `toolResultTextForModel`,
+  维持 "shortCircuit.text 已排版" 的不变量 (头文件注释同步说明)
+- 6 处产生点全部经它: 工具不存在 / 参数 JSON 错 / `prepareToolInvocation` 返回 (权限拒绝与
+  重复调用被拒) / 权限复验拒绝 / prepare 异常 (两处) / 中断占位
+- `execTool()` (目前无调用者) 同一分支一并收口
+- `insertAbortedToolResults` (中间件阶段异常中止整批) 改为经 `formatToolResultText` 生成正文,
+  不再手写 `[Error: ...]`
+
+### R2 `[Interrupt]` 占位文本变空
+
+重复调用确认触发的中断占位用 `ToolResult::interrupted()` (文本为空), 加上 R1 的"原样照抄",
+`interruptToolcallCache` 里的 `content` 变成空串 (旧值是 `"[Interrupt]"`, 计划 D6 要求保留)。
+修法: 占位产生时经 `formattedShortCircuit`, 空文本被补成 `[Interrupt]`。
+
+### R3 `agentxx_execute_command` 的"执行前取消检查"成了死代码
+
+`execute_command_impl.h` 里两个重复的 `if (已取消) { ... }` 块, 块内是
+`// 说明\n        co_return ToolResult::canceled(...)` —— 一个**字面 `\n`** 把 `co_return`
+注释掉了 (编辑事故), 于是已取消的调用照样起子进程, 再由 watcher 杀掉, 返回 `[ExitCode] ...`
+且状态是成功。修法: 合成一个块并把 `co_return` 恢复; 顺带让 `runProcPipeline` 的终态符合
+计划 D5 (超时 -> `failed`, 运行中被取消 -> `canceled`, 其余含非零退出码仍是 `ok`)。
+
+### R4 审计漏掉的 "整次失败但报成功"
+
+- `agentxx_filesystem` 的 list: 取消/超时原先作为 `[Error: Canceled]` / `[Error: timed out ...]`
+  **行**拼进条目列表, 整次调用仍 `ok`。改为记录终止原因 (`StopReason`), 由 `finishResult()`
+  给终态: 取消 -> `canceled` (正文首行说明"列表不完整"), 超时 -> `failed` (首行写原因与
+  建议), 正常结束 -> `ok` (与原来一致; 空目录仍补 `[Empty]`), 不再往结果里塞 `[Error: ...]`。
+- `agentxx_math`: `MathEvalException::what()` 自带 `[Error] ` 前缀, 执行处再 `starts_with` 剥掉。
+  改为异常文本只写错误内容 (不再自己贴标记), 剥离逻辑删除。
+
+### R5 收尾遗漏
+
+- TUI 折叠头预览: 中断 (`interrupted`) 之前只有展开体是警告色, 折叠头仍是普通色;
+  与 `tui.md` 的说法对齐 (失败红 / 中断黄 / 取消与成功普通色)
+- `markToolStatus` 注释写"只有非 Ok 才写", 实现却每条都写 (成功消息也多带一个
+  `status: "ok"`); 改为非 Ok 才写 (缺字段 = ok, 读侧本来就是这么判的)
+- 文档/注释残留 `[User canceled]` (工具占位语义): `index.md`、`roadmap.md`、`agent_tui.cpp`
+- `prompt.cpp` 的 `[Canceled]` 说明改成"本轮被停掉 (用户取消/客户端断开), 结果未知",
+  不再与 `[Interrupt]` 混用 "interruption" 一词
+
+### 新增/调整用例
+
+| 模块 | 用例 | 断言 |
+|---|---|---|
+| `toolcall_parallel` | T6 `test_short_circuit_failure_text` | 工具不存在 -> `[Error: tool not found: ...]` + `extra.status=failed`; 参数 JSON 错 -> 以 `[Error: ` 开头 + `failed`; 正常执行 -> 正文不加标记且不写 `extra.status` |
+| `command` | `test_command_cancel_registry_preCanceled` (改) | 预取消不再起子进程: 状态 `Canceled`、正文 `Command canceled before execution.`、< 2s、注册表无残留 |
+| `filesystem` | `test_list_canceled_status` | 列表取消: 状态 `Canceled`、正文以 `Canceled while listing` 开头且不含 `[Error` |
+
+### 回归 (Windows debug, ASan)
+
+| 模块 | 结果 |
+|---|---|
+| `toolcall_parallel` | 58 / 0 (原 48, 新增 T6) |
+| `command` | 60 / 0 |
+| `filesystem` | 221 / 0 (原 220) |
+| `math_tools` | 82 / 0 |
+| `cancel` / `race_guards` / `message_supplement` | 45 / 68 / 95, 0 失败 |
+| `plugins` / `client_plugins` | 609 / 746, 0 失败 |
+| `wire_roundtrip` / `wire_schema` / `summarization` | 249 / 1325 / 454, 0 失败 |
+| `event_tools` / `event_hub` / `permission` / `subagent_tool` / `toolcall_args` | 全 0 失败 |
+| `tui_tool_header` / `tui_stream` / `tui_ui_items` / `tui_form` / `tui_widget` / `interrupt_ui` | 全 0 失败 |
+| `remote_agent` / `agent` / `jsonl_mode` / `assembly_snapshot_io` / `config_keys` | 全 0 失败 |
+| `boundaries` | 18 / 1 (仍是子模块 `cxx_pluginxx_ui` 的规则 15, 与本任务无关) |

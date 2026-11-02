@@ -2835,8 +2835,8 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
                 // - 其次已结束但还没有结果的那条: 用户中断时 client 侧先把运行中的
                 //   工具消息标为已结束 (见 cancelCurrentRunLocked), agent 端随后才
                 //   补 "[Canceled]" 结果; 只认"还在运行"会找不到目标, 于是新增
-                //   一条同工具消息 —— 界面上同一个工具出现两条 (原消息 + [User
-                //   canceled]) 而不是覆盖原消息
+                //   一条同工具消息 —— 界面上同一个工具出现两条 (原消息 + [Canceled])
+                //   而不是覆盖原消息
                 constexpr size_t kNoTarget = static_cast<size_t>(-1);
                 auto             findTarget = [&](bool onlyRunning) -> size_t {
                     for (size_t i = st.messages.size(); i > 0; --i) {

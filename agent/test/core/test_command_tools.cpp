@@ -1223,8 +1223,10 @@ asio::awaitable<void>
     co_return;
 }
 
-/// 预取消会话测试: 命令启动前 sessionKey 已在注册表中标记为取消,
-/// runProcPipeline 应在启动前/极早立即退出并组装退出状态
+/// 预取消会话测试: 命令启动前 sessionKey 已在注册表中标记为取消
+/// - 预期: **不启动子进程**, 直接给出取消终态 (状态位 = Canceled, 正文只写原因)
+/// - 回归背景: 这段前置检查曾经被行内字面 `\n` 注成注释 (死代码), 已取消的调用
+///   仍会起子进程再由 watcher 杀掉, 返回 `[ExitCode] ...` 且状态是成功
 asio::awaitable<void> test_command_cancel_registry_preCanceled(
     std::weak_ptr<agentxx::agent::AgentContext> agentContext
 ) {
@@ -1235,8 +1237,9 @@ asio::awaitable<void> test_command_cancel_registry_preCanceled(
         {"command", "sleep 30"},
         {"timeout", 60        },
     };
-    auto start  = std::chrono::steady_clock::now();
-    auto result = co_await agentxx_execmd_test::bashExecuteAsync(
+    auto start = std::chrono::steady_clock::now();
+#if defined(BOOST_PROCESS_V2_PROCESS_HPP)
+    auto result = co_await agentxx_execmd_plugin::bashExecuteAsync(
         args,
         agentxx::tools::testResolvedWorkDir(agentContext),
         /*isCanceled=*/nullptr,
@@ -1244,14 +1247,25 @@ asio::awaitable<void> test_command_cancel_registry_preCanceled(
         &reg,
         "preCanceled_sess"
     );
+#else
+    auto result = agentxx_execmd_plugin::bashExecute(
+        args,
+        agentxx::tools::testResolvedWorkDir(agentContext),
+        /*isCanceled=*/nullptr,
+        /*storeFn=*/nullptr,
+        &reg,
+        "preCanceled_sess"
+    );
+#endif
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                        std::chrono::steady_clock::now() - start
     )
                        .count();
 
-    // 预取消应在极短时间内完成 (远小于 30s)
+    // 预取消: 立即返回取消终态, 不跑命令 (远小于 sleep 30 的时长)
+    XX_TEST_EXPECT_TRUE(result.status == agentxx::util::ToolStatus::Canceled);
+    XX_TEST_EXPECT_EQ(result.text, std::string{"Command canceled before execution."});
     XX_TEST_EXPECT_TRUE(elapsed < 2000);
-    XX_TEST_EXPECT_TRUE(result.find("ExitCode") != std::string::npos);
     XX_TEST_EXPECT_EQ(reg.activeCount(), size_t(0));
     TEST_INFO << "preCanceled command returned in " << elapsed << "ms" << std::endl;
     co_return;

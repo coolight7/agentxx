@@ -2034,17 +2034,23 @@ Element MessageListComponent::buildMessageBlock(
                 }
 
                 if (!resOrArgsSummary.empty()) {
-                    if (isError) {
-                        header.push_back(
-                            text(std::move(resOrArgsSummary)) | color(theme.errorColor)
-                            | theme.dim() | xflex_shrink
-                        );
-                    } else {
-                        header.push_back(
-                            text(std::move(resOrArgsSummary)) | color(theme.toolColor) | theme.dim()
-                            | xflex_shrink
-                        );
-                    }
+                    // 折叠头预览按终态配色: Failed = 错误色, Interrupted = 警告色,
+                    // Ok/Canceled = 普通色 (与展开体同一分类, 见 toolVisualOf)
+                    const auto previewColor = [&]() {
+                        switch (visual) {
+                            case ToolVisual::Error:
+                                return theme.errorColor;
+                            case ToolVisual::Warning:
+                                return theme.thinkingColor;
+                            case ToolVisual::Normal:
+                            default:
+                                return theme.toolColor;
+                        }
+                    }();
+                    header.push_back(
+                        text(std::move(resOrArgsSummary)) | color(previewColor) | theme.dim()
+                        | xflex_shrink
+                    );
                 }
             } else {
                 // 展开头: 动态装饰显示名优先, 否则回退原始 toolName

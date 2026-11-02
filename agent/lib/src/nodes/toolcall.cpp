@@ -149,9 +149,28 @@ std::string formatToolResultText(const agentxx::util::ToolResult& result) {
     return agentxx::util::toolResultTextForModel(result);
 }
 
-/// 消息级失败标记写入口: 只有非 `Ok` 才写 `extra["status"]`
-/// - 界面 / CLI / 插件只看该字段, 不看文本
+/// 短路径定案 (未执行就出结果) 的正文排版
+/// - 短路径包括: 中断缓存命中 / 工具不存在 / 权限拒绝 / 重复调用被拒 / 参数 JSON
+///   解析失败 / 准备阶段异常 / 中断占位
+/// - `PreparedToolCall::shortCircuit` 的正文约定是"已排版文本" (缓存命中项存的就是
+///   上一轮的结果正文), 因此排版必须在**产生**短路径结果时完成: 漏掉这一步, 模型
+///   会读到不带 `[Error: ...]` 的裸错误内容, 与提示词的说明对不上
+///
+/// - `args`:
+///     - [result] 未排版的结果 (正文是错误内容或占位文本)
+/// - `return` 正文已按状态排版的结果
+agentxx::util::ToolResult formattedShortCircuit(agentxx::util::ToolResult result) {
+    result.text = formatToolResultText(result);
+    return result;
+}
+
+/// 消息级终态标记写入口: 只有非 `Ok` 才写 `extra["status"]`
+/// - 界面 / CLI / 插件只看该字段, 不看文本; 缺字段 = `Ok`
+/// - `Ok` 不写是为了不给每条成功的工具消息多塞一份状态 (会话里每条消息都会进上下文)
 void markToolStatus(neograph::ChatMessage& msg, agentxx::util::ToolStatus status) {
+    if (status == agentxx::util::ToolStatus::Ok) {
+        return;
+    }
     msg.extra["status"] = std::string{agentxx::util::toolStatusName(status)};
 }
 
@@ -763,13 +782,14 @@ void insertAbortedToolResults(
         auto       aborted   = std::vector<neograph::ChatMessage>{};
         aborted.reserve(toolCalls.size());
         for (const auto& tool : toolCalls) {
+            // 正文与终态走同一套排版 (与执行路径同一实现), 不手写 `[Error: ...]`
             auto msg = neograph::ChatMessage{
-                .role    = "tool",
-                .content = fmt::format(
-                    "[Error: {} (tool call aborted at {} phase)]",
+                .role = "tool",
+                .content = formatToolResultText(agentxx::util::ToolResult::fail(fmt::format(
+                    "{} (tool call aborted at {} phase)",
                     exceptionStr,
                     phasePrefix
-                ),
+                ))),
                 .tool_call_id = tool.id,
                 .tool_name    = tool.name,
                 .flags        = neograph::MessageFlag::AutoInserted,
@@ -1019,8 +1039,9 @@ asio::awaitable<bool> ToolcallWrapNode::prepareToolCall(
                               ? agentCtxPtr->toolRegistry->find(tc.name)
                               : nullptr;
         if (!pluginTool) {
-            out.shortCircuit =
-                agentxx::util::ToolResult::fail(fmt::format("tool not found: {}", tc.name));
+            out.shortCircuit = formattedShortCircuit(
+                agentxx::util::ToolResult::fail(fmt::format("tool not found: {}", tc.name))
+            );
             co_return false;
         }
         out.tool      = pluginTool.get();
@@ -1033,7 +1054,7 @@ asio::awaitable<bool> ToolcallWrapNode::prepareToolCall(
     try {
         args = utilxx_base::Json::parse(tc.arguments);
     } catch (const std::exception& e) {
-        out.shortCircuit = agentxx::util::ToolResult::fail(e.what());
+        out.shortCircuit = formattedShortCircuit(agentxx::util::ToolResult::fail(e.what()));
         co_return false;
     }
     if (args.is_object()) {
@@ -1053,7 +1074,7 @@ asio::awaitable<bool> ToolcallWrapNode::prepareToolCall(
         out.repeatKey
     );
     if (shortCircuit.has_value()) {
-        out.shortCircuit = std::move(shortCircuit);
+        out.shortCircuit = formattedShortCircuit(std::move(*shortCircuit));
         co_return false;
     }
 
@@ -1079,9 +1100,9 @@ asio::awaitable<bool> ToolcallWrapNode::prepareToolCall(
                 tc.id,
                 resp->reason
             );
-            out.shortCircuit = agentxx::util::ToolResult::fail(
+            out.shortCircuit = formattedShortCircuit(agentxx::util::ToolResult::fail(
                 fmt::format("permission denied: {}", resp->reason)
-            );
+            ));
             co_return false;
         }
     }
@@ -1210,7 +1231,8 @@ asio::awaitable<std::optional<neograph::ChatMessage>> ToolcallWrapNode::runPrepa
 
     if (prepared.shortCircuit.has_value()) {
         // 无需执行: 中断缓存命中 / 工具不存在 / 权限拒绝 / 重复调用被拒 / 中断占位
-        // - 正文已经格式化完成 (缓存里存的就是结果文本), 状态照搬
+        // - `shortCircuit.text` 在产生处已按状态排版 (见 formattedShortCircuit),
+        //   缓存命中项存的本来就是上一轮的结果正文, 这里原样写入, 不再二次包裹
         const auto& cached = *prepared.shortCircuit;
         tool_msg.content   = cached.text;
         if (prepared.interrupted) {
@@ -1550,7 +1572,7 @@ asio::awaitable<agentxx::util::ToolResult> ToolcallWrapNode::execTool(
     if (shortCircuit.has_value()) {
         // 参数被修正过也要写回 (调用方可能继续使用 args)
         args = prepared.args;
-        co_return std::move(*shortCircuit);
+        co_return formattedShortCircuit(std::move(*shortCircuit));
     }
     auto raw = co_await runToolCallBody(prepared);
     args     = prepared.args;
@@ -1716,14 +1738,16 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
                     if (in.ctx.cancel_token && in.ctx.cancel_token->is_cancelled()) {
                         prepError = std::current_exception();
                     } else {
-                        prepared.shortCircuit = agentxx::util::ToolResult::fail(e.what());
+                        prepared.shortCircuit
+                            = formattedShortCircuit(agentxx::util::ToolResult::fail(e.what()));
                     }
                 }
                 co_return false;
             },
             [&](std::string errinfo) -> asio::awaitable<bool> {
                 // 参数解析/权限服务等普通异常: 作为本次调用的结果, 不影响同批其他调用
-                prepared.shortCircuit = agentxx::util::ToolResult::fail(errinfo);
+                prepared.shortCircuit
+                    = formattedShortCircuit(agentxx::util::ToolResult::fail(errinfo));
                 co_return true;
             },
             // 控制流异常保护 (取消/中断): 记为取消, 由调用方按取消路径收尾
@@ -1741,7 +1765,11 @@ asio::awaitable<void> ToolcallWrapNode::baseRun(
         }
         if (prepInterrupted) {
             prepared.interrupted  = true;
-            prepared.shortCircuit = agentxx::util::ToolResult::interrupted();
+            // 中断占位也要排版: 空文本会被补成 `[Interrupt]`, 让中断缓存里的这条
+            // 消息结构完整 (内容非空) 且一眼能看出是哪一条
+            prepared.shortCircuit = formattedShortCircuit(
+                agentxx::util::ToolResult::interrupted()
+            );
             isInterrupt           = true;
         }
         preparedCalls.push_back(std::move(prepared));

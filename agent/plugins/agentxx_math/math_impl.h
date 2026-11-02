@@ -37,13 +37,13 @@ enum class AngleUnit {
 };
 
 /// 表达式计算异常类
+/// - `what()` 只写错误内容 (不带 `[Error] ` 之类标记): 标记由执行层按状态统一加
 class MathEvalException : public std::runtime_error {
 public:
 
     explicit MathEvalException(const std::string& msg, size_t pos = 0) :
         std::runtime_error(
-            pos > 0 ? fmt::format("[Error] {} (at position {})", msg, pos)
-                    : fmt::format("[Error] {}", msg)
+            pos > 0 ? fmt::format("{} (at position {})", msg, pos) : msg
         ),
         pos_(pos) {}
 
@@ -1488,14 +1488,8 @@ inline ToolResult mathCalculateExecute(const utilxx_base::Json& arguments) {
         double result = evaluateExpression(expr, angle_unit);
         return ToolResult::ok(detail::formatResult(result, precision));
     } catch (const MathEvalException& e) {
-        // 异常文本已自带 `[Error] ` 前缀 (见 MathEvalException): 这里取纯内容,
-        // 格式统一由执行层做
-        std::string text = e.what();
-        constexpr std::string_view kPrefix{"[Error] "};
-        if (text.starts_with(kPrefix)) {
-            text.erase(0, kPrefix.size());
-        }
-        return ToolResult::fail(std::move(text));
+        // 异常文本就是错误内容 (不带标记): 返回失败状态, 格式由执行层统一处理
+        return ToolResult::fail(e.what());
     } catch (const std::exception& e) {
         return ToolResult::fail(e.what());
     } catch (...) {

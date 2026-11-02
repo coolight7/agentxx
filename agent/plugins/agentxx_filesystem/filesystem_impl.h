@@ -570,17 +570,27 @@ inline ToolResult fileListExecuteImpl(
         );
     };
 
+    /// 提前终止原因 (取消 / 超时), 影响整次调用的终态
+    enum class StopReason {
+        None,
+        Canceled,
+        TimedOut,
+    };
+    StopReason stopReason = StopReason::None;
+
+    /// 检查是否应提前终止 (返回 true 表示停止遍历)
+    /// - 只记录终止原因, **不往结果里写 `[Error: ...]` 行**: 整次调用的终态由
+    ///   返回值的状态位表达 (取消 -> canceled, 超时 -> failed), 正文只写事实说明
     auto checkStop = [&]() -> bool {
-        // 返回 true 表示应提前终止 (取消或超时)
+        if (stopReason != StopReason::None) {
+            return true;
+        }
         if (isCanceled && isCanceled()) {
-            lines.push_back("[Error: Canceled]");
+            stopReason = StopReason::Canceled;
             return true;
         }
         if (deadline.expired()) {
-            lines.push_back(fmt::format(
-                R"([Error: timed out after {} seconds. Try narrowing the path or setting a limit.])",
-                timeout
-            ));
+            stopReason = StopReason::TimedOut;
             return true;
         }
         return false;
@@ -589,6 +599,38 @@ inline ToolResult fileListExecuteImpl(
     /// 是否已达到输出条目上限 (limit <= 0 表示不限)
     auto limitReached = [&]() -> bool {
         return limit > 0 && static_cast<int64_t>(lines.size()) >= limit;
+    };
+
+    /// 组装最终结果: 提前终止时首行说明原因与"列表不完整", 终态分别是
+    /// canceled / failed; 正常结束时正文就是条目列表
+    auto finishResult = [&]() -> ToolResult {
+        const std::string body = detail::joinLines(lines);
+        // 已完成收集的内容描述: 一条都没收集到时不要说"下面的条目不完整"
+        const auto situation
+            = body.empty() ? "no entries were collected" : "the entries below are incomplete";
+        auto compose = [&body](std::string head) {
+            if (body.empty()) {
+                return head;
+            }
+            head += "\n";
+            head += body;
+            return head;
+        };
+        switch (stopReason) {
+            case StopReason::Canceled:
+                return ToolResult::canceled(
+                    compose(fmt::format("Canceled while listing: {}.", situation))
+                );
+            case StopReason::TimedOut:
+                return ToolResult::fail(compose(fmt::format(
+                    "timed out after {} seconds: {}. Narrow `path` or set a smaller `limit`.",
+                    timeout,
+                    situation
+                )));
+            case StopReason::None:
+            default:
+                return detail::okText(std::move(body));
+        }
     };
 
     // 通配模式下 recursive 的目录逐层展开结果可能与 `**` 匹配结果重叠 (如 `src/**` 已含
@@ -747,7 +789,7 @@ inline ToolResult fileListExecuteImpl(
                 }
             }
             flushPending();
-            return detail::okText(detail::joinLines(lines));
+            return finishResult();
         }
 
         // 通配符无匹配: 字面路径确实存在时 (文件名本身含 `*`/`[` 等) 按普通路径处理,
@@ -775,15 +817,15 @@ inline ToolResult fileListExecuteImpl(
     flushPending();
 
     // 未触发提前终止且无条目: 空目录提示行, 让 LLM 能区分 "空目录" 与失败
-    if (lines.empty()) {
+    if (stopReason == StopReason::None && lines.empty()) {
         lines.push_back("[Empty]");
     }
     if (excludedTotal > 0) {
         XX_LOGD("filesystem_list: {} entries excluded by permission rules", excludedTotal);
     }
 
-    // 拼接为多行文本 (与命令行 ls 一致)
-    return detail::okText(detail::joinLines(lines));
+    // 拼接为多行文本 (与命令行 ls 一致); 取消/超时时终态相应变化
+    return finishResult();
 }
 
 // =====================================================================

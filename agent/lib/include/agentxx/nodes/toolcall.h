@@ -71,7 +71,9 @@ public:
         std::string repeatKey{};
         bool        repeatHit = false;
         /// 无需执行执行体时的最终结果 (命中中断缓存 / 工具不存在 / 权限拒绝 /
-        /// 重复调用被用户拒绝); 有值即直接作为结果 (状态由它自己的 status 表达)
+        /// 重复调用被用户拒绝 / 中断占位); 有值即直接作为结果 (状态由它自己的 status 表达)
+        /// - `text` 是**已排版**的正文 (产生处经 formattedShortCircuit 处理过:
+        ///   失败带 `[Error: ...]`, 中断/取消的空文本补占位), 写消息时不再二次包裹
         std::optional<agentxx::util::ToolResult> shortCircuit{};
         /// 开始时间 (毫秒时间戳; 结果消息的 startTimeMs)
         int64_t startMs = 0;
