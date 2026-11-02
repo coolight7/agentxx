@@ -219,7 +219,10 @@ struct ToolExecReq {
     bool failed = false;
     /// 引擎停止/取消: 工具调用映射为 Canceled
     bool Canceled = false;
-    bool done      = false;
+    /// 插件工具返回 `{status, text}` 时的终态 (默认 OK)
+    /// - `ok` / `failed` / `interrupted` / `canceled`, 未知取值按 `ok`
+    int32_t     status = PLUGINXX_OPERATOR_OK;
+    bool done          = false;
 };
 
 /// 工具绑定 (注册工具时创建, 由 JsPluginCtx 持有; execute 回调期间存活
@@ -1116,7 +1119,7 @@ private:
         JS_FreeValue(pctx->ctx, ret);
         switch (outcome.kind) {
             case PromiseOutcome::Kind::Value:
-                req.result = valueToJsonString(pctx->ctx, outcome.value);
+                applyValueOutcome(pctx->ctx, outcome.value, req);
                 break;
             case PromiseOutcome::Kind::Rejected:
                 req.error  = rejectedText(pctx->ctx, outcome);
@@ -1421,6 +1424,47 @@ private:
         return out;
     }
 
+    /// 工具 execute 的正常返回 -> 结果正文与终态
+    ///
+    /// 两种写法都支持:
+    /// - 普通值 / 字符串: 状态 `ok`, 正文按 [valueToJsonString] 转换 (与旧行为一致);
+    /// - 对象且带 `status` 字符串字段: 按工具结果处理 —— `text` 字段作正文
+    ///   (缺省用整份 JSON), `status` 取 `ok`/`failed`/`interrupted`/`canceled`
+    ///   (未知取值按 `ok`; 插件面没有中断态, `interrupted` 记失败)
+    ///
+    /// - `args`:
+    ///     - [ctx] JS 上下文
+    ///     - [v]   execute 的返回值
+    ///     - [req] 写入 result / status
+    void applyValueOutcome(JSContext* ctx, JSValueConst v, ToolExecReq& req) {
+        if (JS_IsObject(v)) {
+            JSValue statusVal = JS_GetPropertyStr(ctx, v, "status");
+            if (JS_IsString(statusVal)) {
+                const auto status  = jsToCppString(ctx, statusVal);
+                JS_FreeValue(ctx, statusVal);
+                JSValue textVal = JS_GetPropertyStr(ctx, v, "text");
+                if (JS_IsString(textVal)) {
+                    req.result = jsToCppString(ctx, textVal);
+                } else {
+                    // `text` 不是字符串 (可能是数字/对象): 走统一转换
+                    req.result = valueToJsonString(ctx, textVal);
+                }
+                JS_FreeValue(ctx, textVal);
+                if (status == "failed" || status == "interrupted") {
+                    req.status = PLUGINXX_OPERATOR_FAILED;
+                } else if (status == "canceled") {
+                    req.status = PLUGINXX_OPERATOR_CANCELED;
+                } else {
+                    req.status = PLUGINXX_OPERATOR_OK;
+                }
+                return;
+            }
+            JS_FreeValue(ctx, statusVal);
+        }
+        req.result = valueToJsonString(ctx, v);
+        req.status = PLUGINXX_OPERATOR_OK;
+    }
+
     // ==================== 桥注入 ====================
 
     bool injectBridge(JsPluginCtx* pctx) {
@@ -1641,6 +1685,13 @@ void* JsEngine::toolExecuteStart(
                         req->error.size()
                     );
                     ntfCopy.done(ntfCopy.host_ud, PLUGINXX_OPERATOR_FAILED, &errSv);
+                } else if (req->status != PLUGINXX_OPERATOR_OK) {
+                    // 插件返回 `{status, text}`: 终态照搬, 正文就是给主程序读的结果
+                    auto resSv = agentxx::plugin::PluginStringView::from(
+                        req->result.data(),
+                        req->result.size()
+                    );
+                    ntfCopy.done(ntfCopy.host_ud, req->status, &resSv);
                 } else {
                     auto resSv = agentxx::plugin::PluginStringView::from(
                         req->result.data(),

@@ -228,8 +228,11 @@ typedef struct AgentxxPluginHookSpecEx {
 
 #define AGENTXX_PLUGIN_IFACE_AGENT_TOOLS             "agentxx.agent.tools"
 /// v2: 全部成员增加 `agent` 参数; 删除 `op_cancel` (统一用 `pluginxx.cancel` 的取消)
-#define AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_VERSION     2
-#define AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_MIN_VERSION 2
+/// v3: 工具结果的成败由最终通知的状态位表达 (`PLUGINXX_OPERATOR_OK`/`FAILED`/`CANCELED`),
+///     结果文本只给模型读 —— 插件不要再把 `[Error: ...]` 之类前缀写进 payload,
+///     失败时只给错误内容 (主程序统一排版); 布局未变 (基线不变)
+#define AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_VERSION     3
+#define AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_MIN_VERSION 3
 /* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
 #define AGENTXX_PLUGIN_IFACE_AGENT_TOOLS_BASELINE_SIZE sizeof(AgentxxPluginToolsIface)
 

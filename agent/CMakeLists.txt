@@ -621,11 +621,11 @@ endif()
 # 已迁到 agentxx 自己的业务表), 作用域引用与通用根请求的字段名泛化
 # - **库代码里的默认值不改**: cxx_pluginxx 被多个主程序共用, `abi.h` 的
 #   `PLUGINXX_API_VERSION` / `PLUGINXX_MIN_API_VERSION` 默认恒为 1, 不跟随任一主程序;
-# - agentxx 在自己的构建里用宏覆盖成 3 (这里是唯一改代次的地方): 嵌套构建
+# - agentxx 在自己的构建里用宏覆盖成 4 (这里是唯一改代次的地方): 嵌套构建
 #   (cxx_pluginxx / 插件 / 测试 / 客户端) 都经 _AGENTXX_COMMON_CMAKE_ARGS 继承同一份
 #   FLAGS, 因此框架、使用方与插件看到的值一致; 插件不链接框架库也能拿到 (只用头文件)
 set(
-  AGENTXX_PLUGIN_API_VERSION "3"
+  AGENTXX_PLUGIN_API_VERSION "4"
   CACHE STRING "agentxx 使用的插件 API 契约代次 (宏覆盖 cxx_pluginxx 的默认值 1)"
 )
 if (NOT(CMAKE_CXX_FLAGS MATCHES "-DPLUGINXX_API_VERSION=${AGENTXX_PLUGIN_API_VERSION}"

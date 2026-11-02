@@ -898,7 +898,14 @@ std::string PluginManager::diagnosePluginPath(std::string_view path) const {
             list
         );
     }
-    return {};
+    // 静态检查都通过 (路径/清单/入口库/导出符号), 但加载仍失败: 最常见的原因是
+    // 插件编译时的 API 代次低于主程序要求 (代次不匹配的插件会在 get_info 阶段被拒)
+    return fmt::format(
+        "静态检查均通过 (路径/清单/入口库/导出符号): 若加载仍失败, 多为插件与主程序的 "
+        "API 代次不匹配 —— 插件需要按 API v{} 重新编译 (当前主程序要求 >= v{})",
+        PLUGINXX_API_VERSION,
+        PLUGINXX_MIN_API_VERSION
+    );
 }
 
 asio::awaitable<std::shared_ptr<PluginInstance>> PluginManager::loadNativeAsync(

@@ -113,7 +113,9 @@
         : (args.script !== undefined && args.script !== null) ? args.script : "";
     var code = typeof rawCode === "string" ? rawCode : String(rawCode !== undefined && rawCode !== null ? rawCode : "");
     if (!code || !code.trim()) {
-      return JSON.stringify({ error: "Arg `code` is empty" });
+      // 工具执行失败: 返回 {status, text} 让主程序知道这次调用失败
+      // (text 只写错误内容, 不要自己加 "[Error: ...]" 前缀)
+      return { status: "failed", text: "Arg `code` is empty" };
     }
     var timeout = typeof args.timeout === "number" ? args.timeout : 60;
     var fullOutput = typeof args.full_output === "boolean" ? args.full_output : true;
@@ -235,7 +237,9 @@
     }
 
     if (timedOut) {
-      return formatTimeout(timeout, stdoutBuf, stderrBuf);
+      // 超时属于工具执行失败 (用户代码抛出异常仍算成功: 与 execute_command
+      // 的"非零退出码"同一处理, 输出块里会写清楚)
+      return { status: "failed", text: formatTimeout(timeout, stdoutBuf, stderrBuf) };
     }
     return formatSuccess(exitCode, stdoutBuf, stderrBuf, fullOutput);
   }

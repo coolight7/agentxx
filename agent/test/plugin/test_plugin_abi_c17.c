@@ -18,14 +18,15 @@
 
 /* ==================== 全局版本 ==================== */
 
-/* v3: 两侧 API 与最低兼容版本一起抬到 3 (旧插件被拒, 必须重编);
-   本代把通用表里的业务成员迁到主程序业务表, 通用根请求字段名泛化 */
-_Static_assert(PLUGINXX_API_VERSION == 3, "agent 侧 ABI 版本必须为 3");
-_Static_assert(PLUGINXX_MIN_API_VERSION == 3, "agent 侧最低兼容 ABI 版本必须为 3");
-_Static_assert(AGENTXX_CLIENT_PLUGIN_API_VERSION == 3, "client 侧 ABI 版本必须为 3");
+/* v4: 两侧 API 与最低兼容版本一起抬到 4 (旧插件被拒, 必须重编);
+   本代工具结果的成败改由最终通知的状态位表达 (`PLUGINXX_OPERATOR_OK`/`FAILED`/
+   `CANCELED`), 结果文本只给模型读 —— 工具表版本 2 -> 3, 布局不变 */
+_Static_assert(PLUGINXX_API_VERSION == 4, "agent 侧 ABI 版本必须为 4");
+_Static_assert(PLUGINXX_MIN_API_VERSION == 4, "agent 侧最低兼容 ABI 版本必须为 4");
+_Static_assert(AGENTXX_CLIENT_PLUGIN_API_VERSION == 4, "client 侧 ABI 版本必须为 4");
 _Static_assert(
-    AGENTXX_CLIENT_PLUGIN_MIN_API_VERSION == 3,
-    "client 侧最低兼容 ABI 版本必须为 3"
+    AGENTXX_CLIENT_PLUGIN_MIN_API_VERSION == 4,
+    "client 侧最低兼容 ABI 版本必须为 4"
 );
 
 /* ==================== 8 字节对齐（全部跨边界结构体） ==================== */

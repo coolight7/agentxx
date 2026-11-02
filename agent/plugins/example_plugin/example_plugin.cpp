@@ -2,7 +2,8 @@
 ///
 /// 演示能力:
 /// 1. 工具注册:
-///    - example_echo (快同步 fast_tool, io 线程直跑)
+///    - example_echo (快同步 fast_tool, io 线程直跑; 返回字符串 = 永远成功)
+///    - example_fail_demo (返回 ToolResult 的对照: 失败靠状态, 不靠抛异常或文本前缀)
 ///    - example_caller (锚定 Task 协程, 经 call_tool 异步互调)
 ///    - example_sleep (锚定 Task 协程, 经 co_await sleep 精确唤醒)
 ///    - example_bridge (协程驱动桥样例: 主程序 timer + 主程序回调两个真实唤醒源)
@@ -154,6 +155,29 @@ static int exampleAgentSetup(AgentCtx& ctx, const agentxx::plugin::ScopeRef& ref
                 args.empty() ? "{}" : args,
                 c.jsonEscape(tid)
             );
+        }
+    );
+
+    // 1.1b fail_demo: 返回带状态的结果 (ToolResult)
+    // - `ToolResult::fail(错误内容)` = 执行完成但失败: 错误内容只写正文,
+    //   不加 `[Error: ...]` 前缀 (主程序统一排版)
+    // - `ToolResult::ok(文本)` 与直接返回字符串等价
+    // - 与 example_echo 对照: 一个返回字符串 (永远成功), 一个能表达失败
+    agentxx::plugin::fast_tool(
+         ctx,
+         ref,
+        "example_fail_demo",
+        "Demonstrate returning a failed tool result without throwing (pass fail=true).",
+        R"({"type":"object","properties":{"fail":{"type":"boolean"}}})",
+        [](std::string_view args) -> agentxx::plugin::ToolResult {
+            const bool shouldFail = args.find("\"fail\":true") != std::string_view::npos
+                                    || args.find("\"fail\": true") != std::string_view::npos;
+            if (shouldFail) {
+                return agentxx::plugin::ToolResult::fail(
+                    "example_fail_demo was asked to fail (this text is the whole error content)"
+                );
+            }
+            return agentxx::plugin::ToolResult::ok(R"({"ok":true})");
         }
     );
 

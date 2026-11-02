@@ -62,6 +62,21 @@ agentxx.registerTool({
   execute: () => ({ kind: typeof agentxx.callTool("js_hello", {}, "") }),
 });
 
+// ---- 工具 7: 返回带状态的结果 {status, text} ----
+// - 与返回普通值的区别: 状态显式给了, 主程序不再把结果当成功
+// - text 是给模型读的正文; 失败时只写错误内容 (不要自己加 "[Error: ...]")
+agentxx.registerTool({
+  name: "js_fail_demo",
+  description: "JS plugin demo: return {status, text} to report failure without throwing.",
+  parameters: {
+    reason: { type: "string", description: "why it failed" },
+  },
+  execute: (args) => ({
+    status: "failed",
+    text: "deliberate failure: " + (args.reason || "no reason given"),
+  }),
+});
+
 // ---- 钩子: agent_start (point 0) ----
 agentxx.onHook(0, (info) => {
   agentxx.log(2, "js hook agent_start fired: " + JSON.stringify(info));
