@@ -2,6 +2,7 @@
 #include "agentxx/agent/context.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/plugin/plugin_manager.h"
+#include "agentxx/util/tool_result.h"
 #include "utilxx_base/json.h"
 #include <asio/use_awaitable.hpp>
 #include <chrono>
@@ -160,31 +161,46 @@ asio::awaitable<agentxx::test::TestResult>
     // 独立插件不注册 ui_control 工具 (已从 computer_use 拆分)
     XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains("agentxx_ui_control_keyboard_mouse"));
 
+    // 截图工具调用: 成败看状态, 失败时正文只是错误内容
+    // (不再是 `{"ok":false,"error":...}` 这样的 JSON —— 那种包装会让调用方只想看文本)
+    // 无桌面会话/无法捕获时按失败状态走, 不强行解析 JSON
+    auto callCapture
+        = [ctx](utilxx_base::Json args) -> asio::awaitable<agentxx::util::ToolResult> {
+        auto tool = ctx->toolRegistry->find("agentxx_screen_capture");
+        XX_TEST_EXPECT_TRUE(tool != nullptr);
+        if (!tool) {
+            co_return agentxx::util::ToolResult::fail("agentxx_screen_capture not registered");
+        }
+        co_return co_await tool->execute_async(args);
+    };
+
     // ---- 3. get_screen_count ----
     int screenCount = 0;
     {
-        auto tool = ctx->toolRegistry->find("agentxx_screen_capture");
-        XX_TEST_EXPECT_TRUE(tool != nullptr);
-        if (tool) {
-            auto out = (co_await tool->execute_async(utilxx_base::Json{
-                {"command", "get_screen_count"}
-            })).text;
-            auto j   = utilxx_base::Json::parse(out);
+        const auto r
+            = co_await callCapture(utilxx_base::Json{{"command", "get_screen_count"}});
+        XX_TEST_EXPECT_TRUE(r.status == agentxx::util::ToolStatus::Ok);
+        if (r.status == agentxx::util::ToolStatus::Ok) {
+            auto j = utilxx_base::Json::parse(r.text);
             XX_TEST_EXPECT_EQ(j["ok"].get<bool>(), true);
             screenCount = j["count"].get<int>();
             XX_TEST_EXPECT_TRUE(screenCount > 0);
+        } else {
+            std::cerr << "[screen_capture] get_screen_count failed: " << r.text << std::endl;
         }
     }
 
     // ---- 4. capture_all (元信息, 不落盘图片) ----
     {
-        auto tool = ctx->toolRegistry->find("agentxx_screen_capture");
-        if (tool) {
-            auto out = (co_await tool->execute_async(utilxx_base::Json{
-                {"command",     "capture_all"},
-                {"save_images", false        },
-            })).text;
-            auto j   = utilxx_base::Json::parse(out);
+        const auto r = co_await callCapture(utilxx_base::Json{
+            {"command",     "capture_all"},
+            {"save_images", false        },
+        });
+        if (r.status != agentxx::util::ToolStatus::Ok) {
+            // 环境抓不到画面 (无桌面会话等): 终态失败, 正文给原因
+            XX_TEST_EXPECT_TRUE(r.text.find("capture") != std::string::npos);
+        } else {
+            auto j = utilxx_base::Json::parse(r.text);
             XX_TEST_EXPECT_EQ(j["ok"].get<bool>(), true);
             XX_TEST_EXPECT_TRUE(j["frames"].size() > 0);
             const auto& f0 = j["frames"][0];
@@ -198,12 +214,11 @@ asio::awaitable<agentxx::test::TestResult>
 
     // ---- 5. 默认不传 command (默认 capture_all) + save_images 落盘 PNG ----
     {
-        auto tool = ctx->toolRegistry->find("agentxx_screen_capture");
-        if (tool) {
-            auto out = (co_await tool->execute_async(utilxx_base::Json{
-                {"save_images", true}
-            })).text;
-            auto j   = utilxx_base::Json::parse(out);
+        const auto r = co_await callCapture(utilxx_base::Json{{"save_images", true}});
+        if (r.status != agentxx::util::ToolStatus::Ok) {
+            XX_TEST_EXPECT_TRUE(r.text.find("capture") != std::string::npos);
+        } else {
+            auto j = utilxx_base::Json::parse(r.text);
             XX_TEST_EXPECT_EQ(j["ok"].get<bool>(), true);
             XX_TEST_EXPECT_EQ(j["frames"].size(), static_cast<size_t>(screenCount));
             for (size_t i = 0; i < j["frames"].size(); ++i) {
@@ -227,14 +242,16 @@ asio::awaitable<agentxx::test::TestResult>
 
     // ---- 6. capture_screen (指定屏幕下标 0) ----
     {
-        auto tool = ctx->toolRegistry->find("agentxx_screen_capture");
-        if (tool) {
-            auto out = (co_await tool->execute_async(utilxx_base::Json{
-                {"command",      "capture_screen"},
-                {"screen_index", 0               },
-                {"save_images",  false           },
-            })).text;
-            auto j   = utilxx_base::Json::parse(out);
+        const auto r = co_await callCapture(utilxx_base::Json{
+            {"command",      "capture_screen"},
+            {"screen_index", 0               },
+            {"save_images",  false           },
+        });
+        if (r.status != agentxx::util::ToolStatus::Ok) {
+            // 部分环境拿不到指定屏幕的画面: 终态失败, 正文写原因
+            XX_TEST_EXPECT_TRUE(r.text.find("capture_screen failed") != std::string::npos);
+        } else {
+            auto j = utilxx_base::Json::parse(r.text);
             XX_TEST_EXPECT_EQ(j["ok"].get<bool>(), true);
             XX_TEST_EXPECT_EQ(j["frames"].size(), 1u);
             const auto& f0 = j["frames"][0];
@@ -244,17 +261,14 @@ asio::awaitable<agentxx::test::TestResult>
         }
     }
 
-    // ---- 7. capture_screen (越界屏幕下标) ----
+    // ---- 7. capture_screen (越界屏幕下标): 终态失败 + 可读原因 ----
     {
-        auto tool = ctx->toolRegistry->find("agentxx_screen_capture");
-        if (tool) {
-            auto out = (co_await tool->execute_async(utilxx_base::Json{
-                {"command",      "capture_screen"},
-                {"screen_index", 99999           }
-            })).text;
-            auto j   = utilxx_base::Json::parse(out);
-            XX_TEST_EXPECT_EQ(j["ok"].get<bool>(), false);
-        }
+        const auto r = co_await callCapture(utilxx_base::Json{
+            {"command",      "capture_screen"},
+            {"screen_index", 99999           }
+        });
+        XX_TEST_EXPECT_TRUE(r.status == agentxx::util::ToolStatus::Failed);
+        XX_TEST_EXPECT_TRUE(r.text.find("capture_screen failed") != std::string::npos);
     }
 
     // ---- 8. agentxx_computer_use 依赖验证: 缺依赖时加载失败 ----

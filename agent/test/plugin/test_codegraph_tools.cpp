@@ -3,6 +3,7 @@
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/tools/tool.h"
+#include "agentxx/util/tool_result.h"
 #include "utilxx_base/json.h"
 #include <asio/co_spawn.hpp>
 #include <asio/detached.hpp>
@@ -410,20 +411,14 @@ asio::awaitable<TestResult>
                 );
             }
             XX_TEST_EXPECT_TRUE(hasSwiftFixture(swiftOut));
-            // 空 query → 参数检查失败抛异常 (插件侧抛 std::invalid_argument,
-            // 经插件边界由主程序重新抛出为 std::runtime_error; 消息保留)
-            bool threw = false;
-            try {
-                (void)co_await tool->execute_async(utilxx_base::Json{
+            // 空 query → 参数检查失败: 插件侧抛 std::invalid_argument, SDK 边界把它
+            // 转成失败状态 (不再向调用方抛异常), 正文保留原因
+            const auto emptyQuery
+                = co_await tool->execute_async(utilxx_base::Json{
                     {"query", ""}
                 });
-            } catch (const std::exception& e) {
-                threw = true;
-                XX_TEST_EXPECT_TRUE(
-                    std::string_view{e.what()}.find("`query` is empty") != std::string::npos
-                );
-            }
-            XX_TEST_EXPECT_TRUE(threw);
+            XX_TEST_EXPECT_TRUE(emptyQuery.status == agentxx::util::ToolStatus::Failed);
+            XX_TEST_EXPECT_TRUE(emptyQuery.text.find("`query` is empty") != std::string::npos);
         }
     }
 

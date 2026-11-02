@@ -25,6 +25,7 @@
 #include "agentxx/plugin/api/plugin_kit.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/plugin/tool_registry.h"
+#include "agentxx/util/tool_result.h"
 #include "asio/co_spawn.hpp"
 #include "asio/redirect_error.hpp"
 #include "asio/steady_timer.hpp"
@@ -121,25 +122,32 @@ asio::awaitable<void> delay(asio::any_io_executor ex, std::chrono::milliseconds 
     co_await timer.async_wait(asio::redirect_error(asio::use_awaitable, ec));
 }
 
-/// 调用一个工具并返回结果文本 (工具不存在或抛错时返回 `[Error: ...]` 文本)
-asio::awaitable<std::string> callTool(
+/// 调用一个工具, 返回状态 + 正文 (工具不存在时按失败处理)
+/// - 成败只看状态, 不看正文里有没有 `[Error` —— 正文只给模型读
+asio::awaitable<agentxx::util::ToolResult> callToolResult(
     const std::shared_ptr<agent::AgentContext>& ctx,
     std::string_view                            name,
     std::string_view                            argsJson = "{}"
 ) {
     auto tool = ctx->toolRegistry ? ctx->toolRegistry->find(name) : nullptr;
     if (!tool) {
-        co_return fmt::format("[Error: 工具 '{}' 不存在]", name);
+        co_return agentxx::util::ToolResult::fail(fmt::format("工具 '{}' 不存在", name));
     }
     Json args = Json::object();
     if (!argsJson.empty()) {
         args = Json::parse(std::string{argsJson});
     }
-    try {
-        co_return (co_await tool->execute_async(args)).text;
-    } catch (const std::exception& e) {
-        co_return fmt::format("[Error: {}]", e.what());
-    }
+    co_return co_await tool->execute_async(args);
+}
+
+/// 调用一个工具并返回给模型看的正文
+/// - 失败时由执行层同一套排版加 `[Error: ...]` ( `util::toolResultTextForModel` )
+asio::awaitable<std::string> callTool(
+    const std::shared_ptr<agent::AgentContext>& ctx,
+    std::string_view                            name,
+    std::string_view                            argsJson = "{}"
+) {
+    co_return agentxx::util::toolResultTextForModel(co_await callToolResult(ctx, name, argsJson));
 }
 
 /// 按归属者取插件挂的根
@@ -724,38 +732,38 @@ asio::awaitable<void> runBody(
         }));
         XX_TEST_EXPECT_TRUE(co_await drain());
 
-        // 撤最近 1 条: 应成功并回显被撤的 id
-        const auto recallResult = co_await callTool(
+        // 撤最近 1 条: 应成功并回显被撤的 id (成败看状态, 不看正文)
+        const auto recallResult = co_await callToolResult(
             rootCtx,
             "chatbot_recall_message",
             R"({"chat":"fake_main|private|U9","count":1})"
         );
-        if (recallResult.rfind("[Error", 0) == 0) {
-            TEST_FAIL << "recall failed: " << recallResult << std::endl;
+        if (recallResult.status != agentxx::util::ToolStatus::Ok) {
+            TEST_FAIL << "recall failed: " << recallResult.text << std::endl;
         }
-        XX_TEST_EXPECT_TRUE(recallResult.rfind("[Error", 0) != 0);
-        const auto recalled = Json::parse(recallResult);
+        XX_TEST_EXPECT_TRUE(recallResult.status == agentxx::util::ToolStatus::Ok);
+        const auto recalled = Json::parse(recallResult.text);
         XX_TEST_EXPECT_TRUE(recalled.contains("recalled"));
         XX_TEST_EXPECT_EQ(recalled["recalled"].size(), size_t{1});
 
         // 再撤一次: 最近记录里已经没有可撤的了 (假平台只认自己发过的 id),
         // 结果应当是"失败"而不是静默成功; 具体是"没有可撤回的记录"还是
         // "平台找不到该消息"取决于内部记录是否还有, 两者都算正确拒绝
-        const auto second = co_await callTool(
+        const auto second = co_await callToolResult(
             rootCtx,
             "chatbot_recall_message",
             R"({"chat":"fake_main|private|U9","count":1})"
         );
-        XX_TEST_EXPECT_TRUE(second.rfind("[Error", 0) == 0);
+        XX_TEST_EXPECT_TRUE(second.status == agentxx::util::ToolStatus::Failed);
 
         // 不存在的消息 id: 平台拒绝并给出可读原因
-        const auto unknown = co_await callTool(
+        const auto unknown = co_await callToolResult(
             rootCtx,
             "chatbot_recall_message",
             R"({"chat":"fake_main|private|U9","messageId":"fake-does-not-exist"})"
         );
-        XX_TEST_EXPECT_TRUE(unknown.rfind("[Error", 0) == 0);
-        XX_TEST_EXPECT_TRUE(unknown.find("找不到") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(unknown.status == agentxx::util::ToolStatus::Failed);
+        XX_TEST_EXPECT_TRUE(unknown.text.find("找不到") != std::string::npos);
     }
 
     // ===================== 5c. 按"倒数第几条"撤回 (跳过最近的那几条) =====================
@@ -813,64 +821,64 @@ asio::awaitable<void> runBody(
         const std::string& newestId = ids[2];
 
         // `target="-2"`: 倒数第二条 = 中间那条
-        const auto second = co_await callTool(
+        const auto second = co_await callToolResult(
             rootCtx,
             "chatbot_recall_message",
             R"({"chat":"fake_main|private|U10","target":"-2"})"
         );
-        if (second.rfind("[Error", 0) == 0) {
-            TEST_FAIL << "recall target=-2 failed: " << second << std::endl;
+        if (second.status != agentxx::util::ToolStatus::Ok) {
+            TEST_FAIL << "recall target=-2 failed: " << second.text << std::endl;
         }
-        XX_TEST_EXPECT_TRUE(second.rfind("[Error", 0) != 0);
+        XX_TEST_EXPECT_TRUE(second.status == agentxx::util::ToolStatus::Ok);
         {
-            const auto json = Json::parse(second);
+            const auto json = Json::parse(second.text);
             XX_TEST_EXPECT_EQ(json["recalled"].size(), size_t{1});
             XX_TEST_EXPECT_EQ(json["recalled"][0].get<std::string>(), middleId);
         }
 
         // `skip=1` (跳过最近一条) 等价写法: 现在剩 [最旧, 最新], 跳过最新 → 最旧
-        const auto skipped = co_await callTool(
+        const auto skipped = co_await callToolResult(
             rootCtx,
             "chatbot_recall_message",
             R"({"chat":"fake_main|private|U10","skip":1,"count":1})"
         );
-        if (skipped.rfind("[Error", 0) == 0) {
-            TEST_FAIL << "recall skip=1 failed: " << skipped << std::endl;
+        if (skipped.status != agentxx::util::ToolStatus::Ok) {
+            TEST_FAIL << "recall skip=1 failed: " << skipped.text << std::endl;
         }
-        XX_TEST_EXPECT_TRUE(skipped.rfind("[Error", 0) != 0);
+        XX_TEST_EXPECT_TRUE(skipped.status == agentxx::util::ToolStatus::Ok);
         {
-            const auto json = Json::parse(skipped);
+            const auto json = Json::parse(skipped.text);
             XX_TEST_EXPECT_EQ(json["recalled"].size(), size_t{1});
             XX_TEST_EXPECT_EQ(json["recalled"][0].get<std::string>(), oldestId);
         }
 
         // 剩最后一条: 再要求"倒数第二条"必须被拒绝 (不能退回去撤最近那条)
-        const auto tooFar = co_await callTool(
+        const auto tooFar = co_await callToolResult(
             rootCtx,
             "chatbot_recall_message",
             R"({"chat":"fake_main|private|U10","target":"-2"})"
         );
-        XX_TEST_EXPECT_TRUE(tooFar.rfind("[Error", 0) == 0);
-        XX_TEST_EXPECT_TRUE(tooFar.find("超出可撤回范围") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(tooFar.status == agentxx::util::ToolStatus::Failed);
+        XX_TEST_EXPECT_TRUE(tooFar.text.find("超出可撤回范围") != std::string::npos);
 
         // `#N` 是引用入站消息的写法, 用来撤回要明确报错并给出正确写法
-        const auto hash = co_await callTool(
+        const auto hash = co_await callToolResult(
             rootCtx,
             "chatbot_recall_message",
             R"({"chat":"fake_main|private|U10","target":"#2"})"
         );
-        XX_TEST_EXPECT_TRUE(hash.rfind("[Error", 0) == 0);
-        XX_TEST_EXPECT_TRUE(hash.find("target=\"-2\"") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(hash.status == agentxx::util::ToolStatus::Failed);
+        XX_TEST_EXPECT_TRUE(hash.text.find("target=\"-2\"") != std::string::npos);
 
         // 最近那条一直没被动过: 最后按默认 (target="-1") 撤掉它
-        const auto last = co_await callTool(
+        const auto last = co_await callToolResult(
             rootCtx,
             "chatbot_recall_message",
             R"({"chat":"fake_main|private|U10","target":"-1"})"
         );
-        XX_TEST_EXPECT_TRUE(last.rfind("[Error", 0) != 0);
+        XX_TEST_EXPECT_TRUE(last.status == agentxx::util::ToolStatus::Ok);
         XX_TEST_EXPECT_EQ(
-            Json::parse(last)["recalled"][0].get<std::string>(),
+            Json::parse(last.text)["recalled"][0].get<std::string>(),
             newestId
         );
     }
@@ -1235,13 +1243,13 @@ asio::awaitable<void> runBody(
         XX_TEST_EXPECT_TRUE(info.value("received", int64_t{0}) >= 0);
         XX_TEST_EXPECT_TRUE(info.value("counters", Json::object()).is_object());
 
-        // 不属于任何人设的会话被拒
-        const auto rejected = co_await callTool(
+        // 不属于任何人设的会话被拒 (看状态)
+        const auto rejected = co_await callToolResult(
             rootCtx,
             "chatbot_chat_info",
             R"({"chat":"fake_main|group|NOT_MINE"})"
         );
-        XX_TEST_EXPECT_TRUE(rejected.rfind("[Error:", 0) == 0);
+        XX_TEST_EXPECT_TRUE(rejected.status == agentxx::util::ToolStatus::Failed);
 
         // set_mode 改成 always → 后续无 @ 也投递 (运行期生效)
         const auto changed = Json::parse(

@@ -360,19 +360,22 @@ asio::awaitable<TestResult> run_assembly_snapshot_tests() {
 
         bool        sawFiltered = false;
         std::string filteredReason;
+        int         filteredCount = 0;
         for (const auto& item : snapshot["tools"]["assembled"]) {
             if (item.value("filtered", false)) {
-                sawFiltered    = true;
+                sawFiltered = true;
+                ++filteredCount;
                 filteredReason = item.value("filter_reason", std::string{});
                 XX_TEST_EXPECT_FALSE(item.value("name", std::string{}).empty());
             }
         }
         XX_TEST_EXPECT_TRUE(sawFiltered);
         XX_TEST_EXPECT_TRUE(has(filteredReason, "toolWhitelist"));
-        // 加载数 = 启用数 + 被过滤数
+        // 加载数 = 启用数 + 被过滤数 (被过滤的具体条数随内置工具增减变化,
+        // 这里断言这条关系本身, 不写死条数)
         XX_TEST_EXPECT_EQ(
             snapshot["tools"].value("assembled_count", 0),
-            snapshot["tools"].value("enabled_count", 0) + 1
+            snapshot["tools"].value("enabled_count", 0) + filteredCount
         );
 
         const auto rendered = joinLines(agentxx::agent::renderAssemblySnapshot(snapshot));

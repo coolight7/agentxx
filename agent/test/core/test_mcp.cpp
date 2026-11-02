@@ -66,22 +66,14 @@ void runMcpStdioServerProcess() {
         return result;
     });
 
-    // 报错的工具: 结果里带 `isError: true` (MCP 协议表达工具失败的方式)
-    // 主程序侧据此把工具终态定为失败 (不再当成功文本)
+    // 报错的工具: 处理体抛异常 → 服务端把结果包成 `isError: true`
+    // (MCP 协议表达工具失败的方式) 主程序侧据此把工具终态定为失败, 不再当成功文本
     McpToolDefinition failTool;
     failTool.name        = "fail";
-    failTool.description = "always reports isError (for the failure mapping test)";
+    failTool.description = "always fails with isError (for the failure mapping test)";
     failTool.inputSchema = json::parse(R"({"type":"object","properties":{}})");
     server.addTool(failTool, [](const json&) -> json {
-        json result       = json::object();
-        json content      = json::array();
-        json item         = json::object();
-        item["type"]      = "text";
-        item["text"]      = "boom from mcp";
-        content.push_back(std::move(item));
-        result["content"] = std::move(content);
-        result["isError"] = true;
-        return result;
+        throw std::runtime_error("boom from mcp");
     });
     server.runStdio();
 }
