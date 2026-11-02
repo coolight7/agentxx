@@ -111,13 +111,13 @@ static int32_t websearchSetup(WebsearchPluginCtx& ctx, const agentxx::plugin::Sc
            std::string_view,
            const PluginxxCancelToken* cancel_token) -> asio::awaitable<std::string> {
             if (pluginxx_cancel_is_requested(cancel_token)) {
-                throw CancelledException("web_fetch cancelled");
+                throw CanceledException("web_fetch Canceled");
             }
             ArgReader args(args_json);
             // args 是本协程帧的局部量: 其生命周期覆盖整个 co_await
             auto result = co_await webFetchExecuteAsync(args.raw());
             if (pluginxx_cancel_is_requested(cancel_token)) {
-                throw CancelledException("web_fetch cancelled");
+                throw CanceledException("web_fetch Canceled");
             }
             co_return result;
         },
@@ -145,7 +145,7 @@ static int32_t websearchSetup(WebsearchPluginCtx& ctx, const agentxx::plugin::Sc
                std::string_view,
                const PluginxxCancelToken* cancel_token) -> asio::awaitable<std::string> {
                 if (pluginxx_cancel_is_requested(cancel_token)) {
-                    throw CancelledException("web_search cancelled");
+                    throw CanceledException("web_search Canceled");
                 }
                 ArgReader   args(args_json);
                 std::string result;
@@ -160,7 +160,7 @@ static int32_t websearchSetup(WebsearchPluginCtx& ctx, const agentxx::plugin::Sc
                     );
                 }
                 if (pluginxx_cancel_is_requested(cancel_token)) {
-                    throw CancelledException("web_search cancelled");
+                    throw CanceledException("web_search Canceled");
                 }
                 co_return result;
             },

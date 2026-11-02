@@ -299,7 +299,7 @@ asio::awaitable<void> PromptSourceRegistry::ensureFresh(
     const auto reason = dominantReason(bits, first);
 
     auto  ordered   = orderedSources();
-    bool  cancelled = false;
+    bool  Canceled = false;
     auto& stats     = lastStats_;
     stats           = PromptRefreshStats{};
     for (auto* state : ordered) {
@@ -307,7 +307,7 @@ asio::awaitable<void> PromptSourceRegistry::ensureFresh(
             continue;
         }
         if (inCtx.cancelToken && inCtx.cancelToken->is_cancelled()) {
-            cancelled = true;
+            Canceled = true;
             break;
         }
         if (!needsBuild(*state, session, force, sid)) {
@@ -406,10 +406,10 @@ asio::awaitable<void> PromptSourceRegistry::ensureFresh(
         }
     }
 
-    if (cancelled) {
+    if (Canceled) {
         // 取消: 保留 dirty 标记与旧文本, 下次请求再试
         XX_LOGD(
-            "[prompt] refresh cancelled for session {} (reason={}), keeping old text",
+            "[prompt] refresh Canceled for session {} (reason={}), keeping old text",
             sid,
             reasonKey(reason)
         );

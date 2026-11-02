@@ -2938,12 +2938,12 @@ static asio::awaitable<void> test_session_controller_one_to_many() {
     // 7. 多客户端断开与宽限期:
     // 客户端 1 断开，但客户端 2 依然在线，轮次活动时不应触发宽限期超时取消
     sc->setTurnActiveForTest(true);
-    auto turnCancelled = std::make_shared<bool>(false);
+    auto turnCanceled = std::make_shared<bool>(false);
     asio::co_spawn(
         ex,
-        keepAliveRun([sc, turnCancelled]() -> asio::awaitable<void> {
+        keepAliveRun([sc, turnCanceled]() -> asio::awaitable<void> {
             co_await sc->handleInterrupt("multi-client-session", "wait", "val", "{}");
-            *turnCancelled = true;
+            *turnCanceled = true;
             co_return;
         }),
         asio::detached
@@ -2964,7 +2964,7 @@ static asio::awaitable<void> test_session_controller_one_to_many() {
     // 等待 500ms (大于 gracePeriod 400ms)
     co_await testSleep(ex, std::chrono::milliseconds{500});
     // 因为客户端 2 仍然在线，轮次没有被取消！
-    XX_TEST_EXPECT_FALSE(*turnCancelled);
+    XX_TEST_EXPECT_FALSE(*turnCanceled);
 
     // 现在关闭客户端 2 (所有客户端均断开)
     client2->close();
@@ -2976,7 +2976,7 @@ static asio::awaitable<void> test_session_controller_one_to_many() {
 
     // 此时进入宽限期，等待 500ms 后宽限期满，轮次被取消，中断结束
     co_await testSleep(ex, std::chrono::milliseconds{500});
-    XX_TEST_EXPECT_TRUE(*turnCancelled);
+    XX_TEST_EXPECT_TRUE(*turnCanceled);
 
     sc->stop();
     co_return;
@@ -3731,7 +3731,7 @@ static asio::awaitable<void> test_session_controller_queue_resume_after_abort() 
     // 发送取消中断 turn 5
     clientT->send(agentxx::agent::WireMessage{agentxx::agent::WireCancel{"queue-resume-test-session"
     }});
-    // 等待 turn 5 结束 (cancelled/error)
+    // 等待 turn 5 结束 (Canceled/error)
     XX_TEST_EXPECT_TRUE(co_await waitForTurns(5));
     {
         std::lock_guard<std::mutex> lk(mu);

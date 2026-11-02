@@ -151,7 +151,10 @@ asio::awaitable<neograph::graph::NodeOutput> PluginGraphNode::run(neograph::grap
         .cancelToken = agentxx::util::adaptCancelToken(in.ctx.cancel_token),
         .drive       = std::move(drive),
     };
-    std::string payload = co_await agentxx::util::awaitHostPluginOp(std::move(awaitArgs));
+    // 非 OK 抛异常 (取消 -> CanceledException, 其余 -> runtime_error), 与改造前一致
+    std::string payload = agentxx::util::requirePluginOpOk(
+        co_await agentxx::util::awaitHostPluginOpResult(std::move(awaitArgs))
+    );
 
     // 解析插件返回的节点输出 JSON:
     // {"writes": [{"channel","value","mode"}], "command": {...}|null, "sends": [...]}

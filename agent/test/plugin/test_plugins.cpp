@@ -188,7 +188,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
         if (ifaceSession) {
             XX_TEST_EXPECT_EQ(ifaceSession->version, AGENTXX_PLUGIN_IFACE_AGENT_SESSION_VERSION);
             XX_TEST_EXPECT_TRUE(ifaceSession->get_session_work_dir != nullptr);
-            XX_TEST_EXPECT_TRUE(ifaceSession->is_cancelled != nullptr);
+            XX_TEST_EXPECT_TRUE(ifaceSession->is_canceled != nullptr);
 
             // 会话工作目录: 空 session_id = 默认会话工作目录 (经 AgentContext 解析)
             auto scopeRaw   = ref.raw();
@@ -215,10 +215,10 @@ asio::awaitable<TestResult> run_plugin_tests() {
             // 取消查询: 新会话未取消 = 0; 空引用按失败处理也是 0
             auto tidSv = makeSv("no_such_session");
             XX_TEST_EXPECT_EQ(
-                ifaceSession->is_cancelled(inst->hostView(), &scopeRaw, &tidSv),
+                ifaceSession->is_canceled(inst->hostView(), &scopeRaw, &tidSv),
                 0
             );
-            XX_TEST_EXPECT_EQ(ifaceSession->is_cancelled(inst->hostView(), nullptr, &tidSv), 0);
+            XX_TEST_EXPECT_EQ(ifaceSession->is_canceled(inst->hostView(), nullptr, &tidSv), 0);
         }
 
         auto ifacePrompt = agentxx::plugin::queryInterface<AgentxxPluginPromptIface>(
@@ -1412,7 +1412,7 @@ throw new Error("top-level rollback probe");
         }
 
         // 31.3 会话取消传递: CancelToken 取消 → execute_cancel 被调用 →
-        //      插件上报 CANCELLED → 工具协程收到 CancelledException
+        //      插件上报 Canceled → 工具协程收到 CanceledException
         {
             struct CancelOp {
                 PluginxxOperatorNotify notify;
@@ -1441,7 +1441,7 @@ throw new Error("top-level rollback probe");
                 auto* o        = static_cast<CancelOp*>(op);
                 if (o && o->notify.done) {
                     auto nullSv = agentxx::plugin::PluginStringView::from(nullptr, 0);
-                    o->notify.done(o->notify.host_ud, PLUGINXX_OPERATOR_CANCELLED, &nullSv);
+                    o->notify.done(o->notify.host_ud, PLUGINXX_OPERATOR_CANCELED, &nullSv);
                 }
                 delete o;
                 s_activeOp = nullptr;
@@ -1471,18 +1471,18 @@ throw new Error("top-level rollback probe");
                 asio::detached
             );
 
-            bool cancelledThrown = false;
+            bool CanceledThrown = false;
             try {
                 auto out = co_await cancelTool->execute_async(utilxx_base::Json{
                     {"sessionId", "t_plugin_cancel"}
                 });
                 (void)out;
             } catch (const neograph::graph::CancelledException&) {
-                cancelledThrown = true;
+                CanceledThrown = true;
             } catch (const std::exception& e) {
                 TEST_FAIL << "unexpected exception: " << e.what() << std::endl;
             }
-            XX_TEST_EXPECT_TRUE(cancelledThrown);
+            XX_TEST_EXPECT_TRUE(CanceledThrown);
             XX_TEST_EXPECT_TRUE(s_cancelCalled); ///< 底层 cancel 回调被调用
             ctx->pluginMount->unregisterTool(inst31.get(), "async_cancel_tool");
             ctx->sessions->remove("t_plugin_cancel");
@@ -2137,7 +2137,7 @@ throw new Error("top-level rollback probe");
         // 36.1 基础功能与幂等性
         agentxx::plugin::CancelRegistry reg;
         XX_TEST_EXPECT_EQ(reg.activeCount(), size_t(0));
-        XX_TEST_EXPECT_FALSE(reg.isCancelled("sess_1"));
+        XX_TEST_EXPECT_FALSE(reg.isCanceled("sess_1"));
 
         int  cb1_count = 0, cb2_count = 0, cb3_count = 0;
         auto id1 = reg.registerCallback("sess_1", [&cb1_count]() {
@@ -2159,8 +2159,8 @@ throw new Error("top-level rollback probe");
         XX_TEST_EXPECT_EQ(cb1_count, 1);
         XX_TEST_EXPECT_EQ(cb2_count, 1);
         XX_TEST_EXPECT_EQ(cb3_count, 0);
-        XX_TEST_EXPECT_TRUE(reg.isCancelled("sess_1"));
-        XX_TEST_EXPECT_FALSE(reg.isCancelled("sess_2"));
+        XX_TEST_EXPECT_TRUE(reg.isCanceled("sess_1"));
+        XX_TEST_EXPECT_FALSE(reg.isCanceled("sess_2"));
         XX_TEST_EXPECT_EQ(reg.activeCount(), size_t(1));
 
         // 重复 cancel 幂等
@@ -2197,10 +2197,10 @@ throw new Error("top-level rollback probe");
             XX_TEST_EXPECT_EQ(scoped_count, 0);
         }
 
-        // clearCancelled 重置标记
-        XX_TEST_EXPECT_TRUE(reg.isCancelled("sess_1"));
-        reg.clearCancelled("sess_1");
-        XX_TEST_EXPECT_FALSE(reg.isCancelled("sess_1"));
+        // clearCanceled 重置标记
+        XX_TEST_EXPECT_TRUE(reg.isCanceled("sess_1"));
+        reg.clearCanceled("sess_1");
+        XX_TEST_EXPECT_FALSE(reg.isCanceled("sess_1"));
 
         // 36.2 防 UAF 排空验证 (Anti-UAF Protocol):
         // 验证 unregisterCallback 必须阻塞等待正在并发执行的回调完成，杜绝回调访问被析构对象
@@ -2274,13 +2274,13 @@ throw new Error("top-level rollback probe");
 
             for (int i = 0; i < 50; ++i) {
                 benchReg.cancel("sess_bench_0");
-                benchReg.clearCancelled("sess_bench_0");
+                benchReg.clearCanceled("sess_bench_0");
                 benchReg.cancel("sess_bench_1");
-                benchReg.clearCancelled("sess_bench_1");
+                benchReg.clearCanceled("sess_bench_1");
                 benchReg.cancel("sess_bench_2");
-                benchReg.clearCancelled("sess_bench_2");
+                benchReg.clearCanceled("sess_bench_2");
                 benchReg.cancel("sess_bench_3");
-                benchReg.clearCancelled("sess_bench_3");
+                benchReg.clearCanceled("sess_bench_3");
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
             }
 
@@ -2292,18 +2292,18 @@ throw new Error("top-level rollback probe");
             XX_TEST_EXPECT_EQ(benchReg.activeCount(), size_t(0));
         }
 
-        // 36.4 PluginBase 集成与 sessionCancelled 本地优先读取
+        // 36.4 PluginBase 集成与 sessionCanceled 本地优先读取
         {
             struct DummyPlugin : public agentxx::plugin::PluginBase {};
 
             DummyPlugin plug;
             // 引用为空 = 只能读本地登记 (不问主程序); 会话取消由主程序侧轮次状态给出
-            XX_TEST_EXPECT_FALSE(plug.sessionCancelled(nullptr, "test_sess"));
+            XX_TEST_EXPECT_FALSE(plug.sessionCanceled(nullptr, "test_sess"));
 
             // 主程序 execute_cancel 或本地登记取消
             plug.cancelRegistry.cancel("test_sess");
             // 本地直接命中, 零跨线程 host 交互
-            XX_TEST_EXPECT_TRUE(plug.sessionCancelled(nullptr, "test_sess"));
+            XX_TEST_EXPECT_TRUE(plug.sessionCanceled(nullptr, "test_sess"));
         }
     }
 
@@ -3604,12 +3604,12 @@ throw new Error("top-level rollback probe");
         // 3) PluginBase 订阅的清理回调生效: 已取消标记在轮次开始后被清掉
         const std::string sid = "sess-round-start";
         probe.cancelRegistry.cancel(sid);
-        XX_TEST_EXPECT_TRUE(probe.cancelRegistry.isCancelled(sid));
+        XX_TEST_EXPECT_TRUE(probe.cancelRegistry.isCanceled(sid));
 
         auto payload = utilxx_base::Json{{"sessionId", sid}}.dump();
         co_await roundCtx->bus->publish("plugin.agentxx.round_start", payload);
         XX_TEST_EXPECT_EQ(hits.load(), 1);
-        XX_TEST_EXPECT_FALSE(probe.cancelRegistry.isCancelled(sid));
+        XX_TEST_EXPECT_FALSE(probe.cancelRegistry.isCanceled(sid));
 
         roundCtx->pluginManager->shutdownAll();
     }

@@ -53,12 +53,12 @@ static int32_t stringSetup(StringPluginCtx& ctx, const ScopeRef& ref) {
         html2mdSchema,
         [](std::string_view args_json, const PluginxxCancelToken* cancel_token) -> std::string {
             if (pluginxx_cancel_is_requested(cancel_token)) {
-                throw agentxx::plugin::CancelledException("html2markdown cancelled");
+                throw agentxx::plugin::CanceledException("html2markdown Canceled");
             }
             ArgReader args(args_json);
             auto      out = htmlToMarkdownExecute(args.raw());
             if (pluginxx_cancel_is_requested(cancel_token)) {
-                throw agentxx::plugin::CancelledException("html2markdown cancelled");
+                throw agentxx::plugin::CanceledException("html2markdown Canceled");
             }
             return out;
         },
@@ -92,12 +92,12 @@ static int32_t stringSetup(StringPluginCtx& ctx, const ScopeRef& ref) {
         regexpSchema,
         [](std::string_view args_json, const PluginxxCancelToken* cancel_token) -> std::string {
             if (pluginxx_cancel_is_requested(cancel_token)) {
-                throw agentxx::plugin::CancelledException("regexp cancelled");
+                throw agentxx::plugin::CanceledException("regexp Canceled");
             }
             ArgReader args(args_json);
             auto      out = regexpExecute(args.raw());
             if (pluginxx_cancel_is_requested(cancel_token)) {
-                throw agentxx::plugin::CancelledException("regexp cancelled");
+                throw agentxx::plugin::CanceledException("regexp Canceled");
             }
             return out;
         },

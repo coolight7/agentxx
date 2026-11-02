@@ -54,7 +54,7 @@ struct FakeTicket {
     void*               ud        = nullptr;
     Harness*            harness   = nullptr;
     bool                executed  = false;
-    bool                cancelled = false;
+    bool                Canceled = false;
 };
 
 /// 伪主程序驱动 + 调度设施。所有调用都发生在用例线程上 (模拟主程序 IO 线程)。
@@ -65,9 +65,9 @@ struct Harness {
         PluginxxOperatorCallback cb     = nullptr;
         void*                    ud     = nullptr;
         uintptr_t                handle = 0;
-        /// 已被 op_cancel 请求取消。真主程序会在取消后以 CANCELLED 触发完成回调,
+        /// 已被 op_cancel 请求取消。真主程序会在取消后以 Canceled 触发完成回调,
         /// 伪主程序只做标记, 由用例决定何时触发 (保持对既有用例的兼容)。
-        bool cancelled = false;
+        bool Canceled = false;
     };
 
     std::deque<FakeTicket*> pending; ///< 已申请、尚未执行的请求 (FIFO = 主程序任务队列)
@@ -179,7 +179,7 @@ void PLUGINXX_CALL fakeCancelDriver(PluginxxDriver* driver) {
     }
     // 与主程序实现一致: 取消只对尚未执行的请求生效, 执行中的不打断。
     if (!ticket->executed) {
-        ticket->cancelled = true;
+        ticket->Canceled = true;
     }
 }
 
@@ -217,7 +217,7 @@ PluginxxOperatorHandle* PLUGINXX_CALL fakeSleep(
     return reinterpret_cast<PluginxxOperatorHandle*>(raw);
 }
 
-/// 伪 op_cancel: 只标记句柄对应的挂起点为"已取消" (真主程序随后会以 CANCELLED
+/// 伪 op_cancel: 只标记句柄对应的挂起点为"已取消" (真主程序随后会以 Canceled
 /// 触发完成回调; 用例按需手工触发, 以免影响既有用例的手工时序)。
 /// 句柄不含 host 参数, 因此伪主程序把 (harness, handle) 记录在堆对象里。
 void PLUGINXX_CALL fakeOpCancel(PluginxxOperatorHandle* op) {
@@ -229,13 +229,13 @@ void PLUGINXX_CALL fakeOpCancel(PluginxxOperatorHandle* op) {
     for (auto& entry : harness->sleeps) {
         if (entry.handle == record->handle) {
             ++harness->opCancelCalls;
-            entry.cancelled = true;
+            entry.Canceled = true;
             return;
         }
     }
 }
 
-int32_t PLUGINXX_CALL fakeOffloadIsCancelled(const PluginxxCancelToken*) {
+int32_t PLUGINXX_CALL fakeOffloadIsCanceled(const PluginxxCancelToken*) {
     return 0;
 }
 
@@ -256,7 +256,7 @@ PluginxxOperatorHandle* PLUGINXX_CALL fakeOffload(
         return nullptr;
     }
     ++harness->offloadCalls;
-    PluginxxCancelToken token{&fakeOffloadIsCancelled, nullptr};
+    PluginxxCancelToken token{&fakeOffloadIsCanceled, nullptr};
     PluginxxString      workError{nullptr, 0};
     void*               result = work(ud, &token, &workError);
     PluginString::free(host, &workError);
@@ -700,7 +700,7 @@ TestResult testPluginBridge() {
         XX_TEST_EXPECT_EQ(harness.runPending(), 0);
     }
 
-    /// 6. 取消: 只产生一个终态 (CANCELLED); 重复取消与迟到完成不产生第二个终态。
+    /// 6. 取消: 只产生一个终态 (Canceled); 重复取消与迟到完成不产生第二个终态。
     {
         harness.clear();
         NotifyProbe probe;
@@ -733,10 +733,10 @@ TestResult testPluginBridge() {
         harness.runPending();
 
         auto& sleepEntry = harness.sleeps.front();
-        sleepEntry.cb(sleepEntry.ud, PLUGINXX_OPERATOR_CANCELLED, nullptr);
+        sleepEntry.cb(sleepEntry.ud, PLUGINXX_OPERATOR_CANCELED, nullptr);
         harness.runPending();
         XX_TEST_EXPECT_EQ(probe.calls, 1);
-        XX_TEST_EXPECT_EQ(probe.status, PLUGINXX_OPERATOR_CANCELLED);
+        XX_TEST_EXPECT_EQ(probe.status, PLUGINXX_OPERATOR_CANCELED);
 
         // 终态唯一: 主程序的 OpCore 在 done 提交后短路一切取消 (不会再用 op 句柄回调
         // 插件), 因此这里不再调用 execute_cancel, 只确认没有第二个终态。
@@ -866,7 +866,7 @@ TestResult testPluginBridge() {
         XX_TEST_EXPECT_EQ(probe.calls, 1);
         XX_TEST_EXPECT_EQ(probe.status, PLUGINXX_OPERATOR_FAILED);
         XX_TEST_EXPECT_EQ(harness.cancelCalls, 1);
-        XX_TEST_EXPECT_TRUE(harness.pending.front()->cancelled);
+        XX_TEST_EXPECT_TRUE(harness.pending.front()->Canceled);
         // 主程序按取消语义丢弃请求
         harness.pending.clear();
         XX_TEST_EXPECT_FALSE(bodyRan);
@@ -965,7 +965,7 @@ TestResult testPluginBridge() {
                 asio::steady_timer timer(ex, std::chrono::milliseconds(15));
                 co_await timer.async_wait(asio::use_awaitable);
                 if (pluginxx_cancel_is_requested(cancel)) {
-                    throw CancelledException("polled cancelled");
+                    throw CanceledException("polled Canceled");
                 }
                 co_return "polled-ok";
             }
@@ -1035,7 +1035,7 @@ TestResult testPluginBridge() {
     }
 
     /// 12. 受控轮询取消: execute_cancel 置取消标志 + 取消尚未触发的退避 (插件不必等满
-    ///     一个退避间隔), 根在下一个阶段边界结束, 只产生一个 CANCELLED 终态。
+    ///     一个退避间隔), 根在下一个阶段边界结束, 只产生一个 Canceled 终态。
     {
         harness.clear();
         NotifyProbe probe;
@@ -1059,7 +1059,7 @@ TestResult testPluginBridge() {
                     asio::steady_timer t(ex, std::chrono::milliseconds(5));
                     co_await t.async_wait(asio::use_awaitable);
                     if (pluginxx_cancel_is_requested(cancel)) {
-                        throw CancelledException("polled cancel");
+                        throw CanceledException("polled cancel");
                     }
                 }
                 co_return "never";
@@ -1078,22 +1078,22 @@ TestResult testPluginBridge() {
         XX_TEST_EXPECT_EQ(bridge->idlePollCount(), uint64_t{1});
         XX_TEST_EXPECT_EQ(harness.queuedTicketCount(), size_t{0});
 
-        // 取消: 尚未触发的退避被 op_cancel 取消 (真主程序随后会以 CANCELLED 触发完成回调)
+        // 取消: 尚未触发的退避被 op_cancel 取消 (真主程序随后会以 Canceled 触发完成回调)
         XX_TEST_EXPECT_TRUE(spec.execute_cancel != nullptr);
         spec.execute_cancel(spec.user_data, op);
         XX_TEST_EXPECT_EQ(harness.opCancelCalls, 1);
         XX_TEST_EXPECT_EQ(harness.sleeps.size(), size_t{1});
-        XX_TEST_EXPECT_TRUE(harness.sleeps.front().cancelled);
+        XX_TEST_EXPECT_TRUE(harness.sleeps.front().Canceled);
         XX_TEST_EXPECT_FALSE(bridge->isPumpWaitScheduled()); // 插件侧状态已复位
         XX_TEST_EXPECT_EQ(probe.calls, 0);                   // 取消请求本身不完成操作
 
-        // 退避回调以 CANCELLED 到达: 仍按"退避结束"处理 -> 立刻续票 (无需等 10ms)
+        // 退避回调以 Canceled 到达: 仍按"退避结束"处理 -> 立刻续票 (无需等 10ms)
         auto entry = harness.sleeps.front();
         harness.sleeps.erase(harness.sleeps.begin());
-        entry.cb(entry.ud, PLUGINXX_OPERATOR_CANCELLED, nullptr);
+        entry.cb(entry.ud, PLUGINXX_OPERATOR_CANCELED, nullptr);
         XX_TEST_EXPECT_EQ(harness.queuedTicketCount(), size_t{1});
 
-        // 继续驱动: 本地 5ms timer 到期后业务体看到取消 -> CANCELLED 终态
+        // 继续驱动: 本地 5ms timer 到期后业务体看到取消 -> Canceled 终态
         // (同样按总时限重试: 计时依赖机器负载, 只等一次在重负载下会偶发失败)
         const auto cancelDeadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
         while (probe.calls == 0 && std::chrono::steady_clock::now() < cancelDeadline) {
@@ -1112,7 +1112,7 @@ TestResult testPluginBridge() {
             }
         }
         XX_TEST_EXPECT_EQ(probe.calls, 1);
-        XX_TEST_EXPECT_EQ(probe.status, PLUGINXX_OPERATOR_CANCELLED);
+        XX_TEST_EXPECT_EQ(probe.status, PLUGINXX_OPERATOR_CANCELED);
         XX_TEST_EXPECT_EQ(probe.payload, std::string{"polled cancel"});
         XX_TEST_EXPECT_EQ(bridge->polledRootCount(), uint64_t{0});
         // 终态唯一: 再驱动不产生第二个终态

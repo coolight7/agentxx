@@ -215,7 +215,7 @@ typedef enum AgentxxFFIEventType {
     AGENTXX_FFI_EVT_ERROR,               ///< 内部错误: {"code","message"}
     AGENTXX_FFI_EVT_WIRE,                ///< 下行 Wire 消息原样转发: 原始 JSON
     AGENTXX_FFI_EVT_HOST_TOOL_CALL,      ///< 嵌入方程序工具调用请求
-    AGENTXX_FFI_EVT_HOST_TOOL_CANCELLED, ///< 嵌入方程序工具调用取消
+    AGENTXX_FFI_EVT_HOST_TOOL_Canceled, ///< 嵌入方程序工具调用取消
     AGENTXX_FFI_EVT_DELTA_TEXT_BATCH,    ///< 文本/思考增量合批
 } AgentxxFFIEventType;
 

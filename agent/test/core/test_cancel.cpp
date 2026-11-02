@@ -63,7 +63,7 @@ asio::awaitable<void> test_cancel_token_checkpoint() {
     XX_TEST_EXPECT_TRUE(token->is_cancelled());
     XX_TEST_EXPECT_TRUE(child->is_cancelled());
 
-    // 已取消时检查点抛出 CancelledException
+    // 已取消时检查点抛出 CanceledException
     threw = false;
     try {
         token->throw_if_cancelled("checkpoint");
@@ -80,21 +80,21 @@ asio::awaitable<void> test_cancel_token_checkpoint() {
 }
 
 // ===========================================================================
-// 边界转换: operation_aborted + 已取消令牌 => CancelledException
+// 边界转换: operation_aborted + 已取消令牌 => CanceledException
 // ===========================================================================
 asio::awaitable<void> test_isCancelAbort() {
-    auto cancelled = std::make_shared<neograph::graph::CancelToken>();
-    cancelled->cancel();
+    auto Canceled = std::make_shared<neograph::graph::CancelToken>();
+    Canceled->cancel();
     auto active = std::make_shared<neograph::graph::CancelToken>();
 
     XX_TEST_EXPECT_TRUE(agentxx::util::isCancelAbort(
         utilxx_base::AsioSystemError(asio::error::operation_aborted),
-        cancelled
+        Canceled
     ));
     // 非 operation_aborted 错误码不算取消
     XX_TEST_EXPECT_FALSE(agentxx::util::isCancelAbort(
         utilxx_base::AsioSystemError(asio::error::timed_out),
-        cancelled
+        Canceled
     ));
     // 无令牌 / 令牌未取消时按超时处理, 不算取消
     XX_TEST_EXPECT_FALSE(agentxx::util::isCancelAbort(
@@ -109,7 +109,7 @@ asio::awaitable<void> test_isCancelAbort() {
 }
 
 asio::awaitable<void> test_catchError_cancel_conversion() {
-    // 已取消 + operation_aborted => 抛出 CancelledException (不被吞为错误消息)
+    // 已取消 + operation_aborted => 抛出 CanceledException (不被吞为错误消息)
     auto token = std::make_shared<neograph::graph::CancelToken>();
     token->cancel();
     bool caughtCancel = false;
@@ -149,7 +149,7 @@ asio::awaitable<void> test_catchError_cancel_conversion() {
 }
 
 asio::awaitable<void> test_catchErrorAsync_cancel_conversion() {
-    // 1. 已取消 + operation_aborted + 无 onRethrow => CancelledException 向上传播
+    // 1. 已取消 + operation_aborted + 无 onRethrow => CanceledException 向上传播
     {
         auto token = std::make_shared<neograph::graph::CancelToken>();
         token->cancel();
@@ -236,7 +236,7 @@ asio::awaitable<void> test_catchErrorAsync_cancel_conversion() {
 }
 
 // ===========================================================================
-// E2E: LLM 请求尚未返回时取消 => "Cancelled by user", 且不等待慢速响应完成
+// E2E: LLM 请求尚未返回时取消 => "Canceled by user", 且不等待慢速响应完成
 // ===========================================================================
 asio::awaitable<void> test_agent_cancel_llm_request() {
     auto sim     = startDaSimServer();
@@ -301,7 +301,7 @@ asio::awaitable<void> test_agent_cancel_llm_request() {
     XX_TEST_EXPECT_TRUE(turnExc == nullptr);
     XX_TEST_EXPECT_TRUE(watcherExc == nullptr);
     XX_TEST_EXPECT_TRUE(turnResult.hasError);
-    XX_TEST_EXPECT_EQ(turnResult.errorMessage, std::string{"Cancelled by user"});
+    XX_TEST_EXPECT_EQ(turnResult.errorMessage, std::string{"Canceled by user"});
     // 执行中 LLM 请求应被中断, 不应等待满 5s 延迟
     XX_TEST_EXPECT_TRUE(elapsedMs < 4000);
 
@@ -515,7 +515,7 @@ asio::awaitable<void> test_agent_cancel_toolcall() {
     XX_TEST_EXPECT_TRUE(turnExc == nullptr);
     XX_TEST_EXPECT_TRUE(watcherExc == nullptr);
     XX_TEST_EXPECT_TRUE(turnResult.hasError);
-    XX_TEST_EXPECT_EQ(turnResult.errorMessage, std::string{"Cancelled by user"});
+    XX_TEST_EXPECT_EQ(turnResult.errorMessage, std::string{"Canceled by user"});
     // 慢速 tool 已开始执行, 但被取消立即中断 (未自然完成):
     // 工具协程绑定 engine 取消信号, 生命周期跟随 engine
     XX_TEST_EXPECT_TRUE(agent.slowExecuted.load());
@@ -607,7 +607,7 @@ asio::awaitable<void> test_offload_cancel_token() {
                 // 模拟长时间同步工作 (从不挂起): 每 10ms 轮询 flag, 取消时提前退出
                 for (int i = 0; i < 1000; ++i) {
                     if (cancelFlag.load(std::memory_order_acquire)) {
-                        throw neograph::graph::CancelledException("offload cancelled");
+                        throw neograph::graph::CancelledException("offload Canceled");
                     }
                     std::this_thread::sleep_for(std::chrono::milliseconds(10));
                 }
@@ -627,16 +627,16 @@ asio::awaitable<void> test_offload_cancel_token() {
     XX_TEST_EXPECT_TRUE(elapsedMs < 5000);
 
     // 已取消令牌直接创建: 工作线程应立即检测到 flag 退出
-    auto cancelledToken = std::make_shared<neograph::graph::CancelToken>();
-    cancelledToken->cancel();
+    auto CanceledToken = std::make_shared<neograph::graph::CancelToken>();
+    CanceledToken->cancel();
     bool caughtCancel2 = false;
     try {
         co_await utilxx::offloadCancellableAsync<int>(
             pool,
-            agentxx::util::adaptCancelToken(cancelledToken),
+            agentxx::util::adaptCancelToken(CanceledToken),
             [](std::atomic<bool>& cancelFlag) -> asio::awaitable<int> {
                 if (cancelFlag.load(std::memory_order_acquire)) {
-                    throw neograph::graph::CancelledException("offload cancelled");
+                    throw neograph::graph::CancelledException("offload Canceled");
                 }
                 co_return 42;
             }

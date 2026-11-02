@@ -353,10 +353,10 @@ asio::awaitable<utilxx_base::Json> SessionServerAgentIO::handleInterrupt(
 
     utilxx_base::Json result      = utilxx_base::Json::array();
     bool              gotResponse = false;
-    bool              cancelled   = false;
+    bool              Canceled   = false;
     // HIL 等待必须可取消: 取当前会话 token 的 fork 子并绑定 slot,
     // WireCancel 到达 (onCancel 置旗级联) 时打断 async_receive,
-    // 返回 {"__cancelled__":true} 使 AgentRunner 不 resume 而抛取消
+    // 返回 {"__Canceled__":true} 使 AgentRunner 不 resume 而抛取消
     // (fork 子随本协程帧持有, 生命周期安全; 父 S 由 Session 持有)
     auto                                          sessForCancel = session();
     std::shared_ptr<neograph::graph::CancelToken> waitOp;
@@ -367,11 +367,11 @@ asio::awaitable<utilxx_base::Json> SessionServerAgentIO::handleInterrupt(
             // 协程, 因此显式丢弃返回值 (绑定本身已把内部执行器设为该 strand)
             static_cast<void>(waitOp->bind_executor(ex_));
             if (waitOp->is_cancelled()) {
-                cancelled = true;
+                Canceled = true;
             }
         }
     }
-    if (!cancelled) {
+    if (!Canceled) {
         co_await agentxx::util::catchErrorAsync<bool>(
             [&]() -> asio::awaitable<bool> {
                 // timeout <= 0 表示不限制: 不启用 cancel_after, 无限等待客户端响应
@@ -402,7 +402,7 @@ asio::awaitable<utilxx_base::Json> SessionServerAgentIO::handleInterrupt(
             [&](std::string errmsg) -> asio::awaitable<bool> {
                 // 取消信号打断的等待按取消处理, 不按超时/过期处理
                 if (waitOp && waitOp->is_cancelled()) {
-                    cancelled = true;
+                    Canceled = true;
                     co_return false;
                 }
                 XX_LOGW("[session_ctrl] interrupt #{} ended early: {}", id, errmsg);
@@ -413,11 +413,11 @@ asio::awaitable<utilxx_base::Json> SessionServerAgentIO::handleInterrupt(
         );
     }
     pending_.erase(id);
-    if (cancelled) {
+    if (Canceled) {
         // 被取消: 不发过期通知 (客户端的取消已由 WireCancel 驱动本地收尾),
         // 返回取消标记, 调用方不 resume
         co_return utilxx_base::Json{
-            {"__cancelled__", true}
+            {"__Canceled__", true}
         };
     }
     if (!gotResponse) {
@@ -2245,7 +2245,7 @@ asio::awaitable<void> SessionServerAgentIO::run() {
 
         std::string turnModel = std::move(currentItem.model);
 
-        // catchErrorAsync: 取消类异常 (CancelledException/NodeInterrupt) 与普通异常
+        // catchErrorAsync: 取消类异常 (CanceledException/NodeInterrupt) 与普通异常
         // 一致转为错误消息通知客户端 (onRethrow), 避免异常逃逸 co_spawn 完成处理器;
         // 其余异常同样转为错误消息
         // 错误提示: agent 线程插入会话历史并发送 MessageTip WireDelta (覆盖

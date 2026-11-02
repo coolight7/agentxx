@@ -768,7 +768,7 @@ void checkInterfaceTableLayout(const fs::path& root, Violations& v) {
         {"AgentxxPluginResourcesIface",
          "register_skill_dir|unregister_skill_dir|register_memory_file|unregister_memory_file|register_mcp_server|unregister_mcp_server|get_own_resources"
         },
-        {"AgentxxPluginSessionIface",     "get_share_store|emit_message_tip|add_share_store|get_session_work_dir|is_cancelled"                                                                                                                                                                                                                                      },
+        {"AgentxxPluginSessionIface",     "get_share_store|emit_message_tip|add_share_store|get_session_work_dir|is_canceled"                                                                                                                                                                                                                                      },
         {"AgentxxPluginToolsIface",       "register_tool|unregister_tool|call_tool_async"                                                                                                                                                                                                                                                                           },
         {"PluginxxCancelIface",           "op_cancel"                                                                                                                                                                                                                                                                                              },
         {"PluginxxCapabilitiesIface",

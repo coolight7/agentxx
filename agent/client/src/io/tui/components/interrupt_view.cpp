@@ -404,10 +404,10 @@ Element InterruptView::buildStatusLine(const TUIMessage& msg) const {
                 text(confirmedText) | color(theme.accentColor) | theme.dim() | xflex_shrink,
             });
         }
-        case TUIMessage::InterruptStatus::Cancelled:
+        case TUIMessage::InterruptStatus::Canceled:
             return hbox({
                 text(tr("interrupt.header")) | color(theme.hintColor),
-                text(tr("interrupt.cancelled")) | color(theme.errorColor) | theme.dim()
+                text(tr("interrupt.Canceled")) | color(theme.errorColor) | theme.dim()
                     | xflex_shrink,
             });
         case TUIMessage::InterruptStatus::Expired:
@@ -749,7 +749,7 @@ void InterruptView::confirm(size_t msgIndex) {
 
         requestIdOf(src, wireId);
         submit.values                 = std::move(values);
-        submit.cancelled              = false;
+        submit.Canceled              = false;
         confirmed                     = true;
         auto& mm                      = ctx_.state->mutableMessage(st, msgIndex);
         mm.interrupt->interruptStatus = TUIMessage::InterruptStatus::Confirmed;
@@ -778,14 +778,14 @@ void InterruptView::cancel(size_t msgIndex) {
         }
         wireId = src.interrupt->interruptId;
         valid  = true;
-        // 标记同请求全部未操作消息为 Cancelled (一条请求一份表单; 防御性遍历)
+        // 标记同请求全部未操作消息为 Canceled (一条请求一份表单; 防御性遍历)
         for (size_t i = 0; i < st.messages.size(); ++i) {
             const auto& m = *st.messages[i];
             if (m.role == TUIMessage::Role::Interrupt && m.interrupt
                 && m.interrupt->interruptId == wireId
                 && m.interrupt->interruptStatus == TUIMessage::InterruptStatus::Waiting) {
                 auto& mm                      = ctx_.state->mutableMessage(st, i);
-                mm.interrupt->interruptStatus = TUIMessage::InterruptStatus::Cancelled;
+                mm.interrupt->interruptStatus = TUIMessage::InterruptStatus::Canceled;
             }
         }
     });
@@ -795,7 +795,7 @@ void InterruptView::cancel(size_t msgIndex) {
     // 清理该请求的表单状态 (消息已固定状态, 编辑残留不再需要)
     states_.erase(wireId);
     InterruptFormSubmit submit;
-    submit.cancelled = true;
+    submit.Canceled = true;
     submit.values    = utilxx_base::Json::object();
     sendSubmit(wireId, submit);
     activeMsg_ = static_cast<size_t>(-1);

@@ -29,7 +29,7 @@ namespace agentxx {
 namespace nodes {
 
 inline static constexpr std::string_view defaultExceptionTip{"[Exception aborted]"};
-inline static constexpr std::string_view defaultUserCancelTip{"[User cancelled]"};
+inline static constexpr std::string_view defaultUserCancelTip{"[User Canceled]"};
 inline static constexpr std::string_view defaultContinueTip{"[Please continue]"};
 
 // 生成唯一的 tool_call id: 毫秒时间戳 + 32 位随机数
@@ -1239,7 +1239,7 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
             co_return;
         } catch (const neograph::graph::CancelledException&) {
             isCancel = true;
-            errInfo  = "Cancelled";
+            errInfo  = "Canceled";
             errorPtr = std::current_exception();
             // } catch (const neograph::graph::NodeInterrupt&) {
             // isCancel = true;

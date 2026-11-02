@@ -121,7 +121,7 @@ static int32_t ragSetup(RagPluginCtx& ctx, RagAgentState& st) {
         ) -> std::string {
             (void)c;
             if (pluginxx_cancel_is_requested(cancel_token)) {
-                throw agentxx::plugin::CancelledException("rag_search cancelled");
+                throw agentxx::plugin::CanceledException("rag_search Canceled");
             }
             ArgReader args(args_json);
             auto      query = args.require<std::string>("query");
@@ -135,7 +135,7 @@ static int32_t ragSetup(RagPluginCtx& ctx, RagAgentState& st) {
             }
             auto results = st.store->search(query, static_cast<size_t>(limit));
             if (pluginxx_cancel_is_requested(cancel_token)) {
-                throw agentxx::plugin::CancelledException("rag_search cancelled");
+                throw agentxx::plugin::CanceledException("rag_search Canceled");
             }
             if (!results.has_value()) {
                 throw std::runtime_error{fmt::format("RAG search failed: {}", results.error())};

@@ -64,7 +64,7 @@ static asio::awaitable<void> test_http_read_timeout() {
         std::make_shared<HttpServer::Handler>(
             [](HttpServer::Request&, HttpServer::Response&, std::string_view
             ) -> asio::awaitable<void> {
-                // Never respond — just wait until cancelled
+                // Never respond — just wait until Canceled
                 asio::steady_timer timer(co_await asio::this_coro::executor);
                 timer.expires_after(std::chrono::seconds{300});
                 utilxx_base::AsioErrorCode ec;

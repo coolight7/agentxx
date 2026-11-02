@@ -65,8 +65,8 @@ void KeyMetrics::noteTurnEnd(const TurnOutcome outcome, const int64_t durationMs
         case TurnOutcome::Failed:
             turnsFailed_.fetch_add(1, std::memory_order_relaxed);
             break;
-        case TurnOutcome::Cancelled:
-            turnsCancelled_.fetch_add(1, std::memory_order_relaxed);
+        case TurnOutcome::Canceled:
+            turnsCanceled_.fetch_add(1, std::memory_order_relaxed);
             break;
         case TurnOutcome::Interrupted:
             turnsInterrupted_.fetch_add(1, std::memory_order_relaxed);
@@ -114,8 +114,8 @@ void KeyMetrics::noteToolCall(const ToolOutcome outcome) {
         case ToolOutcome::Failed:
             toolFailed_.fetch_add(1, std::memory_order_relaxed);
             break;
-        case ToolOutcome::Cancelled:
-            toolCancelled_.fetch_add(1, std::memory_order_relaxed);
+        case ToolOutcome::Canceled:
+            toolCanceled_.fetch_add(1, std::memory_order_relaxed);
             break;
         case ToolOutcome::Interrupted:
             toolInterrupted_.fetch_add(1, std::memory_order_relaxed);
@@ -182,7 +182,7 @@ utilxx_base::Json KeyMetrics::toJson() const {    utilxx_base::Json j = utilxx_b
     turns["total"]          = turns_.load(std::memory_order_relaxed);
     turns["completed"]      = turnsCompleted_.load(std::memory_order_relaxed);
     turns["failed"]         = turnsFailed_.load(std::memory_order_relaxed);
-    turns["cancelled"]      = turnsCancelled_.load(std::memory_order_relaxed);
+    turns["Canceled"]      = turnsCanceled_.load(std::memory_order_relaxed);
     turns["interrupted"]    = turnsInterrupted_.load(std::memory_order_relaxed);
     turns["avg_ms"]         = avgOf(turnTotalMs_.load(std::memory_order_relaxed), turns_.load());
     turns["max_ms"]         = turnMaxMs_.load(std::memory_order_relaxed);
@@ -211,11 +211,11 @@ utilxx_base::Json KeyMetrics::toJson() const {    utilxx_base::Json j = utilxx_b
     utilxx_base::Json tools = utilxx_base::Json::object();
     tools["ok"]             = toolOk_.load(std::memory_order_relaxed);
     tools["failed"]         = toolFailed_.load(std::memory_order_relaxed);
-    tools["cancelled"]      = toolCancelled_.load(std::memory_order_relaxed);
+    tools["Canceled"]      = toolCanceled_.load(std::memory_order_relaxed);
     tools["interrupted"]    = toolInterrupted_.load(std::memory_order_relaxed);
     tools["total"]          = toolOk_.load(std::memory_order_relaxed)
                      + toolFailed_.load(std::memory_order_relaxed)
-                     + toolCancelled_.load(std::memory_order_relaxed)
+                     + toolCanceled_.load(std::memory_order_relaxed)
                      + toolInterrupted_.load(std::memory_order_relaxed);
     j["tools"] = std::move(tools);
 
@@ -253,16 +253,16 @@ std::string KeyMetrics::summary() const {
     const auto  samples    = firstTokenSamples_.load(std::memory_order_relaxed);
     const auto& toolsTotal = toolOk_.load(std::memory_order_relaxed)
                              + toolFailed_.load(std::memory_order_relaxed)
-                             + toolCancelled_.load(std::memory_order_relaxed)
+                             + toolCanceled_.load(std::memory_order_relaxed)
                              + toolInterrupted_.load(std::memory_order_relaxed);
     return fmt::format(
-        "turns={} (ok={} failed={} cancelled={} interrupted={}) ttft_avg={:.1f}ms (n={}) "
+        "turns={} (ok={} failed={} Canceled={} interrupted={}) ttft_avg={:.1f}ms (n={}) "
         "model_calls={} errors={} tools={} (failed={}) compactions={} prompt_refreshes={} "
         "prompt_changes={} events_delivered={} events_dropped={} wait_timeouts={}",
         turns,
         turnsCompleted_.load(std::memory_order_relaxed),
         turnsFailed_.load(std::memory_order_relaxed),
-        turnsCancelled_.load(std::memory_order_relaxed),
+        turnsCanceled_.load(std::memory_order_relaxed),
         turnsInterrupted_.load(std::memory_order_relaxed),
         avgOf(firstTokenTotalMs_.load(std::memory_order_relaxed), samples),
         samples,
@@ -283,7 +283,7 @@ void KeyMetrics::reset() {
     turns_.store(0);
     turnsCompleted_.store(0);
     turnsFailed_.store(0);
-    turnsCancelled_.store(0);
+    turnsCanceled_.store(0);
     turnsInterrupted_.store(0);
     firstTokenSamples_.store(0);
     firstTokenTotalMs_.store(0);
@@ -298,7 +298,7 @@ void KeyMetrics::reset() {
     cacheWriteTokens_.store(0);
     toolOk_.store(0);
     toolFailed_.store(0);
-    toolCancelled_.store(0);
+    toolCanceled_.store(0);
     toolInterrupted_.store(0);
     compactions_.store(0);
     compactionTokensBefore_.store(0);

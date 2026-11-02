@@ -941,28 +941,28 @@ asio::awaitable<TestResult> run_subagent_tool_tests() {
                 .resultId     = "network-interrupt-task",
                 .content      = "",
                 .hasError     = true,
-                .cancelled    = false,
+                .Canceled    = false,
                 .errorMessage = "网络中断: connection reset by peer",
             });
             resp.results.push_back(agentxx::events::RespSubagentBatchItem{
                 .resultId     = "cancel-order-task",
                 .content      = "",
                 .hasError     = true,
-                .cancelled    = false,
+                .Canceled    = false,
                 .errorMessage = "Failed to cancel remote order: order already finalized",
             });
             resp.results.push_back(agentxx::events::RespSubagentBatchItem{
-                .resultId     = "real-cancelled-task",
+                .resultId     = "real-Canceled-task",
                 .content      = "",
                 .hasError     = true,
-                .cancelled    = true,
-                .errorMessage = "Sub-agent cancelled",
+                .Canceled    = true,
+                .errorMessage = "Sub-agent Canceled",
             });
 
-            // 结构化 cancelled 标志断言: 只有真正的取消任务 cancelled==true
-            XX_TEST_EXPECT_FALSE(resp.results[0].cancelled);
-            XX_TEST_EXPECT_FALSE(resp.results[1].cancelled);
-            XX_TEST_EXPECT_TRUE(resp.results[2].cancelled);
+            // 结构化 Canceled 标志断言: 只有真正的取消任务 Canceled==true
+            XX_TEST_EXPECT_FALSE(resp.results[0].Canceled);
+            XX_TEST_EXPECT_FALSE(resp.results[1].Canceled);
+            XX_TEST_EXPECT_TRUE(resp.results[2].Canceled);
 
             // 前两个普通错误应当能正常写入 resumeValues
             utilxx_base::Json resumeValues;

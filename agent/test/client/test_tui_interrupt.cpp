@@ -218,7 +218,7 @@ struct InterruptFixture {
 
     /// 表单提交结果 (通道读取)
     struct Submit {
-        bool              cancelled = false;
+        bool              Canceled = false;
         utilxx_base::Json values    = utilxx_base::Json::object();
 
         /// 便捷: 指定控件 id 的字符串值 (不存在返回 nullopt)
@@ -239,7 +239,7 @@ struct InterruptFixture {
     /// 从通道读取一次提交结果; 返回 false = 无可用消息
     bool recvForm(std::shared_ptr<InterruptResultChannel> ch, Submit& out) {
         bool got = ch->try_receive([&](utilxx_base::AsioErrorCode, InterruptFormSubmit s) {
-            out.cancelled = s.cancelled;
+            out.Canceled = s.Canceled;
             out.values    = std::move(s.values);
         });
         io.run(); // 排空 async_send 投递的完成 handler (数据本身已入队)
@@ -549,7 +549,7 @@ void test_buttons_commit_on_pick() {
     XX_TEST_EXPECT_TRUE(f.click(mi, "allow", 0));
     InterruptFixture::Submit s;
     XX_TEST_EXPECT_TRUE(f.recvForm(ch, s));
-    XX_TEST_EXPECT_FALSE(s.cancelled);
+    XX_TEST_EXPECT_FALSE(s.Canceled);
     XX_TEST_EXPECT_TRUE(s.values.is_object());
     XX_TEST_EXPECT_EQ(s.get("allow").value_or(""), std::string("true"));
 
@@ -849,7 +849,7 @@ void test_form_submits_all_control_values() {
     XX_TEST_EXPECT_TRUE(f.click(mi, "submit", 0));
     InterruptFixture::Submit s;
     XX_TEST_EXPECT_TRUE(f.recvForm(ch, s));
-    XX_TEST_EXPECT_FALSE(s.cancelled);
+    XX_TEST_EXPECT_FALSE(s.Canceled);
     XX_TEST_EXPECT_TRUE(s.values.is_object());
     XX_TEST_EXPECT_EQ(s.values.size(), size_t{3});
     XX_TEST_EXPECT_EQ(s.get("path").value_or(""), std::string("edited"));
@@ -871,7 +871,7 @@ void test_form_without_controls_submits_empty_values() {
     XX_TEST_EXPECT_TRUE(f.click(mi, "submit", 0));
     InterruptFixture::Submit s;
     XX_TEST_EXPECT_TRUE(f.recvForm(ch, s));
-    XX_TEST_EXPECT_FALSE(s.cancelled);
+    XX_TEST_EXPECT_FALSE(s.Canceled);
     XX_TEST_EXPECT_TRUE(s.values.is_object());
     XX_TEST_EXPECT_TRUE(s.values.empty());
     // 无结果值: 状态行用无占位符文案
@@ -1113,18 +1113,18 @@ void test_cancel_marks_all_and_notifies() {
     if (m1.interrupt) {
         XX_TEST_EXPECT_EQ(
             static_cast<int>(m1.interrupt->interruptStatus),
-            static_cast<int>(TUIMessage::InterruptStatus::Cancelled)
+            static_cast<int>(TUIMessage::InterruptStatus::Canceled)
         );
     }
     if (m2.interrupt) {
         XX_TEST_EXPECT_EQ(
             static_cast<int>(m2.interrupt->interruptStatus),
-            static_cast<int>(TUIMessage::InterruptStatus::Cancelled)
+            static_cast<int>(TUIMessage::InterruptStatus::Canceled)
         );
     }
     InterruptFixture::Submit s;
     XX_TEST_EXPECT_TRUE(f.recvForm(ch, s));
-    XX_TEST_EXPECT_TRUE(s.cancelled);
+    XX_TEST_EXPECT_TRUE(s.Canceled);
     XX_TEST_EXPECT_TRUE(s.values.is_object() && s.values.empty());
     // 状态行
     XX_TEST_EXPECT_TRUE(f.render().find("已取消") != std::string::npos);

@@ -414,7 +414,7 @@ void AcpProtocolHandler::workerRunPrompt(
                 emit(jsonRpcResult(
                     id,
                     {
-                        {"stopReason", "cancelled"}
+                        {"stopReason", "Canceled"}
                 }
                 ));
                 return true;

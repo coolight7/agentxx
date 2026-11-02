@@ -245,8 +245,8 @@ asio::awaitable<void> test_tool_await() {
         {"sessionId",  fx->sessionId  },
         {"all",        true           },
     };
-    auto cancelled = co_await execTool(*fx->tool, cancelTokenArgs);
-    XX_TEST_EXPECT_TRUE(cancelled.starts_with("[Event cancel]"));
+    auto Canceled = co_await execTool(*fx->tool, cancelTokenArgs);
+    XX_TEST_EXPECT_TRUE(Canceled.starts_with("[Event cancel]"));
     co_return;
 }
 
@@ -304,8 +304,8 @@ asio::awaitable<void> test_tool_status_list_cancel() {
         Json{{"opt", "cancel"}, {"wait", waitId}, {"sessionId", fx->sessionId}}
     );
     XX_TEST_EXPECT_TRUE(cancelOne.starts_with("[Event cancel] wait="));
-    XX_TEST_EXPECT_TRUE(contains(cancelOne, "cancelled"));
-    XX_TEST_EXPECT_TRUE(fx->hub->queryWait(waitId)->state == agentxx::events::WaitState::Cancelled);
+    XX_TEST_EXPECT_TRUE(contains(cancelOne, "Canceled"));
+    XX_TEST_EXPECT_TRUE(fx->hub->queryWait(waitId)->state == agentxx::events::WaitState::Canceled);
 
     // 已取消的等待再取消: 参数错误 (不是静默成功)
     auto cancelAgain = co_await execTool(

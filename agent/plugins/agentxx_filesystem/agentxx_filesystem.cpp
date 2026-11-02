@@ -314,7 +314,7 @@ static int32_t fsSetup(FsPluginCtx& ctx, const ScopeRef& ref) {
                 args.raw(),
                 std::string(workDir),
                 [&] {
-                    return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCancelled(ref.ptr(), tid);
+                    return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCanceled(ref.ptr(), tid);
                 },
                 makeReadPathFilter(c, ref, tid)
             );
@@ -385,7 +385,7 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
                     return args.errorMessage();
                 }
                 return fileReadExecute(args.raw(), std::string(workDir), [&] {
-                    return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCancelled(ref.ptr(), tid);
+                    return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCanceled(ref.ptr(), tid);
                 });
             },
             0,
@@ -449,7 +449,7 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
                     return args.errorMessage();
                 }
                 return fileWriteExecute(args.raw(), std::string(workDir), [&] {
-                    return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCancelled(ref.ptr(), tid);
+                    return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCanceled(ref.ptr(), tid);
                 });
             },
             0,
@@ -525,7 +525,7 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
                     return args.errorMessage();
                 }
                 return fileEditExecute(args.raw(), std::string(workDir), [&] {
-                    return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCancelled(ref.ptr(), tid);
+                    return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCanceled(ref.ptr(), tid);
                 });
             }
         );
@@ -571,7 +571,7 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
                 args.raw(),
                 std::string(workDir),
                 [&] {
-                    return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCancelled(ref.ptr(), tid);
+                    return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCanceled(ref.ptr(), tid);
                 },
                 makeReadPathFilter(c, ref, tid)
             );
@@ -626,7 +626,7 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
                 args.raw(),
                 std::string(workDir),
                 [&] {
-                    return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCancelled(ref.ptr(), tid);
+                    return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCanceled(ref.ptr(), tid);
                 },
                 makeReadPathFilter(c, ref, tid)
             );
@@ -667,7 +667,7 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
                 return reason;
             }
             return fileMoveExecute(args.raw(), std::string(workDir), [&] {
-                return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCancelled(ref.ptr(), tid);
+                return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCanceled(ref.ptr(), tid);
             });
         },
         0,
@@ -706,7 +706,7 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
                 return reason;
             }
             return fileCopyExecute(args.raw(), std::string(workDir), [&] {
-                return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCancelled(ref.ptr(), tid);
+                return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCanceled(ref.ptr(), tid);
             });
         },
         0,
@@ -738,7 +738,7 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
                 return args.errorMessage();
             }
             return fileRemoveExecute(args.raw(), std::string(workDir), [&] {
-                return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCancelled(ref.ptr(), tid);
+                return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCanceled(ref.ptr(), tid);
             });
         },
         0,

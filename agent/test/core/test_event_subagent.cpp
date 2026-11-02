@@ -298,7 +298,7 @@ asio::awaitable<void> test_async_dispatch_returns_immediately() {
     XX_TEST_EXPECT_EQ(value.value("resultId", std::string{}), std::string{"job1"});
     XX_TEST_EXPECT_EQ(value.value("subagent", std::string{}), std::string{"subagent_task"});
     XX_TEST_EXPECT_FALSE(value.value("hasError", true));
-    XX_TEST_EXPECT_FALSE(value.value("cancelled", true));
+    XX_TEST_EXPECT_FALSE(value.value("Canceled", true));
     XX_TEST_EXPECT_EQ(value.value("content", std::string{}), std::string{"async child result"});
     XX_TEST_EXPECT_FALSE(value.value("agentId", std::string{}).empty());
     // 作业收尾后登记表清空
@@ -537,7 +537,7 @@ asio::awaitable<void> test_async_needs_hub() {
     co_return;
 }
 
-/// 6. 取消: 还在跑的异步作业被取消, 父会话仍能收到 {cancelled:true}
+/// 6. 取消: 还在跑的异步作业被取消, 父会话仍能收到 {Canceled:true}
 asio::awaitable<void> test_async_cancel() {
     auto fx = std::make_shared<SubagentFixture>();
     XX_TEST_EXPECT_TRUE(buildFixture(fx));
@@ -585,7 +585,7 @@ asio::awaitable<void> test_async_cancel() {
     XX_TEST_EXPECT_TRUE(ok);
     if (auto rec = hub->queryEvent("subagent.done.job6"); rec.has_value() && !rec->history.empty()) {
         const auto value = rec->history.front();
-        XX_TEST_EXPECT_TRUE(value.value("cancelled", false) || value.value("hasError", false));
+        XX_TEST_EXPECT_TRUE(value.value("Canceled", false) || value.value("hasError", false));
     }
     XX_TEST_EXPECT_EQ(fx->host->runningAsyncJobs(), size_t{0});
 

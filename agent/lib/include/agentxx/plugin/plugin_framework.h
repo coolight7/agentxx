@@ -66,7 +66,7 @@ using pluginxx::PluginManagerBase;
 
 // ==================== Operation 驱动器 (pluginxx/runtime/op_driver.h) ====================
 using pluginxx::awaitPluginLifecycle;
-using pluginxx::awaitPluginOp;
+using pluginxx::awaitPluginOpResult;
 using pluginxx::cancelPluginOperation;
 using pluginxx::OpCore;
 using pluginxx::OpDrive;

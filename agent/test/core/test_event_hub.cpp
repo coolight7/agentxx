@@ -464,17 +464,17 @@ asio::awaitable<void> test_hub_cancel_and_close() {
     XX_TEST_EXPECT_TRUE(w1.has_value() && w2.has_value());
 
     XX_TEST_EXPECT_TRUE(hub.cancelWait(w1->waitId));
-    XX_TEST_EXPECT_TRUE(hub.queryWait(w1->waitId)->state == WaitState::Cancelled);
+    XX_TEST_EXPECT_TRUE(hub.queryWait(w1->waitId)->state == WaitState::Canceled);
     // 已终态再取消: false
     XX_TEST_EXPECT_FALSE(hub.cancelWait(w1->waitId));
     XX_TEST_EXPECT_TRUE(hub.cancelWaitsOfSession(fx->sessionId, "test") == 1);
-    XX_TEST_EXPECT_TRUE(hub.queryWait(w2->waitId)->state == WaitState::Cancelled);
+    XX_TEST_EXPECT_TRUE(hub.queryWait(w2->waitId)->state == WaitState::Canceled);
 
     auto w3 = hub.watch(spec);
     XX_TEST_EXPECT_TRUE(w3.has_value());
     hub.closeAll("test-close");
     XX_TEST_EXPECT_TRUE(hub.closed());
-    XX_TEST_EXPECT_TRUE(hub.queryWait(w3->waitId)->state == WaitState::Cancelled);
+    XX_TEST_EXPECT_TRUE(hub.queryWait(w3->waitId)->state == WaitState::Canceled);
     // 关闭后一切发布都被拒
     XX_TEST_EXPECT_FALSE(hub.publishValue("cancel.me", Json(1), &err));
     XX_TEST_EXPECT_TRUE(contains(err, "closed"));
@@ -631,14 +631,14 @@ asio::awaitable<void> test_hub_await_once() {
     cancelSpec.event         = "cancel.me.out";
     cancelSpec.originSession = fx->sessionId;
     cancelSpec.timeout       = std::chrono::milliseconds{5000};
-    bool cancelled           = false;
+    bool Canceled           = false;
     try {
         auto ignored  = co_await hub.awaitOnce(cancelSpec, token);
         (void)ignored;
     } catch (const neograph::graph::CancelledException&) {
-        cancelled = true;
+        Canceled = true;
     }
-    XX_TEST_EXPECT_TRUE(cancelled);
+    XX_TEST_EXPECT_TRUE(Canceled);
     XX_TEST_EXPECT_TRUE(hub.waitCount() == 0);
     co_return;
 }

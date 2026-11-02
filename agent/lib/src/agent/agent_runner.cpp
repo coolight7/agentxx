@@ -165,14 +165,14 @@ asio::awaitable<AgentRunner::Outcome> AgentRunner::run(
                                     );
                 }
                 if (batchResp.has_value()) {
-                    // 取消检查: 子代理被取消 (返回 cancelled 结构化字段置位) 时不写回
+                    // 取消检查: 子代理被取消 (返回 Canceled 结构化字段置位) 时不写回
                     // resume 值, 由外层统一按取消处理, 避免把结果当正常摘要/结果 resume 后继续执行
-                    bool subagentCancelled = false;
+                    bool subagentCanceled = false;
                     for (const auto& r : batchResp->results) {
-                        if (r.cancelled) {
-                            subagentCancelled = true;
+                        if (r.Canceled) {
+                            subagentCanceled = true;
                             XX_LOGI(
-                                "AgentRunner `{}` subagent delegation cancelled: resultId={}, msg={}",
+                                "AgentRunner `{}` subagent delegation Canceled: resultId={}, msg={}",
                                 sessionId,
                                 r.resultId,
                                 r.errorMessage
@@ -180,8 +180,8 @@ asio::awaitable<AgentRunner::Outcome> AgentRunner::run(
                             break;
                         }
                     }
-                    if (subagentCancelled || (cancelToken && cancelToken->is_cancelled())) {
-                        throw neograph::graph::CancelledException("subagent delegation cancelled");
+                    if (subagentCanceled || (cancelToken && cancelToken->is_cancelled())) {
+                        throw neograph::graph::CancelledException("subagent delegation Canceled");
                     }
                     agentxx::tools::buildSubagentResumeValues(
                         resumeValues,
@@ -235,7 +235,7 @@ asio::awaitable<AgentRunner::Outcome> AgentRunner::run(
                         }
                         resumeValues[rid] = utilxx_base::Json::parse(resp->resultJson);
                     } else if (resp.has_value() && !resp->handled
-                               && resp->resultJson.find("__cancelled__") != std::string::npos) {
+                               && resp->resultJson.find("__Canceled__") != std::string::npos) {
                         throw neograph::graph::CancelledException("HIL interrupted by cancel");
                     }
                 }
@@ -259,7 +259,7 @@ asio::awaitable<AgentRunner::Outcome> AgentRunner::run(
             // 取消检查: 中断处理完成、resume 前若令牌已取消则直接抛取消,
             // 不再恢复执行 (否则表现为"打断后马上自动恢复继续执行")
             if (cancelToken && cancelToken->is_cancelled()) {
-                throw neograph::graph::CancelledException("cancelled before resume");
+                throw neograph::graph::CancelledException("Canceled before resume");
             }
 
             // 恢复执行中断点, 直接回到触发中断的 Node

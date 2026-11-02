@@ -1009,7 +1009,7 @@ asio::awaitable<EvolutionTrainingAgent::EvaluationResult> EvolutionTrainingAgent
     }
 
     int                        evaluatedCount = 0;
-    bool                       cancelled      = false;
+    bool                       Canceled      = false;
     std::map<std::string, int> scoreKeySeen; // 重名用例计数
 
     for (size_t pos = 0; pos < order.size(); ++pos) {
@@ -1019,7 +1019,7 @@ asio::awaitable<EvolutionTrainingAgent::EvaluationResult> EvolutionTrainingAgent
 
         // 取消检查 (用例边界): 剩余用例不再评估, 外层循环保存现场后退出
         if (cancelRequested(cfg)) {
-            cancelled = true;
+            Canceled = true;
             break;
         }
 
@@ -1170,7 +1170,7 @@ asio::awaitable<EvolutionTrainingAgent::EvaluationResult> EvolutionTrainingAgent
             variant.averageScore(),
             variant.evalRounds,
             evaluatedCount < static_cast<int>(nCases) ? " (early-terminated)" : "",
-            cancelled ? " (cancelled)" : ""
+            Canceled ? " (Canceled)" : ""
         );
     }
     co_return evResult;
@@ -1349,7 +1349,7 @@ asio::awaitable<void> EvolutionTrainingAgent::runEvolutionLoop(const EvolutionTr
         // 取消检查 (代边界): 优雅退出并保存现场
         if (cancelRequested(cfg)) {
             XX_LOGW(
-                "[EvolutionTraining] Cancelled at generation {} boundary. "
+                "[EvolutionTraining] Canceled at generation {} boundary. "
                 "Saving and stopping.",
                 generationCounter
             );
@@ -1621,7 +1621,7 @@ asio::awaitable<void> EvolutionTrainingAgent::runEvolutionLoop(const EvolutionTr
         // 取消检查 (轮末统一出口): 已合并/排序/裁剪完成, 保存后退出
         if (cancelRequested(cfg)) {
             XX_LOGW(
-                "[EvolutionTraining] Cancelled during generation {}. "
+                "[EvolutionTraining] Canceled during generation {}. "
                 "Saving and stopping.",
                 generationCounter
             );

@@ -46,7 +46,7 @@
 namespace agentxx_fs_plugin {
 
 /// 取消查询回调 (返回 true 表示会话已取消); 测试可传 nullptr 等价无取消支持
-using IsCancelledFn = std::function<bool()>;
+using IsCanceledFn = std::function<bool()>;
 
 /// 路径权限过滤回调 (批量): 入参为工具枚举出的**完整路径数组**, 返回等长允许标记
 /// (1 = 已明确允许); 返回空数组表示查询不可用, 调用方跳过过滤 (保持原行为)
@@ -486,7 +486,7 @@ inline std::vector<std::filesystem::path>
 inline std::string fileListExecuteImpl(
     const utilxx_base::Json& arguments,
     const std::string&       workDir,
-    const IsCancelledFn&     isCancelled = nullptr,
+    const IsCanceledFn&     isCanceled = nullptr,
     const PathFilterFn&      pathFilter  = nullptr
 ) {
     auto rawPath    = arguments.value("path", std::string{});
@@ -554,8 +554,8 @@ inline std::string fileListExecuteImpl(
 
     auto checkStop = [&]() -> bool {
         // 返回 true 表示应提前终止 (取消或超时)
-        if (isCancelled && isCancelled()) {
-            lines.push_back("[Error: cancelled]");
+        if (isCanceled && isCanceled()) {
+            lines.push_back("[Error: Canceled]");
             return true;
         }
         if (deadline.expired()) {
@@ -668,7 +668,7 @@ inline std::string fileListExecuteImpl(
     // (recursive 始终表示"展开子目录", 与普通目录路径的语义一致)
     std::vector<std::filesystem::path> matched;
     if (detail::hasGlobMagic(targetPath)) {
-        // 展开期间无法回调 isCancelled (glob 库只接受 atomic 标志), 与 glob 工具一致
+        // 展开期间无法回调 isCanceled (glob 库只接受 atomic 标志), 与 glob 工具一致
         // 传恒假标志, 取消/超时由外层 checkStop 在条目之间轮询
         std::atomic<bool> globNeverCancel{false};
         agentxx::util::catchError<bool>(
@@ -840,7 +840,7 @@ inline void checkWholeFileSizeBeforeRead(const std::filesystem::path& fsPath) {
 inline std::string fileReadExecuteImpl(
     const utilxx_base::Json& arguments,
     const std::string&       workDir,
-    const IsCancelledFn& isCancelled = nullptr // 单文件短操作不轮询; 形参保持与其他执行体一致
+    const IsCanceledFn& isCanceled = nullptr // 单文件短操作不轮询; 形参保持与其他执行体一致
 ) {
     detail::rejectLegacyLineArgs(arguments);
     auto filepath = detail::wsAbs(workDir, arguments.value("path", std::string{}));
@@ -938,7 +938,7 @@ inline std::string fileReadExecuteImpl(
 inline std::string fileWriteExecuteImpl(
     const utilxx_base::Json& arguments,
     const std::string&       workDir,
-    const IsCancelledFn& isCancelled = nullptr // 单文件短操作不轮询; 形参保持与其他执行体一致
+    const IsCanceledFn& isCanceled = nullptr // 单文件短操作不轮询; 形参保持与其他执行体一致
 ) {
     auto filepath = detail::wsAbs(workDir, arguments.value("path", std::string{}));
     if (filepath.empty()) {
@@ -1191,7 +1191,7 @@ inline void applyEditSegments(std::string& content, const std::vector<EditSegmen
 inline std::string fileEditExecuteImpl(
     const utilxx_base::Json& arguments,
     const std::string&       workDir,
-    const IsCancelledFn& isCancelled = nullptr // 单文件短操作不轮询; 形参保持与其他执行体一致
+    const IsCanceledFn& isCanceled = nullptr // 单文件短操作不轮询; 形参保持与其他执行体一致
 ) {
     auto filepath = detail::wsAbs(workDir, arguments.value("path", std::string{}));
     if (filepath.empty()) {
@@ -1285,7 +1285,7 @@ inline std::string fileEditExecuteImpl(
 inline std::string fileGlobExecuteImpl(
     const utilxx_base::Json& arguments,
     const std::string&       workDir,
-    const IsCancelledFn&     isCancelled = nullptr,
+    const IsCanceledFn&     isCanceled = nullptr,
     const PathFilterFn&      pathFilter  = nullptr
 ) {
     auto file_patterns = arguments.value("file_patterns", std::vector<std::string>{});
@@ -1315,7 +1315,7 @@ inline std::string fileGlobExecuteImpl(
     auto maxFiles = arguments.value<int64_t>("max_files", 1000);
 
     auto checkCancel = [&]() -> bool {
-        return isCancelled && isCancelled();
+        return isCanceled && isCanceled();
     };
 
     // glob 取消标志: 本实现以 deadline/cancel 轮询控制整体流程,
@@ -1332,7 +1332,7 @@ inline std::string fileGlobExecuteImpl(
     std::vector<std::filesystem::path> resultList;
     for (const auto& pattern : file_patterns) {
         if (checkCancel() || deadline.expired()) {
-            return "[Error: cancelled or timed out]";
+            return "[Error: Canceled or timed out]";
         }
         // 到限即停: 遍历已在策略内停止, 后续 pattern 不再展开 (总量不超上限)
         if (walkPolicy.limitReached) {
@@ -1374,7 +1374,7 @@ inline std::string fileGlobExecuteImpl(
         filtered.reserve(resultList.size());
         for (const auto& p : resultList) {
             if (checkCancel() || deadline.expired()) {
-                return "[Error: cancelled or timed out]";
+                return "[Error: Canceled or timed out]";
             }
             if (typeFilter.count(detail::fileTypeOf(p))) {
                 filtered.push_back(p);
@@ -1458,7 +1458,7 @@ inline std::string fileGlobExecuteImpl(
     }
     for (const auto& item : resultList) {
         if (checkCancel() || deadline.expired()) {
-            return "[Error: cancelled or timed out]";
+            return "[Error: Canceled or timed out]";
         }
         oss << detail::toUtf8(item) << '\n';
     }
@@ -1471,7 +1471,7 @@ inline std::string fileGlobExecuteImpl(
 inline std::string fileGrepExecuteImpl(
     const utilxx_base::Json& arguments,
     const std::string&       workDir,
-    const IsCancelledFn&     isCancelled = nullptr,
+    const IsCanceledFn&     isCanceled = nullptr,
     const PathFilterFn&      pathFilter  = nullptr
 ) {
     // 搜索模式参数 (两者均可省略, 但至少指定其一; 同时指定时结果为两者并集):
@@ -1525,7 +1525,7 @@ inline std::string fileGrepExecuteImpl(
     auto contextLines    = arguments.value<int64_t>("context_lines", 0);
 
     auto checkStop = [&]() -> bool {
-        return (isCancelled && isCancelled()) || deadline.expired();
+        return (isCanceled && isCanceled()) || deadline.expired();
     };
 
     // ---- glob 收集候选文件 ----
@@ -1538,7 +1538,7 @@ inline std::string fileGrepExecuteImpl(
     glob::WalkPolicy walkPolicy = detail::makeWalkPolicy(excludePatterns, maxFiles);
     for (const auto& pattern : file_patterns) {
         if (checkStop()) {
-            return "[Error: cancelled or timed out]";
+            return "[Error: Canceled or timed out]";
         }
         // 到限即停: 遍历已在策略内停止, 后续 pattern 不再展开 (候选总数不超上限)
         if (walkPolicy.limitReached) {
@@ -1846,7 +1846,7 @@ inline std::string fileGrepExecuteImpl(
     bool anyHit = false;
     for (const auto& item : refilelist) {
         if (checkStop()) {
-            return "[Error: cancelled or timed out]";
+            return "[Error: Canceled or timed out]";
         }
         auto filepath = detail::toUtf8(item);
         // 读取并预处理: 跳过二进制/非文本文件 (glob 阶段已过滤目录)
@@ -2203,9 +2203,9 @@ inline std::string
 inline std::string fileMoveExecute(
     const utilxx_base::Json& arguments,
     const std::string&       workDir,
-    const IsCancelledFn&     isCancelled = nullptr
+    const IsCanceledFn&     isCanceled = nullptr
 ) {
-    (void)isCancelled;
+    (void)isCanceled;
     return detail::asErrorText([&] {
         return fileMoveExecuteImpl(arguments, workDir);
     });
@@ -2214,9 +2214,9 @@ inline std::string fileMoveExecute(
 inline std::string fileCopyExecute(
     const utilxx_base::Json& arguments,
     const std::string&       workDir,
-    const IsCancelledFn&     isCancelled = nullptr
+    const IsCanceledFn&     isCanceled = nullptr
 ) {
-    (void)isCancelled;
+    (void)isCanceled;
     return detail::asErrorText([&] {
         return fileCopyExecuteImpl(arguments, workDir);
     });
@@ -2225,9 +2225,9 @@ inline std::string fileCopyExecute(
 inline std::string fileRemoveExecute(
     const utilxx_base::Json& arguments,
     const std::string&       workDir,
-    const IsCancelledFn&     isCancelled = nullptr
+    const IsCanceledFn&     isCanceled = nullptr
 ) {
-    (void)isCancelled;
+    (void)isCanceled;
     return detail::asErrorText([&] {
         return fileRemoveExecuteImpl(arguments, workDir);
     });
@@ -2236,63 +2236,63 @@ inline std::string fileRemoveExecute(
 inline std::string fileListExecute(
     const utilxx_base::Json& arguments,
     const std::string&       workDir,
-    const IsCancelledFn&     isCancelled = nullptr,
+    const IsCanceledFn&     isCanceled = nullptr,
     const PathFilterFn&      pathFilter  = nullptr
 ) {
     return detail::asErrorText([&] {
-        return fileListExecuteImpl(arguments, workDir, isCancelled, pathFilter);
+        return fileListExecuteImpl(arguments, workDir, isCanceled, pathFilter);
     });
 }
 
 inline std::string fileReadExecute(
     const utilxx_base::Json& arguments,
     const std::string&       workDir,
-    const IsCancelledFn&     isCancelled = nullptr
+    const IsCanceledFn&     isCanceled = nullptr
 ) {
     return detail::asErrorText([&] {
-        return fileReadExecuteImpl(arguments, workDir, isCancelled);
+        return fileReadExecuteImpl(arguments, workDir, isCanceled);
     });
 }
 
 inline std::string fileWriteExecute(
     const utilxx_base::Json& arguments,
     const std::string&       workDir,
-    const IsCancelledFn&     isCancelled = nullptr
+    const IsCanceledFn&     isCanceled = nullptr
 ) {
     return detail::asErrorText([&] {
-        return fileWriteExecuteImpl(arguments, workDir, isCancelled);
+        return fileWriteExecuteImpl(arguments, workDir, isCanceled);
     });
 }
 
 inline std::string fileEditExecute(
     const utilxx_base::Json& arguments,
     const std::string&       workDir,
-    const IsCancelledFn&     isCancelled = nullptr
+    const IsCanceledFn&     isCanceled = nullptr
 ) {
     return detail::asErrorText([&] {
-        return fileEditExecuteImpl(arguments, workDir, isCancelled);
+        return fileEditExecuteImpl(arguments, workDir, isCanceled);
     });
 }
 
 inline std::string fileGlobExecute(
     const utilxx_base::Json& arguments,
     const std::string&       workDir,
-    const IsCancelledFn&     isCancelled = nullptr,
+    const IsCanceledFn&     isCanceled = nullptr,
     const PathFilterFn&      pathFilter  = nullptr
 ) {
     return detail::asErrorText([&] {
-        return fileGlobExecuteImpl(arguments, workDir, isCancelled, pathFilter);
+        return fileGlobExecuteImpl(arguments, workDir, isCanceled, pathFilter);
     });
 }
 
 inline std::string fileGrepExecute(
     const utilxx_base::Json& arguments,
     const std::string&       workDir,
-    const IsCancelledFn&     isCancelled = nullptr,
+    const IsCanceledFn&     isCanceled = nullptr,
     const PathFilterFn&      pathFilter  = nullptr
 ) {
     return detail::asErrorText([&] {
-        return fileGrepExecuteImpl(arguments, workDir, isCancelled, pathFilter);
+        return fileGrepExecuteImpl(arguments, workDir, isCanceled, pathFilter);
     });
 }
 
@@ -2640,7 +2640,7 @@ inline asio::awaitable<std::string>
 
 /// 对外协程执行体: 与同步版 *Execute 外层语义一致 —— 可预期异常统一转为
 /// "[Error: ...]" 错误文本返回, 保证受控轮询路径与测试直测行为一致
-/// (单文件读写为短操作不轮询取消, 故不设 isCancelled 形参)
+/// (单文件读写为短操作不轮询取消, 故不设 isCanceled 形参)
 /// - 文件异步 I/O 可用时走真异步实现 (受控轮询), 否则走同步实现
 /// - 注意: 本包装自身必须是协程 (而非返回惰性协程的普通函数) —— 参数引用在
 ///   协程帧内存续, 若经普通函数中转临时 lambda 会因栈帧提前返回而悬垂

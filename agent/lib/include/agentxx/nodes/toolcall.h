@@ -92,7 +92,7 @@ public:
     /// 权限检查 + 连续重复调用确认
     /// - 全程串行执行, 保持与模型声明相同的顺序 (权限询问与 HIL 顺序稳定)
     /// - `return` 是否需要执行执行体 (false 时 [PreparedToolCall::shortCircuit] 为结果)
-    /// - 取消 (CancelledException) 与中断 (NodeInterrupt) 照常向外传播
+    /// - 取消 (CanceledException) 与中断 (NodeInterrupt) 照常向外传播
     asio::awaitable<bool> prepareToolCall(
         const neograph::ToolCall&                            tc,
         std::string_view                                     sessionId,
@@ -134,7 +134,7 @@ public:
     /// 并发执行一批已准备好的工具调用 (batch 内全部为并行安全调用)
     /// - 结果按 batch 内顺序写入 `outMsgs` 对应槽位 (并发完成顺序 ≠ 提交顺序)
     /// - 工具触发的中断 (NodeInterrupt) 记为 `[Interrupt]` 结果并置 `outInterrupted`
-    /// - 取消 (CancelledException) 与其他异常记入 `outError` 并按批次停止新调用:
+    /// - 取消 (CanceledException) 与其他异常记入 `outError` 并按批次停止新调用:
     ///   未启动/未完成的槽位保持空, 由调用方补取消占位
     asio::awaitable<void> runToolBatch(
         const std::vector<PreparedToolCall>&               batch,

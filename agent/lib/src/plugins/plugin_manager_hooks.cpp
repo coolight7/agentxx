@@ -437,13 +437,16 @@ asio::awaitable<void> runPluginHookHandler(
     };
 
     try {
-        co_await agentxx::util::awaitHostPluginOp(plugin::PluginOpAwaitArgs{
-            .inst        = inst,
-            .label       = fmt::format("hook#{}", static_cast<int>(point)),
-            .ex          = ex,
-            .cancelToken = nullptr,
-            .drive       = std::move(drive),
-        });
+        // 非 OK 抛异常 (取消 -> CanceledException, 其余 -> runtime_error), 与改造前一致
+        static_cast<void>(agentxx::util::requirePluginOpOk(
+            co_await agentxx::util::awaitHostPluginOpResult(plugin::PluginOpAwaitArgs{
+                .inst        = inst,
+                .label       = fmt::format("hook#{}", static_cast<int>(point)),
+                .ex          = ex,
+                .cancelToken = nullptr,
+                .drive       = std::move(drive),
+            })
+        ));
     } catch (const std::exception& e) {
         XX_LOGW(
             "插件 `{}` 的钩子处理器 #{} (point={}) 失败: {}",

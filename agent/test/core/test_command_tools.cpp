@@ -107,14 +107,14 @@ struct ExecuteBashCommandTool {
         co_return co_await agentxx_execmd_plugin::bashExecuteAsync(
             args,
             testResolvedWorkDir(ctx),
-            /*isCancelled=*/nullptr
+            /*isCanceled=*/nullptr
         );
 #else
         // popen 回退 (阻塞实现, 测试协程内直调等价于原同步语义)
         co_return agentxx_execmd_plugin::bashExecute(
             args,
             testResolvedWorkDir(ctx),
-            /*isCancelled=*/nullptr
+            /*isCanceled=*/nullptr
         );
 #endif
     }
@@ -139,13 +139,13 @@ struct ExecuteWindowsCommandTool {
         co_return co_await agentxx_execmd_plugin::windowsExecuteAsync(
             args,
             testResolvedWorkDir(ctx),
-            /*isCancelled=*/nullptr
+            /*isCanceled=*/nullptr
         );
 #else
         co_return agentxx_execmd_plugin::windowsExecute(
             args,
             testResolvedWorkDir(ctx),
-            /*isCancelled=*/nullptr
+            /*isCanceled=*/nullptr
         );
 #endif
     }
@@ -1123,7 +1123,7 @@ asio::awaitable<void>
     co_return;
 }
 
-/// 会话取消及时性: isCancelled 恒真 → watcher 20ms 轮询到后整组 kill 子进程,
+/// 会话取消及时性: isCanceled 恒真 → watcher 20ms 轮询到后整组 kill 子进程,
 /// 工具应秒级返回而非等满 timeout (寄生驱动下取消传播路径验证)
 /// - 环境门控: 依赖 killpg 整组终止生效; WSL 下与 timeout_triggers 同源受限
 ///   (基线即失败, 见 test_linux_timeout_kills_descendants 注释), 门控跳过
@@ -1145,7 +1145,7 @@ asio::awaitable<void>
     auto result = co_await agentxx_execmd_plugin::bashExecuteAsync(
         args,
         agentxx::tools::testResolvedWorkDir(agentContext),
-        /*isCancelled=*/
+        /*isCanceled=*/
         []() {
             return true;
         }
@@ -1157,17 +1157,17 @@ asio::awaitable<void>
     // watcher 事件驱动 / 初始取消检测 + kill 后主工作收尾, 应远小于 sleep 的 30s
     XX_TEST_EXPECT_TRUE(elapsed < 10000);
     XX_TEST_EXPECT_TRUE(result.find("ExitCode") != std::string::npos);
-    TEST_INFO << "cancelled sleep-30 command returned in " << elapsed << "ms" << std::endl;
+    TEST_INFO << "Canceled sleep-30 command returned in " << elapsed << "ms" << std::endl;
     co_return;
 }
 
 /// 预取消会话测试: 命令启动前 sessionKey 已在注册表中标记为取消,
 /// runProcPipeline 应在启动前/极早立即退出并组装退出状态
-asio::awaitable<void> test_command_cancel_registry_precancelled(
+asio::awaitable<void> test_command_cancel_registry_preCanceled(
     std::weak_ptr<agentxx::agent::AgentContext> agentContext
 ) {
     agentxx_execmd_plugin::CancelRegistry reg;
-    reg.cancel("precancelled_sess");
+    reg.cancel("preCanceled_sess");
 
     auto args = utilxx_base::Json{
         {"command", "sleep 30"},
@@ -1177,10 +1177,10 @@ asio::awaitable<void> test_command_cancel_registry_precancelled(
     auto result = co_await agentxx_execmd_plugin::bashExecuteAsync(
         args,
         agentxx::tools::testResolvedWorkDir(agentContext),
-        /*isCancelled=*/nullptr,
+        /*isCanceled=*/nullptr,
         /*storeFn=*/nullptr,
         &reg,
-        "precancelled_sess"
+        "preCanceled_sess"
     );
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                        std::chrono::steady_clock::now() - start
@@ -1191,7 +1191,7 @@ asio::awaitable<void> test_command_cancel_registry_precancelled(
     XX_TEST_EXPECT_TRUE(elapsed < 2000);
     XX_TEST_EXPECT_TRUE(result.find("ExitCode") != std::string::npos);
     XX_TEST_EXPECT_EQ(reg.activeCount(), size_t(0));
-    TEST_INFO << "precancelled command returned in " << elapsed << "ms" << std::endl;
+    TEST_INFO << "preCanceled command returned in " << elapsed << "ms" << std::endl;
     co_return;
 }
 
@@ -1225,7 +1225,7 @@ asio::awaitable<void>
             result = co_await agentxx_execmd_plugin::bashExecuteAsync(
                 args,
                 agentxx::tools::testResolvedWorkDir(agentContext),
-                /*isCancelled=*/nullptr,
+                /*isCanceled=*/nullptr,
                 /*storeFn=*/nullptr,
                 &reg,
                 "event_cancel_sess"
@@ -1299,7 +1299,7 @@ asio::awaitable<void> test_command_cancel_registry_multi_session(
             resultA = co_await agentxx_execmd_plugin::bashExecuteAsync(
                 argsA,
                 agentxx::tools::testResolvedWorkDir(agentContext),
-                /*isCancelled=*/nullptr,
+                /*isCanceled=*/nullptr,
                 /*storeFn=*/nullptr,
                 &reg,
                 "sess_A"
@@ -1326,7 +1326,7 @@ asio::awaitable<void> test_command_cancel_registry_multi_session(
             resultB = co_await agentxx_execmd_plugin::bashExecuteAsync(
                 argsB,
                 agentxx::tools::testResolvedWorkDir(agentContext),
-                /*isCancelled=*/nullptr,
+                /*isCanceled=*/nullptr,
                 /*storeFn=*/nullptr,
                 &reg,
                 "sess_B"
@@ -1354,7 +1354,7 @@ asio::awaitable<void> test_command_cancel_registry_multi_session(
 asio::awaitable<void> test_cancel_registry_basic(std::weak_ptr<agentxx::agent::AgentContext>) {
     agentxx_execmd_plugin::CancelRegistry reg;
     XX_TEST_EXPECT_EQ(reg.activeCount(), size_t(0));
-    XX_TEST_EXPECT_FALSE(reg.isCancelled("sess_1"));
+    XX_TEST_EXPECT_FALSE(reg.isCanceled("sess_1"));
 
     int  cb1_count = 0;
     int  cb2_count = 0;
@@ -1380,8 +1380,8 @@ asio::awaitable<void> test_cancel_registry_basic(std::weak_ptr<agentxx::agent::A
     XX_TEST_EXPECT_EQ(cb1_count, 1);
     XX_TEST_EXPECT_EQ(cb2_count, 1);
     XX_TEST_EXPECT_EQ(cb3_count, 0);
-    XX_TEST_EXPECT_TRUE(reg.isCancelled("sess_1"));
-    XX_TEST_EXPECT_FALSE(reg.isCancelled("sess_2"));
+    XX_TEST_EXPECT_TRUE(reg.isCanceled("sess_1"));
+    XX_TEST_EXPECT_FALSE(reg.isCanceled("sess_2"));
     XX_TEST_EXPECT_EQ(reg.activeCount(), size_t(1));
 
     // 重复 cancel 同一 key 幂等
@@ -1416,10 +1416,10 @@ asio::awaitable<void> test_cancel_registry_basic(std::weak_ptr<agentxx::agent::A
         XX_TEST_EXPECT_EQ(scoped_count, 0);
     }
 
-    // clearCancelled 测试
-    XX_TEST_EXPECT_TRUE(reg.isCancelled("sess_1"));
-    reg.clearCancelled("sess_1");
-    XX_TEST_EXPECT_FALSE(reg.isCancelled("sess_1"));
+    // clearCanceled 测试
+    XX_TEST_EXPECT_TRUE(reg.isCanceled("sess_1"));
+    reg.clearCanceled("sess_1");
+    XX_TEST_EXPECT_FALSE(reg.isCanceled("sess_1"));
 
     co_return;
 }
@@ -1448,12 +1448,12 @@ asio::awaitable<void>
         });
     }
 
-    // 主线程交替触发 cancel 与 clearCancelled
+    // 主线程交替触发 cancel 与 clearCanceled
     for (int i = 0; i < 50; ++i) {
         reg.cancel("sess_0");
-        reg.clearCancelled("sess_0");
+        reg.clearCanceled("sess_0");
         reg.cancel("sess_1");
-        reg.clearCancelled("sess_1");
+        reg.clearCanceled("sess_1");
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 
@@ -1504,7 +1504,7 @@ asio::awaitable<TestResult>
     // poll 寄生驱动新增语义验证 (并发不串行阻塞 + 取消及时传播)
     co_await run(test_command_concurrent_commands);
     co_await run(test_command_cancel_promptly);
-    co_await run(test_command_cancel_registry_precancelled);
+    co_await run(test_command_cancel_registry_preCanceled);
     co_await run(test_command_cancel_registry_promptly);
     co_await run(test_command_cancel_registry_multi_session);
 #endif

@@ -474,7 +474,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
                     return m;
                 }(),
                 [&]() {
-                    auto m  = makeMsg("assistant", "[User cancelled]");
+                    auto m  = makeMsg("assistant", "[User Canceled]");
                     m.flags = neograph::MessageFlag::AutoInserted;
                     return m;
                 }(),
@@ -484,7 +484,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
             XX_TEST_EXPECT_EQ(msgs.size(), size_t{3});
             XX_TEST_EXPECT_EQ(msgs[0].content, std::string{"u1"});
             // 连续噪音段折叠为最后一条
-            XX_TEST_EXPECT_EQ(msgs[1].content, std::string{"[User cancelled]"});
+            XX_TEST_EXPECT_EQ(msgs[1].content, std::string{"[User Canceled]"});
             XX_TEST_EXPECT_EQ(msgs[2].content, std::string{"u2"});
         }
 
@@ -1760,7 +1760,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
 
     // --- T20. subagent 失败返回错误 JSON (非空串): 不得当作有效摘要,
     //           按失败处理 (走失败计数/保留原消息或硬截断), 不污染上下文 ---
-    // - 背景: 子代理被取消时主程序返回 `{"error":"Sub-agent cancelled..."}`
+    // - 背景: 子代理被取消时主程序返回 `{"error":"Sub-agent Canceled..."}`
     //   错误串; 若当摘要写回, 取消后会显示"压缩成功"并继续执行
     {
         auto env = std::make_shared<SummarizationTestEnv>();

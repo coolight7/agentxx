@@ -217,8 +217,8 @@ struct ToolExecReq {
     std::string result, error;
     /// Promise 被拒绝或超时: 工具调用必须映射为 FAILED (不再当成成功文本)
     bool failed = false;
-    /// 引擎停止/取消: 工具调用映射为 CANCELLED
-    bool cancelled = false;
+    /// 引擎停止/取消: 工具调用映射为 Canceled
+    bool Canceled = false;
     bool done      = false;
 };
 
@@ -609,7 +609,7 @@ public:
     }
 
     /// 【JS 线程】settle callTool Promise: OK → resolve(JSON/字符串),
-    /// CANCELLED/FAILED → reject(Error(message))
+    /// Canceled/FAILED → reject(Error(message))
     void settleCall(JsCallBridge* bridge, int32_t status, std::string text) {
         if (!bridge) {
             return;
@@ -628,7 +628,7 @@ public:
         } else {
             std::string msg = text;
             if (msg.empty()) {
-                msg = status == PLUGINXX_OPERATOR_CANCELLED ? "call_tool cancelled"
+                msg = status == PLUGINXX_OPERATOR_CANCELED ? "call_tool Canceled"
                                                             : "call_tool failed";
             }
             JSValue err = JS_NewError(ctx);
@@ -1126,9 +1126,9 @@ private:
                 req.error  = rejectedText(pctx->ctx, outcome);
                 req.failed = true;
                 break;
-            case PromiseOutcome::Kind::Cancelled:
+            case PromiseOutcome::Kind::Canceled:
                 req.error     = rejectedText(pctx->ctx, outcome);
-                req.cancelled = true;
+                req.Canceled = true;
                 break;
         }
         JS_FreeValue(pctx->ctx, outcome.value);
@@ -1259,12 +1259,12 @@ private:
             Value,
             Rejected,
             Timeout,
-            Cancelled
+            Canceled
         };
 
         Kind        kind  = Kind::Value;
         JSValue     value = JS_UNDEFINED; ///< Value=结果值; Rejected=拒绝原因 (均拥有)
-        std::string text;                 ///< Timeout/Cancelled 的说明文本
+        std::string text;                 ///< Timeout/Canceled 的说明文本
     };
 
     /// 驱动 Promise 直至 settle (JS 线程内调用)
@@ -1288,7 +1288,7 @@ private:
             = std::chrono::steady_clock::now() + std::chrono::milliseconds(kPromiseWaitLimitMs);
         while (JS_PromiseState(ctx, value) == JS_PROMISE_PENDING) {
             if (stop_.load(std::memory_order_acquire)) {
-                out.kind = PromiseOutcome::Kind::Cancelled;
+                out.kind = PromiseOutcome::Kind::Canceled;
                 out.text = "interpreter.js engine stopped";
                 return out;
             }
@@ -1358,7 +1358,7 @@ private:
     /// 把 PromiseOutcome 的拒绝原因转成主程序错误文本 (调用方随后 Free outcome.value)
     std::string rejectedText(JSContext* ctx, PromiseOutcome& out) {
         if (out.kind == PromiseOutcome::Kind::Timeout
-            || out.kind == PromiseOutcome::Kind::Cancelled) {
+            || out.kind == PromiseOutcome::Kind::Canceled) {
             return out.text;
         }
         if (JS_IsUndefined(out.value) || JS_IsNull(out.value)) {
@@ -1624,17 +1624,17 @@ void* JsEngine::toolExecuteStart(
                     auto errSv = agentxx::plugin::PluginStringView::fromCstr(
                         "interpreter.js engine stopped"
                     );
-                    ntfCopy.done(ntfCopy.host_ud, PLUGINXX_OPERATOR_CANCELLED, &errSv);
+                    ntfCopy.done(ntfCopy.host_ud, PLUGINXX_OPERATOR_CANCELED, &errSv);
                     return;
                 }
                 engine->doToolExecute(binding, *req);
-                if (req->cancelled) {
-                    // 引擎停止/取消: 终态为 CANCELLED, 不是普通失败
+                if (req->Canceled) {
+                    // 引擎停止/取消: 终态为 Canceled, 不是普通失败
                     auto errSv = agentxx::plugin::PluginStringView::from(
                         req->error.data(),
                         req->error.size()
                     );
-                    ntfCopy.done(ntfCopy.host_ud, PLUGINXX_OPERATOR_CANCELLED, &errSv);
+                    ntfCopy.done(ntfCopy.host_ud, PLUGINXX_OPERATOR_CANCELED, &errSv);
                 } else if (!req->error.empty()) {
                     auto errSv = agentxx::plugin::PluginStringView::from(
                         req->error.data(),

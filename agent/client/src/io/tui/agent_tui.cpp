@@ -3252,7 +3252,7 @@ void TUIClientAgentIO::onContextStats(const agentxx::agent::WireContextStats& st
 // - 消息携带 agent 侧声明的 UI 描述 (InterruptHandleArg.ui): 控件形态
 //   (值按钮/输入框/枚举/勾选项/确认行) 完全由描述数据决定, 客户端不含任何
 //   具体询问 (含权限) 的特化分支
-// - UI 线程提交/取消后经通道回传 InterruptFormSubmit {cancelled, values, options};
+// - UI 线程提交/取消后经通道回传 InterruptFormSubmit {Canceled, values, options};
 //   规则注册等业务语义由 agent 侧处理结果完成 (客户端只回传表单值/选项)
 // - 本协程等待一次提交或取消; 通道关闭 (server 过期通知 / TUI 退出) 时终止,
 //   返回已收集结果 (空 values = 未应答)
@@ -3327,7 +3327,7 @@ asio::awaitable<utilxx_base::Json> TUIClientAgentIO::handleInterrupt(
     auto received  = co_await ch->async_receive(asio::as_tuple(asio::use_awaitable));
     auto ec        = std::get<0>(received);
     auto gotSubmit = std::move(std::get<1>(received));
-    if (!ec && !gotSubmit.cancelled) {
+    if (!ec && !gotSubmit.Canceled) {
         // 一次提交: values 为控件 id → 值 的对象 (控件形态决定值类型);
         // 语义由 agent 侧处理 (客户端只回传表单值, 不解释业务含义)
         if (gotSubmit.values.is_object()) {
@@ -3342,7 +3342,7 @@ asio::awaitable<utilxx_base::Json> TUIClientAgentIO::handleInterrupt(
     activeInterrupts_.erase(wireId);
     awaitingInterruptInput_.store(false, std::memory_order_release);
     // 中断流程结束 (提交/取消/过期): 清理 UI 线程的 channel 映射与该请求的
-    // 表单状态 (消息已固定为 Confirmed/Cancelled/Expired)
+    // 表单状态 (消息已固定为 Confirmed/Canceled/Expired)
     enqueueUiAction([this, wireId]() {
         if (messageList_) {
             messageList_->releaseInterruptChannel(wireId);

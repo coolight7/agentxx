@@ -36,10 +36,10 @@ void testScopeCancelSemantics() {
     {
         auto              run = std::make_shared<neograph::graph::CancelToken>();
         ProviderCallScope scope{run};
-        XX_TEST_EXPECT_FALSE(scope.cancelled());
+        XX_TEST_EXPECT_FALSE(scope.canceled());
         XX_TEST_EXPECT_TRUE(scope.token() != run); // 不是运行令牌本身
         run->cancel();
-        XX_TEST_EXPECT_TRUE(scope.cancelled());
+        XX_TEST_EXPECT_TRUE(scope.canceled());
         XX_TEST_EXPECT_TRUE(run->is_cancelled());
     }
 
@@ -48,7 +48,7 @@ void testScopeCancelSemantics() {
         auto              run = std::make_shared<neograph::graph::CancelToken>();
         ProviderCallScope scope{run};
         scope.token()->cancel();
-        XX_TEST_EXPECT_TRUE(scope.cancelled());
+        XX_TEST_EXPECT_TRUE(scope.canceled());
         XX_TEST_EXPECT_FALSE(run->is_cancelled());
     }
 
@@ -59,8 +59,8 @@ void testScopeCancelSemantics() {
         ProviderCallScope second{run};
         XX_TEST_EXPECT_TRUE(first.token() != second.token());
         first.token()->cancel();
-        XX_TEST_EXPECT_TRUE(first.cancelled());
-        XX_TEST_EXPECT_FALSE(second.cancelled());
+        XX_TEST_EXPECT_TRUE(first.canceled());
+        XX_TEST_EXPECT_FALSE(second.canceled());
         XX_TEST_EXPECT_FALSE(run->is_cancelled());
     }
 }
@@ -99,7 +99,7 @@ void testScopeRaiiSemantics() {
             ProviderCallScope scope{nullptr};
             child = scope.token();
             XX_TEST_EXPECT_TRUE(child != nullptr);
-            XX_TEST_EXPECT_FALSE(scope.cancelled());
+            XX_TEST_EXPECT_FALSE(scope.canceled());
             scope.markDone();
         }
         XX_TEST_EXPECT_FALSE(child->is_cancelled());
@@ -110,7 +110,7 @@ void testScopeRaiiSemantics() {
         auto run = std::make_shared<neograph::graph::CancelToken>();
         run->cancel();
         ProviderCallScope scope{run};
-        XX_TEST_EXPECT_TRUE(scope.cancelled());
+        XX_TEST_EXPECT_TRUE(scope.canceled());
     }
 }
 

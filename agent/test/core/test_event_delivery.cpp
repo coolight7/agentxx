@@ -458,7 +458,7 @@ asio::awaitable<void> test_delivery_close_all() {
     hub->closeAll("test-shutdown");
     XX_TEST_EXPECT_TRUE(hub->closed());
     XX_TEST_EXPECT_TRUE(
-        hub->queryWait(watched->waitId)->state == agentxx::events::WaitState::Cancelled
+        hub->queryWait(watched->waitId)->state == agentxx::events::WaitState::Canceled
     );
     std::string err;
     XX_TEST_EXPECT_FALSE(hub->publishValue("closing.event", Json("x"), &err));

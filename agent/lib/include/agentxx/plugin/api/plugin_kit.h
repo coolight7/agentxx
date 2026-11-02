@@ -72,7 +72,7 @@ namespace plugin {
  */
 
 using pluginxx::ArgReader;
-using pluginxx::CancelledException;
+using pluginxx::CanceledException;
 using pluginxx::CancelRegistry;
 using pluginxx::capability;
 using pluginxx::ctxGuardLogger;
@@ -462,7 +462,7 @@ private:
 /// cancelRegistry / 协程驱动桥 / 后台协作任务) 全部继承自 [pluginxx::PluginBaseT],
 /// 以 agent 侧接口表聚合 [AgentIfaces] 作为其模板实参;
 /// 本类只补齐 agent 业务 helper: 工具模式构建 (schema)、工具提示词描述 (toolPrompt)、
-/// 会话工作目录 (workDir)、会话取消查询 (sessionCancelled)、会话共享存储
+/// 会话工作目录 (workDir)、会话取消查询 (sessionCanceled)、会话共享存储
 /// (addShareStore), 并在 [onHostReady] 中挂钩业务事件。
 class PluginBase : public pluginxx::PluginBaseT<AgentIfaces> {
 public:
@@ -551,22 +551,22 @@ public:
     ///   不做跨线程查询;
     /// - 只是主动查询, 权威的取消通知始终是取消回调;
     /// - `scope` 是本挂载的作用域引用 (会话属于某个作用域)
-    bool sessionCancelled(const PluginxxScopeRef* scope, PluginxxStringView key) const {
+    bool sessionCanceled(const PluginxxScopeRef* scope, PluginxxStringView key) const {
         if (!key.data || key.size == 0) {
             return false;
         }
         std::string_view keySv{key.data, static_cast<size_t>(key.size)};
-        if (cancelRegistry.isCancelled(keySv)) {
+        if (cancelRegistry.isCanceled(keySv)) {
             return true;
         }
-        if (!host || !iface.session || !iface.session->is_cancelled) {
+        if (!host || !iface.session || !iface.session->is_canceled) {
             return false;
         }
-        return iface.session->is_cancelled(host, scope, &key) != 0;
+        return iface.session->is_canceled(host, scope, &key) != 0;
     }
 
-    bool sessionCancelled(const PluginxxScopeRef* scope, std::string_view key) const {
-        return sessionCancelled(scope, PluginStringView::from(key.data(), key.size()));
+    bool sessionCanceled(const PluginxxScopeRef* scope, std::string_view key) const {
+        return sessionCanceled(scope, PluginStringView::from(key.data(), key.size()));
     }
 
     /// 读取会话 LLM 上下文 (经主程序 agentxx.agent.context 接口表)
@@ -621,7 +621,7 @@ protected:
                     );
                     std::string sid = j.value("sessionId", "");
                     if (!sid.empty()) {
-                        self->cancelRegistry.clearCancelled(sid);
+                        self->cancelRegistry.clearCanceled(sid);
                     }
                 } catch (...) {
                 }
@@ -1349,8 +1349,8 @@ struct CallToolAwaiter {
         if (!st->startError.empty()) {
             throw std::runtime_error("call_tool start failed: " + st->startError);
         }
-        if (st->status == PLUGINXX_OPERATOR_CANCELLED) {
-            throw CancelledException(st->payload.empty() ? "call_tool cancelled" : st->payload);
+        if (st->status == PLUGINXX_OPERATOR_CANCELED) {
+            throw CanceledException(st->payload.empty() ? "call_tool Canceled" : st->payload);
         }
         if (st->status != PLUGINXX_OPERATOR_OK) {
             throw std::runtime_error(st->payload.empty() ? "call_tool failed" : st->payload);
@@ -1553,8 +1553,8 @@ struct FeatureCallAwaiter {
             // 受理失败: 与主程序的坏参数/不支持的语义区分开, 这里直接抛
             throw std::runtime_error("call_feature start failed: " + st->startError);
         }
-        if (st->status == PLUGINXX_OPERATOR_CANCELLED) {
-            throw CancelledException(st->payload.empty() ? "call_feature cancelled" : st->payload);
+        if (st->status == PLUGINXX_OPERATOR_CANCELED) {
+            throw CanceledException(st->payload.empty() ? "call_feature Canceled" : st->payload);
         }
         // 注意: 调用本身的失败 (no_impl / disabled / busy / ...) 是"结果"不是"异常",
         // 因此这里只要拿到回包就原样返回, 由调用方读 `ok` 字段判断。
@@ -1826,7 +1826,7 @@ inline void tool(
         /// 因此它们必须比 start 调用活得久。
         detail::RootRequest request;
         /// OpCtl 同样必须由 Job 拥有：业务协程以引用接收它，挂起后仍会读取
-        /// （例如 ctl.throw_if_cancelled()），放在 start 栈上会悬垂。
+        /// （例如 ctl.throw_if_canceled()），放在 start 栈上会悬垂。
         OpCtl ctl;
     };
 
@@ -1866,7 +1866,7 @@ inline void tool(
         auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
         // 同 polled_tool: 新操作开始先清掉上一次会话取消留下的标记
         if (cancelReg && !request.scopeKey.empty()) {
-            cancelReg->clearCancelled(request.scopeKey);
+            cancelReg->clearCanceled(request.scopeKey);
         }
 
         OpCtl ctl{cancelFlag, cancelReg, request.scopeKey, shim->agent};
@@ -2056,7 +2056,7 @@ inline void blocking_tool(
         std::string             argsJson;
         std::string             resultPayload;
         std::string             errorPayload;
-        bool                    isCancelled   = false;
+        bool                    isCanceled   = false;
         PluginxxOperatorHandle* offloadHandle = nullptr;
     };
 
@@ -2094,7 +2094,7 @@ inline void blocking_tool(
             // 新操作开始先清掉上一次会话取消留下的标记: 该标记只对取消发生时正在跑
             // 的操作有效, 残留会让该会话之后的所有调用都被当成已取消
             if (!tidStr.empty()) {
-                shim->ctx->cancelRegistry.clearCancelled(tidStr);
+                shim->ctx->cancelRegistry.clearCanceled(tidStr);
             }
         }
         auto* job = new Job{
@@ -2113,7 +2113,7 @@ inline void blocking_tool(
             .argsJson      = std::move(argsJsonCache),
             .resultPayload = {},
             .errorPayload  = {},
-            .isCancelled   = false
+            .isCanceled   = false
         };
 
         PluginxxString scheduleError{};
@@ -2173,8 +2173,8 @@ inline void blocking_tool(
                         } else {
                             j->resultPayload = j->shim->fn(j->args);
                         }
-                    } catch (const CancelledException& e) {
-                        j->isCancelled  = true;
+                    } catch (const CanceledException& e) {
+                        j->isCanceled  = true;
                         j->errorPayload = e.what();
                     } catch (const std::exception& e) {
                         j->errorPayload = e.what();
@@ -2193,8 +2193,8 @@ inline void blocking_tool(
                         st      = PLUGINXX_OPERATOR_FAILED;
                         payload = *err;
                     } else if (!j->errorPayload.empty()) {
-                        if (j->isCancelled) {
-                            st = PLUGINXX_OPERATOR_CANCELLED;
+                        if (j->isCanceled) {
+                            st = PLUGINXX_OPERATOR_CANCELED;
                         } else {
                             st = PLUGINXX_OPERATOR_FAILED;
                         }
@@ -2202,8 +2202,8 @@ inline void blocking_tool(
                             j->errorPayload.data(),
                             j->errorPayload.size()
                         );
-                    } else if (st == PLUGINXX_OPERATOR_CANCELLED || j->isCancelled) {
-                        st = PLUGINXX_OPERATOR_CANCELLED;
+                    } else if (st == PLUGINXX_OPERATOR_CANCELED || j->isCanceled) {
+                        st = PLUGINXX_OPERATOR_CANCELED;
                     } else {
                         st      = PLUGINXX_OPERATOR_OK;
                         payload = PluginStringView::from(
@@ -2317,26 +2317,26 @@ namespace detail {
 template<typename Job>
 inline int32_t PLUGINXX_CALL polledJobTokenIsRequestedAbi(const PluginxxCancelToken* token) {
     auto* job = (token && token->host_ud) ? static_cast<const Job*>(token->host_ud) : nullptr;
-    return (job && job->cancelled()) ? 1 : 0;
+    return (job && job->Canceled()) ? 1 : 0;
 }
 
 /// 受控轮询工具的业务体包装 (两条路径共用): 运行业务协程并把终态写回 Job。
 ///
-/// - 异常映射: `CancelledException` → CANCELLED, 其它异常 → FAILED;
-/// - 业务体正常返回但期间已请求取消 → CANCELLED (payload 为空, 与
+/// - 异常映射: `CanceledException` → Canceled, 其它异常 → FAILED;
+/// - 业务体正常返回但期间已请求取消 → Canceled (payload 为空, 与
 ///   `blocking_tool` 的取消语义一致);
 /// - 本协程自身不决定"由谁上报/释放 Job": 由 [runPolledPumpJob] 收尾。
 template<typename Job>
 inline asio::awaitable<void> runPolledToolBody(Job* job) {
     try {
-        if (job->cancelled()) {
-            throw CancelledException("polled tool cancelled before execution");
+        if (job->Canceled()) {
+            throw CanceledException("polled tool Canceled before execution");
         }
         job->payload = co_await job->shim
                            ->fn(*job->shim->ctx, job->args, job->tid, job->workDir, &job->token);
         job->status = PLUGINXX_OPERATOR_OK;
-    } catch (const CancelledException& e) {
-        job->status  = PLUGINXX_OPERATOR_CANCELLED;
+    } catch (const CanceledException& e) {
+        job->status  = PLUGINXX_OPERATOR_CANCELED;
         job->payload = e.what();
     } catch (const std::exception& e) {
         job->status  = PLUGINXX_OPERATOR_FAILED;
@@ -2345,8 +2345,8 @@ inline asio::awaitable<void> runPolledToolBody(Job* job) {
         job->status  = PLUGINXX_OPERATOR_FAILED;
         job->payload = "unknown polled tool error";
     }
-    if (job->status == PLUGINXX_OPERATOR_OK && job->cancelled()) {
-        job->status = PLUGINXX_OPERATOR_CANCELLED;
+    if (job->status == PLUGINXX_OPERATOR_OK && job->Canceled()) {
+        job->status = PLUGINXX_OPERATOR_CANCELED;
         job->payload.clear();
     }
 }
@@ -2439,11 +2439,11 @@ inline void polled_tool(
         std::string payload;
 
         /// 是否已请求取消 (本实例取消标志 + 会话级 CancelRegistry)。
-        bool cancelled() const noexcept {
+        bool Canceled() const noexcept {
             if (cancelFlag && cancelFlag->load(std::memory_order_acquire)) {
                 return true;
             }
-            if (shim && shim->ctx && !tid.empty() && shim->ctx->cancelRegistry.isCancelled(tid)) {
+            if (shim && shim->ctx && !tid.empty() && shim->ctx->cancelRegistry.isCanceled(tid)) {
                 return true;
             }
             return false;
@@ -2490,7 +2490,7 @@ inline void polled_tool(
         // (中断恢复/取消后重跑) 不会触发, 残留标记会让该会话之后的每次调用都被判为
         // 已取消 (命令工具直接被杀, 主程序侧表现为 [User canceled])。
         if (!request.scopeKey.empty()) {
-            c.cancelRegistry.clearCancelled(request.scopeKey);
+            c.cancelRegistry.clearCanceled(request.scopeKey);
         }
 
         auto* job       = new Job();

@@ -1855,15 +1855,15 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
             co_return true;
         },
         [&](std::string& errmsg) -> std::optional<bool> {
-            XX_LOGI("Agent Session Cancelled: {}", errmsg);
+            XX_LOGI("Agent Session Canceled: {}", errmsg);
             turnResult.hasError     = true;
-            turnResult.errorMessage = "Cancelled by user";
+            turnResult.errorMessage = "Canceled by user";
             // 取消提示: agent 线程插入会话历史并通知 UI
             insertMessageTip("[Cancel Request]", ViewMessage::TipLevel::Info);
             return true;
         },
         // 传入取消令牌: engine 内未被转换的 operation_aborted (asio 取消信号)
-        // 按取消语义处理, 确保 turnResult 报告 "Cancelled by user" 而非普通错误
+        // 按取消语义处理, 确保 turnResult 报告 "Canceled by user" 而非普通错误
         cancelToken
     );
 
@@ -1924,8 +1924,8 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
     //   否则它会一直躺在待注入队列里等人开轮 (见 rolloverLeftoverNextStepInputs)
     {
         std::string closeReason = turnResult.hasError
-                                      ? (turnResult.errorMessage.find("Cancelled") != std::string::npos
-                                             ? "cancelled"
+                                      ? (turnResult.errorMessage.find("Canceled") != std::string::npos
+                                             ? "Canceled"
                                              : "failed")
                                       : (turnResult.interrupted ? "interrupted" : "completed");
         auto turnEndValue = utilxx_base::Json{
@@ -1982,8 +1982,8 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
         using agentxx::util::KeyMetrics;
         KeyMetrics::TurnOutcome outcome = KeyMetrics::TurnOutcome::Completed;
         if (turnResult.hasError) {
-            outcome = (turnResult.errorMessage.find("Cancelled") != std::string::npos)
-                          ? KeyMetrics::TurnOutcome::Cancelled
+            outcome = (turnResult.errorMessage.find("Canceled") != std::string::npos)
+                          ? KeyMetrics::TurnOutcome::Canceled
                           : KeyMetrics::TurnOutcome::Failed;
         } else if (turnResult.interrupted) {
             outcome = KeyMetrics::TurnOutcome::Interrupted;
@@ -2025,9 +2025,9 @@ asio::awaitable<bool> BaseAgent::shutdownAsync(std::chrono::milliseconds timeout
     // 再关闭中枢 (关闭后投递一律丢弃并计数)
     // - 事件记录不持久化, 生产者都绑在进程上
     if (auto host = agentContext->host.lock(); host) {
-        const auto cancelled = host->cancelAsyncJobs(agentContext);
-        if (cancelled > 0) {
-            XX_LOGI("shutdown stage 1/4: cancel {} async sub-agent job(s)", cancelled);
+        const auto Canceled = host->cancelAsyncJobs(agentContext);
+        if (Canceled > 0) {
+            XX_LOGI("shutdown stage 1/4: cancel {} async sub-agent job(s)", Canceled);
         }
     }
     if (agentContext->eventHub) {
@@ -2038,16 +2038,16 @@ asio::awaitable<bool> BaseAgent::shutdownAsync(std::chrono::milliseconds timeout
     // ---- ② 取消并等待后台任务结束 ----
     if (agentContext->taskScope) {
         const size_t pendingBefore = agentContext->taskScope->pending();
-        const size_t cancelled     = agentContext->taskScope->cancelAll();
+        const size_t Canceled     = agentContext->taskScope->cancelAll();
         bool         idle          = true;
         if (pendingBefore > 0) {
             // awaitIdle 用当前协程的 executor 轮询等待 (任务本身跑在 agent io 线程上)
             idle = co_await agentContext->taskScope->awaitIdle(remainingMs());
         }
         XX_LOGI(
-            "shutdown stage 2/4: background tasks pending={} cancelled={}{}",
+            "shutdown stage 2/4: background tasks pending={} Canceled={}{}",
             pendingBefore,
-            cancelled,
+            Canceled,
             idle ? "" : " (some still running after timeout)"
         );
     }

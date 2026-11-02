@@ -354,7 +354,7 @@ struct RespSubagentBatchItem {
     std::string resultId;
     std::string content;
     bool        hasError  = false;
-    bool        cancelled = false;
+    bool        Canceled = false;
     std::string errorMessage;
     /// agent 节点容器派生时的 agent 唯一 id (AgentHost 填充; 节点已回收, 仅用于日志/关联)
     std::string agentId;

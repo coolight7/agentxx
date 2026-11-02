@@ -61,7 +61,7 @@ namespace agentxx_codegraph_plugin {
 
 /// 插件侧 catchError (替代 libcatchError):
 /// - 捕获 func 抛出的全部异常, 转错误字符串调 onError 返回
-/// - 取消类异常 (CancelledException) 在 codegraph 索引/查询内部不会抛出,
+/// - 取消类异常 (CanceledException) 在 codegraph 索引/查询内部不会抛出,
 ///   无需保留重抛语义
 template<typename T>
 static T catchError(std::function<T()> func, std::function<T(std::string)> onError) {

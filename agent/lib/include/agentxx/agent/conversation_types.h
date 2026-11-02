@@ -273,7 +273,7 @@ struct ViewMessage {
         /// 已提交 (interruptResult 保存结果展示文本)
         Confirmed,
         /// 已取消 (用户主动取消整个中断请求)
-        Cancelled,
+        Canceled,
         /// 已过期 (server 通知中断超时/会话取消, 不再可交互)
         Expired
     };
@@ -751,8 +751,8 @@ inline std::string_view viewMessageInterruptStatusToString(ViewMessage::Interrup
     switch (s) {
         case S::Confirmed:
             return "confirmed";
-        case S::Cancelled:
-            return "cancelled";
+        case S::Canceled:
+            return "Canceled";
         case S::Expired:
             return "expired";
         case S::Waiting:
@@ -767,8 +767,8 @@ inline ViewMessage::InterruptStatus viewMessageInterruptStatusFromString(std::st
     if (s == "confirmed") {
         return S::Confirmed;
     }
-    if (s == "cancelled") {
-        return S::Cancelled;
+    if (s == "Canceled") {
+        return S::Canceled;
     }
     if (s == "expired") {
         return S::Expired;

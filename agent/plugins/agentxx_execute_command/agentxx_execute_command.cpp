@@ -141,11 +141,11 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx, const ScopeRef& ref) {
             if (pluginxx_cancel_is_requested(cancel_token)) {
                 c.cancelRegistry.cancel(tidStr);
             }
-            auto isCancelled = [&c, tidStr, cancel_token]() -> bool {
+            auto isCanceled = [&c, tidStr, cancel_token]() -> bool {
                 if (pluginxx_cancel_is_requested(cancel_token)) {
                     return true;
                 }
-                return c.cancelRegistry.isCancelled(tidStr);
+                return c.cancelRegistry.isCanceled(tidStr);
             };
             StoreFn storeFn = nullptr;
             if (!tidStr.empty() && c.iface.session && c.iface.session->add_share_store) {
@@ -159,7 +159,7 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx, const ScopeRef& ref) {
             co_return co_await windowsExecuteAsync(
                 args.raw(),
                 workDirStr,
-                isCancelled,
+                isCanceled,
                 storeFn,
                 &c.cancelRegistry,
                 tidStr
@@ -183,11 +183,11 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx, const ScopeRef& ref) {
             if (pluginxx_cancel_is_requested(cancel_token)) {
                 c.cancelRegistry.cancel(tidStr);
             }
-            auto isCancelled = [&c, tidStr, cancel_token]() -> bool {
+            auto isCanceled = [&c, tidStr, cancel_token]() -> bool {
                 if (pluginxx_cancel_is_requested(cancel_token)) {
                     return true;
                 }
-                return c.cancelRegistry.isCancelled(tidStr);
+                return c.cancelRegistry.isCanceled(tidStr);
             };
             StoreFn storeFn = nullptr;
             if (!tid.empty() && c.iface.session && c.iface.session->add_share_store) {
@@ -198,7 +198,7 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx, const ScopeRef& ref) {
             return windowsExecute(
                 args.raw(),
                 std::string(workDir),
-                isCancelled,
+                isCanceled,
                 storeFn,
                 &c.cancelRegistry,
                 tidStr
@@ -246,11 +246,11 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx, const ScopeRef& ref) {
             if (pluginxx_cancel_is_requested(cancel_token)) {
                 c.cancelRegistry.cancel(tidStr);
             }
-            auto isCancelled = [&c, tidStr, cancel_token]() -> bool {
+            auto isCanceled = [&c, tidStr, cancel_token]() -> bool {
                 if (pluginxx_cancel_is_requested(cancel_token)) {
                     return true;
                 }
-                return c.cancelRegistry.isCancelled(tidStr);
+                return c.cancelRegistry.isCanceled(tidStr);
             };
             StoreFn storeFn = nullptr;
             if (!tidStr.empty() && c.iface.session && c.iface.session->add_share_store) {
@@ -264,7 +264,7 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx, const ScopeRef& ref) {
             co_return co_await bashExecuteAsync(
                 args.raw(),
                 workDirStr,
-                isCancelled,
+                isCanceled,
                 storeFn,
                 &c.cancelRegistry,
                 tidStr
@@ -288,11 +288,11 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx, const ScopeRef& ref) {
             if (pluginxx_cancel_is_requested(cancel_token)) {
                 c.cancelRegistry.cancel(tidStr);
             }
-            auto isCancelled = [&c, tidStr, cancel_token]() -> bool {
+            auto isCanceled = [&c, tidStr, cancel_token]() -> bool {
                 if (pluginxx_cancel_is_requested(cancel_token)) {
                     return true;
                 }
-                return c.cancelRegistry.isCancelled(tidStr);
+                return c.cancelRegistry.isCanceled(tidStr);
             };
             StoreFn storeFn = nullptr;
             if (!tid.empty() && c.iface.session && c.iface.session->add_share_store) {
@@ -303,7 +303,7 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx, const ScopeRef& ref) {
             return bashExecute(
                 args.raw(),
                 std::string(workDir),
-                isCancelled,
+                isCanceled,
                 storeFn,
                 &c.cancelRegistry,
                 tidStr

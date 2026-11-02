@@ -36,7 +36,7 @@ bool isNoiseMessage(const neograph::ChatMessage& m) {
         return false;
     }
     const std::string_view c = m.content;
-    return c == "[Please continue]" || c == "[User cancelled]" || c == "[Exception aborted]"
+    return c == "[Please continue]" || c == "[User Canceled]" || c == "[Exception aborted]"
            || c == "[Empty]" || c.empty();
 }
 
@@ -707,7 +707,7 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
             co_return "";
         }
         // 取消/错误串转发防护: 子代理被取消时主程序返回
-        // `{"error":"Sub-agent cancelled..."}` (AgentRunner 已优先按取消
+        // `{"error":"Sub-agent Canceled..."}` (AgentRunner 已优先按取消
         // 抛, 此处为直接调用路径的处理), 不得当作有效摘要写回上下文,
         // 否则表现为"压缩成功 + 继续执行", 取消形同虚设
         if (resp->result.size() >= 2 && resp->result.front() == '{'

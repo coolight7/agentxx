@@ -729,7 +729,7 @@ void testCancel() {
             auto j = utilxx_base::Json::parse(turn);
             XX_TEST_EXPECT_TRUE(j.value("hasError", false) == true);
             XX_TEST_EXPECT_TRUE(
-                j.value("errorMessage", std::string{}).find("Cancelled") != std::string::npos
+                j.value("errorMessage", std::string{}).find("Canceled") != std::string::npos
             );
         } catch (...) {
             g_ffi_failed++;

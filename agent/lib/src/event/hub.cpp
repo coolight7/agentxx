@@ -179,7 +179,7 @@ void EventHub::closeAll(std::string_view reason) {
 void EventHub::cancelAllWaits(std::string_view reason) {
     for (auto& [_, entry] : waits_) {
         if (entry.wait.state == WaitState::Armed) {
-            finishWait(entry, WaitState::Cancelled, reason, true);
+            finishWait(entry, WaitState::Canceled, reason, true);
         }
     }
 }
@@ -922,12 +922,12 @@ bool EventHub::cancelWait(std::string_view waitId, std::string_view reason) {
     if (it->second.wait.state != WaitState::Armed) {
         return false;
     }
-    finishWait(it->second, WaitState::Cancelled, reason, true);
+    finishWait(it->second, WaitState::Canceled, reason, true);
     return true;
 }
 
 size_t EventHub::cancelWaitsOfSession(std::string_view sessionId, std::string_view reason) {
-    size_t cancelled = 0;
+    size_t Canceled = 0;
     for (auto& [_, entry] : waits_) {
         if (entry.wait.state != WaitState::Armed) {
             continue;
@@ -935,10 +935,10 @@ size_t EventHub::cancelWaitsOfSession(std::string_view sessionId, std::string_vi
         if (!sessionId.empty() && entry.wait.spec.originSession != sessionId) {
             continue;
         }
-        finishWait(entry, WaitState::Cancelled, reason, true);
-        ++cancelled;
+        finishWait(entry, WaitState::Canceled, reason, true);
+        ++Canceled;
     }
-    return cancelled;
+    return Canceled;
 }
 
 // ---------------------------------------------------------------------------
@@ -1009,7 +1009,7 @@ Json EventHub::listWaitsJson(std::string_view sessionId) const {
         item["delivery"] = entry.wait.spec.delivery;
         item["state"]    = entry.wait.state == WaitState::Armed     ? "armed"
                            : entry.wait.state == WaitState::Satisfied ? "satisfied"
-                           : entry.wait.state == WaitState::Cancelled ? "cancelled"
+                           : entry.wait.state == WaitState::Canceled ? "Canceled"
                                                                       : "timed-out";
         item["values"]     = entry.wait.values.size();
         item["deliveries"] = entry.wait.deliveries;
@@ -1323,9 +1323,9 @@ asio::awaitable<EventWait>
             throw neograph::graph::CancelledException{"event hub closed"};
         }
         if (ct && ct->is_cancelled()) {
-            cancelWait(waitId, "cancelled");
+            cancelWait(waitId, "Canceled");
             cleanup();
-            throw neograph::graph::CancelledException{"event await cancelled"};
+            throw neograph::graph::CancelledException{"event await Canceled"};
         }
         if (deadlineMs > 0 && nowSteadyMs() >= deadlineMs) {
             auto it = waits_.find(waitId);

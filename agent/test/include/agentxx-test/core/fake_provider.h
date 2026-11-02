@@ -236,7 +236,7 @@ public:
             }
             // 与真实 provider 的网络中断同语义: 交给上层按取消处理
             throw neograph::graph::CancelledException{
-                "fake provider: request cancelled while waiting"
+                "fake provider: request Canceled while waiting"
             };
         }
         if (step.kind == FakeStep::Kind::Error) {

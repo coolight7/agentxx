@@ -632,10 +632,10 @@ static int32_t PLUGINXX_CALL xx_session_work_dir(
     );
 }
 
-/// `agentxx.agent.session.is_cancelled`
+/// `agentxx.agent.session.is_canceled`
 /// - `agent` 必须有效: 引用无效返回 0 (未取消) 并记一条警告
 /// - 只是主动查询: 权威的取消通知始终是取消回调
-static int32_t PLUGINXX_CALL xx_session_cancelled(
+static int32_t PLUGINXX_CALL xx_session_Canceled(
     const PluginxxHost*       host,
     const PluginxxScopeRef*   agent,
     const PluginxxStringView* thread_id
@@ -658,7 +658,7 @@ static int32_t PLUGINXX_CALL xx_session_cancelled(
                 agent,
                 [] { return int32_t{0}; },
                 [mgrPtr, agent, tid](PluginMount&) {
-                    return mgrPtr->isSessionCancelled(agent, tid) ? 1 : 0;
+                    return mgrPtr->isSessionCanceled(agent, tid) ? 1 : 0;
                 }
             );
         });
@@ -1200,7 +1200,7 @@ static const AgentxxPluginSessionIface g_ifaceSession = {
     /* emit_message_tip */ xx_emit_message_tip,
     /* add_share_store */ xx_add_share_store,
     /* get_session_work_dir */ xx_session_work_dir,
-    /* is_cancelled */ xx_session_cancelled,
+    /* is_canceled */ xx_session_Canceled,
 };
 
 static const AgentxxPluginPromptIface g_ifacePrompt = {

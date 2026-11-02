@@ -195,7 +195,7 @@ static int exampleAgentSetup(AgentCtx& ctx, const agentxx::plugin::ScopeRef& ref
             } catch (...) {
             }
             co_await agentxx::plugin::sleep(c, ms > 0 ? ms : 0);
-            ctl.throw_if_cancelled();
+            ctl.throw_if_canceled();
             co_return fmt::format(R"({{"slept_ms": {}}})", ms);
         }
     );
@@ -234,7 +234,7 @@ static int exampleAgentSetup(AgentCtx& ctx, const agentxx::plugin::ScopeRef& ref
             for (int i = 0; i < ticks; ++i) {
                 // 主程序计时器适配: 到期 -> 投递 continuation + wake -> 下一次 driver 恢复
                 co_await agentxx::plugin::sleep(c, 1);
-                ctl.throw_if_cancelled();
+                ctl.throw_if_canceled();
             }
             // 主程序回调式互调: 完成回调同样只投递 + 唤醒
             std::string echo = co_await agentxx::plugin::call_tool(
@@ -308,7 +308,7 @@ static int exampleAgentSetup(AgentCtx& ctx, const agentxx::plugin::ScopeRef& ref
                 timer.expires_after(std::chrono::milliseconds(intervalMs));
                 co_await timer.async_wait(asio::use_awaitable);
                 if (pluginxx_cancel_is_requested(cancel_token)) {
-                    throw agentxx::plugin::CancelledException("example_polled_timer cancelled");
+                    throw agentxx::plugin::CanceledException("example_polled_timer Canceled");
                 }
             }
             const auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(

@@ -862,7 +862,7 @@ static int codegraphAgentStartSetup(PluginCtx& ctx) {
 
     ctx.spawn([](PluginCtx& c, agentxx::plugin::OpCtl ctl) -> agentxx::plugin::Task<void> {
         co_await agentxx::plugin::sleep(c, 2000);
-        if (ctl.cancelled()) {
+        if (ctl.canceled()) {
             co_return;
         }
         const auto startedAt = std::chrono::steady_clock::now();

@@ -335,12 +335,12 @@ static int32_t sysMonStartSetup(SysMonCtx& ctx) {
 
     // 4. 后台采样任务
     ctx.spawn([](SysMonCtx& c, OpCtl ctl) -> Task<void> {
-        while (!ctl.cancelled()) {
+        while (!ctl.canceled()) {
             if (c.usageEnabled.load(std::memory_order_relaxed)) {
                 auto usage = co_await offload(c, [&](const PluginxxCancelToken*) {
                     return c.querySync();
                 });
-                if (ctl.cancelled()) {
+                if (ctl.canceled()) {
                     break;
                 }
 

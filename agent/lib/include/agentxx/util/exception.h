@@ -58,7 +58,7 @@ inline bool classifyNeographControlFlow(ExceptionClassification& out) noexcept {
         throw;
     } catch (const neograph::graph::CancelledException& e) {
         out.isControlFlow = true;
-        out.controlKind   = ControlFlowKind::Cancelled;
+        out.controlKind   = ControlFlowKind::Canceled;
         out.errInfo       = e.what();
         utilxx_base::autoConvertToUtf8(out.errInfo);
         out.exPtr = std::current_exception();
@@ -84,7 +84,7 @@ inline void installExceptionClassifier() noexcept {
 }
 
 /// 统一异常分类分析工具 (图引擎取消令牌版)
-/// - 识别: utilxx::CancelledException / neograph 取消与中断 / 取消导致的
+/// - 识别: utilxx::CanceledException / neograph 取消与中断 / 取消导致的
 ///   operation_aborted (按取消语义) / boost 异常 / 标准异常 / 未知异常
 /// - 必须在 `catch` 块内调用
 inline ExceptionClassification
@@ -99,18 +99,18 @@ inline ExceptionClassification
     ExceptionClassification res;
     try {
         throw;
-    } catch (const utilxx::CancelledException& e) {
+    } catch (const utilxx::CanceledException& e) {
         // 统一取消抽象 (utilxx::CancelToken) 抛出的取消异常: 与图引擎版同语义。
         // 异常指针统一归一化为图引擎取消异常, 使上层 (toolcall 节点等) 按
         // neograph::graph::CancelledException 判定取消的逻辑保持有效。
         res.isControlFlow = true;
-        res.controlKind   = ControlFlowKind::Cancelled;
+        res.controlKind   = ControlFlowKind::Canceled;
         res.errInfo       = e.what();
         utilxx_base::autoConvertToUtf8(res.errInfo);
         res.exPtr = std::make_exception_ptr(neograph::graph::CancelledException(res.errInfo));
     } catch (const neograph::graph::CancelledException& e) {
         res.isControlFlow = true;
-        res.controlKind   = ControlFlowKind::Cancelled;
+        res.controlKind   = ControlFlowKind::Canceled;
         res.errInfo       = e.what();
         utilxx_base::autoConvertToUtf8(res.errInfo);
         res.exPtr = std::current_exception();
@@ -124,7 +124,7 @@ inline ExceptionClassification
         if (isCancelAbort(e, cancelToken)) {
             // 取消信号中断异步 IO 产生的 operation_aborted 按取消语义处理
             res.isControlFlow = true;
-            res.controlKind   = ControlFlowKind::Cancelled;
+            res.controlKind   = ControlFlowKind::Canceled;
             res.errInfo       = "operation aborted";
             res.exPtr
                 = std::make_exception_ptr(neograph::graph::CancelledException("operation aborted"));

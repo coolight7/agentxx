@@ -239,7 +239,7 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const utilxx_base::J
                 }
                 for (const auto& e : entries) {
                     if (cancelFlag.load(std::memory_order_acquire)) {
-                        co_return R"({"error":"cancelled"})";
+                        co_return R"({"error":"Canceled"})";
                     }
                     auto st    = fw::statusSummary(e.path);
                     bool dirty = st ? st->dirtyFiles() : false;
@@ -343,7 +343,7 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const utilxx_base::J
                 // 同名已注册的 worktree 直接拒绝 (避免误删用户数据; 复用请换名)
                 for (const auto& e : fw::listWorktrees(repoRootDir)) {
                     if (cancelFlag.load(std::memory_order_acquire)) {
-                        out.error = "[cancelled]";
+                        out.error = "[Canceled]";
                         co_return out;
                     }
                     if (std::filesystem::path{e.path}.filename().generic_string() == out.name) {
@@ -534,7 +534,7 @@ asio::awaitable<std::string> GitWorktreeTool::execute_async(const utilxx_base::J
                 bool found = false;
                 for (const auto& e : fw::listWorktrees(root)) {
                     if (cancelFlag.load(std::memory_order_acquire)) {
-                        out.error = "[cancelled]";
+                        out.error = "[Canceled]";
                         co_return out;
                     }
                     if (std::filesystem::absolute(std::filesystem::path{e.path}).generic_string()

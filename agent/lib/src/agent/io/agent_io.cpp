@@ -176,8 +176,8 @@ void AgentIOBase::registerOnBus(std::shared_ptr<agentxx::events::EventBus> sessi
 
     // 注册 interrupt 处理器
     // - 取消 (WireCancel → onCancel) 与 HIL 等待互斥: handleInterrupt
-    //   被取消信号打断时返回特殊标记 `{"__cancelled__":true}`, 调用方
-    //   (AgentRunner) 据此不 resume 而直接抛 CancelledException,
+    //   被取消信号打断时返回特殊标记 `{"__Canceled__":true}`, 调用方
+    //   (AgentRunner) 据此不 resume 而直接抛 CanceledException,
     //   避免"取消 HIL 弹窗后自动以空结果 resume 继续执行"的死循环
     auto& interruptRR
         = sessionBus->getRR<events::ReqInterrupt, events::RespInterrupt>(events::Topic::Interrupt);
@@ -190,9 +190,9 @@ void AgentIOBase::registerOnBus(std::shared_ptr<agentxx::events::EventBus> sessi
                 req.interruptValue,
                 req.interruptArgsJson
             );
-            // 取消标记: handleInterrupt 被取消时返回 {"__cancelled__":true},
+            // 取消标记: handleInterrupt 被取消时返回 {"__Canceled__":true},
             // handled=false 使调用方不写回 resume 值 (见 AgentRunner)
-            if (result.is_object() && result.value("__cancelled__", false)) {
+            if (result.is_object() && result.value("__Canceled__", false)) {
                 co_return events::RespInterrupt{.handled = false, .resultJson = result.dump()};
             }
             // 结果恒为对象形态 {"values": {控件 id: 值}} (见 makeInterruptResult):
@@ -247,9 +247,9 @@ void AgentIOBase::registerOnBus(std::shared_ptr<agentxx::events::EventBus> sessi
             );
 
             // 取消传递: HIL 等待被 WireCancel 打断时 handleInterrupt 返回
-            // {"__cancelled__":true}, 此处必须抛取消而非判为拒绝,
+            // {"__Canceled__":true}, 此处必须抛取消而非判为拒绝,
             // 否则取消权限弹窗会被当成"[Permission denied]"正常继续执行
-            if (result.is_object() && result.value("__cancelled__", false)) {
+            if (result.is_object() && result.value("__Canceled__", false)) {
                 throw neograph::graph::CancelledException("permission interrupted by cancel");
             }
             // 结果恒为对象形态 {"values": {控件 id: 值}} (见 makeInterruptResult);

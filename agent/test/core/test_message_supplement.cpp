@@ -532,7 +532,7 @@ asio::awaitable<void> test_cancel_auto_supplement() {
     XX_TEST_EXPECT_TRUE(turnExc == nullptr);
     XX_TEST_EXPECT_TRUE(watcherExc == nullptr);
     XX_TEST_EXPECT_TRUE(turnResult.hasError);
-    XX_TEST_EXPECT_EQ(turnResult.errorMessage, std::string{"Cancelled by user"});
+    XX_TEST_EXPECT_EQ(turnResult.errorMessage, std::string{"Canceled by user"});
     // 取消应立即中断会话轮次 (不等待慢速 tool 自然完成)
     XX_TEST_EXPECT_TRUE(elapsedMs < 8000);
 

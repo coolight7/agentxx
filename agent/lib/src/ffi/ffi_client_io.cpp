@@ -47,9 +47,9 @@ void FfiClientAgentIO::failAllPendingInterrupts() {
     for (int64_t id : pendingHostToolCalls_) {
         utilxx_base::Json j = {
             {"callId", id         },
-            {"reason", "cancelled"},
+            {"reason", "Canceled"},
         };
-        emitEvent(AGENTXX_FFI_EVT_HOST_TOOL_CANCELLED, dump(j));
+        emitEvent(AGENTXX_FFI_EVT_HOST_TOOL_Canceled, dump(j));
     }
     pendingHostToolCalls_.clear();
 }

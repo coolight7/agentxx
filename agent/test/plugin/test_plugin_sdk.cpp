@@ -737,8 +737,8 @@ TestResult testPluginSdk() {
                 std::string node{agentxx::plugin::nodeNameOf(req)};
                 std::string state{agentxx::plugin::nodeStateOf(req)};
                 co_await Gate{box.released, box.handle};
-                if (ctl.cancelled()) {
-                    co_return std::string{"cancelled"};
+                if (ctl.canceled()) {
+                    co_return std::string{"Canceled"};
                 }
                 *box.seenState = state;
                 *box.finished  = true;

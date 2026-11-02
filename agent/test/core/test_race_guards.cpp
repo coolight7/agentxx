@@ -503,7 +503,7 @@ asio::awaitable<void> test_cancel_vs_tool_settlement() {
     XX_TEST_EXPECT_TRUE(turnExc == nullptr);
     XX_TEST_EXPECT_TRUE(watcherExc == nullptr);
     XX_TEST_EXPECT_TRUE(turnResult.hasError);
-    XX_TEST_EXPECT_EQ(turnResult.errorMessage, std::string{"Cancelled by user"});
+    XX_TEST_EXPECT_EQ(turnResult.errorMessage, std::string{"Canceled by user"});
 
     // 独占工具排在并行批之后: 取消时还没轮到它, 其执行体不得被调用
     const bool laterRan = std::any_of(trace->begin(), trace->end(), [](const TraceEntry& e) {
@@ -685,7 +685,7 @@ asio::awaitable<void> test_interrupt_answer_inflight_vs_cancel() {
     // 两条合法结局之一: ① 取消结束 (应答迟到不再 resume); ② 应答先完成, resume 完成
     auto session = agent.agentContext->sessions->get(sessionId);
     if (turnResult.hasError) {
-        XX_TEST_EXPECT_EQ(turnResult.errorMessage, std::string{"Cancelled by user"});
+        XX_TEST_EXPECT_EQ(turnResult.errorMessage, std::string{"Canceled by user"});
         const auto danglingBefore = danglingToolCallCount(session);
         TEST_INFO << "[race_guards] 中断/取消落到取消分支: dangling=" << danglingBefore
                   << " messages=" << (session ? session->messagesCount() : 0) << std::endl;
@@ -695,7 +695,7 @@ asio::awaitable<void> test_interrupt_answer_inflight_vs_cancel() {
         if (danglingBefore > 0) {
             g_da_sim_tool_calls           = utilxx_base::Json::array();
             g_da_sim_tool_calls_remaining = -1;
-            g_da_sim_response_content     = "Answer after cancelled turn.";
+            g_da_sim_response_content     = "Answer after Canceled turn.";
             const auto second = co_await agent.runTurnAsync(sessionId, "continue", nullptr);
             XX_TEST_EXPECT_FALSE(second.hasError);
             auto after = agent.agentContext->sessions->get(sessionId);

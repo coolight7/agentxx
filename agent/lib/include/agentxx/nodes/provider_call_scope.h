@@ -54,7 +54,7 @@ public:
     }
 
     /// 本次调用是否已处于取消状态 (子令牌被取消) —— 诊断/测试用
-    bool cancelled() const noexcept {
+    bool canceled() const noexcept {
         return token_ && token_->is_cancelled();
     }
 

@@ -3,9 +3,9 @@
 ///     agentxx_execute_bash_command / agentxx_execute_windows_command
 /// - 头文件-only: 插件入口与测试共同包含, 保证插件行为与测试覆盖一致
 /// - 与原实现的差异点:
-///   - 会话工作目录/取消令牌经参数注入 (workDir / isCancelled 回调),
+///   - 会话工作目录/取消令牌经参数注入 (workDir / isCanceled 回调),
 ///     由插件入口从主程序接口表取值 (agentxx.agent.session.get_session_work_dir /
-///     agentxx.agent.session.is_cancelled), 便于测试直测纯逻辑
+///     agentxx.agent.session.is_canceled), 便于测试直测纯逻辑
 ///   - 统一异步操作模型 (受控轮询): 协程版执行体 *ExecuteAsync 由插件入口经
 ///     `plugin_kit::polled_tool` 注册 —— 协程跑在插件实例本地 reactor (桥的
 ///     local_executor) 上, 管道/子进程/计时器都绑定到该 executor, 由主程序 IO
@@ -87,7 +87,7 @@
 namespace agentxx_execmd_plugin {
 
 /// 取消查询回调 (返回 true 表示会话已取消); 测试可传 nullptr 等价无取消支持
-using IsCancelledFn = std::function<bool()>;
+using IsCanceledFn = std::function<bool()>;
 
 /// 写入 share_store 回调 (返回 ID，失败返回 -1); 插件侧注入，测试可传 nullptr
 using StoreFn = std::function<long long(std::string_view)>;
@@ -561,16 +561,16 @@ inline asio::awaitable<void> procCancelWatchLoop(
     void*                    winJob         = nullptr,
     CancelRegistry*          cancelRegistry = nullptr,
     std::string_view         sessionKey     = {},
-    const IsCancelledFn&     isCancelled    = nullptr
+    const IsCanceledFn&     isCanceled    = nullptr
 ) {
     auto ex          = co_await asio::this_coro::executor;
     auto cancelTimer = std::make_shared<asio::steady_timer>(ex);
-    auto cancelled   = std::make_shared<std::atomic<bool>>(false);
+    auto Canceled   = std::make_shared<std::atomic<bool>>(false);
 
     // 1. 初始状态检查 (单次原子/内存判断，非轮询)
-    if ((cancelRegistry && !sessionKey.empty() && cancelRegistry->isCancelled(sessionKey))
-        || (isCancelled && isCancelled())) {
-        cancelled->store(true, std::memory_order_release);
+    if ((cancelRegistry && !sessionKey.empty() && cancelRegistry->isCanceled(sessionKey))
+        || (isCanceled && isCanceled())) {
+        Canceled->store(true, std::memory_order_release);
         detail::killProcGroup(proc, winJob);
         detail::closePipesAfterKill(outpip, errpip);
         cancelTimer->expires_after(std::chrono::hours(24));
@@ -583,9 +583,9 @@ inline asio::awaitable<void> procCancelWatchLoop(
     if (cancelRegistry) {
         regGuard = cancelRegistry->bind(
             sessionKey,
-            [&proc, winJob, &outpip, &errpip, ex, cancelTimer, cancelled]() {
+            [&proc, winJob, &outpip, &errpip, ex, cancelTimer, Canceled]() {
                 bool expected = false;
-                if (!cancelled
+                if (!Canceled
                          ->compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
                     return;
                 }
@@ -606,9 +606,9 @@ inline asio::awaitable<void> procCancelWatchLoop(
     (void)ec;
 
     // 如果未触发取消，说明主工作正常完成，并行组取消了本协程
-    if (!cancelled->load(std::memory_order_acquire)) {
-        // 退化回退：若未提供 cancelRegistry 但提供了 isCancelled 回调 (旧单测适配)
-        if (!cancelRegistry && isCancelled && isCancelled()) {
+    if (!Canceled->load(std::memory_order_acquire)) {
+        // 退化回退：若未提供 cancelRegistry 但提供了 isCanceled 回调 (旧单测适配)
+        if (!cancelRegistry && isCanceled && isCanceled()) {
             detail::killProcGroup(proc, winJob);
             detail::closePipesAfterKill(outpip, errpip);
             cancelTimer->expires_after(std::chrono::hours(24));
@@ -791,7 +791,7 @@ inline asio::awaitable<std::string> runProcPipeline(
     asio::readable_pipe&     errpip,
     int                      timeout,
     bool                     full_output,
-    const IsCancelledFn&     isCancelled    = nullptr,
+    const IsCanceledFn&     isCanceled    = nullptr,
     const StoreFn&           storeFn        = nullptr,
     void*                    winJob         = nullptr,
     CancelRegistry*          cancelRegistry = nullptr,
@@ -914,7 +914,7 @@ inline asio::awaitable<std::string> runProcPipeline(
                 winJob,
                 cancelRegistry,
                 sessionKey,
-                isCancelled
+                isCanceled
             )
         );
     }
@@ -937,7 +937,7 @@ inline asio::awaitable<std::string> runProcPipeline(
 inline asio::awaitable<std::string> bashExecuteAsync(
     const utilxx_base::Json& arguments,
     const std::string&       workDir,
-    const IsCancelledFn&     isCancelled    = nullptr,
+    const IsCanceledFn&     isCanceled    = nullptr,
     const StoreFn&           storeFn        = nullptr,
     CancelRegistry*          cancelRegistry = nullptr,
     std::string_view         sessionKey     = {}
@@ -957,15 +957,15 @@ inline asio::awaitable<std::string> bashExecuteAsync(
     }
 
     if ((cancelRegistry && !effectiveSessionKey.empty()
-         && cancelRegistry->isCancelled(effectiveSessionKey))
-        || (isCancelled && isCancelled())) {
-        co_return "[ExitCode]\n130\n[Error]\nCommand cancelled before execution.\n";
+         && cancelRegistry->isCanceled(effectiveSessionKey))
+        || (isCanceled && isCanceled())) {
+        co_return "[ExitCode]\n130\n[Error]\nCommand Canceled before execution.\n";
     }
 
     if ((cancelRegistry && !effectiveSessionKey.empty()
-         && cancelRegistry->isCancelled(effectiveSessionKey))
-        || (isCancelled && isCancelled())) {
-        co_return "[ExitCode]\n130\n[Error]\nCommand cancelled before execution.\n";
+         && cancelRegistry->isCanceled(effectiveSessionKey))
+        || (isCanceled && isCanceled())) {
+        co_return "[ExitCode]\n130\n[Error]\nCommand Canceled before execution.\n";
     }
 
     // 受控轮询: 管道/进程绑定到当前协程的 executor (插件实例本地 reactor),
@@ -1025,7 +1025,7 @@ inline asio::awaitable<std::string> bashExecuteAsync(
         errpip,
         timeout,
         full_output,
-        isCancelled,
+        isCanceled,
         storeFn,
         /*winJob=*/nullptr,
         cancelRegistry,
@@ -1037,7 +1037,7 @@ inline asio::awaitable<std::string> bashExecuteAsync(
 inline asio::awaitable<std::string> windowsExecuteAsync(
     const utilxx_base::Json& arguments,
     const std::string&       workDir,
-    const IsCancelledFn&     isCancelled    = nullptr,
+    const IsCanceledFn&     isCanceled    = nullptr,
     const StoreFn&           storeFn        = nullptr,
     CancelRegistry*          cancelRegistry = nullptr,
     std::string_view         sessionKey     = {}
@@ -1139,7 +1139,7 @@ inline asio::awaitable<std::string> windowsExecuteAsync(
         errpip,
         timeout,
         full_output,
-        isCancelled,
+        isCanceled,
         storeFn,
         winJob,
         cancelRegistry,
@@ -1158,7 +1158,7 @@ inline asio::awaitable<std::string> windowsExecuteAsync(
 inline std::string bashExecute(
     const utilxx_base::Json& arguments,
     const std::string&       workDir,
-    const IsCancelledFn&     isCancelled    = nullptr,
+    const IsCanceledFn&     isCanceled    = nullptr,
     const StoreFn&           storeFn        = nullptr,
     CancelRegistry*          cancelRegistry = nullptr,
     std::string_view         sessionKey     = {}
@@ -1170,9 +1170,9 @@ inline std::string bashExecute(
         effectiveSessionKey = arguments["sessionId"].get<std::string>();
     }
     if ((cancelRegistry && !effectiveSessionKey.empty()
-         && cancelRegistry->isCancelled(effectiveSessionKey))
-        || (isCancelled && isCancelled())) {
-        return R"({"error":"Execution cancelled"})";
+         && cancelRegistry->isCanceled(effectiveSessionKey))
+        || (isCanceled && isCanceled())) {
+        return R"({"error":"Execution Canceled"})";
     }
     auto command = arguments.value("command", std::string{});
     if (command.empty()) {
@@ -1219,13 +1219,13 @@ inline std::string bashExecute(
 inline std::string windowsExecute(
     const utilxx_base::Json& arguments,
     const std::string&       workDir,
-    const IsCancelledFn&     isCancelled    = nullptr,
+    const IsCanceledFn&     isCanceled    = nullptr,
     const StoreFn&           storeFn        = nullptr,
     CancelRegistry*          cancelRegistry = nullptr,
     std::string_view         sessionKey     = {}
 ) {
     // 无 bp::v2 时 Windows 命令同样走 popen 回退 (cmd.exe 语义由提示词引导)
-    return bashExecute(arguments, workDir, isCancelled, storeFn, cancelRegistry, sessionKey);
+    return bashExecute(arguments, workDir, isCanceled, storeFn, cancelRegistry, sessionKey);
 }
 
 #endif // BOOST_PROCESS_V2_PROCESS_HPP

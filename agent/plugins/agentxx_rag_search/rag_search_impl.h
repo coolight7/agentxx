@@ -8,7 +8,7 @@
 ///     阻塞安全); embedding 网络调用经局部 io_context 驱动至完成 (与
 ///     agentxx_websearch 的 runSync 同模式)
 ///   - embedding 客户端经 EmbedFn 函数对象注入: 插件入口加载真实 HTTP 版本,
-///     测试可注入假实现 (不依赖网络), 与 filesystem_impl.h 的 IsCancelledFn
+///     测试可注入假实现 (不依赖网络), 与 filesystem_impl.h 的 IsCanceledFn
 ///     注入同思路; 分块/相似度/检索逻辑为纯函数, 行为与原版一致
 #pragma once
 

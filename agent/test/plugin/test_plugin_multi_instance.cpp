@@ -248,7 +248,7 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
                 agentxx::plugin::PluginString::free(instC->hostView(), &err);
             }
 
-            // 取消路径: 新任务 → xx_op_cancel 语义 (op->cancelled CAS + cancelFn)
+            // 取消路径: 新任务 → xx_op_cancel 语义 (op->canceled CAS + cancelFn)
             PluginxxOperatorNotify ntf2{nullptr, nullptr};
             PluginxxString         err2{nullptr, 0};
             auto*                  h2 = ctxA->pluginManager->registerTask(
@@ -266,7 +266,7 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
             }
             XX_TEST_EXPECT_TRUE(h2 != nullptr);
             if (h2) {
-                h2->cancelled.store(true); ///< 模拟 detachAll / op_cancel 前置置位
+                h2->canceled.store(true); ///< 模拟 detachAll / op_cancel 前置置位
                 if (h2->cancelFn) {
                     h2->cancelFn();
                 }
@@ -274,7 +274,7 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
                 XX_TEST_EXPECT_TRUE(st->cancelCount.load(std::memory_order_relaxed) >= 1);
                 // 取消后仍可上报完成 (主程序幂等; 不 UAF)
                 auto nullSv2 = agentxx::plugin::PluginStringView::from(nullptr, 0);
-                ntf2.done(ntf2.host_ud, PLUGINXX_OPERATOR_CANCELLED, &nullSv2);
+                ntf2.done(ntf2.host_ud, PLUGINXX_OPERATOR_CANCELED, &nullSv2);
                 for (int i = 0; i < 100; ++i) {
                     auto stillTracked = std::any_of(
                         instC->outstandingOps.begin(),

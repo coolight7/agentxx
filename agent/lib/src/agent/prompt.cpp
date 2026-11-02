@@ -34,7 +34,7 @@ std::string_view orUnknown(const std::string& value) {
 /// 运行期自动插入上下文的标记说明 (systemPrompt 的 "Context Markers" 段)
 ///
 /// 标记由主程序写入, 改动下列位置时需要同步更新该段文字:
-/// - `[Exception aborted]` / `[User cancelled]` / `[Please continue]` / `[Empty]`:
+/// - `[Exception aborted]` / `[User Canceled]` / `[Please continue]` / `[Empty]`:
 ///   nodes/modelcall.cpp (失败/取消回退消息、消息修复、空消息占位)
 /// - `[Error: ...]` / `[Permission denied]` / `[Repeated call denied by user: ...]` /
 ///   `[User canceled]`: nodes/toolcall.cpp; `[Plugin tool timeout]` 见
@@ -61,7 +61,7 @@ agentxx inserts markers into this conversation to report program state. They are
 
 - Status of a failed or interrupted turn (at the end of an assistant message):
     - `[Exception aborted]`: the last model API call failed (network, timeout, upstream error) even after automatic retries. It is not user feedback. When the conversation continues, resume the same task from the step whose result was lost; do not ask the user what the error means.
-    - `[User cancelled]`: the running turn was interrupted. This includes the case where the user only wanted to add a note and chose to send it immediately: agentxx interrupts the current turn first and then appends that message. It is an interruption marker, not the user's answer, consent, refusal or new instruction. In particular, never treat it as the user rejecting a pending question (requirement or plan confirmation, permission request) or as a reason to change the plan. The user's real intent is only in the user message that comes after the interruption; if no message follows, the user simply stopped the work, so wait instead of resuming on your own.
+    - `[User Canceled]`: the running turn was interrupted. This includes the case where the user only wanted to add a note and chose to send it immediately: agentxx interrupts the current turn first and then appends that message. It is an interruption marker, not the user's answer, consent, refusal or new instruction. In particular, never treat it as the user rejecting a pending question (requirement or plan confirmation, permission request) or as a reason to change the plan. The user's real intent is only in the user message that comes after the interruption; if no message follows, the user simply stopped the work, so wait instead of resuming on your own.
     - `[Empty]`: a placeholder for a message that had no text, thinking and tool call; nothing was said.
 - `[Please continue]` (a user message with only this text): agentxx inserted it to keep the message roles alternating, typically after it recovered from a problem itself (for example a failed model call was retried, or the turn was resumed). It does not come from the user: it is not a request to continue, not approval, and not an answer to a question you asked. Go on with the last real request without replying to the marker, and never treat it as consent for a pending confirmation.
 - Start of a tool result:
@@ -69,7 +69,7 @@ agentxx inserts markers into this conversation to report program state. They are
     - `[Permission denied] <reason>`: the call was blocked by the user or by the permission rules. Do not retry it unchanged; choose an allowed approach or ask the user for access.
     - `[Repeated call denied by user: ...]`: the user rejected one more identical call. Change the arguments or the approach.
     - `[Plugin tool timeout]`: the plugin tool ran past its time limit. Narrow the request or use another tool.
-    - `[User canceled]`: the call was cancelled by an interruption (not the user refusing the action), so its effect is unknown. Check the real state (re-read the file, re-run the check) when the outcome matters.
+    - `[User canceled]`: the call was Canceled by an interruption (not the user refusing the action), so its effect is unknown. Check the real state (re-read the file, re-run the check) when the outcome matters.
     - `[Note] ...`: the result is partial because a limit was reached. Do not report the missing part as nonexistent; widen the query or raise the limit.
     - `[content type: ...]`, `[resource link: ...]`, `[embedded resource: ...]`, `[structuredContent]: ...`: labels for non-text parts of an MCP tool result, not errors.
 - Content moved or dropped:
@@ -251,7 +251,7 @@ The sub-agent cannot see the parent conversation history; its final text output 
 
 ## Notes
 - By default the sub-agent runs synchronously: the parent agent pauses until the sub-agent finishes.
-- `async: true` dispatches the task and returns immediately; the result arrives later as an input starting with `[Event] subagent.done.<result_id>` (or `event_name`). Failed and cancelled tasks also publish (with `hasError`/`cancelled`), so a wait never hangs.
+- `async: true` dispatches the task and returns immediately; the result arrives later as an input starting with `[Event] subagent.done.<result_id>` (or `event_name`). Failed and Canceled tasks also publish (with `hasError`/`Canceled`), so a wait never hangs.
 - Provide a clear, self-contained task description in `message`; the sub-agent has no access to the parent's conversation context.
 - `subagent` must be one of the registered sub-agent names (see the enum values in the parameter description).
 - `system_prompt` is optional; when `subagent` is not set, it is used as the sub-agent's system prompt.)",
@@ -312,7 +312,7 @@ Absent (default): the sub-agent's default full tool set.)"},
                       {"wait", "Wait id (`w-3`) returned by `opt=watch`."},
                       {"mode", R"(How many values you want:
 `first`: the first value, then the wait closes (default).
-`each`: every value is delivered as its own input; the wait stays open until the event ends, is cancelled or times out.
+`each`: every value is delivered as its own input; the wait stays open until the event ends, is Canceled or times out.
 `all`: collect values and deliver them together when the event ends or the `max_items`/max bytes limit is reached.)"},
                       {"delivery", R"(Where the value goes:
 `next-step`: inserted before the next model call of a running turn; promotes to a new turn when idle (default).

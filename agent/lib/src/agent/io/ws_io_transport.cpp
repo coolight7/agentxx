@@ -74,7 +74,7 @@ asio::awaitable<std::optional<WireMessage>> WsAgentIOTransport::recv() {
         co_return std::move(msg);
     }
     // channel 关闭时 async_receive 抛 system_error, 按"无消息"处理返回 nullopt;
-    // 取消类异常 (CancelledException/NodeInterrupt) 由 catchErrorAsync 原样抛出
+    // 取消类异常 (CanceledException/NodeInterrupt) 由 catchErrorAsync 原样抛出
     co_return co_await agentxx::util::catchErrorAsync<std::optional<WireMessage>>(
         [&]() -> asio::awaitable<std::optional<WireMessage>> {
             auto msg = co_await recvQueue_->async_receive(asio::use_awaitable);

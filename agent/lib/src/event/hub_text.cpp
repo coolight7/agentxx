@@ -32,8 +32,8 @@ std::string_view waitStateText(WaitState state) noexcept {
             return "armed";
         case WaitState::Satisfied:
             return "satisfied";
-        case WaitState::Cancelled:
-            return "cancelled";
+        case WaitState::Canceled:
+            return "Canceled";
         case WaitState::TimedOut:
             return "timed-out";
     }

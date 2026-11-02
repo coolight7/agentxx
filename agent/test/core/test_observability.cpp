@@ -65,12 +65,12 @@ void testKeyMetrics() {
     m.noteTurnStart();
     m.noteTurnEnd(KeyMetrics::TurnOutcome::Failed, 200);
     m.noteTurnStart();
-    m.noteTurnEnd(KeyMetrics::TurnOutcome::Cancelled, 50);
+    m.noteTurnEnd(KeyMetrics::TurnOutcome::Canceled, 50);
     m.noteTurnStart();
     m.noteTurnEnd(KeyMetrics::TurnOutcome::Interrupted, 10);
     XX_TEST_EXPECT_EQ(m.turns(), uint64_t{4});
     XX_TEST_EXPECT_EQ(m.turnsFailed(), uint64_t{1});
-    XX_TEST_EXPECT_EQ(m.turnsCancelled(), uint64_t{1});
+    XX_TEST_EXPECT_EQ(m.turnsCanceled(), uint64_t{1});
     XX_TEST_EXPECT_EQ(m.turnsInterrupted(), uint64_t{1});
     XX_TEST_EXPECT_EQ(m.turnTotalMs(), int64_t{383});
     XX_TEST_EXPECT_EQ(m.turnMaxMs(), int64_t{200}); ///< 最大值只增不减
@@ -90,11 +90,11 @@ void testKeyMetrics() {
     m.noteToolCall(KeyMetrics::ToolOutcome::Ok);
     m.noteToolCall(KeyMetrics::ToolOutcome::Ok);
     m.noteToolCall(KeyMetrics::ToolOutcome::Failed);
-    m.noteToolCall(KeyMetrics::ToolOutcome::Cancelled);
+    m.noteToolCall(KeyMetrics::ToolOutcome::Canceled);
     m.noteToolCall(KeyMetrics::ToolOutcome::Interrupted);
     XX_TEST_EXPECT_EQ(m.toolOk(), uint64_t{2});
     XX_TEST_EXPECT_EQ(m.toolFailed(), uint64_t{1});
-    XX_TEST_EXPECT_EQ(m.toolCancelled(), uint64_t{1});
+    XX_TEST_EXPECT_EQ(m.toolCanceled(), uint64_t{1});
     XX_TEST_EXPECT_EQ(m.toolInterrupted(), uint64_t{1});
 
     // ---- 压缩 ----

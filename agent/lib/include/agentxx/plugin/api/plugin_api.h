@@ -473,7 +473,7 @@ typedef struct AgentxxPluginSessionIface {
     /// (v3) 查询会话当前轮次是否已取消 (advisory 定位; 权威通知始终是取消回调):
     /// - `agent` 必须非空 (引用无效返回 0 并记警告)
     /// - 返回 1 已取消 / 0 未取消
-    int32_t(PLUGINXX_CALL* is_cancelled)(
+    int32_t(PLUGINXX_CALL* is_canceled)(
         const PluginxxHost*       host,
         const PluginxxScopeRef*   agent,
         const PluginxxStringView* thread_id

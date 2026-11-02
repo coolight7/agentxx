@@ -435,7 +435,7 @@ public:
     /// 指定 agent 的会话工作目录 (会话有 worktree 绑定时优先; 未加载返回空串)
     std::string sessionWorkDir(const PluginxxScopeRef* agent, std::string_view sessionId);
     /// 指定 agent 的会话是否已取消 (advisory 查询; 无会话/无取消令牌返回 false)
-    bool isSessionCancelled(const PluginxxScopeRef* agent, std::string_view sessionId);
+    bool isSessionCanceled(const PluginxxScopeRef* agent, std::string_view sessionId);
     /// 工具提示词配置 JSON (`{"depict": ..., "args": {...}}`; 未配置返回空串)
     std::string toolPromptJson(std::string_view toolName);
 

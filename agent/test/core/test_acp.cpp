@@ -402,7 +402,7 @@ void test_acp_server_stdio_errors() {
     input += R"({"jsonrpc":"3.0","id":1,"method":"ping"})"
              "\n";
     input += "\n";
-    input += R"({"jsonrpc":"2.0","method":"notifications/cancelled"})"
+    input += R"({"jsonrpc":"2.0","method":"notifications/Canceled"})"
              "\n";
 
     std::istringstream in(input);

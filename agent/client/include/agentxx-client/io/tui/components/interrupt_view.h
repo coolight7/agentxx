@@ -219,7 +219,7 @@ private:
     /// 头行渲染 (默认前缀 / 自定义分段)
     ftxui::Element buildHeader(const middleware::InterruptUi& ui) const;
 
-    /// 状态行 (Confirmed/Cancelled/Expired; 描述缺失时输出诊断行)
+    /// 状态行 (Confirmed/Canceled/Expired; 描述缺失时输出诊断行)
     ftxui::Element buildStatusLine(const TUIMessage& msg) const;
 
     /// 记录命中区域 (msgIndex + 块下标 + 控件 id + 子序号; box 经 shared_ptr 持有)

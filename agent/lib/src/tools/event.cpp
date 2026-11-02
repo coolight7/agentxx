@@ -425,8 +425,8 @@ asio::awaitable<std::string> EventTool::execute_async(const utilxx_base::Json& a
         if (result.state == WaitState::TimedOut) {
             co_return agentxx::events::renderAwaitTimeout(result.spec, timeoutMs);
         }
-        if (result.state == WaitState::Cancelled) {
-            throw neograph::graph::CancelledException{"event await cancelled"};
+        if (result.state == WaitState::Canceled) {
+            throw neograph::graph::CancelledException{"event await Canceled"};
         }
         co_return renderSatisfiedText(*hub, result);
     }
@@ -475,13 +475,13 @@ asio::awaitable<std::string> EventTool::execute_async(const utilxx_base::Json& a
     if (opt == "cancel") {
         if (arguments.value("all", false)) {
             const auto count = hub->cancelWaitsOfSession(sessionId, "tool-cancel");
-            co_return fmt::format("[Event cancel] cancelled {} wait(s) of this session", count);
+            co_return fmt::format("[Event cancel] Canceled {} wait(s) of this session", count);
         }
         const auto waitId = requireString(arguments, "wait");
         if (!hub->cancelWait(waitId, "tool-cancel")) {
             throw std::invalid_argument{fmt::format("Wait not found or already closed: {}", waitId)};
         }
-        co_return fmt::format("[Event cancel] wait={} cancelled", waitId);
+        co_return fmt::format("[Event cancel] wait={} Canceled", waitId);
     }
 
     if (opt == "emit") {

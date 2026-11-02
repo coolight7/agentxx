@@ -284,7 +284,7 @@ std::string PluginManager::sessionWorkDir(const PluginxxScopeRef* agent, std::st
     return c->agentConfig->resolvedWorkDir();
 }
 
-bool PluginManager::isSessionCancelled(const PluginxxScopeRef* agent, std::string_view sessionId) {
+bool PluginManager::isSessionCanceled(const PluginxxScopeRef* agent, std::string_view sessionId) {
     if (sessionId.empty()) {
         return false;
     }

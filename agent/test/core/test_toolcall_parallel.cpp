@@ -523,7 +523,7 @@ asio::awaitable<void> test_parallel_cancel_keeps_completed() {
     XX_TEST_EXPECT_TRUE(turnExc == nullptr);
     XX_TEST_EXPECT_TRUE(watcherExc == nullptr);
     XX_TEST_EXPECT_TRUE(turnResult.hasError);
-    XX_TEST_EXPECT_EQ(turnResult.errorMessage, std::string{"Cancelled by user"});
+    XX_TEST_EXPECT_EQ(turnResult.errorMessage, std::string{"Canceled by user"});
 
     // 取消时独占工具未启动: 其执行体不应被调用
     const bool neverRan = std::none_of(trace->begin(), trace->end(), [](const TraceEntry& e) {

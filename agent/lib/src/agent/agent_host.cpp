@@ -832,8 +832,8 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
         co_return events::RespSubagentBatchItem{
             .resultId     = task.resultId,
             .hasError     = true,
-            .cancelled    = true,
-            .errorMessage = "Subagent cancelled before execution",
+            .Canceled    = true,
+            .errorMessage = "Subagent Canceled before execution",
         };
     }
 
@@ -1294,8 +1294,8 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
                 respItem = events::RespSubagentBatchItem{
                     .resultId     = task.resultId,
                     .hasError     = true,
-                    .cancelled    = true,
-                    .errorMessage = "Sub-agent cancelled",
+                    .Canceled    = true,
+                    .errorMessage = "Sub-agent Canceled",
                     .agentId      = agentId,
                 };
             } else if (runnerOutcome.unresolvedInterrupt) {
@@ -1303,7 +1303,7 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
                 respItem = events::RespSubagentBatchItem{
                     .resultId     = task.resultId,
                     .hasError     = true,
-                    .cancelled    = false,
+                    .Canceled    = false,
                     .errorMessage = fmt::format(
                         "Sub-agent interrupted at node `{}` (interrupt not handled in subagent scope)",
                         runnerOutcome.interruptNode
@@ -1315,7 +1315,7 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
                     .resultId  = task.resultId,
                     .content   = oss.str(),
                     .hasError  = false,
-                    .cancelled = false,
+                    .Canceled = false,
                     .agentId   = agentId,
                 };
             }
@@ -1349,7 +1349,7 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
             co_return events::RespSubagentBatchItem{
                 .resultId     = task.resultId,
                 .hasError     = true,
-                .cancelled    = false,
+                .Canceled    = false,
                 .errorMessage = fmt::format("Sub-agent failed: {}", errmsg),
                 .agentId      = agentId,
             };
@@ -1359,8 +1359,8 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
             return events::RespSubagentBatchItem{
                 .resultId     = task.resultId,
                 .hasError     = true,
-                .cancelled    = true,
-                .errorMessage = fmt::format("Sub-agent cancelled: {}", errmsg),
+                .Canceled    = true,
+                .errorMessage = fmt::format("Sub-agent Canceled: {}", errmsg),
                 .agentId      = agentId,
             };
         },
@@ -1505,7 +1505,7 @@ asio::awaitable<events::RespSubagentBatch> AgentHost::spawnBatch(
                         co_return events::RespSubagentBatchItem{
                             .resultId     = task.resultId,
                             .hasError     = true,
-                            .cancelled    = false,
+                            .Canceled    = false,
                             .errorMessage = fmt::format("Sub-agent failed: {}", std::move(errmsg)),
                         };
                     },
@@ -1513,9 +1513,9 @@ asio::awaitable<events::RespSubagentBatch> AgentHost::spawnBatch(
                         return events::RespSubagentBatchItem{
                             .resultId  = task.resultId,
                             .hasError  = true,
-                            .cancelled = true,
+                            .Canceled = true,
                             .errorMessage
-                            = fmt::format("Sub-agent cancelled: {}", std::move(errmsg)),
+                            = fmt::format("Sub-agent Canceled: {}", std::move(errmsg)),
                         };
                     },
                     cancelToken
@@ -1603,8 +1603,8 @@ asio::awaitable<void> AgentHost::runAsyncSubagentTask(
             return events::RespSubagentBatchItem{
                 .resultId  = task.resultId,
                 .hasError  = true,
-                .cancelled = true,
-                .errorMessage = fmt::format("Sub-agent cancelled: {}", std::move(errmsg)),
+                .Canceled = true,
+                .errorMessage = fmt::format("Sub-agent Canceled: {}", std::move(errmsg)),
             };
         },
         token
@@ -1618,13 +1618,13 @@ asio::awaitable<void> AgentHost::runAsyncSubagentTask(
             {"agentId", result.agentId},
             {"content", result.content},
             {"hasError", result.hasError},
-            {"cancelled", result.cancelled},
+            {"Canceled", result.Canceled},
             {"errorMessage", result.errorMessage},
         };
-        if (result.hasError || result.cancelled) {
+        if (result.hasError || result.Canceled) {
             value["content"] = result.content.empty() ? result.errorMessage : result.content;
         }
-        const bool ok = result.cancelled ? false : !result.hasError;
+        const bool ok = result.Canceled ? false : !result.hasError;
         hub->postValue(eventName, std::move(value));
         hub->postEnd(
             eventName,
@@ -1632,16 +1632,16 @@ asio::awaitable<void> AgentHost::runAsyncSubagentTask(
                 {"resultId", task.resultId},
                 {"ok", ok},
                 {"hasError", result.hasError},
-                {"cancelled", result.cancelled},
+                {"Canceled", result.Canceled},
             }
         );
         XX_LOGI(
-            "[subagent] async {} finished: event={} resultId={} hasError={} cancelled={}",
+            "[subagent] async {} finished: event={} resultId={} hasError={} Canceled={}",
             jobId,
             eventName,
             task.resultId,
             result.hasError,
-            result.cancelled
+            result.Canceled
         );
     } else {
         XX_LOGW(
@@ -1719,7 +1719,7 @@ asio::awaitable<events::RespHostMessage> AgentHost::sendViaA2a(
         if (req.cancelToken && req.cancelToken->is_cancelled()) {
             co_return events::RespHostMessage{
                 .hasError     = true,
-                .errorMessage = fmt::format("A2A message to task `{}` cancelled", taskId),
+                .errorMessage = fmt::format("A2A message to task `{}` Canceled", taskId),
             };
         }
         auto taskResult = co_await client->getTask(taskId);

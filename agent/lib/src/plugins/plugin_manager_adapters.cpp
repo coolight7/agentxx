@@ -129,7 +129,9 @@ asio::awaitable<std::string> PluginTool::execute_async(const utilxx_base::Json& 
         auto timeout = std::chrono::milliseconds{spec_.default_timeout_ms};
         co_return co_await utilxx::asyncWithTimeout<std::string>(
             [a = std::move(awaitArgs)]() mutable -> asio::awaitable<std::string> {
-                co_return co_await agentxx::util::awaitHostPluginOp(std::move(a));
+                co_return agentxx::util::requirePluginOpOk(
+                    co_await agentxx::util::awaitHostPluginOpResult(std::move(a))
+                );
             },
             timeout,
             []() -> std::string {
@@ -137,7 +139,9 @@ asio::awaitable<std::string> PluginTool::execute_async(const utilxx_base::Json& 
             }
         );
     }
-    co_return co_await agentxx::util::awaitHostPluginOp(std::move(awaitArgs));
+    co_return agentxx::util::requirePluginOpOk(
+        co_await agentxx::util::awaitHostPluginOpResult(std::move(awaitArgs))
+    );
 }
 
 // =====================================================================

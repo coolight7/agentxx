@@ -796,7 +796,7 @@ namespace {
 /// prepare 阶段的执行体无关部分: 参数类型修正 + 权限检查 + 连续重复调用确认
 /// - 全程串行执行 (权限询问与 HIL 询问按模型声明顺序发生), 不写会话、不执行工具
 /// - `return` 无需执行执行体时的结果内容 (权限拒绝 / 重复调用被用户拒绝)
-/// - 取消 (CancelledException) 与中断 (NodeInterrupt) 照常抛出, 由调用方按控制流处理
+/// - 取消 (CanceledException) 与中断 (NodeInterrupt) 照常抛出, 由调用方按控制流处理
 asio::awaitable<std::optional<std::string>> prepareToolInvocation(
     const std::shared_ptr<agentxx::agent::AgentContext>& agentCtxPtr,
     neograph::Tool*                                      tool,
@@ -1180,7 +1180,7 @@ asio::awaitable<std::optional<neograph::ChatMessage>> ToolcallWrapNode::runPrepa
                     *outError = std::current_exception();
                 }
                 if (auto ctx = agentContext.lock(); ctx && ctx->metrics) {
-                    ctx->metrics->noteToolCall(agentxx::util::KeyMetrics::ToolOutcome::Cancelled);
+                    ctx->metrics->noteToolCall(agentxx::util::KeyMetrics::ToolOutcome::Canceled);
                 }
             } catch (const neograph::graph::NodeInterrupt&) {
                 // tool 触发中断: 只标记本调用, 中断参数由上层在恢复时按 resultId 取
@@ -1216,7 +1216,7 @@ asio::awaitable<std::optional<neograph::ChatMessage>> ToolcallWrapNode::runPrepa
             return std::optional<bool>{true};
         },
         // 传入取消令牌: tool 被取消信号中断产生的 operation_aborted 转换为
-        // CancelledException, 避免取消被当作普通 tool 错误吞掉
+        // CanceledException, 避免取消被当作普通 tool 错误吞掉
         prepared.cancelToken
     );
 
@@ -1419,16 +1419,16 @@ asio::awaitable<void> ToolcallWrapNode::runToolBatch(
     // - 会话取消会让节点协程上挂起的等待以 operation_aborted 结束 (as_tuple 把
     //   错误作为结果返回, 不抛异常): 此时停止等待, 保留已完成结果, 让调用方按
     //   取消路径补齐 [User canceled] 占位 (未完成的槽位保持空)
-    bool waitCancelled = false;
+    bool waitCanceled = false;
     for (size_t i = 0; i < state->batch.size(); ++i) {
         auto [ec, idx] = co_await doneChannel->async_receive(asio::as_tuple(asio::use_awaitable));
         (void)idx;
         if (ec) {
-            waitCancelled = true;
+            waitCanceled = true;
             break;
         }
     }
-    if (waitCancelled) {
+    if (waitCanceled) {
         // 让子协程的挂起等待尽快结束 (避免取消后仍在后台推进工具执行)
         for (const auto& signal : batchSignals) {
             signal->emit(asio::cancellation_type::all);
@@ -1436,11 +1436,11 @@ asio::awaitable<void> ToolcallWrapNode::runToolBatch(
         outMsgs = state->msgs;
         if (outError == nullptr) {
             outError = std::make_exception_ptr(
-                neograph::graph::CancelledException("cancelled while waiting tool batch")
+                neograph::graph::CancelledException("Canceled while waiting tool batch")
             );
         }
         XX_LOGD(
-            "Toolcall batch wait cancelled: {} of {} call(s) already finished",
+            "Toolcall batch wait Canceled: {} of {} call(s) already finished",
             [&] {
                 size_t done = 0;
                 for (const auto& m : outMsgs) {

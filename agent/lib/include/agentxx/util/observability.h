@@ -27,7 +27,7 @@ public:
     enum class ToolOutcome {
         Ok = 0,      ///< 执行成功 (含工具自身返回的错误文本)
         Failed,      ///<< 抛异常被格式化为错误结果
-        Cancelled,   ///< 用户取消占位
+        Canceled,   ///< 用户取消占位
         Interrupted, ///< 中断占位 (等待用户输入)
     };
 
@@ -35,7 +35,7 @@ public:
     enum class TurnOutcome {
         Completed = 0, ///< 正常结束
         Failed,        ///< 出错结束
-        Cancelled,     ///< 取消结束
+        Canceled,     ///< 取消结束
         Interrupted,   ///< 中断 (等待用户输入后结束本轮)
     };
 
@@ -113,8 +113,8 @@ public:
         return turnsFailed_.load(std::memory_order_relaxed);
     }
 
-    uint64_t turnsCancelled() const noexcept {
-        return turnsCancelled_.load(std::memory_order_relaxed);
+    uint64_t turnsCanceled() const noexcept {
+        return turnsCanceled_.load(std::memory_order_relaxed);
     }
 
     uint64_t turnsInterrupted() const noexcept {
@@ -174,8 +174,8 @@ public:
         return toolFailed_.load(std::memory_order_relaxed);
     }
 
-    uint64_t toolCancelled() const noexcept {
-        return toolCancelled_.load(std::memory_order_relaxed);
+    uint64_t toolCanceled() const noexcept {
+        return toolCanceled_.load(std::memory_order_relaxed);
     }
 
     uint64_t toolInterrupted() const noexcept {
@@ -236,7 +236,7 @@ private:
     std::atomic<uint64_t> turns_{0};
     std::atomic<uint64_t> turnsCompleted_{0};
     std::atomic<uint64_t> turnsFailed_{0};
-    std::atomic<uint64_t> turnsCancelled_{0};
+    std::atomic<uint64_t> turnsCanceled_{0};
     std::atomic<uint64_t> turnsInterrupted_{0};
 
     std::atomic<uint64_t> firstTokenSamples_{0};
@@ -254,7 +254,7 @@ private:
 
     std::atomic<uint64_t> toolOk_{0};
     std::atomic<uint64_t> toolFailed_{0};
-    std::atomic<uint64_t> toolCancelled_{0};
+    std::atomic<uint64_t> toolCanceled_{0};
     std::atomic<uint64_t> toolInterrupted_{0};
 
     std::atomic<uint64_t> compactions_{0};

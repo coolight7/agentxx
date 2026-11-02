@@ -261,15 +261,15 @@ TestResult testTaskScopeSemantics() {
     XX_TEST_EXPECT_EQ(scope->pending(), size_t{0});
 
     // 取消: 挂起在长定时器上的任务收到取消信号后结束等待 (协程退出, 登记项摘除)
-    bool cancelledObserved = false;
-    scope->spawn("wait-cancel", [&cancelledObserved]() -> asio::awaitable<void> {
+    bool CanceledObserved = false;
+    scope->spawn("wait-cancel", [&CanceledObserved]() -> asio::awaitable<void> {
         auto               ex = co_await asio::this_coro::executor;
         asio::steady_timer timer{ex};
         timer.expires_after(std::chrono::seconds{30});
         utilxx_base::AsioErrorCode ec;
         co_await timer.async_wait(asio::redirect_error(asio::use_awaitable, ec));
         if (ec) {
-            cancelledObserved = true; // operation_aborted
+            CanceledObserved = true; // operation_aborted
         }
         co_return;
     });
@@ -280,7 +280,7 @@ TestResult testTaskScopeSemantics() {
     io.run_for(std::chrono::milliseconds{50});
     io.restart();
     XX_TEST_EXPECT_EQ(scope->pending(), size_t{0});
-    XX_TEST_EXPECT_TRUE(cancelledObserved);
+    XX_TEST_EXPECT_TRUE(CanceledObserved);
     XX_TEST_EXPECT_EQ(scope->totalSpawned(), uint64_t{2});
 
     // 等待结束: 全部结束返回 true; 超时返回 false

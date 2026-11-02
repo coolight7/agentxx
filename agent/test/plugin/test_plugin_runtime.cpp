@@ -516,7 +516,7 @@ TestResult testPluginRuntime() {
         int            cancels = 0, cleanup = 0;
         op->accept([&] {
             ++cancels;
-            notify.done(notify.host_ud, PLUGINXX_OPERATOR_CANCELLED, nullptr);
+            notify.done(notify.host_ud, PLUGINXX_OPERATOR_CANCELED, nullptr);
         });
         op->setCallback(
             +[](void*, int32_t, const PluginxxStringView*) {
@@ -990,7 +990,7 @@ TestResult testPluginRuntime() {
         int            cancels = 0;
         op->accept([&] {
             ++cancels;
-            notify.done(notify.host_ud, PLUGINXX_OPERATOR_CANCELLED, nullptr);
+            notify.done(notify.host_ud, PLUGINXX_OPERATOR_CANCELED, nullptr);
         });
         op->setCallback(CallbackState::done, &cb);
 
@@ -1005,7 +1005,7 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_EQ(cancels, 1);
         XX_TEST_EXPECT_TRUE(op->completed());
         XX_TEST_EXPECT_EQ(cb.calls, 1);
-        XX_TEST_EXPECT_EQ(cb.status, PLUGINXX_OPERATOR_CANCELLED);
+        XX_TEST_EXPECT_EQ(cb.status, PLUGINXX_OPERATOR_CANCELED);
         XX_TEST_EXPECT_TRUE(f.manager->runtime()->operations.empty());
     }
 
@@ -1852,7 +1852,7 @@ TestResult testPluginRuntime() {
             cancelFuture.wait();
             order.push("resumed");
             allowDoneFuture.wait();
-            notify.done(notify.host_ud, PLUGINXX_OPERATOR_CANCELLED, nullptr);
+            notify.done(notify.host_ud, PLUGINXX_OPERATOR_CANCELED, nullptr);
             order.push("doneSubmitted");
         });
         op->accept([&] {
@@ -1885,7 +1885,7 @@ TestResult testPluginRuntime() {
             return op->completed();
         }));
         XX_TEST_EXPECT_TRUE(op->completed());
-        XX_TEST_EXPECT_EQ(op->status(), PLUGINXX_OPERATOR_CANCELLED);
+        XX_TEST_EXPECT_EQ(op->status(), PLUGINXX_OPERATOR_CANCELED);
         XX_TEST_EXPECT_TRUE(probe.onIo);
         XX_TEST_EXPECT_FALSE(probe.destroyDuringCallback);
         XX_TEST_EXPECT_EQ(order.size(), size_t{5});
@@ -2239,15 +2239,15 @@ TestResult testPluginRuntime() {
             XX_TEST_EXPECT_EQ(probe.calls, 1);
 
             // 4) 取消尚未开始的请求: 不再执行, lease 立刻释放
-            PluginxxDriver* cancelled = runtime->request_driver(host, driveFn, &probe, &err);
-            XX_TEST_EXPECT_TRUE(cancelled != nullptr);
+            PluginxxDriver* Canceled = runtime->request_driver(host, driveFn, &probe, &err);
+            XX_TEST_EXPECT_TRUE(Canceled != nullptr);
             XX_TEST_EXPECT_GE(f.provider->lifetime->leaseCount(), size_t{1});
-            runtime->cancel_driver(cancelled);
+            runtime->cancel_driver(Canceled);
             XX_TEST_EXPECT_EQ(f.provider->activeDriverCount(), size_t{0});
             XX_TEST_EXPECT_EQ(f.provider->lifetime->leaseCount(), size_t{0});
             f.drainAll();
             XX_TEST_EXPECT_EQ(probe.calls, 1); // 取消后不再执行
-            runtime->cancel_driver(cancelled); // 幂等
+            runtime->cancel_driver(Canceled); // 幂等
             runtime->cancel_driver(nullptr);   // 空指针安全
 
             // 5) 迟到/无效句柄取消: 按地址查表未命中, 安全忽略 (不解引用)

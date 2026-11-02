@@ -418,7 +418,7 @@ json McpServer::processJsonRpc(const json& requestJson, const RequestContext& ct
         handleInitialized(params);
         return hasId ? jsonRpcResponse(id, json::object()) : json{};
     }
-    if (method == "notifications/cancelled") {
+    if (method == "notifications/Canceled") {
         // stdio 取消通知 (现代/legacy); HTTP 无此通知 (关闭流即取消)
         return hasId ? jsonRpcResponse(id, json::object()) : json{};
     }

@@ -228,7 +228,7 @@ public:
     /// 还在跑的异步子代理作业数 (诊断/测试用)
     size_t runningAsyncJobs() const;
 
-    /// 取消异步子代理作业 (只置取消标记: 作业收尾时照常发布 `{cancelled:true}` 值)
+    /// 取消异步子代理作业 (只置取消标记: 作业收尾时照常发布 `{Canceled:true}` 值)
     /// - parentCtx 为空 = 取消全部; 非空只取消该父 agent 上下文上的作业
     ///   (agent 关停时传自己的上下文, 不误伤同一容器里别的根)
     /// - `return` 被取消的作业数
@@ -371,7 +371,7 @@ private:
 
     /// 受理一个异步子代理任务: 登记作业 + 启动真跑协程, 立即返回 (不等结果)
     /// - 父会话事件中枢在任务完成时收到 `{resultId, subagent, agentId, content,
-    ///   hasError, cancelled, errorMessage}` 值, 随后该事件被 end
+    ///   hasError, Canceled, errorMessage}` 值, 随后该事件被 end
     void startAsyncSubagentTask(
         const events::SubagentBatchItem& task,
         std::string                      parentSessionId,

@@ -273,7 +273,7 @@ inline GitResult runGit(
     GitResult skipped;
     if (cancelFlag != nullptr && cancelFlag->load(std::memory_order_acquire)) {
         skipped.exitCode = -1;
-        skipped.err      = "[cancelled]";
+        skipped.err      = "[Canceled]";
         return skipped;
     }
     return detail::runGitImpl(args, cwd, timeoutSec);

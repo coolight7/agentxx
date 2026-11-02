@@ -46,7 +46,7 @@ enum class EventKind : uint8_t { Single, Stream };
 enum class EventState : uint8_t { Open, Ended, Expired };
 
 /// 等待句柄状态
-enum class WaitState : uint8_t { Armed, Satisfied, Cancelled, TimedOut };
+enum class WaitState : uint8_t { Armed, Satisfied, Canceled, TimedOut };
 
 /// 一次投递的结果 (日志/诊断/测试用)
 /// - `Queued`:   已受理 (写入待注入输入, 或作为新一轮输入入队)
@@ -258,7 +258,7 @@ public:
     std::optional<EventWait> queryWait(std::string_view waitId) const;
     std::vector<EventWait>   listWaits(std::string_view sessionId = {}, std::string_view event = {})
         const;
-    bool                     cancelWait(std::string_view waitId, std::string_view reason = "cancelled");
+    bool                     cancelWait(std::string_view waitId, std::string_view reason = "Canceled");
     size_t                   cancelWaitsOfSession(std::string_view sessionId, std::string_view reason);
 
     // -------------------------------------------------------------------
@@ -301,7 +301,7 @@ public:
     /// 阻塞等待一次 (供 `agentxx_event await`)
     ///
     /// 内部登记一个 `delivery=none` 的临时等待, 结束后一定撤销: 值到达 / 超时 /
-    /// 取消令牌被置位三条路径都覆盖; 取消时抛 `CancelledException`。
+    /// 取消令牌被置位三条路径都覆盖; 取消时抛 `CanceledException`。
     asio::awaitable<EventWait> awaitOnce(
         EventWaitSpec                         spec,
         std::shared_ptr<neograph::graph::CancelToken> ct
