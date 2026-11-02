@@ -53,7 +53,7 @@ static int32_t mathSetup(MathPluginCtx& ctx, const ScopeRef& ref) {
         kNameCalculate,
         kDepictCalculate,
         schema,
-        [](std::string_view args_json) -> std::string {
+        [](std::string_view args_json) -> ToolResult {
             ArgReader args(args_json);
             return mathCalculateExecute(args.raw());
         }

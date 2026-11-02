@@ -45,6 +45,12 @@
 
 namespace agentxx_fs_plugin {
 
+/// 工具结果 (带状态) 与终态: 实现体返回它表达成功/失败, 不再靠文本前缀
+/// - 本头可能被单独包含 (测试直调实现体), 因此这里自带引入, 不依赖插件共享头的
+///   声明顺序
+using agentxx::plugin::ToolResult;
+using agentxx::plugin::ToolStatus;
+
 /// 取消查询回调 (返回 true 表示会话已取消); 测试可传 nullptr 等价无取消支持
 using IsCanceledFn = std::function<bool()>;
 
@@ -438,6 +444,18 @@ inline std::string joinLines(const std::vector<std::string>& lines) {
     return output;
 }
 
+/// 成功结果: 工具执行完成, 正文就是给模型读的内容
+/// - 与 [failText] 一样只是简写, 状态由主程序统一处理 (见 agentxx/util/tool_result.h)
+inline ToolResult okText(std::string text) {
+    return ToolResult::ok(std::move(text));
+}
+
+/// 失败结果: 只写错误内容, 不加 `[Error: ...]` 前缀
+/// - 前缀由执行层统一加 (见 toolcall.cpp 的 formatToolResultText), 插件不重复写
+inline ToolResult failText(std::string errorText) {
+    return ToolResult::fail(std::move(errorText));
+}
+
 /// 按权限规则逐项过滤路径列表 (模式类工具用: 模式展开后复核实际路径)
 /// - 仅保留"已明确允许"的路径: 被拒绝 (Deny) 与未获批准 (Ask) 都不进入结果,
 ///   避免模式展开绕过针对子目录的拒绝规则
@@ -483,7 +501,7 @@ inline std::vector<std::filesystem::path>
 // =====================================================================
 // agentxx_filesystem_list 执行体 (原 FileSystemListTool::execute_async)
 // =====================================================================
-inline std::string fileListExecuteImpl(
+inline ToolResult fileListExecuteImpl(
     const utilxx_base::Json& arguments,
     const std::string&       workDir,
     const IsCanceledFn&     isCanceled = nullptr,
@@ -729,29 +747,29 @@ inline std::string fileListExecuteImpl(
                 }
             }
             flushPending();
-            return detail::joinLines(lines);
+            return detail::okText(detail::joinLines(lines));
         }
 
         // 通配符无匹配: 字面路径确实存在时 (文件名本身含 `*`/`[` 等) 按普通路径处理,
         // 与 shell "无匹配时保留模式原样" 的行为一致
         std::error_code ec;
         if (false == std::filesystem::exists(utilxx_base::utf8ToPath(targetPath), ec)) {
-            lines.push_back(fmt::format(R"([Error: no match `path`({}) file found])", rawPath));
-            return detail::joinLines(lines);
+            return detail::failText(fmt::format(R"(no match `path`({}) file found)", rawPath));
         }
     }
 
     auto fsPath = utilxx_base::utf8ToPath(targetPath);
     if (false == std::filesystem::exists(fsPath)) {
-        lines.push_back("[Error: path does not exist]");
-    } else if (std::filesystem::is_directory(fsPath)) {
+        return detail::failText("path does not exist");
+    }
+    if (std::filesystem::is_directory(fsPath)) {
         appendDirContents(fsPath);
     } else if (std::filesystem::is_regular_file(fsPath)) {
         // 单文件同样走待处理缓冲, 使权限过滤对"直接指定的文件"同样生效
         // (与 read/write/edit 等按路径判定的工具保持一致)
         appendEntry(std::filesystem::directory_entry(fsPath));
     } else {
-        lines.push_back("[Error: path exists, but is not a directory or a file]");
+        return detail::failText("path exists, but is not a directory or a file");
     }
 
     flushPending();
@@ -765,7 +783,7 @@ inline std::string fileListExecuteImpl(
     }
 
     // 拼接为多行文本 (与命令行 ls 一致)
-    return detail::joinLines(lines);
+    return detail::okText(detail::joinLines(lines));
 }
 
 // =====================================================================
@@ -837,7 +855,7 @@ inline void checkWholeFileSizeBeforeRead(const std::filesystem::path& fsPath) {
 
 } // namespace detail
 
-inline std::string fileReadExecuteImpl(
+inline ToolResult fileReadExecuteImpl(
     const utilxx_base::Json& arguments,
     const std::string&       workDir,
     const IsCanceledFn& isCanceled = nullptr // 单文件短操作不轮询; 形参保持与其他执行体一致
@@ -903,7 +921,7 @@ inline std::string fileReadExecuteImpl(
         stream.close();
         if (lineNum == 0 && offset == 0) {
             // 空文件: 第 0 行视为空行, 返回空串而非报错
-            return "";
+            return detail::okText("");
         }
         if (lineNum <= offset) {
             // offset 超出文件行数
@@ -918,7 +936,7 @@ inline std::string fileReadExecuteImpl(
         // 保留原始的 crlf 或 \n 换行符不转换
         utilxx_base::autoConvertToUtf8(rawStr);
         detail::checkReadResultLimit(rawStr);
-        return rawStr;
+        return detail::okText(std::move(rawStr));
     }
 
     // 读取完整文件 (先看体量: 超大文件直接报错, 不读进内存)
@@ -929,13 +947,13 @@ inline std::string fileReadExecuteImpl(
     // 保留原始的 crlf 或 \n 换行符不转换
     utilxx_base::autoConvertToUtf8(result);
     detail::checkReadResultLimit(result);
-    return result;
+    return detail::okText(std::move(result));
 }
 
 // =====================================================================
 // agentxx_filesystem_write 执行体 (原 FilesystemWriteFileTool::execute_async)
 // =====================================================================
-inline std::string fileWriteExecuteImpl(
+inline ToolResult fileWriteExecuteImpl(
     const utilxx_base::Json& arguments,
     const std::string&       workDir,
     const IsCanceledFn& isCanceled = nullptr // 单文件短操作不轮询; 形参保持与其他执行体一致
@@ -984,7 +1002,7 @@ inline std::string fileWriteExecuteImpl(
     }
 
     stream.close();
-    return "success";
+    return detail::okText("success");
 }
 
 // =====================================================================
@@ -1188,7 +1206,7 @@ inline void applyEditSegments(std::string& content, const std::vector<EditSegmen
 
 } // namespace detail
 
-inline std::string fileEditExecuteImpl(
+inline ToolResult fileEditExecuteImpl(
     const utilxx_base::Json& arguments,
     const std::string&       workDir,
     const IsCanceledFn& isCanceled = nullptr // 单文件短操作不轮询; 形参保持与其他执行体一致
@@ -1212,7 +1230,7 @@ inline std::string fileEditExecuteImpl(
     std::vector<size_t> unchangedSegments;
     const auto appliedCount = detail::markUnchangedSegments(segments, unchangedSegments);
     if (appliedCount == 0) {
-        return detail::editResultText(0, unchangedSegments);
+        return detail::okText(detail::editResultText(0, unchangedSegments));
     }
 
     auto path = utilxx_base::utf8ToPath(filepath);
@@ -1276,13 +1294,13 @@ inline std::string fileEditExecuteImpl(
         };
     }
 
-    return detail::editResultText(appliedCount, unchangedSegments);
+    return detail::okText(detail::editResultText(appliedCount, unchangedSegments));
 }
 
 // =====================================================================
 // agentxx_filesystem_glob 执行体 (原 FilesystemGlobTool::execute_async)
 // =====================================================================
-inline std::string fileGlobExecuteImpl(
+inline ToolResult fileGlobExecuteImpl(
     const utilxx_base::Json& arguments,
     const std::string&       workDir,
     const IsCanceledFn&     isCanceled = nullptr,
@@ -1332,7 +1350,7 @@ inline std::string fileGlobExecuteImpl(
     std::vector<std::filesystem::path> resultList;
     for (const auto& pattern : file_patterns) {
         if (checkCancel() || deadline.expired()) {
-            return "[Error: Canceled or timed out]";
+            return detail::failText("canceled or timed out");
         }
         // 到限即停: 遍历已在策略内停止, 后续 pattern 不再展开 (总量不超上限)
         if (walkPolicy.limitReached) {
@@ -1361,7 +1379,7 @@ inline std::string fileGlobExecuteImpl(
     }
 
     if (resultList.empty()) {
-        return R"([Error: no file matched `file_patterns`])";
+        return detail::failText(R"(no file matched `file_patterns`)");
     }
 
     // 默认去重: 多 pattern 可能匹配到相同路径
@@ -1374,7 +1392,7 @@ inline std::string fileGlobExecuteImpl(
         filtered.reserve(resultList.size());
         for (const auto& p : resultList) {
             if (checkCancel() || deadline.expired()) {
-                return "[Error: Canceled or timed out]";
+                return detail::failText("canceled or timed out");
             }
             if (typeFilter.count(detail::fileTypeOf(p))) {
                 filtered.push_back(p);
@@ -1437,12 +1455,12 @@ inline std::string fileGlobExecuteImpl(
     if (resultList.empty()) {
         if (walkPolicy.limitReached) {
             // 被截断且过滤后无剩余: 提示里带上"未收集完整"的信息, 避免误判为"无匹配"
-            return fmt::format(
-                R"([Error: no file matched `file_patterns` after filtering. Note: the walk stopped early at `max_files` = {}, so more matches may exist beyond the ones collected (raise `max_files` or narrow `file_patterns`).])",
+            return detail::failText(fmt::format(
+                R"(no file matched `file_patterns` after filtering. Note: the walk stopped early at `max_files` = {}, so more matches may exist beyond the ones collected (raise `max_files` or narrow `file_patterns`).)",
                 maxFiles
-            );
+            ));
         }
-        return R"([Error: no file matched `file_patterns` after filtering])";
+        return detail::failText(R"(no file matched `file_patterns` after filtering)");
     }
 
     // 结果数量达到上限时在首行说明: 遍历已停止, 只列出已匹配到的部分路径
@@ -1458,17 +1476,17 @@ inline std::string fileGlobExecuteImpl(
     }
     for (const auto& item : resultList) {
         if (checkCancel() || deadline.expired()) {
-            return "[Error: Canceled or timed out]";
+            return detail::failText("canceled or timed out");
         }
         oss << detail::toUtf8(item) << '\n';
     }
-    return oss.str();
+    return detail::okText(oss.str());
 }
 
 // =====================================================================
 // agentxx_filesystem_grep 执行体 (原 FilesystemGrepTool::execute_async)
 // =====================================================================
-inline std::string fileGrepExecuteImpl(
+inline ToolResult fileGrepExecuteImpl(
     const utilxx_base::Json& arguments,
     const std::string&       workDir,
     const IsCanceledFn&     isCanceled = nullptr,
@@ -1538,7 +1556,7 @@ inline std::string fileGrepExecuteImpl(
     glob::WalkPolicy walkPolicy = detail::makeWalkPolicy(excludePatterns, maxFiles);
     for (const auto& pattern : file_patterns) {
         if (checkStop()) {
-            return "[Error: Canceled or timed out]";
+            return detail::failText("canceled or timed out");
         }
         // 到限即停: 遍历已在策略内停止, 后续 pattern 不再展开 (候选总数不超上限)
         if (walkPolicy.limitReached) {
@@ -1838,15 +1856,15 @@ inline std::string fileGrepExecuteImpl(
                                             !caseSensitive
                                         );
     if (false == regex_patterns.empty() && !regex) {
-        return fmt::format(
-            R"_([Error: regex compilation failed (regex_patterns are parsed as regular expressions). If you intended literal text search, put the patterns in `text_patterns` instead.])_"
+        return detail::failText(
+            R"_(regex compilation failed (regex_patterns are parsed as regular expressions). If you intended literal text search, put the patterns in `text_patterns` instead.)_"
         );
     }
 
     bool anyHit = false;
     for (const auto& item : refilelist) {
         if (checkStop()) {
-            return "[Error: Canceled or timed out]";
+            return detail::failText("canceled or timed out");
         }
         auto filepath = detail::toUtf8(item);
         // 读取并预处理: 跳过二进制/非文本文件 (glob 阶段已过滤目录)
@@ -1920,7 +1938,7 @@ inline std::string fileGrepExecuteImpl(
                     maxFiles
                 );
             }
-            return summary;
+            return detail::okText(summary);
         }
         if (skippedTooLarge > 0) {
             // 跳过说明写在结果末尾 (不做静默丢弃): 调用方据此判断是否需要提高上限
@@ -1933,14 +1951,14 @@ inline std::string fileGrepExecuteImpl(
         if (walkTruncated) {
             // 数量达到上限导致遍历提前停止: 提示写在**首行** (结果主体是搜索命中,
             // 提示需先被看到), 并明示"还有更多文件未搜索", 避免把结果当成完整结果
-            return fmt::format(
+            return detail::okText(fmt::format(
                 "[Note] Too many files match `file_patterns` (> `max_files` = {}): the walk stopped and only {} matched file(s) were scanned. Narrow `file_patterns`, add `exclude_patterns`, or raise `max_files` to search more.\n{}",
                 maxFiles,
                 refilelist.size(),
                 resultStr.str()
-            );
+            ));
         }
-        return resultStr.str();
+        return detail::okText(resultStr.str());
     }
     // 无匹配错误附带当前匹配模式说明, 便于调用方排查:
     // 正则元字符 (如 `(` `[` `*`) 未转义/未成对时会匹配不到, 此时可改用
@@ -1968,20 +1986,25 @@ inline std::string fileGrepExecuteImpl(
 
 // =====================================================================
 // 对外执行体: 与原 lib 工具的 asyncWithTimeout+catchErrorAsync 外层语义一致
-// —— 可预期异常 (如无匹配/文件打开失败) 统一转为 "[Error: ...]" 错误文本返回,
-// 而非向调用方抛出; 保证插件 execute 回调、测试直测两种路径行为一致
+// —— 可预期异常 (如无匹配/文件打开失败) 统一转成失败结果 (错误内容即异常文本),
+// 不再向调用方抛出; 保证插件 execute 回调、测试直测两种路径行为一致
 // =====================================================================
 namespace detail {
 
-/// 异常 → "[Error: ...]" 文本包装 (取消类异常不在本层出现: impl 内部仅以
+/// 异常 → 失败结果 (取消类异常不在本层出现: impl 内部仅以
 /// 返回值表达取消, 见各执行体的 checkStop 分支)
+/// - 被包装的执行体两种都有: 已经返回带状态结果的直接透传, 只返回文本的包成成功
 template<typename Fn>
-inline std::string asErrorText(Fn&& fn) {
+inline ToolResult asErrorText(Fn&& fn) {
     try {
-        return fn();
+        if constexpr (std::is_same_v<std::remove_cvref_t<decltype(fn())>, ToolResult>) {
+            return fn();
+        } else {
+            return ToolResult::ok(fn());
+        }
     } catch (const std::exception& ex) {
         XX_LOGD("filesystem tool error -> text: {}", ex.what());
-        return fmt::format("[Error: {}]", ex.what());
+        return ToolResult::fail(ex.what());
     }
 }
 
@@ -2198,9 +2221,9 @@ inline std::string
     return fmt::format("Removed: {}", path);
 }
 
-/// 对外执行体 (同步): 异常统一转 "[Error: ...]" 文本返回
+/// 对外执行体 (同步): 异常统一转成失败结果
 /// - 三个工具都是单次元数据/目录操作, 不轮询取消 (形参与其他 *Execute 保持一致)
-inline std::string fileMoveExecute(
+inline ToolResult fileMoveExecute(
     const utilxx_base::Json& arguments,
     const std::string&       workDir,
     const IsCanceledFn&     isCanceled = nullptr
@@ -2211,7 +2234,7 @@ inline std::string fileMoveExecute(
     });
 }
 
-inline std::string fileCopyExecute(
+inline ToolResult fileCopyExecute(
     const utilxx_base::Json& arguments,
     const std::string&       workDir,
     const IsCanceledFn&     isCanceled = nullptr
@@ -2222,7 +2245,7 @@ inline std::string fileCopyExecute(
     });
 }
 
-inline std::string fileRemoveExecute(
+inline ToolResult fileRemoveExecute(
     const utilxx_base::Json& arguments,
     const std::string&       workDir,
     const IsCanceledFn&     isCanceled = nullptr
@@ -2233,7 +2256,7 @@ inline std::string fileRemoveExecute(
     });
 }
 
-inline std::string fileListExecute(
+inline ToolResult fileListExecute(
     const utilxx_base::Json& arguments,
     const std::string&       workDir,
     const IsCanceledFn&     isCanceled = nullptr,
@@ -2244,7 +2267,7 @@ inline std::string fileListExecute(
     });
 }
 
-inline std::string fileReadExecute(
+inline ToolResult fileReadExecute(
     const utilxx_base::Json& arguments,
     const std::string&       workDir,
     const IsCanceledFn&     isCanceled = nullptr
@@ -2254,7 +2277,7 @@ inline std::string fileReadExecute(
     });
 }
 
-inline std::string fileWriteExecute(
+inline ToolResult fileWriteExecute(
     const utilxx_base::Json& arguments,
     const std::string&       workDir,
     const IsCanceledFn&     isCanceled = nullptr
@@ -2264,7 +2287,7 @@ inline std::string fileWriteExecute(
     });
 }
 
-inline std::string fileEditExecute(
+inline ToolResult fileEditExecute(
     const utilxx_base::Json& arguments,
     const std::string&       workDir,
     const IsCanceledFn&     isCanceled = nullptr
@@ -2274,7 +2297,7 @@ inline std::string fileEditExecute(
     });
 }
 
-inline std::string fileGlobExecute(
+inline ToolResult fileGlobExecute(
     const utilxx_base::Json& arguments,
     const std::string&       workDir,
     const IsCanceledFn&     isCanceled = nullptr,
@@ -2285,7 +2308,7 @@ inline std::string fileGlobExecute(
     });
 }
 
-inline std::string fileGrepExecute(
+inline ToolResult fileGrepExecute(
     const utilxx_base::Json& arguments,
     const std::string&       workDir,
     const IsCanceledFn&     isCanceled = nullptr,
@@ -2353,7 +2376,7 @@ inline asio::awaitable<std::string>
 /// agentxx_filesystem_read 执行体协程版 (原 FilesystemReadTextFileTool::execute_async)
 /// - offset/limit 模式经 async_read_until 逐行推进 (保留原始换行符);
 ///   其余整文件读取; 读取后 autoConvertToUtf8 (保留 crlf 或 \n 原样不转换)
-inline asio::awaitable<std::string>
+inline asio::awaitable<ToolResult>
     fileReadExecuteAsyncImpl(const utilxx_base::Json& arguments, const std::string& workDir) {
     detail::rejectLegacyLineArgs(arguments);
     auto filepath = detail::wsAbs(workDir, arguments.value("path", std::string{}));
@@ -2434,7 +2457,7 @@ inline asio::awaitable<std::string>
         stream.close();
         if (lineNum == 0 && offset == 0) {
             // 空文件: 第 0 行视为空行, 返回空串而非报错
-            co_return "";
+            co_return detail::okText("");
         }
         if (lineNum <= offset) {
             // offset 超出文件行数
@@ -2449,7 +2472,7 @@ inline asio::awaitable<std::string>
         // 保留原始的 crlf 或 \n 换行符不转换
         utilxx_base::autoConvertToUtf8(rawStr);
         detail::checkReadResultLimit(rawStr);
-        co_return rawStr;
+        co_return detail::okText(std::move(rawStr));
     }
 
     // 读取完整文件 (先看体量: 超大文件直接报错, 不读进内存)
@@ -2458,13 +2481,13 @@ inline asio::awaitable<std::string>
     // 保留原始的 crlf 或 \n 换行符不转换
     utilxx_base::autoConvertToUtf8(data);
     detail::checkReadResultLimit(data);
-    co_return data;
+    co_return detail::okText(std::move(data));
 }
 
 /// agentxx_filesystem_write 执行体协程版 (原 FilesystemWriteFileTool::execute_async)
 /// - overwrite=false 且目标存在时报错; 自动创建缺失的父目录;
 ///   stream_file create|truncate 打开后 async_write 全部写入
-inline asio::awaitable<std::string>
+inline asio::awaitable<ToolResult>
     fileWriteExecuteAsyncImpl(const utilxx_base::Json& arguments, const std::string& workDir) {
     auto filepath = detail::wsAbs(workDir, arguments.value("path", std::string{}));
     if (filepath.empty()) {
@@ -2515,13 +2538,13 @@ inline asio::awaitable<std::string>
     }
 
     stream.close();
-    co_return "success";
+    co_return detail::okText("success");
 }
 
 /// agentxx_filesystem_edit 执行体协程版 (原 FilesystemEditTextFileTool::execute_async)
 /// - 异步读完整文件 → UTF-8/LF 归一化 → 按段顺序替换 → 原子写 (同目录临时文件 +
 ///   rename 覆盖), 与同步版行为一致
-inline asio::awaitable<std::string>
+inline asio::awaitable<ToolResult>
     fileEditExecuteAsyncImpl(const utilxx_base::Json& arguments, const std::string& workDir) {
     auto filepath = detail::wsAbs(workDir, arguments.value("path", std::string{}));
     if (filepath.empty()) {
@@ -2542,7 +2565,7 @@ inline asio::awaitable<std::string>
     std::vector<size_t> unchangedSegments;
     const auto          appliedCount = detail::markUnchangedSegments(segments, unchangedSegments);
     if (appliedCount == 0) {
-        co_return detail::editResultText(0, unchangedSegments);
+        co_return detail::okText(detail::editResultText(0, unchangedSegments));
     }
 
     auto            path      = utilxx_base::utf8ToPath(filepath);
@@ -2613,7 +2636,7 @@ inline asio::awaitable<std::string>
         };
     }
 
-    co_return detail::editResultText(appliedCount, unchangedSegments);
+    co_return detail::okText(detail::editResultText(appliedCount, unchangedSegments));
 }
 
 #else // !ASIO_HAS_FILE && !BOOST_ASIO_HAS_FILE
@@ -2621,31 +2644,31 @@ inline asio::awaitable<std::string>
 /// 文件异步 I/O 编译期不可用平台 (无 io_uring/iocp 文件支持): 回退同步实现。
 /// 此时 utilxx_base::isAsyncFileIoSupported() 恒为 false, 注册侧会改走
 /// offload线程池适配异步接口 注册, 本回退仅供测试等直调场景保持单一入口
-inline asio::awaitable<std::string>
+inline asio::awaitable<ToolResult>
     fileReadExecuteAsyncImpl(const utilxx_base::Json& arguments, const std::string& workDir) {
     co_return fileReadExecuteImpl(arguments, workDir);
 }
 
-inline asio::awaitable<std::string>
+inline asio::awaitable<ToolResult>
     fileWriteExecuteAsyncImpl(const utilxx_base::Json& arguments, const std::string& workDir) {
     co_return fileWriteExecuteImpl(arguments, workDir);
 }
 
-inline asio::awaitable<std::string>
+inline asio::awaitable<ToolResult>
     fileEditExecuteAsyncImpl(const utilxx_base::Json& arguments, const std::string& workDir) {
     co_return fileEditExecuteImpl(arguments, workDir);
 }
 
 #endif // ASIO_HAS_FILE || BOOST_ASIO_HAS_FILE
 
-/// 对外协程执行体: 与同步版 *Execute 外层语义一致 —— 可预期异常统一转为
-/// "[Error: ...]" 错误文本返回, 保证受控轮询路径与测试直测行为一致
+/// 对外协程执行体: 与同步版 *Execute 外层语义一致 —— 可预期异常统一转成失败结果,
+/// 保证受控轮询路径与测试直测行为一致
 /// (单文件读写为短操作不轮询取消, 故不设 isCanceled 形参)
 /// - 文件异步 I/O 可用时走真异步实现 (受控轮询), 否则走同步实现
 /// - 注意: 本包装自身必须是协程 (而非返回惰性协程的普通函数) —— 参数引用在
 ///   协程帧内存续, 若经普通函数中转临时 lambda 会因栈帧提前返回而悬垂
 ///   (ASan stack-use-after-return 已复现)
-inline asio::awaitable<std::string>
+inline asio::awaitable<ToolResult>
     fileReadExecuteAsync(const utilxx_base::Json& arguments, const std::string& workDir) {
     try {
         if (utilxx_base::isAsyncFileIoSupported()) {
@@ -2654,11 +2677,11 @@ inline asio::awaitable<std::string>
         co_return fileReadExecuteImpl(arguments, workDir);
     } catch (const std::exception& ex) {
         XX_LOGD("filesystem tool error -> text: {}", ex.what());
-        co_return fmt::format("[Error: {}]", ex.what());
+        co_return detail::failText(ex.what());
     }
 }
 
-inline asio::awaitable<std::string>
+inline asio::awaitable<ToolResult>
     fileWriteExecuteAsync(const utilxx_base::Json& arguments, const std::string& workDir) {
     try {
         if (utilxx_base::isAsyncFileIoSupported()) {
@@ -2667,11 +2690,11 @@ inline asio::awaitable<std::string>
         co_return fileWriteExecuteImpl(arguments, workDir);
     } catch (const std::exception& ex) {
         XX_LOGD("filesystem tool error -> text: {}", ex.what());
-        co_return fmt::format("[Error: {}]", ex.what());
+        co_return detail::failText(ex.what());
     }
 }
 
-inline asio::awaitable<std::string>
+inline asio::awaitable<ToolResult>
     fileEditExecuteAsync(const utilxx_base::Json& arguments, const std::string& workDir) {
     try {
         if (utilxx_base::isAsyncFileIoSupported()) {
@@ -2680,7 +2703,7 @@ inline asio::awaitable<std::string>
         co_return fileEditExecuteImpl(arguments, workDir);
     } catch (const std::exception& ex) {
         XX_LOGD("filesystem tool error -> text: {}", ex.what());
-        co_return fmt::format("[Error: {}]", ex.what());
+        co_return detail::failText(ex.what());
     }
 }
 

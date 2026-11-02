@@ -132,13 +132,13 @@ static utilxx_base::Json frameToJson(
     return j;
 }
 
-static std::string framesResult(
+static agentxx::plugin::ToolResult framesResult(
     ScreenCapturePluginCtx&                                        ctx,
     const std::vector<agentxx_screen_capture_plugin::ScreenFrame>& frames,
     bool                                                           saveImages
 ) {
     if (frames.empty()) {
-        return R"({"ok":false,"error":"capture failed"})";
+        return agentxx::plugin::ToolResult::fail("capture failed: no frames returned");
     }
     utilxx_base::Json arr = utilxx_base::Json::array();
     for (const auto& f : frames) {
@@ -147,7 +147,7 @@ static std::string framesResult(
     utilxx_base::Json j = utilxx_base::Json::object();
     j["ok"]             = true;
     j["frames"]         = arr;
-    return j.dump();
+    return agentxx::plugin::ToolResult::ok(j.dump());
 }
 
 static const char* kScreenCaptureDefaultDepict
@@ -197,7 +197,8 @@ static void registerScreenCaptureTool(ScreenCapturePluginCtx& ctx, const agentxx
         "agentxx_screen_capture",
         depict,
         schema,
-        [](ScreenCapturePluginCtx& c, std::string_view args_json) -> std::string {
+        [](ScreenCapturePluginCtx& c, std::string_view args_json)
+            -> agentxx::plugin::ToolResult {
             agentxx::plugin::ArgReader args(args_json);
             if (!args.ok()) {
                 throw std::runtime_error(args.errorMessage());
@@ -222,7 +223,9 @@ static void registerScreenCaptureTool(ScreenCapturePluginCtx& ctx, const agentxx
                 int  target = (idx >= 0) ? static_cast<int>(idx) : 0;
                 auto frame  = capture.capture_.captureScreen(target);
                 if (frame.pixelData.empty()) {
-                    return R"({"ok":false,"error":"capture_screen failed: invalid screen index or capture error"})";
+                    return agentxx::plugin::ToolResult::fail(
+                        "capture_screen failed: invalid screen index or capture error"
+                    );
                 }
                 std::vector<agentxx_screen_capture_plugin::ScreenFrame> frames;
                 frames.push_back(std::move(frame));
@@ -232,7 +235,7 @@ static void registerScreenCaptureTool(ScreenCapturePluginCtx& ctx, const agentxx
             if (command == "capture_mouse") {
                 auto frame = capture.capture_.captureMouseScreen();
                 if (frame.pixelData.empty()) {
-                    return R"({"ok":false,"error":"capture_mouse failed"})";
+                    return agentxx::plugin::ToolResult::fail("capture_mouse failed");
                 }
                 std::vector<agentxx_screen_capture_plugin::ScreenFrame> frames;
                 frames.push_back(std::move(frame));
@@ -240,28 +243,31 @@ static void registerScreenCaptureTool(ScreenCapturePluginCtx& ctx, const agentxx
             }
 
             if (command == "get_screen_count") {
-                return fmt::format(
+                return agentxx::plugin::ToolResult::ok(fmt::format(
                     R"({{"ok":true,"count":{}}})",
                     capture.capture_.getScreenCount()
-                );
+                ));
             }
 
             if (command == "start_streaming") {
                 int  rate = std::clamp(static_cast<int>(fr), 1, 30);
                 bool ok   = capture.startStreaming(rate);
-                return fmt::format(
+                return agentxx::plugin::ToolResult::ok(fmt::format(
                     R"({{"ok":{},"streaming":true,"frame_rate":{}}})",
                     ok ? "true" : "false",
                     rate
-                );
+                ));
             }
 
             if (command == "stop_streaming") {
                 capture.stopStreaming();
-                return R"({"ok":true,"streaming":false})";
+                return agentxx::plugin::ToolResult::ok(R"({"ok":true,"streaming":false})");
             }
 
-            return R"({"ok":false,"error":"unknown command"})";
+            return agentxx::plugin::ToolResult::fail(
+                "unknown command: use capture_all / capture_screen / capture_mouse / "
+                "get_screen_count / start_streaming / stop_streaming"
+            );
         },
         0,
         AGENTXX_PLUGIN_TOOL_FLAG_AUTO_SUMMARY

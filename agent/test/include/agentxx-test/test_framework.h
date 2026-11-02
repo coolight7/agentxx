@@ -1,5 +1,6 @@
 #pragma once
 
+#include "agentxx/util/tool_result.h"
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -23,6 +24,18 @@
 
 namespace agentxx {
 namespace test {
+
+/// 工具结果 -> 模型读到的文本 (与执行层同一实现)
+///
+/// 测试直调插件/工具实现体时拿到的是带状态的结果; 断言"模型看到什么"时用它
+/// 转成文本, 断言成败时直接看 `status` (不要解析文本)
+///
+/// - `args`:
+///     - [result] 工具结果
+/// - `return` 执行层写进上下文的文本
+inline std::string displayText(const agentxx::util::ToolResult& result) {
+    return agentxx::util::toolResultTextForModel(result);
+}
 
 /// 定位当前可执行文件所在目录 (跨平台)
 /// - 用于从任意 cwd 运行测试时, 仍能定位 exe 同目录的 plugins/ 构建产物

@@ -6,7 +6,7 @@
 #include <string>
 
 namespace agentxx_computer_use_plugin {
-std::string uiControlExecute(const utilxx_base::Json& arguments);
+agentxx::plugin::ToolResult uiControlExecute(const utilxx_base::Json& arguments);
 
 struct PluginCtx : public agentxx::plugin::PluginBase {};
 
@@ -130,7 +130,7 @@ static void* computerUseAgentMount(
         "agentxx_ui_control_keyboard_mouse",
         depict,
         makeUiControlSchema(),
-        [](ComputerUsePluginCtx&, std::string_view args_json) -> std::string {
+        [](ComputerUsePluginCtx&, std::string_view args_json) -> agentxx::plugin::ToolResult {
             agentxx::plugin::ArgReader reader(args_json);
             if (reader.hasParseError()) {
                 throw std::runtime_error("invalid args json");

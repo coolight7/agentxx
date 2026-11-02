@@ -22,6 +22,7 @@
 #include <string_view>
 #include <system_error>
 #include <thread>
+#include <utility>
 
 namespace {
 // 本模块测试计数器 (仅本编译单元可见; 不经头文件 extern 导出)
@@ -32,6 +33,67 @@ int g_cmd_failed = 0;
 // 断言计数宏覆盖: 将 test_framework.h 的 XX_TEST_EXPECT_* 映射到本模块计数器
 #define XX_TEST_PASSED g_cmd_passed
 #define XX_TEST_FAILED g_cmd_failed
+
+/// 测试 facade: 插件实现体现在返回带状态的结果 (agentxx::util::ToolResult),
+/// 这里转成"模型读到的文本"再交给断言 —— 文本断言与改动前保持一致;
+/// 需要判断成败时另直调实现体看 `status` (见状态断言用例)
+/// - 参数全量转发 (取消回调 / storeFn / CancelRegistry / 会话键)
+namespace agentxx_execmd_test {
+
+// 实现体返回带状态的结果 (agentxx::util::ToolResult); 这里转成"模型读到的文本",
+// 断言文本与改动前一致。两套实现按 boost.process 可用性二选一 —— 被选中的那一套
+// 才引用插件侧对应的入口 (popen 回退与协程版不同名, 不能同时引用)。
+#if defined(BOOST_PROCESS_V2_PROCESS_HPP)
+template<typename... Extra>
+inline asio::awaitable<std::string>
+    bashExecuteAsync(const utilxx_base::Json& a, const std::string& w, Extra&&... rest) {
+    co_return agentxx::test::displayText(
+        co_await agentxx_execmd_plugin::bashExecuteAsync(a, w, std::forward<Extra>(rest)...)
+    );
+}
+
+template<typename... Extra>
+inline asio::awaitable<std::string>
+    windowsExecuteAsync(const utilxx_base::Json& a, const std::string& w, Extra&&... rest) {
+    co_return agentxx::test::displayText(
+        co_await agentxx_execmd_plugin::windowsExecuteAsync(a, w, std::forward<Extra>(rest)...)
+    );
+}
+#else
+template<typename... Extra>
+inline asio::awaitable<std::string>
+    bashExecuteAsync(const utilxx_base::Json& a, const std::string& w, Extra&&... rest) {
+    // popen 回退是阻塞实现: 协程里直调等价于原同步语义
+    co_return agentxx::test::displayText(
+        agentxx_execmd_plugin::bashExecute(a, w, std::forward<Extra>(rest)...)
+    );
+}
+
+template<typename... Extra>
+inline asio::awaitable<std::string>
+    windowsExecuteAsync(const utilxx_base::Json& a, const std::string& w, Extra&&... rest) {
+    co_return agentxx::test::displayText(
+        agentxx_execmd_plugin::windowsExecute(a, w, std::forward<Extra>(rest)...)
+    );
+}
+
+template<typename... Extra>
+inline std::string bashExecute(const utilxx_base::Json& a, const std::string& w, Extra&&... rest) {
+    return agentxx::test::displayText(
+        agentxx_execmd_plugin::bashExecute(a, w, std::forward<Extra>(rest)...)
+    );
+}
+
+template<typename... Extra>
+inline std::string
+    windowsExecute(const utilxx_base::Json& a, const std::string& w, Extra&&... rest) {
+    return agentxx::test::displayText(
+        agentxx_execmd_plugin::windowsExecute(a, w, std::forward<Extra>(rest)...)
+    );
+}
+#endif
+
+} // namespace agentxx_execmd_test
 
 namespace agentxx {
 namespace tools {
@@ -104,14 +166,14 @@ struct ExecuteBashCommandTool {
     asio::awaitable<std::string> execute_async(const utilxx_base::Json& args) const {
 #if defined(BOOST_PROCESS_V2_PROCESS_HPP)
         // poll 寄生驱动协程版执行体 (与插件注册路径同一实现)
-        co_return co_await agentxx_execmd_plugin::bashExecuteAsync(
+        co_return co_await agentxx_execmd_test::bashExecuteAsync(
             args,
             testResolvedWorkDir(ctx),
             /*isCanceled=*/nullptr
         );
 #else
         // popen 回退 (阻塞实现, 测试协程内直调等价于原同步语义)
-        co_return agentxx_execmd_plugin::bashExecute(
+        co_return agentxx_execmd_test::bashExecute(
             args,
             testResolvedWorkDir(ctx),
             /*isCanceled=*/nullptr
@@ -136,13 +198,13 @@ struct ExecuteWindowsCommandTool {
 
     asio::awaitable<std::string> execute_async(const utilxx_base::Json& args) const {
 #if defined(BOOST_PROCESS_V2_PROCESS_HPP)
-        co_return co_await agentxx_execmd_plugin::windowsExecuteAsync(
+        co_return co_await agentxx_execmd_test::windowsExecuteAsync(
             args,
             testResolvedWorkDir(ctx),
             /*isCanceled=*/nullptr
         );
 #else
-        co_return agentxx_execmd_plugin::windowsExecute(
+        co_return agentxx_execmd_test::windowsExecute(
             args,
             testResolvedWorkDir(ctx),
             /*isCanceled=*/nullptr
@@ -1142,7 +1204,7 @@ asio::awaitable<void>
         {"timeout", 60        },
     };
     auto start  = std::chrono::steady_clock::now();
-    auto result = co_await agentxx_execmd_plugin::bashExecuteAsync(
+    auto result = co_await agentxx_execmd_test::bashExecuteAsync(
         args,
         agentxx::tools::testResolvedWorkDir(agentContext),
         /*isCanceled=*/
@@ -1174,7 +1236,7 @@ asio::awaitable<void> test_command_cancel_registry_preCanceled(
         {"timeout", 60        },
     };
     auto start  = std::chrono::steady_clock::now();
-    auto result = co_await agentxx_execmd_plugin::bashExecuteAsync(
+    auto result = co_await agentxx_execmd_test::bashExecuteAsync(
         args,
         agentxx::tools::testResolvedWorkDir(agentContext),
         /*isCanceled=*/nullptr,
@@ -1222,7 +1284,7 @@ asio::awaitable<void>
     asio::co_spawn(
         ex,
         keepAliveRun([&]() -> asio::awaitable<void> {
-            result = co_await agentxx_execmd_plugin::bashExecuteAsync(
+            result = co_await agentxx_execmd_test::bashExecuteAsync(
                 args,
                 agentxx::tools::testResolvedWorkDir(agentContext),
                 /*isCanceled=*/nullptr,
@@ -1296,7 +1358,7 @@ asio::awaitable<void> test_command_cancel_registry_multi_session(
     asio::co_spawn(
         ex,
         keepAliveRun([&]() -> asio::awaitable<void> {
-            resultA = co_await agentxx_execmd_plugin::bashExecuteAsync(
+            resultA = co_await agentxx_execmd_test::bashExecuteAsync(
                 argsA,
                 agentxx::tools::testResolvedWorkDir(agentContext),
                 /*isCanceled=*/nullptr,
@@ -1323,7 +1385,7 @@ asio::awaitable<void> test_command_cancel_registry_multi_session(
     asio::co_spawn(
         ex,
         keepAliveRun([&]() -> asio::awaitable<void> {
-            resultB = co_await agentxx_execmd_plugin::bashExecuteAsync(
+            resultB = co_await agentxx_execmd_test::bashExecuteAsync(
                 argsB,
                 agentxx::tools::testResolvedWorkDir(agentContext),
                 /*isCanceled=*/nullptr,

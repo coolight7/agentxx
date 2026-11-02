@@ -21,6 +21,9 @@ namespace agentxx_fs_plugin {
 using agentxx::plugin::ctxGuardLogger;
 using agentxx::plugin::pluginLog;
 using agentxx::plugin::pluginStrdup;
+/// 工具结果 (带状态): 实现体返回它表达成功/失败, 不再靠文本前缀
+using agentxx::plugin::ToolResult;
+using agentxx::plugin::ToolStatus;
 
 struct PluginCtx : public agentxx::plugin::PluginBase {};
 

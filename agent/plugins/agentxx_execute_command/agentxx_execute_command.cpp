@@ -135,7 +135,7 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx, const ScopeRef& ref) {
            std::string_view           args_json,
            std::string_view           tid,
            std::string_view           workDir,
-           const PluginxxCancelToken* cancel_token) -> asio::awaitable<std::string> {
+           const PluginxxCancelToken* cancel_token) -> asio::awaitable<ToolResult> {
             ArgReader   args(args_json);
             std::string tidStr(tid);
             if (pluginxx_cancel_is_requested(cancel_token)) {
@@ -177,7 +177,7 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx, const ScopeRef& ref) {
            std::string_view           args_json,
            std::string_view           tid,
            std::string_view           workDir,
-           const PluginxxCancelToken* cancel_token) -> std::string {
+           const PluginxxCancelToken* cancel_token) -> ToolResult {
             ArgReader   args(args_json);
             std::string tidStr(tid);
             if (pluginxx_cancel_is_requested(cancel_token)) {
@@ -240,7 +240,7 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx, const ScopeRef& ref) {
            std::string_view           args_json,
            std::string_view           tid,
            std::string_view           workDir,
-           const PluginxxCancelToken* cancel_token) -> asio::awaitable<std::string> {
+           const PluginxxCancelToken* cancel_token) -> asio::awaitable<ToolResult> {
             ArgReader   args(args_json);
             std::string tidStr(tid);
             if (pluginxx_cancel_is_requested(cancel_token)) {
@@ -282,7 +282,7 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx, const ScopeRef& ref) {
            std::string_view           args_json,
            std::string_view           tid,
            std::string_view           workDir,
-           const PluginxxCancelToken* cancel_token) -> std::string {
+           const PluginxxCancelToken* cancel_token) -> ToolResult {
             ArgReader   args(args_json);
             std::string tidStr(tid);
             if (pluginxx_cancel_is_requested(cancel_token)) {

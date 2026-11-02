@@ -24,6 +24,12 @@
 
 namespace agentxx_math_plugin {
 
+/// 工具结果 (带状态) 与终态: 实现体返回它表达成功/失败, 不再靠文本前缀
+/// - 本头可能被单独包含 (测试直调实现体), 因此这里自带引入, 不依赖插件共享头的
+///   声明顺序
+using agentxx::plugin::ToolResult;
+using agentxx::plugin::ToolStatus;
+
 /// 角度单位枚举
 enum class AngleUnit {
     Radians,
@@ -1458,7 +1464,8 @@ inline double evaluateExpression(std::string_view expr, AngleUnit angle_unit = A
 ///   - `precision` (int, optional): 保留小数位数
 ///   - `angle_unit` (string, optional): 角度单位 ("rad" 或 "deg", 默认为 "rad")
 /// - 参数检查失败抛 std::invalid_argument (主程序统一按工具错误结果回给模型)
-inline std::string mathCalculateExecute(const utilxx_base::Json& arguments) {
+/// - 表达式语法错/求值错不算抛异常: 返回失败结果 (错误内容即异常文本)
+inline ToolResult mathCalculateExecute(const utilxx_base::Json& arguments) {
     auto expr = arguments.value("expression", std::string{});
     if (expr.empty()) {
         throw std::invalid_argument{"Arg `expression` is empty"};
@@ -1479,13 +1486,20 @@ inline std::string mathCalculateExecute(const utilxx_base::Json& arguments) {
 
     try {
         double result = evaluateExpression(expr, angle_unit);
-        return detail::formatResult(result, precision);
+        return ToolResult::ok(detail::formatResult(result, precision));
     } catch (const MathEvalException& e) {
-        return e.what();
+        // 异常文本已自带 `[Error] ` 前缀 (见 MathEvalException): 这里取纯内容,
+        // 格式统一由执行层做
+        std::string text = e.what();
+        constexpr std::string_view kPrefix{"[Error] "};
+        if (text.starts_with(kPrefix)) {
+            text.erase(0, kPrefix.size());
+        }
+        return ToolResult::fail(std::move(text));
     } catch (const std::exception& e) {
-        return fmt::format("[Error] {}", e.what());
+        return ToolResult::fail(e.what());
     } catch (...) {
-        return "[Error] Unknown error occurred during evaluation";
+        return ToolResult::fail("unknown error occurred during evaluation");
     }
 }
 

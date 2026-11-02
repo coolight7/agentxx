@@ -185,11 +185,11 @@ static void* audioStreamAgentMount(
         "agentxx_audio_stream",
         "Capture system audio or microphone stream on Windows (WASAPI). Audio frames are pushed as plugin events to topic 'agentxx_audio_stream.audio'. Supports start, stop, and status query.",
         schema,
-        [](AudioStreamPluginCtx& c, std::string_view args_json) -> std::string {
+        [](AudioStreamPluginCtx& c, std::string_view args_json) -> agentxx::plugin::ToolResult {
             agentxx::plugin::ArgReader args(args_json);
             auto                       command = args.require<std::string>("command");
             if (!args.ok()) {
-                return args.errorMessage();
+                return agentxx::plugin::ToolResult::fail(args.errorMessage());
             }
 
             AudioStreamHolder& holder = *c.holder;
@@ -199,29 +199,29 @@ static void* audioStreamAgentMount(
                 int64_t     pid    = args.value("target_process_id", int64_t{0});
                 auto        source = parseSource(srcStr);
                 bool        ok     = holder.start(source, static_cast<uint32_t>(pid));
-                return fmt::format(
+                return agentxx::plugin::ToolResult::ok(fmt::format(
                     R"({{"ok":{},"running":true,"source":"{}","process_id":{}}})",
                     ok ? "true" : "false",
                     sourceName(source),
                     pid
-                );
+                ));
             }
 
             if (command == "stop") {
                 holder.stop();
-                return R"({"ok":true,"running":false})";
+                return agentxx::plugin::ToolResult::ok(R"({"ok":true,"running":false})");
             }
 
             if (command == "status") {
                 bool running = holder.stream_.isRunning();
-                return fmt::format(
+                return agentxx::plugin::ToolResult::ok(fmt::format(
                     R"({{"ok":true,"running":{},"source":"{}"}})",
                     running ? "true" : "false",
                     sourceName(holder.source_)
-                );
+                ));
             }
 
-            return R"({"ok":false,"error":"unknown command"})";
+            return agentxx::plugin::ToolResult::fail(R"(unknown command: use start/stop/status)");
         }
     );
 

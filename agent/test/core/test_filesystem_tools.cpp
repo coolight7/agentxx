@@ -33,6 +33,109 @@ int g_fs_failed = 0;
 #define XX_TEST_PASSED g_fs_passed
 #define XX_TEST_FAILED g_fs_failed
 
+/// 测试 facade: 插件实现体现在返回带状态的结果 (agentxx::util::ToolResult),
+/// 这里转成"模型读到的文本"再交给断言 —— 文本断言与改动前保持一致;
+/// 需要判断成败时另直调实现体看 `status` (见状态断言用例)
+namespace agentxx_fs_test {
+
+inline std::string fileListExecute(
+    const utilxx_base::Json& a,
+    const std::string&       w,
+    const ::agentxx_fs_plugin::IsCanceledFn& isCanceled = nullptr,
+    const ::agentxx_fs_plugin::PathFilterFn& pathFilter = nullptr
+) {
+    return agentxx::test::displayText(
+        ::agentxx_fs_plugin::fileListExecute(a, w, isCanceled, pathFilter)
+    );
+}
+
+inline std::string fileGlobExecute(
+    const utilxx_base::Json& a,
+    const std::string&       w,
+    const ::agentxx_fs_plugin::IsCanceledFn& isCanceled = nullptr,
+    const ::agentxx_fs_plugin::PathFilterFn& pathFilter = nullptr
+) {
+    return agentxx::test::displayText(
+        ::agentxx_fs_plugin::fileGlobExecute(a, w, isCanceled, pathFilter)
+    );
+}
+
+inline std::string fileGrepExecute(
+    const utilxx_base::Json& a,
+    const std::string&       w,
+    const ::agentxx_fs_plugin::IsCanceledFn& isCanceled = nullptr,
+    const ::agentxx_fs_plugin::PathFilterFn& pathFilter = nullptr
+) {
+    return agentxx::test::displayText(
+        ::agentxx_fs_plugin::fileGrepExecute(a, w, isCanceled, pathFilter)
+    );
+}
+
+inline std::string fileReadExecute(
+    const utilxx_base::Json& a,
+    const std::string&       w,
+    const ::agentxx_fs_plugin::IsCanceledFn& isCanceled = nullptr
+) {
+    return agentxx::test::displayText(::agentxx_fs_plugin::fileReadExecute(a, w, isCanceled));
+}
+
+inline std::string fileWriteExecute(
+    const utilxx_base::Json& a,
+    const std::string&       w,
+    const ::agentxx_fs_plugin::IsCanceledFn& isCanceled = nullptr
+) {
+    return agentxx::test::displayText(::agentxx_fs_plugin::fileWriteExecute(a, w, isCanceled));
+}
+
+inline std::string fileEditExecute(
+    const utilxx_base::Json& a,
+    const std::string&       w,
+    const ::agentxx_fs_plugin::IsCanceledFn& isCanceled = nullptr
+) {
+    return agentxx::test::displayText(::agentxx_fs_plugin::fileEditExecute(a, w, isCanceled));
+}
+
+inline std::string fileMoveExecute(
+    const utilxx_base::Json& a,
+    const std::string&       w,
+    const ::agentxx_fs_plugin::IsCanceledFn& /*isCanceled*/ = nullptr
+) {
+    return agentxx::test::displayText(::agentxx_fs_plugin::fileMoveExecute(a, w));
+}
+
+inline std::string fileCopyExecute(
+    const utilxx_base::Json& a,
+    const std::string&       w,
+    const ::agentxx_fs_plugin::IsCanceledFn& /*isCanceled*/ = nullptr
+) {
+    return agentxx::test::displayText(::agentxx_fs_plugin::fileCopyExecute(a, w));
+}
+
+inline std::string fileRemoveExecute(
+    const utilxx_base::Json& a,
+    const std::string&       w,
+    const ::agentxx_fs_plugin::IsCanceledFn& /*isCanceled*/ = nullptr
+) {
+    return agentxx::test::displayText(::agentxx_fs_plugin::fileRemoveExecute(a, w));
+}
+
+inline asio::awaitable<std::string>
+    fileReadExecuteAsync(const utilxx_base::Json& a, const std::string& w) {
+    co_return agentxx::test::displayText(co_await ::agentxx_fs_plugin::fileReadExecuteAsync(a, w));
+}
+
+inline asio::awaitable<std::string>
+    fileWriteExecuteAsync(const utilxx_base::Json& a, const std::string& w) {
+    co_return agentxx::test::displayText(co_await ::agentxx_fs_plugin::fileWriteExecuteAsync(a, w));
+}
+
+inline asio::awaitable<std::string>
+    fileEditExecuteAsync(const utilxx_base::Json& a, const std::string& w) {
+    co_return agentxx::test::displayText(co_await ::agentxx_fs_plugin::fileEditExecuteAsync(a, w));
+}
+
+} // namespace agentxx_fs_test
+
 namespace agentxx {
 namespace tools {
 
@@ -61,7 +164,7 @@ inline std::string testResolvedWorkDir(const std::weak_ptr<agentxx::agent::Agent
             return {TOOL_NAME, DEPICT, {}};                                                  \
         }                                                                                    \
         asio::awaitable<std::string> execute_async(const utilxx_base::Json& args) const {    \
-            co_return ::agentxx_fs_plugin::IMPL_FN(args, testResolvedWorkDir(ctx), nullptr); \
+            co_return ::agentxx_fs_test::IMPL_FN(args, testResolvedWorkDir(ctx), nullptr);     \
         }                                                                                    \
     };
 
@@ -77,7 +180,7 @@ inline std::string testResolvedWorkDir(const std::weak_ptr<agentxx::agent::Agent
             return {TOOL_NAME, DEPICT, {}};                                                        \
         }                                                                                          \
         asio::awaitable<std::string> execute_async(const utilxx_base::Json& args) const {          \
-            co_return co_await ::agentxx_fs_plugin::IMPL_ASYNC_FN(args, testResolvedWorkDir(ctx)); \
+            co_return co_await ::agentxx_fs_test::IMPL_ASYNC_FN(args, testResolvedWorkDir(ctx)); \
         }                                                                                          \
     };
 
@@ -835,7 +938,7 @@ asio::awaitable<void>
 
     // 测试同步版 fileReadExecute 读取不存在文件
     {
-        auto syncResult = ::agentxx_fs_plugin::fileReadExecute(
+        auto syncResult = agentxx_fs_test::fileReadExecute(
             args,
             agentxx::tools::testResolvedWorkDir(agentContext)
         );
@@ -1804,7 +1907,7 @@ asio::awaitable<void> test_edit_text_file_multi_segments_sync_async_parity(
         };
     };
 
-    auto syncResult  = agentxx_fs_plugin::fileEditExecute(makeArgs(syncFilePath), workDir);
+    auto syncResult  = agentxx_fs_test::fileEditExecute(makeArgs(syncFilePath), workDir);
     auto tool        = agentxx::tools::FilesystemEditTextFileTool{agentContext};
     auto asyncResult = co_await tool.execute_async(makeArgs(asyncFilePath));
 
@@ -2694,8 +2797,8 @@ asio::awaitable<void>
                    && resSlice.find("第一行中文数据") == std::string::npos;
 
     // 3) 同步执行体直测
-    auto resSyncFull  = agentxx_fs_plugin::fileReadExecute(argsFull, testDir);
-    auto resSyncSlice = agentxx_fs_plugin::fileReadExecute(argsSlice, testDir);
+    auto resSyncFull  = agentxx_fs_test::fileReadExecute(argsFull, testDir);
+    auto resSyncSlice = agentxx_fs_test::fileReadExecute(argsSlice, testDir);
     bool syncOk       = resSyncFull.find("第一行中文数据") != std::string::npos
                   && resSyncSlice.find("第二行关键内容") != std::string::npos;
 
@@ -2767,7 +2870,7 @@ asio::awaitable<void>
             {"content",   "同步中文写入\n"},
             {"overwrite", true                  }
     };
-    auto syncRes = agentxx_fs_plugin::fileWriteExecute(syncArgs, testDir);
+    auto syncRes = agentxx_fs_test::fileWriteExecute(syncArgs, testDir);
     bool syncOk  = (syncRes == "success") && fs::exists(utilxx_base::utf8ToPath(syncFilePath));
 
     fs::remove_all(utilxx_base::utf8ToPath(testDir + "/中文测试目录_写入"));
@@ -2833,7 +2936,7 @@ asio::awaitable<void>
         {"old_str", "已替换新字符串_BBB"},
         {"new_str", "同步替换新内容"    }
     };
-    auto syncRes = agentxx_fs_plugin::fileEditExecute(syncArgs, testDir);
+    auto syncRes = agentxx_fs_test::fileEditExecute(syncArgs, testDir);
     bool syncOk  = (syncRes == "success");
 
     fs::remove_all(utilxx_base::utf8ToPath(chineseDir));
@@ -3401,7 +3504,7 @@ asio::awaitable<void>
             {"file_patterns", utilxx_base::Json::array({limitDir + "/**/*"})},
             {"max_files",     10                                            },
         };
-        auto result     = ::agentxx_fs_plugin::fileGlobExecute(args, workDir);
+        auto result     = agentxx_fs_test::fileGlobExecute(args, workDir);
         auto pathCount  = countPathLines(result);
         bool hasNote    = startsWithNote(result) && result.find("max_files") != std::string::npos;
         bool erasedNote = result.find("[Error]") == std::string::npos;
@@ -3420,7 +3523,7 @@ asio::awaitable<void>
             {"file_patterns", utilxx_base::Json::array({limitDir + "/**/*"})},
             {"max_files",     0                                             },
         };
-        auto result    = ::agentxx_fs_plugin::fileGlobExecute(args, workDir);
+        auto result    = agentxx_fs_test::fileGlobExecute(args, workDir);
         auto pathCount = countPathLines(result);
         if (pathCount != 31 || startsWithNote(result)) {
             allPassed = false;
@@ -3437,7 +3540,7 @@ asio::awaitable<void>
             {"file_patterns", utilxx_base::Json::array({limitDir + "/*.txt"})},
             {"max_files",     100                                            },
         };
-        auto result    = ::agentxx_fs_plugin::fileGlobExecute(args, workDir);
+        auto result    = agentxx_fs_test::fileGlobExecute(args, workDir);
         auto pathCount = countPathLines(result);
         if (pathCount != 31 || startsWithNote(result)) {
             allPassed = false;
@@ -3455,7 +3558,7 @@ asio::awaitable<void>
             {"text_patterns", utilxx_base::Json::array({"small_token"})     },
             {"max_files",     10                                            },
         };
-        auto result  = ::agentxx_fs_plugin::fileGrepExecute(args, workDir);
+        auto result  = agentxx_fs_test::fileGrepExecute(args, workDir);
         bool hasNote = startsWithNote(result) && result.find("max_files") != std::string::npos;
         bool ok      = hasNote && countPathLines(result) > 0;
         if (false == ok) {
@@ -3476,7 +3579,7 @@ asio::awaitable<void>
             {"text_patterns", utilxx_base::Json::array({"small_token"})     },
             {"max_files",     100                                           },
         };
-        auto result = ::agentxx_fs_plugin::fileGrepExecute(args, workDir);
+        auto result = agentxx_fs_test::fileGrepExecute(args, workDir);
         if (result.find("small0.txt") == std::string::npos || startsWithNote(result)) {
             allPassed = false;
             TEST_FAIL << "FilesystemGrepTool should scan normally under `max_files`, got: "
@@ -3493,7 +3596,7 @@ asio::awaitable<void>
             {"text_patterns", utilxx_base::Json::array({"no_such_token"})   },
             {"max_files",     10                                            },
         };
-        auto result = ::agentxx_fs_plugin::fileGrepExecute(args, workDir);
+        auto result = agentxx_fs_test::fileGrepExecute(args, workDir);
         bool ok     = result.find("[Error:") != std::string::npos
                   && result.find("max_files") != std::string::npos;
         if (false == ok) {
@@ -3514,7 +3617,7 @@ asio::awaitable<void>
             {"text_patterns",    utilxx_base::Json::array({"big_token", "small_token"})},
             {"max_file_size_mb", 0.001                                                 },
         };
-        auto result       = ::agentxx_fs_plugin::fileGrepExecute(args, workDir);
+        auto result       = agentxx_fs_test::fileGrepExecute(args, workDir);
         bool skippedBig   = result.find("big.txt") == std::string::npos;
         bool matchedSmall = result.find("small0.txt") != std::string::npos;
         bool noted        = result.find("[Note]") != std::string::npos
@@ -3553,14 +3656,14 @@ asio::awaitable<void>
             {"file_patterns", utilxx_base::Json::array({limitDir + "/**"})},
             {"max_files",     0                                           },
         };
-        auto full      = ::agentxx_fs_plugin::fileGlobExecute(argsUnlimited, workDir);
+        auto full      = agentxx_fs_test::fileGlobExecute(argsUnlimited, workDir);
         auto fullCount = countPathLines(full); // 目录自身 + 31 个文件
 
         auto argsLimited = utilxx_base::Json{
             {"file_patterns", utilxx_base::Json::array({limitDir + "/**"})},
             {"max_files",     10                                          },
         };
-        auto limited    = ::agentxx_fs_plugin::fileGlobExecute(argsLimited, workDir);
+        auto limited    = agentxx_fs_test::fileGlobExecute(argsLimited, workDir);
         auto limitCount = countPathLines(limited);
         if (fullCount == 0 || limitCount != 10 || false == startsWithNote(limited)
             || limited.find("[Error]") != std::string::npos) {
@@ -3579,7 +3682,7 @@ asio::awaitable<void>
             {"file_patterns", utilxx_base::Json::array({limitDir + "/**/*", limitDir + "/*.txt"})},
             {"max_files",     10                                                                 },
         };
-        auto result    = ::agentxx_fs_plugin::fileGlobExecute(args, workDir);
+        auto result    = agentxx_fs_test::fileGlobExecute(args, workDir);
         auto pathCount = countPathLines(result);
         if (pathCount != 10 || false == startsWithNote(result)) {
             allPassed = false;
@@ -3598,7 +3701,7 @@ asio::awaitable<void>
             {"output_mode",   "content"                                     },
             {"max_files",     5                                             },
         };
-        auto result = ::agentxx_fs_plugin::fileGrepExecute(args, workDir);
+        auto result = agentxx_fs_test::fileGrepExecute(args, workDir);
         bool ok = startsWithNote(result) && result.find("small_token line") != std::string::npos;
         if (false == ok) {
             allPassed = false;
@@ -3659,7 +3762,7 @@ asio::awaitable<void>
             {"exclude_patterns", utilxx_base::Json::array({buildDir + "/**"}) },
             {"max_files",        1000                                         },
         };
-        auto result = ::agentxx_fs_plugin::fileGlobExecute(args, workDir);
+        auto result = agentxx_fs_test::fileGlobExecute(args, workDir);
         bool ok     = result.find("s0.txt") != std::string::npos
                   && result.find("s1.txt") != std::string::npos
                   && result.find("Too many") == std::string::npos
@@ -3681,7 +3784,7 @@ asio::awaitable<void>
             {"exclude_patterns", utilxx_base::Json::array({buildDir + "/**"}) },
             {"max_files",        1000                                         },
         };
-        auto result = ::agentxx_fs_plugin::fileGrepExecute(args, workDir);
+        auto result = agentxx_fs_test::fileGrepExecute(args, workDir);
         bool ok     = result.find("s0.txt") != std::string::npos
                   && result.find("Too many") == std::string::npos
                   && result.find("/build/") == std::string::npos;
@@ -3702,7 +3805,7 @@ asio::awaitable<void>
             {"exclude_patterns", utilxx_base::Json::array({buildDir})         },
             {"max_files",        2000                                         },
         };
-        auto result = ::agentxx_fs_plugin::fileGrepExecute(args, workDir);
+        auto result = agentxx_fs_test::fileGrepExecute(args, workDir);
         bool ok     = result.find("b0.txt") != std::string::npos // 子树仍被遍历
                   && result.find("build:") == std::string::npos; // 目录条目本身被排除
         if (ok) {
@@ -3888,7 +3991,7 @@ asio::awaitable<void> test_path_queue_serializes_read_modify_write(
 
     // 同步实现共用同一把门闩 (引用计数归还后表项删除)
     {
-        auto syncWriteRes = agentxx_fs_plugin::fileWriteExecute(
+        auto syncWriteRes = agentxx_fs_test::fileWriteExecute(
             utilxx_base::Json{
                 {"path",      dirPath + "/sync.txt"},
                 {"content",   "sync"               },
@@ -3897,7 +4000,7 @@ asio::awaitable<void> test_path_queue_serializes_read_modify_write(
             agentxx::tools::testResolvedWorkDir(agentContext)
         );
         XX_TEST_EXPECT_EQ(syncWriteRes, std::string{"success"});
-        const auto syncEditRes = agentxx_fs_plugin::fileEditExecute(
+        const auto syncEditRes = agentxx_fs_test::fileEditExecute(
             utilxx_base::Json{
                 {"path",    dirPath + "/sync.txt"},
                 {"old_str", "sync"               },

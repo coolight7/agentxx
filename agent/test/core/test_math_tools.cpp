@@ -38,7 +38,8 @@ struct MathCalculateTool {
     }
 
     asio::awaitable<std::string> execute_async(const utilxx_base::Json& args) const {
-        co_return agentxx_math_plugin::mathCalculateExecute(args);
+        // 实现体返回带状态的结果; 断言看"模型读到的文本" (与执行层同一实现)
+        co_return agentxx::test::displayText(agentxx_math_plugin::mathCalculateExecute(args));
     }
 };
 

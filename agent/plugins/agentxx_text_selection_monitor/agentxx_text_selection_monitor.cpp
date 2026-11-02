@@ -137,11 +137,11 @@ static void* textSelectionAgentMount(
         "agentxx_text_selection_monitor",
         "Monitor system-wide text selection events. Supports start, stop, and status query.",
         schema,
-        [](TextSelectionPluginCtx& c, std::string_view args_json) -> std::string {
+        [](TextSelectionPluginCtx& c, std::string_view args_json) -> agentxx::plugin::ToolResult {
             ArgReader args(args_json);
             auto      command = args.require<std::string>("command");
             if (!args.ok()) {
-                return args.errorMessage();
+                return agentxx::plugin::ToolResult::fail(args.errorMessage());
             }
 
             TextSelectionHolder& holder = c.holder;
@@ -149,20 +149,24 @@ static void* textSelectionAgentMount(
             if (command == "start") {
                 int64_t debounceMs = args.value("debounce_ms", int64_t{0});
                 bool    ok         = holder.start(static_cast<int>(debounceMs));
-                return fmt::format(R"({{"ok":{},"running":true}})", ok ? "true" : "false");
+                return agentxx::plugin::ToolResult::ok(
+                    fmt::format(R"({{"ok":{},"running":true}})", ok ? "true" : "false")
+                );
             }
 
             if (command == "stop") {
                 holder.stop();
-                return R"({"ok":true,"running":false})";
+                return agentxx::plugin::ToolResult::ok(R"({"ok":true,"running":false})");
             }
 
             if (command == "status") {
                 bool running = holder.monitor_.isRunning();
-                return fmt::format(R"({{"ok":true,"running":{}}})", running ? "true" : "false");
+                return agentxx::plugin::ToolResult::ok(
+                    fmt::format(R"({{"ok":true,"running":{}}})", running ? "true" : "false")
+                );
             }
 
-            return R"({"ok":false,"error":"unknown command"})";
+            return agentxx::plugin::ToolResult::fail(R"(unknown command: use start/stop/status)");
         }
     );
 

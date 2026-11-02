@@ -1063,7 +1063,7 @@ static UICmdResult uiControlExecuteOne(const UiCmdFields& f) {
     return UICmdResult{false, fmt::format("unknown action: {}", action)};
 }
 
-std::string uiControlExecute(const utilxx_base::Json& arguments) {
+agentxx::plugin::ToolResult uiControlExecute(const utilxx_base::Json& arguments) {
     if (!arguments.is_object() || !arguments.contains("commands")
         || !arguments["commands"].is_array()) {
         // 参数检查失败抛异常 (主程序统一按工具错误结果回给模型), 不返回编码后的 JSON
@@ -1120,11 +1120,13 @@ std::string uiControlExecute(const utilxx_base::Json& arguments) {
         ++i;
     }
 
-    return results.dump();
+    return agentxx::plugin::ToolResult::ok(results.dump());
 }
 #else
-std::string uiControlExecute(const utilxx_base::Json&) {
-    return R"({"error":"agentxx_ui_control_keyboard_mouse is not available on current system"})";
+agentxx::plugin::ToolResult uiControlExecute(const utilxx_base::Json&) {
+    return agentxx::plugin::ToolResult::fail(
+        "agentxx_ui_control_keyboard_mouse is not available on current system"
+    );
 }
 #endif
 

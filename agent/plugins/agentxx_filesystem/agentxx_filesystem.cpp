@@ -253,7 +253,8 @@ static bool destinationAllowed(
         return true;
     }
     reasonOut = fmt::format(
-        "[Error: destination path is not permitted by the current rules: {}. Choose a destination that is allowed (for example inside the working directory), or ask the user to allow it first.]",
+        "destination path is not permitted by the current rules: {}. Choose a destination that is "
+        "allowed (for example inside the working directory), or ask the user to allow it first.",
         dst
     );
     return false;
@@ -308,7 +309,7 @@ static int32_t fsSetup(FsPluginCtx& ctx, const ScopeRef& ref) {
             ArgReader args(args_json);
             auto      path = args.require<std::string>("path");
             if (!args.ok()) {
-                return args.errorMessage();
+                return ToolResult::fail(args.errorMessage());
             }
             return fileListExecute(
                 args.raw(),
@@ -354,11 +355,11 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
                std::string_view args_json,
                std::string_view,
                std::string_view workDir,
-               const PluginxxCancelToken*) -> asio::awaitable<std::string> {
+               const PluginxxCancelToken*) -> asio::awaitable<ToolResult> {
                 ArgReader args(args_json);
                 auto      path = args.require<std::string>("path");
                 if (!args.ok()) {
-                    co_return args.errorMessage();
+                    co_return ToolResult::fail(args.errorMessage());
                 }
                 // 局部量: 其生命周期覆盖整个 co_await (异步读完整文件/逐行读)
                 std::string workDirStr(workDir);
@@ -382,7 +383,7 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
                 ArgReader args(args_json);
                 auto      path = args.require<std::string>("path");
                 if (!args.ok()) {
-                    return args.errorMessage();
+                    return ToolResult::fail(args.errorMessage());
                 }
                 return fileReadExecute(args.raw(), std::string(workDir), [&] {
                     return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCanceled(ref.ptr(), tid);
@@ -417,12 +418,12 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
                std::string_view args_json,
                std::string_view,
                std::string_view workDir,
-               const PluginxxCancelToken*) -> asio::awaitable<std::string> {
+               const PluginxxCancelToken*) -> asio::awaitable<ToolResult> {
                 ArgReader args(args_json);
                 auto      path    = args.require<std::string>("path");
                 auto      content = args.require<std::string>("content");
                 if (!args.ok()) {
-                    co_return args.errorMessage();
+                    co_return ToolResult::fail(args.errorMessage());
                 }
                 std::string workDirStr(workDir);
                 co_return co_await fileWriteExecuteAsync(args.raw(), workDirStr);
@@ -446,7 +447,7 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
                 auto      path    = args.require<std::string>("path");
                 auto      content = args.require<std::string>("content");
                 if (!args.ok()) {
-                    return args.errorMessage();
+                    return ToolResult::fail(args.errorMessage());
                 }
                 return fileWriteExecute(args.raw(), std::string(workDir), [&] {
                     return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCanceled(ref.ptr(), tid);
@@ -497,11 +498,11 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
                std::string_view args_json,
                std::string_view,
                std::string_view workDir,
-               const PluginxxCancelToken*) -> asio::awaitable<std::string> {
+               const PluginxxCancelToken*) -> asio::awaitable<ToolResult> {
                 ArgReader args(args_json);
                 auto      path = args.require<std::string>("path");
                 if (!args.ok()) {
-                    co_return args.errorMessage();
+                    co_return ToolResult::fail(args.errorMessage());
                 }
                 std::string workDirStr(workDir);
                 co_return co_await fileEditExecuteAsync(args.raw(), workDirStr);
@@ -522,7 +523,7 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
                 ArgReader args(args_json);
                 auto      path = args.require<std::string>("path");
                 if (!args.ok()) {
-                    return args.errorMessage();
+                    return ToolResult::fail(args.errorMessage());
                 }
                 return fileEditExecute(args.raw(), std::string(workDir), [&] {
                     return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCanceled(ref.ptr(), tid);
@@ -565,7 +566,7 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
             ArgReader args(args_json);
             auto      patterns = args.require<std::vector<std::string>>("file_patterns");
             if (!args.ok()) {
-                return args.errorMessage();
+                return ToolResult::fail(args.errorMessage());
             }
             return fileGlobExecute(
                 args.raw(),
@@ -620,7 +621,7 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
             ArgReader args(args_json);
             auto      patterns = args.require<std::vector<std::string>>("file_patterns");
             if (!args.ok()) {
-                return args.errorMessage();
+                return ToolResult::fail(args.errorMessage());
             }
             return fileGrepExecute(
                 args.raw(),
@@ -660,11 +661,11 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
             auto      src = args.require<std::string>("src");
             auto      dst = args.require<std::string>("dst");
             if (!args.ok()) {
-                return args.errorMessage();
+                return ToolResult::fail(args.errorMessage());
             }
             std::string reason;
             if (false == destinationAllowed(c, ref, tid, workDir, dst, reason)) {
-                return reason;
+                return ToolResult::fail(std::move(reason));
             }
             return fileMoveExecute(args.raw(), std::string(workDir), [&] {
                 return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCanceled(ref.ptr(), tid);
@@ -699,11 +700,11 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
             auto      src = args.require<std::string>("src");
             auto      dst = args.require<std::string>("dst");
             if (!args.ok()) {
-                return args.errorMessage();
+                return ToolResult::fail(args.errorMessage());
             }
             std::string reason;
             if (false == destinationAllowed(c, ref, tid, workDir, dst, reason)) {
-                return reason;
+                return ToolResult::fail(std::move(reason));
             }
             return fileCopyExecute(args.raw(), std::string(workDir), [&] {
                 return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCanceled(ref.ptr(), tid);
@@ -735,7 +736,7 @@ The whole result of one call must stay within 2000 lines / 256 KiB; a larger res
             ArgReader args(args_json);
             auto      path = args.require<std::string>("path");
             if (!args.ok()) {
-                return args.errorMessage();
+                return ToolResult::fail(args.errorMessage());
             }
             return fileRemoveExecute(args.raw(), std::string(workDir), [&] {
                 return pluginxx_cancel_is_requested(cancel) != 0 || c.sessionCanceled(ref.ptr(), tid);

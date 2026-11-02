@@ -86,6 +86,12 @@
 
 namespace agentxx_execmd_plugin {
 
+/// 工具结果 (带状态) 与终态: 实现体返回它表达成功/失败, 不再靠文本前缀
+/// - 本头可能被单独包含 (测试直调实现体), 因此这里自带引入, 不依赖插件共享头的
+///   声明顺序
+using agentxx::plugin::ToolResult;
+using agentxx::plugin::ToolStatus;
+
 /// 取消查询回调 (返回 true 表示会话已取消); 测试可传 nullptr 等价无取消支持
 using IsCanceledFn = std::function<bool()>;
 
@@ -703,6 +709,8 @@ inline void closePipesAfterKill(asio::readable_pipe& outpip, asio::readable_pipe
 }
 
 /// 构造超时错误结果文本 (多行纯文本输出, 非 JSON)
+/// - 只写内容, 不写 `[Error]` 标记: 失败结果的首行由执行层统一加
+///   (见 toolcall.cpp 的 formatToolResultText)
 inline std::string makeTimeoutResult(
     int            timeout,
     std::string    strout,
@@ -729,9 +737,7 @@ inline std::string makeTimeoutResult(
         strerr = truncateStdErr(strerr, id);
     }
     return fmt::format(
-        R"_(
-[Error]
-Command timed out after {} seconds. If this command is expected to take longer and is not waiting for interactive input, retry with a larger timeout value.
+        R"_(Command timed out after {} seconds. If this command is expected to take longer and is not waiting for interactive input, retry with a larger timeout value.
 [StdOut]
 {}
 [StdErr]
@@ -785,7 +791,8 @@ inline WinProcLaunch buildWinProcLaunch(std::string_view command) {
 /// - 返回组装后的结果文本; 组合协程异常原样传播 (调用方 C ABI 边界保护)
 /// - winJob: Windows 下子进程挂入的 Job Object (HANDLE); 超时/取消时经
 ///   TerminateJobObject 整树终止。Linux 恒为 nullptr (进程组已覆盖)
-inline asio::awaitable<std::string> runProcPipeline(
+/// - `return` 执行结果: 超时为失败 (内容是多行纯文本块), 其余为成功
+inline asio::awaitable<ToolResult> runProcPipeline(
     boost::process::process& proc,
     asio::readable_pipe&     outpip,
     asio::readable_pipe&     errpip,
@@ -918,7 +925,9 @@ inline asio::awaitable<std::string> runProcPipeline(
             )
         );
     }
-    co_return resultStr;
+    co_return timedOut.load(std::memory_order_acquire)
+                  ? ToolResult::fail(std::move(resultStr))
+                  : ToolResult::ok(std::move(resultStr));
 }
 
 #endif // BOOST_PROCESS_V2_PROCESS_HPP
@@ -930,11 +939,12 @@ inline asio::awaitable<std::string> runProcPipeline(
 // 执行体 —— 协程版 (受控轮询路径; BOOST_PROCESS 可用时唯一注册路径)
 // - 在插件实例本地 reactor 上 spawn (经 plugin_kit::polled_tool), 挂起点让出给
 //   主程序 IO 线程;
-//   返回结果文本, 失败抛出异常 (由 C ABI 边界/适配器捕获转 error_out)
+//   返回带状态的结果 (超时/取消分别是失败/取消); 参数错误仍抛异常
+//   (由 C ABI 边界/适配器捕获转 error_out)
 // =====================================================================
 
 /// agentxx_execute_bash_command 执行体 (原 ExecuteBashCommandTool::execute_async)
-inline asio::awaitable<std::string> bashExecuteAsync(
+inline asio::awaitable<ToolResult> bashExecuteAsync(
     const utilxx_base::Json& arguments,
     const std::string&       workDir,
     const IsCanceledFn&     isCanceled    = nullptr,
@@ -959,13 +969,13 @@ inline asio::awaitable<std::string> bashExecuteAsync(
     if ((cancelRegistry && !effectiveSessionKey.empty()
          && cancelRegistry->isCanceled(effectiveSessionKey))
         || (isCanceled && isCanceled())) {
-        co_return "[ExitCode]\n130\n[Error]\nCommand Canceled before execution.\n";
+        // 取消: 终态为 canceled (内容只写原因, 占位文本由执行层处理)\n        co_return ToolResult::canceled("Command canceled before execution.");
     }
 
     if ((cancelRegistry && !effectiveSessionKey.empty()
          && cancelRegistry->isCanceled(effectiveSessionKey))
         || (isCanceled && isCanceled())) {
-        co_return "[ExitCode]\n130\n[Error]\nCommand Canceled before execution.\n";
+        // 取消: 终态为 canceled (内容只写原因, 占位文本由执行层处理)\n        co_return ToolResult::canceled("Command canceled before execution.");
     }
 
     // 受控轮询: 管道/进程绑定到当前协程的 executor (插件实例本地 reactor),
@@ -1034,7 +1044,7 @@ inline asio::awaitable<std::string> bashExecuteAsync(
 }
 
 /// agentxx_execute_windows_command 执行体 (原 ExecuteWindowsCommandTool::execute_async)
-inline asio::awaitable<std::string> windowsExecuteAsync(
+inline asio::awaitable<ToolResult> windowsExecuteAsync(
     const utilxx_base::Json& arguments,
     const std::string&       workDir,
     const IsCanceledFn&     isCanceled    = nullptr,
@@ -1155,7 +1165,7 @@ inline asio::awaitable<std::string> windowsExecuteAsync(
 // - 无法指定子进程工作目录 (继承 agent 进程 cwd), 无会话取消支持
 // =====================================================================
 
-inline std::string bashExecute(
+inline ToolResult bashExecute(
     const utilxx_base::Json& arguments,
     const std::string&       workDir,
     const IsCanceledFn&     isCanceled    = nullptr,
@@ -1172,7 +1182,7 @@ inline std::string bashExecute(
     if ((cancelRegistry && !effectiveSessionKey.empty()
          && cancelRegistry->isCanceled(effectiveSessionKey))
         || (isCanceled && isCanceled())) {
-        return R"({"error":"Execution Canceled"})";
+        return ToolResult::canceled("Command canceled before execution.");
     }
     auto command = arguments.value("command", std::string{});
     if (command.empty()) {
@@ -1192,10 +1202,7 @@ inline std::string bashExecute(
 #endif
     if (!pipe) {
         auto ec = std::error_code{errno, std::system_category()};
-        return utilxx_base::Json{
-            {"error", fmt::format("Exec command failed. Error: {}", ec.message())},
-        }
-            .dump();
+        return ToolResult::fail(fmt::format("Exec command failed. Error: {}", ec.message()));
     }
 
     std::array<char, 1024> buffer{};
@@ -1213,10 +1220,10 @@ inline std::string bashExecute(
         }
         out = detail::truncateStdOut(out, id);
     }
-    return out;
+    return ToolResult::ok(std::move(out));
 }
 
-inline std::string windowsExecute(
+inline ToolResult windowsExecute(
     const utilxx_base::Json& arguments,
     const std::string&       workDir,
     const IsCanceledFn&     isCanceled    = nullptr,

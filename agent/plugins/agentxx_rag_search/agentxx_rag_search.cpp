@@ -118,7 +118,7 @@ static int32_t ragSetup(RagPluginCtx& ctx, RagAgentState& st) {
         kDepictSearch,
         schema,
         [&st](RagPluginCtx& c, std::string_view args_json, const PluginxxCancelToken* cancel_token
-        ) -> std::string {
+        ) -> agentxx::plugin::ToolResult {
             (void)c;
             if (pluginxx_cancel_is_requested(cancel_token)) {
                 throw agentxx::plugin::CanceledException("rag_search Canceled");
@@ -126,7 +126,7 @@ static int32_t ragSetup(RagPluginCtx& ctx, RagAgentState& st) {
             ArgReader args(args_json);
             auto      query = args.require<std::string>("query");
             if (!args.ok()) {
-                return args.errorMessage();
+                return agentxx::plugin::ToolResult::fail(args.errorMessage());
             }
             int limit = std::clamp(args.value("limit", 3), 1, 50);
 
@@ -141,7 +141,9 @@ static int32_t ragSetup(RagPluginCtx& ctx, RagAgentState& st) {
                 throw std::runtime_error{fmt::format("RAG search failed: {}", results.error())};
             }
             if (results->empty()) {
-                return fmt::format("No relevant documents found for: {}", query);
+                return agentxx::plugin::ToolResult::ok(
+                    fmt::format("No relevant documents found for: {}", query)
+                );
             }
 
             auto output = utilxx_base::Json::array();
@@ -155,7 +157,7 @@ static int32_t ragSetup(RagPluginCtx& ctx, RagAgentState& st) {
                     {"similarity",   std::round(score * 1000.0) / 1000.0},
                 });
             }
-            return output.dump(2);
+            return agentxx::plugin::ToolResult::ok(output.dump(2));
         },
         0,
         kAutoSummary
