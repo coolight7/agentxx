@@ -1,6 +1,7 @@
 #pragma once
 
 #include "agentxx/util/tool_result.h"
+#include "utilxx_base/log.h"
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -210,29 +211,73 @@ struct TestResult {
 
 inline bool g_failFast = false;
 
+/// 测试输出的日志级别 (由 `--log-level` 设置, 默认 `Info`)
+/// - 直接复用库的 `utilxx_base::LogLevel`, 因此测试侧输出与库侧日志
+///   (`XX_LOGW` / `XX_LOGE`) 用同一套级别判断, 只有一份含义
+/// - 只影响 `[PASS]` / `[INFO]` / `[SKIP]` / `[Warn]` / `[Error]` 输不输出;
+///   `[FAIL]` 与断言失败信息**始终输出** (测试失败不能被过滤掉)
+inline utilxx_base::LogLevel g_logLevel = utilxx_base::LogLevel::Info;
+
+/// 当前级别下是否要输出 [level] 的输出
+/// - `args`:
+///     - [level] 该条输出自身的级别 (`Info` / `Warn` / `Error`)
+/// - `return` 级别不低于 `g_logLevel` 时为 true
+inline bool logEnabled(utilxx_base::LogLevel level) noexcept {
+    return static_cast<int>(level) >= static_cast<int>(g_logLevel);
+}
+
+/// 丢弃一切写入的流: 被过滤的输出写入它 (保持 `TEST_INFO << ... << std::endl;` 用法不变)
+class NullStreamBuffer : public std::streambuf {
+protected:
+
+    int overflow(int c) override {
+        return c;
+    }
+};
+
+inline NullStreamBuffer g_nullStreamBuffer{};
+inline std::ostream     g_nullStream{&g_nullStreamBuffer};
+
 /// 本测试进程的可执行文件路径 (由 main 填入绝对路径)
 /// - 供需要启动子进程的用例使用 (如 MCP stdio 传输把测试程序自身当 server 子进程)
 /// - 为空时相关用例只跳过 (不当作失败)
 inline std::string g_testExecutablePath;
 
+/// `[PASS]` 成功提示: 按 `Info` 级别过滤
 inline std::ostream& passStream() {
+    if (false == logEnabled(utilxx_base::LogLevel::Info)) {
+        return g_nullStream;
+    }
     return std::cout << "[PASS] ";
 }
 
+/// `[FAIL]` 断言失败: 始终输出 (不受 `--log-level` 影响)
 inline std::ostream& failStream() {
     return std::cout << "[FAIL] ";
 }
 
+/// `[INFO]` 过程信息: 按 `Info` 级别过滤
 inline std::ostream& infoStream() {
+    if (false == logEnabled(utilxx_base::LogLevel::Info)) {
+        return g_nullStream;
+    }
     return std::cout << "[INFO] ";
 }
 
+/// `[SKIP]` 跳过提示: 按 `Info` 级别过滤
 inline std::ostream& skipStream() {
+    if (false == logEnabled(utilxx_base::LogLevel::Info)) {
+        return g_nullStream;
+    }
     return std::cout << "[SKIP] ";
 }
 
+/// `[Warn]` 测试侧警告: 按 `Warn` 级别过滤 (与库日志前缀统一)
 inline std::ostream& warnStream() {
-    return std::cerr << "[WARN] ";
+    if (false == logEnabled(utilxx_base::LogLevel::Warn)) {
+        return g_nullStream;
+    }
+    return std::cerr << "[Warn] ";
 }
 
 // 可流式输出检测: 某些类型 (std::errc/error_code 等) 无 operator<<,

@@ -339,6 +339,12 @@ inline constexpr std::string_view kFullOutputArgDesc =
 inline constexpr std::string_view kTimeoutArgDesc
     = "Default `60` seconds. Execution timeout in seconds. Set `0` for no limit.";
 
+/// `cwd` 参数描述 (bash / windows 工具共用)
+/// - 相对路径基于会话工作目录展开; 必须已存在 (否则按参数错误失败)
+inline constexpr std::string_view kCwdArgDesc =
+    R"(Default: the session work dir.
+Directory to run the command in. Relative paths are resolved against the session work dir, and the directory must already exist.)";
+
 /// bash 工具 depict (POSIX 侧工具描述)
 inline constexpr std::string_view kBashToolDepict
     = "Execute a shell/bash command and return its output.";
@@ -467,6 +473,7 @@ Write plain PowerShell code. Syntax essentials (follow them to avoid quoting/`$`
 - To embed a double quote inside a double-quoted string use backtick: "say `"hi`"", or prefer single quotes: 'say "hi"'.
 - Quote paths that contain spaces or backslashes: `'C:\Program Files\app.exe'`.
 - Separate statements with `;` or newlines (`&&` only works on PowerShell 7+).
+- Multi-line text blocks use a PowerShell Here-String: `@'` ... `'@` (the closing `'@` must be at column 0). POSIX heredoc (`<<EOF`) does NOT work here.
 
 ## Examples:
 - `Get-Process`: List processes
@@ -493,6 +500,7 @@ cmd.exe syntax essentials:
 - `$` has no special meaning in cmd; environment variables use `%VAR%` (e.g. `echo %PATH%`).
 - Special characters `& | < > ^` are cmd operators: quote them or escape with `^` when literal.
 - Chain commands with `&` (always), `&&` (on success), `||` (on failure).
+- There is no heredoc and no Here-String here (no `<<EOF`, no `@'` ... `'@`): to hand over multi-line content, write it into a file first (`> file`) and run that.
 
 ## Examples:
 - `dir C:\Users`: List a directory
@@ -526,6 +534,7 @@ Format: {} -NoProfile -Command '<powershell code>'
 - The outer command runs in the Linux/WSL shell: wrap the whole PowerShell code in single quotes to protect `$`, quotes and spaces.
 - If the PowerShell code itself contains a single quote, escape it as `'\''` (close quote, escaped quote, reopen).
 - Inside the PowerShell code use double quotes for strings.
+- The outer Linux shell allows heredoc, but the PowerShell code passed to `-Command` does not: use a Here-String (`@'` ... `'@`) inside it.
 
 ## Examples:
 - `{} -NoProfile -Command 'Get-Process'`: List processes
@@ -547,6 +556,7 @@ Windows commands are executed via PowerShell ({} {}) through cmd.exe.
 Format: {} -NoProfile -Command "<powershell code>"
 - The command line is parsed by cmd.exe: wrap the PowerShell code in double quotes.
 - Prefer single quotes for strings inside the PowerShell code to avoid cmd double-quote conflicts.
+- cmd.exe has no heredoc / Here-String: write multi-line content into a file first (`> file`) or keep the code on one line.
 
 ## Examples:
 - `{} -NoProfile -Command "Get-Process"`: List processes
@@ -602,7 +612,7 @@ If the user provides a Windows path (e.g. `C:\...` or `D:\...`), convert it to a
     return out;
 }
 
-/// bash 工具 (POSIX) 提示词: depict + `command`/`full_output`/`timeout` 描述
+/// bash 工具 (POSIX) 提示词: depict + `command`/`cwd`/`full_output`/`timeout` 描述
 /// - `command` 描述含系统名、WSL 标记与探测到的解释器列表
 inline ExecPromptText bashToolPrompt(const ExecEnvInfo& env) {
     ExecPromptText prompt;
@@ -620,10 +630,11 @@ The command string is passed as-is to `bash -c` (no extra escaping layer):
     );
     prompt.args["full_output"] = std::string{kFullOutputArgDesc};
     prompt.args["timeout"]     = std::string{kTimeoutArgDesc};
+    prompt.args["cwd"]         = std::string{kCwdArgDesc};
     return prompt;
 }
 
-/// Windows 命令工具提示词: depict + `command`/`full_output`/`timeout` 描述
+/// Windows 命令工具提示词: depict + `command`/`cwd`/`full_output`/`timeout` 描述
 /// - `command` 描述的语法指引按实际执行路径选择:
 ///   [viaProcessSpawn] true (boost.process v2 直传 argv) 用 [winCommandProcessArgDesc],
 ///   false (未启用 boost.process 的 popen 回退) 用 [winCommandPopenArgDesc]
@@ -635,6 +646,7 @@ inline ExecPromptText windowsToolPrompt(const ExecEnvInfo& env, bool viaProcessS
         = viaProcessSpawn ? winCommandProcessArgDesc(env) : winCommandPopenArgDesc(env);
     prompt.args["full_output"] = std::string{kFullOutputArgDesc};
     prompt.args["timeout"]     = std::string{kTimeoutArgDesc};
+    prompt.args["cwd"]         = std::string{kCwdArgDesc};
     return prompt;
 }
 

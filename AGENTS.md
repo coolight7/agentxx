@@ -136,6 +136,11 @@ path/to/agentxx_test -f
 # - 指定仅运行测试模块 `string_util` `regex`, 其他不运行，默认未指定时运行所有模块
 # - 测试模块名称定义见 `agent/test/test.cpp`
 path/to/agentxx_test string_util regex
+
+# 日志级别过滤: debug|info|warn|error (默认 info)
+# - [PASS] / [INFO] / [SKIP] 属于 info, [Warn] / [Error] 是警告与错误, [FAIL] 不受级别影响
+# - 自动/shell 驱动跑测试时建议只看警告与错误, 输出量小很多且不影响定位失败
+path/to/agentxx_test --log-level warn string_util regex
 ```
     - 少数模块要读源码本身做自检 (`config_keys` 扫 `client/src/config_loader.cpp` 的键名、
       `boundaries` 查分层规则): 源码根目录经构建期宏 `AGENTXX_TEST_SOURCE_ROOT` 传入
@@ -478,6 +483,11 @@ path/to/agentxx_test string_util regex
   字符串数组; `web_fetch` 与 `web_fetch_markdown` 合并为 `web_fetch` (`format` = markdown|raw);
   `execute_command` 的 `all_output` 改名 `full_output`; `rag_search` 的 `top_k` 改名 `limit`;
   `string_regexp` 增加 `ignore_case`; `web_fetch` 的 `header` 声明为 object
+- 搜索结果的"无匹配"不是错误 (2026-11): `agentxx_filesystem_grep` 的两种空结果
+  —— `file_patterns` 没展开出任何文件、或文件扫了但没有内容命中 —— 都返回 `Ok`,
+  正文写明"扫了多少文件 / 用了什么模式" (与 grep 退出码 1 同语义); 只有参数错
+  (含正则编译失败) 才是 `Failed`。`list` 的通配路径无匹配仍按失败处理
+  (请求的路径确实不存在, 与"搜了一圈没搜到"不同)。
 - 工具结果与错误约定 (2026-11 重构): 工具返回 `agentxx::util::ToolResult{text, status}`,
   **成败只由 `status` 决定** (`Ok`/`Failed`/`Interrupted`/`Canceled`), `text` 只给模型读
   - 工具实现: 参数检查失败抛 `std::invalid_argument`、运行期错误抛 `std::runtime_error`
@@ -636,6 +646,13 @@ path/to/agentxx_test string_util regex
   `cmd /c "net share > %TEMP%\ns.txt 2>&1"; [IO.File]::ReadAllText("$env:TEMP\ns.txt",[Text.Encoding]::GetEncoding([int]$env:AGENTXX_EXEC_OEM_CODEPAGE))`
   —— 两个提示词写法都已实测可用; 把原生输出接进 PowerShell 管道/变量会在 PowerShell 侧先解码
   (留下 U+FFFD, 无法还原)
+- 命令工具的 `cwd` 参数 (2026-11, 插件 `agentxx_execute_command`): 两条命令工具
+  (`agentxx_execute_bash_command` / `agentxx_execute_windows_command`) 都接受可选 `cwd`
+  —— 相对路径按会话工作目录展开, 目录必须已存在 (否则按参数错误失败, 不会带着错目录启子进程);
+  boost.process 路径用它作 `process_start_dir` + `PWD` 预设, popen 回退路径用 `cd` 命令前缀
+  (未给 `cwd` 时仍是原来的会话工作目录/进程 cwd)。提示词里另写了多行文本的写法:
+  PowerShell 用 Here-String (`@'` ... `'@`, 结尾标记必须顶格), cmd.exe 没有 heredoc 也
+  没有 Here-String (多行内容先落文件再执行)
 
 - offload 工作线程池 (2026-10-25): `PluginManager::setWorkerThreadPool()` 由创建方注入
   (`AgentHost` 注入进程共享池 / `BaseAgent` 自建管理器注入 `agentContext->threadPool`);
@@ -694,6 +711,27 @@ path/to/agentxx_test string_util regex
     - release_build: `agent/build/linux-release/` 或 `agent/build/windows-release/` 或 `agent/build/macos-release/`
     - cross_android_release_build: `agent/build/android-release/`
     - 注意，修改文件时不建议修改 build 目录内的文件，编译时可能被覆盖
+- **插件动态库不随顶层 ALL 构建产出**: `plugins/` 是 lib 的子工程 (`add_subdirectory`),
+  顶层 `cmake --build agent/build/windows-debug` 只编译插件目标的 .obj, 不生成
+  `exec/plugins/<插件名>/*.dll`。改了插件源码 / 抬了插件 API 代次后必须对**内层 lib
+  构建目录**点名插件目标, 否则 `exec/plugins` 里还是上一代库 (运行时报
+  "插件 API 版本过低" 或加载被拒):
+```bash
+# Windows (pwsh): 全部插件 / 只编指定插件 / 只看可编目标
+pwsh -File agent/script/build_plugins.ps1
+pwsh -File agent/script/build_plugins.ps1 agentxx_filesystem agentxx_math
+pwsh -File agent/script/build_plugins.ps1 -List
+
+# Linux / macOS
+agent/script/build_plugins.sh
+agent/script/build_plugins.sh agentxx_filesystem agentxx_math
+agent/script/build_plugins.sh --config Release --jobs 8 --list
+```
+    - 脚本做的事就是 `cmake --build <build>/agentxx_lib_repo-prefix/src/agentxx_lib_repo-build
+      --config <CFG> --target <插件名...>` (内层目录才有 CMakeCache.txt 与插件目标),
+      并在结束时打印 `exec/plugins/<插件名>` 下最新的库文件时间戳, 确认产物真的被替换
+    - 只按插件名选目标时目标名 = `agent/plugins/` 下的目录名; 当前平台不支持的插件
+      (见 plugins.md 平台支持矩阵) 不会出现在列表里
 - LTO (Release 默认开启, 开关 `AGENTXX_ENABLE_LTO`): MSVC 用 `/GL`(编译)+`/LTCG`(链接),
   GCC/Clang 用 `-flto=auto`/`-flto=thin`; **全部产物都参与 LTO** (无例外项):
   - 三库 (`cxx_utilxx_base`/`cxx_utilxx`/`cxx_pluginxx`) 动态库改为**显式导出**:

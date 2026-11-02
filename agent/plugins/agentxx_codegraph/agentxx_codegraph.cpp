@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <filesystem>
 #include <map>
 #include <memory>
@@ -298,6 +299,86 @@ static std::string jsonEdgesToText(const codegraph::Json& arr) {
     return out;
 }
 
+/// 一段时长 -> 人读的"多久以前" (如 `3h 12m ago`)
+static std::string humanAge(int64_t ageMs) {
+    if (ageMs < 60'000) {
+        return "just now";
+    }
+    const int64_t minutes = ageMs / 60'000;
+    if (minutes < 60) {
+        return fmt::format("{} min ago", minutes);
+    }
+    const int64_t hours = minutes / 60;
+    if (hours < 24) {
+        return minutes % 60 == 0 ? fmt::format("{}h ago", hours)
+                                 : fmt::format("{}h {}m ago", hours, minutes % 60);
+    }
+    return fmt::format("{}d ago", hours / 24);
+}
+
+/// 毫秒时间戳 -> 本地时间文本 (`YYYY-MM-DD HH:MM`; 取不到时返回空串)
+static std::string formatLocalTimeMs(int64_t ms) {
+    if (ms <= 0) {
+        return {};
+    }
+    const std::time_t t = static_cast<std::time_t>(ms / 1000);
+    std::tm           tmv{};
+#if XX_IS_WIN_D
+    if (::localtime_s(&tmv, &t) != 0) {
+        return {};
+    }
+#else
+    if (::localtime_r(&t, &tmv) == nullptr) {
+        return {};
+    }
+#endif
+    return fmt::format(
+        "{:04d}-{:02d}-{:02d} {:02d}:{:02d}",
+        tmv.tm_year + 1900,
+        tmv.tm_mon + 1,
+        tmv.tm_mday,
+        tmv.tm_hour,
+        tmv.tm_min
+    );
+}
+
+/// 索引信息尾注: 让调用方知道这批结果基于什么时间的索引
+/// - 索引为空时额外提示"可能索引旧了", 避免把"索引没扫到"当成"代码里没有"
+/// - [empty] 本次结果是否为空
+static std::string indexFooter(CodeGraphManager* m, bool empty) {
+    if (!m) {
+        return {};
+    }
+    const auto info = m->getIndexInfo();
+    if (false == info.available) {
+        return info.indexing
+                   ? std::string{"\nwarning: CodeGraph is still indexing, results may be "
+                                 "incomplete"}
+                   : std::string{"\n[index] no index yet: run `agentxx_codegraph_index` first"};
+    }
+
+    const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                           std::chrono::system_clock::now().time_since_epoch()
+    )
+                           .count();
+    std::string out = fmt::format("\n[index] {} file(s) / {} symbol(s)", info.files, info.symbols);
+    if (info.updatedAtMs > 0) {
+        const auto built = formatLocalTimeMs(info.updatedAtMs);
+        const auto age   = humanAge(std::max<int64_t>(0, nowMs - info.updatedAtMs));
+        out += built.empty() ? fmt::format(", built {}", age)
+                             : fmt::format(", built {} ({})", built, age);
+    }
+    if (empty) {
+        out += "\nno match. If you expected one, the index may be stale (see the build time "
+               "above): rebuild it with `agentxx_codegraph_index`, or check the spelling of the "
+               "name.";
+    }
+    if (info.indexing) {
+        out += "\nwarning: CodeGraph is still indexing, results may be incomplete";
+    }
+    return out;
+}
+
 static std::string contextToText(const codegraph::Json& ctx, CodeGraphManager* m) {
     std::string out;
     if (ctx.contains("symbol")) {
@@ -329,15 +410,18 @@ static std::string contextToText(const codegraph::Json& ctx, CodeGraphManager* m
         }
         out += jsonEdgesToText(ctx["edges"]);
     }
-    if (m && m->isIndexing()) {
-        out += "\nwarning: CodeGraph is still indexing, results may be incomplete";
+    if (out.empty()) {
+        out = "(empty context)";
     }
-    return out.empty() ? "(empty context)" : out;
+    out += indexFooter(m, false);
+    return out;
 }
 
 static std::string
     impactToText(std::string_view title, const codegraph::Json& impact, CodeGraphManager* m) {
     std::string out;
+    const bool  empty = !(impact.contains("nodes") && impact["nodes"].is_array()
+                         && impact["nodes"].size() > 0);
     if (impact.contains("nodes") && impact["nodes"].is_array()) {
         out += jsonNodesToText(title, impact["nodes"]);
     } else {
@@ -346,9 +430,7 @@ static std::string
     if (impact.contains("edges") && impact["edges"].is_array() && impact["edges"].size() > 0) {
         out += fmt::format("\n{}", jsonEdgesToText(impact["edges"]));
     }
-    if (m && m->isIndexing()) {
-        out += "\nwarning: CodeGraph is still indexing, results may be incomplete";
-    }
+    out += indexFooter(m, empty);
     return out;
 }
 
@@ -399,8 +481,8 @@ static void registerAllTools(PluginCtx& ctx, const agentxx::plugin::ScopeRef& re
         b.str("query", p.args.contains("query") ? p.args["query"] : def.query);
         b.integer("limit", p.args.contains("limit") ? p.args["limit"] : def.limit, 20);
         agentxx::plugin::blocking_tool(
-             ctx,
-             ref,
+            ctx,
+            ref,
             "agentxx_codegraph_search",
             depict,
             b.dump({"query"}),
@@ -437,9 +519,7 @@ static void registerAllTools(PluginCtx& ctx, const agentxx::plugin::ScopeRef& re
                         out += fmt::format("\n    signature: {}", node.signature);
                     }
                 }
-                if (c.mgr->isIndexing()) {
-                    out += "\nwarning: CodeGraph is still indexing, results may be incomplete";
-                }
+                out += indexFooter(c.mgr.get(), r.nodes.empty());
                 return out;
             },
             0,
@@ -461,8 +541,8 @@ static void registerAllTools(PluginCtx& ctx, const agentxx::plugin::ScopeRef& re
             3
         );
         agentxx::plugin::blocking_tool(
-             ctx,
-             ref,
+            ctx,
+            ref,
             "agentxx_codegraph_context",
             depict,
             b.dump({"symbol"}),
@@ -504,8 +584,8 @@ static void registerAllTools(PluginCtx& ctx, const agentxx::plugin::ScopeRef& re
             3
         );
         agentxx::plugin::blocking_tool(
-             ctx,
-             ref,
+            ctx,
+            ref,
             "agentxx_codegraph_callers",
             depict,
             b.dump({"symbol"}),
@@ -542,8 +622,8 @@ static void registerAllTools(PluginCtx& ctx, const agentxx::plugin::ScopeRef& re
             3
         );
         agentxx::plugin::blocking_tool(
-             ctx,
-             ref,
+            ctx,
+            ref,
             "agentxx_codegraph_callees",
             depict,
             b.dump({"symbol"}),
@@ -581,8 +661,8 @@ static void registerAllTools(PluginCtx& ctx, const agentxx::plugin::ScopeRef& re
             10
         );
         agentxx::plugin::blocking_tool(
-             ctx,
-             ref,
+            ctx,
+            ref,
             "agentxx_codegraph_path",
             depict,
             b.dump({"from", "to"}),
@@ -620,9 +700,7 @@ static void registerAllTools(PluginCtx& ctx, const agentxx::plugin::ScopeRef& re
                         out += fmt::format("\n    signature: {}", node.signature);
                     }
                 }
-                if (c.mgr->isIndexing()) {
-                    out += "\nwarning: CodeGraph is still indexing, results may be incomplete";
-                }
+                out += indexFooter(c.mgr.get(), r.path.empty());
                 return out;
             },
             0,

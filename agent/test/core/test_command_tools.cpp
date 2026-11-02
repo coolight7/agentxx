@@ -738,8 +738,94 @@ asio::awaitable<void> test_command_subprocess_workdir(std::weak_ptr<agentxx::age
     co_return;
 }
 
-// ---- PowerShell 探测 ----
+// ---- `cwd` 参数 ----
 
+/// `cwd` 参数: 切换命令实际运行的目录
+/// - 不存在: 参数错误 (抛 invalid_argument, 不启动子进程)
+/// - 存在: 命令在该目录下执行 —— 在会话工作目录之外准备 marker, 列出来即证明 `cwd` 生效
+asio::awaitable<void>
+    test_exec_cwd_param(std::weak_ptr<agentxx::agent::AgentContext>) {
+    namespace fs        = std::filesystem;
+    std::error_code ec;
+    const auto      baseDir  = fs::temp_directory_path() / "agentxx_test_exec_cwd";
+    const auto      wdDir    = baseDir / "session_wd";
+    const auto      cwdDir   = baseDir / "run_here";
+    const auto      markerNm = std::string{"cwd_probe_marker_5b21.txt"};
+    fs::remove_all(baseDir, ec);
+    fs::create_directories(wdDir, ec);
+    fs::create_directories(cwdDir, ec);
+    {
+        std::ofstream f{cwdDir / markerNm};
+        f << "probe\n";
+        f.close();
+        if (!f) {
+            g_cmd_failed++;
+            TEST_FAIL << "cwd test: write marker failed" << std::endl;
+            co_return;
+        }
+    }
+    const auto wd  = wdDir.generic_string();
+    const auto cwd = cwdDir.generic_string();
+
+    // 1) 不存在的 cwd: 参数错误 (直接调实现体看异常)
+    {
+        auto args = utilxx_base::Json{
+            {"command", "echo probe"                },
+            {"cwd",     cwd + "/no_such_sub"},
+        };
+        bool threw = false;
+        try {
+#if defined(BOOST_PROCESS_V2_PROCESS_HPP)
+#if XX_IS_WIN_D
+            (void)co_await agentxx_execmd_plugin::windowsExecuteAsync(args, wd);
+#else
+            (void)co_await agentxx_execmd_plugin::bashExecuteAsync(args, wd);
+#endif
+#else
+#if XX_IS_WIN_D
+            (void)agentxx_execmd_plugin::windowsExecute(args, wd);
+#else
+            (void)agentxx_execmd_plugin::bashExecute(args, wd);
+#endif
+#endif
+        } catch (const std::invalid_argument& e) {
+            threw = true;
+            XX_TEST_EXPECT_TRUE(std::string_view{e.what()}.find("`cwd`") != std::string::npos);
+        }
+        XX_TEST_EXPECT_TRUE(threw);
+    }
+
+    // 2) 存在的 cwd: 命令在该目录下运行
+    {
+        auto ctx = makeWorkDirContext(wd);
+#if XX_IS_WIN_D
+        // 无 PowerShell 时回退 cmd.exe 不识别 PS 语法: 与既有 PS 执行测试一致跳过
+        if (false == utilxx_base::detectPowerShell().available) {
+            TEST_INFO << "skip cwd param assert: PowerShell not available" << std::endl;
+            fs::remove_all(baseDir, ec);
+            co_return;
+        }
+        auto tool = agentxx::tools::ExecuteWindowsCommandTool{ctx};
+        auto args = utilxx_base::Json{
+            {"command", "Get-ChildItem -Name"},
+            {"cwd",     cwd                 },
+        };
+#else
+        auto tool = agentxx::tools::ExecuteBashCommandTool{ctx};
+        auto args = utilxx_base::Json{
+            {"command", "ls"},
+            {"cwd",     cwd },
+        };
+#endif
+        auto result = co_await tool.execute_async(args);
+        XX_TEST_EXPECT_TRUE(result.find(markerNm) != std::string::npos);
+    }
+
+    fs::remove_all(baseDir, ec);
+    co_return;
+}
+
+// ---- PowerShell 探测 ----
 asio::awaitable<void> test_detect_powershell(std::weak_ptr<agentxx::agent::AgentContext>) {
     auto info  = utilxx_base::detectPowerShell();
     auto info2 = utilxx_base::detectPowerShell();
@@ -1607,6 +1693,7 @@ asio::awaitable<TestResult>
 #endif
 
     co_await run(test_command_subprocess_workdir);
+    co_await run(test_exec_cwd_param);
     co_await run(test_command_pwd_env);
     co_await run(test_detect_powershell);
     co_await run(test_exec_env_detection);

@@ -1670,14 +1670,23 @@ inline ToolResult fileGrepExecuteImpl(
     }
 
     if (refilelist.empty()) {
+        // 没有任何文件命中 `file_patterns`: 这不是错误, 只是"没找到"
+        // (与 grep 的退出码 1 同语义); 结果用成功状态 + 说清的文本
+        std::string text
+            = "No match `file_patterns`: the patterns expanded to no file, nothing was searched";
         if (walkPolicy.limitReached) {
             // 极端情况: 到限停止后候选被 (权限/exclude/非普通文件) 过滤为空
-            throw std::runtime_error{fmt::format(
-                R"(No match `file_patterns` file found. Note: the walk stopped early at `max_files` = {}, so more files may exist beyond the ones collected (raise `max_files` or narrow `file_patterns`).)",
+            text += fmt::format(
+                " (the walk stopped early at `max_files` = {}, so more files may exist beyond the "
+                "ones collected; raise `max_files` or narrow `file_patterns`)",
                 maxFiles
-            )};
+            );
+        } else {
+            text += " (check the pattern, or note that `exclude_patterns` and permission rules "
+                    "also filter the candidates)";
         }
-        throw std::runtime_error{"No match `file_patterns` file found"};
+        text += ".";
+        return detail::okText(std::move(text));
     }
 
     // 候选文件数达到上限时在输出首行说明 (遍历已停止, 未收集到的文件未搜索):
@@ -2002,28 +2011,36 @@ inline ToolResult fileGrepExecuteImpl(
         }
         return detail::okText(resultStr.str());
     }
-    // 无匹配错误附带当前匹配模式说明, 便于调用方排查:
-    // 正则元字符 (如 `(` `[` `*`) 未转义/未成对时会匹配不到, 此时可改用
-    // text_patterns 纯文本匹配 (text_patterns 不经正则解释) 或转义后重试
-    throw std::runtime_error{fmt::format(
-        R"_(Found {} files match `file_patterns`, but no match `text_patterns`/`regex_patterns` file found.{}{} Active modes: {}.)_",
+    // 有候选文件但都没命中内容: 同样不是错误 (grep 退出码 1 也只表示"没匹配");
+    // 文本说清"扫了多少文件、用了什么模式", 并在正则模式下提示排查转义
+    std::string noMatch = fmt::format(
+        "No match: {} file(s) matched `file_patterns` and were scanned, but none contained the {}.",
         refilelist.size(),
-        skippedTooLarge > 0 ? fmt::format(
+        (!text_patterns.empty() && !regex_patterns.empty())
+            ? "literal text or regular expression patterns"
+            : (text_patterns.empty() ? "regular expression(s)" : "text pattern(s)")
+    );
+    if (false == regex_patterns.empty()) {
+        // 正则元字符 (如 `(` `[` `*`) 未转义/未成对时会匹配不到
+        noMatch += " If you expected a hit, check for unescaped regex metacharacters, or pass the "
+                   "literal text via `text_patterns`.";
+    }
+    if (skippedTooLarge > 0) {
+        noMatch += fmt::format(
             " {} file(s) were skipped (larger than `max_file_size_mb` = {}).",
             skippedTooLarge,
             maxFileSizeMb
-        )
-                            : std::string{},
+        );
+    }
+    if (walkTruncated) {
         // 遍历因数量上限提前停止: 未搜索的文件里可能有匹配, 提示调用方提高上限
-        walkTruncated ? fmt::format(
-            " The walk stopped early at `max_files` = {}, so more matched files may exist unscanned (raise `max_files` or narrow `file_patterns`).",
+        noMatch += fmt::format(
+            " The walk stopped early at `max_files` = {}, so more matched files may exist unscanned "
+            "(raise `max_files` or narrow `file_patterns`).",
             maxFiles
-        )
-                      : std::string{},
-        (!text_patterns.empty() && !regex_patterns.empty())
-            ? "literal text + regular expression (union)"
-            : (text_patterns.empty() ? "regular expression" : "literal text")
-    )};
+        );
+    }
+    return detail::okText(std::move(noMatch));
 }
 
 // =====================================================================

@@ -3613,7 +3613,8 @@ asio::awaitable<void>
         }
     }
 
-    // ⑥ grep 到限且已收集文件都无匹配: 错误文本说明"遍历提前停止", 不误报为"无匹配"
+    // ⑥ grep 到限且已收集文件都无匹配: 正文说明"遍历提前停止", 不误报为"无匹配"
+    //    - 无匹配本身不再是错误 (没有 `[Error` 前缀), 但正文必须讲清"可能漏搜"
     {
         auto args = utilxx_base::Json{
             {"file_patterns", utilxx_base::Json::array({limitDir + "/**/*"})},
@@ -3621,15 +3622,16 @@ asio::awaitable<void>
             {"max_files",     10                                            },
         };
         auto result = agentxx_fs_test::fileGrepExecute(args, workDir);
-        bool ok     = result.find("[Error:") != std::string::npos
-                  && result.find("max_files") != std::string::npos;
+        bool ok     = result.find("max_files") != std::string::npos
+                  && result.find("stopped early") != std::string::npos
+                  && result.find("[Error") == std::string::npos;
         if (false == ok) {
             allPassed = false;
-            TEST_FAIL << "FilesystemGrepTool no-match error should mention the `max_files` cutoff, "
-                         "got: "
+            TEST_FAIL << "FilesystemGrepTool no-match text should mention the `max_files` cutoff "
+                         "without being an error, got: "
                       << result.substr(0, 200) << std::endl;
         } else {
-            TEST_PASS << "FilesystemGrepTool no-match error mentions the `max_files` cutoff"
+            TEST_PASS << "FilesystemGrepTool no-match text mentions the `max_files` cutoff"
                       << std::endl;
         }
     }

@@ -266,10 +266,39 @@ inline std::string truncateStdErr(const std::string& s, long long storeId = -1) 
 // 两边取同一份 [resolveEnvPresets] 结果, 避免取值不一致。
 // ---------------------------------------------------------------------
 
-/// 命令运行目录: workDir (会话工作目录) 优先; 为空时回退主程序进程当前目录
+/// 解析 `cwd` 参数: 相对路径按会话工作目录展开, 并要求已是存在的目录
+/// - 未提供 `cwd` 时返回 [workDir] (会话工作目录, 可为空 = 继承进程当前目录)
+/// - 提供但不存在/不是目录: 抛 `std::invalid_argument` (参数错误 → 失败结果),
+///   不让子进程带着错目录启动后再报一句看不懂的失败
+///
+/// - `args`:
+///     - [arguments] 工具参数 (取 `cwd`)
+///     - [workDir] 会话工作目录
+/// - `return` 命令实际运行的目录 (UTF-8; 空 = 继承进程当前目录)
+inline std::string resolveCwdArg(const utilxx_base::Json& arguments, std::string_view workDir) {
+    const auto cwd = arguments.value("cwd", std::string{});
+    if (cwd.empty()) {
+        return std::string{workDir};
+    }
+    namespace fs = std::filesystem;
+    auto target  = fs::path{utilxx_base::utf8ToPath(cwd)};
+    if (target.is_relative() && false == workDir.empty()) {
+        target = fs::path{utilxx_base::utf8ToPath(std::string{workDir})} / target;
+    }
+    std::error_code ec;
+    if (false == fs::is_directory(target, ec)) {
+        throw std::invalid_argument{
+            fmt::format("Arg `cwd` is not an existing directory: `{}`", cwd)
+        };
+    }
+    return utilxx_base::pathToUtf8Generic(target);
+}
+
+/// 命令运行目录: workDir (会话工作目录, 或 `cwd` 参数指定的目录) 优先;
+/// 为空时回退主程序进程当前目录
 /// - 两条执行路径共用同一判定: boost.process 路径作为子进程初始目录
-///   (process_start_dir) 与 `PWD` 预设取值; popen 回退路径无法改目录 (workDir 传空),
-///   此时它只决定 `PWD` 取值 (进程当前目录)
+///   (process_start_dir) 与 `PWD` 预设取值; popen 回退路径用它拼 `cd` 前缀
+///   (未给 `cwd` 时传空, 此时它只决定 `PWD` 取值 = 进程当前目录)
 /// - 始终返回非空串 (默认 "." 等价于继承当前目录), 使 process_start_dir 可无条件传入
 inline std::string subprocessWorkDir(std::string_view workDir) {
     if (false == workDir.empty()) {
@@ -413,8 +442,9 @@ inline std::string currentLocaleEnvValue() {
 }
 
 /// 解析子进程环境策略 (每次执行前调用: 只读环境变量, 开销可忽略)
-/// - `workDir`: 会话工作目录 (命令将要运行的目录); 为空表示命令在主程序进程
-///   当前目录下运行 (popen 回退路径无法改目录, 一律传空), 与 [subprocessWorkDir] 同义
+/// - `workDir`: 命令将要运行的目录 (会话工作目录, 或 `cwd` 参数指定的目录);
+///   为空表示命令在主程序进程当前目录下运行 (popen 回退路径没给 `cwd` 时传空),
+///   与 [subprocessWorkDir] 同义
 inline ExecEnvPolicy resolveExecEnvPolicy(std::string_view workDir = {}) {
     ExecEnvPolicy p;
     p.pwd     = subprocessWorkDir(workDir);
@@ -994,7 +1024,9 @@ inline asio::awaitable<ToolResult> bashExecuteAsync(
     }
     // 执行环境预设 (输出编码 / PWD / NO_COLOR / TERM / PAGER / locale;
     // PWD 取值 = 命令运行目录, 与下面的 process_start_dir 同一判定)
-    detail::applyExecEnvPolicy(procEnv, detail::resolveExecEnvPolicy(workDir));
+    // 运行目录可由 `cwd` 参数覆盖会话工作目录 (已校验存在)
+    const auto runDir = detail::resolveCwdArg(arguments, workDir);
+    detail::applyExecEnvPolicy(procEnv, detail::resolveExecEnvPolicy(runDir));
 
 #if XX_IS_WIN_D
     auto procExe  = boost::process::environment::find_executable("bash");
@@ -1015,8 +1047,8 @@ inline asio::awaitable<ToolResult> bashExecuteAsync(
         procExe,
         procArgs,
         boost::process::process_environment(procEnv),
-        // 子进程初始工作目录: 会话工作目录 (未配置时显式取进程 cwd, 行为等价继承)
-        boost::process::process_start_dir{detail::subprocessWorkDir(workDir)},
+        // 子进程初始工作目录: `cwd` 参数或会话工作目录 (未配置时显式取进程 cwd, 行为等价继承)
+        boost::process::process_start_dir{detail::subprocessWorkDir(runDir)},
         // stdin 重定向到 null 设备 (Windows: NUL / POSIX: /dev/null),
         // 避免子进程 (如交互式命令) 抢读 agent 进程的终端输入
         boost::process::process_stdio{.in = nullptr, .out = outpip, .err = errpip},
@@ -1078,7 +1110,9 @@ inline asio::awaitable<ToolResult> windowsExecuteAsync(
         }
     }
     // 执行环境预设 (与 bashExecuteAsync 同一份策略; PWD = 命令运行目录)
-    detail::applyExecEnvPolicy(procEnv, detail::resolveExecEnvPolicy(workDir));
+    // 运行目录可由 `cwd` 参数覆盖会话工作目录 (已校验存在)
+    const auto runDir = detail::resolveCwdArg(arguments, workDir);
+    detail::applyExecEnvPolicy(procEnv, detail::resolveExecEnvPolicy(runDir));
 
     auto launch  = detail::buildWinProcLaunch(command);
     auto procExe = boost::process::environment::find_executable(launch.exeName);
@@ -1108,8 +1142,8 @@ inline asio::awaitable<ToolResult> windowsExecuteAsync(
         procExe,
         launch.args,
         boost::process::process_environment(procEnv),
-        // 子进程初始工作目录: 会话工作目录 (未配置时显式取进程 cwd, 行为等价继承)
-        boost::process::process_start_dir{detail::subprocessWorkDir(workDir)},
+        // 子进程初始工作目录: `cwd` 参数或会话工作目录 (未配置时显式取进程 cwd, 行为等价继承)
+        boost::process::process_start_dir{detail::subprocessWorkDir(runDir)},
         // stdin 重定向到 null 设备, 避免子进程抢读 agent 进程的终端输入
         boost::process::process_stdio{.in = nullptr, .out = outpip, .err = errpip},
         // 不继承 agent 的控制台: 命令里的 chcp 等会改掉共享的输出代码页,
@@ -1138,7 +1172,7 @@ inline asio::awaitable<ToolResult> windowsExecuteAsync(
         procExe,
         launch.args,
         boost::process::process_environment(procEnv),
-        boost::process::process_start_dir{detail::subprocessWorkDir(workDir)},
+        boost::process::process_start_dir{detail::subprocessWorkDir(runDir)},
         boost::process::process_stdio{.in = nullptr, .out = outpip, .err = errpip}
     };
     void* winJob = nullptr;
@@ -1164,7 +1198,8 @@ inline asio::awaitable<ToolResult> windowsExecuteAsync(
 // 执行体 —— popen 回退版 (仅 AGENTXX_ENABLE_BOOST_PROCESS 关闭时编译/注册)
 // - 阻塞实现: 只允许经 plugin_kit.h 的 blocking_tool (offload 工作线程) 注册,
 // 禁止在主程序 IO 线程 / 受控轮询协程内直接调用
-// - 无法指定子进程工作目录 (继承 agent 进程 cwd), 无会话取消支持
+// - 无法指定子进程工作目录: 未给 `cwd` 时继承 agent 进程 cwd; 给了 `cwd` 时用
+//   `cd` 命令前缀切目录 (见下方 bashExecute), 无会话取消支持
 // =====================================================================
 
 inline ToolResult bashExecute(
@@ -1175,7 +1210,6 @@ inline ToolResult bashExecute(
     CancelRegistry*          cancelRegistry = nullptr,
     std::string_view         sessionKey     = {}
 ) {
-    (void)workDir;
     std::string effectiveSessionKey{sessionKey};
     if (effectiveSessionKey.empty() && arguments.contains("sessionId")
         && arguments["sessionId"].is_string()) {
@@ -1192,9 +1226,21 @@ inline ToolResult bashExecute(
     }
     // popen 无法单独指定子进程环境: 把预设项作为命令前缀 (POSIX `export ...;`
     // / Windows `set ...&&`), 与 boost.process 路径同一份策略 (见 resolveExecEnvPolicy)。
-    // 该路径也改不了子进程目录, 命令在主程序当前目录下运行, 故 PWD 取进程当前目录
+    // 该路径也改不了子进程目录: 未给 `cwd` 时命令在主程序当前目录下运行 (PWD 取
+    // 进程当前目录); 给了 `cwd` 时用 `cd` 前缀切目录, 并让 PWD 跟着它走
+    const auto cwd    = arguments.value("cwd", std::string{});
+    const auto runDir = detail::resolveCwdArg(arguments, workDir);
+    std::string cdPrefix;
+    if (false == cwd.empty()) {
+#if XX_IS_WIN_D
+        cdPrefix = fmt::format("cd /d \"{}\"&& ", runDir);
+#else
+        cdPrefix = "cd " + detail::shellSingleQuote(runDir) + " && ";
+#endif
+    }
     const auto hardenedCommand
-        = detail::execEnvCommandPrefix(detail::resolveExecEnvPolicy()) + command;
+        = detail::execEnvCommandPrefix(detail::resolveExecEnvPolicy(cwd.empty() ? std::string{} : runDir))
+          + cdPrefix + command;
 #if XX_IS_WIN_D
     auto pipe
         = std::unique_ptr<FILE, decltype(&_pclose)>{_popen(hardenedCommand.c_str(), "r"), _pclose};

@@ -116,6 +116,7 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx, const ScopeRef& ref) {
                   /*required=*/true
               )
               .integer("timeout", argDescOr(winPrompt, "timeout", kTimeoutArgDesc), false, 60)
+              .string("cwd", argDescOr(winPrompt, "cwd", kCwdArgDesc), false)
               .boolean(
                   "full_output",
                   argDescOr(winPrompt, "full_output", kFullOutputArgDesc),
@@ -221,6 +222,7 @@ static int32_t setupExecPlugin(ExecPluginCtx& ctx, const ScopeRef& ref) {
                   /*required=*/true
               )
               .integer("timeout", argDescOr(bashPrompt, "timeout", kTimeoutArgDesc), false, 60)
+              .string("cwd", argDescOr(bashPrompt, "cwd", kCwdArgDesc), false)
               .boolean(
                   "full_output",
                   argDescOr(bashPrompt, "full_output", kFullOutputArgDesc),

@@ -1146,6 +1146,7 @@ public:
                 if (!dbOpened) {
                     return false;
                 }
+                index_path_       = index_path;
                 db_->init_schema();
                 traverser_        = std::make_unique<codegraph::GraphTraverser>(*db_);
                 context_builder_  = std::make_unique<codegraph::ContextBuilder>(*db_, *traverser_);
@@ -1960,6 +1961,60 @@ public:
         return result;
     }
 
+    /// 索引库信息: 文件/符号计数 + 索引库最后写入时间 + 是否索引中
+    /// - 计数 5 秒内走缓存 (逐次统计对大索引库不划算, "新鲜度"不需要实时)
+    CodeGraphIndexInfo getIndexInfo() {
+        {
+            std::lock_guard<std::mutex> lk(info_mutex_);
+            if (info_fetched_at_ != std::chrono::steady_clock::time_point{}
+                && std::chrono::steady_clock::now() - info_fetched_at_
+                       < std::chrono::seconds{5}) {
+                return info_cache_;
+            }
+        }
+
+        CodeGraphIndexInfo info;
+        info.indexing = indexing_.load(std::memory_order_acquire);
+        {
+            std::shared_lock<std::shared_mutex> lock(mutex_);
+            info.available = (db_ != nullptr);
+            if (info.available) {
+                // 索引库最后写入时间 ≈ 最近一次索引完成时间 (每次索引都会写库)
+                if (false == index_path_.empty()) {
+                    std::error_code ec;
+                    const auto      ft = fs::last_write_time(index_path_, ec);
+                    if (false == static_cast<bool>(ec)) {
+                        // file_time 与 system_clock 无统一互转入口 (clock_cast 各工具链
+                        // 支持不一致): 按"当前两时钟差"换算
+                        const auto sys = std::chrono::time_point_cast<std::chrono::milliseconds>(
+                            ft - fs::file_time_type::clock::now()
+                            + std::chrono::system_clock::now()
+                        );
+                        info.updatedAtMs = sys.time_since_epoch().count();
+                    }
+                }
+                (void)catchError<bool>(
+                    [&]() -> bool {
+                        info.files   = static_cast<int64_t>(db_->get_all_files().size());
+                        info.symbols = db_->count_nodes();
+                        return true;
+                    },
+                    [&](std::string errmsg) -> bool {
+                        XX_LOGW("CodeGraphManager: index info query failed: {}", errmsg);
+                        return false;
+                    }
+                );
+            }
+        }
+
+        {
+            std::lock_guard<std::mutex> lk(info_mutex_);
+            info_cache_      = info;
+            info_fetched_at_ = std::chrono::steady_clock::now();
+        }
+        return info;
+    }
+
     bool startFileWatcher(bool auto_reindex) {
         std::unique_lock<std::shared_mutex> lock(mutex_);
         if (!db_ || file_watcher_running_) {
@@ -2300,7 +2355,14 @@ private:
     codegraph::LruCache<std::string, CodeGraphPathResult>    path_cache_{256, 30};
     codegraph::LruCache<std::string, CodeGraphStatusResult>  status_cache_{16, 30};
 
+    /// getIndexInfo 缓存 (5 秒): 避免每次工具调用都重新统计
+    std::mutex                            info_mutex_;
+    CodeGraphIndexInfo                    info_cache_{};
+    std::chrono::steady_clock::time_point info_fetched_at_{};
+
     std::string                                project_root_;
+    /// 索引库路径 (initialize 时确定; 空 = 尚未初始化)
+    fs::path index_path_;
     std::unique_ptr<codegraph::Database>       db_;
     std::unique_ptr<codegraph::GraphTraverser> traverser_;
     std::unique_ptr<codegraph::ContextBuilder> context_builder_;
@@ -2406,6 +2468,10 @@ CodeGraphPathResult
 
 CodeGraphStatusResult CodeGraphManager::getStatus() {
     return impl_->getStatus();
+}
+
+CodeGraphIndexInfo CodeGraphManager::getIndexInfo() {
+    return impl_ ? impl_->getIndexInfo() : CodeGraphIndexInfo{};
 }
 
 bool CodeGraphManager::startFileWatcher(bool auto_reindex) {

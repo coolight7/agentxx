@@ -45,6 +45,15 @@ struct CodeGraphPathResult {
     bool                         success = false;
 };
 
+/// 索引库信息 (给工具结果附"索引新鲜度", 让调用方分辨"真的没有"与"索引旧了")
+struct CodeGraphIndexInfo {
+    bool    available   = false; ///< 索引库是否可用
+    bool    indexing    = false; ///< 是否正在索引 (结果可能不完整)
+    int64_t updatedAtMs = 0;     ///< 索引库最后写入时间 (0 = 取不到)
+    int64_t files       = 0;     ///< 已索引文件数
+    int64_t symbols     = 0;     ///< 已索引符号数
+};
+
 /// CodeGraph 索引过滤配置 (构造时传入, 默认值即全默认行为)
 struct CodeGraphIndexConfig {
     /// 加载(索引)路径列表 (绝对路径; 调用方负责按工作目录解析相对路径)
@@ -110,6 +119,12 @@ public:
     CodeGraphImpactResult getImpact(std::string_view symbol, int max_depth = 5);
     CodeGraphPathResult   findPath(std::string_view from, std::string_view to, int max_depth = 10);
     CodeGraphStatusResult getStatus();
+
+    /// 索引库信息 (文件数/符号数/最后写入时间/是否索引中)
+    /// - 给工具结果附上"索引什么时候建的", 查询结果为空时调用方才能分辨
+    ///   "本来就没有"与"索引旧了没扫到"
+    /// - 统计值 5 秒内重复查询走缓存 (避免每次工具调用都去数一遍)
+    CodeGraphIndexInfo getIndexInfo();
 
     bool startFileWatcher(bool auto_reindex = true);
     void stopFileWatcher();

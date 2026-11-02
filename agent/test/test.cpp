@@ -165,11 +165,18 @@ public:
     }
 
     void onLog(const utilxx_base::LogEntry& entry) override {
-        if (entry.level == utilxx_base::LogLevel::Warn
-            || entry.level == utilxx_base::LogLevel::Error) {
-            std::cerr << "[lib:" << (entry.level == utilxx_base::LogLevel::Error ? "E" : "W")
-                      << "] " << entry.message << std::endl;
+        if (entry.level != utilxx_base::LogLevel::Warn
+            && entry.level != utilxx_base::LogLevel::Error) {
+            return;
         }
+        const bool isError = entry.level == utilxx_base::LogLevel::Error;
+        // 与测试侧输出同一套前缀与级别 (--log-level error 时只留错误)
+        if (false == agentxx::test::logEnabled(
+                isError ? utilxx_base::LogLevel::Error : utilxx_base::LogLevel::Warn
+            )) {
+            return;
+        }
+        std::cerr << (isError ? "[Error] " : "[Warn] ") << entry.message << std::endl;
     }
 };
 
@@ -237,10 +244,35 @@ int main(int argn, char** argv) {
     }
 
     // 解析参数
+    // - `--log-level <level>`: 输出过滤级别 (debug/info/warn/error, 默认 info);
+    //   `[PASS]` 与 `[INFO]` / `[SKIP]` 视为 info, `[Warn]` / `[Error]` 是警告与错误,
+    //   `[FAIL]` 不受级别影响 (测试失败必须可见)
     std::vector<std::string> selectedModules;
     for (int i = 1; i < argn; ++i) {
+        const std::string_view arg{argv[i]};
         if (strcmp(argv[i], "--fail-fast") == 0 || strcmp(argv[i], "-f") == 0) {
             agentxx::test::g_failFast = true;
+        } else if (arg == "--log-level" || arg.starts_with("--log-level=")) {
+            std::string_view value;
+            if (arg.starts_with("--log-level=")) {
+                value = arg.substr(std::string_view{"--log-level="}.size());
+            } else if (i + 1 < argn) {
+                value = argv[++i];
+            }
+            auto lower = utilxx_base::toLower(value);
+            if (lower == "debug") {
+                agentxx::test::g_logLevel = utilxx_base::LogLevel::Debug;
+            } else if (lower == "info") {
+                agentxx::test::g_logLevel = utilxx_base::LogLevel::Info;
+            } else if (lower == "warn" || lower == "warning") {
+                agentxx::test::g_logLevel = utilxx_base::LogLevel::Warn;
+            } else if (lower == "error") {
+                agentxx::test::g_logLevel = utilxx_base::LogLevel::Error;
+            } else {
+                std::cerr << "[Error] --log-level expects debug|info|warn|error, got `" << value
+                          << "`" << std::endl;
+                return 2;
+            }
         } else if (argv[i][0] != '-') {
             selectedModules.emplace_back(argv[i]);
         }
