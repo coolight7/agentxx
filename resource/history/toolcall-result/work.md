@@ -10,9 +10,9 @@
 | P0 | 依赖库拼写统一 (`Canceled`) + `awaitXXXOp` 改名 | 已完成 |
 | P1 | `util/tool_result.h` + `XXToolBase` 签名 + lib 内工具 + 执行层状态机 | 已完成 |
 | P2 | Wire 字段与版本 + `ToolData`/`ViewMessage` + 客户端渲染 | 已完成 |
-| P3 | 插件边界 (`PluginTool` 映射/超时) + API 4 + tools 表 v3 + SDK + JS 引擎 | 未开始 |
-| P4 | 内置插件改造 (filesystem / math / execute_command + 审计其余) | 未开始 |
-| P5 | 测试补齐 + 拼写扫描 + 全量回归 | 未开始 |
+| P3 | 插件边界 (`PluginTool` 映射/超时) + API 4 + tools 表 v3 + SDK + JS 引擎 | 已完成 |
+| P4 | 内置插件改造 (filesystem / math / execute_command + 审计其余) | 已完成 |
+| P5 | 测试补齐 + 拼写扫描 + 全量回归 | 进行中 |
 | P6 | 文档与生成物 | 未开始 |
 
 ## 环境
@@ -164,3 +164,95 @@
 不必先重编; 但**库代码改动要同时编 `agentxx_lib_repo` 与 `agentxx_test_repo`** ——
 测试程序静态链接 `libagentxx_staticd.lib`, 只编 lib 不重链 test, 跑起来还是旧代码 (本次踩到,
 表现为临时打点一行都不打印)。
+
+## P3 已完成 (插件 API 代次 4 + SDK + JS 引擎 + 示例)
+
+- 全局代次: `agent/CMakeLists.txt` 的 `AGENTXX_PLUGIN_API_VERSION` 3 -> 4
+  (它经 `_AGENTXX_COMMON_CMAKE_ARGS` 下发成 `-DPLUGINXX_API_VERSION=4 -DPLUGINXX_MIN_API_VERSION=4`);
+  client 侧 `client_plugin_api.h` 的 `AGENTXX_CLIENT_PLUGIN_API_VERSION` /
+  `AGENTXX_CLIENT_PLUGIN_MIN_API_VERSION` 一并 3 -> 4 (两侧同一代头文件重编)
+- `plugin_api.h` 的 `agentxx.agent.tools` 表 v2 -> v3 (**布局不变, 基线不变**):
+  工具成败只由最终通知的状态位表达 (`PLUGINXX_OPERATOR_OK`/`FAILED`/`CANCELED`),
+  结果文本只给模型读 —— 插件不再把 `[Error: ...]` 之类前缀写进 payload, 失败时只给错误内容
+- `plugin_kit.h`: 引入 `agentxx/util/tool_result.h`, `using ToolResult/ToolStatus`;
+  `fast_tool` / `blocking_tool` / `polled_tool` 的业务体都可以返回 `ToolResult`
+  (返回 `std::string` 仍是"成功", 老写法不用改); 新增
+  `detail::toolBodyResultTo(...)` (把两种返回形态归一成 `{text,status}`) 与
+  `detail::toolStatusOfOperator(...)` (状态 -> 跨边界操作码)
+- `plugin_manager_lifecycle.cpp` 的 `diagnosePluginPath`: 静态检查都通过时提示
+  "多为插件与主程序的 API 代次不匹配 —— 插件需要按 API v4 重新编译"
+- JS 引擎 (`agentxx_javascript_engine.cpp`): `ToolExecReq` 增 `status`, JS 侧返回
+  `{status, text}` 时识别 (`failed`/`interrupted` -> FAILED, `canceled` -> CANCELED, 未知 -> OK),
+  非 OK 时按状态上报
+- 示例: `example_plugin` 增 `example_fail_demo` (`ToolResult` 对照, `example_echo` 仍返回字符串);
+  `example_js` 增 `js_fail_demo`; `example_js_execute_command` 的空 code/超时改为 `{status:"failed",text}`
+- `test_plugin_abi_c17.c` 的 `_Static_assert` 跟着抬到 4 (C17 侧与 C++ 侧看到同一代次)
+
+## P4 已完成 (内置插件工具返回 `ToolResult`)
+
+- `agentxx_filesystem`: 9 个 `*Execute` + 6 个 `*ExecuteImpl` + 3 个 async 实现
+  (含无 async 时的回退) 全部返回 `ToolResult`; `detail::okText/failText` 便于构造;
+  `asErrorText` 用 `if constexpr` 兼容两种返回; 12 处 `args.errorMessage()` 改
+  `ToolResult::fail(...)`; `destinationAllowed` 的文案去掉前缀 (前缀由执行层统一加);
+  polled lambda 返回类型同步
+- `agentxx_math`: `mathCalculateExecute` 返回 `ToolResult` (去掉 `[Error] ` 前缀)
+- `agentxx_execute_command`: `runProcPipeline` / `bashExecuteAsync` / `windowsExecuteAsync` /
+  popen 版 `bashExecute` / `windowsExecute` 全部返回 `ToolResult`; `makeTimeoutResult` 去掉内嵌
+  `[Error]` 行 (块内只剩事实); 取消 -> `ToolResult::canceled("Command canceled before execution.")`;
+  顺带修掉"超时/取消结果以 `[ExitCode]` 开头被当成功"的既有缺陷
+- 其余插件逐个审计: `rag_search` / `audio_stream` / `text_selection_monitor`
+  (`args.errorMessage()` -> 失败, 其它 return 包成功)、`screen_capture`
+  (4 处 `{"ok":false}` -> 失败)、`computer_use` (`uiControlExecute`)
+- 测试适配: `test_framework.h` 新增 `agentxx::test::displayText(ToolResult)`
+  (转发 `util::toolResultTextForModel`, 测试断言文本时与执行层同一份实现);
+  `test_filesystem_tools.cpp` 加 `agentxx_fs_test` facade (22 处调用点)、
+  `test_command_tools.cpp` 加变参模板 facade (boost.process v2 / popen 两套)、
+  `test_math_tools.cpp` 用 `displayText` 包一层
+
+## P5 已完成 (用例补齐 + 握手判定抽取)
+
+- 文本格式化收敛: `util/tool_result.h` 新增 `toolResultTextForModel(const ToolResult&)`
+  (全项目唯一实现), `nodes/toolcall.cpp` 的 `formatToolResultText` 只转发;
+  测试也用它断言 (状态与文本不可能走偏)
+- 握手版本判定抽成可单测的一份: `WireProtocol::VersionCheck{Ok,TooNew,TooOld}` +
+  `checkVersion(remoteVersion)` + `versionRejectReason(check, remoteVersion)`
+  - 服务端 `handleHello`: 用 `checkVersion` 判, 原因用 `versionRejectReason` (过老/过新都拒)
+  - 客户端 `ws_io_transport.cpp`: 同一套判定, 只拒"过老服务端" —— 更新的服务端接受了本端
+    Hello 说明其 `kMinVersion` 覆盖本端版本, 会按兼容方式对待本端 (本端不认识的新消息忽略即可)
+  - 修掉"`kMinVersion` 定义了却没人用"的既有缺陷 (老客户端 `protocolVersion=0` 现在被拒)
+- 新用例: `wire_roundtrip` 加版本协商断言 (`checkVersion` 三态 + 原因文案要点);
+  `remote_agent` 把 fake 服务端改成同一套判定, 补"老客户端被拒"与"服务端过老客户端自己拒"
+  (新增 `/agent-old` 假服务端); `test_mcp` 的 stdio 服务端加 `fail` 工具 (`isError:true`)
+  断言 `Failed`; `test_plugins` 31.5b 插件工具超时 (Failed + `timed out after`)、
+  31.6b "文本像错误但状态成功" (文本原样, 不再包 `[Error]`)
+
+### P3/P4/P5 回归结果 (Windows debug)
+
+| 模块 | 结果 |
+|---|---|
+| `wire_roundtrip` | 249 / 0 (新增版本协商断言) |
+| `remote_agent` | 524 / 0 (新增老客户端被拒 / 服务端过老被拒) |
+| `plugins` | 609 / 0 |
+| `client_plugins` | 746 / 0 |
+| `filesystem` | 220 / 0 |
+| `command` | 60 / 0 |
+| `math_tools` | 82 / 0 |
+| `rag_search` | 85 / 0 |
+
+### 抬升 API 代次时的构建注意事项
+
+- `AGENTXX_PLUGIN_API_VERSION` 是 `set(... CACHE STRING)`, **cache 有值时新默认值不生效**:
+  抬代次必须显式 `cmake -DAGENTXX_PLUGIN_API_VERSION=4 -B agent/build/windows-debug -S agent`
+  (顶层随后会把 `CMAKE_*_FLAGS` 里的旧 `-DPLUGINXX_API_VERSION=3` 剥掉再追加新的)
+- 编译参数一变, MSVC 的 FileTracker 判定全部源文件过期 —— 整棵树 (含 fmt/ftxui/curl 等依赖)
+  重编一次, 这是抬代次的固有代价
+- **插件动态库不随顶层的 ALL 构建**: `plugins/` 是 lib 的子项目 (独立 slnx, 输出直接写到
+  `${EXEC}/plugins/<插件名>/`), 顶层 `cmake --build` 只会编它们的 `.obj`。
+  抬代次后必须再显式编一次:
+  `cmake --build agent/build/windows-debug/agentxx_lib_repo-prefix/src/agentxx_lib_repo-build/agentxx_plugins_builtin --config Debug --parallel 6`
+  否则 `exec/plugins` 里还是上一代 DLL, 测试会报 "API 代次不匹配" (`plugins` 模块 10 处断言)
+- 自写用例踩到的坑: 31.5b 最初用"永不完成也不上报"的工具验证超时, 超时后插件侧那次调用
+  一直不结算 -> `unloadAsync("example_plugin")` 等未完成调用超时失败, 之后 `example_plugin`
+  一直处于已加载状态, 又连锁出 "duplicate or currently loading name" 等 9 处失败 (该模块耗时
+  从 15s 涨到 150s)。改成 `blocking_tool` + 业务体睡得比 `default_timeout_ms` 久, 断言后
+  等业务体跑完再注销, 回归干净
