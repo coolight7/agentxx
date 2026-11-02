@@ -43,8 +43,8 @@ Agentxx 插件系统采用 **纯 C ABI + COM 风格接口表查询**：
   - 核心 vtable 精简：移除原 `strdup` 槽位，改为基于 `alloc` 的头文件内联实现 `pluginxx_strdup`
   - C++ 辅助便捷层：`PluginxxStringView` 与 `PluginxxString` 内置 `operator const T*()` 隐式取址转换与 `empty()` 方法，文件尾部提供值传兼容重载与 `pluginxx_string_free` 重载
 - **接口表独立演进**：每张表首字段 `int32_t version` 独立版本号；表内函数指针可能为 `NULL` (主程序未实现该子能力，调用前判空)
-- **版本限制**：全局 `PLUGINXX_API_VERSION` / `AGENTXX_CLIENT_PLUGIN_API_VERSION` 均为 3（通用表去业务成员换代），加载时要求 `>=` 主程序版本否则拒绝；新增能力 = 新增接口表或表内追加成员并递增该表版本，全局版本号不动
-- **v3 契约的实施方式（不改库）**: `cxx_pluginxx` 的 `abi.h` 里 `PLUGINXX_API_VERSION` / `PLUGINXX_MIN_API_VERSION` 默认**恒为 1**（该库被多个主程序共用，默认值不跟随任一主程序的契约）；agentxx 在 `agent/CMakeLists.txt` 用选项 `AGENTXX_PLUGIN_API_VERSION`（当前 3）向全局 `CMAKE_C_FLAGS/CMAKE_CXX_FLAGS` **宏覆盖**，并同时传给 `cxx_pluginxx` 的嵌套构建（它的 PUBLIC `INTERFACE_COMPILE_DEFINITIONS` 也跟着变成 3），嵌套构建（插件 / 测试 / 客户端）继承同一份 FLAGS，因此框架、使用方与插件看到的值一致；插件不链接框架库也能拿到（只用头文件）。覆盖时**先剔除旧值再追加**，否则缓存里的上一代 `-DPLUGINXX_API_VERSION=2` 会一直留着，插件与主程序编译到不同代次；改完需要让嵌套工程重新配置
+- **版本限制**：全局 `PLUGINXX_API_VERSION` / `AGENTXX_CLIENT_PLUGIN_API_VERSION` 均为 4（工具结果换代：成败改由状态位表达），加载时要求 `>=` 主程序版本否则拒绝；新增能力 = 新增接口表或表内追加成员并递增该表版本，全局版本号不动
+- **v4 契约的实施方式（不改库）**: `cxx_pluginxx` 的 `abi.h` 里 `PLUGINXX_API_VERSION` / `PLUGINXX_MIN_API_VERSION` 默认**恒为 1**（该库被多个主程序共用，默认值不跟随任一主程序的契约）；agentxx 在 `agent/CMakeLists.txt` 用选项 `AGENTXX_PLUGIN_API_VERSION`（当前 4）向全局 `CMAKE_C_FLAGS/CMAKE_CXX_FLAGS` **宏覆盖**，并同时传给 `cxx_pluginxx` 的嵌套构建（它的 PUBLIC `INTERFACE_COMPILE_DEFINITIONS` 也跟着变成 4），嵌套构建（插件 / 测试 / 客户端）继承同一份 FLAGS，因此框架、使用方与插件看到的值一致；插件不链接框架库也能拿到（只用头文件）。覆盖时**先剔除旧值再追加**，否则缓存里的上一代 `-DPLUGINXX_API_VERSION=3` 会一直留着，插件与主程序编译到不同代次；改完需要让嵌套工程重新配置
 - **加载与挂载分离**：`AgentHost` 持有插件管理器（进程一份，一次 `create`/`start`），每个 agent 在 `init` 的 `plugin_mount` 步骤 `mountAgentAsync` 挂载；加载表见 yaml `plugin.list`，本会话挂哪些由 `plugin.mount` 决定 (`policy: all|none|listed` + `list` + 每插件 `args`)，子代理与插件自己创建的根默认 `none`
 - **线程约定**：`query_interface/alloc` 任意线程；注册类与 session/config/prompt 等 IO 约束操作由主程序内部投递同步等待；操作 `start/cancel` 由主程序在 IO 线程驱动 (单次 <~1ms)；`PluginxxOperatorNotify.done` 可任意线程回调；主程序派发给插件的完成回调 (`AgentxxOpCb`/sleep/offload done) 保证在 IO 线程 `post` 入队
 - **实例生命周期、Operation 终态与租约**：见第 15 节（实例生命周期契约，所有插件必须遵守）
@@ -417,7 +417,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 
 | IID | 版本 | 能力 |
 |-----|------|------|
-| `agentxx.agent.tools` | 2 | `register_tool/unregister_tool`, `call_tool_async` (插件互调, cb 保证 IO 线程 post; 取消统一用 `pluginxx.cancel.op_cancel`) |
+| `agentxx.agent.tools` | 3 | `register_tool/unregister_tool`, `call_tool_async` (插件互调, cb 保证 IO 线程 post; 取消统一用 `pluginxx.cancel.op_cancel`); v3 = 工具成败只由最终通知的状态位表达，结果文本不带 `[Error]` 前缀 |
 | `agentxx.agent.permission` | 2 | `register_tool_permission/unregister_tool_permission` (工具权限限制由工具来源方声明) + `check_paths` (批量路径权限三态查询, 不发起询问/中断; 见下方说明) |
 | `agentxx.agent.hooks` | 2 | 句柄式三成员: `register_hook(agent, spec_ex, out_handle)` (同一实例同一个点可登记**任意多个**处理器, 每个一根句柄; `priority` 小的先跑, 相同按登记顺序) + `unregister_hook(handle)` (按句柄精确撤销) + `list_hooks(agent, out)` (处理器清单 JSON) |
 | `agentxx.agent.events` | 2 | `subscribe(agent 可空, topic, handler)` / `unsubscribe` / `publish` (topic 自动加 `plugin.` 前缀, 载荷 JSON)。带引用 = 订阅该 agent 的总线 (会话/轮次事件, 引用只能用 `mount` 回调里下发的那份); 空引用 = 主程序总线 (主 agent 的总线在 `BaseAgent` 构造时就建好, 因此 `start` 里可直接订阅进程级事件, 如 `plugin.agentxx.round_start`) |
@@ -559,35 +559,37 @@ tool_call 中的前后调用形成顺序屏障。并发只发生在同一条 ass
   `filterPathPermissions` (分批 + 同路径去重, 返回等长允许标记) /
   `checkPathDecisions` (原始三态) / `checkPathDecision` (单路径)
 
-### 工具错误与参数检查约定 (抛异常)
+### 工具结果状态与参数检查约定 (状态位 + 正文)
 
-工具的参数检查失败与其它错误**统一走异常**, 不再返回编码后的错误 JSON:
+工具的成败由返回值里的状态位表达, 正文只给模型读 (2026-11 重构):
 
+- **返回 `agentxx::util::ToolResult{text, status}`** (`agent/lib/include/agentxx/util/tool_result.h`):
+  - `status` = `ok` / `failed` / `interrupted` / `canceled` —— 调用成败**只看它**;
+  - `text` 只写正文 (成功的结果内容 / 失败的**错误内容**), **不要**写 `[Error: ...]` 前缀,
+    也不要返回 `{"error": "..."}` 这类结构: 排版由执行层统一做, 调用方 (含模型)
+    只看状态位, 混进正文里的标记只会让人误判。
 - **参数检查失败抛 `std::invalid_argument`** (消息写清是哪个参数、什么原因, 例如
   ``Arg `path` is empty``); 运行期/内部错误 (环境缺失、命令执行失败、上下文不可用)
-  抛 `std::runtime_error`。取消路径抛取消异常 (`neograph::graph::CancelledException`;
-  插件侧抛 `pluginxx::CancelledException`, 由 SDK 边界转换为 CANCELLED)。
-- **主程序统一格式化**: 工具抛出的普通异常由 `ToolcallWrapNode` (`lib/src/nodes/toolcall.cpp`)
-  捕获, 工具结果文本写为 `[Error: <what>]`; 取消/中断异常按控制流处理
-  (取消轮次而不是记成工具错误)。因此工具不需要自己拼错误结构, 模型也能稳定识别
-  错误结果。
-- **插件侧写法**: 在工具回调里直接 `throw` 即可 —— SDK 的 `fast_tool` /
-  `blocking_tool` / `polled_tool` 边界会捕获异常并上报 FAILED (取消异常上报
-  CANCELLED), 主程序 `awaitPluginOp` 再以 `std::runtime_error(<原消息>)` 抛出, 最终落到
-  同一格式。**不要**返回 `{"error":"..."}` 这类字符串: 错误与正常结果会混在同一形态里,
-  调用方 (含模型) 无法可靠区分。
-- **例外 (属正常结果, 保持为结果文本)**: 无匹配、空结果、查询目标不存在之类"调用成功但
-  没有内容"的情况按普通结果返回 (如 `No match found`, 不带 error JSON 包裹); 权限
-  拒绝由框架提前返回 `[Permission denied]`, 工具无需处理。
-- **失败标记 `hasError`**: 一次调用是否失败由执行层判定, 随 `ToolEnd` 增量与展示消息
-  (`ViewMessage::ToolData::hasError`) 下发 —— 客户端 (TUI/CLI) 只看该字段, 不再
-  解析结果文本。来源: 执行期异常 / 工具不存在 / 参数非法 / 权限拒绝 / 重复调用
-  被拒 / 插件工具 FAILED 终态 / 工具按历史约定返回的失败文本 (以 `[Error`、
-  `[Permission denied`、`[Repeated call denied`、`[Plugin tool timeout` 开头;
-  判定集中在 `lib/src/nodes/toolcall.cpp` 的 `toolResultTextIsFailure` 一处)。
-- 内置工具 (`lib/src/tools`) 与内置插件 (`agent/plugins/*`) 已按该约定改造 (2026-09);
-  `agentxx_filesystem` 在异步/受控轮询包装层把异常统一转回 `[Error] <msg>` 文本
-  (保持该插件历史结果形态与渲染约定), 但工具实现内部同样以抛异常方式报告参数错误。
+  抛 `std::runtime_error`。执行层 (`lib/src/nodes/toolcall.cpp`) 捕获这两类异常并换算成
+  `ToolResult::fail(<what>)`; 取消路径抛取消异常 (`neograph::graph::CanceledException`;
+  插件侧抛 `pluginxx::CanceledException`, 由 SDK 边界转换为 CANCELED)。
+- **格式化的唯一实现**: `agentxx::util::toolResultTextForModel(const ToolResult&)` ——
+  只有 `failed` 会被套上 `[Error: <text>]` (多行时首行 `[Error]` 后接原文);
+  `canceled` / `interrupted` 没有正文时补 `[Canceled]` / `[Interrupt]` 占位; `ok` 原样透传。
+  工具实现**不要**调它。
+- **插件侧写法**: 在工具回调里直接 `throw`, 或返回 `ToolResult`. SDK 的 `fast_tool` /
+  `blocking_tool` / `polled_tool` 业务体既接受 `std::string` (成功) 也接受 `ToolResult`;
+  抛出的异常在 SDK 边界变成 `PLUGINXX_OPERATOR_FAILED` (取消上报 `PLUGINXX_OPERATOR_CANCELED`),
+  主程序 `awaitPluginOpResult` 收到状态与载荷后直接给出 `ToolResult` ——
+  **不再以异常形式抛给调用方**。JS 插件可以在结果对象里写 `{status, text}`。
+- **状态位的下发**: 随 `ToolEnd` 增量 (`status`) 与展示消息 (`ViewMessage::ToolData::status`)
+  下发 —— 客户端 (TUI/CLI) 只看该字段, 不再解析结果文本。来源: 工具返回的状态 /
+  执行期异常 / 工具不存在 / 参数非法 / 权限拒绝 / 重复调用被拒 / 插件失败终态。
+- **例外 (属正常结果)**: 无匹配、空结果、查询目标不存在之类"调用成功但没有内容"的情况
+  按 `ok` 返回 (如 `No match found`); 权限拒绝由框架提前给出 `failed` + 可读原因
+  (`permission denied[: reason]`), 工具无需处理。
+- 内置工具 (`lib/src/tools`) 与内置插件 (`agent/plugins/*`) 已按该约定改造 (2026-11):
+  插件里的 `*_impl.h` 直接返回 `ToolResult`, 不再自己拼 `[Error] ` 前缀。
 
 ---
 
@@ -1980,7 +1982,7 @@ plugin:
 | `READY` | — | `rootId` / `sessionId` / `model` |
 | `TURN_START` | 用户输入回显 | `msgId` / `startTimeMs` / `attachments` (无 dataUrl) |
 | `DELTA_TEXT` / `DELTA_THINKING` | token | — |
-| `TOOL_START` / `TOOL_END` | — | `toolName` / `toolCallId` / `arguments` 或 `result` + `hasError` |
+| `TOOL_START` / `TOOL_END` | — | `toolName` / `toolCallId` / `arguments` 或 `result` + `status` (`ok`/`failed`/`interrupted`/`canceled`) |
 | `GEN_STATUS` | — | `phase` (waiting/tool_call/done) / `toolName` |
 | `TURN_END` | **本轮最后一个非空正文段** | `hasError` / `errorMessage` / `interrupted` / `startTimeMs` / `durationMs` / `tps` / `fullText` |
 | `CONTEXT_STATS` | — | `contextTokens` / `maxContextTokens` / `tps` / `usage{...}` |

@@ -12,8 +12,8 @@
 | P2 | Wire 字段与版本 + `ToolData`/`ViewMessage` + 客户端渲染 | 已完成 |
 | P3 | 插件边界 (`PluginTool` 映射/超时) + API 4 + tools 表 v3 + SDK + JS 引擎 | 已完成 |
 | P4 | 内置插件改造 (filesystem / math / execute_command + 审计其余) | 已完成 |
-| P5 | 测试补齐 + 拼写扫描 + 全量回归 | 进行中 |
-| P6 | 文档与生成物 | 未开始 |
+| P5 | 测试补齐 + 拼写扫描 + 全量回归 | 已完成 |
+| P6 | 文档与生成物 | 已完成 |
 
 ## 环境
 
@@ -256,3 +256,56 @@
   一直处于已加载状态, 又连锁出 "duplicate or currently loading name" 等 9 处失败 (该模块耗时
   从 15s 涨到 150s)。改成 `blocking_tool` + 业务体睡得比 `default_timeout_ms` 久, 断言后
   等业务体跑完再注销, 回归干净
+
+## P5 收尾 (全量回归暴露的问题与修法)
+
+首轮全量跑出 10 处失败 (41170 passed / 10 failed), 逐个定位后修掉 9 处, 最终只剩与本任务
+无关的 `boundaries`:
+
+1. `codegraph` (1 处): "空 query 抛异常" 的断言已跟新契约不符 —— 插件工具的参数错误经 SDK
+   边界变成失败状态, 不再向调用方抛异常。改成断言 `status == Failed` + 正文含 `` `query` is empty ``。
+   之后又跑出 1 处是 `.swift` 夹具入库超时 (索引 warmup 等待), 重跑即过 —— 环境抖动。
+2. `screen_capture` (`suite exception`): 工具失败时正文不再包 `{"ok":false,...}` 的 JSON,
+   而旧用例无条件 `Json::parse(...)`, 解析所以直接抛进套件 (整模块 0 通过)。改成
+   成败看 `status`: 成功才解析 JSON, 失败断言正文给出原因 (无桌面会话的机器照样能跑完),
+   越界屏幕下标那条改为断言 `Failed` + 原因。
+3. `mcp` (1 处): 我在 P5 加的 `fail` 假工具把 `isError` 写在 handler 返回值里, 而测试用
+   `McpServer::handleToolsCall` 会把 handler 返回值整体包成一个 content 项并**强制**
+   `isError=false` —— 该假服务端表达工具失败的方式是 handler 抛异常。改成抛
+   `std::runtime_error("boom from mcp")` 后 `isError=true`, 客户端映射成 `Failed`。
+4. `plugin_example_chatbot` (5 处): 用例里 `callTool` 自己拼 `[Error: ...]` 文本再用
+   `rfind("[Error")` 判成败 —— 典型的"看文本判成败"。新增 `callToolResult` (返回
+   `ToolResult`), `callTool` 改为它的 `toolResultTextForModel` 视图; 10 处判成败的断言
+   改看 `status` (失败时正文仍校验原因, 例如 `找不到` / `超出可撤回范围`)。
+5. `assembly_snapshot_io` (1 处, 属既有): 断言 "assembled_count = enabled_count + 1"
+   写死了"恰好一个工具被过滤"; 事件中枢给每个 agent 注册了 `agentxx_event` 之后被过滤的
+   工具变成两个。改成把循环里数出来的 `filteredCount` 加起来 (断言关系本身, 不写死条数)。
+
+其余模块 (含 `toolcall_parallel` / `message_supplement` / `summarization` / `cancel` /
+`race_guards` / `tui_*` / `event_*` / `plugin_*` / `client_plugins` / `jsonl_mode` / `agent`)
+全部 0 失败。
+
+### 全量回归结果 (Windows debug, 41232 passed / 1 failed)
+
+唯一失败是 `boundaries` 的规则 15 (`agent/third_party/cxx_pluginxx_ui` 里 5 处 `载体`),
+子模块未改动, 与本任务无关 (改动前就是这样)。
+
+## P6 已完成 (文档与生成物)
+
+- `AGENTS.md` 的"工具错误约定"整段重写成"工具结果与错误约定": `ToolResult{text, status}`、
+  成败只看状态、执行层唯一排版处、插件边界 (`tools` 表 v3) 都写清; 删除旧的
+  "上述失败文本也算失败"与 `hasError` 描述
+- `docs/zh-cn/design/plugins.md`: §8 的"工具错误与参数检查约定"重写 (状态位 + 正文分工、
+  `toolResultTextForModel` 唯一实现、`awaitPluginOpResult` 不再抛业务失败、JS 插件 `{status,text}`);
+  API 代次段 (3 -> 4) 与 `agentxx.agent.tools` 表版本 (2 -> 3) 同步; 运行时通道事件表把
+  `hasError` 改成 `status`
+- `docs/zh-cn/design/index.md`: delta 公共字段与 `ToolEnd` 说明改成 `status`
+  (并说明"正文里的 `[Error: ...]` 不代表失败")
+- `docs/zh-cn/design/events.md`: §5 的"首行前缀限制"改成"状态与正文的分工"
+  (那套前缀清单与 `tool_result_text.h` 已删除)
+- `docs/zh-cn/design/tui.md`: 工具折叠头/装饰按 `status` 着色 (失败红 / 中断黄 / 取消普通)
+- `docs/en/design/index.md`: delta 字段同步为 `status`
+- 生成物: `agent/schema/wire-schema.json` 与 `docs/zh-cn/design/wire-protocol-fields.md`
+  已在 P2 重生成 (`protocolVersion` 2)。注意 `status` 是**条件字段** (只在 `ToolEnd` 且
+  非 `ok` 时写), 所以它不会出现在字段导出表里 —— 想让它出现只能额外加一个 `ToolEnd` 样本,
+  而样本表要求"一条消息一个样本且顺序与变体一致", 加样本会破坏该断言, 因此这里不做

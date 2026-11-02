@@ -1638,7 +1638,7 @@ EventBus (Event Bus)
 
 ### Delta (Streaming Incremental Event, Unified seq)
 - Type: `TextToken` / `ThinkToken` / `ToolStart` / `ToolEnd` / `TurnStart` / `TurnEnd` / `NodeStart` / `NodeEnd` / `MessageUITip` / `InsertMessage` / `UpdateMessage`.
-- Common fields: `seq` (monotonically increasing per session, shared by `EventBridge` and `SessionServerAgentIO` via `Session::nextDeltaSeq`), `text`, `msgId`, `toolName`/`toolCallId`/`arguments`/`result`/`hasError`, `nodeName`, `think` (`ThinkData`), `tipType` (for `MessageUITip`), `message` (contains full `ViewMessage` pointer for `InsertMessage`/`UpdateMessage`), `historyCount`/`tailHash`, `startTimeMs`/`durationMs`, `tps` (turn-level average rate for `TurnEnd`).
+- Common fields: `seq` (monotonically increasing per session, shared by `EventBridge` and `SessionServerAgentIO` via `Session::nextDeltaSeq`), `text`, `msgId`, `toolName`/`toolCallId`/`arguments`/`result`/`status` (tool end state: `failed`/`interrupted`/`canceled`; omitted means `ok`), `nodeName`, `think` (`ThinkData`), `tipType` (for `MessageUITip`), `message` (contains full `ViewMessage` pointer for `InsertMessage`/`UpdateMessage`), `historyCount`/`tailHash`, `startTimeMs`/`durationMs`, `tps` (turn-level average rate for `TurnEnd`).
 - `MessageUITip`: Transient message rendered in UI without persisting to `viewMessages`.
 - `InsertMessage`: Atomically inserts a complete `ViewMessage` (tips, statistics) into history and synchronizes it across clients.
 - `UpdateMessage`: Updates an already-inserted message in place by `msgId` (e.g. tool result backfill).

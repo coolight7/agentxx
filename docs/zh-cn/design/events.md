@@ -147,25 +147,23 @@ The value will arrive later as an input starting with "[Event] build.done".
 Keep working, or end the turn — you do not need to poll. Use opt=status wait=w-3 to check.
 ```
 
-两种文本都不以工具失败前缀开头，因此不会被执行层记成失败结果。这条不是风格选择，而是约束，
-原因与边界见下一小节。
+两种文本的终态都是成功: 工具返回 `ToolResult::ok(...)`, 成败只看状态, 不看正文里有什么字样。
+以前的实现靠首行前缀判定 (`[Error` / `[Permission denied` / `[Repeated call denied` /
+`[Plugin tool timeout`), 那套清单与实现已经删除 (见 5.1)。
 
-### 5.1 首行前缀的限制（只作用于工具结果文本）
+### 5.1 状态与正文的分工
 
-`await` 超时与 `watch` 回执这两段文本都会作为**工具结果**回到会话里，而“这次调用是否失败”
-除了执行层显式置位（异常 / 工具不存在 / 参数非法 / 权限拒绝 / 插件报错）之外，还允许工具
-自己把失败写成结果文本：首行命中 `[Error` / `[Permission denied` / `[Repeated call denied` /
-`[Plugin tool timeout` 即记成失败。清单与判定实现只有一份，在
-`agentxx/util/tool_result_text.h`（`kToolFailurePrefixes` + `toolResultTextIsFailure`），
-调用点只有 `ToolcallWrapNode` 一处。
+工具结果是一个 `{text, status}` 对 (`agentxx/util/tool_result.h`):
 
-所以：
+- **成败只看 `status`** (`ok` / `failed` / `interrupted` / `canceled`), 由工具自己给 (或由
+  执行层把异常 / 工具不存在 / 参数非法 / 权限拒绝 / 插件失败终态换算成 `failed`);
+- **`text` 只给模型读**: 执行层 `util::toolResultTextForModel` 是唯一的排版处 —— 只有 `failed`
+  会被套上 `[Error: ...]`, `canceled` / `interrupted` 无正文时补占位, `ok` 原样透传;
+- 所以工具正文里出现 `[Error` 这类字样**不代表失败** (`event_tools` 专门断言过: 正文含
+  `[Error: ...]` 但状态是 `ok` 时, 执行层不会再加一层包裹, 也不当成失败)。
 
-- 这两个前缀是**约定**，改文本前先看那份清单；`event_tools` 会逐条断言返回文本
-  并校验 `toolResultTextIsFailure(...) == false`；
-- 限制**只落在工具结果文本上**。事件投递产生的输入是一条 `user` 消息（`[Event] ...`），
-  不经过失败判定，改它的正文不需要考虑这些前缀；
-- 工具结果文本以外的产物（提示、日志、Wire 消息、插件返回值）都不在判定范围内。
+限制只落在“工具的成败”上。事件投递产生的输入是一条 `user` 消息 (`[Event] ...`), 不经过
+这套判定; 提示、日志、Wire 消息同样不涉及。
 
 ### 5.2 来源标记（给界面看的，不参与判定）
 

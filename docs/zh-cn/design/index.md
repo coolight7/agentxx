@@ -2377,8 +2377,8 @@ EventBus (事件总线)
 
 ### Delta (流式增量事件, 统一 seq)
 - Type: TextToken / ThinkToken / ToolStart / ToolEnd / TurnStart / TurnEnd / NodeStart / NodeEnd / MessageUITip / GenStatus / InsertMessage / UpdateMessage
-- 公共字段: seq (会话级单调递增, EventBridge 与 SessionServerAgentIO 共用 Session::nextDeltaSeq 分配), text, msgId, toolName/toolCallId/arguments/result/hasError, nodeName, think (ThinkData), tipType (MessageUITip 时), genPhase (GenStatus 时), message (InsertMessage/UpdateMessage 时携带完整 ViewMessage 指针), historyCount/tailHash, startTimeMs/durationMs, tps (TurnEnd 轮级平均速度)
-- ToolEnd 的 hasError: 工具失败标记, **只由执行层给出** (异常 / 工具不存在 / 参数非法 / 权限拒绝 / 重复调用被拒 / 插件工具 FAILED 终态 / 结果文本以 `[Error: ...]` 等约定前缀开头); 客户端 (TUI/CLI) 只看该字段决定是否按错误渲染, 不再解析结果文本
+- 公共字段: seq (会话级单调递增, EventBridge 与 SessionServerAgentIO 共用 Session::nextDeltaSeq 分配), text, msgId, toolName/toolCallId/arguments/result/status (工具终态: failed/interrupted/canceled, 缺省即 ok), nodeName, think (ThinkData), tipType (MessageUITip 时), genPhase (GenStatus 时), message (InsertMessage/UpdateMessage 时携带完整 ViewMessage 指针), historyCount/tailHash, startTimeMs/durationMs, tps (TurnEnd 轮级平均速度)
+- ToolEnd 的 status: 工具终态, **只由执行层给出** (工具返回值里的 `ToolResult::status`, 兜底把异常 / 工具不存在 / 参数非法 / 权限拒绝 / 重复调用被拒 / 插件 FAILED 终态换算成 `failed`), 取值 `ok`/`failed`/`interrupted`/`canceled`; 客户端 (TUI/CLI) 只看该字段决定是否按错误渲染, 不再解析结果文本 (文本里出现 `[Error: ...]` 不代表失败)
 - MessageUITip: 瞬态提示, 仅 UI 展示不入 viewMessages; InsertMessage: 原子插入完整 ViewMessage (如 Tip/统计), 入历史并同步; UpdateMessage: 按 msgId 原地更新已插入消息 (如 tool 结果回填)
 - GenStatus: 模型生成阶段占位提示 (Waiting 等待响应 / ToolCall 正在调用工具, toolName 为已解析出的工具名 / Done 清除), 仅 UI 展示不入历史。
   agent 侧在模型节点发出请求后发 Waiting, Provider 收到首个 tool_call 分片时发 ToolCall (参数未接收完, 内容不完整无法展示), 节点结束/出错发 Done;

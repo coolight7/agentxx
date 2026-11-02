@@ -22,16 +22,14 @@
     - 编写注释时，统一使用 markdown 风格，多行注释使用 `///` 开头, 示例(其中的 args 和 return 不必每一个都详细说明，尽量对需要注意、不容易从名称了解含义的进行说明):
 ```c++
 /// 英文字母转小写
-/// - 支持传入**unicode**，自动判断在 [A, Z] 转换为 [a, z]，非字母返回原值
-/// - 相关: 转大写函数见 [charToUpper]
-/// 
+/// - 支持传入 **unicode**，自动判断在 [A, Z] 转换为 [a, z]，非字母返回原值
+/// - 相关: 转大写见 [charToUpper]
+///
 /// - `args`:
-///     - [c] 单字符unicode码点，应当 >= 0
-/// 
-/// - `return` 字母将被转换为小写，非字母返回原值
-int charToLower(int c) {
-    return (c >= 'A' && c <= 'Z') ? static_cast<char>(c + ('a' - 'A')) : c;
-}
+///     - [c] 单字符 unicode 码点，应当 >= 0
+///
+/// - `return` 字母转为小写，非字母返回原值
+int charToLower(int c) { ... }
 ```
 - 合适时，尽量使用`std::string_view`替代`const std::string&`
 - 应当使用 [XX_LOG](agent/third_party/cxx_utilxx_base/include/utilxx_base/log.h) 输出日志，而不是 std::cout/cerr，避免影响 TUI 显示
@@ -480,12 +478,20 @@ path/to/agentxx_test string_util regex
   字符串数组; `web_fetch` 与 `web_fetch_markdown` 合并为 `web_fetch` (`format` = markdown|raw);
   `execute_command` 的 `all_output` 改名 `full_output`; `rag_search` 的 `top_k` 改名 `limit`;
   `string_regexp` 增加 `ignore_case`; `web_fetch` 的 `header` 声明为 object
-- 工具错误约定: 参数检查失败抛 `std::invalid_argument`、运行期错误抛 `std::runtime_error`,
-  由 `ToolcallWrapNode` 统一格式化为 `[Error: <msg>]` 结果文本 (工具自身裁剪输出时同样用该前缀);
-  插件侧在 SDK 边界捕获并上报 FAILED (取消上报 CANCELLED); 不要返回 `{"error": ...}` 形态;
-  **失败标记** `hasError` 由执行层给出 (异常/工具不存在/参数非法/权限拒绝/重复调用被拒/
-  插件 FAILED 终态/上述失败文本), 随 `ToolEnd` 与 `ViewMessage::ToolData::hasError` 下发,
-  **客户端只看该字段**, 不再自行解析结果文本 (文本判定集中在 toolcall.cpp 一处)
+- 工具结果与错误约定 (2026-11 重构): 工具返回 `agentxx::util::ToolResult{text, status}`,
+  **成败只由 `status` 决定** (`Ok`/`Failed`/`Interrupted`/`Canceled`), `text` 只给模型读
+  - 工具实现: 参数检查失败抛 `std::invalid_argument`、运行期错误抛 `std::runtime_error`
+    (库内工具) 或直接返回 `ToolResult::fail(<错误内容>)` (插件工具经 SDK 边界变成失败状态,
+    不再向调用方抛); `text` 里**不要**写 `[Error: ...]` 前缀, 也不要返回 `{"error": ...}` 形态
+  - 执行层 (`nodes/toolcall.cpp`) 是唯一的文本排版处 (`util::toolResultTextForModel`):
+    只有 `Failed` 会被套上 `[Error: <text>]` (多行时首行 `[Error]` 后接原文), `Canceled` /
+    `Interrupted` 在无正文时补 `[Canceled]` / `[Interrupt]` 占位, `Ok` 原样透传
+  - 失败标记随 `ToolEnd` 增量 (`status`) 与展示消息 (`ViewMessage::ToolData::status`) 下发,
+    **客户端只看该字段**, 不再解析结果文本; 出现在文本里的 `[Error: ...]` 只是给模型看的排版,
+    不代表状态 (工具可能正常返回一段含该字样的内容)
+  - 插件边界: `agentxx.agent.tools` 表 v3 (布局不变), 插件工具的成败由最终通知的状态位表达
+    (`PLUGINXX_OPERATOR_OK`/`FAILED`/`CANCELED`); SDK 的 `fast_tool`/`blocking_tool`/`polled_tool`
+    业务体可以直接返回 `ToolResult`
 - 输入分页 (2026-10): 单条输入达到 `AgentConfig::userInputSummaryLimitLength` (默认 8K utf8 字符,
   0=关闭) 即把原文经 share store 卸载, 上下文/请求只留开头片段 + `agentxx_share_store` 取回提示
   (模型按行取回); 覆盖两处入口 —— 队列里的用户消息进入轮次时 (`BaseAgent::runTurnAsync`)
