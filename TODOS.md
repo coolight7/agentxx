@@ -24,6 +24,9 @@
 - 机器人插件后台子agent排队运行繁重任务
 - agentxx 自重启控制、仿照 musicxx 的 cli + http + mcp + deeplink 命令控制
 - 通过 mdns 互相发现，以便了解各自正在运行的会话内容
+- share_store 支持 grep、输出到文件等
+- agentxx_cli 更名 agentxx
+- viewMessages 支持分页存储
 
 - SVG绘制支持
 
