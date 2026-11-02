@@ -204,7 +204,7 @@ Keep working, or end the turn — you do not need to poll. Use opt=status wait=w
 | `turn.start` | 轮次开始 | `sessionId` |
 | `turn.end` | 轮次结束 | `sessionId`, `hasError`, `interrupted`, `durationMs`, `reason` |
 | `tool.end.<工具名>` | 一次工具调用结束 | 工具名、是否有错、结果字节数 |
-| `subagent.done.<result_id>` | 异步子代理结束 | `resultId`, `subagent`, `agentId`, `content`, `hasError`, `cancelled`, `errorMessage` |
+| `subagent.done.<result_id>` | 异步子代理结束 | `resultId`, `subagent`, `agentId`, `content`, `hasError`, `Canceled`, `errorMessage` |
 | `timer.<名字>` | `agentxx_event` 的 `after_ms` / `every_ms` | `timer` 与触发时间 |
 
 内置源**只在有人等时**才发布（先问 `hub->wants(名字)`），因此没人用时不产生记录与开销。
@@ -220,7 +220,7 @@ Keep working, or end the turn — you do not need to poll. Use opt=status wait=w
   -> AgentHost 立即受理: 返回 {started:true, event:"subagent.done.job1"}
   -> 工具结果文本: [Subagent started] ... 结果将以 [Event] subagent.done.job1 到达
   -> 子代理在后台跑完（失败/取消同样发布）
-  -> 父会话收到 [Event] subagent.done.job1 {content, hasError, cancelled, ...}
+  -> 父会话收到 [Event] subagent.done.job1 {content, hasError, Canceled, ...}
 ```
 
 要点：
@@ -230,7 +230,7 @@ Keep working, or end the turn — you do not need to poll. Use opt=status wait=w
   都没有时用任务序号；同一批里重名直接报错（否则后到的值会把前一个等待提前满足）；
 - 取消令牌独立于轮次：轮次结束/取消不带走后台任务，由
   `AgentHost::cancelAsyncJobs(父上下文)`（agent 关停）与 `cancelAsyncJobsOfSession` 驱动；
-  被取消也发布 `{cancelled:true}`，父会话的等待不会挂到超时；
+  被取消也发布 `{Canceled:true}`，父会话的等待不会挂到超时；
 - 仍受子代理并发数与嵌套深度预算限制（`runningSubagentCount_` / `sessionDepth_`）；
 - 子代理上下文**继承父事件中枢**（`subCtx->eventHub = parentCtx->eventHub`，嵌套沿用最外层），
   所以子代理 `emit` 的事件父会话能等；

@@ -309,3 +309,7 @@
   已在 P2 重生成 (`protocolVersion` 2)。注意 `status` 是**条件字段** (只在 `ToolEnd` 且
   非 `ok` 时写), 所以它不会出现在字段导出表里 —— 想让它出现只能额外加一个 `ToolEnd` 样本,
   而样本表要求"一条消息一个样本且顺序与变体一致", 加样本会破坏该断言, 因此这里不做
+- 拼写收尾 (文档侧): `is_cancelled` -> `is_canceled` (会话表成员)、`OpCtl::throw_if_cancelled()` ->
+  `throw_if_canceled()`、`ctl.cancelled()` -> `ctl.canceled()`、subagent.done 载荷键按代码写成
+  `Canceled`; 指 neograph 的地方统一写成 `neograph::graph::CancelledException`
+  (它的拼写按约定保留), 涉及 `index.md` / `develop.md` 的中英四份文档

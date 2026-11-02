@@ -58,7 +58,7 @@
 
 - 统一使用 `XX_LOG*` (见 `agent/third_party/cxx_utilxx_base/include/utilxx_base/log.h`)，而非 `std::cout/cerr`，避免干扰 TUI
 - `TUILogSink` 接入右侧日志面板；`TestWarnErrorLogSink` 在测试中把 Warn/Error 输出到 stderr
-- 捕获异常优先 `agentxx::util::catchError/catchErrorAsync` (放行 `CancelledException/NodeInterrupt`)，协程中勿 `catch(...)` 吞取消
+- 捕获异常优先 `agentxx::util::catchError/catchErrorAsync` (放行 `neograph::graph::CancelledException/NodeInterrupt`)，协程中勿 `catch(...)` 吞取消
 
 ## 5. 网络与重连测试
 

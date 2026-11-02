@@ -1386,7 +1386,7 @@ end1  ←   end2  ←   end3
 
 - 每个中间件实现 `onHandleStart` / `onHandleEnd` 钩子 (可分别挂载到 agent_start、modelcall、toolcall)
 - start 阶段异常时跳过 baseRun，直接执行对应的 end
-- 支持 CancelledException / NodeInterrupt 的重新抛出
+- 支持 `neograph::graph::CancelledException` / `NodeInterrupt` 的重新抛出
 - 中间件按会话 (sessionId) 维护独立 State
 - 实际注册栈 (按 `handles` 压入顺序; BaseAgent 先压 SubagentManager/Summarization/Permission,
   CodeAgent 再压 Skill/MemoryFile/LogPrint): SubagentManager → Summarization → Permission
@@ -1411,11 +1411,11 @@ end1  ←   end2  ←   end3
 
 边界转换规则 (exception.h `isCancelAbort` / wrap_handle.h)：
 
-- `operation_aborted` + 令牌已取消 ⇒ 转换为 `CancelledException` 向上传播 (取消语义)；
+- `operation_aborted` + 令牌已取消 ⇒ 转换为 `neograph::graph::CancelledException` 向上传播 (取消语义)；
   `catchError/catchErrorAsync` 传入 cancelToken 参数启用该转换
 - `operation_aborted` + 令牌未取消/无令牌 ⇒ 按超时错误处理 ("timeout: ...")
 - 所有 catch-all / `catch(std::exception&)` 站点必须先重抛
-  `CancelledException` / `NodeInterrupt`，禁止吞掉取消信号 (EventStream::publish、
+  `neograph::graph::CancelledException` / `NodeInterrupt`，禁止吞掉取消信号 (EventStream::publish、
   WrapHandleBaseNode、catchError 等均遵循)
 - tool 经 `ContextualAsyncTool` 接收 `ToolExecutionContext{cancel_token}`，
   可轮询取消或传播到其传输层；toolcall 被取消时已完成的 tool 结果暂存
@@ -1430,7 +1430,7 @@ end1  ←   end2  ←   end3
   - 若注册时会话已处于取消态，立即在锁外同步执行取消回调，避免错过时机；新轮次开始时由 `PluginBase` 自动监听 `plugin.agentxx.round_start` 清空会话取消标记。
 
 不可中断段 (收尾/持久化) 不依赖"异常恰好没传到"，需显式防护：
-catch `CancelledException` → 完成必要收尾 → rethrow，或用
+catch `neograph::graph::CancelledException` → 完成必要收尾 → rethrow，或用
 `asio::this_coro::reset_cancellation_state` 过滤取消信号。
 
 #### 3. AgentIOBase 端点模型 + Transport 层

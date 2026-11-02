@@ -291,7 +291,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
         tool(ctx, "my_async_tool", "Async coroutine tool", R"({"type":"object","properties":{}})",
             [](MyPluginCtx& c, std::string_view args_json, OpCtl ctl) -> Task<std::string> {
                 co_await sleep(c, 100);
-                ctl.throw_if_cancelled();
+                ctl.throw_if_canceled();
                 // 跨插件互调: co_await call_tool(c, ref, "other_tool", "{}", ctl.scopeKey);
                 co_return R"({"status":"ok"})";
             }
@@ -314,7 +314,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
                 ArgReader args(args_json);
                 std::string workDirStr(workDir);
                 if (pluginxx_cancel_is_requested(cancel)) {
-                    throw CancelledException("cancelled");
+                    throw pluginxx::CanceledException("canceled");
                 }
                 // 业务体直接 co_await 现成的 asio 协程实现 (无需局部 io_context + run())
                 co_return co_await doHttpGetAsync(args.raw(), workDirStr);
@@ -323,9 +323,9 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 
         // 5. 后台协作任务 (主程序托管: 自动注册 agentxx.agent.tasks, 卸载时主程序统一取消并精确等待退出)
         spawn(ctx, [](MyPluginCtx& c, OpCtl ctl) -> Task<void> {
-            while (!ctl.cancelled()) {
+            while (!ctl.canceled()) {
                 co_await sleep(c, 5000);
-                if (ctl.cancelled()) break;
+                if (ctl.canceled()) break;
                 // 周期采集并发布事件
             }
         });
@@ -384,11 +384,11 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
      优先经主程序 `json_escape` 接口, 接口缺失/失败时回退本地转义, 供手工拼装 JSON 文本
    - 插件内 `using agentxx::plugin::xxx;` 引入后按原名调用 (内置插件已统一改用)
 
-**后台任务 spawn (主程序托管)**：`spawn` 启动的后台协作任务 (如周期采集 `while(!cancelled()) { offload; sleep; }`) 自 API v1 起注册到主程序 `agentxx.agent.tasks` 接口表，与工具/能力 op 同构管理：
+**后台任务 spawn (主程序托管)**：`spawn` 启动的后台协作任务 (如周期采集 `while(!ctl.canceled()) { offload; sleep; }`, `ctl` 为 `OpCtl`) 自 API v1 起注册到主程序 `agentxx.agent.tasks` 接口表，与工具/能力 op 同构管理：
 
 - **注册**：`spawn()` 内部自动调 `register_task` (io 线程) → 主程序把句柄推入实例 `outstandingOps` (与工具 op 同列表) 并持 `inflight` (存活标记)
 - **运行**：协程照常经 `sleep`/`offload` 挂起于主程序；主程序无感，句柄静默
-- **卸载**：插件卸载时主程序 `detachAll` 统一取消 (调插件 cancel_fn: 置 cancelFlag + 唤醒挂起的 sleep/offload) → 协程 `while(!cancelled())` 退出 → `finishIfDone` (帧销毁后经 `notify.done` 恰好一次上报) → 主程序 `guard.reset` (inflight-1) + 回收句柄 → `waitInflightZero` 精确等待归零 → `dlclose` 安全，无协程帧悬挂/UAF
+- **卸载**：插件卸载时主程序 `detachAll` 统一取消 (调插件 cancel_fn: 置 cancelFlag + 唤醒挂起的 sleep/offload) → 协程 `while(!ctl.canceled())` 退出 → `finishIfDone` (帧销毁后经 `notify.done` 恰好一次上报) → 主程序 `guard.reset` (inflight-1) + 回收句柄 → `waitInflightZero` 精确等待归零 → `dlclose` 安全，无协程帧悬挂/UAF
 - **无降级**：主程序无 `agentxx.agent.tasks` 表或注册失败时 `spawn` 直接失败 (不提供无人托管的自管协程退化路径)
 - **线程约束**：`cancel_fn` 由主程序在 io 线程回调 (协作式)；`notify.done` 可从插件任意线程上报 (主程序 `OpCore::onDone` 原子 CAS + 投递回 io)；kit 协程完成路径恒在 io 线程
 
@@ -424,12 +424,12 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 | `agentxx.agent.capabilities` | 2 | `register_capability(_ex)/unregister/has_capability` (进程级, 同一实例重复声明按幂等成功), `invoke_capability_async(agent 可空)/op_cancel` (引用仅用于标明是哪个 agent 发起的) |
 | `agentxx.agent.scheduler` | 1 | `is_io_thread/post_to_io/sleep/op_cancel/offload` (sleep=主程序计时器; offload=阻塞池委托, 需 cancel_token) |
 | `agentxx.agent.coroutine_runtime` | 1 | 通用协程驱动: `request_driver/cancel_driver/is_io_thread` (driver ticket/wake 协议, 见 §16) |
-| `agentxx.agent.session` | 3 | `get_share_store/add_share_store/emit_message_tip` (IO 线程) + `get_session_work_dir(agent, session_id)` (会话生效工作目录: worktree 绑定优先, session_id 为空返回默认工作目录) + `is_cancelled(agent, thread_id)` (advisory 查询, 权威通知仍是取消回调)。后两项 v3 从插件框架通用表迁入 |
+| `agentxx.agent.session` | 3 | `get_share_store/add_share_store/emit_message_tip` (IO 线程) + `get_session_work_dir(agent, session_id)` (会话生效工作目录: worktree 绑定优先, session_id 为空返回默认工作目录) + `is_canceled(agent, thread_id)` (advisory 查询, 权威通知仍是取消回调)。后两项 v3 从插件框架通用表迁入 |
 | `agentxx.agent.context` | 2 | 会话 LLM 上下文查询: `get_messages/messages_count` (IO 线程)。上下文由会话持有 (图状态不含 `messages` 通道), 插件需要上下文内容时经此按需查询; 只要数量用 `messages_count`, 避免拉取整段上下文 |
 | `agentxx.agent.plugins` | 1 | `list_plugins/get_plugin/get_own_info` (JSON; `list_plugins` 每项带 `mount_count` / `mount_agents`, 一眼看出装了但没挂到谁身上) |
 | `agentxx.agent.config` | 3 | `get_config/get_plugin_args/get_plugin_config_path/get_language/set_language` (`get_plugin_config_path` 返回 yaml `config` 归一化绝对路径，可指向文件/目录；`get_language/set_language` 查询或指定运行时生效语言)。v3 起不再含业务成员 (`get_tool_prompt`/`get_session_work_dir` 已分别迁到 `agentxx.agent.prompt` / `agentxx.agent.session`) |
 | `agentxx.agent.model` | 2 | `get_config(agent)` (该 agent 的主模型及关联配置 JSON) |
-| `agentxx.agent.cancel` | 3 | `op_cancel` (取消一个操作句柄; 原先分散在 tools/feature 的同名成员已收拢到这里)。v3 起 `is_cancelled` 迁到 `agentxx.agent.session` (会话是业务概念, 框架表只管通用取消句柄) |
+| `agentxx.agent.cancel` | 3 | `op_cancel` (取消一个操作句柄; 原先分散在 tools/feature 的同名成员已收拢到这里)。v3 起 `is_canceled` 迁到 `agentxx.agent.session` (会话是业务概念, 框架表只管通用取消句柄) |
 | `agentxx.agent.prompt` | 3 | `get_prompt/set_prompt` (主程序提示词读写) + `get_tool_prompt(tool_name)` (工具提示词配置 JSON `{depict, args}`, 主程序级配置; v3 从插件框架通用表迁入) |
 | `agentxx.agent.json` | 1 | `json_get_string/json_escape` |
 | `agentxx.agent.log` | 1 | `log(level, msg)` (0 trace .. 4 error) |
@@ -446,7 +446,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 >
 > **v3 换代 (当前)**: 全局 API 版本 = 3。通用表不再带有主程序业务概念 ——
 > `pluginxx.config` 去掉 `get_tool_prompt` / `get_session_work_dir`, `pluginxx.cancel` 去掉
-> `is_cancelled` (只剩 `op_cancel`), 三者分别迁到 agentxx 的 `prompt` / `session` 表;
+> `is_canceled` (只剩 `op_cancel`), 三者分别迁到 agentxx 的 `prompt` / `session` 表;
 > 同时把 "agent" 用词泛化为 "作用域" (`PluginxxScopeRef` 参数名 `scope`,
 > 通用根请求 `RootRequest` 的 `sessionId` → `scopeKey`、图节点专用字段改为主程序自定义
 > `extraFields`)。插件需与主程序同一代头文件重编 (旧插件被拒)。
@@ -1021,7 +1021,7 @@ Agentxx 客户端采用统一的分层工具特化渲染机制，TUI 核心层�
 ## 11. Worktree 与会话工作目录
 
 - 插件经 `AgentxxPluginSessionIface::get_session_work_dir(host, agent, thread_id)` 取当前会话生效工作目录 (worktree 绑定优先；thread_id 为空时返回默认会话工作目录), SDK 封装为 `PluginBase::workDir(scope, key)`
-- 会话取消查询 `AgentxxPluginSessionIface::is_cancelled(host, agent, thread_id)` (SDK: `PluginBase::sessionCancelled`; 先看本地登记, 未命中才询主程序)
+- 会话取消查询 `AgentxxPluginSessionIface::is_canceled(host, agent, thread_id)` (SDK: `PluginBase::sessionCancelled`; 先看本地登记, 未命中才询主程序)
 - `blocking_tool` 的 `workDir` 参数由 SDK 在 IO 线程预取并注入，避免 worker 线程跨线程 `ioCallSync`
 - 文件系统 / 命令执行插件每次 `execute` 按注入 `sessionId` 动态解析路径，会话绑定后基准即时切换
 
@@ -1285,7 +1285,7 @@ Closing → CloseFailed → Closing (可重试)
 - `done` 可从任意线程调用；payload 仅在本次调用内借用，主程序第一步复制。
 - 一个 Operation 只产生一个终态：`OK` / `CANCELLED` / `FAILED`；终态之后的
   `cancel` 为空操作，不再进入插件代码。
-- 取消通过不透明 `PluginxxCancelToken` 查询（`is_cancelled`），插件不得把
+- 取消通过不透明 `PluginxxCancelToken` 查询（`is_canceled`），插件不得把
   `volatile` 标志或 ABI 原子地址当作跨线程同步手段。
 - 跨插件互调同时持有 **caller 与 provider 两侧租约**：caller 的完成回调返回前，
   caller 不会被卸载/destroy。

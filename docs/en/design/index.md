@@ -912,7 +912,7 @@ end1  ←   end2  ←   end3
 
 - Each middleware implements `onHandleStart` / `onHandleEnd` hooks (mountable to `agent_start`, `modelcall`, or `toolcall`).
 - On exceptions during `start`, `baseRun` is bypassed, jumping directly to unwind corresponding `end` handlers.
-- Explicitly rethrows `CancelledException` and `NodeInterrupt`.
+- Explicitly rethrows `neograph::graph::CancelledException` and `NodeInterrupt`.
 - Middlewares maintain isolated `State` per session (`sessionId`).
 - Actual registration order (push order into `handles`; BaseAgent pushes SubagentManager/Summarization/Permission first, CodeAgent then pushes Skill/MemoryFile/LogPrint): SubagentManager → Summarization → Permission → Skill → MemoryFile → LogPrint. Planning (`agentxx_planning` plugin, injected via the prompt table `appendSystemPrompts[planning]`) and worktree (static system-prompt append at CodeAgent init + `agentxx_git_worktree` tool) are plugin/tool forms, no longer standalone middlewares (historical `PlanningMiddleware` / `WorktreeMiddleware` have been removed).
 
@@ -928,13 +928,13 @@ Cancellation relies on `neograph::graph::CancelToken` (created per turn, stored 
 
 Boundary conversion rules (`exception.h` `isCancelAbort` / `wrap_handle.h`):
 
-- `operation_aborted` + token is cancelled ⇒ converted to `CancelledException` propagating upward (cancellation semantics); `catchError/catchErrorAsync` with `cancelToken` enables this conversion.
+- `operation_aborted` + token is cancelled ⇒ converted to `neograph::graph::CancelledException` propagating upward (cancellation semantics); `catchError/catchErrorAsync` with `cancelToken` enables this conversion.
 - `operation_aborted` + token not cancelled/missing ⇒ treated as timeout error ("timeout: ...").
-- All catch-all / `catch(std::exception&)` blocks must rethrow `CancelledException` and `NodeInterrupt`, never swallowing cancellation signals (`EventStream::publish`, `WrapHandleBaseNode`, `catchError`, etc.).
+- All catch-all / `catch(std::exception&)` blocks must rethrow `neograph::graph::CancelledException` and `NodeInterrupt`, never swallowing cancellation signals (`EventStream::publish`, `WrapHandleBaseNode`, `catchError`, etc.).
 - Tools implement `ContextualAsyncTool` to receive `ToolExecutionContext{cancel_token}`, allowing them to poll cancellation or propagate it to underlying transports. On cancellation, completed tool results are preserved in `graphData` (`interruptToolcallCache`) before rethrowing.
 - Thread-pool offloading (`offloadCancellableAsync`): Worker threads execute synchronously without suspending, immune to asio signals. Overloads accepting `CancelToken` spawn a watcher coroutine polling the token, asserting `cancelFlag` upon cancellation to notify worker threads to exit (integrated in `filesystem_list`/`glob`/`grep`).
 
-Critical cleanup/persistence phases must explicitly guard against cancellations using `asio::this_coro::reset_cancellation_state` or `catch(CancelledException) -> finalize -> rethrow`.
+Critical cleanup/persistence phases must explicitly guard against cancellations using `asio::this_coro::reset_cancellation_state` or `catch(neograph::graph::CancelledException) -> finalize -> rethrow`.
 
 #### 3. AgentIOBase Endpoint Model + Transport Layer
 

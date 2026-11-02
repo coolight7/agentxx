@@ -567,7 +567,7 @@ path/to/agentxx_test string_util regex
   - 改代次时注意构建缓存: 覆盖时必须**先剔旧值再追加** (否则嵌套 ExternalProject
     会一直用缓存里的上一代值编译)
   - `pluginxx.config` 现有 `get_config/get_plugin_args/get_plugin_config_path/get_language/set_language`,
-    `pluginxx.cancel` 只有 `op_cancel`; `get_session_work_dir`/`is_cancelled` 在
+    `pluginxx.cancel` 只有 `op_cancel`; `get_session_work_dir`/`is_canceled` 在
     `agentxx.agent.session`, `get_tool_prompt` 在 `agentxx.agent.prompt`
   - 每张表**四件套齐全**: IID + `struct_size` + `version`/`_VERSION` + `_MIN_VERSION` +
     `_BASELINE_SIZE`; `plugin_iface_meta.h` 各一条 `IfaceMeta` 特化

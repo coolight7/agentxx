@@ -55,7 +55,7 @@ For details, see [plugins.md](/docs/en/design/plugins.md).
 
 - Uniformly use `XX_LOG*` (see `agent/third_party/cxx_utilxx_base/include/utilxx_base/log.h`) rather than `std::cout/cerr`, avoiding interference with TUI rendering.
 - `TUILogSink` connects to the right-hand log panel; `TestWarnErrorLogSink` exposes Warn/Error to stderr during tests.
-- For catching exceptions, prefer `agentxx::util::catchError/catchErrorAsync` (which lets `CancelledException/NodeInterrupt` pass through). Never swallow cancellations with `catch(...)` in coroutines.
+- For catching exceptions, prefer `agentxx::util::catchError/catchErrorAsync` (which lets `neograph::graph::CancelledException/NodeInterrupt` pass through). Never swallow cancellations with `catch(...)` in coroutines.
 
 ## 5. Network and Reconnection Testing
 

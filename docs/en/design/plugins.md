@@ -201,7 +201,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
         tool(ctx, "my_async_tool", "Async coroutine tool", R"({"type":"object","properties":{}})",
             [](MyPluginCtx& c, std::string_view args_json, OpCtl ctl) -> Task<std::string> {
                 co_await sleep(c, 100);
-                ctl.throw_if_cancelled();
+                ctl.throw_if_canceled();
                 // Cross-plugin call: co_await call_tool(c, ref, "other_tool", "{}", ctl.scopeKey);
                 co_return R"({"status":"ok"})";
             }
@@ -226,7 +226,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
                 ArgReader args(args_json);
                 std::string workDirStr(workDir);
                 if (pluginxx_cancel_is_requested(cancel)) {
-                    throw CancelledException("cancelled");
+                    throw pluginxx::CanceledException("canceled");
                 }
                 // await the existing asio coroutine implementation directly (no local
                 // io_context + run() dance)
@@ -236,9 +236,9 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 
         // 5. Host-managed background task
         spawn(ctx, [](MyPluginCtx& c, OpCtl ctl) -> Task<void> {
-            while (!ctl.cancelled()) {
+            while (!ctl.canceled()) {
                 co_await sleep(c, 5000);
-                if (ctl.cancelled()) break;
+                if (ctl.canceled()) break;
                 // Periodic event publishing
             }
         });
@@ -288,11 +288,11 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
   available, local escaping as fallback) for hand-assembled JSON text
 - Import inside the plugin namespace with `using agentxx::plugin::xxx;` (all built-in plugins do)
 
-**Host-Managed Background Task Spawning (`spawn`)**: Background cooperative tasks started via `spawn` (e.g. periodic collection `while(!cancelled()) { offload; sleep; }`) are registered to the host `agentxx.agent.tasks` interface table since API v1, managed isomorphically with tool/capability ops:
+**Host-Managed Background Task Spawning (`spawn`)**: Background cooperative tasks started via `spawn` (e.g. periodic collection `while(!ctl.canceled()) { offload; sleep; }`, where `ctl` is the `OpCtl`) are registered to the host `agentxx.agent.tasks` interface table since API v1, managed isomorphically with tool/capability ops:
 
 - **Registration**: `spawn()` automatically calls `register_task` (on the IO thread) → Host records the handle into the instance's `outstandingOps` (shared with tool ops) and holds an `inflight` reference.
 - **Execution**: The coroutine suspends via `sleep`/`offload` through the host; transparent to the host.
-- **Unload Coordination**: When the plugin unloads, the host's `detachAll` cancels all registered tasks (invoking the plugin's `cancel_fn`, setting `cancelFlag` and waking sleeping/offloaded tasks) → Coroutine exits `while(!cancelled())` loop → `finishIfDone` (after coroutine frame destruction, reports completion exactly once via `notify.done`) → Host decrements `inflight` (`guard.reset`) and releases handle → `waitInflightZero` cleanly awaits zero active operations → `dlclose` occurs safely without dangling frames or UAF.
+- **Unload Coordination**: When the plugin unloads, the host's `detachAll` cancels all registered tasks (invoking the plugin's `cancel_fn`, setting `cancelFlag` and waking sleeping/offloaded tasks) → Coroutine exits `while(!ctl.canceled())` loop → `finishIfDone` (after coroutine frame destruction, reports completion exactly once via `notify.done`) → Host decrements `inflight` (`guard.reset`) and releases handle → `waitInflightZero` cleanly awaits zero active operations → `dlclose` occurs safely without dangling frames or UAF.
 - **No fallback**: `spawn` fails directly when the host lacks the `agentxx.agent.tasks` table or registration is refused (there is no unmanaged-coroutine degradation path).
 - **Threading Rules**: `cancel_fn` is invoked by the host on the IO thread (cooperative); `notify.done` may be reported from any plugin thread (host handles atomic CAS in `OpCore::onDone` and posts back to IO); `kit` coroutine completion is guaranteed on the IO thread.
 
@@ -321,11 +321,11 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 | `agentxx.agent.capabilities` | 1 | `register_capability(_ex)/unregister/has_capability`, `invoke_capability_async/op_cancel`. |
 | `agentxx.agent.scheduler` | 1 | `is_io_thread/post_to_io/sleep/op_cancel/offload` (`sleep` = host timer; `offload` = blocking-pool delegation, requires a `cancel_token`). |
 | `agentxx.agent.coroutine_runtime` | 1 | Generic coroutine driver: `request_driver/cancel_driver/is_io_thread` (driver-ticket / wake protocol, see §15). |
-| `agentxx.agent.session` | 1 | `get_share_store/add_share_store/emit_message_tip` (IO thread) + `get_session_work_dir(agent, session_id)` (effective session workdir: worktree binding wins, empty session ID returns the default) + `is_cancelled(agent, thread_id)` (advisory; the authoritative notification is still the cancel callback). The last two moved here from the framework tables in v3. |
+| `agentxx.agent.session` | 1 | `get_share_store/add_share_store/emit_message_tip` (IO thread) + `get_session_work_dir(agent, session_id)` (effective session workdir: worktree binding wins, empty session ID returns the default) + `is_canceled(agent, thread_id)` (advisory; the authoritative notification is still the cancel callback). The last two moved here from the framework tables in v3. |
 | `agentxx.agent.plugins` | 1 | `list_plugins/get_plugin/get_own_info` (JSON). |
 | `agentxx.agent.config` | 3 | `get_config/get_plugin_args/get_plugin_config_path/get_language/set_language` (`get_plugin_config_path` returns normalized absolute path configured via YAML `config`, pointing to a file or directory; `get_language/set_language` queries/overrides runtime language). Since v3 it carries no business members (`get_tool_prompt`/`get_session_work_dir` moved to `agentxx.agent.prompt` / `agentxx.agent.session`). |
 | `agentxx.agent.model` | 1 | `get_config` (Active model and associated config JSON). |
-| `agentxx.agent.cancel` | 3 | `op_cancel` (cancel one operation handle). Since v3 `is_cancelled` moved to `agentxx.agent.session`: sessions are a business concept, the framework table only handles generic cancel handles. |
+| `agentxx.agent.cancel` | 3 | `op_cancel` (cancel one operation handle). Since v3 `is_canceled` moved to `agentxx.agent.session`: sessions are a business concept, the framework table only handles generic cancel handles. |
 | `agentxx.agent.prompt` | 3 | `get_prompt/set_prompt` (Host prompt read/write access) + `get_tool_prompt(tool_name)` (per-tool prompt config JSON `{depict, args}`, host-level; moved here from the framework table in v3). |
 | `agentxx.agent.json` | 1 | `json_get_string/json_escape`. |
 | `agentxx.agent.log` | 1 | `log(level, msg)` (0: trace .. 4: error). |
@@ -448,7 +448,7 @@ The Agentxx client adopts a unified, layered tool-specialized rendering mechanis
 ## 11. Worktrees & Session Working Directories
 
 - Plugins query the currently active session working directory via `AgentxxPluginSessionIface::get_session_work_dir(host, agent, thread_id)` (session worktree binding takes precedence; returns default working directory when `thread_id` is empty). SDK wrapper: `PluginBase::workDir(scope, key)`.
-- Session cancel polling: `AgentxxPluginSessionIface::is_cancelled(host, agent, thread_id)` (SDK: `PluginBase::sessionCancelled` — checks the local registry first, only asks the host when it misses).
+- Session cancel polling: `AgentxxPluginSessionIface::is_canceled(host, agent, thread_id)` (SDK: `PluginBase::sessionCancelled` — checks the local registry first, only asks the host when it misses).
 - The `workDir` argument for `blocking_tool` is prefetched and injected on the IO thread by the SDK, avoiding cross-thread `ioCallSync` in worker threads.
 - Filesystem and command execution plugins dynamically resolve paths using the injected `sessionId` on each invocation; relative path references switch immediately upon session binding.
 
