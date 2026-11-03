@@ -3,6 +3,7 @@
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/session_input_sink.h"
 #include "agentxx/event/event_stream.h"
+#include "agentxx/event/naming.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/observability.h"
 #include "agentxx/util/share_store_offload.h"
@@ -64,12 +65,29 @@ constexpr int64_t kSweepPeriodMs = 500;
 /// `await` 轮询周期: 值到达没有回调唤醒时的兜底检查 (同时检查取消令牌)
 constexpr int64_t kAwaitPollMs = 25;
 
-/// 把 `timer.` 前缀规整掉 (两种写法都接受)
-std::string timerShortName(std::string_view name) {
-    if (name.starts_with("timer.")) {
-        return std::string{name.substr(6)};
+/// 定时源事件名前缀 (`agentxx.agent.event.timer.`)
+constexpr std::string_view kTimerEventPrefix = "agentxx.agent.event.timer.";
+
+/// 定时源事件名: `agentxx.agent.event.timer.<名字>`
+/// - 两种写法都接受: 完整事件名, 或只是 `<名字>` (以及旧习惯的 `timer.<名字>`)
+std::string timerEventName(std::string_view name) {
+    if (name.starts_with(naming::kAgentEventPrefix)) {
+        return std::string{name};
     }
-    return std::string{name};
+    constexpr std::string_view kTimerSegment{"timer."};
+    auto                       shortName = name;
+    if (shortName.starts_with(kTimerSegment)) {
+        shortName = shortName.substr(kTimerSegment.size());
+    }
+    return std::string{kTimerEventPrefix} + std::string{shortName};
+}
+
+/// 定时源短名 (`agentxx.agent.event.timer.` 之后的那个名字)
+std::string timerShortName(std::string_view eventName) {
+    if (eventName.starts_with(kTimerEventPrefix)) {
+        return std::string{eventName.substr(kTimerEventPrefix.size())};
+    }
+    return std::string{eventName};
 }
 
 } // namespace
@@ -109,17 +127,22 @@ void EventHub::attachBus(const std::shared_ptr<agentxx::events::EventBus>& bus) 
         return;
     }
     bus_ = bus;
-    auto handlePrefix = [this](std::string_view topic, const std::any& data) {
+    auto handleTopic = [this](std::string_view topic, const std::any& data) {
         if (closed_) {
             return;
         }
         const auto* payload = std::any_cast<std::string>(&data);
         if (nullptr == payload) {
-            // 非字符串载荷不是值主题 (插件事件统一是 std::string)
+            // 非字符串载荷不是值事件 (强类型主题走自己的流)
             return;
         }
-        const auto name = naming::eventNameOfTopic(topic);
-        if (!name.has_value()) {
+        // 只收插件族: 内置源直接调 publishValue, 不经总线
+        if (!naming::isPluginTopic(topic)) {
+            return;
+        }
+        // 没人等、也没声明过的主题不当成值事件: 插件之间的普通消息
+        // (面板刷新/数据通道) 不应在事件表里各占一条记录
+        if (!wants(topic)) {
             return;
         }
         // 载荷不是合法 JSON 时按纯文本值处理 (插件可能发普通字符串)
@@ -142,16 +165,13 @@ void EventHub::attachBus(const std::shared_ptr<agentxx::events::EventBus>& bus) 
             }
         }
         std::string err;
-        if (!publishValue(*name, std::move(value), &err)) {
+        if (!publishValue(topic, std::move(value), &err)) {
             XX_LOGW("[event_hub] publish from bus topic `{}` rejected: {}", topic, err);
         }
     };
-    // 两个前缀都要挂: agent 内部发布用 `evt.`, 插件事件经 qualifyEventTopic 补 `plugin.`
-    valueSubId_       = bus->listenPrefix(naming::kValueTopicPrefix, handlePrefix);
-    pluginValueSubId_ = bus->listenPrefix(
-        std::string{naming::kPluginTopicPrefix} + std::string{naming::kValueTopicPrefix},
-        handlePrefix
-    );
+    // 插件往 `plugin.` 发字符串就等于往中枢发值; 内置主题不走这条路,
+    // 因此不必订阅 `agentxx.*` 前缀 (也不会被强类型主题的高频发布拖慢)
+    valueSubId_ = bus->listenPrefix(naming::kPluginRoot, handleTopic);
 }
 
 void EventHub::detachBus() {
@@ -159,12 +179,8 @@ void EventHub::detachBus() {
         if (valueSubId_ != 0) {
             bus_->unlistenPrefix(valueSubId_);
         }
-        if (pluginValueSubId_ != 0) {
-            bus_->unlistenPrefix(pluginValueSubId_);
-        }
     }
-    valueSubId_       = 0;
-    pluginValueSubId_ = 0;
+    valueSubId_ = 0;
     bus_.reset();
 }
 
@@ -234,6 +250,17 @@ EventHub::RecordEntry*
     return &stored;
 }
 
+std::string EventHub::ownerOfName(std::string_view name, std::string_view owner) {
+    if (!owner.empty()) {
+        return std::string{owner};
+    }
+    // 插件族按主题归因: 这样插件禁用/卸载时它的记录能整批回收
+    if (const auto plugin = naming::pluginNameOfTopic(name); !plugin.empty()) {
+        return "plugin:" + std::string{plugin};
+    }
+    return std::string{};
+}
+
 bool EventHub::define(const EventDefineSpec& spec, std::string* err) {
     auto fail = [&](std::string msg) {
         if (err) {
@@ -271,7 +298,7 @@ bool EventHub::define(const EventDefineSpec& spec, std::string* err) {
         }
         return true;
     }
-    auto* created = ensureRecord(spec.name, spec.owner, spec.originSession);
+    auto* created = ensureRecord(spec.name, ownerOfName(spec.name, spec.owner), spec.originSession);
     if (nullptr == created) {
         return fail(fmt::format(
             "too many events (limit {})",
@@ -292,6 +319,15 @@ bool EventHub::define(const EventDefineSpec& spec, std::string* err) {
 }
 
 bool EventHub::publishValue(std::string_view name, Json value, std::string* err) {
+    return publishValue(name, std::move(value), std::string_view{}, err);
+}
+
+bool EventHub::publishValue(
+    std::string_view name,
+    Json             value,
+    std::string_view owner,
+    std::string*     err
+) {
     auto fail = [&](std::string msg) {
         if (err) {
             *err = std::move(msg);
@@ -315,7 +351,7 @@ bool EventHub::publishValue(std::string_view name, Json value, std::string* err)
         );
         return fail(fmt::format("value too large ({} bytes > {} bytes)", bytes, cfg_.valueHardBytes));
     }
-    auto* rec = ensureRecord(name, "tool", "");
+    auto* rec = ensureRecord(name, ownerOfName(name, owner), "");
     if (nullptr == rec) {
         return fail(fmt::format("too many events (limit {})", cfg_.maxEvents));
     }
@@ -362,16 +398,24 @@ bool EventHub::publishValue(std::string_view name, Json value, std::string* err)
 }
 
 void EventHub::postValue(std::string_view name, Json value) {
-    auto self = weak_from_this();
-    auto n    = std::string{name};
-    asio::post(executor_, [self, n = std::move(n), value = std::move(value)]() mutable {
-        if (auto locked = self.lock()) {
-            std::string err;
-            if (!locked->publishValue(n, std::move(value), &err)) {
-                XX_LOGW("[event_hub] posted value for `{}` rejected: {}", n, err);
+    postValue(name, std::move(value), std::string_view{});
+}
+
+void EventHub::postValue(std::string_view name, Json value, std::string_view owner) {
+    auto self     = weak_from_this();
+    auto n        = std::string{name};
+    auto ownerStr = std::string{owner};
+    asio::post(
+        executor_,
+        [self, n = std::move(n), ownerStr = std::move(ownerStr), value = std::move(value)]() mutable {
+            if (auto locked = self.lock()) {
+                std::string err;
+                if (!locked->publishValue(n, std::move(value), ownerStr, &err)) {
+                    XX_LOGW("[event_hub] posted value for `{}` rejected: {}", n, err);
+                }
             }
         }
-    });
+    );
 }
 
 void EventHub::postEnd(std::string_view name, Json summary) {
@@ -912,7 +956,12 @@ std::expected<EventWait, std::string> EventHub::watch(EventWaitSpec spec) {
 
     // 有人在等这个事件: 建一条记录 (即使发布方还没 define), 否则 `opt=status` /
     // `opt=list` 看不到它, 也回放不了先到的值
-    if (nullptr == ensureRecord(spec.event, spec.owner.empty() ? "watch" : spec.owner, spec.originSession)) {
+    if (nullptr
+        == ensureRecord(
+            spec.event,
+            ownerOfName(spec.event, spec.owner.empty() ? "watch" : spec.owner),
+            spec.originSession
+        )) {
         return std::unexpected{fmt::format("too many events (limit {})", cfg_.maxEvents)};
     }
     XX_LOGI(
@@ -1143,17 +1192,17 @@ bool EventHub::armTimer(std::string_view name, int64_t afterMs, int64_t interval
     if (closed_ || afterMs <= 0) {
         return false;
     }
-    auto shortName = timerShortName(name);
+    const auto  eventName = timerEventName(name);
+    const auto  shortName = timerShortName(eventName);
     std::string err;
     if (shortName.empty()) {
         XX_LOGW("[event_hub] armTimer: timer name is empty");
         return false;
     }
-    if (!naming::validateEventName(std::string{"timer."} + shortName, &err)) {
-        XX_LOGW("[event_hub] invalid timer name `{}`: {}", shortName, err);
+    if (!naming::validateAgentEventName(eventName, &err)) {
+        XX_LOGW("[event_hub] invalid timer name `{}`: {}", eventName, err);
         return false;
     }
-    auto eventName = std::string{"timer."} + shortName;
     std::string defineErr;
     EventDefineSpec spec;
     spec.name        = eventName;
@@ -1175,7 +1224,7 @@ bool EventHub::armTimer(std::string_view name, int64_t afterMs, int64_t interval
 }
 
 bool EventHub::cancelTimer(std::string_view name) {
-    auto key = std::string{"timer."} + timerShortName(name);
+    auto key = timerEventName(name);
     auto it  = timers_.find(key);
     if (it == timers_.end()) {
         return false;
@@ -1232,7 +1281,7 @@ void EventHub::fireTimer(std::string_view key) {
     const bool repeating = src.intervalMs > 0;
     const auto eventName = src.eventName;
     std::string err;
-    if (!publishValue(eventName, std::move(value), &err)) {
+    if (!publishValue(eventName, std::move(value), "timer", &err)) {
         XX_LOGW("[event_hub] timer `{}` publish failed: {}", eventName, err);
         timers_.erase(it);
         return;

@@ -5,6 +5,7 @@
 #include "asio/awaitable.hpp"
 #include "asio/steady_timer.hpp"
 #include "utilxx_base/json.h"
+#include "utilxx_base/log.h"
 #include <chrono>
 #include <cstddef>
 #include <deque>
@@ -60,10 +61,12 @@ enum class DeliverResult : uint8_t { Queued, Deferred, Dropped };
 
 /// 事件定义 (登记一个事件源)
 struct EventDefineSpec {
-    /// 事件名 (hub 内唯一; 建议 `域.用途`, 如 `build.done`)
+    /// 事件名 (= 总线主题)
+    /// - 内置源与模型自建: `agentxx.agent.event.<名字>`
+    /// - 插件: `plugin.<插件名>.<名字>` (框架校验, 不补前缀)
     std::string name;
     EventKind   kind = EventKind::Stream;
-    /// 来源: `tool` / `plugin:<名>` / `core:turn` / `subagent` / `timer`
+    /// 来源: `tool` / `core:turn` / `subagent` / `timer` / `plugin:<插件名>`
     std::string owner;
     /// 一行说明 (`list` 与诊断展示; 插件声明时给模型看的说明也在这)
     std::string description;
@@ -130,8 +133,6 @@ struct EventWaitSpec {
     bool unpausePaused = false;
     /// 会话在跑一轮时直接丢弃这次投递 (插件触发器的 DROP_IF_BUSY 语义)
     bool dropIfBusy = false;
-    /// 监听的总线主题 (空 = `evt.<event>`; 插件触发器可直接给 `plugin.<topic>`)
-    std::string busTopic;
 };
 
 /// 等待句柄 (查询用快照)
@@ -173,10 +174,12 @@ struct EventHubStats {
 /// 事件中枢: 有状态、有值、能结束、能回放的事件表 + 等待句柄 + 投递
 ///
 /// 与 `EventBus` 的分工 (`bus` 负责"通知", 本类负责"值、状态与领取"):
-/// - 值从 `EventBus` 的 `evt.*` 前缀订阅进来 (`attachBus`)
+/// - 事件名就是总线主题 (命名规则见 `agentxx/event/naming.h`):
+///   内置源用 `agentxx.agent.event.*` 直接调 [publishValue] (不经总线),
+///   插件往总线发 `plugin.<插件名>.*` 字符串即等于往中枢发值 (`attachBus` 前缀订阅)
 /// - 等待满足后按投递决策表把值渲染成一条输入, 经 `SessionInputSink` 交回会话
-/// - 生命周期事件发布回总线 (`agent.hub.value` / `agent.hub.ended`), 主题不带
-///   `evt.` 前缀, 因此不会被自己的前缀订阅再吃回去
+/// - 生命周期事件发布回总线 (`agentxx.agent.hub.value` / `agentxx.agent.hub.ended`),
+///   不在中枢收值的段里, 因此不会被自己的前缀订阅再吃回去
 ///
 /// 线程模型: 所有状态只在构造时给的 executor 线程 (agent io 线程) 读写, 不加锁;
 /// 跨线程入口只有 [postValue] / [postEnd]。
@@ -226,7 +229,7 @@ public:
     /// 注入"跑一轮"回调 (BaseAgent::init)
     void setTurnRunner(TurnRunner runner);
 
-    /// 挂到 agent 总线上 (订阅 `evt.` 与 `plugin.evt.` 两个前缀)
+    /// 挂到 agent 总线上 (订阅 `plugin.` 前缀: 插件发到总线的值即中枢的事件)
     void attachBus(const std::shared_ptr<agentxx::events::EventBus>& bus);
 
     /// 退订总线前缀 (关闭时调用)
@@ -241,7 +244,15 @@ public:
     // -------------------------------------------------------------------
 
     bool define(const EventDefineSpec& spec, std::string* err = nullptr);
+    /// 发布一个值 (`owner` 省略时按名字推断: 插件族 → `plugin:<插件名>`, 其余 → 原样保留)
     bool publishValue(std::string_view name, Json value, std::string* err = nullptr);
+    /// 发布一个值并显式给出归属 (内置事件源用: `core:turn` / `tool` / `subagent` / `timer`)
+    bool publishValue(
+        std::string_view name,
+        Json             value,
+        std::string_view owner,
+        std::string*     err
+    );
     bool endEvent(std::string_view name, Json summary = Json::object(), std::string* err = nullptr);
     bool removeEvent(std::string_view name);
 
@@ -250,6 +261,8 @@ public:
     // -------------------------------------------------------------------
 
     void postValue(std::string_view name, Json value);
+    /// 带归属的版本 (异步子代理等后台发布方用; 归属影响诊断与插件卸载回收)
+    void postValue(std::string_view name, Json value, std::string_view owner);
     void postEnd(std::string_view name, Json summary = Json::object());
 
     // -------------------------------------------------------------------
@@ -279,8 +292,9 @@ public:
     }
 
     /// 该事件是否有人关心 (已有记录, 或存在挂起的等待)
-    /// - 供 `turn.*` / `tool.*` 这类内建源判断"值得不值得发": 没人等就不建记录,
-    ///   否则每轮/每次工具调用都会留一条空记录
+    /// - 供 `agentxx.agent.event.turn.*` / `agentxx.agent.event.tool.end.*` 这类内建源
+    ///   判断"值得不值得发": 没人等就不建记录, 否则每轮/每次工具调用都会留一条空记录
+    /// - 总线桥也只收"有人关心"的主题: 插件发到 `plugin.*` 的普通消息不当成值事件
     bool wants(std::string_view name) const;
 
     /// 当前是否在 hub 线程 (构造时记录的那个线程)
@@ -352,12 +366,12 @@ public:
     );
 
     // -------------------------------------------------------------------
-    // 定时源 (`timer.*`)
+    // 定时源 (`agentxx.agent.event.timer.*`)
     // -------------------------------------------------------------------
 
-    /// 建立/重设一个一次性或周期定时源; 到点向 `timer.<name>` 发布一个值
+    /// 建立/重设一个一次性或周期定时源; 到点向 `agentxx.agent.event.timer.<名字>` 发布一个值
     /// - `args`:
-    ///     - [name]       定时源名字 (`timer.` 后的部分)
+    ///     - [name]       完整事件名 (`agentxx.agent.event.timer.<名字>`) 或只是 `<名字>`
     ///     - [afterMs]    首次触发延迟 (必须 > 0)
     ///     - [intervalMs] > 0 = 周期触发; 0 = 一次性
     /// - `return` false = 参数非法 (名字不合法/延迟非正)
@@ -406,7 +420,7 @@ private:
 
     struct TimerSource {
         std::shared_ptr<asio::steady_timer> timer;
-        std::string                         eventName; ///< `timer.<name>`
+        std::string                         eventName; ///< `agentxx.agent.event.timer.<name>`
         int64_t                             intervalMs = 0;
         int64_t                             nextFireMs = 0;
         uint64_t                            fired      = 0;
@@ -424,8 +438,8 @@ private:
     std::map<std::string, TimerSource, std::less<>> timers_;
 
     std::shared_ptr<agentxx::events::EventBus> bus_;
-    size_t                                     valueSubId_ = 0;
-    size_t                                     pluginValueSubId_ = 0;
+    /// 总线 `plugin.` 前缀订阅 id (插件发到总线的值事件)
+    size_t valueSubId_ = 0;
 
     std::shared_ptr<asio::steady_timer> sweepTimer_;
     EventHubStats                       stats_;
@@ -446,6 +460,9 @@ private:
     void dispatchValue(RecordEntry& rec, const Json& value);
     /// 事件结束 (含 single 自动结束) 后的等待处理
     void dispatchEnded(RecordEntry& rec);
+
+    /// 记录归属: 显式给出优先, 否则按主题推断 (`plugin.<名>.x` → `plugin:<名>`)
+    static std::string ownerOfName(std::string_view name, std::string_view owner);
 
     /// 投递一个等待的当前值 (渲染 → deliver → 更新计数)
     /// - `args`:

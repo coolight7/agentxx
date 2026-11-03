@@ -14,88 +14,116 @@
 namespace agentxx {
 namespace events {
 
-/// 事件流 topic 命名空间常量
-/// - 命名约定: <scope>.<subject>[.<detail>]
-///   - scope: agent | service | subagent | io
+/// 事件总线 topic 命名空间常量
+/// - 命名约定 (唯一一份实现: `agentxx/event/naming.h`):
+///   - 内置 agent 端: `agentxx.agent.<域>[.<细节>]`
+///   - 内置 client 端: `agentxx.client.<域>[.<细节>]`
+///   - 插件: `plugin.<插件名>.<自由部分>` (插件写全名, 框架只校验不补前缀)
 ///   - 主体模块只通过这些 topic 字符串与 EventBus 交互
 struct Topic {
     /// ===== 单向事件 (EventStream<T>) =====
     /// agent 生命周期: EventAgentTurnStart / EventAgentTurnEnd
-    inline static constexpr std::string_view AgentTurnStart{"agent.turn.start"};
-    inline static constexpr std::string_view AgentTurnEnd{"agent.turn.end"};
+    inline static constexpr std::string_view AgentTurnStart{"agentxx.agent.turn.start"};
+    inline static constexpr std::string_view AgentTurnEnd{"agentxx.agent.turn.end"};
 
     /// 模型调用: EventModelCallStart / EventModelToken / EventModelCallEnd
-    inline static constexpr std::string_view ModelCallStart{"agent.model.start"};
-    inline static constexpr std::string_view ModelToken{"agent.model.token"};
-    inline static constexpr std::string_view ModelCallEnd{"agent.model.end"};
+    inline static constexpr std::string_view ModelCallStart{"agentxx.agent.model.start"};
+    inline static constexpr std::string_view ModelToken{"agentxx.agent.model.token"};
+    inline static constexpr std::string_view ModelCallEnd{"agentxx.agent.model.end"};
 
     /// 工具调用: EventToolCallStart / EventToolCallEnd
-    inline static constexpr std::string_view ToolCallStart{"agent.tool.start"};
-    inline static constexpr std::string_view ToolCallEnd{"agent.tool.end"};
+    inline static constexpr std::string_view ToolCallStart{"agentxx.agent.tool.start"};
+    inline static constexpr std::string_view ToolCallEnd{"agentxx.agent.tool.end"};
 
     /// 通用显示输出: EventDisplay
-    inline static constexpr std::string_view Display{"io.display"};
+    inline static constexpr std::string_view Display{"agentxx.agent.io.display"};
 
     /// 用户输入 (前端发布): EventUserInput
-    inline static constexpr std::string_view UserInput{"io.user_input"};
+    inline static constexpr std::string_view UserInput{"agentxx.agent.io.user_input"};
 
     /// 取消控制信号: EventCancel
-    inline static constexpr std::string_view Cancel{"io.cancel"};
+    inline static constexpr std::string_view Cancel{"agentxx.agent.io.cancel"};
 
     /// 错误: EventError
-    inline static constexpr std::string_view Error{"agent.error"};
+    inline static constexpr std::string_view Error{"agentxx.agent.error"};
+
+    /// 轮次开始 (载荷 std::string 的 JSON; 插件 SDK 基类据此清除会话取消标记)
+    inline static constexpr std::string_view AgentRoundStart{"agentxx.agent.round.start"};
 
     /// ===== 请求-响应事件 (RequestResponseStream<TReq, TResp>) =====
     /// 中断 HIL: ReqInterrupt / RespInterrupt
-    inline static constexpr std::string_view Interrupt{"service.interrupt"};
+    inline static constexpr std::string_view Interrupt{"agentxx.agent.service.interrupt"};
 
     /// 权限询问: ReqPermission / RespPermission
-    inline static constexpr std::string_view Permission{"service.permission"};
+    inline static constexpr std::string_view Permission{"agentxx.agent.service.permission"};
 
     /// subagent 委派 (统一批量语义): ReqSubagentBatch / RespSubagentBatch
     /// - 单任务与多任务统一为 tasks 数组 (单任务 = 1 个 task)
-    inline static constexpr std::string_view Subagent{"service.subagent"};
+    inline static constexpr std::string_view Subagent{"agentxx.agent.service.subagent"};
 
     /// subagent 进度 (单向, 供 UI 观测): EventSubagentProgress
-    inline static constexpr std::string_view SubagentProgress{"subagent.progress"};
+    inline static constexpr std::string_view SubagentProgress{"agentxx.agent.subagent.progress"};
 
     /// 跨 agent 查询: ReqCrossAgent / RespCrossAgent
     /// - 任一 agent (含 subagent) 可向指定 agentName 发起查询
     /// - 目标 agent 的持有者 (AgentHost) 应答
-    inline static constexpr std::string_view CrossAgent{"service.crossagent"};
+    inline static constexpr std::string_view CrossAgent{"agentxx.agent.service.crossagent"};
 
     /// 工具执行权限检查: ReqToolPermissionCheck / RespToolPermissionCheck
-    inline static constexpr std::string_view ToolPermissionCheck{"service.permission.check"};
+    inline static constexpr std::string_view ToolPermissionCheck{
+        "agentxx.agent.service.permission.check"
+    };
 
     /// 执行前目标复验: ReqPermissionReverify / RespPermissionReverify
-    inline static constexpr std::string_view PermissionReverify{"service.permission.reverify"};
+    inline static constexpr std::string_view PermissionReverify{
+        "agentxx.agent.service.permission.reverify"
+    };
 
     /// 每会话文件系统隔离边界设置/清除 (单向事件): EventSetSessionIsolation /
     /// EventClearSessionIsolation
     inline static constexpr std::string_view PermissionSetIsolation{
-        "service.permission.set_isolation"
+        "agentxx.agent.service.permission.set_isolation"
     };
     inline static constexpr std::string_view PermissionClearIsolation{
-        "service.permission.clear_isolation"
+        "agentxx.agent.service.permission.clear_isolation"
     };
 
     /// "完全授权所有权限"状态变更 (单向事件): EventPermissionFullAuthChanged
-    inline static constexpr std::string_view PermissionFullAuth{"service.permission.full_auth"};
+    inline static constexpr std::string_view PermissionFullAuth{
+        "agentxx.agent.service.permission.full_auth"
+    };
 
     /// subagent 工具执行 (请求-响应): ReqSubagentExecute / RespSubagentExecute
-    inline static constexpr std::string_view SubagentExecute{"service.subagent.execute"};
+    inline static constexpr std::string_view SubagentExecute{
+        "agentxx.agent.service.subagent.execute"
+    };
 
-    /// 文本 Token 估算服务 (同步服务): service.token.count
-    inline static constexpr std::string_view TokenCount{"service.token.count"};
+    /// 文本 Token 估算服务 (同步服务)
+    inline static constexpr std::string_view TokenCount{"agentxx.agent.service.token.count"};
 
     /// 上下文手动压缩 (单向事件): EventCompactContext
-    inline static constexpr std::string_view SummarizationCompact{"service.summarization.compact"};
+    inline static constexpr std::string_view SummarizationCompact{
+        "agentxx.agent.service.summarization.compact"
+    };
 
     /// ===== 单向事件: 事件中枢生命周期 =====
     /// 值到达 / 流结束: EventHubValue / EventHubEnded
-    /// - 不带 `evt.` 前缀 (见 agentxx::events::naming), hub 不会订阅到自己
-    inline static constexpr std::string_view HubValue{"agent.hub.value"};
-    inline static constexpr std::string_view HubEnded{"agent.hub.ended"};
+    /// - 在 `agentxx.agent.hub.` 段, 不在中枢收值的 `agentxx.agent.event.` 段里,
+    ///   因此不会被中枢自己的前缀订阅再吃回去
+    inline static constexpr std::string_view HubValue{"agentxx.agent.hub.value"};
+    inline static constexpr std::string_view HubEnded{"agentxx.agent.hub.ended"};
+
+    /// ===== 主程序约定事件 (双端插件协作) =====
+    /// agent 端有客户端接入/重连 (载荷 std::string 的 JSON)
+    inline static constexpr std::string_view HostClientAttached{
+        "agentxx.agent.host.client_attached"
+    };
+    /// agent 端已加载插件清单 (载荷 std::string 的 JSON)
+    inline static constexpr std::string_view HostServerPlugins{"agentxx.agent.host.server_plugins"};
+    /// client 端主程序接口集上报 (client → agent; 载荷 std::string 的 JSON)
+    inline static constexpr std::string_view ClientInterfaces{
+        "agentxx.client.host.client_interfaces"
+    };
 };
 
 /// ===== agent 生命周期 =====
@@ -443,11 +471,11 @@ struct EventCompactContext {
 };
 
 /// ===== 事件中枢 (EventHub) 生命周期 =====
-/// - 主题 `agent.hub.value` / `agent.hub.ended`, **不带** `evt.` 前缀,
-///   因此不会被 hub 自己的值前缀订阅再吃回去 (不会自激)
+/// - 主题 `agentxx.agent.hub.value` / `agentxx.agent.hub.ended`, 不在中枢收值的
+///   `agentxx.agent.event.` 段里, 因此不会被中枢自己的前缀订阅再吃回去 (不自激)
 /// - 想观测"谁发布了什么值"的插件/UI 订阅这两个主题即可
 struct EventHubValue {
-    /// 事件名 (`evt.` 之后的那个名字)
+    /// 事件名 (= 总线主题)
     std::string name;
     /// 值 (紧凑 JSON 文本)
     std::string valueJson;

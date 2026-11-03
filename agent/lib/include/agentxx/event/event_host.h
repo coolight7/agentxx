@@ -11,20 +11,21 @@ namespace events {
 /// 事件总线持有者总线 (HostBus) topic 命名空间常量
 /// - 事件总线持有者 (AgentHost) 是所有 agent (主 agent 与子代理平等) 的注册表与消息路由:
 ///   主 agent 与子代理都是事件总线持有者中的 AgentNode, 通过事件总线持有者总线交互
-/// - 与会话级事件 (agent.* / io.*) 的区别: 本组 topic 跨 agent 路由
+/// - 会话级主题在 `agentxx.agent.*` 的其余段 (见 agentxx/event/events.h 的 Topic),
+///   本组固定为 `agentxx.agent.host.*`
 struct HostTopic {
     /// 派生子代理 (RR): ReqHostSpawn / RespHostSpawn
     /// - 任意 agent 可发起; 事件总线持有者强制嵌套深度与并发预算
-    inline static constexpr std::string_view AgentSpawn{"agent.spawn"};
+    inline static constexpr std::string_view AgentSpawn{"agentxx.agent.host.spawn"};
     /// 任意→任意 agent 消息 (RR): ReqHostMessage / RespHostMessage
     /// - 目标 agent 需注册 mailbox; 未注册时返回明确的 not-implemented 错误
     /// - 本地节点直投; 远程 agent (A2A) 由事件总线持有者转发
-    inline static constexpr std::string_view AgentMessage{"agent.message"};
+    inline static constexpr std::string_view AgentMessage{"agentxx.agent.host.message"};
     /// 任意 agent 的进度事件 (单向): EventHostProgress
-    inline static constexpr std::string_view AgentProgress{"agent.progress"};
+    inline static constexpr std::string_view AgentProgress{"agentxx.agent.host.progress"};
     /// agent 运行结束事件 (单向): EventHostDone
     /// - 事件总线持有者据此回收 AgentNode (生命周期归事件总线持有者)
-    inline static constexpr std::string_view AgentDone{"agent.done"};
+    inline static constexpr std::string_view AgentDone{"agentxx.agent.host.done"};
 };
 
 /// ===== 派生子代理 =====
