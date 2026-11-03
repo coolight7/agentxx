@@ -303,3 +303,15 @@ agent 的 io executor), 所以 `callSync` 走"直接执行"分支; 跨线程那�
 `plugin_sdk` 115、`event_hub` 204、`event_tools` 97、`event_delivery` 46、`event_subagent` 52、
 `observability` 114, 全绿。
 
+### 7.5 等超时不能算成功
+
+`EventHub::callSync` 在中枢线程正忙超过 10 秒 (或中枢已被释放) 时只返回默认值, 而插件事件表
+的返回码里 `0` 正是 `AGENTXX_PLUGIN_EVENT_OK` —— 于是"没执行"会变成"插件以为成功"。
+现在 `callSync` 多一个 `bool* completed` 出参 (nullptr 时不关心), 表实现统一走
+`hubCall(hub, fn)`: 没执行就记一条警告并返回 `AGENTXX_PLUGIN_EVENT_ERR_STATE`。
+
+顺带记下它的使用约束: 闭包里引用的局部变量只在调用方等结果期间有效 —— 投递分支超时后,
+那个闭包仍可能在调用方返回之后才执行 (实际装配走直接执行分支, 碰不到)。要彻底避免, 得让
+`callSync` 的等待可取消, 或强制闭包按值捕获; 目前按前者不重要、后者改动面太大 (多个闭包写
+捕获变量) 而先记在这里。
+

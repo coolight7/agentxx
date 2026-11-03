@@ -17,6 +17,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -291,9 +292,11 @@ public:
     /// - 其它线程: 投递并等待结果, 最多等 10 秒 —— 中枢线程正忙在别的长任务上时
     ///   宁可返回默认值并记一条警告, 也不让调用方永久阻塞
     /// - 中枢对象在等待期间被释放时不执行, 同样返回默认值
+    /// - `completed` 非空时写入"这次调用真的执行了": false = 超时或中枢已释放,
+    ///   调用方据此把它当成失败, 不要把默认值当成功果
     /// - 定义放在类外 (那里中枢类型已完整, 闭包的调用结果才能求值)
     template<typename Fn>
-    auto callSync(Fn&& fn);
+    auto callSync(Fn&& fn, bool* completed = nullptr);
 
     /// 事件记录数 / 等待数 (测试与诊断)
     size_t eventCount() const noexcept {
@@ -474,8 +477,16 @@ private:
 // ---------------------------------------------------------------------------
 
 template<typename Fn>
-auto EventHub::callSync(Fn&& fn) {
+auto EventHub::callSync(Fn&& fn, bool* completed) {
     using Result = decltype(fn(std::declval<EventHub&>()));
+    // 等超时/中枢已释放时返回默认值, 因此结果类型必须能默认构造
+    static_assert(
+        std::is_void_v<Result> || std::is_default_constructible_v<Result>,
+        "callSync 的结果类型必须可默认构造 (超时时返回 Result{})"
+    );
+    if (completed != nullptr) {
+        *completed = true;
+    }
     if (isHubThread()) {
         return fn(*this);
     }
@@ -501,6 +512,9 @@ auto EventHub::callSync(Fn&& fn) {
         );
         if (future.wait_for(std::chrono::seconds{10}) != std::future_status::ready) {
             XX_LOGW("[event_hub] hub call timed out (waiting for the event hub thread)");
+            if (completed != nullptr) {
+                *completed = false;
+            }
             return;
         }
         future.get();
@@ -525,6 +539,9 @@ auto EventHub::callSync(Fn&& fn) {
         );
         if (future.wait_for(std::chrono::seconds{10}) != std::future_status::ready) {
             XX_LOGW("[event_hub] hub call timed out (waiting for the event hub thread)");
+            if (completed != nullptr) {
+                *completed = false;
+            }
             return Result{};
         }
         return future.get();

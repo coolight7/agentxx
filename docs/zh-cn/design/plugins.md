@@ -1887,7 +1887,7 @@ plugin:
 
 | 用例 | 覆盖 |
 |---|---|
-| `plugin_host_mount` | 一份管理器 + 多个 agent: 工具/提示词/钩子/事件按挂载分开, 重复挂载幂等, 工具名冲突, 挂载失败只回滚该 agent, 引用校验, 22 张表可查, 拆挂载与关闭收尾 |
+| `plugin_host_mount` | 一份管理器 + 多个 agent: 工具/提示词/钩子/事件按挂载分开, 重复挂载幂等, 工具名冲突, 挂载失败只回滚该 agent, 引用校验, 23 张表可查, 拆挂载与关闭收尾 |
 | `plugin_multi_mount` | 真实示例插件 `example_multi_mount`: 计数与 `config_json` 按挂载隔离、重挂归零、旧引用失效 |
 | `plugin_multi_instance` | 多实例三铁律 (两个管理器各一实例) |
 | `plugin_runtime` / `plugin_cleanup` / `plugin_hooks` / `plugin_feature` / `plugin_resources` | 挂载语义下的注册可逆与清单 |

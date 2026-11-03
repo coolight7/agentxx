@@ -538,8 +538,12 @@ path/to/agentxx_test --log-level warn string_util regex
   失败/取消也发; 作业令牌独立于轮次, 由 `cancelAsyncJobs(ctx)`/`cancelAsyncJobsOfSession`
   取消; 子代理上下文继承父 hub。诊断: `KeyMetrics` 的 `events.*` 三计数 + 加载快照
   `event_hub` 段 + `--dump-diagnostics` 的 `## event hub`; 测试模块 `event_hub` /
-  `event_tools` / `event_delivery` / `event_subagent`。**未做**: 插件专用
-  `agentxx.agent.event` 接口表、`execute_command` 的 `background:true`。
+  `event_tools` / `event_delivery` / `event_subagent` / `plugin_event`。插件面接口表
+  `agentxx.agent.event` 已实现 (2026-11-03): `define_event`/`emit_value`/`end_event`/
+  `remove_event`/`query_event`/`list_events`/`register_wait`/`cancel_wait`/`list_waits`,
+  事件与等待按 `plugin:<实例名>` 记账 (禁用/卸载整批回收, 注册清单 `eventRecords`/`eventWaits`),
+  示例插件 `example_event`; **未做**: 触发器/定时器收敛到中枢、`execute_command` 的
+  `background:true`。
 - 会话运行时 (2026-10): `agentxx.agent.runtime` 表让插件挂自己的**根 agent**
   (`mount_root`: 只能放 `start`, `config_json` 给提示词/工具白名单, `mount_plugins` 给挂载策略,
   默认 `include_creator=false` 切断递归) 并在上面开**会话通道** (`open_channel` 一个

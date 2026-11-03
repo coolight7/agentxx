@@ -19,6 +19,8 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
+#include <utility>
 
 namespace agentxx {
 namespace plugin {
@@ -1601,7 +1603,7 @@ static int32_t
 //
 // 三个线程要照顾: 插件调用线程 → 主程序 io 线程 (`onInstanceIo`) → 事件中枢线程
 // (agent 的 io 线程, 中枢状态只在那里读写)。
-// - 第二次投递由 [hubCallSync] 完成: 已在中枢线程直接执行, 否则投递并等待
+// - 第二次投递由 [hubCall] 完成: 已在中枢线程直接执行, 否则投递并等待
 //   (实际装配里两者同一条线程 —— 插件管理器用的就是 agent 的 io executor);
 // - 投递类入口 (`emit_value`) 只投不取结果: 值的写入经 `EventHub::postValue`
 //   排队到中枢线程, 调用方不等待投递结果;
@@ -1619,14 +1621,30 @@ static std::shared_ptr<agentxx::events::EventHub>
     return ctx ? ctx->eventHub : nullptr;
 }
 
-/// 在事件中枢线程执行一次调用并取回结果
+/// 在事件中枢线程执行一次调用并取回结果 (失败一律换成插件可见的失败返回码)
 ///
 /// 中枢状态只能由它自己的线程读写, 因此统一经 `EventHub::callSync` 转一手:
 /// 已在那个线程时直接执行, 其它线程投递后等结果 (等的时间有上限)。
+/// - 等超时或中枢已释放时 `EventHub::callSync` 只给出默认值, 而这里的默认值 `0`
+///   恰好等于 `AGENTXX_PLUGIN_EVENT_OK`, 所以按 `completed` 判一次, 没执行就报
+///   `AGENTXX_PLUGIN_EVENT_ERR_STATE`, 不让插件把没跑成的调用当成功
+/// - 闭包按引用捕获的局部变量只在"调用方等结果期间"有效: 投递分支超时后, 那个闭包
+///   仍可能在调用方返回之后才执行。实际装配中插件管理器与中枢用同一条 io 线程
+///   (`PluginManager::detect...` 见构造处的 executor), 走的是直接执行分支
+/// - 闭包必须返回插件可见的返回码, 由下面的 `static_assert` 保证
 template<typename Fn>
-static auto hubCallSync(const std::shared_ptr<agentxx::events::EventHub>& hub, Fn&& fn)
-    -> decltype(fn(*hub)) {
-    return hub->callSync(std::forward<Fn>(fn));
+static int32_t hubCall(const std::shared_ptr<agentxx::events::EventHub>& hub, Fn&& fn) {
+    static_assert(
+        std::is_same_v<decltype(fn(std::declval<agentxx::events::EventHub&>())), int32_t>,
+        "hubCall 的闭包必须返回插件可见的返回码 (int32_t)"
+    );
+    bool       completed = false;
+    const auto rc        = hub->callSync(std::forward<Fn>(fn), &completed);
+    if (!completed) {
+        XX_LOGW("[event] event hub did not run the call (timed out or hub released)");
+        return AGENTXX_PLUGIN_EVENT_ERR_STATE;
+    }
+    return rc;
 }
 
 /// 事件中枢入口的错误码 → 插件可见的返回码 (没有中枢/已关闭)
@@ -1674,7 +1692,7 @@ static int32_t PLUGINXX_CALL xx_event_define(
                 return eventCodeOfHubFailure(hub);
             }
             const auto owner = eventOwnerOf(inst);
-            return hubCallSync(hub, [&](agentxx::events::EventHub& h) -> int32_t {
+            return hubCall(hub, [&](agentxx::events::EventHub& h) -> int32_t {
                 std::string nameErr;
                 if (!agentxx::events::naming::validateEventName(name, &nameErr)) {
                     XX_LOGW("[event] Plugin `{}` define rejected: {}", inst->name, nameErr);
@@ -1781,7 +1799,7 @@ static int32_t PLUGINXX_CALL xx_event_emit(
             const auto owner = eventOwnerOf(inst);
             // 事件还没声明过就按流式事件补一条 (归属本插件, 便于禁用时整批回收);
             // 声明走中枢线程同步完成, 值的写入随后排队 (不在调用线程等投递结果)
-            const auto rc = hubCallSync(hub, [&](agentxx::events::EventHub& h) -> int32_t {
+            const auto rc = hubCall(hub, [&](agentxx::events::EventHub& h) -> int32_t {
                 std::string nameErr;
                 if (!agentxx::events::naming::validateEventName(nameText, &nameErr)) {
                     XX_LOGW("[event] Plugin `{}` emit rejected: {}", inst->name, nameErr);
@@ -1851,7 +1869,7 @@ static int32_t PLUGINXX_CALL xx_event_end(
             if (!hub) {
                 return eventCodeOfHubFailure(hub);
             }
-            return hubCallSync(hub, [&](agentxx::events::EventHub& h) -> int32_t {
+            return hubCall(hub, [&](agentxx::events::EventHub& h) -> int32_t {
                 if (!h.queryEvent(nameText).has_value()) {
                     return AGENTXX_PLUGIN_EVENT_ERR_NOT_FOUND;
                 }
@@ -1883,7 +1901,7 @@ static int32_t PLUGINXX_CALL xx_event_remove(
             if (!hub) {
                 return eventCodeOfHubFailure(hub);
             }
-            return hubCallSync(hub, [&](agentxx::events::EventHub& h) -> int32_t {
+            return hubCall(hub, [&](agentxx::events::EventHub& h) -> int32_t {
                 if (!h.removeEvent(nameText)) {
                     return AGENTXX_PLUGIN_EVENT_ERR_NOT_FOUND;
                 }
@@ -1943,7 +1961,7 @@ static int32_t PLUGINXX_CALL xx_event_query(
             if (!hub) {
                 return eventCodeOfHubFailure(hub);
             }
-            return hubCallSync(hub, [&](agentxx::events::EventHub& h) -> int32_t {
+            return hubCall(hub, [&](agentxx::events::EventHub& h) -> int32_t {
                 const auto rec = h.queryEvent(nameText);
                 if (!rec.has_value()) {
                     return AGENTXX_PLUGIN_EVENT_ERR_NOT_FOUND;
@@ -1984,7 +2002,7 @@ static int32_t PLUGINXX_CALL xx_event_list(
             if (!hub) {
                 return eventCodeOfHubFailure(hub);
             }
-            return hubCallSync(hub, [&](agentxx::events::EventHub& h) -> int32_t {
+            return hubCall(hub, [&](agentxx::events::EventHub& h) -> int32_t {
                 text = h.listEventsJson(prefixText).dump();
                 return AGENTXX_PLUGIN_EVENT_OK;
             });
@@ -2057,7 +2075,7 @@ static int32_t PLUGINXX_CALL xx_event_register_wait(
             }
             auto specCopy  = waitSpec; // 每个挂载各自一份 (owner 不同)
             specCopy.owner = eventOwnerOf(inst);
-            return hubCallSync(hub, [&](agentxx::events::EventHub& h) -> int32_t {
+            return hubCall(hub, [&](agentxx::events::EventHub& h) -> int32_t {
                 auto result = h.watch(std::move(specCopy));
                 if (!result.has_value()) {
                     XX_LOGW(
@@ -2111,7 +2129,7 @@ static int32_t PLUGINXX_CALL xx_event_cancel_wait(
             if (!hub) {
                 return eventCodeOfHubFailure(hub);
             }
-            return hubCallSync(hub, [&](agentxx::events::EventHub& h) -> int32_t {
+            return hubCall(hub, [&](agentxx::events::EventHub& h) -> int32_t {
                 return h.cancelWait(waitId, "plugin-cancel") ? AGENTXX_PLUGIN_EVENT_OK
                                                              : AGENTXX_PLUGIN_EVENT_ERR_NOT_FOUND;
             });
@@ -2139,7 +2157,7 @@ static int32_t PLUGINXX_CALL xx_event_list_waits(
             if (!hub) {
                 return eventCodeOfHubFailure(hub);
             }
-            return hubCallSync(hub, [&](agentxx::events::EventHub& h) -> int32_t {
+            return hubCall(hub, [&](agentxx::events::EventHub& h) -> int32_t {
                 text = h.listWaitsJson(sessionText).dump();
                 return AGENTXX_PLUGIN_EVENT_OK;
             });
