@@ -238,14 +238,11 @@ public:
         lastSent_ = text;
     }
 
-    bool
-        sendPluginData(const std::string& plugin, const std::string& event, const std::string& json)
-            override {
+    bool sendPluginData(const std::string& topic, const std::string& json) override {
         std::lock_guard<std::mutex> lock(m_);
         ++dataUpCount_;
-        lastDataPlugin_ = plugin;
-        lastDataEvent_  = event;
-        lastDataJson_   = json;
+        lastDataTopic_ = topic;
+        lastDataJson_  = json;
         return true;
     }
 
@@ -367,14 +364,9 @@ public:
         return lastToastLvl_;
     }
 
-    std::string lastDataPlugin() const {
+    std::string lastDataTopic() const {
         std::lock_guard<std::mutex> lock(m_);
-        return lastDataPlugin_;
-    }
-
-    std::string lastDataEvent() const {
-        std::lock_guard<std::mutex> lock(m_);
-        return lastDataEvent_;
+        return lastDataTopic_;
     }
 
 private:
@@ -401,8 +393,7 @@ private:
     std::string        lastInfoSectionId_;
     std::string        lastToast_;
     std::string        lastSent_;
-    std::string        lastDataPlugin_;
-    std::string        lastDataEvent_;
+    std::string        lastDataTopic_;
     std::string        lastDataJson_;
     std::string        lastOverlayPlugin_;
     std::string        lastOverlayTitle_;
@@ -589,9 +580,8 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
     //        server_plugins —— agent 侧插件据此知道 client 接口集)
     mgr->onReady();
     XX_TEST_EXPECT_TRUE(adapter->dataUpCount() >= 2);
-    // 主程序接口集上报最后发出 (插件 READY 处理器先行)
-    XX_TEST_EXPECT_EQ(adapter->lastDataEvent(), "client_interfaces");
-    XX_TEST_EXPECT_EQ(adapter->lastDataPlugin(), "agentxx_host");
+    // 主程序接口集上报最后发出 (插件 READY 处理器先行); 主题为 client 端约定全名
+    XX_TEST_EXPECT_EQ(adapter->lastDataTopic(), "agentxx.client.host.client_interfaces");
 
     // TURN_END: 状态栏项文本更新 (turns: 1)
     {
@@ -632,9 +622,8 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
     // PLUGIN_DATA: 面板内容更新 (adapter onPanelUpdated)
     {
         agentxx::agent::WirePluginData d;
-        d.plugin = "example_plugin";
-        d.event  = "progress";
-        d.data   = R"({"done":1})";
+        d.topic = "plugin.example_plugin.progress";
+        d.data  = R"({"done":1})";
         mgr->onPluginData(d);
     }
     XX_TEST_EXPECT_TRUE(adapter->panelUpdated() >= 1);
@@ -659,13 +648,25 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
     {
         const auto wire = agentxx::plugin::ClientIfaces::query(inst->hostView()).wire;
         XX_TEST_EXPECT_TRUE(wire != nullptr && wire->send_plugin_data != nullptr);
-        auto evtSv = agentxx::plugin::PluginStringView::fromCstr("rebuild");
+        // 主题写全名: `agentxx.client.plugin.<本实例插件名>.<事件>`
+        auto evtSv = agentxx::plugin::PluginStringView::fromCstr(
+            "agentxx.client.plugin.example_plugin.rebuild"
+        );
         auto paySv = agentxx::plugin::PluginStringView::fromCstr(R"({"x":1})");
         int  rc    = wire ? wire->send_plugin_data(inst->hostView(), &evtSv, &paySv) : -1;
         XX_TEST_EXPECT_EQ(rc, 0);
     }
     XX_TEST_EXPECT_TRUE(adapter->dataUpCount() >= 2);
-    XX_TEST_EXPECT_EQ(adapter->lastDataEvent(), "rebuild");
+    XX_TEST_EXPECT_EQ(adapter->lastDataTopic(), "agentxx.client.plugin.example_plugin.rebuild");
+
+    // 不在自己那一族里的主题被拒 (框架只校验不补前缀)
+    {
+        const auto wire = agentxx::plugin::ClientIfaces::query(inst->hostView()).wire;
+        auto       badSv = agentxx::plugin::PluginStringView::fromCstr("rebuild");
+        auto       paySv = agentxx::plugin::PluginStringView::fromCstr("{}");
+        int        rc    = wire ? wire->send_plugin_data(inst->hostView(), &badSv, &paySv) : -1;
+        XX_TEST_EXPECT_TRUE(rc != 0);
+    }
 
     // ---- 6. disable / enable ----
     mgr->disable("example_plugin");
@@ -974,8 +975,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
     //   断言日志, 仅验证路径安全)
     {
         agentxx::agent::WirePluginData d;
-        d.plugin = "agentxx_host";
-        d.event  = "server_plugins";
+        d.topic = "agentxx.agent.host.server_plugins";
         d.data
             = R"({"plugins":[)"
               R"({"name":"agentxx_codegraph","version":"1.0.0","interfaces":["agentxx.agent.core"]},)"
@@ -990,8 +990,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
 
         // 非法载荷: 保留旧值, 不崩溃
         agentxx::agent::WirePluginData bad;
-        bad.plugin = "agentxx_host";
-        bad.event  = "server_plugins";
+        bad.topic = "agentxx.agent.host.server_plugins";
         bad.data   = "not-json";
         mgr->onPluginData(bad);
         auto stateJson2 = mgr->clientStateJson();
@@ -999,8 +998,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
 
         // 无订阅者路径 (当前无任何已加载插件): 安全
         agentxx::agent::WirePluginData orphan;
-        orphan.plugin = "some_plugin";
-        orphan.event  = "progress";
+        orphan.topic = "plugin.some_plugin.progress";
         orphan.data   = R"({})";
         mgr->onPluginData(orphan);
     }
@@ -1170,8 +1168,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
 
             // status 事件: 新版 Append 段风格仅显示 “|- wait for index” (已加载但无进度时)
             agentxx::agent::WirePluginData st;
-            st.plugin = "agentxx_codegraph";
-            st.event  = "status";
+            st.topic = "plugin.agentxx_codegraph.status";
             st.data   = R"({"loaded":true,"project_root":"/workspace/test_proj"})";
             mgr->onPluginData(st);
 
@@ -1186,8 +1183,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
 
             // progress 事件 (进行中): 新版为 “|- indexing 25% (25/100)” + progress 条 + 文件名
             agentxx::agent::WirePluginData prog;
-            prog.plugin = "agentxx_codegraph";
-            prog.event  = "progress";
+            prog.topic = "plugin.agentxx_codegraph.progress";
             prog.data   = R"({"processed":25,"total":100,"current_file":"src/main.cpp"})";
             mgr->onPluginData(prog);
 
@@ -1209,8 +1205,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
 
             // progress 事件 (完成): 新版为 “|- available · 100”
             agentxx::agent::WirePluginData progDone;
-            progDone.plugin = "agentxx_codegraph";
-            progDone.event  = "progress";
+            progDone.topic = "plugin.agentxx_codegraph.progress";
             progDone.data   = R"({"processed":100,"total":100,"current_file":""})";
             mgr->onPluginData(progDone);
 
@@ -1248,8 +1243,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
 
             // usage 事件: Append 段风格为 “|- CPU 36% · 12x” / “|- RAM 52% · 8G/16G” / “|- GPU 42%”
             agentxx::agent::WirePluginData usage;
-            usage.plugin = "agentxx_system_monitor";
-            usage.event  = "usage";
+            usage.topic = "plugin.agentxx_system_monitor.usage";
             usage.data
                 = R"({"cpu":35.5,"cpu_cores":12,"mem_percent":52.0,"mem_used_mb":8192,"mem_total_mb":16384,"gpus":[{"name":"NVIDIA RTX 4090","dedicated_vram_mb":24576,"dedicated_vram_used_mb":6144,"usage_percent":42.0}]})";
             mgr->onPluginData(usage);
@@ -1346,8 +1340,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     R"("stats":{"received":12,"sent":5,"failed":1}})"
                 };
                 agentxx::agent::WirePluginData panelData;
-                panelData.plugin = "agentxx_chatbot";
-                panelData.event  = "panel";
+                panelData.topic = "plugin.agentxx_chatbot.panel";
                 panelData.data   = snapshot;
                 mgr->onPluginData(panelData);
 
@@ -1387,8 +1380,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
 
                 // 坏载荷不能清掉已有内容 (面板停在上一份快照)
                 agentxx::agent::WirePluginData broken;
-                broken.plugin = "agentxx_chatbot";
-                broken.event  = "panel";
+                broken.topic = "plugin.agentxx_chatbot.panel";
                 broken.data   = "not-json";
                 mgr->onPluginData(broken);
                 reg = mgr->uiRegistrySnapshot();
@@ -1404,8 +1396,10 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 const int upBefore = adapter->dataUpCount();
                 mgr->onConnStateChanged("connected", "100%");
                 XX_TEST_EXPECT_TRUE(adapter->dataUpCount() > upBefore);
-                XX_TEST_EXPECT_EQ(adapter->lastDataPlugin(), std::string{"agentxx_chatbot"});
-                XX_TEST_EXPECT_EQ(adapter->lastDataEvent(), std::string{"refresh"});
+                XX_TEST_EXPECT_EQ(
+                    adapter->lastDataTopic(),
+                    std::string{"agentxx.client.plugin.agentxx_chatbot.refresh"}
+                );
 
                 // 卸载: 面板随之撤销
                 co_await mgr->unloadAsync("agentxx_chatbot");
@@ -1426,8 +1420,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         if (plInst) {
             // 14.1 规划事件推送 -> Info 栏段落更新
             agentxx::agent::WirePluginData plData;
-            plData.plugin = "agentxx_planning";
-            plData.event  = "planning";
+            plData.topic = "plugin.agentxx_planning.planning";
             plData.data
                 = R"({"roadmap":"stateDiagram-v2\n[*] --> step1\nstep1 --> [*]","todos":[{"state":"in_progress","content":"do step 1","summary":"doing step 1"},{"state":"completed","content":"done step 0"}],"notes":"test note 123"})";
             mgr->onPluginData(plData);
@@ -2279,8 +2272,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         if (plInst) {
             // 先推送规划 (Info 段 + last_plan_json 就绪)
             agentxx::agent::WirePluginData plData;
-            plData.plugin = "agentxx_planning";
-            plData.event  = "planning";
+            plData.topic = "plugin.agentxx_planning.planning";
             plData.data   = R"({"roadmap":"stateDiagram-v2\n[*] --> e2e\ne2e --> [*]","todos":[]})";
             mgr->onPluginData(plData);
             const int openBefore = adapter->overlayOpenCount();

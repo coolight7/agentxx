@@ -92,7 +92,7 @@ std::string findPluginDir(const char* pluginName) {
 struct Fixture {
     std::shared_ptr<agentxx::agent::AgentContext>   ctx;
     std::shared_ptr<agentxx::plugin::PluginManager> mgr;
-    /// 上下文核心点 (`agentxx.context.countTokens` / `summarize`)
+    /// 上下文核心点 (`agentxx.agent.context.countTokens` / `summarize`)
     agentxx::feature::ContextPoints points;
 };
 
@@ -312,7 +312,7 @@ asio::awaitable<void> test_declaration_and_inventory() {
         XX_TEST_EXPECT_TRUE(listJson.find("plugin.example_feature.beat") != std::string::npos);
         XX_TEST_EXPECT_TRUE(listJson.find("plugin.example_feature.tooslow") != std::string::npos);
         XX_TEST_EXPECT_TRUE(listJson.find("plugin:example_feature") != std::string::npos);
-        XX_TEST_EXPECT_TRUE(listJson.find("agentxx.context.countTokens") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(listJson.find("agentxx.agent.context.countTokens") != std::string::npos);
     }
 
     XX_TEST_EXPECT_TRUE(co_await f.mgr->unloadAsync("example_feature", std::chrono::seconds{5}));
@@ -484,7 +484,7 @@ asio::awaitable<void> test_call_point_paths() {
     // (5) 强类型核心点: 不接受按名调用 (受理即被拒, 不会进链)
     {
         auto out
-            = co_await callPoint(f, caller.get(), "agentxx.context.countTokens", R"({"text":"x"})");
+            = co_await callPoint(f, caller.get(), "agentxx.agent.context.countTokens", R"({"text":"x"})");
         XX_TEST_EXPECT_FALSE(out.accepted);
         XX_TEST_EXPECT_TRUE(out.acceptError.find("不接受按名调用") != std::string::npos);
     }
@@ -507,8 +507,8 @@ asio::awaitable<void> test_call_point_paths() {
 
     // (7) 点存在但没人给值: 受理成功, 结果是 no_impl
     {
-        declareHostPoint(f, "host.test.no_impl");
-        auto out = co_await callPoint(f, caller.get(), "host.test.no_impl", "{}");
+        declareHostPoint(f, "agentxx.agent.host.test.no_impl");
+        auto out = co_await callPoint(f, caller.get(), "agentxx.agent.host.test.no_impl", "{}");
         XX_TEST_EXPECT_TRUE(out.accepted);
         XX_TEST_EXPECT_TRUE(out.finished);
         XX_TEST_EXPECT_FALSE(out.ok);
@@ -517,7 +517,7 @@ asio::awaitable<void> test_call_point_paths() {
 
     // (8) 实现显式置空: 结果是 disabled, 并带上实现给的原因
     {
-        auto& point = declareHostPoint(f, "host.test.disable");
+        auto& point = declareHostPoint(f, "agentxx.agent.host.test.disable");
         XX_TEST_EXPECT_EQ(
             addSyncPluginImpl(
                 point,
@@ -526,7 +526,7 @@ asio::awaitable<void> test_call_point_paths() {
             ),
             0
         );
-        auto out = co_await callPoint(f, caller.get(), "host.test.disable", "{}");
+        auto out = co_await callPoint(f, caller.get(), "agentxx.agent.host.test.disable", "{}");
         XX_TEST_EXPECT_TRUE(out.accepted);
         XX_TEST_EXPECT_FALSE(out.ok);
         XX_TEST_EXPECT_EQ(out.error, std::string{"disabled"});
@@ -554,7 +554,7 @@ asio::awaitable<void> test_call_busy_protection() {
     }
 
     // 一个"等外部放开才给值"的插件层实现: 第一次调用会一直挂在闸门上
-    auto& point = declareHostPoint(f, "host.test.gate");
+    auto& point = declareHostPoint(f, "agentxx.agent.host.test.gate");
     auto  ex    = co_await asio::this_coro::executor;
 
     struct Gate {
@@ -583,7 +583,7 @@ asio::awaitable<void> test_call_busy_protection() {
     CallProbe      second;
     PluginxxString err1{nullptr, 0};
     PluginxxString err2{nullptr, 0};
-    auto           pointSv = agentxx::plugin::PluginStringView::from("host.test.gate");
+    auto           pointSv = agentxx::plugin::PluginStringView::from("agentxx.agent.host.test.gate");
     auto           argsSv  = agentxx::plugin::PluginStringView::from("{}");
     auto* h1 = f.ctx->pluginMount->callFeatureAsync(inst.get(), pointSv, argsSv, &onFeatureCall, &first, &err1);
     XX_TEST_EXPECT_TRUE(h1 != nullptr);

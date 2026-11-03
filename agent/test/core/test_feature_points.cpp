@@ -879,7 +879,7 @@ asio::awaitable<void> test_context_count_tokens_point() {
     XX_TEST_EXPECT_TRUE(r2.fromCache);
 
     // 插件实现替换核心实现: 核心 ask 拿到插件给的值, by 是 plugin:<名>
-    registry.addImpl("agentxx.context.countTokens", jsonImpl("plugin:tok", 0, [](std::string) {
+    registry.addImpl("agentxx.agent.context.countTokens", jsonImpl("plugin:tok", 0, [](std::string) {
                          return std::string{R"({"value":{"tokens":123456}})"};
                      }));
     auto r3 = co_await points.countTokens->ask(req, agentxx::feature::AskOptions{.refresh = true});
@@ -887,7 +887,7 @@ asio::awaitable<void> test_context_count_tokens_point() {
     XX_TEST_EXPECT_EQ(r3.by, std::string{"plugin:tok"});
 
     // 摘除后回到核心实现
-    registry.removeImpl("agentxx.context.countTokens", "plugin:tok");
+    registry.removeImpl("agentxx.agent.context.countTokens", "plugin:tok");
     auto r4 = co_await points.countTokens->ask(req, agentxx::feature::AskOptions{.refresh = true});
     XX_TEST_EXPECT_EQ((r4.ok() ? r4.value->tokens : -1), int64_t{2});
 
@@ -962,7 +962,7 @@ asio::awaitable<void> test_plugin_points() {
     agentxx::feature::PluginPointDecl bad = decl;
     bad.id                                = "plugin.other_plugin.beat";
     XX_TEST_EXPECT_EQ(registry.definePluginPoint(bad), -1);
-    bad.id = "agentxx.context.countTokens";
+    bad.id = "agentxx.agent.context.countTokens";
     XX_TEST_EXPECT_EQ(registry.definePluginPoint(bad), -1);
     bad.id = "plugin.my_plugin.";
     XX_TEST_EXPECT_EQ(registry.definePluginPoint(bad), -1);
@@ -996,7 +996,7 @@ asio::awaitable<void> test_plugin_points() {
 
 /// 同步快路径与功能点取值必须是同一份实现 (一份规则, 两个入口)
 /// - 压缩中间件上的 `countTokens` / `countTokensForUtf8Str` 供 TPS 与内部裁剪同步调用;
-///   功能点 `agentxx.context.countTokens` 供预算计算与插件调用
+///   功能点 `agentxx.agent.context.countTokens` 供预算计算与插件调用
 /// - 这条测试守住"估算规则只写一次": 两边结果必须相等
 asio::awaitable<void> test_sync_path_matches_point() {
     auto ctx         = std::make_shared<agentxx::agent::AgentContext>();

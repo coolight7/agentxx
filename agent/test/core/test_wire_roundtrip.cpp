@@ -579,22 +579,18 @@ TestResult testWireRoundtrip() {
 
     {
         WirePluginData p;
-        p.plugin  = "agentxx_codegraph";
-        p.event   = "status";
+        p.topic   = "plugin.agentxx_codegraph.status";
         p.data    = R"({"ok":true})";
         auto back = roundTrip(p);
-        XX_TEST_EXPECT_EQ(back.plugin, std::string{"agentxx_codegraph"});
-        XX_TEST_EXPECT_EQ(back.event, std::string{"status"});
+        XX_TEST_EXPECT_EQ(back.topic, std::string{"plugin.agentxx_codegraph.status"});
         XX_TEST_EXPECT_EQ(back.data, std::string{R"({"ok":true})"});
     }
     {
         WirePluginDataUp p;
-        p.plugin  = "agentxx_host";
-        p.event   = "client_interfaces";
+        p.topic   = "agentxx.client.host.client_interfaces";
         p.data    = R"({"interfaces":["ui"]})";
         auto back = roundTrip(p);
-        XX_TEST_EXPECT_EQ(back.plugin, std::string{"agentxx_host"});
-        XX_TEST_EXPECT_EQ(back.event, std::string{"client_interfaces"});
+        XX_TEST_EXPECT_EQ(back.topic, std::string{"agentxx.client.host.client_interfaces"});
         XX_TEST_EXPECT_EQ(back.data, std::string{R"({"interfaces":["ui"]})"});
     }
 

@@ -115,6 +115,15 @@ bool contains(std::string_view hay, std::string_view needle) {
     return hay.find(needle) != std::string_view::npos;
 }
 
+/// 内置值事件全名前缀: 中枢事件名就是总线主题, 内置源统一在 `agentxx.agent.event.` 段
+inline constexpr std::string_view kEvtPrefix = agentxx::events::naming::kAgentEventPrefix;
+
+/// 拼一个内置值事件全名 (`agentxx.agent.event.<rest>`)
+/// - 名字必须写全 (框架只校验不补前缀), 所以测试里统一经这个 helper 拼
+std::string ev(std::string_view rest) {
+    return std::string{kEvtPrefix} + std::string{rest};
+}
+
 /// 一次性取走会话里待注入的事件输入正文
 std::vector<std::string> takeEventInputs(const std::shared_ptr<agentxx::agent::Session>& session) {
     std::vector<std::string> out;
@@ -135,7 +144,7 @@ asio::awaitable<void> test_hub_record_statemachine() {
     auto& hub = *fx->hub;
 
     EventDefineSpec spec;
-    spec.name         = "build.done";
+    spec.name         = ev("build.done");
     spec.kind         = EventKind::Stream;
     spec.owner        = "test";
     spec.description  = "build finished";
@@ -145,9 +154,9 @@ asio::awaitable<void> test_hub_record_statemachine() {
 
     XX_TEST_EXPECT_TRUE(hub.eventCount() == 1);
 
-    XX_TEST_EXPECT_TRUE(hub.publishValue("build.done", Json{{"ok", true}}, &err));
+    XX_TEST_EXPECT_TRUE(hub.publishValue(ev("build.done"), Json{{"ok", true}}, &err));
     {
-        auto rec = hub.queryEvent("build.done");
+        auto rec = hub.queryEvent(ev("build.done"));
         XX_TEST_EXPECT_TRUE(rec.has_value());
         XX_TEST_EXPECT_TRUE(rec->published == 1);
         XX_TEST_EXPECT_TRUE(rec->history.size() == 1);
@@ -156,34 +165,34 @@ asio::awaitable<void> test_hub_record_statemachine() {
         XX_TEST_EXPECT_TRUE(rec->owner == "test");
     }
 
-    XX_TEST_EXPECT_TRUE(hub.publishValue("build.done", Json(2), &err));
-    XX_TEST_EXPECT_TRUE(hub.publishValue("build.done", Json(3), &err));
+    XX_TEST_EXPECT_TRUE(hub.publishValue(ev("build.done"), Json(2), &err));
+    XX_TEST_EXPECT_TRUE(hub.publishValue(ev("build.done"), Json(3), &err));
     {
-        auto rec = hub.queryEvent("build.done");
+        auto rec = hub.queryEvent(ev("build.done"));
         // historyLimit=2: 最旧被丢, 计数可见
         XX_TEST_EXPECT_TRUE(rec->history.size() == 2);
         XX_TEST_EXPECT_TRUE(rec->droppedForHistory == 1);
         XX_TEST_EXPECT_TRUE(rec->published == 3);
     }
 
-    XX_TEST_EXPECT_TRUE(hub.endEvent("build.done", Json{{"summary", "done"}}, &err));
+    XX_TEST_EXPECT_TRUE(hub.endEvent(ev("build.done"), Json{{"summary", "done"}}, &err));
     {
-        auto rec = hub.queryEvent("build.done");
+        auto rec = hub.queryEvent(ev("build.done"));
         XX_TEST_EXPECT_TRUE(rec->state == EventState::Ended);
         XX_TEST_EXPECT_TRUE(rec->endedAtMs > 0);
     }
     // 幂等: 第二次 end 是 no-op
-    XX_TEST_EXPECT_TRUE(hub.endEvent("build.done", Json{}, &err));
+    XX_TEST_EXPECT_TRUE(hub.endEvent(ev("build.done"), Json{}, &err));
     // 未知事件: 明确报错
-    XX_TEST_EXPECT_FALSE(hub.endEvent("no.such.event", Json{}, &err));
+    XX_TEST_EXPECT_FALSE(hub.endEvent(ev("no.such.event"), Json{}, &err));
     XX_TEST_EXPECT_TRUE(contains(err, "not found"));
 
     // end 之后再来的值把记录重新打开 (流式事件允许续上)
-    XX_TEST_EXPECT_TRUE(hub.publishValue("build.done", Json(4), &err));
-    XX_TEST_EXPECT_TRUE(hub.queryEvent("build.done")->state == EventState::Open);
+    XX_TEST_EXPECT_TRUE(hub.publishValue(ev("build.done"), Json(4), &err));
+    XX_TEST_EXPECT_TRUE(hub.queryEvent(ev("build.done"))->state == EventState::Open);
 
-    XX_TEST_EXPECT_TRUE(hub.removeEvent("build.done"));
-    XX_TEST_EXPECT_FALSE(hub.queryEvent("build.done").has_value());
+    XX_TEST_EXPECT_TRUE(hub.removeEvent(ev("build.done")));
+    XX_TEST_EXPECT_FALSE(hub.queryEvent(ev("build.done")).has_value());
     co_return;
 }
 
@@ -193,19 +202,19 @@ asio::awaitable<void> test_hub_single_event() {
     auto& hub = *fx->hub;
 
     EventDefineSpec spec;
-    spec.name = "job.result";
+    spec.name = ev("job.result");
     spec.kind = EventKind::Single;
     std::string err;
     XX_TEST_EXPECT_TRUE(hub.define(spec, &err));
-    XX_TEST_EXPECT_TRUE(hub.publishValue("job.result", Json{{"n", 1}}, &err));
+    XX_TEST_EXPECT_TRUE(hub.publishValue(ev("job.result"), Json{{"n", 1}}, &err));
     {
-        auto rec = hub.queryEvent("job.result");
+        auto rec = hub.queryEvent(ev("job.result"));
         XX_TEST_EXPECT_TRUE(rec->state == EventState::Ended);
         XX_TEST_EXPECT_TRUE(rec->published == 1);
     }
-    XX_TEST_EXPECT_TRUE(hub.publishValue("job.result", Json{{"n", 2}}, &err));
+    XX_TEST_EXPECT_TRUE(hub.publishValue(ev("job.result"), Json{{"n", 2}}, &err));
     {
-        auto rec = hub.queryEvent("job.result");
+        auto rec = hub.queryEvent(ev("job.result"));
         XX_TEST_EXPECT_TRUE(rec->overwritten == 1);
         XX_TEST_EXPECT_TRUE(rec->history.size() == 1);
         XX_TEST_EXPECT_TRUE(rec->history.back()["n"].get<int>() == 2);
@@ -213,14 +222,14 @@ asio::awaitable<void> test_hub_single_event() {
 
     // 同名不同 kind: 拒绝, 且不影响已有记录
     EventDefineSpec conflict;
-    conflict.name = "job.result";
+    conflict.name = ev("job.result");
     conflict.kind = EventKind::Stream;
     XX_TEST_EXPECT_FALSE(hub.define(conflict, &err));
     XX_TEST_EXPECT_TRUE(contains(err, "different kind"));
     co_return;
 }
 
-/// 3. 名字校验: 空 / 保留前缀 / 非法字符
+/// 3. 名字校验: 空 / 非法字符 / 不在三族里 (名字必须写全, 框架不补前缀)
 asio::awaitable<void> test_hub_name_validation() {
     auto  fx  = co_await makeFixture();
     auto& hub = *fx->hub;
@@ -228,13 +237,17 @@ asio::awaitable<void> test_hub_name_validation() {
     std::string err;
     XX_TEST_EXPECT_FALSE(hub.publishValue("", Json{}, &err));
     XX_TEST_EXPECT_TRUE(contains(err, "empty"));
-    XX_TEST_EXPECT_FALSE(hub.publishValue("agent.turn.start", Json{}, &err));
-    XX_TEST_EXPECT_TRUE(contains(err, "reserved"));
+    // 裸名/强类型主题不是值事件: 拒绝
+    XX_TEST_EXPECT_FALSE(hub.publishValue("turn.start", Json{}, &err));
+    XX_TEST_EXPECT_TRUE(contains(err, "agentxx.agent.event."));
+    XX_TEST_EXPECT_FALSE(hub.publishValue("agentxx.agent.turn.start", Json{}, &err));
     XX_TEST_EXPECT_FALSE(hub.publishValue("has space", Json{}, &err));
     XX_TEST_EXPECT_TRUE(contains(err, "may only contain"));
     XX_TEST_EXPECT_FALSE(hub.publishValue(std::string(200, 'a'), Json{}, &err));
     XX_TEST_EXPECT_TRUE(contains(err, "too long"));
-    XX_TEST_EXPECT_TRUE(hub.publishValue("ok.name_1-x", Json{}, &err));
+    XX_TEST_EXPECT_TRUE(hub.publishValue(ev("ok.name_1-x"), Json{}, &err));
+    // 插件族同样可以写 (写侧由插件面接口表按插件名校验)
+    XX_TEST_EXPECT_TRUE(hub.publishValue("plugin.demo.ok", Json{}, &err));
     co_return;
 }
 
@@ -243,12 +256,12 @@ asio::awaitable<void> test_hub_replay() {
     auto  fx  = co_await makeFixture();
     auto& hub = *fx->hub;
     std::string err;
-    XX_TEST_EXPECT_TRUE(hub.publishValue("chat.msg", Json("hello"), &err));
+    XX_TEST_EXPECT_TRUE(hub.publishValue(ev("chat.msg"), Json("hello"), &err));
 
     // first: 立即满足并投递 (轮次在跑 → 待注入输入)
     fx->sink->busy = true;
     EventWaitSpec spec;
-    spec.event         = "chat.msg";
+    spec.event         = ev("chat.msg");
     spec.mode          = "first";
     spec.originSession = fx->sessionId;
     auto wait = hub.watch(spec);
@@ -258,7 +271,7 @@ asio::awaitable<void> test_hub_replay() {
     {
         auto inputs = takeEventInputs(fx->session);
         XX_TEST_EXPECT_TRUE(inputs.size() == 1);
-        XX_TEST_EXPECT_TRUE(contains(inputs.front(), "[Event] chat.msg (first)"));
+        XX_TEST_EXPECT_TRUE(contains(inputs.front(), "[Event] " + ev("chat.msg") + " (first)"));
         XX_TEST_EXPECT_TRUE(contains(inputs.front(), "wait: w-"));
         XX_TEST_EXPECT_TRUE(contains(inputs.front(), "status: value"));
         XX_TEST_EXPECT_TRUE(contains(inputs.front(), "value: hello"));
@@ -281,15 +294,15 @@ asio::awaitable<void> test_hub_mode_each() {
     std::string err;
 
     EventWaitSpec spec;
-    spec.event         = "chat.stream";
+    spec.event         = ev("chat.stream");
     spec.mode          = "each";
     spec.originSession = fx->sessionId;
     auto wait          = hub.watch(spec);
     XX_TEST_EXPECT_TRUE(wait.has_value());
     XX_TEST_EXPECT_TRUE(wait->state == WaitState::Armed);
 
-    XX_TEST_EXPECT_TRUE(hub.publishValue("chat.stream", Json("a"), &err));
-    XX_TEST_EXPECT_TRUE(hub.publishValue("chat.stream", Json("b"), &err));
+    XX_TEST_EXPECT_TRUE(hub.publishValue(ev("chat.stream"), Json("a"), &err));
+    XX_TEST_EXPECT_TRUE(hub.publishValue(ev("chat.stream"), Json("b"), &err));
     {
         auto inputs = takeEventInputs(fx->session);
         XX_TEST_EXPECT_TRUE(inputs.size() == 2);
@@ -301,7 +314,7 @@ asio::awaitable<void> test_hub_mode_each() {
         XX_TEST_EXPECT_TRUE(stored->state == WaitState::Armed);
         XX_TEST_EXPECT_TRUE(stored->deliveries == 2);
     }
-    XX_TEST_EXPECT_TRUE(hub.endEvent("chat.stream", Json{}, &err));
+    XX_TEST_EXPECT_TRUE(hub.endEvent(ev("chat.stream"), Json{}, &err));
     {
         auto stored = hub.queryWait(wait->waitId);
         XX_TEST_EXPECT_TRUE(stored->state == WaitState::Satisfied);
@@ -318,18 +331,18 @@ asio::awaitable<void> test_hub_mode_all() {
     std::string err;
 
     EventWaitSpec spec;
-    spec.event         = "batch.done";
+    spec.event         = ev("batch.done");
     spec.mode          = "all";
     spec.originSession = fx->sessionId;
     spec.maxItems      = 4;
     auto wait          = hub.watch(spec);
     XX_TEST_EXPECT_TRUE(wait->state == WaitState::Armed);
 
-    XX_TEST_EXPECT_TRUE(hub.publishValue("batch.done", Json(1), &err));
-    XX_TEST_EXPECT_TRUE(hub.publishValue("batch.done", Json(2), &err));
+    XX_TEST_EXPECT_TRUE(hub.publishValue(ev("batch.done"), Json(1), &err));
+    XX_TEST_EXPECT_TRUE(hub.publishValue(ev("batch.done"), Json(2), &err));
     XX_TEST_EXPECT_TRUE(takeEventInputs(fx->session).empty());
 
-    XX_TEST_EXPECT_TRUE(hub.endEvent("batch.done", Json{}, &err));
+    XX_TEST_EXPECT_TRUE(hub.endEvent(ev("batch.done"), Json{}, &err));
     {
         auto inputs = takeEventInputs(fx->session);
         XX_TEST_EXPECT_TRUE(inputs.size() == 1);
@@ -342,12 +355,12 @@ asio::awaitable<void> test_hub_mode_all() {
 
     // 达到 max_items 时先投一次, 之后继续累积
     EventWaitSpec capped = spec;
-    capped.event         = "batch.capped";
+    capped.event         = ev("batch.capped");
     capped.maxItems      = 2;
     auto wait2           = hub.watch(capped);
     XX_TEST_EXPECT_TRUE(wait2->state == WaitState::Armed);
-    XX_TEST_EXPECT_TRUE(hub.publishValue("batch.capped", Json(1), &err));
-    XX_TEST_EXPECT_TRUE(hub.publishValue("batch.capped", Json(2), &err));
+    XX_TEST_EXPECT_TRUE(hub.publishValue(ev("batch.capped"), Json(1), &err));
+    XX_TEST_EXPECT_TRUE(hub.publishValue(ev("batch.capped"), Json(2), &err));
     {
         auto inputs = takeEventInputs(fx->session);
         XX_TEST_EXPECT_TRUE(inputs.size() == 1);
@@ -364,11 +377,11 @@ asio::awaitable<void> test_hub_watch_ended_event() {
     fx->sink->busy   = true;
     std::string err;
 
-    XX_TEST_EXPECT_TRUE(hub.define(EventDefineSpec{.name = "empty.stream"}, &err));
-    XX_TEST_EXPECT_TRUE(hub.endEvent("empty.stream", Json{}, &err));
+    XX_TEST_EXPECT_TRUE(hub.define(EventDefineSpec{.name = ev("empty.stream")}, &err));
+    XX_TEST_EXPECT_TRUE(hub.endEvent(ev("empty.stream"), Json{}, &err));
 
     EventWaitSpec spec;
-    spec.event         = "empty.stream";
+    spec.event         = ev("empty.stream");
     spec.mode          = "first";
     spec.originSession = fx->sessionId;
     spec.replay        = false;
@@ -383,8 +396,8 @@ asio::awaitable<void> test_hub_watch_ended_event() {
     }
 
     // 流式带值: stream-ended
-    XX_TEST_EXPECT_TRUE(hub.publishValue("empty.stream", Json("x"), &err));
-    XX_TEST_EXPECT_TRUE(hub.endEvent("empty.stream", Json{}, &err));
+    XX_TEST_EXPECT_TRUE(hub.publishValue(ev("empty.stream"), Json("x"), &err));
+    XX_TEST_EXPECT_TRUE(hub.endEvent(ev("empty.stream"), Json{}, &err));
     EventWaitSpec allSpec = spec;
     allSpec.mode          = "all";
     allSpec.replay        = false;
@@ -412,12 +425,12 @@ asio::awaitable<void> test_hub_budgets() {
     fx->sink->busy   = true;
     std::string err;
 
-    XX_TEST_EXPECT_TRUE(hub.define(EventDefineSpec{.name = "one.event"}, &err));
-    XX_TEST_EXPECT_FALSE(hub.define(EventDefineSpec{.name = "two.event"}, &err));
+    XX_TEST_EXPECT_TRUE(hub.define(EventDefineSpec{.name = ev("one.event")}, &err));
+    XX_TEST_EXPECT_FALSE(hub.define(EventDefineSpec{.name = ev("two.event")}, &err));
     XX_TEST_EXPECT_TRUE(contains(err, "too many events"));
 
     EventWaitSpec spec;
-    spec.event         = "one.event";
+    spec.event         = ev("one.event");
     spec.originSession = fx->sessionId;
     spec.delivery      = "none";
     XX_TEST_EXPECT_TRUE(hub.watch(spec).has_value());
@@ -438,7 +451,7 @@ asio::awaitable<void> test_hub_budgets() {
     auto  fx2  = co_await makeFixture(cfg2);
     auto& hub2 = *fx2->hub;
     EventWaitSpec spec2;
-    spec2.event         = "a.event";
+    spec2.event         = ev("a.event");
     spec2.originSession = fx2->sessionId;
     spec2.delivery      = "none";
     XX_TEST_EXPECT_TRUE(hub2.watch(spec2).has_value());
@@ -455,7 +468,7 @@ asio::awaitable<void> test_hub_cancel_and_close() {
     std::string err;
 
     EventWaitSpec spec;
-    spec.event         = "cancel.me";
+    spec.event         = ev("cancel.me");
     spec.originSession = fx->sessionId;
     spec.delivery      = "none";
 
@@ -476,7 +489,7 @@ asio::awaitable<void> test_hub_cancel_and_close() {
     XX_TEST_EXPECT_TRUE(hub.closed());
     XX_TEST_EXPECT_TRUE(hub.queryWait(w3->waitId)->state == WaitState::Canceled);
     // 关闭后一切发布都被拒
-    XX_TEST_EXPECT_FALSE(hub.publishValue("cancel.me", Json(1), &err));
+    XX_TEST_EXPECT_FALSE(hub.publishValue(ev("cancel.me"), Json(1), &err));
     XX_TEST_EXPECT_TRUE(contains(err, "closed"));
     XX_TEST_EXPECT_FALSE(hub.watch(spec).has_value());
     co_return;
@@ -582,13 +595,13 @@ asio::awaitable<void> test_hub_await_once() {
         [hubPtr = fx->hub]() -> asio::awaitable<void> {
             co_await sleepMs(60);
             std::string ignored;
-            hubPtr->publishValue("await.me", Json{{"v", 7}}, &ignored);
+            hubPtr->publishValue(ev("await.me"), Json{{"v", 7}}, &ignored);
             co_return;
         },
         asio::detached
     );
     EventWaitSpec spec;
-    spec.event         = "await.me";
+    spec.event         = ev("await.me");
     spec.mode          = "first";
     spec.originSession = fx->sessionId;
     spec.timeout       = std::chrono::milliseconds{2000};
@@ -603,7 +616,7 @@ asio::awaitable<void> test_hub_await_once() {
 
     // 超时
     EventWaitSpec timeoutSpec;
-    timeoutSpec.event         = "never.arrives";
+    timeoutSpec.event         = ev("never.arrives");
     timeoutSpec.originSession = fx->sessionId;
     timeoutSpec.timeout       = std::chrono::milliseconds{120};
     const auto begin          = std::chrono::steady_clock::now();
@@ -628,7 +641,7 @@ asio::awaitable<void> test_hub_await_once() {
         asio::detached
     );
     EventWaitSpec cancelSpec;
-    cancelSpec.event         = "cancel.me.out";
+    cancelSpec.event         = ev("cancel.me.out");
     cancelSpec.originSession = fx->sessionId;
     cancelSpec.timeout       = std::chrono::milliseconds{5000};
     bool Canceled           = false;
@@ -650,7 +663,8 @@ asio::awaitable<void> test_hub_timer_source() {
     fx->sink->busy = true;
 
     EventWaitSpec spec;
-    spec.event         = "timer.tick";
+    // 定时源事件名: `agentxx.agent.event.timer.<名字>`
+    spec.event         = ev("timer.tick");
     spec.mode          = "each";
     spec.originSession = fx->sessionId;
     auto wait          = hub.watch(spec);
@@ -664,7 +678,7 @@ asio::awaitable<void> test_hub_timer_source() {
     {
         auto inputs = takeEventInputs(fx->session);
         XX_TEST_EXPECT_TRUE(inputs.size() == 1);
-        XX_TEST_EXPECT_TRUE(contains(inputs.front(), "[Event] timer.tick"));
+        XX_TEST_EXPECT_TRUE(contains(inputs.front(), "[Event] " + ev("timer.tick")));
         XX_TEST_EXPECT_TRUE(contains(inputs.front(), "firedAtMs"));
     }
     // 一次性定时源触发后自行移除
@@ -683,13 +697,13 @@ asio::awaitable<void> test_hub_ttl_and_linger() {
     std::string err;
 
     EventDefineSpec spec;
-    spec.name = "ttl.event";
+    spec.name = ev("ttl.event");
     spec.ttl  = std::chrono::milliseconds{30};
     spec.linger = std::chrono::milliseconds{20};
     XX_TEST_EXPECT_TRUE(hub.define(spec, &err));
 
     EventWaitSpec waitSpec;
-    waitSpec.event         = "ttl.event";
+    waitSpec.event         = ev("ttl.event");
     waitSpec.mode          = "first";
     waitSpec.originSession = fx->sessionId;
     waitSpec.replay        = false;
@@ -707,7 +721,7 @@ asio::awaitable<void> test_hub_ttl_and_linger() {
     co_await sleepMs(60);
     hub.sweepExpired();
     // linger 到期后记录被回收
-    XX_TEST_EXPECT_FALSE(hub.queryEvent("ttl.event").has_value());
+    XX_TEST_EXPECT_FALSE(hub.queryEvent(ev("ttl.event")).has_value());
     co_return;
 }
 
@@ -718,13 +732,13 @@ asio::awaitable<void> test_hub_queries() {
     fx->sink->busy   = true;
     std::string err;
     EventDefineSpec spec;
-    spec.name        = "q.event";
+    spec.name        = ev("q.event");
     spec.description = "for queries";
     XX_TEST_EXPECT_TRUE(hub.define(spec, &err));
-    XX_TEST_EXPECT_TRUE(hub.publishValue("q.event", Json(1), &err));
+    XX_TEST_EXPECT_TRUE(hub.publishValue(ev("q.event"), Json(1), &err));
 
     EventWaitSpec waitSpec;
-    waitSpec.event         = "q.event";
+    waitSpec.event         = ev("q.event");
     waitSpec.mode          = "all";
     waitSpec.originSession = fx->sessionId;
     waitSpec.replay        = false;
@@ -734,14 +748,14 @@ asio::awaitable<void> test_hub_queries() {
     {
         auto events = hub.listEventsJson();
         XX_TEST_EXPECT_TRUE(events["count"].get<int>() == 1);
-        XX_TEST_EXPECT_TRUE(events["events"][0]["name"].get<std::string>() == "q.event");
+        XX_TEST_EXPECT_TRUE(events["events"][0]["name"].get<std::string>() == ev("q.event"));
         XX_TEST_EXPECT_TRUE(events["events"][0]["waits"].get<int>() == 1);
         XX_TEST_EXPECT_TRUE(events["events"][0]["description"].get<std::string>() == "for queries");
     }
     {
         auto waits = hub.listWaitsJson(fx->sessionId);
         XX_TEST_EXPECT_TRUE(waits["count"].get<int>() == 1);
-        XX_TEST_EXPECT_TRUE(waits["waits"][0]["event"].get<std::string>() == "q.event");
+        XX_TEST_EXPECT_TRUE(waits["waits"][0]["event"].get<std::string>() == ev("q.event"));
         XX_TEST_EXPECT_TRUE(waits["waits"][0]["state"].get<std::string>() == "armed");
         XX_TEST_EXPECT_TRUE(hub.listWaitsJson("other-session")["count"].get<int>() == 0);
     }
@@ -753,74 +767,128 @@ asio::awaitable<void> test_hub_queries() {
         XX_TEST_EXPECT_TRUE(stats.contains("droppedByReason"));
     }
     // wants: 有记录或有挂起等待
-    XX_TEST_EXPECT_TRUE(hub.wants("q.event"));
-    XX_TEST_EXPECT_FALSE(hub.wants("unknown.event"));
+    XX_TEST_EXPECT_TRUE(hub.wants(ev("q.event")));
+    XX_TEST_EXPECT_FALSE(hub.wants(ev("unknown.event")));
     co_return;
 }
 
-/// 16. 事件名 → 总线主题的换算与校验 (hub 前缀订阅用的同一套规则)
+/// 16. 命名规则: 三族命名空间 / 写侧与读侧校验 / 保留子段
+/// - 总线主题、中枢事件名、功能点 id 共用这一套 (`agentxx/event/naming.h`)
 asio::awaitable<void> test_hub_naming() {
-    using agentxx::events::naming::busTopicOf;
-    using agentxx::events::naming::eventNameOfTopic;
-    using agentxx::events::naming::validateEventName;
+    namespace naming = agentxx::events::naming;
 
-    XX_TEST_EXPECT_TRUE(busTopicOf("build.done") == "evt.build.done");
-    XX_TEST_EXPECT_TRUE(eventNameOfTopic("evt.build.done").value_or("") == "build.done");
-    // 插件事件经 qualifyEventTopic 补 `plugin.` 前缀后仍能还原
-    XX_TEST_EXPECT_TRUE(eventNameOfTopic("plugin.evt.build.done").value_or("") == "build.done");
-    // 不是值主题: 不认
-    XX_TEST_EXPECT_FALSE(eventNameOfTopic("agent.turn.start").has_value());
-    XX_TEST_EXPECT_FALSE(eventNameOfTopic("evt.").has_value());
-    XX_TEST_EXPECT_FALSE(eventNameOfTopic("plugin.agent.turn.start").has_value());
+    // 三族识别
+    XX_TEST_EXPECT_TRUE(naming::isAgentTopic("agentxx.agent.turn.start"));
+    XX_TEST_EXPECT_FALSE(naming::isAgentTopic("agentxx.agent."));
+    XX_TEST_EXPECT_TRUE(naming::isClientTopic("agentxx.client.host.client_interfaces"));
+    XX_TEST_EXPECT_TRUE(naming::isPluginTopic("plugin.demo.panel"));
+    XX_TEST_EXPECT_FALSE(naming::isPluginTopic("plugin.demo"));
+    XX_TEST_EXPECT_FALSE(naming::isPluginTopic("agentxx.agent.event.x"));
+    XX_TEST_EXPECT_TRUE(naming::pluginNameOfTopic("plugin.demo.panel") == "demo");
+    XX_TEST_EXPECT_TRUE(naming::pluginNameOfTopic("agentxx.agent.turn.start").empty());
+
+    // 值事件: 内置 `agentxx.agent.event.*` 与插件族; 强类型主题不算
+    XX_TEST_EXPECT_TRUE(naming::isEventName(ev("build.done")));
+    XX_TEST_EXPECT_TRUE(naming::isEventName("plugin.demo.build.done"));
+    XX_TEST_EXPECT_FALSE(naming::isEventName("agentxx.agent.turn.start"));
+    XX_TEST_EXPECT_FALSE(naming::isEventName("agentxx.client.host.client_interfaces"));
+
+    // 保留子段归框架 (模型/插件建事件时拒绝)
+    XX_TEST_EXPECT_TRUE(naming::isReservedEventSegment(ev("turn.start")));
+    XX_TEST_EXPECT_TRUE(naming::isReservedEventSegment(ev("tool.end.x")));
+    XX_TEST_EXPECT_FALSE(naming::isReservedEventSegment(ev("build.done")));
+    XX_TEST_EXPECT_FALSE(naming::isReservedEventSegment("plugin.demo.turn.start"));
 
     std::string err;
-    XX_TEST_EXPECT_TRUE(validateEventName("ok.name_1-2"));
-    XX_TEST_EXPECT_FALSE(validateEventName("", &err));
+    XX_TEST_EXPECT_TRUE(naming::validateEventName(ev("ok.name_1-2")));
+    XX_TEST_EXPECT_TRUE(naming::validateEventName("plugin.demo.ok.name"));
+    XX_TEST_EXPECT_FALSE(naming::validateEventName("", &err));
     XX_TEST_EXPECT_TRUE(contains(err, "empty"));
-    XX_TEST_EXPECT_FALSE(validateEventName("hub.value", &err));
-    XX_TEST_EXPECT_TRUE(contains(err, "reserved"));
-    XX_TEST_EXPECT_FALSE(validateEventName("service.x", &err));
-    XX_TEST_EXPECT_FALSE(validateEventName("evt.x", &err));
-    XX_TEST_EXPECT_FALSE(validateEventName("has space", &err));
-    XX_TEST_EXPECT_FALSE(validateEventName(std::string(200, 'a'), &err));
-    XX_TEST_EXPECT_TRUE(validateEventName(std::string(agentxx::events::naming::kMaxEventNameLength, 'a')));
+    // 裸名与强类型主题都不认 (框架不补前缀)
+    XX_TEST_EXPECT_FALSE(naming::validateEventName("ok.name_1-2", &err));
+    XX_TEST_EXPECT_TRUE(contains(err, "agentxx.agent.event."));
+    XX_TEST_EXPECT_FALSE(naming::validateEventName("agentxx.agent.turn.start", &err));
+    XX_TEST_EXPECT_FALSE(naming::validateEventName("has space", &err));
+    XX_TEST_EXPECT_FALSE(naming::validateEventName(std::string(200, 'a'), &err));
+    XX_TEST_EXPECT_TRUE(contains(err, "too long"));
+
+    // 内置事件名校验 (内建源用; 必须在 `agentxx.agent.event.` 段)
+    XX_TEST_EXPECT_TRUE(naming::validateAgentEventName(ev("turn.start")));
+    XX_TEST_EXPECT_FALSE(naming::validateAgentEventName("plugin.demo.x", &err));
+
+    // 插件写侧: 只能写自己的段, 且不补前缀
+    XX_TEST_EXPECT_TRUE(naming::validatePluginTopic("plugin.demo.panel.click", "demo"));
+    XX_TEST_EXPECT_FALSE(naming::validatePluginTopic("plugin.other.click", "demo", &err));
+    XX_TEST_EXPECT_TRUE(contains(err, "plugin.demo.*"));
+    XX_TEST_EXPECT_FALSE(naming::validatePluginTopic("click", "demo", &err));
+    XX_TEST_EXPECT_FALSE(naming::validatePluginTopic("plugin.demo.panel", "", &err));
+
+    // 读侧: 三族任意, 但必须是全名
+    XX_TEST_EXPECT_TRUE(naming::validateReadableTopic("agentxx.agent.turn.start"));
+    XX_TEST_EXPECT_TRUE(naming::validateReadableTopic("agentxx.client.host.client_interfaces"));
+    XX_TEST_EXPECT_TRUE(naming::validateReadableTopic("plugin.demo.x"));
+    XX_TEST_EXPECT_FALSE(naming::validateReadableTopic("turn.start", &err));
+
+    // client 端插件上行主题 (`agentxx.client.plugin.<插件名>.*`)
+    XX_TEST_EXPECT_TRUE(
+        naming::clientPluginPrefix("demo") == std::string{naming::kClientPluginDataPrefix} + "demo."
+    );
+    XX_TEST_EXPECT_TRUE(naming::clientPluginNameOfTopic("agentxx.client.plugin.demo.x") == "demo");
+    XX_TEST_EXPECT_TRUE(naming::clientPluginNameOfTopic("agentxx.client.host.x").empty());
+    XX_TEST_EXPECT_TRUE(naming::validateClientPluginTopic("agentxx.client.plugin.demo.x", "demo"));
+    XX_TEST_EXPECT_FALSE(naming::validateClientPluginTopic("agentxx.client.plugin.other.x", "demo", &err));
+    XX_TEST_EXPECT_FALSE(naming::validateClientPluginTopic("plugin.demo.x", "demo", &err));
+
+    // 功能点 id 与事件名同一套规则
+    XX_TEST_EXPECT_TRUE(naming::validateFeaturePointId("agentxx.agent.context.summarize", {}));
+    XX_TEST_EXPECT_FALSE(naming::validateFeaturePointId("context.summarize", {}, &err));
+    XX_TEST_EXPECT_TRUE(naming::validateFeaturePointId("plugin.demo.my_point", "demo"));
+    XX_TEST_EXPECT_FALSE(naming::validateFeaturePointId("plugin.other.my_point", "demo", &err));
     co_return;
 }
 
-/// 17. 总线桥接: 插件/节点往 `evt.<名字>` 或 `plugin.evt.<名字>` 发字符串, 中枢记成事件
+/// 17. 总线桥接: 插件往 `plugin.<插件名>.<事件>` 发字符串, 中枢记成同名的值事件
 /// - 这是“插件不需要新接口表也能往中枢发值”的验证
+/// - 内置源直接调 publishValue, 不走总线 (`agentxx.*` 不管字符串消息)
 asio::awaitable<void> test_hub_bus_bridge() {
     auto  fx  = co_await makeFixture();
     auto& hub = *fx->hub;
     auto  bus = std::make_shared<agentxx::events::EventBus>(co_await asio::this_coro::executor);
     hub.attachBus(bus);
+    std::string err;
+
+    // 先声明: 没人等也没声明过的插件主题不当值事件 (插件之间的普通消息)
+    XX_TEST_EXPECT_TRUE(hub.define(EventDefineSpec{.name = "plugin.demo.chat.ping"}, &err));
 
     // JSON 载荷按结构化值存
-    co_await bus->publish(std::string{"evt.chat.ping"}, std::string{R"({"text":"hi"})"});
-    auto rec = hub.queryEvent("chat.ping");
+    co_await bus->publish(std::string{"plugin.demo.chat.ping"}, std::string{R"({"text":"hi"})"});
+    auto rec = hub.queryEvent("plugin.demo.chat.ping");
     XX_TEST_EXPECT_TRUE(rec.has_value());
     if (rec.has_value()) {
         XX_TEST_EXPECT_TRUE(rec->history.size() == 1);
         XX_TEST_EXPECT_EQ(rec->history.front()["text"].get<std::string>(), std::string{"hi"});
     }
 
-    // 插件事件经 qualifyEventTopic 补 `plugin.` 前缀后同样认; 非 JSON 按纯文本值
-    co_await bus->publish(std::string{"plugin.evt.chat.pong"}, std::string{"plain text"});
-    auto pong = hub.queryEvent("chat.pong");
+    // 非 JSON 按纯文本值
+    XX_TEST_EXPECT_TRUE(hub.define(EventDefineSpec{.name = "plugin.demo.chat.pong"}, &err));
+    co_await bus->publish(std::string{"plugin.demo.chat.pong"}, std::string{"plain text"});
+    auto pong = hub.queryEvent("plugin.demo.chat.pong");
     XX_TEST_EXPECT_TRUE(pong.has_value());
     if (pong.has_value() && !pong->history.empty()) {
         XX_TEST_EXPECT_EQ(pong->history.front().get<std::string>(), std::string{"plain text"});
     }
 
-    // 不是值主题: 不进中枢
-    co_await bus->publish(std::string{"agent.turn.start"}, std::string{"x"});
-    XX_TEST_EXPECT_FALSE(hub.queryEvent("agent.turn.start").has_value());
+    // 强类型主题与内置段都不经这条桥 (内置源直接 publishValue)
+    co_await bus->publish(std::string{"agentxx.agent.turn.start"}, std::string{"x"});
+    co_await bus->publish(std::string{ev("build.done")}, std::string{"y"});
+    XX_TEST_EXPECT_FALSE(hub.queryEvent("agentxx.agent.turn.start").has_value());
+    XX_TEST_EXPECT_FALSE(hub.queryEvent(ev("build.done")).has_value());
     XX_TEST_EXPECT_TRUE(hub.eventCount() == 2);
 
     // 注册的等待被总线来的值满足 (空闲 + 驱动端 → 直接开轮)
     // - replay=false: 不吃上面已经发过的历史值, 只等新值, 断言才有确定性
     auto watched = hub.watch(EventWaitSpec{
-        .event         = "chat.ping",
+        .event         = "plugin.demo.chat.ping",
         .mode          = "each",
         .delivery      = "next-step",
         .originSession = fx->sessionId,
@@ -828,10 +896,10 @@ asio::awaitable<void> test_hub_bus_bridge() {
     });
     XX_TEST_EXPECT_TRUE(watched.has_value());
     XX_TEST_EXPECT_TRUE(fx->sink->texts.empty());
-    co_await bus->publish(std::string{"evt.chat.ping"}, std::string{R"({"text":"again"})"});
+    co_await bus->publish(std::string{"plugin.demo.chat.ping"}, std::string{R"({"text":"again"})"});
     XX_TEST_EXPECT_EQ(fx->sink->texts.size(), size_t{1});
     if (!fx->sink->texts.empty()) {
-        XX_TEST_EXPECT_TRUE(contains(fx->sink->texts.front(), "[Event] chat.ping (each)"));
+        XX_TEST_EXPECT_TRUE(contains(fx->sink->texts.front(), "[Event] plugin.demo.chat.ping (each)"));
         XX_TEST_EXPECT_TRUE(contains(fx->sink->texts.front(), "again"));
     }
     co_return;

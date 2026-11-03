@@ -2119,7 +2119,7 @@ TestResult testPluginRuntime() {
         if (!ifaces.events) {
             return result;
         }
-        const auto topicSv      = PluginStringView::fromCstr("runtime_probe.topic");
+        const auto topicSv      = PluginStringView::fromCstr("plugin.provider.topic");
         int        handlerCalls = 0;
         // EventBus 派发为协程异步执行; 循环推进后必须 restart, 保持上下文
         // 处于非 stopped 状态 (否则 vtable 入口按"IO 不可用"拒绝退订/订阅)。
@@ -2142,7 +2142,7 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_TRUE(sub != nullptr);
         XX_TEST_EXPECT_TRUE(sub && sub->alive.load());
 
-        XX_TEST_EXPECT_EQ(f.manager->publish("runtime_probe.topic", "{}"), 0);
+        XX_TEST_EXPECT_EQ(f.manager->publish("plugin.provider.topic", "{}"), 0);
         flushEvents();
         XX_TEST_EXPECT_EQ(handlerCalls, 1);
 
@@ -2150,7 +2150,7 @@ TestResult testPluginRuntime() {
         ifaces.events->unsubscribe(sub);
         ifaces.events->unsubscribe(sub);
         XX_TEST_EXPECT_FALSE(sub->alive.load());
-        XX_TEST_EXPECT_EQ(f.manager->publish("runtime_probe.topic", "{}"), 0);
+        XX_TEST_EXPECT_EQ(f.manager->publish("plugin.provider.topic", "{}"), 0);
         flushEvents();
         XX_TEST_EXPECT_EQ(handlerCalls, 1); ///< 退订后不再回调
 
@@ -2179,7 +2179,8 @@ TestResult testPluginRuntime() {
             ifaces.events->unsubscribe(late);         ///< 迟到调用必须安全空操作
             ifaces.events->unsubscribe(late);
         }
-        XX_TEST_EXPECT_EQ(f.manager->publish("runtime_probe.topic", "{}"), 0);
+        // 实例已卸载: publish 按 "写自己那一族" 的规则被拒 (插件不在就不再代表它)
+        XX_TEST_EXPECT_TRUE(f.manager->publish("plugin.provider.topic", "{}") != 0);
         flushEvents();
         XX_TEST_EXPECT_EQ(handlerCalls, 1);
     }

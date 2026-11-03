@@ -418,7 +418,7 @@ asio::awaitable<void> test_declaration_from_plugin() {
 
     // 事件记录: 两条, 归属 = 声明它的插件实例
     XX_TEST_EXPECT_EQ(f.hub->eventCount(), size_t{2});
-    const auto build = f.hub->queryEvent("example_event.build");
+    const auto build = f.hub->queryEvent("plugin.example_event.build");
     XX_TEST_EXPECT_TRUE(build.has_value());
     if (build.has_value()) {
         XX_TEST_EXPECT_EQ(build->owner, std::string{"plugin:example_event"});
@@ -429,7 +429,7 @@ asio::awaitable<void> test_declaration_from_plugin() {
         XX_TEST_EXPECT_TRUE(contains(build->description, "构建进度"));
     }
     // 单值事件: 首个值到达后自动结束
-    const auto ready = f.hub->queryEvent("example_event.ready");
+    const auto ready = f.hub->queryEvent("plugin.example_event.ready");
     XX_TEST_EXPECT_TRUE(ready.has_value());
     if (ready.has_value()) {
         XX_TEST_EXPECT_EQ(ready->kind, agentxx::events::EventKind::Single);
@@ -440,11 +440,11 @@ asio::awaitable<void> test_declaration_from_plugin() {
 
     // 事件名在模型可见的清单里 (带说明), 模型据此知道该等什么
     {
-        const auto listJson = f.hub->listEventsJson("example_event.");
+        const auto listJson = f.hub->listEventsJson("plugin.example_event.");
         const auto count    = listJson.value("count", int64_t{0});
         XX_TEST_EXPECT_EQ(count, int64_t{2});
         const auto text = listJson.dump();
-        XX_TEST_EXPECT_TRUE(contains(text, "example_event.build"));
+        XX_TEST_EXPECT_TRUE(contains(text, "plugin.example_event.build"));
         XX_TEST_EXPECT_TRUE(contains(text, "构建进度"));
     }
 
@@ -461,7 +461,7 @@ asio::awaitable<void> test_declaration_from_plugin() {
         const auto waits = f.hub->listWaits("s1");
         XX_TEST_EXPECT_EQ(waits.size(), size_t{1});
         if (waits.size() == 1) {
-            XX_TEST_EXPECT_EQ(waits[0].spec.event, std::string{"example_event.build"});
+            XX_TEST_EXPECT_EQ(waits[0].spec.event, std::string{"plugin.example_event.build"});
             XX_TEST_EXPECT_EQ(waits[0].spec.mode, std::string{"each"});
             XX_TEST_EXPECT_EQ(waits[0].spec.owner, std::string{"plugin:example_event"});
             XX_TEST_EXPECT_EQ(waits[0].deliveries, uint64_t{1}); ///< 回放了 mount 里那个值
@@ -469,7 +469,7 @@ asio::awaitable<void> test_declaration_from_plugin() {
         const auto inputs = takeEventInputs(f.session);
         XX_TEST_EXPECT_EQ(inputs.size(), size_t{1});
         if (inputs.size() == 1) {
-            XX_TEST_EXPECT_TRUE(contains(inputs[0], "[Event] example_event.build"));
+            XX_TEST_EXPECT_TRUE(contains(inputs[0], "[Event] plugin.example_event.build"));
             XX_TEST_EXPECT_TRUE(contains(inputs[0], "\"step\":1"));
         }
     }
@@ -491,21 +491,21 @@ asio::awaitable<void> test_emit_end_remove() {
 
     // 发布的第二个值经中枢线程写入 (`emit_value` 只排队不等待)
     XX_TEST_EXPECT_EQ(
-        emitValue(inst.get(), ref, "example_event.build", R"({"step":2,"total":2})"),
+        emitValue(inst.get(), ref, "plugin.example_event.build", R"({"step":2,"total":2})"),
         int32_t{AGENTXX_PLUGIN_EVENT_OK}
     );
     XX_TEST_EXPECT_TRUE(co_await waitFor([&] {
-        const auto rec = f.hub->queryEvent("example_event.build");
+        const auto rec = f.hub->queryEvent("plugin.example_event.build");
         return rec.has_value() && rec->published == 2;
     }));
 
     // 查询: 字段与中枢记录一致
     {
         int32_t    code = 0;
-        const auto text = queryEventOf(inst.get(), ref, "example_event.build", &code);
+        const auto text = queryEventOf(inst.get(), ref, "plugin.example_event.build", &code);
         XX_TEST_EXPECT_EQ(code, int32_t{AGENTXX_PLUGIN_EVENT_OK});
         auto json = Json::parse(text);
-        XX_TEST_EXPECT_EQ(json.value("name", std::string{}), std::string{"example_event.build"});
+        XX_TEST_EXPECT_EQ(json.value("name", std::string{}), std::string{"plugin.example_event.build"});
         XX_TEST_EXPECT_EQ(json.value("kind", std::string{}), std::string{"stream"});
         XX_TEST_EXPECT_EQ(json.value("state", std::string{}), std::string{"open"});
         XX_TEST_EXPECT_EQ(json.value("owner", std::string{}), std::string{"plugin:example_event"});
@@ -518,11 +518,11 @@ asio::awaitable<void> test_emit_end_remove() {
 
     // 结束一条流: 幂等, 收尾信息进 summary
     XX_TEST_EXPECT_EQ(
-        endEventOf(inst.get(), ref, "example_event.build", R"({"reason":"done"})"),
+        endEventOf(inst.get(), ref, "plugin.example_event.build", R"({"reason":"done"})"),
         int32_t{AGENTXX_PLUGIN_EVENT_OK}
     );
     {
-        const auto rec = f.hub->queryEvent("example_event.build");
+        const auto rec = f.hub->queryEvent("plugin.example_event.build");
         XX_TEST_EXPECT_TRUE(rec.has_value());
         if (rec.has_value()) {
             XX_TEST_EXPECT_EQ(rec->state, agentxx::events::EventState::Ended);
@@ -530,25 +530,25 @@ asio::awaitable<void> test_emit_end_remove() {
         }
     }
     XX_TEST_EXPECT_EQ(
-        endEventOf(inst.get(), ref, "example_event.build"),
+        endEventOf(inst.get(), ref, "plugin.example_event.build"),
         int32_t{AGENTXX_PLUGIN_EVENT_OK}
     );
     // 结束后再到值: 记录重新打开 (流式事件允许续上)
     XX_TEST_EXPECT_EQ(
-        emitValue(inst.get(), ref, "example_event.build", R"({"step":3})"),
+        emitValue(inst.get(), ref, "plugin.example_event.build", R"({"step":3})"),
         int32_t{AGENTXX_PLUGIN_EVENT_OK}
     );
     XX_TEST_EXPECT_TRUE(co_await waitFor([&] {
-        const auto rec = f.hub->queryEvent("example_event.build");
+        const auto rec = f.hub->queryEvent("plugin.example_event.build");
         return rec.has_value() && rec->state == agentxx::events::EventState::Open;
     }));
 
     // 移除记录: 之后查不到, 还挂在它上面的等待按"已结束且无值"收尾
     XX_TEST_EXPECT_EQ(
-        removeEventOf(inst.get(), ref, "example_event.build"),
+        removeEventOf(inst.get(), ref, "plugin.example_event.build"),
         int32_t{AGENTXX_PLUGIN_EVENT_OK}
     );
-    XX_TEST_EXPECT_FALSE(f.hub->queryEvent("example_event.build").has_value());
+    XX_TEST_EXPECT_FALSE(f.hub->queryEvent("plugin.example_event.build").has_value());
     XX_TEST_EXPECT_EQ(f.hub->eventCount(), size_t{1}); ///< 只剩 example_event.ready
     {
         // 挂在上面的等待被收尾 (记录保留到回收期, 但不再等)
@@ -557,14 +557,14 @@ asio::awaitable<void> test_emit_end_remove() {
         }
     }
     XX_TEST_EXPECT_EQ(
-        removeEventOf(inst.get(), ref, "example_event.build"),
+        removeEventOf(inst.get(), ref, "plugin.example_event.build"),
         int32_t{AGENTXX_PLUGIN_EVENT_ERR_NOT_FOUND}
     );
 
     // 插件发的值也能被模型侧等到 (回放): 单值事件的值已经结束, watch 直接拿到
     {
         agentxx::events::EventWaitSpec spec;
-        spec.event          = "example_event.ready";
+        spec.event          = "plugin.example_event.ready";
         spec.mode           = "first";
         spec.delivery       = "none";
         auto result         = f.hub->watch(std::move(spec));
@@ -601,7 +601,7 @@ asio::awaitable<void> test_register_wait_delivery() {
     int32_t    code  = 0;
     int32_t    state = -1;
     const auto waitId
-        = registerWaitOf(inst.get(), ref, "example_event.ready", "s2", "first", "next-step", &code, &state);
+        = registerWaitOf(inst.get(), ref, "plugin.example_event.ready", "s2", "first", "next-step", &code, &state);
     XX_TEST_EXPECT_EQ(code, int32_t{AGENTXX_PLUGIN_EVENT_OK});
     XX_TEST_EXPECT_TRUE(!waitId.empty());
     // 单值事件已经结束且已有值: 注册瞬间就满足
@@ -613,15 +613,15 @@ asio::awaitable<void> test_register_wait_delivery() {
 
     // 多值等待 (每条都要): 两次发布各成一条输入
     const auto eachWait
-        = registerWaitOf(inst.get(), ref, "example_event.build", "s2", "each", "next-step", &code, &state);
+        = registerWaitOf(inst.get(), ref, "plugin.example_event.build", "s2", "each", "next-step", &code, &state);
     XX_TEST_EXPECT_EQ(code, int32_t{AGENTXX_PLUGIN_EVENT_OK});
     XX_TEST_EXPECT_EQ(state, int32_t{AGENTXX_PLUGIN_EVENT_WAIT_ARMED});
     XX_TEST_EXPECT_FALSE(eachWait.empty());
     takeEventInputs(other); // 回放的那条
 
-    emitValue(inst.get(), ref, "example_event.build", R"({"step":2})");
+    emitValue(inst.get(), ref, "plugin.example_event.build", R"({"step":2})");
     const bool delivered = co_await waitFor([&] {
-        const auto rec = f.hub->queryEvent("example_event.build");
+        const auto rec = f.hub->queryEvent("plugin.example_event.build");
         return rec.has_value() && rec->published >= 2;
     });
     XX_TEST_EXPECT_TRUE(delivered);
@@ -649,7 +649,7 @@ asio::awaitable<void> test_register_wait_delivery() {
         XX_TEST_EXPECT_TRUE(!text.empty());
         const auto json = Json::parse(text);
         XX_TEST_EXPECT_TRUE(json.contains("waits"));
-        XX_TEST_EXPECT_TRUE(contains(text, "example_event.build"));
+        XX_TEST_EXPECT_TRUE(contains(text, "plugin.example_event.build"));
         XX_TEST_EXPECT_TRUE(contains(text, "each"));
     }
     {
@@ -673,9 +673,13 @@ asio::awaitable<void> test_failure_paths() {
     }
     const auto ref = agentRefOf(f);
 
-    // 名称非法 (保留前缀) / 空名称
+    // 名称不在自己那一族里 (框架不补前缀) / 空名称
     XX_TEST_EXPECT_EQ(
-        defineEventOf(inst.get(), ref, "plugin.example_event.x", false),
+        defineEventOf(inst.get(), ref, "plugin.other_plugin.x", false),
+        int32_t{AGENTXX_PLUGIN_EVENT_ERR_ARG}
+    );
+    XX_TEST_EXPECT_EQ(
+        defineEventOf(inst.get(), ref, "build", false),
         int32_t{AGENTXX_PLUGIN_EVENT_ERR_ARG}
     );
     XX_TEST_EXPECT_EQ(
@@ -684,34 +688,34 @@ asio::awaitable<void> test_failure_paths() {
     );
     // 同名不同种类: 冲突
     XX_TEST_EXPECT_EQ(
-        defineEventOf(inst.get(), ref, "example_event.build", /*single=*/true),
+        defineEventOf(inst.get(), ref, "plugin.example_event.build", /*single=*/true),
         int32_t{AGENTXX_PLUGIN_EVENT_ERR_CONFLICT}
     );
     // 同名同种类: 幂等成功 (只补充说明)
     XX_TEST_EXPECT_EQ(
-        defineEventOf(inst.get(), ref, "example_event.build", /*single=*/false),
+        defineEventOf(inst.get(), ref, "plugin.example_event.build", /*single=*/false),
         int32_t{AGENTXX_PLUGIN_EVENT_OK}
     );
     // 查不存在的事件
     {
         int32_t code = 0;
-        queryEventOf(inst.get(), ref, "example_event.missing", &code);
+        queryEventOf(inst.get(), ref, "plugin.example_event.missing", &code);
         XX_TEST_EXPECT_EQ(code, int32_t{AGENTXX_PLUGIN_EVENT_ERR_NOT_FOUND});
     }
     // 结束不存在的事件
     XX_TEST_EXPECT_EQ(
-        endEventOf(inst.get(), ref, "example_event.missing"),
+        endEventOf(inst.get(), ref, "plugin.example_event.missing"),
         int32_t{AGENTXX_PLUGIN_EVENT_ERR_NOT_FOUND}
     );
     // 值不是合法 JSON
     XX_TEST_EXPECT_EQ(
-        emitValue(inst.get(), ref, "example_event.build", "{not json"),
+        emitValue(inst.get(), ref, "plugin.example_event.build", "{not json"),
         int32_t{AGENTXX_PLUGIN_EVENT_ERR_ARG}
     );
     // 等待参数非法: 投递模式必须是四种之一
     {
         int32_t code = 0;
-        registerWaitOf(inst.get(), ref, "example_event.build", "s1", "first", "bogus", &code);
+        registerWaitOf(inst.get(), ref, "plugin.example_event.build", "s1", "first", "bogus", &code);
         XX_TEST_EXPECT_EQ(code, int32_t{AGENTXX_PLUGIN_EVENT_ERR_ARG});
         registerWaitOf(inst.get(), ref, "", "s1", "first", "next-step", &code);
         XX_TEST_EXPECT_EQ(code, int32_t{AGENTXX_PLUGIN_EVENT_ERR_ARG});
@@ -721,7 +725,7 @@ asio::awaitable<void> test_failure_paths() {
         auto badId      = agentxx::plugin::PluginStringView::fromCstr("no-such-agent");
         bad.id          = badId;
         bad.seq         = 1;
-        registerWaitOf(inst.get(), bad, "example_event.build", "s1", "first", "next-step", &code);
+        registerWaitOf(inst.get(), bad, "plugin.example_event.build", "s1", "first", "next-step", &code);
         XX_TEST_EXPECT_EQ(code, int32_t{AGENTXX_PLUGIN_ERR_NO_AGENT});
     }
 
@@ -734,11 +738,11 @@ asio::awaitable<void> test_failure_paths() {
         if (dryInst) {
             const auto dryRef = agentRefOf(dry);
             XX_TEST_EXPECT_EQ(
-                defineEventOf(dryInst.get(), dryRef, "dry.event", false),
+                defineEventOf(dryInst.get(), dryRef, "plugin.example_event.dry", false),
                 int32_t{AGENTXX_PLUGIN_EVENT_ERR_UNSUPPORTED}
             );
             XX_TEST_EXPECT_EQ(
-                emitValue(dryInst.get(), dryRef, "dry.event", "{}"),
+                emitValue(dryInst.get(), dryRef, "plugin.example_event.dry", "{}"),
                 int32_t{AGENTXX_PLUGIN_EVENT_ERR_UNSUPPORTED}
             );
         }
@@ -780,7 +784,7 @@ asio::awaitable<void> test_lifecycle_reversible() {
     });
     XX_TEST_EXPECT_TRUE(restored);
     if (restored) {
-        const auto rec = f.hub->queryEvent("example_event.build");
+        const auto rec = f.hub->queryEvent("plugin.example_event.build");
         XX_TEST_EXPECT_TRUE(rec.has_value());
         if (rec.has_value()) {
             XX_TEST_EXPECT_EQ(rec->owner, std::string{"plugin:example_event"});

@@ -451,22 +451,22 @@ asio::awaitable<TestResult> run_plugin_tests() {
         }
     }
 
-    // ---- 6. 事件订阅/发布回环 (plugin.demo.topic) ----
+    // ---- 6. 事件订阅/发布回环 (plugin.<插件名>.<事件>) ----
     {
         // 测试侧订阅同一 topic (JSON 字符串载荷)
         bool received = false;
-        auto subId    = ctx->bus->get<std::string>("plugin.demo.topic")
+        auto subId    = ctx->bus->get<std::string>("plugin.example_plugin.demo")
                          .subscribe([&](const std::string& data) -> asio::awaitable<void> {
                              if (data.find("\"k\"") != std::string::npos) {
                                  received = true;
                              }
                              co_return;
                          });
-        int rc = ctx->pluginManager->publish("demo.topic", R"({"k":"v"})");
+        int rc = ctx->pluginManager->publish("plugin.example_plugin.demo", R"({"k":"v"})");
         XX_TEST_EXPECT_EQ(rc, 0);
         co_await sleepMs(150);
         XX_TEST_EXPECT_TRUE(received);
-        ctx->bus->get<std::string>("plugin.demo.topic").unsubscribe(subId);
+        ctx->bus->get<std::string>("plugin.example_plugin.demo").unsubscribe(subId);
     }
 
     // ---- 7. 禁用 → 工具摘除/钩子处理器摘除; 启用 → 恢复 ----
@@ -717,7 +717,7 @@ agentxx.registerTool({
   description: "registered before the top-level failure",
   execute: () => "should never run",
 });
-agentxx.subscribe("rollback_probe.topic", () => {});
+agentxx.subscribe("plugin.rollback_probe.topic", () => {});
 setTimeout(() => agentxx.log(2, "rollback probe timer"), 60000);
 throw new Error("top-level rollback probe");
 )JS";
@@ -1307,7 +1307,7 @@ throw new Error("top-level rollback probe");
             // 启用状态: publish 正常 (agentxx.agent.events 接口表)
             const auto ev30 = agentxx::plugin::AgentIfaces::query(inst30->hostView()).events;
             XX_TEST_EXPECT_TRUE(ev30 != nullptr && ev30->publish != nullptr);
-            auto topicSv = agentxx::plugin::PluginStringView::fromCstr("demo.topic");
+            auto topicSv = agentxx::plugin::PluginStringView::fromCstr("plugin.example_plugin.demo");
             auto paySv   = agentxx::plugin::PluginStringView::fromCstr(R"({"k":"v"})");
             XX_TEST_EXPECT_EQ(ev30 ? ev30->publish(inst30->hostView(), &topicSv, &paySv) : -1, 0);
             ctx->pluginManager->disable("example_plugin");
@@ -1660,7 +1660,7 @@ throw new Error("top-level rollback probe");
             auto* subBad                 = ctx->pluginManager->subscribe(
                 inst31.get(),
                 nullptr, ///< 主程序总线（进程级事件）
-                "guard_throw.topic",
+                "plugin.example_plugin.guard_throw",
                 +[](const PluginxxStringView*, void*) {
                     throw std::runtime_error("bad handler boom");
                 },
@@ -1669,7 +1669,7 @@ throw new Error("top-level rollback probe");
             auto* subGood = ctx->pluginManager->subscribe(
                 inst31.get(),
                 nullptr, ///< 主程序总线（进程级事件）
-                "guard_throw.topic",
+                "plugin.example_plugin.guard_throw",
                 +[](const PluginxxStringView*, void* ud) {
                     *static_cast<bool*>(ud) = true;
                 },
@@ -1677,7 +1677,7 @@ throw new Error("top-level rollback probe");
             );
             XX_TEST_EXPECT_TRUE(subBad != nullptr);
             XX_TEST_EXPECT_TRUE(subGood != nullptr);
-            XX_TEST_EXPECT_EQ(ctx->pluginManager->publish("guard_throw.topic", "{}"), 0);
+            XX_TEST_EXPECT_EQ(ctx->pluginManager->publish("plugin.example_plugin.guard_throw", "{}"), 0);
             co_await sleepMs(150);                 ///< 派发为 EventBus 协程异步执行
             XX_TEST_EXPECT_TRUE(s_goodHandlerRan); ///< 违约不影响其他订阅者
             ctx->pluginManager->unsubscribe(subBad);
@@ -3445,7 +3445,7 @@ throw new Error("top-level rollback probe");
         );
         sctx->resourceApplier = applier;
 
-        sctx->bus->get<std::string>("plugin.dso_rollback.probe")
+        sctx->bus->get<std::string>("plugin.test_start_fail_plugin.probe")
             .subscribe([&](const std::string& data) -> asio::awaitable<void> {
                 reports.push_back(data);
                 co_return;
@@ -3475,7 +3475,7 @@ throw new Error("top-level rollback probe");
         // 回滚语义由 GraphTypeSlot 失效 + 第二次加载能重新注册同名类型共同证明。
         XX_TEST_EXPECT_EQ(sctx->pluginMount->getPromptJson(), promptBefore);
         // 订阅已撤销: 发布 watch 主题不得调用已卸载 DSO 的 handler (ASan 下泄漏即崩溃)
-        XX_TEST_EXPECT_EQ(sctx->pluginManager->publish("dso_rollback.watch", "{}"), 0);
+        XX_TEST_EXPECT_EQ(sctx->pluginManager->publish("plugin.test_start_fail_plugin.watch", "{}"), 0);
         // 能力已注销: 失败加载不得留下能力注册
         XX_TEST_EXPECT_FALSE(sctx->pluginManager->hasCapability("dso.rollback.cap") != 0);
         // hook 处理器已摘除: 失败实例的处理器不得留在注册表里 (派发器也随之摘除)
@@ -3601,7 +3601,7 @@ throw new Error("top-level rollback probe");
         planCtx->pluginManager->shutdownAll();
     }
 
-    // ---- 42. 轮次开始事件清理会话级取消标记 (plugin.agentxx.round_start) ----
+    // ---- 42. 轮次开始事件清理会话级取消标记 (agentxx.agent.round.start) ----
     //
     // 背景: 会话取消发生时框架把会话键写进实例 CancelRegistry; 该标记必须在下一轮
     // 开始时清掉, 否则该会话之后的每次工具调用都会被判为"已取消" (命令工具直接
@@ -3649,8 +3649,8 @@ throw new Error("top-level rollback probe");
 
         // 2) round_start 事件能经总线送达订阅者 (验证发布/订阅流程本身)
         std::atomic<int>  hits{0};
-        PluginxxStringView topicSv{"plugin.agentxx.round_start",
-                                   sizeof("plugin.agentxx.round_start") - 1};
+        PluginxxStringView topicSv{"agentxx.agent.round.start",
+                                   sizeof("agentxx.agent.round.start") - 1};
         auto*              sub = (evIface && evIface->subscribe)
                                      ? evIface->subscribe(
                                            probeInst->hostView(),
@@ -3670,7 +3670,7 @@ throw new Error("top-level rollback probe");
         XX_TEST_EXPECT_TRUE(probe.cancelRegistry.isCanceled(sid));
 
         auto payload = utilxx_base::Json{{"sessionId", sid}}.dump();
-        co_await roundCtx->bus->publish("plugin.agentxx.round_start", payload);
+        co_await roundCtx->bus->publish("agentxx.agent.round.start", payload);
         XX_TEST_EXPECT_EQ(hits.load(), 1);
         XX_TEST_EXPECT_FALSE(probe.cancelRegistry.isCanceled(sid));
 

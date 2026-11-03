@@ -407,17 +407,15 @@ std::vector<WireSample> wireSamples() {
     // 26) 插件数据 (服务端 -> 客户端)
     {
         WirePluginData m;
-        m.plugin = "agentxx_codegraph";
-        m.event  = "status";
-        m.data   = R"({"ok":true})";
+        m.topic = "plugin.agentxx_codegraph.status";
+        m.data  = R"({"ok":true})";
         out.push_back({"plugin_data", WireMessage{std::move(m)}});
     }
     // 27) 插件数据 (客户端 -> 服务端)
     {
         WirePluginDataUp m;
-        m.plugin = "agentxx_host";
-        m.event  = "client_interfaces";
-        m.data   = R"({"interfaces":["ui"]})";
+        m.topic = "agentxx.client.host.client_interfaces";
+        m.data  = R"({"interfaces":["ui"]})";
         out.push_back({"plugin_data_up", WireMessage{std::move(m)}});
     }
     // 28) 消息队列更新

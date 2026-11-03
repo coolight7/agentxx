@@ -1,6 +1,7 @@
 #include "agentxx-test/core/test_event_hub.h"
 #include "agentxx-test/core/test_agent.h" // 本地 LLM 模拟器 startDaSimServer/g_da_sim_*
 #include "agentxx-test/test_coro_util.h"
+#include "agentxx-test/core/test_event_naming.h"
 
 #include "agentxx/agent/base_agent.h"
 #include "agentxx/agent/config.h"
@@ -264,7 +265,7 @@ asio::awaitable<void> test_delivery_idle_starts_turn() {
     XX_TEST_EXPECT_TRUE(hub != nullptr);
 
     auto watched = hub->watch(agentxx::events::EventWaitSpec{
-        .event         = "chat.message",
+        .event         = evName("chat.message"),
         .mode          = "first",
         .delivery      = "next-step",
         .originSession = fx->sessionId,
@@ -273,21 +274,21 @@ asio::awaitable<void> test_delivery_idle_starts_turn() {
     XX_TEST_EXPECT_TRUE(watched->state == agentxx::events::WaitState::Armed);
 
     std::string err;
-    XX_TEST_EXPECT_TRUE(hub->publishValue("chat.message", Json{{"text", "hi there"}}, &err));
+    XX_TEST_EXPECT_TRUE(hub->publishValue(evName("chat.message"), Json{{"text", "hi there"}}, &err));
     // 会话被唤醒并跑完一轮
     XX_TEST_EXPECT_TRUE(co_await waitFor([&] {
         return fx->recorder->turnCount() >= 1;
     }));
     XX_TEST_EXPECT_TRUE(co_await waitFor([&] {
-        return contextHasText(fx->agent, fx->sessionId, "[Event] chat.message");
+        return contextHasText(fx->agent, fx->sessionId, "[Event] " + evName("chat.message"));
     }));
     XX_TEST_EXPECT_TRUE(contextHasText(fx->agent, fx->sessionId, "hi there"));
     // 展示历史也有一条 (用户看得见事件把什么塞进了会话)
-    XX_TEST_EXPECT_TRUE(viewHasText(fx->agent, fx->sessionId, "[Event] chat.message"));
+    XX_TEST_EXPECT_TRUE(viewHasText(fx->agent, fx->sessionId, "[Event] " + evName("chat.message")));
     // 展示消息带结构化来源标记 (界面据此加来源样式, 不解析正文)
     XX_TEST_EXPECT_EQ(
-        viewSourceOfEventMessage(fx->agent, fx->sessionId, "[Event] chat.message"),
-        std::string{agentxx::agent::kInputSourceEventPrefix} + "chat.message"
+        viewSourceOfEventMessage(fx->agent, fx->sessionId, "[Event] " + evName("chat.message")),
+        std::string{agentxx::agent::kInputSourceEventPrefix} + evName("chat.message")
     );
     // 端点队列里的来源标记
     {
@@ -308,14 +309,14 @@ asio::awaitable<void> test_delivery_busy_steps() {
     fx->endpoint->setTurnActiveForTest(true);
 
     auto watched = hub->watch(agentxx::events::EventWaitSpec{
-        .event         = "build.done",
+        .event         = evName("build.done"),
         .mode          = "first",
         .delivery      = "next-step",
         .originSession = fx->sessionId,
     });
     XX_TEST_EXPECT_TRUE(watched.has_value());
     std::string err;
-    XX_TEST_EXPECT_TRUE(hub->publishValue("build.done", Json{{"ok", true}}, &err));
+    XX_TEST_EXPECT_TRUE(hub->publishValue(evName("build.done"), Json{{"ok", true}}, &err));
 
     auto session = fx->agent->agentContext->sessions->get(fx->sessionId);
     XX_TEST_EXPECT_TRUE(session->pendingInputCount("event:") == 1);
@@ -323,8 +324,8 @@ asio::awaitable<void> test_delivery_busy_steps() {
     {
         auto inputs = session->takePendingInputs(agentxx::agent::InputDelivery::NextStep);
         XX_TEST_EXPECT_TRUE(inputs.size() == 1);
-        XX_TEST_EXPECT_TRUE(contains(inputs.front().text, "[Event] build.done (first)"));
-        XX_TEST_EXPECT_TRUE(inputs.front().source == "event:build.done");
+        XX_TEST_EXPECT_TRUE(contains(inputs.front().text, "[Event] " + evName("build.done") + " (first)"));
+        XX_TEST_EXPECT_TRUE(inputs.front().source == "event:" + evName("build.done"));
     }
     fx->endpoint->setTurnActiveForTest(false);
     co_return;
@@ -337,19 +338,19 @@ asio::awaitable<void> test_delivery_busy_inject() {
     fx->endpoint->setTurnActiveForTest(true);
 
     auto watched = hub->watch(agentxx::events::EventWaitSpec{
-        .event         = "notice.item",
+        .event         = evName("notice.item"),
         .mode          = "first",
         .delivery      = "inject",
         .originSession = fx->sessionId,
     });
     XX_TEST_EXPECT_TRUE(watched.has_value());
     std::string err;
-    XX_TEST_EXPECT_TRUE(hub->publishValue("notice.item", Json("hello"), &err));
+    XX_TEST_EXPECT_TRUE(hub->publishValue(evName("notice.item"), Json("hello"), &err));
 
     auto session = fx->agent->agentContext->sessions->get(fx->sessionId);
     auto injects = session->takePendingInputs(agentxx::agent::InputDelivery::Inject);
     XX_TEST_EXPECT_TRUE(injects.size() == 1);
-    XX_TEST_EXPECT_TRUE(contains(injects.front().text, "[Event] notice.item"));
+    XX_TEST_EXPECT_TRUE(contains(injects.front().text, "[Event] " + evName("notice.item")));
     fx->endpoint->setTurnActiveForTest(false);
     co_return;
 }
@@ -360,14 +361,14 @@ asio::awaitable<void> test_delivery_no_driver() {
     auto hub = fx->hub();
 
     auto watched = hub->watch(agentxx::events::EventWaitSpec{
-        .event         = "orphan.event",
+        .event         = evName("orphan.event"),
         .mode          = "first",
         .delivery      = "next-step",
         .originSession = fx->sessionId,
     });
     XX_TEST_EXPECT_TRUE(watched.has_value());
     std::string err;
-    XX_TEST_EXPECT_TRUE(hub->publishValue("orphan.event", Json("x"), &err));
+    XX_TEST_EXPECT_TRUE(hub->publishValue(evName("orphan.event"), Json("x"), &err));
     XX_TEST_EXPECT_TRUE(hub->stats().deferred >= 1);
 
     auto session = fx->agent->agentContext->sessions->get(fx->sessionId);
@@ -431,14 +432,14 @@ asio::awaitable<void> test_delivery_after_stop() {
 
     const auto deferredBefore = hub->stats().deferred;
     auto       watched        = hub->watch(agentxx::events::EventWaitSpec{
-        .event         = "after.stop",
+        .event         = evName("after.stop"),
         .mode          = "first",
         .delivery      = "next-step",
         .originSession = fx->sessionId,
     });
     XX_TEST_EXPECT_TRUE(watched.has_value());
     std::string err;
-    XX_TEST_EXPECT_TRUE(hub->publishValue("after.stop", Json("x"), &err));
+    XX_TEST_EXPECT_TRUE(hub->publishValue(evName("after.stop"), Json("x"), &err));
     XX_TEST_EXPECT_TRUE(hub->stats().deferred == deferredBefore + 1);
     co_return;
 }
@@ -448,7 +449,7 @@ asio::awaitable<void> test_delivery_close_all() {
     auto fx = co_await makeDeliveryFixture("ev-close");
     auto hub = fx->hub();
     auto watched = hub->watch(agentxx::events::EventWaitSpec{
-        .event         = "closing.event",
+        .event         = evName("closing.event"),
         .mode          = "first",
         .delivery      = "next-step",
         .originSession = fx->sessionId,
@@ -461,7 +462,7 @@ asio::awaitable<void> test_delivery_close_all() {
         hub->queryWait(watched->waitId)->state == agentxx::events::WaitState::Canceled
     );
     std::string err;
-    XX_TEST_EXPECT_FALSE(hub->publishValue("closing.event", Json("x"), &err));
+    XX_TEST_EXPECT_FALSE(hub->publishValue(evName("closing.event"), Json("x"), &err));
     co_return;
 }
 

@@ -1,5 +1,6 @@
 #include "agentxx-test/core/test_agent.h" // 本地 LLM 模拟器 startDaSimServer/g_da_sim_*
 #include "agentxx-test/core/test_event_hub.h"
+#include "agentxx-test/core/test_event_naming.h"
 #include "agentxx-test/test_coro_util.h"
 
 #include "agentxx/agent/agent_host.h"
@@ -276,21 +277,21 @@ asio::awaitable<void> test_async_dispatch_returns_immediately() {
 
     XX_TEST_EXPECT_TRUE(accepted);
     XX_TEST_EXPECT_TRUE(acceptedValue["started"].get<bool>());
-    XX_TEST_EXPECT_EQ(acceptedEvent, std::string{"subagent.done.job1"});
+    XX_TEST_EXPECT_EQ(acceptedEvent, std::string{evName("subagent.done.job1")});
     // 受理不等子代理: 300ms 的延迟下必须快速返回
     XX_TEST_EXPECT_TRUE(acceptCostMs < 250);
     XX_TEST_EXPECT_FALSE(valueArrived.load());
 
     runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
         const auto ok = co_await waitUntil([&] {
-            auto rec = hub->queryEvent("subagent.done.job1");
+            auto rec = hub->queryEvent(evName("subagent.done.job1"));
             return rec.has_value() && !rec->history.empty()
                    && rec->state == agentxx::events::EventState::Ended;
         });
         if (!ok) {
             co_return false;
         }
-        auto rec = hub->queryEvent("subagent.done.job1");
+        auto rec = hub->queryEvent(evName("subagent.done.job1"));
         value    = rec->history.front();
         co_return true;
     });
@@ -317,7 +318,7 @@ asio::awaitable<void> test_async_result_wakes_session() {
 
     // 父会话自己盯这个事件: 子代理结果到达时被唤醒
     auto watched = hub->watch(agentxx::events::EventWaitSpec{
-        .event         = "subagent.done.job2",
+        .event         = evName("subagent.done.job2"),
         .mode          = "first",
         .delivery      = "next-step",
         .originSession = fx->sessionId,
@@ -347,7 +348,7 @@ asio::awaitable<void> test_async_result_wakes_session() {
         acceptedEvent = resp->results[0].eventName;
         co_return resp->results[0].started;
     });
-    XX_TEST_EXPECT_EQ(acceptedEvent, std::string{"subagent.done.job2"});
+    XX_TEST_EXPECT_EQ(acceptedEvent, std::string{evName("subagent.done.job2")});
 
     runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
         co_return co_await waitUntil([&] {
@@ -356,9 +357,9 @@ asio::awaitable<void> test_async_result_wakes_session() {
     });
 
     const auto text = fx->sink->lastText();
-    XX_TEST_EXPECT_TRUE(contains(text, "[Event] subagent.done.job2"));
+    XX_TEST_EXPECT_TRUE(contains(text, "[Event] " + evName("subagent.done.job2")));
     XX_TEST_EXPECT_TRUE(contains(text, "async child result"));
-    XX_TEST_EXPECT_EQ(fx->sink->lastSource(), std::string{"event:subagent.done.job2"});
+    XX_TEST_EXPECT_EQ(fx->sink->lastSource(), std::string{"event:"} + evName("subagent.done.job2"));
     XX_TEST_EXPECT_EQ(hub->queryWait(watched->waitId)->state, agentxx::events::WaitState::Satisfied);
     co_return;
 }
@@ -371,7 +372,7 @@ asio::awaitable<void> test_async_tool_result_text() {
     // 模型派发后会盯这个事件 (事件名可预测), 结果到达时把会话叫醒
     auto* hub    = fx->hub();
     auto  watched = hub->watch(agentxx::events::EventWaitSpec{
-         .event         = "subagent.done.job3",
+         .event         = evName("subagent.done.job3"),
          .mode          = "first",
          .delivery      = "next-step",
          .originSession = fx->sessionId,
@@ -406,16 +407,16 @@ asio::awaitable<void> test_async_tool_result_text() {
     // 工具的返回文本 (模型看到的) 是受理提示, 不是子代理结果
     const auto dumped = g_da_sim_requests.size() >= 2 ? g_da_sim_last_request.dump() : std::string{};
     XX_TEST_EXPECT_TRUE(contains(dumped, "[Subagent started]"));
-    XX_TEST_EXPECT_TRUE(contains(dumped, "subagent.done.job3"));
+    XX_TEST_EXPECT_TRUE(contains(dumped, evName("subagent.done.job3")));
 
     // 结果事件随后到达中枢, 会话被叫醒
     runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
         co_return co_await waitUntil([&] {
-            auto rec = hub->queryEvent("subagent.done.job3");
+            auto rec = hub->queryEvent(evName("subagent.done.job3"));
             return rec.has_value() && !rec->history.empty();
         });
     });
-    auto rec = hub->queryEvent("subagent.done.job3");
+    auto rec = hub->queryEvent(evName("subagent.done.job3"));
     XX_TEST_EXPECT_TRUE(rec.has_value());
     if (rec.has_value() && !rec->history.empty()) {
         XX_TEST_EXPECT_EQ(
@@ -429,7 +430,7 @@ asio::awaitable<void> test_async_tool_result_text() {
             return fx->sink->count() >= 1;
         });
     });
-    XX_TEST_EXPECT_TRUE(contains(fx->sink->lastText(), "[Event] subagent.done.job3"));
+    XX_TEST_EXPECT_TRUE(contains(fx->sink->lastText(), "[Event] " + evName("subagent.done.job3")));
 
     g_da_sim_tool_calls_remaining = -1;
     co_return;
@@ -447,8 +448,8 @@ asio::awaitable<void> test_async_event_name_errors() {
             .parentSessionId = fx->sessionId,
             .cancelToken     = nullptr,
         };
-        req.tasks.push_back(asyncTask("dup1", "same.event"));
-        req.tasks.push_back(asyncTask("dup2", "same.event"));
+        req.tasks.push_back(asyncTask("dup1", evName("same.event")));
+        req.tasks.push_back(asyncTask("dup2", evName("same.event")));
         resp = co_await [&](
                ) -> asio::awaitable<agentxx::events::RespSubagentBatch> {
             auto r = co_await fx->agent->getContext()
@@ -576,14 +577,14 @@ asio::awaitable<void> test_async_cancel() {
     bool ok = false;
     runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
         ok = co_await waitUntil([&] {
-            auto rec = hub->queryEvent("subagent.done.job6");
+            auto rec = hub->queryEvent(evName("subagent.done.job6"));
             return rec.has_value() && !rec->history.empty()
                    && rec->state == agentxx::events::EventState::Ended;
         });
         co_return ok;
     });
     XX_TEST_EXPECT_TRUE(ok);
-    if (auto rec = hub->queryEvent("subagent.done.job6"); rec.has_value() && !rec->history.empty()) {
+    if (auto rec = hub->queryEvent(evName("subagent.done.job6")); rec.has_value() && !rec->history.empty()) {
         const auto value = rec->history.front();
         XX_TEST_EXPECT_TRUE(value.value("Canceled", false) || value.value("hasError", false));
     }

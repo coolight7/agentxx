@@ -818,7 +818,7 @@ asio::awaitable<void> runBody(
         XX_TEST_EXPECT_EQ(runtime->list_runtime(hostView, nullptr), int32_t{-1});
 
         // (a) QUEUE: 每条事件立即投递
-        const std::string topic = "runtime.tick";
+        const std::string topic = "plugin.runtime_probe.tick";
         AgentxxPluginTriggerSpec spec{};
         spec.struct_size = sizeof(AgentxxPluginTriggerSpec);
         spec.policy      = AGENTXX_PLUGIN_TRIGGER_POLICY_QUEUE;
@@ -883,7 +883,7 @@ asio::awaitable<void> runBody(
         AgentxxPluginTriggerSpec merge = spec;
         merge.policy                   = AGENTXX_PLUGIN_TRIGGER_POLICY_COALESCE;
         merge.debounce_ms              = 120;
-        merge.topic                    = PluginStringView::fromCstr("runtime.batch");
+        merge.topic                    = PluginStringView::fromCstr("plugin.runtime_probe.batch");
         int64_t mergeTrigger           = 0;
         XX_TEST_EXPECT_EQ(
             runtime->register_trigger(hostView, &merge, &mergeTrigger),
@@ -894,7 +894,7 @@ asio::awaitable<void> runBody(
             XX_TEST_EXPECT_EQ(
                 runtime->emit_event(
                     hostView,
-                    &SvArg("runtime.batch"),
+                    &SvArg("plugin.runtime_probe.batch"),
                     &SvArg(std::string_view{fmt::format(R"({{"text":"batch-{}"}})", i)})
                 ),
                 int32_t{AGENTXX_PLUGIN_RUNTIME_OK}
@@ -915,7 +915,7 @@ asio::awaitable<void> runBody(
         // (c) DROP_IF_BUSY: 通道正在跑一轮时丢弃
         AgentxxPluginTriggerSpec drop = spec;
         drop.policy                   = AGENTXX_PLUGIN_TRIGGER_POLICY_DROP_IF_BUSY;
-        drop.topic                    = PluginStringView::fromCstr("runtime.drop");
+        drop.topic                    = PluginStringView::fromCstr("plugin.runtime_probe.drop");
         int64_t dropTrigger           = 0;
         XX_TEST_EXPECT_EQ(
             runtime->register_trigger(hostView, &drop, &dropTrigger),
@@ -941,7 +941,7 @@ asio::awaitable<void> runBody(
         XX_TEST_EXPECT_EQ(
             runtime->emit_event(
                 hostView,
-                &SvArg("runtime.drop"),
+                &SvArg("plugin.runtime_probe.drop"),
                 &SvArg(R"({"text":"应当被丢弃"})")
             ),
             int32_t{AGENTXX_PLUGIN_RUNTIME_OK}
@@ -1089,7 +1089,7 @@ asio::awaitable<void> runBody(
         AgentxxPluginTriggerSpec spec{};
         spec.struct_size = sizeof(AgentxxPluginTriggerSpec);
         spec.policy      = AGENTXX_PLUGIN_TRIGGER_POLICY_QUEUE;
-        spec.topic       = PluginStringView::fromCstr("runtime.will-vanish");
+        spec.topic       = PluginStringView::fromCstr("plugin.runtime_probe.will-vanish");
         spec.channel_id  = channelA;
         int64_t triggerId = 0;
         XX_TEST_EXPECT_EQ(

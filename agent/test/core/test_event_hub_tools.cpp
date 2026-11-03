@@ -1,4 +1,5 @@
 #include "agentxx-test/core/test_event_hub.h"
+#include "agentxx-test/core/test_event_naming.h"
 
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/session_input_sink.h"
@@ -134,7 +135,7 @@ asio::awaitable<void> test_tool_watch_and_emit() {
         *fx->tool,
         Json{
             {"opt",       "watch"      },
-            {"event",     "build.done" },
+            {"event",     evName("build.done") },
             {"mode",      "first"      },
             {"sessionId", fx->sessionId},
             {"label",     "waiting for the build"},
@@ -142,7 +143,7 @@ asio::awaitable<void> test_tool_watch_and_emit() {
     );
     XX_TEST_EXPECT_TRUE(armed.starts_with("[Event wait armed]"));
     XX_TEST_EXPECT_TRUE(contains(armed, "wait=w-1"));
-    XX_TEST_EXPECT_TRUE(contains(armed, "event=build.done"));
+    XX_TEST_EXPECT_TRUE(contains(armed, "event=" + evName("build.done")));
     XX_TEST_EXPECT_TRUE(contains(armed, "mode=first"));
     XX_TEST_EXPECT_TRUE(contains(armed, "delivery=next-step"));
     XX_TEST_EXPECT_TRUE(fx->hub->waitCount() == 1);
@@ -151,7 +152,7 @@ asio::awaitable<void> test_tool_watch_and_emit() {
         *fx->tool,
         Json{
             {"opt",    "emit"                     },
-            {"event",  "build.done"               },
+            {"event",  evName("build.done")               },
             {"value",  Json{{"ok", true}}         },
             {"sessionId", fx->sessionId           },
         }
@@ -164,10 +165,10 @@ asio::awaitable<void> test_tool_watch_and_emit() {
     // 值已投递 (轮次在跑 → 待注入输入)
     auto inputs = fx->session->takePendingInputs(agentxx::agent::InputDelivery::NextStep);
     XX_TEST_EXPECT_TRUE(inputs.size() == 1);
-    XX_TEST_EXPECT_TRUE(contains(inputs.front().text, "[Event] build.done (first)"));
+    XX_TEST_EXPECT_TRUE(contains(inputs.front().text, "[Event] " + evName("build.done") + " (first)"));
     XX_TEST_EXPECT_TRUE(contains(inputs.front().text, R"({"ok":true})"));
     XX_TEST_EXPECT_TRUE(contains(inputs.front().text, "label: waiting for the build"));
-    XX_TEST_EXPECT_TRUE(inputs.front().source == "event:build.done");
+    XX_TEST_EXPECT_TRUE(inputs.front().source == "event:" + evName("build.done"));
     co_return;
 }
 
@@ -176,17 +177,17 @@ asio::awaitable<void> test_tool_watch_replay() {
     auto fx = co_await makeToolFixture();
     fx->sink->busy = true;
     std::string err;
-    fx->hub->publishValue("already.there", Json{{"n", 3}}, &err);
+    fx->hub->publishValue(evName("already.there"), Json{{"n", 3}}, &err);
 
     auto text = co_await execTool(
         *fx->tool,
         Json{
             {"opt",       "watch"        },
-            {"event",     "already.there"},
+            {"event",     evName("already.there")},
             {"sessionId", fx->sessionId  },
         }
     );
-    XX_TEST_EXPECT_TRUE(text.starts_with("[Event] already.there (first)"));
+    XX_TEST_EXPECT_TRUE(text.starts_with("[Event] " + evName("already.there") + " (first)"));
     XX_TEST_EXPECT_TRUE(contains(text, "status: value"));
     XX_TEST_EXPECT_TRUE(contains(text, R"({"n":3})"));
     // 回放后该等待已满足 (不再处于挂起状态), 没有新增挂起
@@ -205,7 +206,7 @@ asio::awaitable<void> test_tool_await() {
         [hub = fx->hub]() -> asio::awaitable<void> {
             co_await toolSleepMs(60);
             std::string ignored;
-            hub->publishValue("await.event", Json("payload"), &ignored);
+            hub->publishValue(evName("await.event"), Json("payload"), &ignored);
             co_return;
         },
         asio::detached
@@ -214,12 +215,12 @@ asio::awaitable<void> test_tool_await() {
         *fx->tool,
         Json{
             {"opt",        "await"      },
-            {"event",      "await.event"},
+            {"event",      evName("await.event")},
             {"sessionId",  fx->sessionId},
             {"timeout_ms", 2000         },
         }
     );
-    XX_TEST_EXPECT_TRUE(got.starts_with("[Event] await.event (first)"));
+    XX_TEST_EXPECT_TRUE(got.starts_with("[Event] " + evName("await.event") + " (first)"));
     XX_TEST_EXPECT_TRUE(contains(got, "status: value"));
     XX_TEST_EXPECT_TRUE(contains(got, "value: payload"));
 
@@ -227,19 +228,19 @@ asio::awaitable<void> test_tool_await() {
         *fx->tool,
         Json{
             {"opt",        "await"       },
-            {"event",      "never.event" },
+            {"event",      evName("never.event") },
             {"sessionId",  fx->sessionId },
             {"timeout_ms", 80            },
         }
     );
     XX_TEST_EXPECT_TRUE(timedOut.starts_with("[Event await timeout]"));
-    XX_TEST_EXPECT_TRUE(contains(timedOut, "event=never.event"));
+    XX_TEST_EXPECT_TRUE(contains(timedOut, "event=" + evName("never.event")));
     XX_TEST_EXPECT_TRUE(fx->hub->waitCount() == 0);
 
     // 超过硬上限时被裁剪到 5 分钟 (只看不报错: 立即可取消)
     auto cancelTokenArgs = Json{
         {"opt",        "cancel"       },
-        {"event",      "never.event"  },
+        {"event",      evName("never.event")  },
         {"sessionId",  fx->sessionId  },
         {"all",        true           },
     };
@@ -257,7 +258,7 @@ asio::awaitable<void> test_tool_status_list_cancel() {
         *fx->tool,
         Json{
             {"opt",       "watch"    },
-            {"event",     "status.me"},
+            {"event",     evName("status.me")},
             {"mode",      "each"     },
             {"sessionId", fx->sessionId},
         }
@@ -270,14 +271,14 @@ asio::awaitable<void> test_tool_status_list_cancel() {
         Json{{"opt", "status"}, {"wait", waitId}, {"sessionId", fx->sessionId}}
     );
     XX_TEST_EXPECT_TRUE(waitStatus.starts_with("[Event wait] wait="));
-    XX_TEST_EXPECT_TRUE(contains(waitStatus, "event=status.me"));
+    XX_TEST_EXPECT_TRUE(contains(waitStatus, "event=" + evName("status.me")));
     XX_TEST_EXPECT_TRUE(contains(waitStatus, "state=armed"));
 
     auto eventStatus = co_await execTool(
         *fx->tool,
-        Json{{"opt", "status"}, {"event", "status.me"}, {"sessionId", fx->sessionId}}
+        Json{{"opt", "status"}, {"event", evName("status.me")}, {"sessionId", fx->sessionId}}
     );
-    XX_TEST_EXPECT_TRUE(eventStatus.starts_with("[Event record] name=status.me"));
+    XX_TEST_EXPECT_TRUE(eventStatus.starts_with("[Event record] name=" + evName("status.me")));
     XX_TEST_EXPECT_TRUE(contains(eventStatus, "waits=1"));
 
     auto listAll = co_await execTool(
@@ -285,7 +286,7 @@ asio::awaitable<void> test_tool_status_list_cancel() {
         Json{{"opt", "list"}, {"sessionId", fx->sessionId}}
     );
     XX_TEST_EXPECT_TRUE(contains(listAll, "[Event list] events="));
-    XX_TEST_EXPECT_TRUE(contains(listAll, "status.me"));
+    XX_TEST_EXPECT_TRUE(contains(listAll, evName("status.me")));
     XX_TEST_EXPECT_TRUE(contains(listAll, "[Event list] waits=1"));
     XX_TEST_EXPECT_TRUE(contains(listAll, waitId));
 
@@ -322,30 +323,30 @@ asio::awaitable<void> test_tool_emit_end() {
         *fx->tool,
         Json{
             {"opt",       "emit"       },
-            {"event",     "one.value"  },
+            {"event",     evName("one.value")  },
             {"single",    true         },
             {"value",     Json{{"a", 1}}},
             {"sessionId", fx->sessionId},
         }
     );
-    XX_TEST_EXPECT_TRUE(single.starts_with("[Event emit] event=one.value"));
-    XX_TEST_EXPECT_TRUE(fx->hub->queryEvent("one.value")->kind == agentxx::events::EventKind::Single);
+    XX_TEST_EXPECT_TRUE(single.starts_with("[Event emit] event=" + evName("one.value")));
+    XX_TEST_EXPECT_TRUE(fx->hub->queryEvent(evName("one.value"))->kind == agentxx::events::EventKind::Single);
     XX_TEST_EXPECT_TRUE(
-        fx->hub->queryEvent("one.value")->state == agentxx::events::EventState::Ended
+        fx->hub->queryEvent(evName("one.value"))->state == agentxx::events::EventState::Ended
     );
 
     auto endText = co_await execTool(
         *fx->tool,
-        Json{{"opt", "end"}, {"event", "one.value"}, {"sessionId", fx->sessionId}}
+        Json{{"opt", "end"}, {"event", evName("one.value")}, {"sessionId", fx->sessionId}}
     );
-    XX_TEST_EXPECT_TRUE(endText.starts_with("[Event end] event=one.value"));
+    XX_TEST_EXPECT_TRUE(endText.starts_with("[Event end] event=" + evName("one.value")));
 
     auto removeText = co_await execTool(
         *fx->tool,
-        Json{{"opt", "end"}, {"event", "one.value"}, {"remove", true}, {"sessionId", fx->sessionId}}
+        Json{{"opt", "end"}, {"event", evName("one.value")}, {"remove", true}, {"sessionId", fx->sessionId}}
     );
     XX_TEST_EXPECT_TRUE(contains(removeText, "removed=true"));
-    XX_TEST_EXPECT_FALSE(fx->hub->queryEvent("one.value").has_value());
+    XX_TEST_EXPECT_FALSE(fx->hub->queryEvent(evName("one.value")).has_value());
 
     // 结束不存在的事件: 参数错误
     auto missing = co_await execTool(
@@ -371,18 +372,43 @@ asio::awaitable<void> test_tool_errors() {
     XX_TEST_EXPECT_TRUE(noEvent.starts_with("[threw] "));
     XX_TEST_EXPECT_TRUE(contains(noEvent, "event"));
 
+    // 读侧可跨族: 内置事件名 (含框架保留子段) 也能 watch
+    auto watchBuiltin = co_await execTool(
+        *fx->tool,
+        Json{{"opt", "watch"}, {"event", evName("turn.start")}, {"sessionId", fx->sessionId}}
+    );
+    XX_TEST_EXPECT_TRUE(watchBuiltin.starts_with("[Event wait armed]"));
+
+    // 写侧不能占框架保留子段 (内建事件源会用同名事件)
     auto reserved = co_await execTool(
         *fx->tool,
-        Json{{"opt", "watch"}, {"event", "agent.turn.start"}, {"sessionId", fx->sessionId}}
+        Json{
+            {"opt", "emit"},
+            {"event", evName("turn.start")},
+            {"value", 1},
+            {"sessionId", fx->sessionId},
+        }
     );
     XX_TEST_EXPECT_TRUE(reserved.starts_with("[threw] "));
     XX_TEST_EXPECT_TRUE(contains(reserved, "reserved"));
+
+    // 写侧也不能写插件族 (`plugin.<插件名>.*` 归插件自己)
+    auto pluginWrite = co_await execTool(
+        *fx->tool,
+        Json{
+            {"opt", "emit"},
+            {"event", "plugin.demo.x"},
+            {"value", 1},
+            {"sessionId", fx->sessionId},
+        }
+    );
+    XX_TEST_EXPECT_TRUE(pluginWrite.starts_with("[threw] "));
 
     auto badMode = co_await execTool(
         *fx->tool,
         Json{
             {"opt",       "watch"     },
-            {"event",     "ok.event"  },
+            {"event",     evName("ok.event")  },
             {"mode",      "sometimes"},
             {"sessionId", fx->sessionId},
         }
@@ -437,14 +463,14 @@ asio::awaitable<void> test_tool_watch_timer() {
         *fx->tool,
         Json{
             {"opt",       "watch"    },
-            {"event",     "timer.soon"},
+            {"event",     evName("timer.soon")},
             {"mode",      "first"    },
             {"after_ms",  40         },
             {"sessionId", fx->sessionId},
         }
     );
     XX_TEST_EXPECT_TRUE(armed.starts_with("[Event wait armed]"));
-    XX_TEST_EXPECT_TRUE(contains(armed, "event=timer.soon"));
+    XX_TEST_EXPECT_TRUE(contains(armed, "event=" + evName("timer.soon")));
 
     // 定时到点后值进入会话
     bool delivered = false;
@@ -455,14 +481,14 @@ asio::awaitable<void> test_tool_watch_timer() {
     XX_TEST_EXPECT_TRUE(delivered);
     auto inputs = fx->session->takePendingInputs(agentxx::agent::InputDelivery::NextStep);
     XX_TEST_EXPECT_TRUE(inputs.size() == 1);
-    XX_TEST_EXPECT_TRUE(contains(inputs.front().text, "[Event] timer.soon"));
+    XX_TEST_EXPECT_TRUE(contains(inputs.front().text, "[Event] " + evName("timer.soon")));
 
     // 非法延迟: 参数错误
     auto badTimer = co_await execTool(
         *fx->tool,
         Json{
             {"opt",       "watch"     },
-            {"event",     "timer.bad" },
+            {"event",     evName("timer.bad") },
             {"after_ms",  -5          },
             {"sessionId", fx->sessionId},
         }

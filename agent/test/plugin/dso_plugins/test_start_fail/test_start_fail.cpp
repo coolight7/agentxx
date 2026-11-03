@@ -3,12 +3,12 @@
 /// 行为：start 依次完成全部注册，然后**主动失败**：
 ///   1. 注册工具           `dso_rollback_tool`
 ///   2. 注册图节点类型      `dso_rollback_type`
-///   3. 订阅事件            `dso_rollback.watch`
+///   3. 订阅事件            `plugin.test_start_fail_plugin.watch`
 ///   4. prompt 贡献         `appendSystemPrompts.dso_rollback`
 ///   5. 注册 hook           点 `AGENTXX_PLUGIN_HOOK_MODEL_START`
 ///   6. 注册能力            `dso.rollback.cap`
 ///   7. 注册资源            skill 目录 `/tmp/agentxx_dso_rollback_skills`
-///   8. 发布 `{"step":"all","ok":true}` 到 `dso_rollback.probe`，然后返回 NULL + error
+///   8. 发布 `{"step":"all","ok":true}` 到 `plugin.test_start_fail_plugin.probe`，然后返回 NULL + error
 ///
 /// 若任一步骤失败，则发布 `{"step":"<name>","ok":false}` 并返回该失败。
 /// 测试据此验证：
@@ -68,7 +68,7 @@ void report(const PluginxxHost* host, const char* step, bool ok) {
     if (!events || !events->publish) {
         return;
     }
-    const auto topic = sv("dso_rollback.probe");
+    const auto topic = sv("plugin.test_start_fail_plugin.probe");
     char       buffer[64];
     const int  length = std::snprintf(
         buffer,
@@ -224,7 +224,7 @@ static void* probeMount(
         setError(host, error_out, failStep(host, "events_iface"));
         return nullptr;
     }
-    const auto watchTopic = sv("dso_rollback.watch");
+    const auto watchTopic = sv("plugin.test_start_fail_plugin.watch");
     if (!events->subscribe(host, &ref, &watchTopic, &onProbeEvent, ctx)) {
         setError(host, error_out, failStep(host, "subscribe"));
         return nullptr;
