@@ -1051,6 +1051,7 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 插件经内置 `agentxx_jav
 | `example_js` | JS 插件示例 (C++ 壳 + `plugin.js`) |
 | `example_resources` | 会话资源贡献示例 (声明式与编程式 MCP/Skill/规则/会话环境) |
 | `example_multi_mount` | 多挂载示例 (每 agent 一份状态: 计数 + 挂载级 `config_json`; 见 §18) |
+| `example_event` | 事件中枢示例 (声明流式/单值事件源、发布值、替会话登记等待; 见 §20) |
 | `agentxx_filesystem` | 文件系统 9 工具 (list/read/write/edit/glob/grep/move/copy/remove, 含 `*_impl.h` 直测实现) |
 | `agentxx_execute_command` | 命令执行 2 工具 (bash/windows, 含超时); 在 start 事务内探测 python/node (Windows 侧含 PowerShell) 并把结果写入自身工具提示词 |
 | `agentxx_websearch` | 网络搜索 2 工具 (web_search / web_fetch, `format` = markdown\|raw) |

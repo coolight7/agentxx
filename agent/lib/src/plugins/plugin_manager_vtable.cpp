@@ -16,11 +16,9 @@
 
 #include <chrono>
 #include <cstring>
-#include <future>
 #include <optional>
 #include <stdexcept>
 #include <string>
-#include <thread>
 
 namespace agentxx {
 namespace plugin {
@@ -1756,15 +1754,29 @@ static int32_t PLUGINXX_CALL xx_event_emit(
     }
 
     // 值放进堆上对象: 闭包会被投递到 io 线程后调用, 不能依赖 mutable 捕获
-    auto valueBox = std::make_shared<utilxx_base::Json>(std::move(value));
+    auto valueBox    = std::make_shared<utilxx_base::Json>(std::move(value));
+    auto valueBytes = rawValue.size();
 
     return onScopedInstanceIo(
         host,
         agent,
-        [agent, nameText, valueBox](PluginInstance* inst, PluginManager* mgr) -> int32_t {
+        [agent, nameText, valueBox, valueBytes](PluginInstance* inst, PluginManager* mgr)
+            -> int32_t {
             auto hub = eventHubOf(mgr, agent);
             if (!hub) {
                 return eventCodeOfHubFailure(hub);
+            }
+            const auto hardLimit = hub->config().valueHardBytes;
+            if (hardLimit > 0 && valueBytes > hardLimit) {
+                // 超硬上限的值不存也不发 (中枢那边也只能记日志丢掉), 直接告诉调用方
+                XX_LOGW(
+                    "[event] Plugin `{}` emit `{}` rejected: value is {} bytes > hard limit {}",
+                    inst->name,
+                    nameText,
+                    valueBytes,
+                    hardLimit
+                );
+                return AGENTXX_PLUGIN_EVENT_ERR_ARG;
             }
             const auto owner = eventOwnerOf(inst);
             // 事件还没声明过就按流式事件补一条 (归属本插件, 便于禁用时整批回收);
@@ -1943,6 +1955,10 @@ static int32_t PLUGINXX_CALL xx_event_query(
     );
     if (rc != AGENTXX_PLUGIN_EVENT_OK) {
         return rc;
+    }
+    if (text.empty()) {
+        // 取不到内容 (中枢线程忙/中枢已释放): 不把空串交给插件当成一条事件
+        return AGENTXX_PLUGIN_EVENT_ERR_STATE;
     }
     hostMemorySetString(out_json, text);
     return AGENTXX_PLUGIN_EVENT_OK;

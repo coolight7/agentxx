@@ -266,3 +266,40 @@ wire 结构只在表尾追加一个字段 (老客户端读到空串即旧行为)
 [index.md](/docs/zh-cn/design/index.md) 的"文件编码与换行"一节; `agent/third_party/`
 保留上游行尾与编码, 不强制改写。
 
+## 7. 插件事件表实施要点 (2026-11-03)
+
+### 7.1 线程: 两次投递, 实际只有一次
+
+插件调用线程 → 主程序 io 线程 (`onInstanceIo` / `ioCallSyncKeep`) → 事件中枢线程
+(`EventHub::callSync`)。**实际装配里第二条与第一条是同一条线程** (插件管理器拿的就是
+agent 的 io executor), 所以 `callSync` 走"直接执行"分支; 跨线程那条路 (投递 + 等最多 10 秒)
+只在诊断与测试里出现。等的时间有上限是为了不让"中枢线程正忙"变成插件线程永久阻塞。
+
+`emit_value` 只排队不取结果: 值经 `EventHub::postValue` 落到中枢线程写, 因此插件侧
+"发出去就返回"。返回值只表达"已受理", 不代表已经投递到会话 (丢弃会记警告与计数)。
+
+### 7.2 归属: 按 `plugin:<实例名>` 记账, 不额外记名字清单
+
+事件记录的 `owner` 与等待的 `spec.owner` 都写 `plugin:<实例名>`, 回收时按这个字符串整批删
+(`EventHub::removeOwned`: 先取消等待, 再删记录)。因此
+`PluginMount::Entry` 不需要再加"本实例声明过哪些事件"的列表, 也不会出现"记录删了清单还在"
+这种两处不一致。注册清单的计数同理 (`ownedCounts`)。
+
+### 7.3 三处容易写错的细节
+
+1. 闭包不能是 `mutable` lambda: `onInstanceIo` 会把闭包包进 `std::function` 再调用, 而包装层
+   的 `operator()` 是 const —— 需要移动的值放到堆上 (`shared_ptr`) 再按值拷贝捕获;
+2. `PluginxxScopeRef::id` 是**借用视图**: 测试里用 `mount->agentId()` 造引用时必须让
+   `std::string` 活到调用结束 (早先写成 `const auto id = mount->agentId();` 后返回引用,
+   ASan 报 `stack-buffer-underflow`, 现象是 `findMountById` 里的字符串比较读到栈外);
+3. 单值事件的旧值会被回放: 单值事件首个值到达即结束, 之后再注册 `first` 等待会立刻满足 ——
+   "怎么注册完就有值了"是设计如此, 不是重复投递。
+
+### 7.4 验证
+
+`plugin_event` 5 组 106 条断言 (声明与自查 / 发布结束移除查询 / 登记等待与投递 / 失败路径 /
+禁用-启用-卸载), 加上回归: `boundaries` 18/1 (唯一失败是第三方仓库的用词规则, 与本期无关)、
+`plugin_runtime` 736、`plugin_host_mount` 148、`plugin_cleanup` 99、`plugin_feature` 145、
+`plugin_sdk` 115、`event_hub` 204、`event_tools` 97、`event_delivery` 46、`event_subagent` 52、
+`observability` 114, 全绿。
+
