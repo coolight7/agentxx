@@ -727,7 +727,7 @@ typedef struct AgentxxPluginGraphIface {
 /// 1. 为**任何已声明的点**登记实现 ([AgentxxPluginFeatureImplSpec]): 应用点由主程序
 ///    加载期声明, 插件点由插件自己经 define_point 声明;
 /// 2. **声明自己的点** ([AgentxxPluginFeaturePointSpec]): id 必须落在
-///    `plugin.<本实例插件名>.*`, 声明期间恒可被任何一方调用 (本轮只允许 provide 类型);
+///    `plugin.*` (不限定插件名, 建议用自己的), 声明期间恒可被任何一方调用 (本轮只允许 provide 类型);
 /// 3. **调用点** (call_point_async): 只拿数据 —— 不写值缓存、不记置空、不改调用方
 ///    会话与上下文、不发界面提示、不落盘。
 ///
@@ -761,7 +761,7 @@ typedef struct AgentxxPluginFeaturePointSpec {
     /// 等实现方的超时 (毫秒; 0 = 不限, 默认): 到点取消当次实现并按"没意见"继续链
     int32_t impl_timeout_ms;
     int32_t _reserved; ///< 8 字节补齐
-    /// 点 id, 必须为 `plugin.<本实例插件名>.<名字>` (不含空白字符)
+    /// 点 id, 必须为 `plugin.<名字>.<事件>` (不限定插件名; 不含空白字符)
     PluginxxStringView id;
     /// 展示名 (可空, 缺省用 id)
     PluginxxStringView title;

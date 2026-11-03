@@ -440,7 +440,7 @@ public:
         return unregisterFeatureImpl(inst, strToSv(pointId));
     }
 
-    /// 声明本实例自己的功能点 (id 必须落在 `plugin.<本实例插件名>.*`)
+    /// 声明一个插件功能点 (id 必须落在 `plugin.*`; 建议用自己的插件名作前缀)
     int defineFeaturePoint(PluginInstance* inst, const AgentxxPluginFeaturePointSpec* spec);
 
     /// 撤销本实例声明的点 (连带撤掉这些点上的全部实现)

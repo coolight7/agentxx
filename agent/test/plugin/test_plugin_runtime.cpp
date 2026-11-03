@@ -2179,8 +2179,9 @@ TestResult testPluginRuntime() {
             ifaces.events->unsubscribe(late);         ///< 迟到调用必须安全空操作
             ifaces.events->unsubscribe(late);
         }
-        // 实例已卸载: publish 按 "写自己那一族" 的规则被拒 (插件不在就不再代表它)
-        XX_TEST_EXPECT_TRUE(f.manager->publish("plugin.provider.topic", "{}") != 0);
+        // 主题只要求落在 plugin.*: 实例卸载后写同一主题仍允许
+        // (同组织多插件可共用一个段, 主程序不把主题绑定到具体实例)
+        XX_TEST_EXPECT_EQ(f.manager->publish("plugin.provider.topic", "{}"), 0);
         flushEvents();
         XX_TEST_EXPECT_EQ(handlerCalls, 1);
     }

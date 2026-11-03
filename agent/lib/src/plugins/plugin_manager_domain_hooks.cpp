@@ -149,18 +149,10 @@ PluginxxSubscription* PluginManager::subscribe(
 
 int32_t PluginManager::publish(std::string_view topic, std::string_view eventJson) {
     std::string err;
-    if (!agentxx::events::naming::validateReadableTopic(topic, &err)
-        || !agentxx::events::naming::isPluginTopic(topic)) {
-        XX_LOGW("Plugin publish rejected: topic `{}` must be `plugin.<plugin name>.*` ({})", topic, err);
-        return -1;
-    }
-    // 插件名必须是已加载的插件 (插件自己那一族); 框架不补前缀也不改写主题
-    const auto pluginName = agentxx::events::naming::pluginNameOfTopic(topic);
-    if (pluginName.empty() || find(std::string{pluginName}) == nullptr) {
-        XX_LOGW(
-            "Plugin publish rejected: topic `{}` is outside every loaded plugin's namespace",
-            topic
-        );
+    // 写侧只要求落在插件族里 (`plugin.*`); 不限定后面的名字是不是本实例的 ——
+    // 同一组织的多个插件可能共用一段, 建议仍用自己的插件名
+    if (!agentxx::events::naming::validatePluginWriteTopic(topic, &err)) {
+        XX_LOGW("Plugin publish rejected: topic `{}` ({})", topic, err);
         return -1;
     }
     return pluginxx::PluginHostCore<PluginInstance>::publish(topic, eventJson);

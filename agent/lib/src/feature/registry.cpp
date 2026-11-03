@@ -84,7 +84,7 @@ int32_t Registry::definePluginPoint(const PluginPointDecl& decl) {
         );
         return -1;
     }
-    // 命名空间强校验: id 必须落在 `plugin.<本实例插件名>.*` (框架不补前缀)
+    // 命名空间校验: id 必须落在 `plugin.*` 里 (不限定插件名; 框架不补前缀)
     const std::string_view pluginName = std::string_view{decl.owner}.substr(7);
     std::string            nameErr;
     if (!agentxx::events::naming::validateFeaturePointId(decl.id, pluginName, &nameErr)) {

@@ -11,18 +11,21 @@ namespace naming {
 
 /// 命名契约: 总线主题 / 事件中枢事件名 / 功能点 id 共用一套前缀规则
 ///
-/// 三族命名空间, 各自只能在自己那一族里**写** (注册/发布), **读** (订阅/等待)
+/// 三族命名空间, **写** (注册/发布) 只能落在自己那一族的根下, **读** (订阅/等待)
 /// 可以跨族:
 /// - 内置 agent 端: `agentxx.agent.<域>...`  (轮次/模型/工具/服务/中枢...)
 /// - 内置 client 端: `agentxx.client.<域>...` (客户端主程序上报/下发)
-/// - 插件:          `plugin.<插件名>.<自由部分>`
+/// - 插件:          `plugin.<名字>.<自由部分>`
 ///
-/// 插件名 = 插件实例名 (`plugin.agentxx_chatbot.panel` 的插件名是
-/// `agentxx_chatbot`)。框架**只校验不补前缀**: 名字不在自己那一族里就报错,
-/// 由插件自己写全名。
+/// 插件那一族**只校验 `plugin.` 根, 不限定后面的名字是不是本实例的**:
+/// 同一组织的多个插件可能复用代码、同一功能由不同插件包提供实现, 共用一段是
+/// 正当需求。建议仍用自己的插件名作前缀 (`plugin.<本实例插件名>.xxx`), 便于归属与
+/// 退回时整批回收记录, 但框架不做强制。
+///
+/// 框架**只校验不补前缀**: 名字不在所属族里就报错, 由插件自己写全名。
 ///
 /// 事件中枢的事件名与总线主题是**同一个字符串**: 中枢直接按主题收值
-/// (`plugin.<插件名>.*` 前缀), 内置值事件统一放在 `agentxx.agent.event.` 段,
+/// (`plugin.` 前缀), 内置值事件统一放在 `agentxx.agent.event.` 段,
 /// 与 `agentxx.agent.turn.start` 这类强类型主题分开, 避免同一个主题被
 /// 两种载荷类型共用。
 
@@ -161,23 +164,20 @@ inline std::string_view clientPluginNameOfTopic(std::string_view topic) {
     return rest.substr(0, dot);
 }
 
-/// client 插件上行主题校验 (`agentxx.client.plugin.<本实例插件名>.*`)
-/// - 与 [validatePluginTopic] 同一规则: 不在自己的段里就报错
-inline bool validateClientPluginTopic(
-    std::string_view topic,
-    std::string_view pluginName,
-    std::string*     err = nullptr
-) {
+/// client 插件上行主题校验 (`agentxx.client.plugin.<插件名>.<事件>`)
+/// - 只要求落在 client 插件族里, **不限定插件名**: 同一组织的多个插件、
+///   以及“同一功能由不同插件包提供实现”的场景可以写同一个段
+///   (建议用自己的插件名, 见 docs/zh-cn/design/plugins.md §21)
+inline bool validateClientPluginWriteTopic(std::string_view topic, std::string* err = nullptr) {
     if (!validateNameSyntax(topic, err)) {
         return false;
     }
-    const auto prefix = clientPluginPrefix(pluginName);
-    if (!prefix.empty() && topic.size() > prefix.size() && topic.starts_with(prefix)) {
+    if (!clientPluginNameOfTopic(topic).empty()) {
         return true;
     }
     if (err) {
-        *err = "topic must be inside `agentxx.client.plugin." + std::string{pluginName}
-               + ".*` (the framework does not add the prefix for you)";
+        *err = "topic must be inside `agentxx.client.plugin.<plugin name>.<event>` (the framework "
+               "does not add the prefix for you)";
     }
     return false;
 }
@@ -237,23 +237,20 @@ inline bool validateAgentEventName(std::string_view name, std::string* err = nul
     return false;
 }
 
-/// 插件写自己那一族时的校验 (`plugin.<本实例插件名>.*`)
-/// - 框架**不补前缀**: 不在自己的段里就报错, 错误文本直接给出应有的前缀
-inline bool validatePluginTopic(
-    std::string_view name,
-    std::string_view pluginName,
-    std::string*     err = nullptr
-) {
+/// 插件写侧校验 (`plugin.<插件名>.<事件>`)
+/// - 只要求落在插件族里, **不限定插件名**: 同一组织的多个插件可以共用一个段
+///   (代码复用、同一功能由不同插件包提供实现等), 建议仍用自己的插件名
+/// - 框架**不补前缀**: 不在插件族里就报错, 错误文本直接给出应有的前缀
+inline bool validatePluginWriteTopic(std::string_view name, std::string* err = nullptr) {
     if (!validateNameSyntax(name, err)) {
         return false;
     }
-    const auto prefix = pluginPrefix(pluginName);
-    if (!prefix.empty() && name.size() > prefix.size() && name.starts_with(prefix)) {
+    if (isPluginTopic(name)) {
         return true;
     }
     if (err) {
-        *err = "name must be inside `plugin." + std::string{pluginName} + ".*` (the framework "
-               "does not add the prefix for you)";
+        *err = "name must be inside `plugin.<plugin name>.<event>` (the framework does not add "
+               "the prefix for you)";
     }
     return false;
 }
@@ -289,7 +286,7 @@ inline bool validateBuiltinTopic(std::string_view topic, std::string* err = null
 
 /// 功能点 id 校验 (与事件名同一套前缀规则)
 /// - 内置点: `agentxx.agent.*` (核心实现声明)
-/// - 插件点: `plugin.<本实例插件名>.*`
+/// - 插件点: `plugin.<插件名>.*` (不限定插件名, 见 [validatePluginWriteTopic])
 inline bool validateFeaturePointId(
     std::string_view id,
     std::string_view pluginName, ///< 空 = 内置实现
@@ -299,7 +296,7 @@ inline bool validateFeaturePointId(
         return false;
     }
     if (!pluginName.empty()) {
-        return validatePluginTopic(id, pluginName, err);
+        return validatePluginWriteTopic(id, err);
     }
     if (id.size() > kAgentRoot.size() && id.starts_with(kAgentRoot)) {
         return true;

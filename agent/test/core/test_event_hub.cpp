@@ -816,12 +816,15 @@ asio::awaitable<void> test_hub_naming() {
     XX_TEST_EXPECT_TRUE(naming::validateAgentEventName(ev("turn.start")));
     XX_TEST_EXPECT_FALSE(naming::validateAgentEventName("plugin.demo.x", &err));
 
-    // 插件写侧: 只能写自己的段, 且不补前缀
-    XX_TEST_EXPECT_TRUE(naming::validatePluginTopic("plugin.demo.panel.click", "demo"));
-    XX_TEST_EXPECT_FALSE(naming::validatePluginTopic("plugin.other.click", "demo", &err));
-    XX_TEST_EXPECT_TRUE(contains(err, "plugin.demo.*"));
-    XX_TEST_EXPECT_FALSE(naming::validatePluginTopic("click", "demo", &err));
-    XX_TEST_EXPECT_FALSE(naming::validatePluginTopic("plugin.demo.panel", "", &err));
+    // 插件写侧: 只要落在插件族里 (不限定插件名), 且不补前缀
+    XX_TEST_EXPECT_TRUE(naming::validatePluginWriteTopic("plugin.demo.panel.click"));
+    // 共用一段也允许 (同一组织的多个插件/同一功能多实现), 只在文档建议用自己的名
+    XX_TEST_EXPECT_TRUE(naming::validatePluginWriteTopic("plugin.other.click"));
+    XX_TEST_EXPECT_TRUE(naming::validatePluginWriteTopic("plugin.org.shared.panel.click"));
+    XX_TEST_EXPECT_FALSE(naming::validatePluginWriteTopic("click", &err));
+    XX_TEST_EXPECT_TRUE(contains(err, "plugin.<plugin name>"));
+    XX_TEST_EXPECT_FALSE(naming::validatePluginWriteTopic("plugin.demo", &err));
+    XX_TEST_EXPECT_FALSE(naming::validatePluginWriteTopic("agentxx.agent.turn.start", &err));
 
     // 读侧: 三族任意, 但必须是全名
     XX_TEST_EXPECT_TRUE(naming::validateReadableTopic("agentxx.agent.turn.start"));
@@ -829,21 +832,23 @@ asio::awaitable<void> test_hub_naming() {
     XX_TEST_EXPECT_TRUE(naming::validateReadableTopic("plugin.demo.x"));
     XX_TEST_EXPECT_FALSE(naming::validateReadableTopic("turn.start", &err));
 
-    // client 端插件上行主题 (`agentxx.client.plugin.<插件名>.*`)
+    // client 端插件上行主题 (`agentxx.client.plugin.<名字>.<事件>`, 同样不限定插件名)
     XX_TEST_EXPECT_TRUE(
         naming::clientPluginPrefix("demo") == std::string{naming::kClientPluginDataPrefix} + "demo."
     );
     XX_TEST_EXPECT_TRUE(naming::clientPluginNameOfTopic("agentxx.client.plugin.demo.x") == "demo");
     XX_TEST_EXPECT_TRUE(naming::clientPluginNameOfTopic("agentxx.client.host.x").empty());
-    XX_TEST_EXPECT_TRUE(naming::validateClientPluginTopic("agentxx.client.plugin.demo.x", "demo"));
-    XX_TEST_EXPECT_FALSE(naming::validateClientPluginTopic("agentxx.client.plugin.other.x", "demo", &err));
-    XX_TEST_EXPECT_FALSE(naming::validateClientPluginTopic("plugin.demo.x", "demo", &err));
+    XX_TEST_EXPECT_TRUE(naming::validateClientPluginWriteTopic("agentxx.client.plugin.demo.x"));
+    XX_TEST_EXPECT_TRUE(naming::validateClientPluginWriteTopic("agentxx.client.plugin.other.x"));
+    XX_TEST_EXPECT_FALSE(naming::validateClientPluginWriteTopic("agentxx.client.plugin.x", &err));
+    XX_TEST_EXPECT_FALSE(naming::validateClientPluginWriteTopic("plugin.demo.x", &err));
 
-    // 功能点 id 与事件名同一套规则
+    // 功能点 id 与事件名同一套规则 (插件点只要在 plugin.*, 不限定插件名)
     XX_TEST_EXPECT_TRUE(naming::validateFeaturePointId("agentxx.agent.context.summarize", {}));
     XX_TEST_EXPECT_FALSE(naming::validateFeaturePointId("context.summarize", {}, &err));
     XX_TEST_EXPECT_TRUE(naming::validateFeaturePointId("plugin.demo.my_point", "demo"));
-    XX_TEST_EXPECT_FALSE(naming::validateFeaturePointId("plugin.other.my_point", "demo", &err));
+    XX_TEST_EXPECT_TRUE(naming::validateFeaturePointId("plugin.other.my_point", "demo"));
+    XX_TEST_EXPECT_FALSE(naming::validateFeaturePointId("agentxx.agent.context.x", "demo", &err));
     co_return;
 }
 

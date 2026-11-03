@@ -467,7 +467,7 @@ typedef struct AgentxxClientWireIface {
 
     /// 发送事件到 agent 侧: 服务端原样发布到事件总线 topic (agent 侧插件可订阅;
     /// 载荷 JSON 原样转发, 语义由插件定义)
-    /// - topic 必须是全名 `agentxx.client.plugin.<本实例插件名>.<事件>`
+    /// - topic 必须是全名 `agentxx.client.plugin.<名字>.<事件>` (不限定插件名, 建议用自己的)
     ///   (框架只校验、不补前缀, 不在自己的段里直接返回非 0)
     /// - 返回 0 成功; 非 0 表示未连接或名字/载荷非法
     int32_t(PLUGINXX_CALL* send_plugin_data)(

@@ -3666,9 +3666,10 @@ int ClientPluginManager::sendPluginDataToPeer(
         return -1;
     }
     const std::string topicStr = svToStr(topic);
-    // 只能写自己那一族 (`agentxx.client.plugin.<本实例插件名>.*`); 框架不补前缀
+    // 只能写 client 插件族 (`agentxx.client.plugin.<名字>.<事件>`); 不限定插件名,
+    // 建议用自己的; 框架不补前缀
     std::string err;
-    if (!agentxx::events::naming::validateClientPluginTopic(topicStr, inst->name, &err)) {
+    if (!agentxx::events::naming::validateClientPluginWriteTopic(topicStr, &err)) {
         XX_LOGW("[client_plugin] {} send_plugin_data rejected: {}", inst->name, err);
         return -2;
     }

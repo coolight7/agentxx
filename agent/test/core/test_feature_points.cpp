@@ -958,13 +958,20 @@ asio::awaitable<void> test_plugin_points() {
     decl.resultDoc = "{bpm, beats}";
     XX_TEST_EXPECT_EQ(registry.definePluginPoint(decl), 0);
 
-    // 命名空间校验: 别人的点不能声明
+    // 命名空间校验: 只要在 plugin.* 里就行 (不限定插件名: 同一组织多插件可共用一段),
+    // 其余族与不合格名字一律拒绝
+    agentxx::feature::PluginPointDecl shared = decl;
+    shared.id                                = "plugin.org_shared.beat";
+    shared.owner                             = "plugin:other_plugin";
+    XX_TEST_EXPECT_EQ(registry.definePluginPoint(shared), 0);
+    XX_TEST_EXPECT_EQ(registry.undefinePluginPoint(shared.id), 0);
+
     agentxx::feature::PluginPointDecl bad = decl;
-    bad.id                                = "plugin.other_plugin.beat";
-    XX_TEST_EXPECT_EQ(registry.definePluginPoint(bad), -1);
-    bad.id = "agentxx.agent.context.countTokens";
+    bad.id                                = "agentxx.agent.context.countTokens";
     XX_TEST_EXPECT_EQ(registry.definePluginPoint(bad), -1);
     bad.id = "plugin.my_plugin.";
+    XX_TEST_EXPECT_EQ(registry.definePluginPoint(bad), -1);
+    bad.id = "beat";
     XX_TEST_EXPECT_EQ(registry.definePluginPoint(bad), -1);
 
     // 声明后恒为可调; 没有实现时 no_impl

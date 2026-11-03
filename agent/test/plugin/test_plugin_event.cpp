@@ -673,10 +673,15 @@ asio::awaitable<void> test_failure_paths() {
     }
     const auto ref = agentRefOf(f);
 
-    // 名称不在自己那一族里 (框架不补前缀) / 空名称
+    // 名称只要在 plugin.* 里就行 (不限定插件名: 同一组织多插件可共用一段);
+    // 裸名/空名称一律拒绝 (框架不补前缀)
     XX_TEST_EXPECT_EQ(
         defineEventOf(inst.get(), ref, "plugin.other_plugin.x", false),
-        int32_t{AGENTXX_PLUGIN_EVENT_ERR_ARG}
+        int32_t{AGENTXX_PLUGIN_EVENT_OK}
+    );
+    XX_TEST_EXPECT_EQ(
+        removeEventOf(inst.get(), ref, "plugin.other_plugin.x"),
+        int32_t{AGENTXX_PLUGIN_EVENT_OK}
     );
     XX_TEST_EXPECT_EQ(
         defineEventOf(inst.get(), ref, "build", false),

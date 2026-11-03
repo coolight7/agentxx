@@ -995,7 +995,7 @@ public:
     }
 
     /// 跨端数据 (client → agent): 经端点 WirePluginDataUp 发送
-    /// - topic 必须是全名 `agentxx.client.plugin.<本实例插件名>.<事件>`
+    /// - topic 必须是全名 `agentxx.client.plugin.<名字>.<事件>` (不限定插件名, 建议用自己的)
     int sendPluginDataToPeer(
         ClientPluginInstance* inst,
         PluginxxStringView    topic,

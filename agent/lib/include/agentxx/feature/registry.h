@@ -25,7 +25,7 @@ namespace feature {
 
 /// 插件声明自己的功能点 (本轮只允许 `provide` 类型)
 struct PluginPointDecl {
-    /// 点 id, 必须为 `plugin.<本实例插件名>.<名字>`
+    /// 点 id, 必须为 `plugin.<名字>.<事件>` (不限定插件名, 建议用自己的)
     std::string id;
     /// 声明方归属 (`plugin:<插件名>`)
     std::string owner;
@@ -96,7 +96,7 @@ public:
     JsonProvidePoint& provideJson(std::string_view id, PointOptions opts, std::string origin);
 
     /// 插件声明自己的功能点
-    /// - id 必须落在 `plugin.<本实例插件名>.*`; 不在自己那一族直接拒绝并记日志
+    /// - id 必须落在 `plugin.*` (不限定插件名); 不在插件族里直接拒绝并记日志
     ///   (框架不补前缀, 与事件主题同一套规则)
     /// - 本轮只允许 `provide` 类型 (`decide` 被拒绝并记日志)
     /// - 声明的点在存活期间恒为可调; 值缓存固定不缓存 (调用方要缓存用结果里的 identity)

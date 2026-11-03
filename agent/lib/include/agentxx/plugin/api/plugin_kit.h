@@ -1126,8 +1126,8 @@ inline int32_t removeTrigger(Ctx& ctx, int64_t triggerId) {
 }
 
 /// 发一条事件 (任意线程, 立即返回)
-/// - 主题必须写全名且属于本实例: `plugin.<本实例插件名>.*` (写侧不允许跨族)
-/// - 能不能发到内置主题: 不能 —— 内置源只由主程序发布
+/// - 主题必须写全名并落在插件族里: `plugin.<名字>.<事件>` (不限定插件名, 建议用自己的)
+/// - 写侧不允许跨族: 内置主题 (`agentxx.*`) 只由主程序发布
 template<typename Ctx>
 inline int32_t emitEvent(Ctx& ctx, std::string_view topic, std::string_view payloadJson = {}) {
     if (!hasRuntime(ctx) || !ctx.iface.runtime->emit_event || topic.empty()) {
@@ -1180,8 +1180,9 @@ inline int32_t removeRuntimeTimer(Ctx& ctx, int64_t timerId) {
 
 /// 事件声明选项
 struct EventDefineOptions {
-    /// 事件名 (hub 内唯一): 必须写全名 `plugin.<本实例插件名>.<名字>`
-    /// - 框架**不补前缀**: 不在自己那一族里直接拒绝
+    /// 事件名 (hub 内唯一): 必须写全名 `plugin.<名字>.<事件>`
+    /// - 不限定插件名 (同一组织多插件可共用一段, 建议用自己的)
+    /// - 框架**不补前缀**: 不在插件族里直接拒绝
     /// - 内置专用子段 (`agentxx.agent.event.turn.` / `.tool.` / `.subagent.` /
     ///   `.timer.` / `.host.`) 不可用
     std::string name;
@@ -1665,7 +1666,7 @@ struct FeatureImplOptions {
 
 /// 插件声明自己的功能点 (本轮只允许 provide 类型)
 struct FeaturePointSpec {
-    /// 点 id, 必须落在 `plugin.<本实例插件名>.*` (不含空白字符)
+    /// 点 id, 必须落在 `plugin.*` (不限定插件名, 建议用自己的; 不含空白字符)
     std::string id;
     /// 展示名 (可空, 缺省用 id)
     std::string title;
