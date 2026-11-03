@@ -5,15 +5,22 @@
 #include "agentxx/agent/io/agent_io.h"
 #include "agentxx/agent/io/agent_io_transport.h"
 #include "agentxx/agent/resource_applier.h"
+#include "agentxx/event/hub.h"
+#include "agentxx/event/naming.h"
 #include "agentxx/plugin/plugin_framework.h"
 #include "agentxx/plugin/plugin_interfaces.h"
 #include "agentxx/util/exception.h"
 #include "fmt/format.h"
+#include "utilxx_base/json.h"
 #include "utilxx_base/log.h"
 
+#include <chrono>
 #include <cstring>
+#include <future>
 #include <optional>
 #include <stdexcept>
+#include <string>
+#include <thread>
 
 namespace agentxx {
 namespace plugin {
@@ -1592,6 +1599,557 @@ static int32_t
     });
 }
 
+// ==================== 事件中枢表 (agentxx.agent.event) ====================
+//
+// 三个线程要照顾: 插件调用线程 → 主程序 io 线程 (`onInstanceIo`) → 事件中枢线程
+// (agent 的 io 线程, 中枢状态只在那里读写)。
+// - 第二次投递由 [hubCallSync] 完成: 已在中枢线程直接执行, 否则投递并等待
+//   (实际装配里两者同一条线程 —— 插件管理器用的就是 agent 的 io executor);
+// - 投递类入口 (`emit_value`) 只投不取结果: 值的写入经 `EventHub::postValue`
+//   排队到中枢线程, 调用方不等待投递结果;
+// - 归属统一记成 `plugin:<实例名>`: 插件禁用/卸载时主程序按它整批删记录、取消等待
+//   (`PluginMount::revokeEntry`)。
+
+/// 本挂载所属 agent 的事件中枢 (未启用 `event.enable=false` 时为空)
+static std::shared_ptr<agentxx::events::EventHub>
+    eventHubOf(PluginManager* mgr, const PluginxxScopeRef* agent) {
+    auto* mount = mountIn(mgr, agent);
+    if (nullptr == mount) {
+        return nullptr;
+    }
+    auto ctx = mount->agentContext();
+    return ctx ? ctx->eventHub : nullptr;
+}
+
+/// 在事件中枢线程执行一次调用并取回结果
+///
+/// 中枢状态只能由它自己的线程读写, 因此统一经 `EventHub::callSync` 转一手:
+/// 已在那个线程时直接执行, 其它线程投递后等结果 (等的时间有上限)。
+template<typename Fn>
+static auto hubCallSync(const std::shared_ptr<agentxx::events::EventHub>& hub, Fn&& fn)
+    -> decltype(fn(*hub)) {
+    return hub->callSync(std::forward<Fn>(fn));
+}
+
+/// 事件中枢入口的错误码 → 插件可见的返回码 (没有中枢/已关闭)
+static int32_t eventCodeOfHubFailure(const std::shared_ptr<agentxx::events::EventHub>& hub) {
+    if (!hub) {
+        return AGENTXX_PLUGIN_EVENT_ERR_UNSUPPORTED;
+    }
+    return hub->closed() ? AGENTXX_PLUGIN_EVENT_ERR_STATE
+                         : AGENTXX_PLUGIN_EVENT_ERR_UNSUPPORTED;
+}
+
+/// 本实例在事件中枢里的归属名
+static std::string eventOwnerOf(const PluginInstance* inst) {
+    return fmt::format("plugin:{}", inst != nullptr ? inst->name : std::string{});
+}
+
+static int32_t PLUGINXX_CALL xx_event_define(
+    const PluginxxHost*           host,
+    const PluginxxScopeRef*       agent,
+    const AgentxxPluginEventSpec* spec
+) {
+    if (nullptr == spec || !agentxx::plugin::specSizeOk<AgentxxPluginEventSpec>(spec->struct_size)
+        || agentxx::plugin::PluginStringView::empty(&spec->name)) {
+        return AGENTXX_PLUGIN_EVENT_ERR_ARG;
+    }
+    // 跨边界视图只在本次调用期间有效: 拷成自有字符串后再投递
+    const auto name        = pluginxx::svToStr(&spec->name);
+    const auto description = pluginxx::svToStr(&spec->description);
+    const auto kind        = spec->kind == AGENTXX_PLUGIN_EVENT_KIND_SINGLE
+                                 ? agentxx::events::EventKind::Single
+                                 : agentxx::events::EventKind::Stream;
+    const auto historyLimit = spec->history_limit;
+    const auto ttlMs        = spec->ttl_ms;
+    const auto lingerMs     = spec->linger_ms;
+
+    return onScopedInstanceIo(
+        host,
+        agent,
+        [agent, name, description, kind, historyLimit, ttlMs, lingerMs](
+            PluginInstance* inst,
+            PluginManager*  mgr
+        ) -> int32_t {
+            auto hub = eventHubOf(mgr, agent);
+            if (!hub) {
+                return eventCodeOfHubFailure(hub);
+            }
+            const auto owner = eventOwnerOf(inst);
+            return hubCallSync(hub, [&](agentxx::events::EventHub& h) -> int32_t {
+                std::string nameErr;
+                if (!agentxx::events::naming::validateEventName(name, &nameErr)) {
+                    XX_LOGW("[event] Plugin `{}` define rejected: {}", inst->name, nameErr);
+                    return AGENTXX_PLUGIN_EVENT_ERR_ARG;
+                }
+                if (const auto existing = h.queryEvent(name); existing.has_value()) {
+                    if (existing->kind != kind) {
+                        XX_LOGW(
+                            "[event] Plugin `{}` define `{}` rejected: already defined with another "
+                            "kind",
+                            inst->name,
+                            name
+                        );
+                        return AGENTXX_PLUGIN_EVENT_ERR_CONFLICT;
+                    }
+                } else if (h.eventCount() >= h.config().maxEvents) {
+                    XX_LOGW(
+                        "[event] Plugin `{}` define `{}` rejected: too many events (limit {})",
+                        inst->name,
+                        name,
+                        h.config().maxEvents
+                    );
+                    return AGENTXX_PLUGIN_EVENT_ERR_BUDGET;
+                }
+                agentxx::events::EventDefineSpec def;
+                def.name        = name;
+                def.kind        = kind;
+                def.owner       = owner;
+                def.description = description;
+                if (historyLimit > 0) {
+                    def.historyLimit = static_cast<size_t>(historyLimit);
+                }
+                if (ttlMs > 0) {
+                    def.ttl = std::chrono::milliseconds{ttlMs};
+                }
+                if (lingerMs >= 0) {
+                    def.linger = std::chrono::milliseconds{lingerMs};
+                }
+                std::string err;
+                if (!h.define(def, &err)) {
+                    XX_LOGW("[event] Plugin `{}` define `{}` failed: {}", inst->name, name, err);
+                    return AGENTXX_PLUGIN_EVENT_ERR_STATE;
+                }
+                XX_LOGI("[event] Plugin `{}` defined event `{}`", inst->name, name);
+                return AGENTXX_PLUGIN_EVENT_OK;
+            });
+        }
+    );
+}
+
+static int32_t PLUGINXX_CALL xx_event_emit(
+    const PluginxxHost*       host,
+    const PluginxxScopeRef*   agent,
+    const PluginxxStringView* name,
+    const PluginxxStringView* value_json
+) {
+    if (agentxx::plugin::PluginStringView::empty(name)) {
+        return AGENTXX_PLUGIN_EVENT_ERR_ARG;
+    }
+    const auto nameText = pluginxx::svToStr(name);
+    const auto rawValue = pluginxx::svToStr(value_json);
+    utilxx_base::Json value; // 空载荷按 null 处理
+    if (!rawValue.empty()) {
+        auto parsed = agentxx::util::catchError<std::optional<utilxx_base::Json>>(
+            [&]() -> std::optional<utilxx_base::Json> {
+                return utilxx_base::Json::parse(rawValue);
+            },
+            [&](std::string errmsg) -> std::optional<utilxx_base::Json> {
+                XX_LOGW("[event] emit `{}` rejected: value is not valid JSON ({})", nameText, errmsg);
+                return std::nullopt;
+            }
+        );
+        if (!parsed.has_value()) {
+            return AGENTXX_PLUGIN_EVENT_ERR_ARG;
+        }
+        value = std::move(*parsed);
+    }
+
+    // 值放进堆上对象: 闭包会被投递到 io 线程后调用, 不能依赖 mutable 捕获
+    auto valueBox = std::make_shared<utilxx_base::Json>(std::move(value));
+
+    return onScopedInstanceIo(
+        host,
+        agent,
+        [agent, nameText, valueBox](PluginInstance* inst, PluginManager* mgr) -> int32_t {
+            auto hub = eventHubOf(mgr, agent);
+            if (!hub) {
+                return eventCodeOfHubFailure(hub);
+            }
+            const auto owner = eventOwnerOf(inst);
+            // 事件还没声明过就按流式事件补一条 (归属本插件, 便于禁用时整批回收);
+            // 声明走中枢线程同步完成, 值的写入随后排队 (不在调用线程等投递结果)
+            const auto rc = hubCallSync(hub, [&](agentxx::events::EventHub& h) -> int32_t {
+                std::string nameErr;
+                if (!agentxx::events::naming::validateEventName(nameText, &nameErr)) {
+                    XX_LOGW("[event] Plugin `{}` emit rejected: {}", inst->name, nameErr);
+                    return AGENTXX_PLUGIN_EVENT_ERR_ARG;
+                }
+                if (h.queryEvent(nameText).has_value()) {
+                    return AGENTXX_PLUGIN_EVENT_OK;
+                }
+                agentxx::events::EventDefineSpec def;
+                def.name  = nameText;
+                def.kind  = agentxx::events::EventKind::Stream;
+                def.owner = owner;
+                std::string err;
+                if (!h.define(def, &err)) {
+                    XX_LOGW("[event] Plugin `{}` emit `{}` failed: {}", inst->name, nameText, err);
+                    return AGENTXX_PLUGIN_EVENT_ERR_BUDGET;
+                }
+                return AGENTXX_PLUGIN_EVENT_OK;
+            });
+            if (rc != AGENTXX_PLUGIN_EVENT_OK) {
+                return rc;
+            }
+            hub->postValue(nameText, *valueBox);
+            return AGENTXX_PLUGIN_EVENT_OK;
+        }
+    );
+}
+
+static int32_t PLUGINXX_CALL xx_event_end(
+    const PluginxxHost*       host,
+    const PluginxxScopeRef*   agent,
+    const PluginxxStringView* name,
+    const PluginxxStringView* summary_json
+) {
+    if (agentxx::plugin::PluginStringView::empty(name)) {
+        return AGENTXX_PLUGIN_EVENT_ERR_ARG;
+    }
+    const auto nameText  = pluginxx::svToStr(name);
+    const auto rawSummary = pluginxx::svToStr(summary_json);
+    utilxx_base::Json summary = utilxx_base::Json::object();
+    if (!rawSummary.empty()) {
+        auto parsed = agentxx::util::catchError<std::optional<utilxx_base::Json>>(
+            [&]() -> std::optional<utilxx_base::Json> {
+                return utilxx_base::Json::parse(rawSummary);
+            },
+            [&](std::string errmsg) -> std::optional<utilxx_base::Json> {
+                XX_LOGW(
+                    "[event] end `{}` rejected: summary is not valid JSON ({})",
+                    nameText,
+                    errmsg
+                );
+                return std::nullopt;
+            }
+        );
+        if (!parsed.has_value()) {
+            return AGENTXX_PLUGIN_EVENT_ERR_ARG;
+        }
+        summary = std::move(*parsed);
+    }
+
+    return onScopedInstanceIo(
+        host,
+        agent,
+        [agent, nameText, summary = std::move(summary)](PluginInstance* inst, PluginManager* mgr)
+            -> int32_t {
+            auto hub = eventHubOf(mgr, agent);
+            if (!hub) {
+                return eventCodeOfHubFailure(hub);
+            }
+            return hubCallSync(hub, [&](agentxx::events::EventHub& h) -> int32_t {
+                if (!h.queryEvent(nameText).has_value()) {
+                    return AGENTXX_PLUGIN_EVENT_ERR_NOT_FOUND;
+                }
+                std::string err;
+                if (!h.endEvent(nameText, summary, &err)) {
+                    XX_LOGW("[event] Plugin `{}` end `{}` failed: {}", inst->name, nameText, err);
+                    return AGENTXX_PLUGIN_EVENT_ERR_STATE;
+                }
+                return AGENTXX_PLUGIN_EVENT_OK;
+            });
+        }
+    );
+}
+
+static int32_t PLUGINXX_CALL xx_event_remove(
+    const PluginxxHost*       host,
+    const PluginxxScopeRef*   agent,
+    const PluginxxStringView* name
+) {
+    if (agentxx::plugin::PluginStringView::empty(name)) {
+        return AGENTXX_PLUGIN_EVENT_ERR_ARG;
+    }
+    const auto nameText = pluginxx::svToStr(name);
+    return onScopedInstanceIo(
+        host,
+        agent,
+        [agent, nameText](PluginInstance* inst, PluginManager* mgr) -> int32_t {
+            auto hub = eventHubOf(mgr, agent);
+            if (!hub) {
+                return eventCodeOfHubFailure(hub);
+            }
+            return hubCallSync(hub, [&](agentxx::events::EventHub& h) -> int32_t {
+                if (!h.removeEvent(nameText)) {
+                    return AGENTXX_PLUGIN_EVENT_ERR_NOT_FOUND;
+                }
+                XX_LOGI("[event] Plugin `{}` removed event `{}`", inst->name, nameText);
+                return AGENTXX_PLUGIN_EVENT_OK;
+            });
+        }
+    );
+}
+
+/// 一条事件记录 → 插件可见的 JSON (字段与 `agentxx_event opt=status` 同源)
+static utilxx_base::Json eventRecordJson(const agentxx::events::EventRecord& rec) {
+    using agentxx::events::EventKind;
+    using agentxx::events::EventState;
+    utilxx_base::Json out = utilxx_base::Json::object();
+    out["name"]        = rec.name;
+    out["kind"]        = rec.kind == EventKind::Single ? "single" : "stream";
+    out["state"]       = rec.state == EventState::Open      ? "open"
+                         : rec.state == EventState::Ended   ? "ended"
+                                                            : "expired";
+    out["owner"]       = rec.owner;
+    out["description"] = rec.description;
+    out["published"]   = rec.published;
+    out["overwritten"] = rec.overwritten;
+    out["history"]     = rec.history.size();
+    out["historyLimit"] = rec.historyLimit;
+    out["waits"]        = rec.waitCount;
+    out["createdAtMs"]  = rec.createdAtMs;
+    out["updatedAtMs"]  = rec.updatedAtMs;
+    out["endedAtMs"]    = rec.endedAtMs;
+    if (!rec.history.empty()) {
+        out["last"] = rec.history.back();
+    }
+    if (!rec.summary.is_null() && !rec.summary.empty()) {
+        out["summary"] = rec.summary;
+    }
+    return out;
+}
+
+static int32_t PLUGINXX_CALL xx_event_query(
+    const PluginxxHost*       host,
+    const PluginxxScopeRef*   agent,
+    const PluginxxStringView* name,
+    PluginxxString*           out_json
+) {
+    if (agentxx::plugin::PluginStringView::empty(name) || nullptr == out_json) {
+        return AGENTXX_PLUGIN_EVENT_ERR_ARG;
+    }
+    const auto       nameText = pluginxx::svToStr(name);
+    std::string      text;
+    const int32_t    rc = onScopedInstanceIo(
+        host,
+        agent,
+        [agent, nameText, &text](PluginInstance* inst, PluginManager* mgr) -> int32_t {
+            (void)inst;
+            auto hub = eventHubOf(mgr, agent);
+            if (!hub) {
+                return eventCodeOfHubFailure(hub);
+            }
+            return hubCallSync(hub, [&](agentxx::events::EventHub& h) -> int32_t {
+                const auto rec = h.queryEvent(nameText);
+                if (!rec.has_value()) {
+                    return AGENTXX_PLUGIN_EVENT_ERR_NOT_FOUND;
+                }
+                text = eventRecordJson(*rec).dump();
+                return AGENTXX_PLUGIN_EVENT_OK;
+            });
+        }
+    );
+    if (rc != AGENTXX_PLUGIN_EVENT_OK) {
+        return rc;
+    }
+    hostMemorySetString(out_json, text);
+    return AGENTXX_PLUGIN_EVENT_OK;
+}
+
+static int32_t PLUGINXX_CALL xx_event_list(
+    const PluginxxHost*       host,
+    const PluginxxScopeRef*   agent,
+    const PluginxxStringView* prefix,
+    PluginxxString*           out_json
+) {
+    if (nullptr == out_json) {
+        return AGENTXX_PLUGIN_EVENT_ERR_ARG;
+    }
+    const auto    prefixText = pluginxx::svToStr(prefix);
+    std::string   text;
+    const int32_t rc = onScopedInstanceIo(
+        host,
+        agent,
+        [agent, prefixText, &text](PluginInstance* inst, PluginManager* mgr) -> int32_t {
+            (void)inst;
+            auto hub = eventHubOf(mgr, agent);
+            if (!hub) {
+                return eventCodeOfHubFailure(hub);
+            }
+            return hubCallSync(hub, [&](agentxx::events::EventHub& h) -> int32_t {
+                text = h.listEventsJson(prefixText).dump();
+                return AGENTXX_PLUGIN_EVENT_OK;
+            });
+        }
+    );
+    if (rc != AGENTXX_PLUGIN_EVENT_OK) {
+        return rc;
+    }
+    hostMemorySetString(out_json, text);
+    return AGENTXX_PLUGIN_EVENT_OK;
+}
+
+static int32_t PLUGINXX_CALL xx_event_register_wait(
+    const PluginxxHost*                host,
+    const PluginxxScopeRef*            agent,
+    const AgentxxPluginEventWaitSpec*  spec,
+    PluginxxString*                    out_wait_id,
+    int32_t*                           out_state
+) {
+    if (nullptr == spec
+        || !agentxx::plugin::specSizeOk<AgentxxPluginEventWaitSpec>(spec->struct_size)
+        || agentxx::plugin::PluginStringView::empty(&spec->event)
+        || nullptr == out_wait_id) {
+        return AGENTXX_PLUGIN_EVENT_ERR_ARG;
+    }
+    // 视图只在本次调用期间有效: 拷成自有对象 (含字符串) 后投递
+    agentxx::events::EventWaitSpec waitSpec;
+    waitSpec.event = pluginxx::svToStr(&spec->event);
+    switch (spec->mode) {
+        case AGENTXX_PLUGIN_EVENT_MODE_EACH:
+            waitSpec.mode = "each";
+            break;
+        case AGENTXX_PLUGIN_EVENT_MODE_ALL:
+            waitSpec.mode = "all";
+            break;
+        default:
+            waitSpec.mode = "first";
+            break;
+    }
+    waitSpec.delivery      = pluginxx::svToStr(&spec->delivery);
+    waitSpec.originSession = pluginxx::svToStr(&spec->session_id);
+    waitSpec.label         = pluginxx::svToStr(&spec->label);
+    waitSpec.ref           = pluginxx::svToStr(&spec->ref);
+    waitSpec.replay        = spec->replay != 0;
+    waitSpec.notifyOnTimeout = spec->notify_on_timeout != 0;
+    waitSpec.unpausePaused   = spec->unpause != 0;
+    waitSpec.dropIfBusy      = spec->drop_if_busy != 0;
+    if (spec->timeout_ms > 0) {
+        waitSpec.timeout = std::chrono::milliseconds{spec->timeout_ms};
+    }
+    if (spec->max_items > 0) {
+        waitSpec.maxItems = static_cast<size_t>(spec->max_items);
+    }
+    if (spec->coalesce_ms > 0) {
+        waitSpec.coalesce = std::chrono::milliseconds{spec->coalesce_ms};
+    }
+
+    std::string      waitId;
+    int32_t          state = AGENTXX_PLUGIN_EVENT_WAIT_ARMED;
+    const int32_t    rc    = onScopedInstanceIo(
+        host,
+        agent,
+        [agent, waitSpec = std::move(waitSpec), &waitId, &state](
+            PluginInstance* inst,
+            PluginManager*  mgr
+        ) -> int32_t {
+            auto hub = eventHubOf(mgr, agent);
+            if (!hub) {
+                return eventCodeOfHubFailure(hub);
+            }
+            auto specCopy  = waitSpec; // 每个挂载各自一份 (owner 不同)
+            specCopy.owner = eventOwnerOf(inst);
+            return hubCallSync(hub, [&](agentxx::events::EventHub& h) -> int32_t {
+                auto result = h.watch(std::move(specCopy));
+                if (!result.has_value()) {
+                    XX_LOGW(
+                        "[event] Plugin `{}` register_wait on `{}` rejected: {}",
+                        inst->name,
+                        waitSpec.event,
+                        result.error()
+                    );
+                    const auto &err = result.error();
+                    if (err.find("too many waits") != std::string::npos) {
+                        return AGENTXX_PLUGIN_EVENT_ERR_BUDGET;
+                    }
+                    if (err.find("closed") != std::string::npos) {
+                        return AGENTXX_PLUGIN_EVENT_ERR_STATE;
+                    }
+                    return AGENTXX_PLUGIN_EVENT_ERR_ARG;
+                }
+                waitId = result->waitId;
+                state  = result->state == agentxx::events::WaitState::Armed
+                             ? AGENTXX_PLUGIN_EVENT_WAIT_ARMED
+                             : AGENTXX_PLUGIN_EVENT_WAIT_SATISFIED;
+                return AGENTXX_PLUGIN_EVENT_OK;
+            });
+        }
+    );
+    if (rc != AGENTXX_PLUGIN_EVENT_OK) {
+        return rc;
+    }
+    hostMemorySetString(out_wait_id, waitId);
+    if (nullptr != out_state) {
+        *out_state = state;
+    }
+    return AGENTXX_PLUGIN_EVENT_OK;
+}
+
+static int32_t PLUGINXX_CALL xx_event_cancel_wait(
+    const PluginxxHost*       host,
+    const PluginxxScopeRef*   agent,
+    const PluginxxStringView* wait_id
+) {
+    if (agentxx::plugin::PluginStringView::empty(wait_id)) {
+        return AGENTXX_PLUGIN_EVENT_ERR_ARG;
+    }
+    const auto waitId = pluginxx::svToStr(wait_id);
+    return onScopedInstanceIo(
+        host,
+        agent,
+        [agent, waitId](PluginInstance* inst, PluginManager* mgr) -> int32_t {
+            (void)inst;
+            auto hub = eventHubOf(mgr, agent);
+            if (!hub) {
+                return eventCodeOfHubFailure(hub);
+            }
+            return hubCallSync(hub, [&](agentxx::events::EventHub& h) -> int32_t {
+                return h.cancelWait(waitId, "plugin-cancel") ? AGENTXX_PLUGIN_EVENT_OK
+                                                             : AGENTXX_PLUGIN_EVENT_ERR_NOT_FOUND;
+            });
+        }
+    );
+}
+
+static int32_t PLUGINXX_CALL xx_event_list_waits(
+    const PluginxxHost*       host,
+    const PluginxxScopeRef*   agent,
+    const PluginxxStringView* session_id,
+    PluginxxString*           out_json
+) {
+    if (nullptr == out_json) {
+        return AGENTXX_PLUGIN_EVENT_ERR_ARG;
+    }
+    const auto    sessionText = pluginxx::svToStr(session_id);
+    std::string   text;
+    const int32_t rc = onScopedInstanceIo(
+        host,
+        agent,
+        [agent, sessionText, &text](PluginInstance* inst, PluginManager* mgr) -> int32_t {
+            (void)inst;
+            auto hub = eventHubOf(mgr, agent);
+            if (!hub) {
+                return eventCodeOfHubFailure(hub);
+            }
+            return hubCallSync(hub, [&](agentxx::events::EventHub& h) -> int32_t {
+                text = h.listWaitsJson(sessionText).dump();
+                return AGENTXX_PLUGIN_EVENT_OK;
+            });
+        }
+    );
+    if (rc != AGENTXX_PLUGIN_EVENT_OK) {
+        return rc;
+    }
+    hostMemorySetString(out_json, text);
+    return AGENTXX_PLUGIN_EVENT_OK;
+}
+
+static const AgentxxPluginEventIface g_ifaceEvent = {
+    /* version */ AGENTXX_PLUGIN_IFACE_AGENT_EVENT_VERSION,
+    /* struct_size */ sizeof(AgentxxPluginEventIface),
+    /* define_event */ xx_event_define,
+    /* emit_value */ xx_event_emit,
+    /* end_event */ xx_event_end,
+    /* remove_event */ xx_event_remove,
+    /* query_event */ xx_event_query,
+    /* list_events */ xx_event_list,
+    /* register_wait */ xx_event_register_wait,
+    /* cancel_wait */ xx_event_cancel_wait,
+    /* list_waits */ xx_event_list_waits,
+};
+
 static const AgentxxPluginRuntimeIface g_ifaceRuntime = {
     /* version */ AGENTXX_PLUGIN_IFACE_AGENT_RUNTIME_VERSION,
     /* struct_size */ sizeof(AgentxxPluginRuntimeIface),
@@ -1674,6 +2232,9 @@ const void* PLUGINXX_CALL xx_query_interface(const PluginxxHost*, const Pluginxx
     }
     if (n == AGENTXX_PLUGIN_IFACE_AGENT_RUNTIME) {
         return &g_ifaceRuntime;
+    }
+    if (n == AGENTXX_PLUGIN_IFACE_AGENT_EVENT) {
+        return &g_ifaceEvent;
     }
     return nullptr;
 }

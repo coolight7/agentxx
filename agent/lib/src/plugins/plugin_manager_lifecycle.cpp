@@ -376,6 +376,8 @@ PluginMount::RegistrationInventory
         out.mcpNamespaces += one.mcpNamespaces;
         out.featurePoints += one.featurePoints;
         out.featureImpls += one.featureImpls;
+        out.eventRecords += one.eventRecords;
+        out.eventWaits += one.eventWaits;
         out.ownsGraphDefinition = out.ownsGraphDefinition || one.ownsGraphDefinition;
     }
     return out;

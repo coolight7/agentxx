@@ -12,6 +12,7 @@
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/resource_applier.h"
 #include "agentxx/feature/registry.h"
+#include "agentxx/event/hub.h"
 #include "agentxx/middlewares/permission.h"
 #include "agentxx/plugin/plugin_graph_node.h"
 #include "agentxx/plugin/plugin_manager.h"
@@ -488,6 +489,13 @@ void PluginMount::revokeEntry(Entry& entry) {
         retiredTools_.push_back(std::move(tool));
     }
     entry.toolObjects.clear();
+
+    // ⑩ 事件中枢 (agentxx.agent.event): 本实例声明的事件记录删掉, 它的等待取消
+    // - 事件记录留着会让模型还能 watch 到"已经没人发"的事件, 等待留着会一直挂到超时
+    // - 中枢可能未启用 (event.enable=false): 空指针就跳过
+    if (ctx && ctx->eventHub) {
+        ctx->eventHub->removeOwned(fmt::format("plugin:{}", inst->name));
+    }
 }
 
 void PluginMount::detachInstance(PluginInstance* inst) {

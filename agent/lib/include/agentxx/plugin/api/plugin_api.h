@@ -22,7 +22,8 @@
 ///   (agentxx.agent.permission)、中间件钩子与钩子有序登记 (agentxx.agent.hooks)、会话访问
 ///   (agentxx.agent.session)、主模型配置 (agentxx.agent.model)、主程序提示词读写
 ///   (agentxx.agent.prompt)、会话资源贡献 (agentxx.agent.resources)、执行图
-///   (agentxx.agent.graph)
+///   (agentxx.agent.graph)、功能点 (agentxx.agent.feature)、挂载查询 (agentxx.agent.mount)、
+///   会话运行时 (agentxx.agent.runtime)、事件中枢 (agentxx.agent.event)
 /// - client 侧业务表见 `agentxx/plugin/api/client_plugin_api.h`
 #ifndef AGENTXX_PLUGIN_API_H
 #define AGENTXX_PLUGIN_API_H
@@ -1190,6 +1191,196 @@ typedef struct AgentxxPluginRuntimeIface {
     /// 注销定时器
     int32_t(PLUGINXX_CALL* unregister_timer)(const PluginxxHost* host, int64_t timer_id);
 } AgentxxPluginRuntimeIface;
+
+/* ==================== 接口表: 事件中枢 (agentxx.agent.event) ==================== */
+
+/// 事件中枢: 插件声明事件源 / 发布值 / 结束流 / 登记等待
+///
+/// 与相邻两张表的分工 (选型见插件设计文档"插件事件源"一节):
+/// - `agentxx.agent.runtime` 的 `register_trigger` / `register_timer`: "收到消息就把它当输入
+///   塞进会话", 没有值/状态/谁在等;
+/// - 本表: 有一个**带值的事件**, 谁需要谁来等 (模型经 `agentxx_event` 工具, 插件经
+///   `register_wait`), 并且能查状态、能回放、能结束流。
+///
+/// 归属: 本表登记的事件与等待都记在调用它的插件实例名下, 插件禁用/卸载时由主程序整批回收
+/// (事件记录删除, 等待取消), 插件不必在 `stop` 里自己清。
+///
+/// 全部成员的第一个参数是 `const PluginxxScopeRef* agent` (挂载时下发的那份);
+/// 引用无效返回 `AGENTXX_PLUGIN_ERR_NO_AGENT` 且不产生副作用。
+#define AGENTXX_PLUGIN_IFACE_AGENT_EVENT             "agentxx.agent.event"
+#define AGENTXX_PLUGIN_IFACE_AGENT_EVENT_VERSION     1
+#define AGENTXX_PLUGIN_IFACE_AGENT_EVENT_MIN_VERSION 1
+/* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
+#define AGENTXX_PLUGIN_IFACE_AGENT_EVENT_BASELINE_SIZE sizeof(AgentxxPluginEventIface)
+
+/* ---- 返回码 (本表全部入口) ---- */
+#define AGENTXX_PLUGIN_EVENT_OK               0
+#define AGENTXX_PLUGIN_EVENT_ERR_ARG          (-1) ///< 参数非法 (名称为空/非法字符/取值越界)
+#define AGENTXX_PLUGIN_EVENT_ERR_STATE        (-2) ///< 状态错误 (中枢未建/已关闭)
+#define AGENTXX_PLUGIN_EVENT_ERR_NOT_FOUND    (-3) ///< 事件或等待不存在
+#define AGENTXX_PLUGIN_EVENT_ERR_BUDGET       (-4) ///< 超预算 (事件数/等待数上限)
+#define AGENTXX_PLUGIN_EVENT_ERR_CONFLICT     (-5) ///< 同名事件已被定义成另一种种类
+#define AGENTXX_PLUGIN_EVENT_ERR_UNSUPPORTED  (-6) ///< 主程序未提供事件中枢 (`event.enable=false`)
+
+/* ---- 事件种类 ---- */
+#define AGENTXX_PLUGIN_EVENT_KIND_STREAM 0 ///< 流式: 多次发布, 由 `end_event` 结束
+#define AGENTXX_PLUGIN_EVENT_KIND_SINGLE 1 ///< 单值: 首个值到达后自动结束
+
+/* ---- 等待的取值条数 ---- */
+#define AGENTXX_PLUGIN_EVENT_MODE_FIRST 0 ///< 要一个值 (拿到就结束等待)
+#define AGENTXX_PLUGIN_EVENT_MODE_EACH  1 ///< 每条值都要 (逐个投递, 等待保持)
+#define AGENTXX_PLUGIN_EVENT_MODE_ALL   2 ///< 攒到流结束 (或达上限) 一次投递全部
+
+/* ---- 等待的当前状态 (出参) ---- */
+#define AGENTXX_PLUGIN_EVENT_WAIT_ARMED     0 ///< 已登记, 还在等
+#define AGENTXX_PLUGIN_EVENT_WAIT_SATISFIED 1 ///< 注册时就已经满足 (回放/事件已结束)
+
+/// 声明一个事件源
+typedef struct AgentxxPluginEventSpec {
+    /// 本结构体字节数 (`sizeof(AgentxxPluginEventSpec)`); `0` = 基线布局
+    uint32_t struct_size;
+    /// 种类 (`AGENTXX_PLUGIN_EVENT_KIND_*`; 默认流式)
+    int32_t kind;
+    /// 保留多少个历史值供后注册的等待回放 (0 = 用主程序默认; 单值事件恒为 1)
+    int32_t history_limit;
+    int32_t _reserved;
+    /// 到期仍未结束 → 记录按"已过期"回收 (0 = 不限)
+    int64_t ttl_ms;
+    /// 结束后保留多久 (`< 0` = 用主程序默认; `0` = 结束后立刻回收, 之后查不到)
+    int64_t linger_ms;
+    /// 事件名 (hub 内唯一; 建议 `域.用途`, 如 `chat.group42`; 保留前缀不可用)
+    PluginxxStringView name;
+    /// 一行说明 (模型经 `agentxx_event opt=list` 看到的就是它)
+    PluginxxStringView description;
+} AgentxxPluginEventSpec;
+
+/* 基线: 重置时 = 完整布局; 以后追加字段保持不变 (改为 offsetof(第一个追加字段)) */
+#define AGENTXX_PLUGIN_EVENT_SPEC_BASELINE_SIZE sizeof(AgentxxPluginEventSpec)
+
+/// 登记一个等待 (插件替某个会话等一个值)
+typedef struct AgentxxPluginEventWaitSpec {
+    uint32_t struct_size; ///< sizeof(AgentxxPluginEventWaitSpec); 0 = 基线布局
+    /// 取值条数 (`AGENTXX_PLUGIN_EVENT_MODE_*`)
+    int32_t mode;
+    /// `each`/`all` 的累计上限 (0 = 主程序默认)
+    int32_t max_items;
+    /// 合并窗口 (毫秒; 仅 `each`; 0 = 不合并)
+    int32_t coalesce_ms;
+    /// 会话在跑一轮时直接丢弃这次投递 (0 = 不丢弃)
+    int32_t drop_if_busy;
+    /// 等待超时 (毫秒; 0 = 不限; 到点投递一条超时提示)
+    int64_t timeout_ms;
+    /// 是否消费注册之前已经到达的值 (0 = 只等新值)
+    int32_t replay;
+    /// 超时是否投递一条提示 (0 = 静默结束等待)
+    int32_t notify_on_timeout;
+    /// 会话处于暂停态 (上一轮失败/中断) 时是否解除暂停
+    int32_t unpause;
+    int32_t _reserved;
+    /// 事件名 (必需)
+    PluginxxStringView event;
+    /// 投递目标会话 (投递模式不是 `none` 时必需)
+    PluginxxStringView session_id;
+    /// 投递模式: `next-step`(默认) / `inject` / `next-turn` / `none`
+    PluginxxStringView delivery;
+    /// 投递文本里的一句话说明 (可空)
+    PluginxxStringView label;
+    /// 关联 id (可空; 投递文本里原样显示, 便于对上自己的业务对象)
+    PluginxxStringView ref;
+} AgentxxPluginEventWaitSpec;
+
+/* 基线: 重置时 = 完整布局; 以后追加字段保持不变 (改为 offsetof(第一个追加字段)) */
+#define AGENTXX_PLUGIN_EVENT_WAIT_SPEC_BASELINE_SIZE sizeof(AgentxxPluginEventWaitSpec)
+
+typedef struct AgentxxPluginEventIface {
+    int32_t  version; ///< 主程序填 AGENTXX_PLUGIN_IFACE_AGENT_EVENT_VERSION
+    uint32_t struct_size;
+
+    /// 声明一个事件源 (幂等: 同名同种类重复声明只补充说明)
+    /// `return`: 0 成功; `AGENTXX_PLUGIN_EVENT_ERR_CONFLICT` = 同名已被定义成另一种种类
+    int32_t(PLUGINXX_CALL* define_event)(
+        const PluginxxHost*               host,
+        const PluginxxScopeRef*           agent,
+        const AgentxxPluginEventSpec*     spec
+    );
+
+    /// 发布一个值 (**任意线程**, 立即返回)
+    /// - 事件不存在时按流式事件自动建立 (归属本次调用的插件)
+    /// - `value_json` 必须是合法 JSON; 空串按 `null` 处理
+    /// - 值超过主程序阈值时只影响投递进上下文的文本 (转 share store), 不影响存储
+    /// `return`: 0 已受理; 非 0 拒绝 (名称非法 / 值超硬上限 / 中枢不可用)
+    int32_t(PLUGINXX_CALL* emit_value)(
+        const PluginxxHost*       host,
+        const PluginxxScopeRef*   agent,
+        const PluginxxStringView* name,
+        const PluginxxStringView* value_json
+    );
+
+    /// 结束一条流 (幂等: 已结束的再调一次是空操作; 之后再到值会重新打开该流)
+    /// - `summary_json` 可空 (空串 = 空对象), 它是查询时一并返回的收尾信息
+    int32_t(PLUGINXX_CALL* end_event)(
+        const PluginxxHost*       host,
+        const PluginxxScopeRef*   agent,
+        const PluginxxStringView* name,
+        const PluginxxStringView* summary_json
+    );
+
+    /// 立即移除一条事件记录 (停止服务时用, 不等保留期)
+    /// - 还挂在它上面的等待按"事件已结束且没有值"收尾, 不会永远等下去
+    int32_t(PLUGINXX_CALL* remove_event)(
+        const PluginxxHost*       host,
+        const PluginxxScopeRef*   agent,
+        const PluginxxStringView* name
+    );
+
+    /// 查一条事件的状态与最近的值 (JSON 文本, host->alloc)
+    /// 形状: `{"name","kind","state","owner","description","published","overwritten",
+    ///        "history","historyLimit","waits","createdAtMs","updatedAtMs","endedAtMs",
+    ///        "last":<值>,"summary":{...}}`
+    int32_t(PLUGINXX_CALL* query_event)(
+        const PluginxxHost*       host,
+        const PluginxxScopeRef*   agent,
+        const PluginxxStringView* name,
+        PluginxxString*           out_json
+    );
+
+    /// 列本 agent 的事件 (JSON 文本, host->alloc; `prefix` 可空)
+    /// 形状: `{"count":N,"events":[{...}]}`
+    int32_t(PLUGINXX_CALL* list_events)(
+        const PluginxxHost*       host,
+        const PluginxxScopeRef*   agent,
+        const PluginxxStringView* prefix,
+        PluginxxString*           out_json
+    );
+
+    /// 登记一个等待 (投递目标与模式见 [AgentxxPluginEventWaitSpec])
+    /// - `out_wait_id`: 等待 id (`w-<n>`; host->alloc), 之后可 `cancel_wait`
+    /// - `out_state`: 出参可空; 注册那一刻的状态 (`AGENTXX_PLUGIN_EVENT_WAIT_*`)
+    /// - 预算 (每会话等待数) 用尽返回 `AGENTXX_PLUGIN_EVENT_ERR_BUDGET`
+    int32_t(PLUGINXX_CALL* register_wait)(
+        const PluginxxHost*                 host,
+        const PluginxxScopeRef*             agent,
+        const AgentxxPluginEventWaitSpec*   spec,
+        PluginxxString*                     out_wait_id,
+        int32_t*                            out_state
+    );
+
+    /// 取消一个等待 (只对还在等的有效)
+    int32_t(PLUGINXX_CALL* cancel_wait)(
+        const PluginxxHost*       host,
+        const PluginxxScopeRef*   agent,
+        const PluginxxStringView* wait_id
+    );
+
+    /// 列等待 (JSON 文本, host->alloc; `session_id` 可空 = 本 agent 全部)
+    /// 形状: `{"count":N,"waits":[{...}]}`
+    int32_t(PLUGINXX_CALL* list_waits)(
+        const PluginxxHost*       host,
+        const PluginxxScopeRef*   agent,
+        const PluginxxStringView* session_id,
+        PluginxxString*           out_json
+    );
+} AgentxxPluginEventIface;
 
 #pragma pack(pop)
 

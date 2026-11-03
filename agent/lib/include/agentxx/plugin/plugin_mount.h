@@ -570,13 +570,16 @@ public:
         size_t mcpNamespaces       = 0; ///< MCP 命名空间 (资源应用器)
         size_t featurePoints       = 0; ///< 本实例声明的功能点 (生效中)
         size_t featureImpls        = 0; ///< 本实例登记的功能点实现 (生效中)
+        size_t eventRecords        = 0; ///< 事件中枢里本实例声明的事件记录
+        size_t eventWaits          = 0; ///< 事件中枢里本实例还在等的等待
         bool   ownsGraphDefinition = false; ///< 是否占用执行图定义 (独占 slot)
 
         /// 主程序可撤销注册的总数 (不含 [graphNodeTypes] 的注册表残留)
         size_t total() const {
             return tools + permissionTools + hooks + graphNodeTypes + eventSubscriptions
                    + capabilities + promptKeys + skillDirs + memoryFiles + mcpNamespaces
-                   + featurePoints + featureImpls + (ownsGraphDefinition ? 1 : 0);
+                   + featurePoints + featureImpls + eventRecords + eventWaits
+                   + (ownsGraphDefinition ? 1 : 0);
         }
     };
 

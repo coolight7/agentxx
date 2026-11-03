@@ -434,10 +434,10 @@ void checkTuiBlockNames(const fs::path& root, Violations& v) {
 ///   - 通用表 (`pluginxx.*`, 由插件框架声明): 数量 + 唯一 + 前缀;
 ///   - agent 业务表 (`agentxx.agent.*`): 数量 + 唯一 + 前缀;
 ///   - client 侧表 (`agentxx.client.*`): 数量 + 唯一 + 前缀;
-/// 同时要求 20 张 agent/client 业务表名都写进 `docs/zh-cn/design/plugins.md`
+/// 同时要求 22 张 agent/client 业务表名都写进 `docs/zh-cn/design/plugins.md`
 /// (文档漏写新表等于插件作者查不到 IID)。
 ///
-/// 数量约定: 10 张通用表 + 12 张 agent 业务表 = 22 (与 `PluginManager::kInterfaceTableCount`
+/// 数量约定: 10 张通用表 + 13 张 agent 业务表 = 23 (与 `PluginManager::kInterfaceTableCount`
 /// 一致); 7 张 client 基础表 + 2 张交互表 (timer / keybind) = 9。
 void checkInterfaceTableNames(const fs::path& root, Violations& v) {
     const auto genericHeader
@@ -457,7 +457,7 @@ void checkInterfaceTableNames(const fs::path& root, Violations& v) {
 
     const Group groups[] = {
         {&genericHeader, "PLUGINXX_IFACE_",             10, "pluginxx.",       false},
-        {&agentHeader,   "AGENTXX_PLUGIN_IFACE_AGENT_", 12, "agentxx.agent.",  true },
+        {&agentHeader,   "AGENTXX_PLUGIN_IFACE_AGENT_", 13, "agentxx.agent.",  true },
         {&clientHeader,  "AGENTXX_IFACE_CLIENT_",       9,  "agentxx.client.", true },
     };
 
@@ -539,7 +539,7 @@ void checkInterfaceTableNames(const fs::path& root, Violations& v) {
 /// - 每张表在 `plugin_iface_meta.h` / `pluginxx/api/iface_meta.h` 里恰有一条
 ///   `IfaceMeta` 特化 (漏加特化不会编译失败, 只会让该表退化为"必须完整", 因此必须查)。
 ///
-/// 数量: 通用 10 + agent 业务 12 + client 业务 9 = 31 张。
+/// 数量: 通用 10 + agent 业务 13 + client 业务 9 = 32 张。
 void checkInterfaceTableQuadruple(const fs::path& root, Violations& v) {
     struct Group {
         const fs::path* file;
@@ -561,7 +561,7 @@ void checkInterfaceTableQuadruple(const fs::path& root, Violations& v) {
 
     const Group groups[] = {
         {&genericHeader, "PLUGINXX_IFACE_",             "通用",        10},
-        {&agentHeader,   "AGENTXX_PLUGIN_IFACE_AGENT_", "agent 业务",  12},
+        {&agentHeader,   "AGENTXX_PLUGIN_IFACE_AGENT_", "agent 业务",  13},
         {&clientHeader,  "AGENTXX_IFACE_CLIENT_",       "client 业务", 9 },
     };
 
@@ -713,10 +713,10 @@ void checkInterfaceTableQuadruple(const fs::path& root, Violations& v) {
             + std::to_string(tableTotal) + " (每张表恰一条特化)"
         );
     }
-    if (tableTotal != 31) {
+    if (tableTotal != 32) {
         v.push_back(
             "接口表合计为 " + std::to_string(tableTotal)
-            + ", 期望 31 (通用 10 + agent 12 + client 9)"
+            + ", 期望 32 (通用 10 + agent 13 + client 9)"
         );
     }
 }
@@ -751,6 +751,9 @@ void checkInterfaceTableLayout(const fs::path& root, Violations& v) {
         },
         {"AgentxxClientWireIface",        "send_plugin_data"                                                                                                                                                                                                                                                                                                                  },
         {"AgentxxPluginContextIface",     "get_messages|messages_count"                                                                                                                                                                                                                                                                                                       },
+        {"AgentxxPluginEventIface",
+         "define_event|emit_value|end_event|remove_event|query_event|list_events|register_wait|cancel_wait|list_waits"
+        },
         {"AgentxxPluginFeatureIface",
          "list_points|define_point|undefine_point|register_impl|unregister_impl|call_point_async"
         },
@@ -1257,10 +1260,10 @@ void checkInterfaceTableCount(const fs::path& root, Violations& v) {
     const size_t agentCount  = agentxx::plugin::PluginManager::kInterfaceTableCount;
     const size_t clientCount = agentxx::plugin::ClientPluginManager::kInterfaceTableCount;
 
-    // 数量本身: 10 张通用表 + 12 张 agent 业务表 / 7 张基础表 + 2 张交互表
-    if (agentCount != 22) {
+    // 数量本身: 10 张通用表 + 13 张 agent 业务表 / 7 张基础表 + 2 张交互表
+    if (agentCount != 23) {
         v.push_back(
-            "PluginManager::kInterfaceTableCount 应为 22 (10 通用 + 12 业务), 实际 "
+            "PluginManager::kInterfaceTableCount 应为 23 (10 通用 + 13 业务), 实际 "
             + std::to_string(agentCount)
         );
     }

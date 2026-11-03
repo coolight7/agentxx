@@ -10,11 +10,14 @@
 #include <deque>
 #include <expected>
 #include <functional>
+#include <future>
 #include <map>
 #include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
+#include <utility>
 #include <vector>
 
 namespace asio = ::boost::asio;
@@ -279,6 +282,19 @@ public:
     ///   否则每轮/每次工具调用都会留一条空记录
     bool wants(std::string_view name) const;
 
+    /// 当前是否在 hub 线程 (构造时记录的那个线程)
+    /// - 插件面的表调用据此决定"直接执行"还是"投递到 hub 线程再等"
+    bool isHubThread() const noexcept;
+
+    /// 在中枢线程执行一次调用并取回结果 (**任意线程**)
+    /// - 已在中枢线程: 直接执行 (中枢不加锁, 只有它的线程能读写状态);
+    /// - 其它线程: 投递并等待结果, 最多等 10 秒 —— 中枢线程正忙在别的长任务上时
+    ///   宁可返回默认值并记一条警告, 也不让调用方永久阻塞
+    /// - 中枢对象在等待期间被释放时不执行, 同样返回默认值
+    /// - 定义放在类外 (那里中枢类型已完整, 闭包的调用结果才能求值)
+    template<typename Fn>
+    auto callSync(Fn&& fn);
+
     /// 事件记录数 / 等待数 (测试与诊断)
     size_t eventCount() const noexcept {
         return records_.size();
@@ -286,6 +302,31 @@ public:
     size_t waitCount() const noexcept {
         return waits_.size();
     }
+
+    // -------------------------------------------------------------------
+    // 归属回收 (插件禁用/卸载时按 owner 整批清)
+    // -------------------------------------------------------------------
+
+    /// 删除该 owner 名下的全部事件记录 (还挂着等待的按"已结束且无值"收尾)
+    /// `return` 删除条数
+    size_t removeEventsOfOwner(std::string_view owner);
+
+    /// 取消该 owner 名下还在等的等待
+    /// `return` 取消条数
+    size_t cancelWaitsOfOwner(std::string_view owner, std::string_view reason);
+
+    /// 该 owner 名下的事件记录数 / 等待数 (须在中枢线程调用)
+    size_t eventCountOfOwner(std::string_view owner) const;
+    size_t waitCountOfOwner(std::string_view owner) const;
+
+    /// 按归属整批回收 (插件禁用/卸载): 先取消等待, 再删事件记录
+    /// - **任意线程** (内部经 [callSync] 投到中枢线程)
+    /// `return` 处理的条目数 (等待 + 记录)
+    size_t removeOwned(std::string_view owner, std::string_view reason = "owner-removed");
+
+    /// 该归属名下的事件记录数 / 等待数 (任意线程)
+    /// `return` {事件记录数, 等待数}
+    std::pair<size_t, size_t> ownedCounts(std::string_view owner);
 
     // -------------------------------------------------------------------
     // 生命周期
@@ -369,6 +410,8 @@ private:
     };
 
     asio::any_io_executor                       executor_;
+    /// hub 线程 (构造时所在线程); 跨线程调用方据此判断能否直接执行
+    std::thread::id                             hubThreadId_;
     std::weak_ptr<agentxx::agent::AgentContext> ctx_;
     Config                                      cfg_;
     TurnRunner                                  turnRunner_;
@@ -425,6 +468,68 @@ private:
     /// 中止并清空全部等待 (closeAll 用)
     void cancelAllWaits(std::string_view reason);
 };
+
+// ---------------------------------------------------------------------------
+// 跨线程调用 (模板定义放类外: 中枢类型在这里已完整)
+// ---------------------------------------------------------------------------
+
+template<typename Fn>
+auto EventHub::callSync(Fn&& fn) {
+    using Result = decltype(fn(std::declval<EventHub&>()));
+    if (isHubThread()) {
+        return fn(*this);
+    }
+    auto weak = weak_from_this();
+    if constexpr (std::is_void_v<Result>) {
+        auto promise = std::make_shared<std::promise<void>>();
+        auto future  = promise->get_future();
+        asio::post(
+            executor_,
+            [weak, promise, fn = std::forward<Fn>(fn)]() mutable {
+                auto self = weak.lock();
+                if (!self) {
+                    promise->set_value();
+                    return;
+                }
+                try {
+                    fn(*self);
+                    promise->set_value();
+                } catch (...) {
+                    promise->set_exception(std::current_exception());
+                }
+            }
+        );
+        if (future.wait_for(std::chrono::seconds{10}) != std::future_status::ready) {
+            XX_LOGW("[event_hub] hub call timed out (waiting for the event hub thread)");
+            return;
+        }
+        future.get();
+        return;
+    } else {
+        auto promise = std::make_shared<std::promise<Result>>();
+        auto future  = promise->get_future();
+        asio::post(
+            executor_,
+            [weak, promise, fn = std::forward<Fn>(fn)]() mutable {
+                auto self = weak.lock();
+                if (!self) {
+                    promise->set_value(Result{});
+                    return;
+                }
+                try {
+                    promise->set_value(fn(*self));
+                } catch (...) {
+                    promise->set_exception(std::current_exception());
+                }
+            }
+        );
+        if (future.wait_for(std::chrono::seconds{10}) != std::future_status::ready) {
+            XX_LOGW("[event_hub] hub call timed out (waiting for the event hub thread)");
+            return Result{};
+        }
+        return future.get();
+    }
+}
 
 // ---------------------------------------------------------------------------
 // 文本渲染 (纯函数: 便于测试逐字段断言, 也是给模型看的稳定格式)

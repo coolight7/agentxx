@@ -4,6 +4,7 @@
 
 #include "agentxx/agent/resource_applier.h"
 #include "agentxx/event/event_stream.h"
+#include "agentxx/event/hub.h"
 #include "agentxx/feature/registry.h"
 #include "agentxx/middlewares/permission.h"
 #include "agentxx/plugin/plugin_graph_node.h"
@@ -712,6 +713,13 @@ PluginMount::RegistrationInventory PluginMount::registrationInventory(const Plug
                 ++out.featurePoints;
             }
         }
+    }
+
+    // 事件中枢: 按归属名 ("plugin:<实例名>") 数当前挂着的记录与等待
+    if (auto ctx = agent_.lock(); ctx && ctx->eventHub) {
+        const auto counts  = ctx->eventHub->ownedCounts(fmt::format("plugin:{}", inst.name));
+        out.eventRecords   = counts.first;
+        out.eventWaits     = counts.second;
     }
     return out;
 }

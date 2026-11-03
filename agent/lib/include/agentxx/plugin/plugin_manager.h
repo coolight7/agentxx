@@ -160,11 +160,11 @@ public:
     /// 本主程序向插件提供的接口表数量 (文档里的数字有常量可校验)
     /// - 10 张通用表 (`pluginxx.*`, 由插件框架实现: log/json/config/plugins/events/
     ///   scheduler/coroutine_runtime/tasks/cancel/capabilities)
-    /// - 12 张 agent 业务表 (`agentxx.agent.*`: tools/permission/hooks/session/
-    ///   context/model/prompt/resources/graph/feature/mount/runtime)
+    /// - 13 张 agent 业务表 (`agentxx.agent.*`: tools/permission/hooks/session/
+    ///   context/model/prompt/resources/graph/feature/mount/runtime/event)
     /// - 增删接口表时同时更新本常量与 `docs/zh-cn/design/plugins.md` §8 与根 `AGENTS.md`
     ///   (测试模块 `boundaries` 会校验三者一致)
-    inline static constexpr size_t kInterfaceTableCount = 10 + 12;
+    inline static constexpr size_t kInterfaceTableCount = 10 + 13;
 
     /// 清单行 (诊断与界面展示; 主程序视图)
     struct PluginListView {

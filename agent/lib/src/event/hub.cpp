@@ -80,8 +80,13 @@ std::string timerShortName(std::string_view name) {
 
 EventHub::EventHub(asio::any_io_executor ex, std::weak_ptr<agentxx::agent::AgentContext> ctx, Config cfg) :
     executor_(std::move(ex)),
+    hubThreadId_(std::this_thread::get_id()),
     ctx_(std::move(ctx)),
     cfg_(std::move(cfg)) {}
+
+bool EventHub::isHubThread() const noexcept {
+    return std::this_thread::get_id() == hubThreadId_;
+}
 
 EventHub::~EventHub() {
     // 定时器句柄随成员释放; 已在等待的 async_wait 处理器只持有 weak_ptr, 不会回调本对象
@@ -445,6 +450,88 @@ bool EventHub::wants(std::string_view name) const {
     });
 }
 
+size_t EventHub::removeEventsOfOwner(std::string_view owner) {
+    if (owner.empty()) {
+        return 0;
+    }
+    // 先收集名字再逐个删: removeEvent 会顺手把挂着它的等待收尾, 不能边遍历边 erase
+    std::vector<std::string> names;
+    for (const auto& [name, entry] : records_) {
+        if (entry.rec.owner == owner) {
+            names.push_back(name);
+        }
+    }
+    for (const auto& name : names) {
+        removeEvent(name);
+    }
+    if (!names.empty()) {
+        XX_LOGI("[event_hub] removed {} event(s) of owner `{}`", names.size(), owner);
+    }
+    return names.size();
+}
+
+size_t EventHub::cancelWaitsOfOwner(std::string_view owner, std::string_view reason) {
+    if (owner.empty()) {
+        return 0;
+    }
+    size_t canceled = 0;
+    for (auto& [_, entry] : waits_) {
+        if (entry.wait.state != WaitState::Armed || entry.wait.spec.owner != owner) {
+            continue;
+        }
+        finishWait(entry, WaitState::Canceled, reason.empty() ? "owner-removed" : reason, true);
+        ++canceled;
+    }
+    if (canceled != 0) {
+        XX_LOGI("[event_hub] canceled {} wait(s) of owner `{}`", canceled, owner);
+    }
+    return canceled;
+}
+
+size_t EventHub::eventCountOfOwner(std::string_view owner) const {
+    if (owner.empty()) {
+        return 0;
+    }
+    return static_cast<size_t>(std::count_if(records_.begin(), records_.end(), [&](const auto& item) {
+        return item.second.rec.owner == owner;
+    }));
+}
+
+size_t EventHub::waitCountOfOwner(std::string_view owner) const {
+    if (owner.empty()) {
+        return 0;
+    }
+    return static_cast<size_t>(std::count_if(waits_.begin(), waits_.end(), [&](const auto& item) {
+        return item.second.wait.state == WaitState::Armed && item.second.wait.spec.owner == owner;
+    }));
+}
+
+size_t EventHub::removeOwned(std::string_view owner, std::string_view reason) {
+    if (owner.empty()) {
+        return 0;
+    }
+    auto       ownerCopy  = std::string{owner};
+    auto       reasonCopy = std::string{reason};
+    auto       count      = std::make_shared<size_t>(0);
+    // 结果放在堆上: 即使等超时了, 后到的执行也不会写坏调用方的栈
+    callSync([ownerCopy, reasonCopy, count](EventHub& hub) {
+        *count = hub.cancelWaitsOfOwner(ownerCopy, reasonCopy) + hub.removeEventsOfOwner(ownerCopy);
+    });
+    return *count;
+}
+
+std::pair<size_t, size_t> EventHub::ownedCounts(std::string_view owner) {
+    if (owner.empty()) {
+        return {0, 0};
+    }
+    auto ownerCopy = std::string{owner};
+    auto counts    = std::make_shared<std::pair<size_t, size_t>>(0, 0);
+    callSync([ownerCopy, counts](EventHub& hub) {
+        *counts = {hub.eventCountOfOwner(ownerCopy), hub.waitCountOfOwner(ownerCopy)};
+    });
+    return *counts;
+}
+
 // ---------------------------------------------------------------------------
 // 值 → 等待 → 投递
 // ---------------------------------------------------------------------------
@@ -655,6 +742,11 @@ DeliverResult EventHub::deliver(const EventDelivery& d, std::string* reasonOut) 
     auto session = ctx->sessions ? ctx->sessions->get(d.sessionId) : nullptr;
     if (!session) {
         // 不自动新建会话: 乱发事件不应凭空造出会话
+        XX_LOGW(
+            "[event_hub] event `{}` input dropped: session `{}` not found",
+            d.eventName,
+            d.sessionId
+        );
         setReason("no-session");
         return drop("no-session");
     }
