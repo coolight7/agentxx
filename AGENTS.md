@@ -554,7 +554,7 @@ path/to/agentxx_test --log-level warn string_util regex
   [plugins.md](docs/zh-cn/design/plugins.md) §19。
   注: 提示词只按 **agent 级** 支持修改 (根 `config_json` 的 `prompt`), **不做**会话级
   提示词来源 —— 一个 agent 管理的会话、提示词、插件等保持一致
-- 接口表数量: agent 侧 22 张 (10 张通用表 `pluginxx.*` + 12 张业务表 `agentxx.agent.*`;
+- 接口表数量: agent 侧 23 张 (10 张通用表 `pluginxx.*` + 13 张业务表 `agentxx.agent.*`;
   业务表含 `agentxx.agent.context` 会话 LLM 上下文查询 `get_messages`/`messages_count`
   与 `agentxx.agent.feature` 功能点: `list_points`/`define_point`/`undefine_point`/
   `register_impl`/`unregister_impl`/`call_point_async`/`op_cancel`,
@@ -565,6 +565,10 @@ path/to/agentxx_test --log-level warn string_util regex
   (`get_channel_state`/`get_context_messages`/`list_runtime`) 与事件驱动
   (`register_trigger`/`emit_event`/`register_timer`, 详见
   [plugins.md](docs/zh-cn/design/plugins.md) §19),
+  `agentxx.agent.event` 事件中枢 —— 插件声明事件源 / 发布值 / 结束流 / 替会话登记等待
+  (`define_event`/`emit_value`/`end_event`/`remove_event`/`query_event`/`list_events`/
+  `register_wait`/`cancel_wait`/`list_waits`, 归属按 `plugin:<实例名>` 记账, 禁用卸载整批回收,
+  详见 [plugins.md](docs/zh-cn/design/plugins.md) §20),
   client 侧 9 张 (ui/events/session/wire/self/json/log + timer/keybind)
 - 接口表版本与基线 (**当前代次 3**, 全局 API 版本 = 3: v2 是多 agent 挂载换代,
   v3 把通用表里的业务成员 (会话工作目录 / 取消查询 / 工具提示词) 迁回 agentxx 业务表

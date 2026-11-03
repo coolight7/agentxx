@@ -281,7 +281,16 @@ Keep working, or end the turn — you do not need to poll. Use opt=status wait=w
 
 ## 12. 插件侧
 
-现在（不改接口表）：插件把值发到总线即可，中枢订阅了 `evt.` 与 `plugin.evt.` 两个前缀：
+插件有两条可用的路，选哪条看"要不要值/状态"：
+
+| 需求 | 用法 |
+|---|---|
+| 只把一条消息塞进会话（不需要值/状态） | `agentxx.agent.runtime` 的 `register_trigger` / `register_timer` |
+| 有一个**带值的事件**：谁等谁拿、要查状态、要回放、要结束流 | `agentxx.agent.event` 表（见下） |
+
+### 12.1 经总线发值（不改接口表）
+
+插件把值发到总线即可，中枢订阅了 `evt.` 与 `plugin.evt.` 两个前缀：
 
 ```text
 插件 emitEvent("evt.chat.group42", payload)        // agentxx.agent.runtime 表 / SDK kit
@@ -290,16 +299,34 @@ Keep working, or end the turn — you do not need to poll. Use opt=status wait=w
 模型  agentxx_event {opt:"watch", event:"chat.group42"}
 ```
 
-所以"插件事件 → 唤醒会话"这条流程今天已经可用：会话里 `watch` 一次，插件发一次就显得一条
-输入。尚未做的部分见第 13 节。
+### 12.2 事件中枢表 `agentxx.agent.event`
+
+带值事件的正规入口（`plugin_api.h` 的表 + `plugin_kit.h` 的便捷函数），成员、返回码、
+归属回收与 SDK 函数见 [plugins.md](plugins.md) §20。要点：
+
+- `define_event` 声明事件源：说明文字会出现在模型 `agentxx_event opt=list` 的结果里，
+  模型据此知道该等什么；
+- `emit_value` 发布 JSON 值（任意线程；值排队写入中枢，调用方不等投递结果），
+  `end_event` / `remove_event` 收尾；
+- `register_wait` 替某个会话登记等待：`first` / `each` / `all` 三档 + `delivery`
+  （`next-step` / `inject` / `next-turn` / `none`）+ `replay`（是否消费注册前已有的值）；
+- 归属记成 `plugin:<实例名>`：插件禁用/卸载时主程序先取消它的等待、再删它的记录
+  （`PluginMount::revokeEntry` 最后一步），加载快照的 `eventRecords` / `eventWaits` 给出
+  当前生效条数；
+- 关闭 `event.enable` 时中枢不存在：写入口返回 `AGENTXX_PLUGIN_EVENT_ERR_UNSUPPORTED`，
+  插件应按"功能不可用"降级（示例插件 `example_event` 就是这么写的）。
+
+尚未做的部分见第 13 节。
 
 ## 13. 已知取舍与未做的事项
 
-- **插件专用接口表 `agentxx.agent.event`** 未实现：目前插件只能用总线发值，不能在插件侧
-  "定义事件/登记等待/查询等待"。需要它时应新增一张业务表（追加式，见
-  [plugins.md](plugins.md) 的接口表规则），并补 `boundaries` 的成员台账与示例插件；
+- **触发器/定时器还没有收敛到中枢**：`agentxx.agent.runtime` 的 `register_trigger` /
+  `register_timer` 仍然自带一份合并、忙时丢弃与输入拼装，与中枢的投递规则并存；
+  原计划把它们改成"spec → `EventWaitSpec`"的参数转换，本轮没做（C ABI 与插件写法不变，
+  纯内部收敛，需要单独一轮改动 + 回归）；
 - **后台命令**（`agentxx_execute_command` 的 `background:true`）未实现：命令长时间运行时
-  仍占一轮。
+  仍占一轮；
+- **事件不持久化**：刷新/重启后事件记录与等待都清空（生产者都绑在进程上）。
 
 ## 14. 测试
 
@@ -309,6 +336,7 @@ Keep working, or end the turn — you do not need to poll. Use opt=status wait=w
 | `event_tools` | 七个 `opt` 的参数校验与返回文本（逐字段断言，作为对外约定）、返回文本不命中工具失败前缀、工具注册与 `event.enable` 开关、schema |
 | `event_delivery` | 空闲/在跑/无驱动端/暂停态四种投递路径、轮末兜底、端点停止后解绑、关停丢弃、展示消息的来源标记 |
 | `event_subagent` | 异步派发立即受理、结果事件叫醒会话、工具返回文本、事件名冲突与非法名、无中枢时报错、取消后仍发终态 |
+| `plugin_event` | 插件面全流程（示例插件 `example_event`）：声明事件源与自查、发布/结束/移除/查询、替会话登记等待与投递、失败路径、禁用/启用/卸载的可逆性 |
 
 `event_delivery` / `event_subagent` 每个用例都起一次本地模拟 LLM 服务，单模块耗时十几秒，
 属预期。

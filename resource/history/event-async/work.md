@@ -85,9 +85,31 @@
 
 ### P3 插件接口表 `agentxx.agent.event`
 
-**本期未实施** (原因与替代方案见第 4 节)。
+**已实施 (2026-11-03)**。
 
-- [ ] 新增接口表 + SDK + `boundaries` 台账 + 示例插件 + 文档
+- [x] `plugin_api.h`: 新增表 `agentxx.agent.event` (v1) + 9 个成员 + 返回码与
+      `AgentxxPluginEventSpec` / `AgentxxPluginEventWaitSpec` (均带 `struct_size`)
+- [x] `plugin_iface_meta.h`: 一条 `IfaceMeta` 特化
+- [x] `plugin_manager_vtable.cpp`: 9 个入口实现 (`define_event` / `emit_value` / `end_event` /
+      `remove_event` / `query_event` / `list_events` / `register_wait` / `cancel_wait` / `list_waits`),
+      `query_interface` 分发
+- [x] `EventHub`: `isHubThread` / `callSync` (跨线程执行) / 按归属整批回收
+      (`removeOwned` / `ownedCounts`)
+- [x] `PluginMount::revokeEntry` 最后一步回收本实例的事件记录与等待;
+      `RegistrationInventory` 新增 `eventRecords` / `eventWaits` (含 `total()` 与诊断聚合)
+- [x] SDK (`plugin_kit.h`): `AgentIfaces::event` + `hasEventHub` / `defineEvent` /
+      `emitEventValue` / `endEvent` / `removeEvent` / `queryEvent` / `listEvents` /
+      `registerEventWait` / `cancelWait` / `listEventWaits`
+- [x] 示例插件 `agent/plugins/example_event` (声明流式/单值事件、发初始值、替会话登记等待)
+- [x] 测试模块 `plugin_event` (106 条断言全部通过)
+- [x] `boundaries` 台账: agent 业务表 12 → 13、合计 31 → 32、成员顺序新增一行;
+      `kInterfaceTableCount` = 23
+- [x] 文档: `plugins.md` §8 表格 + 新增 §20、`index.md`、`AGENTS.md`、`events.md` §12、
+      `test-modules.md`
+
+未做: 把触发器/定时器改成 hub 的参数转换 (原计划与本期同期做, 见 plan §10.3)。
+原因: 那是纯内部收敛 (C ABI 与插件写法不变), 与「新增接口表」可以分开, 单独一轮改动
+才好做完整的回归对照; 已在 [events.md](/docs/zh-cn/design/events.md) 第 13 节记为待办。
 
 ### P4 展示与诊断
 
@@ -113,7 +135,10 @@
 | `event_subagent` | passed=52 failed=0 | 26.2 s (6 个用例各起一次模拟服务) |
 | `observability` | passed=114 failed=0 (含新增事件计数) | 2.7 s |
 | `agent_host` | passed=158 failed=0 (回归: spawnBatch 改造) | 14.5 s |
-| `boundaries` | passed=18 failed=1 | 13 s |
+| `boundaries` | passed=18 failed=1 | 14.2 s |
+| `plugin_event` | passed=106 failed=0 | 0.3~0.9 s |
+| `plugin_runtime` / `plugin_host_mount` / `plugin_cleanup` / `plugin_feature` / `plugin_sdk` | 回归全绿 (736 / 148 / 99 / 145 / 115) | — |
+| `event_hub` / `event_tools` / `event_delivery` / `event_subagent` / `observability` | 回归全绿 (204 / 97 / 46 / 52 / 114) | — |
 
 `boundaries` 的失败是**既有问题**, 与本期改动无关: 规则 15 (称呼与用词) 命中
 `agent/third_party/cxx_pluginxx_ui` 里 5 处 `载体` (README.md / docs/integration.md /
@@ -158,24 +183,29 @@ include/pluginxx/ui/item.h)。该目录是**独立仓库** (嵌套 git 仓库, H
 
 ## 4. 未实施事项 (及后续建议)
 
-### 4.1 P3 插件接口表 `agentxx.agent.event`
+### 4.1 P3 插件接口表 `agentxx.agent.event` (已实施, 见 §1 的 P3 段)
 
-**没做**。插件“往中枢发值”今天已经可用, 而且有测试覆盖:
+**已做**。原先可用的只是"插件往总线发值" (经 `agentxx.agent.runtime` 的 `emit_event`,
+中枢订阅 `evt.` 与 `plugin.evt.` 两个前缀); 缺的"定义事件/登记等待/查询等待"这次补齐:
 
-- 插件用 `agentxx.agent.runtime` 的 `emit_event("evt.<名字>", payload)` (SDK `emitEvent`);
-  插件管理器把主题原样发到该 agent 的总线, 中枢订阅的 `evt.` 前缀就能收到;
-- 有 `plugin.evt.` 前缀兜底 (`qualifyEventTopic` 补前缀的场景);
-- 用例 `event_hub` 的 `test_hub_bus_bridge` 覆盖: `evt.` / `plugin.evt.` 两个前缀、
-  JSON 与纯文本载荷、以及“等待被总线值满足 → 变成会话输入”。
+| 落点 | 内容 |
+|---|---|
+| `plugin_api.h` | 表 `agentxx.agent.event` (v1) + `AgentxxPluginEventSpec` / `AgentxxPluginEventWaitSpec` + 9 个返回码 |
+| `plugin_iface_meta.h` | 一条 `IfaceMeta` 特化 (基线 = 完整表长) |
+| `plugin_manager_vtable.cpp` | 9 个入口 + `query_interface` 分发; 作用域引用校验与其它业务表同一套 |
+| `agent/lib/include/agentxx/event/hub.h` / `src/event/hub.cpp` | `isHubThread` / `callSync` (跨线程执行, 等 10 秒上限) / `removeOwned` / `ownedCounts` / 按归属的计数与回收 |
+| `plugin_mount.cpp` | `revokeEntry` 最后一步: 删本实例的事件记录、取消它的等待 |
+| `plugin_mount.h` + `plugin_manager_adapters.cpp` + `plugin_manager_lifecycle.cpp` | 注册清单新增 `eventRecords` / `eventWaits` (含 `total()` 聚合) |
+| `plugin_kit.h` | `AgentIfaces::event` + `hasEventHub` / `defineEvent` / `emitEventValue` / `endEvent` / `removeEvent` / `queryEvent` / `listEvents` / `registerEventWait` / `cancelWait` / `listEventWaits` |
+| `agent/plugins/example_event` | 示例插件 (声明流式/单值事件、发初始值、替会话登记等待) |
+| `agent/test/plugin/test_plugin_event.cpp` | 用例 5 组 106 条断言 |
+| `test_boundaries.cpp` + `kInterfaceTableCount` | 13 张业务表 / 23 张总数 / 成员顺序台账一行 |
 
-缺的是**插件侧“定义事件/登记等待/查询等待”**（插件想被模型 emit 的事件叫醒时需要）。
-做它要按 `docs/zh-cn/design/plugins.md` §17 的接口表规则来:
+实现上要照顾的一件事: **中枢状态只在它自己的线程读写**。插件调用线程先经
+`onInstanceIo` 到主程序 io 线程, 再用 `EventHub::callSync` 到中枢线程; 实际装配里
+两者是同一条线程 (插件管理器用的就是 agent 的 io executor), 所以走的是直接执行,
+跨线程那条路只有诊断与测试会用到。
 
-1. 新表 = 新 IID + `struct_size` + `version`/`_VERSION`/`_MIN_VERSION`/`_BASELINE_SIZE` 四件套;
-2. `plugin_iface_meta.h` 加一条 `IfaceMeta`;
-3. 主程序侧 vtable 实现 (`plugin_manager_vtable.cpp`) + SDK 便捷函数 (`plugin_kit.h`);
-4. `boundaries` 的**成员顺序台账**要同步加一行 (那个测试会逐表校验偏移);
-5. 示例插件 + `plugin_*` 测试模块 + 文档一节。
 
 ### 4.2 插件 `agentxx_execute_command` 的 `background:true`
 
@@ -197,6 +227,7 @@ wire 结构只在表尾追加一个字段 (老客户端读到空串即旧行为)
 | `c2b0a26c` | P2: 异步子代理 (受理即返回, 结果经事件回到父会话) |
 | `67dab2a9` | P4: 关键指标与诊断段 |
 | `265eda49` | 文档: events.md + index/plugins/AGENTS/test-modules |
+| 见下节 | P3: 插件接口表 `agentxx.agent.event` (表 + vtable + SDK + 示例插件 + 用例 + 文档) |
 
 ## 6. 后续补充 (2026-11-02)
 

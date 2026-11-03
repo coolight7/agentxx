@@ -27,7 +27,7 @@ Agentxx 插件系统采用 **纯 C ABI + COM 风格接口表查询**：
   核心 vtable (冻结) ── alloc / free / query_interface (IID → 接口表)
                        │
          ┌─────────────┼─────────────┬──────────────┬─────────────┐
-         │ tools       │ hooks       │ events       │ scheduler   │  ...22 张 agent + 9 张 client
+         │ tools       │ hooks       │ events       │ scheduler   │  ...23 张 agent + 9 张 client
          │ register/   │ 7 钩子点     │ publish/     │ sleep/      │  capabilities/
          │ call_tool   │             │ subscribe    │ offload     │  session/plugins/
          └─────────────┘             └──────────────┘             │  config/model/cancel/...
@@ -410,7 +410,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 
 ## 8. Agent 侧接口表一览
 
-> 共 22 张 agent 侧接口表: 12 张业务表 (`agentxx.agent.*`) + 10 张通用表
+> 共 23 张 agent 侧接口表: 13 张业务表 (`agentxx.agent.*`) + 10 张通用表
 > (`pluginxx.*`, 由插件框架实现, 表内其余行)。**通用表的查询 IID 就是 `pluginxx.<名>`**
 > (如 `pluginxx.log`), `pluginxx.kit` 正在用这组名字查询; 下表把它们写在主程序命名空间下
 > 只是为了与业务表并列阅读 —— 按 `agentxx.agent.log` 查询不会命中。
@@ -439,6 +439,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 | `agentxx.agent.feature` | 2 | 功能点 (扩展点) 体系: `list_points/define_point/undefine_point` (插件声明自己的点, id 须落在 `plugin.<插件名>.*`) + `register_impl/unregister_impl` (为任意已声明的点登记实现, 按层/优先级排序) + `call_point_async` (按名调用一个**通用 JSON 点**, 只拿数据: 不写值缓存/不记置空/不改调用方会话; 强类型核心点返回受理错误; 取消用 `pluginxx.cancel.op_cancel`) |
 | `agentxx.agent.mount` | 1 | 挂载查询 (诊断用): `list` (全部挂载摘要 JSON 数组, 每项含 agentId/agentName/workDir/language/mountSeq/plugins) + `get` (按 agentId 查单个挂载摘要, 没有该挂载返回 -1) |
 | `agentxx.agent.runtime` | 1 | 会话运行时 (插件挂自己的根并驱动会话): `mount_root/unmount_root` (带自己的 `AgentConfig` 覆盖与插件挂载策略) + `open_channel/close_channel` (一个 sessionId 一条通道, 事件经回调交付) + `send_input/cancel/select_model/respond_interrupt` + `get_channel_state/get_context_messages/list_runtime` (只读查询) + `register_trigger/unregister_trigger/emit_event/register_timer/unregister_timer` (事件驱动)。入口用 `root_id` / `channel_id` 句柄寻址, 不带 agent 引用 —— 它看的是整个容器。详见 §19 |
+| `agentxx.agent.event` | 1 | 事件中枢: `define_event` (声明事件源: 名字/种类/说明/历史条数/ttl/保留期) + `emit_value` (发布一个 JSON 值, 任意线程) + `end_event` / `remove_event` + `query_event` / `list_events` (查状态与清单) + `register_wait` / `cancel_wait` / `list_waits` (替某个会话登记等待, 值到达后按投递模式变成该会话的输入)。事件与等待按 `plugin:<实例名>` 记账, 禁用/卸载时整批回收; 与触发器/定时器的选型见 §20 |
 
 > 表中"版本"列 = 表声明的 `X_VERSION`, 与 `X_MIN_VERSION` 一起构成版本对, 另有
 > `X_BASELINE_SIZE` (基线字节数); 需要按 agent 区分的业务表为 v2 起 (v1 只在本进程单 agent
@@ -2066,3 +2067,72 @@ plugin:
 
 完整示例见 `agent/plugins/example_runtime`（挂根 + 开通道 + COALESCE 触发器 + 定时器 +
 三个在 agent 上注册的工具），端到端用例 `plugin_example_runtime`。
+
+## 20. 插件事件源 (`agentxx.agent.event`)
+
+事件中枢让插件拥有"**带值的事件**": 模型用 `agentxx_event` 工具等它, 插件用 `emit_value`
+往它里面放值; 值到达后按投递模式变成某个会话的输入。中枢本体的设计 (记录/等待/投递决策/
+预算) 见 [events.md](events.md), 本节只讲插件这一侧。
+
+### 20.1 与触发器 / 定时器怎么选
+
+| 你的需求 | 用哪个 |
+|---|---|
+| 收到一条消息就把它当输入塞进会话 (不需要值/状态) | `agentxx.agent.runtime` 的 `register_trigger` (§19) |
+| 定时往会话投一条固定输入 | 同上, `register_timer` |
+| 有一个"带值的事件": 谁需要谁来等, 要状态、要回放、要结束流 | **本表** |
+| 被叫醒的是**模型** (它看完值再决定做什么) | **本表** (`register_wait` + 模型 `watch`) |
+
+一句话: 触发器是"把消息塞进去", 事件中枢是"给一个值, 谁等谁拿"。
+
+### 20.2 成员与语义
+
+| 成员 | 语义 |
+|---|---|
+| `define_event(agent, spec)` | 声明事件源: 名字 (hub 内唯一, 建议 `域.用途`)、种类 (`stream` 流式 / `single` 单值, 后者首个值到达即结束)、说明文字 (模型 `agentxx_event opt=list` 看到的就是它)、历史条数 (回放用)、`ttl_ms` (到期未结束按过期回收)、`linger_ms` (结束后保留多久, `< 0` = 主程序默认, `0` = 立刻回收) |
+| `emit_value(agent, name, value_json)` | 发布一个 JSON 值 (**任意线程**; 值经主程序排队写入中枢, 调用方不等投递结果)。事件没声明过时按流式事件自动建立, 归属本实例 |
+| `end_event(agent, name, summary_json)` | 结束一条流 (幂等)。`summary_json` 是查询时一并返回的收尾信息; 结束后再发值会重新打开这条流 |
+| `remove_event(agent, name)` | 立刻移除记录 (不等保留期)。还挂在它上面的等待按"已结束且没有值"收尾, 不会永远等下去 |
+| `query_event(agent, name, out_json)` | 一条事件的状态与最近值 (`{name,kind,state,owner,description,published,overwritten,history,historyLimit,waits,createdAtMs,updatedAtMs,endedAtMs,last,summary}`) |
+| `list_events(agent, prefix, out_json)` | 本 agent 的事件清单 (`{count,events:[...]}`; `prefix` 可空) |
+| `register_wait(agent, spec, out_wait_id, out_state)` | 替某个会话登记等待: `mode` (`first` 一个值 / `each` 每条 / `all` 攒到流结束)、`delivery` (`next-step` / `inject` / `next-turn` / `none`)、`session_id`、`replay` (是否消费注册前已有的值)、`timeout_ms`、`max_items`、`coalesce_ms` (仅 `each`)、`unpause`、`drop_if_busy`; 出参 `out_state` 给出注册那一刻是否已经满足 |
+| `cancel_wait(agent, wait_id)` | 取消一个还在等的等待 (第二次调用返回 `ERR_NOT_FOUND`) |
+| `list_waits(agent, session_id, out_json)` | 等待清单 (`{count,waits:[...]}`; `session_id` 空 = 全部) |
+
+返回码: `AGENTXX_PLUGIN_EVENT_OK` 与 `ERR_ARG` (参数/名称非法)、`ERR_STATE` (中枢已关闭)、
+`ERR_NOT_FOUND`、`ERR_BUDGET` (事件数/等待数超上限)、`ERR_CONFLICT` (同名事件已被定义成
+另一种种类)、`ERR_UNSUPPORTED` (主程序没有中枢: 关掉了 `event.enable` 或版本更早)。
+引用无效时注册类返回 `AGENTXX_PLUGIN_ERR_NO_AGENT` 且无副作用。
+
+事件名与模型侧的规则是同一份 (`agentxx/event/naming.h`): 字母/数字/`.`/`_`/`-`,
+最长 96, 保留前缀 `agent.` / `io.` / `service.` / `hub.` / `plugin.` / `evt.` / `client.` 不可用。
+多个插件可能撞名, 约定用自己的插件名或业务域作前缀 (如 `chatbot.notify`)。
+
+### 20.3 归属与回收
+
+- 本表登记的事件与等待都记在调用它的实例名下 (`owner = plugin:<实例名>`);
+- 插件**禁用 / 卸载**时主程序在同一处回收: 先取消它的等待, 再删掉它的事件记录
+  (`PluginMount::revokeEntry` 的最后一步), 因此 `stop` 里不需要自己清;
+- 启用时按"`mount` 重新声明"的规则照常重建 —— 与工具/权限/钩子一致;
+- 加载快照的注册计数 (`RegistrationInventory::eventRecords` / `eventWaits`) 给出当前生效条数,
+  0 = 已回到基线。
+
+### 20.4 SDK 便捷层
+
+`plugin_kit.h`(`AgentIfaces::event` 为表指针):
+
+| 分组 | 函数 |
+|---|---|
+| 能力判断 | `hasEventHub(ctx)` |
+| 声明与发布 | `defineEvent(ctx, ref, EventDefineOptions)`; `emitEventValue(ctx, ref, name, value)`; `endEvent(ctx, ref, name, summary)`; `removeEvent(ctx, ref, name)` |
+| 查询 | `queryEvent(ctx, ref, name)` → JSON 文本; `listEvents(ctx, ref, prefix)` → JSON 文本 |
+| 等待 | `registerEventWait(ctx, ref, EventWaitOptions, outState, outCode)` → 等待 id; `cancelWait(ctx, ref, waitId)`; `listEventWaits(ctx, ref, sessionId)` |
+
+注意 `emitEvent` 是**运行时表**的"发一条总线事件"(`evt.<名字>` 主题, 靠触发器投递),
+本表的 `emitEventValue` 是"给事件中枢放一个结构化值" —— 两者不要混用。
+
+### 20.5 示例与用例
+
+- 示例插件 `agent/plugins/example_event`: `mount` 里声明一条流式事件与一条单值事件、
+  发布初始值、替挂载配置里给的 `sessionId` 登记一个 `each` 等待;
+- 用例 `plugin_event`: 声明与自查 / 发布结束移除 / 等待与投递 / 失败路径 / 生命周期可逆。
