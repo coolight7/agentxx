@@ -622,7 +622,7 @@ protected:
         if (!iface.events || !iface.events->subscribe) {
             return;
         }
-        auto topicSv   = PluginStringView::fromCstr("plugin.agentxx.round_start");
+        auto topicSv = PluginStringView::from("agentxx.agent.round.start", sizeof("agentxx.agent.round.start") - 1);
         roundStartSub_ = iface.events->subscribe(
             host,
             nullptr, ///< 基类不知道 agent 引用: 订阅主程序总线 (会话事件一并到达)
@@ -649,7 +649,7 @@ protected:
             // 订阅失败时取消标记只能靠每个工具根开始时自清 (见 polled_tool/blocking_tool),
             // 这里明确提示一次, 避免以后排查只能靠现象
             log.warn(
-                "plugin kit: subscribe `plugin.agentxx.round_start` failed; session cancel "
+                "plugin kit: subscribe `agentxx.agent.round.start` failed; session cancel "
                 "marks will only be cleared when the next tool root starts"
             );
         }
@@ -829,7 +829,8 @@ struct ChannelOptions {
 
 /// 触发器参数
 struct TriggerOptions {
-    /// 主题 (不以 `plugin.` / `client.` 开头时自动补 `plugin.`)
+    /// 主题 (必填全名: `agentxx.agent.*` / `agentxx.client.*` / `plugin.<插件名>.*`)
+    /// - 框架不补前缀; 不是三族合法全名时被拒绝
     std::string topic;
     int64_t     channelId = 0;
     /// `AGENTXX_PLUGIN_TRIGGER_POLICY_*` (默认 QUEUE)
@@ -1125,6 +1126,8 @@ inline int32_t removeTrigger(Ctx& ctx, int64_t triggerId) {
 }
 
 /// 发一条事件 (任意线程, 立即返回)
+/// - 主题必须写全名且属于本实例: `plugin.<本实例插件名>.*` (写侧不允许跨族)
+/// - 能不能发到内置主题: 不能 —— 内置源只由主程序发布
 template<typename Ctx>
 inline int32_t emitEvent(Ctx& ctx, std::string_view topic, std::string_view payloadJson = {}) {
     if (!hasRuntime(ctx) || !ctx.iface.runtime->emit_event || topic.empty()) {
@@ -1177,7 +1180,10 @@ inline int32_t removeRuntimeTimer(Ctx& ctx, int64_t timerId) {
 
 /// 事件声明选项
 struct EventDefineOptions {
-    /// 事件名 (hub 内唯一; 建议 `域.用途`, 如 `chat.group42`; 保留前缀不可用)
+    /// 事件名 (hub 内唯一): 必须写全名 `plugin.<本实例插件名>.<名字>`
+    /// - 框架**不补前缀**: 不在自己那一族里直接拒绝
+    /// - 内置专用子段 (`agentxx.agent.event.turn.` / `.tool.` / `.subagent.` /
+    ///   `.timer.` / `.host.`) 不可用
     std::string name;
     /// 一行说明 (模型经 `agentxx_event opt=list` 看到的就是它)
     std::string description;

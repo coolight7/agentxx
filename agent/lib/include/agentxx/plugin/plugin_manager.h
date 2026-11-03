@@ -411,8 +411,24 @@ public:
     /// - 非空引用: 该挂载所属 agent 的总线 (会话/轮次事件)
     /// - 空引用: 主 agent 的总线 (进程级事件)
     std::shared_ptr<pluginxx::EventSource> eventSource(const PluginxxScopeRef* agent) override;
-    /// 事件主题命名空间补齐 (不以 `plugin.`/`client.` 开头时补 `plugin.`)
+    /// 事件主题**不做任何补齐** (基类默认就是原样返回)
+    /// - 命名约定统一为全名: `agentxx.agent.*` / `agentxx.client.*` / `plugin.<插件名>.*`
+    /// - 写侧校验在 [subscribe] / [publish] 与业务表入口, 这里不参与
     std::string qualifyEventTopic(std::string_view topic) override;
+
+    /// 事件订阅 (通用 events 表入口的落点)
+    /// - 主题必须是全名 (三族之一); 裸名 (如 `demo.topic`) 直接拒绝并记日志
+    PluginxxSubscription* subscribe(
+        PluginInstance*                                            inst,
+        const PluginxxScopeRef*                                    scope,
+        std::string_view                                           topic,
+        void(PLUGINXX_CALL* handler)(const PluginxxStringView*, void*),
+        void*                                                      ud
+    );
+
+    /// 事件发布 (通用 events 表入口的落点)
+    /// - 只能落在**某个已加载插件**的族里 (`plugin.<插件名>.*`), 不允许写内置主题
+    int32_t publish(std::string_view topic, std::string_view eventJson);
     /// 阻塞工作委托到工作线程池 (插件 offload: 阻塞工具 / 插件自己的耗时工作)
     /// - 返回 false 表示没有任何可用的线程池 (插件侧据此报 offload 失败)
     bool postToWorkerThread(std::function<void()> fn) override;

@@ -1694,7 +1694,8 @@ static int32_t PLUGINXX_CALL xx_event_define(
             const auto owner = eventOwnerOf(inst);
             return hubCall(hub, [&](agentxx::events::EventHub& h) -> int32_t {
                 std::string nameErr;
-                if (!agentxx::events::naming::validateEventName(name, &nameErr)) {
+                // 写侧只能落在自己的族里: `plugin.<本实例插件名>.*` (框架不补前缀)
+                if (!agentxx::events::naming::validatePluginTopic(name, inst->name, &nameErr)) {
                     XX_LOGW("[event] Plugin `{}` define rejected: {}", inst->name, nameErr);
                     return AGENTXX_PLUGIN_EVENT_ERR_ARG;
                 }
@@ -1801,7 +1802,7 @@ static int32_t PLUGINXX_CALL xx_event_emit(
             // 声明走中枢线程同步完成, 值的写入随后排队 (不在调用线程等投递结果)
             const auto rc = hubCall(hub, [&](agentxx::events::EventHub& h) -> int32_t {
                 std::string nameErr;
-                if (!agentxx::events::naming::validateEventName(nameText, &nameErr)) {
+                if (!agentxx::events::naming::validatePluginTopic(nameText, inst->name, &nameErr)) {
                     XX_LOGW("[event] Plugin `{}` emit rejected: {}", inst->name, nameErr);
                     return AGENTXX_PLUGIN_EVENT_ERR_ARG;
                 }
@@ -1870,6 +1871,11 @@ static int32_t PLUGINXX_CALL xx_event_end(
                 return eventCodeOfHubFailure(hub);
             }
             return hubCall(hub, [&](agentxx::events::EventHub& h) -> int32_t {
+                std::string nameErr;
+                if (!agentxx::events::naming::validatePluginTopic(nameText, inst->name, &nameErr)) {
+                    XX_LOGW("[event] Plugin `{}` end rejected: {}", inst->name, nameErr);
+                    return AGENTXX_PLUGIN_EVENT_ERR_ARG;
+                }
                 if (!h.queryEvent(nameText).has_value()) {
                     return AGENTXX_PLUGIN_EVENT_ERR_NOT_FOUND;
                 }
@@ -1902,6 +1908,11 @@ static int32_t PLUGINXX_CALL xx_event_remove(
                 return eventCodeOfHubFailure(hub);
             }
             return hubCall(hub, [&](agentxx::events::EventHub& h) -> int32_t {
+                std::string nameErr;
+                if (!agentxx::events::naming::validatePluginTopic(nameText, inst->name, &nameErr)) {
+                    XX_LOGW("[event] Plugin `{}` remove rejected: {}", inst->name, nameErr);
+                    return AGENTXX_PLUGIN_EVENT_ERR_ARG;
+                }
                 if (!h.removeEvent(nameText)) {
                     return AGENTXX_PLUGIN_EVENT_ERR_NOT_FOUND;
                 }

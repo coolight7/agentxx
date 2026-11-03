@@ -19,6 +19,7 @@
 #include "agentxx/agent/agent_host.h"
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/io/user_input_json.h"
+#include "agentxx/event/naming.h"
 #include "agentxx/util/exception.h"
 #include "asio/post.hpp"
 #include "fmt/format.h"
@@ -157,7 +158,13 @@ int32_t PluginManager::runtimeRegisterTrigger(
     auto trigger        = std::make_shared<RuntimeTrigger>();
     trigger->triggerId  = nextRuntimeHandle_++;
     trigger->owner      = inst->name;
-    trigger->topic      = qualifyEventTopic(topic);
+    // 不补前缀: 插件必须写全名 (`plugin.<插件名>.*` / `agentxx.agent.*` ...)
+    std::string topicErr;
+    if (!agentxx::events::naming::validateReadableTopic(topic, &topicErr)) {
+        err = fmt::format("register_trigger: {}", topicErr);
+        return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+    }
+    trigger->topic      = topic;
     trigger->channelId  = spec->channel_id;
     trigger->policy     = spec->policy;
     trigger->debounceMs = spec->debounce_ms > 0 ? spec->debounce_ms : kDefaultDebounceMs;

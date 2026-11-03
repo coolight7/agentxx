@@ -13,6 +13,7 @@
 #include "agentxx/agent/config_static.h"
 #include "agentxx/agent/context.h"
 #include "agentxx/event/event_stream.h"
+#include "agentxx/event/naming.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/post.hpp"
@@ -121,11 +122,48 @@ std::shared_ptr<EventSource> PluginManager::eventSource(const PluginxxScopeRef* 
 }
 
 std::string PluginManager::qualifyEventTopic(std::string_view topic) {
-    std::string full{topic};
-    if (!full.starts_with("plugin.") && !full.starts_with("client.")) {
-        full = "plugin." + full;
+    // 不补前缀: 命名约定要求插件自己写全名 (`plugin.<插件名>.*` / `agentxx.*`),
+    // 框架只在写侧校验 (见 [publish] 与业务表入口), 读侧接受三族全名。
+    return std::string{topic};
+}
+
+PluginxxSubscription* PluginManager::subscribe(
+    PluginInstance*                                            inst,
+    const PluginxxScopeRef*                                    scope,
+    std::string_view                                           topic,
+    void(PLUGINXX_CALL* handler)(const PluginxxStringView*, void*),
+    void*                                                      ud
+) {
+    std::string err;
+    if (!agentxx::events::naming::validateReadableTopic(topic, &err)) {
+        XX_LOGW(
+            "Plugin `{}` subscribe rejected: topic `{}` is not a full name ({})",
+            inst != nullptr ? inst->name : std::string{},
+            topic,
+            err
+        );
+        return nullptr;
     }
-    return full;
+    return pluginxx::PluginHostCore<PluginInstance>::subscribe(inst, scope, topic, handler, ud);
+}
+
+int32_t PluginManager::publish(std::string_view topic, std::string_view eventJson) {
+    std::string err;
+    if (!agentxx::events::naming::validateReadableTopic(topic, &err)
+        || !agentxx::events::naming::isPluginTopic(topic)) {
+        XX_LOGW("Plugin publish rejected: topic `{}` must be `plugin.<plugin name>.*` ({})", topic, err);
+        return -1;
+    }
+    // 插件名必须是已加载的插件 (插件自己那一族); 框架不补前缀也不改写主题
+    const auto pluginName = agentxx::events::naming::pluginNameOfTopic(topic);
+    if (pluginName.empty() || find(std::string{pluginName}) == nullptr) {
+        XX_LOGW(
+            "Plugin publish rejected: topic `{}` is outside every loaded plugin's namespace",
+            topic
+        );
+        return -1;
+    }
+    return pluginxx::PluginHostCore<PluginInstance>::publish(topic, eventJson);
 }
 
 // =====================================================================
