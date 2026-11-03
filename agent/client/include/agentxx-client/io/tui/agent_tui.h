@@ -497,12 +497,10 @@ public:
     void sendPluginUserInput(std::string text);
 
     /// 跨端插件数据上行 (client io 线程): WirePluginDataUp → agent 侧插件
+    /// - topic 是全名 (`agentxx.client.plugin.<插件名>.<事件>` /
+    ///   `agentxx.client.host.*`)
     /// 返回 true 表示已投递 (未连接等失败返回 false)
-    bool sendPluginDataUp(
-        const std::string& plugin,
-        const std::string& event,
-        const std::string& json
-    );
+    bool sendPluginDataUp(const std::string& topic, const std::string& json);
 
     /// 设置连接状态 (跨线程安全: 更新 sharedState 并触发重绘)
     /// 状态枚举 ConnState 定义于

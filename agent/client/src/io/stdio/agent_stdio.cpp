@@ -226,19 +226,14 @@ void StdIOClientAgentIO::sendPluginUserInput(const std::string& text) {
     sendUserInput(sessionId_, text);
 }
 
-bool StdIOClientAgentIO::sendPluginDataUp(
-    const std::string& plugin,
-    const std::string& event,
-    const std::string& json
-) {
+bool StdIOClientAgentIO::sendPluginDataUp(const std::string& topic, const std::string& json) {
     if (!transport_ || !transport_->alive()) {
-        XX_LOGW("[stdio] sendPluginDataUp dropped (no transport): {}.{}", plugin, event);
+        XX_LOGW("[stdio] sendPluginDataUp dropped (no transport): {}", topic);
         return false;
     }
     agentxx::agent::WirePluginDataUp up;
-    up.plugin = plugin;
-    up.event  = event;
-    up.data   = json;
+    up.topic = topic;
+    up.data  = json;
     sendToPeer(std::move(up));
     return true;
 }

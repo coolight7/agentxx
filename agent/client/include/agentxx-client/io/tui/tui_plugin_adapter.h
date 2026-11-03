@@ -204,11 +204,9 @@ public:
         }
     }
 
-    bool
-        sendPluginData(const std::string& plugin, const std::string& event, const std::string& json)
-            override {
+    bool sendPluginData(const std::string& topic, const std::string& json) override {
         auto tui = tui_.lock();
-        return tui ? tui->sendPluginDataUp(plugin, event, json) : false;
+        return tui ? tui->sendPluginDataUp(topic, json) : false;
     }
 
     // ---- 通用 overlay (io 线程; 投递到 UI 线程打开/关闭) ----

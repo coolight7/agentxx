@@ -457,12 +457,15 @@ private:
 
     // ----- 插件事件转发 (仅 ex_ 线程访问) -----
 
-    /// 订阅事件总线 `plugin.` 前缀 (run 开始时调用一次):
-    /// - 插件 publish 的事件 (topic 约定 `{插件名}.{事件名}`) 原样转发为
-    ///   WirePluginData (plugin/event/data), 主程序不解析载荷语义
+    /// 订阅主题并向客户端转发 (run 开始时调用一次):
+    /// - `plugin.` 段: agent 侧插件 publish 的事件原样转发为
+    ///   WirePluginData (topic/data), 主程序不解析载荷语义
+    /// - `agentxx.agent.host.` 段: 主程序约定事件 (client_attached /
+    ///   server_plugins) 同样转发
     /// - 频率由插件自身控制; 客户端据此判断插件可用性并展示
-    /// - 注册成功后向总线发布主程序约定事件 `agentxx_host.client_attached`
-    ///   (见 kHostPluginName 注释), 双端插件可据此重发当前状态快照
+    /// - 注册成功后向总线发布主程序约定事件
+    ///   `agentxx.agent.host.client_attached` (见文件头约定事件注释),
+    ///   双端插件可据此重发当前状态快照
     ///   (修复"一次性 status 事件先于订阅发布而丢失"的滞留显示问题)
     /// - 同时订阅权限状态变更事件 (service.permission.full_auth): 状态变化时
     ///   向所有客户端广播 WirePermissionState (见 [subscribePermissionEvents])
@@ -548,7 +551,10 @@ private:
     /// 是否已注册插件事件订阅 (防止 run() 重复注册覆盖回调)
     bool pluginSubscribed_ = false;
     /// 事件总线前缀订阅 id (0 = 未订阅)
+    /// - `plugin.`: agent 侧插件发布的事件
+    /// - `agentxx.agent.host.`: 主程序约定事件 (client_attached / server_plugins)
     size_t pluginSubId_ = 0;
+    size_t hostSubId_   = 0;
     /// 权限状态变更事件订阅 id (0 = 未订阅)
     size_t fullAuthSubId_ = 0;
     /// 上行 WirePluginDataUp 对端缺失警告冷却表 (仅 ex_ 线程访问):

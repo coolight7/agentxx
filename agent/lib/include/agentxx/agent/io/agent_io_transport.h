@@ -107,10 +107,12 @@ inline SessionQueueState sessionQueueStateFromText(std::string_view text) noexce
 struct WireProtocol {
     /// 当前协议版本
     /// - v2: 工具结果状态位 (`delta.status` 取代 `delta.hasError`)
-    inline static constexpr int kVersion = 2;
+    /// - v3: 插件数据改为主题化 (`plugin_data` / `plugin_data_up` 只带 `topic` +
+    ///   `data`, 不再拆 `plugin`/`event`)
+    inline static constexpr int kVersion = 3;
     /// 兼容的最低版本
     /// - 0 = 未声明版本的老客户端, 本版本不再接受 (它靠结果文本前缀判断成败)
-    inline static constexpr int kMinVersion = 2;
+    inline static constexpr int kMinVersion = 3;
 
     /// 对端版本与本端可接受范围的关系
     enum class VersionCheck {
@@ -503,29 +505,27 @@ struct WireSwitchSession {
 };
 
 /// 插件事件转发 (Server -> Client)
-/// - 插件经事件总线发布 (topic 约定 `{插件名}.{事件名}`) 的事件原样转发,
-///   主程序不解析载荷语义; 频率由插件自身控制
-/// - 客户端据此判断插件可用性并展示 (如 agentxx_codegraph 索引进度、
-///   agentxx_system_monitor 周期采集的 usage 事件)
+/// - 插件经事件总线发布的事件原样转发, **主题一路不变**: 插件主题为
+///   `plugin.<插件名>.<事件>`, 主程序约定事件为 `agentxx.agent.host.<事件>`
+/// - 客户端插件收到的是同一个字符串, 按主题前缀/全名过滤即可 (与 agent 端同一
+///   套命名约定, 见 `agentxx/event/naming.h`)
+/// - 主程序不解析载荷语义; 频率由插件自身控制
 struct WirePluginData {
-    /// 插件名 (如 "agentxx_codegraph")
-    std::string plugin;
-    /// 事件名 (如 "progress" / "status")
-    std::string event;
+    /// 总线主题 (如 `plugin.agentxx_codegraph.progress`)
+    std::string topic;
     /// JSON 载荷字符串 (语义由插件定义; 如 {"processed","total","current_file"})
     std::string data;
 };
 
 /// client 插件事件上行 (Client -> Server)
-/// - client 侧插件 (agentxx_plugin_client_create) 经 send_plugin_data 发出的跨端事件;
-///   服务端收到后发布到事件总线 topic `client.{插件名}.{事件名}` (载荷 std::string),
-///   由 agent 侧同名插件订阅处理
+/// - client 侧插件 (`agentxx_plugin_client_create`) 经 `send_plugin_data` 发出的跨端事件;
+///   服务端收到后把**同一个主题**发布到 agent 事件总线, 由 agent 侧插件按名订阅
+/// - 主题归属 client 族: 插件数据 `agentxx.client.plugin.<插件名>.<事件>`,
+///   主程序约定事件 `agentxx.client.host.<事件>` (服务端原样转发, 不会环回客户端)
 /// - 主程序不解析载荷语义; 频率由插件自身控制 (与 WirePluginData 对称)
 struct WirePluginDataUp {
-    /// 发送方插件名 (client 侧实例名, 与 agent 侧同名插件对应)
-    std::string plugin;
-    /// 事件名 (如 "rebuild_request")
-    std::string event;
+    /// 主题 (client 族全名, 见上)
+    std::string topic;
     /// JSON 载荷字符串 (语义由插件定义)
     std::string data;
 };

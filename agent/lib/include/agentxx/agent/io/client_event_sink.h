@@ -53,7 +53,7 @@ public:
     virtual void onSessionSwitched(std::string_view sessionId) {}
 
     /// 插件事件转发 (Server -> Client, WirePluginData)
-    /// - payload: {"plugin": "...", "event": "...", "data": "..."}
+    /// - payload: {"topic": "...", "data": "..."} (topic 与总线主题同名)
     virtual void onPluginData(const WirePluginData& data) {}
 };
 

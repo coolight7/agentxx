@@ -230,20 +230,15 @@ void TUIClientAgentIO::sendPluginUserInput(std::string text) {
     postRedraw();
 }
 
-bool TUIClientAgentIO::sendPluginDataUp(
-    const std::string& plugin,
-    const std::string& event,
-    const std::string& json
-) {
+bool TUIClientAgentIO::sendPluginDataUp(const std::string& topic, const std::string& json) {
     // client io 线程调用 (adapter); 未连接时 sendToPeer 丢弃并记日志
     if (!transport_ || !transport_->alive()) {
-        XX_LOGW("[tui] sendPluginDataUp dropped (no transport): {}.{}", plugin, event);
+        XX_LOGW("[tui] sendPluginDataUp dropped (no transport): {}", topic);
         return false;
     }
     agentxx::agent::WirePluginDataUp up;
-    up.plugin = plugin;
-    up.event  = event;
-    up.data   = json;
+    up.topic = topic;
+    up.data  = json;
     sendToPeer(std::move(up));
     return true;
 }

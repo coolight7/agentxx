@@ -64,12 +64,10 @@ public:
     void sendPluginUserInput(const std::string& text);
 
     /// 跨端插件数据上行: WirePluginDataUp → agent 侧插件
+    /// - topic 是全名 (`agentxx.client.plugin.<插件名>.<事件>` /
+    ///   `agentxx.client.host.*`)
     /// 返回 true 表示已投递 (未连接等失败返回 false)
-    bool sendPluginDataUp(
-        const std::string& plugin,
-        const std::string& event,
-        const std::string& json
-    );
+    bool sendPluginDataUp(const std::string& topic, const std::string& json);
 
 protected:
 

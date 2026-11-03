@@ -76,7 +76,7 @@ typedef enum AgentxxClientEvent {
     AGENTXX_CLIENT_EVT_DELTA,          ///< 增量事件 (同 wire delta JSON 字段)
     AGENTXX_CLIENT_EVT_TURN_END,       ///< 轮次结束 {"sessionId","hasError","interrupted",...}
     AGENTXX_CLIENT_EVT_SESSION_SWITCH, ///< 会话切换 {"sessionId"}
-    AGENTXX_CLIENT_EVT_PLUGIN_DATA, ///< 插件事件转发 (WirePluginData) {"plugin","event","data"}
+    AGENTXX_CLIENT_EVT_PLUGIN_DATA, ///< 插件事件转发 (WirePluginData) {"topic","data"}
     /// 展示区域尺寸变化 {"regions":[{"id":"<面板/段落 id>","w":60,"h":20}]}
     /// - 插件按新的可用宽度重新排列自己的组件 (例如换用不同的列宽/省略策略)
     /// - 仅在数值变化时投递 (同一帧内多次上报会合并为一次);
@@ -465,12 +465,14 @@ typedef struct AgentxxClientWireIface {
     int32_t  version; ///< 主程序填 AGENTXX_IFACE_CLIENT_WIRE_VERSION
     uint32_t struct_size;
 
-    /// 发送事件到 agent 侧: 服务端发布到事件总线 topic `client.{插件名}.{event}`
-    /// (agent 侧同名插件可订阅; 载荷 JSON 原样转发, 语义由插件定义)
-    /// - 返回 0 成功; 非 0 表示未连接或载荷非法
+    /// 发送事件到 agent 侧: 服务端原样发布到事件总线 topic (agent 侧插件可订阅;
+    /// 载荷 JSON 原样转发, 语义由插件定义)
+    /// - topic 必须是全名 `agentxx.client.plugin.<本实例插件名>.<事件>`
+    ///   (框架只校验、不补前缀, 不在自己的段里直接返回非 0)
+    /// - 返回 0 成功; 非 0 表示未连接或名字/载荷非法
     int32_t(PLUGINXX_CALL* send_plugin_data)(
         const PluginxxHost*       host,
-        const PluginxxStringView* event,
+        const PluginxxStringView* topic,
         const PluginxxStringView* json
     );
 } AgentxxClientWireIface;

@@ -74,10 +74,10 @@ struct MsgType { // ===== Client -> Server =====
     /// 服务端持久化会话列表响应 (ListSessions 的结果)
     inline static constexpr std::string_view SessionList = "session_list";
     inline static constexpr std::string_view Pong        = "pong";
-    /// 服务端插件事件转发 (WirePluginData: 插件名 + 事件名 + JSON 载荷)
+    /// 服务端插件事件转发 (WirePluginData: 总线主题 + JSON 载荷)
     inline static constexpr std::string_view PluginData = "plugin_data";
-    /// client 插件事件上行 (WirePluginDataUp: 插件名 + 事件名 + JSON 载荷;
-    /// 服务端发布到事件总线 topic `client.{插件名}.{事件名}`)
+    /// client 插件事件上行 (WirePluginDataUp: 总线主题 + JSON 载荷;
+    /// 服务端把同一个主题发布到 agent 事件总线)
     inline static constexpr std::string_view PluginDataUp = "plugin_data_up";
     /// 服务端消息队列同步 (WireMessageQueueUpdate: 会话 ID + 排队消息列表)
     inline static constexpr std::string_view MessageQueueUpdate = "message_queue_update";
@@ -1065,43 +1065,41 @@ inline WireSwitchSession switchSessionFromJson(const utilxx_base::Json& j) {
 // ---------------------------------------------------------------------------
 
 /// 插件事件转发 (Server -> Client): 插件经事件总线发布的事件原样转发
-/// - data 为 JSON 载荷字符串 (语义由插件定义); 频率由插件自身控制
+/// - `topic` 与总线主题一模一样 (插件 `plugin.<插件名>.<事件>`; 主程序约定事件
+///   `agentxx.agent.host.<事件>`); `data` 为 JSON 载荷字符串
+/// - 客户端按主题全名/前缀过滤, 与 agent 端共用同一套命名约定
 inline utilxx_base::Json makePluginData(const WirePluginData& p) {
     utilxx_base::Json j = {
-        {"type",   MsgType::PluginData},
-        {"plugin", p.plugin           },
-        {"event",  p.event            },
-        {"data",   p.data             },
+        {"type", MsgType::PluginData},
+        {"topic", p.topic           },
+        {"data",  p.data            },
     };
     return j;
 }
 
 inline WirePluginData pluginDataFromJson(const utilxx_base::Json& j) {
     WirePluginData p;
-    p.plugin = j.value("plugin", std::string{});
-    p.event  = j.value("event", std::string{});
-    p.data   = j.value("data", std::string{});
+    p.topic = j.value("topic", std::string{});
+    p.data  = j.value("data", std::string{});
     return p;
 }
 
 /// client 插件事件上行 (Client -> Server): WirePluginDataUp
-/// - 载荷 JSON 原样转发 (语义由插件定义); 服务端发布到事件总线
-///   topic `client.{插件名}.{事件名}`
+/// - `topic` 是 client 族全名 (`agentxx.client.plugin.<插件名>.<事件>` /
+///   `agentxx.client.host.<事件>`); 服务端把同一主题发布到 agent 事件总线
 inline utilxx_base::Json makePluginDataUp(const WirePluginDataUp& p) {
     utilxx_base::Json j = {
-        {"type",   MsgType::PluginDataUp},
-        {"plugin", p.plugin             },
-        {"event",  p.event              },
-        {"data",   p.data               },
+        {"type", MsgType::PluginDataUp},
+        {"topic", p.topic             },
+        {"data",  p.data              },
     };
     return j;
 }
 
 inline WirePluginDataUp pluginDataUpFromJson(const utilxx_base::Json& j) {
     WirePluginDataUp p;
-    p.plugin = j.value("plugin", std::string{});
-    p.event  = j.value("event", std::string{});
-    p.data   = j.value("data", std::string{});
+    p.topic = j.value("topic", std::string{});
+    p.data  = j.value("data", std::string{});
     return p;
 }
 

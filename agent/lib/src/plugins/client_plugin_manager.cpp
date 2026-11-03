@@ -14,6 +14,8 @@
 #include "utilxx_base/container_util.h"
 
 #include "agentxx/agent/io/wire_protocol.h"
+#include "agentxx/event/events.h"
+#include "agentxx/event/naming.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/post.hpp"
@@ -1361,14 +1363,18 @@ void ClientPluginManager::onReady() {
     }();
     j["sessionId"] = sessionId_;
     dispatchEvent(AGENTXX_CLIENT_EVT_READY, j.dump());
-    // 三期6: 向服务端上报本 client 支持的接口集 (约定事件, 镜像 server_plugins;
-    // 服务端存储并经事件总线发布, agent 侧插件订阅 "agentxx_host.client_interfaces"
-    // 据此自适应 —— 如 emit_message_tip 在无 toast 接口的主程序上降级)
+    // 三期6: 向服务端上报本 client 支持的接口集 (client 端主程序约定主题,
+    // 镜像 server_plugins; 服务端存储并经事件总线发布, agent 侧插件订阅
+    // `agentxx.client.host.client_interfaces` 据此自适应 —— 如 emit_message_tip
+    // 在无 toast 接口的主程序上降级)
     if (uiAdapter_) {
         utilxx_base::Json up = utilxx_base::Json::object();
         up["sessionId"]      = sessionId_;
         up["interfaces"]     = j["interfaces"];
-        uiAdapter_->sendPluginData("agentxx_host", "client_interfaces", up.dump());
+        uiAdapter_->sendPluginData(
+            std::string{agentxx::events::Topic::ClientInterfaces},
+            up.dump()
+        );
     }
 }
 
@@ -1415,11 +1421,12 @@ void ClientPluginManager::onSessionSwitched(std::string_view sessionId) {
 }
 
 void ClientPluginManager::onPluginData(const agentxx::agent::WirePluginData& data) {
-    // 主程序约定事件 (server 端 SessionServerAgentIO 发布, 见该文件 kHostPluginName):
-    // server_plugins → 记录服务端已加载插件结构化信息 [{name,version,interfaces},...],
-    // 供 get_client_state ("agentPlugins") 查询对端可用性与能力; 其余约定
-    // 事件照常向插件分发
-    if (data.plugin == "agentxx_host" && data.event == "server_plugins") {
+    // topic 为全名 (agent 端主程序约定主题在 `agentxx.agent.host.*`,
+    // 插件事件在 `plugin.<插件名>.*`)
+    // 主程序约定事件 `agentxx.agent.host.server_plugins` → 记录服务端已加载
+    // 插件结构化信息 [{name,version,interfaces},...], 供 get_client_state
+    // ("agentPlugins") 查询对端可用性与能力; 其余主题照常向插件分发
+    if (data.topic == agentxx::events::Topic::HostServerPlugins) {
         try {
             auto                          j = utilxx_base::Json::parse(data.data);
             std::vector<ServerPluginInfo> infos;
@@ -1465,19 +1472,24 @@ void ClientPluginManager::onPluginData(const agentxx::agent::WirePluginData& dat
             break;
         }
     }
-    if (!hasSubscriber && pluginDataNoSubWarned_.insert(data.plugin).second) {
-        XX_LOGW(
-            "[client_plugin] plugin data `{}.{}` received but no client plugin subscribed "
-            "(plugin missing on this side? server-side loaded: {})",
-            data.plugin,
-            data.event,
-            serverPlugins_.empty() ? "unknown" : "yes"
-        );
+    if (!hasSubscriber) {
+        // 去重键 = 插件名 (非插件主题归到发送方自己的名字下)
+        const auto ownerOf = [](std::string_view topic) {
+            const auto pluginName = agentxx::events::naming::pluginNameOfTopic(topic);
+            return pluginName.empty() ? std::string{topic} : std::string{pluginName};
+        };
+        if (pluginDataNoSubWarned_.insert(ownerOf(data.topic)).second) {
+            XX_LOGW(
+                "[client_plugin] plugin data `{}` received but no client plugin subscribed "
+                "(plugin missing on this side? server-side loaded: {})",
+                data.topic,
+                serverPlugins_.empty() ? "unknown" : "yes"
+            );
+        }
     }
 
     utilxx_base::Json j = utilxx_base::Json::object();
-    j["plugin"]         = data.plugin;
-    j["event"]          = data.event;
+    j["topic"]          = data.topic;
     j["data"]           = data.data;
     dispatchEvent(AGENTXX_CLIENT_EVT_PLUGIN_DATA, j.dump());
 }
@@ -2193,19 +2205,19 @@ void PLUGINXX_CALL
 
 int32_t PLUGINXX_CALL xx_csend_plugin_data(
     const PluginxxHost*       host,
-    const PluginxxStringView* event,
+    const PluginxxStringView* topic,
     const PluginxxStringView* json
 ) {
-    if (agentxx::plugin::PluginStringView::empty(event)) {
+    if (agentxx::plugin::PluginStringView::empty(topic)) {
         return -1;
     }
-    auto evtVal  = *event;
-    auto jsonVal = json ? *json : agentxx::plugin::PluginStringView::from("{}", 2);
+    auto topicVal = *topic;
+    auto jsonVal  = json ? *json : agentxx::plugin::PluginStringView::from("{}", 2);
     return onClientIo<int32_t>(
         host,
         -1,
-        [evtVal, jsonVal](ClientPluginInstance* inst, ClientPluginManager* mgr) {
-            return mgr->sendPluginDataToPeer(inst, evtVal, jsonVal);
+        [topicVal, jsonVal](ClientPluginInstance* inst, ClientPluginManager* mgr) {
+            return mgr->sendPluginDataToPeer(inst, topicVal, jsonVal);
         }
     );
 }
@@ -3647,15 +3659,21 @@ void ClientPluginManager::requestCancelToPeer(
 
 int ClientPluginManager::sendPluginDataToPeer(
     ClientPluginInstance* inst,
-    PluginxxStringView    event,
+    PluginxxStringView    topic,
     PluginxxStringView    json
 ) {
     if (!inst || !uiAdapter_) {
         return -1;
     }
-    std::string ev = svToStr(event);
-    std::string j  = agentxx::plugin::PluginStringView::empty(json) ? "{}" : svToStr(json);
-    return uiAdapter_->sendPluginData(inst->name, ev, j) ? 0 : -1;
+    const std::string topicStr = svToStr(topic);
+    // 只能写自己那一族 (`agentxx.client.plugin.<本实例插件名>.*`); 框架不补前缀
+    std::string err;
+    if (!agentxx::events::naming::validateClientPluginTopic(topicStr, inst->name, &err)) {
+        XX_LOGW("[client_plugin] {} send_plugin_data rejected: {}", inst->name, err);
+        return -2;
+    }
+    const std::string j = agentxx::plugin::PluginStringView::empty(json) ? "{}" : svToStr(json);
+    return uiAdapter_->sendPluginData(topicStr, j) ? 0 : -1;
 }
 
 namespace {

@@ -995,18 +995,19 @@ public:
     }
 
     /// 跨端数据 (client → agent): 经端点 WirePluginDataUp 发送
+    /// - topic 必须是全名 `agentxx.client.plugin.<本实例插件名>.<事件>`
     int sendPluginDataToPeer(
         ClientPluginInstance* inst,
-        PluginxxStringView    event,
+        PluginxxStringView    topic,
         PluginxxStringView    json
     );
 
     int sendPluginDataToPeer(
         ClientPluginInstance* inst,
-        std::string_view      event,
+        std::string_view      topic,
         std::string_view      json
     ) {
-        return sendPluginDataToPeer(inst, strToSv(event), strToSv(json));
+        return sendPluginDataToPeer(inst, strToSv(topic), strToSv(json));
     }
 
     /// 主程序 vtable (静态函数表 `g_clientHostVtable`; 覆写 lifecycle 骨架的同名扩展点)
@@ -1124,7 +1125,7 @@ private:
     std::string startupProgress_;
 
     /// 服务端已加载的 agent 侧插件结构化信息 (io 线程写读): 来自主程序约定
-    /// 事件 `agentxx_host.server_plugins` (WirePluginData; 载荷
+    /// 事件 `agentxx.agent.host.server_plugins` (WirePluginData; 载荷
     /// [{"name","version","interfaces":[...]},...]); 空数组 = 未知 (服务端
     /// 未提供)。client 插件经 get_client_state("agentPlugins") 查询对端
     /// 可用性与声明的接口, 对端缺失时可降级提示, 避免上行数据被静默丢弃
@@ -1233,12 +1234,10 @@ public:
     virtual void requestCancel(const std::string& /*sessionId*/) {}
 
     /// 跨端数据: client → agent (io 线程; 经端点 WirePluginDataUp 发送)
+    /// - topic 是全名 (`agentxx.client.plugin.<插件名>.<事件>` /
+    ///   `agentxx.client.host.*`), 由调用方写全
     /// 返回 true 表示已发送 (未连接等失败返回 false)
-    virtual bool sendPluginData(
-        const std::string& /*plugin*/,
-        const std::string& /*event*/,
-        const std::string& /*json*/
-    ) {
+    virtual bool sendPluginData(const std::string& /*topic*/, const std::string& /*json*/) {
         return false;
     }
 

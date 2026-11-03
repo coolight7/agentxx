@@ -1,4 +1,5 @@
 #include "agentxx/agent/io/session_server_agent_io.h"
+#include "agentxx/event/naming.h"
 
 #include "agentxx/agent/base_agent.h"
 #include "agentxx/agent/config_writer.h"
@@ -114,53 +115,45 @@ static WireSessionList
 // ---------------------------------------------------------------------------
 // 主程序约定事件 (host convention events)
 //
-// 主程序以伪插件名 kHostPluginName 向总线发布约定事件, 经 subscribePluginEvents
-// 的前缀订阅原样转发为 WirePluginData 到客户端, 同时可被 agent 侧插件直接订阅
-// (subscribe 时主程序自动加 "plugin." 前缀)。用于解决跨进程/分端部署时
-// "一次性状态事件先于订阅发布而丢失" 与 "对端插件可用性不可知" 问题:
+// 主程序以 `agentxx.agent.host.*` 主题向总线发布约定事件, 经 subscribePluginEvents
+// 的前缀订阅原样转发为 WirePluginData 到客户端, 同时可被 agent 侧插件直接订阅。
+// 用于解决跨进程/分端部署时 "一次性状态事件先于订阅发布而丢失" 与
+// "对端插件可用性不可知" 问题 (主题名见 `agentxx/event/events.h` 的 `Topic`):
 //
-// - `agentxx_host.client_attached`: 载荷 {"sessionId":"..."}。端点就绪后发布
+// - `agentxx.agent.host.client_attached`: 载荷 {"sessionId":"..."}。端点就绪后发布
 //   (subscribePluginEvents 注册成功时 + handleHello 握手完成时各一次; 重复
 //   发布无害 —— 状态快照重发是幂等的)。双端插件约定: 收到后重发当前完整
 //   状态快照 (如 codegraph 的 status/progress), 使晚接入/晚订阅的客户端
 //   立即得到正确显示。
-// - `agentxx_host.server_plugins`: 载荷 {"plugins":[{"name","version",
+// - `agentxx.agent.host.server_plugins`: 载荷 {"plugins":[{"name","version",
 //   "interfaces":[...]},...]} (服务端已加载的 agent 侧插件结构化信息), 随
 //   handleHello 发布。client 插件经 EVT_PLUGIN_DATA 或 get_client_state
 //   ("agentPlugins") 查询对端可用性与声明的接口, 缺失时可降级提示, 避免
 //   静默丢弃造成"操作成功"假象。
-// - `agentxx_host.client_interfaces`: 载荷 {"sessionId","interfaces":[...]}
+// - `agentxx.client.host.client_interfaces`: 载荷 {"sessionId","interfaces":[...]}
 //   (client 主程序支持的接口名集合)。由客户端在 READY 时经上行插件数据通道
 //   上报 (ClientPluginManager::onReady); controller 与 client 是 1:N (同
 //   会话可多 client 接入/重连), 服务端不存储, 仅在 WirePluginDataUp 分支
-//   拦截并发布到 agent 总线 —— agent 侧插件订阅
-//   "agentxx_host.client_interfaces" 按事件到达知道各 client 快照, 据此
-//   自适应 (如 emit_message_tip 在无 toast 接口的主程序上降级)。
-//
-// 注意: server_plugins/client_interfaces 会转发到对端 (不以 "client." 开头,
-// 不触环回跳过), 对端插件同样可订阅处理。
-static constexpr std::string_view kHostPluginName    = "agentxx_host";
-static constexpr std::string_view kEvtClientAttached = "client_attached";
-static constexpr std::string_view kEvtServerPlugins  = "server_plugins";
-/// client 主程序接口集上报 (client → server; 见文件头注释)
-static constexpr std::string_view kEvtClientInterfaces = "client_interfaces";
+//   拦截并发布到 agent 总线 —— agent 侧插件订阅该主题按事件到达知道各 client
+//   快照, 据此自适应 (如 emit_message_tip 在无 toast 接口的主程序上降级)。
+static constexpr std::string_view kEvtClientAttached = agentxx::events::Topic::HostClientAttached;
+static constexpr std::string_view kEvtServerPlugins = agentxx::events::Topic::HostServerPlugins;
 /// 上行 WirePluginDataUp 对端缺失警告冷却 (同一插件名两次警告最小间隔)
 static constexpr auto kUplinkWarnCooldown = std::chrono::seconds{30};
 
-/// 向总线发布主程序约定事件 (异步投递到总线 executor, 不阻塞调用方;
-/// 总线为空时跳过)。topic 组装为 "plugin.{kHostPluginName}.{event}"。
+/// 向总线发布约定事件 (异步投递到总线 executor, 不阻塞调用方; 总线为空时跳过)
+/// - 主题就是约定的全名, 不再拼接伪插件名
 static void publishHostEvent(
     const std::shared_ptr<agentxx::events::EventBus>& bus,
-    std::string_view                                  event,
+    std::string_view                                  topic,
     std::string                                       dataJson
 ) {
     if (!bus) {
         return;
     }
-    auto topic = fmt::format("plugin.{}.{}", kHostPluginName, event);
     asio::co_spawn(
         bus->executor(),
-        [bus, topic = std::move(topic), data = std::move(dataJson)]() -> asio::awaitable<void> {
+        [bus, topic = std::string{topic}, data = std::move(dataJson)]() -> asio::awaitable<void> {
             co_await bus->publish(topic, data);
             co_return;
         },
@@ -1591,60 +1584,66 @@ void SessionServerAgentIO::onPeerMessage(
                     asio::detached
                 );
             } else if constexpr (std::is_same_v<T, WirePluginDataUp>) {
-                // 主程序约定上行事件拦截: client_interfaces (client 主程序接口集
-                // 上报, 三期6) —— controller 与 client 是 1:N (同会话可多
-                // client 接入/重连), 不做单值存储; 仅向 agent 总线转发
-                // (topic plugin.agentxx_host.client_interfaces, 订阅方按事件
-                // 到达知道各 client 快照), agent 侧插件据此自适应 (如无
-                // toast 接口的主程序上降级提示)
-                if (m.plugin == kHostPluginName && m.event == kEvtClientInterfaces) {
-                    if (auto agt = agent_.lock(); agt && agt->agentContext) {
-                        publishHostEvent(agt->agentContext->bus, kEvtClientInterfaces, m.data);
-                    }
+                // client 上行插件数据: 主题由 client 侧写全名 (client 族), 服务端原样
+                // 发布到 agent 总线, agent 侧插件按同一主题名订阅 (读侧可跨族)
+                // - `agentxx.client.host.*`: 主程序约定事件 (如 client_interfaces,
+                //   client 主程序接口集上报); controller 与 client 是 1:N (同会话可
+                //   多 client 接入/重连), 不做单值存储, 仅向 agent 总线转发
+                // - `agentxx.client.plugin.<插件名>.<事件>`: client 插件数据
+                // 两族都不以 `plugin.` 开头, 因此不会被 subscribePluginEvents 转发
+                // 回客户端 (无环回)
+                std::string topicErr;
+                if (!agentxx::events::naming::validateReadableTopic(m.topic, &topicErr)
+                    || !agentxx::events::naming::isClientTopic(m.topic)) {
+                    XX_LOGW(
+                        "[session_ctrl] WirePluginDataUp rejected: topic `{}` must be "
+                        "`agentxx.client.*` ({})",
+                        m.topic,
+                        topicErr
+                    );
                     return;
                 }
-                // client 插件事件上行: 发布到 agent 事件总线 topic
-                // `plugin.client.{插件名}.{事件名}` (载荷 std::string), 由 agent
-                // 侧插件经 subscribe("client.{插件名}.{事件名}") 订阅处理
-                // (跨端插件数据通道 client → agent);
-                // 前缀 "plugin.client." 的发布不会被 subscribePluginEvents 转发
-                // 回客户端 (见该处环回跳过逻辑)
                 auto agent = agent_.lock();
-                if (agent && agent->agentContext && agent->agentContext->bus) {
-                    // 对端缺失检测: agent 侧未加载同名插件时, 上行数据发布后
-                    // 将无订阅者而静默丢弃 —— 按插件名冷却限频警告, 避免静默
-                    // 丢数据造成"操作成功"假象 (如 client /sysinfo 开关同步)
-                    if (agent->agentContext->pluginManager
-                        && !agent->agentContext->pluginManager->find(m.plugin)) {
+                if (!agent || !agent->agentContext || !agent->agentContext->bus) {
+                    XX_LOGW("[session_ctrl] WirePluginDataUp dropped (no agent bus): {}", m.topic);
+                    return;
+                }
+                // 对端缺失检测: client 插件数据在 agent 侧无同名插件时, 发布后将
+                // 无订阅者而静默丢弃 —— 按插件名冷却限频警告, 避免静默丢数据造成
+                // "操作成功"假象 (如 client /sysinfo 开关同步)
+                if (m.topic.starts_with(agentxx::events::naming::kClientPluginDataPrefix)) {
+                    const auto rest = std::string_view{m.topic}.substr(
+                        agentxx::events::naming::kClientPluginDataPrefix.size()
+                    );
+                    const auto pluginName = rest.substr(0, rest.find('.'));
+                    if (agent->agentContext->pluginManager && !pluginName.empty()
+                        && !agent->agentContext->pluginManager->find(std::string{pluginName})) {
                         auto  now = std::chrono::steady_clock::now();
-                        auto& at  = uplinkWarnAt_[m.plugin];
+                        auto& at  = uplinkWarnAt_[std::string{pluginName}];
                         if (at < now - kUplinkWarnCooldown) {
                             at = now;
                             XX_LOGW(
                                 "[session_ctrl] WirePluginDataUp from client: agent-side plugin "
-                                "`{}` not loaded on server (event `{}.{}`, data will be dropped)",
-                                m.plugin,
-                                m.plugin,
-                                m.event
+                                "`{}` not loaded on server (topic `{}`, data will be dropped)",
+                                pluginName,
+                                m.topic
                             );
                         }
                     }
-                    auto bus   = agent->agentContext->bus;
-                    auto topic = "plugin.client." + m.plugin + "." + m.event;
-                    auto data  = m.data;
-                    // EventBus::publish 为协程; 投递到总线 executor 执行
-                    asio::co_spawn(
-                        bus->executor(),
-                        [bus, topic = std::move(topic), data = std::move(data)](
-                        ) -> asio::awaitable<void> {
-                            co_await bus->publish(topic, data);
-                            co_return;
-                        },
-                        asio::detached
-                    );
-                } else {
-                    XX_LOGW("[session_ctrl] WirePluginDataUp dropped (no agent bus): {}", m.plugin);
                 }
+                auto bus   = agent->agentContext->bus;
+                auto topic = std::move(m.topic);
+                auto data  = std::move(m.data);
+                // EventBus::publish 为协程; 投递到总线 executor 执行
+                asio::co_spawn(
+                    bus->executor(),
+                    [bus, topic = std::move(topic), data = std::move(data)](
+                    ) -> asio::awaitable<void> {
+                        co_await bus->publish(topic, data);
+                        co_return;
+                    },
+                    asio::detached
+                );
             }
         },
         std::move(msg)
@@ -2076,44 +2075,31 @@ void SessionServerAgentIO::subscribePluginEvents() {
     }
     auto bus  = agent->agentContext->bus;
     auto self = shared_from_this();
-    // 订阅全部插件事件 (topic `plugin.{插件名}.{事件名}`):
-    // - 载荷均为 std::string (JSON); 类型不匹配跳过
-    // - 原样转发为 WirePluginData, 主程序不解析语义; 频率由插件控制
-    pluginSubId_ = bus->listenPrefix(
-        "plugin.",
-        [weakSelf = std::weak_ptr<SessionServerAgentIO>{self
-         }](std::string_view topic, const std::any& payload) {
-            auto sp = weakSelf.lock();
-            if (!sp) {
-                return;
-            }
-            if (payload.type() != typeid(std::string)) {
-                return;
-            }
-            const auto& data = std::any_cast<const std::string&>(payload);
-            // topic: "plugin.{插件名}.{事件名}" → 拆出插件名与事件名
-            std::string_view rest = topic.substr(7); // 去掉 "plugin."
-            // 环回跳过: client 插件上行事件 (topic "plugin.client.{...}") 仅面向
-            // agent 侧插件订阅, 不得转发回客户端 (否则 client 插件会收到自己
-            // send_plugin_data 发出的事件, 形成环回)
-            if (rest.starts_with("client.")) {
-                return;
-            }
-            auto dot = rest.find('.');
-            if (dot == std::string_view::npos || dot == 0 || dot + 1 >= rest.size()) {
-                return;
-            }
-            WirePluginData wpd;
-            wpd.plugin = std::string{rest.substr(0, dot)};
-            wpd.event  = std::string{rest.substr(dot + 1)};
-            wpd.data   = data;
-            // 回调运行在 bus executor (与 ex_ 同一 ioCtx); 仍 post 到 ex_
-            // 统一串行化端点状态访问 (与插件侧线程解耦)
-            asio::post(sp->ex_, [sp, w = std::move(wpd)]() mutable {
-                sp->sendToPeer(std::move(w));
-            });
+    // 订阅需要下发给客户端的主题, 逐个原样转发为 WirePluginData:
+    // - `plugin.` 段: agent 侧插件发布的事件 (载荷均为 std::string (JSON),
+    //   类型不匹配跳过); 主程序不解析语义, 频率由插件控制
+    // - `agentxx.agent.host.` 段: 主程序约定事件 (client_attached / server_plugins)
+    // client 上行数据走 `agentxx.client.*`, 不在这两个前缀里, 因此不会环回
+    auto forward = [weakSelf = std::weak_ptr<SessionServerAgentIO>{self}](std::string_view topic,
+                                                                        const std::any& payload) {
+        auto sp = weakSelf.lock();
+        if (!sp) {
+            return;
         }
-    );
+        if (payload.type() != typeid(std::string)) {
+            return;
+        }
+        WirePluginData wpd;
+        wpd.topic = std::string{topic};
+        wpd.data  = std::any_cast<const std::string&>(payload);
+        // 回调运行在 bus executor (与 ex_ 同一 ioCtx); 仍 post 到 ex_
+        // 统一串行化端点状态访问 (与插件侧线程解耦)
+        asio::post(sp->ex_, [sp, w = std::move(wpd)]() mutable {
+            sp->sendToPeer(std::move(w));
+        });
+    };
+    pluginSubId_ = bus->listenPrefix("plugin.", forward);
+    hostSubId_   = bus->listenPrefix("agentxx.agent.host.", std::move(forward));
     pluginSubscribed_ = true;
     // 权限状态变更订阅 (完全授权切换广播)
     subscribePermissionEvents(bus);
@@ -2385,6 +2371,12 @@ void SessionServerAgentIO::stopImpl() {
             agent->agentContext->bus->unlistenPrefix(pluginSubId_);
         }
         pluginSubId_ = 0;
+    }
+    if (hostSubId_ != 0) {
+        if (auto agent = agent_.lock(); agent && agent->agentContext && agent->agentContext->bus) {
+            agent->agentContext->bus->unlistenPrefix(hostSubId_);
+        }
+        hostSubId_ = 0;
     }
     // 退订权限状态变更事件 (同上)
     if (fullAuthSubId_ != 0) {
