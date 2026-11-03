@@ -5,9 +5,12 @@
 /// 数据, 跟着插件生命周期来去 (见 `agentxx/feature/registry.h`)。
 ///
 /// 第一批点:
-/// - `agentxx.context.countTokens`: 文本 Token 估算 (可调; 带按身份的值缓存);
-/// - `agentxx.context.summarize`:   上下文压缩 (本轮不可调);
-/// - `agentxx.tool.summarizeOutput`: 工具输出摘要 (第二批, 见设计文档 §8.3)。
+/// - `agentxx.agent.context.countTokens`: 文本 Token 估算 (可调; 带按身份的值缓存);
+/// - `agentxx.agent.context.summarize`:   上下文压缩 (本轮不可调);
+/// - `agentxx.agent.tool.summarizeOutput`: 工具输出摘要 (第二批, 见设计文档 §8.3)。
+///
+/// 命名约定与总线主题 / 中枢事件名同一套: 核心点落在 `agentxx.agent.*`,
+/// 插件的点在 `plugin.<插件名>.*` (由插件自己写全名, 框架不补前缀)。
 #pragma once
 
 #include "agentxx/feature/feature.h"
@@ -31,16 +34,16 @@ namespace points {
 /// - 请求: `{text}` 或 `{messages}` 二选一, 可带 `model` / `kind` / `countThinking`
 /// - 结果: `{tokens}`
 /// - 身份: `model|kind|fnv1a64(text)`
-inline constexpr std::string_view kContextCountTokens = "agentxx.context.countTokens";
+inline constexpr std::string_view kContextCountTokens = "agentxx.agent.context.countTokens";
 
 /// 上下文压缩 (provide)
 /// - 请求: `{sessionId}` 或 `{messages}`, 可带 `model` / `targetTokens` / `language`
 /// - 结果: `{summary, truncated}`; 实现只产出摘要文本, 不写回会话
 /// - 身份: `sessionId|messagesVersion|model`
-inline constexpr std::string_view kContextSummarize = "agentxx.context.summarize";
+inline constexpr std::string_view kContextSummarize = "agentxx.agent.context.summarize";
 
 /// 工具输出摘要 (provide; 第二批实现)
-inline constexpr std::string_view kToolSummarizeOutput = "agentxx.tool.summarizeOutput";
+inline constexpr std::string_view kToolSummarizeOutput = "agentxx.agent.tool.summarizeOutput";
 
 /// 核心实现归属 (清单里的 `by` / `owner` 取值)
 inline constexpr std::string_view kOwnerCountTokens = "core:context:tokenEstimate";
@@ -85,7 +88,7 @@ struct Codec<CountTokensValue> {
 ///
 /// - 同步快路径: TPS 计算 (`service.token.count`) 直连这里的 [estimateText],
 ///   插件实现不参与这条路径 (见设计文档 §8.1);
-/// - 功能点: `agentxx.context.countTokens` 的核心实现调用同一份规则, 因此
+/// - 功能点: `agentxx.agent.context.countTokens` 的核心实现调用同一份规则, 因此
 ///   "中间件旧函数" 与 "功能点取值" 结果必然一致。
 struct TokenEstimator {
     /// 每个 token 大约为多少个 ascii 字符

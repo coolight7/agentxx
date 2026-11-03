@@ -44,7 +44,7 @@ namespace agentxx {
 namespace nodes {
 namespace {
 
-/// 工具执行事件 (总线 typed 事件 + 事件中枢的 `tool.end.<工具名>` 值)
+/// 工具执行事件 (总线 typed 事件 + 事件中枢的 `agentxx.agent.event.tool.end.<工具名>` 值)
 ///
 /// - 两条路都是"先问有没有人关心再发": 没有订阅者/没人等时零开销 —— 工具调用是
 ///   热路径 (一轮可能几十次), 不能每次都构造事件
@@ -108,7 +108,7 @@ asio::awaitable<void> publishToolEvent(
                 );
             }
             if (ctx->eventHub) {
-                const auto hubEvent = fmt::format("tool.end.{}", toolName);
+                const auto hubEvent = fmt::format("agentxx.agent.event.tool.end.{}", toolName);
                 if (ctx->eventHub->wants(hubEvent)) {
                     std::string err;
                     if (!ctx->eventHub->publishValue(
@@ -119,6 +119,7 @@ asio::awaitable<void> publishToolEvent(
                                 {"status",      std::string{agentxx::util::toolStatusName(status)}},
                                 {"resultBytes", resultBytes      },
                             },
+                            "tool",
                             &err
                         )) {
                         XX_LOGW("[event_hub] publish `{}` failed: {}", hubEvent, err);

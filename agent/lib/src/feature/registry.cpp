@@ -2,9 +2,9 @@
 #include "agentxx/feature/registry.h"
 
 #include "agentxx/agent/config_static.h"
+#include "agentxx/event/naming.h"
 #include "utilxx_base/log.h"
 #include <algorithm>
-#include <cctype>
 
 namespace agentxx {
 namespace feature {
@@ -16,14 +16,15 @@ bool isPluginOwner(std::string_view owner) {
     return owner.starts_with("plugin:") && owner.size() > 7;
 }
 
-/// id 是否含空白字符 (含空白直接判为非法: 这类 id 用点分名字, 不允许空格)
-bool hasWhitespace(std::string_view text) {
-    return std::any_of(text.begin(), text.end(), [](unsigned char c) {
-        return std::isspace(c) != 0;
-    });
-}
-
 } // namespace
+
+void warnIfCorePointMisnamed(std::string_view id) {
+    std::string err;
+    if (agentxx::events::naming::validateFeaturePointId(id, {}, &err)) {
+        return;
+    }
+    XX_LOGW("功能点 `{}` 的 id 不合命名约定: {}", id, err);
+}
 
 Registry::Registry() = default;
 
@@ -43,6 +44,7 @@ PointBase& Registry::addPoint(std::unique_ptr<PointBase> point) {
 
 JsonProvidePoint&
     Registry::provideJson(std::string_view id, PointOptions opts, std::string origin) {
+    warnIfCorePointMisnamed(id);
     if (auto* existing = find(id); existing != nullptr) {
         if (!existing->origin().starts_with("plugin:")) {
             XX_LOGE("功能点 `{}` 已存在 (来源 `{}`), 本次声明未注册进点表", id, existing->origin());
@@ -70,10 +72,6 @@ size_t Registry::pointsCount() const noexcept {
 }
 
 int32_t Registry::definePluginPoint(const PluginPointDecl& decl) {
-    if (decl.id.empty() || hasWhitespace(decl.id)) {
-        XX_LOGW("插件点声明被拒绝: id 为空或含空白字符 (`{}`)", decl.id);
-        return -1;
-    }
     if (!isPluginOwner(decl.owner)) {
         XX_LOGW("插件点 `{}` 声明被拒绝: 归属 `{}` 不是插件", decl.id, decl.owner);
         return -1;
@@ -86,11 +84,11 @@ int32_t Registry::definePluginPoint(const PluginPointDecl& decl) {
         );
         return -1;
     }
-    // 命名空间强校验: id 必须落在 `plugin.<本实例插件名>.*`
+    // 命名空间强校验: id 必须落在 `plugin.<本实例插件名>.*` (框架不补前缀)
     const std::string_view pluginName = std::string_view{decl.owner}.substr(7);
-    const std::string      prefix     = fmt::format("plugin.{}.", pluginName);
-    if (!decl.id.starts_with(prefix) || decl.id.size() <= prefix.size()) {
-        XX_LOGW("插件点 `{}` 声明被拒绝: id 必须落在 `plugin.{}.` 命名空间内", decl.id, pluginName);
+    std::string            nameErr;
+    if (!agentxx::events::naming::validateFeaturePointId(decl.id, pluginName, &nameErr)) {
+        XX_LOGW("插件点 `{}` 声明被拒绝: {}", decl.id, nameErr);
         return -1;
     }
     if (auto* existing = find(decl.id); existing != nullptr) {

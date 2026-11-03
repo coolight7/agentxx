@@ -3,6 +3,7 @@
 
 #include "agentxx/agent/context.h"
 #include "agentxx/event/hub.h"
+#include "agentxx/event/naming.h"
 #include "fmt/format.h"
 #include "utilxx_base/json.h"
 #include <algorithm>
@@ -84,12 +85,46 @@ EventWaitSpec buildWaitSpec(
     return spec;
 }
 
+/// 模型可写的事件名
+/// - 只能落在 `agentxx.agent.event.*` (内置 agent 端事件族) 且不占用内建保留子段
+///   (`turn.` / `tool.` / `subagent.` / `timer.` / `host.`)
+/// - 插件事件 (`plugin.<插件名>.*`) 只读: 写操作由插件自己做
+std::string requireWritableEventName(const utilxx_base::Json& args) {
+    auto        name = requireString(args, "event");
+    std::string err;
+    if (!agentxx::events::naming::validateAgentEventName(name, &err)) {
+        throw std::invalid_argument{fmt::format(
+            "Arg `event` = `{}` is invalid: {}",
+            name,
+            err
+        )};
+    }
+    if (agentxx::events::naming::isReservedEventSegment(name)) {
+        throw std::invalid_argument{fmt::format(
+            "Arg `event` = `{}` uses a segment reserved by a built-in source; pick another "
+            "name under `agentxx.agent.event.`",
+            name
+        )};
+    }
+    return name;
+}
+
+/// 定时源事件名前缀 (`agentxx.agent.event.timer.`)
+constexpr std::string_view kTimerEventPrefix = "agentxx.agent.event.timer.";
+
 /// 可选: `watch` 顺手建立/重设定时源 (`after_ms` / `every_ms`)
 void applyTimerArgs(EventHub& hub, const utilxx_base::Json& args, const EventWaitSpec& spec) {
     const auto afterMs = args.value<int64_t>("after_ms", 0);
     const auto everyMs = args.value<int64_t>("every_ms", 0);
     if (afterMs <= 0 && everyMs <= 0) {
         return;
+    }
+    if (!spec.event.starts_with(kTimerEventPrefix)) {
+        throw std::invalid_argument{fmt::format(
+            "Arg `after_ms`/`every_ms` needs a timer event name: `{}<name>` (got `{}`)",
+            kTimerEventPrefix,
+            spec.event
+        )};
     }
     const auto first = afterMs > 0 ? afterMs : everyMs;
     if (!hub.armTimer(spec.event, first, everyMs)) {
@@ -486,7 +521,7 @@ asio::awaitable<agentxx::util::ToolResult>
     }
 
     if (opt == "emit") {
-        const auto eventName = requireString(arguments, "event");
+        const auto eventName = requireWritableEventName(arguments);
         const bool single    = arguments.value("single", false);
         const bool create    = arguments.value("create", true);
         if (create && !hub->queryEvent(eventName).has_value()) {
@@ -525,7 +560,7 @@ asio::awaitable<agentxx::util::ToolResult>
     }
 
     if (opt == "end") {
-        const auto eventName = requireString(arguments, "event");
+        const auto eventName = requireWritableEventName(arguments);
         auto summary = arguments.contains("summary") ? arguments["summary"]
                                                      : utilxx_base::Json::object();
         std::string err;

@@ -43,6 +43,10 @@ struct PluginPointDecl {
     int32_t implTimeoutMs = 0;
 };
 
+/// 功能点 id 的命名检查 (核心点必须是 `agentxx.agent.*`)
+/// - 不合格时只记一条警告日志, 不阻断声明 (第三方主程序自建点不至于因此跑不起来)
+void warnIfCorePointMisnamed(std::string_view id);
+
 /// 功能点注册表
 class Registry {
 public:
@@ -60,7 +64,7 @@ public:
     ///   并返回新点 (新点不注册进点表, 不会顶掉已有点)
     ///
     /// - `args`:
-    ///     - [id] 功能点 id (核心点用 `agentxx.<域>.<名字>`, 稳定清单见 points.h)
+    ///     - [id] 功能点 id (核心点用 `agentxx.agent.<域>.<名字>`, 稳定清单见 points.h)
     ///     - [opts] 声明选项 (展示名 / 说明 / 可调性 / 值缓存策略 / 等实现超时)
     ///     - [identityOf] 身份规则: 由点声明"这次要算的是哪一份输入"
     ///
@@ -69,6 +73,7 @@ public:
         requires JsonCodable<TReq> && JsonCodable<TValue>
     ProvidePoint<TReq, TValue>&
         provide(std::string_view id, PointOptions opts, IdentityFn identityOf) {
+        warnIfCorePointMisnamed(id);
         if (auto* existing = find(id)) {
             if (auto* typed = dynamic_cast<ProvidePoint<TReq, TValue>*>(existing);
                 typed != nullptr) {
@@ -87,10 +92,12 @@ public:
     }
 
     /// 声明一个通用 JSON 取值点 (主程序声明的点用; 插件点走 [definePluginPoint])
+    /// - id 必须在 `agentxx.agent.*` 段内 (与事件/主题同一套命名约定), 否则只记一条警告
     JsonProvidePoint& provideJson(std::string_view id, PointOptions opts, std::string origin);
 
     /// 插件声明自己的功能点
-    /// - id 必须落在 `plugin.<本实例插件名>.*` 且不含空白; 不合法直接拒绝并记日志
+    /// - id 必须落在 `plugin.<本实例插件名>.*`; 不在自己那一族直接拒绝并记日志
+    ///   (框架不补前缀, 与事件主题同一套规则)
     /// - 本轮只允许 `provide` 类型 (`decide` 被拒绝并记日志)
     /// - 声明的点在存活期间恒为可调; 值缓存固定不缓存 (调用方要缓存用结果里的 identity)
     /// - 同一 id 重复声明 = 覆盖 (记一条日志, 方便排查两个插件抢同一个点)

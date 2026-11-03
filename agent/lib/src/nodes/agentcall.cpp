@@ -23,7 +23,10 @@ asio::awaitable<void> AgentStartCallWrapNode::onNodeStart(neograph::graph::NodeI
             if (ptr->bus) {
                 utilxx_base::Json j;
                 j["sessionId"] = in.ctx.thread_id;
-                co_await ptr->bus->publish("plugin.agentxx.round_start", j.dump());
+                co_await ptr->bus->publish(
+                    agentxx::events::Topic::AgentRoundStart,
+                    j.dump()
+                );
             }
         }
     }

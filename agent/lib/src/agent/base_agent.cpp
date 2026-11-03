@@ -63,7 +63,7 @@ BaseAgent::BaseAgent(std::shared_ptr<agentxx::agent::AgentConfig> in_config) {
     assert(in_config->model.isValid());
 
     // 事件总线在构造时就建好: 插件 `start` (插件加载阶段, 早于本 agent 的 init())
-    // 会以进程级引用订阅事件 (如 `plugin.agentxx.round_start`), 那时上下文里没有
+    // 会以进程级引用订阅事件 (如 `agentxx.agent.round.start`), 那时上下文里没有
     // 总线, 主程序只能拒绝订阅并记警告 (subscribe rejected: no event source)。
     // 总线只依赖 ioCtx, 这里建好不影响 init 的其余步骤 (见 [initEventBus])
     initEventBus();
@@ -98,11 +98,13 @@ namespace {
 
 /// 事件中枢: 只在"有人等"时发布内建事件
 ///
-/// `turn.*` / `tool.*` 每轮、每次工具调用都会产生; 没人等它们时建记录只会白占内存,
-/// 因此先问 hub 要不要 (已有记录或有挂起的等待才算要)。
+/// `agentxx.agent.event.turn.*` / `.tool.end.*` 每轮、每次工具调用都会产生;
+/// 没人等它们时建记录只会白占内存, 因此先问 hub 要不要 (已有记录或有挂起的等待才算要)。
+/// - `owner`: 记录来源 (`core:turn` / `tool` / `subagent` / `timer`), 进诊断与 `opt=list`
 void publishHubValueIfWanted(
     const std::shared_ptr<AgentContext>& ctx,
     std::string_view                     event,
+    std::string_view                     owner,
     utilxx_base::Json                    value
 ) {
     if (!ctx || !ctx->eventHub || event.empty()) {
@@ -112,7 +114,7 @@ void publishHubValueIfWanted(
         return;
     }
     std::string err;
-    if (!ctx->eventHub->publishValue(event, std::move(value), &err)) {
+    if (!ctx->eventHub->publishValue(event, std::move(value), owner, &err)) {
         XX_LOGW("[event_hub] publish `{}` failed: {}", event, err);
     }
 }
@@ -416,7 +418,7 @@ asio::awaitable<void> BaseAgent::init() {
         .after = "event_bus",
         .run   = [&]() -> asio::awaitable<void> {
             // 功能点注册表 (点 / 实现 / 调用): 早于中间件加载, 因此中间件可以声明
-            // 核心点 (如 agentxx.context.countTokens); 也早于插件加载, 因此插件
+            // 核心点 (如 agentxx.agent.context.countTokens); 也早于插件加载, 因此插件
             // 登记实现时点已存在
             // - 开发者模式在启动时读取配置后冻结: 库内热路径只读进程级标记
             //   (与 benchmark 标记同一做法)
@@ -451,7 +453,7 @@ asio::awaitable<void> BaseAgent::init() {
         .name  = "event_hub",
         .after = "middleware_context",
         .run   = [&]() -> asio::awaitable<void> {
-            // 事件中枢: 建在事件总线之上 (值从 `evt.` 前缀订阅进来), 晚于
+            // 事件中枢: 建在事件总线之上 (值从 `plugin.` 前缀订阅进来), 晚于
             // middleware_context 创建 —— 投递超长值时要经中间件上下文取会话 share store
             // - 关闭 (event.enable=false) 时不创建: 工具不注册, 也没有任何行为变化
             initEventHub(co_await asio::this_coro::executor);
@@ -1490,7 +1492,12 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
                               : std::string{"Agentxx"}},
             {"startedAtMs", startTimeMs},
         };
-        publishHubValueIfWanted(agentContext, "turn.start", std::move(turnStartValue));
+        publishHubValueIfWanted(
+            agentContext,
+            "agentxx.agent.event.turn.start",
+            "core:turn",
+            std::move(turnStartValue)
+        );
         if (agentContext->bus
             && agentContext->bus->hasListeners<events::EventAgentTurnStart>(events::Topic::AgentTurnStart)) {
             co_await agentContext->bus->publish(
@@ -1935,7 +1942,12 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
             {"durationMs", durationMs},
             {"reason", std::move(closeReason)},
         };
-        publishHubValueIfWanted(agentContext, "turn.end", std::move(turnEndValue));
+        publishHubValueIfWanted(
+            agentContext,
+            "agentxx.agent.event.turn.end",
+            "core:turn",
+            std::move(turnEndValue)
+        );
         if (agentContext->bus
             && agentContext->bus->hasListeners<events::EventAgentTurnEnd>(events::Topic::AgentTurnEnd)) {
             co_await agentContext->bus->publish(

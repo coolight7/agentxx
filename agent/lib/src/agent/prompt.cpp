@@ -273,9 +273,9 @@ Absent (default): the sub-agent's default full tool set.)"},
                       {"enable_summarization",
                        R"(Optional boolean. Whether the sub-agent runs with context summarization enabled. Default: inherit config (enabled). Pass `false` when delegating same-context work (e.g. context compression) so the sub-agent never re-compresses the passed-in context prefix (would break KV/prefix cache reuse).)"},
                       {"async",
-                       R"(Optional boolean. `true`: dispatch the task and return immediately; the result arrives later as an input starting with `[Event] subagent.done.<result_id>`. Use it when the task takes long and you have other work, then `agentxx_event opt=watch` the event name. Default `false` (block until the sub-agent finishes).)"},
+                       R"(Optional boolean. `true`: dispatch the task and return immediately; the result arrives later as an input starting with `[Event] agentxx.agent.event.subagent.done.<result_id>`. Use it when the task takes long and you have other work, then `agentxx_event opt=watch` the event name. Default `false` (block until the sub-agent finishes).)"},
                       {"event_name",
-                       R"(Optional. Event name carrying the async result (default `subagent.done.<result_id>`; when both are empty, `subagent.done.<task index>`). Letters, digits, `.`, `_`, `-` only. Only used with `async: true`.)"},
+                       R"(Optional. Event name carrying the async result (default `agentxx.agent.event.subagent.done.<result_id>`; when both are empty, `...subagent.done.<task index>`). Must be a full name under `agentxx.agent.event.` (letters, digits, `.`, `_`, `-` only). Only used with `async: true`.)"},
                   },
           },
       },
@@ -290,10 +290,24 @@ Absent (default): the sub-agent's default full tool set.)"},
 - Another agent, a plugin or a timer will publish a value you need later.
 - You want to hand a value to something that already waits for it: `opt=emit` / `opt=end`.
 
+## Event names
+Every name is a full, qualified name. There are three families:
+- `agentxx.agent.event.*`: built-in agent events and events you create yourself.
+- `plugin.<plugin name>.*`: events a plugin declares (read-only for you).
+- `agentxx.client.*`: client-side events (read-only for you).
+Names are never auto-completed: pass the whole name.
+
+Built-in event names (use them as they are):
+- `agentxx.agent.event.turn.start` (a turn started)
+- `agentxx.agent.event.turn.end` (a turn finished)
+- `agentxx.agent.event.tool.end.<tool name>` (a tool finished)
+- `agentxx.agent.event.subagent.done.<result_id>` (an async sub-agent finished)
+- `agentxx.agent.event.timer.<name>` (a timer armed with `after_ms`/`every_ms`)
+When you publish yourself (`opt=emit` / `opt=end`), the name must be `agentxx.agent.event.<your name>` and must not reuse the `turn.` / `tool.` / `subagent.` / `timer.` / `host.` segments.
+
 ## Notes
 - Use `watch` by default; it does not stop the turn. `await` keeps this turn blocked until the value arrives or the timeout passes — use it only when the next step really needs the value now.
 - Do not poll with `opt=status`: the value is delivered to you as input.
-- Built-in event names: `turn.end` (a turn finished), `tool.end.<tool name>` (a tool finished), `subagent.done.<result_id>` (an async sub-agent finished), `timer.<name>` (a timer armed with `after_ms`/`every_ms`). Any other name comes from a plugin or from `opt=emit`.
 - After `watch` returns `wait=w-3`, keep working or end the turn; use `opt=status wait=w-3` only to confirm.)",
               .args =
                   {
@@ -303,10 +317,10 @@ Absent (default): the sub-agent's default full tool set.)"},
 `status`: show one wait (`wait`) or one event (`event`).
 `list`: list events and the waits of this session.
 `cancel`: cancel one wait (`wait`) or all waits of this session (`all`).
-`emit`: publish a value to an event (created on demand).
-`end`: end an event stream, optionally removing it.)"},
+`emit`: publish a value to an event you own (created on demand).
+`end`: end one of your event streams, optionally removing it.)"},
                       {"event",
-                       R"(Event name (letters, digits, `.`, `_`, `-`; max 96 chars). Names starting with `agent.`/`io.`/`service.`/`hub.`/`plugin.` are reserved.)"},
+                       R"(Full event name. `opt=watch`/`opt=await`/`opt=status`: `agentxx.agent.event.*`, `plugin.<plugin name>.*` or `agentxx.client.*`. `opt=emit`/`opt=end`: `agentxx.agent.event.<your name>` only. Letters, digits, `.`, `_`, `-`; max 128 chars.)"},
                       {"wait", "Wait id (`w-3`) returned by `opt=watch`."},
                       {"mode", R"(How many values you want:
 `first`: the first value, then the wait closes (default).
@@ -324,7 +338,7 @@ Absent (default): the sub-agent's default full tool set.)"},
                       {"coalesce_ms",
                        "Only with `mode=each`: merge the values arriving inside this window (milliseconds) into one input."},
                       {"after_ms",
-                       "Arm a timer that fires once after this many milliseconds and publishes `timer.<event>`; use it with `opt=watch` on a `timer.*` event."},
+                       "Arm a timer that fires once after this many milliseconds and publishes `agentxx.agent.event.timer.<name>`; use it with `opt=watch` on that timer event."},
                       {"every_ms",
                        "Arm a repeating timer with this interval in milliseconds (0 = one-shot)."},
                       {"value",

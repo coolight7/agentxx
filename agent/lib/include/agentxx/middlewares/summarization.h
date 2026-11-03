@@ -58,7 +58,7 @@ protected:
     const double tokensPerImage;
     const double extraTokensPerMessage;
 
-    /// token 估算规则 (功能点 `agentxx.context.countTokens` 的核心实现与
+    /// token 估算规则 (功能点 `agentxx.agent.context.countTokens` 的核心实现与
     /// 同步快路径共用同一份实例: 规则只写一次, 两个入口结果必然一致)
     std::shared_ptr<agentxx::feature::TokenEstimator> tokenEstimator;
 
@@ -101,7 +101,7 @@ public:
         bool                                      countThinking = false
     ) const;
 
-    /// 经功能点 `agentxx.context.countTokens` 取 token 数 (预算计算用)
+    /// 经功能点 `agentxx.agent.context.countTokens` 取 token 数 (预算计算用)
     /// - 插件 / FFI 主程序为该点登记的实现会在这里生效; 同步快路径
     ///   ([countTokensForUtf8Str] / [countTokens], 供 TPS 与内部裁剪使用)
     ///   仍只走核心实现, 插件实现不参与 (见 plan §8.1)
@@ -145,7 +145,7 @@ public:
         size_t                                    tokenBudget
     ) const;
 
-    /// LLM 同上下文压缩的核心实现 (功能点 `agentxx.context.summarize` 的 core 层)
+    /// LLM 同上下文压缩的核心实现 (功能点 `agentxx.agent.context.summarize` 的 core 层)
     ///
     /// 只产出摘要文本: 不替换会话消息、不发提示消息、不写 share store ——
     /// 写回由调度方 (本中间件) 做。内部派生"用完即弃"的压缩子代理属于实现细节。
@@ -174,7 +174,7 @@ public:
         bool                                      direct = false
     );
 
-    /// 经功能点 `agentxx.context.summarize` 取摘要文本 (调度方入口)
+    /// 经功能点 `agentxx.agent.context.summarize` 取摘要文本 (调度方入口)
     /// - 插件 / FFI 主程序为该点登记的实现会在这里生效; 拿不到值时返回空串
     ///   (调用方走硬截断回退)
     /// - 本轮该点声明为不可对外开放调用 (`callable = false`), 只由本中间件取用

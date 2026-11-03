@@ -3,7 +3,7 @@
 /// 一条实现、两个入口:
 /// - 同步快路径: TPS 计算直接调 [TokenEstimator::estimateText] (不经功能点,
 ///   插件实现不参与这条路径);
-/// - 功能点: `agentxx.context.countTokens` 的核心实现调用同一份规则。
+/// - 功能点: `agentxx.agent.context.countTokens` 的核心实现调用同一份规则。
 #include "agentxx/feature/points.h"
 
 #include "agentxx/feature/registry.h"
@@ -275,7 +275,7 @@ ContextPoints registerContextPoints(Registry& registry, const ContextPointOption
     ContextPoints out;
     auto          estimator = std::make_shared<TokenEstimator>(options.estimator);
 
-    // ---- agentxx.context.countTokens (可调; 按身份的值缓存) ----
+    // ---- agentxx.agent.context.countTokens (可调; 按身份的值缓存) ----
     PointOptions countOpts;
     countOpts.title    = "文本 Token 估算";
     countOpts.depict   = "按模型规则估算一段文本或一组消息的 token 数";
@@ -309,7 +309,7 @@ ContextPoints registerContextPoints(Registry& registry, const ContextPointOption
         }
     );
 
-    // ---- agentxx.context.summarize (本轮不可调; 结果由调度方写回会话) ----
+    // ---- agentxx.agent.context.summarize (本轮不可调; 结果由调度方写回会话) ----
     PointOptions summarizeOpts;
     summarizeOpts.title         = "上下文压缩";
     summarizeOpts.depict        = "把一段上下文压成一段摘要文本 (不写回会话)";

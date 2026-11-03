@@ -772,7 +772,7 @@ public:
     /// 事件中枢 (值 / 状态 / 等待句柄 / 投递)
     /// - 由 BaseAgent::init 的 `event_hub` 步骤创建 (晚于 event_bus 与
     ///   middleware_context: 投递超长值时要经中间件上下文取会话 share store)
-    /// - 订阅 agent 总线的 `evt.` / `plugin.evt.` 前缀; 关闭时随 agent 一并清空
+    /// - 订阅 agent 总线的 `plugin.` 前缀; 关闭时随 agent 一并清空
     std::shared_ptr<agentxx::events::EventHub> eventHub = nullptr;
 
     /// 模型 Provider 注册表 (共享)

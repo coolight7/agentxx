@@ -1401,16 +1401,18 @@ asio::awaitable<events::RespSubagentBatch> AgentHost::spawnBatch(
             waitIndexes.push_back(i);
             continue;
         }
-        // 结果事件名: 调用方指定 > `subagent.done.<result_id>` > `subagent.done.<序号>`
+        // 结果事件名: 调用方指定 > `agentxx.agent.event.subagent.done.<result_id>` >
+        // `agentxx.agent.event.subagent.done.<序号>`
         std::string eventName = task.eventName;
         if (eventName.empty()) {
             const auto suffix = task.resultId.empty()
                                     ? std::to_string(i + 1)
                                     : eventNameSuffix(task.resultId);
-            eventName = "subagent.done." + (suffix.empty() ? std::to_string(i + 1) : suffix);
+            eventName = "agentxx.agent.event.subagent.done."
+                        + (suffix.empty() ? std::to_string(i + 1) : suffix);
         }
         std::string nameErr;
-        if (!agentxx::events::naming::validateEventName(eventName, &nameErr)) {
+        if (!agentxx::events::naming::validateAgentEventName(eventName, &nameErr)) {
             (*results)[i] = ItemResult{
                 .resultId     = task.resultId,
                 .hasError     = true,
@@ -1625,7 +1627,7 @@ asio::awaitable<void> AgentHost::runAsyncSubagentTask(
             value["content"] = result.content.empty() ? result.errorMessage : result.content;
         }
         const bool ok = result.Canceled ? false : !result.hasError;
-        hub->postValue(eventName, std::move(value));
+        hub->postValue(eventName, std::move(value), "subagent");
         hub->postEnd(
             eventName,
             utilxx_base::Json{
