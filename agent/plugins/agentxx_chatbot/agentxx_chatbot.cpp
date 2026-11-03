@@ -66,21 +66,20 @@ constexpr const char* kLogTag     = "chatbot";
 /// (状态变化时) 就停, 不空转。
 constexpr int32_t kPanelTickMs = 120;
 
-/// 面板快照的主题 (主程序给总线主题补 `plugin.` 前缀再转发给客户端,
-/// 客户端拿到的就是 `{plugin: "agentxx_chatbot", event: "panel"}`)
-constexpr const char* kPanelTopic = "agentxx_chatbot.panel";
+/// 面板快照的主题 (插件族: `plugin.<插件名>.<事件>`, 名字写全, 框架只校验不补前缀)
+constexpr const char* kPanelTopic = "plugin.agentxx_chatbot.panel";
 
 /// 客户端插件请求重发快照 (client → agent)
 ///
-/// 主程序把上行事件发布到 `plugin.client.{插件名}.{事件名}`, 所以**订阅时必须带上
-/// `plugin.client.` 前缀**: 主题补齐只看开头有没有 `plugin.` / `client.`, 写
-/// `client.xxx` 不会被再加前缀, 与总线上实际的 `plugin.client.xxx` 对不上, 收不到事件。
-constexpr const char* kPanelRefreshTopic = "plugin.client.agentxx_chatbot.refresh";
+/// client 侧写自己的族 `agentxx.client.plugin.<插件名>.<事件>`; 服务端把它原样发布到
+/// agent 总线, 所以这里**订阅的就是那个全名** (读侧可跨族)
+constexpr const char* kPanelRefreshTopic
+    = "agentxx.client.plugin.agentxx_chatbot.refresh";
 
-/// 主程序在有客户端接入时发布的事件 (总线主题 `plugin.agentxx_host.client_attached`)
+/// 主程序在有客户端接入时发布的事件 (总线主题 `agentxx.agent.host.client_attached`)
 ///
 /// 晚接入/重连的客户端据此拿到一份当前快照, 不用等下一次状态变化。
-constexpr const char* kClientAttachedTopic = "agentxx_host.client_attached";
+constexpr const char* kClientAttachedTopic = "agentxx.agent.host.client_attached";
 
 /* ==================== 插件日志转发 ==================== */
 

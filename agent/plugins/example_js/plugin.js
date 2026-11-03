@@ -82,8 +82,9 @@ agentxx.onHook(0, (info) => {
   agentxx.log(2, "js hook agent_start fired: " + JSON.stringify(info));
 });
 
-// ---- 事件: 订阅 demo.topic (主程序自动加 plugin. 前缀) ----
-agentxx.subscribe("demo.topic", (payload) => {
+// ---- 事件: 订阅 `plugin.<插件名>.<事件>` ----
+// - 名字写全, 框架只校验不补前缀; 读侧可跨族 (也能订阅 `agentxx.agent.*`)
+agentxx.subscribe("plugin.example_js.demo", (payload) => {
   agentxx.log(2, "js event received: " + JSON.stringify(payload));
 });
 

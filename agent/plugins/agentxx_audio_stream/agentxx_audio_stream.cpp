@@ -113,7 +113,7 @@ bool AudioStreamHolder::start(
                 ctx->jsonEscape(toBase64(data.data))
             );
             auto topicSv
-                = agentxx::plugin::PluginStringView::fromCstr("agentxx_audio_stream.audio");
+                = agentxx::plugin::PluginStringView::fromCstr("plugin.agentxx_audio_stream.audio");
             auto payloadSv
                 = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
             ctx->iface.events->publish(ctx->host, &topicSv, &payloadSv);
@@ -183,7 +183,7 @@ static void* audioStreamAgentMount(
         ctx,
         ref,
         "agentxx_audio_stream",
-        "Capture system audio or microphone stream on Windows (WASAPI). Audio frames are pushed as plugin events to topic 'agentxx_audio_stream.audio'. Supports start, stop, and status query.",
+        "Capture system audio or microphone stream on Windows (WASAPI). Audio frames are pushed as plugin events to topic 'plugin.agentxx_audio_stream.audio'. Supports start, stop, and status query.",
         schema,
         [](AudioStreamPluginCtx& c, std::string_view args_json) -> agentxx::plugin::ToolResult {
             agentxx::plugin::ArgReader args(args_json);

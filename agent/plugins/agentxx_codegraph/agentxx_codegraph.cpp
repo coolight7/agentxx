@@ -728,7 +728,7 @@ static void
                 }
                 std::string payload = j.dump();
                 auto        statusTopic
-                    = agentxx::plugin::PluginStringView::fromCstr("agentxx_codegraph.status");
+                    = agentxx::plugin::PluginStringView::fromCstr("plugin.agentxx_codegraph.status");
                 auto payloadSv
                     = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
                 ctx->iface.events->publish(ctx->host, &statusTopic, &payloadSv);
@@ -739,7 +739,7 @@ static void
                     p["current_file"] = "";
                     std::string pp    = p.dump();
                     auto        progTopic
-                        = agentxx::plugin::PluginStringView::fromCstr("agentxx_codegraph.progress");
+                        = agentxx::plugin::PluginStringView::fromCstr("plugin.agentxx_codegraph.progress");
                     auto ppSv = agentxx::plugin::PluginStringView::from(pp.data(), pp.size());
                     ctx->iface.events->publish(ctx->host, &progTopic, &ppSv);
                 }
@@ -873,7 +873,7 @@ extern "C" PLUGINXX_EXPORT int
                     j["current_file"]   = std::string{currentFile};
                     std::string payload = j.dump();
                     auto        progTopic
-                        = agentxx::plugin::PluginStringView::fromCstr("agentxx_codegraph.progress");
+                        = agentxx::plugin::PluginStringView::fromCstr("plugin.agentxx_codegraph.progress");
                     auto payloadSv
                         = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
                     ctxRaw->iface.events->publish(ctxRaw->host, &progTopic, &payloadSv);
@@ -923,7 +923,7 @@ static int codegraphAgentMountSetup(PluginCtx& ctx, const agentxx::plugin::Scope
 
     if (ctx.iface.events && ctx.iface.events->subscribe) {
         auto attachTopic
-            = agentxx::plugin::PluginStringView::fromCstr("agentxx_host.client_attached");
+            = agentxx::plugin::PluginStringView::fromCstr("agentxx.agent.host.client_attached");
         ctx.iface.events->subscribe(ctx.host, ref.ptr(), &attachTopic, on_client_attached, &ctx);
     }
     return 0;
@@ -964,7 +964,7 @@ static int codegraphAgentStartSetup(PluginCtx& ctx) {
         j["loaded"]         = true;
         j["project_root"]   = ctx.projectRoot;
         std::string payload = j.dump();
-        auto statusTopic = agentxx::plugin::PluginStringView::fromCstr("agentxx_codegraph.status");
+        auto statusTopic = agentxx::plugin::PluginStringView::fromCstr("plugin.agentxx_codegraph.status");
         auto payloadSv   = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
         ctx.iface.events->publish(ctx.host, &statusTopic, &payloadSv);
     }
@@ -1162,12 +1162,14 @@ static void PLUGINXX_CALL onClientPluginData(const PluginxxStringView* payload_j
         payload_json ? static_cast<size_t>(payload_json->size) : 0
     );
     try {
-        auto j      = utilxx_base::Json::parse(raw);
-        auto plugin = j.value("plugin", std::string{});
-        auto event  = j.value("event", std::string{});
-        if (plugin != "agentxx_codegraph") {
+        auto j     = utilxx_base::Json::parse(raw);
+        auto topic = j.value("topic", std::string{});
+        // 只认本插件那一族: `plugin.agentxx_codegraph.<事件>`
+        constexpr std::string_view kPrefix = "plugin.agentxx_codegraph.";
+        if (!topic.starts_with(kPrefix)) {
             return;
         }
+        const auto event = std::string_view{topic}.substr(kPrefix.size());
         utilxx_base::Json d;
         if (j.contains("data")) {
             auto dv = j["data"];

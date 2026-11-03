@@ -3,7 +3,7 @@
 /// 演示一个插件在功能点体系里能做的三件事:
 /// 1. **声明自己的点** (`plugin.example_feature.beat`):
 ///    命名空间必须落在 `plugin.<自己>.*`, 声明期间恒可被任何一方调用;
-/// 2. **为主程序点登记实现** (`agentxx.context.countTokens`):
+/// 2. **为主程序点登记实现** (`agentxx.agent.context.countTokens`):
 ///    插件实现排在 `plugin` 层 (默认优先级 0), 因此会先于核心实现生效;
 ///    摘除后自动回落到核心实现;
 /// 3. **调用功能点** (`callFeature`): 只拿数据 —— 不写值缓存、不记置空、
@@ -201,14 +201,16 @@ static int featureAgentSetup(FeatureCtx& ctx, const agentxx::plugin::ScopeRef& r
     if (provideFeature(
             ctx,
             ref,
-            "agentxx.context.countTokens",
+            "agentxx.agent.context.countTokens",
             [](FeatureCtx&, std::string_view) {
                 return std::string{R"({"tokens":424242})"};
             }
         )
         != 0) {
         // 主程序点可能未加载 (如裸 PluginManager 环境): 不算致命, 记一条日志继续
-        ctx.log.info("example_feature: host point agentxx.context.countTokens not declared yet");
+        ctx.log.info(
+            "example_feature: host point agentxx.agent.context.countTokens not declared yet"
+        );
     }
 
     // 6. 有序登记一个钩子处理器 (`agentxx.agent.hooks` 的表尾三成员)

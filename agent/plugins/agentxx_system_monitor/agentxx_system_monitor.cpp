@@ -268,7 +268,7 @@ static int32_t sysMonStartSetup(SysMonCtx& ctx) {
 
     // 3. 事件订阅
     if (ctx.iface.events && ctx.iface.events->subscribe) {
-        auto t1 = PluginStringView::fromCstr("client.agentxx_system_monitor.usage_enabled");
+        auto t1 = PluginStringView::fromCstr("agentxx.client.plugin.agentxx_system_monitor.usage_enabled");
         ctx.iface.events->subscribe(
             ctx.host,
             nullptr, ///< 进程级订阅 (客户端开关事件走主程序总线)
@@ -291,7 +291,7 @@ static int32_t sysMonStartSetup(SysMonCtx& ctx) {
             &ctx
         );
 
-        auto t2 = PluginStringView::fromCstr("agentxx_host.client_attached");
+        auto t2 = PluginStringView::fromCstr("agentxx.agent.host.client_attached");
         ctx.iface.events->subscribe(
             ctx.host,
             nullptr, ///< 进程级订阅 (客户端接入事件走主程序总线)
@@ -317,7 +317,7 @@ static int32_t sysMonStartSetup(SysMonCtx& ctx) {
                             auto*       u    = static_cast<CpuGpuUsage*>(res);
                             std::string json = usageToJson(*u);
                             auto        topicSv
-                                = PluginStringView::fromCstr("agentxx_system_monitor.usage");
+                                = PluginStringView::fromCstr("plugin.agentxx_system_monitor.usage");
                             auto jsonSv = PluginStringView::from(json.data(), json.size());
                             c->iface.events->publish(c->host, &topicSv, &jsonSv);
                             delete u;
@@ -345,7 +345,7 @@ static int32_t sysMonStartSetup(SysMonCtx& ctx) {
                 }
 
                 std::string json    = usageToJson(usage);
-                auto        topicSv = PluginStringView::fromCstr("agentxx_system_monitor.usage");
+                auto        topicSv = PluginStringView::fromCstr("plugin.agentxx_system_monitor.usage");
                 auto        jsonSv  = PluginStringView::from(json.data(), json.size());
                 if (c.iface.events && c.iface.events->publish) {
                     c.iface.events->publish(c.host, &topicSv, &jsonSv);
@@ -552,8 +552,8 @@ static int32_t sysMonClientSetup(SysMonClientCtx& ctx) {
                     auto j = utilxx_base::Json::parse(
                         std::string_view(payload_json->data, payload_json->size)
                     );
-                    if (j.value("plugin", std::string{}) != "agentxx_system_monitor"
-                        || j.value("event", std::string{}) != "usage") {
+                    // 只认本插件那一族主题 (`plugin.<插件名>.<事件>`)
+                    if (j.value("topic", std::string{}) != "plugin.agentxx_system_monitor.usage") {
                         return;
                     }
                     if (j.contains("data") && j["data"].is_string()) {
@@ -587,7 +587,9 @@ static int32_t sysMonClientSetup(SysMonClientCtx& ctx) {
                 refreshUsageDisplay(*ctx);
                 if (ctx->iface.wire && ctx->iface.wire->send_plugin_data) {
                     std::string payload = next ? R"({"enabled":true})" : R"({"enabled":false})";
-                    auto        evtSv   = PluginStringView::fromCstr("usage_enabled");
+                    auto        evtSv   = PluginStringView::fromCstr(
+                        "agentxx.client.plugin.agentxx_system_monitor.usage_enabled"
+                    );
                     auto        paySv   = PluginStringView::from(payload.data(), payload.size());
                     ctx->iface.wire->send_plugin_data(ctx->host, &evtSv, &paySv);
                 }

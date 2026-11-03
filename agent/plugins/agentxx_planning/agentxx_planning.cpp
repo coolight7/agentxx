@@ -5,8 +5,8 @@
 ///     {dataDir}/plans + 发布 planning 事件, 不再依赖专用 planning 接口表) 并持久化到
 ///     {dataDir}/plans/{thread_id}.json (供 read 模式跨轮次读取);
 ///     mode=read 返回本会话此前保存的规划内容
-///   - 规划写入成功后发布 "agentxx_planning.planning" 插件事件 (载荷为完整
-///     规划 JSON); 订阅主程序约定事件 agentxx_host.client_attached, 客户端接入/
+///   - 规划写入成功后发布 "plugin.agentxx_planning.planning" 插件事件 (载荷为完整
+///     规划 JSON); 订阅主程序约定事件 agentxx.agent.host.client_attached, 客户端接入/
 ///     重连时重发当前会话已保存规划 (状态快照自愈, 见
 ///     [plugins.md](/docs/zh-cn/design/plugins.md) 7.3.1)
 ///   - client 侧入口 (agentxx_plugin_client_create): Plan 渲染完全由插件驱动 ——
@@ -301,14 +301,14 @@ std::string loadPlanningFile(const PluginCtx& ctx, const std::string& tid) {
 namespace {
 
 /// ==================== 插件事件发布 ====================
-/// 规划内容变化 → 发布 "agentxx_planning.planning" (载荷为完整规划 JSON)。
-/// server 侧经事件总线转发为 WirePluginData{plugin, event, data}, client 侧
+/// 规划内容变化 → 发布 `plugin.agentxx_planning.planning` (载荷为完整规划 JSON)。
+/// server 侧经事件总线转发为 WirePluginData{topic, data}, client 侧
 /// 插件订阅 EVT_PLUGIN_DATA 处理并渲染 Info 栏段落 (见下方 client 入口)。
 void publishPlanningEvent(PluginCtx& ctx, const std::string& planJson) {
     if (!ctx.iface.events || !ctx.iface.events->publish || planJson.empty()) {
         return;
     }
-    auto topicSv = agentxx::plugin::PluginStringView::fromCstr("agentxx_planning.planning");
+    auto topicSv = agentxx::plugin::PluginStringView::fromCstr("plugin.agentxx_planning.planning");
     auto planSv  = agentxx::plugin::PluginStringView::from(planJson.data(), planJson.size());
     ctx.iface.events->publish(ctx.host, &topicSv, &planSv);
 }
@@ -537,7 +537,7 @@ static int planningSetup(PluginCtx* ctx, const agentxx::plugin::ScopeRef& ref) {
 
     // 主程序约定事件 client_attached 订阅: 客户端接入/重连时重发当前会话快照
     if (ctx->iface.events && ctx->iface.events->subscribe) {
-        auto topicSv = agentxx::plugin::PluginStringView::fromCstr("agentxx_host.client_attached");
+        auto topicSv = agentxx::plugin::PluginStringView::fromCstr("agentxx.agent.host.client_attached");
         if (!ctx->iface.events->subscribe(host, ref.ptr(), &topicSv, on_client_attached, ctx)) {
             pluginLog(
                 ctx,
@@ -1055,7 +1055,7 @@ static void refreshPlanSection(ClientCtx& ctx) {
     ctx.ui->update_info_section(ctx.host, ctx.section, &jsonSv);
 }
 
-/// EVT_PLUGIN_DATA: 过滤本插件规划事件 {plugin:"agentxx_planning", event:"planning"}
+/// EVT_PLUGIN_DATA: 过滤本插件规划事件 (主题 `plugin.agentxx_planning.planning`)
 /// → 更新 Info 栏段落
 static void PLUGINXX_CALL on_client_plugin_data(const PluginxxStringView* payload_json, void* ud) {
     auto* ctxRaw = static_cast<ClientCtx*>(ud);
@@ -1064,31 +1064,24 @@ static void PLUGINXX_CALL on_client_plugin_data(const PluginxxStringView* payloa
         if (!ctx || !ctx->host) {
             return;
         }
-        PluginxxString plugin{nullptr, 0};
-        PluginxxString event{nullptr, 0};
+        PluginxxString topic{nullptr, 0};
         PluginxxString data{nullptr, 0};
-        auto           kPlugin = agentxx::plugin::PluginStringView::fromCstr("plugin");
-        auto           kEvent  = agentxx::plugin::PluginStringView::fromCstr("event");
-        auto           kData   = agentxx::plugin::PluginStringView::fromCstr("data");
+        auto           kTopic = agentxx::plugin::PluginStringView::fromCstr("topic");
+        auto           kData  = agentxx::plugin::PluginStringView::fromCstr("data");
         if (ctx->iface.json && ctx->iface.json->json_get_string && payload_json) {
-            ctx->iface.json->json_get_string(ctx->host, payload_json, &kPlugin, &plugin);
-            ctx->iface.json->json_get_string(ctx->host, payload_json, &kEvent, &event);
+            ctx->iface.json->json_get_string(ctx->host, payload_json, &kTopic, &topic);
             ctx->iface.json->json_get_string(ctx->host, payload_json, &kData, &data);
         }
         const bool mine
-            = plugin.data && event.data && data.data
-              && agentxx::plugin::PluginStringView::str(plugin)
-                     == std::string_view{"agentxx_planning"}
-              && agentxx::plugin::PluginStringView::str(event) == std::string_view{"planning"};
+            = topic.data && data.data
+              && agentxx::plugin::PluginStringView::str(topic)
+                     == std::string_view{"plugin.agentxx_planning.planning"};
         if (mine) {
             ctx->last_plan_json.assign(data.data, static_cast<size_t>(data.size));
             refreshPlanSection(*ctx);
         }
-        if (plugin.data) {
-            agentxx::plugin::PluginString::free(ctx->host, &plugin);
-        }
-        if (event.data) {
-            agentxx::plugin::PluginString::free(ctx->host, &event);
+        if (topic.data) {
+            agentxx::plugin::PluginString::free(ctx->host, &topic);
         }
         if (data.data) {
             agentxx::plugin::PluginString::free(ctx->host, &data);

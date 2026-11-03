@@ -64,7 +64,7 @@ inline bool ScreenCaptureHolder::startStreaming(int frameRate) {
                         frame.pixelData.size()
                     );
                     auto topicSv
-                        = agentxx::plugin::PluginStringView::fromCstr("agentxx_screen_capture.frame"
+                        = agentxx::plugin::PluginStringView::fromCstr("plugin.agentxx_screen_capture.frame"
                         );
                     auto payloadSv
                         = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
@@ -152,7 +152,7 @@ static agentxx::plugin::ToolResult framesResult(
 
 static const char* kScreenCaptureDefaultDepict
     = "Capture screen frames or control streaming on Windows: capture all screens, mouse screen, or a specific screen; "
-      "get screen count; start/stop streaming (streamed frames are pushed as plugin events to topic 'agentxx_screen_capture.frame'). "
+      "get screen count; start/stop streaming (streamed frames are pushed as plugin events to topic 'plugin.agentxx_screen_capture.frame'). "
       "Captured frames are saved as PNG files under the host dataDir 'captures/' directory; "
       "the result only contains frame metadata (size/offset/screen) plus the image file path — "
       "pixel data never enters the conversation.";

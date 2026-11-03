@@ -33,15 +33,14 @@ using agentxx::plugin::PluginStringView;
 
 namespace {
 
-constexpr const char* kPluginName = "agentxx_chatbot";
 constexpr const char* kPanelId    = "agentxx_chatbot.bots";
 constexpr const char* kPanelTitle = "机器人";
 constexpr const char* kLogTag     = "chatbot-client";
 
-/// agent 侧发布面板快照时用的事件名
-constexpr const char* kPanelEvent = "panel";
-/// 本端请求 agent 侧重发快照时用的事件名 (主程序发布到 `client.{插件名}.{事件名}`)
-constexpr const char* kRefreshEvent = "refresh";
+/// agent 侧发布面板快照的主题 (`plugin.<插件名>.<事件>`)
+constexpr const char* kPanelTopic = "plugin.agentxx_chatbot.panel";
+/// 本端请求 agent 侧重发快照的主题 (client 侧自己的族)
+constexpr const char* kRefreshTopic = "agentxx.client.plugin.agentxx_chatbot.refresh";
 
 /// client 侧实例上下文
 struct ChatbotClientCtx : public agentxx::plugin::ClientPluginBase {
@@ -65,7 +64,7 @@ struct ChatbotClientCtx : public agentxx::plugin::ClientPluginBase {
         setPanelJson(panel, json);
     }
 
-    /// 处理一条插件事件 (载荷形如 `{"plugin":"…","event":"…","data":"<快照 JSON>"}`)
+    /// 处理一条插件事件 (载荷形如 `{"topic":"…","data":"<快照 JSON>"}`)
     void onPluginData(std::string_view payloadJson) {
         utilxx_base::Json payload;
         try {
@@ -73,8 +72,8 @@ struct ChatbotClientCtx : public agentxx::plugin::ClientPluginBase {
         } catch (const std::exception&) {
             return;
         }
-        if (!payload.is_object() || payload.value("plugin", std::string{}) != kPluginName
-            || payload.value("event", std::string{}) != kPanelEvent) {
+        if (!payload.is_object()
+            || payload.value("topic", std::string{}) != std::string{kPanelTopic}) {
             return; // 不是本插件的面板快照
         }
         if (!payload.contains("data") || !payload["data"].is_string()) {
@@ -99,7 +98,7 @@ struct ChatbotClientCtx : public agentxx::plugin::ClientPluginBase {
         if (!host || !iface.wire || !iface.wire->send_plugin_data) {
             return;
         }
-        auto eventSv = PluginStringView::fromCstr(kRefreshEvent);
+        auto eventSv = PluginStringView::fromCstr(kRefreshTopic);
         auto dataSv  = PluginStringView::fromCstr("{}");
         iface.wire->send_plugin_data(host, &eventSv, &dataSv);
     }

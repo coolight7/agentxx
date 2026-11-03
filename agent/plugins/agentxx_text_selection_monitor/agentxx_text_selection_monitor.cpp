@@ -80,7 +80,7 @@ bool TextSelectionHolder::start(int debounceMs) {
                     tsMs
                 );
                 auto topicSv
-                    = PluginStringView::fromCstr("agentxx_text_selection_monitor.selection");
+                    = PluginStringView::fromCstr("plugin.agentxx_text_selection_monitor.selection");
                 auto payloadSv = PluginStringView::from(payload.data(), payload.size());
                 ctx->iface.events->publish(ctx->host, &topicSv, &payloadSv);
             } catch (...) {

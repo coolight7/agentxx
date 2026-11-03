@@ -1,12 +1,13 @@
 /// example_event —— 事件中枢插件示例 (agentxx.agent.event 接口表)
 ///
 /// 演示一个插件在事件中枢里能做的三件事:
-/// 1. **声明自己的事件源** (`example_event.build` 流式 / `example_event.ready` 单值):
+/// 1. **声明自己的事件源** (`plugin.example_event.build` 流式 /
+///    `plugin.example_event.ready` 单值):
 ///    声明内容进中枢的记录表, 模型用 `agentxx_event opt=list` 就能看到 (含说明文字);
 /// 2. **发布值 / 结束流**: 模型用 `agentxx_event opt=watch` 等这些事件, 值到达后作为
 ///    一条以 `[Event] <名字>` 开头的输入进入会话;
 /// 3. **替某个会话登记等待**: 挂载配置里给了 `sessionId` 时, 插件替那个会话等
-///    `example_event.build` 的每条值 (值到达后自动变成那个会话的输入)。
+///    `plugin.example_event.build` 的每条值 (值到达后自动变成那个会话的输入)。
 ///
 /// 归属: 事件与等待都记在本插件实例名下, 禁用/卸载时主程序整批回收, `stop` 里不必手清。
 ///
@@ -100,7 +101,7 @@ static int eventAgentSetup(EventCtx& ctx, const EventMountState& state) {
     // 1. 声明一条流式事件 (多次发布, 由 end_event 结束; 留 4 条历史值供后注册者回放)
     {
         EventDefineOptions opt;
-        opt.name         = "example_event.build";
+        opt.name         = "plugin.example_event.build";
         opt.description  = "示例: 构建进度 (插件发布, 模型可 watch)";
         opt.historyLimit = 4;
         const auto rc    = defineEvent(ctx, ref, opt);
@@ -117,7 +118,7 @@ static int eventAgentSetup(EventCtx& ctx, const EventMountState& state) {
     // 2. 声明一条单值事件 (首个值到达后自动结束, 适合"就绪/已完成"这类一次性通知)
     {
         EventDefineOptions opt;
-        opt.name        = "example_event.ready";
+        opt.name        = "plugin.example_event.ready";
         opt.description = "示例: 就绪通知 (单值事件, 首个值到达后自动结束)";
         opt.single      = true;
         if (defineEvent(ctx, ref, opt) != AGENTXX_PLUGIN_EVENT_OK) {
@@ -129,13 +130,13 @@ static int eventAgentSetup(EventCtx& ctx, const EventMountState& state) {
     utilxx_base::Json ready = utilxx_base::Json::object();
     ready["ok"]             = true;
     ready["plugin"]         = "example_event";
-    if (emitEventValue(ctx, ref, "example_event.ready", ready) != AGENTXX_PLUGIN_EVENT_OK) {
+    if (emitEventValue(ctx, ref, "plugin.example_event.ready", ready) != AGENTXX_PLUGIN_EVENT_OK) {
         return -1;
     }
     utilxx_base::Json step = utilxx_base::Json::object();
     step["step"]           = 1;
     step["total"]          = 2;
-    if (emitEventValue(ctx, ref, "example_event.build", step) != AGENTXX_PLUGIN_EVENT_OK) {
+    if (emitEventValue(ctx, ref, "plugin.example_event.build", step) != AGENTXX_PLUGIN_EVENT_OK) {
         return -1;
     }
     ++ctx.emitted;
@@ -145,7 +146,7 @@ static int eventAgentSetup(EventCtx& ctx, const EventMountState& state) {
     //      空闲时提升为新一轮输入
     if (!state.sessionId.empty()) {
         EventWaitOptions opt;
-        opt.event         = "example_event.build";
+        opt.event         = "plugin.example_event.build";
         opt.mode          = "each";
         opt.sessionId     = state.sessionId;
         opt.label         = "示例插件替会话等的构建进度";

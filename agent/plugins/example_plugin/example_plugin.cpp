@@ -363,10 +363,12 @@ static int exampleAgentSetup(AgentCtx& ctx, const agentxx::plugin::ScopeRef& ref
         );
     }
 
-    // 3. 事件订阅
-    auto topic1 = agentxx::plugin::PluginStringView::fromCstr("demo.topic");
+    // 3. 事件订阅 (读侧可跨族, 但必须是全名)
+    auto topic1 = agentxx::plugin::PluginStringView::fromCstr("plugin.example_plugin.demo");
     ctx.iface.events->subscribe(host, ref.ptr(), &topic1, on_demo_event, &ctx);
-    auto topic2 = agentxx::plugin::PluginStringView::fromCstr("client.example_plugin.hello");
+    // client 插件上行: client 侧自己的族 `agentxx.client.plugin.<插件名>.<事件>`
+    auto topic2
+        = agentxx::plugin::PluginStringView::fromCstr("agentxx.client.plugin.example_plugin.hello");
     ctx.iface.events->subscribe(host, ref.ptr(), &topic2, on_client_hello, &ctx);
 
     // 4. 能力
@@ -601,7 +603,9 @@ static void PLUGINXX_CALL on_client_ready(const PluginxxStringView* payload_json
             ctx->iface.log->log(ctx->host, 2, &msgSv);
         }
         if (ctx->iface.wire && ctx->iface.wire->send_plugin_data) {
-            auto evtSv = agentxx::plugin::PluginStringView::fromCstr("hello");
+            auto evtSv = agentxx::plugin::PluginStringView::fromCstr(
+                "agentxx.client.plugin.example_plugin.hello"
+            );
             auto paySv
                 = agentxx::plugin::PluginStringView::fromCstr(R"({"from":"client-example"})");
             ctx->iface.wire->send_plugin_data(ctx->host, &evtSv, &paySv);
@@ -652,20 +656,16 @@ static void PLUGINXX_CALL on_client_plugin_data(const PluginxxStringView* payloa
     if (!ctx->iface.json || !ctx->iface.json->json_get_string) {
         return;
     }
-    PluginxxString plugin{nullptr, 0};
-    PluginxxString event{nullptr, 0};
+    PluginxxString topic{nullptr, 0};
     PluginxxString data{nullptr, 0};
-    auto           kPlugin = agentxx::plugin::PluginStringView::fromCstr("plugin");
-    auto           kEvent  = agentxx::plugin::PluginStringView::fromCstr("event");
-    auto           kData   = agentxx::plugin::PluginStringView::fromCstr("data");
+    auto           kTopic = agentxx::plugin::PluginStringView::fromCstr("topic");
+    auto           kData  = agentxx::plugin::PluginStringView::fromCstr("data");
     if (payload_json) {
-        ctx->iface.json->json_get_string(ctx->host, payload_json, &kPlugin, &plugin);
-        ctx->iface.json->json_get_string(ctx->host, payload_json, &kEvent, &event);
+        ctx->iface.json->json_get_string(ctx->host, payload_json, &kTopic, &topic);
         ctx->iface.json->json_get_string(ctx->host, payload_json, &kData, &data);
     }
     agentxx::plugin::guardCallVoid(clientGuardLogger(ctx), [&] {
-        std::string line
-            = fmt::format("{}.{}", plugin.data ? plugin.data : "?", event.data ? event.data : "?");
+        std::string line = topic.data ? std::string{topic.data} : std::string{"?"};
         if (data.data && data.size > 0) {
             line = fmt::format("{}: {}", line, data.data);
         }
@@ -685,11 +685,8 @@ static void PLUGINXX_CALL on_client_plugin_data(const PluginxxStringView* payloa
             ctx->ui->update_panel(ctx->host, ctx->panel, &jsonSv);
         }
     });
-    if (plugin.data) {
-        agentxx::plugin::PluginString::free(ctx->host, &plugin);
-    }
-    if (event.data) {
-        agentxx::plugin::PluginString::free(ctx->host, &event);
+    if (topic.data) {
+        agentxx::plugin::PluginString::free(ctx->host, &topic);
     }
     if (data.data) {
         agentxx::plugin::PluginString::free(ctx->host, &data);
