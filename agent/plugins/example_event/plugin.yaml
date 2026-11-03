@@ -1,0 +1,10 @@
+name: example_event
+version: 1.0.0
+description: "Example event-hub plugin: declares event sources, publishes values, waits for values"
+entry: libexample_event.so
+interfaces:
+  require:
+    - agentxx.agent.core
+  # 事件中枢: 主程序关闭 `event.enable` 或版本早于本表时插件降级 (不声明事件, 加载照常成功)
+  optional:
+    - agentxx.agent.event
