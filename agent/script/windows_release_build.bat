@@ -183,7 +183,7 @@ if %ERRORLEVEL% neq 0 (
 )
 
 rem ===== Bundle MSVC runtime DLLs to exec (release redist) =====
-rem - client CMakeLists install TARGETS agentxx_cli DESTINATION
+rem - client CMakeLists install TARGETS agentxx DESTINATION
 rem   AGENTXX_EXEC_INSTALL_PREFIX (exec/); exe uses /MD dynamic CRT,
 rem   needs VC Redist alongside for clean Win10+ machines without VS.
 rem - UCRT (ucrtbase/api-ms-win-*) is inbox on Win10+, do NOT bundle.
@@ -268,16 +268,16 @@ if "%AGENTXX_SKIP_SMOKE%"=="1" goto smoke_done
 if defined TEMP (set "AGENTXX_SMOKE_DIR=%TEMP%\agentxx-release-smoke") else (set "AGENTXX_SMOKE_DIR=%TMP%\agentxx-release-smoke")
 if not exist "%AGENTXX_SMOKE_DIR%\" mkdir "%AGENTXX_SMOKE_DIR%" >NUL 2>&1
 pushd "%AGENTXX_SMOKE_DIR%"
-"%build_dir%\exec\agentxx_cli.exe" --dump-config >NUL 2>&1
+"%build_dir%\exec\agentxx.exe" --dump-config >NUL 2>&1
 set "AGENTXX_SMOKE_RC=%ERRORLEVEL%"
 popd
 if not "%AGENTXX_SMOKE_RC%"=="0" (
-    echo [test] agentxx_cli --dump-config failed: exit=%AGENTXX_SMOKE_RC%
+    echo [test] agentxx --dump-config failed: exit=%AGENTXX_SMOKE_RC%
     echo [test] the release output does not run; a broken plugin DLL is the usual cause
     echo [test] delete the stale LTCG caches and relink, then rebuild: del /S /Q "%build_dir%\*.iobj"
     exit /b 1
 )
-echo [test] agentxx_cli starts and loads plugins OK
+echo [test] agentxx starts and loads plugins OK
 :smoke_done
 
 rem ===== Archive release package (AGENTXX_PACKAGE_RELEASE=1 auto pack) =====

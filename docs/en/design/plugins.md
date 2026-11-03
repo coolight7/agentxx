@@ -23,7 +23,7 @@ The Agentxx plugin system is built on a **pure C ABI + COM-style interface table
 ## 2. Core Architecture & Compatibility Standards
 
 ```
-Host (libagentxx / agentxx_cli)
+Host (libagentxx / agentxx)
   Core vtable (Frozen) ── alloc / free / query_interface (IID → interface table)
                           │
          ┌────────────────┼────────────────┬─────────────────┐

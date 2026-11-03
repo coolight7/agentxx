@@ -1,5 +1,5 @@
 // 内存增长实测: 用 mock LLM 跑多轮会话, 逐轮采样进程内存与各容器大小,
-// 验证 agentxx_cli 消息轮次增加时内存增长的来源与是否泄漏。
+// 验证 agentxx 消息轮次增加时内存增长的来源与是否泄漏。
 //
 // 用法: agentxx_test memgrowth (经环境变量覆盖: MEM_TURNS / MEM_RESP_KB /
 // MEM_HUGE_LIMIT / MEM_SCENARIOS, 后者为逗号分隔的 0/1/2 子集选择)

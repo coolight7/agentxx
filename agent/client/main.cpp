@@ -74,7 +74,7 @@ extern "C" const char* __asan_default_options() {
 #endif
 }
 
-/// 获取当前可执行程序 (agentxx_cli) 所在目录
+/// 获取当前可执行程序 (agentxx) 所在目录
 /// - Windows: GetModuleFileNameW 获取 exe 全路径后取目录
 /// - Unix (Linux/Android): 读取 /proc/self/exe 符号链接后取目录
 /// - 统一返回正斜杠 (generic_string), 与 AGENTXX_WORK_DIR 一致 (yaml 拼接无转义问题)
@@ -620,7 +620,7 @@ int main(int argn, char** argv) {
         setBuiltinEnvVar(kBuiltinWorkDirEnv, workDir);
     }
 
-    // - AGENTXX_EXEC_DIR: agentxx_cli 可执行程序所在目录
+    // - AGENTXX_EXEC_DIR: agentxx 可执行程序所在目录
     //   yaml 中可写模型/插件/数据等相对 exe 目录的路径 (如 `${AGENTXX_EXEC_DIR}/plugins`)
     {
         auto execDir = getExecutableDir();
@@ -689,7 +689,7 @@ int main(int argn, char** argv) {
             return 0;
         } else if (arg == "--help" || arg == "-h") {
             XX_OUT(R"_(
-Usage: agentxx_cli [mode] [options]
+Usage: agentxx [mode] [options]
 
 Modes:
     tui                  TUI 交互模式 (默认)

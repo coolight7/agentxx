@@ -211,9 +211,9 @@ for abi in "${abi_list[@]}"; do
     find "$abi_build_dir/exec" -type f -name "*.so" -exec "$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" --strip-unneeded {} +
 
     # 可执行文件: NDK 工具链默认给所有配置加 -g, 不 strip 时体积会大一个量级
-    # (与 script/linux_release_build.sh 对 agentxx_cli 的处理一致);
+    # (与 script/linux_release_build.sh 对 agentxx 的处理一致);
     # 未编译的可执行文件 (如 AGENTXX_BUILD_TEST=OFF 时的 agentxx_test) 自动跳过
-    for _exe in agentxx_cli agentxx_test agentxx_benchmark; do
+    for _exe in agentxx agentxx_test agentxx_benchmark; do
         if [[ -f "$abi_build_dir/exec/$_exe" ]]; then
             "$NDK_ROOT/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" --strip-all "$abi_build_dir/exec/$_exe" || true
             ls -lh "$abi_build_dir/exec/$_exe"

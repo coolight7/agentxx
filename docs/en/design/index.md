@@ -162,7 +162,7 @@ Stacked middleware architecture intercepting execution before and after Graph no
 
 #### Session SQLite Persistence (Messages Context / viewMessages / share_store)
 
-- Toggle: `AgentConfig::enableSessionStore` (disabled by default; enabled by `agentxx_cli` in `buildDefaultConfig`). When enabled, `BaseAgent` instantiates `SessionStore` and injects it into `AgentContext` (`AgentContext::sessions->sessionStore`; requires non-empty `dataDir` or explicit `sessionStoreDirectory`, otherwise falls back to memory-only with startup warning):
+- Toggle: `AgentConfig::enableSessionStore` (disabled by default; enabled by `agentxx` in `buildDefaultConfig`). When enabled, `BaseAgent` instantiates `SessionStore` and injects it into `AgentContext` (`AgentContext::sessions->sessionStore`; requires non-empty `dataDir` or explicit `sessionStoreDirectory`, otherwise falls back to memory-only with startup warning):
   - Recovers and persists session message state (attached via `SessionsManager` when creating a Session).
   - Supplies `MiddlewareContext` construction parameters (write-through share store).
 - Data Directory: `{dataDir}/sqlite/sessions/{sessionId}/` (`sessionId` is sanitized via `sanitizeSessionId` to replace illegal characters, truncate length, and avoid Windows reserved names, appending an FNV hash suffix on collision; `dataDir` configured by YAML `data_dir`; **if neither dataDir nor sessionStoreDirectory is set, persistence is disabled** and settings, sessions, and codegraph indices remain in-memory only).
@@ -449,7 +449,7 @@ Conventions for adding new test modules: Headers contain only function declarati
 
 ### Configuration File
 
-Configuration files use YAML format (defaults to `{program_cwd}/agentxx-config.yaml`, overrideable via `agentxx_cli --config <path>`). Selected values support `${VAR}` environment variable expansion:
+Configuration files use YAML format (defaults to `{program_cwd}/agentxx-config.yaml`, overrideable via `agentxx --config <path>`). Selected values support `${VAR}` environment variable expansion:
 
 ```yaml
 model:
@@ -605,7 +605,7 @@ permission:
 Environment variable precedence: `Built-in variables` > `--env override file` > `.env file` > `System environment variables` > Retain `${VAR}` literal.
 Built-in variables (injected by `main` at startup for YAML expansion):
 - `${AGENTXX_WORK_DIR}`: Process working directory after launch (forward slash format).
-- `${AGENTXX_EXEC_DIR}`: Directory containing the `agentxx_cli` binary (forward slash format).
+- `${AGENTXX_EXEC_DIR}`: Directory containing the `agentxx` binary (forward slash format).
 
 **Layered configuration (base + overlay)**:
 
@@ -658,7 +658,7 @@ plugin:
 ### Command-Line Usage
 
 ```bash
-agentxx_cli [mode] [options]
+agentxx [mode] [options]
 ```
 
 **Modes:**
@@ -689,25 +689,25 @@ agentxx_cli [mode] [options]
 
 ```bash
 # Local TUI mode (Client + Agent in single process)
-agentxx_cli tui --config agentxx-config.yaml
+agentxx tui --config agentxx-config.yaml
 
 # Local CLI mode
-agentxx_cli cli --config agentxx-config.yaml
+agentxx cli --config agentxx-config.yaml
 
 # Launch WebSocket Server
-agentxx_cli server --host 0.0.0.0 --port 17000 --config agentxx-config.yaml
+agentxx server --host 0.0.0.0 --port 17000 --config agentxx-config.yaml
 
 # Connect to remote agent (TUI)
-agentxx_cli tui --agent ws://192.168.1.100:17000/agent --token xxx
+agentxx tui --agent ws://192.168.1.100:17000/agent --token xxx
 
 # Connect to remote agent (CLI)
-agentxx_cli cli --agent ws://192.168.1.100:17000/agent?token=xxx
+agentxx cli --agent ws://192.168.1.100:17000/agent?token=xxx
 
 # ACP stdio service
-agentxx_cli acp --config agentxx-config.yaml
+agentxx acp --config agentxx-config.yaml
 
 # Prompt training mode
-agentxx_cli train --config agentxx-config.yaml
+agentxx train --config agentxx-config.yaml
 ```
 
 ### Using as a Library
@@ -1350,7 +1350,7 @@ agent/
 │   └── src/                      # Source files (mirrors include directory structure;
 │                                 #   util/ holds sqlite.cpp / settings_db.cpp, ui/ holds item.cpp / text_width.cpp)
 │
-├── client/                       # agentxx_cli executable
+├── client/                       # agentxx executable
 │   ├── main.cpp                  # Entry point: argument parsing -> config loading -> mode dispatch
 │   ├── include/agentxx-client/
 │   │   ├── config_loader.h       # YAML configuration loading / .env parsing / environment variable expansion
@@ -1607,7 +1607,7 @@ SessionServerAgentIO (Remote Session Driver)
   ├── deltaBuf (Disconnection buffer) + grace timer
   └── AgentIOTransportBase (Supplied from AgentServer)
 
-Client (agentxx_cli)
+Client (agentxx)
   ├── TUIClientAgentIO / StdIOClientAgentIO → AgentIOBase
   ├── ChannelAgentIOTransport / WsAgentIOTransport → AgentIOTransportBase
   ├── ConfigLoader → YAML + .env

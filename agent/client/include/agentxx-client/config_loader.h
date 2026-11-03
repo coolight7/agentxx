@@ -138,7 +138,7 @@ struct YamlAppConfig {
 /// - 未注入时 (测试/嵌入场景) resolveEnvVars 惰性回退 current_path()
 inline constexpr std::string_view kBuiltinWorkDirEnv = "AGENTXX_WORK_DIR";
 
-/// 程序内置环境变量: agentxx_cli 可执行程序所在目录
+/// 程序内置环境变量: agentxx 可执行程序所在目录
 /// - yaml 配置中可经 `${AGENTXX_EXEC_DIR}` 引用 (如模型/插件路径相对 exe 目录)
 /// - 值为程序启动时解析的可执行文件所在目录 (正斜杠格式); 仅 main 入口注入
 /// - 未注入时 (测试/嵌入场景) resolveEnvVars 保留 ${AGENTXX_EXEC_DIR} 原样

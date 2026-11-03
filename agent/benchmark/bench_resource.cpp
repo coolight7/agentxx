@@ -1010,9 +1010,9 @@ void benchResourceTui() {
 void benchResourceSplitCli() {
     std::cout << "\n=== Resource Benchmark: M3 Split CLI + Server ===" << std::endl;
 
-    std::string cliBin = findAgentxxCliPath();
+    std::string cliBin = findAgentxxExePath();
     if (cliBin.empty()) {
-        std::cout << "  [resource][split_cli] skipped: agentxx_cli binary not found" << std::endl;
+        std::cout << "  [resource][split_cli] skipped: agentxx binary not found" << std::endl;
         return;
     }
 
@@ -1079,7 +1079,7 @@ void benchResourceSplitCli() {
         ofs << buildClientYamlConfig(clientCfgOpts);
     }
 
-    // 启动 client 子进程 (agentxx_cli cli --config client.yaml --agent ws://... --token ...)
+    // 启动 client 子进程 (agentxx cli --config client.yaml --agent ws://... --token ...)
     std::string              wsUrl = fmt::format("ws://127.0.0.1:{}/agent", serverPort);
     std::vector<std::string> clientArgs
         = {"cli", "--config", clientYaml, "--agent", wsUrl, "--token", token};
@@ -1309,9 +1309,9 @@ void benchResourceSplitTui() {
     std::cout << "\n=== Resource Benchmark: M4 Split TUI + Server ===" << std::endl;
     // 注: counts 仅在编译了 client 支持时用于驱动轮次
 
-    std::string cliBin = findAgentxxCliPath();
+    std::string cliBin = findAgentxxExePath();
     if (cliBin.empty()) {
-        std::cout << "  [resource][split_tui] skipped: agentxx_cli binary not found" << std::endl;
+        std::cout << "  [resource][split_tui] skipped: agentxx binary not found" << std::endl;
         return;
     }
 

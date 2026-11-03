@@ -488,7 +488,7 @@ public:
     /// - 数据目录: {dataDir}/sqlite/sessions/{sessionId}/
     ///   - session.db  展示历史 + LLM 上下文 + 会话元数据 + share store KV (store 表)
     /// - 开启后会话在重启后可恢复历史消息/上下文/模型选择/share store
-    /// - 默认关闭 (库使用方按需开启); agentxx_cli 在 buildDefaultConfig 中开启
+    /// - 默认关闭 (库使用方按需开启); agentxx 在 buildDefaultConfig 中开启
     bool enableSessionStore            = false;
     bool websearchConvertHtml2markdown = true;
 

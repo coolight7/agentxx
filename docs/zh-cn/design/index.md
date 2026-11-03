@@ -228,7 +228,7 @@ git_worktree 及延迟加载加载 (`ToolSkillSearchSubAgentTask` 模板类, 当
 
 #### 会话 SQLite 持久化 (消息上下文 / viewMessages / share_store)
 
-- 开关: `AgentConfig::enableSessionStore` (默认关闭; agentxx_cli 在 `buildDefaultConfig` 中开启)。
+- 开关: `AgentConfig::enableSessionStore` (默认关闭; agentxx 在 `buildDefaultConfig` 中开启)。
   开启后由 BaseAgent 创建 `SessionStore` 并注入 AgentContext
   (`AgentContext::sessions->sessionStore`; 要求 dataDir 非空或显式指定了
   `sessionStoreDirectory`, 否则自动禁用仅存内存):
@@ -662,10 +662,10 @@ TUI [F3] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
 
 ```bash
 # 只把 modelcall 与 toolcall 调到 trace/debug, 其余模块保持全局级别
-AGENTXX_LOG_MODULES="modelcall=debug,toolcall=trace" agentxx_cli tui
+AGENTXX_LOG_MODULES="modelcall=debug,toolcall=trace" agentxx tui
 
 # 插件日志整体只留警告以上, 但 codegraph 插件单独放开
-AGENTXX_LOG_MODULES="plugin.=warn,plugin.agentxx_codegraph=debug" agentxx_cli tui
+AGENTXX_LOG_MODULES="plugin.=warn,plugin.agentxx_codegraph=debug" agentxx tui
 ```
 
 - 级别取 `trace|debug|info|warn|error` (大小写不敏感); 非法段跳过并打印一行 `[Log]` 提示
@@ -767,7 +767,7 @@ path/to/agentxx_test string_util regex agent
 
 ### 配置文件
 
-配置文件为 YAML 格式 (默认 `{程序运行目录}/agentxx-config.yaml`, 支持 agentxx_cli --config 指定文件路径)，
+配置文件为 YAML 格式 (默认 `{程序运行目录}/agentxx-config.yaml`, 支持 agentxx --config 指定文件路径)，
 按 base + overlay 两层加载 (见下方"分层配置"; base 为数据目录下的 `agentxx-config.yaml`, overlay 覆盖 base)，
 其中部分变量支持 `${VAR}` 环境变量替换：
 > 每条键**由哪一侧读**（跑 agent 的服务端 / 只做界面的客户端 / 两侧各自读自己那份）见 [configuration.md](configuration.md) 第 5 节, 键清单与归属列见 [config-keys.md](config-keys.md)。
@@ -943,11 +943,11 @@ permission:
 环境变量加载优先级: `程序内置变量` > `--env 覆盖文件` > `.env 文件` > `系统环境变量` > 保留 `${VAR}` 原样。
 程序内置变量 (main 启动时注入, 供 yaml `${VAR}` 展开使用):
 - `${AGENTXX_WORK_DIR}`: 程序启动后的工作目录 (正斜杠格式)
-- `${AGENTXX_EXEC_DIR}`: agentxx_cli 可执行程序所在目录 (正斜杠格式)
+- `${AGENTXX_EXEC_DIR}`: agentxx 可执行程序所在目录 (正斜杠格式)
 
 **分层配置 (base + overlay)**:
 
-agentxx_cli 启动时按两层加载配置, 用于"全局默认配置 + 项目局部覆盖":
+agentxx 启动时按两层加载配置, 用于"全局默认配置 + 项目局部覆盖":
 
 | 层 | 配置文件 | .env |
 |----|----------|------|
@@ -1075,7 +1075,7 @@ plugin:
 ### 命令行使用
 
 ```bash
-agentxx_cli [mode] [options]
+agentxx [mode] [options]
 ```
 
 **模式:**
@@ -1108,28 +1108,28 @@ agentxx_cli [mode] [options]
 
 ```bash
 # 本地 TUI 模式 (同进程 client + agent)
-agentxx_cli tui --config agentxx-config.yaml
+agentxx tui --config agentxx-config.yaml
 
 # 本地 CLI 模式
-agentxx_cli cli --config agentxx-config.yaml
+agentxx cli --config agentxx-config.yaml
 
 # 启动 WebSocket 服务
-agentxx_cli server --host 0.0.0.0 --port 17000 --config agentxx-config.yaml
+agentxx server --host 0.0.0.0 --port 17000 --config agentxx-config.yaml
 
 # 连接远程 agent (TUI)
-agentxx_cli tui --agent ws://192.168.1.100:17000/agent --token xxx
+agentxx tui --agent ws://192.168.1.100:17000/agent --token xxx
 
 # 连接远程 agent (CLI)
-agentxx_cli cli --agent ws://192.168.1.100:17000/agent?token=xxx
+agentxx cli --agent ws://192.168.1.100:17000/agent?token=xxx
 
 # JSONL 一次性运行 (脚本/其它语言驱动; 见 "JSONL 模式" 一节)
-agentxx_cli jsonl --config agentxx-config.yaml < request.jsonl > response.jsonl
+agentxx jsonl --config agentxx-config.yaml < request.jsonl > response.jsonl
 
 # ACP stdio 服务
-agentxx_cli acp --config agentxx-config.yaml
+agentxx acp --config agentxx-config.yaml
 
 # 训练模式
-agentxx_cli train --config agentxx-config.yaml
+agentxx train --config agentxx-config.yaml
 ```
 
 ### JSONL 模式 (脚本驱动)
@@ -1168,7 +1168,7 @@ stderr : 日志与诊断 (不混进 stdout, 保证 stdout 可逐行解析)
 ```bash
 printf '%s\n' '{"type":"hello"}' \
               '{"type":"user_input","text":"你好","requestId":1}' \
-  | agentxx_cli jsonl --config agentxx-config.yaml \
+  | agentxx jsonl --config agentxx-config.yaml \
   | jq -c 'select(.type=="input_ack" or .type=="turn_result")'
 ```
 
@@ -1828,7 +1828,7 @@ Client                              Server
     序列化/渲染整段上下文"的长上下文形态下, 常驻内存是系统分配器的 2~4 倍
     (提交量 5~6 倍; Windows release 实测见 [benchmark.md](benchmark.md)
     第 10、12 节)
-  - 作用范围只有**最终程序** (`agentxx_cli` / `agentxx_test` / `agentxx_benchmark`),
+  - 作用范围只有**最终程序** (`agentxx` / `agentxx_test` / `agentxx_benchmark`),
     接入逻辑集中在 `agent/cmake/agentxx_mimalloc.cmake` (分配器为第三方依赖
     [mimalloc](https://github.com/microsoft/mimalloc), 源码在 `agent/third_party/mimalloc`):
     静态链接把 mimalloc 的分配器并入产物
@@ -1853,7 +1853,7 @@ Client                              Server
     `AGENTXX_ENABLE_MIMALLOC=OFF`): Mach-O 采用两层次命名空间, `libc++` 与系统
     框架对 `malloc/free` 的引用在链接期已绑定 `libSystem`, 主可执行文件的静态覆盖
     只作用于自身 (且 `_malloc` 不在导出符号表中), 跨模块释放会在 `mi_free` 崩溃
-    (实测 Release `agentxx_cli` 启动即崩)。ELF 不同: GNU ld 会把被共享库引用的
+    (实测 Release `agentxx` 启动即崩)。ELF 不同: GNU ld 会把被共享库引用的
     `malloc` 放进 `.dynsym`, 由运行期符号插入使全进程统一走 mimalloc。强制接管
     只能用 `DYLD_INSERT_LIBRARIES` 预加载 mimalloc 动态库 (非自包含分发)
   - 实测 (Release, 同机同场景, 对比调优后的 glibc): 常驻内存略升 (200K 上下文
@@ -2052,7 +2052,7 @@ agent/
 │   │                             #      加载/启停/卸载/级联骨架 (PluginHostLifecycle) 都在此
 │   └── (其余: boost/fmt/simdjson/sqlite3/OpenSSL/neograph/yaml-cpp/...)
 │
-├── client/                       # agentxx_cli 可执行程序
+├── client/                       # agentxx 可执行程序
 │   ├── main.cpp                  # 入口: 参数解析 → 配置加载 → 模式分发
 │   ├── include/agentxx-client/
 │   │   ├── config_loader.h       # YAML 配置加载 / .env 解析 / 环境变量替换
@@ -2347,7 +2347,7 @@ SessionServerAgentIO (远程会话驱动)
   ├── deltaBuf (断线缓冲) + grace timer
   └── AgentIOTransportBase (从 AgentServer 传入)
 
-Client (agentxx_cli)
+Client (agentxx)
   ├── TUIClientAgentIO / StdIOClientAgentIO → AgentIOBase
   ├── ChannelAgentIOTransport / WsAgentIOTransport → AgentIOTransportBase
   ├── ConfigLoader → YAML + .env

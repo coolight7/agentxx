@@ -23,7 +23,7 @@ Agentxx 插件系统采用 **纯 C ABI + COM 风格接口表查询**：
 ## 2. 核心架构与兼容性准则
 
 ```
-主程序 (libagentxx / agentxx_cli)
+主程序 (libagentxx / agentxx)
   核心 vtable (冻结) ── alloc / free / query_interface (IID → 接口表)
                        │
          ┌─────────────┼─────────────┬──────────────┬─────────────┐

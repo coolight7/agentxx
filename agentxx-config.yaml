@@ -3,11 +3,11 @@
 # **推荐做法**: 
 #   - 在 {data_dir}/.env 声明各种 api-key, {data_dir}/agentxx-config.yaml 内声明模型、插件
 #   - 然后在不同项目的根目录中放一个 agentxx-config.yaml, 声明使用的 mcp、memory、skill
-#   - 在项目文件夹执行 `agentxx_cli` 启动，无需指定配置文件路径，就会自动加载 {data_dir}/agentxx-config.yaml 
+#   - 在项目文件夹执行 `agentxx` 启动，无需指定配置文件路径，就会自动加载 {data_dir}/agentxx-config.yaml 
 #     作为 base 层配置，了解模型列表和插件列表；然后读取 {项目根目录}/agentxx-config.yaml 作为 overlay 层配置，
 #     读入本项目的 mcp、skill、AGENTS.md 等
 # 
-# 使用方式: agentxx_cli --config agentxx-config.yaml [train|acp]
+# 使用方式: agentxx --config agentxx-config.yaml [train|acp]
 #
 # key 字段支持 ${VAR} 环境变量占位符，会在运行时被真实环境变量替换。
 # 查找顺序: 内置变量 > --env 覆盖文件变量 > .env 文件变量 > 系统环境变量 > 保留 ${VAR} 原样
@@ -15,7 +15,7 @@
 # 内置变量:
 #   - AGENTXX_WORK_DIR: 程序启动后的工作目录 (启动时所在目录, 正斜杠格式)
 #     例如: data_dir: ${AGENTXX_WORK_DIR}/.agentxx-data
-#   - AGENTXX_EXEC_DIR: agentxx_cli 可执行程序所在目录 (正斜杠格式)
+#   - AGENTXX_EXEC_DIR: agentxx 可执行程序所在目录 (正斜杠格式)
 #     例如: 插件/数据相对 exe 目录: data_dir: ${AGENTXX_EXEC_DIR}/.agentxx-data
 #
 # 可选的 .env 文件（--env 指定文件/当前目录/配置文件同目录）:
@@ -63,7 +63,7 @@
 # data_dir: ~/.agentxx
 data_dir: default
 
-# === 会话工作目录 (留空/不配置 = 使用进程当前工作目录, 即 agentxx_cli 启动目录)
+# === 会话工作目录 (留空/不配置 = 使用进程当前工作目录, 即 agentxx 启动目录)
 # 支持 `~` 与 ${VAR} 展开, 相对路径按程序工作目录解析; 须为存在的目录
 # 生效范围:
 #   - permission.mode: ask 的默认放行范围 (该目录内读写放行, 其余询问)

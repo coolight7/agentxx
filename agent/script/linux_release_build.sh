@@ -153,7 +153,7 @@ if [[ $? -ne 0 ]]; then
 fi
 
 # ===== 复制 C++/系统运行时到 exec (release 发布分发) =====
-# - 目标: {build}/exec 与 agentxx_cli 同目录携带 libstdc++/libgcc_s 等，
+# - 目标: {build}/exec 与 agentxx 同目录携带 libstdc++/libgcc_s 等，
 #   参考 client/CMakeLists.txt `install(... DESTINATION "${AGENTXX_EXEC_INSTALL_PREFIX}")`
 #   的 exec 目录布局，解压即运行，无需目标机安装同版本 GCC。
 # - 运行期加载: 产物已带 $ORIGIN (优先搜索自身所在目录, 见
@@ -178,7 +178,7 @@ if [[ "${AGENTXX_SKIP_BUNDLE_RUNTIME:-0}" != "1" ]]; then
     unset _lib
     # 2) 反查 exec 下全部产物的真实动态依赖 (ldd), 将解析到绝对路径的
     #    非系统库按需补拷 (不预设列表: 避免拷贝 libatomic/libgomp 等
-    #    x86_64 上根本用不到的库)。agentxx_cli/agentxx_test 等 ldd 可见,
+    #    x86_64 上根本用不到的库)。agentxx/agentxx_test 等 ldd 可见,
     #    运行期 dlopen 的 plugins/*.so 则逐个单独扫描。
     if command -v ldd >/dev/null 2>&1; then
         while IFS= read -r _f; do
@@ -206,14 +206,14 @@ if [[ "${AGENTXX_SKIP_BUNDLE_RUNTIME:-0}" != "1" ]]; then
                 unset _src _name
             done < <(ldd "$_f" 2>/dev/null)
             unset _line
-        done < <(find "$EXEC_DIR" -type f \( -name "agentxx_*" -o -name "lib*.so*" \) ! -name "*.a" 2>/dev/null | sort -u)
+        done < <(find "$EXEC_DIR" -type f \( -name "agentxx" -o -name "agentxx_*" -o -name "lib*.so*" \) ! -name "*.a" 2>/dev/null | sort -u)
         unset _f
     fi
     echo "[runtime] exec libs:"
     ls -lh "$EXEC_DIR/"*.so* 2>/dev/null || true
 fi
 
-strip --strip-all "$build_dir/exec/agentxx_cli"
+strip --strip-all "$build_dir/exec/agentxx"
 strip --strip-all "$build_dir/exec/agentxx_benchmark"
 strip --strip-unneeded "$build_dir/exec/libagentxx.so"
 find "$build_dir/exec/" -type f -name "*.so*" -exec strip --strip-unneeded {} \;

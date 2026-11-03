@@ -820,7 +820,7 @@ asio::awaitable<void> BaseAgent::init() {
 
     // 启动加载快照: 记录本次启动实际加载成了什么
     // - 计数摘要走 Info, 完整 JSON 走 Debug (常规启动不打印全部内容, 排查时按需打开)
-    // - `agentxx_cli --dump-config` 用同一份实现打印到标准输出
+    // - `agentxx --dump-config` 用同一份实现打印到标准输出
     logAssemblySnapshot(buildRuntimeSnapshot(*agentContext), "startup");
 
     co_return;

@@ -5,7 +5,7 @@
 # - 工具链: llvm-mingw (Clang + MinGW-w64 headers/libs), 自动下载至
 #   agent/third_party/cross-windows/toolchain/
 #   不依赖系统 apt 安装的 mingw (如 g++-mingw-w64 / mingw-w64-x86-64-dev)
-# - 产物: {build}/exec/agentxx_cli.exe + libagentxx.dll + plugins/*.dll
+# - 产物: {build}/exec/agentxx.exe + libagentxx.dll + plugins/*.dll
 #
 # 设计目标:
 #   - 所有交叉所需文件均落在 agent/third_party/cross-windows/ 内:
@@ -40,7 +40,7 @@
 #
 # 产物目录:
 #   agent/build/cross-windows-release/
-#     - exec/agentxx_cli.exe
+#     - exec/agentxx.exe
 #     - exec/libagentxx.dll (+ libagentxx.dll.a)
 #     - exec/plugins/*.dll
 #     - exec/agentxx_benchmark.exe (若启用)
@@ -811,11 +811,11 @@ fi
 
 # ===== Strip (MinGW PE) =====
 echo "[strip] using $MINGW_STRIP"
-if [[ -f "$build_dir/exec/agentxx_cli.exe" ]]; then
-    "$MINGW_STRIP" --strip-all "$build_dir/exec/agentxx_cli.exe" || true
+if [[ -f "$build_dir/exec/agentxx.exe" ]]; then
+    "$MINGW_STRIP" --strip-all "$build_dir/exec/agentxx.exe" || true
 fi
-if [[ -f "$build_dir/exec/agentxx_cli" ]]; then
-    "$MINGW_STRIP" --strip-all "$build_dir/exec/agentxx_cli" || true
+if [[ -f "$build_dir/exec/agentxx" ]]; then
+    "$MINGW_STRIP" --strip-all "$build_dir/exec/agentxx" || true
 fi
 if [[ -f "$build_dir/exec/agentxx_benchmark.exe" ]]; then
     "$MINGW_STRIP" --strip-all "$build_dir/exec/agentxx_benchmark.exe" || true
@@ -834,7 +834,7 @@ if [[ -d "$build_dir/exec" ]]; then
 fi
 
 # ===== 复制 MinGW 运行时 DLL (Windows 上直接运行所需) =====
-# - client CMakeLists install TARGETS agentxx_cli DESTINATION
+# - client CMakeLists install TARGETS agentxx DESTINATION
 #   AGENTXX_EXEC_INSTALL_PREFIX (exec/); 交叉产物与 exe 同目录分发，
 #   否则在纯净 Windows 上启动时报 "找不到 xxx.dll"。
 # - Clang/llvm-mingw: libc++.dll / libunwind.dll
@@ -870,8 +870,8 @@ if [[ "${AGENTXX_SKIP_BUNDLE_RUNTIME:-0}" != "1" && -n "${toolchain_dir:-}" ]]; 
     elif command -v x86_64-w64-mingw32-objdump >/dev/null 2>&1; then
         _objdump="x86_64-w64-mingw32-objdump"
     fi
-    if [[ -n "$_objdump" && -f "$build_dir/exec/agentxx_cli.exe" ]]; then
-        _need_dlls=$("$_objdump" -p "$build_dir/exec/agentxx_cli.exe" 2>/dev/null | grep -i "DLL Name" | awk '{print $NF}')
+    if [[ -n "$_objdump" && -f "$build_dir/exec/agentxx.exe" ]]; then
+        _need_dlls=$("$_objdump" -p "$build_dir/exec/agentxx.exe" 2>/dev/null | grep -i "DLL Name" | awk '{print $NF}')
         for _dll in $_need_dlls; do
             case "$_dll" in
                 KERNEL32.dll|USER32.dll|ADVAPI32.dll|SHELL32.dll|WS2_32.dll|MSWSOCK.dll|WINMM.dll|OLE32.dll|OLEAUT32.dll|GDI32.dll|CRYPT32.dll|BCRYPT.dll|NCRYPT.dll|SCHANNEL.dll|SECUR32.dll|IPHLPAPI.dll|DNSAPI.dll|WINHTTP.dll|WTSAPI32.dll|USERENV.dll|VERSION.dll|SHLWAPI.dll|COMDLG32.dll|COMCTL32.dll|IMM32.dll|SETUPAPI.dll|CFGMGR32.dll|POWRPROF.dll|NTDLL.dll|MSVCRT.dll|UCRTBASE.dll|API-MS-Win-*.dll|api-ms-win-*.dll) continue ;;
@@ -908,7 +908,7 @@ echo ""
 echo "============================================"
 echo "  交叉编译完成! (Hermetic)"
 echo "  输出目录: $build_dir/exec/"
-echo "    - agentxx_cli.exe (Windows x64)"
+echo "    - agentxx.exe (Windows x64)"
 echo "    - libagentxx.dll (+ libagentxx.dll.a)"
 echo "    - plugins/*.dll"
 echo "  安装目录: $build_dir/agentxx-project-install/"
@@ -916,7 +916,7 @@ echo "  工具链:   $toolchain_dir ($LLVM_MINGW_VERSION)"
 echo "  CrossRoot: $cross_root"
 echo "============================================"
 echo "  在 Windows 上运行:"
-echo "    agentxx_cli.exe"
+echo "    agentxx.exe"
 echo "  或将 exec 目录整体拷贝到 Windows 主机后双击运行"
 
 # ===== 归档发布包 (AGENTXX_PACKAGE_RELEASE=1 时自动执行) =====

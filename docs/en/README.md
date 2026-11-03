@@ -56,19 +56,19 @@
 | ⬜ | iOS | Compatibility testing pending |
 
 ### Binary Size and Dependencies
-- Both the executable `agentxx_cli` and the shared library `libagentxx` statically link dependencies where possible to minimize dynamic library requirements. Symbol visibility control and pruning are applied during build.
+- Both the executable `agentxx` and the shared library `libagentxx` statically link dependencies where possible to minimize dynamic library requirements. Symbol visibility control and pruning are applied during build.
 - Default compilation optimizations favor performance. For minimal binary footprint, optional dependencies like Hyperscan / Boost.Process can be omitted and `-Os`/`-Oz` optimization flags applied.
 - The following measurements reflect `Release compilation favoring performance, including all optional dependencies such as Hyperscan and Boost.Process`, tested on `Date: 2026/09/04, commit: f2121cec2869b6df31e1b15a2ff62305dcc1b005`.
 - Memory Footprint (externally loading 5 common plugins: `agentxx_filesystem`, `agentxx_execute_command`, `agentxx_system`, `agentxx_websearch`, `agentxx_planning`):
 
-| agentxx_cli Target | Init RAM | 100K Context | 200K Context | Notes |
+| agentxx Target | Init RAM | 100K Context | 200K Context | Notes |
 |---|---|---|---|---|
 | **Win / TUI** | 3.4 MB | 12.2 MB | 19.6 MB | Measured via Task Manager |
 | **Linux / TUI** | 3.1 MB | 8.9 MB | 14.1 MB | RES-SHR measured via `top`. Only depends on system libs, so measures exclusive memory |
 
 - Executable & Shared Library Binary Sizes:
 
-| System | agentxx_cli | libagentxx | Compiler | Notes |
+| System | agentxx | libagentxx | Compiler | Notes |
 |---|---|---|---|---|
 | **Windows** | 16.3 MB | 12.4 MB | MSVC 19.51.36247.0 / Visual Studio 18 2026 · x86_64 · -O2 | Recommend bundling MSVC runtime |
 | **Linux** | 21.1 MB | 15.7 MB | GCC 16.1.0 · x86_64 · -O3 · --strip-all | Recommend bundling libstdc++.so.6, libgcc_s.so.1 |
@@ -220,7 +220,7 @@
 
 ### UI
 - ⬜ GUI
-- ✅ TUI: `agentxx_cli tui`
+- ✅ TUI: `agentxx tui`
     - Client / plugin architecture.
     - Light and Dark themes.
     - Local pagination for message histories and session lists.
@@ -228,7 +228,7 @@
     - Configurable streaming render modes for thinking blocks (single-line tail clipping vs. auto-expanded full view, folding upon completion).
     - Displays LLM token speeds, latency, and turn finish timestamps.
     - Configurable animation levels.
-- ✅ CLI: `agentxx_cli cli`
+- ✅ CLI: `agentxx cli`
     - Primarily intended for auxiliary debugging and testing.
 
 ### Server
@@ -246,7 +246,7 @@
 ### Plugin Support
 - ✅ C/C++ plugin support allowing extensible modifications to both Agent and Client UI. See [Plugin Development Documentation](/docs/en/design/plugins.md); [Built-in Plugins](/agent/plugins/); [Example Plugin](/agent/plugins/example_plugin/).
     - Can be compiled either as standalone dynamic shared libraries or statically embedded into `libagentxx`.
-    - High compatibility achieved via pure C APIs, COM-style querying, explicit 8-byte structure alignment, fixed-width integer types (`int32_t`, `int64_t`), unified calling conventions, and passing structs by pointer rather than value. This ensures runtime compatibility across different compilers, standard library implementations, and dependency versions; validated by mixing Debug/Release binaries of `agentxx_cli` with plugin dynamic libraries.
+    - High compatibility achieved via pure C APIs, COM-style querying, explicit 8-byte structure alignment, fixed-width integer types (`int32_t`, `int64_t`), unified calling conventions, and passing structs by pointer rather than value. This ensures runtime compatibility across different compilers, standard library implementations, and dependency versions; validated by mixing Debug/Release binaries of `agentxx` with plugin dynamic libraries.
     - Native asynchronous interfaces supporting cooperative non-blocking coroutine execution between host and plugins within a single thread without locking.
 - Multi-Language Plugin Ecosystem:
     - Modelled after `agentxx_javascript_engine`, execution engines can be built as plugins. New plugins can depend on the engine to execute code snippets at runtime, or directly invoke host-installed `nodejs`, `python3`, etc.
@@ -309,7 +309,7 @@
     - Build scripts for verified platforms. See [Build Guides](/docs/en/build/).
 - `agent/lib`: libagentxx
     - Core library containing toolcalls, nodes, middlewares, etc., cleanly decoupled for embedding.
-- `agent/client`: agentxx_cli
+- `agent/client`: agentxx
     - Executable client powering CLI, TUI, and server initialization.
     - `agent/client/include/agentxx-client/io`: Implements stdio and TUI Agent invocation.
     - `agent/client/include/agentxx-client/train`: Prompt training module.
@@ -365,11 +365,11 @@ npm install --legacy-peer-deps
 - Developer docs: [Development Guide](/docs/en/develop.md) · [Architecture](/docs/en/design/index.md) · [Plugins](/docs/en/design/plugins.md)
 - Generated Library Linking:
     - Shared library: `libagentxx` (Debug adds `d`: `libagentxxd`). Unified multi-platform naming, differing only in extensions (`.so`, `.dll`, `.dylib`).
-    - Static library: `libagentxx_static` (Debug adds `d`: `libagentxx_staticd`). Unified naming across platforms (`.a`, `.lib`). Supports static linking of all dependencies to produce standalone executables like `agentxx_cli` (verified on Linux and Windows). You can likewise statically link `libagentxx_static` and its static dependencies into your own application to eliminate dynamic library dependencies.
+    - Static library: `libagentxx_static` (Debug adds `d`: `libagentxx_staticd`). Unified naming across platforms (`.a`, `.lib`). Supports static linking of all dependencies to produce standalone executables like `agentxx` (verified on Linux and Windows). You can likewise statically link `libagentxx_static` and its static dependencies into your own application to eliminate dynamic library dependencies.
     - Builds default to shared `libagentxx` and static `libagentxx_static`, dynamically linking runtime libraries (libstdc++, libgcc, msvcrt `/MD` | `/MDd`).
 
 ## Configuration & Running
-- Edit `agentxx-config.yaml` in `{PROJECT_ROOT}` to configure your model API credentials. Run `agentxx_cli` from that directory.
+- Edit `agentxx-config.yaml` in `{PROJECT_ROOT}` to configure your model API credentials. Run `agentxx` from that directory.
 - (Optional) Store API keys in `.env` in the same directory. Copy `.env.example` to `.env` and configure environment variables.
 ```sh
 cd {PROJECT_ROOT}
@@ -380,16 +380,16 @@ cd {PROJECT_ROOT}
 
 # client handles UI rendering and user I/O.
 # server-io runs the agent-loop server, executing turns and invoking LLM APIs.
-# agentxx_cli can launch UI+server together, UI connecting to remote server, or server standalone.
+# agentxx can launch UI+server together, UI connecting to remote server, or server standalone.
 
 # Single-process mode (Client + Server-IO in one process):
-agentxx_cli tui # Launches TUI interface + server-io
-agentxx_cli cli # Launches CLI + server-io
+agentxx tui # Launches TUI interface + server-io
+agentxx cli # Launches CLI + server-io
 
 # Separated processes via WebSocket:
 # Useful for custom GUI clients connecting to the server.
-agentxx_cli server --host 0.0.0.0 --port 7007 --token passwd # Starts server-io
-agentxx_cli tui --agent ws://127.0.0.1:7007/agent --token passwd # Starts TUI client connecting to server-io
+agentxx server --host 0.0.0.0 --port 7007 --token passwd # Starts server-io
+agentxx tui --agent ws://127.0.0.1:7007/agent --token passwd # Starts TUI client connecting to server-io
 ```
 
 ## LICENSE & THIRD_PARTY

@@ -189,7 +189,7 @@ _strip_resign() {
 }
 if [[ "${AGENTXX_SKIP_STRIP:-0}" != "1" ]]; then
     echo "[strip] strip + ad-hoc resign release artifacts"
-    _strip_resign "$build_dir/exec/agentxx_cli"
+    _strip_resign "$build_dir/exec/agentxx"
     _strip_resign "$build_dir/exec/agentxx_test"
     _strip_resign "$build_dir/exec/agentxx_benchmark"
     _strip_resign "$build_dir/exec/libagentxx.dylib"

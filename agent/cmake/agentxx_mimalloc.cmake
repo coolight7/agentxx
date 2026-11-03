@@ -7,7 +7,7 @@
 # new/delete, 内存按线程本地堆分配, 空闲页及时归还系统。
 #
 # 作用范围 (只作用于**最终程序**, 不作用于动态库):
-# - agentxx_cli / agentxx_test / agentxx_benchmark: 由本文件接入分配器
+# - agentxx / agentxx_test / agentxx_benchmark: 由本文件接入分配器
 # - libagentxx.so (FFI/嵌入) 与插件动态库: 不接入, 跟随最终程序的分配器
 #   (动态库若自行覆盖 malloc, 主程序的 SQL/运行时等模块仍走各自的分配器, 反而
 #    可能跨模块 free 不匹配); 内置合并进 libagentxx 的插件随最终程序一起使用

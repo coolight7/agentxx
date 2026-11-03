@@ -277,7 +277,7 @@ set(AGENTXX_BUILTIN_PLUGIN_MANIFEST_ENTRIES "")
 # 运行期应从 "插件自身所在目录" 与 exec 目录 ("../../") 搜索动态库依赖:
 # release 分发把 libstdc++.so.6 / libgcc_s.so.1 等复制到 exec, 主程序 dlopen 插件
 # 时优先复用其中的运行库, 而不是先命中系统库 (与可执行文件/共享库
-# agentxx_cli/agentxx_test/agentxx_benchmark/libagentxx.so 的处理一致);
+# agentxx/agentxx_test/agentxx_benchmark/libagentxx.so 的处理一致);
 # 传入的相对子目录 "../.." 即 exec 目录 (插件位于 exec/plugins/<插件名>/)
 # - 目录级默认值: 对本目录及插件子目录 "之后创建" 的目标生效, 故须在下方
 #   agentxx_load_plugin() 之前调用 (见 cmake/agentxx_runtime_search_path.cmake)

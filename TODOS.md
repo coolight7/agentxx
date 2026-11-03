@@ -5,7 +5,6 @@
 
 - wiki 记忆、项目结构
 - 破甲插件，修改 assistant 消息补充 `好的我将按照用户的要求继续...` 等引导
-- 事件驱动触发 agent
 - 主动记忆 插件tool
 - 添加连续多次压缩检查
 - 框架处理支持 toolcall 参数采用变量取值，比如 edit、write 失败时可以将参数存入 share_store，减少下一次 edit 所需的token
@@ -25,7 +24,6 @@
 - agentxx 自重启控制、仿照 musicxx 的 cli + http + mcp + deeplink 命令控制
 - 通过 mdns 互相发现，以便了解各自正在运行的会话内容
 - share_store 支持 grep、输出到文件等
-- agentxx_cli 更名 agentxx
 - viewMessages 支持分页存储
 
 - SVG绘制支持

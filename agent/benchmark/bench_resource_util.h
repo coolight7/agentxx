@@ -4,7 +4,7 @@
 // - 进程内存/CPU 采样 (见 bench_mem_probe.h) 与各容器字节估算
 // - 子进程启动/管理 (支持伪终端 PTY, 用于真实运行 TUI 子进程)
 // - 固定消息模板与 token 校准 (保证各模式负载一致, 结果可横向对比)
-// - 真实进程 (agentxx_cli server/tui) 的 yaml 配置生成 (新列表段结构)
+// - 真实进程 (agentxx server/tui) 的 yaml 配置生成 (新列表段结构)
 
 #include "bench_mem_probe.h"
 
@@ -735,14 +735,14 @@ inline std::string findSharedLibPath() {
     return "";
 }
 
-/// 定位 agentxx_cli 可执行文件 (拆分模式需要真实进程)
-inline std::string findAgentxxCliPath() {
+/// 定位 agentxx 可执行文件 (拆分模式需要真实进程)
+inline std::string findAgentxxExePath() {
     namespace fs = std::filesystem;
     std::error_code ec;
 #if XX_IS_WIN_D
-    const std::string exeName = "agentxx_cli.exe";
+    const std::string exeName = "agentxx.exe";
 #else
-    const std::string exeName = "agentxx_cli";
+    const std::string exeName = "agentxx";
 #endif
     auto                  exeDir     = executableDir();
     auto                  cwd        = fs::current_path(ec);
@@ -763,7 +763,7 @@ inline std::string findAgentxxCliPath() {
 }
 
 // ---------------------------------------------------------------------------
-// 4. 真实进程 (agentxx_cli) 的 yaml 配置生成
+// 4. 真实进程 (agentxx) 的 yaml 配置生成
 // ---------------------------------------------------------------------------
 
 struct RealRunConfigOptions {

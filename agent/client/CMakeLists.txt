@@ -7,7 +7,7 @@ cmake_policy(SET CMP0091 NEW)
 cmake_policy(SET CMP0144 NEW)
 cmake_policy(SET CMP0167 OLD)
 
-project(agentxx_cli VERSION ${AGENTXX_VERSION} LANGUAGES C CXX)
+project(agentxx VERSION ${AGENTXX_VERSION} LANGUAGES C CXX)
 include(GNUInstallDirs)
 
 # 全局版本宏注入
@@ -31,21 +31,21 @@ else()
   list(PREPEND CMAKE_FIND_LIBRARY_SUFFIXES .a)
 endif()
 
-add_executable(agentxx_cli)
+add_executable(agentxx)
 
 file(GLOB_RECURSE client_SOURCES 
 	CONFIGURE_DEPENDS
 	"${CMAKE_CURRENT_SOURCE_DIR}/*.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/*.cc" "${CMAKE_CURRENT_SOURCE_DIR}/*.cxx"
 )
-target_sources(agentxx_cli PRIVATE
+target_sources(agentxx PRIVATE
 	${client_SOURCES}
 )
 
-target_include_directories(agentxx_cli PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include/")
+target_include_directories(agentxx PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include/")
 # neograph/json.h 内部 #include <yyjson.h> (构建期头, 见 lib/CMakeLists 说明):
 # client 经 find_package(agentxx_static) 只得 install/include, 需补 neograph 源码 deps 路径
 if (DEFINED neograph_SOURCE_DIR)
-  target_include_directories(agentxx_cli PRIVATE "${neograph_SOURCE_DIR}/deps/yyjson/")
+  target_include_directories(agentxx PRIVATE "${neograph_SOURCE_DIR}/deps/yyjson/")
 endif()
 
 # 注意: 不要添加 /FS /MP 编译选项 —— 顶层已统一管理; 命令行出现重复 /FS 时
@@ -54,7 +54,7 @@ endif()
 # PCH: 只预编译稳定第三方头，加速编译 (GCC/Clang，与 lib 保持一致)。
 # 第三方头须用 <...> 形式 (见 lib/CMakeLists.txt 说明)
 if (AGENTXX_ENABLE_PCH AND NOT XX_IS_MSVC_D)
-  target_precompile_headers(agentxx_cli PRIVATE
+  target_precompile_headers(agentxx PRIVATE
     <algorithm> <atomic> <chrono> <cstdint> <cstring> <deque> <exception>
     <filesystem> <fstream> <functional> <map> <memory> <mutex> <optional>
     <set> <sstream> <string> <string_view> <thread> <unordered_map>
@@ -65,7 +65,7 @@ if (AGENTXX_ENABLE_PCH AND NOT XX_IS_MSVC_D)
   )
   # ccache + PCH 兼容 (GCC 特有)，仅对本目标生效
   if (CCACHE_PROGRAM AND XX_IS_GCC_D)
-    target_compile_options(agentxx_cli PRIVATE -fpch-preprocess)
+    target_compile_options(agentxx PRIVATE -fpch-preprocess)
   endif()
 endif()
 
@@ -114,11 +114,11 @@ find_package(cxx_pluginxx REQUIRED)
 find_package(cxx_pluginxx_ui REQUIRED)
 find_package(agentxx_static REQUIRED)
 
-target_link_directories(agentxx_cli PUBLIC
+target_link_directories(agentxx PUBLIC
   "${AGENTXX_INSTALL_DIR}/lib/"
 )
 
-target_link_libraries(agentxx_cli PUBLIC
+target_link_libraries(agentxx PUBLIC
   # === neograph vvv 链接顺序是必要的
   neograph_sqlite
   neograph_acp
@@ -137,22 +137,22 @@ target_link_libraries(agentxx_cli PUBLIC
 # 条件依赖显式链接 (目标已在依赖查找段按开关查出; hs_runtime 为 HyperScan
 # 运行期库, 按裸库名经 cxx_utilxx 的 link 目录解析)
 if (AGENTXX_ENABLE_HYPERSCAN)
-  target_link_libraries(agentxx_cli PRIVATE
+  target_link_libraries(agentxx PRIVATE
     PkgConfig::hyperscan
     hs_runtime
   )
 endif()
 if (AGENTXX_LINUX_IO_URING_SUPPORTED)
-  target_link_libraries(agentxx_cli PRIVATE
+  target_link_libraries(agentxx PRIVATE
     PkgConfig::uring
   )
 endif()
 
 if (XX_IS_MSVC_D)
-	target_compile_options(agentxx_cli PRIVATE 
+	target_compile_options(agentxx PRIVATE 
 		"/bigobj"
 	)
-	target_compile_definitions(agentxx_cli PRIVATE
+	target_compile_definitions(agentxx PRIVATE
 		strdup=_strdup
 		strcasecmp=_stricmp
 		strncasecmp=_strnicmp
@@ -160,15 +160,15 @@ if (XX_IS_MSVC_D)
 endif ()
 # ===== 运行期动态库搜索路径: 优先从可执行文件所在目录搜索 =====
 # release 分发会把 libstdc++.so.6 / libgcc_s.so.1 等运行库复制到 exec (与
-# agentxx_cli 同目录), 不带该搜索项时加载器不会看自身目录, 目标机器上的旧版
+# agentxx 同目录), 不带该搜索项时加载器不会看自身目录, 目标机器上的旧版
 # 系统 libstdc++ 会被优先加载 (详见 cmake/agentxx_runtime_search_path.cmake)
 include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/agentxx_runtime_search_path.cmake")
-agentxx_set_own_dir_rpath(agentxx_cli)
+agentxx_set_own_dir_rpath(agentxx)
 
 # ===== 内存分配器: mimalloc (见 cmake/agentxx_mimalloc.cmake) =====
-# 静态链接 (默认) 时分配器并入 agentxx_cli; 动态链接时额外把分配器动态库
+# 静态链接 (默认) 时分配器并入 agentxx; 动态链接时额外把分配器动态库
 # 装到 exec 目录 (与产物同目录, 随产物分发)
 include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/agentxx_mimalloc.cmake")
-agentxx_mimalloc_attach(agentxx_cli)
+agentxx_mimalloc_attach(agentxx)
 
-install(TARGETS agentxx_cli DESTINATION "${AGENTXX_EXEC_INSTALL_PREFIX}")
+install(TARGETS agentxx DESTINATION "${AGENTXX_EXEC_INSTALL_PREFIX}")

@@ -25,7 +25,7 @@ class AgentContext;
 /// - [buildRuntimeSnapshot]: 需要 init() 之后的 AgentContext
 
 /// 配置侧加载快照 (不依赖 agent 实例)
-/// - `agentxx_cli --dump-config` 与启动日志共用同一份实现
+/// - `agentxx --dump-config` 与启动日志共用同一份实现
 /// - API key 只输出"是否已设置", 不输出内容
 utilxx_base::Json buildConfigSnapshot(const AgentConfig& config);
 

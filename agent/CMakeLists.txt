@@ -90,7 +90,7 @@ set(AGENTXX_PLUGIN_BUILTIN_LIST
 # ===== 内存分配器: mimalloc =====
 # https://github.com/microsoft/mimalloc (源码位于 third_party/mimalloc, 经
 # ExternalProject 构建安装; 接管 malloc/free/new/delete, 替换 glibc / CRT 分配器)
-# - 作用范围: 最终程序 (agentxx_cli / agentxx_test / agentxx_benchmark), 见
+# - 作用范围: 最终程序 (agentxx / agentxx_test / agentxx_benchmark), 见
 #   cmake/agentxx_mimalloc.cmake
 # - 不受影响的目标: libagentxx.so (跟随最终程序的分配器) 与插件动态库
 #   (plugins/ 不改动: 内置合并进 libagentxx 的插件随最终程序使用 mimalloc,
@@ -101,7 +101,7 @@ set(AGENTXX_PLUGIN_BUILTIN_LIST
 # - 默认关闭 (OFF): 实测在"每轮都要序列化/渲染整段上下文"的运行形态下, 它的常驻
 #   内存是 glibc/CRT 的 2~4 倍 (提交量 5~6 倍, Windows release 实测数据见
 #   docs/zh-cn/design/benchmark.md 第 10、12 节); 需要换分配性能/抗碎片时显式打开
-option(AGENTXX_ENABLE_MIMALLOC "Use mimalloc as the memory allocator of the programs (agentxx_cli/test/benchmark). OFF by default: long-context runs cost 2~4x resident memory (5~6x commit; docs/zh-cn/design/benchmark.md sections 10/12). Disabled automatically on macOS/iOS." OFF)
+option(AGENTXX_ENABLE_MIMALLOC "Use mimalloc as the memory allocator of the programs (agentxx/test/benchmark). OFF by default: long-context runs cost 2~4x resident memory (5~6x commit; docs/zh-cn/design/benchmark.md sections 10/12). Disabled automatically on macOS/iOS." OFF)
 # 链接方式 (外部可指定, 默认静态):
 # - STATIC: 静态库并入产物, 内置分配器 (无额外运行库依赖, 分发单文件即可)
 # - SHARED: 链接 libmimalloc.so / mimalloc.dll (分配器可独立升级/替换)
@@ -137,7 +137,7 @@ option(AGENTXX_ENABLE_LTO "Enable Link Time Optimization (LTO) for Release build
 #   也可直接指定 mold/gold/bfd 等。mold 可大幅减少大体积二进制链接时间
 set(AGENTXX_LINKER "auto" CACHE STRING "Linker for GCC/Clang: auto|mold|gold|bfd|...")
 # - 相同代码合并 (ICF, --icf=all): Release 下把机器码/只读数据完全相同的段
-#   合并为一份, 减小产物体积 (实测已 strip 产物: agentxx_cli -3.2%,
+#   合并为一份, 减小产物体积 (实测已 strip 产物: agentxx -3.2%,
 #   libagentxx.so -2.7%; 未 strip 时因符号表一并合并看起来更多),
 #   对运行行为无影响 (只影响"相同函数/常量是否有不同地址"这种非法用法)。
 #   仅 mold/gold/lld 支持该选项, 使用默认 bfd 链接器时自动跳过
@@ -266,7 +266,7 @@ endif ()
 #   未定义引用在链接期即绑定到 libSystem (ordinal 固定), 运行期 dyld 不会再去
 #   主可执行文件解析; 主可执行文件静态覆盖的分配器只作用于自身 (且 _malloc
 #   不在导出符号表中)。于是出现"程序侧 mimalloc / 框架侧系统分配器"并用,
-#   任何跨模块传递并释放的指针都会在 mi_free 崩溃 (实测 agentxx_cli 启动即崩)。
+#   任何跨模块传递并释放的指针都会在 mi_free 崩溃 (实测 agentxx 启动即崩)。
 # - 这与 ELF 不同: GNU ld 会把可执行文件定义且被共享库引用的 malloc 放进
 #   .dynsym, 运行期符号插入 (interposition) 使全进程统一走 mimalloc。
 # - 如需在 macOS 强制接管分配器, 只能采用 DYLD_INSERT_LIBRARIES 预加载

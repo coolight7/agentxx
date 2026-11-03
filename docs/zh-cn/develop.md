@@ -67,7 +67,7 @@
 ```sh
 export http_proxy=http://127.0.0.1:7980
 export https_proxy=http://127.0.0.1:7980
-agentxx_cli tui
+agentxx tui
 # 在 clash「连接」页面关闭 agent 连接，观察重连、Hello(lastSeq/tailHash) 与 Delta 去重
 ```
 

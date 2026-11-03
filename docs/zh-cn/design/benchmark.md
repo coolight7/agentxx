@@ -57,7 +57,7 @@
 |---|---|---|
 | `resource_cli` | 同进程 CLI + Channel | 进程内 stdio 客户端 + agent, 真实轮次 + 100K/200K 上下文注入 + **真实逐轮往返** (每轮走完整流程, 无注入历史) |
 | `resource_tui` | 同进程(无界面) TUI + Channel | TUI 端点仅作协议端点 (不启动 FTXUI), 测同步/分页/消息窗口 |
-| `resource_split_cli` | 真实两进程 | `agentxx_cli server` + `agentxx_cli cli --agent ws://...`, 分别采样 |
+| `resource_split_cli` | 真实两进程 | `agentxx server` + `agentxx cli --agent ws://...`, 分别采样 |
 | `resource_split_tui` | 真实 server + 连接客户端 | server 子进程 + bench 进程内 headless TUI 端点 (WS) |
 | `resource_ffi` | 动态库调用 | `dlopen(libagentxx.so)` + C ABI 驱动轮次 (对照组) |
 | `resource_real_tui` | 同进程 + **真实 TUI** | `TUIClientAgentIO::start()` 启动 FTXUI 界面线程, 采集帧耗时/帧数/渲染字节 |
@@ -157,7 +157,7 @@ process_base → agent_constructed → tui_started → agent_init_done
   `frameStats()` 恒为 0
 - 打开时: 每帧记录组件树构建耗时 (帧数/累计/最大)
 - 基准程序在 `main()` 启动时打开该标记, 子进程场景 (每个场景独立进程) 同样生效;
-  `agentxx_cli` / `agentxx_test` 不打开, 保持正常运行时的开销
+  `agentxx` / `agentxx_test` 不打开, 保持正常运行时的开销
 
 ## 3. 报告与对比
 
@@ -308,7 +308,7 @@ process_base → agent_constructed → tui_started → agent_init_done
 
 | 产物 | 优化前 | 优化后 | 变化 |
 |---|---|---|---|
-| `agentxx_cli` | 33.24 MB (未 strip) / 23.17 MB (strip) | 22.42 MB | -32.5% / -3.2% |
+| `agentxx` | 33.24 MB (未 strip) / 23.17 MB (strip) | 22.42 MB | -32.5% / -3.2% |
 | `libagentxx.so` | 22.18 MB (未 strip) / 16.91 MB (strip) | 16.46 MB | -25.8% / -2.7% |
 | `agentxx_benchmark` | 38.83 MB (未 strip) | 26.88 MB | -30.8% |
 
@@ -432,7 +432,7 @@ wall 6288 → 4737 ms)。
 
 | 组 | 说明 |
 |---|---|
-| 旧版 9/17 | `agent/build/output/agentxx-0.3.0-windows-x64.zip` 内的 `agentxx_cli.exe` (系统分配器 + 旧代码), 作为"上一个版本"基准 |
+| 旧版 9/17 | `agent/build/output/agentxx-0.3.0-windows-x64.zip` 内的 `agentxx_cli.exe` (当时的产物名, 系统分配器 + 旧代码), 作为"上一个版本"基准 |
 | mimalloc 默认 | 当前代码 + `AGENTXX_ENABLE_MIMALLOC=ON` (当时 Windows release 脚本默认 `MIMALLOC_LINK=SHARED`) |
 | mimalloc 调参 | 当前代码 + mimalloc + 运行期 `MIMALLOC_PURGE_DELAY=0` + `MIMALLOC_PAGE_COMMIT_ON_DEMAND=1` |
 | no-mimalloc | 当前代码 + `-DAGENTXX_ENABLE_MIMALLOC=OFF` (系统分配器; 与"mimalloc 默认"只差这一个开关) |
@@ -441,7 +441,7 @@ wall 6288 → 4737 ms)。
 
 - 专用工作集 = 任务管理器"内存"列 (`Working Set - Private`); WS = 工作集;
   提交 = 私有字节; 单位 MB
-- 负载: `agentxx_cli cli` + 本地 mock LLM (SSE 立即返回, 无 toolcall); 50 条 8KB
+- 负载: `agentxx cli` + 本地 mock LLM (SSE 立即返回, 无 toolcall); 50 条 8KB
   用户消息 ≈ 100K token 上下文, 100 条 ≈ 200K token; 另加"5 条 × 80KB"作为
   "同样上下文、更少轮次"的对照
 - 每轮都要把整段上下文 (含历史) 重新序列化并发给 LLM, 是该负载 CPU 与临时缓冲的主要
@@ -539,7 +539,7 @@ cmake --build agent/build/windows-release --config Release --parallel 6
 
 - 负载侧: 起一个本地 OpenAI 兼容 mock 服务 (只回 SSE), 配置里写
   `base_url: http://127.0.0.1:<port>/v1` 且 `plugin.list: []`, 然后用
-  `agentxx_cli cli --config <cfg>` 逐条送入固定大小的用户消息 (每条一轮),
+  `agentxx cli --config <cfg>` 逐条送入固定大小的用户消息 (每条一轮),
   其间按固定间隔采样专用工作集/工作集/提交
 - Windows 专用工作集定义: `Win32_PerfFormattedData_PerfProc_Process.WorkingSetPrivate`
   (任务管理器"内存"列); WS / 提交取 `WorkingSet64` / `PrivateMemorySize64`
@@ -570,7 +570,7 @@ cmake --build agent/build/windows-release --config Release --parallel 6
 即依赖重写前), 只作量级对照。原始数据存于 `resource/benchmark/` 下两个目录
 (`2026-09-26_88fee6e0_windows-longctx/`、`2026-09-26_88fee6e0_linux-resource/`)。
 
-负载与方法 (与 §10 同一套台账): Windows release, `agentxx_cli cli` + 本地 mock LLM
+负载与方法 (与 §10 同一套台账): Windows release, `agentxx cli` + 本地 mock LLM
 (只回 SSE 且立即返回), 无插件, data_dir 指向临时目录, 经 stdin 逐条送入固定大小消息
 (每条一轮), 全部轮次被 mock 服务收到后空转 4 秒取稳态。分配次数取自
 `MIMALLOC_SHOW_STATS=1` 的退出统计 (只有 mimalloc 变体能取到)。
@@ -634,7 +634,7 @@ asio 的帧回收缓存只缓存 ≤1020 字节的块, 所以这些大帧每轮�
 > "链接期有多少代码被内联进这个协程"有关。同一份 release 参数下: 去掉 `/GL` 单 TU
 > 编译的帧 ≤ 11.7 KiB; 该 TU 用 `/GL` 单独 `/LTCG` 链接也只有 ≤12.6 KiB 的帧
 > (单 TU 可内联面小); 全程序 `/GL` 的
-> `agentxx_cli.exe` 里 ≥384 KiB 的帧有 **94 个 / 合计 164.6 MiB (最大 6.45 MiB)**,
+> `agentxx.exe` 里 ≥384 KiB 的帧有 **94 个 / 合计 164.6 MiB (最大 6.45 MiB)**,
 > 同一份代码的 debug 构建 (无 LTO) 里没有任何 ≥64 KiB 的帧。只把
 > `base_agent.cpp` 改成不加 `/GL`、其余完全不变再重链, 上一轮记录的四个 2.5 MB 帧
 > (`0x263EC0/0x2646C0/0x2649C0/0x264AC0`) 与 6.7 MB 组全部消失, ≥384 KiB 的帧
@@ -790,7 +790,7 @@ server 空闲三者一致 (专用 1.6 MB / 提交 2.9 MB)。
    第 11 节记录的"每条消息文本被拷贝多次"现象**减轻但没有消失**;
 3. **`huge` 档基本不变**: 50 × 8KB 组 1.1 GiB / 570 块 (≈每轮 11 块 × ≈2 MB) 与上一批
    逐项相同, 100 × 8KB 组 2.4 → 2.3 GiB / 1.4K → 1.3K 块; 静态扫描也一致
-   (本批 `agentxx_cli.exe` 96 个 ≥384 KiB 的协程帧 / 合计 165.6 MiB /
+   (本批 `agentxx.exe` 96 个 ≥384 KiB 的协程帧 / 合计 165.6 MiB /
    最大 6.45 MiB, 上一批 94 个 / 164.6 MiB / 最大 6.45 MiB) —— 即第 11 节定位的
    "MSVC + 全程序 LTO 下的巨帧"问题**与本次重构无关, 仍未解决**;
    mimalloc 变体的提交量减半是 binned 峰值下降 (113.1 → 25.8 MiB) 的结果,
@@ -911,7 +911,7 @@ AgentRunner::run 帧            2,506,528 B
 
 ### 13.3 效果 (同一构建目录, 只加上述标记 + 两个转发包装)
 
-静态统计方式 (release `agentxx_cli.exe`, `scan_coro_frames.py`):
+静态统计方式 (release `agentxx.exe`, `scan_coro_frames.py`):
 
 | 指标 | 处置前 | 处置后 |
 |---|---|---|
@@ -920,7 +920,7 @@ AgentRunner::run 帧            2,506,528 B
 | 生产路径 (agent 轮次) 最大帧 | 2.5 MB (`AgentRunner::run` 链) | **< 384 KiB** |
 
 运行时统计方式 (Windows release, `AGENTXX_ENABLE_MIMALLOC=ON` + `MIMALLOC_LINK=SHARED`,
-`agentxx_cli cli` + mock LLM, 8 KB/轮):
+`agentxx cli` + mock LLM, 8 KB/轮):
 
 | 指标 (50×8KB / 100×8KB) | 处置前 | 处置后 |
 |---|---|---|
@@ -940,16 +940,16 @@ AgentRunner::run 帧            2,506,528 B
 
 ```powershell
 # 静态统计方式: ≥384 KiB 的帧数与最大帧 (无需运行)
-python resource/benchmark/harness/scan_coro_frames.py <agentxx_cli.exe>
+python resource/benchmark/harness/scan_coro_frames.py <agentxx.exe>
 # 归属到函数 (定位"帧尺寸来自哪个函数", 也就是需要打断内联的位置)
-python resource/benchmark/harness/frame_owner.py <agentxx_cli.exe> <link.map>
+python resource/benchmark/harness/frame_owner.py <agentxx.exe> <link.map>
 #   /MAP 需要一次等价重链 (/DEBUG:FULL /MAP, ≈150 s), 做法见 memory-2/work.md §2.1
 # 运行时统计方式: MIMALLOC_SHOW_STATS=1 看 huge 档累计量/块数 (块数 ÷ 轮数 = 每轮巨帧次数)
 ```
 
 未处置的巨帧 (与生产路径无关, 需要时按 13.2 处理):
 
-- 训练模式: `runTrainingMode` 链 6.77 MB、`runEvolutionLoop` 1.67 MB (仅 `agentxx_cli train`);
+- 训练模式: `runTrainingMode` 链 6.77 MB、`runEvolutionLoop` 1.67 MB (仅 `agentxx train`);
 - neograph 子图: `SubgraphNode::run` 4.98 MB、`run_subgraph_async` 1.66 MB
   (仅图里含子图时才会走到; 默认 agent 图不含)。
 
@@ -1050,7 +1050,7 @@ python resource/benchmark/harness/frame_owner.py <agentxx_cli.exe> <link.map>
 
 ### 14.3 巨帧回归卡口 (静态扫描)
 
-`scan_coro_frames.py` 扫 release `agentxx_cli.exe`:
+`scan_coro_frames.py` 扫 release `agentxx.exe`:
 
 | 指标 | 13.3 处置后 (09-28) | 本批 (10-07) |
 |---|---|---|
@@ -1059,7 +1059,7 @@ python resource/benchmark/harness/frame_owner.py <agentxx_cli.exe> <link.map>
 | 最大帧 | – | 6.4 MiB (训练链, 见 13.4) |
 
 即 67 个提交与依赖变化没有把巨帧带回来; 生产路径最大帧保持 < 384 KiB,
-最大帧仍是 13.4 列出的训练链 (`runTrainingMode`, 仅在 `agentxx_cli train` 走到)。
+最大帧仍是 13.4 列出的训练链 (`runTrainingMode`, 仅在 `agentxx train` 走到)。
 原始扫描输出见
 [`resource/benchmark/2026-10-07_d6e21470_windows-resource/frames_scan_agentxx_cli_2026-10-07.txt`](../../../resource/benchmark/2026-10-07_d6e21470_windows-resource/frames_scan_agentxx_cli_2026-10-07.txt)。
 
@@ -1204,7 +1204,7 @@ token 估算与压缩改走功能点; `104d5c79`: 启用重复调用检查), 基
 
 ### 15.3 巨帧回归卡口 (静态扫描)
 
-`scan_coro_frames.py` 扫 release `agentxx_cli.exe`:
+`scan_coro_frames.py` 扫 release `agentxx.exe`:
 
 | 指标 | 13.3 处置后 (09-28) | 14.3 (10-07) | 本批 |
 |---|---|---|---|
@@ -1343,7 +1343,7 @@ token 估算与压缩改走功能点; `104d5c79`: 启用重复调用检查), 基
 
 ### 16.3 巨帧回归卡口 (静态扫描)
 
-`scan_coro_frames.py` 扫 release `agentxx_cli.exe`:
+`scan_coro_frames.py` 扫 release `agentxx.exe`:
 
 | 指标 | 13.3 处置后 (09-28) | 14.3 (10-07) | 15.3 (10-11) | 本批 |
 |---|---|---|---|---|
@@ -1378,7 +1378,7 @@ token 估算与压缩改走功能点; `104d5c79`: 启用重复调用检查), 基
 
 > 标注: 见第 16 节的标注段 (同日、同机器、同依赖、同构建开关); 本节运行时代码改动
 > 为工作区内的未提交改动 (7 个文件 +293/-26), 依赖与第 16 节完全相同。载荷仍是
-> `agentxx_cli cli` + 本地 mock LLM (5 插件或无插件), 每条消息 8KB = 一轮,
+> `agentxx cli` + 本地 mock LLM (5 插件或无插件), 每条消息 8KB = 一轮,
 > 稳态取"跑满轮次后空转 4 秒"的专用工作集 (与任务管理器"内存"列同一套定义)。原始数据:
 > [`resource/benchmark/2026-10-12_fc66f870_windows-resource/rounds_opt/`](../../../resource/benchmark/2026-10-12_fc66f870_windows-resource/rounds_opt/README.md)。
 
@@ -1682,7 +1682,7 @@ set BASE={临时目录}
 :: 先等 init 与插件加载完成再灌入输入 (太早会被 "stop accepting new input" 丢掉),
 :: 输入结束后继续占住 stdin, 让轮次跑完
 ( ping -n 26 127.0.0.1 >nul & type "%BASE%\input.txt" & ping -n 300 127.0.0.1 >nul ) ^
-    | agentxx_cli.exe cli --config "%BASE%\measure.yaml" --env "%APPDATA%\agentxx\.env" > "%BASE%\out.log" 2>&1
+    | agentxx.exe cli --config "%BASE%\measure.yaml" --env "%APPDATA%\agentxx\.env" > "%BASE%\out.log" 2>&1
 ```
 
 - `measure.yaml` 关键项: `model_context_max_token: 30000` (让自动压缩在前几轮就触发)、

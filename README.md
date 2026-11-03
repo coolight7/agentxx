@@ -68,25 +68,25 @@
 | ⬜ | IOS | 待测试兼容 |
 
 ### 实测性能
-- Agentxx 编译后输出的 可执行程序`agentxx_cli`、动态库`libagentxx` 都会尽量静态链接依赖库，保持编译结果对动态库的依赖尽量少; 编译优化 控制导出符号，裁剪无用符号
+- Agentxx 编译后输出的 可执行程序`agentxx`、动态库`libagentxx` 都会尽量静态链接依赖库，保持编译结果对动态库的依赖尽量少; 编译优化 控制导出符号，裁剪无用符号
 - 默认的编译优化倾向于追求性能，如果需要裁剪体积，可以移除 Hyperscan 等可选库、采用 -Os/-Oz 体积编译优化
 - 以下是`Release倾向性能优化编译`,`添加了Hyperscan等所有可选依赖库`时的体积和运行时内存占用, 测试于 `时间: 2026/09/17, commit: 737e79106acf2bdb67668ae2456eafd41bb1a03c`
 - **内存占用** :
     -   插件加载: 外置加载5个常用插件 agentxx_filesystem, agentxx_execute_command, agentxx_system, agentxx_websearch, agentxx_planning
     -   如果编译时启用 mimalloc，内存分配性能会提升 (windows ~ 10%, linux ~ 33%), 但内存占用近乎翻3倍
 
-| agentxx_cli Target | 启动时内存占用 | 100K 上下文 | 200K上下文 | TIP |
+| agentxx Target | 启动时内存占用 | 100K 上下文 | 200K上下文 | TIP |
 |---|---|---|---|---|
 | **Win/TUI** | 4.2M | 13.2M | 19.7M | 任务管理器查看内存占用 |
 | **Win/TUI** | 3.3M | - | - | 不加载插件 |
-| **Linux/TUI** | 3.2M | 9.2M | 15.1M | top命令查看RES-SHR, agentxx_cli 仅依赖系统库，不需要其他动态库，因此仅计算独占内存大小 |
+| **Linux/TUI** | 3.2M | 9.2M | 15.1M | top命令查看RES-SHR, agentxx 仅依赖系统库，不需要其他动态库，因此仅计算独占内存大小 |
 | **Linux/TUI** | 2M | - | - | 不加载插件 |
-| **Macos/TUI** | 5.2M | 21.1M | 31.5M | top命令查看RES-SHR, agentxx_cli 仅依赖系统库，不需要其他动态库，因此仅计算独占内存大小 |
+| **Macos/TUI** | 5.2M | 21.1M | 31.5M | top命令查看RES-SHR, agentxx 仅依赖系统库，不需要其他动态库，因此仅计算独占内存大小 |
 | **Macos/TUI** | 3.8M | - | - | 不加载插件 |
 
 - **可执行文件/动态库文件体积**:
 
-| System | agentxx_cli | libagentxx | compiler | TIP |
+| System | agentxx | libagentxx | compiler | TIP |
 |---|---|---|---|---|
 | **Windows** | 17.9M | 13.5M | MSVC 19.51.36247.0/Visual Studio 18 2026 · x86_64 · -O2 | 打包时建议带上msvc运行时 |
 | **Linux** | 22M | 16.1M | GCC 16.1.0 · x86_64 · -O3 · --strip-unneeded | 打包时建议带上 libstdc++.so.6,libgcc_s.so.1 |
@@ -240,7 +240,7 @@
 
 ### UI
 - ⬜GUI
-- ✅TUI: `agentxx_cli tui`
+- ✅TUI: `agentxx tui`
     - 支持多模态输入
     - 支持插件/client端
     - 支持 白昼、夜间 主题
@@ -250,7 +250,7 @@
     - 支持选择流式渲染思考内容方式（单行裁剪显示末尾内容/自动展开显示完整内容，完成时自动折叠）
     - 支持显示 LLM Api token速度、耗时、轮次完成时间点
     - 可选动画等级
-- ✅Cli: `agentxx_cli cli`
+- ✅Cli: `agentxx cli`
     - 多用于辅助调试测试，非着重开发方向, 建议使用 TUI
 
 ### Server
@@ -268,7 +268,7 @@
 ### 插件化支持
 - ✅c/c++插件支持，可对 agent、client-ui 插件化修改；详见[插件开发文档](docs/zh-cn/design/plugins.md); [内置插件代码实现](/agent/plugins/); [插件示例](/agent/plugins/example_plugin/)
     - 可选外置编译插件为动态库，或是内嵌编译进 libagentxx
-    - 通过 C-Api、COM Api查询、明确字节对齐、明确基本类型大小（int32、int64）、函数调用约定、结构体指针传递代替值传递 提高兼容性，使主程序与插件允许使用不同编译器、不同依赖库版本、不同标准库时仍可以兼容运行; 可通过混用 Debug/Release 编译的`agentxx_cli`和插件动态库测试，实测可兼容正常运行
+    - 通过 C-Api、COM Api查询、明确字节对齐、明确基本类型大小（int32、int64）、函数调用约定、结构体指针传递代替值传递 提高兼容性，使主程序与插件允许使用不同编译器、不同依赖库版本、不同标准库时仍可以兼容运行; 可通过混用 Debug/Release 编译的`agentxx`和插件动态库测试，实测可兼容正常运行
     - 原生异步接口支持，兼容主程序和插件之间异步调用、协程异步互相切换执行互不阻塞、运行在同一线程无锁
 - 其他编程语言插件: 
     - 仿照`agentxx_javascript_engine`实现编程语言的执行引擎, 然后新建插件项目, 指定依赖它, 运行时把代码片段发给执行引擎执行即可; 实际上不一定需要由 执行引擎插件 本身来执行代码, 也可以接收代码片段后调用系统安装的 `nodejs、python3` 等直接执行也是可以的
@@ -335,7 +335,7 @@
     - 编译脚本，存放已经验证支持的系统上的编译脚本，使用前可以先参考 [对应的编译文档](/docs/zh-cn/build/)
 - `agent/lib`: libagentxx
     - 核心库，包含了内置实现的 toolcall、node、middleware 等，分离编译以便嵌入其他 app 开发使用
-- `agent/client`: agentxx_cli
+- `agent/client`: agentxx
     - 命令行可执行程序，计划用于启动服务、实现命令行用户交互、TUI
     - `agent/client/include/agentxx-client/io` 实现了 stdio、TUI 方式的 Agent 调用
     - `agent/client/include/agentxx-client/train` 提示词训练
@@ -386,11 +386,11 @@ npm install --legacy-peer-deps
 - 开发文档: [开发指南](/docs/zh-cn/develop.md) · [整体设计](/docs/zh-cn/design/index.md) · [插件系统](/docs/zh-cn/design/plugins.md) · [资源基准](/docs/zh-cn/design/benchmark.md)
 - 生成库链接方式:
     - 动态链接库`libagentxx`; Debug编译时末尾添加d`libagentxxd`，统一多平台名称，仅后缀区别`.so/.dll/.dylib`.
-    - 静态链接库`libagentxx_static`; Debug编译时末尾添加d`libagentxx_staticd`，统一多平台名称，仅后缀区别`.a/.lib`. 支持静态链接所有依赖库，合并生成独立可运行的 `agentxx_cli`, 已在 linux/win 验证. 同理可静态链接`libagentxx_static`及其静态依赖库，即可得到让自己的程序也摆脱动态库依赖
+    - 静态链接库`libagentxx_static`; Debug编译时末尾添加d`libagentxx_staticd`，统一多平台名称，仅后缀区别`.a/.lib`. 支持静态链接所有依赖库，合并生成独立可运行的 `agentxx`, 已在 linux/win 验证. 同理可静态链接`libagentxx_static`及其静态依赖库，即可得到让自己的程序也摆脱动态库依赖
     - 默认编译提供 动态库`libagentxx`、静态库`libagentxx_static`, 且统一动态链接 libstdc++/libgcc/msvcrt(/MD|/MDd)
 
 ## 配置文件和运行
-- 参考 `{项目根目录}` 下的 `agentxx-config.yaml`，修改它在里面配置你的模型 llm api，然后 cd 到 `agentxx-config.yaml` 所在目录，运行 agentxx_cli 即可
+- 参考 `{项目根目录}` 下的 `agentxx-config.yaml`，修改它在里面配置你的模型 llm api，然后 cd 到 `agentxx-config.yaml` 所在目录，运行 agentxx 即可
 - （可选）`agentxx-config.yaml` 内配置 llm api key 时，建议放到同目录的 `.env` 中，模版参考 `.env.example`, 复制并重命名为 `.env` 然后添加环境变量即可
 - 配置支持**分层加载** (base + overlay)：
     - overlay 层: 工作目录下的 `agentxx-config.yaml` / `.env` (或 `--config` 指定的文件 + 其同目录 `.env`)
@@ -416,16 +416,16 @@ cd {项目根目录}
 
 # client 负责UI渲染和输入输出交互
 # server-io 运行 agent-loop 的 server 端，负责执行会话、调用 llm api 等实际操作
-# agentxx_cli 启动时可以选择 `启动UI+server` 或 `仅启动UI，网络连接server` 或 `仅启动 server`
+# agentxx 启动时可以选择 `启动UI+server` 或 `仅启动UI，网络连接server` 或 `仅启动 server`
 
-# client + server-io 在同一个进程内启动, agentxx_cli 内的 client 包含两种UI:
-agentxx_cli tui # 一个进程启动 TUI 界面 + server-io
-agentxx_cli cli # 一个进程启动 cli + server-io
+# client + server-io 在同一个进程内启动, agentxx 内的 client 包含两种UI:
+agentxx tui # 一个进程启动 TUI 界面 + server-io
+agentxx cli # 一个进程启动 cli + server-io
 
 # - client 和 server-io 分离为两个进程，两者使用 websocket 网络连接
 # - 自己开发 GUI 连接 server 可使用该方式连接
-agentxx_cli server --host 0.0.0.0 --port 7007 --token passwd # 启动 server-io
-agentxx_cli tui --agent ws://127.0.0.1:7007/agent --token passwd # 启动 TUI界面，并连接 server-io
+agentxx server --host 0.0.0.0 --port 7007 --token passwd # 启动 server-io
+agentxx tui --agent ws://127.0.0.1:7007/agent --token passwd # 启动 TUI界面，并连接 server-io
 ```
 
 ## LICENSE & THIRD_PARTY

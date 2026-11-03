@@ -44,7 +44,7 @@ int main(int argn, char** argv) {
 #endif
 
     // 开启性能统计采集 (TUI 帧耗时等): 基准程序全程打开;
-    // 正常使用 (agentxx_cli / agentxx_test) 该标记默认关闭, 统计相关代码不执行,
+    // 正常使用 (agentxx / agentxx_test) 该标记默认关闭, 统计相关代码不执行,
     // 避免统计带来的额外开销 (见 agentxx::agent::AgentConfigStatic::enableBenchmark)
     agentxx::agent::AgentConfigStatic::setEnableBenchmark(true);
 

@@ -64,7 +64,7 @@ You can use proxies like `clash` to manually sever network connections at runtim
 ```sh
 export http_proxy=http://127.0.0.1:7980
 export https_proxy=http://127.0.0.1:7980
-agentxx_cli tui
+agentxx tui
 # Close the agent connection in Clash's "Connections" tab, and observe reconnection, Hello (lastSeq/tailHash), and Delta deduplication.
 ```
 

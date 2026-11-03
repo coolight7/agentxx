@@ -71,12 +71,12 @@ agentxx 有两处持久化配置，职责必须分开，避免同一件事两处
 
 | 运行形态 | 谁在跑 | 读哪些配置 |
 |---|---|---|
-| `agentxx_cli server` | 服务端 | 全部（见 5.1） |
-| `agentxx_cli tui` / `cli`（无 `--agent`） | 同一个进程同时是两端 | 全部；界面偏好另取本机设置库 |
-| `agentxx_cli jsonl` | 服务端 | 全部（模型 + 插件 + 运行时资源） |
-| `agentxx_cli acp` | 服务端 | 全部 |
-| `agentxx_cli train` | 服务端 | 只用模型段（`model.use.train*`） |
-| `agentxx_cli tui` / `cli --agent <url>` | 客户端 | **只有** `data_dir`（本机界面偏好 `{data_dir}/sqlite/global.db`）与 `plugin.list` 中 `sides` 允许 client 的条目（`cli` 不读设置库，`data_dir` 填了也不用） |
+| `agentxx server` | 服务端 | 全部（见 5.1） |
+| `agentxx tui` / `cli`（无 `--agent`） | 同一个进程同时是两端 | 全部；界面偏好另取本机设置库 |
+| `agentxx jsonl` | 服务端 | 全部（模型 + 插件 + 运行时资源） |
+| `agentxx acp` | 服务端 | 全部 |
+| `agentxx train` | 服务端 | 只用模型段（`model.use.train*`） |
+| `agentxx tui` / `cli --agent <url>` | 客户端 | **只有** `data_dir`（本机界面偏好 `{data_dir}/sqlite/global.db`）与 `plugin.list` 中 `sides` 允许 client 的条目（`cli` 不读设置库，`data_dir` 填了也不用） |
 
 ### 5.1 按运行侧划分的键
 

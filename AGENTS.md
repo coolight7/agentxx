@@ -109,11 +109,11 @@ int charToLower(int c) { ... }
     - [util](agent/lib/include/agentxx/util/) 与图引擎/主程序耦合的少量头: [exception.h](agent/lib/include/agentxx/util/exception.h) (异常分类 + 统一捕获, 基于 utilxx_base::catchError*)、neograph_json_bridge.h、cancel_adapter.h; 以及主程序专用的数据库工具 [sqlite.h](agent/lib/include/agentxx/util/sqlite.h) (轻量 RAII sqlite3 封装)、[settings_db.h](agent/lib/include/agentxx/util/settings_db.h) (全局设置 KV 库, 实现于 `agent/lib/src/util/`), 其余通用工具已拆为独立工程 (见 `agent/third_party/cxx_utilxx*`)
     - [BaseAgent](agent/lib/include/agentxx/agent/base_agent.h) agent 运行核心基类 (ReAct 循环 + 会话执行)
     - [CodeAgent](agent/lib/include/agentxx/agent/code_agent.h) 继承 BaseAgent, 添加编程工具/中间件
-- `agent/client`: 编译结果 {build}/exec/agentxx_cli
+- `agent/client`: 编译结果 {build}/exec/agentxx
     - 命令行可执行程序，用于启动 agent 服务、实现命令行 cli/TUI 交互
     - `agent/client/main.cpp` 通过 --agent 启动时
     - IO交互继承于 [AgentIOBase](agent/lib/include/agentxx/agent/io/agent_io.h) (端点基类)
-        - `agent/client/include/agentxx-client/io/stdio` 采用 stdin、stdout、stderr 作为输入输出 `agentxx_cli cli`
+        - `agent/client/include/agentxx-client/io/stdio` 采用 stdin、stdout、stderr 作为输入输出 `agentxx cli`
         - `agent/client/include/agentxx-client/io/tui` 采用 TUI 作为终端渲染界面交互
         - client/server 为两个 AgentIOBase 端点, 经 transport 双向通信 (进程内 Channel / 远程 WS);
           发送经 `sendToPeer()`, 接收经 `onPeerMessage()` 分发到 protected 被动回调 (onDelta 等)
@@ -747,7 +747,7 @@ agent/script/build_plugins.sh --config Release --jobs 8 --list
 - 链接期体积优化 (Release, GCC/Clang, 非交叉, 仅 Linux/Android):
   - ICF 相同代码合并 `-Wl,--icf=all` (开关 `AGENTXX_ENABLE_ICF`, 默认 ON):
     仅 mold/gold/lld 支持, 用默认 bfd 时自动跳过。实测体积收益 (已 strip 产物):
-    `agentxx_cli` -3.2%, `libagentxx.so` -2.7% (未 strip 产物因符号表合并看起来更多)
+    `agentxx` -3.2%, `libagentxx.so` -2.7% (未 strip 产物因符号表合并看起来更多)
   - 符号表裁剪仍由发布脚本完成 (`script/*_build.sh` 的 `strip`), 不在链接期做
     (直接 `cmake --build` 的产物会保留符号表, 属预期)
 - 内存分配器 (mimalloc, **默认关闭**, 见 docs/zh-cn/design/index.md "内存占用与分配器调整"):
@@ -760,7 +760,7 @@ agent/script/build_plugins.sh --config Release --jobs 8 --list
     Windows release 实测见 docs/zh-cn/design/benchmark.md 第 10、12 节)
     源码是 `agent/third_party/mimalloc` 子模块, 经 ExternalProject 构建安装
     (`MI_INSTALL_TOPLEVEL` / `MI_OPT_ARCH=OFF` 通用 CPU 基线 / `MI_ALLOW_THP=OFF`)
-  - 只作用于**最终程序** (`agentxx_cli`/`agentxx_test`/`agentxx_benchmark`), 接入逻辑
+  - 只作用于**最终程序** (`agentxx`/`agentxx_test`/`agentxx_benchmark`), 接入逻辑
     在 `agent/cmake/agentxx_mimalloc.cmake`: STATIC 用 `-Wl,-u,malloc` 保证从静态库
     取出定义 malloc/free 的目标文件 (程序自身定义进入动态符号表 → 同进程的
     libstdc++/dlopen 插件也走 mimalloc, 不会跨模块 free 不匹配); SHARED 用
@@ -777,7 +777,7 @@ agent/script/build_plugins.sh --config Release --jobs 8 --list
     时强制 `AGENTXX_ENABLE_MIMALLOC=OFF`): Mach-O 采用两层次命名空间, libc++/
     系统框架对 `malloc/free` 的引用在链接期已绑定 libSystem, 主可执行文件的静态
     覆盖只作用于自身 (且 `_malloc` 不在导出符号表中), 跨模块释放会在 `mi_free`
-    崩溃 (实测 Release `agentxx_cli` 启动即崩); 这与 ELF 不同 (GNU ld 把被共享库
+    崩溃 (实测 Release `agentxx` 启动即崩); 这与 ELF 不同 (GNU ld 把被共享库
     引用的 `malloc` 放入 `.dynsym` 从而全进程插入)。强制接管只能用
     `DYLD_INSERT_LIBRARIES` 预加载 mimalloc 动态库 (非自包含分发)
   - 实测 (Release, 对比调优后的 glibc): 200K 上下文服务端 RSS +5.5~6.6 MB, 但 user

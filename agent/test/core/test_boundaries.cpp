@@ -1203,7 +1203,7 @@ void checkModelLayerIncludes(const fs::path& root, Violations& v) {
 
 /// 规则 14: JSONL 模式的 stdout 纪律
 ///
-/// 背景: `agentxx_cli jsonl` 的 stdout 就是对外协议 (每行一条 Wire 消息), 外部脚本按行
+/// 背景: `agentxx jsonl` 的 stdout 就是对外协议 (每行一条 Wire 消息), 外部脚本按行
 /// 解析。运行器里若混进直接打印 (调试输出/进度提示), stdout 会被污染, 脚本解析随之失败。
 /// 因此本规则要求:
 ///   - `client/src/io/jsonl/jsonl_mode.cpp` 存在 (搬移/改名后必须同步本规则);

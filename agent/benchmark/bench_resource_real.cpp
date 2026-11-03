@@ -912,9 +912,9 @@ void benchResourceRealTui() {
 void benchResourceServerOnly() {
     std::cout << "\n=== Resource Benchmark: 真实 server 子进程单独运行 ===" << std::endl;
 
-    std::string cliBin = findAgentxxCliPath();
+    std::string cliBin = findAgentxxExePath();
     if (cliBin.empty()) {
-        std::cout << "  [resource][server_only] skipped: agentxx_cli binary not found" << std::endl;
+        std::cout << "  [resource][server_only] skipped: agentxx binary not found" << std::endl;
         return;
     }
 
@@ -1159,9 +1159,9 @@ void benchResourceRealTuiChild() {
     std::cout << "\n=== Resource Benchmark: 真实 TUI 子进程 (伪终端) + 真实 server 子进程 ==="
               << std::endl;
 
-    std::string cliBin = findAgentxxCliPath();
+    std::string cliBin = findAgentxxExePath();
     if (cliBin.empty()) {
-        std::cout << "  [resource][real_tui_child] skipped: agentxx_cli binary not found"
+        std::cout << "  [resource][real_tui_child] skipped: agentxx binary not found"
                   << std::endl;
         return;
     }
