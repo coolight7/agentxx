@@ -11,7 +11,7 @@ path/to/agentxx_test --fail-fast        # 遇到失败立即终止
 path/to/agentxx_test string_util regex  # 只跑指定模块
 ```
 
-模块总数: 136 (同步 70 / 异步 66)
+模块总数: 137 (同步 70 / 异步 67)
 
 | 模块 | 调度 | 构建 |
 |---|---|---|

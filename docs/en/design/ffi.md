@@ -165,7 +165,7 @@ Version Policy: `AGENTXX_FFI_API_VERSION` is currently **2** (the single change 
 | `EVT_COMPONENTS` | wire append_component_info JSON | Startup components (MCP, Skills, Memory, Plugins) loading status |
 | `EVT_INTERRUPT_REQ` | `{"interruptId","sessionId","node","value","argJson"}` | HITL interrupt prompt (permission confirmation / input collection); `argJson` is the serialized `InterruptHandleArg` (`{name,arg,resultId,ui}`): **`ui` is the required declarative form descriptor** (header segments + ordered blocks text/markdown/diff/image/progress/separator/gap/control/submit + reserved custom). See 4.6 for the rendering guide |
 | `EVT_INTERRUPT_EXPIRED` | `{"interruptId"}` | Interrupt expired or cancelled; can no longer be answered |
-| `EVT_PLUGIN_DATA` | wire plugin_data JSON | Agent-side plugin event forwarding (`{plugin,event,data}`) |
+| `EVT_PLUGIN_DATA` | wire plugin_data JSON | Agent-side plugin event forwarding (`{topic,data}`) |
 | `EVT_WIRE` | raw outbound wire JSON | Passthrough for low-frequency outbound messages (structural messages outside the dedicated set): `input_ack` (input acceptance receipt, see Section 4.11) / `list_dir_result` / `view_messages_page` / `message_queue_update` / `permission_state` / `rename_session_result` / `add_model_result` / `remove_model_result`; the host dispatches on `type` |
 | `EVT_HOST_TOOL_CALL` | `{"callId","name","argsJson","sessionId","timeoutSec"}` | Server asks the host to run a registered host tool (see 4.9); `argsJson` is JSON text |
 | `EVT_HOST_TOOL_CANCELLED` | `{"callId","reason"}` | A host tool call was cancelled (calls still unanswered at stop/destroy are all reported), so the host can release local resources |

@@ -8,7 +8,7 @@
 >
 > 相关文档: [index.md](index.md) · [配置与设置边界](configuration.md)
 
-协议版本: `2` · 消息类型数: 48
+协议版本: `3` · 消息类型数: 48
 
 字段类型按序列化后的 JSON 取值推导 (`array<T>` 表示数组, `object{...}` 展开一层
 字段); 省略的字段表示该字段可缺省 (取零值/默认值), 老对端不认识的新字段会被忽略。
@@ -40,8 +40,8 @@
 | 22 | list_sessions | `list_sessions` | `type` string, `beforeMs` integer, `beforeId` string, `limit` integer |
 | 23 | session_list | `session_list` | `type` string, `sessions` array<object{sessionId:string, lastActiveMs:integer, title:string}>, `totalCount` integer, `hasMore` boolean |
 | 24 | switch_session | `switch_session` | `type` string, `sessionId` string |
-| 25 | plugin_data | `plugin_data` | `type` string, `plugin` string, `event` string, `data` string |
-| 26 | plugin_data_up | `plugin_data_up` | `type` string, `plugin` string, `event` string, `data` string |
+| 25 | plugin_data | `plugin_data` | `type` string, `topic` string, `data` string |
+| 26 | plugin_data_up | `plugin_data_up` | `type` string, `topic` string, `data` string |
 | 27 | message_queue_update | `message_queue_update` | `type` string, `sessionId` string, `state` string, `items` array<object{id:string, text:string, createdAtMs:integer}> |
 | 28 | clear_message_queue | `clear_message_queue` | `type` string, `sessionId` string |
 | 29 | remove_queue_item | `remove_queue_item` | `type` string, `sessionId` string, `itemId` string |

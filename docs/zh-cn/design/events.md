@@ -22,18 +22,31 @@
 | | `EventBus` | `EventHub`（本文） |
 |---|---|---|
 | 语义 | 通知（发了就完） | **有状态**：每个名字有一份记录（历史值、是否已结束、等待数） |
-| 名字 | 主题字符串，多方约定 | 事件名（`域.用途`），有字符集与保留前缀校验 |
+| 名字 | 主题字符串，多方约定 | 事件名（与总线主题**同一个字符串**），有三族前缀与保留子段校验 |
 | 订阅 | 类型化模板订阅 / 前缀订阅 | 等待句柄（`w-3`），可查询、可取消、可回放 |
 | 结果去处 | 订阅者自己处理 | 统一翻译成**会话输入**（`[Event] ...`） |
 | 生命周期 | 无 | 记录可结束、可过期、可移除；等待可超时 |
 
-hub 通过组合使用总线：它订阅 `evt.` 与 `plugin.evt.` 两个前缀，因此**插件往总线发一个
-`evt.<名字>` 就等于往中枢发值**，不需要新接口表也能用（见第 12 节）。
+hub 通过组合使用总线：它**只订阅 `plugin.` 前缀**，因此**插件往总线发一个
+`plugin.<插件名>.<名字>` 就等于往中枢发值**，不需要新接口表也能用（见第 12 节）；
+内置源不走总线，直接调 `publishValue`（避免被强类型主题的高频发布拖慢）。
+
+命名规则只有一份实现（`agentxx/event/naming.h`），事件名与总线主题、功能点 id 共用：
+
+| 族 | 形式 | 谁能写 |
+|---|---|---|
+| 内置 agent 端 | `agentxx.agent.<域>...` | 主程序 |
+| 内置 client 端 | `agentxx.client.<域>...` | 客户端主程序 |
+| 插件 | `plugin.<插件名>.<自由部分>` | 该插件自己 |
+
+值事件（带值、可等待、可回放的那些）用两段：内置在 `agentxx.agent.event.` 段
+（与 `agentxx.agent.turn.start` 这类强类型主题分开，避免同一主题两种载荷），
+插件直接用自己那一族。**框架只校验不补前缀**：名字不在自己那一族里就报错。
 
 ## 2. 三个对象
 
 ```text
-生产者：模型 agentxx_event emit/end │ 插件（总线 evt.*）│ 轮次/工具生命周期
+生产者：模型 agentxx_event emit/end │ 插件（总线 plugin.<插件名>.*）│ 轮次/工具生命周期
         │ 子代理完成 │ 定时器
         ▼
 EventHub（每个根一份，跑在该 agent 的 io 线程）
@@ -201,11 +214,14 @@ Keep working, or end the turn — you do not need to poll. Use opt=status wait=w
 
 | 事件名 | 何时有值 | 值 |
 |---|---|---|
-| `turn.start` | 轮次开始 | `sessionId` |
-| `turn.end` | 轮次结束 | `sessionId`, `hasError`, `interrupted`, `durationMs`, `reason` |
-| `tool.end.<工具名>` | 一次工具调用结束 | 工具名、是否有错、结果字节数 |
-| `subagent.done.<result_id>` | 异步子代理结束 | `resultId`, `subagent`, `agentId`, `content`, `hasError`, `Canceled`, `errorMessage` |
-| `timer.<名字>` | `agentxx_event` 的 `after_ms` / `every_ms` | `timer` 与触发时间 |
+| `agentxx.agent.event.turn.start` | 轮次开始 | `sessionId` |
+| `agentxx.agent.event.turn.end` | 轮次结束 | `sessionId`, `hasError`, `interrupted`, `durationMs`, `reason` |
+| `agentxx.agent.event.tool.end.<工具名>` | 一次工具调用结束 | 工具名、是否有错、结果字节数 |
+| `agentxx.agent.event.subagent.done.<result_id>` | 异步子代理结束 | `resultId`, `subagent`, `agentId`, `content`, `hasError`, `Canceled`, `errorMessage` |
+| `agentxx.agent.event.timer.<名字>` | `agentxx_event` 的 `after_ms` / `every_ms` | `timer` 与触发时间 |
+
+这些子段（`turn.` / `tool.` / `subagent.` / `timer.` / `host.`）归框架占用：
+模型与插件建自己的事件时不能占（读侧照样可以等它们，见第 12.3 节）。
 
 内置源**只在有人等时**才发布（先问 `hub->wants(名字)`），因此没人用时不产生记录与开销。
 生命周期事件同时仍按原样发布到类型化总线（`Topic::AgentTurnStart/End`、`ToolCallStart/End`），
@@ -217,17 +233,18 @@ Keep working, or end the turn — you do not need to poll. Use opt=status wait=w
 
 ```text
 父会话 toolcall: agentxx_subagent {tasks:[{subagent:"task", message:"...", async:true, result_id:"job1"}]}
-  -> AgentHost 立即受理: 返回 {started:true, event:"subagent.done.job1"}
-  -> 工具结果文本: [Subagent started] ... 结果将以 [Event] subagent.done.job1 到达
+  -> AgentHost 立即受理: 返回 {started:true, event:"agentxx.agent.event.subagent.done.job1"}
+  -> 工具结果文本: [Subagent started] ... 结果将以 [Event] agentxx.agent.event.subagent.done.job1 到达
   -> 子代理在后台跑完（失败/取消同样发布）
-  -> 父会话收到 [Event] subagent.done.job1 {content, hasError, Canceled, ...}
+  -> 父会话收到 [Event] agentxx.agent.event.subagent.done.job1 {content, hasError, Canceled, ...}
 ```
 
 要点：
 
 - **同一批里同步任务照旧等结果**，纯异步的一批立即返回（`service.subagent` 只有一条路径）；
-- 事件名：`event_name` 优先，其次 `subagent.done.<result_id>`（非法字符换成 `_`），
-  都没有时用任务序号；同一批里重名直接报错（否则后到的值会把前一个等待提前满足）；
+- 事件名：`event_name` 优先，其次 `agentxx.agent.event.subagent.done.<result_id>`
+  （非法字符换成 `_`），都没有时用任务序号；同一批里重名直接报错（否则后到的值会把前一个
+  等待提前满足）；
 - 取消令牌独立于轮次：轮次结束/取消不带走后台任务，由
   `AgentHost::cancelAsyncJobs(父上下文)`（agent 关停）与 `cancelAsyncJobsOfSession` 驱动；
   被取消也发布 `{Canceled:true}`，父会话的等待不会挂到超时；
@@ -290,14 +307,18 @@ Keep working, or end the turn — you do not need to poll. Use opt=status wait=w
 
 ### 12.1 经总线发值（不改接口表）
 
-插件把值发到总线即可，中枢订阅了 `evt.` 与 `plugin.evt.` 两个前缀：
+插件把值发到总线即可；中枢只订阅 `plugin.` 前缀，所以插件写自己那一族就等于发值：
 
 ```text
-插件 emitEvent("evt.chat.group42", payload)        // agentxx.agent.runtime 表 / SDK kit
-  -> 插件管理器把主题原样发到该 agent 的总线 (`evt.chat.group42`)
-  -> 中枢前缀订阅收到, 记为事件 chat.group42
-模型  agentxx_event {opt:"watch", event:"chat.group42"}
+插件 emitEvent("plugin.chat.group42.progress", payload)  // agentxx.agent.runtime 表 / SDK kit
+  -> 插件管理器校验名字在本实例的 `plugin.<实例插件名>.*` 里, 原样发到该 agent 的总线
+  -> 中枢前缀订阅收到, 记为同一个名字的事件
+模型  agentxx_event {opt:"watch", event:"plugin.chat.group42.progress"}
 ```
+
+插件名 = 插件实例名（`plugin.agentxx_chatbot.panel` 的插件名是 `agentxx_chatbot`）：
+写侧只能落在自己的段里，框架**不补前缀**；读侧（订阅/等待/触发器）可以跨族，
+但必须是全名（裸名直接拒绝）。
 
 ### 12.2 事件中枢表 `agentxx.agent.event`
 
@@ -315,6 +336,14 @@ Keep working, or end the turn — you do not need to poll. Use opt=status wait=w
   当前生效条数；
 - 关闭 `event.enable` 时中枢不存在：写入口返回 `AGENTXX_PLUGIN_EVENT_ERR_UNSUPPORTED`，
   插件应按"功能不可用"降级（示例插件 `example_event` 就是这么写的）。
+
+### 12.3 模型侧 `agentxx_event` 的名字规则
+
+- 读（`watch` / `await` / `status` / `list`）：三族任意全名，包括内置源那些事件
+  （`agentxx.agent.event.turn.start` 也能等）；
+- 写（`emit` / `end`）：只能落在 `agentxx.agent.event.*` 且不能占框架保留子段
+  （`turn.` / `tool.` / `subagent.` / `timer.` / `host.`）；插件族 `plugin.<名>.*` 只读；
+- 定时源：`after_ms` / `every_ms` 要求事件名在 `agentxx.agent.event.timer.` 段里。
 
 尚未做的部分见第 13 节。
 

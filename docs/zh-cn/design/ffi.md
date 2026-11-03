@@ -183,7 +183,7 @@ agentxx_ffi_event_queue_free(q);
 | `EVT_COMPONENTS` | wire append_component_info JSON | 启动组件 (MCP/Skill/Memory/插件) 加载信息 |
 | `EVT_INTERRUPT_REQ` | `{"interruptId","sessionId","node","value","argJson"}` | HIL 中断询问 (权限确认/输入收集); argJson 为 InterruptHandleArg 序列化 (`{name,arg,resultId,ui}`): **`ui` 为必填的中断 UI 描述** (声明式表单: 头行分段 + 有序块列表 text/markdown/diff/image/progress/separator/gap/control/submit + 预留 custom); 渲染指引见 4.6 |
 | `EVT_INTERRUPT_EXPIRED` | `{"interruptId"}` | 中断已过期/取消, 不再可应答 |
-| `EVT_PLUGIN_DATA` | wire plugin_data JSON | agent 侧插件事件转发 (`{plugin,event,data}`) |
+| `EVT_PLUGIN_DATA` | wire plugin_data JSON | agent 侧插件事件转发 (`{topic,data}`) |
 | `EVT_WIRE` | 原始下行 wire JSON | 低频下行消息原样转发 (白名单外的结构性消息): `input_ack` (输入受理回执, 见 4.11) / `list_dir_result` / `view_messages_page` / `message_queue_update` / `permission_state` / `rename_session_result` / `add_model_result` / `remove_model_result`; 嵌入方程序按 `type` 自行分派 |
 | `EVT_HOST_TOOL_CALL` | `{"callId","name","argsJson","sessionId","timeoutSec"}` | 服务端请求嵌入方程序执行已注册的嵌入方程序工具 (见 4.9); `argsJson` 为 JSON 文本 |
 | `EVT_HOST_TOOL_CANCELLED` | `{"callId","reason"}` | 嵌入方程序工具调用被取消 (停止/销毁时未应答的调用统一上报), 嵌入方程序可据此释放本地资源 |

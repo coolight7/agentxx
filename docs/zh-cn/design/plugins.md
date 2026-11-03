@@ -142,7 +142,8 @@ auto b64 = utilxx_base::base64Encode(data);
   实现 `pluginxx::DomainHooks` (事件后端、工作线程池、配置/语言/会话工作目录/取消状态/
   插件清单) + 在 `query_interface` 里先调 `queryGenericPluginIface` 再分发自己的业务表。
   agentxx 侧对应实现见 `agent/plugin/plugin_manager_domain_hooks.cpp` (事件后端
-  `AgentEventBusSource` 包装 `agentxx::events::EventBus`, 主题命名空间补齐等)
+  `AgentEventBusSource` 包装 `agentxx::events::EventBus`; 主题**不做任何补齐**,
+  命名规则统一为全名, 见 `agentxx/event/naming.h`)
 
 - **生命周期骨架整体在 `cxx_pluginxx`** (`pluginxx/host/lifecycle.h` 的
   `PluginHostLifecycle<InstanceT>`, 继承 `PluginHostCore`): 动态库加载与入口符号校验、
@@ -420,7 +421,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 | `agentxx.agent.tools` | 3 | `register_tool/unregister_tool`, `call_tool_async` (插件互调, cb 保证 IO 线程 post; 取消统一用 `pluginxx.cancel.op_cancel`); v3 = 工具成败只由最终通知的状态位表达，结果文本不带 `[Error]` 前缀 |
 | `agentxx.agent.permission` | 2 | `register_tool_permission/unregister_tool_permission` (工具权限限制由工具来源方声明) + `check_paths` (批量路径权限三态查询, 不发起询问/中断; 见下方说明) |
 | `agentxx.agent.hooks` | 2 | 句柄式三成员: `register_hook(agent, spec_ex, out_handle)` (同一实例同一个点可登记**任意多个**处理器, 每个一根句柄; `priority` 小的先跑, 相同按登记顺序) + `unregister_hook(handle)` (按句柄精确撤销) + `list_hooks(agent, out)` (处理器清单 JSON) |
-| `agentxx.agent.events` | 2 | `subscribe(agent 可空, topic, handler)` / `unsubscribe` / `publish` (topic 自动加 `plugin.` 前缀, 载荷 JSON)。带引用 = 订阅该 agent 的总线 (会话/轮次事件, 引用只能用 `mount` 回调里下发的那份); 空引用 = 主程序总线 (主 agent 的总线在 `BaseAgent` 构造时就建好, 因此 `start` 里可直接订阅进程级事件, 如 `plugin.agentxx.round_start`) |
+| `agentxx.agent.events` | 3 | `subscribe(agent 可空, topic, handler)` / `unsubscribe` / `publish` (topic 必须是全名, 写侧只能落在 `plugin.<本实例插件名>.*`; 框架不补前缀, 见 §21)。带引用 = 订阅该 agent 的总线 (会话/轮次事件, 引用只能用 `mount` 回调里下发的那份); 空引用 = 主程序总线 (主 agent 的总线在 `BaseAgent` 构造时就建好, 因此 `start` 里可直接订阅进程级事件, 如 `agentxx.agent.round.start`) |
 | `agentxx.agent.capabilities` | 2 | `register_capability(_ex)/unregister/has_capability` (进程级, 同一实例重复声明按幂等成功), `invoke_capability_async(agent 可空)/op_cancel` (引用仅用于标明是哪个 agent 发起的) |
 | `agentxx.agent.scheduler` | 1 | `is_io_thread/post_to_io/sleep/op_cancel/offload` (sleep=主程序计时器; offload=阻塞池委托, 需 cancel_token) |
 | `agentxx.agent.coroutine_runtime` | 1 | 通用协程驱动: `request_driver/cancel_driver/is_io_thread` (driver ticket/wake 协议, 见 §16) |
@@ -601,7 +602,7 @@ tool_call 中的前后调用形成顺序屏障。并发只发生在同一条 ass
 | `agentxx.client.ui` | 1 | `register_status_item/update/unregister`, `register_panel/update/unregister`, `register_info_section/update/unregister`, `register_command/unregister`, `show_toast`, `update_tool_decor(tool_call_id, decor_json)`, `register_tool_renderer(spec)/unregister_tool_renderer(tool_name)`, `bind_action_handler/unbind_action_handler`, `open_overlay/close_overlay` |
 | `agentxx.client.events` | 1 | `subscribe/unsubscribe` (事件见 `AgentxxClientEvent`: READY/CONN_STATE/USER_INPUT/DELTA/TURN_END/SESSION_SWITCH/PLUGIN_DATA) |
 | `agentxx.client.session` | 1 | `get_client_state` (快照 JSON), `send_user_input`, `request_cancel` |
-| `agentxx.client.wire` | 1 | `send_plugin_data(event, json)` → 服务端 `client.{插件}.{event}` |
+| `agentxx.client.wire` | 1 | `send_plugin_data(topic, json)` → 服务端原样发到 agent 总线的同一个主题 (topic 必须是全名 `agentxx.client.plugin.<本实例插件名>.<事件>`) |
 | `agentxx.client.self` | 1 | `get_own_info/get_plugin_args/get_plugin_config_path` (后者返回 yaml `config` 归一化绝对路径) |
 | `agentxx.client.json` | 1 | `json_get_string/json_escape` |
 | `agentxx.client.log` | 1 | `log(level, msg)` |
@@ -1165,18 +1166,19 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 插件经内置 `agentxx_jav
 ```
 
 数据只有一条来源：agent 侧把运行态整理成 `PanelSnapshot`（`chatbot_panel.h`，结构版本
-`kPanelSnapshotVersion = 1`），按主题 `agentxx_chatbot.panel` 发布；主程序把它转成
-`WirePluginData{plugin,event,data}` 下发（`data` 是快照 JSON 文本），client 侧在
-`AGENTXX_CLIENT_EVT_PLUGIN_DATA` 里认领 `plugin=agentxx_chatbot` / `event=panel` 的那条。
+`kPanelSnapshotVersion = 1`），按主题 `plugin.agentxx_chatbot.panel` 发布；主程序把它转成
+`WirePluginData{topic,data}` 下发（`data` 是快照 JSON 文本），client 侧在
+`AGENTXX_CLIENT_EVT_PLUGIN_DATA` 里认领 `topic == "plugin.agentxx_chatbot.panel"` 的那条。
 解析失败或结构版本更高时只记一条警告（含字节数与前 120 字），面板保留上一次的内容。
 
 - **推送节拍**：agent 侧 `kPanelTickMs = 120` 的定时器。只有存在正在跑一轮的会话时才持续推
   （加载帧要逐帧走），否则由 `engine.setChangeHook` 的变更钩子（收消息 / 平台状态 / 通道就绪 /
   轮起止 / 模式切换 / 发消息都会触发）推一份就停；
 - **晚接入兜底**：client 侧在 `EVT_READY` 与 `EVT_CONN_STATE`（`connState == "connected"`）时
-  各发一次 `send_plugin_data("refresh")`。agent 侧订阅的主题要写全
-  `plugin.client.agentxx_chatbot.refresh`（总线会给 `client.*` 补 `plugin.` 前缀，写 `client.xxx`
-  收不到），另订阅 `plugin.agentxx_host.client_attached`，有客户端接上就补一份；
+  各发一次 `send_plugin_data("agentxx.client.plugin.agentxx_chatbot.refresh")`。上行主题
+  由 client 侧写全（client 插件自己那一族），服务端原样发布到 agent 总线，所以 agent 侧订阅的
+  就是同一个全名；另订阅主程序约定主题 `agentxx.agent.host.client_attached`，有客户端接上
+  就补一份；
 - **必须在主程序 IO 线程上发布**（实现时踩过的坑）：插件接口表的 `publish` / `subscribe` /
   `post_to_io` 都是"投到主程序 IO 线程并等它执行完"的同步调用，而工具执行期间主程序 IO 线程
   正在等插件 io 线程的 `runOnIoBlocking` 结果 —— 在插件 io 线程里直接 `publish` 就会互等
@@ -1943,13 +1945,13 @@ plugin:
 (这张表的入口没有 `error_out` 参数)。
 
 **与事件中枢的关系**: 事件中枢 (`agentxx::events::EventHub`, 见 [events.md](events.md))
-订阅总线的 `evt.` 与 `plugin.evt.` 两个前缀，所以插件用
-`emit_event("evt.chat.group42", payload)` 发一条主题带 `evt.` 前缀的事件，就等于
-往中枢发了一个名为 `chat.group42` 的值：模型只要先
-`agentxx_event {opt:"watch", event:"chat.group42"}`，值到达时就会被唤醒。
-主题名与事件名的字符集/保留前缀规则见 `agentxx/event/naming.h`。
-目前**没有**插件专用的“定义事件/登记等待”接口表（计划中的 `agentxx.agent.event`），
-需要时应按追加式新增一张业务表并在 `boundaries` 的成员台账里登记。
+**只订阅 `plugin.` 前缀**，所以插件用
+`emit_event("plugin.chat.group42.progress", payload)` 发一条自己那一族的事件，就等于
+往中枢发了一个同名的值：模型只要先
+`agentxx_event {opt:"watch", event:"plugin.chat.group42.progress"}`，值到达时就会被唤醒。
+名字规则（三族命名空间 / 写侧只能写自己那一族 / 读侧必须全名）见
+`agentxx/event/naming.h`，插件面“定义事件/登记等待”的正规入口是 `agentxx.agent.event` 表
+（见 §20）。
 
 ### 19.3 根配置 (`config_json`)
 
@@ -2090,7 +2092,7 @@ plugin:
 
 | 成员 | 语义 |
 |---|---|
-| `define_event(agent, spec)` | 声明事件源: 名字 (hub 内唯一, 建议 `域.用途`)、种类 (`stream` 流式 / `single` 单值, 后者首个值到达即结束)、说明文字 (模型 `agentxx_event opt=list` 看到的就是它)、历史条数 (回放用)、`ttl_ms` (到期未结束按过期回收)、`linger_ms` (结束后保留多久, `< 0` = 主程序默认, `0` = 立刻回收) |
+| `define_event(agent, spec)` | 声明事件源: 名字 (**必须是全名** `plugin.<本实例插件名>.<自由部分>`, hub 内唯一)、种类 (`stream` 流式 / `single` 单值, 后者首个值到达即结束)、说明文字 (模型 `agentxx_event opt=list` 看到的就是它)、历史条数 (回放用)、`ttl_ms` (到期未结束按过期回收)、`linger_ms` (结束后保留多久, `< 0` = 主程序默认, `0` = 立刻回收) |
 | `emit_value(agent, name, value_json)` | 发布一个 JSON 值 (**任意线程**; 值经主程序排队写入中枢, 调用方不等投递结果)。事件没声明过时按流式事件自动建立, 归属本实例 |
 | `end_event(agent, name, summary_json)` | 结束一条流 (幂等)。`summary_json` 是查询时一并返回的收尾信息; 结束后再发值会重新打开这条流 |
 | `remove_event(agent, name)` | 立刻移除记录 (不等保留期)。还挂在它上面的等待按"已结束且没有值"收尾, 不会永远等下去 |
@@ -2106,8 +2108,10 @@ plugin:
 引用无效时注册类返回 `AGENTXX_PLUGIN_ERR_NO_AGENT` 且无副作用。
 
 事件名与模型侧的规则是同一份 (`agentxx/event/naming.h`): 字母/数字/`.`/`_`/`-`,
-最长 96, 保留前缀 `agent.` / `io.` / `service.` / `hub.` / `plugin.` / `evt.` / `client.` 不可用。
-多个插件可能撞名, 约定用自己的插件名或业务域作前缀 (如 `chatbot.notify`)。
+最长 128, 名字必须写全三族之一: 内置 agent 端 `agentxx.agent.*`、内置 client 端
+`agentxx.client.*`、插件族 `plugin.<插件名>.*`。本表写侧（`define_event` / `emit_value` /
+`end_event` / `remove_event`）只接受 `plugin.<本实例插件名>.*`，**框架不补前缀**；
+`query_event` / `list_events` / `register_wait` 是读侧，可跨族但必须全名。
 
 ### 20.3 归属与回收
 
@@ -2129,11 +2133,63 @@ plugin:
 | 查询 | `queryEvent(ctx, ref, name)` → JSON 文本; `listEvents(ctx, ref, prefix)` → JSON 文本 |
 | 等待 | `registerEventWait(ctx, ref, EventWaitOptions, outState, outCode)` → 等待 id; `cancelWait(ctx, ref, waitId)`; `listEventWaits(ctx, ref, sessionId)` |
 
-注意 `emitEvent` 是**运行时表**的"发一条总线事件"(`evt.<名字>` 主题, 靠触发器投递),
-本表的 `emitEventValue` 是"给事件中枢放一个结构化值" —— 两者不要混用。
+注意 `emitEvent` 是**运行时表**的"发一条总线事件"(主题必须是全名, 写侧只能落在自己那一族
+`plugin.<本实例插件名>.*`, 靠触发器投递), 本表的 `emitEventValue` 是"给事件中枢放一个
+结构化值" —— 两者不要混用。
 
 ### 20.5 示例与用例
 
 - 示例插件 `agent/plugins/example_event`: `mount` 里声明一条流式事件与一条单值事件、
   发布初始值、替挂载配置里给的 `sessionId` 登记一个 `each` 等待;
 - 用例 `plugin_event`: 声明与自查 / 发布结束移除 / 等待与投递 / 失败路径 / 生命周期可逆。
+
+## 21. 名字契约 (总线主题 / 事件名 / 功能点 id)
+
+三者共用一套前缀规则, 唯一实现在 `agentxx/event/naming.h`。
+
+### 21.1 三族命名空间
+
+| 族 | 形式 | 例 |
+|---|---|---|
+| 内置 agent 端 | `agentxx.agent.<域>...` | `agentxx.agent.turn.start`、`agentxx.agent.tool.end` |
+| 内置 client 端 | `agentxx.client.<域>...` | `agentxx.client.host.client_interfaces` |
+| 插件 | `plugin.<插件名>.<自由部分>` | `plugin.agentxx_chatbot.panel` |
+
+- 插件名 = 插件**实例名** (`plugin.agentxx_chatbot.panel` 的插件名是 `agentxx_chatbot`);
+- **写侧只能写自己那一族**: 插件只能写 `plugin.<本实例插件名>.*`, 客户端插件只能写
+  `agentxx.client.plugin.<本实例插件名>.*`;
+- **读侧可以跨族** (订阅 / 登记等待 / 触发器), 但必须是全名;
+- **框架只校验不补前缀**: 名字不在自己的段里就报错（错误文本会给出应有的前缀）。
+- 通用 events 表 (`pluginxx.events`) 的 `publish` 只校验“主题落在某个已加载插件的族里”
+  （该入口签名不带实例信息, 拿不到调用方是谁）；需要按本实例名强校验的写入口用
+  `agentxx.agent.event` 表（`define_event` / `emit_value` / `end_event` / `remove_event`）。
+
+### 21.2 值事件段
+
+事件中枢的事件名**就是**总线主题: 内置值事件统一在 `agentxx.agent.event.` 段
+(`agentxx.agent.event.turn.start` / `.tool.end.<工具名>` / `.subagent.done.<id>` /
+`.timer.<名字>`), 与 `agentxx.agent.turn.start` 这类强类型主题分开, 避免同一主题两种载荷;
+插件值事件直接用自己的族。`turn.` / `tool.` / `subagent.` / `timer.` / `host.` 五个子段归
+框架, 模型与插件建事件时不能占。
+
+### 21.3 跨端主题 (agent ↔ client)
+
+| 方向 | 主题 |
+|---|---|
+| agent 端插件 → client | `plugin.<插件名>.<事件>` (与本地插件主题同一个名字) |
+| agent 端主程序 → client | `agentxx.agent.host.*` (如 `agentxx.agent.host.server_plugins`) |
+| client 主程序 → agent | `agentxx.client.host.*` (如 `agentxx.client.host.client_interfaces`) |
+| client 端插件 → agent | `agentxx.client.plugin.<插件名>.<事件>` |
+
+线上结构 `WirePluginData{topic,data}` / `WirePluginDataUp{topic,data}` (线协议 v3),
+客户端插件事件回调载荷也是 `{topic,data}`; 订阅方按主题全名认领自己关心的那几条。
+
+注意 `agentxx.client.*` 只在**总线**上用, 不是中枢值事件: 中构只收内置
+`agentxx.agent.event.*` 与 `plugin.<名>.*`, 所以“让模型能等的值”要么是内置源、
+要么由插件用自己的族发布。
+
+### 21.4 功能点 id
+
+同一套规则: 核心点 `agentxx.agent.*` (`agentxx.agent.context.countTokens` /
+`agentxx.agent.context.summarize` / `agentxx.agent.tool.summarizeOutput`), 插件点
+`plugin.<插件名>.*` (强制, `definePluginPoint` 会拒掉不在自己段里的名字)。

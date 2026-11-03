@@ -100,7 +100,7 @@ git_worktree 及延迟加载加载 (`ToolSkillSearchSubAgentTask` 模板类, 当
 | | `agentxx_codegraph_callers` / `agentxx_codegraph_callees` | 调用图正向/反向追踪 |
 | | `agentxx_codegraph_path` | 查找两符号间的调用流程径 |
 | | 实际注册 5 工具 (search/context/callers/callees/path; 日志 `loaded (6 tools)` 中的第 6 个是 client 侧 Info 段, 非 agent 工具); 仅当该插件经 yaml `plugin.list` 段配置加载且编译启用 `AGENTXX_ENABLE_PLUGIN_CODEGRAPH` 时注册 |
-| **规划** | `agentxx_planning` | 两层任务规划 (Mermaid 状态图 + Todo List + 备忘录; 双端插件: 规划持久化到 `{dataDir}/plans/{thread}.json`, 发布 `agentxx_planning.planning` 事件, client 侧经类型级工具渲染器 (实时+历史回溯) 与实时装饰+Info 段落渲染, 订阅 `agentxx_host.client_attached` 做接入重发自愈) |
+| **规划** | `agentxx_planning` | 两层任务规划 (Mermaid 状态图 + Todo List + 备忘录; 双端插件: 规划持久化到 `{dataDir}/plans/{thread}.json`, 发布 `plugin.agentxx_planning.planning` 事件, client 侧经类型级工具渲染器 (实时+历史回溯) 与实时装饰+Info 段落渲染, 订阅 `agentxx.agent.host.client_attached` 做接入重发自愈) |
 | **子代理** | `agentxx_subagent` | 创建和管理子代理执行委派任务 (单任务字段 subagent/message, 或批量 tasks 数组并行; 由 SubagentManager 中间件持有单实例注入, 默认注册 `subagent_task`) |
 | | `tool_skill_search` 逻辑 | 延迟加载工具/技能的搜索: `ToolSkillSearchSubAgentTask` 仅为 system prompt 模板 (当前未独立注册为 tool, 由 subagent 按需内联检索逻辑) |
 | **数据** | `agentxx_share_store` | 会话级文本寄存，节省上下文 |
@@ -194,14 +194,15 @@ git_worktree 及延迟加载加载 (`ToolSkillSearchSubAgentTask` 模板类, 当
 `agentxx::events::EventHub` 在总线之上补一层**有状态的记录 + 等待句柄 + 投递**：
 
 - 每个根一份中枢（`AgentContext::eventHub`，`BaseAgent::init` 的 `event_hub` 步骤建），
-  跑在该 agent 的 io 线程；同时订阅总线 `evt.` 与 `plugin.evt.` 两个前缀，
-  插件往总线发一个值就等于往中枢发值；
+  跑在该 agent 的 io 线程；只订阅总线 `plugin.` 前缀（插件往总线发自己那一族的值就等于
+  往中枢发值；内置源不走总线，直接 `publishValue`）—— 命名规则见
+  [events.md](events.md) 第 1 节与 [plugins.md](plugins.md) §21；
 - 模型用内置工具 `agentxx_event`（`watch`/`await`/`status`/`list`/`cancel`/`emit`/`end`）
   登记等待或发布值；值到达时统一翻译成会话输入（空闲开新一轮，在跑则插到下一次模型调用前）；
 - “往会话塞一轮输入”统一经 `SessionInputSink`（由 `SessionServerAgentIO` 实现，
   弱引用登记在 `Session::inputSink`），保证一个会话同一时刻只有一个驱动者；
-- 内置事件源：`turn.start` / `turn.end` / `tool.end.<工具名>` / `subagent.done.<result_id>` /
-  `timer.<名字>`，只在有人等时发布；
+- 内置事件源：`agentxx.agent.event.turn.start` / `.turn.end` / `.tool.end.<工具名>` /
+  `.subagent.done.<result_id>` / `.timer.<名字>`，只在有人等时发布；
 - `agentxx_subagent` 的 `async:true`：派出去就继续，后台跑完后以
   `[Event] subagent.done.<result_id>` 回到父会话；失败/取消同样发布（等待不会挂到超时），
   取消令牌独立于轮次，并在 agent 关停时统一取消。

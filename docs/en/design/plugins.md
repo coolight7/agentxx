@@ -367,7 +367,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 | `agentxx.client.ui` | 1 | `register_status_item/update/unregister`, `register_panel/update/unregister`, `register_info_section/update/unregister`, `register_command/unregister`, `show_toast`, `update_tool_decor(tool_call_id, decor_json)`, `register_tool_renderer(spec)/unregister_tool_renderer(tool_name)`, `bind_action_handler/unbind_action_handler`, `open_overlay/close_overlay`. |
 | `agentxx.client.events` | 1 | `subscribe/unsubscribe` (See `AgentxxClientEvent`: `READY`, `CONN_STATE`, `USER_INPUT`, `DELTA`, `TURN_END`, `SESSION_SWITCH`, `PLUGIN_DATA`, `UI_LAYOUT`). |
 | `agentxx.client.session` | 1 | `get_client_state` (snapshot JSON), `send_user_input`, `request_cancel`. |
-| `agentxx.client.wire` | 1 | `send_plugin_data(event, json)` → Dispatched to server as `client.{plugin}.{event}`. |
+| `agentxx.client.wire` | 1 | `send_plugin_data(topic, json)` → published on the agent bus under the same topic (topic must be the full name `agentxx.client.plugin.<plugin name>.<event>`). |
 | `agentxx.client.self` | 1 | `get_own_info/get_plugin_args/get_plugin_config_path` (Returns normalized absolute path configured via YAML `config`). |
 | `agentxx.client.json` | 1 | `json_get_string/json_escape`. |
 | `agentxx.client.log` | 1 | `log(level, msg)`. |

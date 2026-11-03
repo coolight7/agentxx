@@ -523,14 +523,20 @@ path/to/agentxx_test --log-level warn string_util regex
 - 事件中枢与异步挂起 (2026-11, 详见 [events.md](docs/zh-cn/design/events.md)):
   `agentxx::events::EventHub` (`AgentContext::eventHub`, 每个根一份) = 有状态记录
   (`EventRecord`: kind/state/历史值) + 等待句柄 (`EventWait`: mode first|each|all,
-  delivery next-step|inject|next-turn|none) + 投递; 它**建在总线之上** (订阅 `evt.` 与
-  `plugin.evt.` 两个前缀), 总线仍只做通知; 名字规则在 `agentxx/event/naming.h`
-  (字符集/长度 96/保留前缀), 投递文本固定以 `[Event] <名字> (<mode>)` 开头
+  delivery next-step|inject|next-turn|none) + 投递; 它**建在总线之上** (只订阅 `plugin.`
+  前缀; 内置源直接 `publishValue` 不走总线), 总线仍只做通知; 名字规则唯一实现在
+  `agentxx/event/naming.h` —— 三族命名空间 (内置 agent 端 `agentxx.agent.*` / 内置 client 端
+  `agentxx.client.*` / 插件 `plugin.<插件名>.*`), 写侧只能写自己那一族、读侧可跨族但必须全名,
+  **框架只校验不补前缀**; 中枢事件名**就是**总线主题, 内置值事件统一在
+  `agentxx.agent.event.` 段 (与强类型主题分开), `turn.`/`tool.`/`subagent.`/`timer.`/`host.`
+  子段保留给框架; 功能点 id 同一套规则 (`agentxx.agent.context.*` / `plugin.<名>.*`);
+  投递文本固定以 `[Event] <名字> (<mode>)` 开头
   (不命中工具失败前缀); 往会话塞输入统一经 `SessionInputSink`
   (实现 = `SessionServerAgentIO`, 弱引用挂 `Session::inputSink`), 空闲开新一轮 / 在跑写
   `Session::pendingInputs_`; 轮末把落在最后一次模型调用之后的 next-step 输入提升为下一轮
-  (`rolloverLeftoverNextStepInputs`, 仅在有驱动端时)。内置事件源 `turn.start`/`turn.end`/
-  `tool.end.<工具名>`/`subagent.done.<result_id>`/`timer.<名字>` 先问 `wants()` 再发。
+  (`rolloverLeftoverNextStepInputs`, 仅在有驱动端时)。内置事件源
+  `agentxx.agent.event.turn.start`/`.turn.end`/`.tool.end.<工具名>`/
+  `.subagent.done.<result_id>`/`.timer.<名字>` 先问 `wants()` 再发。
   模型工具 `agentxx_event` (watch/await/status/list/cancel/emit/end), 配置键 `event.*`
   (enable/value_max_bytes/wait_timeout_ms/max_waits_session/allow_headless_turn/delivery)。
   `agentxx_subagent` 的 `async:true` 在 `AgentHost::spawnBatch` 里**立即受理**
