@@ -526,7 +526,8 @@ path/to/agentxx_test --log-level warn string_util regex
   delivery next-step|inject|next-turn|none) + 投递; 它**建在总线之上** (只订阅 `plugin.`
   前缀; 内置源直接 `publishValue` 不走总线), 总线仍只做通知; 名字规则唯一实现在
   `agentxx/event/naming.h` —— 三族命名空间 (内置 agent 端 `agentxx.agent.*` / 内置 client 端
-  `agentxx.client.*` / 插件 `plugin.<插件名>.*`), 写侧只能写自己那一族、读侧可跨族但必须全名,
+  `agentxx.client.*` / 插件 `plugin.<插件名>.*`), 写侧只能落在自己那一族的根下 (插件写
+  `plugin.*`, 不限定插件名, 只建议用自己的)、读侧可跨族但必须全名,
   **框架只校验不补前缀**; 中枢事件名**就是**总线主题, 内置值事件统一在
   `agentxx.agent.event.` 段 (与强类型主题分开), `turn.`/`tool.`/`subagent.`/`timer.`/`host.`
   子段保留给框架; 功能点 id 同一套规则 (`agentxx.agent.context.*` / `plugin.<名>.*`);

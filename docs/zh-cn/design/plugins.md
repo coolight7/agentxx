@@ -421,7 +421,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 | `agentxx.agent.tools` | 3 | `register_tool/unregister_tool`, `call_tool_async` (插件互调, cb 保证 IO 线程 post; 取消统一用 `pluginxx.cancel.op_cancel`); v3 = 工具成败只由最终通知的状态位表达，结果文本不带 `[Error]` 前缀 |
 | `agentxx.agent.permission` | 2 | `register_tool_permission/unregister_tool_permission` (工具权限限制由工具来源方声明) + `check_paths` (批量路径权限三态查询, 不发起询问/中断; 见下方说明) |
 | `agentxx.agent.hooks` | 2 | 句柄式三成员: `register_hook(agent, spec_ex, out_handle)` (同一实例同一个点可登记**任意多个**处理器, 每个一根句柄; `priority` 小的先跑, 相同按登记顺序) + `unregister_hook(handle)` (按句柄精确撤销) + `list_hooks(agent, out)` (处理器清单 JSON) |
-| `agentxx.agent.events` | 3 | `subscribe(agent 可空, topic, handler)` / `unsubscribe` / `publish` (topic 必须是全名, 写侧只能落在 `plugin.<本实例插件名>.*`; 框架不补前缀, 见 §21)。带引用 = 订阅该 agent 的总线 (会话/轮次事件, 引用只能用 `mount` 回调里下发的那份); 空引用 = 主程序总线 (主 agent 的总线在 `BaseAgent` 构造时就建好, 因此 `start` 里可直接订阅进程级事件, 如 `agentxx.agent.round.start`) |
+| `agentxx.agent.events` | 3 | `subscribe(agent 可空, topic, handler)` / `unsubscribe` / `publish` (topic 必须是全名; 写侧只能落在 `plugin.*`, 不限定插件名; 框架不补前缀, 见 §21)。带引用 = 订阅该 agent 的总线 (会话/轮次事件, 引用只能用 `mount` 回调里下发的那份); 空引用 = 主程序总线 (主 agent 的总线在 `BaseAgent` 构造时就建好, 因此 `start` 里可直接订阅进程级事件, 如 `agentxx.agent.round.start`) |
 | `agentxx.agent.capabilities` | 2 | `register_capability(_ex)/unregister/has_capability` (进程级, 同一实例重复声明按幂等成功), `invoke_capability_async(agent 可空)/op_cancel` (引用仅用于标明是哪个 agent 发起的) |
 | `agentxx.agent.scheduler` | 1 | `is_io_thread/post_to_io/sleep/op_cancel/offload` (sleep=主程序计时器; offload=阻塞池委托, 需 cancel_token) |
 | `agentxx.agent.coroutine_runtime` | 1 | 通用协程驱动: `request_driver/cancel_driver/is_io_thread` (driver ticket/wake 协议, 见 §16) |
@@ -602,7 +602,7 @@ tool_call 中的前后调用形成顺序屏障。并发只发生在同一条 ass
 | `agentxx.client.ui` | 1 | `register_status_item/update/unregister`, `register_panel/update/unregister`, `register_info_section/update/unregister`, `register_command/unregister`, `show_toast`, `update_tool_decor(tool_call_id, decor_json)`, `register_tool_renderer(spec)/unregister_tool_renderer(tool_name)`, `bind_action_handler/unbind_action_handler`, `open_overlay/close_overlay` |
 | `agentxx.client.events` | 1 | `subscribe/unsubscribe` (事件见 `AgentxxClientEvent`: READY/CONN_STATE/USER_INPUT/DELTA/TURN_END/SESSION_SWITCH/PLUGIN_DATA) |
 | `agentxx.client.session` | 1 | `get_client_state` (快照 JSON), `send_user_input`, `request_cancel` |
-| `agentxx.client.wire` | 1 | `send_plugin_data(topic, json)` → 服务端原样发到 agent 总线的同一个主题 (topic 必须是全名 `agentxx.client.plugin.<本实例插件名>.<事件>`) |
+| `agentxx.client.wire` | 1 | `send_plugin_data(topic, json)` → 服务端原样发到 agent 总线的同一个主题 (topic 必须是全名 `agentxx.client.plugin.<名字>.<事件>`, 不限定插件名) |
 | `agentxx.client.self` | 1 | `get_own_info/get_plugin_args/get_plugin_config_path` (后者返回 yaml `config` 归一化绝对路径) |
 | `agentxx.client.json` | 1 | `json_get_string/json_escape` |
 | `agentxx.client.log` | 1 | `log(level, msg)` |
@@ -1949,7 +1949,7 @@ plugin:
 `emit_event("plugin.chat.group42.progress", payload)` 发一条自己那一族的事件，就等于
 往中枢发了一个同名的值：模型只要先
 `agentxx_event {opt:"watch", event:"plugin.chat.group42.progress"}`，值到达时就会被唤醒。
-名字规则（三族命名空间 / 写侧只能写自己那一族 / 读侧必须全名）见
+名字规则（三族命名空间 / 写侧只能落在自己那一族的根下 / 读侧必须全名）见
 `agentxx/event/naming.h`，插件面“定义事件/登记等待”的正规入口是 `agentxx.agent.event` 表
 （见 §20）。
 
@@ -2092,7 +2092,7 @@ plugin:
 
 | 成员 | 语义 |
 |---|---|
-| `define_event(agent, spec)` | 声明事件源: 名字 (**必须是全名** `plugin.<本实例插件名>.<自由部分>`, hub 内唯一)、种类 (`stream` 流式 / `single` 单值, 后者首个值到达即结束)、说明文字 (模型 `agentxx_event opt=list` 看到的就是它)、历史条数 (回放用)、`ttl_ms` (到期未结束按过期回收)、`linger_ms` (结束后保留多久, `< 0` = 主程序默认, `0` = 立刻回收) |
+| `define_event(agent, spec)` | 声明事件源: 名字 (**必须是全名** `plugin.<名字>.<自由部分>`, hub 内唯一; 不限定插件名, 建议用自己的)、种类 (`stream` 流式 / `single` 单值, 后者首个值到达即结束)、说明文字 (模型 `agentxx_event opt=list` 看到的就是它)、历史条数 (回放用)、`ttl_ms` (到期未结束按过期回收)、`linger_ms` (结束后保留多久, `< 0` = 主程序默认, `0` = 立刻回收) |
 | `emit_value(agent, name, value_json)` | 发布一个 JSON 值 (**任意线程**; 值经主程序排队写入中枢, 调用方不等投递结果)。事件没声明过时按流式事件自动建立, 归属本实例 |
 | `end_event(agent, name, summary_json)` | 结束一条流 (幂等)。`summary_json` 是查询时一并返回的收尾信息; 结束后再发值会重新打开这条流 |
 | `remove_event(agent, name)` | 立刻移除记录 (不等保留期)。还挂在它上面的等待按"已结束且没有值"收尾, 不会永远等下去 |
@@ -2110,7 +2110,7 @@ plugin:
 事件名与模型侧的规则是同一份 (`agentxx/event/naming.h`): 字母/数字/`.`/`_`/`-`,
 最长 128, 名字必须写全三族之一: 内置 agent 端 `agentxx.agent.*`、内置 client 端
 `agentxx.client.*`、插件族 `plugin.<插件名>.*`。本表写侧（`define_event` / `emit_value` /
-`end_event` / `remove_event`）只接受 `plugin.<本实例插件名>.*`，**框架不补前缀**；
+`end_event` / `remove_event`）只接受 `plugin.*`（不限定插件名），**框架不补前缀**；
 `query_event` / `list_events` / `register_wait` 是读侧，可跨族但必须全名。
 
 ### 20.3 归属与回收
@@ -2133,8 +2133,8 @@ plugin:
 | 查询 | `queryEvent(ctx, ref, name)` → JSON 文本; `listEvents(ctx, ref, prefix)` → JSON 文本 |
 | 等待 | `registerEventWait(ctx, ref, EventWaitOptions, outState, outCode)` → 等待 id; `cancelWait(ctx, ref, waitId)`; `listEventWaits(ctx, ref, sessionId)` |
 
-注意 `emitEvent` 是**运行时表**的"发一条总线事件"(主题必须是全名, 写侧只能落在自己那一族
-`plugin.<本实例插件名>.*`, 靠触发器投递), 本表的 `emitEventValue` 是"给事件中枢放一个
+注意 `emitEvent` 是**运行时表**的"发一条总线事件"(主题必须是全名, 写侧只能落在 `plugin.*`
+里, 靠触发器投递), 本表的 `emitEventValue` 是"给事件中枢放一个
 结构化值" —— 两者不要混用。
 
 ### 20.5 示例与用例
@@ -2155,14 +2155,19 @@ plugin:
 | 内置 client 端 | `agentxx.client.<域>...` | `agentxx.client.host.client_interfaces` |
 | 插件 | `plugin.<插件名>.<自由部分>` | `plugin.agentxx_chatbot.panel` |
 
-- 插件名 = 插件**实例名** (`plugin.agentxx_chatbot.panel` 的插件名是 `agentxx_chatbot`);
-- **写侧只能写自己那一族**: 插件只能写 `plugin.<本实例插件名>.*`, 客户端插件只能写
-  `agentxx.client.plugin.<本实例插件名>.*`;
+- 插件名 = 插件**实例名** (`plugin.agentxx_chatbot.panel` 的插件名是 `agentxx_chatbot`),
+  只是**命名建议**: 插件那一族只校验 `plugin.` 根, 后面的名字自由;
+- **写侧只能落在自己那一族的根下**: 插件只能写 `plugin.*`, 客户端插件只能写
+  `agentxx.client.plugin.*`。**插件那一族不限定后面的名字是不是本实例的**:
+  同一组织的多个插件可能复用代码、同一功能由不同插件包提供实现, 共用一段是正当需求;
+  **建议仍用自己的插件名** (`plugin.<本实例插件名>.xxx`), 这样归属清楚 (记录按
+  `plugin:<名>` 记账, 禁用/卸载能整批回收), 但框架不强制;
 - **读侧可以跨族** (订阅 / 登记等待 / 触发器), 但必须是全名;
-- **框架只校验不补前缀**: 名字不在自己的段里就报错（错误文本会给出应有的前缀）。
-- 通用 events 表 (`pluginxx.events`) 的 `publish` 只校验“主题落在某个已加载插件的族里”
-  （该入口签名不带实例信息, 拿不到调用方是谁）；需要按本实例名强校验的写入口用
-  `agentxx.agent.event` 表（`define_event` / `emit_value` / `end_event` / `remove_event`）。
+- **框架只校验不补前缀**: 名字不在所属族里就报错（错误文本会给出应有的前缀）。
+- 通用 events 表 (`pluginxx.events`) 与 `agentxx.agent.event` 表的写侧同一标准:
+  只要求落在 `plugin.*` 里, 不核对“是不是本实例的名字”(该入口签名也不带实例信息)。
+  需要按插件归属做治理时, 用加载快照的 `eventRecords` / `eventWaits` 与记录里的
+  `owner` 字段 (定义/登记等待时记的是**调用者实例名**)。
 
 ### 21.2 值事件段
 
@@ -2192,4 +2197,5 @@ plugin:
 
 同一套规则: 核心点 `agentxx.agent.*` (`agentxx.agent.context.countTokens` /
 `agentxx.agent.context.summarize` / `agentxx.agent.tool.summarizeOutput`), 插件点
-`plugin.<插件名>.*` (强制, `definePluginPoint` 会拒掉不在自己段里的名字)。
+`plugin.<插件名>.*` (`definePluginPoint` 会拒掉不在插件族里的名字; 不限定插件名,
+建议用自己的)。

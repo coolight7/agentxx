@@ -316,9 +316,13 @@ Keep working, or end the turn — you do not need to poll. Use opt=status wait=w
 模型  agentxx_event {opt:"watch", event:"plugin.chat.group42.progress"}
 ```
 
-插件名 = 插件实例名（`plugin.agentxx_chatbot.panel` 的插件名是 `agentxx_chatbot`）：
-写侧只能落在自己的段里，框架**不补前缀**；读侧（订阅/等待/触发器）可以跨族，
+写侧只能落在插件族里（`plugin.*`），框架**不补前缀**；读侧（订阅/等待/触发器）可以跨族，
 但必须是全名（裸名直接拒绝）。
+
+插件族**只校验 `plugin.` 根，不限定后面的名字是不是本实例的**：同一组织的多个插件可能
+复用代码、同一功能由不同插件包提供实现，共用一段是正当需求。建议仍用自己的插件名
+（`plugin.<本实例插件名>.xxx`），这样记录归属（`plugin:<名>`）与禁用/卸载时的整批回收
+都清楚，但框架不强制。
 
 ### 12.2 事件中枢表 `agentxx.agent.event`
 
