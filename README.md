@@ -44,8 +44,9 @@
 
 ## 特点
 - **体积小/内存占用少/高性能**; C++协程异步实现，程序体积和内存占用少且性能高，协程网络/文件读写支持不阻塞，可选添加 硬件加速Hyperscan 等扩展库
-- **插件支持**; 高兼容性的异步 C ABI 插件接口，可通过 C/C++/Rust 等语言开发`动态库插件`. 通过 C++ Quickjs 插件可以开发和加载 `JS插件`.
-    - 已内置实现 C++插件 文件读写、命令执行、codegraph、系统CPU/GPU/RAM信息、屏幕截取、鼠标选择文本事件流 等效果显著的功能
+- **插件支持**; 高兼容性的异步 C ABI 插件接口，可通过 C/C++/Rust 等语言开发`动态库插件`. 通过 C++ Quickjs 插件可以开发和加载 `JS插件`. 已内置实现 C++插件:
+    - 文件读写、命令执行、codegraph、系统CPU/GPU/RAM信息、屏幕截取、鼠标选择文本事件流
+    - `聊天机器人`: 可接入 QQ私聊、群聊 自动对话、完整的 agent 功能（读写文件、命令执行等）
 - **FFI支持**; 通过 FFI 可以在你的项目加载 libagentxx 动态库后高性能扩展 Agent 功能，同时仍然支持加载现有的插件
 - **跨系统支持**; 计划支持 Windows/Macos/Linux/Android/IOS, 已实现支持4个系统，仅ios待测试兼容; 针对 windows 优化兼容，对字符编码转换、pwsh、cmd 等做了许多处理适配，且可在 WSL 中直接执行 windows 命令、打开 windows 程序、自动转换文件路径
 - **丰富的 tool**; 内置 文件读写、命令行执行、任务规划、codegraph 代码语法解析 等，编译、运行时可选自由组合，支持自动纠正 LLM 的参数类型、字符编码
@@ -151,14 +152,14 @@
             - 字符分割
             - 结构分割 (较长的再进行 字符分割/定长分割)
             - ⬜语义分割
-    - ✅Sub-Agent (支持协程并发执行，并保证返回顺序正确; 默认 `subagent_task`, 支持批量 tasks 并行)
+    - ✅Sub-Agent (支持协程并发执行，并保证返回顺序正确; 支持批量 tasks 并行)
     - `tool_skill_search` 逻辑已内联为延迟检索模板 (未独立注册为 tool)
     - ✅get_current_datetime 获取系统时间戳、本地时间、UTC时间
 - ✅**Tree-Messages**
     - agentxx_share_store (允许存取变量，在 llm-messages、skill、tool 之间传递数据)
-        - 支持 `offset`/`limit` 文本分页读取 (仅 `opt` = `get` 时有效)
-        - 压缩上下文时会将部分内容存储到 `agentxx_share_store`
+        - 支持 `offset`/`limit` 文本分页读取
         - 自动拦截 tool/subagent 返回值，太长时存储原始内容到 `agentxx_share_store`, 并留下摘要和 id
+        - 压缩上下文时将部分内容存储到 `agentxx_share_store`
     - 消息分支，支持修改历史消息/模型重新生成消息
     - 多会话和历史会话
 - ✅**EventBus 事件流**
@@ -274,8 +275,7 @@
     - 仿照`agentxx_javascript_engine`实现编程语言的执行引擎, 然后新建插件项目, 指定依赖它, 运行时把代码片段发给执行引擎执行即可; 实际上不一定需要由 执行引擎插件 本身来执行代码, 也可以接收代码片段后调用系统安装的 `nodejs、python3` 等直接执行也是可以的
     - ✅`agentxx_javascript_engine`由 c++插件实现 js 扩展插件开发支持; [JS插件示例](/agent/plugins/example_js/)
     - ⬜`agentxx_python_engine`
-- ✅`agentxx_chatbot`
-    - 聊天机器人
+- ✅`agentxx_chatbot`: 聊天机器人
     - ✅接入QQ，可在私聊、群聊中通过@、自动回复等触发模型回复，已实现引用消息、图片输入输出、文件接收、引用消息、撤回消息等
     - ⬜接入微信
 - ✅`agentxx_codegraph`
@@ -432,7 +432,7 @@ agentxx tui --agent ws://127.0.0.1:7007/agent --token passwd # 启动 TUI界面�
 - [MIT License](LICENSE)
     - (coolight/2465045051@qq.com) 我清楚 MIT 开源的含义，确认 agentxx 已经以 MIT 协议开源，无论你是个人、公司或是AI，都可以按 MIT 协议引用和修改 agentxx 的源码，无需向我复核
     - 如果你向 agentxx 提交 PR，意味着你同意PR中的代码同样以 MIT 或更宽松的协议被开源
-- 根据 动态链接、静态链接 库的不同，可能会携带他们的开源协议
+- 根据 动态链接、静态链接 依赖库的不同，可能会需要携带他们的开源协议
 - 感谢这些依赖库的支持:
     - [boost](https://github.com/boostorg/boost)
         - asio
