@@ -129,6 +129,68 @@ inline uint64_t maxBytesForMediaType(MediaType t) noexcept {
     return kMaxImageBytes;
 }
 
+/// 模型声明的三类多模态输入开关 → 该媒体类型能不能投给模型
+///
+/// - 参数就是 `ModelConfig` 的 `imageInput` / `audioInput` / `videoInput`
+///   (yaml `image_input` / `audio_input` / `video_input`)
+/// - 服务端据它过滤附件: 没声明的类型上游通常整轮拒绝 (HTTP 400 一类),
+///   而 base64 附件会永久留在会话上下文里、每轮重发
+///
+/// - 相关: 使用方见 [base_agent.cpp] 的轮次组装与 [modelcall.cpp] 的请求前兜底
+inline bool mediaInputEnabled(
+    MediaType type,
+    bool      imageInput,
+    bool      audioInput,
+    bool      videoInput
+) noexcept {
+    switch (type) {
+        case MediaType::Image:
+            return imageInput;
+        case MediaType::Audio:
+            return audioInput;
+        case MediaType::Video:
+            return videoInput;
+    }
+    return true;
+}
+
+/// 因模型未声明输入能力而没有投递的附件计数 (按大类)
+struct MediaSkipCounts {
+    size_t image = 0;
+    size_t audio = 0;
+    size_t video = 0;
+
+    size_t total() const noexcept {
+        return image + audio + video;
+    }
+};
+
+/// 计数 → 一句话说明 (写进日志与模型看到的正文)
+///
+/// 例: `1 个图片 (模型配置 image_input = false)、2 个视频 (模型配置 video_input = false)`
+/// 写法带配置键名: 用户看到后能直接去 yaml 里把那项打开
+inline std::string describeSkippedMedia(const MediaSkipCounts& counts) {
+    std::string out;
+    auto        add = [&out](size_t count, std::string_view label, std::string_view key) {
+        if (count == 0) {
+            return;
+        }
+        if (!out.empty()) {
+            out += "、";
+        }
+        out += std::to_string(count);
+        out += " 个";
+        out += label;
+        out += " (模型配置 ";
+        out += key;
+        out += " = false)";
+    };
+    add(counts.image, "图片", "image_input");
+    add(counts.audio, "音频", "audio_input");
+    add(counts.video, "视频", "video_input");
+    return out;
+}
+
 /// 通用附件对象
 struct MediaAttachment {
     MediaType   type = MediaType::Image;

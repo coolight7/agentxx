@@ -467,3 +467,36 @@ AgentHost: mounted root 'ext:agentxx_chatbot:1' (owner='agentxx_chatbot', ..., r
 
 注意：这一层的请求体字段类型全部按官方文档写（这几处都是「发对了靠运气」的地方），
 加字段时同时补 `chatbot_media` 的断言；改到整条流程就补 `chatbot_media_io`。
+
+## 修复（2026-11-04）：附件类型按模型声明的能力投递（起点：视频）
+
+现象是"群里发了视频后机器人再也不回话"，而且此后同一会话的所有消息都不回；发图片/语音到
+不支持对应能力的模型上同症状。三个问题叠加：
+
+1. 附件（图片/音频/视频）被无条件当多模态附件投给模型（`assembleInput` 只看 `kind != File`）。
+   模型配置里的 `image_input`/`audio_input`/`video_input` 只被客户端文件选择弹窗用过，
+   服务端没看 —— 没声明的类型上游对未知内容块**整轮 400**（视频最典型）；
+2. 这些附件的 base64 随用户消息写进会话上下文，之后每轮请求都重发（图片几 MB、视频可达
+   数十 MB），这条会话从此跑不通，换模型也没用；
+3. 主程序对附件有单文件上限（图片 10MB / 音频 25MB / 视频 50MB），超限时 `parseUserInputJson`
+   按参数错误拒绝**整条输入**，插件只记一条日志 —— 正文一起丢，机器人同样一声不出。
+
+改动：
+
+- 框架 `conversation_types.h`：新增判据 `mediaInputEnabled(type, image, audio, video)`、
+  计数 `MediaSkipCounts` 与文案 `describeSkippedMedia`（日志与正文共用同一句话）；
+- 框架 `base_agent.cpp`：组用户消息前按当前会话模型声明的能力过滤附件（不投、也不读文件），
+  正文末尾补一行「[附件未传给模型] N 个图片 (模型配置 image_input = false)…」；展示用的附件与
+  `TurnStart` 增量不变；
+- 框架 `modelcall.cpp`：模型未声明的类型，把上下文里已有的 `image_urls`/`audio_urls`/`video_urls`
+  全剔掉（与"剔除本地路径形式附件地址"同一处兜底），已经写坏的会话能自行恢复；
+- 插件 `chatbot_engine.cpp`：`flush` 在带附件的输入被拒时去掉 `attachments` 重投一次，
+  正文不再丢；`assembleInput` 多一个 `hasAttachments` 出参供重试判断；
+- 插件提示词 `chatbot-input-guide` 补一句 `[#n:附件]` 行的读法；README 补"发了附件后不回复"；
+- 用例：`plugin_example_chatbot` 第 7e~7g 段 —— 视频/音频未声明时不投（且正文有原因与文件名），
+  开关打开后重新投；图片关掉后同样不投。
+
+注意：三个开关默认都是 false（= 纯文本模型），要发图/语音得先在模型条目里打开对应项 ——
+与 TUI 附件按钮的判据完全一致。
+
+详见 `resource/history/media-capability-gating/index.md`。

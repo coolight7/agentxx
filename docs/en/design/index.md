@@ -478,6 +478,12 @@ model:
                                       # the file picker filters by these types (images png/jpg/jpeg/webp/gif/bmp
                                       # <=10MB; audio wav/mp3/ogg/m4a/aac/flac <=25MB;
                                       # video mp4/mov/webm/mkv <=50MB; <=5 attachments per message).
+                                      # image_input/audio_input/video_input are also enforced server-side:
+                                      # an attachment whose type is not declared is not sent to the model
+                                      # (most endpoints reject e.g. a `video_url` part with HTTP 400), the
+                                      # user message instead carries a `[附件未传给模型] 1 个图片
+                                      # (模型配置 image_input = false)...` note with the file name and path;
+                                      # such URLs already stored in the context are dropped before the request.
                                       # The client reads files and transmits them as RFC 2397 Data URL (Base64);
                                       # on cross-device setups (remote client+server on different devices) the picker
                                       # additionally offers a "server" tab; picking a server file sends only its path,

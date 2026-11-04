@@ -1,4 +1,5 @@
 #include "agentxx/agent/base_agent.h"
+#include "agentxx/agent/conversation_types.h"
 #include "agentxx/util/neograph_json_bridge.h"
 
 #include "agentxx/agent/agent_host.h"
@@ -1590,6 +1591,60 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
         }
     }
 
+    // 附件按当前模型声明的输入能力投递 (`image_input` / `audio_input` / `video_input`):
+    // - 没声明的类型上游通常整轮拒绝 (HTTP 400 "unknown content part" 一类),
+    //   用户看到的是“发了附件之后机器人再没回过话”;
+    // - 附件会被转成 base64 写进会话上下文, 之后每一轮请求都重发这一大段
+    //   (单个视频可达数十 MB), 该会话从此不可用。
+    // 因此不投, 只把“收到了什么、为什么没投、去改哪个配置”写进模型看到的那份正文 ——
+    // 展示用的 `attachments` 保持完整, 客户端照旧显示附件卡片。
+    // 三个开关立即取成值: 后面要跨 co_await 用, 不能留着指向模型注册表的引用
+    bool takesImage = false;
+    bool takesAudio = false;
+    bool takesVideo = false;
+    {
+        const auto& currentModelCfg = agentContext->getSessionCurrentModelConfig(sessionId);
+        takesImage                  = currentModelCfg.imageInput;
+        takesAudio                  = currentModelCfg.audioInput;
+        takesVideo                  = currentModelCfg.videoInput;
+    }
+    auto takesMedia = [takesImage, takesAudio, takesVideo](MediaType type) {
+        return mediaInputEnabled(type, takesImage, takesAudio, takesVideo);
+    };
+    if (!attachments.empty()) {
+        MediaSkipCounts skipped;
+        for (const auto& att : attachments) {
+            if (takesMedia(att.type)) {
+                continue;
+            }
+            switch (att.type) {
+                case MediaType::Image:
+                    ++skipped.image;
+                    break;
+                case MediaType::Audio:
+                    ++skipped.audio;
+                    break;
+                case MediaType::Video:
+                    ++skipped.video;
+                    break;
+            }
+        }
+        if (skipped.total() > 0) {
+            const std::string what = describeSkippedMedia(skipped);
+            llmInput += fmt::format(
+                "\n[附件未传给模型] {}: 当前模型未声明对应的多模态输入能力, "
+                "只保留文件名与路径",
+                what
+            );
+            XX_LOGW(
+                "[base_agent] 会话 {} 收到 {} 个未声明支持的媒体附件, 未投递给模型: {}",
+                sessionId,
+                skipped.total(),
+                what
+            );
+        }
+    }
+
     auto userMsgJson = utilxx_base::Json{
         {"role",    "user"  },
         {"content", llmInput},
@@ -1670,6 +1725,10 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
         };
 
         for (auto& att : attachments) {
+            // 模型未声明该类型: 连文件都不读 (base64 白读一遍也投不上去)
+            if (!takesMedia(att.type)) {
+                continue;
+            }
             if (att.dataUrl.empty() && !att.pathOrUrl.empty()
                 && !att.pathOrUrl.starts_with("http://")
                 && !att.pathOrUrl.starts_with("https://")) {
@@ -1681,6 +1740,10 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
         utilxx_base::Json audioUrls = utilxx_base::Json::array();
         utilxx_base::Json videoUrls = utilxx_base::Json::array();
         for (const auto& att : attachments) {
+            // 模型没声明该类输入能力: 不投 (上游整轮 400, 且 base64 会永久留在上下文)
+            if (!takesMedia(att.type)) {
+                continue;
+            }
             // 只接受能直接给上游的形式: Base64 Data URL 或 http(s) 地址。
             // 本地路径原样塞进 image_urls 会被上游直接拒 (HTTP 400
             // "media[0].url must use the http or https scheme"), 整轮失败;

@@ -1196,7 +1196,11 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 插件经内置 `agentxx_jav
 （直接向调度层投一条假消息，不碰平台网络）与 `chatbot_debug_outbox`（回看假平台收到的出站，
 含被动回复 id / 引用句柄）。生产环境不要打开。
 
-**附件**：图片/语音/视频作为多模态附件投给会话；普通文件（`file`）不作为附件（框架的
+**附件**：图片/音频/视频只在模型条目声明了对应能力（`image_input` / `audio_input` /
+`video_input`）时才作为多模态附件投给会话；没声明的类型会被上游整轮拒绝（HTTP 400），
+且 base64 附件会永久留在会话上下文里每轮重发，所以服务端会先过滤掉，只在输入里给
+文件名/大小/路径（详见 `resource/history/media-capability-gating/index.md`）；
+普通文件（`file`）不作为附件（框架的
 MediaType 只有 image/audio/video），而是把本地路径写进输入 —— 但人设根常常没挂文件系统
 插件（`mount.mode: none`），所以小于 `behavior.attachments.inlineTextMaxBytes`（默认 64 KiB）
 的小文本文件会把正文**直接内联**进输入（`[#n:附件内容开始]` … `[#n:附件内容结束]`），

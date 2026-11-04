@@ -1,5 +1,6 @@
 #include "agentxx/nodes/modelcall.h"
 
+#include "agentxx/agent/conversation_types.h"
 #include "agentxx/agent/model_registry.h"
 #include "agentxx/agent/session_store.h"
 #include "agentxx/event/event_stream.h"
@@ -510,6 +511,47 @@ neograph::CompletionParams ModelCallWrapNode::build_params(std::string_view sess
                 sessionId,
                 dropped
             );
+        }
+    }
+
+    // 附件兜底: 当前模型未声明输入能力的媒体类型, 上下文里对应的 URL 全部剔掉
+    // - 这类值通常是旧版本或插件无条件投递时写入的 base64 (图片几 MB / 视频可达数十 MB),
+    //   它们永久留在会话上下文里, 每轮请求都重发一次且上游整轮报错 -> 该会话再也跑不通
+    // - 剔掉后文字与其它附件照常发送, 老会话自行恢复
+    if (!params.messages.empty() && ctxPtr) {
+        bool takesImage = false;
+        bool takesAudio = false;
+        bool takesVideo = false;
+        {
+            const auto& mc = ctxPtr->getSessionCurrentModelConfig(sessionId);
+            takesImage     = mc.imageInput;
+            takesAudio     = mc.audioInput;
+            takesVideo     = mc.videoInput;
+        }
+        if (!takesImage || !takesAudio || !takesVideo) {
+            agent::MediaSkipCounts dropped;
+            for (auto& m : params.messages) {
+                if (!takesImage && !m.image_urls.empty()) {
+                    dropped.image += m.image_urls.size();
+                    m.image_urls.clear();
+                }
+                if (!takesAudio && !m.audio_urls.empty()) {
+                    dropped.audio += m.audio_urls.size();
+                    m.audio_urls.clear();
+                }
+                if (!takesVideo && !m.video_urls.empty()) {
+                    dropped.video += m.video_urls.size();
+                    m.video_urls.clear();
+                }
+            }
+            if (dropped.total() > 0) {
+                XX_LOGW(
+                    "[modelcall] 会话 {} 的上下文里有 {} 个附件属于模型未声明的输入类型, 已跳过: {}",
+                    sessionId,
+                    dropped.total(),
+                    agent::describeSkippedMedia(dropped)
+                );
+            }
         }
     }
     params.tools    = std::move(tool_defs);

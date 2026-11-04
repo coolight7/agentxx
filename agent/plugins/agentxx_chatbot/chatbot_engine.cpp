@@ -108,6 +108,24 @@ std::string firstLineOf(std::string_view text, size_t maxCodePoints = 60) {
     return line;
 }
 
+/// 去掉输入 JSON 里的 `attachments` (投递被拒时的重试形态)
+///
+/// 主程序对附件有条数与单文件大小上限, 超限时把**整条输入**判为参数错误 (连正文
+/// 一起丢掉)。重试只去掉附件即可: 渲染好的输入块里已经有文件名/大小/路径, 模型
+/// 仍能知道收到了什么。解析失败时原样返回 (宁可报错也不要改坏报文)。
+std::string withoutAttachments(const std::string& inputJson) {
+    try {
+        auto input = Json::parse(inputJson);
+        if (!input.is_object()) {
+            return inputJson;
+        }
+        input.erase("attachments");
+        return input.dump();
+    } catch (const std::exception&) {
+        return inputJson;
+    }
+}
+
 } // namespace
 
 int64_t ChatbotEngine::nowMs() {
@@ -553,8 +571,12 @@ void ChatbotEngine::onInbound(const InboundEvent& rawEvent) {
 std::string ChatbotEngine::assembleInput(
     const std::string&               chatKeyText,
     const std::vector<InboundEvent>& batch,
-    std::string_view                 reason
+    std::string_view                 reason,
+    bool*                            hasAttachments
 ) {
+    if (hasAttachments != nullptr) {
+        *hasAttachments = false;
+    }
     const ChatKey key        = parseChatKey(chatKeyText);
     auto&         state      = stateOf(chatKeyText);
     const auto    route      = router_ != nullptr ? router_->route(key) : RouteResult{};
@@ -715,6 +737,9 @@ std::string ChatbotEngine::assembleInput(
     input["delivery"] = "next-turn";
     if (!attachments.empty()) {
         input["attachments"] = std::move(attachments);
+        if (hasAttachments != nullptr) {
+            *hasAttachments = true;
+        }
     }
 
     // 一轮记账: 工具据此定位被动回复 id 与「回哪条」
@@ -820,8 +845,28 @@ void ChatbotEngine::flush(const std::string& chatKeyText, std::string_view reaso
     // 排队被取走: 面板上的条数要归零
     notifyChanged();
 
-    const std::string inputJson = assembleInput(chatKeyText, batch, reason);
-    const int32_t     rc        = runtime_.sendInput ? runtime_.sendInput(channelId, inputJson) : -1;
+    bool              hasAttachments = false;
+    const std::string inputJson      = assembleInput(chatKeyText, batch, reason, &hasAttachments);
+    int32_t           rc             = runtime_.sendInput ? runtime_.sendInput(channelId, inputJson)
+                                                          : -1;
+    if (rc != 0 && hasAttachments) {
+        // 附件被拒 (超出主程序的单文件大小/条数上限): 去掉附件重投一次
+        // - 主程序对这类输入返回参数错误, 整条输入 (含正文) 都不会进上下文;
+        //   而渲染好的输入块里已写清文件名/大小/路径, 只丢多模态附件不影响模型
+        //   知道“收到了什么”。不重试的话现象是“群里发了视频后机器人再也不出声”
+        const std::string retryJson = withoutAttachments(inputJson);
+        const int32_t     retryRc
+            = runtime_.sendInput ? runtime_.sendInput(channelId, retryJson) : -1;
+        XX_LOGW(
+            "[{}] 会话 '{}' 带附件的输入被拒 (错误码 {}), {} (错误码 {})",
+            kLogTag,
+            chatKeyText,
+            rc,
+            retryRc == 0 ? "已去掉附件重投" : "去掉附件重投仍失败",
+            retryRc
+        );
+        rc = retryRc;
+    }
     if (rc != 0) {
         // 投递失败: 把原文标进下一轮元信息, 并计数 (不重投, 避免重复上下文)
         state.pendingNotice = "上一条消息投递失败 (运行时错误码 " + std::to_string(rc) + ")";

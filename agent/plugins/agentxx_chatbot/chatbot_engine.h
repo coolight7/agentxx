@@ -273,10 +273,12 @@ private:
     ///
     /// - `args`:
     ///     - [reason] 唤醒原因码 (写进输入块, 见 [wakeReasonNote])
+    ///     - [hasAttachments] 非空时写回“本次是否带了多模态附件” (投递被拒时据此重试)
     std::string assembleInput(
         const std::string&               chatKey,
         const std::vector<InboundEvent>& batch,
-        std::string_view                 reason
+        std::string_view                 reason,
+        bool*                            hasAttachments = nullptr
     );
 
     /// 把重复到达的同 msgId 事件合并进缓冲/历史

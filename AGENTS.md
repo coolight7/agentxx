@@ -884,3 +884,14 @@ sudo echo 3 > /proc/sys/vm/drop_caches
   `agent/plugins/agentxx_chatbot/chatbot_time.{h,cpp}`, 时区由 `behavior.timezone` 决定
   (`auto` 默认跟平台时间戳 / `system` / `+08:00` / `Asia/Shanghai`), 写错的时区在 `start`
   校验时报配置错误。每轮输入首部另有一行「当前时间 + 时区」告诉模型消息时间用哪套时区
+- 多模态附件按模型声明的能力投递 (2026-11-04): 图片/音频/视频只有模型条目声明了对应开关
+  (`image_input` / `audio_input` / `video_input`) 才会投给模型 —— 没声明的类型上游通常整轮拒绝
+  (HTTP 400, 现象是“发了附件后机器人再也不出声”), 且 base64 附件会永久留在会话上下文里每轮重发。
+  `BaseAgent::runTurnAsync` 在组用户消息前就按类型剔掉, 正文末尾补一行
+  `[附件未传给模型] N 个图片 (模型配置 image_input = false)…` (展示用的 attachments 与 TurnStart
+  增量不变), `modelcall::build_params` 另把老会话上下文里已有的 `image_urls`/`audio_urls`/
+  `video_urls` 按同一套开关剔掉, 老会话自行恢复; 判据函数 `mediaInputEnabled` 与提示文案
+  `describeSkippedMedia` 在 `conversation_types.h`。**默认全 false = 纯文本模型**, 所以发图/语音
+  前要先在模型条目里把对应项打开 (TUI 附件按钮也看同一组开关)。chatbot 侧另补了一条:
+  带附件的输入被主程序按参数错误拒绝时 (单文件超 10/25/50MB 上限), `flush` 会去掉 `attachments`
+  重投一次, 正文不会再跟着一起丢 (见 `resource/history/media-capability-gating/index.md`)

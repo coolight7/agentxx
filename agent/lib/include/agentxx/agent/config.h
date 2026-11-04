@@ -120,10 +120,15 @@ public:
     bool requestReasoningSummary = true;
 
     /// 是否支持图像输入 (多模态)
+    ///
+    /// - 客户端据它决定是否展示附件入口 (三者任一为真才显示按钮);
+    /// - **服务端也据它过滤附件**: 为 false 时图片不会被投给模型 (上游对不认识的内容块
+    ///   通常整轮 400), 改为在用户消息正文里补一行「[附件未传给模型] …」并保留文件名/路径,
+    ///   上下文里已有的 `image_urls` 也会在请求前剔掉 (见 [mediaInputEnabled])
     bool imageInput = false;
-    /// 是否支持音频输入 (多模态)
+    /// 是否支持音频输入 (多模态; 服务端过滤同 [imageInput])
     bool audioInput = false;
-    /// 是否支持视频输入 (多模态)
+    /// 是否支持视频输入 (多模态; 服务端过滤同 [imageInput])
     bool videoInput = false;
 
     /// 是否在请求体里加 prompt 缓存断点 (yaml `cache_control`, 默认关闭)

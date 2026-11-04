@@ -269,6 +269,9 @@ asio::awaitable<void> runBody(
         cfg.model.baseUrl               = std::string{baseUrl};
         cfg.model.apiKey                = "EMPTY";
         cfg.model.modelName             = "sim-model";
+        // 图片声明为可用: 服务端会按声明的能力过滤附件 (用例 7 要求图片能投上去);
+        // 音频/视频保持默认 false, 由用例 7e~7g 逐个验证过滤行为
+        cfg.model.imageInput            = true;
         cfg.availableModels["test-sim"] = cfg.model;
         cfg.currentModelName            = "test-sim";
         cfg.prompt.systemPrompt         = "You are the built-in assistant.";
@@ -1066,6 +1069,137 @@ asio::awaitable<void> runBody(
         // 正文没被塞进输入, 但路径给了 (模型可以自己用工具读)
         XX_TEST_EXPECT_TRUE(request.find("附件内容开始") == std::string::npos);
         XX_TEST_EXPECT_TRUE(request.find("blob.bin") != std::string::npos);
+    }
+
+    // ===================== 7e. 视频: 模型没声明视频输入时不投多模态附件 =====================
+    //
+    // 背景 (真机踩到的): QQ 视频被当成多模态附件投上去后, 上游不认 `video_url`
+    // 就整轮 HTTP 400, 机器人从此一声不出; 而 base64 视频还会永久留在会话上下文里,
+    // 之后每一轮都重发一次。图片/音频同理, 所以三类都按模型声明的能力投递。
+    // 切换测试模型声明的多模态能力 (改注册表里的配置; 覆盖会重建 provider)
+    auto setModelCaps = [&rootCtx](bool image, bool audio, bool video) {
+        if (!rootCtx || !rootCtx->modelRegistry) {
+            return;
+        }
+        auto mc       = rootCtx->modelRegistry->getModelConfig("test-sim");
+        mc.imageInput = image;
+        mc.audioInput = audio;
+        mc.videoInput = video;
+        rootCtx->modelRegistry->registerModel("test-sim", mc);
+    };
+    // 发一条带附件的消息并等一轮模型请求, 返回请求原文
+    auto sendWithAttachment = [&](std::string_view chatId,
+                                  std::string_view msgId,
+                                  std::string_view text,
+                                  std::string_view kind,
+                                  std::string_view url,
+                                  std::string_view fileName,
+                                  std::string_view mime) -> asio::awaitable<std::string> {
+        Json args = Json::object();
+        args["account"]     = "fake_main";
+        args["type"]        = "private";
+        args["chatId"]      = std::string{chatId};
+        args["text"]        = std::string{text};
+        args["sender"]      = "小张";
+        args["msgId"]       = std::string{msgId};
+        args["attachments"] = Json::array(
+            {Json{{"kind", std::string{kind}},
+                  {"url", std::string{url}},
+                  {"fileName", std::string{fileName}},
+                  {"mimeType", std::string{mime}},
+                  {"sizeBytes", 2048}}}
+        );
+        const int before = g_da_sim_request_count.load();
+        if (!co_await injectJson(args)) {
+            co_return std::string{};
+        }
+        const bool gotNewRequest
+            = co_await waitUntil(ex, 60s, [&]() { return g_da_sim_request_count.load() > before; });
+        if (!gotNewRequest) {
+            co_return std::string{};
+        }
+        co_return lastRequestText();
+    };
+    XX_TEST_EXPECT_TRUE(rootCtx && rootCtx->modelRegistry != nullptr);
+    {
+        XX_TEST_EXPECT_TRUE(co_await drain());
+        daSimSetToolCalls(Json::array(), 0);
+        daSimSetResponseContent("");
+        setModelCaps(true, false, false);
+        const auto request = co_await sendWithAttachment(
+            "U9",
+            "msg-video",
+            "这个视频里是什么",
+            "video",
+            "https://example.invalid/b.mp4",
+            "b.mp4",
+            "video/mp4"
+        );
+        // 没声明视频输入的模型收不到 video_url (上游会整轮 400)
+        XX_TEST_EXPECT_TRUE(request.find("video_url") == std::string::npos);
+        // 但正文里有文件名/地址与原因, 模型知道收到了视频、也知道自己没看到内容
+        XX_TEST_EXPECT_TRUE(request.find("b.mp4") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(request.find("附件未传给模型") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(request.find("video_input = false") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(request.find("这个视频里是什么") != std::string::npos);
+
+        // 模型声明视频输入后照旧投 (声明了能力的模型不该被一起挡掉)
+        setModelCaps(true, false, true);
+        const auto requestWithVideo = co_await sendWithAttachment(
+            "U9",
+            "msg-video-2",
+            "再看一遍这个视频",
+            "video",
+            "https://example.invalid/b.mp4",
+            "b.mp4",
+            "video/mp4"
+        );
+        XX_TEST_EXPECT_TRUE(requestWithVideo.find("再看一遍这个视频") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(requestWithVideo.find("video_url") != std::string::npos);
+        // 注意不能断言「正文里没有 [附件未传给模型]」: 上一轮那条消息的说明已经写进
+        // 会话上下文, 历史每轮都会重发 —— 只能看本次这一条的正文
+        setModelCaps(true, false, false);
+    }
+
+    // ===================== 7f. 音频: 没声明 audio_input 时不投 =====================
+    {
+        XX_TEST_EXPECT_TRUE(co_await drain());
+        daSimSetToolCalls(Json::array(), 0);
+        const auto request = co_await sendWithAttachment(
+            "U2",
+            "msg-audio",
+            "这段语音说了什么",
+            "audio",
+            "https://example.invalid/c.wav",
+            "c.wav",
+            "audio/wav"
+        );
+        XX_TEST_EXPECT_TRUE(request.find("input_audio") == std::string::npos);
+        XX_TEST_EXPECT_TRUE(request.find("c.wav") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(request.find("audio_input = false") != std::string::npos);
+        // 语音的平台识别文本仍在正文里 (投不投音频都不影响对话)
+        XX_TEST_EXPECT_TRUE(request.find("这段语音说了什么") != std::string::npos);
+    }
+
+    // ===================== 7g. 图片: 没声明 image_input 时同样不投 =====================
+    {
+        XX_TEST_EXPECT_TRUE(co_await drain());
+        daSimSetToolCalls(Json::array(), 0);
+        setModelCaps(false, false, false);
+        const auto request = co_await sendWithAttachment(
+            "U9",
+            "msg-image-off",
+            "这张图里是什么",
+            "image",
+            "https://example.invalid/d.png",
+            "d.png",
+            "image/png"
+        );
+        XX_TEST_EXPECT_TRUE(request.find("image_url") == std::string::npos);
+        XX_TEST_EXPECT_TRUE(request.find("d.png") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(request.find("image_input = false") != std::string::npos);
+        // 恢复图片能力 (后面的用例都按“只声明了图片”跑)
+        setModelCaps(true, false, false);
     }
 
     // ===================== 8. 一条回复超长 → 按上限切成多条 =====================
