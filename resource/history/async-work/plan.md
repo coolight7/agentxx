@@ -1009,10 +1009,10 @@ K 个后台任务的 token 流与工具调度都在容器 io 线程上交错执�
 4. **会话目录的前置条件**: `{创建者会话目录}` 在创建者**没有**会话存储时不存在, 此时
    ① 回退到 `{dataDir}/sqlite/sessions/agent/{async_id}`, 还是 ② 直接拒绝 `session_store=true`? 我建议 ①。
 5. **台账保留**: 结束后保留 5 分钟 (`linger_ms`) 作为纯内存回收, 可以吗? 还是"一直留到进程退出"?
-6. **插件表成员数**: 4 个 (`submit` / `cancel` / `get` / `list`) 是否合并成 3 个 (`get` 并入 `list(id 可空)`)?
+6. **插件表成员数**: 4 个 (`submit` / `cancel` / `get` / `list`) 是否合并成 3 个 (`get` 并入 `list(id 可空)`)? 人工核对可行
 7. **`kind=tool` 的落地时间**: 本期只落 `kind=agent`、结构预留, 确认?
-   (后续 `execute_command background:true` 与插件的后台工具都走同一条通道)
-8. **provider 共享**: 本期不做 (§10.2) 确认?
+   (后续 `execute_command background:true` 与插件的后台工具都走同一条通道); 人工核对: 先做 agent，然后做 tool，异步启动的参数名称要统一为 `async:bool`
+8. **provider 共享**: 本期不做 (§10.2) 确认? 共享 provider/HTTP 连接池需要做，这个应该迁移到 AgentHost 提供，所有 AgentNode 共享, 以便 agent、tool 都共享使用
 
 ## 13. 文档更新清单
 
