@@ -88,6 +88,7 @@ agentxx 有两处持久化配置，职责必须分开，避免同一件事两处
 | 服务端 | `permission.mode`、`permission.whitelist`、`permission.blacklist` | 权限判定在 agent 侧；客户端只展示询问并镜像"完全授权" |
 | 服务端 | `subagent.enable`、`worktree.enable` | 工具装配 |
 | 服务端 | `dev_mode` | 统计与诊断采集，启动期冻结 |
+| 服务端 | `event.*`、`async_work.*` | 事件中枢与后台任务的开关/预算/落盘/中断策略；客户端不参与，也不知道有后台任务 |
 | 服务端 | `plugin.mount.policy` / `.list` / `.args` | 本会话挂哪些插件 |
 | 服务端 | `work_dir` | 工具相对路径、子进程工作目录、权限名单的基准；远程客户端显示与选文件用服务端回报的 `hello_ack.workDir` |
 | 服务端 | `language` | 会话与提示词语言；远程客户端的界面语言是设置库的 `tui.lang` |

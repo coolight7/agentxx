@@ -439,7 +439,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 | `agentxx.agent.tasks` | 1 | 后台任务主程序托管: `register_task/cancel_task` (kit `spawn` 自动注册; 主程序登记句柄 + 持 inflight + `notify.done` 完成通知 —— 卸载时 detachAll 统一取消 + `waitInflightZero` 精确等待, 无协程帧悬挂; `notify` 为出参, `notify.done` 可从插件任意线程回调) |
 | `agentxx.agent.feature` | 2 | 功能点 (扩展点) 体系: `list_points/define_point/undefine_point` (插件声明自己的点, id 须落在 `plugin.<插件名>.*`) + `register_impl/unregister_impl` (为任意已声明的点登记实现, 按层/优先级排序) + `call_point_async` (按名调用一个**通用 JSON 点**, 只拿数据: 不写值缓存/不记置空/不改调用方会话; 强类型核心点返回受理错误; 取消用 `pluginxx.cancel.op_cancel`) |
 | `agentxx.agent.mount` | 1 | 挂载查询 (诊断用): `list` (全部挂载摘要 JSON 数组, 每项含 agentId/agentName/workDir/language/mountSeq/plugins) + `get` (按 agentId 查单个挂载摘要, 没有该挂载返回 -1) |
-| `agentxx.agent.runtime` | 1 | 会话运行时 (插件挂自己的根并驱动会话): `mount_root/unmount_root` (带自己的 `AgentConfig` 覆盖与插件挂载策略) + `open_channel/close_channel` (一个 sessionId 一条通道, 事件经回调交付) + `send_input/cancel/select_model/respond_interrupt` + `get_channel_state/get_context_messages/list_runtime` (只读查询) + `register_trigger/unregister_trigger/emit_event/register_timer/unregister_timer` (事件驱动)。入口用 `root_id` / `channel_id` 句柄寻址, 不带 agent 引用 —— 它看的是整个容器。详见 §19 |
+| `agentxx.agent.runtime` | 1 | 会话运行时 (插件挂自己的根并驱动会话): `mount_root/unmount_root` (带自己的 `AgentConfig` 覆盖与插件挂载策略) + `open_channel/close_channel` (一个 sessionId 一条通道, 事件经回调交付) + `send_input/cancel/select_model/respond_interrupt` + `get_channel_state/get_context_messages/list_runtime` (只读查询) + `register_trigger/unregister_trigger/emit_event/register_timer/unregister_timer` (事件驱动)。入口用 `root_id` / `channel_id` 句柄寻址, 不带 agent 引用 —— 它看的是整个容器。表尾的 4 个后台任务成员 (`submit/cancel/get/list_async_work`) 尚未实现。详见 §19 |
 | `agentxx.agent.event` | 1 | 事件中枢: `define_event` (声明事件源: 名字/种类/说明/历史条数/ttl/保留期) + `emit_value` (发布一个 JSON 值, 任意线程) + `end_event` / `remove_event` + `query_event` / `list_events` (查状态与清单) + `register_wait` / `cancel_wait` / `list_waits` (替某个会话登记等待, 值到达后按投递模式变成该会话的输入)。事件与等待按 `plugin:<实例名>` 记账, 禁用/卸载时整批回收; 与触发器/定时器的选型见 §20 |
 
 > 表中"版本"列 = 表声明的 `X_VERSION`, 与 `X_MIN_VERSION` 一起构成版本对, 另有
@@ -1943,6 +1943,7 @@ plugin:
 | | `emit_event(topic, payload)` | 发一条 `std::string` 事件 (任意线程, 立即返回) |
 | 定时 | `register_timer(spec, out_id)` | 一次性 / 周期 |
 | | `unregister_timer(id)` | 注销定时器 |
+| (待做) 后台任务 | `submit_async_work` / `cancel_async_work` / `get_async_work` / `list_async_work` | 追加在表尾; **尚未实现** —— 现在插件只能经事件中枢间接等结果 (`plugin.<名>.*` 发值 + 模型 `agentxx_event {opt:"watch", id}`), 见 [events.md](events.md) 第 8 节 |
 
 错误码 (`AGENTXX_PLUGIN_RUNTIME_*`): `OK(0)` / `ERR_ARG` / `ERR_STATE` / `ERR_NOT_FOUND` /
 `ERR_BUDGET` / `ERR_CONFLICT` / `ERR_UNSUPPORTED` / `ERR_FAILED`。具体原因写日志
@@ -2180,10 +2181,11 @@ plugin:
 ### 21.2 值事件段
 
 事件中枢的事件名**就是**总线主题: 内置值事件统一在 `agentxx.agent.event.` 段
-(`agentxx.agent.event.turn.start` / `.tool.end.<工具名>` / `.subagent.done.<id>` /
-`.timer.<名字>`), 与 `agentxx.agent.turn.start` 这类强类型主题分开, 避免同一主题两种载荷;
-插件值事件直接用自己的族。`turn.` / `tool.` / `subagent.` / `timer.` / `host.` 五个子段归
-框架, 模型与插件建事件时不能占。
+(`agentxx.agent.event.turn.start` / `.tool.end.<工具名>` / `.timer.<名字>`),
+唯一例外是后台任务的完成事件 `agentxx.agent.async.done` (见
+[events.md](events.md) 第 8 节), 它们与 `agentxx.agent.turn.start` 这类强类型主题分开,
+避免同一主题两种载荷; 插件值事件直接用自己的族。`turn.` / `tool.` / `async.` / `timer.` /
+`host.` 五个子段归框架, 模型与插件建事件时不能占。
 
 ### 21.3 跨端主题 (agent ↔ client)
 

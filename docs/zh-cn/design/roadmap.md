@@ -260,3 +260,9 @@
   不动用户已有选项）；`PWD` 取命令实际运行目录（会话工作目录, 默认即主程序运行目录,
   与子进程 cwd 一致）；`command` 模块新增子进程 UTF-8 编码、中文往返与 `PWD` 用例。
 - 2026-10-26: 按代码/文档/测试一致性精读（`resource/history/analyse-1/analyse.md`）同步: 接口表数量 20→21、Tip 前缀去 `#`、wire 消息清单改为以 `wire-protocol-fields.md` 为准并补 `host_tool_*`、插件目录与工具数量、权限声明工具清单; 新增 PRO-13 / PRO-14 / TRN-1 三条未来计划。
+- 2026-11-05: JOB-1~JOB-12 中的“后台任务”部分实施（`resource/history/async-work/plan.md`）：
+  `agentxx_subagent` 去掉 `async`/`event_name` 参数，改由 `async_work.enable` 控制；新增
+  `agentxx::agent::AsyncWorkManager`（每队列 FIFO + 额度，不设全局/深度上限）、
+  单一结果事件 `agentxx.agent.async.done` + `EventWaitSpec::match` 定向等待、
+  `agentxx_event` 新增 `works` 与 `id`；测试模块 `async_work`。剩下的作业表/进度/后台命令/
+  配额车道等仍按原计划单独立项（见 [events.md](events.md) 第 13 节“未做的事项”）。

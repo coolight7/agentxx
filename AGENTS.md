@@ -9,7 +9,7 @@
     - Android 5.0+
 
 ## 整体设计 & 建议
-- 详细主程序架构设计见[design](docs/zh-cn/design/index.md)，插件设计文档见[plugins.md](docs/zh-cn/design/plugins.md)，客户端界面层（描述层/适配/kit/GUI 接入）见[ui-layer.md](docs/zh-cn/design/ui-layer.md)，事件中枢与异步子代理见[events.md](docs/zh-cn/design/events.md)，当大幅修改代码时，请参考并更新
+- 详细主程序架构设计见[design](docs/zh-cn/design/index.md)，插件设计文档见[plugins.md](docs/zh-cn/design/plugins.md)，客户端界面层（描述层/适配/kit/GUI 接入）见[ui-layer.md](docs/zh-cn/design/ui-layer.md)，事件中枢与后台任务见[events.md](docs/zh-cn/design/events.md)，当大幅修改代码时，请参考并更新
 - Agent 的设计支持:
     - 并发多会话，单线程/多协程交错执行会话，不需要线程锁
     - client (tui/cli) 主要负责UI渲染展示、用户交互；agent (BaseAgent/CodeAgent) 负责运行会话、调用 llm api、运行 toolcall 等
@@ -529,7 +529,7 @@ path/to/agentxx_test --log-level warn string_util regex
   `agentxx.client.*` / 插件 `plugin.<插件名>.*`), 写侧只能落在自己那一族的根下 (插件写
   `plugin.*`, 不限定插件名, 只建议用自己的)、读侧可跨族但必须全名,
   **框架只校验不补前缀**; 中枢事件名**就是**总线主题, 内置值事件统一在
-  `agentxx.agent.event.` 段 (与强类型主题分开), `turn.`/`tool.`/`subagent.`/`timer.`/`host.`
+  `agentxx.agent.event.` 段 (与强类型主题分开), `turn.`/`tool.`/`async.`/`timer.`/`host.`
   子段保留给框架; 功能点 id 同一套规则 (`agentxx.agent.context.*` / `plugin.<名>.*`);
   投递文本固定以 `[Event] <名字> (<mode>)` 开头
   (不命中工具失败前缀); 往会话塞输入统一经 `SessionInputSink`
@@ -537,20 +537,44 @@ path/to/agentxx_test --log-level warn string_util regex
   `Session::pendingInputs_`; 轮末把落在最后一次模型调用之后的 next-step 输入提升为下一轮
   (`rolloverLeftoverNextStepInputs`, 仅在有驱动端时)。内置事件源
   `agentxx.agent.event.turn.start`/`.turn.end`/`.tool.end.<工具名>`/
-  `.subagent.done.<result_id>`/`.timer.<名字>` 先问 `wants()` 再发。
-  模型工具 `agentxx_event` (watch/await/status/list/cancel/emit/end), 配置键 `event.*`
+  `.timer.<名字>` 先问 `wants()` 再发 (后台任务的 `agentxx.agent.async.done` 是唯一
+  落在 `agentxx.agent.event.` 段外的内置值事件, 见下面的后台任务段)。
+  模型工具 `agentxx_event` (watch/await/status/list/works/cancel/emit/end, 前台任务用
+  `id` = asyncId 定向等/查/取消), 配置键 `event.*`
   (enable/value_max_bytes/wait_timeout_ms/max_waits_session/allow_headless_turn/delivery)。
-  `agentxx_subagent` 的 `async:true` 在 `AgentHost::spawnBatch` 里**立即受理**
-  (同一批同步任务照旧等; 返回 `{started:true, eventName}`), 后台跑完 `postValue`+`postEnd`,
-  失败/取消也发; 作业令牌独立于轮次, 由 `cancelAsyncJobs(ctx)`/`cancelAsyncJobsOfSession`
-  取消; 子代理上下文继承父 hub。诊断: `KeyMetrics` 的 `events.*` 三计数 + 加载快照
-  `event_hub` 段 + `--dump-diagnostics` 的 `## event hub`; 测试模块 `event_hub` /
+  诊断: `KeyMetrics` 的 `events.*` 三计数 + 加载快照 `event_hub` 段 +
+  `--dump-diagnostics` 的 `## event hub`; 测试模块 `event_hub` /
   `event_tools` / `event_delivery` / `event_subagent` / `plugin_event`。插件面接口表
   `agentxx.agent.event` 已实现 (2026-11-03): `define_event`/`emit_value`/`end_event`/
   `remove_event`/`query_event`/`list_events`/`register_wait`/`cancel_wait`/`list_waits`,
   事件与等待按 `plugin:<实例名>` 记账 (禁用/卸载整批回收, 注册清单 `eventRecords`/`eventWaits`),
   示例插件 `example_event`; **未做**: 触发器/定时器收敛到中枢、`execute_command` 的
   `background:true`。
+- 后台任务 (async work, 2026-11, 详见 [events.md](docs/zh-cn/design/events.md) 第 8 节):
+  `agentxx::agent::AsyncWorkManager` (`agent/lib/{include/agentxx/agent/async_work.h,src/agent/async_work.cpp}`,
+  由 `AgentHost` 持有并通过 `friend` 访问其私有接口) = 台账 (`AsyncWorkEntry`: kind/state/
+  queueKey/时间戳/结果) + 每队列 FIFO + 额度 + 结束 linger 清扫 + 取消/查询 + 指标记账;
+  `kind` 目前只有 `agent` 在用 (`tool` 只留结构, `submit` 对 `kind=tool` 明确拒绝
+  `not supported yet`)。**委派即提交**: `agentxx_subagent` 不再有 `async`/`event_name`
+  参数, 开关是 `async_work.enable`, 受理返回 `{started:true, asyncId}`, 工具正文
+  `[Async work started] id=...`。**单一事件名** `agentxx.agent.async.done`
+  (`naming.h` 的 `kAgentAsyncPrefix`; 它是唯一落在 `agentxx.agent.event.` 段外的内置值
+  事件), 值里用 `asyncId` 区分, 等待靠 `EventWaitSpec::match` 过滤 (不匹配的值不消耗
+  等待、带过滤的等待不随事件结束收尾); `asyncId` 就是任务 agent 的 `sessionId`。
+  并发只有每队列额度 (默认队列 = 创建者 agentId, `async_work.max_concurrent` 默认 3),
+  **不设**排队条数/嵌套深度/全局上限。取消: `agentxx_event {opt:"cancel", id}` /
+  `{opt:"cancel", scope:"mine"}`、`AgentHost::cancelAsyncWorks(ctx)` (排队中的直接出队,
+  运行中的置取消令牌, 被取消同样发终态)。没有中枢时仍受理, 结果只落台账
+  (`delivered=false`), 用 `agentxx_event {opt:"works"}`/`{opt:"status", id}` 查。
+  `agentxx_subagent` 一批里同步任务照旧等结果, 只有带 `tool_call_id` 的才走后台
+  (压缩等内部直调一律同步); 取消令牌独立于轮次, 子代理上下文继承父 hub。
+  配置 `async_work.*`: `enable`/`max_concurrent`/`interrupt_policy`(bubble|deny|allow)/
+  `session_store`/`session_store_keep_days`/`linger_ms`/`result_max_bytes`。
+  诊断: `KeyMetrics` 与加载快照的 `async_work` 段; 测试 `async_work` /
+  `event_subagent` / `event_tools`。**未做**: `kind=tool` 异步工具、`interrupt_policy`
+  应答器、任务会话落盘 (`{创建者会话目录}/agent/{asyncId}`)、`agentxx.agent.runtime`
+  表尾 4 成员 (submit/cancel/get/list_async_work)、TUI Info「后台任务」段、
+  provider/HTTP 连接池下沉 `AgentHost`。
 - 会话运行时 (2026-10): `agentxx.agent.runtime` 表让插件挂自己的**根 agent**
   (`mount_root`: 只能放 `start`, `config_json` 给提示词/工具白名单, `mount_plugins` 给挂载策略,
   默认 `include_creator=false` 切断递归) 并在上面开**会话通道** (`open_channel` 一个

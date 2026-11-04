@@ -137,7 +137,7 @@ Stacked middleware architecture intercepting execution before and after Graph no
 | **MemoryFileMiddleware** | Reads and caches context memory files; content is appended to the end of the system message (stable prefix, so upstream KV/prefix caching can hit it). |
 | **SummarizationMiddleware** | Token tracking and automatic context compaction, preventing model window overflow. |
 | **SubagentManagerMiddleware** | Subagent delegation management: owns the `SubAgentManagerTool` singleton (`agentxx_subagent`), injecting it for models per YAML `subagent.enable`; the `service.subagent.execute` bus service stays registered (for internal paths like context compaction). |
-| **AgentHost** | Process-level agent host: Registers root agent and subagents as equal peers (`AgentNode`), spawning independent agents for subagent execution, serving `service.subagent` on both root and child global buses (flattening nested and root delegations into identical paths), enforcing depth and concurrency budgets, routing inter-agent messages via `HostBus`, and handling lifecycle cleanup. |
+| **AgentHost** | Process-level agent host: Registers root agent and subagents as equal peers (`AgentNode`), spawning independent agents for subagent execution, serving `service.subagent` on both root and child global buses (flattening nested and root delegations into identical paths), routing inter-agent messages via `HostBus`, owning the async-work manager (`async_work.h`: per-queue FIFO + quota; no global or nesting-depth limit), and handling lifecycle cleanup. |
 | **EventBridge** | Translates internal GraphEngine events into strongly-typed EventBus events. |
 | **LogPrint** | Debug logging middleware (conditionally compiled, log levels controlled by configuration). |
 
@@ -1085,7 +1085,7 @@ Host Bus (`HostBus`, owned by `AgentHost` for inter-agent routing):
 
 | Topic | Type | Description |
 |---|---|---|
-| `agent.spawn` | ReqHostSpawn / RespHostSpawn | Req/Resp | Spawns subagents (host enforces depth and concurrency budgets) |
+| `agent.spawn` | ReqHostSpawn / RespHostSpawn | Req/Resp | Spawns subagents (concurrency is limited per queue by `async_work.max_concurrent`; nesting depth is display-only) |
 | `agent.message` | ReqHostMessage / RespHostMessage | Req/Resp | Inter-agent messaging (mailbox / A2A bridge) |
 | `agent.progress` | EventHostProgress | Unidirectional | Progress events from any agent |
 | `agent.done` | EventHostDone | Unidirectional | Agent completion (signals host to reclaim AgentNode) |
