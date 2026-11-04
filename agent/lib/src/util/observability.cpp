@@ -171,6 +171,31 @@ void KeyMetrics::noteEventWaitTimeout() {
     eventWaitTimeouts_.fetch_add(1, std::memory_order_relaxed);
 }
 
+void KeyMetrics::noteAsyncWorkSubmitted(size_t queuedNow) {
+    asyncWorkSubmitted_.fetch_add(1, std::memory_order_relaxed);
+    // 排队峰值: 只增不减 (以原子比较交换写入最大值, 多线程提交也不会回退)
+    uint64_t peak = asyncWorkQueuedPeak_.load(std::memory_order_relaxed);
+    while (static_cast<uint64_t>(queuedNow) > peak
+           && !asyncWorkQueuedPeak_.compare_exchange_weak(
+               peak,
+               static_cast<uint64_t>(queuedNow),
+               std::memory_order_relaxed
+           )) {
+    }
+}
+
+void KeyMetrics::noteAsyncWorkFinished(bool hasError, bool canceled, int64_t runMs) {
+    asyncWorkFinished_.fetch_add(1, std::memory_order_relaxed);
+    if (canceled) {
+        asyncWorkCanceled_.fetch_add(1, std::memory_order_relaxed);
+    } else if (hasError) {
+        asyncWorkFailed_.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (runMs > 0) {
+        asyncWorkRunMs_.fetch_add(runMs, std::memory_order_relaxed);
+    }
+}
+
 std::string KeyMetrics::lastModelErrorKind() const {
     std::lock_guard<std::mutex> lock(errorMutex_);
     return lastModelErrorKind_;
@@ -245,6 +270,20 @@ utilxx_base::Json KeyMetrics::toJson() const {    utilxx_base::Json j = utilxx_b
     events["wait_timeouts"] = eventWaitTimeouts_.load(std::memory_order_relaxed);
     j["events"]             = std::move(events);
 
+    // 后台任务 (async work)
+    utilxx_base::Json asyncWork = utilxx_base::Json::object();
+    asyncWork["submitted"]      = asyncWorkSubmitted_.load(std::memory_order_relaxed);
+    asyncWork["finished"]       = asyncWorkFinished_.load(std::memory_order_relaxed);
+    asyncWork["failed"]         = asyncWorkFailed_.load(std::memory_order_relaxed);
+    asyncWork["canceled"]       = asyncWorkCanceled_.load(std::memory_order_relaxed);
+    asyncWork["queued_peak"]    = asyncWorkQueuedPeak_.load(std::memory_order_relaxed);
+    asyncWork["run_total_ms"]   = asyncWorkRunMs_.load(std::memory_order_relaxed);
+    asyncWork["run_avg_ms"]     = avgOf(
+        asyncWorkRunMs_.load(std::memory_order_relaxed),
+        asyncWorkFinished_.load(std::memory_order_relaxed)
+    );
+    j["async_work"] = std::move(asyncWork);
+
     return j;
 }
 
@@ -258,7 +297,8 @@ std::string KeyMetrics::summary() const {
     return fmt::format(
         "turns={} (ok={} failed={} Canceled={} interrupted={}) ttft_avg={:.1f}ms (n={}) "
         "model_calls={} errors={} tools={} (failed={}) compactions={} prompt_refreshes={} "
-        "prompt_changes={} events_delivered={} events_dropped={} wait_timeouts={}",
+        "prompt_changes={} events_delivered={} events_dropped={} wait_timeouts={} "
+        "async_work={} (done={} failed={} canceled={} queued_peak={})",
         turns,
         turnsCompleted_.load(std::memory_order_relaxed),
         turnsFailed_.load(std::memory_order_relaxed),
@@ -275,14 +315,18 @@ std::string KeyMetrics::summary() const {
         promptChangedSections_.load(std::memory_order_relaxed),
         eventDelivered_.load(std::memory_order_relaxed),
         eventDropped_.load(std::memory_order_relaxed),
-        eventWaitTimeouts_.load(std::memory_order_relaxed)
+        eventWaitTimeouts_.load(std::memory_order_relaxed),
+        asyncWorkSubmitted_.load(std::memory_order_relaxed),
+        asyncWorkFinished_.load(std::memory_order_relaxed),
+        asyncWorkFailed_.load(std::memory_order_relaxed),
+        asyncWorkCanceled_.load(std::memory_order_relaxed),
+        asyncWorkQueuedPeak_.load(std::memory_order_relaxed)
     );
 }
 
 void KeyMetrics::reset() {
     turns_.store(0);
-    turnsCompleted_.store(0);
-    turnsFailed_.store(0);
+    turnsCompleted_.store(0);    turnsFailed_.store(0);
     turnsCanceled_.store(0);
     turnsInterrupted_.store(0);
     firstTokenSamples_.store(0);
@@ -311,6 +355,12 @@ void KeyMetrics::reset() {
     eventDelivered_.store(0);
     eventDropped_.store(0);
     eventWaitTimeouts_.store(0);
+    asyncWorkSubmitted_.store(0);
+    asyncWorkFinished_.store(0);
+    asyncWorkFailed_.store(0);
+    asyncWorkCanceled_.store(0);
+    asyncWorkQueuedPeak_.store(0);
+    asyncWorkRunMs_.store(0);
     turnStartSteadyMs_.store(0);
     firstTokenSeen_.store(false);
     {

@@ -91,6 +91,15 @@ public:
     /// 一次事件等待超时 (`watch` 的 timeout 到点)
     void noteEventWaitTimeout();
 
+    // ---- 异步任务 (async work) ----
+
+    /// 一次后台任务被受理 (入队)
+    /// - 同时记录当前排队数峰值 (`queuedPeak` 只增不减)
+    void noteAsyncWorkSubmitted(size_t queuedNow);
+    /// 一次后台任务收尾
+    /// - `hasError` / `canceled` 决定计入失败还是取消 (取消优先)
+    void noteAsyncWorkFinished(bool hasError, bool canceled, int64_t runMs);
+
     /// 指标 JSON (字段稳定; 时间量为毫秒累计 + 计数, 便于外部求平均)
     utilxx_base::Json toJson() const;
 
@@ -231,6 +240,31 @@ public:
     /// 最近一次模型错误分类 (空 = 无错误)
     std::string lastModelErrorKind() const;
 
+    /// 后台任务: 受理 / 收尾 / 失败 / 取消 / 排队峰值 / 运行耗时累计
+    uint64_t asyncWorkSubmitted() const noexcept {
+        return asyncWorkSubmitted_.load(std::memory_order_relaxed);
+    }
+
+    uint64_t asyncWorkFinished() const noexcept {
+        return asyncWorkFinished_.load(std::memory_order_relaxed);
+    }
+
+    uint64_t asyncWorkFailed() const noexcept {
+        return asyncWorkFailed_.load(std::memory_order_relaxed);
+    }
+
+    uint64_t asyncWorkCanceled() const noexcept {
+        return asyncWorkCanceled_.load(std::memory_order_relaxed);
+    }
+
+    uint64_t asyncWorkQueuedPeak() const noexcept {
+        return asyncWorkQueuedPeak_.load(std::memory_order_relaxed);
+    }
+
+    int64_t asyncWorkRunMs() const noexcept {
+        return asyncWorkRunMs_.load(std::memory_order_relaxed);
+    }
+
 private:
 
     std::atomic<uint64_t> turns_{0};
@@ -270,6 +304,13 @@ private:
     std::atomic<uint64_t> eventDelivered_{0};
     std::atomic<uint64_t> eventDropped_{0};
     std::atomic<uint64_t> eventWaitTimeouts_{0};
+
+    std::atomic<uint64_t> asyncWorkSubmitted_{0};
+    std::atomic<uint64_t> asyncWorkFinished_{0};
+    std::atomic<uint64_t> asyncWorkFailed_{0};
+    std::atomic<uint64_t> asyncWorkCanceled_{0};
+    std::atomic<uint64_t> asyncWorkQueuedPeak_{0};
+    std::atomic<int64_t>  asyncWorkRunMs_{0};
 
     /// 本轮的单调起点 (noteTurnStart 记录, noteFirstToken/noteTurnEnd 取值)
     std::atomic<int64_t> turnStartSteadyMs_{0};

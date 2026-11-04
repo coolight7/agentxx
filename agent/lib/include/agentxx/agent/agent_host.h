@@ -75,6 +75,10 @@ struct AgentNode {
     std::string name;
     /// 父节点 id (空 = 根 agent)
     std::string parentAgentId;
+    /// 本节点运行的任务 session id
+    /// - 子代理 / 后台任务: 就是它跑的那一个会话 (后台任务 = `asyncId`)
+    /// - 根: 为空 (根可驱动多个会话, 没有唯一的"任务会话")
+    std::string sessionId;
     /// 嵌套深度 (根 = 0; 仅作展示, 节点容器不再限制嵌套深度)
     size_t depth = 0;
     /// 独立 agent 实例

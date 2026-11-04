@@ -5,6 +5,7 @@
 #include "agentxx/agent/context.h"
 #include "agentxx/event/hub.h"
 #include "agentxx/util/exception.h"
+#include "agentxx/util/observability.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/post.hpp"
@@ -198,6 +199,7 @@ AsyncWorkSubmitResult
         out.error = "agent host is gone";
         return out;
     }
+    auto metrics = creator ? creator->metrics : nullptr;
 
     // ---- 自包含快照: 配置强引用与配额一次带走, 运行期不再回读创建者 ----
     if (!spec.baseConfig && creator && creator->agentConfig) {
@@ -238,6 +240,7 @@ AsyncWorkSubmitResult
         entry.resultMaxBytes   = spec.resultMaxBytes;
         entry.token            = std::make_shared<neograph::graph::CancelToken>();
         entry.creatorCtx       = creator;
+        entry.metrics          = creator ? creator->metrics : nullptr;
         spec.asyncId           = entry.asyncId;
         entry.spec             = spec;
 
@@ -248,6 +251,11 @@ AsyncWorkSubmitResult
 
         queues_[spec.queueKey].push_back(entry.asyncId);
         entries_.insert_or_assign(entry.asyncId, std::move(entry));
+
+        // 指标: 受理 + 当前排队数峰值
+        if (metrics) {
+            metrics->noteAsyncWorkSubmitted(queues_[spec.queueKey].size());
+        }
     }
 
     XX_LOGI(
@@ -429,6 +437,13 @@ asio::awaitable<void>
             entry.resultText             = truncateUtf8(content, entry.resultMaxBytes);
             entry.lingerDeadlineSteadyMs = steadyNowMs() + entry.lingerMs;
             queueKey                     = entry.queueKey;
+            if (entry.metrics) {
+                entry.metrics->noteAsyncWorkFinished(
+                    hasError,
+                    canceled,
+                    finishedAtMs - startedAtMs
+                );
+            }
             auto rit                     = runningPerQueue_.find(queueKey);
             if (rit != runningPerQueue_.end()) {
                 if (rit->second > 0) {

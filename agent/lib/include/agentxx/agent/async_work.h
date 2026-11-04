@@ -20,6 +20,10 @@ class CancelToken;
 } // namespace neograph::graph
 
 namespace agentxx {
+namespace util {
+class KeyMetrics;
+} // namespace util
+
 namespace agent {
 
 class AgentConfig;
@@ -165,6 +169,8 @@ struct AsyncWorkEntry {
     AsyncWorkSpec                                 spec;
     std::shared_ptr<neograph::graph::CancelToken> token;
     std::weak_ptr<AgentContext>                   creatorCtx;
+    /// 创建者的关键指标 (提交时取得; 任务收尾时记账)
+    std::shared_ptr<agentxx::util::KeyMetrics> metrics;
     size_t                                        maxConcurrent   = 3;
     int64_t                                       lingerMs        = 300000;
     size_t                                        resultMaxBytes  = 8192;

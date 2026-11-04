@@ -8,6 +8,7 @@
 /// 输出保持稳定顺序 (map 按键排序, 列表按加载顺序), 便于人工对比两次启动的输出。
 #include "agentxx/agent/assembly_snapshot.h"
 
+#include "agentxx/agent/agent_host.h"
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/model_registry.h"
 #include "agentxx/agent/session_store.h"
@@ -504,6 +505,35 @@ utilxx_base::Json buildRuntimeSnapshot(const AgentContext& ctx) {
         root["event_hub"] = ctx.eventHub->statsJson();
     }
 
+    // ---- 后台任务 (async work): 本 agent 创建的任务现状 ----
+    // - 队列/额度是容器级的, 这里只看"我提交的那些"; 排版与诊断包都读这一段
+    if (auto host = ctx.host.lock(); host) {
+        const auto& cfg     = *ctx.agentConfig;
+        const auto  entries = host->asyncWorksJson(ctx.agentId, {}, true, 20);
+        size_t      running = 0;
+        size_t      queued  = 0;
+        if (entries.is_array()) {
+            for (const auto& item : entries) {
+                const auto state = item.value("state", std::string{});
+                if (state == "running") {
+                    ++running;
+                } else if (state == "queued") {
+                    ++queued;
+                }
+            }
+        }
+        root["async_work"] = utilxx_base::Json{
+            {"enable",           cfg.enableAsyncWork          },
+            {"max_concurrent",   cfg.asyncWorkMaxConcurrent   },
+            {"interrupt_policy", cfg.asyncWorkInterruptPolicy },
+            {"session_store",    cfg.asyncWorkSessionStore    },
+            {"linger_ms",        cfg.asyncWorkLingerMs        },
+            {"running",          running                     },
+            {"queued",           queued                      },
+            {"entries",          entries                     },
+        };
+    }
+
     return root;
 }
 
@@ -903,6 +933,20 @@ std::vector<std::string> renderAssemblySnapshot(const utilxx_base::Json& snapsho
             h.value("deferred", 0),
             h.value("dropped", 0),
             h.value("closed", false)
+        ));
+    }
+    if (snapshot.contains("async_work") && snapshot["async_work"].is_object()) {
+        const auto& aw = snapshot["async_work"];
+        add(fmt::format(
+            "async_work: enable={} max_concurrent={} interrupt_policy={} session_store={} "
+            "running={} queued={} entries={}",
+            aw.value("enable", true),
+            aw.value("max_concurrent", 0),
+            aw.value("interrupt_policy", std::string{}),
+            aw.value("session_store", false),
+            aw.value("running", 0),
+            aw.value("queued", 0),
+            aw.contains("entries") && aw["entries"].is_array() ? aw["entries"].size() : 0
         ));
     }
     if (snapshot.contains("components") && snapshot["components"].is_object()) {

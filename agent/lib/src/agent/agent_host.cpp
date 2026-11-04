@@ -1040,6 +1040,7 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
     node->parentAgentId = (spec != nullptr && !spec->creatorAgentId.empty())
                               ? spec->creatorAgentId
                               : std::string{"root"};
+    node->sessionId     = subagentSessionId;
     node->depth         = 0;
     node->agent         = subagent;
     registry_.insert(node);
