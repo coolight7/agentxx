@@ -35,6 +35,116 @@ namespace agent {
 
 namespace {
 
+/// 把后台任务的提交快照写成派生配置
+/// - 只在快照里写了的时候覆盖 (空 = 与现状子代理一致: 只有内置工具)
+/// - 不读父上下文: 创建者先销毁也能跑
+void applyAsyncWorkOverrides(
+    const agentxx::agent::AsyncWorkSpec& spec,
+    agentxx::agent::AgentConfig&         subCfg
+) {
+    using namespace agentxx::agent;
+
+    // 模型: 空 = 创建者的 subagent 模型 (makeSubagentConfig 已处理)
+    if (!spec.model.empty()) {
+        subCfg.currentModelName = spec.model;
+    }
+    if (!spec.workDir.empty()) {
+        subCfg.workDir = spec.workDir;
+    }
+    if (!spec.language.empty()) {
+        subCfg.language         = normalizeLanguage(spec.language);
+        subCfg.languageExplicit = true;
+    }
+
+    // 插件挂载 (与 yaml `plugin.mount` 同构)
+    if (spec.plugins.has_value() && spec.plugins->is_object()) {
+        const auto& mount = *spec.plugins;
+        const auto  mode  = mount.value("mode", std::string{"none"});
+        if (mode == "all") {
+            subCfg.pluginMountPolicy = PluginMountPolicy::All;
+        } else if (mode == "listed" || mode == "list") {
+            subCfg.pluginMountPolicy = PluginMountPolicy::Listed;
+        } else {
+            subCfg.pluginMountPolicy = PluginMountPolicy::None;
+        }
+        subCfg.pluginMountList.clear();
+        if (mount.contains("list") && mount["list"].is_array()) {
+            for (const auto& item : mount["list"]) {
+                if (item.is_string() && !item.get<std::string>().empty()) {
+                    subCfg.pluginMountList.push_back(item.get<std::string>());
+                }
+            }
+        }
+        if (mount.contains("args") && mount["args"].is_object()) {
+            subCfg.pluginMountArgs = mount["args"];
+        }
+    }
+
+    // MCP: 字符串写法 `namespace=url` 或纯 url (命名空间由 url 推导)
+    if (!spec.mcpServers.empty()) {
+        subCfg.mcpServerUrls.clear();
+        for (const auto& raw : spec.mcpServers) {
+            if (raw.empty()) {
+                continue;
+            }
+            std::string ns;
+            std::string url = raw;
+            if (const auto eq = raw.find('='); eq != std::string::npos && eq > 0) {
+                ns  = raw.substr(0, eq);
+                url = raw.substr(eq + 1);
+            } else {
+                // 从 url 尾巴推一个可用命名空间 (工具名前缀要能过名字校验)
+                auto tail = raw;
+                if (const auto schemeEnd = tail.find("//"); schemeEnd != std::string::npos) {
+                    tail = tail.substr(schemeEnd + 2);
+                }
+                while (!tail.empty() && tail.back() == '/') {
+                    tail.pop_back();
+                }
+                for (const char ch : tail) {
+                    const bool ok = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+                                    || (ch >= '0' && ch <= '9') || ch == '_' || ch == '-';
+                    ns.push_back(ok ? ch : '_');
+                }
+            }
+            if (ns.empty() || url.empty()) {
+                XX_LOGW("async work: invalid mcp server entry `{}`, skipped", raw);
+                continue;
+            }
+            McpServerConfig server;
+            server.url           = url;
+            subCfg.mcpServerUrls[ns] = std::move(server);
+        }
+    }
+
+    // Skill / Memory / RAG 与权限边界 (只追加, 不覆盖创建者已有规则)
+    for (const auto& path : spec.skills) {
+        if (!path.empty()) {
+            subCfg.skillDirPaths.push_back(path);
+        }
+    }
+    for (const auto& path : spec.memoryFiles) {
+        if (!path.empty()) {
+            subCfg.memoryFilePaths.push_back(path);
+        }
+    }
+    for (const auto& path : spec.ragDocs) {
+        if (!path.empty()) {
+            subCfg.ragDocsPaths.push_back(path);
+        }
+    }
+    for (const auto& path : spec.permissionAllowPaths) {
+        if (!path.empty()) {
+            subCfg.permissionAllowPaths.push_back(path);
+        }
+    }
+    for (const auto& path : spec.permissionDenyPaths) {
+        if (!path.empty()) {
+            subCfg.permissionDenyPaths.push_back(path);
+        }
+    }
+}
+
 } // namespace
 
 // ===========================================================================
@@ -908,6 +1018,12 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
             subagentName,
             *task.enableSummarization
         );
+    }
+
+    // ---- 后台任务自带的挂载清单 (提交快照; 默认全空 = 只有内置工具) ----
+    // - 这里是"创建者先销毁也能跑"的关键: 不靠父上下文, 只用快照
+    if (spec != nullptr) {
+        applyAsyncWorkOverrides(*spec, *subCfg);
     }
 
     // ---- 同上下文运行: 前缀复用与工具执行策略 ----

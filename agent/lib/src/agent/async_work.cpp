@@ -268,6 +268,37 @@ AsyncWorkSubmitResult
         out.queueAhead
     );
 
+    // 结果直接唤醒创建者会话 (`notify_delivery`): 入队前就替它登记定向等待,
+    // 任务完成时值经中枢投递成一条会话输入 (don't rely on the model to watch)
+    if (!spec.notifyDelivery.empty() && creator && creator->eventHub) {
+        auto hub           = creator->eventHub;
+        const auto asyncId = out.asyncId;
+        const auto session = spec.creatorSessionId;
+        const auto delivery = spec.notifyDelivery;
+        agentxx::events::EventWaitSpec waitSpec;
+        waitSpec.event         = std::string{kAsyncDoneEvent};
+        waitSpec.mode          = "first";
+        waitSpec.delivery      = delivery;
+        waitSpec.originSession = session;
+        waitSpec.owner         = std::string{kAsyncOwner};
+        waitSpec.ref           = asyncId;
+        waitSpec.match         = utilxx_base::Json{{"asyncId", asyncId}};
+        waitSpec.replay        = false;
+        bool executed          = false;
+        hub->callSync(
+            [&](agentxx::events::EventHub& h) {
+                h.watch(std::move(waitSpec));
+            },
+            &executed
+        );
+        if (!executed) {
+            XX_LOGW(
+                "[async_work] {}: could not register the session wake-up wait (hub busy)",
+                asyncId
+            );
+        }
+    }
+
     // 推进队列 (容器 io 线程); 提交方不等待
     // - 投递体持有容器强引用: 容器 (含本管理器) 在任务排空之前不会被释放, `this` 始终有效
     asio::post(host->ioCtx()->get_executor(), [host, key = spec.queueKey]() {

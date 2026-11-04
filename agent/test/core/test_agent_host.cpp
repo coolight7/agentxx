@@ -579,10 +579,13 @@ asio::awaitable<void> test_subagent_summarization_switch() {
 /// - B 纯文本回复 → 结果沿 B → A → 根逐级 resume 回填
 /// - 深度/并发预算、级联取消经 req.parentSessionId / req.cancelToken 生效
 /// - 全部节点回收 (registry 仅剩 root, runningSubagents == 0)
+/// - 本用例关掉后台任务 (`async_work.enable=false`): 要测的是"委派同步等结果"
+///   的嵌套链路; 开着时子代理会直接提交后台任务并在本轮结束前不等它
 asio::awaitable<void> test_host_spawn_nested_delegation() {
     auto sim     = startDaSimServer();
     auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
     auto cfg     = makeSimConfig(baseUrl);
+    cfg->enableAsyncWork = false;
 
     g_da_sim_response_content = "nested leaf result";
     g_da_sim_requests.clear();
