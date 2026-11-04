@@ -44,6 +44,10 @@ inline constexpr std::string_view kPluginRoot = "plugin.";
 /// 事件中枢的值事件段 (内置源与模型自建事件)
 inline constexpr std::string_view kAgentEventPrefix = "agentxx.agent.event.";
 
+/// 内置异步任务的结果事件段 (框架保留: 后台任务完成值都发在这一段)
+/// - 已实现: `agentxx.agent.async.done` (单事件名, 靠值里的 `asyncId` 区分任务)
+inline constexpr std::string_view kAgentAsyncPrefix = "agentxx.agent.async.";
+
 /// client 端插件数据的主题段 (客户端插件上行到 agent 总线)
 /// - 组装结果: `agentxx.client.plugin.<插件名>.<事件名>`
 inline constexpr std::string_view kClientPluginDataPrefix = "agentxx.client.plugin.";
@@ -182,10 +186,14 @@ inline bool validateClientPluginWriteTopic(std::string_view topic, std::string* 
     return false;
 }
 
-/// 中枢值事件名: 内置段 (`agentxx.agent.event.*`) 或插件族 (`plugin.<名>.*`)
-/// - 内置 agent 主题里只有 `agentxx.agent.event.` 段是值事件, 其余是强类型主题
+/// 中枢值事件名: 内置段 (`agentxx.agent.event.*`) / 异步任务段
+/// (`agentxx.agent.async.*`) 或插件族 (`plugin.<名>.*`)
+/// - 内置 agent 主题里只有这两段是值事件, 其余是强类型主题
 inline bool isEventName(std::string_view name) {
     if (name.size() > kAgentEventPrefix.size() && name.starts_with(kAgentEventPrefix)) {
+        return true;
+    }
+    if (name.size() > kAgentAsyncPrefix.size() && name.starts_with(kAgentAsyncPrefix)) {
         return true;
     }
     return isPluginTopic(name);
@@ -207,7 +215,7 @@ inline bool isReservedEventSegment(std::string_view name) {
 }
 
 /// 事件中枢的事件名校验 (定义/发布/等待三处共用)
-/// - 名字必须是 `agentxx.agent.event.*` 或 `plugin.<插件名>.*`
+/// - 名字必须是 `agentxx.agent.event.*` / `agentxx.agent.async.*` 或 `plugin.<插件名>.*`
 inline bool validateEventName(std::string_view name, std::string* err = nullptr) {
     if (!validateNameSyntax(name, err)) {
         return false;
@@ -216,8 +224,9 @@ inline bool validateEventName(std::string_view name, std::string* err = nullptr)
         return true;
     }
     if (err) {
-        *err = "event name must be `agentxx.agent.event.<name>` (built in) or "
-               "`plugin.<plugin name>.<name>` (plugin)";
+        *err = "event name must be `agentxx.agent.event.<name>` or "
+               "`agentxx.agent.async.<name>` (built in) or `plugin.<plugin name>.<name>` "
+               "(plugin)";
     }
     return false;
 }

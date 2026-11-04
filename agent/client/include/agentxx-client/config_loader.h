@@ -120,6 +120,21 @@ struct YamlAppConfig {
     bool eventAllowHeadlessTurn = false;
     /// `watch` 的默认投递模式 (yaml `event.delivery`, 默认 next-step)
     std::string eventDelivery = "next-step";
+    /// 异步任务开关 (yaml `async_work.enable`, 默认 true)
+    /// - 关 = 模型委派同步执行, 插件提交被拒
+    bool enableAsyncWork = true;
+    /// 每个队列的并发额度 (yaml `async_work.max_concurrent`, 默认 3)
+    int64_t asyncWorkMaxConcurrent = 3;
+    /// 后台任务的权限询问/中断策略 (yaml `async_work.interrupt_policy`, 默认 bubble)
+    std::string asyncWorkInterruptPolicy = "bubble";
+    /// 后台任务会话是否落盘 (yaml `async_work.session_store`, 默认 false)
+    bool asyncWorkSessionStore = false;
+    /// 落盘目录保留天数 (yaml `async_work.session_store_keep_days`, 默认 0 = 不清理)
+    int64_t asyncWorkSessionStoreKeepDays = 0;
+    /// 结束后台账保留时长 (毫秒; yaml `async_work.linger_ms`, 默认 300000)
+    int64_t asyncWorkLingerMs = 300000;
+    /// 台账结果正文上限 (字节; yaml `async_work.result_max_bytes`, 默认 8192)
+    int64_t asyncWorkResultMaxBytes = 8192;
     /// git worktree 模式开关 (yaml `worktree.enable`, 默认 false)
     /// - 开启后注册 agentxx_git_worktree 工具 + 注入行为提示词, 模型在代码
     ///   修改任务开始时创建独立 worktree 并绑定会话 (详见

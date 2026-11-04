@@ -365,6 +365,98 @@ std::vector<ConfigKeyEntry> configKeyEntries() {
              return cfg.eventDelivery;
          }}
     );
+    // ---- 异步任务 (yaml `async_work` 块) ----
+    out.push_back(
+        {"async_work.enable",
+         "bool",
+         "true",
+         "async_work:\n  enable: false\n",
+         "",
+         false,
+         "true",
+         "false",
+         [](const YamlAppConfig& cfg) {
+             return boolText(cfg.enableAsyncWork);
+         }}
+    );
+    out.push_back(
+        {"async_work.max_concurrent",
+         "int",
+         "3",
+         "async_work:\n  max_concurrent: 2\n",
+         "",
+         false,
+         "3",
+         "2",
+         [](const YamlAppConfig& cfg) {
+             return std::to_string(cfg.asyncWorkMaxConcurrent);
+         }}
+    );
+    out.push_back(
+        {"async_work.interrupt_policy",
+         "enum (bubble | deny | allow)",
+         "bubble",
+         "async_work:\n  interrupt_policy: allow\n",
+         "",
+         false,
+         "bubble",
+         "allow",
+         [](const YamlAppConfig& cfg) {
+             return cfg.asyncWorkInterruptPolicy;
+         }}
+    );
+    out.push_back(
+        {"async_work.session_store",
+         "bool",
+         "false",
+         "async_work:\n  session_store: true\n",
+         "",
+         false,
+         "false",
+         "true",
+         [](const YamlAppConfig& cfg) {
+             return boolText(cfg.asyncWorkSessionStore);
+         }}
+    );
+    out.push_back(
+        {"async_work.session_store_keep_days",
+         "int (0 = 不自动清理)",
+         "0",
+         "async_work:\n  session_store_keep_days: 7\n",
+         "",
+         false,
+         "0",
+         "7",
+         [](const YamlAppConfig& cfg) {
+             return std::to_string(cfg.asyncWorkSessionStoreKeepDays);
+         }}
+    );
+    out.push_back(
+        {"async_work.linger_ms",
+         "int (毫秒)",
+         "300000",
+         "async_work:\n  linger_ms: 60000\n",
+         "",
+         false,
+         "300000",
+         "60000",
+         [](const YamlAppConfig& cfg) {
+             return std::to_string(cfg.asyncWorkLingerMs);
+         }}
+    );
+    out.push_back(
+        {"async_work.result_max_bytes",
+         "int (字节)",
+         "8192",
+         "async_work:\n  result_max_bytes: 1024\n",
+         "",
+         false,
+         "8192",
+         "1024",
+         [](const YamlAppConfig& cfg) {
+             return std::to_string(cfg.asyncWorkResultMaxBytes);
+         }}
+    );
     out.push_back(
         {"dev_mode",
          "bool",

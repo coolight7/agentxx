@@ -35,19 +35,6 @@ namespace agent {
 
 namespace {
 
-/// 事件名后缀: 只保留字母/数字/`.`/`_`/`-`
-/// - 工具调用 id 等外部标识可能带其它字符, 直接拼进事件名会被事件名校验拒掉
-std::string eventNameSuffix(std::string_view raw) {
-    std::string out;
-    out.reserve(raw.size());
-    for (const char ch : raw) {
-        const bool ok = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
-                        || (ch >= '0' && ch <= '9') || ch == '.' || ch == '_' || ch == '-';
-        out.push_back(ok ? ch : '_');
-    }
-    return out;
-}
-
 } // namespace
 
 // ===========================================================================
@@ -110,6 +97,8 @@ void AgentRegistry::clear() {
 
 std::shared_ptr<AgentHost> AgentHost::create(Config cfg) {
     std::shared_ptr<AgentHost> host(new AgentHost(std::move(cfg)));
+    // 异步任务管理器 (进程一份): 队列/额度/台账都挂在它上面
+    host->asyncWork_ = std::make_unique<AsyncWorkManager>(host);
     // agent 节点容器总线: 派生与跨 agent 消息服务
     std::weak_ptr<AgentHost> self = host;
 
@@ -243,60 +232,57 @@ asio::awaitable<void> AgentHost::loadPluginsAsync() {
 }
 
 size_t AgentHost::runningSubagents() const {
-    return runningSubagentCount_;
+    return runningAsyncWork();
 }
 
-size_t AgentHost::runningAsyncJobs() const {
-    std::lock_guard<std::mutex> lock(asyncJobsMutex_);
-    return asyncJobs_.size();
+size_t AgentHost::runningAsyncWork() const {
+    return asyncWork_ ? asyncWork_->runningCount() : 0;
 }
 
-size_t AgentHost::cancelAsyncJobs(const std::shared_ptr<AgentContext>& parentCtx) {
-    std::vector<std::shared_ptr<neograph::graph::CancelToken>> tokens;
-    {
-        std::lock_guard<std::mutex> lock(asyncJobsMutex_);
-        for (auto& entry : asyncJobs_) {
-            if (parentCtx) {
-                auto ctx = entry.second.parentCtx.lock();
-                // 父 agent 已释放的作业不再有意义; 只取消同一个上下文上的作业
-                // (多根共享一个容器时不能误伤别人)
-                if (!ctx || ctx != parentCtx) {
-                    continue;
-                }
-            }
-            tokens.push_back(entry.second.token);
-        }
-    }
-    for (auto& token : tokens) {
-        if (token) {
-            token->cancel();
-        }
-    }
-    if (!tokens.empty()) {
-        XX_LOGI("[subagent] cancel {} async job(s)", tokens.size());
-    }
-    return tokens.size();
+size_t AgentHost::queuedAsyncWork(std::string_view queueKey) const {
+    return asyncWork_ ? asyncWork_->queuedCount(queueKey) : 0;
 }
 
-size_t AgentHost::cancelAsyncJobsOfSession(std::string_view parentSessionId) {
-    std::vector<std::shared_ptr<neograph::graph::CancelToken>> tokens;
-    {
-        std::lock_guard<std::mutex> lock(asyncJobsMutex_);
-        for (auto& entry : asyncJobs_) {
-            if (entry.second.parentSessionId == parentSessionId) {
-                tokens.push_back(entry.second.token);
-            }
-        }
+AsyncWorkSubmitResult
+    AgentHost::submitAsyncWork(AsyncWorkSpec spec, std::shared_ptr<AgentContext> creator) {
+    if (!asyncWork_) {
+        AsyncWorkSubmitResult out;
+        out.error = "async work is not available (host not created through create())";
+        return out;
     }
-    for (auto& token : tokens) {
-        if (token) {
-            token->cancel();
-        }
+    return asyncWork_->submit(std::move(spec), std::move(creator));
+}
+
+bool AgentHost::cancelAsyncWork(std::string_view asyncId) {
+    return asyncWork_ ? asyncWork_->cancel(asyncId) : false;
+}
+
+size_t AgentHost::cancelAsyncWorks(const std::shared_ptr<AgentContext>& creator) {
+    return asyncWork_ ? asyncWork_->cancelByCreator(creator) : 0;
+}
+
+size_t AgentHost::cancelAsyncWorksOfSession(std::string_view creatorSessionId) {
+    return asyncWork_ ? asyncWork_->cancelBySession(creatorSessionId) : 0;
+}
+
+utilxx_base::Json AgentHost::asyncWorkJson(std::string_view asyncId) const {
+    return asyncWork_ ? asyncWork_->entryJson(asyncId) : utilxx_base::Json::object();
+}
+
+utilxx_base::Json AgentHost::asyncWorksJson(
+    std::string_view creatorAgentId,
+    std::string_view creatorSessionId,
+    bool             includeFinished,
+    size_t           limit
+) const {
+    if (!asyncWork_) {
+        return utilxx_base::Json::array();
     }
-    if (!tokens.empty()) {
-        XX_LOGI("[subagent] cancel {} async job(s) of session `{}`", tokens.size(), parentSessionId);
-    }
-    return tokens.size();
+    return asyncWork_->listJson(creatorAgentId, creatorSessionId, includeFinished, limit);
+}
+
+size_t AgentHost::shutdownAsyncWorks(std::string_view reason) {
+    return asyncWork_ ? asyncWork_->shutdown(reason) : 0;
 }
 
 std::shared_ptr<BaseAgent> AgentHost::rootAgent() const {
@@ -826,7 +812,8 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
     const events::SubagentBatchItem&              task,
     std::string_view                              parentSessionId,
     std::shared_ptr<neograph::graph::CancelToken> cancelToken,
-    std::shared_ptr<AgentContext>                 parentAgentCtx
+    std::shared_ptr<AgentContext>                 parentAgentCtx,
+    const AsyncWorkSpec*                          spec
 ) {
     if (cancelToken && cancelToken->is_cancelled()) {
         co_return events::RespSubagentBatchItem{
@@ -838,51 +825,17 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
     }
 
     const auto& subagentName = task.subagentName;
-    // ---- agent 节点容器预算检查 (深度 / 并发) ----
-    size_t parentDepth = 0;
-    if (auto it = sessionDepth_.find(parentSessionId); it != sessionDepth_.end()) {
-        parentDepth = it->second;
-    }
-    const size_t depth = parentDepth + 1;
-    if (depth > cfg_.maxDepth) {
-        XX_LOGW(
-            "AgentHost::spawnOneTask: `{}` rejected, depth {} exceeds maxDepth {}",
-            subagentName,
-            depth,
-            cfg_.maxDepth
-        );
-        co_return events::RespSubagentBatchItem{
-            .resultId     = task.resultId,
-            .hasError     = true,
-            .errorMessage = fmt::format(
-                "Subagent `{}` rejected: max nesting depth ({}) exceeded",
-                subagentName,
-                cfg_.maxDepth
-            ),
-        };
-    }
-    if (runningSubagentCount_ >= cfg_.maxConcurrentSubagents) {
-        XX_LOGW(
-            "AgentHost::spawnOneTask: `{}` rejected, concurrent limit {} reached",
-            subagentName,
-            cfg_.maxConcurrentSubagents
-        );
-        co_return events::RespSubagentBatchItem{
-            .resultId     = task.resultId,
-            .hasError     = true,
-            .errorMessage = fmt::format(
-                "Subagent `{}` rejected: concurrent subagent limit ({}) reached",
-                subagentName,
-                cfg_.maxConcurrentSubagents
-            ),
-        };
-    }
 
     // ---- 独立 agent 构造 (与根 agent 平等) ----
     // 父配置取**发起请求那一个根**的: 多根时子代理的工具继承/记账/提示词
     // 都该跟随它所在的根, 不能一律用内置根
-    auto requestCtx = parentAgentCtx ? parentAgentCtx : (rootAgent_ ? rootAgent_->getContext() : nullptr);
-    auto parentConfig = requestCtx ? requestCtx->agentConfig : nullptr;
+    // - 异步任务带提交快照 (spec->baseConfig): 创建者已销毁也能派生
+    auto requestCtx = parentAgentCtx ? parentAgentCtx
+                                     : (rootAgent_ ? rootAgent_->getContext() : nullptr);
+    std::shared_ptr<AgentConfig> parentConfig
+        = (spec && spec->baseConfig)
+              ? spec->baseConfig
+              : (requestCtx ? requestCtx->agentConfig : nullptr);
     if (!parentConfig) {
         co_return events::RespSubagentBatchItem{
             .resultId     = task.resultId,
@@ -1056,6 +1009,7 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
 
     // 唯一运行 id 与 session id
     const auto agentId  = nextAgentId();
+    subCtx->agentId     = agentId;
     const auto parentId = std::string{parentSessionId};
     // 会话存储根独占: 子代理默认没有会话存储 (直接通过); 调用方自己开了存储时
     // 同一存储根已被别的 agent 占用就拒绝派生 (否则写库时才会静默串数据)
@@ -1071,55 +1025,37 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
         };
     }
     // 同上下文模式: 子代理直接运行在指定 session (与父会话同 session),
-    // 共享上下文前缀; 默认模式使用独立 subagent 线程 id (上下文隔离)
+    // 共享上下文前缀; 异步任务直接用 asyncId 作 session 名 (一个值, 不另造);
+    // 其余默认模式使用独立 subagent 线程 id (上下文隔离)
     const auto subagentSessionId
-        = sameContext ? task.sessionId
-                      : fmt::format("subagent_{}_{}_{}", subagentName, agentId, agentIdSeq_);
+        = sameContext ? std::string{task.sessionId}
+                      : (spec != nullptr && !spec->asyncId.empty()
+                             ? spec->asyncId
+                             : fmt::format("subagent_{}_{}_{}", subagentName, agentId, agentIdSeq_));
 
-    // 注册节点 (平等成员; 父为根节点)
+    // 注册节点 (平等成员; 父为创建者节点)
     auto node           = std::make_shared<AgentNode>();
     node->agentId       = agentId;
     node->name          = std::string{subagentName};
-    node->parentAgentId = "root";
-    node->depth         = depth;
+    node->parentAgentId = (spec != nullptr && !spec->creatorAgentId.empty())
+                              ? spec->creatorAgentId
+                              : std::string{"root"};
+    node->depth         = 0;
     node->agent         = subagent;
     registry_.insert(node);
-
-    runningSubagentCount_++;
-    if (!sameContext) {
-        // 同上下文模式共享父线程: 不覆盖父线程深度记录
-        utilxx_base::insertOrAssignHeterogeneous(sessionDepth_, subagentSessionId, depth);
-    }
 
     // 运行边界清理 (成功/错误/取消统一回收节点)
     struct SpawnCleanup {
         std::shared_ptr<AgentHost> host;
         std::string                agentId;
-        std::string                subagentSessionId;
-        bool                       sharedSession = false;
-        bool                       done          = false;
-
-        void releaseAccounting() {
-            if (done) {
-                return;
-            }
-            done = true;
-            if (host) {
-                if (!sharedSession) {
-                    utilxx_base::eraseHeterogeneous(host->sessionDepth_, subagentSessionId);
-                }
-                if (host->runningSubagentCount_ > 0) {
-                    host->runningSubagentCount_--;
-                }
-            }
-        }
 
         ~SpawnCleanup() {
             // 节点释放由 spawnOneTask 在所属 IO executor 上显式 await；
-            // 析构只负责预算计数，避免同步 reset 仍在运行的 AgentContext。
-            releaseAccounting();
+            // 析构不做同步 reset (那会释放仍在运行的 AgentContext)。
+            (void)host;
+            (void)agentId;
         }
-    } cleanup{shared_from_this(), agentId, subagentSessionId, sameContext};
+    } cleanup{shared_from_this(), agentId};
 
     // ---- 运行 (engine 直跑: 保留调用方 executor, 无锁交错) ----
     auto response = co_await agentxx::util::catchErrorAsync<events::RespSubagentBatchItem>(
@@ -1372,7 +1308,6 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
             XX_LOGE("AgentHost: deferred shutdown failed for agent `{}`", agentId);
         }
     }
-    cleanup.releaseAccounting();
     co_return response;
 }
 
@@ -1392,65 +1327,69 @@ asio::awaitable<events::RespSubagentBatch> AgentHost::spawnBatch(
 
     // ---- 异步任务: 立即受理, 结果经事件回到父会话 ----
     // - 同一批里同步任务照旧等它跑完; 纯异步的一批立即返回 (父轮次不被占)
-    // - 事件名在同一批内不能重复: 两条任务同名时后者的值会把前者的等待提前满足
-    std::vector<size_t>   waitIndexes;
-    std::set<std::string> usedEvents;
+    // - 受理即入队: 额度 (每队列) 决定何时开跑, **不会因额度/排队被打回**
+    // - 事件名: 默认固定 `agentxx.agent.async.done` (靠值里的 `asyncId` 区分);
+    //   调用方显式给 `event_name` 时仍用它 (内部直调兼容)
+    std::vector<size_t> waitIndexes;
     for (size_t i = 0; i < n; ++i) {
         const auto& task = req.tasks[i];
         if (!task.async) {
             waitIndexes.push_back(i);
             continue;
         }
-        // 结果事件名: 调用方指定 > `agentxx.agent.event.subagent.done.<result_id>` >
-        // `agentxx.agent.event.subagent.done.<序号>`
         std::string eventName = task.eventName;
-        if (eventName.empty()) {
-            const auto suffix = task.resultId.empty()
-                                    ? std::to_string(i + 1)
-                                    : eventNameSuffix(task.resultId);
-            eventName = "agentxx.agent.event.subagent.done."
-                        + (suffix.empty() ? std::to_string(i + 1) : suffix);
+        if (!eventName.empty()) {
+            std::string nameErr;
+            if (!agentxx::events::naming::validateAgentEventName(eventName, &nameErr)) {
+                (*results)[i] = ItemResult{
+                    .resultId     = task.resultId,
+                    .hasError     = true,
+                    .errorMessage = fmt::format(
+                        "async event name `{}` is invalid: {}",
+                        eventName,
+                        nameErr
+                    ),
+                };
+                continue;
+            }
         }
-        std::string nameErr;
-        if (!agentxx::events::naming::validateAgentEventName(eventName, &nameErr)) {
+        // 提交快照: 身份/任务/工具/前缀字段 + 派生基准配置 (创建者销毁后仍可跑)
+        AsyncWorkSpec spec;
+        spec.kind                     = AsyncWorkKind::Agent;
+        spec.creatorAgentId           = parentAgentCtx ? parentAgentCtx->agentId : std::string{};
+        spec.creatorSessionId         = req.parentSessionId;
+        spec.name                     = task.subagentName;
+        spec.systemPrompt             = task.systemPrompt;
+        spec.message                  = task.message;
+        spec.messages                 = task.messages.value_or(utilxx_base::Json{});
+        spec.sameContextSessionId     = task.sessionId;
+        spec.enableSummarization      = task.enableSummarization;
+        spec.tools                    = task.tools;
+        spec.keepProvidedSystemMessage = task.keepProvidedSystemMessage;
+        spec.inheritRequestTools      = task.inheritRequestTools;
+        spec.toolExecutionDisabled    = task.toolExecutionDisabled;
+        spec.resultId                 = task.resultId;
+        spec.eventName                = eventName;
+        spec.baseConfig = parentAgentCtx ? parentAgentCtx->agentConfig : nullptr;
+
+        auto submitted = submitAsyncWork(std::move(spec), parentAgentCtx);
+        if (!submitted.accepted) {
             (*results)[i] = ItemResult{
                 .resultId     = task.resultId,
                 .hasError     = true,
                 .errorMessage = fmt::format(
-                    "async event name `{}` is invalid: {}",
-                    eventName,
-                    nameErr
+                    "async work rejected: {}",
+                    submitted.error.empty() ? "unknown" : submitted.error
                 ),
-            };
-            continue;
-        }
-        if (!usedEvents.insert(eventName).second) {
-            (*results)[i] = ItemResult{
-                .resultId     = task.resultId,
-                .hasError     = true,
-                .errorMessage = fmt::format(
-                    "async event name `{}` is used by another task of this call; give "
-                    "each task its own `event_name`",
-                    eventName
-                ),
-            };
-            continue;
-        }
-        if (!parentAgentCtx || !parentAgentCtx->eventHub) {
-            (*results)[i] = ItemResult{
-                .resultId     = task.resultId,
-                .hasError     = true,
-                .errorMessage = "async delegation needs the event hub (event.enable=false?)",
             };
             continue;
         }
         (*results)[i] = ItemResult{
             .resultId  = task.resultId,
             .started   = true,
-            .eventName = eventName,
+            .eventName = eventName.empty() ? std::string{"agentxx.agent.async.done"} : eventName,
             .subagent  = task.subagentName,
         };
-        startAsyncSubagentTask(task, req.parentSessionId, parentAgentCtx, std::move(eventName));
     }
     if (waitIndexes.empty()) {
         batchResp.results = std::move(*results);
@@ -1535,128 +1474,6 @@ asio::awaitable<events::RespSubagentBatch> AgentHost::spawnBatch(
 
     batchResp.results = std::move(*results);
     co_return batchResp;
-}
-
-void AgentHost::startAsyncSubagentTask(
-    const events::SubagentBatchItem& task,
-    std::string                      parentSessionId,
-    std::shared_ptr<AgentContext>    parentCtx,
-    std::string                      eventName
-) {
-    // 作业令牌独立于轮次: 异步任务的可能活过父轮次 (轮次令牌会随取消/轮末失效),
-    // 因此另建一个, 由 cancelAsyncJobs / cancelAsyncJobsOfSession 两处驱动。
-    auto token = std::make_shared<neograph::graph::CancelToken>();
-    std::string jobId;
-    {
-        std::lock_guard<std::mutex> lock(asyncJobsMutex_);
-        jobId                 = fmt::format("job-{}", ++asyncJobSeq_);
-        asyncJobs_[jobId]     = AsyncSubagentJob{
-            .parentCtx       = parentCtx,
-            .parentSessionId = parentSessionId,
-            .token           = token,
-        };
-    }
-    // 作业跑在中枢所在 executor 上: 收尾发布与中枢状态修改在同一线程,
-    // 且与父会话的节点运行方式一致 (子代理直跑在调用方 executor)。
-    auto executor = parentCtx && parentCtx->eventHub ? parentCtx->eventHub->executor()
-                                                    : ioCtx_->get_executor();
-    asio::co_spawn(
-        executor,
-        [this,
-         task,
-         parentSessionId = std::move(parentSessionId),
-         parentCtx       = std::move(parentCtx),
-         eventName       = std::move(eventName),
-         jobId           = std::move(jobId),
-         token]() mutable -> asio::awaitable<void> {
-            co_await runAsyncSubagentTask(
-                std::move(task),
-                std::move(parentSessionId),
-                std::move(parentCtx),
-                std::move(eventName),
-                std::move(jobId),
-                std::move(token)
-            );
-        },
-        asio::detached
-    );
-}
-
-asio::awaitable<void> AgentHost::runAsyncSubagentTask(
-    events::SubagentBatchItem                     task,
-    std::string                                   parentSessionId,
-    std::shared_ptr<AgentContext>                 parentCtx,
-    std::string                                   eventName,
-    std::string                                   jobId,
-    std::shared_ptr<neograph::graph::CancelToken> token
-) {
-    auto result = co_await agentxx::util::catchErrorAsync<events::RespSubagentBatchItem>(
-        [&]() -> asio::awaitable<events::RespSubagentBatchItem> {
-            co_return co_await spawnOneTask(task, parentSessionId, token, parentCtx);
-        },
-        [&task](std::string errmsg) -> asio::awaitable<events::RespSubagentBatchItem> {
-            co_return events::RespSubagentBatchItem{
-                .resultId     = task.resultId,
-                .hasError     = true,
-                .errorMessage = fmt::format("Sub-agent failed: {}", std::move(errmsg)),
-            };
-        },
-        [&task](std::string& errmsg) -> std::optional<events::RespSubagentBatchItem> {
-            return events::RespSubagentBatchItem{
-                .resultId  = task.resultId,
-                .hasError  = true,
-                .Canceled = true,
-                .errorMessage = fmt::format("Sub-agent Canceled: {}", std::move(errmsg)),
-            };
-        },
-        token
-    );
-
-    // 结果发布: 失败/取消也发 —— 否则父会话的等待只能等到超时才知道没结果
-    if (auto hub = parentCtx ? parentCtx->eventHub : nullptr; hub) {
-        auto value = utilxx_base::Json{
-            {"resultId", task.resultId},
-            {"subagent", task.subagentName},
-            {"agentId", result.agentId},
-            {"content", result.content},
-            {"hasError", result.hasError},
-            {"Canceled", result.Canceled},
-            {"errorMessage", result.errorMessage},
-        };
-        if (result.hasError || result.Canceled) {
-            value["content"] = result.content.empty() ? result.errorMessage : result.content;
-        }
-        const bool ok = result.Canceled ? false : !result.hasError;
-        hub->postValue(eventName, std::move(value), "subagent");
-        hub->postEnd(
-            eventName,
-            utilxx_base::Json{
-                {"resultId", task.resultId},
-                {"ok", ok},
-                {"hasError", result.hasError},
-                {"Canceled", result.Canceled},
-            }
-        );
-        XX_LOGI(
-            "[subagent] async {} finished: event={} resultId={} hasError={} Canceled={}",
-            jobId,
-            eventName,
-            task.resultId,
-            result.hasError,
-            result.Canceled
-        );
-    } else {
-        XX_LOGW(
-            "[subagent] async {} finished but the parent has no event hub, result dropped "
-            "(event={} resultId={})",
-            jobId,
-            eventName,
-            task.resultId
-        );
-    }
-
-    std::lock_guard<std::mutex> lock(asyncJobsMutex_);
-    asyncJobs_.erase(jobId);
 }
 
 asio::awaitable<events::RespHostMessage> AgentHost::sendMessage(events::ReqHostMessage req) {

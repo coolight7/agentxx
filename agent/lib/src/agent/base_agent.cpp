@@ -2100,9 +2100,9 @@ asio::awaitable<bool> BaseAgent::shutdownAsync(std::chrono::milliseconds timeout
     // 再关闭中枢 (关闭后投递一律丢弃并计数)
     // - 事件记录不持久化, 生产者都绑在进程上
     if (auto host = agentContext->host.lock(); host) {
-        const auto Canceled = host->cancelAsyncJobs(agentContext);
+        const auto Canceled = host->cancelAsyncWorks(agentContext);
         if (Canceled > 0) {
-            XX_LOGI("shutdown stage 1/4: cancel {} async sub-agent job(s)", Canceled);
+            XX_LOGI("shutdown stage 1/4: cancel {} async work(s)", Canceled);
         }
     }
     if (agentContext->eventHub) {

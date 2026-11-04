@@ -290,6 +290,18 @@ static void applyServerRuntimeConfig(
     config->eventMaxWaitsSession    = static_cast<size_t>(std::max<int64_t>(0, yamlCfg.eventMaxWaitsSession));
     config->eventAllowHeadlessTurn  = yamlCfg.eventAllowHeadlessTurn;
     config->eventDelivery           = yamlCfg.eventDelivery;
+    // 异步任务 (yaml `async_work.*`): 开关 / 每队列额度 / 中断策略 / 会话落盘 /
+    // 台账保留时长与结果上限
+    config->enableAsyncWork = yamlCfg.enableAsyncWork;
+    config->asyncWorkMaxConcurrent
+        = static_cast<size_t>(std::max<int64_t>(1, yamlCfg.asyncWorkMaxConcurrent));
+    config->asyncWorkInterruptPolicy = yamlCfg.asyncWorkInterruptPolicy;
+    config->asyncWorkSessionStore    = yamlCfg.asyncWorkSessionStore;
+    config->asyncWorkSessionStoreKeepDays
+        = static_cast<size_t>(std::max<int64_t>(0, yamlCfg.asyncWorkSessionStoreKeepDays));
+    config->asyncWorkLingerMs = std::max<int64_t>(0, yamlCfg.asyncWorkLingerMs);
+    config->asyncWorkResultMaxBytes
+        = static_cast<size_t>(std::max<int64_t>(1, yamlCfg.asyncWorkResultMaxBytes));
     // git worktree 模式 (yaml `worktree.enable`, 默认 false)
     config->enableWorktree = yamlCfg.worktreeEnable;
     // 开发者模式 (yaml `dev_mode`, 默认 false): 只控制"记录数据"的收集

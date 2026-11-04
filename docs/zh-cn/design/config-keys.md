@@ -18,7 +18,7 @@
 
 > 相关文档: [index.md](index.md) · [配置与设置边界](configuration.md)
 
-键数: 62
+键数: 69
 
 | 键路径 | 归属 | 类型 | 默认值 |
 |---|---|---|---|
@@ -33,6 +33,13 @@
 | `event.max_waits_session` | 服务端 | int | 32 |
 | `event.allow_headless_turn` | 服务端 | bool | false |
 | `event.delivery` | 服务端 | enum (next-step | inject | next-turn | none) | next-step |
+| `async_work.enable` | 服务端 | bool | true |
+| `async_work.max_concurrent` | 服务端 | int | 3 |
+| `async_work.interrupt_policy` | 服务端 | enum (bubble | deny | allow) | bubble |
+| `async_work.session_store` | 服务端 | bool | false |
+| `async_work.session_store_keep_days` | 服务端 | int (0 = 不自动清理) | 0 |
+| `async_work.linger_ms` | 服务端 | int (毫秒) | 300000 |
+| `async_work.result_max_bytes` | 服务端 | int (字节) | 8192 |
 | `dev_mode` | 服务端 | bool | false |
 | `permission.mode` | 服务端 | enum (ask | all_ask | pass | deny) | ask |
 | `permission.whitelist.list` | 服务端 | list<string> | 空 |
@@ -161,6 +168,55 @@ event:
 ```yaml
 event:
   delivery: inject
+```
+
+### `async_work.enable`
+
+```yaml
+async_work:
+  enable: false
+```
+
+### `async_work.max_concurrent`
+
+```yaml
+async_work:
+  max_concurrent: 2
+```
+
+### `async_work.interrupt_policy`
+
+```yaml
+async_work:
+  interrupt_policy: allow
+```
+
+### `async_work.session_store`
+
+```yaml
+async_work:
+  session_store: true
+```
+
+### `async_work.session_store_keep_days`
+
+```yaml
+async_work:
+  session_store_keep_days: 7
+```
+
+### `async_work.linger_ms`
+
+```yaml
+async_work:
+  linger_ms: 60000
+```
+
+### `async_work.result_max_bytes`
+
+```yaml
+async_work:
+  result_max_bytes: 1024
 ```
 
 ### `dev_mode`

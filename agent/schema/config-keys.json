@@ -2,7 +2,7 @@
   "version": 1,
   "note": "生成物, 请勿手工编辑; 重新生成: AGENTXX_UPDATE_CONFIG_KEYS=1 agentxx_test config_keys",
   "source": "agent/client/src/config_loader.cpp",
-  "count": 62,
+  "count": 69,
   "keys": [
     {
       "path": "data_dir",
@@ -80,6 +80,55 @@
       "type": "enum (next-step | inject | next-turn | none)",
       "default": "next-step",
       "sample": "event:\n  delivery: inject"
+    },
+    {
+      "path": "async_work.enable",
+      "owner": "server",
+      "type": "bool",
+      "default": "true",
+      "sample": "async_work:\n  enable: false"
+    },
+    {
+      "path": "async_work.max_concurrent",
+      "owner": "server",
+      "type": "int",
+      "default": "3",
+      "sample": "async_work:\n  max_concurrent: 2"
+    },
+    {
+      "path": "async_work.interrupt_policy",
+      "owner": "server",
+      "type": "enum (bubble | deny | allow)",
+      "default": "bubble",
+      "sample": "async_work:\n  interrupt_policy: allow"
+    },
+    {
+      "path": "async_work.session_store",
+      "owner": "server",
+      "type": "bool",
+      "default": "false",
+      "sample": "async_work:\n  session_store: true"
+    },
+    {
+      "path": "async_work.session_store_keep_days",
+      "owner": "server",
+      "type": "int (0 = 不自动清理)",
+      "default": "0",
+      "sample": "async_work:\n  session_store_keep_days: 7"
+    },
+    {
+      "path": "async_work.linger_ms",
+      "owner": "server",
+      "type": "int (毫秒)",
+      "default": "300000",
+      "sample": "async_work:\n  linger_ms: 60000"
+    },
+    {
+      "path": "async_work.result_max_bytes",
+      "owner": "server",
+      "type": "int (字节)",
+      "default": "8192",
+      "sample": "async_work:\n  result_max_bytes: 1024"
     },
     {
       "path": "dev_mode",

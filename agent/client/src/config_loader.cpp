@@ -849,6 +849,87 @@ static YamlAppConfig parseYamlConfigNode(
         }
     }
 
+    // 异步任务 (yaml `async_work` 块)
+    // - enable:               是否启用后台任务 (默认 true; 关 = 委派同步执行)
+    // - max_concurrent:       每队列并发额度 (默认 3; 唯一的并发约束)
+    // - interrupt_policy:     权限询问/中断处理策略 bubble|deny|allow (默认 bubble)
+    // - session_store:        后台任务会话是否落盘 (默认 false)
+    // - session_store_keep_days: 落盘目录保留天数 (默认 0 = 不自动清理)
+    // - linger_ms:            结束后台账保留时长 (默认 300000)
+    // - result_max_bytes:     台账结果正文上限 (默认 8192)
+    const auto asyncWorkNode = mapChild(root, "async_work");
+    if (isNodePresent(asyncWorkNode)) {
+        auto readBool = [&](std::string_view key, bool& out) {
+            const auto node = mapChild(asyncWorkNode, key);
+            if (!isNodePresent(node)) {
+                return;
+            }
+            const auto val = utilxx_base::toLower(
+                resolveEnvVars(nodeScalarText(node), dotEnvVars, overrideEnvVars)
+            );
+            if (val == "true" || val == "1" || val == "yes" || val == "on") {
+                out = true;
+            } else if (val == "false" || val == "0" || val == "no" || val == "off"
+                       || val.empty()) {
+                out = false;
+            } else {
+                XX_LOGW(
+                    "[Config] Warning: unknown async_work.{} '{}', keeping default {}",
+                    key,
+                    val,
+                    out
+                );
+            }
+        };
+        auto readNumber = [&](std::string_view key, int64_t& out, int64_t minValue) {
+            const auto node = mapChild(asyncWorkNode, key);
+            if (!isNodePresent(node)) {
+                return;
+            }
+            const auto val    = resolveEnvVars(nodeScalarText(node), dotEnvVars, overrideEnvVars);
+            int64_t    parsed = 0;
+            if (parseFullNumber(val, parsed) && parsed >= minValue) {
+                out = parsed;
+            } else {
+                XX_LOGW(
+                    "[Config] Warning: invalid async_work.{} '{}' (needs >= {}), keeping "
+                    "default {}",
+                    key,
+                    val,
+                    minValue,
+                    out
+                );
+            }
+        };
+        readBool("enable", cfg.enableAsyncWork);
+        readBool("session_store", cfg.asyncWorkSessionStore);
+        int64_t maxConcurrent = static_cast<int64_t>(cfg.asyncWorkMaxConcurrent);
+        readNumber("max_concurrent", maxConcurrent, 1);
+        cfg.asyncWorkMaxConcurrent = static_cast<size_t>(maxConcurrent);
+        int64_t keepDays = static_cast<int64_t>(cfg.asyncWorkSessionStoreKeepDays);
+        readNumber("session_store_keep_days", keepDays, 0);
+        cfg.asyncWorkSessionStoreKeepDays = static_cast<size_t>(keepDays);
+        readNumber("linger_ms", cfg.asyncWorkLingerMs, 0);
+        int64_t resultMaxBytes = static_cast<int64_t>(cfg.asyncWorkResultMaxBytes);
+        readNumber("result_max_bytes", resultMaxBytes, 1);
+        cfg.asyncWorkResultMaxBytes = static_cast<size_t>(resultMaxBytes);
+        if (const auto node = mapChild(asyncWorkNode, "interrupt_policy"); isNodePresent(node)) {
+            const auto val = utilxx_base::toLower(
+                resolveEnvVars(nodeScalarText(node), dotEnvVars, overrideEnvVars)
+            );
+            if (val == "bubble" || val == "deny" || val == "allow") {
+                cfg.asyncWorkInterruptPolicy = val;
+            } else {
+                XX_LOGW(
+                    "[Config] Warning: unknown async_work.interrupt_policy '{}' "
+                    "(bubble|deny|allow), keeping default {}",
+                    val,
+                    cfg.asyncWorkInterruptPolicy
+                );
+            }
+        }
+    }
+
     // 开发者模式 (yaml `dev_mode`, 默认 false; 顶层标量键)
     // - 开启时才收集"记录数据" (功能点调用统计 / 钩子派发记录 / 成功调用日志);
     //   启动时读取后冻结, 只控制记录收集, 不改变任何行为

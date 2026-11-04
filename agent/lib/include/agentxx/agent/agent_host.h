@@ -1,5 +1,6 @@
 #pragma once
 
+#include "agentxx/agent/async_work.h"
 #include "agentxx/agent/base_agent.h"
 #include "agentxx/agent/config.h"
 #include "agentxx/event/event_host.h"
@@ -74,7 +75,7 @@ struct AgentNode {
     std::string name;
     /// 父节点 id (空 = 根 agent)
     std::string parentAgentId;
-    /// 嵌套深度 (根 = 0)
+    /// 嵌套深度 (根 = 0; 仅作展示, 节点容器不再限制嵌套深度)
     size_t depth = 0;
     /// 独立 agent 实例
     std::shared_ptr<BaseAgent> agent;
@@ -120,10 +121,6 @@ public:
         std::shared_ptr<asio::io_context> ioCtx = nullptr;
         /// 共享 threadPool 线程数 (0 = 默认 hardware_concurrency/2)
         size_t threadPoolWorkers = 0;
-        /// 子代理最大嵌套深度 (根 = 0; 超出拒绝派生)
-        size_t maxDepth = 3;
-        /// 子代理最大并发数 (超出拒绝派生)
-        size_t maxConcurrentSubagents = 8;
         /// 进程内根数上限 (含内置根; 超出时 [mountRoot] 返回空)
         size_t maxRoots = 8;
         /// agent 构造工厂 (默认 CodeAgent; 可注入自定义 BaseAgent 子类)
@@ -225,17 +222,47 @@ public:
         std::shared_ptr<AgentContext>   parentAgentCtx = nullptr
     );
 
-    /// 还在跑的异步子代理作业数 (诊断/测试用)
-    size_t runningAsyncJobs() const;
+    /// 还在跑的异步任务数 (诊断/测试用)
+    size_t runningAsyncWork() const;
 
-    /// 取消异步子代理作业 (只置取消标记: 作业收尾时照常发布 `{Canceled:true}` 值)
-    /// - parentCtx 为空 = 取消全部; 非空只取消该父 agent 上下文上的作业
-    ///   (agent 关停时传自己的上下文, 不误伤同一容器里别的根)
-    /// - `return` 被取消的作业数
-    size_t cancelAsyncJobs(const std::shared_ptr<AgentContext>& parentCtx = nullptr);
+    /// 排队中的异步任务数 (`queueKey` 为空 = 全部)
+    size_t queuedAsyncWork(std::string_view queueKey = {}) const;
 
-    /// 取消某个父会话上的异步子代理作业 (会话被取消时用)
-    size_t cancelAsyncJobsOfSession(std::string_view parentSessionId);
+    // =====================================================================
+    // 异步任务 (async work): 进程级后台执行单元
+    // =====================================================================
+    //
+    // 一次任务 = 一次后台执行 (`kind` = agent / tool), 提交即可, 结果统一走
+    // 事件中枢的 `agentxx.agent.async.done`。每队列 (默认按创建者) 一条 FIFO +
+    // 额度, **不限制排队条数 / 嵌套深度 / 全局并发**。
+
+    /// 提交一个后台任务 (任何线程; 内部投递到容器 io 线程)
+    /// - 只有"未启用"与"参数非法"会被拒; 不会因额度/排队条数被拒
+    AsyncWorkSubmitResult
+        submitAsyncWork(AsyncWorkSpec spec, std::shared_ptr<AgentContext> creator = nullptr);
+
+    /// 取消单条 (运行中 → 置取消令牌; 排队中 → 直接出队)
+    bool cancelAsyncWork(std::string_view asyncId);
+
+    /// 按创建者批量取消 (`creator` 为空 = 全部)
+    size_t cancelAsyncWorks(const std::shared_ptr<AgentContext>& creator = nullptr);
+
+    /// 按创建者会话批量取消
+    size_t cancelAsyncWorksOfSession(std::string_view creatorSessionId);
+
+    /// 单条任务 JSON (不存在 = 空对象)
+    utilxx_base::Json asyncWorkJson(std::string_view asyncId) const;
+
+    /// 任务清单 JSON (`creatorAgentId`/`creatorSessionId` 为空 = 不过滤)
+    utilxx_base::Json asyncWorksJson(
+        std::string_view creatorAgentId   = {},
+        std::string_view creatorSessionId = {},
+        bool             includeFinished  = true,
+        size_t           limit            = 20
+    ) const;
+
+    /// 关停: 取消全部在跑与排队项 (`return` 处理条数)
+    size_t shutdownAsyncWorks(std::string_view reason);
 
     /// 跨 agent 消息 (hostBus agent.message RR)
     /// - 目标 agent 需注册 mailbox 或注册为远程 agent (A2A 桥接);
@@ -274,7 +301,7 @@ public:
         std::chrono::milliseconds timeout = std::chrono::seconds{30}
     );
 
-    /// 当前运行中的子代理数量
+    /// 当前运行中的子代理数量 (含后台任务里的 agent; 等价 [runningAsyncWork])
     size_t runningSubagents() const;
 
     // =====================================================================
@@ -362,34 +389,6 @@ private:
         std::string                agentId;
     };
 
-    /// 一个异步子代理作业 (取消/回收用)
-    struct AsyncSubagentJob {
-        std::weak_ptr<AgentContext>                   parentCtx;
-        std::string                                   parentSessionId;
-        std::shared_ptr<neograph::graph::CancelToken> token;
-    };
-
-    /// 受理一个异步子代理任务: 登记作业 + 启动真跑协程, 立即返回 (不等结果)
-    /// - 父会话事件中枢在任务完成时收到 `{resultId, subagent, agentId, content,
-    ///   hasError, Canceled, errorMessage}` 值, 随后该事件被 end
-    void startAsyncSubagentTask(
-        const events::SubagentBatchItem& task,
-        std::string                      parentSessionId,
-        std::shared_ptr<AgentContext>    parentCtx,
-        std::string                      eventName
-    );
-
-    /// 异步作业主体: 跑子代理, 结果/失败/取消三种终态都发布到父会话的事件中枢
-    /// - 发布经 `postValue`/`postEnd` (投递回中枢自己的线程), 作业跑在哪个线程都安全
-    asio::awaitable<void> runAsyncSubagentTask(
-        events::SubagentBatchItem                    task,
-        std::string                                  parentSessionId,
-        std::shared_ptr<AgentContext>                parentCtx,
-        std::string                                  eventName,
-        std::string                                  jobId,
-        std::shared_ptr<neograph::graph::CancelToken> token
-    );
-
     /// 摘下 agentId 及其子树节点 (先子后父), 返回待关闭列表
     /// - 节点立即从注册表消失 (调用方 unmountRoot 返回后 registry/findRoot 都查不到),
     ///   agent 对象由返回的列表保活
@@ -401,18 +400,20 @@ private:
     void scheduleShutdownAsync(std::vector<PendingClose> pending);
 
     /// 派生单个子代理并等待其完成 (spawnBatch 内部按任务逐个调用)
-    /// - 深度/并发预算检查, 独立 agent 构造, 运行边界 RAII 回收
+    /// - 独立 agent 构造, 运行边界 RAII 回收
     /// - 派生时在该子代理全局总线上 registerServer service.subagent (agent 节点容器应答,
     ///   与 attachRoot 对称): 子代理作用域内再遇 subagent 委派中断,
     ///   经本总线请求递归处理, 与根委派完全同路径 (扁平化)
     /// - HIL 类中断 (权限询问等) 经子代理会话总线冒泡到父 IO:
     ///   parentAgentCtx 指定父 agent 上下文 (从该上下文的 SessionStore
     ///   查找父会话), 嵌套时是上一级子代理而非根
+    /// - spec 非空时按异步任务的提交快照派生 (基准配置来自快照, 创建者销毁后仍可跑)
     asio::awaitable<events::RespSubagentBatchItem> spawnOneTask(
         const events::SubagentBatchItem&              task,
         std::string_view                              parentSessionId,
         std::shared_ptr<neograph::graph::CancelToken> cancelToken,
-        std::shared_ptr<AgentContext>                 parentAgentCtx = nullptr
+        std::shared_ptr<AgentContext>                 parentAgentCtx = nullptr,
+        const AsyncWorkSpec*                          spec           = nullptr
     );
     /// 经 A2A 协议向远程 agent 发送消息并等待终态 (轮询 GetTask)
     asio::awaitable<events::RespHostMessage> sendViaA2a(
@@ -429,6 +430,9 @@ private:
 
     /// 按 agentId 找已挂载的根 (内部使用; 不加锁)
     MountedRoot* findMountedRoot(std::string_view agentId);
+
+    /// 异步任务管理器需要直调派生入口 (private spawnOneTask / makeSubagentConfig)
+    friend class AsyncWorkManager;
 
     Config                                      cfg_;
     std::shared_ptr<asio::io_context>           ioCtx_;
@@ -449,15 +453,9 @@ private:
     uint64_t agentIdSeq_ = 0;
     /// 挂载根自增序号 (生成 `ext:<owner>:<n>`)
     uint64_t rootSeq_ = 0;
-    /// 当前运行中的子代理数 (并发预算)
-    size_t runningSubagentCount_ = 0;
-    /// 异步子代理作业 (jobId -> 作业; 跨线程: 受理在总线线程, 收尾在中枢线程)
-    std::map<std::string, AsyncSubagentJob, std::less<>> asyncJobs_;
-    mutable std::mutex                                   asyncJobsMutex_;
-    /// 异步作业 id 自增序号
-    uint64_t asyncJobSeq_ = 0;
-    /// subagent sessionId -> 嵌套深度 (根会话不在表内, 视为 0)
-    std::map<std::string, size_t, std::less<>> sessionDepth_;
+    /// 异步任务管理器 (进程级: 队列/额度/台账)
+    /// - 声明在 roots_ 之前: 成员逆序析构, agent 先释放再关管理器
+    std::unique_ptr<AsyncWorkManager> asyncWork_;
     /// 已占用的会话存储根 (规范化路径 -> agentId)
     std::map<std::string, std::string, std::less<>> storeRoots_;
     /// 已占用的会话 (规范化 `存储根|sessionId` -> owner; 跨插件实例, 需锁)

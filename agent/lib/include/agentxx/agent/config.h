@@ -476,6 +476,39 @@ public:
     /// - 取值 next-step / inject / next-turn / none
     std::string eventDelivery = "next-step";
 
+    // -------------------------------------------------------------------
+    // 异步任务 (`async_work.*`; 见 [async_work.h](/agent/lib/include/agentxx/agent/async_work.h))
+    // -------------------------------------------------------------------
+
+    /// 是否启用异步任务 (yaml `async_work.enable`, 默认 true)
+    /// - 开启时: 模型委派 (`agentxx_subagent`) 即提交后台任务, 结果经事件返回;
+    ///   插件可提交后台任务; 模型与界面能看到后台任务清单
+    /// - 关闭时: 委派同步执行 (阻塞本轮), 插件提交被拒 (`not_enabled`)
+    bool enableAsyncWork = true;
+
+    /// 每个队列的并发额度 (yaml `async_work.max_concurrent`, 默认 3)
+    /// - 队列默认按创建者分组; 唯一的并发约束 (不设排队条数/嵌套深度/全局上限)
+    size_t asyncWorkMaxConcurrent = 3;
+
+    /// 后台任务遇到权限询问/人工中断时的处理策略 (yaml `async_work.interrupt_policy`)
+    /// - `bubble` (默认): 冒泡到创建者会话; 创建者已销毁时按拒绝
+    /// - `deny`: 一律拒绝; `allow`: 一律允许
+    std::string asyncWorkInterruptPolicy = "bubble";
+
+    /// 后台任务的会话是否落盘 (yaml `async_work.session_store`, 默认 false)
+    /// - 目录: `{创建者会话目录}/agent/{async_id}`
+    bool asyncWorkSessionStore = false;
+
+    /// 落盘目录的保留天数 (yaml `async_work.session_store_keep_days`, 默认 0 = 不自动清理)
+    size_t asyncWorkSessionStoreKeepDays = 0;
+
+    /// 结束后台账条目保留时长, 单位毫秒 (yaml `async_work.linger_ms`, 默认 300000)
+    /// - 纯内存回收 (不是限制); 0 = 结束时立即清掉
+    int64_t asyncWorkLingerMs = 300000;
+
+    /// 台账里保留的结果正文上限, 单位字节 (yaml `async_work.result_max_bytes`, 默认 8192)
+    size_t asyncWorkResultMaxBytes = 8192;
+
     /// 是否启用 git worktree 模式 (yaml `worktree.enable`, 默认关闭)
     /// - 开启后注册 `agentxx_git_worktree` 工具 + 程序初始化时一次性追加
     ///   worktree 行为提示词到 system prompt (提示模型在涉及代码修改的任务

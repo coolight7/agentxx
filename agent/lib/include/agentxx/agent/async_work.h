@@ -1,0 +1,249 @@
+#pragma once
+
+#include "agentxx/event/events.h"
+#include "asio/awaitable.hpp"
+#include "utilxx_base/json.h"
+#include <chrono>
+#include <cstdint>
+#include <map>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
+
+namespace asio = ::boost::asio;
+
+namespace neograph::graph {
+class CancelToken;
+} // namespace neograph::graph
+
+namespace agentxx {
+namespace agent {
+
+class AgentConfig;
+class AgentContext;
+class AgentHost;
+
+/// 异步任务种类
+/// - `Agent`: 启动一个 agent 跑任务 (子代理形态, 本期实现)
+/// - `Tool`: 异步工具 (结构预留, 见 plan §10.4)
+enum class AsyncWorkKind : int { Agent = 0, Tool = 1 };
+
+/// 异步任务状态
+enum class AsyncWorkState : uint8_t {
+    Queued = 0,
+    Running,
+    Finished,
+    Failed,
+    Canceled,
+};
+
+/// 后台任务的中断 (权限询问/人工中断) 处理策略
+/// - `Bubble`: 冒泡到创建者会话 (创建者已销毁时按拒绝)
+/// - `Deny`:   一律拒绝
+/// - `Allow`:  一律允许 (人工中断用空结果 resume)
+enum class AsyncInterruptPolicy : uint8_t { Bubble = 0, Deny = 1, Allow = 2 };
+
+/// 状态/种类/策略的稳定文本 (`queued`/`running`/... 用于 JSON 与日志)
+std::string_view toString(AsyncWorkState state) noexcept;
+std::string_view toString(AsyncWorkKind kind) noexcept;
+std::string_view toString(AsyncInterruptPolicy policy) noexcept;
+
+/// 中断策略解析 (`bubble`/`deny`/`allow`); 无法识别时返回 false
+bool parseInterruptPolicy(std::string_view text, AsyncInterruptPolicy* out) noexcept;
+
+/// 提交参数: 自包含, 提交后不再回读创建者 (快照在手)
+///
+/// 派生配置清单默认全空 (= 现状子代理: 只有内置工具), 要什么就列什么。
+struct AsyncWorkSpec {
+    AsyncWorkKind kind = AsyncWorkKind::Agent;
+
+    /// 任务 id (`async-<n>`; 由管理器分配, 同时是该任务 agent 的 sessionId)
+    /// - 提交方不需要填; 内部使用
+    std::string asyncId;
+
+    /// 归属账本 (由提交入口填; C++ 调用方可留空 = 不使用创建者上下文)
+    std::string creatorAgentId;
+    /// 创建者会话: 结果事件与 HIL 的去处; 可空
+    std::string creatorSessionId;
+    /// 排队与额度的分组键; 空 = creatorAgentId
+    std::string queueKey;
+
+    /// 身份与任务
+    std::string         name = "async";
+    std::string         systemPrompt;
+    std::string         message;
+    utilxx_base::Json   messages; ///< 结构化上下文 (数组; 非空时优先于 message)
+    /// 同上下文模式: 子代理直接运行在这个 session (内部直调用法, 模型侧不暴露)
+    std::string         sameContextSessionId;
+    /// 上下文压缩开关 (空 = 继承派生配置)
+    std::optional<bool> enableSummarization;
+    /// 模型名; 空 = 创建者的 subagent 模型
+    std::string                      model;
+    std::optional<utilxx_base::Json> tools; ///< 空=默认 / []=无 / ["*"]=继承创建者 / 名单
+
+    /// 显式挂载清单 (空 = 不挂, 与现状子代理一致)
+    std::optional<utilxx_base::Json> plugins; ///< 与 yaml `plugin.mount` 同构
+    std::vector<std::string>         mcpServers;
+    std::vector<std::string>         skills;
+    std::vector<std::string>         memoryFiles;
+    std::vector<std::string>         ragDocs;
+    std::string                      workDir;  ///< 空 = 跟随创建者
+    std::string                      language; ///< 空 = 跟随创建者
+    std::vector<std::string>         permissionAllowPaths;
+    std::vector<std::string>         permissionDenyPaths;
+
+    /// 会话持久化: 目录 = {创建者会话目录}/agent/{asyncId}, sessionId = asyncId
+    bool        sessionStore = false;
+    std::string sessionStoreDir; ///< 空 = {创建者会话目录}/agent
+
+    /// 中断策略与时限
+    AsyncInterruptPolicy      interruptPolicy = AsyncInterruptPolicy::Bubble;
+    std::chrono::milliseconds interruptTimeout{0};
+    std::chrono::milliseconds timeLimit{0};
+
+    /// 结果: 事件名固定 `agentxx.agent.async.done`, 此处只决定是否额外投递会话
+    /// - 空 = 不投递; `next-step` / `inject` / `next-turn`
+    std::string notifyDelivery;
+
+    /// 同上下文模式与工具执行策略 (与 `events::SubagentBatchItem` 同义)
+    bool keepProvidedSystemMessage = false;
+    bool inheritRequestTools       = false;
+    bool toolExecutionDisabled     = false;
+
+    /// 任务结果标识 (回填到父 toolcall 的 tool_call_id; 仅日志与台账用)
+    std::string resultId;
+
+    /// 以下三项由提交入口按 `AgentConfig` 填入 (调用方可不管)
+    size_t  maxConcurrent  = 3;     ///< 本队列的并发额度
+    int64_t lingerMs       = 300000; ///< 结束后台账保留时长 (毫秒)
+    size_t  resultMaxBytes = 8192;  ///< 台账结果正文上限 (字节)
+
+    /// 结果事件名
+    /// - 空 = 固定名 `agentxx.agent.async.done` (单一事件名, 靠值里的 `asyncId` 区分)
+    /// - 内部直调路径可显式指定 (P3 之前的旧路径); 模型侧不暴露
+    std::string eventName;
+
+    /// 派生基准配置 (提交入口填: 创建者 `AgentContext::agentConfig` 的强引用)
+    /// - 持有它即保证"创建者已销毁也能派生"; 为空时退回创建者上下文取
+    std::shared_ptr<AgentConfig> baseConfig;
+};
+
+/// 提交回执 (队列不限条数, 因此只有"受理/拒绝"两种)
+struct AsyncWorkSubmitResult {
+    bool           accepted = false;
+    std::string    asyncId; ///< `async-<n>`; 同时是该任务 agent 的 sessionId
+    AsyncWorkState state   = AsyncWorkState::Queued;
+    size_t         queueAhead = 0;
+    std::string    error; ///< accepted=false 时的原因
+};
+
+/// 任务条目 (台账: 查询与界面展示用; 不含上下文正文)
+struct AsyncWorkEntry {
+    std::string    asyncId;
+    AsyncWorkKind  kind  = AsyncWorkKind::Agent;
+    AsyncWorkState state = AsyncWorkState::Queued;
+    std::string    queueKey;
+    std::string    creatorAgentId;
+    std::string    creatorSessionId;
+    std::string    agentId; ///< 运行期 registry id (结束后仅用于日志关联)
+    std::string    name;
+    std::string    model;
+    int64_t        createdAtMs  = 0;
+    int64_t        startedAtMs  = 0;
+    int64_t        finishedAtMs = 0;
+    std::string    resultText; ///< 截断后的结果正文
+    std::string    error;
+    bool           hasError  = false;
+    bool           canceled  = false;
+    bool           delivered = false; ///< 结果是否真的投递到了中枢
+
+    /// ---- 下列为管理器内部字段 (查询与展示不使用) ----
+
+    AsyncWorkSpec                                 spec;
+    std::shared_ptr<neograph::graph::CancelToken> token;
+    std::weak_ptr<AgentContext>                   creatorCtx;
+    size_t                                        maxConcurrent   = 3;
+    int64_t                                       lingerMs        = 300000;
+    size_t                                        resultMaxBytes  = 8192;
+    /// 台账清扫时刻 (steady 毫秒; 0 = 不必清扫)
+    int64_t                                       lingerDeadlineSteadyMs = 0;
+};
+
+/// 异步任务管理器 (进程一份, 挂在 [AgentHost] 上)
+///
+/// 一次任务 = 一次后台执行 (`kind` = agent / tool), 提交即可, 结果统一走事件。
+/// 每队列 (默认按创建者) 一条 FIFO + 额度, 队列只在内存 (进程退出即丢)。
+///
+/// 线程模型: 提交/取消/查询可在任意线程 (内部加锁); 队列推进与任务运行在容器
+/// io 线程上。
+class AsyncWorkManager {
+public:
+
+    explicit AsyncWorkManager(std::weak_ptr<AgentHost> host);
+    ~AsyncWorkManager();
+
+    AsyncWorkManager(const AsyncWorkManager&)            = delete;
+    AsyncWorkManager& operator=(const AsyncWorkManager&) = delete;
+
+    /// 提交一个后台任务 (任意线程)
+    /// - 只做校验 + 入队, 立即返回; 只有"未启用"与"参数非法"会被拒,
+    ///   **不会因额度/排队条数被拒**
+    AsyncWorkSubmitResult submit(AsyncWorkSpec spec, std::shared_ptr<AgentContext> creator);
+
+    /// 取消单条 (运行中 → 置取消令牌; 排队中 → 直接出队)
+    bool cancel(std::string_view asyncId);
+
+    /// 按创建者批量取消 (`creator` 为空 = 全部)
+    size_t cancelByCreator(const std::shared_ptr<AgentContext>& creator);
+
+    /// 按创建者会话批量取消
+    size_t cancelBySession(std::string_view creatorSessionId);
+
+    /// 单条任务 JSON (不存在返回空对象)
+    utilxx_base::Json entryJson(std::string_view asyncId) const;
+
+    /// 任务清单 JSON
+    /// - `creatorAgentId` 为空 = 全部
+    /// - `includeFinished` 为 false 时只给排队 + 运行中
+    utilxx_base::Json listJson(
+        std::string_view creatorAgentId,
+        std::string_view creatorSessionId = {},
+        bool             includeFinished  = true,
+        size_t           limit            = 20
+    ) const;
+
+    /// 运行中的任务数 / 排队中的任务数 (诊断与测试用)
+    size_t runningCount() const;
+    size_t queuedCount(std::string_view queueKey = {}) const;
+
+    /// 关停: 取消全部在跑与排队项 (`return` 处理条数)
+    size_t shutdown(std::string_view reason);
+
+private:
+
+    /// 调度一条队列 (在容器 io 线程上执行)
+    void pump(std::string_view queueKey);
+
+    /// 台账清扫 (结束超过 linger 的条目); 调用方必须已持锁
+    void sweepLingerLocked();
+
+    /// 任务主体: 跑子代理 / 工具, 结果发事件 + 回台账 (容器 io 线程)
+    /// - 协程帧持有容器强引用: 容器 (含本管理器) 在任务结束前不会被释放
+    asio::awaitable<void> runner(std::shared_ptr<AgentHost> host, std::string entryId);
+
+    std::weak_ptr<AgentHost> host_;
+    mutable std::mutex       mutex_;
+    /// 台账 (asyncId -> 条目)
+    std::map<std::string, AsyncWorkEntry, std::less<>> entries_;
+    /// 每队列的排队 id (FIFO)
+    std::map<std::string, std::vector<std::string>, std::less<>> queues_;
+    /// 每队列运行中的条数
+    std::map<std::string, size_t, std::less<>> runningPerQueue_;
+    uint64_t                                   seq_ = 0;
+};
+
+} // namespace agent
+} // namespace agentxx

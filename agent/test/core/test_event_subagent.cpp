@@ -209,6 +209,9 @@ bool contains(std::string_view hay, std::string_view needle) {
     return hay.find(needle) != std::string_view::npos;
 }
 
+/// 异步任务结果事件名 (单一事件名, 靠值里的 `asyncId` 区分任务)
+constexpr std::string_view kAsyncDone = "agentxx.agent.async.done";
+
 /// 构造一个异步任务 (目标 subagent 名固定为内置 `subagent_task`)
 agentxx::events::SubagentBatchItem asyncTask(std::string resultId, std::string eventName = {}) {
     agentxx::events::SubagentBatchItem task;
@@ -277,33 +280,40 @@ asio::awaitable<void> test_async_dispatch_returns_immediately() {
 
     XX_TEST_EXPECT_TRUE(accepted);
     XX_TEST_EXPECT_TRUE(acceptedValue["started"].get<bool>());
-    XX_TEST_EXPECT_EQ(acceptedEvent, std::string{evName("subagent.done.job1")});
+    XX_TEST_EXPECT_EQ(acceptedEvent, std::string{kAsyncDone});
     // 受理不等子代理: 300ms 的延迟下必须快速返回
     XX_TEST_EXPECT_TRUE(acceptCostMs < 250);
     XX_TEST_EXPECT_FALSE(valueArrived.load());
 
     runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
         const auto ok = co_await waitUntil([&] {
-            auto rec = hub->queryEvent(evName("subagent.done.job1"));
+            auto rec = hub->queryEvent(kAsyncDone);
             return rec.has_value() && !rec->history.empty()
                    && rec->state == agentxx::events::EventState::Ended;
         });
         if (!ok) {
             co_return false;
         }
-        auto rec = hub->queryEvent(evName("subagent.done.job1"));
+        auto rec = hub->queryEvent(kAsyncDone);
         value    = rec->history.front();
         co_return true;
     });
 
-    XX_TEST_EXPECT_EQ(value.value("resultId", std::string{}), std::string{"job1"});
-    XX_TEST_EXPECT_EQ(value.value("subagent", std::string{}), std::string{"subagent_task"});
+    // 值里只有一个标识 `asyncId`, 不再有 `resultId`/`subagent`/`agentId`
+    const auto asyncId = value.value("asyncId", std::string{});
+    XX_TEST_EXPECT_FALSE(asyncId.empty());
+    XX_TEST_EXPECT_EQ(value.value("kind", std::string{}), std::string{"agent"});
+    XX_TEST_EXPECT_EQ(value.value("name", std::string{}), std::string{"subagent_task"});
     XX_TEST_EXPECT_FALSE(value.value("hasError", true));
-    XX_TEST_EXPECT_FALSE(value.value("Canceled", true));
+    XX_TEST_EXPECT_FALSE(value.value("canceled", true));
     XX_TEST_EXPECT_EQ(value.value("content", std::string{}), std::string{"async child result"});
-    XX_TEST_EXPECT_FALSE(value.value("agentId", std::string{}).empty());
-    // 作业收尾后登记表清空
-    XX_TEST_EXPECT_EQ(fx->host->runningAsyncJobs(), size_t{0});
+    // 台账里能按 asyncId 查回来, 且 asyncId 就是该任务的 sessionId (一个值, 不另造)
+    const auto ledger = fx->host->asyncWorkJson(asyncId);
+    XX_TEST_EXPECT_EQ(ledger.value("state", std::string{}), std::string{"done"});
+    XX_TEST_EXPECT_EQ(ledger.value("name", std::string{}), std::string{"subagent_task"});
+    XX_TEST_EXPECT_TRUE(ledger.value("delivered", false));
+    // 任务收尾后不再处于运行态
+    XX_TEST_EXPECT_EQ(fx->host->runningAsyncWork(), size_t{0});
 
     g_da_sim_delay_ms = 0;
     co_return;
@@ -318,7 +328,7 @@ asio::awaitable<void> test_async_result_wakes_session() {
 
     // 父会话自己盯这个事件: 子代理结果到达时被唤醒
     auto watched = hub->watch(agentxx::events::EventWaitSpec{
-        .event         = evName("subagent.done.job2"),
+        .event         = std::string{kAsyncDone},
         .mode          = "first",
         .delivery      = "next-step",
         .originSession = fx->sessionId,
@@ -348,7 +358,7 @@ asio::awaitable<void> test_async_result_wakes_session() {
         acceptedEvent = resp->results[0].eventName;
         co_return resp->results[0].started;
     });
-    XX_TEST_EXPECT_EQ(acceptedEvent, std::string{evName("subagent.done.job2")});
+    XX_TEST_EXPECT_EQ(acceptedEvent, std::string{kAsyncDone});
 
     runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
         co_return co_await waitUntil([&] {
@@ -357,9 +367,12 @@ asio::awaitable<void> test_async_result_wakes_session() {
     });
 
     const auto text = fx->sink->lastText();
-    XX_TEST_EXPECT_TRUE(contains(text, "[Event] " + evName("subagent.done.job2")));
+    XX_TEST_EXPECT_TRUE(contains(text, "[Event] " + std::string{kAsyncDone}));
     XX_TEST_EXPECT_TRUE(contains(text, "async child result"));
-    XX_TEST_EXPECT_EQ(fx->sink->lastSource(), std::string{"event:"} + evName("subagent.done.job2"));
+    XX_TEST_EXPECT_EQ(
+        fx->sink->lastSource(),
+        std::string{"event:"} + std::string{kAsyncDone}
+    );
     XX_TEST_EXPECT_EQ(hub->queryWait(watched->waitId)->state, agentxx::events::WaitState::Satisfied);
     co_return;
 }
@@ -369,10 +382,10 @@ asio::awaitable<void> test_async_tool_result_text() {
     auto fx = std::make_shared<SubagentFixture>();
     XX_TEST_EXPECT_TRUE(buildFixture(fx));
 
-    // 模型派发后会盯这个事件 (事件名可预测), 结果到达时把会话叫醒
-    auto* hub    = fx->hub();
+    // 模型派发后会盯这个事件 (事件名固定), 结果到达时把会话叫醒
+    auto* hub     = fx->hub();
     auto  watched = hub->watch(agentxx::events::EventWaitSpec{
-         .event         = evName("subagent.done.job3"),
+         .event         = std::string{kAsyncDone},
          .mode          = "first",
          .delivery      = "next-step",
          .originSession = fx->sessionId,
@@ -407,16 +420,16 @@ asio::awaitable<void> test_async_tool_result_text() {
     // 工具的返回文本 (模型看到的) 是受理提示, 不是子代理结果
     const auto dumped = g_da_sim_requests.size() >= 2 ? g_da_sim_last_request.dump() : std::string{};
     XX_TEST_EXPECT_TRUE(contains(dumped, "[Subagent started]"));
-    XX_TEST_EXPECT_TRUE(contains(dumped, evName("subagent.done.job3")));
+    XX_TEST_EXPECT_TRUE(contains(dumped, kAsyncDone));
 
     // 结果事件随后到达中枢, 会话被叫醒
     runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
         co_return co_await waitUntil([&] {
-            auto rec = hub->queryEvent(evName("subagent.done.job3"));
+            auto rec = hub->queryEvent(kAsyncDone);
             return rec.has_value() && !rec->history.empty();
         });
     });
-    auto rec = hub->queryEvent(evName("subagent.done.job3"));
+    auto rec = hub->queryEvent(kAsyncDone);
     XX_TEST_EXPECT_TRUE(rec.has_value());
     if (rec.has_value() && !rec->history.empty()) {
         XX_TEST_EXPECT_EQ(
@@ -430,17 +443,18 @@ asio::awaitable<void> test_async_tool_result_text() {
             return fx->sink->count() >= 1;
         });
     });
-    XX_TEST_EXPECT_TRUE(contains(fx->sink->lastText(), "[Event] " + evName("subagent.done.job3")));
+    XX_TEST_EXPECT_TRUE(contains(fx->sink->lastText(), "[Event] " + std::string{kAsyncDone}));
 
     g_da_sim_tool_calls_remaining = -1;
     co_return;
 }
 
-/// 4. 同名事件冲突 / 非法事件名: 明确错误, 不派发
+/// 4. 单一事件名: 同一批多个任务不再需要各给一个事件名; 非法事件名仍直接报错
 asio::awaitable<void> test_async_event_name_errors() {
     auto fx = std::make_shared<SubagentFixture>();
     XX_TEST_EXPECT_TRUE(buildFixture(fx));
 
+    // 两条任务都不给 `event_name`: 都受理 (同一事件名, 靠值里的 asyncId 区分)
     agentxx::events::RespSubagentBatch resp;
     runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
         agentxx::events::ReqSubagentBatch req{
@@ -448,32 +462,31 @@ asio::awaitable<void> test_async_event_name_errors() {
             .parentSessionId = fx->sessionId,
             .cancelToken     = nullptr,
         };
-        req.tasks.push_back(asyncTask("dup1", evName("same.event")));
-        req.tasks.push_back(asyncTask("dup2", evName("same.event")));
-        resp = co_await [&](
-               ) -> asio::awaitable<agentxx::events::RespSubagentBatch> {
-            auto r = co_await fx->agent->getContext()
-                         ->bus->request<
-                             agentxx::events::ReqSubagentBatch,
-                             agentxx::events::RespSubagentBatch>(
-                             agentxx::events::Topic::Subagent,
-                             std::move(req),
-                             std::chrono::seconds(30)
-                         );
-            co_return r.has_value() ? std::move(*r) : agentxx::events::RespSubagentBatch{};
-        }();
+        req.tasks.push_back(asyncTask("dup1"));
+        req.tasks.push_back(asyncTask("dup2"));
+        auto r = co_await fx->agent->getContext()
+                     ->bus->request<
+                         agentxx::events::ReqSubagentBatch,
+                         agentxx::events::RespSubagentBatch>(
+                         agentxx::events::Topic::Subagent,
+                         std::move(req),
+                         std::chrono::seconds(30)
+                     );
+        if (r.has_value()) {
+            resp = std::move(*r);
+        }
         co_return true;
     });
 
     XX_TEST_EXPECT_EQ(resp.results.size(), size_t{2});
     if (resp.results.size() == 2) {
         XX_TEST_EXPECT_TRUE(resp.results[0].started);
-        XX_TEST_EXPECT_FALSE(resp.results[1].started);
-        XX_TEST_EXPECT_TRUE(resp.results[1].hasError);
-        XX_TEST_EXPECT_TRUE(contains(resp.results[1].errorMessage, "used by another task"));
+        XX_TEST_EXPECT_TRUE(resp.results[1].started);
+        XX_TEST_EXPECT_EQ(resp.results[0].eventName, std::string{kAsyncDone});
+        XX_TEST_EXPECT_EQ(resp.results[1].eventName, std::string{kAsyncDone});
     }
 
-    // 非法事件名 (保留前缀): 直接报错
+    // 非法事件名 (不在事件族里): 直接报错
     agentxx::events::RespSubagentBatch badName;
     runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
         agentxx::events::ReqSubagentBatch req{
@@ -503,8 +516,8 @@ asio::awaitable<void> test_async_event_name_errors() {
     co_return;
 }
 
-/// 5. 关掉事件中枢时异步派发不可用 (明确报错, 不退化成同步)
-asio::awaitable<void> test_async_needs_hub() {
+/// 5. 关掉事件中枢时仍受理, 结果只落台账 (没有事件可等)
+asio::awaitable<void> test_async_without_hub() {
     auto fx = std::make_shared<SubagentFixture>();
     XX_TEST_EXPECT_TRUE(buildFixture(fx, /*enableEvent=*/false));
     XX_TEST_EXPECT_TRUE(fx->hub() == nullptr);
@@ -532,8 +545,27 @@ asio::awaitable<void> test_async_needs_hub() {
     });
     XX_TEST_EXPECT_EQ(resp.results.size(), size_t{1});
     if (!resp.results.empty()) {
-        XX_TEST_EXPECT_TRUE(resp.results[0].hasError);
-        XX_TEST_EXPECT_TRUE(contains(resp.results[0].errorMessage, "event hub"));
+        XX_TEST_EXPECT_TRUE(resp.results[0].started);
+        XX_TEST_EXPECT_FALSE(resp.results[0].hasError);
+    }
+
+    // 等任务跑完: 台账里有结果, `delivered=false` (没中枢可投)
+    const auto done = runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
+        co_return co_await waitUntil([&] {
+            return fx->host->runningAsyncWork() == 0 && fx->host->asyncWorksJson().size() == 1;
+        });
+    });
+    XX_TEST_EXPECT_TRUE(done);
+    auto list = fx->host->asyncWorksJson();
+    if (list.is_array() && !list.empty()) {
+        const auto id     = list[0].value("asyncId", std::string{});
+        const auto ledger = fx->host->asyncWorkJson(id);
+        XX_TEST_EXPECT_EQ(ledger.value("state", std::string{}), std::string{"done"});
+        XX_TEST_EXPECT_FALSE(ledger.value("delivered", true));
+        XX_TEST_EXPECT_EQ(
+            ledger.value("result", std::string{}),
+            std::string{"async child result"}
+        );
     }
     co_return;
 }
@@ -568,27 +600,27 @@ asio::awaitable<void> test_async_cancel() {
         co_return started;
     });
     XX_TEST_EXPECT_TRUE(started);
-    XX_TEST_EXPECT_EQ(fx->host->runningAsyncJobs(), size_t{1});
+    XX_TEST_EXPECT_EQ(fx->host->runningAsyncWork(), size_t{1});
 
     // agent 关停路径: 按父上下文取消 (不误伤容器里别的根)
-    XX_TEST_EXPECT_EQ(fx->host->cancelAsyncJobs(fx->agent->getContext()), size_t{1});
+    XX_TEST_EXPECT_EQ(fx->host->cancelAsyncWorks(fx->agent->getContext()), size_t{1});
 
     // 取消后仍要发布终态 (否则父会话只能等到超时)
     bool ok = false;
     runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
         ok = co_await waitUntil([&] {
-            auto rec = hub->queryEvent(evName("subagent.done.job6"));
+            auto rec = hub->queryEvent(kAsyncDone);
             return rec.has_value() && !rec->history.empty()
                    && rec->state == agentxx::events::EventState::Ended;
         });
         co_return ok;
     });
     XX_TEST_EXPECT_TRUE(ok);
-    if (auto rec = hub->queryEvent(evName("subagent.done.job6")); rec.has_value() && !rec->history.empty()) {
+    if (auto rec = hub->queryEvent(kAsyncDone); rec.has_value() && !rec->history.empty()) {
         const auto value = rec->history.front();
-        XX_TEST_EXPECT_TRUE(value.value("Canceled", false) || value.value("hasError", false));
+        XX_TEST_EXPECT_TRUE(value.value("canceled", false) || value.value("hasError", false));
     }
-    XX_TEST_EXPECT_EQ(fx->host->runningAsyncJobs(), size_t{0});
+    XX_TEST_EXPECT_EQ(fx->host->runningAsyncWork(), size_t{0});
 
     g_da_sim_delay_ms = 0;
     co_return;
@@ -601,7 +633,7 @@ asio::awaitable<TestResult> run_event_subagent_tests() {
     co_await test_async_result_wakes_session();
     co_await test_async_tool_result_text();
     co_await test_async_event_name_errors();
-    co_await test_async_needs_hub();
+    co_await test_async_without_hub();
     co_await test_async_cancel();
 
     result.passed = g_es_passed;
