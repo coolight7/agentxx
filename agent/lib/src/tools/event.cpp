@@ -1,6 +1,8 @@
 #include "agentxx/tools/event.h"
 #include "agentxx/util/neograph_json_bridge.h"
 
+#include "agentxx/agent/agent_host.h"
+#include "agentxx/agent/async_work.h"
 #include "agentxx/agent/context.h"
 #include "agentxx/event/hub.h"
 #include "agentxx/event/naming.h"
@@ -50,6 +52,18 @@ std::string requireSessionId(const utilxx_base::Json& args) {
     return sessionId;
 }
 
+/// 后台任务的结果事件名 (单一事件名, 靠值里的 `asyncId` 区分)
+constexpr std::string_view kAsyncDoneEvent = "agentxx.agent.async.done";
+
+/// 毫秒 → `mm:ss` (后台任务耗时展示)
+std::string formatElapsed(int64_t ms) {
+    if (ms < 0) {
+        ms = 0;
+    }
+    const auto totalSeconds = ms / 1000;
+    return fmt::format("{:02d}:{:02d}", totalSeconds / 60, totalSeconds % 60);
+}
+
 /// 组装等待登记 (watch / await 共用)
 EventWaitSpec buildWaitSpec(
     const utilxx_base::Json& args,
@@ -57,7 +71,19 @@ EventWaitSpec buildWaitSpec(
     std::string_view         defaultDelivery
 ) {
     EventWaitSpec spec;
-    spec.event         = requireString(args, "event");
+    // 事件名: `event` 或（后台任务）`id` 至少给一个; 给 `id` 时事件名固定
+    const auto asyncId = args.value("id", std::string{});
+    const auto eventArg
+        = (args.contains("event") && args["event"].is_string())
+              ? args["event"].get<std::string>()
+              : std::string{};
+    if (!eventArg.empty()) {
+        spec.event = eventArg;
+    } else if (!asyncId.empty()) {
+        spec.event = std::string{kAsyncDoneEvent};
+    } else {
+        throw std::invalid_argument{"Arg `event` (or `id` for a background task) is required"};
+    }
     spec.originSession = std::string{sessionId};
     spec.owner         = "tool";
     spec.mode          = args.value("mode", std::string{"first"});
@@ -81,6 +107,13 @@ EventWaitSpec buildWaitSpec(
     }
     if (spec.coalesce.count() > 0 && spec.mode != "each") {
         throw std::invalid_argument{"Arg `coalesce_ms` only applies to mode=each"};
+    }
+    // 后台任务定向等待: 给 `id` 时按值里的 asyncId 过滤
+    if (!asyncId.empty()) {
+        spec.match = utilxx_base::Json{{"asyncId", asyncId}};
+        if (spec.ref.empty()) {
+            spec.ref = asyncId;
+        }
     }
     return spec;
 }
@@ -153,6 +186,110 @@ std::string renderSatisfiedText(EventHub& hub, const EventWait& wait) {
         note = "the event ended without any value";
     }
     return agentxx::events::renderEventText(wait, status, texts, note);
+}
+
+/// 后台任务列表文本 (给模型读的摘要, 不含结果正文)
+std::string renderAsyncWorks(
+    agentxx::agent::AgentHost& host,
+    const std::string&         creatorAgentId,
+    std::string_view           onlyId,
+    std::string_view           stateFilter,
+    bool                       allScopes,
+    size_t                     limit,
+    size_t                     maxConcurrent
+) {
+    auto items = utilxx_base::Json::array();
+    if (!onlyId.empty()) {
+        auto one = host.asyncWorkJson(onlyId);
+        if (!one.is_object() || one.empty()) {
+            throw std::invalid_argument{fmt::format("Background task not found: {}", onlyId)};
+        }
+        items.push_back(std::move(one));
+    } else {
+        items = host.asyncWorksJson(allScopes ? std::string_view{} : creatorAgentId, {}, true, 200);
+    }
+
+    size_t running = 0;
+    size_t queued  = 0;
+    auto   lines   = std::vector<std::string>{};
+    auto   done    = std::vector<std::string>{};
+    const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                         std::chrono::system_clock::now().time_since_epoch()
+    )
+                         .count();
+    for (const auto& item : items) {
+        const auto state = item.value("state", std::string{});
+        if (state == "running") {
+            ++running;
+        } else if (state == "queued") {
+            ++queued;
+        }
+        if (stateFilter != "all" && !stateFilter.empty() && state != stateFilter) {
+            continue;
+        }
+        const auto id   = item.value("asyncId", std::string{});
+        const auto kind = item.value("kind", std::string{});
+        const auto name = item.value("name", std::string{});
+        if (state == "running") {
+            const auto elapsed = now - item.value("startedAtMs", now);
+            lines.push_back(fmt::format(
+                "- {} [running] {} {} 已跑 {}",
+                id,
+                kind,
+                name,
+                formatElapsed(elapsed)
+            ));
+        } else if (state == "queued") {
+            const auto ahead = item.value("queueAhead", int64_t{0});
+            lines.push_back(fmt::format(
+                "- {} [queued]  {} {} 前方 {}",
+                id,
+                kind,
+                name,
+                ahead
+            ));
+        } else if (state == "done" || state == "failed" || state == "canceled") {
+            const auto start  = item.value("startedAtMs", int64_t{0});
+            const auto finish = item.value("finishedAtMs", int64_t{0});
+            const auto mark   = state == "done" ? "ok" : (state == "canceled" ? "canceled" : "failed");
+            done.push_back(fmt::format(
+                "- {} {} [{}] 用时 {}",
+                id,
+                kind,
+                mark,
+                formatElapsed(finish - start)
+            ));
+        }
+        if (lines.size() >= limit) {
+            break;
+        }
+    }
+
+    std::string out = fmt::format(
+        "[Async work] running={} queued={} (per-queue limit {})\n",
+        running,
+        queued,
+        maxConcurrent
+    );
+    if (lines.empty() && done.empty()) {
+        out += "(no background task matches the filter)";
+        return out;
+    }
+    for (const auto& line : lines) {
+        out += line;
+        out += "\n";
+    }
+    if (!done.empty()) {
+        out += "最近完成:\n";
+        for (const auto& line : done) {
+            out += line;
+            out += "\n";
+        }
+    }
+    while (!out.empty() && out.back() == '\n') {
+        out.pop_back();
+    }
+    return out;
 }
 
 /// 事件列表文本
@@ -243,6 +380,7 @@ neograph::ChatTool EventTool::get_definition() const {
                              "await",
                              "status",
                              "list",
+                             "works",
                              "cancel",
                              "emit",
                              "end",
@@ -262,6 +400,13 @@ neograph::ChatTool EventTool::get_definition() const {
                     {
                         {"type", "string"},
                         {"description", prompt.getArg("wait")},
+                    },
+                },
+                {
+                    "id",
+                    {
+                        {"type", "string"},
+                        {"description", prompt.getArg("id")},
                     },
                 },
                 {
@@ -426,6 +571,42 @@ asio::awaitable<agentxx::util::ToolResult>
     }
     const auto sessionId = requireSessionId(arguments);
     const auto opt       = requireString(arguments, "opt");
+    const auto asyncId   = arguments.value("id", std::string{});
+
+    // 后台任务工具面: `works` / `status id=` / `cancel id=|scope=mine` 都直接问 agent 容器
+    const auto hostOf = [&]() -> std::shared_ptr<agentxx::agent::AgentHost> {
+        auto host = agentContextPtr->host.lock();
+        if (!host) {
+            throw std::runtime_error{"background tasks need the agent host (not attached)"};
+        }
+        return host;
+    };
+    // 本 agent 的并发额度 (唯一一类并发约束)
+    const auto perQueueLimit = [&]() -> size_t {
+        return agentContextPtr->agentConfig ? agentContextPtr->agentConfig->asyncWorkMaxConcurrent
+                                            : size_t{3};
+    };
+
+    if (opt == "works") {
+        const auto scope  = arguments.value("scope", std::string{"mine"});
+        const auto state  = arguments.value("state", std::string{"all"});
+        const auto limit  = static_cast<size_t>(
+            std::clamp<int64_t>(arguments.value<int64_t>("limit", 20), 1, 200)
+        );
+        const bool allScopes = scope == "all";
+        if (!allScopes && scope != "mine") {
+            throw std::invalid_argument{fmt::format("Arg `scope` is invalid for opt=works: {}", scope)};
+        }
+        co_return agentxx::util::ToolResult::ok(renderAsyncWorks(
+            *hostOf(),
+            agentContextPtr->agentId,
+            asyncId,
+            state,
+            allScopes,
+            limit,
+            perQueueLimit()
+        ));
+    }
 
     if (opt == "watch") {
         auto spec = buildWaitSpec(arguments, sessionId, hub->config().deliveryDefault);
@@ -468,6 +649,46 @@ asio::awaitable<agentxx::util::ToolResult>
     }
 
     if (opt == "status") {
+        // `id`: 查某条后台任务
+        if (!asyncId.empty()) {
+            const auto entry = hostOf()->asyncWorkJson(asyncId);
+            if (!entry.is_object() || entry.empty()) {
+                throw std::invalid_argument{fmt::format("Background task not found: {}", asyncId)};
+            }
+            const auto state = entry.value("state", std::string{});
+            auto       out   = fmt::format(
+                "[Async work status] {} kind={} name={} state={}",
+                asyncId,
+                entry.value("kind", std::string{}),
+                entry.value("name", std::string{}),
+                state
+            );
+            if (state == "running" || state == "done" || state == "failed"
+                || state == "canceled") {
+                const auto now = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                     std::chrono::system_clock::now().time_since_epoch()
+                )
+                                     .count();
+                const auto start  = entry.value("startedAtMs", int64_t{0});
+                const auto finish = entry.value("finishedAtMs", int64_t{0});
+                out += fmt::format(" elapsed={}", formatElapsed((finish > 0 ? finish : now) - start));
+            }
+            if (entry.value("hasError", false)) {
+                out += " hasError=true";
+            }
+            if (entry.value("canceled", false)) {
+                out += " canceled=true";
+            }
+            const auto error = entry.value("error", std::string{});
+            if (!error.empty()) {
+                out += fmt::format("\nerror: {}", error);
+            }
+            const auto result = entry.value("result", std::string{});
+            if (!result.empty() && state != "running" && state != "queued") {
+                out += fmt::format("\nresult:\n{}", result);
+            }
+            co_return agentxx::util::ToolResult::ok(out);
+        }
         const auto waitId = arguments.value("wait", std::string{});
         if (!waitId.empty()) {
             auto wait = hub->queryWait(waitId);
@@ -509,6 +730,24 @@ asio::awaitable<agentxx::util::ToolResult>
     }
 
     if (opt == "cancel") {
+        // `id`: 取消某条后台任务; `scope=mine`: 取消自己名下全部
+        if (!asyncId.empty()) {
+            if (!hostOf()->cancelAsyncWork(asyncId)) {
+                throw std::invalid_argument{fmt::format(
+                    "Background task not found or already finished: {}",
+                    asyncId
+                )};
+            }
+            co_return agentxx::util::ToolResult::ok(
+                fmt::format("[Async work cancel] id={} canceled", asyncId)
+            );
+        }
+        if (arguments.value("scope", std::string{}) == "mine") {
+            const auto count = hostOf()->cancelAsyncWorks(agentContextPtr);
+            co_return agentxx::util::ToolResult::ok(
+                fmt::format("[Async work cancel] canceled {} task(s) of this agent", count)
+            );
+        }
         if (arguments.value("all", false)) {
             const auto count = hub->cancelWaitsOfSession(sessionId, "tool-cancel");
             co_return agentxx::util::ToolResult::ok(fmt::format("[Event cancel] Canceled {} wait(s) of this session", count));

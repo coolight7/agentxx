@@ -37,6 +37,22 @@ int64_t systemNowMs() {
                                     .count());
 }
 
+/// 值是否满足等待的值过滤 (顶层字段相等匹配; 空过滤 = 都满足)
+bool waitMatchesSpec(const EventWaitSpec& spec, const Json& value) {
+    if (spec.match.empty()) {
+        return true;
+    }
+    if (!value.is_object()) {
+        return false;
+    }
+    for (const auto& [key, expected] : spec.match.items()) {
+        if (!value.contains(key) || value[key] != expected) {
+            return false;
+        }
+    }
+    return true;
+}
+
 /// 值的字节数 (紧凑 JSON 文本长度; 未构造文本时按 0)
 size_t valueBytesOf(const Json& value) {
     if (value.is_null()) {
@@ -58,7 +74,6 @@ std::string rawValueText(const Json& value) {
 
 /// 终态等待在表里保留多久 (供 `opt=status` 事后查看)
 constexpr int64_t kTerminalWaitLingerMs = 60 * 1000;
-
 /// 超时/回收检查周期
 constexpr int64_t kSweepPeriodMs = 500;
 
@@ -587,6 +602,10 @@ void EventHub::dispatchValue(RecordEntry& rec, const Json& value) {
         if (wait.state != WaitState::Armed || wait.spec.event != rec.rec.name) {
             continue;
         }
+        // 值过滤: 不匹配的值不消耗等待 (别人的任务完成不能把"我等的那一条"吃掉)
+        if (!waitMatchesSpec(wait.spec, value)) {
+            continue;
+        }
         auto& spec = wait.spec;
         wait.lastValueAtMs = systemNowMs();
         if (spec.mode == "first") {
@@ -635,6 +654,11 @@ void EventHub::dispatchEnded(RecordEntry& rec) {
     for (auto& [_, entry] : waits_) {
         auto& wait = entry.wait;
         if (wait.state != WaitState::Armed || wait.spec.event != rec.rec.name) {
+            continue;
+        }
+        // 带值过滤的等待不随事件结束收尾: 共用一个事件名的多条流里,
+        // 别人的流结束不代表我要的那条有结果
+        if (!wait.spec.match.empty()) {
             continue;
         }
         if (!entry.coalesced.empty()) {
@@ -986,8 +1010,16 @@ std::expected<EventWait, std::string> EventHub::watch(EventWaitSpec spec) {
     // 回放: 注册之前到达的值也要给 (减少"我明明发了它却没收到"的往返)
     if (stored.wait.spec.replay) {
         if (auto* rec = findRecord(stored.wait.spec.event); rec && !rec->rec.history.empty()) {
-            std::vector<Json> replay{rec->rec.history.begin(), rec->rec.history.end()};
-            if (stored.wait.spec.mode == "all") {
+            std::vector<Json> replay;
+            replay.reserve(rec->rec.history.size());
+            for (const auto& value : rec->rec.history) {
+                if (waitMatchesSpec(stored.wait.spec, value)) {
+                    replay.push_back(value);
+                }
+            }
+            if (replay.empty()) {
+                // 历史里没有匹配的值: 不回放, 继续等新值
+            } else if (stored.wait.spec.mode == "all") {
                 for (auto& value : replay) {
                     stored.wait.values.push_back(value);
                     stored.wait.bytes += valueBytesOf(value);
@@ -1014,7 +1046,8 @@ std::expected<EventWait, std::string> EventHub::watch(EventWaitSpec spec) {
     }
 
     // 事件已经结束: 不再等
-    if (stored.wait.state == WaitState::Armed) {
+    // - 带值过滤的等待除外: 它是多任务共用一个事件名时的定向等待, 只看值
+    if (stored.wait.state == WaitState::Armed && stored.wait.spec.match.empty()) {
         if (auto* rec = findRecord(stored.wait.spec.event);
             rec && rec->rec.state != EventState::Open) {
             if (stored.wait.spec.mode == "first") {

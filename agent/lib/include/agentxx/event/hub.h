@@ -127,6 +127,11 @@ struct EventWaitSpec {
     std::chrono::milliseconds coalesce{0};
     /// 是否消费注册前的历史值
     bool replay = true;
+    /// 值过滤: 顶层字段相等匹配 (`{"asyncId":"async-7"}`), 空对象 = 不过滤
+    /// - 不匹配的值**不消耗**等待 (`first` 不会被别人的值吃掉)
+    /// - 带过滤的等待只看值: 事件结束不会收尾它们 (多任务共用一个事件名时,
+    ///   别人的任务结束不能算我的任务结束); 超时/取消照常生效
+    Json match = Json::object();
     /// 超时是否投递一条提示
     bool notifyOnTimeout = true;
     /// 暂停态 (上一轮失败/中断) 是否解除暂停

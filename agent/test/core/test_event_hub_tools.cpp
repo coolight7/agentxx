@@ -120,7 +120,8 @@ asio::awaitable<void> test_tool_definition() {
     XX_TEST_EXPECT_TRUE(params["required"][0].get<std::string>() == "opt");
     const auto& optEnum = params["properties"]["opt"]["enum"];
     XX_TEST_EXPECT_TRUE(optEnum.is_array());
-    XX_TEST_EXPECT_TRUE(optEnum.size() == 7);
+    // watch / await / status / list / works / cancel / emit / end
+    XX_TEST_EXPECT_TRUE(optEnum.size() == 8);
     const auto& modeEnum = params["properties"]["mode"]["enum"];
     XX_TEST_EXPECT_TRUE(modeEnum.size() == 3);
     co_return;
@@ -497,6 +498,62 @@ asio::awaitable<void> test_tool_watch_timer() {
     co_return;
 }
 
+/// 10. 后台任务: `id` 定向等待只看自己那一条; `works` 无容器时报明确错误
+asio::awaitable<void> test_tool_async_work_wait() {
+    auto fx = co_await makeToolFixture();
+    fx->sink->busy = true;
+
+    const std::string doneEvent = "agentxx.agent.async.done";
+
+    // 定向等待 async-7: 只给 id, 事件名自动取结果事件
+    auto armed = co_await execTool(
+        *fx->tool,
+        Json{
+            {"opt",       "watch"          },
+            {"id",        "async-7"        },
+            {"mode",      "first"          },
+            {"sessionId", fx->sessionId    },
+        }
+    );
+    XX_TEST_EXPECT_TRUE(armed.starts_with("[Event wait armed]"));
+    XX_TEST_EXPECT_TRUE(contains(armed, "event=" + doneEvent));
+
+    // 别人的任务先完成: 不消耗我的等待
+    std::string pubErr;
+    fx->hub->publishValue(
+        doneEvent,
+        Json{{"asyncId", "async-9"}, {"content", "not mine"}},
+        &pubErr
+    );
+    co_await toolSleepMs(20);
+    XX_TEST_EXPECT_EQ(fx->session->pendingInputCount("event:"), size_t{0});
+
+    // 我那条到达: 投递并唤醒会话
+    fx->hub->publishValue(
+        doneEvent,
+        Json{{"asyncId", "async-7"}, {"content", "mine"}},
+        &pubErr
+    );
+    bool delivered = false;
+    for (int i = 0; i < 200 && !delivered; ++i) {
+        co_await toolSleepMs(10);
+        delivered = fx->session->pendingInputCount("event:") > 0;
+    }
+    XX_TEST_EXPECT_TRUE(delivered);
+    auto inputs = fx->session->takePendingInputs(agentxx::agent::InputDelivery::NextStep);
+    XX_TEST_EXPECT_EQ(inputs.size(), size_t{1});
+    XX_TEST_EXPECT_TRUE(contains(inputs.front().text, "mine"));
+
+    // 没有 agent 容器: `works` 报明确错误
+    auto works = co_await execTool(
+        *fx->tool,
+        Json{{"opt", "works"}, {"sessionId", fx->sessionId}}
+    );
+    XX_TEST_EXPECT_TRUE(works.starts_with("[threw]"));
+    XX_TEST_EXPECT_TRUE(contains(works, "agent host"));
+    co_return;
+}
+
 asio::awaitable<TestResult> run_event_tools_tests() {
     TestResult result;
 
@@ -509,6 +566,7 @@ asio::awaitable<TestResult> run_event_tools_tests() {
     co_await test_tool_errors();
     co_await test_tool_without_hub();
     co_await test_tool_watch_timer();
+    co_await test_tool_async_work_wait();
 
     result.passed = g_et_passed;
     result.failed = g_et_failed;

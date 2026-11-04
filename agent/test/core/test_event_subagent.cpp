@@ -404,7 +404,7 @@ asio::awaitable<void> test_async_tool_result_text() {
               Json{
                   {"name", "agentxx_subagent"},
                   {"arguments",
-                   R"({"tasks":[{"subagent":"subagent_task","message":"work","async":true,"result_id":"job3"}]})"},
+                   R"({"tasks":[{"subagent":"subagent_task","message":"work","result_id":"job3"}]})"},
               }},
          },
     });
@@ -418,8 +418,9 @@ asio::awaitable<void> test_async_tool_result_text() {
     XX_TEST_EXPECT_FALSE(turnResult.hasError);
 
     // 工具的返回文本 (模型看到的) 是受理提示, 不是子代理结果
+    // - 模型侧已不再有 `async` 参数: 只要 `async_work.enable` 打开, 调用即提交
     const auto dumped = g_da_sim_requests.size() >= 2 ? g_da_sim_last_request.dump() : std::string{};
-    XX_TEST_EXPECT_TRUE(contains(dumped, "[Subagent started]"));
+    XX_TEST_EXPECT_TRUE(contains(dumped, "[Async work started]"));
     XX_TEST_EXPECT_TRUE(contains(dumped, kAsyncDone));
 
     // 结果事件随后到达中枢, 会话被叫醒

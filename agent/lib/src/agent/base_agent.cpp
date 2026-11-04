@@ -1308,9 +1308,12 @@ asio::awaitable<void> BaseAgent::initMiddleware() {
 asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> BaseAgent::initTools() {
     std::vector<std::unique_ptr<agentxx::tools::XXToolBase>> tools{};
     tools.push_back(std::make_unique<agentxx::tools::SessionShareStoreTool>(agentContext));
-    // 事件中枢工具: 挂起等待 / 阻塞等待 / 查状态 / 取消 / 发布
-    // - 只在 event.enable 打开且有事件中枢时注册 (关闭时模型看不到它)
-    if (agentContext->eventHub) {
+    // 事件中枢工具: 挂起等待 / 阻塞等待 / 查状态 / 取消 / 发布 / 后台任务
+    // - 有中枢, 或启用了后台任务 (`async_work.enable`) 时注册
+    //   (后者在关掉事件中枢时仍能查/取消后台任务: 结果只落台账)
+    const bool asyncEnabled
+        = agentContext->agentConfig && agentContext->agentConfig->enableAsyncWork;
+    if (agentContext->eventHub || asyncEnabled) {
         tools.push_back(std::make_unique<agentxx::tools::EventTool>(agentContext));
     }
     // agentxx_get_current_datetime 已迁移至 agentxx_system 插件 (同名同行为,

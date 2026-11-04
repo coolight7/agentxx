@@ -101,21 +101,25 @@ inline std::string
     return key;
 }
 
-/// 异步派发的受理提示 (工具结果文本)
-/// - 以 `[Subagent started]` 开头 (不命中工具失败前缀), 并告诉模型结果会以
-///   `[Event] <event>` 输入到达, 不要轮询
+/// 后台任务的受理提示 (工具结果文本)
+/// - 以 `[Async work started]` 开头 (不命中工具失败前缀), 并告诉模型
+///   结果会以 `[Event] agentxx.agent.async.done` 输入到达, 不要轮询
 inline std::string renderSubagentStartedText(const events::RespSubagentBatchItem& item) {
     const auto name = item.subagent.empty() ? std::string{"-"} : item.subagent;
+    const auto id   = item.asyncId.empty() ? item.resultId : item.asyncId;
     return fmt::format(
-        "[Subagent started] subagent={} result={} event={}\n"
+        "[Async work started] id={} subagent={} event={}\n"
         "The result will arrive later as an input starting with \"[Event] {}\".\n"
-        "Keep working (or finish the turn); use agentxx_event opt=watch event={} if you "
-        "need to be woken by it.",
+        "Keep working (or finish the turn). Use agentxx_event {{\"opt\":\"watch\",\"id\":\"{}\"}} "
+        "to be woken by it, {{\"opt\":\"await\",\"id\":\"{}\"}} to block for it now, "
+        "{{\"opt\":\"cancel\",\"id\":\"{}\"}} to drop it, {{\"opt\":\"works\"}} to list them.",
+        id,
         name,
-        item.resultId.empty() ? std::string{"-"} : item.resultId,
         item.eventName,
         item.eventName,
-        item.eventName
+        id,
+        id,
+        id
     );
 }
 

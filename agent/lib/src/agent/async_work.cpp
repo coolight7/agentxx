@@ -648,7 +648,7 @@ utilxx_base::Json AsyncWorkManager::listJson(
         if (!includeFinished && finished) {
             continue;
         }
-        arr.push_back(utilxx_base::Json{
+        auto item = utilxx_base::Json{
             {"asyncId",      e.asyncId         },
             {"kind",         toString(e.kind)  },
             {"name",         e.name            },
@@ -657,7 +657,21 @@ utilxx_base::Json AsyncWorkManager::listJson(
             {"finishedAtMs", e.finishedAtMs    },
             {"hasError",     e.hasError        },
             {"canceled",     e.canceled        },
-        });
+        };
+        if (e.state == AsyncWorkState::Queued) {
+            // 排队位置: 同一队列里在它前面的条数 (给模型看"还要等几个")
+            int64_t ahead = 0;
+            if (auto qit = queues_.find(e.queueKey); qit != queues_.end()) {
+                for (const auto& queuedId : qit->second) {
+                    if (queuedId == e.asyncId) {
+                        break;
+                    }
+                    ++ahead;
+                }
+            }
+            item["queueAhead"] = ahead;
+        }
+        arr.push_back(std::move(item));
         ++n;
     }
     return arr;

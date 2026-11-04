@@ -1388,6 +1388,7 @@ asio::awaitable<events::RespSubagentBatch> AgentHost::spawnBatch(
         (*results)[i] = ItemResult{
             .resultId  = task.resultId,
             .started   = true,
+            .asyncId   = submitted.asyncId,
             .eventName = eventName.empty() ? std::string{"agentxx.agent.async.done"} : eventName,
             .subagent  = task.subagentName,
         };

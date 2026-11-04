@@ -245,11 +245,12 @@ Useful for passing large content between tool calls without repeating it in mess
           ToolPrompt{
               .depict =
                   R"(Run a sub-agent on a task with an isolated message context.
-The sub-agent cannot see the parent conversation history; its final text output is returned to the parent as this tool's result.
+The sub-agent cannot see the parent conversation history; its final text output is returned to you later through an event.
 
 ## Notes
-- By default the sub-agent runs synchronously: the parent agent pauses until the sub-agent finishes.
-- `async: true` dispatches the task and returns immediately; the result arrives later as an input starting with `[Event] subagent.done.<result_id>` (or `event_name`). Failed and Canceled tasks also publish (with `hasError`/`Canceled`), so a wait never hangs.
+- Calling this tool submits an **async work** and returns immediately with its `asyncId`; the result arrives later as an input starting with `[Event] agentxx.agent.async.done` (failed and canceled tasks publish too, so a wait never hangs).
+- Need the result right now? `agentxx_event {opt:"await", id:"<asyncId>"}` (or `opt:"watch"` to keep working first). Drop it with `agentxx_event {opt:"cancel", id:"<asyncId>"}`. `agentxx_event {opt:"works"}` lists your background tasks.
+- When async work is disabled in configuration the call runs synchronously instead: the parent agent pauses until the sub-agent finishes and the text result is returned directly.
 - Provide a clear, self-contained task description in `message`; the sub-agent has no access to the parent's conversation context.
 - `subagent` must be one of the registered sub-agent names (see the enum values in the parameter description).
 - `system_prompt` is optional; when `subagent` is not set, it is used as the sub-agent's system prompt.)",
@@ -272,10 +273,6 @@ The sub-agent cannot see the parent conversation history; its final text output 
 Absent (default): the sub-agent's default full tool set.)"},
                       {"enable_summarization",
                        R"(Optional boolean. Whether the sub-agent runs with context summarization enabled. Default: inherit config (enabled). Pass `false` when delegating same-context work (e.g. context compression) so the sub-agent never re-compresses the passed-in context prefix (would break KV/prefix cache reuse).)"},
-                      {"async",
-                       R"(Optional boolean. `true`: dispatch the task and return immediately; the result arrives later as an input starting with `[Event] agentxx.agent.event.subagent.done.<result_id>`. Use it when the task takes long and you have other work, then `agentxx_event opt=watch` the event name. Default `false` (block until the sub-agent finishes).)"},
-                      {"event_name",
-                       R"(Optional. Event name carrying the async result (default `agentxx.agent.event.subagent.done.<result_id>`; when both are empty, `...subagent.done.<task index>`). Must be a full name under `agentxx.agent.event.` (letters, digits, `.`, `_`, `-` only). Only used with `async: true`.)"},
                   },
           },
       },
@@ -302,6 +299,7 @@ Built-in event names (use them as they are):
 - `agentxx.agent.event.turn.end` (a turn finished)
 - `agentxx.agent.event.tool.end.<tool name>` (a tool finished)
 - `agentxx.agent.event.subagent.done.<result_id>` (an async sub-agent finished)
+- `agentxx.agent.async.done` (a background task (async work) finished; the value carries `asyncId`)
 - `agentxx.agent.event.timer.<name>` (a timer armed with `after_ms`/`every_ms`)
 When you publish yourself (`opt=emit` / `opt=end`), the name must be `agentxx.agent.event.<your name>` and must not reuse the `turn.` / `tool.` / `subagent.` / `timer.` / `host.` segments.
 
@@ -314,11 +312,14 @@ When you publish yourself (`opt=emit` / `opt=end`), the name must be `agentxx.ag
                       {"opt", R"(Operation to perform:
 `watch`: register a wait and return immediately (default choice).
 `await`: block this turn until a value arrives or `timeout_ms` passes.
-`status`: show one wait (`wait`) or one event (`event`).
+`status`: show one wait (`wait`), one event (`event`) or one background task (`id`).
 `list`: list events and the waits of this session.
-`cancel`: cancel one wait (`wait`) or all waits of this session (`all`).
+`works`: list background tasks (async work) with their state.
+`cancel`: cancel one wait (`wait`), all waits of this session (`all`), one background task (`id`) or all tasks of this agent (`scope:"mine"`).
 `emit`: publish a value to an event you own (created on demand).
 `end`: end one of your event streams, optionally removing it.)"},
+                      {"id",
+                       R"(Background task id (`async-7`, returned when you submitted it). With `opt=watch`/`opt=await` it waits for THAT task's result only (no `event` needed); with `opt=status`/`opt=cancel` it targets that task; with `opt=works` it shows just that one.)"},
                       {"event",
                        R"(Full event name. `opt=watch`/`opt=await`/`opt=status`: `agentxx.agent.event.*`, `plugin.<plugin name>.*` or `agentxx.client.*`. `opt=emit`/`opt=end`: `agentxx.agent.event.<your name>` only. Letters, digits, `.`, `_`, `-`; max 128 chars.)"},
                       {"wait", "Wait id (`w-3`) returned by `opt=watch`."},
@@ -356,9 +357,12 @@ When you publish yourself (`opt=emit` / `opt=end`), the name must be `agentxx.ag
                        "`opt=watch`: allow the delivery to unpause a session paused by a failed/interrupted turn (default `false`)."},
                       {"label", "One-line note shown in the delivered input."},
                       {"ref", "Optional id to correlate the delivered input with your own bookkeeping (e.g. a task id)."},
-                      {"scope", "`opt=list`: `events`, `waits` or `all` (default `all`)."},
+                      {"scope",
+                       "`opt=list`: `events`, `waits` or `all` (default `all`). `opt=works`: `mine` (default) or `all`. `opt=cancel`: `mine` cancels every background task of this agent."},
+                      {"state",
+                       "`opt=works`: only show tasks in this state (`queued`, `running`, `done`, `failed`, `canceled`); default `all`."},
                       {"prefix", "`opt=list`: only show event names starting with this prefix."},
-                      {"limit", "`opt=list`: maximum entries per section (default 20)."},
+                      {"limit", "`opt=list`/`opt=works`: maximum entries (default 20)."},
                   },
           },
       },
