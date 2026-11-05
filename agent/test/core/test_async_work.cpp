@@ -450,6 +450,278 @@ asio::awaitable<void> test_tool_kind_rejected() {
     co_return;
 }
 
+/// 8. 中断策略: 未显式指定时跟随配置, 显式指定时覆盖配置
+asio::awaitable<void> test_interrupt_policy_from_config() {
+    auto fx = std::make_shared<AwFixture>();
+    XX_TEST_EXPECT_TRUE(buildFixture(fx));
+
+    // 配置 deny: 不指定策略的任务解析为 deny
+    fx->cfg->asyncWorkInterruptPolicy = "deny";
+    auto fromConfig                   = fx->host->submitAsyncWork(makeSpec(fx, "deny-default"), fx->ctx());
+    XX_TEST_EXPECT_TRUE(fromConfig.accepted);
+    XX_TEST_EXPECT_EQ(
+        fx->host->asyncWorkJson(fromConfig.asyncId).value("interruptPolicy", std::string{}),
+        std::string{"deny"}
+    );
+
+    // 单次提交显式给 allow: 覆盖配置
+    auto explicitSpec            = makeSpec(fx, "allow-explicit");
+    explicitSpec.interruptPolicy = agentxx::agent::AsyncInterruptPolicy::Allow;
+    auto explicitRes             = fx->host->submitAsyncWork(std::move(explicitSpec), fx->ctx());
+    XX_TEST_EXPECT_TRUE(explicitRes.accepted);
+    XX_TEST_EXPECT_EQ(
+        fx->host->asyncWorkJson(explicitRes.asyncId).value("interruptPolicy", std::string{}),
+        std::string{"allow"}
+    );
+
+    // 配置改成 allow: 后续未指定的任务跟随
+    fx->cfg->asyncWorkInterruptPolicy = "allow";
+    auto cfgAllow                     = fx->host->submitAsyncWork(makeSpec(fx, "allow-default"), fx->ctx());
+    XX_TEST_EXPECT_TRUE(cfgAllow.accepted);
+    XX_TEST_EXPECT_EQ(
+        fx->host->asyncWorkJson(cfgAllow.asyncId).value("interruptPolicy", std::string{}),
+        std::string{"allow"}
+    );
+
+    // 配置里的非法取值: 按默认 bubble (加载期已校验, 这里只保证回退不崩)
+    fx->cfg->asyncWorkInterruptPolicy = "bogus";
+    auto cfgBogus                     = fx->host->submitAsyncWork(makeSpec(fx, "bogus-default"), fx->ctx());
+    XX_TEST_EXPECT_TRUE(cfgBogus.accepted);
+    XX_TEST_EXPECT_EQ(
+        fx->host->asyncWorkJson(cfgBogus.asyncId).value("interruptPolicy", std::string{}),
+        std::string{"bubble"}
+    );
+
+    XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
+        co_return co_await waitUntil([&] {
+            return fx->host->runningAsyncWork() == 0 && fx->host->queuedAsyncWork() == 0;
+        });
+    }));
+    co_return;
+}
+
+/// 9. 固定应答器 (`deny` / `allow`): 权限询问与 HIL 中断都直接作答
+/// - `deny`: 权限一律拒绝, HIL 按取消收尾 (handled=false + `__Canceled__`)
+/// - `allow`: 权限一律允许, HIL 用空结果恢复 (handled=true + `{}`)
+/// - `bubble`: 不注册任何应答器 (询问冒泡到创建者会话)
+asio::awaitable<void> test_interrupt_responders() {
+    auto io  = std::make_shared<asio::io_context>();
+    auto run = [&](std::function<void()> fn) {
+        bool ok = runOnIo(io, [&]() -> asio::awaitable<bool> {
+            fn();
+            co_return true;
+        });
+        XX_TEST_EXPECT_TRUE(ok);
+    };
+    (void)run;
+
+    // --- deny ---
+    {
+        auto bus = std::make_shared<agentxx::events::EventBus>(io->get_executor());
+        agentxx::agent::installAsyncInterruptResponders(
+            bus,
+            agentxx::agent::AsyncInterruptPolicy::Deny
+        );
+        std::optional<agentxx::events::RespPermission> permResp;
+        std::optional<agentxx::events::RespInterrupt>  intResp;
+        XX_TEST_EXPECT_TRUE(runOnIo(io, [&]() -> asio::awaitable<bool> {
+            auto p = co_await bus->request<agentxx::events::ReqPermission, agentxx::events::RespPermission>(
+                agentxx::events::Topic::Permission,
+                agentxx::events::ReqPermission{.toolName = "t"},
+                std::chrono::milliseconds{2000}
+            );
+            if (p.has_value()) {
+                permResp = *p;
+            }
+            auto i = co_await bus->request<agentxx::events::ReqInterrupt, agentxx::events::RespInterrupt>(
+                agentxx::events::Topic::Interrupt,
+                agentxx::events::ReqInterrupt{.interruptNode = "ask"},
+                std::chrono::milliseconds{2000}
+            );
+            if (i.has_value()) {
+                intResp = *i;
+            }
+            co_return true;
+        }));
+        XX_TEST_EXPECT_TRUE(permResp.has_value());
+        if (permResp.has_value()) {
+            XX_TEST_EXPECT_TRUE(
+                permResp->decision == agentxx::events::RespPermission::Decision::Deny
+            );
+            XX_TEST_EXPECT_TRUE(permResp->reason.find("deny") != std::string::npos);
+            XX_TEST_EXPECT_FALSE(permResp->remember);
+            XX_TEST_EXPECT_FALSE(permResp->fullAuth);
+        }
+        XX_TEST_EXPECT_TRUE(intResp.has_value());
+        if (intResp.has_value()) {
+            XX_TEST_EXPECT_FALSE(intResp->handled);
+            XX_TEST_EXPECT_TRUE(
+                intResp->resultJson.find("__Canceled__") != std::string::npos
+            );
+        }
+    }
+
+    // --- allow ---
+    {
+        auto bus = std::make_shared<agentxx::events::EventBus>(io->get_executor());
+        agentxx::agent::installAsyncInterruptResponders(
+            bus,
+            agentxx::agent::AsyncInterruptPolicy::Allow
+        );
+        std::optional<agentxx::events::RespPermission> permResp;
+        std::optional<agentxx::events::RespInterrupt>  intResp;
+        XX_TEST_EXPECT_TRUE(runOnIo(io, [&]() -> asio::awaitable<bool> {
+            auto p = co_await bus->request<agentxx::events::ReqPermission, agentxx::events::RespPermission>(
+                agentxx::events::Topic::Permission,
+                agentxx::events::ReqPermission{.toolName = "t"},
+                std::chrono::milliseconds{2000}
+            );
+            if (p.has_value()) {
+                permResp = *p;
+            }
+            auto i = co_await bus->request<agentxx::events::ReqInterrupt, agentxx::events::RespInterrupt>(
+                agentxx::events::Topic::Interrupt,
+                agentxx::events::ReqInterrupt{.interruptNode = "ask"},
+                std::chrono::milliseconds{2000}
+            );
+            if (i.has_value()) {
+                intResp = *i;
+            }
+            co_return true;
+        }));
+        XX_TEST_EXPECT_TRUE(permResp.has_value());
+        if (permResp.has_value()) {
+            XX_TEST_EXPECT_TRUE(
+                permResp->decision == agentxx::events::RespPermission::Decision::Allow
+            );
+            XX_TEST_EXPECT_TRUE(permResp->reason.find("allow") != std::string::npos);
+        }
+        XX_TEST_EXPECT_TRUE(intResp.has_value());
+        if (intResp.has_value()) {
+            XX_TEST_EXPECT_TRUE(intResp->handled);
+            XX_TEST_EXPECT_EQ(intResp->resultJson, std::string{"{}"});
+        }
+    }
+
+    // --- bubble: 不注册应答器, 请求拿不到结果 (询问冒泡到创建者会话) ---
+    {
+        auto bus        = std::make_shared<agentxx::events::EventBus>(io->get_executor());
+        bool noServerOk = false;
+        agentxx::agent::installAsyncInterruptResponders(
+            bus,
+            agentxx::agent::AsyncInterruptPolicy::Bubble
+        );
+        XX_TEST_EXPECT_TRUE(runOnIo(io, [&]() -> asio::awaitable<bool> {
+            auto p = co_await bus->request<agentxx::events::ReqPermission, agentxx::events::RespPermission>(
+                agentxx::events::Topic::Permission,
+                agentxx::events::ReqPermission{.toolName = "t"},
+                std::chrono::milliseconds{500}
+            );
+            noServerOk = !p.has_value();
+            co_return true;
+        }));
+        XX_TEST_EXPECT_TRUE(noServerOk);
+    }
+
+    co_return;
+}
+
+/// 10. 会话落盘 (`session_store`): 提交时独占登记存储根+会话, 任务结束后释放
+/// - 未给目录且创建者没有 dataDir/sessionStoreDirectory 时明确拒绝
+/// - 目录 = 调用方指定的存储根; 会话 id = asyncId (同一根下多个任务互不冲突)
+asio::awaitable<void> test_session_store_claim() {
+    auto fx = std::make_shared<AwFixture>();
+    XX_TEST_EXPECT_TRUE(buildFixture(fx));
+
+    // 未给目录、创建者也没有数据目录: 拒绝 (不能默默不落盘)
+    {
+        auto spec            = makeSpec(fx, "store-no-dir");
+        spec.sessionStore    = true;
+        spec.sessionStoreDir.clear();
+        auto rejected        = fx->host->submitAsyncWork(std::move(spec), fx->ctx());
+        XX_TEST_EXPECT_FALSE(rejected.accepted);
+        XX_TEST_EXPECT_TRUE(rejected.error.find("store") != std::string::npos);
+    }
+
+    // 指定临时存储根: 提交即占用 (键为 存储根|会话Id), 任务结束后释放
+    const auto baseDir = std::filesystem::temp_directory_path()
+                         / fmt::format("agentxx_aw_store_{}", static_cast<uint64_t>(::GetCurrentProcessId()));
+    std::error_code ec;
+    std::filesystem::remove_all(baseDir, ec);
+    const std::string root = (baseDir / "agent").string();
+
+    std::string asyncId;
+    XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
+        auto spec            = makeSpec(fx, "store-job");
+        spec.sessionStore    = true;
+        spec.sessionStoreDir = root;
+        auto r               = fx->host->submitAsyncWork(std::move(spec), fx->ctx());
+        asyncId              = r.asyncId;
+        co_return r.accepted && !r.asyncId.empty();
+    }));
+    XX_TEST_EXPECT_FALSE(asyncId.empty());
+
+    const auto ownsSession = [&] {
+        const auto occ = fx->host->sessionOccupancyJson();
+        for (const auto& [key, value] : occ.items()) {
+            if (key.find(asyncId) != std::string::npos) {
+                return value.is_string()
+                       && value.get<std::string>().find(asyncId) != std::string::npos;
+            }
+        }
+        return false;
+    };
+    XX_TEST_EXPECT_TRUE(ownsSession());
+
+    // 等任务结束: 占用释放 (磁盘上的会话目录保留, 供事后回看)
+    XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
+        co_return co_await waitUntil([&] {
+            return fx->host->runningAsyncWork() == 0 && fx->host->queuedAsyncWork() == 0;
+        });
+    }));
+    XX_TEST_EXPECT_FALSE(ownsSession());
+    XX_TEST_EXPECT_EQ(
+        fx->host->asyncWorkJson(asyncId).value("state", std::string{}),
+        std::string{"done"}
+    );
+
+    std::filesystem::remove_all(baseDir, ec);
+    co_return;
+}
+
+/// 11. 创建者已销毁: 只靠提交快照继续跑完, 结果只落台账 (无中枢可投递)
+/// - `creator` 传空 + 快照里带配置: 仍能派生并跑完
+/// - 没有创建者上下文就没有中枢: `delivered=false`, 正文仍可在台账查到
+asio::awaitable<void> test_creator_gone_still_runs() {
+    auto fx = std::make_shared<AwFixture>();
+    XX_TEST_EXPECT_TRUE(buildFixture(fx));
+
+    auto snapshot = std::make_shared<agentxx::agent::AgentConfig>(*fx->cfg);
+    std::string asyncId;
+    XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
+        auto spec             = makeSpec(fx, "orphan-job", {}, snapshot);
+        spec.creatorSessionId = "gone-session";
+        auto r                = fx->host->submitAsyncWork(std::move(spec), nullptr);
+        asyncId               = r.asyncId;
+        co_return r.accepted;
+    }));
+    XX_TEST_EXPECT_FALSE(asyncId.empty());
+
+    XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
+        co_return co_await waitUntil([&] {
+            const auto state
+                = fx->host->asyncWorkJson(asyncId).value("state", std::string{});
+            return state == "done" || state == "failed" || state == "canceled";
+        });
+    }));
+    const auto entry = fx->host->asyncWorkJson(asyncId);
+    XX_TEST_EXPECT_EQ(entry.value("state", std::string{}), std::string{"done"});
+    XX_TEST_EXPECT_FALSE(entry.value("delivered", true));
+    XX_TEST_EXPECT_TRUE(entry.value("result", std::string{}).find("async work result") != std::string::npos);
+    // 启动用的会话 id 就是 asyncId (不另造)
+    co_return;
+}
+
 asio::awaitable<TestResult> run_async_work_tests() {
     TestResult result;
 
@@ -460,6 +732,10 @@ asio::awaitable<TestResult> run_async_work_tests() {
     co_await test_session_id_is_async_id();
     co_await test_cancel_queued_and_running();
     co_await test_tool_kind_rejected();
+    co_await test_interrupt_policy_from_config();
+    co_await test_interrupt_responders();
+    co_await test_session_store_claim();
+    co_await test_creator_gone_still_runs();
 
     result.passed = g_aw_passed;
     result.failed = g_aw_failed;

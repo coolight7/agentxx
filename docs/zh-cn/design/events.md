@@ -266,6 +266,14 @@ async work，`kind` 区分 `agent`（启动一个 agent，已实现）与 `tool`
 - **没有中枢时**：仍受理，结果只落台账（`delivered=false`），用 `agentxx_event
   {opt:"works"}` / `{opt:"status", id}` 查；
 - 子代理上下文**继承父事件中枢**（嵌套沿用最外层），所以子代理 emit 的事件父会话能等；
+- **中断策略**（`async_work.interrupt_policy`，单次提交可覆盖）：`bubble`（默认）把
+  权限询问与 HIL 冒泡到创建者会话；创建者会话已销毁时按拒绝。`deny` / `allow` 不冒泡，
+  改为在任务自己的会话总线上注册固定应答器 —— 权限询问一律拒绝/允许（不记住选择、
+  不切完全授权），其他 HIL 中断 `allow` 用空结果恢复、`deny` 按取消收尾；
+- **会话落盘**（可选，`async_work.session_store`）：目录
+  `{创建者会话目录}/agent/{asyncId}`，提交时按（存储根, asyncId）独占登记、任务结束释放；
+  只服务事后回看，不做重启续跑；创建者没有 `dataDir` / `sessionStoreDirectory` 时
+  明确拒绝，不默默不落盘；
 - 台账（entry）是纯内存记录：运行中一直在，结束后保留 `async_work.linger_ms`
   （默认 5 分钟）供查询，到期自动清除。
 - **界面可见**：TUI Info 侧边栏的「后台任务」段经 `WireContextStats.asyncWorks`

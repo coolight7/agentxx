@@ -71,7 +71,7 @@ struct TUIAsyncWorkItem {
     std::string kind;
     /// 任务名 (子代理模板名)
     std::string name;
-    /// 状态文本 (`queued` / `running` / `finished` / `failed` / `canceled`)
+    /// 状态文本 (`queued` / `running` / `done` / `failed` / `canceled`)
     std::string state;
     /// 已运行时长 (毫秒); 排队中为 0
     int64_t elapsedMs = 0;

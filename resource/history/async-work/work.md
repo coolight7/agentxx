@@ -15,7 +15,8 @@
 
 提交记录: `2dca9dc5` (P0) → `164029e0` (P1) → `6ea5a5aa` (P3) → `04ea4a57` (P2) →
 `0a40ed4b` (P4 文档) → Info 侧边栏「后台任务」段 + `WireContextStats.asyncWorks`
-("async_work: Info 侧边栏「后台任务」段 + WireContextStats.asyncWorks")。
+("async_work: Info 侧边栏「后台任务」段 + WireContextStats.asyncWorks") → HIL 三策略 +
+会话落盘 + 创建者已销毁用例。
 
 ## 已完成
 
@@ -121,11 +122,6 @@
 
 ## 待完成
 
-- **P2 剩余**:    - `session_store` 落盘: 目录 `{创建者会话目录}/agent/{asyncId}`
-      (`async_work.session_store` / `session_store_keep_days` 已解析但未生效);
-    - HIL 三策略应答器: `AsyncInterruptPolicy` (`bubble` / `deny` / `allow`) 还没接到
-      权限询问与人工中断链路上, 目前后台任务遇到询问仍按普通子代理冒泡;
-    - 创建者已销毁路径的专项用例 (现在只有 `baseConfig` 快照保证能派生, 没有断言覆盖)。
 - **P3 剩余**: 插件表 `agentxx.agent.runtime` 表尾追加 4 成员
   (`submit_async_work` / `cancel_async_work` / `get_async_work` / `list_async_work`) +
   `plugin_kit.h` 便捷函数 + 归属回收 + `boundaries` 成员台账与 `plugin_runtime` 版本断言。

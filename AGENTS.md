@@ -42,6 +42,26 @@ int charToLower(int c) { ... }
 - `resource/history/` 内是一些功能实现、修复历史记录，在修正文档、批量修改命名等操作时不要修改这个文件夹内的文件
 - 实现功能、插件接口、对外接口时，非必要的限制条件不用实现，可以先跟用户确认是否添加限制/检查，或是在实现后列出可选的一些限制和检查，询问用户是否增加实现
 
+## 大任务先规划
+
+改动跨多个模块、要改对外接口、或预计超过耗时较长时，**先在 `resource/history/` 下建任务目录**，不要直接开始写：
+
+```text
+resource/history/<任务短名>/        # 英文小写 + 短横线，能看出主题，例：cache-and-data-dir
+├── index.md    # 任务卡片：目标、范围、状态、关键决策、结论（事后来看这一页就够）
+├── plan.md     # 设计方案：背景、现状调查、方案、边界、数据兼容、分步实施、验证、风险
+└── work.md     # 实施记录：当前进度（已完成/进行中/待完成）、每步改了什么与怎么验证、遇到的问题
+```
+
+- **先规划再动手**：`plan.md` 允许边分析边写——先列骨架，再逐节补齐（现状调查要写到文件与函数一级）；
+  全部写完后**通读一遍**，去掉重复、调整顺序、补齐漏项，再按它开工。
+- **实施时持续更新 `work.md`**：每完成一步就写下"改了哪些文件 + 验证结果"，进度用任务列表维护；
+  与计划不一致的地方、临时绕过的点、留给别人的注意事项都要写进去，不要攒到最后补。
+- **收尾**：`work.md` 补全验证清单与剩余事项，`index.md` 补结论与偏差；值得长期保留的结论搬到
+  `docs/zh-cn/design/` 对应分册，`AGENTS.md` 只留"必须遵守的规则"。
+- 三个文件的常用格式、每节写什么，见 [docs/README.md](docs/README.md) §3。改一个函数、修一个明确的
+  bug 不需要建记录。
+
 ## 文件编码与换行
 - 本项目自己编写的**所有**文件统一 **UTF-8 (无 BOM) + LF** 保存: 代码 (`agent/lib`
   `agent/client` `agent/test` `agent/benchmark` `agent/plugins` `agent/tools`)、脚本
@@ -570,14 +590,20 @@ path/to/agentxx_test --log-level warn string_util regex
   (压缩等内部直调一律同步); 取消令牌独立于轮次, 子代理上下文继承父 hub。
   配置 `async_work.*`: `enable`/`max_concurrent`/`interrupt_policy`(bubble|deny|allow)/
   `session_store`/`session_store_keep_days`/`linger_ms`/`result_max_bytes`。
+  **中断策略**: `bubble` 把权限询问/HIL 冒泡到创建者会话 (创建者已销毁按拒绝);
+  `deny`/`allow` 不冒泡, 在任务自己的会话总线上注册固定应答器
+  (`installAsyncInterruptResponders`: 权限一律拒绝/允许, 其他 HIL 中断 deny 按取消收尾 /
+  allow 用空结果恢复)。**会话落盘** (可选): 目录 `{创建者会话目录}/agent/{asyncId}`,
+  提交时按 (存储根, asyncId) `claimSession` 独占、任务结束 `releaseSession`;
+  创建者无 `dataDir`/`sessionStoreDirectory` 时明确拒绝 (不默默不落盘)。
   诊断: `KeyMetrics` 与加载快照的 `async_work` 段; 测试 `async_work` /
   `event_subagent` / `event_tools`。**界面**: TUI Info 侧边栏「后台任务」段 (排在 Context 段
   之后、Append 段之前) 经 `WireContextStats.asyncWorks` 追加字段下发 (最多 10 条, 为空不带,
   老客户端忽略), 只展示不给取消入口 (`info.asyncWorks` 一组文案键; 测试
   `tui_widget` 的 `test_info_sidebar_async_works`), 详见
-  [tui.md](docs/zh-cn/design/tui.md) §2.7。**未做**: `kind=tool` 异步工具、`interrupt_policy`
-  应答器、任务会话落盘 (`{创建者会话目录}/agent/{asyncId}`)、`agentxx.agent.runtime`
-  表尾 4 成员 (submit/cancel/get/list_async_work)、TUI Info「后台任务」段、
+  [tui.md](docs/zh-cn/design/tui.md) §2.7。**未做**: `kind=tool` 异步工具、
+  `agentxx.agent.runtime`
+  表尾 4 成员 (submit/cancel/get/list_async_work)、
   provider/HTTP 连接池下沉 `AgentHost`。
 - 会话运行时 (2026-10): `agentxx.agent.runtime` 表让插件挂自己的**根 agent**
   (`mount_root`: 只能放 `start`, `config_json` 给提示词/工具白名单, `mount_plugins` 给挂载策略,

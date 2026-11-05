@@ -1,6 +1,7 @@
 #pragma once
 
 #include "agentxx/event/events.h"
+#include "agentxx/event/event_stream.h"
 #include "asio/awaitable.hpp"
 #include "utilxx_base/json.h"
 #include <chrono>
@@ -100,13 +101,19 @@ struct AsyncWorkSpec {
     std::vector<std::string>         permissionDenyPaths;
 
     /// 会话持久化: 目录 = {创建者会话目录}/agent/{asyncId}, sessionId = asyncId
-    bool        sessionStore = false;
-    std::string sessionStoreDir; ///< 空 = {创建者会话目录}/agent
+    /// - 空 = 跟随创建者配置 `async_work.session_store`
+    /// - 开启时任务自己的会话落盘 (事后可回看; 不做重启后继续跑)
+    std::optional<bool> sessionStore;
+    std::string         sessionStoreDir; ///< 空 = {创建者会话目录}/agent
+    /// 由提交入口算出的存储根 (内部使用; 也是会话独占的键)
+    std::string sessionStoreRoot;
 
     /// 中断策略与时限
-    AsyncInterruptPolicy      interruptPolicy = AsyncInterruptPolicy::Bubble;
-    std::chrono::milliseconds interruptTimeout{0};
-    std::chrono::milliseconds timeLimit{0};
+    /// - `中断策略` 为空 = 跟随创建者配置 `async_work.interrupt_policy` (默认 bubble);
+    ///   单次提交可直接指定, 覆盖配置 (插件/内部调用用法)
+    std::optional<AsyncInterruptPolicy> interruptPolicy;
+    std::chrono::milliseconds           interruptTimeout{0};
+    std::chrono::milliseconds           timeLimit{0};
 
     /// 结果: 事件名固定 `agentxx.agent.async.done`, 此处只决定是否额外投递会话
     /// - 空 = 不投递; `next-step` / `inject` / `next-turn`
@@ -134,6 +141,26 @@ struct AsyncWorkSpec {
     /// - 持有它即保证"创建者已销毁也能派生"; 为空时退回创建者上下文取
     std::shared_ptr<AgentConfig> baseConfig;
 };
+
+/// 在会话总线上注册固定的权限/中断应答器 (`deny` / `allow` 策略)
+///
+/// 后台任务不保证有前台界面, 不能把所有询问都冒泡给人 (`bubble`)。不冒泡时
+/// 总得有人在会话总线上回答:
+/// - 权限询问 (`Topic::Permission`, 权限中间件的 INTERRUPT 分支):
+///   `allow` → 一律允许, `deny` → 一律拒绝; 两者都不"记住选择"、不切完全授权
+/// - 其他 HIL 中断 (`Topic::Interrupt`, 如询问节点): `allow` 用空结果 (`{}`) 恢复
+///   (等价跳过该询问), `deny` 应答 `handled=false` 并带 `__Canceled__` 标记
+///   (AgentRunner 据此抛取消，不会 resume)
+///
+/// 响应器只拿策略拷贝, 不引用外部对象; 总线随子会话/上下文销毁, 不需要注销。
+///
+/// - `args`:
+///     - [bus] 会话总线; 为空或 [policy] 为 `Bubble` 时什么都不做
+///     - [policy] `Deny` / `Allow`
+void installAsyncInterruptResponders(
+    const std::shared_ptr<agentxx::events::EventBus>& bus,
+    AsyncInterruptPolicy                              policy
+);
 
 /// 提交回执 (队列不限条数, 因此只有"受理/拒绝"两种)
 struct AsyncWorkSubmitResult {

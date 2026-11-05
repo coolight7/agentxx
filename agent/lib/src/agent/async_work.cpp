@@ -2,6 +2,7 @@
 
 #include "agentxx/agent/agent_host.h"
 #include "agentxx/agent/config.h"
+#include "agentxx/agent/config_static.h"
 #include "agentxx/agent/context.h"
 #include "agentxx/event/hub.h"
 #include "agentxx/util/exception.h"
@@ -14,9 +15,49 @@
 #include "utilxx_base/string_util.h"
 #include <algorithm>
 #include <chrono>
+#include <filesystem>
 
 namespace agentxx {
 namespace agent {
+
+void installAsyncInterruptResponders(
+    const std::shared_ptr<agentxx::events::EventBus>& bus,
+    AsyncInterruptPolicy                              policy
+) {
+    if (!bus || policy == AsyncInterruptPolicy::Bubble) {
+        return;
+    }
+    const bool allow = policy == AsyncInterruptPolicy::Allow;
+    // 权限询问: 按策略直接作答, 不让询问流向前台界面 (后台任务不一定有界面)
+    bus->getRR<agentxx::events::ReqPermission, agentxx::events::RespPermission>(
+           agentxx::events::Topic::Permission
+    )
+        .registerServer([allow](const agentxx::events::ReqPermission&, size_t)
+                            -> asio::awaitable<agentxx::events::RespPermission> {
+            co_return agentxx::events::RespPermission{
+                .reason   = allow ? "async work: interrupt_policy=allow (auto approved)"
+                                 : "async work: interrupt_policy=deny (auto denied)",
+                .decision = allow ? agentxx::events::RespPermission::Decision::Allow
+                                  : agentxx::events::RespPermission::Decision::Deny,
+                .remember = false,
+                .fullAuth = false,
+            };
+        });
+    // 其他 HIL 中断: allow 用空结果恢复, deny 按取消收尾
+    bus->getRR<agentxx::events::ReqInterrupt, agentxx::events::RespInterrupt>(
+           agentxx::events::Topic::Interrupt
+    )
+        .registerServer([allow](const agentxx::events::ReqInterrupt&, size_t)
+                            -> asio::awaitable<agentxx::events::RespInterrupt> {
+            if (allow) {
+                co_return agentxx::events::RespInterrupt{.handled = true, .resultJson = "{}"};
+            }
+            co_return agentxx::events::RespInterrupt{
+                .handled    = false,
+                .resultJson = R"({"__Canceled__":true})",
+            };
+        });
+}
 
 namespace {
 
@@ -220,6 +261,42 @@ AsyncWorkSubmitResult
     if (spec.queueKey.empty()) {
         spec.queueKey = spec.creatorAgentId.empty() ? "root" : spec.creatorAgentId;
     }
+    // 中断策略: 未指定时跟随创建者配置 (配置里的取值已在加载期校验过, 认不出用默认)
+    if (!spec.interruptPolicy.has_value()) {
+        AsyncInterruptPolicy policy = AsyncInterruptPolicy::Bubble;
+        if (spec.baseConfig
+            && !parseInterruptPolicy(spec.baseConfig->asyncWorkInterruptPolicy, &policy)) {
+            policy = AsyncInterruptPolicy::Bubble;
+        }
+        spec.interruptPolicy = policy;
+    }
+
+    // 会话持久化 (可选): 未指定时跟随配置; 开启时算出存储根
+    // - 目录 = {创建者会话目录}/agent, 会话 id = asyncId
+    //   → 库文件 `{存储根}/{asyncId}/session.db`
+    if (!spec.sessionStore.has_value()) {
+        spec.sessionStore = spec.baseConfig ? spec.baseConfig->asyncWorkSessionStore : false;
+    }
+    if (*spec.sessionStore) {
+        std::string root = spec.sessionStoreDir;
+        if (root.empty() && spec.baseConfig && !spec.creatorSessionId.empty()) {
+            std::string creatorRoot = spec.baseConfig->sessionStoreDirectory;
+            if (creatorRoot.empty() && !spec.baseConfig->dataDir.empty()) {
+                // 未配 dataDir = 不落盘 (与 agent 自身的会话存储开关同规则)
+                creatorRoot = AgentConfigStatic::getSessionsDir(spec.baseConfig->dataDir);
+            }
+            if (!creatorRoot.empty()) {
+                root = (std::filesystem::path(creatorRoot) / spec.creatorSessionId / "agent")
+                           .string();
+            }
+        }
+        if (root.empty()) {
+            out.error = "session_store requested but no store directory "
+                        "(dataDir/sessionStoreDirectory empty)";
+            return out;
+        }
+        spec.sessionStoreRoot = std::move(root);
+    }
 
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -243,6 +320,21 @@ AsyncWorkSubmitResult
         entry.metrics          = creator ? creator->metrics : nullptr;
         spec.asyncId           = entry.asyncId;
         entry.spec             = spec;
+
+        // 会话落盘: 同一存储根 + 会话 id 只能有一个驱动者 (撞上就拒绝, 早失败)
+        if (!spec.sessionStoreRoot.empty()
+            && !host->claimSession(
+                spec.sessionStoreRoot,
+                entry.asyncId,
+                fmt::format("async_work:{}", entry.asyncId)
+            )) {
+            out.error = fmt::format(
+                "session store `{}` is busy with session `{}`",
+                spec.sessionStoreRoot,
+                entry.asyncId
+            );
+            return out;
+        }
 
         out.accepted   = true;
         out.asyncId    = entry.asyncId;
@@ -377,6 +469,23 @@ asio::awaitable<void>
         token   = it->second.token;
         creator = it->second.creatorCtx.lock();
     }
+    // 会话落盘占用在任务收尾时释放 (存储根本身留在磁盘上供事后回看)
+    struct SessionClaimRelease {
+        std::shared_ptr<AgentHost> host;
+        std::string                root;
+        std::string                sessionId;
+        std::string                owner;
+
+        ~SessionClaimRelease() {
+            if (host && !root.empty()) {
+                host->releaseSession(root, sessionId, owner);
+            }
+        }
+    } claimRelease;
+    claimRelease.host      = host;
+    claimRelease.root      = spec.sessionStoreRoot;
+    claimRelease.sessionId = entryId;
+    claimRelease.owner     = fmt::format("async_work:{}", entryId);
     const auto startedAtMs = systemNowMs();
 
     auto task   = taskOfSpec(spec);
@@ -644,6 +753,9 @@ utilxx_base::Json AsyncWorkManager::entryJson(std::string_view asyncId) const {
         {"hasError",         e.hasError         },
         {"canceled",         e.canceled         },
         {"delivered",        e.delivered        },
+        // 中断策略属于提交快照, 诊断/测试用它确认"从配置解析到了什么"
+        {"interruptPolicy",
+         toString(e.spec.interruptPolicy.value_or(AsyncInterruptPolicy::Bubble))},
     };
     if (!e.error.empty()) {
         j["error"] = e.error;

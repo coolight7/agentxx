@@ -420,7 +420,7 @@ Context
   界面显示 `( 无 )`): 最多 10 条, 服务端 `SessionServerAgentIO::sendContextStats` 向
   `AgentHost` 取"本会话创建的"运行/排队/最近完成项;
 - 条目字段 `{id, kind, name, state, elapsedMs, queueAhead}`: `state` 为
-  `queued` / `running` / `finished` / `failed` / `canceled`; 标记分别为 `.` / `>` /
+  `queued` / `running` / `done` / `failed` / `canceled`; 标记分别为 `.` / `>` /
   `ok` / `x` / `-` (ASCII, 侧边栏窄时不会被截成半个字符), 失败的条目用错误色;
 - 时长按 `mm:ss` (超过一小时 `h:mm:ss`) 显示, 排队中改为显示前面还有几个;
 - **只展示, 不提供取消入口**: 取消走模型工具 `agentxx_event {opt:"cancel", id}`

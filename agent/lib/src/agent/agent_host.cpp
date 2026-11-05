@@ -143,6 +143,13 @@ void applyAsyncWorkOverrides(
             subCfg.permissionDenyPaths.push_back(path);
         }
     }
+
+    // 会话落盘 (§3.8): 目录 = {创建者会话目录}/agent, 会话 id = asyncId
+    // - 只改本任务自己的会话; 存储根已在提交时独占登记
+    if (spec.sessionStore.value_or(false) && !spec.sessionStoreRoot.empty()) {
+        subCfg.enableSessionStore     = true;
+        subCfg.sessionStoreDirectory  = spec.sessionStoreRoot;
+    }
 }
 
 } // namespace
@@ -1194,7 +1201,16 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
             //   嵌套委派时父上下文是上一级子代理 (而非根), 保证任意深度
             //   的 HIL 都能找到正确的父会话链
             auto subSession = subCtx->getSession(subagentSessionId);
-            if (!parentId.empty()) {
+            // ---- HIL / 权限策略 (async work §3.7) ----
+            // - `bubble` (默认): 子会话继承父会话的 io 与总线, 询问冒泡到创建者会话
+            //   (父 IO 已在该总线上注册 interrupt/permission 处理器)
+            // - `deny` / `allow`: 不冒泡, 在本会话自己的总线上注册固定应答器
+            // - `bubble` 但创建者会话已销毁: 无人可问, 按 `deny` 处理
+            const auto interruptPolicy
+                = spec ? spec->interruptPolicy.value_or(AsyncInterruptPolicy::Bubble)
+                       : AsyncInterruptPolicy::Bubble;
+            bool hilBubbled = false;
+            if (!parentId.empty() && interruptPolicy == AsyncInterruptPolicy::Bubble) {
                 // 父上下文优先 (嵌套委派时是上一级子代理), 否则用发起请求那个根
                 auto parentCtx = parentAgentCtx ? parentAgentCtx : requestCtx;
                 if (parentCtx) {
@@ -1202,6 +1218,7 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
                     if (parentSession) {
                         subSession->io  = parentSession->io;
                         subSession->bus = parentSession->bus;
+                        hilBubbled      = true;
                         if (sameContext) {
                             // 同上下文模式: 强制使用父会话当前模型 (忽略 subagentModel),
                             // 与父会话相同模型 + 相同 session + 相同上下文前缀,
@@ -1210,6 +1227,30 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
                         }
                     }
                 }
+            }
+            if (!hilBubbled) {
+                // 策略指定不冒泡, 或创建者已销毁: 固定作答 (创建者已销毁也按 deny)
+                const auto effective
+                    = interruptPolicy == AsyncInterruptPolicy::Allow
+                          ? AsyncInterruptPolicy::Allow
+                          : AsyncInterruptPolicy::Deny;
+                if (interruptPolicy == AsyncInterruptPolicy::Bubble) {
+                    XX_LOGW(
+                        "[async_work] `{}` ({}): creator session `{}` is gone, HIL falls back to "
+                        "deny",
+                        subagentName,
+                        subagentSessionId,
+                        parentId
+                    );
+                }
+                // 会话总线可能还没建 (正常由跑轮次时创建): 这里先建一份,
+                // 后续跑轮次看到非空就直接用
+                if (!subSession->bus) {
+                    subSession->bus
+                        = std::make_shared<agentxx::events::EventBus>(co_await asio::this_coro::executor
+                        );
+                }
+                installAsyncInterruptResponders(subSession->bus, effective);
             }
 
             // ---- 子代理委派总线 registerServer (扁平化核心) ----
