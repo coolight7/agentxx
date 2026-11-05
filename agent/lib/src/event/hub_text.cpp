@@ -9,37 +9,6 @@ namespace events {
 
 namespace {
 
-/// 状态/种类/模式的显示文本
-std::string_view kindText(EventKind kind) noexcept {
-    return kind == EventKind::Single ? "single" : "stream";
-}
-
-std::string_view stateText(EventState state) noexcept {
-    switch (state) {
-        case EventState::Open:
-            return "open";
-        case EventState::Ended:
-            return "ended";
-        case EventState::Expired:
-            return "expired";
-    }
-    return "unknown";
-}
-
-std::string_view waitStateText(WaitState state) noexcept {
-    switch (state) {
-        case WaitState::Armed:
-            return "armed";
-        case WaitState::Satisfied:
-            return "satisfied";
-        case WaitState::Canceled:
-            return "Canceled";
-        case WaitState::TimedOut:
-            return "timed-out";
-    }
-    return "unknown";
-}
-
 /// "wait: w-3 ref: call_1" 一行的尾部 (没有 ref 时为空)
 std::string refSuffix(const EventWait& wait) {
     if (wait.spec.ref.empty()) {
@@ -83,43 +52,6 @@ std::string renderEventText(
     // 去掉末尾换行: 投递文本作为一条 user 消息, 末尾空行没有意义
     if (!out.empty() && out.back() == '\n') {
         out.pop_back();
-    }
-    return out;
-}
-
-std::string renderWaitStatus(const EventWait& wait) {
-    return fmt::format(
-        "[Event wait] wait={} event={} mode={} delivery={} state={} values={} deliveries={}{}",
-        wait.waitId,
-        wait.spec.event,
-        wait.spec.mode,
-        wait.spec.delivery,
-        waitStateText(wait.state),
-        wait.values.size(),
-        wait.deliveries,
-        wait.closeReason.empty() ? std::string{} : fmt::format(" reason={}", wait.closeReason)
-    );
-}
-
-std::string renderEventStatus(const EventRecord& rec) {
-    std::string out = fmt::format(
-        "[Event record] name={} kind={} state={} owner={} published={} history={} waits={}"
-        "{}",
-        rec.name,
-        kindText(rec.kind),
-        stateText(rec.state),
-        rec.owner.empty() ? std::string{"-"} : rec.owner,
-        rec.published,
-        rec.history.size(),
-        rec.waitCount,
-        rec.droppedForHistory > 0 ? fmt::format(" dropped={}", rec.droppedForHistory)
-                                  : std::string{}
-    );
-    if (!rec.description.empty()) {
-        out += fmt::format("\ndescription: {}", rec.description);
-    }
-    if (!rec.history.empty()) {
-        out += fmt::format("\nlast: {}", rec.history.back().dump());
     }
     return out;
 }

@@ -102,6 +102,18 @@
   "未做"清单、后台任务段的说明)、`roadmap.md` 的 2026-11-05 条目。
 - 代码无改动。
 
+### 9. 后续清理: 删掉指向已删除 opt 的残留
+
+- `agent/lib/src/agent/prompt.cpp`: 系统提示词 "Context Markers" 段里的 `[Event] ...` 行
+  原写 "a value you asked for with `agentxx_event` (`opt=watch`/`opt=await`)" —— 这两个 opt 已删除,
+  改成描述真实来源 (后台任务结果 / 插件 / 定时器发布的 bubble)。
+- 删掉无人调用的状态文本函数 `renderWaitStatus` / `renderEventStatus` (`event/hub.h` 声明 +
+  `event/hub_text.cpp` 实现) 以及只给它们用的 `kindText` / `stateText` / `waitStateText`
+  (与上一轮删 `renderWaitArmed` 同一个理由)。
+- 注释同步: `agent/config.h` 的 `eventWaitTimeoutMs`、`event/hub.h` 的 `waitTimeoutDefault` /
+  `deliveryDefault`、`event/hub.cpp` 四处 (`opt=status` / `opt=list` / `agentxx_event opt=await`)、
+  `plugins/plugin_manager_vtable.cpp` 的事件记录 JSON 注释。
+
 ## 验证
 
 - 逐模块: `async_tools` 86 / `async_work` 121 / `event_tools` 58 / `event_hub` 244 /

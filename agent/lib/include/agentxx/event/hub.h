@@ -200,9 +200,9 @@ public:
         size_t valueHardBytes        = 1024 * 1024;
         size_t deliveryBacklogPerSession = 64;
         bool   allowHeadlessTurn     = false;
-        /// `watch` 未指定 timeout 时使用 (0 = 不限)
+        /// 等待未指定 timeout 时使用 (0 = 不限)
         std::chrono::milliseconds waitTimeoutDefault{0};
-        /// `watch` 未指定 delivery 时使用
+        /// 等待未指定 delivery 时使用
         std::string deliveryDefault = "next-step";
     };
 
@@ -585,12 +585,6 @@ std::string renderEventText(
     const std::vector<std::string>& valueTexts,
     std::string_view                note = {}
 );
-
-/// 单个等待的状态文本 (`opt=status wait=`)
-std::string renderWaitStatus(const EventWait& wait);
-
-/// 事件的状态文本 (`opt=status event=`)
-std::string renderEventStatus(const EventRecord& rec);
 
 /// `await` 超时文本
 std::string renderAwaitTimeout(const EventWaitSpec& spec, int64_t waitedMs);

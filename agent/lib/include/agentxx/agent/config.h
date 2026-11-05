@@ -465,7 +465,7 @@ public:
     /// - 0 表示不限制
     size_t eventValueMaxBytes = 32 * 1024;
 
-    /// `agentxx_event opt=watch` 未指定超时时的默认值, 单位毫秒
+    /// 等待未指定超时时的默认值, 单位毫秒 (插件 `register_wait` 与模型侧的等待都用它)
     /// (yaml `event.wait_timeout_ms`, 默认 0 = 不限)
     int64_t eventWaitTimeoutMs = 0;
 

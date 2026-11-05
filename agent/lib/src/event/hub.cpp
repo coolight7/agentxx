@@ -72,7 +72,7 @@ std::string rawValueText(const Json& value) {
     return value.dump();
 }
 
-/// 终态等待在表里保留多久 (供 `opt=status` 事后查看)
+/// 终态等待在表里保留多久 (供事后查询)
 constexpr int64_t kTerminalWaitLingerMs = 60 * 1000;
 /// 超时/回收检查周期
 constexpr int64_t kSweepPeriodMs = 500;
@@ -611,7 +611,7 @@ void EventHub::dispatchValue(RecordEntry& rec, const Json& value) {
         if (spec.mode == "first") {
             wait.values = {value};
             wait.bytes  = bytes;
-            // 值保留在等待里: `opt=status` 与 `awaitOnce` 的返回值都靠它
+            // 值保留在等待里: 查询与 `awaitOnce` 的返回值都靠它
             flushWait(entry, "value", /*resetValues=*/false);
             finishWait(entry, WaitState::Satisfied, "delivered", true);
             continue;
@@ -978,8 +978,8 @@ std::expected<EventWait, std::string> EventHub::watch(EventWaitSpec spec) {
         spec.maxItems = 1;
     }
 
-    // 有人在等这个事件: 建一条记录 (即使发布方还没 define), 否则 `opt=status` /
-    // `opt=list` 看不到它, 也回放不了先到的值
+    // 有人在等这个事件: 建一条记录 (即使发布方还没 define), 否则查询与
+    // 回放都看不到它
     if (nullptr
         == ensureRecord(
             spec.event,
@@ -1442,7 +1442,7 @@ size_t EventHub::sweepExpired(int64_t steadyNowMs) {
 }
 
 // ---------------------------------------------------------------------------
-// 阻塞等待 (agentxx_event opt=await)
+// 阻塞等待 (agentxx_async_await / 插件登记等待后的取值路径)
 // ---------------------------------------------------------------------------
 
 asio::awaitable<EventWait>

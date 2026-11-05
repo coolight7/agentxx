@@ -2157,7 +2157,7 @@ static int32_t PLUGINXX_CALL xx_event_remove(
     );
 }
 
-/// 一条事件记录 → 插件可见的 JSON (字段与 `agentxx_event opt=status` 同源)
+/// 一条事件记录 → 插件可见的 JSON (字段与中枢的事件记录同源)
 static utilxx_base::Json eventRecordJson(const agentxx::events::EventRecord& rec) {
     using agentxx::events::EventKind;
     using agentxx::events::EventState;
