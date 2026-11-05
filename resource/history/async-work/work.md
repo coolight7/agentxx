@@ -161,7 +161,9 @@
     - 测试 `agent\build\windows-debug\exec\agentxx_test.exe --log-level warn <模块>`;
     - 生成物: `$env:AGENTXX_UPDATE_CONFIG_KEYS='1'` (配置键目录)、
       `$env:AGENTXX_UPDATE_TEST_MODULES='1'` (测试模块清单)。
-- `boundaries` 模块的 5 条失败全部来自 `agent/third_party/cxx_pluginxx_ui`
-  (`载体` 用词规则, 该子模块是独立仓库, 未随本次改动修改), 与本任务无关;
+- 全量回归 (2026-11-05, Debug + ASan/UBSan): **41,518 项断言, 1 项失败**; 唯一失败是
+  `boundaries` 规则 15 的 5 条用词违规, 全部位于 `agent/third_party/cxx_pluginxx_ui`
+  (`载体`, 该子模块是独立仓库, 未随本次改动修改), 与本任务无关;
   其余模块 (含 `async_work` / `event_hub` / `event_tools` / `event_subagent` /
-  `agent_host` / `config_keys` / `test_modules`) 全绿。
+  `agent_host` / `tui_widget` / `wire_roundtrip` / `wire_schema` / `config_keys` /
+  `test_modules`) 全绿。
