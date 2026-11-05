@@ -16,7 +16,8 @@
 提交记录: `2dca9dc5` (P0) → `164029e0` (P1) → `6ea5a5aa` (P3) → `04ea4a57` (P2) →
 `0a40ed4b` (P4 文档) → Info 侧边栏「后台任务」段 + `WireContextStats.asyncWorks`
 ("async_work: Info 侧边栏「后台任务」段 + WireContextStats.asyncWorks") → HIL 三策略 +
-会话落盘 + 创建者已销毁用例。
+会话落盘 + 创建者已销毁用例 → `session_store_keep_days` 清理 (90f46e94) →
+插件表 runtime v2 四成员 (b1ea340d) → 根配置 `asyncWork` 段 (8f5a8971)。
 
 ## 已完成
 
@@ -187,9 +188,6 @@
     - 测试 `agent\build\windows-debug\exec\agentxx_test.exe --log-level warn <模块>`;
     - 生成物: `$env:AGENTXX_UPDATE_CONFIG_KEYS='1'` (配置键目录)、
       `$env:AGENTXX_UPDATE_TEST_MODULES='1'` (测试模块清单)。
-- 全量回归 (2026-11-05, Debug + ASan/UBSan): **41,518 项断言, 1 项失败**; 唯一失败是
-  `boundaries` 规则 15 的 5 条用词违规, 全部位于 `agent/third_party/cxx_pluginxx_ui`
-  (`载体`, 该子模块是独立仓库, 未随本次改动修改), 与本任务无关;
-  其余模块 (含 `async_work` / `event_hub` / `event_tools` / `event_subagent` /
-  `agent_host` / `tui_widget` / `wire_roundtrip` / `wire_schema` / `config_keys` /
-  `test_modules`) 全绿。
+- 全量回归 (2026-11-05, Debug + ASan/UBSan): **41,585 项断言, 1 项失败** (插件表 v2 与根配置
+  段完成后重跑); 唯一失败仍是 `boundaries` 规则 15 的 5 条用词违规, 全部位于
+  `agent/third_party/cxx_pluginxx_ui` 子模块 (既有问题, 与本任务无关)。
