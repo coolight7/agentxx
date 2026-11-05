@@ -127,7 +127,13 @@
   `test_info_sidebar_async_works` (4 种形态)、`wire_schema` 新鲜度。
 - 文档: `events.md` 第 8 节 / `tui.md` §2.7 / `AGENTS.md` 均已同步 (下面「文档」一段)。
 
-### P4 文档 (已完成部分)
+### P4 根配置 asyncWork 段 (已完成)
+
+- `plugin_manager_runtime_config.cpp`: 根 `config_json` 支持 `asyncWork` 段
+  (`enable` / `maxConcurrent` / `interruptPolicy` / `sessionStore` / `lingerMs` /
+  `resultMaxBytes` / `sessionStoreKeepDays`), 非法中断策略退回 `bubble`。
+- 测试: `plugin_agent_runtime` 199 → **209 断言** (字段落值 + 非法策略回退)。
+- 文档: `plugins.md` §19.3 根配置表补一行。 (已完成部分)
 
 - `docs/zh-cn/design/events.md`: 第 8 节整节改写为「后台任务 (async work)」(委派即提交、
   单一事件名 + `match`、结果值形状、每队列额度、`asyncId` = sessionId、取消入口、
@@ -147,7 +153,9 @@
 ## 待完成
 
 - **P4 剩余**:
-    - chatbot 插件接入 (后台任务完成时主动播报)。
+    - chatbot 插件接入: `chatbot_task.h/.cpp` (业务队列 + `submitAsyncWork` + `on_event` 回插)、
+      `chatbot_task` 工具 (`submit/status/cancel/list`)、`/agentxx-cmd task ...` 命令、
+      「机器人」栏任务段。配置形态 (`config_json` 的 `asyncWork` 段) **已实现**。
 - **`kind=tool`** (异步工具) 未实现: `AsyncWorkManager::submit` 对 `kind=tool` 明确返回
   `not supported yet`。
 - **`session_store_keep_days`**: 已实现 (提交带落盘的任务时清理过期任务会话目录);

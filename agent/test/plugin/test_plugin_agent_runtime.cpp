@@ -532,6 +532,36 @@ asio::awaitable<void> runBody(
                 AGENTXX_PLUGIN_RUNTIME_ERR_STATE
             );
         }
+
+        // 8) 根配置的 asyncWork 段落到 AgentConfig (插件根自己提交任务时用)
+        {
+            AgentxxPluginMountRootSpec rootSpec{};
+            rootSpec.struct_size   = sizeof(AgentxxPluginMountRootSpec);
+            std::string rootName{"probe-root"};
+            rootSpec.name          = PluginStringView::from(rootName);
+            const std::string configJson = R"({"prompt":{"systemPrompt":"hi"},"asyncWork":{"enable":true,"maxConcurrent":5,"interruptPolicy":"allow","sessionStore":true,"lingerMs":1000,"resultMaxBytes":1024,"sessionStoreKeepDays":7}})";
+            rootSpec.config_json         = PluginStringView::from(configJson);
+            std::string err;
+            auto        cfg = mgr->deriveRootConfig(rootSpec, "ext:probe:1", *inst, err);
+            XX_TEST_EXPECT_TRUE(cfg != nullptr);
+            if (cfg) {
+                XX_TEST_EXPECT_TRUE(cfg->enableAsyncWork);
+                XX_TEST_EXPECT_EQ(cfg->asyncWorkMaxConcurrent, size_t{5});
+                XX_TEST_EXPECT_EQ(cfg->asyncWorkInterruptPolicy, std::string{"allow"});
+                XX_TEST_EXPECT_TRUE(cfg->asyncWorkSessionStore);
+                XX_TEST_EXPECT_EQ(cfg->asyncWorkLingerMs, int64_t{1000});
+                XX_TEST_EXPECT_EQ(cfg->asyncWorkResultMaxBytes, size_t{1024});
+                XX_TEST_EXPECT_EQ(cfg->asyncWorkSessionStoreKeepDays, size_t{7});
+            }
+            // 非法中断策略退回 bubble (与 yaml 加载期同一套取值)
+            const std::string badJson = R"({"asyncWork":{"interruptPolicy":"bogus"}})";
+            rootSpec.config_json      = PluginStringView::from(badJson);
+            auto badCfg               = mgr->deriveRootConfig(rootSpec, "ext:probe:2", *inst, err);
+            XX_TEST_EXPECT_TRUE(badCfg != nullptr);
+            if (badCfg) {
+                XX_TEST_EXPECT_EQ(badCfg->asyncWorkInterruptPolicy, std::string{"bubble"});
+            }
+        }
     }
 
     // ===================== 2. 无容器时不可用 =====================

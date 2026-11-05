@@ -365,6 +365,43 @@ std::shared_ptr<agentxx::agent::AgentConfig> PluginManager::deriveRootConfig(
         cfg->enableSessionStore = j.value("enableSessionStore", cfg->enableSessionStore);
     }
 
+    // ---- 后台任务 (`asyncWork`, camelCase 与 yaml `async_work.*` 一一对应) ----
+    // 插件根也是 agent: 它自己提交后台任务时用这里的开关与额度
+    if (j.contains("asyncWork") && j["asyncWork"].is_object()) {
+        const auto& aw = j["asyncWork"];
+        if (aw.contains("enable")) {
+            cfg->enableAsyncWork = aw.value("enable", cfg->enableAsyncWork);
+        }
+        if (aw.contains("maxConcurrent") && aw["maxConcurrent"].is_number()) {
+            cfg->asyncWorkMaxConcurrent = static_cast<size_t>(
+                std::max<int64_t>(1, aw.value("maxConcurrent", int64_t{3}))
+            );
+        }
+        if (aw.contains("interruptPolicy") && aw["interruptPolicy"].is_string()) {
+            // 非法取值退回 bubble (与 yaml 加载期同一套取值)
+            agentxx::agent::AsyncInterruptPolicy parsed{};
+            const auto policy = aw.value("interruptPolicy", std::string{"bubble"});
+            cfg->asyncWorkInterruptPolicy
+                = agentxx::agent::parseInterruptPolicy(policy, &parsed) ? policy : "bubble";
+        }
+        if (aw.contains("sessionStore")) {
+            cfg->asyncWorkSessionStore = aw.value("sessionStore", false);
+        }
+        if (aw.contains("lingerMs") && aw["lingerMs"].is_number()) {
+            cfg->asyncWorkLingerMs = std::max<int64_t>(0, aw.value("lingerMs", int64_t{300000}));
+        }
+        if (aw.contains("resultMaxBytes") && aw["resultMaxBytes"].is_number()) {
+            cfg->asyncWorkResultMaxBytes = static_cast<size_t>(
+                std::max<int64_t>(1, aw.value("resultMaxBytes", int64_t{8192}))
+            );
+        }
+        if (aw.contains("sessionStoreKeepDays") && aw["sessionStoreKeepDays"].is_number()) {
+            cfg->asyncWorkSessionStoreKeepDays = static_cast<size_t>(
+                std::max<int64_t>(0, aw.value("sessionStoreKeepDays", int64_t{0}))
+            );
+        }
+    }
+
     // ---- 模型 ----
     if (j.contains("model") && j["model"].is_string()) {
         const std::string want = j["model"].get<std::string>();

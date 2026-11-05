@@ -1996,6 +1996,7 @@ plugin:
 | `mcpServers` / `skills` / `memoryFiles` | 清空 | `inherit.mcp/skill/memory` 为 true 才拷贝 |
 | `enableSessionStore` | 跟随主程序 | 会话目录固定为 `{主程序会话根}/{rootId}` (每根独占) |
 | `enableSubagent` | `false` | 对外应答的根通常不需要子代理 |
+| `asyncWork` | 继承 | 后台任务开关/额度/中断策略/落盘与保留期: `enable` / `maxConcurrent` / `interruptPolicy` (bubble\|deny\|allow) / `sessionStore` / `lingerMs` / `resultMaxBytes` / `sessionStoreKeepDays`, 非法取值退回默认 |
 | `pluginMount*` | **不要给** | 插件挂载用 `spec.mount_plugins`, 两处都给 → `ERR_ARG` |
 
 `spec.mount_plugins` 与 yaml `plugin.mount` 同构:
