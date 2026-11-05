@@ -266,3 +266,8 @@
   单一结果事件 `agentxx.agent.async.done` + `EventWaitSpec::match` 定向等待、
   `agentxx_event` 新增 `works` 与 `id`；测试模块 `async_work`。剩下的作业表/进度/后台命令/
   配额车道等仍按原计划单独立项（见 [events.md](events.md) 第 13 节“未做的事项”）。
+- 2026-11-06: 后台任务补齐 `kind=tool`（异步工具）: 模型侧新增 `agentxx_tool_async`
+  （权限在提交时按目标工具问一次, 只跑工具注册表里的工具）、`AsyncWorkManager` 新增
+  `runToolWork`（参数补 `sessionId`/`tool_call_id`, 50 ms 轮询取消）、插件
+  `AgentxxPluginAsyncWorkSpec` 尾部追加 `tool_name`/`tool_args_json`（基线停在
+  `offsetof`, 旧插件按 `ERR_ARG` 降级）；`execute_command` 的 `background:true` 仍不做。

@@ -20,7 +20,7 @@
 会话落盘 + 创建者已销毁用例 → `session_store_keep_days` 清理 (90f46e94) →
 插件表 runtime v2 四成员 (b1ea340d) → 根配置 `asyncWork` 段 (8f5a8971) → P4 chatbot 接入
 (`chatbot_task` + 命令 + 面板段 + 宿主 `exclude`; 90d50c79) → P5 模型注册表下沉
-(c9515795) → P6 `kind=tool` 异步工具。
+(c9515795) → P6 `kind=tool` 异步工具 (ea84152c)。
 
 ## 已完成
 
