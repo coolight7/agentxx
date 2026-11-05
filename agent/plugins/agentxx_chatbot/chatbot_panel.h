@@ -67,6 +67,21 @@ struct PanelAccountView {
     std::string reason; ///< 平台给的原因 (可空)
 };
 
+/// 一条后台任务 (面板「后台任务」段的一行)
+///
+/// 只是显示用的快照: 并发额度、排队与执行都在主程序, 数据源是 `ChatbotTaskManager`
+/// 的业务台账 (它与 TUI Info 段看到的全局台账不是同一份)。
+struct PanelTaskView {
+    std::string asyncId; ///< 任务 id (`async-7`)
+    std::string title;   ///< 显示名 (任务正文开头)
+    /// `queued` / `running` / `done` / `failed` / `canceled`
+    std::string state;
+    std::string chatKey; ///< 提交它的会话
+    int32_t     queueAhead = 0;
+    /// 已进行 / 总耗时 (毫秒; 终态是总耗时)
+    int64_t elapsedMs = 0;
+};
+
 /// 一份面板快照 (一次事件推送的完整内容)
 struct PanelSnapshot {
     /// 刷新计数 (1 起): 客户端用它取加载动画的当前帧, 所以同一份数据也要换帧号
@@ -75,6 +90,8 @@ struct PanelSnapshot {
     std::vector<PanelAccountView> accounts;
     std::vector<PanelPersonaView> personas;
     std::vector<PanelSessionView> sessions;
+    /// 后台任务 (最近提交的在前; 最多几条由 agent 侧截)
+    std::vector<PanelTaskView> tasks;
     uint64_t received = 0; ///< 全局收到的消息数
     uint64_t sent     = 0; ///< 全局发出的回复数
     uint64_t failed   = 0; ///< 投递失败次数
@@ -117,6 +134,12 @@ std::string panelPersonaDetail(const PanelPersonaView& persona);
 
 /// 会话右侧的排队条数文本 (`0` 也表示"没有积压")
 std::string panelSessionQueueText(const PanelSessionView& session);
+
+/// 任务一行的文本: `async-7 1m20s 查一下汇率` (运行中带进度, 终态带结果标记)
+std::string panelTaskText(const PanelTaskView& task, bool running);
+
+/// 任务状态的中文标记 (`排队` / `运行` / `完成` / `失败` / `取消`)
+std::string panelTaskStateLabel(std::string_view state);
 
 /// 账号列表项文本 (不带 `|- ` 前缀): `qq_main online`, 断开时带原因
 std::string panelAccountItemText(const PanelAccountView& account);

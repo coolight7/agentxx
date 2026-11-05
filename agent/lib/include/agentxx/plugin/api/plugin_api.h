@@ -1122,6 +1122,8 @@ typedef struct AgentxxPluginAsyncWorkSpec {
     /// 工具策略 JSON: 空 = 默认; `[]` = 无工具; `["*"]` = 继承创建者; 否则名单
     PluginxxStringView tools_json;
     /// 插件挂载 (与 yaml `plugin.mount` 同构); 空 = 不挂
+    /// - 键: `mode` (`all` / `listed` / `none`)、`list`、`args`、`exclude`
+    /// - `exclude` 是剔除名单 (`all` / `listed` 都生效)
     PluginxxStringView plugins_json;
     PluginxxStringView mcp_servers_json; ///< 字符串数组
     PluginxxStringView skills_json;      ///< 字符串数组

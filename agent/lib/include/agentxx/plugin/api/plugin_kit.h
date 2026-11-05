@@ -1449,6 +1449,8 @@ struct AsyncWorkOptions {
     /// 工具策略: 空 = 默认; `[]` = 无工具; `["*"]` = 继承创建者; 否则名单
     utilxx_base::Json tools;
     /// 插件挂载 (与 yaml `plugin.mount` 同构); 空 = 不挂
+    /// - 键: `mode` (`all` / `listed` / `none`)、`list`、`args`、`exclude`
+    /// - `exclude` 是剔除名单 (`All` / `Listed` 都生效): 插件提交任务时用它把自己排除在外
     utilxx_base::Json plugins;
     utilxx_base::Json mcpServers;
     utilxx_base::Json skills;

@@ -11,6 +11,7 @@
 #include "chatbot_engine.h"
 #include "chatbot_outbound.h"
 #include "chatbot_router.h"
+#include "chatbot_task.h"
 #include "platform/platform.h"
 
 #include <functional>
@@ -22,9 +23,11 @@ namespace chatbot {
 
 /// 工具依赖的运行期对象 (全部由插件入口持有, 生命周期覆盖工具)
 struct ChatbotToolDeps {
-    ChatbotEngine*   engine   = nullptr;
-    ChatbotOutbound* outbound = nullptr;
-    ChatbotRouter*   router   = nullptr;
+    ChatbotEngine*      engine      = nullptr;
+    ChatbotOutbound*    outbound    = nullptr;
+    ChatbotRouter*      router      = nullptr;
+    /// 后台任务 (可空 = 该运行环境不支持, 工具会明说不支持)
+    ChatbotTaskManager* tasks       = nullptr;
     /// 平台对象查询 (按账号 id 取; 出站发送要靠它)
     std::function<IPlatform*(const std::string& accountId)> platformOf;
 };
@@ -88,6 +91,20 @@ std::string toolRecallMessage(
     std::string_view       argsJson
 );
 
+/// `chatbot_task` 后台任务 (4 个动作)
+///
+/// - `submit`: 把一件耗时的事交给后台 agent 跑, 结果跑完作为一条新输入回到本会话
+/// - `status`: 查一条 (或本会话最近一条) 的进度与结果开头
+/// - `cancel`: 取消一条 (`id`) 或本会话全部
+/// - `list`: 列本会话的后台任务
+///
+/// 并发额度、排队与执行都在主程序 (`submit_async_work`), 这里只管业务字段。
+std::string toolTask(
+    const ChatbotToolDeps& deps,
+    std::string_view       threadId,
+    std::string_view       argsJson
+);
+
 /// 工具名清单 (测试断言与文档用)
 inline constexpr const char* kChatbotToolNames[] = {
     "chatbot_send_message",
@@ -96,6 +113,7 @@ inline constexpr const char* kChatbotToolNames[] = {
     "chatbot_status",
     "chatbot_set_mode",
     "chatbot_recall_message",
+    "chatbot_task",
 };
 
 /// `chatbot_debug_inject` (仅 `behavior.debugTools` 打开时注册)

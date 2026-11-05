@@ -22,6 +22,7 @@
 #include "chatbot_outbound.h"
 #include "chatbot_panel.h"
 #include "chatbot_router.h"
+#include "chatbot_task.h"
 #include "chatbot_tools.h"
 #include "platform/platform.h"
 
@@ -47,8 +48,7 @@
 #include <vector>
 
 namespace ac = agentxx::chatbot;
-using agentxx::plugin::AgentRef;
-using agentxx::plugin::ChannelEvent;
+using agentxx::plugin::AgentRef;using agentxx::plugin::ChannelEvent;
 using agentxx::plugin::PluginBase;
 using agentxx::plugin::PluginString;
 using agentxx::plugin::PluginStringView;
@@ -58,6 +58,16 @@ namespace {
 
 constexpr const char* kPluginName = "agentxx_chatbot";
 constexpr const char* kLogTag     = "chatbot";
+
+/// 字符串转小写 (只处理 ASCII; 命令/op 取值都是 ASCII)
+std::string lowerText(std::string text) {
+    for (auto& ch : text) {
+        if (ch >= 'A' && ch <= 'Z') {
+            ch = static_cast<char>(ch - 'A' + 'a');
+        }
+    }
+    return text;
+}
 
 /// 侧边栏面板事件的刷新节拍 (毫秒)
 ///
@@ -132,6 +142,8 @@ struct ChatbotCtx : public PluginBase {
     ac::ChatbotRouter   router;
     ac::ChatbotOutbound outbound;
     ac::ChatbotEngine   engine;
+    /// 后台任务业务台账 (只在插件 io 线程访问; 执行/并发在主程序)
+    ac::ChatbotTaskManager tasks;
 
     /// 账号 → 平台对象 (只在插件 io 线程访问; 工具线程通过 `platformOf` 读取时
     /// 用一把锁护住 map 结构本身)
@@ -338,6 +350,9 @@ struct ChatbotCtx : public PluginBase {
 
 /* ==================== 侧边栏「机器人」栏的快照发布 ==================== */
 
+/// 面板「后台任务」段的数据 (定义在下面; 这里先声明, 快照发布要用)
+std::vector<ac::PanelTaskView> panelTaskViewsOf(const ac::ChatbotTaskManager& tasks);
+
 /// 驱动票回调 (主程序 IO 线程; 不抛异常出边界)
 void PLUGINXX_CALL onPanelDriveTicket(void* ud) {
     auto* ctx = static_cast<ChatbotCtx*>(ud);
@@ -410,6 +425,7 @@ void ChatbotCtx::publishPanel() {
     }
     ac::PanelSnapshot snapshot = engine.panelSnapshot();
     snapshot.tick              = ++panelTick;
+    snapshot.tasks             = panelTaskViewsOf(tasks);
     {
         std::lock_guard lock(panelOutbox.mutex);
         panelOutbox.json    = ac::panelSnapshotJson(snapshot);
@@ -434,7 +450,8 @@ void ChatbotCtx::schedulePanelTick() {
             return;
         }
         publishPanel();
-        if (started.load(std::memory_order_acquire) && engine.hasRunningSession()) {
+        if (started.load(std::memory_order_acquire)
+            && (engine.hasRunningSession() || tasks.pendingTotal() > 0)) {
             schedulePanelTick();
             return;
         }
@@ -582,6 +599,18 @@ const char* kRecallMessageSchema = R"JSON({
   "required": []
 })JSON";
 
+const char* kTaskSchema = R"JSON({
+  "type": "object",
+  "properties": {
+    "op": {"type": "string", "description": "submit(提交一件耗时的事) / status(查进度) / cancel(取消) / list(列本会话的任务)", "enum": ["submit", "status", "cancel", "list"]},
+    "prompt": {"type": "string", "description": "op=submit 时要后台去做的具体事情 (写清目标与验收标准, 它看不到本群聊天记录)"},
+    "title": {"type": "string", "description": "op=submit 时的一句话显示名 (默认取正文开头)"},
+    "id": {"type": "string", "description": "op=status/cancel 时的任务 id (async-7 这种)"},
+    "chat": {"type": "string", "description": "可选: 指定会话 (默认当前会话)"}
+  },
+  "required": ["op"]
+})JSON";
+
 const char* kDebugInjectSchema = R"JSON({
   "type": "object",
   "properties": {
@@ -645,7 +674,7 @@ std::string
     return std::move(out->first);
 }
 
-/// 给一个 agent 注册 7 个 `chatbot_*` 工具
+/// 给一个 agent 注册 `chatbot_*` 工具 (7 个 + 调试工具)
 ///
 /// 工作体**统一用 `blocking_tool`**: 它们都要 `runOnIoBlocking` 等插件 io 线程的结果,
 /// 而插件 io 线程反过来也会找主程序 IO 线程 (开通道 / 投输入 / 要面板驱动票)。
@@ -760,6 +789,24 @@ void registerToolsOn(ChatbotCtx& ctx, const AgentRef& ref) {
         "说\"最后两条都撤\"用 count=2。发错了、说重复了、内容不合适时用它。",
         kRecallMessageSchema,
         recall
+    );
+
+    auto task = [deps](ChatbotCtx& c, std::string_view args, std::string_view tid) {
+        return runToolOnIo(c, args, tid, [deps](std::string_view t, std::string_view a) {
+            return ac::toolTask(*deps, t, a);
+        });
+    };
+    agentxx::plugin::blocking_tool(
+        ctx,
+        ref,
+        "chatbot_task",
+        "后台任务: 把需要很久的事 (查资料/巡一遍仓库/算很久) 交给后台 agent 跑, "
+        "提交后立刻返回, 你可以继续聊天; 它跑完结果会作为一条新输入回到这个会话, "
+        "那时再决定要不要回给用户。任务看不到本群聊天记录, 所以 prompt 要把要做的事写全。\n"
+        "op=submit 提交 (返回任务 id) / status 查进度 / cancel 取消 / list 列本会话的任务。\n"
+        "一句话就能答完的事不要用后台任务, 直接做完再回。",
+        kTaskSchema,
+        task
     );
 
     // 调试工具只在 `behavior.debugTools` 打开时注册 (测试与本地演示用)
@@ -964,9 +1011,299 @@ void subscribePanelEvents(ChatbotCtx& ctx) {
     }
 }
 
+/* ==================== 后台任务 (async work) ====================
+ *
+ * 分工 (见 `resource/history/async-work/plan.md` §11):
+ * - 执行、并发额度与排队都在主程序 (`submit_async_work`);
+ * - 插件只管业务台账 (`ChatbotTaskManager`) 与"结果怎么回到会话":
+ *   通道还在就投成一条会话输入, 由人设组织语言回复; 通道已回收就直接发一条
+ *   (被动→主动降级)。**没用** `notify_delivery`: 插件提交的任务挂在内置根的中枢上,
+ *   而聊天会话属于人设根, 那边投递会因"会话不存在"被丢掉。
+ */
+
+/// 后台任务的工具策略: 人设白名单优先, 没配就继承 (`["*"]`)
+///
+/// 人设根 `enableSubagent = false`, 子代理配置从父配置拷贝 —— 后台任务因此拿不到
+/// 委派工具, 不会出现"后台任务再派后台任务"。白名单里真写了委派工具也剔掉一次。
+std::string taskToolsJsonOf(const ac::PersonaConfig& persona) {
+    Json tools = Json::array();
+    if (persona.tools.empty()) {
+        tools.push_back("*");
+        return tools.dump();
+    }
+    for (const auto& name : persona.tools) {
+        if (name == "agentxx_subagent") {
+            continue;
+        }
+        tools.push_back(name);
+    }
+    if (tools.empty()) {
+        tools.push_back("*");
+    }
+    return tools.dump();
+}
+
+/// 后台任务的插件挂载清单: 人设现有清单去掉本插件
+///
+/// 为什么必须去掉自己: 后台任务没有聊天会话, `chatbot_*` 工具在那里定位不到平台对象,
+/// 结果由插件自己发。剔除用的是提交快照的 `exclude` (`all` / `listed` 都生效)。
+std::string taskPluginsJsonOf(const ac::PersonaConfig& persona) {
+    Json mount = Json::object();
+    const std::string mode = persona.mount.mode;
+    if (mode == "all") {
+        mount["mode"] = "all";
+    } else if (mode == "listed") {
+        Json list = Json::array();
+        for (const auto& name : persona.mount.list) {
+            if (name != kPluginName) {
+                list.push_back(name);
+            }
+        }
+        if (list.empty()) {
+            mount["mode"] = "none";
+        } else {
+            mount["mode"] = "listed";
+            mount["list"] = std::move(list);
+        }
+    } else {
+        // none: 人设根只挂了本插件 (强制), 后台任务一个插件也不用挂
+        mount["mode"] = "none";
+    }
+    Json exclude = Json::array();
+    exclude.push_back(kPluginName);
+    mount["exclude"] = std::move(exclude);
+    // 挂载级参数照抄人设配置, 但去掉本插件那一段 (后台任务不挂自己)
+    if (!persona.mount.argsJson.empty()) {
+        try {
+            auto args = Json::parse(persona.mount.argsJson);
+            if (args.is_object()) {
+                args.erase(std::string{kPluginName});
+                if (!args.empty()) {
+                    mount["args"] = std::move(args);
+                }
+            }
+        } catch (const std::exception&) {
+            // args 不是合法 JSON: 忽略 (主程序会按默认值处理)
+        }
+    }
+    return mount.dump();
+}
+
+/// 后台任务结果投递失败时的兜底: 直接发一条到会话 (没有通道可注入时)
+void sendTaskResultDirectly(ChatbotCtx& ctx, const ac::TaskRecord& record) {
+    const ac::ChatKey key = ac::parseChatKey(record.chatKey);
+    if (!key.valid()) {
+        ctx.log.warn(fmt::format("后台任务 {} 的会话键 '{}' 解析失败, 结果没有发出",
+                                 record.asyncId,
+                                 record.chatKey));
+        return;
+    }
+    ac::OutboundMessage message;
+    message.accountId = key.accountId;
+    message.type      = key.type;
+    message.chatId    = key.chatId;
+    message.text      = ac::ChatbotTaskManager::finishedText(record);
+    ctx.outbound.enqueueDirect(key, std::move(message));
+    XX_LOGI(
+        "[{}] 后台任务 {} 的结果直接发到会话 '{}' (通道已回收)",
+        kLogTag,
+        record.asyncId,
+        record.chatKey
+    );
+}
+
+/// 任务终态: 把结果送回会话 (插件 io 线程)
+void deliverTaskOutcome(ChatbotCtx& ctx, const ac::TaskRecord& record) {
+    if (record.state == ac::TaskState::Canceled) {
+        // 取消多半是用户自己下的命令 (那边已经回了消息), 不再往群里发一条
+        return;
+    }
+    if (ctx.engine.deliverTaskResult(record.chatKey, ac::ChatbotTaskManager::resultNote(record))) {
+        return;
+    }
+    sendTaskResultDirectly(ctx, record);
+}
+
+/// 任务事件处理 (插件 io 线程)
+void handleTaskEvent(
+    ChatbotCtx&        ctx,
+    int32_t            phase,
+    const std::string& asyncId,
+    const std::string& payloadJson
+) {
+    if (asyncId.empty()) {
+        return;
+    }
+    if (!ctx.tasks.onEvent(asyncId, phase, payloadJson)) {
+        return;
+    }
+    const bool terminal = phase == AGENTXX_PLUGIN_ASYNC_WORK_EVT_FINISHED
+                          || phase == AGENTXX_PLUGIN_ASYNC_WORK_EVT_CANCELED;
+    if (terminal) {
+        if (const auto* record = ctx.tasks.recordOf(asyncId); record != nullptr) {
+            deliverTaskOutcome(ctx, *record);
+        }
+    }
+    ctx.panelChanged();
+}
+
+/// 任务事件回调 (**主程序 io 线程**: 只拷数据, 立刻 post 回插件 io 线程)
+void PLUGINXX_CALL onChatbotAsyncWorkEvent(
+    void*                     userData,
+    int32_t                   phase,
+    const PluginxxStringView* payloadJson
+) {
+    auto* ctx = static_cast<ChatbotCtx*>(userData);
+    if (ctx == nullptr) {
+        return;
+    }
+    std::string json;
+    if (payloadJson != nullptr && payloadJson->data != nullptr) {
+        json.assign(payloadJson->data, static_cast<size_t>(payloadJson->size));
+    }
+    std::string asyncId;
+    try {
+        if (!json.empty()) {
+            asyncId = Json::parse(json).value("asyncId", std::string{});
+        }
+    } catch (const std::exception&) {
+        // 载荷不是对象: 拿不到 id 就没法记账, 直接丢掉
+        return;
+    }
+    if (asyncId.empty()) {
+        return;
+    }
+    ctx->runOnIo([ctx, phase, asyncId = std::move(asyncId), json = std::move(json)]() {
+        handleTaskEvent(*ctx, phase, asyncId, json);
+    });
+}
+
+/// 建后台任务的注入点 (提交/取消/台账回查都转成 SDK 调用)
+ac::TaskRuntime makeTaskRuntime(ChatbotCtx& ctx) {
+    ac::TaskRuntime runtime;
+    runtime.submit = [&ctx](const ac::TaskSubmit& request, std::string& err) -> std::string {
+        const ac::PersonaConfig* persona = ctx.config.findPersona(request.persona);
+        if (persona == nullptr) {
+            err = "找不到人设配置 '" + request.persona + "'";
+            return {};
+        }
+        const ac::ChatKey key       = ac::parseChatKey(request.chatKey);
+        const std::string sessionId = ctx.router.sessionIdOf(persona->name, key);
+
+        agentxx::plugin::AsyncWorkOptions opt;
+        opt.name         = "chatbot-task";
+        opt.message      = request.prompt;
+        opt.sessionId    = sessionId;
+        // 排队额度按人设分组 (不同人设的群互不排队)
+        opt.queueKey     = "chatbot:" + persona->name;
+        opt.model        = request.model.empty() ? persona->model : request.model;
+        opt.tools        = Json::parse(taskToolsJsonOf(*persona));
+        opt.plugins      = Json::parse(taskPluginsJsonOf(*persona));
+        // 群里不弹权限窗 (人设根上没有人在等答复)
+        opt.interruptPolicy = 2; // AGENTXX_PLUGIN_ASYNC_WORK_POLICY_ALLOW
+        opt.onEvent         = &onChatbotAsyncWorkEvent;
+        opt.userData        = &ctx;
+
+        int32_t    code = 0;
+        const auto asyncId = agentxx::plugin::submitAsyncWork(ctx, opt, &code);
+        if (asyncId.empty()) {
+            err = code == AGENTXX_PLUGIN_RUNTIME_ERR_UNSUPPORTED
+                      ? std::string{"当前主程序不支持后台任务 (运行时表没有 submit_async_work)"}
+                      : fmt::format("主程序拒绝提交 (错误码 {})", code);
+        }
+        return asyncId;
+    };
+    runtime.cancel = [&ctx](std::string_view asyncId) {
+        return agentxx::plugin::cancelAsyncWork(ctx, asyncId);
+    };
+    runtime.resultOf = [&ctx](std::string_view asyncId) {
+        return agentxx::plugin::getAsyncWorkJson(ctx, asyncId);
+    };
+    return runtime;
+}
+
+/// `/agentxx-cmd task <submit|list|status|cancel> [参数]` 的实现
+std::string runTaskCommand(ChatbotCtx& ctx, std::string_view chatKey, std::string_view args) {
+    const std::string usage
+        = "用法: /agentxx-cmd task submit <要做的事> | list | status [任务id] | cancel "
+          "[任务id|all]";
+    const std::string text = ac::trimCopy(args);
+    if (text.empty()) {
+        return usage;
+    }
+    size_t      split = text.find(' ');
+    std::string op    = split == std::string::npos ? text : text.substr(0, split);
+    std::string body
+        = split == std::string::npos ? std::string{} : ac::trimCopy(text.substr(split + 1));
+    op = lowerText(std::move(op));
+
+    if (op == "list" || op == "ls") {
+        return ctx.tasks.listText(chatKey);
+    }
+    if (op == "status" || op == "show") {
+        return ctx.tasks.statusText(chatKey, body);
+    }
+    if (op == "cancel" || op == "kill") {
+        // 不给 id 或给 all = 取消本会话全部
+        const std::string id = (body == "all" || body == "*") ? std::string{} : body;
+        return ctx.tasks.cancel(chatKey, id);
+    }
+    if (op == "submit" || op == "run" || op == "add") {
+        if (body.empty()) {
+            return "要提交什么? 写成 `/agentxx-cmd task submit <要做的事>`";
+        }
+        const ac::ChatKey key   = ac::parseChatKey(std::string{chatKey});
+        const auto        route = ctx.router.route(key);
+        ac::TaskSubmit    request;
+        request.chatKey = std::string{chatKey};
+        request.persona = route.personaName;
+        request.prompt  = body;
+        const auto result = ctx.tasks.submit(request);
+        if (!result.ok) {
+            return result.message;
+        }
+        std::string title;
+        if (const auto* record = ctx.tasks.recordOf(result.asyncId); record != nullptr) {
+            title = record->title;
+        }
+        XX_LOGI("[{}] 命令受理后台任务 {} (会话 '{}')", kLogTag, result.asyncId, chatKey);
+        return "已受理后台任务 " + result.asyncId + (title.empty() ? "" : " (" + title + ")")
+               + "\n跑完我会把结果发出来; 查进度用 `/agentxx-cmd task status " + result.asyncId
+               + "`。";
+    }
+    return usage;
+}
+
+/// 面板「后台任务」段的数据 (最多几条: 窄栏放不下更多)
+std::vector<ac::PanelTaskView> panelTaskViewsOf(const ac::ChatbotTaskManager& tasks) {
+    constexpr size_t kMaxPanelTasks = 6;
+    std::vector<ac::PanelTaskView> out;
+    const int64_t                  now = ac::ChatbotEngine::nowMs();
+    for (const auto& record : tasks.allRecords()) {
+        if (out.size() >= kMaxPanelTasks) {
+            break;
+        }
+        ac::PanelTaskView view;
+        view.asyncId    = record.asyncId;
+        view.title      = record.title;
+        view.state      = ac::taskStateName(record.state);
+        view.chatKey    = record.chatKey;
+        view.queueAhead = record.queueAhead;
+        if (ac::taskStatePending(record.state)) {
+            const int64_t from = record.startedAtMs > 0 ? record.startedAtMs : record.submittedAtMs;
+            view.elapsedMs     = now - from;
+        } else if (record.finishedAtMs > record.submittedAtMs) {
+            view.elapsedMs = record.finishedAtMs - record.submittedAtMs;
+        }
+        out.push_back(std::move(view));
+    }
+    return out;
+}
+
+/* ==================== 生命周期 ==================== */
+
 /// 进程级启动: 校验配置 → 挂人设根 → 起平台连接
-void* chatbotStart(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString* error) {
-    if (!notify || !notify->done) {
+void* chatbotStart(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString* error) {    if (!notify || !notify->done) {
         PluginString::set(ctx.host, error, "start: notify required");
         return nullptr;
     }
@@ -1103,6 +1440,7 @@ void* chatbotStart(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, Plugin
     ctx.toolDeps.engine     = &ctx.engine;
     ctx.toolDeps.outbound   = &ctx.outbound;
     ctx.toolDeps.router     = &ctx.router;
+    ctx.toolDeps.tasks      = &ctx.tasks;
     ctx.toolDeps.platformOf = [&ctx](const std::string& accountId) -> ac::IPlatform* {
         return ctx.platformOf(accountId);
     };
@@ -1217,6 +1555,9 @@ void* chatbotStart(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, Plugin
                 platform->downloadAttachment(accountId, ref);
             }
         };
+        runtime.taskCommand = [&ctx](std::string_view chatKey, std::string_view args) {
+            return runTaskCommand(ctx, chatKey, args);
+        };
         ctx.engine.init(
             ctx.io->get_executor(),
             ctx.config,
@@ -1225,6 +1566,8 @@ void* chatbotStart(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, Plugin
             std::move(runtime)
         );
         ctx.engine.buildRoutes();
+        // 后台任务的业务台账 (执行与额度在主程序)
+        ctx.tasks.init(makeTaskRuntime(ctx));
         // 调度状态一变就要重画侧边栏面板 (通知在插件 io 线程发出)
         ctx.engine.setChangeHook([&ctx]() {
             ctx.panelChanged();
@@ -1267,6 +1610,8 @@ void* chatbotStop(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, Pluginx
             }
             ctx.outbound.shutdown();
             ctx.engine.shutdown();
+            // 任务台账清空: 未完成的任务由主程序按 owner 回收, 这里只丢业务字段
+            ctx.tasks.clear();
         });
         // 2. 关全部通道
         size_t closed = 0;

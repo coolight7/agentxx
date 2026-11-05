@@ -10,6 +10,7 @@
 #include "agentxx-test/core/test_cancel.h"
 #include "agentxx-test/core/test_chatbot_core.h"
 #include "agentxx-test/core/test_chatbot_media.h"
+#include "agentxx-test/core/test_chatbot_task.h"
 #include "agentxx-test/core/test_chatbot_media_io.h"
 #include "agentxx-test/core/test_chatbot_qq.h"
 #include "agentxx-test/core/test_checkpoint_store.h"
@@ -340,6 +341,7 @@ int main(int argn, char** argv) {
         runSync("string_util", agentxx::test::testStringUtil);
         runSync("invisible_text", agentxx::test::testInvisibleText);
         runSync("chatbot_core", agentxx::test::testChatbotCore);
+        runSync("chatbot_task", agentxx::test::testChatbotTask);
         runSync("chatbot_qq", agentxx::test::testChatbotQq);
         runSync("chatbot_media", agentxx::test::testChatbotMedia);
         runSync("regex", agentxx::test::testRegex);

@@ -1971,6 +1971,14 @@ plugin:
 - 老主程序 (v1) 没有这 4 个成员: 用 `ifaceHas<&AgentxxPluginRuntimeIface::submit_async_work>`
   判定后降级; SDK 便捷层是 `submitAsyncWork` / `cancelAsyncWork` /
   `getAsyncWorkJson` / `listAsyncWorkJson` (`AsyncWorkOptions`)。
+- `plugins_json` 的形状与 yaml `plugin.mount` 同构 (`mode` = `all`/`listed`/`none`、`list`、
+  `args`), **另多一个 `exclude`** (字符串数组, `all` 与 `listed` 都生效): 插件提交任务时
+  用它把自己排除在外。例: `{"mode":"all","exclude":["agentxx_chatbot"]}` ——
+  后台任务没有创建者的会话上下文, 依赖会话的工具 (如 `chatbot_*`) 在那边定位不到对象。
+- **结果怎么回到创建者**: 任务挂的是**内置根**的中枢 (`creatorAgentId` 也填内置根),
+  所以 `notify_delivery` 只适用于"创建者会话属于内置根"的情况; 插件给自己的根开的
+  会话 (如 chatbot 的聊天会话) 拿不到这个投递 —— 那种情况下由插件在 `on_event`
+  里自己把结果写回会话 (见 `agent/plugins/agentxx_chatbot/chatbot_task.cpp`)。
 
 **与事件中枢的关系**: 事件中枢 (`agentxx::events::EventHub`, 见 [events.md](events.md))
 **只订阅 `plugin.` 前缀**，所以插件用

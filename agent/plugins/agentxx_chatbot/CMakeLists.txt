@@ -27,6 +27,8 @@ set(_CHATBOT_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/chatbot_engine.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/chatbot_outbound.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/chatbot_tools.cpp
+  # 后台任务业务台账 (提交/事件/取消/文本渲染; 执行与额度在主程序)
+  ${CMAKE_CURRENT_SOURCE_DIR}/chatbot_task.cpp
   # 侧边栏「机器人」栏: 快照数据 (agent 侧发布) + 组件渲染 + client 侧入口
   ${CMAKE_CURRENT_SOURCE_DIR}/chatbot_panel.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/chatbot_panel_ui.cpp

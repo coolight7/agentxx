@@ -11,7 +11,7 @@ path/to/agentxx_test --fail-fast        # 遇到失败立即终止
 path/to/agentxx_test string_util regex  # 只跑指定模块
 ```
 
-模块总数: 138 (同步 70 / 异步 68)
+模块总数: 139 (同步 71 / 异步 68)
 
 | 模块 | 调度 | 构建 |
 |---|---|---|
@@ -24,6 +24,7 @@ path/to/agentxx_test string_util regex  # 只跑指定模块
 | `string_util` | 同步 | 通用 |
 | `invisible_text` | 同步 | 通用 |
 | `chatbot_core` | 同步 | 通用 |
+| `chatbot_task` | 同步 | 通用 |
 | `chatbot_qq` | 同步 | 通用 |
 | `chatbot_media` | 同步 | 通用 |
 | `regex` | 同步 | 通用 |

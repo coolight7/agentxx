@@ -84,6 +84,16 @@ int64_t intArg(const Json& args, std::string_view key, int64_t fallback) {
     return fallback;
 }
 
+/// 字符串转小写 (只处理 ASCII; op 取值都是 ASCII)
+std::string lowerText(std::string text) {
+    for (auto& ch : text) {
+        if (ch >= 'A' && ch <= 'Z') {
+            ch = static_cast<char>(ch - 'A' + 'a');
+        }
+    }
+    return text;
+}
+
 /// 附件参数 → `MediaRef` 列表 (字符串 = 本地路径或 URL)
 std::vector<MediaRef> attachmentsArg(const Json& args) {
     std::vector<MediaRef> out;
@@ -631,6 +641,73 @@ std::string toolRecallMessage(
     }
     out["note"] = "撤回只对发送后 2 分钟内的消息有效";
     return out.dump();
+}
+
+std::string toolTask(
+    const ChatbotToolDeps& deps,
+    std::string_view       threadId,
+    std::string_view       argsJson
+) {
+    if (deps.tasks == nullptr) {
+        throw std::runtime_error("后台任务不可用 (插件未初始化)");
+    }
+    const auto        args = parseArgsOrThrow(argsJson);
+    std::string       err;
+    const std::string chatKey = resolveChat(deps, threadId, stringArg(args, "chat"), err);
+    if (chatKey.empty()) {
+        throw std::runtime_error(err);
+    }
+
+    std::string op = stringArg(args, "op", "list");
+    op             = lowerText(std::move(op));
+    if (op.empty()) {
+        op = "list";
+    }
+
+    if (op == "submit") {
+        // 正文兼容几种写法: `prompt` (推荐) / `task` / `text`
+        std::string prompt = stringArg(args, "prompt");
+        if (trimCopy(prompt).empty()) {
+            prompt = stringArg(args, "task");
+        }
+        if (trimCopy(prompt).empty()) {
+            prompt = stringArg(args, "text");
+        }
+        const ChatKey key   = parseChatKey(chatKey);
+        const auto    route = deps.router != nullptr ? deps.router->route(key) : RouteResult{};
+        TaskSubmit    request;
+        request.chatKey = chatKey;
+        request.persona = route.personaName;
+        request.title   = stringArg(args, "title");
+        request.prompt  = prompt;
+        request.model   = stringArg(args, "model");
+
+        auto result = deps.tasks->submit(request);
+        if (!result.ok) {
+            // 提交被拒是「参数/额度」问题, 让模型换个做法: 按工具失败上报
+            throw std::runtime_error(result.message);
+        }
+        XX_LOGI(
+            "[{}] 受理后台任务 {} (会话 '{}', 人设 '{}')",
+            kLogTag,
+            result.asyncId,
+            chatKey,
+            request.persona
+        );
+        return result.message;
+    }
+    if (op == "status") {
+        return deps.tasks->statusText(chatKey, stringArg(args, "id"));
+    }
+    if (op == "cancel") {
+        return deps.tasks->cancel(chatKey, stringArg(args, "id"));
+    }
+    if (op == "list") {
+        return deps.tasks->listText(chatKey);
+    }
+    throw std::invalid_argument(
+        "op 取值非法: 用 submit / status / cancel / list (收到 '" + op + "')"
+    );
 }
 
 } // namespace chatbot

@@ -302,16 +302,19 @@ void testBuiltinCommands() {
         } else if (def.mode == CommandMode::Model) {
             XX_TEST_EXPECT_TRUE(!def.prompt.empty());
         } else {
-            XX_TEST_EXPECT_TRUE(def.action == "cancel" || def.action == "clear");
+            XX_TEST_EXPECT_TRUE(
+                def.action == "cancel" || def.action == "clear" || def.action == "task"
+            );
         }
     }
 
-    // 根命令 + 四个子命令都在, 且各自是预期形态
+    // 根命令 + 五个子命令都在, 且各自是预期形态
     XX_TEST_EXPECT_TRUE(names.count(root) == 1);
     XX_TEST_EXPECT_TRUE(names.count(root + " help") == 1);
     XX_TEST_EXPECT_TRUE(names.count(root + " info") == 1);
     XX_TEST_EXPECT_TRUE(names.count(root + " hello") == 1);
     XX_TEST_EXPECT_TRUE(names.count(root + " stop") == 1);
+    XX_TEST_EXPECT_TRUE(names.count(root + " task") == 1);
 
     // `{commandList}` 由引擎按同一张表拼出来, 帮助 (含根命令本身) 必须带上它
     bool helpUsesList = false;

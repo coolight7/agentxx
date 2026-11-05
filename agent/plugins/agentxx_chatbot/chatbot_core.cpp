@@ -664,6 +664,14 @@ std::vector<CommandDef> builtinCommands() {
         def.action = "cancel";
         defs.push_back(std::move(def));
     }
+    // 后台任务: 耗时的事交给后台 agent 跑, 结果跑完回到会话
+    {
+        CommandDef def;
+        def.name   = root + " task";
+        def.mode   = CommandMode::Action;
+        def.action = "task";
+        defs.push_back(std::move(def));
+    }
     return defs;
 }
 

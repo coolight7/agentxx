@@ -913,7 +913,7 @@ flush(chat):
 |---|---|
 | `local` | 插件直接回复（模板变量替换），不进模型、不消耗 token、不受「通道忙」影响 |
 | `model` | 把 `prompt` 模板（可带 `{sender}` `{text}` `{args}`）作为一条单独输入投给会话，走正常一轮 |
-| `action` | 执行插件动作（`cancel` = 打断当前轮；`clear` = 开新会话〔本期不做，本期只实现 `cancel`〕）后可带 `reply` |
+| `action` | 执行插件动作（`cancel` = 打断当前轮；`task` = 后台任务 `submit`/`list`/`status`/`cancel`；`clear` = 开新会话〔本期不做，本期只实现 `cancel` 与 `task`〕）后可带 `reply` |
 
 同一条消息只会命中一个命令（最长匹配），因此不存在「多条命令不同 `mode` 冲突」。
 
@@ -1336,6 +1336,7 @@ public:
 | `chatbot_core` | 纯函数 | `splitText` / `parseCommand` / `renderInputBlock` / `dedupeRing` / `quoteIndexMap`；无网络无主程序依赖 → 直接单元测试 |
 | `chatbot_outbound` | 出站 | 每会话 FIFO + 账号级并发上限 + 令牌桶；被动/主动选择；窗口过期降级；`msg_seq` 递增 |
 | `chatbot_tools` | 工具 | 用 `blocking_tool`（内部发 HTTP 需要等结果）；`thread_id` 就是 `sessionId`，据此定位 `ChatKey` |
+| `chatbot_task` | 后台任务业务层 | 只管提交/状态/取消/文本渲染；执行与并发额度在主程序（`agentxx.agent.runtime` 的 `submit_async_work`）；终态靠 `on_event` post 回插件 io 线程，结果由插件投回会话 |
 | `platform/qq/qq_gateway` | WS | `wsConnect` + `WsClient::recv` 循环；心跳定时器；`Resume` 优先进 Identify 限流 |
 | `platform/qq/qq_api` | openapi | `HttpClient::requestAsync`；token 缓存 + 提前刷新；`Authorization: QQBot <t>` |
 | `platform/qq/qq_media` | 上传 | 分片（prepare → PUT → part_finish → 合并）；`file_info` 缓存 |

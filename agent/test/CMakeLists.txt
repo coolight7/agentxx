@@ -144,6 +144,8 @@ target_sources(agentxx_test PRIVATE
   # 侧边栏「机器人」栏: 快照 JSON (panel) 与组件树 (panel_ui) 也是纯逻辑
   "${AGENTXX_CHATBOT_SOURCE_DIR}/chatbot_panel.cpp"
   "${AGENTXX_CHATBOT_SOURCE_DIR}/chatbot_panel_ui.cpp"
+  # 后台任务业务层: 提交/事件/取消/渲染都是纯逻辑 (执行与额度在主程序)
+  "${AGENTXX_CHATBOT_SOURCE_DIR}/chatbot_task.cpp"
   "${AGENTXX_CHATBOT_SOURCE_DIR}/platform/qq/qq_normalize.cpp"
   # 富媒体上传的请求体与分片规划: 纯逻辑 (不碰网络), 见 `chatbot_media` 用例
   "${AGENTXX_CHATBOT_SOURCE_DIR}/platform/qq/qq_media_request.cpp"

@@ -135,6 +135,11 @@ public:
         /// 下载一个入站附件 (平台层实现; 落盘后回填 `localPath`)
         std::function<void(const std::string& accountId, MediaRef& attachment)>
             downloadAttachment;
+        /// `/agentxx-cmd task ...` 的后台任务操作 (插件入口实现: 提交/查询/取消/列表)
+        ///
+        /// - `args` 是命令名后面那段文字 (`submit 帮我查一下…` / `list` / `cancel all`)
+        /// - 返回给用户看的回复正文 (不抛异常; 失败也在正文里说清楚)
+        std::function<std::string(std::string_view chatKey, std::string_view args)> taskCommand;
     };
 
     void init(
@@ -189,6 +194,13 @@ public:
 
     /// 工具侧入口: 打一次「工具产出了正文」标记 (兜底发送的依据)
     void noteAssistantText(std::string_view chatKey, std::string_view text);
+
+    /// 后台任务的结果回到会话 (插件在任务终态调用)
+    ///
+    /// - 通道存在: 作为一条「系统提示」输入投给会话 (下一轮开始), 由人设组织语言回复
+    /// - 通道不存在 (会话已回收/从未创建): 返回 false, 调用方改用 `ChatbotOutbound`
+    ///   直接发一条 (被动→主动降级)
+    bool deliverTaskResult(std::string_view chatKey, std::string_view text);
 
     /// 停止: 清空缓冲与定时器
     void shutdown();

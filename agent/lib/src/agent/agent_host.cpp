@@ -75,6 +75,15 @@ void applyAsyncWorkOverrides(
                 }
             }
         }
+        // 剔除名单: `All` / `Listed` 都生效; 提交方用它保证自己不会再被挂到任务 agent 上
+        subCfg.pluginMountExclude.clear();
+        if (mount.contains("exclude") && mount["exclude"].is_array()) {
+            for (const auto& item : mount["exclude"]) {
+                if (item.is_string() && !item.get<std::string>().empty()) {
+                    subCfg.pluginMountExclude.push_back(item.get<std::string>());
+                }
+            }
+        }
         if (mount.contains("args") && mount["args"].is_object()) {
             subCfg.pluginMountArgs = mount["args"];
         }

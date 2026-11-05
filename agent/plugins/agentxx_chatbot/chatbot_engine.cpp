@@ -1013,6 +1013,27 @@ bool ChatbotEngine::handleCommand(
             notifyChanged();
             return true;
         }
+        if (def->action == "task") {
+            // 后台任务: `submit <要做的事>` / `list` / `status [id]` / `cancel [id|all]`
+            std::string reply;
+            if (runtime_.taskCommand) {
+                reply = runtime_.taskCommand(chatKeyText, command.args);
+            } else {
+                reply = "后台任务不可用 (当前主程序没有 async work 入口)";
+            }
+            OutboundMessage message;
+            message.accountId      = key.accountId;
+            message.type           = key.type;
+            message.chatId         = key.chatId;
+            message.text           = std::move(reply);
+            message.passiveReplyTo = event.platformMessageId;
+            message.replyToRef     = event.replyRef;
+            if (outbound_ != nullptr && !message.text.empty()) {
+                outbound_->enqueueDirect(key, std::move(message));
+            }
+            notifyChanged();
+            return true;
+        }
         // clear (本期未实现: 只提示)
         XX_LOGW("[{}] 命令动作 '{}' 本期未实现", kLogTag, def->action);
         notifyChanged();
@@ -1391,6 +1412,34 @@ void ChatbotEngine::noteAssistantText(std::string_view chatKey, std::string_view
         return;
     }
     it->second.turn.lastAssistantText.assign(text);
+}
+
+bool ChatbotEngine::deliverTaskResult(std::string_view chatKey, std::string_view text) {
+    if (stopped_ || text.empty() || router_ == nullptr || !runtime_.sendInput) {
+        return false;
+    }
+    const int64_t channelId = router_->find(chatKey);
+    if (channelId <= 0) {
+        // 会话通道还没建 / 已被回收: 由调用方改用 outbound 直接发
+        return false;
+    }
+    Json input        = Json::object();
+    input["text"]     = std::string{text};
+    input["delivery"] = "next-turn";
+    const int32_t rc  = runtime_.sendInput(channelId, input.dump());
+    if (rc != 0) {
+        XX_LOGW(
+            "[{}] 后台任务结果投递被拒 (会话 '{}', 通道 {}, 错误码 {})",
+            kLogTag,
+            chatKey,
+            channelId,
+            rc
+        );
+        return false;
+    }
+    XX_LOGI("[{}] 后台任务结果已投回会话 '{}' (通道 {})", kLogTag, chatKey, channelId);
+    notifyChanged();
+    return true;
 }
 
 /* ==================== 侧边栏面板快照 ==================== */

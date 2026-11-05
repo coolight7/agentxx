@@ -351,6 +351,12 @@ public:
     /// - 与加载表里的 args 合并后交给插件的 `mount` 回调 (挂载级配置)
     utilxx_base::Json pluginMountArgs{};
 
+    /// 挂载时剔除的插件名 (运行时注入, 不是 yaml 配置项)
+    /// - 在 `All` 与 `Listed` 两种策略下都生效 (剔除后名单为空时退化成 `None`)
+    /// - 目前只有后台任务提交快照用它: 插件提交任务时要保证自己不会再被挂到任务
+    ///   的 agent 上 (例如 chatbot 的后台任务不该拿到 `chatbot_*` 工具)
+    std::vector<std::string> pluginMountExclude{};
+
     /// share store 桥接 (运行时注入, 非配置项):
     /// - 非空时, 本 agent 的 `agentxx_share_store` 工具读写该 MiddlewareContext
     ///   的 share store (而非本 agent 自己的), 保证 id 空间一致

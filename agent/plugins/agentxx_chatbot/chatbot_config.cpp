@@ -943,8 +943,8 @@ bool validateConfig(ChatbotConfig& config, int32_t maxRoots, ConfigError& err) {
             }
         }
         if (command.mode == CommandMode::Action && command.action != "cancel"
-            && command.action != "clear") {
-            setError(err, where + ".action", "只能是 cancel / clear");
+            && command.action != "clear" && command.action != "task") {
+            setError(err, where + ".action", "只能是 cancel / clear / task");
             return false;
         }
         if (command.mode == CommandMode::Local && command.reply.empty()) {

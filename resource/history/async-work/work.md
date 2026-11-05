@@ -10,14 +10,15 @@
 | P1 | 每队列 FIFO + 额度 + 台账/linger + 指标/快照/配置块 + 测试模块 | 已完成 |
 | P2 | 提交自包含 (显式清单) + 定向投递; 会话落盘 / HIL 三策略 / 创建者已销毁用例 | 部分 |
 | P3 | 单一事件名 + hub 值过滤 `match` + 工具改造 + 插件表 4 成员 | 已完成 |
-| P4 | 文档 + 界面; chatbot 接入 | 部分 (文档 + wire/TUI 已做, chatbot 待做) |
+| P4 | 文档 + 界面; chatbot 接入 | 已完成 (文档 + wire/TUI + chatbot 接入) |
 | P5 | provider/HTTP 连接池下沉到 `AgentHost` 供所有 AgentNode 共享 (§12-8 人工核对结论) | 待开始 |
 
 提交记录: `2dca9dc5` (P0) → `164029e0` (P1) → `6ea5a5aa` (P3) → `04ea4a57` (P2) →
 `0a40ed4b` (P4 文档) → Info 侧边栏「后台任务」段 + `WireContextStats.asyncWorks`
 ("async_work: Info 侧边栏「后台任务」段 + WireContextStats.asyncWorks") → HIL 三策略 +
 会话落盘 + 创建者已销毁用例 → `session_store_keep_days` 清理 (90f46e94) →
-插件表 runtime v2 四成员 (b1ea340d) → 根配置 `asyncWork` 段 (8f5a8971)。
+插件表 runtime v2 四成员 (b1ea340d) → 根配置 `asyncWork` 段 (8f5a8971) → P4 chatbot 接入
+(`chatbot_task` + 命令 + 面板段 + 宿主 `exclude`)。
 
 ## 已完成
 
@@ -128,6 +129,42 @@
   `test_info_sidebar_async_works` (4 种形态)、`wire_schema` 新鲜度。
 - 文档: `events.md` 第 8 节 / `tui.md` §2.7 / `AGENTS.md` 均已同步 (下面「文档」一段)。
 
+### P4 chatbot 接入 (已完成)
+
+- 宿主: `AgentConfig::pluginMountExclude` (运行时注入, 不是 yaml 配置项) +
+  `mountAllAsync` 在 `All` / `Listed` 两种策略下都跳过剔除名单;
+  提交快照 `plugins` 新增 `exclude` 数组 (`applyAsyncWorkOverrides`), SDK 注释同步。
+- `agent/plugins/agentxx_chatbot/chatbot_task.{h,cpp}` (新, 纯逻辑, 编进测试):
+  `ChatbotTaskManager` 管业务台账 —— 提交 (每会话上限 4 条、正文压缩成一行留档)、
+  事件状态机 (`queued`/`running`/`done`/`failed`/`canceled`、终态回查台账取结果摘要)、
+  取消 (单条 / 本会话全部 / 跨会话拒绝)、文本渲染 (`listText`/`statusText`/`resultNote`/
+  `finishedText`/`formatTaskElapsed`)、过期与条数回收。
+- `chatbot_tools`: 新增 `chatbot_task` 工具 (`submit`/`status`/`cancel`/`list`);
+  `ChatbotToolDeps` 多一个 `tasks`。
+- `chatbot_engine`: 新增 `deliverTaskResult` (把结果作为一条 `next-turn` 输入投回会话)
+  与 `Runtime::taskCommand` (`/agentxx-cmd task ...` 的实现入口)。
+- `chatbot_core`: 内置命令表加 `/agentxx-cmd task` (action = `task`); `validateConfig`
+  的 action 白名单同步。
+- 插件入口: `ChatbotCtx::tasks` + `makeTaskRuntime` (提交快照: 人设白名单 / 人设插件清单
+  去掉自己 + `exclude` / 排队键 `chatbot:<人设名>` / `interruptPolicy = allow` /
+  `sessionId` = 聊天会话 id)、`onChatbotAsyncWorkEvent` (容器 io 线程 → post 回插件 io
+  线程)、`handleTaskEvent` (记账 → 终态投递 → 刷面板)、`sendTaskResultDirectly`
+  (通道已回收时用 outbound 直发)。
+- 面板: `PanelSnapshot.tasks` (`PanelTaskView`: id/标题/状态/会话/排队位/耗时) +
+  「后台任务」段 (最多 6 条, 运行中带时长与加载帧); 空数组不写进 JSON (老客户端行为不变)。
+- 测试: 新模块 `chatbot_task` (138 断言, 纯逻辑); `chatbot_core` 内置命令表断言更新;
+  `plugin_example_chatbot` 新增 13b 段 (工具清单 7 个 + `chatbot_task` 提交/清单/详情/取消 +
+  两条命令回复, 全流程 236 断言全绿)。
+- 文档: 插件 `README.md` §2.4/§4.1、`docs/zh-cn/design/plugins.md` §19.2 (`exclude` 与
+  "结果怎么回到创建者")、`AGENTS.md`。
+- **与计划的偏差** (实现后确认): 没有用 `notify_delivery` 唤醒聊天会话 —— 插件提交的
+  任务挂在**内置根**的中枢上 (`runtimeSubmitAsyncWork` 用 `primaryAgent_` 的上下文),
+  而聊天会话属于**人设根**, 中枢投递会因 "session not found" 被丢掉。改成插件自己在
+  `on_event` 里投递 (会话在就 `next-turn` 输入, 不在就用 `outbound` 直发)。
+- **已知限制** (本期不做): 人设的 MCP / Skill / Memory / RAG 没有逐人设配置, 所以后台
+  任务拿不到这些 (子代理配置派生时会清空, 插件也没地方读); 中断策略固定 `allow`,
+  没做人设级配置项; 任务结果不进 TUI Info 段 (那里是主程序台账, 自然会包含)。
+
 ### P4 根配置 asyncWork 段 (已完成)
 
 - `plugin_manager_runtime_config.cpp`: 根 `config_json` 支持 `asyncWork` 段
@@ -153,14 +190,11 @@
 
 ## 待完成
 
-- **P4 剩余**:
-    - chatbot 插件接入: `chatbot_task.h/.cpp` (业务队列 + `submitAsyncWork` + `on_event` 回插)、
-      `chatbot_task` 工具 (`submit/status/cancel/list`)、`/agentxx-cmd task ...` 命令、
-      「机器人」栏任务段。配置形态 (`config_json` 的 `asyncWork` 段) **已实现**。
 - **`kind=tool`** (异步工具) 未实现: `AsyncWorkManager::submit` 对 `kind=tool` 明确返回
   `not supported yet`。
-- **`session_store_keep_days`**: 已实现 (提交带落盘的任务时清理过期任务会话目录);
-  用例在 `async_work` 模块（`test_session_store_claim`）。
+- **P5**: provider/HTTP 连接池下沉 `AgentHost` (所有 `AgentNode` 共享)。
+- 可选后续 (chatbot 侧): 人设级 MCP/Skill/Memory 与后台任务的中断策略配置项;
+  后台任务的会话落盘开关 (`asyncWork.sessionStore` 已支持, 插件目前传 `-1` 跟随配置)。
 
 ## 注意事项
 

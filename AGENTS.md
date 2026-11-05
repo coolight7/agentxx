@@ -602,7 +602,14 @@ path/to/agentxx_test --log-level warn string_util regex
   之后、Append 段之前) 经 `WireContextStats.asyncWorks` 追加字段下发 (最多 10 条, 为空不带,
   老客户端忽略), 只展示不给取消入口 (`info.asyncWorks` 一组文案键; 测试
   `tui_widget` 的 `test_info_sidebar_async_works`), 详见
-  [tui.md](docs/zh-cn/design/tui.md) §2.7。**未做**: `kind=tool` 异步工具、
+  [tui.md](docs/zh-cn/design/tui.md) §2.7。**插件接入示例** (`agentxx_chatbot`,
+  测试 `chatbot_task` / `plugin_example_chatbot`): 业务台账在 `chatbot_task.{h,cpp}` (纯逻辑,
+  编进测试), 模型工具 `chatbot_task` (`submit`/`status`/`cancel`/`list`) + 命令
+  `/agentxx-cmd task ...` + 侧边栏「机器人」栏的「后台任务」段; 提交快照里的人设插件清单
+  用 `plugins.exclude` 把自己排除 (后台任务没有聊天会话, `chatbot_*` 在那边定位不到对象);
+  **结果回调是插件投递而不是 `notify_delivery`** —— 插件提交的任务挂在内置根的中枢上
+  (`runtimeSubmitAsyncWork` 用 `primaryAgent_` 上下文), 而插件自己开的会话属于它的根,
+  中枢投递会因 "session not found" 丢掉。**未做**: `kind=tool` 异步工具、
   provider/HTTP 连接池下沉 `AgentHost`。
 - 会话运行时 (2026-10): `agentxx.agent.runtime` 表让插件挂自己的**根 agent**
   (`mount_root`: 只能放 `start`, `config_json` 给提示词/工具白名单, `mount_plugins` 给挂载策略,
@@ -706,7 +713,8 @@ path/to/agentxx_test --log-level warn string_util regex
     (自建 GraphRegistry 的主程序需自行调用 `registerAgentGraphConditions`)
   - 中断/异常不再需要"整份上下文快照 + 回灌": 会话不随图状态回滚, 节点抛出前已写入的消息保留
 - 测试模块: client 侧 19 个 (含 `banner_art` `update_check` `tui_form` `tui_surface` `tui_theme` `tui_ui_items` `tui_widget`),
-  同步组另有 `json` `json_view` `json_reflection` `interrupt_ui` `ui_items` `plugin_runtime` `plugin_sdk` `plugin_bridge`,
+  同步组另有 `json` `json_view` `json_reflection` `interrupt_ui` `ui_items` `plugin_runtime` `plugin_sdk` `plugin_bridge`
+  `chatbot_task`,
   插件挂载组另有 `plugin_host_mount` (一管理器 + 多 agent) `plugin_multi_mount` (示例插件全流程)
 - 命令执行环境与输出编码 (2026-10-18, 插件 `agentxx_execute_command`): 子进程固定下发
   `PYTHONIOENCODING=utf-8` / `PYTHONUTF8=1` / `JAVA_TOOL_OPTIONS` (stdout/stderr 编码 +

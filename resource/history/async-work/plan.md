@@ -992,6 +992,13 @@ K 个后台任务的 token 流与工具调度都在容器 io 线程上交错执�
 | 不阻塞 | 提交即返回; 任务跑在容器 io 线程, 不占插件 io 线程 |
 | 与 TUI Info 段的关系 | 两处数据源不同: TUI Info 段看全部任务 (核心推送), chatbot 面板看业务字段 (自己的队列) |
 
+**实施后的修正 (2026-11-05, 已完成)**: 结果通知的第 ① 不够 —— 插件提交的任务挂在
+**内置根**的中枢上 (`runtimeSubmitAsyncWork` 用 `primaryAgent_` 的上下文), 而聊天会话属于
+**人设根**, `notify_delivery` 投递会因 "session not found" 被丢掉。实际实现在 `on_event`
+里由插件自己投: 通道在就把结果写成一条 `next-turn` 输入, 不在就用 `outbound` 直发。
+另外提交快照的 `plugins` 必须支持 `exclude` (字符串数组) 才能做到"按人设清单挂、但去掉自己"
+—— `all` 模式下用 `list` 表达不了。
+
 ### 11.4 与现有 `ChatbotRouter` 的关系
 
 - `ChatbotRouter` 管"聊天会话的通道池 (一聊一条通道)";

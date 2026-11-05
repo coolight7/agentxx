@@ -12,6 +12,8 @@ namespace {
 /// 面板是窄栏: 名字太长会挤掉右侧的排队数, 这里先截一道
 constexpr size_t kTitleMaxCodePoints  = 24;
 constexpr size_t kPromptMaxCodePoints = 48;
+/// 后台任务一行的宽度 (含 id + 时长 + 名字)
+constexpr size_t kTaskMaxCodePoints = 40;
 
 /// 列表项前缀列宽 (`|- ` 三个字符 ≈ 24u, 终端 1 格 8u)
 constexpr double kBulletCols = 24.0;
@@ -137,6 +139,40 @@ std::vector<pluginxx::ui::Item> panelItemsOf(const PanelSnapshot& snapshot) {
         );
         row.cross = "center";
         items.push_back(std::move(row));
+    }
+
+    /* ---------- 后台任务 ---------- */
+
+    if (!snapshot.tasks.empty()) {
+        pushSectionGap();
+        items.push_back(build::title(sectionHeaderText("后台任务", snapshot.tasks.size())));
+        for (const auto& task : snapshot.tasks) {
+            const bool pending = task.state == "queued" || task.state == "running";
+            // 运行中借用会话那段同一个点阵 (每帧转一格), 终态给一个静态标记
+            std::string markerText = "✓";
+            if (pending) {
+                markerText = panelSpinnerFrame(snapshot.tick);
+            } else if (task.state == "failed" || task.state == "canceled") {
+                markerText = "×";
+            } else if (task.state == "queued") {
+                markerText = "·";
+            }
+            Item marker = build::text(markerText);
+            marker.tone = pending ? "accent" : (task.state == "done" ? "hint" : "warn");
+            marker.wrap = false;
+
+            Item row = build::row(
+                {
+                    build::sizedBox(kBulletCols, 0.0, listBullet()),
+                    build::sizedBox(kMarkerCols, 0.0, marker),
+                    build::expanded(hintText(panelTruncate(
+                        panelTaskText(task, pending), kTaskMaxCodePoints
+                    ))),
+                }
+            );
+            row.cross = "center";
+            items.push_back(std::move(row));
+        }
     }
 
     /* ---------- 人设信息 ---------- */

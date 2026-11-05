@@ -380,13 +380,14 @@ asio::awaitable<void> runBody(
     if (!rootCtx) {
         co_return;
     }
-    // 6 个业务工具 + 2 个调试工具都在人设根上
+    // 7 个业务工具 + 2 个调试工具都在人设根上
     for (const auto* name : {"chatbot_send_message",
                              "chatbot_history",
                              "chatbot_chat_info",
                              "chatbot_status",
                              "chatbot_set_mode",
                              "chatbot_recall_message",
+                             "chatbot_task",
                              "chatbot_debug_inject",
                              "chatbot_debug_outbox"}) {
         XX_TEST_EXPECT_TRUE(rootCtx->toolRegistry->contains(name));
@@ -460,7 +461,7 @@ asio::awaitable<void> runBody(
             }
             if (!busy) {
                 // 每次取**当前**人设根的上下文: 禁用→启用后人设根是新建的, 旧上下文
-                // 里的 chatbot_* 工具已摘除 (拿旧上下文取工具只会得到"工具不存在")
+                // 里的 chatbot_* 工具已摘除 (拿旧上下文取工具只会得到"工具不存在")
                 std::shared_ptr<agent::AgentContext> ctx;
                 if (auto root = rootOf(host, kOwner)) {
                     ctx = root->getContext();
@@ -1513,6 +1514,115 @@ asio::awaitable<void> runBody(
         );
         XX_TEST_EXPECT_TRUE(toolResult.find("静默标记") != std::string::npos);
     }
+
+    // ===================== 13b. 后台任务: 工具提交/查询/取消 + 命令入口 =====================
+    //
+    // 走真实链路: 工具 → 插件 SDK 的 submit_async_work → 主程序台账 → 任务事件
+    // → 插件 io 线程记账。这里只断言**业务层看得到的东西** (受理回执、清单、取消),
+    // 任务本身能不能跑完取决于有没有可用模型, 不在本用例的验收范围。
+    {
+        XX_TEST_EXPECT_TRUE(co_await drain());
+        auto root = rootOf(host, kOwner);
+        XX_TEST_EXPECT_TRUE(root != nullptr);
+        if (root) {
+            auto taskCtx = root->getContext();
+            XX_TEST_EXPECT_TRUE(taskCtx != nullptr);
+            if (taskCtx) {
+                auto hasTool = taskCtx->toolRegistry->contains("chatbot_task");
+                XX_TEST_EXPECT_TRUE(hasTool);
+
+                // 一开始没有任务
+                const auto emptyList = co_await callTool(
+                    taskCtx,
+                    "chatbot_task",
+                    R"({"op":"list","chat":"fake_main|group|G1"})"
+                );
+                XX_TEST_EXPECT_TRUE(emptyList.find("还没有后台任务") != std::string::npos);
+
+                // 提交: 回执里带任务 id
+                Json submitArgs   = Json::object();
+                submitArgs["op"]     = "submit";
+                submitArgs["chat"]   = "fake_main|group|G1";
+                submitArgs["prompt"] = "在后台把 1 到 3 求和, 只回结果";
+                submitArgs["title"]  = "求和";
+                const auto submitted
+                    = co_await callTool(taskCtx, "chatbot_task", submitArgs.dump());
+                XX_TEST_EXPECT_TRUE(submitted.find("已受理后台任务") != std::string::npos);
+
+                // 从回执里取出 `async-N`
+                std::string asyncId;
+                if (const auto pos = submitted.find("async-"); pos != std::string::npos) {
+                    auto end = pos;
+                    while (end < submitted.size()
+                           && ((submitted[end] >= '0' && submitted[end] <= '9')
+                               || submitted[end] == '-' || (submitted[end] >= 'a'
+                                                            && submitted[end] <= 'z'))) {
+                        ++end;
+                    }
+                    asyncId = submitted.substr(pos, end - pos);
+                }
+                XX_TEST_EXPECT_FALSE(asyncId.empty());
+
+                if (!asyncId.empty()) {
+                    // 清单与详情都能看到它
+                    const auto list = co_await callTool(
+                        taskCtx,
+                        "chatbot_task",
+                        R"({"op":"list","chat":"fake_main|group|G1"})"
+                    );
+                    XX_TEST_EXPECT_TRUE(list.find(asyncId) != std::string::npos);
+
+                    Json statusArgs = Json::object();
+                    statusArgs["op"]   = "status";
+                    statusArgs["chat"] = "fake_main|group|G1";
+                    statusArgs["id"]   = asyncId;
+                    const auto status
+                        = co_await callTool(taskCtx, "chatbot_task", statusArgs.dump());
+                    XX_TEST_EXPECT_TRUE(status.find(asyncId) != std::string::npos);
+
+                    // 取消: 任务可能已经被撤下或已经跑完, 两种回执都算正常
+                    Json cancelArgs = Json::object();
+                    cancelArgs["op"]   = "cancel";
+                    cancelArgs["chat"] = "fake_main|group|G1";
+                    cancelArgs["id"]   = asyncId;
+                    const auto canceled
+                        = co_await callTool(taskCtx, "chatbot_task", cancelArgs.dump());
+                    XX_TEST_EXPECT_TRUE(
+                        canceled.find("已取消") != std::string::npos
+                        || canceled.find("已经结束") != std::string::npos
+                    );
+                }
+
+                // 命令入口: `/agentxx-cmd task list` 直接回一条本地消息
+                // (不断言"不进模型": 上面那个后台任务可能正在跑模型, 计数会被它推高;
+                //  "命令不进模型" 已由第 6 段的 `/agentxx-cmd info` 验过)
+                XX_TEST_EXPECT_TRUE(co_await inject(
+                    "private",
+                    "U1",
+                    "/agentxx-cmd task list",
+                    false,
+                    "msg-task-cmd"
+                ));
+                XX_TEST_EXPECT_TRUE(co_await waitOutbox(ex, 30s, taskCtx, [](const Json& outbox) {
+                    const auto text = concatSentText(outbox);
+                    return text.find("后台任务") != std::string::npos;
+                }));
+                // 用法提示: 不带子命令时给 help 样式的说明
+                XX_TEST_EXPECT_TRUE(co_await inject(
+                    "private",
+                    "U1",
+                    "/agentxx-cmd task",
+                    false,
+                    "msg-task-usage"
+                ));
+                XX_TEST_EXPECT_TRUE(co_await waitOutbox(ex, 30s, taskCtx, [](const Json& outbox) {
+                    return concatSentText(outbox).find("task submit") != std::string::npos;
+                }));
+            }
+        }
+        XX_TEST_EXPECT_TRUE(co_await drain());
+    }
+
 
     // ===================== 13. 禁用 → 启用: 工具与人设根恢复 =====================
     //

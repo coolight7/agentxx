@@ -265,6 +265,8 @@ asio::awaitable<std::shared_ptr<PluginMount>>
                                          : agentxx::agent::PluginMountPolicy::All;
     const auto& listed = ctx->agentConfig ? ctx->agentConfig->pluginMountList
                                           : std::vector<std::string>{};
+    const auto& excluded = ctx->agentConfig ? ctx->agentConfig->pluginMountExclude
+                                            : std::vector<std::string>{};
     for (const auto& [name, inst] : this->plugins_) {
         (void)name;
         if (!inst) {
@@ -275,6 +277,11 @@ asio::awaitable<std::shared_ptr<PluginMount>>
         }
         if (policy == agentxx::agent::PluginMountPolicy::Listed
             && std::find(listed.begin(), listed.end(), inst->name) == listed.end()) {
+            continue;
+        }
+        // 剔除名单两种策略都生效 (后台任务提交时用它把自己排除在外)
+        if (std::find(excluded.begin(), excluded.end(), inst->name) != excluded.end()) {
+            XX_LOGD("agent '{}' 跳过插件 '{}' (在剔除名单里)", mount->agentId(), inst->name);
             continue;
         }
         co_await mount->mountOneAsync(inst);

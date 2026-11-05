@@ -1,6 +1,7 @@
 #include "chatbot_panel.h"
 
 #include "chatbot_core.h"
+#include "chatbot_task.h"
 
 #include "utilxx_base/json.h"
 
@@ -121,6 +122,30 @@ PanelAccountView accountFromJson(const Json& item) {
     return account;
 }
 
+Json taskToJson(const PanelTaskView& task) {
+    Json item = Json::object();
+    item["id"]       = task.asyncId;
+    item["title"]    = task.title;
+    item["state"]    = task.state;
+    item["chatKey"]  = task.chatKey;
+    if (task.queueAhead > 0) {
+        item["queueAhead"] = task.queueAhead;
+    }
+    item["elapsedMs"] = task.elapsedMs;
+    return item;
+}
+
+PanelTaskView taskFromJson(const Json& item) {
+    PanelTaskView task;
+    task.asyncId    = textOf(item, "id");
+    task.title      = textOf(item, "title");
+    task.state      = textOf(item, "state");
+    task.chatKey    = textOf(item, "chatKey");
+    task.queueAhead = static_cast<int32_t>(int64Of(item, "queueAhead"));
+    task.elapsedMs  = int64Of(item, "elapsedMs");
+    return task;
+}
+
 } // namespace
 
 std::string panelSnapshotJson(const PanelSnapshot& snapshot) {
@@ -146,6 +171,15 @@ std::string panelSnapshotJson(const PanelSnapshot& snapshot) {
         sessions.push_back(sessionToJson(session));
     }
     out["sessions"] = std::move(sessions);
+
+    // 空数组不写: 老客户端不认识这个字段时行为不变, 正常部署也少一段 JSON
+    if (!snapshot.tasks.empty()) {
+        Json tasks = Json::array();
+        for (const auto& task : snapshot.tasks) {
+            tasks.push_back(taskToJson(task));
+        }
+        out["tasks"] = std::move(tasks);
+    }
 
     Json stats = Json::object();
     stats["received"] = static_cast<int64_t>(snapshot.received);
@@ -197,6 +231,13 @@ bool parsePanelSnapshot(std::string_view json, PanelSnapshot& out) {
         for (const auto& item : root["sessions"]) {
             if (item.is_object()) {
                 snapshot.sessions.push_back(sessionFromJson(item));
+            }
+        }
+    }
+    if (root.contains("tasks") && root["tasks"].is_array()) {
+        for (const auto& item : root["tasks"]) {
+            if (item.is_object()) {
+                snapshot.tasks.push_back(taskFromJson(item));
             }
         }
     }
@@ -267,6 +308,41 @@ std::string panelPersonaDetail(const PanelPersonaView& persona) {
 
 std::string panelSessionQueueText(const PanelSessionView& session) {
     return std::to_string(session.queued);
+}
+
+std::string panelTaskStateLabel(std::string_view state) {
+    if (state == "queued") {
+        return "排队";
+    }
+    if (state == "running") {
+        return "运行";
+    }
+    if (state == "done") {
+        return "完成";
+    }
+    if (state == "failed") {
+        return "失败";
+    }
+    if (state == "canceled") {
+        return "取消";
+    }
+    return std::string{state};
+}
+
+std::string panelTaskText(const PanelTaskView& task, bool running) {
+    std::string out = task.asyncId;
+    if (running) {
+        out += " " + formatTaskElapsed(task.elapsedMs);
+        if (task.state == "queued" && task.queueAhead > 0) {
+            out += " 排队第 " + std::to_string(task.queueAhead) + " 位";
+        }
+    } else {
+        out += " " + panelTaskStateLabel(task.state);
+    }
+    if (!task.title.empty()) {
+        out += " " + task.title;
+    }
+    return out;
 }
 
 std::string panelAccountItemText(const PanelAccountView& account) {
