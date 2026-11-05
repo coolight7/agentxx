@@ -3234,6 +3234,20 @@ void TUIClientAgentIO::onContextStats(const agentxx::agent::WireContextStats& st
         if (!stats.sessionTitle.empty()) {
             st.sessionTitle = stats.sessionTitle;
         }
+        // 本会话创建的后台任务 (Info 侧边栏「后台任务」段): 每次推送都是当前快照,
+        // 直接覆盖 —— 任务结束时服务端会再推一次 (完成态保留 linger 时长供查看)
+        st.asyncWorks.clear();
+        st.asyncWorks.reserve(stats.asyncWorks.size());
+        for (const auto& work : stats.asyncWorks) {
+            st.asyncWorks.push_back(TUIAsyncWorkItem{
+                .id         = work.id,
+                .kind       = work.kind,
+                .name       = work.name,
+                .state      = work.state,
+                .elapsedMs  = work.elapsedMs,
+                .queueAhead = work.queueAhead,
+            });
+        }
     }
     postRedraw();
 }

@@ -268,6 +268,9 @@ async work，`kind` 区分 `agent`（启动一个 agent，已实现）与 `tool`
 - 子代理上下文**继承父事件中枢**（嵌套沿用最外层），所以子代理 emit 的事件父会话能等；
 - 台账（entry）是纯内存记录：运行中一直在，结束后保留 `async_work.linger_ms`
   （默认 5 分钟）供查询，到期自动清除。
+- **界面可见**：TUI Info 侧边栏的「后台任务」段经 `WireContextStats.asyncWorks`
+  （追加字段，最多 10 条，为空不带）展示本会话创建的运行/排队/最近完成项；
+  只展示不给取消入口（取消走 `agentxx_event opt=cancel`），详见 [tui.md](tui.md) §2.7。
 
 自动压缩这类内部委派没有 `tool_call_id`，一律同步等结果（不受开关影响）。
 

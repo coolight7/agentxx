@@ -10,10 +10,12 @@
 | P1 | 每队列 FIFO + 额度 + 台账/linger + 指标/快照/配置块 + 测试模块 | 已完成 |
 | P2 | 提交自包含 (显式清单) + 定向投递; 会话落盘 / HIL 三策略 / 创建者已销毁用例 | 部分 |
 | P3 | 单一事件名 + hub 值过滤 `match` + 工具改造; 插件表 4 成员 | 部分 |
-| P4 | 文档 (events / index / AGENTS / plugins / configuration / roadmap); wire + TUI + chatbot | 部分 |
+| P4 | 文档 + 界面; chatbot 接入 | 部分 (文档 + wire/TUI 已做, chatbot 待做) |
 | P5 | provider/HTTP 连接池下沉到 `AgentHost` 供所有 AgentNode 共享 (§12-8 人工核对结论) | 待开始 |
 
-提交记录: `2dca9dc5` (P0) → `164029e0` (P1) → `6ea5a5aa` (P3) → `04ea4a57` (P2) → 文档 (本次)。
+提交记录: `2dca9dc5` (P0) → `164029e0` (P1) → `6ea5a5aa` (P3) → `04ea4a57` (P2) →
+`0a40ed4b` (P4 文档) → Info 侧边栏「后台任务」段 + `WireContextStats.asyncWorks`
+("async_work: Info 侧边栏「后台任务」段 + WireContextStats.asyncWorks")。
 
 ## 已完成
 
@@ -84,6 +86,22 @@
 - 测试: `event_tools` 的 opt 枚举断言 7 → 8; 新增定向等待用例 (无关值不消耗等待、
   无容器时 `works` 报 `[threw]` + 提示 "agent host")。
 
+### P4 界面与文档 (已完成部分)
+
+- 线消息: `WireContextStats` 追加 `asyncWorks` (新结构 `WireAsyncWorkItem`:
+  `{id, kind, name, state, elapsedMs, queueAhead}`); `makeContextStats` 空数组不发,
+  `contextStatsFromJson` 按默认空数组兼容老服务端; 生成物 `wire-schema.json` /
+  `wire-protocol-fields.md` 重新生成 (`AGENTXX_UPDATE_WIRE_SCHEMA=1`)。
+- 服务端: `SessionServerAgentIO::sendContextStats` 向 `AgentHost` 取本会话创建的
+  运行/排队/最近完成项 (最多 10 条 `kAsyncWorksInStats`), 已跑时长由时间戳当场算出。
+- 客户端: `TUIRenderState.asyncWorks` + `onContextStats` 覆盖式同步; Info 侧边栏新增
+  「后台任务」段 (Context 之后、Append 之前): 头部 `运行 N / 排队 M`, 逐条
+  `标记 id 名字 时长|排队位`; 文案键 `info.asyncWorks` / `info.asyncWorksEmpty` /
+  `info.asyncWorkSummary` / `info.asyncWorkAhead`。
+- 测试: `wire_roundtrip` (字段往返 + 空数组兼容)、`tui_widget` 新增
+  `test_info_sidebar_async_works` (4 种形态)、`wire_schema` 新鲜度。
+- 文档: `events.md` 第 8 节 / `tui.md` §2.7 / `AGENTS.md` 均已同步 (下面「文档」一段)。
+
 ### P4 文档 (已完成部分)
 
 - `docs/zh-cn/design/events.md`: 第 8 节整节改写为「后台任务 (async work)」(委派即提交、
@@ -103,8 +121,7 @@
 
 ## 待完成
 
-- **P2 剩余**:
-    - `session_store` 落盘: 目录 `{创建者会话目录}/agent/{asyncId}`
+- **P2 剩余**:    - `session_store` 落盘: 目录 `{创建者会话目录}/agent/{asyncId}`
       (`async_work.session_store` / `session_store_keep_days` 已解析但未生效);
     - HIL 三策略应答器: `AsyncInterruptPolicy` (`bubble` / `deny` / `allow`) 还没接到
       权限询问与人工中断链路上, 目前后台任务遇到询问仍按普通子代理冒泡;
@@ -113,8 +130,6 @@
   (`submit_async_work` / `cancel_async_work` / `get_async_work` / `list_async_work`) +
   `plugin_kit.h` 便捷函数 + 归属回收 + `boundaries` 成员台账与 `plugin_runtime` 版本断言。
 - **P4 剩余**:
-    - `WireContextStats.asyncWorks` (字段 + 生成物 `wire-schema.json` /
-      `wire-protocol-fields.md` 重生成) 与 TUI Info 面板「后台任务」段;
     - chatbot 插件接入 (后台任务完成时主动播报)。
 - **P5**: provider/HTTP 连接池下沉到 `AgentHost` (所有 `AgentNode` 共享一份), 未开始。
 - **`kind=tool`** (异步工具) 未实现: `AsyncWorkManager::submit` 对 `kind=tool` 明确返回

@@ -903,6 +903,108 @@ void test_info_sidebar_session_title() {
     TUISettings::instance().setLanguage(savedLang);
 }
 
+/// Info 侧边栏「后台任务」段:
+/// - 没任务 (或老服务端不带该字段) 时显示"( none )"
+/// - 收到 WireContextStats.asyncWorks 后逐条显示 id/名字/状态标记与时长,
+///   头部给出 "running N / queued M", 且排在 Context 之后、Append 之前
+/// - 后续推送 (流式 tps、任务结束后的下一次统计) 直接覆盖为最新快照
+void test_info_sidebar_async_works() {
+    const auto savedLang = TUISettings::instance().language();
+    TUISettings::instance().setLanguage(TuiLanguage::EnUs);
+
+    asio::io_context io;
+    auto             tui = std::make_shared<TUIClientAgentIO>(io.get_executor(), "session");
+    tui->refreshRenderContext();
+
+    // 1) 尚未收到任何任务: 段落存在, 内容为 "( none )"
+    {
+        const auto text = renderScrollItems(tui->renderInfoSidebar(), 60, 16);
+        XX_TEST_EXPECT_TRUE(text.find("Async Work") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(text.find("( none )") != std::string::npos);
+    }
+
+    // 2) 一条运行中 + 一条排队: 头部计数、逐条 id/名字/时长/排队位
+    {
+        agentxx::agent::WireContextStats stats;
+        stats.contextTokens      = 1000;
+        stats.maxContextTokens   = 8000;
+        stats.promptTokens       = 5000;
+        stats.totalTokens        = 6000;
+        stats.completionTokens   = 1000;
+        stats.cachedPromptTokens = 4000;
+        stats.asyncWorks.push_back(agentxx::agent::WireAsyncWorkItem{
+            .id        = "async-7",
+            .kind      = "agent",
+            .name      = "research",
+            .state     = "running",
+            .elapsedMs = 42000,
+        });
+        stats.asyncWorks.push_back(agentxx::agent::WireAsyncWorkItem{
+            .id         = "async-9",
+            .kind       = "agent",
+            .name       = "translate",
+            .state      = "queued",
+            .queueAhead = 2,
+        });
+        tui->onPeerMessage(agentxx::agent::WireMessage{stats});
+        tui->refreshRenderContext();
+
+        const auto text = renderScrollItems(tui->renderInfoSidebar(), 60, 20);
+        XX_TEST_EXPECT_TRUE(text.find("Async Work") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(text.find("running 1 / queued 1") != std::string::npos);
+        // 运行中的条目: id + 名字 + 00:42
+        XX_TEST_EXPECT_TRUE(text.find("async-7") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(text.find("research") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(text.find("00:42") != std::string::npos);
+        // 排队中的条目: 不显示时长, 显示前面还有几个
+        XX_TEST_EXPECT_TRUE(text.find("async-9") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(text.find("translate") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(text.find("(2 ahead)") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(text.find("( none )") == std::string::npos);
+        // 段落位置: Context 之后, Append 之前
+        const auto posContext = text.find("Context");
+        const auto posWorks   = text.find("Async Work");
+        XX_TEST_EXPECT_TRUE(posContext != std::string::npos);
+        XX_TEST_EXPECT_TRUE(posWorks != std::string::npos);
+        XX_TEST_EXPECT_TRUE(posContext < posWorks);
+    }
+
+    // 3) 任务结束后的推送 (只带完成态): 覆盖为最新快照, 不再有 running 条目
+    {
+        agentxx::agent::WireContextStats stats;
+        stats.contextTokens = 1000;
+        stats.asyncWorks.push_back(agentxx::agent::WireAsyncWorkItem{
+            .id        = "async-7",
+            .kind      = "agent",
+            .name      = "research",
+            .state     = "failed",
+            .elapsedMs = 65000,
+        });
+        tui->onPeerMessage(agentxx::agent::WireMessage{stats});
+        tui->refreshRenderContext();
+
+        const auto text = renderScrollItems(tui->renderInfoSidebar(), 60, 20);
+        XX_TEST_EXPECT_TRUE(text.find("running 0 / queued 0") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(text.find("async-7") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(text.find("01:05") != std::string::npos);
+        // 排队那条已不在快照里 (界面直接覆盖, 不做本地堆积)
+        XX_TEST_EXPECT_TRUE(text.find("async-9") == std::string::npos);
+    }
+
+    // 4) 空数组 (老服务端/没有任务): 回到 "( none )"
+    {
+        agentxx::agent::WireContextStats stats;
+        stats.contextTokens = 1000;
+        tui->onPeerMessage(agentxx::agent::WireMessage{stats});
+        tui->refreshRenderContext();
+        const auto text = renderScrollItems(tui->renderInfoSidebar(), 60, 16);
+        XX_TEST_EXPECT_TRUE(text.find("( none )") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(text.find("async-7") == std::string::npos);
+    }
+
+    TUISettings::instance().setLanguage(savedLang);
+}
+
 /// 记录收到的鼠标事件、固定返回指定"是否处理"的模态组件 (测试模态层的事件契约)
 class ProbeModal : public ftxui::ComponentBase {
 public:
@@ -1050,6 +1152,7 @@ TestResult testTuiWidget() {
     test_info_access_point_extended_components();
     test_info_sidebar_context_section();
     test_info_sidebar_session_title();
+    test_info_sidebar_async_works();
     test_modal_container_mouse_contract();
     test_modal_overlay_text_selectable();
 

@@ -334,11 +334,11 @@ struct UiActionItem {
 - 相关 schema 与约束见 [plugins.md](plugins.md) §9.1~§9.6 与
   [ui_components.h](/agent/client/include/agentxx-client/io/tui/ui_components.h)。
 
-### 2.7 Info 面板: 会话标题段与 Context 段 (已消耗 token 用量)
+### 2.7 Info 面板: 会话标题段 / Context 段 / 后台任务段
 
 Info tab 内容区 (`renderInfoSidebar()`, 见
 [tui_sidebar_content.cpp](/agent/client/src/io/tui/tui_sidebar_content.cpp)) 自上而下是:
-**会话标题段** → 插件 Info 段落 → Context 段 → Append 段。
+**会话标题段** → 插件 Info 段落 → Context 段 → 后台任务段 → Append 段。
 
 会话标题段显示当前会话的名称:
 
@@ -404,6 +404,34 @@ Context
 - 回归测试: `agentxx_test tui_widget` 的 `test_info_sidebar_context_section`
   (无数据形态 / 各项数字与命中率 / Context 段在 Append 之上 / 输入为 0 时不显示命中率);
   跨进程恢复与统计规则见 `agentxx_test usage_ledger`。
+
+#### 后台任务段
+
+显示本会话创建的后台任务 (`async work`, 见 [events.md](events.md) 第 8 节):
+
+```
+后台任务
+|- 运行 1 / 排队 1
+|- > async-7 research 00:42
+|- . async-9 translate (前面 2 个)
+```
+
+- 数据通道 `WireContextStats.asyncWorks` (追加字段, 不改消息类型; 老服务端不带时为空数组,
+  界面显示 `( 无 )`): 最多 10 条, 服务端 `SessionServerAgentIO::sendContextStats` 向
+  `AgentHost` 取"本会话创建的"运行/排队/最近完成项;
+- 条目字段 `{id, kind, name, state, elapsedMs, queueAhead}`: `state` 为
+  `queued` / `running` / `finished` / `failed` / `canceled`; 标记分别为 `.` / `>` /
+  `ok` / `x` / `-` (ASCII, 侧边栏窄时不会被截成半个字符), 失败的条目用错误色;
+- 时长按 `mm:ss` (超过一小时 `h:mm:ss`) 显示, 排队中改为显示前面还有几个;
+- **只展示, 不提供取消入口**: 取消走模型工具 `agentxx_event {opt:"cancel", id}`
+  (或 chatbot 自己的面板), 界面不做动作按钮, 避免两个入口两套状态;
+- 每次推送都是当前快照, 客户端**直接覆盖**本地列表; 任务结束后服务端按
+  `async_work.linger_ms` (默认 5 分钟) 继续带出完成态, 到期后自动从列表消失;
+- 文案键: `info.asyncWorks` / `info.asyncWorksEmpty` / `info.asyncWorkSummary` /
+  `info.asyncWorkAhead`;
+- 回归测试: `agentxx_test tui_widget` 的 `test_info_sidebar_async_works`
+  (无任务 / 运行+排队 / 不用时长而用排队位 / 完成态覆盖 / 清空回到 `( 无 )`),
+  线消息往返见 `agentxx_test wire_roundtrip`。
 
 ### 2.8 Info 侧边栏底部 (工作目录 / 授权按钮 / 版本信息)
 

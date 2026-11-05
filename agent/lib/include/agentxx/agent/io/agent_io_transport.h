@@ -307,6 +307,23 @@ struct WireTurnResult {
     bool        interrupted = false;
 };
 
+/// 信息侧边栏「后台任务」段的一条 (`WireContextStats.asyncWorks` 下发)
+/// - 只用于界面展示: 客户不据此做任何判断, 不参与取消/重试等动作
+struct WireAsyncWorkItem {
+    /// 任务 id (`asyncId`; 也是任务 agent 的 sessionId)
+    std::string id;
+    /// 种类文本 (`agent` / `tool`)
+    std::string kind;
+    /// 任务名 (子代理模板名)
+    std::string name;
+    /// 状态文本 (`queued` / `running` / `finished` / `failed` / `canceled`)
+    std::string state;
+    /// 已运行时长 (毫秒); 排队中为 0
+    int64_t elapsedMs = 0;
+    /// 同队列里在它前面的条数 (仅排队时有意义, 0 = 下一个就跑)
+    int32_t queueAhead = 0;
+};
+
 struct WireContextStats {
     uint64_t contextTokens    = 0;
     uint64_t maxContextTokens = 0;
@@ -331,6 +348,11 @@ struct WireContextStats {
     /// 当前会话标题 (空 = 未命名/老对端未提供)
     /// - 界面 (TUI 信息侧边栏) 据此显示当前会话标题; 内容与改名/自动标题同步
     std::string sessionTitle;
+
+    // ---- 本会话创建的后台任务 (追加在末尾; 老对端不认识时按空数组处理) ----
+    // 运行 / 排队 / 最近完成项 (最多 10 条), 只给信息侧边栏「后台任务」段展示,
+    // 不参与任何判定; 服务端没有任务时不带该字段, 界面保持"( 无 )"
+    std::vector<WireAsyncWorkItem> asyncWorks;
 };
 
 /// Wire 层错误码 (`WireError::code`)

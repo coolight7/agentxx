@@ -278,6 +278,74 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
         elements.push_back(text(""));
     }
 
+    // 后台任务段: 本会话创建的后台任务 (运行/排队/最近完成)
+    // - 数据来自服务端推送的 WireContextStats.asyncWorks (见 onContextStats)
+    // - 只展示状态与已跑时长, 不提供取消入口 (取消走模型工具 `agentxx_event`)
+    // - 空数组时显示"( 无 )": 老服务端不带该字段, 或本会话确实没有任务
+    {
+        Elements workEls;
+        workEls.push_back(text(tr("info.asyncWorks")) | color(theme_.accentColor));
+        if (st.asyncWorks.empty()) {
+            workEls.push_back(
+                hbox({text("|- "), text(tr("info.asyncWorksEmpty"))}) | color(theme_.hintColor)
+            );
+        } else {
+            size_t running = 0;
+            size_t queued  = 0;
+            for (const auto& work : st.asyncWorks) {
+                if (work.state == "running") {
+                    ++running;
+                } else if (work.state == "queued") {
+                    ++queued;
+                }
+            }
+            workEls.push_back(
+                hbox({text("|- "), text(trf("info.asyncWorkSummary", running, queued))})
+                | color(theme_.normalColor)
+            );
+            // 已跑时长按 mm:ss 显示 (超过一小时按 h:mm:ss)
+            auto elapsedText = [](int64_t ms) -> std::string {
+                const int64_t total = std::max<int64_t>(0, ms) / 1000;
+                const int64_t hours = total / 3600;
+                const int64_t mins  = (total % 3600) / 60;
+                const int64_t secs  = total % 60;
+                if (hours > 0) {
+                    return fmt::format("{}:{:02d}:{:02d}", hours, mins, secs);
+                }
+                return fmt::format("{:02d}:{:02d}", mins, secs);
+            };
+            for (const auto& work : st.asyncWorks) {
+                // 状态标记用 ASCII, 避免侧边栏窄时多字节字符被截成半个
+                std::string mark;
+                Color       rowColor = theme_.normalColor;
+                if (work.state == "running") {
+                    mark = ">";
+                } else if (work.state == "queued") {
+                    mark     = ".";
+                    rowColor = theme_.hintColor;
+                } else if (work.state == "failed") {
+                    mark     = "x";
+                    rowColor = theme_.errorColor;
+                } else if (work.state == "canceled") {
+                    mark     = "-";
+                    rowColor = theme_.hintColor;
+                } else {
+                    mark     = "ok";
+                    rowColor = theme_.hintColor;
+                }
+                std::string line = fmt::format("|- {} {} {}", mark, work.id, work.name);
+                if (work.state == "queued" && work.queueAhead > 0) {
+                    line += " " + std::string(trf("info.asyncWorkAhead", work.queueAhead));
+                } else if (work.elapsedMs > 0) {
+                    line += " " + elapsedText(work.elapsedMs);
+                }
+                workEls.push_back(text(std::move(line)) | color(rowColor));
+            }
+        }
+        elements.push_back(vbox(std::move(workEls)));
+        elements.push_back(text(""));
+    }
+
     // 已加载组件 (Plugin/Memory/Skill/MCP) 展示:
     // - CodeGraph 索引状态与系统资源占用由对应插件经 register_info_section
     //   注入本 Info 栏 (见下方 "插件扩展 Info 段落"), TUI 不再单独渲染

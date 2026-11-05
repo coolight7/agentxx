@@ -773,6 +773,22 @@ inline utilxx_base::Json makeContextStats(const WireContextStats& msg) {
     if (!msg.sessionTitle.empty()) {
         j["sessionTitle"] = msg.sessionTitle;
     }
+    // 本会话创建的后台任务 (信息侧边栏「后台任务」段): 空数组不发, 对端显示"( 无 )"
+    if (!msg.asyncWorks.empty()) {
+        auto arr = utilxx_base::Json::array();
+        for (const auto& work : msg.asyncWorks) {
+            utilxx_base::Json item = {
+                {"id",         work.id        },
+                {"kind",       work.kind      },
+                {"name",       work.name      },
+                {"state",      work.state     },
+                {"elapsedMs",  work.elapsedMs },
+                {"queueAhead", work.queueAhead},
+            };
+            arr.push_back(std::move(item));
+        }
+        j["asyncWorks"] = std::move(arr);
+    }
     return j;
 }
 

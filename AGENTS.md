@@ -571,7 +571,11 @@ path/to/agentxx_test --log-level warn string_util regex
   配置 `async_work.*`: `enable`/`max_concurrent`/`interrupt_policy`(bubble|deny|allow)/
   `session_store`/`session_store_keep_days`/`linger_ms`/`result_max_bytes`。
   诊断: `KeyMetrics` 与加载快照的 `async_work` 段; 测试 `async_work` /
-  `event_subagent` / `event_tools`。**未做**: `kind=tool` 异步工具、`interrupt_policy`
+  `event_subagent` / `event_tools`。**界面**: TUI Info 侧边栏「后台任务」段 (排在 Context 段
+  之后、Append 段之前) 经 `WireContextStats.asyncWorks` 追加字段下发 (最多 10 条, 为空不带,
+  老客户端忽略), 只展示不给取消入口 (`info.asyncWorks` 一组文案键; 测试
+  `tui_widget` 的 `test_info_sidebar_async_works`), 详见
+  [tui.md](docs/zh-cn/design/tui.md) §2.7。**未做**: `kind=tool` 异步工具、`interrupt_policy`
   应答器、任务会话落盘 (`{创建者会话目录}/agent/{asyncId}`)、`agentxx.agent.runtime`
   表尾 4 成员 (submit/cancel/get/list_async_work)、TUI Info「后台任务」段、
   provider/HTTP 连接池下沉 `AgentHost`。

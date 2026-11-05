@@ -366,6 +366,11 @@ constexpr Entry kTable[] = {
     {"info.outputTokens",               "Output: {}",                                                                    "输出: {}"                                                                                               },
     {"info.cacheHitRate",               "Cache hit: {:.1f}%",                                                            "缓存命中率: {:.1f}%"                                                                                 },
     {"info.contextEmpty",               "( no data )",                                                                   "( 无数据 )"                                                                                            },
+    // 后台任务段 (Info 侧边栏; 数据来自 WireContextStats.asyncWorks)
+    {"info.asyncWorks",                 "Async Work",                                                                    "后台任务"                                                                                            },
+    {"info.asyncWorksEmpty",            "( none )",                                                                      "( 无 )"                                                                                                },
+    {"info.asyncWorkSummary",           "running {} / queued {}",                                                        "运行 {} / 排队 {}"                                                                                    },
+    {"info.asyncWorkAhead",             "({} ahead)",                                                                    "(前面 {} 个)"                                                                                        },
     {"info.append",                     "Append",                                                                        "已加载"                                                                                                },
     {"info.appendFailed",               "Failed: {}",                                                                    "失败: {}"                                                                                               },
     {"info.viewFailed",                 "[ View ]",                                                                      "[ 查看 ]"                                                                                               },

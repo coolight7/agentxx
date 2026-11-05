@@ -345,7 +345,8 @@
         "promptTokens": "integer",
         "completionTokens": "integer",
         "totalTokens": "integer",
-        "cachedPromptTokens": "integer"
+        "cachedPromptTokens": "integer",
+        "asyncWorks": "array<object{id:string, kind:string, name:string, state:string, elapsedMs:integer, queueAhead:integer}>"
       },
       "sample": {
         "type": "context_stats",
@@ -355,7 +356,25 @@
         "promptTokens": 9000,
         "completionTokens": 1200,
         "totalTokens": 10200,
-        "cachedPromptTokens": 7200
+        "cachedPromptTokens": 7200,
+        "asyncWorks": [
+          {
+            "id": "async-7",
+            "kind": "agent",
+            "name": "research",
+            "state": "running",
+            "elapsedMs": 42000,
+            "queueAhead": 0
+          },
+          {
+            "id": "async-9",
+            "kind": "agent",
+            "name": "translate",
+            "state": "queued",
+            "elapsedMs": 0,
+            "queueAhead": 2
+          }
+        ]
       }
     },
     {

@@ -2,6 +2,7 @@
 #include "agentxx/event/naming.h"
 
 #include "agentxx/agent/base_agent.h"
+#include "agentxx/agent/agent_host.h"
 #include "agentxx/agent/config_writer.h"
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/io/context_stats_wire.h"
@@ -42,6 +43,56 @@ static constexpr size_t kIncrementalReplayMaxMessages = 512;
 /// - 超过上限说明对端在切换尚未完成时持续发消息: 不再暂存, 照常分发让它拿到
 ///   明确的拒绝结果, 好过无上限堆积
 static constexpr size_t kMaxStashedWhileSwitching = 64;
+
+/// 信息侧边栏「后台任务」段最多下发的条数
+/// - 侧边栏只有几行可见高度, 发多了反而看不到标的 (完整台账由 `agentxx_event
+///   {opt:"works"}` 与插件接口给出)
+static constexpr size_t kAsyncWorksInStats = 10;
+
+/// 后台任务台账 JSON → 界面条目
+///
+/// 台账条目 (`AsyncWorkManager::listJson`) 是给模型/插件看的完整记录, 界面只需要
+/// 少量字段: 状态、名字、已跑时长与排队位。已跑时长由时间戳当场算出 (运行中 = 现在 -
+/// 开始, 已结束 = 结束 - 开始), 台账里不存"时长"避免每次写回。
+///
+/// - `args`:
+///     - [works] `AgentHost::asyncWorksJson` 返回的数组
+///     - [limit] 最多取几条 (界面限制 10 条, 避免侧边栏被挤满)
+///
+/// - `return` 可直接放进 `WireContextStats::asyncWorks` 的条目
+static std::vector<WireAsyncWorkItem>
+    asyncWorkItemsOf(const utilxx_base::Json& works, size_t limit) {
+    std::vector<WireAsyncWorkItem> out;
+    if (!works.is_array()) {
+        return out;
+    }
+    const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                           std::chrono::system_clock::now().time_since_epoch()
+    )
+                           .count();
+    for (const auto& item : works) {
+        if (out.size() >= limit) {
+            break;
+        }
+        WireAsyncWorkItem work;
+        work.id    = item.value("asyncId", std::string{});
+        work.kind  = item.value("kind", std::string{});
+        work.name  = item.value("name", std::string{});
+        work.state = item.value("state", std::string{});
+        if (work.id.empty()) {
+            continue;
+        }
+        const auto startedAtMs  = item.value("startedAtMs", int64_t{0});
+        const auto finishedAtMs = item.value("finishedAtMs", int64_t{0});
+        if (startedAtMs > 0) {
+            const auto endMs = finishedAtMs > startedAtMs ? finishedAtMs : nowMs;
+            work.elapsedMs   = std::max<int64_t>(0, endMs - startedAtMs);
+        }
+        work.queueAhead = static_cast<int32_t>(item.value("queueAhead", int64_t{0}));
+        out.push_back(std::move(work));
+    }
+    return out;
+}
 
 /// 会话标题规范化: 去首尾空白、换行/制表符折叠为空格、限长
 /// - 标题是会话列表里的单行文本, 不是正文: 多行内容会被截断为一行
@@ -2719,6 +2770,16 @@ void SessionServerAgentIO::sendContextStats(const std::shared_ptr<AgentIOTranspo
     }
     // 上下文占用 + 会话累计用量 (界面显示已消耗/输入/输出/缓存 token) 统一组装
     WireContextStats stats = io::toWireContextStats(*sess->contextStats);
+    // 后台任务 (信息侧边栏「后台任务」段): 本会话创建的运行/排队/最近完成项;
+    // 无容器 (单机库调用/未挂载) 或没有任务时不带该字段, 界面显示"( 无 )"
+    if (auto agent = agent_.lock(); agent && agent->agentContext) {
+        if (auto host = agent->agentContext->host.lock()) {
+            stats.asyncWorks = asyncWorkItemsOf(
+                host->asyncWorksJson({}, config_.sessionId, true, kAsyncWorksInStats),
+                kAsyncWorksInStats
+            );
+        }
+    }
     if (target) {
         sendToClient(target, stats);
     } else {

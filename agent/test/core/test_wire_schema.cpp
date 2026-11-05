@@ -314,7 +314,7 @@ std::vector<WireSample> wireSamples() {
     }
     // 13) 上下文统计
     {
-        WireContextStats m;
+        agentxx::agent::WireContextStats m;
         m.contextTokens      = 123456;
         m.maxContextTokens   = 200000;
         m.tps                = 12.5;
@@ -322,6 +322,22 @@ std::vector<WireSample> wireSamples() {
         m.completionTokens   = 1200;
         m.totalTokens        = 10200;
         m.cachedPromptTokens = 7200;
+        // 后台任务 (界面 Info 侧边栏「后台任务」段): 带一条运行中 + 一条排队,
+        // 让 schema 里能看到 elapsedMs / queueAhead 两个可缺省字段
+        m.asyncWorks.push_back(agentxx::agent::WireAsyncWorkItem{
+            .id        = "async-7",
+            .kind      = "agent",
+            .name      = "research",
+            .state     = "running",
+            .elapsedMs = 42000,
+        });
+        m.asyncWorks.push_back(agentxx::agent::WireAsyncWorkItem{
+            .id         = "async-9",
+            .kind       = "agent",
+            .name       = "translate",
+            .state      = "queued",
+            .queueAhead = 2,
+        });
         out.push_back({"context_stats", WireMessage{std::move(m)}});
     }
     // 14) 错误对象

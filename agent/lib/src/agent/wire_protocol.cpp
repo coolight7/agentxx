@@ -382,6 +382,22 @@ WireContextStats contextStatsFromJson(const utilxx_base::Json& j) {
     stats.cachedPromptTokens = j.value("cachedPromptTokens", uint64_t{0});
     // 会话标题: 老服务端不带该字段时为空串 (界面保留/不显示标题)
     stats.sessionTitle = j.value("sessionTitle", std::string{});
+    // 后台任务 (老服务端不带该字段时为空数组, 界面显示"( 无 )")
+    if (const auto it = j.find("asyncWorks"); it != j.end() && it->is_array()) {
+        for (const auto& item : *it) {
+            WireAsyncWorkItem work;
+            work.id         = item.value("id", std::string{});
+            work.kind       = item.value("kind", std::string{});
+            work.name       = item.value("name", std::string{});
+            work.state      = item.value("state", std::string{});
+            work.elapsedMs  = item.value("elapsedMs", int64_t{0});
+            work.queueAhead = static_cast<int32_t>(item.value("queueAhead", int64_t{0}));
+            if (work.id.empty()) {
+                continue;
+            }
+            stats.asyncWorks.push_back(std::move(work));
+        }
+    }
     return stats;
 }
 

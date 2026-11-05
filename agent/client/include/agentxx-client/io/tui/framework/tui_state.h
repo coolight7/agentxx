@@ -61,6 +61,24 @@ struct TUIPendingInput {
     bool                                         expanded    = false;
 };
 
+/// 信息侧边栏「后台任务」段的一条 (`WireContextStats.asyncWorks` 下发)
+/// - 只给界面展示: 显示状态与已跑时长, 不提供取消/重试入口
+///   (取消走模型工具 `agentxx_event {opt:"cancel", id}`)
+struct TUIAsyncWorkItem {
+    /// 任务 id (`asyncId`)
+    std::string id;
+    /// 种类文本 (`agent` / `tool`)
+    std::string kind;
+    /// 任务名 (子代理模板名)
+    std::string name;
+    /// 状态文本 (`queued` / `running` / `finished` / `failed` / `canceled`)
+    std::string state;
+    /// 已运行时长 (毫秒); 排队中为 0
+    int64_t elapsedMs = 0;
+    /// 同队列里在它前面的条数 (仅排队时有意义)
+    int32_t queueAhead = 0;
+};
+
 /// agent-io 连接状态 (消息列表 banner 显示 + 输入发送限制)
 /// - Connecting: 服务尚未就绪 (本地模式 init 中 / 远程模式连接握手前),
 ///   禁止发送消息, banner 显示"启动中"
@@ -193,6 +211,11 @@ struct TUIRenderState {
     uint64_t                             sessionTotalTokens        = 0;
     uint64_t                             sessionCachedPromptTokens = 0;
     bool                                 sessionUsageKnown         = false;
+
+    /// 本会话创建的后台任务 (WireContextStats.asyncWorks 下发; 空 = 无任务)
+    /// - 信息侧边栏在 Context 段之后、Append 段之前显示「后台任务」段
+    /// - 服务端没有任务时不下发该字段, 这里保持空数组 (界面显示"( 无 )")
+    std::vector<TUIAsyncWorkItem> asyncWorks;
     std::optional<TUIMessage::ThinkData> pendingTokenThink;
 
     /// 流式末尾 Think 折叠态的用户点击覆盖 (tri-state; UI 线程写, client 线程读):

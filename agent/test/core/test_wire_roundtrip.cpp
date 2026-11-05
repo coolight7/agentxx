@@ -224,6 +224,21 @@ TestResult testWireRoundtrip() {
         st.completionTokens   = 300;
         st.totalTokens        = 1800;
         st.cachedPromptTokens = 1200;
+        // 后台任务 (信息侧边栏「后台任务」段): 运行中 + 排队各一条
+        st.asyncWorks.push_back(WireAsyncWorkItem{
+            .id        = "async-7",
+            .kind      = "agent",
+            .name      = "research",
+            .state     = "running",
+            .elapsedMs = 42000,
+        });
+        st.asyncWorks.push_back(WireAsyncWorkItem{
+            .id         = "async-9",
+            .kind       = "agent",
+            .name       = "translate",
+            .state      = "queued",
+            .queueAhead = 2,
+        });
         auto back             = roundTrip(st);
         XX_TEST_EXPECT_EQ(back.contextTokens, uint64_t{123456});
         XX_TEST_EXPECT_EQ(back.maxContextTokens, uint64_t{200000});
@@ -233,6 +248,21 @@ TestResult testWireRoundtrip() {
         XX_TEST_EXPECT_EQ(back.completionTokens, uint64_t{300});
         XX_TEST_EXPECT_EQ(back.totalTokens, uint64_t{1800});
         XX_TEST_EXPECT_EQ(back.cachedPromptTokens, uint64_t{1200});
+        // 后台任务: 字段逐一往返 (老对端不带该字段时为空数组, 见解码默认值)
+        XX_TEST_EXPECT_EQ(back.asyncWorks.size(), size_t{2});
+        if (back.asyncWorks.size() == 2) {
+            XX_TEST_EXPECT_EQ(back.asyncWorks[0].id, std::string{"async-7"});
+            XX_TEST_EXPECT_EQ(back.asyncWorks[0].state, std::string{"running"});
+            XX_TEST_EXPECT_EQ(back.asyncWorks[0].name, std::string{"research"});
+            XX_TEST_EXPECT_EQ(back.asyncWorks[0].elapsedMs, 42000);
+            XX_TEST_EXPECT_EQ(back.asyncWorks[1].id, std::string{"async-9"});
+            XX_TEST_EXPECT_EQ(back.asyncWorks[1].state, std::string{"queued"});
+            XX_TEST_EXPECT_EQ(back.asyncWorks[1].queueAhead, 2);
+        }
+        // 没有任务时不发该字段, 解出来是空数组 (老服务端的形态)
+        WireContextStats empty;
+        empty.contextTokens = 10;
+        XX_TEST_EXPECT_TRUE(roundTrip(empty).asyncWorks.empty());
     }
 
     // ---------------- 错误对象 (文本与机器码分开) ----------------
