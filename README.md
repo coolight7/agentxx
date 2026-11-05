@@ -216,8 +216,6 @@
     - Mcp Server
         - ⬜CodeGraph
         - ⬜Websearch
-- ⬜**A2UI支持**
-    - 统一 client 插件使用 A2UI 数据结构
 - ⬜**Self-upgrade**
     - 自动循环调整系统提示词、工具提示词等，评估效果
     - 自动测试

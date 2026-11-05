@@ -8,7 +8,7 @@
 - 主动记忆 插件tool
 - 添加连续多次压缩检查
 - 框架处理支持 toolcall 参数采用变量取值，比如 edit、write 失败时可以将参数存入 share_store，减少下一次 edit 所需的token
-- 移除InterruptUi，统一使用 plugin::ui
+- 移除InterruptUi，统一使用 plugin::ui，中断提示消息显示优化，支持展开详情
 - 调整 PluginChannelAgentIO 头文件位置
 - 应当const &:
   - PluginGraphNode 构造函数参数 `AgentxxPluginGraphNodeTypeSpec  spec`
@@ -25,6 +25,9 @@
 - 通过 mdns 互相发现，以便了解各自正在运行的会话内容
 - share_store 支持 grep、输出到文件等
 - viewMessages 支持分页存储
+- 上下文较长警告消息，提示模型及时更新文档或plan，即将压缩
+- 事件在 modelcall 插入时同步添加 viewMessage
+- command-code-deepseek-flash 偶现 content 跟末尾思考内容交错
 
 - SVG绘制支持
 
