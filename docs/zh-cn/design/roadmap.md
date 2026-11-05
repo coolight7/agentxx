@@ -270,7 +270,8 @@
   （权限在提交时按目标工具问一次, 只跑工具注册表里的工具）、`AsyncWorkManager` 新增
   `runToolWork`（参数补 `sessionId`/`tool_call_id`, 50 ms 轮询取消）、插件
   `AgentxxPluginAsyncWorkSpec` 尾部追加 `tool_name`/`tool_args_json`（基线停在
-  `offsetof`, 旧插件按 `ERR_ARG` 降级）；`execute_command` 的 `background:true` 仍不做。
+  `offsetof`, 旧插件按 `ERR_ARG` 降级）；`execute_command` 的 `background:true` **不做**
+  （2026-11-06 定：`agentxx_async_start` 已能代替，流式输出以后在 `agentxx_async_*` 上扩）。
 - 2026-11-06 (工具族收敛): 模型侧后台任务收敛成 `agentxx_async_start` / `_query` / `_await` /
   `_cancel`，`agentxx_event` 只留 `emit`/`end`（`watch` 与定时器参数删除）；
   `agentxx_async_start` 的 `notify` 默认 `true`（结果经 `next-step` 主动插回会话）；

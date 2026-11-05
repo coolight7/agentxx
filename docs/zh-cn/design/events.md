@@ -416,8 +416,9 @@ value: [Async task] id=async-7 ... result: ...
   `register_timer` 仍然自带一份合并、忙时丢弃与输入拼装，与中枢的投递规则并存；
   原计划把它们改成"spec → `EventWaitSpec`"的参数转换，本轮没做（C ABI 与插件写法不变，
   纯内部收敛，需要单独一轮改动 + 回归）；
-- **后台命令**（`agentxx_execute_command` 的 `background:true`）未实现：命令长时间运行时
-  仍占一轮（可以用 `agentxx_async_start` 把那次命令调用丢到后台，但拿不到流式输出）；
+- **后台命令**（`agentxx_execute_command` 的 `background:true`）**不做**（2026-11-06 决定）：
+  用 `agentxx_async_start {tool:"agentxx_execute_bash_command", args:{command, timeout:0}}`
+  把那次命令调用丢到后台就够了；流式输出以后在 `agentxx_async_*` 上扩，不在命令工具里做；
 - **后台任务的人工介入只在任务上**：`kind=agent` 的 `InterruptPolicy`
   （`bubble` / `deny` / `allow`）接入会话总线应答器；`kind=tool` 没有自己的会话，
   中断不回弹，权限只在**提交时**按目标工具判定一次；

@@ -575,8 +575,7 @@ path/to/agentxx_test --log-level warn string_util regex
   `agentxx.agent.event` 已实现 (2026-11-03): `define_event`/`emit_value`/`end_event`/
   `remove_event`/`query_event`/`list_events`/`register_wait`/`cancel_wait`/`list_waits`,
   事件与等待按 `plugin:<实例名>` 记账 (禁用/卸载整批回收, 注册清单 `eventRecords`/`eventWaits`),
-  示例插件 `example_event`; **未做**: 触发器/定时器收敛到中枢、`execute_command` 的
-  `background:true`。
+  示例插件 `example_event`; **未做**: 触发器/定时器收敛到中枢。
 - 后台任务 (async work, 2026-11, 详见 [events.md](docs/zh-cn/design/events.md) 第 8 节):
   `agentxx::agent::AsyncWorkManager` (`agent/lib/{include/agentxx/agent/async_work.h,src/agent/async_work.cpp}`,
   由 `AgentHost` 持有并通过 `friend` 访问其私有接口) = 台账 (`AsyncWorkEntry`: kind/state/
@@ -624,8 +623,9 @@ path/to/agentxx_test --log-level warn string_util regex
   中枢投递会因 "session not found" 丢掉。**模型注册表已下沉到 `AgentHost`** (2026-11-05):
   所有根/子代理/后台任务共用一份 `ModelProviderRegistry` (同名模型 `getProvider` 返回
   同一个实例, 运行时 `AddModel`/`RemoveModel` 对所有人立即生效); HTTP keep-alive 连接池
-  本来就是 `utilxx::HttpClient` 的进程级单例。**未做**: `execute_command` 的
-  `background:true` (可用 `agentxx_async_start` 把那次命令调用丢到后台代替)。- 会话运行时 (2026-10): `agentxx.agent.runtime` 表让插件挂自己的**根 agent**
+  本来就是 `utilxx::HttpClient` 的进程级单例。**不做**: `execute_command` 的
+  `background:true` (2026-11-06 定：`agentxx_async_start` 已能代替，流式输出以后在
+  `agentxx_async_*` 上扩)。- 会话运行时 (2026-10): `agentxx.agent.runtime` 表让插件挂自己的**根 agent**
   (`mount_root`: 只能放 `start`, `config_json` 给提示词/工具白名单, `mount_plugins` 给挂载策略,
   默认 `include_creator=false` 切断递归) 并在上面开**会话通道** (`open_channel` 一个
   `sessionId` 一条; 事件 `READY`/`TURN_*/DELTA_*`/`INTERRUPT`/`CLOSED`; 输入/取消/换模型/
