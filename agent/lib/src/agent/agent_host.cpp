@@ -236,6 +236,11 @@ std::shared_ptr<AgentHost> AgentHost::create(Config cfg) {
     if (auto primary = host->cfg_.primaryAgent.lock(); primary != nullptr) {
         primary->host       = self;
         primary->threadPool = host->threadPool_;
+        // 模型注册表同样提前给: 插件 `start` 里挂的根也可能要查模型
+        if (!host->modelRegistry_) {
+            host->modelRegistry_ = std::make_shared<agentxx::agent::ModelProviderRegistry>();
+        }
+        primary->modelRegistry = host->modelRegistry_;
     }
 
     // agent.spawn (RR): 任意调用方经 agent 节点容器总线派生独立子代理
@@ -363,6 +368,10 @@ size_t AgentHost::runningSubagents() const {
 
 size_t AgentHost::runningAsyncWork() const {
     return asyncWork_ ? asyncWork_->runningCount() : 0;
+}
+
+std::shared_ptr<agentxx::agent::ModelProviderRegistry> AgentHost::modelRegistry() const {
+    return modelRegistry_;
 }
 
 size_t AgentHost::queuedAsyncWork(std::string_view queueKey) const {
@@ -517,6 +526,21 @@ void AgentHost::injectShared(std::shared_ptr<agentxx::agent::AgentContext> ctx) 
     // host 引用 (供节点/工具经 AgentContext 知道 agent 节点容器)
     ctx->threadPool = threadPool_;
     ctx->host       = weak_from_this();
+    // 模型注册表: 进程一份 (provider 实例与模型清单共用, 所有 AgentNode 共享)。
+    // 表还是空的, 由各个 agent 的 `initModelRegistry` 依次填 (只补表里没有的)。
+    if (!modelRegistry_) {
+        modelRegistry_ = std::make_shared<agentxx::agent::ModelProviderRegistry>();
+    }
+    // 调用方自己建了 agent 并先 `init()` 再挂进来时, 那份是它自建的:
+    // 把里面的模型并进共享表再换指针 (否则先 init 时认识的模型会白丢)
+    if (ctx->modelRegistry && ctx->modelRegistry != modelRegistry_) {
+        for (const auto& name : ctx->modelRegistry->listModelNames()) {
+            if (!modelRegistry_->hasModel(name)) {
+                modelRegistry_->registerModel(name, ctx->modelRegistry->getModelConfig(name));
+            }
+        }
+    }
+    ctx->modelRegistry = modelRegistry_;
     // 插件管理器: 一律用容器这一份 (进程唯一)。
     // 不注入的话 BaseAgent::init 会自建一份管理器 (ownsPluginHost_=true),
     // 那就又跑了一份插件实例 —— 插件的根也因此会跟着建第二份管理器。
@@ -666,6 +690,12 @@ std::shared_ptr<BaseAgent> AgentHost::createAgent(std::shared_ptr<AgentConfig> c
             agent->agentContext->bus
                 = std::make_shared<agentxx::events::EventBus>(ioCtx_->get_executor());
         }
+    }
+    // 共享基础设施在这里就注好: 调用方通常先 `init()` 再 `mountRoot()`, 等挂载时才注入
+    // 的话 `init` 会先自建一份 (模型注册表就是这样——晚注入等于白建一份 provider 缓存)。
+    // 挂载时的 `injectShared` 因此只是一次幂等的补调。
+    if (agent->agentContext) {
+        injectShared(agent->agentContext);
     }
     return agent;
 }
@@ -1103,6 +1133,12 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
     /// 注入共享基础设施与 agent 节点容器引用
     subCtx->threadPool = threadPool_;
     subCtx->host       = weak_from_this();
+    // 模型注册表: 与所有 AgentNode 共一份 (provider 与连接池复用, 模型清单一致)
+    // - 子代理原本每个都新建 registry: 同一模型会有 N 份 provider 实例
+    if (!modelRegistry_) {
+        modelRegistry_ = std::make_shared<agentxx::agent::ModelProviderRegistry>();
+    }
+    subCtx->modelRegistry = modelRegistry_;
     // 插件管理器: 子代理按自己的挂载策略走 (默认 None = 不挂载任何插件)
     if (pluginHost_ && !subCtx->pluginManager
         && subCtx->agentConfig->pluginMountPolicy != PluginMountPolicy::None) {

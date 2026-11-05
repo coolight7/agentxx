@@ -2346,9 +2346,16 @@ BaseAgent (基类)
   │     │     ├── deltaSeq (普通 uint64_t, 仅 io 线程递增)
   │     │     └── io / bus (会话级)
   │     ├── sessions->sessionStore (SessionStore, SQLite 持久化; 可空)
-  │     ├── ModelProviderRegistry
+  │     ├── ModelProviderRegistry (容器共享: 所有 AgentNode 一份, 见下)
   │     └── EventBus
   └── AgentConfig → ModelConfig / AgentPrompt
+
+AgentHost 进程级共享设施 (由容器注入给每个 AgentNode)
+  ├── io_context (根与容器同一条线程)
+  ├── thread_pool (插件阻塞工具 / 异步 offload)
+  ├── ModelProviderRegistry (模型清单 + provider 实例缓存;
+  │    同名模型的所有 agent 共用一个 provider / HTTP keep-alive 连接池)
+  └── PluginManager (插件实例进程一份, 每个 agent 一份挂载)
 
 CodeAgent (继承 BaseAgent)
   ├── 工具: lib 内仅 share_store/subagent/git_worktree (+延迟加载加载); 文件系统/命令/网络/

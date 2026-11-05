@@ -11,7 +11,7 @@
 | P2 | 提交自包含 (显式清单) + 定向投递; 会话落盘 / HIL 三策略 / 创建者已销毁用例 | 部分 |
 | P3 | 单一事件名 + hub 值过滤 `match` + 工具改造 + 插件表 4 成员 | 已完成 |
 | P4 | 文档 + 界面; chatbot 接入 | 已完成 (文档 + wire/TUI + chatbot 接入) |
-| P5 | provider/HTTP 连接池下沉到 `AgentHost` 供所有 AgentNode 共享 (§12-8 人工核对结论) | 待开始 |
+| P5 | 模型注册表下沉 `AgentHost` (所有 AgentNode 共享 provider) | 已完成 |
 
 提交记录: `2dca9dc5` (P0) → `164029e0` (P1) → `6ea5a5aa` (P3) → `04ea4a57` (P2) →
 `0a40ed4b` (P4 文档) → Info 侧边栏「后台任务」段 + `WireContextStats.asyncWorks`
@@ -188,11 +188,35 @@
   `opt=works`、`asyncId` = sessionId、无全局/深度上限、未做项清单), 事件中枢段与
   "相关文档"表述同步。
 
-## 待完成
+### P5 模型注册表下沉 AgentHost (已完成)
 
+勘察结论 (先纠正一个前提): **HTTP keep-alive 连接池本来就是进程级单例**
+(`utilxx::HttpClient` 的连接池是静态的), 所以连接数并没有因为 agent 多而乘倍。
+真正重复的是**每个 agent 一份 `ModelProviderRegistry`**:
+
+- `BaseAgent::initModelRegistry` 每次都新建一份 registry + provider 缓存; 子代理/插件根/后台
+  任务每个都来一遍 —— 同一模型 N 份 provider 实例 (每份一个 `ModelConfig` 拷贝);
+- 运行时 `AddModel` / `RemoveModel` 只改**内置根**那一份: 先挂好的人设根看不到新模型。
+
+实现:
+
+- `AgentHost` 新增 `modelRegistry_` + 公开 `modelRegistry()`; 三处注入共享:
+  `create()` 提前给主 agent、`createAgent()` 创建后立即给 (调用方往往先 `init` 后 `mountRoot`,
+  晚注入等于白建一份缓存)、`injectShared()` 与子代理派生处;
+- `BaseAgent::initModelRegistry` 改为"已经在就复用, 只补表里没有的模型": 同名不覆盖
+  (否则每来一个 agent 都会清掉共享表里缓存的 provider), 默认模型只在"建表那一次"按
+  `currentModelName` 定, 后来者不抢;
+- 晚注入兜底: `injectShared` 发现 agent 已经自建过 registry 时, 先把它认识的模型并进
+  共享表 (不覆盖) 再换指针;
+- 测试: `agent_host` 新增 `test_host_shared_model_registry` (173 断言): 同一份指针、
+  两个 agent 拿到的 `getProvider("a")` 是同一个实例、默认模型由先 init 的定、
+  运行时增删模型两边同时可见、无容器的独立 `BaseAgent` 仍自建一份。
+
+偏差: 计划里写的是"provider/HTTP 连接池下沉", 实际只做了模型注册表 (连接池已共享)。
+
+## 待完成
 - **`kind=tool`** (异步工具) 未实现: `AsyncWorkManager::submit` 对 `kind=tool` 明确返回
   `not supported yet`。
-- **P5**: provider/HTTP 连接池下沉 `AgentHost` (所有 `AgentNode` 共享)。
 - 可选后续 (chatbot 侧): 人设级 MCP/Skill/Memory 与后台任务的中断策略配置项;
   后台任务的会话落盘开关 (`asyncWork.sessionStore` 已支持, 插件目前传 `-1` 跟随配置)。
 

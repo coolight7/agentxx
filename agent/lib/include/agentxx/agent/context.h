@@ -776,7 +776,10 @@ public:
     std::shared_ptr<agentxx::events::EventHub> eventHub = nullptr;
 
     /// 模型 Provider 注册表 (共享)
-    /// - 由 BaseAgent 在 init() 中创建并注入
+    /// - 容器 (`AgentHost`) 注入的是**进程唯一那一份**: 所有根/子代理/后台任务共用
+    ///   provider 实例 (HTTP 连接池本来就是进程级单例) 与同一份模型清单 —— 运行时
+    ///   `AddModel` / `RemoveModel` 对所有人立即生效
+    /// - 独立 `BaseAgent` (无容器) 在 `init()` 里自建一份, 行为与旧版一致
     /// - 含可用模型与默认模型; 各会话的当前选择记录在 Session 中
     std::shared_ptr<ModelProviderRegistry> modelRegistry = nullptr;
 

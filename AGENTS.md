@@ -609,9 +609,10 @@ path/to/agentxx_test --log-level warn string_util regex
   用 `plugins.exclude` 把自己排除 (后台任务没有聊天会话, `chatbot_*` 在那边定位不到对象);
   **结果回调是插件投递而不是 `notify_delivery`** —— 插件提交的任务挂在内置根的中枢上
   (`runtimeSubmitAsyncWork` 用 `primaryAgent_` 上下文), 而插件自己开的会话属于它的根,
-  中枢投递会因 "session not found" 丢掉。**未做**: `kind=tool` 异步工具、
-  provider/HTTP 连接池下沉 `AgentHost`。
-- 会话运行时 (2026-10): `agentxx.agent.runtime` 表让插件挂自己的**根 agent**
+  中枢投递会因 "session not found" 丢掉。**模型注册表已下沉到 `AgentHost`** (2026-11-05):
+  所有根/子代理/后台任务共用一份 `ModelProviderRegistry` (同名模型 `getProvider` 返回
+  同一个实例, 运行时 `AddModel`/`RemoveModel` 对所有人立即生效); HTTP keep-alive 连接池
+  本来就是 `utilxx::HttpClient` 的进程级单例。**未做**: `kind=tool` 异步工具。- 会话运行时 (2026-10): `agentxx.agent.runtime` 表让插件挂自己的**根 agent**
   (`mount_root`: 只能放 `start`, `config_json` 给提示词/工具白名单, `mount_plugins` 给挂载策略,
   默认 `include_creator=false` 切断递归) 并在上面开**会话通道** (`open_channel` 一个
   `sessionId` 一条; 事件 `READY`/`TURN_*/DELTA_*`/`INTERRUPT`/`CLOSED`; 输入/取消/换模型/

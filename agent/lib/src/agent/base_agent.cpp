@@ -953,23 +953,37 @@ void BaseAgent::notifyInitProgress(std::string_view step) {
 }
 
 void BaseAgent::initModelRegistry() {
-    auto config   = agentContext->agentConfig;
-    auto registry = std::make_shared<agentxx::agent::ModelProviderRegistry>();
+    auto config = agentContext->agentConfig;
+    // 容器注入的就是进程共享那一份 (所有 AgentNode 共用 provider 实例与模型清单);
+    // 没注入 (独立 BaseAgent / 测试嵌入 / FFI 单 agent) 时自己建一份, 行为与以前一致
+    auto registry = agentContext->modelRegistry
+                        ? agentContext->modelRegistry
+                        : std::make_shared<agentxx::agent::ModelProviderRegistry>();
+    // 只补表里还没有的: 同名不覆盖 —— 否则每个新 agent 一 init 就会清掉
+    // 共享表里已缓存的 provider (registerModel 会清注入/缓存的实例)
+    const bool wasEmpty = registry->size() == 0;
     for (const auto& [name, mc] : config->availableModels) {
-        registry->registerModel(name, mc);
-    }
-    if (config->availableModels.empty()) {
-        registry->registerModel(config->model.modelName, config->model);
-        registry->setDefaultModel(config->model.modelName);
-    } else if (!config->currentModelName.empty()) {
-        if (registry->hasModel(config->currentModelName)) {
-            registry->setDefaultModel(config->currentModelName);
-        } else {
-            // 指定了不存在的模型
-            XX_LOGE("指定使用的模型不存在: `{}`", config->currentModelName);
+        if (!registry->hasModel(name)) {
+            registry->registerModel(name, mc);
         }
     }
-    // currentModelName 为空时默认模型为 registerModel 首个注册的模型
+    if (config->availableModels.empty() && !registry->hasModel(config->model.modelName)) {
+        registry->registerModel(config->model.modelName, config->model);
+    }
+    // 默认模型: 只有把表建起来的那一个 agent 说了算 (`registerModel` 首个注册项
+    // 会自动成为默认, 所以得在填完之后按配置的 `currentModelName` 纠正)
+    if (wasEmpty) {
+        if (!config->currentModelName.empty() && registry->hasModel(config->currentModelName)) {
+            registry->setDefaultModel(config->currentModelName);
+        } else if (!config->model.modelName.empty()
+                   && registry->hasModel(config->model.modelName)) {
+            registry->setDefaultModel(config->model.modelName);
+        }
+    } else if (!config->currentModelName.empty()
+               && !registry->hasModel(config->currentModelName)) {
+        // 指定了不存在的模型: 共享表里也没有
+        XX_LOGE("指定使用的模型不存在: `{}`", config->currentModelName);
+    }
     agentContext->modelRegistry = std::move(registry);
 }
 

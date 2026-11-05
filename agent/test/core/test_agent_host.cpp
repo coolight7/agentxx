@@ -1175,6 +1175,158 @@ asio::awaitable<void> test_host_session_claim() {
     co_return;
 }
 
+/// 验证: 模型注册表是容器级共享 (所有 AgentNode 一份)
+///
+/// - 首个 agent `init` 把自己的 `availableModels` 填进共享表; 默认模型由它定
+/// - 后挂的根只补自己认识、表里没有的模型, 不抢默认模型、不重建 provider
+/// - 同一个模型名在两个 agent 上拿到**同一个** provider 实例 (连接池与缓存真正共用)
+/// - 运行时增删模型对所有人立即可见
+asio::awaitable<void> test_host_shared_model_registry() {
+    auto io = std::make_shared<asio::io_context>();
+
+    agentxx::agent::ModelConfig first;
+    first.baseUrl   = "http://127.0.0.1:1";
+    first.apiKey    = "EMPTY";
+    first.modelName = "model-a";
+
+    agentxx::agent::ModelConfig second = first;
+    second.modelName                   = "model-b";
+
+    auto primaryCfg                 = std::make_shared<agentxx::agent::AgentConfig>();
+    primaryCfg->model               = first;
+    primaryCfg->agentName           = "shared-primary";
+    primaryCfg->availableModels     = { { "a", first }, { "b", second } };
+    primaryCfg->currentModelName    = "b";
+    primaryCfg->permissionMode      = agentxx::agent::PermissionMode::Pass;
+    primaryCfg->enableSessionStore  = false;
+
+    auto primary = std::make_shared<agentxx::agent::CodeAgent>(primaryCfg);
+
+    // 后挂的根: 自己多认识一个模型 c, 并想把它当默认 (共享表已定默认时不抢)
+    agentxx::agent::ModelConfig third = first;
+    third.modelName                   = "model-c";
+    auto rootCfg                = std::make_shared<agentxx::agent::AgentConfig>();
+    rootCfg->model              = third;
+    rootCfg->agentName          = "shared-root";
+    rootCfg->availableModels    = { { "a", first }, { "c", third } };
+    rootCfg->currentModelName   = "c";
+    rootCfg->permissionMode     = agentxx::agent::PermissionMode::Pass;
+    rootCfg->enableSessionStore = false;
+    auto other                  = std::make_shared<agentxx::agent::CodeAgent>(rootCfg);
+
+    auto host = agentxx::agent::AgentHost::create(
+        {.ioCtx = io,
+         .primaryAgent
+         = std::weak_ptr<agentxx::agent::AgentContext>(primary->getContext())}
+    );
+    XX_TEST_EXPECT_TRUE(host != nullptr);
+    if (!host) {
+        co_return;
+    }
+
+    // init 会用到容器那条 io (真实 `co_await`): 必须在它的 io 线程上跑
+    std::string        otherId;
+    std::atomic<bool>  finished{false};
+    asio::co_spawn(
+        *io,
+        [&]() -> asio::awaitable<void> {
+            try {
+                co_await primary->init();
+                auto primaryCtx = primary->getContext();
+                XX_TEST_EXPECT_TRUE(primaryCtx != nullptr);
+                XX_TEST_EXPECT_TRUE(primaryCtx->modelRegistry != nullptr);
+                // 容器那一份就是 agent 那一份
+                XX_TEST_EXPECT_TRUE(primaryCtx->modelRegistry == host->modelRegistry());
+                if (primaryCtx->modelRegistry) {
+                    XX_TEST_EXPECT_EQ(primaryCtx->modelRegistry->size(), size_t{2});
+                    XX_TEST_EXPECT_EQ(
+                        primaryCtx->modelRegistry->getDefaultModelName(),
+                        std::string{"b"}
+                    );
+                }
+
+                // ---- 后挂的根: 自己多认识一个模型 + 一份共享 provider ----
+                co_await other->init();
+                otherId = host->mountRoot(other, {.owner = "shared-test"});
+            } catch (const std::exception& e) {
+                XX_TEST_EXPECT_TRUE(false && "shared model registry: init threw");
+                TEST_FAIL << "shared model registry: " << e.what() << std::endl;
+            }
+            finished = true;
+            co_return;
+        }(),
+        asio::detached
+    );
+    pumpIoUntil(io, finished);
+
+    auto primaryCtx = primary->getContext();
+    XX_TEST_EXPECT_FALSE(otherId.empty());
+    auto otherCtx = other->getContext();
+    XX_TEST_EXPECT_TRUE(otherCtx != nullptr);
+    XX_TEST_EXPECT_TRUE(primaryCtx != nullptr);
+    if (primaryCtx == nullptr || otherCtx == nullptr) {
+        co_return;
+    }
+    {
+        // 同一份注册表: 三张模型都在, 默认仍是先 init 的那个 agent 定的 `b`
+        XX_TEST_EXPECT_TRUE(otherCtx->modelRegistry == host->modelRegistry());
+        XX_TEST_EXPECT_TRUE(otherCtx->modelRegistry == primaryCtx->modelRegistry);
+        const auto& registry = otherCtx->modelRegistry;
+        XX_TEST_EXPECT_TRUE(registry->hasModel("a"));
+        XX_TEST_EXPECT_TRUE(registry->hasModel("b"));
+        XX_TEST_EXPECT_TRUE(registry->hasModel("c"));
+        XX_TEST_EXPECT_EQ(registry->getDefaultModelName(), std::string{"b"});
+        // provider 实例也是同一个 (同一个模型不会建两套 HTTP 客户端/连接池)
+        auto fromPrimary = registry->getProvider("a");
+        auto fromOther   = registry->getProvider("a");
+        XX_TEST_EXPECT_TRUE(fromPrimary != nullptr);
+        XX_TEST_EXPECT_TRUE(fromPrimary == fromOther);
+    }
+
+    // ---- 运行时增删模型: 两个 agent 立即可见 ----
+    {
+        agentxx::agent::ModelConfig runtimeModel = first;
+        runtimeModel.modelName                   = "model-d";
+        primaryCtx->modelRegistry->registerModel("d", runtimeModel);
+        XX_TEST_EXPECT_TRUE(otherCtx->modelRegistry->hasModel("d"));
+        XX_TEST_EXPECT_TRUE(otherCtx->modelRegistry->removeModel("d"));
+        XX_TEST_EXPECT_FALSE(primaryCtx->modelRegistry->hasModel("d"));
+    }
+
+    // ---- 独立 BaseAgent (没有容器): 仍然自建一份, 不影响容器那份 ----
+    {
+        auto standaloneCfg                = std::make_shared<agentxx::agent::AgentConfig>();
+        standaloneCfg->model              = first;
+        standaloneCfg->agentName          = "standalone";
+        standaloneCfg->permissionMode     = agentxx::agent::PermissionMode::Pass;
+        standaloneCfg->enableSessionStore = false;
+        auto             standalone       = std::make_shared<agentxx::agent::CodeAgent>(standaloneCfg);
+        std::atomic<bool> standaloneDone{false};
+        asio::co_spawn(
+            *io,
+            [&]() -> asio::awaitable<void> {
+                try {
+                    co_await standalone->init();
+                } catch (const std::exception& e) {
+                    TEST_FAIL << "standalone init: " << e.what() << std::endl;
+                }
+                standaloneDone = true;
+                co_return;
+            }(),
+            asio::detached
+        );
+        pumpIoUntil(io, standaloneDone);
+        auto standaloneCtx = standalone->getContext();
+        XX_TEST_EXPECT_TRUE(standaloneCtx->modelRegistry != nullptr);
+        XX_TEST_EXPECT_FALSE(standaloneCtx->modelRegistry == host->modelRegistry());
+    }
+
+    if (!otherId.empty()) {
+        XX_TEST_EXPECT_TRUE(host->unmountRoot(otherId));
+    }
+    co_return;
+}
+
 asio::awaitable<TestResult> run_agent_host_tests() {    g_host_passed = 0;
     g_host_failed = 0;
     try {
@@ -1190,6 +1342,7 @@ asio::awaitable<TestResult> run_agent_host_tests() {    g_host_passed = 0;
         co_await test_host_remote_a2a();
         co_await test_host_multi_root();
         co_await test_host_session_claim();
+        co_await test_host_shared_model_registry();
     } catch (const std::exception& e) {
         TEST_FAIL << "agent_host suite exception: " << e.what() << std::endl;
         g_host_failed++;

@@ -229,6 +229,14 @@ public:
     /// 还在跑的异步任务数 (诊断/测试用)
     size_t runningAsyncWork() const;
 
+    /// 进程共享的模型注册表 (所有 AgentNode 共用一份)
+    ///
+    /// - 容器创建时还是空的, 首个 agent `init` 时从它的 `availableModels` 填; 之后
+    ///   每个 agent 只补自己认识、表里还没有的模型 (同名不覆盖: 不丢已缓存的 provider)
+    /// - 运行时 `AddModel` / `RemoveModel` 改的是这一份, 所有人设根/子代理都能立即看到
+    /// - `agentContext->modelRegistry` 指向的就是它 (未挂容器的独立 BaseAgent 仍自建一份)
+    std::shared_ptr<agentxx::agent::ModelProviderRegistry> modelRegistry() const;
+
     /// 排队中的异步任务数 (`queueKey` 为空 = 全部)
     size_t queuedAsyncWork(std::string_view queueKey = {}) const;
 
@@ -447,6 +455,10 @@ private:
     std::shared_ptr<asio::thread_pool>          threadPool_;
     std::shared_ptr<agentxx::events::EventBus>  hostBus_;
     AgentRegistry                               registry_;
+    /// 进程共享的模型注册表 (所有 AgentNode 一份: provider 实例与模型清单共用)
+    /// - 首个 agent `init` 时从自己的 `availableModels` 填进来, 之后的 agent 只
+    ///   补自己才认识的那些; 容器与 agent 同一条 io 线程, 不需要锁
+    std::shared_ptr<agentxx::agent::ModelProviderRegistry> modelRegistry_;
     /// 插件管理器 (进程一份; 由 [loadPluginsAsync] 建立)
     /// - 声明在 roots_ 之前: 成员逆序析构, 这样 agent 先释放 (拆挂载) 再关管理器
     std::shared_ptr<agentxx::plugin::PluginManager> pluginHost_;
