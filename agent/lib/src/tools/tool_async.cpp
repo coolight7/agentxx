@@ -183,11 +183,16 @@ asio::awaitable<agentxx::util::ToolResult>
 
     co_return agentxx::util::ToolResult::ok(fmt::format(
         "[Async tool started] id={} tool={}\n"
-        "结果跑完会作为一条输入回到这个会话 (事件 `agentxx.agent.async.done`); "
-        "想当场拿结果用 agentxx_event {{opt:\"await\", id:\"{}\"}}, "
-        "要停止用 {{opt:\"cancel\", id:\"{}\"}}。",
+        "The tool now runs in the background; its result is published as the value of event "
+        "`agentxx.agent.async.done` (field `asyncId`). Nothing is inserted into this "
+        "conversation automatically: use agentxx_event {{opt:\"await\", id:\"{}\"}} to block "
+        "for it now, {{opt:\"watch\", id:\"{}\"}} to be woken later, "
+        "{{opt:\"status\", id:\"{}\"}} / {{opt:\"works\"}} to check afterwards, "
+        "{{opt:\"cancel\", id:\"{}\"}} to drop it.",
         result.asyncId,
         toolName,
+        result.asyncId,
+        result.asyncId,
         result.asyncId,
         result.asyncId
     ));

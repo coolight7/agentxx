@@ -281,8 +281,15 @@ async work，`kind` 区分 `agent`（启动一个 agent 跑任务）与 `tool`�
 - **界面可见**：TUI Info 侧边栏的「后台任务」段经 `WireContextStats.asyncWorks`
   （追加字段，最多 10 条，为空不带）展示本会话创建的运行/排队/最近完成项；
   只展示不给取消入口（取消走 `agentxx_event opt=cancel`），详见 [tui.md](tui.md) §2.7。
-- **结果怎么回到会话**：`agentxx_subagent` 提交时由主程序替创建者会话登记一条定向等待
-  （`notify_delivery`），模型不用自己 `watch`。**插件提交的任务不能用这条路**：它们挂的是
+- **结果怎么回到会话（现状）**：主程序**不替模型自动登记等待**——受理文本会告诉模型
+  “结果会以 `[Event] agentxx.agent.async.done` 输入到达”，要不要等由模型决定：
+  `agentxx_event {opt:"await", id:"async-7"}` 当场等（阻塞本轮，默认 30 s，硬上限 5 min），
+  `{opt:"watch", id:"async-7"}` 不等本轮但值到了再叫醒（`delivery` 默认取 `event.delivery`），
+  或者干脆不管（完后就只在台账里，`works` / `status id` 可查）。`AsyncWorkSpec.notifyDelivery`
+  能把“提交即登记定向等待”做成自动的，但**模型侧两条入口（`agentxx_subagent` /
+  `agentxx_tool_async`）目前都没填它**，只有插件（`AgentxxPluginAsyncWorkSpec.notify_delivery`）
+  在用。
+- **插件提交的任务不能走 `notify_delivery` 回自己的会话**：它们挂的是
   **内置根**的中枢（`runtimeSubmitAsyncWork` 取 `primaryAgent_` 的上下文），而插件自己开的
   会话属于它自己的根，中枢投递会因 `session not found` 丢掉 —— 那种场景由插件在
   `on_event` 里自己投（参考 `agent/plugins/agentxx_chatbot/chatbot_task.cpp`）。

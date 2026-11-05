@@ -102,21 +102,27 @@ inline std::string
 }
 
 /// 后台任务的受理提示 (工具结果文本)
-/// - 以 `[Async work started]` 开头 (不命中工具失败前缀), 并告诉模型
-///   结果会以 `[Event] agentxx.agent.async.done` 输入到达, 不要轮询
+/// - 以 `[Async work started]` 开头 (不命中工具失败前缀)
+/// - 说清“结果落成事件值，不会自动插进会话”，并把 await/watch/status/cancel 的写法给出
 inline std::string renderSubagentStartedText(const events::RespSubagentBatchItem& item) {
     const auto name = item.subagent.empty() ? std::string{"-"} : item.subagent;
     const auto id   = item.asyncId.empty() ? item.resultId : item.asyncId;
     return fmt::format(
         "[Async work started] id={} subagent={} event={}\n"
-        "The result will arrive later as an input starting with \"[Event] {}\".\n"
-        "Keep working (or finish the turn). Use agentxx_event {{\"opt\":\"watch\",\"id\":\"{}\"}} "
-        "to be woken by it, {{\"opt\":\"await\",\"id\":\"{}\"}} to block for it now, "
-        "{{\"opt\":\"cancel\",\"id\":\"{}\"}} to drop it, {{\"opt\":\"works\"}} to list them.",
+        "The result is published as the value of event `{}` (field `asyncId` = {}); it is NOT "
+        "inserted into this conversation by itself.\n"
+        "Keep working (or finish the turn), then use agentxx_event "
+        "{{\"opt\":\"watch\",\"id\":\"{}\"}} to be woken by it, "
+        "{{\"opt\":\"await\",\"id\":\"{}\"}} to block for it now, "
+        "{{\"opt\":\"status\",\"id\":\"{}\"}} to check later, "
+        "{{\"opt\":\"cancel\",\"id\":\"{}\"}} to drop it, "
+        "{{\"opt\":\"works\"}} to list them.",
         id,
         name,
         item.eventName,
         item.eventName,
+        id,
+        id,
         id,
         id,
         id
