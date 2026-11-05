@@ -245,12 +245,11 @@ Useful for passing large content between tool calls without repeating it in mess
           ToolPrompt{
               .depict =
                   R"(Run a sub-agent on a task with an isolated message context.
-The sub-agent cannot see the parent conversation history; its final text output is returned to you later through an event.
+The sub-agent cannot see the parent conversation history; its final text output becomes this tool's result.
 
 ## Notes
-- Calling this tool submits an **async work** and returns immediately with its `asyncId`; the result arrives later as an input starting with `[Event] agentxx.agent.async.done` (failed and canceled tasks publish too, so a wait never hangs).
-- Need the result right now? `agentxx_event {opt:"await", id:"<asyncId>"}` (or `opt:"watch"` to keep working first). Drop it with `agentxx_event {opt:"cancel", id:"<asyncId>"}`. `agentxx_event {opt:"works"}` lists your background tasks.
-- When async work is disabled in configuration the call runs synchronously instead: the parent agent pauses until the sub-agent finishes and the text result is returned directly.
+- This call waits for the sub-agent to finish: the parent turn pauses until the text result comes back.
+- To run it in the background instead, call `agentxx_async_start` with `tool:"agentxx_subagent"` and the same arguments; the result then arrives later as an input starting with `[Event] agentxx.agent.async.done` (use `agentxx_async_query` / `agentxx_async_await` / `agentxx_async_cancel` to inspect, wait for, or drop it).
 - Provide a clear, self-contained task description in `message`; the sub-agent has no access to the parent's conversation context.
 - `subagent` must be one of the registered sub-agent names (see the enum values in the parameter description).
 - `system_prompt` is optional; when `subagent` is not set, it is used as the sub-agent's system prompt.)",

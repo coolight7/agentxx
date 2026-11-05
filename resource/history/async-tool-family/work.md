@@ -113,6 +113,11 @@
 - 注释同步: `agent/config.h` 的 `eventWaitTimeoutMs`、`event/hub.h` 的 `waitTimeoutDefault` /
   `deliveryDefault`、`event/hub.cpp` 四处 (`opt=status` / `opt=list` / `agentxx_event opt=await`)、
   `plugins/plugin_manager_vtable.cpp` 的事件记录 JSON 注释。
+- `agentxx_subagent` 的提示词还写着旧语义 (提交后台任务 / 立即返回 `asyncId`, 并教模型用
+  已删除的 `agentxx_event opt=await/watch/cancel/works`): 改成"本调用等子代理跑完, 最终文本
+  就是工具结果", 要后台跑就用 `agentxx_async_start {tool:"agentxx_subagent"}`。
+- `agent/lib/src/agent/io/session_server_agent_io.cpp` 侧边栏限条数注释里的 `opt:works`
+  改成 `agentxx_async_query`。
 
 ## 验证
 

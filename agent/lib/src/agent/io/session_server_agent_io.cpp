@@ -45,8 +45,8 @@ static constexpr size_t kIncrementalReplayMaxMessages = 512;
 static constexpr size_t kMaxStashedWhileSwitching = 64;
 
 /// 信息侧边栏「后台任务」段最多下发的条数
-/// - 侧边栏只有几行可见高度, 发多了反而看不到标的 (完整台账由 `agentxx_event
-///   {opt:"works"}` 与插件接口给出)
+/// - 侧边栏只有几行可见高度, 发多了反而看不到标的 (完整台账由 `agentxx_async_query`
+/// 与插件接口给出)
 static constexpr size_t kAsyncWorksInStats = 10;
 
 /// 后台任务台账 JSON → 界面条目
