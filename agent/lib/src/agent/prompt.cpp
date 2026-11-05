@@ -280,116 +280,129 @@ Absent (default): the sub-agent's default full tool set.)"},
           "agentxx_event",
           ToolPrompt{
               .depict =
-                  R"(Wait for a value that does not exist yet, or publish one for others to pick up.
+                  R"(Publish a value to an event, or end one of your event streams.
 
 ## When to use
-- A result is not ready yet but you have other work to do: `opt=watch` registers a wait and returns immediately. The value arrives later as an input starting with `[Event] <name>`.
-- Another agent, a plugin or a timer will publish a value you need later.
-- You want to hand a value to something that already waits for it: `opt=emit` / `opt=end`.
+- Hand a value to whatever is waiting for it (a plugin, a background task, the client): `opt=emit`.
+- A stream you own is finished: `opt=end`.
 
 ## Event names
-Every name is a full, qualified name. There are three families:
-- `agentxx.agent.event.*`: built-in agent events and events you create yourself.
-- `plugin.<plugin name>.*`: events a plugin declares (read-only for you).
-- `agentxx.client.*`: client-side events (read-only for you).
-Names are never auto-completed: pass the whole name.
-
-Built-in event names (use them as they are):
-- `agentxx.agent.event.turn.start` (a turn started)
-- `agentxx.agent.event.turn.end` (a turn finished)
-- `agentxx.agent.event.tool.end.<tool name>` (a tool finished)
-- `agentxx.agent.event.subagent.done.<result_id>` (an async sub-agent finished)
-- `agentxx.agent.async.done` (a background task (async work) finished; the value carries `asyncId`)
-- `agentxx.agent.event.timer.<name>` (a timer armed with `after_ms`/`every_ms`)
-When you publish yourself (`opt=emit` / `opt=end`), the name must be `agentxx.agent.event.<your name>` and must not reuse the `turn.` / `tool.` / `subagent.` / `timer.` / `host.` segments.
+- `opt=emit` / `opt=end` only accept `agentxx.agent.event.<your name>`; the `turn.` / `tool.` / `subagent.` / `timer.` / `host.` segments are reserved for built-in sources.
+- Names are never auto-completed: write the whole name. Letters, digits, `.`, `_`, `-`; max 128 chars.
+- `agentxx.agent.event.turn.start` / `.turn.end` / `.tool.end.<工具名>` are published by the framework when someone waits for them.
 
 ## Notes
-- Use `watch` by default; it does not stop the turn. `await` keeps this turn blocked until the value arrives or the timeout passes — use it only when the next step really needs the value now.
-- Do not poll with `opt=status`: the value is delivered to you as input.
-- After `watch` returns `wait=w-3`, keep working or end the turn; use `opt=status wait=w-3` only to confirm.)",
+- `emit` creates the event on demand (`create:true`, default) and returns how many values are published and how many waits are attached.
+- `end` closes the stream; `remove:true` also deletes the record.
+- Reading results is not done here: background task results arrive as inputs by themselves (see `agentxx_async_start`), and `agentxx_async_query` / `agentxx_async_await` cover tasks.)",
               .args =
                   {
                       {"opt", R"(Operation to perform:
-`watch`: register a wait and return immediately (default choice).
-`await`: block this turn until a value arrives or `timeout_ms` passes.
-`status`: show one wait (`wait`), one event (`event`) or one background task (`id`).
-`list`: list events and the waits of this session.
-`works`: list background tasks (async work) with their state.
-`cancel`: cancel one wait (`wait`), all waits of this session (`all`), one background task (`id`) or all tasks of this agent (`scope:"mine"`).
 `emit`: publish a value to an event you own (created on demand).
-`end`: end one of your event streams, optionally removing it.)"},
-                      {"id",
-                       R"(Background task id (`async-7`, returned when you submitted it). With `opt=watch`/`opt=await` it waits for THAT task's result only (no `event` needed); with `opt=status`/`opt=cancel` it targets that task; with `opt=works` it shows just that one.)"},
+`end`: end one of your event streams, optionally removing the record.)"},
                       {"event",
-                       R"(Full event name. `opt=watch`/`opt=await`/`opt=status`: `agentxx.agent.event.*`, `plugin.<plugin name>.*` or `agentxx.client.*`. `opt=emit`/`opt=end`: `agentxx.agent.event.<your name>` only. Letters, digits, `.`, `_`, `-`; max 128 chars.)"},
-                      {"wait", "Wait id (`w-3`) returned by `opt=watch`."},
-                      {"mode", R"(How many values you want:
-`first`: the first value, then the wait closes (default).
-`each`: every value is delivered as its own input; the wait stays open until the event ends, is Canceled or times out.
-`all`: collect values and deliver them together when the event ends or the `max_items`/max bytes limit is reached.)"},
-                      {"delivery", R"(Where the value goes:
-`next-step`: inserted before the next model call of a running turn; promotes to a new turn when idle (default).
-`inject`: only visible in the next request, not written into the conversation.
-`next-turn`: queued as a new turn after the current one.
-`none`: keep the value in this tool only (no input is created).)"},
-                      {"timeout_ms",
-                       R"(Wait timeout in milliseconds. `0` (default) means no timeout for `watch`; `await` uses 30000 by default and is capped at 300000.)"},
-                      {"max_items",
-                       "Upper bound of values collected by `mode=all` before they are delivered (default 16)."},
-                      {"coalesce_ms",
-                       "Only with `mode=each`: merge the values arriving inside this window (milliseconds) into one input."},
-                      {"after_ms",
-                       "Arm a timer that fires once after this many milliseconds and publishes `agentxx.agent.event.timer.<name>`; use it with `opt=watch` on that timer event."},
-                      {"every_ms",
-                       "Arm a repeating timer with this interval in milliseconds (0 = one-shot)."},
+                       R"(Full event name. `emit`/`end`: `agentxx.agent.event.<your name>` only (the reserved segments above are rejected).)"},
                       {"value",
-                       "Any JSON value to publish (`opt=emit`). A string is delivered as plain text."},
+                       "Any JSON value to publish (`opt=emit`). A string is published as plain text."},
                       {"summary", "Optional JSON summary attached to the end of a stream (`opt=end`)."},
                       {"single",
                        "`opt=emit`: create the event as single-value (the first value ends it automatically)."},
+                      {"create",
+                       "`opt=emit`: create the event if it does not exist yet (default `true`)."},
+                      {"label", "`opt=emit`: one-line description used when the event is created."},
                       {"remove", "`opt=end`: remove the event record immediately instead of keeping it for a while."},
-                      {"all", "`opt=cancel`: cancel every wait of the current session."},
-                      {"replay",
-                       "`opt=watch`: consume the values published before you registered (default `true`)."},
-                      {"notify_on_timeout",
-                       "`opt=watch`: deliver a timeout input when the wait expires (default `true`)."},
-                      {"unpause",
-                       "`opt=watch`: allow the delivery to unpause a session paused by a failed/interrupted turn (default `false`)."},
-                      {"label", "One-line note shown in the delivered input."},
-                      {"ref", "Optional id to correlate the delivered input with your own bookkeeping (e.g. a task id)."},
-                      {"scope",
-                       "`opt=list`: `events`, `waits` or `all` (default `all`). `opt=works`: `mine` (default) or `all`. `opt=cancel`: `mine` cancels every background task of this agent."},
-                      {"state",
-                       "`opt=works`: only show tasks in this state (`queued`, `running`, `done`, `failed`, `canceled`); default `all`."},
-                      {"prefix", "`opt=list`: only show event names starting with this prefix."},
-                      {"limit", "`opt=list`/`opt=works`: maximum entries (default 20)."},
                   },
           },
       },
       {
-          "agentxx_tool_async",
+          "agentxx_async_start",
           ToolPrompt{
               .depict =
-                  R"(Run ONE tool call in the background.
+                  R"(Start ONE tool call or ONE sub-agent task in the background.
 
-Use it for a single long call (a slow command, a big search, a long fetch) when you want to keep talking instead of blocking the turn: the call is accepted immediately and its result becomes the value of event `agentxx.agent.async.done` (value carries `asyncId` + `content`). Nothing is inserted into the conversation automatically.
+## When to use
+- The call takes long (a slow command, a big search, a long fetch, a whole sub-agent task) and you want to keep working instead of blocking the turn.
+- `tool` is any tool you can call directly (`agentxx_filesystem_grep`, `agentxx_execute_bash_command`, ...), or `agentxx_subagent` (then `args` is exactly what you would pass to it: `{"subagent":"task","message":"..."}`).
+- `args` is handed to that tool unchanged.
+
+## What happens to the result
+- `notify` defaults to `true`: when the task finishes, its result is inserted into this conversation as an input — before your next model call if the turn is still running, or as a new turn if the turn already ended. You do not need to poll.
+- `notify:false`: the result stays in the task ledger; read it with `agentxx_async_query` or block with `agentxx_async_await`.
+- Permission for the target tool is checked once now, at submit time (same rules as calling it directly); the background run does not ask again.
 
 ## Notes
-- `tool` must be a registry tool (plugin / dynamically registered). Lib built-in fast tools (share_store / event / subagent / git_worktree) cannot run in the background; `agentxx_tool_async` itself cannot be nested.
-- Permission for that tool is checked once, now, at submit time (same rules as calling it directly); the background run does not ask again.
-- The tool runs with THIS agent's configuration (same work dir and tool set).
-- Collect the result with `agentxx_event {opt:"await", id:"<asyncId>"}` (blocks this turn for it), `{opt:"watch", id:"<asyncId>"}` (keeps working, be woken later), `{opt:"status", id:"<asyncId>"}` / `{opt:"works"}` (check afterwards); stop with `{opt:"cancel", id:"<asyncId>"}`.
-- Cancelling is best effort: tools that watch the cancel token stop right away, others finish in the background and their result is discarded.
+- Only plugin / dynamically registered tools can run in the background; `agentxx_subagent` is the exception (it runs as a sub-agent task). Lib built-in tools (share_store / event / ...) must be called directly.
 - Do not wrap a call that finishes in a second or two — call the tool directly instead.
-- Availability: only registered when background work is enabled in configuration (`async_work.enable`).)",
+- Concurrency is limited per agent (`async_work.max_concurrent`, default 3); extra tasks are accepted and wait in a queue.
+- Availability: only registered when background work is enabled (`async_work.enable`).)",
               .args =
                   {
                       {"tool",
-                       "Name of the tool to run in the background (must be a tool available to you)."},
+                       "Tool to run in the background: any tool you can call directly, or `agentxx_subagent`."},
                       {"args",
                        "Argument object for that tool, passed through unchanged (same schema as calling it directly)."},
+                      {"notify",
+                       "Insert the result into this conversation when the task finishes (default `true`). Set `false` to keep it in the ledger only."},
                       {"label",
-                       "Optional short display name for the background task (default: the tool name)."},
+                       "Optional short display name for the task (default: the tool name or the sub-agent name)."},
+                  },
+          },
+      },
+      {
+          "agentxx_async_query",
+          ToolPrompt{
+              .depict =
+                  R"(Check the background tasks of this session.
+
+## When to use
+- See what is still running / queued before starting something similar again.
+- With `id`: get one task with its result text. Without `id`: list the tasks of one `group`.
+
+## Notes
+- `group` values: `all` (default, every task of this session), `queued`, `running`, `done`, `failed`, `canceled`.
+- Tasks started with `notify:true` also deliver their result as an input by themselves; querying again is harmless.
+- Finished tasks stay in the ledger for a while (`async_work.linger_ms`, default 5 minutes), then disappear.)",
+              .args =
+                  {
+                      {"group",
+                       "Which tasks to list: `all` (default) / `queued` / `running` / `done` / `failed` / `canceled`."},
+                      {"id",
+                       "Task id (`async-7`). When given, the list is ignored and that single task is returned with its result."},
+                  },
+          },
+      },
+      {
+          "agentxx_async_await",
+          ToolPrompt{
+              .depict =
+                  R"(Block this turn until one background task finishes.
+
+- `id` is required; `timeout_ms` defaults to `30000` and is capped at `300000`.
+- A task that already finished returns its result immediately (no waiting, no event needed).
+- Use it only when your next step really needs that result now; otherwise let `notify` deliver it, or keep working and query later.
+- On timeout you get a note instead of an error: query again or keep working. Cancelling the session interrupts the wait.)",
+              .args =
+                  {
+                      {"id", "Task id to wait for (`async-7`)."},
+                      {"timeout_ms",
+                       "How long to block, in milliseconds (default `30000`, capped at `300000`)."},
+                  },
+          },
+      },
+      {
+          "agentxx_async_cancel",
+          ToolPrompt{
+              .depict =
+                  R"(Cancel background tasks of this session.
+
+- `id`: cancel one task (must have been started by this session; an already finished task reports an error).
+- `group`: cancel a batch — `all` (default: every unfinished task of this session), `queued` or `running`.
+- Cancelling is best effort: a running tool stops at its next cancellation check; results produced afterwards are discarded. The task still ends in the `canceled` state and stays in the ledger.)",
+              .args =
+                  {
+                      {"id", "Task id to cancel (`async-7`)."},
+                      {"group",
+                       "Which tasks to cancel: `all` (default) / `queued` / `running`. Finished tasks cannot be canceled."},
                   },
           },
       },

@@ -3,9 +3,9 @@
 /// 演示一个插件在事件中枢里能做的三件事:
 /// 1. **声明自己的事件源** (`plugin.example_event.build` 流式 /
 ///    `plugin.example_event.ready` 单值):
-///    声明内容进中枢的记录表, 模型用 `agentxx_event opt=list` 就能看到 (含说明文字);
-/// 2. **发布值 / 结束流**: 模型用 `agentxx_event opt=watch` 等这些事件, 值到达后作为
-///    一条以 `[Event] <名字>` 开头的输入进入会话;
+///    声明内容进中枢的记录表 (含说明文字), 会话侧可用 `agentxx_async_query` 查后台任务;
+/// 2. **发布值 / 结束流**: 插件每轮发一个值, 读者是已经等着的会话
+///    (值到达后作为一条以 `[Event] <名字>` 开头的输入进入会话);
 /// 3. **替某个会话登记等待**: 挂载配置里给了 `sessionId` 时, 插件替那个会话等
 ///    `plugin.example_event.build` 的每条值 (值到达后自动变成那个会话的输入)。
 ///
@@ -91,7 +91,7 @@ static int eventAgentSetup(EventCtx& ctx, const EventMountState& state) {
     using namespace agentxx::plugin;
     const auto& ref = state.ref;
 
-    // 事件中枢不可用 (主程序关了 `event.enable` 或版本更早): 按"功能不可用"降级,
+    // 事件中枢不可用 (老主程序/嵌入环境没建中枢): 按"功能不可用"降级,
     // 不影响插件加载 —— 事件的发布方不在了, 只是没人等得到值
     if (!hasEventHub(ctx)) {
         ctx.log.info("example_event: event hub iface unavailable, plugin stays idle");
@@ -102,11 +102,11 @@ static int eventAgentSetup(EventCtx& ctx, const EventMountState& state) {
     {
         EventDefineOptions opt;
         opt.name         = "plugin.example_event.build";
-        opt.description  = "示例: 构建进度 (插件发布, 模型可 watch)";
+        opt.description  = "示例: 构建进度 (插件发布, 等待中的会话会收到)";
         opt.historyLimit = 4;
         const auto rc    = defineEvent(ctx, ref, opt);
         if (rc == AGENTXX_PLUGIN_EVENT_ERR_UNSUPPORTED) {
-            // 表在、中枢没有 (例如 `event.enable=false`): 同样按降级处理
+            // 表在、中枢没有 (例如嵌入方没启): 同样按降级处理
             ctx.log.info("example_event: event hub is not enabled, plugin stays idle");
             return 0;
         }

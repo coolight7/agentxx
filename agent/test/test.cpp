@@ -6,6 +6,7 @@
 #include "agentxx-test/core/test_anthropic_provider.h"
 #include "agentxx-test/core/test_assembly_snapshot.h"
 #include "agentxx-test/core/test_async_work.h"
+#include "agentxx-test/core/test_async_tools.h"
 #include "agentxx-test/core/test_boundaries.h"
 #include "agentxx-test/core/test_cancel.h"
 #include "agentxx-test/core/test_chatbot_core.h"
@@ -505,6 +506,7 @@ int main(int argn, char** argv) {
                 co_await run("event_delivery", agentxx::test::run_event_delivery_tests);
                 co_await run("event_subagent", agentxx::test::run_event_subagent_tests);
                 co_await run("async_work", agentxx::test::run_async_work_tests);
+                co_await run("async_tools", agentxx::test::run_async_tools_tests);
                 co_await run("feature_points", agentxx::test::run_feature_points_tests);
                 co_await run("event_bridge", agentxx::test::run_event_bridge_tests);
                 co_await run("interrupt_bus", agentxx::test::run_interrupt_bus_tests);

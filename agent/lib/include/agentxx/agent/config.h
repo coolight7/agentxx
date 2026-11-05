@@ -456,9 +456,8 @@ public:
     // 事件中枢 (`event.*`; 见 [hub.h](/agent/lib/include/agentxx/event/hub.h))
     // -------------------------------------------------------------------
 
-    /// 是否启用事件中枢与 `agentxx_event` 工具 (yaml `event.enable`, 默认 true)
-    /// - 关闭后: 不注册工具, hub 不建记录也不接总线上的值; 其余行为与旧版一致
-    bool enableEvent = true;
+    /// 事件中枢是常驻设施 (没有开关): 每次 init 都会建 hub, `agentxx_event`
+    /// 与后台任务查询/取消工具也随之常驻注册 (后者另需 `async_work.enable` 与容器)。
 
     /// 事件单值进入上下文前的阈值, 单位为**字节** (yaml `event.value_max_bytes`, 默认 32 KB)
     /// - 超过时把值转存会话 share store, 文本里只留取回提示与开头片段

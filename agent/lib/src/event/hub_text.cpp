@@ -50,21 +50,6 @@ std::string refSuffix(const EventWait& wait) {
 
 } // namespace
 
-std::string renderWaitArmed(const EventWait& wait) {
-    return fmt::format(
-        "[Event wait armed] wait={} event={} mode={} delivery={}\n"
-        "The value will arrive later as an input starting with \"[Event] {}\".\n"
-        "Keep working, or end the turn — you do not need to poll. "
-        "Use opt=status wait={} to check.",
-        wait.waitId,
-        wait.spec.event,
-        wait.spec.mode,
-        wait.spec.delivery,
-        wait.spec.event,
-        wait.waitId
-    );
-}
-
 std::string renderEventText(
     const EventWait&                wait,
     std::string_view                status,
@@ -143,7 +128,7 @@ std::string renderAwaitTimeout(const EventWaitSpec& spec, int64_t waitedMs) {
     const auto seconds = waitedMs / 1000;
     return fmt::format(
         "[Event await timeout] event={} waited={}s (no value arrived; the wait was removed, "
-        "use opt=watch to keep waiting in the background)",
+        "query the task again with agentxx_async_query, or keep working and let the automatic notification deliver it)",
         spec.event,
         seconds
     );

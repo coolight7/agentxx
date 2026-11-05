@@ -271,3 +271,8 @@
   `runToolWork`（参数补 `sessionId`/`tool_call_id`, 50 ms 轮询取消）、插件
   `AgentxxPluginAsyncWorkSpec` 尾部追加 `tool_name`/`tool_args_json`（基线停在
   `offsetof`, 旧插件按 `ERR_ARG` 降级）；`execute_command` 的 `background:true` 仍不做。
+- 2026-11-06 (工具族收敛): 模型侧后台任务收敛成 `agentxx_async_start` / `_query` / `_await` /
+  `_cancel`，`agentxx_event` 只留 `emit`/`end`（`watch` 与定时器参数删除）；
+  `agentxx_async_start` 的 `notify` 默认 `true`（结果经 `next-step` 主动插回会话）；
+  `agentxx_subagent` 回到同步语义，后台跑走 `async_start {tool:"agentxx_subagent"}`；
+  事件中枢常驻（删 `event.enable`）。详见 `resource/history/async-tool-family/`。

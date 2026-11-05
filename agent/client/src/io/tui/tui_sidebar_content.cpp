@@ -280,7 +280,7 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
 
     // 后台任务段: 本会话创建的后台任务 (运行/排队/最近完成)
     // - 数据来自服务端推送的 WireContextStats.asyncWorks (见 onContextStats)
-    // - 只展示状态与已跑时长, 不提供取消入口 (取消走模型工具 `agentxx_event`)
+    // - 只展示状态与已跑时长, 不提供取消入口 (取消走模型工具 `agentxx_async_cancel`)
     // - 空数组时显示"( 无 )": 老服务端不带该字段, 或本会话确实没有任务
     {
         Elements workEls;

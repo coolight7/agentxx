@@ -126,7 +126,7 @@ void pumpIoUntil(const std::shared_ptr<asio::io_context>& io, const std::atomic<
 }
 
 /// 建夹具 + 挂根 (在 io 上完成, 内部自己泵 io)
-bool buildFixture(const std::shared_ptr<SubagentFixture>& fx, bool enableEvent = true) {
+bool buildFixture(const std::shared_ptr<SubagentFixture>& fx) {
     fx->sim = startDaSimServer();
     g_da_sim_response_content     = "async child result";
     g_da_sim_tool_calls           = Json::array();
@@ -142,7 +142,6 @@ bool buildFixture(const std::shared_ptr<SubagentFixture>& fx, bool enableEvent =
     cfg->model.modelName     = "test-sim";
     cfg->prompt.systemPrompt = "You are a helpful assistant.";
     cfg->permissionMode      = agentxx::agent::PermissionMode::Pass;
-    cfg->enableEvent         = enableEvent;
     cfg->llmMaxRetry         = 1;
 
     auto        io = fx->io;
@@ -377,7 +376,8 @@ asio::awaitable<void> test_async_result_wakes_session() {
     co_return;
 }
 
-/// 3. 工具层: 父轮次拿到 `[Subagent started]` 文本, 结果经事件随之回到会话
+/// 3. 工具层: 父轮次拿到 `[Async started]` 文本, 结果经事件随之回到会话
+/// - 子代理本身已回到同步语义, 后台执行只能经 `agentxx_async_start` (参数与直接调用一致)
 asio::awaitable<void> test_async_tool_result_text() {
     auto fx = std::make_shared<SubagentFixture>();
     XX_TEST_EXPECT_TRUE(buildFixture(fx));
@@ -393,7 +393,7 @@ asio::awaitable<void> test_async_tool_result_text() {
     });
     XX_TEST_EXPECT_TRUE(watched.has_value());
 
-    // 第一次请求让模型发起异步子代理委派, 之后返回纯文本
+    // 第一次请求让模型发起后台子代理任务, 之后返回纯文本
     g_da_sim_tool_calls_remaining = 1;
     g_da_sim_tool_calls           = Json::array({
         Json{
@@ -402,9 +402,9 @@ asio::awaitable<void> test_async_tool_result_text() {
              {"type", "function"},
              {"function",
               Json{
-                  {"name", "agentxx_subagent"},
+                  {"name", "agentxx_async_start"},
                   {"arguments",
-                   R"({"tasks":[{"subagent":"subagent_task","message":"work","result_id":"job3"}]})"},
+                   R"({"tool":"agentxx_subagent","args":{"subagent":"subagent_task","message":"work"}})"},
               }},
          },
     });
@@ -418,10 +418,14 @@ asio::awaitable<void> test_async_tool_result_text() {
     XX_TEST_EXPECT_FALSE(turnResult.hasError);
 
     // 工具的返回文本 (模型看到的) 是受理提示, 不是子代理结果
-    // - 模型侧已不再有 `async` 参数: 只要 `async_work.enable` 打开, 调用即提交
-    const auto dumped = g_da_sim_requests.size() >= 2 ? g_da_sim_last_request.dump() : std::string{};
-    XX_TEST_EXPECT_TRUE(contains(dumped, "[Async work started]"));
-    XX_TEST_EXPECT_TRUE(contains(dumped, kAsyncDone));
+    bool sawStarted = false;
+    for (const auto& req : g_da_sim_requests.get()) {
+        if (contains(req.dump(), "[Async started]")) {
+            sawStarted = true;
+        }
+    }
+    XX_TEST_EXPECT_TRUE(sawStarted);
+    XX_TEST_EXPECT_TRUE(contains(g_da_sim_last_request.get().dump(), "agentxx_subagent"));
 
     // 结果事件随后到达中枢, 会话被叫醒
     runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
@@ -438,13 +442,25 @@ asio::awaitable<void> test_async_tool_result_text() {
             std::string{"async child result"}
         );
     }
-    // 事件把父会话叫醒 (结果作为一条新的输入进入会话)
-    runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
+    // 事件把父会话叫醒: 结果要么已作为输入投给驱动端 (轮次已结束), 要么已排成
+    // 待注入输入 (任务跑得快、父轮次还在跑 -> next-step 排队)
+    XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
         co_return co_await waitUntil([&] {
-            return fx->sink->count() >= 1;
+            auto session = fx->agent->getContext()->getSession(fx->sessionId);
+            return fx->sink->count() >= 1
+                   || (session && session->pendingInputCount("event:") >= 1);
         });
-    });
-    XX_TEST_EXPECT_TRUE(contains(fx->sink->lastText(), "[Event] " + std::string{kAsyncDone}));
+    }));
+    const auto pending = [&]() -> size_t {
+        auto session = fx->agent->getContext()->getSession(fx->sessionId);
+        return session ? session->pendingInputCount("event:") : 0;
+    };
+    XX_TEST_EXPECT_TRUE(fx->sink->count() >= 1 || pending() >= 1);
+    if (fx->sink->count() >= 1) {
+        XX_TEST_EXPECT_TRUE(
+            contains(fx->sink->lastText(), "[Event] " + std::string{kAsyncDone})
+        );
+    }
 
     g_da_sim_tool_calls_remaining = -1;
     co_return;
@@ -517,60 +533,6 @@ asio::awaitable<void> test_async_event_name_errors() {
     co_return;
 }
 
-/// 5. 关掉事件中枢时仍受理, 结果只落台账 (没有事件可等)
-asio::awaitable<void> test_async_without_hub() {
-    auto fx = std::make_shared<SubagentFixture>();
-    XX_TEST_EXPECT_TRUE(buildFixture(fx, /*enableEvent=*/false));
-    XX_TEST_EXPECT_TRUE(fx->hub() == nullptr);
-
-    agentxx::events::RespSubagentBatch resp;
-    runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
-        agentxx::events::ReqSubagentBatch req{
-            .parentAgentName = "root",
-            .parentSessionId = fx->sessionId,
-            .cancelToken     = nullptr,
-        };
-        req.tasks.push_back(asyncTask("nohub"));
-        auto r = co_await fx->agent->getContext()
-                     ->bus->request<
-                         agentxx::events::ReqSubagentBatch,
-                         agentxx::events::RespSubagentBatch>(
-                         agentxx::events::Topic::Subagent,
-                         std::move(req),
-                         std::chrono::seconds(30)
-                     );
-        if (r.has_value()) {
-            resp = std::move(*r);
-        }
-        co_return true;
-    });
-    XX_TEST_EXPECT_EQ(resp.results.size(), size_t{1});
-    if (!resp.results.empty()) {
-        XX_TEST_EXPECT_TRUE(resp.results[0].started);
-        XX_TEST_EXPECT_FALSE(resp.results[0].hasError);
-    }
-
-    // 等任务跑完: 台账里有结果, `delivered=false` (没中枢可投)
-    const auto done = runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
-        co_return co_await waitUntil([&] {
-            return fx->host->runningAsyncWork() == 0 && fx->host->asyncWorksJson().size() == 1;
-        });
-    });
-    XX_TEST_EXPECT_TRUE(done);
-    auto list = fx->host->asyncWorksJson();
-    if (list.is_array() && !list.empty()) {
-        const auto id     = list[0].value("asyncId", std::string{});
-        const auto ledger = fx->host->asyncWorkJson(id);
-        XX_TEST_EXPECT_EQ(ledger.value("state", std::string{}), std::string{"done"});
-        XX_TEST_EXPECT_FALSE(ledger.value("delivered", true));
-        XX_TEST_EXPECT_EQ(
-            ledger.value("result", std::string{}),
-            std::string{"async child result"}
-        );
-    }
-    co_return;
-}
-
 /// 6. 取消: 还在跑的异步作业被取消, 父会话仍能收到 {Canceled:true}
 asio::awaitable<void> test_async_cancel() {
     auto fx = std::make_shared<SubagentFixture>();
@@ -634,7 +596,6 @@ asio::awaitable<TestResult> run_event_subagent_tests() {
     co_await test_async_result_wakes_session();
     co_await test_async_tool_result_text();
     co_await test_async_event_name_errors();
-    co_await test_async_without_hub();
     co_await test_async_cancel();
 
     result.passed = g_es_passed;

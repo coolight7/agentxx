@@ -11,7 +11,7 @@ namespace test {
 /// 事件中枢 (EventHub) 自身的状态机 / 等待 / 投递决策 / 预算 / 定时源
 asio::awaitable<TestResult> run_event_hub_tests();
 
-/// 事件工具 (agentxx_event) 的参数校验与返回文本
+/// 事件工具 (agentxx_event) 的发布值与结束流 (emit / end)
 asio::awaitable<TestResult> run_event_tools_tests();
 
 /// 事件投递路径 (会话端点 + 轮次状态)

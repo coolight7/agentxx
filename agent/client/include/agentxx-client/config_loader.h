@@ -106,9 +106,6 @@ struct YamlAppConfig {
     agent::PermissionMode permissionMode = agent::PermissionMode::Ask;
     /// subagent 总开关 (yaml `subagent.enable`, 默认 true)
     bool enableSubagent = true;
-    /// 事件中枢开关 (yaml `event.enable`, 默认 true)
-    /// - 关闭后不注册 `agentxx_event` 工具, 中枢也不接总线上的值
-    bool eventEnable = true;
     /// 事件单值进入上下文的阈值 (字节; yaml `event.value_max_bytes`, 默认 32768)
     /// - 超出时转存会话 share store, 文本里给 id 与取回提示
     int64_t eventValueMaxBytes = 32 * 1024;

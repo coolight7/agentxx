@@ -282,9 +282,8 @@ static void applyServerRuntimeConfig(
 
     // 子代理开关 (yaml `subagent.enable`, 默认 true)
     config->enableSubagent = yamlCfg.enableSubagent;
-    // 事件中枢 (yaml `event.*`): 开关 / 单值阈值 / 默认超时 / 每会话等待上限 /
-    // 无驱动端自驱 / 默认投递模式
-    config->enableEvent             = yamlCfg.eventEnable;
+    // 事件中枢 (yaml `event.*`): 中枢常驻, 这里只给单值阈值 / 默认超时 /
+    // 每会话等待上限 / 无驱动端自驱 / 默认投递模式
     config->eventValueMaxBytes      = static_cast<size_t>(std::max<int64_t>(0, yamlCfg.eventValueMaxBytes));
     config->eventWaitTimeoutMs      = yamlCfg.eventWaitTimeoutMs;
     config->eventMaxWaitsSession    = static_cast<size_t>(std::max<int64_t>(0, yamlCfg.eventMaxWaitsSession));

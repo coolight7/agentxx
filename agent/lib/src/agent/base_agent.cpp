@@ -21,8 +21,8 @@
 #include "agentxx/nodes/graph_conditions.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/protocol/provider_common.h"
+#include "agentxx/tools/async_tools.h"
 #include "agentxx/tools/event.h"
-#include "agentxx/tools/tool_async.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/observability.h"
 #include "agentxx/util/share_store_offload.h"
@@ -457,7 +457,7 @@ asio::awaitable<void> BaseAgent::init() {
         .run   = [&]() -> asio::awaitable<void> {
             // 事件中枢: 建在事件总线之上 (值从 `plugin.` 前缀订阅进来), 晚于
             // middleware_context 创建 —— 投递超长值时要经中间件上下文取会话 share store
-            // - 关闭 (event.enable=false) 时不创建: 工具不注册, 也没有任何行为变化
+            // - 常驻: 没有开关, `agentxx_event` / 后台任务查询依赖它
             initEventHub(co_await asio::this_coro::executor);
             co_return;
         },
@@ -998,10 +998,6 @@ void BaseAgent::initEventBus() {
 
 void BaseAgent::initEventHub(asio::any_io_executor executor) {
     const auto& config = agentContext->agentConfig;
-    if (config && !config->enableEvent) {
-        XX_LOGI("[event_hub] disabled by config (event.enable=false)");
-        return;
-    }
     agentxx::events::EventHub::Config hubConfig;
     if (config) {
         if (config->eventValueMaxBytes > 0) {
@@ -1323,18 +1319,18 @@ asio::awaitable<void> BaseAgent::initMiddleware() {
 asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> BaseAgent::initTools() {
     std::vector<std::unique_ptr<agentxx::tools::XXToolBase>> tools{};
     tools.push_back(std::make_unique<agentxx::tools::SessionShareStoreTool>(agentContext));
-    // 事件中枢工具: 挂起等待 / 阻塞等待 / 查状态 / 取消 / 发布 / 后台任务
-    // - 有中枢, 或启用了后台任务 (`async_work.enable`) 时注册
-    //   (后者在关掉事件中枢时仍能查/取消后台任务: 结果只落台账)
+    // 事件中枢工具: 发布值 / 结束事件流 (中枢常驻, 工具也常驻注册)
+    tools.push_back(std::make_unique<agentxx::tools::EventTool>(agentContext));
+    // 后台任务工具族: 开始 / 查询 / 阻塞等待 / 取消
+    // - 只看 `async_work.enable`: 容器 (AgentHost) 可能是 init 之后才挂上来的
+    //   (嵌入式用法), 所以不在这里判容器; 工具内部取不到容器时给明确错误
     const bool asyncEnabled
         = agentContext->agentConfig && agentContext->agentConfig->enableAsyncWork;
-    if (agentContext->eventHub || asyncEnabled) {
-        tools.push_back(std::make_unique<agentxx::tools::EventTool>(agentContext));
-    }
-    // 后台工具调用: 把一次工具调用丢到后台跑 (`kind=tool`)
-    // - 只在开了 `async_work.enable` 且有容器时注册: 没有容器就没有后台执行的地方
-    if (asyncEnabled && !agentContext->host.expired()) {
-        tools.push_back(std::make_unique<agentxx::tools::ToolAsyncTool>(agentContext));
+    if (asyncEnabled) {
+        tools.push_back(std::make_unique<agentxx::tools::AsyncStartTool>(agentContext));
+        tools.push_back(std::make_unique<agentxx::tools::AsyncQueryTool>(agentContext));
+        tools.push_back(std::make_unique<agentxx::tools::AsyncAwaitTool>(agentContext));
+        tools.push_back(std::make_unique<agentxx::tools::AsyncCancelTool>(agentContext));
     }
     // agentxx_get_current_datetime 已迁移至 agentxx_system 插件 (同名同行为,
     // 经 PluginManager 注册)

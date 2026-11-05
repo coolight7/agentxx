@@ -1960,8 +1960,8 @@ plugin:
   `interrupt_policy` (-1 = 跟随创建者配置)、`notify_delivery`、`on_event` 回调;
 - 提交**只校验参数**, 不因额度或排队条数被拒 (额度只决定何时起跑); 返回的 `asyncId`
   同时是该任务 agent 的 `sessionId`;
-- 结果统一发 `agentxx.agent.async.done` (值里用 `asyncId` 区分); 想当场拿结果让模型
-  `agentxx_event {opt:"await", id}`;
+- 结果统一发 `agentxx.agent.async.done` (值里用 `asyncId` 区分); 模型侧的读取入口是
+  `agentxx_async_query` / `agentxx_async_await` (不再经 `agentxx_event`);
 - `cancel/get/list` 都**只能碰本实例提交的** (`owner = plugin:<实例名>`): 取消别人的返回
   `ERR_ARG`, 查别人的返回空; 插件禁用/卸载时主程序按 owner 把这批未完成任务取消
   (只置取消令牌, 终态照常记录);
@@ -1991,8 +1991,9 @@ plugin:
 **与事件中枢的关系**: 事件中枢 (`agentxx::events::EventHub`, 见 [events.md](events.md))
 **只订阅 `plugin.` 前缀**，所以插件用
 `emit_event("plugin.chat.group42.progress", payload)` 发一条自己那一族的事件，就等于
-往中枢发了一个同名的值：模型只要先
-`agentxx_event {opt:"watch", event:"plugin.chat.group42.progress"}`，值到达时就会被唤醒。
+往中枢发了一个同名的值：会话侧由插件用 `register_wait` 替它登记等待（值到达直接变成
+那个会话的输入）；模型侧不再自己挂等待（早期 `agentxx_event opt=watch` 已删除），
+后台任务的结果则由 `agentxx_async_start` 的 `notify` 自动送回。
 名字规则（三族命名空间 / 写侧只能落在自己那一族的根下 / 读侧必须全名）见
 `agentxx/event/naming.h`，插件面“定义事件/登记等待”的正规入口是 `agentxx.agent.event` 表
 （见 §20）。
@@ -2118,7 +2119,7 @@ plugin:
 
 ## 20. 插件事件源 (`agentxx.agent.event`)
 
-事件中枢让插件拥有"**带值的事件**": 模型用 `agentxx_event` 工具等它, 插件用 `emit_value`
+事件中枢让插件拥有"**带值的事件**": 会话侧由插件的 `register_wait` 等它, 插件用 `emit_value`
 往它里面放值; 值到达后按投递模式变成某个会话的输入。中枢本体的设计 (记录/等待/投递决策/
 预算) 见 [events.md](events.md), 本节只讲插件这一侧。
 
@@ -2137,7 +2138,7 @@ plugin:
 
 | 成员 | 语义 |
 |---|---|
-| `define_event(agent, spec)` | 声明事件源: 名字 (**必须是全名** `plugin.<名字>.<自由部分>`, hub 内唯一; 不限定插件名, 建议用自己的)、种类 (`stream` 流式 / `single` 单值, 后者首个值到达即结束)、说明文字 (模型 `agentxx_event opt=list` 看到的就是它)、历史条数 (回放用)、`ttl_ms` (到期未结束按过期回收)、`linger_ms` (结束后保留多久, `< 0` = 主程序默认, `0` = 立刻回收) |
+| `define_event(agent, spec)` | 声明事件源: 名字 (**必须是全名** `plugin.<名字>.<自由部分>`, hub 内唯一; 不限定插件名, 建议用自己的)、种类 (`stream` 流式 / `single` 单值, 后者首个值到达即结束)、说明文字 (中枢记录表与诊断看得到)、历史条数 (回放用)、`ttl_ms` (到期未结束按过期回收)、`linger_ms` (结束后保留多久, `< 0` = 主程序默认, `0` = 立刻回收) |
 | `emit_value(agent, name, value_json)` | 发布一个 JSON 值 (**任意线程**; 值经主程序排队写入中枢, 调用方不等投递结果)。事件没声明过时按流式事件自动建立, 归属本实例 |
 | `end_event(agent, name, summary_json)` | 结束一条流 (幂等)。`summary_json` 是查询时一并返回的收尾信息; 结束后再发值会重新打开这条流 |
 | `remove_event(agent, name)` | 立刻移除记录 (不等保留期)。还挂在它上面的等待按"已结束且没有值"收尾, 不会永远等下去 |
@@ -2149,7 +2150,7 @@ plugin:
 
 返回码: `AGENTXX_PLUGIN_EVENT_OK` 与 `ERR_ARG` (参数/名称非法)、`ERR_STATE` (中枢已关闭)、
 `ERR_NOT_FOUND`、`ERR_BUDGET` (事件数/等待数超上限)、`ERR_CONFLICT` (同名事件已被定义成
-另一种种类)、`ERR_UNSUPPORTED` (主程序没有中枢: 关掉了 `event.enable` 或版本更早)。
+另一种种类)、`ERR_UNSUPPORTED` (嵌入方没建中枢或版本更早; 现主程序恒常驻)。
 引用无效时注册类返回 `AGENTXX_PLUGIN_ERR_NO_AGENT` 且无副作用。
 
 事件名与模型侧的规则是同一份 (`agentxx/event/naming.h`): 字母/数字/`.`/`_`/`-`,

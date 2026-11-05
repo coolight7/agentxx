@@ -111,11 +111,12 @@ stateDiagram-v2
 - `single` 事件收到第二个值会覆盖并计 `overwritten`（单值语义明确，不静默丢）；
 - 同名事件被定义成不同 `kind` 时保留先定义者，后到的 `define` 返回错误；
 - 已 `end` 的事件再收到值会重新打开（流式事件允许"续上"）；
-- 终态等待保留一段时间供 `opt=status` 查询，之后回收。
+- 终态等待保留一段时间供诊断查询，之后回收。
 
 ## 4. 投递决策
 
-投递模式由等待的 `delivery` 决定（`watch` 的默认值来自 `event.delivery`，缺省 `next-step`）：
+投递模式由等待的 `delivery` 决定（后台任务结果默认 `next-step`，来自 `agentxx_async_start` 的
+`notify`；插件的等待可用 `event.delivery` 作默认）：
 
 | 会话状态 | `next-step` | `inject` | `next-turn` | `none` |
 |---|---|---|---|---|
@@ -153,12 +154,13 @@ label: ...
 - 超长值（超过 `event.value_max_bytes`）转会话 share store，文本里留 `agentxx_share_store`
   的取回提示；超过 1 MB 硬上限直接拒绝发布。
 
-`agentxx_event opt=watch` 未立即满足时的回执：
+后台任务完成时的回执文本（`async_start` 返回的是受理信息，结果由它自己投递）：
 
 ```text
-[Event wait armed] wait=w-3 event=build.done mode=first delivery=next-step
-The value will arrive later as an input starting with "[Event] build.done".
-Keep working, or end the turn — you do not need to poll. Use opt=status wait=w-3 to check.
+[Event] agentxx.agent.async.done (first)
+wait: w-3 ref=async-7
+status: value
+value: [Async task] id=async-7 ... result: ...
 ```
 
 两种文本的终态都是成功: 工具返回 `ToolResult::ok(...)`, 成败只看状态, 不看正文里有什么字样。
@@ -193,27 +195,29 @@ Keep working, or end the turn — you do not need to poll. Use opt=status wait=w
   **不解析正文**；空值不写进 JSON，老客户端与老会话库照旧
 - 历史消息经 Sync（`ViewMessage` JSON）与会话库重载后仍带该字段
 
-## 6. 工具 `agentxx_event`
+## 6. 模型侧工具
 
-`opt` 八个取值：
+后台任务与事件用一组小工具，各管一件事（`opt` 只在 `agentxx_event` 里保留，且只剩两个值）：
 
-| `opt` | 作用 | 关键参数 |
+| 工具 | 参数 | 作用 |
 |---|---|---|
-| `watch` | 登记等待立即返回（默认选择） | `event` 或 `id`, `mode`, `delivery`, `timeout_ms`, `label`, `ref`, `replay`, `coalesce_ms`, `unpause`, `drop_if_busy` |
-| `await` | 阻塞本轮直到值到达或超时（`timeout_ms` 上限 300000） | 同 `watch` |
-| `status` | 查一个后台任务（`id`）、一个等待（`wait`）或一个事件（`event`） | `id` / `wait` / `event` |
-| `list` | 列事件/本会话的等待 | `scope`（`events`/`waits`/`all`）、`prefix`、`limit` |
-| `works` | 列后台任务台账 | `scope`（`mine`/`all`）、`state`、`limit` |
-| `cancel` | 取消一条后台任务、一个等待或本会话全部等待 | `id` / `scope=mine` / `wait` / `all` |
-| `emit` | 发布一个值（不存在则自动定义） | `event`, `value`, `summary`, `single`, `remove` |
-| `end` | 结束一条事件流 | `event`, `summary`, `remove` |
+| `agentxx_async_start` | `tool`, `args`, `notify`（默认 `true`）, `label` | 把一次工具调用（或一条 `agentxx_subagent` 子代理任务）放到后台；`notify=true` 时结果自动插回会话 |
+| `agentxx_async_query` | `group`（`all`/`queued`/`running`/`done`/`failed`/`canceled`, 默认 `all`）, `id` | 按分组列本会话的后台任务；给 `id` 查单条（含结果正文） |
+| `agentxx_async_await` | `id`, `timeout_ms`（默认 30000，上限 300000） | 阻塞本轮直到该任务出结果；已完成的直接返回台账结果 |
+| `agentxx_async_cancel` | `id`, `group`（`all`/`queued`/`running`） | 取消本会话的一条或一批后台任务 |
+| `agentxx_event` | `opt` = `emit` \| `end`，另有 `event`/`value`/`summary`/`single`/`create`/`label`/`remove` | 发布值 / 结束事件流（只管写侧） |
 
-`id` 是后台任务的 `asyncId`：给 `id` 时 `event` 自动取 `agentxx.agent.async.done`，
-并用 `match={"asyncId":id}` 过滤（不匹配的值不消耗等待）。
+`id` 是后台任务的 `asyncId`（`async-7`）：`agentxx_async_await` 用它登记
+`match={"asyncId":id}` 的定向等待（不匹配的值不消耗等待）。
 
-工具有两个开关：`event.enable=false` 时既不注册工具、也不建中枢；工具本身
-`repeatCallCheck=false`（模型反复 `watch` 同一事件是合法用法），
-`supportsParallel=false`（中枢状态在单线程上改）。
+工具开关：事件中枢**常驻**（删了早期版本的 `event.enable`），`agentxx_event` 总是注册；
+`agentxx_async_*` 需要 `async_work.enable`（容器在 init 之后才挂上也可以，工具内部取不到时
+给明确错误）。`repeatCallCheck` 全为 false，`agentxx_async_query` 声明 `supportsParallel=true`
+（只读），其余独占（`supportsParallel=false`）。
+
+模型侧不再提供“等任意事件”与定时器（早期 `agentxx_event` 的 `watch` / `await` / `status` /
+`list` / `works` / `cancel` 与 `after_ms` / `every_ms` 已删除）：等结果用 `agentxx_async_await`，
+后台任务默认会把结果主动送回来。
 
 ## 7. 内置事件源
 
@@ -223,10 +227,10 @@ Keep working, or end the turn — you do not need to poll. Use opt=status wait=w
 | `agentxx.agent.event.turn.end` | 轮次结束 | `sessionId`, `hasError`, `interrupted`, `durationMs`, `reason` |
 | `agentxx.agent.event.tool.end.<工具名>` | 一次工具调用结束 | 工具名、是否有错、结果字节数 |
 | `agentxx.agent.async.done` | 一条后台任务结束（成功/失败/取消） | `asyncId`, `kind`, `name`, `content`, `hasError`, `canceled`, `errorMessage`, `creatorSessionId`, `startedAtMs`, `finishedAtMs` |
-| `agentxx.agent.event.timer.<名字>` | `agentxx_event` 的 `after_ms` / `every_ms` | `timer` 与触发时间 |
+| `agentxx.agent.event.timer.<名字>` | 定时源（插件 `register_timer` / 内部安排） | `timer` 与触发时间 |
 
 这些子段（`turn.` / `tool.` / `async.` / `timer.` / `host.`）归框架占用：
-模型与插件建自己的事件时不能占（读侧照样可以等它们，见第 12.3 节）。
+模型与插件建自己的事件时不能占（订阅侧不受限）。
 
 内置源**只在有人等时**才发布（先问 `hub->wants(名字)`），因此没人用时不产生记录与开销。
 生命周期事件同时仍按原样发布到类型化总线（`Topic::AgentTurnStart/End`、`ToolCallStart/End`），
@@ -234,17 +238,24 @@ Keep working, or end the turn — you do not need to poll. Use opt=status wait=w
 
 ## 8. 后台任务（async work）
 
-模型侧“委派即提交”：`agentxx_subagent` 调用不再有 `async` / `event_name` 参数，是否异步
-由配置 `async_work.enable` 决定（关闭时同步等结果，行为与旧版一致）。一次后台执行叫一个
-async work，`kind` 区分 `agent`（启动一个 agent 跑任务）与 `tool`（把一次工具调用放到后台跑）。
+模型侧“开始即提交”：任何工具调用（含 `agentxx_subagent`）都可以通过
+`agentxx_async_start {tool, args, notify}` 放到后台跑；`notify` 默认 `true`，结果完成时
+**主动插回上下文**（轮次在跑就插到下一次 `ModelCallNode` 之前，轮次已结束就入队开新一轮）。
+`agentxx_subagent` 自己不再隐式异步（隐式异步已删除）：直接调用就是同步等结果，
+后台跑只是把同一组参数交给 `agentxx_async_start`。
+
+一次后台执行叫一个 async work，`kind` 区分 `agent`（启动一个 agent 跑任务）与
+`tool`（把一次工具调用放到后台跑）。
 
 ```text
-父会话 toolcall: agentxx_subagent {subagent:"task", message:"..."}
+父会话 toolcall: agentxx_async_start {tool:"agentxx_subagent", args:{subagent:"task", message:"..."}}
+  或:          agentxx_async_start {tool:"agentxx_execute_bash_command", args:{command:"...", timeout:0}}
   -> AgentHost::submitAsyncWork 立即受理: 入队, 返回 {started:true, asyncId:"async-7"}
-  -> 工具结果文本: [Async work started] id=async-7 ... (给出 watch/await/cancel 写法)
+  -> 工具结果文本: [Async started] id=async-7 ... (结果默认自己回来, 也可 query/await/cancel)
   -> 队列 (默认按创建者) 有名额时后台跑; 失败/取消同样发布
   -> 结果值发到固定事件名 agentxx.agent.async.done, 值里用 asyncId 区分是哪一条
-  -> 想定向等: agentxx_event {opt:"await", id:"async-7"} / {opt:"watch", id:"async-7"}
+  -> 提交时就替会话登记了一条 next-step 定向等待: 轮次在跑 -> 下一次模型调用前插入;
+     轮次已结束 -> 入队并开新一轮
 ```
 
 要点：
@@ -260,12 +271,18 @@ async work，`kind` 区分 `agent`（启动一个 agent 跑任务）与 `tool`�
   也没有全局并发上限；
 - **`asyncId` 就是任务 agent 的 sessionId**（一个值，不另造；`kind=tool` 的任务没有 agent，
   `asyncId` 仍然是它自己的会话 id，只是不派生 agent）；
-- **取消**：`agentxx_event {opt:"cancel", id}` / `{opt:"cancel", scope:"mine"}`，
+- **取消**：`agentxx_async_cancel {id}` / `{group:"running"}`（只能取消本会话启动的），
   插件侧经 `agentxx.agent.runtime` 的 `cancel_async_work`；agent 关停走
   `AgentHost::cancelAsyncWorks(ctx)`，排队中的直接出队，运行中的置取消令牌；
   被取消同样发终态，等待方不会挂到超时；
-- **没有中枢时**：仍受理，结果只落台账（`delivered=false`），用 `agentxx_event
-  {opt:"works"}` / `{opt:"status", id}` 查；
+- **查询**：`agentxx_async_query {group}` / `{id}`；没开 `notify` 或错过投递时靠它拿结果；
+- **结果怎么回到会话**：`agentxx_async_start` 的 `notify`（默认 `true`）在提交时就登记一条
+  `next-step` 定向等待，值到达时：轮次在跑 → 插到下一次模型调用前；轮次已结束 → 入队并开
+  新一轮；会话没有驱动端 → 落待注入输入（计数 `deferred`）。`notify:false` 只落台账。
+  **插件提交的任务不能用这条路**：它们挂的是**内置根**的中枢（`runtimeSubmitAsyncWork` 取
+  `primaryAgent_` 的上下文），而插件自己开的会话属于它自己的根，中枢投递会因
+  `session not found` 丢掉 —— 那种场景由插件在 `on_event` 里自己投
+  （参考 `agent/plugins/agentxx_chatbot/chatbot_task.cpp`）。
 - 子代理上下文**继承父事件中枢**（嵌套沿用最外层），所以子代理 emit 的事件父会话能等；
 - **中断策略**（`async_work.interrupt_policy`，单次提交可覆盖）：`bubble`（默认）把
   权限询问与 HIL 冒泡到创建者会话；创建者会话已销毁时按拒绝。`deny` / `allow` 不冒泡，
@@ -280,29 +297,20 @@ async work，`kind` 区分 `agent`（启动一个 agent 跑任务）与 `tool`�
   （默认 5 分钟）供查询，到期自动清除。
 - **界面可见**：TUI Info 侧边栏的「后台任务」段经 `WireContextStats.asyncWorks`
   （追加字段，最多 10 条，为空不带）展示本会话创建的运行/排队/最近完成项；
-  只展示不给取消入口（取消走 `agentxx_event opt=cancel`），详见 [tui.md](tui.md) §2.7。
-- **结果怎么回到会话（现状）**：主程序**不替模型自动登记等待**——受理文本会告诉模型
-  “结果会以 `[Event] agentxx.agent.async.done` 输入到达”，要不要等由模型决定：
-  `agentxx_event {opt:"await", id:"async-7"}` 当场等（阻塞本轮，默认 30 s，硬上限 5 min），
-  `{opt:"watch", id:"async-7"}` 不等本轮但值到了再叫醒（`delivery` 默认取 `event.delivery`），
-  或者干脆不管（完后就只在台账里，`works` / `status id` 可查）。`AsyncWorkSpec.notifyDelivery`
-  能把“提交即登记定向等待”做成自动的，但**模型侧两条入口（`agentxx_subagent` /
-  `agentxx_tool_async`）目前都没填它**，只有插件（`AgentxxPluginAsyncWorkSpec.notify_delivery`）
-  在用。
-- **插件提交的任务不能走 `notify_delivery` 回自己的会话**：它们挂的是
-  **内置根**的中枢（`runtimeSubmitAsyncWork` 取 `primaryAgent_` 的上下文），而插件自己开的
-  会话属于它自己的根，中枢投递会因 `session not found` 丢掉 —— 那种场景由插件在
-  `on_event` 里自己投（参考 `agent/plugins/agentxx_chatbot/chatbot_task.cpp`）。
-- **`kind=tool`（异步工具）**：模型侧入口是 `agentxx_tool_async`（参数 `tool` / `args` /
-  `label`），把**一次工具调用**放到后台（`AsyncWorkSpec{toolName, toolArgs}`）。工具在
-  **创建者**的**工具注册表**里查（插件与动态注册的工具；lib 内置快工具由引擎独立持有，
-  不在表里，不支持后台跑），找不到就在运行期按失败收尾；参数原样转交，执行层补
-  `sessionId` / `tool_call_id`（与前台调用一致，下游工具会读这两个字段）。
-  **权限在提交时按目标工具问一次**（`Topic::ToolPermissionCheck`，与前台同一套中间件）——
-  否则模型只要拿到本工具的调用权就能绕过目标工具自己的限制；后台执行期间不再问人。
-  取消是尽力而为：执行层每 50 ms 看一次取消令牌，置位后按取消收尾（工具自己不认识取消
-  时会继续跑到它的超时，结果被丢弃）。插件侧同一能力走 `submit_async_work` 的追加字段
-  `tool_name` / `tool_args_json`（旧布局填不出来时按 `ERR_ARG` 拒）。
+  只展示不给取消入口（取消走 `agentxx_async_cancel`），详见 [tui.md](tui.md) §2.7。
+- **`kind=tool`（异步工具）**：`agentxx_async_start` 把**一次工具调用**放到后台
+  （`AsyncWorkSpec{toolName, toolArgs}`）。工具在**创建者**的**工具注册表**里查（插件与
+  动态注册的工具；lib 内置快工具由引擎独立持有，不在表里，不支持后台跑），找不到就在
+  运行期按失败收尾；参数原样转交，执行层补 `sessionId` / `tool_call_id`（与前台调用一致，
+  下游工具会读这两个字段）。**权限在提交时按目标工具问一次**（`Topic::ToolPermissionCheck`，
+  与前台同一套中间件）—— 否则模型只要拿到 `agentxx_async_start` 的调用权就能绕过目标工具
+  自己的限制；后台执行期间不再问人。取消是尽力而为：执行层每 50 ms 看一次取消令牌，
+  置位后按取消收尾（工具自己不认识取消时会继续跑到它的超时，结果被丢弃）。
+  插件侧同一能力走 `submit_async_work` 的追加字段 `tool_name` / `tool_args_json`
+  （旧布局填不出来时按 `ERR_ARG` 拒）。
+- **`kind=agent`（子代理）**：`agentxx_async_start {tool:"agentxx_subagent", args:{...}}`
+  与直接调用 `agentxx_subagent` 的参数完全一致（`subagent` / `message` 或 `messages` /
+  `system_prompt` / `tools` / `enable_summarization`），内部转成 `kind=agent` 的提交快照。
 
 自动压缩这类内部委派没有 `tool_call_id`，一律同步等结果（不受开关影响）。
 
@@ -316,13 +324,12 @@ async work，`kind` 区分 `agent`（启动一个 agent 跑任务）与 `tool`�
 | 单会话"待运行的事件输入" | 64 | — |
 | 单值进入上下文的阈值 | 32 KB | `event.value_max_bytes` |
 | 单值硬上限 | 1 MB | — |
-| `watch` 默认超时 | 0（不限） | `event.wait_timeout_ms` |
-| `watch` 默认投递模式 | `next-step` | `event.delivery` |
+| `await` 默认超时 | 30 s（硬上限 5 min） | — |
+| 插件/内部等待默认投递模式 | `next-step` | `event.delivery` |
 | 无驱动端自驱一轮 | 关闭 | `event.allow_headless_turn` |
-| 中枢总开关 | 开 | `event.enable` |
 
 超预算的处理一律是"明确报错或丢弃 + 计数"，不静默排队：事件/等待超限时 `define`/`watch`
-返回错误文本；丢弃按原因分桶记在 `statsJson()` 的 `droppedByReason` 里。
+（内部入口）返回错误文本；丢弃按原因分桶记在 `statsJson()` 的 `droppedByReason` 里。
 
 ## 10. 线程与生命周期
 
@@ -364,9 +371,11 @@ async work，`kind` 区分 `agent`（启动一个 agent 跑任务）与 `tool`�
 插件 emitEvent("plugin.chat.group42.progress", payload)  // agentxx.agent.runtime 表 / SDK kit
   -> 插件管理器校验名字在本实例的 `plugin.<实例插件名>.*` 里, 原样发到该 agent 的总线
   -> 中枢前缀订阅收到, 记为同一个名字的事件
-模型  agentxx_event {opt:"watch", event:"plugin.chat.group42.progress"}
 ```
 
+模型侧的订阅入口已合并到后台任务：模型不再自己挂等待，需要“把插件事件变成会话输入”时
+由插件 `register_wait` 替会话登记（值到达直接作为会话输入），或后续在
+`agentxx_async_start` 上扩展“事件订阅”目标。
 写侧只能落在插件族里（`plugin.*`），框架**不补前缀**；读侧（订阅/等待/触发器）可以跨族，
 但必须是全名（裸名直接拒绝）。
 
@@ -380,25 +389,24 @@ async work，`kind` 区分 `agent`（启动一个 agent 跑任务）与 `tool`�
 带值事件的正规入口（`plugin_api.h` 的表 + `plugin_kit.h` 的便捷函数），成员、返回码、
 归属回收与 SDK 函数见 [plugins.md](plugins.md) §20。要点：
 
-- `define_event` 声明事件源：说明文字会出现在模型 `agentxx_event opt=list` 的结果里，
-  模型据此知道该等什么；
+- `define_event` 声明事件源：说明文字会进中枢记录表（诊断与 `list_runtime` 可见）；
 - `emit_value` 发布 JSON 值（任意线程；值排队写入中枢，调用方不等投递结果），
   `end_event` / `remove_event` 收尾；
 - `register_wait` 替某个会话登记等待：`first` / `each` / `all` 三档 + `delivery`
-  （`next-step` / `inject` / `next-turn` / `none`）+ `replay`（是否消费注册前已有的值）；
+  （`next-step` / `inject` / `next-turn` / `none`）+ `replay`（是否消费注册前已有的值）——
+  模型侧的自动通知用的就是这套机制；
 - 归属记成 `plugin:<实例名>`：插件禁用/卸载时主程序先取消它的等待、再删它的记录
   （`PluginMount::revokeEntry` 最后一步），加载快照的 `eventRecords` / `eventWaits` 给出
   当前生效条数；
-- 关闭 `event.enable` 时中枢不存在：写入口返回 `AGENTXX_PLUGIN_EVENT_ERR_UNSUPPORTED`，
-  插件应按"功能不可用"降级（示例插件 `example_event` 就是这么写的）。
+- 中枢在现主程序中恒常驻，写入口不会再返回 `AGENTXX_PLUGIN_EVENT_ERR_UNSUPPORTED`
+  （该常量保留给"嵌入方没建中枢"的环境；老主程序上仍会看到）。
 
-### 12.3 模型侧 `agentxx_event` 的名字规则
+### 12.3 模型侧的事件名规则
 
-- 读（`watch` / `await` / `status` / `list`）：三族任意全名，包括内置源那些事件
-  （`agentxx.agent.event.turn.start` 也能等）；
-- 写（`emit` / `end`）：只能落在 `agentxx.agent.event.*` 且不能占框架保留子段
-  （`turn.` / `tool.` / `async.` / `timer.` / `host.`）；插件族 `plugin.<名>.*` 只读；
-- 定时源：`after_ms` / `every_ms` 要求事件名在 `agentxx.agent.event.timer.` 段里。
+- 写（`agentxx_event opt=emit|end`）：只能落在 `agentxx.agent.event.*` 且不能占框架保留子段
+  （`turn.` / `tool.` / `async.` / `timer.` / `host.`）；插件族 `plugin.<名>.*` 只写自己那一侧；
+- 读不再由模型直接发起：后台任务结果由 `agentxx_async_start` 主动送回，要单拿一条用
+  `agentxx_async_await {id}`；插件的订阅走 `agentxx.agent.event` 接口表的 `register_wait`。
 
 尚未做的部分见第 13 节。
 
@@ -409,10 +417,13 @@ async work，`kind` 区分 `agent`（启动一个 agent 跑任务）与 `tool`�
   原计划把它们改成"spec → `EventWaitSpec`"的参数转换，本轮没做（C ABI 与插件写法不变，
   纯内部收敛，需要单独一轮改动 + 回归）；
 - **后台命令**（`agentxx_execute_command` 的 `background:true`）未实现：命令长时间运行时
-  仍占一轮（现在可以用 `agentxx_tool_async` 把那次命令调用丢到后台，算半个替代）；
+  仍占一轮（可以用 `agentxx_async_start` 把那次命令调用丢到后台，但拿不到流式输出）；
 - **后台任务的人工介入只在任务上**：`kind=agent` 的 `InterruptPolicy`
   （`bubble` / `deny` / `allow`）接入会话总线应答器；`kind=tool` 没有自己的会话，
   中断不回弹，权限只在**提交时**按目标工具判定一次；
+- **模型侧不再能等任意事件/建定时器**（早期 `watch` 与 `after_ms`/`every_ms` 已删）：
+  插件订阅走接口表，模型只需要 `agentxx_async_await {id}`；以后需要“事件订阅”类异步内容时，
+  在 `agentxx_async_start` 上扩展目标（工具名 —— 子代理/事件订阅/…）；
 - **事件不持久化**：刷新/重启后事件记录与等待都清空（生产者都绑在进程上）。
 
 ## 14. 测试
@@ -420,10 +431,11 @@ async work，`kind` 区分 `agent`（启动一个 agent 跑任务）与 `tool`�
 | 模块 | 覆盖 |
 |---|---|
 | `event_hub` | 记录状态机、回放、三种 `mode`、预算、名字校验、取消、`awaitOnce` 三种退出、定时源、ttl/linger |
-| `event_tools` | 八个 `opt` 的参数校验与返回文本（逐字段断言，作为对外约定）、返回文本不命中工具失败前缀、工具注册与 `event.enable` 开关、schema |
+| `event_tools` | `agentxx_event` 只剩发布侧：`opt` 枚举只有 emit/end、写侧名字校验（保留子段/插件族）、建/发/结束/移除与 single 形态、失败形态 |
 | `event_delivery` | 空闲/在跑/无驱动端/暂停态四种投递路径、轮末兜底、端点停止后解绑、关停丢弃、展示消息的来源标记 |
-| `event_subagent` | 后台任务立即受理、单一事件名与值里的 `asyncId`、结果事件叫醒会话、工具返回文本、非法事件名拒绝、无中枢时只落台账、取消后仍发终态 |
+| `event_subagent` | 后台任务立即受理、单一事件名与值里的 `asyncId`、经 `agentxx_async_start` 的受理文本、结果自动投递（驱动端或待注入）、非法事件名拒绝、取消后仍发终态 |
 | `async_work` | 台账与状态机、每队列 FIFO 与额度、排队/运行的取消、linger 清扫、指标计数、`listJson` 的 `queueAhead`、`kind=tool` 的执行/失败/取消 |
+| `async_tools` | `agentxx_async_start`（工具/子代理两种目标、notify 默认与关闭、权限与参数）、`_query`（六档 group、单条 id、归属隔离）、`_await`（已完成/运行中/超时）、`_cancel`（id / group / 终态 / 归属） |
 | `plugin_event` | 插件面全流程（示例插件 `example_event`）：声明事件源与自查、发布/结束/移除/查询、替会话登记等待与投递、失败路径、禁用/启用/卸载的可逆性 |
 
 `event_delivery` / `event_subagent` 每个用例都起一次本地模拟 LLM 服务，单模块耗时十几秒，

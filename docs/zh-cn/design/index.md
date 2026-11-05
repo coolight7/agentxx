@@ -74,9 +74,8 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 知识检索 / 字符串 / 系统时间 / 规划写入) 已从 lib 内置实现拆分为**独立插件**
 (同名同行为, 见 `agent/plugins/agentxx_*`)，经 yaml `plugin.list` 段配置加载，
 或构建期经 `AGENTXX_PLUGIN_BUILTIN_LIST`
-合并编译进 libagentxx (默认不内置)；lib 内仅保留 share_store / subagent /
-git_worktree / event / tool_async 及延迟加载加载 (`ToolSkillSearchSubAgentTask` 模板类,
-当前未独立注册为 tool)：
+合并编译进 libagentxx (默认不内置)；lib 内仅保留 share_store / subagent / git_worktree /
+event / async_* 及延迟加载加载 (`ToolSkillSearchSubAgentTask` 模板类, 当前未独立注册为 tool)：
 
 | 分类 | 工具 | 说明 |
 |------|------|------|
@@ -105,8 +104,11 @@ git_worktree / event / tool_async 及延迟加载加载 (`ToolSkillSearchSubAgen
 | **子代理** | `agentxx_subagent` | 创建和管理子代理执行委派任务 (单任务字段 subagent/message, 或批量 tasks 数组并行; 由 SubagentManager 中间件持有单实例注入, 默认注册 `subagent_task`) |
 | | `tool_skill_search` 逻辑 | 延迟加载工具/技能的搜索: `ToolSkillSearchSubAgentTask` 仅为 system prompt 模板 (当前未独立注册为 tool, 由 subagent 按需内联检索逻辑) |
 | **数据** | `agentxx_share_store` | 会话级文本寄存，节省上下文 |
-| **事件/后台** | `agentxx_event` | 事件中枢的模型侧入口 (`watch`/`await`/`status`/`list`/`works`/`cancel`/`emit`/`end`) |
-| | `agentxx_tool_async` | 把**一次工具调用**放到后台跑 (`kind=tool`), 受理返回 `[Async tool started] id=...`; 只在 `async_work.enable` 时注册 |
+| **事件/后台** | `agentxx_event` | 发布值 / 结束事件流 (`opt` = `emit` / `end`) |
+| | `agentxx_async_start` | 把**一次工具调用或子代理任务**放后台跑, `notify`（默认 true）开启时结果自动插回上下文; 只在 `async_work.enable` 时注册 |
+| | `agentxx_async_query` | 查本会话的后台任务 (`group` 六档 / `id` 单条, 含结果正文) |
+| | `agentxx_async_await` | 阻塞本轮等某条任务 (`timeout_ms` 默认 30s, 上限 5min) |
+| | `agentxx_async_cancel` | 取消单条 / 一批本会话的后台任务 |
 | | `agentxx_string_html_to_markdown` | HTML 转 Markdown |
 | | `agentxx_string_regexp` | 正则搜索/替换/移除 |
 | **系统** | `agentxx_get_current_datetime` | 获取当前日期时间 |
@@ -200,9 +202,10 @@ git_worktree / event / tool_async 及延迟加载加载 (`ToolSkillSearchSubAgen
   跑在该 agent 的 io 线程；只订阅总线 `plugin.` 前缀（插件往总线发自己那一族的值就等于
   往中枢发值；内置源不走总线，直接 `publishValue`）—— 命名规则见
   [events.md](events.md) 第 1 节与 [plugins.md](plugins.md) §21；
-- 模型用内置工具 `agentxx_event`（`watch`/`await`/`status`/`list`/`works`/`cancel`/
-  `emit`/`end`）登记等待、查后台任务或发布值；值到达时统一翻译成会话输入
-  （空闲开新一轮，在跑则插到下一次模型调用前）；
+- 模型侧的工具族：`agentxx_async_start`（开始一条后台任务，`tool` + `args` + `notify`）、
+  `agentxx_async_query` / `_await` / `_cancel`（查 / 阻塞等 / 取消），以及只管发布侧的
+  `agentxx_event`（`emit` / `end`）；`notify` 默认 `true` —— 提交时就替会话登记一条
+  `next-step` 等待，值到达时空闲开新一轮、在跑则插到下一次模型调用前；
 - “往会话塞一轮输入”统一经 `SessionInputSink`（由 `SessionServerAgentIO` 实现，
   弱引用登记在 `Session::inputSink`），保证一个会话同一时刻只有一个驱动者；
 - 内置事件源：`agentxx.agent.event.turn.start` / `.turn.end` / `.tool.end.<工具名>` /
@@ -213,15 +216,16 @@ git_worktree / event / tool_async 及延迟加载加载 (`ToolSkillSearchSubAgen
 后台任务由 `agentxx::agent::AsyncWorkManager`（`AgentHost` 持有，见
 `agent/lib/include/agentxx/agent/async_work.h`）管：台账 + 每队列 FIFO + 额度
 （`async_work.max_concurrent`，默认 3，队列 = 创建者 agentId），不设排队条数/嵌套深度/
-全局上限。`agentxx_subagent` **委派即提交**（不再有 `async` / `event_name` 参数，开关是
-`async_work.enable`），返回 `{started:true, asyncId}`，后台跑完/失败/取消都发终态；
-`asyncId` 就是任务 agent 的 `sessionId`。取消经 `agentxx_event {opt:"cancel", id}`
-或 agent 关停（`AgentHost::cancelAsyncWorks`）。
+全局上限。`agentxx_async_start {tool:"agentxx_subagent", args:{subagent, message, ...}}`
+把子代理放后台（参数与直接调用完全一致；`agentxx_subagent` 自己已回到同步语义），
+返回 `{started:true, asyncId}`，后台跑完/失败/取消都发终态；
+`asyncId` 就是任务 agent 的 `sessionId`。取消经 `agentxx_async_cancel {id}` /
+`{group:"running"}` 或 agent 关停（`AgentHost::cancelAsyncWorks`）。
 
-`kind` 两种：`agent`（起一个 agent 跑任务，上面的默认形态）与 `tool`（把**一次工具调用**
-放到后台，模型侧入口 `agentxx_tool_async`，工具在创建者的**工具注册表**里查（插件与动态
-注册的工具）、参数原样转交，权限在提交时按目标工具问一次，取消是 50 ms 轮询的尽力而为；
-插件侧用 `submit_async_work` 的 `tool_name` / `tool_args_json`）。
+`kind` 两种：`agent`（起一个 agent 跑任务）与 `tool`（把**一次工具调用**放到后台，
+工具在创建者的**工具注册表**里查（插件与动态注册的工具）、参数原样转交，权限在提交时
+按目标工具问一次，取消是 50 ms 轮询的尽力而为；插件侧走 `submit_async_work` 的
+`tool_name` / `tool_args_json`）。事件中枢**常驻**（早期 `event.enable` 开关已删）。
 
 细节（状态机、投递决策表、文本格式、预算、诊断、配置项）见 [events.md](events.md) 第 8 节；
 配置键 `event.*` / `async_work.*` 见 [config-keys.md](config-keys.md)。

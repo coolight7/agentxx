@@ -288,19 +288,6 @@ std::vector<ConfigKeyEntry> configKeyEntries() {
     );
     // ---- 事件中枢 (yaml `event` 块) ----
     out.push_back(
-        {"event.enable",
-         "bool",
-         "true",
-         "event:\n  enable: false\n",
-         "",
-         false,
-         "true",
-         "false",
-         [](const YamlAppConfig& cfg) {
-             return boolText(cfg.eventEnable);
-         }}
-    );
-    out.push_back(
         {"event.value_max_bytes",
          "int (字节)",
          "32768",

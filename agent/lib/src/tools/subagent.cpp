@@ -407,12 +407,8 @@ asio::awaitable<agentxx::util::ToolResult>
     auto sessionId = arguments.value("sessionId", std::string{});
     auto resultId  = arguments.value("tool_call_id", std::string{});
 
-    // 是否异步由配置决定 (`async_work.enable`), 不再由工具参数控制:
-    // - 工具调用路径 (有 tool_call_id): 提交后台任务, 立即返回 asyncId
-    // - 内部直调路径 (上下文压缩等, 无 tool_call_id): 始终同步等结果
-    const bool asyncMode
-        = agentCtxPtr->agentConfig != nullptr && agentCtxPtr->agentConfig->enableAsyncWork
-          && !resultId.empty();
+    // 子代理始终同步返回结果: 要后台跑由 `agentxx_async_start`
+    // （`tool="agentxx_subagent"` + 同样的参数）提交, 不再随 `async_work.enable` 改变形态
 
     // 通过 requestInterrupt 触发/恢复中断
     // - 首次: 存储中断参数 (tasks 数组) 到 graphData, 抛出 NodeInterrupt
@@ -456,10 +452,6 @@ asio::awaitable<agentxx::util::ToolResult>
                 // 任务结果标识: 缺省按任务序号生成默认值
                 if (!task.resultId.empty()) {
                     t["result_id"] = task.resultId;
-                }
-                // 后台任务: 中断参数里的内部标记 (模型侧没有这个参数)
-                if (asyncMode) {
-                    t["async"] = true;
                 }
                 tasksJson.push_back(std::move(t));
             }

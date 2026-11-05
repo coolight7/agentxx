@@ -1844,7 +1844,7 @@ static int32_t PLUGINXX_CALL xx_runtime_list_async_work(
 // - 归属统一记成 `plugin:<实例名>`: 插件禁用/卸载时主程序按它整批删记录、取消等待
 //   (`PluginMount::revokeEntry`)。
 
-/// 本挂载所属 agent 的事件中枢 (未启用 `event.enable=false` 时为空)
+/// 本挂载所属 agent 的事件中枢 (恒常驻; 早期版本可关, 已删除该开关)
 static std::shared_ptr<agentxx::events::EventHub>
     eventHubOf(PluginManager* mgr, const PluginxxScopeRef* agent) {
     auto* mount = mountIn(mgr, agent);

@@ -778,7 +778,7 @@ static YamlAppConfig parseYamlConfigNode(
     // 条目的 args): 主程序不解析其字段语义, 整体原样传递给插件
 
     // 事件中枢 (yaml `event` 块)
-    // - enable:              是否启用事件中枢与 agentxx_event 工具 (默认 true)
+    // - 中枢常驻, 没有 enable 开关
     // - value_max_bytes:     单值进入上下文的阈值 (字节, 超出转 share store; 默认 32768)
     // - wait_timeout_ms:     watch 的默认超时 (毫秒, 0 = 不限; 默认 0)
     // - max_waits_session:   每会话同时挂起的等待数上限 (默认 32)
@@ -786,17 +786,6 @@ static YamlAppConfig parseYamlConfigNode(
     // - delivery:            watch 的默认投递模式 (默认 next-step)
     const auto eventNode = mapChild(root, "event");
     if (isNodePresent(eventNode)) {
-        if (const auto node = mapChild(eventNode, "enable"); isNodePresent(node)) {
-            const auto val
-                = utilxx_base::toLower(resolveEnvVars(nodeScalarText(node), dotEnvVars, overrideEnvVars));
-            if (val == "true" || val == "1" || val == "yes" || val == "on") {
-                cfg.eventEnable = true;
-            } else if (val == "false" || val == "0" || val == "no" || val == "off" || val.empty()) {
-                cfg.eventEnable = false;
-            } else {
-                XX_LOGW("[Config] Warning: unknown event.enable '{}', fallback to true", val);
-            }
-        }
         auto readNumber = [&](std::string_view key, int64_t& out, int64_t minValue) {
             const auto node = mapChild(eventNode, key);
             if (!isNodePresent(node)) {

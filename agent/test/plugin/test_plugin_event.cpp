@@ -119,7 +119,7 @@ struct EventFixture {
     uint64_t                                        mountSeq = 0;
 };
 
-/// 造一个 agent 上下文与挂载; `withHub=false` 时不建中枢 (模拟 `event.enable=false`)
+/// 造一个 agent 上下文与挂载; `withHub=false` 时不建中枢 (模拟没有中枢的嵌入方)
 asio::awaitable<EventFixture> makeFixture(bool withHub = true) {
     auto ex       = co_await asio::this_coro::executor;
     auto f        = EventFixture{};
@@ -734,9 +734,9 @@ asio::awaitable<void> test_failure_paths() {
         XX_TEST_EXPECT_EQ(code, int32_t{AGENTXX_PLUGIN_ERR_NO_AGENT});
     }
 
-    // 中枢未启用 (`event.enable=false`): 写入口一律返回不支持
+    // 没有中枢的嵌入环境: 写入口一律返回不支持 (主程序恒常驻, 这条只是兼容老环境的降级路径)
     {
-        auto dry = co_await makeFixture(/*withHub=*/false);
+        auto dry     = co_await makeFixture(/*withHub=*/false);
         auto dryInst = co_await loadExampleEvent(dry);
         // 插件降级: 没有事件中枢时 mount 直接返回成功, 不声明任何事件
         XX_TEST_EXPECT_TRUE(dryInst != nullptr);

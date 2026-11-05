@@ -495,7 +495,7 @@ path/to/agentxx_test --log-level warn string_util regex
 - 插件工具提示词归属 (2026-10): 插件工具的提示词 (depict + 参数说明) 写在**插件自身**字面量里
   (少数插件经 `agentxx.agent.prompt` 接口表注入, 如 execute_command/codegraph/planning);
   `AgentPrompt::toolPrompt` (prompt.cpp) 只保留内置工具 (share_store / subagent /
-  git_worktree / event / tool_async),
+  git_worktree / event / async_start / async_query / async_await / async_cancel),
   并保持**表中存在同名条目时覆盖插件提示词**的逻辑 (改动插件工具文案只需改插件)
 - 工具集调整 (2026-10): 文件系统新增 `agentxx_filesystem_move` / `_copy` / `_remove`
   三个写类工具 (权限: move/copy 声明 `src` 写作用域, 另一个目标 `dst` 在工具内用只读三态
@@ -560,12 +560,18 @@ path/to/agentxx_test --log-level warn string_util regex
   `agentxx.agent.event.turn.start`/`.turn.end`/`.tool.end.<工具名>`/
   `.timer.<名字>` 先问 `wants()` 再发 (后台任务的 `agentxx.agent.async.done` 是唯一
   落在 `agentxx.agent.event.` 段外的内置值事件, 见下面的后台任务段)。
-  模型工具 `agentxx_event` (watch/await/status/list/works/cancel/emit/end, 前台任务用
-  `id` = asyncId 定向等/查/取消), 配置键 `event.*`
-  (enable/value_max_bytes/wait_timeout_ms/max_waits_session/allow_headless_turn/delivery)。
+  **模型侧工具族** (2026-11): `agentxx_async_start` (`tool` + `args` + `notify`, 默认 `true` =
+  结果自动插回上下文) / `agentxx_async_query` (`group` 六档或 `id`) / `agentxx_async_await`
+  (`id` + `timeout_ms`) / `agentxx_async_cancel` (`id` 或 `group`), 以及只管发布侧
+  `agentxx_event` (`opt` = `emit`/`end`)。早期的 `agentxx_event watch/await/status/list/
+  works/cancel` 与 `after_ms`/`every_ms` 已删除 (模型不再等任意事件、不再自建定时器),
+  `agentxx_tool_async` 已改名为 `agentxx_async_start`。**事件中枢恒常驻**:
+  `event.enable` 配置键已删除 (插件面 `AGENTXX_PLUGIN_EVENT_ERR_UNSUPPORTED` 只给没有中枢的
+  嵌入环境/老主程序)。配置键 `event.*`
+  (value_max_bytes/wait_timeout_ms/max_waits_session/allow_headless_turn/delivery)。
   诊断: `KeyMetrics` 的 `events.*` 三计数 + 加载快照 `event_hub` 段 +
   `--dump-diagnostics` 的 `## event hub`; 测试模块 `event_hub` /
-  `event_tools` / `event_delivery` / `event_subagent` / `plugin_event`。插件面接口表
+  `event_tools` / `event_delivery` / `event_subagent` / `async_tools` / `plugin_event`。插件面接口表
   `agentxx.agent.event` 已实现 (2026-11-03): `define_event`/`emit_value`/`end_event`/
   `remove_event`/`query_event`/`list_events`/`register_wait`/`cancel_wait`/`list_waits`,
   事件与等待按 `plugin:<实例名>` 记账 (禁用/卸载整批回收, 注册清单 `eventRecords`/`eventWaits`),
@@ -576,22 +582,24 @@ path/to/agentxx_test --log-level warn string_util regex
   由 `AgentHost` 持有并通过 `friend` 访问其私有接口) = 台账 (`AsyncWorkEntry`: kind/state/
   queueKey/时间戳/结果) + 每队列 FIFO + 额度 + 结束 linger 清扫 + 取消/查询 + 指标记账;
   `kind` = `agent` (起一个 agent 跑任务) 或 `tool` (把一次工具调用放到后台跑,
-  模型侧入口 `agentxx_tool_async` (`tool` / `args` / `label`), 权限在提交时按目标工具
+  入口 `agentxx_async_start`; 权限在提交时按目标工具
   问一次、取消是 50 ms 轮询的尽力而为; 工具在创建者的**工具注册表**里查 (插件/动态注册
   的工具; lib 内置快工具不在表里, 不支持后台跑), 参数原样转交并补 `sessionId` /
-  `tool_call_id`)。**委派即提交**: `agentxx_subagent` 不再有 `async`/`event_name`
-  参数, 开关是 `async_work.enable`, 受理返回 `{started:true, asyncId}`, 工具正文
-  `[Async work started] id=...`。**单一事件名** `agentxx.agent.async.done`
+  `tool_call_id`)。**子代理回归同步**: `agentxx_subagent` 不再隐式异步 (删掉了
+  `async_work.enable` 决定形态的老行为), 要后台跑就 `agentxx_async_start
+  {tool:"agentxx_subagent", args:{subagent, message, ...}}` —— 参数与直接调用完全一致,
+  内部按 `kind=agent` 提交; 受理返回 `{started:true, asyncId}`、正文 `[Async started] id=...`。
+  **notify 默认开**: 提交时就替会话登记一条 `next-step` 定向等待 (轮次在跑 → 下一次模型调用前
+  插入; 轮次已结束 → 入队开新一轮; `notify:false` 只落台账)。**单一事件名** `agentxx.agent.async.done`
   (`naming.h` 的 `kAgentAsyncPrefix`; 它是唯一落在 `agentxx.agent.event.` 段外的内置值
   事件), 值里用 `asyncId` 区分, 等待靠 `EventWaitSpec::match` 过滤 (不匹配的值不消耗
   等待、带过滤的等待不随事件结束收尾); `asyncId` 就是任务 agent 的 `sessionId`。
   并发只有每队列额度 (默认队列 = 创建者 agentId, `async_work.max_concurrent` 默认 3),
-  **不设**排队条数/嵌套深度/全局上限。取消: `agentxx_event {opt:"cancel", id}` /
-  `{opt:"cancel", scope:"mine"}`、`AgentHost::cancelAsyncWorks(ctx)` (排队中的直接出队,
-  运行中的置取消令牌, 被取消同样发终态)。没有中枢时仍受理, 结果只落台账
-  (`delivered=false`), 用 `agentxx_event {opt:"works"}`/`{opt:"status", id}` 查。
-  `agentxx_subagent` 一批里同步任务照旧等结果, 只有带 `tool_call_id` 的才走后台
-  (压缩等内部直调一律同步); 取消令牌独立于轮次, 子代理上下文继承父 hub。
+  **不设**排队条数/嵌套深度/全局上限。取消: `agentxx_async_cancel {id}` /
+  `{group:"running"}` (只限本会话启动的)、`AgentHost::cancelAsyncWorks(ctx)` (排队中的
+  直接出队, 运行中的置取消令牌, 被取消同样发终态)。查询: `agentxx_async_query`
+  (`group` = `all`(本会话)/`queued`/`running`/`done`/`failed`/`canceled`, 或 `id`)。
+  取消令牌独立于轮次, 子代理上下文继承父 hub; 压缩等内部直调一律同步。
   配置 `async_work.*`: `enable`/`max_concurrent`/`interrupt_policy`(bubble|deny|allow)/
   `session_store`/`session_store_keep_days`/`linger_ms`/`result_max_bytes`。
   **中断策略**: `bubble` 把权限询问/HIL 冒泡到创建者会话 (创建者已销毁按拒绝);
@@ -602,7 +610,7 @@ path/to/agentxx_test --log-level warn string_util regex
   创建者无 `dataDir`/`sessionStoreDirectory` 时明确拒绝 (不默默不落盘);
   `session_store_keep_days` > 0 时, 提交带落盘任务时顺手清掉过期任务会话目录。
   诊断: `KeyMetrics` 与加载快照的 `async_work` 段; 测试 `async_work` /
-  `event_subagent` / `event_tools`。**界面**: TUI Info 侧边栏「后台任务」段 (排在 Context 段
+  `async_tools` / `event_subagent` / `event_tools`。**界面**: TUI Info 侧边栏「后台任务」段 (排在 Context 段
   之后、Append 段之前) 经 `WireContextStats.asyncWorks` 追加字段下发 (最多 10 条, 为空不带,
   老客户端忽略), 只展示不给取消入口 (`info.asyncWorks` 一组文案键; 测试
   `tui_widget` 的 `test_info_sidebar_async_works`), 详见
@@ -617,7 +625,7 @@ path/to/agentxx_test --log-level warn string_util regex
   所有根/子代理/后台任务共用一份 `ModelProviderRegistry` (同名模型 `getProvider` 返回
   同一个实例, 运行时 `AddModel`/`RemoveModel` 对所有人立即生效); HTTP keep-alive 连接池
   本来就是 `utilxx::HttpClient` 的进程级单例。**未做**: `execute_command` 的
-  `background:true` (可用 `agentxx_tool_async` 把那次命令调用丢到后台代替)。- 会话运行时 (2026-10): `agentxx.agent.runtime` 表让插件挂自己的**根 agent**
+  `background:true` (可用 `agentxx_async_start` 把那次命令调用丢到后台代替)。- 会话运行时 (2026-10): `agentxx.agent.runtime` 表让插件挂自己的**根 agent**
   (`mount_root`: 只能放 `start`, `config_json` 给提示词/工具白名单, `mount_plugins` 给挂载策略,
   默认 `include_creator=false` 切断递归) 并在上面开**会话通道** (`open_channel` 一个
   `sessionId` 一条; 事件 `READY`/`TURN_*/DELTA_*`/`INTERRUPT`/`CLOSED`; 输入/取消/换模型/

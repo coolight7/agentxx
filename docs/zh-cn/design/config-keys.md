@@ -18,7 +18,7 @@
 
 > 相关文档: [index.md](index.md) · [配置与设置边界](configuration.md)
 
-键数: 69
+键数: 68
 
 | 键路径 | 归属 | 类型 | 默认值 |
 |---|---|---|---|
@@ -27,7 +27,6 @@
 | `language` | 服务端 | string (zh-cn | en) | 空 (由客户端界面语言决定) |
 | `subagent.enable` | 服务端 | bool | true |
 | `worktree.enable` | 服务端 | bool | false |
-| `event.enable` | 服务端 | bool | true |
 | `event.value_max_bytes` | 服务端 | int (字节) | 32768 |
 | `event.wait_timeout_ms` | 服务端 | int (毫秒, 0 = 不限) | 0 |
 | `event.max_waits_session` | 服务端 | int | 32 |
@@ -126,13 +125,6 @@ subagent:
 ```yaml
 worktree:
   enable: true
-```
-
-### `event.enable`
-
-```yaml
-event:
-  enable: false
 ```
 
 ### `event.value_max_bytes`

@@ -574,9 +574,6 @@ auto EventHub::callSync(Fn&& fn, bool* completed) {
 // 文本渲染 (纯函数: 便于测试逐字段断言, 也是给模型看的稳定格式)
 // ---------------------------------------------------------------------------
 
-/// 挂起成功的返回文本 (`agentxx_event opt=watch` 未立即满足时)
-std::string renderWaitArmed(const EventWait& wait);
-
 /// 一次投递的文本 (`[Event] <name> ...`), 也是模型收到的输入正文
 /// - 单值给 `value:` 一行, 多值给 `values:` 列表
 /// - `valueTexts` 是调用方已经定稿的值文本 (超长值已转 share store, 见 hub.cpp)

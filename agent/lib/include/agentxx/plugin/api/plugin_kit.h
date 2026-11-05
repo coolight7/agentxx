@@ -1228,7 +1228,7 @@ struct EventWaitOptions {
     bool dropIfBusy = false;
 };
 
-/// 主程序是否提供事件中枢 (老主程序没有这张表 / `event.enable=false` 时两者都为假)
+/// 主程序是否提供事件中枢 (老主程序没有这张表时为假; 现主程序中恒常驻)
 template<typename Ctx>
 inline bool hasEventHub(const Ctx& ctx) {
     return ctx.iface.event != nullptr && ctx.iface.event->define_event != nullptr;

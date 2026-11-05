@@ -1329,7 +1329,7 @@ typedef struct AgentxxPluginRuntimeIface {
 #define AGENTXX_PLUGIN_EVENT_ERR_NOT_FOUND    (-3) ///< 事件或等待不存在
 #define AGENTXX_PLUGIN_EVENT_ERR_BUDGET       (-4) ///< 超预算 (事件数/等待数上限)
 #define AGENTXX_PLUGIN_EVENT_ERR_CONFLICT     (-5) ///< 同名事件已被定义成另一种种类
-#define AGENTXX_PLUGIN_EVENT_ERR_UNSUPPORTED  (-6) ///< 主程序未提供事件中枢 (`event.enable=false`)
+#define AGENTXX_PLUGIN_EVENT_ERR_UNSUPPORTED  (-6) ///< 主程序未提供事件中枢 (只有老主程序会返回; 现主程序恒定常驻)
 
 /* ---- 事件种类 ---- */
 #define AGENTXX_PLUGIN_EVENT_KIND_STREAM 0 ///< 流式: 多次发布, 由 `end_event` 结束
