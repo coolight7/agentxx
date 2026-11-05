@@ -382,6 +382,10 @@ size_t AgentHost::cancelAsyncWorksOfSession(std::string_view creatorSessionId) {
     return asyncWork_ ? asyncWork_->cancelBySession(creatorSessionId) : 0;
 }
 
+size_t AgentHost::cancelAsyncWorksOfOwner(std::string_view owner) {
+    return asyncWork_ ? asyncWork_->cancelByOwner(owner) : 0;
+}
+
 utilxx_base::Json AgentHost::asyncWorkJson(std::string_view asyncId) const {
     return asyncWork_ ? asyncWork_->entryJson(asyncId) : utilxx_base::Json::object();
 }

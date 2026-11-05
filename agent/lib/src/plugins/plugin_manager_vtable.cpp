@@ -1599,6 +1599,221 @@ static int32_t
     });
 }
 
+// ---- 后台任务 (v2 尾部追加) ----
+
+/// 解析 spec 里的一个 JSON 文本字段 (空 = 不设置)
+/// - `return` false = 文本不是合法 JSON
+static bool parseSpecJson(
+    const PluginxxStringView& view,
+    utilxx_base::Json&        out,
+    std::string&              err,
+    const char*               field
+) {
+    const auto raw = pluginxx::svToStr(&view);
+    if (raw.empty()) {
+        return true;
+    }
+    return agentxx::util::catchError<bool>(
+        [&]() -> bool {
+            out = utilxx_base::Json::parse(raw);
+            return true;
+        },
+        [&](std::string info) -> bool {
+            err = fmt::format("`{}` is not valid JSON: {}", field, info);
+            return false;
+        }
+    );
+}
+
+/// 把 JSON 数组文本写成字符串列表 (空/`[]` = 不设置)
+static bool specStringList(
+    const utilxx_base::Json&    src,
+    std::vector<std::string>&   out,
+    std::string&                err,
+    const char*                 field
+) {
+    if (!src.is_array()) {
+        err = fmt::format("`{}` must be a JSON array of strings", field);
+        return false;
+    }
+    for (const auto& item : src) {
+        if (!item.is_string()) {
+            err = fmt::format("`{}` must contain only strings", field);
+            return false;
+        }
+        out.push_back(item.get<std::string>());
+    }
+    return true;
+}
+
+static int32_t PLUGINXX_CALL xx_runtime_submit_async_work(
+    const PluginxxHost*               host,
+    const AgentxxPluginAsyncWorkSpec* spec,
+    PluginxxString*                   out_async_id
+) {
+    if (!spec || !out_async_id
+        || !agentxx::plugin::specSizeOk<AgentxxPluginAsyncWorkSpec>(spec->struct_size)) {
+        return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+    }
+    const auto text = [](const PluginxxStringView& view) { return pluginxx::svToStr(&view); };
+
+    agent::AsyncWorkSpec work;
+    work.kind = (spec->kind == 1) ? agent::AsyncWorkKind::Tool : agent::AsyncWorkKind::Agent;
+    work.name = text(spec->name);
+    if (work.name.empty()) {
+        work.name = "plugin-task";
+    }
+    work.systemPrompt     = text(spec->system_prompt);
+    work.message          = text(spec->message);
+    work.model            = text(spec->model);
+    work.creatorSessionId = text(spec->session_id);
+    work.queueKey         = text(spec->queue_key);
+    work.workDir          = text(spec->work_dir);
+    work.language         = text(spec->language);
+    work.notifyDelivery   = text(spec->notify_delivery);
+    if (spec->interrupt_policy >= 0) {
+        work.interruptPolicy
+            = static_cast<agent::AsyncInterruptPolicy>(spec->interrupt_policy);
+    }
+    if (spec->session_store >= 0) {
+        work.sessionStore = spec->session_store != 0;
+    }
+    work.interruptTimeout = std::chrono::milliseconds{spec->interrupt_timeout_ms};
+    work.timeLimit        = std::chrono::milliseconds{spec->time_limit_ms};
+
+    std::string        err;
+    utilxx_base::Json  json;
+    std::vector<std::string> list;
+    if (!parseSpecJson(spec->tools_json, json, err, "tools_json")) {
+        XX_LOGW("[runtime] submit_async_work 被拒: {}", err);
+        return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+    }
+    if (!json.is_null()) {
+        if (!json.is_array()) {
+            XX_LOGW("[runtime] submit_async_work 被拒: `tools_json` must be a JSON array");
+            return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+        }
+        work.tools = json;
+    }
+    json = utilxx_base::Json{};
+    if (!parseSpecJson(spec->plugins_json, json, err, "plugins_json")) {
+        XX_LOGW("[runtime] submit_async_work 被拒: {}", err);
+        return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+    }
+    if (!json.is_null()) {
+        if (!json.is_object()) {
+            XX_LOGW("[runtime] submit_async_work 被拒: `plugins_json` must be a JSON object");
+            return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+        }
+        work.plugins = json;
+    }
+
+    struct ListField {
+        const PluginxxStringView* view;
+        const char*               name;
+        std::vector<std::string>* target;
+    };
+    const ListField listFields[] = {
+        {&spec->mcp_servers_json,   "mcp_servers_json",   &work.mcpServers  },
+        {&spec->skills_json,        "skills_json",        &work.skills      },
+        {&spec->memory_files_json,  "memory_files_json",  &work.memoryFiles },
+        {&spec->rag_docs_json,      "rag_docs_json",      &work.ragDocs     },
+        {&spec->permission_allow_json, "permission_allow_json", &work.permissionAllowPaths},
+        {&spec->permission_deny_json,  "permission_deny_json",  &work.permissionDenyPaths },
+    };
+    for (const auto& field : listFields) {
+        json = utilxx_base::Json{};
+        if (!parseSpecJson(*field.view, json, err, field.name)) {
+            XX_LOGW("[runtime] submit_async_work 被拒: {}", err);
+            return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+        }
+        if (json.is_null() || (json.is_array() && json.empty())) {
+            continue;
+        }
+        if (!specStringList(json, *field.target, err, field.name)) {
+            XX_LOGW("[runtime] submit_async_work 被拒: {}", err);
+            return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+        }
+    }
+    (void)list;
+
+    // 事件回调: 跨边界函数指针与 user_data 按值带进 C++ 闭包
+    if (spec->on_event != nullptr) {
+        auto fn = spec->on_event;
+        auto ud = spec->user_data;
+        work.onEvent
+            = [fn, ud](agent::AsyncWorkEventPhase phase, const utilxx_base::Json& payload) {
+                  const std::string        text = payload.dump();
+                  const PluginxxStringView view{text.data(), text.size()};
+                  fn(ud, static_cast<int32_t>(phase), &view);
+              };
+    }
+
+    auto       specPtr = std::make_shared<agent::AsyncWorkSpec>(std::move(work));
+    auto       result  = std::make_shared<std::string>();
+    const auto rc      = onInstanceIo(
+        host,
+        [specPtr, result](PluginInstance* inst, PluginManager* mgr) -> int32_t {
+            auto outcome = mgr->runtimeSubmitAsyncWork(inst, std::move(*specPtr));
+            if (outcome.code != AGENTXX_PLUGIN_RUNTIME_OK) {
+                XX_LOGW(
+                    "[runtime] submit_async_work 被拒 ({}): {}",
+                    outcome.code,
+                    outcome.error
+                );
+                return outcome.code;
+            }
+            *result = outcome.asyncId;
+            return AGENTXX_PLUGIN_RUNTIME_OK;
+        }
+    );
+    if (rc == AGENTXX_PLUGIN_RUNTIME_OK && !result->empty()) {
+        hostMemorySetString(out_async_id, *result);
+    }
+    return rc;
+}
+
+static int32_t PLUGINXX_CALL xx_runtime_cancel_async_work(
+    const PluginxxHost*       host,
+    const PluginxxStringView* async_id
+) {
+    auto id = svText(async_id);
+    return onInstanceIo(host, [id = std::move(id)](PluginInstance* inst, PluginManager* mgr) -> int32_t {
+        return mgr->runtimeCancelAsyncWork(inst, id);
+    });
+}
+
+static int32_t PLUGINXX_CALL xx_runtime_get_async_work(
+    const PluginxxHost*       host,
+    const PluginxxStringView* async_id,
+    PluginxxString*           out_json
+) {
+    auto id = svText(async_id);
+    return queryStringIo(
+        host,
+        out_json,
+        [id = std::move(id)](PluginInstance* inst, PluginManager* mgr) {
+            return mgr->runtimeGetAsyncWork(inst, id);
+        }
+    );
+}
+
+static int32_t PLUGINXX_CALL xx_runtime_list_async_work(
+    const PluginxxHost*       host,
+    const PluginxxStringView* session_id,
+    PluginxxString*           out_json
+) {
+    auto sessionId = svText(session_id);
+    return queryStringIo(
+        host,
+        out_json,
+        [sessionId = std::move(sessionId)](PluginInstance* inst, PluginManager* mgr) {
+            return mgr->runtimeListAsyncWork(inst, sessionId);
+        }
+    );
+}
+
+
 // ==================== 事件中枢表 (agentxx.agent.event) ====================
 //
 // 三个线程要照顾: 插件调用线程 → 主程序 io 线程 (`onInstanceIo`) → 事件中枢线程
@@ -2214,6 +2429,10 @@ static const AgentxxPluginRuntimeIface g_ifaceRuntime = {
     /* emit_event */ xx_runtime_emit_event,
     /* register_timer */ xx_runtime_register_timer,
     /* unregister_timer */ xx_runtime_unregister_timer,
+    /* submit_async_work */ xx_runtime_submit_async_work,
+    /* cancel_async_work */ xx_runtime_cancel_async_work,
+    /* get_async_work */ xx_runtime_get_async_work,
+    /* list_async_work */ xx_runtime_list_async_work,
 };
 
 const void* PLUGINXX_CALL xx_query_interface(const PluginxxHost*, const PluginxxStringView* iid);

@@ -254,6 +254,10 @@ public:
     /// 按创建者会话批量取消
     size_t cancelAsyncWorksOfSession(std::string_view creatorSessionId);
 
+    /// 按归属标记批量取消 (`owner` 由提交方填, 插件用 `plugin:<实例名>`)
+    /// - 插件禁用/卸载时按它回收自己提交的任务 (只置取消令牌, 终态照常记录)
+    size_t cancelAsyncWorksOfOwner(std::string_view owner);
+
     /// 单条任务 JSON (不存在 = 空对象)
     utilxx_base::Json asyncWorkJson(std::string_view asyncId) const;
 

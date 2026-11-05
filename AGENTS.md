@@ -603,8 +603,6 @@ path/to/agentxx_test --log-level warn string_util regex
   老客户端忽略), 只展示不给取消入口 (`info.asyncWorks` 一组文案键; 测试
   `tui_widget` 的 `test_info_sidebar_async_works`), 详见
   [tui.md](docs/zh-cn/design/tui.md) §2.7。**未做**: `kind=tool` 异步工具、
-  `agentxx.agent.runtime`
-  表尾 4 成员 (submit/cancel/get/list_async_work)、
   provider/HTTP 连接池下沉 `AgentHost`。
 - 会话运行时 (2026-10): `agentxx.agent.runtime` 表让插件挂自己的**根 agent**
   (`mount_root`: 只能放 `start`, `config_json` 给提示词/工具白名单, `mount_plugins` 给挂载策略,
@@ -615,9 +613,14 @@ path/to/agentxx_test --log-level warn string_util regex
   每根 64 通道, 每实例 256 触发器+定时器; 禁用/卸载按 owner 整批回收。
   通道事件回调在根所属 io 线程,**不得同步阻塞**。SDK 便捷层在
   `plugin_kit.h` (`AgentIfaces::runtime` + `mountRoot`/`openChannel`/`sendText`/`addTrigger`
-  等), 示例插件 `agent/plugins/example_runtime`, 测试 `plugin_agent_runtime` (177 条,
+  等), 示例插件 `agent/plugins/example_runtime`, 测试 `plugin_agent_runtime` (199 条,
   主程序侧语义) 与 `plugin_example_runtime` (49 条, 真实插件全流程); 详见
   [plugins.md](docs/zh-cn/design/plugins.md) §19。
+  **后台任务入口 (v2)**: `submit_async_work` (参数 `AgentxxPluginAsyncWorkSpec`,
+  返回 `asyncId` = 任务会话 id) / `cancel_async_work` / `get_async_work` /
+  `list_async_work`, SDK `submitAsyncWork`/`cancelAsyncWork`/`getAsyncWorkJson`/
+  `listAsyncWorkJson`; 只能碰本实例提交的 (owner `plugin:<实例名>`), `on_event` 回调在
+  容器 io 线程、实例释放后不再进入插件代码。
   注: 提示词只按 **agent 级** 支持修改 (根 `config_json` 的 `prompt`), **不做**会话级
   提示词来源 —— 一个 agent 管理的会话、提示词、插件等保持一致
 - 接口表数量: agent 侧 23 张 (10 张通用表 `pluginxx.*` + 13 张业务表 `agentxx.agent.*`;
@@ -629,8 +632,11 @@ path/to/agentxx_test --log-level warn string_util regex
   (`mount_root`/`unmount_root`)、在上面开关会话通道 (`open_channel`/`close_channel`/
   `send_input`/`cancel`/`select_model`/`respond_interrupt`)、查询
   (`get_channel_state`/`get_context_messages`/`list_runtime`) 与事件驱动
-  (`register_trigger`/`emit_event`/`register_timer`, 详见
-  [plugins.md](docs/zh-cn/design/plugins.md) §19),
+  (`register_trigger`/`emit_event`/`register_timer`), **v2 表尾追加后台任务四成员**
+  (`submit_async_work`/`cancel_async_work`/`get_async_work`/`list_async_work`; 基线用
+  `offsetof` 停在追加前, 插件用 `ifaceHas` 判定降级; 只能碰本实例提交的, owner =
+  `plugin:<实例名>`, 禁用/卸载按 owner 批量取消), 详见
+  [plugins.md](docs/zh-cn/design/plugins.md) §19,
   `agentxx.agent.event` 事件中枢 —— 插件声明事件源 / 发布值 / 结束流 / 替会话登记等待
   (`define_event`/`emit_value`/`end_event`/`remove_event`/`query_event`/`list_events`/
   `register_wait`/`cancel_wait`/`list_waits`, 归属按 `plugin:<实例名>` 记账, 禁用卸载整批回收,

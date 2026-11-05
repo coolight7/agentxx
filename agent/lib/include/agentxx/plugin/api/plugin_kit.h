@@ -1423,12 +1423,156 @@ inline std::string listEventWaits(Ctx& ctx, const ScopeRef& agent, std::string_v
     });
 }
 
+/* ==================== 后台任务 (async work) ====================
+ *
+ * 提交即入队; 结果发到固定事件 `agentxx.agent.async.done` (值里用 `asyncId` 区分),
+ * 想当场拿结果就让模型 `agentxx_event {opt:"await", id}`。
+ * 插件禁用/卸载时主程序按 `plugin:<实例名>` 把未完成的任务取消 (终态照常记录)。
+ */
+
+/// 提交参数 (字段语义与 `AgentxxPluginAsyncWorkSpec` 一致; 全部可选)
+struct AsyncWorkOptions {
+    std::string name = "plugin-task";
+    std::string systemPrompt;
+    /// 任务正文 (必需: 空且没有上下文时提交会被拒)
+    std::string message;
+    /// 空 = 创建者的 subagent 模型
+    std::string model;
+    /// 创建者会话 (结果事件与 HIL 的去处)
+    std::string sessionId;
+    /// 排队与额度分组; 空 = 创建者 agentId
+    std::string queueKey;
+    std::string workDir;
+    std::string language;
+    /// 结果额外投递到创建者会话: 空 = 不投递; `next-step` / `inject` / `next-turn`
+    std::string notifyDelivery;
+    /// 工具策略: 空 = 默认; `[]` = 无工具; `["*"]` = 继承创建者; 否则名单
+    utilxx_base::Json tools;
+    /// 插件挂载 (与 yaml `plugin.mount` 同构); 空 = 不挂
+    utilxx_base::Json plugins;
+    utilxx_base::Json mcpServers;
+    utilxx_base::Json skills;
+    utilxx_base::Json memoryFiles;
+    utilxx_base::Json ragDocs;
+    utilxx_base::Json permissionAllow;
+    utilxx_base::Json permissionDeny;
+    /// 中断策略: -1 = 跟随配置, 0 = bubble, 1 = deny, 2 = allow
+    int32_t interruptPolicy = -1;
+    /// 会话落盘: -1 = 跟随配置, 0 = 否, 1 = 是
+    int32_t sessionStore     = -1;
+    int64_t interruptTimeoutMs = 0;
+    int64_t timeLimitMs        = 0;
+    /// 任务事件回调 (可空); **在容器 io 线程调用, 必须快速返回**
+    AgentxxPluginAsyncWorkEventFn onEvent  = nullptr;
+    void*                          userData = nullptr;
+};
+
+/// 提交一个后台任务; 返回 `asyncId` (失败返回空串)
+///
+/// - 只校验参数, 不因额度/排队被拒 (额度只影响何时起跑)
+/// - `outCode` 非空时写入返回码 (`AGENTXX_PLUGIN_RUNTIME_*`), 便于区分"不支持"与"参数错"
+template<typename Ctx>
+inline std::string submitAsyncWork(Ctx& ctx, const AsyncWorkOptions& opt, int32_t* outCode = nullptr) {
+    if (!hasRuntime(ctx) || !ctx.iface.runtime->submit_async_work) {
+        if (outCode != nullptr) {
+            *outCode = AGENTXX_PLUGIN_RUNTIME_ERR_UNSUPPORTED;
+        }
+        return {};
+    }
+    auto jsonText = [](const utilxx_base::Json& value) {
+        return value.is_null() ? std::string{} : value.dump();
+    };
+    const auto tools       = jsonText(opt.tools);
+    const auto plugins     = jsonText(opt.plugins);
+    const auto mcpServers  = jsonText(opt.mcpServers);
+    const auto skills      = jsonText(opt.skills);
+    const auto memoryFiles = jsonText(opt.memoryFiles);
+    const auto ragDocs     = jsonText(opt.ragDocs);
+    const auto allow       = jsonText(opt.permissionAllow);
+    const auto deny        = jsonText(opt.permissionDeny);
+
+    AgentxxPluginAsyncWorkSpec spec{};
+    spec.struct_size          = sizeof(AgentxxPluginAsyncWorkSpec);
+    spec.kind                 = 0;
+    spec.interrupt_policy     = opt.interruptPolicy;
+    spec.session_store        = opt.sessionStore;
+    spec.interrupt_timeout_ms = opt.interruptTimeoutMs;
+    spec.time_limit_ms        = opt.timeLimitMs;
+    spec.session_id           = PluginStringView::from(opt.sessionId);
+    spec.queue_key            = PluginStringView::from(opt.queueKey);
+    spec.name                 = PluginStringView::from(opt.name);
+    spec.system_prompt        = PluginStringView::from(opt.systemPrompt);
+    spec.message              = PluginStringView::from(opt.message);
+    spec.model                = PluginStringView::from(opt.model);
+    spec.tools_json           = PluginStringView::from(tools);
+    spec.plugins_json         = PluginStringView::from(plugins);
+    spec.mcp_servers_json     = PluginStringView::from(mcpServers);
+    spec.skills_json          = PluginStringView::from(skills);
+    spec.memory_files_json    = PluginStringView::from(memoryFiles);
+    spec.rag_docs_json        = PluginStringView::from(ragDocs);
+    spec.work_dir             = PluginStringView::from(opt.workDir);
+    spec.language             = PluginStringView::from(opt.language);
+    spec.permission_allow_json = PluginStringView::from(allow);
+    spec.permission_deny_json  = PluginStringView::from(deny);
+    spec.notify_delivery       = PluginStringView::from(opt.notifyDelivery);
+    spec.on_event              = opt.onEvent;
+    spec.user_data             = opt.userData;
+
+    PluginxxString out{nullptr, 0};
+    const auto     rc = ctx.iface.runtime->submit_async_work(ctx.host, &spec, &out);
+    if (outCode != nullptr) {
+        *outCode = rc;
+    }
+    if (rc != AGENTXX_PLUGIN_RUNTIME_OK || !out.data) {
+        if (out.data) {
+            PluginString::free(ctx.host, &out);
+        }
+        return {};
+    }
+    std::string asyncId{out.data, static_cast<size_t>(out.size)};
+    PluginString::free(ctx.host, &out);
+    return asyncId;
+}
+
+/// 取消一条后台任务 (只能取消本实例提交的)
+template<typename Ctx>
+inline int32_t cancelAsyncWork(Ctx& ctx, std::string_view asyncId) {
+    if (!hasRuntime(ctx) || !ctx.iface.runtime->cancel_async_work || asyncId.empty()) {
+        return AGENTXX_PLUGIN_RUNTIME_ERR_UNSUPPORTED;
+    }
+    auto id = PluginStringView::from(asyncId.data(), asyncId.size());
+    return ctx.iface.runtime->cancel_async_work(ctx.host, &id);
+}
+
+/// 单条任务 JSON (不存在或不是本实例提交的返回空串)
+template<typename Ctx>
+inline std::string getAsyncWorkJson(Ctx& ctx, std::string_view asyncId) {
+    if (!hasRuntime(ctx) || !ctx.iface.runtime->get_async_work || asyncId.empty()) {
+        return {};
+    }
+    auto id = PluginStringView::from(asyncId.data(), asyncId.size());
+    return detail::takeHostString(ctx.host, [&](PluginxxString* out) {
+        return ctx.iface.runtime->get_async_work(ctx.host, &id, out);
+    });
+}
+
+/// 任务清单 JSON (数组; `sessionId` 空 = 本实例提交的全部)
+template<typename Ctx>
+inline std::string listAsyncWorkJson(Ctx& ctx, std::string_view sessionId = {}) {
+    if (!hasRuntime(ctx) || !ctx.iface.runtime->list_async_work) {
+        return {};
+    }
+    auto session = PluginStringView::from(sessionId.data(), sessionId.size());
+    return detail::takeHostString(ctx.host, [&](PluginxxString* out) {
+        return ctx.iface.runtime->list_async_work(ctx.host, &session, out);
+    });
+}
+
 /* ==================== 插件框架 detail 名的引入 (pluginxx/kit/kit.h) ====================
  *
  * 业务 helper (polled_tool / graph node / call_tool awaiter) 需要插件框架协程设施的
  * detail 类型与函数; 同样以 using 声明引入, 类型本体仍在 pluginxx::detail 一份。
  */
-
 namespace detail {
 
 using pluginxx::detail::advanceRootOnce;

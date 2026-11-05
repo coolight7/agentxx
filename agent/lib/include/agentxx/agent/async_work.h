@@ -59,6 +59,16 @@ std::string_view toString(AsyncInterruptPolicy policy) noexcept;
 /// 中断策略解析 (`bubble`/`deny`/`allow`); 无法识别时返回 false
 bool parseInterruptPolicy(std::string_view text, AsyncInterruptPolicy* out) noexcept;
 
+/// 事件阶段 (提交方回调用; 与插件接口表的取值一一对应)
+/// - 队列从排队到起跑才发 `Started`; 终态只有 `Finished` 或 `Canceled` 之一
+/// - 回调都在容器 io 线程上、同一任务串行触发
+enum class AsyncWorkEventPhase : uint8_t { Queued = 0, Started = 1, Finished = 2, Canceled = 3 };
+
+/// 提交方的任务事件回调 (`Queued` / `Started` / `Finished` / `Canceled`)
+/// - `payload` 带 `asyncId` / `kind` / `name` / `queueAhead` / `hasError` / `canceled` / `error`
+/// - **在容器 io 线程调用, 必须快速返回**: 不得同步阻塞 (整个进程的会话都在这条线程)
+using AsyncWorkEventFn = std::function<void(AsyncWorkEventPhase, const utilxx_base::Json&)>;
+
 /// 提交参数: 自包含, 提交后不再回读创建者 (快照在手)
 ///
 /// 派生配置清单默认全空 (= 现状子代理: 只有内置工具), 要什么就列什么。
@@ -75,6 +85,11 @@ struct AsyncWorkSpec {
     std::string creatorSessionId;
     /// 排队与额度的分组键; 空 = creatorAgentId
     std::string queueKey;
+
+    /// 归属标记 (日志/诊断用; 插件提交时填 `plugin:<实例名>`)
+    /// - 插件禁用/卸载按它整批取消 (`AgentHost::cancelAsyncWorksOfOwner`)
+    /// - 模型工具提交的任务为空 (归属看 creatorAgentId / creatorSessionId)
+    std::string owner;
 
     /// 身份与任务
     std::string         name = "async";
@@ -118,6 +133,9 @@ struct AsyncWorkSpec {
     /// 结果: 事件名固定 `agentxx.agent.async.done`, 此处只决定是否额外投递会话
     /// - 空 = 不投递; `next-step` / `inject` / `next-turn`
     std::string notifyDelivery;
+
+    /// 任务事件回调 (空 = 不回调): 排队/起跑/终态各一次
+    AsyncWorkEventFn onEvent;
 
     /// 同上下文模式与工具执行策略 (与 `events::SubagentBatchItem` 同义)
     bool keepProvidedSystemMessage = false;
@@ -179,6 +197,8 @@ struct AsyncWorkEntry {
     std::string    queueKey;
     std::string    creatorAgentId;
     std::string    creatorSessionId;
+    /// 归属标记 (插件提交时为 `plugin:<实例名>`; 模型提交为空)
+    std::string    owner;
     std::string    agentId; ///< 运行期 registry id (结束后仅用于日志关联)
     std::string    name;
     std::string    model;
@@ -234,6 +254,9 @@ public:
 
     /// 按创建者会话批量取消
     size_t cancelBySession(std::string_view creatorSessionId);
+
+    /// 按归属标记批量取消 (插件禁用/卸载; 只置取消令牌, 终态照常记录)
+    size_t cancelByOwner(std::string_view owner);
 
     /// 单条任务 JSON (不存在返回空对象)
     utilxx_base::Json entryJson(std::string_view asyncId) const;

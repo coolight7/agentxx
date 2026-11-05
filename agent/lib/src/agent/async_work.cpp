@@ -155,6 +155,33 @@ std::string truncateUtf8(std::string_view text, size_t maxBytes) {
     return out;
 }
 
+/// 触发提交方的任务事件回调
+/// - 回调属外部代码 (插件): 抛异常只记日志, 不影响任务状态与结果投递
+/// - 调用点都在容器 io 线程 (排队那条经 post 回到同一线程, 与后续阶段保序)
+void fireAsyncWorkEvent(
+    const AsyncWorkEventFn&   cb,
+    AsyncWorkEventPhase       phase,
+    const utilxx_base::Json& payload
+) {
+    if (!cb) {
+        return;
+    }
+    agentxx::util::catchError<bool>(
+        [&]() -> bool {
+            cb(phase, payload);
+            return true;
+        },
+        [phase](std::string errinfo) -> bool {
+            XX_LOGW(
+                "[async_work] on_event callback threw (phase={}): {}",
+                static_cast<int>(phase),
+                errinfo
+            );
+            return false;
+        }
+    );
+}
+
 /// 从 spec 构造派生任务 (身份/工具/前缀字段)
 events::SubagentBatchItem taskOfSpec(const AsyncWorkSpec& spec) {
     events::SubagentBatchItem task;
@@ -375,6 +402,7 @@ AsyncWorkSubmitResult
         entry.queueKey         = spec.queueKey;
         entry.creatorAgentId   = spec.creatorAgentId;
         entry.creatorSessionId = spec.creatorSessionId;
+        entry.owner            = spec.owner;
         entry.name             = spec.name;
         entry.model            = spec.model;
         entry.createdAtMs      = systemNowMs();
@@ -426,6 +454,24 @@ AsyncWorkSubmitResult
         out.queueAhead
     );
 
+    // 提交方回调: 受理 (排到位) —— 投递到容器 io 线程, 与后续 Started/Finished 保序
+    if (spec.onEvent) {
+        auto            cb      = spec.onEvent;
+        auto            payload = utilxx_base::Json{
+            {"asyncId", out.asyncId  },
+            {"kind",    toString(spec.kind)},
+            {"name",    spec.name    },
+            {"queueAhead", out.queueAhead},
+        };
+        const auto executor = host->ioCtx()->get_executor();
+        asio::post(
+            executor,
+            [cb = std::move(cb), payload = std::move(payload)]() {
+                fireAsyncWorkEvent(cb, AsyncWorkEventPhase::Queued, payload);
+            }
+        );
+    }
+
     // 结果直接唤醒创建者会话 (`notify_delivery`): 入队前就替它登记定向等待,
     // 任务完成时值经中枢投递成一条会话输入 (don't rely on the model to watch)
     if (!spec.notifyDelivery.empty() && creator && creator->eventHub) {
@@ -470,7 +516,9 @@ void AsyncWorkManager::pump(std::string_view queueKey) {
     if (!host) {
         return;
     }
-    std::string nextId;
+    std::string        nextId;
+    AsyncWorkEventFn   startCb;
+    utilxx_base::Json  startPayload;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         auto                        qit = queues_.find(queueKey);
@@ -497,6 +545,13 @@ void AsyncWorkManager::pump(std::string_view queueKey) {
             runningPerQueue_[std::string{queueKey}] = running + 1;
             eit->second.state                       = AsyncWorkState::Running;
             eit->second.startedAtMs                 = systemNowMs();
+            // 提交方回调 (起跑) 在锁外触发, 避免外部代码重入引发死锁
+            startCb      = eit->second.spec.onEvent;
+            startPayload = utilxx_base::Json{
+                {"asyncId", headId              },
+                {"kind",    toString(eit->second.kind)},
+                {"name",    eit->second.name    },
+            };
             break;
         }
         auto qit2 = queues_.find(queueKey);
@@ -507,6 +562,7 @@ void AsyncWorkManager::pump(std::string_view queueKey) {
     if (nextId.empty()) {
         return;
     }
+    fireAsyncWorkEvent(startCb, AsyncWorkEventPhase::Started, startPayload);
     XX_LOGD("[async_work] launch {} (queue={})", nextId, queueKey);
     asio::co_spawn(
         host->ioCtx()->get_executor(),
@@ -679,6 +735,22 @@ asio::awaitable<void>
         );
     }
 
+    // 提交方回调: 终态 (取消优先: 取消时即使带错误也按取消上报)
+    if (spec.onEvent) {
+        fireAsyncWorkEvent(
+            spec.onEvent,
+            canceled ? AsyncWorkEventPhase::Canceled : AsyncWorkEventPhase::Finished,
+            utilxx_base::Json{
+                {"asyncId",  entryId              },
+                {"kind",     toString(spec.kind)  },
+                {"name",     spec.name            },
+                {"hasError", hasError             },
+                {"canceled", canceled             },
+                {"error",    error                },
+            }
+        );
+    }
+
     // 排队补位 (先取执行器再构造投递体: 两者不要互相依赖求值顺序)
     if (!queueKey.empty()) {
         auto ex = host->ioCtx()->get_executor();
@@ -690,9 +762,11 @@ asio::awaitable<void>
 }
 
 bool AsyncWorkManager::cancel(std::string_view asyncId) {
-    std::string queueKey;
-    bool        removedFromQueue = false;
-    bool        canceledRunning  = false;
+    std::string       queueKey;
+    bool              removedFromQueue = false;
+    bool              canceledRunning  = false;
+    AsyncWorkEventFn  canceledCb;
+    utilxx_base::Json canceledPayload;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         auto                        it = entries_.find(asyncId);
@@ -716,6 +790,16 @@ bool AsyncWorkManager::cancel(std::string_view asyncId) {
             e.error                  = "canceled while queued";
             e.lingerDeadlineSteadyMs = steadyNowMs() + e.lingerMs;
             removedFromQueue         = true;
+            // 排队中直接被取消: 任务不会起跑, 终态回调在这里发
+            canceledCb      = e.spec.onEvent;
+            canceledPayload = utilxx_base::Json{
+                {"asyncId",  e.asyncId           },
+                {"kind",     toString(e.kind)     },
+                {"name",     e.name              },
+                {"hasError", false                },
+                {"canceled", true                 },
+                {"error",    e.error             },
+            };
         } else if (e.state == AsyncWorkState::Running) {
             if (e.token && !e.token->is_cancelled()) {
                 e.token->cancel();
@@ -732,6 +816,7 @@ bool AsyncWorkManager::cancel(std::string_view asyncId) {
         removedFromQueue ? "dequeued" : "cancel token set"
     );
     if (removedFromQueue) {
+        fireAsyncWorkEvent(canceledCb, AsyncWorkEventPhase::Canceled, canceledPayload);
         // 出队后让后面的任务有机会起跑
         if (auto h = host_.lock(); h) {
             asio::post(h->ioCtx()->get_executor(), [h, key = std::move(queueKey)]() {
@@ -796,6 +881,34 @@ size_t AsyncWorkManager::cancelBySession(std::string_view creatorSessionId) {
     return count;
 }
 
+size_t AsyncWorkManager::cancelByOwner(std::string_view owner) {
+    if (owner.empty()) {
+        return 0;
+    }
+    std::vector<std::string> ids;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (const auto& [id, entry] : entries_) {
+            if (entry.state != AsyncWorkState::Queued && entry.state != AsyncWorkState::Running) {
+                continue;
+            }
+            if (entry.owner == owner) {
+                ids.push_back(id);
+            }
+        }
+    }
+    size_t count = 0;
+    for (const auto& id : ids) {
+        if (cancel(id)) {
+            ++count;
+        }
+    }
+    if (count > 0) {
+        XX_LOGI("[async_work] canceled {} task(s) of owner `{}`", count, owner);
+    }
+    return count;
+}
+
 utilxx_base::Json AsyncWorkManager::entryJson(std::string_view asyncId) const {
     std::lock_guard<std::mutex> lock(mutex_);
     auto                        it = entries_.find(asyncId);
@@ -811,6 +924,7 @@ utilxx_base::Json AsyncWorkManager::entryJson(std::string_view asyncId) const {
         {"queueKey",         e.queueKey         },
         {"creatorAgentId",   e.creatorAgentId   },
         {"creatorSessionId", e.creatorSessionId },
+        {"owner",            e.owner            },
         {"agentId",          e.agentId          },
         {"model",            e.model            },
         {"createdAtMs",      e.createdAtMs      },
@@ -862,6 +976,7 @@ utilxx_base::Json AsyncWorkManager::listJson(
             {"kind",         toString(e.kind)  },
             {"name",         e.name            },
             {"state",        toString(e.state) },
+            {"owner",        e.owner           },
             {"startedAtMs",  e.startedAtMs     },
             {"finishedAtMs", e.finishedAtMs    },
             {"hasError",     e.hasError        },

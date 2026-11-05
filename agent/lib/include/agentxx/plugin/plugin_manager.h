@@ -1,6 +1,7 @@
 #ifndef AGENTXX_PLUGIN_PLUGIN_MANAGER_H
 #define AGENTXX_PLUGIN_PLUGIN_MANAGER_H
 
+#include "agentxx/agent/async_work.h"
 #include "agentxx/plugin/api/plugin_api.h"
 #include "agentxx/plugin/api/plugin_kit.h"
 #include "agentxx/plugin/plugin_framework.h"
@@ -639,6 +640,28 @@ public:
 
     /// 取消通道当前轮次
     int32_t runtimeCancel(PluginInstance* inst, int64_t channelId);
+
+    // ---------------- 后台任务 (async work) ----------------
+
+    /// 提交结果 (入口需要同时给出错误码、任务 id 与可读原因)
+    struct AsyncSubmitOutcome {
+        int32_t     code = AGENTXX_PLUGIN_RUNTIME_OK;
+        std::string asyncId;
+        std::string error;
+    };
+
+    /// 提交一个后台任务 (归属记为 `plugin:<实例名>`)
+    AsyncSubmitOutcome
+        runtimeSubmitAsyncWork(PluginInstance* inst, agent::AsyncWorkSpec work);
+
+    /// 取消一条后台任务 (只能取消本实例提交的)
+    int32_t runtimeCancelAsyncWork(PluginInstance* inst, std::string_view asyncId);
+
+    /// 单条任务 JSON (只能看本实例提交的; 不存在返回 ERR_NOT_FOUND)
+    std::string runtimeGetAsyncWork(PluginInstance* inst, std::string_view asyncId);
+
+    /// 任务清单 JSON (`sessionId` 空 = 本实例提交的全部)
+    std::string runtimeListAsyncWork(PluginInstance* inst, std::string_view sessionId);
 
     /// 切换通道的模型
     int32_t runtimeSelectModel(PluginInstance* inst, int64_t channelId, std::string_view model);

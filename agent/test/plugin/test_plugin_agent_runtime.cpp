@@ -396,6 +396,144 @@ asio::awaitable<void> runBody(
         XX_TEST_EXPECT_TRUE(runtime->register_timer != nullptr);
     }
 
+    // ===================== 1b. 后台任务入口 (v2 尾部追加) =====================
+    // 结论: 4 个成员可用; kind=tool 未实现; 任务能真跑完, 台账/清单/取消都只能
+    // 碰本实例提交的那几条 (别的插件看不到也取消不了)
+    {
+        XX_TEST_EXPECT_TRUE(runtime->submit_async_work != nullptr);
+        XX_TEST_EXPECT_TRUE(runtime->cancel_async_work != nullptr);
+        XX_TEST_EXPECT_TRUE(runtime->get_async_work != nullptr);
+        XX_TEST_EXPECT_TRUE(runtime->list_async_work != nullptr);
+
+        // 后台任务派生时会按创建者会话查 worktree / HIL, 因此主上下文要有会话管理器
+        if (!primaryCtx->sessions) {
+            primaryCtx->sessions = std::make_shared<agentxx::agent::SessionsManager>();
+        }
+
+        std::string message{"do the plugin work"};
+        std::string name{"probe-task"};
+        AgentxxPluginAsyncWorkSpec spec{};
+        spec.struct_size          = sizeof(AgentxxPluginAsyncWorkSpec);
+        spec.interrupt_policy     = -1;
+        spec.session_store        = -1;
+        spec.name                 = PluginStringView::from(name);
+        spec.message              = PluginStringView::from(message);
+
+        // 1) kind=tool 未实现 → 明确不支持
+        {
+            spec.kind = 1;
+            PluginxxString out{nullptr, 0};
+            XX_TEST_EXPECT_EQ(
+                runtime->submit_async_work(hostView, &spec, &out),
+                AGENTXX_PLUGIN_RUNTIME_ERR_UNSUPPORTED
+            );
+            XX_TEST_EXPECT_TRUE(out.data == nullptr);
+            spec.kind = 0;
+        }
+
+        // 2) 正常提交: 拿到 asyncId, 回调收到排队/起跑/终态
+        struct CallbackCounter {
+            std::atomic<int> queued{0};
+            std::atomic<int> started{0};
+            std::atomic<int> finished{0};
+        } counter;
+        spec.on_event = +[](void* user_data, int32_t phase, const PluginxxStringView*) {
+            auto* c = static_cast<CallbackCounter*>(user_data);
+            if (c == nullptr) {
+                return;
+            }
+            switch (phase) {
+                case AGENTXX_PLUGIN_ASYNC_WORK_EVT_QUEUED:
+                    ++c->queued;
+                    break;
+                case AGENTXX_PLUGIN_ASYNC_WORK_EVT_STARTED:
+                    ++c->started;
+                    break;
+                case AGENTXX_PLUGIN_ASYNC_WORK_EVT_FINISHED:
+                    ++c->finished;
+                    break;
+                default:
+                    break;
+            }
+        };
+        spec.user_data = &counter;
+
+        PluginxxString out{nullptr, 0};
+        const auto     submitRc = runtime->submit_async_work(hostView, &spec, &out);
+        XX_TEST_EXPECT_EQ(submitRc, AGENTXX_PLUGIN_RUNTIME_OK);
+        const auto asyncId = takeString(hostView, out);
+        XX_TEST_EXPECT_FALSE(asyncId.empty());
+        spec.user_data = nullptr;
+        spec.on_event  = nullptr;
+
+        // 3) 等跑完 (模拟模型立即回复), 台账可查且归属本实例
+        const bool done = co_await waitUntil(
+            ex,
+            std::chrono::seconds{60},
+            [&] {
+                const auto entry = mgr->runtimeGetAsyncWork(inst.get(), asyncId);
+                return entry.find("\"done\"") != std::string::npos
+                       || entry.find("\"failed\"") != std::string::npos;
+            }
+        );
+        XX_TEST_EXPECT_TRUE(done);
+
+        {
+            PluginxxString json{nullptr, 0};
+            auto           id = PluginStringView::from(asyncId);
+            XX_TEST_EXPECT_EQ(
+                runtime->get_async_work(hostView, &id, &json),
+                AGENTXX_PLUGIN_RUNTIME_OK
+            );
+            const auto text = takeString(hostView, json);
+            XX_TEST_EXPECT_TRUE(text.find(asyncId) != std::string::npos);
+            XX_TEST_EXPECT_TRUE(text.find("plugin:runtime_probe") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(text.find("\"done\"") != std::string::npos);
+            // 结果正文已落台账 (具体内容取决于模拟模型, 只看字段在不在)
+            XX_TEST_EXPECT_TRUE(text.find("\"result\"") != std::string::npos);
+        }
+
+        // 4) 清单里能查到 (按会话过滤为空时也给本实例全部)
+        {
+            PluginxxString json{nullptr, 0};
+            PluginxxStringView empty{};
+            XX_TEST_EXPECT_EQ(
+                runtime->list_async_work(hostView, &empty, &json),
+                AGENTXX_PLUGIN_RUNTIME_OK
+            );
+            const auto text = takeString(hostView, json);
+            XX_TEST_EXPECT_TRUE(text.find(asyncId) != std::string::npos);
+        }
+
+        // 5) 回调至少收到排队与终态 (起跑可能合并到同一轮, 不作硬断言)
+        XX_TEST_EXPECT_TRUE(counter.queued.load() >= 1);
+        XX_TEST_EXPECT_TRUE(counter.finished.load() == 1);
+
+        // 6) 别的实例看不到也取消不了这条任务
+        {
+            auto other       = makeInstance(mgr, ex, "other_probe");
+            auto otherView   = other->hostView();
+            auto id          = PluginStringView::from(asyncId);
+            XX_TEST_EXPECT_EQ(
+                runtime->cancel_async_work(otherView, &id),
+                AGENTXX_PLUGIN_RUNTIME_ERR_ARG
+            );
+            PluginxxString json{nullptr, 0};
+            XX_TEST_EXPECT_TRUE(
+                runtime->get_async_work(otherView, &id, &json) != AGENTXX_PLUGIN_RUNTIME_OK
+            );
+        }
+
+        // 7) 自己的任务已结束: 取消返回状态错 (不是“找不到”)
+        {
+            auto id = PluginStringView::from(asyncId);
+            XX_TEST_EXPECT_EQ(
+                runtime->cancel_async_work(hostView, &id),
+                AGENTXX_PLUGIN_RUNTIME_ERR_STATE
+            );
+        }
+    }
+
     // ===================== 2. 无容器时不可用 =====================
     {
         // 另一个管理器: 主程序上下文没有 host 引用 → 拿不到容器

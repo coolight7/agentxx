@@ -9,7 +9,7 @@
 | P0 | 抽取 `AsyncWorkManager` + 改名 + 删除全局并发上限/嵌套深度 | 已完成 |
 | P1 | 每队列 FIFO + 额度 + 台账/linger + 指标/快照/配置块 + 测试模块 | 已完成 |
 | P2 | 提交自包含 (显式清单) + 定向投递; 会话落盘 / HIL 三策略 / 创建者已销毁用例 | 部分 |
-| P3 | 单一事件名 + hub 值过滤 `match` + 工具改造; 插件表 4 成员 | 部分 |
+| P3 | 单一事件名 + hub 值过滤 `match` + 工具改造 + 插件表 4 成员 | 已完成 |
 | P4 | 文档 + 界面; chatbot 接入 | 部分 (文档 + wire/TUI 已做, chatbot 待做) |
 | P5 | provider/HTTP 连接池下沉到 `AgentHost` 供所有 AgentNode 共享 (§12-8 人工核对结论) | 待开始 |
 
@@ -87,6 +87,30 @@
 - 测试: `event_tools` 的 opt 枚举断言 7 → 8; 新增定向等待用例 (无关值不消耗等待、
   无容器时 `works` 报 `[threw]` + 提示 "agent host")。
 
+### P3 插件表四成员 (已完成)
+
+- `plugin_api.h`: `AgentxxPluginAsyncWorkSpec` (含 `on_event` / `user_data`, 无 `event_name`)
+  + `AGENTXX_PLUGIN_ASYNC_WORK_EVT_*` 四个阶段 + 表尾追加
+  `submit_async_work`/`cancel_async_work`/`get_async_work`/`list_async_work`;
+  `_VERSION` 1→2, `_MIN_VERSION` 保持 1, `_BASELINE_SIZE` 改为
+  `offsetof(AgentxxPluginRuntimeIface, submit_async_work)` (基线停在追加前)。
+- 宿主: `PluginManager::runtimeSubmitAsyncWork` (校验 → 派生 `AsyncWorkSpec` →
+  `host->submitAsyncWork`, 归属 `plugin:<实例名>`) / `runtimeCancelAsyncWork` /
+  `runtimeGetAsyncWork` / `runtimeListAsyncWork`; `releaseRuntimeOfOwner` 先按 owner
+  取消未完成任务再卸根。四个 vtable 包装走 `onInstanceIo` / `queryStringIo` 骨架。
+- 回调生命周期: 包一层 `weak_ptr<PluginInstance> + enabled` 检查, 实例释放/禁用后不再
+  进入插件代码。
+- `AsyncWorkSpec` 新增 `owner` 与 `onEvent` (+ `AsyncWorkEventPhase`); 管理器在提交/起跑/
+  终态 (含排队中取消) 各触发一次, 异常只记日志; `entryJson`/`listJson` 补 `owner`,
+  `AgentHost::cancelAsyncWorksOfOwner` 新增。
+- SDK: `AsyncWorkOptions` + `submitAsyncWork` / `cancelAsyncWork` /
+  `getAsyncWorkJson` / `listAsyncWorkJson` (老主程序按字段空判降级)。
+- `boundaries`: 基线允许 `offsetof(表, 成员)` 形态; 成员顺序台账补上四个新成员。
+- 测试: `plugin_agent_runtime` 177 → **199 断言** (四成员可空、kind=tool 拒绝、提交→终态、
+  `get`/`list` 看到 owner 与结果、回调阶段、别的实例看不到也取消不了、自己的已结束后取消返回
+  `ERR_STATE`)。
+- 文档: `plugins.md` §19.2/接口表总表、`AGENTS.md` 已同步。
+
 ### P4 界面与文档 (已完成部分)
 
 - 线消息: `WireContextStats` 追加 `asyncWorks` (新结构 `WireAsyncWorkItem`:
@@ -122,9 +146,6 @@
 
 ## 待完成
 
-- **P3 剩余**: 插件表 `agentxx.agent.runtime` 表尾追加 4 成员
-  (`submit_async_work` / `cancel_async_work` / `get_async_work` / `list_async_work`) +
-  `plugin_kit.h` 便捷函数 + 归属回收 + `boundaries` 成员台账与 `plugin_runtime` 版本断言。
 - **P4 剩余**:
     - chatbot 插件接入 (后台任务完成时主动播报)。
 - **`kind=tool`** (异步工具) 未实现: `AsyncWorkManager::submit` 对 `kind=tool` 明确返回

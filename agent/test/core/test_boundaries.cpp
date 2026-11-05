@@ -615,14 +615,24 @@ void checkInterfaceTableQuadruple(const fs::path& root, Violations& v) {
                     if (!body.empty() && body.front() == '"') {
                         iids.push_back(name);
                     } else if (name.ends_with("_BASELINE_SIZE")) {
+                        // 两种合法写法, 都是编译器算的:
+                        // - `sizeof(表名)`: 本代表就是完整布局
+                        // - `offsetof(表名, 第一个追加成员)`: 表尾追加过成员, 基线停在
+                        //   追加前的位置 (老主程序/老插件按基线判整表可用)
                         static const std::regex kSizeof{R"re(sizeof[ \t]*\([ \t]*(\w+)[ \t]*\))re"};
-                        std::smatch             sm;
+                        static const std::regex kOffsetof{
+                            R"re(offsetof[ \t]*\([ \t]*(\w+)[ \t]*,[ \t]*(\w+)[ \t]*\))re"
+                        };
+                        std::smatch sm;
                         if (std::regex_search(body, sm, kSizeof) && sm.size() > 1) {
+                            baselines.push_back(sm[1].str());
+                        } else if (std::regex_search(body, sm, kOffsetof) && sm.size() > 2) {
                             baselines.push_back(sm[1].str());
                         } else {
                             v.push_back(
                                 where + ": `" + name
-                                + "` 不是 `sizeof(表名)` 形态 (基线必须由编译器算)"
+                                + "` 既不是 `sizeof(表名)` 也不是 "
+                                  "`offsetof(表名, 第一个追加成员)` 形态 (基线必须由编译器算)"
                             );
                         }
                     } else if (name.ends_with("_MIN_VERSION")) {
@@ -763,7 +773,7 @@ void checkInterfaceTableLayout(const fs::path& root, Violations& v) {
         {"AgentxxPluginModelIface",       "get_config"                                                                                                                                                                                                                                                                                                                        },
         {"AgentxxPluginMountIface",       "list|get"                                                                                                                                                                                                                                                                                                                          },
         {"AgentxxPluginRuntimeIface",
-         "mount_root|unmount_root|open_channel|close_channel|send_input|cancel|select_model|respond_interrupt|get_channel_state|get_context_messages|list_runtime|register_trigger|unregister_trigger|emit_event|register_timer|unregister_timer"
+         "mount_root|unmount_root|open_channel|close_channel|send_input|cancel|select_model|respond_interrupt|get_channel_state|get_context_messages|list_runtime|register_trigger|unregister_trigger|emit_event|register_timer|unregister_timer|submit_async_work|cancel_async_work|get_async_work|list_async_work"
         },
         {"AgentxxPluginPermissionIface",
          "register_tool_permission|unregister_tool_permission|check_paths"                                                                                                                                                                                                                                                                                                    },

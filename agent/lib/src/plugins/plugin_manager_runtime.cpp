@@ -1030,6 +1030,14 @@ void PluginManager::releaseRuntimeChannelsOf(PluginInstance* inst) {
 }
 
 void PluginManager::releaseRuntimeOfOwner(std::string_view owner) {
+    // 后台任务: 先置取消令牌 (排队中直接出队, 运行中的终态照常记录)
+    // - 必须在释放根之前做: 任务挂在根上, 根没了就找不到执行体
+    if (auto host = runtimeHost(); host && !owner.empty()) {
+        const auto count = host->cancelAsyncWorksOfOwner(fmt::format("plugin:{}", owner));
+        if (count > 0) {
+            XX_LOGI("[runtime] canceled {} background task(s) of `{}`", count, owner);
+        }
+    }
     // 顺序: 触发器/定时器 → 通道 → 根。前两项都指向通道或根, 反过来会留下悬空目标。
     std::erase_if(runtimeTriggers_, [owner](const std::shared_ptr<RuntimeTrigger>& item) {
         return item && item->owner == owner;
@@ -1066,6 +1074,136 @@ void PluginManager::releaseRuntimeOfOwner(std::string_view owner) {
         }
         runtimeDropRoot(*root, false);
     }
+}
+
+// =====================================================================
+// 后台任务 (async work)
+// =====================================================================
+
+PluginManager::AsyncSubmitOutcome
+    PluginManager::runtimeSubmitAsyncWork(PluginInstance* inst, agent::AsyncWorkSpec work) {
+    AsyncSubmitOutcome out;
+    if (inst == nullptr) {
+        out.code  = AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+        out.error = "instance is null";
+        return out;
+    }
+    auto host = runtimeHost();
+    if (!host) {
+        out.code  = AGENTXX_PLUGIN_RUNTIME_ERR_UNSUPPORTED;
+        out.error = "no agent host";
+        return out;
+    }
+    auto primary = primaryAgent_.lock();
+    auto ctx     = primary;
+    if (!ctx || !ctx->agentConfig) {
+        out.code  = AGENTXX_PLUGIN_RUNTIME_ERR_UNSUPPORTED;
+        out.error = "no agent attached";
+        return out;
+    }
+    if (work.kind != agent::AsyncWorkKind::Agent) {
+        out.code  = AGENTXX_PLUGIN_RUNTIME_ERR_UNSUPPORTED;
+        out.error = "kind `tool` is not supported yet";
+        return out;
+    }
+    // 归属: 插件禁用/卸载时按它回收自己提交的任务
+    const auto owner = fmt::format("plugin:{}", inst->name);
+    work.owner       = owner;
+    if (work.creatorAgentId.empty()) {
+        work.creatorAgentId = ctx->agentId;
+    }
+    if (!work.baseConfig) {
+        work.baseConfig = ctx->agentConfig;
+    }
+    // 回调包装: 实例释放/禁用后不再进入插件代码
+    if (work.onEvent) {
+        auto cb       = std::move(work.onEvent);
+        auto weakInst = inst->self;
+        work.onEvent
+            = [weakInst, cb = std::move(cb)](agent::AsyncWorkEventPhase phase,
+                                             const utilxx_base::Json&  payload) {
+                  auto ptr = weakInst.lock();
+                  if (!ptr || !ptr->enabled) {
+                      return;
+                  }
+                  cb(phase, payload);
+              };
+    }
+    auto res = host->submitAsyncWork(std::move(work), ctx);
+    if (!res.accepted) {
+        out.code  = AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+        out.error = res.error;
+        return out;
+    }
+    out.code    = AGENTXX_PLUGIN_RUNTIME_OK;
+    out.asyncId = res.asyncId;
+    XX_LOGI(
+        "[runtime] submitted background task {} (owner={}, ahead={})",
+        res.asyncId,
+        inst->name,
+        static_cast<int64_t>(res.queueAhead)
+    );
+    return out;
+}
+
+int32_t PluginManager::runtimeCancelAsyncWork(PluginInstance* inst, std::string_view asyncId) {
+    if (inst == nullptr || asyncId.empty()) {
+        return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+    }
+    auto host = runtimeHost();
+    if (!host) {
+        return AGENTXX_PLUGIN_RUNTIME_ERR_UNSUPPORTED;
+    }
+    // 只能取消本实例提交的: 别人的任务不允许跨插件干预
+    const auto entry = host->asyncWorkJson(asyncId);
+    if (entry.is_object() && entry.size() == 0) {
+        return AGENTXX_PLUGIN_RUNTIME_ERR_NOT_FOUND;
+    }
+    if (entry.value("owner", std::string{}) != fmt::format("plugin:{}", inst->name)) {
+        return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+    }
+    return host->cancelAsyncWork(asyncId) ? AGENTXX_PLUGIN_RUNTIME_OK
+                                          : AGENTXX_PLUGIN_RUNTIME_ERR_STATE;
+}
+
+std::string PluginManager::runtimeGetAsyncWork(PluginInstance* inst, std::string_view asyncId) {
+    if (inst == nullptr || asyncId.empty()) {
+        return {};
+    }
+    auto host = runtimeHost();
+    if (!host) {
+        return {};
+    }
+    const auto entry = host->asyncWorkJson(asyncId);
+    if (!entry.is_object() || entry.size() == 0) {
+        return {};
+    }
+    if (entry.value("owner", std::string{}) != fmt::format("plugin:{}", inst->name)) {
+        return {};
+    }
+    return entry.dump();
+}
+
+std::string PluginManager::runtimeListAsyncWork(PluginInstance* inst, std::string_view sessionId) {
+    if (inst == nullptr) {
+        return {};
+    }
+    auto host = runtimeHost();
+    if (!host) {
+        return {};
+    }
+    const auto all = host->asyncWorksJson({}, sessionId, true, 100);
+    if (!all.is_array()) {
+        return {};
+    }
+    auto       mine = utilxx_base::Json::array();
+    const auto want = fmt::format("plugin:{}", inst->name);
+    for (const auto& item : all) {
+        if (item.is_object() && item.value("owner", std::string{}) == want) {
+            mine.push_back(item);
+        }
+    }
+    return mine.dump();
 }
 
 } // namespace plugin

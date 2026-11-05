@@ -439,7 +439,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 | `agentxx.agent.tasks` | 1 | 后台任务主程序托管: `register_task/cancel_task` (kit `spawn` 自动注册; 主程序登记句柄 + 持 inflight + `notify.done` 完成通知 —— 卸载时 detachAll 统一取消 + `waitInflightZero` 精确等待, 无协程帧悬挂; `notify` 为出参, `notify.done` 可从插件任意线程回调) |
 | `agentxx.agent.feature` | 2 | 功能点 (扩展点) 体系: `list_points/define_point/undefine_point` (插件声明自己的点, id 须落在 `plugin.<插件名>.*`) + `register_impl/unregister_impl` (为任意已声明的点登记实现, 按层/优先级排序) + `call_point_async` (按名调用一个**通用 JSON 点**, 只拿数据: 不写值缓存/不记置空/不改调用方会话; 强类型核心点返回受理错误; 取消用 `pluginxx.cancel.op_cancel`) |
 | `agentxx.agent.mount` | 1 | 挂载查询 (诊断用): `list` (全部挂载摘要 JSON 数组, 每项含 agentId/agentName/workDir/language/mountSeq/plugins) + `get` (按 agentId 查单个挂载摘要, 没有该挂载返回 -1) |
-| `agentxx.agent.runtime` | 1 | 会话运行时 (插件挂自己的根并驱动会话): `mount_root/unmount_root` (带自己的 `AgentConfig` 覆盖与插件挂载策略) + `open_channel/close_channel` (一个 sessionId 一条通道, 事件经回调交付) + `send_input/cancel/select_model/respond_interrupt` + `get_channel_state/get_context_messages/list_runtime` (只读查询) + `register_trigger/unregister_trigger/emit_event/register_timer/unregister_timer` (事件驱动)。入口用 `root_id` / `channel_id` 句柄寻址, 不带 agent 引用 —— 它看的是整个容器。表尾的 4 个后台任务成员 (`submit/cancel/get/list_async_work`) 尚未实现。详见 §19 |
+| `agentxx.agent.runtime` | 2 | 会话运行时 (插件挂自己的根并驱动会话): `mount_root/unmount_root` (带自己的 `AgentConfig` 覆盖与插件挂载策略) + `open_channel/close_channel` (一个 sessionId 一条通道, 事件经回调交付) + `send_input/cancel/select_model/respond_interrupt` + `get_channel_state/get_context_messages/list_runtime` (只读查询) + `register_trigger/unregister_trigger/emit_event/register_timer/unregister_timer` (事件驱动)。入口用 `root_id` / `channel_id` 句柄寻址, 不带 agent 引用 —— 它看的是整个容器。v2 表尾追加后台任务四成员 (`submit/cancel/get/list_async_work`, 基线不变, `ifaceHas` 判定)。详见 §19 |
 | `agentxx.agent.event` | 1 | 事件中枢: `define_event` (声明事件源: 名字/种类/说明/历史条数/ttl/保留期) + `emit_value` (发布一个 JSON 值, 任意线程) + `end_event` / `remove_event` + `query_event` / `list_events` (查状态与清单) + `register_wait` / `cancel_wait` / `list_waits` (替某个会话登记等待, 值到达后按投递模式变成该会话的输入)。事件与等待按 `plugin:<实例名>` 记账, 禁用/卸载时整批回收; 与触发器/定时器的选型见 §20 |
 
 > 表中"版本"列 = 表声明的 `X_VERSION`, 与 `X_MIN_VERSION` 一起构成版本对, 另有
@@ -1943,11 +1943,34 @@ plugin:
 | | `emit_event(topic, payload)` | 发一条 `std::string` 事件 (任意线程, 立即返回) |
 | 定时 | `register_timer(spec, out_id)` | 一次性 / 周期 |
 | | `unregister_timer(id)` | 注销定时器 |
-| (待做) 后台任务 | `submit_async_work` / `cancel_async_work` / `get_async_work` / `list_async_work` | 追加在表尾; **尚未实现** —— 现在插件只能经事件中枢间接等结果 (`plugin.<名>.*` 发值 + 模型 `agentxx_event {opt:"watch", id}`), 见 [events.md](events.md) 第 8 节 |
+| 后台任务 (v2) | `submit_async_work(spec, out_id)` | 提交后台任务; 结果发到固定事件 `agentxx.agent.async.done`, 标识用返回的 `asyncId` |
+| | `cancel_async_work(id)` | 只能取消本实例提交的 (别人的任务返回 `ERR_ARG`) |
+| | `get_async_work(id, out_json)` / `list_async_work(session_id, out_json)` | 台账查询; `session_id` 空 = 本实例提交的全部 |
 
 错误码 (`AGENTXX_PLUGIN_RUNTIME_*`): `OK(0)` / `ERR_ARG` / `ERR_STATE` / `ERR_NOT_FOUND` /
 `ERR_BUDGET` / `ERR_CONFLICT` / `ERR_UNSUPPORTED` / `ERR_FAILED`。具体原因写日志
 (这张表的入口没有 `error_out` 参数)。
+
+**后台任务四成员 (v2)**:
+
+- `submit_async_work` 的参数是 `AgentxxPluginAsyncWorkSpec` (带 `struct_size`, 字段语义
+  与 C++ 侧 `AsyncWorkSpec` 一致): 任务正文 `message`、身份 `name` / `system_prompt` /
+  `model`、显式挂载清单 (`tools_json` / `plugins_json` / `mcp_servers_json` / `skills_json` /
+  `memory_files_json` / `rag_docs_json`)、目录与语言、权限清单、`session_store` /
+  `interrupt_policy` (-1 = 跟随创建者配置)、`notify_delivery`、`on_event` 回调;
+- 提交**只校验参数**, 不因额度或排队条数被拒 (额度只决定何时起跑); 返回的 `asyncId`
+  同时是该任务 agent 的 `sessionId`;
+- 结果统一发 `agentxx.agent.async.done` (值里用 `asyncId` 区分); 想当场拿结果让模型
+  `agentxx_event {opt:"await", id}`;
+- `cancel/get/list` 都**只能碰本实例提交的** (`owner = plugin:<实例名>`): 取消别人的返回
+  `ERR_ARG`, 查别人的返回空; 插件禁用/卸载时主程序按 owner 把这批未完成任务取消
+  (只置取消令牌, 终态照常记录);
+- `on_event` 回调 (**容器 io 线程, 必须快速返回**): `QUEUED` / `STARTED` / `FINISHED` /
+  `CANCELED` 四个阶段, `payload_json` 带 `asyncId` / `kind` / `name` / `queueAhead` /
+  `hasError` / `canceled` / `error`; 实例释放/禁用后不再进入插件代码;
+- 老主程序 (v1) 没有这 4 个成员: 用 `ifaceHas<&AgentxxPluginRuntimeIface::submit_async_work>`
+  判定后降级; SDK 便捷层是 `submitAsyncWork` / `cancelAsyncWork` /
+  `getAsyncWorkJson` / `listAsyncWorkJson` (`AsyncWorkOptions`)。
 
 **与事件中枢的关系**: 事件中枢 (`agentxx::events::EventHub`, 见 [events.md](events.md))
 **只订阅 `plugin.` 前缀**，所以插件用

@@ -916,10 +916,11 @@ typedef struct AgentxxPluginMountIface {
 /// 它是容器级接口, 不是"当前 agent"接口。`root_id` 与该根的 `agentId` 是同一个值,
 /// 需要 agent 级操作 (查挂了哪些插件等) 时直接当 agentId 用。
 #define AGENTXX_PLUGIN_IFACE_AGENT_RUNTIME             "agentxx.agent.runtime"
-#define AGENTXX_PLUGIN_IFACE_AGENT_RUNTIME_VERSION     1
+/// v2: 表尾追加 4 个后台任务入口 (submit/cancel/get/list_async_work)
+#define AGENTXX_PLUGIN_IFACE_AGENT_RUNTIME_VERSION     2
 #define AGENTXX_PLUGIN_IFACE_AGENT_RUNTIME_MIN_VERSION 1
 /* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
-#define AGENTXX_PLUGIN_IFACE_AGENT_RUNTIME_BASELINE_SIZE sizeof(AgentxxPluginRuntimeIface)
+#define AGENTXX_PLUGIN_IFACE_AGENT_RUNTIME_BASELINE_SIZE offsetof(AgentxxPluginRuntimeIface, submit_async_work)
 
 /* ---- 返回码 (本表全部入口) ---- */
 #define AGENTXX_PLUGIN_RUNTIME_OK              0
@@ -1072,6 +1073,74 @@ typedef struct AgentxxPluginTimerSpec {
 /* 基线: 重置时 = 完整布局; 以后追加字段保持不变 (改为 offsetof(第一个追加字段)) */
 #define AGENTXX_PLUGIN_TIMER_SPEC_BASELINE_SIZE sizeof(AgentxxPluginTimerSpec)
 
+/* ---- 后台任务 (async work) ---- */
+
+/// 任务事件阶段 (回调的 `phase` 参数)
+/// - `QUEUED`: 已受理排队 (`payload_json` 带 `queueAhead`)
+/// - `STARTED`: 从队列起跑
+/// - `FINISHED` / `CANCELED`: 终态 (取消优先: 取消时即使带错误也按 CANCELED 上报)
+#define AGENTXX_PLUGIN_ASYNC_WORK_EVT_QUEUED   0
+#define AGENTXX_PLUGIN_ASYNC_WORK_EVT_STARTED  1
+#define AGENTXX_PLUGIN_ASYNC_WORK_EVT_FINISHED 2
+#define AGENTXX_PLUGIN_ASYNC_WORK_EVT_CANCELED 3
+
+/// 任务事件回调 (**在容器 io 线程调用, 必须快速返回**)
+/// - 不得在此同步阻塞 (等待网络/人工答复): 整个进程的会话都在这条线程上
+/// - `payload_json` 与其中的字符串只在回调期间有效; 要留着就自己拷
+/// - 插件禁用/卸载后不再回调 (主程序解绑时同时取消该插件提交的任务)
+typedef void(PLUGINXX_CALL* AgentxxPluginAsyncWorkEventFn)(
+    void*                     user_data,
+    int32_t                   phase,
+    const PluginxxStringView* payload_json
+);
+
+/// 提交一个后台任务 (`submit_async_work` 的参数)
+///
+/// 语义与 C++ 侧 `agentxx::agent::AsyncWorkSpec` 一致: 提交即入队, 结果发到固定事件
+/// `agentxx.agent.async.done` (值里用 `asyncId` 区分), 标识不另传。
+/// 字段全是可选/有默认; 新字段只能追加在尾部 (读取方用 `specSizeOk` 判)。
+typedef struct AgentxxPluginAsyncWorkSpec {
+    uint32_t struct_size; ///< sizeof(AgentxxPluginAsyncWorkSpec); 0 = 基线布局
+    /// 0 = `agent` (本期只支持) ; 1 = `tool` (预留, 返回 ERR_UNSUPPORTED)
+    int32_t kind;
+    /// 中断策略: 0 = bubble 1 = deny 2 = allow; -1 = 跟随创建者配置
+    int32_t interrupt_policy;
+    /// 任务会话是否落盘: 0 = 否, 1 = 是, -1 = 跟随创建者配置
+    int32_t session_store;
+    int32_t _reserved;
+    int64_t interrupt_timeout_ms; ///< 0 = 不限
+    int64_t time_limit_ms;        ///< 0 = 不限
+    /// 创建者会话 (通道的会话): 结果事件与 HIL 都按它找创建者; 空 = 不关联会话
+    PluginxxStringView session_id;
+    /// 排队与额度分组; 空 = 创建者 agentId
+    PluginxxStringView queue_key;
+    PluginxxStringView name;
+    PluginxxStringView system_prompt;
+    PluginxxStringView message;
+    /// 空 = 创建者的 subagent 模型
+    PluginxxStringView model;
+    /// 工具策略 JSON: 空 = 默认; `[]` = 无工具; `["*"]` = 继承创建者; 否则名单
+    PluginxxStringView tools_json;
+    /// 插件挂载 (与 yaml `plugin.mount` 同构); 空 = 不挂
+    PluginxxStringView plugins_json;
+    PluginxxStringView mcp_servers_json; ///< 字符串数组
+    PluginxxStringView skills_json;      ///< 字符串数组
+    PluginxxStringView memory_files_json; ///< 字符串数组
+    PluginxxStringView rag_docs_json;     ///< 字符串数组
+    PluginxxStringView work_dir;          ///< 空 = 跟随创建者
+    PluginxxStringView language;          ///< 空 = 跟随创建者
+    PluginxxStringView permission_allow_json; ///< 字符串数组
+    PluginxxStringView permission_deny_json;  ///< 字符串数组
+    /// 结果额外投递到创建者会话: 空 = 不投递; `next-step` / `inject` / `next-turn`
+    PluginxxStringView notify_delivery;
+    /// 任务事件回调 (可空)
+    AgentxxPluginAsyncWorkEventFn on_event;
+    void*                          user_data;
+} AgentxxPluginAsyncWorkSpec;
+
+/* 基线: 重置时 = 完整布局; 以后追加字段保持不变 (改为 offsetof(第一个追加字段)) */
+#define AGENTXX_PLUGIN_ASYNC_WORK_SPEC_BASELINE_SIZE sizeof(AgentxxPluginAsyncWorkSpec)
+
 typedef struct AgentxxPluginRuntimeIface {
     int32_t  version; ///< 主程序填 AGENTXX_PLUGIN_IFACE_AGENT_RUNTIME_VERSION
     uint32_t struct_size;
@@ -1190,6 +1259,38 @@ typedef struct AgentxxPluginRuntimeIface {
 
     /// 注销定时器
     int32_t(PLUGINXX_CALL* unregister_timer)(const PluginxxHost* host, int64_t timer_id);
+
+    /* ---- 后台任务 (v2 尾部追加; 基线不变) ---- */
+
+    /// 提交一个后台任务 (入队即返回; 结果发到 `agentxx.agent.async.done`)
+    /// - 只校验参数, 不因额度/排队被拒 (额度只影响何时起跑)
+    /// - `out_async_id`: 框架分配的 id (= 该任务 agent 的 sessionId; `host->alloc`)
+    /// - 插件禁用/卸载时本实例提交的任务会被取消 (终态照常记录)
+    int32_t(PLUGINXX_CALL* submit_async_work)(
+        const PluginxxHost*               host,
+        const AgentxxPluginAsyncWorkSpec* spec,
+        PluginxxString*                   out_async_id
+    );
+
+    /// 取消一条后台任务 (排队中直接出队; 运行中置取消令牌)
+    int32_t(PLUGINXX_CALL* cancel_async_work)(
+        const PluginxxHost*       host,
+        const PluginxxStringView* async_id
+    );
+
+    /// 单条任务 JSON (不存在返回 `{}`)
+    int32_t(PLUGINXX_CALL* get_async_work)(
+        const PluginxxHost*       host,
+        const PluginxxStringView* async_id,
+        PluginxxString*           out_json
+    );
+
+    /// 任务清单 JSON (数组; `session_id` 空 = 本实例提交的全部)
+    int32_t(PLUGINXX_CALL* list_async_work)(
+        const PluginxxHost*       host,
+        const PluginxxStringView* session_id,
+        PluginxxString*           out_json
+    );
 } AgentxxPluginRuntimeIface;
 
 /* ==================== 接口表: 事件中枢 (agentxx.agent.event) ==================== */
