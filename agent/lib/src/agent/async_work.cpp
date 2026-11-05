@@ -61,6 +61,64 @@ void installAsyncInterruptResponders(
 
 namespace {
 
+/// 清掉过期 (超过 `keepDays` 天未改动) 的任务会话目录
+///
+/// 目录结构是 `{存储根}/{asyncId}/session.db`, 一个子目录 = 一个后台任务的会话。
+/// 清理只在“提交一个带落盘的任务”时做一次 (不另起定时器), 失败只记日志 —— 运维事实
+/// 上的保留期, 不影响任务本身。
+///
+/// - `args`:
+///     - [root] 存储根 (`{创建者会话目录}/agent`)
+///     - [keepDays] 保留天数; <= 0 由调用方拦住, 此处不做
+void purgeExpiredSessionDirs(const std::string& root, size_t keepDays) {
+    if (root.empty() || keepDays == 0) {
+        return;
+    }
+    std::error_code ec;
+    if (!std::filesystem::is_directory(root, ec)) {
+        return;
+    }
+    const auto cutoff = std::filesystem::file_time_type::clock::now()
+                        - std::chrono::hours{24 * static_cast<int64_t>(keepDays)};
+    size_t removed = 0;
+    for (std::filesystem::directory_iterator
+             it(root, std::filesystem::directory_options::skip_permission_denied, ec),
+         end;
+         it != end;
+         it.increment(ec)) {
+        if (ec) {
+            break;
+        }
+        std::error_code subEc;
+        if (!it->is_directory(subEc)) {
+            continue;
+        }
+        const auto mtime = std::filesystem::last_write_time(it->path(), subEc);
+        if (subEc || mtime > cutoff) {
+            continue;
+        }
+        std::error_code rmEc;
+        std::filesystem::remove_all(it->path(), rmEc);
+        if (rmEc) {
+            XX_LOGW(
+                "[async_work] could not purge expired session dir `{}`: {}",
+                it->path().string(),
+                rmEc.message()
+            );
+            continue;
+        }
+        ++removed;
+    }
+    if (removed > 0) {
+        XX_LOGI(
+            "[async_work] purged {} expired session dir(s) older than {} day(s) under `{}`",
+            removed,
+            keepDays,
+            root
+        );
+    }
+}
+
 /// 结果事件名 (单一事件名, 靠值里的 `asyncId` 区分是哪一条任务)
 constexpr std::string_view kAsyncDoneEvent = "agentxx.agent.async.done";
 
@@ -296,6 +354,14 @@ AsyncWorkSubmitResult
             return out;
         }
         spec.sessionStoreRoot = std::move(root);
+        // 保留天数 (`session_store_keep_days`, 0 = 不自动清理): 顺手清掉过期的
+        // 任务会话目录 (只在提交带落盘的任务时做一次, 不另起定时器)
+        if (spec.baseConfig && spec.baseConfig->asyncWorkSessionStoreKeepDays > 0) {
+            purgeExpiredSessionDirs(
+                spec.sessionStoreRoot,
+                spec.baseConfig->asyncWorkSessionStoreKeepDays
+            );
+        }
     }
 
     {

@@ -127,9 +127,10 @@
   `plugin_kit.h` 便捷函数 + 归属回收 + `boundaries` 成员台账与 `plugin_runtime` 版本断言。
 - **P4 剩余**:
     - chatbot 插件接入 (后台任务完成时主动播报)。
-- **P5**: provider/HTTP 连接池下沉到 `AgentHost` (所有 `AgentNode` 共享一份), 未开始。
 - **`kind=tool`** (异步工具) 未实现: `AsyncWorkManager::submit` 对 `kind=tool` 明确返回
   `not supported yet`。
+- **`session_store_keep_days`**: 已实现 (提交带落盘的任务时清理过期任务会话目录);
+  用例在 `async_work` 模块（`test_session_store_claim`）。
 
 ## 注意事项
 

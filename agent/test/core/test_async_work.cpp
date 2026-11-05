@@ -649,6 +649,14 @@ asio::awaitable<void> test_session_store_claim() {
     std::error_code ec;
     std::filesystem::remove_all(baseDir, ec);
     const std::string root = (baseDir / "agent").string();
+    // 保留天数 = 1: 预先放一个 3 天前的任务会话目录, 提交时顺便清掉
+    fx->cfg->asyncWorkSessionStoreKeepDays = 1;
+    const auto staleDir = std::filesystem::path{root} / "async-stale";
+    std::filesystem::create_directories(staleDir, ec);
+    const auto staleTime
+        = std::filesystem::file_time_type::clock::now() - std::chrono::hours{24 * 3};
+    std::filesystem::last_write_time(staleDir, staleTime, ec);
+    XX_TEST_EXPECT_TRUE(std::filesystem::is_directory(staleDir));
 
     std::string asyncId;
     XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
@@ -680,6 +688,8 @@ asio::awaitable<void> test_session_store_claim() {
         });
     }));
     XX_TEST_EXPECT_FALSE(ownsSession());
+    // 过期的任务会话目录已被清掉 (保留天数 1, 那个目录是 3 天前的)
+    XX_TEST_EXPECT_FALSE(std::filesystem::exists(staleDir));
     XX_TEST_EXPECT_EQ(
         fx->host->asyncWorkJson(asyncId).value("state", std::string{}),
         std::string{"done"}

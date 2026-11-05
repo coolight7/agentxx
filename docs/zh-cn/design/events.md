@@ -273,7 +273,8 @@ async work，`kind` 区分 `agent`（启动一个 agent，已实现）与 `tool`
 - **会话落盘**（可选，`async_work.session_store`）：目录
   `{创建者会话目录}/agent/{asyncId}`，提交时按（存储根, asyncId）独占登记、任务结束释放；
   只服务事后回看，不做重启续跑；创建者没有 `dataDir` / `sessionStoreDirectory` 时
-  明确拒绝，不默默不落盘；
+  明确拒绝，不默默不落盘；`async_work.session_store_keep_days`（默认 0 = 不清理）开启后，
+  提交带落盘的任务时顺手清掉超过该天数的旧任务会话目录；
 - 台账（entry）是纯内存记录：运行中一直在，结束后保留 `async_work.linger_ms`
   （默认 5 分钟）供查询，到期自动清除。
 - **界面可见**：TUI Info 侧边栏的「后台任务」段经 `WireContextStats.asyncWorks`

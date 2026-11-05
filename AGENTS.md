@@ -595,7 +595,8 @@ path/to/agentxx_test --log-level warn string_util regex
   (`installAsyncInterruptResponders`: 权限一律拒绝/允许, 其他 HIL 中断 deny 按取消收尾 /
   allow 用空结果恢复)。**会话落盘** (可选): 目录 `{创建者会话目录}/agent/{asyncId}`,
   提交时按 (存储根, asyncId) `claimSession` 独占、任务结束 `releaseSession`;
-  创建者无 `dataDir`/`sessionStoreDirectory` 时明确拒绝 (不默默不落盘)。
+  创建者无 `dataDir`/`sessionStoreDirectory` 时明确拒绝 (不默默不落盘);
+  `session_store_keep_days` > 0 时, 提交带落盘任务时顺手清掉过期任务会话目录。
   诊断: `KeyMetrics` 与加载快照的 `async_work` 段; 测试 `async_work` /
   `event_subagent` / `event_tools`。**界面**: TUI Info 侧边栏「后台任务」段 (排在 Context 段
   之后、Append 段之前) 经 `WireContextStats.asyncWorks` 追加字段下发 (最多 10 条, 为空不带,
