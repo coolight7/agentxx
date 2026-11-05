@@ -32,8 +32,8 @@ class AgentContext;
 class AgentHost;
 
 /// 异步任务种类
-/// - `Agent`: 启动一个 agent 跑任务 (子代理形态, 本期实现)
-/// - `Tool`: 异步工具 (结构预留, 见 plan §10.4)
+/// - `Agent`: 启动一个 agent 跑任务 (子代理形态)
+/// - `Tool`: 把一次工具调用放到后台跑 (创建者工具表里的同名工具; 结果同样走事件)
 enum class AsyncWorkKind : int { Agent = 0, Tool = 1 };
 
 /// 异步任务状态
@@ -141,6 +141,15 @@ struct AsyncWorkSpec {
     bool keepProvidedSystemMessage = false;
     bool inheritRequestTools       = false;
     bool toolExecutionDisabled     = false;
+
+    /// ---- 以下两项只在 `kind == Tool` 时使用 ----
+    ///
+    /// 要后台执行的工具名 (在**创建者**的工具注册表里查; 表里没有时任务直接失败)。
+    /// 只有插件工具与动态注册的工具在表里; lib 内置快工具由引擎独立持有, 不支持后台跑。
+    /// 工具参数原样传给它 —— 与前台调用同一套执行语义 (权限已在提交时问过, 结果压缩
+    /// 在事件/台账侧按大小截断)。
+    std::string       toolName;
+    utilxx_base::Json toolArgs = utilxx_base::Json::object();
 
     /// 任务结果标识 (回填到父 toolcall 的 tool_call_id; 仅日志与台账用)
     std::string resultId;

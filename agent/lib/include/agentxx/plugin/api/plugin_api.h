@@ -1101,7 +1101,8 @@ typedef void(PLUGINXX_CALL* AgentxxPluginAsyncWorkEventFn)(
 /// 字段全是可选/有默认; 新字段只能追加在尾部 (读取方用 `specSizeOk` 判)。
 typedef struct AgentxxPluginAsyncWorkSpec {
     uint32_t struct_size; ///< sizeof(AgentxxPluginAsyncWorkSpec); 0 = 基线布局
-    /// 0 = `agent` (本期只支持) ; 1 = `tool` (预留, 返回 ERR_UNSUPPORTED)
+    /// 0 = `agent` (起一个 agent 跑任务) ; 1 = `tool` (把一次工具调用放到后台跑)
+    /// - `1` 需要 `tool_name` (追加字段, 旧布局填不出来时按 `ERR_ARG` 拒)
     int32_t kind;
     /// 中断策略: 0 = bubble 1 = deny 2 = allow; -1 = 跟随创建者配置
     int32_t interrupt_policy;
@@ -1138,10 +1139,15 @@ typedef struct AgentxxPluginAsyncWorkSpec {
     /// 任务事件回调 (可空)
     AgentxxPluginAsyncWorkEventFn on_event;
     void*                          user_data;
+    /// ---- 以下两项是追加字段: 只在 `kind = 1` (`tool`) 时使用 ----
+    /// 要后台执行的工具名 (在**插件自己挂的那个根/会话**的工具表里查)
+    PluginxxStringView tool_name;
+    /// 工具参数 JSON 对象原文 (空 = `{}`); 不是对象时按 `ERR_ARG` 拒
+    PluginxxStringView tool_args_json;
 } AgentxxPluginAsyncWorkSpec;
 
 /* 基线: 重置时 = 完整布局; 以后追加字段保持不变 (改为 offsetof(第一个追加字段)) */
-#define AGENTXX_PLUGIN_ASYNC_WORK_SPEC_BASELINE_SIZE sizeof(AgentxxPluginAsyncWorkSpec)
+#define AGENTXX_PLUGIN_ASYNC_WORK_SPEC_BASELINE_SIZE offsetof(AgentxxPluginAsyncWorkSpec, tool_name)
 
 typedef struct AgentxxPluginRuntimeIface {
     int32_t  version; ///< 主程序填 AGENTXX_PLUGIN_IFACE_AGENT_RUNTIME_VERSION

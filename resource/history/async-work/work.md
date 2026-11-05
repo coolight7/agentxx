@@ -8,17 +8,19 @@
 |---|---|---|
 | P0 | 抽取 `AsyncWorkManager` + 改名 + 删除全局并发上限/嵌套深度 | 已完成 |
 | P1 | 每队列 FIFO + 额度 + 台账/linger + 指标/快照/配置块 + 测试模块 | 已完成 |
-| P2 | 提交自包含 (显式清单) + 定向投递; 会话落盘 / HIL 三策略 / 创建者已销毁用例 | 部分 |
+| P2 | 提交自包含 (显式清单) + 定向投递; 会话落盘 / HIL 三策略 / 创建者已销毁用例 | 已完成 |
 | P3 | 单一事件名 + hub 值过滤 `match` + 工具改造 + 插件表 4 成员 | 已完成 |
 | P4 | 文档 + 界面; chatbot 接入 | 已完成 (文档 + wire/TUI + chatbot 接入) |
 | P5 | 模型注册表下沉 `AgentHost` (所有 AgentNode 共享 provider) | 已完成 |
+| P6 | `kind=tool` 异步工具 (模型侧 `agentxx_tool_async` + 插件面追加字段) | 已完成 |
 
 提交记录: `2dca9dc5` (P0) → `164029e0` (P1) → `6ea5a5aa` (P3) → `04ea4a57` (P2) →
 `0a40ed4b` (P4 文档) → Info 侧边栏「后台任务」段 + `WireContextStats.asyncWorks`
 ("async_work: Info 侧边栏「后台任务」段 + WireContextStats.asyncWorks") → HIL 三策略 +
 会话落盘 + 创建者已销毁用例 → `session_store_keep_days` 清理 (90f46e94) →
 插件表 runtime v2 四成员 (b1ea340d) → 根配置 `asyncWork` 段 (8f5a8971) → P4 chatbot 接入
-(`chatbot_task` + 命令 + 面板段 + 宿主 `exclude`)。
+(`chatbot_task` + 命令 + 面板段 + 宿主 `exclude`; 90d50c79) → P5 模型注册表下沉
+(c9515795) → P6 `kind=tool` 异步工具。
 
 ## 已完成
 
@@ -214,11 +216,48 @@
 
 偏差: 计划里写的是"provider/HTTP 连接池下沉", 实际只做了模型注册表 (连接池已共享)。
 
+### P6 `kind=tool` 异步工具 (已完成)
+
+- `AsyncWorkSpec`: 新增 `toolName` / `toolArgs` (只在 `kind == Tool` 时使用)。
+- `AsyncWorkManager::submit`: `kind=tool` 要求 `toolName` 非空 + 有创建者上下文
+  (工具表在创建者身上); `message` 只有 `kind=agent` 才必需。
+- `async_work.cpp` 新增 `runToolWork(creator, spec, token)`:
+  - 在创建者工具表里查 `spec.toolName`, 找不到立即失败收尾;
+  - 参数拷一份进协程帧, 并补 `sessionId` / `tool_call_id` (与前台 `ToolcallWrapNode`
+    一致, 下游工具会读);
+  - `asio::co_spawn` 执行 `tool->execute_async(args)`, 状态放 `shared_ptr<RunState>`
+    (不会因为外层提前退出而悬挂), 异常经 `catchErrorAsync` 转成失败结果;
+  - 每 50 ms 看一次取消令牌 (取消是尽力而为: 工具不认识取消时会继续跑到自己的超时,
+    结果被丢弃);
+  - `ToolStatus` → `RespSubagentBatchItem` 的映射 (`Ok` 进 `content`, `Canceled` 置
+    `Canceled`, `Interrupted`/`Failed` 置 `hasError`);
+  - 结果落台台账 (并把 `kind` 记成 `tool`), 事件仍是 `agentxx.agent.async.done`。
+- 新工具 `agentxx_tool_async` (`agent/lib/{include/agentxx/tools/tool_async.h,src/tools/tool_async.cpp}`):
+  参数 `tool` / `args` / `label`; 校验工名存在、不允许套自己 (不嵌套); **提交前按目标工具
+  与参数问一次权限** (`Topic::ToolPermissionCheck`, 与前台同一套权限中间件) —— 否则只要能
+  调本工具就能绕过目标工具自己的限制; 返回 `[Async tool started] id=...` 与取值/取消写法。
+  只在 `async_work.enable` 且上下文有容器时注册 (`base_agent.cpp`), 提示词在
+  `prompt.cpp` 的 `toolPrompt` 表内。
+- 插件面: `AgentxxPluginAsyncWorkSpec` 尾部追加 `tool_name` / `tool_args_json`
+  (基线改为 `offsetof(tool_name)`, `plugin_spec.h` 里登记该特化); vtable 用 `specHas` 读;
+  `runtimeSubmitAsyncWork` 只在 `kind=tool` 且工名为空时拒 (`ERR_ARG`);
+  SDK `AsyncWorkOptions` 加 `toolName` / `toolArgs` (`toolName` 非空即按 tool 提交)。
+- 测试: `async_work` 7 → **10 个用例 / 121 断言** (`test_tool_kind_runs` 用测试工具验证
+  真的执行 + `sessionId` 注入 + 台账 `done`/`result`; `test_tool_kind_failures` 覆盖缺工名 /
+  缺创建者 / 工具不存在 / 工具返回失败; `test_tool_kind_cancel` 覆盖运行中取消);
+  `plugin_agent_runtime` 209 → **214 断言** (旧布局缺 `tool_name` 按 `ERR_ARG` 拒、
+  `tool_args_json` 不是对象被拒、kind=tool 受理后按 failed 收尾)。
+- 文档: `events.md` §8 (kind=tool 段) / §13 (未做项)、`plugins.md` §19.2、`AGENTS.md` 同步。
+- 偏差: 计划里 `kind=tool` 没提权限与 `sessionId` 注入, 实现时补上了 —— 不补会分别变成
+  "绕过目标工具限制" 与 "半个内置工具在后台直接报错"。
+
 ## 待完成
-- **`kind=tool`** (异步工具) 未实现: `AsyncWorkManager::submit` 对 `kind=tool` 明确返回
-  `not supported yet`。
 - 可选后续 (chatbot 侧): 人设级 MCP/Skill/Memory 与后台任务的中断策略配置项;
   后台任务的会话落盘开关 (`asyncWork.sessionStore` 已支持, 插件目前传 `-1` 跟随配置)。
+- 可选后续 (后台任务): `execute_command` 的 `background:true` (现在可用 `agentxx_tool_async`
+  把那次命令调用丢到后台, 但不如命令层自己支持流式回显)。
+- `kind=tool` 的中断处理: 它没有自己的会话/agent, HIL 与权限只在**提交时**按目标工具
+  判定一次; 后台执行期间不再问人 (有意为之, 避免无界面时挂死)。
 
 ## 注意事项
 
@@ -249,3 +288,6 @@
 - 全量回归 (2026-11-05, Debug + ASan/UBSan): **41,585 项断言, 1 项失败** (插件表 v2 与根配置
   段完成后重跑); 唯一失败仍是 `boundaries` 规则 15 的 5 条用词违规, 全部位于
   `agent/third_party/cxx_pluginxx_ui` 子模块 (既有问题, 与本任务无关)。
+- 全量回归 (P6 完成后, Debug + ASan/UBSan): **41,812 项断言, 1 项失败** —— 同上, 仍是
+  `boundaries` 规则 15 的 5 条 (全在 `cxx_pluginxx_ui` 子模块)。P6 自己新增的断言:
+  `async_work` 105 → **121**、`plugin_agent_runtime` 209 → **214**。

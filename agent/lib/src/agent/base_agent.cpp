@@ -22,6 +22,7 @@
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/protocol/provider_common.h"
 #include "agentxx/tools/event.h"
+#include "agentxx/tools/tool_async.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/observability.h"
 #include "agentxx/util/share_store_offload.h"
@@ -1329,6 +1330,11 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> BaseAg
         = agentContext->agentConfig && agentContext->agentConfig->enableAsyncWork;
     if (agentContext->eventHub || asyncEnabled) {
         tools.push_back(std::make_unique<agentxx::tools::EventTool>(agentContext));
+    }
+    // 后台工具调用: 把一次工具调用丢到后台跑 (`kind=tool`)
+    // - 只在开了 `async_work.enable` 且有容器时注册: 没有容器就没有后台执行的地方
+    if (asyncEnabled && !agentContext->host.expired()) {
+        tools.push_back(std::make_unique<agentxx::tools::ToolAsyncTool>(agentContext));
     }
     // agentxx_get_current_datetime 已迁移至 agentxx_system 插件 (同名同行为,
     // 经 PluginManager 注册)

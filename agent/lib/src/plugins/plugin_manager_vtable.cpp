@@ -1671,6 +1671,25 @@ static int32_t PLUGINXX_CALL xx_runtime_submit_async_work(
     work.workDir          = text(spec->work_dir);
     work.language         = text(spec->language);
     work.notifyDelivery   = text(spec->notify_delivery);
+    // 追加字段 (旧插件填短结构体时读不到): kind=tool 的工名与参数
+    if (specHas(&AgentxxPluginAsyncWorkSpec::tool_name, spec->struct_size)) {
+        work.toolName = text(spec->tool_name);
+    }
+    if (specHas(&AgentxxPluginAsyncWorkSpec::tool_args_json, spec->struct_size)) {
+        utilxx_base::Json toolArgs;
+        std::string       toolErr;
+        if (!parseSpecJson(spec->tool_args_json, toolArgs, toolErr, "tool_args_json")) {
+            XX_LOGW("[runtime] submit_async_work 被拒: {}", toolErr);
+            return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+        }
+        if (!toolArgs.is_null()) {
+            if (!toolArgs.is_object()) {
+                XX_LOGW("[runtime] submit_async_work 被拒: `tool_args_json` must be a JSON object");
+                return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+            }
+            work.toolArgs = std::move(toolArgs);
+        }
+    }
     if (spec->interrupt_policy >= 0) {
         work.interruptPolicy
             = static_cast<agent::AsyncInterruptPolicy>(spec->interrupt_policy);

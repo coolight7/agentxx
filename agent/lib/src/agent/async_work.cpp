@@ -5,8 +5,11 @@
 #include "agentxx/agent/config_static.h"
 #include "agentxx/agent/context.h"
 #include "agentxx/event/hub.h"
+#include "agentxx/plugin/tool_registry.h"
+#include "agentxx/tools/tool.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/observability.h"
+#include "agentxx/util/tool_result.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/post.hpp"
@@ -203,6 +206,105 @@ events::SubagentBatchItem taskOfSpec(const AsyncWorkSpec& spec) {
     return task;
 }
 
+/// 跑一个工具任务 (`kind == Tool`): 在创建者的工具表里执行同名工具
+///
+/// 取消是"尽力而为": 每 50ms 查一次取消令牌, 置位后立即按取消收尾 (工具本身如果
+/// 不认识取消, 它会在后台继续跑到自己的超时, 结果被丢弃); 协程状态用 shared_ptr
+/// 持有, 不会因为本函数提前退出而悬挂。
+asio::awaitable<events::RespSubagentBatchItem> runToolWork(
+    const std::shared_ptr<AgentContext>&          creator,
+    const AsyncWorkSpec&                          spec,
+    const std::shared_ptr<neograph::graph::CancelToken>& token
+) {
+    auto fail = [&spec](std::string message, bool canceled = false) {
+        return events::RespSubagentBatchItem{
+            .resultId     = spec.resultId,
+            .hasError     = true,
+            .Canceled     = canceled,
+            .errorMessage = std::move(message),
+        };
+    };
+    if (!creator || !creator->toolRegistry) {
+        co_return fail("async tool: creator has no tool registry");
+    }
+    auto tool = creator->toolRegistry->find(spec.toolName);
+    if (!tool) {
+        // lib 内置工具由引擎持有, 不在注册表里: 它们本来就是快工具, 不支持后台跑
+        co_return fail(fmt::format(
+            "async tool: tool `{}` not found in the creator's tool registry "
+            "(only plugin / dynamically registered tools can run in the background)",
+            spec.toolName
+        ));
+    }
+    // 取消已经开始就不必启动执行体
+    if (token && token->is_cancelled()) {
+        co_return fail("async tool canceled", /*canceled=*/true);
+    }
+
+    struct RunState {
+        std::atomic<bool>        done{false};
+        agentxx::util::ToolResult result;
+    };
+    auto state = std::make_shared<RunState>();
+    auto args  = spec.toolArgs; // 拷一份进协程帧: 提交方的对象可能早就不在了
+    // 会话与调用 id 由执行层补齐 (与前台 ToolcallWrapNode 一致): 下游工具会读它们
+    if (!spec.creatorSessionId.empty() && args.is_object()) {
+        args["sessionId"] = spec.creatorSessionId;
+        if (!spec.resultId.empty()) {
+            args["tool_call_id"] = spec.resultId;
+        }
+    }
+    const auto ex = co_await asio::this_coro::executor;
+    asio::co_spawn(
+        ex,
+        [state, tool, args = std::move(args)]() -> asio::awaitable<void> {
+            state->result = co_await agentxx::util::catchErrorAsync<agentxx::util::ToolResult>(
+                [&]() -> asio::awaitable<agentxx::util::ToolResult> {
+                    co_return co_await tool->execute_async(args);
+                },
+                [](std::string errmsg) -> asio::awaitable<agentxx::util::ToolResult> {
+                    co_return agentxx::util::ToolResult::fail(std::move(errmsg));
+                }
+            );
+            state->done.store(true, std::memory_order_release);
+            co_return;
+        }(),
+        asio::detached
+    );
+
+    // 等完成 / 等取消 (两者都不阻塞 io 线程)
+    asio::steady_timer poll{ex};
+    while (!state->done.load(std::memory_order_acquire)) {
+        if (token && token->is_cancelled()) {
+            co_return fail("async tool canceled", /*canceled=*/true);
+        }
+        poll.expires_after(std::chrono::milliseconds{50});
+        utilxx_base::AsioErrorCode ec;
+        co_await poll.async_wait(asio::redirect_error(asio::use_awaitable, ec));
+    }
+
+    const auto& result = state->result;
+    events::RespSubagentBatchItem out;
+    out.resultId = spec.resultId;
+    switch (result.status) {
+        case agentxx::util::ToolStatus::Ok:
+            out.content = result.text;
+            break;
+        case agentxx::util::ToolStatus::Canceled:
+            out.hasError     = true;
+            out.Canceled     = true;
+            out.errorMessage = result.text.empty() ? std::string{"async tool canceled"} : result.text;
+            break;
+        case agentxx::util::ToolStatus::Interrupted:
+        case agentxx::util::ToolStatus::Failed:
+        default:
+            out.hasError     = true;
+            out.errorMessage = result.text.empty() ? std::string{"async tool failed"} : result.text;
+            break;
+    }
+    co_return out;
+}
+
 } // namespace
 
 // ===========================================================================
@@ -311,12 +413,17 @@ void AsyncWorkManager::sweepLingerLocked() {
 AsyncWorkSubmitResult
     AsyncWorkManager::submit(AsyncWorkSpec spec, std::shared_ptr<AgentContext> creator) {
     AsyncWorkSubmitResult out;
-    if (spec.kind != AsyncWorkKind::Agent) {
-        // 异步工具 (kind=tool) 结构已预留, 本期只落 agent
-        out.error = "kind `tool` is not supported yet";
-        return out;
-    }
-    if (spec.message.empty() && !spec.messages.is_array()) {
+    if (spec.kind == AsyncWorkKind::Tool) {
+        // 异步工具: 在**创建者**的工具表里执行, 所以必须有上下文 (工具表在它身上)
+        if (spec.toolName.empty()) {
+            out.error = "tool name is empty (kind `tool` needs `toolName`)";
+            return out;
+        }
+        if (!creator) {
+            out.error = "kind `tool` needs the creator context (tool registry)";
+            return out;
+        }
+    } else if (spec.message.empty() && !spec.messages.is_array()) {
         out.error = "message is empty (need `message` or `messages`)";
         return out;
     }
@@ -611,8 +718,12 @@ asio::awaitable<void>
     const auto startedAtMs = systemNowMs();
 
     auto task   = taskOfSpec(spec);
-    auto result = co_await agentxx::util::catchErrorAsync<events::RespSubagentBatchItem>(
+    const bool isToolTask = spec.kind == agentxx::agent::AsyncWorkKind::Tool;
+    auto       result    = co_await agentxx::util::catchErrorAsync<events::RespSubagentBatchItem>(
         [&]() -> asio::awaitable<events::RespSubagentBatchItem> {
+            if (isToolTask) {
+                co_return co_await runToolWork(creator, spec, token);
+            }
             co_return co_await host->spawnOneTask(
                 task,
                 spec.creatorSessionId,

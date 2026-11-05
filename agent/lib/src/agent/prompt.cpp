@@ -366,6 +366,33 @@ When you publish yourself (`opt=emit` / `opt=end`), the name must be `agentxx.ag
                   },
           },
       },
+      {
+          "agentxx_tool_async",
+          ToolPrompt{
+              .depict =
+                  R"(Run ONE tool call in the background.
+
+Use it for a single long call (a slow command, a big search, a long fetch) when you want to keep talking instead of blocking the turn: the call is accepted immediately and the result arrives later as an input starting with `[Event] agentxx.agent.async.done` (the value carries `asyncId` + `content`).
+
+## Notes
+- `tool` must be a registry tool (plugin / dynamically registered). Lib built-in fast tools (share_store / event / subagent / git_worktree) cannot run in the background; `agentxx_tool_async` itself cannot be nested.
+- Permission for that tool is checked once, now, at submit time (same rules as calling it directly); the background run does not ask again.
+- The tool runs with THIS agent's configuration (same work dir and tool set).
+- Collect the result with `agentxx_event {opt:"await", id:"<asyncId>"}`, list with `opt:"works"`, stop with `{opt:"cancel", id:"<asyncId>"}`.
+- Cancelling is best effort: tools that watch the cancel token stop right away, others finish in the background and their result is discarded.
+- Do not wrap a call that finishes in a second or two — call the tool directly instead.
+- Availability: only registered when background work is enabled in configuration (`async_work.enable`).)",
+              .args =
+                  {
+                      {"tool",
+                       "Name of the tool to run in the background (must be a tool available to you)."},
+                      {"args",
+                       "Argument object for that tool, passed through unchanged (same schema as calling it directly)."},
+                      {"label",
+                       "Optional short display name for the background task (default: the tool name)."},
+                  },
+          },
+      },
   } {}
 
 const std::string& ToolPrompt::getArg(std::string_view name) const {

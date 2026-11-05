@@ -1971,6 +1971,14 @@ plugin:
 - 老主程序 (v1) 没有这 4 个成员: 用 `ifaceHas<&AgentxxPluginRuntimeIface::submit_async_work>`
   判定后降级; SDK 便捷层是 `submitAsyncWork` / `cancelAsyncWork` /
   `getAsyncWorkJson` / `listAsyncWorkJson` (`AsyncWorkOptions`)。
+- **`kind=tool` (异步工具)**: `spec.kind = 1` + 追加字段 `tool_name` / `tool_args_json`
+  (SDK: `AsyncWorkOptions::toolName` / `toolArgs`, `toolName` 非空即按 tool 提交)。
+  工具在**插件这个根的工具注册表**里查 (插件工具与动态注册的工具; lib 内置快工具不在
+  表里, 不支持后台跑), 找不到时任务按失败收尾; 参数原样转交 (执行层
+  补 `sessionId` / `tool_call_id`), `message` / 派生配置 / 工具策略 / 挂载清单都不参与。
+  `kind=1` 但读不到 `tool_name` (旧插件用旧布局) 或 `tool_args_json` 不是 JSON 对象时
+  返回 `ERR_ARG`。两个追加字段的基线是 `offsetof(tool_name)`, 老主程序填的短结构体
+  读不到它们。
 - `plugins_json` 的形状与 yaml `plugin.mount` 同构 (`mode` = `all`/`listed`/`none`、`list`、
   `args`), **另多一个 `exclude`** (字符串数组, `all` 与 `listed` 都生效): 插件提交任务时
   用它把自己排除在外。例: `{"mode":"all","exclude":["agentxx_chatbot"]}` ——

@@ -75,7 +75,8 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 (同名同行为, 见 `agent/plugins/agentxx_*`)，经 yaml `plugin.list` 段配置加载，
 或构建期经 `AGENTXX_PLUGIN_BUILTIN_LIST`
 合并编译进 libagentxx (默认不内置)；lib 内仅保留 share_store / subagent /
-git_worktree 及延迟加载加载 (`ToolSkillSearchSubAgentTask` 模板类, 当前未独立注册为 tool)：
+git_worktree / event / tool_async 及延迟加载加载 (`ToolSkillSearchSubAgentTask` 模板类,
+当前未独立注册为 tool)：
 
 | 分类 | 工具 | 说明 |
 |------|------|------|
@@ -104,6 +105,8 @@ git_worktree 及延迟加载加载 (`ToolSkillSearchSubAgentTask` 模板类, 当
 | **子代理** | `agentxx_subagent` | 创建和管理子代理执行委派任务 (单任务字段 subagent/message, 或批量 tasks 数组并行; 由 SubagentManager 中间件持有单实例注入, 默认注册 `subagent_task`) |
 | | `tool_skill_search` 逻辑 | 延迟加载工具/技能的搜索: `ToolSkillSearchSubAgentTask` 仅为 system prompt 模板 (当前未独立注册为 tool, 由 subagent 按需内联检索逻辑) |
 | **数据** | `agentxx_share_store` | 会话级文本寄存，节省上下文 |
+| **事件/后台** | `agentxx_event` | 事件中枢的模型侧入口 (`watch`/`await`/`status`/`list`/`works`/`cancel`/`emit`/`end`) |
+| | `agentxx_tool_async` | 把**一次工具调用**放到后台跑 (`kind=tool`), 受理返回 `[Async tool started] id=...`; 只在 `async_work.enable` 时注册 |
 | | `agentxx_string_html_to_markdown` | HTML 转 Markdown |
 | | `agentxx_string_regexp` | 正则搜索/替换/移除 |
 | **系统** | `agentxx_get_current_datetime` | 获取当前日期时间 |
@@ -214,6 +217,11 @@ git_worktree 及延迟加载加载 (`ToolSkillSearchSubAgentTask` 模板类, 当
 `async_work.enable`），返回 `{started:true, asyncId}`，后台跑完/失败/取消都发终态；
 `asyncId` 就是任务 agent 的 `sessionId`。取消经 `agentxx_event {opt:"cancel", id}`
 或 agent 关停（`AgentHost::cancelAsyncWorks`）。
+
+`kind` 两种：`agent`（起一个 agent 跑任务，上面的默认形态）与 `tool`（把**一次工具调用**
+放到后台，模型侧入口 `agentxx_tool_async`，工具在创建者的**工具注册表**里查（插件与动态
+注册的工具）、参数原样转交，权限在提交时按目标工具问一次，取消是 50 ms 轮询的尽力而为；
+插件侧用 `submit_async_work` 的 `tool_name` / `tool_args_json`）。
 
 细节（状态机、投递决策表、文本格式、预算、诊断、配置项）见 [events.md](events.md) 第 8 节；
 配置键 `event.*` / `async_work.*` 见 [config-keys.md](config-keys.md)。

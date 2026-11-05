@@ -1434,7 +1434,7 @@ inline std::string listEventWaits(Ctx& ctx, const ScopeRef& agent, std::string_v
 struct AsyncWorkOptions {
     std::string name = "plugin-task";
     std::string systemPrompt;
-    /// 任务正文 (必需: 空且没有上下文时提交会被拒)
+    /// 任务正文 (agent 任务必需: 空且没有上下文时提交会被拒)
     std::string message;
     /// 空 = 创建者的 subagent 模型
     std::string model;
@@ -1464,6 +1464,12 @@ struct AsyncWorkOptions {
     int32_t sessionStore     = -1;
     int64_t interruptTimeoutMs = 0;
     int64_t timeLimitMs        = 0;
+    /// 非空 = 提交一个 `kind=tool` 的后台任务: 把这一次工具调用放到后台跑
+    /// - 工具在你挂的这个根的工具表里查 (找不到时任务按失败收尾)
+    /// - `message` / 派生配置 / 工具策略都不参与 (不会另起 agent)
+    /// - 需要本端 SDK 与主程序都懂追加字段, 否则返回 `ERR_ARG`
+    std::string       toolName;
+    utilxx_base::Json toolArgs = utilxx_base::Json::object();
     /// 任务事件回调 (可空); **在容器 io 线程调用, 必须快速返回**
     AgentxxPluginAsyncWorkEventFn onEvent  = nullptr;
     void*                          userData = nullptr;
@@ -1492,10 +1498,11 @@ inline std::string submitAsyncWork(Ctx& ctx, const AsyncWorkOptions& opt, int32_
     const auto ragDocs     = jsonText(opt.ragDocs);
     const auto allow       = jsonText(opt.permissionAllow);
     const auto deny        = jsonText(opt.permissionDeny);
+    const auto toolArgs    = jsonText(opt.toolArgs);
 
     AgentxxPluginAsyncWorkSpec spec{};
     spec.struct_size          = sizeof(AgentxxPluginAsyncWorkSpec);
-    spec.kind                 = 0;
+    spec.kind                 = opt.toolName.empty() ? 0 : 1;
     spec.interrupt_policy     = opt.interruptPolicy;
     spec.session_store        = opt.sessionStore;
     spec.interrupt_timeout_ms = opt.interruptTimeoutMs;
@@ -1517,6 +1524,8 @@ inline std::string submitAsyncWork(Ctx& ctx, const AsyncWorkOptions& opt, int32_
     spec.permission_allow_json = PluginStringView::from(allow);
     spec.permission_deny_json  = PluginStringView::from(deny);
     spec.notify_delivery       = PluginStringView::from(opt.notifyDelivery);
+    spec.tool_name             = PluginStringView::from(opt.toolName);
+    spec.tool_args_json        = PluginStringView::from(toolArgs);
     spec.on_event              = opt.onEvent;
     spec.user_data             = opt.userData;
 

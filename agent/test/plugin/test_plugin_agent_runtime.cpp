@@ -397,8 +397,8 @@ asio::awaitable<void> runBody(
     }
 
     // ===================== 1b. 后台任务入口 (v2 尾部追加) =====================
-    // 结论: 4 个成员可用; kind=tool 未实现; 任务能真跑完, 台账/清单/取消都只能
-    // 碰本实例提交的那几条 (别的插件看不到也取消不了)
+    // 结论: 4 个成员可用; kind=tool 需追加字段 `tool_name` (旧布局按参数错拒);
+    // 任务能真跑完, 台账/清单/取消都只能碰本实例提交的那几条 (别的插件看不到也取消不了)
     {
         XX_TEST_EXPECT_TRUE(runtime->submit_async_work != nullptr);
         XX_TEST_EXPECT_TRUE(runtime->cancel_async_work != nullptr);
@@ -419,16 +419,32 @@ asio::awaitable<void> runBody(
         spec.name                 = PluginStringView::from(name);
         spec.message              = PluginStringView::from(message);
 
-        // 1) kind=tool 未实现 → 明确不支持
+        // 1) kind=tool 需要追加字段 tool_name: 只填旧字段时按参数错拒
         {
             spec.kind = 1;
             PluginxxString out{nullptr, 0};
             XX_TEST_EXPECT_EQ(
                 runtime->submit_async_work(hostView, &spec, &out),
-                AGENTXX_PLUGIN_RUNTIME_ERR_UNSUPPORTED
+                AGENTXX_PLUGIN_RUNTIME_ERR_ARG
             );
             XX_TEST_EXPECT_TRUE(out.data == nullptr);
             spec.kind = 0;
+        }
+
+        // 1b) kind=tool 的 tool_args_json 必须是 JSON 对象
+        {
+            std::string toolName{"probe_no_such_tool"};
+            std::string badArgs{"[1,2]"};
+            AgentxxPluginAsyncWorkSpec toolSpec{};
+            toolSpec.struct_size    = sizeof(AgentxxPluginAsyncWorkSpec);
+            toolSpec.kind           = 1;
+            toolSpec.tool_name      = PluginStringView::from(toolName);
+            toolSpec.tool_args_json = PluginStringView::from(badArgs);
+            PluginxxString out{nullptr, 0};
+            XX_TEST_EXPECT_EQ(
+                runtime->submit_async_work(hostView, &toolSpec, &out),
+                AGENTXX_PLUGIN_RUNTIME_ERR_ARG
+            );
         }
 
         // 2) 正常提交: 拿到 asyncId, 回调收到排队/起跑/终态
@@ -531,6 +547,33 @@ asio::awaitable<void> runBody(
                 runtime->cancel_async_work(hostView, &id),
                 AGENTXX_PLUGIN_RUNTIME_ERR_STATE
             );
+        }
+
+        // 7b) kind=tool: 工名不存在也能受理 (查找在运行期), 收尾按 failed 记
+        {
+            std::string toolName{"probe_no_such_tool"};
+            AgentxxPluginAsyncWorkSpec toolSpec{};
+            toolSpec.struct_size = sizeof(AgentxxPluginAsyncWorkSpec);
+            toolSpec.kind        = 1;
+            toolSpec.tool_name   = PluginStringView::from(toolName);
+            PluginxxString out{nullptr, 0};
+            XX_TEST_EXPECT_EQ(
+                runtime->submit_async_work(hostView, &toolSpec, &out),
+                AGENTXX_PLUGIN_RUNTIME_OK
+            );
+            const auto toolAsyncId = takeString(hostView, out);
+            XX_TEST_EXPECT_FALSE(toolAsyncId.empty());
+            const bool toolSettled = co_await waitUntil(
+                ex,
+                std::chrono::seconds{20},
+                [&] {
+                    const auto entry = mgr->runtimeGetAsyncWork(inst.get(), toolAsyncId);
+                    return entry.find("\"failed\"") != std::string::npos;
+                }
+            );
+            XX_TEST_EXPECT_TRUE(toolSettled);
+            const auto toolEntry = mgr->runtimeGetAsyncWork(inst.get(), toolAsyncId);
+            XX_TEST_EXPECT_TRUE(toolEntry.find("\"tool\"") != std::string::npos);
         }
 
         // 8) 根配置的 asyncWork 段落到 AgentConfig (插件根自己提交任务时用)

@@ -7,6 +7,9 @@
 #include "agentxx/agent/code_agent.h"
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/context.h"
+#include "agentxx/plugin/tool_registry.h"
+#include "agentxx/tools/tool.h"
+#include "agentxx/util/tool_result.h"
 #include "agentxx/util/observability.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -19,6 +22,7 @@
 #include <chrono>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 
 namespace {
@@ -157,6 +161,57 @@ agentxx::agent::AsyncWorkSpec makeSpec(
     spec.baseConfig       = base ? std::move(base) : fx->cfg;
     return spec;
 }
+
+/// 测试用工具: 按参数睡一段再返回固定文本, 并记下收到的参数 (验证 sessionId 注入)
+class AwTestSleepTool final : public agentxx::tools::XXToolBase {
+public:
+
+    explicit AwTestSleepTool(std::weak_ptr<agentxx::agent::AgentContext> in_ctx) :
+        XXToolBase(
+            "aw_test_sleep",
+            std::move(in_ctx),
+            /*autoSummaryOutput=*/false,
+            /*canDelayLoad=*/false,
+            /*maxRetry=*/0,
+            /*repeatCallCheck=*/false,
+            /*supportsParallel=*/false
+        ) {}
+
+    neograph::ChatTool get_definition() const override {
+        return {
+            get_name(),
+            "Sleep, then answer with a fixed text.",
+            neograph::json::parse(R"({"type":"object","properties":{}})")
+        };
+    }
+
+    asio::awaitable<agentxx::util::ToolResult>
+        execute_async(const utilxx_base::Json& arguments) override {
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            lastArgs = arguments;
+            ++calls;
+        }
+        const auto sleepMs
+            = arguments.is_object() ? arguments.value("sleepMs", int64_t{0}) : int64_t{0};
+        if (sleepMs > 0) {
+            asio::steady_timer timer(
+                co_await asio::this_coro::executor,
+                std::chrono::milliseconds{sleepMs}
+            );
+            AsioErrorCode ec;
+            co_await timer.async_wait(asio::redirect_error(asio::use_awaitable, ec));
+        }
+        if (arguments.is_object() && arguments.value("fail", false)) {
+            co_return agentxx::util::ToolResult::fail("tool said no");
+        }
+        co_return agentxx::util::ToolResult::ok("tool says hi");
+    }
+
+    utilxx_base::Json lastArgs = utilxx_base::Json::object();
+    int               calls    = 0;
+    std::mutex        mutex;
+};
 
 } // namespace
 
@@ -430,27 +485,166 @@ asio::awaitable<void> test_cancel_queued_and_running() {
     co_return;
 }
 
-/// 7. `kind=tool` 本期未实现: 明确拒绝 (结构已预留)
-asio::awaitable<void> test_tool_kind_rejected() {
+/// 7. `kind=tool`: 在创建者工具表里执行同名工具, 结果写入台账/事件
+asio::awaitable<void> test_tool_kind_runs() {
     auto fx = std::make_shared<AwFixture>();
     XX_TEST_EXPECT_TRUE(buildFixture(fx));
 
-    auto spec   = makeSpec(fx, "as-tool");
-    spec.kind   = agentxx::agent::AsyncWorkKind::Tool;
-    auto result = fx->host->submitAsyncWork(std::move(spec), fx->ctx());
-    XX_TEST_EXPECT_FALSE(result.accepted);
-    XX_TEST_EXPECT_TRUE(result.error.find("not supported") != std::string::npos);
+    auto ctx  = fx->ctx();
+    auto tool = std::make_shared<AwTestSleepTool>(ctx);
+    XX_TEST_EXPECT_TRUE(ctx->toolRegistry->registerTool(tool->get_name(), tool));
 
-    // 参数缺失: message 与 messages 都为空时拒绝
+    agentxx::agent::AsyncWorkSpec spec;
+    spec.kind             = agentxx::agent::AsyncWorkKind::Tool;
+    spec.name             = "sleepy";
+    spec.toolName         = "aw_test_sleep";
+    spec.toolArgs         = Json{{"sleepMs", 30}};
+    spec.creatorSessionId = fx->sessionId;
+    spec.baseConfig       = fx->cfg;
+    // 工具任务不需要 message: 不写也算受理
+    XX_TEST_EXPECT_TRUE(spec.message.empty());
+
+    auto submitted = fx->host->submitAsyncWork(std::move(spec), ctx);
+    XX_TEST_EXPECT_TRUE(submitted.accepted);
+
+    XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
+        co_return co_await waitUntil([&] {
+            const auto state
+                = fx->host->asyncWorkJson(submitted.asyncId).value("state", std::string{});
+            return state == "done" || state == "failed" || state == "canceled";
+        });
+    }));
+
+    const auto entry = fx->host->asyncWorkJson(submitted.asyncId);
+    XX_TEST_EXPECT_EQ(entry.value("state", std::string{}), std::string{"done"});
+    XX_TEST_EXPECT_EQ(entry.value("kind", std::string{}), std::string{"tool"});
+    XX_TEST_EXPECT_EQ(entry.value("name", std::string{}), std::string{"sleepy"});
+    XX_TEST_EXPECT_FALSE(entry.value("hasError", true));
+    XX_TEST_EXPECT_EQ(entry.value("result", std::string{}), std::string{"tool says hi"});
+
+    // 工具真的被调用了, 且执行层补齐了 sessionId (与前台调用一致)
+    {
+        std::lock_guard<std::mutex> lock(tool->mutex);
+        XX_TEST_EXPECT_EQ(tool->calls, 1);
+        XX_TEST_EXPECT_EQ(tool->lastArgs.value("sleepMs", int64_t{0}), int64_t{30});
+        XX_TEST_EXPECT_EQ(tool->lastArgs.value("sessionId", std::string{}), fx->sessionId);
+    }
+    co_return;
+}
+
+/// 8. `kind=tool` 的拒绝与失败路径
+asio::awaitable<void> test_tool_kind_failures() {
+    auto fx = std::make_shared<AwFixture>();
+    XX_TEST_EXPECT_TRUE(buildFixture(fx));
+
+    auto ctx  = fx->ctx();
+    auto tool = std::make_shared<AwTestSleepTool>(ctx);
+    XX_TEST_EXPECT_TRUE(ctx->toolRegistry->registerTool(tool->get_name(), tool));
+
+    // 缺 toolName: 直接拒
+    agentxx::agent::AsyncWorkSpec noName;
+    noName.kind = agentxx::agent::AsyncWorkKind::Tool;
+    auto r1     = fx->host->submitAsyncWork(std::move(noName), ctx);
+    XX_TEST_EXPECT_FALSE(r1.accepted);
+    XX_TEST_EXPECT_TRUE(r1.error.find("toolName") != std::string::npos);
+
+    // 缺创建者上下文 (工具表在它身上): 直接拒
+    agentxx::agent::AsyncWorkSpec noCtx;
+    noCtx.kind       = agentxx::agent::AsyncWorkKind::Tool;
+    noCtx.toolName   = "aw_test_sleep";
+    noCtx.baseConfig = fx->cfg;
+    auto r2          = fx->host->submitAsyncWork(std::move(noCtx), nullptr);
+    XX_TEST_EXPECT_FALSE(r2.accepted);
+    XX_TEST_EXPECT_TRUE(r2.error.find("creator") != std::string::npos);
+
+    // 工具不存在: 受理 (提交时只校形状), 跑起来后按失败收尾
+    agentxx::agent::AsyncWorkSpec unknown;
+    unknown.kind             = agentxx::agent::AsyncWorkKind::Tool;
+    unknown.toolName         = "aw_no_such_tool";
+    unknown.creatorSessionId = fx->sessionId;
+    unknown.baseConfig       = fx->cfg;
+    auto r3                  = fx->host->submitAsyncWork(std::move(unknown), ctx);
+    XX_TEST_EXPECT_TRUE(r3.accepted);
+
+    // 工具自己返回失败: 台账按 failed 记, 正文进 error
+    agentxx::agent::AsyncWorkSpec failing;
+    failing.kind             = agentxx::agent::AsyncWorkKind::Tool;
+    failing.toolName         = "aw_test_sleep";
+    failing.toolArgs         = Json{{"fail", true}};
+    failing.creatorSessionId = fx->sessionId;
+    failing.baseConfig       = fx->cfg;
+    auto r4                  = fx->host->submitAsyncWork(std::move(failing), ctx);
+    XX_TEST_EXPECT_TRUE(r4.accepted);
+
+    XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
+        auto settled = [&](const std::string& id) {
+            const auto state = fx->host->asyncWorkJson(id).value("state", std::string{});
+            return state == "done" || state == "failed" || state == "canceled";
+        };
+        co_return co_await waitUntil([&] { return settled(r3.asyncId) && settled(r4.asyncId); });
+    }));
+
+    const auto missing = fx->host->asyncWorkJson(r3.asyncId);
+    XX_TEST_EXPECT_EQ(missing.value("state", std::string{}), std::string{"failed"});
+    XX_TEST_EXPECT_TRUE(
+        missing.value("error", std::string{}).find("not found") != std::string::npos
+    );
+
+    const auto failed = fx->host->asyncWorkJson(r4.asyncId);
+    XX_TEST_EXPECT_EQ(failed.value("state", std::string{}), std::string{"failed"});
+    XX_TEST_EXPECT_TRUE(
+        failed.value("error", std::string{}).find("tool said no") != std::string::npos
+    );
+
+    // message 为空时仍要拒 (agent 任务那条规则不能被放宽)
     auto bad = makeSpec(fx, "no-message");
     bad.message.clear();
-    auto rejected = fx->host->submitAsyncWork(std::move(bad), fx->ctx());
+    auto rejected = fx->host->submitAsyncWork(std::move(bad), ctx);
     XX_TEST_EXPECT_FALSE(rejected.accepted);
     XX_TEST_EXPECT_TRUE(rejected.error.find("message") != std::string::npos);
     co_return;
 }
 
-/// 8. 中断策略: 未显式指定时跟随配置, 显式指定时覆盖配置
+/// 9. `kind=tool` 的取消: 慢工具被取消后按 canceled 收尾 (工具本身尽力而为)
+asio::awaitable<void> test_tool_kind_cancel() {
+    auto fx = std::make_shared<AwFixture>();
+    XX_TEST_EXPECT_TRUE(buildFixture(fx));
+
+    auto ctx  = fx->ctx();
+    auto tool = std::make_shared<AwTestSleepTool>(ctx);
+    XX_TEST_EXPECT_TRUE(ctx->toolRegistry->registerTool(tool->get_name(), tool));
+
+    agentxx::agent::AsyncWorkSpec spec;
+    spec.kind             = agentxx::agent::AsyncWorkKind::Tool;
+    spec.toolName         = "aw_test_sleep";
+    spec.toolArgs         = Json{{"sleepMs", 3000}};
+    spec.creatorSessionId = fx->sessionId;
+    spec.baseConfig       = fx->cfg;
+    auto submitted        = fx->host->submitAsyncWork(std::move(spec), ctx);
+    XX_TEST_EXPECT_TRUE(submitted.accepted);
+
+    // 等它真的跑起来再取消 (排队中取消是出队, 走的是另一条分支)
+    XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
+        co_return co_await waitUntil([&] {
+            return fx->host->asyncWorkJson(submitted.asyncId).value("state", std::string{})
+                   == "running";
+        });
+    }));
+    XX_TEST_EXPECT_TRUE(fx->host->cancelAsyncWork(submitted.asyncId));
+
+    XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
+        co_return co_await waitUntil([&] {
+            return fx->host->asyncWorkJson(submitted.asyncId).value("state", std::string{})
+                   == "canceled";
+        });
+    }));
+    const auto entry = fx->host->asyncWorkJson(submitted.asyncId);
+    XX_TEST_EXPECT_TRUE(entry.value("canceled", false));
+    XX_TEST_EXPECT_EQ(fx->host->runningAsyncWork(), size_t{0});
+    co_return;
+}
+
+/// 10. 中断策略: 未显式指定时跟随配置, 显式指定时覆盖配置
 asio::awaitable<void> test_interrupt_policy_from_config() {
     auto fx = std::make_shared<AwFixture>();
     XX_TEST_EXPECT_TRUE(buildFixture(fx));
@@ -741,7 +935,9 @@ asio::awaitable<TestResult> run_async_work_tests() {
     co_await test_linger_sweep();
     co_await test_session_id_is_async_id();
     co_await test_cancel_queued_and_running();
-    co_await test_tool_kind_rejected();
+    co_await test_tool_kind_runs();
+    co_await test_tool_kind_failures();
+    co_await test_tool_kind_cancel();
     co_await test_interrupt_policy_from_config();
     co_await test_interrupt_responders();
     co_await test_session_store_claim();

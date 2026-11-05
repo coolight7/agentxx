@@ -1101,9 +1101,10 @@ PluginManager::AsyncSubmitOutcome
         out.error = "no agent attached";
         return out;
     }
-    if (work.kind != agent::AsyncWorkKind::Agent) {
-        out.code  = AGENTXX_PLUGIN_RUNTIME_ERR_UNSUPPORTED;
-        out.error = "kind `tool` is not supported yet";
+    if (work.kind == agent::AsyncWorkKind::Tool && work.toolName.empty()) {
+        // 旧插件用旧布局提交 kind=1 时读不到追加的 tool_name: 按参数错拒并说明原因
+        out.code  = AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+        out.error = "kind `tool` needs `tool_name` (async work spec field)";
         return out;
     }
     // 归属: 插件禁用/卸载时按它回收自己提交的任务

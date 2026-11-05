@@ -494,7 +494,8 @@ path/to/agentxx_test --log-level warn string_util regex
   (原 `insert`/`set`), 且 `offset`/`limit` **仅 `get` 时有效** (`new`/`update` 传入即忽略, 文本原样存储)
 - 插件工具提示词归属 (2026-10): 插件工具的提示词 (depict + 参数说明) 写在**插件自身**字面量里
   (少数插件经 `agentxx.agent.prompt` 接口表注入, 如 execute_command/codegraph/planning);
-  `AgentPrompt::toolPrompt` (prompt.cpp) 只保留内置工具 (share_store / subagent / git_worktree),
+  `AgentPrompt::toolPrompt` (prompt.cpp) 只保留内置工具 (share_store / subagent /
+  git_worktree / event / tool_async),
   并保持**表中存在同名条目时覆盖插件提示词**的逻辑 (改动插件工具文案只需改插件)
 - 工具集调整 (2026-10): 文件系统新增 `agentxx_filesystem_move` / `_copy` / `_remove`
   三个写类工具 (权限: move/copy 声明 `src` 写作用域, 另一个目标 `dst` 在工具内用只读三态
@@ -574,8 +575,11 @@ path/to/agentxx_test --log-level warn string_util regex
   `agentxx::agent::AsyncWorkManager` (`agent/lib/{include/agentxx/agent/async_work.h,src/agent/async_work.cpp}`,
   由 `AgentHost` 持有并通过 `friend` 访问其私有接口) = 台账 (`AsyncWorkEntry`: kind/state/
   queueKey/时间戳/结果) + 每队列 FIFO + 额度 + 结束 linger 清扫 + 取消/查询 + 指标记账;
-  `kind` 目前只有 `agent` 在用 (`tool` 只留结构, `submit` 对 `kind=tool` 明确拒绝
-  `not supported yet`)。**委派即提交**: `agentxx_subagent` 不再有 `async`/`event_name`
+  `kind` = `agent` (起一个 agent 跑任务) 或 `tool` (把一次工具调用放到后台跑,
+  模型侧入口 `agentxx_tool_async` (`tool` / `args` / `label`), 权限在提交时按目标工具
+  问一次、取消是 50 ms 轮询的尽力而为; 工具在创建者的**工具注册表**里查 (插件/动态注册
+  的工具; lib 内置快工具不在表里, 不支持后台跑), 参数原样转交并补 `sessionId` /
+  `tool_call_id`)。**委派即提交**: `agentxx_subagent` 不再有 `async`/`event_name`
   参数, 开关是 `async_work.enable`, 受理返回 `{started:true, asyncId}`, 工具正文
   `[Async work started] id=...`。**单一事件名** `agentxx.agent.async.done`
   (`naming.h` 的 `kAgentAsyncPrefix`; 它是唯一落在 `agentxx.agent.event.` 段外的内置值
@@ -612,7 +616,8 @@ path/to/agentxx_test --log-level warn string_util regex
   中枢投递会因 "session not found" 丢掉。**模型注册表已下沉到 `AgentHost`** (2026-11-05):
   所有根/子代理/后台任务共用一份 `ModelProviderRegistry` (同名模型 `getProvider` 返回
   同一个实例, 运行时 `AddModel`/`RemoveModel` 对所有人立即生效); HTTP keep-alive 连接池
-  本来就是 `utilxx::HttpClient` 的进程级单例。**未做**: `kind=tool` 异步工具。- 会话运行时 (2026-10): `agentxx.agent.runtime` 表让插件挂自己的**根 agent**
+  本来就是 `utilxx::HttpClient` 的进程级单例。**未做**: `execute_command` 的
+  `background:true` (可用 `agentxx_tool_async` 把那次命令调用丢到后台代替)。- 会话运行时 (2026-10): `agentxx.agent.runtime` 表让插件挂自己的**根 agent**
   (`mount_root`: 只能放 `start`, `config_json` 给提示词/工具白名单, `mount_plugins` 给挂载策略,
   默认 `include_creator=false` 切断递归) 并在上面开**会话通道** (`open_channel` 一个
   `sessionId` 一条; 事件 `READY`/`TURN_*/DELTA_*`/`INTERRUPT`/`CLOSED`; 输入/取消/换模型/
@@ -643,7 +648,9 @@ path/to/agentxx_test --log-level warn string_util regex
   (`register_trigger`/`emit_event`/`register_timer`), **v2 表尾追加后台任务四成员**
   (`submit_async_work`/`cancel_async_work`/`get_async_work`/`list_async_work`; 基线用
   `offsetof` 停在追加前, 插件用 `ifaceHas` 判定降级; 只能碰本实例提交的, owner =
-  `plugin:<实例名>`, 禁用/卸载按 owner 批量取消), 详见
+  `plugin:<实例名>`, 禁用/卸载按 owner 批量取消; 参数 `AgentxxPluginAsyncWorkSpec` 尾部
+  又追加了 `tool_name`/`tool_args_json` 支撑 `kind=tool`, 基线停在 `offsetof(tool_name)`,
+  读侧用 `specHas` 判定), 详见
   [plugins.md](docs/zh-cn/design/plugins.md) §19,
   `agentxx.agent.event` 事件中枢 —— 插件声明事件源 / 发布值 / 结束流 / 替会话登记等待
   (`define_event`/`emit_value`/`end_event`/`remove_event`/`query_event`/`list_events`/

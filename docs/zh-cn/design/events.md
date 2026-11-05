@@ -236,7 +236,7 @@ Keep working, or end the turn — you do not need to poll. Use opt=status wait=w
 
 模型侧“委派即提交”：`agentxx_subagent` 调用不再有 `async` / `event_name` 参数，是否异步
 由配置 `async_work.enable` 决定（关闭时同步等结果，行为与旧版一致）。一次后台执行叫一个
-async work，`kind` 区分 `agent`（启动一个 agent，已实现）与 `tool`（异步工具，结构预留）。
+async work，`kind` 区分 `agent`（启动一个 agent 跑任务）与 `tool`（把一次工具调用放到后台跑）。
 
 ```text
 父会话 toolcall: agentxx_subagent {subagent:"task", message:"..."}
@@ -258,7 +258,8 @@ async work，`kind` 区分 `agent`（启动一个 agent，已实现）与 `tool`
 - **排队与额度**：每队列（默认 = 创建者 agentId）一条 FIFO，额度
   `async_work.max_concurrent`（默认 3）；不设排队条数上限、不设嵌套深度上限、
   也没有全局并发上限；
-- **`asyncId` 就是任务 agent 的 sessionId**（一个值，不另造）；
+- **`asyncId` 就是任务 agent 的 sessionId**（一个值，不另造；`kind=tool` 的任务没有 agent，
+  `asyncId` 仍然是它自己的会话 id，只是不派生 agent）；
 - **取消**：`agentxx_event {opt:"cancel", id}` / `{opt:"cancel", scope:"mine"}`，
   插件侧经 `agentxx.agent.runtime` 的 `cancel_async_work`；agent 关停走
   `AgentHost::cancelAsyncWorks(ctx)`，排队中的直接出队，运行中的置取消令牌；
@@ -285,6 +286,16 @@ async work，`kind` 区分 `agent`（启动一个 agent，已实现）与 `tool`
   **内置根**的中枢（`runtimeSubmitAsyncWork` 取 `primaryAgent_` 的上下文），而插件自己开的
   会话属于它自己的根，中枢投递会因 `session not found` 丢掉 —— 那种场景由插件在
   `on_event` 里自己投（参考 `agent/plugins/agentxx_chatbot/chatbot_task.cpp`）。
+- **`kind=tool`（异步工具）**：模型侧入口是 `agentxx_tool_async`（参数 `tool` / `args` /
+  `label`），把**一次工具调用**放到后台（`AsyncWorkSpec{toolName, toolArgs}`）。工具在
+  **创建者**的**工具注册表**里查（插件与动态注册的工具；lib 内置快工具由引擎独立持有，
+  不在表里，不支持后台跑），找不到就在运行期按失败收尾；参数原样转交，执行层补
+  `sessionId` / `tool_call_id`（与前台调用一致，下游工具会读这两个字段）。
+  **权限在提交时按目标工具问一次**（`Topic::ToolPermissionCheck`，与前台同一套中间件）——
+  否则模型只要拿到本工具的调用权就能绕过目标工具自己的限制；后台执行期间不再问人。
+  取消是尽力而为：执行层每 50 ms 看一次取消令牌，置位后按取消收尾（工具自己不认识取消
+  时会继续跑到它的超时，结果被丢弃）。插件侧同一能力走 `submit_async_work` 的追加字段
+  `tool_name` / `tool_args_json`（旧布局填不出来时按 `ERR_ARG` 拒）。
 
 自动压缩这类内部委派没有 `tool_call_id`，一律同步等结果（不受开关影响）。
 
@@ -391,13 +402,10 @@ async work，`kind` 区分 `agent`（启动一个 agent，已实现）与 `tool`
   原计划把它们改成"spec → `EventWaitSpec`"的参数转换，本轮没做（C ABI 与插件写法不变，
   纯内部收敛，需要单独一轮改动 + 回归）；
 - **后台命令**（`agentxx_execute_command` 的 `background:true`）未实现：命令长时间运行时
-  仍占一轮；
-- **`kind=tool`（异步工具）未实现**：`AsyncWorkManager` 已有结构与台账，但 `submit` 对
-  `kind=tool` 明确返回 `not supported yet`，现在只有 `kind=agent` 在用；
-- **后台任务的落盘与人工介入未做**：entry 只在内存（重启即丢），`InterruptPolicy`
-  （`bubble` / `deny` / `allow`）已定义但还没接入权限应答器；
-- **插件看不到后台任务**：`agentxx.agent.runtime` 表尾的 `submit/cancel/get/list_async_work`
-  四个成员还没加，插件目前只能通过事件中枢间接等结果；
+  仍占一轮（现在可以用 `agentxx_tool_async` 把那次命令调用丢到后台，算半个替代）；
+- **后台任务的人工介入只在任务上**：`kind=agent` 的 `InterruptPolicy`
+  （`bubble` / `deny` / `allow`）接入会话总线应答器；`kind=tool` 没有自己的会话，
+  中断不回弹，权限只在**提交时**按目标工具判定一次；
 - **事件不持久化**：刷新/重启后事件记录与等待都清空（生产者都绑在进程上）。
 
 ## 14. 测试
@@ -408,7 +416,7 @@ async work，`kind` 区分 `agent`（启动一个 agent，已实现）与 `tool`
 | `event_tools` | 八个 `opt` 的参数校验与返回文本（逐字段断言，作为对外约定）、返回文本不命中工具失败前缀、工具注册与 `event.enable` 开关、schema |
 | `event_delivery` | 空闲/在跑/无驱动端/暂停态四种投递路径、轮末兜底、端点停止后解绑、关停丢弃、展示消息的来源标记 |
 | `event_subagent` | 后台任务立即受理、单一事件名与值里的 `asyncId`、结果事件叫醒会话、工具返回文本、非法事件名拒绝、无中枢时只落台账、取消后仍发终态 |
-| `async_work` | 台账与状态机、每队列 FIFO 与额度、排队/运行的取消、linger 清扫、指标计数、`listJson` 的 `queueAhead`、`kind=tool` 拒绝 |
+| `async_work` | 台账与状态机、每队列 FIFO 与额度、排队/运行的取消、linger 清扫、指标计数、`listJson` 的 `queueAhead`、`kind=tool` 的执行/失败/取消 |
 | `plugin_event` | 插件面全流程（示例插件 `example_event`）：声明事件源与自查、发布/结束/移除/查询、替会话登记等待与投递、失败路径、禁用/启用/卸载的可逆性 |
 
 `event_delivery` / `event_subagent` 每个用例都起一次本地模拟 LLM 服务，单模块耗时十几秒，
