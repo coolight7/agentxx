@@ -49,7 +49,7 @@
 ### 3. 工具
 
 - `tools/event.{h,cpp}` 删除，新增 `tools/async_emit.{h,cpp}`（`AsyncEmitTool`，名字
-  `agentxx_async_emit`）：`event` 必填，`value` / `end` / `summary` / `allow_publish` / `label`；
+  `agentxx_async_emit`）：`event` 必填，`value` / `end` / `public_publish` / `label`；
   参数组合非法（既无 value 也无 end、summary 无 end）按参数错误；
   创建前用 `mayCreateByPublish` 校验资格，创建时写 `publishMask` 与 `label`。
 - 结果文本：`Created a new stream (publishing allowed to: …)` + `N value(s) published so far` +

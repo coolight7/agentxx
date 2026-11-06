@@ -123,14 +123,17 @@ asio::awaitable<void> test_tool_definition() {
     XX_TEST_EXPECT_TRUE(params["required"].is_array());
     XX_TEST_EXPECT_EQ(params["required"].size(), size_t{1});
     XX_TEST_EXPECT_EQ(params["required"][0].get<std::string>(), std::string{"event"});
-    // opt / single / create / remove 都不再存在
-    for (const auto* gone : {"opt", "single", "create", "remove", "mode", "watch"}) {
+    // opt / single / create / remove / summary / allow_publish 都不再存在
+    for (const auto* gone : {"opt", "single", "create", "remove", "summary", "allow_publish", "mode", "watch"}) {
         XX_TEST_EXPECT_FALSE(params["properties"].contains(gone));
     }
-    for (const auto* kept : {"event", "value", "end", "summary", "allow_publish", "label"}) {
+    for (const auto* kept : {"event", "value", "end", "public_publish", "label"}) {
         XX_TEST_EXPECT_TRUE(params["properties"].contains(kept));
     }
     XX_TEST_EXPECT_TRUE(params["properties"]["end"]["type"].get<std::string>() == "boolean");
+    XX_TEST_EXPECT_TRUE(
+        params["properties"]["public_publish"]["type"].get<std::string>() == "boolean"
+    );
     co_return;
 }
 
@@ -216,7 +219,6 @@ asio::awaitable<void> test_end_stream() {
         Json{
             {"event",     evName("job.done")},
             {"end",       true               },
-            {"summary",   Json{{"ok", true}} },
             {"sessionId", fx->sessionId      },
         }
     );
@@ -266,20 +268,20 @@ asio::awaitable<void> test_publish_permissions() {
     std::string modelErr;
     XX_TEST_EXPECT_TRUE(fx->hub->publishValue(evName("mine"), Json{3}, "tool", &modelErr));
 
-    // 创建时放开 plugin: 插件可以发, 返回值里也写清楚
+    // 创建时声明公开 (`public_publish: true`): 插件也能发, 返回值里也写清楚
     auto opened = co_await execTool(
         *fx->tool,
         Json{
-            {"event",         evName("shared")       },
-            {"value",         1                      },
-            {"allow_publish", Json::array({"plugin"})},
-            {"sessionId",     fx->sessionId          },
+            {"event",          evName("shared")},
+            {"value",          1               },
+            {"public_publish", true            },
+            {"sessionId",      fx->sessionId   },
         }
     );
-    XX_TEST_EXPECT_TRUE(contains(opened, "publishing allowed to: owner+plugin"));
+    XX_TEST_EXPECT_TRUE(contains(opened, "publishing allowed to: any"));
     XX_TEST_EXPECT_TRUE(
         fx->hub->queryEvent(evName("shared"))->publishMask
-        == agentxx::events::PublishMask::Plugin
+        == agentxx::events::PublishMask::Any
     );
     XX_TEST_EXPECT_TRUE(fx->hub->publishValue(evName("shared"), Json{2}, "plugin:demo", &pluginErr));
     // 框架自己的事件段 (`agentxx.agent.event.*`) 内置源始终可以发布
@@ -344,19 +346,6 @@ asio::awaitable<void> test_tool_errors() {
     XX_TEST_EXPECT_TRUE(empty.starts_with("[threw] "));
     XX_TEST_EXPECT_TRUE(contains(empty, "end"));
 
-    // summary 只在 end 时有意义
-    auto straySummary = co_await execTool(
-        *fx->tool,
-        Json{
-            {"event",     evName("stray")     },
-            {"value",     1                    },
-            {"summary",   Json{{"s", 1}}       },
-            {"sessionId", fx->sessionId        },
-        }
-    );
-    XX_TEST_EXPECT_TRUE(straySummary.starts_with("[threw] "));
-    XX_TEST_EXPECT_TRUE(contains(straySummary, "end"));
-
     // 收尾不存在的事件: 参数错误
     auto missing = co_await execTool(
         *fx->tool,
@@ -381,18 +370,18 @@ asio::awaitable<void> test_tool_errors() {
     XX_TEST_EXPECT_TRUE(pluginCreate.starts_with("[threw] "));
     XX_TEST_EXPECT_TRUE(contains(pluginCreate, "may not create"));
 
-    // allow_publish 取值非法
-    auto badAllow = co_await execTool(
+    // public_publish 只收布尔值
+    auto badPublic = co_await execTool(
         *fx->tool,
         Json{
-            {"event",         evName("x")     },
-            {"value",         1                },
-            {"allow_publish", Json::array({"nobody"})},
-            {"sessionId",     fx->sessionId   },
+            {"event",          evName("x")  },
+            {"value",          1             },
+            {"public_publish", "yes"         },
+            {"sessionId",      fx->sessionId },
         }
     );
-    XX_TEST_EXPECT_TRUE(badAllow.starts_with("[threw] "));
-    XX_TEST_EXPECT_TRUE(contains(badAllow, "allow_publish"));
+    XX_TEST_EXPECT_TRUE(badPublic.starts_with("[threw] "));
+    XX_TEST_EXPECT_TRUE(contains(badPublic, "public_publish"));
 
     // 会话 id 由执行层注入, 缺失时报内部错误
     auto noSession = co_await execTool(*fx->tool, Json{{"event", evName("x")}, {"value", 1}});

@@ -22,7 +22,7 @@
    `plugin.*`）；但**隐式创建**只允许模型在 `agentxx.agent.event.*` 的非保留段里做。
    保留段（`turn.` / `tool.` / `subagent.` / `timer.` / `host.`）不能由模型创建，避免抢内建名字。
 3. **`opt` 拆成 `end`**：`value` 给了就发布，`end: true` 就收尾；两个都没给是参数错误。
-   `single` / `create` / `remove` 删除（单值语义用 `end: true` 表达，记录按 linger 自然回收）。
+   `single` / `create` / `remove` / `summary` 删除（单值语义用 `end: true` 表达，收尾信息不再带）。
 4. **结果文本给新信息**：投递给了几个等待（wait id + delivery）、累计发布条数、还剩几个等待、
    是否新建了事件与谁能发、是否收尾及因收尾结束的等待数；不复述事件名与值。
 5. **插件面同样可声明**：`AgentxxPluginEventSpec` 尾部追加 `publish_mask`，
@@ -31,8 +31,8 @@
 
 ## 结论
 
-- 模型侧只剩一个事件工具 `agentxx_async_emit`，参数 6 个（`event` / `value` / `end` /
-  `summary` / `allow_publish` / `label`），`opt` 的取值再也不会被记错；
+- 模型侧只剩一个事件工具 `agentxx_async_emit`，参数 5 个（`event` / `value` / `end` /
+  `public_publish` / `label`）—— 权限只有一个布尔值，`opt` 的取值再也不会被记错；
 - 发布权限从"谁都能发"变成"创建时决定"，跨族发布（模型给插件事件发值）成为正当用法；
 - 事件中枢多了 `PublishMask`、`publishValueEx` / `endEventEx`（含投递统计），
   工具与插件面都用同一套判定；
@@ -41,4 +41,5 @@
 - 与计划偏差：①匿名发布（内部代码/测试不带身份）视为记录自己的归属，与旧行为一致，
   只有模型工具与插件面做身份校验；②内置源在框架事件段内始终可以发布（同一段被多个内置源
   共用）；③`single` / `create` / `remove` 参数随 `opt` 一起删掉，单值语义用 `end: true` 表达；
-  ④`allow_publish` / `label` 只在创建那一次生效。
+  ④权限参数从角色数组简化为 `public_publish: bool`（`true` = 任何人可发）；`public_publish` / `label`
+  只在创建那一次生效；⑤`summary` 不做了（收尾只关闭流，内容用 `value` 发）。

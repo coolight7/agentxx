@@ -563,10 +563,10 @@ path/to/agentxx_test --log-level warn string_util regex
   **模型侧工具族** (2026-11): `agentxx_async_start` (`tool` + `args` + `notify`, 默认 `true` =
   结果自动插回上下文) / `agentxx_async_query` (`group` 六档或 `id`) / `agentxx_async_await`
   (`id` + `timeout_ms`) / `agentxx_async_cancel` (`id` 或 `group`), 以及只管发布侧的
-  `agentxx_async_emit` (`event` + `value` / `end:true` (+ `summary`), 建事件时可选
-  `allow_publish` / `label`; 可以指向任意合法事件名, 能不能发看该事件创建时声明的
-  `PublishMask`, 创建者自己与框架段内的内置源不受限)。早期的 `agentxx_event watch/await/status/list/
-  works/cancel` 与 `after_ms`/`every_ms` 已删除 (模型不再等任意事件、不再自建定时器),
+  `agentxx_async_emit` (`event` + `value` / `end:true`, 建事件时可选
+  `public_publish` / `label`; 可以指向任意合法事件名, 能不能发看该事件创建时是否声明了
+  公开 (`PublishMask`), 创建者自己与框架段内的内置源不受限)。早期的 `watch`/`await`/`status`/
+  `list`/`works`/`cancel` 参数与 `after_ms`/`every_ms` 已删除 (模型不再等任意事件、不再自建定时器),
   `agentxx_tool_async` 已改名为 `agentxx_async_start`。**事件中枢恒常驻**:
   `event.enable` 配置键已删除 (插件面 `AGENTXX_PLUGIN_EVENT_ERR_UNSUPPORTED` 只给没有中枢的
   嵌入环境/老主程序)。配置键 `event.*`

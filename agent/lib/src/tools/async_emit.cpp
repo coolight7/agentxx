@@ -47,47 +47,17 @@ std::string requireSessionId(const utilxx_base::Json& args) {
     return sessionId;
 }
 
-/// 解析 `allow_publish`: 数组或单个字符串, 取值 `model` / `plugin` / `builtin` / `any`
-/// - 缺省 = 只有创建者能发 (返回 None)
-PublishMask parseAllowPublish(const utilxx_base::Json& args) {
-    if (!args.contains("allow_publish") || args["allow_publish"].is_null()) {
+/// 解析 `public_publish`: `true` = 除创建者外任何调用方也能发 (对应 `PublishMask::Any`)
+/// - 缺省 `false` = 只有创建者能发
+PublishMask parsePublicPublish(const utilxx_base::Json& args) {
+    if (!args.contains("public_publish") || args["public_publish"].is_null()) {
         return PublishMask::None;
     }
-    const auto& raw = args["allow_publish"];
-    if (!raw.is_array() && !raw.is_string()) {
-        throw std::invalid_argument{
-            "Arg `allow_publish` must be an array of `model` / `plugin` / `builtin` / `any`"
-        };
+    const auto& raw = args["public_publish"];
+    if (!raw.is_boolean()) {
+        throw std::invalid_argument{"Arg `public_publish` must be a boolean"};
     }
-    uint32_t mask = 0;
-    auto     add  = [&](const std::string& item) {
-        if (item == "model") {
-            mask |= static_cast<uint32_t>(PublishMask::Model);
-        } else if (item == "plugin") {
-            mask |= static_cast<uint32_t>(PublishMask::Plugin);
-        } else if (item == "builtin") {
-            mask |= static_cast<uint32_t>(PublishMask::Builtin);
-        } else if (item == "any") {
-            mask |= static_cast<uint32_t>(PublishMask::Any);
-        } else {
-            throw std::invalid_argument{fmt::format(
-                "Arg `allow_publish` item `{}` is invalid; use `model` / `plugin` / `builtin` / "
-                "`any`",
-                item
-            )};
-        }
-    };
-    if (raw.is_string()) {
-        add(raw.get<std::string>());
-    } else {
-        for (const auto& item : raw) {
-            if (!item.is_string()) {
-                throw std::invalid_argument{"Arg `allow_publish` items must be strings"};
-            }
-            add(item.get<std::string>());
-        }
-    }
-    return static_cast<PublishMask>(mask);
+    return raw.get<bool>() ? PublishMask::Any : PublishMask::None;
 }
 
 /// 本次投递到的等待: `w-3 next-step, w-7 none`
@@ -148,17 +118,10 @@ neograph::ChatTool AsyncEmitTool::get_definition() const {
                     },
                 },
                 {
-                    "summary",
+                    "public_publish",
                     {
-                        {"description", prompt.getArg("summary")},
-                    },
-                },
-                {
-                    "allow_publish",
-                    {
-                        {"type", "array"},
-                        {"items", utilxx_base::Json{{"type", "string"}}},
-                        {"description", prompt.getArg("allow_publish")},
+                        {"type", "boolean"},
+                        {"description", prompt.getArg("public_publish")},
                     },
                 },
                 {
@@ -198,9 +161,6 @@ asio::awaitable<agentxx::util::ToolResult>
             "Give `value` to publish something, `end: true` to close the stream, or both"
         };
     }
-    if (arguments.contains("summary") && !wantEnd) {
-        throw std::invalid_argument{"Arg `summary` is only used together with `end: true`"};
-    }
 
     // 事件不存在: 只有拿到创建资格时才建 (模型只能在 `agentxx.agent.event.*` 自建)
     bool    created = false;
@@ -219,7 +179,7 @@ asio::awaitable<agentxx::util::ToolResult>
                 eventName
             )};
         }
-        mask                   = parseAllowPublish(arguments);
+        mask                   = parsePublicPublish(arguments);
         EventDefineSpec spec   = {};
         spec.name              = eventName;
         spec.kind              = EventKind::Stream;
@@ -244,9 +204,7 @@ asio::awaitable<agentxx::util::ToolResult>
     }
     std::optional<EndOutcome> ended;
     if (wantEnd) {
-        auto summary = arguments.contains("summary") ? arguments["summary"]
-                                                     : utilxx_base::Json::object();
-        auto outcome = hub->endEventEx(eventName, std::move(summary), kModelOwner);
+        auto outcome = hub->endEventEx(eventName, utilxx_base::Json::object(), kModelOwner);
         if (!outcome.has_value()) {
             throw std::runtime_error{outcome.error()};
         }

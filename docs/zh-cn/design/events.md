@@ -205,7 +205,7 @@ value: [Async task] id=async-7 ... result: ...
 | `agentxx_async_query` | `group`（`all`/`queued`/`running`/`done`/`failed`/`canceled`, 默认 `all`）, `id` | 按分组列本会话的后台任务；给 `id` 查单条（含结果正文） |
 | `agentxx_async_await` | `id`, `timeout_ms`（默认 30000，上限 300000） | 阻塞本轮直到该任务出结果；已完成的直接返回台账结果 |
 | `agentxx_async_cancel` | `id`, `group`（`all`/`queued`/`running`） | 取消本会话的一条或一批后台任务 |
-| `agentxx_async_emit` | `event`, `value`, `end`, `summary`, `allow_publish`, `label` | 发布值 / 结束事件流（只管写侧，见 6.1） |
+| `agentxx_async_emit` | `event`, `value`, `end`, `public_publish`, `label` | 发布值 / 结束事件流（只管写侧，见 6.1） |
 
 `id` 是后台任务的 `asyncId`（`async-7`）：`agentxx_async_await` 用它登记
 `match={"asyncId":id}` 的定向等待（不匹配的值不消耗等待）。
@@ -224,25 +224,21 @@ value: [Async task] id=async-7 ... result: ...
 一次调用做两件事（可以只做一件）：
 
 - 给了 `value` → 发布一个值；
-- `end: true` → 收尾这条流（可带 `summary`）；两个都没给是参数错误。
+- `end: true` → 收尾这条流；两个都没给是参数错误。
 
 事件不存在时，只有**有创建资格**的调用方才能顺手建出来（按流式事件建，归属 `tool`）：
 模型只能在 `agentxx.agent.event.<名字>` 里建，且不能占框架保留子段；插件只能在 `plugin.*` 里建。
 
-发布权限由**创建它的那一方**决定：
+发布权限由**创建它的那一方**决定（参数就一个布尔值）：
 
-| 谁 | 说明 |
+| 创建时的参数 | 谁能发 |
 |---|---|
-| 创建者自己 | 始终可以发、可以收尾 |
-| `allow_publish: ["model"]` | 允许模型侧工具调用发 |
-| `allow_publish: ["plugin"]` | 允许插件发 |
-| `allow_publish: ["builtin"]` | 允许内置源发 |
-| `allow_publish: ["any"]` | 三者全开 |
-| 不写（默认） | 只有创建者能发 |
+| 不写（默认） | 只有创建者能发、能收尾 |
+| `public_publish: true` | 任何人（插件、内置源、其它模型调用）都能发 |
 
 补充规则：框架自己的事件段（`agentxx.agent.event.*` / `agentxx.agent.async.*`）内置源始终可以发
 （同一段被轮次、工具结束、定时器、后台任务共用）；插件族记录不受这条照顾。
-`allow_publish` 与 `label` 只在**创建**那一次生效，事件已存在时按它自己的定义来。
+`public_publish` 与 `label` 只在**创建**那一次生效，事件已存在时按它自己的定义来。
 
 结果文本只给这次调用带来的新信息，不回显参数：`created a new stream (publishing allowed to: …)` /
 `N value(s) published so far` / `delivered to M waiter(s): w-3 next-step, …` /
@@ -460,7 +456,7 @@ value: [Async task] id=async-7 ... result: ...
 | 模块 | 覆盖 |
 |---|---|
 | `event_hub` | 记录状态机、回放、三种 `mode`、预算、名字校验、取消、`awaitOnce` 三种退出、定时源、ttl/linger |
-| `event_tools` | `agentxx_async_emit`：定义字段（`event`/`value`/`end`/`summary`/`allow_publish`/`label`）、创建与计数、投递统计、收尾与幂等、发布权限（默认只有创建者、放开 model/plugin、插件族拒绝内置源）、失败形态 |
+| `event_tools` | `agentxx_async_emit`：定义字段（`event`/`value`/`end`/`public_publish`/`label`）、创建与计数、投递统计、收尾与幂等、发布权限（默认只有创建者、`public_publish` 后公开、插件族拒绝内置源）、失败形态 |
 | `event_delivery` | 空闲/在跑/无驱动端/暂停态四种投递路径、轮末兜底、端点停止后解绑、关停丢弃、展示消息的来源标记 |
 | `event_subagent` | 后台任务立即受理、单一事件名与值里的 `asyncId`、经 `agentxx_async_start` 的受理文本、结果自动投递（驱动端或待注入）、非法事件名拒绝、取消后仍发终态 |
 | `async_work` | 台账与状态机、每队列 FIFO 与额度、排队/运行的取消、linger 清扫、指标计数、`listJson` 的 `queueAhead`、`kind=tool` 的执行/失败/取消 |

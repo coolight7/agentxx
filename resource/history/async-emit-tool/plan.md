@@ -65,24 +65,24 @@ enum class PublishMask : uint32_t {
 
 ### 3.3 工具：`agentxx_async_emit`
 
-参数（6 个）：
+参数（5 个）：
 
 | 参数 | 说明 |
 |---|---|
 | `event` | 必填，任意合法事件名 |
 | `value` | 可选，要发布的值（任意 JSON，字符串按纯文本） |
 | `end` | 可选，`true` = 发布后收尾（不带 `value` 时只收尾） |
-| `summary` | 可选，仅 `end:true` 时有效，收尾信息 |
-| `allow_publish` | 可选，仅**新建**事件时有效：`["model","plugin","builtin","any"]`，缺省只有创建者能发 |
+| `public_publish` | 可选，仅**新建**事件时有效：`true` = 任何人都能发，缺省只有创建者 |
 | `label` | 可选，仅新建事件时有效，一行说明 |
 
 语义：
 
 - `value` 与 `end` 至少给一个，两个都不给按参数错误；
-- 事件存在：按其 `publishMask` 判定能否发布/收尾，`allow_publish` 与 `label` 忽略
+- 事件存在：按其 `publishMask` 判定能否发布/收尾，`public_publish` 与 `label` 忽略
   （返回文本里点出"沿用已有定义"）；
-- 事件不存在且给了 `value`：按流式事件创建（归属 `tool`），`allow_publish`/`label` 生效；
+- 事件不存在且给了 `value`：按流式事件创建（归属 `tool`），`public_publish`/`label` 生效；
 - 事件不存在且只给 `end`：按参数错误（没有可收尾的流）。
+- 收尾不带附加信息（`summary` 删了）：要说明什么就用 `value` 发一条值。
 
 返回文本（短句、只给新信息）：
 

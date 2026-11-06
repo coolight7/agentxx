@@ -287,8 +287,8 @@ Absent (default): the sub-agent's default full tool set.)"},
 
 ## Who may publish
 - An event belongs to whoever created it; by default only that owner may publish to it.
-- The creator decides at creation time whether others may publish too (`allow_publish`).
-- You may target any valid event name: if the event exists and does not allow your kind of caller, the call fails and tells you why.
+- The creator decides at creation time whether everyone may publish too (`public_publish`).
+- You may target any valid event name: if the event exists and does not allow you, the call fails and tells you why.
 - Creating an event is limited to `agentxx.agent.event.<name>` for you (the `turn.` / `tool.` / `subagent.` / `timer.` / `host.` segments belong to built-in sources and cannot be created).
 - Background task results do not need this tool: `agentxx_async_start` delivers them by itself; use `agentxx_async_query` / `agentxx_async_await` / `agentxx_async_cancel` for tasks.)",
               .args =
@@ -299,10 +299,8 @@ Absent (default): the sub-agent's default full tool set.)"},
                        "Any JSON value to publish; a string is published as plain text."},
                       {"end",
                        R"(`true` closes the stream. With `value` it publishes first and then closes; alone it only closes an existing event.)"},
-                      {"summary",
-                       "Optional JSON summary attached when closing (only with `end: true`)."},
-                      {"allow_publish",
-                       R"(Only used when this call creates the event: who else may publish to it — `model` (tool calls), `plugin` (plugins), `builtin` (round/tool/timer/background sources), `any`. Absent (default) = only the creator.)"},
+                      {"public_publish",
+                       R"(Only used when this call creates the event: `true` lets anyone publish to it (plugins, built-in sources, other model calls); default `false` = only the creator.)"},
                       {"label", "Only used when this call creates the event: a one-line description."},
                   },
           },
