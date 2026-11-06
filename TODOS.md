@@ -1,13 +1,4 @@
 # TODO
-- eventBus 改为tree，命名空间使用 axx/bxx/cc
-- tui支持修改上下文
-- 验证subagent
-
-- wiki 记忆、项目结构
-- 破甲插件，修改 assistant 消息补充 `好的我将按照用户的要求继续...` 等引导
-- 主动记忆 插件tool
-- 添加连续多次压缩检查
-- 框架处理支持 toolcall 参数采用变量取值，比如 edit、write 失败时可以将参数存入 share_store，减少下一次 edit 所需的token
 - 移除InterruptUi，统一使用 plugin::ui，中断提示消息显示优化，支持展开详情
 - 调整 PluginChannelAgentIO 头文件位置
 - 应当const &:
@@ -15,12 +6,20 @@
   - PluginTool 构造函数参数 `AgentxxPluginToolSpec spec`
   - PluginManager::qualifyEventTopic 不能放过 `client.*`，客户端插件事件也应当 plugin.client.*
 
+- tui支持修改上下文
+- 验证subagent
+- wiki 记忆、项目结构
+- 破甲插件，修改 assistant 消息补充 `好的我将按照用户的要求继续...` 等引导
+- 主动记忆 插件tool
+- 添加连续多次压缩检查
+- 框架处理支持 toolcall 参数采用变量取值，比如 edit、write 失败时可以将参数存入 share_store，减少下一次 edit 所需的token
 - agentxx_javascript_engine 的一份脚本仍只对应一个挂载作用域（mountAgentId_
 记“当前挂载”，第二次挂载会覆盖），要做到“每 agent 一份 JS 实例”需要把 JsPluginCtx
 按挂载拆开（每挂载一个 JS runtime + 一套注册），属下一篇量级。单 agent 场景与非 JS
 插件不受影响。
 - 机器人插件提供tool给主程序调用，实现通知
 - 机器人插件后台子agent排队运行繁重任务
+- 机器人回复消息时引用的msg_id可能过期，自动处理改为@
 - agentxx 自重启控制、仿照 musicxx 的 cli + http + mcp + deeplink 命令控制
 - 通过 mdns 互相发现，以便了解各自正在运行的会话内容
 - share_store 支持 grep、输出到文件等
@@ -28,6 +27,9 @@
 - 上下文较长警告消息，提示模型及时更新文档或plan，即将压缩
 - 事件在 modelcall 插入时同步添加 viewMessage
 - command-code-deepseek-flash 偶现 content 跟末尾思考内容交错
+- viewMessage 更新、处理逻辑放到 agent-server
+- 同步 JS插件和动态库插件接口实现
+- 更新 en 文档
 
 - SVG绘制支持
 

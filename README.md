@@ -274,7 +274,8 @@
     - ✅`agentxx_javascript_engine`由 c++插件实现 js 扩展插件开发支持; [JS插件示例](/agent/plugins/example_js/)
     - ⬜`agentxx_python_engine`
 - ✅`agentxx_chatbot`: 聊天机器人
-    - ✅接入QQ，可在私聊、群聊中通过@、自动回复等触发模型回复，已实现引用消息、图片输入输出、文件接收、引用消息、撤回消息等
+    - 支持各种任务自动执行，可用功能与 TUI 启动的 agent 会话基本相同，我们已在 [musicxx](https://github.com/coolight7/musicxx) 项目的 QQ交流群 中接入，方便处理回复用户问题和bug反馈时排查代码，以及支持根据用户需求自行编写插件发给用户使用
+    - ✅接入QQ，可在私聊、群聊中通过@、自动回复等触发模型回复，已实现引用消息、图片输入输出、文件收发、引用消息、撤回消息等
     - ⬜接入微信
 - ✅`agentxx_codegraph`
     - 分析代码符号、查找定位
