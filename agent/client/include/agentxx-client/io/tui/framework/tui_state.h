@@ -63,7 +63,7 @@ struct TUIPendingInput {
 
 /// 信息侧边栏「后台任务」段的一条 (`WireContextStats.asyncWorks` 下发)
 /// - 只给界面展示: 显示状态与已跑时长, 不提供取消/重试入口
-///   (取消走模型工具 `agentxx_event {opt:"cancel", id}`)
+///   (取消走模型工具 `agentxx_async_cancel {id}`)
 struct TUIAsyncWorkItem {
     /// 任务 id (`asyncId`)
     std::string id;

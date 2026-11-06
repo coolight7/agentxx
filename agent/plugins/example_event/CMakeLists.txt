@@ -1,7 +1,7 @@
 # example_event —— 事件中枢插件示例 (声明事件源 / 发布值 / 登记等待)
 # - 演示插件如何:
 #   1. 经事件中枢表 (agentxx.agent.event) 声明自己产生的事件 (流式 / 单值)
-#   2. 发布结构化值、结束一条流 (模型可以用 `agentxx_event` 工具等这些事件)
+#   2. 发布结构化值、结束一条流 (模型可以用 `agentxx_async_emit` 往这些事件发值)
 #   3. 替某个会话登记一个等待 (值到达后作为一条输入进入那个会话)
 # - 插件仅 agent 侧入口 (无 client 入口)
 set(PLUGIN_NAME example_event)
