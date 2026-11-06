@@ -314,6 +314,16 @@ public:
     /// - 如果指定了 subagentModel 则返回它，否则返回主模型
     const ModelConfig& getSubagentModel() const;
 
+    /// 配置决定的默认模型条目名 (即 [availableModels] 里的 key)
+    /// - 规则: [currentModelName] (yaml `model.use.default`) 命中可用模型 → 用它;
+    ///   否则 [model] 的上游名 model_name 恰好是某个条目名 → 用它; 否则取
+    ///   字典序第一个条目 (建表按 [availableModels] 顺序注册, 第一个成为默认)
+    /// - 与会话里已选模型无关, 只回答"没选过模型时应当用哪一个"
+    /// - 用途: `init()` 建模型表时定默认模型; `init()` 之前查询当前模型
+    ///   (客户端握手即拉 `WireGetModel`) 时按同一规则回退, 两处结果一致
+    /// - 没有可用模型列表时返回主模型的上游名 (那时表里只有它)
+    std::string defaultModelName() const;
+
     /// 工具白名单 (enableToolFiltering 时生效): 仅保留名称在列表中的工具;
     /// 列表中的名称在子代理中不存在时自然跳过 (不报错)
     std::vector<std::string> toolWhitelist;

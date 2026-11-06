@@ -2432,6 +2432,113 @@ static asio::awaitable<void> test_session_controller_switch_session() {
 }
 
 // ---------------------------------------------------------------------------
+// 19a. SessionServerAgentIO: init 之前的模型信息
+//      启动壳先起传输接收循环再跑 init (客户端握手后立刻发 WireGetModel), 此时
+//      进程共享的模型注册表已挂到上下文上, 但模型要等 init 才注册 —— 表空着不能
+//      当成"表里找不到", 否则当前模型解析成空串, TUI 状态栏显示"未选择", 而配置
+//      里的 `model.use.default` 明明有值
+// ---------------------------------------------------------------------------
+
+static asio::awaitable<void> test_model_info_before_init() {
+    auto ex = co_await asio::this_coro::executor;
+
+    // 配置: 两个可用模型, `model.use.default` 指定 beta (客户端加载时填进 currentModelName)
+    auto cfg             = std::make_shared<agentxx::agent::AgentConfig>();
+    cfg->model.baseUrl   = "http://127.0.0.1:1";
+    cfg->model.modelName = "upstream-name";
+    agentxx::agent::ModelConfig alphaCfg;
+    alphaCfg.name                 = "alpha";
+    alphaCfg.baseUrl              = "http://127.0.0.1:1";
+    alphaCfg.modelName            = "alpha-upstream";
+    cfg->availableModels["alpha"] = alphaCfg;
+    agentxx::agent::ModelConfig betaCfg;
+    betaCfg.name                 = "beta";
+    betaCfg.baseUrl              = "http://127.0.0.1:1";
+    betaCfg.modelName            = "beta-upstream";
+    betaCfg.imageInput           = true;
+    cfg->availableModels["beta"] = betaCfg;
+    cfg->currentModelName        = "beta";
+
+    auto agent = std::make_shared<agentxx::agent::BaseAgent>(cfg);
+
+    // 模拟 `AgentHost::create` 的早期注入 (主 agent 上下文先挂上容器共享的注册表,
+    // 模型条目由后面的 init 注册)
+    agent->agentContext->modelRegistry = std::make_shared<agentxx::agent::ModelProviderRegistry>();
+    XX_TEST_EXPECT_EQ(agent->agentContext->modelRegistry->size(), size_t{0});
+
+    // ---- init 之前: 名称按配置回退, 不能是空串 ----
+    XX_TEST_EXPECT_EQ(agent->getCurrentModelName("early"), std::string("beta"));
+    // 模型配置同一条目 (多模态能力 / 上下文上限都读它)
+    XX_TEST_EXPECT_TRUE(agent->agentContext->getSessionCurrentModelConfig("early").imageInput);
+    XX_TEST_EXPECT_EQ(
+        agent->agentContext->getSessionCurrentModelConfig("early").modelName,
+        std::string("beta-upstream")
+    );
+
+    // ---- WireGetModel: 握手后立刻查询 (客户端 onTransportStarted) 拿到同一个名字 ----
+    auto tp      = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+    auto clientT = std::move(tp.first);
+    auto serverT = std::move(tp.second);
+
+    SessionServerAgentIO::Config scCfg;
+    scCfg.sessionId = "early";
+    auto sc         = std::make_shared<SessionServerAgentIO>(ex, agent, scCfg);
+    sc->setTransport(std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT)));
+
+    sc->onPeerMessage(agentxx::agent::WireMessage{agentxx::agent::WireGetModel{"early"}});
+    auto msg = co_await clientT->recv();
+    XX_TEST_EXPECT_TRUE(msg.has_value());
+    if (msg) {
+        auto* mi = std::get_if<agentxx::agent::WireModelInfo>(&*msg);
+        XX_TEST_EXPECT_TRUE(mi != nullptr);
+        if (mi) {
+            XX_TEST_EXPECT_EQ(mi->currentModel, std::string("beta"));
+            XX_TEST_EXPECT_EQ(mi->models.size(), size_t{2});
+            // 能力表按当前模型的条目给 (输入栏附件按钮看 image_input)
+            bool sawBetaCap = false;
+            for (const auto& cap : mi->capabilities) {
+                if (cap.name == "beta") {
+                    sawBetaCap = true;
+                    XX_TEST_EXPECT_TRUE(cap.imageInput);
+                }
+            }
+            XX_TEST_EXPECT_TRUE(sawBetaCap);
+        }
+    }
+
+    // ---- init 之后 (建表 + 定默认模型): 会话没选模型时仍是配置那一个 ----
+    for (const auto& [name, mc] : cfg->availableModels) {
+        agent->agentContext->modelRegistry->registerModel(name, mc);
+    }
+    XX_TEST_EXPECT_TRUE(agent->agentContext->modelRegistry->setDefaultModel(
+        cfg->defaultModelName()
+    ));
+    XX_TEST_EXPECT_EQ(agent->getCurrentModelName("early"), std::string("beta"));
+
+    // ---- 会话已选过模型 (从会话库恢复): init 前后都按会话的选择 ----
+    agent->agentContext->getSession("picked")->setModelName("alpha");
+    XX_TEST_EXPECT_EQ(agent->getCurrentModelName("picked"), std::string("alpha"));
+
+    // ---- 配置没有 `model.use.default` 时按建表规则: 字典序第一个条目 ----
+    auto noUse                      = std::make_shared<agentxx::agent::AgentConfig>();
+    noUse->model.modelName          = "upstream-name";
+    noUse->availableModels["gamma"] = alphaCfg;
+    noUse->availableModels["delta"] = betaCfg;
+    XX_TEST_EXPECT_EQ(noUse->defaultModelName(), std::string("delta"));
+    // 上游名恰好也是条目名时优先用它
+    noUse->model.modelName = "gamma";
+    XX_TEST_EXPECT_EQ(noUse->defaultModelName(), std::string("gamma"));
+    // 没有可用模型列表: 表里只有主模型 (按上游名入表)
+    auto single             = std::make_shared<agentxx::agent::AgentConfig>();
+    single->model.modelName = "only-model";
+    XX_TEST_EXPECT_EQ(single->defaultModelName(), std::string("only-model"));
+
+    clientT->close();
+    sc->stop();
+    co_return;
+}
+
+// ---------------------------------------------------------------------------
 // 19b. SessionServerAgentIO: 切换会话期间发给目标会话的请求不被丢弃
 //      切换要先在线程池里加载目标会话历史, 提交绑定之前端点仍指向旧会话:
 //      客户端切换后紧接着发出的请求 (如"沿用当前模型"的 WireSelectModel) 若按
@@ -4471,6 +4578,9 @@ asio::awaitable<TestResult> run_remote_agent_tests() {
 
     std::cout << "  [remote] session controller switch session..." << std::endl;
     co_await test_session_controller_switch_session();
+
+    std::cout << "  [remote] model info before init..." << std::endl;
+    co_await test_model_info_before_init();
 
     std::cout << "  [remote] session switch defers target requests..." << std::endl;
     co_await test_session_switch_defers_target_requests();

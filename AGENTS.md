@@ -553,7 +553,9 @@ path/to/agentxx_test --log-level warn string_util regex
   `agentxx.agent.event.` 段 (与强类型主题分开), `turn.`/`tool.`/`async.`/`timer.`/`host.`
   子段保留给框架; 功能点 id 同一套规则 (`agentxx.agent.context.*` / `plugin.<名>.*`);
   投递文本固定以 `[Event] <名字> (<mode>)` 开头
-  (不命中工具失败前缀); 往会话塞输入统一经 `SessionInputSink`
+  (不命中工具失败前缀); 展示历史里它是 `ViewMessage::Role::Event` (LLM 上下文仍是 `user` 消息;
+  角色由 `ViewMessage::roleOfInputSource(source)` 推导, 默认折叠, 界面上是 `+ [事件] <名字>`
+  折叠头, 见 tui.md §2.17); 往会话塞输入统一经 `SessionInputSink`
   (实现 = `SessionServerAgentIO`, 弱引用挂 `Session::inputSink`), 空闲开新一轮 / 在跑写
   `Session::pendingInputs_`; 轮末把落在最后一次模型调用之后的 next-step 输入提升为下一轮
   (`rolloverLeftoverNextStepInputs`, 仅在有驱动端时)。内置事件源
@@ -768,9 +770,13 @@ path/to/agentxx_test --log-level warn string_util regex
   `can't decrement invalidated vector iterator`)
 - 用途模型来源可见 (2026-10-25): 分层加载后逐个打印
   `[Config] model.use.<键>: '<值>' (overlay|base[ overrides base '<旧值>'])`;
-  `AgentContext::getSessionCurrentModelName` 在 registry 未就绪时优先返回会话已选模型,
-  其次返回 `AgentConfig::currentModelName` (即 `model.use.*` 里的**条目名**, 与 registry 键一致),
-  最后才退回主模型的上游 `model_name` —— 客户端启动早期 (init 前) 拉取的模型名因此能对齐用户配置
+  `AgentContext::getSessionCurrentModelName` 判断 registry 是否就绪看的是**表里有没有模型**
+  (`size() > 0`), 不是指针非空 —— 进程共享的注册表在 `AgentHost::create` 就挂到上下文上了
+  (插件 `start` 里挂的根要能查模型), 模型却要到 `init()` 才注册; 只看指针会把 init 前的查询
+  解析成空串 (TUI 状态栏显示"未选择", 必须手动选一次)。未就绪时优先返回会话已选模型,
+  否则返回 `AgentConfig::defaultModelName()` (规则与 init 建表同一份: `model.use.*` 的条目名 →
+  上游名恰好是条目名 → 字典序第一条; 没有可用模型列表时用主模型上游名), 所以客户端启动早期
+  (init 前, 握手即发 `WireGetModel`) 与 init 之后拿到的模型名一致
 
 ## 编译
 - 平台/编译器宏: 顶层 `agent/CMakeLists.txt` 统一判定并经 `_AGENTXX_COMMON_CMAKE_ARGS`

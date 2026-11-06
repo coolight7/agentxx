@@ -271,7 +271,8 @@ Parent Agent LLM calls agentxx_subagent (single task = tasks array with 1 item, 
 ### Client UI
 
 - **TUI Mode**: FTXUI-based terminal interface featuring:
-  - Message list supporting User, Assistant, Thinking, Tool, System, and Interrupt roles.
+  - Message list supporting User, Event, Assistant, Thinking, Tool, System, Tip, and Interrupt roles.
+  - Foldable message blocks (user messages, event inputs, Thinking/Tool/System/Tip) toggle on click: a user message starts with `-` (expanded) or `+` (folded, one-line preview); event inputs start folded and render as a `+ [Event] <name>` header with tool-like colors.
   - Automatic folding/expansion of Thinking and Tool blocks (expanded while executing, folded upon completion; a Thinking stream the user manually expanded stays expanded when committed).
   - Interactive click-to-fold/expand: Clicking finalized messages toggles `msg.collapsed`; clicking the tail Thinking block during active streaming toggles the shared override state (`TUIRenderState::streamThinkOverride`, cycling: unset follows TailThinkingMode / folded / expanded). The override is scoped to the current stream: a manually expanded thinking stream stays expanded once committed (`pushCurrentTokenLocked` derives `msg.collapsed` from it, so the end of thinking no longer folds it back), and it resets to -1 on commit / new stream start so the next thinking round follows the configured default (it lives in the shared state because the commit happens on the client thread and has to read the UI thread's click). Hit areas are mapped from the previous frame's `visibleBoxes` (`collapsibleBoxes_` + `collapsibleIsStream_`).
   - Real-time streaming token rendering with Copy-on-Write (COW) semantics, preventing O(n²) string accumulation.

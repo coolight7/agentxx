@@ -196,7 +196,8 @@ static std::shared_ptr<agent::AgentSessionRuntime> setupLocalUnifiedDirect(
     }
     if (auto tui = dynamic_cast<TUIClientAgentIO*>(clientIO.get())) {
         // 本地模式无上下文可解析默认模型, 必须显式请求一次: WireModelInfo 回填
-        // 状态标模型名与弹窗列表 (init 前处理 WireGetModel 安全)
+        // 状态栏模型名与弹窗列表 (init 前处理 WireGetModel 安全: 这时模型表可能还没建,
+        // 服务端按配置的 `model.use.*` 回退, 得到的就是 init 之后会用的那一个)
         cfg.onTransportStarted = [tui, sessionId]() {
             tui->sendToPeer(agent::WireGetModel{sessionId});
         };

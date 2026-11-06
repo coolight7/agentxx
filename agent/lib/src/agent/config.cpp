@@ -29,6 +29,23 @@ const ModelConfig& AgentConfig::getSubagentModel() const {
     return subagentModel.has_value() ? subagentModel.value() : model;
 }
 
+std::string AgentConfig::defaultModelName() const {
+    if (!availableModels.empty()) {
+        // `model.use.default` 指定且存在
+        if (!currentModelName.empty() && availableModels.contains(currentModelName)) {
+            return currentModelName;
+        }
+        // 没指定 `model.use` 时, 上游名恰好也是条目名
+        if (!model.modelName.empty() && availableModels.contains(model.modelName)) {
+            return model.modelName;
+        }
+        // 都没有: 建表时第一个注册的条目成为默认 (`availableModels` 是 std::map)
+        return availableModels.begin()->first;
+    }
+    // 没有可用模型列表: 主模型按上游名入表, 默认就是它
+    return model.modelName;
+}
+
 std::string AgentConfig::resolvedWorkDir() const noexcept {
     // workDir 非空时原样返回 (client/FFI 加载侧已把相对路径按进程 cwd 解析为绝对路径);
     // 为空时回退进程当前工作目录, 与历史行为完全一致

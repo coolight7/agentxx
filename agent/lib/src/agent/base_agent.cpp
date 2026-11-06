@@ -972,13 +972,13 @@ void BaseAgent::initModelRegistry() {
         registry->registerModel(config->model.modelName, config->model);
     }
     // 默认模型: 只有把表建起来的那一个 agent 说了算 (`registerModel` 首个注册项
-    // 会自动成为默认, 所以得在填完之后按配置的 `currentModelName` 纠正)
+    // 会自动成为默认, 所以得在填完之后按配置纠正)
+    // - 挑哪一个由 `AgentConfig::defaultModelName()` 决定: init 之前的模型查询
+    //   (客户端握手即拉 `WireGetModel`) 也必须给出同一答案
     if (wasEmpty) {
-        if (!config->currentModelName.empty() && registry->hasModel(config->currentModelName)) {
-            registry->setDefaultModel(config->currentModelName);
-        } else if (!config->model.modelName.empty()
-                   && registry->hasModel(config->model.modelName)) {
-            registry->setDefaultModel(config->model.modelName);
+        const auto preferred = config->defaultModelName();
+        if (!preferred.empty() && registry->hasModel(preferred)) {
+            registry->setDefaultModel(preferred);
         }
     } else if (!config->currentModelName.empty()
                && !registry->hasModel(config->currentModelName)) {
@@ -1810,11 +1810,16 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
     // 历史用于 client 同步/展示, 上下文仅用于调用 LLM API
     // - 附带开始时间戳: 会话列表的 lastActiveMs 依赖此值 (持久化 meta),
     //   无时间戳时列表无法显示活动时间
-    auto userViewMsg = ViewMessage::makeText(ViewMessage::Role::User, processedInput, startTimeMs);
+    auto userViewMsg = ViewMessage::makeText(
+        ViewMessage::roleOfInputSource(inputSource),
+        processedInput,
+        startTimeMs
+    );
     userViewMsg.attachments = attachments;
-    // 来源标记 (事件中枢投递的事件输入): 只影响展示样式, 角色仍是 User
+    // 来源标记 (事件中枢投递的事件输入): 角色随之变成 Role::Event (折叠展示),
+    // 在 LLM 上下文里它仍是 user 消息 (下方 appendMessages 不变)
     userViewMsg.source = std::string{inputSource};
-    const auto userMsgId    = session->appendViewMessage(std::move(userViewMsg));
+    const auto userMsgId = session->appendViewMessage(std::move(userViewMsg));
     {
         // 用户消息写入会话上下文 (唯一权威): 图状态不再持有 messages 通道,
         // 引擎运行期间节点直接从会话读取上下文

@@ -555,11 +555,11 @@ static void testRoleLabelLocalization() {
 }
 
 // ---------------------------------------------------------------------------
-// 事件中枢投递的输入: 用户消息头部带来源标记
+// 事件中枢投递的输入: 专属展示角色 Role::Event (折叠头 `+ [事件] <事件名>`)
 //
 // 来源是**结构化字段** (`ViewMessage::source`, 取值 `event:<事件名>`), 不是从正文
 // 里扒出来的: 正文已经是渲染好的 `[Event] ...` 文本, 再解析一遍会把展示逻辑
-// 绑在文本格式上。非事件来源 (空) 不加标记。
+// 绑在文本格式上。正文通常很长, 所以默认折叠、点击整块展开。
 // ---------------------------------------------------------------------------
 
 void testEventSourceBadge() {
@@ -569,33 +569,151 @@ void testEventSourceBadge() {
 
     ScrollFixture f;
     f.sharedState.mutate([](TUIRenderState& st) {
-        auto eventMsg  = std::make_shared<TUIMessage>();
-        eventMsg->role = TUIMessage::Role::User;
-        eventMsg->text = "[Event] chat.message (first)\nstatus: value\nvalue: hi there";
+        // 正文里带一个只在展开态才看得见的尾部标记, 用于断言折叠/展开
+        auto eventMsg = std::make_shared<TUIMessage>(TUIMessage::makeText(
+            TUIMessage::Role::Event,
+            "[Event] chat.message (first)\nstatus: value\nvalue: hi there EVBODY9XYZ",
+            1000
+        ));
         eventMsg->source = std::string{agentxx::agent::kInputSourceEventPrefix} + "chat.message";
         st.messages.push_back(std::move(eventMsg));
 
         auto userMsg  = std::make_shared<TUIMessage>();
         userMsg->role = TUIMessage::Role::User;
-        userMsg->text = "typed by the user";
+        userMsg->text = "typed by the user USERBODY8ABC";
         st.messages.push_back(std::move(userMsg));
     });
 
-    const auto        frame = stripAnsiCodes(f.render());
-    // 中文界面的来源标记文本 (i18n 键 msg.eventSource, 见 tui_i18n.cpp)
-    const std::string badge = " [事件] chat.message";
-    // 事件输入: 头部有来源标记, 正文照旧展示
-    XX_TEST_EXPECT_TRUE(frame.find(badge) != std::string::npos);
-    XX_TEST_EXPECT_TRUE(frame.find("value: hi there") != std::string::npos);
-    // 用户自己输入的消息: 正文里没有事件名字, 也不出现来源标记
-    XX_TEST_EXPECT_TRUE(frame.find("typed by the user") != std::string::npos);
+    // 中文界面的事件头 (i18n 键 msg.eventSource, 见 tui_i18n.cpp)
+    const std::string header = "+ [事件] chat.message";
+
+    // 折叠态 (默认): 头部标记 + 事件名 + 单行预览; 正文尾部标记不入屏
+    std::string frame = stripAnsiCodes(f.render());
+    XX_TEST_EXPECT_TRUE(frame.find(header) != std::string::npos);
+    XX_TEST_EXPECT_TRUE(frame.find("[Event] chat.message (first)") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(frame.find("EVBODY9XYZ") == std::string::npos);
+    // 事件名只出现一次 (只在那条事件消息的头部)
     {
-        // 来源标记只出现一次 (只有那条事件消息带)
-        size_t first = frame.find(badge);
-        size_t next  = first == std::string::npos ? std::string::npos : frame.find(badge, first + 1);
+        size_t first = frame.find(header);
+        size_t next  = first == std::string::npos ? std::string::npos
+                                                  : frame.find(header, first + 1);
         XX_TEST_EXPECT_TRUE(first != std::string::npos);
         XX_TEST_EXPECT_TRUE(next == std::string::npos);
     }
+    // 用户自己输入的消息: `- ` 开头, 正文完整展示 (默认展开)
+    XX_TEST_EXPECT_TRUE(frame.find("- typed by the user USERBODY8ABC") != std::string::npos);
+
+    // 点击事件消息 -> 展开: 标记变 `-`, 正文全文上屏
+    f.render(); // 命中盒由上一帧 visibleBoxes 反推, 再渲染一帧
+    bool clicked = false;
+    for (const auto& box : f.comp->collapsibleBoxes()) {
+        if (box.IsEmpty()) {
+            continue;
+        }
+        ftxui::Mouse m;
+        m.button = ftxui::Mouse::Left;
+        m.motion = ftxui::Mouse::Released;
+        m.x      = (box.x_min + box.x_max) / 2;
+        m.y      = (box.y_min + box.y_max) / 2;
+        clicked  = f.comp->OnEvent(ftxui::Event::Mouse("", m));
+        break;
+    }
+    XX_TEST_EXPECT_TRUE(clicked);
+    std::string expanded = stripAnsiCodes(f.render());
+    XX_TEST_EXPECT_TRUE(expanded.find("- [事件] chat.message") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(expanded.find("EVBODY9XYZ") != std::string::npos);
+    {
+        auto snap = f.sharedState.readSnapshot();
+        XX_TEST_EXPECT_TRUE(!snap->messages.empty() && !snap->messages[0]->collapsed);
+    }
+
+    // 再次点击 -> 折回
+    f.render();
+    clicked = false;
+    for (const auto& box : f.comp->collapsibleBoxes()) {
+        if (box.IsEmpty()) {
+            continue;
+        }
+        ftxui::Mouse m;
+        m.button = ftxui::Mouse::Left;
+        m.motion = ftxui::Mouse::Released;
+        m.x      = (box.x_min + box.x_max) / 2;
+        m.y      = (box.y_min + box.y_max) / 2;
+        clicked  = f.comp->OnEvent(ftxui::Event::Mouse("", m));
+        break;
+    }
+    XX_TEST_EXPECT_TRUE(clicked);
+    frame = stripAnsiCodes(f.render());
+    XX_TEST_EXPECT_TRUE(frame.find(header) != std::string::npos);
+    XX_TEST_EXPECT_TRUE(frame.find("EVBODY9XYZ") == std::string::npos);
+
+    settings.setLanguage(savedLang);
+}
+
+// ---------------------------------------------------------------------------
+// 用户消息支持展开/折叠: 开头标记与其它可折叠消息统一为 `+` / `-`
+// (原来是不可折叠的 `> ` 前缀)
+// ---------------------------------------------------------------------------
+
+void testUserMessageCollapse() {
+    auto&      settings  = TUISettings::instance();
+    const auto savedLang = settings.language();
+    settings.setLanguage(TuiLanguage::ZhCn);
+
+    ScrollFixture f;
+    f.sharedState.mutate([](TUIRenderState& st) {
+        auto userMsg  = std::make_shared<TUIMessage>();
+        userMsg->role = TUIMessage::Role::User;
+        userMsg->text
+            = "first line of the user input USRHEAD7XYZ\nsecond line USRTAIL3ABC";
+        st.messages.push_back(std::move(userMsg));
+    });
+
+    // 默认展开: `- ` 开头, 正文逐行展示
+    std::string frame = stripAnsiCodes(f.render());
+    XX_TEST_EXPECT_TRUE(frame.find("- first line of the user input USRHEAD7XYZ")
+                        != std::string::npos);
+    XX_TEST_EXPECT_TRUE(frame.find("second line USRTAIL3ABC") != std::string::npos);
+
+    // 点击 -> 折叠: `+ ` 开头 + 单行预览 (只保留首行)
+    f.render();
+    bool clicked = false;
+    for (const auto& box : f.comp->collapsibleBoxes()) {
+        if (box.IsEmpty()) {
+            continue;
+        }
+        ftxui::Mouse m;
+        m.button = ftxui::Mouse::Left;
+        m.motion = ftxui::Mouse::Released;
+        m.x      = (box.x_min + box.x_max) / 2;
+        m.y      = (box.y_min + box.y_max) / 2;
+        clicked  = f.comp->OnEvent(ftxui::Event::Mouse("", m));
+        break;
+    }
+    XX_TEST_EXPECT_TRUE(clicked);
+    frame = stripAnsiCodes(f.render());
+    XX_TEST_EXPECT_TRUE(frame.find("+ first line of the user input USRHEAD7XYZ")
+                        != std::string::npos);
+    XX_TEST_EXPECT_TRUE(frame.find("second line USRTAIL3ABC") == std::string::npos);
+
+    // 再点一次 -> 展开
+    f.render();
+    clicked = false;
+    for (const auto& box : f.comp->collapsibleBoxes()) {
+        if (box.IsEmpty()) {
+            continue;
+        }
+        ftxui::Mouse m;
+        m.button = ftxui::Mouse::Left;
+        m.motion = ftxui::Mouse::Released;
+        m.x      = (box.x_min + box.x_max) / 2;
+        m.y      = (box.y_min + box.y_max) / 2;
+        clicked  = f.comp->OnEvent(ftxui::Event::Mouse("", m));
+        break;
+    }
+    XX_TEST_EXPECT_TRUE(clicked);
+    frame = stripAnsiCodes(f.render());
+    XX_TEST_EXPECT_TRUE(frame.find("second line USRTAIL3ABC") != std::string::npos);
 
     settings.setLanguage(savedLang);
 }
@@ -876,7 +994,7 @@ static void testNavStripButtons() {
         std::string frame = stripAnsiCodes(f.render());
         XX_TEST_EXPECT_EQ(f.comp->anchorIndex(), size_t{0});
         XX_TEST_EXPECT_FALSE(f.comp->isStickToBottom());
-        XX_TEST_EXPECT_TRUE(screenRowText(frame, 0).find("> USER_MARK_0") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(screenRowText(frame, 0).find("- USER_MARK_0") != std::string::npos);
 
         // 已解除吸附: 底部新增内容不拉动视图 (顶行仍是同一条消息)
         f.sharedState.mutate([&](TUIRenderState& st) {
@@ -889,7 +1007,7 @@ static void testNavStripButtons() {
         f.render();
         XX_TEST_EXPECT_EQ(f.comp->anchorIndex(), size_t{0});
         XX_TEST_EXPECT_TRUE(
-            screenRowText(stripAnsiCodes(f.render()), 0).find("> USER_MARK_0") != std::string::npos
+            screenRowText(stripAnsiCodes(f.render()), 0).find("- USER_MARK_0") != std::string::npos
         );
     }
 
@@ -935,20 +1053,20 @@ static void testNavStripButtons() {
         XX_TEST_EXPECT_TRUE(clickNav(f, Nav::PrevUser));
         std::string frame = stripAnsiCodes(f.render());
         XX_TEST_EXPECT_EQ(f.comp->anchorIndex(), kUserIndex[3]);
-        XX_TEST_EXPECT_TRUE(screenRowText(frame, 0).find("> USER_MARK_3") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(screenRowText(frame, 0).find("- USER_MARK_3") != std::string::npos);
         XX_TEST_EXPECT_FALSE(f.comp->isStickToBottom());
 
         // 再按一次 -: 继续跳到上一条用户消息
         XX_TEST_EXPECT_TRUE(clickNav(f, Nav::PrevUser));
         frame = stripAnsiCodes(f.render());
         XX_TEST_EXPECT_EQ(f.comp->anchorIndex(), kUserIndex[2]);
-        XX_TEST_EXPECT_TRUE(screenRowText(frame, 0).find("> USER_MARK_2") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(screenRowText(frame, 0).find("- USER_MARK_2") != std::string::npos);
 
         // + : 跳到下一条用户消息
         XX_TEST_EXPECT_TRUE(clickNav(f, Nav::NextUser));
         frame = stripAnsiCodes(f.render());
         XX_TEST_EXPECT_EQ(f.comp->anchorIndex(), kUserIndex[3]);
-        XX_TEST_EXPECT_TRUE(screenRowText(frame, 0).find("> USER_MARK_3") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(screenRowText(frame, 0).find("- USER_MARK_3") != std::string::npos);
 
         // 下滚几行使顶行落到该用户消息之后 (消息已离开视口顶), 再按 - 回到它
         for (int i = 0; i < 3; ++i) {
@@ -956,12 +1074,12 @@ static void testNavStripButtons() {
         }
         f.render();
         XX_TEST_EXPECT_TRUE(
-            screenRowText(stripAnsiCodes(f.render()), 0).find("> USER_MARK_3") == std::string::npos
+            screenRowText(stripAnsiCodes(f.render()), 0).find("- USER_MARK_3") == std::string::npos
         );
         XX_TEST_EXPECT_TRUE(clickNav(f, Nav::PrevUser));
         frame = stripAnsiCodes(f.render());
         XX_TEST_EXPECT_EQ(f.comp->anchorIndex(), kUserIndex[3]);
-        XX_TEST_EXPECT_TRUE(screenRowText(frame, 0).find("> USER_MARK_3") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(screenRowText(frame, 0).find("- USER_MARK_3") != std::string::npos);
 
         // 已在最后一条用户消息: 下方没有用户消息 -> + 退化为跳到底部 (恢复吸附)
         XX_TEST_EXPECT_TRUE(clickNav(f, Nav::NextUser));
@@ -1105,8 +1223,11 @@ TestResult testTuiScroll() {
 
     testRoleLabelLocalization();
 
-    // 事件中枢投递的输入: 用户消息头部带来源标记
+    // 事件中枢投递的输入: 折叠头 `+ [事件] <事件名>`
     testEventSourceBadge();
+
+    // 用户消息支持展开/折叠 (`+` / `-` 开头标记)
+    testUserMessageCollapse();
 
     testBannerRetryButtonHitArea();
 
@@ -2805,7 +2926,7 @@ TestResult testTuiScroll() {
         });
         h.render();
         XX_TEST_EXPECT_EQ(h.comp->totalHeight(), 4); // 用户消息 2 行 + 占位项 2 行
-        const int userRow = screenRowOf(stripAnsiCodes(h.render()), "> hi");
+        const int userRow = screenRowOf(stripAnsiCodes(h.render()), "- hi");
         const int waitRow = screenRowOf(stripAnsiCodes(h.render()), "waiting for response...");
         XX_TEST_EXPECT_TRUE(userRow >= 0);
         XX_TEST_EXPECT_EQ(waitRow - userRow, 2);

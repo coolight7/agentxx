@@ -668,8 +668,8 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
   标签与正文分开) 与**视觉为空的消息** (`isBlankMessage`: 该消息渲染后整块只有一行
   空白, 即 Assistant/User 且正文不含任何可见字符、也没有附件) —— 后者本身已是一行
   空白, 再补一行就让相邻消息之间多出一整行
-- `isBlankMessage` 的判据是"这一块渲染出来有没有可见内容", 因此 Think/System/Tip
-  恒为 false (它们的头部行总会渲染): 早期这三种角色一度按正文判空白, 结果是只有耗时
+- `isBlankMessage` 的判据是"这一块渲染出来有没有可见内容", 因此 Think/System/Tip/Event
+  恒为 false (它们的头部行总会渲染): 早期这几种角色一度按正文判空白, 结果是只有耗时
   的空思考消息头部行不跟尾部空行, 和下一条消息贴在一起 (看起来像"边距为 0"),
   直到该消息被缓存淘汰/重拉历史后才变正常
 - 视觉为空的消息 (模型把 U+200B 之类的零宽占位符当正文输出) 一并从源头处理:
@@ -764,22 +764,53 @@ agent 线程插入会话历史的展示条目: 轮次统计、错误/取消提�
 - 相关测试: `agentxx_test tui_scroll` 的场景 9 / 9b / 9c (前缀与级别文本、不再带 `#`、
   运行中点阵推进、结束后回到静态标记)
 
-### 2.17 事件输入的来源标记
+### 2.17 事件输入的展示角色 (`Role::Event`)
 
-事件中枢投递的输入在会话里就是一条普通 `user` 消息 (正文是渲染好的 `[Event] ...` 文本,
-见 [events.md](events.md) 第 5 节)。为了让界面区分"事件塞进来的"和"用户敲的", 服务端额外
-下发结构化来源, 渲染在 `Role::User` 分支:
+事件中枢投递进会话的输入, 在 LLM 上下文里必须是 `user` 消息 (模型只认 user/assistant/tool),
+但展示历史里它有专属角色 `ViewMessage::Role::Event`: 正文是中枢渲染好的 `[Event] ...`
+多行文本 (事件名 + 各字段 + 值), 一次投递常常十几行, 借用户消息展示会把屏幕占满,
+而且用户消息当时不可折叠。
 
-- 字段: `ViewMessage::source` / `WireDelta::source` (TurnStart), 取值 `event:<事件名>`;
-  用户自己输入时为空串 (`kInputSourceEventPrefix` / `eventNameOfInputSource`, 见
-  [conversation_types.h](/agent/lib/include/agentxx/agent/conversation_types.h))
-- 显示: 正文前加一行 `| [事件] <事件名>` (i18n 键 `msg.eventSource`; 英文为 ` [Event] {}`;
-  颜色 `theme.dim()`), 正文照旧按纯文本渲染
-- **不解析正文**: 正文是给模型看的稳定文本, 会随 [events.md](events.md) 第 5 节调整;
-  从正文里再扒一次事件名等于把展示绑在文本格式上
-- 历史消息经 Sync (`ViewMessage` JSON) 与会话库重载后仍带该字段, 重启后同样有标记
-- 相关测试: `agentxx_test tui_scroll` 的来源标记场景 (出现标记且只出现一次),
-  `agentxx_test tui_stream` 的 TurnStart 场景 (来源保留、空来源不写 JSON、JSON 往返)
+- 角色推导: `ViewMessage::roleOfInputSource(source)` (`event:<事件名>` → `Event`,
+  其余 → `User`)。服务端两处写入点 (`BaseAgent::runTurnAsync`、
+  `nodes/session_context.cpp` 的 `appendUserViewMessage`) 与客户端 TurnStart 回显
+   (`agent_tui.cpp`) 共用这一份判定; `source` 照旧随消息保留 (事件名从这里取,
+  不解析正文), 空来源不写进 JSON
+- 默认折叠: `ViewMessage::makeText(Role::Event, ...)` 自动 `collapsed = true`
+- 渲染 ([MessageListComponent::buildMessageBlock](/agent/client/src/io/tui/components/message_list.cpp)
+  的 `Role::Event` 分支): 头部形态与工具消息一致, `+ [事件] <事件名>`
+   (i18n 键 `msg.eventSource`, 英文 ` [Event] {}`); 折叠态其后接 `· ` 与单行预览,
+  展开态下一行显示全文。折叠标记、标签与正文都用 `theme.toolColor`, 单行预览叠加
+  `theme.dim()`; 正文按纯文本渲染 (`renderPlainText`, 保留硬换行)
+- 折叠交互: 点击消息块任意位置切换 (与 Think/Tool/System/Tip/User 同一套命中登记,
+  见 §3.2)
+- **不解析正文**: 事件名取自结构化来源字段; 正文是给模型看的稳定文本, 会随
+  [events.md](events.md) 第 5 节调整, 从正文里再扒一次等于把展示绑在文本格式上
+- 老数据兼容: 早期把事件输入记成 `role=user` + `source=event:*`, `ViewMessage::fromJson`
+  解析时归一化为 `Role::Event` 并默认折叠; 新角色字符串 `"event"` 在旧客户端上不认识,
+  回退 `Role::User` 照旧显示
+- 历史消息经 Sync (`ViewMessage` JSON) 与会话库重载后角色与来源都保留
+- 相关测试: `agentxx_test tui_scroll` 的事件折叠头场景 (默认折叠、点击展开/折回、
+  事件名只出现一次)、`agentxx_test tui_stream` 的 TurnStart 场景 (角色推导、
+  JSON 往返、老数据归一化)、`agentxx_test event_delivery` (展示角色与来源、默认折叠)
+
+### 2.18 用户消息的展开/折叠
+
+用户自己输入的消息 (`Role::User`) 与其它可折叠消息统一: 开头标记 `-` (展开)/ `+` (折叠),
+点击消息块切换; 折叠态只显示标记 + 单行预览 (叠加 `theme.dim()`), 展开态按纯文本折行
+显示全文 (`renderPlainText`, 不解析 markdown)。
+
+- 默认展开 (与事件消息相反: 来源为空时 `makeText` 不改 `collapsed`)
+- 附件卡片始终显示在正文上方 (折叠与否都不影响卡片); 正文为空且带附件时不画只有一个
+  标记的空行
+- 前缀从早期的 `> ` 改为 `- `: 与 Think/Tool/System/Tip/Event 的折叠标记一致,
+  一眼能看出这一块可以点开/收起
+- 右侧跳转按钮列 (`-` / `+`, 见 §2.15) 仍只认 `Role::User`: 事件投递的输入不算
+  "用户消息", 跳转不会停在它们上面
+- 拖选复制不受影响: 全局拖选在松开时先吃掉事件 (`agent_tui.cpp` 的拖选跟踪分支),
+  不会误触发折叠
+- 正文视觉为空且无附件的消息仍按空消息过滤 (`isBlankMessage`, 判据见 §2.14)
+- 相关测试: `agentxx_test tui_scroll` 的用户消息折叠场景 (标记切换、折叠态只留首行)
 
 ---
 

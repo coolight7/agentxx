@@ -78,7 +78,10 @@ SessionStoreHooks makeSessionStoreHooks(
                 // 自动标题 (首条用户消息预览) 上一步已随消息写入会话库: 同步到会话统计,
                 // 使界面 (信息侧边栏) 无需等下次从库里取就能显示标题
                 // (已有标题时不覆盖: 改名优先, 且缓存已非空)
-                if (msg.role == ViewMessage::Role::User && !msg.text.empty()) {
+                // 事件投递的输入同样算作输入消息, 否则事件开头的会话永远没有标题
+                if ((msg.role == ViewMessage::Role::User
+                     || msg.role == ViewMessage::Role::Event)
+                    && !msg.text.empty()) {
                     if (auto sessionPtr = weakSession.lock();
                         sessionPtr && sessionPtr->contextStats
                         && sessionPtr->contextStats->title.empty()) {
@@ -741,32 +744,43 @@ std::string AgentContext::getSessionCurrentModelName(std::string_view sessionId)
     if (session) {
         selected = session->getModelName();
     }
-    if (modelRegistry) {
+    // 表里已有模型时由它做权威解析: 会话没选模型 / 选了已下架的模型 → 默认模型
+    // - 判定必须是 size() > 0 而不是"指针非空": 进程共享的注册表在 `AgentHost::create`
+    //   里就挂到上下文上了 (插件 `start` 里挂的根也要能查模型), 但模型要到 `init()`
+    //   才注册。客户端握手后立刻发 `WireGetModel` (见 mode_runners 的
+    //   onTransportStarted), 那会儿表是空的, 当成"有表但在里面找不到"会解析出空串,
+    //   状态栏于是显示"未选择", 而配置里的 `model.use.default` 明明有值
+    if (modelRegistry && modelRegistry->size() > 0) {
         return modelRegistry->resolveModelName(selected);
     }
-    // 未初始化 registry (init 前的查询 / 测试嵌入场景): 回退到配置选定的模型
+    // 表还没建 (init 之前 / 测试嵌入场景): 回退到配置选定的模型
     // - 会话已选过模型 (从会话库恢复): 直接用该名称 (selectModel 只记 registry 内的条目名)
-    // - 否则用 `model.use.*` 解析出的**条目名** (与 registry 的键一致, 客户端启动时
-    //   显示的模型名就是用户在 yaml 里写的那一个, 而不是上游 model_name)
-    // - 都没有再退回主模型的上游名称
+    // - 否则用配置决定的默认条目名 (与 init 建表后定下的默认模型同一规则), 客户端启动时
+    //   显示的模型名就是用户在 yaml 里写的那一个, 而不是上游 model_name
     if (!selected.empty()) {
         return selected;
     }
     if (agentConfig) {
-        if (!agentConfig->currentModelName.empty()) {
-            return agentConfig->currentModelName;
-        }
-        return agentConfig->model.modelName;
+        return agentConfig->defaultModelName();
     }
     return {};
 }
 
 const ModelConfig& AgentContext::getSessionCurrentModelConfig(std::string_view sessionId) const {
-    if (modelRegistry) {
+    // 与 getSessionCurrentModelName 同一处判定: 表空着 (init 之前) 不算"有表",
+    // 否则会拿到 ModelConfig::defaultModelConfig (空配置) 而不是配置里的模型
+    if (modelRegistry && modelRegistry->size() > 0) {
         return modelRegistry->getModelConfig(getSessionCurrentModelName(sessionId));
     }
-    // 未初始化 registry 时(测试/嵌入场景)回退主模型
-    return agentConfig ? agentConfig->model : ModelConfig::defaultModelConfig;
+    // 表还没建 (init 之前 / 测试嵌入场景): 用配置里同一条目的配置, 找不到再用主模型
+    if (agentConfig) {
+        auto it = agentConfig->availableModels.find(getSessionCurrentModelName(sessionId));
+        if (it != agentConfig->availableModels.end()) {
+            return it->second;
+        }
+        return agentConfig->model;
+    }
+    return ModelConfig::defaultModelConfig;
 }
 
 std::vector<std::pair<std::string, std::string>>

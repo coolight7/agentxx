@@ -1381,9 +1381,10 @@ void testTuiStreamScenario15(asio::io_context& ioCtx) {
     }
 }
 
-// 场景 16: TurnStart 的来源标记 (事件中枢投递的输入) 保留在消息上
+// 场景 16: TurnStart 的来源标记 (事件中枢投递的输入) -> 展示角色 Role::Event
 // - 服务端在 TurnStart 增量里给出 `source`, 客户端只存不解析正文
-// - 历史消息经 Sync (ViewMessage JSON) 重载时同样保留
+// - 角色由 source 推导 (`ViewMessage::roleOfInputSource`): 事件消息默认折叠
+// - 历史消息经 Sync (ViewMessage JSON) 重载时同样保留角色与来源
 void testTuiStreamEventSource(asio::io_context& ioCtx) {
     TestTUIClientIO client(ioCtx);
 
@@ -1405,7 +1406,9 @@ void testTuiStreamEventSource(asio::io_context& ioCtx) {
     auto snap = client.sharedState().snapshot();
     XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)1);
     if (snap->messages.size() == 1) {
-        XX_TEST_EXPECT_TRUE(snap->messages[0]->role == TUIMessage::Role::User);
+        XX_TEST_EXPECT_TRUE(snap->messages[0]->role == TUIMessage::Role::Event);
+        // 事件正文通常很长: 默认折叠 (只显示 `+ [事件] <名字>` 头部)
+        XX_TEST_EXPECT_TRUE(snap->messages[0]->collapsed);
         XX_TEST_EXPECT_EQ(
             snap->messages[0]->source,
             std::string{agentxx::agent::kInputSourceEventPrefix} + "chat.message"
@@ -1416,7 +1419,7 @@ void testTuiStreamEventSource(asio::io_context& ioCtx) {
         );
     }
 
-    // 用户自己输入的一轮: 来源为空 (不加样式)
+    // 用户自己输入的一轮: 来源为空 -> Role::User, 默认展开
     {
         WireDelta d;
         d.type        = WireDelta::Type::TurnStart;
@@ -1428,22 +1431,34 @@ void testTuiStreamEventSource(asio::io_context& ioCtx) {
     snap = client.sharedState().snapshot();
     XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)2);
     if (snap->messages.size() == 2) {
+        XX_TEST_EXPECT_TRUE(snap->messages[1]->role == TUIMessage::Role::User);
+        XX_TEST_EXPECT_FALSE(snap->messages[1]->collapsed);
         XX_TEST_EXPECT_TRUE(snap->messages[1]->source.empty());
         XX_TEST_EXPECT_TRUE(agentxx::agent::eventNameOfInputSource(snap->messages[1]->source).empty()
         );
     }
 
-    // ViewMessage JSON 往返也保留来源 (Sync 重载历史时靠它加样式)
+    // ViewMessage JSON 往返也保留角色与来源 (Sync 重载历史时靠它折叠展示)
     {
-        ViewMessage original = ViewMessage::makeText(ViewMessage::Role::User, "[Event] a.b", 1);
-        original.source      = std::string{agentxx::agent::kInputSourceEventPrefix} + "a.b";
-        const auto json      = original.toJson();
+        ViewMessage original
+            = ViewMessage::makeText(ViewMessage::Role::Event, "[Event] a.b", 1);
+        original.source = std::string{agentxx::agent::kInputSourceEventPrefix} + "a.b";
+        const auto json = original.toJson();
         XX_TEST_EXPECT_EQ(json.value("source", std::string{}), original.source);
+        XX_TEST_EXPECT_EQ(json.value("role", std::string{}), std::string{"event"});
         const auto restored = ViewMessage::fromJson(json);
+        XX_TEST_EXPECT_TRUE(restored.role == ViewMessage::Role::Event);
+        XX_TEST_EXPECT_TRUE(restored.collapsed);
         XX_TEST_EXPECT_EQ(restored.source, original.source);
         // 空来源不写进 JSON (老客户端/老库无字段, 兼容)
         ViewMessage plain = ViewMessage::makeText(ViewMessage::Role::User, "hi", 2);
         XX_TEST_EXPECT_FALSE(plain.toJson().contains("source"));
+        // 老数据兼容: 早期事件输入记成 user + source, 解析时归一化为 Event
+        auto legacy = plain.toJson();
+        legacy["source"] = std::string{agentxx::agent::kInputSourceEventPrefix} + "old.event";
+        const auto migrated = ViewMessage::fromJson(legacy);
+        XX_TEST_EXPECT_TRUE(migrated.role == ViewMessage::Role::Event);
+        XX_TEST_EXPECT_TRUE(migrated.collapsed);
     }
 }
 

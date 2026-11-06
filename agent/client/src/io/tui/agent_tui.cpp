@@ -2708,7 +2708,8 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
                     bool updatedExisting = false;
                     for (size_t i = st.messages.size(); i > 0; --i) {
                         const auto r = st.messages[i - 1]->role;
-                        if (r == TUIMessage::Role::User || r == TUIMessage::Role::Tool
+                        if (r == TUIMessage::Role::User || r == TUIMessage::Role::Event
+                            || r == TUIMessage::Role::Tool
                             || r == TUIMessage::Role::Assistant) {
                             break; // 遇到用户输入、工具执行或正文回答边界，不得跨越更新前序动作的
                                    // Think
@@ -2989,12 +2990,15 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
                 // 空文本+有附件的纯附件消息也需回显（此前 !text.empty() 会吞掉）;
                 // 正文为空/全空白且无附件的用户消息不入列表 (TUI 忽略空 content)
                 {
-                    auto msg = std::make_shared<TUIMessage>(
-                        TUIMessage::makeText(TUIMessage::Role::User, delta.text, delta.startTimeMs)
-                    );
+                    auto msg = std::make_shared<TUIMessage>(TUIMessage::makeText(
+                        TUIMessage::roleOfInputSource(delta.source),
+                        delta.text,
+                        delta.startTimeMs
+                    ));
                     msg->id          = delta.msgId;
                     msg->attachments = delta.attachments;
-                    // 来源标记 (事件中枢投递的输入): 消息头显示来源, 与用户自己输入区分
+                    // 来源标记 (事件中枢投递的输入): 角色为 Role::Event (折叠头显示事件名),
+                    // 与用户自己输入区分
                     msg->source = delta.source;
                     if (false == isBlankContentMessage(*msg)) {
                         // 用户自己的新消息: 先恢复吸附底部, 再追加 (追加触发的

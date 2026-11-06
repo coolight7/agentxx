@@ -1083,8 +1083,11 @@ void SessionStore::appendViewMessage(
                     meta.bindInt64(2, msg.startTimeMs);
                     meta.step();
                 }
-                // 会话名称: 首条用户消息的单行预览 (仅首次写入, 不覆盖)
-                if (msg.role == ViewMessage::Role::User && !msg.text.empty()) {
+                // 会话名称: 首条输入消息的单行预览 (仅首次写入, 不覆盖)
+                // - 事件投递的输入同样算 (否则事件开头的会话没有标题)
+                if ((msg.role == ViewMessage::Role::User
+                     || msg.role == ViewMessage::Role::Event)
+                    && !msg.text.empty()) {
                     auto title = previewOfTitle(msg.text, 60);
                     if (!title.empty()) {
                         auto titleStmt = db.prepare("INSERT INTO meta(key, value) VALUES (?, ?) "

@@ -181,19 +181,25 @@ value: [Async task] id=async-7 ... result: ...
 限制只落在“工具的成败”上。事件投递产生的输入是一条 `user` 消息 (`[Event] ...`), 不经过
 这套判定; 提示、日志、Wire 消息同样不涉及。
 
-### 5.2 来源标记（给界面看的，不参与判定）
+### 5.2 来源标记与展示角色（给界面看的，不参与判定）
 
-事件投递的输入在会话里就是一条 `user` 消息，角色与用户自己敲进去的一样。为了在界面上区分，
-服务端额外带上结构化来源：
+事件投递的输入进入 LLM 上下文时仍是 `user` 消息（模型只认 user/assistant/tool），但
+展示历史里有专属角色，界面因此能把它折叠起来，不占满屏幕：
 
+- `ViewMessage::Role::Event`：事件投递的输入的展示角色；普通用户输入仍为 `Role::User`。
+  角色由来源推导（`ViewMessage::roleOfInputSource`），服务端两处写入点
+  （`BaseAgent::runTurnAsync`、`nodes/session_context.cpp` 的 `appendUserViewMessage`）
+  与客户端 TurnStart 回显共用这一份判定；事件消息默认折叠（`makeText`）
 - `ViewMessage::source` 与 `WireDelta::source`（TurnStart 用）取值 `event:<事件名>`；
   用户自己输入时为空字符串
 - 写入口：`BaseAgent::runTurnAsync(..., inputSource)` → 展示消息 + TurnStart 增量；
   常量与前缀解析在 `conversation_types.h`（`kInputSourceEventPrefix` / `eventNameOfInputSource`），
   投递方与展示方共用一份，不各记一套字符串
-- 客户端只拿它做展示（用户消息头部加一行 `| [事件] <事件名>`，i18n 键 `msg.eventSource`），
+- 客户端只拿它做展示（折叠头 `+ [事件] <事件名>`，i18n 键 `msg.eventSource`），
   **不解析正文**；空值不写进 JSON，老客户端与老会话库照旧
-- 历史消息经 Sync（`ViewMessage` JSON）与会话库重载后仍带该字段
+  （老数据 `role=user` + `source=event:*` 在 `fromJson` 里归一化为 `Role::Event`）
+- 历史消息经 Sync（`ViewMessage` JSON）与会话库重载后角色与来源都保留；
+  界面细节见 [tui.md](tui.md) §2.17
 
 ## 6. 模型侧工具
 

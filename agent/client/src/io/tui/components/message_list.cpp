@@ -42,8 +42,8 @@ constexpr int kDecorItemIndent = 4;
 ///
 /// 判据 = "该消息渲染后有没有可见内容":
 /// - Assistant/User: 正文无可见字符且无附件 (纯附件消息的附件卡片本身可见) 时为空白
-/// - Think/System/Tip: 头部行 (折叠标记 + 角色标签 + 可能的耗时/预览) 始终渲染,
-///   所以恒为 false —— 否则头部行不跟随尾部空行, 会和下一条消息贴在一起
+/// - Think/System/Tip/Event: 头部行 (折叠标记 + 角色标签/事件名 + 可能的耗时/预览)
+///   始终渲染, 所以恒为 false —— 否则头部行不跟随尾部空行, 会和下一条消息贴在一起
 /// - Tool/Interrupt: 工具头部与交互控件始终可见
 bool isBlankMessage(const TUIMessage& msg) {
     switch (msg.role) {
@@ -54,6 +54,7 @@ bool isBlankMessage(const TUIMessage& msg) {
         case TUIMessage::Role::Think:
         case TUIMessage::Role::System:
         case TUIMessage::Role::Tip:
+        case TUIMessage::Role::Event:
             // 头部行始终存在 (见上), 不再按正文判空白
             return false;
         case TUIMessage::Role::Tool:
@@ -321,9 +322,11 @@ Element MessageListComponent::OnRender() {
         const auto& msgs   = ctx_.frameState->messages;
         for (size_t i = 0; i < vboxes.size() && i < msgs.size(); ++i) {
             const auto& msg = *msgs[i];
-            // 可折叠消息: Think / Tool / System (点击 header 折叠/展开)
+            // 可折叠消息: User / Event / Think / Tool / System / Tip
+            // (点击消息块任意位置折叠/展开)
             const bool collapsible
-                = (msg.role == TUIMessage::Role::Think || msg.role == TUIMessage::Role::Tool
+                = (msg.role == TUIMessage::Role::User || msg.role == TUIMessage::Role::Event
+                   || msg.role == TUIMessage::Role::Think || msg.role == TUIMessage::Role::Tool
                    || msg.role == TUIMessage::Role::System || msg.role == TUIMessage::Role::Tip);
             if (!collapsible || vboxes[i].IsEmpty()) {
                 continue;
@@ -1015,9 +1018,28 @@ size_t MessageListComponent::quickHeight(size_t index, int width) {
         // 但滚动条/总高度仍存在)。此偏差还使"估算==实测"恒不成立, 每帧触发
         // corrected 重算, 浪费且无法稳定到精确总高度。
         switch (msg.role) {
-            case TUIMessage::Role::User:
-                // 纯文本折行 (不解析 markdown): 按行计数即可 (段内换行就是硬换行)
-                return estimateLines(msg.text, width) + msg.attachments.size() + 1;
+            case TUIMessage::Role::User: {
+                // 展开: 正文按纯文本折行 (不解析 markdown), 按行计数即可
+                // (段内换行就是硬换行); 折叠: 只有一行 (标记 + 单行预览)
+                // 附件卡片无论折叠与否都展示在正文上方, 有附件时另占一行分隔符 "|";
+                // 正文视觉为空且带附件时不画标记行 (与 buildMessageBlock 一致)
+                const bool showTextRow
+                    = !agentxx::util::isVisuallyBlank(msg.text) || msg.attachments.empty();
+                const size_t textLines
+                    = !showTextRow ? size_t{0}
+                                   : (msg.collapsed ? size_t{1} : estimateLines(msg.text, width));
+                return textLines + msg.attachments.size()
+                       + (msg.attachments.empty() ? size_t{0} : size_t{1}) + 1;
+            }
+            case TUIMessage::Role::Event: {
+                // 折叠: 仅 header 行 + 空行; 展开: header + 正文 + 空行
+                // (事件正文是中枢渲染的纯文本, 与 User 同一套估算)
+                const bool hasBody = !agentxx::util::isVisuallyBlank(msg.text);
+                if (msg.collapsed || !hasBody) {
+                    return 2; // header + 尾部空行
+                }
+                return 1 + estimateLines(msg.text, width) + 1;
+            }
             case TUIMessage::Role::Assistant:
                 // Assistant 走 renderMarkdown (cmark-gfm + DomBuilder): 段内
                 // 单换行 (softbreak) 合并为空格, 按此语义估算 (estimateLines
@@ -1677,7 +1699,7 @@ Element MessageListComponent::buildMessageBlock(
     switch (msg.role) {
         case TUIMessage::Role::User: {
             // 内容超宽时 xflex_shrink 使段落吸收剩余宽度换行/裁剪,
-            // 避免 hbox 按比例压缩前缀 "> " (见 ftxui box_helper::ComputeShrinkHard)
+            // 避免 hbox 按比例压缩开头标记 (见 ftxui box_helper::ComputeShrinkHard)
             Elements userElements;
             // 多模态附件卡片 (仅展示元信息, 不展示 Base64 数据;
             // 点击在文件管理器中定位显示对应文件)
@@ -1712,8 +1734,8 @@ Element MessageListComponent::buildMessageBlock(
                 userElements.push_back(text("|") | color(theme.accentColor) | bold);
             }
 
-            // 事件中枢投递的输入: 正文前加一行来源标记 (事件名来自结构化来源字段,
-            // 不解析正文), 与用户自己输入的消息区分
+            // 事件来源标记 (兼容: 老数据/第三方构造的 Role::User 带事件来源时仍标出来;
+            // 新写入的事件输入走 Role::Event 自己的折叠头, 见下方分支)
             if (auto eventName = agentxx::agent::eventNameOfInputSource(msg.source);
                 !eventName.empty()) {
                 userElements.push_back(text(fmt::format(
@@ -1723,13 +1745,67 @@ Element MessageListComponent::buildMessageBlock(
                                        | theme.dim());
             }
 
-            userElements.push_back(hbox({
-                text("> ") | color(theme.userColor),
-                // 正文按纯文本折行渲染 (不解析 markdown): 单节点包含整段文本,
-                // 折行结果按宽度缓存 (见 markdown::FlowText)
-                renderPlainText(msg.text, theme.userColor),
-            }));
+            // 可折叠: 开头标记 `-` (展开) / `+` (折叠, 后接单行预览)
+            // 正文按纯文本折行渲染 (不解析 markdown): 单节点包含整段文本,
+            // 折行结果按宽度缓存 (见 markdown::FlowText)
+            const bool expanded  = !msg.collapsed;
+            const bool textBlank = agentxx::util::isVisuallyBlank(msg.text);
+            if (expanded) {
+                // 正文为空且带附件时不再画一个只有标记的空行 (附件卡片已单独占行)
+                if (!textBlank || msg.attachments.empty()) {
+                    userElements.push_back(hbox({
+                        text("- ") | color(theme.userColor),
+                        renderPlainText(msg.text, theme.userColor),
+                    }));
+                }
+            } else if (!textBlank) {
+                // 折叠态: 标记 + 单行预览 (弱化), 宽度按内容区剩余列数自适应
+                const int   prefixCols = 2; // "- " / "+ "
+                const int   budget     = collapsedPreviewBudget(maxWidth, prefixCols);
+                std::string preview = oneLinePreview(msg.text, static_cast<size_t>(budget));
+                if (!preview.empty()) {
+                    userElements.push_back(hbox({
+                        text("+ ") | color(theme.userColor),
+                        text(std::move(preview)) | color(theme.userColor) | theme.dim()
+                            | xflex_shrink,
+                    }));
+                }
+            }
             return vbox(std::move(userElements));
+        }
+        case TUIMessage::Role::Event: {
+            // 事件中枢投递的输入 (正文是中枢渲染好的 `[Event] ...` 文本, 通常很长):
+            // 头部与工具消息同一套折叠头 (标记 + 角色标签 + 事件名), 默认折叠;
+            // 折叠态其后接 "· " 与单行预览, 展开态下一行显示全文。
+            // 事件名取结构化来源字段, 不解析正文
+            const bool        expanded  = !msg.collapsed;
+            const auto        eventName = agentxx::agent::eventNameOfInputSource(msg.source);
+            const std::string label     = trf("msg.eventSource", std::string{eventName});
+            const bool        hasBody   = !agentxx::util::isVisuallyBlank(msg.text);
+            Elements          lines;
+            Elements          header;
+            header.push_back(text(expanded ? "-" : "+") | color(theme.toolColor));
+            header.push_back(text(label) | color(theme.toolColor));
+            if (!expanded) {
+                // 预览自适应内容区剩余列宽 (前缀 = 标记 1 列 + 标签 + 分隔符 "· ")
+                std::string_view sep = "· ";
+                const int        prefixCols
+                    = 1 + static_cast<int>(markdown::utf8_display_width(label))
+                      + static_cast<int>(markdown::utf8_display_width(sep));
+                const int   budget = collapsedPreviewBudget(maxWidth, prefixCols);
+                std::string preview = oneLinePreview(msg.text, static_cast<size_t>(budget));
+                if (!preview.empty()) {
+                    header.push_back(text(sep) | color(theme.toolColor) | theme.dim());
+                    header.push_back(text(std::move(preview)) | color(theme.toolColor)
+                                     | theme.dim() | xflex_shrink);
+                }
+            }
+            lines.push_back(hbox(std::move(header)));
+            if (expanded && hasBody) {
+                // 正文保留硬换行 (事件文本是逐行的键值对), 配色同工具消息
+                lines.push_back(renderPlainText(msg.text, theme.toolColor));
+            }
+            return vbox(std::move(lines));
         }
         case TUIMessage::Role::Assistant: {
             auto [el, builder]

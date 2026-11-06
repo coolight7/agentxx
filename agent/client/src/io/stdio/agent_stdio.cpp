@@ -167,7 +167,9 @@ void StdIOClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
 
 void StdIOClientAgentIO::onSync(const agentxx::agent::WireSyncPayload& payload) {
     for (const auto& vm : payload.messages) {
-        if (vm.role == agentxx::agent::ViewMessage::Role::User) {
+        // 事件投递的输入 (Role::Event) 在命令行下与用户输入同样回放
+        if (vm.role == agentxx::agent::ViewMessage::Role::User
+            || vm.role == agentxx::agent::ViewMessage::Role::Event) {
             std::cout << "> " << vm.text << std::endl;
         } else if (vm.role == agentxx::agent::ViewMessage::Role::Assistant) {
             std::cout << vm.text << std::endl;

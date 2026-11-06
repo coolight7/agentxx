@@ -211,9 +211,11 @@ neograph::ChatMessage makeInjectedUserMessage(
     return msg;
 }
 
-/// 追加一条展示消息 (user 输入) 并通知 UI
+/// 追加一条展示消息 (user 输入 / 事件投递的输入) 并通知 UI
 /// - EventBridge 只展开 assistant/tool 角色, user 消息需调用方自行落到展示历史,
 ///   否则 UI 看不到注入的输入 (只出现在 LLM 上下文里)
+/// - 展示角色按来源区分: 事件中枢投递的输入用 Role::Event (可折叠),
+///   其余用 Role::User (见 ViewMessage::roleOfInputSource)
 void appendUserViewMessage(
     const std::shared_ptr<agentxx::agent::Session>& session,
     const agentxx::agent::SessionPendingInput&      input
@@ -226,10 +228,12 @@ void appendUserViewMessage(
     )
                                                 .count());
     auto       vm    = agentxx::agent::ViewMessage::makeText(
-        agentxx::agent::ViewMessage::Role::User,
+        agentxx::agent::ViewMessage::roleOfInputSource(input.source),
         input.text,
         input.createdAtMs > 0 ? input.createdAtMs : nowMs
     );
+    // 来源标记: 事件投递的输入在界面上显示事件名 (不解析正文)
+    vm.source = input.source;
     vm.id = session->appendViewMessage(vm);
     if (!session->io) {
         return;

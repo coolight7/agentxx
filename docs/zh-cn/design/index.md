@@ -491,7 +491,10 @@ TUI [F3] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
   插件不进入 UI 线程; 结果经动作通道回传 (`__submit` + `{"values":{...}}` / `__cancel`),
   `commitOnPick` 的候选项点击即提交
 - **TUI 模式**: 基于 FTXUI 的终端 UI，支持：
-  - 消息列表 (User/Assistant/Thinking/Tool/System/Interrupt 角色)
+  - 消息列表 (User/Event/Assistant/Thinking/Tool/System/Tip/Interrupt 角色)
+  - 可折叠消息 (用户消息/事件输入/Thinking/Tool/System/Tip) 点击整块切换折叠:
+    用户消息开头是 `-` (展开) / `+` (折叠, 单行预览), 事件输入默认折叠并以
+    `+ [事件] <名字>` 折叠头展示 (仿工具配色), 详见 [tui.md](tui.md) §2.17 / §2.18
   - Thinking/Tool 消息自动折叠/展开 (执行中展开，完成后折叠; 用户在流式思考上
     手动点击展开的除外 —— 提交落盘时保持展开)
   - 消息与流式末尾 Thinking 支持点击折叠/展开: 已提交消息点击切换

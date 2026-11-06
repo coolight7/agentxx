@@ -306,6 +306,9 @@ inline std::string_view eventNameOfInputSource(std::string_view source) noexcept
 /// - Role::Interrupt: interrupt (中断 UI 描述 + 表单状态/结果)
 /// - Role::Tip:       tip (tipLevel/running)
 ///
+/// 角色只决定**展示**形态, 与 LLM 上下文里的角色无关: 事件中枢投递的输入在上下文里
+/// 仍是 user 消息, 展示历史里是 Role::Event (见 [roleOfInputSource])。
+///
 /// 注意: 纯 UI 交互状态 (输入框编辑文本/选中项/校验提示/结果回传通道等) 不属于
 /// 消息内容, 由渲染端 (如 TUI MessageListComponent) 独立维护, 不进入本结构。
 ///
@@ -321,7 +324,11 @@ struct ViewMessage {
         /// 中断表单消息 (内嵌交互控件, 直接渲染在消息列表中)
         Interrupt,
         /// 消息提示
-        Tip
+        Tip,
+        /// 事件中枢投递的输入 (展示专用; 上下文里仍是 user 消息)
+        /// - 正文是中枢渲染好的 `[Event] ...` 文本, 事件名取结构化来源字段 `source`
+        /// - 正文通常很长, 默认折叠展示 (见 [makeText])
+        Event
     };
     /// 提示消息级别 (System 提示消息使用, 与 agentxx::agent::WireDelta::TipType 对应)
     enum class TipLevel : uint8_t {
@@ -403,9 +410,10 @@ struct ViewMessage {
     std::string text;
 
     /// 来源标记 (空 = 用户自己输入的)
-    /// - `event:<事件名>`: 事件中枢投递的事件输入 (见 [events.md](/docs/zh-cn/design/events.md))
-    /// - 只用于展示样式与诊断: 角色仍是 User, 处理路径不变; 正文已经是
-    ///   渲染好的 `[Event] ...` 文本, 带结构化来源是为了让渲染端不必解析正文
+    /// - `event:<事件名>`: 事件中枢投递的事件输入 (见 [events.md](/docs/zh-cn/design/events.md)),
+    ///   此时角色为 Role::Event (见 [roleOfInputSource]); 处理路径与用户输入相同
+    /// - 正文已经是渲染好的 `[Event] ...` 文本, 带结构化来源是为了让渲染端
+    ///   不必解析正文
     std::string source;
 
     /// 多模态媒体附件列表
@@ -415,12 +423,13 @@ struct ViewMessage {
     std::optional<ThinkData>     think       = std::nullopt; ///< Role::Think 有效
     std::optional<TipData>       tip         = std::nullopt; ///< Role::Tip 有效
     Role                         role        = Role::User;
-    /// 折叠展示 (Think/Tool/System/Tip 消息; 点击可折叠/展开)
+    /// 折叠展示 (User/Think/Tool/System/Tip/Event 消息; 点击可折叠/展开)
     bool collapsed = false;
 
-    /// 便捷构造: 纯文本消息 (User/Assistant/Think/System/Tip)
+    /// 便捷构造: 纯文本消息 (User/Assistant/Think/System/Tip/Event)
     /// - Tip 消息自动创建 tip 子结构 (tipLevel 默认 Info), 且默认折叠展示
     ///   (提示类消息内容通常较长, 折叠避免占据消息列表空间, 点击可展开)
+    /// - Event 消息同样默认折叠: 事件正文是中枢渲染好的多行文本, 展开了一屏放不下
     static ViewMessage
         makeText(Role role, std::string text, int64_t startTimeMs = 0, int64_t durationMs = 0) {
         ViewMessage m;
@@ -429,10 +438,25 @@ struct ViewMessage {
         m.startTimeMs = startTimeMs;
         m.durationMs  = durationMs;
         if (role == Role::Tip) {
-            m.tip       = TipData{};
+            m.tip = TipData{};
+        }
+        if (role == Role::Tip || role == Role::Event) {
             m.collapsed = true;
         }
         return m;
+    }
+
+    /// 按输入来源得到展示角色
+    /// - 事件中枢投递的输入 (`event:<事件名>`) 用 Role::Event, 其余 (用户自己输入、
+    ///   内部注入) 用 Role::User
+    /// - 服务端写入展示历史与客户端 TurnStart 回显共用这一份判定
+    ///
+    /// - `args`:
+    ///     - [source] 来源标记 (空 = 用户自己输入)
+    ///
+    /// - `return` 展示角色 (Role::Event / Role::User)
+    static Role roleOfInputSource(std::string_view source) noexcept {
+        return eventNameOfInputSource(source).empty() ? Role::User : Role::Event;
     }
 
     /// 该消息是否有可展示的内容 (写入/加载/客户端插入时用它过滤"看不见"的消息)
@@ -443,6 +467,7 @@ struct ViewMessage {
     ///   **只有耗时的空思考不算** —— 它渲染出来只剩一个 `[思考]` 头部行,
     ///   看上去就是一条空消息
     /// - Tool / Interrupt: 恒为有内容 (工具头部名称/参数与中断控件始终可见)
+    /// - Event: 恒为有内容 (头部行始终显示事件名)
     /// - 其余角色 (User/Assistant/System/Tip): 正文可见即算有内容
     ///
     /// - `return` 该消息值得出现在展示历史里时为 true
@@ -453,6 +478,7 @@ struct ViewMessage {
         switch (role) {
             case Role::Tool:
             case Role::Interrupt:
+            case Role::Event:
                 return true;
             case Role::Think:
                 if (think && (think->isEncrypted || think->reasoningTokens > 0)) {
@@ -473,7 +499,8 @@ struct ViewMessage {
     /// 从 wire/哈希 JSON 解析; 非法 role 或缺省字段时按默认值解析。
     /// - 有专属子结构的 role (Tool/Tip/Interrupt/Think) 在该 role 下保证子结构非空
     ///   (JSON 里缺字段就按默认值构造)
-    /// - User/System/Assistant 没有专属子结构, 对应成员保持为空
+    /// - User/System/Assistant/Event 没有专属子结构, 对应成员保持为空
+    /// - 兼容: 早期展示消息把事件输入记成 User + source, 解析时归一化为 Event
     static ViewMessage fromJson(const utilxx_base::Json& j);
 };
 
@@ -755,6 +782,8 @@ inline std::string_view viewMessageRoleToString(ViewMessage::Role role) noexcept
             return "tool";
         case R::Interrupt:
             return "interrupt";
+        case R::Event:
+            return "event";
     }
     return "user";
 }
@@ -781,6 +810,9 @@ inline std::optional<ViewMessage::Role> viewMessageRoleFromString(std::string_vi
     }
     if (s == "interrupt") {
         return R::Interrupt;
+    }
+    if (s == "event") {
+        return R::Event;
     }
     return std::nullopt;
 }
@@ -935,8 +967,18 @@ inline ViewMessage ViewMessage::fromJson(const utilxx_base::Json& j) {
     } else {
         m.role = ViewMessage::Role::User;
     }
+    // 兼容老数据: 早期展示消息把事件中枢投递的输入记成 User + source,
+    // 按同一规则归一化为 Event (老会话库/老服务端 Sync 也能直接折叠展示)
+    if (m.role == ViewMessage::Role::User
+        && !agentxx::agent::eventNameOfInputSource(m.source).empty()) {
+        m.role = ViewMessage::Role::Event;
+        // 老数据没有折叠字段 (默认展开), 事件消息按默认折叠展示
+        if (!j.contains("collapsed")) {
+            m.collapsed = true;
+        }
+    }
     // 角色专属子结构: 有子结构的 role 在该 role 下保证非空 (渲染端可直接解引用),
-    // 缺字段按默认值构造; User/System/Assistant 没有子结构, 不构造
+    // 缺字段按默认值构造; User/System/Assistant/Event 没有子结构, 不构造
     switch (m.role) {
         case ViewMessage::Role::Tool: {
             ViewMessage::ToolData t;
@@ -997,6 +1039,7 @@ inline ViewMessage ViewMessage::fromJson(const utilxx_base::Json& j) {
         case ViewMessage::Role::User:
         case ViewMessage::Role::System:
         case ViewMessage::Role::Assistant:
+        case ViewMessage::Role::Event:
             break;
     }
     if (j.contains("attachments") && j["attachments"].is_array()) {
