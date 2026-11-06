@@ -444,7 +444,7 @@ public:
         return closed_;
     }
 
-    /// 阻塞等待一次 (供 `agentxx_event await`)
+    /// 阻塞等待一次 (供 `agentxx_async_await`)
     ///
     /// 内部登记一个 `delivery=none` 的临时等待, 结束后一定撤销: 值到达 / 超时 /
     /// 取消令牌被置位三条路径都覆盖; 取消时抛 `CanceledException`。

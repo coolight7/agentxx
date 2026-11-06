@@ -456,7 +456,7 @@ public:
     // 事件中枢 (`event.*`; 见 [hub.h](/agent/lib/include/agentxx/event/hub.h))
     // -------------------------------------------------------------------
 
-    /// 事件中枢是常驻设施 (没有开关): 每次 init 都会建 hub, `agentxx_event`
+    /// 事件中枢是常驻设施 (没有开关): 每次 init 都会建 hub, `agentxx_async_emit`
     /// 与后台任务查询/取消工具也随之常驻注册 (后者另需 `async_work.enable` 与容器)。
 
     /// 事件单值进入上下文前的阈值, 单位为**字节** (yaml `event.value_max_bytes`, 默认 32 KB)

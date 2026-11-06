@@ -47,7 +47,7 @@ hub 通过组合使用总线：它**只订阅 `plugin.` 前缀**，因此**插�
 ## 2. 三个对象
 
 ```text
-生产者：模型 agentxx_event emit/end │ 插件（总线 plugin.<插件名>.*）│ 轮次/工具生命周期
+生产者：模型 agentxx_async_emit │ 插件（总线 plugin.<插件名>.*）│ 轮次/工具生命周期
         │ 子代理完成 │ 定时器
         ▼
 EventHub（每个根一份，跑在该 agent 的 io 线程）

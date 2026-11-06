@@ -1432,7 +1432,7 @@ inline std::string listEventWaits(Ctx& ctx, const ScopeRef& agent, std::string_v
 /* ==================== 后台任务 (async work) ====================
  *
  * 提交即入队; 结果发到固定事件 `agentxx.agent.async.done` (值里用 `asyncId` 区分),
- * 想当场拿结果就让模型 `agentxx_event {opt:"await", id}`。
+ * 想当场拿结果就让模型 `agentxx_async_await {id}`。
  * 插件禁用/卸载时主程序按 `plugin:<实例名>` 把未完成的任务取消 (终态照常记录)。
  */
 
