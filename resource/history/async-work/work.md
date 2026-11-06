@@ -254,8 +254,6 @@
 ## 待完成
 - 可选后续 (chatbot 侧): 人设级 MCP/Skill/Memory 与后台任务的中断策略配置项;
   后台任务的会话落盘开关 (`asyncWork.sessionStore` 已支持, 插件目前传 `-1` 跟随配置)。
-- 可选后续 (后台任务): `execute_command` 的 `background:true` (现在可用 `agentxx_tool_async`
-  把那次命令调用丢到后台, 但不如命令层自己支持流式回显)。
 - `kind=tool` 的中断处理: 它没有自己的会话/agent, HIL 与权限只在**提交时**按目标工具
   判定一次; 后台执行期间不再问人 (有意为之, 避免无界面时挂死)。
 

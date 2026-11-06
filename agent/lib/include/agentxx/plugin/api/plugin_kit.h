@@ -1172,7 +1172,7 @@ inline int32_t removeRuntimeTimer(Ctx& ctx, int64_t timerId) {
  *
  * 什么时候用这张表 (选型与 `agentxx.agent.runtime` 的触发器/定时器的区别):
  * - 只需要"收到消息就把它当输入塞进会话": 用 `addTrigger` / `addRuntimeTimer`;
- * - 有一个**带值的事件**, 谁需要谁来等 (模型 `agentxx_event` 工具 / 插件
+ * - 有一个**带值的事件**, 谁需要谁来等 (模型 `agentxx_async_emit` 工具 / 插件
  *   `registerEventWait`), 并且要查状态、要回放、要结束流: 用本表。
  *
  * 事件与等待都记在本插件实例名下, 禁用/卸载时由主程序整批回收, `stop` 里不必手清。
@@ -1186,10 +1186,15 @@ struct EventDefineOptions {
     /// - 内置专用子段 (`agentxx.agent.event.turn.` / `.tool.` / `.subagent.` /
     ///   `.timer.` / `.host.`) 不可用
     std::string name;
-    /// 一行说明 (模型经 `agentxx_event opt=list` 看到的就是它)
+    /// 一行说明 (模型经事件列表看到的就是它)
     std::string description;
     /// 单值事件: 首个值到达后自动结束 (默认流式, 由 `endEvent` 结束)
     bool single = false;
+    /// 除本插件外还允许谁发布 (`AGENTXX_PLUGIN_EVENT_PUBLISH_*` 位掩码)
+    /// - 默认 `0` = 只有创建它的插件能发
+    /// - 比如填 `AGENTXX_PLUGIN_EVENT_PUBLISH_MODEL` 后, 模型可以用
+    ///   `agentxx_async_emit` 往这个事件发值
+    uint32_t allowPublish = 0;
     /// 保留多少个历史值供后注册的等待回放 (0 = 主程序默认)
     int32_t historyLimit = 0;
     /// 到期仍未结束 → 按过期回收 (0 = 不限)
@@ -1249,6 +1254,7 @@ inline int32_t defineEvent(Ctx& ctx, const ScopeRef& agent, const EventDefineOpt
     spec.linger_ms     = opt.linger.count();
     spec.name          = PluginStringView::from(opt.name);
     spec.description   = PluginStringView::from(opt.description);
+    spec.publish_mask  = opt.allowPublish;
     auto ref           = agent.raw();
     return ctx.iface.event->define_event(ctx.host, &ref, &spec);
 }

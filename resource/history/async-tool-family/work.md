@@ -11,7 +11,6 @@
 - [x] 文档
 - [x] 全量回归
 - [x] 提交 (`00846f3f`)
-- [x] 后续决定: 命令工具的 `background:true` 不做，只用文档说明
 
 ## 记录
 
@@ -92,15 +91,6 @@
 - `plugins.md`: §19.2 结果读取入口、§21 事件关系、§20.2 `define_event` 说明、`ERR_UNSUPPORTED`。
 - `AGENTS.md`: 事件中枢段与后台任务段（工具族、notify、取消/查询、子代理同步、`event.enable` 删除）。
 - `roadmap.md`: 2026-11-06 条目。
-
-### 8. 后续决定: `execute_command` 的 `background:true` 不做
-
-- 2026-11-06 定: 后台跑命令不需要命令工具自己实现, 用
-  `agentxx_async_start {tool:"agentxx_execute_bash_command", args:{command, timeout:0}}`
-  把那次命令调用放到后台就够了; 流式输出以后在 `agentxx_async_*` 上扩。
-- 文档同步: `events.md` §13 的「后台命令」条目、`AGENTS.md` 两处 (插件事件表的
-  "未做"清单、后台任务段的说明)、`roadmap.md` 的 2026-11-05 条目。
-- 代码无改动。
 
 ### 9. 后续清理: 删掉指向已删除 opt 的残留
 

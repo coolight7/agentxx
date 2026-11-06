@@ -276,40 +276,34 @@ Absent (default): the sub-agent's default full tool set.)"},
           },
       },
       {
-          "agentxx_event",
+          "agentxx_async_emit",
           ToolPrompt{
               .depict =
-                  R"(Publish a value to an event, or end one of your event streams.
+                  R"(Publish a value to an event, and/or close that event's stream.
 
 ## When to use
-- Hand a value to whatever is waiting for it (a plugin, a background task, the client): `opt=emit`.
-- A stream you own is finished: `opt=end`.
+- Hand a value to whoever waits for that event (a plugin, the client, a background task).
+- Close a stream you own when there is nothing more to report.
 
-## Event names
-- `opt=emit` / `opt=end` only accept `agentxx.agent.event.<your name>`; the `turn.` / `tool.` / `subagent.` / `timer.` / `host.` segments are reserved for built-in sources.
-- Names are never auto-completed: write the whole name. Letters, digits, `.`, `_`, `-`; max 128 chars.
-- `agentxx.agent.event.turn.start` / `.turn.end` / `.tool.end.<工具名>` are published by the framework when someone waits for them.
-
-## Notes
-- `emit` creates the event on demand (`create:true`, default) and returns how many values are published and how many waits are attached.
-- `end` closes the stream; `remove:true` also deletes the record.
-- Reading results is not done here: background task results arrive as inputs by themselves (see `agentxx_async_start`), and `agentxx_async_query` / `agentxx_async_await` cover tasks.)",
+## Who may publish
+- An event belongs to whoever created it; by default only that owner may publish to it.
+- The creator decides at creation time whether others may publish too (`allow_publish`).
+- You may target any valid event name: if the event exists and does not allow your kind of caller, the call fails and tells you why.
+- Creating an event is limited to `agentxx.agent.event.<name>` for you (the `turn.` / `tool.` / `subagent.` / `timer.` / `host.` segments belong to built-in sources and cannot be created).
+- Background task results do not need this tool: `agentxx_async_start` delivers them by itself; use `agentxx_async_query` / `agentxx_async_await` / `agentxx_async_cancel` for tasks.)",
               .args =
                   {
-                      {"opt", R"(Operation to perform:
-`emit`: publish a value to an event you own (created on demand).
-`end`: end one of your event streams, optionally removing the record.)"},
                       {"event",
-                       R"(Full event name. `emit`/`end`: `agentxx.agent.event.<your name>` only (the reserved segments above are rejected).)"},
+                       R"(Full event name: `agentxx.agent.event.<name>`, `agentxx.agent.async.<name>` or `plugin.<plugin name>.<name>`. Never auto-completed; letters, digits, `.`, `_`, `-`; max 128 chars.)"},
                       {"value",
-                       "Any JSON value to publish (`opt=emit`). A string is published as plain text."},
-                      {"summary", "Optional JSON summary attached to the end of a stream (`opt=end`)."},
-                      {"single",
-                       "`opt=emit`: create the event as single-value (the first value ends it automatically)."},
-                      {"create",
-                       "`opt=emit`: create the event if it does not exist yet (default `true`)."},
-                      {"label", "`opt=emit`: one-line description used when the event is created."},
-                      {"remove", "`opt=end`: remove the event record immediately instead of keeping it for a while."},
+                       "Any JSON value to publish; a string is published as plain text."},
+                      {"end",
+                       R"(`true` closes the stream. With `value` it publishes first and then closes; alone it only closes an existing event.)"},
+                      {"summary",
+                       "Optional JSON summary attached when closing (only with `end: true`)."},
+                      {"allow_publish",
+                       R"(Only used when this call creates the event: who else may publish to it — `model` (tool calls), `plugin` (plugins), `builtin` (round/tool/timer/background sources), `any`. Absent (default) = only the creator.)"},
+                      {"label", "Only used when this call creates the event: a one-line description."},
                   },
           },
       },

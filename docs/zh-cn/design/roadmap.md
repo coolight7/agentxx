@@ -192,7 +192,7 @@
 | LLM-9 | 轮次局部模型回退 | 先定触发条件、候选模型来源与能力兼容校验 |
 | LLM-12 | 结构化输出统一入口 | 出现第一个需要强制 JSON 输出的场景（标题生成 / 计划校验 / 抽取） |
 | TOOL-14 | 延迟工具暴露级别 | 延迟加载实现完善后 |
-| JOB-1 ~ JOB-12 | 作业表、进度、后台命令、子代理记录、配额车道、fork 上下文、可继续子代理、定时任务、跨会话观察者 | 子代理改造排期时整体设计 |
+| JOB-1 ~ JOB-12 | 作业表、进度、子代理记录、配额车道、fork 上下文、可继续子代理、定时任务、跨会话观察者 | 子代理改造排期时整体设计 |
 | OBS-2 | telemetry 内容边界（设计约束） | 出现 telemetry 出口时 |
 | PRO-13 | 重连重放缓冲的字节上限（现为只有条数上限 `deltaBufferCap`） | 单条增量载荷变大、或实测出现重放缓冲占用异常时；估算函数 `estimateWireDeltaBytes` / `estimateViewMessageBytes` 已删除，需要时按当时的数据结构重写 |
 | PRO-14 | MCP / A2A 运行入口与插件导出 | 把 cli 入口的能力同步一份到 `McpServer` / `A2aServer`（当前只有库调用面与测试），并提供插件的注册/导出功能 |
@@ -264,16 +264,21 @@
   `agentxx_subagent` 去掉 `async`/`event_name` 参数，改由 `async_work.enable` 控制；新增
   `agentxx::agent::AsyncWorkManager`（每队列 FIFO + 额度，不设全局/深度上限）、
   单一结果事件 `agentxx.agent.async.done` + `EventWaitSpec::match` 定向等待、
-  `agentxx_event` 新增 `works` 与 `id`；测试模块 `async_work`。剩下的作业表/进度/后台命令/
+  `agentxx_event` 新增 `works` 与 `id`；测试模块 `async_work`。剩下的作业表/进度/
   配额车道等仍按原计划单独立项（见 [events.md](events.md) 第 13 节“未做的事项”）。
 - 2026-11-06: 后台任务补齐 `kind=tool`（异步工具）: 模型侧新增 `agentxx_tool_async`
   （权限在提交时按目标工具问一次, 只跑工具注册表里的工具）、`AsyncWorkManager` 新增
   `runToolWork`（参数补 `sessionId`/`tool_call_id`, 50 ms 轮询取消）、插件
   `AgentxxPluginAsyncWorkSpec` 尾部追加 `tool_name`/`tool_args_json`（基线停在
-  `offsetof`, 旧插件按 `ERR_ARG` 降级）；`execute_command` 的 `background:true` **不做**
-  （2026-11-06 定：`agentxx_async_start` 已能代替，流式输出以后在 `agentxx_async_*` 上扩）。
+  `offsetof`, 旧插件按 `ERR_ARG` 降级）。
 - 2026-11-06 (工具族收敛): 模型侧后台任务收敛成 `agentxx_async_start` / `_query` / `_await` /
   `_cancel`，`agentxx_event` 只留 `emit`/`end`（`watch` 与定时器参数删除）；
   `agentxx_async_start` 的 `notify` 默认 `true`（结果经 `next-step` 主动插回会话）；
   `agentxx_subagent` 回到同步语义，后台跑走 `async_start {tool:"agentxx_subagent"}`；
   事件中枢常驻（删 `event.enable`）。详见 `resource/history/async-tool-family/`。
+- 2026-11-06 (事件发布工具与权限): `agentxx_event` 更名为 `agentxx_async_emit`，`opt` 换成
+  `end: bool`（`value` 发布值、`end` 收尾，可同时给）；事件名不再由工具做白名单，
+  能不能发由事件**创建时**声明的 `PublishMask` 决定（`owner`/`model`/`plugin`/`builtin`/`any`，
+  模型建事件用 `allow_publish` 声明），隐式创建仍限自建段；插件面 `AgentxxPluginEventSpec`
+  尾部加 `publish_mask` + `ERR_DENIED`；工具结果改为“投递给谁/累计多少/还剩几个等待”的短句。
+  详见 `resource/history/async-emit-tool/`。

@@ -50,6 +50,19 @@ enum class EventKind : uint8_t { Single, Stream };
 /// 事件记录状态
 enum class EventState : uint8_t { Open, Ended, Expired };
 
+/// 谁能往这个事件发布值 (创建时声明; 创建者自己不受限)
+/// - 位掩码, 可组合
+enum class PublishMask : uint32_t {
+    None    = 0,        ///< 只有创建者
+    Model   = 1u << 0,  ///< 模型侧工具调用 (`agentxx_async_emit`, 归属 `tool`)
+    Plugin  = 1u << 1,  ///< 插件 (归属 `plugin:<插件名>`)
+    Builtin = 1u << 2,  ///< 内置源 (轮次 / 工具结束 / 定时器 / 后台任务)
+    Any     = Model | Plugin | Builtin,
+};
+
+/// 发布者类别 (由归属名推断; 用来对照 [PublishMask])
+enum class PublishRole : uint8_t { Model, Plugin, Builtin };
+
 /// 等待句柄状态
 enum class WaitState : uint8_t { Armed, Satisfied, Canceled, TimedOut };
 
@@ -78,6 +91,8 @@ struct EventDefineSpec {
     std::chrono::milliseconds ttl{0};
     /// 结束后保留多久 (供查状态与回放); 0 = 立即回收
     std::chrono::milliseconds linger{60000};
+    /// 除创建者外, 还允许谁发布值 (默认 [PublishMask::None] = 只有创建者)
+    PublishMask publishMask = PublishMask::None;
 };
 
 /// 事件记录 (查询用快照)
@@ -100,6 +115,8 @@ struct EventRecord {
     int64_t          createdAtMs = 0, updatedAtMs = 0, endedAtMs = 0;
     /// `endEvent` 时附带的值 (可为空)
     Json summary = Json::object();
+    /// 除创建者外还允许谁发布 (创建时声明; 诊断与 `list_events` 用)
+    PublishMask publishMask = PublishMask::None;
 };
 
 /// 等待登记 (一次 `watch`)
@@ -163,6 +180,50 @@ struct EventDelivery {
     bool        unpausePaused = false;
     /// 会话在跑一轮时直接丢弃 (插件触发器的 DROP_IF_BUSY 语义)
     bool        dropIfBusy = false;
+};
+
+/// 发布者类别: `plugin:<名>` 开头的归属是插件, `tool` 是模型侧工具调用, 其余算内置源
+PublishRole publishRoleOf(std::string_view publisherOwner);
+
+/// 类别名 (`model` / `plugin` / `builtin`)
+std::string_view publishRoleName(PublishRole role);
+
+/// 发布权限展示 (`owner` / `owner+model` / `any`)
+std::string publishMaskText(PublishMask mask);
+
+/// 发布者能否往这条事件发布值 (创建者自己总能发, 其他人看 `publishMask`)
+bool mayPublish(const EventRecord& rec, std::string_view publisherOwner);
+
+/// 发布者能否通过"第一次发布"顺手把这条事件建出来
+/// - 模型: 只能 `agentxx.agent.event.*` 且不占内建保留子段
+/// - 插件: 只能 `plugin.*` (框架不补前缀)
+/// - 内置源: `agentxx.agent.event.*` 与 `agentxx.agent.async.*`
+bool mayCreateByPublish(std::string_view name, std::string_view publisherOwner);
+
+/// 一次发布的统计结果 (工具用它给出有意义的结果文本)
+struct PublishOutcome {
+    /// 本次发布顺手建了记录
+    bool created = false;
+    /// 单值事件在本次发布后自动结束
+    bool endedNow = false;
+    /// 该事件累计发布条数 (含本次)
+    uint64_t published = 0;
+    /// 本次值实际投递给了几个等待
+    size_t delivered = 0;
+    /// 发布后还挂着的等待数
+    size_t remainingWaits = 0;
+    /// 逐条投递 (`{"waitId":"w-3","delivery":"next-step"}`)
+    Json deliveries = Json::array();
+};
+
+/// 一次收尾的统计结果
+struct EndOutcome {
+    /// 事件早已结束 (重复收尾是空操作)
+    bool alreadyEnded = false;
+    /// 收尾前累计发布的条数
+    uint64_t published = 0;
+    /// 因这次收尾而结束的等待数 (它们没拿到值)
+    size_t closedWaits = 0;
 };
 
 /// 事件中枢的运行统计 (进诊断与加载快照)
@@ -258,8 +319,28 @@ public:
         std::string_view owner,
         std::string*     err
     );
+
+    /// 带发布者归属与统计结果的版本 (发布权限在这里判定)
+    /// - `owner` 为空时按事件名推断 (插件族 → `plugin:<名>`)
+    /// - 拒绝条件: 名字非法 / 值超硬上限 / 不是创建者且定义未放开对应发布者 /
+    ///   事件不存在且当前发布者不允许建它
+    std::expected<PublishOutcome, std::string>
+                 publishValueEx(std::string_view name, Json value, std::string_view owner);
+
     bool endEvent(std::string_view name, Json summary = Json::object(), std::string* err = nullptr);
+
+    /// 带发布者归属与统计的收尾 (收尾别人的流同样要权限)
+    std::expected<EndOutcome, std::string>
+         endEventEx(std::string_view name, Json summary, std::string_view owner);
+    bool endEvent(
+        std::string_view name,
+        Json             summary,
+        std::string_view owner,
+        std::string*     err
+    );
     bool removeEvent(std::string_view name);
+    /// 带发布者归属的移除
+    bool removeEvent(std::string_view name, std::string_view owner, std::string* err);
 
     // -------------------------------------------------------------------
     // 任意线程 (插件 / 外部)
@@ -269,6 +350,8 @@ public:
     /// 带归属的版本 (异步子代理等后台发布方用; 归属影响诊断与插件卸载回收)
     void postValue(std::string_view name, Json value, std::string_view owner);
     void postEnd(std::string_view name, Json summary = Json::object());
+    /// 带归属的收尾 (后台发布方用; 收尾别人的流会被权限拒绝)
+    void postEnd(std::string_view name, Json summary, std::string_view owner);
 
     // -------------------------------------------------------------------
     // 等待
@@ -462,7 +545,8 @@ private:
     RecordEntry* ensureRecord(std::string_view name, std::string_view owner, std::string_view sessionId);
 
     /// 值到达后匹配等待并投递
-    void dispatchValue(RecordEntry& rec, const Json& value);
+    /// `return` 本次值实际投递到的等待 (`[{"waitId":..,"delivery":..}]`)
+    Json dispatchValue(RecordEntry& rec, const Json& value);
     /// 事件结束 (含 single 自动结束) 后的等待处理
     void dispatchEnded(RecordEntry& rec);
 

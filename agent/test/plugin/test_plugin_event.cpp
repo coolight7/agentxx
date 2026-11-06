@@ -240,17 +240,19 @@ int32_t defineEventOf(
     const PluginxxScopeRef& ref,
     std::string_view        name,
     bool                    single,
-    std::string_view        description = {}
+    std::string_view        description = {},
+    uint32_t                publishMask = 0
 ) {
     auto* table = eventTableOf(inst);
     if (nullptr == table || table->define_event == nullptr) {
         return -1;
     }
     AgentxxPluginEventSpec spec{};
-    spec.struct_size = sizeof(AgentxxPluginEventSpec);
-    spec.kind        = single ? AGENTXX_PLUGIN_EVENT_KIND_SINGLE : AGENTXX_PLUGIN_EVENT_KIND_STREAM;
-    spec.name        = agentxx::plugin::PluginStringView::from(name.data(), name.size());
-    spec.description = agentxx::plugin::PluginStringView::from(
+    spec.struct_size  = sizeof(AgentxxPluginEventSpec);
+    spec.kind         = single ? AGENTXX_PLUGIN_EVENT_KIND_SINGLE : AGENTXX_PLUGIN_EVENT_KIND_STREAM;
+    spec.publish_mask = publishMask;
+    spec.name         = agentxx::plugin::PluginStringView::from(name.data(), name.size());
+    spec.description  = agentxx::plugin::PluginStringView::from(
         description.data(),
         description.size()
     );
@@ -761,6 +763,85 @@ asio::awaitable<void> test_failure_paths() {
 // ===========================================================================
 // 5. 生命周期: 禁用删记录并取消等待, 启用重新声明, 卸载回到基线
 // ===========================================================================
+// ===========================================================================
+// 5. 发布权限: 创建时没放开别人就只能自己发, 放开后模型/其它插件才能发
+// ===========================================================================
+asio::awaitable<void> test_publish_permission() {
+    auto       f    = co_await makeFixture();
+    auto       inst = co_await loadExampleEvent(f);
+    XX_TEST_EXPECT_TRUE(inst != nullptr);
+    if (!inst) {
+        co_return;
+    }
+    const auto ref = agentRefOf(f);
+
+    // 默认 (mask=0): 只有创建它的插件能发
+    XX_TEST_EXPECT_EQ(
+        defineEventOf(inst.get(), ref, "plugin.example_event.secured", false),
+        int32_t{AGENTXX_PLUGIN_EVENT_OK}
+    );
+    XX_TEST_EXPECT_EQ(
+        emitValue(inst.get(), ref, "plugin.example_event.secured", R"({"v":1})"),
+        int32_t{AGENTXX_PLUGIN_EVENT_OK}
+    );
+    std::string err;
+    XX_TEST_EXPECT_FALSE(
+        f.hub->publishValue("plugin.example_event.secured", Json{{"v", 2}}, "tool", &err)
+    );
+    XX_TEST_EXPECT_TRUE(err.find("only allows publishing by owner") != std::string::npos);
+    // 模型想收尾别人的流同样被拒
+    XX_TEST_EXPECT_FALSE(
+        f.hub->endEvent("plugin.example_event.secured", Json::object(), "tool", &err)
+    );
+
+    // 创建时放开 model: 模型侧工具可以发, 也可以收尾
+    XX_TEST_EXPECT_EQ(
+        defineEventOf(
+            inst.get(),
+            ref,
+            "plugin.example_event.secured",
+            false,
+            {},
+            AGENTXX_PLUGIN_EVENT_PUBLISH_MODEL
+        ),
+        int32_t{AGENTXX_PLUGIN_EVENT_OK}
+    );
+    const auto rec = f.hub->queryEvent("plugin.example_event.secured");
+    XX_TEST_EXPECT_TRUE(rec.has_value());
+    if (rec.has_value()) {
+        XX_TEST_EXPECT_TRUE(rec->publishMask == agentxx::events::PublishMask::Model);
+    }
+    XX_TEST_EXPECT_TRUE(
+        f.hub->publishValue("plugin.example_event.secured", Json{{"v", 3}}, "tool", &err)
+    );
+    XX_TEST_EXPECT_TRUE(
+        f.hub->endEvent("plugin.example_event.secured", Json::object(), "tool", &err)
+    );
+
+    // 别家的事件: 插件发布被拒 (DENIED), 放开 plugin 之后通过
+    {
+        agentxx::events::EventDefineSpec other;
+        other.name  = "plugin.other_owner.task";
+        other.owner = "plugin:other_owner";
+        XX_TEST_EXPECT_TRUE(f.hub->define(other, &err));
+    }
+    XX_TEST_EXPECT_EQ(
+        emitValue(inst.get(), ref, "plugin.other_owner.task", R"({"v":1})"),
+        int32_t{AGENTXX_PLUGIN_EVENT_ERR_DENIED}
+    );
+    {
+        agentxx::events::EventDefineSpec open;
+        open.name        = "plugin.other_owner.task";
+        open.owner       = "plugin:other_owner";
+        open.publishMask = agentxx::events::PublishMask::Plugin;
+        XX_TEST_EXPECT_TRUE(f.hub->define(open, &err));
+    }
+    XX_TEST_EXPECT_EQ(
+        emitValue(inst.get(), ref, "plugin.other_owner.task", R"({"v":2})"),
+        int32_t{AGENTXX_PLUGIN_EVENT_OK}
+    );
+}
+
 asio::awaitable<void> test_lifecycle_reversible() {
     auto       f    = co_await makeFixture();
     auto       inst = co_await loadExampleEvent(f);
@@ -813,6 +894,7 @@ asio::awaitable<TestResult> run_plugin_event_tests() {
         co_await test_emit_end_remove();
         co_await test_register_wait_delivery();
         co_await test_failure_paths();
+        co_await test_publish_permission();
         co_await test_lifecycle_reversible();
     } catch (const std::exception& e) {
         TEST_FAIL << "plugin_event suite exception: " << e.what() << std::endl;

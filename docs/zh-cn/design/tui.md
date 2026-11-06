@@ -423,7 +423,7 @@ Context
   `queued` / `running` / `done` / `failed` / `canceled`; 标记分别为 `.` / `>` /
   `ok` / `x` / `-` (ASCII, 侧边栏窄时不会被截成半个字符), 失败的条目用错误色;
 - 时长按 `mm:ss` (超过一小时 `h:mm:ss`) 显示, 排队中改为显示前面还有几个;
-- **只展示, 不提供取消入口**: 取消走模型工具 `agentxx_event {opt:"cancel", id}`
+- **只展示, 不提供取消入口**: 取消走模型工具 `agentxx_async_cancel {id}`
   (或 chatbot 自己的面板), 界面不做动作按钮, 避免两个入口两套状态;
 - 每次推送都是当前快照, 客户端**直接覆盖**本地列表; 任务结束后服务端按
   `async_work.linger_ms` (默认 5 分钟) 继续带出完成态, 到期后自动从列表消失;

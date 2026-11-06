@@ -786,7 +786,8 @@ asio::awaitable<void>
                 {"ok",       !hasError && !canceled},
                 {"hasError", hasError             },
                 {"canceled", canceled             },
-            }
+            },
+            kAsyncOwner
         );
         delivered = true;
     }

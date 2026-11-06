@@ -1913,11 +1913,18 @@ static int32_t PLUGINXX_CALL xx_event_define(
     const auto historyLimit = spec->history_limit;
     const auto ttlMs        = spec->ttl_ms;
     const auto lingerMs     = spec->linger_ms;
+    // 尾部追加字段: 老插件没填 (结构体不够长) 时按 0 = 只有创建者能发
+    const auto publishMask = agentxx::plugin::specHas(
+                                 &AgentxxPluginEventSpec::publish_mask,
+                                 spec->struct_size
+                             )
+                                 ? spec->publish_mask
+                                 : 0u;
 
     return onScopedInstanceIo(
         host,
         agent,
-        [agent, name, description, kind, historyLimit, ttlMs, lingerMs](
+        [agent, name, description, kind, historyLimit, ttlMs, lingerMs, publishMask](
             PluginInstance* inst,
             PluginManager*  mgr
         ) -> int32_t {
@@ -1957,6 +1964,7 @@ static int32_t PLUGINXX_CALL xx_event_define(
                 def.kind        = kind;
                 def.owner       = owner;
                 def.description = description;
+                def.publishMask = static_cast<agentxx::events::PublishMask>(publishMask);
                 if (historyLimit > 0) {
                     def.historyLimit = static_cast<size_t>(historyLimit);
                 }
@@ -2033,15 +2041,37 @@ static int32_t PLUGINXX_CALL xx_event_emit(
             }
             const auto owner = eventOwnerOf(inst);
             // 事件还没声明过就按流式事件补一条 (归属本插件, 便于禁用时整批回收);
-            // 声明走中枢线程同步完成, 值的写入随后排队 (不在调用线程等投递结果)
+            // 声明与权限检查走中枢线程同步完成, 值的写入随后排队 (不在调用线程等投递结果)
             const auto rc = hubCall(hub, [&](agentxx::events::EventHub& h) -> int32_t {
                 std::string nameErr;
-                if (!agentxx::events::naming::validatePluginWriteTopic(nameText, &nameErr)) {
+                if (!agentxx::events::naming::validateEventName(nameText, &nameErr)) {
                     XX_LOGW("[event] Plugin `{}` emit rejected: {}", inst->name, nameErr);
                     return AGENTXX_PLUGIN_EVENT_ERR_ARG;
                 }
-                if (h.queryEvent(nameText).has_value()) {
+                if (const auto existing = h.queryEvent(nameText); existing.has_value()) {
+                    // 别家的事件: 创建时没放开插件发布就拒绝
+                    if (!agentxx::events::mayPublish(*existing, owner)) {
+                        XX_LOGW(
+                            "[event] Plugin `{}` emit `{}` rejected: owned by `{}`, publishing "
+                            "allowed to {}",
+                            inst->name,
+                            nameText,
+                            existing->owner,
+                            agentxx::events::publishMaskText(existing->publishMask)
+                        );
+                        return AGENTXX_PLUGIN_EVENT_ERR_DENIED;
+                    }
                     return AGENTXX_PLUGIN_EVENT_OK;
+                }
+                // 不存在: 插件只能在自己的族里建事件
+                if (!agentxx::events::mayCreateByPublish(nameText, owner)) {
+                    XX_LOGW(
+                        "[event] Plugin `{}` may not create `{}`: plugins create only "
+                        "`plugin.<name>.<event>`",
+                        inst->name,
+                        nameText
+                    );
+                    return AGENTXX_PLUGIN_EVENT_ERR_DENIED;
                 }
                 agentxx::events::EventDefineSpec def;
                 def.name  = nameText;
@@ -2104,17 +2134,30 @@ static int32_t PLUGINXX_CALL xx_event_end(
             if (!hub) {
                 return eventCodeOfHubFailure(hub);
             }
+            const auto owner = eventOwnerOf(inst);
             return hubCall(hub, [&](agentxx::events::EventHub& h) -> int32_t {
                 std::string nameErr;
-                if (!agentxx::events::naming::validatePluginWriteTopic(nameText, &nameErr)) {
+                if (!agentxx::events::naming::validateEventName(nameText, &nameErr)) {
                     XX_LOGW("[event] Plugin `{}` end rejected: {}", inst->name, nameErr);
                     return AGENTXX_PLUGIN_EVENT_ERR_ARG;
                 }
-                if (!h.queryEvent(nameText).has_value()) {
+                const auto existing = h.queryEvent(nameText);
+                if (!existing.has_value()) {
                     return AGENTXX_PLUGIN_EVENT_ERR_NOT_FOUND;
                 }
+                if (!agentxx::events::mayPublish(*existing, owner)) {
+                    XX_LOGW(
+                        "[event] Plugin `{}` end `{}` rejected: owned by `{}`, publishing allowed "
+                        "to {}",
+                        inst->name,
+                        nameText,
+                        existing->owner,
+                        agentxx::events::publishMaskText(existing->publishMask)
+                    );
+                    return AGENTXX_PLUGIN_EVENT_ERR_DENIED;
+                }
                 std::string err;
-                if (!h.endEvent(nameText, summary, &err)) {
+                if (!h.endEvent(nameText, summary, owner, &err)) {
                     XX_LOGW("[event] Plugin `{}` end `{}` failed: {}", inst->name, nameText, err);
                     return AGENTXX_PLUGIN_EVENT_ERR_STATE;
                 }
@@ -2141,14 +2184,19 @@ static int32_t PLUGINXX_CALL xx_event_remove(
             if (!hub) {
                 return eventCodeOfHubFailure(hub);
             }
+            const auto owner = eventOwnerOf(inst);
             return hubCall(hub, [&](agentxx::events::EventHub& h) -> int32_t {
                 std::string nameErr;
-                if (!agentxx::events::naming::validatePluginWriteTopic(nameText, &nameErr)) {
+                if (!agentxx::events::naming::validateEventName(nameText, &nameErr)) {
                     XX_LOGW("[event] Plugin `{}` remove rejected: {}", inst->name, nameErr);
                     return AGENTXX_PLUGIN_EVENT_ERR_ARG;
                 }
-                if (!h.removeEvent(nameText)) {
-                    return AGENTXX_PLUGIN_EVENT_ERR_NOT_FOUND;
+                std::string err;
+                if (!h.removeEvent(nameText, owner, &err)) {
+                    // 记录不存在或是别家的事件且未放开插件发布: 两种都按拒绝回报
+                    XX_LOGW("[event] Plugin `{}` remove `{}` rejected: {}", inst->name, nameText, err);
+                    return h.queryEvent(nameText).has_value() ? AGENTXX_PLUGIN_EVENT_ERR_DENIED
+                                                              : AGENTXX_PLUGIN_EVENT_ERR_NOT_FOUND;
                 }
                 XX_LOGI("[event] Plugin `{}` removed event `{}`", inst->name, nameText);
                 return AGENTXX_PLUGIN_EVENT_OK;
@@ -2168,6 +2216,7 @@ static utilxx_base::Json eventRecordJson(const agentxx::events::EventRecord& rec
                          : rec.state == EventState::Ended   ? "ended"
                                                             : "expired";
     out["owner"]       = rec.owner;
+    out["publishTo"]   = agentxx::events::publishMaskText(rec.publishMask);
     out["description"] = rec.description;
     out["published"]   = rec.published;
     out["overwritten"] = rec.overwritten;

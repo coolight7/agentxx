@@ -1308,7 +1308,7 @@ typedef struct AgentxxPluginRuntimeIface {
 /// 与相邻两张表的分工 (选型见插件设计文档"插件事件源"一节):
 /// - `agentxx.agent.runtime` 的 `register_trigger` / `register_timer`: "收到消息就把它当输入
 ///   塞进会话", 没有值/状态/谁在等;
-/// - 本表: 有一个**带值的事件**, 谁需要谁来等 (模型经 `agentxx_event` 工具, 插件经
+/// - 本表: 有一个**带值的事件**, 谁需要谁来等 (模型经 `agentxx_async_emit` 工具, 插件经
 ///   `register_wait`), 并且能查状态、能回放、能结束流。
 ///
 /// 归属: 本表登记的事件与等待都记在调用它的插件实例名下, 插件禁用/卸载时由主程序整批回收
@@ -1330,6 +1330,13 @@ typedef struct AgentxxPluginRuntimeIface {
 #define AGENTXX_PLUGIN_EVENT_ERR_BUDGET       (-4) ///< 超预算 (事件数/等待数上限)
 #define AGENTXX_PLUGIN_EVENT_ERR_CONFLICT     (-5) ///< 同名事件已被定义成另一种种类
 #define AGENTXX_PLUGIN_EVENT_ERR_UNSUPPORTED  (-6) ///< 主程序未提供事件中枢 (只有老主程序会返回; 现主程序恒定常驻)
+#define AGENTXX_PLUGIN_EVENT_ERR_DENIED       (-7) ///< 发布权限不足 (事件由别人创建且没放开该发布者)
+
+/* ---- 除创建者外, 还允许谁发布 (`AgentxxPluginEventSpec.publish_mask`) ---- */
+#define AGENTXX_PLUGIN_EVENT_PUBLISH_MODEL   0x1u ///< 模型侧工具调用 (`agentxx_async_emit`)
+#define AGENTXX_PLUGIN_EVENT_PUBLISH_PLUGIN  0x2u ///< 其它插件
+#define AGENTXX_PLUGIN_EVENT_PUBLISH_BUILTIN 0x4u ///< 内置源 (轮次 / 工具结束 / 定时器 / 后台任务)
+#define AGENTXX_PLUGIN_EVENT_PUBLISH_ANY     (AGENTXX_PLUGIN_EVENT_PUBLISH_MODEL | AGENTXX_PLUGIN_EVENT_PUBLISH_PLUGIN | AGENTXX_PLUGIN_EVENT_PUBLISH_BUILTIN)
 
 /* ---- 事件种类 ---- */
 #define AGENTXX_PLUGIN_EVENT_KIND_STREAM 0 ///< 流式: 多次发布, 由 `end_event` 结束
@@ -1359,12 +1366,15 @@ typedef struct AgentxxPluginEventSpec {
     int64_t linger_ms;
     /// 事件名 (hub 内唯一; 建议 `域.用途`, 如 `chat.group42`; 保留前缀不可用)
     PluginxxStringView name;
-    /// 一行说明 (模型经 `agentxx_event opt=list` 看到的就是它)
+    /// 一行说明 (模型经事件列表看到的就是它)
     PluginxxStringView description;
+    /// 除创建者外还允许谁发布 (`AGENTXX_PLUGIN_EVENT_PUBLISH_*` 位掩码; `0` = 只有创建者)
+    /// - 0 字节处以前的结构体没有这个字段, 主程序按 `struct_size` 判定
+    uint32_t publish_mask;
 } AgentxxPluginEventSpec;
 
 /* 基线: 重置时 = 完整布局; 以后追加字段保持不变 (改为 offsetof(第一个追加字段)) */
-#define AGENTXX_PLUGIN_EVENT_SPEC_BASELINE_SIZE sizeof(AgentxxPluginEventSpec)
+#define AGENTXX_PLUGIN_EVENT_SPEC_BASELINE_SIZE offsetof(AgentxxPluginEventSpec, publish_mask)
 
 /// 登记一个等待 (插件替某个会话等一个值)
 typedef struct AgentxxPluginEventWaitSpec {

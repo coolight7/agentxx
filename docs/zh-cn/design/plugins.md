@@ -440,7 +440,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 | `agentxx.agent.feature` | 2 | 功能点 (扩展点) 体系: `list_points/define_point/undefine_point` (插件声明自己的点, id 须落在 `plugin.<插件名>.*`) + `register_impl/unregister_impl` (为任意已声明的点登记实现, 按层/优先级排序) + `call_point_async` (按名调用一个**通用 JSON 点**, 只拿数据: 不写值缓存/不记置空/不改调用方会话; 强类型核心点返回受理错误; 取消用 `pluginxx.cancel.op_cancel`) |
 | `agentxx.agent.mount` | 1 | 挂载查询 (诊断用): `list` (全部挂载摘要 JSON 数组, 每项含 agentId/agentName/workDir/language/mountSeq/plugins) + `get` (按 agentId 查单个挂载摘要, 没有该挂载返回 -1) |
 | `agentxx.agent.runtime` | 2 | 会话运行时 (插件挂自己的根并驱动会话): `mount_root/unmount_root` (带自己的 `AgentConfig` 覆盖与插件挂载策略) + `open_channel/close_channel` (一个 sessionId 一条通道, 事件经回调交付) + `send_input/cancel/select_model/respond_interrupt` + `get_channel_state/get_context_messages/list_runtime` (只读查询) + `register_trigger/unregister_trigger/emit_event/register_timer/unregister_timer` (事件驱动)。入口用 `root_id` / `channel_id` 句柄寻址, 不带 agent 引用 —— 它看的是整个容器。v2 表尾追加后台任务四成员 (`submit/cancel/get/list_async_work`, 基线不变, `ifaceHas` 判定)。详见 §19 |
-| `agentxx.agent.event` | 1 | 事件中枢: `define_event` (声明事件源: 名字/种类/说明/历史条数/ttl/保留期) + `emit_value` (发布一个 JSON 值, 任意线程) + `end_event` / `remove_event` + `query_event` / `list_events` (查状态与清单) + `register_wait` / `cancel_wait` / `list_waits` (替某个会话登记等待, 值到达后按投递模式变成该会话的输入)。事件与等待按 `plugin:<实例名>` 记账, 禁用/卸载时整批回收; 与触发器/定时器的选型见 §20 |
+| `agentxx.agent.event` | 1 | 事件中枢: `define_event` (声明事件源: 名字/种类/说明/历史条数/ttl/保留期/**还有谁可以发布**) + `emit_value` (发布一个 JSON 值, 任意线程) + `end_event` / `remove_event` + `query_event` / `list_events` (查状态与清单) + `register_wait` / `cancel_wait` / `list_waits` (替某个会话登记等待, 值到达后按投递模式变成该会话的输入)。事件与等待按 `plugin:<实例名>` 记账, 禁用/卸载时整批回收; 与触发器/定时器的选型见 §20 |
 
 > 表中"版本"列 = 表声明的 `X_VERSION`, 与 `X_MIN_VERSION` 一起构成版本对, 另有
 > `X_BASELINE_SIZE` (基线字节数); 需要按 agent 区分的业务表为 v2 起 (v1 只在本进程单 agent
@@ -1961,7 +1961,7 @@ plugin:
 - 提交**只校验参数**, 不因额度或排队条数被拒 (额度只决定何时起跑); 返回的 `asyncId`
   同时是该任务 agent 的 `sessionId`;
 - 结果统一发 `agentxx.agent.async.done` (值里用 `asyncId` 区分); 模型侧的读取入口是
-  `agentxx_async_query` / `agentxx_async_await` (不再经 `agentxx_event`);
+  `agentxx_async_query` / `agentxx_async_await` (不再经事件发布工具);
 - `cancel/get/list` 都**只能碰本实例提交的** (`owner = plugin:<实例名>`): 取消别人的返回
   `ERR_ARG`, 查别人的返回空; 插件禁用/卸载时主程序按 owner 把这批未完成任务取消
   (只置取消令牌, 终态照常记录);
@@ -1992,7 +1992,7 @@ plugin:
 **只订阅 `plugin.` 前缀**，所以插件用
 `emit_event("plugin.chat.group42.progress", payload)` 发一条自己那一族的事件，就等于
 往中枢发了一个同名的值：会话侧由插件用 `register_wait` 替它登记等待（值到达直接变成
-那个会话的输入）；模型侧不再自己挂等待（早期 `agentxx_event opt=watch` 已删除），
+那个会话的输入）；模型侧不再自己挂等待（早期版本的 `watch` 已删除），
 后台任务的结果则由 `agentxx_async_start` 的 `notify` 自动送回。
 名字规则（三族命名空间 / 写侧只能落在自己那一族的根下 / 读侧必须全名）见
 `agentxx/event/naming.h`，插件面“定义事件/登记等待”的正规入口是 `agentxx.agent.event` 表
@@ -2138,10 +2138,10 @@ plugin:
 
 | 成员 | 语义 |
 |---|---|
-| `define_event(agent, spec)` | 声明事件源: 名字 (**必须是全名** `plugin.<名字>.<自由部分>`, hub 内唯一; 不限定插件名, 建议用自己的)、种类 (`stream` 流式 / `single` 单值, 后者首个值到达即结束)、说明文字 (中枢记录表与诊断看得到)、历史条数 (回放用)、`ttl_ms` (到期未结束按过期回收)、`linger_ms` (结束后保留多久, `< 0` = 主程序默认, `0` = 立刻回收) |
-| `emit_value(agent, name, value_json)` | 发布一个 JSON 值 (**任意线程**; 值经主程序排队写入中枢, 调用方不等投递结果)。事件没声明过时按流式事件自动建立, 归属本实例 |
-| `end_event(agent, name, summary_json)` | 结束一条流 (幂等)。`summary_json` 是查询时一并返回的收尾信息; 结束后再发值会重新打开这条流 |
-| `remove_event(agent, name)` | 立刻移除记录 (不等保留期)。还挂在它上面的等待按"已结束且没有值"收尾, 不会永远等下去 |
+| `define_event(agent, spec)` | 声明事件源: 名字 (**必须是全名** `plugin.<名字>.<自由部分>`, hub 内唯一; 不限定插件名, 建议用自己的)、种类 (`stream` 流式 / `single` 单值, 后者首个值到达即结束)、说明文字 (中枢记录表与诊断看得到)、历史条数 (回放用)、`ttl_ms` (到期未结束按过期回收)、`linger_ms` (结束后保留多久, `< 0` = 主程序默认, `0` = 立刻回收)、`publish_mask` (除自己外还允许谁发: `AGENTXX_PLUGIN_EVENT_PUBLISH_MODEL` / `_PLUGIN` / `_BUILTIN` / `_ANY`; 省略或 `0` = 只有自己) |
+| `emit_value(agent, name, value_json)` | 发布一个 JSON 值 (**任意线程**; 值经主程序排队写入中枢, 调用方不等投递结果)。事件没声明过时按流式事件自动建立, 归属本实例; 别家的事件在创建时没放开 `plugin` 则返回 `ERR_DENIED` |
+| `end_event(agent, name, summary_json)` | 结束一条流 (幂等)。`summary_json` 是查询时一并返回的收尾信息; 结束后再发值会重新打开这条流。收尾别人的流同样看发布权限 |
+| `remove_event(agent, name)` | 立刻移除记录 (不等保留期)。还挂在它上面的等待按"已结束且没有值"收尾, 不会永远等下去; 别家的记录要权限 |
 | `query_event(agent, name, out_json)` | 一条事件的状态与最近值 (`{name,kind,state,owner,description,published,overwritten,history,historyLimit,waits,createdAtMs,updatedAtMs,endedAtMs,last,summary}`) |
 | `list_events(agent, prefix, out_json)` | 本 agent 的事件清单 (`{count,events:[...]}`; `prefix` 可空) |
 | `register_wait(agent, spec, out_wait_id, out_state)` | 替某个会话登记等待: `mode` (`first` 一个值 / `each` 每条 / `all` 攒到流结束)、`delivery` (`next-step` / `inject` / `next-turn` / `none`)、`session_id`、`replay` (是否消费注册前已有的值)、`timeout_ms`、`max_items`、`coalesce_ms` (仅 `each`)、`unpause`、`drop_if_busy`; 出参 `out_state` 给出注册那一刻是否已经满足 |
@@ -2150,14 +2150,18 @@ plugin:
 
 返回码: `AGENTXX_PLUGIN_EVENT_OK` 与 `ERR_ARG` (参数/名称非法)、`ERR_STATE` (中枢已关闭)、
 `ERR_NOT_FOUND`、`ERR_BUDGET` (事件数/等待数超上限)、`ERR_CONFLICT` (同名事件已被定义成
-另一种种类)、`ERR_UNSUPPORTED` (嵌入方没建中枢或版本更早; 现主程序恒常驻)。
+另一种种类)、`ERR_DENIED` (发布权限不足: 别家的事件没在创建时放开本类发布者)、
+`ERR_UNSUPPORTED` (嵌入方没建中枢或版本更早; 现主程序恒常驻)。
 引用无效时注册类返回 `AGENTXX_PLUGIN_ERR_NO_AGENT` 且无副作用。
 
 事件名与模型侧的规则是同一份 (`agentxx/event/naming.h`): 字母/数字/`.`/`_`/`-`,
 最长 128, 名字必须写全三族之一: 内置 agent 端 `agentxx.agent.*`、内置 client 端
-`agentxx.client.*`、插件族 `plugin.<插件名>.*`。本表写侧（`define_event` / `emit_value` /
-`end_event` / `remove_event`）只接受 `plugin.*`（不限定插件名），**框架不补前缀**；
-`query_event` / `list_events` / `register_wait` 是读侧，可跨族但必须全名。
+`agentxx.client.*`、插件族 `plugin.<插件名>.*`。本表**创建**事件（`define_event`，以及
+`emit_value` 顺手补建）只接受 `plugin.*`（不限定插件名），**框架不补前缀**；
+`emit_value` / `end_event` / `remove_event` 可以指向任意合法事件名 —— 能不能动由该事件
+创建时声明的 `publish_mask` 决定（创建者自己总能发；框架事件段 `agentxx.agent.event.*` /
+`agentxx.agent.async.*` 内置源总能发）；`query_event` / `list_events` / `register_wait`
+是读侧，可跨族但必须全名。
 
 ### 20.3 归属与回收
 
@@ -2175,7 +2179,7 @@ plugin:
 | 分组 | 函数 |
 |---|---|
 | 能力判断 | `hasEventHub(ctx)` |
-| 声明与发布 | `defineEvent(ctx, ref, EventDefineOptions)`; `emitEventValue(ctx, ref, name, value)`; `endEvent(ctx, ref, name, summary)`; `removeEvent(ctx, ref, name)` |
+| 声明与发布 | `defineEvent(ctx, ref, EventDefineOptions)`（`EventDefineOptions.allowPublish` 声明还允许谁发布）; `emitEventValue(ctx, ref, name, value)`; `endEvent(ctx, ref, name, summary)`; `removeEvent(ctx, ref, name)` |
 | 查询 | `queryEvent(ctx, ref, name)` → JSON 文本; `listEvents(ctx, ref, prefix)` → JSON 文本 |
 | 等待 | `registerEventWait(ctx, ref, EventWaitOptions, outState, outCode)` → 等待 id; `cancelWait(ctx, ref, waitId)`; `listEventWaits(ctx, ref, sessionId)` |
 

@@ -22,7 +22,7 @@
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/protocol/provider_common.h"
 #include "agentxx/tools/async_tools.h"
-#include "agentxx/tools/event.h"
+#include "agentxx/tools/async_emit.h"
 #include "agentxx/util/exception.h"
 #include "agentxx/util/observability.h"
 #include "agentxx/util/share_store_offload.h"
@@ -457,7 +457,7 @@ asio::awaitable<void> BaseAgent::init() {
         .run   = [&]() -> asio::awaitable<void> {
             // 事件中枢: 建在事件总线之上 (值从 `plugin.` 前缀订阅进来), 晚于
             // middleware_context 创建 —— 投递超长值时要经中间件上下文取会话 share store
-            // - 常驻: 没有开关, `agentxx_event` / 后台任务查询依赖它
+            // - 常驻: 没有开关, `agentxx_async_emit` / 后台任务查询依赖它
             initEventHub(co_await asio::this_coro::executor);
             co_return;
         },
@@ -1319,8 +1319,8 @@ asio::awaitable<void> BaseAgent::initMiddleware() {
 asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> BaseAgent::initTools() {
     std::vector<std::unique_ptr<agentxx::tools::XXToolBase>> tools{};
     tools.push_back(std::make_unique<agentxx::tools::SessionShareStoreTool>(agentContext));
-    // 事件中枢工具: 发布值 / 结束事件流 (中枢常驻, 工具也常驻注册)
-    tools.push_back(std::make_unique<agentxx::tools::EventTool>(agentContext));
+    // 事件发布工具: 发布值 / 结束事件流 (中枢常驻, 工具也常驻注册)
+    tools.push_back(std::make_unique<agentxx::tools::AsyncEmitTool>(agentContext));
     // 后台任务工具族: 开始 / 查询 / 阻塞等待 / 取消
     // - 只看 `async_work.enable`: 容器 (AgentHost) 可能是 init 之后才挂上来的
     //   (嵌入式用法), 所以不在这里判容器; 工具内部取不到容器时给明确错误

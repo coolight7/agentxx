@@ -104,7 +104,7 @@ event / async_* 及延迟加载加载 (`ToolSkillSearchSubAgentTask` 模板类, 
 | **子代理** | `agentxx_subagent` | 创建和管理子代理执行委派任务 (单任务字段 subagent/message, 或批量 tasks 数组并行; 由 SubagentManager 中间件持有单实例注入, 默认注册 `subagent_task`) |
 | | `tool_skill_search` 逻辑 | 延迟加载工具/技能的搜索: `ToolSkillSearchSubAgentTask` 仅为 system prompt 模板 (当前未独立注册为 tool, 由 subagent 按需内联检索逻辑) |
 | **数据** | `agentxx_share_store` | 会话级文本寄存，节省上下文 |
-| **事件/后台** | `agentxx_event` | 发布值 / 结束事件流 (`opt` = `emit` / `end`) |
+| **事件/后台** | `agentxx_async_emit` | 发布值 / 结束事件流 (`value` + `end`)；能不能发由事件创建时声明的发布者决定 |
 | | `agentxx_async_start` | 把**一次工具调用或子代理任务**放后台跑, `notify`（默认 true）开启时结果自动插回上下文; 只在 `async_work.enable` 时注册 |
 | | `agentxx_async_query` | 查本会话的后台任务 (`group` 六档 / `id` 单条, 含结果正文) |
 | | `agentxx_async_await` | 阻塞本轮等某条任务 (`timeout_ms` 默认 30s, 上限 5min) |
@@ -204,7 +204,7 @@ event / async_* 及延迟加载加载 (`ToolSkillSearchSubAgentTask` 模板类, 
   [events.md](events.md) 第 1 节与 [plugins.md](plugins.md) §21；
 - 模型侧的工具族：`agentxx_async_start`（开始一条后台任务，`tool` + `args` + `notify`）、
   `agentxx_async_query` / `_await` / `_cancel`（查 / 阻塞等 / 取消），以及只管发布侧的
-  `agentxx_event`（`emit` / `end`）；`notify` 默认 `true` —— 提交时就替会话登记一条
+  `agentxx_async_emit`（`value` / `end`）；`notify` 默认 `true` —— 提交时就替会话登记一条
   `next-step` 等待，值到达时空闲开新一轮、在跑则插到下一次模型调用前；
 - “往会话塞一轮输入”统一经 `SessionInputSink`（由 `SessionServerAgentIO` 实现，
   弱引用登记在 `Session::inputSink`），保证一个会话同一时刻只有一个驱动者；

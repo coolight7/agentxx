@@ -103,27 +103,19 @@ inline std::string
 
 /// 后台任务的受理提示 (工具结果文本)
 /// - 以 `[Async work started]` 开头 (不命中工具失败前缀)
-/// - 说清“结果落成事件值，不会自动插进会话”，并把 await/watch/status/cancel 的写法给出
+/// - 说清"结果落成事件值，并以事件投递回会话"，以及查询/等待/取消各自用哪个工具
 inline std::string renderSubagentStartedText(const events::RespSubagentBatchItem& item) {
     const auto name = item.subagent.empty() ? std::string{"-"} : item.subagent;
     const auto id   = item.asyncId.empty() ? item.resultId : item.asyncId;
     return fmt::format(
         "[Async work started] id={} subagent={} event={}\n"
-        "The result is published as the value of event `{}` (field `asyncId` = {}); it is NOT "
-        "inserted into this conversation by itself.\n"
-        "Keep working (or finish the turn), then use agentxx_event "
-        "{{\"opt\":\"watch\",\"id\":\"{}\"}} to be woken by it, "
-        "{{\"opt\":\"await\",\"id\":\"{}\"}} to block for it now, "
-        "{{\"opt\":\"status\",\"id\":\"{}\"}} to check later, "
-        "{{\"opt\":\"cancel\",\"id\":\"{}\"}} to drop it, "
-        "{{\"opt\":\"works\"}} to list them.",
+        "The result is published as the value of event `{}` (field `asyncId` = {}) and is "
+        "delivered to this conversation when it finishes; `agentxx_async_query` reads the "
+        "ledger, `agentxx_async_await` ``{}`` blocks for it now, `agentxx_async_cancel` drops it.",
         id,
         name,
         item.eventName,
         item.eventName,
-        id,
-        id,
-        id,
         id,
         id
     );

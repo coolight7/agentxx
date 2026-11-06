@@ -562,8 +562,10 @@ path/to/agentxx_test --log-level warn string_util regex
   落在 `agentxx.agent.event.` 段外的内置值事件, 见下面的后台任务段)。
   **模型侧工具族** (2026-11): `agentxx_async_start` (`tool` + `args` + `notify`, 默认 `true` =
   结果自动插回上下文) / `agentxx_async_query` (`group` 六档或 `id`) / `agentxx_async_await`
-  (`id` + `timeout_ms`) / `agentxx_async_cancel` (`id` 或 `group`), 以及只管发布侧
-  `agentxx_event` (`opt` = `emit`/`end`)。早期的 `agentxx_event watch/await/status/list/
+  (`id` + `timeout_ms`) / `agentxx_async_cancel` (`id` 或 `group`), 以及只管发布侧的
+  `agentxx_async_emit` (`event` + `value` / `end:true` (+ `summary`), 建事件时可选
+  `allow_publish` / `label`; 可以指向任意合法事件名, 能不能发看该事件创建时声明的
+  `PublishMask`, 创建者自己与框架段内的内置源不受限)。早期的 `agentxx_event watch/await/status/list/
   works/cancel` 与 `after_ms`/`every_ms` 已删除 (模型不再等任意事件、不再自建定时器),
   `agentxx_tool_async` 已改名为 `agentxx_async_start`。**事件中枢恒常驻**:
   `event.enable` 配置键已删除 (插件面 `AGENTXX_PLUGIN_EVENT_ERR_UNSUPPORTED` 只给没有中枢的
@@ -575,6 +577,9 @@ path/to/agentxx_test --log-level warn string_util regex
   `agentxx.agent.event` 已实现 (2026-11-03): `define_event`/`emit_value`/`end_event`/
   `remove_event`/`query_event`/`list_events`/`register_wait`/`cancel_wait`/`list_waits`,
   事件与等待按 `plugin:<实例名>` 记账 (禁用/卸载整批回收, 注册清单 `eventRecords`/`eventWaits`),
+  **发布权限** (2026-11-06): `AgentxxPluginEventSpec` 尾部 `publish_mask`
+  (`AGENTXX_PLUGIN_EVENT_PUBLISH_MODEL/PLUGIN/BUILTIN`, 基线 `offsetof`), 默认 0 = 只有本插件;
+  越权返回 `AGENTXX_PLUGIN_EVENT_ERR_DENIED`; kit 侧 `EventDefineOptions.allowPublish`。
   示例插件 `example_event`; **未做**: 触发器/定时器收敛到中枢。
 - 后台任务 (async work, 2026-11, 详见 [events.md](docs/zh-cn/design/events.md) 第 8 节):
   `agentxx::agent::AsyncWorkManager` (`agent/lib/{include/agentxx/agent/async_work.h,src/agent/async_work.cpp}`,
@@ -623,9 +628,7 @@ path/to/agentxx_test --log-level warn string_util regex
   中枢投递会因 "session not found" 丢掉。**模型注册表已下沉到 `AgentHost`** (2026-11-05):
   所有根/子代理/后台任务共用一份 `ModelProviderRegistry` (同名模型 `getProvider` 返回
   同一个实例, 运行时 `AddModel`/`RemoveModel` 对所有人立即生效); HTTP keep-alive 连接池
-  本来就是 `utilxx::HttpClient` 的进程级单例。**不做**: `execute_command` 的
-  `background:true` (2026-11-06 定：`agentxx_async_start` 已能代替，流式输出以后在
-  `agentxx_async_*` 上扩)。- 会话运行时 (2026-10): `agentxx.agent.runtime` 表让插件挂自己的**根 agent**
+  本来就是 `utilxx::HttpClient` 的进程级单例。- 会话运行时 (2026-10): `agentxx.agent.runtime` 表让插件挂自己的**根 agent**
   (`mount_root`: 只能放 `start`, `config_json` 给提示词/工具白名单, `mount_plugins` 给挂载策略,
   默认 `include_creator=false` 切断递归) 并在上面开**会话通道** (`open_channel` 一个
   `sessionId` 一条; 事件 `READY`/`TURN_*/DELTA_*`/`INTERRUPT`/`CLOSED`; 输入/取消/换模型/

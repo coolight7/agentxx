@@ -180,7 +180,9 @@ void EventHub::attachBus(const std::shared_ptr<agentxx::events::EventBus>& bus) 
             }
         }
         std::string err;
-        if (!publishValue(topic, std::move(value), &err)) {
+        // 总线消息没有发送者身份: 插件族的主题按名字推断归属 (`plugin.<名>.x` → `plugin:<名>`),
+        // 否则会被当成内置源发布
+        if (!publishValue(topic, std::move(value), ownerOfName(topic, {}), &err)) {
             XX_LOGW("[event_hub] publish from bus topic `{}` rejected: {}", topic, err);
         }
     };
@@ -276,6 +278,95 @@ std::string EventHub::ownerOfName(std::string_view name, std::string_view owner)
     return std::string{};
 }
 
+PublishRole publishRoleOf(std::string_view publisherOwner) {
+    // 插件的归属记作 `plugin:<插件名>` (中枢里所有插件记录都用这个前缀)
+    if (publisherOwner.starts_with("plugin:") || publisherOwner.starts_with(naming::kPluginRoot)) {
+        return PublishRole::Plugin;
+    }
+    if (publisherOwner == "tool") {
+        return PublishRole::Model;
+    }
+    return PublishRole::Builtin;
+}
+
+std::string_view publishRoleName(PublishRole role) {
+    switch (role) {
+        case PublishRole::Model:
+            return "model";
+        case PublishRole::Plugin:
+            return "plugin";
+        case PublishRole::Builtin:
+            return "builtin";
+    }
+    return "unknown";
+}
+
+namespace {
+
+/// 框架自己的事件段 (`agentxx.agent.event.*` / `agentxx.agent.async.*`)
+/// - 段内的记录由多个内置源共同使用 (轮次 / 工具结束 / 定时器 / 后台任务),
+///   不能因为某一条记录先被别人建了就拦住内置源
+bool isFrameworkEventName(std::string_view name) {
+    return name.starts_with(naming::kAgentEventPrefix)
+           || name.starts_with(naming::kAgentAsyncPrefix);
+}
+
+/// 掩码里是否开了某一类发布者
+bool hasPublishBit(PublishMask mask, PublishRole role) {
+    const auto bit = role == PublishRole::Model    ? PublishMask::Model
+                     : role == PublishRole::Plugin ? PublishMask::Plugin
+                                                   : PublishMask::Builtin;
+    return (static_cast<uint32_t>(mask) & static_cast<uint32_t>(bit)) != 0;
+}
+
+} // namespace
+
+std::string publishMaskText(PublishMask mask) {
+    const auto bits = static_cast<uint32_t>(mask);
+    if (bits == 0) {
+        return "owner";
+    }
+    if (bits == static_cast<uint32_t>(PublishMask::Any)) {
+        return "any";
+    }
+    std::string out = "owner";
+    for (const auto role : {PublishRole::Model, PublishRole::Plugin, PublishRole::Builtin}) {
+        if (hasPublishBit(mask, role)) {
+            out += "+";
+            out += publishRoleName(role);
+        }
+    }
+    return out;
+}
+
+bool mayPublish(const EventRecord& rec, std::string_view publisherOwner) {
+    if (publisherOwner == rec.owner) {
+        return true;
+    }
+    const auto role = publishRoleOf(publisherOwner);
+    // 内置源在框架自己的事件段里总是可以发布 (同一段被轮次/工具/定时器/后台任务
+    // 共同使用, 也不应因为记录先被别的代码建了就拦下来)
+    if (role == PublishRole::Builtin && isFrameworkEventName(rec.name)) {
+        return true;
+    }
+    return hasPublishBit(rec.publishMask, role);
+}
+
+bool mayCreateByPublish(std::string_view name, std::string_view publisherOwner) {
+    switch (publishRoleOf(publisherOwner)) {
+        case PublishRole::Model:
+            // 模型只能在自建事件段里建, 且不能占内建保留子段
+            return name.starts_with(naming::kAgentEventPrefix)
+                   && !naming::isReservedEventSegment(name);
+        case PublishRole::Plugin:
+            return naming::isPluginTopic(name);
+        case PublishRole::Builtin:
+            return name.starts_with(naming::kAgentEventPrefix)
+                   || name.starts_with(naming::kAgentAsyncPrefix);
+    }
+    return false;
+}
+
 bool EventHub::define(const EventDefineSpec& spec, std::string* err) {
     auto fail = [&](std::string msg) {
         if (err) {
@@ -311,6 +402,11 @@ bool EventHub::define(const EventDefineSpec& spec, std::string* err) {
         if (!spec.owner.empty()) {
             existing->rec.owner = spec.owner;
         }
+        // 权限只升不降: 后来者可以放宽, 但不收窄 (收窄会打断已在用的发布方)
+        existing->rec.publishMask = static_cast<PublishMask>(
+            static_cast<uint32_t>(existing->rec.publishMask)
+            | static_cast<uint32_t>(spec.publishMask)
+        );
         return true;
     }
     auto* created = ensureRecord(spec.name, ownerOfName(spec.name, spec.owner), spec.originSession);
@@ -323,6 +419,7 @@ bool EventHub::define(const EventDefineSpec& spec, std::string* err) {
     created->rec.kind         = spec.kind;
     created->rec.description  = spec.description;
     created->rec.historyLimit = spec.historyLimit;
+    created->rec.publishMask  = spec.publishMask;
     if (spec.kind == EventKind::Single || spec.historyLimit == 0) {
         created->rec.historyLimit = 1;
     }
@@ -343,18 +440,24 @@ bool EventHub::publishValue(
     std::string_view owner,
     std::string*     err
 ) {
-    auto fail = [&](std::string msg) {
-        if (err) {
-            *err = std::move(msg);
-        }
-        return false;
-    };
+    auto outcome = publishValueEx(name, std::move(value), owner);
+    if (outcome.has_value()) {
+        return true;
+    }
+    if (err) {
+        *err = outcome.error();
+    }
+    return false;
+}
+
+std::expected<PublishOutcome, std::string>
+    EventHub::publishValueEx(std::string_view name, Json value, std::string_view owner) {
     if (closed_) {
-        return fail("event hub is closed");
+        return std::unexpected{std::string{"event hub is closed"}};
     }
     std::string nameErr;
     if (!naming::validateEventName(name, &nameErr)) {
-        return fail(nameErr);
+        return std::unexpected{nameErr};
     }
     const auto bytes = valueBytesOf(value);
     if (cfg_.valueHardBytes > 0 && bytes > cfg_.valueHardBytes) {
@@ -364,11 +467,41 @@ bool EventHub::publishValue(
             bytes,
             cfg_.valueHardBytes
         );
-        return fail(fmt::format("value too large ({} bytes > {} bytes)", bytes, cfg_.valueHardBytes));
+        return std::unexpected{
+            fmt::format("value too large ({} bytes > {} bytes)", bytes, cfg_.valueHardBytes)
+        };
     }
-    auto* rec = ensureRecord(name, ownerOfName(name, owner), "");
+    // 发布者身份: 显式给了就按它判定 (模型工具 / 插件 / 内置源);
+    // 没给说明是中枢内部代码直接调用, 视为记录自己的归属 (与旧行为一致, 不做拦截)
+    auto*      existing  = findRecord(name);
+    const auto publisher = (owner.empty() && nullptr != existing) ? existing->rec.owner
+                                                                  : ownerOfName(name, owner);
+    const auto role      = publishRoleOf(publisher);
+    if (existing) {
+        if (!mayPublish(existing->rec, publisher)) {
+            return std::unexpected{fmt::format(
+                "`{}` belongs to `{}` and only allows publishing by {} (this call is {})",
+                name,
+                existing->rec.owner.empty() ? std::string_view{"-"} : existing->rec.owner,
+                publishMaskText(existing->rec.publishMask),
+                publishRoleName(role)
+            )};
+        }
+    } else if (!mayCreateByPublish(name, publisher)) {
+        // 名字没建过, 且当前发布者没资格建它: 把"找创建者"这条出路写进错误文本
+        return std::unexpected{fmt::format(
+            "event `{}` is not defined, and {} may not create it (ask whoever owns it to define "
+            "the event, or use `agentxx.agent.event.<name>` for your own)",
+            name,
+            publishRoleName(role)
+        )};
+    }
+
+    PublishOutcome outcome;
+    outcome.created = (nullptr == existing);
+    auto* rec        = ensureRecord(name, publisher, "");
     if (nullptr == rec) {
-        return fail(fmt::format("too many events (limit {})", cfg_.maxEvents));
+        return std::unexpected{fmt::format("too many events (limit {})", cfg_.maxEvents)};
     }
     if (rec->rec.kind == EventKind::Single && rec->rec.published > 0) {
         ++rec->rec.overwritten;
@@ -386,18 +519,27 @@ bool EventHub::publishValue(
     rec->rec.updatedAtMs = systemNowMs();
     // 已被 end 的事件再收到值: 记录保留, 但重新打开 (流式事件允许"续上")
     if (rec->rec.state != EventState::Open) {
-        rec->rec.state           = EventState::Open;
-        rec->rec.endedAtMs       = 0;
-        rec->lingerDeadlineMs    = 0;
+        rec->rec.state        = EventState::Open;
+        rec->rec.endedAtMs    = 0;
+        rec->lingerDeadlineMs = 0;
         XX_LOGD("[event_hub] event `{}` got a value after end, reopened", name);
     }
     const auto nameCopy = rec->rec.name;
     const auto count    = rec->rec.published;
-    dispatchValue(*rec, value);
+    outcome.deliveries  = dispatchValue(*rec, value);
+    outcome.delivered   = outcome.deliveries.size();
+    outcome.published   = count;
     if (rec->rec.kind == EventKind::Single) {
+        // 单值事件发完就收尾: 以记录自己的归属收尾, 不受本次发布者影响
         std::string endErr;
-        endEvent(nameCopy, Json::object(), &endErr);
+        if (endEvent(nameCopy, Json::object(), rec->rec.owner, &endErr)) {
+            outcome.endedNow = true;
+        }
     }
+    const auto remaining = std::count_if(waits_.begin(), waits_.end(), [&](const auto& item) {
+        return item.second.wait.state == WaitState::Armed && item.second.wait.spec.event == nameCopy;
+    });
+    outcome.remainingWaits = static_cast<size_t>(remaining);
     if (bus_ && bus_->hasListeners<EventHubValue>(Topic::HubValue)) {
         EventHubValue ev{.name = nameCopy, .valueJson = value.dump(), .valueCount = count};
         auto          bus = bus_;
@@ -409,7 +551,7 @@ bool EventHub::publishValue(
             asio::detached
         );
     }
-    return true;
+    return outcome;
 }
 
 void EventHub::postValue(std::string_view name, Json value) {
@@ -434,40 +576,88 @@ void EventHub::postValue(std::string_view name, Json value, std::string_view own
 }
 
 void EventHub::postEnd(std::string_view name, Json summary) {
-    auto self = weak_from_this();
-    auto n    = std::string{name};
-    asio::post(executor_, [self, n = std::move(n), summary = std::move(summary)]() mutable {
-        if (auto locked = self.lock()) {
-            std::string err;
-            if (!locked->endEvent(n, std::move(summary), &err)) {
-                XX_LOGW("[event_hub] posted end for `{}` rejected: {}", n, err);
+    postEnd(name, std::move(summary), std::string_view{});
+}
+
+void EventHub::postEnd(std::string_view name, Json summary, std::string_view owner) {
+    auto self     = weak_from_this();
+    auto n        = std::string{name};
+    auto ownerStr = std::string{owner};
+    asio::post(
+        executor_,
+        [self, n = std::move(n), summary = std::move(summary), ownerStr = std::move(ownerStr)](
+        ) mutable {
+            if (auto locked = self.lock()) {
+                std::string err;
+                if (!locked->endEvent(n, std::move(summary), ownerStr, &err)) {
+                    XX_LOGW("[event_hub] posted end for `{}` rejected: {}", n, err);
+                }
             }
         }
-    });
+    );
 }
 
 bool EventHub::endEvent(std::string_view name, Json summary, std::string* err) {
-    auto fail = [&](std::string msg) {
-        if (err) {
-            *err = std::move(msg);
-        }
-        return false;
-    };
-    auto* rec = findRecord(name);
-    if (nullptr == rec) {
-        return fail(fmt::format("event not found: {}", name));
-    }
-    if (rec->rec.state != EventState::Open) {
-        // 幂等: 第二次 end 是 no-op
+    return endEvent(name, std::move(summary), std::string_view{}, err);
+}
+
+bool EventHub::endEvent(
+    std::string_view name,
+    Json             summary,
+    std::string_view owner,
+    std::string*     err
+) {
+    auto outcome = endEventEx(name, std::move(summary), owner);
+    if (outcome.has_value()) {
         return true;
     }
+    if (err) {
+        *err = outcome.error();
+    }
+    return false;
+}
+
+std::expected<EndOutcome, std::string>
+    EventHub::endEventEx(std::string_view name, Json summary, std::string_view owner) {
+    auto* rec = findRecord(name);
+    if (nullptr == rec) {
+        return std::unexpected{fmt::format("event not found: {}", name)};
+    }
+    const auto publisher = owner.empty()
+                               ? rec->rec.owner
+                               : ownerOfName(name, owner);
+    if (!mayPublish(rec->rec, publisher)) {
+        return std::unexpected{fmt::format(
+            "`{}` belongs to `{}` and only allows publishing by {} (this call is {})",
+            name,
+            rec->rec.owner.empty() ? std::string_view{"-"} : rec->rec.owner,
+            publishMaskText(rec->rec.publishMask),
+            publishRoleName(publishRoleOf(publisher))
+        )};
+    }
+    EndOutcome outcome;
+    outcome.published = rec->rec.published;
+    if (rec->rec.state != EventState::Open) {
+        // 幂等: 第二次 end 是 no-op
+        outcome.alreadyEnded = true;
+        return outcome;
+    }
+    // 这次收尾会让多少等待结束: 与 dispatchEnded 同一过滤条件 (带值过滤的等待不收)
+    outcome.closedWaits = static_cast<size_t>(std::count_if(
+        waits_.begin(),
+        waits_.end(),
+        [&](const auto& item) {
+            return item.second.wait.state == WaitState::Armed
+                   && item.second.wait.spec.event == name && item.second.wait.spec.match.empty();
+        }
+    ));
     rec->rec.state        = EventState::Ended;
     rec->rec.endedAtMs    = systemNowMs();
     rec->rec.updatedAtMs  = rec->rec.endedAtMs;
     rec->rec.summary      = summary.is_null() ? Json::object() : std::move(summary);
     rec->lingerDeadlineMs = nowSteadyMs() + std::min<int64_t>(rec->rec.lingerMs, 24 * 60 * 60 * 1000);
-    const auto nameCopy   = rec->rec.name;
-    const auto count      = rec->rec.published;
+    const auto nameCopy    = rec->rec.name;
+    const auto count       = rec->rec.published;
     const auto summaryText = rec->rec.summary.dump();
     dispatchEnded(*rec);
     if (bus_ && bus_->hasListeners<EventHubEnded>(Topic::HubEnded)) {
@@ -481,12 +671,32 @@ bool EventHub::endEvent(std::string_view name, Json summary, std::string* err) {
             asio::detached
         );
     }
-    return true;
+    return outcome;
 }
 
 bool EventHub::removeEvent(std::string_view name) {
+    return removeEvent(name, std::string_view{}, nullptr);
+}
+
+bool EventHub::removeEvent(std::string_view name, std::string_view owner, std::string* err) {
     auto it = records_.find(name);
     if (it == records_.end()) {
+        if (err) {
+            *err = fmt::format("event not found: {}", name);
+        }
+        return false;
+    }
+    const auto publisher = owner.empty() ? it->second.rec.owner : ownerOfName(name, owner);
+    if (!mayPublish(it->second.rec, publisher)) {
+        if (err) {
+            *err = fmt::format(
+                "`{}` belongs to `{}` and only allows publishing by {} (this call is {})",
+                name,
+                it->second.rec.owner.empty() ? std::string_view{"-"} : it->second.rec.owner,
+                publishMaskText(it->second.rec.publishMask),
+                publishRoleName(publishRoleOf(publisher))
+            );
+        }
         return false;
     }
     // 事件被移除: 还挂在上面的等待按"事件已结束且无值"收尾, 否则会永远等下去
@@ -595,8 +805,9 @@ std::pair<size_t, size_t> EventHub::ownedCounts(std::string_view owner) {
 // 值 → 等待 → 投递
 // ---------------------------------------------------------------------------
 
-void EventHub::dispatchValue(RecordEntry& rec, const Json& value) {
-    const auto bytes = valueBytesOf(value);
+Json EventHub::dispatchValue(RecordEntry& rec, const Json& value) {
+    const auto bytes      = valueBytesOf(value);
+    Json       deliveries = Json::array();
     for (auto& [_, entry] : waits_) {
         auto& wait = entry.wait;
         if (wait.state != WaitState::Armed || wait.spec.event != rec.rec.name) {
@@ -613,6 +824,7 @@ void EventHub::dispatchValue(RecordEntry& rec, const Json& value) {
             wait.bytes  = bytes;
             // 值保留在等待里: 查询与 `awaitOnce` 的返回值都靠它
             flushWait(entry, "value", /*resetValues=*/false);
+            deliveries.push_back({{ "waitId", wait.waitId }, { "delivery", wait.spec.delivery }});
             finishWait(entry, WaitState::Satisfied, "delivered", true);
             continue;
         }
@@ -631,12 +843,16 @@ void EventHub::dispatchValue(RecordEntry& rec, const Json& value) {
                     entry.coalescedBytes  = 0;
                     entry.coalesceUntilMs = 0;
                     flushWait(entry, "values");
+                    deliveries.push_back(
+                        { { "waitId", wait.waitId }, { "delivery", wait.spec.delivery } }
+                    );
                 }
                 continue;
             }
             wait.values = {value};
             wait.bytes  = bytes;
             flushWait(entry, "value");
+            deliveries.push_back({ { "waitId", wait.waitId }, { "delivery", wait.spec.delivery } });
             continue;
         }
         // all: 累积到上限就整体投递一次, 之后继续累积
@@ -646,8 +862,10 @@ void EventHub::dispatchValue(RecordEntry& rec, const Json& value) {
                              || (spec.maxBytes > 0 && wait.bytes >= spec.maxBytes);
         if (reached) {
             flushWait(entry, "values");
+            deliveries.push_back({ { "waitId", wait.waitId }, { "delivery", wait.spec.delivery } });
         }
     }
+    return deliveries;
 }
 
 void EventHub::dispatchEnded(RecordEntry& rec) {
@@ -1149,6 +1367,7 @@ Json EventHub::listEventsJson(std::string_view prefix) const {
                                                                       : "expired";
         item["owner"]       = entry.rec.owner;
         item["description"] = entry.rec.description;
+        item["publishTo"]   = publishMaskText(entry.rec.publishMask);
         item["published"]   = entry.rec.published;
         item["history"]     = entry.rec.history.size();
         item["waits"]       = std::count_if(

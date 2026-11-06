@@ -51,9 +51,6 @@
 - `agentxx_subagent` 回到普通工具的形态（同步等结果），后台跑统一走
   `agentxx_async_start {tool:"agentxx_subagent", args:{...}}`，为以后“事件订阅”类目标留了同一入口；
 - 事件中枢常驻（没有 `event.enable`），`agentxx_event` 只负责发布侧；
-- 后续决定（2026-11-06）: `agentxx_execute_command` 的 `background:true` **不做** —— 后台跑命令
-  用 `agentxx_async_start {tool:"<命令工具>", args:{...}}` 代替，流式输出以后在 `agentxx_async_*`
-  上扩，不在命令工具里各自实现；
 - 全量回归 41,853 / 1（唯一失败是 `boundaries` 规则 15 的 third_party 既有用词）。
 - 与计划偏差: ①工具注册不再要求 init 时已有容器（嵌入式先 init 后 attach）；
   ②`agentxx_async_await` 只接 `id`（不再支持等任意事件），见 [plan.md](./plan.md) §6 风险段。
