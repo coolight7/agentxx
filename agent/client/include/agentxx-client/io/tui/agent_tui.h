@@ -595,6 +595,25 @@ private:
     void resetTrailingRunningToolsLocked(TUIRenderState& st);
 
     void pushCurrentTokenLocked(TUIRenderState& st);
+
+    /// “没有可并目标” 下标 (与有效消息下标区分)
+    static constexpr size_t kNoStepMessage = static_cast<size_t>(-1);
+
+    /// 当前模型步骤内与 `role` 同角色的展示消息下标 (交错流式输出的归组目标)
+    ///
+    /// 背景: 同一模型步骤里上游可能把思考/正文分成多段**交替**送出
+    /// (思考 → 正文 → 思考 → 正文 ...)。服务端的展示历史按步骤归组 ——
+    /// 一个步骤只有最前的一条 Think 和一条 Assistant (见 event_stream.cpp 的
+    /// 展开逻辑), 客户端若每次角色切换都新建一条消息, 实时画面就会与重开
+    /// 会话后的历史不一致 (思考末尾的段落会单独成块出现在正文开头之后)。
+    ///
+    /// 判定规则与服务端一致: 从尾部往前只越过**另一角色**的消息
+    /// (找思考时越过正文, 找正文时越过思考), 遇到其他任何消息
+    /// (用户/事件/工具/提示/系统/中断) 或走到开头即视为跨步骤。
+    ///
+    /// - `return` 可并目标的消息下标; 没有时返回 [kNoStepMessage] (调用方新建)
+    size_t findStepMessageLocked(const TUIRenderState& st, TUIMessage::Role role) const;
+
     void cancelCurrentRunLocked(TUIRenderState& st);
     void sendUserInputLocked(
         TUIRenderState&                              st,

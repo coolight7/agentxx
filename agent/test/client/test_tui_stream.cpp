@@ -1063,6 +1063,29 @@ void testTuiStreamScenario11(asio::io_context& ioCtx) {
         XX_TEST_EXPECT_EQ(snap->streamThinkOverride, -1);
     }
 
+    // 第一步的工具执行: 工具消息是步骤边界 —— 其后的思考/正文属于下个模型步骤
+    {
+        WireDelta d;
+        d.type       = WireDelta::Type::ToolStart;
+        d.toolName   = "first_tool";
+        d.toolCallId = "call_10";
+        client.testOnDelta(d);
+
+        WireDelta e;
+        e.type       = WireDelta::Type::ToolEnd;
+        e.toolName   = "first_tool";
+        e.toolCallId = "call_10";
+        e.result     = "ok";
+        client.testOnDelta(e);
+
+        auto snap = client.sharedState().snapshot();
+        // [Think A(展开), Assistant A, Tool]
+        XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)3);
+        if (snap->messages.size() == 3) {
+            XX_TEST_EXPECT_TRUE(snap->messages[2]->role == TUIMessage::Role::Tool);
+        }
+    }
+
     // 第 2 轮思考 (未点击): 提交落盘回到默认折叠
     {
         WireDelta d;
@@ -1078,13 +1101,13 @@ void testTuiStreamScenario11(asio::io_context& ioCtx) {
         client.testOnDelta(d);
 
         auto snap = client.sharedState().snapshot();
-        // [Think A(展开), Assistant A, Think B(折叠), Tool]
-        XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)4);
-        if (snap->messages.size() == 4) {
-            XX_TEST_EXPECT_TRUE(snap->messages[2]->role == TUIMessage::Role::Think);
-            XX_TEST_EXPECT_EQ(snap->messages[2]->text, std::string{"思考内容 B"});
-            XX_TEST_EXPECT_TRUE(snap->messages[2]->collapsed);
-            XX_TEST_EXPECT_TRUE(snap->messages[3]->role == TUIMessage::Role::Tool);
+        // [Think A(展开), Assistant A, Tool, Think B(折叠), Tool]
+        XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)5);
+        if (snap->messages.size() == 5) {
+            XX_TEST_EXPECT_TRUE(snap->messages[3]->role == TUIMessage::Role::Think);
+            XX_TEST_EXPECT_EQ(snap->messages[3]->text, std::string{"思考内容 B"});
+            XX_TEST_EXPECT_TRUE(snap->messages[3]->collapsed);
+            XX_TEST_EXPECT_TRUE(snap->messages[4]->role == TUIMessage::Role::Tool);
         }
     }
 }
@@ -1462,6 +1485,97 @@ void testTuiStreamEventSource(asio::io_context& ioCtx) {
     }
 }
 
+// 场景 17: 同一个模型步骤内思考/正文交错到达 (思考 -> 正文 -> 思考 -> 正文)
+//
+// 上游 (gpt-oss / harmony 形态等) 会在一次响应里交替送出思考段和正文段。服务端的
+// 展示历史按步骤归组 —— 一个步骤只有最前一条 Think 和一条 Assistant (见
+// event_stream.cpp 的展开逻辑); 客户端若每次角色切换都新建消息, 实时画面就会
+// 把一个步骤拆成多条交错的消息 (思考末尾的段落在正文开头之后单独成块),
+// 与重开会话后的历史不一致。
+void testTuiStreamScenario17(asio::io_context& ioCtx) {
+    TestTUIClientIO client(ioCtx);
+
+    const auto thinkToken = [&client](std::string_view t) {
+        WireDelta d;
+        d.type        = WireDelta::Type::ThinkToken;
+        d.text        = std::string{t};
+        d.startTimeMs = 1000;
+        client.testOnDelta(d);
+    };
+    const auto textToken = [&client](std::string_view t) {
+        WireDelta d;
+        d.type        = WireDelta::Type::TextToken;
+        d.text        = std::string{t};
+        d.startTimeMs = 1000;
+        client.testOnDelta(d);
+    };
+
+    thinkToken("first segment. ");
+    textToken("已完成。");
+    thinkToken("last words.");
+    textToken("事件输入…");
+
+    // 思考段结束时的结算包 (累计耗时): 回填到本步骤的思考消息
+    {
+        WireDelta settle;
+        settle.type        = WireDelta::Type::ThinkToken;
+        settle.text        = "";
+        settle.startTimeMs = 1000;
+        settle.durationMs  = 1500;
+        client.testOnDelta(settle);
+    }
+    {
+        WireDelta end;
+        end.type = WireDelta::Type::TurnEnd;
+        client.testOnDelta(end);
+    }
+
+    auto snap = client.sharedState().snapshot();
+    // 一个步骤只有一条思考 + 一条正文 (与重开会话后的历史一致)
+    XX_TEST_EXPECT_EQ(snap->messages.size(), size_t{2});
+    if (snap->messages.size() == 2) {
+        XX_TEST_EXPECT_TRUE(snap->messages[0]->role == TUIMessage::Role::Think);
+        XX_TEST_EXPECT_EQ(snap->messages[0]->text, std::string{"first segment. last words."});
+        XX_TEST_EXPECT_EQ(snap->messages[0]->durationMs, int64_t{1500});
+        XX_TEST_EXPECT_TRUE(snap->messages[1]->role == TUIMessage::Role::Assistant);
+        XX_TEST_EXPECT_EQ(snap->messages[1]->text, std::string{"已完成。事件输入…"});
+    }
+
+    // 下一步骤 (工具执行之后) 的思考/正文仍各自成一条, 不并入上一步骤
+    {
+        WireDelta tool;
+        tool.type       = WireDelta::Type::ToolStart;
+        tool.toolName   = "search";
+        tool.toolCallId = "call_x";
+        tool.arguments  = "{}";
+        client.testOnDelta(tool);
+
+        WireDelta toolEnd;
+        toolEnd.type       = WireDelta::Type::ToolEnd;
+        toolEnd.toolName   = "search";
+        toolEnd.toolCallId = "call_x";
+        toolEnd.result     = "ok";
+        client.testOnDelta(toolEnd);
+    }
+    thinkToken("next step thinking. ");
+    textToken("next step answer");
+    {
+        WireDelta end;
+        end.type = WireDelta::Type::TurnEnd;
+        client.testOnDelta(end);
+    }
+
+    snap = client.sharedState().snapshot();
+    XX_TEST_EXPECT_EQ(snap->messages.size(), size_t{5});
+    if (snap->messages.size() == 5) {
+        XX_TEST_EXPECT_TRUE(snap->messages[2]->role == TUIMessage::Role::Tool);
+        XX_TEST_EXPECT_TRUE(snap->messages[3]->role == TUIMessage::Role::Think);
+        XX_TEST_EXPECT_EQ(snap->messages[3]->text, std::string{"next step thinking. "});
+        XX_TEST_EXPECT_TRUE(snap->messages[4]->role == TUIMessage::Role::Assistant);
+        XX_TEST_EXPECT_EQ(snap->messages[4]->text, std::string{"next step answer"});
+    }
+}
+
 TestResult testTuiStream() {
     testTuiStreamMarkdown();
     asio::io_context ioCtx;
@@ -1481,6 +1595,7 @@ TestResult testTuiStream() {
     testTuiStreamScenario14(ioCtx);
     testTuiStreamScenario15(ioCtx);
     testTuiStreamEventSource(ioCtx);
+    testTuiStreamScenario17(ioCtx);
 
     return TestResult{g_tui_stream_passed, g_tui_stream_failed};
 }

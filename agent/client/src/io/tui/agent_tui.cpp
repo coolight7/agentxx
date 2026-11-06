@@ -63,6 +63,16 @@ bool isBlankContentMessage(const TUIMessage& msg) {
     return !msg.hasVisibleContent();
 }
 
+/// 合并同一思考消息的多段思考元数据 (加密标记取"或", token 统计取大)
+///
+/// 交错流式输出时一个步骤的思考可能分多段到达 (见
+/// TUIClientAgentIO::findStepMessageLocked), 各段都可能携带加密思考标记/
+/// 推理 token 统计; 合并结果与服务端按整段思考结算的一致。
+void mergeThinkData(TUIMessage::ThinkData& dst, const TUIMessage::ThinkData& src) {
+    dst.isEncrypted     = dst.isEncrypted || src.isEncrypted;
+    dst.reasoningTokens = std::max(dst.reasoningTokens, src.reasoningTokens);
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -2059,28 +2069,66 @@ void TUIClientAgentIO::pushCurrentTokenLocked(TUIRenderState& st) {
         return;
     }
     resetTrailingRunningToolsLocked(st);
-    auto msg  = std::make_shared<TUIMessage>();
-    msg->role = st.currentTokenRole;
-    if (st.currentToken && !st.currentToken->empty()) {
-        msg->text = *st.currentToken;
-    }
-    if (st.currentTokenRole == TUIMessage::Role::Think) {
-        // 折叠态跟随用户对流式思考的手动点击: 用户点击展开过则提交后保持展开
-        // (思考结束不自动折回), 未点击/点击折叠时维持默认折叠。
-        // 覆盖态说明见 TUIRenderState::streamThinkOverride
-        msg->collapsed = (st.streamThinkOverride != 1);
-        if (st.pendingTokenThink.has_value()) {
-            msg->think = *st.pendingTokenThink;
+
+    // 交错流式输出: 同一模型步骤内思考/正文可能分成多段交替到达
+    // (思考 -> 正文 -> 思考 -> 正文 ...)。服务端的展示历史按步骤归组
+    // (一个步骤只有最前的一条 Think 和一条 Assistant), 这里把后到的段
+    // 并回同步骤的同角色消息 —— 不并的话实时画面会把一个步骤拆成多条
+    // 交错的消息, 与重开会话后的历史不一致 (思考末尾的段落单独成块
+    // 出现在正文开头之后)
+    const size_t mergeTarget = findStepMessageLocked(st, st.currentTokenRole);
+    if (mergeTarget != kNoStepMessage) {
+        auto& m = sharedState_.mutableMessage(st, mergeTarget);
+        if (st.currentToken && !st.currentToken->empty()) {
+            m.text += *st.currentToken;
         }
-    }
-    msg->durationMs  = st.pendingTokenDurationMs;
-    msg->startTimeMs = st.pendingTokenStartTimeMs;
-    // 空 content 消息过滤: 流式正文 (Assistant) 全为空白时不落入消息列表
-    // (如模型只输出了空格/换行); 思考消息同一判据 —— 全为空白且没有加密思考/
-    // token 统计时也不保留 (只剩一个 `[思考]` 头部行的空消息没有展示意义,
-    // 见 ViewMessage::hasVisibleContent)
-    if (!isBlankContentMessage(*msg)) {
-        pushLocalMessageLocked(st, std::move(msg));
+        if (st.currentTokenRole == TUIMessage::Role::Think) {
+            if (st.pendingTokenThink.has_value()) {
+                if (!m.think) {
+                    m.think = *st.pendingTokenThink;
+                } else {
+                    mergeThinkData(*m.think, *st.pendingTokenThink);
+                }
+            }
+            // 折叠态跟随用户对流式思考的手动点击: 用户点击展开过则保持展开;
+            // 未点击时沿用该消息原来的折叠状态 (不去动用户已做的选择)
+            if (st.streamThinkOverride == 1) {
+                m.collapsed = false;
+            }
+        }
+        // 起止时间/耗时取整个步骤的合并值 (服务端同样按步骤累加
+        // 思考段耗时, 见 event_stream.cpp 的 finalizeThinkSegment)
+        if (st.pendingTokenStartTimeMs > 0
+            && (m.startTimeMs == 0 || st.pendingTokenStartTimeMs < m.startTimeMs)) {
+            m.startTimeMs = st.pendingTokenStartTimeMs;
+        }
+        if (st.pendingTokenDurationMs > 0) {
+            m.durationMs = std::max(m.durationMs, st.pendingTokenDurationMs);
+        }
+    } else {
+        auto msg  = std::make_shared<TUIMessage>();
+        msg->role = st.currentTokenRole;
+        if (st.currentToken && !st.currentToken->empty()) {
+            msg->text = *st.currentToken;
+        }
+        if (st.currentTokenRole == TUIMessage::Role::Think) {
+            // 折叠态跟随用户对流式思考的手动点击: 用户点击展开过则提交后保持展开
+            // (思考结束不自动折回), 未点击/点击折叠时维持默认折叠。
+            // 覆盖态说明见 TUIRenderState::streamThinkOverride
+            msg->collapsed = (st.streamThinkOverride != 1);
+            if (st.pendingTokenThink.has_value()) {
+                msg->think = *st.pendingTokenThink;
+            }
+        }
+        msg->durationMs  = st.pendingTokenDurationMs;
+        msg->startTimeMs = st.pendingTokenStartTimeMs;
+        // 空 content 消息过滤: 流式正文 (Assistant) 全为空白时不落入消息列表
+        // (如模型只输出了空格/换行); 思考消息同一判据 —— 全为空白且没有加密思考/
+        // token 统计时也不保留 (只剩一个 `[思考]` 头部行的空消息没有展示意义,
+        // 见 ViewMessage::hasVisibleContent)
+        if (!isBlankContentMessage(*msg)) {
+            pushLocalMessageLocked(st, std::move(msg));
+        }
     }
     st.pendingTokenDurationMs  = 0;
     st.pendingTokenStartTimeMs = 0;
@@ -2089,6 +2137,28 @@ void TUIClientAgentIO::pushCurrentTokenLocked(TUIRenderState& st) {
     // 当前流的折叠覆盖态已随本次提交生效并按消息落盘, 就此失效:
     // 下一次思考 (新流) 回到设置模式 (TailThinkingMode) 的默认展示
     st.streamThinkOverride = -1;
+}
+
+size_t TUIClientAgentIO::findStepMessageLocked(
+    const TUIRenderState& st,
+    TUIMessage::Role      role
+) const {
+    for (size_t i = st.messages.size(); i > 0; --i) {
+        const auto r = st.messages[i - 1]->role;
+        if (r == role) {
+            return i - 1;
+        }
+        // 只允许越过另一角色的流式消息 (思考 <-> 正文): 其余消息都属于
+        // 步骤边界 (用户/事件输入, 工具执行, 提示/中断等), 跨过它们合并会把
+        // 上一步骤的内容拼到这一步骤里
+        const bool otherStreamRole = (role == TUIMessage::Role::Think)
+                                         ? (r == TUIMessage::Role::Assistant)
+                                         : (r == TUIMessage::Role::Think);
+        if (!otherStreamRole) {
+            return kNoStepMessage;
+        }
+    }
+    return kNoStepMessage;
 }
 
 void TUIClientAgentIO::cancelCurrentRunLocked(TUIRenderState& st) {
@@ -2706,37 +2776,27 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
                     }
 
                     bool updatedExisting = false;
-                    for (size_t i = st.messages.size(); i > 0; --i) {
-                        const auto r = st.messages[i - 1]->role;
-                        if (r == TUIMessage::Role::User || r == TUIMessage::Role::Event
-                            || r == TUIMessage::Role::Tool
-                            || r == TUIMessage::Role::Assistant) {
-                            break; // 遇到用户输入、工具执行或正文回答边界，不得跨越更新前序动作的
-                                   // Think
+                    // 回填目标 = 本步骤的思考消息 (与 pushCurrentTokenLocked 同一套归组
+                    // 规则: 可以越过交错到达的正文段落继续往前找, 遇到用户/事件/
+                    // 工具/提示等消息即视为跨步骤)
+                    if (const size_t thinkTarget
+                        = findStepMessageLocked(st, TUIMessage::Role::Think);
+                        thinkTarget != kNoStepMessage) {
+                        auto& m = sharedState_.mutableMessage(st, thinkTarget);
+                        if (delta.think) {
+                            if (!m.think) {
+                                m.think = *delta.think;
+                            } else {
+                                mergeThinkData(*m.think, *delta.think);
+                            }
                         }
-                        if (r == TUIMessage::Role::Think) {
-                            auto& m = sharedState_.mutableMessage(st, i - 1);
-                            if (delta.think) {
-                                if (!m.think) {
-                                    m.think = *delta.think;
-                                } else {
-                                    if (delta.think->reasoningTokens > 0) {
-                                        m.think->reasoningTokens = delta.think->reasoningTokens;
-                                    }
-                                    if (delta.think->isEncrypted) {
-                                        m.think->isEncrypted = true;
-                                    }
-                                }
-                            }
-                            if (delta.durationMs > 0) {
-                                m.durationMs = delta.durationMs;
-                            }
-                            if (delta.startTimeMs > 0 && m.startTimeMs == 0) {
-                                m.startTimeMs = delta.startTimeMs;
-                            }
-                            updatedExisting = true;
-                            break;
+                        if (delta.durationMs > 0) {
+                            m.durationMs = delta.durationMs;
                         }
+                        if (delta.startTimeMs > 0 && m.startTimeMs == 0) {
+                            m.startTimeMs = delta.startTimeMs;
+                        }
+                        updatedExisting = true;
                     }
                     if (updatedExisting) {
                         st.isStreaming = true;
