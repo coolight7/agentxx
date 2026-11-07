@@ -1,5 +1,5 @@
 # TODO
-- 移除InterruptUi，统一使用 plugin::ui，中断提示消息显示优化，支持展开详情
+- 中断提示消息显示优化，支持展开详情
 - 调整 PluginChannelAgentIO 头文件位置
 - 应当const &:
   - PluginGraphNode 构造函数参数 `AgentxxPluginGraphNodeTypeSpec  spec`
@@ -25,9 +25,6 @@
 - share_store 支持 grep、输出到文件等
 - viewMessages 支持分页存储
 - 上下文较长警告消息，提示模型及时更新文档或plan，即将压缩
-- 事件在 modelcall 插入时同步添加 viewMessage
-- command-code-deepseek-flash 偶现 content 跟末尾思考内容交错
-- viewMessage 更新、处理逻辑放到 agent-server
 - 同步 JS插件和动态库插件接口实现
 - 更新 en 文档
 
