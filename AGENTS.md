@@ -644,7 +644,13 @@ path/to/agentxx_test --log-level warn string_util regex
   中枢投递会因 "session not found" 丢掉。**模型注册表已下沉到 `AgentHost`** (2026-11-05):
   所有根/子代理/后台任务共用一份 `ModelProviderRegistry` (同名模型 `getProvider` 返回
   同一个实例, 运行时 `AddModel`/`RemoveModel` 对所有人立即生效); HTTP keep-alive 连接池
-  本来就是 `utilxx::HttpClient` 的进程级单例。- 会话运行时 (2026-10): `agentxx.agent.runtime` 表让插件挂自己的**根 agent**
+  本来就是 `utilxx::HttpClient` 的进程级单例。**聊天消息投递 (2026-11)**: 会话正在跑时
+  新到的消息按 `delivery: next-step` 插进本轮 (`flush()` 通道忙时改投 next-step, 不再攒到
+  TURN_END), 模型在下一次调用前就能看到; 被动回复的 `msg_id` 过期 (群 5 分钟 / 单聊 60 分钟,
+  同一 `msg_id` 群最多 5 次) 时自动改写成带 `@发送者` 的主动消息重投, 并在
+  `chatbot_send_message` 的返回里带 `warning`; 该工具默认等平台结果
+  (`behavior.sendResultWaitMs`, 默认 4000, 0 = 只排队), 失败才算失败。
+- 会话运行时 (2026-10): `agentxx.agent.runtime` 表让插件挂自己的**根 agent**
   (`mount_root`: 只能放 `start`, `config_json` 给提示词/工具白名单, `mount_plugins` 给挂载策略,
   默认 `include_creator=false` 切断递归) 并在上面开**会话通道** (`open_channel` 一个
   `sessionId` 一条; 事件 `READY`/`TURN_*/DELTA_*`/`INTERRUPT`/`CLOSED`; 输入/取消/换模型/
