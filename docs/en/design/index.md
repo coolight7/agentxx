@@ -57,7 +57,7 @@ Agentxx is an AI Agent framework implemented in C++23, compiled with C++26/C17 s
 ### Core Conversational Capabilities
 
 - **Multi-Turn Conversations**: Comprehensive multi-turn conversation management, maintaining dual message sets: `viewMessages` (append-only complete historical log) and `llmMessages` (compressible LLM context).
-- **Streaming Output**: LLM responses are streamed as incremental Delta events (TextToken / ThinkToken / ToolStart / ToolEnd / TurnStart / TurnEnd / NodeStart / NodeEnd / MessageUITip / InsertMessage / UpdateMessage), with each Delta bearing a monotonically increasing `seq` for replay and synchronization. Turn statistics, errors, cancellation notifications, and interrupt headers are constructed by the agent thread as complete ViewMessages and inserted into session history via InsertMessage (carrying `msgId`), guaranteeing that `viewMessages` stay perfectly synchronized with the UI.
+- **Streaming Output**: LLM responses are streamed as incremental Delta events (stream_begin / text_token / thinking_token / insert_message / update_message / stream_end plus the UI-state ops turn_start / turn_end / node_start / node_end / message_tip / gen_status), with each Delta bearing a monotonically increasing `seq` for replay and synchronization. **The agent is the only writer of the view history**: message boundaries, text grouping, durations, default collapsed state and ids are all decided on the agent side; a client only keeps a copy (append text by id / upsert a whole row / drop the streaming item) and has no grouping or backfill heuristics left (see "Delta" below).
 - **Multi-Model Support**: Dynamic per-session (`sessionId`) model switching at runtime, supporting OpenAI Chat Completions, Anthropic Messages, and OpenAI Responses (Codex) provider protocols.
 - **Context Compaction**: `SummarizationMiddleware` automatically compresses historical messages when context approaches the model token limit, supporting tool call deduplication and truncation. The compaction result is written back to the session `llmMessages` immediately (and persisted during the next throttled flush), so a killed process does not lose it and does not re-compact in a loop after restart; compaction is mutually exclusive per session (manual vs. in-turn); the "Summarizing…" tip message is reused by its pending id, so an interrupt/resume does not append duplicates. Failure and cooldown handling: consecutive LLM failures are counted per turn (`graphDataKey_summarizationFailCount`) and fall back to a **hard truncation** (dropping the oldest messages by token budget) after 2 failures or at >= 95% token usage; "less than 2 new messages since the last compaction" is treated as a cooldown (`graphDataKey_summarizationLastMsgCount`) that skips redundant LLM compaction (avoiding a useless compaction subagent every turn); a manual compaction waits at most 2 minutes (so a stuck subagent cannot occupy the io thread forever — the timeout falls back to hard truncation); a single queued input (user message), as well as a next-step/inject injected input, reaching `userInputSummaryLimitLength` (default 8K characters, 0=disabled) is offloaded to share_store — the LLM context/request keeps only the leading excerpt plus a fetch hint (the model pages the rest back with `agentxx_share_store`), while display history and the turn echo keep the full original text; the judgement and hint format are shared with tool output compaction (`agentxx::util::offloadShareStoreIfOversized`).
 - **Chain-of-Thought (CoT) Display**: Streams and renders LLM reasoning/thinking content in real time.
@@ -1022,11 +1022,15 @@ NeoGraph GraphEngine (run_stream_async)
                 │     ├── CHANNEL_WRITE → handleChannelWrite:
                 │     │                   - "message_tip" channel → Delta::MessageTip
                 │     │                   - "messages" channel:
-                │     │                     assistant(tool_calls) → appendViewMessage
-                │     │                       + Delta::ToolStart stream
-                │     │                     tool → appendViewMessage + backfill update
-                │     │                       (edit tools include diff fields) + Delta::ToolEnd stream
-                │     │                     assistant → appendViewMessage
+                │     │                     assistant → reconcileSegment: create a row
+                │     │                       when the step has no segment yet, replace
+                │     │                       the single segment by id (no delta when the
+                │     │                       text matches), else merge metadata only;
+                │     │                       each tool_call becomes an insert_message
+                │     │                       (a tool row is an ordinary history row)
+                │     │                     tool → backfill that row by tool_call_id and
+                │     │                       send a whole update_message (status and
+                │     │                       duration live on the row)
                 │     │                   - Pushes WireContextStats when LLM output is present
                 │     ├── NODE_START/END → Node timing + Delta::NodeStart/NodeEnd
                 │     └── ERROR          → publishError (bus event; reported via WireTurnResult)
@@ -1162,12 +1166,13 @@ Client                              Server
   │                                    │
   │──── UserInput (text) ────────────→│
   │                                    │ runTurnAsync()
-  │←── Delta (text_token, seq=1) ─────│
+  │←── Delta (stream_begin, seq=1) ───│ segment start (role + thinking metadata + id)
   │←── Delta (text_token, seq=2) ─────│
-  │←── Delta (tool_start, seq=3) ─────│
-  │←── Delta (tool_end, seq=4) ───────│
-  │←── Delta (text_token, seq=5) ─────│
-  │←── TurnResult ────────────────────│
+  │←── Delta (text_token, seq=3) ─────│
+  │←── Delta (insert_message, seq=4) ─│ segment finalized into a row (same id)
+  │←── Delta (insert_message, seq=5) ─│ tool row (not finished yet)
+  │←── Delta (update_message, seq=6) ─│ tool result backfilled (whole row)
+  │←── TurnResult ───────────────────│
   │                                    │
   │  [Connection Severed]              │ Grace timer started
   │                                    │
@@ -1644,14 +1649,23 @@ EventBus (Event Bus)
 - Serialization: `toJson`/`fromJson` shared between Wire Sync and chained hashing.
 
 ### Delta (Streaming Incremental Event, Unified seq)
-- Type: `TextToken` / `ThinkToken` / `ToolStart` / `ToolEnd` / `TurnStart` / `TurnEnd` / `NodeStart` / `NodeEnd` / `MessageUITip` / `InsertMessage` / `UpdateMessage`.
-- Common fields: `seq` (monotonically increasing per session, shared by `EventBridge` and `SessionServerAgentIO` via `Session::nextDeltaSeq`), `text`, `msgId`, `toolName`/`toolCallId`/`arguments`/`result`/`status` (tool end state: `failed`/`interrupted`/`canceled`; omitted means `ok`), `nodeName`, `think` (`ThinkData`), `tipType` (for `MessageUITip`), `message` (contains full `ViewMessage` pointer for `InsertMessage`/`UpdateMessage`), `historyCount`/`tailHash`, `startTimeMs`/`durationMs`, `tps` (turn-level average rate for `TurnEnd`).
-- `MessageUITip`: Transient message rendered in UI without persisting to `viewMessages`.
-- `InsertMessage`: Atomically inserts a complete `ViewMessage` (tips, statistics) into history and synchronizes it across clients.
-- `UpdateMessage`: Updates an already-inserted message in place by `msgId` (e.g. tool result backfill).
+- Type: six message-level ops (`stream_begin` / `text_token` / `thinking_token` / `insert_message` / `update_message` / `stream_end`) and six UI-state ops (`turn_start` / `turn_end` / `node_start` / `node_end` / `message_tip` / `gen_status`).
+- Fields: `seq` (monotonically increasing per session, shared by `EventBridge` and `SessionServerAgentIO` via `Session::nextDeltaSeq`), `msgId` (every message-level op is addressed by id), `text` (appended stream text / tip body), `message` (full `ViewMessage` for insert/update), `streamRole` + `think` (for `stream_begin`), `nodeName`/`startTimeMs`/`durationMs`, `tps` (turn-level average rate for `turn_end`), `tipType` (for `message_tip`), `genPhase` + `toolName` (for `gen_status`).
+- **A tool call is an ordinary history row**: there is no tool_start/tool_end op — the call inserts a `role=tool` row whose text is the argument JSON, and the result arrives as a whole-row `update_message` (`toolResult` / `toolFinished` / `status` / `durationMs` on the row). Success is expressed only by the row's `status` (`ok`/`failed`/`interrupted`/`canceled`, decided by the execution layer); clients never parse the result text.
+- `message_tip`: transient tip rendered in UI only. **Local rows** (interrupt forms, transient tips) that a client creates itself always use the `local_` id prefix, so agent ops never hit them.
+- `gen_status`: placeholder for the generation phase (Waiting / ToolCall / Done), UI only.
+
+### View History (viewMessages) and the Client Copy
+- **The agent is the single writer**: `EventBridge` decides when a segment starts/ends, how long it took, the default collapsed state and the message id; a client (`ViewReplica`) only appends text by id, upserts a whole row, or drops the streaming item.
+- **One segment per row**: think → text → think becomes three rows (a role switch ends the previous segment), so the undecided segment is always at the list tail and a client never needs to append into a middle row.
+- **Live slot**: `Session::streamingView` holds the segment being produced (not in `viewMessages`, not part of the chain hash, no persistence sequence, not paginated). Finalizing goes through the normal `appendViewMessage` with the reserved id, and `WireSyncPayload.streaming` ships the slot to a client that attaches mid-stream.
+- **Finalization check**: a `messages` write replaces the single segment's row by id when the text/duration/thinking metadata differ (no delta when the text matches), and merges metadata only for multi-segment steps.
+- **Cancel/error**: the half-produced text is still finalized into a row and persisted (the view history then holds one more message than the LLM context).
+- Invisible rows (whitespace / zero-width placeholders only) are filtered both on the agent side and in the client copy.
+- Old-version compatibility is not provided: wire `kVersion`/`kMinVersion` are both 4, FFI API is 3 (`AGENTXX_FFI_CAP_VIEW_REPLICA`).
 
 ### SyncPayload / MessageQueueItem
-- `SyncPayload`: `{fromIndex, messages[], tailHash, totalMessages, messageQueue[]}`
+- `SyncPayload`: `{fromIndex, messages[], streaming (live slot, optional), tailHash, totalMessages, deltaSeq, messageQueue[], lastViewSeq, incremental}`
   - Full Sync: `fromIndex=0`, `totalMessages == messages.size()`.
   - Tail-window Sync: `fromIndex > 0` (indicating older unrendered messages exist upstream), `totalMessages` reflects full conversation count; client paginates older messages via `WireGetViewMessages`.
 - `MessageQueueItem`: `{id, text, model, createdAtMs}`.

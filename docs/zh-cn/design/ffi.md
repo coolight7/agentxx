@@ -164,8 +164,10 @@ agentxx_ffi_event_queue_free(q);
 | 日志 | `agentxx_ffi_drain_logs` | 取走积压日志 `[{"level","message"},...]` 写入 `AgentxxString* out` (异常后排障) |
 | 事件队列 | `agentxx_ffi_event_queue_create` / `agentxx_ffi_event_queue_free` / `..._on_event` / `..._pop` | 见 4.2 |
 
-版本策略: 当前 `AGENTXX_FFI_API_VERSION` 为 **2**
-(1 → 2 的唯一变更: `agentxx_ffi_send_input` 的文本参数改为输入 JSON, 见 4.11);
+版本策略: 当前 `AGENTXX_FFI_API_VERSION` 为 **3**
+(1 → 2: `agentxx_ffi_send_input` 的文本参数改为输入 JSON, 见 4.11;
+2 → 3: 展示历史增量收敛为 6 个消息级 op + 界面状态类 op, 嵌入方程序按 id 维护副本即可,
+能力位 `AGENTXX_FFI_CAP_VIEW_REPLICA` 表示可用此语义);
 调用方/嵌入方程序绑定加载时应当校验 `agentxx_ffi_api_version() >= AGENTXX_FFI_API_VERSION`，
 以支持非破坏性扩展向前兼容；新增符号/字段为非破坏性不递增，删除/重命名或修改参数语义时递增。
 
@@ -175,8 +177,8 @@ agentxx_ffi_event_queue_free(q);
 |------|---------|------|
 | `EVT_READY` | `{"sessionId"}` | 服务端就绪, 可开始发送输入 |
 | `EVT_SYNC` | wire sync JSON | 完整/部分历史同步 (含 fromIndex 尾窗语义) |
-| `EVT_DELTA` | wire delta JSON | 流式增量 (kind=text_token/thinking_token/tool_start/tool_end/turn_end/...) |
-| `EVT_DELTA_TEXT_BATCH` | `{"kind":"text"｜"thinking","text":"自上次事件以来的新增文本"}` | 合批后的文本/思考增量 (仅 `set_delta_batch(>0)` 时产出); 嵌入方程序直接追加, 不必解析 wire delta 全部字段; 工具/轮次事件不受合批影响, 仍严格有序 |
+| `EVT_DELTA` | wire delta JSON | 流式增量: 消息级 op (stream_begin/text_token/thinking_token/insert_message/update_message/stream_end, 均带 `msgId`) + 界面状态类 op (turn_start/turn_end/node_start/node_end/message_tip/gen_status); 工具就是普通历史行, 不再有 tool_start/tool_end |
+| `EVT_DELTA_TEXT_BATCH` | `{"msgId":"...","kind":"text"｜"thinking","text":"自上次事件以来的新增文本"}` | 合批后的文本/思考增量 (仅 `set_delta_batch(>0)` 时产出); 同一批不跨消息 id; 嵌入方程序直接追加到对应消息, 不必解析 wire delta 全部字段; 工具/轮次事件不受合批影响, 仍严格有序 |
 | `EVT_TURN_END` | wire turn_result JSON | 轮次结束 (`has_error` 字段报告异步错误) |
 | `EVT_CONTEXT_STATS` | wire context_stats JSON | 上下文 token 统计 (含 tps) + 会话累计用量 (`promptTokens`/`completionTokens`/`totalTokens`/`cachedPromptTokens`) + 当前会话标题 (`sessionTitle`; 空串时不带该字段) |
 | `EVT_MODEL_INFO` | wire model_info JSON | 当前模型信息 (查询/切换结果): `{currentModel, models[], capabilities[]}`; `capabilities` 为各模型多模态输入能力 `{name, image_input, audio_input, video_input}`, 嵌入方程序据此判断是否展示图片/音频/视频输入入口 |

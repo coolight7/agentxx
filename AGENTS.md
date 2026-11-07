@@ -517,7 +517,7 @@ path/to/agentxx_test --log-level warn string_util regex
   - 执行层 (`nodes/toolcall.cpp`) 是唯一的文本排版处 (`util::toolResultTextForModel`):
     只有 `Failed` 会被套上 `[Error: <text>]` (多行时首行 `[Error]` 后接原文), `Canceled` /
     `Interrupted` 在无正文时补 `[Canceled]` / `[Interrupt]` 占位, `Ok` 原样透传
-  - 失败标记随 `ToolEnd` 增量 (`status`) 与展示消息 (`ViewMessage::ToolData::status`) 下发,
+  - 失败标记只写在展示消息上 (`ViewMessage::ToolData::status`, 随 `update_message` 的整条工具行下发),
     **客户端只看该字段**, 不再解析结果文本; 出现在文本里的 `[Error: ...]` 只是给模型看的排版,
     不代表状态 (工具可能正常返回一段含该字样的内容)
   - 插件边界: `agentxx.agent.tools` 表 v3 (布局不变), 插件工具的成败由最终通知的状态位表达
@@ -733,8 +733,25 @@ path/to/agentxx_test --log-level warn string_util regex
     `BaseAgent::initRegisterNodes` 同时注册到 per-agent 与进程级全局条件表
     (自建 GraphRegistry 的主程序需自行调用 `registerAgentGraphConditions`)
   - 中断/异常不再需要"整份上下文快照 + 回灌": 会话不随图状态回滚, 节点抛出前已写入的消息保留
+- 展示历史归属 (2026-11, 协议 v4, 详见 [index.md](docs/zh-cn/design/index.md) 的
+  "Delta" 与 "展示历史 (viewMessages) 与客户端副本"): **agent 是展示历史的唯一写者**, 客户端只维护副本
+  - 消息边界/正文归组/耗时/默认折叠/id 全在 `EventBridge` 决定; 客户端 `ViewReplica`
+    (`agent/lib/include/agentxx/agent/io/view_replica.h`) 只做三种动作: 按 id 追加文本、整条 upsert、
+    丢弃流式项 —— **不得**再写归组/合并/回填启发式
+  - 一段一行 (思考 → 正文 → 思考 = 3 行), 因此未定稿的段永远在列表末尾;
+    正在输出的那一段在会话的直播槽 `Session::streamingView` (不进 viewMessages / 不落盘 / 不参与分页),
+    定稿时用预留 id 走 `appendViewMessage`, 中途接入的客户端从 `WireSyncPayload.streaming` 拿到它
+  - 协议只有 6 个消息级 op (`stream_begin`/`text_token`/`thinking_token`/`insert_message`/
+    `update_message`/`stream_end`) + 6 个界面状态 op; **工具行就是普通历史行**
+    (插入=调用开始, 更新=结果到达, 成败与耗时都在行上), 没有 tool_start/tool_end
+  - 客户端自造行 (中断表单/瞬态提示) 一律用 `local_` 前缀 id, agent 的 op 永不命中它们;
+    整份同步会重建副本, 本地行随界面态丢弃 (新中断请求到达时重新建行)
+  - 取消/出错时已产出的半截内容定稿成行并落盘: 展示历史会比 LLM 上下文多一条未说完的 assistant 消息
+  - 不做旧版本兼容: wire `kVersion`/`kMinVersion` 同抬到 4, FFI API 抬到 3
+    (`AGENTXX_FFI_CAP_VIEW_REPLICA`); 改协议时同时改 `agent/schema/wire-schema.json`
+    与 `docs/zh-cn/design/wire-protocol-fields.md` (`AGENTXX_UPDATE_WIRE_SCHEMA=1` 重新生成)
 - 测试模块: client 侧 19 个 (含 `banner_art` `update_check` `tui_form` `tui_surface` `tui_theme` `tui_ui_items` `tui_widget`),
-  同步组另有 `json` `json_view` `json_reflection` `interrupt_ui` `ui_items` `plugin_runtime` `plugin_sdk` `plugin_bridge`
+  同步组另有 `view_replica`(副本语义) `json` `json_view` `json_reflection` `interrupt_ui` `ui_items` `plugin_runtime` `plugin_sdk` `plugin_bridge`
   `chatbot_task`,
   插件挂载组另有 `plugin_host_mount` (一管理器 + 多 agent) `plugin_multi_mount` (示例插件全流程)
 - 命令执行环境与输出编码 (2026-10-18, 插件 `agentxx_execute_command`): 子进程固定下发

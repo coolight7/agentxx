@@ -62,7 +62,7 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
   - **图状态不再持有上下文**: neograph 执行图里没有 `messages` 通道, `state.serialize()` (每 super-step checkpoint、VALUES 事件、插件 stateJson) 的载荷与上下文大小无关; 需要上下文内容的插件经接口表 `agentxx.agent.context` 查询, 图状态里的只读通道 `xx_messagesMeta` 只给条数/版本/末尾消息摘要
   - 上下文变更只经 `Session::appendMessages` / `replaceMessages` / `truncateMessages` 单一入口 (节点与中间件经 `agentxx/nodes/session_context.h` 的入口调用), 不再有"图状态写通道 + 轮末整体覆盖对账"的双份拷贝
   - ReAct 循环路由由 `llm` 节点按"本轮是否有 tool_calls"返回 `Command.goto_node` (tools / agent_end) 给出, 不再依赖读上下文的条件边; 节点级 `xx_autoRoute=false` 可关闭, 交由图定义/自定义路由节点接管
-- **流式输出**: LLM 响应以增量 Delta 事件推送 (TextToken / ThinkToken / ToolStart / ToolEnd / TurnStart / TurnEnd / NodeStart / NodeEnd / MessageUITip / InsertMessage / UpdateMessage)，每个 Delta 携带单调递增 seq 用于重放与同步; 轮次统计/错误/取消提示/中断头消息由 agent 线程构造为完整 ViewMessage 经 InsertMessage 插入会话历史并推送 (携带 msgId), 保证 viewMessages 与 UI 展示一致
+- **流式输出**: LLM 响应以增量 Delta 事件推送 (stream_begin / text_token / thinking_token / insert_message / update_message / stream_end + 界面状态类 turn_start / turn_end / node_start / node_end / message_tip / gen_status)，每个 Delta 携带单调递增 seq 用于重放与同步; **展示历史的唯一写者是 agent**: 消息边界/正文归组/耗时/折叠默认值/id 全在 agent 端决定, 客户端只按 op 维护副本 (按 id 追加文本 / 整条 upsert / 丢弃流式项), 不再有归组与回填启发式 (见下文 "展示历史 (viewMessages) 与客户端副本")
 - **多模型支持**: 运行时按会话 (sessionId) 动态切换模型，支持 OpenAI Chat Completions、Anthropic Messages、OpenAI Responses (Codex) 三种 Provider 协议
 - **上下文压缩**: SummarizationMiddleware 在上下文接近模型 token 上限时自动压缩历史消息，支持 toolcall 输出去重与截断; 压缩请求带上**当前完整上下文** (system + 全部消息) 与末尾压缩指令, 由压缩子代理决定哪些信息必须保留 (模板要求写清末尾要点: 进行中的动作、最近一次工具调用与其结果、下一步), 压缩结果覆盖回 `[system] | [user 压缩指令] | [assistant 摘要]` —— **不再原样保留最近消息** (否则刚压完的上下文立刻被最近消息重新填满); 压缩请求中的 thinking 只保留最新一条 (旧轮 thinking 对续写没有价值, 加密 thinking 也无法按字符估算 token); 压缩完成后**立即**把压缩结果写回会话上下文并请求节流落盘 (崩溃/被杀时不丢压缩结果, 重启后不会因上下文重新超限而反复压缩), 同一会话压缩互斥 (手动 Summy Context 与轮内自动压缩不并发), 压缩提示消息按挂起 id 复用 (中断续跑不产生重复提示), 提示带 `tip->running` 标记: 开始时置位 (界面在折叠标记处显示加载动画), 结果回填时清除; 失败与冷却处理: 压缩失败按轮内计数累积 (`graphDataKey_summarizationFailCount`), 连续失败 >= 2 次或 token 占用 >= 95% 上限时降级**硬截断** (按 token 预算丢弃最旧消息) 回退; "上次压缩后消息增长不足 2 条" 视为冷却期 (`graphDataKey_summarizationLastMsgCount`), 跳过重复的 LLM 压缩 (避免每轮派生无效的压缩子代理); 手动压缩等待上限 5 分钟 (子代理卡住时不无限占用 io 线程, 超时走硬截断); 队列输入 (用户消息) 与 next-step/inject 注入输入单条达到 `userInputSummaryLimitLength` (默认 8K 字符, 0=关闭) 时原文经 share store 卸载, 上下文/请求里只留开头片段与取回提示 (模型用 `agentxx_share_store` 按行取回), 展示历史与轮次回显仍是完整原文 —— 与 toolcall 输出压缩共用同一套判定与提示格式 (见 `agentxx::util::offloadShareStoreIfOversized`)
 - **思维链展示**: 支持 LLM 的 thinking/reasoning_content 流式输出与展示
@@ -501,8 +501,8 @@ TUI [F3] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
     msg.collapsed; 流式输出中的末尾 Think 子项点击切换共享状态覆盖态
     (TUIRenderState::streamThinkOverride, 三态: 未点击跟随 TailThinkingMode
     设置 / 点击折叠 / 点击展开)。覆盖态的生命周期 = 当前流: 用户手动展开过的
-    思考流在提交落盘时据此保持展开 (pushCurrentTokenLocked 决定 msg.collapsed,
-    思考结束不自动折回), 提交与新流开始时重置为 -1, 使下一次思考回到设置模式
+    思考流在定稿行到达时据此保持展开 (`onDelta` 把覆盖态写到同 id 的行上,
+    思考结束不自动折回), 定稿与新流开始时重置为 -1, 使下一次思考回到设置模式
     的默认展示 (放在共享状态而非组件内: 提交发生在 client 线程, 需读取 UI 线程
     的点击结果); 命中区域由上一帧 visibleBoxes 反推 (collapsibleBoxes_ +
     collapsibleIsStream_ 区分消息区/流式区)
@@ -1555,13 +1555,16 @@ neograph GraphEngine (run_stream_async)
                 │     │                     → Done (清除占位提示)。标记不是模型
                 │     │                     输出文本, 不计入正文/思考/tps
                 │     ├── CHANNEL_WRITE → handleChannelWrite:
+                │     │                   - 开头先把未定稿的流式段写成行
                 │     │                   - "message_tip" 通道 → Delta::MessageTip
                 │     │                   - "messages" 通道:
-                │     │                     assistant(tool_calls) → appendViewMessage
-                │     │                       + Delta::ToolStart 流
-                │     │                     tool → appendViewMessage + 回填更新
-                │     │                       (edit 工具附带 diff 渲染字段) + Delta::ToolEnd 流
-                │     │                     assistant → appendViewMessage
+                │     │                     assistant → reconcileSegment: 本步骤
+                │     │                       没有段就新建行, 单段则整条覆盖
+                │     │                       (同 id, 文本一致不发增量), 多段只
+                │     │                       合并元数据; tool_calls 逐条 insert_message
+                │     │                       (工具行就是普通历史行)
+                │     │                     tool → 按 tool_call_id 回填该行 + 整条
+                │     │                       update_message (成败/耗时都在行上)
                 │     │                   - 含 LLM 输出时推送 WireContextStats
                 │     ├── NODE_START/END → 节点计时 + Delta::NodeStart/NodeEnd
                 │     └── ERROR          → publishError (总线, 不产 Delta,
@@ -1784,12 +1787,13 @@ Client                              Server
   │                                    │
   │──── UserInput (text) ────────────→│
   │                                    │ runTurnAsync()
-  │←── Delta (text_token, seq=1) ─────│
+  │←── Delta (stream_begin, seq=1) ───│ 段开始 (角色 + 思考元数据 + id)
   │←── Delta (text_token, seq=2) ─────│
-  │←── Delta (tool_start, seq=3) ─────│
-  │←── Delta (tool_end, seq=4) ───────│
-  │←── Delta (text_token, seq=5) ─────│
-  │←── TurnResult ────────────────────│
+  │←── Delta (text_token, seq=3) ─────│
+  │←── Delta (insert_message, seq=4) ─│ 段定稿成行 (同一 id)
+  │←── Delta (insert_message, seq=5) ─│ 工具行 (未完成)
+  │←── Delta (update_message, seq=6) ─│ 工具结果回填 (整条)
+  │←── TurnResult ───────────────────│
   │                                    │
   │  [连接断开]                         │ 启动 grace 定时器
   │                                    │
@@ -2413,16 +2417,41 @@ EventBus (事件总线)
 - 序列化: toJson/fromJson 供 Wire Sync 与链式哈希共用; 对应 role 下保证子结构非空
 
 ### Delta (流式增量事件, 统一 seq)
-- Type: TextToken / ThinkToken / ToolStart / ToolEnd / TurnStart / TurnEnd / NodeStart / NodeEnd / MessageUITip / GenStatus / InsertMessage / UpdateMessage
-- 公共字段: seq (会话级单调递增, EventBridge 与 SessionServerAgentIO 共用 Session::nextDeltaSeq 分配), text, msgId, toolName/toolCallId/arguments/result/status (工具终态: failed/interrupted/canceled, 缺省即 ok), nodeName, think (ThinkData), tipType (MessageUITip 时), genPhase (GenStatus 时), message (InsertMessage/UpdateMessage 时携带完整 ViewMessage 指针), historyCount/tailHash, startTimeMs/durationMs, tps (TurnEnd 轮级平均速度)
-- ToolEnd 的 status: 工具终态, **只由执行层给出** (工具返回值里的 `ToolResult::status`, 兜底把异常 / 工具不存在 / 参数非法 / 权限拒绝 / 重复调用被拒 / 插件 FAILED 终态换算成 `failed`), 取值 `ok`/`failed`/`interrupted`/`canceled`; 客户端 (TUI/CLI) 只看该字段决定是否按错误渲染, 不再解析结果文本 (文本里出现 `[Error: ...]` 不代表失败)
-- MessageUITip: 瞬态提示, 仅 UI 展示不入 viewMessages; InsertMessage: 原子插入完整 ViewMessage (如 Tip/统计), 入历史并同步; UpdateMessage: 按 msgId 原地更新已插入消息 (如 tool 结果回填)
-- GenStatus: 模型生成阶段占位提示 (Waiting 等待响应 / ToolCall 正在调用工具, toolName 为已解析出的工具名 / Done 清除), 仅 UI 展示不入历史。
-  agent 侧在模型节点发出请求后发 Waiting, Provider 收到首个 tool_call 分片时发 ToolCall (参数未接收完, 内容不完整无法展示), 节点结束/出错发 Done;
-  首个正文/思考 token 或 ToolStart 到达时由 client 自行清除 (占位位置被真实内容接替)
+- Type: 消息级 6 个 stream_begin / text_token / thinking_token / insert_message / update_message / stream_end;
+  界面状态类 6 个 turn_start / turn_end / node_start / node_end / message_tip / gen_status
+- 字段: seq (会话级单调递增, EventBridge 与 SessionServerAgentIO 共用 `Session::nextDeltaSeq` 分配),
+  msgId (消息级 op 一律按 id 寻址), text (流式段追加的文本 / 提示正文), message (insert/update 时
+  携带完整 ViewMessage), streamRole + think (stream_begin 时: 段角色与思考元数据),
+  nodeName/startTimeMs/durationMs (节点与轮次计时), tps (turn_end 轮级平均速度),
+  tipType (message_tip 时), genPhase + toolName (gen_status 时)
+- **工具行就是普通历史行**: 协议里没有 tool_start / tool_end —— 工具调用一开始就 insert_message
+  一条 role=tool 的行 (正文是参数 JSON), 结果到达时 update_message 整条覆盖 (toolResult / toolFinished /
+  status / durationMs 都在行上)。成败只由行里的 `status` 表示 (取值 `ok`/`failed`/`interrupted`/`canceled`,
+  由执行层给出), 客户端不解析结果文本 (文本里出现 `[Error: ...]` 不代表失败)
+- message_tip: 瞬态提示, 仅 UI 展示不入 viewMessages; **本地行**: 客户端自造的行 (中断表单、瞬态提示)
+  id 统一 `local_` 前缀, agent 的消息级 op 永远不会命中它们
+- gen_status: 模型生成阶段占位提示 (Waiting 等待响应 / ToolCall 正在调用工具, toolName 为已解析出的
+  工具名 / Done 清除), 仅 UI 展示不入历史。agent 侧在模型节点发出请求后发 Waiting, Provider 收到首个
+  tool_call 分片时先定稿当前段再发 ToolCall, 节点结束/出错发 Done
+
+### 展示历史 (viewMessages) 与客户端副本
+- **agent 是唯一写者**: 什么时候切段、一段多长、耗时多少、默认折叠与否、id 怎么分配, 全在
+  `EventBridge` 里决定; 客户端 (`ViewReplica`) 只做三种动作: 按 id 追加文本、整条 upsert、丢弃流式项
+- **一段一行**: 思考 → 正文 → 思考 交错就是 3 行 (类型切换即切段), 不做跟段合并;
+  这样"还没定稿的那一段"永远在列表末尾, 客户端不需要往中间某一行追加的能力
+- **直播槽**: `Session::streamingView` 单独存正在输出的那一段 (不进 viewMessages, 不计链式哈希,
+  不占持久化序号、不落盘、不参与分页); 定稿时用预留 id 走正常 `appendViewMessage`, 所以重连补拉/
+  分页语义零改动; `WireSyncPayload.streaming` 把直播槽一并下发, 中途接入的客户端不会丢半截内容
+- **定稿对账**: `messages` 通道写入时, 若该角色在本步骤只有一段, 用定稿文本/耗时整条覆盖同一 id 的行
+  (文本一致就不发增量); 多段时只把思考元数据合并到第一段 (与实时所见保持一致)
+- **取消/出错**: 已产出的半截内容照常定稿成行并落盘 (用户看到过就进历史), 代价是展示历史比 LLM 上下文
+  多一条未说完的 assistant 消息
+- **不可见的行** (只有空白/零宽占位符) 在 agent 定稿处与客户端副本两处都过滤
+- 旧版本兼容: 不做 —— wire 协议 `kVersion`/`kMinVersion` 同抬到 4, FFI API 抬到 3
+  (`AGENTXX_FFI_CAP_VIEW_REPLICA` 能力位告知嵌入方程序可用副本语义)
 
 ### SyncPayload / MessageQueueItem
-- SyncPayload {fromIndex (窗口首条绝对下标), messages[], tailHash, totalMessages, deltaSeq, messageQueue[]}
+- SyncPayload {fromIndex (窗口首条绝对下标), messages[], streaming (直播槽, 可选), tailHash, totalMessages, deltaSeq, messageQueue[], lastViewSeq, incremental}
   - 完整同步: fromIndex=0, totalMessages==messages.size()
   - 尾窗同步: fromIndex=窗口起始下标 (>0 表示上方还有更早消息), totalMessages=会话总消息数, 客户端按 WireGetViewMessages 分页拉取
   - deltaSeq: 快照序号 (= Session::deltaSeq, 即快照已包含 seq <= deltaSeq 的全部增量);

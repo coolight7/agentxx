@@ -584,8 +584,8 @@ tool_call 中的前后调用形成顺序屏障。并发只发生在同一条 ass
   抛出的异常在 SDK 边界变成 `PLUGINXX_OPERATOR_FAILED` (取消上报 `PLUGINXX_OPERATOR_CANCELED`),
   主程序 `awaitPluginOpResult` 收到状态与载荷后直接给出 `ToolResult` ——
   **不再以异常形式抛给调用方**。JS 插件可以在结果对象里写 `{status, text}`。
-- **状态位的下发**: 随 `ToolEnd` 增量 (`status`) 与展示消息 (`ViewMessage::ToolData::status`)
-  下发 —— 客户端 (TUI/CLI) 只看该字段, 不再解析结果文本。来源: 工具返回的状态 /
+- **状态位的下发**: 随展示消息 (`ViewMessage::ToolData::status`, 写在 tool 行的
+  `update_message` 里) 下发 —— 客户端 (TUI/CLI) 只看该字段, 不再解析结果文本。来源: 工具返回的状态 /
   执行期异常 / 工具不存在 / 参数非法 / 权限拒绝 / 重复调用被拒 / 插件失败终态。
 - **例外 (属正常结果)**: 无匹配、空结果、查询目标不存在之类"调用成功但没有内容"的情况
   按 `ok` 返回 (如 `No match found`); 权限拒绝由框架提前给出 `failed` + 可读原因
@@ -911,7 +911,7 @@ Agentxx 客户端采用统一的分层工具特化渲染机制，TUI 核心层�
      `new` 的 id 取自结果 JSON，完成后才有，运行中只有 `new`）、`agentxx_subagent` →
      `Subagent` (`explorer · <任务首行>` / `4 tasks: explorer, coder, planner, ...`)。
 3. **实例级工具装饰 (`update_tool_decor`)**：
-   - 订阅 `EVT_DELTA` 的 `tool_start`/`tool_end` 后，按特定调用 `tool_call_id` 推送语义 JSON (优先级高于类型级渲染器)；
+   - 订阅 `EVT_DELTA` 的 `insert_message` / `update_message` 后，按特定调用的 `tool_call_id` 推送语义 JSON (优先级高于类型级渲染器)；
      典型实现见 `agentxx_planning` (Mermaid 状态图 + 动态待办列表)。
    - **只覆盖本进程内实时发生的调用**：重启客户端恢复会话、重连、切换会话时，历史 `Tool` 消息由
      `WireSyncPayload`/`WireViewMessagesPage` 回放，此时没有任何 delta 事件与装饰推送 ——
@@ -2032,7 +2032,7 @@ plugin:
 | `READY` | — | `rootId` / `sessionId` / `model` |
 | `TURN_START` | 用户输入回显 | `msgId` / `startTimeMs` / `attachments` (无 dataUrl) |
 | `DELTA_TEXT` / `DELTA_THINKING` | token | — |
-| `TOOL_START` / `TOOL_END` | — | `toolName` / `toolCallId` / `arguments` 或 `result` + `status` (`ok`/`failed`/`interrupted`/`canceled`) |
+| `TOOL_START` / `TOOL_END` | — | `msgId` / `toolName` / `toolCallId` / `arguments` 或 `result` + `status` (`ok`/`failed`/`interrupted`/`canceled`)；由工具行在通道层派生 (插入=开始, 更新=结果) |
 | `GEN_STATUS` | — | `phase` (waiting/tool_call/done) / `toolName` |
 | `TURN_END` | **本轮最后一个非空正文段** | `hasError` / `errorMessage` / `interrupted` / `startTimeMs` / `durationMs` / `tps` / `fullText` |
 | `CONTEXT_STATS` | — | `contextTokens` / `maxContextTokens` / `tps` / `usage{...}` |

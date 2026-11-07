@@ -23,7 +23,7 @@
 
 ## 状态
 
-规划完成，等待开工（实施进度见 [work.md](./work.md)）。
+已完成 (2026-11-07)。实施进度与验证结果见 [work.md](./work.md)。
 
 ## 关键决策
 
@@ -44,4 +44,17 @@
 
 ## 结论
 
-待实现。完成后在此补：实际改动与偏差、验证结果、遗留事项。
+已实现并全量回归通过 (Debug; 42115 条断言)。实际改动与计划一致, 主要偏差:
+
+1. **删掉了 thinkSeg* 段计时**: 段耗时改由 `flushOpenStream()` 用段起止直接写行,
+   协议里不再有"结算包"式空 `ThinkToken` (token 不带耗时, 耗时只在行的 `durationMs` 上);
+2. **`reconcileSegment` 的时间戳回退只对"本步骤没有流式段"生效**: 已有段时只接受消息 JSON
+   里显式给出的 `startTimeMs`/`durationMs`, 否则定稿会多发一条无意义增量并把流式段的
+   起始时间改成节点开始时间;
+3. **工具行 = 普通历史行**: `WireDelta` 只保留 `toolName` (GenStatus 占位提示用), 其余工具
+   字段 (toolCallId/arguments/result/status) 全删, 插件 channel 的 TOOL_START/TOOL_END
+   由工具行派生, `agentxx_planning` 也改成从工具行推导装饰;
+4. **整份同步仍然丢弃本地行** (中断表单/瞬时提示): onSync 新建整份状态, 与改造前一致;
+   `ViewReplica::reset` 自身保留"副本里已装入的本地行", 但没有调用方依赖它。
+
+遗留事项见 [work.md](./work.md) 末尾 (外部库用词、Release 基准抽查)。

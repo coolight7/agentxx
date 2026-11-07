@@ -641,8 +641,8 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
     `chunk_type::kGenerationStart`)
   - `ToolCall`: Provider 收到工具调用的**首个分片**后下发 (`chunk_type::kToolCallStart`),
     `toolName` 为已解析出的工具名 (可能为空)。工具调用参数按增量分片传输, 接收完成前
-    JSON 不完整、无法展示, 因此该阶段只提示"正在调用工具"; 接收完成后照常发
-    `ToolStart` (完整参数 + 工具消息)
+    JSON 不完整、无法展示, 因此该阶段只提示"正在调用工具"; agent 侧先定稿当前段,
+    随后随 `messages` 通道到达的工具行 (`insert_message` 一条 role=tool 的行) 接替该提示
   - `Done`: 节点结束/出错时下发 (补充清除)
 - 渲染: [MessageListComponent::buildGenPlaceholderItem](/agent/client/include/agentxx-client/io/tui/components/message_list.h)
   在列表末尾渲染单行占位项 (`- [思考] 等待响应...` / `- [工具] read_file 正在调用工具...`),
@@ -685,16 +685,17 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
 - 加载动画的帧循环由 `hasRunningToolOrThink()` 维持, 占位提示出现时它必然为真 ——
   该时刻既没有流式思考输出也没有未完成的工具消息, 漏掉占位判定会让点阵停在首帧
   (该判定现名 `hasRunningMessage()`, 同时覆盖运行中的提示消息, 见 §2.16)
-- 清除: 首个正文/思考 token、ToolStart、NodeEnd、TurnEnd 到达时由 client 线程清除
-  (`TUIClientAgentIO::onDelta` 的 `clearGenPlaceholder`), 占位位置由真实内容接替 ——
+- 清除: 首个正文/思考 token、工具消息 (`insert_message` 的工具行)、NodeEnd、TurnEnd
+  到达时由 client 线程清除 (`TUIClientAgentIO::onDelta` 的 `clearGenPlaceholder`), 占位
+  位置由真实内容接替 ——
   因此占位是**瞬态渲染态** (`TUIRenderState::genPhase` / `genToolName`), 不进消息列表、
   不落历史、不参与上下文统计
 - 空状态 banner 判定 (`showEmptyBanner`) 把占位提示也算作"有内容":
   itemCount/itemKey/quickHeight/buildItem/fillViewport/OnRender 必须用同一判定, 否则
   子项下标错位
 - 占位项的判定必须排在"流式区"各分支之前 (四个回调一致): 占位提示出现时流式区
-  还没有 token (`currentToken` 为空, 且 `streamUseIncremental_` 可能为假), 若先走
-  流式降级分支, 占位项下标会落到流式子项分支上解引空的 `currentToken` (崩溃)
+  还没有 token (流式文本为空, 且 `streamUseIncremental_` 可能为假), 若先走
+  流式降级分支, 占位项下标会落到流式子项分支上解引空的流式文本 (崩溃)
 - 流结束 (无 token) 的帧里 `OnRender` 要把流式区子项数归零
   (`streamUseIncremental_` / `streamHeaderCount_`): 无 token 时 `itemCount` 不会调用
   `syncStream`, 这两个值会停留在上一流的状态 (增量模式的思考流留下头部项),
@@ -812,32 +813,32 @@ agent 线程插入会话历史的展示条目: 轮次统计、错误/取消提�
 - 正文视觉为空且无附件的消息仍按空消息过滤 (`isBlankMessage`, 判据见 §2.14)
 - 相关测试: `agentxx_test tui_scroll` 的用户消息折叠场景 (标记切换、折叠态只留首行)
 
-### 2.19 流式输出的分段归组 (思考/正文交错)
+### 2.19 流式输出的分段 (思考/正文交错) 与消息成型
 
 一次模型调用里, 上游可能把思考与正文分成**多段交替**送出 (思考 → 正文 → 思考 → 正文,
 gpt-oss / harmony 形态的模型以及部分网关转发的 `reasoning_content` 就是这样)。
-服务端的展示历史按**模型步骤**归组 —— 一个步骤只有最前一条 `Think` 和一条 `Assistant`
-(见 [event_stream.cpp](/agent/lib/src/event/event_stream.cpp) 的展开逻辑); 客户端按增量
-建消息, 必须按同一套规则归组, 否则实时画面与重开会话后的历史不一致: 思考末尾的段落会
-单独成块出现在正文开头之后 (现象是"思考末尾几个词和正文开头交错")。
 
-- 归组入口 `TUIClientAgentIO::findStepMessageLocked` (`agent_tui.cpp`): 从尾部往前找最近
-  一条**同角色**消息, 只允许越过另一角色的流式消息 (找思考时越过正文, 找正文时越过思考);
-  遇到其他任何消息 (用户/事件/工具/提示/系统/中断) 或走到开头即视为跨步骤。
-- 命中目标时 `pushCurrentTokenLocked` 把这一段文本**追加**到那条消息 (不新建): 思考元数据
-  (加密标记/推理 token 数) 合并, 起止时间取整步合并值, 折叠状态不动 (用户手动展开过的
-  保持展开)。没有目标时才按原来的方式新建消息。
-- 思考段的结算包 (空文本 `ThinkToken`, 携带累计耗时) 用同一规则回填 —— 否则思考消息后面
-  跟了正文段落时找不到目标, 会多出一条只有耗时的空 `[思考]`。
-- 步骤边界依赖工具/用户/事件消息: ReAct 循环里下一步必然跟在 `tools` 节点之后 (工具消息
-  先入列), 因此不需要额外的步骤号; 重试 (同一节点内重发) 属于同一步骤。
-- 实时观感: 交错到达的后一段仍先显示在列表末尾的流式区, 角色再次切换时并回前面那条同角色
-  消息, 收敛到与服务端历史相同的两条。
-- 已知差异: 若某一步骤的思考段出现在正文段**之后**才开始 (先正文后思考), 客户端会按到达
-  顺序把思考消息接在后面, 而重开会话后历史里思考块在正文块之前 —— 文字内容一致, 只是块
-  顺序不同 (未做中途插入: 消息列表的并行数组只支持头部插入/头部删除)。
-- 相关测试: `agentxx_test tui_stream` 的场景 17 (思考/正文交错 → 一条 `Think` + 一条
-  `Assistant`, 用工具消息验证步骤边界) 与场景 11 (跨步骤的思考仍各自成一条)。
+**分段只在一处决定: agent 端 `EventBridge`** (`agent/lib/src/event/event_stream.cpp`):
+
+- **一段一行**: 类型切换 (思考 ↔ 正文) 就是上一段结束、下一段开始; 思考 → 正文 → 思考
+  就是 3 行。这样"还没定稿的那一段"永远在列表末尾, 客户端不需要往中间某一行追加的能力。
+- 正在输出的那一段存在会话的**直播槽** (`Session::streamingView`): 不进 viewMessages、
+  不计链式哈希、不占持久化序号、不落盘、不参与分页; 定稿 (`flushOpenStream`) 时用预留
+  的 id 走正常 `appendViewMessage`, 并发一条 `insert_message` 让客户端把流式项收敛成行。
+- `messages` 通道写入时的定稿对账 (`reconcileSegment`): 本步骤内该角色没有段就新建一行
+  (非流式/网关缓冲的情形); 只有一段就用定稿文本/耗时/思考元数据整条覆盖同一 id
+  (文本一致不发增量, 保持幂等); 多段时文本保持分段原样 (与实时所见一致), 只把元数据
+  合并到第一段。
+- 折叠默认值也在 agent 端定义 (思考/工具/提示/事件默认折叠), 客户端只维护用户的点击。
+- 取消/出错时已产出的半截内容照常定稿成行并落盘 (用户看到过就进历史)。
+
+客户端 (`agent/client/src/io/tui/agent_tui.cpp` 的 `onDelta`) 只做两件事: 6 个消息级 op
+交给 `ViewReplica` (按 id 追加文本 / 整条 upsert / 丢弃流式项), 界面状态类增量
+(生成占位/吸附底部/折叠覆盖/中断表单) 自己处理 —— 没有归组与回填启发式。
+
+- 实时观感: 流式区始终只展示末尾那一段, 段结束时整段落成正式行 (头部带耗时)。
+- 相关测试: `agentxx_test tui_stream` (每个 op 的副本效果与定稿收敛)、`view_replica`
+  (副本语义本身)、`event_bridge` (分段与定稿对账)。
 
 ---
 

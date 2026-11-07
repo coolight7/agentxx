@@ -149,7 +149,7 @@ agentxx_ffi_event_queue_free(q);
 | Logging | `agentxx_ffi_drain_logs` | Drains pending logs `[{"level","message"},...]` into `AgentxxString* out` (for post-failure diagnostics) |
 | Event Queue | `agentxx_ffi_event_queue_create` / `agentxx_ffi_event_queue_free` / `..._on_event` / `..._pop` | See Section 4.2 |
 
-Version Policy: `AGENTXX_FFI_API_VERSION` is currently **2** (the single change from 1 to 2: `agentxx_ffi_send_input` takes an input JSON instead of a plain text argument, see Section 4.11). Callers and language bindings should verify `agentxx_ffi_api_version() >= AGENTXX_FFI_API_VERSION` to ensure forward compatibility; adding non-breaking symbols/fields does not increment it, while breaking removals, renames, or semantic parameter modifications will increment it.
+Version Policy: `AGENTXX_FFI_API_VERSION` is currently **3** (1 → 2: `agentxx_ffi_send_input` takes an input JSON instead of a plain text argument, see Section 4.11; 2 → 3: view-history deltas are reduced to six message-level ops plus UI-state ops, so the host only keeps a copy keyed by message id — capability `AGENTXX_FFI_CAP_VIEW_REPLICA` announces that semantic). Callers and language bindings should verify `agentxx_ffi_api_version() >= AGENTXX_FFI_API_VERSION` to ensure forward compatibility; adding non-breaking symbols/fields does not increment it, while breaking removals, renames, or semantic parameter modifications will increment it.
 
 ### 4.4 Event Types (`AgentxxFFIEventType`, payloads are `const AgentxxStringView*` JSON)
 
@@ -157,8 +157,8 @@ Version Policy: `AGENTXX_FFI_API_VERSION` is currently **2** (the single change 
 |---|---|---|
 | `EVT_READY` | `{"sessionId"}` | Server is ready; input transmission can begin |
 | `EVT_SYNC` | wire sync JSON | Full or partial history sync (supports `fromIndex` tail-window semantics) |
-| `EVT_DELTA` | wire delta JSON | Streaming delta (`kind=text_token/thinking_token/tool_start/tool_end/turn_end/...`) |
-| `EVT_DELTA_TEXT_BATCH` | `{"kind":"text"｜"thinking","text":"new text since last event"}` | Batched text/thinking delta (emitted only while `set_delta_batch(>0)`); the host appends the text directly instead of parsing every wire delta field; tool and turn events are never batched and stay strictly ordered |
+| `EVT_DELTA` | wire delta JSON | Streaming delta: message-level ops (stream_begin/text_token/thinking_token/insert_message/update_message/stream_end, all carrying `msgId`) plus UI-state ops (turn_start/turn_end/node_start/node_end/message_tip/gen_status); a tool call is an ordinary history row, so there is no tool_start/tool_end |
+| `EVT_DELTA_TEXT_BATCH` | `{"msgId":"...","kind":"text"｜"thinking","text":"new text since last event"}` | Batched text/thinking delta (emitted only while `set_delta_batch(>0)`); one batch never spans message ids; the host appends the text to that message instead of parsing every wire delta field; tool and turn events are never batched and stay strictly ordered |
 | `EVT_TURN_END` | wire turn_result JSON | Turn finished (`has_error` field reports asynchronous errors) |
 | `EVT_CONTEXT_STATS` | wire context_stats JSON | Context token statistics (including TPS) plus session cumulative usage (`promptTokens`/`completionTokens`/`totalTokens`/`cachedPromptTokens`) |
 | `EVT_MODEL_INFO` | wire model_info JSON | Current model information (query/switch result) |
