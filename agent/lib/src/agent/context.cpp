@@ -538,6 +538,15 @@ void Session::persistThrottled(std::string_view reason) {
 }
 
 void Session::enqueueViewPersist(PendingViewOp op) {
+    // 同一条行的连续覆盖只留一条: PendingViewOp 只记下标, 回放时读的是行当前内容,
+    // 中间状态没有落库价值 (流式文本反复追加到同一条行时会调用很多次)
+    if (false == op.isAppend) {
+        for (const auto& pending : pendingViewOps_) {
+            if (false == pending.isAppend && pending.index == op.index) {
+                return;
+            }
+        }
+    }
     pendingViewOps_.push_back(std::move(op));
     const auto nowMs = steadyNowMs();
     if (viewLastPersistMs_ == 0 || nowMs - viewLastPersistMs_ >= kPersistThrottleMs) {

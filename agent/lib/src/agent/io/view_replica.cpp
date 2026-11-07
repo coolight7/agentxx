@@ -52,6 +52,23 @@ bool ViewReplica::appendToken(const WireDelta& delta, bool thinking) {
         return false;
     }
     if (stream_.id != delta.msgId) {
+        // 目标是一条已经落定的行: 同一模型步骤里思考/正文交错返回时, 后一段追加到
+        // 该角色先落定的那条行上 (agent 端按步骤归组, 一条行会多次收到 token)
+        if (auto row = rowById(delta.msgId); row) {
+            if (delta.text.empty()) {
+                return false;
+            }
+            // 换成新对象再追加: 渲染缓存以消息指针为失效 key, 原地改文本不会重绘
+            auto copy = std::make_shared<ViewMessage>(*row);
+            copy->text.append(delta.text);
+            // rowById 命中时索引必然可用 (缺失时它已重建)
+            auto it = index_.find(std::string{delta.msgId});
+            if (it == index_.end() || it->second >= rows_.size()) {
+                return false; // 防御: 索引与表不同步
+            }
+            rows_[it->second] = std::move(copy);
+            return true;
+        }
         // 防御: stream_begin 丢了 (或跨段乱序), 用 token 里的 id 自建一条
         stream_.clear();
         stream_.id   = delta.msgId;

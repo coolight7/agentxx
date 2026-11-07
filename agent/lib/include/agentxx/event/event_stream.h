@@ -580,8 +580,11 @@ private:
 ///      (TUI/stdio), 并写入会话历史 (appendViewMessage)
 ///   2. 强类型总线事件发布 (EventBus: ModelToken/Error 等)
 ///   3. 可选转发到原始 callback (origCb)
-/// - **展示历史的唯一写者**: 消息边界与内容 (一段一行、正文归组、耗时、可见性、
+/// - **展示历史的唯一写者**: 消息边界与内容 (按步骤归组、耗时、可见性、
 ///   折叠默认值、id 分配) 全部在这里决定; 客户端只按 id 应用 op, 不做任何归组/合并
+/// - 归组规则: 一次模型调用 (一个模型节点, 即一次 NODE_START..NODE_END) 里思考/正文
+///   各至多一条行; 上游把两者交替送出时 (思考 → 正文 → 思考 → 正文), 后一段并回
+///   同角色的那条行, 不切成多条 (与"一个 assistant 消息 = 一条思考 + 一条正文"一致)
 /// - 有状态: 内部维护流式段 (直播槽) / 段内的已定稿行 (/stepRows_/) / WireDelta seq
 /// - 新增 GraphEvent 处理时只需扩展本类, 无需修改 BaseAgent
 /// - 调用者保证 AgentContext 及其 bus、Session、io 在回调期间存活
@@ -664,13 +667,38 @@ private:
         Assistant,
     };
 
-    /// 本步骤内已定稿的流式段行 (按定稿顺序;
+    /// 本步骤内已定稿的段行 (按定稿顺序;
     /// 供定稿对账判断"本步骤内该角色有几段")
+    /// - 正常情况下思考/正文各至多一条: 上游把思考与正文交替送出时 (思考 → 正文 →
+    ///   思考 → 正文), 切回已出现过的角色会把文本并回这一条, 不新起一段
     struct StepRow {
         agentxx::agent::ViewMessage::Role role = agentxx::agent::ViewMessage::Role::Assistant;
         std::string                       msgId;
         size_t                            index = 0; ///< 在 viewMessages 里的下标 (只增不改)
     };
+
+    /// 本步骤内某角色已定稿的行
+    /// - 思考/正文各至多一条 (见 [StepRow]); 该角色在本步骤还没出现时返回 nullptr
+    const StepRow* findStepRow(agentxx::agent::ViewMessage::Role role) const;
+
+    /// 把一段流式文本接到本步骤对应角色的行上
+    /// - 直播槽正是该角色 → 追加到直播槽 (常规路径)
+    /// - 该角色在本步骤已定稿 (交错返回的后一段) → 追加到那条行, 只下发该 id 的 token 增量
+    /// - 该角色还没出现 → 先定稿当前段, 再新开一段
+    void routeStreamText(std::string_view text, bool thinking);
+
+    /// 把思考元数据 (加密标记/token 统计) 并到本步骤的思考行
+    /// - 直播槽是思考 → 并入直播槽; 已定稿 → 整条覆盖下发; 还没出现 → 新开思考段
+    void routeStreamThink(const agentxx::agent::ViewMessage::ThinkData& data);
+
+    /// 追加文本到一条已定稿的段行 (交错返回的后一段走这里)
+    /// - 同时刷新该行的耗时 (从该段起点到本次追加) 并下发 token 增量
+    /// - 客户端按 id 追加 (直播槽 id 之外的 token 落到同 id 的那条行上)
+    void appendToStepRow(
+        const StepRow&   row,
+        std::string_view text,
+        bool             thinking
+    );
 
     /// 开一段流式消息 (角色切换时先定稿上一段)
     /// - headless (无对端) 会话不建直播槽: 不逐 token 累积, 也不发 stream_begin/token

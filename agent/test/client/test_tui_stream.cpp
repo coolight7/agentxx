@@ -1080,10 +1080,11 @@ void testTuiStreamEventSource(asio::io_context& ioCtx) {
     }
 }
 
-// 场景 17: 交错多段 (思考 -> 正文 -> 思考 -> 正文) = 一段一行
+// 场景 17: 思考/正文交错 —— agent 端按模型步骤归组: 一条思考 + 一条正文
 //
-// agent 端按"一次角色切换之间连续输出的文本"切段并各定稿一行, 客户端只按序落行,
-// 不做任何合并 —— 因此实时画面与重开会话后的历史天然一致。
+// 一次模型调用里上游可能把两者分多段交替送出。agent 端 EventBridge 在切回已出现过
+// 的角色时把文字并回那条已定稿的行 (同一 id 继续下发 token), 客户端只管按 id 追加。
+// 这里与 agent 端实际下发的 op 序列一致。
 void testTuiStreamScenario17(asio::io_context& ioCtx) {
     TestTUIClientIO client(ioCtx);
 
@@ -1092,26 +1093,22 @@ void testTuiStreamScenario17(asio::io_context& ioCtx) {
     client.testOnDelta(insertRow(streamRow("msg_1", ViewMessage::Role::Think, "first segment. ")));
     client.testOnDelta(streamBegin("msg_2", ViewMessage::Role::Assistant));
     client.testOnDelta(textToken("msg_2", "已完成。"));
-    client.testOnDelta(insertRow(streamRow("msg_2", ViewMessage::Role::Assistant, "已完成。")));
-    client.testOnDelta(streamBegin("msg_3", ViewMessage::Role::Think));
-    client.testOnDelta(thinkToken("msg_3", "last words."));
-    client.testOnDelta(insertRow(streamRow("msg_3", ViewMessage::Role::Think, "last words.")));
-    client.testOnDelta(streamBegin("msg_4", ViewMessage::Role::Assistant));
-    client.testOnDelta(textToken("msg_4", "事件输入…"));
-    client.testOnDelta(insertRow(streamRow("msg_4", ViewMessage::Role::Assistant, "事件输入…")));
+    // 思考又回来: 追加到已定稿的思考行 (不 new 一条)
+    client.testOnDelta(thinkToken("msg_1", "last words."));
+    // 正文继续
+    client.testOnDelta(textToken("msg_2", "事件输入…"));
+    client.testOnDelta(
+        insertRow(streamRow("msg_2", ViewMessage::Role::Assistant, "已完成。事件输入…"))
+    );
     client.testOnDelta(turnEnd());
 
     auto snap = client.sharedState().snapshot();
-    XX_TEST_EXPECT_EQ(snap->messages().size(), size_t{4});
-    if (snap->messages().size() == 4) {
+    XX_TEST_EXPECT_EQ(snap->messages().size(), size_t{2});
+    if (snap->messages().size() == 2) {
         XX_TEST_EXPECT_TRUE(snap->messages()[0]->role == TUIMessage::Role::Think);
-        XX_TEST_EXPECT_EQ(snap->messages()[0]->text, std::string{"first segment. "});
+        XX_TEST_EXPECT_EQ(snap->messages()[0]->text, std::string{"first segment. last words."});
         XX_TEST_EXPECT_TRUE(snap->messages()[1]->role == TUIMessage::Role::Assistant);
-        XX_TEST_EXPECT_EQ(snap->messages()[1]->text, std::string{"已完成。"});
-        XX_TEST_EXPECT_TRUE(snap->messages()[2]->role == TUIMessage::Role::Think);
-        XX_TEST_EXPECT_EQ(snap->messages()[2]->text, std::string{"last words."});
-        XX_TEST_EXPECT_TRUE(snap->messages()[3]->role == TUIMessage::Role::Assistant);
-        XX_TEST_EXPECT_EQ(snap->messages()[3]->text, std::string{"事件输入…"});
+        XX_TEST_EXPECT_EQ(snap->messages()[1]->text, std::string{"已完成。事件输入…"});
     }
 }
 

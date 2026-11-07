@@ -49,6 +49,9 @@ struct ViewStreamTail {
 /// - 消息边界、正文归组、耗时、可见性、折叠默认值与 id 全部由 agent 决定,
 ///   本类只做三种动作: **按 id 追加文本**、**整条 upsert**、**丢弃流式项**;
 /// - 没有"归组/合并/回填"一类启发式 —— 那些规则只存在于 agent 端 EventBridge;
+/// - "按 id 追加文本": 文本增量 (text_token/thinking_token) 通常落在尾部流式项上;
+///   同一模型步骤里思考/正文交错返回时, 后一段的目标 id 是该角色已落定的那条行,
+///   此时按 id 追加到那一行 (换新对象, 渲染缓存以指针失效);
 /// - `insert_message` / `update_message` 都是 by-id upsert:
 ///   未知 id 的 insert 追加到末尾, 已知 id 的 insert 等价整条替换 (重连重放幂等);
 ///   未知 id 的 update 忽略 (多半是被本地条数上限清理掉的老消息);
@@ -122,7 +125,9 @@ private:
     bool upsertRow(ViewMessage row);
     /// 追加一条历史行 (内部用; 已按 id 去重与可见性过滤)
     void appendRow(const ViewMessage& row);
-    /// 尾部流式项追加文本 (含 stream_begin 丢失时按 token id 自建一条)
+    /// 文本增量追加 (按 id 定位目标)
+    /// - 目标是尾部流式项 → 直接追加 (含 stream_begin 丢失时按 token id 自建一条)
+    /// - 目标是已落定的行 (同一模型步骤里交错返回的后一段) → 换新对象追加到那一行
     bool appendToken(const WireDelta& delta, bool thinking);
     /// 重建 id → 下标索引 (trimHead/prepend 后调用; 远低于逐条查找的频率)
     void rebuildIndex() const;

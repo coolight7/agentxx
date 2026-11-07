@@ -1640,18 +1640,43 @@ static TestResult testPendingViewOpsIndexReplay() {
         sess->updateViewMessage(updated);
         XX_TEST_EXPECT_EQ(replayed.size(), size_t{1}); // 仍只有首次那一条
 
-        // 轮末补存: 回放队列 (append + 两次 update), 三条都应是"当下内容"
+        // 轮末补存: 回放队列 (append + 一次 update)。同一行的连续覆盖只留一条
+        // (回放时读的是行的当下内容, 中间状态没有落库价值; 流式文本反复追加到
+        //  同一行时不会把队列撞大)
         sess->flushViewMessages();
-        XX_TEST_EXPECT_EQ(replayed.size(), size_t{4});
-        if (replayed.size() == 4) {
+        XX_TEST_EXPECT_EQ(replayed.size(), size_t{3});
+        if (replayed.size() == 3) {
             XX_TEST_EXPECT_TRUE(replayed[1].first);
             XX_TEST_EXPECT_EQ(replayed[1].second, std::string{"tool-done"});
             XX_TEST_EXPECT_FALSE(replayed[2].first);
             XX_TEST_EXPECT_EQ(replayed[2].second, std::string{"tool-done"});
-            XX_TEST_EXPECT_FALSE(replayed[3].first);
-            XX_TEST_EXPECT_EQ(replayed[3].second, std::string{"tool-done"});
         }
         XX_TEST_EXPECT_EQ(id1.empty(), false);
+    }
+
+    // Case 1b: 不同行各自的覆盖不会被合并 (去重只按下标)
+    {
+        auto sess = std::make_shared<agentxx::agent::Session>();
+        sess->bindIoThread();
+
+        int updateCalls = 0;
+        sess->setStoreHooks(agentxx::agent::SessionStoreHooks{
+            .onAppendViewMessage = [&](const V&, uint64_t, uint64_t) {},
+            .onUpdateViewMessage = [&](const V&) { ++updateCalls; },
+        });
+        auto idA = sess->appendViewMessage(makeMsg(V::Role::Tool, "a"));
+        auto idB = sess->appendViewMessage(makeMsg(V::Role::Tool, "b"));
+        for (const auto& id : {idA, idB, idA, idB}) {
+            for (const auto& m : sess->viewMessages) {
+                if (m.id == id) {
+                    auto copy = m;
+                    sess->updateViewMessage(copy);
+                    break;
+                }
+            }
+        }
+        sess->flushViewMessages();
+        XX_TEST_EXPECT_EQ(updateCalls, 2); // 每条行各回放一次
     }
 
     // Case 2: restore 丢弃队列 → 不落库陈旧操作

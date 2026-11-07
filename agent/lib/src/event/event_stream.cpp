@@ -166,27 +166,17 @@ void EventBridge::handleLLMToken(const neograph::graph::GraphEvent& event) {
     }
 
     // 消息成型 (agent 是唯一写者):
-    // - 类型切换 (思考 <-> 正文) = 上一段结束、下一段开始, 一段一行, 不做跨段合并
+    // - 类型切换 (思考 <-> 正文): 该角色在本步骤已出现时并回那条行, 否则新起一段;
+    //   同一段里不把两个角色的文字混在一条行上 (一条行只有一个正文槽)
     // - 思考类型且文本为空 = 加密思考首包/元数据包: 只带元数据, 不追加文本
     const bool isThinking = (lastChatChunkType_ == neograph::ChatStreamChunk::TYPE_THINKING);
     if (isThinking && token.empty()) {
-        const ViewMessage::ThinkData meta{
+        routeStreamThink(ViewMessage::ThinkData{
             .reasoningTokens = 0,
             .isEncrypted     = true,
-        };
-        if (openKind_ != OpenStreamKind::Think) {
-            beginStream(ViewMessage::Role::Think, meta);
-        } else {
-            mergeStreamThink(meta);
-        }
+        });
     } else {
-        const auto wantRole = isThinking ? ViewMessage::Role::Think : ViewMessage::Role::Assistant;
-        const auto wantKind
-            = isThinking ? OpenStreamKind::Think : OpenStreamKind::Assistant;
-        if (openKind_ != wantKind) {
-            beginStream(wantRole);
-        }
-        appendStreamText(token, isThinking);
+        routeStreamText(token, isThinking);
     }
 
     // 累计估算 token 数: 批量估算 (每16 token推送窗口再估, 减少 countTokens 遍历)
@@ -203,6 +193,90 @@ void EventBridge::handleLLMToken(const neograph::graph::GraphEvent& event) {
 
     // 总线发布
     publishModelToken(token, kind);
+}
+
+const EventBridge::StepRow* EventBridge::findStepRow(ViewMessage::Role role) const {
+    // 只看本步骤的行: stepRows_ 在 NODE_START 清空, 上一模型调用的行不会命中
+    for (auto it = stepRows_.rbegin(); it != stepRows_.rend(); ++it) {
+        if (it->role == role) {
+            return &*it;
+        }
+    }
+    return nullptr;
+}
+
+void EventBridge::routeStreamText(std::string_view text, bool thinking) {
+    if (text.empty()) {
+        return;
+    }
+    const auto role = thinking ? ViewMessage::Role::Think : ViewMessage::Role::Assistant;
+    const auto kind = thinking ? OpenStreamKind::Think : OpenStreamKind::Assistant;
+    if (openKind_ == kind) {
+        appendStreamText(text, thinking);
+        return;
+    }
+    // 上游把思考/正文分多段交替送出 (思考 → 正文 → 思考 → 正文): 切回已出现过的
+    // 角色时把文字并回那条已定稿的行, 而不是再切一条 (否则一次模型调用会被拆成
+    // 多条思考行与正文行, 与重开会话后的历史、与 LLM 上下文都对应不上)
+    if (const auto* row = findStepRow(role); row != nullptr) {
+        appendToStepRow(*row, text, thinking);
+        return;
+    }
+    // 该角色在本步骤还没出现: 先定稿当前段 (另一个角色), 再新开一段
+    beginStream(role);
+    appendStreamText(text, thinking);
+}
+
+void EventBridge::routeStreamThink(const ViewMessage::ThinkData& data) {
+    if (openKind_ == OpenStreamKind::Think) {
+        mergeStreamThink(data);
+        return;
+    }
+    const auto* row = findStepRow(ViewMessage::Role::Think);
+    if (row == nullptr) {
+        beginStream(ViewMessage::Role::Think, data);
+        return;
+    }
+    // 思考行已定稿 (元数据包比正文晚到): 合并后整条覆盖下发 (低频, 不是文本增量)
+    if (!session_ || row->index >= session_->viewMessages.size()) {
+        return;
+    }
+    ViewMessage merged = session_->viewMessages[row->index];
+    auto        think  = merged.think.value_or(ViewMessage::ThinkData{});
+    mergeThinkMeta(think, data);
+    if (merged.think.has_value() && merged.think->isEncrypted == think.isEncrypted
+        && merged.think->reasoningTokens == think.reasoningTokens) {
+        return;
+    }
+    merged.think = think;
+    emitDelta(WireDelta{
+        .message = std::make_shared<ViewMessage>(merged),
+        .type    = agentxx::agent::WireDelta::Type::UpdateMessage,
+    });
+    session_->updateViewMessage(std::move(merged));
+}
+
+void EventBridge::appendToStepRow(
+    const StepRow&   row,
+    std::string_view text,
+    bool             thinking
+) {
+    if (!session_ || text.empty() || row.index >= session_->viewMessages.size()) {
+        return;
+    }
+    ViewMessage updated = session_->viewMessages[row.index];
+    updated.text.append(text);
+    // 耗时按"该角色从第一段到本次追加"的跨度重算 (交错的各段合起来是一段)
+    if (updated.startTimeMs > 0) {
+        updated.durationMs = std::max<int64_t>(0, nowMs() - updated.startTimeMs);
+    }
+    session_->updateViewMessage(std::move(updated));
+    emitDelta(WireDelta{
+        .text  = std::string{text},
+        .msgId = row.msgId,
+        .type  = thinking ? agentxx::agent::WireDelta::Type::ThinkToken
+                          : agentxx::agent::WireDelta::Type::TextToken,
+    });
 }
 
 void EventBridge::beginStream(

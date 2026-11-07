@@ -74,6 +74,9 @@
 - `message` 是整条展示消息 (`insert_message` / `update_message`): 消息边界、正文、
   工具参数与结果、成败、耗时、默认折叠都在这一条里; 文本增量 (`text_token` /
   `thinking_token`) 只带追加的文本。
+- 文本增量的目标行就是 `msgId` 对应的那条: 通常是尾部流式项 (`stream_begin` 下发的 id);
+  同一模型步骤里思考/正文交错时, 目标是该角色**已落定**的行 (客户端按 id 追加到那一行,
+  不新开流式项), 见 [tui.md](tui.md) §2.19。
 - `error.code` 取值见 `WireErrorCode`: 0 internal / 1 invalid state / 2 session not
   found / 3 session mismatch / 4 invalid args / 5 message not found; 未知码按 0 处理。
 - 连接阶段取值见 `WireConnectionStage`: unhandshaken / unbound / ready /

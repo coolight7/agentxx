@@ -191,11 +191,28 @@ TestResult testViewReplica() {
         XX_TEST_EXPECT_FALSE(r.hasStream());
         XX_TEST_EXPECT_EQ(idsOf(r), std::string{"s1"});
         XX_TEST_EXPECT_EQ(r.rows()[0]->text, std::string{"half"});
-        // 定稿行之后的 token (迟到) 自建一条新流 (id 与已有行同名, 但流式项是独立的)
+        // 定稿行之后同 id 的 token: 追加到那条已落定的行 (不新开流式项), 且换新对象
+        const auto before = r.rows()[0];
         XX_TEST_EXPECT_TRUE(r.applyDelta(tok));
-        XX_TEST_EXPECT_TRUE(r.hasStream());
-        XX_TEST_EXPECT_EQ(*r.stream().text, std::string{"half"});
+        XX_TEST_EXPECT_FALSE(r.hasStream());
         XX_TEST_EXPECT_EQ(r.rows().size(), size_t{1});
+        XX_TEST_EXPECT_EQ(r.rows()[0]->text, std::string{"halfhalf"});
+        XX_TEST_EXPECT_TRUE(r.rows()[0].get() != before.get()); // 指针变了才会重绘
+        // 已定稿行 + 未定稿的正文流共存: 思考的后一段追加到前面的行, 直播槽不动
+        WireDelta bodyBegin;
+        bodyBegin.type       = WireDelta::Type::StreamBegin;
+        bodyBegin.msgId      = "s2";
+        bodyBegin.streamRole = Role::Assistant;
+        r.applyDelta(bodyBegin);
+        WireDelta thinkTok;
+        thinkTok.type  = WireDelta::Type::ThinkToken;
+        thinkTok.msgId = "s1";
+        thinkTok.text  = "-more";
+        XX_TEST_EXPECT_TRUE(r.applyDelta(thinkTok));
+        XX_TEST_EXPECT_EQ(r.rows()[0]->text, std::string{"halfhalf-more"});
+        XX_TEST_EXPECT_TRUE(r.hasStream());
+        XX_TEST_EXPECT_EQ(r.stream().id, std::string{"s2"});
+        XX_TEST_EXPECT_TRUE(r.stream().text->empty());
     }
 
     // ---- 6. token 先于 stream_begin 到达 (丢包): 按 token 自带 id 自建流 ----

@@ -701,6 +701,9 @@ std::string buildSchemaDoc(const std::vector<WireSample>& samples) {
     out += "- `message` 是整条展示消息 (`insert_message` / `update_message`): 消息边界、正文、\n";
     out += "  工具参数与结果、成败、耗时、默认折叠都在这一条里; 文本增量 (`text_token` /\n";
     out += "  `thinking_token`) 只带追加的文本。\n";
+    out += "- 文本增量的目标行就是 `msgId` 对应的那条: 通常是尾部流式项 (`stream_begin` 下发的 id);\n";
+    out += "  同一模型步骤里思考/正文交错时, 目标是该角色**已落定**的行 (客户端按 id 追加到那一行,\n";
+    out += "  不新开流式项), 见 [tui.md](tui.md) §2.19。\n";
     out += "- `error.code` 取值见 `WireErrorCode`: 0 internal / 1 invalid state / 2 session not\n";
     out += "  found / 3 session mismatch / 4 invalid args / 5 message not found; 未知码按 0 处理。\n";
     out += "- 连接阶段取值见 `WireConnectionStage`: unhandshaken / unbound / ready /\n";

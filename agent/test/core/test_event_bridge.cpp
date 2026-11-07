@@ -1004,6 +1004,155 @@ asio::awaitable<void> test_eventbridge_think_duration() {
     co_return;
 }
 
+/// 验证思考/正文交错 (思考 → 正文 → 思考 → 正文) 按模型步骤归组
+/// - 一次模型调用只产出"一条思考 + 一条正文": 后一段并回同角色的那条行, 不切成多条
+/// - 并回时下发该行 id 的 token 增量 (客户端按 id 追加), 不新开流式段
+/// - 定稿对账与流式累积一致: 文本相同就不发 update_message
+asio::awaitable<void> test_eventbridge_interleaved_segments() {
+    using ET = neograph::graph::GraphEvent::Type;
+    using DT = agentxx::agent::WireDelta::Type;
+    using VM = agentxx::agent::ViewMessage;
+
+    auto makeFlow = [](std::shared_ptr<agentxx::agent::Session>& session,
+                       std::shared_ptr<TestEbIO>&               io) {
+        session          = std::make_shared<agentxx::agent::Session>();
+        io               = std::make_shared<TestEbIO>();
+        session->io      = io;
+        auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
+        return makeTestBridge(agentContext, session, io);
+    };
+    auto makeChunk = [](int type, std::string data) {
+        return neograph::json{
+            {"type", type           },
+            {"data", std::move(data)}
+        };
+    };
+
+    // ---- 流程 1: 交错两轮 + messages 定稿对账 ----
+    {
+        std::shared_ptr<agentxx::agent::Session> session;
+        std::shared_ptr<TestEbIO>                io;
+        auto bridge   = makeFlow(session, io);
+        auto bridgeCb = bridge->makeCallback();
+
+        bridgeCb(neograph::graph::GraphEvent{ET::NODE_START, "llm", neograph::json::object()});
+        bridgeCb(neograph::graph::GraphEvent{
+            ET::LLM_TOKEN,
+            "llm",
+            makeChunk(neograph::ChatStreamChunk::TYPE_THINKING, "think-1")
+        });
+        bridgeCb(neograph::graph::GraphEvent{
+            ET::LLM_TOKEN,
+            "llm",
+            makeChunk(neograph::ChatStreamChunk::TYPE_CONTENT, "body-1")
+        });
+        bridgeCb(neograph::graph::GraphEvent{
+            ET::LLM_TOKEN,
+            "llm",
+            makeChunk(neograph::ChatStreamChunk::TYPE_THINKING, "think-2")
+        });
+        bridgeCb(neograph::graph::GraphEvent{
+            ET::LLM_TOKEN,
+            "llm",
+            makeChunk(neograph::ChatStreamChunk::TYPE_CONTENT, "body-2")
+        });
+
+        // NodeStart, StreamBegin(Think), Think(think-1),
+        // InsertMessage(思考行), StreamBegin(Assistant), Text(body-1),
+        // Think(think-2 并回已定稿的思考行), Text(body-2)
+        XX_TEST_EXPECT_EQ(io->deltas.size(), size_t{8});
+        std::string thinkId;
+        std::string bodyId;
+        if (io->deltas.size() == 8) {
+            XX_TEST_EXPECT_TRUE(io->deltas[1].type == DT::StreamBegin);
+            XX_TEST_EXPECT_TRUE(io->deltas[1].streamRole == VM::Role::Think);
+            thinkId = io->deltas[1].msgId;
+            XX_TEST_EXPECT_TRUE(io->deltas[3].type == DT::InsertMessage);
+            if (io->deltas[3].message) {
+                XX_TEST_EXPECT_EQ(io->deltas[3].message->id, thinkId);
+                XX_TEST_EXPECT_EQ(io->deltas[3].message->text, std::string{"think-1"});
+            }
+            XX_TEST_EXPECT_TRUE(io->deltas[4].type == DT::StreamBegin);
+            XX_TEST_EXPECT_TRUE(io->deltas[4].streamRole == VM::Role::Assistant);
+            bodyId = io->deltas[4].msgId;
+            XX_TEST_EXPECT_TRUE(io->deltas[5].type == DT::TextToken);
+            // 思考的后一段并回已定稿的思考行: 不新开 stream_begin, 增量指向那条行的 id
+            XX_TEST_EXPECT_TRUE(io->deltas[6].type == DT::ThinkToken);
+            XX_TEST_EXPECT_EQ(io->deltas[6].msgId, thinkId);
+            XX_TEST_EXPECT_EQ(io->deltas[6].text, std::string{"think-2"});
+            XX_TEST_EXPECT_TRUE(io->deltas[7].type == DT::TextToken);
+            XX_TEST_EXPECT_EQ(io->deltas[7].msgId, bodyId);
+        }
+        // 此刻只有思考行已定稿 (正文还在直播槽里)
+        XX_TEST_EXPECT_EQ(session->viewMessages.size(), size_t{1});
+        if (session->viewMessages.size() == 1) {
+            XX_TEST_EXPECT_TRUE(session->viewMessages[0].role == VM::Role::Think);
+            XX_TEST_EXPECT_EQ(session->viewMessages[0].text, std::string{"think-1think-2"});
+        }
+
+        // messages 通道定稿: 文本与流式累积一致 -> 不额外发整条覆盖
+        bridgeCb(neograph::graph::GraphEvent{
+            ET::CHANNEL_WRITE,
+            "llm",
+            neograph::json{
+                {"channel", "messages"},
+                {"value",
+                 neograph::json::array({
+                     neograph::json{
+                         {"role", "assistant"},
+                         {"content", "body-1body-2"},
+                         {"reasoning_content", "think-1think-2"},
+                     },
+                 })},
+            }
+        });
+        XX_TEST_EXPECT_EQ(io->deltas.size(), size_t{9}); // 只多了正文行的 InsertMessage
+        for (const auto& d : io->deltas) {
+            XX_TEST_EXPECT_FALSE(d.type == DT::UpdateMessage);
+        }
+        XX_TEST_EXPECT_EQ(session->viewMessages.size(), size_t{2});
+
+        bridgeCb(neograph::graph::GraphEvent{ET::NODE_END, "llm", neograph::json::object()});
+        XX_TEST_EXPECT_TRUE(io->deltas.back().type == DT::NodeEnd);
+    }
+
+    // ---- 流程 2: 没有 messages 通道写入 (节点直接结束): 仍是一条思考 + 一条正文 ----
+    {
+        std::shared_ptr<agentxx::agent::Session> session;
+        std::shared_ptr<TestEbIO>                io;
+        auto bridge   = makeFlow(session, io);
+        auto bridgeCb = bridge->makeCallback();
+
+        bridgeCb(neograph::graph::GraphEvent{ET::NODE_START, "llm", neograph::json::object()});
+        bridgeCb(neograph::graph::GraphEvent{
+            ET::LLM_TOKEN,
+            "llm",
+            makeChunk(neograph::ChatStreamChunk::TYPE_THINKING, "t1")
+        });
+        bridgeCb(neograph::graph::GraphEvent{
+            ET::LLM_TOKEN,
+            "llm",
+            makeChunk(neograph::ChatStreamChunk::TYPE_CONTENT, "c1")
+        });
+        bridgeCb(neograph::graph::GraphEvent{
+            ET::LLM_TOKEN,
+            "llm",
+            makeChunk(neograph::ChatStreamChunk::TYPE_THINKING, "t2")
+        });
+        bridgeCb(neograph::graph::GraphEvent{ET::NODE_END, "llm", neograph::json::object()});
+
+        XX_TEST_EXPECT_EQ(session->viewMessages.size(), size_t{2});
+        if (session->viewMessages.size() == 2) {
+            XX_TEST_EXPECT_TRUE(session->viewMessages[0].role == VM::Role::Think);
+            XX_TEST_EXPECT_EQ(session->viewMessages[0].text, std::string{"t1t2"});
+            XX_TEST_EXPECT_TRUE(session->viewMessages[1].role == VM::Role::Assistant);
+            XX_TEST_EXPECT_EQ(session->viewMessages[1].text, std::string{"c1"});
+        }
+    }
+
+    co_return;
+}
+
 /// 验证生成阶段占位提示 (GenStatus): 模型节点开始执行 / 工具调用开始 / 生成结束
 /// - 生成开始标记 (模型调用节点在请求发出后下发) -> GenStatus::Waiting
 /// - 工具调用开始标记 (Provider 首个 tool_call 分片) -> GenStatus::ToolCall (含工具名)
@@ -1151,6 +1300,7 @@ asio::awaitable<TestResult> run_event_bridge_tests() {
         co_await test_eventbridge_channel_write_thinking();
         co_await test_eventbridge_node_delta();
         co_await test_eventbridge_think_duration();
+        co_await test_eventbridge_interleaved_segments();
         co_await test_eventbridge_tps();
         co_await test_eventbridge_gen_status();
         co_await test_eventbridge_gen_status_error();
