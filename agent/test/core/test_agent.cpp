@@ -1621,13 +1621,14 @@ asio::awaitable<void> test_agent_turn_system_message() {
     XX_TEST_EXPECT_TRUE(foundStat);
 
     // io 应收到 InsertMessage WireDelta, 携带完整 ViewMessage, msgId 与历史消息一致
+    // (本轮还含用户行/正文定稿行等其他 insert_message, 只比对 Tip 那一条)
     bool foundDelta = false;
     for (const auto& d : io->deltas) {
-        if (d.type == agentxx::agent::WireDelta::Type::InsertMessage && d.message) {
+        if (d.type == agentxx::agent::WireDelta::Type::InsertMessage && d.message
+            && d.message->role == agentxx::agent::ViewMessage::Role::Tip) {
             foundDelta = true;
             XX_TEST_EXPECT_EQ(d.message->id, statMsgId);
             XX_TEST_EXPECT_TRUE(!d.message->text.empty());
-            XX_TEST_EXPECT_EQ(d.message->role, agentxx::agent::ViewMessage::Role::Tip);
         }
     }
     XX_TEST_EXPECT_TRUE(foundDelta);
