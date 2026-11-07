@@ -8,6 +8,7 @@
 #include "ftxui/component/mouse.hpp"
 #include "ftxui/dom/elements.hpp"
 #include <cstdint>
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
@@ -43,15 +44,49 @@ namespace client {
 /// 约束: **一条中断消息 = 一份表单** (一次中断请求渲染为一条消息), 描述中的
 /// 全部 control 块都是可交互控件, 用户一次提交全部值。
 ///
+/// 展示形态由**处理状态**决定 (形态即语义, 用户不用记快捷键):
+///
+/// | 状态 | 标记 | 内容 | 可折叠 |
+/// |---|---|---|---|
+/// | 等待操作 (`Waiting`) | `!` | 头行 + 描述全部内容块 + 控件 + 提交行 | 否 (不登记折叠命中区) |
+/// | 已处理 + 折叠 | `+` | 一行摘要 (头行分段 + 目标 + 处理结果) | 是 (点摘要行展开) |
+/// | 已处理 + 展开 | `-` | 头行 + 结果文本 + 描述内容块 (跳过控件/提交行) | 是 (点头行收起) |
+///
+/// 未处理的消息**不可能被折叠**: 渲染与命中都不读 `collapsed`, 用户的注意力
+/// 不会被"折叠成一个 + 的待办"挡住; 处理完成的那一刻自动折叠成一行摘要
+/// (见 [confirm] / [cancel] 与 client 侧的过期通知处理)。
+///
+/// 折叠/展开的命中只在**头行/摘要行** (整行判定), 不并进消息列表的
+/// `handleCollapsibleClick` —— 否则展开态的控件点击会被折叠判定抢走。
+///
 /// UI 状态 (各控件编辑文本/选中项/勾选项/校验提示) 存于本类的状态表,
 /// key = 中断请求 id, 与消息内容 (可被复制/重放) 分离; 控件状态按 **控件 id**
 /// 索引 (而非块下标), 版式变化不影响状态归属。
 class InterruptView {
 public:
 
+    /// 工具显示名解析器 (UI 线程; 由消息列表注入)
+    ///
+    /// 输入原始工具名, 返回该工具的**特化显示名** (如 `agentxx_filesystem_write`
+    /// -> `Write`); 返回空串 = 显示名仍在生成中, 该分段本帧留空 (不显示原始
+    /// 工具名, 下一帧才换成显示名就不会跳变); 没有注册渲染器的工具由解析器
+    /// 直接返回原始工具名 (结果不会再变)。
+    ///
+    /// 未注入解析器 (单测直接构造中断视图) 时用分段里的字面工具名。
+    using ToolDisplayNameFn = std::function<std::string(std::string_view)>;
+
     /// 控件命中区域 (渲染时由共享组件层的行模型登记; 点击命中检测按"行元素框 +
     /// 行内区域"两级判定, 局部坐标定义与 [UiHitRegion] 一致)
     struct HitBox {
+        /// 命中类型 (决定命中后的动作)
+        enum class Kind : uint8_t {
+            /// 表单控件 (控件块/提交行; 按 controlId + sub 定位具体位置)
+            Form,
+            /// 折叠/展开 (已处理消息的头行/摘要行; 整行判定, 不看 region)
+            Fold,
+        };
+
+        Kind kind = Kind::Form;
         /// 消息下标 (0-based, 对应 TUIRenderState::messages)
         size_t msgIndex = 0;
         /// 描述块下标 (ui.blocks 的下标; 点击派发按它定位具体块, 与控件 id 无关)
@@ -80,6 +115,9 @@ public:
 
     /// 帧开头调用: 清空上一帧的命中区域 (本帧构建可见中断消息时重新填充)
     void beginFrame();
+
+    /// 设置工具显示名解析器 (见 [ToolDisplayNameFn]; 只解析 `kind == "tool"` 的分段)
+    void setToolDisplayNameResolver(ToolDisplayNameFn fn);
 
     /// 注册中断请求的结果回传通道 (client 线程经 enqueueUiAction 调用)
     void attachChannel(int64_t wireId, std::shared_ptr<InterruptResultChannel> ch);
@@ -117,7 +155,7 @@ public:
     /// 高度估算 (行数; 不含消息尾部空行) —— 与 build 同一套布局过程
     size_t estimate(const TUIMessage& msg, int width) const;
 
-    /// 构建中断消息块 (Waiting 时渲染描述块与控件, 否则渲染状态行)
+    /// 构建中断消息块 (等待态渲染描述块与控件; 已处理态渲染摘要行或详情)
     /// - [mdBuilders] markdown 渲染器生命周期 (Element 内部容器指向它;
     ///   调用方 (消息列表) 须随 Element 持有, 否则悬空)
     ftxui::Element build(
@@ -154,6 +192,85 @@ private:
     static constexpr int kSubSubmitCancel  = 1;
     /// 提交行在描述块未声明 id 时使用的固定命中 id
     static constexpr std::string_view kItemIdSubmit = "submit";
+    /// 折叠命中区的固定标识 (整行可点; 不关联任何描述块)
+    static constexpr std::string_view kItemIdFold = "fold";
+    /// 折叠命中区的块下标占位 (折叠不按块定位)
+    static constexpr size_t kFoldBlockIndex = static_cast<size_t>(-1);
+    /// 标记列宽度 (终端列: 1 列字形 + 1 个空格, 与其它消息的折叠标记列对齐)
+    static constexpr int kMarkColumns = 2;
+
+    /// 展示形态 (由处理状态 + 折叠标志决定)
+    enum class Mode : uint8_t {
+        /// 等待用户操作: 恒展开且不可折叠 (不登记折叠命中区)
+        Waiting,
+        /// 已处理且折叠: 一行摘要
+        Collapsed,
+        /// 已处理且展开: 头行 + 结果文本 + 内容块 (不含控件与提交行)
+        Expanded,
+    };
+
+    /// 消息当前的展示形态 (描述缺失/非法时由调用方先走诊断行, 不经过这里)
+    static Mode modeOf(const TUIMessage& msg);
+
+    /// 解析好的分段 (已按拼接规则补齐相邻段之间的空格)
+    struct ResolvedSegment {
+        std::string text;
+        std::string color;
+        bool        bold = false;
+        bool        dim  = false;
+    };
+
+    /// 分段 → 可渲染分段
+    /// - i18n 键优先 (缺键回退字面文本)
+    /// - `kind == "tool"`: 换成工具特化显示名; 显示名未就绪时该段丢弃 (本帧不画)
+    /// - 相邻两段都非空且两侧都没有空白时补一个空格 (生产方不必在键解析结果里
+    ///   预埋空格; 往两端都预埋空格又会与英文段落重复)
+    std::vector<ResolvedSegment>
+        resolveSegments(const std::vector<middleware::InterruptUiSegment>& segments) const;
+    /// 可渲染分段 → 单行文本 (列宽计算用; 与 [segElements] 逐段对齐)
+    static std::string joinSegments(const std::vector<ResolvedSegment>& segments);
+    /// 可渲染分段 → 横排元素
+    ftxui::Elements segElements(const std::vector<ResolvedSegment>& segments) const;
+
+    /// 标记列 (`!` / `+` / `-` 加一个空格; 未处理 = error + bold, 已处理 = hint)
+    ftxui::Element buildMark(Mode mode) const;
+
+    /// 等待态头行 (默认前缀 / 自定义分段)
+    ftxui::Elements buildHeader(const middleware::InterruptUi& ui) const;
+
+    /// 已处理展开态: 头行 (带结果文本) + 描述内容块 (跳过控件与提交行)
+    ftxui::Element buildProcessed(
+        const TUIMessage&                                   msg,
+        size_t                                              msgIndex,
+        const middleware::InterruptUi&                      ui,
+        int                                                 maxWidth,
+        std::vector<std::unique_ptr<markdown::DomBuilder>>& mdBuilders
+    );
+
+    /// 折叠摘要行 (恒一行; 点它展开)
+    ftxui::Element buildSummaryLine(
+        const TUIMessage&              msg,
+        size_t                         msgIndex,
+        const middleware::InterruptUi& ui,
+        int                            maxWidth
+    );
+
+    /// 描述缺失/非法时的诊断行 (不可交互, 无命中区)
+    ftxui::Element buildDiagnosticLine() const;
+
+    /// 处理结果文案 (无占位符非空: 已确认/已取消/已过期; 未处理返回空)
+    std::string statusTextOf(const TUIMessage& msg) const;
+    /// 处理结果的配色 (已确认 = accent, 其余 = error)
+    ftxui::Color statusColorOf(const TUIMessage& msg) const;
+
+    /// 通用回退: 首个内容块的首行 (去掉行首列表符号与空白; 无内容块返回空)
+    std::string firstContentLine(const middleware::InterruptUi& ui) const;
+
+    /// 登记折叠命中区 (整行判定; 返回的元素自持反射框, 被搬走也不会悬空)
+    ftxui::Element registerFoldHit(size_t msgIndex, ftxui::Element element) const;
+
+    /// 文本终端显示列宽 (宽字符按 2 列)
+    static int textColumns(std::string_view s);
 
     /// 描述里的控件/提交行块 → 共享组件项 (附来源块下标, 渲染时用于记录命中来源)
     struct FormItem {
@@ -196,13 +313,16 @@ private:
     /// - [state] 为空时按描述默认值布局 (估算路径)
     /// - [registerHits] 为真时把控件命中区域写入 hits_ (渲染路径)
     /// - [msgIndex] 仅命中登记使用 (估算路径可传 0)
+    /// - [contentOnly] 为真时跳过控件与提交行块 (已处理展开态: 控件值已在结果
+    ///   文本里, 不再画可点控件)
     void layoutForm(
         const TUIMessage& msg,
         size_t            msgIndex,
         const FormState*  state,
         int               width,
         bool              registerHits,
-        UiRenderResult&   out
+        UiRenderResult&   out,
+        bool              contentOnly = false
     ) const;
 
     /// 登记某个块渲染出的控件命中区域 (行元素框 + 行内区域两级命中)
@@ -217,10 +337,7 @@ private:
     ) const;
 
     /// 头行渲染 (默认前缀 / 自定义分段)
-    ftxui::Element buildHeader(const middleware::InterruptUi& ui) const;
-
-    /// 状态行 (Confirmed/Canceled/Expired; 描述缺失时输出诊断行)
-    ftxui::Element buildStatusLine(const TUIMessage& msg) const;
+    ftxui::Elements buildHeaderSegments(const middleware::InterruptUi& ui) const;
 
     /// 记录命中区域 (msgIndex + 块下标 + 控件 id + 子序号; box 经 shared_ptr 持有)
     void
@@ -229,7 +346,8 @@ private:
             std::string                        controlId,
             int                                sub,
             const std::shared_ptr<ftxui::Box>& box,
-            const UiHitRegion&                 region) const;
+            const UiHitRegion&                 region,
+            HitBox::Kind                       kind = HitBox::Kind::Form) const;
 
     /// 经结果通道回传 (通道缺失时静默丢弃并记日志)
     void sendSubmit(int64_t wireId, const InterruptFormSubmit& submit);
@@ -242,6 +360,9 @@ private:
     void cancel(size_t msgIndex);
 
     TUICtx& ctx_;
+
+    /// 工具显示名解析器 (空 = 直接用分段里的字面工具名)
+    ToolDisplayNameFn toolDisplayName_;
 
     /// 最近一次渲染的命中区域 (UI 线程独占; beginFrame 清空, 构建期填充;
     /// 布局函数为 const, 故此处 mutable)

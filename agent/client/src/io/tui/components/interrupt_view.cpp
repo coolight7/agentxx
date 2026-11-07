@@ -1,6 +1,8 @@
 #include "agentxx-client/io/tui/components/interrupt_view.h"
 
+#include "agentxx-client/io/tui/framework/owned_reflect.h"
 #include "agentxx-client/io/tui/framework/tui_i18n.h"
+#include "agentxx-client/io/tui/framework/ui_hit.h"
 #include "agentxx-client/io/tui/markdown_block.h"
 #include "fmt/format.h"
 #include "utilxx_base/log.h"
@@ -16,6 +18,13 @@ namespace {
 
 using utilxx_base::Json;
 
+/// 摘要行分隔符 (分段 / 补充说明 / 处理结果三段之间的间隔符号)
+constexpr std::string_view kSummarySeparator = " · ";
+/// 分隔符占用的终端列数
+constexpr int kSeparatorColumns = 3;
+/// 补充说明的最少列数 (不足时分段与结果之外的地方不画)
+constexpr int kMinDetailColumns = 8;
+
 /// 值 → 展示文本 (状态行 "标签: 值" 使用)
 std::string valueText(const Json& v) {
     if (v.is_string()) {
@@ -30,10 +39,74 @@ std::string valueText(const Json& v) {
     return v.dump();
 }
 
+/// 文本终端显示列宽 (宽字符按 2 列)
+int columnsOf(std::string_view s) {
+    return static_cast<int>(markdown::utf8_display_width(s));
+}
+
+bool endsWithSpace(std::string_view s) {
+    return !s.empty() && (s.back() == ' ' || s.back() == '\t');
+}
+
+bool startsWithSpace(std::string_view s) {
+    return !s.empty() && (s.front() == ' ' || s.front() == '\t');
+}
+
+/// 单行截断: 只取首个换行前的内容, 按终端显示列宽截断 (宽字符按 2 列, 不切码点)
+/// - 超出 [maxCols] 时以 "..." 收尾, 结果总宽不超过 [maxCols]
+/// - 放不下省略号时返回空串 (调用方自行省略该段)
+std::string oneLineWithin(std::string_view s, int maxCols) {
+    if (maxCols <= 0 || s.empty()) {
+        return {};
+    }
+    const auto        nl = s.find('\n');
+    std::string_view  line = (nl == std::string_view::npos) ? s : s.substr(0, nl);
+    while (!line.empty() && (line.front() == ' ' || line.front() == '\t')) {
+        line.remove_prefix(1);
+    }
+    while (!line.empty() && (line.back() == ' ' || line.back() == '\t' || line.back() == '\r')) {
+        line.remove_suffix(1);
+    }
+    if (line.empty()) {
+        return {};
+    }
+    if (columnsOf(line) <= maxCols) {
+        return std::string{line};
+    }
+    // 预留省略号 3 列后逐码点累积, 超过预算即停 (不切断码点)
+    const int budget = maxCols - 3;
+    if (budget <= 0) {
+        return {};
+    }
+    std::string out;
+    int         cols = 0;
+    for (size_t i = 0; i < line.size();) {
+        size_t len = markdown::utf8_byte_length(line[i]);
+        len        = std::min(len, line.size() - i);
+        const int w
+            = markdown::codepoint_width(markdown::utf8_codepoint(line.data() + i, len));
+        if (cols + w > budget) {
+            break;
+        }
+        out.append(line.substr(i, len));
+        cols += w;
+        i    += len;
+    }
+    if (out.empty()) {
+        return {}; // 首个字符就放不下: 宁可不画也不画半截
+    }
+    out += "...";
+    return out;
+}
+
 } // namespace
 
 InterruptView::InterruptView(TUICtx& ctx) :
     ctx_(ctx) {}
+
+void InterruptView::setToolDisplayNameResolver(ToolDisplayNameFn fn) {
+    toolDisplayName_ = std::move(fn);
+}
 
 // ---------------------------------------------------------------------------
 // 通道与 UI 状态管理
@@ -285,7 +358,8 @@ void InterruptView::layoutForm(
     const FormState*  state,
     int               width,
     bool              registerHits,
-    UiRenderResult&   out
+    UiRenderResult&   out,
+    bool              contentOnly
 ) const {
     const auto ui = resolveUi(msg);
     if (ui.empty()) {
@@ -293,7 +367,8 @@ void InterruptView::layoutForm(
     }
 
     // 控件块与提交行 → 共享组件项 (标签/说明的 i18n 键在此解析)
-    const auto items = formItems(ui);
+    // - 已处理展开态只看内容块: 控件值已体现在结果文本里, 不再画可点控件
+    const auto items = contentOnly ? std::vector<FormItem>{} : formItems(ui);
 
     UiRenderCtx rc;
     rc.theme  = ctx_.theme;
@@ -315,6 +390,9 @@ void InterruptView::layoutForm(
 
         // ---- 控件块与提交行: 共享组件渲染 (控件行/标签/校验提示与插件表单同实现) ----
         if (block.kind == "control" || block.kind == "submit") {
+            if (contentOnly) {
+                continue;
+            }
             if (nextItem < items.size() && items[nextItem].blockIndex == bi) {
                 renderBlockItem(items[nextItem]);
                 ++nextItem;
@@ -358,67 +436,291 @@ void InterruptView::layoutForm(
 }
 
 // ---------------------------------------------------------------------------
-// 渲染
+// 形态与分段
 // ---------------------------------------------------------------------------
 
-Element InterruptView::buildHeader(const middleware::InterruptUi& ui) const {
-    const auto& theme = *ctx_.theme;
-    Elements    segs;
-    if (ui.header.segments.empty()) {
-        // 默认前缀 (语言随 TuiI18n)
-        segs.push_back(text(tr("interrupt.header")) | color(theme.accentColor) | bold);
-    } else {
-        // 自定义分段 (完全由描述决定; 描述未着色时用普通内容色)
-        for (const auto& seg : ui.header.segments) {
-            auto label = resolveLabel(seg.labelKey, seg.text);
-            if (label.empty()) {
-                continue;
-            }
-            Element el = text(label) | color(client::uiRoleColor(seg.color, theme));
-            if (seg.bold) {
-                el = el | bold;
-            }
-            if (seg.dim) {
-                el = el | theme.dim();
-            }
-            segs.push_back(std::move(el));
-        }
+InterruptView::Mode InterruptView::modeOf(const TUIMessage& msg) {
+    if (isWaiting(msg)) {
+        // 未处理恒展开: 不读 msg.collapsed, 从根上保证"待办条目不可能被折叠"
+        return Mode::Waiting;
     }
-    return hbox(std::move(segs));
+    return msg.collapsed ? Mode::Collapsed : Mode::Expanded;
 }
 
-Element InterruptView::buildStatusLine(const TUIMessage& msg) const {
+std::vector<InterruptView::ResolvedSegment> InterruptView::resolveSegments(
+    const std::vector<middleware::InterruptUiSegment>& segments
+) const {
+    std::vector<ResolvedSegment> out;
+    out.reserve(segments.size());
+    for (const auto& seg : segments) {
+        std::string label = resolveLabel(seg.labelKey, seg.text);
+        // 工具名分段: 换成该工具的特化显示名 (如 agentxx_filesystem_write -> Write)。
+        // 显示名未就绪时本帧**不画该段** —— 先画原始工具名会在下一帧跳变成显示名
+        if (seg.kind == "tool" && toolDisplayName_) {
+            label = toolDisplayName_(label);
+        }
+        if (label.empty()) {
+            continue;
+        }
+        // 相邻两段之间补一个空格: 生产方只给各自的值, 不预埋前导/尾随空格
+        // (键解析会丢掉字面文本里的空格, 两端都预留又会与英文段落重复)
+        if (!out.empty() && !endsWithSpace(out.back().text) && !startsWithSpace(label)) {
+            label.insert(label.begin(), ' ');
+        }
+        out.push_back(ResolvedSegment{std::move(label), seg.color, seg.bold, seg.dim});
+    }
+    return out;
+}
+
+std::string InterruptView::joinSegments(const std::vector<ResolvedSegment>& segments) {
+    std::string out;
+    for (const auto& seg : segments) {
+        out += seg.text;
+    }
+    return out;
+}
+
+Elements InterruptView::segElements(const std::vector<ResolvedSegment>& segments) const {
     const auto& theme = *ctx_.theme;
+    Elements    out;
+    out.reserve(segments.size());
+    for (const auto& seg : segments) {
+        Element el = text(seg.text) | color(client::uiRoleColor(seg.color, theme));
+        if (seg.bold) {
+            el = el | bold;
+        }
+        if (seg.dim) {
+            el = el | theme.dim();
+        }
+        out.push_back(std::move(el));
+    }
+    return out;
+}
+
+Element InterruptView::buildMark(Mode mode) const {
+    const auto& theme = *ctx_.theme;
+    switch (mode) {
+        case Mode::Waiting:
+            // 未处理: 提醒色 + 加粗 (与其它角色的折叠标记同列同时长)
+            return text("! ") | color(theme.errorColor) | bold;
+        case Mode::Collapsed:
+            return text("+ ") | color(theme.hintColor);
+        case Mode::Expanded:
+        default:
+            return text("- ") | color(theme.hintColor);
+    }
+}
+
+Elements InterruptView::buildHeaderSegments(const middleware::InterruptUi& ui) const {
+    auto segs = resolveSegments(ui.header.segments);
+    if (ui.header.segments.empty()) {
+        // 描述未声明头行分段: 用客户端默认前缀 (语言随 TuiI18n)
+        segs.push_back(ResolvedSegment{std::string{tr("interrupt.header")}, "accent", true, false});
+    }
+    return segElements(segs);
+}
+
+std::string InterruptView::statusTextOf(const TUIMessage& msg) const {
     if (!msg.interrupt) {
-        return text("");
+        return {};
     }
     const auto& it = *msg.interrupt;
     switch (it.interruptStatus) {
-        case TUIMessage::InterruptStatus::Confirmed: {
+        case TUIMessage::InterruptStatus::Confirmed:
             // 无控件值的表单 (仅确认行) 提交后无结果值: 用无占位符文案
-            const auto confirmedText = it.interruptResult.empty()
-                                           ? std::string{tr("interrupt.confirmedEmpty")}
-                                           : trf("interrupt.confirmed", it.interruptResult);
-            return hbox({
-                text(tr("interrupt.header")) | color(theme.hintColor),
-                text(confirmedText) | color(theme.accentColor) | theme.dim() | xflex_shrink,
-            });
-        }
+            return it.interruptResult.empty() ? std::string{tr("interrupt.confirmedEmpty")}
+                                              : trf("interrupt.confirmed", it.interruptResult);
         case TUIMessage::InterruptStatus::Canceled:
-            return hbox({
-                text(tr("interrupt.header")) | color(theme.hintColor),
-                text(tr("interrupt.Canceled")) | color(theme.errorColor) | theme.dim()
-                    | xflex_shrink,
-            });
+            return std::string{tr("interrupt.Canceled")};
         case TUIMessage::InterruptStatus::Expired:
-            return hbox({
-                text(tr("interrupt.header")) | color(theme.hintColor),
-                text(tr("interrupt.expired")) | color(theme.errorColor) | theme.dim()
-                    | xflex_shrink,
-            });
+            return std::string{tr("interrupt.expired")};
+        case TUIMessage::InterruptStatus::Waiting:
         default:
-            return text("");
+            return {};
     }
+}
+
+Color InterruptView::statusColorOf(const TUIMessage& msg) const {
+    const auto& theme = *ctx_.theme;
+    if (msg.interrupt
+        && msg.interrupt->interruptStatus == TUIMessage::InterruptStatus::Confirmed) {
+        return theme.accentColor;
+    }
+    return theme.errorColor;
+}
+
+std::string InterruptView::firstContentLine(const middleware::InterruptUi& ui) const {
+    // 通用回退: 描述里首个内容块的首行 (去掉行首列表符号/标题符号与空白)
+    for (const auto& block : ui.blocks) {
+        std::string body;
+        if (block.kind == "text") {
+            body = resolveLabel(block.textKey, block.text);
+        } else if (block.kind == "markdown") {
+            body = block.text;
+        } else {
+            continue;
+        }
+        const auto        nl   = body.find('\n');
+        std::string_view  line = (nl == std::string::npos) ? std::string_view{body}
+                                                          : std::string_view{body}.substr(0, nl);
+        while (!line.empty()
+               && (line.front() == ' ' || line.front() == '\t' || line.front() == '-'
+                   || line.front() == '*' || line.front() == '#' || line.front() == '•')) {
+            line.remove_prefix(1);
+        }
+        while (!line.empty() && (line.back() == ' ' || line.back() == '\t' || line.back() == '\r')) {
+            line.remove_suffix(1);
+        }
+        if (!line.empty()) {
+            return std::string{line};
+        }
+    }
+    return {};
+}
+
+Element InterruptView::registerFoldHit(size_t msgIndex, Element element) const {
+    // 整行判定: 区域不在行内细分 (点击头行/摘要行任意位置都算)
+    auto box = std::make_shared<Box>(kNoBox);
+    hit(msgIndex,
+        kFoldBlockIndex,
+        std::string{kItemIdFold},
+        0,
+        box,
+        UiHitRegion{},
+        HitBox::Kind::Fold);
+    return std::make_shared<OwnedReflect>(std::move(element), std::move(box));
+}
+
+// ---------------------------------------------------------------------------
+// 渲染
+// ---------------------------------------------------------------------------
+
+Element InterruptView::buildDiagnosticLine() const {
+    const auto& theme = *ctx_.theme;
+    return hbox({
+        buildMark(Mode::Waiting),
+        text(tr("interrupt.noDescriptor")) | color(theme.errorColor) | bold | xflex_shrink,
+    });
+}
+
+Element InterruptView::buildSummaryLine(
+    const TUIMessage&              msg,
+    size_t                         msgIndex,
+    const middleware::InterruptUi& ui,
+    int                            maxWidth
+) {
+    const auto& theme = *ctx_.theme;
+
+    // 1) 摘要分段: summary.segments 优先, 其次复用头行分段, 都没有时默认前缀
+    std::vector<ResolvedSegment> segs;
+    if (!ui.summary.segments.empty()) {
+        segs = resolveSegments(ui.summary.segments);
+    } else if (!ui.header.segments.empty()) {
+        segs = resolveSegments(ui.header.segments);
+    } else {
+        segs.push_back(ResolvedSegment{std::string{tr("interrupt.header")}, "accent", true, false});
+    }
+    const std::string segText = joinSegments(segs);
+
+    // 2) 补充说明 (目标/首行摘要): detailKey 优先, 空时回退首个内容块的首行
+    std::string detail = resolveLabel(ui.summary.detailKey, ui.summary.detail);
+    if (detail.empty()) {
+        detail = firstContentLine(ui);
+    }
+
+    // 3) 处理结果: 折叠行就是要能直接看出结论, 与展开态同一份文案
+    const std::string result = statusTextOf(msg);
+
+    // 4) 单行拼装: 列宽预算按优先级分配
+    //    - 摘要分段不裁 (它们说明"这是什么询问")
+    //    - 结果保留: 先保证状态词 (已确认/已取消/已过期), 正文按剩余空间截断
+    //    - detail 最后压缩, 没空间就整段省略
+    const int avail     = std::max(1, maxWidth) - kMarkColumns;
+    int       remaining = avail - columnsOf(segText);
+
+    std::string resultText;
+    if (!result.empty()) {
+        std::string statusWord = result;
+        if (const auto pos = result.find(": "); pos != std::string::npos) {
+            statusWord.resize(pos);
+        }
+        if (remaining >= kSeparatorColumns + columnsOf(statusWord)) {
+            remaining -= kSeparatorColumns;
+            resultText = oneLineWithin(result, remaining);
+            remaining -= columnsOf(resultText);
+        }
+    }
+
+    std::string detailText;
+    if (!detail.empty() && remaining >= kSeparatorColumns + kMinDetailColumns) {
+        detailText = oneLineWithin(detail, remaining - kSeparatorColumns);
+    }
+
+    Elements row;
+    row.push_back(buildMark(Mode::Collapsed));
+    for (auto& el : segElements(segs)) {
+        row.push_back(std::move(el));
+    }
+    if (!detailText.empty()) {
+        row.push_back(text(kSummarySeparator) | color(theme.hintColor) | theme.dim());
+        row.push_back(text(detailText) | color(theme.hintColor) | theme.dim());
+    }
+    if (!resultText.empty()) {
+        row.push_back(text(kSummarySeparator) | color(theme.hintColor) | theme.dim());
+        row.push_back(
+            text(resultText) | color(statusColorOf(msg)) | theme.dim() | xflex_shrink
+        );
+    }
+    return registerFoldHit(msgIndex, hbox(std::move(row)) | xflex_shrink);
+}
+
+Element InterruptView::buildProcessed(
+    const TUIMessage&                                   msg,
+    size_t                                              msgIndex,
+    const middleware::InterruptUi&                      ui,
+    int                                                 maxWidth,
+    std::vector<std::unique_ptr<markdown::DomBuilder>>& mdBuilders
+) {
+    const auto& theme = *ctx_.theme;
+
+    // 头行: 标记 + 分段 + 处理结果 (同一行; 点它收起)
+    auto segs = resolveSegments(ui.header.segments);
+    if (ui.header.segments.empty()) {
+        // 描述未声明头行分段: 用客户端默认前缀 (语言随 TuiI18n)
+        segs.push_back(ResolvedSegment{std::string{tr("interrupt.header")}, "accent", true, false});
+    }
+    const std::string segText = joinSegments(segs);
+    Elements header;
+    header.push_back(buildMark(Mode::Expanded));
+    for (auto& el : segElements(segs)) {
+        header.push_back(std::move(el));
+    }
+    const std::string result = statusTextOf(msg);
+    // 结果文本占剩余列宽 (两个空格分隔); 剩余不足时整段省略, 不在窄终端抢头行的位置
+    const int resultBudget
+        = std::max(1, maxWidth) - kMarkColumns - columnsOf(segText) - 2;
+    if (!result.empty() && resultBudget > 3) {
+        if (const auto resultText = oneLineWithin(result, resultBudget); !resultText.empty()) {
+            header.push_back(text("  ") | color(theme.hintColor) | theme.dim());
+            header.push_back(
+                text(resultText) | color(statusColorOf(msg)) | theme.dim() | xflex_shrink
+            );
+        }
+    }
+
+    // 内容块: 跳过控件与提交行 (控件值已体现在结果文本里, 不再画可点控件)
+    UiRenderResult layout;
+    layoutForm(msg, msgIndex, stateOf(msg), maxWidth, false, layout, /*contentOnly=*/true);
+    for (auto& builder : layout.builders) {
+        mdBuilders.push_back(std::move(builder));
+    }
+
+    Elements rows;
+    rows.push_back(registerFoldHit(msgIndex, hbox(std::move(header))));
+    for (auto& row : layout.rows) {
+        rows.push_back(std::move(row.element));
+    }
+    return vbox(std::move(rows));
 }
 
 void InterruptView::hit(
@@ -427,9 +729,11 @@ void InterruptView::hit(
     std::string                        controlId,
     int                                sub,
     const std::shared_ptr<ftxui::Box>& box,
-    const UiHitRegion&                 region
+    const UiHitRegion&                 region,
+    HitBox::Kind                       kind
 ) const {
     HitBox h;
+    h.kind       = kind;
     h.msgIndex   = msgIndex;
     h.blockIndex = blockIndex;
     h.controlId  = std::move(controlId);
@@ -448,22 +752,31 @@ Element InterruptView::build(
     if (!msg.interrupt) {
         return text("");
     }
-    if (!isWaiting(msg)) {
-        return buildStatusLine(msg);
-    }
 
-    const auto& theme = *ctx_.theme;
-    const auto  ui    = resolveUi(msg);
+    const auto ui = resolveUi(msg);
     if (ui.empty()) {
-        // 描述缺失/非法 (契约错误): 仅输出诊断行, 不渲染任何控件 (无命中区域)
-        XX_LOGE(
-            "[tui] interrupt #{} has no UI descriptor, prompt not interactive",
-            msg.interrupt->interruptId
-        );
-        return hbox({text(tr("interrupt.noDescriptor")) | color(theme.errorColor) | bold});
+        // 描述缺失/非法 (契约错误): 仅输出诊断行, 不渲染任何控件 (无命中区域),
+        // 也不给它折叠能力 (诊断行不是可处理的询问)
+        if (isWaiting(msg)) {
+            XX_LOGE(
+                "[tui] interrupt #{} has no UI descriptor, prompt not interactive",
+                msg.interrupt->interruptId
+            );
+        }
+        return buildDiagnosticLine();
     }
 
-    // 表单状态 (惰性初始化: 按描述默认值填充各控件)
+    switch (modeOf(msg)) {
+        case Mode::Collapsed:
+            return buildSummaryLine(msg, msgIndex, ui, maxWidth);
+        case Mode::Expanded:
+            return buildProcessed(msg, msgIndex, ui, maxWidth, mdBuilders);
+        case Mode::Waiting:
+        default:
+            break;
+    }
+
+    // 等待用户操作: 头行 + 描述全部内容块 + 控件 + 提交行 (与旧实现一致, 多了标记列)
     auto&          state = uiStateFor(msg);
     UiRenderResult layout;
     layoutForm(msg, msgIndex, &state, maxWidth, true, layout);
@@ -472,8 +785,14 @@ Element InterruptView::build(
         mdBuilders.push_back(std::move(builder));
     }
 
+    Elements headerRow;
+    headerRow.push_back(buildMark(Mode::Waiting));
+    for (auto& el : buildHeaderSegments(ui)) {
+        headerRow.push_back(std::move(el));
+    }
+
     Elements rows;
-    rows.push_back(buildHeader(ui));
+    rows.push_back(hbox(std::move(headerRow)));
     for (auto& row : layout.rows) {
         rows.push_back(std::move(row.element));
     }
@@ -484,17 +803,26 @@ size_t InterruptView::estimate(const TUIMessage& msg, int width) const {
     if (!msg.interrupt) {
         return 1;
     }
-    if (!isWaiting(msg)) {
-        return 1; // 状态行
-    }
     const auto ui = resolveUi(msg);
     if (ui.empty()) {
         return 1; // 描述缺失: 诊断行
     }
+    const Mode mode = modeOf(msg);
+    if (mode == Mode::Collapsed) {
+        return 1; // 摘要行恒为一行
+    }
 
     // 与 build 同一套布局过程 (registerHits=false; 不创建命中区域)
     UiRenderResult layout;
-    layoutForm(msg, 0, stateOf(msg), width, false, layout);
+    layoutForm(
+        msg,
+        0,
+        stateOf(msg),
+        width,
+        false,
+        layout,
+        /*contentOnly=*/mode == Mode::Expanded
+    );
     size_t lines = 1; // 头行
     for (const auto& row : layout.rows) {
         lines += std::max<size_t>(1, row.lines);
@@ -527,8 +855,48 @@ bool InterruptView::handleClick(const Mouse& mouse, const Box& areaBox) {
         return false;
     }
 
+    // 折叠/展开**先**判定: 命中区为已处理消息的整行头行/摘要行 (不看行内区域)。
+    // 未处理的消息不登记这种区域, 所以"待处理条目到底能不能被折叠"只由渲染决定
+    for (const auto& h : hits_) {
+        if (h.kind != HitBox::Kind::Fold) {
+            continue;
+        }
+        if (!h.box || h.box->IsEmpty() || !h.box->Contain(mouse.x, mouse.y)) {
+            continue;
+        }
+        const size_t mi      = h.msgIndex;
+        bool         handled = false;
+        ctx_.state->mutate([&](TUIRenderState& st) {
+            if (mi >= st.messages().size()) {
+                return;
+            }
+            const auto& src = *st.messages()[mi];
+            if (src.role != TUIMessage::Role::Interrupt || !src.interrupt) {
+                return;
+            }
+            if (isWaiting(src)) {
+                return; // 未处理不可折叠 (渲染侧同一判定, 这里再防一次)
+            }
+            auto& msg     = ctx_.state->mutableMessage(st, mi);
+            msg.collapsed = !msg.collapsed;
+            handled       = true;
+        });
+        if (!handled) {
+            return false;
+        }
+        // 折叠后 (或展开已处理消息) 没有可交互控件: 顺带释放键盘焦点
+        if (activeMsg_ == mi) {
+            clearActive();
+        }
+        ctx_.postRedraw();
+        return true;
+    }
+
     // 命中检测 (命中区域为上一帧布局结果): 行元素框 + 行内区域两级判定
     for (const auto& h : hits_) {
+        if (h.kind != HitBox::Kind::Form) {
+            continue;
+        }
         if (!h.box || h.box->IsEmpty()) {
             continue;
         }
@@ -754,6 +1122,8 @@ void InterruptView::confirm(size_t msgIndex) {
         auto& mm                      = ctx_.state->mutableMessage(st, msgIndex);
         mm.interrupt->interruptStatus = TUIMessage::InterruptStatus::Confirmed;
         mm.interrupt->interruptResult = display;
+        // 处理完成即自动折叠成一行摘要 (之后用户可自行展开/收起)
+        mm.collapsed = true;
     });
 
     if (confirmed) {
@@ -786,6 +1156,8 @@ void InterruptView::cancel(size_t msgIndex) {
                 && m.interrupt->interruptStatus == TUIMessage::InterruptStatus::Waiting) {
                 auto& mm                      = ctx_.state->mutableMessage(st, i);
                 mm.interrupt->interruptStatus = TUIMessage::InterruptStatus::Canceled;
+                // 取消即自动折叠成一行摘要 (与提交同一个形态规则)
+                mm.collapsed = true;
             }
         }
     });

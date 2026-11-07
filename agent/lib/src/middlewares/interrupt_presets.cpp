@@ -39,6 +39,16 @@ double numberFromString(std::string_view s) {
     return v;
 }
 
+/// 权限分类是否属于"写"类 (以内置命名约定 `_write` 结尾)
+///
+/// 只影响权限名的颜色 (写类 `thinking`, 其余 `hint`), 不参与任何权限判定;
+/// 插件自定义分类没按约定命名时一律按"非写类"上色。
+bool isWriteCategory(std::string_view category) {
+    constexpr std::string_view kSuffix = "_write";
+    return category.size() >= kSuffix.size()
+           && category.substr(category.size() - kSuffix.size()) == kSuffix;
+}
+
 /// 候选项/按钮标签取值: **键与字面文本不同时给** (文案只在一处维护)
 /// - 有 i18n 键: 只给键, 字面文本留空 (文案由客户端词表提供)
 /// - 无键但有字面文本: 只给字面文本 (调用方自定义文案)
@@ -509,25 +519,39 @@ InterruptUi confirmCard(const ConfirmCardOptions& opts) {
 InterruptUi
     permissionCard(std::string_view toolName, std::string_view category, std::string_view target) {
     InterruptUi ui;
-    // 头行: 权限标记 + 工具名 + 权限分类
+    // 头行三段: 权限标记 + 工具名 + 权限名 (客户端只按分段数据渲染)
     InterruptUiSegment badge;
-    // 权限标记文案只声明 i18n 键, 字面文本留空 (由客户端词表提供)
+    // 权限标记文案只声明 i18n 键, 字面文本留空 (由客户端词表提供); 行首的 "!"
+    // 由客户端的标记列提供, 不进文案 (否则未处理态会画出两个标记)
     badge.labelKey = "interrupt.permissionBadge";
     badge.color    = "error";
     badge.bold     = true;
     ui.header.segments.push_back(std::move(badge));
     if (!toolName.empty()) {
+        // 工具名标成 tool 分段: 客户端换成该工具的特化显示名 (如 Write),
+        // 拿不到显示名时回退本段的字面文本
         InterruptUiSegment tool;
         tool.text  = std::string{toolName};
+        tool.kind  = "tool";
         tool.color = "accent";
         tool.bold  = true;
         ui.header.segments.push_back(std::move(tool));
     }
     if (!category.empty()) {
+        // 权限名: 内置分类给 i18n 键 (读/写), 插件自定义分类只给字面文本
+        // - 读/写只靠颜色区分: 不加粗 (加粗是界面统一的排版语义, 不能当区分手段),
+        //   也不加方括号/背景色 (会改变行内节奏, 窄终端更容易挤坏折行)
         InterruptUiSegment cat;
-        cat.text  = " " + std::string{category};
-        cat.color = "hint";
+        cat.text     = std::string{category};
+        cat.labelKey = permissionCategoryLabelKey(category);
+        cat.color    = isWriteCategory(category) ? "thinking" : "hint";
         ui.header.segments.push_back(std::move(cat));
+    }
+
+    // 折叠摘要: 已处理的中断消息折叠成一行时, 分段沿用头行三段, 目标路径放 detail
+    // (折叠行恒为一行, 客户端按剩余列宽截断)
+    if (!target.empty()) {
+        ui.summary.detail = std::string{target};
     }
 
     // 目标描述 (受约束路径等): 硬折行, 避免无空格长路径不换行/被压为 0 宽
@@ -563,6 +587,17 @@ InterruptUi
         true
     ));
     return ui;
+}
+
+std::string permissionCategoryLabelKey(std::string_view category) {
+    // 内置权限分类 → 客户端词表键; 插件自定义分类 (自由字符串) 只给字面文本
+    if (category == "filesystem_read") {
+        return "interrupt.permission.read";
+    }
+    if (category == "filesystem_write") {
+        return "interrupt.permission.write";
+    }
+    return {};
 }
 
 } // namespace preset

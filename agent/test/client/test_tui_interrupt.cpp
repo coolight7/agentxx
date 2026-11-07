@@ -82,6 +82,26 @@ size_t countOccurrences(std::string_view text, std::string_view needle) {
     return count;
 }
 
+/// 去掉终端样式转义序列 (SGR)
+///
+/// `Screen::ToString()` 会为每次样式切换插入 `ESC[...m`, 断言跨样式的文本
+/// (如“标记 + 分段”) 时这些字节会把人眼连续的文本割开 —— 先去掉再断言
+std::string stripAnsi(std::string_view s) {
+    std::string out;
+    out.reserve(s.size());
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (s[i] == '\x1b' && i + 1 < s.size() && s[i + 1] == '[') {
+            i += 2;
+            while (i < s.size() && !(s[i] >= '@' && s[i] <= '~')) {
+                ++i;
+            }
+            continue;
+        }
+        out += s[i];
+    }
+    return out;
+}
+
 struct InterruptFixture {
     // io_context 须先声明 (最后析构): 结果通道 (中断视图持有) 在 sharedState
     // 析构时释放, 其析构需访问 io_context 的 channel service
@@ -137,7 +157,7 @@ struct InterruptFixture {
         return sharedState.readSnapshot()->messages().size() - 1;
     }
 
-    /// 渲染消息列表 (刷新中断控件命中区域) 并取回文本
+    /// 渲染消息列表 (刷新中断控件命中区域) 并取回文本 (已去掉样式转义)
     std::string render(int width = 120, int height = 60) {
         ctx.frameState = sharedState.readSnapshot();
         auto el        = comp->Render();
@@ -146,7 +166,7 @@ struct InterruptFixture {
             ftxui::Dimension::Fixed(height)
         );
         ftxui::Render(screen, el);
-        return screen.ToString();
+        return stripAnsi(screen.ToString());
     }
 
     /// 渲染并统计内容占据的行数 (首/末非空行之间的跨度, 含内部空行):
@@ -222,6 +242,63 @@ struct InterruptFixture {
         return false;
     }
 
+    /// 在渲染出来的屏幕上点击**包含指定文本的那一行** (内容区最左列)
+    ///
+    /// 用途: 头行/摘要行没有控件命中区 (只有整行折叠区), 只能按屏幕位置点击。
+    /// 返回 false = 屏幕上找不到该文本 (未渲染/被裁剪)
+    bool clickText(std::string_view needle, int width = 120, int height = 60) {
+        ctx.frameState = sharedState.readSnapshot();
+        auto el        = comp->Render();
+        auto screen    = ftxui::Screen::Create(
+            ftxui::Dimension::Fixed(width),
+            ftxui::Dimension::Fixed(height)
+        );
+        ftxui::Render(screen, el);
+        for (int y = 0; y < height; ++y) {
+            std::string line;
+            for (int x = 0; x < width; ++x) {
+                line += screen.PixelAt(x, y).character;
+            }
+            if (line.find(needle) == std::string::npos) {
+                continue;
+            }
+            ftxui::Mouse m;
+            m.button = ftxui::Mouse::Left;
+            m.motion = ftxui::Mouse::Released;
+            m.x      = 4; // 内容区左边界 (左侧留白 3 列) 之后
+            m.y      = y;
+            comp->OnEvent(ftxui::Event::Mouse("", m));
+            return true;
+        }
+        return false;
+    }
+
+    /// 点击指定消息的折叠命中区 (已处理消息的摘要行/头行)
+    bool clickFold(size_t msgIndex) {
+        render();
+        for (const auto& h : comp->interruptHitBoxes()) {
+            if (h.msgIndex != msgIndex
+                || h.kind != agentxx::client::InterruptView::HitBox::Kind::Fold || !h.box) {
+                continue;
+            }
+            return clickHit(h);
+        }
+        return false;
+    }
+
+    /// 指定消息的折叠命中区条数 (未处理消息应为 0; 先渲染一帧刷新命中区)
+    size_t foldHitCount(size_t msgIndex) {
+        render();
+        size_t n = 0;
+        for (const auto& h : comp->interruptHitBoxes()) {
+            if (h.msgIndex == msgIndex
+                && h.kind == agentxx::client::InterruptView::HitBox::Kind::Fold) {
+                ++n;
+            }
+        }
+        return n;
+    }
+
     /// 依次输入字符串的每个字符 (作用于激活的中断消息的聚焦控件)
     void type(const std::string& s) {
         for (char c : s) {
@@ -283,7 +360,32 @@ struct InterruptFixture {
             "/workspace/data/x.txt"
         );
     }
+
+    /// 构造一条中断消息 (不加入列表; 供直接构造中断视图的用例)
+    static TUIMessage makeInterruptMessage(
+        const agentxx::middleware::InterruptUi& ui,
+        int64_t                                 interruptId = 1
+    ) {
+        TUIMessage m;
+        m.id                         = fmt::format("local_interrupt_{}", interruptId);
+        m.role                       = TUIMessage::Role::Interrupt;
+        m.interrupt                  = TUIMessage::InterruptData{};
+        m.interrupt->interruptId     = interruptId;
+        m.interrupt->ui              = ui.toJson();
+        m.interrupt->interruptStatus = TUIMessage::InterruptStatus::Waiting;
+        return m;
+    }
 };
+
+/// 渲染单个元素并取回屏幕文本 (直接构造中断视图的用例使用; 已去掉样式转义)
+std::string renderElement(ftxui::Element el, int width = 120, int height = 20) {
+    auto screen = ftxui::Screen::Create(
+        ftxui::Dimension::Fixed(width),
+        ftxui::Dimension::Fixed(height)
+    );
+    ftxui::Render(screen, el);
+    return stripAnsi(screen.ToString());
+}
 
 } // namespace
 
@@ -309,8 +411,11 @@ void test_header_default_and_custom() {
     f2.addInterrupt(ch2, InterruptFixture::permissionUi());
     const std::string text2 = f2.render();
     XX_TEST_EXPECT_TRUE(text2.find("! [权限] ") != std::string::npos);
+    // 工具名: 没有注册渲染器 (夹具无插件管理器) 时显示原始工具名
     XX_TEST_EXPECT_TRUE(text2.find("read_file") != std::string::npos);
-    XX_TEST_EXPECT_TRUE(text2.find("filesystem_read") != std::string::npos);
+    // 权限名: 内置分类走客户端词表 (分类标识不再直接上屏)
+    XX_TEST_EXPECT_TRUE(text2.find("读取文件") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text2.find("filesystem_read") == std::string::npos);
     XX_TEST_EXPECT_TRUE(text2.find("! [中断] ") == std::string::npos);
 }
 
@@ -1160,17 +1265,19 @@ void test_expired_and_release_channel() {
     f.comp->releaseInterruptChannel(3);
     XX_TEST_EXPECT_EQ(f.controlState(mi, "path").editText, std::string("hi"));
 
-    // 过期状态: 不再可交互
+    // 过期状态: 不再可交互 (client io 侧置状态时一并自动折叠, 见 agent_tui.cpp
+    // 的 WireInterruptExpired)
     auto mi2 = f.addInterrupt(ch, ui, 4);
     f.sharedState.mutate([&](TUIRenderState& st) {
         if (mi2 < st.messages().size() && st.messages()[mi2]->interrupt) {
             st.messages()[mi2]->interrupt->interruptStatus = TUIMessage::InterruptStatus::Expired;
+            st.messages()[mi2]->collapsed                  = true;
         }
     });
     const std::string text = f.render();
     XX_TEST_EXPECT_TRUE(text.find("已过期") != std::string::npos);
     XX_TEST_EXPECT_FALSE(f.click(mi2, "path", 0));
-    XX_TEST_EXPECT_EQ(f.comp->interruptEstimate(mi2, 120), size_t{1}); // 状态行 1 行
+    XX_TEST_EXPECT_EQ(f.comp->interruptEstimate(mi2, 120), size_t{1}); // 摘要行 1 行
 }
 
 // ---------------------------------------------------------------------------
@@ -1287,6 +1394,213 @@ void test_head_trim_shifts_hit_indices() {
     XX_TEST_EXPECT_EQ(f.sharedState.readSnapshot()->messages().size(), size_t{1});
 }
 
+// ---------------------------------------------------------------------------
+// 展示形态: 未处理恒展开 / 已处理自动折叠成摘要 / 可展开回详情
+// ---------------------------------------------------------------------------
+
+/// 未处理的中断消息: 恒展开且**不可折叠**
+///
+/// 需求: 用户的注意力不能被"折叠成一个 + 的待办"挡住 —— 渲染与命中都不读
+/// `collapsed`, 也不登记折叠命中区。
+void test_waiting_is_not_collapsible() {
+    InterruptFixture f;
+    auto             ch = f.makeChannel();
+    auto             mi = f.addInterrupt(ch, InterruptFixture::permissionUi());
+
+    const std::string text = f.render();
+    XX_TEST_EXPECT_TRUE(text.find("! [权限] ") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("记住此选择") != std::string::npos); // 表单完整展开
+    // 未处理不登记折叠命中区
+    XX_TEST_EXPECT_EQ(f.foldHitCount(mi), size_t{0});
+    // 点头行 (标记 + 分段那一行) 不改变折叠状态
+    XX_TEST_EXPECT_TRUE(f.clickText("[权限]"));
+    XX_TEST_EXPECT_FALSE(f.snapshotMsg(mi).collapsed);
+    XX_TEST_EXPECT_TRUE(f.render().find("记住此选择") != std::string::npos);
+
+    // 被外部强行置 true 也按展开渲染 (即使测试直接改状态, 待办也不会被折叠)
+    f.sharedState.mutate([&](TUIRenderState& st) {
+        st.messages()[mi]->collapsed = true;
+    });
+    const std::string forced = f.render();
+    XX_TEST_EXPECT_TRUE(forced.find("! [权限] ") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(forced.find("记住此选择") != std::string::npos);
+}
+
+/// 提交后自动折叠: 一行摘要 + 结果尾缀, 不再渲染表单
+void test_submit_auto_collapses_to_summary() {
+    InterruptFixture f;
+    auto             ch = f.makeChannel();
+    auto             mi = f.addInterrupt(ch, InterruptFixture::permissionUi());
+
+    XX_TEST_EXPECT_TRUE(f.click(mi, "decision", 0)); // 允许 (commitOnPick)
+    InterruptFixture::Submit s;
+    XX_TEST_EXPECT_TRUE(f.recvForm(ch, s));
+
+    const auto msg = f.snapshotMsg(mi);
+    XX_TEST_EXPECT_TRUE(msg.interrupt.has_value());
+    XX_TEST_EXPECT_TRUE(msg.collapsed);
+    if (msg.interrupt) {
+        XX_TEST_EXPECT_EQ(
+            static_cast<int>(msg.interrupt->interruptStatus),
+            static_cast<int>(TUIMessage::InterruptStatus::Confirmed)
+        );
+    }
+    // 折叠行恒一行
+    XX_TEST_EXPECT_EQ(f.comp->interruptEstimate(mi, 120), size_t{1});
+    XX_TEST_EXPECT_EQ(f.renderedRows(), size_t{1});
+
+    const std::string text = f.render(160, 40);
+    XX_TEST_EXPECT_TRUE(text.find("+ [权限] ") != std::string::npos);
+    // 工具名 (夹具无渲染器 → 原始名) + 权限名 (词表) + 目标 + 结果
+    XX_TEST_EXPECT_TRUE(text.find("read_file") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("读取文件") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("/workspace/data/x.txt") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("已确认") != std::string::npos);
+    // 折叠行只有摘要: 勾选框与按钮不再渲染
+    // (控件标签会出现在结果文本里 —— 结果就是各控件的 "标签: 值", 属预期)
+    XX_TEST_EXPECT_TRUE(text.find("[   ]") == std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("允许") == std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("拒绝") == std::string::npos);
+}
+
+/// 摘要行可点开看详情; 展开态只渲染内容块 (不再画可点控件)
+void test_summary_expand_and_collapse() {
+    InterruptFixture f;
+    auto             ch = f.makeChannel();
+    auto             mi = f.addInterrupt(ch, InterruptFixture::permissionUi());
+    XX_TEST_EXPECT_TRUE(f.click(mi, "remember", 0));
+    XX_TEST_EXPECT_TRUE(f.click(mi, "decision", 0));
+    InterruptFixture::Submit s;
+    XX_TEST_EXPECT_TRUE(f.recvForm(ch, s));
+
+    // 折叠态: 点摘要行展开
+    XX_TEST_EXPECT_EQ(f.foldHitCount(mi), size_t{1});
+    XX_TEST_EXPECT_TRUE(f.clickFold(mi));
+    XX_TEST_EXPECT_FALSE(f.snapshotMsg(mi).collapsed);
+
+    const std::string expanded = f.render();
+    XX_TEST_EXPECT_TRUE(expanded.find("- [权限] ") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(expanded.find("/workspace/data/x.txt") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(expanded.find("已确认") != std::string::npos);
+    // 已处理展开态: 控件与提交行都不再渲染 (只有内容块)
+    XX_TEST_EXPECT_TRUE(expanded.find("[   ]") == std::string::npos);
+    XX_TEST_EXPECT_TRUE(expanded.find("允许") == std::string::npos);
+    // 原控件位置不可交互 (无命中区)
+    XX_TEST_EXPECT_FALSE(f.click(mi, "remember", 0));
+    XX_TEST_EXPECT_FALSE(f.click(mi, "decision", 0));
+
+    // 展开态: 再点头行收起
+    XX_TEST_EXPECT_TRUE(f.clickFold(mi));
+    XX_TEST_EXPECT_TRUE(f.snapshotMsg(mi).collapsed);
+}
+
+/// 取消与过期同样自动折叠
+void test_cancel_and_expired_auto_collapse() {
+    using namespace agentxx::middleware;
+
+    // 取消: 由中断视图自己置状态 + 折叠值
+    {
+        InterruptFixture f;
+        auto             ch = f.makeChannel();
+        InterruptUi      ui;
+        ui.blocks.push_back(preset::textControl("path", "Path", {}, "hi"));
+        ui.blocks.push_back(preset::submitBlock());
+        auto mi = f.addInterrupt(ch, ui);
+
+        XX_TEST_EXPECT_TRUE(f.click(mi, "submit", 1)); // 取消
+        InterruptFixture::Submit s;
+        XX_TEST_EXPECT_TRUE(f.recvForm(ch, s));
+        XX_TEST_EXPECT_TRUE(s.Canceled);
+        XX_TEST_EXPECT_TRUE(f.snapshotMsg(mi).collapsed);
+
+        const std::string text = f.render();
+        XX_TEST_EXPECT_TRUE(text.find("+ [中断] ") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(text.find("已取消") != std::string::npos);
+        XX_TEST_EXPECT_EQ(f.comp->interruptEstimate(mi, 120), size_t{1});
+    }
+
+    // 过期: client io 侧置状态时一并把折叠值写 true (同一条路径, 见 agent_tui.cpp
+    // 的 WireInterruptExpired); 这里直接落定同样的两个字段校验渲染与交互
+    {
+        InterruptFixture f;
+        auto             ch = f.makeChannel();
+        auto             mi = f.addInterrupt(ch, InterruptFixture::permissionUi());
+        f.sharedState.mutate([&](TUIRenderState& st) {
+            st.messages()[mi]->interrupt->interruptStatus = TUIMessage::InterruptStatus::Expired;
+            st.messages()[mi]->collapsed                  = true;
+        });
+        const std::string text = f.render();
+        XX_TEST_EXPECT_TRUE(text.find("+ [权限] ") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(text.find("已过期") != std::string::npos);
+        XX_TEST_EXPECT_EQ(f.comp->interruptEstimate(mi, 120), size_t{1});
+        XX_TEST_EXPECT_FALSE(f.click(mi, "decision", 0));
+        // 折叠/展开仍可用 (过期只是不能提交)
+        XX_TEST_EXPECT_TRUE(f.clickFold(mi));
+        XX_TEST_EXPECT_FALSE(f.snapshotMsg(mi).collapsed);
+    }
+}
+
+/// 折叠态按回车/输入不提交 (不会有"看不见的表单被回车提交")
+void test_collapsed_ignores_keyboard() {
+    InterruptFixture f;
+    auto             ch = f.makeChannel();
+    auto             mi = f.addInterrupt(ch, InterruptFixture::permissionUi());
+
+    XX_TEST_EXPECT_TRUE(f.click(mi, "decision", 0)); // 提交 → 自动折叠
+    InterruptFixture::Submit s;
+    XX_TEST_EXPECT_TRUE(f.recvForm(ch, s));
+    const auto status0 = f.snapshotMsg(mi).interrupt->interruptStatus;
+
+    f.comp->OnEvent(ftxui::Event::Return);
+    f.type("x");
+    InterruptFixture::Submit s2;
+    XX_TEST_EXPECT_FALSE(f.recvForm(ch, s2));
+    XX_TEST_EXPECT_EQ(
+        static_cast<int>(f.snapshotMsg(mi).interrupt->interruptStatus),
+        static_cast<int>(status0)
+    );
+}
+
+/// 工具显示名三态: 就绪 → 显示名 / 未就绪 → 该段留空 / 无渲染器 → 原名
+///
+/// 铁律: 未就绪时**绝不先显示原名再跳变** (原名下一帧变成显示名也是可见的跳变)。
+void test_tool_display_name_three_states() {
+    InterruptFixture f;
+    agentxx::client::InterruptView view(f.ctx);
+    const auto msg = InterruptFixture::makeInterruptMessage(InterruptFixture::permissionUi());
+    std::vector<std::unique_ptr<markdown::DomBuilder>> builders;
+
+    // 1) 显示名就绪 (如工具渲染器给出 "Write")
+    view.setToolDisplayNameResolver([](std::string_view) {
+        return std::string{"Write"};
+    });
+    std::string text = renderElement(view.build(msg, 0, 100, builders));
+    XX_TEST_EXPECT_TRUE(text.find("Write") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("read_file") == std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("读取文件") != std::string::npos);
+
+    // 2) 显示名未就绪: 该段留空 (不能出现原名)
+    view.setToolDisplayNameResolver([](std::string_view) {
+        return std::string{};
+    });
+    text = renderElement(view.build(msg, 0, 100, builders));
+    XX_TEST_EXPECT_TRUE(text.find("read_file") == std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("! [权限]") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(text.find("读取文件") != std::string::npos);
+
+    // 3) 没有注册渲染器: 解析器直接返回原始工具名 (结果不会再变)
+    view.setToolDisplayNameResolver([](std::string_view name) {
+        return std::string{name};
+    });
+    text = renderElement(view.build(msg, 0, 100, builders));
+    XX_TEST_EXPECT_TRUE(text.find("read_file") != std::string::npos);
+
+    // 4) 未注入解析器: 等同于"无渲染器"一档 (直接用字面工具名)
+    agentxx::client::InterruptView plain(f.ctx);
+    text = renderElement(plain.build(msg, 0, 100, builders));
+    XX_TEST_EXPECT_TRUE(text.find("read_file") != std::string::npos);
+}
+
 TestResult testTuiInterrupt() {
     g_tui_interrupt_passed = 0;
     g_tui_interrupt_failed = 0;
@@ -1328,6 +1642,13 @@ TestResult testTuiInterrupt() {
     test_expired_and_release_channel();
     // 本地条数上限清理: 命中区/激活下标随头部删除前移
     test_head_trim_shifts_hit_indices();
+    // 展示形态: 未处理恒展开 / 已处理自动折叠 / 展开回详情
+    test_waiting_is_not_collapsible();
+    test_submit_auto_collapses_to_summary();
+    test_summary_expand_and_collapse();
+    test_cancel_and_expired_auto_collapse();
+    test_collapsed_ignores_keyboard();
+    test_tool_display_name_three_states();
     // 估算与实测一致 / 状态版本
     test_estimate_matches_rendered_rows();
     test_state_version_bumps_on_change();

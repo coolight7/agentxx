@@ -1136,15 +1136,27 @@ asio::awaitable<void> test_permission_prompt_carries_ui_descriptor() {
         XX_TEST_EXPECT_FALSE(ui.empty());
         XX_TEST_EXPECT_EQ(ui.header.segments.size(), size_t{3});
         if (ui.header.segments.size() == 3) {
-            // 权限标记只声明 i18n 键 (字面文本由客户端词表提供)
+            // 权限标记只声明 i18n 键 (字面文本由客户端词表提供); 行首的 "!" 由
+            // 客户端的标记列提供, 不进文案
             XX_TEST_EXPECT_TRUE(ui.header.segments[0].text.empty());
             XX_TEST_EXPECT_EQ(
                 ui.header.segments[0].labelKey,
                 std::string("interrupt.permissionBadge")
             );
+            // 工具名: 标成 tool 分段, 客户端换成特化显示名 (如 Write)
             XX_TEST_EXPECT_EQ(ui.header.segments[1].text, std::string("agentxx_filesystem_write"));
-            XX_TEST_EXPECT_EQ(ui.header.segments[2].text, std::string(" filesystem_write"));
+            XX_TEST_EXPECT_EQ(ui.header.segments[1].kind, std::string("tool"));
+            // 权限名: 内置分类只给 i18n 键 (字面文本是分类标识, 词表缺键时才显示)
+            XX_TEST_EXPECT_EQ(ui.header.segments[2].text, std::string("filesystem_write"));
+            XX_TEST_EXPECT_EQ(
+                ui.header.segments[2].labelKey,
+                std::string("interrupt.permission.write")
+            );
+            XX_TEST_EXPECT_EQ(ui.header.segments[2].color, std::string("thinking"));
+            XX_TEST_EXPECT_FALSE(ui.header.segments[2].bold);
         }
+        // 折叠摘要: 目标路径 (已处理后的折叠行显示它)
+        XX_TEST_EXPECT_EQ(ui.summary.detail, std::string("/data/projects/ui/out.txt"));
         // 块序列: 目标描述 (hint, 硬折行) / 空行 / 勾选控件 / 空行 / 按钮控件
         size_t hintTexts = 0;
         size_t checkbox  = 0;

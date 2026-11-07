@@ -59,6 +59,39 @@ std::string nextLocalRowId(TUIRenderState& st, std::string_view kind) {
     return fmt::format("local_{}_{}", kind, ++st.localRowSeq);
 }
 
+/// 预取中断描述里工具名分段 (`kind == "tool"`) 的显示名
+///
+/// 中断视图渲染时按工具名查显示名 (如 `agentxx_filesystem_write` -> `Write`),
+/// 而显示名来自工具渲染器 (可能在 client io 线程异步执行)。建行时先按工具名
+/// 各投递一次 "名称查询" (输入特征与 UI 侧的查询完全一致: 无 tool_call_id、
+/// 无参数/结果、不限宽度), 首帧大概率已命中缓存。
+/// 在 client io 线程调用: 命中缓存时直接返回, 未命中才投递, 重复调用由缓存按
+/// 输入特征去重 (见 ClientPluginManager::requestToolRender)。
+void prefetchInterruptToolNames(
+    agentxx::plugin::ClientPluginManager*   mgr,
+    const agentxx::middleware::InterruptUi& ui
+) {
+    if (!mgr) {
+        return;
+    }
+    const auto prefetch
+        = [mgr](const std::vector<agentxx::middleware::InterruptUiSegment>& segments) {
+              for (const auto& seg : segments) {
+                  if (seg.kind != "tool" || seg.text.empty()) {
+                      continue;
+                  }
+                  agentxx::plugin::ClientToolRenderRequest req;
+                  req.toolName   = seg.text;
+                  req.isFinished = false;
+                  req.isError    = false;
+                  req.maxWidth   = 0;
+                  mgr->requestToolRender(req);
+              }
+          };
+    prefetch(ui.header.segments);
+    prefetch(ui.summary.segments);
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -1888,6 +1921,8 @@ void TUIClientAgentIO::onPeerMessage(agentxx::agent::WireMessage msg) {
                                    == TUIMessage::InterruptStatus::Waiting) {
                             auto& mm                      = sharedState_.mutableMessage(st, i);
                             mm.interrupt->interruptStatus = TUIMessage::InterruptStatus::Expired;
+                            // 状态落定即自动折叠成一行摘要 (与提交/取消同一形态规则)
+                            mm.collapsed = true;
                         }
                     }
                 }
@@ -2979,6 +3014,11 @@ asio::awaitable<utilxx_base::Json> TUIClientAgentIO::handleInterrupt(
     // 一份表单 (一条消息); 缺失/非法时留空, 客户端渲染诊断行且不可交互
     const utilxx_base::Json uiJson
         = handleArg.ui.empty() ? utilxx_base::Json{} : handleArg.ui.toJson();
+    // 预取描述里工具名分段 (`kind == "tool"`) 的显示名: 摘要行/头行要把原始
+    // 工具名换成特化显示名 (如 agentxx_filesystem_write -> Write), 而显示名来自工具
+    // 渲染器 (可能在 client io 线程异步执行)。建行时先按工具名投递一次 "名称查询",
+    // 首帧大概率已命中缓存; UI 侧仍按三态兜底 (未就绪的段留空, 不显示原名)
+    prefetchInterruptToolNames(pluginManager_.get(), handleArg.ui);
 
     awaitingInterruptInput_.store(true, std::memory_order_release);
 
@@ -3007,6 +3047,9 @@ asio::awaitable<utilxx_base::Json> TUIClientAgentIO::handleInterrupt(
         // 表单形态完全由描述数据决定 (各控件字段自包含); 编辑文本/选中项/
         // 勾选项等纯 UI 状态由 InterruptView 按描述惰性初始化, 不存于消息
         m->interrupt->ui = uiJson;
+        // 新建的请求恒为未处理: 整份展开且不可折叠 (处理完成后由提交/取消/
+        // 过期三处置 true 自动折叠成摘要行)
+        m->collapsed = false;
         std::lock_guard<std::mutex> lock(sharedState_.mutex());
         auto&                       st = sharedState_.mutableState();
         // 中断表单消息同样按本地条数上限记账 (它在列表末尾, 吸附底部时必然

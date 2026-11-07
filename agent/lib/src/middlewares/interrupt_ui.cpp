@@ -103,6 +103,7 @@ InterruptUiSegment InterruptUiSegment::fromJson(const Json& j) {
     InterruptUiSegment seg;
     seg.text     = j.value("text", "");
     seg.labelKey = j.value("labelKey", "");
+    seg.kind     = j.value("kind", "");
     seg.color    = j.value("color", "");
     seg.bold     = j.value("bold", false);
     seg.dim      = j.value("dim", false);
@@ -113,6 +114,7 @@ Json InterruptUiSegment::toJson() const {
     auto j = Json::object();
     putIfNotEmpty(j, "text", text);
     putIfNotEmpty(j, "labelKey", labelKey);
+    putIfNotEmpty(j, "kind", kind);
     putIfNotEmpty(j, "color", color);
     putIfTrue(j, "bold", bold);
     putIfTrue(j, "dim", dim);
@@ -141,6 +143,36 @@ Json InterruptUiHeader::toJson() const {
         }
         j["segments"] = std::move(arr);
     }
+    return j;
+}
+
+InterruptUiSummary InterruptUiSummary::fromJson(const Json& j) {
+    InterruptUiSummary summary;
+    if (!j.is_object()) {
+        return summary;
+    }
+    auto it = j.find("segments");
+    if (it != j.end() && it->is_array()) {
+        for (const auto& s : *it) {
+            summary.segments.push_back(InterruptUiSegment::fromJson(s));
+        }
+    }
+    summary.detail    = j.value("detail", "");
+    summary.detailKey = j.value("detailKey", "");
+    return summary;
+}
+
+Json InterruptUiSummary::toJson() const {
+    auto j = Json::object();
+    if (!segments.empty()) {
+        auto arr = Json::array();
+        for (const auto& s : segments) {
+            arr.push_back(s.toJson());
+        }
+        j["segments"] = std::move(arr);
+    }
+    putIfNotEmpty(j, "detail", detail);
+    putIfNotEmpty(j, "detailKey", detailKey);
     return j;
 }
 
@@ -353,6 +385,10 @@ InterruptUi InterruptUi::fromJson(const Json& j) {
     if (hIt != j.end() && hIt->is_object()) {
         ui.header = InterruptUiHeader::fromJson(*hIt);
     }
+    auto sIt = j.find("summary");
+    if (sIt != j.end() && sIt->is_object()) {
+        ui.summary = InterruptUiSummary::fromJson(*sIt);
+    }
     auto bIt = j.find("blocks");
     if (bIt != j.end() && bIt->is_array()) {
         ui.blocks.reserve(bIt->size());
@@ -368,6 +404,9 @@ Json InterruptUi::toJson() const {
     j["version"] = version;
     if (!header.segments.empty()) {
         j["header"] = header.toJson();
+    }
+    if (!summary.empty()) {
+        j["summary"] = summary.toJson();
     }
     if (!blocks.empty()) {
         auto arr = Json::array();

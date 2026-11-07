@@ -371,6 +371,17 @@ private:
     ///   pendingRender 分支): 占位行被工具消息取代时不会少一段内容, 动画等级
     ///   >= High 时两行逐字一致
     std::string   genPlaceholderToolDisplayName(const TUIRenderState& st) const;
+
+    /// 工具显示名 (只按工具名查询; 与 [genPlaceholderToolDisplayName] 同一路径)
+    ///
+    /// 用途: 中断摘要/头行的 `kind == "tool"` 分段要把原始工具名换成特化显示名
+    /// (如 agentxx_filesystem_write -> Write)。缓存键为 "#工具名", 命中后只是一次
+    /// map 查找; 未命中时投递一次后台渲染请求 (不在 UI 线程执行插件回调)。
+    ///
+    /// - 返回空串: 该工具有特化渲染器但显示名尚未就绪 (本帧不显示, 也不显示原名
+    ///   —— 先显示原名会在下一帧跳变)
+    /// - 无渲染器 / 渲染器没给名字: 返回原始工具名 (结果不会再变)
+    std::string toolDisplayNameOf(const TUIRenderState& st, std::string_view toolName) const;
     LazyBuiltItem buildGenPlaceholderItem(const TUIRenderState& st);
 
     ftxui::Element buildMessageBlock(

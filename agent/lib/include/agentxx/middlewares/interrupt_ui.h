@@ -18,12 +18,19 @@ namespace middleware {
 inline constexpr std::string_view kInterruptSubmitActionId = "__submit";
 inline constexpr std::string_view kInterruptCancelActionId = "__cancel";
 
-/// 中断 UI 分段 (头行的分段文本, 例如 "! [Permission] " + 工具名 + 权限分类)
+/// 中断 UI 分段 (头行/摘要行的分段文本, 例如 "[Permission] " + 工具名 + 权限分类)
 struct InterruptUiSegment {
     /// 字面文本 (labelKey 为空时使用; 客户端渲染语言不匹配时的回退)
     std::string text;
     /// 客户端 i18n 键 (客户端优先解析; 其他前端/缺键时回退 text)
     std::string labelKey;
+    /// 分段用途提示 (客户端按它的含义特化渲染)
+    /// - 空: 普通文本
+    /// - "tool": 工具名 —— 客户端可用该工具的特化显示名替换
+    ///   (如 `agentxx_filesystem_write` -> `Write`)。显示名由工具渲染器给出,
+    ///   尚未就绪时客户端**该段留空** (不显示原始工具名, 避免下一帧跳变);
+    ///   没有注册渲染器的工具才回退本段的字面文本
+    std::string kind;
     /// 主题色名: error / accent / hint / normal / thinking / tool (空 = normal)
     std::string color;
     bool        bold = false;
@@ -43,6 +50,29 @@ struct InterruptUiHeader {
 
     static InterruptUiHeader fromJson(const utilxx_base::Json& j);
     utilxx_base::Json        toJson() const;
+};
+
+/// 中断折叠摘要 (处理完成后的中断消息默认只渲染这一行)
+///
+/// 一条中断消息的处理状态落定后 (已确认/已取消/已过期) 客户端把它折叠成一行:
+/// 标记 + 摘要分段 + 补充说明 + 处理结果。本结构只描述其中**补充信息**那一段;
+/// 结果文案与列宽预算由客户端决定 (状态语义只有客户端知道)。
+///
+/// 整份为空时客户端按通用规则生成折叠行 (复用头行分段 + 首个内容块的首行)。
+struct InterruptUiSummary {
+    /// 摘要分段 (空 = 复用 header.segments; header 也为空时用客户端默认前缀)
+    std::vector<InterruptUiSegment> segments;
+    /// 目标 / 补充说明 (单行; 客户端按剩余列宽截断, 放不下时整段省略)
+    std::string detail;
+    /// detail 的 i18n 键 (客户端优先解析; 缺键回退 detail)
+    std::string detailKey;
+
+    bool empty() const {
+        return segments.empty() && detail.empty() && detailKey.empty();
+    }
+
+    static InterruptUiSummary fromJson(const utilxx_base::Json& j);
+    utilxx_base::Json          toJson() const;
 };
 
 /// 控件候选项 (kind=control 的 buttons / select 控件使用)
@@ -216,11 +246,13 @@ struct InterruptUi {
     int version = 1;
     /// 头行
     InterruptUiHeader header;
+    /// 折叠摘要 (可选: 已处理的中断消息折叠成一行时使用)
+    InterruptUiSummary summary;
     /// 描述块列表 (按顺序渲染)
     std::vector<InterruptUiBlock> blocks;
 
     bool empty() const {
-        return blocks.empty() && header.segments.empty();
+        return blocks.empty() && header.segments.empty() && summary.empty();
     }
 
     static InterruptUi fromJson(const utilxx_base::Json& j);

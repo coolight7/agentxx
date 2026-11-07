@@ -273,6 +273,16 @@ MessageListComponent::MessageListComponent(TUICtx& ctx) :
     // - 注册为子项: 与两个 spinner 同款, 播放中的动画回调经组件树转发
     bannerArt_ = std::make_shared<BannerArtComponent>();
     Add(bannerArt_);
+
+    // 中断描述里的工具名分段 (`kind == "tool"`) 要走工具特化渲染的名称查询:
+    // 中断视图只定义"工具名 -> 显示名"这一个注入点, 具体怎么查由本组件决定
+    // (与占位提示/工具消息同一套渲染器与缓存, 见 [toolDisplayNameOf])
+    interruptView_.setToolDisplayNameResolver([this](std::string_view toolName) {
+        // 渲染总在帧内发生 (ctx_.frameState 已指向本帧快照); 没有快照时按
+        // "无渲染器"处理 (直接用原始工具名, 不投递请求)
+        return ctx_.frameState ? toolDisplayNameOf(*ctx_.frameState, toolName)
+                               : std::string{toolName};
+    });
 }
 
 void MessageListComponent::invalidateCache() {
@@ -1069,8 +1079,15 @@ size_t MessageListComponent::quickHeight(size_t index, int width) {
                 return lines + 1; // +1: 尾部空行
             }
             case TUIMessage::Role::Interrupt:
-                // 中断消息: 形态由消息携带的 UI 描述决定 (InterruptView 通用实现),
-                // 这里只给一个"头行 + 描述若干行"的量级估计 (不 layoutForm 实测)
+                // 中断消息: 形态由处理状态 + 折叠标志决定 (与 InterruptView::estimate
+                // 同一判定):
+                // - 等待用户操作: 头行 + 描述块 (+ 控件), 只给一个"头行 + 描述若干行"
+                //   的量级估计 (不 layoutForm 实测)
+                // - 已处理且折叠: 一行摘要
+                // - 已处理且展开: 同样按量级估计 (进入视口后实测修正)
+                if (!InterruptView::isWaiting(msg) && msg.collapsed) {
+                    return 2; // 摘要行 + 尾部空行
+                }
                 return roughRows(msg.text.size()) + 5 + 1; // +1: 尾部空行
         }
         return 2; // 未知角色按默认处理: 内容 1 行 + 空行
@@ -1490,32 +1507,43 @@ LazyBuiltItem MessageListComponent::buildGenPlaceholderItem(const TUIRenderState
     return out;
 }
 
-std::string MessageListComponent::genPlaceholderToolDisplayName(const TUIRenderState& st) const {
-    if (st.genToolName.empty()) {
+std::string MessageListComponent::toolDisplayNameOf(
+    const TUIRenderState& st,
+    std::string_view      toolName
+) const {
+    if (toolName.empty()) {
         return {};
     }
-    // 参数与结果此时都还没有 (工具调用参数仍在接收), 只按工具名换显示名 ——
-    // 与正常工具消息走同一套工具特化渲染查询, 未命中渲染器/模版时回退原始工具名。
-    // 不传宽度 (0 = 不限): 占位行只展示显示名, 显示名与宽度无关, 固定的输入特征
-    // 使请求只投递一次, 终端宽度变化也不会重复请求
+    // 只按工具名查 (无 tool_call_id / 参数 / 结果): 与正常工具消息走同一套工具特化
+    // 渲染查询。不传宽度 (0 = 不限): 显示名与宽度无关, 固定的输入特征使请求只投递
+    // 一次, 终端宽度变化也不会重复请求
     auto res = queryToolRender(
         ctx_,
         st,
-        std::string_view{}, // 无 toolCallId: 阶段装饰按调用 id 注册, 此时尚未分配
-        st.genToolName,
+        std::string_view{}, // 无 toolCallId: 名称结果按工具名索引 (键 "#工具名")
+        toolName,
         std::string_view{},
         std::string_view{},
         false,
         false,
         0
     );
-    // 显示名取特化渲染结果 (含"结果未就绪"时的过渡显示名); 尚无显示名时不回退
-    // 原始工具名: 该工具存在特化渲染器, 显示名随后就到, 先显示原始工具名会让
-    // 占位行闪一下 (见头文件 [hasGenPlaceholder] 与 renderClientTool 的说明)
+    // 显示名取特化渲染结果 (含"结果未就绪"时的过渡显示名); 尚无显示名时**不回退**
+    // 原始工具名: 该工具存在特化渲染器, 显示名随后就到, 先显示原始工具名会让它
+    // 下一帧跳变 (见头文件 [toolDisplayNameOf])
     if (!res.displayName.empty()) {
         return res.displayName;
     }
-    return res.pendingRender ? std::string{} : st.genToolName;
+    return res.pendingRender ? std::string{} : std::string{toolName};
+}
+
+std::string MessageListComponent::genPlaceholderToolDisplayName(const TUIRenderState& st) const {
+    if (st.genToolName.empty()) {
+        return {};
+    }
+    // 参数与结果此时都还没有 (工具调用参数仍在接收), 只按工具名换显示名 ——
+    // 与正常工具消息走同一套工具特化渲染查询, 未命中渲染器/模版时回退原始工具名
+    return toolDisplayNameOf(st, st.genToolName);
 }
 
 LazyBuiltItem MessageListComponent::buildStreamingHeader(const TUIRenderState& st) {

@@ -137,6 +137,13 @@ InterruptUiBlock submitBlock(
     std::string cancelLabelKey = {}
 );
 
+/// 权限分类的 i18n 键 (内置分类 -> 客户端词表键; 其它返回空)
+///
+/// - 内置分类: `filesystem_read` -> `interrupt.permission.read`,
+///   `filesystem_write` -> `interrupt.permission.write`
+/// - 插件自定义分类 (自由字符串) 返回空: 调用方只给它字面文本, 由客户端原样显示
+std::string permissionCategoryLabelKey(std::string_view category);
+
 /// 横排按钮控件 (commitOnPick = 点击即选中并提交; 一问一答形态)
 InterruptUiBlock buttonControl(
     std::string                    id,
@@ -239,8 +246,14 @@ InterruptUi confirmCard(const ConfirmCardOptions& opts);
 
 /// 权限询问卡片 (预设模板; 由权限服务端构造, 客户端不关心 permission 语义)
 ///
-/// - 头行: 权限标记 (i18n `interrupt.permissionBadge`) + 工具名 (accent) +
-///   权限分类 (hint)
+/// - 头行三段 (客户端只按分段数据渲染):
+///   - 权限标记 (i18n `interrupt.permissionBadge`, error + bold)
+///   - 工具名 (accent + bold, `kind = "tool"`): 客户端用该工具的**特化显示名**
+///     替换 (如 `agentxx_filesystem_write` -> `Write`), 显示名未就绪时该段留空
+///   - 权限名 (内置分类给 i18n 键 `interrupt.permission.read|write`, 插件自定义
+///     分类只给字面文本): **读/写只靠颜色区分** (`hint` / `thinking`), 不加粗
+///     (加粗是界面统一的排版语义, 不能拿来表达业务分类)
+/// - 折叠摘要: `summary.detail = target` (已处理的中断消息折叠成一行时显示目标)
 /// - 目标描述 (hint, 硬折行); 目标为目录 (规范化路径带尾斜杠) 时紧随生效范围提示行
 ///   (textKey = `interrupt.rememberDir`, hint, 硬折行): 点击授权或完全授权均表示
 ///   同时授权子目录与文件

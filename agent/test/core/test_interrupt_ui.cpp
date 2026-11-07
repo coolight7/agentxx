@@ -131,8 +131,71 @@ void test_ui_json_roundtrip() {
     XX_TEST_EXPECT_EQ(back.toJson().dump(), dumped.dump());
 }
 
-void test_ui_unknown_and_custom_fields() {
-    // 未知字段忽略、未知 kind 原样保留 (向前兼容; 客户端渲染时忽略/降级)
+/// 分段 `kind` 与折叠摘要 (`summary`) 的 JSON 往返
+///
+/// 两者都是"老客户端忽略也无害"的可选字段: 空值不写进 JSON, 缺字段按默认值解析。
+void test_ui_summary_and_segment_kind() {
+    using agentxx::middleware::InterruptUi;
+    using agentxx::middleware::InterruptUiSegment;
+
+    InterruptUi ui;
+    ui.header.segments.push_back(InterruptUiSegment{
+        .text     = "agentxx_filesystem_write",
+        .labelKey = "",
+        .kind     = "tool",
+        .color    = "accent",
+        .bold     = true,
+    });
+    ui.summary.segments.push_back(InterruptUiSegment{
+        .text  = "summary-badge",
+        .color = "error",
+    });
+    ui.summary.detail    = "C:/work/a.txt";
+    ui.summary.detailKey = "custom.detail";
+
+    const auto dumped = ui.toJson();
+    XX_TEST_EXPECT_TRUE(dumped.is_object());
+    XX_TEST_EXPECT_EQ(
+        dumped["header"]["segments"][0].value("kind", std::string{}),
+        std::string("tool")
+    );
+    XX_TEST_EXPECT_TRUE(dumped.contains("summary"));
+    XX_TEST_EXPECT_EQ(
+        dumped["summary"].value("detail", std::string{}),
+        std::string("C:/work/a.txt")
+    );
+
+    const auto back = InterruptUi::fromJson(dumped);
+    XX_TEST_EXPECT_EQ(back.header.segments.size(), size_t{1});
+    XX_TEST_EXPECT_EQ(back.header.segments[0].kind, std::string("tool"));
+    XX_TEST_EXPECT_EQ(back.summary.segments.size(), size_t{1});
+    XX_TEST_EXPECT_EQ(back.summary.segments[0].text, std::string("summary-badge"));
+    XX_TEST_EXPECT_EQ(back.summary.detail, std::string("C:/work/a.txt"));
+    XX_TEST_EXPECT_EQ(back.summary.detailKey, std::string("custom.detail"));
+    XX_TEST_EXPECT_FALSE(back.empty());
+    // 往返稳定
+    XX_TEST_EXPECT_EQ(back.toJson().dump(), dumped.dump());
+
+    // 空字段不写: 默认分段的 kind 为空, 默认摘要整段不写
+    InterruptUi plain;
+    plain.blocks.push_back(agentxx::middleware::preset::textBlock("x"));
+    XX_TEST_EXPECT_TRUE(plain.summary.empty());
+    const auto plainJson = plain.toJson();
+    XX_TEST_EXPECT_FALSE(plainJson.contains("summary"));
+    XX_TEST_EXPECT_FALSE(plainJson.contains("header"));
+
+    // 只有摘要时也算非空描述 (不需要 blocks); 缺字段按默认值解析
+    const auto onlySummary = InterruptUi::fromJson(Json{
+        {"summary", Json{{"detail", "only-detail"}}}
+    });
+    XX_TEST_EXPECT_FALSE(onlySummary.empty());
+    XX_TEST_EXPECT_EQ(onlySummary.summary.detail, std::string("only-detail"));
+    XX_TEST_EXPECT_TRUE(onlySummary.summary.detailKey.empty());
+    XX_TEST_EXPECT_TRUE(onlySummary.summary.segments.empty());
+    XX_TEST_EXPECT_TRUE(InterruptUi::fromJson(Json{{"summary", "not-object"}}).empty());
+}
+
+void test_ui_unknown_and_custom_fields() {    // 未知字段忽略、未知 kind 原样保留 (向前兼容; 客户端渲染时忽略/降级)
     const auto json = Json::parse(R"({
         "version": 1,
         "unknownTop": 123,
@@ -244,6 +307,45 @@ void test_preset_permission_and_confirm_card() {
     XX_TEST_EXPECT_EQ(perm.header.segments.size(), size_t{3});
     XX_TEST_EXPECT_EQ(perm.header.segments[0].labelKey, std::string("interrupt.permissionBadge"));
     XX_TEST_EXPECT_TRUE(perm.header.segments[0].text.empty());
+    // 头行三段语义: 权限标记 / 工具名 (kind = tool) / 权限名 (内置分类给 i18n 键)
+    XX_TEST_EXPECT_TRUE(perm.header.segments[0].kind.empty());
+    XX_TEST_EXPECT_EQ(perm.header.segments[1].text, std::string("read_file"));
+    XX_TEST_EXPECT_EQ(perm.header.segments[1].kind, std::string("tool"));
+    XX_TEST_EXPECT_EQ(perm.header.segments[2].text, std::string("filesystem_read"));
+    XX_TEST_EXPECT_EQ(
+        perm.header.segments[2].labelKey,
+        std::string("interrupt.permission.read")
+    );
+    // 读/写只靠颜色区分: 不加粗 (加粗是全局排版语义, 不能当区分手段)
+    XX_TEST_EXPECT_EQ(perm.header.segments[2].color, std::string("hint"));
+    XX_TEST_EXPECT_FALSE(perm.header.segments[2].bold);
+    // 折叠摘要: 目标路径进 detail, 分段留空 (复用头行三段)
+    XX_TEST_EXPECT_TRUE(perm.summary.segments.empty());
+    XX_TEST_EXPECT_EQ(perm.summary.detail, std::string("/tmp/x"));
+
+    // 写类分类: 同一个 i18n 键族 + thinking 颜色, 同样不加粗
+    const auto permWrite = preset::permissionCard("write_file", "filesystem_write", "/tmp/y");
+    XX_TEST_EXPECT_EQ(permWrite.header.segments.size(), size_t{3});
+    XX_TEST_EXPECT_EQ(
+        permWrite.header.segments[2].labelKey,
+        std::string("interrupt.permission.write")
+    );
+    XX_TEST_EXPECT_EQ(permWrite.header.segments[2].color, std::string("thinking"));
+    XX_TEST_EXPECT_FALSE(permWrite.header.segments[2].bold);
+    XX_TEST_EXPECT_EQ(permWrite.summary.detail, std::string("/tmp/y"));
+
+    // 插件自定义分类: 没有词表键, 字面文本照原样 (客户端直接显示)
+    const auto permCustom = preset::permissionCard("custom_tool", "custom_scope", "x");
+    XX_TEST_EXPECT_EQ(permCustom.header.segments.size(), size_t{3});
+    XX_TEST_EXPECT_EQ(permCustom.header.segments[2].text, std::string("custom_scope"));
+    XX_TEST_EXPECT_TRUE(permCustom.header.segments[2].labelKey.empty());
+    XX_TEST_EXPECT_EQ(permCustom.header.segments[2].color, std::string("hint"));
+
+    // 无目标 (工具级权限声明): 摘要不带 detail
+    const auto permNoTarget = preset::permissionCard("no_target_tool", "filesystem_write", {});
+    XX_TEST_EXPECT_TRUE(permNoTarget.summary.empty());
+    XX_TEST_EXPECT_EQ(permNoTarget.header.segments.size(), size_t{3});
+
     XX_TEST_EXPECT_EQ(countControls(perm, "checkbox"), size_t{2});
     const auto* remember = findControl(perm, "checkbox");
     XX_TEST_EXPECT_TRUE(remember != nullptr);
@@ -287,6 +389,7 @@ void test_preset_permission_and_confirm_card() {
     // 权限卡片 (目录目标): 紧随目标描述后附加生效范围提示行 (interrupt.rememberDir)
     // 且勾选项 remember/fullAuth 均无 help (提示归属路径本身)
     const auto permDir      = preset::permissionCard("list_dir", "filesystem_read", "/tmp/dir/");
+    XX_TEST_EXPECT_EQ(permDir.summary.detail, std::string("/tmp/dir/"));
     size_t     dirHintTexts = 0;
     bool       hasDirPrompt = false;
     for (const auto& b : permDir.blocks) {
@@ -983,6 +1086,7 @@ TestResult testInterruptUi() {
     g_interrupt_ui_failed = 0;
 
     test_ui_json_roundtrip();
+    test_ui_summary_and_segment_kind();
     test_ui_unknown_and_custom_fields();
     test_preset_input_form();
     test_preset_permission_and_confirm_card();
