@@ -511,13 +511,19 @@ Element InterruptView::buildMark(Mode mode) const {
     }
 }
 
-Elements InterruptView::buildHeaderSegments(const middleware::InterruptUi& ui) const {
-    auto segs = resolveSegments(ui.header.segments);
-    if (ui.header.segments.empty()) {
-        // 描述未声明头行分段: 用客户端默认前缀 (语言随 TuiI18n)
+std::vector<InterruptView::ResolvedSegment> InterruptView::segmentsOrDefault(
+    const std::vector<middleware::InterruptUiSegment>& segments
+) const {
+    auto segs = resolveSegments(segments);
+    if (segments.empty()) {
+        // 描述未声明分段: 用客户端默认前缀 (语言随 TuiI18n)
         segs.push_back(ResolvedSegment{std::string{tr("interrupt.header")}, "accent", true, false});
     }
-    return segElements(segs);
+    return segs;
+}
+
+Elements InterruptView::buildHeaderSegments(const middleware::InterruptUi& ui) const {
+    return segElements(segmentsOrDefault(ui.header.segments));
 }
 
 std::string InterruptView::statusTextOf(const TUIMessage& msg) const {
@@ -612,14 +618,8 @@ Element InterruptView::buildSummaryLine(
     const auto& theme = *ctx_.theme;
 
     // 1) 摘要分段: summary.segments 优先, 其次复用头行分段, 都没有时默认前缀
-    std::vector<ResolvedSegment> segs;
-    if (!ui.summary.segments.empty()) {
-        segs = resolveSegments(ui.summary.segments);
-    } else if (!ui.header.segments.empty()) {
-        segs = resolveSegments(ui.header.segments);
-    } else {
-        segs.push_back(ResolvedSegment{std::string{tr("interrupt.header")}, "accent", true, false});
-    }
+    const auto& rawSegs = ui.summary.segments.empty() ? ui.header.segments : ui.summary.segments;
+    const auto  segs    = segmentsOrDefault(rawSegs);
     const std::string segText = joinSegments(segs);
 
     // 2) 补充说明 (目标/首行摘要): detailKey 优先, 空时回退首个内容块的首行
@@ -684,11 +684,7 @@ Element InterruptView::buildProcessed(
     const auto& theme = *ctx_.theme;
 
     // 头行: 标记 + 分段 + 处理结果 (同一行; 点它收起)
-    auto segs = resolveSegments(ui.header.segments);
-    if (ui.header.segments.empty()) {
-        // 描述未声明头行分段: 用客户端默认前缀 (语言随 TuiI18n)
-        segs.push_back(ResolvedSegment{std::string{tr("interrupt.header")}, "accent", true, false});
-    }
+    const auto        segs    = segmentsOrDefault(ui.header.segments);
     const std::string segText = joinSegments(segs);
     Elements header;
     header.push_back(buildMark(Mode::Expanded));

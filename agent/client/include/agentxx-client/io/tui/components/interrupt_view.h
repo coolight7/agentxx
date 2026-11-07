@@ -232,6 +232,11 @@ private:
     /// 可渲染分段 → 横排元素
     ftxui::Elements segElements(const std::vector<ResolvedSegment>& segments) const;
 
+    /// 分段 → 可渲染分段; 描述未声明任何分段时给客户端默认前缀
+    /// (`interrupt.header` 一段, accent + bold)
+    std::vector<ResolvedSegment>
+        segmentsOrDefault(const std::vector<middleware::InterruptUiSegment>& segments) const;
+
     /// 标记列 (`!` / `+` / `-` 加一个空格; 未处理 = error + bold, 已处理 = hint)
     ftxui::Element buildMark(Mode mode) const;
 
