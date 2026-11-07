@@ -867,13 +867,13 @@ void benchResourceTui() {
     res1.pluginsAgent  = res0.pluginsAgent;
     res1.pluginsClient = res0.pluginsClient;
     for (int w = 0; w < 20; ++w) {
-        if (!tui->sharedState().readSnapshot()->messages.empty()) {
+        if (!tui->sharedState().readSnapshot()->messages().empty()) {
             break;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
     auto tuiSnap1 = tui->sharedState().readSnapshot();
-    res1.note     = fmt::format("tail=100 + pagePull, tuiMsgCount={}", tuiSnap1->messages.size());
+    res1.note     = fmt::format("tail=100 + pagePull, tuiMsgCount={}", tuiSnap1->messages().size());
 
     {
         std::promise<void> p;
@@ -956,13 +956,13 @@ void benchResourceTui() {
     res2.pluginsAgent  = res0.pluginsAgent;
     res2.pluginsClient = res0.pluginsClient;
     for (int w = 0; w < 20; ++w) {
-        if (tui->sharedState().readSnapshot()->messages.size() > 100) {
+        if (tui->sharedState().readSnapshot()->messages().size() > 100) {
             break;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
     auto tuiSnap2 = tui->sharedState().readSnapshot();
-    res2.note     = fmt::format("tail=100 + pagePull, tuiMsgCount={}", tuiSnap2->messages.size());
+    res2.note     = fmt::format("tail=100 + pagePull, tuiMsgCount={}", tuiSnap2->messages().size());
 
     {
         std::promise<void> p;
@@ -1479,7 +1479,7 @@ void benchResourceSplitTui() {
     auto   memServer1 = sampleMemoryMedian(serverProc.pid);
     auto   memClient1 = sampleMemoryMedian(0);
     auto   tuiSnap1   = tui->sharedState().readSnapshot();
-    size_t tuiMsgs1   = (tuiSnap1 != nullptr) ? tuiSnap1->messages.size() : 0;
+    size_t tuiMsgs1   = (tuiSnap1 != nullptr) ? tuiSnap1->messages().size() : 0;
 
     ResourceResult resServer1;
     resServer1.mode         = "split_tui";
@@ -1544,7 +1544,7 @@ void benchResourceSplitTui() {
     auto   memServer2 = sampleMemoryMedian(serverProc.pid);
     auto   memClient2 = sampleMemoryMedian(0);
     auto   tuiSnap2   = tui->sharedState().readSnapshot();
-    size_t tuiMsgs2   = (tuiSnap2 != nullptr) ? tuiSnap2->messages.size() : 0;
+    size_t tuiMsgs2   = (tuiSnap2 != nullptr) ? tuiSnap2->messages().size() : 0;
 
     ResourceResult resServer2;
     resServer2.mode         = "split_tui";

@@ -40,57 +40,148 @@ StdIOClientAgentIO::~StdIOClientAgentIO() {
 
 void StdIOClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
     using Type = agentxx::agent::WireDelta::Type;
+    using Role = agentxx::agent::ViewMessage::Role;
     // 输出前自检控制台代码页: 工具子进程 (chcp 等) 会改掉共享控制台的输出代码页,
     // 之后本进程写的 UTF-8 中文会被按旧代码页解码成乱码 (见 util/console_state.h)。
     // 这里逐次检查 (只多一次 GetConsoleOutputCP), 行式输出无需重新对齐画面
     (void)consoleStateGuard_.check();
+
+    /// 工具终态文案由状态位给出, 不看结果文本
+    auto toolStateText = [](agentxx::util::ToolStatus status) -> std::string_view {
+        switch (status) {
+            case agentxx::util::ToolStatus::Failed:
+                return "error";
+            case agentxx::util::ToolStatus::Interrupted:
+                return "interrupted";
+            case agentxx::util::ToolStatus::Canceled:
+                return "canceled";
+            case agentxx::util::ToolStatus::Ok:
+            default:
+                return "done";
+        }
+    };
+    /// 历史行 (整条下发) 的打印: 流式已实时打印过的部分只补打尾部
+    auto printRow = [&](const agentxx::agent::ViewMessage& msg, bool update) {
+        if (msg.role == Role::Tool && msg.tool) {
+            // 工具行: 开始/结束各打一行 (与改造前 ToolStart/ToolEnd 的观感一致)
+            if (!msg.tool->toolFinished) {
+                std::cout << std::endl
+                          << fmt::format("[Tool] {} running...", msg.tool->toolName)
+                          << std::endl;
+            } else {
+                std::cout << std::endl
+                          << fmt::format(
+                                 "[Tool] {} {}",
+                                 msg.tool->toolName,
+                                 toolStateText(msg.tool->status)
+                             )
+                          << std::endl;
+            }
+            return;
+        }
+        if (msg.role == Role::Tip && msg.tip) {
+            std::string prefix;
+            switch (msg.tip->tipLevel) {
+                case agentxx::agent::ViewMessage::TipLevel::Warning:
+                    prefix = "[Warning] ";
+                    break;
+                case agentxx::agent::ViewMessage::TipLevel::Error:
+                    prefix = "[Error] ";
+                    break;
+                default:
+                    prefix = "[Info] ";
+                    break;
+            }
+            std::cout << std::endl << prefix << msg.text << std::endl;
+            return;
+        }
+        if (msg.role == Role::User || msg.role == Role::Event) {
+            if (!update) {
+                std::cout << "> " << msg.text << std::endl;
+            }
+            return;
+        }
+        if (msg.role != Role::Assistant && msg.role != Role::Think) {
+            return; // 中断表单等纯界面行: 行式输出不展示
+        }
+        const bool isCurrentStream = !msg.id.empty() && msg.id == streamId_;
+        if (update && !isCurrentStream) {
+            return; // 非当前流的整条覆盖: 正文已经打过/已打过, 不重复
+        }
+        // 同一段已实时打印过: 只补打未打印的尾部 (按字符数, 与改造前的"只打一次"等价)
+        const size_t already = isCurrentStream ? streamPrintedLen_ : 0;
+        if (already < msg.text.size()) {
+            if (already == 0 && !isThinking_) {
+                std::cout << std::endl;
+            }
+            std::cout << msg.text.substr(already) << std::flush;
+        }
+        if (isCurrentStream) {
+            streamPrintedLen_ = msg.text.size();
+            if (update) {
+                // 定稿行已打全: 该段收尾
+                std::cout << std::endl;
+                streamId_.clear();
+                streamPrintedLen_ = 0;
+                isThinking_       = false;
+            }
+        }
+    };
+
     switch (delta.type) {
+        case Type::StreamBegin:
+            // 新的一段流: 记住 id 与角色 (思考段要打 [Think] 前缀)
+            streamId_         = delta.msgId;
+            streamPrintedLen_ = 0;
+            isThinking_       = false;
+            if (delta.streamRole == Role::Think && delta.think
+                && delta.think->isEncrypted) {
+                // 加密思考首包: 开始思考提示 (与改造前一致)
+                std::cout << std::endl << "[Think] (思考内容被加密)" << std::flush;
+                isThinking_ = true;
+            }
+            break;
         case Type::TextToken:
+            if (streamId_ != delta.msgId) {
+                streamId_         = delta.msgId;
+                streamPrintedLen_ = 0;
+                isThinking_       = false;
+            }
             if (isThinking_) {
                 std::cout << std::endl << "[Content] ";
+                isThinking_ = false;
             }
-            isThinking_ = false;
             std::cout << delta.text << std::flush;
+            streamPrintedLen_ += delta.text.size();
             break;
         case Type::ThinkToken:
+            if (streamId_ != delta.msgId) {
+                streamId_         = delta.msgId;
+                streamPrintedLen_ = 0;
+                isThinking_       = false;
+            }
             if (!delta.text.empty()) {
                 if (!isThinking_) {
                     std::cout << std::endl << "[Think] ";
                     isThinking_ = true;
                 }
                 std::cout << delta.text << std::flush;
-            } else if (delta.think && delta.think->isEncrypted
-                       && delta.think->reasoningTokens == 0) {
-                // 加密思考首包: 开始思考提示 (元数据更新包静默处理, 避免正文后重复打印)
-                if (!isThinking_) {
-                    std::cout << std::endl << "[Think] (思考内容被加密)" << std::flush;
-                    isThinking_ = true;
-                }
+                streamPrintedLen_ += delta.text.size();
             }
             break;
-        case Type::ToolStart:
-            std::cout << std::endl
-                      << fmt::format("[Tool] {} running...", delta.toolName) << std::endl;
+        case Type::InsertMessage:
+        case Type::UpdateMessage:
+            if (delta.message) {
+                printRow(*delta.message, delta.type == Type::UpdateMessage);
+            }
             break;
-        case Type::ToolEnd: {
-            // 终态文案由状态给出, 不看结果文本
-            const auto state = [&]() -> std::string_view {
-                switch (delta.status) {
-                    case agentxx::util::ToolStatus::Failed:
-                        return "error";
-                    case agentxx::util::ToolStatus::Interrupted:
-                        return "interrupted";
-                    case agentxx::util::ToolStatus::Canceled:
-                        return "canceled";
-                    case agentxx::util::ToolStatus::Ok:
-                    default:
-                        return "done";
-                }
-            }();
-            std::cout << std::endl
-                      << fmt::format("[Tool] {} {}", delta.toolName, state) << std::endl;
+        case Type::StreamEnd:
+            if (!streamId_.empty() && streamId_ == delta.msgId) {
+                streamId_.clear();
+                streamPrintedLen_ = 0;
+                isThinking_       = false;
+            }
             break;
-        }
         case Type::MessageUITip: {
             std::string prefix;
             using TipType = agentxx::agent::WireDelta::TipType;
@@ -108,35 +199,16 @@ void StdIOClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
             std::cout << std::endl << prefix << delta.text << std::endl;
             break;
         }
-        case Type::InsertMessage:
-        case Type::UpdateMessage: {
-            if (delta.message) {
-                using namespace agentxx::agent;
-                const auto& msg = *delta.message;
-                std::string prefix;
-                if (msg.role == ViewMessage::Role::Tip && msg.tip) {
-                    switch (msg.tip->tipLevel) {
-                        case ViewMessage::TipLevel::Warning:
-                            prefix = "[Warning] ";
-                            break;
-                        case ViewMessage::TipLevel::Error:
-                            prefix = "[Error] ";
-                            break;
-                        default:
-                            prefix = "[Info] ";
-                            break;
-                    }
-                }
-                std::cout << std::endl << prefix << msg.text << std::endl;
-            }
-            break;
-        }
         case Type::TurnStart:
-            isThinking_ = false;
+            isThinking_       = false;
+            streamId_.clear();
+            streamPrintedLen_ = 0;
             break;
         case Type::TurnEnd: {
             std::cout << "\n>>> " << std::flush;
-            isThinking_ = false;
+            isThinking_       = false;
+            streamId_.clear();
+            streamPrintedLen_ = 0;
 
             // 首次会话结束时输出汇总信息
             if (!g_firstSessionDone) {

@@ -72,8 +72,8 @@ void InterruptView::setActiveMsg(size_t msgIndex) {
     activeMsg_ = msgIndex;
     // 激活时确保表单状态已按描述初始化 (首次编辑前 edited=false)
     ctx_.state->mutate([&](TUIRenderState& st) {
-        if (msgIndex < st.messages.size() && isWaiting(*st.messages[msgIndex])) {
-            uiStateFor(*st.messages[msgIndex]);
+        if (msgIndex < st.messages().size() && isWaiting(*st.messages()[msgIndex])) {
+            uiStateFor(*st.messages()[msgIndex]);
         }
     });
     ctx_.postRedraw();
@@ -209,10 +209,10 @@ uint64_t InterruptView::stateVersion(const TUIMessage& msg) const {
 
 InterruptView::FormState InterruptView::formState(size_t msgIndex) {
     auto st = ctx_.state ? ctx_.state->readSnapshot() : ctx_.frameState;
-    if (!st || msgIndex >= st->messages.size()) {
+    if (!st || msgIndex >= st->messages().size()) {
         return {};
     }
-    const auto& msg    = *st->messages[msgIndex];
+    const auto& msg    = *st->messages()[msgIndex];
     int64_t     wireId = 0;
     if (!requestIdOf(msg, wireId)) {
         return {};
@@ -551,10 +551,10 @@ bool InterruptView::handleClick(const Mouse& mouse, const Box& areaBox) {
         Act          act     = Act::None;
 
         ctx_.state->mutate([&](TUIRenderState& st) {
-            if (mi >= st.messages.size()) {
+            if (mi >= st.messages().size()) {
                 return;
             }
-            const auto& msg = *st.messages[mi];
+            const auto& msg = *st.messages()[mi];
             if (!isWaiting(msg)) {
                 return;
             }
@@ -634,10 +634,10 @@ bool InterruptView::handleKey(Event event) {
 
     // 校验激活消息仍可交互; 按键作用于当前聚焦控件 (状态修改在锁内完成)
     ctx_.state->mutate([&](TUIRenderState& st) {
-        if (mi >= st.messages.size()) {
+        if (mi >= st.messages().size()) {
             return;
         }
-        const auto& msg = *st.messages[mi];
+        const auto& msg = *st.messages()[mi];
         if (!isWaiting(msg)) {
             return;
         }
@@ -706,10 +706,10 @@ void InterruptView::confirm(size_t msgIndex) {
     std::string         display;
 
     ctx_.state->mutate([&](TUIRenderState& st) {
-        if (msgIndex >= st.messages.size()) {
+        if (msgIndex >= st.messages().size()) {
             return;
         }
-        const auto& src = *st.messages[msgIndex];
+        const auto& src = *st.messages()[msgIndex];
         if (!isWaiting(src)) {
             return;
         }
@@ -769,18 +769,18 @@ void InterruptView::cancel(size_t msgIndex) {
     bool    valid  = false;
 
     ctx_.state->mutate([&](TUIRenderState& st) {
-        if (msgIndex >= st.messages.size() || !st.messages[msgIndex]->interrupt) {
+        if (msgIndex >= st.messages().size() || !st.messages()[msgIndex]->interrupt) {
             return;
         }
-        const auto& src = *st.messages[msgIndex];
+        const auto& src = *st.messages()[msgIndex];
         if (!isWaiting(src)) {
             return;
         }
         wireId = src.interrupt->interruptId;
         valid  = true;
         // 标记同请求全部未操作消息为 Canceled (一条请求一份表单; 防御性遍历)
-        for (size_t i = 0; i < st.messages.size(); ++i) {
-            const auto& m = *st.messages[i];
+        for (size_t i = 0; i < st.messages().size(); ++i) {
+            const auto& m = *st.messages()[i];
             if (m.role == TUIMessage::Role::Interrupt && m.interrupt
                 && m.interrupt->interruptId == wireId
                 && m.interrupt->interruptStatus == TUIMessage::InterruptStatus::Waiting) {

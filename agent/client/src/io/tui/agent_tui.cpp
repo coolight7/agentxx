@@ -54,23 +54,9 @@ using namespace ftxui;
 
 namespace {
 
-/// 消息是否没有可展示的内容 (正文为空/只有空白或零宽占位符)
-///
-/// 判定统一在 [ViewMessage::hasVisibleContent] —— 服务端写入 (事件桥)、会话库
-/// 加载、客户端插入与渲染层用同一份规则。曾经这里是只处理正文类角色的局部版
-/// 本, 于是空的思考消息在实况下会显示、重新拉历史后又消失 (两边规则不一致)。
-bool isBlankContentMessage(const TUIMessage& msg) {
-    return !msg.hasVisibleContent();
-}
-
-/// 合并同一思考消息的多段思考元数据 (加密标记取"或", token 统计取大)
-///
-/// 交错流式输出时一个步骤的思考可能分多段到达 (见
-/// TUIClientAgentIO::findStepMessageLocked), 各段都可能携带加密思考标记/
-/// 推理 token 统计; 合并结果与服务端按整段思考结算的一致。
-void mergeThinkData(TUIMessage::ThinkData& dst, const TUIMessage::ThinkData& src) {
-    dst.isEncrypted     = dst.isEncrypted || src.isEncrypted;
-    dst.reasoningTokens = std::max(dst.reasoningTokens, src.reasoningTokens);
+/// 本地行 id: 客户端自造的行统一带 `local_` 前缀 (agent 的消息级 op 永不命中它们)
+std::string nextLocalRowId(TUIRenderState& st, std::string_view kind) {
+    return fmt::format("local_{}_{}", kind, ++st.localRowSeq);
 }
 
 } // namespace
@@ -211,8 +197,6 @@ void TUIClientAgentIO::sendPluginUserInput(std::string text) {
         std::lock_guard<std::mutex> lock(sharedState_.mutex());
         auto&                       st = sharedState_.mutableState();
         if (awaitingInterruptInput_.load(std::memory_order_acquire)) {
-            pushCurrentTokenLocked(st);
-            resetTrailingRunningToolsLocked(st);
             // 先吸附底部再追加: 追加触发的本地条数清理检查据此判定"用户正跟随
             // 最新内容" (见 [applyLocalTrimCheck])
             enqueueUiAction([this]() {
@@ -220,10 +204,9 @@ void TUIClientAgentIO::sendPluginUserInput(std::string text) {
                     messageList_->setStickToBottom(true);
                 }
             });
-            pushLocalMessageLocked(
-                st,
-                std::make_shared<TUIMessage>(TUIMessage::makeText(TUIMessage::Role::User, text))
-            );
+            auto localUser = TUIMessage::makeText(TUIMessage::Role::User, text);
+            localUser.id   = nextLocalRowId(st, "input");
+            pushLocalRowLocked(st, std::move(localUser));
             inputChannel_->async_send(
                 utilxx_base::AsioErrorCode{},
                 std::move(text),
@@ -567,15 +550,12 @@ void TUIClientAgentIO::start() {
             std::lock_guard<std::mutex> lock(sharedState_.mutex());
             auto&                       st = sharedState_.mutableState();
             if (awaitingInterruptInput_.load(std::memory_order_acquire)) {
-                pushCurrentTokenLocked(st);
-                resetTrailingRunningToolsLocked(st);
                 // 先吸附底部再追加 (本回调已在 UI 线程): 追加触发的本地条数
                 // 清理检查据此判定"用户正跟随最新内容"
                 messageList_->setStickToBottom(true);
-                pushLocalMessageLocked(
-                    st,
-                    std::make_shared<TUIMessage>(TUIMessage::makeText(TUIMessage::Role::User, text))
-                );
+                auto localUser = TUIMessage::makeText(TUIMessage::Role::User, text);
+                localUser.id   = nextLocalRowId(st, "input");
+                pushLocalRowLocked(st, std::move(localUser));
                 inputChannel_->async_send(
                     utilxx_base::AsioErrorCode{},
                     std::move(text),
@@ -632,11 +612,6 @@ void TUIClientAgentIO::start() {
         inputCfg.onRunNextPending = [this] {
             if (transport_) {
                 sendToPeer(agentxx::agent::WireInterruptAndRunNext{currentSessionId()});
-            }
-            std::lock_guard<std::mutex> lock(sharedState_.mutex());
-            auto&                       st = sharedState_.mutableState();
-            if (st.isStreaming) {
-                pushCurrentTokenLocked(st);
             }
             postRedraw();
         };
@@ -1905,8 +1880,8 @@ void TUIClientAgentIO::onPeerMessage(agentxx::agent::WireMessage msg) {
                 {
                     std::lock_guard<std::mutex> lock(sharedState_.mutex());
                     auto&                       st = sharedState_.mutableState();
-                    for (size_t i = 0; i < st.messages.size(); ++i) {
-                        const auto& msg = *st.messages[i];
+                    for (size_t i = 0; i < st.replica.rows().size(); ++i) {
+                        const auto& msg = *st.replica.rows()[i];
                         if (msg.role == TUIMessage::Role::Interrupt && msg.interrupt
                             && msg.interrupt->interruptId == expiredId
                             && msg.interrupt->interruptStatus
@@ -2051,122 +2026,9 @@ void TUIClientAgentIO::onPeerMessage(agentxx::agent::WireMessage msg) {
 // 协议处理辅助 (调用方须持有 sharedState_.mutex())
 // ---------------------------------------------------------------------------
 
-void TUIClientAgentIO::resetTrailingRunningToolsLocked(TUIRenderState& st) {
-    for (size_t i = st.messages.size(); i > 0; --i) {
-        const auto& msg = *st.messages[i - 1];
-        if (msg.role != TUIMessage::Role::Tool) {
-            break;
-        }
-        if (msg.tool && !msg.tool->toolFinished) {
-            auto& m              = sharedState_.mutableMessage(st, i - 1);
-            m.tool->toolFinished = true;
-        }
-    }
-}
-
-void TUIClientAgentIO::pushCurrentTokenLocked(TUIRenderState& st) {
-    if (!st.hasPendingToken()) {
-        return;
-    }
-    resetTrailingRunningToolsLocked(st);
-
-    // 交错流式输出: 同一模型步骤内思考/正文可能分成多段交替到达
-    // (思考 -> 正文 -> 思考 -> 正文 ...)。服务端的展示历史按步骤归组
-    // (一个步骤只有最前的一条 Think 和一条 Assistant), 这里把后到的段
-    // 并回同步骤的同角色消息 —— 不并的话实时画面会把一个步骤拆成多条
-    // 交错的消息, 与重开会话后的历史不一致 (思考末尾的段落单独成块
-    // 出现在正文开头之后)
-    const size_t mergeTarget = findStepMessageLocked(st, st.currentTokenRole);
-    if (mergeTarget != kNoStepMessage) {
-        auto& m = sharedState_.mutableMessage(st, mergeTarget);
-        if (st.currentToken && !st.currentToken->empty()) {
-            m.text += *st.currentToken;
-        }
-        if (st.currentTokenRole == TUIMessage::Role::Think) {
-            if (st.pendingTokenThink.has_value()) {
-                if (!m.think) {
-                    m.think = *st.pendingTokenThink;
-                } else {
-                    mergeThinkData(*m.think, *st.pendingTokenThink);
-                }
-            }
-            // 折叠态跟随用户对流式思考的手动点击: 用户点击展开过则保持展开;
-            // 未点击时沿用该消息原来的折叠状态 (不去动用户已做的选择)
-            if (st.streamThinkOverride == 1) {
-                m.collapsed = false;
-            }
-        }
-        // 起止时间/耗时取整个步骤的合并值 (服务端同样按步骤累加
-        // 思考段耗时, 见 event_stream.cpp 的 finalizeThinkSegment)
-        if (st.pendingTokenStartTimeMs > 0
-            && (m.startTimeMs == 0 || st.pendingTokenStartTimeMs < m.startTimeMs)) {
-            m.startTimeMs = st.pendingTokenStartTimeMs;
-        }
-        if (st.pendingTokenDurationMs > 0) {
-            m.durationMs = std::max(m.durationMs, st.pendingTokenDurationMs);
-        }
-    } else {
-        auto msg  = std::make_shared<TUIMessage>();
-        msg->role = st.currentTokenRole;
-        if (st.currentToken && !st.currentToken->empty()) {
-            msg->text = *st.currentToken;
-        }
-        if (st.currentTokenRole == TUIMessage::Role::Think) {
-            // 折叠态跟随用户对流式思考的手动点击: 用户点击展开过则提交后保持展开
-            // (思考结束不自动折回), 未点击/点击折叠时维持默认折叠。
-            // 覆盖态说明见 TUIRenderState::streamThinkOverride
-            msg->collapsed = (st.streamThinkOverride != 1);
-            if (st.pendingTokenThink.has_value()) {
-                msg->think = *st.pendingTokenThink;
-            }
-        }
-        msg->durationMs  = st.pendingTokenDurationMs;
-        msg->startTimeMs = st.pendingTokenStartTimeMs;
-        // 空 content 消息过滤: 流式正文 (Assistant) 全为空白时不落入消息列表
-        // (如模型只输出了空格/换行); 思考消息同一判据 —— 全为空白且没有加密思考/
-        // token 统计时也不保留 (只剩一个 `[思考]` 头部行的空消息没有展示意义,
-        // 见 ViewMessage::hasVisibleContent)
-        if (!isBlankContentMessage(*msg)) {
-            pushLocalMessageLocked(st, std::move(msg));
-        }
-    }
-    st.pendingTokenDurationMs  = 0;
-    st.pendingTokenStartTimeMs = 0;
-    st.pendingTokenThink.reset();
-    st.currentToken.reset();
-    // 当前流的折叠覆盖态已随本次提交生效并按消息落盘, 就此失效:
-    // 下一次思考 (新流) 回到设置模式 (TailThinkingMode) 的默认展示
-    st.streamThinkOverride = -1;
-}
-
-size_t TUIClientAgentIO::findStepMessageLocked(
-    const TUIRenderState& st,
-    TUIMessage::Role      role
-) const {
-    for (size_t i = st.messages.size(); i > 0; --i) {
-        const auto r = st.messages[i - 1]->role;
-        if (r == role) {
-            return i - 1;
-        }
-        // 只允许越过另一角色的流式消息 (思考 <-> 正文): 其余消息都属于
-        // 步骤边界 (用户/事件输入, 工具执行, 提示/中断等), 跨过它们合并会把
-        // 上一步骤的内容拼到这一步骤里
-        const bool otherStreamRole = (role == TUIMessage::Role::Think)
-                                         ? (r == TUIMessage::Role::Assistant)
-                                         : (r == TUIMessage::Role::Think);
-        if (!otherStreamRole) {
-            return kNoStepMessage;
-        }
-    }
-    return kNoStepMessage;
-}
-
 void TUIClientAgentIO::cancelCurrentRunLocked(TUIRenderState& st) {
     requestCancel(currentSessionId());
-    pushCurrentTokenLocked(st);
-    resetTrailingRunningToolsLocked(st);
-    // 取消提示由 agent 线程确认取消后经 MessageTip WireDelta 插入 (原在此处
-    // 即时插入 "[Cancel Request]", 迁移后由 agent 端统一插入保证历史一致)
+    // 取消提示由 agent 线程确认取消后插入 (客户端不再本地造消息)
     st.isStreaming = false;
 }
 
@@ -2175,7 +2037,6 @@ void TUIClientAgentIO::sendUserInputLocked(
     std::string                                  text,
     std::vector<agentxx::agent::MediaAttachment> attachments
 ) {
-    resetTrailingRunningToolsLocked(st);
     // 事件接收器通知用原文 (inputChannel 分支会 move text, 提前拷贝)
     const std::string notifyText = text;
     // 待应用模型选择: 取走后随本条消息携带给 server-io (WireUserInput.model),
@@ -2259,9 +2120,11 @@ void TUIClientAgentIO::onMessageQueueUpdate(const agentxx::agent::WireMessageQue
 // 执行, 同帧的布局/渲染随即按新列表 (与收缩后的并行数组) 进行。
 // ---------------------------------------------------------------------------
 
-void TUIClientAgentIO::pushLocalMessageLocked(TUIRenderState& st, std::shared_ptr<TUIMessage> msg) {
-    st.messages.push_back(std::move(msg));
-    if (st.messages.size() > agentxx::client::kLocalMessageLimit) {
+void TUIClientAgentIO::pushLocalRowLocked(TUIRenderState& st, TUIMessage row) {
+    if (!st.replica.upsertLocalRow(std::move(row))) {
+        return;
+    }
+    if (st.replica.rows().size() > agentxx::client::kLocalMessageLimit) {
         scheduleLocalTrimCheck();
     }
 }
@@ -2285,7 +2148,7 @@ void TUIClientAgentIO::applyLocalTrimCheck() {
     size_t messageCount = 0;
     {
         auto snap    = sharedState_.readSnapshot();
-        messageCount = snap->messages.size();
+        messageCount = snap->messages().size();
     }
     // 清理条件: 超出上限 + 滚动位置在底部 + 只清理视口上方 (未被显示) 的头部消息
     const bool   atBottom = messageList_->isStickToBottom();
@@ -2300,16 +2163,14 @@ void TUIClientAgentIO::applyLocalTrimCheck() {
         std::lock_guard<std::mutex> lock(sharedState_.mutex());
         auto&                       st = sharedState_.mutableState();
         // 复查: 动作排队期间列表可能已被整体替换 (onSync / 会话切换) 或已缩短
-        if (st.messages.size() > agentxx::client::kLocalMessageLimit) {
-            dropped = std::min(plan, st.messages.size() - agentxx::client::kLocalMessageLimit);
-            st.messages.erase(
-                st.messages.begin(),
-                st.messages.begin() + static_cast<std::ptrdiff_t>(dropped)
-            );
+        if (st.replica.rows().size() > agentxx::client::kLocalMessageLimit) {
+            const size_t planned
+                = std::min(plan, st.replica.rows().size() - agentxx::client::kLocalMessageLimit);
+            dropped = st.replica.trimHead(planned);
             // 历史窗口记账: 已加载区间首条右移 (这些消息在服务端仍在),
             // 用户上滚到窗口顶部时按页重新拉回
             st.history.noteTrimmedHead(dropped);
-            left = st.messages.size();
+            left = st.replica.rows().size();
         }
     }
     if (dropped == 0) {
@@ -2374,23 +2235,10 @@ void TUIClientAgentIO::onViewMessagesPage(const agentxx::agent::WireViewMessages
             );
             return;
         }
-        prependedCount = page.messages.size();
-        prependedCount = page.messages.size();
-        anchored       = !st.messages.empty();
-        // ViewMessage → TUIMessage (shared_ptr) 转换后按页内顺序整体前插
-        // (空 content 消息过滤: 不入列表, 前插条数按实际插入项计数,
-        //  滚动锚定依赖该条数估算新增行数)
-        std::vector<std::shared_ptr<TUIMessage>> converted;
-        converted.reserve(page.messages.size());
-        for (const auto& vm : page.messages) {
-            auto msg = std::make_shared<TUIMessage>(vm);
-            if (isBlankContentMessage(*msg)) {
-                continue;
-            }
-            converted.push_back(std::move(msg));
-        }
-        prependedCount = converted.size();
-        st.messages.insert(st.messages.begin(), converted.begin(), converted.end());
+        anchored       = !st.replica.rows().empty();
+        // 本页消息按页内顺序整体前插到窗口上方 (副本内部按 id 去重并过滤空行,
+        // 前插条数取实际插入项, 滚动锚定依赖该条数估算新增行数)
+        prependedCount = st.replica.prependRows(page.messages);
         // 窗口起点左移到本页起始下标, 条数按实际入列表条数累加
         st.history.notePrepended(page.startIndex, prependedCount);
     }
@@ -2757,231 +2605,79 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
         std::lock_guard<std::mutex> lock(sharedState_.mutex());
         auto&                       st = sharedState_.mutableState();
         // 清除生成占位提示 (等待响应 / 正在调用工具):
-        // 真实输出 (正文/思考/工具消息) 到达或生成结束时调用 —— 占位项所在位置
+        // 真实输出 (正文/思考/历史行) 到达或生成结束时调用 —— 占位项所在位置
         // 被真实内容取代 (见 TUIRenderState::genPhase 注释)
         auto clearGenPlaceholder = [&st]() {
             st.genPhase = agentxx::agent::WireDelta::GenPhase::Done;
             st.genToolName.clear();
         };
         switch (delta.type) {
+            // ---- 消息级 op: 一律交给副本按 id 应用, 本端不判断消息边界 ----
+            case Type::StreamBegin: {
+                clearGenPlaceholder();
+                // 新的一段流: 上一流的思考折叠覆盖态随之失效
+                if (st.replica.stream().id != delta.msgId) {
+                    st.streamThinkOverride = -1;
+                }
+                st.replica.applyDelta(delta);
+                st.isStreaming = true;
+            } break;
             case Type::TextToken:
             case Type::ThinkToken: {
                 clearGenPlaceholder();
-                if (delta.type == Type::ThinkToken && delta.text.empty()) {
-                    // 空文本 ThinkToken: 加密思考内容或思考元数据更新 (如
-                    // reasoning_tokens/duration) 若当前正在累积明文 Think 流 (尚未收到正文
-                    // TextToken / ToolStart), 先将已累积的思考文本落盘到 messages
-                    if (st.currentTokenRole == TUIMessage::Role::Think && st.hasPendingToken()) {
-                        pushCurrentTokenLocked(st);
-                    }
-
-                    bool updatedExisting = false;
-                    // 回填目标 = 本步骤的思考消息 (与 pushCurrentTokenLocked 同一套归组
-                    // 规则: 可以越过交错到达的正文段落继续往前找, 遇到用户/事件/
-                    // 工具/提示等消息即视为跨步骤)
-                    if (const size_t thinkTarget
-                        = findStepMessageLocked(st, TUIMessage::Role::Think);
-                        thinkTarget != kNoStepMessage) {
-                        auto& m = sharedState_.mutableMessage(st, thinkTarget);
-                        if (delta.think) {
-                            if (!m.think) {
-                                m.think = *delta.think;
-                            } else {
-                                mergeThinkData(*m.think, *delta.think);
-                            }
-                        }
-                        if (delta.durationMs > 0) {
-                            m.durationMs = delta.durationMs;
-                        }
-                        if (delta.startTimeMs > 0 && m.startTimeMs == 0) {
-                            m.startTimeMs = delta.startTimeMs;
-                        }
-                        updatedExisting = true;
-                    }
-                    if (updatedExisting) {
-                        st.isStreaming = true;
-                        break;
-                    }
-                    // 当前轮次/步骤尚无 Think 消息 (如加密思考首包): 开始思考时立即在消息列表中创建
-                    // Think 消息展示 —— 但只限"有信息可展示"的情况 (加密思考 / token 统计);
-                    // 单纯的结算包 (只剩一个耗时) 不为它新建一条空思考消息
-                    pushCurrentTokenLocked(st);
-                    resetTrailingRunningToolsLocked(st);
-                    auto msg       = std::make_shared<TUIMessage>();
-                    msg->role      = TUIMessage::Role::Think;
-                    msg->collapsed = true;
-                    if (delta.think) {
-                        msg->think = *delta.think;
-                    }
-                    msg->startTimeMs
-                        = delta.startTimeMs > 0 ? delta.startTimeMs : st.pendingTokenStartTimeMs;
-                    msg->durationMs = delta.durationMs;
-                    if (!isBlankContentMessage(*msg)) {
-                        pushLocalMessageLocked(st, std::move(msg));
-                    }
-                    st.currentTokenRole = TUIMessage::Role::Assistant;
-                    st.isStreaming      = true;
-                    break;
-                }
-
-                auto role = (delta.type == Type::ThinkToken) ? TUIMessage::Role::Think
-                                                             : TUIMessage::Role::Assistant;
-                if (st.currentTokenRole != role && st.hasPendingToken()) {
-                    // 先 push 再更新时间戳: pushCurrentTokenLocked 使用
-                    // st.pendingToken* 的当前值构造消息, 若先覆盖成新角色的
-                    // 时间戳, 旧 token 的时长/开始时间会丢失 (修复)
-                    pushCurrentTokenLocked(st);
-                    st.pendingTokenStartTimeMs = delta.startTimeMs;
-                    st.pendingTokenDurationMs  = delta.durationMs;
-                }
-                st.currentTokenRole = role;
-                if (delta.type == Type::ThinkToken && delta.think.has_value()) {
-                    st.pendingTokenThink = delta.think;
-                }
-                if (delta.startTimeMs > 0 && st.pendingTokenStartTimeMs == 0) {
-                    st.pendingTokenStartTimeMs = delta.startTimeMs;
-                }
-                if (delta.durationMs > 0) {
-                    st.pendingTokenDurationMs = delta.durationMs;
-                }
-                // 按需 COW: 仅当字符串被 UI 快照共享 (渲染期间) 才复制本体,
-                // 避免每 token 深拷贝整个已累积文本 (O(n²) -> O(n))
-                if (!st.currentToken) {
-                    resetTrailingRunningToolsLocked(st);
-                    st.currentToken = std::make_shared<std::string>();
-                    // 新流开始: 递增流身份 (COW 复制不递增, 见 currentTokenEpoch 注释)
-                    ++st.currentTokenEpoch;
-                    // 同时清除上一流的思考折叠覆盖态 (流提交落盘时已生效过;
-                    // 此处补充覆盖未走提交的流结束路径): 新流回到设置模式默认展示
-                    st.streamThinkOverride = -1;
-                } else if (st.currentToken.use_count() > 1) {
-                    st.currentToken = std::make_shared<std::string>(*st.currentToken);
-                }
-                if (!delta.text.empty()) {
-                    st.currentToken->append(delta.text);
-                }
+                st.replica.applyDelta(delta);
                 st.isStreaming = true;
             } break;
-            case Type::ToolStart: {
-                // 工具消息到达: 占位提示 (等待响应/正在调用工具) 由真实工具消息取代
+            case Type::InsertMessage: {
                 clearGenPlaceholder();
-                pushCurrentTokenLocked(st);
-                auto m                = std::make_shared<TUIMessage>();
-                m->role               = TUIMessage::Role::Tool;
-                m->tool               = TUIMessage::ToolData{};
-                m->tool->toolName     = delta.toolName;
-                m->tool->toolCallId   = delta.toolCallId;
-                m->text               = delta.arguments;
-                m->tool->toolFinished = false;
-                m->collapsed          = true;
-                m->startTimeMs        = delta.startTimeMs > 0
-                                            ? delta.startTimeMs
-                                            : static_cast<int64_t>(
-                                           std::chrono::duration_cast<std::chrono::milliseconds>(
-                                               std::chrono::system_clock::now().time_since_epoch()
-                                           )
-                                               .count()
-                                       );
-                pushLocalMessageLocked(st, std::move(m));
-                st.isStreaming = true;
-            } break;
-            case Type::ToolEnd: {
-                // 回填目标: 同一个 tool_call_id 的工具消息
-                // - 优先还在运行的那条 (正常执行路径)
-                // - 其次已结束但还没有结果的那条: 用户中断时 client 侧先把运行中的
-                //   工具消息标为已结束 (见 cancelCurrentRunLocked), agent 端随后才
-                //   补 "[Canceled]" 结果; 只认"还在运行"会找不到目标, 于是新增
-                //   一条同工具消息 —— 界面上同一个工具出现两条 (原消息 + [Canceled])
-                //   而不是覆盖原消息
-                constexpr size_t kNoTarget = static_cast<size_t>(-1);
-                auto             findTarget = [&](bool onlyRunning) -> size_t {
-                    for (size_t i = st.messages.size(); i > 0; --i) {
-                        const auto& msg = *st.messages[i - 1];
-                        if (msg.role != TUIMessage::Role::Tool || !msg.tool
-                            || msg.tool->toolCallId != delta.toolCallId) {
-                            continue;
-                        }
-                        if (onlyRunning) {
-                            if (!msg.tool->toolFinished) {
-                                return i - 1;
+                if (delta.message) {
+                    // 用户自己的新消息: 先恢复吸附底部, 再追加 (追加触发的本地条数
+                    // 清理检查读到的是"跟随最新内容"的状态, 不被上一轮的上滚挡住)
+                    if (delta.message->role == TUIMessage::Role::User
+                        || delta.message->role == TUIMessage::Role::Event) {
+                        enqueueUiAction([this]() {
+                            if (messageList_) {
+                                messageList_->setStickToBottom(true);
                             }
-                        } else if (msg.tool->toolResult.empty()) {
-                            return i - 1;
+                        });
+                    }
+                    // 定稿行落定当前流: 把用户对流式思考的折叠点击写到行上
+                    // (等价于改造前的"流提交时写入")
+                    const bool finalizesStream
+                        = st.replica.hasStream() && st.replica.stream().id == delta.message->id;
+                    st.replica.applyDelta(delta);
+                    if (finalizesStream) {
+                        if (st.streamThinkOverride >= 0) {
+                            st.replica.setRowCollapsed(
+                                delta.message->id,
+                                st.streamThinkOverride != 1
+                            );
                         }
+                        st.streamThinkOverride = -1;
                     }
-                    return kNoTarget;
-                };
-                size_t hit = findTarget(true);
-                if (hit == kNoTarget && !delta.toolCallId.empty()) {
-                    // 已结束且结果为空 = 先前被取消/重置过、结果尚未回填的那条
-                    hit = findTarget(false);
                 }
-                if (hit != kNoTarget) {
-                    auto& m              = sharedState_.mutableMessage(st, hit);
-                    m.tool->toolResult   = delta.result;
-                    m.tool->toolFinished = true;
-                    m.tool->status       = delta.status;
-                    m.collapsed          = true;
-                    if (delta.startTimeMs > 0) {
-                        m.startTimeMs = delta.startTimeMs;
-                    }
-                    if (delta.durationMs > 0) {
-                        m.durationMs = delta.durationMs;
-                    } else if (m.startTimeMs > 0) {
-                        const int64_t nowMs = static_cast<int64_t>(
-                            std::chrono::duration_cast<std::chrono::milliseconds>(
-                                std::chrono::system_clock::now().time_since_epoch()
-                            )
-                                .count()
-                        );
-                        m.durationMs = std::max(int64_t{0}, nowMs - m.startTimeMs);
-                    }
-                } else {
-                    auto m                = std::make_shared<TUIMessage>();
-                    m->role               = TUIMessage::Role::Tool;
-                    m->tool               = TUIMessage::ToolData{};
-                    m->tool->toolName     = delta.toolName;
-                    m->tool->toolCallId   = delta.toolCallId;
-                    m->tool->toolResult   = delta.result;
-                    m->tool->toolFinished = true;
-                    m->tool->status       = delta.status;
-                    m->startTimeMs        = delta.startTimeMs;
-                    m->durationMs         = delta.durationMs;
-                    m->collapsed          = true;
-                    pushLocalMessageLocked(st, std::move(m));
-                }
+            } break;
+            case Type::UpdateMessage:
+            case Type::StreamEnd: {
+                st.replica.applyDelta(delta);
             } break;
             case Type::NodeStart: {
                 st.currentNodeName = delta.nodeName;
             } break;
             case Type::NodeEnd: {
                 // 节点结束即该节点的生成结束: 补充清除占位提示 (正常已由首个
-                // 正文/思考 token 或工具消息清除; agent 侧同时会下发 GenStatus::Done)
+                // 正文/思考 token 或历史行清除; agent 侧同时会下发 GenStatus::Done)
                 clearGenPlaceholder();
                 if (st.currentNodeName == delta.nodeName) {
                     st.currentNodeName.clear();
                 }
-                // 节点级计时不回填 Think 流: 节点耗时聚合了思考+正文等多个消息,
-                // 直接覆盖会破坏单条消息的准确时长; Think 的耗时由 agent 端在
-                // 思考流完成时经空文本 ThinkToken 结算包 (durationMs) 回填
-                if (st.hasPendingToken()) {
-                    if (st.currentTokenRole != TUIMessage::Role::Think) {
-                        st.pendingTokenStartTimeMs = delta.startTimeMs;
-                        st.pendingTokenDurationMs  = delta.durationMs;
-                    }
-                } else if (!st.messages.empty()
-                           && st.messages.back()->role != TUIMessage::Role::Think) {
-                    auto& m       = sharedState_.mutableMessage(st, st.messages.size() - 1);
-                    m.startTimeMs = delta.startTimeMs;
-                    m.durationMs  = delta.durationMs;
-                }
+                // 消息时长由 agent 端在定稿行上给出, 客户端不再回填
             } break;
             case Type::MessageUITip: {
-                // 通用提示消息: 插入提示消息 (按级别区分显示);
-                // 默认折叠展示 (提示类消息, 与 makeText 的 System 默认折叠语义一致)
-                pushCurrentTokenLocked(st);
-                resetTrailingRunningToolsLocked(st);
+                // 通用瞬态提示: 不进历史, 造一条本地行 (id 带 local_ 前缀,
+                // 不会被 agent 的消息级 op 命中)
                 auto msg       = std::make_shared<TUIMessage>();
+                msg->id        = fmt::format("local_tip_{}", ++st.localRowSeq);
                 msg->role      = TUIMessage::Role::Tip;
                 msg->text      = delta.text;
                 msg->tip       = TUIMessage::TipData{};
@@ -2997,44 +2693,17 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
                         msg->tip->tipLevel = TUIMessage::TipLevel::Error;
                         break;
                 }
-                // 空 content 消息过滤 (提示文本为空/全空白时无展示意义)
-                if (!isBlankContentMessage(*msg)) {
-                    pushLocalMessageLocked(st, std::move(msg));
+                if (st.replica.upsertLocalRow(std::move(*msg))) {
+                    if (st.replica.rows().size() > agentxx::client::kLocalMessageLimit) {
+                        scheduleLocalTrimCheck();
+                    }
                 }
                 st.isStreaming = true;
             } break;
-            case Type::InsertMessage: {
-                // 完整 ViewMessage 消息插入 (轮次统计、系统提示、中断头等):
-                // 服务端已完成 appendViewMessage 与持久化, 客户端直接加载展示
-                pushCurrentTokenLocked(st);
-                resetTrailingRunningToolsLocked(st);
-                // 空 content 消息过滤 (如正文为空/全空白的 assistant 消息)
-                if (delta.message && false == isBlankContentMessage(*delta.message)) {
-                    pushLocalMessageLocked(st, delta.message);
-                }
-            } break;
-            case Type::UpdateMessage: {
-                // 完整 ViewMessage 消息更新 (按 id 定位已插入的历史消息):
-                pushCurrentTokenLocked(st);
-                resetTrailingRunningToolsLocked(st);
-                if (delta.message && !delta.message->id.empty()) {
-                    for (size_t i = 0; i < st.messages.size(); ++i) {
-                        if (st.messages[i]->id == delta.message->id) {
-                            if (isBlankContentMessage(*delta.message)) {
-                                // 更新后变为空 content: 从列表中移除 (不保留空块)
-                                st.messages.erase(st.messages.begin() + static_cast<int64_t>(i));
-                            } else {
-                                st.messages[i] = delta.message;
-                            }
-                            break;
-                        }
-                    }
-                }
-            } break;
             case Type::GenStatus: {
                 // 生成阶段提示 (agent 侧 GenStatus 增量): 模型节点开始执行但尚无
-                // 可见输出时, 消息列表末尾展示占位项; 首个正文/思考 token 或工具
-                // 消息到达即由本函数清除 (见 TUIRenderState::genPhase 注释)
+                // 可见输出时, 消息列表末尾展示占位项; 首个正文/思考 token 或历史行
+                // 到达即由本函数清除 (见 TUIRenderState::genPhase 注释)
                 st.genPhase    = delta.genPhase;
                 st.genToolName = delta.genPhase == agentxx::agent::WireDelta::GenPhase::ToolCall
                                      ? delta.toolName
@@ -3045,41 +2714,13 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
             } break;
             case Type::TurnStart: {
                 clearGenPlaceholder();
-                pushCurrentTokenLocked(st);
-                resetTrailingRunningToolsLocked(st);
-                // 空文本+有附件的纯附件消息也需回显（此前 !text.empty() 会吞掉）;
-                // 正文为空/全空白且无附件的用户消息不入列表 (TUI 忽略空 content)
-                {
-                    auto msg = std::make_shared<TUIMessage>(TUIMessage::makeText(
-                        TUIMessage::roleOfInputSource(delta.source),
-                        delta.text,
-                        delta.startTimeMs
-                    ));
-                    msg->id          = delta.msgId;
-                    msg->attachments = delta.attachments;
-                    // 来源标记 (事件中枢投递的输入): 角色为 Role::Event (折叠头显示事件名),
-                    // 与用户自己输入区分
-                    msg->source = delta.source;
-                    if (false == isBlankContentMessage(*msg)) {
-                        // 用户自己的新消息: 先恢复吸附底部, 再追加 (追加触发的
-                        // 本地条数清理检查读到的是"跟随最新内容"的状态, 不被
-                        // 上一轮的上滚挡住)
-                        enqueueUiAction([this]() {
-                            if (messageList_) {
-                                messageList_->setStickToBottom(true);
-                            }
-                        });
-                        pushLocalMessageLocked(st, std::move(msg));
-                    }
-                }
                 st.isStreaming = true;
             } break;
             case Type::TurnEnd: {
                 clearGenPlaceholder();
                 st.currentNodeName.clear();
-                pushCurrentTokenLocked(st);
-                resetTrailingRunningToolsLocked(st);
-                st.isStreaming = false;
+                st.streamThinkOverride = -1;
+                st.isStreaming         = false;
             } break;
         }
     }
@@ -3135,19 +2776,10 @@ void TUIClientAgentIO::onSync(const agentxx::agent::WireSyncPayload& payload) {
                 st->pendingInputs.push_back(std::move(pi));
             }
 
-            // 历史消息与 server viewMessages 同型 (ViewMessage), 直接拷贝;
-            // 原 json→TUIMessage 解析逻辑已下沉到 server (event_stream 展开)
-            // - 空 content 消息 (正文为空/全空白) 不入列表 (TUI 忽略其渲染);
-            //   历史分页的窗口下标/总数仍按服务端 viewMessages 计数,
-            //   与本地列表条数解耦 (见 historyWindowStart/historyTotal)
-            st->messages.reserve(payload.messages.size());
-            for (const auto& vm : payload.messages) {
-                auto msg = std::make_shared<TUIMessage>(vm);
-                if (isBlankContentMessage(*msg)) {
-                    continue;
-                }
-                st->messages.push_back(std::move(msg));
-            }
+            // 展示历史: 整体替换为服务端快照 (本地行 local_ 保留),
+            // 中途接入时 payload.streaming 灌成尾部流式项
+            st->replica.reset(payload);
+            st->streamThinkOverride = -1;
             // 历史分页窗口元数据: fromIndex = 本批消息的起始绝对下标
             // (尾窗同步时 > 0, 上方还有更早历史待分页拉取; 完整同步时为 0);
             // 未返回的分页请求随整体替换作废 (loading 复位), 尾部序号作为新基线
@@ -3155,9 +2787,12 @@ void TUIClientAgentIO::onSync(const agentxx::agent::WireSyncPayload& payload) {
             st->history.reset(
                 payload.fromIndex,
                 payload.totalMessages != 0 ? payload.totalMessages : payload.messages.size(),
-                st->messages.size()
+                st->replica.rows().size()
             );
             st->history.observeTailSeq(payload.lastViewSeq);
+            if (st->replica.hasStream()) {
+                st->isStreaming = true;
+            }
             // 队列镜像同步 (服务端排队消息镜像; 队列状态随快照到达)
             {
                 std::vector<agentxx::client::MessageQueueMirror::Entry> entries;
@@ -3205,24 +2840,10 @@ void TUIClientAgentIO::onIncrementalSync(const agentxx::agent::WireSyncPayload& 
     {
         std::lock_guard<std::mutex> lock(sharedState_.mutex());
         auto&                       st = sharedState_.mutableState();
-        if (!st.messages.empty()) {
-            const size_t          messagesBefore = st.messages.size();
-            std::set<std::string> knownIds;
-            for (const auto& m : st.messages) {
-                if (m && !m->id.empty()) {
-                    knownIds.insert(m->id);
-                }
-            }
-            for (const auto& vm : payload.messages) {
-                if (!vm.id.empty() && knownIds.count(vm.id) != 0) {
-                    continue;
-                }
-                auto msg = std::make_shared<TUIMessage>(vm);
-                if (isBlankContentMessage(*msg)) {
-                    continue;
-                }
-                pushLocalMessageLocked(st, std::move(msg));
-            }
+        if (!st.replica.rows().empty()) {
+            const size_t messagesBefore = st.replica.rows().size();
+            // 按 msg.id 去重后追加 (断线期间经 delta 已收到的行不会重复)
+            st.replica.appendIncremental(payload);
             // 序号连续性: 增量补拉的尾部序号应当接着上次观察到的值
             // (断号说明中间还有未收到的消息; 下一次重连的 afterViewSeq 补拉会补齐,
             //  这里先记警告并把序号基线推进到新值, 供诊断与后续判断使用)
@@ -3234,7 +2855,8 @@ void TUIClientAgentIO::onIncrementalSync(const agentxx::agent::WireSyncPayload& 
                     st.history.lastSeq()
                 );
             }
-            st.history.noteTailAppended(st.messages.size() - messagesBefore, payload.totalMessages);
+            st.history.noteTailAppended(st.replica.rows().size() - messagesBefore,
+                                        payload.totalMessages);
             applied = true;
         }
     }
@@ -3249,11 +2871,10 @@ void TUIClientAgentIO::onIncrementalSync(const agentxx::agent::WireSyncPayload& 
 }
 
 void TUIClientAgentIO::onTurnResult(const agentxx::agent::WireTurnResult& /*result*/) {
+    // 轮次终态只影响界面状态: 消息内容已由 agent 逐 op 下发 (无本地拼装可收)
     {
         std::lock_guard<std::mutex> lock(sharedState_.mutex());
         auto&                       st = sharedState_.mutableState();
-        pushCurrentTokenLocked(st);
-        resetTrailingRunningToolsLocked(st);
         st.isStreaming = false;
     }
     postRedraw();
@@ -3380,6 +3001,7 @@ asio::awaitable<utilxx_base::Json> TUIClientAgentIO::handleInterrupt(
     {
         auto m                    = std::make_shared<TUIMessage>();
         m->role                   = TUIMessage::Role::Interrupt;
+        m->id                     = fmt::format("local_interrupt_{}", wireId);
         m->interrupt              = TUIMessage::InterruptData{};
         m->interrupt->interruptId = wireId;
         // 表单形态完全由描述数据决定 (各控件字段自包含); 编辑文本/选中项/
@@ -3389,7 +3011,7 @@ asio::awaitable<utilxx_base::Json> TUIClientAgentIO::handleInterrupt(
         auto&                       st = sharedState_.mutableState();
         // 中断表单消息同样按本地条数上限记账 (它在列表末尾, 吸附底部时必然
         // 在视口内, 不会被清理)
-        pushLocalMessageLocked(st, std::move(m));
+        pushLocalRowLocked(st, std::move(*m));
     }
     postRedraw();
 

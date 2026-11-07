@@ -285,10 +285,9 @@ void MessageListComponent::invalidateCache() {
 
 Element MessageListComponent::OnRender() {
     // 流式已结束 (无流式 token): 及时释放增量渲染器缓存的稳定块/文本, 避免常驻内存。
-    // 同时重置流身份缓存 (streamEpoch_/streamFedLen_): 使下一流强制走重建分支。
-    // 为什么必须重置: onSync 会整体重建 TUIRenderState (currentTokenEpoch 归 0),
-    // 若此处保留旧 streamEpoch_, 新流首 token 递增后的 epoch 可能与旧值恰好相等,
-    // syncStream 误判为"同一流"而走增量分支, 而 fedLen 仍是旧流长度 —— 首 token
+    // 同时重置流身份缓存 (streamId_/streamFedLen_): 使下一流强制走重建分支。
+    // 为什么必须重置: onSync/重连可能把尾部流式项换成一个新 id, 若保留旧身份,
+    // syncStream 会误判为"同一流"而走增量分支, 而 fedLen 仍是旧流长度 —— 首 token
     // 内容被整体跳过 (渲染缺字), 直到 token 超过旧 fedLen 才从错误偏移开始显示。
     // (须在构建/布局前判断; 流式进行中时 hasStreamingToken 为真, 不会重置)
     if (ctx_.frameState && !hasStreamingToken(*ctx_.frameState)) {
@@ -296,7 +295,7 @@ Element MessageListComponent::OnRender() {
             streamRenderer_->reset();
         }
         streamFedLen_ = 0;
-        streamEpoch_  = ~0ULL;
+        streamId_.clear();
         // 流式区子项数一并归零: 无 token 时 itemCount 不会调用 syncStream, 这两个值
         // 会停留在上一流的值 (增量模式的 Think 流留下头部项), 使生成占位提示的下标
         // 被推到列表末尾之外 —— 占位提示不显示, 该位置留下上一流的空头部行
@@ -319,7 +318,7 @@ Element MessageListComponent::OnRender() {
     collapsibleIsStream_.clear();
     if (ctx_.frameState) {
         const auto& vboxes = scrollable_->visibleBoxes();
-        const auto& msgs   = ctx_.frameState->messages;
+        const auto& msgs   = ctx_.frameState->messages();
         for (size_t i = 0; i < vboxes.size() && i < msgs.size(); ++i) {
             const auto& msg = *msgs[i];
             // 可折叠消息: User / Event / Think / Tool / System / Tip
@@ -340,7 +339,7 @@ Element MessageListComponent::OnRender() {
         // 标记区分 (点击切换 streamThinkOverride 而非消息 collapsed)。
         // 非 Think 流式内容 (Assistant 正文) 不可折叠, 不登记。
         if (hasStreamingToken(*ctx_.frameState)
-            && ctx_.frameState->currentTokenRole == TUIMessage::Role::Think) {
+            && ctx_.frameState->stream().role == TUIMessage::Role::Think) {
             for (size_t i = msgs.size(); i < vboxes.size(); ++i) {
                 if (vboxes[i].IsEmpty()) {
                     continue;
@@ -402,7 +401,7 @@ void MessageListComponent::reportDecorVisibility(const std::vector<Box>& vboxes)
     }
     const auto&           st = *ctx_.frameState;
     std::set<std::string> visible;
-    const auto&           msgs = st.messages;
+    const auto&           msgs = st.messages();
     for (size_t i = 0; i < vboxes.size() && i < msgs.size(); ++i) {
         if (vboxes[i].IsEmpty()) {
             continue; // 子项不在视口内
@@ -498,7 +497,7 @@ bool MessageListComponent::handleCollapsibleClick(const Mouse& mouse) {
         if (collapsibleIsStream_[k] != 0) {
             const size_t si = collapsibleIndices_[k];
             const bool   committedToMessage
-                = ctx_.frameState && si < ctx_.frameState->messages.size();
+                = ctx_.frameState && si < ctx_.frameState->messages().size();
             if (!committedToMessage) {
                 toggleStreamThinkCollapsed();
                 return true;
@@ -507,7 +506,7 @@ bool MessageListComponent::handleCollapsibleClick(const Mouse& mouse) {
         const size_t mi      = collapsibleIndices_[k];
         bool         handled = false;
         ctx_.state->mutate([&](TUIRenderState& st) {
-            if (mi < st.messages.size()) {
+            if (mi < st.messages().size()) {
                 auto& msg     = ctx_.state->mutableMessage(st, mi);
                 msg.collapsed = !msg.collapsed;
                 handled       = true;
@@ -673,7 +672,7 @@ size_t MessageListComponent::prevUserMessageIndex() const {
         return kNoMessageIndex;
     }
     const auto& st = *ctx_.frameState;
-    if (st.messages.empty()) {
+    if (st.messages().empty()) {
         return kNoMessageIndex;
     }
     // 视口顶行落在锚点子项中间 (行偏移 > 0) 时该子项自身也是候选: 跳转把它的首行
@@ -681,11 +680,11 @@ size_t MessageListComponent::prevUserMessageIndex() const {
     const size_t anchor = scrollable_->anchorIndex();
     size_t       cursor = std::min(
         anchor + (scrollable_->anchorRow() > 0 ? size_t{1} : size_t{0}),
-        st.messages.size()
+        st.messages().size()
     );
     while (cursor > 0) {
         --cursor;
-        const auto& msg = st.messages[cursor];
+        const auto& msg = st.messages()[cursor];
         if (msg && msg->role == TUIMessage::Role::User) {
             return cursor;
         }
@@ -699,8 +698,8 @@ size_t MessageListComponent::nextUserMessageIndex() const {
     }
     const auto& st = *ctx_.frameState;
     // 从视口顶行所在子项的**下一条**开始找: 顶行那一条已经对齐/可见, 不重复跳
-    for (size_t i = scrollable_->anchorIndex() + 1; i < st.messages.size(); ++i) {
-        const auto& msg = st.messages[i];
+    for (size_t i = scrollable_->anchorIndex() + 1; i < st.messages().size(); ++i) {
+        const auto& msg = st.messages()[i];
         if (msg && msg->role == TUIMessage::Role::User) {
             return i;
         }
@@ -752,11 +751,11 @@ void MessageListComponent::clearStreamThinkOverride() {
 // ---------------------------------------------------------------------------
 
 bool MessageListComponent::hasStreamingToken(const TUIRenderState& st) const {
-    return st.isStreaming && st.currentToken && !st.currentToken->empty();
+    return st.isStreaming && st.replica.hasStream() && !st.stream().text->empty();
 }
 
 bool MessageListComponent::showEmptyBanner(const TUIRenderState& st) const {
-    return st.messages.empty() && !hasStreamingToken(st) && !hasGenPlaceholder(st);
+    return st.messages().empty() && !hasStreamingToken(st) && !hasGenPlaceholder(st);
 }
 
 bool MessageListComponent::hasGenPlaceholder(const TUIRenderState& st) const {
@@ -765,7 +764,7 @@ bool MessageListComponent::hasGenPlaceholder(const TUIRenderState& st) const {
 
 size_t MessageListComponent::genPlaceholderIndex(const TUIRenderState& st) const {
     // 占位提示排在列表最后 (消息与流式内容之后): 流式区子项数随渲染是否降级变化
-    size_t n = st.messages.size();
+    size_t n = st.messages().size();
     if (hasStreamingToken(st)) {
         n += streamUseIncremental_ ? streamItemCount() : 1;
     }
@@ -784,12 +783,12 @@ bool MessageListComponent::hasRunningMessage() const {
         return true;
     }
     // 流式 think 输出中 (流式区 "[Think]" 头部正在推进)
-    if (hasStreamingToken(st) && st.currentTokenRole == TUIMessage::Role::Think) {
+    if (hasStreamingToken(st) && st.stream().role == TUIMessage::Role::Think) {
         return true;
     }
     // 存在未完成的 Tool 消息 (串行执行下即当前运行的工具; 全部扫描仅读标志位,
     // 每帧一次成本可忽略) 或运行中的提示消息 (如正在压缩上下文)
-    for (const auto& m : st.messages) {
+    for (const auto& m : st.messages()) {
         if (!m) {
             continue;
         }
@@ -817,7 +816,7 @@ size_t MessageListComponent::itemCount() {
     if (showEmptyBanner(st)) {
         return 1; // 空状态 banner (fillViewport)
     }
-    size_t n = st.messages.size();
+    size_t n = st.messages().size();
     if (hasStreamingToken(st)) {
         syncStream(st); // 每帧同步流式增量状态 (feed 新 token / harvest 稳定块)
         if (streamUseIncremental_) {
@@ -849,7 +848,7 @@ uint64_t MessageListComponent::itemKey(size_t index) {
     auto        combine = [](uint64_t seed, uint64_t v) -> uint64_t {
         return seed ^ (v + 0x9e3779b97f4a7c15ULL + (seed << 6) + (seed >> 2));
     };
-    if (st.messages.empty() && !hasStreamingToken(st)) {
+    if (st.messages().empty() && !hasStreamingToken(st)) {
         // banner 内容随连接状态 + 启动进度 (startupProgress) 变化:
         // 两者计入 key 使 LazyScrollable 缓存失效重建 —— 若 key 恒定,
         // 缓存的是首次渲染的 banner 文本, 连接状态切换/启动步骤更新
@@ -864,12 +863,12 @@ uint64_t MessageListComponent::itemKey(size_t index) {
         h = combine(h, (startupSpinner_ && startupSpinner_->animationEnabled()) ? 1ULL : 0ULL);
         return h;
     }
-    if (index < st.messages.size()) {
+    if (index < st.messages().size()) {
         // 消息内容变化必然伴随消息指针变化 (见 TUISharedState::mutableMessage /
         // onSync 整体替换), 故以指针为主 key; 附加廉价 O(1) 特征 (长度/标志)
         // 防止地址重用 (ABA) —— 内容变则指针变, 长度几乎必然同步变化
-        uint64_t    h = reinterpret_cast<uint64_t>(st.messages[index].get());
-        const auto& m = *st.messages[index];
+        uint64_t    h = reinterpret_cast<uint64_t>(st.messages()[index].get());
+        const auto& m = *st.messages()[index];
         h             = combine(h, static_cast<uint64_t>(m.role));
         h             = combine(h, m.collapsed);
         h             = combine(h, m.tool ? m.tool->toolFinished : false);
@@ -898,7 +897,7 @@ uint64_t MessageListComponent::itemKey(size_t index) {
         }
         if (m.role == TUIMessage::Role::Think) {
             h = combine(h, static_cast<uint64_t>(TUISettings::instance().tailThinkingMode()));
-            const bool isTailMsg = (index + 1 == st.messages.size() && !hasStreamingToken(st));
+            const bool isTailMsg = (index + 1 == st.messages().size() && !hasStreamingToken(st));
             h                    = combine(h, isTailMsg ? 1 : 0);
         }
         // Tool/Think 消息头部可能使用加载动画 (动画等级 >= High), 计入动画标志:
@@ -964,16 +963,16 @@ uint64_t MessageListComponent::itemKey(size_t index) {
         // 降级路径: 单个 paragraph 项, 以 (指针, 长度, role) 作为 key 触发高度重估。
         // 折叠/展开状态计入 key: 点击切换时若 token 长度未变 (帧间无新 token),
         // 仅凭指针+长度无法使缓存失效, 渲染内容将不随点击更新
-        uint64_t h = reinterpret_cast<uint64_t>(st.currentToken.get());
-        h          = combine(h, st.currentToken ? st.currentToken->size() : 0);
-        h          = combine(h, static_cast<uint64_t>(st.currentTokenRole));
-        h          = combine(h, static_cast<uint64_t>(st.pendingTokenDurationMs));
+        uint64_t h = reinterpret_cast<uint64_t>(st.stream().text.get());
+        h          = combine(h, st.stream().text ? st.stream().text->size() : 0);
+        h          = combine(h, static_cast<uint64_t>(st.stream().role));
+        h          = combine(h, std::hash<std::string>{}(st.stream().id));
         h          = combine(h, static_cast<uint64_t>(TUISettings::instance().tailThinkingMode()));
         h          = combine(h, streamThinkCollapsed(st) ? 1ULL : 0ULL);
         h          = combine(h, 0xDEAD0000ull);
         return h;
     }
-    const size_t si = index - st.messages.size();
+    const size_t si = index - st.messages().size();
     // 头部项 (thinking 时长行): key 稳定, 帧间缓存;
     // 动画标志计入 key: 热切换动画等级时使缓存失效重建 (静态 "-" ↔ spinner 点阵)
     if (si < streamHeaderCount_) {
@@ -988,7 +987,7 @@ uint64_t MessageListComponent::itemKey(size_t index) {
     }
     // 尾部块: 每帧内容变化, key 随 (token 长度, 尾部起点) 变化触发重建
     uint64_t h = combine(streamGen_, 0xFEED0000ull);
-    h          = combine(h, st.currentToken ? st.currentToken->size() : 0);
+    h          = combine(h, st.stream().text ? st.stream().text->size() : 0);
     h          = combine(h, streamRenderer_ ? streamRenderer_->frontierStart() : 0);
     return h;
 }
@@ -1009,8 +1008,8 @@ size_t MessageListComponent::quickHeight(size_t index, int width) {
         const auto cols = static_cast<size_t>(std::max(8, width));
         return bytes / cols + 1;
     };
-    if (index < st.messages.size()) {
-        const auto& msg = *st.messages[index];
+    if (index < st.messages().size()) {
+        const auto& msg = *st.messages()[index];
         // 注意: 所有消息分支的估算高度 = buildMessageBlock 内容行数 + 1 (尾部空行)。
         // buildMessageItem 产出 vbox({block, text("")}), 实测高度恒比内容多 1 行;
         // 若估算漏掉该空行, 不可见项 (未测量) 高度恒偏低 1 行/条, 总高度偏低
@@ -1078,29 +1077,29 @@ size_t MessageListComponent::quickHeight(size_t index, int width) {
     }
     // ---- 流式区 ----
     // 生成占位提示项先判定 (判定顺序必须与 itemKey/buildItem 一致): 占位提示出现
-    // 时流式区通常还未开始 (首个 token 未到达, currentToken 为 null), 若先走
-    // 降级路径, 占位项下标会落到流式子项分支上解引空的 currentToken
+    // 时流式区通常还未开始 (首个 token 未到达, 尾部流式项不存在), 若先走
+    // 降级路径, 占位项下标会落到流式子项分支上解引空的流式文本
     if (hasGenPlaceholder(st) && index == genPlaceholderIndex(st)) {
         // 占位提示: 1 行 header + 1 行尾部空行 (与消息块一致)。上方即使是流式区
         // 末尾子项也自带尾部空行, 故无需前置空行 (见 buildGenPlaceholderItem)
         return 2;
     }
     if (!streamUseIncremental_) {
-        if (st.currentTokenRole == TUIMessage::Role::Think && streamThinkCollapsed(st)) {
+        if (st.stream().role == TUIMessage::Role::Think && streamThinkCollapsed(st)) {
             // 单行折叠流式 thinking: 1 行 header + 1 行尾部空行
             return 2;
         }
         // 降级路径: 单个子项 (think 展开态为头部行 + 整段正文) + 尾部空行。
         // 无流式 token 时按 1 行估算: 占位项已在上方返回, 走到这里的无 token
         // 分支只用于防御异常状态
-        if (!st.currentToken) {
+        if (!st.replica.hasStream()) {
             return 1;
         }
-        const size_t body   = estimateLines(*st.currentToken, width);
-        const bool   header = (st.currentTokenRole == TUIMessage::Role::Think);
+        const size_t body   = estimateLines(*st.stream().text, width);
+        const bool   header = (st.stream().role == TUIMessage::Role::Think);
         return (header ? 1 + body : body) + 1; // +1: 尾部空行
     }
-    const size_t si = index - st.messages.size();
+    const size_t si = index - st.messages().size();
     if (si < streamHeaderCount_) {
         return 1; // thinking 头部行 (正文标题行, 其后紧接正文, 不带尾部空行)
     }
@@ -1215,8 +1214,8 @@ LazyBuiltItem MessageListComponent::buildItem(size_t index) {
         out.cacheable           = !bannerAnimating && !artAnimating;
         return out;
     }
-    if (index < st.messages.size()) {
-        return buildMessageItem(*st.messages[index], index);
+    if (index < st.messages().size()) {
+        return buildMessageItem(*st.messages()[index], index);
     }
     // ---- 生成占位提示项 (列表最后一项; 见 [genPlaceholderIndex]) ----
     if (hasGenPlaceholder(st) && index == genPlaceholderIndex(st)) {
@@ -1226,7 +1225,7 @@ LazyBuiltItem MessageListComponent::buildItem(size_t index) {
     if (!streamUseIncremental_) {
         return buildStreamingItem(st);
     }
-    const size_t si = index - st.messages.size();
+    const size_t si = index - st.messages().size();
     if (si < streamHeaderCount_) {
         return buildStreamingHeader(st);
     }
@@ -1393,15 +1392,14 @@ LazyBuiltItem MessageListComponent::buildStreamingItem(const TUIRenderState& st)
 
     LazyBuiltItem out;
     out.cacheable   = false;
-    out.sourceBytes = st.currentToken ? st.currentToken->size() : 0;
+    out.sourceBytes = st.stream().text ? st.stream().text->size() : 0;
 
-    Element block;
-    if (st.currentTokenRole == TUIMessage::Role::Think) {
-        // 流式输出期间不显示耗时: think 耗时在输出完成时才由 agent 端结算
-        // (空文本 ThinkToken 结算包回填到已提交消息), pendingTokenDurationMs
-        // 仅在完成瞬间短暂非零, 平时恒为 0 → 不渲染耗时文本。
-        // 不回退读取上一条同角色消息的时长 (那是旧数据, 与当前流无关)
-        const int64_t durationMs = st.pendingTokenDurationMs;
+    const auto& streamText   = *st.stream().text;
+    const auto& streamThink  = st.stream().think;
+    Element     block;
+    if (st.stream().role == TUIMessage::Role::Think) {
+        // 流式输出期间不显示耗时: 耗时由 agent 端写在定稿行上 (本端只是预览),
+        // 因此这里不渲染任何时长文本
 
         // 折叠态 (SingleLine 设置或用户点击折叠): 单行 header + 末尾截取预览;
         // 展开态: "- " + 角色标签 header + 全文多行渲染 (标签随界面语言切换)。
@@ -1415,28 +1413,21 @@ LazyBuiltItem MessageListComponent::buildStreamingItem(const TUIRenderState& st)
             header.push_back(text(roleLabel) | color(theme.thinkingColor));
             // 前缀显示列数 (按实际标签宽度计, 宽字符占 2 列): 供预览宽度预算使用
             int prefixCols = 1 + static_cast<int>(markdown::utf8_display_width(roleLabel));
-            if (durationMs > 0) {
-                const std::string durationText
-                    = utilxx_base::formatDurationMilliseconds(durationMs);
-                header.push_back(text(durationText) | color(theme.thinkingColor));
-                header.push_back(text(" "));
-                prefixCols += static_cast<int>(markdown::utf8_display_width(durationText)) + 1;
-            }
-            if (st.currentToken && !st.currentToken->empty()) {
+            if (!streamText.empty()) {
                 // 预览自适应宽度: 内容区剩余列数与用户设置截取长度取较小值
                 const int budget
                     = collapsedPreviewBudget(std::max(1, scrollable_->contentWidth()), prefixCols);
                 const size_t previewLen = budget > 0 ? static_cast<size_t>(budget) : prefixCols;
                 header.push_back(
-                    text(tailLinePreview(lastNonBlankLine(*st.currentToken), previewLen))
+                    text(tailLinePreview(lastNonBlankLine(streamText), previewLen))
                     | color(theme.thinkingColor) | theme.dim() | xflex_shrink
                 );
-            } else if (st.pendingTokenThink && st.pendingTokenThink->reasoningTokens > 0) {
+            } else if (streamThink && streamThink->reasoningTokens > 0) {
                 header.push_back(
-                    text(trf("think.encryptedTokens", st.pendingTokenThink->reasoningTokens))
+                    text(trf("think.encryptedTokens", streamThink->reasoningTokens))
                     | color(theme.thinkingColor) | theme.dim() | xflex_shrink
                 );
-            } else if (st.pendingTokenThink && st.pendingTokenThink->isEncrypted) {
+            } else if (streamThink && streamThink->isEncrypted) {
                 header.push_back(
                     text(tr("think.encrypted")) | color(theme.thinkingColor) | theme.dim()
                     | xflex_shrink
@@ -1449,19 +1440,12 @@ LazyBuiltItem MessageListComponent::buildStreamingItem(const TUIRenderState& st)
             // 流式输出中的 think 恒为运行态: 动画等级 >= High 时用加载动画替代 "-"
             header.push_back(runningHeaderMark(true) | color(theme.thinkingColor));
             header.push_back(text(roleLabel) | color(theme.thinkingColor));
-            if (durationMs > 0) {
-                header.push_back(
-                    text(utilxx_base::formatDurationMilliseconds(durationMs))
-                    | color(theme.thinkingColor)
-                );
-                header.push_back(text(" "));
-            }
             lines.push_back(hbox(std::move(header)));
-            lines.push_back(paragraph(*st.currentToken) | color(theme.thinkingColor));
+            lines.push_back(paragraph(streamText) | color(theme.thinkingColor));
             block = vbox(std::move(lines));
         }
     } else {
-        block = paragraph(*st.currentToken) | color(theme.normalColor);
+        block = paragraph(streamText) | color(theme.normalColor);
     }
     // 尾部空行: 列表内所有子项 (消息块、增量稳定块、流式区末尾项) 都自带尾部
     // 空行, 因此占位提示/后续内容直接接排, 无需判断"上方是哪类子项"
@@ -1544,15 +1528,7 @@ LazyBuiltItem MessageListComponent::buildStreamingHeader(const TUIRenderState& s
     const bool animMark = runSpinner_->animationEnabled();
     header.push_back((animMark ? runningHeaderMark(true) : text("-")) | color(theme.thinkingColor));
     header.push_back(text(tr("msg.roleThink")) | color(theme.thinkingColor));
-    // 流式输出期间不显示耗时 (同 buildStreamingItem): think 耗时在输出完成时
-    // 才由 agent 端结算回填到已提交消息; pendingTokenDurationMs 平时恒为 0。
-    // 不回退读取上一条同角色消息的时长 (旧数据与当前流无关)
-    if (st.pendingTokenDurationMs > 0) {
-        header.push_back(
-            text(utilxx_base::formatDurationMilliseconds(st.pendingTokenDurationMs) + " ")
-            | color(theme.thinkingColor)
-        );
-    }
+    // 流式输出期间不显示耗时 (同 buildStreamingItem): 耗时由 agent 端写在定稿行上
     LazyBuiltItem out;
     out.element = hbox(std::move(header));
     // 使用加载动画时不可缓存 (每帧重建刷新点阵帧); 静态标识时保持可缓存
@@ -1565,7 +1541,7 @@ LazyBuiltItem MessageListComponent::buildStreamingStable(const TUIRenderState& s
     // 已闭合顶层块: 构建一次后由 LazyScrollable 缓存 (key 稳定, 仅可见项被布局)
     const auto&        theme    = *ctx_.theme;
     const int          maxWidth = std::max(1, scrollable_->contentWidth());
-    const bool         thinking = (st.currentTokenRole == TUIMessage::Role::Think);
+    const bool         thinking = (st.stream().role == TUIMessage::Role::Think);
     const ftxui::Color c        = thinking ? theme.thinkingColor : theme.normalColor;
 
     LazyBuiltItem out;
@@ -1587,12 +1563,12 @@ LazyBuiltItem MessageListComponent::buildStreamingFrontier(const TUIRenderState&
     // 尾部 (仍增长) 块: 每帧重建
     const auto&        theme    = *ctx_.theme;
     const int          maxWidth = std::max(1, scrollable_->contentWidth());
-    const bool         thinking = (st.currentTokenRole == TUIMessage::Role::Think);
+    const bool         thinking = (st.stream().role == TUIMessage::Role::Think);
     const ftxui::Color c        = thinking ? theme.thinkingColor : theme.normalColor;
 
     LazyBuiltItem out;
     out.cacheable   = false;
-    out.sourceBytes = st.currentToken ? st.currentToken->size() : 0;
+    out.sourceBytes = st.stream().text ? st.stream().text->size() : 0;
     if (streamRenderer_) {
         std::unique_ptr<markdown::DomBuilder> fb;
         auto el = streamRenderer_->renderFrontier(theme.markdownTheme, maxWidth, fb);
@@ -1624,9 +1600,8 @@ void MessageListComponent::syncStream(const TUIRenderState& st) {
             ++streamGen_;
         }
         streamFedLen_ = 0;
-        // 下一流强制全部重建 (防御: 即使 future 代码在重建 currentToken 时
-        // 忘记递增 epoch, 此处补充处理也能保证渲染器不与新流串用)
-        streamEpoch_ = ~0ULL;
+        // 下一流强制全部重建 (防御: 即使 id 比较失手, 此处也能保证渲染器不与新流串用)
+        streamId_.clear();
         // 流结束: 清除流式折叠的用户点击覆盖态 (已提交的 Think 消息由
         // msg.collapsed 管理 —— 手动展开过的流已在提交时落盘为展开),
         // 下一次思考回到设置模式的默认展示
@@ -1638,7 +1613,7 @@ void MessageListComponent::syncStream(const TUIRenderState& st) {
     // 走 buildStreamingItem 单行折叠子项; 点击展开后恢复增量路径 —— 折叠期间
     // 不 feed 渲染器、不更新 fedLen/epoch, 恢复后按 fedLen 补齐缺失增量即可
     // (与下方动画降级路径的恢复语义一致)
-    if (st.currentTokenRole == TUIMessage::Role::Think && streamThinkCollapsed(st)) {
+    if (st.stream().role == TUIMessage::Role::Think && streamThinkCollapsed(st)) {
         return;
     }
 
@@ -1646,33 +1621,33 @@ void MessageListComponent::syncStream(const TUIRenderState& st) {
     // 降级期间不 feed 渲染器、不更新 fedLen/epoch —— renderer 内容与 fedLen
     // 的一致性保持 (renderer text == token[0..fedLen)), 恢复增量后按 fedLen
     // 追加缺失的增量即可, 无需重建 (与"新流"路径区分)。
-    const bool inc = (st.currentTokenRole == TUIMessage::Role::Think)
+    const bool inc = (st.stream().role == TUIMessage::Role::Think)
                          ? TUISettings::instance().isAnimationEnabled(AnimationLevel::Ultra)
                          : TUISettings::instance().isAnimationEnabled(AnimationLevel::Low);
     if (!inc) {
         return;
     }
     streamUseIncremental_ = true;
-    streamHeaderCount_    = (st.currentTokenRole == TUIMessage::Role::Think) ? 1 : 0;
+    streamHeaderCount_    = (st.stream().role == TUIMessage::Role::Think) ? 1 : 0;
 
     if (!streamRenderer_) {
         streamRenderer_ = std::make_unique<markdown::IncrementalRenderer>();
     }
-    const auto& tok = *st.currentToken;
-    if (st.currentTokenEpoch != streamEpoch_) {
-        // 新流 (token 被重置/更换): 重建渲染器并整段 feed。
-        // 判定依据: client 线程仅在新建 currentToken 时递增 epoch (COW 复制
-        // 不递增, 内容仍是同一流延续), 故 epoch 相同即"同一流", 无需再对
-        // 整段累积文本做前缀比较
+    const auto& tok = *st.stream().text;
+    if (st.stream().id != streamId_) {
+        // 新流 (id 变化): 重建渲染器并整段 feed。
+        // 判定依据: 每段流在 agent 端有自己的消息 id (stream_begin 下发),
+        // 同一段内的 token 只会追加, 故 id 相同即"同一流", 无需再对整段累积
+        // 文本做前缀比较
         //
         // 注意: 此处不得清除用户的点击折叠覆盖态 —— 折叠展示期间不更新
-        // streamEpoch_ (见上方提前 return), 用户点击展开后首个渲染帧必然
+        // streamId_ (见上方提前 return), 用户点击展开后首个渲染帧必然
         // 走到本分支, 若在此重置覆盖态, 展开会在下一帧被撤销 (表现为点击
         // 展开闪一下又折回, 需再点一次)。覆盖态的生命周期由 client 线程
-        // 管理: 流提交落盘与新流开始时重置 (见 pushCurrentTokenLocked/onDelta)
+        // 管理: 定稿行到达与新流开始时重置 (见 onDelta)
         streamRenderer_->reset();
         ++streamGen_;
-        streamEpoch_ = st.currentTokenEpoch;
+        streamId_ = st.stream().id;
         if (!tok.empty()) {
             streamRenderer_->append(tok);
         }
@@ -1935,7 +1910,7 @@ Element MessageListComponent::buildMessageBlock(
                 if (!msg.text.empty()) {
                     const auto& st = *ctx_.frameState;
                     const bool  isTailMsg
-                        = (msgIndex + 1 == st.messages.size() && !hasStreamingToken(st));
+                        = (msgIndex + 1 == st.messages().size() && !hasStreamingToken(st));
                     if (isTailMsg
                         && TUISettings::instance().tailThinkingMode()
                                == TailThinkingMode::SingleLine) {
@@ -2470,7 +2445,7 @@ bool MessageListComponent::handleAttachmentClick(const Mouse& mouse) {
             || mouse.x > box.x_max) {
             continue;
         }
-        const auto& msgs = ctx_.frameState->messages;
+        const auto& msgs = ctx_.frameState->messages();
         if (h.msgIndex >= msgs.size()) {
             continue;
         }
@@ -2508,10 +2483,10 @@ void MessageListComponent::clearInterruptUiState() {
 size_t MessageListComponent::interruptEstimate(size_t msgIndex, int width) const {
     // 取实时快照 (测试辅助路径: 不依赖上一帧 frameState 的刷新时机)
     auto st = ctx_.state ? ctx_.state->readSnapshot() : ctx_.frameState;
-    if (!st || msgIndex >= st->messages.size()) {
+    if (!st || msgIndex >= st->messages().size()) {
         return 1;
     }
-    return interruptView_.estimate(*st->messages[msgIndex], width);
+    return interruptView_.estimate(*st->messages()[msgIndex], width);
 }
 
 } // namespace agentxx::client

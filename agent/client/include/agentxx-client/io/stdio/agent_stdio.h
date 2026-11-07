@@ -31,10 +31,15 @@ private:
 
     std::shared_ptr<StderrLogSink> logSink_;
     bool                           isThinking_ = false;
-    /// 控制台代码页/模式的周期自检器 (Windows 下子进程会改掉共享控制台状态)
-    ConsoleStateGuard consoleStateGuard_;
     /// 当前会话 sessionId (mode_runners 加载时设置; 插件代发消息用)
     std::string sessionId_;
+    /// 当前流式消息 id (空 = 没有在打印的流)
+    /// - 行式输出没有消息列表: 只靠它做"同一段只打一次"的判定
+    std::string streamId_;
+    /// 当前流已实时打印的字符数 (定稿行到达时只补打未打印的尾部)
+    size_t streamPrintedLen_ = 0;
+    /// 控制台代码页/模式的周期自检器 (Windows 下子进程会改掉共享控制台状态)
+    ConsoleStateGuard consoleStateGuard_;
 
 public:
 

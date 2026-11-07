@@ -742,7 +742,7 @@ void benchResourceRealTui() {
     res1.frameAvgMs   = (stats1.frames > 0) ? (stats1.totalRenderMs / stats1.frames) : -1.0;
     size_t tuiLoaded1 = 0;
     if (auto snap = tui->sharedState().readSnapshot()) {
-        tuiLoaded1 = snap->messages.size();
+        tuiLoaded1 = snap->messages().size();
     }
     res1.note = fmt::format(
         "注入固定组 + 尾窗同步/分页({}条); 同步窗口渲染{}帧/平均{:.2f}ms/最大{:.2f}ms; "
@@ -835,7 +835,7 @@ void benchResourceRealTui() {
     res2.frameAvgMs   = (stats2.frames > 0) ? (stats2.totalRenderMs / stats2.frames) : -1.0;
     size_t tuiLoaded2 = 0;
     if (auto snap = tui->sharedState().readSnapshot()) {
-        tuiLoaded2 = snap->messages.size();
+        tuiLoaded2 = snap->messages().size();
     }
     res2.note = fmt::format(
         "注入固定组 + 尾窗同步/分页({}条); 同步窗口渲染{}帧/平均{:.2f}ms/最大{:.2f}ms; "

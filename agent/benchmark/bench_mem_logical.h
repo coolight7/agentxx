@@ -300,7 +300,7 @@ template<typename TuiRenderStateT>
 inline std::vector<LogicalMemRow> collectTuiLogicalMem(const TuiRenderStateT& st) {
     std::vector<LogicalMemRow> rows;
     size_t                     msgBytes = 0;
-    for (const auto& m : st.messages) {
+    for (const auto& m : st.messages()) {
         if (m) {
             msgBytes += agentxx::agent::estimateViewMessageBytes(*m)
                         + sizeof(std::shared_ptr<TuiRenderStateT>);
@@ -309,14 +309,14 @@ inline std::vector<LogicalMemRow> collectTuiLogicalMem(const TuiRenderStateT& st
     rows.push_back(
         {"client.tui.messages",
          msgBytes,
-         st.messages.size(),
+         st.messages().size(),
          "客户端已加载的展示消息 (shared_ptr 持有)"}
     );
     rows.push_back(
         {"client.tui.stream_token",
-         st.currentToken ? st.currentToken->size() : 0,
-         st.currentToken ? size_t{1} : size_t{0},
-         "流式累积 token 文本"}
+         st.replica.hasStream() ? st.stream().text->size() : 0,
+         st.replica.hasStream() ? size_t{1} : size_t{0},
+         "尾部流式项文本 (来自 agent 的 token 增量)"}
     );
     rows.push_back(
         {"client.tui.context_snapshot",

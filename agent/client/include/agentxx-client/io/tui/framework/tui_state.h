@@ -4,6 +4,7 @@
 #include "agentxx-client/io/tui/model/queue_mirror.h"
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/io/agent_io_transport.h"
+#include "agentxx/agent/io/view_replica.h"
 #include "agentxx/plugin/client_plugin_manager.h"
 #include "asio/experimental/concurrent_channel.hpp"
 #include "neograph/api.h"
@@ -98,8 +99,8 @@ enum class ConnState : uint8_t {
 /// - 读方: 短锁拷贝 shared_ptr 快照, 之后无锁渲染
 ///
 /// 性能设计 (流式输出的热路径):
-/// - currentToken 为 shared_ptr<string>: 流式追加 token 时按需 COW 字符串本体,
-///   避免每 token 深拷贝整个已累积文本 (O(n²) -> O(n))
+/// - 消息行与尾部流式项由 [ViewReplica] 持有: 行是 shared_ptr (整份状态 COW 只拷
+///   指针), 流式文本是 shared_ptr<string> (每 token 只在 UI 持有快照时复制本体)
 /// - contextMessages 为 shared_ptr<json>: utilxx_base::Json 拷贝是深拷贝
 ///   (yyjson_mut_val_mut_copy 全树复制), 若放在 COW 整份拷贝内,
 ///   每 token 都会复制整个上下文 JSON; 指针化后 COW 拷贝仅 O(1)
@@ -136,7 +137,19 @@ struct TUIRenderState {
     /// 仅对"选择之后发送的下一条消息"生效 (重复选择以最后一次为准)
     std::string pendingModel;
 
-    std::vector<std::shared_ptr<TUIMessage>> messages;
+    /// 展示历史副本 (agent 是唯一写者; 本端只按 id 追加文本 / 整条 upsert /
+    /// 丢弃流式项)
+    agentxx::agent::ViewReplica replica;
+
+    /// 消息行 (只读视图; 渲染与命中都从这里取)
+    const std::vector<std::shared_ptr<TUIMessage>>& messages() const noexcept {
+        return replica.rows();
+    }
+
+    /// 尾部流式项 (agent 端 Session::streamingView 的客户端副本)
+    const agentxx::agent::ViewStreamTail& stream() const noexcept {
+        return replica.stream();
+    }
 
     std::vector<std::string> modelNames;
 
@@ -153,8 +166,6 @@ struct TUIRenderState {
     /// - 测试可直接经 mutate 注入假注册表, 驱动装饰渲染路径
     std::shared_ptr<const agentxx::plugin::ClientUiRegistry> pluginRegistry;
 
-    std::shared_ptr<std::string> currentToken;
-
     /// 上下文消息快照 (弹窗展示用); 为 null 表示尚未获取
     std::shared_ptr<utilxx_base::Json> contextMessages;
 
@@ -162,31 +173,12 @@ struct TUIRenderState {
     std::map<std::string, agentxx::agent::ModelCapabilityInfo> modelCapabilities;
 
     // ---- 历史分页窗口状态 (服务端 viewMessages 尾窗同步 + 分页拉取) ----
-    /// 已加载窗口首条消息在服务端完整 viewMessages 中的绝对下标
     /// 历史分页窗口 (上下边界/未完成的请求/序号连续性都在模型内,
     /// 见 [HistoryWindow]); 完整同步后 windowStart()==0, 尾窗同步后 > 0
     HistoryWindow history;
-    /// 流式代次 (client 线程在**新建** currentToken 时递增; COW 复制不递增):
-    /// - 语义 = 流身份: 同一流内 currentToken 只会被原地 append (或 COW 复制,
-    ///   内容仍是同一流的延续), epoch 不变
-    /// - UI 线程 (MessageListComponent::syncStream) 据此 O(1) 判断"新流/延续流",
-    ///   替代每帧对整段累积文本做前缀比较 (O(n²) -> O(n))
-    uint64_t currentTokenEpoch = 0;
 
-    /// 判断当前是否有待提交的流式 token 内容 (文本或加密思考/token统计)
-    bool hasPendingToken() const noexcept {
-        if (currentToken && !currentToken->empty()) {
-            return true;
-        }
-        return (currentTokenRole == TUIMessage::Role::Think) && pendingTokenThink.has_value()
-               && (pendingTokenThink->isEncrypted || pendingTokenThink->reasoningTokens > 0);
-    }
-
-    int64_t pendingTokenDurationMs  = 0;
-    int64_t pendingTokenStartTimeMs = 0;
     /// 持久化会话总数 (WireSessionList.totalCount; 0 = 未知, 供弹窗展示 x/y)
     uint64_t sessionListTotalCount = 0;
-
     /// 上下文统计 (WireContextStats 响应填充; 状态栏/Info 侧边栏显示用)
     /// - TUI 不持有 server-io 的 Session, 统计经 Wire 消息获取后存于此
     /// - 0/0 表示尚未收到服务端推送
@@ -216,30 +208,30 @@ struct TUIRenderState {
     /// - 信息侧边栏在 Context 段之后、Append 段之前显示「后台任务」段
     /// - 服务端没有任务时不下发该字段, 这里保持空数组 (界面显示"( 无 )")
     std::vector<TUIAsyncWorkItem> asyncWorks;
-    std::optional<TUIMessage::ThinkData> pendingTokenThink;
 
     /// 流式末尾 Think 折叠态的用户点击覆盖 (tri-state; UI 线程写, client 线程读):
     /// - -1 = 用户未点击 (跟随 TUISettings::tailThinkingMode 设置)
     /// - 0  = 用户点击折叠
     /// - 1  = 用户点击展开
     ///
-    /// 作用范围 = 当前流 (currentTokenEpoch 标识): 用户点击展开后, 流提交落盘
-    /// (pushCurrentTokenLocked) 时据此把 Think 消息落盘为展开 (collapsed=false),
-    /// 思考结束不会自动折回; 提交与新流开始时重置为 -1, 使下一次思考回到
+    /// 作用范围 = 当前流 (`replica.stream().id` 标识): 用户点击展开后, 定稿行
+    /// (insert_message, id 等于当前流 id) 到达时把该值写到行上 (`collapsed`),
+    /// 思考结束不会自动折回; 定稿与新流开始时重置为 -1, 使下一次思考回到
     /// 设置模式的默认展示。
     ///
-    /// 放在共享状态而非 UI 组件内: 提交落盘发生在 client 线程, 需要读到用户
+    /// 放在共享状态而非 UI 组件内: 定稿行应用发生在 client 线程, 需要读到用户
     /// 在 UI 线程点击的结果 (双方经 sharedState 的 mutex + COW 访问)。
     int streamThinkOverride = -1;
+    /// 本地瞬态提示行的 id 序号 (`local_tip_<n>`): 提示不进历史, 每次一条新行
+    uint64_t localRowSeq = 0;
     /// 消息队列镜像 (队列快照/状态/投递回执记账见 [MessageQueueMirror])
     MessageQueueMirror queue;
 
     /// 当前是否已"完全授权所有权限" (服务端 WirePermissionState 下发/广播):
     /// - 由 agent 侧权限中间件持有 (权限切换按钮或权限询问卡片勾选 fullAuth 由客户端切换)
     /// - Info 侧边栏底部的授权按钮显示与点击切换依据此值
-    bool             fullAuthorized   = false;
-    TUIMessage::Role currentTokenRole = TUIMessage::Role::Assistant;
-    bool             isStreaming      = false;
+    bool fullAuthorized = false;
+    bool isStreaming    = false;
 
     // ---- 生成占位提示 (服务端 GenStatus 增量) ----
     /// 模型生成阶段: 模型节点开始执行后, 首个正文/思考 token 或工具消息到达前,
@@ -308,8 +300,9 @@ public:
     ///    免去每帧对全部消息文本重新哈希的开销
     /// 复制成本: 低频事件 (Tool 结束 / 节点结束 / 折叠点击) 才触发, 可接受
     TUIMessage& mutableMessage(TUIRenderState& st, size_t idx) {
-        st.messages[idx] = std::make_shared<TUIMessage>(*st.messages[idx]);
-        return *st.messages[idx];
+        auto copy = std::make_shared<TUIMessage>(*st.replica.rows()[idx]);
+        st.replica.replaceRow(idx, copy);
+        return *copy;
     }
 
     /// 快照: 拷贝 shared_ptr (纳秒级), 供 UI 线程本帧无锁渲染
