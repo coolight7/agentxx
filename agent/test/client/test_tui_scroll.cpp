@@ -48,6 +48,66 @@ using namespace agentxx::client;
 namespace {
 
 /// 测试夹具: 固定 100x20 视口的消息列表
+namespace {
+
+/// 夹具: 把一行当作 agent 下发的 insert_message 放进展示历史 (id 自动生成)
+void pushRow(TUIRenderState& st, TUIMessage row) {
+    static uint64_t seq = 0;
+    if (row.id.empty()) {
+        row.id = fmt::format("t_row_{}", ++seq);
+    }
+    agentxx::agent::WireDelta d;
+    d.type    = agentxx::agent::WireDelta::Type::InsertMessage;
+    d.msgId   = row.id;
+    d.message = std::make_shared<TUIMessage>(std::move(row));
+    st.replica.applyDelta(d);
+}
+
+/// 夹具: 前插一行 (历史分页场景)
+void prependRow(TUIRenderState& st, TUIMessage row) {
+    static uint64_t seq = 0;
+    if (row.id.empty()) {
+        row.id = fmt::format("t_prepend_{}", ++seq);
+    }
+    std::vector<TUIMessage> rows{std::move(row)};
+    st.replica.prependRows(rows);
+}
+
+/// 夹具: 把尾部流式项设成 (角色 + 文本) 的形态
+/// - `epoch` 非 0 时用它当流 id (同一 epoch = 同一条流), 否则每次换一条新流
+/// - 真实路径只会追加, 这里的"整段设置"语义仅服务于夹具
+void setStream(
+    TUIRenderState&   st,
+    TUIMessage::Role  role,
+    const std::string& text,
+    uint64_t          epoch = 0
+) {
+    static uint64_t seq = 0;
+    const auto      id  = fmt::format("t_stream_{}", epoch == 0 ? ++seq : epoch);
+    agentxx::agent::WireDelta begin;
+    begin.type       = agentxx::agent::WireDelta::Type::StreamBegin;
+    begin.msgId      = id;
+    begin.streamRole = role;
+    st.replica.applyDelta(begin);
+    if (!text.empty()) {
+        agentxx::agent::WireDelta tok;
+        tok.type = (role == TUIMessage::Role::Think) ? agentxx::agent::WireDelta::Type::ThinkToken
+                                                     : agentxx::agent::WireDelta::Type::TextToken;
+        tok.msgId = id;
+        tok.text  = text;
+        st.replica.applyDelta(tok);
+    }
+    st.isStreaming = true;
+}
+
+/// 夹具: 丢弃尾部流式项 (流结束)
+void clearStream(TUIRenderState& st) {
+    st.replica.clearStream();
+    st.isStreaming = false;
+}
+
+} // namespace
+
 struct ScrollFixture {
     asio::io_context io;
     TUISharedState   sharedState;
@@ -62,6 +122,10 @@ struct ScrollFixture {
     /// 渲染尺寸 (成员使高视口夹具可覆写; 默认 100x20)
     int width  = kWidth;
     int height = kHeight;
+
+    /// setToken 当前累积的流 id 与序号 (同一 id 内只追加, 变化即换新流)
+    std::string tokenStreamId_;
+    uint64_t    tokenStreamSeq_ = 0;
 
     ScrollFixture() {
         sharedState.mutate([&](TUIRenderState& st) {
@@ -85,60 +149,71 @@ struct ScrollFixture {
                 m->text += "history line " + std::to_string(j) + " with some words to wrap ";
             }
             sharedState.mutate([&](TUIRenderState& st) {
-                st.messages.push_back(std::move(m));
+                pushRow(st, std::move(*m));
             });
         }
     }
 
-    /// 设置流式增量文本 (模拟 onDelta 累积)
+    /// 设置流式增量文本 (模拟 onDelta 的 token 追加; 内容变化时换一条新流)
     void setToken(const std::string& tok) {
         sharedState.mutate([&](TUIRenderState& st) {
-            if (!st.currentToken) {
-                st.currentToken = std::make_shared<std::string>();
+            if (st.replica.hasStream() && st.replica.stream().id == tokenStreamId_) {
+                const auto& cur = *st.replica.stream().text;
+                if (tok.size() > cur.size() && tok.compare(0, cur.size(), cur) == 0) {
+                    // 同一流的增量追加
+                    agentxx::agent::WireDelta d;
+                    d.type  = agentxx::agent::WireDelta::Type::TextToken;
+                    d.msgId = tokenStreamId_;
+                    d.text  = tok.substr(cur.size());
+                    st.replica.applyDelta(d);
+                    st.isStreaming = true;
+                    return;
+                }
             }
-            st.currentToken->assign(tok);
-            st.isStreaming = true;
+            tokenStreamId_ = fmt::format("t_token_{}", ++tokenStreamSeq_);
+            setStream(st, TUIMessage::Role::Assistant, tok);
         });
     }
 
     /// 模拟 onDelta 新建流式 token (指定流身份 epoch + 整体替换内容);
-    /// 同流追加时保持相同 epoch (与 onDelta 的 COW/原地 append 语义一致)
-    void setTokenEpoch(uint64_t epoch, const std::string& tok) {
+    /// 同流追加时保持相同 epoch (与 onDelta 的"同一段流追加"语义一致)
+    void setTokenEpoch(
+        uint64_t         epoch,
+        const std::string& tok,
+        TUIMessage::Role role = TUIMessage::Role::Assistant
+    ) {
+        tokenStreamId_ = fmt::format("t_token_{}", epoch);
         sharedState.mutate([&](TUIRenderState& st) {
-            st.currentToken      = std::make_shared<std::string>(tok);
-            st.currentTokenEpoch = epoch;
-            st.isStreaming       = true;
+            setStream(st, role, tok, epoch);
         });
     }
 
-    /// 模拟 onSync: 整体重建 TUIRenderState (currentTokenEpoch 归 0, 消息历史保留)
+    /// 模拟 onSync: 整体重建 TUIRenderState (流式项丢弃, 消息历史保留)
     /// 注意: 必须深拷贝消息 (每个消息新建 shared_ptr) —— 真实 onSync 从
     /// WireMessage 反序列化重建 ViewMessage, 消息指针全变, 驱动 itemKey 变化;
     /// 若浅拷贝 (共享指针), key 不变, 无法模拟缓存失效路径
     void rebuildState() {
         sharedState.mutate([&](TUIRenderState& st) {
-            auto prev       = sharedState.snapshot();
-            auto ns         = std::make_shared<TUIRenderState>();
-            ns->isStreaming = false;
-            ns->messages.reserve(prev->messages.size());
-            for (const auto& m : prev->messages) {
-                ns->messages.push_back(std::make_shared<TUIMessage>(*m));
+            // 等价于 onSync 的整体替换: 消息全部换新对象 (渲染缓存随指针失效)
+            agentxx::agent::WireSyncPayload p;
+            for (const auto& m : st.replica.rows()) {
+                p.messages.push_back(*m);
             }
-            st = std::move(*ns);
+            p.totalMessages = p.messages.size();
+            st.replica.reset(p);
+            st.isStreaming = false;
         });
     }
 
-    /// 流式结束: token 落为正式消息 (模拟 TurnEnd pushCurrentTokenLocked)
+    /// 流式结束: 用同一个 id 定稿成正式行 (模拟 agent 的 insert_message)
     void endStream() {
         sharedState.mutate([&](TUIRenderState& st) {
-            if (st.currentToken && !st.currentToken->empty()) {
-                auto m  = std::make_shared<TUIMessage>();
-                m->role = TUIMessage::Role::Assistant;
-                m->text = *st.currentToken;
-                st.messages.push_back(std::move(m));
+            if (st.replica.hasStream() && !st.replica.stream().text->empty()) {
+                auto m  = TUIMessage::makeText(TUIMessage::Role::Assistant, *st.replica.stream().text);
+                m.id    = st.replica.stream().id;
+                pushRow(st, std::move(m));
             }
-            st.currentToken.reset();
-            st.isStreaming = false;
+            clearStream(st);
         });
     }
 
@@ -327,7 +402,7 @@ static void testHistoryPrependAnchoring() {
         f.addHistory(8);
         // 模拟尾窗同步窗口元数据: 窗口上方还有 100 条更早历史
         f.sharedState.mutate([&](TUIRenderState& st) {
-            st.history.reset(100, 108, st.messages.size());
+            st.history.reset(100, 108, st.messages().size());
         });
         f.render();
         f.render(); // 两帧建立测量/缓存
@@ -349,9 +424,9 @@ static void testHistoryPrependAnchoring() {
                 for (int j = 0; j < 40; ++j) {
                     m->text += "older history " + std::to_string(j) + " words to wrap ";
                 }
-                st.messages.insert(st.messages.begin(), std::move(m));
+                prependRow(st, std::move(*m));
             }
-            st.history.reset(96, 108, st.messages.size());
+            st.history.reset(96, 108, st.messages().size());
         });
         f.comp->onHistoryPrepended(4);
         std::string after = f.render();
@@ -372,7 +447,7 @@ static void testHistoryPrependAnchoring() {
         ScrollFixture f;
         f.addHistory(8);
         f.sharedState.mutate([&](TUIRenderState& st) {
-            st.history.reset(100, 108, st.messages.size());
+            st.history.reset(100, 108, st.messages().size());
         });
         f.render();
         f.render();
@@ -381,8 +456,8 @@ static void testHistoryPrependAnchoring() {
             auto m  = std::make_shared<TUIMessage>();
             m->role = TUIMessage::Role::Assistant;
             m->text = "PAGED_OLDER_MESSAGE";
-            st.messages.insert(st.messages.begin(), std::move(m));
-            st.history.reset(99, 108, st.messages.size());
+            prependRow(st, std::move(*m));
+            st.history.reset(99, 108, st.messages().size());
         });
         f.comp->onHistoryPrepended(1);
         f.render();
@@ -417,8 +492,8 @@ static void testHistoryPrependAnchoring() {
             auto m  = std::make_shared<TUIMessage>();
             m->role = TUIMessage::Role::Assistant;
             m->text = "FIRST_LOADED";
-            st.messages.push_back(std::move(m));
-            st.history.reset(50, 50, st.messages.size());
+            pushRow(st, std::move(*m));
+            st.history.reset(50, 50, st.messages().size());
         });
         f.comp->onHistoryPrepended(1); // 空数组上调用安全 (仅记录条数语义)
         std::string frame = f.render();
@@ -435,7 +510,7 @@ static void testHistoryPrependAnchoring() {
         ScrollFixture f;
         f.addHistory(8); // 每条都很高 -> 吸附底部时视口顶行在末尾几条上
         f.sharedState.mutate([&](TUIRenderState& st) {
-            st.history.reset(100, 108, st.messages.size());
+            st.history.reset(100, 108, st.messages().size());
         });
         f.render();
         f.render(); // 两帧建立测量/缓存
@@ -459,7 +534,7 @@ static void testHistoryPrependAnchoring() {
 
         // 模拟清理: 消息数据删除 + 历史窗口记账 (client 线程) + 组件下标平移
         f.sharedState.mutate([&](TUIRenderState& st) {
-            st.messages.erase(st.messages.begin(), st.messages.begin() + dropped);
+            st.replica.trimHead(dropped);
             st.history.noteTrimmedHead(dropped);
         });
         f.comp->onHistoryTrimmed(dropped);
@@ -504,7 +579,7 @@ static void testRoleLabelLocalization() {
             think->role      = TUIMessage::Role::Think;
             think->collapsed = true;
             think->text      = "think body";
-            st.messages.push_back(std::move(think));
+            pushRow(st, std::move(*think));
 
             auto tool                = std::make_shared<TUIMessage>();
             tool->role               = TUIMessage::Role::Tool;
@@ -514,7 +589,7 @@ static void testRoleLabelLocalization() {
             tool->tool->toolName     = "agentxx_filesystem_read";
             tool->tool->toolFinished = true;
             tool->tool->toolResult   = "ok";
-            st.messages.push_back(std::move(tool));
+            pushRow(st, std::move(*tool));
 
             auto tip           = std::make_shared<TUIMessage>();
             tip->role          = TUIMessage::Role::Tip;
@@ -522,13 +597,13 @@ static void testRoleLabelLocalization() {
             tip->text          = "disk space low";
             tip->tip           = TUIMessage::TipData{};
             tip->tip->tipLevel = TUIMessage::TipLevel::Warning;
-            st.messages.push_back(std::move(tip));
+            pushRow(st, std::move(*tip));
 
             auto sys       = std::make_shared<TUIMessage>();
             sys->role      = TUIMessage::Role::System;
             sys->collapsed = true;
             sys->text      = "system note";
-            st.messages.push_back(std::move(sys));
+            pushRow(st, std::move(*sys));
         });
 
         f.render();
@@ -576,12 +651,12 @@ void testEventSourceBadge() {
             1000
         ));
         eventMsg->source = std::string{agentxx::agent::kInputSourceEventPrefix} + "chat.message";
-        st.messages.push_back(std::move(eventMsg));
+        pushRow(st, std::move(*eventMsg));
 
         auto userMsg  = std::make_shared<TUIMessage>();
         userMsg->role = TUIMessage::Role::User;
         userMsg->text = "typed by the user USERBODY8ABC";
-        st.messages.push_back(std::move(userMsg));
+        pushRow(st, std::move(*userMsg));
     });
 
     // 中文界面的事件头 (i18n 键 msg.eventSource, 见 tui_i18n.cpp)
@@ -624,7 +699,7 @@ void testEventSourceBadge() {
     XX_TEST_EXPECT_TRUE(expanded.find("EVBODY9XYZ") != std::string::npos);
     {
         auto snap = f.sharedState.readSnapshot();
-        XX_TEST_EXPECT_TRUE(!snap->messages.empty() && !snap->messages[0]->collapsed);
+        XX_TEST_EXPECT_TRUE(!snap->messages().empty() && !snap->messages()[0]->collapsed);
     }
 
     // 再次点击 -> 折回
@@ -666,7 +741,7 @@ void testUserMessageCollapse() {
         userMsg->role = TUIMessage::Role::User;
         userMsg->text
             = "first line of the user input USRHEAD7XYZ\nsecond line USRTAIL3ABC";
-        st.messages.push_back(std::move(userMsg));
+        pushRow(st, std::move(*userMsg));
     });
 
     // 默认展开: `- ` 开头, 正文逐行展示
@@ -808,7 +883,7 @@ static void testMarkdownListTextCopy() {
         m->role = TUIMessage::Role::Assistant;
         m->text = "- alpha bravo charlie delta echo foxtrot golf hotel india juliet\n"
                   "- second\n";
-        st.messages.push_back(std::move(m));
+        pushRow(st, std::move(*m));
     });
     f.render();
     f.render();
@@ -904,7 +979,7 @@ static void testNavStripButtons() {
                 auto u  = std::make_shared<TUIMessage>();
                 u->role = TUIMessage::Role::User;
                 u->text = fmt::format("USER_MARK_{}", i);
-                st.messages.push_back(std::move(u));
+                pushRow(st, std::move(*u));
                 for (int j = 0; j < 4; ++j) {
                     std::string text = fmt::format("assistant {} msg{} ", j, i);
                     for (int k = 0; k < 20; ++k) {
@@ -913,7 +988,7 @@ static void testNavStripButtons() {
                     auto a  = std::make_shared<TUIMessage>();
                     a->role = TUIMessage::Role::Assistant;
                     a->text = std::move(text);
-                    st.messages.push_back(std::move(a));
+                    pushRow(st, std::move(*a));
                 }
             }
         });
@@ -1001,7 +1076,7 @@ static void testNavStripButtons() {
             auto a  = std::make_shared<TUIMessage>();
             a->role = TUIMessage::Role::Assistant;
             a->text = "appended tail marker TAILN_TOP";
-            st.messages.push_back(std::move(a));
+            pushRow(st, std::move(*a));
         });
         f.render();
         f.render();
@@ -1034,7 +1109,7 @@ static void testNavStripButtons() {
             auto a  = std::make_shared<TUIMessage>();
             a->role = TUIMessage::Role::Assistant;
             a->text = "newest tail marker TAILN_BOT";
-            st.messages.push_back(std::move(a));
+            pushRow(st, std::move(*a));
         });
         f.render();
         XX_TEST_EXPECT_TRUE(
@@ -1094,7 +1169,7 @@ static void testNavStripButtons() {
                 auto a  = std::make_shared<TUIMessage>();
                 a->role = TUIMessage::Role::Assistant;
                 a->text = fmt::format("assistant only {}\n\n", i) + std::string(600, 'z');
-                st.messages.push_back(std::move(a));
+                pushRow(st, std::move(*a));
             }
         });
         f.render(); // 吸附底部
@@ -1123,12 +1198,12 @@ static void testNavStripButtons() {
             tip->tip       = TUIMessage::TipData{};
             tip->collapsed = false;
             tip->text      = std::move(body);
-            st.messages.push_back(std::move(tip));
+            pushRow(st, std::move(*tip));
             for (int i = 0; i < 6; ++i) {
                 auto a  = std::make_shared<TUIMessage>();
                 a->role = TUIMessage::Role::Assistant;
                 a->text = fmt::format("assistant {}\n\n", i) + std::string(600, 'y');
-                st.messages.push_back(std::move(a));
+                pushRow(st, std::move(*a));
             }
         });
         f.render();
@@ -1142,8 +1217,8 @@ static void testNavStripButtons() {
         // 按钮所在行同样是 Tip 消息的命中行: 点按钮只跳转, 不折叠该消息
         XX_TEST_EXPECT_TRUE(clickNav(f, Nav::Top));
         auto snap = f.sharedState.readSnapshot();
-        XX_TEST_EXPECT_TRUE(!snap->messages.empty());
-        XX_TEST_EXPECT_FALSE(snap->messages[0]->collapsed);
+        XX_TEST_EXPECT_TRUE(!snap->messages().empty());
+        XX_TEST_EXPECT_FALSE(snap->messages()[0]->collapsed);
 
         // 点消息区域 (非按钮列) 仍然折叠该消息
         ftxui::Mouse m;
@@ -1153,7 +1228,7 @@ static void testNavStripButtons() {
         m.y      = navRow;
         XX_TEST_EXPECT_TRUE(f.comp->OnEvent(ftxui::Event::Mouse("", m)));
         snap = f.sharedState.readSnapshot();
-        XX_TEST_EXPECT_TRUE(snap->messages[0]->collapsed);
+        XX_TEST_EXPECT_TRUE(snap->messages()[0]->collapsed);
     }
 
     // ---- 空列表 (banner): 无可跳转目标, 不画按钮也不登记命中 ----
@@ -1439,7 +1514,7 @@ TestResult testTuiScroll() {
             auto m  = std::make_shared<TUIMessage>();
             m->role = TUIMessage::Role::User;
             m->text = "hello user message with marker USRM";
-            st.messages.push_back(std::move(m));
+            pushRow(st, std::move(*m));
             st.isStreaming = true;
         });
         f.comp->setStickToBottom(true);
@@ -1460,7 +1535,7 @@ TestResult testTuiScroll() {
                 auto m  = std::make_shared<TUIMessage>();
                 m->role = TUIMessage::Role::Assistant;
                 m->text = "short line " + std::to_string(i);
-                st.messages.push_back(std::move(m));
+                pushRow(st, std::move(*m));
             }
         });
         f.render(); // 建立缓存与布局
@@ -1489,7 +1564,7 @@ TestResult testTuiScroll() {
             auto m  = std::make_shared<TUIMessage>();
             m->role = TUIMessage::Role::User;
             m->text = "user msg marker USRM";
-            st.messages.push_back(std::move(m));
+            pushRow(st, std::move(*m));
             st.isStreaming = true;
         });
         f.comp->setStickToBottom(true);
@@ -1509,7 +1584,7 @@ TestResult testTuiScroll() {
             m->text      = "tip tip body line that is long enough to be truncated "
                            "in the collapsed preview with unique tail marker "
                            "SYSM_TAIL_9XYZ";
-            st.messages.push_back(std::move(m));
+            pushRow(st, std::move(*m));
         });
 
         // 点击命中区域由上一帧 visibleBoxes 反推: 渲染两帧建立布局与命中盒
@@ -1547,7 +1622,7 @@ TestResult testTuiScroll() {
 
         // 状态确实更新为展开
         auto snap = f.sharedState.readSnapshot();
-        XX_TEST_EXPECT_TRUE(!snap->messages.empty() && !snap->messages[0]->collapsed);
+        XX_TEST_EXPECT_TRUE(!snap->messages().empty() && !snap->messages()[0]->collapsed);
 
         // 再次点击 → 重新折叠 (先渲染刷新命中区域: 展开后消息更高, box 更大)
         f.render();
@@ -1569,7 +1644,7 @@ TestResult testTuiScroll() {
         XX_TEST_EXPECT_TRUE(collapsed2.find("+ [Tip] · ") != std::string::npos);
         XX_TEST_EXPECT_TRUE(collapsed2.find("SYSM_TAIL_9XYZ") == std::string::npos);
         snap = f.sharedState.readSnapshot();
-        XX_TEST_EXPECT_TRUE(!snap->messages.empty() && snap->messages[0]->collapsed);
+        XX_TEST_EXPECT_TRUE(!snap->messages().empty() && snap->messages()[0]->collapsed);
     }
 
     {
@@ -1582,7 +1657,7 @@ TestResult testTuiScroll() {
             m->tip->tipLevel = TUIMessage::TipLevel::Warning;
             m->collapsed     = true;
             m->text          = "warning tip body with marker WRN_TAIL_7K";
-            st.messages.push_back(std::move(m));
+            pushRow(st, std::move(*m));
 
             auto m2           = std::make_shared<TUIMessage>();
             m2->role          = TUIMessage::Role::Tip;
@@ -1590,14 +1665,14 @@ TestResult testTuiScroll() {
             m2->tip->tipLevel = TUIMessage::TipLevel::Error;
             m2->collapsed     = true;
             m2->text          = "error tip body with marker ERR_TAIL_8M";
-            st.messages.push_back(std::move(m2));
+            pushRow(st, std::move(*m2));
 
             auto m3       = std::make_shared<TUIMessage>();
             m3->role      = TUIMessage::Role::Tip;
             m3->tip       = TUIMessage::TipData{};
             m3->collapsed = true;
             m3->text      = "info tip body with marker INF_TAIL_6N";
-            st.messages.push_back(std::move(m3));
+            pushRow(st, std::move(*m3));
         });
         f.render();
         f.render();
@@ -1635,7 +1710,7 @@ TestResult testTuiScroll() {
             m->tip->running = true;
             m->collapsed    = true;
             m->text         = "Summarizing LLM Context... RUN_TIP_1A";
-            st.messages.push_back(std::move(m));
+            pushRow(st, std::move(*m));
         });
         // 首帧: 点阵为 spinner 首帧 (测试环境无帧循环, 帧索引停在首帧)
         XX_TEST_EXPECT_TRUE(stripAnsiCodes(f.render()).find("⠋ [Tip] · ") != std::string::npos);
@@ -1652,7 +1727,8 @@ TestResult testTuiScroll() {
             m->tip         = TUIMessage::TipData{};
             m->collapsed   = true;
             m->text        = "Summarized LLM Context 100->50/200 · 0.8s";
-            st.messages[0] = std::move(m);
+            m->id          = st.replica.rows()[0]->id; // 同一行按 id 更新
+            st.replica.replaceRow(0, std::move(m));
         });
         std::string done = stripAnsiCodes(f.render());
         XX_TEST_EXPECT_TRUE(done.find("+ [Tip] · Summarized") != std::string::npos);
@@ -1681,7 +1757,7 @@ TestResult testTuiScroll() {
                     m->text += "softbreak line " + std::to_string(j) + " msg" + std::to_string(i)
                                + "\n";
                 }
-                st.messages.push_back(std::move(m));
+                pushRow(st, std::move(*m));
             }
         });
         // 多渲染几帧: stickToBottom 下底部可见项被实测修正, 总高度逼近
@@ -1714,7 +1790,7 @@ TestResult testTuiScroll() {
             tip->tip       = TUIMessage::TipData{};
             tip->collapsed = true;
             tip->text      = "collapsed tip header";
-            st.messages.push_back(std::move(tip));
+            pushRow(st, std::move(*tip));
             // 8 条 softbreak assistant 消息
             for (int i = 0; i < 8; ++i) {
                 auto m  = std::make_shared<TUIMessage>();
@@ -1723,7 +1799,7 @@ TestResult testTuiScroll() {
                     m->text
                         += "soft line " + std::to_string(j) + " mixed" + std::to_string(i) + "\n";
                 }
-                st.messages.push_back(std::move(m));
+                pushRow(st, std::move(*m));
             }
         });
         f.render();
@@ -1804,7 +1880,7 @@ TestResult testTuiScroll() {
                         break;
                     }
                 }
-                st.messages.push_back(std::move(m));
+                pushRow(st, std::move(*m));
             }
         });
 
@@ -1884,7 +1960,7 @@ TestResult testTuiScroll() {
                     m->text = "history paragraph " + std::to_string(base + i)
                               + " with enough words to wrap around the width nicely "
                                 "and fill several lines of the screen area.\n";
-                    st.messages.push_back(std::move(m));
+                    pushRow(st, std::move(*m));
                 }
             };
             addHistory(300, 0);
@@ -1896,13 +1972,13 @@ TestResult testTuiScroll() {
                        "    phase_b --> phase_c\n"
                        "    phase_c --> [*]\n"
                        "```\n";
-            st.messages.push_back(std::move(mm));
+            pushRow(st, std::move(*mm));
             addHistory(5, 1000);
             // 最后一条普通消息 (marker 必须在底部可见)
             auto last  = std::make_shared<TUIMessage>();
             last->role = TUIMessage::Role::Assistant;
             last->text = "final message with unique marker LAST_MK_9ZQ\n";
-            st.messages.push_back(std::move(last));
+            pushRow(st, std::move(*last));
         });
 
         for (int i = 0; i < 8; ++i) {
@@ -1942,7 +2018,7 @@ TestResult testTuiScroll() {
             m->role = TUIMessage::Role::Assistant;
             m->text = "history paragraph 0 with enough words to wrap around the width nicely "
                       "and fill several lines of the screen area.\n";
-            st.messages.push_back(std::move(m));
+            pushRow(st, std::move(*m));
         });
         f.render();
         XX_TEST_EXPECT_TRUE(f.comp->totalHeight() == 3);
@@ -1957,7 +2033,7 @@ TestResult testTuiScroll() {
                       "    phase_b --> phase_c\n"
                       "    phase_c --> [*]\n"
                       "```\n";
-            st.messages.push_back(std::move(m));
+            pushRow(st, std::move(*m));
         });
         f2.render();
         XX_TEST_EXPECT_TRUE(f2.comp->totalHeight() == 24);
@@ -1967,7 +2043,7 @@ TestResult testTuiScroll() {
             auto m  = std::make_shared<TUIMessage>();
             m->role = TUIMessage::Role::Assistant;
             m->text = "line one\nline two\nline three\nline four\nline five\n";
-            st.messages.push_back(std::move(m));
+            pushRow(st, std::move(*m));
         });
         f3.render();
         XX_TEST_EXPECT_TRUE(f3.comp->totalHeight() == 2);
@@ -1988,7 +2064,7 @@ TestResult testTuiScroll() {
                 m->text = "history paragraph " + std::to_string(i)
                           + " with enough words to wrap around the width nicely "
                             "and fill several lines of the screen area.\n";
-                st.messages.push_back(std::move(m));
+                pushRow(st, std::move(*m));
             }
             // 中间一条 filesystem_edit Tool 消息 (展开, 大 diff)
             auto et                = std::make_shared<TUIMessage>();
@@ -2043,19 +2119,19 @@ TestResult testTuiScroll() {
                 st.pluginRegistry          = std::move(reg);
                 et->tool->toolCallId       = "call_edit_scroll_1";
             }
-            st.messages.push_back(std::move(et));
+            pushRow(st, std::move(*et));
             // 后面 5 条历史 + last
             for (int i = 0; i < 5; ++i) {
                 auto m  = std::make_shared<TUIMessage>();
                 m->role = TUIMessage::Role::Assistant;
                 m->text = "tail paragraph " + std::to_string(i)
                           + " with enough words to wrap around the width nicely.\n";
-                st.messages.push_back(std::move(m));
+                pushRow(st, std::move(*m));
             }
             auto last  = std::make_shared<TUIMessage>();
             last->role = TUIMessage::Role::Assistant;
             last->text = "final message with unique marker LAST_MK_8XY\n";
-            st.messages.push_back(std::move(last));
+            pushRow(st, std::move(*last));
         });
 
         for (int i = 0; i < 8; ++i) {
@@ -2082,7 +2158,7 @@ TestResult testTuiScroll() {
             m->tool->toolFinished = true;
             m->tool->toolResult   = "some result with marker COLX_ZZ";
             m->text               = "{\"path\":\"/a/b/c\"}";
-            st.messages.push_back(std::move(m));
+            pushRow(st, std::move(*m));
         });
         g.render();
         std::string gframe = g.render();
@@ -2130,7 +2206,7 @@ TestResult testTuiScroll() {
                     m->tip  = TUIMessage::TipData{};
                     m->text = "system tip message with marker " + mk;
                 }
-                st.messages.push_back(std::move(m));
+                pushRow(st, std::move(*m));
             }
         });
 
@@ -2242,7 +2318,7 @@ TestResult testTuiScroll() {
                         aj       += "\"}";
                         hm->text  = std::move(aj);
                     }
-                    st.messages.push_back(std::move(hm));
+                    pushRow(st, std::move(*hm));
                     continue;
                 }
                 // 折叠消息
@@ -2266,7 +2342,7 @@ TestResult testTuiScroll() {
                     m->tip  = TUIMessage::TipData{};
                     m->text = "tip with marker " + mk;
                 }
-                st.messages.push_back(std::move(m));
+                pushRow(st, std::move(*m));
             }
         });
 
@@ -2395,7 +2471,7 @@ TestResult testTuiScroll() {
                 m->role              = TUIMessage::Role::Tip;
                 m->tip               = TUIMessage::TipData{};
                 m->text              = "tip " + mk;
-                st.messages.push_back(std::move(m));
+                pushRow(st, std::move(*m));
             }
         });
         f.comp->setStickToBottom(false); // 固定视口在顶部 (offset=0)
@@ -2432,11 +2508,7 @@ TestResult testTuiScroll() {
         {
             ScrollFixture f;
             f.sharedState.mutate([&](TUIRenderState& st) {
-                st.currentTokenRole = TUIMessage::Role::Think;
-                st.currentToken     = std::make_shared<std::string>(
-                    "Thinking step one\nThinking step two\nThinking step three final tail marker THK_TAIL_18A"
-                );
-                st.isStreaming = true;
+                setStream(st, TUIMessage::Role::Think, "Thinking step one\nThinking step two\nThinking step three final tail marker THK_TAIL_18A");
             });
             std::string frame = f.render();
             // 单行折叠标志 "+ [Think]"
@@ -2452,11 +2524,7 @@ TestResult testTuiScroll() {
         {
             ScrollFixture f;
             f.sharedState.mutate([&](TUIRenderState& st) {
-                st.currentTokenRole = TUIMessage::Role::Think;
-                st.currentToken     = std::make_shared<std::string>(
-                    "Thinking step one auto expand header\nThinking step two\nThinking step three THK_TAIL_18B"
-                );
-                st.isStreaming = true;
+                setStream(st, TUIMessage::Role::Think, "Thinking step one auto expand header\nThinking step two\nThinking step three THK_TAIL_18B");
             });
             std::string frame = f.render();
             // 自动展开标志 "- [Think]"
@@ -2478,7 +2546,7 @@ TestResult testTuiScroll() {
                 m->collapsed = true;
                 m->text
                     = "First line head of thinking that is very long\nSecond line\nTail line with marker THK_TAIL_18C";
-                st.messages.push_back(std::move(m));
+                pushRow(st, std::move(*m));
             });
             std::string frame = f.render();
             XX_TEST_EXPECT_TRUE(frame.find("+ [Think]") != std::string::npos);
@@ -2506,13 +2574,7 @@ TestResult testTuiScroll() {
         {
             ScrollFixture f;
             f.sharedState.mutate([&](TUIRenderState& st) {
-                st.currentTokenRole  = TUIMessage::Role::Think;
-                st.currentTokenEpoch = 7;
-                st.currentToken      = std::make_shared<std::string>(
-                    "Thinking head line hidden when collapsed THK18D_HEAD\n"
-                         "Thinking step two\nThinking step three tail THK_TAIL_18D"
-                );
-                st.isStreaming = true;
+                setStream(st, TUIMessage::Role::Think, "Thinking head line hidden when collapsed THK18D_HEAD\n" "Thinking step two\nThinking step three tail THK_TAIL_18D", 7);
             });
             // 两帧建立布局与命中区域
             std::string frame = f.render();
@@ -2544,13 +2606,7 @@ TestResult testTuiScroll() {
         {
             ScrollFixture f;
             f.sharedState.mutate([&](TUIRenderState& st) {
-                st.currentTokenRole  = TUIMessage::Role::Think;
-                st.currentTokenEpoch = 8;
-                st.currentToken      = std::make_shared<std::string>(
-                    "Auto expand head line THK18E_HEAD\n"
-                         "Thinking step two\nThinking step three tail THK_TAIL_18E"
-                );
-                st.isStreaming = true;
+                setStream(st, TUIMessage::Role::Think, "Auto expand head line THK18E_HEAD\n" "Thinking step two\nThinking step three tail THK_TAIL_18E", 8);
             });
             std::string frame = f.render();
             frame             = f.render();
@@ -2577,12 +2633,7 @@ TestResult testTuiScroll() {
         {
             ScrollFixture f;
             f.sharedState.mutate([&](TUIRenderState& st) {
-                st.currentTokenRole  = TUIMessage::Role::Think;
-                st.currentTokenEpoch = 3;
-                st.currentToken      = std::make_shared<std::string>(
-                    "Stream one head THK18F_HEAD\nStream one tail THK_TAIL_18F"
-                );
-                st.isStreaming = true;
+                setStream(st, TUIMessage::Role::Think, "Stream one head THK18F_HEAD\nStream one tail THK_TAIL_18F", 3);
             });
             f.render();
             f.render();
@@ -2590,28 +2641,24 @@ TestResult testTuiScroll() {
             XX_TEST_EXPECT_TRUE(clickFirstCollapsible(f));
             XX_TEST_EXPECT_TRUE(f.render().find("+ [Think]") != std::string::npos);
 
-            // 流结束: token 提交为正式 Think 消息 (pushCurrentTokenLocked 语义,
+            // 流结束: token 提交为正式 Think 行 (agent 端定稿 insert_message,
             // 默认 collapsed=true), 覆盖态应随流结束重置
             f.sharedState.mutate([&](TUIRenderState& st) {
+                // 定稿: 同一 id 落成正式行 (流式项随之丢弃), 默认折叠
                 auto m       = std::make_shared<TUIMessage>();
                 m->role      = TUIMessage::Role::Think;
                 m->collapsed = true;
-                m->text      = st.currentToken ? *st.currentToken : "";
-                st.messages.push_back(std::move(m));
-                st.currentToken.reset();
-                st.isStreaming = false;
+                m->text      = *st.replica.stream().text;
+                m->id        = st.replica.stream().id;
+                pushRow(st, std::move(*m));
+                clearStream(st);
             });
             std::string committedFrame = f.render();
             XX_TEST_EXPECT_TRUE(committedFrame.find("+ [Think]") != std::string::npos);
 
             // 新一轮思考开始 (新 epoch): 不沿用上一流的折叠覆盖态, 自动展开
             f.sharedState.mutate([&](TUIRenderState& st) {
-                st.currentTokenRole  = TUIMessage::Role::Think;
-                st.currentTokenEpoch = 9;
-                st.currentToken      = std::make_shared<std::string>(
-                    "Stream two head THK18F_HEAD2\nStream two tail THK_TAIL_18F2"
-                );
-                st.isStreaming = true;
+                setStream(st, TUIMessage::Role::Think, "Stream two head THK18F_HEAD2\nStream two tail THK_TAIL_18F2", 9);
             });
             std::string nextStreamFrame = f.render();
             nextStreamFrame             = f.render();
@@ -2627,10 +2674,11 @@ TestResult testTuiScroll() {
         settings.setAnimationLevel(AnimationLevel::Ultra);
         {
             ScrollFixture f;
-            f.sharedState.mutate([&](TUIRenderState& st) {
-                st.currentTokenRole = TUIMessage::Role::Think;
-            });
-            f.setTokenEpoch(11, "Thinking head line THK18G_HEAD\nThinking tail THK_TAIL_18G");
+            f.setTokenEpoch(
+                11,
+                "Thinking head line THK18G_HEAD\nThinking tail THK_TAIL_18G",
+                TUIMessage::Role::Think
+            );
             // 两帧建立布局与命中区域
             f.render();
             std::string frame = f.render();
@@ -2649,7 +2697,8 @@ TestResult testTuiScroll() {
             // 同一流继续增长 (epoch 不变) 仍保持展开, 新内容可见
             f.setTokenEpoch(
                 11,
-                "Thinking head line THK18G_HEAD\nThinking tail THK_TAIL_18G\nAddendum THK_18G_ADD"
+                "Thinking head line THK18G_HEAD\nThinking tail THK_TAIL_18G\nAddendum THK_18G_ADD",
+                TUIMessage::Role::Think
             );
             std::string grown = f.render();
             XX_TEST_EXPECT_TRUE(grown.find("THK18G_HEAD") != std::string::npos);
@@ -2672,10 +2721,7 @@ TestResult testTuiScroll() {
         {
             ScrollFixture f;
             f.sharedState.mutate([&](TUIRenderState& st) {
-                st.currentTokenRole  = TUIMessage::Role::Think;
-                st.currentTokenEpoch = 1;
-                st.currentToken      = std::make_shared<std::string>("thinking THK19A");
-                st.isStreaming       = true;
+                setStream(st, TUIMessage::Role::Think, "thinking THK19A", 1);
             });
             std::string frame = f.render();
             // spinner 默认帧序列首帧; 测试环境无 ScreenInteractive 动画循环,
@@ -2691,12 +2737,7 @@ TestResult testTuiScroll() {
         {
             ScrollFixture f;
             f.sharedState.mutate([&](TUIRenderState& st) {
-                st.currentTokenRole  = TUIMessage::Role::Think;
-                st.currentTokenEpoch = 2;
-                st.currentToken
-                    = std::make_shared<std::string>("head THK19B_HEAD\ntail THK_TAIL_19B");
-                st.isStreaming            = true;
-                st.pendingTokenDurationMs = 1500;
+                setStream(st, TUIMessage::Role::Think, "head THK19B_HEAD\ntail THK_TAIL_19B", 2);
             });
             f.render();
             std::string frame = f.render();
@@ -2717,7 +2758,7 @@ TestResult testTuiScroll() {
                 m->tool           = TUIMessage::ToolData{};
                 m->tool->toolName = "agentxx_filesystem_read";
                 m->collapsed      = true;
-                st.messages.push_back(std::move(m));
+                pushRow(st, std::move(*m));
             });
             std::string runningFrame = f.render();
             XX_TEST_EXPECT_TRUE(runningFrame.find("⠋ [Tool]") != std::string::npos);
@@ -2726,10 +2767,10 @@ TestResult testTuiScroll() {
             // 工具完成: mutableMessage 复制消息 (指针变化 -> itemKey 失效重建),
             // 头部回退静态标识
             f.sharedState.mutate([&](TUIRenderState& st) {
-                auto nm                = std::make_shared<TUIMessage>(*st.messages.back());
+                auto nm                = std::make_shared<TUIMessage>(*st.replica.rows().back());
                 nm->tool->toolFinished = true;
                 nm->tool->toolResult   = "ok";
-                st.messages.back()     = std::move(nm);
+                st.replica.replaceRow(st.replica.rows().size() - 1, std::move(nm));
             });
             std::string doneFrame = f.render();
             XX_TEST_EXPECT_TRUE(doneFrame.find("+ [Tool]") != std::string::npos);
@@ -2747,7 +2788,7 @@ TestResult testTuiScroll() {
                 m->tool           = TUIMessage::ToolData{};
                 m->tool->toolName = "agentxx_filesystem_read";
                 m->collapsed      = true;
-                st.messages.push_back(std::move(m));
+                pushRow(st, std::move(*m));
             });
             std::string frame = f.render();
             XX_TEST_EXPECT_TRUE(frame.find("+ [Tool]") != std::string::npos);
@@ -2763,10 +2804,10 @@ TestResult testTuiScroll() {
         //
         // 背景: 模型节点开始执行到首个可见输出之间, agent 下发 GenStatus 增量,
         // 消息列表末尾出现占位项 (见 docs/zh-cn/design/tui.md §2.13)。此时
-        // isStreaming 为真但 currentToken 尚未建立 (首个 token 未到达), 且
+        // isStreaming 为真但流式项尚未建立 (首个 token 未到达), 且
         // streamUseIncremental_ 为假 —— 估算走"流式区降级路径"。
         // 修复前 quickHeight 的占位项判定写在降级路径之后 (不可达): 占位项下标
-        // 落入降级分支解引空的 currentToken 构造 string_view, 进程立即崩溃
+        // 落入降级分支解引空的流式文本指针构造 string_view, 进程立即崩溃
         // (用户报告: TUI 会话中一发送消息就退出, 且无 ASan 报告 —— 崩溃在
         //  消息列表渲染帧内, 终端处于全屏界面, 报告不可见)
         ScrollFixture f;
@@ -2774,7 +2815,7 @@ TestResult testTuiScroll() {
             auto m  = std::make_shared<TUIMessage>();
             m->role = TUIMessage::Role::User;
             m->text = "hello gen placeholder";
-            st.messages.push_back(std::move(m));
+            pushRow(st, std::move(*m));
             // GenStatus(Waiting) 到达后的客户端状态: 生成中, 尚无 token
             st.isStreaming = true;
             st.genPhase    = agentxx::agent::WireDelta::GenPhase::Waiting;
@@ -2788,7 +2829,7 @@ TestResult testTuiScroll() {
         XX_TEST_EXPECT_TRUE(frame.find("waiting for response...") != std::string::npos);
         XX_TEST_EXPECT_EQ(f.comp->totalHeight(), 4);
         // 占位提示不是消息: 不进入消息列表
-        XX_TEST_EXPECT_EQ(f.sharedState.readSnapshot()->messages.size(), (size_t)1);
+        XX_TEST_EXPECT_EQ(f.sharedState.readSnapshot()->messages().size(), (size_t)1);
 
         // 工具调用阶段 (已解析出工具名): 展示工具名与阶段说明
         f.sharedState.mutate([&](TUIRenderState& st) {
@@ -2825,15 +2866,11 @@ TestResult testTuiScroll() {
 
         ScrollFixture g;
         g.sharedState.mutate([&](TUIRenderState& st) {
-            st.currentTokenRole  = TUIMessage::Role::Think;
-            st.currentTokenEpoch = 21;
-            st.currentToken      = std::make_shared<std::string>("thinking THK20_STALE");
-            st.isStreaming       = true;
+            setStream(st, TUIMessage::Role::Think, "thinking THK20_STALE", 21);
         });
         g.render(); // 思考流走增量渲染 (子项数 = 头部 1 + 尾部块 1)
         g.sharedState.mutate([&](TUIRenderState& st) {
-            st.currentToken.reset(); // 流结束 (提交落盘 + 复位流式状态)
-            st.isStreaming = false;
+            clearStream(st); // 流结束 (提交落盘 + 复位流式状态)
         });
         g.render(); // 无 token 帧
 
@@ -2866,12 +2903,9 @@ TestResult testTuiScroll() {
             auto m  = std::make_shared<TUIMessage>();
             m->role = TUIMessage::Role::User;
             m->text = "hi";
-            st.messages.push_back(std::move(m));
+            pushRow(st, std::move(*m));
             // 流式正文已积累 (增量渲染), 随后上游开始接收工具调用
-            st.currentTokenRole  = TUIMessage::Role::Assistant;
-            st.currentTokenEpoch = 31;
-            st.currentToken      = std::make_shared<std::string>("answer text MARK21_BODY");
-            st.isStreaming       = true;
+            setStream(st, TUIMessage::Role::Assistant, "answer text MARK21_BODY", 31);
         });
         f.render(); // 首帧: 建立流式渲染 (内容行已上屏)
         f.sharedState.mutate([&](TUIRenderState& st) {
@@ -2898,10 +2932,8 @@ TestResult testTuiScroll() {
             auto m  = std::make_shared<TUIMessage>();
             m->role = TUIMessage::Role::User;
             m->text = "hi";
-            st.messages.push_back(std::move(m));
-            st.currentTokenRole = TUIMessage::Role::Assistant;
-            st.currentToken     = std::make_shared<std::string>("fallback text MARK21_FALLBACK");
-            st.isStreaming      = true;
+            pushRow(st, std::move(*m));
+            setStream(st, TUIMessage::Role::Assistant, "fallback text MARK21_FALLBACK");
         });
         g.render();
         g.sharedState.mutate([&](TUIRenderState& st) {
@@ -2920,7 +2952,7 @@ TestResult testTuiScroll() {
             auto m  = std::make_shared<TUIMessage>();
             m->role = TUIMessage::Role::User;
             m->text = "hi";
-            st.messages.push_back(std::move(m));
+            pushRow(st, std::move(*m));
             st.isStreaming = true;
             st.genPhase    = agentxx::agent::WireDelta::GenPhase::Waiting;
         });
@@ -2950,7 +2982,7 @@ TestResult testTuiScroll() {
             auto m  = std::make_shared<TUIMessage>();
             m->role = TUIMessage::Role::User;
             m->text = "hi";
-            st.messages.push_back(std::move(m));
+            pushRow(st, std::move(*m));
             st.isStreaming = true;
             st.genPhase    = agentxx::agent::WireDelta::GenPhase::Waiting;
         });
@@ -3001,7 +3033,7 @@ TestResult testTuiScroll() {
             auto m  = std::make_shared<TUIMessage>();
             m->role = TUIMessage::Role::User;
             m->text = "hi";
-            st.messages.push_back(std::move(m));
+            pushRow(st, std::move(*m));
             st.isStreaming = true;
             st.genPhase    = agentxx::agent::WireDelta::GenPhase::ToolCall;
         });
@@ -3046,35 +3078,53 @@ TestResult testTuiScroll() {
         XX_TEST_EXPECT_TRUE(waiting.find("List ") == std::string::npos);
     }
 
-    // 视觉为空的消息 (模型把零宽占位符当正文输出) 不追加尾部空行:
-    // 一条看不见内容的消息只占 1 行, 不会让相邻消息之间多出一整行空白
+    // 视觉为空的消息 (模型把零宽占位符当正文输出) 不进副本:
+    // agent 端在定稿处就过滤一次, 客户端收到后也按不可见丢弃 —— 不会出现
+    // "只有一行空白" 的消息把相邻消息顶开
     {
         ScrollFixture f;
-        auto          blank = std::make_shared<TUIMessage>();
-        blank->role         = TUIMessage::Role::Assistant;
-        blank->text         = "\xE2\x80\x8B"; // U+200B 零宽空格
-        f.sharedState.mutate([&](TUIRenderState& st) { st.messages.push_back(blank); });
         (void)f.render();
-        XX_TEST_EXPECT_EQ(f.comp->totalHeight(), 1);
+        const int baseHeight = f.comp->totalHeight(); // 空列表 = 视口高度
 
-        auto normal = std::make_shared<TUIMessage>();
+        auto blank  = std::make_shared<TUIMessage>();
+        blank->role = TUIMessage::Role::Assistant;
+        blank->text = "\xE2\x80\x8B"; // U+200B 零宽空格
+        f.sharedState.mutate([&](TUIRenderState& st) { pushRow(st, *blank); });
+        (void)f.render();
+        XX_TEST_EXPECT_EQ(f.sharedState.snapshot()->messages().size(), size_t{0});
+        XX_TEST_EXPECT_EQ(f.comp->totalHeight(), baseHeight);
+
+        auto normal  = std::make_shared<TUIMessage>();
         normal->role = TUIMessage::Role::Assistant;
         normal->text = "hello";
-        f.sharedState.mutate([&](TUIRenderState& st) { st.messages.push_back(normal); });
+        f.sharedState.mutate([&](TUIRenderState& st) { pushRow(st, *normal); });
         (void)f.render();
-        XX_TEST_EXPECT_EQ(f.comp->totalHeight(), 3); // 空消息 1 行 + 普通消息 2 行
+        const int afterNormal = f.comp->totalHeight();
+        XX_TEST_EXPECT_EQ(afterNormal, 2); // 内容 1 行 + 尾部空行 1 行
 
-        // 只有耗时的思考消息: 头部行始终渲染 (折叠标记 + 角色标签 + 耗时),
-        // 因此仍跟着一行尾部空行 —— 否则这条头部会和下一条消息贴在一起
-        // (这正是"部分消息下边距为 0"的由来)
-        auto think       = std::make_shared<TUIMessage>();
-        think->role      = TUIMessage::Role::Think;
-        think->text      = " ";
+        // 只有耗时、正文全空白的思考不算有内容 (判据见 ViewMessage::hasVisibleContent):
+        // 这种行渲染出来只剩一个 `[思考]` 头部, 看上去就是一条空消息 -> 副本丢弃
+        auto think        = std::make_shared<TUIMessage>();
+        think->role       = TUIMessage::Role::Think;
+        think->text       = " ";
         think->durationMs = 10900;
         think->collapsed  = true;
-        f.sharedState.mutate([&](TUIRenderState& st) { st.messages.push_back(think); });
+        f.sharedState.mutate([&](TUIRenderState& st) { pushRow(st, *think); });
         (void)f.render();
-        XX_TEST_EXPECT_EQ(f.comp->totalHeight(), 5); // 4 + 思考消息 2 行 (头部 + 尾部空行)
+        XX_TEST_EXPECT_EQ(f.sharedState.snapshot()->messages().size(), size_t{1});
+        XX_TEST_EXPECT_EQ(f.comp->totalHeight(), afterNormal);
+
+        // 带加密思考统计的空正文 Think 有内容 (头部会展示 token 统计):
+        // 头部 1 行 + 尾部空行 1 行
+        auto enc      = std::make_shared<TUIMessage>();
+        enc->role     = TUIMessage::Role::Think;
+        enc->text     = " ";
+        enc->collapsed = true;
+        enc->think     = TUIMessage::ThinkData{};
+        enc->think->reasoningTokens = 128;
+        f.sharedState.mutate([&](TUIRenderState& st) { pushRow(st, *enc); });
+        (void)f.render();
+        XX_TEST_EXPECT_EQ(f.comp->totalHeight(), afterNormal + 2);
     }
 
     // 恢复原始界面语言

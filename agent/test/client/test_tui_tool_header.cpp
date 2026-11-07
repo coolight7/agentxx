@@ -491,6 +491,19 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
 
 namespace {
 
+/// 夹具: 把一行当作 agent 下发的 insert_message 放进展示历史
+void pushRow(TUIRenderState& st, TUIMessage row) {
+    static uint64_t seq = 0;
+    if (row.id.empty()) {
+        row.id = fmt::format("t_th_row_{}", ++seq);
+    }
+    agentxx::agent::WireDelta d;
+    d.type    = agentxx::agent::WireDelta::Type::InsertMessage;
+    d.msgId   = row.id;
+    d.message = std::make_shared<TUIMessage>(std::move(row));
+    st.replica.applyDelta(d);
+}
+
 /// 测试夹具: 固定视口的消息列表 (单条 Tool 消息即可完整展示头部)
 struct ToolHeaderFixture {
     asio::io_context io;
@@ -550,7 +563,7 @@ struct ToolHeaderFixture {
             // 折叠态头部才显示 "动词 · 参数摘要" 特化渲染
             m->collapsed = collapsed;
             m->text      = std::move(args);
-            st.messages.push_back(std::move(m));
+            pushRow(st, std::move(*m));
         });
     }
 
@@ -570,7 +583,7 @@ struct ToolHeaderFixture {
     /// 缓存因此不命中 —— 用于覆盖"结果到达后的一帧"
     void finishLastTool(std::string result) {
         sharedState.mutate([&](TUIRenderState& st) {
-            for (auto it = st.messages.rbegin(); it != st.messages.rend(); ++it) {
+            for (auto it = st.messages().rbegin(); it != st.messages().rend(); ++it) {
                 if ((*it)->role != TUIMessage::Role::Tool || !(*it)->tool) {
                     continue;
                 }
@@ -589,7 +602,7 @@ struct ToolHeaderFixture {
             m->collapsed  = collapsed;
             m->durationMs = durationMs;
             m->text       = std::move(text);
-            st.messages.push_back(std::move(m));
+            pushRow(st, std::move(*m));
         });
     }
 
@@ -1350,7 +1363,9 @@ void testTuiToolHeaderDecorButtonMultiFrame() {
 
     // 点击展开消息 (模拟用户点击展开)
     f.sharedState.mutate([&](TUIRenderState& st) {
-        st.messages[0]->collapsed = false;
+        auto row       = std::make_shared<TUIMessage>(*st.replica.rows()[0]);
+        row->collapsed = false;
+        st.replica.replaceRow(0, std::move(row));
     });
 
     // 帧 2: 展开渲染, 此时生成 decorHits 按钮
@@ -1369,7 +1384,9 @@ void testTuiToolHeaderDecorButtonMultiFrame() {
 
     // 帧 4: 再次折叠
     f.sharedState.mutate([&](TUIRenderState& st) {
-        st.messages[0]->collapsed = true;
+        auto row       = std::make_shared<TUIMessage>(*st.replica.rows()[0]);
+        row->collapsed = true;
+        st.replica.replaceRow(0, std::move(row));
     });
     std::string collapsed2 = f.render();
     XX_TEST_EXPECT_TRUE(collapsed2.find("+ [Tool] ") != std::string::npos);

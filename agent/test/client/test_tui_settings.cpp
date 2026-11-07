@@ -907,7 +907,7 @@ void test_tui_multimodal_capability_survives_session_sync() {
     {
         auto snap = tui->sharedState().readSnapshot();
         // 历史消息被整体替换
-        XX_TEST_EXPECT_EQ(snap->messages.size(), size_t{1});
+        XX_TEST_EXPECT_EQ(snap->messages().size(), size_t{1});
         // 模型能力表跨 Sync 保留: 附件按钮不消失 (修复前此处为空 -> 按钮隐藏)
         XX_TEST_EXPECT_EQ(snap->modelCapabilities.size(), size_t{2});
         XX_TEST_EXPECT_TRUE(snap->currentModelCapability().hasMultimodalInput());

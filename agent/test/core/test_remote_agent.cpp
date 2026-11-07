@@ -210,23 +210,70 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
         }
     }
     {
+        // 流式段开始: 角色 + 思考元数据往返 (v4 新增)
         WireDelta d;
-        d.type       = WireDelta::Type::ToolEnd;
-        d.seq        = 9;
-        d.toolName   = "bash";
-        d.toolCallId = "tc1";
-        d.result     = "output";
-        d.status     = agentxx::util::ToolStatus::Failed;
+        d.type        = WireDelta::Type::StreamBegin;
+        d.seq         = 6;
+        d.msgId       = "m2";
+        d.startTimeMs = 1700000000123LL;
+        d.streamRole  = ViewMessage::Role::Think;
+        d.think       = ViewMessage::ThinkData{
+            .reasoningTokens = 12,
+            .isEncrypted     = true,
+        };
         auto back = WsAgentIOTransport::deserialize(WsAgentIOTransport::serialize(WireMessage{d}));
         XX_TEST_EXPECT_TRUE(back.has_value());
         if (back) {
             auto* bd = std::get_if<WireDelta>(&*back);
             XX_TEST_EXPECT_TRUE(bd != nullptr);
             if (bd) {
-                XX_TEST_EXPECT_TRUE(bd->type == WireDelta::Type::ToolEnd);
-                XX_TEST_EXPECT_EQ(bd->toolName, std::string("bash"));
-                XX_TEST_EXPECT_EQ(bd->toolCallId, std::string("tc1"));
-                XX_TEST_EXPECT_TRUE(bd->status == agentxx::util::ToolStatus::Failed);
+                XX_TEST_EXPECT_TRUE(bd->type == WireDelta::Type::StreamBegin);
+                XX_TEST_EXPECT_EQ(bd->msgId, std::string("m2"));
+                XX_TEST_EXPECT_EQ(bd->startTimeMs, int64_t{1700000000123LL});
+                XX_TEST_EXPECT_TRUE(bd->streamRole == ViewMessage::Role::Think);
+                XX_TEST_EXPECT_TRUE(bd->think.has_value());
+                if (bd->think) {
+                    XX_TEST_EXPECT_EQ(bd->think->reasoningTokens, 12);
+                    XX_TEST_EXPECT_TRUE(bd->think->isEncrypted);
+                }
+            }
+        }
+    }
+    {
+        // 整条消息插入 (工具行 / 定稿行): 成败与耗时都在行上
+        auto tool = ViewMessage::makeText(ViewMessage::Role::Tool, R"({"cmd":"ls"})");
+        tool.tool             = ViewMessage::ToolData{};
+        tool.tool->toolName   = "bash";
+        tool.tool->toolCallId = "tc1";
+        tool.tool->toolResult = "output";
+        tool.tool->status     = agentxx::util::ToolStatus::Failed;
+        tool.tool->toolFinished = true;
+
+        WireDelta d;
+        d.type    = WireDelta::Type::UpdateMessage;
+        d.seq     = 9;
+        d.msgId   = tool.id;
+        d.message = std::make_shared<ViewMessage>(tool);
+        auto back = WsAgentIOTransport::deserialize(WsAgentIOTransport::serialize(WireMessage{d}));
+        XX_TEST_EXPECT_TRUE(back.has_value());
+        if (back) {
+            auto* bd = std::get_if<WireDelta>(&*back);
+            XX_TEST_EXPECT_TRUE(bd != nullptr);
+            if (bd) {
+                XX_TEST_EXPECT_TRUE(bd->type == WireDelta::Type::UpdateMessage);
+                XX_TEST_EXPECT_TRUE(bd->message != nullptr);
+                if (bd->message) {
+                    XX_TEST_EXPECT_TRUE(bd->message->role == ViewMessage::Role::Tool);
+                    XX_TEST_EXPECT_EQ(bd->message->text, std::string(R"({"cmd":"ls"})"));
+                    XX_TEST_EXPECT_TRUE(bd->message->tool.has_value());
+                    if (bd->message->tool) {
+                        XX_TEST_EXPECT_EQ(bd->message->tool->toolName, std::string("bash"));
+                        XX_TEST_EXPECT_TRUE(
+                            bd->message->tool->status == agentxx::util::ToolStatus::Failed
+                        );
+                        XX_TEST_EXPECT_TRUE(bd->message->tool->toolFinished);
+                    }
+                }
             }
         }
     }

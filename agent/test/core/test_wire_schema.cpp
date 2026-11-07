@@ -250,30 +250,30 @@ std::vector<WireSample> wireSamples() {
     out.push_back(
         {"interrupt_expired", WireMessage{WireInterruptExpired{.id = 42, .sessionId = "s1"}}}
     );
-    // 10) 会话增量 (流式 token / 消息插入与更新)
+    // 10) 会话增量: 整条消息更新 (工具行; 流式段/提示/占位提示的专用字段见文末说明)
     {
+        auto tool             = ViewMessage::makeText(ViewMessage::Role::Tool, R"({"path":"a.txt"})");
+        tool.tool             = ViewMessage::ToolData{};
+        tool.tool->toolName   = "agentxx_filesystem_read";
+        tool.tool->toolCallId = "call_1";
+        tool.tool->toolResult = "文件内容";
+        tool.tool->toolFinished = true;
+
         WireDelta m;
-        m.type         = WireDelta::Type::InsertMessage;
-        m.seq          = 128;
-        m.historyCount = 12;
-        m.msgId        = "m-12";
-        m.text         = "增量文本";
-        m.toolName     = "agentxx_filesystem_read";
-        m.toolCallId   = "call_1";
-        m.arguments    = R"({"path":"a.txt"})";
-        m.result       = "文件内容";
-        m.nodeName     = "llm";
-        m.tailHash     = "cafebabe";
-        m.startTimeMs  = 1700000000123LL;
-        m.durationMs   = 456;
-        m.tps          = 12.5;
-        m.tipType      = WireDelta::TipType::Warning;
-        m.status       = agentxx::util::ToolStatus::Ok;
-        // 来源标记 (事件中枢投递的输入): 客户端据此加来源样式
-        m.source = "event:chat.message";
-        m.message      = std::make_shared<ViewMessage>(
-            ViewMessage::makeText(ViewMessage::Role::Assistant, "插入的完整消息")
-        );
+        m.type        = WireDelta::Type::UpdateMessage;
+        m.seq         = 128;
+        m.msgId       = "m-12";
+        m.text        = "增量文本";
+        m.toolName    = "agentxx_filesystem_read";
+        m.nodeName    = "llm";
+        m.startTimeMs = 1700000000123LL;
+        m.durationMs  = 456;
+        m.tps         = 12.5;
+        m.think       = ViewMessage::ThinkData{
+            .reasoningTokens = 640,
+            .isEncrypted     = true,
+        };
+        m.message = std::make_shared<ViewMessage>(std::move(tool));
         out.push_back({"delta", WireMessage{std::move(m)}});
     }
     // 11) 会话完整/增量同步快照
@@ -695,6 +695,12 @@ std::string buildSchemaDoc(const std::vector<WireSample>& samples) {
     out += "\n## 说明\n\n";
     out += "- 每个 `type` 对应 `WireMessage` 变体的一个成员; 服务端按 `type` 分派, 未知\n";
     out += "  `type` 返回 `nullopt` (连接不断开)。\n";
+    out += "- `delta` 里与具体 `type` 相关的字段: `streamRole` 只在 `stream_begin` 上出现\n";
+    out += "  (段角色: assistant/think), `tipType` 只在 `message_tip` 上出现 (info/warning/\n";
+    out += "  error), `genPhase` 只在 `gen_status` 上出现 (waiting/tool_call/done)。\n";
+    out += "- `message` 是整条展示消息 (`insert_message` / `update_message`): 消息边界、正文、\n";
+    out += "  工具参数与结果、成败、耗时、默认折叠都在这一条里; 文本增量 (`text_token` /\n";
+    out += "  `thinking_token`) 只带追加的文本。\n";
     out += "- `error.code` 取值见 `WireErrorCode`: 0 internal / 1 invalid state / 2 session not\n";
     out += "  found / 3 session mismatch / 4 invalid args / 5 message not found; 未知码按 0 处理。\n";
     out += "- 连接阶段取值见 `WireConnectionStage`: unhandshaken / unbound / ready /\n";

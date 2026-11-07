@@ -56,6 +56,19 @@ using namespace agentxx::client;
 
 namespace {
 
+/// 夹具: 把一行当作 agent 下发的 insert_message 放进展示历史
+void pushRow(TUIRenderState& st, TUIMessage row) {
+    static uint64_t seq = 0;
+    if (row.id.empty()) {
+        row.id = fmt::format("t_int_row_{}", ++seq);
+    }
+    agentxx::agent::WireDelta d;
+    d.type    = agentxx::agent::WireDelta::Type::InsertMessage;
+    d.msgId   = row.id;
+    d.message = std::make_shared<TUIMessage>(std::move(row));
+    st.replica.applyDelta(d);
+}
+
 /// 统计子串出现次数 (校验同一标签不重复渲染)
 size_t countOccurrences(std::string_view text, std::string_view needle) {
     if (needle.empty()) {
@@ -118,10 +131,10 @@ struct InterruptFixture {
         m->interrupt->interruptId = interruptId;
         m->interrupt->ui          = uiJson;
         sharedState.mutate([&](TUIRenderState& st) {
-            st.messages.push_back(std::move(m));
+            pushRow(st, std::move(*m));
         });
         comp->attachInterruptChannel(interruptId, ch);
-        return sharedState.readSnapshot()->messages.size() - 1;
+        return sharedState.readSnapshot()->messages().size() - 1;
     }
 
     /// 渲染消息列表 (刷新中断控件命中区域) 并取回文本
@@ -249,7 +262,7 @@ struct InterruptFixture {
     /// 读取消息的快照副本 (校验状态用)
     TUIMessage snapshotMsg(size_t mi) {
         auto snap = sharedState.readSnapshot();
-        return (mi < snap->messages.size()) ? *snap->messages[mi] : TUIMessage{};
+        return (mi < snap->messages().size()) ? *snap->messages()[mi] : TUIMessage{};
     }
 
     /// 指定消息指定控件的状态副本 (测试便捷访问; 空/未知 id 返回默认值)
@@ -1150,8 +1163,8 @@ void test_expired_and_release_channel() {
     // 过期状态: 不再可交互
     auto mi2 = f.addInterrupt(ch, ui, 4);
     f.sharedState.mutate([&](TUIRenderState& st) {
-        if (mi2 < st.messages.size() && st.messages[mi2]->interrupt) {
-            st.messages[mi2]->interrupt->interruptStatus = TUIMessage::InterruptStatus::Expired;
+        if (mi2 < st.messages().size() && st.messages()[mi2]->interrupt) {
+            st.messages()[mi2]->interrupt->interruptStatus = TUIMessage::InterruptStatus::Expired;
         }
     });
     const std::string text = f.render();
@@ -1242,7 +1255,7 @@ void test_head_trim_shifts_hit_indices() {
             auto m  = std::make_shared<TUIMessage>();
             m->role = TUIMessage::Role::Assistant;
             m->text = "leading message";
-            st.messages.push_back(std::move(m));
+            pushRow(st, std::move(*m));
         }
     });
     auto         ch = f.makeChannel();
@@ -1257,7 +1270,7 @@ void test_head_trim_shifts_hit_indices() {
 
     // 清理头部两条: 消息数据删除 + 组件下标平移 (中间不渲染, 与运行期顺序一致)
     f.sharedState.mutate([&](TUIRenderState& st) {
-        st.messages.erase(st.messages.begin(), st.messages.begin() + 2);
+        st.replica.trimHead(2);
     });
     f.comp->onHistoryTrimmed(2);
 
@@ -1271,7 +1284,7 @@ void test_head_trim_shifts_hit_indices() {
     XX_TEST_EXPECT_EQ(f.comp->activeInterruptMsg(), size_t{0});
     // 若命中区未平移 (msgIndex 仍是 2), 这条消息已不存在 -> 点击被静默丢弃,
     // 激活态不会建立
-    XX_TEST_EXPECT_EQ(f.sharedState.readSnapshot()->messages.size(), size_t{1});
+    XX_TEST_EXPECT_EQ(f.sharedState.readSnapshot()->messages().size(), size_t{1});
 }
 
 TestResult testTuiInterrupt() {

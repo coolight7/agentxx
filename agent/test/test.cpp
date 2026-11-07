@@ -80,6 +80,7 @@
 #include "agentxx-test/core/test_ui_kit.h"
 #include "agentxx-test/core/test_usage_ledger.h"
 #include "agentxx-test/core/test_util_misc.h"
+#include "agentxx-test/core/test_view_replica.h"
 #include "agentxx-test/core/test_wire_roundtrip.h"
 #include "agentxx-test/core/test_wire_schema.h"
 #include "agentxx-test/core/test_worktree.h"
@@ -367,6 +368,7 @@ int main(int argn, char** argv) {
         runSync("storage_consistency", agentxx::test::testStorageConsistency);
         runSync("writer_lease", agentxx::test::testWriterLease);
         runSync("toolcall_args", agentxx::test::testToolcallArgs);
+        runSync("view_replica", agentxx::test::testViewReplica);
         runSync("wire_roundtrip", agentxx::test::testWireRoundtrip);
         runSync("wire_schema", agentxx::test::testWireSchema);
         runSync("test_modules", agentxx::test::testTestModules);

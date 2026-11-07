@@ -72,7 +72,11 @@ public:
 
 protected:
 
-    void emitDeltaText(std::string_view kind, std::string_view chunk) override {
+    void emitDeltaText(
+        std::string_view /*msgId*/,
+        std::string_view kind,
+        std::string_view chunk
+    ) override {
         if (kind != "text") {
             return;
         }

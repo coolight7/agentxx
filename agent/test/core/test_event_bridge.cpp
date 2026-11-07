@@ -29,6 +29,12 @@ int g_eb_failed = 0;
 namespace agentxx {
 namespace test {
 
+namespace {
+/// 类型简称 (本文件大量断言增量类型与消息角色)
+using DT = agentxx::agent::WireDelta::Type;
+using VM = agentxx::agent::ViewMessage;
+} // namespace
+
 /// 测试用 IO: 覆写 sendToPeer 记录收到的 delta (等价于 server 端点缓冲行为)
 class TestEbIO : public agentxx::agent::AgentIOBase {
 public:
@@ -94,6 +100,7 @@ asio::awaitable<void> test_eventbridge_token() {
         = std::make_shared<agentxx::events::EventBus>(co_await asio::this_coro::executor);
     auto session = std::make_shared<agentxx::agent::Session>();
     auto io      = std::make_shared<TestEbIO>();
+    session->io  = io; // 有对端才建直播槽并产出流式增量
 
     // 订阅 ModelToken 事件
     std::atomic<int> tokenEventCount{0};
@@ -150,15 +157,20 @@ asio::awaitable<void> test_eventbridge_token() {
     XX_TEST_EXPECT_EQ(tokenEventCount.load(), 2);
     XX_TEST_EXPECT_EQ(lastToken, std::string{" World"});
 
-    // 同时应产出 TextToken delta, 且 seq 会话级单调递增
-    XX_TEST_EXPECT_EQ(io->deltas.size(), size_t{2});
-    if (io->deltas.size() == 2) {
-        XX_TEST_EXPECT_TRUE(io->deltas[0].type == agentxx::agent::WireDelta::Type::TextToken);
+    // 同时应产出 stream_begin + text_token 增量, 且 seq 会话级单调递增
+    XX_TEST_EXPECT_EQ(io->deltas.size(), size_t{3});
+    if (io->deltas.size() == 3) {
+        XX_TEST_EXPECT_TRUE(io->deltas[0].type == DT::StreamBegin);
+        XX_TEST_EXPECT_TRUE(io->deltas[0].streamRole == VM::Role::Assistant);
+        XX_TEST_EXPECT_FALSE(io->deltas[0].msgId.empty());
         XX_TEST_EXPECT_EQ(io->deltas[0].seq, uint64_t{1});
-        XX_TEST_EXPECT_EQ(io->deltas[0].text, std::string{"Hello"});
-        XX_TEST_EXPECT_TRUE(io->deltas[1].type == agentxx::agent::WireDelta::Type::TextToken);
+        XX_TEST_EXPECT_TRUE(io->deltas[1].type == DT::TextToken);
+        XX_TEST_EXPECT_EQ(io->deltas[1].msgId, io->deltas[0].msgId);
         XX_TEST_EXPECT_EQ(io->deltas[1].seq, uint64_t{2});
-        XX_TEST_EXPECT_EQ(io->deltas[1].text, std::string{" World"});
+        XX_TEST_EXPECT_EQ(io->deltas[1].text, std::string{"Hello"});
+        XX_TEST_EXPECT_TRUE(io->deltas[2].type == DT::TextToken);
+        XX_TEST_EXPECT_EQ(io->deltas[2].seq, uint64_t{3});
+        XX_TEST_EXPECT_EQ(io->deltas[2].text, std::string{" World"});
     }
 
     co_return;
@@ -170,6 +182,7 @@ asio::awaitable<void> test_eventbridge_nullbus_passthrough() {
     // 不设置 bus (bus == nullptr)
     auto session = std::make_shared<agentxx::agent::Session>();
     auto io      = std::make_shared<TestEbIO>();
+    session->io  = io;
 
     std::atomic<int>                     origCbCount{0};
     neograph::graph::GraphStreamCallback origCb = [&](const neograph::graph::GraphEvent& event) {
@@ -186,8 +199,8 @@ asio::awaitable<void> test_eventbridge_nullbus_passthrough() {
         neograph::json(std::string{"x"})
     });
     XX_TEST_EXPECT_EQ(origCbCount.load(), 1);
-    // 无 bus 时 WireDelta 翻译仍正常
-    XX_TEST_EXPECT_EQ(io->deltas.size(), size_t{1});
+    // 无 bus 时 WireDelta 翻译仍正常 (stream_begin + text_token)
+    XX_TEST_EXPECT_EQ(io->deltas.size(), size_t{2});
 
     co_return;
 }
@@ -298,7 +311,7 @@ asio::awaitable<void> test_eventbridge_message_tip() {
     co_return;
 }
 
-/// 验证 CHANNEL_WRITE messages: assistant(tool_calls) -> ToolStart + 历史追加
+/// 验证 CHANNEL_WRITE messages: assistant(tool_calls) -> 工具行 insert_message + 历史追加
 asio::awaitable<void> test_eventbridge_channel_write_messages() {
     auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
     auto session      = std::make_shared<agentxx::agent::Session>();
@@ -328,12 +341,21 @@ asio::awaitable<void> test_eventbridge_channel_write_messages() {
                        }
     });
 
-    // 产出 ToolStart delta
+    // 工具行就是普通历史行: 整条 insert_message (未完成状态)
     XX_TEST_EXPECT_EQ(io->deltas.size(), size_t{1});
     if (!io->deltas.empty()) {
-        XX_TEST_EXPECT_TRUE(io->deltas[0].type == agentxx::agent::WireDelta::Type::ToolStart);
-        XX_TEST_EXPECT_EQ(io->deltas[0].toolName, std::string{"bash"});
-        XX_TEST_EXPECT_EQ(io->deltas[0].toolCallId, std::string{"call_1"});
+        const auto& d = io->deltas[0];
+        XX_TEST_EXPECT_TRUE(d.type == DT::InsertMessage);
+        if (d.message) {
+            XX_TEST_EXPECT_TRUE(d.message->role == VM::Role::Tool);
+            XX_TEST_EXPECT_EQ(d.message->text, std::string{"{\"cmd\":\"ls\"}"});
+            XX_TEST_EXPECT_TRUE(d.message->tool.has_value());
+            if (d.message->tool) {
+                XX_TEST_EXPECT_EQ(d.message->tool->toolName, std::string{"bash"});
+                XX_TEST_EXPECT_EQ(d.message->tool->toolCallId, std::string{"call_1"});
+                XX_TEST_EXPECT_FALSE(d.message->tool->toolFinished);
+            }
+        }
     }
     // 历史已追加
     XX_TEST_EXPECT_EQ(session->viewMessages.size(), size_t{1});
@@ -705,13 +727,13 @@ asio::awaitable<void> test_eventbridge_turn_tps() {
     co_return;
 }
 
-/// 验证 THINKING 流段耗时结算 (think 输出完成时才计算耗时并回填):
-/// - token WireDelta 不再携带 durationMs (修复"流式刚开始就显示耗时")
-/// - 离开 THINKING 时先发空文本 ThinkToken 结算包 (携带 startTimeMs/durationMs),
-///   再发正文首个 token 的 WireDelta
-/// - 思考后直接 tool_calls (无正文): 结算包先于 ToolStart 到达
-/// - 纯思考流 (无正文无工具): 结算包先于 NodeEnd 到达
-/// - 结算幂等: 同一段落只结算一次
+/// 验证思考/正文分段与定稿 (直播槽 -> 正式行):
+/// - 一段一行: 思考 -> 正文是一次段切换, 上一段先定稿成行 (insert_message) 再开新段
+/// - 段内 token 只带文本; 耗时在定稿时写进行 (durationMs), 协议不再有"结算包"增量
+/// - 思考后直接 tool_calls (无正文): 思考段在 CHANNEL_WRITE 时定稿
+/// - 纯思考流 (无正文无工具): 思考段在 NodeEnd 前定稿
+/// - 纯正文流: 只有正文行
+/// - CHANNEL_WRITE 的定稿文本与已有段一致时不额外发整条覆盖 (幂等)
 asio::awaitable<void> test_eventbridge_think_duration() {
     auto makeChunk = [](int type, std::string data) {
         return neograph::json{
@@ -721,17 +743,25 @@ asio::awaitable<void> test_eventbridge_think_duration() {
     };
     using ET = neograph::graph::GraphEvent::Type;
     using DT = agentxx::agent::WireDelta::Type;
+    using VM = agentxx::agent::ViewMessage;
 
-    // ---- 流程 1: think -> 正文: 切换时结算, 且正文 token 不携带时长 ----
+    auto sleepMs = [](int ms) -> asio::awaitable<void> {
+        co_await asio::steady_timer(
+            co_await asio::this_coro::executor,
+            std::chrono::milliseconds(ms)
+        )
+            .async_wait(asio::use_awaitable);
+    };
+
+    // ---- 流程 1: think -> 正文: 切段时思考行定稿, 节点结束时正文行定稿 ----
     {
         auto agentContext         = std::make_shared<agentxx::agent::AgentContext>();
         agentContext->agentConfig = std::make_shared<agentxx::agent::AgentConfig>();
-        agentContext->bus
-            = std::make_shared<agentxx::events::EventBus>(co_await asio::this_coro::executor);
-        auto session  = std::make_shared<agentxx::agent::Session>();
-        auto io       = std::make_shared<TestEbIO>();
-        auto bridge   = makeTestBridge(agentContext, session, io);
-        auto bridgeCb = bridge->makeCallback();
+        auto session              = std::make_shared<agentxx::agent::Session>();
+        auto io                   = std::make_shared<TestEbIO>();
+        session->io               = io;
+        auto bridge               = makeTestBridge(agentContext, session, io);
+        auto bridgeCb             = bridge->makeCallback();
 
         bridgeCb(neograph::graph::GraphEvent{ET::NODE_START, "llm", neograph::json::object()});
         bridgeCb(neograph::graph::GraphEvent{
@@ -739,11 +769,7 @@ asio::awaitable<void> test_eventbridge_think_duration() {
             "llm",
             makeChunk(neograph::ChatStreamChunk::TYPE_THINKING, "a")
         });
-        co_await asio::steady_timer(
-            co_await asio::this_coro::executor,
-            std::chrono::milliseconds(60)
-        )
-            .async_wait(asio::use_awaitable);
+        co_await sleepMs(60);
         bridgeCb(neograph::graph::GraphEvent{
             ET::LLM_TOKEN,
             "llm",
@@ -755,42 +781,65 @@ asio::awaitable<void> test_eventbridge_think_duration() {
             makeChunk(neograph::ChatStreamChunk::TYPE_CONTENT, "x")
         });
 
-        // NodeStart, Think(a), Think(b), 结算包, Text(x)
-        XX_TEST_EXPECT_EQ(io->deltas.size(), size_t{5});
-        if (io->deltas.size() == 5) {
-            XX_TEST_EXPECT_TRUE(io->deltas[1].type == DT::ThinkToken);
-            XX_TEST_EXPECT_EQ(io->deltas[1].text, std::string{"a"});
-            // 流式 token 不携带时长 (修复点: 首个 think token 即携带微小耗时)
-            XX_TEST_EXPECT_EQ(io->deltas[1].durationMs, int64_t{0});
+        // NodeStart, StreamBegin(Think), Think(a), Think(b),
+        // InsertMessage(思考行), StreamBegin(Assistant), Text(x)
+        XX_TEST_EXPECT_EQ(io->deltas.size(), size_t{7});
+        if (io->deltas.size() == 7) {
+            XX_TEST_EXPECT_TRUE(io->deltas[1].type == DT::StreamBegin);
+            XX_TEST_EXPECT_TRUE(io->deltas[1].streamRole == VM::Role::Think);
+            const auto thinkId = io->deltas[1].msgId;
+            XX_TEST_EXPECT_FALSE(thinkId.empty());
+            XX_TEST_EXPECT_TRUE(io->deltas[2].type == DT::ThinkToken);
+            XX_TEST_EXPECT_EQ(io->deltas[2].msgId, thinkId);
+            XX_TEST_EXPECT_EQ(io->deltas[2].text, std::string{"a"});
+            // 流式 token 不带耗时 (耗时在定稿行上)
             XX_TEST_EXPECT_EQ(io->deltas[2].durationMs, int64_t{0});
-
-            // 结算包: 空文本 ThinkToken, 携带段起点与总耗时 (>= 50ms)
-            const auto& fin = io->deltas[3];
-            XX_TEST_EXPECT_TRUE(fin.type == DT::ThinkToken);
-            XX_TEST_EXPECT_TRUE(fin.text.empty());
-            XX_TEST_EXPECT_FALSE(fin.think.has_value());
-            XX_TEST_EXPECT_TRUE(fin.startTimeMs > 0);
-            XX_TEST_EXPECT_TRUE(fin.durationMs >= 50 && fin.durationMs < 10000);
-
-            // 正文首个 token 在结算包之后, 且不携带时长
-            XX_TEST_EXPECT_TRUE(io->deltas[4].type == DT::TextToken);
-            XX_TEST_EXPECT_EQ(io->deltas[4].text, std::string{"x"});
-            XX_TEST_EXPECT_EQ(io->deltas[4].durationMs, int64_t{0});
+            XX_TEST_EXPECT_EQ(io->deltas[3].durationMs, int64_t{0});
+            // 定稿行: 全文 + 段耗时 (>= 50ms) + 沿用流式段的 id
+            XX_TEST_EXPECT_TRUE(io->deltas[4].type == DT::InsertMessage);
+            if (io->deltas[4].message) {
+                XX_TEST_EXPECT_TRUE(io->deltas[4].message->role == VM::Role::Think);
+                XX_TEST_EXPECT_EQ(io->deltas[4].message->id, thinkId);
+                XX_TEST_EXPECT_EQ(io->deltas[4].message->text, std::string{"ab"});
+                XX_TEST_EXPECT_TRUE(io->deltas[4].message->collapsed);
+                XX_TEST_EXPECT_TRUE(io->deltas[4].message->startTimeMs > 0);
+                XX_TEST_EXPECT_TRUE(
+                    io->deltas[4].message->durationMs >= 50
+                    && io->deltas[4].message->durationMs < 10000
+                );
+            }
+            XX_TEST_EXPECT_TRUE(io->deltas[5].type == DT::StreamBegin);
+            XX_TEST_EXPECT_TRUE(io->deltas[5].streamRole == VM::Role::Assistant);
+            XX_TEST_EXPECT_TRUE(io->deltas[6].type == DT::TextToken);
+            XX_TEST_EXPECT_EQ(io->deltas[6].text, std::string{"x"});
         }
 
-        // 节点结束: 段落已结算, 不再重复发结算包
+        // 节点结束: 未收尾的正文段定稿成行, 之后才是 NodeEnd
         bridgeCb(neograph::graph::GraphEvent{ET::NODE_END, "llm", neograph::json::object()});
-        XX_TEST_EXPECT_EQ(io->deltas.size(), size_t{6});
-        if (io->deltas.size() == 6) {
-            XX_TEST_EXPECT_TRUE(io->deltas[5].type == DT::NodeEnd);
+        XX_TEST_EXPECT_EQ(io->deltas.size(), size_t{9});
+        if (io->deltas.size() == 9) {
+            XX_TEST_EXPECT_TRUE(io->deltas[7].type == DT::InsertMessage);
+            if (io->deltas[7].message) {
+                XX_TEST_EXPECT_TRUE(io->deltas[7].message->role == VM::Role::Assistant);
+                XX_TEST_EXPECT_EQ(io->deltas[7].message->text, std::string{"x"});
+            }
+            XX_TEST_EXPECT_TRUE(io->deltas[8].type == DT::NodeEnd);
+        }
+        XX_TEST_EXPECT_EQ(session->viewMessages.size(), size_t{2});
+        if (session->viewMessages.size() == 2) {
+            XX_TEST_EXPECT_TRUE(session->viewMessages[0].role == VM::Role::Think);
+            XX_TEST_EXPECT_EQ(session->viewMessages[0].text, std::string{"ab"});
+            XX_TEST_EXPECT_TRUE(session->viewMessages[1].role == VM::Role::Assistant);
+            XX_TEST_EXPECT_EQ(session->viewMessages[1].text, std::string{"x"});
         }
     }
 
-    // ---- 流程 2: think -> tool_calls (无正文): CHANNEL_WRITE 前结算 ----
+    // ---- 流程 2: think -> tool_calls (无正文): 思考行在 CHANNEL_WRITE 前定稿 ----
     {
         auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
         auto session      = std::make_shared<agentxx::agent::Session>();
         auto io           = std::make_shared<TestEbIO>();
+        session->io       = io;
         auto bridge       = makeTestBridge(agentContext, session, io);
         auto bridgeCb     = bridge->makeCallback();
 
@@ -800,11 +849,7 @@ asio::awaitable<void> test_eventbridge_think_duration() {
             "llm",
             makeChunk(neograph::ChatStreamChunk::TYPE_THINKING, "t")
         });
-        co_await asio::steady_timer(
-            co_await asio::this_coro::executor,
-            std::chrono::milliseconds(50)
-        )
-            .async_wait(asio::use_awaitable);
+        co_await sleepMs(50);
 
         neograph::json msgJson{
             {"role",       "assistant"},
@@ -820,22 +865,29 @@ asio::awaitable<void> test_eventbridge_think_duration() {
             neograph::json{{"channel", "messages"}, {"value", neograph::json::array({msgJson})}}
         });
 
-        // NodeStart, Think(t), 结算包, ToolStart
-        XX_TEST_EXPECT_EQ(io->deltas.size(), size_t{4});
-        if (io->deltas.size() == 4) {
-            const auto& fin = io->deltas[2];
-            XX_TEST_EXPECT_TRUE(fin.type == DT::ThinkToken);
-            XX_TEST_EXPECT_TRUE(fin.text.empty());
-            XX_TEST_EXPECT_TRUE(fin.durationMs >= 40);
-            XX_TEST_EXPECT_TRUE(io->deltas[3].type == DT::ToolStart);
+        // NodeStart, StreamBegin, Think(t), InsertMessage(思考行), InsertMessage(工具行)
+        XX_TEST_EXPECT_EQ(io->deltas.size(), size_t{5});
+        if (io->deltas.size() == 5) {
+            XX_TEST_EXPECT_TRUE(io->deltas[3].type == DT::InsertMessage);
+            if (io->deltas[3].message) {
+                XX_TEST_EXPECT_TRUE(io->deltas[3].message->role == VM::Role::Think);
+                XX_TEST_EXPECT_TRUE(io->deltas[3].message->durationMs >= 40);
+            }
+            XX_TEST_EXPECT_TRUE(io->deltas[4].type == DT::InsertMessage);
+            if (io->deltas[4].message) {
+                XX_TEST_EXPECT_TRUE(io->deltas[4].message->role == VM::Role::Tool);
+                XX_TEST_EXPECT_EQ(io->deltas[4].message->tool->toolName, std::string{"bash"});
+            }
         }
+        XX_TEST_EXPECT_EQ(session->viewMessages.size(), size_t{2});
     }
 
-    // ---- 流程 3: 纯思考流 -> NODE_END 前结算 ----
+    // ---- 流程 3: 纯思考流 -> NodeEnd 前定稿 ----
     {
         auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
         auto session      = std::make_shared<agentxx::agent::Session>();
         auto io           = std::make_shared<TestEbIO>();
+        session->io       = io;
         auto bridge       = makeTestBridge(agentContext, session, io);
         auto bridgeCb     = bridge->makeCallback();
 
@@ -845,29 +897,28 @@ asio::awaitable<void> test_eventbridge_think_duration() {
             "llm",
             makeChunk(neograph::ChatStreamChunk::TYPE_THINKING, "z")
         });
-        co_await asio::steady_timer(
-            co_await asio::this_coro::executor,
-            std::chrono::milliseconds(50)
-        )
-            .async_wait(asio::use_awaitable);
+        co_await sleepMs(50);
         bridgeCb(neograph::graph::GraphEvent{ET::NODE_END, "llm", neograph::json::object()});
 
-        // NodeStart, Think(z), 结算包, NodeEnd
-        XX_TEST_EXPECT_EQ(io->deltas.size(), size_t{4});
-        if (io->deltas.size() == 4) {
-            const auto& fin = io->deltas[2];
-            XX_TEST_EXPECT_TRUE(fin.type == DT::ThinkToken);
-            XX_TEST_EXPECT_TRUE(fin.text.empty());
-            XX_TEST_EXPECT_TRUE(fin.durationMs >= 40);
-            XX_TEST_EXPECT_TRUE(io->deltas[3].type == DT::NodeEnd);
+        // NodeStart, StreamBegin, Think(z), InsertMessage(思考行), NodeEnd
+        XX_TEST_EXPECT_EQ(io->deltas.size(), size_t{5});
+        if (io->deltas.size() == 5) {
+            XX_TEST_EXPECT_TRUE(io->deltas[3].type == DT::InsertMessage);
+            if (io->deltas[3].message) {
+                XX_TEST_EXPECT_TRUE(io->deltas[3].message->role == VM::Role::Think);
+                XX_TEST_EXPECT_EQ(io->deltas[3].message->text, std::string{"z"});
+                XX_TEST_EXPECT_TRUE(io->deltas[3].message->durationMs >= 40);
+            }
+            XX_TEST_EXPECT_TRUE(io->deltas[4].type == DT::NodeEnd);
         }
     }
 
-    // ---- 流程 4: 纯正文流: 不产生结算包 ----
+    // ---- 流程 4: 纯正文流: 只有正文行 ----
     {
         auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
         auto session      = std::make_shared<agentxx::agent::Session>();
         auto io           = std::make_shared<TestEbIO>();
+        session->io       = io;
         auto bridge       = makeTestBridge(agentContext, session, io);
         auto bridgeCb     = bridge->makeCallback();
 
@@ -879,19 +930,24 @@ asio::awaitable<void> test_eventbridge_think_duration() {
         });
         bridgeCb(neograph::graph::GraphEvent{ET::NODE_END, "llm", neograph::json::object()});
 
-        XX_TEST_EXPECT_EQ(io->deltas.size(), size_t{3});
+        // NodeStart, StreamBegin, Text(y), InsertMessage(正文行), NodeEnd
+        XX_TEST_EXPECT_EQ(io->deltas.size(), size_t{5});
         for (const auto& d : io->deltas) {
-            XX_TEST_EXPECT_FALSE(
-                d.type == DT::ThinkToken && d.text.empty() && !d.think.has_value()
-            );
+            // 没有思考段: 不产出 think_token
+            XX_TEST_EXPECT_FALSE(d.type == DT::ThinkToken);
+        }
+        if (io->deltas.size() == 5 && io->deltas[3].message) {
+            XX_TEST_EXPECT_TRUE(io->deltas[3].message->role == VM::Role::Assistant);
+            XX_TEST_EXPECT_EQ(io->deltas[3].message->text, std::string{"y"});
         }
     }
 
-    // ---- 流程 5: think 流式 -> CHANNEL_WRITE: 历史 Think 消息必须包含思考耗时 ----
+    // ---- 流程 5: 流式文本与 CHANNEL_WRITE 一致: 不额外发整条覆盖 ----
     {
         auto agentContext = std::make_shared<agentxx::agent::AgentContext>();
         auto session      = std::make_shared<agentxx::agent::Session>();
         auto io           = std::make_shared<TestEbIO>();
+        session->io       = io;
         auto bridge       = makeTestBridge(agentContext, session, io);
         auto bridgeCb     = bridge->makeCallback();
 
@@ -901,13 +957,9 @@ asio::awaitable<void> test_eventbridge_think_duration() {
             "llm",
             makeChunk(neograph::ChatStreamChunk::TYPE_THINKING, "thinking...")
         });
-        co_await asio::steady_timer(
-            co_await asio::this_coro::executor,
-            std::chrono::milliseconds(50)
-        )
-            .async_wait(asio::use_awaitable);
+        co_await sleepMs(50);
 
-        // 切换到正文, 触发 finalizeThinkSegment
+        // 切换到正文: 思考段先定稿
         bridgeCb(neograph::graph::GraphEvent{
             ET::LLM_TOKEN,
             "llm",
@@ -924,6 +976,14 @@ asio::awaitable<void> test_eventbridge_think_duration() {
             "llm",
             neograph::json{{"channel", "messages"}, {"value", neograph::json::array({msgJson})}}
         });
+
+        // NodeStart, StreamBegin(Think), Think, InsertMessage(思考行),
+        // StreamBegin(Assistant), Text(ans), InsertMessage(正文行)
+        XX_TEST_EXPECT_EQ(io->deltas.size(), size_t{7});
+        for (const auto& d : io->deltas) {
+            // 文本与段一致: 不再追加整条覆盖
+            XX_TEST_EXPECT_FALSE(d.type == DT::UpdateMessage);
+        }
 
         // session->viewMessages 包含 Think + Assistant
         XX_TEST_EXPECT_EQ(session->viewMessages.size(), size_t{2});
@@ -947,7 +1007,7 @@ asio::awaitable<void> test_eventbridge_think_duration() {
 /// 验证生成阶段占位提示 (GenStatus): 模型节点开始执行 / 工具调用开始 / 生成结束
 /// - 生成开始标记 (模型调用节点在请求发出后下发) -> GenStatus::Waiting
 /// - 工具调用开始标记 (Provider 首个 tool_call 分片) -> GenStatus::ToolCall (含工具名)
-/// - 工具调用开始时思考段已结算: 结算包先于占位提示到达
+/// - 工具调用开始时思考段已定稿: 思考行先于占位提示到达
 /// - 节点结束 -> GenStatus::Done (清除占位提示)
 /// - 生成阶段标记不是模型输出文本: 不产出文本 token, 不参与 tps 统计
 asio::awaitable<void> test_eventbridge_gen_status() {
@@ -967,6 +1027,7 @@ asio::awaitable<void> test_eventbridge_gen_status() {
         = std::make_shared<agentxx::events::EventBus>(co_await asio::this_coro::executor);
     auto session  = std::make_shared<agentxx::agent::Session>();
     auto io       = std::make_shared<TestEbIO>();
+    session->io   = io;
     auto bridge   = makeTestBridge(agentContext, session, io);
     auto bridgeCb = bridge->makeCallback();
 
@@ -984,41 +1045,46 @@ asio::awaitable<void> test_eventbridge_gen_status() {
         XX_TEST_EXPECT_TRUE(io->deltas[1].text.empty());
     }
 
-    // 思考 token: 占位提示之后仍是正常的思考流
+    // 思考 token: 占位提示之后仍是正常的思考流 (stream_begin + think_token)
     bridgeCb(neograph::graph::GraphEvent{
         ET::LLM_TOKEN,
         "llm",
         makeChunk(neograph::ChatStreamChunk::TYPE_THINKING, "thinking")
     });
-    XX_TEST_EXPECT_EQ(io->deltas.size(), size_t{3});
-    if (io->deltas.size() == 3) {
-        XX_TEST_EXPECT_TRUE(io->deltas[2].type == DT::ThinkToken);
-        XX_TEST_EXPECT_EQ(io->deltas[2].text, std::string{"thinking"});
+    XX_TEST_EXPECT_EQ(io->deltas.size(), size_t{4});
+    if (io->deltas.size() == 4) {
+        XX_TEST_EXPECT_TRUE(io->deltas[2].type == DT::StreamBegin);
+        XX_TEST_EXPECT_TRUE(io->deltas[2].streamRole == VM::Role::Think);
+        XX_TEST_EXPECT_TRUE(io->deltas[3].type == DT::ThinkToken);
+        XX_TEST_EXPECT_EQ(io->deltas[3].text, std::string{"thinking"});
     }
 
-    // 工具调用开始 (思考后直接 tool_calls): 先结算思考段, 再下发占位提示
+    // 工具调用开始 (思考后直接 tool_calls): 先定稿思考行, 再下发占位提示
     bridgeCb(neograph::graph::GraphEvent{
         ET::LLM_TOKEN,
         "llm",
         makeChunk(agentxx::protocol::chunk_type::kToolCallStart, "read_file")
     });
-    XX_TEST_EXPECT_EQ(io->deltas.size(), size_t{5});
-    if (io->deltas.size() == 5) {
-        // 结算包: 空文本 ThinkToken (回填思考耗时)
-        XX_TEST_EXPECT_TRUE(io->deltas[3].type == DT::ThinkToken);
-        XX_TEST_EXPECT_TRUE(io->deltas[3].text.empty());
-        XX_TEST_EXPECT_TRUE(io->deltas[4].type == DT::GenStatus);
-        XX_TEST_EXPECT_TRUE(io->deltas[4].genPhase == GP::ToolCall);
-        XX_TEST_EXPECT_EQ(io->deltas[4].toolName, std::string{"read_file"});
+    XX_TEST_EXPECT_EQ(io->deltas.size(), size_t{6});
+    if (io->deltas.size() == 6) {
+        // 定稿行: 思考全文 + 段耗时
+        XX_TEST_EXPECT_TRUE(io->deltas[4].type == DT::InsertMessage);
+        if (io->deltas[4].message) {
+            XX_TEST_EXPECT_TRUE(io->deltas[4].message->role == VM::Role::Think);
+            XX_TEST_EXPECT_EQ(io->deltas[4].message->text, std::string{"thinking"});
+        }
+        XX_TEST_EXPECT_TRUE(io->deltas[5].type == DT::GenStatus);
+        XX_TEST_EXPECT_TRUE(io->deltas[5].genPhase == GP::ToolCall);
+        XX_TEST_EXPECT_EQ(io->deltas[5].toolName, std::string{"read_file"});
     }
 
     // 节点结束: 生成结束, 先下发 Done 清除占位提示, 再发 NodeEnd
     bridgeCb(neograph::graph::GraphEvent{ET::NODE_END, "llm", neograph::json::object()});
-    XX_TEST_EXPECT_EQ(io->deltas.size(), size_t{7});
-    if (io->deltas.size() == 7) {
-        XX_TEST_EXPECT_TRUE(io->deltas[5].type == DT::GenStatus);
-        XX_TEST_EXPECT_TRUE(io->deltas[5].genPhase == GP::Done);
-        XX_TEST_EXPECT_TRUE(io->deltas[6].type == DT::NodeEnd);
+    XX_TEST_EXPECT_EQ(io->deltas.size(), size_t{8});
+    if (io->deltas.size() == 8) {
+        XX_TEST_EXPECT_TRUE(io->deltas[6].type == DT::GenStatus);
+        XX_TEST_EXPECT_TRUE(io->deltas[6].genPhase == GP::Done);
+        XX_TEST_EXPECT_TRUE(io->deltas[7].type == DT::NodeEnd);
     }
 
     // 生成阶段标记不计入 tps 输出 (只统计真实输出 token)
@@ -1027,7 +1093,7 @@ asio::awaitable<void> test_eventbridge_gen_status() {
     co_return;
 }
 
-/// 验证出错时清除生成占位提示: 思考流中途出错 -> 结算思考段 + GenStatus::Done
+/// 验证出错时清除生成占位提示: 中途出错 -> 未定稿的段先定稿 + GenStatus::Done
 asio::awaitable<void> test_eventbridge_gen_status_error() {
     auto makeChunk = [](int type, std::string data) {
         return neograph::json{

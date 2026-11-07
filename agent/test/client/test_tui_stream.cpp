@@ -343,447 +343,412 @@ public:
     }
 };
 
-// 场景 1: 加密 thinking (text 为空, think.isEncrypted=true) -> 思考开始时立即展示 ->
-// 随后收到 assistant 文本 -> 轮次结束回填 token 数
+namespace {
+
+// ---- 常用 op 构造 (形态与 agent 端 EventBridge 下发的一致) ----
+
+WireDelta streamBegin(
+    std::string                           msgId,
+    ViewMessage::Role                     role,
+    std::optional<ViewMessage::ThinkData> think = std::nullopt
+) {
+    WireDelta d;
+    d.type        = WireDelta::Type::StreamBegin;
+    d.msgId       = std::move(msgId);
+    d.streamRole  = role;
+    d.think       = std::move(think);
+    d.startTimeMs = 1000;
+    return d;
+}
+
+WireDelta textToken(std::string msgId, std::string text) {
+    WireDelta d;
+    d.type  = WireDelta::Type::TextToken;
+    d.msgId = std::move(msgId);
+    d.text  = std::move(text);
+    return d;
+}
+
+WireDelta thinkToken(std::string msgId, std::string text) {
+    WireDelta d;
+    d.type  = WireDelta::Type::ThinkToken;
+    d.msgId = std::move(msgId);
+    d.text  = std::move(text);
+    return d;
+}
+
+WireDelta insertRow(ViewMessage m) {
+    WireDelta d;
+    d.type    = WireDelta::Type::InsertMessage;
+    d.msgId   = m.id;
+    d.message = std::make_shared<ViewMessage>(std::move(m));
+    return d;
+}
+
+WireDelta updateRow(ViewMessage m) {
+    WireDelta d;
+    d.type    = WireDelta::Type::UpdateMessage;
+    d.msgId   = m.id;
+    d.message = std::make_shared<ViewMessage>(std::move(m));
+    return d;
+}
+
+WireDelta streamEnd(std::string msgId) {
+    WireDelta d;
+    d.type  = WireDelta::Type::StreamEnd;
+    d.msgId = std::move(msgId);
+    return d;
+}
+
+WireDelta turnStart() {
+    WireDelta d;
+    d.type        = WireDelta::Type::TurnStart;
+    d.startTimeMs = 1000;
+    return d;
+}
+
+WireDelta turnEnd() {
+    WireDelta d;
+    d.type = WireDelta::Type::TurnEnd;
+    return d;
+}
+
+/// 用户行 (agent 在轮次开始时先下发整条用户消息)
+ViewMessage userRow(std::string id, std::string text, int64_t startMs = 1000) {
+    auto m = ViewMessage::makeText(ViewMessage::Role::User, std::move(text), startMs);
+    m.id   = std::move(id);
+    return m;
+}
+
+/// 已定稿的流式行 (agent 在段结束时用 stream_begin 的同一个 id 下发整条)
+ViewMessage streamRow(
+    std::string       id,
+    ViewMessage::Role role,
+    std::string       text,
+    int64_t           startMs    = 1000,
+    int64_t           durationMs = 0
+) {
+    auto m = ViewMessage::makeText(role, std::move(text), startMs, durationMs);
+    m.id   = std::move(id);
+    if (role == ViewMessage::Role::Think || role == ViewMessage::Role::Tool
+        || role == ViewMessage::Role::Tip || role == ViewMessage::Role::Event) {
+        m.collapsed = true;
+    }
+    return m;
+}
+
+/// 工具行 (agent 在 assistant 的 tool_calls 展开时下发, 未完成状态)
+ViewMessage toolRow(
+    std::string id,
+    std::string toolName,
+    std::string toolCallId,
+    std::string arguments,
+    bool        finished = false
+) {
+    ViewMessage m;
+    m.id        = std::move(id);
+    m.role      = ViewMessage::Role::Tool;
+    m.text      = std::move(arguments);
+    m.collapsed = true;
+    m.tool      = ViewMessage::ToolData{};
+    m.tool->toolName     = std::move(toolName);
+    m.tool->toolCallId   = std::move(toolCallId);
+    m.tool->toolFinished = finished;
+    m.startTimeMs        = 1000;
+    return m;
+}
+
+} // namespace
+} // namespace
+
+// 场景 1: 常规一轮 —— 用户行 (insert) -> turn_start -> 占位 -> stream_begin/token ->
+// 定稿行 (insert) -> turn_end
 void testTuiStreamScenario1(asio::io_context& ioCtx) {
     TestTUIClientIO client(ioCtx);
-    {
-        WireDelta d1;
-        d1.type        = WireDelta::Type::ThinkToken;
-        d1.text        = "";
-        d1.think       = ViewMessage::ThinkData{.reasoningTokens = 0, .isEncrypted = true};
-        d1.startTimeMs = 1000;
-        d1.durationMs  = 0;
-        client.testOnDelta(d1);
-    }
 
-    auto snap1 = client.sharedState().snapshot();
-    XX_TEST_EXPECT_EQ(snap1->messages.size(), (size_t)1);
-    if (snap1->messages.size() == 1) {
-        XX_TEST_EXPECT_TRUE(snap1->messages[0]->role == TUIMessage::Role::Think);
-        XX_TEST_EXPECT_TRUE(snap1->messages[0]->think.has_value());
-        if (snap1->messages[0]->think) {
-            XX_TEST_EXPECT_TRUE(snap1->messages[0]->think->isEncrypted);
-            XX_TEST_EXPECT_EQ(snap1->messages[0]->think->reasoningTokens, 0);
-        }
+    client.testOnDelta(insertRow(userRow("msg_1", "hi")));
+    client.testOnDelta(turnStart());
+    {
+        auto snap = client.sharedState().snapshot();
+        XX_TEST_EXPECT_EQ(snap->messages().size(), size_t{1});
+        XX_TEST_EXPECT_TRUE(snap->messages()[0]->role == TUIMessage::Role::User);
+        XX_TEST_EXPECT_EQ(snap->messages()[0]->text, std::string{"hi"});
+        XX_TEST_EXPECT_TRUE(snap->isStreaming);
     }
 
     {
-        WireDelta d2;
-        d2.type        = WireDelta::Type::TextToken;
-        d2.text        = "Hello";
-        d2.startTimeMs = 1050;
-        client.testOnDelta(d2);
+        WireDelta d;
+        d.type     = WireDelta::Type::GenStatus;
+        d.genPhase = WireDelta::GenPhase::Waiting;
+        client.testOnDelta(d);
+        XX_TEST_EXPECT_TRUE(
+            client.sharedState().snapshot()->genPhase == WireDelta::GenPhase::Waiting
+        );
     }
 
+    client.testOnDelta(streamBegin("msg_2", ViewMessage::Role::Assistant));
+    client.testOnDelta(textToken("msg_2", "Hello"));
+    client.testOnDelta(textToken("msg_2", " world"));
     {
-        WireDelta d_usage;
-        d_usage.type       = WireDelta::Type::ThinkToken;
-        d_usage.text       = "";
-        d_usage.durationMs = 80;
-        d_usage.think      = ViewMessage::ThinkData{.reasoningTokens = 854, .isEncrypted = true};
-        client.testOnDelta(d_usage);
+        auto snap = client.sharedState().snapshot();
+        // 流式项不在行里: 行数不变, 文本只在尾部流式项上累积
+        XX_TEST_EXPECT_EQ(snap->messages().size(), size_t{1});
+        XX_TEST_EXPECT_TRUE(snap->replica.hasStream());
+        XX_TEST_EXPECT_EQ(snap->replica.stream().id, std::string{"msg_2"});
+        XX_TEST_EXPECT_EQ(*snap->stream().text, std::string{"Hello world"});
+        // 首个 token 到达即清除占位提示
+        XX_TEST_EXPECT_TRUE(snap->genPhase == WireDelta::GenPhase::Done);
     }
 
+    client.testOnDelta(
+        insertRow(streamRow("msg_2", ViewMessage::Role::Assistant, "Hello world", 1000, 42))
+    );
+    client.testOnDelta(turnEnd());
     {
-        WireDelta d3;
-        d3.type = WireDelta::Type::TurnEnd;
-        client.testOnDelta(d3);
-    }
-
-    auto snap = client.sharedState().snapshot();
-    XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)2);
-    if (snap->messages.size() == 2) {
-        XX_TEST_EXPECT_TRUE(snap->messages[0]->role == TUIMessage::Role::Think);
-        XX_TEST_EXPECT_TRUE(snap->messages[0]->think.has_value());
-        if (snap->messages[0]->think) {
-            XX_TEST_EXPECT_TRUE(snap->messages[0]->think->isEncrypted);
-            XX_TEST_EXPECT_EQ(snap->messages[0]->think->reasoningTokens, 854);
-        }
-        XX_TEST_EXPECT_EQ(snap->messages[0]->durationMs, 80);
-        XX_TEST_EXPECT_TRUE(snap->messages[1]->role == TUIMessage::Role::Assistant);
-        XX_TEST_EXPECT_EQ(snap->messages[1]->text, "Hello");
+        auto snap = client.sharedState().snapshot();
+        XX_TEST_EXPECT_EQ(snap->messages().size(), size_t{2});
+        XX_TEST_EXPECT_FALSE(snap->replica.hasStream());
+        XX_TEST_EXPECT_FALSE(snap->isStreaming);
+        const auto& row = *snap->messages()[1];
+        XX_TEST_EXPECT_TRUE(row.role == TUIMessage::Role::Assistant);
+        XX_TEST_EXPECT_EQ(row.id, std::string{"msg_2"});
+        XX_TEST_EXPECT_EQ(row.text, std::string{"Hello world"});
+        XX_TEST_EXPECT_EQ(row.durationMs, int64_t{42});
+        XX_TEST_EXPECT_FALSE(row.collapsed);
     }
 }
 
-// 场景 2: 多步 ReAct 交互
+// 场景 2: 多步 ReAct —— 思考段 + 正文段 + 工具行 + 工具结果 + 第二段正文
 void testTuiStreamScenario2(asio::io_context& ioCtx) {
     TestTUIClientIO client(ioCtx);
 
-    {
-        WireDelta d1_think;
-        d1_think.type  = WireDelta::Type::ThinkToken;
-        d1_think.text  = "";
-        d1_think.think = ViewMessage::ThinkData{.reasoningTokens = 0, .isEncrypted = true};
-        client.testOnDelta(d1_think);
-    }
+    client.testOnDelta(insertRow(userRow("msg_1", "read the file")));
 
+    // 第 1 段: 思考
+    client.testOnDelta(
+        streamBegin("msg_2", ViewMessage::Role::Think, ViewMessage::ThinkData{.reasoningTokens = 12})
+    );
+    client.testOnDelta(thinkToken("msg_2", "thinking..."));
+    client.testOnDelta(
+        insertRow(streamRow("msg_2", ViewMessage::Role::Think, "thinking...", 1000, 1200))
+    );
+    // 第 2 段: 正文
+    client.testOnDelta(streamBegin("msg_3", ViewMessage::Role::Assistant));
+    client.testOnDelta(textToken("msg_3", "let me read it"));
+    client.testOnDelta(
+        insertRow(streamRow("msg_3", ViewMessage::Role::Assistant, "let me read it", 1000, 900))
+    );
+    // 工具行 (未完成) + 结果 (整条覆盖)
+    client.testOnDelta(insertRow(toolRow("msg_4", "read", "call_1", "{\"path\":\"a.txt\"}")));
     {
-        WireDelta d1_usage;
-        d1_usage.type       = WireDelta::Type::ThinkToken;
-        d1_usage.text       = "";
-        d1_usage.durationMs = 120;
-        d1_usage.think      = ViewMessage::ThinkData{.reasoningTokens = 320, .isEncrypted = true};
-        client.testOnDelta(d1_usage);
+        auto toolDone                    = toolRow("msg_4", "read", "call_1", "{\"path\":\"a.txt\"}");
+        toolDone.tool->toolResult        = "file body";
+        toolDone.tool->toolFinished      = true;
+        toolDone.durationMs              = 12;
+        client.testOnDelta(updateRow(std::move(toolDone)));
     }
+    // 第 3 段: 第二段正文
+    client.testOnDelta(streamBegin("msg_5", ViewMessage::Role::Assistant));
+    client.testOnDelta(textToken("msg_5", "done"));
+    client.testOnDelta(insertRow(streamRow("msg_5", ViewMessage::Role::Assistant, "done")));
+    client.testOnDelta(turnEnd());
 
-    {
-        WireDelta d1_tool;
-        d1_tool.type       = WireDelta::Type::ToolStart;
-        d1_tool.toolName   = "search";
-        d1_tool.toolCallId = "call_1";
-        d1_tool.arguments  = "{\"q\":\"test\"}";
-        client.testOnDelta(d1_tool);
-    }
-
-    {
-        WireDelta d1_tool_end;
-        d1_tool_end.type       = WireDelta::Type::ToolEnd;
-        d1_tool_end.toolName   = "search";
-        d1_tool_end.toolCallId = "call_1";
-        d1_tool_end.result     = "ok";
-        client.testOnDelta(d1_tool_end);
-    }
-
-    auto snap1 = client.sharedState().snapshot();
-    XX_TEST_EXPECT_EQ(snap1->messages.size(), (size_t)2);
-    if (snap1->messages.size() == 2) {
-        XX_TEST_EXPECT_TRUE(snap1->messages[0]->role == TUIMessage::Role::Think);
-        if (snap1->messages[0]->think) {
-            XX_TEST_EXPECT_EQ(snap1->messages[0]->think->reasoningTokens, 320);
+    auto snap = client.sharedState().snapshot();
+    XX_TEST_EXPECT_EQ(snap->messages().size(), size_t{5});
+    if (snap->messages().size() == 5) {
+        XX_TEST_EXPECT_TRUE(snap->messages()[0]->role == TUIMessage::Role::User);
+        XX_TEST_EXPECT_TRUE(snap->messages()[1]->role == TUIMessage::Role::Think);
+        XX_TEST_EXPECT_EQ(snap->messages()[1]->text, std::string{"thinking..."});
+        XX_TEST_EXPECT_TRUE(snap->messages()[2]->role == TUIMessage::Role::Assistant);
+        XX_TEST_EXPECT_TRUE(snap->messages()[3]->role == TUIMessage::Role::Tool);
+        XX_TEST_EXPECT_TRUE(snap->messages()[3]->tool.has_value());
+        if (snap->messages()[3]->tool) {
+            XX_TEST_EXPECT_TRUE(snap->messages()[3]->tool->toolFinished);
+            XX_TEST_EXPECT_EQ(snap->messages()[3]->tool->toolResult, std::string{"file body"});
+            XX_TEST_EXPECT_EQ(snap->messages()[3]->text, std::string{"{\"path\":\"a.txt\"}"});
         }
-        XX_TEST_EXPECT_TRUE(snap1->messages[1]->role == TUIMessage::Role::Tool);
+        XX_TEST_EXPECT_EQ(snap->messages()[3]->durationMs, int64_t{12});
+        XX_TEST_EXPECT_TRUE(snap->messages()[4]->role == TUIMessage::Role::Assistant);
+        XX_TEST_EXPECT_EQ(snap->messages()[4]->text, std::string{"done"});
     }
-
-    {
-        WireDelta d2_think;
-        d2_think.type  = WireDelta::Type::ThinkToken;
-        d2_think.text  = "";
-        d2_think.think = ViewMessage::ThinkData{.reasoningTokens = 0, .isEncrypted = true};
-        client.testOnDelta(d2_think);
-    }
-
-    auto snap2 = client.sharedState().snapshot();
-    XX_TEST_EXPECT_EQ(snap2->messages.size(), (size_t)3);
-    if (snap2->messages.size() == 3) {
-        XX_TEST_EXPECT_TRUE(snap2->messages[0]->role == TUIMessage::Role::Think);
-        if (snap2->messages[0]->think) {
-            XX_TEST_EXPECT_EQ(snap2->messages[0]->think->reasoningTokens, 320);
-        }
-        XX_TEST_EXPECT_TRUE(snap2->messages[1]->role == TUIMessage::Role::Tool);
-        XX_TEST_EXPECT_TRUE(snap2->messages[2]->role == TUIMessage::Role::Think);
-        if (snap2->messages[2]->think) {
-            XX_TEST_EXPECT_EQ(snap2->messages[2]->think->reasoningTokens, 0);
-        }
-    }
-
-    {
-        WireDelta d2_text;
-        d2_text.type = WireDelta::Type::TextToken;
-        d2_text.text = "Final answer";
-        client.testOnDelta(d2_text);
-    }
-
-    {
-        WireDelta d2_usage;
-        d2_usage.type       = WireDelta::Type::ThinkToken;
-        d2_usage.text       = "";
-        d2_usage.durationMs = 90;
-        d2_usage.think      = ViewMessage::ThinkData{.reasoningTokens = 150, .isEncrypted = true};
-        client.testOnDelta(d2_usage);
-    }
-
-    {
-        WireDelta d2_end;
-        d2_end.type = WireDelta::Type::TurnEnd;
-        client.testOnDelta(d2_end);
-    }
-
-    auto snap3 = client.sharedState().snapshot();
-    XX_TEST_EXPECT_EQ(snap3->messages.size(), (size_t)4);
-    if (snap3->messages.size() == 4) {
-        XX_TEST_EXPECT_TRUE(snap3->messages[0]->role == TUIMessage::Role::Think);
-        if (snap3->messages[0]->think) {
-            XX_TEST_EXPECT_EQ(snap3->messages[0]->think->reasoningTokens, 320);
-        }
-        XX_TEST_EXPECT_TRUE(snap3->messages[1]->role == TUIMessage::Role::Tool);
-        XX_TEST_EXPECT_TRUE(snap3->messages[2]->role == TUIMessage::Role::Think);
-        if (snap3->messages[2]->think) {
-            XX_TEST_EXPECT_EQ(snap3->messages[2]->think->reasoningTokens, 150);
-        }
-        XX_TEST_EXPECT_TRUE(snap3->messages[3]->role == TUIMessage::Role::Assistant);
-        XX_TEST_EXPECT_EQ(snap3->messages[3]->text, "Final answer");
-    }
+    XX_TEST_EXPECT_FALSE(snap->replica.hasStream());
 }
 
-// 场景 3: 加密 thinking -> 随后直接 TurnEnd
+// 场景 3: 加密思考 (stream_begin 带加密标记, 无正文 token) -> 定稿行带元数据
 void testTuiStreamScenario3(asio::io_context& ioCtx) {
     TestTUIClientIO client(ioCtx);
+
+    client.testOnDelta(streamBegin(
+        "msg_1",
+        ViewMessage::Role::Think,
+        ViewMessage::ThinkData{.reasoningTokens = 0, .isEncrypted = true}
+    ));
     {
-        WireDelta d1;
-        d1.type  = WireDelta::Type::ThinkToken;
-        d1.text  = "";
-        d1.think = ViewMessage::ThinkData{.reasoningTokens = 50, .isEncrypted = true};
-        client.testOnDelta(d1);
+        auto snap = client.sharedState().snapshot();
+        // 流式项已建立 (可展示"思考中"), 但还没落成行
+        XX_TEST_EXPECT_EQ(snap->messages().size(), size_t{0});
+        XX_TEST_EXPECT_TRUE(snap->replica.hasStream());
+        XX_TEST_EXPECT_TRUE(snap->stream().think.has_value());
+        if (snap->stream().think) {
+            XX_TEST_EXPECT_TRUE(snap->stream().think->isEncrypted);
+        }
     }
 
-    {
-        WireDelta d2;
-        d2.type = WireDelta::Type::TurnEnd;
-        client.testOnDelta(d2);
-    }
+    auto row         = streamRow("msg_1", ViewMessage::Role::Think, "", 1000, 80);
+    row.think        = ViewMessage::ThinkData{.reasoningTokens = 50, .isEncrypted = true};
+    client.testOnDelta(insertRow(std::move(row)));
+    client.testOnDelta(turnEnd());
 
     auto snap = client.sharedState().snapshot();
-    XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)1);
-    if (snap->messages.size() == 1) {
-        XX_TEST_EXPECT_TRUE(snap->messages[0]->role == TUIMessage::Role::Think);
-        XX_TEST_EXPECT_TRUE(snap->messages[0]->think.has_value());
-        if (snap->messages[0]->think) {
-            XX_TEST_EXPECT_TRUE(snap->messages[0]->think->isEncrypted);
-            XX_TEST_EXPECT_EQ(snap->messages[0]->think->reasoningTokens, 50);
+    XX_TEST_EXPECT_EQ(snap->messages().size(), size_t{1});
+    if (snap->messages().size() == 1) {
+        XX_TEST_EXPECT_TRUE(snap->messages()[0]->role == TUIMessage::Role::Think);
+        XX_TEST_EXPECT_TRUE(snap->messages()[0]->think.has_value());
+        if (snap->messages()[0]->think) {
+            XX_TEST_EXPECT_TRUE(snap->messages()[0]->think->isEncrypted);
+            XX_TEST_EXPECT_EQ(snap->messages()[0]->think->reasoningTokens, 50);
         }
+        XX_TEST_EXPECT_EQ(snap->messages()[0]->durationMs, int64_t{80});
+        XX_TEST_EXPECT_TRUE(snap->messages()[0]->collapsed);
     }
 }
 
-// 场景 4: 明文 thinking (流式) -> 无正文直接结束 -> 收到 usage 回填
+// 场景 4: 明文思考定稿 -> 正文/耗时/元数据都来自定稿整条
 void testTuiStreamScenario4(asio::io_context& ioCtx) {
     TestTUIClientIO client(ioCtx);
-    {
-        WireDelta d1;
-        d1.type        = WireDelta::Type::ThinkToken;
-        d1.text        = "明文思考内容";
-        d1.startTimeMs = 2000;
-        client.testOnDelta(d1);
-    }
 
-    {
-        WireDelta d_usage;
-        d_usage.type       = WireDelta::Type::ThinkToken;
-        d_usage.text       = "";
-        d_usage.durationMs = 95;
-        d_usage.think      = ViewMessage::ThinkData{.reasoningTokens = 150, .isEncrypted = false};
-        client.testOnDelta(d_usage);
-    }
-
-    {
-        WireDelta d_end;
-        d_end.type = WireDelta::Type::TurnEnd;
-        client.testOnDelta(d_end);
-    }
+    client.testOnDelta(streamBegin("msg_1", ViewMessage::Role::Think));
+    client.testOnDelta(thinkToken("msg_1", "明文思考"));
+    auto row  = streamRow("msg_1", ViewMessage::Role::Think, "明文思考", 2000, 95);
+    row.think = ViewMessage::ThinkData{.reasoningTokens = 150};
+    client.testOnDelta(insertRow(std::move(row)));
+    client.testOnDelta(turnEnd());
 
     auto snap = client.sharedState().snapshot();
-    XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)1);
-    if (snap->messages.size() == 1) {
-        XX_TEST_EXPECT_TRUE(snap->messages[0]->role == TUIMessage::Role::Think);
-        XX_TEST_EXPECT_EQ(snap->messages[0]->text, "明文思考内容");
-        XX_TEST_EXPECT_TRUE(snap->messages[0]->think.has_value());
-        if (snap->messages[0]->think) {
-            XX_TEST_EXPECT_FALSE(snap->messages[0]->think->isEncrypted);
-            XX_TEST_EXPECT_EQ(snap->messages[0]->think->reasoningTokens, 150);
+    XX_TEST_EXPECT_EQ(snap->messages().size(), size_t{1});
+    if (snap->messages().size() == 1) {
+        XX_TEST_EXPECT_EQ(snap->messages()[0]->text, std::string{"明文思考"});
+        XX_TEST_EXPECT_EQ(snap->messages()[0]->startTimeMs, int64_t{2000});
+        XX_TEST_EXPECT_EQ(snap->messages()[0]->durationMs, int64_t{95});
+        XX_TEST_EXPECT_TRUE(snap->messages()[0]->think.has_value());
+        if (snap->messages()[0]->think) {
+            XX_TEST_EXPECT_EQ(snap->messages()[0]->think->reasoningTokens, 150);
+            XX_TEST_EXPECT_FALSE(snap->messages()[0]->think->isEncrypted);
         }
-        XX_TEST_EXPECT_EQ(snap->messages[0]->durationMs, 95);
     }
 }
 
-// 场景 5: 明文 thinking 流式 -> 思考完成结算包 -> NodeEnd -> 正文 -> TurnEnd
+// 场景 5: 整段视觉为空 -> stream_end 丢弃流式项, 不产生行
 void testTuiStreamScenario5(asio::io_context& ioCtx) {
     TestTUIClientIO client(ioCtx);
 
-    {
-        WireDelta d_think;
-        d_think.type        = WireDelta::Type::ThinkToken;
-        d_think.text        = "思考中...";
-        d_think.startTimeMs = 3000;
-        client.testOnDelta(d_think);
-    }
+    client.testOnDelta(streamBegin("msg_1", ViewMessage::Role::Assistant));
+    client.testOnDelta(textToken("msg_1", " \xE2\x80\x8B "));
+    XX_TEST_EXPECT_TRUE(client.sharedState().snapshot()->replica.hasStream());
 
+    client.testOnDelta(streamEnd("msg_1"));
     {
         auto snap = client.sharedState().snapshot();
-        XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)0);
-        XX_TEST_EXPECT_EQ(snap->pendingTokenDurationMs, int64_t{0});
+        XX_TEST_EXPECT_EQ(snap->messages().size(), size_t{0});
+        XX_TEST_EXPECT_FALSE(snap->replica.hasStream());
     }
+    // 未知 id 的 stream_end 是 no-op
+    client.testOnDelta(streamEnd("msg_unknown"));
+    XX_TEST_EXPECT_EQ(client.sharedState().snapshot()->messages().size(), size_t{0});
 
-    {
-        WireDelta d_final;
-        d_final.type        = WireDelta::Type::ThinkToken;
-        d_final.text        = "";
-        d_final.startTimeMs = 3000;
-        d_final.durationMs  = 1234;
-        client.testOnDelta(d_final);
-    }
-
-    {
-        WireDelta d_nodeEnd;
-        d_nodeEnd.type        = WireDelta::Type::NodeEnd;
-        d_nodeEnd.nodeName    = "llm";
-        d_nodeEnd.startTimeMs = 2900;
-        d_nodeEnd.durationMs  = 99999;
-        client.testOnDelta(d_nodeEnd);
-    }
-
-    {
-        WireDelta d_text;
-        d_text.type        = WireDelta::Type::TextToken;
-        d_text.text        = "Answer";
-        d_text.startTimeMs = 4300;
-        client.testOnDelta(d_text);
-    }
-
-    {
-        WireDelta d_end;
-        d_end.type = WireDelta::Type::TurnEnd;
-        client.testOnDelta(d_end);
-    }
-
+    // 后续正常一段不受影响
+    client.testOnDelta(streamBegin("msg_2", ViewMessage::Role::Assistant));
+    client.testOnDelta(textToken("msg_2", "answer"));
+    client.testOnDelta(insertRow(streamRow("msg_2", ViewMessage::Role::Assistant, "answer")));
     auto snap = client.sharedState().snapshot();
-    XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)2);
-    if (snap->messages.size() == 2) {
-        XX_TEST_EXPECT_TRUE(snap->messages[0]->role == TUIMessage::Role::Think);
-        XX_TEST_EXPECT_EQ(snap->messages[0]->text, "思考中...");
-        XX_TEST_EXPECT_EQ(snap->messages[0]->durationMs, 1234);
-        XX_TEST_EXPECT_TRUE(snap->messages[1]->role == TUIMessage::Role::Assistant);
-        XX_TEST_EXPECT_EQ(snap->messages[1]->text, "Answer");
-    }
+    XX_TEST_EXPECT_EQ(snap->messages().size(), size_t{1});
+    XX_TEST_EXPECT_EQ(snap->messages()[0]->text, std::string{"answer"});
 }
 
-// 场景 6: Tool 执行中断/未结束 -> 收到新轮次 TurnStart
+// 场景 6: 工具行 —— insert(未完成) + update(完成) 覆盖同一行, 不产生第二条
 void testTuiStreamScenario6(asio::io_context& ioCtx) {
     TestTUIClientIO client(ioCtx);
 
-    {
-        WireDelta d_tool;
-        d_tool.type       = WireDelta::Type::ToolStart;
-        d_tool.toolName   = "agentxx_execute_bash_command";
-        d_tool.toolCallId = "call_bash_1";
-        d_tool.arguments  = "{\"command\":\"sleep 100\"}";
-        client.testOnDelta(d_tool);
-    }
-
+    client.testOnDelta(insertRow(toolRow("msg_1", "read", "call_1", "{\"path\":\"a.txt\"}")));
     {
         auto snap = client.sharedState().snapshot();
-        XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)1);
-        XX_TEST_EXPECT_TRUE(snap->messages[0]->role == TUIMessage::Role::Tool);
-        if (snap->messages[0]->tool) {
-            XX_TEST_EXPECT_FALSE(snap->messages[0]->tool->toolFinished);
-        }
+        XX_TEST_EXPECT_EQ(snap->messages().size(), size_t{1});
+        XX_TEST_EXPECT_FALSE(snap->messages()[0]->tool->toolFinished);
     }
 
-    {
-        WireDelta d_turnStart;
-        d_turnStart.type        = WireDelta::Type::TurnStart;
-        d_turnStart.text        = "新用户消息";
-        d_turnStart.startTimeMs = 5000;
-        client.testOnDelta(d_turnStart);
-    }
+    auto done                   = toolRow("msg_1", "read", "call_1", "{\"path\":\"a.txt\"}");
+    done.tool->toolResult       = "body";
+    done.tool->toolFinished     = true;
+    done.tool->status           = agentxx::util::ToolStatus::Failed;
+    done.durationMs             = 34;
+    client.testOnDelta(updateRow(std::move(done)));
 
-    {
-        auto snap = client.sharedState().snapshot();
-        XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)2);
-        XX_TEST_EXPECT_TRUE(snap->messages[0]->role == TUIMessage::Role::Tool);
-        if (snap->messages[0]->tool) {
-            XX_TEST_EXPECT_TRUE(snap->messages[0]->tool->toolFinished);
+    auto snap = client.sharedState().snapshot();
+    XX_TEST_EXPECT_EQ(snap->messages().size(), size_t{1});
+    if (snap->messages().size() == 1) {
+        const auto& row = *snap->messages()[0];
+        XX_TEST_EXPECT_EQ(row.id, std::string{"msg_1"});
+        XX_TEST_EXPECT_TRUE(row.tool.has_value());
+        if (row.tool) {
+            XX_TEST_EXPECT_TRUE(row.tool->toolFinished);
+            XX_TEST_EXPECT_EQ(row.tool->toolResult, std::string{"body"});
+            XX_TEST_EXPECT_TRUE(row.tool->status == agentxx::util::ToolStatus::Failed);
         }
-        XX_TEST_EXPECT_TRUE(snap->messages[1]->role == TUIMessage::Role::User);
-        XX_TEST_EXPECT_EQ(snap->messages[1]->text, "新用户消息");
+        XX_TEST_EXPECT_EQ(row.durationMs, int64_t{34});
     }
 }
 
-// 场景 7: 多个并行 tool 均未结束 -> 收到 MessageTip (如取消请求)
+// 场景 7: update 未知 id 忽略 (本地清理掉的老行), 已知 id 生效
 void testTuiStreamScenario7(asio::io_context& ioCtx) {
     TestTUIClientIO client(ioCtx);
 
-    {
-        WireDelta d_t1;
-        d_t1.type       = WireDelta::Type::ToolStart;
-        d_t1.toolName   = "tool1";
-        d_t1.toolCallId = "call_p1";
-        client.testOnDelta(d_t1);
-    }
+    auto row = streamRow("msg_1", ViewMessage::Role::Tip, "tip");
+    client.testOnDelta(insertRow(row));
 
-    {
-        WireDelta d_t2;
-        d_t2.type       = WireDelta::Type::ToolStart;
-        d_t2.toolName   = "tool2";
-        d_t2.toolCallId = "call_p2";
-        client.testOnDelta(d_t2);
-    }
-
+    auto stale = streamRow("msg_gone", ViewMessage::Role::Tip, "stale update");
+    client.testOnDelta(updateRow(std::move(stale)));
     {
         auto snap = client.sharedState().snapshot();
-        XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)2);
-        XX_TEST_EXPECT_FALSE(snap->messages[0]->tool->toolFinished);
-        XX_TEST_EXPECT_FALSE(snap->messages[1]->tool->toolFinished);
+        XX_TEST_EXPECT_EQ(snap->messages().size(), size_t{1});
+        XX_TEST_EXPECT_EQ(snap->messages()[0]->text, std::string{"tip"});
     }
 
-    {
-        WireDelta d_tip;
-        d_tip.type    = WireDelta::Type::InsertMessage;
-        d_tip.message = std::make_shared<ViewMessage>(
-            ViewMessage::makeText(ViewMessage::Role::Tip, "[Cancel Request]")
-        );
-        client.testOnDelta(d_tip);
-    }
-
+    auto updated    = streamRow("msg_1", ViewMessage::Role::Tip, "tip updated");
+    updated.tip->running = false;
+    client.testOnDelta(updateRow(std::move(updated)));
     {
         auto snap = client.sharedState().snapshot();
-        XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)3);
-        XX_TEST_EXPECT_TRUE(snap->messages[0]->tool->toolFinished);
-        XX_TEST_EXPECT_TRUE(snap->messages[1]->tool->toolFinished);
-        XX_TEST_EXPECT_TRUE(snap->messages[2]->role == TUIMessage::Role::Tip);
+        XX_TEST_EXPECT_EQ(snap->messages().size(), size_t{1});
+        XX_TEST_EXPECT_EQ(snap->messages()[0]->text, std::string{"tip updated"});
     }
 }
 
-// 场景 8: 历史中存在已完成的 tool 与未完成的 tool -> 收到 TextToken 时重置
+// 场景 8: 重放幂等 —— 同一条 insert 重复投递不产生重复行; 先到的 update 不新建
 void testTuiStreamScenario8(asio::io_context& ioCtx) {
     TestTUIClientIO client(ioCtx);
 
-    {
-        WireDelta d_t1;
-        d_t1.type       = WireDelta::Type::ToolStart;
-        d_t1.toolName   = "tool1";
-        d_t1.toolCallId = "call_f1";
-        client.testOnDelta(d_t1);
-
-        WireDelta d_t1_end;
-        d_t1_end.type       = WireDelta::Type::ToolEnd;
-        d_t1_end.toolName   = "tool1";
-        d_t1_end.toolCallId = "call_f1";
-        d_t1_end.result     = "ok";
-        client.testOnDelta(d_t1_end);
-    }
-
-    {
-        WireDelta d_t2;
-        d_t2.type       = WireDelta::Type::ToolStart;
-        d_t2.toolName   = "tool2";
-        d_t2.toolCallId = "call_u2";
-        client.testOnDelta(d_t2);
-    }
-
-    {
-        WireDelta d_text;
-        d_text.type = WireDelta::Type::TextToken;
-        d_text.text = "继续输出";
-        client.testOnDelta(d_text);
-    }
-
-    {
-        WireDelta d_end;
-        d_end.type = WireDelta::Type::TurnEnd;
-        client.testOnDelta(d_end);
-    }
-
+    auto row = streamRow("msg_1", ViewMessage::Role::Assistant, "hello");
+    client.testOnDelta(insertRow(row));
+    client.testOnDelta(insertRow(row));
+    client.testOnDelta(insertRow(row));
     {
         auto snap = client.sharedState().snapshot();
-        XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)3);
-        XX_TEST_EXPECT_TRUE(snap->messages[0]->tool->toolFinished);
-        XX_TEST_EXPECT_TRUE(snap->messages[1]->tool->toolFinished);
-        XX_TEST_EXPECT_TRUE(snap->messages[2]->role == TUIMessage::Role::Assistant);
-        XX_TEST_EXPECT_EQ(snap->messages[2]->text, "继续输出");
+        XX_TEST_EXPECT_EQ(snap->messages().size(), size_t{1});
+    }
+
+    // 断线重连: 增量补拉会再投递一遍同样的行 (按 id 去重)
+    WireSyncPayload p;
+    p.incremental   = true;
+    p.messages      = {row, row};
+    p.totalMessages = 1;
+    client.testOnSync(p);
+    {
+        auto snap = client.sharedState().snapshot();
+        XX_TEST_EXPECT_EQ(snap->messages().size(), size_t{1});
     }
 }
 
-// 场景 9: 直接收到 InsertMessage
+// 场景 9: 完整行插入 (Tip: 级别/耗时/折叠)
 void testTuiStreamScenario9(asio::io_context& ioCtx) {
     TestTUIClientIO client(ioCtx);
 
@@ -791,346 +756,122 @@ void testTuiStreamScenario9(asio::io_context& ioCtx) {
     vm.id            = "msg_000001";
     vm.tip->tipLevel = ViewMessage::TipLevel::Warning;
     vm.collapsed     = true;
+    client.testOnDelta(insertRow(std::move(vm)));
 
-    WireDelta d_insert;
-    d_insert.type    = WireDelta::Type::InsertMessage;
-    d_insert.message = std::make_shared<ViewMessage>(std::move(vm));
-    client.testOnDelta(d_insert);
-
-    {
-        auto snap = client.sharedState().snapshot();
-        XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)1);
-        XX_TEST_EXPECT_EQ(snap->messages[0]->id, std::string{"msg_000001"});
-        XX_TEST_EXPECT_EQ(snap->messages[0]->role, TUIMessage::Role::Tip);
-        XX_TEST_EXPECT_EQ(snap->messages[0]->text, std::string{"Turn tip message"});
-        XX_TEST_EXPECT_EQ(snap->messages[0]->startTimeMs, int64_t{1000});
-        XX_TEST_EXPECT_EQ(snap->messages[0]->durationMs, int64_t{200});
-        XX_TEST_EXPECT_TRUE(snap->messages[0]->collapsed);
-        XX_TEST_EXPECT_TRUE(snap->messages[0]->tip.has_value());
-        if (snap->messages[0]->tip) {
-            XX_TEST_EXPECT_EQ(snap->messages[0]->tip->tipLevel, ViewMessage::TipLevel::Warning);
+    auto snap = client.sharedState().snapshot();
+    XX_TEST_EXPECT_EQ(snap->messages().size(), size_t{1});
+    if (snap->messages().size() == 1) {
+        XX_TEST_EXPECT_EQ(snap->messages()[0]->id, std::string{"msg_000001"});
+        XX_TEST_EXPECT_EQ(snap->messages()[0]->role, TUIMessage::Role::Tip);
+        XX_TEST_EXPECT_EQ(snap->messages()[0]->text, std::string{"Turn tip message"});
+        XX_TEST_EXPECT_EQ(snap->messages()[0]->startTimeMs, int64_t{1000});
+        XX_TEST_EXPECT_EQ(snap->messages()[0]->durationMs, int64_t{200});
+        XX_TEST_EXPECT_TRUE(snap->messages()[0]->collapsed);
+        XX_TEST_EXPECT_TRUE(snap->messages()[0]->tip.has_value());
+        if (snap->messages()[0]->tip) {
+            XX_TEST_EXPECT_EQ(snap->messages()[0]->tip->tipLevel, ViewMessage::TipLevel::Warning);
         }
     }
 }
 
-// 场景 10: 空 content 消息过滤 (TUI 忽略空串 / " " / 全空白正文的消息渲染)
-// - TurnStart 空文本无附件: 不入列表; 有附件: 入列表 (纯附件消息需渲染卡片)
-// - 流式正文全空白: 不生成 Assistant 消息
-// - MessageUITip / InsertMessage 空文本: 不入列表
-// - UpdateMessage 更新为空 content: 移除已存在的同名消息
-// - onSync / Sync 完整历史中的空 content 消息: 过滤
+// 场景 10: 空行过滤 —— 空白正文的行不进入列表; 带附件的空正文用户行保留
 void testTuiStreamScenario10(asio::io_context& ioCtx) {
-    // ①② TurnStart 空文本 (无附件不入列表; 有附件入列表)
+    TestTUIClientIO client(ioCtx);
+
+    // 空白用户行: 忽略
+    client.testOnDelta(insertRow(userRow("msg_1", " ")));
     {
-        TestTUIClientIO client(ioCtx);
-
-        // ① TurnStart 文本为单个空格且无附件 -> 不入列表
-        {
-            WireDelta d;
-            d.type        = WireDelta::Type::TurnStart;
-            d.text        = " ";
-            d.msgId       = "msg_000001";
-            d.startTimeMs = 1000;
-            client.testOnDelta(d);
-
-            auto snap = client.sharedState().snapshot();
-            XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)0);
-        }
-
-        // ② TurnStart 文本为空 + 有附件 -> 入列表 (附件卡片需展示)
-        {
-            WireDelta d;
-            d.type        = WireDelta::Type::TurnStart;
-            d.text        = "";
-            d.msgId       = "msg_000002";
-            d.startTimeMs = 1100;
-            MediaAttachment att;
-            att.type        = MediaType::Image;
-            att.displayName = "a.png";
-            att.mimeType    = "image/png";
-            att.pathOrUrl   = "/tmp/a.png";
-            d.attachments.push_back(att);
-            client.testOnDelta(d);
-
-            auto snap = client.sharedState().snapshot();
-            XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)1);
-            if (snap->messages.size() == 1) {
-                XX_TEST_EXPECT_TRUE(snap->messages[0]->role == TUIMessage::Role::User);
-                XX_TEST_EXPECT_EQ(snap->messages[0]->attachments.size(), (size_t)1);
-            }
-        }
-    }
-
-    // ③④ 流式正文全为空白 -> 不生成 Assistant 消息; 有效正文仍保留
-    {
-        TestTUIClientIO client(ioCtx);
-
-        // ③ 流式正文全为空白 -> 不生成 Assistant 消息
-        {
-            WireDelta d_token;
-            d_token.type = WireDelta::Type::TextToken;
-            d_token.text = "   ";
-            client.testOnDelta(d_token);
-
-            WireDelta d_blank;
-            d_blank.type = WireDelta::Type::TextToken;
-            d_blank.text = "\n ";
-            client.testOnDelta(d_blank);
-
-            WireDelta d_end;
-            d_end.type = WireDelta::Type::TurnEnd;
-            client.testOnDelta(d_end);
-
-            auto snap = client.sharedState().snapshot();
-            XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)0);
-        }
-
-        // ④ 空白正文后紧跟有效正文 -> 仅保留有效正文消息
-        {
-            WireDelta d_token;
-            d_token.type = WireDelta::Type::TextToken;
-            d_token.text = " ";
-            client.testOnDelta(d_token);
-
-            WireDelta d_end;
-            d_end.type = WireDelta::Type::TurnEnd;
-            client.testOnDelta(d_end);
-
-            WireDelta d_token2;
-            d_token2.type = WireDelta::Type::TextToken;
-            d_token2.text = "有效回答";
-            client.testOnDelta(d_token2);
-
-            WireDelta d_end2;
-            d_end2.type = WireDelta::Type::TurnEnd;
-            client.testOnDelta(d_end2);
-
-            auto snap = client.sharedState().snapshot();
-            XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)1);
-            if (snap->messages.size() == 1) {
-                XX_TEST_EXPECT_TRUE(snap->messages[0]->role == TUIMessage::Role::Assistant);
-                XX_TEST_EXPECT_EQ(snap->messages[0]->text, std::string{"有效回答"});
-            }
-        }
-    }
-
-    // ⑤⑥⑦ 提示/插入/更新消息的空 content 过滤
-    {
-        TestTUIClientIO client(ioCtx);
-
-        // ⑤ MessageUITip 空白文本 -> 不入列表
-        {
-            WireDelta d;
-            d.type    = WireDelta::Type::MessageUITip;
-            d.text    = "  ";
-            d.tipType = WireDelta::TipType::Warning;
-            client.testOnDelta(d);
-
-            auto snap = client.sharedState().snapshot();
-            XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)0);
-        }
-
-        // ⑥ InsertMessage 空 content ViewMessage -> 不入列表
-        {
-            WireDelta d;
-            d.type    = WireDelta::Type::InsertMessage;
-            d.message = std::make_shared<ViewMessage>(
-                ViewMessage::makeText(ViewMessage::Role::Assistant, " ")
-            );
-            d.message->id = "msg_blank_insert";
-            client.testOnDelta(d);
-
-            auto snap = client.sharedState().snapshot();
-            XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)0);
-        }
-
-        // ⑦ UpdateMessage 更新为空白 content -> 移除该消息
-        {
-            WireDelta d_ins;
-            d_ins.type    = WireDelta::Type::InsertMessage;
-            d_ins.message = std::make_shared<ViewMessage>(
-                ViewMessage::makeText(ViewMessage::Role::Assistant, "占位内容")
-            );
-            d_ins.message->id = "msg_update_target";
-            client.testOnDelta(d_ins);
-
-            auto snap1 = client.sharedState().snapshot();
-            XX_TEST_EXPECT_EQ(snap1->messages.size(), (size_t)1);
-
-            WireDelta d_upd;
-            d_upd.type    = WireDelta::Type::UpdateMessage;
-            d_upd.message = std::make_shared<ViewMessage>(
-                ViewMessage::makeText(ViewMessage::Role::Assistant, " ")
-            );
-            d_upd.message->id = "msg_update_target";
-            client.testOnDelta(d_upd);
-
-            auto snap2 = client.sharedState().snapshot();
-            XX_TEST_EXPECT_EQ(snap2->messages.size(), (size_t)0);
-        }
-    }
-
-    // ⑧ onSync 完整历史: 空 content 消息过滤, 非空消息保留
-    {
-        TestTUIClientIO client(ioCtx);
-
-        WireSyncPayload payload;
-        payload.fromIndex = 0;
-        payload.messages.push_back(ViewMessage::makeText(ViewMessage::Role::User, "历史用户消息"));
-        payload.messages.push_back(ViewMessage::makeText(ViewMessage::Role::Assistant, ""));
-        payload.messages.push_back(ViewMessage::makeText(ViewMessage::Role::Assistant, " "));
-        payload.messages.push_back(ViewMessage::makeText(ViewMessage::Role::Assistant, "历史回答"));
-        payload.totalMessages = payload.messages.size();
-        client.testOnSync(payload);
-
         auto snap = client.sharedState().snapshot();
-        XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)2);
-        if (snap->messages.size() == 2) {
-            XX_TEST_EXPECT_EQ(snap->messages[0]->text, std::string{"历史用户消息"});
-            XX_TEST_EXPECT_EQ(snap->messages[1]->text, std::string{"历史回答"});
-        }
-        // 历史窗口元数据仍按服务端 viewMessages 计数 (与本地列表条数解耦)
-        XX_TEST_EXPECT_EQ(snap->history.totalCount(), uint64_t{4});
-        XX_TEST_EXPECT_EQ(snap->history.windowStart(), uint64_t{0});
+        XX_TEST_EXPECT_EQ(snap->messages().size(), size_t{0});
     }
 
-    // ⑨ Tool / Think 不受空 content 过滤影响 (头部/思考时长仍有意义)
+    // 空正文 + 附件的用户行: 保留 (附件卡片本身可见)
     {
-        TestTUIClientIO client(ioCtx);
-
-        WireDelta d_tool;
-        d_tool.type       = WireDelta::Type::ToolStart;
-        d_tool.toolName   = "agentxx_execute_bash_command";
-        d_tool.toolCallId = "call_empty_args";
-        d_tool.arguments  = ""; // 无参数工具: Tool 消息正文为空
-        client.testOnDelta(d_tool);
-
-        WireDelta d_think;
-        d_think.type  = WireDelta::Type::ThinkToken;
-        d_think.text  = "";
-        d_think.think = ViewMessage::ThinkData{.reasoningTokens = 0, .isEncrypted = true};
-        client.testOnDelta(d_think);
-
+        auto m          = userRow("msg_2", "");
+        MediaAttachment att;
+        att.type        = MediaType::Image;
+        att.displayName = "a.png";
+        att.mimeType    = "image/png";
+        att.pathOrUrl   = "/tmp/a.png";
+        m.attachments.push_back(att);
+        client.testOnDelta(insertRow(std::move(m)));
         auto snap = client.sharedState().snapshot();
-        XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)2);
-        if (snap->messages.size() == 2) {
-            XX_TEST_EXPECT_TRUE(snap->messages[0]->role == TUIMessage::Role::Tool);
-            XX_TEST_EXPECT_TRUE(snap->messages[1]->role == TUIMessage::Role::Think);
-        }
+        XX_TEST_EXPECT_EQ(snap->messages().size(), size_t{1});
+        XX_TEST_EXPECT_EQ(snap->messages()[0]->attachments.size(), size_t{1});
+    }
+
+    // 空白 assistant 行: 忽略 (模型只吐出零宽占位符)
+    client.testOnDelta(
+        insertRow(streamRow("msg_3", ViewMessage::Role::Assistant, " \xE2\x80\x8B\n"))
+    );
+    // 空白提示行: 忽略
+    client.testOnDelta(insertRow(streamRow("msg_4", ViewMessage::Role::Tip, "")));
+
+    auto snap = client.sharedState().snapshot();
+    XX_TEST_EXPECT_EQ(snap->messages().size(), size_t{1});
+
+    // onSync 完整历史: 空行同样过滤
+    WireSyncPayload p;
+    p.messages = {
+        userRow("msg_10", "hi"),
+        streamRow("msg_11", ViewMessage::Role::Assistant, "  "),
+        streamRow("msg_12", ViewMessage::Role::Assistant, "answer"),
+    };
+    p.totalMessages = p.messages.size();
+    client.testOnSync(p);
+    snap = client.sharedState().snapshot();
+    XX_TEST_EXPECT_EQ(snap->messages().size(), size_t{2});
+    if (snap->messages().size() == 2) {
+        XX_TEST_EXPECT_EQ(snap->messages()[0]->text, std::string{"hi"});
+        XX_TEST_EXPECT_EQ(snap->messages()[1]->text, std::string{"answer"});
     }
 }
 
-// 场景 11: 流式思考的折叠覆盖态 (TUIRenderState::streamThinkOverride) 在提交落盘
-// 时生效 —— 用户手动点击展开过的思考流, 结束后保持展开 (不自动折回);
-// 覆盖态随提交失效, 下一次思考回到默认折叠
+// 场景 11: 流式思考的折叠点击覆盖态 —— 用户点击展开后定稿行保持展开,
+// 覆盖态随定稿失效, 下一次思考回到默认折叠
 void testTuiStreamScenario11(asio::io_context& ioCtx) {
     TestTUIClientIO client(ioCtx);
 
-    // 第 1 轮思考: 明文思考文本累积 (未点击: 覆盖态为 -1, 未提交入列)
-    {
-        WireDelta d;
-        d.type = WireDelta::Type::ThinkToken;
-        d.text = "思考内容 A";
-        client.testOnDelta(d);
-
-        auto snap = client.sharedState().snapshot();
-        XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)0);
-        XX_TEST_EXPECT_TRUE(snap->currentToken && *snap->currentToken == "思考内容 A");
-        XX_TEST_EXPECT_EQ(snap->streamThinkOverride, -1);
-    }
+    client.testOnDelta(streamBegin("msg_1", ViewMessage::Role::Think));
+    client.testOnDelta(thinkToken("msg_1", "思考内容 A"));
+    XX_TEST_EXPECT_EQ(client.sharedState().snapshot()->streamThinkOverride, -1);
 
     // 模拟 UI 线程点击展开 (MessageListComponent::toggleStreamThinkCollapsed)
     client.sharedState().mutate([](TUIRenderState& st) {
         st.streamThinkOverride = 1;
     });
 
-    // 思考结束: 正文开始 (TextToken) 触发思考 token 提交入列
+    client.testOnDelta(insertRow(streamRow("msg_1", ViewMessage::Role::Think, "思考内容 A")));
     {
-        WireDelta d;
-        d.type = WireDelta::Type::TextToken;
-        d.text = "Answer A";
-        client.testOnDelta(d);
-
         auto snap = client.sharedState().snapshot();
-        XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)1);
-        if (snap->messages.size() == 1) {
-            XX_TEST_EXPECT_TRUE(snap->messages[0]->role == TUIMessage::Role::Think);
-            XX_TEST_EXPECT_EQ(snap->messages[0]->text, std::string{"思考内容 A"});
-            // 用户手动展开 -> 提交后保持展开 (思考结束不折叠)
-            XX_TEST_EXPECT_FALSE(snap->messages[0]->collapsed);
+        XX_TEST_EXPECT_EQ(snap->messages().size(), size_t{1});
+        if (snap->messages().size() == 1) {
+            XX_TEST_EXPECT_EQ(snap->messages()[0]->text, std::string{"思考内容 A"});
+            // 用户手动展开 -> 定稿行保持展开 (思考结束不折回)
+            XX_TEST_EXPECT_FALSE(snap->messages()[0]->collapsed);
         }
-        // 覆盖态随提交失效
+        // 覆盖态随定稿失效
         XX_TEST_EXPECT_EQ(snap->streamThinkOverride, -1);
     }
 
-    // 第一步的工具执行: 工具消息是步骤边界 —— 其后的思考/正文属于下个模型步骤
-    {
-        WireDelta d;
-        d.type       = WireDelta::Type::ToolStart;
-        d.toolName   = "first_tool";
-        d.toolCallId = "call_10";
-        client.testOnDelta(d);
-
-        WireDelta e;
-        e.type       = WireDelta::Type::ToolEnd;
-        e.toolName   = "first_tool";
-        e.toolCallId = "call_10";
-        e.result     = "ok";
-        client.testOnDelta(e);
-
-        auto snap = client.sharedState().snapshot();
-        // [Think A(展开), Assistant A, Tool]
-        XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)3);
-        if (snap->messages.size() == 3) {
-            XX_TEST_EXPECT_TRUE(snap->messages[2]->role == TUIMessage::Role::Tool);
-        }
-    }
-
-    // 第 2 轮思考 (未点击): 提交落盘回到默认折叠
-    {
-        WireDelta d;
-        d.type = WireDelta::Type::ThinkToken;
-        d.text = "思考内容 B";
-        client.testOnDelta(d);
-    }
-    {
-        WireDelta d;
-        d.type       = WireDelta::Type::ToolStart;
-        d.toolName   = "some_tool";
-        d.toolCallId = "call_11";
-        client.testOnDelta(d);
-
-        auto snap = client.sharedState().snapshot();
-        // [Think A(展开), Assistant A, Tool, Think B(折叠), Tool]
-        XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)5);
-        if (snap->messages.size() == 5) {
-            XX_TEST_EXPECT_TRUE(snap->messages[3]->role == TUIMessage::Role::Think);
-            XX_TEST_EXPECT_EQ(snap->messages[3]->text, std::string{"思考内容 B"});
-            XX_TEST_EXPECT_TRUE(snap->messages[3]->collapsed);
-            XX_TEST_EXPECT_TRUE(snap->messages[4]->role == TUIMessage::Role::Tool);
-        }
+    // 下一段思考 (未点击): 定稿行回到默认折叠
+    client.testOnDelta(streamBegin("msg_2", ViewMessage::Role::Think));
+    client.testOnDelta(thinkToken("msg_2", "思考内容 B"));
+    client.testOnDelta(insertRow(streamRow("msg_2", ViewMessage::Role::Think, "思考内容 B")));
+    auto snap = client.sharedState().snapshot();
+    XX_TEST_EXPECT_EQ(snap->messages().size(), size_t{2});
+    if (snap->messages().size() == 2) {
+        XX_TEST_EXPECT_TRUE(snap->messages()[1]->collapsed);
     }
 }
 
-// 场景 12: 生成占位提示 (GenStatus) 状态机 —— 模型节点开始执行后, 首个正文/思考
-// token 或工具消息到达前展示占位提示, 到达后自动清除:
-// - Waiting: 尚无可见输出 -> 占位生效, 但不产生任何消息
-// - 首个思考/正文 token -> 占位清除 (位置由真实流式内容接替)
-// - ToolCall: 正在接收工具调用参数 -> 占位生效 (带工具名)
-// - ToolStart / TurnEnd / Done 增量 -> 占位清除
+// 场景 12: 生成占位提示 (GenStatus) 状态机
 void testTuiStreamScenario12(asio::io_context& ioCtx) {
     using GP = WireDelta::GenPhase;
     TestTUIClientIO client(ioCtx);
 
-    // 用户消息 (轮次开始)
-    {
-        WireDelta d;
-        d.type  = WireDelta::Type::TurnStart;
-        d.text  = "hi";
-        d.msgId = "u1";
-        client.testOnDelta(d);
-    }
-    // 模型节点开始执行: 请求已发出, 首个 token 未到达
+    client.testOnDelta(insertRow(userRow("msg_1", "hi")));
+    client.testOnDelta(turnStart());
     {
         WireDelta d;
         d.type     = WireDelta::Type::GenStatus;
@@ -1140,23 +881,15 @@ void testTuiStreamScenario12(asio::io_context& ioCtx) {
         auto snap = client.sharedState().snapshot();
         XX_TEST_EXPECT_TRUE(snap->genPhase == GP::Waiting);
         XX_TEST_EXPECT_TRUE(snap->genToolName.empty());
-        // 占位提示不是消息: 只展示用户消息
-        XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)1);
+        XX_TEST_EXPECT_EQ(snap->messages().size(), size_t{1});
         XX_TEST_EXPECT_TRUE(snap->isStreaming);
     }
-
-    // 首个思考 token 到达: 占位提示被真实内容取代
     {
-        WireDelta d;
-        d.type = WireDelta::Type::ThinkToken;
-        d.text = "思考中";
-        client.testOnDelta(d);
-
-        auto snap = client.sharedState().snapshot();
-        XX_TEST_EXPECT_TRUE(snap->genPhase == GP::Done);
+        // 首个思考 token 到达: 占位提示被真实内容取代
+        client.testOnDelta(streamBegin("msg_2", ViewMessage::Role::Think));
+        client.testOnDelta(thinkToken("msg_2", "思考中"));
+        XX_TEST_EXPECT_TRUE(client.sharedState().snapshot()->genPhase == GP::Done);
     }
-
-    // 工具调用开始 (带工具名): 参数未接收完, 展示占位提示
     {
         WireDelta d;
         d.type     = WireDelta::Type::GenStatus;
@@ -1168,23 +901,14 @@ void testTuiStreamScenario12(asio::io_context& ioCtx) {
         XX_TEST_EXPECT_TRUE(snap->genPhase == GP::ToolCall);
         XX_TEST_EXPECT_EQ(snap->genToolName, std::string{"read_file"});
     }
-
-    // 工具消息到达: 占位提示清除, 真实工具消息入列表
     {
-        WireDelta d;
-        d.type       = WireDelta::Type::ToolStart;
-        d.toolName   = "read_file";
-        d.toolCallId = "call_1";
-        d.arguments  = "{\"path\":\"a.txt\"}";
-        client.testOnDelta(d);
-
+        // 工具行到达: 占位提示清除
+        client.testOnDelta(insertRow(toolRow("msg_3", "read_file", "call_1", "{\"p\":1}")));
         auto snap = client.sharedState().snapshot();
         XX_TEST_EXPECT_TRUE(snap->genPhase == GP::Done);
         XX_TEST_EXPECT_TRUE(snap->genToolName.empty());
-        XX_TEST_EXPECT_TRUE(snap->messages.back()->role == TUIMessage::Role::Tool);
+        XX_TEST_EXPECT_TRUE(snap->messages().back()->role == TUIMessage::Role::Tool);
     }
-
-    // Done 增量 (节点结束/出错时下发): 直接清除占位提示
     {
         WireDelta d;
         d.type     = WireDelta::Type::GenStatus;
@@ -1198,270 +922,141 @@ void testTuiStreamScenario12(asio::io_context& ioCtx) {
         client.testOnDelta(done);
         XX_TEST_EXPECT_TRUE(client.sharedState().snapshot()->genPhase == GP::Done);
     }
-
-    // 轮次结束: 占位提示不残留
     {
+        // 轮次结束: 占位提示不残留
         WireDelta d;
         d.type     = WireDelta::Type::GenStatus;
         d.genPhase = GP::Waiting;
         client.testOnDelta(d);
-
-        WireDelta end;
-        end.type = WireDelta::Type::TurnEnd;
-        client.testOnDelta(end);
+        client.testOnDelta(turnEnd());
         XX_TEST_EXPECT_TRUE(client.sharedState().snapshot()->genPhase == GP::Done);
     }
 }
 
-} // namespace
-
-// 场景 13: 工具失败标记跟随 delta 的 hasError (界面不再看结果文本前缀)
-// - ToolEnd 的 hasError 应写进 TUIMessage 的工具子结构
-// - 成功的结果保持 hasError = false (文本里出现 "error" 字样也不影响)
+// 场景 13: 工具终态位来自行字段 (界面不看结果文本)
 void testTuiStreamScenario13(asio::io_context& ioCtx) {
     TestTUIClientIO client(ioCtx);
 
     {
-        WireDelta start;
-        start.type       = WireDelta::Type::ToolStart;
-        start.toolName   = "agentxx_filesystem_read";
-        start.toolCallId = "call_ok";
-        start.arguments  = "{\"path\":\"a.txt\"}";
-        client.testOnDelta(start);
+        auto ok                 = toolRow("msg_1", "read", "call_ok", "{}");
+        ok.tool->toolResult     = "no error here, just text";
+        ok.tool->toolFinished   = true;
+        ok.tool->status         = agentxx::util::ToolStatus::Ok;
+        client.testOnDelta(insertRow(std::move(ok)));
     }
     {
-        WireDelta end;
-        end.type       = WireDelta::Type::ToolEnd;
-        end.toolName   = "agentxx_filesystem_read";
-        end.toolCallId = "call_ok";
-        end.result     = "no error here, just text";
-        end.status     = agentxx::util::ToolStatus::Ok;
-        client.testOnDelta(end);
-    }
-    {
-        WireDelta start;
-        start.type       = WireDelta::Type::ToolStart;
-        start.toolName   = "agentxx_filesystem_read";
-        start.toolCallId = "call_bad";
-        start.arguments  = "{\"path\":\"missing.txt\"}";
-        client.testOnDelta(start);
-    }
-    {
-        WireDelta end;
-        end.type       = WireDelta::Type::ToolEnd;
-        end.toolName   = "agentxx_filesystem_read";
-        end.toolCallId = "call_bad";
-        end.result     = "[Error: path does not exist]";
-        end.status     = agentxx::util::ToolStatus::Failed;
-        client.testOnDelta(end);
+        auto bad              = toolRow("msg_2", "read", "call_bad", "{}");
+        bad.tool->toolResult  = "[Error: path does not exist]";
+        bad.tool->toolFinished = true;
+        bad.tool->status      = agentxx::util::ToolStatus::Failed;
+        client.testOnDelta(insertRow(std::move(bad)));
     }
 
     auto snap = client.sharedState().snapshot();
-    XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)2);
-    if (snap->messages.size() == 2) {
-        XX_TEST_EXPECT_TRUE(snap->messages[0]->role == TUIMessage::Role::Tool);
-        XX_TEST_EXPECT_TRUE(snap->messages[0]->tool.has_value());
-        if (snap->messages[0]->tool) {
-            XX_TEST_EXPECT_TRUE(snap->messages[0]->tool->status == agentxx::util::ToolStatus::Ok);
-        }
-        XX_TEST_EXPECT_TRUE(snap->messages[1]->role == TUIMessage::Role::Tool);
-        XX_TEST_EXPECT_TRUE(snap->messages[1]->tool.has_value());
-        if (snap->messages[1]->tool) {
-            XX_TEST_EXPECT_TRUE(snap->messages[1]->tool->status == agentxx::util::ToolStatus::Failed);
-            XX_TEST_EXPECT_TRUE(snap->messages[1]->tool->toolFinished);
-        }
+    XX_TEST_EXPECT_EQ(snap->messages().size(), size_t{2});
+    if (snap->messages().size() == 2) {
+        XX_TEST_EXPECT_TRUE(
+            snap->messages()[0]->tool->status == agentxx::util::ToolStatus::Ok
+        );
+        XX_TEST_EXPECT_TRUE(
+            snap->messages()[1]->tool->status == agentxx::util::ToolStatus::Failed
+        );
     }
 }
 
-// 场景 14: 工具执行中被用户中断 -> 后到的取消结果覆盖原工具消息
-// - 中断时 client 侧先把运行中的工具消息标为已结束 (cancelCurrentRunLocked ->
-//   resetTrailingRunningToolsLocked), 取消结果由 agent 端稍后才补
-//   ("[Canceled]" 的 ToolEnd)
-// - 期望: 这条结果回填到原工具消息上 (同一个工具只有一条消息), 而不是另插一条
+// 场景 14: 取消 —— 工具行未完成时 agent 下发终态覆盖原行 (同一个工具只有一条)
 void testTuiStreamScenario14(asio::io_context& ioCtx) {
     TestTUIClientIO client(ioCtx);
 
-    // 1. 工具开始执行 (消息处于运行中)
-    {
-        WireDelta start;
-        start.type        = WireDelta::Type::ToolStart;
-        start.toolName    = "agentxx_execute_command";
-        start.toolCallId  = "call_cancel";
-        start.arguments   = "{\"command\":\"Start-Sleep -Seconds 5\"}";
-        start.startTimeMs = 1000;
-        client.testOnDelta(start);
-    }
-    // 2. 中断瞬间的重置: 用一条提示消息触发与取消相同的"末尾运行中工具标为结束"
-    //    逻辑 (取消本身由界面按键路径发起, 测试里不驱动按键)
-    {
-        WireDelta tip;
-        tip.type    = WireDelta::Type::MessageUITip;
-        tip.text    = "[Cancel Request]";
-        tip.tipType = WireDelta::TipType::Info;
-        client.testOnDelta(tip);
-    }
+    client.testOnDelta(insertRow(toolRow("msg_1", "execute_command", "call_cancel", "{}")));
+    client.testOnDelta(insertRow(streamRow("msg_2", ViewMessage::Role::Tip, "[Cancel Request]")));
     {
         auto snap = client.sharedState().snapshot();
-        XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)2);
-        if (snap->messages.size() == 2) {
-            XX_TEST_EXPECT_TRUE(snap->messages[0]->role == TUIMessage::Role::Tool);
-            XX_TEST_EXPECT_TRUE(snap->messages[0]->tool.has_value());
-            if (snap->messages[0]->tool) {
-                XX_TEST_EXPECT_TRUE(snap->messages[0]->tool->toolFinished);
-                XX_TEST_EXPECT_TRUE(snap->messages[0]->tool->toolResult.empty());
-            }
-        }
-    }
-    // 3. agent 端补的取消结果
-    {
-        WireDelta end;
-        end.type       = WireDelta::Type::ToolEnd;
-        end.toolName   = "agentxx_execute_command";
-        end.toolCallId = "call_cancel";
-        end.result     = "[Canceled]";
-        end.durationMs = 2000;
-        client.testOnDelta(end);
+        XX_TEST_EXPECT_EQ(snap->messages().size(), size_t{2});
+        XX_TEST_EXPECT_FALSE(snap->messages()[0]->tool->toolFinished);
     }
 
+    auto canceled               = toolRow("msg_1", "execute_command", "call_cancel", "{}");
+    canceled.tool->toolResult   = "[Canceled]";
+    canceled.tool->toolFinished = true;
+    canceled.tool->status       = agentxx::util::ToolStatus::Canceled;
+    canceled.durationMs         = 2000;
+    client.testOnDelta(updateRow(std::move(canceled)));
+
     auto snap = client.sharedState().snapshot();
-    // 工具消息 + 取消提示 (没有多出第二条工具消息)
-    XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)2);
-    if (snap->messages.size() == 2) {
-        const auto& toolMsg = snap->messages[0];
-        XX_TEST_EXPECT_TRUE(toolMsg->role == TUIMessage::Role::Tool);
-        XX_TEST_EXPECT_TRUE(toolMsg->tool.has_value());
-        if (toolMsg->tool) {
-            XX_TEST_EXPECT_TRUE(toolMsg->tool->toolFinished);
-            XX_TEST_EXPECT_EQ(toolMsg->tool->toolResult, std::string{"[Canceled]"});
-            XX_TEST_EXPECT_EQ(toolMsg->tool->toolCallId, std::string{"call_cancel"});
-            XX_TEST_EXPECT_EQ(toolMsg->durationMs, (int64_t)2000);
-        }
-        // 原消息里的参数保留 (覆盖结果时不清参数)
-        XX_TEST_EXPECT_EQ(
-            toolMsg->text,
-            std::string{"{\"command\":\"Start-Sleep -Seconds 5\"}"}
-        );
-        XX_TEST_EXPECT_TRUE(snap->messages[1]->role == TUIMessage::Role::Tip);
+    XX_TEST_EXPECT_EQ(snap->messages().size(), size_t{2});
+    if (snap->messages().size() == 2) {
+        const auto& toolMsg = *snap->messages()[0];
+        XX_TEST_EXPECT_TRUE(toolMsg.tool->toolFinished);
+        XX_TEST_EXPECT_EQ(toolMsg.tool->toolResult, std::string{"[Canceled]"});
+        XX_TEST_EXPECT_TRUE(toolMsg.tool->status == agentxx::util::ToolStatus::Canceled);
+        XX_TEST_EXPECT_EQ(toolMsg.durationMs, int64_t{2000});
+        // 原参数保留 (整条覆盖内容来自 agent, 参数仍在)
+        XX_TEST_EXPECT_EQ(toolMsg.text, std::string{"{}"});
+        XX_TEST_EXPECT_TRUE(snap->messages()[1]->role == TUIMessage::Role::Tip);
     }
 }
 
-/// 场景 15: 没有可展示内容的思考不再落成消息
-///
-/// - 思考流只吐出空白/零宽占位符: 切到正文时提交, 但不进入消息列表
-///   (否则界面上只剩一个 `[思考]` 头部行, 看上去是一条空消息,
-///   而且它不追加尾部空行, 会和后面的消息贴在一起)
-/// - 只有耗时的思考结算包 (无加密思考/token 统计): 不为其新建空思考消息
-/// - 带加密信息的思考包仍新建消息 (头部有 token 统计可展示)
+// 场景 15: token 自愈 —— stream_begin 丢了也能按 token 里的 id 建流式项,
+// 定稿行到达时正常收敛成一行
 void testTuiStreamScenario15(asio::io_context& ioCtx) {
     TestTUIClientIO client(ioCtx);
 
-    // 1. 思考流只吐出空白/零宽占位符
+    client.testOnDelta(textToken("msg_9", "Hello"));
     {
-        WireDelta think;
-        think.type        = WireDelta::Type::ThinkToken;
-        think.text        = " \xE2\x80\x8B \n";
-        think.startTimeMs = 1000;
-        client.testOnDelta(think);
+        auto snap = client.sharedState().snapshot();
+        XX_TEST_EXPECT_EQ(snap->messages().size(), size_t{0});
+        XX_TEST_EXPECT_TRUE(snap->replica.hasStream());
+        XX_TEST_EXPECT_EQ(snap->replica.stream().id, std::string{"msg_9"});
+        XX_TEST_EXPECT_EQ(*snap->stream().text, std::string{"Hello"});
     }
-    // 2. 接着来正文: 思考流被提交, 但全为空白所以不入列表
-    {
-        WireDelta text;
-        text.type        = WireDelta::Type::TextToken;
-        text.text        = "Hello";
-        text.startTimeMs = 1200;
-        client.testOnDelta(text);
-    }
-    // 3. 只有耗时的思考结算包: 不新建空思考消息
-    {
-        WireDelta settle;
-        settle.type        = WireDelta::Type::ThinkToken;
-        settle.text        = "";
-        settle.startTimeMs = 1300;
-        settle.durationMs  = 2400;
-        client.testOnDelta(settle);
-    }
-    // 4. 带加密思考/token 统计的包: 仍然新建消息
-    {
-        WireDelta enc;
-        enc.type        = WireDelta::Type::ThinkToken;
-        enc.text        = "";
-        enc.think       = ViewMessage::ThinkData{.reasoningTokens = 128, .isEncrypted = true};
-        enc.startTimeMs = 1400;
-        enc.durationMs  = 500;
-        client.testOnDelta(enc);
-    }
-
+    client.testOnDelta(textToken("msg_9", " again"));
+    client.testOnDelta(insertRow(streamRow("msg_9", ViewMessage::Role::Assistant, "Hello again")));
     auto snap = client.sharedState().snapshot();
-    XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)2);
-    if (snap->messages.size() == 2) {
-        XX_TEST_EXPECT_TRUE(snap->messages[0]->role == TUIMessage::Role::Assistant);
-        XX_TEST_EXPECT_EQ(snap->messages[0]->text, std::string{"Hello"});
-        XX_TEST_EXPECT_TRUE(snap->messages[1]->role == TUIMessage::Role::Think);
-        if (snap->messages[1]->think) {
-            XX_TEST_EXPECT_EQ(snap->messages[1]->think->reasoningTokens, 128);
-            XX_TEST_EXPECT_TRUE(snap->messages[1]->think->isEncrypted);
-        }
-    }
+    XX_TEST_EXPECT_EQ(snap->messages().size(), size_t{1});
+    XX_TEST_EXPECT_FALSE(snap->replica.hasStream());
+    XX_TEST_EXPECT_EQ(snap->messages()[0]->text, std::string{"Hello again"});
 }
 
-// 场景 16: TurnStart 的来源标记 (事件中枢投递的输入) -> 展示角色 Role::Event
-// - 服务端在 TurnStart 增量里给出 `source`, 客户端只存不解析正文
-// - 角色由 source 推导 (`ViewMessage::roleOfInputSource`): 事件消息默认折叠
-// - 历史消息经 Sync (ViewMessage JSON) 重载时同样保留角色与来源
+// 场景 16: 事件输入 (来源标记) -> Role::Event, 默认折叠; JSON 往返保留角色
 void testTuiStreamEventSource(asio::io_context& ioCtx) {
     TestTUIClientIO client(ioCtx);
 
     {
-        WireDelta d;
-        d.type        = WireDelta::Type::TurnStart;
-        d.text        = "[Event] chat.message (first)\nstatus: value\nvalue: hi";
-        d.msgId       = "m-1";
-        d.startTimeMs = 1000;
-        d.source = std::string{agentxx::agent::kInputSourceEventPrefix} + "chat.message";
-        client.testOnDelta(d);
-    }
-    {
-        WireDelta d;
-        d.type        = WireDelta::Type::TurnEnd;
-        client.testOnDelta(d);
+        auto m       = userRow("msg_1", "[Event] chat.message (first)\nstatus: value\nvalue: hi");
+        m.role       = ViewMessage::Role::Event;
+        m.source     = std::string{agentxx::agent::kInputSourceEventPrefix} + "chat.message";
+        m.collapsed  = true;
+        client.testOnDelta(insertRow(std::move(m)));
+        client.testOnDelta(turnEnd());
     }
 
     auto snap = client.sharedState().snapshot();
-    XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)1);
-    if (snap->messages.size() == 1) {
-        XX_TEST_EXPECT_TRUE(snap->messages[0]->role == TUIMessage::Role::Event);
-        // 事件正文通常很长: 默认折叠 (只显示 `+ [事件] <名字>` 头部)
-        XX_TEST_EXPECT_TRUE(snap->messages[0]->collapsed);
+    XX_TEST_EXPECT_EQ(snap->messages().size(), size_t{1});
+    if (snap->messages().size() == 1) {
+        XX_TEST_EXPECT_TRUE(snap->messages()[0]->role == TUIMessage::Role::Event);
+        XX_TEST_EXPECT_TRUE(snap->messages()[0]->collapsed);
         XX_TEST_EXPECT_EQ(
-            snap->messages[0]->source,
+            snap->messages()[0]->source,
             std::string{agentxx::agent::kInputSourceEventPrefix} + "chat.message"
         );
         XX_TEST_EXPECT_EQ(
-            std::string{agentxx::agent::eventNameOfInputSource(snap->messages[0]->source)},
+            std::string{agentxx::agent::eventNameOfInputSource(snap->messages()[0]->source)},
             std::string{"chat.message"}
         );
     }
 
-    // 用户自己输入的一轮: 来源为空 -> Role::User, 默认展开
-    {
-        WireDelta d;
-        d.type        = WireDelta::Type::TurnStart;
-        d.text        = "typed by the user";
-        d.msgId       = "m-2";
-        d.startTimeMs = 2000;
-        client.testOnDelta(d);
-    }
+    // 用户自己输入: Role::User, 默认展开, 无来源
+    client.testOnDelta(insertRow(userRow("msg_2", "typed by the user", 2000)));
     snap = client.sharedState().snapshot();
-    XX_TEST_EXPECT_EQ(snap->messages.size(), (size_t)2);
-    if (snap->messages.size() == 2) {
-        XX_TEST_EXPECT_TRUE(snap->messages[1]->role == TUIMessage::Role::User);
-        XX_TEST_EXPECT_FALSE(snap->messages[1]->collapsed);
-        XX_TEST_EXPECT_TRUE(snap->messages[1]->source.empty());
-        XX_TEST_EXPECT_TRUE(agentxx::agent::eventNameOfInputSource(snap->messages[1]->source).empty()
-        );
+    XX_TEST_EXPECT_EQ(snap->messages().size(), size_t{2});
+    if (snap->messages().size() == 2) {
+        XX_TEST_EXPECT_TRUE(snap->messages()[1]->role == TUIMessage::Role::User);
+        XX_TEST_EXPECT_FALSE(snap->messages()[1]->collapsed);
+        XX_TEST_EXPECT_TRUE(snap->messages()[1]->source.empty());
     }
 
-    // ViewMessage JSON 往返也保留角色与来源 (Sync 重载历史时靠它折叠展示)
+    // ViewMessage JSON 往返也保留角色与来源
     {
         ViewMessage original
             = ViewMessage::makeText(ViewMessage::Role::Event, "[Event] a.b", 1);
@@ -1473,11 +1068,11 @@ void testTuiStreamEventSource(asio::io_context& ioCtx) {
         XX_TEST_EXPECT_TRUE(restored.role == ViewMessage::Role::Event);
         XX_TEST_EXPECT_TRUE(restored.collapsed);
         XX_TEST_EXPECT_EQ(restored.source, original.source);
-        // 空来源不写进 JSON (老客户端/老库无字段, 兼容)
+        // 空来源不写进 JSON
         ViewMessage plain = ViewMessage::makeText(ViewMessage::Role::User, "hi", 2);
         XX_TEST_EXPECT_FALSE(plain.toJson().contains("source"));
         // 老数据兼容: 早期事件输入记成 user + source, 解析时归一化为 Event
-        auto legacy = plain.toJson();
+        auto legacy      = plain.toJson();
         legacy["source"] = std::string{agentxx::agent::kInputSourceEventPrefix} + "old.event";
         const auto migrated = ViewMessage::fromJson(legacy);
         XX_TEST_EXPECT_TRUE(migrated.role == ViewMessage::Role::Event);
@@ -1485,95 +1080,147 @@ void testTuiStreamEventSource(asio::io_context& ioCtx) {
     }
 }
 
-// 场景 17: 同一个模型步骤内思考/正文交错到达 (思考 -> 正文 -> 思考 -> 正文)
+// 场景 17: 交错多段 (思考 -> 正文 -> 思考 -> 正文) = 一段一行
 //
-// 上游 (gpt-oss / harmony 形态等) 会在一次响应里交替送出思考段和正文段。服务端的
-// 展示历史按步骤归组 —— 一个步骤只有最前一条 Think 和一条 Assistant (见
-// event_stream.cpp 的展开逻辑); 客户端若每次角色切换都新建消息, 实时画面就会
-// 把一个步骤拆成多条交错的消息 (思考末尾的段落在正文开头之后单独成块),
-// 与重开会话后的历史不一致。
+// agent 端按"一次角色切换之间连续输出的文本"切段并各定稿一行, 客户端只按序落行,
+// 不做任何合并 —— 因此实时画面与重开会话后的历史天然一致。
 void testTuiStreamScenario17(asio::io_context& ioCtx) {
     TestTUIClientIO client(ioCtx);
 
-    const auto thinkToken = [&client](std::string_view t) {
-        WireDelta d;
-        d.type        = WireDelta::Type::ThinkToken;
-        d.text        = std::string{t};
-        d.startTimeMs = 1000;
-        client.testOnDelta(d);
-    };
-    const auto textToken = [&client](std::string_view t) {
-        WireDelta d;
-        d.type        = WireDelta::Type::TextToken;
-        d.text        = std::string{t};
-        d.startTimeMs = 1000;
-        client.testOnDelta(d);
-    };
-
-    thinkToken("first segment. ");
-    textToken("已完成。");
-    thinkToken("last words.");
-    textToken("事件输入…");
-
-    // 思考段结束时的结算包 (累计耗时): 回填到本步骤的思考消息
-    {
-        WireDelta settle;
-        settle.type        = WireDelta::Type::ThinkToken;
-        settle.text        = "";
-        settle.startTimeMs = 1000;
-        settle.durationMs  = 1500;
-        client.testOnDelta(settle);
-    }
-    {
-        WireDelta end;
-        end.type = WireDelta::Type::TurnEnd;
-        client.testOnDelta(end);
-    }
+    client.testOnDelta(streamBegin("msg_1", ViewMessage::Role::Think));
+    client.testOnDelta(thinkToken("msg_1", "first segment. "));
+    client.testOnDelta(insertRow(streamRow("msg_1", ViewMessage::Role::Think, "first segment. ")));
+    client.testOnDelta(streamBegin("msg_2", ViewMessage::Role::Assistant));
+    client.testOnDelta(textToken("msg_2", "已完成。"));
+    client.testOnDelta(insertRow(streamRow("msg_2", ViewMessage::Role::Assistant, "已完成。")));
+    client.testOnDelta(streamBegin("msg_3", ViewMessage::Role::Think));
+    client.testOnDelta(thinkToken("msg_3", "last words."));
+    client.testOnDelta(insertRow(streamRow("msg_3", ViewMessage::Role::Think, "last words.")));
+    client.testOnDelta(streamBegin("msg_4", ViewMessage::Role::Assistant));
+    client.testOnDelta(textToken("msg_4", "事件输入…"));
+    client.testOnDelta(insertRow(streamRow("msg_4", ViewMessage::Role::Assistant, "事件输入…")));
+    client.testOnDelta(turnEnd());
 
     auto snap = client.sharedState().snapshot();
-    // 一个步骤只有一条思考 + 一条正文 (与重开会话后的历史一致)
-    XX_TEST_EXPECT_EQ(snap->messages.size(), size_t{2});
-    if (snap->messages.size() == 2) {
-        XX_TEST_EXPECT_TRUE(snap->messages[0]->role == TUIMessage::Role::Think);
-        XX_TEST_EXPECT_EQ(snap->messages[0]->text, std::string{"first segment. last words."});
-        XX_TEST_EXPECT_EQ(snap->messages[0]->durationMs, int64_t{1500});
-        XX_TEST_EXPECT_TRUE(snap->messages[1]->role == TUIMessage::Role::Assistant);
-        XX_TEST_EXPECT_EQ(snap->messages[1]->text, std::string{"已完成。事件输入…"});
+    XX_TEST_EXPECT_EQ(snap->messages().size(), size_t{4});
+    if (snap->messages().size() == 4) {
+        XX_TEST_EXPECT_TRUE(snap->messages()[0]->role == TUIMessage::Role::Think);
+        XX_TEST_EXPECT_EQ(snap->messages()[0]->text, std::string{"first segment. "});
+        XX_TEST_EXPECT_TRUE(snap->messages()[1]->role == TUIMessage::Role::Assistant);
+        XX_TEST_EXPECT_EQ(snap->messages()[1]->text, std::string{"已完成。"});
+        XX_TEST_EXPECT_TRUE(snap->messages()[2]->role == TUIMessage::Role::Think);
+        XX_TEST_EXPECT_EQ(snap->messages()[2]->text, std::string{"last words."});
+        XX_TEST_EXPECT_TRUE(snap->messages()[3]->role == TUIMessage::Role::Assistant);
+        XX_TEST_EXPECT_EQ(snap->messages()[3]->text, std::string{"事件输入…"});
     }
+}
 
-    // 下一步骤 (工具执行之后) 的思考/正文仍各自成一条, 不并入上一步骤
+// 场景 18: 中途接入 —— 全量同步带 streaming, 之后继续追加 token 并正常定稿
+void testTuiStreamScenario18(asio::io_context& ioCtx) {
+    TestTUIClientIO client(ioCtx);
+
+    WireSyncPayload p;
+    p.messages = {
+        userRow("msg_1", "hi"),
+        streamRow("msg_2", ViewMessage::Role::Assistant, "first part"),
+    };
+    p.totalMessages = p.messages.size();
+    auto streaming  = streamRow("msg_3", ViewMessage::Role::Assistant, "半截内容");
+    streaming.id    = "msg_3";
+    p.streaming     = streaming;
+    client.testOnSync(std::move(p));
+
     {
-        WireDelta tool;
-        tool.type       = WireDelta::Type::ToolStart;
-        tool.toolName   = "search";
-        tool.toolCallId = "call_x";
-        tool.arguments  = "{}";
-        client.testOnDelta(tool);
-
-        WireDelta toolEnd;
-        toolEnd.type       = WireDelta::Type::ToolEnd;
-        toolEnd.toolName   = "search";
-        toolEnd.toolCallId = "call_x";
-        toolEnd.result     = "ok";
-        client.testOnDelta(toolEnd);
+        auto snap = client.sharedState().snapshot();
+        XX_TEST_EXPECT_EQ(snap->messages().size(), size_t{2});
+        XX_TEST_EXPECT_TRUE(snap->replica.hasStream());
+        XX_TEST_EXPECT_EQ(snap->replica.stream().id, std::string{"msg_3"});
+        XX_TEST_EXPECT_EQ(*snap->stream().text, std::string{"半截内容"});
+        XX_TEST_EXPECT_TRUE(snap->isStreaming);
     }
-    thinkToken("next step thinking. ");
-    textToken("next step answer");
+
+    client.testOnDelta(textToken("msg_3", "继续"));
+    XX_TEST_EXPECT_EQ(*client.sharedState().snapshot()->stream().text, std::string{"半截内容继续"});
+
+    client.testOnDelta(insertRow(streamRow("msg_3", ViewMessage::Role::Assistant, "半截内容继续")));
+    auto snap = client.sharedState().snapshot();
+    XX_TEST_EXPECT_EQ(snap->messages().size(), size_t{3});
+    XX_TEST_EXPECT_FALSE(snap->replica.hasStream());
+    XX_TEST_EXPECT_EQ(snap->messages()[2]->text, std::string{"半截内容继续"});
+}
+
+// 场景 19: 本地行 (中断表单/瞬态提示) 与 agent 行同居一份副本 —— 本地行 id 带
+// `local_` 前缀, agent 的消息级 op 永不命中它们; 整份同步重建副本时本地行
+// 随界面态丢弃 (新中断请求到达时重新建行)
+void testTuiStreamScenario19(asio::io_context& ioCtx) {
+    TestTUIClientIO client(ioCtx);
+
     {
-        WireDelta end;
-        end.type = WireDelta::Type::TurnEnd;
-        client.testOnDelta(end);
+        ViewMessage form;
+        form.id        = "local_interrupt_7";
+        form.role      = ViewMessage::Role::Interrupt;
+        form.interrupt = ViewMessage::InterruptData{};
+        form.interrupt->interruptId = 7;
+        client.sharedState().mutate([&](TUIRenderState& st) {
+            st.replica.upsertLocalRow(form);
+        });
+    }
+    XX_TEST_EXPECT_EQ(client.sharedState().snapshot()->messages().size(), size_t{1});
+
+    // agent 行照常按 id 落在末尾, 本地行仍在
+    client.testOnDelta(insertRow(userRow("msg_1", "hi")));
+    {
+        auto snap = client.sharedState().snapshot();
+        XX_TEST_EXPECT_EQ(snap->messages().size(), size_t{2});
+        XX_TEST_EXPECT_EQ(snap->messages()[0]->id, std::string{"local_interrupt_7"});
+        XX_TEST_EXPECT_EQ(snap->messages()[1]->role, TUIMessage::Role::User);
     }
 
-    snap = client.sharedState().snapshot();
-    XX_TEST_EXPECT_EQ(snap->messages.size(), size_t{5});
-    if (snap->messages.size() == 5) {
-        XX_TEST_EXPECT_TRUE(snap->messages[2]->role == TUIMessage::Role::Tool);
-        XX_TEST_EXPECT_TRUE(snap->messages[3]->role == TUIMessage::Role::Think);
-        XX_TEST_EXPECT_EQ(snap->messages[3]->text, std::string{"next step thinking. "});
-        XX_TEST_EXPECT_TRUE(snap->messages[4]->role == TUIMessage::Role::Assistant);
-        XX_TEST_EXPECT_EQ(snap->messages[4]->text, std::string{"next step answer"});
+    // 整份同步: 副本整体重建, 本地行随界面态丢弃
+    WireSyncPayload p;
+    p.messages      = {userRow("msg_1", "hi")};
+    p.totalMessages = p.messages.size();
+    client.testOnSync(std::move(p));
+
+    auto snap = client.sharedState().snapshot();
+    XX_TEST_EXPECT_EQ(snap->messages().size(), size_t{1});
+    if (snap->messages().size() == 1) {
+        XX_TEST_EXPECT_EQ(snap->messages()[0]->id, std::string{"msg_1"});
     }
+}
+
+// 场景 20: 瞬态提示 (MessageUITip) 造本地行, id 带 local_ 前缀 (不被 agent 命中)
+void testTuiStreamScenario20(asio::io_context& ioCtx) {
+    TestTUIClientIO client(ioCtx);
+
+    WireDelta tip;
+    tip.type    = WireDelta::Type::MessageUITip;
+    tip.text    = "模型重试中";
+    tip.tipType = WireDelta::TipType::Warning;
+    client.testOnDelta(tip);
+
+    auto snap = client.sharedState().snapshot();
+    XX_TEST_EXPECT_EQ(snap->messages().size(), size_t{1});
+    if (snap->messages().size() == 1) {
+        const auto& row = *snap->messages()[0];
+        XX_TEST_EXPECT_TRUE(row.role == TUIMessage::Role::Tip);
+        XX_TEST_EXPECT_EQ(row.text, std::string{"模型重试中"});
+        XX_TEST_EXPECT_TRUE(row.id.starts_with("local_"));
+        XX_TEST_EXPECT_TRUE(row.tip.has_value());
+        if (row.tip) {
+            XX_TEST_EXPECT_TRUE(row.tip->tipLevel == ViewMessage::TipLevel::Warning);
+        }
+    }
+
+    // agent 的整条覆盖永远打不中本地行 (不同命名空间)
+    auto stale   = streamRow("local_tip_1", ViewMessage::Role::Tip, "overridden");
+    stale.id     = "local_tip_99";
+    client.testOnDelta(updateRow(std::move(stale)));
+    XX_TEST_EXPECT_EQ(client.sharedState().snapshot()->messages().size(), size_t{1});
+    XX_TEST_EXPECT_EQ(
+        client.sharedState().snapshot()->messages()[0]->text,
+        std::string{"模型重试中"}
+    );
 }
 
 TestResult testTuiStream() {
@@ -1596,6 +1243,9 @@ TestResult testTuiStream() {
     testTuiStreamScenario15(ioCtx);
     testTuiStreamEventSource(ioCtx);
     testTuiStreamScenario17(ioCtx);
+    testTuiStreamScenario18(ioCtx);
+    testTuiStreamScenario19(ioCtx);
+    testTuiStreamScenario20(ioCtx);
 
     return TestResult{g_tui_stream_passed, g_tui_stream_failed};
 }
