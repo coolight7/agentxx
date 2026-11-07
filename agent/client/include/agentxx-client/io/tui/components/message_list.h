@@ -188,7 +188,7 @@ public:
         return scrollable_->anchorIndex();
     }
 
-    /// 测试辅助: 中断消息块的高度估算 (行数; 不含消息尾部空行)
+    /// 测试辅助: 中断消息块的高度估算 (行数; 含末尾附件列表, 不含消息尾部空行)
     size_t interruptEstimate(size_t msgIndex, int width) const;
 
     /// 测试辅助: 最近一次渲染的中断控件命中区域 (转发自 InterruptView)
@@ -391,6 +391,12 @@ private:
         int                                                 maxWidth,
         std::vector<std::unique_ptr<markdown::DomBuilder>>& mdBuilders
     );
+
+    /// 展开态消息末尾的附件列表 (所有消息角色共用):
+    /// - 首行 `|- n个附件（点击打开）`, 其下每条附件一行 `|- 类型: 文件名 大小`
+    /// - 每行绑定自己的命中区 (`attachmentHits_`, 点击在文件管理器中定位)
+    /// - 折叠态不画列表 (只在折叠头行最右侧给数量, 见 appendAttachmentCount)
+    void appendAttachmentList(ftxui::Elements& out, const TUIMessage& msg, size_t msgIndex);
 
     /// 当前帧是否存在 "正在运行" 的条目 (runSpinner_ 的 isActive 判定):
     /// - 流式输出中且角色为 Think (流式区 [Think] 头部)

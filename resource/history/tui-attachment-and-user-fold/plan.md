@@ -43,26 +43,41 @@
 
 ## 2. 方案
 
-### 2.1 附件显示 (统一形态)
+### 2.1 附件段 (所有角色共用)
 
 ```text
-折叠态 (单行):
-+ 正文首行预览...                                        3个附件
+折叠态 (单行, 可折叠角色):
++ [工具] my_tool tool result body                       2个附件
 
-展开态 (正文之后):
-- 正文...
-|- 3个附件（点击打开）
+展开态 (正文/参数/结果/中断控件之后, 不可折叠角色恒为此形态):
+- [工具] my_tool
+    参数: {
+            "path": "a.txt"
+          }
+    结果: tool result body
+|- 2个附件（点击打开）
 |- 📷 图像附件: photo.png 12.1 KB
 |- 🎬 视频附件: clip.mp4 2.0 MB
 ```
 
-- 折叠行: `hbox({ "+ ", 预览|xflex_shrink, filler(), "n个附件" })`; 预览的列宽预算
-  (`collapsedPreviewBudget`) 扣掉右侧计数 (含 1 列间隔), 避免长预览把计数挤出去
-- 展开: 正文行之后依次 push 计数头行与每个附件行; 附件行保留各自的 `reflect` 命中区
+三个共用件 (匿名命名空间 / 成员函数):
+
+| 位置 | 职责 |
+|---|---|
+| `MessageListComponent::appendAttachmentList(out, msg, msgIndex)` | 展开态列表: 计数头行 + 每条附件一行, 每行登记自己的命中区 |
+| `appendAttachmentCount(header, msg, theme)` | 折叠态: `filler()` + `n个附件` 追加到折叠头行最右 |
+| `attachmentCountColumnsOf(msg)` / `attachmentListLinesOf(msg)` | 列宽预算要扣的列数 / 高度估算要加的行数 |
+| `isCollapsibleRole(role)` | 可折叠角色名单的唯一来源 (渲染分支 + 折叠命中登记 + 附件排版) |
+
+- 可折叠角色 (User/Event/Think/Tool/System/Tip): 折叠时数量贴右、列表不画; 展开时列表在末尾
+- 不可折叠角色 (Assistant/Interrupt): 没有折叠形态, 带附件时总是列表
+- 每个角色分支只需在 `expanded` 时调 `appendAttachmentList(lines, ...)`, 折叠时在头部组装末尾
+  调 `appendAttachmentCount(header, ...)`; 预览的 `collapsedPreviewBudget` 扣 `attachmentCountColumnsOf(msg)`
 - 文案: 新增 `msg.attachCount` (`{}个附件` / `{} attachments`) 与 `msg.attachCountOne`
   (`1个附件` / `1 attachment`); `msg.attachOpen` 从 `( 点击显示 )` 改为
   `（点击打开）` / ` (click to open)` (现在只出现在计数头行)
-- `quickHeight` 同步改: 折叠 1 行; 展开 = 正文行数 + (有附件时) `1 + 附件数`; 两者都 +1 尾部空行
+- `quickHeight` 统一改成 `contentLines + attachmentListLinesOf(msg) + 1(尾部空行)`,
+  `contentLines` 由角色分支计算 (不变), 附件行数集中加在一处
 
 ### 2.2 用户消息初始折叠
 
@@ -88,18 +103,21 @@
   与其它角色的折叠状态一致 (agent 也是每次同步下发自己的 `collapsed`), 可接受
 - **其它端点 (stdio/CLI/FFI) 不受影响**: 折叠默认值只写在 TUI 的接收逻辑里,
   `ViewReplica` 行为不变
-- **附件只在 `Role::User` 上出现**: 事件/工具等角色不会带 `attachments`, 因此
-  "统一"指同一条消息在折叠/展开两种形态下都有固定的附件呈现位置
+- **附件是所有角色的通用字段**: 任何角色带 `attachments` 都用同一段渲染; 不能折叠的
+  角色没有"折叠态贴右"的形态, 所以总是列出列表 (不会出现"展开才能看附件"的死角)
 - **超长文件名仍会被右缘裁剪**: 与改造前的卡片一致 (FTXUI 只裁剪不折行), 未额外加折行逻辑
 
 ## 4. 分步实施
 
 1. `tui_state.h`: 阈值常量 + `shouldCollapseUserMessage`
-2. `message_list.cpp`: User 分支渲染改写 (折叠右侧计数 / 展开末尾列表) + `quickHeight` 同步
-3. `message_list.h` 注释 (附件"卡片"→"行")
-4. `tui_i18n.cpp`: 新增/更新附件文案
+2. `message_list.cpp`: 共用件 (`appendAttachmentList` / `appendAttachmentCount` /
+   `attachmentCountColumnsOf` / `attachmentListLinesOf` / `isCollapsibleRole`), 七个角色分支接入
+3. `quickHeight`: 统一 `contentLines + attachmentListLinesOf(msg) + 1`
+4. `message_list.h`: 声明 `appendAttachmentList` + 命中区注释
+5. `tui_i18n.cpp`: 新增/更新附件文案
 5. `agent_tui.cpp`: 四个接收路径 + 两处本地行
-6. `tui_scroll` 新增两个场景 (附件两种形态 / 折叠阈值与接收路径)
+6. `tui_scroll` 新增两个场景 (附件两种形态 / 折叠阈值与接收路径), 以及跨角色附件段
+   (工具折叠贴右 / 正文消息末尾列表)
 7. `docs/zh-cn/design/tui.md` §2.18 重写, §2.19 折叠默认值例外说明
 
 ## 5. 验证计划

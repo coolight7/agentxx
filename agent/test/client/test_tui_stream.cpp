@@ -1071,12 +1071,14 @@ void testTuiStreamEventSource(asio::io_context& ioCtx) {
         // 空来源不写进 JSON
         ViewMessage plain = ViewMessage::makeText(ViewMessage::Role::User, "hi", 2);
         XX_TEST_EXPECT_FALSE(plain.toJson().contains("source"));
-        // 老数据兼容: 早期事件输入记成 user + source, 解析时归一化为 Event
+        // 事件输入只用 Role::Event: 老数据里把事件输入记成 user + source 的写法
+        // 不再做角色归一化, 解析后仍是 user (折叠状态与来源字段按原文保留)
         auto legacy      = plain.toJson();
         legacy["source"] = std::string{agentxx::agent::kInputSourceEventPrefix} + "old.event";
-        const auto migrated = ViewMessage::fromJson(legacy);
-        XX_TEST_EXPECT_TRUE(migrated.role == ViewMessage::Role::Event);
-        XX_TEST_EXPECT_TRUE(migrated.collapsed);
+        const auto unnormalized = ViewMessage::fromJson(legacy);
+        XX_TEST_EXPECT_TRUE(unnormalized.role == ViewMessage::Role::User);
+        XX_TEST_EXPECT_FALSE(unnormalized.collapsed);
+        XX_TEST_EXPECT_EQ(unnormalized.source, legacy["source"].get<std::string>());
     }
 }
 

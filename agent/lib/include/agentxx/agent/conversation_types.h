@@ -137,12 +137,8 @@ inline uint64_t maxBytesForMediaType(MediaType t) noexcept {
 ///   而 base64 附件会永久留在会话上下文里、每轮重发
 ///
 /// - 相关: 使用方见 [base_agent.cpp] 的轮次组装与 [modelcall.cpp] 的请求前兜底
-inline bool mediaInputEnabled(
-    MediaType type,
-    bool      imageInput,
-    bool      audioInput,
-    bool      videoInput
-) noexcept {
+inline bool
+    mediaInputEnabled(MediaType type, bool imageInput, bool audioInput, bool videoInput) noexcept {
     switch (type) {
         case MediaType::Image:
             return imageInput;
@@ -500,7 +496,6 @@ struct ViewMessage {
     /// - 有专属子结构的 role (Tool/Tip/Interrupt/Think) 在该 role 下保证子结构非空
     ///   (JSON 里缺字段就按默认值构造)
     /// - User/System/Assistant/Event 没有专属子结构, 对应成员保持为空
-    /// - 兼容: 早期展示消息把事件输入记成 User + source, 解析时归一化为 Event
     static ViewMessage fromJson(const utilxx_base::Json& j);
 };
 
@@ -980,16 +975,6 @@ inline ViewMessage ViewMessage::fromJson(const utilxx_base::Json& j) {
     } else {
         m.role = ViewMessage::Role::User;
     }
-    // 兼容老数据: 早期展示消息把事件中枢投递的输入记成 User + source,
-    // 按同一规则归一化为 Event (老会话库/老服务端 Sync 也能直接折叠展示)
-    if (m.role == ViewMessage::Role::User
-        && !agentxx::agent::eventNameOfInputSource(m.source).empty()) {
-        m.role = ViewMessage::Role::Event;
-        // 老数据没有折叠字段 (默认展开), 事件消息按默认折叠展示
-        if (!j.contains("collapsed")) {
-            m.collapsed = true;
-        }
-    }
     // 角色专属子结构: 有子结构的 role 在该 role 下保证非空 (渲染端可直接解引用),
     // 缺字段按默认值构造; User/System/Assistant/Event 没有子结构, 不构造
     switch (m.role) {
@@ -1002,11 +987,10 @@ inline ViewMessage ViewMessage::fromJson(const utilxx_base::Json& j) {
                 t.toolResult   = tj.value("tool_result", std::string{});
                 t.diff         = tj.value("diff", std::string{});
                 t.toolFinished = tj.value("tool_finished", false);
-                t.status       = agentxx::util::toolStatusFromName(tj.value("status", std::string{}));
+                t.status = agentxx::util::toolStatusFromName(tj.value("status", std::string{}));
                 // 旧会话字段 (只有布尔): 没有 status 时按 has_error 生日映射, 只影响历史
                 // 消息的颜色; 新数据一律写入 status。待旧会话数据淘汰后可删。
-                if (t.status == agentxx::util::ToolStatus::Ok
-                    && tj.value("has_error", false)) {
+                if (t.status == agentxx::util::ToolStatus::Ok && tj.value("has_error", false)) {
                     t.status = agentxx::util::ToolStatus::Failed;
                 }
             }

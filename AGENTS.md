@@ -467,6 +467,14 @@ path/to/agentxx_test --log-level warn string_util regex
   打开下载页经 `util/open_url.h` 校验 http/https 后交系统浏览器
 - 设置弹窗: 条目按 界面/显示/更新/其他 分组, 内容超出终端高度时内容区限高可滚动
   (`vscroll_indicator | yframe`, 选中项带 focus 自动滚入视口, 滚轮 = 上/下移动选中项)
+- 消息列表项的附件段 (2026-11, 所有消息角色共用): 展开态在消息末尾列附件
+  (`|- n个附件（点击打开）` + 每条一行 `|- 类型: 文件名 大小`, 行点击在文件管理器中定位),
+  折叠态只在折叠头行最右侧显示 `n个附件`; `Assistant`/`Interrupt` 不可折叠, 总是列表;
+  可折叠角色名单唯一来源 `isCollapsibleRole`, 实现见 tui.md §2.18
+  (`appendAttachmentList` / `appendAttachmentCount` / `attachmentListLinesOf`)
+- 用户消息的初始折叠态 (2026-11): TUI 收到消息时判定一次 —— 正文换行 > 5 个或按码点计
+  > 200 字则建行时折叠; 这是客户端唯一替 agent 决定折叠默认值的地方 (其余角色仍由 agent
+  给定), 用户后续点击不再被覆盖 (整份 `onSync` 重建除外), 见 tui.md §2.18
 - 添加模型配置 (2026-10): 选择模型弹窗 (F2) 顶部固定条目「+ 添加模型配置」打开表单弹窗
   (`ModelConfigOverlay`, 基本字段 + 高级项; 控件用组件描述层构建器 + 共用表单交互);
   提交经新线消息 `WireAddModel` 交服务端 `SessionServerAgentIO::handleAddModel`:
@@ -992,6 +1000,12 @@ sudo echo 3 > /proc/sys/vm/drop_caches
   不跨帧缓存, 帧循环由 `MessageListComponent::hasRunningMessage()` 维持; 运行标记由发起方
   在同一条消息 (同一 id) 的两次写入上置位/清除 (见 `middlewares/summarization.cpp`),
   从会话库读回历史时一律清掉 (`SessionStore` 的 `clearRunningTipFlag`), 避免重启后一直转
+- 改了 `agent/lib/include/` 下的头文件后, 只编内层 test/client 构建目录**不够** (2026-11-08):
+  它们用 `find_package(agentxx_static)` 指向安装前缀 `{build}/agentxx-project-install/include`,
+  那份头由 `agentxx_lib_repo` 的 install 步骤刷新 (顶层构建时 `BUILD_ALWAYS`/`INSTALL_ALWAYS`
+  才会跑)。直接编 `agentxx_test_repo-...-build` / `agentxx_client_repo-...-build` 时用的还是上一份头,
+  现象是"测试断言与源码对不上"(例如已删的兼容分支仍在生效)。两种正确做法: 构建**顶层**目录,
+  或先在内层 lib 构建目录编 `agentxx_static` 再 `cmake --install <lib-build> --config Debug`
 - 启动日志出现 `Plugin `xxx` subscribe rejected: no event source (scope ref absent)`: 插件在 `start` 里以**空引用**订阅主程序总线 (kit 基类自动订阅 `plugin.agentxx.round_start`), 而主 agent 的事件总线当时还没建 —— 旧实现把总线建在 `init()` 的 `event_bus` 步骤, 晚于插件加载 (`loadPluginsAsync`)。现在 `BaseAgent` 构造函数就调 `initEventBus()` (幂等, `init()` 只确认存在), 插件在 `start` 里就能订阅; 看到这条警告说明总线那一侧又退回了延迟创建 (现象: 插件收不到轮次事件, 加载日志 `events=0`)
 - Android release (aarch64) 链接共享库时报 `relocation R_AARCH64_ADR_PREL_PG_HI21 cannot be used against symbol 'poly1305_blocks_sve2'`, 是 OpenSSL 4.0.1 aarch64 汇编的上游缺陷 (跨目标文件直接取全局符号地址、未写 `.hidden`, 静态 libcrypto.a 链进 .so 时该符号可抢占): 顶层 `agent/CMakeLists.txt` 已对 Android 共享库加 `-Wl,--exclude-libs=ALL` 处理, 详见 `resource/history/android-release-openssl-reloc/index.md`
 - chatbot 插件里说的“消息时间对不上” (2026-10-31): 平台时间戳 (`2026-10-29T12:03:09+08:00`)

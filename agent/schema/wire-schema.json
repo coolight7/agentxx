@@ -274,7 +274,7 @@
         "totalMessages": "integer",
         "lastViewSeq": "integer",
         "incremental": "boolean",
-        "messages": "array<object{role:string, text:string, startTimeMs:integer, durationMs:integer, source:string}>",
+        "messages": "array<object{role:string, text:string, startTimeMs:integer, durationMs:integer, source:string, collapsed:boolean}>",
         "message_queue": "array<object{id:string, text:string, createdAtMs:integer, model:string, delivery:string, recovered:boolean}>",
         "queue_state": "string",
         "type": "string"
@@ -288,11 +288,12 @@
         "incremental": true,
         "messages": [
           {
-            "role": "user",
-            "text": "历史消息",
+            "role": "event",
+            "text": "[Event] chat.message",
             "startTimeMs": 0,
             "durationMs": 0,
-            "source": "event:chat.message"
+            "source": "event:chat.message",
+            "collapsed": true
           }
         ],
         "message_queue": [

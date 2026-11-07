@@ -196,8 +196,10 @@ value: [Async task] id=async-7 ... result: ...
   常量与前缀解析在 `conversation_types.h`（`kInputSourceEventPrefix` / `eventNameOfInputSource`），
   投递方与展示方共用一份，不各记一套字符串
 - 客户端只拿它做展示（折叠头 `+ [事件] <事件名>`，i18n 键 `msg.eventSource`），
-  **不解析正文**；空值不写进 JSON，老客户端与老会话库照旧
-  （老数据 `role=user` + `source=event:*` 在 `fromJson` 里归一化为 `Role::Event`）
+  **不解析正文**；空值不写进 JSON
+- 只认 `Role::Event`：`fromJson` 按 JSON 里的角色原样解析，不做角色归一化 —— 早期把事件
+  输入记成 `role=user` + `source=event:*` 的历史消息就按普通用户消息展示
+  （User 行不画事件头，折叠默认值也走用户消息规则）
 - 历史消息经 Sync（`ViewMessage` JSON）与会话库重载后角色与来源都保留；
   界面细节见 [tui.md](tui.md) §2.17
 

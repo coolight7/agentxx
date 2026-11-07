@@ -280,8 +280,9 @@ std::vector<WireSample> wireSamples() {
     {
         WireSyncPayload m;
         m.fromIndex     = 0;
-        m.messages      = {ViewMessage::makeText(ViewMessage::Role::User, "历史消息")};
-        // 事件输入的历史消息带来源标记 (重载会话后仍能加样式)
+        m.messages      = {ViewMessage::makeText(ViewMessage::Role::Event, "[Event] chat.message")};
+        // 事件输入的历史消息: 角色为 event (默认折叠), 另带来源标记
+        // (展示端靠它显示事件名, 不必解析正文)
         m.messages.front().source = "event:chat.message";
         m.tailHash      = "deadbeef";
         m.totalMessages = 1;

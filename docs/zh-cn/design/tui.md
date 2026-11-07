@@ -798,9 +798,9 @@ agent 线程插入会话历史的展示条目: 轮次统计、错误/取消提�
 而且用户消息当时不可折叠。
 
 - 角色推导: `ViewMessage::roleOfInputSource(source)` (`event:<事件名>` → `Event`,
-  其余 → `User`)。服务端两处写入点 (`BaseAgent::runTurnAsync`、
-  `nodes/session_context.cpp` 的 `appendUserViewMessage`) 与客户端 TurnStart 回显
-   (`agent_tui.cpp`) 共用这一份判定; `source` 照旧随消息保留 (事件名从这里取,
+  其余 → `User`)。只在服务端的两个写入点判定 (`BaseAgent::runTurnAsync`、
+  `nodes/session_context.cpp` 的 `appendUserViewMessage`)。客户端不自行推导,
+  行就是带 `role` 的 `insert_message` 下发的; `source` 随消息保留 (事件名从这里取,
   不解析正文), 空来源不写进 JSON
 - 默认折叠: `ViewMessage::makeText(Role::Event, ...)` 自动 `collapsed = true`
 - 渲染 ([MessageListComponent::buildMessageBlock](/agent/client/src/io/tui/components/message_list.cpp)
@@ -812,19 +812,20 @@ agent 线程插入会话历史的展示条目: 轮次统计、错误/取消提�
   见 §3.2)
 - **不解析正文**: 事件名取自结构化来源字段; 正文是给模型看的稳定文本, 会随
   [events.md](events.md) 第 5 节调整, 从正文里再扒一次等于把展示绑在文本格式上
-- 老数据兼容: 早期把事件输入记成 `role=user` + `source=event:*`, `ViewMessage::fromJson`
-  解析时归一化为 `Role::Event` 并默认折叠; 新角色字符串 `"event"` 在旧客户端上不认识,
-  回退 `Role::User` 照旧显示
+- 只认 `Role::Event`: 早期把事件输入记成 `role=user` + `source=event:*` 的写法**不再做角色
+  归一化** (`ViewMessage::fromJson` 按 JSON 里的角色原样解析), 展示端也不再给 user 行
+  画事件头 —— 这类历史消息就按普通用户消息展示
 - 历史消息经 Sync (`ViewMessage` JSON) 与会话库重载后角色与来源都保留
 - 相关测试: `agentxx_test tui_scroll` 的事件折叠头场景 (默认折叠、点击展开/折回、
   事件名只出现一次)、`agentxx_test tui_stream` 的 TurnStart 场景 (角色推导、
-  JSON 往返、老数据归一化)、`agentxx_test event_delivery` (展示角色与来源、默认折叠)
+  JSON 往返、user + source 不再归一化)、`agentxx_test event_delivery`
+  (展示角色与来源、默认折叠)
 
-### 2.18 用户消息的展开/折叠与附件显示
+### 2.18 用户消息的展开/折叠与附件段 (所有消息共用)
 
 用户自己输入的消息 (`Role::User`) 与其它可折叠消息统一: 开头标记 `-` (展开)/ `+` (折叠),
-点击消息块切换; 折叠态只显示标记 + 单行预览 (叠加 `theme.dim()`), 展开态按纯文本折行
-显示全文 (`renderPlainText`, 不解析 markdown)。
+点击消息块切换; 折叠态只显示标记 + 单行预览 (与正文同色, 不叠加 `theme.dim()`),
+展开态按纯文本折行显示全文 (`renderPlainText`, 不解析 markdown)。
 
 **初始折叠状态由 TUI 收到消息时判定一次** (`tui_state.h` 的
 `shouldCollapseUserMessage`, 阈值 `kUserMessageFoldMaxNewlines` = 5 /
@@ -840,17 +841,22 @@ agent 线程插入会话历史的展示条目: 轮次统计、错误/取消提�
   路径除外); 这是客户端唯一替 agent 决定折叠默认值的地方, 其余角色 (思考/工具/提示/
   事件) 的默认折叠仍由 agent 端给定
 
-**附件显示统一为一段列表** (折叠/展开两种形态, `buildMessageBlock` 的 User 分支):
+**附件段 (所有消息角色共用)**: 附件列表与计数不绑定角色 —— 任何带 `attachments`
+的消息都用同一段渲染 (`appendAttachmentList` / `appendAttachmentCount`,
+`message_list.cpp`):
 
-- 折叠态: 消息行最右侧 (行内 `filler()` 撑开) 显示 `n个附件` (`msg.attachCount` /
-  `msg.attachCountOne`), 附件列表不展示; 预览列宽预算扣除这段计数
-- 展开态: 列表放在消息**末尾** (正文之后), 首行 `|- n个附件（点击打开）`
-  (`msg.attachOpen`), 其下每条附件一行 `|- 类型: 文件名 大小`; 正文视觉为空且带
-  附件时不画只有一个标记的空行
-- 点击某条附件行仍在文件管理器中定位对应文件 (`attachmentHits_` 命中区, 与早期
-  卡片相同); 折叠态的计数不单独响应点击 (整行点击只是展开/收起)
-- 高度估算 (`quickHeight`) 与实际排版一致: 折叠 1 行; 展开 = 正文行数 +
-  (有附件时) `1 + 附件数`
+- 展开态: 列表放在消息**末尾** (正文/参数/结果/中断控件之后), 首行
+  `|- n个附件（点击打开）` (`msg.attachCount` / `msg.attachCountOne` + `msg.attachOpen`),
+  其下每条附件一行 `|- 类型: 文件名 大小`
+- 折叠态: 消息折叠头行**最右侧** (`filler()` 撑开) 显示 `n个附件`, 列表不展示;
+  各角色折叠预览的列宽预算都扣掉这段计数 (`attachmentCountColumnsOf`)
+- 不可折叠的角色 (`Assistant` / `Interrupt`) 没有折叠形态, 带附件时总是展示列表;
+  可折叠角色名单的唯一来源是 `isCollapsibleRole` (渲染分支、折叠命中登记、
+  附件排版与高度估算共用)
+- 点击某条附件行在文件管理器中定位对应文件 (`attachmentHits_` 命中区, 与早期卡片
+  相同); 折叠态的计数不单独响应点击 (整行点击只是展开/收起), 因此也没有命中区
+- 高度估算 (`quickHeight`) 统一加 `attachmentListLinesOf(msg)`: 展开态 `1 + 附件数`
+  行, 折叠态 0 行 (计数画在头行上)
 - 前缀从早期的 `> ` 改为 `- `: 与 Think/Tool/System/Tip/Event 的折叠标记一致,
   一眼能看出这一块可以点开/收起
 - 右侧跳转按钮列 (`-` / `+`, 见 §2.15) 仍只认 `Role::User`: 事件投递的输入不算
@@ -859,8 +865,9 @@ agent 线程插入会话历史的展示条目: 轮次统计、错误/取消提�
   不会误触发折叠
 - 正文视觉为空且无附件的消息仍按空消息过滤 (`isBlankMessage`, 判据见 §2.14)
 - 相关测试: `agentxx_test tui_scroll` 的用户消息折叠场景 (标记切换、折叠态只留首行)、
-  附件显示场景 (展开态列表顺序/大小、折叠态右侧计数、单数文案) 与初始折叠阈值
-  (5 个换行 / 200 字边界、`insert_message` 与 `onSync` 两条接收路径)
+  附件显示场景 (展开态列表顺序/大小、折叠态右侧计数、单数文案、工具消息折叠贴右 /
+  正文消息末尾列表) 与初始折叠阈值 (5 个换行 / 200 字边界、`insert_message` 与
+  `onSync` 两条接收路径)
 
 ### 2.19 流式输出的分段 (思考/正文交错) 与消息成型
 

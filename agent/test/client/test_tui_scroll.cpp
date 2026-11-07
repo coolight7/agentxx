@@ -888,6 +888,105 @@ void testUserMessageAttachments() {
 }
 
 // ---------------------------------------------------------------------------
+// 附件段与消息角色无关 (所有角色共用 appendAttachmentList / appendAttachmentCount):
+// - 可折叠角色 (Tool/Think/System/Tip/Event/User): 折叠时数量贴右, 展开时列表在末尾
+// - 不可折叠角色 (Assistant/Interrupt): 没有折叠形态, 总是列出附件列表
+// ---------------------------------------------------------------------------
+
+void testRoleSharedAttachmentSection() {
+    auto&      settings  = TUISettings::instance();
+    const auto savedLang = settings.language();
+    settings.setLanguage(TuiLanguage::ZhCn);
+
+    auto photoOf = [](std::string name) {
+        agentxx::agent::MediaAttachment att;
+        att.type        = agentxx::agent::MediaType::Image;
+        att.displayName = std::move(name);
+        att.sizeBytes   = 2048;
+        return att;
+    };
+
+    ScrollFixture f;
+    f.sharedState.mutate([&photoOf](TUIRenderState& st) {
+        // 1) 工具消息 (折叠, 2 个附件): 数量贴右, 列表不画
+        auto tool                = std::make_shared<TUIMessage>();
+        tool->id                 = "t_tool_att";
+        tool->role               = TUIMessage::Role::Tool;
+        tool->text               = "{\"path\":\"a.txt\"}";
+        tool->collapsed          = true;
+        tool->tool               = TUIMessage::ToolData{};
+        tool->tool->toolName     = "my_tool";
+        tool->tool->toolCallId   = "call_att";
+        tool->tool->toolResult   = "tool result body";
+        tool->tool->toolFinished = true;
+        tool->attachments        = {photoOf("tool-a.png"), photoOf("tool-b.png")};
+        pushRow(st, std::move(*tool));
+
+        // 2) 正文消息 (不可折叠, 1 个附件): 总是把列表放在末尾
+        auto asst        = TUIMessage::makeText(TUIMessage::Role::Assistant, "asst body ASSTBODY2");
+        asst.id          = "t_asst_att";
+        asst.attachments = {photoOf("asst.png")};
+        pushRow(st, std::move(asst));
+
+        // 3) 事件消息 (默认折叠, 1 个附件): 数量贴右
+        auto ev        = TUIMessage::makeText(TUIMessage::Role::Event, "[Event] EVBODY3");
+        ev.id          = "t_ev_att";
+        ev.source      = "event:test.evt";
+        ev.attachments = {photoOf("ev.png")};
+        pushRow(st, std::move(ev));
+    });
+
+    std::string frame = stripAnsiCodes(f.render());
+
+    // ---- 工具消息折叠: 头行最右侧是数量, 附件名不出现 ----
+    // (角色标签随界面语言切换, 这里按工具名定位行; 行首可见字符应是折叠标记 "+")
+    const int         toolRow  = screenRowOf(frame, "my_tool");
+    const std::string toolLine = trimRowEnd(screenRowText(frame, toolRow));
+    XX_TEST_EXPECT_TRUE(toolRow >= 0);
+    const size_t firstVisible = toolLine.find_first_not_of(' ');
+    XX_TEST_EXPECT_TRUE(firstVisible != std::string::npos && toolLine[firstVisible] == '+');
+    XX_TEST_EXPECT_TRUE(toolLine.ends_with("2个附件"));
+    XX_TEST_EXPECT_TRUE(screenRowOf(frame, "tool-a.png") < 0);
+    // 折叠行没有附件命中区 (只有展开态的附件行登记命中)
+    XX_TEST_EXPECT_EQ(f.comp->attachmentHitBoxes().size(), size_t{1}); // 仅 Assistant 那一行
+
+    // ---- 正文消息 (不可折叠): 正文之后是附件列表 ----
+    const int bodyRow   = screenRowOf(frame, "ASSTBODY2");
+    const int headerRow = screenRowOf(frame, "|- 1个附件（点击打开）");
+    const int fileRow   = screenRowOf(frame, "asst.png");
+    XX_TEST_EXPECT_TRUE(bodyRow >= 0);
+    XX_TEST_EXPECT_TRUE(headerRow == bodyRow + 1);
+    XX_TEST_EXPECT_TRUE(fileRow == headerRow + 1);
+
+    // ---- 事件消息 (默认折叠): 折叠头行同样把数量贴到最右 ----
+    // 该行可能与右侧跳转按钮列同高, 因此按"包含"判定而不是行尾
+    const int         evRow  = screenRowOf(frame, "EVBODY3");
+    const std::string evLine = trimRowEnd(screenRowText(frame, evRow));
+    XX_TEST_EXPECT_TRUE(evRow >= 0);
+    XX_TEST_EXPECT_TRUE(evLine.find("test.evt") != std::string::npos);
+    const size_t evCountAt = evLine.find("1个附件");
+    XX_TEST_EXPECT_TRUE(evCountAt != std::string::npos);
+    XX_TEST_EXPECT_TRUE(evCountAt > 40); // 靠右 (左对齐时约在第 30 列)
+    XX_TEST_EXPECT_TRUE(screenRowOf(frame, "ev.png") < 0);
+
+    // ---- 工具消息展开: 列表出现在末尾 (结果之后) ----
+    f.sharedState.mutate([&f](TUIRenderState& st) {
+        f.sharedState.mutableMessage(st, 0).collapsed = false;
+    });
+    frame                = stripAnsiCodes(f.render());
+    const int resultRow  = screenRowOf(frame, "tool result body");
+    const int toolHeader = screenRowOf(frame, "|- 2个附件（点击打开）");
+    const int toolFile   = screenRowOf(frame, "tool-a.png");
+    XX_TEST_EXPECT_TRUE(resultRow >= 0);
+    XX_TEST_EXPECT_TRUE(toolHeader > resultRow);
+    XX_TEST_EXPECT_TRUE(toolFile == toolHeader + 1);
+    // 展开后两条工具附件 + 1 条正文附件都有命中区
+    XX_TEST_EXPECT_EQ(f.comp->attachmentHitBoxes().size(), size_t{3});
+
+    settings.setLanguage(savedLang);
+}
+
+// ---------------------------------------------------------------------------
 // 用户消息的初始折叠状态: 换行符超 5 个或超过 200 字时折叠, 否则展开
 // (判定发生在 TUI 收到消息时; 用户之后的点击不再被覆盖)
 // ---------------------------------------------------------------------------
@@ -1508,6 +1607,9 @@ TestResult testTuiScroll() {
 
     // 消息列表项的附件显示 (折叠: 右侧数量 / 展开: 末尾附件列表)
     testUserMessageAttachments();
+
+    // 附件段与角色无关 (工具折叠贴右 / 正文消息总是末尾列表)
+    testRoleSharedAttachmentSection();
 
     // 用户消息的初始折叠状态 (换行 > 5 或字数 > 200 时折叠)
     testUserMessageFoldOnReceive();
