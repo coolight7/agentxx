@@ -62,7 +62,17 @@ extern "C" {
 /// FFI API 版本
 /// - 1 → 2: `agentxx_ffi_send_input` 的文本参数改为输入 JSON (支持附件),
 ///   属于参数语义变更 (见版本策略)
-#define AGENTXX_FFI_API_VERSION 2
+/// - 2 → 3: 展示历史单写者 (wire 协议 v4)。delta 增量改为按消息 id 寻址的
+///   固定操作集合, 嵌入方程序必须按 `msgId` 应用:
+///   - `stream_begin` / `text_token` / `thinking_token` / `insert_message` /
+///     `update_message` / `stream_end` 为**消息级操作** (`msgId` 必填):
+///   `insert`/`update` 都是按 id upsert (重复投递幂等), `stream_end` 丢弃流式项
+///   - `turn_start` / `turn_end` / `node_start` / `node_end` / `gen_status` /
+///     `message_tip` 为界面状态标记, 不带消息内容
+///   - `EVT_DELTA_TEXT_BATCH` 的 JSON 新增 `msgId` (合批不跨消息 id)
+///   - `EVT_SYNC` 的 JSON 新增可选 `streaming` (进行中的流式消息)
+///   嵌入方程序可以完全不做拼装: 直接调 `agentxx_ffi_get_view_messages` 拉取历史
+#define AGENTXX_FFI_API_VERSION 3
 
 #if defined(_WIN32)
 #define AGENTXX_FFI_EXPORT __declspec(dllexport)
@@ -95,6 +105,9 @@ extern "C" {
 #define AGENTXX_FFI_CAP_PLUGIN_DATA_UP   "plugin_data_up"
 #define AGENTXX_FFI_CAP_WIRE_PASSTHROUGH "wire_passthrough"
 #define AGENTXX_FFI_CAP_DELTA_BATCH      "delta_batch"
+/// delta 增量携带消息 id 并按 id 应用 (嵌入方程序可按 op 自建副本, 也可只用
+/// `get_view_messages` 拉取; 见 AGENTXX_FFI_API_VERSION 3 的说明)
+#define AGENTXX_FFI_CAP_VIEW_REPLICA "view_replica"
 
 /* ==================== 错误码 ==================== */
 

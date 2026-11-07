@@ -73,10 +73,15 @@ bool FfiClientAgentIO::submitHostToolResponse(
 // 被动接收回调
 // ---------------------------------------------------------------------------
 
-void FfiClientAgentIO::emitDeltaText(std::string_view kind, std::string_view text) {
+void FfiClientAgentIO::emitDeltaText(
+    std::string_view msgId,
+    std::string_view kind,
+    std::string_view text
+) {
     utilxx_base::Json j = {
-        {"kind", kind},
-        {"text", text},
+        {"msgId", msgId},
+        {"kind",  kind },
+        {"text",  text },
     };
     emitEvent(AGENTXX_FFI_EVT_DELTA_TEXT_BATCH, dump(j));
 }

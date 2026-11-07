@@ -205,14 +205,20 @@ Session::~Session() {
     }
 }
 
-std::string Session::appendViewMessage(ViewMessage msg) {
+std::string Session::appendViewMessage(ViewMessage msg, std::string_view reuseId) {
     // 强制校验: viewMessages/chainHash/msgIdCounter_ 仅允许 io 线程写入
     assertIoThread();
 
     // 链式哈希对消息内容 (不含 id)
     chainHash.append(msg.toJson().dump());
-    auto id = fmt::format("msg_{:06d}", ++msgIdCounter_);
-    msg.id  = id;
+    std::string id;
+    if (reuseId.empty()) {
+        id = fmt::format("msg_{:06d}", ++msgIdCounter_);
+    } else {
+        // 定稿路径: 沿用直播槽预留的 id (计数器在 beginStreamingView 已推进)
+        id = std::string{reuseId};
+    }
+    msg.id = id;
     // 展示历史持久化序号: 会话内单调递增, 与库里 view_message.seq 一致
     const auto viewSeq = ++viewSeqCounter_;
     viewMessages.push_back(std::move(msg));
@@ -229,6 +235,48 @@ std::string Session::appendViewMessage(ViewMessage msg) {
         });
     }
     return id;
+}
+
+std::string Session::beginStreamingView(ViewMessage skeleton) {
+    assertIoThread();
+    // 预留 id (不推 viewSeqCounter_: 那段还没进历史)
+    const auto id = fmt::format("msg_{:06d}", ++msgIdCounter_);
+    skeleton.id   = id;
+    streamingView = std::move(skeleton);
+    return id;
+}
+
+void Session::appendStreamingText(std::string_view text) {
+    assertIoThread();
+    if (!streamingView.has_value() || text.empty()) {
+        return;
+    }
+    streamingView->text.append(text);
+}
+
+void Session::mergeStreamingThink(const ViewMessage::ThinkData& data) {
+    assertIoThread();
+    if (!streamingView.has_value()) {
+        return;
+    }
+    if (!streamingView->think.has_value()) {
+        streamingView->think = data;
+        return;
+    }
+    auto& think         = *streamingView->think;
+    think.isEncrypted   = think.isEncrypted || data.isEncrypted;
+    think.reasoningTokens = std::max(think.reasoningTokens, data.reasoningTokens);
+}
+
+std::string Session::finalizeStreamingView(ViewMessage finalMsg) {
+    assertIoThread();
+    if (!streamingView.has_value()) {
+        return appendViewMessage(std::move(finalMsg));
+    }
+    const auto id = streamingView->id;
+    streamingView.reset();
+    finalMsg.id = id;
+    return appendViewMessage(std::move(finalMsg), id);
 }
 
 void Session::updateViewMessage(ViewMessage msg) {
@@ -287,6 +335,9 @@ void Session::restore(
     // 整体替换 viewMessages 前丢弃待落盘队列: 队列按下标引用消息, 替换后
     // 旧下标不再有效; 恢复发生在会话加载阶段, 此时不应有未落盘增量
     pendingViewOps_.clear();
+
+    // 进程重启/切会话后没有半截行: 直播槽一并清空
+    streamingView.reset();
 
     // 重建链式哈希: 与 appendViewMessage 一致, 对不含 id 的消息内容哈希
     chainHash.reset();

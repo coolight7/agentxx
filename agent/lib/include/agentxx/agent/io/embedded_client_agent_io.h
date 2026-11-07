@@ -161,10 +161,15 @@ protected:
 
 private:
 
-    /// 交付一段合批后的增量文本 (kind = "text" / "thinking")
-    virtual void emitDeltaText(std::string_view kind, std::string_view text) = 0;
+    /// 交付一段合批后的增量文本
+    /// - [msgId] 所属流式消息 id (不允许跨 id 合并); [kind] = "text" / "thinking"
+    virtual void emitDeltaText(
+        std::string_view msgId,
+        std::string_view kind,
+        std::string_view text
+    ) = 0;
 
-    /// 交付一条非合批的增量 (工具开始/结束、轮次边界等)
+    /// 交付一条非合批的增量 (消息级 op / 轮次边界等)
     virtual void emitDeltaEvent(const agent::WireDelta& delta) = 0;
 
     /// 当前挂起等待的中断 ID (0 表示无; 原子量, 跨线程无锁查询)
@@ -177,9 +182,11 @@ private:
     int32_t deltaBatchMs_ = 0;
     /// 合批到期定时器 (首次开启合批时创建)
     std::shared_ptr<asio::steady_timer> deltaBatchTimer_;
-    /// 积压的增量文本与类别 (类别变化时先冲刷再累积)
+    /// 积压的增量文本与类别 (类别或 msgId 变化时先冲刷再累积)
     std::string pendingDeltaText_;
     std::string pendingDeltaKind_;
+    /// 积压文本所属的流式消息 id (按 id 分别合批, 不允许跨 id 拼接)
+    std::string pendingDeltaMsgId_;
 
     /// 自身弱引用 (异步回调保活; 由 [initSelf] 注入)
     std::weak_ptr<EmbeddedClientAgentIO> self_;

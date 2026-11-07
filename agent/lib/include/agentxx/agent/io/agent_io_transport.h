@@ -109,10 +109,14 @@ struct WireProtocol {
     /// - v2: 工具结果状态位 (`delta.status` 取代 `delta.hasError`)
     /// - v3: 插件数据改为主题化 (`plugin_data` / `plugin_data_up` 只带 `topic` +
     ///   `data`, 不再拆 `plugin`/`event`)
-    inline static constexpr int kVersion = 3;
+    /// - v4: 展示历史单写者 (`stream_begin` / `text_token` / `thinking_token` /
+    ///   `insert_message` / `update_message` / `stream_end` 六个消息级 op,
+    ///   消息 id 必填; 删除了 `tool_start` / `tool_end` / `TurnStart.text` 等旧字段)
+    inline static constexpr int kVersion = 4;
     /// 兼容的最低版本
-    /// - 0 = 未声明版本的老客户端, 本版本不再接受 (它靠结果文本前缀判断成败)
-    inline static constexpr int kMinVersion = 3;
+    /// - v4 起不再接受旧对端: 旧版客户端自行拼装消息 (无 id、靠 ToolEnd 回扫),
+    ///   新版不再下发那些增量, 连上也无法正确显示
+    inline static constexpr int kMinVersion = 4;
 
     /// 对端版本与本端可接受范围的关系
     enum class VersionCheck {

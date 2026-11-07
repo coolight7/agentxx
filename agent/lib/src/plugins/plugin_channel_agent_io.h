@@ -87,7 +87,11 @@ protected:
     // ---- 基类被动回调 (均已在 client io 线程) ----
 
     /// 合批后的增量文本 (本端点默认不合批, 但基类仍可能在关闭时冲刷)
-    void emitDeltaText(std::string_view kind, std::string_view text) override;
+    void emitDeltaText(
+        std::string_view msgId,
+        std::string_view kind,
+        std::string_view text
+    ) override;
 
     /// 逐条增量 (正文/思考/工具生命周期/生成阶段/提示)
     void emitDeltaEvent(const agent::WireDelta& delta) override;

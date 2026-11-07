@@ -682,9 +682,9 @@ extern "C" PLUGINXX_EXPORT void PLUGINXX_CALL agentxx_plugin_agent_destroy(void*
 ///      直接推导折叠头 displayName/summary 与展开体 items (状态图/todos/notes)。
 ///      历史回溯路径走这里 —— 重启恢复/重连/切换会话后, 工具消息由 Sync 回放,
 ///      没有 update_tool_decor 推送, 依赖类型级渲染器才能特化渲染
-///   ② 运行时装饰 (update_tool_decor): 订阅 EVT_DELTA, tool_start 按 arguments
-///      推送装饰 (折叠头显示名 + 展开体 items), tool_end 以最终内容刷新;
-///      本进程内实时调用的展开头因此显示语义名 ("Plan")
+///   ② 运行时装饰 (update_tool_decor): 订阅 EVT_DELTA, 工具行插入/更新时
+///      推送装饰 (折叠头显示名 + 展开体 items); 本进程内实时调用的展开头
+///      因此显示语义名 ("Plan")
 /// - Info 栏段落 "Plan" (懒注册): EVT_PLUGIN_DATA planning 事件驱动,
 ///   展示最近一次规划概览; client_attached 重发快照自愈
 /// - EVT_SESSION_SWITCH → 清理装饰与段落
@@ -700,7 +700,7 @@ struct ClientCtx {
     AgentxxInfoSection*         section = nullptr; ///< 懒注册句柄 (null=未展示)
     std::string                 last_plan_json;    ///< 最近一次规划内容缓存 (Info 段落)
     /// 进行中 planning 工具调用的参数缓存 (tool_call_id → arguments JSON;
-    /// tool_start 缓存, tool_end 刷新最终装饰后摘除)
+    /// 工具行插入时缓存, 完成后摘除)
     std::map<std::string, std::string> pending_args;
     /// 通用交互动作控制器 (action_id → handler; dispatch 经 ud 恢复本实例)
     agentxx::plugin::kit::ActionController actions;
@@ -1089,12 +1089,11 @@ static void PLUGINXX_CALL on_client_plugin_data(const PluginxxStringView* payloa
     });
 }
 
-/// EVT_DELTA: planning 工具生命周期 → 工具消息装饰 (实时调用路径; 历史回溯
+/// EVT_DELTA: planning 工具行的插入/更新 → 工具消息装饰 (实时调用路径; 历史回溯
 /// 由类型级渲染器覆盖, 见 buildPlanningToolRender)
-/// - tool_start: 缓存参数; write 推送完整装饰 (折叠头 Plan · todos 摘要 +
-///   展开体 状态图/todos/notes); read 推送占位 (结果未返回)
-/// - tool_end: 以缓存的最终参数重建装饰 (覆盖流式期间的不完整内容);
-///   read 模式此时展示结果摘要
+/// - insert_message (工具行未完成): 缓存参数并推送装饰 —— write 推完整内容
+///   (折叠头 Plan · todos 摘要 + 展开体 状态图/todos/notes), read 推占位
+/// - update_message (工具行已完成): 用行上的结果重建装饰 (read 展示已保存规划)
 static void PLUGINXX_CALL on_client_delta(const PluginxxStringView* payload_json, void* ud) {
     auto* ctxRaw = static_cast<ClientCtx*>(ud);
     agentxx::plugin::guardCallVoid(clientGuardLogger(ctxRaw), [&] {
@@ -1106,10 +1105,9 @@ static void PLUGINXX_CALL on_client_delta(const PluginxxStringView* payload_json
             return;
         }
         const std::string_view raw{payload_json->data, static_cast<size_t>(payload_json->size)};
-        // 快速预过滤: 仅 planning 工具相关 delta 才值得完整解析
-        // (deltaToJson 字段序固定 type 在前)
-        if (raw.find("\"tool_start\"") == std::string_view::npos
-            && raw.find("\"tool_end\"") == std::string_view::npos) {
+        // 快速预过滤: 只关心整条消息的插入/更新 (deltaToJson 字段序固定 type 在前)
+        if (raw.find("\"insert_message\"") == std::string_view::npos
+            && raw.find("\"update_message\"") == std::string_view::npos) {
             return;
         }
         if (raw.find("\"agentxx_planning\"") == std::string_view::npos) {
@@ -1121,46 +1119,40 @@ static void PLUGINXX_CALL on_client_delta(const PluginxxStringView* payload_json
         } catch (...) {
             return;
         }
-        const auto type = d.value("type", std::string{});
-        if (type != "tool_start" && type != "tool_end") {
+        if (!d.contains("message") || !d["message"].is_object()) {
             return;
         }
-        if (d.value("tool_name", std::string{}) != "agentxx_planning") {
+        const auto& msg = d["message"];
+        // 工具行 = role=tool 且带 tool 数据 (成败/参数/结果都在行上)
+        if (msg.value("role", std::string{}) != "tool" || !msg.contains("tool")
+            || !msg["tool"].is_object()) {
             return;
         }
-        const auto callId = d.value("tool_call_id", std::string{});
+        const auto& tool = msg["tool"];
+        if (tool.value("tool_name", std::string{}) != "agentxx_planning") {
+            return;
+        }
+        const auto callId  = tool.value("tool_call_id", std::string{});
+        const auto argsStr = msg.value("text", std::string{});
+        const bool finished = tool.value("tool_finished", false);
 
-        if (type == "tool_start") {
-            const auto argsStr = d.value("arguments", std::string{});
-            // 与类型级渲染器同一解析 (mode=read 时结果未返回 → 占位提示)
-            utilxx_base::Json plan;
-            bool              readPlaceholder = false;
-            if (!planFromToolCall(argsStr, std::string_view{}, plan, readPlaceholder)) {
-                return;
-            }
+        utilxx_base::Json plan;
+        bool              readPlaceholder = false;
+        const auto        resultText      = finished ? tool.value("tool_result", std::string{})
+                                                     : std::string{};
+        if (!planFromToolCall(argsStr, resultText, plan, readPlaceholder)) {
+            return;
+        }
+        if (!finished) {
             ctx->pending_args[callId] = argsStr;
             pushToolDecor(*ctx, callId, readPlaceholder ? makeReadingPlaceholderPlan() : plan);
             return;
         }
-
-        // tool_end: 以缓存的最终参数重建 (write 完整内容; read 展示已保存规划)
-        auto it = ctx->pending_args.find(callId);
-        if (it != ctx->pending_args.end()) {
-            utilxx_base::Json plan;
-            bool              readPlaceholder = false;
-            if (planFromToolCall(
-                    it->second,
-                    d.value("result", std::string{}),
-                    plan,
-                    readPlaceholder
-                )) {
-                // read 结果非法时保持 tool_start 的占位装饰 (不覆盖为空内容)
-                if (!readPlaceholder) {
-                    pushToolDecor(*ctx, callId, plan);
-                }
-            }
-            ctx->pending_args.erase(it);
+        // 工具完成: read 结果非法时保持插入时的占位装饰 (不覆盖为空内容)
+        if (!readPlaceholder) {
+            pushToolDecor(*ctx, callId, plan);
         }
+        ctx->pending_args.erase(callId);
     });
 }
 

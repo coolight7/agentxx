@@ -576,11 +576,13 @@ private:
 /// GraphEvent -> 会话增量 WireDelta + EventBus 适配器
 /// - 接替 [agentxx::agent::BaseAgent] 的 llm callback 职责: 把 neograph 的 GraphStreamCallback
 /// 翻译成:
-///   1. 会话增量 WireDelta (TextToken/ThinkToken/ToolStart/ToolEnd/NodeStart/NodeEnd ...),
-///      经 emitDelta 发送到对端 (TUI/stdio), 并写入会话历史 (appendViewMessage)
+///   1. 会话增量 WireDelta (六个消息级 op + 界面状态标记), 经 emitDelta 发送到对端
+///      (TUI/stdio), 并写入会话历史 (appendViewMessage)
 ///   2. 强类型总线事件发布 (EventBus: ModelToken/Error 等)
 ///   3. 可选转发到原始 callback (origCb)
-/// - 有状态: 内部维护流式状态 (chunk 类型切换/节点计时/WireDelta seq)
+/// - **展示历史的唯一写者**: 消息边界与内容 (一段一行、正文归组、耗时、可见性、
+///   折叠默认值、id 分配) 全部在这里决定; 客户端只按 id 应用 op, 不做任何归组/合并
+/// - 有状态: 内部维护流式段 (直播槽) / 段内的已定稿行 (/stepRows_/) / WireDelta seq
 /// - 新增 GraphEvent 处理时只需扩展本类, 无需修改 BaseAgent
 /// - 调用者保证 AgentContext 及其 bus、Session、io 在回调期间存活
 ///   (makeCallback 内部经 shared_from_this 持有本对象)
@@ -632,6 +634,16 @@ public:
     ///   无 LLM 流式输出时返回 0
     double takeTurnTps();
 
+    /// 结束当前打开的流式段 (段结束/角色切换/节点结束/轮末都调)
+    /// - 可见 → 定稿成正式行 (appendViewMessage + InsertMessage)
+    /// - 整段视觉为空 → 丢弃直播槽 + StreamEnd (客户端丢弃该流式项)
+    /// - 没有打开段时为 no-op (幂等); 对外开放是为了让 BaseAgent 在取消/错误/
+    ///   轮末在 "/持久化之前"统一收尾
+    void flushOpenStream();
+
+    /// 轮末收尾: 定稿当前段 + 清空本步骤的行索引
+    void finishTurn();
+
 private:
 
     void handleLLMToken(const neograph::graph::GraphEvent& event);
@@ -642,21 +654,47 @@ private:
 
     /// 处理生成阶段标记 chunk (非模型输出文本; 见 protocol/provider_common.h):
     /// 映射为 GenStatus 增量 (等待响应 / 正在调用工具), 由 client 展示占位提示
-    /// - 思考流未结算时先结算 (工具调用开始即思考结束), client 先回填耗时再收占位
+    /// - 思考流未结束时先定稿 (工具调用开始即思考结束), client 先收到 Think 行再收占位
     void handleGenStatusChunk(const neograph::ChatStreamChunk& chunk);
+
+    /// 当前打开的流式段所属角色 (None = 无)
+    enum class OpenStreamKind : uint8_t {
+        None,
+        Think,
+        Assistant,
+    };
+
+    /// 本步骤内已定稿的流式段行 (按定稿顺序;
+    /// 供定稿对账判断"本步骤内该角色有几段")
+    struct StepRow {
+        agentxx::agent::ViewMessage::Role role = agentxx::agent::ViewMessage::Role::Assistant;
+        std::string                       msgId;
+        size_t                            index = 0; ///< 在 viewMessages 里的下标 (只增不改)
+    };
+
+    /// 开一段流式消息 (角色切换时先定稿上一段)
+    /// - headless (无对端) 会话不建直播槽: 不逐 token 累积, 也不发 stream_begin/token
+    /// - `meta` 为思考元数据 (加密思考/token 统计), 仅 "开始时就已知" 时给
+    void beginStream(
+        agentxx::agent::ViewMessage::Role                            role,
+        const std::optional<agentxx::agent::ViewMessage::ThinkData>& meta = std::nullopt
+    );
+
+    /// 往当前段追加文本 (无打开段时忽略)
+    void appendStreamText(std::string_view text, bool thinking);
+
+    /// 合并当前段的思考元数据 (无打开段时忽略)
+    void mergeStreamThink(const agentxx::agent::ViewMessage::ThinkData& data);
 
     /// 下发生成阶段 (占位提示): 同时维护 genStatusActive_ (生成是否仍在进行)
     /// - [phase] 为 Done 时清除占位提示, 其余阶段展示占位提示
     /// - [toolName] 仅 ToolCall 阶段使用 (已解析出的工具名, 可为空)
     void emitGenStatus(agentxx::agent::WireDelta::GenPhase phase, std::string_view toolName = {});
 
-    /// 结算当前 THINKING 流段: 发送空文本 ThinkToken WireDelta (仅携带
-    /// startTimeMs/durationMs), client 据此为已提交的 Think 消息回填耗时。
-    /// - think 输出完成 (切换到正文/节点结束/出错/输出最终 assistant 消息) 时调用,
-    ///   耗时 = 完成时刻 - 段起点; 未处于 THINKING 段时为 no-op (幂等)
-    /// - 必须在该段落后续 WireDelta (正文 token/ToolStart/NodeEnd) 之前发送,
-    ///   保证 client 先落盘 Think 消息并回填时长, 再处理后续内容
-    void finalizeThinkSegment();
+    /// 把一个已定稿的段写成历史行并广播 InsertMessage
+    /// - `row` 的 id 必须是直播槽预留的 id (定稿路径复用)
+    /// - `return` 落库后的下标
+    size_t commitStreamRow(agentxx::agent::ViewMessage row, bool usedStreamingSlot);
 
     /// 估算 UTF-8 字符串对应的 token 数
     /// - 优先使用 EventBus 上注册的 TokenCount 服务 (由 SummarizationMiddleware 提供,
@@ -696,19 +734,14 @@ private:
     std::chrono::system_clock::time_point nodeStartTime_{};
     int64_t                               nodeStartTimeMs_ = 0;
 
-    /// THINKING 流段计时 (think 消息耗时统计):
-    /// - 进入 THINKING (非 THINKING -> THINKING) 时记录段起点
-    /// - 离开时经 finalizeThinkSegment() 结算: 耗时 = 完成时刻 - 段起点,
-    ///   以空文本 ThinkToken WireDelta 回传, client 在 Think 输出完成时才显示耗时
-    /// - thinkSegActive_ 保证同一段落只结算一次; 仅 io 线程访问
-    std::chrono::system_clock::time_point thinkSegStart_{};
-    int64_t                               thinkSegStartMs_ = 0;
-    bool                                  thinkSegActive_  = false;
-    /// 最近一次 THINKING 段的开始时间戳与累计耗时 (毫秒)
-    /// - 用于在 handleChannelWrite 展开写入 viewMessages 历史时带入 Think 消息,
-    ///   保证落库持久化后重启恢复仍能显示思考耗时; 写入后清零
-    int64_t lastThinkSegStartMs_    = 0;
-    int64_t lastThinkSegDurationMs_ = 0;
+    /// 当前打开的流式段 (直播槽): 角色/预留 id/段起点
+    OpenStreamKind openKind_    = OpenStreamKind::None;
+    std::string    openId_;     ///< = Session::streamingView->id
+    int64_t        openStartMs_ = 0;
+
+    /// 本步骤内已定稿的流式段行 (NODE_START 清空); 定稿对账用它判断
+    /// "该角色在这一步里有几段"
+    std::vector<StepRow> stepRows_;
 
     /// toolCallId → viewMessages 索引 映射 (加速 tool 结果回填 O(1) 定位)
     /// - assistant(tool_calls) 消息登记, tool 结果按 id O(1) 定位, 避免每结果

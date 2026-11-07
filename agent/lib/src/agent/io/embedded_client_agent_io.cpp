@@ -186,20 +186,25 @@ void EmbeddedClientAgentIO::flushDeltaBatch() {
     if (pendingDeltaText_.empty()) {
         return;
     }
-    auto kind = std::move(pendingDeltaKind_);
-    auto text = std::move(pendingDeltaText_);
+    auto msgId = std::move(pendingDeltaMsgId_);
+    auto kind  = std::move(pendingDeltaKind_);
+    auto text  = std::move(pendingDeltaText_);
+    pendingDeltaMsgId_.clear();
     pendingDeltaKind_.clear();
     pendingDeltaText_.clear();
-    emitDeltaText(kind, text);
+    emitDeltaText(msgId, kind, text);
 }
 
 void EmbeddedClientAgentIO::onDelta(const agent::WireDelta& delta) {
     using T = agent::WireDelta::Type;
     if (deltaBatchMs_ > 0 && (delta.type == T::TextToken || delta.type == T::ThinkToken)) {
         const std::string kind = (delta.type == T::TextToken) ? "text" : "thinking";
-        if (!pendingDeltaText_.empty() && pendingDeltaKind_ != kind) {
+        // 按 (msgId, kind) 合批: 不允许跨 id 拼接 (每段是一条独立消息)
+        if (!pendingDeltaText_.empty()
+            && (pendingDeltaKind_ != kind || pendingDeltaMsgId_ != delta.msgId)) {
             flushDeltaBatch();
         }
+        pendingDeltaMsgId_ = delta.msgId;
         pendingDeltaKind_  = kind;
         pendingDeltaText_ += delta.text;
         if (deltaBatchTimer_) {

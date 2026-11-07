@@ -8,7 +8,7 @@
 >
 > 相关文档: [index.md](index.md) · [配置与设置边界](configuration.md)
 
-协议版本: `3` · 消息类型数: 48
+协议版本: `4` · 消息类型数: 48
 
 字段类型按序列化后的 JSON 取值推导 (`array<T>` 表示数组, `object{...}` 展开一层
 字段); 省略的字段表示该字段可缺省 (取零值/默认值), 老对端不认识的新字段会被忽略。
@@ -24,7 +24,7 @@
 | 6 | interrupt_request | `interrupt_request` | `type` string, `id` integer, `sessionId` string, `node` string, `value` string, `argJson` string |
 | 7 | interrupt_response | `interrupt_response` | `type` string, `id` integer, `result` object{allow:string} |
 | 8 | interrupt_expired | `interrupt_expired` | `type` string, `id` integer, `sessionId` string |
-| 9 | delta | `delta` | `type` string, `seq` integer, `text` string, `msgId` string, `tool_name` string, `tool_call_id` string, `arguments` string, `result` string, `historyCount` integer, `tailHash` string, `startTimeMs` integer, `durationMs` integer, `tps` number, `nodeName` string, `source` string, `message` object{role:string, text:string, startTimeMs:integer, durationMs:integer}, `kind` string |
+| 9 | delta | `delta` | `type` string, `seq` integer, `text` string, `msgId` string, `tool_name` string, `startTimeMs` integer, `durationMs` integer, `tps` number, `nodeName` string, `think` object{reasoning_tokens:integer, is_encrypted:boolean}, `message` object{role:string, text:string, startTimeMs:integer, durationMs:integer, tool:object{tool_name:string, tool_call_id:string, tool_result:string, tool_finished:boolean}}, `kind` string |
 | 10 | sync | `sync` | `fromIndex` integer, `tailHash` string, `deltaSeq` integer, `totalMessages` integer, `lastViewSeq` integer, `incremental` boolean, `messages` array<object{role:string, text:string, startTimeMs:integer, durationMs:integer, source:string}>, `message_queue` array<object{id:string, text:string, createdAtMs:integer, model:string, delivery:string, recovered:boolean}>, `queue_state` string, `type` string |
 | 11 | turn_result | `turn_result` | `type` string, `sessionId` string, `hasError` boolean, `interrupted` boolean, `errorMessage` string, `startTimeMs` integer, `durationMs` integer |
 | 12 | context_stats | `context_stats` | `type` string, `contextTokens` integer, `maxContextTokens` integer, `tps` number, `promptTokens` integer, `completionTokens` integer, `totalTokens` integer, `cachedPromptTokens` integer, `asyncWorks` array<object{id:string, kind:string, name:string, state:string, elapsedMs:integer, queueAhead:integer}> |
@@ -68,6 +68,12 @@
 
 - 每个 `type` 对应 `WireMessage` 变体的一个成员; 服务端按 `type` 分派, 未知
   `type` 返回 `nullopt` (连接不断开)。
+- `delta` 里与具体 `type` 相关的字段: `streamRole` 只在 `stream_begin` 上出现
+  (段角色: assistant/think), `tipType` 只在 `message_tip` 上出现 (info/warning/
+  error), `genPhase` 只在 `gen_status` 上出现 (waiting/tool_call/done)。
+- `message` 是整条展示消息 (`insert_message` / `update_message`): 消息边界、正文、
+  工具参数与结果、成败、耗时、默认折叠都在这一条里; 文本增量 (`text_token` /
+  `thinking_token`) 只带追加的文本。
 - `error.code` 取值见 `WireErrorCode`: 0 internal / 1 invalid state / 2 session not
   found / 3 session mismatch / 4 invalid args / 5 message not found; 未知码按 0 处理。
 - 连接阶段取值见 `WireConnectionStage`: unhandshaken / unbound / ready /

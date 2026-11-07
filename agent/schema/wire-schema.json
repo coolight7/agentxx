@@ -1,5 +1,5 @@
 {
-  "protocolVersion": 3,
+  "protocolVersion": 4,
   "messageCount": 48,
   "note": "生成物, 请勿手工编辑; 重新生成: AGENTXX_UPDATE_WIRE_SCHEMA=1 agentxx_test wire_schema",
   "messages": [
@@ -26,7 +26,7 @@
         "tailHash": "deadbeef",
         "language": "zh-cn",
         "afterViewSeq": 128,
-        "protocolVersion": 3,
+        "protocolVersion": 4,
         "capabilities": [
           "input.delivery",
           "ui.form"
@@ -58,7 +58,7 @@
           "gpt-x",
           "claude-y"
         ],
-        "protocolVersion": 3,
+        "protocolVersion": 4,
         "capabilities": [
           "input.delivery",
           "input.ack",
@@ -226,17 +226,12 @@
         "text": "string",
         "msgId": "string",
         "tool_name": "string",
-        "tool_call_id": "string",
-        "arguments": "string",
-        "result": "string",
-        "historyCount": "integer",
-        "tailHash": "string",
         "startTimeMs": "integer",
         "durationMs": "integer",
         "tps": "number",
         "nodeName": "string",
-        "source": "string",
-        "message": "object{role:string, text:string, startTimeMs:integer, durationMs:integer}",
+        "think": "object{reasoning_tokens:integer, is_encrypted:boolean}",
+        "message": "object{role:string, text:string, startTimeMs:integer, durationMs:integer, tool:object{tool_name:string, tool_call_id:string, tool_result:string, tool_finished:boolean}}",
         "kind": "string"
       },
       "sample": {
@@ -245,23 +240,27 @@
         "text": "增量文本",
         "msgId": "m-12",
         "tool_name": "agentxx_filesystem_read",
-        "tool_call_id": "call_1",
-        "arguments": "{\"path\":\"a.txt\"}",
-        "result": "文件内容",
-        "historyCount": 12,
-        "tailHash": "cafebabe",
         "startTimeMs": 1700000000123,
         "durationMs": 456,
         "tps": 12.5,
         "nodeName": "llm",
-        "source": "event:chat.message",
-        "message": {
-          "role": "assistant",
-          "text": "插入的完整消息",
-          "startTimeMs": 0,
-          "durationMs": 0
+        "think": {
+          "reasoning_tokens": 640,
+          "is_encrypted": true
         },
-        "kind": "insert_message"
+        "message": {
+          "role": "tool",
+          "text": "{\"path\":\"a.txt\"}",
+          "startTimeMs": 0,
+          "durationMs": 0,
+          "tool": {
+            "tool_name": "agentxx_filesystem_read",
+            "tool_call_id": "call_1",
+            "tool_result": "文件内容",
+            "tool_finished": true
+          }
+        },
+        "kind": "update_message"
       }
     },
     {

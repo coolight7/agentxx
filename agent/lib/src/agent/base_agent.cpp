@@ -1819,7 +1819,8 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
     // 来源标记 (事件中枢投递的事件输入): 角色随之变成 Role::Event (折叠展示),
     // 在 LLM 上下文里它仍是 user 消息 (下方 appendMessages 不变)
     userViewMsg.source = std::string{inputSource};
-    const auto userMsgId = session->appendViewMessage(std::move(userViewMsg));
+    const auto userMsgId = session->appendViewMessage(userViewMsg);
+    userViewMsg.id       = userMsgId;
     {
         // 用户消息写入会话上下文 (唯一权威): 图状态不再持有 messages 通道,
         // 引擎运行期间节点直接从会话读取上下文
@@ -1836,23 +1837,25 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
     // 记录轮次开始: 重置轮级 LLM API 平均生成速度 (token/s) 统计
     eventBridge->handleTurnStart();
 
-    // TurnStart 即时回显附件元数据（不含 dataUrl，防大包）：
-    // 客户端据此在 user 消息首屏即渲染附件卡片；dataUrl 经后续 Sync 补齐
-    // （Sync/SessionStore 保留 dataUrl 元数据以外的全部由服务端权威持有）
-    WireDelta turnStartDelta{
-        .text        = processedInput,
-        .msgId       = userMsgId,
+    // 用户行先整条下发 (insert_message), 再发轮次标记 (turn_start):
+    // - 顺序固定为"先整条, 后标记": 插件通道 (PluginChannelAgentIO) 需要从这条行里
+    //   取 TURN_START.text / attachments
+    // - 下发的副本清空 attachments[].dataUrl (防大包): 完整 dataUrl 留在历史里,
+    //   需要时由 GetViewMessages 拉取
+    {
+        ViewMessage out = userViewMsg;
+        for (auto& a : out.attachments) {
+            a.dataUrl.clear();
+        }
+        eventBridge->emitDelta(WireDelta{
+            .message = std::make_shared<ViewMessage>(std::move(out)),
+            .type    = WireDelta::Type::InsertMessage,
+        });
+    }
+    eventBridge->emitDelta(WireDelta{
         .startTimeMs = startTimeMs,
         .type        = WireDelta::Type::TurnStart,
-    };
-    // 事件输入: 客户端据此给这条用户消息加来源样式 (不解析正文)
-    turnStartDelta.source = std::string{inputSource};
-    for (const auto& a : attachments) {
-        MediaAttachment meta = a;
-        meta.dataUrl.clear();
-        turnStartDelta.attachments.push_back(std::move(meta));
-    }
-    eventBridge->emitDelta(std::move(turnStartDelta));
+    });
 
     auto cancelToken = std::make_shared<neograph::graph::CancelToken>();
     session->setCancelToken(cancelToken);
@@ -1987,6 +1990,11 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
     // 轮次统计系统提示
     const double turnTps = eventBridge->takeTurnTps();
 
+    // 轮末收尾: 定稿当前流式段 (取消/出错的半截内容也走这条: 可见则进历史并落盘)
+    // - 必须在 persistNow("turn-end") 之前, 保证直播槽不残留到下一轮、
+    //   定稿行与上下文一起落盘
+    eventBridge->finishTurn();
+
     // 轮次统计系统提示: 由 agent 线程插入会话历史并发送 WireDelta (原由 UI 端
     // 在 TurnEnd 时自行构造), 模型名之后显示本轮 LLM API 平均生成速度;
     // 必须在 flushViewMessages 之前插入, 确保提示消息落盘持久化到 SQLite
@@ -2060,12 +2068,10 @@ asio::awaitable<BaseAgent::TurnResult> BaseAgent::runTurnAsync(
     session->persistNow("turn-end");
 
     eventBridge->emitDelta(WireDelta{
-        .tailHash     = session->chainHash.tailHex(),
-        .historyCount = session->chainHash.count(),
-        .startTimeMs  = startTimeMs,
-        .durationMs   = durationMs,
-        .tps          = turnTps,
-        .type         = WireDelta::Type::TurnEnd,
+        .startTimeMs = startTimeMs,
+        .durationMs  = durationMs,
+        .tps         = turnTps,
+        .type        = WireDelta::Type::TurnEnd,
     });
 
     // checkpoint store 采用 InMemorySingleCheckpointStore, save 时自动淘汰

@@ -119,14 +119,18 @@ struct CloseReason {
 inline std::string_view deltaTypeToString(WireDelta::Type t) noexcept {
     using T = WireDelta::Type;
     switch (t) {
+        case T::StreamBegin:
+            return "stream_begin";
         case T::TextToken:
             return "text_token";
         case T::ThinkToken:
             return "thinking_token";
-        case T::ToolStart:
-            return "tool_start";
-        case T::ToolEnd:
-            return "tool_end";
+        case T::InsertMessage:
+            return "insert_message";
+        case T::UpdateMessage:
+            return "update_message";
+        case T::StreamEnd:
+            return "stream_end";
         case T::TurnStart:
             return "turn_start";
         case T::TurnEnd:
@@ -139,10 +143,6 @@ inline std::string_view deltaTypeToString(WireDelta::Type t) noexcept {
             return "message_tip";
         case T::GenStatus:
             return "gen_status";
-        case T::InsertMessage:
-            return "insert_message";
-        case T::UpdateMessage:
-            return "update_message";
     }
     return "text_token";
 }
@@ -174,17 +174,23 @@ inline WireDelta::GenPhase genPhaseFromString(std::string_view s) noexcept {
 
 inline std::optional<WireDelta::Type> deltaTypeFromString(std::string_view s) noexcept {
     using T = WireDelta::Type;
+    if (s == "stream_begin") {
+        return T::StreamBegin;
+    }
     if (s == "text_token") {
         return T::TextToken;
     }
     if (s == "thinking_token") {
         return T::ThinkToken;
     }
-    if (s == "tool_start") {
-        return T::ToolStart;
+    if (s == "insert_message") {
+        return T::InsertMessage;
     }
-    if (s == "tool_end") {
-        return T::ToolEnd;
+    if (s == "update_message") {
+        return T::UpdateMessage;
+    }
+    if (s == "stream_end") {
+        return T::StreamEnd;
     }
     if (s == "turn_start") {
         return T::TurnStart;
@@ -204,12 +210,6 @@ inline std::optional<WireDelta::Type> deltaTypeFromString(std::string_view s) no
     if (s == "gen_status") {
         return T::GenStatus;
     }
-    if (s == "insert_message") {
-        return T::InsertMessage;
-    }
-    if (s == "update_message") {
-        return T::UpdateMessage;
-    }
     return std::nullopt;
 }
 
@@ -223,33 +223,15 @@ inline utilxx_base::Json deltaToJson(const WireDelta& d) {
     if (!d.msgId.empty()) {
         j["msgId"] = d.msgId;
     }
+    // GenStatus 专用: ToolCall 阶段已解析出的工具名
     if (!d.toolName.empty()) {
         j["tool_name"] = d.toolName;
     }
-    if (!d.toolCallId.empty()) {
-        j["tool_call_id"] = d.toolCallId;
-    }
-    if (!d.arguments.empty()) {
-        j["arguments"] = d.arguments;
-    }
-    if (!d.result.empty()) {
-        j["result"] = d.result;
-    }
-    // ToolEnd 的终态: `ok` 不写 (缺省即成功); 客户端不认识的取值按 `ok` 处理
-    if (d.type == WireDelta::Type::ToolEnd && d.status != agentxx::util::ToolStatus::Ok) {
-        j["status"] = std::string{agentxx::util::toolStatusName(d.status)};
-    }
-    // GenStatus: 生成阶段 (占位提示; tool_name 复用同名字段)
+    // GenStatus: 生成阶段 (占位提示)
     if (d.type == WireDelta::Type::GenStatus) {
         j["genPhase"] = std::string(genPhaseToString(d.genPhase));
     }
-    if (d.historyCount > 0) {
-        j["historyCount"] = d.historyCount;
-    }
-    if (!d.tailHash.empty()) {
-        j["tailHash"] = d.tailHash;
-    }
-    // 运行时统计字段 (TurnEnd 使用)
+    // 运行时统计字段 (TurnStart/TurnEnd/StreamBegin 使用)
     if (d.startTimeMs > 0) {
         j["startTimeMs"] = d.startTimeMs;
     }
@@ -262,19 +244,9 @@ inline utilxx_base::Json deltaToJson(const WireDelta& d) {
     if (!d.nodeName.empty()) {
         j["nodeName"] = d.nodeName;
     }
-    // TurnStart 来源标记 (事件中枢投递的输入): 客户端据此加来源样式
-    if (!d.source.empty()) {
-        j["source"] = d.source;
-    }
-    // TurnStart 即时回显附件元数据（不含 dataUrl，见 WireDelta::attachments 注释）
-    if (d.type == WireDelta::Type::TurnStart && !d.attachments.empty()) {
-        utilxx_base::Json arr = utilxx_base::Json::array();
-        for (const auto& a : d.attachments) {
-            MediaAttachment meta = a;
-            meta.dataUrl.clear();
-            arr.push_back(meta.toJson());
-        }
-        j["attachments"] = std::move(arr);
+    // StreamBegin: 段角色与思考元数据
+    if (d.type == WireDelta::Type::StreamBegin) {
+        j["streamRole"] = std::string(viewMessageRoleToString(d.streamRole));
     }
     if (d.think) {
         utilxx_base::Json th = utilxx_base::Json::object();
@@ -317,28 +289,15 @@ inline std::optional<WireDelta> deltaFromJson(const utilxx_base::Json& j) {
         return std::nullopt;
     }
     WireDelta d;
-    d.type         = typeOpt.value();
-    d.seq          = j.value("seq", uint64_t{0});
-    d.text         = j.value("text", std::string{});
-    d.msgId        = j.value("msgId", std::string{});
-    d.toolName     = j.value("tool_name", std::string{});
-    d.toolCallId   = j.value("tool_call_id", std::string{});
-    d.arguments    = j.value("arguments", std::string{});
-    d.result       = j.value("result", std::string{});
-    d.status       = agentxx::util::toolStatusFromName(j.value("status", std::string{}));
-    d.historyCount = j.value("historyCount", uint64_t{0});
-    d.tailHash     = j.value("tailHash", std::string{});
-    d.startTimeMs  = j.value("startTimeMs", int64_t{0});
-    d.durationMs   = j.value("durationMs", int64_t{0});
-    d.tps          = j.value("tps", 0.0);
-    d.nodeName     = j.value("nodeName", std::string{});
-    d.source       = j.value("source", std::string{});
-    if (j.contains("attachments") && j["attachments"].is_array()
-        && d.type == WireDelta::Type::TurnStart) {
-        for (const auto& a : j["attachments"]) {
-            d.attachments.push_back(MediaAttachment::fromJson(a));
-        }
-    }
+    d.type        = typeOpt.value();
+    d.seq         = j.value("seq", uint64_t{0});
+    d.text        = j.value("text", std::string{});
+    d.msgId       = j.value("msgId", std::string{});
+    d.toolName    = j.value("tool_name", std::string{});
+    d.startTimeMs = j.value("startTimeMs", int64_t{0});
+    d.durationMs  = j.value("durationMs", int64_t{0});
+    d.tps         = j.value("tps", 0.0);
+    d.nodeName    = j.value("nodeName", std::string{});
     if (j.contains("think") && j["think"].is_object()) {
         ViewMessage::ThinkData th;
         th.reasoningTokens = j["think"].value("reasoning_tokens", 0);
@@ -360,6 +319,11 @@ inline std::optional<WireDelta> deltaFromJson(const utilxx_base::Json& j) {
     }
     if (d.type == WireDelta::Type::GenStatus) {
         d.genPhase = genPhaseFromString(j.value("genPhase", std::string{"done"}));
+    }
+    if (d.type == WireDelta::Type::StreamBegin) {
+        if (auto role = viewMessageRoleFromString(j.value("streamRole", std::string{}))) {
+            d.streamRole = *role;
+        }
     }
     return d;
 }
@@ -441,6 +405,11 @@ inline utilxx_base::Json syncToJson(const WireSyncPayload& p) {
     if (!p.queueState.empty()) {
         j["queue_state"] = p.queueState;
     }
+    // 进行中的流式消息 (直播槽): 只供中途接入/重连的客户端补齐半截内容,
+    // 不在 messages 里, 也不计入 fromIndex/totalMessages/lastViewSeq
+    if (p.streaming.has_value()) {
+        j["streaming"] = p.streaming->toJson();
+    }
     return j;
 }
 
@@ -467,6 +436,12 @@ inline std::optional<WireSyncPayload> syncFromJson(const utilxx_base::Json& j) {
         }
     }
     p.queueState = j.value("queue_state", std::string{});
+    if (j.contains("streaming") && j["streaming"].is_object()) {
+        auto streaming   = ViewMessage::fromJson(j["streaming"]);
+        if (!streaming.id.empty()) {
+            p.streaming = std::move(streaming);
+        }
+    }
     return p;
 }
 

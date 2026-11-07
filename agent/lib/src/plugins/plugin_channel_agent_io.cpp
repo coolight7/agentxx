@@ -90,7 +90,12 @@ void PluginChannelAgentIO::emit(
     }
 }
 
-void PluginChannelAgentIO::emitDeltaText(std::string_view kind, std::string_view text) {
+void PluginChannelAgentIO::emitDeltaText(
+    std::string_view msgId,
+    std::string_view kind,
+    std::string_view text
+) {
+    (void)msgId;
     const bool isText = (kind != "thinking");
     if (isText) {
         turnText_ += text;
@@ -106,31 +111,74 @@ void PluginChannelAgentIO::emitDeltaText(std::string_view kind, std::string_view
 
 void PluginChannelAgentIO::emitDeltaEvent(const agent::WireDelta& delta) {
     using T = agent::WireDelta::Type;
+    using R = agent::ViewMessage::Role;
     switch (delta.type) {
-        case T::TurnStart: {
-            turnText_.clear();
-            segmentText_.clear();
-            lastSegment_.clear();
-            utilxx_base::Json payload = utilxx_base::Json::object();
-            payload["msgId"]          = delta.msgId;
-            payload["startTimeMs"]    = delta.startTimeMs;
-            if (!delta.attachments.empty()) {
-                utilxx_base::Json atts = utilxx_base::Json::array();
-                for (const auto& att : delta.attachments) {
-                    utilxx_base::Json one = att.toJson();
-                    // dataUrl 体积大: 通道事件只给元数据 (需要内容时走附件路径)
-                    one.erase("data_url");
-                    atts.push_back(std::move(one));
-                }
-                payload["attachments"] = std::move(atts);
+        // 历史行 (整条下发): 插件侧的 TURN_START / TOOL_START / TOOL_END 从这里派生,
+        // 不再有专门的 tool_start/tool_end 增量
+        case T::InsertMessage:
+        case T::UpdateMessage: {
+            if (!delta.message) {
+                break;
             }
-            emit(AGENTXX_PLUGIN_CHANNEL_EVT_TURN_START, 0, delta.text, &payload);
+            const auto& msg = *delta.message;
+            if (msg.role == R::User || msg.role == R::Event) {
+                // 用户行 (轮次开始): 重置本轮累积, 交 TURN_START 事件
+                turnText_.clear();
+                segmentText_.clear();
+                lastSegment_.clear();
+                utilxx_base::Json payload = utilxx_base::Json::object();
+                payload["msgId"]          = msg.id;
+                payload["startTimeMs"]    = msg.startTimeMs;
+                if (!msg.attachments.empty()) {
+                    utilxx_base::Json atts = utilxx_base::Json::array();
+                    for (const auto& att : msg.attachments) {
+                        utilxx_base::Json one = att.toJson();
+                        // dataUrl 体积大: 通道事件只给元数据 (需要内容时走附件路径)
+                        one.erase("data_url");
+                        atts.push_back(std::move(one));
+                    }
+                    payload["attachments"] = std::move(atts);
+                }
+                emit(AGENTXX_PLUGIN_CHANNEL_EVT_TURN_START, 0, msg.text, &payload);
+                break;
+            }
+            if (msg.role == R::Tool && msg.tool) {
+                if (!msg.tool->toolFinished) {
+                    // 工具行写入 = 调用开始: 正文段被工具打断, 记下已产出的那一段
+                    if (!segmentText_.empty()) {
+                        lastSegment_ = segmentText_;
+                        segmentText_.clear();
+                    }
+                    utilxx_base::Json payload = utilxx_base::Json::object();
+                    payload["msgId"]          = msg.id;
+                    payload["toolName"]       = msg.tool->toolName;
+                    payload["toolCallId"]     = msg.tool->toolCallId;
+                    payload["arguments"]      = msg.text;
+                    emit(AGENTXX_PLUGIN_CHANNEL_EVT_TOOL_START, 0, {}, &payload);
+                } else {
+                    utilxx_base::Json payload = utilxx_base::Json::object();
+                    payload["msgId"]          = msg.id;
+                    payload["toolName"]       = msg.tool->toolName;
+                    payload["toolCallId"]     = msg.tool->toolCallId;
+                    payload["result"]         = msg.tool->toolResult;
+                    // 终态名 (ok/failed/interrupted/canceled), 不再传布尔 hasError
+                    payload["status"]
+                        = std::string{agentxx::util::toolStatusName(msg.tool->status)};
+                    emit(AGENTXX_PLUGIN_CHANNEL_EVT_TOOL_END, 0, {}, &payload);
+                }
+                break;
+            }
+            // 其它角色 (assistant/think 的定稿行): 正文已经以 token 交付, 不重复派生
             break;
         }
+        case T::StreamBegin:
         case T::TextToken:
         case T::ThinkToken: {
             // 合批关闭时逐 token 走到这里 (合批开启时这些增量在 [onDelta] 里就
             // 被攒起来, 由 [emitDeltaText] 统一交出)
+            if (delta.type == T::StreamBegin) {
+                break;
+            }
             const bool isText = (delta.type == T::TextToken);
             if (isText) {
                 turnText_ += delta.text;
@@ -143,29 +191,6 @@ void PluginChannelAgentIO::emitDeltaEvent(const agent::WireDelta& delta) {
                 delta.text,
                 nullptr
             );
-            break;
-        }
-        case T::ToolStart: {
-            // 工具调用打断正文段: 记住已产出的那一段 (作为 TURN_END.text 候选)
-            if (!segmentText_.empty()) {
-                lastSegment_ = segmentText_;
-                segmentText_.clear();
-            }
-            utilxx_base::Json payload = utilxx_base::Json::object();
-            payload["toolName"]       = delta.toolName;
-            payload["toolCallId"]     = delta.toolCallId;
-            payload["arguments"]      = delta.arguments;
-            emit(AGENTXX_PLUGIN_CHANNEL_EVT_TOOL_START, 0, {}, &payload);
-            break;
-        }
-        case T::ToolEnd: {
-            utilxx_base::Json payload = utilxx_base::Json::object();
-            payload["toolName"]       = delta.toolName;
-            payload["toolCallId"]     = delta.toolCallId;
-            payload["result"]         = delta.result;
-            // 终态名 (ok/failed/interrupted/canceled), 不再传布尔 hasError
-            payload["status"] = std::string{agentxx::util::toolStatusName(delta.status)};
-            emit(AGENTXX_PLUGIN_CHANNEL_EVT_TOOL_END, 0, {}, &payload);
             break;
         }
         case T::GenStatus: {
@@ -191,9 +216,13 @@ void PluginChannelAgentIO::emitDeltaEvent(const agent::WireDelta& delta) {
             emit(AGENTXX_PLUGIN_CHANNEL_EVT_TIP, 0, delta.text, &payload);
             break;
         }
+        case T::TurnStart:
+        case T::TurnEnd:
+        case T::NodeStart:
+        case T::NodeEnd:
+        case T::StreamEnd:
         default:
-            // NodeStart / NodeEnd / InsertMessage / UpdateMessage 属界面内部事件,
-            // 通道不转 (插件关心的是对话内容与工具, 不是渲染细节)
+            // 轮次/节点标记与纯界面 op: 插件关心的是对话内容与工具, 不是渲染细节
             break;
     }
 }

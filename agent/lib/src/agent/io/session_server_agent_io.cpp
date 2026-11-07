@@ -49,6 +49,23 @@ static constexpr size_t kMaxStashedWhileSwitching = 64;
 /// 与插件接口给出)
 static constexpr size_t kAsyncWorksInStats = 10;
 
+/// 单个消息级 op 进重放缓冲的字节上限 (超过则只广播, 不入缓冲)
+/// - 缓冲按条数计 (config_.deltaBufferCap), 一条 MB 级的工具行会把整窗口挤掉;
+///   丢掉的 token/行靠 afterViewSeq 增量补拉与定稿行的 upsert 补回来
+static constexpr size_t kDeltaBufferMaxMsgBytes = 64 * 1024;
+
+/// 粗略估算一个 op 的载荷字节 (不序列化: 这里只看量级, 不进缓存)
+static bool deltaTooLargeForReplay(const WireDelta& delta) {
+    size_t bytes = delta.text.size() + delta.msgId.size();
+    if (delta.message) {
+        bytes += delta.message->text.size();
+        if (delta.message->tool) {
+            bytes += delta.message->tool->toolResult.size();
+        }
+    }
+    return bytes > kDeltaBufferMaxMsgBytes;
+}
+
 /// 后台任务台账 JSON → 界面条目
 ///
 /// 台账条目 (`AsyncWorkManager::listJson`) 是给模型/插件看的完整记录, 界面只需要
@@ -344,7 +361,16 @@ void SessionServerAgentIO::sendToPeer(WireMessage msg) {
     // - 重放 delta: 来自缓冲内部 (handleHello 重放), seq <= 缓冲尾 seq → 不重复入缓冲
     // 由此重放路径无需特殊发送通道, 也不会污染缓冲
     if (const auto* d = std::get_if<WireDelta>(&msg)) {
-        if (deltaBuffer_.empty() || d->seq > deltaBuffer_.back().seq) {
+        // 大消息 op (工具行的参数 + 结果整条下发) 不入重放缓冲: 缓冲按条数计,
+        // 一条 MB 级的 op 会把整窗口挤出去。断线重连靠 afterViewSeq 增量补拉
+        // 补齐 (库里的已定稿行本来就在, 且 upsert 幂等)
+        if (deltaTooLargeForReplay(*d)) {
+            XX_LOGD(
+                "[session_ctrl] skip replay buffer for large delta (kind={}, seq={})",
+                static_cast<int>(d->type),
+                d->seq
+            );
+        } else if (deltaBuffer_.empty() || d->seq > deltaBuffer_.back().seq) {
             deltaBuffer_.push_back(*d);
             while (deltaBuffer_.size() > config_.deltaBufferCap) {
                 deltaBuffer_.pop_front();
@@ -2496,6 +2522,8 @@ WireSyncPayload SessionServerAgentIO::buildFullSync() {
         // 快照序号: 客户端据此重置去重用的序号 (服务端 seq 可能已重新计数)
         p.deltaSeq    = sess->deltaSeq;
         p.lastViewSeq = sess->lastViewSeq();
+        // 直播槽 (进行中的流式消息): 中途接入的客户端据此补上这半截内容
+        p.streaming = sess->streamingView;
     }
     p.messageQueue = std::vector<MessageQueueItem>(messageQueue_.begin(), messageQueue_.end());
     p.queueState   = std::string{sessionQueueStateText(queueState_)};
@@ -2523,6 +2551,7 @@ WireSyncPayload SessionServerAgentIO::buildTailSync(size_t tailCount) {
     // 快照序号: 客户端据此重置去重用的序号 (服务端 seq 可能已重新计数)
     p.deltaSeq     = sess->deltaSeq;
     p.lastViewSeq  = sess->lastViewSeq();
+    p.streaming    = sess->streamingView;
     p.messageQueue = std::vector<MessageQueueItem>(messageQueue_.begin(), messageQueue_.end());
     p.queueState   = std::string{sessionQueueStateText(queueState_)};
     return p;

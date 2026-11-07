@@ -14,6 +14,41 @@
 namespace agentxx {
 namespace events {
 
+using ViewMessage = agentxx::agent::ViewMessage;
+using WireDelta   = agentxx::agent::WireDelta;
+
+namespace {
+
+/// 当前系统时钟毫秒 (与 ViewMessage 的 startTimeMs/durationMs 同一时钟)
+int64_t nowMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::system_clock::now().time_since_epoch()
+    )
+        .count();
+}
+
+/// 合并思考元数据 (加密标记取或, token 统计取大)
+void mergeThinkMeta(ViewMessage::ThinkData& dst, const ViewMessage::ThinkData& src) {
+    dst.isEncrypted     = dst.isEncrypted || src.isEncrypted;
+    dst.reasoningTokens = std::max(dst.reasoningTokens, src.reasoningTokens);
+}
+
+/// 该角色在展示历史上的默认折叠态 (折叠只是默认值, 运行时的展开/折叠在客户端)
+bool defaultCollapsedOf(ViewMessage::Role role) noexcept {
+    using R = ViewMessage::Role;
+    switch (role) {
+        case R::Think:
+        case R::Tool:
+        case R::Tip:
+        case R::Event:
+            return true;
+        default:
+            return false;
+    }
+}
+
+} // namespace
+
 EventStreamInterface::EventStreamInterface(
     std::string_view      in_name,
     const std::type_info& elementType
@@ -74,7 +109,7 @@ void EventBridge::operator()(const neograph::graph::GraphEvent& event) {
             break;
         default:
             // 未知/未处理事件: 重置 chunk 类型, 使下一个 token 视为新流开始
-            // (tps 计时重置; THINKING 段由 thinkSegActive_ 跟踪, 不受影响)
+            // (tps 计时重置; 已打开的流式段不受影响, 由定稿路径收尾)
             lastChatChunkType_ = neograph::ChatStreamChunk::TYPE_UNKNOWN;
             break;
     }
@@ -100,8 +135,6 @@ neograph::graph::GraphStreamCallback EventBridge::makeCallback() {
 void EventBridge::handleLLMToken(const neograph::graph::GraphEvent& event) {
     std::string token;
     std::string kind = "content";
-    // 进入前的 chunk 类型: 用于检测 THINKING 流段的进入/离开
-    const bool prevWasThinking = (lastChatChunkType_ == neograph::ChatStreamChunk::TYPE_THINKING);
 
     // tps 统计: 新 ModelCall 流开始 (节点开始/结束后的首个 token) 时重置计时与计数
     if (lastChatChunkType_ == neograph::ChatStreamChunk::TYPE_UNKNOWN) {
@@ -132,22 +165,28 @@ void EventBridge::handleLLMToken(const neograph::graph::GraphEvent& event) {
         token = event.data.dump();
     }
 
-    // THINKING 流段跟踪:
-    // - 进入 THINKING: 记录段起点 (think 耗时从此刻起算, 不随 token 携带时长,
-    //   避免"流式刚开始就显示耗时")
-    // - 离开 THINKING (切换到正文): 先结算 think 段耗时 —— 在正文首个 token 的
-    //   WireDelta 之前发送空文本 ThinkToken 结算包, client 收到后为已落盘的 Think
-    //   消息回填最终时长 ("输出完成时才计算并显示")
-    const bool curIsThinking = (lastChatChunkType_ == neograph::ChatStreamChunk::TYPE_THINKING);
-    if (!prevWasThinking && curIsThinking) {
-        thinkSegActive_  = true;
-        thinkSegStart_   = std::chrono::system_clock::now();
-        thinkSegStartMs_ = static_cast<int64_t>(
-            std::chrono::duration_cast<std::chrono::milliseconds>(thinkSegStart_.time_since_epoch())
-                .count()
-        );
-    } else if (prevWasThinking && !curIsThinking && thinkSegActive_) {
-        finalizeThinkSegment();
+    // 消息成型 (agent 是唯一写者):
+    // - 类型切换 (思考 <-> 正文) = 上一段结束、下一段开始, 一段一行, 不做跨段合并
+    // - 思考类型且文本为空 = 加密思考首包/元数据包: 只带元数据, 不追加文本
+    const bool isThinking = (lastChatChunkType_ == neograph::ChatStreamChunk::TYPE_THINKING);
+    if (isThinking && token.empty()) {
+        const ViewMessage::ThinkData meta{
+            .reasoningTokens = 0,
+            .isEncrypted     = true,
+        };
+        if (openKind_ != OpenStreamKind::Think) {
+            beginStream(ViewMessage::Role::Think, meta);
+        } else {
+            mergeStreamThink(meta);
+        }
+    } else {
+        const auto wantRole = isThinking ? ViewMessage::Role::Think : ViewMessage::Role::Assistant;
+        const auto wantKind
+            = isThinking ? OpenStreamKind::Think : OpenStreamKind::Assistant;
+        if (openKind_ != wantKind) {
+            beginStream(wantRole);
+        }
+        appendStreamText(token, isThinking);
     }
 
     // 累计估算 token 数: 批量估算 (每16 token推送窗口再估, 减少 countTokens 遍历)
@@ -164,27 +203,117 @@ void EventBridge::handleLLMToken(const neograph::graph::GraphEvent& event) {
 
     // 总线发布
     publishModelToken(token, kind);
+}
 
-    std::optional<agentxx::agent::ViewMessage::ThinkData> thinkData;
-    if (lastChatChunkType_ == neograph::ChatStreamChunk::TYPE_THINKING) {
-        if (token.empty()) {
-            thinkData = agentxx::agent::ViewMessage::ThinkData{
-                .reasoningTokens = 0,
-                .isEncrypted     = true,
-            };
-        }
+void EventBridge::beginStream(
+    ViewMessage::Role                            role,
+    const std::optional<ViewMessage::ThinkData>& meta
+) {
+    // 角色切换/上一段结束: 先把上一段定稿 (可见则落行并广播)
+    flushOpenStream();
+    openKind_    = OpenStreamKind::None;
+    openId_.clear();
+    // headless (无对端) 会话不建直播槽: 不逐 token 累积, 也不发 stream_begin/token
+    // (定稿路径不变: channel write 照常写历史)
+    if (!session_ || !session_->io) {
+        return;
     }
-
+    ViewMessage skeleton;
+    skeleton.role        = role;
+    skeleton.startTimeMs = nowMs();
+    skeleton.think       = meta;
+    skeleton.collapsed   = defaultCollapsedOf(role);
+    openStartMs_         = skeleton.startTimeMs;
+    openId_              = session_->beginStreamingView(std::move(skeleton));
+    openKind_            = (role == ViewMessage::Role::Think) ? OpenStreamKind::Think
+                                                             : OpenStreamKind::Assistant;
     emitDelta(agentxx::agent::WireDelta{
-        .text        = std::move(token),
-        .startTimeMs = nodeStartTimeMs_,
-        .think       = std::move(thinkData),
-        .type        = (lastChatChunkType_ == neograph::ChatStreamChunk::TYPE_THINKING)
-                           ? agentxx::agent::WireDelta::Type::ThinkToken
-                           : agentxx::agent::WireDelta::Type::TextToken,
-        // token WireDelta 不再携带 durationMs: think 耗时由 finalizeThinkSegment()
-        // 在段落完成时以独立结算包发送 (见 handleLLMToken 内 THINKING 流段跟踪)
+        .msgId       = openId_,
+        .startTimeMs = openStartMs_,
+        .streamRole  = role,
+        .think       = meta,
+        .type        = agentxx::agent::WireDelta::Type::StreamBegin,
     });
+}
+
+void EventBridge::appendStreamText(std::string_view text, bool thinking) {
+    if (openKind_ == OpenStreamKind::None || !session_ || text.empty()) {
+        return;
+    }
+    session_->appendStreamingText(text);
+    emitDelta(agentxx::agent::WireDelta{
+        .text  = std::string{text},
+        .msgId = openId_,
+        .type  = thinking ? agentxx::agent::WireDelta::Type::ThinkToken
+                          : agentxx::agent::WireDelta::Type::TextToken,
+    });
+}
+
+void EventBridge::mergeStreamThink(const ViewMessage::ThinkData& data) {
+    if (openKind_ == OpenStreamKind::None || !session_) {
+        return;
+    }
+    session_->mergeStreamingThink(data);
+}
+
+size_t EventBridge::commitStreamRow(ViewMessage row, bool usedStreamingSlot) {
+    // 发出去的副本必须先带好 id (下面 move 进了会话)
+    ViewMessage out = row;
+    const auto  id  = usedStreamingSlot ? session_->finalizeStreamingView(std::move(row))
+                                        : session_->appendViewMessage(std::move(row));
+    out.id          = id;
+    const size_t index = session_->viewMessages.size() - 1;
+    emitDelta(agentxx::agent::WireDelta{
+        .message = std::make_shared<ViewMessage>(std::move(out)),
+        .type    = agentxx::agent::WireDelta::Type::InsertMessage,
+    });
+    return index;
+}
+
+void EventBridge::flushOpenStream() {
+    const auto kind = openKind_;
+    openKind_       = OpenStreamKind::None;
+    const auto id   = openId_;
+    openId_.clear();
+    if (kind == OpenStreamKind::None || !session_) {
+        return;
+    }
+    const auto role = (kind == OpenStreamKind::Think) ? ViewMessage::Role::Think
+                                                      : ViewMessage::Role::Assistant;
+    ViewMessage row;
+    row.role = role;
+    if (session_->streamingView.has_value()) {
+        auto& slot      = *session_->streamingView;
+        row.text        = std::move(slot.text);
+        row.think       = slot.think;
+        row.startTimeMs = slot.startTimeMs > 0 ? slot.startTimeMs : openStartMs_;
+    } else {
+        // 直播槽不在 (headless/已被清掉): 仍按段起止算耗时
+        row.startTimeMs = openStartMs_;
+    }
+    if (row.startTimeMs <= 0) {
+        row.startTimeMs = openStartMs_;
+    }
+    row.durationMs = std::max<int64_t>(0, nowMs() - (row.startTimeMs > 0 ? row.startTimeMs : 0));
+    row.collapsed  = defaultCollapsedOf(role);
+
+    if (row.hasVisibleContent()) {
+        // 定稿成正式行 (取消/出错的半截内容走同一路径: 用户看到过就进历史)
+        const size_t index = commitStreamRow(std::move(row), true);
+        stepRows_.push_back(StepRow{role, id, index});
+        return;
+    }
+    // 整段视觉为空 (模型只吐了零宽占位符之类): 不进历史, 让客户端丢掉流式项
+    session_->clearStreamingView();
+    emitDelta(agentxx::agent::WireDelta{
+        .msgId = id,
+        .type  = agentxx::agent::WireDelta::Type::StreamEnd,
+    });
+}
+
+void EventBridge::finishTurn() {
+    flushOpenStream();
+    stepRows_.clear();
 }
 
 void EventBridge::handleGenStatusChunk(const neograph::ChatStreamChunk& chunk) {
@@ -195,9 +324,9 @@ void EventBridge::handleGenStatusChunk(const neograph::ChatStreamChunk& chunk) {
         return;
     }
     // 工具调用开始 (参数未接收完, 内容无法展示): 提示 UI "正在调用工具"
-    // - 思考流此时已结束 (工具调用紧接思考/正文之后), 先结算思考段耗时,
-    //   保证 client 先回填 Think 消息耗时再展示占位提示
-    finalizeThinkSegment();
+    // - 思考/正文流此时已结束 (工具调用紧接其后), 先定稿当前段,
+    //   保证 client 先收到行 (含耗时) 再展示占位提示
+    flushOpenStream();
     emitGenStatus(Phase::ToolCall, chunk.data);
 }
 
@@ -214,40 +343,13 @@ void EventBridge::emitGenStatus(
     });
 }
 
-void EventBridge::finalizeThinkSegment() {
-    if (!thinkSegActive_) {
-        return;
-    }
-    thinkSegActive_ = false;
-    // 结算包: 空文本 ThinkToken, 仅携带该思考段的开始时间与总耗时。
-    // client (TUI) 对空文本 ThinkToken 的处理 = 先落盘累积中的 Think 流文本,
-    // 再向前回溯最近一条 Think 消息回填 startTimeMs/durationMs —— 即"输出完成时
-    // 才计算这条消息的耗时并显示"
-    const int64_t durationMs
-        = static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
-                                   std::chrono::system_clock::now() - thinkSegStart_
-        )
-                                   .count());
-    if (lastThinkSegStartMs_ == 0) {
-        lastThinkSegStartMs_ = thinkSegStartMs_;
-    }
-    lastThinkSegDurationMs_ += durationMs;
-    emitDelta(agentxx::agent::WireDelta{
-        .text        = {},
-        .startTimeMs = thinkSegStartMs_,
-        .durationMs  = lastThinkSegDurationMs_,
-        .type        = agentxx::agent::WireDelta::Type::ThinkToken,
-    });
-}
-
 void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
     using agentxx::agent::ViewMessage;
     using agentxx::agent::WireDelta;
 
-    // 最终 assistant 消息写出即生成结束: 先结算未闭合的 THINKING 流段
-    // (典型场景: 思考后直接发起 tool_calls, 无正文 token 触发类型切换,
-    // 结算包必须先于 ToolStart WireDelta 到达, client 才能回填 Think 时长)
-    finalizeThinkSegment();
+    // 任何通道写入前先收尾当前流式段: 保证"发提示/落行"之前没有未定稿的段
+    // (重试提示来自 messages/message_tip 通道写入, 天然满足)
+    flushOpenStream();
 
     auto chan = event.data.value("channel", std::string{});
     // event.data 为图边界类型 (neograph::json): value 整体转业务 Json
@@ -287,6 +389,7 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
             // 展开语义与渲染端 (TUI) 同步一致: 历史消息直接就是渲染消息,
             // client 端无需再按 json 解析
             auto reasoning       = jm.value("reasoning_content", std::string{});
+            auto content         = jm.value("content", std::string{});
             int  reasoningTokens = 0;
             bool isEncrypted     = false;
             if (jm.contains("extra") && jm["extra"].is_object()) {
@@ -297,106 +400,130 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
                     isEncrypted = true;
                 }
             }
-            int64_t thinkStartTimeMs = jm.value("startTimeMs", int64_t{0});
-            int64_t thinkDurationMs  = jm.value("durationMs", int64_t{0});
-            if (thinkStartTimeMs == 0) {
-                thinkStartTimeMs
-                    = lastThinkSegStartMs_ > 0 ? lastThinkSegStartMs_ : nodeStartTimeMs_;
-            }
-            if (thinkDurationMs == 0) {
-                thinkDurationMs = lastThinkSegDurationMs_;
-            }
-            // 回退: 若为非流式或无独立 THINKING chunk 的思考 (如仅返回 reasoning_tokens / encrypted
-            // reasoning), 但有节点计时, 则以节点运行耗时作为回退值
-            if (thinkDurationMs == 0
-                && (isEncrypted || reasoningTokens > 0 || !reasoning.empty())) {
-                if (nodeStartTimeMs_ > 0) {
-                    const int64_t nowMs = static_cast<int64_t>(
-                        std::chrono::duration_cast<std::chrono::milliseconds>(
-                            std::chrono::system_clock::now().time_since_epoch()
-                        )
-                            .count()
-                    );
-                    thinkDurationMs = std::max(int64_t{0}, nowMs - nodeStartTimeMs_);
-                }
-            }
-            // 思考消息只在"有内容可看"时才创建: 正文可见, 或带加密思考/token 统计。
-            // 只含空白/零宽占位符的思考 (模型偶尔只吐出 \n、U+200B 之类) 不建消息 ——
-            // 否则展示历史里会多出一条只剩 `[思考]` 头部、下面什么都没有的空消息,
-            // 而且它不追加尾部空行, 看上去和后面的消息贴在一起 (判定与服务端加载 /
-            // 客户端插入层共用 [ViewMessage::hasVisibleContent])
-            auto thinkMsg = ViewMessage::makeText(
-                ViewMessage::Role::Think,
-                reasoning,
-                thinkStartTimeMs,
-                thinkDurationMs
-            );
+            // 定稿元数据 (0 = 该字段未提供): 提供时整条覆盖到已有行上, 未提供时保留
+            // 流式段自己记的起止; 只有"本步骤没有流式段"(非流式/网关缓冲)才按节点
+            // 计时回退, 避免定稿把流式行的起始时间改成节点开始时间 (多一条无意义增量)
+            const int64_t jsonStartMs    = jm.value("startTimeMs", int64_t{0});
+            const int64_t jsonDurationMs = jm.value("durationMs", int64_t{0});
+            std::optional<ViewMessage::ThinkData> thinkMeta;
             if (isEncrypted || reasoningTokens > 0) {
-                thinkMsg.think = ViewMessage::ThinkData{
+                thinkMeta = ViewMessage::ThinkData{
                     .reasoningTokens = reasoningTokens,
                     .isEncrypted     = isEncrypted,
                 };
             }
-            if (thinkMsg.hasVisibleContent()) {
-                thinkMsg.collapsed = true;
-                session_->appendViewMessage(std::move(thinkMsg));
-                if (isEncrypted || reasoningTokens > 0) {
-                    emitDelta(WireDelta{
-                        .text        = "",
-                        .startTimeMs = thinkStartTimeMs,
-                        .durationMs  = thinkDurationMs,
-                        .think       = ViewMessage::ThinkData{
-                            .reasoningTokens = reasoningTokens,
-                            .isEncrypted     = isEncrypted,
-                        },
-                        .type        = WireDelta::Type::ThinkToken,
-                    });
+            // 单段时把定稿元数据并到该行上 (整条覆盖, 同 id)
+            auto mergeMetaInto = [&](const StepRow& seg, const ViewMessage::ThinkData& meta) {
+                if (seg.index >= session_->viewMessages.size()) {
+                    return;
                 }
-                lastThinkSegStartMs_    = 0;
-                lastThinkSegDurationMs_ = 0;
-            }
-            auto content = jm.value("content", std::string{});
-            // 只含空白/零宽占位符的正文不当成一条消息 (模型偶尔把 U+200B 当成
-            // 正文输出, 独占一条 assistant 消息): 否则展示历史里会多出一条
-            // 看不见内容的消息, 列表里就是多出来的空白 (见 invisible_text.h)
-            const bool contentVisible = !content.empty() && !agentxx::util::isVisuallyBlank(content);
-            if (contentVisible) {
-                int64_t assistantStartTimeMs = jm.value("startTimeMs", int64_t{0});
-                int64_t assistantDurationMs  = jm.value("durationMs", int64_t{0});
-                if (assistantStartTimeMs == 0) {
-                    assistantStartTimeMs
-                        = nodeStartTimeMs_ > 0 ? nodeStartTimeMs_ : thinkStartTimeMs;
+                ViewMessage row = session_->viewMessages[seg.index];
+                auto        merged = row.think.value_or(ViewMessage::ThinkData{});
+                mergeThinkMeta(merged, meta);
+                if (row.think.has_value() && row.think->isEncrypted == merged.isEncrypted
+                    && row.think->reasoningTokens == merged.reasoningTokens) {
+                    return; // 完全一致: 不发 op (省带宽且幂等)
                 }
-                if (assistantDurationMs == 0 && nodeStartTimeMs_ > 0) {
-                    const int64_t nowMs = static_cast<int64_t>(
-                        std::chrono::duration_cast<std::chrono::milliseconds>(
-                            std::chrono::system_clock::now().time_since_epoch()
-                        )
-                            .count()
+                row.think = merged;
+                session_->updateViewMessage(row);
+                emitDelta(WireDelta{
+                    .message = std::make_shared<ViewMessage>(std::move(row)),
+                    .type    = WireDelta::Type::UpdateMessage,
+                });
+            };
+            // 定稿对账 (只用本步骤内已定稿的段):
+            // - 无段   → 最终文本可见则新建一行 (非流式/网关缓冲)
+            // - 单段   → 最终文本/元数据/耗时不一致才整条覆盖 (同 id)
+            // - 多段   → 文本保持分段原样 (与实时所见一致), 只把元数据补到第一段
+            auto reconcileSegment = [&](ViewMessage::Role                            segRole,
+                                        const std::string&                        finalText,
+                                        const std::optional<ViewMessage::ThinkData>&
+                                            meta) {
+                std::vector<const StepRow*> segs;
+                for (const auto& row : stepRows_) {
+                    if (row.role == segRole) {
+                        segs.push_back(&row);
+                    }
+                }
+                if (segs.empty()) {
+                    // 无流式段: 按节点计时回退 (时间点/耗时都只能从节点推断)
+                    const int64_t startMs = jsonStartMs > 0 ? jsonStartMs : nodeStartTimeMs_;
+                    int64_t       durMs   = jsonDurationMs;
+                    if (durMs == 0 && nodeStartTimeMs_ > 0) {
+                        durMs = std::max<int64_t>(0, nowMs() - nodeStartTimeMs_);
+                    }
+                    ViewMessage row = ViewMessage::makeText(segRole, finalText, startMs, durMs);
+                    // 折叠默认值由 agent 决定 (思考/工具/提示/事件默认折叠)
+                    row.collapsed = defaultCollapsedOf(segRole);
+                    if (meta) {
+                        row.think = meta;
+                    }
+                    if (!row.hasVisibleContent()) {
+                        return;
+                    }
+                    commitStreamRow(std::move(row), false);
+                    return;
+                }
+                if (segs.size() > 1) {
+                    XX_LOGD(
+                        "[event_bridge] step has {} segments (role={}); keep segment texts, "
+                        "merge metadata into the first one",
+                        segs.size(),
+                        static_cast<int>(segRole)
                     );
-                    assistantDurationMs = std::max(int64_t{0}, nowMs - nodeStartTimeMs_);
+                    if (meta) {
+                        mergeMetaInto(*segs.front(), *meta);
+                    }
+                    return;
                 }
-                auto m = ViewMessage::makeText(
-                    ViewMessage::Role::Assistant,
-                    content,
-                    assistantStartTimeMs,
-                    assistantDurationMs
-                );
-                session_->appendViewMessage(std::move(m));
-            }
+                const StepRow& seg = *segs.front();
+                if (seg.index >= session_->viewMessages.size()) {
+                    return;
+                }
+                ViewMessage row = session_->viewMessages[seg.index];
+                bool        changed = false;
+                if (!finalText.empty() && row.text != finalText) {
+                    row.text = finalText;
+                    changed  = true;
+                }
+                if (jsonStartMs > 0 && row.startTimeMs != jsonStartMs) {
+                    row.startTimeMs = jsonStartMs;
+                    changed         = true;
+                }
+                if (jsonDurationMs > 0 && row.durationMs != jsonDurationMs) {
+                    row.durationMs = jsonDurationMs;
+                    changed        = true;
+                }
+                if (meta) {
+                    auto merged = row.think.value_or(ViewMessage::ThinkData{});
+                    mergeThinkMeta(merged, *meta);
+                    if (!row.think.has_value() || !(row.think->isEncrypted == merged.isEncrypted
+                                                    && row.think->reasoningTokens
+                                                           == merged.reasoningTokens)) {
+                        row.think = merged;
+                        changed   = true;
+                    }
+                }
+                if (!changed || !row.hasVisibleContent()) {
+                    return;
+                }
+                session_->updateViewMessage(row);
+                emitDelta(WireDelta{
+                    .message = std::make_shared<ViewMessage>(std::move(row)),
+                    .type    = WireDelta::Type::UpdateMessage,
+                });
+            };
+
+            reconcileSegment(ViewMessage::Role::Think, reasoning, thinkMeta);
+            reconcileSegment(ViewMessage::Role::Assistant, content, std::nullopt);
             if (jm.contains("tool_calls") && jm["tool_calls"].is_array()) {
                 for (const auto& tc : jm["tool_calls"]) {
                     const auto toolName   = tc.value("name", std::string{});
                     const auto toolCallId = tc.value("id", std::string{});
                     const auto arguments  = tc.value("arguments", std::string{});
 
-                    const int64_t startMs = static_cast<int64_t>(
-                        std::chrono::duration_cast<std::chrono::milliseconds>(
-                            std::chrono::system_clock::now().time_since_epoch()
-                        )
-                            .count()
-                    );
-                    ViewMessage m;
+                    const int64_t startMs = nowMs();
+                    ViewMessage   m;
                     m.role      = ViewMessage::Role::Tool;
                     m.text      = arguments;
                     m.collapsed = true; // 历史重连默认折叠 (与 onDelta 实时展开不同)
@@ -404,20 +531,18 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
                     m.tool->toolName   = toolName;
                     m.tool->toolCallId = toolCallId;
                     m.startTimeMs      = startMs;
-                    const auto msgId   = session_->appendViewMessage(std::move(m));
+                    const auto msgId   = session_->appendViewMessage(m);
+                    m.id               = msgId;
                     // 登记 toolCallId → viewMessages 索引, 供 tool 结果回填 O(1) 定位
                     // (viewMessages append-only, 索引不失效)
                     const size_t historyIndex = session_->viewMessages.size() - 1;
                     if (!toolCallId.empty()) {
                         toolCallHistoryIndex_[toolCallId] = historyIndex;
                     }
+                    // 工具行就是普通历史行: 整条 insert_message (未完成状态)
                     emitDelta(WireDelta{
-                        .msgId       = msgId,
-                        .toolName    = toolName,
-                        .toolCallId  = toolCallId,
-                        .arguments   = arguments,
-                        .startTimeMs = startMs,
-                        .type        = WireDelta::Type::ToolStart,
+                        .message = std::make_shared<ViewMessage>(std::move(m)),
+                        .type    = WireDelta::Type::InsertMessage,
                     });
                 }
             }
@@ -481,13 +606,7 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
                 if (toolDurationMs > 0) {
                     target->durationMs = toolDurationMs;
                 } else if (target->startTimeMs > 0) {
-                    const int64_t nowMs = static_cast<int64_t>(
-                        std::chrono::duration_cast<std::chrono::milliseconds>(
-                            std::chrono::system_clock::now().time_since_epoch()
-                        )
-                            .count()
-                    );
-                    target->durationMs = std::max(int64_t{0}, nowMs - target->startTimeMs);
+                    target->durationMs = std::max<int64_t>(0, nowMs() - target->startTimeMs);
                     toolDurationMs     = target->durationMs;
                 }
                 if (toolStartTimeMs > 0) {
@@ -497,21 +616,26 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
                 // 缺失), 若不更新, 重启恢复/会话切换后再展示的 tool 结果会一直
                 // 显示未完成状态。经 Session::updateViewMessage 触发 onUpdateViewMessage
                 // 回调覆盖库内对应行 (按 msg.id 定位)。
-                if (!target->id.empty()) {
-                    session_->updateViewMessage(*target);
+                ViewMessage row = *target;
+                if (!row.id.empty()) {
+                    session_->updateViewMessage(row);
                 }
+                // 工具结果就是普通历史行的整条覆盖 (成败/耗时看行字段)
+                emitDelta(WireDelta{
+                    .message = std::make_shared<ViewMessage>(std::move(row)),
+                    .type    = WireDelta::Type::UpdateMessage,
+                });
                 // (edit 工具参数 unified diff: 渲染端自行计算, 无处理者, 不再生成;
                 //  ToolData::diff 字段保留供未来)
+            } else {
+                // 找不到目标行 (历史已被清掉/恢复场景): 没有"凭空造一行"的 op,
+                // 只记日志 —— 旧实现会发 ToolEnd 让客户端自建一条工具消息
+                XX_LOGW(
+                    "[event_bridge] tool result for `{}` has no matching row (call_id={})",
+                    toolName,
+                    toolCallId
+                );
             }
-            emitDelta(WireDelta{
-                .toolName    = toolName,
-                .toolCallId  = toolCallId,
-                .result      = content,
-                .startTimeMs = target ? target->startTimeMs : toolStartTimeMs,
-                .durationMs  = target ? target->durationMs : toolDurationMs,
-                .type        = WireDelta::Type::ToolEnd,
-                .status      = toolStatus,
-            });
         }
     }
     // ---- 请求落盘已结算的上下文 (增量持久化的核心挂点) ----
@@ -536,10 +660,10 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
 
 void EventBridge::handleTurnStart() {
     // 重置轮级 tps 统计 (上一轮残留: 流已结算, 计数归零)
-    turnTpsTokenCount_      = 0.0;
-    turnTpsDurationSec_     = 0.0;
-    lastThinkSegStartMs_    = 0;
-    lastThinkSegDurationMs_ = 0;
+    turnTpsTokenCount_  = 0.0;
+    turnTpsDurationSec_ = 0.0;
+    // 换轮即无未定稿的段 (正常已在轮末收尾)
+    finishTurn();
     // 重置流级统计 (防御: 上轮异常结束可能未结算)
     tpsStartTime_  = {};
     tpsTokenCount_ = 0.0;
@@ -594,13 +718,12 @@ double EventBridge::takeTurnTps() {
 }
 
 void EventBridge::handleNodeStart(const neograph::graph::GraphEvent& event) {
-    // 防御: 上一节点遗留未结算的 THINKING 段 (正常应已在节点结束/出错时结算)
-    finalizeThinkSegment();
-    lastThinkSegStartMs_    = 0;
-    lastThinkSegDurationMs_ = 0;
-    lastChatChunkType_      = neograph::ChatStreamChunk::TYPE_UNKNOWN;
-    nodeStartTime_          = std::chrono::system_clock::now();
-    nodeStartTimeMs_        = static_cast<int64_t>(
+    // 新节点 = 新的一步: 防御性地收尾上一节点遗留的未定稿段, 清空本步骤行索引
+    flushOpenStream();
+    stepRows_.clear();
+    lastChatChunkType_ = neograph::ChatStreamChunk::TYPE_UNKNOWN;
+    nodeStartTime_     = std::chrono::system_clock::now();
+    nodeStartTimeMs_   = static_cast<int64_t>(
         std::chrono::duration_cast<std::chrono::milliseconds>(nodeStartTime_.time_since_epoch())
             .count()
     );
@@ -614,9 +737,9 @@ void EventBridge::handleNodeStart(const neograph::graph::GraphEvent& event) {
 void EventBridge::handleNodeEnd(const neograph::graph::GraphEvent& event) {
     // 结算当前 LLM 流: 将流耗时累加到轮级 tps 统计 (ModelCall 节点结束即流结束)
     settleCurrentStream();
-    // 结算未闭合的 THINKING 段 (思考后无正文直接结束的流, 如纯思考/仅 tool_calls):
-    // 结算包先于 NodeEnd WireDelta 发送, client 先回填 Think 时长再收节点结束事件
-    finalizeThinkSegment();
+    // 定稿未收尾的流式段 (思考后无正文直接结束的流, 如纯思考/仅 tool_calls):
+    // 定稿行先于 NodeEnd WireDelta 发送, client 先拿到行 (含耗时) 再收节点结束事件
+    flushOpenStream();
     // 生成阶段提示收尾: 节点结束即生成结束, 清除 client 侧占位提示
     // (正常路径下正文/工具消息已先到达并让 client 清除; 此处补充处理无输出即结束的场景)
     if (genStatusActive_) {
@@ -641,9 +764,9 @@ void EventBridge::handleError(const neograph::graph::GraphEvent& event) {
     // 错误不产出会话增量 WireDelta (由 WireTurnResult 统一报告), 仅发布总线事件
     // 结算当前 LLM 流 (错误/取消可能跳过节点结束, 轮级统计需及时结算)
     settleCurrentStream();
-    // 结算未闭合的 THINKING 段: 错误/取消中断思考流时同样回填已耗时长,
-    // 使 client 已落盘的 Think 消息携带中断前的真实耗时
-    finalizeThinkSegment();
+    // 定稿未收尾的流式段: 取消/出错时已产出的半截内容照常成行并落盘
+    // (用户看到过就进历史; 与 LLM 上下文相比这里会多一条未说完的 assistant 消息)
+    flushOpenStream();
     // 生成阶段提示收尾: 出错/取消时清除 client 侧占位提示 (不再有后续输出)
     if (genStatusActive_) {
         emitGenStatus(agentxx::agent::WireDelta::GenPhase::Done);

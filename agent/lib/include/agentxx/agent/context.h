@@ -181,6 +181,12 @@ public:
     /// - 仅 ioContext 线程可读写 (写: appendViewMessage), 通过 assertIoThread() 强制
     std::vector<ViewMessage> viewMessages;
 
+    /// 进行中的流式消息 (直播槽)
+    /// - 不在 viewMessages 里: 不计链式哈希、不占持久化序号、不落盘、不参与分页
+    /// - 至多一条; 只用于把半截内容发给中途接入的客户端 (WireSyncPayload::streaming)
+    /// - 定稿 (finalizeStreamingView) 时才用预留 id 走正常 appendViewMessage
+    std::optional<ViewMessage> streamingView;
+
     /// 本会话的 IO
     std::shared_ptr<AgentIOBase> io = nullptr;
 
@@ -370,7 +376,9 @@ public:
     /// 向 viewMessages 追加一条消息并更新链式哈希，返回分配的 msgId
     /// - 必须在 ioContext 线程内调用 (assertIoThread 强制校验)
     /// - 已绑定持久化回调时同步落库 (失败仅记日志)
-    std::string appendViewMessage(ViewMessage msg);
+    /// - `reuseId` 非空时沿用它 (定稿路径复用直播槽预留的 id, 否则客户端那条
+    ///   流式项无法收敛到正式行); 此时不推进 msgIdCounter_
+    std::string appendViewMessage(ViewMessage msg, std::string_view reuseId = {});
 
     /// 更新一条已存在的历史消息 (按 msg.id 定位) 并同步持久化
     /// - 必须在 ioContext 线程内调用 (assertIoThread 强制校验)
@@ -378,6 +386,37 @@ public:
     ///   tool 结果回填属于"补齐信息", 与增量 WireDelta 语义一致)
     /// - 已绑定持久化回调时同步更新库内对应行 (失败仅记日志)
     void updateViewMessage(ViewMessage msg);
+
+    // -------------------------------------------------------------------
+    // 直播槽 (进行中的流式消息; 仅 io 线程)
+    //
+    // 一次角色切换之间连续输出的文本 = 一段; 段开始时占一个 id、边流边写进槽里,
+    // 段结束时定稿成正式行 (可见) 或直接丢弃 (整段视觉为空)。
+    // 槽里的内容从不进 viewMessages / 链式哈希 / 持久化队列。
+    // -------------------------------------------------------------------
+
+    /// 开始一段流式消息: 分配 msgId (复用 msgIdCounter_, 不推进 viewSeqCounter_)
+    /// - `skeleton` 带 role/startTimeMs/think, 正文从空开始
+    /// - 已有打开的另一段时直接覆盖 (调用方负责先定稿上一段)
+    /// - `return` 本段的消息 id
+    std::string beginStreamingView(ViewMessage skeleton);
+
+    /// 往直播槽追加正文/思考文本 (无槽时忽略)
+    void appendStreamingText(std::string_view text);
+
+    /// 合并思考元数据 (加密标记取或, reasoning_tokens 取大)
+    void mergeStreamingThink(const ViewMessage::ThinkData& data);
+
+    /// 定稿: 用预留 id 走正常 appendViewMessage (哈希/序号/落盘/分页照旧)
+    /// - `finalMsg` 的 id 被直播槽的 id 覆盖; 无槽时按普通追加处理
+    /// - `return` 落库后的消息 id
+    std::string finalizeStreamingView(ViewMessage finalMsg);
+
+    /// 放弃直播槽 (整段视觉为空): 不写历史, 由调用方发 stream_end 让客户端丢弃流式项
+    void clearStreamingView() {
+        assertIoThread();
+        streamingView.reset();
+    }
 
     /// 绑定持久化回调 (由 SessionsManager 创建 Session 时注入; 测试可不绑定)
     void setStoreHooks(SessionStoreHooks hooks);

@@ -441,6 +441,7 @@ int32_t AGENTXX_FFI_CALL
                      AGENTXX_FFI_CAP_PLUGIN_DATA_UP,
                      AGENTXX_FFI_CAP_WIRE_PASSTHROUGH,
                      AGENTXX_FFI_CAP_DELTA_BATCH,
+                     AGENTXX_FFI_CAP_VIEW_REPLICA,
                  }                                        }
             };
             capsJson = j.dump();

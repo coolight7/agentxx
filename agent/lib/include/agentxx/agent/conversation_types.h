@@ -573,7 +573,7 @@ struct WireDelta {
     /// - [ToolCall]: 正在接收工具调用参数 (参数不完整, 内容无法展示) → UI 展示"正在调用工具"
     /// - [Done]: 生成结束 (节点结束/出错/取消) → UI 清除占位提示
     ///
-    /// 首个正文/思考 token 或工具消息 (ToolStart) 到达时, UI 自行清除占位提示
+    /// 首个正文/思考 token 或历史行 (insert_message) 到达时, UI 自行清除占位提示
     /// (占位内容所在位置被真实消息取代)
     enum class GenPhase : uint8_t {
         Waiting,
@@ -581,11 +581,33 @@ struct WireDelta {
         Done,
     };
 
+    /// 会话增量操作 (展示历史单写者: agent 生成, 客户端只按 id 应用)
+    ///
+    /// 一条展示消息怎么成型只有一处实现 (agent 端 EventBridge): 消息边界、正文
+    /// 归组、耗时、可见性、折叠默认值与 id 全部由它决定, 客户端只做三种动作 ——
+    /// 按 id 追加文本 (token)、整条 upsert (insert/update)、丢弃流式项 (stream_end)。
+    ///
+    /// 常规一轮的 op 顺序:
+    /// ```text
+    /// insert_message(user) -> turn_start -> gen_status
+    /// -> stream_begin -> text_token* -> insert_message(定稿行)
+    /// -> insert_message(tool 行) -> update_message(tool 结果)
+    /// -> ... -> turn_end
+    /// ```
     enum class Type : uint8_t {
+        /// 一段流式消息开始 (客户端在末尾起一条流式项)
+        StreamBegin,
+        /// 往该 msgId 追加正文
         TextToken,
+        /// 往该 msgId 追加思考
         ThinkToken,
-        ToolStart,
-        ToolEnd,
+        /// 历史里出现一行 (分段定稿 / 用户输入 / 工具行 / 提示 / 中断头); 按 id upsert
+        InsertMessage,
+        /// 按 id 整条覆盖 (工具结果回填 / 定稿对账 / 提示运行标记)
+        UpdateMessage,
+        /// 该流到此为止且没有历史行 (整段视觉为空): 客户端丢弃该流式项
+        StreamEnd,
+        /// 轮次开始标记 (用户行本身走 InsertMessage)
         TurnStart,
         TurnEnd,
         NodeStart,
@@ -597,51 +619,39 @@ struct WireDelta {
         ///   参数 (GenPhase::ToolCall) 时下发, 生成结束下发 GenPhase::Done
         /// - toolName: ToolCall 阶段已解析出的工具名 (可能为空: 工具名尚未到达)
         GenStatus,
-        /// 完整 ViewMessage 消息插入 (原子消息载荷, 如 Tip 提示、完整卡片等)
-        InsertMessage,
-        /// 完整 ViewMessage 消息更新 (按 msgId 定位更新已插入的消息)
-        UpdateMessage,
     };
 
     // 成员按对齐/尺寸从大到小排列, 减少结构体内填充字节
+
+    /// token 文本 (TextToken/ThinkToken)、提示文本 (MessageUITip)
     std::string text;
 
+    /// 所有消息级操作 (token/insert/update/stream_begin/stream_end) 的寻址键,
+    /// 非空且由 agent 分配 (客户端自造的行用 `local_` 前缀, 永不被命中)
     std::string msgId;
-    std::string toolName;
-    std::string toolCallId;
-    std::string arguments;
 
-    std::string result;
+    /// GenStatus 专用: ToolCall 阶段已解析出的工具名 (其余操作为空)
+    std::string toolName;
 
     std::string nodeName;
-    std::string tailHash;
 
-    /// 来源标记 (TurnStart 用): 空 = 用户自己输入的; `event:<事件名>` = 事件中枢投递
-    /// - 客户端据此给这条用户消息加来源样式 (不解析正文)
-    /// - 与 `ViewMessage::source` 同一套取值 (见 [kInputSourceEventPrefix])
-    std::string source;
-
-    uint64_t seq          = 0;
-    uint64_t historyCount = 0;
+    uint64_t seq = 0;
 
     // 运行时长统计
-    int64_t startTimeMs = 0; // 开始时间戳 (毫秒)
-    int64_t durationMs  = 0; // 运行时长 (毫秒)
+    int64_t startTimeMs = 0; // 开始时间戳 (毫秒; StreamBegin/TurnStart/TurnEnd)
+    int64_t durationMs  = 0; // 运行时长 (毫秒; TurnEnd)
 
     // 轮次统计 (TurnEnd 使用): 本轮会话 LLM API 平均生成速度 (token/s, 估算值)
     // - 0 = 本轮无 LLM 流式输出 (如纯工具错误轮)
     double tps = 0.0;
 
-    /// 完整 ViewMessage 载荷 (InsertMessage 使用)
+    /// 完整 ViewMessage 载荷 (InsertMessage / UpdateMessage 使用, id 必填)
     std::shared_ptr<ViewMessage> message = nullptr;
 
-    /// TurnStart 即时回显附件 (服务端 viewMessages 权威副本经 Sync 补齐):
-    /// - TurnStart 历史上仅 text+msgId，附件会丢失导致首屏 user 消息无卡片
-    /// - 此处仅传元数据（displayName/mimeType/pathOrUrl/sizeBytes/type），
-    ///   不传 dataUrl（Base64 体积大，走 Sync 全部时再补齐）
-    std::vector<MediaAttachment> attachments;
+    /// StreamBegin 的段角色 (Assistant / Think)
+    ViewMessage::Role streamRole = ViewMessage::Role::Assistant;
 
-    // Think 结构体 (Role::Think 消息专属, 如加密思考/token统计)
+    /// StreamBegin 携带的思考元数据 (加密思考/token 统计; 其余操作为空)
     std::optional<ViewMessage::ThinkData> think = std::nullopt;
 
     Type type = Type::TextToken;
@@ -651,9 +661,6 @@ struct WireDelta {
 
     // GenStatus: 模型生成阶段 (占位提示)
     GenPhase genPhase = GenPhase::Done;
-
-    /// ToolEnd 的终态 (其它增量不写); 客户端**不认识的取值一律按 `Ok` 处理**
-    agentxx::util::ToolStatus status = agentxx::util::ToolStatus::Ok;
 };
 
 /// 输入投递模式 (`WireUserInput.delivery`)
@@ -759,6 +766,12 @@ struct WireSyncPayload {
     ///   不得整体替换本地历史
     /// - false (默认): 全部或尾窗快照, 客户端整体替换本地历史
     bool incremental = false;
+
+    /// 进行中的流式消息 (直播槽 Session::streamingView): 完整/尾窗同步时携带,
+    /// 供"中途接入"的客户端补上这半截内容
+    /// - 空 = 当前没有进行中的流
+    /// - 不在 messages 里, 也不计入 fromIndex/totalMessages/lastViewSeq
+    std::optional<ViewMessage> streaming;
 };
 
 // ---------------------------------------------------------------------------
