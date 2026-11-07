@@ -10,6 +10,7 @@
 #include "neograph/api.h"
 #include "neograph/define.h"
 #include "utilxx_base/json.h"
+#include "utilxx_base/string_util.h"
 #include <deque>
 #include <functional>
 #include <map>
@@ -17,6 +18,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace agentxx::client {
@@ -51,6 +53,35 @@ using InterruptResultChannel
 /// - 纯 UI 交互状态 (中断输入框编辑文本/选中项/校验提示/结果回传通道)
 ///   不属于消息内容, 由 MessageListComponent 独立维护 (InterruptUIState 表)
 using TUIMessage = agentxx::agent::ViewMessage;
+
+/// 用户消息按正文折成折叠态的阈值 (见 [shouldCollapseUserMessage])
+inline constexpr size_t kUserMessageFoldMaxNewlines = 5;
+inline constexpr size_t kUserMessageFoldMaxChars    = 200;
+
+/// 用户消息是否按折叠态展示 (TUI 收到消息时判定一次)
+///
+/// 判据 (任一命中即折叠):
+/// - 正文含**超过** [kUserMessageFoldMaxNewlines] 个换行符 (即 6 行及以上)
+/// - 正文按 unicode 码点计**超过** [kUserMessageFoldMaxChars] 字
+///   (中文按 1 字计, 不按字节或显示列计)
+///
+/// 只用于消息**创建**时的初始状态 (接收/同步/补拉/历史分页/本地行):
+/// 长消息展开后一屏放不下, 先给单行预览; 之后用户在界面上的展开/折叠点击
+/// 不会被后续更新覆盖 (客户端只在这一个时刻替 agent 决定默认值)
+///
+/// - `args`:
+///     - [text] 用户消息正文 (UTF-8)
+///
+/// - `return` 初始状态应为折叠时返回 true
+inline bool shouldCollapseUserMessage(std::string_view text) noexcept {
+    size_t newlines = 0;
+    for (const char c : text) {
+        if (c == '\n' && ++newlines > kUserMessageFoldMaxNewlines) {
+            return true;
+        }
+    }
+    return utilxx_base::utf8GetLength(text) > kUserMessageFoldMaxChars;
+}
 
 /// 排队等待发送的用户输入 (服务端消息队列在客户端的镜像)
 struct TUIPendingInput {

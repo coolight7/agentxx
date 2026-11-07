@@ -12,18 +12,21 @@
 #include "agentxx-test/client/test_tui_scroll.h"
 #include "agentxx-test/client/test_tui_tool_header.h"
 
+#include "agentxx-client/io/tui/agent_tui.h"
 #include "agentxx-client/io/tui/components/message_list.h"
 #include "agentxx-client/io/tui/framework/tui_context.h"
 #include "agentxx-client/io/tui/framework/tui_settings.h"
 #include "agentxx-client/io/tui/framework/tui_state.h"
 #include "agentxx-client/io/tui/model/message_window.h"
 #include "agentxx-client/io/tui/tui_theme.h"
+#include "agentxx/agent/io/wire_protocol.h"
 #include "asio/io_context.hpp"
 #include "ftxui/component/animation.hpp"
 #include "ftxui/component/event.hpp"
 #include "ftxui/component/mouse.hpp"
 #include "ftxui/dom/elements.hpp"
 #include "ftxui/screen/screen.hpp"
+#include "utilxx_base/string_util.h"
 #include <memory>
 #include <set>
 #include <string>
@@ -794,6 +797,205 @@ void testUserMessageCollapse() {
 }
 
 // ---------------------------------------------------------------------------
+// 消息列表项的附件显示 (统一形态)
+//
+// - 折叠: 消息行最右侧只显示数量 `n个附件`
+// - 展开: 正文之后 (消息末尾) 列出附件
+//   `|- n个附件（点击打开）` / `|- 类型: 文件名 大小`
+// ---------------------------------------------------------------------------
+
+/// 去掉行尾空白 (屏幕行按整宽输出, 尾部是版面留白)
+static std::string trimRowEnd(std::string_view row) {
+    size_t end = row.size();
+    while (end > 0 && (row[end - 1] == ' ' || row[end - 1] == '\r')) {
+        --end;
+    }
+    return std::string{row.substr(0, end)};
+}
+
+void testUserMessageAttachments() {
+    auto&      settings  = TUISettings::instance();
+    const auto savedLang = settings.language();
+    settings.setLanguage(TuiLanguage::ZhCn);
+
+    ScrollFixture f;
+    f.sharedState.mutate([](TUIRenderState& st) {
+        auto row  = std::make_shared<TUIMessage>();
+        row->role = TUIMessage::Role::User;
+        row->text = "look at ATTACHPHOTO7";
+        agentxx::agent::MediaAttachment photo;
+        photo.type        = agentxx::agent::MediaType::Image;
+        photo.displayName = "photo.png";
+        photo.sizeBytes   = 12345;
+        agentxx::agent::MediaAttachment clip;
+        clip.type        = agentxx::agent::MediaType::Video;
+        clip.displayName = "clip.mp4";
+        clip.sizeBytes   = 2 * 1024 * 1024;
+        row->attachments = {photo, clip};
+        pushRow(st, std::move(*row));
+    });
+
+    // ---- 展开 (默认): 正文在上, 附件列表在末尾 ----
+    std::string frame     = stripAnsiCodes(f.render());
+    const int   textRow   = screenRowOf(frame, "- look at ATTACHPHOTO7");
+    const int   headerRow = screenRowOf(frame, "|- 2个附件（点击打开）");
+    const int   photoRow  = screenRowOf(frame, "photo.png");
+    const int   clipRow   = screenRowOf(frame, "clip.mp4");
+    XX_TEST_EXPECT_TRUE(textRow >= 0);
+    XX_TEST_EXPECT_TRUE(headerRow >= 0);
+    XX_TEST_EXPECT_TRUE(headerRow == textRow + 1); // 正文紧随其后就是附件列表
+    XX_TEST_EXPECT_TRUE(photoRow == headerRow + 1);
+    XX_TEST_EXPECT_TRUE(clipRow == photoRow + 1);
+    // 每条附件带类型与大小 (展开态不再单行重复"点击打开"提示)
+    XX_TEST_EXPECT_TRUE(screenRowText(frame, photoRow).find("12.1 KB") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(screenRowText(frame, clipRow).find("2.0 MB") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(screenRowText(frame, photoRow).find("点击打开") == std::string::npos);
+    // 每条附件一行都有命中区 (点击在文件管理器中定位; 命中动作本身不在测试里触发)
+    XX_TEST_EXPECT_EQ(f.comp->attachmentHitBoxes().size(), size_t{2});
+
+    // ---- 折叠: 单行预览 + 最右侧的数量, 附件列表隐藏 ----
+    f.sharedState.mutate([&f](TUIRenderState& st) {
+        f.sharedState.mutableMessage(st, 0).collapsed = true;
+    });
+    frame = stripAnsiCodes(f.render());
+    const int previewRow = screenRowOf(frame, "+ look at ATTACHPHOTO7");
+    XX_TEST_EXPECT_TRUE(previewRow >= 0);
+    // 数量与预览在同一行, 且该行去尾后以数量结尾 (即贴在本项最右侧);
+    // 字节位置还需明显靠右 —— 左对齐时它会紧跟在预览后 (约第 20 列)
+    const std::string previewLine = trimRowEnd(screenRowText(frame, previewRow));
+    const size_t      countAt     = previewLine.rfind("2个附件");
+    XX_TEST_EXPECT_TRUE(countAt != std::string::npos);
+    XX_TEST_EXPECT_TRUE(previewLine.ends_with("2个附件"));
+    XX_TEST_EXPECT_TRUE(countAt > 40);
+    // 附件列表在折叠态不展示
+    XX_TEST_EXPECT_TRUE(screenRowOf(frame, "photo.png") < 0);
+    XX_TEST_EXPECT_TRUE(screenRowOf(frame, "|- 2个附件") < 0);
+    // 折叠态没有附件行命中区 (右侧计数不单独响应点击, 整行点击只是展开/收起)
+    XX_TEST_EXPECT_EQ(f.comp->attachmentHitBoxes().size(), size_t{0});
+
+    // ---- 单个附件用单数文案 ----
+    f.sharedState.mutate([](TUIRenderState& st) {
+        auto row = std::make_shared<TUIMessage>(*st.replica.rows()[0]);
+        row->attachments.resize(1);
+        row->collapsed = true;
+        st.replica.replaceRow(0, row);
+    });
+    frame = stripAnsiCodes(f.render());
+    XX_TEST_EXPECT_TRUE(trimRowEnd(screenRowText(frame, screenRowOf(frame, "+ look at")))
+                            .ends_with("1个附件"));
+
+    settings.setLanguage(savedLang);
+}
+
+// ---------------------------------------------------------------------------
+// 用户消息的初始折叠状态: 换行符超 5 个或超过 200 字时折叠, 否则展开
+// (判定发生在 TUI 收到消息时; 用户之后的点击不再被覆盖)
+// ---------------------------------------------------------------------------
+
+/// 测试用 TUI 端点: 暴露受保护的 onDelta/onSync (与 test_tui_stream 同一手法)
+class FoldTUIClientIO : public TUIClientAgentIO {
+public:
+
+    explicit FoldTUIClientIO(asio::io_context& ctx) :
+        TUIClientAgentIO(ctx.get_executor(), "fold_session") {}
+
+    void feedDelta(const agentxx::agent::WireDelta& d) {
+        onDelta(d);
+    }
+
+    void feedSync(const agentxx::agent::WireSyncPayload& p) {
+        onSync(p);
+    }
+};
+
+void testUserMessageFoldOnReceive() {
+    // ---- 判据边界 ----
+    XX_TEST_EXPECT_FALSE(shouldCollapseUserMessage(""));
+    // 5 个换行符 (6 行) 仍展开, 6 个换行符折叠
+    XX_TEST_EXPECT_FALSE(shouldCollapseUserMessage("1\n2\n3\n4\n5\n6"));
+    XX_TEST_EXPECT_TRUE(shouldCollapseUserMessage("1\n2\n3\n4\n5\n6\n7"));
+    // 200 字仍展开, 201 字折叠 (按字符计, 不按字节)
+    XX_TEST_EXPECT_FALSE(shouldCollapseUserMessage(std::string(200, 'x')));
+    XX_TEST_EXPECT_TRUE(shouldCollapseUserMessage(std::string(201, 'x')));
+    std::string zh200;
+    while (utilxx_base::utf8GetLength(zh200) < 200) {
+        zh200 += "中";
+    }
+    XX_TEST_EXPECT_FALSE(shouldCollapseUserMessage(zh200));
+    XX_TEST_EXPECT_TRUE(shouldCollapseUserMessage(zh200 + "中"));
+
+    // ---- 接收路径: 插入的用户行按规则定初始状态 ----
+    asio::io_context io;
+    FoldTUIClientIO  client(io);
+    auto             rowsOf = [&client] {
+        return client.sharedState().snapshot()->replica.rows();
+    };
+    auto insertUser = [&client](std::string id, std::string text) {
+        agentxx::agent::ViewMessage row
+            = agentxx::agent::ViewMessage::makeText(agentxx::agent::ViewMessage::Role::User,
+                                                   std::move(text));
+        row.id                             = std::move(id);
+        agentxx::agent::WireDelta d;
+        d.type    = agentxx::agent::WireDelta::Type::InsertMessage;
+        d.msgId   = row.id;
+        d.message = std::make_shared<agentxx::agent::ViewMessage>(std::move(row));
+        client.feedDelta(d);
+    };
+
+    insertUser("msg_short", "short user input FOLDOK1");
+    insertUser("msg_long", std::string(201, 'y'));
+    {
+        auto rows = rowsOf();
+        XX_TEST_EXPECT_EQ(rows.size(), size_t{2});
+        XX_TEST_EXPECT_FALSE(rows[0]->collapsed); // 短消息: 展开
+        XX_TEST_EXPECT_TRUE(rows[1]->collapsed);  // 长消息: 折叠
+        // 文本本身不被改写 (折叠只是展示状态)
+        XX_TEST_EXPECT_EQ(rows[0]->text, std::string{"short user input FOLDOK1"});
+    }
+
+    // ---- 同步快照里的历史用户行同样按规则定初始状态 ----
+    {
+        agentxx::agent::WireSyncPayload payload;
+        auto shortRow = agentxx::agent::ViewMessage::makeText(
+            agentxx::agent::ViewMessage::Role::User,
+            "history short SYNCROW1"
+        );
+        shortRow.id = "msg_h1";
+        auto longRow = agentxx::agent::ViewMessage::makeText(
+            agentxx::agent::ViewMessage::Role::User,
+            "line\nline\nline\nline\nline\nline\nline SYNCROW2"
+        );
+        longRow.id = "msg_h2";
+        payload.messages.push_back(shortRow);
+        payload.messages.push_back(longRow);
+        payload.totalMessages = payload.messages.size();
+        client.feedSync(payload);
+
+        auto rows = rowsOf();
+        XX_TEST_EXPECT_EQ(rows.size(), size_t{2});
+        XX_TEST_EXPECT_FALSE(rows[0]->collapsed);
+        XX_TEST_EXPECT_TRUE(rows[1]->collapsed);
+    }
+
+    // ---- 其它角色不受规则影响 (agent 给出的折叠状态原样保留) ----
+    {
+        agentxx::agent::ViewMessage think
+            = agentxx::agent::ViewMessage::makeText(agentxx::agent::ViewMessage::Role::Think,
+                                                    "thinking text");
+        think.id                        = "msg_think";
+        think.collapsed                 = false;
+        agentxx::agent::WireDelta d;
+        d.type    = agentxx::agent::WireDelta::Type::InsertMessage;
+        d.msgId   = think.id;
+        d.message = std::make_shared<agentxx::agent::ViewMessage>(think);
+        client.feedDelta(d);
+        auto rows = rowsOf();
+        XX_TEST_EXPECT_EQ(rows.size(), size_t{3});
+        XX_TEST_EXPECT_FALSE(rows[2]->collapsed);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // 回归: 连接失败 banner 的 [重试] 按钮命中区域随状态出现/消失
 //
 // 背景: 如果用成员 Box 保存命中区域, 且以 `Box{}` (四个分量为 0) 表示"清空",
@@ -1303,6 +1505,12 @@ TestResult testTuiScroll() {
 
     // 用户消息支持展开/折叠 (`+` / `-` 开头标记)
     testUserMessageCollapse();
+
+    // 消息列表项的附件显示 (折叠: 右侧数量 / 展开: 末尾附件列表)
+    testUserMessageAttachments();
+
+    // 用户消息的初始折叠状态 (换行 > 5 或字数 > 200 时折叠)
+    testUserMessageFoldOnReceive();
 
     testBannerRetryButtonHitArea();
 

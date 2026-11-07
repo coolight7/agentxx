@@ -59,6 +59,41 @@ std::string nextLocalRowId(TUIRenderState& st, std::string_view kind) {
     return fmt::format("local_{}_{}", kind, ++st.localRowSeq);
 }
 
+/// 单行版本: 一条行的初始折叠状态 (规则与限制见 [foldLongUserMessages])
+void foldLongUserMessage(TUIMessage& row) {
+    if (row.role != TUIMessage::Role::User) {
+        return;
+    }
+    if (row.id.starts_with(agentxx::agent::kLocalRowIdPrefix)) {
+        return; // 本地行: 创建时已定好, 不在这里改写 (可能被上一帧快照共享)
+    }
+    if (shouldCollapseUserMessage(row.text)) {
+        row.collapsed = true;
+    }
+}
+
+/// 用户消息的初始折叠状态 (TUI 收到消息时判定一次; 判据见 tui_state.h 的
+/// [shouldCollapseUserMessage])
+///
+/// 应用时机只能是行**刚由副本创建**的那一刻 (插入/同步/补拉/分页前插):
+/// 此时行对象由副本独占 (还没有帧快照引用它), 直接改写安全; 之后用户点击
+/// 产生的展开/折叠状态也不会再被覆盖。
+/// - 本地行 (`local_` 前缀) 跳过: 它们可能被上一帧快照共享 (onSync 整体替换时
+///   被搬到新状态里), 改写会与 UI 线程竞争; 本地用户行在创建时就已按同一
+///   规则定好初始状态
+void foldLongUserMessages(
+    const std::vector<std::shared_ptr<TUIMessage>>& rows,
+    size_t                                          begin,
+    size_t                                          end
+) {
+    end = std::min(end, rows.size());
+    for (size_t i = begin; i < end; ++i) {
+        if (rows[i]) {
+            foldLongUserMessage(*rows[i]);
+        }
+    }
+}
+
 /// 预取中断描述里工具名分段 (`kind == "tool"`) 的显示名
 ///
 /// 中断视图渲染时按工具名查显示名 (如 `agentxx_filesystem_write` -> `Write`),
@@ -239,6 +274,8 @@ void TUIClientAgentIO::sendPluginUserInput(std::string text) {
             });
             auto localUser = TUIMessage::makeText(TUIMessage::Role::User, text);
             localUser.id   = nextLocalRowId(st, "input");
+            // 长输入先折叠展示 (与 agent 下发的用户行同一规则; 见 pushLocalRowLocked)
+            localUser.collapsed = shouldCollapseUserMessage(text);
             pushLocalRowLocked(st, std::move(localUser));
             inputChannel_->async_send(
                 utilxx_base::AsioErrorCode{},
@@ -588,6 +625,9 @@ void TUIClientAgentIO::start() {
                 messageList_->setStickToBottom(true);
                 auto localUser = TUIMessage::makeText(TUIMessage::Role::User, text);
                 localUser.id   = nextLocalRowId(st, "input");
+                // 长输入同 agent 下发的用户行一样先折叠展示 (本地行不经过
+                // foldLongUserMessages, 在这里按同一规则定初始状态)
+                localUser.collapsed = shouldCollapseUserMessage(text);
                 pushLocalRowLocked(st, std::move(localUser));
                 inputChannel_->async_send(
                     utilxx_base::AsioErrorCode{},
@@ -2274,6 +2314,8 @@ void TUIClientAgentIO::onViewMessagesPage(const agentxx::agent::WireViewMessages
         // 本页消息按页内顺序整体前插到窗口上方 (副本内部按 id 去重并过滤空行,
         // 前插条数取实际插入项, 滚动锚定依赖该条数估算新增行数)
         prependedCount = st.replica.prependRows(page.messages);
+        // 用户消息按正文长短定初始折叠状态 (刚前插的行)
+        foldLongUserMessages(st.replica.rows(), 0, prependedCount);
         // 窗口起点左移到本页起始下标, 条数按实际入列表条数累加
         st.history.notePrepended(page.startIndex, prependedCount);
     }
@@ -2689,6 +2731,11 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
                             );
                         }
                         st.streamThinkOverride = -1;
+                    } else if (delta.message->role == TUIMessage::Role::User) {
+                        // 用户行刚写入副本: 按正文长短定初始折叠状态 (长输入折叠展示)
+                        if (auto row = st.replica.rowById(delta.message->id)) {
+                            foldLongUserMessage(*row);
+                        }
                     }
                 }
             } break;
@@ -2814,6 +2861,8 @@ void TUIClientAgentIO::onSync(const agentxx::agent::WireSyncPayload& payload) {
             // 展示历史: 整体替换为服务端快照 (本地行 local_ 保留),
             // 中途接入时 payload.streaming 灌成尾部流式项
             st->replica.reset(payload);
+            // 用户消息按正文长短定初始折叠状态 (同步重建的行视为新创建; 本地行跳过)
+            foldLongUserMessages(st->replica.rows(), 0, st->replica.rows().size());
             st->streamThinkOverride = -1;
             // 历史分页窗口元数据: fromIndex = 本批消息的起始绝对下标
             // (尾窗同步时 > 0, 上方还有更早历史待分页拉取; 完整同步时为 0);
@@ -2879,6 +2928,12 @@ void TUIClientAgentIO::onIncrementalSync(const agentxx::agent::WireSyncPayload& 
             const size_t messagesBefore = st.replica.rows().size();
             // 按 msg.id 去重后追加 (断线期间经 delta 已收到的行不会重复)
             st.replica.appendIncremental(payload);
+            // 用户消息按正文长短定初始折叠状态 (新追加的行)
+            foldLongUserMessages(
+                st.replica.rows(),
+                messagesBefore,
+                st.replica.rows().size()
+            );
             // 序号连续性: 增量补拉的尾部序号应当接着上次观察到的值
             // (断号说明中间还有未收到的消息; 下一次重连的 afterViewSeq 补拉会补齐,
             //  这里先记警告并把序号基线推进到新值, 供诊断与后续判断使用)

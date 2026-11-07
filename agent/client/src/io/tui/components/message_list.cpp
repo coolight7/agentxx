@@ -41,7 +41,7 @@ constexpr int kDecorItemIndent = 4;
 /// 就让相邻两条消息之间多出一整行 (表现为消息间距异常变大)。
 ///
 /// 判据 = "该消息渲染后有没有可见内容":
-/// - Assistant/User: 正文无可见字符且无附件 (纯附件消息的附件卡片本身可见) 时为空白
+/// - Assistant/User: 正文无可见字符且无附件 (纯附件消息的附件列表本身可见) 时为空白
 /// - Think/System/Tip/Event: 头部行 (折叠标记 + 角色标签/事件名 + 可能的耗时/预览)
 ///   始终渲染, 所以恒为 false —— 否则头部行不跟随尾部空行, 会和下一条消息贴在一起
 /// - Tool/Interrupt: 工具头部与交互控件始终可见
@@ -49,7 +49,7 @@ bool isBlankMessage(const TUIMessage& msg) {
     switch (msg.role) {
         case TUIMessage::Role::Assistant:
         case TUIMessage::Role::User:
-            // 附件卡片本身始终有可见内容
+            // 附件列表本身始终有可见内容
             return msg.attachments.empty() && agentxx::util::isVisuallyBlank(msg.text);
         case TUIMessage::Role::Think:
         case TUIMessage::Role::System:
@@ -195,9 +195,17 @@ static ToolVisual toolVisualOf(const agentxx::agent::ViewMessage& msg) {
     }
 }
 
-/// 多模态附件大小文本 (文件顶部匿名命名空间内，供 buildMessageBlock 卡片使用)
+/// 多模态附件大小文本 (文件顶部匿名命名空间内，供 buildMessageBlock 的附件列表使用)
 /// - 提前声明：定义在文件尾部匿名命名空间（与落盘/打开辅助同处）
 std::string attachmentSizeText(uint64_t bytes);
+
+/// 附件数量文本 ("3个附件" / "3 attachments"; 单数单独一条文案)
+std::string attachmentCountText(size_t count) {
+    if (count == 1) {
+        return std::string(tr("msg.attachCountOne"));
+    }
+    return trf("msg.attachCount", count);
+}
 } // namespace
 
 MessageListComponent::MessageListComponent(TUICtx& ctx) :
@@ -384,7 +392,7 @@ Element MessageListComponent::OnRender() {
     // decor 按钮命中: 同中断控件命中区域生命期 (OnRender 清空 + 构建期填充)
     decorHits_.clear();
 
-    // 附件卡片命中: 同 decorHits_ 生命期
+    // 附件行命中: 同 decorHits_ 生命期
     attachmentHits_.clear();
 
     return hbox({
@@ -1029,16 +1037,26 @@ size_t MessageListComponent::quickHeight(size_t index, int width) {
         switch (msg.role) {
             case TUIMessage::Role::User: {
                 // 展开: 正文按纯文本折行 (不解析 markdown), 按行计数即可
-                // (段内换行就是硬换行); 折叠: 只有一行 (标记 + 单行预览)
-                // 附件卡片无论折叠与否都展示在正文上方, 有附件时另占一行分隔符 "|";
-                // 正文视觉为空且带附件时不画标记行 (与 buildMessageBlock 一致)
-                const bool showTextRow
-                    = !agentxx::util::isVisuallyBlank(msg.text) || msg.attachments.empty();
-                const size_t textLines
-                    = !showTextRow ? size_t{0}
-                                   : (msg.collapsed ? size_t{1} : estimateLines(msg.text, width));
-                return textLines + msg.attachments.size()
-                       + (msg.attachments.empty() ? size_t{0} : size_t{1}) + 1;
+                // (段内换行就是硬换行); 折叠: 只有一行 (标记 + 单行预览 + 右侧附件数量)
+                // 附件列表在展开态末尾: 计数头行 + 每条附件一行;
+                // 正文视觉为空且带附件时不画正文行 (与 buildMessageBlock 一致)
+                const bool   hasAttachments = !msg.attachments.empty();
+                const bool   textBlank      = agentxx::util::isVisuallyBlank(msg.text);
+                size_t       lines          = 0;
+                if (msg.collapsed) {
+                    // 正文为空且无附件时什么也不画 (保持原估算: 占位 1 行)
+                    if (!textBlank || hasAttachments) {
+                        lines += 1;
+                    }
+                } else {
+                    if (!textBlank || !hasAttachments) {
+                        lines += estimateLines(msg.text, width);
+                    }
+                    if (hasAttachments) {
+                        lines += 1 + msg.attachments.size();
+                    }
+                }
+                return lines + 1; // +1: 尾部空行
             }
             case TUIMessage::Role::Event: {
                 // 折叠: 仅 header 行 + 空行; 展开: header + 正文 + 空行
@@ -1170,7 +1188,7 @@ void MessageListComponent::onHistoryTrimmed(size_t count) {
     scrollable_->notifyTrimmedHead(count);
     // 中断视图: 激活消息与上一帧命中区下标同步前移
     interruptView_.onMessagesTrimmedHead(count);
-    // 附件卡片命中区: 指向被删消息的丢弃, 其余下标前移。这些命中区在下一帧
+    // 附件行命中区: 指向被删消息的丢弃, 其余下标前移。这些命中区在下一帧
     // 渲染重建之前仍参与点击判定, 不跟着前移会点到"下一条"消息
     for (auto& hit : attachmentHits_) {
         hit.msgIndex = (hit.msgIndex < count) ? static_cast<size_t>(-1) : (hit.msgIndex - count);
@@ -1704,38 +1722,6 @@ Element MessageListComponent::buildMessageBlock(
             // 内容超宽时 xflex_shrink 使段落吸收剩余宽度换行/裁剪,
             // 避免 hbox 按比例压缩开头标记 (见 ftxui box_helper::ComputeShrinkHard)
             Elements userElements;
-            // 多模态附件卡片 (仅展示元信息, 不展示 Base64 数据;
-            // 点击在文件管理器中定位显示对应文件)
-            for (size_t ai = 0; ai < msg.attachments.size(); ++ai) {
-                const auto&      att = msg.attachments[ai];
-                AttachmentHitBox hit;
-                hit.msgIndex = msgIndex;
-                hit.attIndex = ai;
-                hit.box      = std::make_shared<Box>();
-                attachmentHits_.push_back(std::move(hit));
-                auto       boxPtr = attachmentHits_.back().box;
-                const auto iconKey
-                    = att.type == agentxx::agent::MediaType::Image   ? "msg.attachImage"
-                      : att.type == agentxx::agent::MediaType::Audio ? "msg.attachAudio"
-                                                                     : "msg.attachVideo";
-                auto cardRow = hbox({
-                                   text(fmt::format(
-                                       "|- {}: {} ",
-                                       TuiI18n::instance().t(iconKey),
-                                       att.displayName
-                                   )) | color(theme.accentColor)
-                                       | bold,
-                                   text(attachmentSizeText(att.sizeBytes)) | theme.dim(),
-                                   text(" "),
-                                   text(std::string(TuiI18n::instance().t("msg.attachOpen")))
-                                       | color(theme.accentColor),
-                               })
-                               | reflect(*boxPtr);
-                userElements.push_back(cardRow);
-            }
-            if (false == userElements.empty()) {
-                userElements.push_back(text("|") | color(theme.accentColor) | bold);
-            }
 
             // 事件来源标记 (兼容: 老数据/第三方构造的 Role::User 带事件来源时仍标出来;
             // 新写入的事件输入走 Role::Event 自己的折叠头, 见下方分支)
@@ -1751,27 +1737,87 @@ Element MessageListComponent::buildMessageBlock(
             // 可折叠: 开头标记 `-` (展开) / `+` (折叠, 后接单行预览)
             // 正文按纯文本折行渲染 (不解析 markdown): 单节点包含整段文本,
             // 折行结果按宽度缓存 (见 markdown::FlowText)
-            const bool expanded  = !msg.collapsed;
-            const bool textBlank = agentxx::util::isVisuallyBlank(msg.text);
+            const bool expanded       = !msg.collapsed;
+            const bool textBlank      = agentxx::util::isVisuallyBlank(msg.text);
+            const bool hasAttachments = !msg.attachments.empty();
             if (expanded) {
-                // 正文为空且带附件时不再画一个只有标记的空行 (附件卡片已单独占行)
-                if (!textBlank || msg.attachments.empty()) {
+                // 正文为空且带附件时不再画一个只有标记的空行 (附件列表自己占行)
+                if (!textBlank || !hasAttachments) {
                     userElements.push_back(hbox({
                         text("- ") | color(theme.userColor),
                         renderPlainText(msg.text, theme.userColor),
                     }));
                 }
-            } else if (!textBlank) {
-                // 折叠态: 标记 + 单行预览 (弱化), 宽度按内容区剩余列数自适应
-                const int   prefixCols = 2; // "- " / "+ "
-                const int   budget     = collapsedPreviewBudget(maxWidth, prefixCols);
-                std::string preview = oneLinePreview(msg.text, static_cast<size_t>(budget));
-                if (!preview.empty()) {
-                    userElements.push_back(hbox({
-                        text("+ ") | color(theme.userColor),
-                        text(std::move(preview)) | color(theme.userColor) | theme.dim()
-                            | xflex_shrink,
-                    }));
+                // 附件列表: 统一放在消息末尾 (正文之后), 首行给数量与点击说明,
+                // 其下每条附件一行, 点击该行在文件管理器中定位对应文件
+                if (hasAttachments) {
+                    Elements header;
+                    header.push_back(text("|- ") | color(theme.accentColor) | bold);
+                    header.push_back(
+                        text(attachmentCountText(msg.attachments.size()))
+                        | color(theme.accentColor) | bold
+                    );
+                    header.push_back(text(tr("msg.attachOpen")) | theme.dim());
+                    userElements.push_back(hbox(std::move(header)));
+                    for (size_t ai = 0; ai < msg.attachments.size(); ++ai) {
+                        const auto&      att = msg.attachments[ai];
+                        AttachmentHitBox hit;
+                        hit.msgIndex = msgIndex;
+                        hit.attIndex = ai;
+                        hit.box      = std::make_shared<Box>();
+                        attachmentHits_.push_back(std::move(hit));
+                        auto       boxPtr = attachmentHits_.back().box;
+                        const auto iconKey
+                            = att.type == agentxx::agent::MediaType::Image ? "msg.attachImage"
+                              : att.type == agentxx::agent::MediaType::Audio
+                                  ? "msg.attachAudio"
+                                  : "msg.attachVideo";
+                        Elements row;
+                        row.push_back(text("|- ") | color(theme.accentColor));
+                        row.push_back(
+                            text(fmt::format(
+                                "{}: {}",
+                                TuiI18n::instance().t(iconKey),
+                                att.displayName
+                            ))
+                            | color(theme.accentColor)
+                        );
+                        if (const std::string sizeText = attachmentSizeText(att.sizeBytes);
+                            !sizeText.empty()) {
+                            row.push_back(text(" " + sizeText) | theme.dim());
+                        }
+                        userElements.push_back(hbox(std::move(row)) | reflect(*boxPtr));
+                    }
+                }
+            } else {
+                // 折叠态: 标记 + 单行预览 (弱化), 宽度按内容区剩余列数自适应;
+                // 有附件时把数量推到本行最右侧 (折叠行只有一行, 右侧即列表项最右)
+                const std::string countText = hasAttachments
+                                                  ? attachmentCountText(msg.attachments.size())
+                                                  : std::string{};
+                if (!textBlank || !countText.empty()) {
+                    Elements row;
+                    row.push_back(text("+ ") | color(theme.userColor));
+                    int prefixCols = 2; // "- " / "+ "
+                    if (!countText.empty()) {
+                        // 预览预算扣除右侧附件数量 (含 1 列间隔)
+                        prefixCols += static_cast<int>(markdown::utf8_display_width(countText)) + 1;
+                    }
+                    if (!textBlank) {
+                        const int   budget = collapsedPreviewBudget(maxWidth, prefixCols);
+                        std::string preview
+                            = oneLinePreview(msg.text, static_cast<size_t>(budget));
+                        if (!preview.empty()) {
+                            row.push_back(text(std::move(preview)) | color(theme.userColor)
+                                        | theme.dim() | xflex_shrink);
+                        }
+                    }
+                    if (!countText.empty()) {
+                        // filler 吃掉中间空白, 把计数顶到本行最右
+                        row.push_back(filler());
+                        row.push_back(text(countText) | color(theme.accentColor));
+                    }
+                    userElements.push_back(hbox(std::move(row)));
                 }
             }
             return vbox(std::move(userElements));

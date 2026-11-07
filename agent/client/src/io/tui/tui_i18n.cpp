@@ -84,7 +84,9 @@ constexpr Entry kTable[] = {
     {"msg.attachImage",                 "📷︎ Image",                                                                 "📷︎ 图像附件"                                                                                     },
     {"msg.attachAudio",                 "🎵︎ Audio",                                                                 "🎵︎ 音频附件"                                                                                     },
     {"msg.attachVideo",                 "🎬︎ Video",                                                                 "🎬︎ 视频附件"                                                                                     },
-    {"msg.attachOpen",                  "( Click to show )",                                                             "( 点击显示 )"                                                                                         },
+    {"msg.attachCount",                 "{} attachments",                                                            "{}个附件"                                                                                         },
+    {"msg.attachCountOne",              "1 attachment",                                                              "1个附件"                                                                                          },
+    {"msg.attachOpen",                  " (click to open)",                                                          "（点击打开）"                                                                                     },
 
     // ---- 文件选择弹窗 ----
     {"picker.title",                    "Select File ( model supports: {} )",                                            "选择文件 ( 当前模型支持: {} )"                                                                  },

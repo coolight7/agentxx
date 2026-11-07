@@ -90,9 +90,10 @@ public:
         std::vector<UiHitRegion> regions;
     };
 
-    /// 多模态附件卡片命中检测 (UI 线程独占; 与 decorHits_ 同生命期):
-    /// - OnRender 开头清空, 构建可见 User 消息附件卡片时填充
+    /// 多模态附件行命中检测 (UI 线程独占; 与 decorHits_ 同生命期):
+    /// - OnRender 开头清空, 构建可见 User 消息的附件行 (展开态的附件列表) 时填充
     /// - 点击命中后在文件管理器中定位显示对应文件 远端 dataUrl 先落盘到临时目录
+    /// - 折叠态不画附件行 (只在行最右侧给出附件数量), 因此也没有命中区
     struct AttachmentHitBox {
         size_t                      msgIndex = static_cast<size_t>(-1);
         size_t                      attIndex = 0;
@@ -222,7 +223,7 @@ public:
     /// 处理连接失败 banner 的 [重试] 按钮点击 (命中 bannerHits_ 时触发 onRetryClick_)
     bool handleRetryClick(const ftxui::Mouse& mouse);
 
-    /// 处理多模态附件卡片点击: 在文件管理器中定位显示对应文件
+    /// 处理多模态附件行点击: 在文件管理器中定位显示对应文件
     bool handleAttachmentClick(const ftxui::Mouse& mouse);
 
     /// 测试辅助: 最近一次渲染的 decor 按钮命中区域
@@ -230,7 +231,7 @@ public:
         return decorHits_;
     }
 
-    /// 测试辅助: 最近一次渲染的附件卡片命中区域
+    /// 测试辅助: 最近一次渲染的附件行命中区域
     const std::vector<AttachmentHitBox>& attachmentHitBoxes() const {
         return attachmentHits_;
     }
