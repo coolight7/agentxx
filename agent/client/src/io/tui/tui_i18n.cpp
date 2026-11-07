@@ -277,9 +277,9 @@ constexpr Entry kTable[] = {
     // 头行文案不带行首 "!" (标记列提供): 未处理 = "!" / 已处理折叠 = "+" / 展开 = "-"
     {"interrupt.header",                "[Interrupt] ",                                                                  "[中断] "                                                                                              },
     {"interrupt.permissionBadge",       "[Permission] ",                                                                 "[权限] "                                                                                              },
-    {"interrupt.noDescriptor",          "[Interrupt] missing UI descriptor",                                             "[中断] 缺少 UI 描述"                                                                              },
-    {"interrupt.permission.read",       "Read files",                                                                     "读取文件"                                                                                            },
-    {"interrupt.permission.write",      "Write files",                                                                    "写入文件"                                                                                            },
+    {"interrupt.noDescriptor",          "[Interrupt] missing UI descriptor",                                             "[中断] 缺少 UI 描述"                                                                                      },
+    {"interrupt.permission.read",       "Read files",                                                                    "读取文件"                                                                                               },
+    {"interrupt.permission.write",      "Write files",                                                                   "写入文件"                                                                                               },
     {"interrupt.confirmed",             "Confirmed: {}",                                                                 "已确认: {}"                                                                                            },
     {"interrupt.confirmedEmpty",        "Confirmed",                                                                     "已确认"                                                                                                },
     {"interrupt.Canceled",             "Canceled",                                                                     "已取消"                                                                                                },

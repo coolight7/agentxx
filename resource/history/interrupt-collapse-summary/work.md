@@ -1,6 +1,6 @@
 # 实施记录: 中断消息折叠与摘要
 
-进度: 9 / 10 (代码 + 测试完成, 文档回填与收尾核对进行中)
+进度: 10 / 10 (完成)
 
 ## 任务列表
 
@@ -21,9 +21,9 @@
       按三态处理 (**未就绪留空, 绝不显示原名再跳变**; 无渲染器→原名),
       `handleInterrupt` 预取一次; 见 plan.md §3.4.1
 - [x] 8. 测试: `interrupt_ui` / `interrupt_bus` / `tui_interrupt` 三组 (§9 含收尾核对), 见 plan.md §9
-- [ ] 9. 文档: `docs/zh-cn/design/tui.md` §2.6 补折叠规则; index.md 回填结论
-- [ ] 10. **收尾核对**: 权限名两档只差颜色 (分段 `bold` 均为 false)、折叠行带结果、
-      未处理不可折叠、展开无控件、无"原名 → 显示名"跳变
+- [x] 9. 文档: `docs/zh-cn/design/tui.md` §2.6 补折叠规则; index.md 回填结论
+- [x] 10. **收尾核对**: 权限名两档只差颜色 (分段 `bold` 均为 false)、折叠行带结果、
+      未处理不可折叠、展开无控件、无"原名 → 显示名"跳变 —— 逐项结果见文末"收尾核对"
 
 ## 每步记录 (改了什么 + 怎么验证)
 
@@ -97,17 +97,37 @@
     `test_collapsed_ignores_keyboard` / `test_tool_display_name_three_states`;
   - 既有用例调整: 头行断言 `filesystem_read` → `读取文件`; 过期态用例同时置 `collapsed`.
 
+### 9. 文档
+
+- `docs/zh-cn/design/tui.md` §2.6: 新增"中断消息的形态由处理状态决定"一条 (三形态表 +
+  标记列 + 折叠行列宽权衡规则 + 摘要来源 + 命中只在头行/摘要行) 与工具显示名 / 权限名来源一条。
+- `interrupt_ui.h`: `kind` / `summary` 的用途与回退规则; `interrupt_presets.h`: `permissionCard`
+  头注释重写 (三段语义 + `summary.detail` + 分类键表); `interrupt_view.h`: 类注释补三形态表与
+  命中说明 (含"未处理不可折叠")。
+- `resource/history/interrupt-collapse-summary/index.md`: 状态改"已实施" + 结论回填。
+
 ### 验证 (Windows debug, ASan)
 
 ```text
-agentxx_test interrupt_ui interrupt_bus tui_interrupt ui_items tui_ui_items tui_form tui_widget tui_tool_header
-  -> passed=1694 failed=0
-agentxx_test tui_stream tui_surface view_replica session_persistence tui_scroll
-  -> passed=2714 failed=0
+# 本次改动模块
+tui_interrupt / interrupt_ui / interrupt_bus              -> 853 passed, 0 failed
+# 界面层回归
+ui_items tui_ui_items tui_form tui_widget tui_tool_header
+  + tui_interrupt interrupt_ui interrupt_bus               -> 1694 passed, 0 failed
+# 展示历史 / 会话 / 滚动回归
+tui_stream tui_surface view_replica session_persistence tui_scroll
+                                                            -> 2714 passed, 0 failed
+# 其余客户端模块
+tui_theme tui_input tui_settings banner_art ui_kit
+  + plugin_sdk plugin_bridge client_plugins                 -> 7428 passed, 0 failed
 ```
 
 编译: `agentxx_shared` / `agentxx`(client) / `agentxx_test` 三个内层目标 Debug 构建通过
 (注意: 改了 lib 头文件后必须先跑 lib 的 `INSTALL` 目标, 否则 client 仍按安装树里的旧头编译)。
+
+全量 `agentxx_test` 单次跑完耗时过长 (> 30 分钟仍未结束), 改为按上述分组覆盖受影响模块;
+另: `boundaries` 模块的失败是既有的 (第三方库 `cxx_pluginxx_ui` 文档里用了停用词 `载体`),
+与本次改动无关 (上一提交的回归记录已标注)。
 
 ## 与计划不一致的地方 / 临时绕过
 
@@ -137,7 +157,18 @@ agentxx_test tui_stream tui_surface view_replica session_persistence tui_scroll
 - [x] 回归: `agentxx_test tui_stream tui_surface view_replica session_persistence tui_scroll` 通过
 - [x] Windows debug 编译通过 (lib / client / test)
 - [ ] TUI 手测: 权限询问未处理态、允许后折叠 (带结果)、再展开、取消后折叠、过期折叠
-- [ ] 收尾核对: 权限名只用颜色区分 (`bold` 均为 false)、工具名未就绪时不出现原名
+  (需要人工在真实会话里发一次需要权限的工具调用; 自动用例已覆盖同一套渲染与交互路径)
+
+## 收尾核对 (逐项对照, 均在 `tui_interrupt` / `interrupt_ui` 用例中断言)
+
+| 核对项 | 结论 | 依据 |
+|---|---|---|
+| 权限名两档只差颜色 (`read` → `hint`, `write` → `thinking`), 分段 `bold` 均为 false | 通过 | `interrupt_ui::test_preset_permission_and_confirm_card` 断言颜色与两个 `bold == false` |
+| 折叠行包含处理结果尾缀 | 通过 | 已确认 (`已确认` + 结果值) / 已取消 / 已过期 三个用例均在折叠行文本中断言 |
+| 展开已处理消息不出现控件 | 通过 | 展开态断言无 `[   ]` 与 `允许`; 点原控件 id 返回 false (无命中区) |
+| 未处理消息点击头行不折叠 | 通过 | `test_waiting_is_not_collapsible`: 点头行后 `collapsed` 仍 false, 且 Fold 命中区为 0 |
+| 已处理消息摘要行/头行双向翻转 | 通过 | `test_summary_expand_and_collapse`: 点摘要展开 → 点头行收起 |
+| 无"原名 → 显示名"跳变 | 通过 | `test_tool_display_name_three_states`: 渲染中 (resolver 返回空) 该段不出现原名 |
 
 ## 遗留事项
 
