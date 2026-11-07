@@ -36,6 +36,40 @@ int64_t unixNowMs() {
         .count();
 }
 
+/// 判定「这条失败是被动回复窗口过期 / `msg_id` 无效」——重发主动消息能成功
+///
+/// 平台没给统一的错误码文档, 只能按 4xx + 响应体里的关键词判:
+/// 窗口过期、`msg_id` 不存在/无效/已过期、`msg_seq` 重复都会命中。
+/// 判定只是"可以改发主动消息"的依据: 判错也只是多发一条主动消息, 不会重复发送
+/// (被动回复失败本身说明那条没发出去)。
+bool looksLikeExpiredPassive(int status, std::string_view body) {
+    if (status < 400 || status >= 500) {
+        return false;
+    }
+    static constexpr std::string_view kKeys[] = {
+        "msg_id", "msgid", "msg_seq", "过期", "失效", "无效", "超时",
+        "expired", "invalid", "not exist", "不存在", "被动",
+    };
+    std::string lower{body};
+    for (auto& ch : lower) {
+        if (ch >= 'A' && ch <= 'Z') {
+            ch = static_cast<char>(ch - 'A' + 'a');
+        }
+    }
+    for (const auto key : kKeys) {
+        std::string needle{key};
+        for (auto& ch : needle) {
+            if (ch >= 'A' && ch <= 'Z') {
+                ch = static_cast<char>(ch - 'A' + 'a');
+            }
+        }
+        if (lower.find(needle) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
 } // namespace
 
 QqPlatform::QqPlatform(asio::any_io_executor ex, std::string dataDir) :
@@ -57,6 +91,8 @@ PlatformCaps QqPlatform::caps() const {
     caps.maxAttachments     = 1; ///< 一条消息一个富媒体 (msg_type=7)
     // 全量消息里能从 `mentions[]` / 正文 `<@openid>` 标记反推 @, 不是只能靠事件类型
     caps.mentionByEventType = false;
+    // 群消息里 @ 用户靠 markdown 正文的 `<qqbot-at-user id="…" />` (见 doSend)
+    caps.mentionInContent = true;
     return caps;
 }
 
@@ -257,6 +293,24 @@ asio::awaitable<void> QqPlatform::doSend(OutboundMessage msg, SendResultFn done)
         }
     }
 
+    // ---- @ 人 (被动回复过期后改发的主动消息会带这个) ----
+    //
+    // 官方「文本交互」: @用户 写成 `<qqbot-at-user id="member_openid" />`,
+    // **群里只在 markdown 消息里生效** (文字子频道才支持文本消息), 所以这里把群消息
+    // 改成 msg_type=2。拿不到 openid 时退化成正文前缀 `@昵称 ` —— 不会真的提醒到对方,
+    // 但至少看得出这句是在回谁。
+    std::string atPrefix;
+    if (!msg.mentionOpenId.empty()) {
+        if (msg.type == ChatType::Group && msgType != 7) {
+            msgType = 2;
+            atPrefix = "<qqbot-at-user id=\"" + msg.mentionOpenId + "\" /> ";
+        }
+        // 单聊本来就是对着他说, 不需要 @; 富媒体消息没有正文位, 也没法带标记
+    }
+    if (atPrefix.empty() && !msg.mentionName.empty()) {
+        atPrefix = "@" + msg.mentionName + " ";
+    }
+
     // 上传可能耗时, 期间平台可能已被停: 停了就不再往外发
     if (stopped_) {
         result.ok     = false;
@@ -270,7 +324,7 @@ asio::awaitable<void> QqPlatform::doSend(OutboundMessage msg, SendResultFn done)
     auto response = co_await api_->sendMessage(
         msg.type,
         msg.chatId,
-        msg.text + extraText,
+        atPrefix + msg.text + extraText,
         msg.passiveReplyTo,
         msg.passiveSeq,
         msg.replyToRef,
@@ -281,6 +335,9 @@ asio::awaitable<void> QqPlatform::doSend(OutboundMessage msg, SendResultFn done)
         result.ok     = false;
         result.reason = "发送失败 (status " + std::to_string(response.status) + "): "
                         + (response.error.empty() ? response.body.substr(0, 200) : response.error);
+        // 被动回复窗口过期 / msg_id 无效: 出站层据此改发主动消息 (见 chatbot_outbound)
+        result.passiveExpired = !msg.passiveReplyTo.empty()
+                                && looksLikeExpiredPassive(response.status, response.body);
         {
             std::lock_guard guard(mutex_);
             ++sendFailCount_;

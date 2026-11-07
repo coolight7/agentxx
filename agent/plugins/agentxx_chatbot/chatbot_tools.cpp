@@ -1,6 +1,7 @@
 #include "chatbot_tools.h"
 
 #include "chatbot_core.h"
+#include "platform/fake/fake_platform.h"
 #include "utilxx_base/json.h"
 #include "utilxx_base/log.h"
 
@@ -193,9 +194,10 @@ std::string resolveChat(
 }
 
 std::string toolSendMessage(
-    const ChatbotToolDeps& deps,
-    std::string_view       threadId,
-    std::string_view       argsJson
+    const ChatbotToolDeps&        deps,
+    std::string_view              threadId,
+    std::string_view              argsJson,
+    std::shared_ptr<OutboundWait> wait
 ) {
     const auto args = parseArgsOrThrow(argsJson);
     const auto text = stringArg(args, "text");
@@ -213,6 +215,9 @@ std::string toolSendMessage(
     }
     // 正文是「这轮不说话」的标记: 按模型意愿什么都不发, 工具结果里说明一句
     if (attachments.empty() && isSilenceReply(text)) {
+        if (wait) {
+            wait->resolveSkipped();
+        }
         Json skipped      = Json::object();
         skipped["queued"] = int64_t{0};
         skipped["parts"]  = int64_t{0};
@@ -253,9 +258,20 @@ std::string toolSendMessage(
         }
     }
 
+    // 被动回复窗口过期后要改发主动消息: 先记下"这条 msg_id 是谁说的",
+    // 平台能把人 @ 回来 (拿不到 openid 时退化成正文里的 @昵称)
+    if (!request.passiveMsgId.empty()) {
+        deps.engine->mentionTargetOf(
+            chatKey,
+            request.passiveMsgId,
+            request.mentionOpenId,
+            request.mentionName
+        );
+    }
+
     const auto* turn     = deps.engine->turnOf(chatKey);
     const int32_t sent   = turn != nullptr ? turn->sentCount : 0;
-    const auto outcome   = deps.outbound->submit(key, request, sent);
+    const auto outcome   = deps.outbound->submit(key, request, sent, std::move(wait));
     if (!outcome.ok) {
         throw std::runtime_error(outcome.reason.empty() ? std::string{"发送被拒绝"} : outcome.reason);
     }
@@ -267,6 +283,61 @@ std::string toolSendMessage(
     result["chat"]   = chatKey;
     if (!outcome.reason.empty()) {
         result["note"] = outcome.reason;
+    }
+    return result.dump();
+}
+
+std::string mergeSendOutcome(std::string json, OutboundWait* wait, int32_t timeoutMs) {
+    if (wait == nullptr) {
+        return json;
+    }
+    const bool resolved = wait->waitFor(timeoutMs);
+    const std::string warning = wait->warning();
+    if (!resolved) {
+        // 平台还没回: 保持"已排队"的说法, 不让工具卡住
+        Json result = Json::object();
+        try {
+            result = Json::parse(json);
+        } catch (const std::exception&) {
+            return json;
+        }
+        if (wait) {
+            result["warning"] = warning;
+        }
+        const std::string existingNote = result.value("note", std::string{});
+        const std::string queuedNote
+            = "消息已排队, 平台还没返回发送结果 (本次没等到)";
+        result["note"] = existingNote.empty() ? queuedNote
+                                              : existingNote + "; " + queuedNote;
+        return result.dump();
+    }
+    if (!wait->ok()) {
+        // 最终失败: 按工具失败上报, 让模型知道这句没出去
+        std::string reason = wait->failure();
+        if (reason.empty()) {
+            reason = "平台拒绝了这条消息";
+        }
+        if (!warning.empty()) {
+            reason += " (" + warning + ")";
+        }
+        throw std::runtime_error(reason);
+    }
+    Json result = Json::object();
+    try {
+        result = Json::parse(json);
+    } catch (const std::exception&) {
+        return json;
+    }
+    if (wait->sent() > 0) {
+        result["sent"] = static_cast<int64_t>(wait->sent());
+        const std::string messageId = wait->platformMessageId();
+        if (!messageId.empty()) {
+            result["messageId"] = messageId;
+        }
+    }
+    if (!warning.empty()) {
+        // 发送成功但降级过 (msg_id 过期 → 改 @ 的主动消息): 明确告诉模型
+        result["warning"] = warning;
     }
     return result.dump();
 }
@@ -440,6 +511,8 @@ std::string toolDebugInject(const ChatbotToolDeps& deps, std::string_view argsJs
     event.chatName          = stringArg(args, "chatName", event.chatId);
     event.senderName        = stringArg(args, "sender", "tester");
     event.senderId          = event.senderName;
+    // 出站 @ 他用的 id (真平台是 member_openid/user_openid; 不填就用 senderId)
+    event.senderMentionId   = stringArg(args, "senderMentionId", event.senderId);
     event.senderRole        = stringArg(args, "role", "member");
     event.text              = stringArg(args, "text");
     event.platformMessageId = stringArg(args, "msgId");
@@ -514,6 +587,55 @@ std::string toolDebugOutbox(const ChatbotToolDeps& deps, std::string_view argsJs
         }
     }
     return all.dump();
+}
+
+std::string toolDebugPlatform(const ChatbotToolDeps& deps, std::string_view argsJson) {
+    const auto args = parseArgsOrThrow(argsJson);
+    const auto op   = lowerText(stringArg(args, "op"));
+    const bool value = boolArg(args, "value", true);
+    if (op.empty()) {
+        throw std::invalid_argument("op 必填 (当前只有 expire_passive)");
+    }
+    if (!deps.platformOf || deps.engine == nullptr) {
+        throw std::runtime_error("chatbot 插件状态不可用");
+    }
+    const std::string accountArg = stringArg(args, "account");
+    std::vector<std::string> accountIds;
+    if (!accountArg.empty()) {
+        accountIds.push_back(accountArg);
+    } else {
+        for (const auto& account : deps.engine->config().accounts) {
+            accountIds.push_back(account.id);
+        }
+    }
+    size_t applied = 0;
+    for (const auto& accountId : accountIds) {
+        auto* platform = deps.platformOf(accountId);
+        if (platform == nullptr) {
+            continue;
+        }
+        // 这些开关只对假平台有意义: 真平台没有对应的东西可拨, 跳过
+        auto* fake = dynamic_cast<FakePlatform*>(platform);
+        if (fake == nullptr) {
+            continue;
+        }
+        if (op == "expire_passive") {
+            fake->setExpirePassive(value);
+            ++applied;
+            continue;
+        }
+        throw std::invalid_argument(
+            "op 取值非法: 用 expire_passive (收到 '" + op + "')"
+        );
+    }
+    if (applied == 0) {
+        throw std::runtime_error("没有可用的假平台账号 (accounts[].type = \"fake\")");
+    }
+    Json out = Json::object();
+    out["op"]      = op;
+    out["value"]   = value;
+    out["applied"] = static_cast<int64_t>(applied);
+    return out.dump();
 }
 
 std::string toolRecallMessage(

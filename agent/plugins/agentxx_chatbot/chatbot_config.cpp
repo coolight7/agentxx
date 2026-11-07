@@ -557,6 +557,9 @@ void parseBehavior(const Json& root, ChatbotConfig& out) {
     cfg.sendIntervalMs = static_cast<int32_t>(
         jsonIntOf(j, "sendIntervalMs", cfg.sendIntervalMs)
     );
+    cfg.sendResultWaitMs = static_cast<int32_t>(
+        jsonIntOf(j, "sendResultWaitMs", cfg.sendResultWaitMs)
+    );
     cfg.messageSplitLimit = static_cast<int32_t>(
         jsonIntOf(j, "messageSplitLimit", cfg.messageSplitLimit)
     );

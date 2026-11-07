@@ -572,6 +572,7 @@ std::string ChatbotEngine::assembleInput(
     const std::string&               chatKeyText,
     const std::vector<InboundEvent>& batch,
     std::string_view                 reason,
+    std::string_view                 delivery,
     bool*                            hasAttachments
 ) {
     if (hasAttachments != nullptr) {
@@ -580,6 +581,9 @@ std::string ChatbotEngine::assembleInput(
     const ChatKey key        = parseChatKey(chatKeyText);
     auto&         state      = stateOf(chatKeyText);
     const auto    route      = router_ != nullptr ? router_->route(key) : RouteResult{};
+    // 中途插入 (`next-step` 且本轮就在跑): 编号接着上一段排, 本轮记账不复位 ——
+    // 模型看到的是同一轮里又插进来一段, `replyTo` 仍按本轮统一编号取
+    const bool midTurn = delivery == "next-step" && state.turn.active;
 
     // 缓冲内按平台时间排序 (同一时间保持到达顺序), 再重新编号
     std::vector<InboundEvent> ordered = batch;
@@ -620,6 +624,14 @@ std::string ChatbotEngine::assembleInput(
         blockOpt.hintExtra = state.pendingNotice;
         state.pendingNotice.clear();
     }
+    if (midTurn) {
+        // 让模型知道这段是插进来的: 不要因为"上一句已经答完了"就忽略它
+        if (!blockOpt.hintExtra.empty()) {
+            blockOpt.hintExtra += "\n";
+        }
+        blockOpt.hintExtra += "这一轮还在执行中, 下面这段是中途插进来的新消息, 现在就可以看到; "
+                              "回复时用到的编号与本轮前面那段是同一套";
+    }
 
     std::vector<InputMessageView> views;
     std::vector<TurnMessage>      turnMessages;
@@ -633,6 +645,12 @@ std::string ChatbotEngine::assembleInput(
     std::vector<int> mentionIndexes;
 
     int index = 0;
+    if (midTurn) {
+        // 接着上一段的编号往下排: 模型手上的 `[#n]` 与 `replyTo` 用同一套
+        for (const auto& existing : state.turn.messages) {
+            index = std::max(index, existing.index);
+        }
+    }
     for (const auto& item : ordered) {
         InputMessageView view;
         view.index         = ++index;
@@ -658,6 +676,8 @@ std::string ChatbotEngine::assembleInput(
         turnMessage.index             = view.index;
         turnMessage.platformMessageId = item.platformMessageId;
         turnMessage.replyRef          = item.replyRef;
+        turnMessage.senderMentionId   = item.senderMentionId;
+        turnMessage.senderName        = view.senderName;
         turnMessage.mentionedMe       = item.mentionedMe();
         turnMessage.timestampMs       = item.timestampMs;
         turnMessages.push_back(turnMessage);
@@ -733,8 +753,8 @@ std::string ChatbotEngine::assembleInput(
     // 「本轮为什么开始」写进输入块: 模型据此知道该不该接话
     // (被 @ / always 窗口到期 / 缓冲攒满), 而不是一概把最后一句话当问题回答
     blockOpt.wakeReason = wakeReasonNote(reason, ordered.size(), mentionIndexes);
-    input["text"]    = renderInputBlock(blockOpt, views);
-    input["delivery"] = "next-turn";
+    input["text"]       = renderInputBlock(blockOpt, views);
+    input["delivery"]   = std::string{delivery};
     if (!attachments.empty()) {
         input["attachments"] = std::move(attachments);
         if (hasAttachments != nullptr) {
@@ -745,21 +765,35 @@ std::string ChatbotEngine::assembleInput(
     // 一轮记账: 工具据此定位被动回复 id 与「回哪条」
     auto& turn       = state.turn;
     turn.active      = true;
-    turn.turnSerial  = ++activitySeq_;
+    turn.wakeReason  = std::string{reason};
     turn.chatKey     = chatKeyText;
     turn.personaName = route.personaName;
-    turn.sentCount   = 0;
-    turn.modelSent   = false;
-    turn.messages    = std::move(turnMessages);
-    turn.hadMention  = hadMention;
-    turn.wakeReason  = std::string{reason};
     // 兜底策略 `mention` 也要看本轮模式: 私聊的 `mention` 已按 `always` 算
     turn.mode = (key.type == ChatType::Private && route.mode == ChatMode::Mention)
                     ? ChatMode::Always
                     : route.mode;
-    turn.lastAssistantText.clear();
-    turn.startedAtMs = nowMs();
-    turn.lastPassiveMsgId = lastMentionMsgId.empty() ? lastPassiveMsgId : lastMentionMsgId;
+    if (midTurn) {
+        // 同一轮里又插进来一段: 额度、是否调过工具、开始时间都不动, 编号接着排
+        turn.turnSerial = ++activitySeq_;
+        turn.messages.insert(turn.messages.end(), turnMessages.begin(), turnMessages.end());
+        turn.hadMention = turn.hadMention || hadMention;
+        const std::string newest
+            = lastMentionMsgId.empty() ? lastPassiveMsgId : lastMentionMsgId;
+        if (!newest.empty()) {
+            turn.lastPassiveMsgId = newest;
+        }
+        ++state.counters.injected;
+        ++globalCounters_.injected;
+    } else {
+        turn.turnSerial   = ++activitySeq_;
+        turn.sentCount    = 0;
+        turn.modelSent    = false;
+        turn.messages     = std::move(turnMessages);
+        turn.hadMention   = hadMention;
+        turn.lastAssistantText.clear();
+        turn.startedAtMs      = nowMs();
+        turn.lastPassiveMsgId = lastMentionMsgId.empty() ? lastPassiveMsgId : lastMentionMsgId;
+    }
 
     return input.dump();
 }
@@ -789,18 +823,20 @@ void ChatbotEngine::flush(const std::string& chatKeyText, std::string_view reaso
         return;
     }
 
-    // 通道是否在忙: 忙就不投, 缓冲继续积累, 等本轮 TURN_END
+    // 通道正在跑一轮: **不**攒到 TURN_END, 按 `next-step` 插进本轮 ——
+    // 主程序在下一个 modelcall 边界把它写进上下文 (drainPendingSessionInputs),
+    // 模型不用等这一轮跑完就能知道群里又说了什么 (见 README §2.1)
     const int64_t existingChannel = router_ != nullptr ? router_->find(chatKeyText) : 0;
-    if (existingChannel > 0 && router_ != nullptr && router_->isBusy(existingChannel)) {
+    const bool    running = router_ != nullptr && existingChannel > 0
+                            && router_->isBusy(existingChannel);
+    if (running) {
         XX_LOGD(
-            "[{}] 会话 '{}' 正在跑一轮, {} 条消息继续缓冲 (原因: {})",
+            "[{}] 会话 '{}' 正在跑一轮, {} 条消息按 next-step 插进本轮 (原因: {})",
             kLogTag,
             chatKeyText,
             state.items.size(),
             std::string{reason}
         );
-        state.stale = true;
-        return;
     }
 
     std::string err;
@@ -846,9 +882,15 @@ void ChatbotEngine::flush(const std::string& chatKeyText, std::string_view reaso
     notifyChanged();
 
     bool              hasAttachments = false;
-    const std::string inputJson      = assembleInput(chatKeyText, batch, reason, &hasAttachments);
-    int32_t           rc             = runtime_.sendInput ? runtime_.sendInput(channelId, inputJson)
-                                                          : -1;
+    const std::string inputJson      = assembleInput(
+        chatKeyText,
+        batch,
+        reason,
+        // 正在跑一轮 → next-step (插进本轮); 否则排队成新一轮
+        running ? "next-step" : "next-turn",
+        &hasAttachments
+    );
+    int32_t rc = runtime_.sendInput ? runtime_.sendInput(channelId, inputJson) : -1;
     if (rc != 0 && hasAttachments) {
         // 附件被拒 (超出主程序的单文件大小/条数上限): 去掉附件重投一次
         // - 主程序对这类输入返回参数错误, 整条输入 (含正文) 都不会进上下文;
@@ -879,6 +921,15 @@ void ChatbotEngine::flush(const std::string& chatKeyText, std::string_view reaso
             channelId,
             rc
         );
+        if (running) {
+            // 插不进本轮: 放回缓冲队首, 等本轮 TURN_END 再投 —— 内容不能丢
+            state.items.insert(state.items.begin(), batch.begin(), batch.end());
+            for (const auto& item : batch) {
+                state.chars += utf8CodePointCount(item.text);
+            }
+            state.stale = true;
+            notifyChanged();
+        }
         return;
     }
     XX_LOGI(
@@ -1086,13 +1137,15 @@ bool ChatbotEngine::handleCommand(
     turn.startedAtMs      = nowMs();
     turn.lastPassiveMsgId = event.platformMessageId;
     turn.messages.clear();
-    turn.messages.push_back(TurnMessage{
-        1,
-        event.platformMessageId,
-        event.replyRef,
-        true,
-        event.timestampMs,
-    });
+    TurnMessage commandMessage;
+    commandMessage.index             = 1;
+    commandMessage.platformMessageId = event.platformMessageId;
+    commandMessage.replyRef          = event.replyRef;
+    commandMessage.senderMentionId   = event.senderMentionId;
+    commandMessage.senderName        = event.senderName;
+    commandMessage.mentionedMe       = true;
+    commandMessage.timestampMs       = event.timestampMs;
+    turn.messages.push_back(std::move(commandMessage));
     notifyChanged();
     return true;
 }
@@ -1284,6 +1337,15 @@ void ChatbotEngine::fallbackSend(const std::string& chatKey, TurnContext& turn) 
     OutboundRequest request;
     request.text         = text;
     request.passiveMsgId = defaultPassiveMsgId(chatKey);
+    // 被动回复窗口过期时改发主动消息要 @ 原说话人
+    if (!request.passiveMsgId.empty()) {
+        mentionTargetOf(
+            chatKey,
+            request.passiveMsgId,
+            request.mentionOpenId,
+            request.mentionName
+        );
+    }
     if (outbound_ == nullptr) {
         return;
     }
@@ -1404,6 +1466,32 @@ std::string ChatbotEngine::defaultPassiveMsgId(std::string_view chatKey) const {
         return it->second.turn.messages.back().platformMessageId;
     }
     return {};
+}
+
+bool ChatbotEngine::mentionTargetOf(
+    std::string_view chatKey,
+    std::string_view platformMessageId,
+    std::string&     openId,
+    std::string&     name
+) const {
+    if (platformMessageId.empty()) {
+        return false;
+    }
+    auto it = sessions_.find(std::string{chatKey});
+    if (it == sessions_.end()) {
+        return false;
+    }
+    // 从新往旧找: 同一个 msgId 正常只有一条, 重复到达的也已合并
+    const auto& messages = it->second.turn.messages;
+    for (auto r = messages.rbegin(); r != messages.rend(); ++r) {
+        if (r->platformMessageId != platformMessageId) {
+            continue;
+        }
+        openId = r->senderMentionId;
+        name   = r->senderName;
+        return true;
+    }
+    return false;
 }
 
 void ChatbotEngine::noteAssistantText(std::string_view chatKey, std::string_view text) {
@@ -1603,6 +1691,8 @@ std::string ChatbotEngine::statusJson() const {
     outboundJson["dropped"]   = static_cast<int64_t>(counters.dropped);
     outboundJson["failed"]    = static_cast<int64_t>(counters.failed);
     outboundJson["activeBlocked"] = static_cast<int64_t>(counters.activeBlocked);
+    // 被动回复窗口过期 → 改发 @ 的主动消息的条数
+    outboundJson["passiveFallback"] = static_cast<int64_t>(counters.passiveFallback);
     outboundJson["pending"]   = static_cast<int64_t>(
         outbound_ != nullptr ? outbound_->pendingTotal() : 0
     );
@@ -1617,6 +1707,8 @@ std::string ChatbotEngine::statusJson() const {
     countersJson["wakeMentioned"] = static_cast<int64_t>(globalCounters_.wakeMentioned);
     countersJson["aggregated"] = static_cast<int64_t>(globalCounters_.aggregated);
     countersJson["turns"]      = static_cast<int64_t>(globalCounters_.turns);
+    // 会话正在执行一轮时按 next-step 插进本轮的条数
+    countersJson["injected"]   = static_cast<int64_t>(globalCounters_.injected);
     // 群里“非 @ 消息”的条数: 一直为 0 就说明平台没给「接收所有消息」权限
     countersJson["fullMode"]   = static_cast<int64_t>(globalCounters_.fullMode);
     out["counters"]            = std::move(countersJson);
@@ -1656,6 +1748,7 @@ std::string ChatbotEngine::chatInfoJson(std::string_view chatKey) const {
     countersJson["duplicated"] = static_cast<int64_t>(counters.duplicated);
     countersJson["wakeMentioned"] = static_cast<int64_t>(counters.wakeMentioned);
     countersJson["turns"]      = static_cast<int64_t>(counters.turns);
+    countersJson["injected"]   = static_cast<int64_t>(counters.injected);
     countersJson["lastTurnMs"] = counters.lastTurnMs;
     // 本会话里来自群「全量消息」事件的条数 (`always` 会话靠它判断平台权限)
     countersJson["fullMode"]   = static_cast<int64_t>(counters.fullMode);

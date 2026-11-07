@@ -61,6 +61,10 @@ struct TurnMessage {
     std::string platformMessageId;
     /// 平台引用句柄 (引用回复用)
     std::string replyRef;
+    /// @ 这条消息的说话人时平台要的 id (被动回复过期后改发主动消息用)
+    std::string senderMentionId;
+    /// 说话人显示名 (同上; 平台不支持真 @ 时写成文本前缀)
+    std::string senderName;
     bool        mentionedMe = false;
     int64_t     timestampMs = 0;
 };
@@ -106,6 +110,8 @@ struct ChatCounters {
     uint64_t wakeMentioned = 0;
     uint64_t aggregated = 0;
     uint64_t turns      = 0;
+    /// 其中「会话正在执行一轮时按 next-step 插进本轮」的条数
+    uint64_t injected   = 0;
     /// 其中来自群「全量消息」事件的条数 (平台没开「接收所有消息」时恒为 0)
     uint64_t fullMode   = 0;
     int64_t  lastTurnMs = 0;
@@ -191,6 +197,21 @@ public:
 
     /// 工具侧入口: 该会话当前的默认被动回复 id (本轮最后一条 / 被 @ 的那条)
     std::string defaultPassiveMsgId(std::string_view chatKey) const;
+
+    /// 工具侧入口: 某个被动回复 id 是谁说的 (被动回复过期后改 @ 他用)
+    ///
+    /// - `args`:
+    ///     - [chatKey] 会话键
+    ///     - [platformMessageId] 本轮里那条消息的平台 id
+    ///     - [openId] 写回 @ 他要用的平台 id (找不到时不动)
+    ///     - [name] 写回显示名
+    /// - `return` 本轮里找到这条消息返回 true
+    bool mentionTargetOf(
+        std::string_view chatKey,
+        std::string_view platformMessageId,
+        std::string&     openId,
+        std::string&     name
+    ) const;
 
     /// 工具侧入口: 打一次「工具产出了正文」标记 (兜底发送的依据)
     void noteAssistantText(std::string_view chatKey, std::string_view text);
@@ -285,11 +306,13 @@ private:
     ///
     /// - `args`:
     ///     - [reason] 唤醒原因码 (写进输入块, 见 [wakeReasonNote])
+    ///     - [delivery] 投递模式: `next-turn` = 排队成新一轮; `next-step` = 插进正在跑的这轮
     ///     - [hasAttachments] 非空时写回“本次是否带了多模态附件” (投递被拒时据此重试)
     std::string assembleInput(
         const std::string&               chatKey,
         const std::vector<InboundEvent>& batch,
         std::string_view                 reason,
+        std::string_view                 delivery,
         bool*                            hasAttachments = nullptr
     );
 

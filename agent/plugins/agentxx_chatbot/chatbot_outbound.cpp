@@ -22,7 +22,131 @@ constexpr size_t kMaxPassiveEntries = 64;
 /// 最近平台消息 id 保留条数
 constexpr size_t kMaxRecentIds = 8;
 
+/// 失败原因看起来是「被动回复窗口过期 / `msg_id` 无效」吗
+///
+/// 平台能自己判定的会置 `SendResult::passiveExpired`; 这里只是兜底 (其它平台/不同
+/// 措辞)。判错不会造成重复发送: 被动回复失败本身就说明那条没发出去。
+bool looksLikeExpiredPassive(std::string_view reason) {
+    if (reason.empty()) {
+        return false;
+    }
+    static constexpr std::string_view kKeys[] = {
+        "msg_id", "msgid", "msg_seq", "过期", "失效", "无效", "超时",
+        "expired", "invalid", "not exist", "不存在", "被动",
+    };
+    std::string lower{reason};
+    for (auto& ch : lower) {
+        if (ch >= 'A' && ch <= 'Z') {
+            ch = static_cast<char>(ch - 'A' + 'a');
+        }
+    }
+    for (const auto key : kKeys) {
+        std::string needle{key};
+        for (auto& ch : needle) {
+            if (ch >= 'A' && ch <= 'Z') {
+                ch = static_cast<char>(ch - 'A' + 'a');
+            }
+        }
+        if (lower.find(needle) != std::string::npos) {
+            return true;
+        }
+    }
+    return false;
+}
+
 } // namespace
+
+/* ==================== OutboundWait ==================== */
+
+void OutboundWait::resolveSuccess(std::string platformMessageId) {
+    {
+        std::lock_guard lock(mutex_);
+        if (done_) {
+            return;
+        }
+        done_              = true;
+        ok_                = true;
+        sent_              = 1;
+        platformMessageId_ = std::move(platformMessageId);
+    }
+    cv_.notify_all();
+}
+
+void OutboundWait::resolveSkipped() {
+    {
+        std::lock_guard lock(mutex_);
+        if (done_) {
+            return;
+        }
+        done_ = true;
+        ok_   = true;
+        sent_ = 0;
+    }
+    cv_.notify_all();
+}
+
+void OutboundWait::resolveFailure(std::string reason) {    {
+        std::lock_guard lock(mutex_);
+        if (done_) {
+            return;
+        }
+        done_    = true;
+        ok_      = false;
+        failure_ = std::move(reason);
+    }
+    cv_.notify_all();
+}
+
+void OutboundWait::noteWarning(std::string warning) {
+    std::lock_guard lock(mutex_);
+    if (warning.empty()) {
+        return;
+    }
+    if (warning_.empty()) {
+        warning_ = std::move(warning);
+    } else {
+        warning_ += "; ";
+        warning_ += warning;
+    }
+}
+
+bool OutboundWait::waitFor(int32_t timeoutMs) {
+    std::unique_lock lock(mutex_);
+    if (done_) {
+        return true;
+    }
+    if (timeoutMs <= 0) {
+        return false;
+    }
+    return cv_.wait_for(lock, std::chrono::milliseconds{timeoutMs}, [this]() {
+        return done_;
+    });
+}
+
+bool OutboundWait::ok() const {
+    std::lock_guard lock(mutex_);
+    return ok_;
+}
+
+int32_t OutboundWait::sent() const {
+    std::lock_guard lock(mutex_);
+    return sent_;
+}
+
+std::string OutboundWait::warning() const {
+    std::lock_guard lock(mutex_);
+    return warning_;
+}
+
+std::string OutboundWait::failure() const {
+    std::lock_guard lock(mutex_);
+    return failure_;
+}
+
+std::string OutboundWait::platformMessageId() const {
+    std::lock_guard lock(mutex_);
+    return platformMessageId_;
+}
 
 int64_t ChatbotOutbound::nowMs() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -183,13 +307,17 @@ int32_t ChatbotOutbound::nextPassiveSeq(
 }
 
 SubmitOutcome ChatbotOutbound::submit(
-    const ChatKey&         key,
-    const OutboundRequest& req,
-    int32_t                alreadySentThisTurn
+    const ChatKey&                key,
+    const OutboundRequest&        req,
+    int32_t                       alreadySentThisTurn,
+    std::shared_ptr<OutboundWait> wait
 ) {
     SubmitOutcome outcome;
     if (stopped_ || behavior_ == nullptr) {
         outcome.reason = "插件已停止, 无法发送";
+        if (wait) {
+            wait->resolveFailure(outcome.reason);
+        }
         return outcome;
     }
     const std::string chatKeyText = key.key();
@@ -203,6 +331,9 @@ SubmitOutcome ChatbotOutbound::submit(
     auto parts = splitTextToParts(normalizeOutboundText(req.text), splitOpt);
     if (parts.empty() && req.attachments.empty()) {
         outcome.reason = "没有可发送的内容 (文本为空且没有附件)";
+        if (wait) {
+            wait->resolveFailure(outcome.reason);
+        }
         return outcome;
     }
     if (parts.empty()) {
@@ -218,6 +349,9 @@ SubmitOutcome ChatbotOutbound::submit(
                          + " 条; 把想说的合并成一条再发 (或下一轮再说)";
         state.counters.dropped += parts.size();
         counters_.dropped += parts.size();
+        if (wait) {
+            wait->resolveFailure(outcome.reason);
+        }
         return outcome;
     }
 
@@ -242,7 +376,11 @@ SubmitOutcome ChatbotOutbound::submit(
         job.message.replyToRef   = req.replyToRef;
         // 被动回复 id 由调用方给出 (本轮被投递的那条消息); 序号在发送前统一分配
         job.message.passiveReplyTo = req.passiveMsgId;
+        // @ 目标只在被动回复过期改发主动消息时用得上 (见 pump)
+        job.message.mentionOpenId = req.mentionOpenId;
+        job.message.mentionName   = req.mentionName;
         job.message.markdown     = wantMarkdown;
+        job.wait                 = wait;
         // 附件只跟最后一条走 (前面的分段只发文本, 附件放最后一条消息上)
         if (i + 1 == take) {
             job.message.attachments = req.attachments;
@@ -265,6 +403,10 @@ SubmitOutcome ChatbotOutbound::submit(
 
     outcome.queued = queued;
     outcome.ok     = queued > 0;
+    if (!outcome.ok && wait) {
+        // 一条都没入队: 等待器不能悬着 (工具会等到超时)
+        wait->resolveFailure(outcome.reason.empty() ? std::string{"发送被拒绝"} : outcome.reason);
+    }
     pump(chatKeyText);
     return outcome;
 }
@@ -394,9 +536,24 @@ void ChatbotOutbound::pump(const std::string& chatKey) {
         utf8CodePointCount(job.message.text)
     );
 
+    // 被动回复失败时要原样重发这条 (含 @ 目标): `send_` 拿走的是移动后的值, 先留一份
+    // (没有被动 id 的消息不会走降级, 不必拷)
+    std::shared_ptr<OutboundMessage> retryMessage;
+    if (!job.message.passiveReplyTo.empty()) {
+        retryMessage = std::make_shared<OutboundMessage>(job.message);
+        // 被动回复本身就是对那条消息的直接回应, 不用再 @ 人;
+        // @ 目标只留给"窗口过期后改发的主动消息" (见下面的结果回调)
+        job.message.mentionOpenId.clear();
+        job.message.mentionName.clear();
+    }
+    auto wait = job.wait;
+
     send_(
         std::move(job.message),
-        [this, chatKey](const SendResult& result) {
+        [this,
+         chatKey,
+         wait         = std::move(wait),
+         retryMessage = std::move(retryMessage)](const SendResult& result) {
             auto it2 = sessions_.find(chatKey);
             if (it2 == sessions_.end()) {
                 return;
@@ -417,6 +574,86 @@ void ChatbotOutbound::pump(const std::string& chatKey) {
                         state2.recentIds.pop_front();
                     }
                 }
+                if (wait) {
+                    wait->resolveSuccess(result.platformMessageId);
+                }
+            } else if (retryMessage != nullptr
+                       && (result.passiveExpired || looksLikeExpiredPassive(result.reason))) {
+                // 被动回复窗口过期 (模型跑得久, 平台已经不认这条 msg_id 了):
+                // 按 overflowPolicy 处理 —— 默认改发主动消息, 并把原说话人 @ 回来
+                const std::string policy
+                    = behavior_ != nullptr ? behavior_->overflowPolicy : std::string{"active"};
+                if (policy == "truncate") {
+                    ++state2.counters.droppedOutOfWindow;
+                    ++counters_.droppedOutOfWindow;
+                    XX_LOGW(
+                        "[{}] 会话 '{}': 被动回复窗口已过期, 按 truncate 放弃发送",
+                        kLogTag,
+                        chatKey
+                    );
+                    if (wait) {
+                        wait->resolveFailure(
+                            "被动回复窗口已过期 (msg_id 已失效), 按 overflowPolicy=truncate 放弃发送"
+                        );
+                    }
+                } else if (policy == "fail") {
+                    ++state2.counters.failed;
+                    ++counters_.failed;
+                    XX_LOGW(
+                        "[{}] 会话 '{}': 被动回复窗口已过期, 按 fail 丢弃",
+                        kLogTag,
+                        chatKey
+                    );
+                    if (wait) {
+                        wait->resolveFailure(
+                            "被动回复窗口已过期 (msg_id 已失效, 平台返回: " + result.reason + ")"
+                        );
+                    }
+                } else {
+                    // active (默认): 清掉被动 id 改发主动消息; 平台能在正文里 @ 人时
+                    // 把刚才那条消息的说话人 @ 回来, 否则只留显示名 (平台写成文本前缀)
+                    auto message      = *retryMessage;
+                    message.passiveReplyTo.clear();
+                    message.passiveSeq = 0;
+                    PlatformCaps caps;
+                    if (caps_) {
+                        caps = caps_(message.accountId);
+                    }
+                    if (!caps.mentionInContent || message.type == ChatType::Private) {
+                        // 私聊本来就是对着他说; 平台不支持真 @ 时只留名字
+                        message.mentionOpenId.clear();
+                    }
+                    ++state2.counters.passiveFallback;
+                    ++counters_.passiveFallback;
+
+                    std::string warning = "引用的 msg_id 已过期 (平台被动回复窗口已过), "
+                                          "已改为主动消息重发";
+                    if (!message.mentionOpenId.empty()) {
+                        warning += "并 @ 了"
+                                   + (message.mentionName.empty() ? std::string{"原说话人"}
+                                                                  : message.mentionName);
+                    } else if (!message.mentionName.empty()) {
+                        warning += ", 正文以 \"@" + message.mentionName
+                                   + "\" 开头 (该平台不能真的 @ 人)";
+                    }
+                    if (wait) {
+                        wait->noteWarning(warning);
+                    }
+                    XX_LOGW(
+                        "[{}] 会话 '{}': 被动回复窗口已过期, 改发主动消息 (@{})",
+                        kLogTag,
+                        chatKey,
+                        message.mentionName.empty() ? std::string{"-"} : message.mentionName
+                    );
+
+                    // 插回队首: 这句回复不能被后发的消息挤到后面
+                    Job retryJob;
+                    retryJob.chatKey          = chatKey;
+                    retryJob.attachmentsReady = true;
+                    retryJob.message          = std::move(message);
+                    retryJob.wait             = wait;
+                    state2.queue.push_front(std::move(retryJob));
+                }
             } else {
                 ++state2.counters.failed;
                 ++counters_.failed;
@@ -432,6 +669,9 @@ void ChatbotOutbound::pump(const std::string& chatKey) {
                     || result.reason.find("no permission") != std::string::npos) {
                     ++state2.counters.activeBlocked;
                     ++counters_.activeBlocked;
+                }
+                if (wait) {
+                    wait->resolveFailure(result.reason);
                 }
             }
             pump(chatKey);

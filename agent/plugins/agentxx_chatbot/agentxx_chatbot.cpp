@@ -638,6 +638,16 @@ const char* kDebugOutboxSchema = R"JSON({
   "required": []
 })JSON";
 
+const char* kDebugPlatformSchema = R"JSON({
+  "type": "object",
+  "properties": {
+    "op": {"type": "string", "description": "expire_passive(被动回复按 msg_id 过期失败) / 目前只有这一个", "enum": ["expire_passive"]},
+    "value": {"type": "boolean", "description": "开关值 (默认 true)"},
+    "account": {"type": "string", "description": "可选: 只对某个账号生效"}
+  },
+  "required": ["op"]
+})JSON";
+
 /// 在插件 io 线程上跑一个工具工作体, 拿回结果串
 ///
 /// 为什么要绕这一层: 工具工作体要跳到插件 io 线程执行, 而 `args` / `tid` 只是主程序在
@@ -689,9 +699,21 @@ void registerToolsOn(ChatbotCtx& ctx, const AgentRef& ref) {
 
     auto sendMessage = [deps](ChatbotCtx& c, std::string_view args, std::string_view tid) {
         c.toolCalls.fetch_add(1, std::memory_order_relaxed);
-        return runToolOnIo(c, args, tid, [deps](std::string_view t, std::string_view a) {
-            return ac::toolSendMessage(*deps, t, a);
-        });
+        // 提交之后要在**工作线程**上等平台的发送结果: 被动回复窗口过期会改发 @ 的
+        // 主动消息, 那句提示必须回到模型手里 (见 chatbot_tools 的 mergeSendOutcome)
+        auto wait = std::make_shared<ac::OutboundWait>();
+        auto json = runToolOnIo(
+            c,
+            args,
+            tid,
+            [deps, wait](std::string_view t, std::string_view a) {
+                return ac::toolSendMessage(*deps, t, a, wait);
+            }
+        );
+        const int32_t waitMs = deps->engine != nullptr
+                                  ? deps->engine->config().behavior.sendResultWaitMs
+                                  : 0;
+        return ac::mergeSendOutcome(std::move(json), wait.get(), waitMs);
     };
 
     auto history = [deps](ChatbotCtx& c, std::string_view args, std::string_view tid) {
@@ -841,6 +863,21 @@ void registerToolsOn(ChatbotCtx& ctx, const AgentRef& ref) {
         [debugOutbox](ChatbotCtx& c, std::string_view args, std::string_view tid) {
             return debugOutbox(c, args, tid);
         }
+    );
+
+    auto debugPlatform = [deps](ChatbotCtx& c, std::string_view args, std::string_view tid) {
+        return runToolOnIo(c, args, tid, [deps](std::string_view, std::string_view a) {
+            return ac::toolDebugPlatform(*deps, a);
+        });
+    };
+    agentxx::plugin::blocking_tool(
+        ctx,
+        ref,
+        "chatbot_debug_platform",
+        "调试用: 拨假平台的开关 (op=expire_passive 让被动回复按 msg_id 过期失败)。"
+        "只在 behavior.debugTools 打开时注册, 生产环境不会出现。",
+        kDebugPlatformSchema,
+        debugPlatform
     );
 }
 

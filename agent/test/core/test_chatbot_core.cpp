@@ -7,6 +7,7 @@
 /// - 时间与时区: RFC3339 带时区后缀的解析 / 时区写法 / 按配置时区格式化
 /// - 去重环: 重复 / 容量 / 顺序
 /// - 引用编号映射
+/// - 出站降级: 被动回复窗口过期 → 自动改发 @ 的主动消息 (群/单聊/truncate)
 /// - 配置校验: 每种非法配置给出预期错误
 /// - 侧边栏「机器人」栏: 快照 JSON 往返 / 展示文案 / 组件树 (加载帧与排队数)
 ///
@@ -15,11 +16,14 @@
 
 #include "agentxx_chatbot/chatbot_config.h"
 #include "agentxx_chatbot/chatbot_core.h"
+#include "agentxx_chatbot/chatbot_outbound.h"
 #include "agentxx_chatbot/chatbot_panel.h"
 #include "agentxx_chatbot/chatbot_panel_ui.h"
 #include "agentxx_chatbot/chatbot_router.h"
 #include "agentxx_chatbot/chatbot_time.h"
 #include "agentxx_chatbot/chatbot_types.h"
+
+#include "asio/io_context.hpp"
 
 #include <map>
 #include <set>
@@ -686,10 +690,187 @@ void testReplyTo() {
     XX_TEST_EXPECT_EQ(displayNameOf("", ""), std::string{});
 }
 
+/* ==================== 出站: 被动回复过期改 @ 主动消息 ==================== */
+
+/// 出站降级: 平台判 `msg_id` 过期 → 自动改发主动消息并 @ 原说话人
+///
+/// 场景是"模型跑完长任务再回复": 那条消息的被动回复窗口已经过了, 平台拒绝,
+/// 以前只记一条失败日志 (消息丢掉), 现在改发主动消息并把提示交给工具。
+void testOutboundPassiveFallback() {
+    asio::io_context io;
+    BehaviorConfig   behavior;
+    behavior.sendIntervalMs     = 0;
+    behavior.messageSplitLimit  = 0; // 不切分
+    behavior.maxRepliesPerTurn  = 5;
+    behavior.overflowPolicy     = "active";
+
+    auto caps = [](const std::string&) {
+        PlatformCaps c;
+        c.passiveReply    = true;
+        c.markdown        = true;
+        c.mentionInContent = true;
+        return c;
+    };
+
+    ChatKey key;
+    key.accountId = "qq_main";
+    key.type      = ChatType::Group;
+    key.chatId    = "G1";
+
+    // ---- 1. 群聊: 被动过期 → 主动 + @ ----
+    {
+        std::vector<OutboundMessage> sent;
+        auto send = [&sent](OutboundMessage msg, SendResultFn done) {
+            sent.push_back(msg);
+            SendResult result;
+            if (!msg.passiveReplyTo.empty()) {
+                result.ok             = false;
+                result.reason         = "发送失败 (status 400): msg_id 已过期";
+                result.passiveExpired = true;
+            } else {
+                result.ok                = true;
+                result.platformMessageId = "fake-1";
+            }
+            if (done) {
+                done(result);
+            }
+        };
+
+        ChatbotOutbound outbound;
+        outbound.init(io.get_executor(), &behavior, send, caps);
+
+        OutboundRequest req;
+        req.text          = "任务跑完了, 我回来了";
+        req.passiveMsgId  = "msg-old";
+        req.mentionOpenId = "member-openid";
+        req.mentionName   = "小张";
+
+        auto wait = std::make_shared<OutboundWait>();
+        const auto outcome = outbound.submit(key, req, 0, wait);
+        XX_TEST_EXPECT_TRUE(outcome.ok);
+        // 两次: 第一次带被动 id (被拒), 第二次改发主动消息
+        XX_TEST_EXPECT_EQ(sent.size(), size_t{2});
+        if (sent.size() == 2) {
+            XX_TEST_EXPECT_EQ(sent[0].passiveReplyTo, std::string{"msg-old"});
+            XX_TEST_EXPECT_EQ(sent[0].passiveSeq, 1);
+            // 被动回复本身就是对那条消息的回应: 不该带 @ (否则每条回复都变成 @ + markdown)
+            XX_TEST_EXPECT_TRUE(sent[0].mentionOpenId.empty());
+            XX_TEST_EXPECT_TRUE(sent[0].mentionName.empty());
+            XX_TEST_EXPECT_TRUE(sent[1].passiveReplyTo.empty());
+            XX_TEST_EXPECT_EQ(sent[1].passiveSeq, 0);
+            XX_TEST_EXPECT_EQ(sent[1].mentionOpenId, std::string{"member-openid"});
+            XX_TEST_EXPECT_EQ(sent[1].mentionName, std::string{"小张"});
+            XX_TEST_EXPECT_EQ(sent[1].text, sent[0].text);
+        }
+        XX_TEST_EXPECT_EQ(outbound.counters().passiveFallback, uint64_t{1});
+        XX_TEST_EXPECT_EQ(outbound.counters().sent, uint64_t{1});
+        XX_TEST_EXPECT_EQ(outbound.counters().failed, uint64_t{0});
+        // 工具侧的等待器: 成功 + 带警告 (模型能知道这句是怎么发出去的)
+        XX_TEST_EXPECT_TRUE(wait->ok());
+        XX_TEST_EXPECT_EQ(wait->sent(), int32_t{1});
+        XX_TEST_EXPECT_TRUE(contains(wait->warning(), "已过期"));
+        XX_TEST_EXPECT_TRUE(contains(wait->warning(), "小张"));
+    }
+
+    // ---- 2. 单聊: 改发主动消息时不带 @ (本来就是对着他说) ----
+    {
+        std::vector<OutboundMessage> sent;
+        auto send = [&sent](OutboundMessage msg, SendResultFn done) {
+            sent.push_back(msg);
+            SendResult result;
+            if (!msg.passiveReplyTo.empty()) {
+                result.ok             = false;
+                result.reason         = "发送失败 (status 400): msg_id 已过期";
+                result.passiveExpired = true;
+            } else {
+                result.ok = true;
+            }
+            if (done) {
+                done(result);
+            }
+        };
+        ChatbotOutbound outbound;
+        outbound.init(io.get_executor(), &behavior, send, caps);
+
+        ChatKey privateKey;
+        privateKey.accountId = "qq_main";
+        privateKey.type      = ChatType::Private;
+        privateKey.chatId    = "U1";
+
+        OutboundRequest req;
+        req.text          = "在的";
+        req.passiveMsgId  = "msg-old";
+        req.mentionOpenId = "user-openid";
+        req.mentionName   = "小李";
+        auto       wait    = std::make_shared<OutboundWait>();
+        const auto outcome = outbound.submit(privateKey, req, 0, wait);
+        XX_TEST_EXPECT_TRUE(outcome.ok);
+        XX_TEST_EXPECT_EQ(sent.size(), size_t{2});
+        if (sent.size() == 2) {
+            XX_TEST_EXPECT_TRUE(sent[1].mentionOpenId.empty());
+            // 显示名留着: 平台会写成正文前缀
+            XX_TEST_EXPECT_EQ(sent[1].mentionName, std::string{"小李"});
+        }
+        XX_TEST_EXPECT_TRUE(wait->ok());
+    }
+
+    // ---- 3. 非过期的失败: 等待器给出最终失败 (工具据此报给模型) ----
+    {
+        auto send = [](OutboundMessage, SendResultFn done) {
+            SendResult result;
+            result.ok     = false;
+            result.reason = "发送失败 (status 403): bot is muted";
+            if (done) {
+                done(result);
+            }
+        };
+        ChatbotOutbound outbound;
+        outbound.init(io.get_executor(), &behavior, send, caps);
+
+        OutboundRequest req;
+        req.text         = "这条发不出去";
+        req.passiveMsgId = "msg-old";
+        auto       wait    = std::make_shared<OutboundWait>();
+        const auto outcome = outbound.submit(key, req, 0, wait);
+        XX_TEST_EXPECT_TRUE(outcome.ok);
+        XX_TEST_EXPECT_FALSE(wait->ok());
+        XX_TEST_EXPECT_TRUE(contains(wait->failure(), "muted"));
+        XX_TEST_EXPECT_EQ(outbound.counters().failed, uint64_t{1});
+    }
+
+    // ---- 4. `truncate` 策略: 过期就放弃, 不重发 ----
+    {
+        BehaviorConfig truncate = behavior;
+        truncate.overflowPolicy = "truncate";
+        int sends               = 0;
+        auto send = [&sends](OutboundMessage msg, SendResultFn done) {
+            ++sends;
+            SendResult result;
+            result.ok             = msg.passiveReplyTo.empty();
+            result.reason         = "发送失败 (status 400): msg_id 已过期";
+            result.passiveExpired = true;
+            if (done) {
+                done(result);
+            }
+        };
+        ChatbotOutbound outbound;
+        outbound.init(io.get_executor(), &truncate, send, caps);
+
+        OutboundRequest req;
+        req.text         = "放弃这条";
+        req.passiveMsgId = "msg-old";
+        auto       wait    = std::make_shared<OutboundWait>();
+        const auto outcome = outbound.submit(key, req, 0, wait);
+        XX_TEST_EXPECT_TRUE(outcome.ok);
+        XX_TEST_EXPECT_EQ(sends, 1);
+        XX_TEST_EXPECT_EQ(outbound.counters().droppedOutOfWindow, uint64_t{1});
+        XX_TEST_EXPECT_FALSE(wait->ok());
+    }
+}
+
 /* ==================== 去重环 ==================== */
 
-void testDedupe() {
-    DedupeRing ring(3);
+void testDedupe() {    DedupeRing ring(3);
     XX_TEST_EXPECT_FALSE(ring.seenOrAdd("a"));
     XX_TEST_EXPECT_TRUE(ring.seenOrAdd("a"));
     XX_TEST_EXPECT_EQ(ring.duplicateCount(), uint64_t{1});
@@ -1838,6 +2019,7 @@ TestResult testChatbotCore() {
     testWakeReasonNote();
     testReplyTo();
     testDedupe();
+    testOutboundPassiveFallback();
     testTypes();
     testConfigParseAndValidate();
     testConfigValidationFailures();

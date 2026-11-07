@@ -125,6 +125,8 @@ TestResult testChatbotQq() {
         XX_TEST_EXPECT_EQ(out.senderName, std::string{"寒光"});
         XX_TEST_EXPECT_EQ(out.senderRole, std::string{"owner"});
         XX_TEST_EXPECT_EQ(out.senderId, std::string{"BFD86A0EA982C29C0ACC9F1F0EA38E00"});
+        // 出站 @ 他要用 `member_openid` (与 senderId 不一定相同)
+        XX_TEST_EXPECT_EQ(out.senderMentionId, std::string{"BFD86A0EA982C29C0ACC9F1F0EA38E00"});
         XX_TEST_EXPECT_TRUE(out.mentionedMe());
         XX_TEST_EXPECT_EQ(out.mentionSelf, MentionSelfSource::EventType);
         XX_TEST_EXPECT_FALSE(out.fromFullMode);
@@ -285,7 +287,37 @@ TestResult testChatbotQq() {
         XX_TEST_EXPECT_TRUE(normalizeQqEvent("C2C_MESSAGE_CREATE", data, out));
         XX_TEST_EXPECT_EQ(out.type, ChatType::Private);
         XX_TEST_EXPECT_EQ(out.chatId, std::string{"PRIVATE-1"});
+        // 没有 user_openid 时退回 senderId (@ 他仍然能用)
+        XX_TEST_EXPECT_EQ(out.senderMentionId, std::string{"PRIVATE-1"});
         XX_TEST_EXPECT_TRUE(out.mentionedMe());
+    }
+
+    // ===================== 8b. @ 目标是 openid, 不是 author.id =====================
+    {
+        // 群里 @ 用户要 member_openid (官方「文本交互」: 群填 member_openid)
+        const auto group = Json::parse(R"JSON({
+          "author": {"bot": false, "id": "ID-A", "member_openid": "MEMBER-A",
+                     "union_openid": "UNION-A", "username": "小周"},
+          "content": "在吗",
+          "group_openid": "G-OPENID",
+          "id": "ROBOT1.0_member",
+          "timestamp": "2026-10-29T10:00:00+08:00"
+        })JSON");
+        InboundEvent out;
+        XX_TEST_EXPECT_TRUE(normalizeQqEvent("GROUP_AT_MESSAGE_CREATE", group, out));
+        XX_TEST_EXPECT_EQ(out.senderId, std::string{"ID-A"});
+        XX_TEST_EXPECT_EQ(out.senderMentionId, std::string{"MEMBER-A"});
+
+        // 单聊要 user_openid
+        const auto privateChat = Json::parse(R"JSON({
+          "author": {"bot": false, "id": "ID-B", "user_openid": "USER-B", "username": "小吴"},
+          "content": "在吗",
+          "id": "ROBOT1.0_c2c",
+          "timestamp": "2026-10-29T10:00:00+08:00"
+        })JSON");
+        XX_TEST_EXPECT_TRUE(normalizeQqEvent("C2C_MESSAGE_CREATE", privateChat, out));
+        XX_TEST_EXPECT_EQ(out.senderId, std::string{"ID-B"});
+        XX_TEST_EXPECT_EQ(out.senderMentionId, std::string{"USER-B"});
     }
 
     // ===================== 9. 该丢的事件 =====================

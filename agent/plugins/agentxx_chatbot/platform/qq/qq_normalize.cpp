@@ -472,6 +472,16 @@ bool normalizeQqEvent(
         }
         out.senderName = author.value("username", std::string{});
         out.senderRole = roleOf(author);
+        // @ 这个人要用哪个 id: QQ 群是 `member_openid`, 单聊是 `user_openid`
+        // (官方「文本交互」文档: `<qqbot-at-user id="" />` 群填 member_openid)。
+        // `senderId` 不能直接拿来 @: 它优先取 `author.id`, 与 @ 用的 id 不一定是同一个。
+        out.senderMentionId = author.value("member_openid", std::string{});
+        if (out.senderMentionId.empty()) {
+            out.senderMentionId = author.value("user_openid", std::string{});
+        }
+        if (out.senderMentionId.empty()) {
+            out.senderMentionId = out.senderId;
+        }
         if (author.value("bot", false)) {
             // 机器人自己发的消息不再进流程 (平台也可能推回来)
             return false;

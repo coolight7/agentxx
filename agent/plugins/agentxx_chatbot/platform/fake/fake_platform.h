@@ -93,6 +93,10 @@ public:
     /// 让接下来的 N 次发送失败
     void setFailCount(int32_t count);
 
+    /// 模拟被动回复窗口过期: 开着时带 `passiveReplyTo` 的发送一律按
+    /// 「`msg_id` 已过期」失败 (`SendResult::passiveExpired = true`)
+    void setExpirePassive(bool expire);
+
     /// 连接状态是否已置为 online
     bool online() const;
 
@@ -108,6 +112,8 @@ private:
     int64_t                nextId_       = 0;
     int32_t                sendDelayMs_  = 0;
     int32_t                failCount_    = 0;
+    /// 开 = 带被动回复 id 的发送按「msg_id 已过期」失败
+    bool                   expirePassive_ = false;
     bool                   online_       = false;
     bool                   stopped_      = false;
 };

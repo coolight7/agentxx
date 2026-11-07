@@ -15,6 +15,7 @@
 #include "platform/platform.h"
 
 #include <functional>
+#include <memory>
 #include <string>
 #include <string_view>
 
@@ -45,12 +46,28 @@ std::string resolveChat(
 /// `chatbot_send_message`
 ///
 /// - `threadId`: 工具的作用域键 (就是会话 id); 空 = 只能靠 `chat` 参数定位
+/// - `wait`: 非空时由出站层在拿到发送结果后填 (工具据此把"真的发出去了没有"告诉模型)
 /// - 返回给模型看的文本 (成功给"已排队"摘要, 失败给原因)
 std::string toolSendMessage(
-    const ChatbotToolDeps& deps,
-    std::string_view       threadId,
-    std::string_view       argsJson
+    const ChatbotToolDeps&        deps,
+    std::string_view              threadId,
+    std::string_view              argsJson,
+    std::shared_ptr<OutboundWait> wait = nullptr
 );
+
+/// 把发送结果并进 `chatbot_send_message` 的返回 (在**工作线程**上调)
+///
+/// 工具体在插件 io 线程上只做提交, 平台结果要等异步回调; 这里等工作线程上的
+/// `wait` (上限 `timeoutMs`, 0 = 不等) 把结果写进 JSON:
+/// - 成功 → `sent` + 平台消息 id; 做过 `@` 降级时加 `warning`;
+/// - 最终失败 → 抛 `std::runtime_error` (SDK 边界会变成工具失败, 模型能看到原因);
+/// - 等不到 → 保留"已排队"的说法 (不阻塞工具)。
+///
+/// - `args`:
+///     - [json] `toolSendMessage` 的返回
+///     - [wait] 提交时给出的等待器 (可空)
+///     - [timeoutMs] 等多久 (`behavior.sendResultWaitMs`)
+std::string mergeSendOutcome(std::string json, OutboundWait* wait, int32_t timeoutMs);
 
 /// `chatbot_history`
 std::string toolHistory(
@@ -127,10 +144,20 @@ std::string toolDebugInject(const ChatbotToolDeps& deps, std::string_view argsJs
 /// 回看平台侧收到的出站 (只有假平台会记录; 真平台返回空表)。
 std::string toolDebugOutbox(const ChatbotToolDeps& deps, std::string_view argsJson);
 
+/// `chatbot_debug_platform` (仅 `behavior.debugTools` 打开时注册)
+///
+/// 拨假平台的开关, 用来在测试里造平台侧的情形:
+/// - `op = expire_passive` + `value`: 让带 `msg_id` 的被动回复一律按「窗口过期」失败
+///   (验证「自动改发 @ 的主动消息」这条降级)
+///
+/// 只对假平台生效; 真平台会明确报"不支持"。
+std::string toolDebugPlatform(const ChatbotToolDeps& deps, std::string_view argsJson);
+
 /// 调试工具名清单
 inline constexpr const char* kChatbotDebugToolNames[] = {
     "chatbot_debug_inject",
     "chatbot_debug_outbox",
+    "chatbot_debug_platform",
 };
 
 } // namespace chatbot

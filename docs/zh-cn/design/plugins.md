@@ -1070,7 +1070,7 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 插件经内置 `agentxx_jav
 | `agentxx_text_selection_monitor` | 文本选择监听 (仅 Windows UIAutomation) |
 | `agentxx_javascript_engine` | QuickJS 引擎 (能力 `interpreter.js`) |
 | `example_js_execute_command` | JS 代码执行工具 (`example_js_execute_command`, 依赖 `agentxx_javascript_engine`) |
-| `agentxx_chatbot` | 聊天平台桥接 (QQ, 结构化预留其它平台): 每账号 + 每群/私聊一个独立会话, 每个人设一个根 agent; 工具 `chatbot_send_message` / `_history` / `_chat_info` / `_status` / `_set_mode` / `_recall_message`; client 侧「机器人」侧边栏面板 (会话/会话 id/排队数/人设, 见 §13.1) |
+| `agentxx_chatbot` | 聊天平台桥接 (QQ, 结构化预留其它平台): 每账号 + 每群/私聊一个独立会话, 每个人设一个根 agent; 工具 `chatbot_send_message` / `_history` / `_chat_info` / `_status` / `_set_mode` / `_recall_message` / `_task`; client 侧「机器人」侧边栏面板 (会话/会话 id/排队数/人设, 见 §13.1) |
 
 > **插件自管工具提示词 (含运行环境探测)**：工具定义 (`description` / `parameters`) 在
 > `register_tool` 时固化，因此插件必须在自己注册工具**之前**完成一切探测/决策
@@ -1103,8 +1103,22 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 插件经内置 `agentxx_jav
 - **撤回也走工具**：`chatbot_recall_message` 按"倒数第几条"（`target: "-2"`）、
   `skip` + `count` 或 `messageId` 撤回自己刚发的消息，插件自己记着最近 8 条发出去的平台
   id（撤成功后从记录里去掉，同一条不会被反复选中）；
-- **一轮里多条消息一起带上去**：被 @ 立即唤醒；`always` 模式按静默窗口聚合并投递；通道正在
-  跑一轮时新消息继续缓冲，本轮结束（`TURN_END`）后一次性带上；
+- **一轮里多条消息一起带上去**：被 @ 立即唤醒；`always` 模式按静默窗口聚合并投递；
+  通道**正在跑一轮**时按 `delivery: next-step` 把这一批**插进当前这一轮**（主程序在下一个
+  modelcall 边界写进上下文，见 [index.md](index.md) 的「Delta」一节），模型立刻就能看到，
+  不必等本轮结束；插失败时回到缓冲，等 `TURN_END` 再投（内容不丢）。本轮记账跟着延续：
+  `[#n]` 编号接着上一段往下排（`replyTo` 用同一套），`maxRepliesPerTurn` 额度不重置；
+  `chatbot_chat_info` 的 `counters.injected` 是中途插入的条数；
+- **发送结果会回到工具**：`chatbot_send_message` 在插件 io 线程上提交、在**工作线程**上等
+  平台结果（上限 `behavior.sendResultWaitMs`，默认 4000 ms，0 = 不等），返回里给出 `sent` /
+  `messageId`；等不到就保持「已排队」的说法（不拖住工具），最终失败按工具失败上报。
+  其中**被动回复窗口过期**（群 5 分钟 / 单聊 60 分钟，模型跑久一点就会超）单独处理：
+  平台判出过期（`SendResult::passiveExpired`，出站层另有按失败文本判定的兜底）时按
+  `overflowPolicy` 走 —— `active`（默认）把同一条消息**插回队首**、清掉 `msg_id` 改发主动消息，
+  群里带 `<qqbot-at-user id="member_openid" />` 把原说话人 @ 回来（加不到 openid 时退化成
+  正文前缀 `@昵称 `，单聊不 @），工具返回里带 `warning`，计数 `outbound.passiveFallback`；
+  `truncate` / `fail` 沿用原语义。
+  注：QQ 群只在 markdown 消息里支持 `@用户`，所以降级那条会发成 `msg_type=2`；
 - **时间与时区分开处理**：平台时间戳按它自带的时区后缀解析成时间点
   （`2026-10-29T12:03:09+08:00` 就是 UTC 04:03:09；早先把它当 UTC 处理，消息时间会整体
   偏一个时区，模型据此谈时间就与用户所在地区对不上），显示时区由 `behavior.timezone`
@@ -1192,9 +1206,11 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 插件经内置 `agentxx_jav
 `panelItemsOf`），不引用主程序头，`chatbot_core` 模块直测；真实插件全流程（面板注册、
 快照渲染、坏载荷不清空、refresh 请求、卸载后面板消失）在 `client_plugins` 模块第 13b 节。
 
-**调试**：`behavior.debugTools`（默认关）打开后注册两个工具 —— `chatbot_debug_inject`
-（直接向调度层投一条假消息，不碰平台网络）与 `chatbot_debug_outbox`（回看假平台收到的出站，
-含被动回复 id / 引用句柄）。生产环境不要打开。
+**调试**：`behavior.debugTools`（默认关）打开后注册三个工具 —— `chatbot_debug_inject`
+（直接向调度层投一条假消息，不碰平台网络）、`chatbot_debug_outbox`（回看假平台收到的出站，
+含被动回复 id / 引用句柄 / @ 目标）与 `chatbot_debug_platform`（拨假平台开关，
+`op = expire_passive` 让带 `msg_id` 的发送按「窗口过期」失败，用来验证上面那条降级）。
+生产环境不要打开。
 
 **附件**：图片/音频/视频只在模型条目声明了对应能力（`image_input` / `audio_input` /
 `video_input`）时才作为多模态附件投给会话；没声明的类型会被上游整轮拒绝（HTTP 400），

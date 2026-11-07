@@ -19,7 +19,7 @@
 插件不受影响。
 - 机器人插件提供tool给主程序调用，实现通知
 - 机器人插件后台子agent排队运行繁重任务
-- 机器人回复消息时引用的msg_id可能过期，自动处理改为@
+- 机器人插件 的 client 渲染支持每个会话点击弹窗查看 viewMessages
 - agentxx 自重启控制、仿照 musicxx 的 cli + http + mcp + deeplink 命令控制
 - 通过 mdns 互相发现，以便了解各自正在运行的会话内容
 - share_store 支持 grep、输出到文件等

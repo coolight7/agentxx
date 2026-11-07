@@ -11,7 +11,9 @@
 /// 3. `mention` 模式: 3 条无 @ 只进缓冲, 第 4 条带 @ 时一次投递带上全部 4 条;
 /// 4. 同 `msg_id` 注入两次只处理一次 (`duplicated` 计数 +1);
 /// 5. 长文本按上限切成多条, 分段标记齐全;
-/// 6. 卸载插件 → 通道关闭、根回收、工具撤销。
+/// 6. 一轮在跑时的新消息按 `next-step` 插进本轮 (不等 TURN_END);
+/// 7. 被动回复过期 → 自动改发 @ 的主动消息, 工具返回里带警告;
+/// 8. 卸载插件 → 通道关闭、根回收、工具撤销。
 #include "agentxx-test/plugin/test_plugin_example_chatbot.h"
 
 #include "agentxx-test/core/test_agent.h"
@@ -219,6 +221,84 @@ asio::awaitable<bool> waitOutbox(
     co_return cond(outboxOf(co_await callTool(rootCtx, "chatbot_debug_outbox", R"({"limit":50})")));
 }
 
+/// 按 sessionId 取某个 chatbot 会话的通道
+///
+/// 不能只按前缀取: 到用例中后段时同一个人设下已经有多个通道 (U1/U2/U3/G1…)，
+/// `channelOfPrefix` 拿到的是其中第一个。`chatbot_chat_info` 会给出该会话的
+/// `sessionId`，用它匹配通道对象。
+asio::awaitable<std::shared_ptr<plugin::RuntimeChannel>> channelOfChat(
+    const std::shared_ptr<agent::AgentContext>&    ctx,
+    const std::shared_ptr<plugin::PluginManager>&  mgr,
+    const std::string&                             chatKey
+) {
+    Json       args = Json::object();
+    args["chat"]    = chatKey;
+    // 先落到具名 string: `callTool` 的参数是 string_view, 传临时量会悬空
+    std::string argsJson = args.dump();
+    const auto  info     = Json::parse(co_await callTool(ctx, "chatbot_chat_info", argsJson));
+    const auto  sessionId = info.value("sessionId", std::string{});
+    if (sessionId.empty()) {
+        co_return nullptr;
+    }
+    for (const auto& channel : mgr->runtimeChannels_) {
+        if (channel && channel->sessionId == sessionId) {
+            co_return channel;
+        }
+    }
+    co_return nullptr;
+}
+
+/// 按会话轮转等待「通道正处于 / 不在跑一轮」
+asio::awaitable<bool> waitChatBusy(
+    asio::any_io_executor                          ex,
+    std::chrono::milliseconds                      timeout,
+    const std::shared_ptr<agent::AgentContext>&    ctx,
+    const std::shared_ptr<plugin::PluginManager>&  mgr,
+    const std::string&                             chatKey,
+    bool                                           wantBusy
+) {
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    while (std::chrono::steady_clock::now() < deadline) {
+        auto channel = co_await channelOfChat(ctx, mgr, chatKey);
+        if (channel != nullptr && channel->turnBusy == wantBusy) {
+            co_return true;
+        }
+        co_await delay(ex, 20ms);
+    }
+    auto channel = co_await channelOfChat(ctx, mgr, chatKey);
+    co_return channel != nullptr && channel->turnBusy == wantBusy;
+}
+
+/// 轮转等待「该会话的中途插入计数达到 want」(会话正在跑一轮时按 next-step 投了几条)
+asio::awaitable<bool> waitInjectedCount(
+    asio::any_io_executor                         ex,
+    std::chrono::milliseconds                     timeout,
+    const std::shared_ptr<agent::AgentContext>&   ctx,
+    const std::string&                            chatKey,
+    int64_t                                       want
+) {
+    Json        args = Json::object();
+    args["chat"]     = chatKey;
+    std::string argsJson = args.dump();
+    const auto  deadline = std::chrono::steady_clock::now() + timeout;
+    while (std::chrono::steady_clock::now() < deadline) {
+        try {
+            const auto info = Json::parse(
+                co_await callTool(ctx, "chatbot_chat_info", argsJson)
+            );
+            const auto injected
+                = info.value("counters", Json::object()).value("injected", int64_t{0});
+            if (injected >= want) {
+                co_return true;
+            }
+        } catch (const std::exception&) {
+            // 插件刚停/上下文不在: 继续等
+        }
+        co_await delay(ex, 30ms);
+    }
+    co_return false;
+}
+
 /// 最近一次模型请求的完整文本 (查输入里带了什么)
 ///
 /// 走 `daSimLastRequestText()`: 请求记录由模拟器服务线程追加, 这里直接读
@@ -380,7 +460,7 @@ asio::awaitable<void> runBody(
     if (!rootCtx) {
         co_return;
     }
-    // 7 个业务工具 + 2 个调试工具都在人设根上
+    // 7 个业务工具 + 3 个调试工具都在人设根上
     for (const auto* name : {"chatbot_send_message",
                              "chatbot_history",
                              "chatbot_chat_info",
@@ -389,7 +469,8 @@ asio::awaitable<void> runBody(
                              "chatbot_recall_message",
                              "chatbot_task",
                              "chatbot_debug_inject",
-                             "chatbot_debug_outbox"}) {
+                             "chatbot_debug_outbox",
+                             "chatbot_debug_platform"}) {
         XX_TEST_EXPECT_TRUE(rootCtx->toolRegistry->contains(name));
     }
     if (rootCtx->agentConfig) {
@@ -1624,6 +1705,242 @@ asio::awaitable<void> runBody(
     }
 
 
+    // ===================== 12b. 一轮在跑时的新消息: 按 next-step 插进本轮 =====================
+    //
+    // 以前 `flush()` 见通道忙就把这批消息攒在聚合缓冲里等 TURN_END，一轮跑得久时
+    // 模型整轮都看不到群里新说的话。现在按 `delivery: next-step` 投，主程序在下一个
+    // modelcall 边界把它写进上下文 —— 这一轮的下一次请求里就能看到。
+    {
+        XX_TEST_EXPECT_TRUE(co_await drain());
+        auto root = rootOf(host, kOwner);
+        XX_TEST_EXPECT_TRUE(root != nullptr);
+        if (root) {
+            auto ctx = root->getContext();
+            XX_TEST_EXPECT_TRUE(ctx != nullptr);
+            if (ctx) {
+                // 让这一轮有两次 modelcall: 第一次回一个无害的工具调用 (chat_info)
+                daSimSetToolCalls(
+                    Json::array(
+                        {Json{
+                            {"index", 0},
+                            {"id", "call_next_step_info"},
+                            {"type", "function"},
+                            {"function",
+                             Json{{"name", "chatbot_chat_info"},
+                                  {"arguments", R"({"chat":"fake_main|private|U3"})"}}},
+                        }}
+                    ),
+                    1
+                );
+                daSimSetResponseContent("");
+                // 模型回得慢: 留出"一轮还在跑"的窗口
+                daSimSetDelayMs(1200);
+
+                const int requestsBefore = g_da_sim_request_count.load();
+                XX_TEST_EXPECT_TRUE(co_await inject(
+                    "private",
+                    "U3",
+                    "第一句: 你现在忙吗",
+                    false,
+                    "msg-ns-1"
+                ));
+                // 等这一轮真的跑起来 (按 sessionId 找通道: 同一个人设下已有多个通道)
+                XX_TEST_EXPECT_TRUE(co_await waitChatBusy(
+                    ex,
+                    30s,
+                    ctx,
+                    mgr,
+                    "fake_main|private|U3",
+                    true
+                ));
+                XX_TEST_EXPECT_TRUE(co_await waitUntil(ex, 30s, [&]() {
+                    // 通道先忙起来 (TURN_START), 请求随后才发出: 等它真的到模拟器
+                    return g_da_sim_request_count.load() > requestsBefore;
+                }));
+                const int requestsAfterStart = g_da_sim_request_count.load();
+
+                // 一轮在跑时再来一条 (私聊 always: 静默窗口过后就投)
+                XX_TEST_EXPECT_TRUE(co_await inject(
+                    "private",
+                    "U3",
+                    "第二句: 顺便看下这个",
+                    false,
+                    "msg-ns-2"
+                ));
+                // 投递方式必须是 next-step (插进本轮), 不是等 TURN_END 的新一轮
+                XX_TEST_EXPECT_TRUE(co_await waitInjectedCount(
+                    ex,
+                    30s,
+                    ctx,
+                    "fake_main|private|U3",
+                    1
+                ));
+
+                // 这一轮的下一次 modelcall 里就该有它 (不用等这一轮结束)
+                XX_TEST_EXPECT_TRUE(co_await waitUntil(ex, 60s, [&]() {
+                    if (g_da_sim_request_count.load() <= requestsAfterStart) {
+                        return false;
+                    }
+                    const auto requests = daSimRequestsSnapshot();
+                    for (size_t i = requests.size(); i > 0; --i) {
+                        const auto& req = requests[i - 1];
+                        const auto  text = req.dump();
+                        if (text.find("第二句: 顺便看下这个") != std::string::npos) {
+                            return true;
+                        }
+                    }
+                    return false;
+                }));
+
+                // 缓冲里不该攒着它 (以前会攒到 TURN_END)
+                {
+                    Json        checkArgs = Json::object();
+                    checkArgs["chat"]     = "fake_main|private|U3";
+                    const auto  checkJson = checkArgs.dump();
+                    const auto  info      = Json::parse(
+                        co_await callTool(ctx, "chatbot_chat_info", checkJson)
+                    );
+                    XX_TEST_EXPECT_EQ(info.value("buffered", int64_t{-1}), int64_t{0});
+                }
+
+                // 等这一轮收尾, 再把模拟器恢复成"即时返回"
+                XX_TEST_EXPECT_TRUE(co_await waitChatBusy(
+                    ex,
+                    60s,
+                    ctx,
+                    mgr,
+                    "fake_main|private|U3",
+                    false
+                ));
+                daSimSetDelayMs(0);
+                XX_TEST_EXPECT_TRUE(co_await drain());
+            }
+        }
+    }
+
+    // ===================== 12c. 被动回复过期 → 自动改发 @ 的主动消息 =====================
+    //
+    // 模型跑完长任务再回复时，引用的 `msg_id` 可能已经过了平台的被动回复窗口。
+    // 以前只记一条失败日志 (消息丢掉); 现在自动改发主动消息、把原说话人 @ 回来，
+    // 并把结果与警告交回模型 (`chatbot_send_message` 的返回)。
+    {
+        XX_TEST_EXPECT_TRUE(co_await drain());
+        auto root = rootOf(host, kOwner);
+        XX_TEST_EXPECT_TRUE(root != nullptr);
+        if (root) {
+            auto ctx = root->getContext();
+            XX_TEST_EXPECT_TRUE(ctx != nullptr);
+            if (ctx) {
+                daSimSetDelayMs(0);
+                // 假平台: 带 msg_id 的被动回复一律按"窗口过期"失败
+                const auto switchOn = co_await callTool(
+                    ctx,
+                    "chatbot_debug_platform",
+                    R"({"op":"expire_passive","value":true})"
+                );
+                XX_TEST_EXPECT_TRUE(switchOn.find("expire_passive") != std::string::npos);
+
+                const std::string marker = "过期了也要发出去这句";
+                daSimSetToolCalls(
+                    Json::array(
+                        {Json{
+                            {"index", 0},
+                            {"id", "call_expired_send"},
+                            {"type", "function"},
+                            {"function",
+                             Json{{"name", "chatbot_send_message"},
+                                  {"arguments", Json{{"text", marker}}.dump()}}},
+                        }}
+                    ),
+                    1
+                );
+                daSimSetResponseContent("");
+
+                const int requestsBefore = g_da_sim_request_count.load();
+                Json      args           = Json::object();
+                args["account"]         = "fake_main";
+                args["type"]            = "group";
+                args["chatId"]          = "G1";
+                args["text"]            = "@机器人 说句话";
+                args["sender"]          = "小张";
+                args["senderMentionId"] = "member-zhang";
+                args["mentionedMe"]     = true;
+                args["msgId"]           = "msg-expire-1";
+                XX_TEST_EXPECT_TRUE(co_await injectJson(args));
+                XX_TEST_EXPECT_TRUE(co_await waitUntil(ex, 60s, [&]() {
+                    return g_da_sim_request_count.load() > requestsBefore;
+                }));
+
+                // 平台只记录"真的发出去了"的消息: 被拒的那条 (带 msg_id) 不在其中,
+                // 所以这里应当只有一条 —— 而且必须是改发后的主动消息 (@ 了原说话人)
+                XX_TEST_EXPECT_TRUE(co_await waitOutbox(ex, 30s, ctx, [&](const Json& outbox) {
+                    int matched = 0;
+                    for (const auto& item : outbox) {
+                        if (item.value("text", std::string{}).find(marker) != std::string::npos) {
+                            ++matched;
+                        }
+                    }
+                    return matched >= 1;
+                }));
+                {
+                    const auto outbox = outboxOf(
+                        co_await callTool(ctx, "chatbot_debug_outbox", R"({"limit":50})")
+                    );
+                    std::vector<Json> matched;
+                    for (const auto& item : outbox) {
+                        if (item.value("text", std::string{}).find(marker) != std::string::npos) {
+                            matched.push_back(item);
+                        }
+                    }
+                    XX_TEST_EXPECT_EQ(matched.size(), size_t{1});
+                    if (!matched.empty()) {
+                        // 降级那条: 没有被动 id, 改成 @ 原说话人
+                        XX_TEST_EXPECT_TRUE(matched[0].value("passiveTo", std::string{}).empty());
+                        XX_TEST_EXPECT_EQ(matched[0].value("passiveSeq", -1), 0);
+                        XX_TEST_EXPECT_EQ(
+                            matched[0].value("mentionOpenId", std::string{}),
+                            std::string{"member-zhang"}
+                        );
+                        XX_TEST_EXPECT_EQ(
+                            matched[0].value("mentionName", std::string{}),
+                            std::string{"小张"}
+                        );
+                    }
+                }
+                // 工具返回里带警告 (模型在下一段请求里能看到, 不必等人工排查)
+                XX_TEST_EXPECT_TRUE(co_await waitUntil(ex, 60s, [&]() {
+                    const auto requests = daSimRequestsSnapshot();
+                    for (const auto& req : requests) {
+                        const auto text = req.dump();
+                        if (text.find("msg_id 已过期") != std::string::npos
+                            && text.find("已改为主动消息重发") != std::string::npos) {
+                            return true;
+                        }
+                    }
+                    return false;
+                }));
+                // 计数: 全局出站里记录了一次"被动过期改 @"
+                {
+                    const auto status = Json::parse(co_await callTool(ctx, "chatbot_status"));
+                    XX_TEST_EXPECT_TRUE(
+                        status.value("outbound", Json::object())
+                            .value("passiveFallback", int64_t{0})
+                        >= 1
+                    );
+                }
+
+                // 关掉开关: 后面的用例照常发被动回复
+                const auto switchOff = co_await callTool(
+                    ctx,
+                    "chatbot_debug_platform",
+                    R"({"op":"expire_passive","value":false})"
+                );
+                XX_TEST_EXPECT_TRUE(switchOff.find("expire_passive") != std::string::npos);
+                XX_TEST_EXPECT_TRUE(co_await drain());
+            }
+        }
+    }
+
     // ===================== 13. 禁用 → 启用: 工具与人设根恢复 =====================
     //
     // 禁用 = 骨架摘除注册 + 拆挂载 + 投递 stop (插件在自己 stop 里卸人设根);
@@ -1663,7 +1980,8 @@ asio::awaitable<void> runBody(
                                          "chatbot_set_mode",
                                          "chatbot_recall_message",
                                          "chatbot_debug_inject",
-                                         "chatbot_debug_outbox"}) {
+                                         "chatbot_debug_outbox",
+                                         "chatbot_debug_platform"}) {
                     XX_TEST_EXPECT_TRUE(restoredCtx->toolRegistry->contains(name));
                 }
                 // 恢复后确实还能跑一轮: 注入一条 → 模型请求 → 兜底发送

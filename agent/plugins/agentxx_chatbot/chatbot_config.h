@@ -100,6 +100,11 @@ struct BehaviorConfig {
     int32_t aggregateWindowMs = 800;
     /// 一轮内多条回复之间的间隔
     int32_t sendIntervalMs = 350;
+    /// `chatbot_send_message` 等平台发送结果的上限 (毫秒; 0 = 不等)
+    ///
+    /// 等得到就把"真的发出去了没有、有没有改成 @ 的主动消息"告诉模型;
+    /// 等不到就退回"已排队"的说法 (不拖住工具)。
+    int32_t sendResultWaitMs = 4000;
     /// 单条发送文本上限 (UTF-8 码点; 0 = 不切分)
     int32_t messageSplitLimit = 1500;
     /// 切出多条时追加 `(i/n)` 分段标记

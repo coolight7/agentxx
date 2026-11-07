@@ -26,6 +26,8 @@ PlatformCaps FakePlatform::caps() const {
     caps.textLimit       = 0;
     caps.maxAttachments  = 5;
     caps.mentionByEventType = true;
+    // 与 QQ 一样能在正文里 @ 人 (用来验证「被动回复过期后改发 @ 的主动消息」)
+    caps.mentionInContent = true;
     return caps;
 }
 
@@ -102,16 +104,30 @@ void FakePlatform::send(OutboundMessage msg, SendResultFn done) {
     int32_t     delay = 0;
     bool        fail  = false;
     std::string messageId;
+    bool        expirePassive = false;
     {
         std::lock_guard lock(mutex_);
         if (stopped_ || !online_) {
             fail = true;
+        } else if (expirePassive_ && !msg.passiveReplyTo.empty()) {
+            // 模拟真平台: 被动回复窗口过期 (msg_id 已经不能用了)
+            expirePassive = true;
         } else if (failCount_ > 0) {
             --failCount_;
             fail = true;
         } else {
             delay = sendDelayMs_;
         }
+    }
+    if (expirePassive) {
+        if (done) {
+            SendResult result;
+            result.ok             = false;
+            result.reason         = "fake platform: 发送失败 (status 400): msg_id 已过期或无效";
+            result.passiveExpired = true;
+            done(result);
+        }
+        return;
     }
     if (fail) {
         if (done) {
@@ -188,6 +204,11 @@ void FakePlatform::setFailCount(int32_t count) {
     failCount_ = count;
 }
 
+void FakePlatform::setExpirePassive(bool expire) {
+    std::lock_guard lock(mutex_);
+    expirePassive_ = expire;
+}
+
 bool FakePlatform::online() const {
     std::lock_guard lock(mutex_);
     return online_;
@@ -235,6 +256,9 @@ std::string FakePlatform::debugOutbox(size_t limit, bool clear) {
         item["passiveSeq"] = record.message.passiveSeq;
         item["replyToRef"] = record.message.replyToRef;
         item["markdown"]   = record.message.markdown;
+        // 被动回复过期后改发的主动消息会带 @ 目标 (测试据此核对降级)
+        item["mentionOpenId"] = record.message.mentionOpenId;
+        item["mentionName"]   = record.message.mentionName;
         item["messageId"]  = record.platformMessageId;
         item["refIdx"]     = record.refIdx;
         item["attachments"] = static_cast<int64_t>(record.message.attachments.size());

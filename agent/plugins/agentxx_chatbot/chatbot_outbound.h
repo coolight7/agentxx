@@ -15,11 +15,13 @@
 
 #include "asio/any_io_executor.hpp"
 #include "asio/steady_timer.hpp"
+#include <condition_variable>
 #include <cstdint>
 #include <deque>
 #include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -37,6 +39,10 @@ struct OutboundRequest {
     std::string replyToRef;
     /// 被动回复 id (空 = 主动消息)
     std::string passiveMsgId;
+    /// 被动回复过期后改发主动消息时 @ 谁 (平台句柄; 空 = 不 @)
+    std::string mentionOpenId;
+    /// 被 @ 的人的显示名 (平台不支持真 @ 时写进正文)
+    std::string mentionName;
     /// 是否允许 markdown (平台能力会再收一次)
     bool markdown = false;
 };
@@ -61,6 +67,56 @@ struct OutboundCounters {
     uint64_t failed       = 0;
     uint64_t activeBlocked = 0;
     uint64_t droppedOutOfWindow = 0;
+    /// 被动回复窗口过期, 改发 @ 的主动消息的条数
+    uint64_t passiveFallback = 0;
+};
+
+/// 一次 `submit` 的发送结果等待器 (可选)
+///
+/// 为什么要它: `chatbot_send_message` 得把「到底发出去没有、有没有降级」告诉模型,
+/// 而真实发送是异步的 (平台 HTTP 往返)。工具跑在工作线程上等它, 插件 io 线程照常
+/// 推进发送, 两边都不阻塞对方。
+///
+/// 结束条件 = **第一个有结论的结果**:
+/// - 成功 → `ok = true` (+ 平台消息 id);
+/// - 最终失败 → `ok = false` + 失败原因;
+/// - 被动回复过期改发主动消息 → 只记 `warning`, 继续等重发的那次结果。
+///
+/// 线程: 写入方是插件 io 线程, 读取方是工具的工作线程 (mutex + condition_variable)。
+class OutboundWait {
+public:
+
+    OutboundWait() = default;
+    OutboundWait(const OutboundWait&)            = delete;
+    OutboundWait& operator=(const OutboundWait&) = delete;
+
+    /// 记一次成功 (带平台消息 id)
+    void resolveSuccess(std::string platformMessageId);
+    /// 记「按模型意愿什么都没发」(静默标记): 成功, 但没有消息出去
+    void resolveSkipped();
+    /// 记一次最终失败 (含原因)
+    void resolveFailure(std::string reason);
+    /// 记一条降级提示 (不结束等待)
+    void noteWarning(std::string warning);
+    /// 等工作线程用: 等到有结论返回 true, 超时返回 false
+    bool waitFor(int32_t timeoutMs);
+
+    bool        ok() const;
+    int32_t     sent() const;
+    std::string warning() const;
+    std::string failure() const;
+    std::string platformMessageId() const;
+
+private:
+
+    mutable std::mutex      mutex_;
+    std::condition_variable cv_;
+    bool                    done_ = false;
+    bool                    ok_   = false;
+    int32_t                 sent_ = 0;
+    std::string             warning_;
+    std::string             failure_;
+    std::string             platformMessageId_;
 };
 
 /// 每个会话的被动回复计数 (同一个 `msg_id` 最多能回几次)
@@ -87,6 +143,8 @@ public:
         std::string chatKey;
         /// 附件是否已准备好 (URL 已被下载成本地路径)
         bool attachmentsReady = true;
+        /// 本次提交的发送结果等待器 (可空; 同一次提交的各段共用)
+        std::shared_ptr<OutboundWait> wait;
     };
 
     void init(
@@ -100,10 +158,12 @@ public:
     ///
     /// - 文本按 `messageSplitLimit` 切分; 超出 `maxRepliesPerTurn` 的部分丢弃并计入
     ///   `dropped` (调用方应把 `reason` 交给模型)
+    /// - `wait`: 可空; 非空时由发送结果回调填 (工具据此把真实结果告诉模型)
     SubmitOutcome submit(
-        const ChatKey&        key,
-        const OutboundRequest& req,
-        int32_t               alreadySentThisTurn
+        const ChatKey&                key,
+        const OutboundRequest&        req,
+        int32_t                       alreadySentThisTurn,
+        std::shared_ptr<OutboundWait> wait = nullptr
     );
 
     /// 直接入队一条已切好的消息 (命令的 local 回复走这条, 不占「一轮几条」额度)

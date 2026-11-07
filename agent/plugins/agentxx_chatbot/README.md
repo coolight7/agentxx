@@ -89,12 +89,13 @@ plugin:
         behavior:
           aggregateWindowMs: 800        # always 模式的静默窗口 (毫秒)
           sendIntervalMs: 350           # 一轮内多条回复之间的间隔
+          sendResultWaitMs: 4000        # chatbot_send_message 等平台发送结果的上限 (0 = 不等, 直接回"已排队")
           messageSplitLimit: 1500       # 单条文本上限 (UTF-8 码点; 0 = 不切分)
           maxSplitParts: 8              # 单条最多切成几段
           maxRepliesPerTurn: 5          # 一轮最多发几条
           maxChatsPerPersona: 64        # 每人设活跃会话上限 (超了回收最久没动的)
           fallbackReply: mention        # 模型没调工具时: mention (被 @ 或 always 会话) | always | never; 正文只有 [静默] 时不发 (见 §3.1)
-          overflowPolicy: active        # 被动回复次数用尽后: active | truncate | fail
+          overflowPolicy: active        # 被动回复次数用尽 / 窗口过期后: active(改发主动消息, 群里会 @ 原说话人) | truncate | fail
           humanInLoop: auto-allow       # 群里的权限询问弹不出来: auto-allow | auto-deny
           timezone: auto                # 消息时间的显示时区: auto | system | +08:00 | Asia/Shanghai (见 §3)
           injectContextHint: true       # 每轮输入开头带「你在哪个群」
@@ -119,6 +120,22 @@ plugin:
 | `off` | 该会话完全不处理（也可以运行期用 `chatbot_set_mode` 切换） |
 
 私聊里 `mention` 按 `always` 处理（单聊消息本来就是直接发给机器人的）。
+
+#### 一轮还在跑时来的新消息：插进这一轮（`next-step`）
+
+一轮跑得久（工具链长、模型慢）时，群里可能又来了消息。插件的投递规则是：
+
+| 状态 | 投递方式 | 效果 |
+|------|----------|------|
+| 会话空闲 | `next-turn` | 排队成新的一轮 |
+| 会话正在跑一轮 | `next-step` | 插进**当前这一轮**，主程序在下一个 modelcall 边界写进上下文 |
+
+也就是说模型不必等这一轮跑完才知道群里又说了什么：它下一次请求里就能看到这段新消息，
+输入块里另有一句「这一轮还在执行中, 下面这段是中途插进来的新消息」。
+`[#n]` 编号接着前面那段往下排（`replyTo` 用同一套编号），`maxRepliesPerTurn`
+额度也仍按「一轮」算，不会因为插进来就重置。
+插失败（运行时拒绝）时这批消息会回到聚合缓冲，等本轮 `TURN_END` 再投，内容不丢；
+`chatbot_chat_info` 的 `counters.injected` 是「中途插入」的条数。
 
 #### `always` 的前置条件：平台要给机器人「接收所有消息」
 
@@ -290,6 +307,8 @@ QQ群「技术交流群」(群 id 尾号 6789); 下面是最近收到的消息�
   `@别人(名字)` / `@别的机器人(名字)`（@ 的是群里的其他人，不是在叫你）；
 - 「本轮唤醒原因」说明这轮为什么开始：有人 @ 了你、`always` 模式的静默窗口到期、
   缓冲攒满、通道刚就绪…… 不是被 @ 叫起来的轮次，模型不必抢着回；
+- 会话正在跑一轮时插进来的那段（§2.1）会多一句「这一轮还在执行中, 下面这段是中途插进来的
+  新消息」，编号接着前面那段往下排（`replyTo` 用同一套编号）；
 - `[MM-DD HH:MM]` 是平台给的**消息发送时间**；紧随其后的是「当前时间」一行，
   它带时区说明，模型据此判断“现在”与“消息多久之前”；
 - 时间点来自平台时间戳自带的时区（`2026-10-29T12:03:09+08:00` 就是东八区 12:03），
@@ -360,14 +379,14 @@ QQ群「技术交流群」(群 id 尾号 6789); 下面是最近收到的消息�
 ## 4. 工具
 | 工具 | 用途 |
 |------|------|
-| `chatbot_send_message` | **唯一的回复出口**。参数：`text`（正文）、`attachments`（本地路径或 http(s) 地址数组）、`replyTo`（引用本轮第 n 条）、`markdown`、`chat`（跨会话时必须显式给）。正文只有 `[静默]` 时不发送（见 §3.1） |
+| `chatbot_send_message` | **唯一的回复出口**。参数：`text`（正文）、`attachments`（本地路径或 http(s) 地址数组）、`replyTo`（引用本轮第 n 条）、`markdown`、`chat`（跨会话时必须显式给）。正文只有 `[静默]` 时不发送（见 §3.1）。返回里给出真实发送结果（`sent` / `messageId`），被动回复过期改发 @ 时另带 `warning`（见 §4.2） |
 | `chatbot_history` | 取该会话最近 N 条原始消息（含被 mode 过滤掉的），每条带消息时间（时区同 §3.0） |
-| `chatbot_chat_info` | 会话状态：路由到哪个人设、当前模式、通道 id、计数、缓冲条数 |
-| `chatbot_status` | 插件全局状态：账号连接、人设、出站队列、计数 |
+| `chatbot_chat_info` | 会话状态：路由到哪个人设、当前模式、通道 id、计数（含 `injected` 中途插入条数）、缓冲条数 |
+| `chatbot_status` | 插件全局状态：账号连接、人设、出站队列、计数（`outbound.passiveFallback` = 被动过期改发 @ 的条数） |
 | `chatbot_set_mode` | 运行期改触发模式（不写回配置） |
 | `chatbot_recall_message` | 撤回自己刚发出的消息（平台时限内，QQ 为 2 分钟）。参数：`target`（`-1` 最后一条、`-2` 倒数第二条…）、`skip` + `count`（跳过最近几条再连撤几条）、`messageId`、`chat` |
 | `chatbot_task` | 后台任务（`op` = `submit` / `status` / `cancel` / `list`）。`submit` 把要跑很久的事交给后台 agent（它看不到本群聊天记录，所以 `prompt` 要写完整），提交后模型可以继续说话；跑完结果作为一条新输入回到这个会话，由人设组织语言回复 |
-| `chatbot_debug_inject` / `chatbot_debug_outbox` | 仅 `behavior.debugTools: true` 时注册：直接注入假消息 / 回看假平台收到了什么 |
+| `chatbot_debug_inject` / `chatbot_debug_outbox` / `chatbot_debug_platform` | 仅 `behavior.debugTools: true` 时注册：直接注入假消息 / 回看假平台收到了什么 / 拨假平台开关（`op=expire_passive` 让被动回复按 `msg_id` 过期失败） |
 
 工具只注册在**人设根**上。内置主会话默认看不到它们（`exposeToolsOnHost: true` 才会注册）。
 
@@ -394,6 +413,36 @@ QQ群「技术交流群」(群 id 尾号 6789); 下面是最近收到的消息�
   `plugin.mount` 配上 `agentxx_filesystem` / `agentxx_execute_command` 等。
 - **开关**：主配置的 `async_work.enable` 只管"模型侧的委派工具要不要异步"；插件主动
   提交不受它影响（插件自己就是决定者）。额度 `async_work.max_concurrent` 照旧生效。
+
+### 4.2 发送结果与「被动回复过期」的降级
+
+`chatbot_send_message` 不再只是「已排队」：
+
+- 插件在后台把消息交给平台，工具在**工作线程**上等这趟结果（上限
+  `behavior.sendResultWaitMs`，默认 4000 ms，0 = 不等）；
+- 拿到成功 → 返回里带 `sent` 与平台 `messageId`；拿到失败 → 按工具失败上报原因
+  （模型能知道这句没出去）；等不到 → 仍旧说「已排队」，不拖住工具。
+
+关键的一条：**模型跑完长任务再回复时，引用的 `msg_id` 可能已经过了平台的被动回复窗口**
+（群 5 分钟 / 单聊 60 分钟）。平台会拒绝这条被动回复，以前只记一条失败日志 —— 消息丢掉，
+模型还以为发出去了。现在的处理：
+
+| 平台返回 | 处理 |
+|---|---|
+| 被动回复窗口过期 / `msg_id` 无效 | 按 `overflowPolicy`：`active`（默认）**改发主动消息**并 **@ 原说话人**；`truncate` 放弃；`fail` 按失败上报 |
+| 其它失败 | 照旧计 `failed`，工具拿到失败原因 |
+
+改发时群消息会变成 markdown（QQ 群里「@用户」只在 markdown 消息里生效，写法
+`<qqbot-at-user id="member_openid" />`，id 取入站事件里那个人的 `member_openid`）；
+拿不到 openid 时退化成正文前缀 `@昵称 `，单聊不 @（本来就是对着他说）。
+工具返回里会带上警告，模型下次就知道该说什么：
+
+```json
+{"queued":1,"parts":1,"chat":"qq_main|group|…","sent":1,"messageId":"…",
+ "warning":"引用的 msg_id 已过期 (平台被动回复窗口已过), 已改为主动消息重发并 @ 了小张"}
+```
+
+降级次数看 `chatbot_status` 的 `outbound.passiveFallback`。
 
 ## 5. 常见问题
 
@@ -439,6 +488,15 @@ behavior:
 
 **回复发不出去，日志里有「被动回复次数用尽」。**** 同一条消息平台允许的被动回复次数有限，
 用尽后按 `overflowPolicy` 处理（默认降级为主动消息；`truncate` 放弃、`fail` 报给模型）。
+
+**日志里出现「被动回复窗口已过期, 改发主动消息 (@某某)」。** 这是正常降级：模型跑得久
+（工具链长、后台任务刚回来），那条消息的被动回复窗口已经过了，平台不认原来的 `msg_id`。
+插件把同一条回复改成主动消息重发，并把原说话人 @ 回来；工具返回里带 `warning`，
+`chatbot_status` 的 `outbound.passiveFallback` 计数会涨（详见 §4.2）。真要彻底避开：
+
+- 让模型别攒太久再回（长活走 `chatbot_task`，跑完尽快回一句）；
+- 群主给机器人打开「允许主动发送消息」（§2.1），否则降级后的主动消息会被平台拒；
+- 主动消息有每日条数上限（群每群每天 1000 条），别把降级当常规通道。
 
 **凭证泄露。** 用 `appIdFile` / `appSecretFile` 指向 `.env` 文件，并把那个文件加进 `.gitignore`。
 日志里不会打印凭证取值。

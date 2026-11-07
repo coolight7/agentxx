@@ -100,6 +100,12 @@ struct InboundEvent {
     std::string chatName;
     std::string senderId;
     std::string senderName;
+    /// 出站时 @ 这个人要用的 id
+    ///
+    /// 与 [senderId] 不一定相同: QQ 群里 @ 用户要 `member_openid`, 单聊要
+    /// `user_openid`。被动回复窗口过期后改发主动消息时用它把人喊回来
+    /// (见 [OutboundMessage::mentionOpenId])。拿不到时留空, 出站退化成文本 `@昵称`。
+    std::string senderMentionId;
     /// `owner` / `admin` / `member`; 平台不提供时为空
     std::string senderRole;
     std::string text;
@@ -159,6 +165,13 @@ struct OutboundMessage {
     std::string passiveReplyTo;
     /// 被动回复序号 (QQ 的 `msg_seq`; 从 1 开始)
     int32_t passiveSeq = 0;
+    /// 主动消息里要 @ 的人 (平台句柄; 空 = 不 @)
+    ///
+    /// 只在被动回复过期、改发主动消息时填 (见 `ChatbotOutbound::pump`):
+    /// 那条 `msg_id` 对应的说话人, 让他在群里被真的 @ 到。
+    std::string mentionOpenId;
+    /// 被 @ 的人的显示名 (平台不支持真 @ 时写成正文前缀)
+    std::string mentionName;
     std::vector<MediaRef> attachments;
     /// 用 markdown 形态发送 (平台能力允许时)
     bool markdown = false;
@@ -173,6 +186,11 @@ struct SendResult {
     std::string platformMessageId;
     /// 平台给的「引用本条」句柄 (QQ: `ext_info.ref_idx`)
     std::string refIdx;
+    /// 平台判定「被动回复窗口已过期 / `msg_id` 无效」
+    ///
+    /// 这类失败重发主动消息能成功 (窗口过期与序号用尽不同: 后者出站层自己就能算出来)。
+    /// 平台认得出来就置位; 出站层另有一份按失败文本判定的兜底, 别的平台也能降级。
+    bool passiveExpired = false;
 };
 
 /// 出站结果回调
@@ -224,6 +242,11 @@ struct PlatformCaps {
     size_t textLimit = 0;
     /// 单条消息最多几个附件
     size_t maxAttachments = 0;
+    /// 能在出站正文里 @ 指定用户
+    ///
+    /// QQ 群只有 markdown 消息支持 (`<qqbot-at-user id="member_openid" />`), 由平台实现
+    /// 自己选消息类型; 为 false 时出站层清掉 @ 目标, 只留显示名让平台写成文本前缀。
+    bool mentionInContent = false;
     /// 被 @ 判定是否只能靠事件类型
     ///
     /// `true` = 平台只有「@机器人」事件带 @ 语义, 全量消息里判不出来;
