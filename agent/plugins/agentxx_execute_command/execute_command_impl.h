@@ -619,7 +619,7 @@ inline asio::awaitable<void> procCancelWatchLoop(
     if (cancelRegistry) {
         regGuard = cancelRegistry->bind(
             sessionKey,
-            [&proc, winJob, &outpip, &errpip, ex, cancelTimer, Canceled]() {
+            [&proc, winJob, ex, cancelTimer, Canceled]() {
                 bool expected = false;
                 if (!Canceled
                          ->compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
@@ -627,9 +627,10 @@ inline asio::awaitable<void> procCancelWatchLoop(
                 }
                 // 立即整组 kill (Linux: setsid killpg, Windows: TerminateJobObject)
                 detail::killProcGroup(proc, winJob);
-                // 在管道绑定的 executor 上关闭读句柄并取消等待计时器
-                asio::post(ex, [&outpip, &errpip, cancelTimer]() {
-                    detail::closePipesAfterKill(outpip, errpip);
+                // 关闭管道读句柄要留在本协程里做 (见下方步骤 4), 这里只投递"取消计时器"
+                // 唤醒它 —— 投递体只捕获 shared_ptr: 主工作可能在本协程收尾前就结束,
+                // 捕获本协程帧里的 pipe 引用会在帧销毁后被访问 (悬垂引用)
+                asio::post(ex, [cancelTimer]() {
                     cancelTimer->cancel();
                 });
             }
@@ -653,8 +654,12 @@ inline asio::awaitable<void> procCancelWatchLoop(
         co_return;
     }
 
-    // 4. 由注册表取消事件触发：子进程已在回调中 kill，管道已关闭。
-    // 挂起直至被并行组取消 (主工作自然读取 EOF 并组装退出结果)
+    // 4. 由注册表取消事件触发：子进程已在回调中 kill。
+    // 先关闭本端管道读句柄 (在本协程帧内调用, 引用有效): 进程树若未杀净
+    // (Windows 下 Job 不可用 / assign 失败回退单进程 terminate, 漏网孙进程仍持有
+    // 写端) 尚未完成的 async_read 也能立即以错误结束, 主工作不会永久等待 EOF。
+    // 之后挂起直至被并行组取消 (主工作自然读取 EOF 并组装退出结果)
+    detail::closePipesAfterKill(outpip, errpip);
     cancelTimer->expires_after(std::chrono::hours(24));
     co_await cancelTimer->async_wait(asio::as_tuple(asio::use_awaitable));
 }

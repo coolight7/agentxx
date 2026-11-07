@@ -337,6 +337,10 @@ value: [Async task] id=async-7 ... result: ...
   与前台同一套中间件）—— 否则模型只要拿到 `agentxx_async_start` 的调用权就能绕过目标工具
   自己的限制；后台执行期间不再问人。取消是尽力而为：执行层每 50 ms 看一次取消令牌，
   置位后按取消收尾（工具自己不认识取消时会继续跑到它的超时，结果被丢弃）。
+  执行体是发起方 `co_spawn` 出去的一具**独立后台协程**（发起方返回后它还在跑），
+  `co_spawn` 必须传**可调用对象**而不是内联调用的临时闭包 —— lambda 协程帧只存闭包
+  指针，临时闭包在语句结束即析构，后台协程恢复后访问它捕获的 `args` / `tool` 就是
+  use-after-free（测试 `async_tools` 的 `test_tool_closure_lifetime` 覆盖这条路径）。
   插件侧同一能力走 `submit_async_work` 的追加字段 `tool_name` / `tool_args_json`
   （旧布局填不出来时按 `ERR_ARG` 拒）。
 - **`kind=agent`（子代理）**：`agentxx_async_start {tool:"agentxx_subagent", args:{...}}`

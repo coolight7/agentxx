@@ -90,6 +90,12 @@ resource/history/<任务短名>/        # 英文小写 + 短横线，能看出�
   误报为 `-Wmaybe-uninitialized` (告警行指向函数末尾, 是绑定用的匿名对象) ——
   `-O0` 不报, 只在优化构建里出现; 这类位置改成具名变量再逐项取值
   (`auto v = ...; std::get<0>(v)` / `v.first` / `v.second`) 即可消除
+- **协程闭包生命周期**: `asio::co_spawn` / `TaskScope::spawn` 一律传**可调用对象**,
+  不要写成内联调用 `[...]{...}()`, 也不要传具名 lambda 产生的 awaitable —— lambda
+  协程帧只保存闭包指针 (不复制闭包), 临时闭包在语句结束即析构, 而协程可能到那之后
+  才恢复 (detached 后台任务尤其明显: 发起方先返回、任务还在跑), 访问捕获变量就是
+  use-after-free (实测 ASan 报 heap-use-after-free; 后台工具执行体这条路径由测试
+  `async_tools` 的 `test_tool_closure_lifetime` 覆盖, 规则同 task_scope.h 的 spawn 说明)
 - 系统提示词加载: 段落来源统一登记到 `PromptSourceRegistry`
   (`agent/lib/include/agentxx/agent/prompt_sources.h`, 挂 `AgentContext::promptSources`);
   静态附加段 (`Stable`) 与运行时文档段 (`Dynamic`) 分开存、只统一视图; 内置来源

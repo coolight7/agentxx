@@ -137,15 +137,45 @@ public:
         if (sleepMsArg > 0) {
             co_await sleepMs(sleepMsArg);
         }
+        // 挂起之后再读一次参数: 后台协程可能在本工具的发起方 (async_work 的
+        // runToolWork) 返回后才恢复执行, 参数引用必须仍然有效 ——
+        // 见 [test_tool_closure_lifetime]
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            markerAfterSleep = arguments.is_object()
+                                   ? arguments.value("marker", std::string{})
+                                   : std::string{};
+            finished = true;
+        }
         if (arguments.is_object() && arguments.value("fail", false)) {
             co_return agentxx::util::ToolResult::fail("tool said no");
         }
         co_return agentxx::util::ToolResult::ok("tool says hi");
     }
 
+    int callCount() {
+        std::lock_guard<std::mutex> lock(mutex);
+        return calls;
+    }
+
+    bool finishedOk() {
+        std::lock_guard<std::mutex> lock(mutex);
+        return finished;
+    }
+
+    std::string markerAfterSleepText() {
+        std::lock_guard<std::mutex> lock(mutex);
+        return markerAfterSleep;
+    }
+
     utilxx_base::Json lastArgs = utilxx_base::Json::object();
     int               calls    = 0;
     std::mutex        mutex;
+
+private:
+
+    std::string markerAfterSleep;
+    bool        finished = false;
 };
 
 /// 夹具: 模拟 LLM + AgentHost + 一个根 CodeAgent + 一个真实会话 (含驱动端)
@@ -693,6 +723,49 @@ asio::awaitable<void> test_cancel() {
     co_return;
 }
 
+/// 8. 取消后台任务后工具仍在跑: 它捕获的参数必须仍然有效
+/// - 工具执行体是 runToolWork 里 co_spawn 出去的后台协程, 取消时发起方先返回
+///   (帧销毁), 工具继续跑到自己的超时
+/// - 若 co_spawn 拿的是"内联调用的临时闭包"产生的 awaitable, 后台协程恢复后
+///   访问闭包成员 (args/tool/state) 就是 use-after-free (实测 ASan 报 heap-use-after-free)
+/// - 断言: 挂起之后再读参数仍能拿到原值 (marker 用长字符串, 让 Json 内部有堆分配,
+///   悬垂读取才有实际后果)
+asio::awaitable<void> test_tool_closure_lifetime() {
+    auto fx = std::make_shared<AtFixture>();
+    XX_TEST_EXPECT_TRUE(buildFixture(fx));
+
+    agentxx::tools::AsyncStartTool start{fx->ctx()};
+    const std::string             marker = "marker-" + std::string(512, 'x');
+    std::string                   asyncId;
+
+    XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
+        auto text = co_await execTool(
+            start,
+            Json{
+                {"tool",      "at_test_sleep"                           },
+                {"args",      Json{{"sleepMs", 400}, {"marker", marker}}},
+                {"notify",    false                                    },
+                {"sessionId", fx->sessionId                             },
+            }
+        );
+        asyncId = parseAsyncId(text);
+        if (asyncId.empty()) {
+            co_return false;
+        }
+        // 等工具进入执行体 (此时它停在睡眠里) 再取消: 发起方 runToolWork 随即返回,
+        // 工具协程稍后才会恢复
+        if (!co_await waitUntil([&] { return fx->sleepTool->callCount() >= 1; })) {
+            co_return false;
+        }
+        fx->host->cancelAsyncWork(asyncId);
+        co_return co_await waitUntil([&] { return fx->sleepTool->finishedOk(); });
+    }));
+
+    XX_TEST_EXPECT_TRUE(fx->sleepTool->finishedOk());
+    XX_TEST_EXPECT_EQ(fx->sleepTool->markerAfterSleepText(), marker);
+    co_return;
+}
+
 asio::awaitable<TestResult> run_async_tools_tests() {
     TestResult result;
 
@@ -703,6 +776,7 @@ asio::awaitable<TestResult> run_async_tools_tests() {
     co_await test_query();
     co_await test_await();
     co_await test_cancel();
+    co_await test_tool_closure_lifetime();
 
     result.passed = g_at_passed;
     result.failed = g_at_failed;

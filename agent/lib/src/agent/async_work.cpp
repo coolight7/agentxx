@@ -255,6 +255,11 @@ asio::awaitable<events::RespSubagentBatchItem> runToolWork(
         }
     }
     const auto ex = co_await asio::this_coro::executor;
+    // 必须把**可调用对象**交给 co_spawn (不要在这里内联调用成 `{...}()`):
+    // lambda 协程的帧只保存闭包指针, 内联调用产生的是临时闭包 —— 语句结束即析构,
+    // 而这具协程要在本函数返回后继续跑 (取消时本函数先退出, 工具仍在后台跑到自己的
+    // 超时)。传可调用对象时闭包由 co_spawn 复制进自己的协程帧, 生命周期与任务一致,
+    // 后台协程访问 state/tool/args 才不悬垂 (同 [TaskScope::spawn] 的约定)
     asio::co_spawn(
         ex,
         [state, tool, args = std::move(args)]() -> asio::awaitable<void> {
@@ -268,7 +273,7 @@ asio::awaitable<events::RespSubagentBatchItem> runToolWork(
             );
             state->done.store(true, std::memory_order_release);
             co_return;
-        }(),
+        },
         asio::detached
     );
 
