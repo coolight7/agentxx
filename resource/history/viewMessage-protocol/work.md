@@ -63,7 +63,7 @@
 | 模块 | 命令 | 结果 |
 |---|---|---|
 | 编译 (Debug) | `cmake --build agent/build/windows-debug --config Debug` | 通过 (无 error) |
-| 全量测试 | `agentxx_test --log-level warn` | 通过 42115 条; 仅 `boundaries` 规则 15 失败 5 条 (全部在 `agent/third_party/cxx_pluginxx_ui` 那个独立仓库的文档/注释里, 与本次改动无关, 见"剩余事项") |
+| 全量测试 | `agentxx_test --log-level warn` | 通过 42117 条, 失败 1 条 (即下面这条 `boundaries`); 其余所有模块 0 failed |
 | 协议与事件 | `agentxx_test event_bridge wire_schema wire_roundtrip session_schema session_persistence session_sync` | 全部 0 failed |
 | 副本语义 | `agentxx_test view_replica` | 108 passed / 0 failed |
 | TUI | `agentxx_test tui_stream tui_scroll tui_interrupt tui_tool_header tui_form tui_widget tui_surface tui_theme tui_settings` | 全部 0 failed |
