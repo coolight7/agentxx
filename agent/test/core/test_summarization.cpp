@@ -1136,9 +1136,9 @@ asio::awaitable<TestResult> run_summarization_tests() {
         XX_TEST_EXPECT_FALSE(hasSummary);
         // 统计发布与 viewMessage
         XX_TEST_EXPECT_EQ(maxContextTokensOf(env->ctx, env->sessionId), size_t{1000});
-        XX_TEST_EXPECT_TRUE(env->session()->viewMessages.size() >= 1);
+        XX_TEST_EXPECT_TRUE(env->session()->viewWindow().size() >= 1);
         XX_TEST_EXPECT_TRUE(
-            env->session()->viewMessages.back().text.find("Summarized LLM Context")
+            env->session()->viewWindow().back().text.find("Summarized LLM Context")
             != std::string::npos
         );
     }
@@ -1192,9 +1192,9 @@ asio::awaitable<TestResult> run_summarization_tests() {
         // 估算规则: 每条消息 extraTokensPerMessage(3) + role + content (ascii/4, unicode/1.1)
         // 3 条消息: 9 + ["system"1 "sys"0] + ["user"1 39 chars→9] + ["assistant"2 28 chars→7] = 29
         XX_TEST_EXPECT_EQ(contextTokensOf(env->ctx, env->sessionId), size_t{29});
-        XX_TEST_EXPECT_TRUE(env->session()->viewMessages.size() >= 1);
+        XX_TEST_EXPECT_TRUE(env->session()->viewWindow().size() >= 1);
         XX_TEST_EXPECT_TRUE(
-            env->session()->viewMessages.back().text.find("Summarized LLM Context")
+            env->session()->viewWindow().back().text.find("Summarized LLM Context")
             != std::string::npos
         );
     }
@@ -1822,8 +1822,8 @@ asio::awaitable<TestResult> run_summarization_tests() {
         XX_TEST_EXPECT_EQ(res.size(), size_t{3}); // system + 压缩提示 + 摘要
 
         auto sess = env->session();
-        XX_TEST_EXPECT_TRUE(sess->viewMessages.size() >= 1);
-        const auto& vm = sess->viewMessages.back();
+        XX_TEST_EXPECT_TRUE(sess->viewWindow().size() >= 1);
+        const auto& vm = sess->viewWindow().back();
         XX_TEST_EXPECT_EQ(vm.role, agentxx::agent::ViewMessage::Role::Tip);
         // 验证格式: 包含 "压缩上下文 900->.../1000 · "
         XX_TEST_EXPECT_TRUE(vm.text.starts_with("Summarized LLM Context 900->"));
@@ -1852,8 +1852,8 @@ asio::awaitable<TestResult> run_summarization_tests() {
         bool ok = co_await env->handle->compactSessionContext(env->sessionId);
         XX_TEST_EXPECT_TRUE(ok);
         XX_TEST_EXPECT_TRUE(env->session()->llmMessagesJson().is_array());
-        XX_TEST_EXPECT_TRUE(env->session()->viewMessages.size() >= 1);
-        const auto& vm = env->session()->viewMessages.back();
+        XX_TEST_EXPECT_TRUE(env->session()->viewWindow().size() >= 1);
+        const auto& vm = env->session()->viewWindow().back();
         XX_TEST_EXPECT_TRUE(vm.text.starts_with("Summarized LLM Context "));
     }
 
@@ -2086,7 +2086,7 @@ asio::awaitable<TestResult> run_summarization_tests() {
         // 提示消息: 每轮各一条且均已更新为结果文本; 无停留在 "Summarizing..." 的残留
         size_t summarizingCount = 0;
         size_t summarizedCount  = 0;
-        for (const auto& vm : env->session()->viewMessages) {
+        for (const auto& vm : env->session()->viewWindow()) {
             if (vm.text.starts_with("Summarizing LLM Context...")) {
                 ++summarizingCount;
             } else if (vm.text.starts_with("Summarized LLM Context ")) {
@@ -2176,14 +2176,14 @@ asio::awaitable<TestResult> run_summarization_tests() {
             threwInterrupt = true;
         }
         XX_TEST_EXPECT_TRUE(threwInterrupt);
-        XX_TEST_EXPECT_EQ(session->viewMessages.size(), size_t{1});
-        XX_TEST_EXPECT_TRUE(session->viewMessages[0].text.starts_with("Summarizing LLM Context...")
+        XX_TEST_EXPECT_EQ(session->viewWindow().size(), size_t{1});
+        XX_TEST_EXPECT_TRUE(session->viewWindow()[0].text.starts_with("Summarizing LLM Context...")
         );
         const auto pendingTipId = ctx->middlewareHandleContext->getGraphDataItemValue<std::string>(
             sid,
             agentxx::middleware::MiddlewareContext::graphDataKey_summarizationTipMsgId
         );
-        XX_TEST_EXPECT_EQ(pendingTipId, session->viewMessages[0].id);
+        XX_TEST_EXPECT_EQ(pendingTipId, session->viewWindow()[0].id);
 
         // ② 续跑 (resume): 预置中断结果, 再次执行 → 复用同一提示消息并更新为结果文本
         ctx->middlewareHandleContext->setGraphDataItemValue<utilxx_base::Json>(
@@ -2196,9 +2196,9 @@ asio::awaitable<TestResult> run_summarization_tests() {
         auto res = co_await runModelcall(handle, ctx, sid, msgs, 900);
         XX_TEST_EXPECT_FALSE(res.empty());
         // 提示消息仍只有一条, 且已更新为压缩结果 (无重复/无残留)
-        XX_TEST_EXPECT_EQ(session->viewMessages.size(), size_t{1});
-        XX_TEST_EXPECT_TRUE(session->viewMessages[0].text.starts_with("Summarized LLM Context "));
-        XX_TEST_EXPECT_EQ(session->viewMessages[0].id, pendingTipId);
+        XX_TEST_EXPECT_EQ(session->viewWindow().size(), size_t{1});
+        XX_TEST_EXPECT_TRUE(session->viewWindow()[0].text.starts_with("Summarized LLM Context "));
+        XX_TEST_EXPECT_EQ(session->viewWindow()[0].id, pendingTipId);
         // 挂起提示标记已清理
         XX_TEST_EXPECT_TRUE(
             ctx->middlewareHandleContext

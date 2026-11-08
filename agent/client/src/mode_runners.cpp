@@ -191,6 +191,8 @@ static std::shared_ptr<agent::AgentSessionRuntime> setupLocalUnifiedDirect(
     // stdio 客户端无滚动交互, 保持完整同步 (initialSyncTailCount=0)
     if (isTui) {
         cfg.initialSyncTailCount = kTuiInitialSyncTailCount;
+        // hello 里也声明同一个值 (客户端偏好), 与远程 TUI 的声明保持一致
+        cfg.historyTail = static_cast<int32_t>(kTuiInitialSyncTailCount);
         // 客户端界面语言: hello 带它对齐会话语言 (配置已显式指定语言时不生效)
         cfg.language = TUISettings::instance().languageCode();
     }
@@ -369,9 +371,10 @@ static asio::awaitable<void> runRemoteCliAsync(
         .sessionId = sessionId,
         .token     = token,
         .lastSeq   = 0,
-        .tailHash  = "",
         .model     = "",
         .language  = "en",
+        // 远程 CLI 没有滚动翻页界面: 声明 0 = 完整同步
+        .historyTail     = 0,
  // 协议版本与能力声明: 服务端据此决定是否下发补拉/回执等能力
         .protocolVersion = agent::WireProtocol::kVersion,
         .capabilities
@@ -473,9 +476,10 @@ static asio::awaitable<void> runRemoteTuiAsync(
         .sessionId = sessionId,
         .token     = token,
         .lastSeq   = 0,
-        .tailHash  = "",
         .model     = "",
         .language  = TUISettings::instance().languageCode(),
+        // 远程 TUI 与本地 TUI 一致: 首屏只要末尾 N 条, 其余向上滚动时按页拉
+        .historyTail     = static_cast<int32_t>(kTuiInitialSyncTailCount),
  // 协议版本与能力声明: 版本高于服务端时握手会被明确拒绝
         .protocolVersion = agent::WireProtocol::kVersion,
         .capabilities

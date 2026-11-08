@@ -347,7 +347,6 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
     {
         WireSyncPayload p;
         p.fromIndex = 2;
-        p.tailHash  = "hash123";
         auto vm     = ViewMessage::makeText(ViewMessage::Role::User, "hi");
         vm.id       = "id1";
         p.messages.push_back(std::move(vm));
@@ -358,7 +357,6 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
             XX_TEST_EXPECT_TRUE(sp != nullptr);
             if (sp) {
                 XX_TEST_EXPECT_EQ(sp->fromIndex, uint64_t{2});
-                XX_TEST_EXPECT_EQ(sp->tailHash, std::string("hash123"));
                 XX_TEST_EXPECT_EQ(sp->messages.size(), size_t{1});
                 if (!sp->messages.empty()) {
                     XX_TEST_EXPECT_EQ(sp->messages[0].id, std::string("id1"));
@@ -369,7 +367,8 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
         }
     }
     {
-        agentxx::agent::WireHello hello{"sess", "tok", 3, "th", "", "zh-cn"};
+        agentxx::agent::WireHello hello{"sess", "tok", 3, "", "zh-cn"};
+        hello.historyTail = 100;
         auto                      json = WsAgentIOTransport::serialize(WireMessage{hello});
         auto                      back = WsAgentIOTransport::deserialize(json);
         XX_TEST_EXPECT_TRUE(back.has_value());
@@ -380,6 +379,7 @@ static asio::awaitable<void> test_remote_protocol_roundtrip() {
                 XX_TEST_EXPECT_EQ(h->sessionId, std::string("sess"));
                 XX_TEST_EXPECT_EQ(h->token, std::string("tok"));
                 XX_TEST_EXPECT_EQ(h->lastSeq, uint64_t{3});
+                XX_TEST_EXPECT_EQ(h->historyTail, int32_t{100});
                 XX_TEST_EXPECT_EQ(h->language, std::string("zh-cn"));
             }
         }
@@ -641,7 +641,7 @@ static asio::awaitable<void> test_remote_transport_loopback() {
         }
         co_await wsSendJson(
             ws,
-            io::makeHelloAck(true, hello->value("sessionId", std::string{}), "", {})
+            io::makeHelloAck(true, hello->value("sessionId", std::string{}), {})
         );
         for (;;) {
             auto j = co_await wsRecvJson(ws);
@@ -723,7 +723,6 @@ static asio::awaitable<void> fakeAgentHandler(HttpServer::WsStream& ws) {
             io::makeHelloAck(
                 false,
                 hello->value("sessionId", std::string{}),
-                "",
                 {},
                 {},
                 "",
@@ -741,7 +740,6 @@ static asio::awaitable<void> fakeAgentHandler(HttpServer::WsStream& ws) {
         io::makeHelloAck(
             ok,
             hello->value("sessionId", std::string{}),
-            "",
             {},
             {},
             "",
@@ -788,7 +786,6 @@ static asio::awaitable<void> fakeOldServerHandler(HttpServer::WsStream& ws) {
         io::makeHelloAck(
             true,
             hello->value("sessionId", std::string{}),
-            "",
             {},
             {},
             "",
@@ -1305,7 +1302,7 @@ static asio::awaitable<void> test_remote_client_reconnect() {
         }
         co_await wsSendJson(
             ws,
-            io::makeHelloAck(true, hello->value("sessionId", std::string{}), "", {})
+            io::makeHelloAck(true, hello->value("sessionId", std::string{}), {})
         );
         if (myConn == 1) {
             auto j = co_await wsRecvJson(ws);
@@ -1542,7 +1539,7 @@ static asio::awaitable<void> test_remote_client_context_stats() {
         }
         co_await wsSendJson(
             ws,
-            io::makeHelloAck(true, hello->value("sessionId", std::string{}), "", {})
+            io::makeHelloAck(true, hello->value("sessionId", std::string{}), {})
         );
         // 上下文占用 + 会话累计用量 (输入/输出/缓存) 一并下发
         agentxx::agent::WireContextStats wireStats;
@@ -1640,7 +1637,7 @@ static asio::awaitable<void> test_channel_client_integration() {
                 co_return;
             }
             st->send(agentxx::agent::WireMessage{
-                agentxx::agent::WireHelloAck{true, h->sessionId, "", {}}
+                agentxx::agent::WireHelloAck{true, h->sessionId, {}}
             });
             for (;;) {
                 auto m = co_await st->recv();
@@ -1709,7 +1706,7 @@ static asio::awaitable<void> test_remote_echo() {
         }
         co_await wsSendJson(
             ws,
-            io::makeHelloAck(true, hello->value("sessionId", std::string{}), "", {})
+            io::makeHelloAck(true, hello->value("sessionId", std::string{}), {})
         );
         uint64_t seq = 0;
         for (;;) {
@@ -1850,7 +1847,7 @@ static asio::awaitable<void> test_remote_multi_reconnect() {
         }
         co_await wsSendJson(
             ws,
-            io::makeHelloAck(true, hello->value("sessionId", std::string{}), "", {})
+            io::makeHelloAck(true, hello->value("sessionId", std::string{}), {})
         );
         if (myConn <= dropTimes) {
             co_return;
@@ -1935,7 +1932,7 @@ static asio::awaitable<void> test_remote_cancel() {
         }
         co_await wsSendJson(
             ws,
-            io::makeHelloAck(true, hello->value("sessionId", std::string{}), "", {})
+            io::makeHelloAck(true, hello->value("sessionId", std::string{}), {})
         );
         for (;;) {
             auto j = co_await wsRecvJson(ws);
@@ -2018,7 +2015,7 @@ static asio::awaitable<void> test_remote_reconnect_sync() {
         }
         co_await wsSendJson(
             ws,
-            io::makeHelloAck(true, hello->value("sessionId", std::string{}), "", {})
+            io::makeHelloAck(true, hello->value("sessionId", std::string{}), {})
         );
         if (myConn == 1) {
             auto j = co_await wsRecvJson(ws);
@@ -2036,7 +2033,6 @@ static asio::awaitable<void> test_remote_reconnect_sync() {
             co_return;
         }
         agentxx::agent::WireSyncPayload sp;
-        sp.tailHash = "reconnect-sync";
         co_await wsSendJson(ws, io::makeSyncMsg(sp, 1));
         for (;;) {
             auto j = co_await wsRecvJson(ws);
@@ -2126,7 +2122,7 @@ static asio::awaitable<void> test_remote_reconnect_sync_watermark() {
         }
         co_await wsSendJson(
             ws,
-            io::makeHelloAck(true, hello->value("sessionId", std::string{}), "", {})
+            io::makeHelloAck(true, hello->value("sessionId", std::string{}), {})
         );
         if (myConn == 1) {
             // 旧会话: 客户端在连接 1 上收到的最后一个 delta 序号 = 100 (旧序号)
@@ -2143,7 +2139,6 @@ static asio::awaitable<void> test_remote_reconnect_sync_watermark() {
         {
             agentxx::agent::WireSyncPayload sp;
             sp.deltaSeq = 0;
-            sp.tailHash = "fresh-session";
             co_await wsSendJson(ws, io::makeSyncMsg(sp));
 
             agentxx::agent::WireDelta d;
@@ -2157,7 +2152,6 @@ static asio::awaitable<void> test_remote_reconnect_sync_watermark() {
         {
             agentxx::agent::WireSyncPayload sp;
             sp.deltaSeq = 5;
-            sp.tailHash = "sync-at-5";
             co_await wsSendJson(ws, io::makeSyncMsg(sp));
 
             agentxx::agent::WireDelta stale;
@@ -2323,7 +2317,7 @@ static asio::awaitable<void> test_remote_auth_rejected() {
             }
             bool authOk = (hello->token == "secret");
             st->send(agentxx::agent::WireMessage{
-                agentxx::agent::WireHelloAck{authOk, hello->sessionId, "", {}}
+                agentxx::agent::WireHelloAck{authOk, hello->sessionId, {}}
             });
         }),
         asio::detached
@@ -2747,7 +2741,6 @@ static asio::awaitable<void> test_model_switch_with_next_input() {
                                   .sessionId = "model-switch-session",
                                   .token     = "",
                                   .lastSeq   = 0,
-                                  .tailHash  = "",
                                   .model     = "",
                                   .language  = "zh-cn",
                                   }
@@ -4470,7 +4463,6 @@ static asio::awaitable<void> test_remote_user_input_attachment_to_llm() {
                                   .sessionId = "att-llm-session",
                                   .token     = "",
                                   .lastSeq   = 0,
-                                  .tailHash  = "",
                                   .model     = "",
                                   .language  = "zh-cn",
                                   }

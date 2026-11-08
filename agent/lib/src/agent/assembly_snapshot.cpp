@@ -279,8 +279,10 @@ utilxx_base::Json buildConfigSnapshot(const AgentConfig& config) {
     perm["deny_paths"]     = config.permissionDenyPaths;
     root["permission"]     = std::move(perm);
 
-    utilxx_base::Json features  = utilxx_base::Json::object();
-    features["session_store"]   = config.enableSessionStore;
+    utilxx_base::Json features     = utilxx_base::Json::object();
+    features["session_store"]      = config.enableSessionStore;
+    // 展示历史常驻窗口 (条数): 0 = 不淘汰; 仅在会话持久化开启时生效
+    features["view_window"]        = config.sessionViewWindowMessages;
     features["summarization"]   = config.enableSummarization;
     features["subagent"]        = config.enableSubagent;
     features["worktree"]        = config.enableWorktree;

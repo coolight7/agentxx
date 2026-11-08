@@ -1810,11 +1810,15 @@ void SessionServerAgentIO::handleHello(
     std::optional<WireSyncPayload> replaySync;
     /// 客户端 lastSeq 已超出 delta 缓冲: 必须下发一份快照 (全部或增量补拉)
     bool                              deltaBufferMissed = false;
-    std::string                       tailHash;
     std::vector<WireInterruptRequest> pendingInterrupts;
 
     auto sess = session();
-    tailHash  = sess ? sess->getHashInfo().tailHex : std::string{};
+
+    // 客户端声明的展示历史尾窗条数: 记住后每次 Sync/切换会话都用它
+    // (-1 = 未声明, 保留服务端默认值 initialSyncTailCount)
+    if (hello.historyTail >= 0) {
+        clientHistoryTail_ = hello.historyTail;
+    }
 
     // 同步策略 (按代价从低到高, 先满足者胜出):
     // ① delta 重放: 实时重连 (客户端 lastSeq 仍在缓冲内) 时传输量最小
@@ -1844,6 +1848,10 @@ void SessionServerAgentIO::handleHello(
                          ? agent->agentContext->sessions->sessionStore
                          : nullptr;
         if (store) {
+            // 读库前先把节流窗口里未落盘的展示历史刷出去:
+            // 刚定稿的行 (≤3s) 只在内存里, 若它们既不在 delta 缓冲、又没落库,
+            // 增量补拉会静默少一两条 (客户端却据此认为已收全)
+            sess->flushViewMessages();
             auto rows = store->loadViewMessagesAfter(
                 config_.sessionId,
                 hello.afterViewSeq,
@@ -1874,7 +1882,7 @@ void SessionServerAgentIO::handleHello(
     if (!replaySync.has_value() && replayDeltas.empty()
         && (deltaBufferMissed || hello.lastSeq == 0)) {
         if (sess && sess->viewMessageCount() > 0) {
-            replaySync = buildTailSync(config_.initialSyncTailCount);
+            replaySync = buildTailSync(effectiveSyncTailCount());
         } else if (deltaBufferMissed) {
             replaySync = buildFullSync();
         }
@@ -1911,7 +1919,6 @@ void SessionServerAgentIO::handleHello(
     WireHelloAck helloAck;
     helloAck.ok        = true;
     helloAck.sessionId = config_.sessionId;
-    helloAck.tailHash  = std::move(tailHash);
     helloAck.models    = std::move(models);
     helloAck.plugins   = std::move(loadedPlugins);
     helloAck.deviceId  = utilxx::getDeviceId();
@@ -2054,7 +2061,7 @@ void SessionServerAgentIO::switchSession(std::string newThreadId) {
         if (newThreadId == config_.sessionId) {
             // 仍回推一次 Sync 校准客户端 (本地状态异常时); 与首次接入一致
             // 按尾窗配置分页, 客户端整体重置窗口后可再分页拉取更早历史
-            auto sync = buildTailSync(config_.initialSyncTailCount);
+            auto sync = buildTailSync(effectiveSyncTailCount());
             sendToPeer(std::move(sync));
             sendContextStats();
         }
@@ -2100,7 +2107,7 @@ void SessionServerAgentIO::switchSession(std::string newThreadId) {
     }
 
     // 回推新会话状态: Sync (历史消息, 按尾窗配置分页) + 模型信息 + 上下文统计
-    auto sync = buildTailSync(config_.initialSyncTailCount);
+    auto sync = buildTailSync(effectiveSyncTailCount());
     sendToPeer(std::move(sync));
 
     // 模型信息必须与客户端接入路径 (WireGetModel) 同构: 除当前模型名与可用
@@ -2516,9 +2523,13 @@ WireSyncPayload SessionServerAgentIO::buildFullSync() {
     p.fromIndex = 0;
     auto sess   = session();
     if (sess) {
-        p.messages      = sess->getFullViewMessagesCopy();
-        p.tailHash      = sess->getHashInfo().tailHex;
-        p.totalMessages = p.messages.size();
+        const auto total = static_cast<uint64_t>(sess->viewMessageCount());
+        p.totalMessages  = total;
+        // 完整同步 = 取整个下标空间; 窗口化后内存里只有尾部, 这段必然回库读一次
+        // (stdio / jsonl / FFI 这类没有"向上翻页"的界面才走这里)
+        if (total > 0) {
+            (void)sess->collectViewRange(0, total, p.messages);
+        }
         // 快照序号: 客户端据此重置去重用的序号 (服务端 seq 可能已重新计数)
         p.deltaSeq    = sess->deltaSeq;
         p.lastViewSeq = sess->lastViewSeq();
@@ -2528,6 +2539,14 @@ WireSyncPayload SessionServerAgentIO::buildFullSync() {
     p.messageQueue = std::vector<MessageQueueItem>(messageQueue_.begin(), messageQueue_.end());
     p.queueState   = std::string{sessionQueueStateText(queueState_)};
     return p;
+}
+
+size_t SessionServerAgentIO::effectiveSyncTailCount() const noexcept {
+    // 客户端声明的优先 (-1 = 未声明); 负数一律当"未声明"处理
+    if (clientHistoryTail_ >= 0) {
+        return static_cast<size_t>(clientHistoryTail_);
+    }
+    return config_.initialSyncTailCount;
 }
 
 WireSyncPayload SessionServerAgentIO::buildTailSync(size_t tailCount) {
@@ -2541,13 +2560,18 @@ WireSyncPayload SessionServerAgentIO::buildTailSync(size_t tailCount) {
         p.queueState   = std::string{sessionQueueStateText(queueState_)};
         return p;
     }
-    const size_t total = sess->viewMessageCount();
+    const uint64_t total = sess->viewMessageCount();
     // 窗口起始下标: 总数不足窗口大小时从 0 开始 (此时等同于完整同步)
-    const size_t start = (total > tailCount) ? (total - tailCount) : 0;
-    p.fromIndex        = start;
-    p.totalMessages    = total;
-    p.messages         = sess->getViewMessagesRange(start, total);
-    p.tailHash         = sess->getHashInfo().tailHex;
+    const uint64_t start = (total > tailCount) ? (total - tailCount) : 0;
+    p.fromIndex          = start;
+    p.totalMessages      = total;
+    if (total > start) {
+        // 尾窗一定落在内存窗口里 (窗口右端就是最新一条), 通常不需要读库;
+        // 万一会话窗口比尾窗还小 (cap < tail), collectViewRange 会自己回库补
+        if (!sess->collectViewRange(start, total, p.messages)) {
+            p.messages.clear();
+        }
+    }
     // 快照序号: 客户端据此重置去重用的序号 (服务端 seq 可能已重新计数)
     p.deltaSeq     = sess->deltaSeq;
     p.lastViewSeq  = sess->lastViewSeq();
@@ -2579,32 +2603,28 @@ WireSyncPayload SessionServerAgentIO::buildIncrementalSync(
             return buildFullSync();
         }
     }
-    const auto total = sess->viewMessageCount();
+    const uint64_t total = sess->viewMessageCount();
+    // 追加位置: 本批消息的起始绝对下标 (= 首行 seq - 1)
+    // - 老实现用 `total - rows.size()`, 依赖"补拉永远到末尾"这个前提;
+    //   现在可以精确算, 与真实下标空间一一对应
+    p.fromIndex = rows.empty() ? total : (rows.front().seq - 1);
     p.messages.reserve(rows.size());
     for (auto& row : rows) {
         p.messages.push_back(std::move(row.message));
     }
-    // 追加位置: 本批消息在服务端完整 viewMessages 中的起始绝对下标
-    // (增量补拉时必然位于末尾, 条数不超过服务端总量)
-    p.fromIndex     = total > p.messages.size() ? total - p.messages.size() : 0;
     p.totalMessages = total;
-    p.tailHash      = sess->getHashInfo().tailHex;
     p.deltaSeq      = sess->deltaSeq;
     p.lastViewSeq   = sess->lastViewSeq();
     p.messageQueue  = std::vector<MessageQueueItem>(messageQueue_.begin(), messageQueue_.end());
     p.queueState    = std::string{sessionQueueStateText(queueState_)};
     XX_LOGD(
-        "[session_ctrl] incremental replay {} message(s) after seq {} (session={})",
+        "[session_ctrl] incremental replay {} message(s) after seq {} (fromIndex={}, session={})",
         p.messages.size(),
         afterSeq,
+        p.fromIndex,
         config_.sessionId
     );
     return p;
-}
-
-std::string SessionServerAgentIO::currentTailHash() {
-    auto sess = session();
-    return sess ? sess->getHashInfo().tailHex : std::string{};
 }
 
 void SessionServerAgentIO::handleRenameSession(
@@ -2762,8 +2782,8 @@ void SessionServerAgentIO::handleGetViewMessages(
         sendToClient(target, std::move(page));
         return;
     }
-    const size_t total = sess->viewMessageCount();
-    page.totalCount    = total;
+    const uint64_t total = sess->viewMessageCount();
+    page.totalCount      = total;
     // beforeIndex == 0 视为"从末尾向前取" (客户端首次加载时的默认请求);
     // 正常分页流程窗口顶部为 0 时客户端不应再发起请求
     const uint64_t before
@@ -2773,10 +2793,12 @@ void SessionServerAgentIO::handleGetViewMessages(
     const uint64_t cnt = std::min<uint64_t>(count, before);
     page.startIndex    = before - cnt;
     if (cnt > 0) {
-        page.messages = sess->getViewMessagesRange(
-            static_cast<size_t>(page.startIndex),
-            static_cast<size_t>(before)
-        );
+        // 页从内存/库拼接 (窗口化后更早的页只能回库读)
+        // - 取不到 (库不可用): 回空页, 客户端据 startIndex+条数对账后停止上拉,
+        //   不会把不连续的内容当成合法页
+        if (!sess->collectViewRange(page.startIndex, before, page.messages)) {
+            page.messages.clear();
+        }
     }
     sendToClient(target, std::move(page));
 }

@@ -238,10 +238,11 @@ void EventBridge::routeStreamThink(const ViewMessage::ThinkData& data) {
         return;
     }
     // 思考行已定稿 (元数据包比正文晚到): 合并后整条覆盖下发 (低频, 不是文本增量)
-    if (!session_ || row->index >= session_->viewMessages.size()) {
+    const auto* current = session_ ? session_->viewMessageById(row->msgId) : nullptr;
+    if (current == nullptr) {
         return;
     }
-    ViewMessage merged = session_->viewMessages[row->index];
+    ViewMessage merged = *current;
     auto        think  = merged.think.value_or(ViewMessage::ThinkData{});
     mergeThinkMeta(think, data);
     if (merged.think.has_value() && merged.think->isEncrypted == think.isEncrypted
@@ -261,10 +262,11 @@ void EventBridge::appendToStepRow(
     std::string_view text,
     bool             thinking
 ) {
-    if (!session_ || text.empty() || row.index >= session_->viewMessages.size()) {
+    const auto* current = session_ ? session_->viewMessageById(row.msgId) : nullptr;
+    if (current == nullptr || text.empty()) {
         return;
     }
-    ViewMessage updated = session_->viewMessages[row.index];
+    ViewMessage updated = *current;
     updated.text.append(text);
     // 耗时按"该角色从第一段到本次追加"的跨度重算 (交错的各段合起来是一段)
     if (updated.startTimeMs > 0) {
@@ -330,18 +332,17 @@ void EventBridge::mergeStreamThink(const ViewMessage::ThinkData& data) {
     session_->mergeStreamingThink(data);
 }
 
-size_t EventBridge::commitStreamRow(ViewMessage row, bool usedStreamingSlot) {
+std::string EventBridge::commitStreamRow(ViewMessage row, bool usedStreamingSlot) {
     // 发出去的副本必须先带好 id (下面 move 进了会话)
     ViewMessage out = row;
     const auto  id  = usedStreamingSlot ? session_->finalizeStreamingView(std::move(row))
                                         : session_->appendViewMessage(std::move(row));
     out.id          = id;
-    const size_t index = session_->viewMessages.size() - 1;
     emitDelta(agentxx::agent::WireDelta{
         .message = std::make_shared<ViewMessage>(std::move(out)),
         .type    = agentxx::agent::WireDelta::Type::InsertMessage,
     });
-    return index;
+    return id;
 }
 
 void EventBridge::flushOpenStream() {
@@ -373,8 +374,8 @@ void EventBridge::flushOpenStream() {
 
     if (row.hasVisibleContent()) {
         // 定稿成正式行 (取消/出错的半截内容走同一路径: 用户看到过就进历史)
-        const size_t index = commitStreamRow(std::move(row), true);
-        stepRows_.push_back(StepRow{role, id, index});
+        const auto id = commitStreamRow(std::move(row), true);
+        stepRows_.push_back(StepRow{role, id});
         return;
     }
     // 整段视觉为空 (模型只吐了零宽占位符之类): 不进历史, 让客户端丢掉流式项
@@ -488,10 +489,12 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
             }
             // 单段时把定稿元数据并到该行上 (整条覆盖, 同 id)
             auto mergeMetaInto = [&](const StepRow& seg, const ViewMessage::ThinkData& meta) {
-                if (seg.index >= session_->viewMessages.size()) {
+                const auto* existing
+                    = session_ ? session_->viewMessageById(seg.msgId) : nullptr;
+                if (existing == nullptr) {
                     return;
                 }
-                ViewMessage row = session_->viewMessages[seg.index];
+                ViewMessage row = *existing;
                 auto        merged = row.think.value_or(ViewMessage::ThinkData{});
                 mergeThinkMeta(merged, meta);
                 if (row.think.has_value() && row.think->isEncrypted == merged.isEncrypted
@@ -551,10 +554,12 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
                     return;
                 }
                 const StepRow& seg = *segs.front();
-                if (seg.index >= session_->viewMessages.size()) {
+                const auto*    existing
+                    = session_ ? session_->viewMessageById(seg.msgId) : nullptr;
+                if (existing == nullptr) {
                     return;
                 }
-                ViewMessage row = session_->viewMessages[seg.index];
+                ViewMessage row     = *existing;
                 bool        changed = false;
                 if (!finalText.empty() && row.text != finalText) {
                     row.text = finalText;
@@ -607,11 +612,10 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
                     m.startTimeMs      = startMs;
                     const auto msgId   = session_->appendViewMessage(m);
                     m.id               = msgId;
-                    // 登记 toolCallId → viewMessages 索引, 供 tool 结果回填 O(1) 定位
-                    // (viewMessages append-only, 索引不失效)
-                    const size_t historyIndex = session_->viewMessages.size() - 1;
+                    // 登记 toolCallId → 工具行的 msgId, 供 tool 结果回填定位
+                    // (按 id 而非下标: 展示历史窗口会淘汰, 下标会变)
                     if (!toolCallId.empty()) {
-                        toolCallHistoryIndex_[toolCallId] = historyIndex;
+                        toolCallMsgIds_[toolCallId] = msgId;
                     }
                     // 工具行就是普通历史行: 整条 insert_message (未完成状态)
                     emitDelta(WireDelta{
@@ -650,47 +654,45 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
             if (toolDurationMs == 0) {
                 toolDurationMs = jm.value("durationMs", int64_t{0});
             }
-            // 回填对应的 Tool 消息 (assistant tool_calls 展开时已登记索引):
-            // - 优先 O(1) 索引定位 (本轮已登记)
-            // - 未命中时回扫补充 (如历史来自更早轮次/恢复中断场景)
-            ViewMessage* target = nullptr;
-            if (auto idxIt = toolCallHistoryIndex_.find(toolCallId);
-                idxIt != toolCallHistoryIndex_.end()
-                && idxIt->second < session_->viewMessages.size()) {
-                target = &session_->viewMessages[idxIt->second];
+            // 回填对应的 Tool 消息 (assistant tool_calls 展开时已登记 msgId):
+            // - 优先按 msgId 定位 (本轮已登记)
+            // - 未命中时在内存窗口里回扫补充 (如历史来自更早轮次/恢复中断场景)
+            const ViewMessage* source = nullptr;
+            if (auto idIt = toolCallMsgIds_.find(toolCallId); idIt != toolCallMsgIds_.end()) {
+                source = session_->viewMessageById(idIt->second);
             }
-            if (!target) {
-                for (auto it = session_->viewMessages.rbegin(); it != session_->viewMessages.rend();
-                     ++it) {
+            if (source == nullptr) {
+                const auto& window = session_->viewWindow();
+                for (auto it = window.rbegin(); it != window.rend(); ++it) {
                     if (it->role == ViewMessage::Role::Tool && it->tool
                         && it->tool->toolCallId == toolCallId && !it->tool->toolFinished) {
-                        target = &*it;
+                        source = &*it;
                         break;
                     }
                 }
             }
-            if (target) {
-                if (!target->tool) {
-                    target->tool = ViewMessage::ToolData{}; // 防御: 类型保证下不应为空
+            if (source != nullptr) {
+                ViewMessage row = *source;
+                if (!row.tool) {
+                    row.tool = ViewMessage::ToolData{}; // 防御: 类型保证下不应为空
                 }
-                target->tool->toolResult   = content;
-                target->tool->toolFinished = true;
-                target->tool->status       = toolStatus;
-                target->collapsed          = true;
+                row.tool->toolResult   = content;
+                row.tool->toolFinished = true;
+                row.tool->status       = toolStatus;
+                row.collapsed          = true;
                 if (toolDurationMs > 0) {
-                    target->durationMs = toolDurationMs;
-                } else if (target->startTimeMs > 0) {
-                    target->durationMs = std::max<int64_t>(0, nowMs() - target->startTimeMs);
-                    toolDurationMs     = target->durationMs;
+                    row.durationMs = toolDurationMs;
+                } else if (row.startTimeMs > 0) {
+                    row.durationMs = std::max<int64_t>(0, nowMs() - row.startTimeMs);
+                    toolDurationMs = row.durationMs;
                 }
                 if (toolStartTimeMs > 0) {
-                    target->startTimeMs = toolStartTimeMs;
+                    row.startTimeMs = toolStartTimeMs;
                 }
                 // 回填后同步持久化: 库内该行仍是未完成的 Tool 消息 (tool_finished
                 // 缺失), 若不更新, 重启恢复/会话切换后再展示的 tool 结果会一直
                 // 显示未完成状态。经 Session::updateViewMessage 触发 onUpdateViewMessage
                 // 回调覆盖库内对应行 (按 msg.id 定位)。
-                ViewMessage row = *target;
                 if (!row.id.empty()) {
                     session_->updateViewMessage(row);
                 }

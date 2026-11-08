@@ -105,12 +105,12 @@ void AgentSessionRuntime::start() {
     });
     asio::post(clientEx, [self = shared_from_this()]() {
         self->clientIO_->sendToPeer(WireHello{
-            .sessionId = self->cfg_.sessionId,
-            .token     = "",
-            .lastSeq   = self->cfg_.lastSeq,
-            .tailHash  = self->cfg_.tailHash,
-            .model     = "",
-            .language  = self->cfg_.language,
+            .sessionId   = self->cfg_.sessionId,
+            .token       = "",
+            .lastSeq     = self->cfg_.lastSeq,
+            .model       = "",
+            .language    = self->cfg_.language,
+            .historyTail = self->cfg_.historyTail,
         });
         if (self->cfg_.onTransportStarted) {
             self->cfg_.onTransportStarted();

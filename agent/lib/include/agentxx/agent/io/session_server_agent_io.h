@@ -72,6 +72,8 @@ public:
         /// - N > 0 = 仅同步末尾 N 条 (fromIndex=窗口起始下标), 客户端
         ///   (TUI) 向上滚动到窗口顶部时经 WireGetViewMessages 分页拉取
         ///   更早历史, 避免长会话恢复时整份传输
+        /// - 仅在 hello 未声明 `historyTail` 时生效 (插件运行时通道、
+        ///   未发 hello 的内部端点); 远程客户端的取值以它自己声明的为准
         size_t initialSyncTailCount = 0;
         /// `collect` 投递模式的静默合并窗口
         /// - 窗口内同一客户端的连续输入合并为一条, 窗口结束后按 next-turn 提交
@@ -204,9 +206,6 @@ public:
     size_t queueSizeForTest() const noexcept {
         return messageQueue_.size();
     }
-
-    /// 当前 viewMessages 的链式哈希尾 (供 hello_ack/sync)
-    std::string currentTailHash();
 
     /// 切换本端点绑定的会话 (会话选择弹窗确认后由客户端经 WireSwitchSession 请求)
     /// - 重新绑定 config_.sessionId 到目标会话 (不存在时由 SessionStore 从持久化恢复创建)
@@ -499,7 +498,6 @@ private:
     std::deque<WireDelta> deltaBuffer_;
 
     // ----- 会话切换中的请求暂存 (仅 ex_ 线程访问) -----
-
     /// 切换会话请求序号: 切换要等目标会话历史加载完才提交绑定, 期间可能又来一次
     /// 切换请求 —— 只让序号最新的一次提交, 避免先发出的旧请求后到把会话切回旧目标
     uint64_t switchSeq_ = 0;
@@ -510,9 +508,16 @@ private:
     std::vector<std::pair<WireMessage, std::shared_ptr<AgentIOTransportBase>>>
         stashedWhileSwitching_;
 
+    /// 客户端在 hello 里声明的展示历史尾窗条数 (见 [WireHello::historyTail])
+    /// - -1 = 未声明 (用 config_.initialSyncTailCount)
+    /// - 记住后每次 Sync/切换会话都用它 (客户端的能力/偏好不随同步次数变)
+    int32_t clientHistoryTail_ = -1;
+
+    /// 本次同步应使用的尾窗条数 (0 = 完整同步)
+    size_t effectiveSyncTailCount() const noexcept;
+
     // 服务端消息队列 (仅 ex_ 线程访问)
-    std::deque<MessageQueueItem> messageQueue_;
-    uint64_t                     nextQueueItemId_ = 1;
+    std::deque<MessageQueueItem> messageQueue_;    uint64_t                     nextQueueItemId_ = 1;
     /// 队列状态 (取代 queuePaused_/pendingInsert_ 两个 bool)
     SessionQueueState queueState_ = SessionQueueState::Idle;
     /// 轮次进行中收到"打断并运行下一条"时置位: 本轮结束后不暂停队列, 直接继续

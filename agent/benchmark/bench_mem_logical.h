@@ -127,8 +127,8 @@ inline std::vector<LogicalMemRow> collectAgentLogicalMem(
             if (!sess) {
                 continue;
             }
-            totalViewBytes += estimateViewMessagesBytes(sess->viewMessages);
-            totalViewCount += sess->viewMessages.size();
+            totalViewBytes += estimateViewMessagesBytes(sess->viewWindow());
+            totalViewCount += sess->viewWindow().size();
             totalLlmBytes
                 += sess->llmMessagesJson().is_null() ? 0 : sess->llmMessagesJson().dump().size();
             totalLlmCount

@@ -84,11 +84,16 @@ public:
     };
 
     struct LoadedSession {
+        /// 展示历史的**窗口内容** (按 seq 升序, 下标连续)
+        /// - 只是尾部窗口, 不代表完整历史; 更早的页按需经 [loadViewMessagesPage] 读
         std::vector<ViewMessage> viewMessages;
         utilxx_base::Json        llmMessages = utilxx_base::Json::array();
+        /// 窗口首条的绝对展示下标 (= 首条消息的 seq - 1; 全量加载时为 0)
+        uint64_t viewWindowBase = 0;
         /// 恢复后的 msg id 计数器 (保证新消息 id 不与已存消息冲突)
         uint64_t msgIdCounter = 0;
-        /// 库内最大展示消息序号 (供重连增量补拉与继续编号)
+        /// 展示历史总条数 (绝对下标空间大小; 同时是库内最大展示消息序号)
+        /// - `absIndex = seq - 1` 恒成立: view_message 不删行、seq 由会话单调分配
         uint64_t lastViewSeq = 0;
         /// 该会话历史累计用量 (usage 表聚合; 无记录/读取失败时为全 0)
         UsageSummary usage;
@@ -98,7 +103,23 @@ public:
     };
 
     /// 加载指定 session 的会话消息状态; 无数据/打开失败时返回空结构 (仅记日志)
-    LoadedSession loadSession(std::string_view sessionId);
+    ///
+    /// - `args`:
+    ///     - [sessionId] 会话 id
+    ///     - [tailCount] 只读末尾多少条展示历史 (0 = 全量, 诊断/测试用);
+    ///       >0 时 `viewMessages` 是尾部窗口, `viewWindowBase` 给出窗口首条绝对下标
+    /// - LLM 上下文 / 用量 / 标题始终全量读取, 与窗口大小无关
+    LoadedSession loadSession(std::string_view sessionId, size_t tailCount = 0);
+
+    /// 读取展示历史页 `[startIndex, startIndex + count)` (绝对下标区间)
+    ///
+    /// - SQL: `WHERE seq > startIndex AND seq <= startIndex + count ORDER BY seq`
+    ///   (走主键, 不扫全表)
+    /// - 只读连接 (不取写租约); 无数据/打开失败/单行解析失败时返回的条数少于请求
+    ///   (调用方据此判定"这一页取不全", 不要把短页当成合法的连续页)
+    /// - 行内容不做"视觉为空"过滤: 每一行占一个下标, 过滤会让后续下标整体前移
+    std::vector<ViewMessage>
+        loadViewMessagesPage(std::string_view sessionId, uint64_t startIndex, uint32_t count);
 
     /// 读取展示历史中序号大于 [afterSeq] 的消息 (断线增量补拉)
     ///

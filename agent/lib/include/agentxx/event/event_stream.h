@@ -673,8 +673,8 @@ private:
     ///   思考 → 正文), 切回已出现过的角色会把文本并回这一条, 不新起一段
     struct StepRow {
         agentxx::agent::ViewMessage::Role role = agentxx::agent::ViewMessage::Role::Assistant;
-        std::string                       msgId;
-        size_t                            index = 0; ///< 在 viewMessages 里的下标 (只增不改)
+        /// 行的消息 id (展示历史窗口化后不再记下标: 淘汰会让下标失效)
+        std::string msgId;
     };
 
     /// 本步骤内某角色已定稿的行
@@ -721,8 +721,8 @@ private:
 
     /// 把一个已定稿的段写成历史行并广播 InsertMessage
     /// - `row` 的 id 必须是直播槽预留的 id (定稿路径复用)
-    /// - `return` 落库后的下标
-    size_t commitStreamRow(agentxx::agent::ViewMessage row, bool usedStreamingSlot);
+    /// - `return` 落库后的消息 id
+    std::string commitStreamRow(agentxx::agent::ViewMessage row, bool usedStreamingSlot);
 
     /// 估算 UTF-8 字符串对应的 token 数
     /// - 优先使用 EventBus 上注册的 TokenCount 服务 (由 SummarizationMiddleware 提供,
@@ -771,11 +771,11 @@ private:
     /// "该角色在这一步里有几段"
     std::vector<StepRow> stepRows_;
 
-    /// toolCallId → viewMessages 索引 映射 (加速 tool 结果回填 O(1) 定位)
-    /// - assistant(tool_calls) 消息登记, tool 结果按 id O(1) 定位, 避免每结果
+    /// toolCallId → 工具行的 msgId 映射 (加速 tool 结果回填定位)
+    /// - assistant(tool_calls) 消息登记, tool 结果按 id 找行, 避免每结果
     ///   从历史末尾线性回扫 O(n²); 未命中时回扫补充 (如历史来自更早轮次)
-    /// - viewMessages append-only, 索引不失效
-    std::unordered_map<std::string, size_t> toolCallHistoryIndex_;
+    /// - 记 id 而不是下标: 展示历史窗口会淘汰旧行, 下标会整体前移
+    std::unordered_map<std::string, std::string> toolCallMsgIds_;
 
     /// tps (token/s) 统计: 从每次 ModelCall 流式开始 (节点开始后首个 token) 计时,
     /// 累计估算 token 数, 每 [tpsPushIntervalSec_] 秒推送一次到对端 (WireContextStats.tps)

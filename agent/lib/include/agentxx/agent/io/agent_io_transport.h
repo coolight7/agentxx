@@ -112,11 +112,14 @@ struct WireProtocol {
     /// - v4: 展示历史单写者 (`stream_begin` / `text_token` / `thinking_token` /
     ///   `insert_message` / `update_message` / `stream_end` 六个消息级 op,
     ///   消息 id 必填; 删除了 `tool_start` / `tool_end` / `TurnStart.text` 等旧字段)
-    inline static constexpr int kVersion = 4;
+    // - v5: 展示历史窗口化 —— 删除链式哈希 (`tailHash`), 新增
+    ///   `WireHello.historyTail` (客户端声明首次接入要多少条历史)
+    inline static constexpr int kVersion = 5;
     /// 兼容的最低版本
     /// - v4 起不再接受旧对端: 旧版客户端自行拼装消息 (无 id、靠 ToolEnd 回扫),
     ///   新版不再下发那些增量, 连上也无法正确显示
-    inline static constexpr int kMinVersion = 4;
+    /// - v5 起同样不兼容 v4: 展示历史的下标空间与快照字段变了
+    inline static constexpr int kMinVersion = 5;
 
     /// 对端版本与本端可接受范围的关系
     enum class VersionCheck {
@@ -199,12 +202,18 @@ struct WireHello {
     std::string sessionId;
     std::string token;
     uint64_t    lastSeq = 0;
-    std::string tailHash;
     std::string model;
     std::string language = "en"; ///< 界面/客户端指定使用的语言 (默认 "en", 不支持 auto)
     /// 已持有的展示历史序号: >0 时服务端按"该序号之后的消息"增量补拉
     /// (见 WireSyncPayload::incremental), 0 = 未提供 (完整/尾窗同步)
     uint64_t afterViewSeq = 0;
+    /// 首次接入/切换会话时希望的展示历史尾窗条数
+    /// - `-1` = 未声明 (用服务端默认值 `initialSyncTailCount`)
+    /// - `0`  = 完整同步 (stdio / jsonl / FFI 等没有"向上翻页"的界面)
+    /// - `>0` = 只下发末尾这么多条, 更早的由 `get_view_messages` 按页拉取
+    /// - 服务端记住该值, 之后每次 Sync (含切换会话) 都用它
+    /// - 声明值超过会话历史时自然退化为完整同步; JSON 不携带该字段时为 -1
+    int32_t historyTail = -1;
     /// 协议版本: 客户端按自身实现上报; 老客户端缺字段 → 0
     int protocolVersion = WireProtocol::kVersion;
     /// 客户端能力声明 (取值见 [WireProtocol]; 缺省 = 老客户端, 服务端按最保守处理)
@@ -214,7 +223,6 @@ struct WireHello {
 struct WireHelloAck {
     bool                     ok = false;
     std::string              sessionId;
-    std::string              tailHash;
     std::vector<std::string> models;
     /// 拒绝原因 (仅 ok=false 时有值; 如协议版本不受支持)
     std::string error;
@@ -859,7 +867,7 @@ public:
     virtual bool alive() const noexcept = 0;
 
     /// 会话切换通知: 更新客户端重连时握手携带的 sessionId, 并复位增量重放状态
-    /// (新会话的 delta seq 独立编号, 旧会话的 seq/tailHash 不再适用)。
+    /// (新会话的 delta seq 独立编号, 旧会话的 seq 不再适用)。
     /// - WS 客户端模式: 覆写实现 (见 WsAgentIOTransport)
     /// - Channel/服务端模式: 无重连, 默认 no-op
     /// 线程安全: 可从任意线程调用 (实现内部投递回自身 executor)

@@ -110,6 +110,7 @@ asio::awaitable<bool> WsAgentIOTransport::connect(const WireHello& hello) {
     // 记录 sessionId 供重连时复用
     helloSessionId_ = hello.sessionId;
     helloLanguage_  = hello.language;
+    helloHistoryTail_ = hello.historyTail;
     // 协议版本与能力声明: 重连时沿用同一份声明
     helloProtocolVersion_ = hello.protocolVersion;
     helloCapabilities_    = hello.capabilities;
@@ -120,7 +121,7 @@ asio::awaitable<bool> WsAgentIOTransport::connect(const WireHello& hello) {
         hello.sessionId,
         hello.token,
         hello.lastSeq,
-        hello.tailHash,
+        hello.historyTail,
         hello.language,
         hello.afterViewSeq,
         hello.protocolVersion,
@@ -215,9 +216,9 @@ void WsAgentIOTransport::updateReconnectSessionId(std::string newSessionId) {
         // 服务端模式不存在重连握手, 无需处理
         return;
     }
-    // helloSessionId_/lastDeltaSeq_/lastTailHash_ 仅由 ex_ 线程访问
+    // helloSessionId_/lastDeltaSeq_/helloHistoryTail_ 仅由 ex_ 线程访问
     // (connect() 与 readLoop 重连路径), 投递回 ex_ 线程更新避免数据竞争。
-    // 会话切换后新会话的 delta seq 独立编号, 旧的 seq/tailHash 不再适用,
+    // 会话切换后新会话的 delta seq 独立编号, 旧的 seq 不再适用,
     // 一并复位: 重连时 lastSeq=0 使服务端回退完整 Sync
     auto self = shared_from_this();
     asio::dispatch(ex_, [self, tid = std::move(newSessionId)]() {
@@ -228,7 +229,6 @@ void WsAgentIOTransport::updateReconnectSessionId(std::string newSessionId) {
         // 展示历史序号同属旧会话: 一并复位, 重连时不请求增量补拉
         self->lastViewSeq_.store(0, std::memory_order_release);
         self->lastDeltaSeq_.store(0, std::memory_order_release);
-        self->lastTailHash_.clear();
     });
 }
 
@@ -372,7 +372,6 @@ asio::awaitable<void> WsAgentIOTransport::readLoop() {
                 ) {
                 }
             } else if (auto* sync = std::get_if<WireSyncPayload>(&wireMsg.value())) {
-                lastTailHash_ = sync->tailHash;
                 // 展示历史序号: 记录快照末尾序号, 重连时按它请求增量补拉
                 if (sync->lastViewSeq > 0) {
                     lastViewSeq_.store(sync->lastViewSeq, std::memory_order_release);
@@ -457,7 +456,7 @@ asio::awaitable<void> WsAgentIOTransport::readLoop() {
                 helloSessionId_,
                 token_,
                 lastDeltaSeq_.load(std::memory_order_acquire),
-                lastTailHash_,
+                helloHistoryTail_,
                 helloLanguage_,
                 lastViewSeq_.load(std::memory_order_acquire),
                 helloProtocolVersion_,

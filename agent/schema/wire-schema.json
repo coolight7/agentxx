@@ -1,5 +1,5 @@
 {
-  "protocolVersion": 4,
+  "protocolVersion": 5,
   "messageCount": 48,
   "note": "生成物, 请勿手工编辑; 重新生成: AGENTXX_UPDATE_WIRE_SCHEMA=1 agentxx_test wire_schema",
   "messages": [
@@ -12,7 +12,7 @@
         "sessionId": "string",
         "token": "string",
         "lastSeq": "integer",
-        "tailHash": "string",
+        "historyTail": "integer",
         "language": "string",
         "afterViewSeq": "integer",
         "protocolVersion": "integer",
@@ -23,10 +23,10 @@
         "sessionId": "sess-中文-1",
         "token": "token-abc",
         "lastSeq": 42,
-        "tailHash": "deadbeef",
+        "historyTail": 100,
         "language": "zh-cn",
         "afterViewSeq": 128,
-        "protocolVersion": 4,
+        "protocolVersion": 5,
         "capabilities": [
           "input.delivery",
           "ui.form"
@@ -41,7 +41,6 @@
         "type": "string",
         "ok": "boolean",
         "sessionId": "string",
-        "tailHash": "string",
         "models": "array<string>",
         "protocolVersion": "integer",
         "capabilities": "array<string>",
@@ -53,12 +52,11 @@
         "type": "hello_ack",
         "ok": true,
         "sessionId": "sess-中文-1",
-        "tailHash": "deadbeef",
         "models": [
           "gpt-x",
           "claude-y"
         ],
-        "protocolVersion": 4,
+        "protocolVersion": 5,
         "capabilities": [
           "input.delivery",
           "input.ack",
@@ -269,7 +267,6 @@
       "type": "sync",
       "fields": {
         "fromIndex": "integer",
-        "tailHash": "string",
         "deltaSeq": "integer",
         "totalMessages": "integer",
         "lastViewSeq": "integer",
@@ -281,7 +278,6 @@
       },
       "sample": {
         "fromIndex": 0,
-        "tailHash": "deadbeef",
         "deltaSeq": 7,
         "totalMessages": 1,
         "lastViewSeq": 5,

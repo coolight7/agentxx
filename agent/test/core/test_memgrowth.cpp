@@ -119,8 +119,8 @@ ContainerSnapshot snapshotContainers(
     ContainerSnapshot out;
     auto              session = ctx->sessions->get(sessionId);
     if (session) {
-        out.fullHistoryCount = session->viewMessages.size();
-        out.fullHistoryBytes = estimateHistoryBytes(session->viewMessages);
+        out.fullHistoryCount = session->viewWindow().size();
+        out.fullHistoryBytes = estimateHistoryBytes(session->viewWindow());
         out.llmMsgCount      = session->llmMessagesJson().size();
         out.llmMsgBytes      = estimateJsonBytes(session->llmMessagesJson());
     }

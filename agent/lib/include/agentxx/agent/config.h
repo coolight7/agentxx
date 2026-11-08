@@ -545,6 +545,17 @@ public:
     bool enableSessionStore            = false;
     bool websearchConvertHtml2markdown = true;
 
+    /// 展示历史常驻条数上限 (yaml `session.view_window_messages`, 默认 400)
+    ///
+    /// - 展示历史无论是写入还是重启恢复都不再把全部消息留在内存: 会话只常驻
+    ///   末尾 N 条, 更早的消息按需从 `session.db` 的 `view_message` 表按行号区间
+    ///   读回来 (界面向下滚动加载更多时经 `WireGetViewMessages` 逐页拉取)
+    /// - 0 = 不淘汰 (老行为); 只在启用会话持久化时生效 —— 内存模式下去掉就是
+    ///   真的丢了, 所以强制保留全部
+    /// - 只按条数不按字节: 单条消息大小差异很大 (带附件/工具长输出),
+    ///   按字节封顶会让窗口条数忽大忽小, 分页体验不稳定
+    size_t sessionViewWindowMessages = 400;
+
     /// 在向 llm api 发起请求之前，自动检查 [messages] 是否符合 utf-8 编码、角色顺序等要求
     bool repairMessages = true;
 

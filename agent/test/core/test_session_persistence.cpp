@@ -227,9 +227,9 @@ static TestResult testViewMessagesRoundtrip() {
     // 清理
     removeTempRoot(root);
 
-    // ---- 视觉为空的消息 (零宽占位符) 不进展示历史 ----
-    // 模型偶尔把 U+200B 当正文输出并独占一条消息; 这种消息在界面上就是一块
-    // 看不见内容的空白。加载时过滤掉, 但已占用的消息 id 不能倒退。
+    // ---- 视觉为空的消息 (零宽占位符) 照样占位 ----
+    // 窗口化后读取期不再过滤它们: 每一行都占一个绝对下标, 读取时过滤会让后续
+    // 下标整体前移, 分页的页长与请求就对不上; 表格里不显示由客户端决定
     {
         auto root3 = makeTempRoot();
         auto p     = std::make_shared<SessionStore>(root3);
@@ -268,21 +268,25 @@ static TestResult testViewMessagesRoundtrip() {
         }
 
         auto loaded = std::make_shared<SessionStore>(root3)->loadSession("t-blank");
-        XX_TEST_EXPECT_EQ(loaded.viewMessages.size(), size_t{3});
-        if (loaded.viewMessages.size() == 3) {
-            XX_TEST_EXPECT_EQ(loaded.viewMessages[0].text, "hello");
-            XX_TEST_EXPECT_EQ(loaded.viewMessages[1].think->reasoningTokens, 42);
-            XX_TEST_EXPECT_EQ(loaded.viewMessages[2].text, "real thought");
-            XX_TEST_EXPECT_EQ(loaded.viewMessages[2].durationMs, int64_t{3300});
+        XX_TEST_EXPECT_EQ(loaded.viewMessages.size(), size_t{6});
+        if (loaded.viewMessages.size() == 6) {
+            XX_TEST_EXPECT_EQ(loaded.viewMessages[0].text, "\xE2\x80\x8B");
+            XX_TEST_EXPECT_EQ(loaded.viewMessages[1].text, "hello");
+            XX_TEST_EXPECT_EQ(loaded.viewMessages[4].think->reasoningTokens, 42);
+            XX_TEST_EXPECT_EQ(loaded.viewMessages[5].text, "real thought");
+            XX_TEST_EXPECT_EQ(loaded.viewMessages[5].durationMs, int64_t{3300});
         }
-        // 被过滤的消息也占过 id: 计数不能小于实际分配过的数量
         XX_TEST_EXPECT_TRUE(loaded.msgIdCounter >= uint64_t{6});
 
-        // 增量补拉 (翻页) 走同一过滤规则
+        // 增量补拉 (翻页) 与按页读取走同一规则: 不过滤
         auto rows = std::make_shared<SessionStore>(root3)->loadViewMessagesAfter("t-blank", 0);
-        XX_TEST_EXPECT_EQ(rows.size(), size_t{3});
-        for (const auto& row : rows) {
-            XX_TEST_EXPECT_FALSE(row.message.text == "\xE2\x80\x8B");
+        XX_TEST_EXPECT_EQ(rows.size(), size_t{6});
+
+        auto page = std::make_shared<SessionStore>(root3)->loadViewMessagesPage("t-blank", 0, 6);
+        XX_TEST_EXPECT_EQ(page.size(), size_t{6});
+        if (page.size() == 6) {
+            XX_TEST_EXPECT_EQ(page[1].text, "hello");
+            XX_TEST_EXPECT_EQ(page[5].text, "real thought");
         }
 
         removeTempRoot(root3);
@@ -560,14 +564,14 @@ static TestResult testUpdateHistoryPersistence() {
         auto toolId    = s1->appendViewMessage(std::move(toolMsg));
 
         // 模拟 tool 结果回填: 走 Session::updateViewMessage (触发 onUpdateViewMessage 落库)
-        auto& stored              = s1->viewMessages.back();
+        V stored                  = s1->viewWindow().back();
         stored.tool->toolResult   = "file content";
         stored.tool->toolFinished = true;
         stored.collapsed          = true;
         s1->updateViewMessage(stored);
 
         // 内存中已完成
-        XX_TEST_EXPECT_TRUE(s1->viewMessages.back().tool->toolFinished);
+        XX_TEST_EXPECT_TRUE(s1->viewWindow().back().tool->toolFinished);
         // 模拟轮末统一补存 (节流窗口内的 append/update 落库)
         s1->flushViewMessages();
 
@@ -576,8 +580,8 @@ static TestResult testUpdateHistoryPersistence() {
         auto store2          = std::make_shared<agentxx::agent::SessionsManager>();
         store2->sessionStore = p2;
         auto s2              = store2->getOrCreate("thread-upd");
-        XX_TEST_EXPECT_EQ(s2->viewMessages.size(), size_t{2});
-        const auto& toolMsg2 = s2->viewMessages[1];
+        XX_TEST_EXPECT_EQ(s2->viewWindow().size(), size_t{2});
+        const auto& toolMsg2 = s2->viewWindow()[1];
         XX_TEST_EXPECT_EQ(toolMsg2.id, toolId);
         XX_TEST_EXPECT_TRUE(toolMsg2.tool.has_value());
         if (toolMsg2.tool) {
@@ -585,8 +589,8 @@ static TestResult testUpdateHistoryPersistence() {
             XX_TEST_EXPECT_EQ(toolMsg2.tool->toolResult, std::string{"file content"});
         }
 
-        // 链式哈希不受 updateViewMessage 影响 (历史内容语义不变)
-        XX_TEST_EXPECT_EQ(s2->getHashInfo().count, size_t{2});
+        // 回填后内存里就已是完整行, 重启不需要再靠哈希对账
+        XX_TEST_EXPECT_EQ(s2->viewMessageCount(), size_t{2});
 
         // 不存在的 id: 仅记日志, 不崩溃
         V bogus  = ViewMessage::makeText(V::Role::User, "x");
@@ -624,8 +628,8 @@ static TestResult testSessionStoreIntegration() {
         s1->saveLlmMessages();
         // 模拟轮末统一补存 (节流窗口内的 append 落库)
         s1->flushViewMessages();
-        auto hash1 = s1->getHashInfo();
-        XX_TEST_EXPECT_EQ(hash1.count, size_t{3});
+        XX_TEST_EXPECT_EQ(s1->viewMessageCount(), size_t{3});
+        XX_TEST_EXPECT_EQ(s1->lastViewSeq(), uint64_t{3});
 
         // ---- 第二次"运行" (模拟重启): 新建 store + sessionStore ----
         auto p2              = std::make_shared<SessionStore>(root);
@@ -633,14 +637,14 @@ static TestResult testSessionStoreIntegration() {
         store2->sessionStore = p2;
 
         auto s2 = store2->getOrCreate("thread-a");
-        XX_TEST_EXPECT_EQ(s2->viewMessages.size(), size_t{3});
-        XX_TEST_EXPECT_EQ(s2->viewMessages[0].id, std::string{"msg_000001"});
-        XX_TEST_EXPECT_EQ(s2->viewMessages[1].id, std::string{"msg_000002"});
-        XX_TEST_EXPECT_EQ(s2->viewMessages[2].tool.has_value(), true);
-        // 链式哈希一致 (恢复重建 == 追加计算)
-        auto hash2 = s2->getHashInfo();
-        XX_TEST_EXPECT_EQ(hash2.count, hash1.count);
-        XX_TEST_EXPECT_EQ(hash2.tailHex, hash1.tailHex);
+        XX_TEST_EXPECT_EQ(s2->viewWindow().size(), size_t{3});
+        XX_TEST_EXPECT_EQ(s2->viewWindow()[0].id, std::string{"msg_000001"});
+        XX_TEST_EXPECT_EQ(s2->viewWindow()[1].id, std::string{"msg_000002"});
+        XX_TEST_EXPECT_EQ(s2->viewWindow()[2].tool.has_value(), true);
+        // 恢复后总数与最后序号一致 (没有链式哈希了, 直接对序号)
+        XX_TEST_EXPECT_EQ(s2->viewMessageCount(), size_t{3});
+        XX_TEST_EXPECT_EQ(s2->lastViewSeq(), uint64_t{3});
+        XX_TEST_EXPECT_EQ(s2->viewWindowBase(), size_t{0});
         // LLM 上下文恢复
         XX_TEST_EXPECT_TRUE(s2->llmMessagesJson().is_array());
         XX_TEST_EXPECT_EQ(s2->llmMessagesJson().size(), size_t{2});
@@ -653,17 +657,17 @@ static TestResult testSessionStoreIntegration() {
         auto store3          = std::make_shared<agentxx::agent::SessionsManager>();
         store3->sessionStore = p3;
         auto s3              = store3->getOrCreate("thread-a");
-        XX_TEST_EXPECT_EQ(s3->viewMessages.size(), size_t{4});
-        XX_TEST_EXPECT_EQ(s3->viewMessages[3].text, std::string{"a2"});
-        XX_TEST_EXPECT_EQ(s3->getHashInfo().count, size_t{4});
+        XX_TEST_EXPECT_EQ(s3->viewWindow().size(), size_t{4});
+        XX_TEST_EXPECT_EQ(s3->viewWindow()[3].text, std::string{"a2"});
+        XX_TEST_EXPECT_EQ(s3->viewMessageCount(), size_t{4});
         // 计数延续
         auto newId2 = s3->appendViewMessage(ViewMessage::makeText(V::Role::User, "u3"));
         XX_TEST_EXPECT_EQ(newId2, std::string{"msg_000005"});
 
         // ---- 不同 thread 互不影响 ----
         auto sOther = store3->getOrCreate("thread-b");
-        XX_TEST_EXPECT_EQ(sOther->viewMessages.size(), size_t{0});
-        XX_TEST_EXPECT_EQ(sOther->getHashInfo().count, size_t{0});
+        XX_TEST_EXPECT_EQ(sOther->viewWindow().size(), size_t{0});
+        XX_TEST_EXPECT_EQ(sOther->viewMessageCount(), size_t{0});
     }
     removeTempRoot(root);
     return TestResult{};
@@ -1114,9 +1118,9 @@ static asio::awaitable<void> testSessionPersistenceE2E() {
 
             // 内存 viewMessages: user + Think(tool_calls 展开) + Tool
             auto sess = agent.agentContext->getSession("e2e-thread");
-            XX_TEST_EXPECT_TRUE(sess->viewMessages.size() >= size_t{3});
+            XX_TEST_EXPECT_TRUE(sess->viewWindow().size() >= size_t{3});
             bool thinkingInMemory = false;
-            for (const auto& vm : sess->viewMessages) {
+            for (const auto& vm : sess->viewWindow()) {
                 if (vm.role == agentxx::agent::ViewMessage::Role::Think
                     && vm.text == "E2E reasoning before tool call") {
                     thinkingInMemory = true;
@@ -1147,27 +1151,27 @@ static asio::awaitable<void> testSessionPersistenceE2E() {
             // 展示历史恢复: user + Think + Tool + Assistant(收尾文本);
             // Think 是本次修复的核心断言, 修复前 tool_calls 分支不展开 Think,
             // 重启后 Think 丢失
-            XX_TEST_EXPECT_EQ(sess->viewMessages.size(), size_t{4});
-            XX_TEST_EXPECT_EQ(sess->viewMessages[0].id, std::string{"msg_000001"});
-            XX_TEST_EXPECT_EQ(sess->viewMessages[0].text, std::string{"Hello"});
+            XX_TEST_EXPECT_EQ(sess->viewWindow().size(), size_t{4});
+            XX_TEST_EXPECT_EQ(sess->viewWindow()[0].id, std::string{"msg_000001"});
+            XX_TEST_EXPECT_EQ(sess->viewWindow()[0].text, std::string{"Hello"});
             XX_TEST_EXPECT_TRUE(
-                sess->viewMessages[1].role == agentxx::agent::ViewMessage::Role::Think
+                sess->viewWindow()[1].role == agentxx::agent::ViewMessage::Role::Think
             );
             XX_TEST_EXPECT_EQ(
-                sess->viewMessages[1].text,
+                sess->viewWindow()[1].text,
                 std::string{"E2E reasoning before tool call"}
             );
-            XX_TEST_EXPECT_TRUE(sess->viewMessages[1].collapsed);
-            XX_TEST_EXPECT_TRUE(sess->viewMessages[1].startTimeMs > 0);
-            XX_TEST_EXPECT_TRUE(sess->viewMessages[1].durationMs > 0);
+            XX_TEST_EXPECT_TRUE(sess->viewWindow()[1].collapsed);
+            XX_TEST_EXPECT_TRUE(sess->viewWindow()[1].startTimeMs > 0);
+            XX_TEST_EXPECT_TRUE(sess->viewWindow()[1].durationMs > 0);
             XX_TEST_EXPECT_TRUE(
-                sess->viewMessages[2].role == agentxx::agent::ViewMessage::Role::Tool
+                sess->viewWindow()[2].role == agentxx::agent::ViewMessage::Role::Tool
             );
             // 收尾 assistant 消息 (带内容) 同样可持久化恢复
             XX_TEST_EXPECT_TRUE(
-                sess->viewMessages[3].role == agentxx::agent::ViewMessage::Role::Assistant
+                sess->viewWindow()[3].role == agentxx::agent::ViewMessage::Role::Assistant
             );
-            XX_TEST_EXPECT_EQ(sess->viewMessages[3].text, std::string{"E2E final answer"});
+            XX_TEST_EXPECT_EQ(sess->viewWindow()[3].text, std::string{"E2E final answer"});
             // LLM 上下文恢复 (system + user + assistant(tool_calls) + tool + assistant)
             XX_TEST_EXPECT_TRUE(sess->llmMessagesJson().is_array());
             XX_TEST_EXPECT_TRUE(sess->llmMessagesJson().size() >= size_t{2});
@@ -1245,9 +1249,9 @@ static asio::awaitable<void> testTurnEndTipPersistenceRoundtrip() {
             XX_TEST_EXPECT_TRUE(sess != nullptr);
             if (sess) {
                 // 内存中消息: User + Assistant + Tip (轮次统计: 模型名 · 耗时 · 时间点)
-                XX_TEST_EXPECT_EQ(sess->viewMessages.size(), size_t{3});
-                if (sess->viewMessages.size() >= 3) {
-                    const auto& tipMsg = sess->viewMessages.back();
+                XX_TEST_EXPECT_EQ(sess->viewWindow().size(), size_t{3});
+                if (sess->viewWindow().size() >= 3) {
+                    const auto& tipMsg = sess->viewWindow().back();
                     XX_TEST_EXPECT_EQ(tipMsg.role, agentxx::agent::ViewMessage::Role::Tip);
                     XX_TEST_EXPECT_TRUE(tipMsg.text.find("test-model-xyz") != std::string::npos);
                     XX_TEST_EXPECT_TRUE(tipMsg.tip.has_value());
@@ -1269,17 +1273,17 @@ static asio::awaitable<void> testTurnEndTipPersistenceRoundtrip() {
             auto sess = agent.agentContext->getSession("turn-tip-thread");
             XX_TEST_EXPECT_TRUE(sess != nullptr);
             if (sess) {
-                XX_TEST_EXPECT_EQ(sess->viewMessages.size(), size_t{3});
-                if (sess->viewMessages.size() >= 3) {
+                XX_TEST_EXPECT_EQ(sess->viewWindow().size(), size_t{3});
+                if (sess->viewWindow().size() >= 3) {
                     XX_TEST_EXPECT_EQ(
-                        sess->viewMessages[0].role,
+                        sess->viewWindow()[0].role,
                         agentxx::agent::ViewMessage::Role::User
                     );
                     XX_TEST_EXPECT_EQ(
-                        sess->viewMessages[1].role,
+                        sess->viewWindow()[1].role,
                         agentxx::agent::ViewMessage::Role::Assistant
                     );
-                    const auto& tipMsg = sess->viewMessages[2];
+                    const auto& tipMsg = sess->viewWindow()[2];
                     XX_TEST_EXPECT_EQ(tipMsg.role, agentxx::agent::ViewMessage::Role::Tip);
                     XX_TEST_EXPECT_TRUE(tipMsg.text.find("test-model-xyz") != std::string::npos);
                     XX_TEST_EXPECT_TRUE(tipMsg.tip.has_value());
@@ -1625,7 +1629,7 @@ static TestResult testPendingViewOpsIndexReplay() {
         // 节流窗口内: 追加第二条 + 两次更新 (均进入队列, 不立即落库)
         auto        id2 = sess->appendViewMessage(makeMsg(V::Role::Tool, "tool-running"));
         const auto* m2  = [&]() -> const V* {
-            for (const auto& m : sess->viewMessages) {
+            for (const auto& m : sess->viewWindow()) {
                 if (m.id == id2) {
                     return &m;
                 }
@@ -1667,7 +1671,7 @@ static TestResult testPendingViewOpsIndexReplay() {
         auto idA = sess->appendViewMessage(makeMsg(V::Role::Tool, "a"));
         auto idB = sess->appendViewMessage(makeMsg(V::Role::Tool, "b"));
         for (const auto& id : {idA, idB, idA, idB}) {
-            for (const auto& m : sess->viewMessages) {
+            for (const auto& m : sess->viewWindow()) {
                 if (m.id == id) {
                     auto copy = m;
                     sess->updateViewMessage(copy);
@@ -1706,7 +1710,7 @@ static TestResult testPendingViewOpsIndexReplay() {
         sess->flushViewMessages();
         XX_TEST_EXPECT_EQ(appendCalls, 1); // 未回放被丢弃的排队操作
         XX_TEST_EXPECT_EQ(updateCalls, 0);
-        XX_TEST_EXPECT_EQ(sess->viewMessages.size(), size_t{1});
+        XX_TEST_EXPECT_EQ(sess->viewWindow().size(), size_t{1});
     }
 
     return TestResult{};

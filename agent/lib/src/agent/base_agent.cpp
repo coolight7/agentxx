@@ -89,6 +89,8 @@ BaseAgent::BaseAgent(std::shared_ptr<agentxx::agent::AgentConfig> in_config) {
                 root = agentxx::agent::AgentConfigStatic::getSessionsDir(in_config->dataDir);
             }
             agentContext->sessions->sessionStore = std::make_shared<SessionStore>(std::move(root));
+            // 展示历史常驻窗口: 只在有会话库时生效 (内存模式下去掉就真的丢了)
+            agentContext->sessions->viewWindowMessages = in_config->sessionViewWindowMessages;
         } else {
             XX_LOGD("Session store disabled: dataDir not set and sessionStoreDirectory empty "
                     "(in-memory only)");
@@ -405,6 +407,10 @@ asio::awaitable<void> BaseAgent::init() {
                 = std::make_shared<agentxx::util::TaskScope>(co_await asio::this_coro::executor);
             // 关键指标: 与总线同一生命周期, 诊断包/快照可读
             agentContext->metrics = std::make_shared<agentxx::util::KeyMetrics>();
+            // 会话侧也要记账 (展示历史窗口的分页/淘汰计数要进同一份指标)
+            if (agentContext->sessions) {
+                agentContext->sessions->metrics = agentContext->metrics;
+            }
             co_return;
         },
         .rollback =

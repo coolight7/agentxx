@@ -71,7 +71,7 @@ public:
     bool alive() const noexcept override;
 
     /// 会话切换: 更新重连握手的 sessionId 并复位增量重放状态
-    /// (新会话 delta seq 独立编号, 旧会话 seq/tailHash 不再适用)。
+    /// (新会话 delta seq 独立编号, 旧会话的 seq 不再适用)。
     /// 投递到 ex_ 线程执行 (与 readLoop 重连路径同线程, 无数据竞争)
     void updateReconnectSessionId(std::string newThreadId) override;
 
@@ -131,9 +131,10 @@ private:
     std::atomic<uint64_t> lastDeltaSeq_{0};
     /// 已持有的展示历史序号 (由 Sync 快照更新, 重连时经 hello 回传)
     std::atomic<uint64_t> lastViewSeq_{0};
-    std::string           lastTailHash_;
     std::string           helloSessionId_; // 首次 connect 时的 sessionId, 重连时复用
     std::string           helloLanguage_;  // 首次 connect 时的 language, 重连时复用
+    /// 首次 connect 时声明的展示历史尾窗条数, 重连时复用 (见 WireHello::historyTail)
+    int32_t helloHistoryTail_ = -1;
     /// 首次 connect 时的协议版本与能力声明, 重连时复用
     int                         helloProtocolVersion_ = 0;
     std::vector<std::string>    helloCapabilities_;

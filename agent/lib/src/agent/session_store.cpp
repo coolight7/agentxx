@@ -24,18 +24,6 @@ namespace {
 /// - Windows 默认 MAX_PATH=260, 需控制单段长度
 static constexpr size_t kMaxSessionDataDirLen = 96;
 
-/// 加载展示历史时是否保留该消息
-///
-/// 只含空白/零宽占位符的正文 (典型: 模型把 U+200B 当正文输出, 独占一条
-/// assistant 消息) 不进展示历史 —— 客户端每条消息都带一行尾部空行, 这种
-/// 看不见内容的消息就变成一块多余空白 (看起来像消息间距异常变大)。
-/// 同一判定在消息模型上 (see [ViewMessage::hasVisibleContent]): 写入侧
-/// (事件桥)、客户端插入侧与渲染层共用同一份规则, 两边不会出现"实况显示、
-/// 重拉历史后消失"的差异。
-static bool isDisplayableViewMessage(const ViewMessage& msg) {
-    return msg.hasVisibleContent();
-}
-
 /// 清掉从库里读回的提示消息的"运行中"标记
 ///
 /// `running` 表示界面在该提示的折叠标记处显示加载动画 (如"正在压缩上下文")。
@@ -622,7 +610,7 @@ bool SessionStore::sessionDataDirExists(std::string_view sessionId) const {
     return fs::exists(fs::path(rootDir_) / sanitizeSessionId(sessionId), ec);
 }
 
-SessionStore::LoadedSession SessionStore::loadSession(std::string_view sessionId) {
+SessionStore::LoadedSession SessionStore::loadSession(std::string_view sessionId, size_t tailCount) {
     LoadedSession out;
     // 只读路径: 用临时连接直接读文件, 不获取写租约
     // - 另一进程正在写该会话 (持有写租约) 时, 本进程仍可读取历史, 不会因
@@ -672,24 +660,31 @@ SessionStore::LoadedSession SessionStore::loadSession(std::string_view sessionId
     //   丢失", 且后续 saveLlmMessages 会用新上下文覆盖库内旧数据 (不可恢复)
     // - 展示历史 / LLM 上下文 / meta 三段各自独立捕获, 一段失败不影响其余
     //   (三段共用上面打开的只读连接 [db])
-    /// 解析成功的展示消息行数 (含因视觉为空被过滤掉的; msgIdCounter 的默认值)
-    size_t parsedRows = 0;
     agentxx::util::catchError<bool>(
         [&]() -> bool {
-            // 展示历史 (按追加顺序)
-            auto stmt = db.prepare("SELECT seq, json FROM view_message ORDER BY seq");
+            // 展示历史: 全量按追加顺序读; tailCount > 0 时只取末尾 tailCount 条
+            // (倒序 LIMIT 再反转, 只读尾部 N 行, 不扫全表也不解析整份历史)
+            auto stmt = tailCount > 0
+                            ? db.prepare("SELECT seq, json FROM view_message "
+                                         "ORDER BY seq DESC LIMIT ?")
+                            : db.prepare("SELECT seq, json FROM view_message ORDER BY seq");
+            if (tailCount > 0) {
+                stmt.bindInt64(1, static_cast<int64_t>(tailCount));
+            }
+            bool sawRow = false;
             while (stmt.step()) {
                 const auto jsonText = stmt.columnText(1);
+                const auto seq      = static_cast<uint64_t>(stmt.columnInt64(0));
                 agentxx::util::catchError<bool>(
                     [&]() -> bool {
                         auto j   = utilxx_base::Json::parse(jsonText);
                         auto msg = ViewMessage::fromJson(j);
                         clearRunningTipFlag(msg); // 历史消息: 提示不可能还在运行中
-                        // 解析成功的行都计入总数 (下面 msgIdCounter 的默认值:
-                        // 消息 id 按追加顺序连续分配, 被过滤的消息也曾占一个 id)
-                        ++parsedRows;
-                        if (!isDisplayableViewMessage(msg)) {
-                            return true;
+                        // 每一行都保留 (含视觉为空的行): 它们同样占一个绝对下标,
+                        // 读取期过滤会让后续下标整体前移, 分页页长与请求就对不上
+                        if (!sawRow) {
+                            sawRow              = true;
+                            out.viewWindowBase = seq - 1;
                         }
                         out.viewMessages.push_back(std::move(msg));
                         return true;
@@ -698,12 +693,16 @@ SessionStore::LoadedSession SessionStore::loadSession(std::string_view sessionId
                         XX_LOGW(
                             "SessionStore: loadSession({}) 跳过无法解析的历史消息 (seq={}): {}",
                             sessionId,
-                            stmt.columnInt64(0),
+                            seq,
                             errmsg
                         );
                         return false;
                     }
                 );
+            }
+            if (tailCount > 0) {
+                // 倒序读取的结果反转为追加顺序 (窗口内下标连续)
+                std::reverse(out.viewMessages.begin(), out.viewMessages.end());
             }
             return true;
         },
@@ -749,20 +748,23 @@ SessionStore::LoadedSession SessionStore::loadSession(std::string_view sessionId
             return false;
         }
     );
-    // 回退: 老数据无 msgIdCounter 记录时按历史条数恢复
-    // (历史 append-only, id 连续分配, 条数即最后序号;
-    //  用解析行数而非保留条数 —— 视觉为空而被过滤的消息也占过一个 id)
-    if (out.msgIdCounter == 0) {
-        out.msgIdCounter = parsedRows > 0 ? parsedRows : out.viewMessages.size();
-    }
-    // 回退: 老数据无 viewSeqCounter 记录时取库内最大行序号 (Session::restore 亦会
-    // 按历史条数推算, 二者一致: 老库行序号即追加顺序 1..N)
-    if (out.lastViewSeq == 0) {
+    // 回退: 老数据没有 msgIdCounter / viewSeqCounter 记录时按库内行数恢复
+    // - 必须走 SQL 统计, **不能**用"解析行数": 只读尾窗时读到的行数不等于总行数
+    // - 历史 append-only 且取显式 seq, `MAX(seq)` 就是总条数与最后分配的 id 序号
+    if (out.msgIdCounter == 0 || out.lastViewSeq == 0) {
         agentxx::util::catchError<bool>(
             [&]() -> bool {
-                auto stmt = db.prepare("SELECT COALESCE(MAX(seq), 0) FROM view_message");
+                auto stmt
+                    = db.prepare("SELECT COUNT(*), COALESCE(MAX(seq), 0) FROM view_message");
                 if (stmt.step()) {
-                    out.lastViewSeq = static_cast<uint64_t>(stmt.columnInt64(0));
+                    const auto rowCount = static_cast<uint64_t>(stmt.columnInt64(0));
+                    const auto maxSeq   = static_cast<uint64_t>(stmt.columnInt64(1));
+                    if (out.lastViewSeq == 0) {
+                        out.lastViewSeq = maxSeq;
+                    }
+                    if (out.msgIdCounter == 0) {
+                        out.msgIdCounter = maxSeq > 0 ? maxSeq : rowCount;
+                    }
                 }
                 return true;
             },
@@ -1244,11 +1246,7 @@ std::vector<SessionStore::ViewMessageRow> SessionStore::loadViewMessagesAfter(
                         auto j       = utilxx_base::Json::parse(jsonText);
                         row.message  = ViewMessage::fromJson(j);
                         clearRunningTipFlag(row.message); // 同上: 历史消息不保留运行中标记
-                        // 视觉为空的消息不进展示历史 (与 loadSession 同一规则):
-                        // 翻页拉回旧数据时不应把空白消息带回来
-                        if (!isDisplayableViewMessage(row.message)) {
-                            return true;
-                        }
+                        // 不过滤视觉为空的行: 它同样占一个绝对下标 (见 loadSession)
                         out.push_back(std::move(row));
                         return true;
                     },
@@ -1268,6 +1266,91 @@ std::vector<SessionStore::ViewMessageRow> SessionStore::loadViewMessagesAfter(
         },
         [&](std::string errmsg) -> bool {
             XX_LOGE("SessionStore: loadViewMessagesAfter({}) failed: {}", sessionId, errmsg);
+            return false;
+        }
+    );
+    return out;
+}
+
+// ---------------------------------------------------------------------------
+// 展示历史按页读取 (窗口化后更早的页只能从库里取)
+// ---------------------------------------------------------------------------
+
+std::vector<ViewMessage> SessionStore::loadViewMessagesPage(
+    std::string_view sessionId,
+    uint64_t         startIndex,
+    uint32_t         count
+) {
+    std::vector<ViewMessage> out;
+    if (count == 0) {
+        return out;
+    }
+    // 只读路径: 目录不存在直接返回空 (不创建目录/不取写租约)
+    if (!sessionDataDirExists(sessionId)) {
+        return out;
+    }
+    const auto dbFile = fs::path(rootDir_) / sanitizeSessionId(sessionId) / "session.db";
+    agentxx::util::SqliteDb db;
+    const auto              opened = agentxx::util::catchError<bool>(
+        [&]() -> bool {
+            db.open(dbFile.string());
+            return true;
+        },
+        [&](std::string errmsg) -> bool {
+            XX_LOGW(
+                "SessionStore: loadViewMessagesPage({}) open {} failed: {}",
+                sessionId,
+                dbFile.string(),
+                errmsg
+            );
+            return false;
+        }
+    );
+    if (!opened) {
+        return out;
+    }
+    if (const int version = readSchemaVersion(db); version > kSchemaVersion) {
+        XX_LOGE(
+            "SessionStore: loadViewMessagesPage({}) refused: schema version {} is newer than "
+            "supported {}",
+            sessionId,
+            version,
+            kSchemaVersion
+        );
+        return out;
+    }
+    const int64_t endSeq = static_cast<int64_t>(startIndex) + static_cast<int64_t>(count);
+    agentxx::util::catchError<bool>(
+        [&]() -> bool {
+            auto stmt = db.prepare(
+                "SELECT json FROM view_message WHERE seq > ? AND seq <= ? ORDER BY seq"
+            );
+            stmt.bindInt64(1, static_cast<int64_t>(startIndex));
+            stmt.bindInt64(2, endSeq);
+            while (stmt.step()) {
+                const auto jsonText = stmt.columnText(0);
+                agentxx::util::catchError<bool>(
+                    [&]() -> bool {
+                        auto msg = ViewMessage::fromJson(utilxx_base::Json::parse(jsonText));
+                        clearRunningTipFlag(msg);
+                        out.push_back(std::move(msg));
+                        return true;
+                    },
+                    [&](std::string errmsg) -> bool {
+                        // 单行解析失败只跳过该行: 返回的条数会少于请求 (调用方按短页处理)
+                        XX_LOGW(
+                            "SessionStore: loadViewMessagesPage({}) 跳过无法解析的消息: {}",
+                            sessionId,
+                            errmsg
+                        );
+                        return false;
+                    }
+                );
+            }
+            return true;
+        },
+        [&](std::string errmsg) -> bool {
+            XX_LOGE("SessionStore: loadViewMessagesPage({}) failed: {}", sessionId, errmsg);
             return false;
         }
     );

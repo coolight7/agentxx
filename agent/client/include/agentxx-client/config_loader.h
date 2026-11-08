@@ -120,6 +120,9 @@ struct YamlAppConfig {
     /// 异步任务开关 (yaml `async_work.enable`, 默认 true)
     /// - 关 = 模型委派同步执行, 插件提交被拒
     bool enableAsyncWork = true;
+    /// 展示历史常驻条数上限 (yaml `session.view_window_messages`, 默认 400)
+    /// - 0 = 不淘汰; 仅在启用会话持久化时生效
+    int64_t sessionViewWindowMessages = 400;
     /// 每个队列的并发额度 (yaml `async_work.max_concurrent`, 默认 3)
     int64_t asyncWorkMaxConcurrent = 3;
     /// 后台任务的权限询问/中断策略 (yaml `async_work.interrupt_policy`, 默认 bubble)

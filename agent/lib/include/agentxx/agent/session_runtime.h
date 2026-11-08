@@ -94,9 +94,11 @@ public:
         /// 客户端 hello 携带的界面语言
         std::string language = "en";
 
-        /// hello 的断线重放参数 (0 / 空 = 从头同步)
-        uint64_t    lastSeq  = 0;
-        std::string tailHash;
+        /// hello 的断线重放参数 (0 = 从头同步) 与展示历史尾窗声明
+        /// - `historyTail` 见 [WireHello::historyTail]: -1 = 用服务端默认值,
+        ///   0 = 完整同步, >0 = 首屏只要末尾这么多条 (插件运行时通道用 -1)
+        uint64_t lastSeq     = 0;
+        int32_t  historyTail = -1;
 
         /// 客户端接收循环就绪后回调 (client io 线程): 调用方在此发 hello 与
         /// 首个查询 (如当前模型信息)

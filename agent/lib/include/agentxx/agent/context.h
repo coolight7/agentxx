@@ -99,6 +99,11 @@ struct SessionStoreHooks {
     /// 更新一条已持久化历史消息后调用 (msg 已含分配 id; 如 tool 结果回填)
     std::function<void(const ViewMessage&)> onUpdateViewMessage;
 
+    /// 读取展示历史页 `[start, start + count)` (绝对下标区间)
+    /// - 由会话在"请求的范围超出内存窗口"时调用 (窗口化后更早的页只能回库取)
+    /// - 实现见 [SessionStore::loadViewMessagesPage]; 无会话库时为空 (不淘汰)
+    std::function<std::vector<ViewMessage>(uint64_t start, uint32_t count)> onLoadViewPage;
+
     /// 保存 LLM 上下文消息 (每轮对话结束时调用)
     /// - 传入的是已序列化的 JSON 数组**文本**, 不是 DOM: 落盘只需要文本,
     ///   会话侧直接给出文本可以少构造一份与上下文等大的 DOM
@@ -163,10 +168,12 @@ enum class SessionActivity : uint8_t {
 /// 单个会话的独立状态 (按 sessionId 区分)
 /// - 设计目标：单线程/多协程交错执行多会话，会话间状态彼此隔离
 /// - io/bus/contextStats 在 agent 线程 (io_context) 上访问，无需额外同步
-/// - viewMessages/messages(上下文)/chainHash/cancelToken/modelName 仅在 ioContext 线程读写,
+/// - 展示历史窗口/messages(上下文)/cancelToken/modelName 仅在 ioContext 线程读写,
 ///   通过 bindIoThread() 绑定 io 线程, assertIoThread() 强制校验。
 ///   client/UI 不直接读取, 需要时由 io 线程拷贝后经 Wire 消息 (Sync/WireDelta) 传输,
 ///   因此无需快照/锁同步
+/// - 展示历史只常驻**尾部窗口** (见 [viewWindow]); 更早的页按需从会话库读
+///   (窗口化后内存不再随历史长度线性增长)
 /// - deltaSeq              (普通 uint64_t, 仅 io 线程递增; EventBridge 分配)
 /// - contextStats          (std::atomic 字段, 跨线程安全)
 /// - UI 线程的取消/切模型操作通过 Wire 消息 (WireCancel/WireSelectModel) 发往 agent 线程处理
@@ -177,12 +184,8 @@ public:
     ~Session();
     // 成员按对齐/尺寸从大到小排列, 减少结构体内填充字节
 
-    /// 完整历史消息 (append-only, 永不压缩, 用于 client 同步与展示)
-    /// - 仅 ioContext 线程可读写 (写: appendViewMessage), 通过 assertIoThread() 强制
-    std::vector<ViewMessage> viewMessages;
-
     /// 进行中的流式消息 (直播槽)
-    /// - 不在 viewMessages 里: 不计链式哈希、不占持久化序号、不落盘、不参与分页
+    /// - 不在展示历史里: 不占持久化序号、不落盘、不参与分页
     /// - 至多一条; 只用于把半截内容发给中途接入的客户端 (WireSyncPayload::streaming)
     /// - 定稿 (finalizeStreamingView) 时才用预留 id 走正常 appendViewMessage
     std::optional<ViewMessage> streamingView;
@@ -206,11 +209,7 @@ public:
     ///   下面的读写接口访问
     /// - 所有变更经 appendMessages / replaceMessages / truncateMessages 单一入口,
     ///   保证 messagesVersion 单调递增 (中断/异常快照与回滚依赖该版本号)
-    /// - 仅 ioContext 线程访问 (与 viewMessages 同一约束)
-
-    /// viewMessages 的链式哈希 (用于 client 校验一致性)    /// - 仅 ioContext 线程可读写
-    /// (appendViewMessage 内部更新)
-    ChainHash chainHash;
+    /// - 仅 ioContext 线程访问 (与展示历史窗口同一约束)
 
     /// WireDelta 流序号 (单调递增; 仅 io 线程读写)
     /// - 由 EventBridge / Session::nextDeltaSeq 统一分配, 服务端增量重放缓冲
@@ -221,7 +220,7 @@ public:
     SessionActivity activity = SessionActivity::Idle;
 
     // -------------------------------------------------------------------
-    // 线程绑定: 强制 viewMessages/上下文消息/chainHash 只在 io 线程写入
+    // 线程绑定: 强制展示历史窗口/上下文消息只在 io 线程写入
     // -------------------------------------------------------------------
 
     /// 绑定 io 线程 (在 BaseAgent::runTurnAsync 首次使用时调用)
@@ -259,48 +258,58 @@ public:
     }
 
     // -------------------------------------------------------------------
-    // 只读访问接口 (仅 io 线程调用; client 同步由 io 线程拷贝后经 Wire 传输)
+    // 展示历史 (尾部窗口 + 绝对下标; 仅 io 线程)
+    //
+    // 绝对下标 absIndex = 持久化序号 seq - 1: view_message 表不删行、seq 由会话
+    // 单调分配, 两者永远一致, 所以不需要额外的"展示下标"列。
+    // 内存里只保留尾部 [viewWindowBase_, viewWindowBase_ + viewWindow_.size()),
+    // 该区间的右端恒等于总数 (最新一条总在内存); 更早的页从会话库读。
     // -------------------------------------------------------------------
 
-    /// 获取完整历史消息副本
-    /// - 仅 io 线程调用 (assertIoThread 强制校验); 返回拷贝供 Sync 传输
-    std::vector<ViewMessage> getFullViewMessagesCopy() const {
-        assertIoThread();
-        return viewMessages;
+    /// 内存里的展示历史窗口 (只读借用; **不是**完整历史)
+    /// - 需要完整历史时用 [collectViewRange]; 只需要"最近几条"时直接遍历这里
+    /// - 仅 io 线程访问 (与其它可变状态同一约束, 此处不重复断言)
+    const std::vector<ViewMessage>& viewWindow() const noexcept {
+        return viewWindow_;
     }
 
-    /// 历史消息总数 (仅 io 线程调用; 历史分页同步用)
+    /// 窗口首条的绝对下标 (= 首条消息的 seq - 1)
+    size_t viewWindowBase() const noexcept {
+        return viewWindowBase_;
+    }
+
+    /// 窗口条数上限 (0 = 不淘汰, 内存模式)
+    size_t viewWindowCap() const noexcept {
+        return viewWindowCap_;
+    }
+
+    /// 展示历史**总条数** (绝对下标空间大小; 不是窗口条数)
     size_t viewMessageCount() const {
         assertIoThread();
-        return viewMessages.size();
+        return viewSeqCounter_;
     }
 
-    /// 获取 [start, end) 区间的历史消息副本 (历史分页同步用)
-    /// - 仅 io 线程调用 (assertIoThread 强制校验)
-    /// - start/end 自动限制到有效区间 (end <= start 时返回空), 避免调用方
-    ///   重复做边界裁剪; 相比 getFullViewMessagesCopy 避免了每页请求的
-    ///   整份拷贝 (长会话分页热路径)
-    std::vector<ViewMessage> getViewMessagesRange(size_t start, size_t end) const {
-        assertIoThread();
-        if (end > viewMessages.size()) {
-            end = viewMessages.size();
-        }
-        if (start >= end) {
-            return {};
-        }
-        return std::vector<ViewMessage>(viewMessages.begin() + start, viewMessages.begin() + end);
+    /// 按绝对下标取窗口内的消息; 不在内存 (已淘汰或超范围) 时返回 nullptr
+    /// - 仅 io 线程调用; 返回的指针在同一窗口区间内稳定 (写入会重新分配请勿跨调用持有)
+    const ViewMessage* viewMessageAt(uint64_t absIndex) const;
+
+    /// 按消息 id 取窗口内的消息; 不在窗口内返回 nullptr
+    const ViewMessage* viewMessageById(std::string_view id) const;
+
+    /// 取 [start, end) 区间 (绝对下标): 内存优先、缺口回库读
+    /// - `return` false 表示有一段读不到 (无会话库/读失败); 此时 `out` 为空,
+    ///   调用方应按"没有更早历史"降级 (不要把短页当成合法的连续页)
+    bool collectViewRange(uint64_t start, uint64_t end, std::vector<ViewMessage>& out);
+
+    /// 设置窗口条数上限 (0 = 不淘汰)
+    /// - 由 SessionsManager 在会话创建/恢复前写入; 运行期不再改变
+    void setViewWindowCap(size_t cap) noexcept {
+        viewWindowCap_ = cap;
     }
 
-    /// 获取链式哈希信息
-    /// - 仅 io 线程调用 (assertIoThread 强制校验)
-    struct HashInfo {
-        size_t      count = 0;
-        std::string tailHex;
-    };
-
-    HashInfo getHashInfo() const {
-        assertIoThread();
-        return HashInfo{chainHash.count(), chainHash.tailHex()};
+    /// 注入关键指标 (可选; 分页/淘汰计数写进同一份)
+    void setMetrics(std::weak_ptr<agentxx::util::KeyMetrics> metrics) noexcept {
+        metrics_ = std::move(metrics);
     }
 
     // -------------------------------------------------------------------
@@ -373,18 +382,19 @@ public:
     // io 线程专用写入接口
     // -------------------------------------------------------------------
 
-    /// 向 viewMessages 追加一条消息并更新链式哈希，返回分配的 msgId
+    /// 向展示历史追加一条消息 (入窗口 + 压持久化队列) 并返回分配的 msgId
     /// - 必须在 ioContext 线程内调用 (assertIoThread 强制校验)
-    /// - 已绑定持久化回调时同步落库 (失败仅记日志)
+    /// - 已绑定持久化回调时按节流规则落库 (失败仅记日志)
     /// - `reuseId` 非空时沿用它 (定稿路径复用直播槽预留的 id, 否则客户端那条
     ///   流式项无法收敛到正式行); 此时不推进 msgIdCounter_
+    /// - 追加后可能触发窗口淘汰 (仅当待落盘队列为空时)
     std::string appendViewMessage(ViewMessage msg, std::string_view reuseId = {});
 
-    /// 更新一条已存在的历史消息 (按 msg.id 定位) 并同步持久化
+    /// 更新一条已存在的历史消息 (按 msg.id 定位)
     /// - 必须在 ioContext 线程内调用 (assertIoThread 强制校验)
-    /// - 不更新链式哈希 (哈希基于消息内容, 历史内容本不应变化;
-    ///   tool 结果回填属于"补齐信息", 与增量 WireDelta 语义一致)
-    /// - 已绑定持久化回调时同步更新库内对应行 (失败仅记日志)
+    /// - 已绑定持久化回调时按节流规则更新库内对应行 (失败仅记日志)
+    /// - 已在窗口外 (被淘汰) 时**不改内存、直接写库**: 调用方持有的副本可能
+    ///   已过期, 不能据此重建整行; 客户端最终靠定稿的整条 upsert 收敛
     void updateViewMessage(ViewMessage msg);
 
     // -------------------------------------------------------------------
@@ -392,7 +402,7 @@ public:
     //
     // 一次角色切换之间连续输出的文本 = 一段; 段开始时占一个 id、边流边写进槽里,
     // 段结束时定稿成正式行 (可见) 或直接丢弃 (整段视觉为空)。
-    // 槽里的内容从不进 viewMessages / 链式哈希 / 持久化队列。
+    // 槽里的内容从不进展示历史 / 持久化队列。
     // -------------------------------------------------------------------
 
     /// 开始一段流式消息: 分配 msgId (复用 msgIdCounter_, 不推进 viewSeqCounter_)
@@ -407,7 +417,7 @@ public:
     /// 合并思考元数据 (加密标记取或, reasoning_tokens 取大)
     void mergeStreamingThink(const ViewMessage::ThinkData& data);
 
-    /// 定稿: 用预留 id 走正常 appendViewMessage (哈希/序号/落盘/分页照旧)
+    /// 定稿: 用预留 id 走正常 appendViewMessage (序号/落盘/分页照旧)
     /// - `finalMsg` 的 id 被直播槽的 id 覆盖; 无槽时按普通追加处理
     /// - `return` 落库后的消息 id
     std::string finalizeStreamingView(ViewMessage finalMsg);
@@ -421,16 +431,28 @@ public:
     /// 绑定持久化回调 (由 SessionsManager 创建 Session 时注入; 测试可不绑定)
     void setStoreHooks(SessionStoreHooks hooks);
 
-    /// 从持久化状态恢复: 重建链式哈希 (对不含 id 的消息内容, 与
-    /// appendViewMessage 语义一致) 并恢复 msgIdCounter
+    /// 从持久化状态恢复: 载入尾部窗口 + 总数 + msgIdCounter
     /// - 不触发持久化回调 (恢复本身不产生新的写入)
-    /// - [lastViewSeq] 为库内最大展示消息序号 (见 [lastViewSeq]), 供重连
-    ///   增量补拉继续编号; 0 = 老数据未记录 (按 0 起算)
+    /// - [lastViewSeq] 为历史总条数 (库内最大展示消息序号), 供重连增量补拉
+    ///   继续编号; 0 = 老数据未记录 (按窗口条数起算)
+    /// - 等价于 `restoreWindow(messages, /*base=*/0, max(lastViewSeq, size), msgIdCounter)`,
+    ///   供测试与内存模式使用
     void
         restore(std::vector<ViewMessage> messages, uint64_t msgIdCounter, uint64_t lastViewSeq = 0);
 
+    /// 从持久化状态恢复尾部窗口 (窗口化加载路径)
+    /// - `base` 为窗口首条的绝对下标, `total` 为历史总条数
+    /// - 整体替换前先清空待落盘队列 (旧下标失效); 加载阶段不应有未落盘增量
+    void restoreWindow(
+        std::vector<ViewMessage> messages,
+        uint64_t                 base,
+        uint64_t                 total,
+        uint64_t                 msgIdCounter
+    );
+
     /// 展示历史持久化序号 (单调递增, 每条消息一个)
     /// - 与 deltaSeq (WireDelta 流序号) 相互独立: 本序号标识"持久化历史里的第几条"
+    /// - 同时就是历史**总条数**: `absIndex = lastViewSeq() - 1` 是最后一条的绝对下标
     /// - 客户端在 Sync 里记录它, 重连时经 WriteHello.afterViewSeq 请求增量补拉
     uint64_t lastViewSeq() const {
         assertIoThread();
@@ -604,31 +626,33 @@ public:
 
 private:
 
-    /// 待落盘的 viewMessages 操作 (保持 append/update 混合顺序, 回放即重放写序列)
-    /// - 只记录 viewMessages 下标 (append-only 容器, 下标稳定), 不持有消息副本:
+    /// 待落盘的展示历史操作 (保持 append/update 混合顺序, 回放即重放写序列)
+    /// - 只记**绝对下标** (窗口基准会移动, 绝对下标才稳定), 不持有消息副本:
     ///   节流窗口内可能有成百上千条消息待落盘, 逐条深拷贝会让消息在内存中存在
     ///   两份 (实测注入 200K token 历史时多占 1.4 MB)
     /// - 回放时按当下内容落库: 同一消息在窗口内被多次更新只写最新内容, 最终
     ///   落库结果与逐条拷贝一致 (append 先于其 update 入队)
     struct PendingViewOp {
         bool     isAppend = false;
-        size_t   index    = 0; ///< viewMessages 下标 (isAppend/isUpdate 均为该条消息)
+        uint64_t absIndex = 0; ///< 该条消息的绝对下标 (= seq - 1)
         uint64_t counter  = 0; ///< isAppend 时的 msgIdCounter (与消息同事务提交)
         uint64_t seq      = 0; ///< isAppend 时的展示历史持久化序号 (见 [lastViewSeq])
     };
 
-    /// 持久化回调 (可选; 为空时不落库)
+    /// 持久化回调 (可选; 为空时不落库, 也不淘汰窗口)
     SessionStoreHooks hooks_;
 
     /// worktree 绑定 (仅 io 线程读写; path 为空 = 未绑定)
     WorktreeBinding worktreeBinding_;
 
-    /// viewMessages 的 msgId → 下标索引 (仅 ioContext 线程读写)
-    /// - 供 updateViewMessage 的 O(1) 定位: tool 结果回填按 msgId 更新历史消息,
+    /// 窗口内消息 id → 绝对下标索引 (仅 ioContext 线程读写)
+    /// - 供 updateViewMessage 的 O(1) 定位: tool 结果回填按 msgId 更新消息,
     ///   长会话 (数千条) + 大量工具调用时, 每条结果都线性重扫一遍历史开销明显
-    /// - 仅在 appendViewMessage / restore / updateViewMessage 内维护; 索引未命中
-    ///   或与 viewMessages 不一致时回退线性扫描并修复索引 (防御其他直接改动)
-    std::unordered_map<std::string, size_t, std::hash<std::string>, std::equal_to<>> msgIndex_;
+    /// - 只含窗口内的 id (淘汰时同步移除, 内存随之下降); 索引未命中或与窗口
+    ///   不一致时回退线性扫描并修复索引 (防御其他直接改动)
+    /// - mutable: 只读查询路径 (viewMessageById) 命中索引不一致时也会修它
+    mutable std::unordered_map<std::string, uint64_t, std::hash<std::string>, std::equal_to<>>
+        msgIndex_;
 
     /// 上下文 Json 镜像 (惰性生成: 仅边界形态需要时构造, 避免每次写入都深拷贝)
     mutable utilxx_base::Json llmMessagesJsonCache_ = utilxx_base::Json::array();
@@ -653,19 +677,39 @@ private:
     /// 待注入输入 (next-step / inject; 仅 io 线程)
     std::vector<SessionPendingInput> pendingInputs_;
 
+    /// 展示历史尾部窗口 (仅保留尾部若干条; 窗口内绝对下标连续)
+    /// - 不变量: `viewWindowBase_ + viewWindow_.size() == viewSeqCounter_`
+    ///   (最新一条总在内存, 所以尾窗/追加快照永远不需要读库)
+    std::vector<ViewMessage> viewWindow_;
+
     std::vector<PendingViewOp> pendingViewOps_;
 
     /// 标记上下文已变更: 版本号递增 + Json 镜像失效
     void markMessagesChanged();
 
+    /// 标记: 有淘汰待做 (待落盘队列非空时不能删内存, 否则队列里的下标失效)
+    bool viewEvictPending_ = false;
+
+    /// 窗口淘汰检查 (仅删除已落库的部分; 内存模式 cap==0 时不做任何事)
+    void maybeEvictViewWindow();
+
     std::shared_ptr<neograph::graph::CancelToken> cancelToken_  = nullptr;
     uint64_t                                      msgIdCounter_ = 0;
 
-    /// 展示历史持久化序号计数 (每次 appendViewMessage 递增)
+    /// 展示历史持久化序号计数 (每次 appendViewMessage 递增; = 历史总条数)
     uint64_t viewSeqCounter_ = 0;
 
     /// 上下文版本号 (每次变更 +1)
     uint64_t messagesVersion_ = 0;
+
+    /// 窗口首条的绝对下标 (= 窗口内首条消息的 seq - 1)
+    uint64_t viewWindowBase_ = 0;
+
+    /// 窗口条数上限 (0 = 不淘汰; 内存模式或没有会话库时恒为 0)
+    size_t viewWindowCap_ = 0;
+
+    /// 关键指标 (弱引用; 为空时不计数)
+    std::weak_ptr<agentxx::util::KeyMetrics> metrics_;
 
     // -------------------------------------------------------------------
     // 持久化节流 (仅 io 线程访问)
@@ -692,6 +736,10 @@ private:
     void enqueueViewPersist(PendingViewOp op);
     /// 回放并清空待落盘队列 (更新节流时间戳)
     void flushPendingViewOps();
+
+    /// 窗口内某条消息的绝对下标; 不在窗口 (已淘汰) 时为空
+    /// - 走 [msgIndex_]; 索引缺失或失效时线性扫描窗口并修复索引 (防御)
+    std::optional<uint64_t> absoluteIndexOfId(std::string_view id) const;
 };
 
 /// 会话存储: 按 sessionId 取/建 Session
@@ -730,7 +778,22 @@ public:
     /// - 数据目录: {dataDir}/sqlite/sessions/{sessionId}/
     std::shared_ptr<SessionStore> sessionStore = nullptr;
 
+    /// 展示历史常驻条数上限 (0 = 不淘汰, 全量常驻)
+    /// - 取自 `session.view_window_messages`; 由 BaseAgent 初始化时写入,
+    ///   每个会话恢复时使用 (运行期不再改变)
+    /// - 没有会话库 (内存模式) 时不会淘汰: 数据不在别处, 删了就丢了
+    size_t viewWindowMessages = 0;
+
+    /// 关键指标 (可选; 由 BaseAgent 注入), 会话侧记账展示历史的分页/淘汰
+    /// - 弱引用: 指标对象属于 AgentContext, 会话不应延长它的寿命
+    std::weak_ptr<agentxx::util::KeyMetrics> metrics;
+
 private:
+
+    /// 本次加载的展示历史尾窗条数 (0 = 全量)
+    size_t viewTailCount() const noexcept {
+        return sessionStore ? viewWindowMessages : 0;
+    }
 
     std::map<std::string, std::shared_ptr<Session>, std::less<>> sessions_;
 };

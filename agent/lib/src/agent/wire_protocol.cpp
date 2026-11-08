@@ -16,7 +16,7 @@ utilxx_base::Json toJson(const WireHello& msg) {
         msg.sessionId,
         msg.token,
         msg.lastSeq,
-        msg.tailHash,
+        msg.historyTail,
         msg.language,
         msg.afterViewSeq,
         msg.protocolVersion,
@@ -28,7 +28,6 @@ utilxx_base::Json toJson(const WireHelloAck& msg) {
     return makeHelloAck(
         msg.ok,
         msg.sessionId,
-        msg.tailHash,
         msg.models,
         msg.plugins,
         msg.deviceId,
@@ -253,9 +252,10 @@ WireHello helloFromJson(const utilxx_base::Json& j) {
     hello.sessionId    = j.value("sessionId", std::string{});
     hello.token        = j.value("token", std::string{});
     hello.lastSeq      = j.value("lastSeq", uint64_t{0});
-    hello.tailHash     = j.value("tailHash", std::string{});
     hello.language     = j.value("language", std::string{});
     hello.afterViewSeq = j.value("afterViewSeq", uint64_t{0});
+    // 展示历史尾窗声明: 缺字段 = -1 (用服务端默认值)
+    hello.historyTail = static_cast<int32_t>(j.value("historyTail", int64_t{-1}));
     // 协议版本: 老客户端缺字段 → 0 (最低兼容版本, 服务端不拒绝)
     hello.protocolVersion = static_cast<int>(j.value("protocolVersion", int64_t{0}));
     hello.capabilities    = utilxx_base::jsonGetStringArray(j, "capabilities");
@@ -266,7 +266,6 @@ WireHelloAck helloAckFromJson(const utilxx_base::Json& j) {
     WireHelloAck ack;
     ack.ok        = j.value("ok", false);
     ack.sessionId = j.value("sessionId", std::string{});
-    ack.tailHash  = j.value("tailHash", std::string{});
     if (j.contains("models") && j["models"].is_array()) {
         for (const auto& m : j["models"]) {
             if (m.is_string()) {

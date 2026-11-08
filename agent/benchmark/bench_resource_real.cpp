@@ -646,8 +646,8 @@ void benchResourceRealTui() {
         std::promise<void> p;
         asio::post(*agent->ioCtx, [&]() {
             if (auto sess = agent->agentContext->getSession(sessionId)) {
-                res0.viewCount = sess->viewMessages.size();
-                res0.viewBytes = estimateViewMessagesBytes(sess->viewMessages);
+                res0.viewCount = sess->viewWindow().size();
+                res0.viewBytes = estimateViewMessagesBytes(sess->viewWindow());
                 res0.llmCount  = sess->llmMessagesJson().size();
                 res0.llmBytes  = estimateLlmMessagesBytes(sess->llmMessagesJson());
             }
@@ -758,8 +758,8 @@ void benchResourceRealTui() {
         std::promise<void> p;
         asio::post(*agent->ioCtx, [&]() {
             if (auto sess = agent->agentContext->getSession(sessionId)) {
-                res1.viewCount = sess->viewMessages.size();
-                res1.viewBytes = estimateViewMessagesBytes(sess->viewMessages);
+                res1.viewCount = sess->viewWindow().size();
+                res1.viewBytes = estimateViewMessagesBytes(sess->viewWindow());
                 res1.llmCount  = sess->llmMessagesJson().size();
                 res1.llmBytes  = estimateLlmMessagesBytes(sess->llmMessagesJson());
             }
@@ -851,8 +851,8 @@ void benchResourceRealTui() {
         std::promise<void> p;
         asio::post(*agent->ioCtx, [&]() {
             if (auto sess = agent->agentContext->getSession(sessionId)) {
-                res2.viewCount = sess->viewMessages.size();
-                res2.viewBytes = estimateViewMessagesBytes(sess->viewMessages);
+                res2.viewCount = sess->viewWindow().size();
+                res2.viewBytes = estimateViewMessagesBytes(sess->viewWindow());
                 res2.llmCount  = sess->llmMessagesJson().size();
                 res2.llmBytes  = estimateLlmMessagesBytes(sess->llmMessagesJson());
             }

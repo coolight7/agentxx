@@ -358,7 +358,7 @@ asio::awaitable<void> test_eventbridge_channel_write_messages() {
         }
     }
     // 历史已追加
-    XX_TEST_EXPECT_EQ(session->viewMessages.size(), size_t{1});
+    XX_TEST_EXPECT_EQ(session->viewWindow().size(), size_t{1});
 
     co_return;
 }
@@ -401,15 +401,15 @@ asio::awaitable<void> test_eventbridge_channel_write_thinking() {
                        }
     });
     // Think 在前, Tool 在后
-    XX_TEST_EXPECT_EQ(session->viewMessages.size(), size_t{2});
-    if (session->viewMessages.size() == 2) {
-        const auto& thinking = session->viewMessages[0];
+    XX_TEST_EXPECT_EQ(session->viewWindow().size(), size_t{2});
+    if (session->viewWindow().size() == 2) {
+        const auto& thinking = session->viewWindow()[0];
         XX_TEST_EXPECT_TRUE(thinking.role == agentxx::agent::ViewMessage::Role::Think);
         XX_TEST_EXPECT_EQ(thinking.text, std::string{"need to list files first"});
         XX_TEST_EXPECT_TRUE(thinking.collapsed);
         XX_TEST_EXPECT_FALSE(thinking.id.empty()); // 已分配 id (可持久化定位)
 
-        const auto& tool = session->viewMessages[1];
+        const auto& tool = session->viewWindow()[1];
         XX_TEST_EXPECT_TRUE(tool.role == agentxx::agent::ViewMessage::Role::Tool);
         if (tool.tool) {
             XX_TEST_EXPECT_EQ(tool.tool->toolCallId, std::string{"call_1"});
@@ -432,13 +432,13 @@ asio::awaitable<void> test_eventbridge_channel_write_thinking() {
              })},
                        }
     });
-    XX_TEST_EXPECT_EQ(session->viewMessages.size(), size_t{4});
-    if (session->viewMessages.size() == 4) {
-        const auto& thinking2 = session->viewMessages[2];
+    XX_TEST_EXPECT_EQ(session->viewWindow().size(), size_t{4});
+    if (session->viewWindow().size() == 4) {
+        const auto& thinking2 = session->viewWindow()[2];
         XX_TEST_EXPECT_TRUE(thinking2.role == agentxx::agent::ViewMessage::Role::Think);
         XX_TEST_EXPECT_EQ(thinking2.text, std::string{"reasoned here"});
         XX_TEST_EXPECT_TRUE(thinking2.collapsed);
-        const auto& assistant = session->viewMessages[3];
+        const auto& assistant = session->viewWindow()[3];
         XX_TEST_EXPECT_TRUE(assistant.role == agentxx::agent::ViewMessage::Role::Assistant);
         XX_TEST_EXPECT_EQ(assistant.text, std::string{"done"});
     }
@@ -458,10 +458,10 @@ asio::awaitable<void> test_eventbridge_channel_write_thinking() {
              })},
                        }
     });
-    XX_TEST_EXPECT_EQ(session->viewMessages.size(), size_t{5});
-    if (session->viewMessages.size() == 5) {
+    XX_TEST_EXPECT_EQ(session->viewWindow().size(), size_t{5});
+    if (session->viewWindow().size() == 5) {
         XX_TEST_EXPECT_TRUE(
-            session->viewMessages[4].role == agentxx::agent::ViewMessage::Role::Assistant
+            session->viewWindow()[4].role == agentxx::agent::ViewMessage::Role::Assistant
         );
     }
 
@@ -491,9 +491,9 @@ asio::awaitable<void> test_eventbridge_channel_write_thinking() {
              })},
                        }
     });
-    XX_TEST_EXPECT_EQ(session->viewMessages.size(), size_t{7});
-    if (session->viewMessages.size() == 7) {
-        const auto& encThink = session->viewMessages[5];
+    XX_TEST_EXPECT_EQ(session->viewWindow().size(), size_t{7});
+    if (session->viewWindow().size() == 7) {
+        const auto& encThink = session->viewWindow()[5];
         XX_TEST_EXPECT_TRUE(encThink.role == agentxx::agent::ViewMessage::Role::Think);
         XX_TEST_EXPECT_TRUE(encThink.text.empty()); // 保持空内容
         XX_TEST_EXPECT_TRUE(encThink.think.has_value());
@@ -501,7 +501,7 @@ asio::awaitable<void> test_eventbridge_channel_write_thinking() {
             XX_TEST_EXPECT_EQ(encThink.think->reasoningTokens, 854);
             XX_TEST_EXPECT_TRUE(encThink.think->isEncrypted);
         }
-        const auto& assistant = session->viewMessages[6];
+        const auto& assistant = session->viewWindow()[6];
         XX_TEST_EXPECT_TRUE(assistant.role == agentxx::agent::ViewMessage::Role::Assistant);
         XX_TEST_EXPECT_EQ(assistant.text, std::string{"answer"});
     }
@@ -525,12 +525,12 @@ asio::awaitable<void> test_eventbridge_channel_write_thinking() {
              })},
                        }
     });
-    XX_TEST_EXPECT_EQ(session->viewMessages.size(), size_t{8});
-    if (session->viewMessages.size() == 8) {
+    XX_TEST_EXPECT_EQ(session->viewWindow().size(), size_t{8});
+    if (session->viewWindow().size() == 8) {
         XX_TEST_EXPECT_TRUE(
-            session->viewMessages[7].role == agentxx::agent::ViewMessage::Role::Assistant
+            session->viewWindow()[7].role == agentxx::agent::ViewMessage::Role::Assistant
         );
-        XX_TEST_EXPECT_EQ(session->viewMessages[7].text, std::string{"after blank think"});
+        XX_TEST_EXPECT_EQ(session->viewWindow()[7].text, std::string{"after blank think"});
     }
 
     co_return;
@@ -825,12 +825,12 @@ asio::awaitable<void> test_eventbridge_think_duration() {
             }
             XX_TEST_EXPECT_TRUE(io->deltas[8].type == DT::NodeEnd);
         }
-        XX_TEST_EXPECT_EQ(session->viewMessages.size(), size_t{2});
-        if (session->viewMessages.size() == 2) {
-            XX_TEST_EXPECT_TRUE(session->viewMessages[0].role == VM::Role::Think);
-            XX_TEST_EXPECT_EQ(session->viewMessages[0].text, std::string{"ab"});
-            XX_TEST_EXPECT_TRUE(session->viewMessages[1].role == VM::Role::Assistant);
-            XX_TEST_EXPECT_EQ(session->viewMessages[1].text, std::string{"x"});
+        XX_TEST_EXPECT_EQ(session->viewWindow().size(), size_t{2});
+        if (session->viewWindow().size() == 2) {
+            XX_TEST_EXPECT_TRUE(session->viewWindow()[0].role == VM::Role::Think);
+            XX_TEST_EXPECT_EQ(session->viewWindow()[0].text, std::string{"ab"});
+            XX_TEST_EXPECT_TRUE(session->viewWindow()[1].role == VM::Role::Assistant);
+            XX_TEST_EXPECT_EQ(session->viewWindow()[1].text, std::string{"x"});
         }
     }
 
@@ -879,7 +879,7 @@ asio::awaitable<void> test_eventbridge_think_duration() {
                 XX_TEST_EXPECT_EQ(io->deltas[4].message->tool->toolName, std::string{"bash"});
             }
         }
-        XX_TEST_EXPECT_EQ(session->viewMessages.size(), size_t{2});
+        XX_TEST_EXPECT_EQ(session->viewWindow().size(), size_t{2});
     }
 
     // ---- 流程 3: 纯思考流 -> NodeEnd 前定稿 ----
@@ -985,16 +985,16 @@ asio::awaitable<void> test_eventbridge_think_duration() {
             XX_TEST_EXPECT_FALSE(d.type == DT::UpdateMessage);
         }
 
-        // session->viewMessages 包含 Think + Assistant
-        XX_TEST_EXPECT_EQ(session->viewMessages.size(), size_t{2});
-        if (session->viewMessages.size() == 2) {
-            const auto& th = session->viewMessages[0];
+        // session->viewWindow() 包含 Think + Assistant
+        XX_TEST_EXPECT_EQ(session->viewWindow().size(), size_t{2});
+        if (session->viewWindow().size() == 2) {
+            const auto& th = session->viewWindow()[0];
             XX_TEST_EXPECT_TRUE(th.role == agentxx::agent::ViewMessage::Role::Think);
             XX_TEST_EXPECT_EQ(th.text, std::string{"thinking..."});
             XX_TEST_EXPECT_TRUE(th.startTimeMs > 0);
             XX_TEST_EXPECT_TRUE(th.durationMs >= 40);
 
-            const auto& asst = session->viewMessages[1];
+            const auto& asst = session->viewWindow()[1];
             XX_TEST_EXPECT_TRUE(asst.role == agentxx::agent::ViewMessage::Role::Assistant);
             XX_TEST_EXPECT_EQ(asst.text, std::string{"ans"});
             XX_TEST_EXPECT_TRUE(asst.startTimeMs > 0);
@@ -1084,10 +1084,10 @@ asio::awaitable<void> test_eventbridge_interleaved_segments() {
             XX_TEST_EXPECT_EQ(io->deltas[7].msgId, bodyId);
         }
         // 此刻只有思考行已定稿 (正文还在直播槽里)
-        XX_TEST_EXPECT_EQ(session->viewMessages.size(), size_t{1});
-        if (session->viewMessages.size() == 1) {
-            XX_TEST_EXPECT_TRUE(session->viewMessages[0].role == VM::Role::Think);
-            XX_TEST_EXPECT_EQ(session->viewMessages[0].text, std::string{"think-1think-2"});
+        XX_TEST_EXPECT_EQ(session->viewWindow().size(), size_t{1});
+        if (session->viewWindow().size() == 1) {
+            XX_TEST_EXPECT_TRUE(session->viewWindow()[0].role == VM::Role::Think);
+            XX_TEST_EXPECT_EQ(session->viewWindow()[0].text, std::string{"think-1think-2"});
         }
 
         // messages 通道定稿: 文本与流式累积一致 -> 不额外发整条覆盖
@@ -1110,7 +1110,7 @@ asio::awaitable<void> test_eventbridge_interleaved_segments() {
         for (const auto& d : io->deltas) {
             XX_TEST_EXPECT_FALSE(d.type == DT::UpdateMessage);
         }
-        XX_TEST_EXPECT_EQ(session->viewMessages.size(), size_t{2});
+        XX_TEST_EXPECT_EQ(session->viewWindow().size(), size_t{2});
 
         bridgeCb(neograph::graph::GraphEvent{ET::NODE_END, "llm", neograph::json::object()});
         XX_TEST_EXPECT_TRUE(io->deltas.back().type == DT::NodeEnd);
@@ -1141,12 +1141,12 @@ asio::awaitable<void> test_eventbridge_interleaved_segments() {
         });
         bridgeCb(neograph::graph::GraphEvent{ET::NODE_END, "llm", neograph::json::object()});
 
-        XX_TEST_EXPECT_EQ(session->viewMessages.size(), size_t{2});
-        if (session->viewMessages.size() == 2) {
-            XX_TEST_EXPECT_TRUE(session->viewMessages[0].role == VM::Role::Think);
-            XX_TEST_EXPECT_EQ(session->viewMessages[0].text, std::string{"t1t2"});
-            XX_TEST_EXPECT_TRUE(session->viewMessages[1].role == VM::Role::Assistant);
-            XX_TEST_EXPECT_EQ(session->viewMessages[1].text, std::string{"c1"});
+        XX_TEST_EXPECT_EQ(session->viewWindow().size(), size_t{2});
+        if (session->viewWindow().size() == 2) {
+            XX_TEST_EXPECT_TRUE(session->viewWindow()[0].role == VM::Role::Think);
+            XX_TEST_EXPECT_EQ(session->viewWindow()[0].text, std::string{"t1t2"});
+            XX_TEST_EXPECT_TRUE(session->viewWindow()[1].role == VM::Role::Assistant);
+            XX_TEST_EXPECT_EQ(session->viewWindow()[1].text, std::string{"c1"});
         }
     }
 

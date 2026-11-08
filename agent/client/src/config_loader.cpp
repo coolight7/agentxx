@@ -838,6 +838,28 @@ static YamlAppConfig parseYamlConfigNode(
         }
     }
 
+    // 会话存储 (yaml `session` 块)
+    // - view_window_messages: 展示历史常驻条数上限 (默认 400; 0 = 不淘汰)
+    //   只按条数不按字节; 仅在启用会话持久化时生效 (内存模式下数据不在别处)
+    const auto sessionNode = mapChild(root, "session");
+    if (isNodePresent(sessionNode)) {
+        const auto node = mapChild(sessionNode, "view_window_messages");
+        if (isNodePresent(node)) {
+            const auto val    = resolveEnvVars(nodeScalarText(node), dotEnvVars, overrideEnvVars);
+            int64_t    parsed = 0;
+            if (parseFullNumber(val, parsed) && parsed >= 0) {
+                cfg.sessionViewWindowMessages = parsed;
+            } else {
+                XX_LOGW(
+                    "[Config] Warning: invalid session.view_window_messages '{}' (needs >= 0), "
+                    "keeping default {}",
+                    val,
+                    cfg.sessionViewWindowMessages
+                );
+            }
+        }
+    }
+
     // 异步任务 (yaml `async_work` 块)
     // - enable:               是否启用后台任务 (默认 true; 关 = 委派同步执行)
     // - max_concurrent:       每队列并发额度 (默认 3; 唯一的并发约束)

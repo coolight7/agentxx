@@ -163,9 +163,9 @@ std::vector<WireSample> wireSamples() {
         m.sessionId       = "sess-中文-1";
         m.token           = "token-abc";
         m.lastSeq         = 42;
-        m.tailHash        = "deadbeef";
         m.language        = "zh-cn";
         m.afterViewSeq    = 128;
+        m.historyTail     = 100;
         m.protocolVersion = WireProtocol::kVersion;
         m.capabilities    = {
             std::string{WireProtocol::kCapInputDelivery},
@@ -178,7 +178,6 @@ std::vector<WireSample> wireSamples() {
         WireHelloAck m;
         m.ok              = true;
         m.sessionId       = "sess-中文-1";
-        m.tailHash        = "deadbeef";
         m.models          = {"gpt-x", "claude-y"};
         m.deviceId        = "device-42";
         m.workDir         = "D:/work/项目";
@@ -284,7 +283,6 @@ std::vector<WireSample> wireSamples() {
         // 事件输入的历史消息: 角色为 event (默认折叠), 另带来源标记
         // (展示端靠它显示事件名, 不必解析正文)
         m.messages.front().source = "event:chat.message";
-        m.tailHash      = "deadbeef";
         m.totalMessages = 1;
         m.messageQueue.push_back(MessageQueueItem{
             .id          = "q-1",

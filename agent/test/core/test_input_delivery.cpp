@@ -368,7 +368,7 @@ bool viewMessagesHasText(
     if (!session) {
         return false;
     }
-    for (const auto& vm : session->getFullViewMessagesCopy()) {
+    for (const auto& vm : session->viewWindow()) {
         if (vm.text.find(text) != std::string::npos) {
             return true;
         }

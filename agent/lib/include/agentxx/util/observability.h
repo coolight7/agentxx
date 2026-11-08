@@ -100,6 +100,15 @@ public:
     /// - `hasError` / `canceled` 决定计入失败还是取消 (取消优先)
     void noteAsyncWorkFinished(bool hasError, bool canceled, int64_t runMs);
 
+    // ---- 展示历史窗口 (会话内 viewMessages) ----
+
+    /// 一次展示历史取段: 命中内存窗口 / 回会话库读页
+    void noteViewPageRead(bool fromStore);
+    /// 一次窗口淘汰 (count = 本次从内存移除的条数)
+    void noteViewEvict(size_t count);
+    /// 一次取段因为库读不全/库不可用而降级 (页被丢弃, 客户端停止上拉)
+    void noteViewCollectPartial();
+
     /// 指标 JSON (字段稳定; 时间量为毫秒累计 + 计数, 便于外部求平均)
     utilxx_base::Json toJson() const;
 
@@ -265,6 +274,23 @@ public:
         return asyncWorkRunMs_.load(std::memory_order_relaxed);
     }
 
+    /// 展示历史: 内存命中次数 / 回库读页次数 / 淘汰条数 / 降级次数
+    uint64_t viewPageMemory() const noexcept {
+        return viewPagesMemory_.load(std::memory_order_relaxed);
+    }
+
+    uint64_t viewPageStore() const noexcept {
+        return viewPagesDb_.load(std::memory_order_relaxed);
+    }
+
+    uint64_t viewEvicted() const noexcept {
+        return viewEvictCount_.load(std::memory_order_relaxed);
+    }
+
+    uint64_t viewCollectPartial() const noexcept {
+        return viewCollectPartial_.load(std::memory_order_relaxed);
+    }
+
 private:
 
     std::atomic<uint64_t> turns_{0};
@@ -311,6 +337,11 @@ private:
     std::atomic<uint64_t> asyncWorkCanceled_{0};
     std::atomic<uint64_t> asyncWorkQueuedPeak_{0};
     std::atomic<int64_t>  asyncWorkRunMs_{0};
+
+    std::atomic<uint64_t> viewPagesMemory_{0};
+    std::atomic<uint64_t> viewPagesDb_{0};
+    std::atomic<uint64_t> viewEvictCount_{0};
+    std::atomic<uint64_t> viewCollectPartial_{0};
 
     /// 本轮的单调起点 (noteTurnStart 记录, noteFirstToken/noteTurnEnd 取值)
     std::atomic<int64_t> turnStartSteadyMs_{0};

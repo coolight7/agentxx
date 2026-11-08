@@ -251,8 +251,10 @@ std::vector<std::string> sessionSection(
     ));
 
     // 存储体积 (会话库文件大小; 取不到就跳过)
-    const auto loaded = store->loadSession(std::string{sessionId});
-    lines.push_back(fmt::format("- persisted view messages: {}", loaded.viewMessages.size()));
+    // - 只读尾窗 (100 条): 诊断不需要把整份展示历史解析回内存,
+    //   总数取库内记录 (viewSeqCounter)
+    const auto loaded = store->loadSession(std::string{sessionId}, 100);
+    lines.push_back(fmt::format("- persisted view messages: {}", loaded.lastViewSeq));
     lines.push_back(fmt::format(
         "- persisted llm messages: {}",
         loaded.llmMessages.is_array() ? loaded.llmMessages.size() : 0
@@ -260,6 +262,17 @@ std::vector<std::string> sessionSection(
     lines.push_back(
         fmt::format("- share store last id: {}", store->shareStoreLastId(std::string{sessionId}))
     );
+    // 内存里的展示历史窗口 (窗口化后: 只常驻尾部, 更早的页回库读)
+    if (ctx.sessions) {
+        if (auto sess = ctx.sessions->get(sessionId); sess) {
+            lines.push_back(fmt::format(
+                "- view window: base={} size={} cap={}",
+                sess->viewWindowBase(),
+                sess->viewWindow().size(),
+                sess->viewWindowCap()
+            ));
+        }
+    }
 
     if (options.includeMessages) {
         const auto rows = store->loadViewMessagesAfter(std::string{sessionId}, 0, 50);

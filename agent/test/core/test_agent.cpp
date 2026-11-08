@@ -1608,7 +1608,7 @@ asio::awaitable<void> test_agent_turn_system_message() {
     // viewMessages 应包含 Tip 轮次统计消息 (模型名 · t/s · 时长 · 时间)
     bool        foundStat = false;
     std::string statMsgId;
-    for (const auto& vm : session->viewMessages) {
+    for (const auto& vm : session->viewWindow()) {
         if (vm.role == agentxx::agent::ViewMessage::Role::Tip) {
             foundStat = true;
             statMsgId = vm.id;

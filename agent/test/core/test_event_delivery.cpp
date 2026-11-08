@@ -152,7 +152,7 @@ bool viewHasText(
     if (!session) {
         return false;
     }
-    for (const auto& m : session->viewMessages) {
+    for (const auto& m : session->viewWindow()) {
         if (contains(m.text, text)) {
             return true;
         }
@@ -171,7 +171,7 @@ std::string viewSourceOfEventMessage(
     if (!session) {
         return {};
     }
-    for (const auto& m : session->viewMessages) {
+    for (const auto& m : session->viewWindow()) {
         if (m.role == agentxx::agent::ViewMessage::Role::Event && contains(m.text, text)) {
             return m.source;
         }
@@ -188,7 +188,7 @@ const agentxx::agent::ViewMessage* firstEventViewMessage(
     if (!session) {
         return nullptr;
     }
-    for (const auto& m : session->viewMessages) {
+    for (const auto& m : session->viewWindow()) {
         if (m.role == agentxx::agent::ViewMessage::Role::Event) {
             return &m;
         }

@@ -301,6 +301,9 @@ static void applyServerRuntimeConfig(
     config->asyncWorkLingerMs = std::max<int64_t>(0, yamlCfg.asyncWorkLingerMs);
     config->asyncWorkResultMaxBytes
         = static_cast<size_t>(std::max<int64_t>(1, yamlCfg.asyncWorkResultMaxBytes));
+    // 展示历史常驻窗口 (yaml `session.view_window_messages`, 0 = 不淘汰)
+    config->sessionViewWindowMessages
+        = static_cast<size_t>(std::max<int64_t>(0, yamlCfg.sessionViewWindowMessages));
     // git worktree 模式 (yaml `worktree.enable`, 默认 false)
     config->enableWorktree = yamlCfg.worktreeEnable;
     // 开发者模式 (yaml `dev_mode`, 默认 false): 只控制"记录数据"的收集

@@ -65,7 +65,6 @@ TestResult testWireRoundtrip() {
         WireHelloAck ack;
         ack.ok        = true;
         ack.sessionId = "sess-中文-1";
-        ack.tailHash  = "deadbeef";
         ack.models    = {"gpt-x", "claude-y"};
         ack.deviceId  = "device-42";
         ack.workDir   = "D:/work/项目";
@@ -81,7 +80,6 @@ TestResult testWireRoundtrip() {
         auto back = roundTrip(ack);
         XX_TEST_EXPECT_TRUE(back.ok);
         XX_TEST_EXPECT_EQ(back.sessionId, std::string{"sess-中文-1"});
-        XX_TEST_EXPECT_EQ(back.tailHash, std::string{"deadbeef"});
         XX_TEST_EXPECT_EQ(back.models.size(), size_t{2});
         XX_TEST_EXPECT_EQ(back.deviceId, std::string{"device-42"});
         XX_TEST_EXPECT_EQ(back.workDir, std::string{"D:/work/项目"});
@@ -104,9 +102,9 @@ TestResult testWireRoundtrip() {
         hello.sessionId       = "sess-中文-1";
         hello.token           = "tok";
         hello.lastSeq         = 42;
-        hello.tailHash        = "abc";
         hello.language        = "zh-cn";
         hello.afterViewSeq    = 128;
+        hello.historyTail     = 0;
         hello.protocolVersion = WireProtocol::kVersion;
         hello.capabilities    = {
             std::string{WireProtocol::kCapInputDelivery},
@@ -116,8 +114,14 @@ TestResult testWireRoundtrip() {
         XX_TEST_EXPECT_EQ(back.sessionId, std::string{"sess-中文-1"});
         XX_TEST_EXPECT_EQ(back.lastSeq, uint64_t{42});
         XX_TEST_EXPECT_EQ(back.afterViewSeq, uint64_t{128});
+        // 展示历史尾窗声明往返 (0 = 完整同步; -1 不携带字段)
+        XX_TEST_EXPECT_EQ(back.historyTail, int32_t{0});
         XX_TEST_EXPECT_EQ(back.protocolVersion, WireProtocol::kVersion);
         XX_TEST_EXPECT_EQ(back.capabilities.size(), size_t{2});
+
+        WireHello undeclared;
+        undeclared.sessionId = "sess-2";
+        XX_TEST_EXPECT_EQ(roundTrip(undeclared).historyTail, int32_t{-1});
 
         // 老客户端 (缺字段): 版本 0、能力空 (服务端按最低兼容版本处理)
         auto legacyJson

@@ -376,7 +376,6 @@ inline MessageQueueItem messageQueueItemFromJson(const utilxx_base::Json& j) {
 inline utilxx_base::Json syncToJson(const WireSyncPayload& p) {
     utilxx_base::Json j = utilxx_base::Json::object();
     j["fromIndex"]      = p.fromIndex;
-    j["tailHash"]       = p.tailHash;
     // 快照对应的服务端增量序号 (0 = 未提供): 客户端据此重置去重用的序号,
     // 避免服务端 seq 重新计数后客户端旧序号把新增量全部判为重复 (见结构体注释)
     j["deltaSeq"] = p.deltaSeq;
@@ -419,7 +418,6 @@ inline std::optional<WireSyncPayload> syncFromJson(const utilxx_base::Json& j) {
     }
     WireSyncPayload p;
     p.fromIndex     = j.value("fromIndex", uint64_t{0});
-    p.tailHash      = j.value("tailHash", std::string{});
     p.totalMessages = j.value("totalMessages", uint64_t{0});
     p.deltaSeq      = j.value("deltaSeq", uint64_t{0});
     p.lastViewSeq   = j.value("lastViewSeq", uint64_t{0});
@@ -453,7 +451,7 @@ inline utilxx_base::Json makeHello(
     std::string_view                sessionId,
     std::string_view                token,
     uint64_t                        lastSeq         = 0,
-    std::string_view                tailHash        = "",
+    int32_t                         historyTail     = -1,
     std::string_view                language        = "",
     uint64_t                        afterViewSeq    = 0,
     int                             protocolVersion = WireProtocol::kVersion,
@@ -467,8 +465,9 @@ inline utilxx_base::Json makeHello(
     if (lastSeq > 0) {
         j["lastSeq"] = lastSeq;
     }
-    if (!tailHash.empty()) {
-        j["tailHash"] = tailHash;
+    // 展示历史尾窗声明 (见 WireHello::historyTail); -1 = 未声明, 不携带字段
+    if (historyTail >= 0) {
+        j["historyTail"] = historyTail;
     }
     if (!language.empty()) {
         j["language"] = language;
@@ -595,7 +594,6 @@ inline utilxx_base::Json makePing(int64_t t) {
 inline utilxx_base::Json makeHelloAck(
     bool                                         ok,
     std::string_view                             sessionId,
-    std::string_view                             tailHash,
     const std::vector<std::string>&              models,
     const std::vector<WireHelloAck::PluginInfo>& plugins         = {},
     std::string_view                             deviceId        = "",
@@ -609,9 +607,6 @@ inline utilxx_base::Json makeHelloAck(
         {"ok",        ok               },
         {"sessionId", sessionId        },
     };
-    if (!tailHash.empty()) {
-        j["tailHash"] = tailHash;
-    }
     if (!models.empty()) {
         j["models"] = models;
     }

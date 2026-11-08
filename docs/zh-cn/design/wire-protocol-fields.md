@@ -8,15 +8,15 @@
 >
 > 相关文档: [index.md](index.md) · [配置与设置边界](configuration.md)
 
-协议版本: `4` · 消息类型数: 48
+协议版本: `5` · 消息类型数: 48
 
 字段类型按序列化后的 JSON 取值推导 (`array<T>` 表示数组, `object{...}` 展开一层
 字段); 省略的字段表示该字段可缺省 (取零值/默认值), 老对端不认识的新字段会被忽略。
 
 | # | 消息 | `type` | 字段 (JSON 类型) |
 |---:|---|---|---|
-| 0 | hello | `hello` | `type` string, `sessionId` string, `token` string, `lastSeq` integer, `tailHash` string, `language` string, `afterViewSeq` integer, `protocolVersion` integer, `capabilities` array<string> |
-| 1 | hello_ack | `hello_ack` | `type` string, `ok` boolean, `sessionId` string, `tailHash` string, `models` array<string>, `protocolVersion` integer, `capabilities` array<string>, `deviceId` string, `workDir` string, `plugins` array<object{name:string, version:string, interfaces:array<string>}> |
+| 0 | hello | `hello` | `type` string, `sessionId` string, `token` string, `lastSeq` integer, `historyTail` integer, `language` string, `afterViewSeq` integer, `protocolVersion` integer, `capabilities` array<string> |
+| 1 | hello_ack | `hello_ack` | `type` string, `ok` boolean, `sessionId` string, `models` array<string>, `protocolVersion` integer, `capabilities` array<string>, `deviceId` string, `workDir` string, `plugins` array<object{name:string, version:string, interfaces:array<string>}> |
 | 2 | user_input | `user_input` | `type` string, `sessionId` string, `text` string, `model` string, `delivery` string, `requestId` integer, `attachments` array<object{type:string, display_name:string, mime_type:string, path_or_url:string, data_url:string, size_bytes:integer}> |
 | 3 | input_ack | `input_ack` | `type` string, `status` string, `requestId` integer, `sessionId` string, `delivery` string, `reason` string, `detail` string, `itemId` string |
 | 4 | cancel | `cancel` | `type` string, `sessionId` string |
@@ -25,7 +25,7 @@
 | 7 | interrupt_response | `interrupt_response` | `type` string, `id` integer, `result` object{allow:string} |
 | 8 | interrupt_expired | `interrupt_expired` | `type` string, `id` integer, `sessionId` string |
 | 9 | delta | `delta` | `type` string, `seq` integer, `text` string, `msgId` string, `tool_name` string, `startTimeMs` integer, `durationMs` integer, `tps` number, `nodeName` string, `think` object{reasoning_tokens:integer, is_encrypted:boolean}, `message` object{role:string, text:string, startTimeMs:integer, durationMs:integer, tool:object{tool_name:string, tool_call_id:string, tool_result:string, tool_finished:boolean}}, `kind` string |
-| 10 | sync | `sync` | `fromIndex` integer, `tailHash` string, `deltaSeq` integer, `totalMessages` integer, `lastViewSeq` integer, `incremental` boolean, `messages` array<object{role:string, text:string, startTimeMs:integer, durationMs:integer, source:string, collapsed:boolean}>, `message_queue` array<object{id:string, text:string, createdAtMs:integer, model:string, delivery:string, recovered:boolean}>, `queue_state` string, `type` string |
+| 10 | sync | `sync` | `fromIndex` integer, `deltaSeq` integer, `totalMessages` integer, `lastViewSeq` integer, `incremental` boolean, `messages` array<object{role:string, text:string, startTimeMs:integer, durationMs:integer, source:string, collapsed:boolean}>, `message_queue` array<object{id:string, text:string, createdAtMs:integer, model:string, delivery:string, recovered:boolean}>, `queue_state` string, `type` string |
 | 11 | turn_result | `turn_result` | `type` string, `sessionId` string, `hasError` boolean, `interrupted` boolean, `errorMessage` string, `startTimeMs` integer, `durationMs` integer |
 | 12 | context_stats | `context_stats` | `type` string, `contextTokens` integer, `maxContextTokens` integer, `tps` number, `promptTokens` integer, `completionTokens` integer, `totalTokens` integer, `cachedPromptTokens` integer, `asyncWorks` array<object{id:string, kind:string, name:string, state:string, elapsedMs:integer, queueAhead:integer}> |
 | 13 | error | `error` | `type` string, `code` integer, `message` string |

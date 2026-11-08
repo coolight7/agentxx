@@ -393,36 +393,6 @@ static void test_router_prefix_fallback() {
     }
 }
 
-static void test_chain_hash() {
-    agentxx::agent::ChainHash ch;
-    XX_TEST_EXPECT_EQ(ch.count(), 0u);
-    XX_TEST_EXPECT_EQ(ch.tail(), 0u);
-
-    ch.append("hello");
-    XX_TEST_EXPECT_EQ(ch.count(), 1u);
-    auto t1 = ch.tail();
-    XX_TEST_EXPECT_TRUE(t1 != 0u);
-
-    ch.append("world");
-    XX_TEST_EXPECT_EQ(ch.count(), 2u);
-    auto t2 = ch.tail();
-    XX_TEST_EXPECT_TRUE(t2 != t1); // 链式哈希应随追加变化
-
-    // tailHex 为 16 位十六进制
-    XX_TEST_EXPECT_EQ(ch.tailHex().size(), 16u);
-
-    // 确定性: 相同追加序列得到相同哈希
-    agentxx::agent::ChainHash ch2;
-    ch2.append("hello");
-    ch2.append("world");
-    XX_TEST_EXPECT_EQ(ch2.tail(), t2);
-
-    // reset
-    ch.reset();
-    XX_TEST_EXPECT_EQ(ch.count(), 0u);
-    XX_TEST_EXPECT_EQ(ch.tail(), 0u);
-}
-
 static void test_router_multi_instance_isolation() {
     // 验证方案 3: 多个 XXRouter 实例之间缓存完全隔离, 销毁一个实例不会破坏另一个实例的缓存
     std::string      re_path;
@@ -457,7 +427,6 @@ TestResult testMiscFixes() {
     test_router_more();
     test_router_prefix_fallback();
     test_router_multi_instance_isolation();
-    test_chain_hash();
 
     return TestResult{g_mf_passed, g_mf_failed};
 }

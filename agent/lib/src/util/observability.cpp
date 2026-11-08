@@ -196,6 +196,24 @@ void KeyMetrics::noteAsyncWorkFinished(bool hasError, bool canceled, int64_t run
     }
 }
 
+void KeyMetrics::noteViewPageRead(bool fromStore) {
+    if (fromStore) {
+        viewPagesDb_.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        viewPagesMemory_.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+void KeyMetrics::noteViewEvict(size_t count) {
+    if (count > 0) {
+        viewEvictCount_.fetch_add(static_cast<uint64_t>(count), std::memory_order_relaxed);
+    }
+}
+
+void KeyMetrics::noteViewCollectPartial() {
+    viewCollectPartial_.fetch_add(1, std::memory_order_relaxed);
+}
+
 std::string KeyMetrics::lastModelErrorKind() const {
     std::lock_guard<std::mutex> lock(errorMutex_);
     return lastModelErrorKind_;
@@ -284,6 +302,14 @@ utilxx_base::Json KeyMetrics::toJson() const {    utilxx_base::Json j = utilxx_b
     );
     j["async_work"] = std::move(asyncWork);
 
+    // 展示历史窗口: 分页是从内存命中还是回库读; 淘汰与降级次数
+    utilxx_base::Json view   = utilxx_base::Json::object();
+    view["pages_memory"]     = viewPagesMemory_.load(std::memory_order_relaxed);
+    view["pages_store"]      = viewPagesDb_.load(std::memory_order_relaxed);
+    view["evicted"]          = viewEvictCount_.load(std::memory_order_relaxed);
+    view["collect_partial"]  = viewCollectPartial_.load(std::memory_order_relaxed);
+    j["view_window"]         = std::move(view);
+
     return j;
 }
 
@@ -298,7 +324,8 @@ std::string KeyMetrics::summary() const {
         "turns={} (ok={} failed={} Canceled={} interrupted={}) ttft_avg={:.1f}ms (n={}) "
         "model_calls={} errors={} tools={} (failed={}) compactions={} prompt_refreshes={} "
         "prompt_changes={} events_delivered={} events_dropped={} wait_timeouts={} "
-        "async_work={} (done={} failed={} canceled={} queued_peak={})",
+        "async_work={} (done={} failed={} canceled={} queued_peak={}) view_pages={} (store={}) "
+        "view_evicted={} view_partial={}",
         turns,
         turnsCompleted_.load(std::memory_order_relaxed),
         turnsFailed_.load(std::memory_order_relaxed),
@@ -320,7 +347,11 @@ std::string KeyMetrics::summary() const {
         asyncWorkFinished_.load(std::memory_order_relaxed),
         asyncWorkFailed_.load(std::memory_order_relaxed),
         asyncWorkCanceled_.load(std::memory_order_relaxed),
-        asyncWorkQueuedPeak_.load(std::memory_order_relaxed)
+        asyncWorkQueuedPeak_.load(std::memory_order_relaxed),
+        viewPagesMemory_.load(std::memory_order_relaxed) + viewPagesDb_.load(),
+        viewPagesDb_.load(std::memory_order_relaxed),
+        viewEvictCount_.load(std::memory_order_relaxed),
+        viewCollectPartial_.load(std::memory_order_relaxed)
     );
 }
 
@@ -361,6 +392,10 @@ void KeyMetrics::reset() {
     asyncWorkCanceled_.store(0);
     asyncWorkQueuedPeak_.store(0);
     asyncWorkRunMs_.store(0);
+    viewPagesMemory_.store(0);
+    viewPagesDb_.store(0);
+    viewEvictCount_.store(0);
+    viewCollectPartial_.store(0);
     turnStartSteadyMs_.store(0);
     firstTokenSeen_.store(false);
     {

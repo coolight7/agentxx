@@ -6,6 +6,7 @@
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/tools/subagent.h"
 #include "agentxx/util/neograph_json_bridge.h"
+#include "agentxx/util/observability.h"
 #include "neograph/graph/registry.h"
 #include "utilxx/async_offload.h"
 #include "utilxx_base/container_util.h"
@@ -14,6 +15,7 @@
 #include <filesystem>
 #include <fmt/format.h>
 #include <fmt/ranges.h>
+#include <optional>
 
 namespace agentxx {
 namespace agent {
@@ -97,6 +99,10 @@ SessionStoreHooks makeSessionStoreHooks(
             [store, sessionId, weakSession](const ViewMessage& msg) {
                 store->updateViewMessage(sessionId, msg);
                 reportPersistFailure(weakSession.lock(), store);
+            },
+        .onLoadViewPage =
+            [store, sessionId](uint64_t start, uint32_t count) {
+                return store->loadViewMessagesPage(sessionId, start, count);
             },
         .onSaveLlmMessages =
             [store, sessionId, weakSession](std::string_view msgsText) {
@@ -206,11 +212,9 @@ Session::~Session() {
 }
 
 std::string Session::appendViewMessage(ViewMessage msg, std::string_view reuseId) {
-    // 强制校验: viewMessages/chainHash/msgIdCounter_ 仅允许 io 线程写入
+    // 强制校验: 展示历史窗口/msgIdCounter_ 仅允许 io 线程写入
     assertIoThread();
 
-    // 链式哈希对消息内容 (不含 id)
-    chainHash.append(msg.toJson().dump());
     std::string id;
     if (reuseId.empty()) {
         id = fmt::format("msg_{:06d}", ++msgIdCounter_);
@@ -220,20 +224,23 @@ std::string Session::appendViewMessage(ViewMessage msg, std::string_view reuseId
     }
     msg.id = id;
     // 展示历史持久化序号: 会话内单调递增, 与库里 view_message.seq 一致
+    // (绝对展示下标 = seq - 1)
     const auto viewSeq = ++viewSeqCounter_;
-    viewMessages.push_back(std::move(msg));
-    // 维护 msgId → 下标索引 (updateViewMessage 的 O(1) 定位用)
-    msgIndex_.insert_or_assign(id, viewMessages.size() - 1);
+    viewWindow_.push_back(std::move(msg));
+    // 维护 msgId → 绝对下标索引 (updateViewMessage 的 O(1) 定位用)
+    msgIndex_.insert_or_assign(id, viewSeq - 1);
     // 持久化 (节流, 尽力而为): 压入待落盘队列 — 首次立即落库, 节流窗口内合并,
     // 待下次触发或轮末 flushViewMessages() 补存 (消息 + 追加后计数同事务)
     if (hooks_.onAppendViewMessage) {
         enqueueViewPersist(PendingViewOp{
             .isAppend = true,
-            .index    = viewMessages.size() - 1,
+            .absIndex = viewSeq - 1,
             .counter  = msgIdCounter_,
             .seq      = viewSeq,
         });
     }
+    // 窗口淘汰 (只在待落盘队列为空时真正删除, 见 maybeEvictViewWindow)
+    maybeEvictViewWindow();
     return id;
 }
 
@@ -280,7 +287,7 @@ std::string Session::finalizeStreamingView(ViewMessage finalMsg) {
 }
 
 void Session::updateViewMessage(ViewMessage msg) {
-    // 强制校验: viewMessages/chainHash/msgIdCounter_ 仅允许 io 线程写入
+    // 强制校验: 展示历史窗口/msgIdCounter_ 仅允许 io 线程写入
     assertIoThread();
 
     if (msg.id.empty()) {
@@ -288,36 +295,27 @@ void Session::updateViewMessage(ViewMessage msg) {
         return;
     }
     // 定位同 id 消息: 先走 msgId 索引 (O(1)); 索引缺失或指向的消息已变
-    // 则回退线性扫描并修复索引 (viewMessages/索引仅本类维护, 回退属防御)
-    size_t index = viewMessages.size();
-    if (auto idxIt = msgIndex_.find(msg.id); idxIt != msgIndex_.end()) {
-        if (idxIt->second < viewMessages.size() && viewMessages[idxIt->second].id == msg.id) {
-            index = idxIt->second;
-        }
-    }
-    if (index == viewMessages.size()) {
-        for (size_t i = 0; i < viewMessages.size(); ++i) {
-            if (viewMessages[i].id == msg.id) {
-                index = i;
-                msgIndex_.insert_or_assign(msg.id, i); // 修复索引
-                break;
-            }
-        }
-    }
-    if (index < viewMessages.size()) {
-        auto& m = viewMessages[index];
-        m       = std::move(msg);
+    // 则回退线性扫描并修复索引 (窗口/索引仅本类维护, 回退属防御)
+    const auto absIndex = absoluteIndexOfId(msg.id);
+    if (absIndex.has_value()) {
+        viewWindow_[*absIndex - viewWindowBase_] = std::move(msg);
         // 持久化 (节流, 尽力而为): 覆盖库内对应行, 供重启恢复
         if (hooks_.onUpdateViewMessage) {
             enqueueViewPersist(PendingViewOp{
                 .isAppend = false,
-                .index    = index,
+                .absIndex = *absIndex,
                 .counter  = 0,
             });
         }
         return;
     }
-    XX_LOGW("Session::updateViewMessage: msg id {} not found in history", msg.id);
+    // 已淘汰 (不在内存窗口): 只写库, 不改内存
+    // - 调用方持有的是淘汰前读到的副本, 不能据此重建整行;
+    //   客户端的显示由定稿的整条 upsert 收敛
+    XX_LOGD("Session::updateViewMessage: msg id {} is outside the window, write to store only", msg.id);
+    if (hooks_.onUpdateViewMessage) {
+        hooks_.onUpdateViewMessage(msg);
+    }
 }
 
 void Session::setStoreHooks(SessionStoreHooks hooks) {
@@ -330,35 +328,181 @@ void Session::restore(
     uint64_t                 msgIdCounter,
     uint64_t                 lastViewSeq
 ) {
+    const auto total
+        = std::max<uint64_t>(lastViewSeq, static_cast<uint64_t>(messages.size()));
+    restoreWindow(std::move(messages), 0, total, msgIdCounter);
+}
+
+void Session::restoreWindow(
+    std::vector<ViewMessage> messages,
+    uint64_t                 base,
+    uint64_t                 total,
+    uint64_t                 msgIdCounter
+) {
     assertIoThread();
 
-    // 整体替换 viewMessages 前丢弃待落盘队列: 队列按下标引用消息, 替换后
+    // 整体替换窗口前丢弃待落盘队列: 队列按绝对下标引用消息, 替换后
     // 旧下标不再有效; 恢复发生在会话加载阶段, 此时不应有未落盘增量
     pendingViewOps_.clear();
+    viewEvictPending_ = false;
 
     // 进程重启/切会话后没有半截行: 直播槽一并清空
     streamingView.reset();
 
-    // 重建链式哈希: 与 appendViewMessage 一致, 对不含 id 的消息内容哈希
-    chainHash.reset();
-    for (const auto& m : messages) {
-        auto content = m;
-        content.id.clear();
-        chainHash.append(content.toJson().dump());
-    }
-    viewMessages  = std::move(messages);
-    msgIdCounter_ = msgIdCounter;
-    // 展示历史序号: 库内最大值优先; 老数据无记录时按历史条数推算, 保证后续
-    // 追加的序号严格大于已存在的历史 (重连增量补拉不会漏消息)
-    viewSeqCounter_ = std::max(lastViewSeq, static_cast<uint64_t>(viewMessages.size()));
-    // 重建 msgId → 下标索引 (与 viewMessages 同步; 恢复的历史全部建索引)
+    viewWindow_     = std::move(messages);
+    viewWindowBase_ = base;
+    msgIdCounter_   = msgIdCounter;
+    // 总数: 库内记录的优先; 老数据无记录时按"窗口首条下标 + 窗口条数"推算,
+    // 保证后续追加的序号严格大于已存在的历史 (重连增量补拉不会漏消息)
+    viewSeqCounter_ = std::max<uint64_t>(total, base + viewWindow_.size());
+    // 重建 msgId → 绝对下标索引 (只含窗口内的 id)
     msgIndex_.clear();
-    msgIndex_.reserve(viewMessages.size());
-    for (size_t i = 0; i < viewMessages.size(); ++i) {
-        if (false == viewMessages[i].id.empty()) {
-            msgIndex_.insert_or_assign(viewMessages[i].id, i);
+    msgIndex_.reserve(viewWindow_.size());
+    for (size_t i = 0; i < viewWindow_.size(); ++i) {
+        if (false == viewWindow_[i].id.empty()) {
+            msgIndex_.insert_or_assign(viewWindow_[i].id, base + i);
         }
     }
+}
+
+std::optional<uint64_t> Session::absoluteIndexOfId(std::string_view id) const {
+    if (id.empty()) {
+        return std::nullopt;
+    }
+    const auto windowEnd = viewWindowBase_ + viewWindow_.size();
+    // 异构查找未开 (std::hash<std::string> 不是透明哈希): 一次 string 构造换 O(1) 定位
+    const std::string key{id};
+    if (auto idxIt = msgIndex_.find(key); idxIt != msgIndex_.end()) {
+        const auto absIndex = idxIt->second;
+        if (absIndex >= viewWindowBase_ && absIndex < windowEnd
+            && viewWindow_[static_cast<size_t>(absIndex - viewWindowBase_)].id == id) {
+            return absIndex;
+        }
+    }
+    // 索引缺失/不一致: 线性扫描窗口并修复索引 (旧下标可能因淘汰而失效)
+    for (size_t i = 0; i < viewWindow_.size(); ++i) {
+        if (viewWindow_[i].id == id) {
+            msgIndex_.insert_or_assign(key, viewWindowBase_ + i);
+            return viewWindowBase_ + i;
+        }
+    }
+    return std::nullopt;
+}
+
+const ViewMessage* Session::viewMessageAt(uint64_t absIndex) const {
+    if (absIndex < viewWindowBase_) {
+        return nullptr;
+    }
+    const auto offset = absIndex - viewWindowBase_;
+    if (offset >= viewWindow_.size()) {
+        return nullptr;
+    }
+    return &viewWindow_[static_cast<size_t>(offset)];
+}
+
+const ViewMessage* Session::viewMessageById(std::string_view id) const {
+    const auto absIndex = absoluteIndexOfId(id);
+    return absIndex.has_value() ? viewMessageAt(*absIndex) : nullptr;
+}
+
+bool Session::collectViewRange(uint64_t start, uint64_t end, std::vector<ViewMessage>& out) {
+    assertIoThread();
+    out.clear();
+    if (end > viewSeqCounter_) {
+        end = viewSeqCounter_;
+    }
+    if (start >= end) {
+        return true;
+    }
+    const auto memBase = viewWindowBase_;
+    const auto memEnd  = viewWindowBase_ + viewWindow_.size();
+    if (start < memBase) {
+        // 前半段不在内存: 回库读 (页区间与 seq 一一对应)
+        const uint64_t headEnd = std::min(end, memBase);
+        const uint64_t want    = headEnd - start;
+        std::vector<ViewMessage> page;
+        if (hooks_.onLoadViewPage) {
+            page = hooks_.onLoadViewPage(start, static_cast<uint32_t>(want));
+            if (auto m = metrics_.lock(); m) {
+                m->noteViewPageRead(true);
+            }
+        }
+        if (page.size() != want) {
+            // 库不可用/短页: 不能把不连续的内容当成合法页返回 (客户端会按
+            // startIndex 对账), 直接回空页由调用方降级
+            XX_LOGW(
+                "Session::collectViewRange: page [{}, {}) from store is incomplete ({} of {}); "
+                "older history unavailable",
+                start,
+                headEnd,
+                page.size(),
+                want
+            );
+            if (auto m = metrics_.lock(); m) {
+                m->noteViewCollectPartial();
+            }
+            return false;
+        }
+        out = std::move(page);
+    } else if (auto m = metrics_.lock(); m) {
+        // 整段命中内存 (尾窗/追加快照的常规路径)
+        m->noteViewPageRead(false);
+    }
+    // 内存覆盖的部分 (窗口比库新: tool 结果回填只在内存里)
+    const uint64_t from = std::max(start, memBase);
+    if (from < end && from < memEnd) {
+        const uint64_t to = std::min(end, memEnd);
+        out.insert(
+            out.end(),
+            viewWindow_.begin() + static_cast<ptrdiff_t>(from - memBase),
+            viewWindow_.begin() + static_cast<ptrdiff_t>(to - memBase)
+        );
+    }
+    return true;
+}
+
+void Session::maybeEvictViewWindow() {
+    assertIoThread();
+    if (viewWindowCap_ == 0 || viewWindow_.size() <= viewWindowCap_) {
+        viewEvictPending_ = false;
+        return;
+    }
+    // 待落盘队列按下标引用内存: 队列非空时不删, 等 flush 后再试
+    // (既不在 io 线程强做批量写库, 也不会出现"窗口里删了、库里还没写")
+    if (!pendingViewOps_.empty()) {
+        viewEvictPending_ = true;
+        return;
+    }
+    viewEvictPending_ = false;
+    // 成批删除: 至少清到 cap 以下, 且一次至少删 cap/4 条 —— 逐条 erase(begin())
+    // 在长会话里是 O(n) 搬移, 分批后摊还成本可忽略
+    const size_t batch = std::max<size_t>(viewWindowCap_ / 4, 1);
+    size_t       drop  = viewWindow_.size() - viewWindowCap_;
+    drop               = std::max(drop, batch);
+    drop               = std::min(drop, viewWindow_.size());
+    if (drop == 0) {
+        return;
+    }
+    for (size_t i = 0; i < drop; ++i) {
+        if (!viewWindow_[i].id.empty()) {
+            msgIndex_.erase(viewWindow_[i].id);
+        }
+    }
+    viewWindow_.erase(
+        viewWindow_.begin(),
+        viewWindow_.begin() + static_cast<ptrdiff_t>(drop)
+    );
+    viewWindowBase_ += drop;
+    if (auto m = metrics_.lock(); m) {
+        m->noteViewEvict(drop);
+    }
+    XX_LOGD(
+        "Session: view window evicted {} message(s), window=[{}, {}) cap={}",
+        drop,
+        viewWindowBase_,
+        viewWindowBase_ + viewWindow_.size(),
+        viewWindowCap_
+    );
 }
 
 void Session::saveLlmMessages() {
@@ -514,7 +658,7 @@ void Session::persistNow(std::string_view reason) {
     // 空会话不落盘: 只连接/切换过、还没产生任何消息的会话落盘会建出空的会话库,
     // 会话列表里随后多出一条无内容条目; 第一条消息写入时 (appendViewMessage /
     // saveLlmMessages) 才建立会话库。进程退出时的整体刷盘也走本入口
-    if (viewMessages.empty() && messages_.empty() && pendingViewOps_.empty()) {
+    if (viewWindow_.empty() && messages_.empty() && pendingViewOps_.empty()) {
         return;
     }
     XX_LOGD("Session: persist now ({})", reason);
@@ -538,11 +682,11 @@ void Session::persistThrottled(std::string_view reason) {
 }
 
 void Session::enqueueViewPersist(PendingViewOp op) {
-    // 同一条行的连续覆盖只留一条: PendingViewOp 只记下标, 回放时读的是行当前内容,
-    // 中间状态没有落库价值 (流式文本反复追加到同一条行时会调用很多次)
+    // 同一条行的连续覆盖只留一条: PendingViewOp 只记绝对下标, 回放时读的是行
+    // 当前内容, 中间状态没有落库价值 (流式文本反复追加到同一条行时会调用很多次)
     if (false == op.isAppend) {
         for (const auto& pending : pendingViewOps_) {
-            if (false == pending.isAppend && pending.index == op.index) {
+            if (false == pending.isAppend && pending.absIndex == op.absIndex) {
                 return;
             }
         }
@@ -559,18 +703,20 @@ void Session::flushPendingViewOps() {
     if (pendingViewOps_.empty()) {
         return;
     }
+    const auto windowEnd = viewWindowBase_ + viewWindow_.size();
     for (const auto& op : pendingViewOps_) {
-        // 下标越界防御: restore() 整体替换 viewMessages 时会先清空队列, 正常路径
-        // 不会命中; 此处先做一次判断, 避免异常路径把错误数据写库
-        if (op.index >= viewMessages.size()) {
+        // 绝对下标越界防御: restore 整体替换窗口时会先清空队列, 且淘汰只在队列
+        // 为空时发生, 正常路径不会命中; 此处先做一次判断, 避免异常路径把错误数据写库
+        if (op.absIndex < viewWindowBase_ || op.absIndex >= windowEnd) {
             XX_LOGW(
-                "Session::flushPendingViewOps: stale view index {} (size={})",
-                op.index,
-                viewMessages.size()
+                "Session::flushPendingViewOps: stale view index {} (window=[{}, {}))",
+                op.absIndex,
+                viewWindowBase_,
+                windowEnd
             );
             continue;
         }
-        const auto& msg = viewMessages[op.index];
+        const auto& msg = viewWindow_[static_cast<size_t>(op.absIndex - viewWindowBase_)];
         if (op.isAppend) {
             if (hooks_.onAppendViewMessage) {
                 hooks_.onAppendViewMessage(msg, op.counter, op.seq);
@@ -583,6 +729,10 @@ void Session::flushPendingViewOps() {
     }
     pendingViewOps_.clear();
     viewLastPersistMs_ = steadyNowMs();
+    // 队列表清空了: 之前因"待落盘不为空"而推迟的淘汰现在可以做
+    if (viewEvictPending_) {
+        maybeEvictViewWindow();
+    }
 }
 
 void Session::setCancelToken(std::shared_ptr<neograph::graph::CancelToken> token) {
@@ -647,9 +797,15 @@ std::shared_ptr<Session> SessionsManager::getOrCreate(std::string_view sessionId
     // 拷贝到局部: 供 lambda 按值捕获 (成员无法直接捕获)
     auto sessionStore = this->sessionStore;
     if (sessionStore) {
-        // 从 SQLite 恢复该 session 的历史消息/LLM 上下文, 并绑定持久化回调
-        auto loaded = sessionStore->loadSession(sessionId);
-        session->restore(std::move(loaded.viewMessages), loaded.msgIdCounter, loaded.lastViewSeq);
+        // 从 SQLite 恢复该 session 的展示历史尾窗/LLM 上下文, 并绑定持久化回调
+        auto loaded = sessionStore->loadSession(sessionId, viewTailCount());
+        session->setViewWindowCap(viewWindowMessages);
+        session->restoreWindow(
+            std::move(loaded.viewMessages),
+            loaded.viewWindowBase,
+            loaded.lastViewSeq,
+            loaded.msgIdCounter
+        );
         session->replaceMessagesFromJson(loaded.llmMessages);
         session->setStoreHooks(makeSessionStoreHooks(sessionStore, std::string{sessionId}, session)
         );
@@ -661,6 +817,7 @@ std::shared_ptr<Session> SessionsManager::getOrCreate(std::string_view sessionId
             session->contextStats->title = loaded.title;
         }
     }
+    session->setMetrics(metrics);
     utilxx_base::insertHeterogeneous(sessions_, std::string{sessionId}, session);
     return session;
 }
@@ -673,18 +830,19 @@ asio::awaitable<std::shared_ptr<Session>>
     }
 
     auto                        sessionStore = this->sessionStore;
+    const size_t                tailCount    = viewTailCount();
     SessionStore::LoadedSession loaded;
     if (sessionStore) {
         if (pool) {
             loaded = co_await utilxx::offloadAsync<SessionStore::LoadedSession>(
                 *pool,
-                [sessionStore,
-                 sid = std::string(sessionId)]() -> asio::awaitable<SessionStore::LoadedSession> {
-                    co_return sessionStore->loadSession(sid);
+                [sessionStore, tailCount, sid = std::string(sessionId)]()
+                    -> asio::awaitable<SessionStore::LoadedSession> {
+                    co_return sessionStore->loadSession(sid, tailCount);
                 }
             );
         } else {
-            loaded = sessionStore->loadSession(sessionId);
+            loaded = sessionStore->loadSession(sessionId, tailCount);
         }
     }
 
@@ -695,7 +853,13 @@ asio::awaitable<std::shared_ptr<Session>>
 
     auto session = std::make_shared<Session>();
     if (sessionStore) {
-        session->restore(std::move(loaded.viewMessages), loaded.msgIdCounter, loaded.lastViewSeq);
+        session->setViewWindowCap(viewWindowMessages);
+        session->restoreWindow(
+            std::move(loaded.viewMessages),
+            loaded.viewWindowBase,
+            loaded.lastViewSeq,
+            loaded.msgIdCounter
+        );
         session->replaceMessagesFromJson(loaded.llmMessages);
         session->setStoreHooks(makeSessionStoreHooks(sessionStore, std::string{sessionId}, session)
         );
@@ -705,6 +869,7 @@ asio::awaitable<std::shared_ptr<Session>>
             session->contextStats->title = loaded.title;
         }
     }
+    session->setMetrics(metrics);
     utilxx_base::insertHeterogeneous(sessions_, std::string{sessionId}, session);
     co_return session;
 }
