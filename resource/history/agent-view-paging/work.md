@@ -14,7 +14,7 @@
 | 3 端点 + 协议 v5 | 已完成 | `collectViewRange` 取段、`historyTail`、增量补拉前 flush、删 `tailHash` |
 | 4 写入方 + 测试/基准适配 | 已完成 | EventBridge 按 id、diagnostics、基准适配；新用例已补（见“新增用例”） |
 | 5 配置/可观测/文档/schema | 已完成 | 配置键 + 快照 + 指标 + wire schema + 设计文档（index/tui/benchmark）均已改 |
-| 6 全量验证 | 进行中 | 逐模块数字见“验证结果”；**benchmark 复测未做**（需 release 重建，见“待完成”） |
+| 6 全量验证 | 已完成 | 全量 42544 通过（1 例既有偶发重跑通过）；release 侧已编过并跑过 `resource_real_tui`；窗口收益需新场景，见“待完成” |
 
 ## 现状调查结论（步骤 0）
 
