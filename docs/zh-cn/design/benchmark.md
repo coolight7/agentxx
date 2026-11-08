@@ -353,6 +353,13 @@ mmap/trim 阈值, 后者实测会增加 15% 场景耗时)。
    ~8 MB RSS, codegraph 单独 ~6 MB (tree-sitter 语法表 + 后台预索引)
 4. **线程栈**: 默认 8 MB 线程栈使 VmSize 仍有百 MB 级冗余 (RSS 影响很小)
 
+> 展示历史窗口化 (2026-11-08, `session.view_window_messages` 默认 400) 的收益目前**量不到**:
+> `agent/benchmark` 的资源场景都 `enableSessionStore = false`, 没库就不淘汰 → 展示侧仍是全量。
+> 同机 release 实测 (`resource_real_tui`, 2026-11-08): startup RSS 22.79 MB / 私脏 7.70 MB,
+> ctx100k 27.38 MB (view 354 条 / 524 KB), ctx200k 30.79 MB (view 708 条 / 1051 KB),
+> 帧 0.19~0.21 ms; 开库 + 窗口 400 时 ctx200k 的展示侧会落在 400 条 / 600 KB 量级 ——
+> 要给出差值需新增一个“开库 + N 条历史 + 重启加载”的场景。
+
 
 ## 9. 内存分配器 mimalloc 实测 (2026-09-26 / 88fee6e0 重测)
 
