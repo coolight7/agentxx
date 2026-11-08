@@ -818,6 +818,37 @@ void testEventSourceBadge() {
 }
 
 // ---------------------------------------------------------------------------
+// 事件内容被转存到 share store 时的折叠预览: 提示行不算内容
+// (正文 `[Content]` 段的第一行是取回提示, 预览应跳过它看后面的开头片段)
+// ---------------------------------------------------------------------------
+
+void testEventOffloadPreview() {
+    auto&      settings  = TUISettings::instance();
+    const auto savedLang = settings.language();
+    settings.setLanguage(TuiLanguage::ZhCn);
+
+    ScrollFixture f;
+    f.sharedState.mutate([](TUIRenderState& st) {
+        auto eventMsg = std::make_shared<TUIMessage>(TUIMessage::makeText(
+            TUIMessage::Role::Event,
+            "[Event] big.done\n[Info]\nmode: first\nwait: w-1\nstatus: value\n[Content]\n"
+            "[Content offloaded. Use the `agentxx_share_store` tool to fetch the content by "
+            "ID 3. Total 200 lines, show [1, 66], hide [67, 200].]\nlog: PREVIEWLINE7Q",
+            1000
+        ));
+        eventMsg->source = std::string{agentxx::agent::kInputSourceEventPrefix} + "big.done";
+        pushRow(st, std::move(*eventMsg));
+    });
+
+    const std::string frame = stripAnsiCodes(f.render());
+    // 预览是提示行后面的第一行内容
+    XX_TEST_EXPECT_TRUE(frame.find("+ [事件] big.done · log: PREVIEWLINE7Q") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(frame.find("Content offloaded") == std::string::npos);
+
+    settings.setLanguage(savedLang);
+}
+
+// ---------------------------------------------------------------------------
 // 用户消息支持展开/折叠: 开头标记与其它可折叠消息统一为 `+` / `-`
 // (原来是不可折叠的 `> ` 前缀)
 // ---------------------------------------------------------------------------
@@ -1690,6 +1721,9 @@ TestResult testTuiScroll() {
 
     // 事件中枢投递的输入: 折叠头 `+ [事件] <事件名>`
     testEventSourceBadge();
+
+    // 内容被转存 share store 时预览跳过提示行
+    testEventOffloadPreview();
 
     // 用户消息支持展开/折叠 (`+` / `-` 开头标记)
     testUserMessageCollapse();

@@ -809,7 +809,8 @@ agent 线程插入会话历史的展示条目: 轮次统计、错误/取消提�
   单行预览, 展开态下一行显示全文
   - 配色: 折叠标记与 `[事件]` 前缀用高亮色 `theme.accentColor`; 事件名折叠态叠加
     `theme.dim()` (展开态保持高亮), 分隔符与内容预览同样 dim; 正文用 `theme.toolColor`
-  - 预览取正文 `[Content]` 段的第一行 (`eventContentPreview`, 跳过 `#n` 分块标记):
+  - 预览取正文 `[Content]` 段的第一行 (`eventContentPreview`, 跳过 `#n` 分块标记与
+    `[Content offloaded. ...]` 转存提示行, 提示行不算内容):
     正文首行 `[Event] <名字>` 与头部重复、`[Info]` 只是元信息, 都不适合当预览;
     找不到 `[Content]` 段标记时退回正文首行
   - 正文按纯文本渲染 (`renderPlainText`, 保留硬换行)

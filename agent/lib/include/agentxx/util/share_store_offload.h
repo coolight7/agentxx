@@ -12,6 +12,12 @@ class AgentContext;
 
 namespace util {
 
+/// 卸载提示的首行前缀
+/// - 提示文本由 [offloadShareStoreIfOversized] 生成, 界面侧靠这个前缀把提示行
+///   当成"非内容"跳过 (例如事件折叠头只预览真实内容)
+/// - 提示行本身固定作为第一行输出 (后面接开头片段)
+inline constexpr std::string_view kOffloadHintPrefix = "[Content offloaded.";
+
 /// 单条文本卸载到会话 share store 的结果 (见 [offloadShareStoreIfOversized])
 struct ShareStoreOffload {
     /// 是否发生了卸载 (false = 内容未达阈值, [text] 即输入原文)

@@ -67,6 +67,14 @@
 | 全量 `agentxx_test --log-level warn` | 42684 passed / 5 failed，失败全在 `boundaries`（接口表台账与 `third_party/cxx_pluginxx` 头文件不一致，规则 7/8/9/10/15），本次改动未触碰接口表与 `boundaries` 用例 |
 | 构建 | 内层 lib（`agentxx_static`）+ install + 内层 client（`agentxx`）+ 内层 test（`agentxx_test`）均无错误 |
 
+## 4.1 收尾补充
+
+- 转存提示的首行前缀抽成公用常量 `agentxx::util::kOffloadHintPrefix`
+  (`share_store_offload.h`), 提示文本本身仍由 `offloadShareStoreIfOversized` 排版
+  (字节级输出未变, `share_store` 的逐字断言仍通过); 界面侧据此把提示行当成"非内容"跳过。
+- 新增 `tui_scroll` 用例 `testEventOffloadPreview`: 内容段第一行是转存提示时, 折叠预览
+  显示提示后面那行真实内容。
+
 ## 5. 遗留与注意
 
 - Windows 调试版测试必须从 `{build}/exec/` 目录运行（那里有 `clang_rt.asan_dynamic-x86_64.dll`）；
