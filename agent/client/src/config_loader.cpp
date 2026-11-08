@@ -779,7 +779,8 @@ static YamlAppConfig parseYamlConfigNode(
 
     // 事件中枢 (yaml `event` 块)
     // - 中枢常驻, 没有 enable 开关
-    // - value_max_bytes:     单值进入上下文的阈值 (字节, 超出转 share store; 默认 32768)
+    // - value_max_bytes:     内容 (即 [Content] 段) 的字节上限 (超出整段转 share store;
+    //                        默认 32768, 与工具输出压缩阈值取小生效)
     // - wait_timeout_ms:     watch 的默认超时 (毫秒, 0 = 不限; 默认 0)
     // - max_waits_session:   每会话同时挂起的等待数上限 (默认 32)
     // - allow_headless_turn: 无驱动端时是否允许事件自驱一轮 (默认 false)

@@ -793,9 +793,9 @@ agent 线程插入会话历史的展示条目: 轮次统计、错误/取消提�
 ### 2.17 事件输入的展示角色 (`Role::Event`)
 
 事件中枢投递进会话的输入, 在 LLM 上下文里必须是 `user` 消息 (模型只认 user/assistant/tool),
-但展示历史里它有专属角色 `ViewMessage::Role::Event`: 正文是中枢渲染好的 `[Event] ...`
-多行文本 (事件名 + 各字段 + 值), 一次投递常常十几行, 借用户消息展示会把屏幕占满,
-而且用户消息当时不可折叠。
+但展示历史里它有专属角色 `ViewMessage::Role::Event`: 正文是中枢渲染好的三段文本
+(`[Event]` 事件名 / `[Info]` 元信息 / `[Content]` 内容), 一次投递常常十几行,
+借用户消息展示会把屏幕占满, 而且用户消息当时不可折叠。
 
 - 角色推导: `ViewMessage::roleOfInputSource(source)` (`event:<事件名>` → `Event`,
   其余 → `User`)。只在服务端的两个写入点判定 (`BaseAgent::runTurnAsync`、
@@ -804,22 +804,28 @@ agent 线程插入会话历史的展示条目: 轮次统计、错误/取消提�
   不解析正文), 空来源不写进 JSON
 - 默认折叠: `ViewMessage::makeText(Role::Event, ...)` 自动 `collapsed = true`
 - 渲染 ([MessageListComponent::buildMessageBlock](/agent/client/src/io/tui/components/message_list.cpp)
-  的 `Role::Event` 分支): 头部形态与工具消息一致, `+ [事件] <事件名>`
-   (i18n 键 `msg.eventSource`, 英文 ` [Event] {}`); 折叠态其后接 `· ` 与单行预览,
-  展开态下一行显示全文。折叠标记、标签与正文都用 `theme.toolColor`, 单行预览叠加
-  `theme.dim()`; 正文按纯文本渲染 (`renderPlainText`, 保留硬换行)
+  的 `Role::Event` 分支): 头部 `+ [事件] <事件名> · <内容预览>`
+  (i18n 键 `msg.eventPrefix` = ` [事件] `, 事件名单独渲染); 折叠态其后接 ` · ` 与
+  单行预览, 展开态下一行显示全文
+  - 配色: 折叠标记与 `[事件]` 前缀用高亮色 `theme.accentColor`; 事件名折叠态叠加
+    `theme.dim()` (展开态保持高亮), 分隔符与内容预览同样 dim; 正文用 `theme.toolColor`
+  - 预览取正文 `[Content]` 段的第一行 (`eventContentPreview`, 跳过 `#n` 分块标记):
+    正文首行 `[Event] <名字>` 与头部重复、`[Info]` 只是元信息, 都不适合当预览;
+    找不到 `[Content]` 段标记时退回正文首行
+  - 正文按纯文本渲染 (`renderPlainText`, 保留硬换行)
 - 折叠交互: 点击消息块任意位置切换 (与 Think/Tool/System/Tip/User 同一套命中登记,
   见 §3.2)
 - **不解析正文**: 事件名取自结构化来源字段; 正文是给模型看的稳定文本, 会随
   [events.md](events.md) 第 5 节调整, 从正文里再扒一次等于把展示绑在文本格式上
+  (例外仅是折叠预览: 按固定分段标记 `[Content]` 切一行给用户看, 不影响交互)
 - 只认 `Role::Event`: 早期把事件输入记成 `role=user` + `source=event:*` 的写法**不再做角色
   归一化** (`ViewMessage::fromJson` 按 JSON 里的角色原样解析), 展示端也不再给 user 行
   画事件头 —— 这类历史消息就按普通用户消息展示
 - 历史消息经 Sync (`ViewMessage` JSON) 与会话库重载后角色与来源都保留
 - 相关测试: `agentxx_test tui_scroll` 的事件折叠头场景 (默认折叠、点击展开/折回、
-  事件名只出现一次)、`agentxx_test tui_stream` 的 TurnStart 场景 (角色推导、
-  JSON 往返、user + source 不再归一化)、`agentxx_test event_delivery`
-  (展示角色与来源、默认折叠)
+  事件名只出现一次、` · ` 列距、折叠态逐格 dim/高亮色)、`agentxx_test tui_stream`
+  的 TurnStart 场景 (角色推导、JSON 往返、user + source 不再归一化)、
+  `agentxx_test event_delivery` (展示角色与来源、默认折叠)
 
 ### 2.18 用户消息的展开/折叠与附件段 (所有消息共用)
 

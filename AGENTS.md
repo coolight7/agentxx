@@ -566,10 +566,14 @@ path/to/agentxx_test --log-level warn string_util regex
   **框架只校验不补前缀**; 中枢事件名**就是**总线主题, 内置值事件统一在
   `agentxx.agent.event.` 段 (与强类型主题分开), `turn.`/`tool.`/`async.`/`timer.`/`host.`
   子段保留给框架; 功能点 id 同一套规则 (`agentxx.agent.context.*` / `plugin.<名>.*`);
-  投递文本固定以 `[Event] <名字> (<mode>)` 开头
-  (不命中工具失败前缀); 展示历史里它是 `ViewMessage::Role::Event` (LLM 上下文仍是 `user` 消息;
-  角色由 `ViewMessage::roleOfInputSource(source)` 推导, 默认折叠, 界面上是 `+ [事件] <名字>`
-  折叠头, 见 tui.md §2.17); 往会话塞输入统一经 `SessionInputSink`
+  投递文本是三段纯文本 `[Event] <名字>` / `[Info]` (mode/wait/status/ref/label/note) /
+  `[Content]` (值按纯文本渲染, 不套 JSON 转义; 多值用 `#1`/`#2`; 超长整段转 share store,
+  阈值 = `toolcallSummaryLimitOutputLength` 与 `event.value_max_bytes` 取小) ——
+  首行仍以 `[Event]` 开头 (不命中工具失败前缀, 提示词也按这个首行识别事件输入);
+  展示历史里它是 `ViewMessage::Role::Event` (LLM 上下文仍是 `user` 消息;
+  角色由 `ViewMessage::roleOfInputSource(source)` 推导, 默认折叠, 界面上是
+  `+ [事件] <名字> · <内容预览>` 折叠头 —— 标记与前缀高亮色, 折叠态名字/内容 dim,
+  预览取 `[Content]` 段首行, 见 tui.md §2.17); 往会话塞输入统一经 `SessionInputSink`
   (实现 = `SessionServerAgentIO`, 弱引用挂 `Session::inputSink`), 空闲开新一轮 / 在跑写
   `Session::pendingInputs_`; 轮末把落在最后一次模型调用之后的 next-step 输入提升为下一轮
   (`rolloverLeftoverNextStepInputs`, 仅在有驱动端时)。内置事件源

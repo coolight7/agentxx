@@ -139,29 +139,57 @@ stateDiagram-v2
 ## 5. 投递文本（给模型看的稳定格式）
 
 ```text
-[Event] build.done (first)
-wait: w-3 ref: call_1
+[Event] build.done
+[Info]
+mode: first
+wait: w-3
 status: value
-value: {"ok":true,"url":"https://example.com/out.zip"}
+ref: call_1
 note: ...
 label: ...
+[Content]
+ok: true
+url: https://example.com/out.zip
 ```
 
-- 首行 `[Event] <名字> (<mode>)` 固定，模型据此识别"这是事件而不是用户说话"；
-- `status` 取值：`value` / `values` / `stream-ended` / `ended-empty` / `timeout`；
-- 单值写 `value:`，多值写 `values:` 加逐条编号；
-- 末尾换行去掉（投递文本作为一条 `user` 消息）；
-- 超长值（超过 `event.value_max_bytes`）转会话 share store，文本里留 `agentxx_share_store`
-  的取回提示；超过 1 MB 硬上限直接拒绝发布。
+三段结构（`renderEventText`, 实现见 `agent/lib/src/event/hub_text.cpp`）:
 
-后台任务完成时的回执文本（`async_start` 返回的是受理信息，结果由它自己投递）：
+- `[Event] <名字>`: 首行只放事件名, 模型据此识别“这是事件而不是用户说话”; 折叠预览与日志也靠它认事件
+- `[Info]`: `mode` / `wait` / `status` 恒输出, `ref` / `label` / `note` 有值才写;
+  `status` 取值 `value` / `values` / `stream-ended` / `stream-open` / `ended-empty` / `timeout`
+- `[Content]`: 值本体, 按**纯文本**渲染 (`renderEventValuesText`, 不套 JSON 转义):
+  字符串原样 (多行就是多行), 数字/布尔/null 同 JSON 文本, 对象逐行 `键: 值`,
+  数组逐行 `- 值`, 嵌套结构或多行字符串在键后换行并缩进两格;
+  多个值 (`mode=all` 等) 每段前一行 `#<序号>`; 无值时写 `(no value)`;
+  嵌套超过 8 层退回紧凑 JSON
+- 末尾换行去掉（投递文本作为一条 `user` 消息）;
+- 内容过长时**整段**转会话 share store（不再逐值转存, 否则默认阈值下会卸载两次）:
+  判定与提示与工具输出压缩共用 `agentxx::util::offloadShareStoreIfOversized`,
+  阈值 = `toolcallSummaryLimitOutputLength`（utf8 字符数, 默认 2 K）与
+  `event.value_max_bytes`（字节, 默认 32 K）取较小者（`AgentConfig::eventContentLimitLength`）;
+  文本里留 `[Content offloaded. ...]` 与开头片段, 模型用 `agentxx_share_store` 按行取回;
+  超过 1 MB 硬上限直接拒绝发布。
+
+后台任务完成时的回执文本（`async_start` 返回的是受理信息，结果由它自己投递）:
 
 ```text
-[Event] agentxx.agent.async.done (first)
-wait: w-3 ref=async-7
+[Event] agentxx.agent.async.done
+[Info]
+mode: first
+wait: w-3
 status: value
-value: [Async task] id=async-7 ... result: ...
+ref: async-7
+[Content]
+asyncId: async-7
+kind: tool
+name: agentxx_filesystem_grep
+content:
+  <工具输出原样, 多行就是多行>
+hasError: false
 ```
+
+`agentxx_async_await` 的返回值用同一个渲染函数（`EventHub::contentText` + `renderEventText`）,
+所以等待工具的结果与自动投递的输入格式一致。
 
 两种文本的终态都是成功: 工具返回 `ToolResult::ok(...)`, 成败只看状态, 不看正文里有什么字样。
 以前的实现靠首行前缀判定 (`[Error` / `[Permission denied` / `[Repeated call denied` /
@@ -195,8 +223,8 @@ value: [Async task] id=async-7 ... result: ...
 - 写入口：`BaseAgent::runTurnAsync(..., inputSource)` → 展示消息 + TurnStart 增量；
   常量与前缀解析在 `conversation_types.h`（`kInputSourceEventPrefix` / `eventNameOfInputSource`），
   投递方与展示方共用一份，不各记一套字符串
-- 客户端只拿它做展示（折叠头 `+ [事件] <事件名>`，i18n 键 `msg.eventSource`），
-  **不解析正文**；空值不写进 JSON
+- 客户端只拿它做展示（折叠头 `+ [事件] <事件名> · <内容预览>`，i18n 键 `msg.eventPrefix`），
+  **不解析正文**（唯一例外是折叠预览按固定分段标记 `[Content]` 取一行）；空值不写进 JSON
 - 只认 `Role::Event`：`fromJson` 按 JSON 里的角色原样解析，不做角色归一化 —— 早期把事件
   输入记成 `role=user` + `source=event:*` 的历史消息就按普通用户消息展示
   （User 行不画事件头，折叠默认值也走用户消息规则）
@@ -359,7 +387,8 @@ value: [Async task] id=async-7 ... result: ...
 | 等待数 | 256 | — |
 | 单会话等待数 | 32 | `event.max_waits_session` |
 | 单会话"待运行的事件输入" | 64 | — |
-| 单值进入上下文的阈值 | 32 KB | `event.value_max_bytes` |
+| 内容段转 share store 阈值 | 2 K 字符（与工具输出同阈值） | `toolcallSummaryLimitOutputLength` |
+| 内容段字节上限 | 32 KB | `event.value_max_bytes` |
 | 单值硬上限 | 1 MB | — |
 | `await` 默认超时 | 30 s（硬上限 5 min） | — |
 | 插件/内部等待默认投递模式 | `next-step` | `event.delivery` |

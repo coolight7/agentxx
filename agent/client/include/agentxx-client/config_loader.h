@@ -106,8 +106,9 @@ struct YamlAppConfig {
     agent::PermissionMode permissionMode = agent::PermissionMode::Ask;
     /// subagent 总开关 (yaml `subagent.enable`, 默认 true)
     bool enableSubagent = true;
-    /// 事件单值进入上下文的阈值 (字节; yaml `event.value_max_bytes`, 默认 32768)
-    /// - 超出时转存会话 share store, 文本里给 id 与取回提示
+    /// 事件内容进入上下文的阈值 (字节; yaml `event.value_max_bytes`, 默认 32768)
+    /// - 超出时整段内容转存会话 share store, 文本里给 id 与取回提示
+    /// - 与工具输出压缩阈值 (`toolcallSummaryLimitOutputLength`) 取小, 默认按后者 (2 K 字符)
     int64_t eventValueMaxBytes = 32 * 1024;
     /// `watch` 的默认超时 (毫秒; yaml `event.wait_timeout_ms`, 0 = 不限)
     int64_t eventWaitTimeoutMs = 0;
