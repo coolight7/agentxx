@@ -200,7 +200,6 @@
 - `test_config_keys`：登记 `session.view_window_messages`（schema 随之重生成）
 
 ## 额外改动（与功能本体无关，但为了 `boundaries` 通过）
-
 `boundaries` 模块会扫源码与设计文档里的禁用词，本轮清理了这些早已超期的词：
 
 - 代码/文档：`载入` → `加载`；`宿主契约` → `主程序契约`；`宿主运行时` → `主程序运行时`
@@ -208,6 +207,35 @@
 - `agent/third_party/cxx_pluginxx_ui`：`通用载体` → `通用数据字段`
   （`docs/integration.md`、`include/pluginxx/ui/item.h`、`README.md`）——
   **改动落在子模块工作区**，需在子模块仓库自行提交（本次未提交）
+
+## release 侧复测与 benchmark 编译修复（2026-11-08）
+
+benchmark 模块只在 release 编，且上次构建产物是 10 月 26 日的 —— 改动后先试编了一次，
+**发现模块本身已经编译不过**（与本次改动无关的旧毛病 + 本次的 `WireHello` 字段变化）：
+
+| 问题 | 位置 | 修法 |
+|---|---|---|
+| `agentxx::agent::estimateViewMessageBytes` 不存在（库里没有这个函数） | `bench_mem_logical.h:94,305` | 在头文件里就地实现一个估算（结构体尺寸 + id/text/source + tool 子结构 + attach 估算） |
+| `WireHello{sessionId, "", 0, "", "", "en"}` 比新布局多一个字段 | `bench_resource_real.cpp:306,574,713` | 按新顺序改为 `{sessionId, "", 0, "", "en"}`（`tailHash` 已删，`historyTail` 默认 -1 → 用服务端默认 100） |
+
+修完后 `agentxx_static`（Release）+ `agentxx_benchmark`（Release）均编译通过，
+`agentxx_benchmark --list` 与 `resource_real_tui` 跑通（产物：`exec/bench/bench_20261108_211454.{json,md}`）。
+
+实测（Release, 同机，跑时全量测试已结束、CPU 空载）：
+
+| 采样点 | RSS | 私脏 | 展示历史 (view) | LLM 上下文 | token |
+|---|---|---|---|---|---|
+| startup | 22.79 MB | 7.70 MB | 3 条 / 1 KB | 3 条 / 12 KB | 0 |
+| ctx100k | 27.38 MB | 11.23 MB | 354 条 / 524 KB | 354 条 / 395 KB | 99216 |
+| ctx200k | 30.79 MB | 14.22 MB | 708 条 / 1051 KB | 708 条 / 781 KB | 199280 |
+
+帧耗时 0.19~0.21 ms，尾窗 100 + 分页拉取 300 条正常。
+
+**关键发现：这个场景里 `view` 条数 = 全量（354/708），因为 benchmark 的所有资源场景都
+`enableSessionStore = false`** —— 没库就 `cap = 0`、不淘汰，窗口根本不会生效。所以现有
+场景量不出本次改动的收益；ctx200k 那 708 条若开了库 + 窗口 400，展示侧会从
+1051 KB 降到 600 KB 量级（按 1.48 KB/条估算）。要量真实收益需新增“开库 + N 条历史 +
+重启加载”的场景（对比 `session.view_window_messages` = 400 与 0），已列入下面“待完成”。
 
 ## 验证结果
 
@@ -243,14 +271,16 @@ cd agent\build\windows-debug\exec
 
 ## 待完成 / 后续
 
-1. **benchmark 复测未做**：需要 release 重建（`agent/build/windows-release` 是本次改动之前的产物），
-   计划里的两组场景（长会话 / 多图附件）还没跑，`benchmark.md` 的“估算”字样因此保留。
-   命令参考：
+1. **新场景才能量到窗口收益**：benchmark 模块已修到可编可跑（见上一节），但现有资源场景全部
+   `enableSessionStore = false`（`bench_resource.cpp:138` / `:619`，`bench_resource_real.cpp:443` /
+   `:1470`），没有会话库就 `cap = 0`、不淘汰，窗口根本不会生效 —— 直接跑 `resource` 得到的
+   `viewCount`/`viewBytes` 仍是全量，无法反映本次改动。要量出收益需要新增一个
+   “开库 + N 条历史 + 重启加载”的场景（对比 `session.view_window_messages` = 400 与 0）。
+   release 侧已就绪（已编过 `agentxx_static` 并 install、编过 `agentxx_benchmark`），
+   补场景后一条命令即可跑：
    ```powershell
-   cmake --build agent\build\windows-release\agentxx_lib_repo-prefix\src\agentxx_lib_repo-build --config Release --target agentxx_static
-   cmake --install agent\build\windows-release\agentxx_lib_repo-prefix\src\agentxx_lib_repo-build --config Release
-   cmake --build agent\build\windows-release\agentxx_benchmark_repo-prefix\src\agentxx_benchmark_repo-build --config Release --target agentxx_benchmark
-   cmake --install agent\build\windows-release\agentxx_benchmark_repo-prefix\src\agentxx_benchmark_repo-build --config Release
+   cd agent\build\windows-release\exec
+   .\agentxx_benchmark.exe resource
    ```
 2. **页读是同步的**：`collectViewRange` 在 io 线程上直接查库（与写库共用
    `SessionStore` 互斥锁）。实测单页 100 条很快，但库被长事务占住时会顶住 io 线程 ——

@@ -303,7 +303,7 @@ inline std::shared_ptr<HeadlessWsDriver> startHeadlessWsClient(
     asio::co_spawn(
         ex,
         [drv, token = std::string{token}, connected]() -> asio::awaitable<void> {
-            agent::WireHello hello{drv->sessionId, token, 0, "", "", "en"};
+            agent::WireHello hello{drv->sessionId, token, 0, "", "en"};
             bool             ok = co_await drv->transport->connect(hello);
             if (ok) {
                 connected->store(true);
@@ -571,7 +571,7 @@ void benchResourceRealTui() {
     }
     phaseTracker.mark("agent_init_done", "agent init + 5 插件加载完成");
 
-    tui->sendToPeer(agent::WireHello{sessionId, "", 0, "", "", "en"});
+    tui->sendToPeer(agent::WireHello{sessionId, "", 0, "", "en"});
     tui->sendToPeer(agent::WireGetModel{sessionId});
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
@@ -710,7 +710,7 @@ void benchResourceRealTui() {
     // - 服务端仅同步末尾 initialSyncTailCount 条; 更早历史由客户端按
     //   historyWindowStart 逐页拉取 (benchmark 此处复刻 TUI 里 requestOlderHistory 的做法)
     auto syncAndPullHistory = [&](int pages) {
-        tui->sendToPeer(agent::WireHello{sessionId, "", 0, "", "", "en"});
+        tui->sendToPeer(agent::WireHello{sessionId, "", 0, "", "en"});
         std::this_thread::sleep_for(std::chrono::milliseconds(150));
         for (int p = 0; p < pages; ++p) {
             uint64_t start = 0;

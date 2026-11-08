@@ -88,10 +88,27 @@ struct LogicalMemReport {
 // 消息字节估算
 // ---------------------------------------------------------------------------
 
+inline size_t estimateViewMessageBytes(const agentxx::agent::ViewMessage& m) {
+    // 只算消息自身持有的容器内容 + 结构体尺寸; 附件按估算函数算
+    // (dataUrl 这类外部内容不算在内, 落库版本也已剔除)
+    size_t n = sizeof(agentxx::agent::ViewMessage) + m.id.size() + m.text.size() + m.source.size();
+    if (m.tool.has_value()) {
+        n += m.tool->toolName.size() + m.tool->toolCallId.size() + m.tool->toolResult.size()
+             + m.tool->diff.size();
+    }
+    if (m.interrupt.has_value()) {
+        n += m.interrupt->interruptResult.size() + m.interrupt->ui.dump().size();
+    }
+    for (const auto& att : m.attachments) {
+        n += static_cast<size_t>(agentxx::agent::estimateAttachmentSizeBytes(att));
+    }
+    return n;
+}
+
 inline size_t estimateViewMessagesBytes(const std::vector<agentxx::agent::ViewMessage>& msgs) {
     size_t total = 0;
     for (const auto& m : msgs) {
-        total += agentxx::agent::estimateViewMessageBytes(m);
+        total += estimateViewMessageBytes(m);
     }
     return total;
 }
@@ -302,7 +319,7 @@ inline std::vector<LogicalMemRow> collectTuiLogicalMem(const TuiRenderStateT& st
     size_t                     msgBytes = 0;
     for (const auto& m : st.messages()) {
         if (m) {
-            msgBytes += agentxx::agent::estimateViewMessageBytes(*m)
+            msgBytes += estimateViewMessageBytes(*m)
                         + sizeof(std::shared_ptr<TuiRenderStateT>);
         }
     }
