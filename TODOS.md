@@ -1,5 +1,4 @@
 # TODO
-- 中断提示消息显示优化，支持展开详情
 - 调整 PluginChannelAgentIO 头文件位置
 - 应当const &:
   - PluginGraphNode 构造函数参数 `AgentxxPluginGraphNodeTypeSpec  spec`
@@ -25,6 +24,9 @@
 - 上下文较长警告消息，提示模型及时更新文档或plan，即将压缩
 - 同步 JS插件和动态库插件接口实现
 - 更新 en 文档
+
+- 事件的渲染显示、特化渲染、相关工具特化渲染、优化响应格式
+- tui 后台任务显示更新不及时
 
 - SVG绘制支持
 
