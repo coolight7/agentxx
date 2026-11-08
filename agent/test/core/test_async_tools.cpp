@@ -118,10 +118,14 @@ public:
         XXToolBase("at_test_sleep", std::move(in_ctx), false, false, 0, false, false) {}
 
     neograph::ChatTool get_definition() const override {
+        // 参数 schema 如实声明类型: 后台任务执行前会按它修正模型给的宽松参数
+        // (见 [test_async_tool_args_normalize])
         return {
             get_name(),
             "Sleep, then answer with a fixed text.",
-            neograph::json::parse(R"({"type":"object","properties":{}})")
+            neograph::json::parse(
+                R"({"type":"object","properties":{"sleepMs":{"type":"integer"},"marker":{"type":"string"},"fail":{"type":"boolean"}}})"
+            )
         };
     }
 
@@ -328,6 +332,53 @@ asio::awaitable<void> test_start_tool_notify_default() {
         }
     }
     XX_TEST_EXPECT_TRUE(delivered);
+    co_return;
+}
+
+/// 1b. 后台工具任务也按工具 schema 修正参数 (与前台 ToolcallWrapNode 同一套规则)
+asio::awaitable<void> test_async_tool_args_normalize() {
+    auto fx = std::make_shared<AtFixture>();
+    XX_TEST_EXPECT_TRUE(buildFixture(fx));
+
+    agentxx::tools::AsyncStartTool tool{fx->ctx()};
+    std::string                     text;
+    std::string                     asyncId;
+
+    XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
+        text = co_await execTool(
+            tool,
+            Json{
+                {"tool", "at_test_sleep"},
+                // 模型常见的宽松写法: 整数写字符串、字符串写数字、布尔写 "no"
+                {"args",
+                 Json{
+                     {"sleepMs", "5"},
+                     {"marker", 123},
+                     {"fail", "no"},
+                 }},
+                {"sessionId", fx->sessionId},
+            }
+        );
+        asyncId = parseAsyncId(text);
+        co_return co_await waitUntil([&] {
+            const auto entry = fx->host->asyncWorkJson(asyncId);
+            return entry.value("state", std::string{}) == "done";
+        });
+    }));
+
+    XX_TEST_EXPECT_FALSE(asyncId.empty());
+    // 工具收到的参数已按 schema 声明修正 (不修正的话工具会把 sleepMs 当 0,
+    // marker 读不到字符串, fail 也读不到布尔)
+    std::lock_guard<std::mutex> lock(fx->sleepTool->mutex);
+    XX_TEST_EXPECT_TRUE(fx->sleepTool->lastArgs["sleepMs"].is_number_integer());
+    XX_TEST_EXPECT_EQ(fx->sleepTool->lastArgs["sleepMs"].get<long long>(), 5LL);
+    XX_TEST_EXPECT_TRUE(fx->sleepTool->lastArgs["marker"].is_string());
+    XX_TEST_EXPECT_EQ(
+        fx->sleepTool->lastArgs["marker"].get<std::string>(),
+        std::string{"123"}
+    );
+    XX_TEST_EXPECT_TRUE(fx->sleepTool->lastArgs["fail"].is_boolean());
+    XX_TEST_EXPECT_EQ(fx->sleepTool->lastArgs["fail"].get<bool>(), false);
     co_return;
 }
 
@@ -770,6 +821,7 @@ asio::awaitable<TestResult> run_async_tools_tests() {
     TestResult result;
 
     co_await test_start_tool_notify_default();
+    co_await test_async_tool_args_normalize();
     co_await test_start_notify_off();
     co_await test_start_subagent_target();
     co_await test_start_errors();

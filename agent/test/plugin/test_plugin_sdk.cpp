@@ -954,6 +954,75 @@ TestResult testPluginSdk() {
         XX_TEST_EXPECT_TRUE(client.regionSize("p").width == 0);
     }
 
+    // ---- ArgReader: 字符串转数值/布尔的严格解析 ----
+    // - 整数/浮点: **整个**字符串都必须是数值, 不再取前缀 (`"100 lines"` 读不到)
+    // - 布尔: 忽略大小写, 认 true/yes/y/on/enable/enabled/1 与
+    //   false/no/n/off/disable/disabled/0, 其它文本读不到(而不是静默 false)
+    // - 整数还要落在目标类型范围内, 越界不做回绕转换
+    // - JSON 里的浮点数转整数取“相近整数” (与向上取整差不到 1e-6 就向上, 否则向下)
+    {
+        ArgReader args(R"({
+            "n": " 42 ",
+            "plus": "+7",
+            "big": "999999999999999999999",
+            "prefix": "100 lines",
+            "fracText": "3.7",
+            "hex": "0x10",
+            "f": "1.5 kg",
+            "fv": "1.5",
+            "flagTrue": "True",
+            "flagZero": "0",
+            "flagYes": "Yes",
+            "flagOn": " ON ",
+            "flagNo": "no",
+            "flagOff": "disabled",
+            "flagWord": "ok",
+            "small": "9999999999",
+            "roundUp": 4.999999999,
+            "roundDown": 3.7,
+            "roundNeg": -3.5,
+            "wideInt": 3000000000
+        })");
+        XX_TEST_EXPECT_FALSE(args.hasParseError());
+
+        // 整数: 首尾空白/前导 '+' 可忽略, 其余必须完整
+        XX_TEST_EXPECT_EQ(args.get<long long>("n").value_or(0), 42LL);
+        XX_TEST_EXPECT_EQ(args.get<long long>("plus").value_or(0), 7LL);
+        XX_TEST_EXPECT_FALSE(args.get<long long>("prefix").has_value());
+        XX_TEST_EXPECT_FALSE(args.get<long long>("fracText").has_value());
+        XX_TEST_EXPECT_FALSE(args.get<long long>("big").has_value());
+        XX_TEST_EXPECT_FALSE(args.get<int>("small").has_value()); // 超出 int 范围
+
+        // 浮点: 同样要求完整, 且拒绝十六进制浮点写法
+        XX_TEST_EXPECT_TRUE(args.get<double>("fv").value_or(0.0) == 1.5);
+        XX_TEST_EXPECT_FALSE(args.get<double>("f").has_value());
+        XX_TEST_EXPECT_FALSE(args.get<double>("hex").has_value());
+
+        // 布尔: 忽略大小写, 常见肯定/否定词都认; 无法判断的词读不到
+        XX_TEST_EXPECT_TRUE(args.get<bool>("flagTrue").value_or(false));
+        XX_TEST_EXPECT_FALSE(args.get<bool>("flagZero").value_or(true));
+        XX_TEST_EXPECT_TRUE(args.get<bool>("flagYes").value_or(false));
+        XX_TEST_EXPECT_TRUE(args.get<bool>("flagOn").value_or(false));
+        XX_TEST_EXPECT_FALSE(args.get<bool>("flagNo").value_or(true));
+        XX_TEST_EXPECT_FALSE(args.get<bool>("flagOff").value_or(true));
+        XX_TEST_EXPECT_FALSE(args.get<bool>("flagWord").has_value());
+
+        // JSON 浮点数转整数: 取“相近整数”, 越 int 范围读不到
+        XX_TEST_EXPECT_EQ(args.get<long long>("roundUp").value_or(0), 5LL);
+        XX_TEST_EXPECT_EQ(args.get<long long>("roundDown").value_or(0), 3LL);
+        XX_TEST_EXPECT_EQ(args.get<long long>("roundNeg").value_or(0), -4LL);
+        XX_TEST_EXPECT_FALSE(args.get<int>("wideInt").has_value());
+
+        // 缺省值/错误汇报语义不变
+        XX_TEST_EXPECT_EQ(args.value<long long>("prefix", -1), -1LL);
+        XX_TEST_EXPECT_TRUE(args.ok()); // 只是取用, 没调 require 不产生错误
+
+        ArgReader required(R"({"n":"100 lines"})");
+        XX_TEST_EXPECT_EQ(required.require<long long>("n"), 0LL);
+        XX_TEST_EXPECT_FALSE(required.ok());
+        XX_TEST_EXPECT_TRUE(required.errorMessage().find("'n'") != std::string::npos);
+    }
+
     return result;
 }
 } // namespace agentxx::test

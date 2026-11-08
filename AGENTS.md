@@ -770,6 +770,10 @@ path/to/agentxx_test --log-level warn string_util regex
     `util::autoFixToolArgsTypes` 是同一份实现 —— 特化渲染器 / 预设模版摘要 / 展开体看到的
     参数类型就是工具实际收到的, **渲染器里不要再写 string↔数组、单对象↔对象数组一类的兼容**;
     未登记 schema 的工具 (或插件已卸载后的历史) 保留模型原文即为正确行为
+  - **参数自愈的适用范围**: 凡是把参数交给工具的地方都用这一份实现 —— 前台工具调用
+    (`ToolcallWrapNode`, 内置工具与插件工具不区分) 与后台工具任务 (`AsyncWorkManager` 的
+    `kind=tool`, 提交后执行前); 数值取整与布尔认词规则见
+    [index.md](docs/zh-cn/design/index.md) 的“参数自愈”条目
   - 客户端自造行 (中断表单/瞬态提示) 一律用 `local_` 前缀 id, agent 的 op 永不命中它们;
     整份同步会重建副本, 本地行随界面态丢弃 (新中断请求到达时重新建行)
   - 取消/出错时已产出的半截内容定稿成行并落盘: 展示历史会比 LLM 上下文多一条未说完的 assistant 消息

@@ -2,6 +2,7 @@
 #include "agentxx-test/test_coro_util.h"
 #include "agentxx/agent/context.h"
 #include "agentxx/util/neograph_json_bridge.h"
+#include "agentxx/util/tool_args_fix.h"
 #include "utilxx_base/env.h"
 #include <neograph/types.h>
 // 原 lib 内置工具已迁移至 agentxx_filesystem 插件 (同名同行为); 测试直测
@@ -1971,11 +1972,24 @@ asio::awaitable<void>
         XX_TEST_EXPECT_EQ(arr[1].newStr, std::string{"d"});
     }
 
-    // 单对象形态 (少写一层数组)
+    // 单对象形态 (少写一层数组): 客户端直接拿到的已是数组 —— agent 写展示历史前
+    // 按工具 schema 自愈过一次 (见 util::autoFixToolArgsTypes), 这里模拟同一步骤
     auto objArgs = utilxx_base::Json{
         {"path",  "/a.txt"                                             },
         {"edits", utilxx_base::Json{{"old_str", "a"}, {"new_str", "b"}}}
     };
+    const auto editParams = utilxx_base::Json{
+        {"type", "object"},
+        {"properties",
+         utilxx_base::Json{
+             {"edits",
+              utilxx_base::Json{
+                  {"type", "array"},
+                  {"items", utilxx_base::Json{{"type", "object"}}},
+              }},
+         }},
+    };
+    XX_TEST_EXPECT_TRUE(agentxx::util::autoFixToolArgsTypes(editParams, objArgs));
     const auto obj = editSegmentsArg(objArgs);
     XX_TEST_EXPECT_EQ(obj.size(), size_t{1});
     if (obj.size() == 1) {

@@ -11,13 +11,18 @@ namespace util {
 /// - string -> 字符串数组: 参数声明为数组 (字符串数组) 而传入单个字符串时, 包装为 `[str]`
 /// - object -> 对象数组: 参数声明为数组 (元素为对象) 而传入单个对象时, 包装为 `[obj]`
 ///   (LLM 少写一层数组的常见形态, 如 `edits`/`actions` 这类参数)
-/// - string -> number/integer: 参数声明为数值而传入字符串时, 若字符串可完整解析为数值则转换
-///   (integer 仅接受整数写法; number 支持小数/指数; 前导 '+', 首尾空白会被容忍)
+/// - string -> number/integer: 参数声明为数值而传入字符串时, 要求**整串**都是数值才转
+///   (integer 允许小数写法并按“相近整数”取整, 如 `"3.5"` -> 3、`"49.9999999"` -> 50;
+///   number 支持小数/指数; 前导 '+', 首尾空白会被容忍; `"100 lines"` 不转)
 /// - number/integer -> string: 参数声明为字符串而传入数值时, 转为十进制字符串
 /// - number(double) <-> integer: 参数声明的数值类型与传入数值类型不同时互相转换
-///   (integer -> number 转为 double; number -> integer 仅当浮点值恰为整数值且在
-///   int64 表示范围内才无损转换, 如 3.0 转 3, 3.5 保持原样)
-/// - bool -> string / string("true"/"false") -> boolean: 布尔与字符串互相转换
+///   (integer -> number 转为 double; number -> integer 取“相近整数”: 与向上取整相差
+///   不超过 1e-6 时向上取整, 否则向下取整 —— `3.7` -> 3、`4.999999999` -> 5、
+///   `-3.7` -> -4; 超出 int64 范围或 NaN/Inf 保持原样)
+/// - bool -> string / string -> boolean: 布尔与字符串互相转换
+///   (字符串忽略首尾空白与 ASCII 大小写: `true`/`yes`/`y`/`on`/`enable`/`enabled`/`1`
+///   为真, `false`/`no`/`n`/`off`/`disable`/`disabled`/`0` 为假; 其它文本
+///   保持原样, 由工具参数校验给出明确错误)
 /// - [单字符串数组] -> string: 参数声明为字符串而传入单元素字符串数组时, 解包为字符串
 /// - [单对象数组] -> object: 参数声明为对象而传入单元素对象数组时, 解包为对象
 /// - 枚举字符串大小写: 参数值命中 schema `enum` 声明的字符串枚举项 (忽略大小写)

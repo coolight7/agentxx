@@ -265,7 +265,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
                std::string_view tid,
                std::string_view workDir,
                volatile int32_t* cancel_flag) -> std::string {
-                // ArgReader: 宽容类型提取 (支持 string/number/bool/json 宽容转换与自愈)
+                // ArgReader: 强类型读取 (转不了就是参数错误, 不猜也不取一部分)
                 ArgReader args(args_json);
                 auto path = args.require<std::string>("path");
                 if (!args.ok()) {
@@ -357,9 +357,15 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
    - 经 `ctx.schema("tool_name")` 获得构建器实例，通过 `.string()`, `.integer()`, `.number()`, `.boolean()`, `.array()`, `.stringArray()`, `.enumString()` 等链式声明参数
    - 自动从主程序 `toolPrompt` 中提取当前语言下的参数说明并优先覆盖默认注释，最后调用 `.build()` 输出标准 JSON Schema 字符串
 3. **强类型参数提取器 (`ArgReader`)**:
-   - 宽容解析输入 JSON：容忍格式宽松，并在类型不匹配时尝试智能自愈（如字符串 `"true"`/`"1"` 转布尔，数字转字符串等）
-   - 提供 `args.require<T>("key")`（若缺少则置错误标记）、`args.get<T>("key")`（返回 `std::optional<T>`）
-   - `args.ok()` 与 `args.errorMessage()` 方便快速校验和返回参数错误
+   - 只做读取：按调用方要的类型取值，读不到就是“缺参数/类型不对”，不猜也不取一部分 ——
+     字符串转数值要求**整串**都是数值（`" 42 "` → 42，`"100 lines"`/`"0x10"` 读不到），整数还要落在目标类型范围内；
+     JSON 浮点值转整数取“相近整数”（与向上取整相差不超过 1e-6 时向上，否则向下：`3.7` → 3、`4.999999999` → 5、`-3.7` → -4）；
+     字符串转布尔忽略大小写，`true`/`yes`/`y`/`on`/`enable`/`enabled`/`1` 为真，
+     `false`/`no`/`n`/`off`/`disable`/`disabled`/`0` 为假（其它文本读不到，不会静默成 false）
+   - 提供 `args.require<T>("key")`（缺参数或转换失败时置错误标记）、`args.get<T>("key")`（返回 `std::optional<T>`）
+   - `args.ok()` 与 `args.errorMessage()` 方便快速校验和返回参数错误；读取不会抛异常出 SDK 边界
+   - 参数形态的修正不归它管：工具被调用前，主程序已按工具 JSON Schema 把参数改正过
+     (`agentxx::util::autoFixToolArgsTypes`)，插件读到的就是工具实际要用的类型
 4. **事件驱动取消注册中心 (`CancelRegistry`)**:
    - 已提升至插件开发框架通用基础设施（`agentxx::plugin::CancelRegistry`），各实例独立持有 `ctx.cancelRegistry`
    - `ctx.init()` 自动订阅 `plugin.agentxx.round_start` 事件，新轮次开始时自动清除对应会话的历史已取消标记
@@ -880,7 +886,8 @@ Agentxx 客户端采用统一的分层工具特化渲染机制，TUI 核心层�
      **写入展示历史时 (EventBridge 建行) / 历史尾窗加载 / 分页读取** 三处都经
      `agentxx::util::autoFixedToolArgsJson` 处理过, schema 来自 `ToolRegistry::parametersOf`
      (静态工具登记表 + 插件工具定义), 与执行前的 `ToolcallWrapNode::autoFixArgsType`
-     是同一份实现。因此渲染器里拿到的 `args_json` 已与工具实际收到的参数类型一致
+     是同一份实现 (内置工具与插件工具不区分; 后台工具任务在 `AsyncWorkManager` 里
+     同样走它)。因此渲染器里拿到的 `args_json` 已与工具实际收到的参数类型一致
      (数组参数不会是单字符串、对象数组不会是单对象、数值参数不会是字符串),
      直接按 schema 声明的类型读即可; 只有**没有登记 schema 的工具 / 插件已卸载后的历史**
      会保留模型原文。

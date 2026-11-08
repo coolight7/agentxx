@@ -20,7 +20,6 @@
 - agentxx 自重启控制、仿照 musicxx 的 cli + http + mcp + deeplink 命令控制
 - 通过 mdns 互相发现，以便了解各自正在运行的会话内容
 - share_store 支持 grep、输出到文件等
-- viewMessages 支持分页存储
 - 上下文较长警告消息，提示模型及时更新文档或plan，即将压缩
 - 同步 JS插件和动态库插件接口实现
 - 更新 en 文档
@@ -28,7 +27,7 @@
 - 事件的渲染显示、特化渲染、相关工具特化渲染、优化响应格式，事件tui配色为user颜色
 - tui 后台任务显示更新不及时
 - 长tool调用超时
-- store 特化渲染支持 string id，优化 特化渲染 前也用 toolcallnode 的预处理参数转换
+- 预设异步事件：延时、循环延时、指定时间点
 
 - SVG绘制支持
 

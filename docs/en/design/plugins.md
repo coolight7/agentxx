@@ -174,7 +174,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
                std::string_view tid,
                std::string_view workDir,
                volatile int32_t* cancel_flag) -> std::string {
-                // ArgReader: tolerant type extraction (smart conversions between string/number/bool/json)
+                // ArgReader: typed read (a value it cannot convert is an argument error, never a guess)
                 ArgReader args(args_json);
                 auto path = args.require<std::string>("path");
                 if (!args.ok()) {
@@ -268,9 +268,10 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 2. **Fluent Schema Builder (`ToolSchemaBuilder`)**:
    - Obtainable via `ctx.schema("tool_name")`, supporting `.string()`, `.integer()`, `.number()`, `.boolean()`, `.array()`, `.stringArray()`, `.enumString()`, and `.build()`.
    - Merges localized descriptions from host `toolPrompt` automatically.
-3. **Tolerant Parameter Reader (`ArgReader`)**:
-   - Parses input JSON with smart auto-healing (e.g. converting `"true"`/`"1"` to boolean, numbers to strings).
-   - Provides `require<T>()`, `get<T>()`, `ok()`, and `errorMessage()` for error-resilient parameter extraction.
+3. **Typed Parameter Reader (`ArgReader`)**:
+   - Read-only: returns the type the caller asks for, and "cannot read" simply means a missing/wrong argument — no guessing, no partial values. A string to number conversion needs the **whole** string to be numeric (`" 42 "` → 42, `"100 lines"`/`"0x10"` cannot be read) and the integer must fit the target type; a floating-point JSON value read as an integer is rounded to the nearest integer (ceil when it is within 1e-6 of the next integer, otherwise floor: `3.7` → 3, `4.999999999` → 5, `-3.7` → -4); string to boolean ignores case and accepts `true`/`yes`/`y`/`on`/`enable`/`enabled`/`1` as true and `false`/`no`/`n`/`off`/`disable`/`disabled`/`0` as false (other text cannot be read instead of silently becoming false).
+   - Provides `require<T>()`, `get<T>()`, `ok()`, and `errorMessage()`; a failed read is reported as an argument error, never thrown across the SDK boundary.
+   - Fixing the shape of the arguments is not its job: before a tool runs, the host already corrects the arguments according to the tool JSON Schema (`agentxx::util::autoFixToolArgsTypes`), so a plugin reads exactly the types the tool is declared with.
 4. **Event-Driven Cancellation Registry (`CancelRegistry`)**:
    - Centralized, instance-isolated cancellation manager (`ctx.cancelRegistry`).
    - Automatically clears per-session cancellation flags when `plugin.agentxx.round_start` fires.
@@ -393,12 +394,13 @@ The Agentxx client adopts a unified, layered tool-specialized rendering mechanis
 1. **Type-Level Tool Renderers (`register_tool_renderer`)**:
    - During client initialization, plugins register specialized rendering definitions (`AgentxxToolRenderSpec`) keyed by `tool_name`, universally taking effect when the TUI renders messages for that tool (both during real-time streaming and history replay).
    - **History replay is one of the main scenarios**: `Tool` messages replayed after a session restart / reconnect / session switch carry no instance-level decoration (see item 2) — their specialized rendering relies entirely on the renderer registered here, whose only inputs are the message's own `args_json` / `result_text`.
+   - **Arguments are already self-healed against the tool schema, so renderers need no type-compatibility code**: the argument text of a tool row is run through `agentxx::util::autoFixedToolArgsJson` in all three places — **when the display history is written (EventBridge creates the row) / history window load / paginated read** — with the schema coming from `ToolRegistry::parametersOf` (static tool table plus plugin tool definitions), the same implementation used before execution by `ToolcallWrapNode::autoFixArgsType` (built-in and plugin tools alike; background tool tasks run it too in `AsyncWorkManager`). So the `args_json` a renderer receives already matches the types the tool actually received (an array parameter is never a bare string, an object array is never a single object, a numeric parameter is never a string); read it directly by the type the schema declares. Only **tools with no registered schema / history of a plugin that has been unloaded** keep the model's original text.
    - Framework nuance: **the expanded-state header display name is overridden only by instance-level decorations** (a type-level renderer match keeps the raw `toolName` in the expanded header), while renderers always drive the **collapsed header name/summary** and the **expanded body items**. Since replayed history messages start collapsed (`collapsed=true` in `event_stream`), the replayed view matches the live one.
    - **Dual-Track Mechanism**:
      - **`<key, render_fn>` Callback Function**: Provides an `AgentxxToolRenderFn` receiving `AgentxxToolRenderInput` (`tool_name`, `args_json`, `result_text`, `is_finished`, `is_error`, `max_width`) and returning `AgentxxToolRenderOutput` (`displayName`, `summary`, `items_json`). Suitable for tools requiring complex argument parsing, conditional formatting, or dynamic UI item generation (e.g. `read` offset-limit parameters, `glob`/`grep` patterns and file summaries, `edit` diff comparisons).
      - **Declarative Template (`template_json`)**: When `render_fn == NULL`, the host automatically extracts fields from `args_json` and formats the summary according to the declarative template, e.g. `{"displayName":"Search","summaryKey":"query"}` or `{"displayName":"Bash","summaryKey":"command"}`.
    - **Generic Diff Rendering**: Expanded `items_json` supports `{"kind":"Diff","path":"...","oldStr":"...","newStr":"..."}` (or use the kit helper `agentxx::ui::kit::pathDiffRow`). The TUI generically renders this as an adaptive side-by-side or unified diff comparison, freely reusable by any plugin.
-   - **Diff Overlay (`open_overlay` DIFF) — single or multiple segments**: segments follow the same "one level less" rule as the edit tool arguments, because argument type auto-fix converts a single object and a one-element array into each other, so the UI must accept both:
+   - **Diff Overlay (`open_overlay` DIFF) — single or multiple segments**: segments follow the same "one level less" rule as the edit tool arguments; the UI accepts both forms because the UI descriptor layer is a **public component contract** — a plugin may build a `DIFF` payload directly (not necessarily from tool arguments), so the host cannot insist on one form. Tool arguments themselves are self-healed against the schema before the display history is written (`ToolRegistry::parametersOf` + `util::autoFixToolArgsTypes`), so a renderer receives an array when `edits` was passed as a single object:
      - multiple: `{"path":"a.cpp","edits":[{"old_str":"..","new_str":".."}, ...]}`
      - single: `{"path":"a.cpp","old_str":"..","new_str":".."}` (legacy form, still supported)
      - `edits` as a **single object**: `{"path":"a.cpp","edits":{"old_str":"..","new_str":".."}}`

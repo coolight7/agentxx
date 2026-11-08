@@ -8,7 +8,9 @@
 #include "agentxx/plugin/tool_registry.h"
 #include "agentxx/tools/tool.h"
 #include "agentxx/util/exception.h"
+#include "agentxx/util/neograph_json_bridge.h"
 #include "agentxx/util/observability.h"
+#include "agentxx/util/tool_args_fix.h"
 #include "agentxx/util/tool_result.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -247,6 +249,14 @@ asio::awaitable<events::RespSubagentBatchItem> runToolWork(
     };
     auto state = std::make_shared<RunState>();
     auto args  = spec.toolArgs; // 拷一份进协程帧: 提交方的对象可能早就不在了
+    // 参数类型自动修正: 与前台 ToolcallWrapNode 执行前同一份实现 (内置工具与插件工具
+    // 一视同仁), 后台跑的工具同样按自己声明的 schema 拿到正确类型
+    try {
+        const auto parameters = agentxx::util::fromNeographJson(tool->get_definition().parameters);
+        agentxx::util::autoFixToolArgsTypes(parameters, args, spec.toolName);
+    } catch (const std::exception& e) {
+        XX_LOGW("Async tool auto-fix arg type failed: {}", e.what());
+    }
     // 会话与调用 id 由执行层补齐 (与前台 ToolcallWrapNode 一致): 下游工具会读它们
     if (!spec.creatorSessionId.empty() && args.is_object()) {
         args["sessionId"] = spec.creatorSessionId;

@@ -92,6 +92,48 @@ bool parseFullNumber(std::string_view s, T& out) {
 #endif
 }
 
+/// 解析布尔文本: 忽略首尾空白与 ASCII 大小写
+/// - 真: `true` / `yes` / `y` / `on` / `enable` / `enabled` / `1`
+/// - 假: `false` / `no` / `n` / `off` / `disable` / `disabled` / `0`
+/// - 其它文本 (如 `"ok"`/`"maybe"`): 不转换, 保留原值交给工具参数校验
+///   (插件侧读不到类型时用默认值或报参数错误, 不会静默当成 false)
+/// - 与插件 SDK 的 ArgReader 读取时同一套认法 (kit.h 的 `detail::parseBoolText`)
+///
+/// - `args`:
+///     - [s] 待解析文本
+///     - [out] 解析成功时的布尔值
+///
+/// - `return` 是否解析成功
+bool parseBoolText(std::string_view s, bool& out) {
+    size_t b = 0, e = s.size();
+    while (b < e && utilxx_base::charIsSpace(s[b])) {
+        ++b;
+    }
+    while (e > b && utilxx_base::charIsSpace(s[e - 1])) {
+        --e;
+    }
+    s = s.substr(b, e - b);
+    if (s.empty()) {
+        return false;
+    }
+    std::string lower;
+    lower.reserve(s.size());
+    for (const char c : s) {
+        lower.push_back(utilxx_base::charToLower(c));
+    }
+    if (lower == "true" || lower == "yes" || lower == "y" || lower == "on"
+        || lower == "enable" || lower == "enabled" || lower == "1") {
+        out = true;
+        return true;
+    }
+    if (lower == "false" || lower == "no" || lower == "n" || lower == "off"
+        || lower == "disable" || lower == "disabled" || lower == "0") {
+        out = false;
+        return true;
+    }
+    return false;
+}
+
 /// 数值 json -> 十进制字符串 (整数用 to_string, 浮点用最短可往返表示)
 std::string numberToJsonString(const utilxx_base::Json& v) {
     if (v.is_number_unsigned()) {
@@ -103,22 +145,26 @@ std::string numberToJsonString(const utilxx_base::Json& v) {
     return fmt::format("{}", v.get<double>());
 }
 
-/// 尝试把 double 无损转换为 long long:
-/// 仅当值为整数值 (如 3.0) 且在 int64 表示范围内时才成功; NaN/Inf/3.5 等返回 false
-bool tryDoubleToInt64(double v, long long& out) {
-    const double t = std::trunc(v);
-    if (t != v) {
-        // 非整数值; NaN 也在此被拒绝 (NaN != NaN 恒为真)
+/// double -> long long 的取整 (参数自愈: 工具声明 integer 而模型给了浮点数)
+/// - 与向上取整的距离不超过 1e-6 时取向上取整 (处理 4.999999999 这类浮点表示偏差,
+///   也让"跟整数只差一点点"的值回到整数)
+/// - 其余向下取整: 3.7 -> 3, -3.7 -> -4
+/// - NaN/Inf 与超出 int64 表示范围的值返回 false (保持原样)
+bool doubleToInt64Rounded(double v, long long& out) {
+    if (!std::isfinite(v)) {
         return false;
     }
+    constexpr double kRoundEps = 1e-6;
+    const auto       up        = std::ceil(v);
+    const double     rounded   = (up - v <= kRoundEps) ? up : std::floor(v);
     // 边界用可被 double 精确表示的 ±2^63 比较, 避免越界 static_cast 的未定义行为
     // (-2^63 为闭区间下界, +2^63 为开区间上界)
     constexpr double kInt64Min   = -9223372036854775808.0;
     constexpr double kInt64MaxP1 = 9223372036854775808.0;
-    if (!(v >= kInt64Min && v < kInt64MaxP1)) {
+    if (!(rounded >= kInt64Min && rounded < kInt64MaxP1)) {
         return false;
     }
-    out = static_cast<long long>(v);
+    out = static_cast<long long>(rounded);
     return true;
 }
 
@@ -348,22 +394,29 @@ bool autoFixToolArgsTypes(
                         changed    = true;
                     }
                 } else {
-                    // 仅声明 integer: 只接受纯整数写法 ("3.5" 不转换)
+                    // 仅声明 integer: 整数写法直接取; 小数写法按“相近整数”取整
+                    // ("3.5" -> 3, "49.9999999" -> 50); 整串不是数值则不转换
                     long long v = 0;
                     if (parseFullNumber(str, v)) {
                         args[name] = v;
                         fixInfo    = "string -> integer";
                         changed    = true;
+                    } else {
+                        double d = 0;
+                        if (parseFullNumber(str, d) && doubleToInt64Rounded(d, v)) {
+                            args[name] = v;
+                            fixInfo    = "string -> integer (rounded)";
+                            changed    = true;
+                        }
                     }
                 }
             } else if (types.isBool && !types.isString) {
-                // 3) string -> boolean (目标不含 string 时)
-                if ("true" == str) {
-                    args[name] = true;
-                    fixInfo    = "string -> boolean";
-                    changed    = true;
-                } else if ("false" == str) {
-                    args[name] = false;
+                // 3) string -> boolean (目标不含 string 时): 忽略首尾空白与大小写,
+                // 认 true/yes/y/on/enable/enabled/1 与 false/no/n/off/disable/disabled/0;
+                // 其它文本保持原样交给工具参数校验
+                bool v = false;
+                if (parseBoolText(str, v)) {
+                    args[name] = v;
                     fixInfo    = "string -> boolean";
                     changed    = true;
                 }
@@ -375,12 +428,11 @@ bool autoFixToolArgsTypes(
                 fixInfo    = "number -> string";
                 changed    = true;
             } else if (arg.is_number_float()) {
-                // number(double) -> integer: 目标声明 integer 时, 仅当浮点值恰为
-                // 整数值且在 int64 表示范围内才无损转换 (如 LLM 传 3.0 而工具要
-                // integer); 3.5/越界值等保持原样
+                // number(double) -> integer: 目标声明 integer 时取相近整数
+                // (3.7 -> 3, 4.999999999 -> 5, -3.7 -> -4); 越界/NaN 保持原样
                 if (types.isInteger && !types.isString) {
                     long long v = 0;
-                    if (tryDoubleToInt64(arg.get<double>(), v)) {
+                    if (doubleToInt64Rounded(arg.get<double>(), v)) {
                         args[name] = v;
                         fixInfo    = "number -> integer";
                         changed    = true;

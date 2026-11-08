@@ -42,7 +42,7 @@ The synchronous group also contains `json` `json_view` `json_reflection` `interr
 ## 3. Plugin Development
 
 - **Declarative Export**: Prefer `AGENTXX_PLUGIN_AGENT_EXPORT` (client side `AGENTXX_PLUGIN_CLIENT_EXPORT`), which automatically generates C entry points with ABI exception guards and manages context lifecycle.
-- **Fluent Schema & Tolerant Reader**: Declare tool argument schemas via `ctx.schema(toolName)` (auto-merged with host `toolPrompt`); use `ArgReader` inside execution callbacks for error-tolerant and type-safe argument extraction.
+- **Fluent Schema & Typed Reader**: Declare tool argument schemas via `ctx.schema(toolName)` (auto-merged with host `toolPrompt`); read arguments with `ArgReader` by the type you ask for (a value it cannot convert is an argument error — no guessing, no partial values).
 - **Event-Driven Cancellation**: Register cancellation actions for subprocesses and long-running tasks via `ctx.cancelRegistry.registerCallback(sessionKey, cb)` (yielding an RAII `ScopedRegistration` guard) for millisecond-level instant termination.
 - **Follow the Three Iron Rules**: No mutable global statics / State recovered via `user_data` closures / Interface tables cached into instance context.
 - **Record Failed Components**: External resource failures (MCP, Skills, Memory) should be recorded in `appendComponentInfo.failedComponents` for client UI reporting.

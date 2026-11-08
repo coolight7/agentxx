@@ -199,7 +199,8 @@ TestResult testToolcallArgs() {
         XX_TEST_EXPECT_EQ(args["b"].get<long long>(), 5);
     }
 
-    // #9 integer schema 不接受小数写法: "3.5" 保持字符串
+    // #9 integer schema 接受整串是数值的小数写法, 取“相近整数”
+    // (以前 "3.5" 一律不转, 工具就拿到一个字符串参数直接报错)
     {
         neograph::ChatTool def;
         def.name       = "tool_j";
@@ -207,8 +208,33 @@ TestResult testToolcallArgs() {
         auto args      = utilxx_base::Json{
                  {"count", "3.5"}
         };
+        XX_TEST_EXPECT_TRUE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
+        XX_TEST_EXPECT_EQ(args["count"].get<long long>(), 3);
+
+        // 整串必须是数值: 带别的文字不转
+        args = utilxx_base::Json{
+            {"count", "3.5 files"}
+        };
         XX_TEST_EXPECT_FALSE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
         XX_TEST_EXPECT_TRUE(args["count"].is_string());
+    }
+
+    // #9b integer schema 接受小数写法 "50.0" 与“差一丁点”的写法 "49.9999999"
+    {
+        neograph::ChatTool def;
+        def.name       = "tool_j2";
+        def.parameters = makeParams({"count", {{"type", "integer"}}});
+        auto args      = utilxx_base::Json{
+                 {"count", "50.0"}
+        };
+        XX_TEST_EXPECT_TRUE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
+        XX_TEST_EXPECT_EQ(args["count"].get<long long>(), 50);
+
+        args = utilxx_base::Json{
+            {"count", "49.9999999"}
+        };
+        XX_TEST_EXPECT_TRUE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
+        XX_TEST_EXPECT_EQ(args["count"].get<long long>(), 50);
     }
 
     // #10 非数值字符串: 不转换
@@ -323,16 +349,75 @@ TestResult testToolcallArgs() {
         XX_TEST_EXPECT_EQ(args["flag"].get<bool>(), false);
     }
 
-    // #17 boolean schema 不接受其他字符串: "yes" 不转换
+    // #17 boolean schema 认常见肯定/否定词 (以前的 "yes" 不转)
     {
         neograph::ChatTool def;
         def.name       = "tool_r";
         def.parameters = makeParams({"flag", {{"type", "boolean"}}});
-        auto args      = utilxx_base::Json{
-                 {"flag", "yes"}
+
+        for (const auto* yesText : {"yes", "Yes", "on", "enable", "ENABLED", "y"}) {
+            auto args = utilxx_base::Json{{"flag", yesText}};
+            XX_TEST_EXPECT_TRUE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
+            XX_TEST_EXPECT_EQ(args["flag"].get<bool>(), true);
+        }
+        for (const auto* noText : {"no", "OFF", "disable", "disabled", "n"}) {
+            auto args = utilxx_base::Json{{"flag", noText}};
+            XX_TEST_EXPECT_TRUE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
+            XX_TEST_EXPECT_EQ(args["flag"].get<bool>(), false);
+        }
+
+        // 说不上真假的词不转换 (留给工具参数校验报错)
+        auto args = utilxx_base::Json{
+            {"flag", "maybe"}
         };
         XX_TEST_EXPECT_FALSE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
         XX_TEST_EXPECT_TRUE(args["flag"].is_string());
+    }
+
+    // #17b boolean schema 忽略首尾空白与大小写, 并接受 1/0 写法
+    // (模型常写 "True"/" FALSE "/"1"; 以前只有精确的 true/false 才转,
+    //  "True" 会原样传给工具, 插件侧读 bool 时静默变成 false)
+    {
+        neograph::ChatTool def;
+        def.name       = "tool_r_case";
+        def.parameters = makeParams({"flag", {{"type", "boolean"}}});
+
+        auto args = utilxx_base::Json{
+            {"flag", "True"}
+        };
+        XX_TEST_EXPECT_TRUE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
+        XX_TEST_EXPECT_EQ(args["flag"].get<bool>(), true);
+
+        args = utilxx_base::Json{
+            {"flag", " FALSE "}
+        };
+        XX_TEST_EXPECT_TRUE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
+        XX_TEST_EXPECT_EQ(args["flag"].get<bool>(), false);
+
+        args = utilxx_base::Json{
+            {"flag", "1"}
+        };
+        XX_TEST_EXPECT_TRUE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
+        XX_TEST_EXPECT_EQ(args["flag"].get<bool>(), true);
+
+        args = utilxx_base::Json{
+            {"flag", "0"}
+        };
+        XX_TEST_EXPECT_TRUE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
+        XX_TEST_EXPECT_EQ(args["flag"].get<bool>(), false);
+
+        // 说不上真假的词仍不转换; 已经是布尔的参数不动
+        args = utilxx_base::Json{
+            {"flag", "ok"}
+        };
+        XX_TEST_EXPECT_FALSE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
+        XX_TEST_EXPECT_TRUE(args["flag"].is_string());
+
+        args = utilxx_base::Json{
+            {"flag", true}
+        };
+        XX_TEST_EXPECT_FALSE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
+        XX_TEST_EXPECT_TRUE(args["flag"].is_boolean());
     }
 
     // #18 bool -> string schema: 转为 "true"/"false"
@@ -510,7 +595,7 @@ TestResult testToolcallArgs() {
         XX_TEST_EXPECT_EQ(args["size"].get<double>(), 12345678901.0);
     }
 
-    // #30 number -> integer: 浮点值恰为整数值时无损转换 (3.0 -> 3)
+    // #30 number -> integer: 整值浮点直接转换 (3.0 -> 3)
     {
         neograph::ChatTool def;
         def.name       = "tool_ae";
@@ -536,7 +621,8 @@ TestResult testToolcallArgs() {
         XX_TEST_EXPECT_EQ(args["count"].get<long long>(), -3);
     }
 
-    // #32 number -> integer: 非整数值浮点保持原样 (3.5 无法无损转整数)
+    // #32 number -> integer: 非整数值浮点取“相近整数”
+    // (3.5 -> 3, -3.5 -> -4, 4.999999999 -> 5)
     {
         neograph::ChatTool def;
         def.name       = "tool_ag";
@@ -544,9 +630,23 @@ TestResult testToolcallArgs() {
         auto args      = utilxx_base::Json{
                  {"count", 3.5}
         };
-        XX_TEST_EXPECT_FALSE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
-        XX_TEST_EXPECT_TRUE(args["count"].is_number_float());
-        XX_TEST_EXPECT_EQ(args["count"].get<double>(), 3.5);
+        XX_TEST_EXPECT_TRUE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
+        XX_TEST_EXPECT_TRUE(args["count"].is_number_integer());
+        XX_TEST_EXPECT_EQ(args["count"].get<long long>(), 3);
+
+        // 与向上取整只差浮点误差: 取向上取整
+        args = utilxx_base::Json{
+            {"count", 4.999999999}
+        };
+        XX_TEST_EXPECT_TRUE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
+        XX_TEST_EXPECT_EQ(args["count"].get<long long>(), 5);
+
+        // 负数是向下取整
+        args = utilxx_base::Json{
+            {"count", -3.5}
+        };
+        XX_TEST_EXPECT_TRUE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
+        XX_TEST_EXPECT_EQ(args["count"].get<long long>(), -4);
     }
 
     // #33 number -> integer: 超出 int64 表示范围保持原样 (1e20)

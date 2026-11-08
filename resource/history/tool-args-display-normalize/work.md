@@ -82,7 +82,6 @@
 - 未做：真机 TUI 手工观察旧会话摘要（依赖已保存在库里的老数据；逻辑与用例覆盖一致）
 
 ## 遇到的问题 / 注意
-
 - `agent/lib/src/nodes/toolcall.cpp` 的批量删改用 PowerShell 改行区间时一度写坏（把新段插到文件头），
   已 `git checkout` 还原后重做；**改这类大段代码别用「先算行号、下一命令再用」的脚本**
   （变量不跨命令保留），要么一条脚本内完成，要么用精确字符串替换
@@ -90,5 +89,72 @@
   submodule 工作区状态与父仓库记录不一致，属本次改动之前就存在的状态，未触碰
 - `ToolRegistry::parametersOf` 每取一次会拷一份 schema（几百字节到几 KB）；只在建工具行 /
   加载历史行时调用，热路径（每轮多次工具调用）可接受
-- 自带 `ArgReader` 的宽容读取（third_party `cxx_pluginxx`）保留未动：它属于插件框架的通用工具，
-  与"展示侧参数已自愈"不冲突
+
+## 后续调整（同日，按 review 意见）
+
+1. **布尔字符串忽略首尾空白与大小写**（`agentxx::util::autoFixToolArgsTypes`）
+   - 新建 helper `parseBoolText`（`agent/lib/src/util/tool_args_fix.cpp`）：只认
+     `true`/`false`/`1`/`0`（忽略 ASCII 大小写与首尾空白），其它文本保持原样
+   - 原因：以前只认精确的 `"true"`/`"false"`，模型写 `"True"` 时自愈不动，插件侧
+     `ArgReader::get<bool>` 又会静默当成 `false`
+   - 测试：`toolcall_args` 新增 #17b（True / " FALSE " / "1" / "0" / "ok" / 已是布尔）；
+     文档同步（`docs/zh-cn/design/index.md` 参数自愈条目）
+2. **`ArgReader` 字符串转数值改成严格解析**（`agent/third_party/cxx_pluginxx/include/pluginxx/kit/kit.h`）
+   - 新增 `detail::parseWholeInteger` / `parseWholeDouble` / `parseBoolText` / `fitsInType`：
+     字符串转整数/浮点要求**整个**字符串（允许首尾空白与一个前导 `+`）都是数值，
+     `"100 lines"` 读不到而不是得 100；整数还要求落在目标类型范围内（不再回绕截断）；
+     浮点拒绝 `0x` 写法与 inf/nan；字符串转布尔同样忽略大小写只认 true/false/1/0，
+     读不到时返回 `nullopt`（`require` 报参数错误），不再静默 false
+   - `get<std::string>` 的"非字符串按 `dump()` 返回"保留不变（用户确认第 3 点暂不修改）
+   - 测试：`plugin_sdk` 新增 ArgReader 用例；`filesystem` 的 `editSegmentsArg` 单对象用例
+     改为"先过自愈再渲染"（与客户端实际拿到的形态一致）
+   - 注意：改的是子模块 `agent/third_party/cxx_pluginxx` 的**源码**，父仓库会显示该 submodule
+     内容有修改；该库按独立仓库维护，需要在库仓库里另行提交。顶层构建的
+     `cxx_pluginxx_repo` 带 `BUILD_ALWAYS`/`INSTALL_ALWAYS`，头文件会自动重新安装，
+     依赖它的 lib / 插件 / 测试会重编（本次实测 `agentxx_filesystem` 重新编译并链接）
+3. 验证：debug 构建 0 错误；`boundaries` 19、`toolcall_args` 224、`plugin_sdk` 133、
+   `filesystem` 222、`plugins` 609、`event_bridge` 223、`client_plugins` 747 全绿；
+   全量套件（`--log-level error`）除本次已修复的两个用例外无其它失败
+
+## 后续调整 2（同日，按第二轮 review 意见）
+
+1. **参数自愈不分工具归属**：确认前台工具调用 (`prepareToolInvocation` →
+   `ToolcallWrapNode::autoFixArgsType`) 对内置/中间件/插件工具一视同仁（schema 取自
+   `tool->get_definition()`）；补上唯一漏掉的入口 —— 后台工具任务
+   `agent/lib/src/agent/async_work.cpp` 的 `runToolWork` 在执行体前也调
+   `util::autoFixToolArgsTypes`（以前直接 `execute_async(spec.toolArgs)`，模型给的
+   宽松参数原样进工具）
+2. **布尔认词扩到常见肯定/否定词**（两个实现同步：`tool_args_fix.cpp` 的
+   `parseBoolText` 与 kit.h 的 `detail::parseBoolText`）：
+   真 = `true`/`yes`/`y`/`on`/`enable`/`enabled`/`1`，假 = `false`/`no`/`n`/`off`/`disable`/`disabled`/`0`
+   （忽略首尾空白与大小写；`ok`/`maybe` 之类仍保持原样）
+3. **浮点转整数改为“相近整数”取整**（`doubleToInt64Rounded` / kit.h 的
+   `doubleToWholeInteger`）：与向上取整相差不超过 1e-6 时向上取整，否则向下取整
+   —— `3.7` → 3、`4.999999999` → 5、`-3.7` → -4；越界与 NaN/Inf 保持原样。
+   字符串 → integer 也走同一规则（`"3.5"` → 3、`"49.9999999"` → 50，
+   `"3.5 files"` 仍不转）；数值收紧（整串才能转）保持不变
+4. **ArgReader 跟着对齐**：字符串→整数的严格整串规则不变；JSON 浮点→整数改为同一套
+   取整；整数目标补 `fitsInType` 范围检查（以前 `is_number_integer` 分支直接
+   `static_cast` 会回绕）；`get<std::string>` 的 `dump()` 仍未改（用户确认第 3 点不动）
+5. 验证：debug 构建 0 错误（全插件重编，因 kit.h 是 header-only）；
+   `toolcall_args` 256、`plugin_sdk` 141、`async_tools` 99（新增
+   `test_async_tool_args_normalize`：后台工具任务收到的 `"5"`/`123`/`"no"` 已按 schema
+   改成 5/"123"/false）、`event_bridge` 223；全量套件（`--log-level error`）
+   **passed=42651 failed=0**
+
+## 注意事项（补充）
+- `ArgReader` 与自愈各管一段：自愈按 tool schema 在**调用前 / 写展示历史前**改写参数，
+  `ArgReader` 只负责按调用方要的类型读取（数值/布尔的严格规则见上）；
+  `get<std::string>` 对非字符串仍 `dump()`（用户确认暂不改）
+
+## 文档同步（同日）
+- `docs/zh-cn/design/plugins.md`：`ArgReader` 条目由“宽容解析 / 智能自愈”改为“只做读取 +
+  整串数值 + 布尔忽略大小写只认 true/false/1/0 + 参数形态修正归主程序
+  (`util::autoFixToolArgsTypes`)”，`blocking_tool` 示例里的注释同步
+- `docs/en/design/plugins.md`：同上（`Tolerant Parameter Reader` → `Typed Parameter Reader`），另补
+  “参数已按 schema 自愈、渲染器不写类型兼容”一条，以及 DIFF 载荷两种形态都认的新理由
+- `docs/zh-cn/design/index.md`：SDK 条目由“宽容类型解析与参数智能自愈”改为“强类型参数读取”
+- `docs/en/design/index.md`：SDK 条目与 `Argument Self-Healing` 条目同步（补布尔大小写、
+  单对象↔对象数组、展示侧同一份实现）
+- `docs/zh-cn/develop.md` / `docs/en/develop.md`：速览条目里的“智能自愈 / error-tolerant”去掉
+- 校验：`boundaries` 19 passed（含自研代码与文档的用词检查）

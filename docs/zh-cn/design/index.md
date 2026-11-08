@@ -122,7 +122,7 @@ event / async_* 及延迟加载加载 (`ToolSkillSearchSubAgentTask` 模板类, 
 工具特性：
 - **自动压缩**: 工具输出超过阈值 (`toolcallSummaryLimitOutputLength`, 默认 2K) 且该 tool 启用 `autoSummaryOutput` 时压缩摘要 (经 share_store 卸载原文); 自带分页参数的工具不启用 (例如 `agentxx_filesystem_read` 的 `offset`/`limit`: 读多少行由调用方决定, 结果原样返回); 自带裁剪的工具也不启用 (命令执行类按 stdout/stderr 分别裁剪到 30k 字符, 保留 `[ExitCode]`/`[StdOut]`/`[StdErr]` 三段结构)
 - **延迟加载**: 插件工具按需注册；`XXToolBase::canDelayLoad` 标记可延迟工具 (默认 true), 初始仅名称注入 system prompt
-- **参数自愈**: `agentxx::util::autoFixToolArgsTypes` 按 JSON Schema 自动修正参数类型 (string↔数组/数值/布尔互转, 单对象↔对象数组, 枚举大小写), 提高模型兼容性。**执行前与展示侧各用一次同一份实现**: `ToolcallWrapNode::autoFixArgsType` 在工具拿到参数前修正, 展示历史里的工具行参数文本 (实时写入 / 历史加载 / 分页读取) 也按同一规则自愈 —— 特化渲染器与展开体看到的参数形态就是工具实际收到的, 渲染器不需要再写类型兼容分支 (schema 来自 `ToolRegistry::parametersOf`: 静态工具登记表 + 插件工具定义)
+- **参数自愈**: `agentxx::util::autoFixToolArgsTypes` 按 JSON Schema 自动修正参数类型 (string↔数组/数值/布尔互转, 单对象↔对象数组, 枚举大小写), 提高模型兼容性。数值收紧: 字符串必须是**整串**数值才转 (`"100 lines"` 不转), 小数写法与浮点值按“相近整数”取整 (与向上取整相差不超过 1e-6 时向上取整, 否则向下取整: `3.7` → 3、`4.999999999` → 5、`-3.7` → -4); 布尔字符串忽略首尾空白与大小写, `true`/`yes`/`y`/`on`/`enable`/`enabled`/`1` 为真、`false`/`no`/`n`/`off`/`disable`/`disabled`/`0` 为假 (其它文本保持原样)。**凡是把参数交给工具的地方都走这一份实现**: 前台工具调用 (`ToolcallWrapNode::autoFixArgsType` 在工具拿到参数前)、后台跑的工具任务 (`AsyncWorkManager` 的 `kind=tool` 提交后、执行前); 展示历史里的工具行参数文本 (实时写入 / 历史加载 / 分页读取) 也按同一规则自愈 —— 内置工具与插件工具一视同仁, 特化渲染器与展开体看到的参数形态就是工具实际收到的, 渲染器不需要再写类型兼容分支 (schema 取自工具自己的定义; 展示侧经 `ToolRegistry::parametersOf`: 静态工具登记表 + 插件工具定义)
 - **重复调用检查**: 启用检查的 tool 在同一 llm↔tool 链内连续同名同参调用达阈值 (`toolcallRepeatCheckThreshold`, 默认 5, 0=禁用) 时经中断询问通道让用户确认，防止模型陷入死循环；重置轮次时自愈。内置工具用构造参数 `XXToolBase::repeatCallCheck` 开启；插件工具用注册 flags `AGENTXX_PLUGIN_TOOL_FLAG_REPEAT_CALL_CHECK` 开启 (默认关闭；当前 `agentxx_filesystem` 的 read/list/glob/grep/write、`agentxx_planning`、`agentxx_string_html_to_markdown`、`agentxx_get_current_datetime` 已开启)
 - **受限并行执行**: 同一条 assistant 消息声明的多个 tool_call 拆成三段执行 ——
   prepare (参数修正 + 权限 + 重复确认) 与 finalize (结果定稿) 按声明顺序串行，
@@ -2519,7 +2519,7 @@ EventBus (事件总线)
 - 现代 SDK (plugin_kit.h): 
   - `AGENTXX_PLUGIN_AGENT_EXPORT` / `AGENTXX_PLUGIN_CLIENT_EXPORT` 声明式导出宏, 自动包裹 C ABI 异常守卫与实例上下文生命周期
   - `ToolSchemaBuilder` 链式参数构建器，自动与主程序 `toolPrompt` 提示词覆盖融合
-  - `ArgReader` 宽容类型解析与参数智能自愈
+  - `ArgReader` 强类型参数读取: 字符串转整数/浮点要求**整个**字符串都是数值 (不接受 `"100 lines"` 这种前缀匹配, 整数还要求落在目标类型范围内), JSON 浮点值转整数按“相近整数”取整 (与向上取整相差不超过 1e-6 时向上, 否则向下), 字符串转布尔忽略大小写认 `true`/`yes`/`y`/`on`/`enable`/`enabled`/`1` 与 `false`/`no`/`n`/`off`/`disable`/`disabled`/`0`, 读不到时交回默认值或报参数错误
   - `CancelRegistry` 框架级事件驱动取消注册表，提供会话取消即时回调与 `ScopedRegistration` 防悬挂互斥保护
   - `PluginBase` 状态基类 + `Task<T>` 锚定协程 + `sleep/yield/offload/call_tool/invoke_cap` awaiter
   - `tool/fast_tool/blocking_tool/hook/capability/spawn` 便捷注册族
