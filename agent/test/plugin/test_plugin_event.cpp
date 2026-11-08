@@ -472,7 +472,9 @@ asio::awaitable<void> test_declaration_from_plugin() {
         XX_TEST_EXPECT_EQ(inputs.size(), size_t{1});
         if (inputs.size() == 1) {
             XX_TEST_EXPECT_TRUE(contains(inputs[0], "[Event] plugin.example_event.build"));
-            XX_TEST_EXPECT_TRUE(contains(inputs[0], "\"step\":1"));
+            // 值按纯文本渲染: 不套 JSON 转义, 也不保留花括号
+            XX_TEST_EXPECT_TRUE(contains(inputs[0], "step: 1"));
+            XX_TEST_EXPECT_FALSE(contains(inputs[0], "\"step\":1"));
         }
     }
 
@@ -631,7 +633,7 @@ asio::awaitable<void> test_register_wait_delivery() {
         const auto inputs = takeEventInputs(other);
         XX_TEST_EXPECT_EQ(inputs.size(), size_t{1});
         if (inputs.size() == 1) {
-            XX_TEST_EXPECT_TRUE(contains(inputs[0], "\"step\":2"));
+            XX_TEST_EXPECT_TRUE(contains(inputs[0], "step: 2"));
         }
     }
 

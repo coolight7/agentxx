@@ -469,11 +469,21 @@ public:
     /// 事件中枢是常驻设施 (没有开关): 每次 init 都会建 hub, `agentxx_async_emit`
     /// 与后台任务查询/取消工具也随之常驻注册 (后者另需 `async_work.enable` 与容器)。
 
-    /// 事件单值进入上下文前的阈值, 单位为**字节** (yaml `event.value_max_bytes`, 默认 32 KB)
-    /// - 超过时把值转存会话 share store, 文本里只留取回提示与开头片段
-    ///   (与工具输出压缩同一套实现, 见 [agentxx::util::offloadShareStoreIfOversized])
-    /// - 0 表示不限制
+    /// 事件内容 (`[Content]` 段) 进入上下文前的阈值, 单位为**字节**
+    /// (yaml `event.value_max_bytes`, 默认 32 KB)
+    /// - 超过时把整段内容转存会话 share store, 文本里只留取回提示与开头片段
+    ///   (与工具输出压缩同一套实现与提示, 见 [agentxx::util::offloadShareStoreIfOversized])
+    /// - 实际阈值同时受 [toolcallSummaryLimitOutputLength] (utf8 字符数) 约束:
+    ///   取两者较小者 (字符数不会超过字节数, 取小只会更早压缩, 不会放过超阈值内容);
+    ///   默认取工具输出压缩阈值 (2 K)
+    /// - 0 表示这一项不限制 (仍受工具输出压缩阈值约束; 两者都为 0 时不压缩)
+    /// - 合成规则见 [eventContentLimitLength]
     size_t eventValueMaxBytes = 32 * 1024;
+
+    /// 事件内容 (`[Content]` 段) 的压缩阈值, 单位为 utf8 字符数 (0 = 不压缩)
+    /// - 由 [eventValueMaxBytes] 与 [toolcallSummaryLimitOutputLength] 取较小者合成
+    ///   (0 视为该项不限制), 见 [agentxx::events::EventHub::Config::contentLimitLength]
+    size_t eventContentLimitLength() const;
 
     /// 等待未指定超时时的默认值, 单位毫秒 (插件 `register_wait` 与模型侧的等待都用它)
     /// (yaml `event.wait_timeout_ms`, 默认 0 = 不限)

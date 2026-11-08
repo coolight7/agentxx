@@ -635,14 +635,12 @@ asio::awaitable<agentxx::util::ToolResult> AsyncAwaitTool::execute_async(const J
             agentxx::events::renderAwaitTimeout(specCopy, timeoutMs)
         );
     }
-    std::vector<std::string> texts;
-    texts.reserve(wait.values.size());
-    for (const auto& value : wait.values) {
-        texts.push_back(hub->valueText(state.sessionId, value));
-    }
+    const auto content = hub->contentText(state.sessionId, wait.values);
     const std::string status
-        = texts.empty() ? "ended-empty" : (texts.size() > 1 ? "values" : "value");
-    co_return agentxx::util::ToolResult::ok(agentxx::events::renderEventText(wait, status, texts));
+        = wait.values.empty() ? "ended-empty" : (wait.values.size() > 1 ? "values" : "value");
+    co_return agentxx::util::ToolResult::ok(
+        agentxx::events::renderEventText(wait, status, content)
+    );
 }
 
 // ===========================================================================

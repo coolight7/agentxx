@@ -5,6 +5,7 @@
 #include "agentxx/event/event_stream.h"
 #include "agentxx/event/hub.h"
 #include "agentxx/event/naming.h"
+#include "agentxx/middlewares/middleware.h"
 #include "neograph/graph/cancel.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -12,6 +13,7 @@
 #include "asio/steady_timer.hpp"
 #include "asio/this_coro.hpp"
 #include "asio/use_awaitable.hpp"
+#include "fmt/format.h"
 #include "utilxx_base/asio_error.h"
 #include <chrono>
 #include <functional>
@@ -271,10 +273,15 @@ asio::awaitable<void> test_hub_replay() {
     {
         auto inputs = takeEventInputs(fx->session);
         XX_TEST_EXPECT_TRUE(inputs.size() == 1);
-        XX_TEST_EXPECT_TRUE(contains(inputs.front(), "[Event] " + ev("chat.msg") + " (first)"));
-        XX_TEST_EXPECT_TRUE(contains(inputs.front(), "wait: w-"));
-        XX_TEST_EXPECT_TRUE(contains(inputs.front(), "status: value"));
-        XX_TEST_EXPECT_TRUE(contains(inputs.front(), "value: hello"));
+        // 三段式: 首行只有事件名, 元信息全在 [Info], 值在 [Content] 里原样给出
+        const auto& text = inputs.front();
+        XX_TEST_EXPECT_TRUE(text.starts_with("[Event] " + ev("chat.msg") + "\n[Info]\n"));
+        XX_TEST_EXPECT_TRUE(contains(text, "mode: first"));
+        XX_TEST_EXPECT_TRUE(contains(text, "wait: w-"));
+        XX_TEST_EXPECT_TRUE(contains(text, "status: value"));
+        XX_TEST_EXPECT_TRUE(contains(text, "[Content]\nhello"));
+        // 旧格式的 `value:` / `values:` 行已删除
+        XX_TEST_EXPECT_FALSE(contains(text, "value: hello"));
     }
 
     // replay=false: 不消费历史, 保持挂起
@@ -283,6 +290,101 @@ asio::awaitable<void> test_hub_replay() {
     auto wait2             = hub.watch(noReplay);
     XX_TEST_EXPECT_TRUE(wait2.has_value());
     XX_TEST_EXPECT_TRUE(wait2->state == WaitState::Armed);
+    co_return;
+}
+
+/// 4.1 投递文本格式: `[Event]` / `[Info]` / `[Content]` 三段, 内容为纯文本
+/// - 值为 JSON 对象时按 `键: 值` 逐行, 多行字符串不套 `\n` 转义 (模型读得懂)
+/// - 多值按 `#1` / `#2` 分块; 无值写 `(no value)`
+asio::awaitable<void> test_hub_text_format() {
+    agentxx::events::EventWait wait;
+    wait.waitId      = "w-7";
+    wait.spec.event  = ev("build.done");
+    wait.spec.mode   = "first";
+    wait.spec.ref    = "call_1";
+    wait.spec.label  = "nightly";
+
+    // 对象值: 多行字符串、布尔、数字、嵌套数组
+    Json value = Json::object();
+    value["asyncId"] = "async-7";
+    value["ok"]      = true;
+    value["log"]     = "line1\nline2";
+    value["count"]   = 2;
+    value["items"]   = Json::array({Json::object({{ "n", 1 }}), Json::object({{ "n", 2 }})});
+
+    const auto content
+        = agentxx::events::renderEventValuesText(std::vector<Json>{value});
+    XX_TEST_EXPECT_EQ(
+        content,
+        std::string{"asyncId: async-7\nok: true\nlog:\n  line1\n  line2\ncount: 2\n"
+                    "items:\n  - n: 1\n  - n: 2"}
+    );
+    const auto text = agentxx::events::renderEventText(wait, "value", content, "note here");
+    XX_TEST_EXPECT_EQ(
+        text,
+        "[Event] " + ev("build.done")
+            + "\n[Info]\nmode: first\nwait: w-7\nstatus: value\nref: call_1\nlabel: nightly\n"
+              "note: note here\n[Content]\n"
+            + content
+    );
+
+    // 多值: 每段前一行 `#<序号>`
+    XX_TEST_EXPECT_EQ(
+        agentxx::events::renderEventValuesText(std::vector<Json>{Json("a"), Json("b")}),
+        std::string{"#1\na\n#2\nb"}
+    );
+    // 无值: 段落仍存在, 内容位置写占位
+    XX_TEST_EXPECT_TRUE(agentxx::events::renderEventValuesText({}).empty());
+    XX_TEST_EXPECT_TRUE(
+        agentxx::events::renderEventText(wait, "ended-empty", "").ends_with("[Content]\n(no value)")
+    );
+    co_return;
+}
+
+/// 4.2 长内容转 share store: 与工具输出压缩共用同一套判定与提示
+asio::awaitable<void> test_hub_content_offload() {
+    EventHub::Config cfg;
+    cfg.contentLimitLength = 64;
+    auto  fx  = co_await makeFixture(cfg);
+    auto& hub = *fx->hub;
+    // share store 挂在中间件上下文上 (无持久化时按内存计数分配 id)
+    fx->ctx->middlewareHandleContext
+        = std::make_shared<agentxx::middleware::MiddlewareContext>();
+    fx->sink->busy = true;
+    std::string err;
+
+    // 30 行内容 (超过 64 字符阈值)
+    std::string body;
+    for (int i = 1; i <= 30; ++i) {
+        body += fmt::format("line{}\n", i);
+    }
+    Json value = Json::object();
+    value["log"] = body;
+    XX_TEST_EXPECT_TRUE(hub.publishValue(ev("big.done"), std::move(value), &err));
+
+    EventWaitSpec spec;
+    spec.event         = ev("big.done");
+    spec.mode          = "first";
+    spec.originSession = fx->sessionId;
+    auto watched       = hub.watch(spec);
+    XX_TEST_EXPECT_TRUE(watched.has_value());
+    auto inputs = takeEventInputs(fx->session);
+    XX_TEST_EXPECT_TRUE(inputs.size() == 1);
+    if (!inputs.empty()) {
+        const auto& text = inputs.front();
+        // 提示与工具输出压缩完全一致: 给出 id / 总行数 / 可见行区间
+        XX_TEST_EXPECT_TRUE(contains(text, "[Content]\n[Content offloaded."));
+        XX_TEST_EXPECT_TRUE(contains(text, "`agentxx_share_store`"));
+        XX_TEST_EXPECT_TRUE(contains(text, "ID 1"));
+        XX_TEST_EXPECT_TRUE(text.ends_with("..."));
+    }
+    // 原文完整写入 share store (模型用 id 取回全文)
+    auto stored = fx->ctx->middlewareHandleContext->getShareStoreItemValue(fx->sessionId, 1);
+    XX_TEST_EXPECT_TRUE(stored.has_value());
+    if (stored.has_value()) {
+        XX_TEST_EXPECT_TRUE(contains(*stored, "log:\n  line1"));
+        XX_TEST_EXPECT_TRUE(contains(*stored, "line30"));
+    }
     co_return;
 }
 
@@ -306,8 +408,8 @@ asio::awaitable<void> test_hub_mode_each() {
     {
         auto inputs = takeEventInputs(fx->session);
         XX_TEST_EXPECT_TRUE(inputs.size() == 2);
-        XX_TEST_EXPECT_TRUE(contains(inputs[0], "value: a"));
-        XX_TEST_EXPECT_TRUE(contains(inputs[1], "value: b"));
+        XX_TEST_EXPECT_TRUE(contains(inputs[0], "[Content]\na"));
+        XX_TEST_EXPECT_TRUE(contains(inputs[1], "[Content]\nb"));
     }
     {
         auto stored = hub.queryWait(wait->waitId);
@@ -347,9 +449,9 @@ asio::awaitable<void> test_hub_mode_all() {
         auto inputs = takeEventInputs(fx->session);
         XX_TEST_EXPECT_TRUE(inputs.size() == 1);
         XX_TEST_EXPECT_TRUE(contains(inputs.front(), "status: stream-ended"));
-        XX_TEST_EXPECT_TRUE(contains(inputs.front(), "values:"));
-        XX_TEST_EXPECT_TRUE(contains(inputs.front(), "1. 1"));
-        XX_TEST_EXPECT_TRUE(contains(inputs.front(), "2. 2"));
+        // 多个值: 每段前一行 `#<序号>`
+        XX_TEST_EXPECT_TRUE(contains(inputs.front(), "[Content]\n#1\n1"));
+        XX_TEST_EXPECT_TRUE(contains(inputs.front(), "#2\n2"));
         XX_TEST_EXPECT_TRUE(contains(inputs.front(), "note: stream ended with 2 value(s)"));
     }
 
@@ -393,6 +495,8 @@ asio::awaitable<void> test_hub_watch_ended_event() {
         XX_TEST_EXPECT_TRUE(inputs.size() == 1);
         XX_TEST_EXPECT_TRUE(contains(inputs.front(), "status: ended-empty"));
         XX_TEST_EXPECT_TRUE(contains(inputs.front(), "the event ended without any value"));
+        // 没有值时 [Content] 段仍在, 但写占位, 不让后续段落错位
+        XX_TEST_EXPECT_TRUE(inputs.front().ends_with("[Content]\n(no value)"));
     }
 
     // 流式带值: stream-ended
@@ -504,7 +608,7 @@ asio::awaitable<void> test_hub_delivery_table() {
     fx->sink->busy = false;
     EventDelivery idle;
     idle.sessionId = fx->sessionId;
-    idle.text      = "[Event] x (first)\nstatus: value\nvalue: 1";
+    idle.text      = "[Event] x\n[Info]\nmode: first\nstatus: value\n[Content]\n1";
     idle.source    = "event:x";
     idle.delivery  = "next-step";
     XX_TEST_EXPECT_TRUE(hub.deliver(idle) == DeliverResult::Queued);
@@ -567,7 +671,7 @@ asio::awaitable<void> test_hub_backlog_limit() {
 
     EventDelivery delivery;
     delivery.sessionId = fx->sessionId;
-    delivery.text      = "[Event] flood\nstatus: value\nvalue: 1";
+    delivery.text      = "[Event] flood\n[Info]\nmode: each\nstatus: value\n[Content]\n1";
     delivery.source    = "event:flood";
     delivery.delivery  = "next-step";
 
@@ -679,7 +783,8 @@ asio::awaitable<void> test_hub_timer_source() {
         auto inputs = takeEventInputs(fx->session);
         XX_TEST_EXPECT_TRUE(inputs.size() == 1);
         XX_TEST_EXPECT_TRUE(contains(inputs.front(), "[Event] " + ev("timer.tick")));
-        XX_TEST_EXPECT_TRUE(contains(inputs.front(), "firedAtMs"));
+        // 定时源的值对象按 `键: 值` 逐行给出
+        XX_TEST_EXPECT_TRUE(contains(inputs.front(), "firedAtMs: "));
     }
     // 一次性定时源触发后自行移除
     XX_TEST_EXPECT_FALSE(hub.cancelTimer("tick"));
@@ -904,8 +1009,11 @@ asio::awaitable<void> test_hub_bus_bridge() {
     co_await bus->publish(std::string{"plugin.demo.chat.ping"}, std::string{R"({"text":"again"})"});
     XX_TEST_EXPECT_EQ(fx->sink->texts.size(), size_t{1});
     if (!fx->sink->texts.empty()) {
-        XX_TEST_EXPECT_TRUE(contains(fx->sink->texts.front(), "[Event] plugin.demo.chat.ping (each)"));
-        XX_TEST_EXPECT_TRUE(contains(fx->sink->texts.front(), "again"));
+        XX_TEST_EXPECT_TRUE(contains(fx->sink->texts.front(), "[Event] plugin.demo.chat.ping"));
+        XX_TEST_EXPECT_TRUE(contains(fx->sink->texts.front(), "mode: each"));
+        // JSON 对象值按纯文本渲染 (不套转义, 不保留花括号)
+        XX_TEST_EXPECT_TRUE(contains(fx->sink->texts.front(), "text: again"));
+        XX_TEST_EXPECT_FALSE(contains(fx->sink->texts.front(), "{"));
     }
     co_return;
 }
@@ -916,6 +1024,8 @@ asio::awaitable<TestResult> run_event_hub_tests() {
     co_await test_hub_single_event();
     co_await test_hub_name_validation();
     co_await test_hub_replay();
+    co_await test_hub_text_format();
+    co_await test_hub_content_offload();
     co_await test_hub_mode_each();
     co_await test_hub_mode_all();
     co_await test_hub_watch_ended_event();

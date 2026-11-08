@@ -1032,9 +1032,8 @@ void BaseAgent::initEventHub(asio::any_io_executor executor) {
     const auto& config = agentContext->agentConfig;
     agentxx::events::EventHub::Config hubConfig;
     if (config) {
-        if (config->eventValueMaxBytes > 0) {
-            hubConfig.valueBytes = config->eventValueMaxBytes;
-        }
+        // 内容压缩阈值: 与工具输出压缩同一规则 (见 AgentConfig::eventContentLimitLength)
+        hubConfig.contentLimitLength = config->eventContentLimitLength();
         if (config->eventMaxWaitsSession > 0) {
             hubConfig.maxWaitsPerSession = config->eventMaxWaitsSession;
         }
@@ -1073,12 +1072,12 @@ void BaseAgent::initEventHub(asio::any_io_executor executor) {
     hub->attachBus(agentContext->bus);
     agentContext->eventHub = std::move(hub);
     XX_LOGD(
-        "[event_hub] ready: maxEvents={} maxWaits={} maxWaitsPerSession={} valueBytes={} "
+        "[event_hub] ready: maxEvents={} maxWaits={} maxWaitsPerSession={} contentLimit={} "
         "delivery={} allowHeadlessTurn={}",
         hubConfig.maxEvents,
         hubConfig.maxWaits,
         hubConfig.maxWaitsPerSession,
-        hubConfig.valueBytes,
+        hubConfig.contentLimitLength,
         hubConfig.deliveryDefault,
         hubConfig.allowHeadlessTurn
     );

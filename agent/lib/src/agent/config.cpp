@@ -2,6 +2,7 @@
 
 #include "agentxx/agent/config_static.h"
 #include "agentxx/agent/config_validation.h"
+#include <algorithm>
 #include <expected>
 #include <filesystem>
 #include <fmt/format.h>
@@ -27,6 +28,18 @@ bool ModelConfig::isOpenaiResponseApi() const {
 
 const ModelConfig& AgentConfig::getSubagentModel() const {
     return subagentModel.has_value() ? subagentModel.value() : model;
+}
+
+size_t AgentConfig::eventContentLimitLength() const {
+    // 两项取小 (0 视为该项不限制): 字符数 <= 字节数, 把字节上限当字符阈值用
+    // 只会更早压缩, 不会放过超出字节上限的内容; 两者都为 0 时不压缩
+    if (eventValueMaxBytes == 0) {
+        return toolcallSummaryLimitOutputLength;
+    }
+    if (toolcallSummaryLimitOutputLength == 0) {
+        return eventValueMaxBytes;
+    }
+    return std::min(eventValueMaxBytes, toolcallSummaryLimitOutputLength);
 }
 
 std::string AgentConfig::defaultModelName() const {

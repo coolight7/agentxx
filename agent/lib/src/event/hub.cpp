@@ -61,17 +61,6 @@ size_t valueBytesOf(const Json& value) {
     return value.dump().size();
 }
 
-/// 值 → 给模型看的文本 (字符串直接给原文, 其余走紧凑 JSON)
-std::string rawValueText(const Json& value) {
-    if (value.is_string()) {
-        return value.get<std::string>();
-    }
-    if (value.is_null()) {
-        return "null";
-    }
-    return value.dump();
-}
-
 /// 终态等待在表里保留多久 (供事后查询)
 constexpr int64_t kTerminalWaitLingerMs = 60 * 1000;
 /// 超时/回收检查周期
@@ -902,12 +891,8 @@ void EventHub::dispatchEnded(RecordEntry& rec) {
 }
 
 void EventHub::flushWait(WaitEntry& entry, std::string_view status, bool resetValues) {
-    auto& wait = entry.wait;
-    std::vector<std::string> texts;
-    texts.reserve(wait.values.size());
-    for (const auto& value : wait.values) {
-        texts.push_back(valueText(wait.spec.originSession, value));
-    }
+    auto&      wait    = entry.wait;
+    const auto content = contentText(wait.spec.originSession, wait.values);
     std::string note;
     if (status == "stream-ended" || status == "ended-empty") {
         if (const auto* rec = findRecord(wait.spec.event)) {
@@ -919,7 +904,7 @@ void EventHub::flushWait(WaitEntry& entry, std::string_view status, bool resetVa
     }
     EventDelivery delivery;
     delivery.sessionId     = wait.spec.originSession;
-    delivery.text          = renderEventText(wait, status, texts, note);
+    delivery.text          = renderEventText(wait, status, content, note);
     delivery.source        = std::string{agentxx::agent::kInputSourceEventPrefix}
                              + wait.spec.event;
     delivery.delivery      = wait.spec.delivery;
@@ -974,17 +959,24 @@ void EventHub::finishWait(
     }
 }
 
-std::string EventHub::valueText(std::string_view sessionId, const Json& value) {
-    auto text = rawValueText(value);
-    if (cfg_.valueBytes == 0 || text.size() < cfg_.valueBytes) {
+std::string EventHub::contentText(std::string_view sessionId, const std::vector<Json>& values) {
+    // 先按纯文本渲染 (不套 JSON 转义), 再整段判定是否需要转存
+    auto text = renderEventValuesText(values);
+    if (text.empty() || cfg_.contentLimitLength == 0) {
+        return text;
+    }
+    // 字节数不足阈值时不可能达到阈值字符数 (utf8 每字符至少 1 字节), 提前返回
+    if (text.size() < cfg_.contentLimitLength) {
         return text;
     }
     auto ctx = ctx_.lock();
     if (!ctx || sessionId.empty()) {
         return text;
     }
-    // 超长值转会话 share store, 文本里给 id 与取回提示 (与工具输出压缩同一套实现)
-    auto offload = agentxx::util::offloadShareStoreIfOversized(ctx, sessionId, text, cfg_.valueBytes);
+    // 整段内容转会话 share store, 文本里给 id 与取回提示
+    // (与工具输出压缩同一套判定与提示, 见 offloadShareStoreIfOversized)
+    auto offload
+        = agentxx::util::offloadShareStoreIfOversized(ctx, sessionId, text, cfg_.contentLimitLength);
     return std::move(offload.text);
 }
 

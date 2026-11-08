@@ -352,7 +352,9 @@ asio::awaitable<void> test_delivery_busy_steps() {
     {
         auto inputs = session->takePendingInputs(agentxx::agent::InputDelivery::NextStep);
         XX_TEST_EXPECT_TRUE(inputs.size() == 1);
-        XX_TEST_EXPECT_TRUE(contains(inputs.front().text, "[Event] " + evName("build.done") + " (first)"));
+        XX_TEST_EXPECT_TRUE(
+            contains(inputs.front().text, "[Event] " + evName("build.done") + "\n[Info]\n")
+        );
         XX_TEST_EXPECT_TRUE(inputs.front().source == "event:" + evName("build.done"));
     }
     fx->endpoint->setTurnActiveForTest(false);
@@ -427,7 +429,7 @@ asio::awaitable<void> test_delivery_rollover() {
     }));
 
     agentxx::agent::SessionPendingInput leftover;
-    leftover.text        = "[Event] late.arrival (first)\nstatus: value\nvalue: 1";
+    leftover.text        = "[Event] late.arrival\n[Info]\nmode: first\nstatus: value\n[Content]\n1";
     leftover.source      = "event:late.arrival";
     leftover.delivery    = std::string{agentxx::agent::InputDelivery::NextStep};
     leftover.createdAtMs = 1;

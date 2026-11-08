@@ -257,7 +257,10 @@ public:
         size_t maxEvents             = 256;
         size_t maxWaits              = 256;
         size_t maxWaitsPerSession    = 32;
-        size_t valueBytes            = 32 * 1024;
+        /// 投递内容 (`[Content]` 段) 的压缩阈值, 单位为 utf8 字符数 (0 = 不压缩)
+        /// - 与工具输出压缩同一套判定与提示, 见 [agentxx::util::offloadShareStoreIfOversized]
+        /// - 主程序按 `AgentConfig::eventContentLimitLength()` 填充
+        size_t contentLimitLength    = 2 * 1024;
         size_t valueHardBytes        = 1024 * 1024;
         size_t deliveryBacklogPerSession = 64;
         bool   allowHeadlessTurn     = false;
@@ -301,9 +304,10 @@ public:
     /// 退订总线前缀 (关闭时调用)
     void detachBus();
 
-    /// 值 → 给模型看的文本 (超长时转会话 share store)
+    /// 值列表 → `[Content]` 段文本 (超长时整段转会话 share store)
     /// - 投递文本与工具返回值共用这一处, 保证两边展示一致
-    std::string valueText(std::string_view sessionId, const Json& value);
+    /// - 多值按 `#1` / `#2` 分块; 内容为空时返回空串 (由 [renderEventText] 补占位)
+    std::string contentText(std::string_view sessionId, const std::vector<Json>& values);
 
     // -------------------------------------------------------------------
     // 定义 / 发布 (hub 线程)
@@ -658,16 +662,46 @@ auto EventHub::callSync(Fn&& fn, bool* completed) {
 // 文本渲染 (纯函数: 便于测试逐字段断言, 也是给模型看的稳定格式)
 // ---------------------------------------------------------------------------
 
-/// 一次投递的文本 (`[Event] <name> ...`), 也是模型收到的输入正文
-/// - 单值给 `value:` 一行, 多值给 `values:` 列表
-/// - `valueTexts` 是调用方已经定稿的值文本 (超长值已转 share store, 见 hub.cpp)
+/// 事件值列表 → 纯文本 (给模型看的 `[Content]` 段)
+///
+/// 不套 JSON 转义: 字符串原样输出 (多行就是多行), 否则模型读多行结果 (后台任务返回的
+/// 工具输出 / 子代理文本) 时会看到 `\n` 这类字面量。格式规则:
+/// - 字符串: 原样; 数字/布尔/null: 与 JSON 文本一致
+/// - 对象: 逐行 `键: 值`, 值是嵌套结构或多行字符串时键后换行、内容缩进 2 格
+/// - 数组: 逐行 `- 值`, 嵌套同样缩进
+/// - 多值 (`mode=all` 等): 每段前一行 `#<序号>` (从 1 开始)
+/// - 空对象/空数组写 `{}` / `[]`; 嵌套超过 8 层退回紧凑 JSON
+///
+/// - `args`:
+///     - [values] 事件值列表 (为空时返回空串)
+///
+/// - `return` 逐段拼接的纯文本 (段间一个换行, 末尾不带换行)
+std::string renderEventValuesText(const std::vector<Json>& values);
+
+/// 一次投递的文本, 也是模型收到的输入正文 —— 三段固定结构:
+///
+/// ```text
+/// [Event] <事件名>
+/// [Info]
+/// mode: first
+/// wait: w-3
+/// status: value
+/// [Content]
+/// <内容>
+/// ```
+///
+/// - 首行只放事件名 (`mode` 等元信息全部进 `[Info]`), 模型据此识别"这是事件而不是
+///   用户说话", 折叠预览与日志也能一眼认出是哪个事件
+/// - `[Info]` 中 `mode` / `wait` / `status` 固定输出, `ref` / `label` / `note` 有值才写
+/// - `[Content]` 是 [renderEventValuesText] 的结果; 超长时已转会话 share store,
+///   文本里是取回提示与开头片段; 内容为空时写 `(no value)`
 /// - `status` 取值: `value` / `values` / `stream-ended` / `stream-open` /
 ///   `ended-empty` / `timeout`
 std::string renderEventText(
-    const EventWait&                wait,
-    std::string_view                status,
-    const std::vector<std::string>& valueTexts,
-    std::string_view                note = {}
+    const EventWait& wait,
+    std::string_view status,
+    std::string_view contentText,
+    std::string_view note = {}
 );
 
 /// `await` 超时文本
