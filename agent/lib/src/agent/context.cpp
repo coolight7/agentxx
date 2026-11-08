@@ -62,13 +62,35 @@ void reportPersistFailure(
     session->io->sendToPeer(std::move(delta));
 }
 
+/// 工具行参数自愈 (展示历史加载/分页时使用): 只处理 Tool 角色且有参数的行
+/// - 回调由 BaseAgent 注入 (按工具 schema 修正参数类型), 未注入/无 schema/无变化时
+///   行保持原样
+void normalizeToolViewArgsIn(
+    const std::function<std::string(std::string_view, std::string_view)>& normalizer,
+    std::vector<ViewMessage>&                                            rows
+) {
+    if (!normalizer) {
+        return;
+    }
+    for (auto& row : rows) {
+        if (row.role != ViewMessage::Role::Tool || !row.tool || row.text.empty()) {
+            continue;
+        }
+        auto fixed = normalizer(std::string_view{row.tool->toolName}, std::string_view{row.text});
+        if (fixed != row.text) {
+            row.text = std::move(fixed);
+        }
+    }
+}
+
 /// 组装会话持久化回调 (每次写入后检查写失败并提示一次)
 /// - 捕获 sessionId 副本, 回调生命周期随 session, 无悬垂风险;
 ///   session 用 weak_ptr 避免回调与 session 互相持有
 SessionStoreHooks makeSessionStoreHooks(
     const std::shared_ptr<SessionStore>& store,
     std::string                          sessionId,
-    const std::shared_ptr<Session>&      session
+    const std::shared_ptr<Session>&      session,
+    std::function<std::string(std::string_view, std::string_view)> toolArgsNormalizer
 ) {
     std::weak_ptr<Session> weakSession = session;
     return SessionStoreHooks{
@@ -101,8 +123,15 @@ SessionStoreHooks makeSessionStoreHooks(
                 reportPersistFailure(weakSession.lock(), store);
             },
         .onLoadViewPage =
-            [store, sessionId](uint64_t start, uint32_t count) {
-                return store->loadViewMessagesPage(sessionId, start, count);
+            [store, sessionId, toolArgsNormalizer = std::move(toolArgsNormalizer)](
+                uint64_t start,
+                uint32_t count
+            ) {
+                auto page = store->loadViewMessagesPage(sessionId, start, count);
+                // 分页读出的工具行与恢复尾窗同一处理: 更早的历史也按当前工具 schema
+                // 修正参数类型 (库内旧行是模型原文)
+                normalizeToolViewArgsIn(toolArgsNormalizer, page);
+                return page;
             },
         .onSaveLlmMessages =
             [store, sessionId, weakSession](std::string_view msgsText) {
@@ -799,6 +828,8 @@ std::shared_ptr<Session> SessionsManager::getOrCreate(std::string_view sessionId
     if (sessionStore) {
         // 从 SQLite 恢复该 session 的展示历史尾窗/LLM 上下文, 并绑定持久化回调
         auto loaded = sessionStore->loadSession(sessionId, viewTailCount());
+        // 恢复的工具行参数按当前工具 schema 修正 (库里存的是模型原文)
+        normalizeToolViewArgs(loaded.viewMessages);
         session->setViewWindowCap(viewWindowMessages);
         session->restoreWindow(
             std::move(loaded.viewMessages),
@@ -807,7 +838,8 @@ std::shared_ptr<Session> SessionsManager::getOrCreate(std::string_view sessionId
             loaded.msgIdCounter
         );
         session->replaceMessagesFromJson(loaded.llmMessages);
-        session->setStoreHooks(makeSessionStoreHooks(sessionStore, std::string{sessionId}, session)
+        session->setStoreHooks(
+            makeSessionStoreHooks(sessionStore, std::string{sessionId}, session, toolArgsNormalizer)
         );
         // 累计用量同样从台账恢复 (之后每次模型调用累加, 见 nodes/modelcall.cpp):
         // 界面显示"本会话已消耗多少 token"跨进程重启连续
@@ -854,6 +886,8 @@ asio::awaitable<std::shared_ptr<Session>>
     auto session = std::make_shared<Session>();
     if (sessionStore) {
         session->setViewWindowCap(viewWindowMessages);
+        // 恢复的工具行参数按当前工具 schema 修正 (与 getOrCreate 同一处理)
+        normalizeToolViewArgs(loaded.viewMessages);
         session->restoreWindow(
             std::move(loaded.viewMessages),
             loaded.viewWindowBase,
@@ -861,7 +895,8 @@ asio::awaitable<std::shared_ptr<Session>>
             loaded.msgIdCounter
         );
         session->replaceMessagesFromJson(loaded.llmMessages);
-        session->setStoreHooks(makeSessionStoreHooks(sessionStore, std::string{sessionId}, session)
+        session->setStoreHooks(
+            makeSessionStoreHooks(sessionStore, std::string{sessionId}, session, toolArgsNormalizer)
         );
         // 累计用量从台账恢复 (与 getOrCreate 同一处理)
         if (session->contextStats) {
@@ -877,6 +912,10 @@ asio::awaitable<std::shared_ptr<Session>>
 std::shared_ptr<Session> SessionsManager::get(std::string_view sessionId) {
     auto it = sessions_.find(sessionId);
     return it == sessions_.end() ? nullptr : it->second;
+}
+
+void SessionsManager::normalizeToolViewArgs(std::vector<ViewMessage>& rows) const {
+    normalizeToolViewArgsIn(toolArgsNormalizer, rows);
 }
 
 void SessionsManager::remove(std::string_view sessionId) {

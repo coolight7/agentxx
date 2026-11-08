@@ -1800,14 +1800,15 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 );
             }
 
-            // 15.3h edit `edits` **单个对象** (少写一层数组的形态): 渲染结果与
-            // "只含一项的数组"完全一致 —— 工具参数的类型自动修正会把对象与单元素
-            // 数组成对互转, 界面层两种形态都要认
+            // 15.3h edit `edits`: 客户端只收到数组形态
+            // - 模型少写一层数组 (传单个对象) 时, agent 在写展示历史前已按工具 schema
+            //   包成数组 (见 util::autoFixToolArgsTypes 与 event_bridge 的
+            //   tool_args_normalize 用例), 渲染器不再自己做兼容
             auto editSingleObj = co_await renderToolAsync(
                 mgr,
                 "call_edit_8",
                 "agentxx_filesystem_edit",
-                R"({"path":"/home/user/i.cpp","edits":{"old_str":"oldA();","new_str":"newA();"}})",
+                R"({"path":"/home/user/i.cpp","edits":[{"old_str":"oldA();","new_str":"newA();"}]})",
                 "success",
                 true,
                 false,
@@ -1829,7 +1830,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 XX_TEST_EXPECT_EQ(editSingleObj.items[0].value("newStr", std::string{}), "newA();");
             }
 
-            // 15.3i 同一份参数写成数组形态: 展开体与折叠头与上面逐字一致
+            // 15.3i 同一份参数多次请求: 展开体与折叠头逐字一致 (缓存/幂等)
             auto editArrayOne = co_await renderToolAsync(
                 mgr,
                 "call_edit_9",
@@ -1849,10 +1850,10 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         }
     }
 
-    // ---- 15b. agentxx_filesystem client 插件: glob/grep 渲染兼容单字符串参数 ----
-    // 真实会话中 LLM 常把 file_patterns/text_patterns/regex_patterns 下发为
-    // 单个字符串而非数组; 渲染回调取不到数组时摘要退化为空, 折叠头丢失检索参数。
-    // 此处用真实插件的注册回调覆盖: 数组 / 单字符串 / 混合 text+regex。
+    // ---- 15b. agentxx_filesystem client 插件: glob/grep 渲染 (数組参数) ----
+    // 真实会话中 LLM 常把 file_patterns/text_patterns/regex_patterns 下发为单个字符串;
+    // agent 在写展示历史前已按工具 schema 包成数组 (util::autoFixToolArgsTypes,
+    // 见 event_bridge 的 tool_args_normalize 用例), 所以渲染器拿到的总是数组。
     {
         auto fsPath = findPluginPath("agentxx_filesystem");
         auto fsInst = co_await mgr->loadNativeAsync(fsPath);
@@ -1876,12 +1877,12 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             XX_TEST_EXPECT_EQ(globArr.displayName, "Glob");
             XX_TEST_EXPECT_TRUE(globArr.summary.find("a, b, ...") != std::string::npos);
 
-            // glob 单字符串形态 (真实 LLM 下发形态)
+            // glob 单元素数组 (模型下发单字符串, 经 agent 参数自愈后的形态)
             auto globStr = co_await renderToolAsync(
                 mgr,
                 "call_glob_str",
                 "agentxx_filesystem_glob",
-                R"({"file_patterns":"agent/test/*.cpp"})",
+                R"({"file_patterns":["agent/test/*.cpp"]})",
                 "",
                 true,
                 false,
@@ -1907,12 +1908,12 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             XX_TEST_EXPECT_TRUE(grepArr.summary.find(R"("foo")") != std::string::npos);
             XX_TEST_EXPECT_TRUE(grepArr.summary.find("src/**/*.h") != std::string::npos);
 
-            // grep 单字符串形态 (真实 LLM 下发形态: file/text 均为单字符串)
+            // grep 单元素数组 (模型对 text/file 都下发单字符串时的自愈形态)
             auto grepStr = co_await renderToolAsync(
                 mgr,
                 "call_grep_str",
                 "agentxx_filesystem_grep",
-                R"({"text_patterns":"startDaSimServer","file_patterns":"agent/test/core/test_agent.cpp"})",
+                R"({"text_patterns":["startDaSimServer"],"file_patterns":["agent/test/core/test_agent.cpp"]})",
                 "",
                 true,
                 false,
@@ -1925,12 +1926,12 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 grepStr.summary.find("agent/test/core/test_agent.cpp") != std::string::npos
             );
 
-            // grep 混合形态: 单字符串 text + 数组 regex (摘要合并展示)
+            // grep 混合形态: 单元素 text 数组 + 单元素 regex 数组 (摘要合并展示)
             auto grepMix = co_await renderToolAsync(
                 mgr,
                 "call_grep_mix",
                 "agentxx_filesystem_grep",
-                R"({"text_patterns":"hello","regex_patterns":["world"],"file_patterns":["src/**/*.txt"]})",
+                R"({"text_patterns":["hello"],"regex_patterns":["world"],"file_patterns":["src/**/*.txt"]})",
                 "",
                 true,
                 false,

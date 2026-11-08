@@ -764,6 +764,12 @@ path/to/agentxx_test --log-level warn string_util regex
   - 协议只有 6 个消息级 op (`stream_begin`/`text_token`/`thinking_token`/`insert_message`/
     `update_message`/`stream_end`) + 6 个界面状态 op; **工具行就是普通历史行**
     (插入=调用开始, 更新=结果到达, 成败与耗时都在行上), 没有 tool_start/tool_end
+  - **工具行的参数文本按工具 schema 自愈**: 建行 (`EventBridge::handleChannelWrite`)、
+    历史尾窗加载、分页读取三处都经 `agentxx::util::autoFixedToolArgsJson`
+    (schema 来自 `ToolRegistry::parametersOf`: 静态登记表 + 插件工具定义), 与执行前的
+    `util::autoFixToolArgsTypes` 是同一份实现 —— 特化渲染器 / 预设模版摘要 / 展开体看到的
+    参数类型就是工具实际收到的, **渲染器里不要再写 string↔数组、单对象↔对象数组一类的兼容**;
+    未登记 schema 的工具 (或插件已卸载后的历史) 保留模型原文即为正确行为
   - 客户端自造行 (中断表单/瞬态提示) 一律用 `local_` 前缀 id, agent 的 op 永不命中它们;
     整份同步会重建副本, 本地行随界面态丢弃 (新中断请求到达时重新建行)
   - 取消/出错时已产出的半截内容定稿成行并落盘: 展示历史会比 LLM 上下文多一条未说完的 assistant 消息

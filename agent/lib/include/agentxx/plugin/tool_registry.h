@@ -2,10 +2,12 @@
 
 #include "agentxx/tools/tool.h"
 #include "neograph/types.h"
+#include "utilxx_base/json.h"
 #include <map>
 #include <memory>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace agentxx {
@@ -51,10 +53,29 @@ public:
     /// - 传入 engine 已持有所有权的内置工具名; 仅作名称比对, 不持有对象
     void setStaticToolNames(std::vector<std::string> names);
 
+    /// 登记静态工具的参数 schema (BaseAgent::init 调用; 展示侧参数自愈用)
+    /// - 只保存名字与参数 schema (`ChatTool::parameters`), 不持有工具对象;
+    ///   与 [setStaticToolNames] 是两件事, 后者只用于插件工具注册冲突检测
+    /// - 整体替换 (重复调用以最后一次为准)
+    void setStaticToolSchemas(std::vector<std::pair<std::string, utilxx_base::Json>> schemas);
+
+    /// 取工具参数 JSON Schema (静态登记表 → 动态插件工具定义)
+    /// - 展示侧用它把工具行参数按声明类型自愈 (见
+    ///   [agentxx::util::autoFixToolArgsTypes]), 使特化渲染器直接按类型读参数
+    /// - 插件工具的定义按名字缓存 (注册/摘除时失效), 避免每一行都构造一次
+    ///   `ChatTool`; 仅 io 线程调用 (与表内其它查询一致)
+    /// - 未登记返回 false (`out` 保持不变)
+    bool parametersOf(std::string_view name, utilxx_base::Json& out) const;
+
 private:
 
     /// 静态工具名 (内置/MCP/延迟加载工具), 冲突检测用
     std::vector<std::string> staticToolNames_{};
+    /// 静态工具参数 schema (名字 → parameters; 展示侧参数自愈用)
+    std::map<std::string, utilxx_base::Json, std::less<>> staticToolSchemas_{};
+    /// 插件工具定义里的参数 schema 缓存 (get_definition 每次都会构造 ChatTool)
+    /// - 注册/摘除该名字时清掉, 因此不会读到旧定义
+    mutable std::map<std::string, utilxx_base::Json, std::less<>> dynamicSchemaCache_{};
     /// 动态插件工具表
     std::map<std::string, std::shared_ptr<agentxx::tools::XXToolBase>, std::less<>> tools_{};
 };

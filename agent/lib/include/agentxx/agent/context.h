@@ -788,7 +788,17 @@ public:
     /// - 弱引用: 指标对象属于 AgentContext, 会话不应延长它的寿命
     std::weak_ptr<agentxx::util::KeyMetrics> metrics;
 
+    /// 工具行参数自愈回调 (由 BaseAgent 注入; 无注入时历史参数原样保留)
+    /// - 入参: 工具名 + 参数 JSON 文本; 返回修正后的文本 (无该工具 schema 时即原文本)
+    /// - 作用于恢复尾窗与分页读取的工具行, 使老会话的展示参数与实时路径用同一套类型
+    ///   (实例见 BaseAgent::init: 捕获 ToolRegistry 后调 util::autoFixedToolArgsJson)
+    std::function<std::string(std::string_view toolName, std::string_view argsJson)>
+        toolArgsNormalizer;
+
 private:
+
+    /// 就地修正展示历史里工具行的参数文本 (无回调/无 schema/无变化时行保持原样)
+    void normalizeToolViewArgs(std::vector<ViewMessage>& rows) const;
 
     /// 本次加载的展示历史尾窗条数 (0 = 全量)
     size_t viewTailCount() const noexcept {

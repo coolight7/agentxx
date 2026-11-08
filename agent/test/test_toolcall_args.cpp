@@ -2,6 +2,7 @@
 
 #include "agentxx/nodes/toolcall.h"
 #include "agentxx/util/neograph_json_bridge.h"
+#include "agentxx/util/tool_args_fix.h"
 #include "fmt/format.h"
 #include "utilxx_base/json.h"
 #include <cstddef>
@@ -1369,6 +1370,83 @@ TestResult testToolcallArgs() {
         };
         XX_TEST_EXPECT_FALSE(agentxx::nodes::ToolcallWrapNode::autoFixArgsType(def, args));
         XX_TEST_EXPECT_TRUE(args["config"].is_array());
+    }
+
+    // #76 共享实现 (autoFixToolArgsTypes): 直接传参数 schema, 与节点包装同一结果
+    {
+        const auto params = utilxx_base::Json{
+            {"type",       "object"                                        },
+            {"properties",
+             utilxx_base::Json{
+                 {"paths",
+                  utilxx_base::Json{
+                      {"type", "array"},
+                      {"items", utilxx_base::Json{{"type", "string"}}},
+                  }},
+             }                                                              },
+        };
+        auto args = utilxx_base::Json{
+            {"paths", "a.txt"}
+        };
+        XX_TEST_EXPECT_TRUE(
+            agentxx::util::autoFixToolArgsTypes(params, args, "tool_shared")
+        );
+        XX_TEST_EXPECT_TRUE(args["paths"].is_array());
+        XX_TEST_EXPECT_EQ(args["paths"][0].get<std::string>(), std::string{"a.txt"});
+
+        // 已经是合法类型: 不再转换
+        XX_TEST_EXPECT_FALSE(
+            agentxx::util::autoFixToolArgsTypes(params, args, "tool_shared")
+        );
+        // schema 不是对象 / 参数不是对象: 直接不处理
+        auto notObject = utilxx_base::Json{
+            {"paths", "a.txt"}
+        };
+        XX_TEST_EXPECT_FALSE(agentxx::util::autoFixToolArgsTypes(
+            utilxx_base::Json{},
+            notObject,
+            "tool_shared"
+        ));
+        XX_TEST_EXPECT_TRUE(notObject["paths"].is_string());
+    }
+
+    // #77 文本级入口 (autoFixedToolArgsJson): 有转换才重写文本, 否则原样返回
+    {
+        const auto params = utilxx_base::Json{
+            {"type",       "object"                                      },
+            {"properties",
+             utilxx_base::Json{
+                 {"limit", utilxx_base::Json{{"type", "integer"}}},
+             }                                                            },
+        };
+        // 发生转换: 字符串数字 -> 数值, 文本重新 dump
+        XX_TEST_EXPECT_EQ(
+            agentxx::util::autoFixedToolArgsJson(params, R"({"limit":"10"})"),
+            std::string{R"({"limit":10})"}
+        );
+        // 无转换: 原样返回 (逐字节相同, 不重新格式化)
+        const std::string alreadyOk = R"(  { "limit" : 10 }  )";
+        XX_TEST_EXPECT_EQ(
+            agentxx::util::autoFixedToolArgsJson(params, alreadyOk),
+            alreadyOk
+        );
+        // 空文本 / 非法 JSON / 非对象 / 无 schema: 原样返回
+        XX_TEST_EXPECT_EQ(
+            agentxx::util::autoFixedToolArgsJson(params, std::string_view{}),
+            std::string{}
+        );
+        XX_TEST_EXPECT_EQ(
+            agentxx::util::autoFixedToolArgsJson(params, R"({"limit":)"),
+            std::string{R"({"limit":)"}
+        );
+        XX_TEST_EXPECT_EQ(
+            agentxx::util::autoFixedToolArgsJson(params, R"([1,2])"),
+            std::string{R"([1,2])"}
+        );
+        XX_TEST_EXPECT_EQ(
+            agentxx::util::autoFixedToolArgsJson(utilxx_base::Json{}, R"({"limit":"10"})"),
+            std::string{R"({"limit":"10"})"}
+        );
     }
 
     return TestResult{g_tca_passed, g_tca_failed};

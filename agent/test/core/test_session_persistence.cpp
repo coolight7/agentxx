@@ -9,6 +9,7 @@
 #include "agentxx/middlewares/interrupt_presets.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/util/sqlite.h"
+#include "agentxx/util/tool_args_fix.h"
 #include "utilxx_base/json.h"
 #include "utilxx_base/log.h"
 #include "utilxx_base/string_util.h"
@@ -1953,6 +1954,108 @@ static void testViewWindowPaging() {
     }
 }
 
+/// 恢复历史时工具行参数按注入的回调自愈 (BaseAgent 注入的 normalizer)
+/// - 尾窗恢复与分页读取两条路径都要生效: 老会话库里存的是模型原文
+/// - 未注入回调 / 工具不匹配时行保持原样
+static TestResult testToolViewArgsNormalizeOnLoad() {
+    using agentxx::agent::SessionStore;
+    using agentxx::agent::SessionsManager;
+    using agentxx::agent::ViewMessage;
+    using V = ViewMessage;
+
+    // 模拟 grep 的参数 schema (file_patterns 是字符串数组, max_files 是整数)
+    const auto grepParams = utilxx_base::Json{
+        {"type",       "object"                                                    },
+        {"properties",
+         utilxx_base::Json{
+             {"file_patterns",
+              utilxx_base::Json{
+                  {"type", "array"},
+                  {"items", utilxx_base::Json{{"type", "string"}}},
+              }},
+             {"max_files", utilxx_base::Json{{"type", "integer"}}},
+         }                                                                          },
+    };
+    const std::string rawArgs = R"({"file_patterns":"*.cpp","max_files":"5"})";
+    const std::string fixedArgs = R"({"file_patterns":["*.cpp"],"max_files":5})";
+
+    auto root = makeTempRoot();
+    {
+        // ---- 第一次"运行": 库里写的是模型原文的工具行 ----
+        auto sessionStore   = std::make_shared<SessionStore>(root);
+        auto mgr            = std::make_shared<SessionsManager>();
+        mgr->sessionStore   = sessionStore;
+        auto s1             = mgr->getOrCreate("thread-args");
+        s1->appendViewMessage(V::makeText(V::Role::User, "u1"));
+        V toolMsg;
+        toolMsg.role      = V::Role::Tool;
+        toolMsg.text      = rawArgs;
+        toolMsg.collapsed = true;
+        V::ToolData t;
+        t.toolName     = "grep";
+        t.toolCallId   = "call_args";
+        t.toolFinished = true;
+        toolMsg.tool   = std::move(t);
+        s1->appendViewMessage(std::move(toolMsg));
+        s1->flushViewMessages();
+    }
+    {
+        // ---- 第二次"运行": 注入 normalizer, 尾窗恢复要自愈 ----
+        auto sessionStore = std::make_shared<SessionStore>(root);
+        auto mgr          = std::make_shared<SessionsManager>();
+        mgr->sessionStore = sessionStore;
+        mgr->toolArgsNormalizer
+            = [grepParams](std::string_view toolName, std::string_view argsJson) {
+                  if (toolName != "grep") {
+                      return std::string{argsJson};
+                  }
+                  return agentxx::util::autoFixedToolArgsJson(grepParams, argsJson);
+              };
+        auto s = mgr->getOrCreate("thread-args");
+        XX_TEST_EXPECT_EQ(s->viewWindow().size(), size_t{2});
+        if (s->viewWindow().size() == 2) {
+            XX_TEST_EXPECT_EQ(s->viewWindow()[1].text, fixedArgs);
+        }
+    }
+    {
+        // ---- 第三次"运行": 尾窗只留 1 条, 分页读出的更早行同样自愈 ----
+        auto sessionStore       = std::make_shared<SessionStore>(root);
+        auto mgr                = std::make_shared<SessionsManager>();
+        mgr->sessionStore       = sessionStore;
+        mgr->viewWindowMessages = 1;
+        mgr->toolArgsNormalizer
+            = [grepParams](std::string_view toolName, std::string_view argsJson) {
+                  if (toolName != "grep") {
+                      return std::string{argsJson};
+                  }
+                  return agentxx::util::autoFixedToolArgsJson(grepParams, argsJson);
+              };
+        auto s = mgr->getOrCreate("thread-args");
+        // 内存窗口只有最后一条 (工具行被淘汰), 取全区间会走 onLoadViewPage
+        XX_TEST_EXPECT_EQ(s->viewWindow().size(), size_t{1});
+        std::vector<V> all;
+        XX_TEST_EXPECT_TRUE(s->collectViewRange(0, 2, all));
+        XX_TEST_EXPECT_EQ(all.size(), size_t{2});
+        if (all.size() == 2) {
+            XX_TEST_EXPECT_EQ(all[1].role, V::Role::Tool);
+            XX_TEST_EXPECT_EQ(all[1].text, fixedArgs);
+        }
+    }
+    {
+        // ---- 未注入 normalizer: 恢复的历史保持原文 (不改变现有行为) ----
+        auto sessionStore = std::make_shared<SessionStore>(root);
+        auto mgr          = std::make_shared<SessionsManager>();
+        mgr->sessionStore = sessionStore;
+        auto s            = mgr->getOrCreate("thread-args");
+        XX_TEST_EXPECT_EQ(s->viewWindow().size(), size_t{2});
+        if (s->viewWindow().size() == 2) {
+            XX_TEST_EXPECT_EQ(s->viewWindow()[1].text, rawArgs);
+        }
+    }
+    removeTempRoot(root);
+    return TestResult{};
+}
+
 asio::awaitable<TestResult> run_session_persistence_tests() {
     g_sp_passed = 0;
     g_sp_failed = 0;
@@ -1974,6 +2077,7 @@ asio::awaitable<TestResult> run_session_persistence_tests() {
     testViewMessageMsgIdMigration();
     testPendingViewOpsIndexReplay();
     testViewWindowPaging();
+    testToolViewArgsNormalizeOnLoad();
 
     // E2E 需要独立 io_context (BaseAgent 内部有自身的 io 循环)
     asio::io_context io;

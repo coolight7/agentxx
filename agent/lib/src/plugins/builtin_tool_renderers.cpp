@@ -8,6 +8,10 @@
 /// 渲染范围: 折叠头的显示名与一行摘要 (与插件渲染器的 "displayName + summary"
 /// 形态一致)。不提供 items —— 展开体保持主程序通用展示 (参数 JSON + 结果文本),
 /// 特化渲染不隐藏工具的原始信息。
+///
+/// 参数形态: 工具展示行的参数文本在写入展示历史前已按工具 schema 修正过
+/// (见 agentxx::util::autoFixToolArgsTypes, 与执行前同一份实现), 所以这里按
+/// schema 声明的类型直接读, 不需要再做 string/array、单对象/对象数组一类的兼容判断。
 #include "agentxx/plugin/builtin_tool_renderers.h"
 
 #include "agentxx/plugin/client_plugin_manager.h"

@@ -1,10 +1,12 @@
 #include "agentxx/event/event_stream.h"
 #include "agentxx/util/invisible_text.h"
 #include "agentxx/util/neograph_json_bridge.h"
+#include "agentxx/util/tool_args_fix.h"
 
 #include "agentxx/agent/io/agent_io_transport.h"
 #include "agentxx/agent/io/context_stats_wire.h"
 #include "agentxx/middlewares/summarization.h"
+#include "agentxx/plugin/tool_registry.h"
 #include "agentxx/protocol/provider_common.h"
 #include "agentxx/util/task_scope.h"
 #include "fmt/format.h"
@@ -31,6 +33,25 @@ int64_t nowMs() {
 void mergeThinkMeta(ViewMessage::ThinkData& dst, const ViewMessage::ThinkData& src) {
     dst.isEncrypted     = dst.isEncrypted || src.isEncrypted;
     dst.reasoningTokens = std::max(dst.reasoningTokens, src.reasoningTokens);
+}
+
+/// 工具展示行的参数文本: 按工具参数 schema 把参数修正成声明的类型
+/// - 与执行前同一份实现 (`agentxx::util::autoFixToolArgsTypes`): 特化渲染器与
+///   展开体看到的参数形态和工具实际收到的完全一致, 渲染器不用再写类型兼容分支
+/// - 无 agent 上下文 / 无该工具 schema / 参数不是 JSON 对象时原样返回
+std::string toolRowArgsText(
+    const std::shared_ptr<agentxx::plugin::ToolRegistry>& registry,
+    std::string_view                                      toolName,
+    std::string_view                                      argsJson
+) {
+    if (!registry || toolName.empty() || argsJson.empty()) {
+        return std::string{argsJson};
+    }
+    utilxx_base::Json parameters;
+    if (!registry->parametersOf(toolName, parameters)) {
+        return std::string{argsJson};
+    }
+    return agentxx::util::autoFixedToolArgsJson(parameters, argsJson);
 }
 
 /// 该角色在展示历史上的默认折叠态 (折叠只是默认值, 运行时的展开/折叠在客户端)
@@ -596,6 +617,10 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
             reconcileSegment(ViewMessage::Role::Think, reasoning, thinkMeta);
             reconcileSegment(ViewMessage::Role::Assistant, content, std::nullopt);
             if (jm.contains("tool_calls") && jm["tool_calls"].is_array()) {
+                // 工具行参数按工具 schema 自愈 (与执行前同一份实现): 渲染器历史/实时
+                // 两条路径都拿到声明的类型
+                auto agentCtx = ctx_.lock();
+                auto registry = agentCtx ? agentCtx->toolRegistry : nullptr;
                 for (const auto& tc : jm["tool_calls"]) {
                     const auto toolName   = tc.value("name", std::string{});
                     const auto toolCallId = tc.value("id", std::string{});
@@ -604,7 +629,7 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
                     const int64_t startMs = nowMs();
                     ViewMessage   m;
                     m.role      = ViewMessage::Role::Tool;
-                    m.text      = arguments;
+                    m.text      = toolRowArgsText(registry, toolName, arguments);
                     m.collapsed = true; // 历史重连默认折叠 (与 onDelta 实时展开不同)
                     m.tool      = ViewMessage::ToolData{};
                     m.tool->toolName   = toolName;

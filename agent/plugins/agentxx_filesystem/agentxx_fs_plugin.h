@@ -27,11 +27,10 @@ using agentxx::plugin::ToolStatus;
 
 struct PluginCtx : public agentxx::plugin::PluginBase {};
 
-/// 提取"字符串列表"参数 (client 渲染摘要用):
-/// - 值为数组时逐项提取其中的字符串元素 (跳过非字符串元素)
-/// - 值不是数组时 (如 LLM 下发的单字符串) 直接按单个字符串渲染
-///   (如 file_patterns 写成 "agent/test/*.cpp")
-/// - 缺失/其他类型: 返回空列表
+/// 提取"字符串列表"参数 (client 渲染摘要用)
+/// - 参数类型已在写展示历史前按工具 schema 修正过 (见 `util::autoFixToolArgsTypes`),
+///   所以这里只按声明的数组读: 模型少写一层写成单字符串时已被包成 `[str]`
+/// - 逐项提取字符串元素 (跳过非字符串元素); 缺失/不是数组时返回空列表
 inline std::vector<std::string> stringListArg(const utilxx_base::Json& args, std::string_view key) {
     std::vector<std::string> out;
     const std::string        k{key};
@@ -39,13 +38,12 @@ inline std::vector<std::string> stringListArg(const utilxx_base::Json& args, std
         return out;
     }
     const auto& v = args[k];
-    if (v.is_string()) {
-        out.push_back(v.get<std::string>());
-    } else if (v.is_array()) {
-        for (const auto& item : v) {
-            if (item.is_string()) {
-                out.push_back(item.get<std::string>());
-            }
+    if (!v.is_array()) {
+        return out;
+    }
+    for (const auto& item : v) {
+        if (item.is_string()) {
+            out.push_back(item.get<std::string>());
         }
     }
     return out;
@@ -94,9 +92,10 @@ struct EditSegmentText {
 };
 
 /// 从 edit 工具参数取替换段 (client 渲染摘要与展开体用)
-/// - `edits` 数组: 逐项取 `old_str`/`new_str` (非对象元素跳过)
-/// - `edits` 为单个对象 (少写一层数组的常见形态): 按单个段处理
-/// - 未给 `edits`: 按 `old_str`/`new_str` 取单个段 (旧写法)
+/// - `edits` 数组: 逐项取 `old_str`/`new_str` (非对象元素跳过); 模型少写一层写成
+///   单个对象时, 已在写展示历史前按 schema 包成数组 (见 `util::autoFixToolArgsTypes`),
+///   因此这里只按数组读
+/// - 未给 `edits`: 按 `old_str`/`new_str` 取单个段 (工具本身支持的另一种参数形态)
 /// - 参数还在流式输出中 (解析失败) / 两种写法都没有: 返回空列表
 ///   (调用方跳过摘要与 diff 片段)
 inline std::vector<EditSegmentText> editSegmentsArg(const utilxx_base::Json& args) {
@@ -104,24 +103,17 @@ inline std::vector<EditSegmentText> editSegmentsArg(const utilxx_base::Json& arg
     if (!args.is_object()) {
         return out;
     }
-    auto takeOne = [&out](const utilxx_base::Json& item) {
-        if (!item.is_object()) {
-            return;
-        }
-        out.push_back(EditSegmentText{
-            item.value<std::string>("old_str", std::string{}),
-            item.value<std::string>("new_str", std::string{})
-        });
-    };
     // 缺失键 → 只读 operator[] 返回 Null 常量
     const auto& editsArg = args["edits"];
-    if (!editsArg.is_null()) {
-        if (editsArg.is_array()) {
-            for (const auto& item : editsArg) {
-                takeOne(item);
+    if (editsArg.is_array()) {
+        for (const auto& item : editsArg) {
+            if (!item.is_object()) {
+                continue;
             }
-        } else {
-            takeOne(editsArg);
+            out.push_back(EditSegmentText{
+                item.value<std::string>("old_str", std::string{}),
+                item.value<std::string>("new_str", std::string{})
+            });
         }
         return out;
     }

@@ -1,5 +1,6 @@
 #include "agentxx/plugin/tool_registry.h"
 
+#include "agentxx/util/neograph_json_bridge.h"
 #include "utilxx_base/container_util.h"
 #include "utilxx_base/log.h"
 #include <algorithm>
@@ -25,6 +26,8 @@ bool ToolRegistry::registerTool(
         XX_LOGW("ToolRegistry: tool `{}` conflicts with built-in tool", name);
         return false;
     }
+    // 同名旧缓存 (仅在先摘除后重注册时有值) 必须清掉: 定义可能已变
+    dynamicSchemaCache_.erase(name);
     utilxx_base::insertHeterogeneous(tools_, std::move(name), std::move(tool));
     return true;
 }
@@ -36,6 +39,7 @@ std::shared_ptr<agentxx::tools::XXToolBase> ToolRegistry::unregisterTool(std::st
     }
     auto tool = std::move(it->second);
     tools_.erase(it);
+    dynamicSchemaCache_.erase(std::string{name});
     return tool;
 }
 
@@ -75,6 +79,48 @@ std::vector<std::string> ToolRegistry::names() const {
 
 void ToolRegistry::setStaticToolNames(std::vector<std::string> names) {
     staticToolNames_ = std::move(names);
+}
+
+void ToolRegistry::setStaticToolSchemas(
+    std::vector<std::pair<std::string, utilxx_base::Json>> schemas
+) {
+    staticToolSchemas_.clear();
+    for (auto& [name, parameters] : schemas) {
+        if (name.empty()) {
+            continue;
+        }
+        utilxx_base::insertHeterogeneous(
+            staticToolSchemas_,
+            std::move(name),
+            std::move(parameters)
+        );
+    }
+}
+
+bool ToolRegistry::parametersOf(std::string_view name, utilxx_base::Json& out) const {
+    if (name.empty()) {
+        return false;
+    }
+    if (auto it = staticToolSchemas_.find(name); it != staticToolSchemas_.end()) {
+        out = it->second;
+        return true;
+    }
+    auto tool = find(name);
+    if (!tool) {
+        return false;
+    }
+    if (auto it = dynamicSchemaCache_.find(name); it != dynamicSchemaCache_.end()) {
+        out = it->second;
+        return true;
+    }
+    // 插件工具: 定义里的 parameters 是图边界类型 (neograph::json), 转成业务 Json 后缓存
+    auto params = agentxx::util::fromNeographJson(tool->get_definition().parameters);
+    if (!params.is_object()) {
+        params = utilxx_base::Json::object();
+    }
+    out = params;
+    utilxx_base::insertHeterogeneous(dynamicSchemaCache_, std::string{name}, std::move(params));
+    return true;
 }
 
 } // namespace plugin

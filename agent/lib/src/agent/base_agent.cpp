@@ -27,6 +27,7 @@
 #include "agentxx/util/observability.h"
 #include "agentxx/util/share_store_offload.h"
 #include "agentxx/util/task_scope.h"
+#include "agentxx/util/tool_args_fix.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/use_awaitable.hpp"
@@ -783,11 +784,36 @@ asio::awaitable<void> BaseAgent::init() {
             //   unique_ptr, 之后遍历将解引用空指针
             if (agentContext->toolRegistry) {
                 std::vector<std::string> staticNames;
+                std::vector<std::pair<std::string, utilxx_base::Json>> staticSchemas;
                 staticNames.reserve(tools.size());
+                staticSchemas.reserve(tools.size());
                 for (auto& tool : tools) {
                     staticNames.push_back(tool->get_name());
+                    // 参数 schema 一并登记: 展示侧 (工具展示行的参数文本) 按它把参数修正成
+                    // 声明的类型, 与执行前用的是同一份实现 (见 util::autoFixToolArgsTypes)
+                    staticSchemas.emplace_back(
+                        tool->get_name(),
+                        agentxx::util::fromNeographJson(tool->get_definition().parameters)
+                    );
                 }
                 agentContext->toolRegistry->setStaticToolNames(std::move(staticNames));
+                agentContext->toolRegistry->setStaticToolSchemas(std::move(staticSchemas));
+            }
+            // 展示历史里的工具行参数自愈: 加载尾窗/分页读取时按 schema 修正, 让特化渲染器
+            // 与实时路径看到同一套参数类型 (无 schema 的工具原样保留)
+            if (agentContext->sessions) {
+                auto registry = agentContext->toolRegistry;
+                agentContext->sessions->toolArgsNormalizer =
+                    [registry](std::string_view toolName, std::string_view argsJson) -> std::string {
+                    if (!registry || argsJson.empty()) {
+                        return std::string{argsJson};
+                    }
+                    utilxx_base::Json parameters;
+                    if (!registry->parametersOf(toolName, parameters)) {
+                        return std::string{argsJson};
+                    }
+                    return agentxx::util::autoFixedToolArgsJson(parameters, argsJson);
+                };
             }
             // 记录本 agent 加载的工具名列表 (供子代理"全部继承父工具"使用)
             agentContext->toolNames.clear();

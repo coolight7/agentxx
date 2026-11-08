@@ -5,6 +5,7 @@
 #include "agentxx/event/events.h"
 #include "agentxx/middlewares/middleware.h"
 #include "agentxx/middlewares/summarization.h"
+#include "agentxx/plugin/tool_registry.h"
 #include "agentxx/protocol/provider_common.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -359,6 +360,93 @@ asio::awaitable<void> test_eventbridge_channel_write_messages() {
     }
     // 历史已追加
     XX_TEST_EXPECT_EQ(session->viewWindow().size(), size_t{1});
+
+    co_return;
+}
+
+/// 验证工具行的参数文本按工具 schema 自愈: 与执行前的自动参数修正同一份实现,
+/// 没登记 schema / 参数不是对象的工具保持原文
+/// - 背景: 特化渲染器靠展示行里的参数文本推导摘要, 不能各自再写类型兼容
+///   (如 file_patterns 传成单字符串时渲染器应当直接看到数组)
+asio::awaitable<void> test_eventbridge_tool_args_normalize() {
+    auto agentContext          = std::make_shared<agentxx::agent::AgentContext>();
+    agentContext->toolRegistry = std::make_shared<agentxx::plugin::ToolRegistry>();
+    // 静态工具登记: file_patterns 是字符串数组, max_files 是整数
+    agentContext->toolRegistry->setStaticToolSchemas({
+        {"grep",
+         utilxx_base::Json{
+             {"type", "object"},
+             {"properties",
+              utilxx_base::Json{
+                  {"file_patterns",
+                   utilxx_base::Json{
+                       {"type", "array"},
+                       {"items", utilxx_base::Json{{"type", "string"}}},
+                   }},
+                  {"max_files", utilxx_base::Json{{"type", "integer"}}},
+              }},
+         }},
+    });
+    auto session = std::make_shared<agentxx::agent::Session>();
+    auto io      = std::make_shared<TestEbIO>();
+
+    auto bridge   = makeTestBridge(agentContext, session, io);
+    auto bridgeCb = bridge->makeCallback();
+
+    auto msgJson = neograph::json{
+        {"role",       "assistant"},
+        {"content",    ""         },
+        {"tool_calls",
+         neograph::json::array({
+             neograph::json{
+                 {"id", "call_grep"},
+                 {"name", "grep"},
+                 {"arguments", "{\"file_patterns\":\"*.cpp\",\"max_files\":\"5\"}"},
+             },
+             neograph::json{
+                 {"id", "call_unknown"},
+                 {"name", "no_schema_tool"},
+                 {"arguments", "{\"file_patterns\":\"*.cpp\"}"},
+             },
+         })                       },
+    };
+    bridgeCb(neograph::graph::GraphEvent{
+        neograph::graph::GraphEvent::Type::CHANNEL_WRITE,
+        "llm",
+        neograph::json{
+                       {"channel", "messages"},
+                       {"value", neograph::json::array({msgJson})},
+                       }
+    });
+
+    XX_TEST_EXPECT_EQ(io->deltas.size(), size_t{2});
+    if (io->deltas.size() == 2) {
+        const auto& normalized = io->deltas[0];
+        XX_TEST_EXPECT_TRUE(normalized.type == DT::InsertMessage);
+        if (normalized.message) {
+            // 单字符串包成数组 / 字符串整数转数值 (与执行前收到的参数一致)
+            XX_TEST_EXPECT_EQ(
+                normalized.message->text,
+                std::string{"{\"file_patterns\":[\"*.cpp\"],\"max_files\":5}"}
+            );
+        }
+        // 没登记 schema 的工具: 原文不动
+        const auto& untouched = io->deltas[1];
+        if (untouched.message) {
+            XX_TEST_EXPECT_EQ(
+                untouched.message->text,
+                std::string{"{\"file_patterns\":\"*.cpp\"}"}
+            );
+        }
+    }
+    // 历史里存的也是自愈后的参数 (客户端/history 回放都按它渲染)
+    XX_TEST_EXPECT_EQ(session->viewWindow().size(), size_t{2});
+    if (session->viewWindow().size() == 2) {
+        XX_TEST_EXPECT_EQ(
+            session->viewWindow()[0].text,
+            std::string{"{\"file_patterns\":[\"*.cpp\"],\"max_files\":5}"}
+        );
+    }
 
     co_return;
 }
@@ -1297,6 +1385,7 @@ asio::awaitable<TestResult> run_event_bridge_tests() {
         co_await test_eventbridge_error();
         co_await test_eventbridge_message_tip();
         co_await test_eventbridge_channel_write_messages();
+        co_await test_eventbridge_tool_args_normalize();
         co_await test_eventbridge_channel_write_thinking();
         co_await test_eventbridge_node_delta();
         co_await test_eventbridge_think_duration();

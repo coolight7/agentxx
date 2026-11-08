@@ -750,8 +750,10 @@ tool_call 中的前后调用形成顺序屏障。并发只发生在同一条 ass
   | 裸数组 | `[{"old_str":"..","new_str":".."}, ...]` | 无文件路径的多段 |
   - 段内缺 `old_str`/`new_str` 按空串 (删除 / 纯新增那一侧); 两侧都为空的段跳过
   - 给了 `edits` 就不再读 `old_str`/`new_str` (与 edit 工具参数的互斥规则一致)
-  - 段落形态两种都认的原因: 工具参数的类型自动修正会把"单个对象"与"单元素数组"
-    成对互转 (`ToolcallWrapNode::autoFixArgsType`), 界面层不能只认其中一种
+  - 段落形态两种都认的原因: 界面描述层是**公开的组件契约**, 插件可以直接构建
+    `DIFF` 载荷 (不必来自工具参数), 主程序不能只认其中一种; 而工具参数本身在
+    写展示历史前已按 schema 自愈 (`ToolRegistry::parametersOf` + `util::autoFixToolArgsTypes`),
+     `edits` 传成单个对象时渲染器拿到的是数组
   - SDK 便捷方法: `ClientPluginBase::showDiffOverlay(title, path, segments)`
     (单段自动用旧写法下发, 老主程序也能渲染)
 - `extra_json` 支持尺寸与外观选项 (数据层, 老主程序忽略未知键):
@@ -874,6 +876,14 @@ Agentxx 客户端采用统一的分层工具特化渲染机制，TUI 核心层�
    - 插件在 client 初始化时按 `tool_name` 注册特化渲染定义 (`AgentxxToolRenderSpec`)，TUI 渲染该工具消息 (实时流式或历史回溯) 时统一生效。
    - **历史回溯是主要场景之一**：会话重启恢复/重连/切换会话后回放的 `Tool` 消息没有实例级装饰
      (见第 3 条), 特化渲染完全依赖此处注册的渲染器 (输入只有消息自带的 `args_json`/`result_text`)。
+   - **参数已按工具 schema 自愈, 渲染器不需要再写类型兼容**：工具展示行的参数文本在
+     **写入展示历史时 (EventBridge 建行) / 历史尾窗加载 / 分页读取** 三处都经
+     `agentxx::util::autoFixedToolArgsJson` 处理过, schema 来自 `ToolRegistry::parametersOf`
+     (静态工具登记表 + 插件工具定义), 与执行前的 `ToolcallWrapNode::autoFixArgsType`
+     是同一份实现。因此渲染器里拿到的 `args_json` 已与工具实际收到的参数类型一致
+     (数组参数不会是单字符串、对象数组不会是单对象、数值参数不会是字符串),
+     直接按 schema 声明的类型读即可; 只有**没有登记 schema 的工具 / 插件已卸载后的历史**
+     会保留模型原文。
    - 框架规则差异：**展开状态的头部显示名只由实例级装饰覆盖** (类型级渲染器命中时展开头保持
      原始 `toolName`)，渲染器始终覆盖**折叠头显示名/摘要**与**展开体 items**；折叠态是历史消息的
      默认形态 (见 `event_stream` 历史展开时 `collapsed=true`)，因此历史回溯观感与实时一致。

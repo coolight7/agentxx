@@ -961,15 +961,9 @@ void testTuiToolHeaderEditMultiSegmentBody() {
     }
     XX_TEST_EXPECT_EQ(pathCount, size_t{1});
 
-    // `edits` **单个对象** (少写一层数组的形态) 与"只含一项的数组"渲染一致:
-    // 工具参数的类型自动修正会把两种形态互转, 展开体两种写法都得认
-    ToolHeaderFixture single(80, 24);
-    single.pushTool(
-        "agentxx_filesystem_edit",
-        R"({"path":"/home/one.cpp","edits":{"old_str":"oldA();","new_str":"newA();"}})",
-        true,
-        false
-    );
+    // `edits` 以数组形态到达客户端: 模型少写一层数组 (单个对象) 时, agent 写展示历史前
+    // 已按工具 schema 包成数组 (见 event_bridge 的 tool_args_normalize 用例与
+    // util::autoFixToolArgsTypes), 因此渲染器只按数组读
     ToolHeaderFixture arrayOfOne(80, 24);
     arrayOfOne.pushTool(
         "agentxx_filesystem_edit",
@@ -977,11 +971,10 @@ void testTuiToolHeaderEditMultiSegmentBody() {
         true,
         false
     );
-    const std::string singleOut = single.plainRender();
+    const std::string singleOut = arrayOfOne.plainRender();
     XX_TEST_EXPECT_TRUE(singleOut.find("oldA();") != std::string::npos);
     XX_TEST_EXPECT_TRUE(singleOut.find("newA();") != std::string::npos);
     XX_TEST_EXPECT_TRUE(singleOut.find("/home/one.cpp") != std::string::npos);
-    XX_TEST_EXPECT_EQ(singleOut, arrayOfOne.plainRender());
 }
 
 /// 装饰区域尺寸上报: owner = tool_call_id (插件据此查询 regionSize / 收 UI_LAYOUT)
