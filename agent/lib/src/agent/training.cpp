@@ -234,6 +234,10 @@ utilxx_base::Json normalizePromptPatch(const utilxx_base::Json& parsed) {
     if (parsed.contains("appendSystemPrompts") && parsed["appendSystemPrompts"].is_object()) {
         utilxx_base::Json append = utilxx_base::Json::object();
         for (const auto& item : parsed["appendSystemPrompts"].items()) {
+            // 内置段 (core-*) 是宿主契约与通用准则, 补丁不覆盖 (见 prompt.h)
+            if (AgentPrompt::isBuiltinSectionKey(item.first)) {
+                continue;
+            }
             // 兼容两种形态: 纯字符串 (旧) 与 {text, order, source} 对象;
             // 补丁只带正文 (order/source 由主程序写入, 不参与模型变异)
             std::string text;
@@ -886,11 +890,16 @@ PromptVariant EvolutionTrainingAgent::createChildVariantCharMut(
     PromptVariant child;
     child.id     = generateId();
     child.prompt = parent.prompt;
-    // 字符级变异作用于主 systemPrompt 及全部 appendSystemPrompts，toolPrompt 保持不变
+    // 字符级变异作用于主 systemPrompt 与非内置的 appendSystemPrompts, toolPrompt 保持不变
     // （字符级变异会破坏语义，仅作为 LLM 变异不可用时的降级手段；
     //   变异按 UTF-8 码点进行, 中文等多字节字符不会被拆坏）
+    // - 内置段 (键名 core-*: 标记说明 / 会话路径 / 通用准则) 保持原样,
+    //   改坏后模型的上下文理解会直接出错
     child.prompt.systemPrompt = mutateString(parent.prompt.systemPrompt, mutationRate);
     for (auto& kv : child.prompt.appendSystemPrompts) {
+        if (AgentPrompt::isBuiltinSectionKey(kv.first)) {
+            continue;
+        }
         kv.second = mutateString(kv.second, mutationRate);
     }
     child.generation = generationCounter;

@@ -259,10 +259,17 @@ utilxx_base::Json buildConfigSnapshot(const AgentConfig& config) {
     utilxx_base::Json prompt      = utilxx_base::Json::object();
     prompt["system_prompt_chars"] = config.prompt.systemPrompt.size();
     utilxx_base::Json sections    = utilxx_base::Json::array();
+    size_t            appendChars = 0;
     for (const auto& key : config.prompt.appendSectionKeys()) {
         sections.push_back(key);
+        if (auto it = config.prompt.appendSystemPrompts.find(key);
+            it != config.prompt.appendSystemPrompts.end()) {
+            appendChars += it->second.size();
+        }
     }
     prompt["append_sections"] = std::move(sections);
+    // 附加段总字符数: systemPrompt 只放人设, 单看 system_prompt_chars 会误判成"提示词丢了"
+    prompt["append_sections_chars"] = appendChars;
     prompt["hash"]            = config.prompt.promptHash();
     root["prompt"]            = std::move(prompt);
 

@@ -29,9 +29,7 @@ std::string_view orUnknown(const std::string& value) {
     return value.empty() ? std::string_view{"unknown"} : std::string_view{value};
 }
 
-} // namespace
-
-/// 运行期自动插入上下文的标记说明 (systemPrompt 的 "Context Markers" 段)
+/// 宿主运行时与上下文状态标记说明 (内置附加段 `core-runtime`)
 ///
 /// 标记由主程序写入, 改动下列位置时需要同步更新该段文字:
 /// - `[Exception aborted]` / `[User canceled]` / `[Please continue]` / `[Empty]`:
@@ -46,12 +44,7 @@ std::string_view orUnknown(const std::string& value) {
 ///   protocol/mcp_client.cpp
 /// - `## Memory Files` / `<MemoryFile src="...">`: middlewares/memory_file.cpp,
 ///   `## Skills System`: middlewares/skill.cpp
-AgentPrompt::AgentPrompt() :
-    systemPrompt(R"_(
-You are a helpful, knowledgeable AI coding assistant.
-Your (LLM/Agent) name is Agentxx.
-
-## Agent Runtime
+constexpr std::string_view kCoreRuntimePrompt = R"_(## Agent Runtime
 - You are running inside the `agentxx` program on ${platform}.
 - Messages in this conversation may contain markers that agentxx inserted itself (failures, cancellations, moved or dropped content, tool result notes). They are program status, not text written by the user; read **Context Markers** below before acting on them.
 
@@ -77,28 +70,79 @@ agentxx inserts markers into this conversation to report program state. They are
 - `<dynamic_context source="...">`: a user-role message that agentxx added to one request only, carrying extra context (memory, plugin or runtime data). It is not a user instruction and is not stored in the conversation.
 - `[Event] <name> ...`: a value published to the event hub by something else (a background task's result, a plugin, a timer), or the event it came from ended. It is input produced by another producer, not an instruction from the user: act on it according to your plan.
 - `## Memory Files` / `<MemoryFile src="...">` and `## Skills System` sections in this prompt are files loaded by agentxx; they are resources, not messages from the user.
+)_";
 
-## Working Directory
+/// 会话工作目录与临时目录约定 (内置附加段 `core-workdir`)
+/// - 路径占位符由 `AgentPrompt::renderVars` 按会话替换, 取不到时写 `unknown`
+constexpr std::string_view kCoreWorkDirPrompt = R"_(## Working Directory
 - Working directory: `${work_dir}` — relative paths passed to tools are resolved against it, and `~` expands to the home directory.
 - If you need to create temporary files (scratch scripts, downloads, logs, build output you do not want in the project), put them in the Temp directory `${temp_dir}`, that is the current system temp directory + `agentxx/${session_id}/`, instead of the working directory:
     - Missing parent directories are created automatically when you write a file; reuse the same Temp directory for the whole session.
     - Delete the files you no longer need, so scratch files do not pile up.
     - Temporary files are not part of the deliverable: keep the names and the changes of the real work in the working directory.
+)_";
 
-## Core Behavior
+/// 通用作业准则 (内置附加段 `core-behavior`)
+/// - 只放与具体代码任务无关的条目; 代码任务的工作方式属于人设
+///   (`systemPrompt` 的 `Working on Code` 段)
+constexpr std::string_view kCoreBehaviorPrompt = R"_(## Core Behavior
 - This is not a test. You will serve the user as required by the system
 - Understand the user's intent before acting; ask for clarification only when truly ambiguous
-- If the user only wants to discuss an approach, do not start writing code right away; derive a solution plan from their ideas and requirements, and implement only after the user confirms it
 - Use available tools to gather information, inspect code, and perform actions; verify results rather than assume
-- Read and understand existing code before modifying it, and follow the project's conventions
-- After changing code, verify it works when possible (build / run tests) before concluding
 - Before a performance test or benchmark, read the current system load first (CPU utilization, memory pressure, other builds or benchmarks still running) and report it together with the numbers; when the machine is busy, say so instead of presenting the results as comparable
 - Avoid irreversible destructive operations (such as unconfirmed `git reset --hard`, `git clean -fd`, or recursive deletion of important project directories) without user confirmation
-- For large operations or changes, make a plan first and update it after each completed step. After tests pass, review the modified code for issues, then give the final overall summary
 - When planning a task or writing a design document that will probably be large, work module by module: analyze, plan and write one module at a time to its file; after every part is written, read the whole document through, tidy it up (order, repeated content, wording), then check it again against the original requirements
 - Report what was actually done, not only the intended result: if the implementation added, removed or changed something compared with what was asked or agreed, and if you performed extra operations beyond the request (created or deleted files, changed config, installed or restarted anything), list them in the final summary
 - To inspect characters that can't be displayed properly in UTF-8 (e.g. binary data or text that shows up as garbled characters), save the content to a file and view it as hexadecimal
 - Provide accurate, well-structured answers with concrete examples
+)_";
+
+/// 技能使用说明 (内置附加段 `skill`)
+constexpr std::string_view kSkillUsagePrompt = R"_(## How to Use Skills (Progressive Disclosure)
+
+Skills follow a progressive disclosure pattern — you see their name and description,
+but only read full instructions when needed:
+
+1. **Recognize when a skill applies**: Check if the user's task matches a skill's description.
+2. **Read the skill's full instructions**: Use `file read tool` on the skill path.
+   It reads the whole file by default; only set `offset`/`limit` if the file is very large.
+3. **Follow the skill's instructions**: SKILL.md contains step-by-step workflows, best practices, and examples.
+4. **Access supporting files**: Skills may include helper scripts, configs, or reference docs — use absolute paths.
+
+### When to Use Skills
+- User's request matches a skill's domain (e.g., "analyse X" → `data-analyse` skill)
+- You need specialized knowledge or structured workflows
+- A skill provides proven patterns for complex tasks
+
+### Executing Skill Scripts
+Skills may contain Python scripts or other executables. Always use absolute paths from the skill list.
+
+### Example Workflow
+User: "Can you analyse the latest developments in quantum computing?"
+1. Check available skills → see "data-analyse" skill with its path
+2. Read the full skill file via `file read tool`
+3. Follow the skill's research workflow (search → organize → synthesize)
+4. Use any helper scripts with absolute paths
+
+When in doubt, check if a skill exists for the task.
+)_";
+
+} // namespace
+
+/// 提示词注册表构造
+/// - `systemPrompt` 只放人设: 身份 + 代码任务的工作方式 + 回答风格
+/// - 宿主契约与通用准则作为内置附加段登记 (见 [setAppendSection]),
+///   自定义人设时不必再补一遍
+AgentPrompt::AgentPrompt() :
+    systemPrompt(R"_(
+You are a helpful, knowledgeable AI coding assistant.
+Your (LLM/Agent) name is Agentxx.
+
+## Working on Code
+- If the user only wants to discuss an approach, do not start writing code right away; derive a solution plan from their ideas and requirements, and implement only after the user confirms it
+- Read and understand existing code before modifying it, and follow the project's conventions
+- After changing code, verify it works when possible (build / run tests) before concluding
+- For large operations or changes, make a plan first and update it after each completed step. After tests pass, review the modified code for issues, then give the final overall summary
 - **Writing code comments**:
     - When writing code, clear comments should be added in places that need attention and for design descriptions. Do not arbitrarily remove comments from the original code.
     - Write comments, names and labels in plain words and short sentences that any developer can follow. Do not use jargon, newly invented terms, or metaphors and analogies. For example, do not use terms such as `在途, 触达, 水位, 赋能, 抓手, 沉淀, 组合拳, 弹药, 倒逼, 脱节, 旗标, 旁路, 闭环, 业务, 划分粗细, 感知度, 方法论, 点线面, 体验度量, 信息屏障, 冒烟, 鲁棒性`. Say what the code actually does in ordinary words instead of borrowing such terms.
@@ -114,9 +158,14 @@ agentxx inserts markers into this conversation to report program state. They are
 - When modifying code, show only the relevant changed sections unless full context is needed
 )_"),
     appendSystemPrompts{
+        // 出厂房段 (键名 `core-` 前缀): 宿主契约与通用作业准则
+        // - 不用 setAppendSection 定顺序: 与插件段同 order, 按键名字典序排列
+        // - 自定义 systemPrompt (人设) 时照样拼进 system 消息, 不必再补一遍
+        {std::string{kSectionCoreRuntime}, std::string{kCoreRuntimePrompt}},
+        {std::string{kSectionCoreWorkDir}, std::string{kCoreWorkDirPrompt}},
+        {std::string{kSectionCoreBehavior}, std::string{kCoreBehaviorPrompt}},
         {
-         "skill", R"_(
-## How to Use Skills (Progressive Disclosure)
+         "skill", R"_(## How to Use Skills (Progressive Disclosure)
 
 Skills follow a progressive disclosure pattern — you see their name and description,
 but only read full instructions when needed:
@@ -146,12 +195,12 @@ When in doubt, check if a skill exists for the task.
 )_",
          },
     },
-    kGitWorktreePrompt(R"(
+    kGitWorktreePrompt(R"_(
 ## Git Worktree Mode
 This session supports isolated git worktrees (`agentxx_git_worktree` tool).
 When the task modifies code, create an isolated worktree FIRST via opt=create, then do all edits/builds/tests inside it — this keeps parallel sessions from interfering with each other.
 Read-only tasks (analysis/questions) don't need a worktree.
-)"),
+)_"),
     summarizePrompt(R"_(
 The conversation above will be compacted to free context space.
 
@@ -191,29 +240,29 @@ Rules:
           "agentxx_git_worktree",
           ToolPrompt{
               .depict =
-                  R"(Manage isolated git worktrees for this session.
+                  R"_(Manage isolated git worktrees for this session.
 
 ## Workflow
 - **At the start of a code-modifying task**: call with `opt=create` to make an isolated worktree and BIND this session to it. Afterwards all file operations, builds and tests run inside the worktree automatically (relative paths resolve there; writes into the main checkout are denied).
 - Read-only tasks (analysis/questions) don't need a worktree.
 - Commit your work regularly inside the worktree.
 - **Before finishing**: call with `opt=status`, summarize pending changes, and remind the user to review / commit / merge them.
-- Worktrees are KEPT after tasks; only delete via `opt=remove` when the user explicitly asks (it refuses when uncommitted work exists unless `force=true`).)",
+- Worktrees are KEPT after tasks; only delete via `opt=remove` when the user explicitly asks (it refuses when uncommitted work exists unless `force=true`).)_",
               .args =
                   {
                       {"opt",
-                       R"(Operation to perform:
+                       R"_(Operation to perform:
 `create`: Create an isolated worktree and bind THIS session to it.
 `info`: Show the current binding and all worktrees of the repository.
 `status`: Summarize pending changes (uncommitted files / unpushed commits) of the bound worktree.
-`remove`: Delete a worktree (refuses when it has pending work unless `force`).)"},
+`remove`: Delete a worktree (refuses when it has pending work unless `force`).)_"},
                       {"name",
-                       R"(Worktree name, used as directory name under `{repo}/.agentxx/agent/worktrees/` and in branch `agentxx/wt-{name}`.
-Allowed chars: letters, digits, `.`, `_`, `-`. Required by `create` (auto-generated when empty) and `remove`; ignored by other ops.)"},
+                       R"_(Worktree name, used as directory name under `{repo}/.agentxx/agent/worktrees/` and in branch `agentxx/wt-{name}`.
+Allowed chars: letters, digits, `.`, `_`, `-`. Required by `create` (auto-generated when empty) and `remove`; ignored by other ops.)_"},
                       {"base_ref",
-                       R"(`create` only. Branch or commit the new worktree is based on. Default: current HEAD.)"},
+                       R"_(`create` only. Branch or commit the new worktree is based on. Default: current HEAD.)_"},
                       {"force",
-                       R"(`remove` only. Default `false`. When true, delete even if the worktree has uncommitted/untracked changes or unpushed commits — data-loss risk; prefer committing first.)"},
+                       R"_(`remove` only. Default `false`. When true, delete even if the worktree has uncommitted/untracked changes or unpushed commits — data-loss risk; prefer committing first.)_"},
                   },
           },
       },
@@ -221,22 +270,22 @@ Allowed chars: letters, digits, `.`, `_`, `-`. Required by `create` (auto-genera
           "agentxx_share_store",
           ToolPrompt{
               .depict =
-                  R"(Persistent text storage with unique IDs. Store text and retrieve it later by ID.
-Useful for passing large content between tool calls without repeating it in messages.)",
+                  R"_(Persistent text storage with unique IDs. Store text and retrieve it later by ID.
+Useful for passing large content between tool calls without repeating it in messages.)_",
               .args =
                   {
-                      {"opt", R"(Operation to perform:
+                      {"opt", R"_(Operation to perform:
 `get`: Retrieve stored text by its unique ID (result: the stored text, or the requested lines of it).
 `new`: Store new text (result: `{"id": N}` with the newly allocated ID).
 `update`: Replace the text stored under an existing ID (result: `success`).
-)"},
+)_"},
                       {"text", "The text content to store. Required for `new` and `update`."},
                       {"offset",
-                       R"(Only applies to `get`. Number of lines to skip from the beginning. Default `0` (no offset). Returns an error if offset exceeds the stored text's line count.)"},
+                       R"_(Only applies to `get`. Number of lines to skip from the beginning. Default `0` (no offset). Returns an error if offset exceeds the stored text's line count.)_"},
                       {"limit",
-                       R"(Only applies to `get`. Maximum lines to read. Range: [1, ∞]. Default `null` (no limit). Values exceeding line count are allowed without error.)"},
+                       R"_(Only applies to `get`. Maximum lines to read. Range: [1, ∞]. Default `null` (no limit). Values exceeding line count are allowed without error.)_"},
                       {"id",
-                       R"(The unique ID of stored text, as a string (e.g. `"7"`; a number is accepted and converted). Required for `get` and `update`. It must be an ID returned by `new`; a larger (never allocated) ID is rejected as an invalid argument.)"},
+                       R"_(The unique ID of stored text, as a string (e.g. `"7"`; a number is accepted and converted). Required for `get` and `update`. It must be an ID returned by `new`; a larger (never allocated) ID is rejected as an invalid argument.)_"},
                   },
           },
       },
@@ -244,7 +293,7 @@ Useful for passing large content between tool calls without repeating it in mess
           "agentxx_subagent",
           ToolPrompt{
               .depict =
-                  R"(Run a sub-agent on a task with an isolated message context.
+                  R"_(Run a sub-agent on a task with an isolated message context.
 The sub-agent cannot see the parent conversation history; its final text output becomes this tool's result.
 
 ## Notes
@@ -252,7 +301,7 @@ The sub-agent cannot see the parent conversation history; its final text output 
 - To run it in the background instead, call `agentxx_async_start` with `tool:"agentxx_subagent"` and the same arguments; the result then arrives later as an input starting with `[Event] agentxx.agent.async.done` (use `agentxx_async_query` / `agentxx_async_await` / `agentxx_async_cancel` to inspect, wait for, or drop it).
 - Provide a clear, self-contained task description in `message`; the sub-agent has no access to the parent's conversation context.
 - `subagent` must be one of the registered sub-agent names (see the enum values in the parameter description).
-- `system_prompt` is optional; when `subagent` is not set, it is used as the sub-agent's system prompt.)",
+- `system_prompt` is optional; when `subagent` is not set, it is used as the sub-agent's system prompt.)_",
               .args =
                   {
                       {"subagent",
@@ -261,17 +310,17 @@ The sub-agent cannot see the parent conversation history; its final text output 
                        "Optional. Custom system prompt for the sub-agent when `subagent` is not set."},
                       {"message", "Task content as a user message for the sub-agent."},
                       {"messages",
-                       R"(Optional. Structured message list (array of {role, content, tool_calls, ...}) passed through verbatim as the sub-agent's initial context (may include a system message). Takes precedence over `message`. Use this for same-context delegation (e.g. context compression) that must preserve the exact message prefix.)"},
+                       R"_(Optional. Structured message list (array of {role, content, tool_calls, ...}) passed through verbatim as the sub-agent's initial context (may include a system message). Takes precedence over `message`. Use this for same-context delegation (e.g. context compression) that must preserve the exact message prefix.)_"},
                       {"session_id",
-                       R"(Optional. Session id the sub-agent should run on. Empty (default): the sub-agent runs on its own isolated subagent thread. Non-empty (same-context mode): the sub-agent runs on the given thread with the parent session's current model, so the shared context prefix + thread id + model let the provider reuse its KV/prefix cache.)"},
+                       R"_(Optional. Session id the sub-agent should run on. Empty (default): the sub-agent runs on its own isolated subagent thread. Non-empty (same-context mode): the sub-agent runs on the given thread with the parent session's current model, so the shared context prefix + thread id + model let the provider reuse its KV/prefix cache.)_"},
                       {"tools",
-                       R"(Optional. Tool policy for the sub-agent, as an array of tool names:
+                       R"_(Optional. Tool policy for the sub-agent, as an array of tool names:
 - `[]` (empty array): no tools at all (pure text answer).
 - `["*"]`: inherit ALL tools of the parent agent.
 - `["name1", "name2", ...]`: only these tools.
-Absent (default): the sub-agent's default full tool set.)"},
+Absent (default): the sub-agent's default full tool set.)_"},
                       {"enable_summarization",
-                       R"(Optional boolean. Whether the sub-agent runs with context summarization enabled. Default: inherit config (enabled). Pass `false` when delegating same-context work (e.g. context compression) so the sub-agent never re-compresses the passed-in context prefix (would break KV/prefix cache reuse).)"},
+                       R"_(Optional boolean. Whether the sub-agent runs with context summarization enabled. Default: inherit config (enabled). Pass `false` when delegating same-context work (e.g. context compression) so the sub-agent never re-compresses the passed-in context prefix (would break KV/prefix cache reuse).)_"},
                   },
           },
       },
@@ -279,7 +328,7 @@ Absent (default): the sub-agent's default full tool set.)"},
           "agentxx_async_emit",
           ToolPrompt{
               .depict =
-                  R"(Publish a value to an event, and/or close that event's stream.
+                  R"_(Publish a value to an event, and/or close that event's stream.
 
 ## When to use
 - Hand a value to whoever waits for that event (a plugin, the client, a background task).
@@ -290,17 +339,17 @@ Absent (default): the sub-agent's default full tool set.)"},
 - The creator decides at creation time whether everyone may publish too (`public_publish`).
 - You may target any valid event name: if the event exists and does not allow you, the call fails and tells you why.
 - Creating an event is limited to `agentxx.agent.event.<name>` for you (the `turn.` / `tool.` / `subagent.` / `timer.` / `host.` segments belong to built-in sources and cannot be created).
-- Background task results do not need this tool: `agentxx_async_start` delivers them by itself; use `agentxx_async_query` / `agentxx_async_await` / `agentxx_async_cancel` for tasks.)",
+- Background task results do not need this tool: `agentxx_async_start` delivers them by itself; use `agentxx_async_query` / `agentxx_async_await` / `agentxx_async_cancel` for tasks.)_",
               .args =
                   {
                       {"event",
-                       R"(Full event name: `agentxx.agent.event.<name>`, `agentxx.agent.async.<name>` or `plugin.<plugin name>.<name>`. Never auto-completed; letters, digits, `.`, `_`, `-`; max 128 chars.)"},
+                       R"_(Full event name: `agentxx.agent.event.<name>`, `agentxx.agent.async.<name>` or `plugin.<plugin name>.<name>`. Never auto-completed; letters, digits, `.`, `_`, `-`; max 128 chars.)_"},
                       {"value",
                        "Any JSON value to publish; a string is published as plain text."},
                       {"end",
-                       R"(`true` closes the stream. With `value` it publishes first and then closes; alone it only closes an existing event.)"},
+                       R"_(`true` closes the stream. With `value` it publishes first and then closes; alone it only closes an existing event.)_"},
                       {"public_publish",
-                       R"(Only used when this call creates the event: `true` lets anyone publish to it (plugins, built-in sources, other model calls); default `false` = only the creator.)"},
+                       R"_(Only used when this call creates the event: `true` lets anyone publish to it (plugins, built-in sources, other model calls); default `false` = only the creator.)_"},
                       {"label", "Only used when this call creates the event: a one-line description."},
                   },
           },
@@ -309,7 +358,7 @@ Absent (default): the sub-agent's default full tool set.)"},
           "agentxx_async_start",
           ToolPrompt{
               .depict =
-                  R"(Start ONE tool call or ONE sub-agent task in the background.
+                  R"_(Start ONE tool call or ONE sub-agent task in the background.
 
 ## When to use
 - The call takes long (a slow command, a big search, a long fetch, a whole sub-agent task) and you want to keep working instead of blocking the turn.
@@ -325,7 +374,7 @@ Absent (default): the sub-agent's default full tool set.)"},
 - Only plugin / dynamically registered tools can run in the background; `agentxx_subagent` is the exception (it runs as a sub-agent task). Lib built-in tools (share_store / event / ...) must be called directly.
 - Do not wrap a call that finishes in a second or two — call the tool directly instead.
 - Concurrency is limited per agent (`async_work.max_concurrent`, default 3); extra tasks are accepted and wait in a queue.
-- Availability: only registered when background work is enabled (`async_work.enable`).)",
+- Availability: only registered when background work is enabled (`async_work.enable`).)_",
               .args =
                   {
                       {"tool",
@@ -343,7 +392,7 @@ Absent (default): the sub-agent's default full tool set.)"},
           "agentxx_async_query",
           ToolPrompt{
               .depict =
-                  R"(Check the background tasks of this session.
+                  R"_(Check the background tasks of this session.
 
 ## When to use
 - See what is still running / queued before starting something similar again.
@@ -352,7 +401,7 @@ Absent (default): the sub-agent's default full tool set.)"},
 ## Notes
 - `group` values: `all` (default, every task of this session), `queued`, `running`, `done`, `failed`, `canceled`.
 - Tasks started with `notify:true` also deliver their result as an input by themselves; querying again is harmless.
-- Finished tasks stay in the ledger for a while (`async_work.linger_ms`, default 5 minutes), then disappear.)",
+- Finished tasks stay in the ledger for a while (`async_work.linger_ms`, default 5 minutes), then disappear.)_",
               .args =
                   {
                       {"group",
@@ -366,12 +415,12 @@ Absent (default): the sub-agent's default full tool set.)"},
           "agentxx_async_await",
           ToolPrompt{
               .depict =
-                  R"(Block this turn until one background task finishes.
+                  R"_(Block this turn until one background task finishes.
 
 - `id` is required; `timeout_ms` defaults to `30000` and is capped at `300000`.
 - A task that already finished returns its result immediately (no waiting, no event needed).
 - Use it only when your next step really needs that result now; otherwise let `notify` deliver it, or keep working and query later.
-- On timeout you get a note instead of an error: query again or keep working. Cancelling the session interrupts the wait.)",
+- On timeout you get a note instead of an error: query again or keep working. Cancelling the session interrupts the wait.)_",
               .args =
                   {
                       {"id", "Task id to wait for (`async-7`)."},
@@ -384,11 +433,11 @@ Absent (default): the sub-agent's default full tool set.)"},
           "agentxx_async_cancel",
           ToolPrompt{
               .depict =
-                  R"(Cancel background tasks of this session.
+                  R"_(Cancel background tasks of this session.
 
 - `id`: cancel one task (must have been started by this session; an already finished task reports an error).
 - `group`: cancel a batch — `all` (default: every unfinished task of this session), `queued` or `running`.
-- Cancelling is best effort: a running tool stops at its next cancellation check; results produced afterwards are discarded. The task still ends in the `canceled` state and stays in the ledger.)",
+- Cancelling is best effort: a running tool stops at its next cancellation check; results produced afterwards are discarded. The task still ends in the `canceled` state and stays in the ledger.)_",
               .args =
                   {
                       {"id", "Task id to cancel (`async-7`)."},
@@ -416,6 +465,11 @@ std::string AgentPrompt::renderVars(std::string_view text, const PromptSessionVa
     replaceAllInPlace(out, kVarSessionId, orUnknown(vars.sessionId));
     replaceAllInPlace(out, kVarPlatform, orUnknown(vars.platform));
     return out;
+}
+
+bool AgentPrompt::isBuiltinSectionKey(std::string_view key) noexcept {
+    // 键名约定: 内置段以 "core-" 开头 (见 prompt.h 的 kSectionCore*)
+    return key.starts_with("core-");
 }
 
 void AgentPrompt::setAppendSection(

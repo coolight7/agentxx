@@ -2526,6 +2526,15 @@ worktree 绑定是运行期经 `agentxx_git_worktree` 工具切换的临时状�
   - 替换在拼装完成后统一执行, 自定义 `systemPrompt` 与各附加段 (`appendSystemPrompts`) 都生效
 - 提示词文本统一放在 `agent/lib/src/agent/prompt.cpp` (构造函数里初始化):
   `prompt.h` 只声明成员与取值方式, 改提示词文本不会牵连所有包含该头文件的编译单元
+  - **归属**: `systemPrompt` 只放人设 (身份 / 代码任务的工作方式 `Working on Code` / `Response Style`);
+    宿主契约与通用准则直接放在附加段表里 —— `core-runtime` (`Agent Runtime` + `Context Markers`)、
+    `core-workdir` (会话工作目录 / 临时目录)、`core-behavior` (通用作业准则);
+    它们不单独设 order, 与插件段一起按键名排序
+  - 自定义人设 (FFI 的 `system` 键 / 插件 `prompt.systemPrompt` / `makeSubAgentConfig`)
+    只替换 `systemPrompt`, 内置段照样拼进 system 消息; 内置段可按同名键覆盖,
+    JSON 给 `null` 则删除 (允许的定制)
+  - 内置段不被训练改写: 字符级变异与 LLM 补丁都按
+    `AgentPrompt::isBuiltinSectionKey` (键名 `core-` 前缀) 跳过
   - 表中**只放内置工具** (share_store / subagent / git_worktree); 插件工具的提示词写在插件自身字面量里
     (少数插件经 `agentxx.agent.prompt` 接口表注入, 如 execute_command / codegraph / planning),
     表里仍保留“同名条目存在时覆盖插件提示词” (定制/本地化时可用)

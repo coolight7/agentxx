@@ -2102,6 +2102,74 @@ asio::awaitable<void> test_agent_system_prompt_session_dirs() {
 }
 
 // ---------------------------------------------------------------------------
+// 系统提示词的归属拆分:
+//  1) `systemPrompt` 只放人设 (身份 / 代码任务工作方式 / 回答风格), 不放宿主契约
+//  2) 宿主契约与通用准则在附加段内置段里 (core-runtime / core-workdir / core-behavior)
+//  3) 自定义 systemPrompt 后拼装结果仍包含这些内置段, 占位符照常替换
+//  4) 内置段与插件段同为 order 0, 按键名字典序排列
+// ---------------------------------------------------------------------------
+asio::awaitable<void> test_agent_system_prompt_builtin_sections() {
+    using agentxx::agent::AgentPrompt;
+
+    auto cfg             = std::make_shared<agentxx::agent::AgentConfig>();
+    cfg->model.baseUrl   = "http://127.0.0.1:1234";
+    cfg->model.modelName = "test-sim";
+
+    // 1) 出厂状态: 三个内置段都在
+    for (const auto key : {AgentPrompt::kSectionCoreRuntime,
+                           AgentPrompt::kSectionCoreWorkDir,
+                           AgentPrompt::kSectionCoreBehavior}) {
+        XX_TEST_EXPECT_TRUE(cfg->prompt.appendSystemPrompts.count(key) == 1);
+        XX_TEST_EXPECT_TRUE(AgentPrompt::isBuiltinSectionKey(key));
+        auto it = cfg->prompt.appendSystemPrompts.find(key);
+        XX_TEST_EXPECT_TRUE(it != cfg->prompt.appendSystemPrompts.end());
+        if (it != cfg->prompt.appendSystemPrompts.end()) {
+            XX_TEST_EXPECT_FALSE(it->second.empty());
+        }
+    }
+    XX_TEST_EXPECT_FALSE(AgentPrompt::isBuiltinSectionKey("planning"));
+
+    // 2) 人设里不再有宿主契约; 代码任务的工作方式与回答风格留着
+    XX_TEST_EXPECT_TRUE(cfg->prompt.systemPrompt.find("## Context Markers") == std::string::npos);
+    XX_TEST_EXPECT_TRUE(
+        cfg->prompt.systemPrompt.find("## Working Directory") == std::string::npos
+    );
+    XX_TEST_EXPECT_TRUE(cfg->prompt.systemPrompt.find("## Core Behavior") == std::string::npos);
+    XX_TEST_EXPECT_TRUE(cfg->prompt.systemPrompt.find("## Working on Code") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(
+        cfg->prompt.systemPrompt.find("**Writing code comments**") != std::string::npos
+    );
+    XX_TEST_EXPECT_TRUE(cfg->prompt.systemPrompt.find("## Response Style") != std::string::npos);
+
+    // 3) 自定义人设 (只写自己的身份与风格) 后, 契约段仍然拼进去
+    cfg->prompt.systemPrompt = "You are Bob, a terse assistant.";
+    auto agent               = std::make_shared<agentxx::agent::CodeAgent>(cfg);
+    co_await agent->init();
+
+    const std::string sessionId = "builtin_sections_session";
+    const auto        combined  = agent->buildSystemPrompt(sessionId);
+    XX_TEST_EXPECT_TRUE(combined.find("You are Bob, a terse assistant.") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(combined.find("## Agent Runtime") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(combined.find("### Context Markers") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(combined.find("## Working Directory") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(combined.find("## Core Behavior") != std::string::npos);
+    // 人设被整段替换后, 代码任务段落不再出现 (它属于人设, 不属于内置段)
+    XX_TEST_EXPECT_TRUE(combined.find("## Working on Code") == std::string::npos);
+    // 占位符照常替换 (内置段里的 ${work_dir} / ${temp_dir} / ${platform})
+    XX_TEST_EXPECT_TRUE(combined.find("${") == std::string::npos);
+
+    // 4) 顺序: 内置段不单独设 order, 与插件段 (order 0) 一起按键名排序
+    cfg->prompt.setAppendSection("planning", "## Planning Guide", 0, "plugin:planning");
+    std::string orderKeys;
+    for (const auto& section : cfg->prompt.orderedAppendSections()) {
+        orderKeys += std::string{section.key} + ",";
+    }
+    XX_TEST_EXPECT_TRUE(orderKeys.starts_with("core-behavior,core-runtime,core-workdir,"));
+
+    co_return;
+}
+
+// ---------------------------------------------------------------------------
 // 权限状态 wire 接口 (Info 侧边栏授权按钮的服务端侧)
 //  1) WireGetPermissionState -> WirePermissionState (反映权限中间件当前状态)
 //  2) WireSetFullAuth(..) -> 权限中间件状态切换 + 向客户端广播新状态
@@ -2299,6 +2367,7 @@ asio::awaitable<TestResult> run_agent_tests() {
         co_await test_agent_toolcall_intercept_exception();
         co_await test_agent_build_system_prompt_and_wire_get_context();
         co_await test_agent_system_prompt_session_dirs();
+        co_await test_agent_system_prompt_builtin_sections();
         co_await test_agent_permission_state_wire();
         co_await test_agent_graph_build_fallback();
     } catch (const std::exception& e) {

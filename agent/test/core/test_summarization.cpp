@@ -146,11 +146,11 @@ struct SummarizationTestEnv {
 
         // 默认模型名 = 首个注册的 "fallback"
         ctx->agentConfig->model.modelName = "fallback";
-        // 测试环境剥离通用附加提示词 (planning/skill/codegraph) 的干扰，仅保留 summarization 模板
-        // 否则 system 消息会被模型侧通用拼接拉长，导致断言 `content=="sys"` 失败
-        ctx->agentConfig->prompt.appendSystemPrompts.erase("planning");
-        ctx->agentConfig->prompt.appendSystemPrompts.erase("skill");
-        ctx->agentConfig->prompt.appendSystemPrompts.erase("codegraph");
+        // 测试环境清空出厂附加段 (planning/skill/codegraph 与内置的 core-* 契约段),
+        // 只留 summarization 模板; 否则 system 消息会被通用拼接拉长,
+        // 导致断言 `content=="sys"` 失败
+        ctx->agentConfig->prompt.appendSystemPrompts.clear();
+        ctx->agentConfig->prompt.appendSystemPromptMeta.clear();
 
         // 伪造 subagent 管理器 (压缩走 subagent 路径)
         subagent = std::make_shared<FakeSubAgentManagerTool>("fake_subagent", ctx);

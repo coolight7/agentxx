@@ -90,10 +90,10 @@ std::string_view stateMark(std::string_view state) {
 
 /// 单条任务详情 (台账 JSON → 文本; 含结果正文)
 std::string renderEntryDetail(const Json& entry) {
-    const auto state  = entry.value("state", std::string{});
-    const auto start  = entry.value("startedAtMs", int64_t{0});
-    const auto finish = entry.value("finishedAtMs", int64_t{0});
-    std::string out   = fmt::format(
+    const auto  state  = entry.value("state", std::string{});
+    const auto  start  = entry.value("startedAtMs", int64_t{0});
+    const auto  finish = entry.value("finishedAtMs", int64_t{0});
+    std::string out    = fmt::format(
         "[Async task] id={} kind={} name={} state={}",
         entry.value("asyncId", std::string{}),
         entry.value("kind", std::string{}),
@@ -127,11 +127,11 @@ std::string renderEntryDetail(const Json& entry) {
 
 /// 任务清单 (台账 JSON 数组 → 文本)
 std::string renderTaskList(std::string_view group, const Json& items) {
-    size_t running = 0;
-    size_t queued  = 0;
-    size_t done    = 0;
-    size_t failed  = 0;
-    size_t canceled = 0;
+    size_t                   running  = 0;
+    size_t                   queued   = 0;
+    size_t                   done     = 0;
+    size_t                   failed   = 0;
+    size_t                   canceled = 0;
     std::vector<std::string> lines;
     size_t                   matched = 0;
     for (const auto& item : items) {
@@ -214,9 +214,11 @@ std::string renderTaskList(std::string_view group, const Json& items) {
 }
 
 /// 台账里取本会话的一条任务; 不存在或属别的会话时按参数错误拒绝
-Json requireOwnedEntry(const std::shared_ptr<agentxx::agent::AgentHost>& host,
-                       std::string_view                                   asyncId,
-                       std::string_view                                   sessionId) {
+Json requireOwnedEntry(
+    const std::shared_ptr<agentxx::agent::AgentHost>& host,
+    std::string_view                                  asyncId,
+    std::string_view                                  sessionId
+) {
     auto entry = host->asyncWorkJson(asyncId);
     if (!entry.is_object() || entry.empty()) {
         throw std::invalid_argument{fmt::format(
@@ -226,10 +228,9 @@ Json requireOwnedEntry(const std::shared_ptr<agentxx::agent::AgentHost>& host,
         )};
     }
     if (entry.value("creatorSessionId", std::string{}) != sessionId) {
-        throw std::invalid_argument{fmt::format(
-            "Background task `{}` was not started by this session",
-            asyncId
-        )};
+        throw std::invalid_argument{
+            fmt::format("Background task `{}` was not started by this session", asyncId)
+        };
     }
     return entry;
 }
@@ -241,8 +242,8 @@ struct AsyncCtx {
     std::string                                   sessionId;
 };
 
-AsyncCtx acquire(const std::shared_ptr<agentxx::agent::AgentContext>& ctxPtr,
-                 const Json&                                      arguments) {
+AsyncCtx
+    acquire(const std::shared_ptr<agentxx::agent::AgentContext>& ctxPtr, const Json& arguments) {
     AsyncCtx out;
     out.ctx = ctxPtr;
     if (!ctxPtr) {
@@ -251,7 +252,8 @@ AsyncCtx acquire(const std::shared_ptr<agentxx::agent::AgentContext>& ctxPtr,
     out.sessionId = requireSessionId(arguments);
     out.host      = ctxPtr->host.lock();
     if (!out.host) {
-        throw std::runtime_error{"background tasks need an agent host (this agent has no container)"};
+        throw std::runtime_error{"background tasks need an agent host (this agent has no container)"
+        };
     }
     return out;
 }
@@ -315,8 +317,7 @@ neograph::ChatTool AsyncStartTool::get_definition() const {
     return {get_name(), prompt.depict, agentxx::util::toNeographJson(params)};
 }
 
-asio::awaitable<agentxx::util::ToolResult>
-    AsyncStartTool::execute_async(const Json& arguments) {
+asio::awaitable<agentxx::util::ToolResult> AsyncStartTool::execute_async(const Json& arguments) {
     const auto args  = arguments.is_object() ? arguments : Json::object();
     auto       state = acquire(agentContext.lock(), args);
 
@@ -342,7 +343,7 @@ asio::awaitable<agentxx::util::ToolResult>
     const auto label  = args.value("label", std::string{});
 
     // 会话与调用 id 由执行层补齐 (与前台 ToolcallNode 一致): 下游工具会读它们
-    const auto sessionId = state.sessionId;
+    const auto sessionId  = state.sessionId;
     toolArgs["sessionId"] = sessionId;
     const auto callId     = args.value("tool_call_id", std::string{});
     if (!callId.empty()) {
@@ -352,26 +353,23 @@ asio::awaitable<agentxx::util::ToolResult>
     // 权限: 后台执行不再经过 ToolcallWrapNode, 因此在**提交前**按真正的目标工具与参数
     // 问一次 (与前台同一套权限中间件, 该询问用户时照旧询问)
     if (state.ctx->bus) {
-        auto resp
-            = co_await state.ctx->bus
-                  ->request<agentxx::events::ReqToolPermissionCheck,
-                            agentxx::events::RespToolPermissionCheck>(
-                      agentxx::events::Topic::ToolPermissionCheck,
-                      agentxx::events::ReqToolPermissionCheck{
-                          .agentName = state.ctx->agentConfig
-                                           ? state.ctx->agentConfig->agentName
-                                           : std::string{},
-                          .sessionId = sessionId,
-                          .toolName  = toolName,
-                          .arguments = toolArgs,
-                      },
-                      std::chrono::milliseconds{0}
-                  );
+        auto resp = co_await state.ctx->bus->request<
+            agentxx::events::ReqToolPermissionCheck,
+            agentxx::events::RespToolPermissionCheck>(
+            agentxx::events::Topic::ToolPermissionCheck,
+            agentxx::events::ReqToolPermissionCheck{
+                .agentName
+                = state.ctx->agentConfig ? state.ctx->agentConfig->agentName : std::string{},
+                .sessionId = sessionId,
+                .toolName  = toolName,
+                .arguments = toolArgs,
+            },
+            std::chrono::milliseconds{0}
+        );
         if (resp.has_value() && !resp->allow) {
             co_return agentxx::util::ToolResult::fail(
-                resp->reason.empty()
-                    ? fmt::format("permission denied: `{}`", toolName)
-                    : fmt::format("permission denied: {}", resp->reason)
+                resp->reason.empty() ? fmt::format("permission denied: `{}`", toolName)
+                                     : fmt::format("permission denied: {}", resp->reason)
             );
         }
     }
@@ -435,20 +433,12 @@ asio::awaitable<agentxx::util::ToolResult>
 
     auto submitted = state.host->submitAsyncWork(std::move(spec), state.ctx);
     if (!submitted.accepted) {
-        throw std::runtime_error{
-            fmt::format("background task rejected: {}", submitted.error)
-        };
+        throw std::runtime_error{fmt::format("background task rejected: {}", submitted.error)};
     }
 
-    std::string out = fmt::format(
-        "[Async started] id={} {}\n",
-        submitted.asyncId,
-        startedAs
-    );
+    std::string out = fmt::format("[Async started] id={} {}\n", submitted.asyncId, startedAs);
     if (notify) {
-        out += "The result will be inserted into this conversation as an input when it is done "
-               "(before the next model call if the turn is still running, otherwise it starts a "
-               "new turn).\n";
+        out += "The result will be inserted into this conversation as an input when it is done.\n";
     } else {
         out += "No automatic notification (notify=false): the result stays in the task ledger.\n";
     }
@@ -514,8 +504,7 @@ neograph::ChatTool AsyncQueryTool::get_definition() const {
     return {get_name(), prompt.depict, agentxx::util::toNeographJson(params)};
 }
 
-asio::awaitable<agentxx::util::ToolResult>
-    AsyncQueryTool::execute_async(const Json& arguments) {
+asio::awaitable<agentxx::util::ToolResult> AsyncQueryTool::execute_async(const Json& arguments) {
     const auto args  = arguments.is_object() ? arguments : Json::object();
     auto       state = acquire(agentContext.lock(), args);
 
@@ -598,8 +587,7 @@ neograph::ChatTool AsyncAwaitTool::get_definition() const {
     return {get_name(), prompt.depict, agentxx::util::toNeographJson(params)};
 }
 
-asio::awaitable<agentxx::util::ToolResult>
-    AsyncAwaitTool::execute_async(const Json& arguments) {
+asio::awaitable<agentxx::util::ToolResult> AsyncAwaitTool::execute_async(const Json& arguments) {
     const auto args  = arguments.is_object() ? arguments : Json::object();
     auto       state = acquire(agentContext.lock(), args);
 
@@ -633,9 +621,11 @@ asio::awaitable<agentxx::util::ToolResult>
     spec.ref           = asyncId;
     spec.mode          = "first";
     spec.delivery      = "none";
-    spec.match         = Json{{"asyncId", asyncId}};
-    spec.replay        = true;
-    spec.timeout       = std::chrono::milliseconds{timeoutMs};
+    spec.match         = Json{
+                {"asyncId", asyncId}
+    };
+    spec.replay  = true;
+    spec.timeout = std::chrono::milliseconds{timeoutMs};
 
     auto specCopy = spec;
     auto token    = getSessionCancelToken(state.ctx, args);
@@ -650,11 +640,9 @@ asio::awaitable<agentxx::util::ToolResult>
     for (const auto& value : wait.values) {
         texts.push_back(hub->valueText(state.sessionId, value));
     }
-    const std::string status = texts.empty() ? "ended-empty"
-                                             : (texts.size() > 1 ? "values" : "value");
-    co_return agentxx::util::ToolResult::ok(
-        agentxx::events::renderEventText(wait, status, texts)
-    );
+    const std::string status
+        = texts.empty() ? "ended-empty" : (texts.size() > 1 ? "values" : "value");
+    co_return agentxx::util::ToolResult::ok(agentxx::events::renderEventText(wait, status, texts));
 }
 
 // ===========================================================================
@@ -701,8 +689,7 @@ neograph::ChatTool AsyncCancelTool::get_definition() const {
     return {get_name(), prompt.depict, agentxx::util::toNeographJson(params)};
 }
 
-asio::awaitable<agentxx::util::ToolResult>
-    AsyncCancelTool::execute_async(const Json& arguments) {
+asio::awaitable<agentxx::util::ToolResult> AsyncCancelTool::execute_async(const Json& arguments) {
     const auto args  = arguments.is_object() ? arguments : Json::object();
     auto       state = acquire(agentContext.lock(), args);
 
@@ -734,10 +721,9 @@ asio::awaitable<agentxx::util::ToolResult>
     }
     if (group == "all") {
         const auto count = state.host->cancelAsyncWorksOfSession(state.sessionId);
-        co_return agentxx::util::ToolResult::ok(fmt::format(
-            "[Async cancel] canceled {} unfinished task(s) of this session",
-            count
-        ));
+        co_return agentxx::util::ToolResult::ok(
+            fmt::format("[Async cancel] canceled {} unfinished task(s) of this session", count)
+        );
     }
     // 只取消指定状态的: 逐条按台账状态筛, 再单条取消 (排队中的会直接出队)
     auto   items  = state.host->asyncWorksJson({}, state.sessionId, /*includeFinished=*/false, 200);
