@@ -337,8 +337,9 @@ constexpr Entry kTable[] = {
     {"msg.tipLevelInfo",                "Info",                                                                          "信息"                                                                                                   },
     {"msg.tipLevelWarn",                "Warn",                                                                          "警告"                                                                                                   },
     {"msg.tipLevelError",               "Error",                                                                         "错误"                                                                                                   },
-    // 事件中枢投递的输入: 用户消息头部标出来源事件 (来源字段由服务端给出, 不解析正文)
-    {"msg.eventSource",                " [Event] {}",                                                                    " [事件] {}"                                                                                              },
+    // 事件中枢投递的输入: 用户消息头部标出来源事件 (来源字段由服务端给出, 不解析正文);
+    // 前缀与事件名分开, 前缀用高亮色、折叠时事件名再弱化
+    {"msg.eventPrefix",                " [Event] ",                                                                   " [事件] "                                                                                              },
 
     // ---- 工具消息正文标签 (字段前缀, 随语言切换) ----
     {"tool.args",                       "  args: ",                                                                      "  参数: "                                                                                               },

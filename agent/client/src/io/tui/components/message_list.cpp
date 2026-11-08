@@ -237,6 +237,40 @@ void appendAttachmentCount(Elements& header, const TUIMessage& msg, const TUIThe
     header.push_back(text(countText) | color(theme.accentColor));
 }
 
+/// 事件折叠头的单行预览
+///
+/// 事件正文是中枢渲染好的三段文本 (`[Event] <名字>` / `[Info]` 元信息 /
+/// `[Content]` 内容): 头部已经显示了事件名, 元信息也不是内容, 所以预览取
+/// `[Content]` 段里第一行实际内容 (跳过分段标记与多值分块标记 `#1`)。
+/// 找不到该段标记时 (旧格式正文 / 手工构造的测试文本) 退回正文首行。
+std::string eventContentPreview(std::string_view text, size_t maxWidth) {
+    constexpr std::string_view kContentMark = "[Content]";
+    std::string_view           body         = text;
+    if (const auto pos = text.find(kContentMark); pos != std::string_view::npos) {
+        body = text.substr(pos + kContentMark.size());
+        // 跳过紧跟分段标记的空行与多值分块标记 (`#1` / `#2`)
+        while (!body.empty()) {
+            const auto nl   = body.find('\n');
+            const auto line = body.substr(0, nl);
+            bool       skip = line.empty() || line == "\r";
+            if (!skip && line.size() >= 2 && line.front() == '#') {
+                skip = std::all_of(line.begin() + 1, line.end(), [](char c) {
+                    return c >= '0' && c <= '9';
+                });
+            }
+            if (!skip) {
+                break;
+            }
+            if (nl == std::string_view::npos) {
+                body = std::string_view{};
+                break;
+            }
+            body = body.substr(nl + 1);
+        }
+    }
+    return oneLinePreview(body, maxWidth);
+}
+
 /// 该角色的消息块是否支持点击折叠
 /// - 与 OnRender 的折叠命中登记、附件排版判定共用同一份角色名单
 /// - Assistant / Interrupt 没有折叠形态 (永远展开), 带附件时总是列出附件列表
@@ -1869,27 +1903,37 @@ Element MessageListComponent::buildMessageBlock(
             return vbox(std::move(userElements));
         }
         case TUIMessage::Role::Event: {
-            // 事件中枢投递的输入 (正文是中枢渲染好的 `[Event] ...` 文本, 通常很长):
-            // 头部与工具消息同一套折叠头 (标记 + 角色标签 + 事件名), 默认折叠;
-            // 折叠态其后接 "· " 与单行预览, 展开态下一行显示全文。
-            // 事件名取结构化来源字段, 不解析正文
+            // 事件中枢投递的输入 (正文是中枢渲染好的 `[Event]` / `[Info]` / `[Content]`
+            // 三段文本, 通常很长): 头部与工具消息同一套折叠头 (标记 + 角色前缀 + 事件名),
+            // 默认折叠; 折叠态其后接 " · " 与内容预览, 展开态下一行显示全文。
+            // 事件名取结构化来源字段, 不解析正文 (预览取正文的 `[Content]` 段,
+            // 见 eventContentPreview)
             const bool        expanded  = !msg.collapsed;
             const auto        eventName = agentxx::agent::eventNameOfInputSource(msg.source);
-            const std::string label     = trf("msg.eventSource", std::string{eventName});
+            const std::string prefix    = std::string{tr("msg.eventPrefix")};
             const bool        hasBody   = !agentxx::util::isVisuallyBlank(msg.text);
             Elements          lines;
             Elements          header;
-            header.push_back(text(expanded ? "-" : "+") | color(theme.toolColor));
-            header.push_back(text(label) | color(theme.toolColor));
+            // 标记与角色前缀用高亮色: 一眼认出这是事件输入而不是普通用户消息
+            header.push_back(text(expanded ? "-" : "+") | color(theme.accentColor));
+            header.push_back(text(prefix) | color(theme.accentColor));
+            // 事件名: 折叠态弱化 (与工具名同一规则), 展开态保持高亮
+            if (expanded) {
+                header.push_back(text(eventName) | color(theme.accentColor));
+            } else {
+                header.push_back(text(eventName) | color(theme.accentColor) | theme.dim());
+            }
             if (!expanded) {
-                // 预览自适应内容区剩余列宽 (前缀 = 标记 1 列 + 标签 + 分隔符 "· "
-                // + 右侧附件数量)
-                std::string_view sep = "· ";
-                const int prefixCols = 1 + static_cast<int>(markdown::utf8_display_width(label))
-                                       + static_cast<int>(markdown::utf8_display_width(sep))
-                                       + attachmentCountColumnsOf(msg);
+                // 预览自适应内容区剩余列宽 (前缀 = 标记 1 列 + 角色前缀 + 事件名
+                // + 分隔符 " · " + 右侧附件数量)
+                std::string_view sep = " · ";
+                const int        prefixCols
+                    = 1 + static_cast<int>(markdown::utf8_display_width(prefix))
+                      + static_cast<int>(markdown::utf8_display_width(eventName))
+                      + static_cast<int>(markdown::utf8_display_width(sep))
+                      + attachmentCountColumnsOf(msg);
                 const int   budget  = collapsedPreviewBudget(maxWidth, prefixCols);
-                std::string preview = oneLinePreview(msg.text, static_cast<size_t>(budget));
+                std::string preview = eventContentPreview(msg.text, static_cast<size_t>(budget));
                 if (!preview.empty()) {
                     header.push_back(text(sep) | color(theme.toolColor) | theme.dim());
                     header.push_back(
@@ -1903,7 +1947,7 @@ Element MessageListComponent::buildMessageBlock(
             lines.push_back(hbox(std::move(header)));
             if (expanded) {
                 if (hasBody) {
-                    // 正文保留硬换行 (事件文本是逐行的键值对), 配色同工具消息
+                    // 正文保留硬换行 (事件文本是逐行的分段内容), 配色同工具消息
                     lines.push_back(renderPlainText(msg.text, theme.toolColor));
                 }
                 appendAttachmentList(lines, msg, msgIndex);

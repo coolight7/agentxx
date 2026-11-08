@@ -1023,7 +1023,10 @@ void testTuiStreamEventSource(asio::io_context& ioCtx) {
     TestTUIClientIO client(ioCtx);
 
     {
-        auto m       = userRow("msg_1", "[Event] chat.message (first)\nstatus: value\nvalue: hi");
+        auto m = userRow(
+            "msg_1",
+            "[Event] chat.message\n[Info]\nmode: first\nstatus: value\n[Content]\nhi"
+        );
         m.role       = ViewMessage::Role::Event;
         m.source     = std::string{agentxx::agent::kInputSourceEventPrefix} + "chat.message";
         m.collapsed  = true;

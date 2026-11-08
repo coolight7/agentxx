@@ -367,6 +367,8 @@ void test_i18n_lookup_switches_with_language() {
     XX_TEST_EXPECT_EQ(i18n.t("msg.roleThink"), std::string_view(" [思考] "));
     XX_TEST_EXPECT_EQ(i18n.t("msg.roleTool"), std::string_view(" [工具] "));
     XX_TEST_EXPECT_EQ(i18n.t("msg.roleSystem"), std::string_view(" [系统] "));
+    // 事件消息头前缀 (事件名单独渲染, 前缀用高亮色、折叠时名字与内容弱化)
+    XX_TEST_EXPECT_EQ(i18n.t("msg.eventPrefix"), std::string_view(" [事件] "));
     XX_TEST_EXPECT_EQ(i18n.t("msg.tipLevelInfo"), std::string_view("信息"));
     XX_TEST_EXPECT_EQ(i18n.t("msg.tipLevelWarn"), std::string_view("警告"));
     XX_TEST_EXPECT_EQ(i18n.t("msg.tipLevelError"), std::string_view("错误"));
@@ -382,6 +384,7 @@ void test_i18n_lookup_switches_with_language() {
     XX_TEST_EXPECT_EQ(i18n.t("msg.roleThink"), std::string_view(" [Think] "));
     XX_TEST_EXPECT_EQ(i18n.t("msg.roleTool"), std::string_view(" [Tool] "));
     XX_TEST_EXPECT_EQ(i18n.t("msg.roleSystem"), std::string_view(" [System] "));
+    XX_TEST_EXPECT_EQ(i18n.t("msg.eventPrefix"), std::string_view(" [Event] "));
     XX_TEST_EXPECT_EQ(i18n.t("msg.tipPrefix", "Warn"), std::string(" [Tip] Warn"));
 
     // 恢复默认 (简体中文)

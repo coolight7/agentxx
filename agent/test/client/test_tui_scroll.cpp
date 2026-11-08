@@ -53,6 +53,20 @@ namespace {
 /// 测试夹具: 固定 100x20 视口的消息列表
 namespace {
 
+/// 屏幕某一行的一格一字文本 (宽字符的占位格记一个空格)
+///
+/// 与屏幕上看到的列一一对应, 所以 ASCII 子串在串里的下标就是它的列号
+/// (消息按列对齐, 折叠头的颜色/dim 断言靠这个定位)
+std::string screenRowText(const ftxui::Screen& screen, int y) {
+    std::string row;
+    row.reserve(static_cast<size_t>(screen.dimx()));
+    for (int x = 0; x < screen.dimx(); ++x) {
+        const auto& ch = screen.PixelAt(x, y).character;
+        row += ch.empty() ? ' ' : ch[0];
+    }
+    return row;
+}
+
 /// 夹具: 把一行当作 agent 下发的 insert_message 放进展示历史 (id 自动生成)
 void pushRow(TUIRenderState& st, TUIMessage row) {
     static uint64_t seq = 0;
@@ -222,6 +236,11 @@ struct ScrollFixture {
 
     /// 渲染一帧 (模拟 UI 循环: 取快照 -> 渲染)
     std::string render() {
+        return renderScreen().ToString();
+    }
+
+    /// 渲染一帧并返回屏幕 (逐格样式可查: 颜色 / dim)
+    ftxui::Screen renderScreen() {
         ctx.frameState = sharedState.readSnapshot();
         auto el        = comp->Render();
         auto screen    = ftxui::Screen::Create(
@@ -229,7 +248,7 @@ struct ScrollFixture {
             ftxui::Dimension::Fixed(height)
         );
         ftxui::Render(screen, el);
-        return screen.ToString();
+        return screen;
     }
 
     /// 在消息列表区域中部发送滚轮事件 (返回是否被处理)
@@ -636,8 +655,8 @@ static void testRoleLabelLocalization() {
 // 事件中枢投递的输入: 专属展示角色 Role::Event (折叠头 `+ [事件] <事件名>`)
 //
 // 来源是**结构化字段** (`ViewMessage::source`, 取值 `event:<事件名>`), 不是从正文
-// 里扒出来的: 正文已经是渲染好的 `[Event] ...` 文本, 再解析一遍会把展示逻辑
-// 绑在文本格式上。正文通常很长, 所以默认折叠、点击整块展开。
+// 里扒出来的: 正文已经是渲染好的 `[Event]` / `[Info]` / `[Content]` 文本, 再解析一遍会把
+// 展示逻辑绑在文本格式上。正文通常很长, 所以默认折叠、点击整块展开。
 // ---------------------------------------------------------------------------
 
 void testEventSourceBadge() {
@@ -647,10 +666,11 @@ void testEventSourceBadge() {
 
     ScrollFixture f;
     f.sharedState.mutate([](TUIRenderState& st) {
-        // 正文里带一个只在展开态才看得见的尾部标记, 用于断言折叠/展开
+        // 正文是中枢渲染好的三段文本; 内容段第二行带一个只在展开态才看得见的尾部标记
         auto eventMsg = std::make_shared<TUIMessage>(TUIMessage::makeText(
             TUIMessage::Role::Event,
-            "[Event] chat.message (first)\nstatus: value\nvalue: hi there EVBODY9XYZ",
+            "[Event] chat.message\n[Info]\nmode: first\nwait: w-3\nstatus: value\n"
+            "[Content]\ntext: hi there\ntail: EVBODY9XYZ",
             1000
         ));
         eventMsg->source = std::string{agentxx::agent::kInputSourceEventPrefix} + "chat.message";
@@ -662,13 +682,14 @@ void testEventSourceBadge() {
         pushRow(st, std::move(*userMsg));
     });
 
-    // 中文界面的事件头 (i18n 键 msg.eventSource, 见 tui_i18n.cpp)
-    const std::string header = "+ [事件] chat.message";
+    // 中文界面的事件头 (i18n 键 msg.eventPrefix, 见 tui_i18n.cpp)
+    const std::string header  = "+ [事件] chat.message";
+    // 折叠预览取 `[Content]` 段第一行 (不重复事件名, 也不显示 [Info] 元信息)
+    const std::string preview = "text: hi there";
 
-    // 折叠态 (默认): 头部标记 + 事件名 + 单行预览; 正文尾部标记不入屏
+    // 折叠态 (默认): 头部标记 + 事件名 + " · " + 内容预览; 正文尾部标记不入屏
     std::string frame = stripAnsiCodes(f.render());
-    XX_TEST_EXPECT_TRUE(frame.find(header) != std::string::npos);
-    XX_TEST_EXPECT_TRUE(frame.find("[Event] chat.message (first)") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(frame.find(header + " · " + preview) != std::string::npos);
     XX_TEST_EXPECT_TRUE(frame.find("EVBODY9XYZ") == std::string::npos);
     // 事件名只出现一次 (只在那条事件消息的头部)
     {
@@ -680,6 +701,48 @@ void testEventSourceBadge() {
     }
     // 用户自己输入的消息: `- ` 开头, 正文完整展示 (默认展开)
     XX_TEST_EXPECT_TRUE(frame.find("- typed by the user USERBODY8ABC") != std::string::npos);
+
+    // 折叠头样式: `+` 与 `[事件]` 前缀用高亮色; 事件名与内容预览叠加 dim
+    {
+        auto        screen = f.renderScreen();
+        int         rowY   = -1;
+        std::string row;
+        for (int y = 0; y < screen.dimy(); ++y) {
+            // 逐格文本只保留每个格的首字节 (宽字符断成单字节), 所以用 ASCII 的事件名定位行
+            auto text = screenRowText(screen, y);
+            if (text.find("chat.message") != std::string::npos) {
+                rowY = y;
+                row  = std::move(text);
+                break;
+            }
+        }
+        XX_TEST_EXPECT_TRUE(rowY >= 0);
+        if (rowY >= 0) {
+            const auto markAt = row.find('+');
+            XX_TEST_EXPECT_TRUE(markAt != std::string::npos);
+            if (markAt != std::string::npos) {
+                const auto& mark = screen.PixelAt(static_cast<int>(markAt), rowY);
+                XX_TEST_EXPECT_TRUE(mark.foreground_color == f.theme.accentColor);
+                XX_TEST_EXPECT_FALSE(mark.dim);
+            }
+            // 名字与内容之间是 " · " (两边各一个空格): 内容从名字后 3 列开始
+            const auto nameAt = row.find("chat.message");
+            XX_TEST_EXPECT_TRUE(nameAt != std::string::npos);
+            const auto prevAt = row.find(preview);
+            XX_TEST_EXPECT_TRUE(prevAt != std::string::npos);
+            if (nameAt != std::string::npos && prevAt != std::string::npos) {
+                XX_TEST_EXPECT_EQ(prevAt, nameAt + 12 + 3);
+            }
+            if (nameAt != std::string::npos) {
+                const auto& name = screen.PixelAt(static_cast<int>(nameAt), rowY);
+                XX_TEST_EXPECT_TRUE(name.foreground_color == f.theme.accentColor);
+                XX_TEST_EXPECT_TRUE(name.dim);
+            }
+            if (prevAt != std::string::npos) {
+                XX_TEST_EXPECT_TRUE(screen.PixelAt(static_cast<int>(prevAt), rowY).dim);
+            }
+        }
+    }
 
     // 点击事件消息 -> 展开: 标记变 `-`, 正文全文上屏
     f.render(); // 命中盒由上一帧 visibleBoxes 反推, 再渲染一帧
@@ -700,6 +763,32 @@ void testEventSourceBadge() {
     std::string expanded = stripAnsiCodes(f.render());
     XX_TEST_EXPECT_TRUE(expanded.find("- [事件] chat.message") != std::string::npos);
     XX_TEST_EXPECT_TRUE(expanded.find("EVBODY9XYZ") != std::string::npos);
+    // 展开态: 全文上屏 (含分段标记), 事件名不再 dim
+    XX_TEST_EXPECT_TRUE(expanded.find("[Info]") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(expanded.find("mode: first") != std::string::npos);
+    {
+        auto        screen = f.renderScreen();
+        int         rowY   = -1;
+        std::string row;
+        for (int y = 0; y < screen.dimy(); ++y) {
+            auto text = screenRowText(screen, y);
+            if (text.find("chat.message") != std::string::npos) {
+                rowY = y;
+                row  = std::move(text);
+                break;
+            }
+        }
+        XX_TEST_EXPECT_TRUE(rowY >= 0);
+        // 展开态的标记是 `-`
+        XX_TEST_EXPECT_TRUE(rowY >= 0 && row.find('-') != std::string::npos);
+        const auto nameAt = rowY >= 0 ? row.find("chat.message") : std::string::npos;
+        XX_TEST_EXPECT_TRUE(nameAt != std::string::npos);
+        if (nameAt != std::string::npos) {
+            const auto& name = screen.PixelAt(static_cast<int>(nameAt), rowY);
+            XX_TEST_EXPECT_TRUE(name.foreground_color == f.theme.accentColor);
+            XX_TEST_EXPECT_FALSE(name.dim);
+        }
+    }
     {
         auto snap = f.sharedState.readSnapshot();
         XX_TEST_EXPECT_TRUE(!snap->messages().empty() && !snap->messages()[0]->collapsed);
