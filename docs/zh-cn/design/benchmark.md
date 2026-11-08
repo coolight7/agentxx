@@ -344,11 +344,11 @@ mmap/trim 阈值, 后者实测会增加 15% 场景耗时)。
 
 ### 后续可优化方向
 
-1. **会话消息双份存储**: `viewMessages` (展示) 与 `llmMessages` (LLM 上下文)
-   各自持有正文, 200K token 历史约 1.9 MB; 若要合并需让 LLM 侧引用展示侧内容
-   (涉及压缩改写语义), 改动面大
-2. **`msgIndex_` 与 `WireDelta` 的 id/文本副本**: 每条消息的 id 在 `viewMessages`
-   与 `msgIndex_` 中各存一份 (长会话约 100 KB 级)
+1. **会话消息双份存储**: `llmMessages` (LLM 上下文) 与展示历史各持正文; 展示侧已窗口化
+   (`session.view_window_messages`, 默认 400 条, 更早的回库读), 这份副本不再随会话历史
+   线性增长; 200K token 历史里“两份正文”的额外开销 (约 1.9 MB) 现在主要在 LLM 侧
+2. **`msgIndex_` 与 `WireDelta` 的 id/文本副本**: 每条消息的 id 在展示历史与 `msgIndex_`
+   中各存一份 (现在只在窗口内, 量级已被窗口上限约束)
 3. **插件静态依赖**: 每个插件各带一份 fmt/simdjson/正则/curl; 5 个常用插件合计
    ~8 MB RSS, codegraph 单独 ~6 MB (tree-sitter 语法表 + 后台预索引)
 4. **线程栈**: 默认 8 MB 线程栈使 VmSize 仍有百 MB 级冗余 (RSS 影响很小)

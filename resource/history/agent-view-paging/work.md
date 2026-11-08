@@ -219,6 +219,9 @@
 | `wire_schema` | passed=1325 failed=0 |
 | `boundaries` | passed=19 failed=0（术语清理后） |
 | `config_keys` | passed=217 failed=0（登记新键并重生成 schema 后） |
+| **全量** `agentxx_test` | passed=42544 failed=1 —— 唯一失败是 `plugins` 第 1114 行
+（JS 引擎 disable/enable 紧邻后执行 `js_hello` 文本里没拿到入参）；
+单独重跑 `plugins` 为 609/0 通过，判定为并发压力下的既有用例偶发，与本次改动无关 |
 
 构建方式（顶层一次全量构建会超时，所以分两步）：
 
