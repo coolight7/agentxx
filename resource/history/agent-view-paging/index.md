@@ -3,7 +3,7 @@
 | 项 | 内容 |
 |---|---|
 | 任务短名 | `agent-view-paging` |
-| 状态 | **方案已确认，待实施**（决策见 plan.md §8） |
+| 状态 | **已完成**（2026-11-08：实现 / 测试 / 文档；benchmark 复测待做） |
 | 范围 | `agent/lib`（Session / SessionStore / SessionServerAgentIO / EventBridge）+ wire 协议 v5；测试、文档 |
 | 目标 | agent 端只常驻尾部窗口，更早的展示历史按需从 `session.db` 读；客户端分页行为不变 |
 
@@ -64,3 +64,18 @@
 - 协议抬到 v5，老客户端/老服务端不能互连（现成机制会给出明确错误）。
 
 详见 [plan.md](plan.md)。
+
+## 结论与偏差（事后）
+
+- 已完成：存储尾窗加载 + 按页读（`loadSession(tailCount)` / `loadViewMessagesPage`）、
+  `Session` 窗口化（成批淘汰，只在待落盘队列为空时淘汰）、端点三入口统一经
+  `collectViewRange`、协议 v5 + `WireHello.historyTail`、链式哈希全量移除、
+  配置/加载快照/诊断/指标、wire schema 与设计文档更新、新增用例。
+- 与计划不同的两处：
+  1. `Session` 对外给的是只读引用 `viewWindow()`（计划里写的是 `viewWindowSnapshot()`），
+     省一次整窗拷贝；
+  2. `collectViewRange` 遇到库页不全时**整页失败**（不是“能取多少算多少”）——
+     客户端 `applyPage` 本来就要求页长与起始下标对得上，回空页语义更简单。
+- 未做：benchmark 复测（需 release 重建）；页读仍是同步实现（与写库共用 `SessionStore`
+  互斥锁，实测单页 100 条很快）。
+- 实施记录、验证数字、额外改动见 [work.md](work.md)。

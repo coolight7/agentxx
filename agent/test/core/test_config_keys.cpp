@@ -445,6 +445,19 @@ std::vector<ConfigKeyEntry> configKeyEntries() {
          }}
     );
     out.push_back(
+        {"session.view_window_messages",
+         "int (0 = 不淘汰)",
+         "400",
+         "session:\n  view_window_messages: 200\n",
+         "",
+         false,
+         "400",
+         "200",
+         [](const YamlAppConfig& cfg) {
+             return std::to_string(cfg.sessionViewWindowMessages);
+         }}
+    );
+    out.push_back(
         {"dev_mode",
          "bool",
          "false",

@@ -671,7 +671,8 @@ SessionStore::LoadedSession SessionStore::loadSession(std::string_view sessionId
             if (tailCount > 0) {
                 stmt.bindInt64(1, static_cast<int64_t>(tailCount));
             }
-            bool sawRow = false;
+            bool     sawRow = false;
+            uint64_t minSeq = 0;
             while (stmt.step()) {
                 const auto jsonText = stmt.columnText(1);
                 const auto seq      = static_cast<uint64_t>(stmt.columnInt64(0));
@@ -682,10 +683,10 @@ SessionStore::LoadedSession SessionStore::loadSession(std::string_view sessionId
                         clearRunningTipFlag(msg); // 历史消息: 提示不可能还在运行中
                         // 每一行都保留 (含视觉为空的行): 它们同样占一个绝对下标,
                         // 读取期过滤会让后续下标整体前移, 分页页长与请求就对不上
-                        if (!sawRow) {
-                            sawRow              = true;
-                            out.viewWindowBase = seq - 1;
-                        }
+                        // 窗口首条的绝对下标取自窗口内最小的 seq (倒序时在最后、
+                        // 全量顺序读时在第一行)
+                        minSeq = sawRow ? std::min(minSeq, seq) : seq;
+                        sawRow = true;
                         out.viewMessages.push_back(std::move(msg));
                         return true;
                     },
@@ -703,6 +704,10 @@ SessionStore::LoadedSession SessionStore::loadSession(std::string_view sessionId
             if (tailCount > 0) {
                 // 倒序读取的结果反转为追加顺序 (窗口内下标连续)
                 std::reverse(out.viewMessages.begin(), out.viewMessages.end());
+            }
+            // 窗口首条的绝对下标 = 窗口内最小 seq - 1 (全量加载时为 0)
+            if (sawRow) {
+                out.viewWindowBase = minSeq - 1;
             }
             return true;
         },

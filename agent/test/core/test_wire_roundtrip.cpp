@@ -177,6 +177,10 @@ TestResult testWireRoundtrip() {
         XX_TEST_EXPECT_TRUE(WireProtocol::checkVersion(WireProtocol::kMinVersion - 1)
                             == WireProtocol::VersionCheck::TooOld);
         XX_TEST_EXPECT_TRUE(WireProtocol::checkVersion(0) == WireProtocol::VersionCheck::TooOld);
+        // v4 及更早对端不再兼容 (展示历史下标空间与快照字段已变)
+        XX_TEST_EXPECT_EQ(WireProtocol::kVersion, 5);
+        XX_TEST_EXPECT_EQ(WireProtocol::kMinVersion, 5);
+        XX_TEST_EXPECT_TRUE(WireProtocol::checkVersion(4) == WireProtocol::VersionCheck::TooOld);
 
         // 原因文案: 报出对端版本, 并指出该更新哪一端 (本端/对端); 放行时没有原因
         const auto tooNew = WireProtocol::versionRejectReason(

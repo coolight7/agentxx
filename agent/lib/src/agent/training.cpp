@@ -234,7 +234,7 @@ utilxx_base::Json normalizePromptPatch(const utilxx_base::Json& parsed) {
     if (parsed.contains("appendSystemPrompts") && parsed["appendSystemPrompts"].is_object()) {
         utilxx_base::Json append = utilxx_base::Json::object();
         for (const auto& item : parsed["appendSystemPrompts"].items()) {
-            // 内置段 (core-*) 是宿主契约与通用准则, 补丁不覆盖 (见 prompt.h)
+            // 内置段 (core-*) 是主程序契约与通用准则, 补丁不覆盖 (见 prompt.h)
             if (AgentPrompt::isBuiltinSectionKey(item.first)) {
                 continue;
             }

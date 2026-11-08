@@ -29,7 +29,7 @@ std::string_view orUnknown(const std::string& value) {
     return value.empty() ? std::string_view{"unknown"} : std::string_view{value};
 }
 
-/// 宿主运行时与上下文状态标记说明 (内置附加段 `core-runtime`)
+/// 主程序运行时与上下文状态标记说明 (内置附加段 `core-runtime`)
 ///
 /// 标记由主程序写入, 改动下列位置时需要同步更新该段文字:
 /// - `[Exception aborted]` / `[User canceled]` / `[Please continue]` / `[Empty]`:
@@ -131,7 +131,7 @@ When in doubt, check if a skill exists for the task.
 
 /// 提示词注册表构造
 /// - `systemPrompt` 只放人设: 身份 + 代码任务的工作方式 + 回答风格
-/// - 宿主契约与通用准则作为内置附加段登记 (见 [setAppendSection]),
+/// - 主程序契约与通用准则作为内置附加段登记 (见 [setAppendSection]),
 ///   自定义人设时不必再补一遍
 AgentPrompt::AgentPrompt() :
     systemPrompt(R"_(
@@ -158,7 +158,7 @@ Your (LLM/Agent) name is Agentxx.
 - When modifying code, show only the relevant changed sections unless full context is needed
 )_"),
     appendSystemPrompts{
-        // 出厂房段 (键名 `core-` 前缀): 宿主契约与通用作业准则
+        // 出厂房段 (键名 `core-` 前缀): 主程序契约与通用作业准则
         // - 不用 setAppendSection 定顺序: 与插件段同 order, 按键名字典序排列
         // - 自定义 systemPrompt (人设) 时照样拼进 system 消息, 不必再补一遍
         {std::string{kSectionCoreRuntime}, std::string{kCoreRuntimePrompt}},

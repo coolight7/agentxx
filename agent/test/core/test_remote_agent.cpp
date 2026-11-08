@@ -3483,6 +3483,287 @@ static asio::awaitable<void> test_view_messages_pagination() {
 }
 
 // ---------------------------------------------------------------------------
+// 24. 展示历史窗口化 + 会话库: 尾窗同步 / 跨窗口分页 / 重启后继续分页 /
+//     historyTail 声明 / 增量补拉前先刷展示历史
+// - 服务端只常驻尾部窗口 (session.view_window_messages), 更早的页回库读
+// - 客户端在 hello 里声明首屏要多少条: -1 用服务端默认, 0 完整同步, >0 尾窗
+// ---------------------------------------------------------------------------
+
+/// 收下一条 sync (跳过握手回执/统计等其它消息; 最多等 limit 条)
+asio::awaitable<std::optional<agentxx::agent::WireSyncPayload>> recvSyncMessage(
+    agentxx::agent::ChannelAgentIOTransport& transport, int limit = 32
+) {
+    for (int i = 0; i < limit; ++i) {
+        auto msg = co_await transport.recv();
+        if (!msg.has_value()) {
+            co_return std::nullopt;
+        }
+        if (auto* sync = std::get_if<agentxx::agent::WireSyncPayload>(&*msg); sync != nullptr) {
+            co_return *sync;
+        }
+    }
+    co_return std::nullopt;
+}
+
+/// 收下一条分页响应
+asio::awaitable<std::optional<agentxx::agent::WireViewMessagesPage>> recvViewMessagesPage(
+    agentxx::agent::ChannelAgentIOTransport& transport, int limit = 32
+) {
+    for (int i = 0; i < limit; ++i) {
+        auto msg = co_await transport.recv();
+        if (!msg.has_value()) {
+            co_return std::nullopt;
+        }
+        if (auto* page = std::get_if<agentxx::agent::WireViewMessagesPage>(&*msg); page != nullptr) {
+            co_return *page;
+        }
+    }
+    co_return std::nullopt;
+}
+
+static asio::awaitable<void> test_view_paging_with_store() {
+    auto ex = co_await asio::this_coro::executor;
+
+    const auto dataDir = std::filesystem::temp_directory_path()
+                         / fmt::format(
+                             "agentxx_view_window_test_{}",
+                             std::chrono::steady_clock::now().time_since_epoch().count()
+                         );
+    {
+        std::error_code ec;
+        std::filesystem::create_directories(dataDir, ec);
+    }
+
+    const size_t kTotal  = 200;
+    const size_t kWindow = 50;
+
+    auto makeAgent = [&]() {
+        auto cfg                        = std::make_shared<agentxx::agent::AgentConfig>();
+        cfg->model.baseUrl              = "http://127.0.0.1:1";
+        cfg->model.apiKey               = "EMPTY";
+        cfg->model.modelName            = "test-model";
+        cfg->dataDir                    = dataDir.string();
+        cfg->enableSessionStore         = true;
+        cfg->sessionViewWindowMessages  = kWindow;
+        return std::make_shared<agentxx::agent::BaseAgent>(cfg);
+    };
+
+    // ---- 第一段: 带会话库 + 窗口 50 ----
+    {
+        auto tp      = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+        auto clientT = std::move(tp.first);
+        auto serverT = std::move(tp.second);
+
+        auto agent = makeAgent();
+        auto sess  = agent->agentContext->getSession("pag-win");
+        for (size_t i = 1; i <= kTotal; ++i) {
+            sess->appendViewMessage(agentxx::agent::ViewMessage::makeText(
+                agentxx::agent::ViewMessage::Role::User,
+                "w" + std::to_string(i)
+            ));
+        }
+        sess->flushViewMessages();
+        // 内存里只留尾部窗口, 总数仍是全量 (绝对下标 = seq - 1)
+        XX_TEST_EXPECT_TRUE(sess->viewWindow().size() <= kWindow);
+        XX_TEST_EXPECT_EQ(sess->viewMessageCount(), kTotal);
+        XX_TEST_EXPECT_TRUE(sess->viewMessageAt(0) == nullptr);
+
+        agentxx::agent::SessionServerAgentIO::Config scCfg;
+        scCfg.sessionId            = "pag-win";
+        scCfg.initialSyncTailCount = 100; // hello 未声明时的默认值
+        auto sc                    = std::make_shared<SessionServerAgentIO>(ex, agent, scCfg);
+        sc->setTransport(
+            std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT))
+        );
+
+        // ---- 首次接入未声明 historyTail: 用服务端默认 100 → 尾窗 [100, 200) ----
+        sc->handleHello(agentxx::agent::WireHello{"pag-win", "", 0, ""});
+        auto ack = co_await clientT->recv();
+        XX_TEST_EXPECT_TRUE(ack.has_value());
+        if (ack.has_value()) {
+            XX_TEST_EXPECT_TRUE(std::get_if<agentxx::agent::WireHelloAck>(&*ack) != nullptr);
+        }
+        auto tailSync = co_await recvSyncMessage(*clientT);
+        XX_TEST_EXPECT_TRUE(tailSync.has_value());
+        if (tailSync.has_value()) {
+            XX_TEST_EXPECT_EQ(tailSync->fromIndex, uint64_t{100});
+            XX_TEST_EXPECT_EQ(tailSync->totalMessages, static_cast<uint64_t>(kTotal));
+            XX_TEST_EXPECT_EQ(tailSync->messages.size(), size_t{100});
+            if (!tailSync->messages.empty()) {
+                XX_TEST_EXPECT_EQ(tailSync->messages.front().text, std::string{"w101"});
+                XX_TEST_EXPECT_EQ(tailSync->messages.back().text, std::string{"w200"});
+            }
+        }
+
+        // ---- 跨窗口边界页 [40, 140): 前半段回库、后半段在内存 ----
+        sc->onPeerMessage(agentxx::agent::WireMessage{
+            agentxx::agent::WireGetViewMessages{"pag-win", 140, 100}
+        });
+        auto page = co_await recvViewMessagesPage(*clientT);
+        XX_TEST_EXPECT_TRUE(page.has_value());
+        if (page.has_value()) {
+            XX_TEST_EXPECT_EQ(page->startIndex, uint64_t{40});
+            XX_TEST_EXPECT_EQ(page->totalCount, static_cast<uint64_t>(kTotal));
+            XX_TEST_EXPECT_EQ(page->messages.size(), size_t{100});
+            if (page->messages.size() == 100) {
+                XX_TEST_EXPECT_EQ(page->messages.front().text, std::string{"w41"});
+                XX_TEST_EXPECT_EQ(page->messages.front().id, std::string{"msg_000041"});
+                XX_TEST_EXPECT_EQ(page->messages.back().text, std::string{"w140"});
+            }
+        }
+
+        // ---- 最头部一页 [0, 50): 完全回库 ----
+        sc->onPeerMessage(agentxx::agent::WireMessage{
+            agentxx::agent::WireGetViewMessages{"pag-win", 50, 50}
+        });
+        auto head = co_await recvViewMessagesPage(*clientT);
+        XX_TEST_EXPECT_TRUE(head.has_value());
+        if (head.has_value()) {
+            XX_TEST_EXPECT_EQ(head->startIndex, uint64_t{0});
+            XX_TEST_EXPECT_EQ(head->messages.size(), size_t{50});
+            if (!head->messages.empty()) {
+                XX_TEST_EXPECT_EQ(head->messages.front().text, std::string{"w1"});
+                XX_TEST_EXPECT_EQ(head->messages.back().text, std::string{"w50"});
+            }
+        }
+
+        // ---- 增量补拉前先刷展示历史: 刚定稿 (还在节流窗口) 的行不能丢 ----
+        // append 后不 flush: 上一行落库距今 <3s, 这一行只进了待落盘队列
+        const auto lateId = sess->appendViewMessage(
+            agentxx::agent::ViewMessage::makeText(
+                agentxx::agent::ViewMessage::Role::Assistant,
+                "late-line"
+            )
+        );
+        XX_TEST_EXPECT_EQ(lateId, std::string{"msg_000201"});
+
+        auto tp2      = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+        auto client3  = std::move(tp2.first);
+        auto server3  = std::move(tp2.second);
+        auto sc3      = std::make_shared<SessionServerAgentIO>(ex, agent, scCfg);
+        sc3->setTransport(
+            std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(server3))
+        );
+        // 客户端已持有 200 条展示历史 (afterViewSeq = 200), delta 缓冲为空
+        agentxx::agent::WireHello hello3{"pag-win", "", 0, ""};
+        hello3.afterViewSeq = kTotal;
+        sc3->handleHello(hello3);
+        auto ack3 = co_await client3->recv();
+        XX_TEST_EXPECT_TRUE(ack3.has_value());
+        auto incSync = co_await recvSyncMessage(*client3);
+        XX_TEST_EXPECT_TRUE(incSync.has_value());
+        if (incSync.has_value()) {
+            XX_TEST_EXPECT_TRUE(incSync->incremental);
+            XX_TEST_EXPECT_EQ(incSync->fromIndex, static_cast<uint64_t>(kTotal));
+            XX_TEST_EXPECT_EQ(incSync->messages.size(), size_t{1});
+            if (!incSync->messages.empty()) {
+                XX_TEST_EXPECT_EQ(incSync->messages.front().text, std::string{"late-line"});
+            }
+        }
+        sc3->stop();
+
+        // ---- 声明 historyTail = 0: 完整同步 ----
+        auto tp4      = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+        auto client4  = std::move(tp4.first);
+        auto server4  = std::move(tp4.second);
+        auto sc4      = std::make_shared<SessionServerAgentIO>(ex, agent, scCfg);
+        sc4->setTransport(
+            std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(server4))
+        );
+        agentxx::agent::WireHello hello4{"pag-win", "", 0, ""};
+        hello4.historyTail = 0;
+        sc4->handleHello(hello4);
+        auto ack4 = co_await client4->recv();
+        XX_TEST_EXPECT_TRUE(ack4.has_value());
+        auto fullSync = co_await recvSyncMessage(*client4);
+        XX_TEST_EXPECT_TRUE(fullSync.has_value());
+        if (fullSync.has_value()) {
+            XX_TEST_EXPECT_EQ(fullSync->fromIndex, uint64_t{0});
+            XX_TEST_EXPECT_EQ(fullSync->totalMessages, static_cast<uint64_t>(kTotal + 1));
+            XX_TEST_EXPECT_EQ(fullSync->messages.size(), kTotal + 1);
+            if (!fullSync->messages.empty()) {
+                XX_TEST_EXPECT_EQ(fullSync->messages.front().text, std::string{"w1"});
+                XX_TEST_EXPECT_EQ(fullSync->messages.back().text, std::string{"late-line"});
+            }
+        }
+
+        // ---- 声明 historyTail = 20: 尾窗 (并记住, 切换会话也用它) ----
+        auto tp5      = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+        auto client5  = std::move(tp5.first);
+        auto server5  = std::move(tp5.second);
+        auto sc5      = std::make_shared<SessionServerAgentIO>(ex, agent, scCfg);
+        sc5->setTransport(
+            std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(server5))
+        );
+        agentxx::agent::WireHello hello5{"pag-win", "", 0, ""};
+        hello5.historyTail = 20;
+        sc5->handleHello(hello5);
+        auto ack5 = co_await client5->recv();
+        XX_TEST_EXPECT_TRUE(ack5.has_value());
+        auto tail20 = co_await recvSyncMessage(*client5);
+        XX_TEST_EXPECT_TRUE(tail20.has_value());
+        if (tail20.has_value()) {
+            XX_TEST_EXPECT_EQ(tail20->fromIndex, static_cast<uint64_t>(kTotal + 1 - 20));
+            XX_TEST_EXPECT_EQ(tail20->messages.size(), size_t{20});
+        }
+        sc5->stop();
+
+        sc->stop();
+        sc4->stop();
+    }
+
+    // ---- 第二段: 重启 (新 agent, 同一数据目录) 后继续分页 ----
+    {
+        auto tp      = agentxx::agent::ChannelAgentIOTransport::makePair(ex, ex);
+        auto clientT = std::move(tp.first);
+        auto serverT = std::move(tp.second);
+
+        auto agent = makeAgent();
+        auto sess  = agent->agentContext->getSession("pag-win");
+        // 恢复出来的就是尾部窗口, 总数延续
+        XX_TEST_EXPECT_EQ(sess->viewMessageCount(), kTotal + 1);
+        XX_TEST_EXPECT_TRUE(sess->viewWindow().size() <= kWindow);
+        XX_TEST_EXPECT_EQ(
+            sess->viewWindowBase() + sess->viewWindow().size(),
+            kTotal + 1
+        );
+
+        agentxx::agent::SessionServerAgentIO::Config scCfg;
+        scCfg.sessionId = "pag-win";
+        auto sc         = std::make_shared<SessionServerAgentIO>(ex, agent, scCfg);
+        sc->setTransport(
+            std::shared_ptr<agentxx::agent::AgentIOTransportBase>(std::move(serverT))
+        );
+        sc->handleHello(agentxx::agent::WireHello{"pag-win", "", 0, ""});
+        auto ack = co_await clientT->recv();
+        XX_TEST_EXPECT_TRUE(ack.has_value());
+        // 默认完整同步 (initialSyncTailCount=0), 全部内容都要从库+内存拼出来
+        auto fullSync = co_await recvSyncMessage(*clientT);
+        XX_TEST_EXPECT_TRUE(fullSync.has_value());
+        if (fullSync.has_value()) {
+            XX_TEST_EXPECT_EQ(fullSync->totalMessages, static_cast<uint64_t>(kTotal + 1));
+            XX_TEST_EXPECT_EQ(fullSync->messages.size(), kTotal + 1);
+            if (fullSync->messages.size() == kTotal + 1) {
+                XX_TEST_EXPECT_EQ(fullSync->messages.front().text, std::string{"w1"});
+                XX_TEST_EXPECT_EQ(fullSync->messages[100].text, std::string{"w101"});
+                XX_TEST_EXPECT_EQ(fullSync->messages.back().text, std::string{"late-line"});
+            }
+        }
+        sc->stop();
+    }
+
+    for (int attempt = 0; attempt < 40; ++attempt) {
+        std::error_code ec;
+        std::filesystem::remove_all(dataDir, ec);
+        if (!ec || !std::filesystem::exists(dataDir)) {
+            break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    co_return;
+}
+
+// ---------------------------------------------------------------------------
 // 23. 历史分页 wire 序列化 roundtrip (WS JSON):
 //     GetViewMessages / ViewMessagesPage / Sync.totalMessages 字段保真
 // ---------------------------------------------------------------------------
@@ -4641,6 +4922,9 @@ asio::awaitable<TestResult> run_remote_agent_tests() {
 
     std::cout << "  [remote] view messages pagination..." << std::endl;
     co_await test_view_messages_pagination();
+
+    std::cout << "  [remote] view paging with session store..." << std::endl;
+    co_await test_view_paging_with_store();
 
     std::cout << "  [remote] wire pagination roundtrip..." << std::endl;
     co_await test_wire_pagination_roundtrip();

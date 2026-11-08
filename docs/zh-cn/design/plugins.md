@@ -2021,7 +2021,7 @@ plugin:
 | 字段 | 默认 | 说明 |
 |---|---|---|
 | `agentName` | `"{name}-{插件名}"` | 展示名 |
-| `prompt.systemPrompt` | 不继承 (用内置人设) | 插件应显式给; 宿主契约与通用准则在内置附加段 (`core-runtime` / `core-workdir` / `core-behavior`), 不随 `systemPrompt` 一起被替换 |
+| `prompt.systemPrompt` | 不继承 (用内置人设) | 插件应显式给; 主程序契约与通用准则在内置附加段 (`core-runtime` / `core-workdir` / `core-behavior`), 不随 `systemPrompt` 一起被替换 |
 | `prompt.append` / `prompt.toolPrompt` | 空 | 按 key 写附加段 / 覆盖工具描述 (同名可用 `core-*` 键覆盖内置段) |
 | `toolWhitelist` + `enableToolFiltering` | 不继承 | 工具白名单只影响这个根 |
 | `model` | 继承 | 取值必须是可用模型列表里的键 |

@@ -2103,8 +2103,8 @@ asio::awaitable<void> test_agent_system_prompt_session_dirs() {
 
 // ---------------------------------------------------------------------------
 // 系统提示词的归属拆分:
-//  1) `systemPrompt` 只放人设 (身份 / 代码任务工作方式 / 回答风格), 不放宿主契约
-//  2) 宿主契约与通用准则在附加段内置段里 (core-runtime / core-workdir / core-behavior)
+//  1) `systemPrompt` 只放人设 (身份 / 代码任务工作方式 / 回答风格), 不放主程序契约
+//  2) 主程序契约与通用准则在附加段内置段里 (core-runtime / core-workdir / core-behavior)
 //  3) 自定义 systemPrompt 后拼装结果仍包含这些内置段, 占位符照常替换
 //  4) 内置段与插件段同为 order 0, 按键名字典序排列
 // ---------------------------------------------------------------------------
@@ -2129,7 +2129,7 @@ asio::awaitable<void> test_agent_system_prompt_builtin_sections() {
     }
     XX_TEST_EXPECT_FALSE(AgentPrompt::isBuiltinSectionKey("planning"));
 
-    // 2) 人设里不再有宿主契约; 代码任务的工作方式与回答风格留着
+    // 2) 人设里不再有主程序契约; 代码任务的工作方式与回答风格留着
     XX_TEST_EXPECT_TRUE(cfg->prompt.systemPrompt.find("## Context Markers") == std::string::npos);
     XX_TEST_EXPECT_TRUE(
         cfg->prompt.systemPrompt.find("## Working Directory") == std::string::npos

@@ -12,9 +12,9 @@
 | 1 存储侧（SessionStore） | 已完成 | `loadSession(tailCount)` / `loadViewMessagesPage` / 去空行过滤 |
 | 2 Session 窗口模型 | 已完成 | 窗口/基准/访问器/淘汰/`collectViewRange`/删链式哈希/指标 |
 | 3 端点 + 协议 v5 | 已完成 | `collectViewRange` 取段、`historyTail`、增量补拉前 flush、删 `tailHash` |
-| 4 写入方 + 测试/基准适配 | 部分完成 | EventBridge 按 id、diagnostics、基准与测试已改；**新用例待补** |
-| 5 配置/可观测/文档/schema | 部分完成 | 配置键 + 快照 + 指标已完成；wire schema 已重生成；**docs 待改** |
-| 6 全量验证 | 待开始 | `agentxx_test` 全量 + benchmark 复测 |
+| 4 写入方 + 测试/基准适配 | 已完成 | EventBridge 按 id、diagnostics、基准适配；新用例已补（见“新增用例”） |
+| 5 配置/可观测/文档/schema | 已完成 | 配置键 + 快照 + 指标 + wire schema + 设计文档（index/tui/benchmark）均已改 |
+| 6 全量验证 | 进行中 | 逐模块数字见“验证结果”；**benchmark 复测未做**（需 release 重建，见“待完成”） |
 
 ## 现状调查结论（步骤 0）
 
@@ -143,3 +143,115 @@
 - 只读尾窗后 **`msgIdCounter` 不能用"解析行数"回退**：尾窗行数 != 总行数，
   必须走 `SELECT COUNT(*), MAX(seq)`（已改）。
 - Windows 下 `Set-Content -Encoding utf8` 在 PowerShell 7 是 **UTF-8 无 BOM**，符合本项目约定。
+
+## 文档更新（步骤 5）
+
+### `docs/zh-cn/design/index.md`
+
+- 能力概述：“多轮对话”改成“展示历史落库为 append-only 完整历史, 会话内存只常驻尾部窗口”
+- “多会话与并发”：`链式哈希` 条目换成 `展示历史尾部窗口`（默认 400 / 0 = 不淘汰 /
+  无库不淘汰）；线程绑定条目去掉 `chainHash`
+- “会话 SQLite 持久化”小节：
+  - `view_message` 表写明 `seq` 主键 = 绝对下标 + 1、加载只解析尾窗、淘汰不删行；
+    `meta` 表补 `viewSeqCounter`（历史总条数）
+  - 新增 `展示历史窗口化` 块：写/淘汰/读三条路径，`collectViewRange` +
+    `onLoadViewPage` 回库、短页整页失败、老库空行不再过滤、附件 `dataUrl` 淘汰后取不回
+  - `getOrCreate` 改写为“恢复尾窗 + `COUNT(*)/MAX(seq)` 取总数与 msgIdCounter”；
+    `PendingViewOp.index` → `absIndex`（绝对下标），淘汰只在待落盘队列为空时做
+  - 开关条目补 `session.view_window_messages`
+- 连接与重连：“历史分页”条目改成“条数取自 Hello 的 `historyTail`（远程 TUI 100 /
+  远程 CLI 0）”，并说明“服务端内存窗口”与“同步窗口”是两个量
+- 会话切换、时序图、目录树：`tailHash` → `historyTail`、`viewMessages + chainHash` →
+  `展示历史尾部窗口`、删 `ChainHash` 条目；Hello/重连两条框线的短横数量按字宽重算，
+  保证框宽不变（用脚本校长度）
+- 端点描述：`handleGetViewMessages` / `switchSession` 注明经 `collectViewRange`、回空页、
+  `historyTail`
+- 附录 A：`toJson/fromJson` 去掉“与链式哈希共用”；`SyncPayload` 字段删 `tailHash`；
+  `ChainHash` 条目换成 Hello 的 `historyTail` 说明；展示历史小节加“内存只常驻尾部窗口”
+  与协议 v5 / FFI 3 的说明
+
+### `docs/zh-cn/design/tui.md`
+
+- 直播槽描述去掉“不计链式哈希”
+- §3.5 去掉“服务端 `Session::viewMessages` 与会话历史同增”，改为“服务端自己的窗口
+  有 `session.view_window_messages` 上限，更早的回库读”
+- “可重新拉回”条目：绝对下标 = `seq - 1`，内存里没有时回库读
+
+### `docs/zh-cn/design/benchmark.md`
+
+- 第 5 节结论 4：尾窗同步改为“Hello 的 `historyTail`”，并补一句“服务端自己的内存窗口由
+  `session.view_window_messages`（默认 400）控制，两者无关”
+
+### 自动生成物
+
+- `agent/schema/wire-schema.json` / `docs/zh-cn/design/wire-protocol-fields.md`
+  （`AGENTXX_UPDATE_WIRE_SCHEMA=1`）
+- `agent/schema/config-keys.json` / `docs/zh-cn/design/config-keys.md`
+  （`AGENTXX_UPDATE_CONFIG_KEYS=1`，新键 `session.view_window_messages` 归属“服务端”）
+
+## 新增用例
+
+- `test_session_persistence`：`testViewMessagesPageRead`（按页读、越界、空行也行）、
+  `testViewWindowPaging`（窗口上限/淘汰延迟到 flush/跨边界取段/淘汰后更新只写库/
+  重启后 base+总数一致/内存模式不淘汰/没 `onLoadViewPage` 时取段失败）
+- `test_remote_agent`：`test_view_paging_with_store`（真实 SessionStore + 窗口 50 +
+  200 条历史：尾窗同步、跨窗口分页、重启后继续分页、页不连续时的收敛）
+- `test_wire_roundtrip`：`kVersion`/`kMinVersion` = 5、v4 被拒、`historyTail` 往返
+- `test_config_keys`：登记 `session.view_window_messages`（schema 随之重生成）
+
+## 额外改动（与功能本体无关，但为了 `boundaries` 通过）
+
+`boundaries` 模块会扫源码与设计文档里的禁用词，本轮清理了这些早已超期的词：
+
+- 代码/文档：`载入` → `加载`；`宿主契约` → `主程序契约`；`宿主运行时` → `主程序运行时`
+  （`prompt.h` / `prompt.cpp` / `training.cpp` / `test_agent.cpp` / `index.md` / `plugins.md`）
+- `agent/third_party/cxx_pluginxx_ui`：`通用载体` → `通用数据字段`
+  （`docs/integration.md`、`include/pluginxx/ui/item.h`、`README.md`）——
+  **改动落在子模块工作区**，需在子模块仓库自行提交（本次未提交）
+
+## 验证结果
+
+| 模块 | 结果 |
+|---|---|
+| `session_persistence` | passed=726 failed=0 |
+| `remote_agent` | passed=602 failed=0 |
+| `wire_roundtrip` | passed=262 failed=0 |
+| `wire_schema` | passed=1325 failed=0 |
+| `boundaries` | passed=19 failed=0（术语清理后） |
+| `config_keys` | passed=217 failed=0（登记新键并重生成 schema 后） |
+
+构建方式（顶层一次全量构建会超时，所以分两步）：
+
+```powershell
+# 1) 库：编译 + 安装头文件到 {build}/agentxx-project-install
+cmake --build agent\build\windows-debug\agentxx_lib_repo-prefix\src\agentxx_lib_repo-build `
+  --config Debug --target agentxx_static
+cmake --install agent\build\windows-debug\agentxx_lib_repo-prefix\src\agentxx_lib_repo-build --config Debug
+
+# 2) 测试：编译 + 安装 exe 到 {build}/exec
+cmake --build agent\build\windows-debug\agentxx_test_repo-prefix\src\agentxx_test_repo-build `
+  --config Debug --target agentxx_test
+cmake --install agent\build\windows-debug\agentxx_test_repo-prefix\src\agentxx_test_repo-build --config Debug
+
+# 3) 跑
+cd agent\build\windows-debug\exec
+.\agentxx_test.exe --log-level error
+```
+
+## 待完成 / 后续
+
+1. **benchmark 复测未做**：需要 release 重建（`agent/build/windows-release` 是本次改动之前的产物），
+   计划里的两组场景（长会话 / 多图附件）还没跑，`benchmark.md` 的“估算”字样因此保留。
+   命令参考：
+   ```powershell
+   cmake --build agent\build\windows-release\agentxx_lib_repo-prefix\src\agentxx_lib_repo-build --config Release --target agentxx_static
+   cmake --install agent\build\windows-release\agentxx_lib_repo-prefix\src\agentxx_lib_repo-build --config Release
+   cmake --build agent\build\windows-release\agentxx_benchmark_repo-prefix\src\agentxx_benchmark_repo-build --config Release --target agentxx_benchmark
+   cmake --install agent\build\windows-release\agentxx_benchmark_repo-prefix\src\agentxx_benchmark_repo-build --config Release
+   ```
+2. **页读是同步的**：`collectViewRange` 在 io 线程上直接查库（与写库共用
+   `SessionStore` 互斥锁）。实测单页 100 条很快，但库被长事务占住时会顶住 io 线程 ——
+   需要时改成协程 + 线程池（计划 §7 已列该风险）。
+3. **老库视觉为空的行**：读取期不再过滤，CLI 可能打印一行空行；要清理需另做一次性
+   “重排 seq”维护脚本（不在本轮）。
+4. `agent/third_party/cxx_pluginxx_ui` 的术语清理还在子模块工作区，需在子模块仓库单独提交。

@@ -2,7 +2,7 @@
   "version": 1,
   "note": "生成物, 请勿手工编辑; 重新生成: AGENTXX_UPDATE_CONFIG_KEYS=1 agentxx_test config_keys",
   "source": "agent/client/src/config_loader.cpp",
-  "count": 68,
+  "count": 69,
   "keys": [
     {
       "path": "data_dir",
@@ -122,6 +122,13 @@
       "type": "int (字节)",
       "default": "8192",
       "sample": "async_work:\n  result_max_bytes: 1024"
+    },
+    {
+      "path": "session.view_window_messages",
+      "owner": "server",
+      "type": "int (0 = 不淘汰)",
+      "default": "400",
+      "sample": "session:\n  view_window_messages: 200"
     },
     {
       "path": "dev_mode",

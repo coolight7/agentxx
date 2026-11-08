@@ -1600,6 +1600,74 @@ static TestResult testViewMessageMsgIdMigration() {
 ///   最终落库结果一致), 且 append 先于其 update 入队
 /// - Session::restore 整体替换 viewMessages 时丢弃队列 (旧下标失效), 之后
 ///   不会再回放陈旧操作
+// ---------------------------------------------------------------------------
+// 展示历史按页读取 / 只读尾窗加载
+// - 页区间 `[startIndex, startIndex + count)` 对应 seq `(startIndex, startIndex+count]`
+// - 只读尾窗时总数/窗口基准/msgIdCounter 仍要正确 (行数不等于总条数)
+// ---------------------------------------------------------------------------
+static TestResult testViewMessagesPageRead() {
+    using V = agentxx::agent::ViewMessage;
+    using agentxx::agent::SessionStore;
+
+    auto root = makeTempRoot();
+    {
+        auto store = std::make_shared<SessionStore>(root);
+        for (int i = 0; i < 12; ++i) {
+            store->appendViewMessage(
+                "pg",
+                V::makeText(V::Role::User, fmt::format("p{}", i)),
+                static_cast<uint64_t>(i + 1),
+                static_cast<uint64_t>(i + 1)
+            );
+        }
+
+        // ---- 按页: 左开右闭, 恰好在同一绝对下标空间 ----
+        auto page = store->loadViewMessagesPage("pg", 4, 3);
+        XX_TEST_EXPECT_EQ(page.size(), size_t{3});
+        if (page.size() == 3) {
+            XX_TEST_EXPECT_EQ(page[0].text, std::string{"p4"});
+            XX_TEST_EXPECT_EQ(page[1].text, std::string{"p5"});
+            XX_TEST_EXPECT_EQ(page[2].text, std::string{"p6"});
+        }
+        // 页尾到顶 (超出现有行) 时只返回实际存在的条数
+        auto tailPage = store->loadViewMessagesPage("pg", 10, 100);
+        XX_TEST_EXPECT_EQ(tailPage.size(), size_t{2});
+        // 超出范围: 空 (不是错误)
+        XX_TEST_EXPECT_TRUE(store->loadViewMessagesPage("pg", 12, 10).empty());
+        XX_TEST_EXPECT_TRUE(store->loadViewMessagesPage("pg", 0, 0).empty());
+
+        // ---- 只读尾窗 ----
+        auto tail = store->loadSession("pg", 5);
+        XX_TEST_EXPECT_EQ(tail.viewMessages.size(), size_t{5});
+        XX_TEST_EXPECT_EQ(tail.viewWindowBase, uint64_t{7});
+        XX_TEST_EXPECT_EQ(tail.lastViewSeq, uint64_t{12});
+        XX_TEST_EXPECT_EQ(tail.msgIdCounter, uint64_t{12});
+        if (tail.viewMessages.size() == 5) {
+            XX_TEST_EXPECT_EQ(tail.viewMessages.front().text, std::string{"p7"});
+            XX_TEST_EXPECT_EQ(tail.viewMessages.back().text, std::string{"p11"});
+        }
+        // 尾窗大于历史: 退化为全量 (base = 0)
+        auto over = store->loadSession("pg", 100);
+        XX_TEST_EXPECT_EQ(over.viewMessages.size(), size_t{12});
+        XX_TEST_EXPECT_EQ(over.viewWindowBase, uint64_t{0});
+
+        // ---- 全量加载 (`tailCount = 0`, 诊断/测试用) ----
+        auto all = store->loadSession("pg");
+        XX_TEST_EXPECT_EQ(all.viewMessages.size(), size_t{12});
+        XX_TEST_EXPECT_EQ(all.viewWindowBase, uint64_t{0});
+    }
+    removeTempRoot(root);
+    return TestResult{};
+}
+
+// ---------------------------------------------------------------------------
+// 展示历史窗口化: 只常驻尾部窗口 + 更早的页回库读
+// - 绝对下标 absIndex = seq - 1 (view_message 不删行、seq 单调)
+// - 淘汰只在待落盘队列为空时发生 (队列按下标引用内存)
+// - 取段内存优先, 缺口回库; 内存里的行比库里新 (tool 回填)
+// ---------------------------------------------------------------------------
+static void testViewWindowPaging();
+
 static TestResult testPendingViewOpsIndexReplay() {
     using V = agentxx::agent::ViewMessage;
 
@@ -1716,11 +1784,181 @@ static TestResult testPendingViewOpsIndexReplay() {
     return TestResult{};
 }
 
+/// 展示历史窗口化 (会话 + 存储层)
+/// - 超过上限后只常驻尾部: 总数不变、旧下标不可取、msgId 索引只留窗口内
+/// - 待落盘队列非空时不淘汰 (否则队列里的行就没了), flush 之后才删
+/// - 跨窗口边界取段能拼出完整序列, 且内存里的行覆盖库内旧版本
+/// - 已淘汰的行被更新时只写库, 不改内存
+/// - 重启后 base/总数/msgIdCounter 与重启前一致, 继续分页仍正确
+/// - 内存模式 (无会话库) 不淘汰; 库不可读时取段明确失败 (调用方回空页降级)
+static void testViewWindowPaging() {
+    using V = agentxx::agent::ViewMessage;
+    using agentxx::agent::SessionStore;
+
+    // ---- Case 1: 超过上限后只常驻尾部窗口 ----
+    {
+        auto root             = makeTempRoot();
+        auto store            = std::make_shared<SessionStore>(root);
+        auto mgr              = std::make_shared<agentxx::agent::SessionsManager>();
+        mgr->sessionStore     = store;
+        mgr->viewWindowMessages = 10;
+        auto sess             = mgr->getOrCreate("win-cap");
+
+        for (int i = 0; i < 40; ++i) {
+            sess->appendViewMessage(V::makeText(V::Role::User, fmt::format("m{}", i)));
+        }
+        XX_TEST_EXPECT_EQ(sess->viewMessageCount(), size_t{40});
+        // 待落盘队列非空 → 淘汰被推迟 (节流窗口内只首批落库)
+        XX_TEST_EXPECT_TRUE(sess->viewWindow().size() > size_t{10});
+        sess->flushViewMessages();
+
+        // 成批淘汰 (至少 cap/4 条): 窗口不一定刚好等于 cap, 但一定不超
+        XX_TEST_EXPECT_TRUE(sess->viewWindow().size() <= size_t{10});
+        XX_TEST_EXPECT_EQ(
+            sess->viewWindowBase() + sess->viewWindow().size(),
+            size_t{40}
+        );
+        XX_TEST_EXPECT_EQ(sess->viewWindowCap(), size_t{10});
+
+        // 旧下标不在内存: 按下标/按 id 都取不到
+        XX_TEST_EXPECT_TRUE(sess->viewMessageAt(0) == nullptr);
+        XX_TEST_EXPECT_TRUE(sess->viewMessageById("msg_000001") == nullptr);
+        // 窗口内仍可直接取
+        const auto* last = sess->viewMessageAt(39);
+        XX_TEST_EXPECT_TRUE(last != nullptr);
+        if (last != nullptr) {
+            XX_TEST_EXPECT_EQ(last->text, std::string{"m39"});
+        }
+        XX_TEST_EXPECT_TRUE(sess->viewMessageById("msg_000040") != nullptr);
+
+        // ---- 跨窗口边界取段: 前半段回库, 后半段来自内存 ----
+        std::vector<V> range;
+        const auto     base = static_cast<uint64_t>(sess->viewWindowBase());
+        XX_TEST_EXPECT_TRUE(sess->collectViewRange(base - 5, base + 5, range));
+        XX_TEST_EXPECT_EQ(range.size(), size_t{10});
+        if (range.size() == 10) {
+            for (size_t i = 0; i < range.size(); ++i) {
+                XX_TEST_EXPECT_EQ(range[i].text, fmt::format("m{}", base - 5 + i));
+                XX_TEST_EXPECT_EQ(range[i].id, fmt::format("msg_{:06d}", base - 5 + i + 1));
+            }
+        }
+
+        // 整段历史都能取回 (完整同步走的就是这条路径)
+        std::vector<V> all;
+        XX_TEST_EXPECT_TRUE(sess->collectViewRange(0, 40, all));
+        XX_TEST_EXPECT_EQ(all.size(), size_t{40});
+        if (all.size() == 40) {
+            XX_TEST_EXPECT_EQ(all.front().text, std::string{"m0"});
+            XX_TEST_EXPECT_EQ(all.back().text, std::string{"m39"});
+        }
+
+        // ---- 已淘汰的行被更新: 只写库, 不改内存 ----
+        V oldRow = V::makeText(V::Role::Tool, "old-result");
+        oldRow.id = "msg_000002";
+        sess->updateViewMessage(oldRow);
+        std::vector<V> head;
+        XX_TEST_EXPECT_TRUE(sess->collectViewRange(1, 2, head));
+        XX_TEST_EXPECT_EQ(head.size(), size_t{1});
+        if (head.size() == 1) {
+            XX_TEST_EXPECT_EQ(head[0].text, std::string{"old-result"});
+            XX_TEST_EXPECT_TRUE(head[0].role == V::Role::Tool);
+        }
+
+        // ---- 重启: base / 总数 / msgIdCounter 一致 ----
+        auto mgr2              = std::make_shared<agentxx::agent::SessionsManager>();
+        mgr2->sessionStore     = std::make_shared<SessionStore>(root);
+        mgr2->viewWindowMessages = 10;
+        auto sess2             = mgr2->getOrCreate("win-cap");
+        XX_TEST_EXPECT_EQ(sess2->viewMessageCount(), size_t{40});
+        XX_TEST_EXPECT_EQ(sess2->viewWindowBase(), size_t{30});
+        XX_TEST_EXPECT_EQ(sess2->viewWindow().size(), size_t{10});
+        XX_TEST_EXPECT_EQ(sess2->viewWindow().front().text, std::string{"m30"});
+        // id 计数延续 (新消息不冲突)
+        XX_TEST_EXPECT_EQ(
+            sess2->appendViewMessage(V::makeText(V::Role::User, "m40")),
+            std::string{"msg_000041"}
+        );
+        XX_TEST_EXPECT_EQ(sess2->viewMessageCount(), size_t{41});
+        store.reset();
+        mgr.reset();
+        mgr2.reset();
+        removeTempRoot(root);
+    }
+
+    // ---- Case 2: 连续追加 3×cap 不返回控制权: 全部落库, 一条不丢 ----
+    {
+        auto root           = makeTempRoot();
+        auto store          = std::make_shared<SessionStore>(root);
+        auto mgr            = std::make_shared<agentxx::agent::SessionsManager>();
+        mgr->sessionStore   = store;
+        mgr->viewWindowMessages = 8;
+        auto sess           = mgr->getOrCreate("win-burst");
+
+        for (int i = 0; i < 24; ++i) {
+            sess->appendViewMessage(V::makeText(V::Role::User, fmt::format("b{}", i)));
+        }
+        // 淘汰没跟上 (队列非空), 但总量正确
+        XX_TEST_EXPECT_EQ(sess->viewMessageCount(), size_t{24});
+        sess->flushViewMessages();
+        XX_TEST_EXPECT_TRUE(sess->viewWindow().size() <= size_t{8});
+
+        // 库里必须是完整 24 行 (没有因淘汰丢消息)
+        auto all = std::make_shared<SessionStore>(root)->loadSession("win-burst");
+        XX_TEST_EXPECT_EQ(all.viewMessages.size(), size_t{24});
+        XX_TEST_EXPECT_EQ(all.lastViewSeq, uint64_t{24});
+        if (all.viewMessages.size() == 24) {
+            XX_TEST_EXPECT_EQ(all.viewMessages.front().text, std::string{"b0"});
+            XX_TEST_EXPECT_EQ(all.viewMessages.back().text, std::string{"b23"});
+        }
+        store.reset();
+        mgr.reset();
+        removeTempRoot(root);
+    }
+
+    // ---- Case 3: 内存模式 (无会话库) 永不淘汰 ----
+    {
+        auto mgr            = std::make_shared<agentxx::agent::SessionsManager>();
+        mgr->viewWindowMessages = 4;
+        auto sess           = mgr->getOrCreate("win-memory");
+        for (int i = 0; i < 20; ++i) {
+            sess->appendViewMessage(V::makeText(V::Role::User, fmt::format("n{}", i)));
+        }
+        XX_TEST_EXPECT_EQ(sess->viewWindowCap(), size_t{0});
+        XX_TEST_EXPECT_EQ(sess->viewWindow().size(), size_t{20});
+        XX_TEST_EXPECT_EQ(sess->viewWindowBase(), size_t{0});
+    }
+
+    // ---- Case 4: 内存窗口装不下、又读不到库时取段明确失败 ----
+    // 场景: 会话有库但读页拿不到完整区间 (库不可读/页被删/短页), 调用方要回空页
+    // 降级而不是把不连续的内容当合法页返回
+    {
+        auto sess = std::make_shared<agentxx::agent::Session>();
+        sess->bindIoThread();
+        sess->setViewWindowCap(4);
+        for (int i = 0; i < 12; ++i) {
+            sess->appendViewMessage(V::makeText(V::Role::User, fmt::format("d{}", i)));
+        }
+        // 没有绑定会话库 (无 onLoadViewPage): 淘汰照做, 但更早的行就取不回来了
+        XX_TEST_EXPECT_TRUE(sess->viewWindowBase() > size_t{0});
+        XX_TEST_EXPECT_TRUE(sess->viewWindow().size() <= size_t{4});
+        XX_TEST_EXPECT_EQ(sess->viewMessageCount(), size_t{12});
+
+        std::vector<V> gap;
+        XX_TEST_EXPECT_FALSE(sess->collectViewRange(0, 12, gap));
+        XX_TEST_EXPECT_TRUE(gap.empty());
+        // 窗口内的区间仍可取 (尾窗同步/追加快照不需要库)
+        std::vector<V> tailOnly;
+        XX_TEST_EXPECT_TRUE(sess->collectViewRange(sess->viewWindowBase(), 12, tailOnly));
+        XX_TEST_EXPECT_EQ(tailOnly.size(), sess->viewWindow().size());
+    }
+}
+
 asio::awaitable<TestResult> run_session_persistence_tests() {
     g_sp_passed = 0;
     g_sp_failed = 0;
 
     testViewMessagesRoundtrip();
+    testViewMessagesPageRead();
     testLlmMessagesRoundtrip();
     testLlmMessagesTextMirror();
     testShareStoreRoundtrip();
@@ -1735,6 +1973,7 @@ asio::awaitable<TestResult> run_session_persistence_tests() {
     testStoreConnectionLruEviction();
     testViewMessageMsgIdMigration();
     testPendingViewOpsIndexReplay();
+    testViewWindowPaging();
 
     // E2E 需要独立 io_context (BaseAgent 内部有自身的 io 循环)
     asio::io_context io;

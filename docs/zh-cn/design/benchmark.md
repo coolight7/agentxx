@@ -269,7 +269,9 @@ process_base → agent_constructed → tui_started → agent_init_done
 4. **客户端内存与服务端上下文解耦**: 真实两进程下服务端 200K 上下文时 RSS 36.90MB,
    客户端只有 18.12MB; headless TUI 客户端在 100K 上下文时
    `client.tui.messages` = 231,881 字节 / 468 条 —— 长会话场景建议按客户端类型
-   启用尾窗同步 (`initialSyncTailCount`), 与本地模式的策略保持一致。
+   启用尾窗同步 (Hello 的 `historyTail`), 与本地模式的策略保持一致; 服务端自己的展示历史
+   内存窗口由 `session.view_window_messages` (默认 400, 0 = 全部常驻) 控制 —— 两者是独立的量,
+   前者决定客户端拿到多少条, 后者决定 agent 进程自身留多少条。
 
 ## 6. 相关实现
 

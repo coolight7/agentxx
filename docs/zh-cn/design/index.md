@@ -57,7 +57,7 @@ Agentxx 是一个使用 C++23 实现的 AI Agent 框架，编译器启用 C++26/
 
 ### 核心对话能力
 
-- **多轮对话**: 支持完整的多轮对话管理，维护 `viewMessages` (append-only 完整历史) 和会话 LLM 上下文 (可压缩的调用上下文) 双消息集
+- **多轮对话**: 支持完整的多轮对话管理，维护展示历史 (落库为 append-only 完整历史, 会话内存只常驻尾部窗口) 和会话 LLM 上下文 (可压缩的调用上下文) 双消息集
   - **会话是 LLM 上下文的唯一权威**: 上下文以 typed 形式 (`std::vector<neograph::ChatMessage>`) 存在会话里, 带单调递增版本号 `messagesVersion`; Json 形态 (`Session::llmMessagesJson()`) 只在持久化 / `WireGetContext` / 插件查询等边界按需惰性生成
   - **图状态不再持有上下文**: neograph 执行图里没有 `messages` 通道, `state.serialize()` (每 super-step checkpoint、VALUES 事件、插件 stateJson) 的载荷与上下文大小无关; 需要上下文内容的插件经接口表 `agentxx.agent.context` 查询, 图状态里的只读通道 `xx_messagesMeta` 只给条数/版本/末尾消息摘要
   - 上下文变更只经 `Session::appendMessages` / `replaceMessages` / `truncateMessages` 单一入口 (节点与中间件经 `agentxx/nodes/session_context.h` 的入口调用), 不再有"图状态写通道 + 轮末整体覆盖对账"的双份拷贝
@@ -242,8 +242,8 @@ event / async_* 及延迟加载加载 (`ToolSkillSearchSubAgentTask` 模板类, 
 - **活动状态**: Idle / Streaming / ExecutingTool / WaitingInput 四种状态
   (注: 目前仅 ExecutingTool/Idle 被 LogPrint 中间件实际写入, Streaming/WaitingInput
   为预留; UI 活动状态实际经 Delta 事件流完成)
-- **链式哈希**: viewMessages 使用 FNV-1a 链式哈希校验一致性
-- **线程绑定 (单线程读写)**: Session 通过 `bindIoThread()` 绑定 io 线程，`assertIoThread()` 强制校验可变状态 (viewMessages/上下文消息/chainHash) 仅在 io 线程读写；client/UI 不直接读取，需要时由 io 线程拷贝后经 Wire 消息 (Sync/Delta) 传输，因此无需快照/锁同步
+- **展示历史尾部窗口**: 会话对象里只常驻最近 N 条展示消息 (`session.view_window_messages`, 默认 400, 0 = 全部常驻), 更早的行留在会话库、按绝对下标 (`seq - 1`) 回库读取; 客户端的分页语义不变 (见 "展示历史 (viewMessages) 与客户端副本")。没有会话库时不淘汰 (内存是唯一副本)
+- **线程绑定 (单线程读写)**: Session 通过 `bindIoThread()` 绑定 io 线程，`assertIoThread()` 强制校验可变状态 (展示历史窗口/上下文消息) 仅在 io 线程读写；client/UI 不直接读取，需要时由 io 线程拷贝后经 Wire 消息 (Sync/Delta) 传输，因此无需快照/锁同步
 - **取消/切模型**: UI 线程的取消/切模型操作通过 Wire 消息 (WireCancel/WireSelectModel) 发往 agent 线程处理，避免跨线程竞争
 - **异步互斥锁**: `AsyncMutex` 基于 asio concurrent_channel 实现协程安全的互斥，不会阻塞线程，适用于协程跨越 co_await 临界区
 
@@ -255,23 +255,42 @@ event / async_* 及延迟加载加载 (`ToolSkillSearchSubAgentTask` 模板类, 
   `sessionStoreDirectory`, 否则自动禁用仅存内存):
   - 会话消息状态恢复/落库 (经 `SessionsManager` 在创建 Session 时挂接)
   - `MiddlewareContext` 构造参数 (share store 写穿)
+  - 内存窗口上限 `session.view_window_messages` (yaml, 默认 400, 0 = 不淘汰):
+    只对开了会话库的会话生效 —— 没库就没有可回读的副本
 - 数据目录: `{dataDir}/sqlite/sessions/{sessionId}/` (sessionId 经 `sanitizeSessionId` 清洗为安全目录名:
   非法字符替换/超长截断/Windows 保留名规避, 发生改写时附加 FNV hash 尾缀防碰撞;
   dataDir 由 yaml `data_dir` 指定, **未配置 dataDir 且未指定 sessionStoreDirectory 时不持久化**:
   设置/会话/codegraph 数据仅存内存, BaseAgent 初始化时输出警告)
 - 分库设计 (单库 `session.db`, 四表, 启用 WAL + busy_timeout):
-  - `view_message` 表: viewMessages (append-only, 每消息一行 JSON)
+  - `view_message` 表: 展示历史 (append-only, 每消息一行 JSON, `seq` 主键即绝对下标 + 1):
+    加载时只解析尾部窗口, 更早的行按 `seq` 区间查询; 窗口淘汰只删内存, 这张表一行不删
   - `llm_context` 表: 会话 LLM 上下文 (单行整体替换; Json 形态由 typed 上下文按需生成)
-  - `meta` 表: msgIdCounter/title/lastActiveMs
+  - `meta` 表: viewSeqCounter (历史总条数)/msgIdCounter/title/lastActiveMs
   - `store` 表: agentxx_share_store KV 条目 (id 自增 = 现有最大 id + 1,
     重启后延续; 内存只缓存最近使用的少数条目, 其余按 id 读取) ——
     与消息历史同一生命周期 (随 session 创建/删除),
     同一 io 线程写入, 互斥锁串行保护
+- **展示历史窗口化** (内存只留尾部, 更早的回库读):
+  - 写: `appendViewMessage` 追加到窗口尾并入待落盘队列; `viewWindowBase()` / `viewMessageCount()`
+    给出窗口起点与历史总条数, 窗口内第 i 条的绝对下标恒为 `base + i`
+  - 淘汰: 窗口超过 `viewWindowCap()` 时**成批**删掉头部 (每次至少 cap/4 —— 逐条
+    `erase(begin())` 在长会话里是 O(n) 搬移, 分批后摊还成本可忽略), 只释放内存;
+    淘汰后回填 (`updateViewMessage`) 命中不到行时只写库、不改内存
+  - 读: 取段统一走 `collectViewRange(start, end, out)`, 窗口覆盖不到时经
+    `SessionStoreHooks::onLoadViewPage` 回库读那一页 (`WHERE seq > start AND seq <= end`, 走主键);
+    库里的行也不全 (还在节流窗口内没落盘) 时**整页失败**, 端点回空页让客户端停止上拉
+  - 无会话库 (或 `session.view_window_messages = 0`) 时不淘汰: 内存是唯一副本,
+    淘汰等于永久丢掉更早的历史
+  - 老库里视觉为空的行 (只有空白/零宽占位符) 读取期**不再过滤**: 它们照样占绝对下标、
+    照常参与分页传输, TUI 不显示 (CLI 可能打印一行空行); 过滤只发生在 agent 定稿处
+  - 附件 `dataUrl` 落库时已剔除, 淘汰后读回的只有文件名/大小 —— 与"重启后同样拿不到原图"一致
 - 接入点:
-  - `SessionsManager::getOrCreate`: 创建 Session 时从 SQLite 恢复 viewMessages 与 LLM 上下文 (Json → typed 转换一次),
-    重建链式哈希 (对不含 id 的消息内容, 与 appendViewMessage 语义一致),
-    恢复 msgIdCounter 保证新消息 id 不冲突; 并绑定 `SessionStoreHooks`
-    (std::function 回调, context.h 不依赖 sqlite 头)
+  - `SessionsManager::getOrCreate`: 创建 Session 时从 SQLite 恢复展示历史**尾部窗口**
+    (`loadSession(id, tailCount)` 走 `ORDER BY seq DESC LIMIT ?`, 只解析这一批) 与 LLM 上下文
+    (Json → typed 转换一次), 同时带回窗口首条绝对下标与历史总条数;
+    恢复 msgIdCounter 保证新消息 id 不冲突 —— 只读尾窗时行数不等于总条数,
+    msgIdCounter / 总条数都由 `SELECT COUNT(*), MAX(seq)` 取;
+    并绑定 `SessionStoreHooks` (std::function 回调, context.h 不依赖 sqlite 头)
   - `Session::appendViewMessage` / `updateViewMessage`: 追加/回填经节流器落库
     (消息 + 计数事务提交; update 按 msg.id 更新对应行, 如 tool 结果回填
     toolFinished/toolResult/collapsed, 保证重启恢复的历史与内存状态一致)
@@ -282,10 +301,12 @@ event / async_* 及延迟加载加载 (`ToolSkillSearchSubAgentTask` 模板类, 
     一个节流窗口 (<3s), 而非整轮 —— 如果 viewMessages 逐条即时落库、
     llmContext 仅轮末保存, 反复中途被杀的会话会出现"view 完整而 llm 上下文
     滞后/为空"
-    - 队列元素只记录 `viewMessages` 下标 (`PendingViewOp.index`), 不持有消息副本:
-      viewMessages append-only (下标稳定), 回放时按当下内容落库。逐条深拷贝会让
+    - 队列元素只记录**绝对下标** (`PendingViewOp.absIndex`), 不持有消息副本: 展示历史
+      append-only (下标稳定), 回放时按 `absIndex - viewWindowBase()` 取行。逐条深拷贝会让
       窗口内每条消息在内存中存在两份 (实测注入 200K token 历史时多占约 1 MB)
-    - `Session::restore` 整体替换 viewMessages 前先清空队列 (旧下标失效)
+    - 窗口淘汰**只在待落盘队列为空时**进行 (队列非空就置 `viewEvictPending_`, flush 之后再试):
+      队列里的绝对下标因此总能取到行, 也不会出现"窗口里删了、库里还没写"
+    - `Session::restoreWindow` 整体替换窗口前先清空队列 (旧下标失效)
   - `EventBridge::handleChannelWrite`: LLM 上下文增量的结算挂点 —— 节点把
     assistant 回复 / tool 结果写入会话上下文后, 发出与旧 messages 通道写入同形的
     事件 (`{"channel":"messages","value":[...]}`), EventBridge 据此展开 view 消息
@@ -322,10 +343,10 @@ TUI [F3] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
   → SessionServerAgentIO::switchSession:
       重绑定 config_.sessionId → 清空 delta 重放缓冲 (新会话 seq 独立编号)
       → 重置 firstTurn_ (首条输入走 resume_if_exists=true 恢复路径)
-      → 回推新会话 Sync (按 initialSyncTailCount 尾窗分页; 0=完整同步)
+      → 回推新会话 Sync (按客户端声明的 historyTail 尾窗分页; 0=完整同步)
         + WireModelInfo + WireContextStats
   → 客户端 (TUI) 更新本地 sessionId 绑定; WS 模式同时
-    transport->updateReconnectSessionId() (复位重连握手的 sessionId/lastSeq/tailHash)
+    transport->updateReconnectSessionId() (复位重连握手的 sessionId/lastSeq/historyTail)
 ```
 
 - 仅当无进行中轮次时切换 (客户端前置拦截 + 服务端双重保护)
@@ -432,13 +453,17 @@ TUI [F3] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
 - **断线重连**: 客户端自动重连，携带 lastSeq 供增量 Delta 重放，seq 不连续时回退完整 Sync;
   客户端记录的序号高于服务端当前 seq (服务端进程重启/会话重建后 seq 从 0 重新计数) 时同样回退完整 Sync,
   SyncPayload.deltaSeq 携带快照序号 (快照已含 seq <= deltaSeq 的全部增量), 客户端据此重置去重序号
-- **历史分页 (viewMessages 尾窗同步)**: 长会话恢复时服务端仅同步末尾窗口
-  (SessionServerAgentIO::Config::initialSyncTailCount, 本地 TUI 模式 =100,
-  远程经 AgentServer::Config 原样转发, 0=全部); SyncPayload.fromIndex 携带窗口
+- **历史分页 (viewMessages 尾窗同步)**: 长会话恢复时服务端仅同步末尾窗口, 条数取自
+  客户端 Hello 的 `historyTail` (远程 TUI 声明 100 = 本地 TUI 的 `kTuiInitialSyncTailCount`,
+  远程 CLI 声明 0 = 完整同步; 未声明时用 `SessionServerAgentIO::Config::initialSyncTailCount`,
+  远程经 AgentServer::Config 原样转发); SyncPayload.fromIndex 携带窗口
   起始绝对下标、totalMessages 携带会话总消息数。客户端 (TUI) 向上滚动接近
   窗口顶部时发送 GetViewMessages(beforeIndex, count) 分页拉取更早历史, 服务端
-  以 ViewMessagesPage(startIndex, totalCount, messages) 回应; viewMessages 为
-  append-only, 绝对下标恒定, 前插不影响既有下标 (无竞态)。TUI 侧前插后经
+  以 ViewMessagesPage(startIndex, totalCount, messages) 回应; 展示历史为
+  append-only, 绝对下标 (= `seq - 1`) 恒定, 前插不影响既有下标 (无竞态)。
+  服务端自己的内存窗口 (默认 400 条) 与这里的同步窗口是两个量: 取段一律经
+  `Session::collectViewRange` —— 内存没有就回库读那一页, 读不到整页时回空页。
+  TUI 侧前插后经
   LazyScrollable::notifyPrepended 做滚动锚定 (既有条目缓存/实测高度随索引
   平移保留, 偏移按新增区高度在 prepareLayout 内按新快照全额补偿并随
   实测增量收敛), 视口内容保持稳定
@@ -1515,11 +1540,12 @@ AgentIOBase (服务端端点: SessionServerAgentIO)
     ├── run()              → 驱动循环: 取输入 → 执行轮次 → 推送结果
     ├── stop()             → 停止驱动循环 (关闭输入 channel/取消轮次/fail pending)
     ├── onDisconnect()     → 传输断开时启动 grace 定时器 (宽限期满且无连接则取消轮次)
-    ├── handleGetViewMessages() → 历史分页请求: 按绝对下标切片 [before-count, before)
+    ├── handleGetViewMessages() → 历史分页请求: 按绝对下标取段 [before-count, before)
+    │                              (经 Session::collectViewRange: 内存窗口没有时回库读页)
     │                              回应 WireViewMessagesPage (append-only 下标恒定无竞态;
-    │                              会话不匹配回空页, count=0 用默认页大小 100)
+    │                              页读不全/会话不匹配回空页, count=0 用默认页大小 100)
     └── switchSession()    → 会话切换: 重绑定 sessionId, 清空 delta 缓冲, 重置 firstTurn_,
-                             回推新会话 Sync (按 initialSyncTailCount 尾窗分页) + 模型信息 + 上下文统计
+                             回推新会话 Sync (按客户端声明的 historyTail 尾窗分页) + 模型信息 + 上下文统计
 
 AgentIOTransportBase (传输层抽象)
     ├── connect(hello)     → 建立连接并发送握手
@@ -1662,7 +1688,7 @@ AgentContext
          │     ├── bus                   (会话级事件总线)
          │     ├── contextStats          (std::atomic 字段, 跨线程安全)
          │     ├── activity              (Activity)
-         │     ├── viewMessages + chainHash (仅 io 线程读写, client 经 Wire 拷贝传输)
+         │     ├── 展示历史尾部窗口 (仅 io 线程读写; 更早的按页回库, client 经 Wire 拷贝传输)
          │     ├── deltaSeq              (普通 uint64_t, 仅 io 线程递增; EventBridge 分配)
          │     ├── cancelToken           (仅 io 线程读写)
          │     └── modelName             (仅 io 线程读写, 经 Wire 切换)
@@ -1670,7 +1696,7 @@ AgentContext
                └── ...
 
 线程安全策略:
-  - io 线程: 读写 viewMessages/上下文消息/chainHash/deltaSeq (assertIoThread 强制校验)
+  - io 线程: 读写展示历史窗口/上下文消息/deltaSeq (assertIoThread 强制校验)
   - client/UI: 不直接读取, 由 io 线程拷贝后经 Wire 消息 (Sync/Delta) 传输
   - 取消/切模型: 经 Wire 消息发往 agent 线程处理
   - SessionsManager: 仅在 agent io_context 线程访问, 无需锁
@@ -1760,7 +1786,7 @@ AgentContext
   ├── writeLoop():    writeQueue (concurrent_channel, cap=4096) → ws send
   ├── readLoop():     ws recv → 反序列化 → recvQueue (concurrent_channel, cap=256)
   │                     → recv() 处理; 断线后进入自动重连循环:
-  │                       重连 → 重建 writeQueue → 发送 Hello(lastSeq, tailHash)
+  │                       重连 → 重建 writeQueue → 发送 Hello(lastSeq, historyTail)
   │                       → 服务端增量重放 (seq 不连续时回退完整 Sync)
   ├── heartbeatLoop(): 每 heartbeatInterval 发送 Ping
   └── Delta 去重: 收到 delta 时更新 lastDeltaSeq_, 重放重复投递的
@@ -1780,7 +1806,7 @@ AgentContext
 Client                              Server
   │                                    │
   │──── Hello (thread, token, seq,    │
-  │      tailHash, model) ───────────→│
+  │      historyTail, model) ────────→│
   │                                    │ 验证 token
   │                                    │ 查找/创建 SessionServerAgentIO
   │←── HelloAck (ok, models, hash) ───│
@@ -1797,7 +1823,7 @@ Client                              Server
   │                                    │
   │  [连接断开]                         │ 启动 grace 定时器
   │                                    │
-  │──── Hello (seq=3, tailHash) ─────→│ 增量重放 seq>3 的 delta
+  │──── Hello (seq=3, historyTail) ──→│ 增量重放 seq>3 的 delta
   │←── HelloAck + Delta replay ───────│ seq 不连续时回退完整 Sync;
   │                                    │ 客户端序号 > 服务端当前 seq
   │                                    │ (进程重启) 同样回退完整 Sync,
@@ -1966,13 +1992,13 @@ agent/
 │   │   │   ├── config.h          # AgentConfig / ModelConfig 配置
 │   │   │   ├── config_static.h   # 静态路径配置 + 全局运行开关 (enableBenchmark)
 │   │   │   ├── context.h         # AgentContext / Session / SessionsManager / ContextStats
-│   │   │   │                     #   Session: 线程绑定 (viewMessages/chainHash 单线程读写)
+│   │   │   │                     #   Session: 线程绑定 (展示历史窗口/上下文消息单线程读写)
 │   │   │   ├── checkpoint_store.h # 单检查点存储: SingleCheckpointStore 策略基类 +
 │   │   │   │                     #   InMemorySingleCheckpointStore (每 thread 仅最新,
 │   │   │   │                     #   save 时自动淘汰历史, O(super-steps) -> O(threads))
 │   │   │   ├── conversation_types.h # Delta(含NodeStart/End/seq/timing) / SyncPayload
-│   │   │   │                     #   ViewMessage (UI 展示消息, role 拆分子结构) /
-│   │   │   │                     #   ChainHash / AppendComponentNotification
+│   │   │   │                     #   SyncPayload / ViewMessage (UI 展示消息, role 拆分子结构) /
+│   │   │   │                     #   AppendComponentNotification
 │   │   │   ├── model_registry.h  # ModelProviderRegistry (运行时模型切换)
 │   │   │   ├── session_store.h   # 会话 SQLite 持久化: 单库 session.db
 │   │   │   │                     #   (view_message/llm_context/meta/store 四表, 含 share store KV),
@@ -2358,7 +2384,7 @@ BaseAgent (基类)
   ├── MiddlewareContext → 中间件栈
   ├── AgentContext
   │     ├── sessions (SessionsManager) → Session (per sessionId)
-  │     │     ├── viewMessages + chainHash (仅 io 线程读写, client 经 Wire 拷贝传输)
+  │     │     ├── 展示历史尾部窗口 (仅 io 线程读写; 更早的按页回库, client 经 Wire 拷贝传输)
   │     │     ├── 会话 LLM 上下文 (typed 权威, io 线程读写; Json 形态按需生成)
   │     │     ├── cancelToken / modelName (io 线程读写)
   │     │     ├── activity / contextStats (atomic, 跨线程安全)
@@ -2414,7 +2440,7 @@ EventBus (事件总线)
   - Think: ThinkData {reasoningTokens, isEncrypted}
   - Tip: TipData {tipLevel: Info/Warning/Error} — 系统提示与 Turn 统计经 InsertMessage 原子插入
   - Interrupt: InterruptData {interruptId, ui (声明式表单描述), interruptStatus (Waiting/Confirmed/Cancelled/Expired), interruptResult (提交值展示文本)}
-- 序列化: toJson/fromJson 供 Wire Sync 与链式哈希共用; 对应 role 下保证子结构非空
+- 序列化: toJson/fromJson 供 Wire Sync 与落库共用; 对应 role 下保证子结构非空
 
 ### Delta (流式增量事件, 统一 seq)
 - Type: 消息级 6 个 stream_begin / text_token / thinking_token / insert_message / update_message / stream_end;
@@ -2443,7 +2469,7 @@ EventBus (事件总线)
   - 一条行只有一个正文槽, 所以"思考 + 正文"仍是两条行 (思考行在前、正文行在后); 与
     "一个 assistant 消息 = reasoning_content + content"的 LLM 上下文一一对应
   - 先正文后思考的罕见顺序按到达顺序落行 (思考行会排在正文行之后), 文字与历史一致, 只是块顺序不同
-- **直播槽**: `Session::streamingView` 单独存正在输出的那一段 (不进 viewMessages, 不计链式哈希,
+- **直播槽**: `Session::streamingView` 单独存正在输出的那一段 (不进 viewMessages,
   不占持久化序号、不落盘、不参与分页); 定稿时用预留 id 走正常 `appendViewMessage`, 所以重连补拉/
   分页语义零改动; `WireSyncPayload.streaming` 把直播槽一并下发, 中途接入的客户端不会丢半截内容
   - 交错返回时直播槽可能是正文行, 而思考的后一段直接追加到已定稿的思考行 (客户端按 id 追加)
@@ -2452,11 +2478,20 @@ EventBus (事件总线)
 - **取消/出错**: 已产出的半截内容照常定稿成行并落盘 (用户看到过就进历史), 代价是展示历史比 LLM 上下文
   多一条未说完的 assistant 消息
 - **不可见的行** (只有空白/零宽占位符) 在 agent 定稿处与客户端副本两处都过滤
-- 旧版本兼容: 不做 —— wire 协议 `kVersion`/`kMinVersion` 同抬到 4, FFI API 抬到 3
-  (`AGENTXX_FFI_CAP_VIEW_REPLICA` 能力位告知嵌入方程序可用副本语义)
+- **内存只常驻尾部窗口**: 会话库里的展示历史是完整的 append-only 表, 会话对象只留最近
+  `session.view_window_messages` 条 (默认 400, 0 = 全部常驻) 供写入/回填/增量补拉使用;
+  这个窗口与"同步给客户端的尾窗"是两个独立的量 (后者由 Hello 的 `historyTail` 决定)
+  - 绝对下标 = `seq - 1`, 与库主键一一对应; 窗口记 `viewWindowBase()` 与总条数
+    `viewMessageCount()`, "窗口内第 i 条"的绝对下标恒为 `base + i`
+  - 超过上限时成批删掉头部 (每次至少 cap/4), **只释放内存, 库里一行不删**;
+    淘汰后回填 (`updateViewMessage`) 命中不到行时只写库
+  - 没有会话库时不淘汰 (内存是唯一副本, 淘汰等于永久丢历史)
+- 旧版本兼容: 不做 —— wire 协议 `kVersion`/`kMinVersion` 同抬到 5 (Hello 的 `historyTail`
+  取代链式哈希做尾窗声明), FFI API 抬到 3 (`AGENTXX_FFI_CAP_VIEW_REPLICA` 能力位告知
+  嵌入方程序可用副本语义)
 
 ### SyncPayload / MessageQueueItem
-- SyncPayload {fromIndex (窗口首条绝对下标), messages[], streaming (直播槽, 可选), tailHash, totalMessages, deltaSeq, messageQueue[], lastViewSeq, incremental}
+- SyncPayload {fromIndex (窗口首条绝对下标), messages[], streaming (直播槽, 可选), totalMessages, deltaSeq, messageQueue[], lastViewSeq, incremental}
   - 完整同步: fromIndex=0, totalMessages==messages.size()
   - 尾窗同步: fromIndex=窗口起始下标 (>0 表示上方还有更早消息), totalMessages=会话总消息数, 客户端按 WireGetViewMessages 分页拉取
   - deltaSeq: 快照序号 (= Session::deltaSeq, 即快照已包含 seq <= deltaSeq 的全部增量);
@@ -2464,7 +2499,9 @@ EventBus (事件总线)
     客户端若保留旧序号 (如 100) 会把之后 seq=1,2,... 的增量全部判为重复丢弃
     (表现为重连成功但界面永不刷新); 0 表示未提供 (客户端按 0 处理, 放行后续增量)
 - MessageQueueItem {id, text, model (待应用模型, 空=默认), createdAtMs}
-- ChainHash: FNV-1a 链式哈希, append(string) 累积, tailHex 供 Hello/Sync 校验
+- Hello 的 `historyTail`: 客户端声明"恢复会话时要多少条尾窗" (0 = 完整同步, -1 = 未声明,
+  由服务端 `initialSyncTailCount` 决定)。协议 v5 之前这里放的是链式哈希, 已删除 ——
+  一致性由"绝对下标 = `seq - 1`"天然保证
 
 ### Wire 协议分页语义
 - ListSessions: keyset 游标 {beforeMs, beforeId, limit} 按 lastActiveMs 降序分页; 服务端回 WireSessionList {sessions[], totalCount, hasMore}
@@ -2527,7 +2564,7 @@ worktree 绑定是运行期经 `agentxx_git_worktree` 工具切换的临时状�
 - 提示词文本统一放在 `agent/lib/src/agent/prompt.cpp` (构造函数里初始化):
   `prompt.h` 只声明成员与取值方式, 改提示词文本不会牵连所有包含该头文件的编译单元
   - **归属**: `systemPrompt` 只放人设 (身份 / 代码任务的工作方式 `Working on Code` / `Response Style`);
-    宿主契约与通用准则直接放在附加段表里 —— `core-runtime` (`Agent Runtime` + `Context Markers`)、
+    主程序契约与通用准则直接放在附加段表里 —— `core-runtime` (`Agent Runtime` + `Context Markers`)、
     `core-workdir` (会话工作目录 / 临时目录)、`core-behavior` (通用作业准则);
     它们不单独设 order, 与插件段一起按键名排序
   - 自定义人设 (FFI 的 `system` 键 / 插件 `prompt.systemPrompt` / `makeSubAgentConfig`)

@@ -63,7 +63,7 @@ public:
 
     /// 系统提示词主体 —— **只放人设** (文本见 prompt.cpp)
     /// - 出厂内容 = 身份两行 + `## Working on Code` (代码任务的工作方式) + `## Response Style`
-    /// - 宿主契约 (上下文状态标记说明 / 会话路径) 与通用作业准则不在这里: 它们是
+    /// - 主程序契约 (上下文状态标记说明 / 会话路径) 与通用作业准则不在这里: 它们是
     ///   [appendSystemPrompts] 的内置段, 自定义人设时不必再补一遍
     /// - 其中可写会话级占位符 (`${work_dir}` / `${temp_dir}` / `${session_id}`),
     ///   拼装系统消息时按会话替换 (见 [renderVars] 与 AgentContext::buildSystemPrompt)
@@ -73,7 +73,7 @@ public:
     /// 附加系统提示词表 (通用扩展点)
     /// - 键为插件或功能标识 (如 "planning"、"skill"、"codegraph")，值为主 prompt 之外的补充段
     /// - 出厂内置段 (键名 `core-` 前缀, 见 [isBuiltinSectionKey]):
-    ///   `core-runtime` / `core-workdir` / `core-behavior` —— 宿主契约与通用准则,
+    ///   `core-runtime` / `core-workdir` / `core-behavior` —— 主程序契约与通用准则,
     ///   自定义 `systemPrompt` 时照样拼接 (未设 order: 与插件段一起按键名排序)
     /// - 插件通过 prompt iface 的 `appendSystemPrompts` 对象以键值形式注入/更新，卸载时按备份恢复
     /// - 最终 system 消息由 `systemPrompt` + 按键字典序拼接的附加段 + `appendSystemMessage`
@@ -90,7 +90,7 @@ public:
     /// 内置附加段的键
     /// - 键名以 `core-` 开头是内置段的保留前缀 (见 [isBuiltinSectionKey])
     /// - 出厂时就写在 [appendSystemPrompts] 里, 不单独设 order/source
-    /// - `core-runtime`: 宿主运行时与上下文状态标记说明 (`Agent Runtime` + `Context Markers`)
+    /// - `core-runtime`: 主程序运行时与上下文状态标记说明 (`Agent Runtime` + `Context Markers`)
     /// - `core-workdir`: 会话工作目录与临时目录约定 (含路径占位符)
     /// - `core-behavior`: 通用作业准则 (与具体代码任务无关的条目)
     inline static constexpr std::string_view kSectionCoreRuntime  = "core-runtime";

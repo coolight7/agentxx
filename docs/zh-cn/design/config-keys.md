@@ -18,7 +18,7 @@
 
 > 相关文档: [index.md](index.md) · [配置与设置边界](configuration.md)
 
-键数: 68
+键数: 69
 
 | 键路径 | 归属 | 类型 | 默认值 |
 |---|---|---|---|
@@ -39,6 +39,7 @@
 | `async_work.session_store_keep_days` | 服务端 | int (0 = 不自动清理) | 0 |
 | `async_work.linger_ms` | 服务端 | int (毫秒) | 300000 |
 | `async_work.result_max_bytes` | 服务端 | int (字节) | 8192 |
+| `session.view_window_messages` | 服务端 | int (0 = 不淘汰) | 400 |
 | `dev_mode` | 服务端 | bool | false |
 | `permission.mode` | 服务端 | enum (ask | all_ask | pass | deny) | ask |
 | `permission.whitelist.list` | 服务端 | list<string> | 空 |
@@ -209,6 +210,13 @@ async_work:
 ```yaml
 async_work:
   result_max_bytes: 1024
+```
+
+### `session.view_window_messages`
+
+```yaml
+session:
+  view_window_messages: 200
 ```
 
 ### `dev_mode`

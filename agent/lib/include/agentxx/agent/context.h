@@ -431,7 +431,7 @@ public:
     /// 绑定持久化回调 (由 SessionsManager 创建 Session 时注入; 测试可不绑定)
     void setStoreHooks(SessionStoreHooks hooks);
 
-    /// 从持久化状态恢复: 载入尾部窗口 + 总数 + msgIdCounter
+    /// 从持久化状态恢复: 加载尾部窗口 + 总数 + msgIdCounter
     /// - 不触发持久化回调 (恢复本身不产生新的写入)
     /// - [lastViewSeq] 为历史总条数 (库内最大展示消息序号), 供重连增量补拉
     ///   继续编号; 0 = 老数据未记录 (按窗口条数起算)
