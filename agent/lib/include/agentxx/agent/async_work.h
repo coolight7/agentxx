@@ -31,6 +31,7 @@ namespace agent {
 class AgentConfig;
 class AgentContext;
 class AgentHost;
+class AsyncWake;
 
 /// 异步任务种类
 /// - `Agent`: 启动一个 agent 跑任务 (子代理形态)
@@ -129,7 +130,19 @@ struct AsyncWorkSpec {
     ///   单次提交可直接指定, 覆盖配置 (插件/内部调用用法)
     std::optional<AsyncInterruptPolicy> interruptPolicy;
     std::chrono::milliseconds           interruptTimeout{0};
-    std::chrono::milliseconds           timeLimit{0};
+
+    /// 排队超时 (毫秒; <= 0 = 不限制)
+    /// - 计时起点是**延时结束那一刻** (没延时就是提交时刻): 延时本来就规定
+    ///   "什么时候才允许跑", 不该再拿排队超时把它自己耗掉
+    /// - 到点还没拿到名额: 任务出队并按 `failed` 收尾 (`error` 写明 queue timeout),
+    ///   结果事件照发 (等它的人不会挂到自己的超时)
+    std::chrono::milliseconds queueTimeout{0};
+
+    /// 运行超时 (毫秒; <= 0 = 不限制)
+    /// - 计时起点是**起跑那一刻**: 排队与延时都不算
+    /// - `kind=tool`: 到点立即按 `failed` 收尾 (执行体继续跑, 结果丢弃)
+    /// - `kind=agent`: 到点置取消令牌 (引擎在下一个检查点停), 同样按 `failed` 收尾
+    std::chrono::milliseconds runTimeout{0};
 
     /// 起跑延时 (毫秒; <= 0 = 不延时)
     /// - 到点之前任务**一直算排队中** (`queued`), 只是不会被 `pump` 拉起;
@@ -229,6 +242,9 @@ struct AsyncWorkEntry {
     int64_t        finishedAtMs = 0;
     /// 提交时的起跑延时原值 (毫秒; 0 = 不延时; 台账展示用)
     int64_t        delayMs = 0;
+    /// 排队超时与运行超时 (毫秒; 0 = 不限制; 台账展示用)
+    int64_t        queueTimeoutMs = 0;
+    int64_t        runTimeoutMs   = 0;
     std::string    resultText; ///< 截断后的结果正文
     std::string    error;
     bool           hasError  = false;
@@ -249,6 +265,10 @@ struct AsyncWorkEntry {
     int64_t                                       lingerDeadlineSteadyMs = 0;
     /// 起跑到期时刻 (steady 毫秒; 0 = 不延时; 到期后 `pump` 才会拉起它)
     int64_t                                       delayUntilSteadyMs = 0;
+    /// 排队超时到期时刻 (steady 毫秒; 0 = 不限制; 到点仍未起跑按失败收尾)
+    int64_t                                       queueDeadlineSteadyMs = 0;
+    /// 运行期唤醒器 (起跑时创建; 完成/取消/到期都经它叫醒等待方)
+    std::shared_ptr<AsyncWake>                    wake;
 };
 
 /// 异步任务管理器 (进程一份, 挂在 [AgentHost] 上)
@@ -272,13 +292,19 @@ public:
     ///   **不会因额度/排队条数被拒**
     AsyncWorkSubmitResult submit(AsyncWorkSpec spec, std::shared_ptr<AgentContext> creator);
 
-    /// 取消单条 (运行中 → 置取消令牌; 排队中 → 直接出队)
+    /// 取消单条 (运行中 → 置取消令牌并叫醒等待方; 排队中 → 直接出队并按终态收尾)
+    /// - 两种情形都发结果事件 (`agentxx.agent.async.done`), 等它的人不会挂到自己的超时
     bool cancel(std::string_view asyncId);
 
     /// 抹掉一条排队中任务的剩余延时, 让它在本次 pump 里就能起跑
     /// - 只对 `Queued` 条目有效 (运行中/终态/不存在返回 false)
     /// - 原本就没有延时也返回 true (调用方语义是"让它立刻排队起跑")
     bool startNow(std::string_view asyncId);
+
+    /// 调整一条排队中任务的起跑延时 (毫秒; 0 = 移除延时, 立即排队起跑)
+    /// - 只对 `Queued` 条目有效; 排队超时的计时起点跟着延时重算
+    /// - `return`: `true` = 已应用; `false` = 不存在或不在排队中
+    bool setDelay(std::string_view asyncId, int64_t delayMs);
 
     /// 按创建者批量取消 (`creator` 为空 = 全部)
     size_t cancelByCreator(const std::shared_ptr<AgentContext>& creator);
@@ -318,11 +344,12 @@ private:
     /// 所有队列各推一次 (延时唤醒定时器到点时用)
     void pumpAllQueues();
 
-    /// 排定下一次延时唤醒 (容器 io 线程; 没有待唤醒项时取消定时器)
-    void armDelayTimer();
+    /// 排定下一次超时唤醒 (容器 io 线程; 没有待唤醒项时取消定时器)
+    /// - 取"最早的延时到期"与"最早的排队超时"两者的最小值
+    void armDeadlineTimer();
 
-    /// 延时唤醒定时器到点 (容器 io 线程)
-    void onDelayTimerFired();
+    /// 超时唤醒定时器到点 (容器 io 线程)
+    void onDeadlineTimerFired();
 
     /// 当前有排队条目的队列键快照
     std::vector<std::string> queueKeysSnapshot() const;
@@ -333,6 +360,22 @@ private:
     /// 任务主体: 跑子代理 / 工具, 结果发事件 + 回台账 (容器 io 线程)
     /// - 协程帧持有容器强引用: 容器 (含本管理器) 在任务结束前不会被释放
     asio::awaitable<void> runner(std::shared_ptr<AgentHost> host, std::string entryId);
+
+    /// 任务收尾 (唯一入口): 台账 + 结果事件 + 界面通知 + 提交方回调 + 队列补位
+    /// - `runner` (正常/失败/取消)、排队中被取消、排队超时三条路径都走它
+    /// - 只有它发 `agentxx.agent.async.done`: 否则等它的人 (await / notify) 会挂到超时
+    /// - `releaseClaim`: 释放提交时占用的会话存储根 (排队期终态也要释放)
+    void finishEntry(
+        std::string_view entryId,
+        bool             hasError,
+        bool             canceled,
+        std::string      content,
+        std::string      error,
+        int64_t          startedAtMs,
+        int64_t          finishedAtMs,
+        std::string      agentId,
+        bool             releaseClaim
+    );
 
     std::weak_ptr<AgentHost> host_;
     mutable std::mutex       mutex_;
@@ -346,11 +389,11 @@ private:
 
     /// ---- 以下两项只在容器 io 线程访问 (pump 的调用点都是 post 过来的) ----
 
-    /// 延时唤醒定时器 (共用一条: 到点后按需重排)
+    /// 超时唤醒定时器 (共用一条: 到点后按需重排)
     /// - 句柄只持容器弱引用, 不让 host → manager → timer → handler → host 成环
-    std::unique_ptr<asio::steady_timer> delayTimer_;
+    std::unique_ptr<asio::steady_timer> deadlineTimer_;
     /// 已排定的唤醒时刻 (steady 毫秒; 0 = 未排)
-    int64_t                             delayTimerDeadlineMs_ = 0;
+    int64_t                             deadlineTimerAtMs_ = 0;
 };
 
 } // namespace agent

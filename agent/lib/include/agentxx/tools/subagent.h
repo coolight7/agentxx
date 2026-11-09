@@ -111,11 +111,13 @@ inline std::string renderSubagentStartedText(const events::RespSubagentBatchItem
         "[Async work started] id={} subagent={} event={}\n"
         "The result is published as the value of event `{}` (field `asyncId` = {}) and is "
         "delivered to this conversation when it finishes; `agentxx_async_query` reads the "
-        "ledger, `agentxx_async_await` ``{}`` blocks for it now, `agentxx_async_cancel` drops it.",
+        "ledger, `agentxx_async_await` {{id:\"{}\"}} blocks for it now, "
+        "`agentxx_async_manager` {{opt:\"cancel\", id:\"{}\"}} cancels it.",
         id,
         name,
         item.eventName,
         item.eventName,
+        id,
         id,
         id
     );

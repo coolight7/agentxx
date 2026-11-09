@@ -261,6 +261,11 @@ public:
     /// - 原本就没延时也返回 true (语义是"让它现在就能跑")
     bool startAsyncWorkNow(std::string_view asyncId);
 
+    /// 调整一条排队中任务的起跑延时 (`delayMs` = 0 即移除延时)
+    /// - 只对排队中 (`queued`) 的条目有效; 返回 false 表示不存在或不在排队中
+    /// - 排队超时的计时起点跟着延时重算
+    bool setAsyncWorkDelay(std::string_view asyncId, int64_t delayMs);
+
     /// 按创建者批量取消 (`creator` 为空 = 全部)
     size_t cancelAsyncWorks(const std::shared_ptr<AgentContext>& creator = nullptr);
 

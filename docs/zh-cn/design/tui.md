@@ -462,7 +462,7 @@ Context
   通知创建者会话的驱动端点 (`SessionInputSink::onAsyncWorksChanged`), 端点合并后重推一次
   统计; 只要还有排队/运行中的条目就按秒续推 (已跑时长跟着走), 全部终态后推一次即停;
   无存活客户端时不推也不轮询;
-- **只展示, 不提供取消入口**: 取消走模型工具 `agentxx_async_cancel {id}`
+- **只展示, 不提供取消入口**: 取消走模型工具 `agentxx_async_manager {opt:"cancel", id}`
   (或 chatbot 自己的面板), 界面不做动作按钮, 避免两个入口两套状态;
 - 每次推送都是当前快照, 客户端**直接覆盖**本地列表; 任务结束后服务端按
   `async_work.linger_ms` (默认 5 分钟) 继续带出完成态, 到期后在下一次推送里消失;

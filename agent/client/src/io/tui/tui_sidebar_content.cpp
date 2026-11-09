@@ -300,7 +300,7 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
     //   服务端在任务状态变化后主动重推 (运行期间每秒一次, 已跑时长跟着走)
     // - 状态已由分组表达, 条目前不再带状态标记; 只有「完成」段的条目带一个单字符
     //   标记 (见 [asyncWorkMark])
-    // - 只展示状态与已跑时长, 不提供取消入口 (取消走模型工具 `agentxx_async_cancel`)
+    // - 只展示状态与已跑时长, 不提供取消入口 (取消走模型工具 `agentxx_async_manager`)
     // - 空数组时显示"( 无 )": 老服务端不带该字段, 或本会话确实没有任务
     {
         Elements workEls;

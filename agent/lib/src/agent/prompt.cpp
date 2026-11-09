@@ -298,7 +298,7 @@ The sub-agent cannot see the parent conversation history; its final text output 
 
 ## Notes
 - This call waits for the sub-agent to finish: the parent turn pauses until the text result comes back.
-- To run it in the background instead, call `agentxx_async_start` with `tool:"agentxx_subagent"` and the same arguments; the result then arrives later as an input starting with `[Event] agentxx.agent.async.done` (use `agentxx_async_query` / `agentxx_async_await` / `agentxx_async_cancel` to inspect, wait for, or drop it).
+- To run it in the background instead, call `agentxx_async_run` with `tool:"agentxx_subagent"` and the same arguments; the result then arrives later as an input starting with `[Event] agentxx.agent.async.done` (use `agentxx_async_query` / `agentxx_async_await` / `agentxx_async_manager` to inspect, wait for, or drop it).
 - Provide a clear, self-contained task description in `message`; the sub-agent has no access to the parent's conversation context.
 - `subagent` must be one of the registered sub-agent names (see the enum values in the parameter description).
 - `system_prompt` is optional; when `subagent` is not set, it is used as the sub-agent's system prompt.)_",
@@ -339,7 +339,7 @@ Absent (default): the sub-agent's default full tool set.)_"},
 - The creator decides at creation time whether everyone may publish too (`public_publish`).
 - You may target any valid event name: if the event exists and does not allow you, the call fails and tells you why.
 - Creating an event is limited to `agentxx.agent.event.<name>` for you (the `turn.` / `tool.` / `subagent.` / `timer.` / `host.` segments belong to built-in sources and cannot be created).
-- Background task results do not need this tool: `agentxx_async_start` delivers them by itself; use `agentxx_async_query` / `agentxx_async_await` / `agentxx_async_cancel` for tasks.)_",
+- Background task results do not need this tool: `agentxx_async_run` delivers them by itself; use `agentxx_async_query` / `agentxx_async_await` / `agentxx_async_manager` for tasks.)_",
               .args =
                   {
                       {"event",
@@ -355,7 +355,7 @@ Absent (default): the sub-agent's default full tool set.)_"},
           },
       },
       {
-          "agentxx_async_start",
+          "agentxx_async_run",
           ToolPrompt{
               .depict =
                   R"_(Start ONE tool call or ONE sub-agent task in the background.
@@ -363,7 +363,7 @@ Absent (default): the sub-agent's default full tool set.)_"},
 ## When to use
 - The call takes long (a slow command, a big search, a long fetch, a whole sub-agent task) and you want to keep working instead of blocking the turn.
 - `tool` is any tool you can call directly — built-in (`agentxx_share_store`, `agentxx_async_emit`, ...), plugin-provided (`agentxx_filesystem_grep`, `agentxx_execute_bash_command`, ...) or `agentxx_subagent` (then `args` is exactly what you would pass to it: `{"subagent":"task","message":"..."}`).
-- The only tool you cannot start in the background is `agentxx_async_start` itself.
+- The only tool you cannot start in the background is `agentxx_async_run` itself.
 - `args` is handed to that tool unchanged.
 
 ## What happens to the result
@@ -374,7 +374,12 @@ Absent (default): the sub-agent's default full tool set.)_"},
 ## Delayed start
 - `delayMs` > 0 keeps the task `queued` until that many milliseconds have passed; it does not start earlier and it does not block other queued tasks.
 - Use it for "do this in 10 minutes" style work, retries after a pause, or polling loops with a gap.
-- While it waits, `agentxx_async_await {id, start_now:true}` drops the remaining delay and starts it immediately; `agentxx_async_cancel` still cancels it right away.
+- While it waits, `agentxx_async_manager {opt:"delay", id, delayMs:0}` (or `agentxx_async_await {id, start_now:true}`) drops the remaining delay; `agentxx_async_manager {opt:"cancel", id}` drops the task.
+
+## Limits
+- `queueTimeoutMs` > 0: how long the task may wait for a queue slot once its delay is over (the delay itself does not count). Default `0` = no limit. A task that misses it ends as `failed` with a `queue timeout` reason.
+- `runTimeoutMs` > 0: how long the task may run once it starts (queue and delay do not count). Default `0` = no limit. A task that exceeds it ends as `failed` with a `run timeout` reason; a running tool keeps going in the background and its result is discarded.
+- These two are task-side limits; `agentxx_async_await`'s `timeoutMs` only limits how long *you* wait.
 
 ## Notes
 - Do not wrap a call that finishes in a second or two — call the tool directly instead.
@@ -383,7 +388,7 @@ Absent (default): the sub-agent's default full tool set.)_"},
               .args =
                   {
                       {"tool",
-                       "Tool to run in the background: any tool you can call directly (built-in or plugin), or `agentxx_subagent`. `agentxx_async_start` itself is rejected."},
+                       "Tool to run in the background: any tool you can call directly (built-in or plugin), or `agentxx_subagent`. `agentxx_async_run` itself is rejected."},
                       {"args",
                        "Argument object for that tool, passed through unchanged (same schema as calling it directly)."},
                       {"notify",
@@ -391,7 +396,11 @@ Absent (default): the sub-agent's default full tool set.)_"},
                       {"label",
                        "Optional short display name for the task (default: the tool name or the sub-agent name)."},
                       {"delayMs",
-                       R"_(Optional. Wait this many milliseconds before the task may start (default `0` = as soon as the queue allows). The whole delay counts as `queued`, never as `running`; other queued tasks are not blocked by it. Keep it to what you really need — a long delay just means a late answer.)_"},
+                       R"_(Optional. Wait this many milliseconds before the task may start (default `0` = as soon as the queue allows). The whole delay counts as `queued`, never as `running`; other queued tasks are not blocked by it. Adjust or drop it later with `agentxx_async_manager`.)_"},
+                      {"queueTimeoutMs",
+                       R"_(Optional. Milliseconds the task may stay queued for a slot after its delay is over (default `0` = no limit). On timeout it ends as `failed` with a `queue timeout` reason.)_"},
+                      {"runTimeoutMs",
+                       R"_(Optional. Milliseconds the task may run after it starts (default `0` = no limit; queue and delay do not count). On timeout it ends as `failed` with a `run timeout` reason.)_"},
                   },
           },
       },
@@ -407,7 +416,7 @@ Absent (default): the sub-agent's default full tool set.)_"},
 
 ## Notes
 - `group` values: `all` (default, every task of this session), `queued`, `running`, `done`, `failed`, `canceled`.
-- A task started with `delayMs` counts as `queued` until the delay is over (the output shows how much is left).
+- A task still waiting for its `delayMs` shows up as `queued` with a `*` bullet and the time left.
 - Tasks started with `notify:true` also deliver their result as an input by themselves; querying again is harmless.
 - Finished tasks stay in the ledger for a while (`async_work.linger_ms`, default 5 minutes), then disappear.)_",
               .args =
@@ -425,34 +434,41 @@ Absent (default): the sub-agent's default full tool set.)_"},
               .depict =
                   R"_(Block this turn until one background task finishes.
 
-- `id` is required; `timeout_ms` defaults to `30000` and is capped at `300000`.
+- `id` is required; `timeoutMs` is how long *you* wait for the result — delay + queue time + run time all count inside it. Default `30000`, capped at `300000`.
 - A task that already finished returns its result immediately (no waiting, no event needed).
 - Use it only when your next step really needs that result now; otherwise let `notify` deliver it, or keep working and query later.
 - On timeout you get a note instead of an error: query again or keep working. Cancelling the session interrupts the wait.)_",
               .args =
                   {
                       {"id", "Task id to wait for (`async-7`)."},
-                      {"timeout_ms",
-                       "How long to block, in milliseconds (default `30000`, capped at `300000`)."},
+                      {"timeoutMs",
+                       "How long to wait for the result, in milliseconds (default `30000`, capped at `300000`). Covers the task's delay, queue wait and run time."},
                       {"start_now",
-                       R"_(Optional boolean (default `false`). When the task was started with `delayMs` and is still waiting for that delay, `true` drops the remaining delay and lets it start immediately. Without it, a task whose remaining delay is longer than `timeout_ms` is reported back at once instead of being waited for.)_"},
+                       R"_(Optional boolean (default `false`). When the task was started with `delayMs` and is still waiting for that delay, `true` drops the remaining delay and lets it start immediately. Without it, a task whose remaining delay is longer than `timeoutMs` is reported back at once instead of being waited for.)_"},
                   },
           },
       },
       {
-          "agentxx_async_cancel",
+          "agentxx_async_manager",
           ToolPrompt{
               .depict =
-                  R"_(Cancel background tasks of this session.
+                  R"_(Change the background tasks of this session: cancel them, or adjust their start delay.
 
-- `id`: cancel one task (must have been started by this session; an already finished task reports an error).
-- `group`: cancel a batch — `all` (default: every unfinished task of this session), `queued` or `running`.
-- Cancelling is best effort: a running tool stops at its next cancellation check; results produced afterwards are discarded. The task still ends in the `canceled` state and stays in the ledger.)_",
+## `opt`
+- `cancel`: drop the task. A queued task is removed from the queue immediately (it never runs); a running task gets a cancellation request and stops at its next cancellation point (best effort). Either way it ends in the `canceled` state and stays in the ledger.
+- `delay`: change the start delay of a queued task. `delayMs` is required: `> 0` waits that many milliseconds before it may start, `0` removes the delay so it can start right away. Tasks that are already running or finished cannot be changed.
+
+## `id`
+- One task id or an array of ids; ids of this session only. Every id gets its own result line, so a partial failure does not abort the rest.
+- To check state first, use `agentxx_async_query`.)_",
               .args =
                   {
-                      {"id", "Task id to cancel (`async-7`)."},
-                      {"group",
-                       "Which tasks to cancel: `all` (default) / `queued` / `running`. Finished tasks cannot be canceled."},
+                      {"opt",
+                       "What to do: `cancel` (drop the tasks) or `delay` (change their start delay)."},
+                      {"id",
+                       "Task id or array of task ids (`[\"async-7\", \"async-9\"]`). Only tasks started by this session."},
+                      {"delayMs",
+                       R"_(Required for `opt:"delay"`. New start delay in milliseconds; `0` removes the delay so the task can start immediately.)_"},
                   },
           },
       },

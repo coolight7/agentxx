@@ -282,3 +282,16 @@
   插件面用 `publish_mask`），隐式创建仍限自建段；插件面 `AgentxxPluginEventSpec`
   尾部加 `publish_mask` + `ERR_DENIED`；工具结果改为“投递给谁/累计多少/还剩几个等待”的短句。
   详见 `resource/history/async-emit-tool/`。
+- 2026-11-09 (延时排队与任意工具): `agentxx_async_run` 新增 `delayMs` 起跑延时（延时期间仍是
+  `queued`、不占名额也不挡后面的任务，靠一条共享 `steady_timer` 到点重推）；
+  `agentxx_async_await` 新增 `start_now`；异步启动**只拦它自己**，其余工具（含内置与
+  其他后台任务工具）都能放后台，内置工具经 `AgentContext::builtinToolIndex` 在创建者身上查。
+  详见 `resource/history/async-delay-and-any-tool/`。
+- 2026-11-10 (改名 / 管理入口 / 三个时限 / 通知式等待): `agentxx_async_start` →
+  **`agentxx_async_run`**，`agentxx_async_cancel` → **`agentxx_async_manager`**
+  （`opt` = `cancel` / `delay`, `id` 支持数组, 删掉 `group`）；`await` 参数改 `timeoutMs`；
+  新增 `queueTimeoutMs`（受理→起跑，含延时）与 `runTimeoutMs`（起跑→结束，仅
+  `kind=agent`），`AsyncWorkSpec::timeLimit` 改名 `runTimeout` 并真正生效；
+  查询列表用 `*` 标记延时中的排队项；`kind=tool` 执行方的 50 ms 定时器轮询换成
+  `AsyncWake`（通知式，零延迟、无空转）；排队中被取消/超时也走统一收尾（发终态事件、
+  释放会话存储占用、队列补位）。详见 `resource/history/async-run-manager-and-timeouts/`。

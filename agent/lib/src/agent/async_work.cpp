@@ -27,6 +27,69 @@
 namespace agentxx {
 namespace agent {
 
+// ===========================================================================
+// AsyncWake
+// ===========================================================================
+
+/// 一次后台执行的唤醒器: 完成 / 取消 / 到期都叫醒等待方一次
+///
+/// 为什么不用轮询: 后台工具任务要等**两个信号** —— 执行体跑完 (只有一个原子标志)
+/// 与取消置位 (取消令牌里的原子标志)。等待普通条件没有现成的异步原语, 旧实现在
+/// 一个 50 ms 定时器循环里查标志: 每个运行中的工具任务每秒 20 次空转唤醒, 取消
+/// 还要等下一次醒来。这里改成通知式: 谁改变状态谁 `signal()`, 等待方只醒一次。
+///
+/// 线程约定:
+/// - `signal()` 任意线程可调: 只加锁记一次信号, 再投递到容器 io 线程取消等待
+/// - `wait()` **只能在容器 io 线程调**: 醒一次就返回, 由调用方复核 done / token / 到期
+/// - 信号不会丢也不会累积: 每轮等待最多消费一次已发生的信号 (旧信号不会把后续
+///   等待连续打醒成忙循环)
+class AsyncWake {
+public:
+
+    explicit AsyncWake(asio::io_context::executor_type executor) :
+        timer_(std::make_shared<asio::steady_timer>(std::move(executor))) {}
+
+    /// 叫醒等待方一次 (完成 / 取消 / 到期)
+    void signal() {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            ++signaled_;
+        }
+        // 投递体捕获定时器本身: 管理器/任务已经释放时也能安全取消
+        asio::post(timer_->get_executor(), [timer = timer_]() { timer->cancel(); });
+    }
+
+    /// 等一次唤醒
+    /// - `timeout` <= 0: 不设到期, 只等 `signal()`
+    /// - 到期 (`timeout` > 0) 时也返回, 由调用方按自己的截止时刻判断
+    asio::awaitable<void> wait(std::chrono::milliseconds timeout) {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            if (consumed_ != signaled_) {
+                consumed_ = signaled_;
+                co_return; // 信号已经发生: 不必再等
+            }
+        }
+        if (timeout.count() > 0) {
+            timer_->expires_after(timeout);
+        } else {
+            timer_->expires_at(std::chrono::steady_clock::time_point::max());
+        }
+        utilxx_base::AsioErrorCode ec;
+        co_await timer_->async_wait(asio::redirect_error(asio::use_awaitable, ec));
+        std::lock_guard<std::mutex> lock(mutex_);
+        consumed_ = signaled_;
+    }
+
+private:
+
+    std::shared_ptr<asio::steady_timer> timer_;
+    std::mutex                          mutex_;
+    /// 已发生的信号数与已消费的信号数 (差值 = 还没被看到的信号)
+    uint64_t                            signaled_ = 0;
+    uint64_t                            consumed_ = 0;
+};
+
 void installAsyncInterruptResponders(
     const std::shared_ptr<agentxx::events::EventBus>& bus,
     AsyncInterruptPolicy                              policy
@@ -131,7 +194,6 @@ constexpr std::string_view kAsyncDoneEvent = "agentxx.agent.async.done";
 
 /// 结果事件与台账的归属标记 (`plugin.` 之外的自有标记, 只用于日志/诊断)
 constexpr std::string_view kAsyncOwner = "async_work";
-
 int64_t systemNowMs() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
                std::chrono::system_clock::now().time_since_epoch()
@@ -305,13 +367,14 @@ bool resolveCreatorTool(
 
 /// 跑一个工具任务 (`kind == Tool`): 在创建者的工具表里执行同名工具
 ///
-/// 取消是"尽力而为": 每 50ms 查一次取消令牌, 置位后立即按取消收尾 (工具本身如果
-/// 不认识取消, 它会在后台继续跑到自己的超时, 结果被丢弃); 协程状态用 shared_ptr
-/// 持有, 不会因为本函数提前退出而悬挂。
+/// 取消是"尽力而为": 等待靠 [AsyncWake] 通知 (完成 / 取消 / 运行超时三者任一都会叫醒),
+/// 置位后立即按取消收尾 (工具本身如果不认识取消, 它会在后台继续跑到自己的超时, 结果被
+/// 丢弃); 协程状态用 shared_ptr 持有, 不会因为本函数提前退出而悬挂。
 asio::awaitable<events::RespSubagentBatchItem> runToolWork(
     const std::shared_ptr<AgentContext>&          creator,
     const AsyncWorkSpec&                          spec,
-    const std::shared_ptr<neograph::graph::CancelToken>& token
+    const std::shared_ptr<neograph::graph::CancelToken>& token,
+    const std::shared_ptr<AsyncWake>&              wake
 ) {
     auto fail = [&spec](std::string message, bool canceled = false) {
         return events::RespSubagentBatchItem{
@@ -336,8 +399,7 @@ asio::awaitable<events::RespSubagentBatchItem> runToolWork(
         agentxx::util::ToolResult result;
     };
     auto state = std::make_shared<RunState>();
-    auto args  = spec.toolArgs; // 拷一份进协程帧: 提交方的对象可能早就不在了
-    // 参数类型自动修正: 与前台 ToolcallWrapNode 执行前同一份实现 (内置工具与插件工具
+    auto args  = spec.toolArgs; // 拷一份进协程帧: 提交方的对象可能早就不在了    // 参数类型自动修正: 与前台 ToolcallWrapNode 执行前同一份实现 (内置工具与插件工具
     // 一视同仁), 后台跑的工具同样按自己声明的 schema 拿到正确类型
     try {
         const auto parameters
@@ -361,7 +423,7 @@ asio::awaitable<events::RespSubagentBatchItem> runToolWork(
     // 后台协程访问 state/target/args 才不悬垂 (同 [TaskScope::spawn] 的约定)
     asio::co_spawn(
         ex,
-        [state, target = std::move(target), args = std::move(args)]() -> asio::awaitable<void> {
+        [state, wake, target = std::move(target), args = std::move(args)]() -> asio::awaitable<void> {
             state->result = co_await agentxx::util::catchErrorAsync<agentxx::util::ToolResult>(
                 [&]() -> asio::awaitable<agentxx::util::ToolResult> {
                     if (auto* xxTool = dynamic_cast<agentxx::tools::XXToolBase*>(target.tool)) {
@@ -379,20 +441,40 @@ asio::awaitable<events::RespSubagentBatchItem> runToolWork(
                 }
             );
             state->done.store(true, std::memory_order_release);
+            // 完成时叫醒等待方 (与取消/到期走同一个唤醒器)
+            if (wake) {
+                wake->signal();
+            }
             co_return;
         },
         asio::detached
     );
 
-    // 等完成 / 等取消 (两者都不阻塞 io 线程)
-    asio::steady_timer poll{ex};
+    // 等完成 / 等取消 / 等到期: 不再轮询 —— 三者任一发生都会把等待叫醒
+    // (`spec.runTimeout` 为 0 时不设到期, 只等完成或取消)
+    const int64_t runTimeoutMs = std::max<int64_t>(0, spec.runTimeout.count());
+    const int64_t deadline
+        = runTimeoutMs > 0 ? steadyNowMs() + runTimeoutMs : 0;
     while (!state->done.load(std::memory_order_acquire)) {
         if (token && token->is_cancelled()) {
             co_return fail("async tool canceled", /*canceled=*/true);
         }
-        poll.expires_after(std::chrono::milliseconds{50});
-        utilxx_base::AsioErrorCode ec;
-        co_await poll.async_wait(asio::redirect_error(asio::use_awaitable, ec));
+        int64_t waitMs = 0; // 0 = 不设到期
+        if (deadline != 0) {
+            const auto now = steadyNowMs();
+            if (now >= deadline) {
+                co_return fail(fmt::format(
+                    "run timeout: still running after {} ms (async_work run limit); the tool "
+                    "keeps running in the background and its result is discarded",
+                    runTimeoutMs
+                ));
+            }
+            waitMs = deadline - now;
+        }
+        if (!wake) {
+            co_return fail("async tool: wake handle is missing");
+        }
+        co_await wake->wait(std::chrono::milliseconds{waitMs});
     }
 
     const auto& result = state->result;
@@ -629,9 +711,17 @@ AsyncWorkSubmitResult
         entry.lingerMs         = spec.lingerMs;
         entry.resultMaxBytes   = spec.resultMaxBytes;
         // 起跑延时: 到点之前一直是排队中 (pump 跳过它)
-        const auto delayMs   = std::max<int64_t>(0, spec.delay.count());
-        entry.delayMs        = delayMs;
+        const auto delayMs       = std::max<int64_t>(0, spec.delay.count());
+        entry.delayMs            = delayMs;
         entry.delayUntilSteadyMs = delayMs > 0 ? steadyNowMs() + delayMs : 0;
+        // 排队超时 / 运行超时: 计时起点分别是"延时结束那一刻"与"起跑那一刻"
+        entry.queueTimeoutMs = std::max<int64_t>(0, spec.queueTimeout.count());
+        entry.runTimeoutMs   = std::max<int64_t>(0, spec.runTimeout.count());
+        entry.queueDeadlineSteadyMs
+            = entry.queueTimeoutMs > 0
+                  ? (entry.delayUntilSteadyMs > 0 ? entry.delayUntilSteadyMs : steadyNowMs())
+                        + entry.queueTimeoutMs
+                  : 0;
         entry.token            = std::make_shared<neograph::graph::CancelToken>();
         entry.creatorCtx       = creator;
         entry.metrics          = creator ? creator->metrics : nullptr;
@@ -753,7 +843,10 @@ void AsyncWorkManager::pump(std::string_view queueKey) {
         std::shared_ptr<AgentContext> creator;
         std::string                   sessionId;
     };
-    std::vector<Launch> launches;
+    std::vector<Launch>      launches;
+    /// 排队超时到期的条目 (锁外走 finishEntry: 它会再持锁并重写台账)
+    std::vector<std::string> queueTimeouts;
+    std::vector<int64_t>     queueTimeoutLimits;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         auto                        qit = queues_.find(queueKey);
@@ -774,6 +867,13 @@ void AsyncWorkManager::pump(std::string_view queueKey) {
                 continue;
             }
             auto& entry = eit->second;
+            if (entry.queueDeadlineSteadyMs != 0 && now >= entry.queueDeadlineSteadyMs) {
+                // 排队超时: 移出队列, 锁外按失败收尾 (含结果事件)
+                queueTimeouts.push_back(queuedId);
+                queueTimeoutLimits.push_back(entry.queueTimeoutMs);
+                queue.erase(queue.begin() + static_cast<std::ptrdiff_t>(index));
+                continue;
+            }
             if (entry.delayUntilSteadyMs > now) {
                 // 延时未到: 留在队列里等唤醒, 名额让给后面能跑的
                 ++index;
@@ -811,6 +911,26 @@ void AsyncWorkManager::pump(std::string_view queueKey) {
             queues_.erase(qit2);
         }
     }
+    for (size_t i = 0; i < queueTimeouts.size(); ++i) {
+        const auto& id    = queueTimeouts[i];
+        const auto  limit = queueTimeoutLimits[i];
+        XX_LOGW("[async_work] {} queue timeout (limit={}ms)", id, limit);
+        finishEntry(
+            id,
+            /*hasError=*/true,
+            /*canceled=*/false,
+            std::string{},
+            fmt::format(
+                "queue timeout: still waiting for a queue slot after {} ms (async_work queue "
+                "limit)",
+                limit
+            ),
+            /*startedAtMs=*/0,
+            systemNowMs(),
+            std::string{},
+            /*releaseClaim=*/true
+        );
+    }
     for (auto& launch : launches) {
         // 提交方回调 (起跑) 在锁外触发, 避免外部代码重入引发死锁
         fireAsyncWorkEvent(launch.cb, AsyncWorkEventPhase::Started, launch.payload);
@@ -825,8 +945,8 @@ void AsyncWorkManager::pump(std::string_view queueKey) {
             asio::detached
         );
     }
-    // 队列里还留着未到期的条目: 排一次唤醒 (到点后再推一次这条队列)
-    armDelayTimer();
+    // 队列里还留着未到期的条目 (延时 / 排队超时): 排一次唤醒
+    armDeadlineTimer();
 }
 
 void AsyncWorkManager::pumpAllQueues() {
@@ -835,7 +955,7 @@ void AsyncWorkManager::pumpAllQueues() {
     }
 }
 
-void AsyncWorkManager::armDelayTimer() {
+void AsyncWorkManager::armDeadlineTimer() {
     auto host = host_.lock();
     if (!host) {
         return;
@@ -846,37 +966,44 @@ void AsyncWorkManager::armDelayTimer() {
         const auto                  now = steadyNowMs();
         for (const auto& [id, entry] : entries_) {
             (void)id;
-            if (entry.state != AsyncWorkState::Queued || entry.delayUntilSteadyMs == 0) {
+            if (entry.state != AsyncWorkState::Queued) {
                 continue;
             }
-            // 已到期 (等一次 pump 就能起跑): 取"现在"作为唤醒时刻
-            const auto at = entry.delayUntilSteadyMs > now ? entry.delayUntilSteadyMs : now;
-            if (earliest == 0 || at < earliest) {
-                earliest = at;
-            }
+            // 延时到期与排队超时取最早的那个; 已到期的取"现在" (等一次 pump)
+            const auto mark = [&earliest, now](int64_t at) {
+                if (at == 0) {
+                    return;
+                }
+                const auto when = at > now ? at : now;
+                if (earliest == 0 || when < earliest) {
+                    earliest = when;
+                }
+            };
+            mark(entry.delayUntilSteadyMs);
+            mark(entry.queueDeadlineSteadyMs);
         }
     }
     if (earliest == 0) {
-        // 没有待唤醒的延时项: 取消已排定的唤醒
-        if (delayTimer_) {
-            delayTimer_->cancel();
+        // 没有待唤醒的条目: 取消已排定的唤醒
+        if (deadlineTimer_) {
+            deadlineTimer_->cancel();
         }
-        delayTimerDeadlineMs_ = 0;
+        deadlineTimerAtMs_ = 0;
         return;
     }
-    if (delayTimerDeadlineMs_ != 0 && delayTimerDeadlineMs_ <= earliest) {
+    if (deadlineTimerAtMs_ != 0 && deadlineTimerAtMs_ <= earliest) {
         return; // 已排定的唤醒不晚于这个时刻, 不必重排
     }
     const auto now = steadyNowMs();
-    if (!delayTimer_) {
-        delayTimer_ = std::make_unique<asio::steady_timer>(host->ioCtx()->get_executor());
+    if (!deadlineTimer_) {
+        deadlineTimer_ = std::make_unique<asio::steady_timer>(host->ioCtx()->get_executor());
     }
-    delayTimerDeadlineMs_ = earliest;
-    delayTimer_->expires_after(std::chrono::milliseconds{std::max<int64_t>(0, earliest - now)});
+    deadlineTimerAtMs_ = earliest;
+    deadlineTimer_->expires_after(std::chrono::milliseconds{std::max<int64_t>(0, earliest - now)});
     // 只持容器弱引用: 不让 host → manager → timer → handler → host 成环
-    delayTimer_->async_wait([weakHost = std::weak_ptr<AgentHost>{host}](
-                                const utilxx_base::AsioErrorCode& ec
-                            ) {
+    deadlineTimer_->async_wait([weakHost = std::weak_ptr<AgentHost>{host}](
+                                   const utilxx_base::AsioErrorCode& ec
+                               ) {
         if (ec) {
             return; // 被重排或管理器停止取消
         }
@@ -884,12 +1011,12 @@ void AsyncWorkManager::armDelayTimer() {
         if (!host || !host->asyncWork_) {
             return;
         }
-        host->asyncWork_->onDelayTimerFired();
+        host->asyncWork_->onDeadlineTimerFired();
     });
 }
 
-void AsyncWorkManager::onDelayTimerFired() {
-    delayTimerDeadlineMs_ = 0;
+void AsyncWorkManager::onDeadlineTimerFired() {
+    deadlineTimerAtMs_ = 0;
     pumpAllQueues();
 }
 
@@ -920,6 +1047,9 @@ bool AsyncWorkManager::startNow(std::string_view asyncId) {
         queued      = true;
         changed     = entry.delayUntilSteadyMs != 0;
         entry.delayUntilSteadyMs = 0;
+        // 剩余延时被抹掉: 排队超时的计时起点重新从"现在"算
+        entry.queueDeadlineSteadyMs
+            = entry.queueTimeoutMs > 0 ? steadyNowMs() + entry.queueTimeoutMs : 0;
         queueKey                 = entry.queueKey;
         creator                  = entry.creatorCtx.lock();
         sessionId                = entry.creatorSessionId;
@@ -957,31 +1087,46 @@ asio::awaitable<void>
         token   = it->second.token;
         creator = it->second.creatorCtx.lock();
     }
-    // 会话落盘占用在任务收尾时释放 (存储根本身留在磁盘上供事后回看)
-    struct SessionClaimRelease {
-        std::shared_ptr<AgentHost> host;
-        std::string                root;
-        std::string                sessionId;
-        std::string                owner;
-
-        ~SessionClaimRelease() {
-            if (host && !root.empty()) {
-                host->releaseSession(root, sessionId, owner);
-            }
+    // 完成 / 取消 / 到期都经同一个唤醒器叫醒等待方
+    // (工具任务用它取代旧的 50 ms 轮询; 取消请求走 [cancel] → `wake->signal()`)
+    auto wake = std::make_shared<AsyncWake>(host->ioCtx()->get_executor());
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (auto it = entries_.find(entryId); it != entries_.end()) {
+            it->second.wake = wake;
         }
-    } claimRelease;
-    claimRelease.host      = host;
-    claimRelease.root      = spec.sessionStoreRoot;
-    claimRelease.sessionId = entryId;
-    claimRelease.owner     = fmt::format("async_work:{}", entryId);
+    }
     const auto startedAtMs = systemNowMs();
 
     auto task   = taskOfSpec(spec);
     const bool isToolTask = spec.kind == agentxx::agent::AsyncWorkKind::Tool;
-    auto       result    = co_await agentxx::util::catchErrorAsync<events::RespSubagentBatchItem>(
+
+    // 运行超时 (`kind=agent`): 到点置取消令牌 —— 引擎在下一个检查点停下, 收尾按失败报
+    // - 工具任务由 `runToolWork` 自己的等待算到点, 这里不必再挂定时器
+    // - 处理器只持 shared_ptr 拷贝: 计时器先于任务释放也不会悬垂
+    auto             timedOut = std::make_shared<std::atomic<bool>>(false);
+    asio::steady_timer runTimer{co_await asio::this_coro::executor};
+    const auto       runTimeoutMs = std::max<int64_t>(0, spec.runTimeout.count());
+    if (!isToolTask && runTimeoutMs > 0) {
+        runTimer.expires_after(std::chrono::milliseconds{runTimeoutMs});
+        runTimer.async_wait([timedOut, wake, token](const utilxx_base::AsioErrorCode& ec) {
+            if (ec) {
+                return; // 任务先结束, 定时器被撤销
+            }
+            timedOut->store(true);
+            if (token && !token->is_cancelled()) {
+                token->cancel();
+            }
+            if (wake) {
+                wake->signal();
+            }
+        });
+    }
+
+    auto result = co_await agentxx::util::catchErrorAsync<events::RespSubagentBatchItem>(
         [&]() -> asio::awaitable<events::RespSubagentBatchItem> {
             if (isToolTask) {
-                co_return co_await runToolWork(creator, spec, token);
+                co_return co_await runToolWork(creator, spec, token, wake);
             }
             co_return co_await host->spawnOneTask(
                 task,
@@ -1009,37 +1154,143 @@ asio::awaitable<void>
         },
         token
     );
+    // 任务已结束: 撤销运行超时定时器 (处理器持 shared_ptr, 迟到的取消不会悬垂)
+    runTimer.cancel();
     const auto finishedAtMs = systemNowMs();
 
     // ---- 结果终态 (取消优先: 取消时即使带错误也按取消收尾) ----
-    const bool  canceled = result.Canceled || (token && token->is_cancelled());
-    const bool  hasError = result.hasError && !canceled;
+    bool        canceled = result.Canceled || (token && token->is_cancelled());
+    bool        hasError = result.hasError && !canceled;
     std::string content  = result.content;
     std::string error    = result.errorMessage;
+    // 运行超时导致的"取消"不是用户取消: 按失败报, 并说明是哪个限制
+    if (timedOut->load()) {
+        canceled = false;
+        hasError = true;
+        error    = fmt::format(
+            "run timeout: still running after {} ms (async_work run limit)",
+            runTimeoutMs
+        );
+        content.clear();
+    }
     if ((hasError || canceled) && content.empty()) {
         content = error.empty() ? std::string{"(no result)"} : error;
     }
 
+    finishEntry(
+        entryId,
+        hasError,
+        canceled,
+        std::move(content),
+        std::move(error),
+        startedAtMs,
+        finishedAtMs,
+        result.agentId,
+        /*releaseClaim=*/true
+    );
+    co_return;
+}
+
+void AsyncWorkManager::finishEntry(
+    std::string_view entryId,
+    bool             hasError,
+    bool             canceled,
+    std::string      content,
+    std::string      error,
+    int64_t          startedAtMs,
+    int64_t          finishedAtMs,
+    std::string      agentId,
+    bool             releaseClaim
+) {
+    auto host = host_.lock();
+    if (!host) {
+        return;
+    }
+    AsyncWorkKind                              kind = AsyncWorkKind::Agent;
+    std::string                                name;
+    std::string                                queueKey;
+    std::string                                sessionId;
+    std::string                                eventName;
+    std::string                                sessionStoreRoot;
+    std::shared_ptr<AgentContext>              creator;
+    AsyncWorkEventFn                           onEvent;
+    std::shared_ptr<agentxx::util::KeyMetrics> metrics;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto                        it = entries_.find(entryId);
+        if (it == entries_.end()) {
+            return;
+        }
+        auto& entry = it->second;
+        if (entry.state != AsyncWorkState::Queued && entry.state != AsyncWorkState::Running) {
+            return; // 已经收过尾: 幂等
+        }
+        kind             = entry.kind;
+        name             = entry.name;
+        queueKey         = entry.queueKey;
+        sessionId        = entry.creatorSessionId;
+        eventName        = entry.spec.eventName;
+        sessionStoreRoot = entry.spec.sessionStoreRoot;
+        creator          = entry.creatorCtx.lock();
+        onEvent          = entry.spec.onEvent;
+        metrics          = entry.metrics;
+        entry.wake.reset();
+        if (entry.state == AsyncWorkState::Queued) {
+            // 排队中终止: 从队列摘除 (取消 / 排队超时都走这里)
+            if (auto qit = queues_.find(queueKey); qit != queues_.end()) {
+                auto& queued = qit->second;
+                queued.erase(
+                    std::remove(queued.begin(), queued.end(), std::string{entryId}),
+                    queued.end()
+                );
+                if (queued.empty()) {
+                    queues_.erase(qit);
+                }
+            }
+            entry.delayUntilSteadyMs = 0;
+        } else {
+            // 运行中终止: 归还队列名额 (否则后续任务永远起不来)
+            if (auto rit = runningPerQueue_.find(queueKey); rit != runningPerQueue_.end()) {
+                if (rit->second > 0) {
+                    --rit->second;
+                }
+                if (rit->second == 0) {
+                    runningPerQueue_.erase(rit);
+                }
+            }
+        }
+        entry.state                  = canceled ? AsyncWorkState::Canceled
+                                                : (hasError ? AsyncWorkState::Failed
+                                                            : AsyncWorkState::Finished);
+        entry.finishedAtMs           = finishedAtMs;
+        entry.agentId                = std::move(agentId);
+        entry.hasError               = hasError;
+        entry.canceled               = canceled;
+        entry.error                  = error;
+        entry.resultText             = truncateUtf8(content, entry.resultMaxBytes);
+        entry.lingerDeadlineSteadyMs = steadyNowMs() + entry.lingerMs;
+    }
+
     // ---- 结果投递: 事件 (主路) ----
+    // 排队中取消/超时的任务同样要发: 否则 `await` 会挂到自己的超时, `notify` 也收不到
     bool delivered = false;
     if (creator && creator->eventHub) {
-        const std::string eventName
-            = spec.eventName.empty() ? std::string{kAsyncDoneEvent} : spec.eventName;
-        auto value = utilxx_base::Json{
-            {"asyncId",          entryId               },
-            {"kind",             toString(spec.kind)   },
-            {"name",             spec.name             },
-            {"content",          content               },
-            {"hasError",         hasError              },
-            {"canceled",         canceled              },
-            {"errorMessage",     error                 },
-            {"creatorSessionId", spec.creatorSessionId },
-            {"startedAtMs",      startedAtMs           },
-            {"finishedAtMs",     finishedAtMs          },
+        const std::string evName = eventName.empty() ? std::string{kAsyncDoneEvent} : eventName;
+        auto              value  = utilxx_base::Json{
+            {"asyncId",          entryId    },
+            {"kind",             toString(kind)},
+            {"name",             name       },
+            {"content",          content    },
+            {"hasError",         hasError   },
+            {"canceled",         canceled   },
+            {"errorMessage",     error      },
+            {"creatorSessionId", sessionId  },
+            {"startedAtMs",      startedAtMs},
+            {"finishedAtMs",     finishedAtMs},
         };
-        creator->eventHub->postValue(eventName, std::move(value), kAsyncOwner);
+        creator->eventHub->postValue(evName, std::move(value), kAsyncOwner);
         creator->eventHub->postEnd(
-            eventName,
+            evName,
             utilxx_base::Json{
                 {"asyncId",  entryId              },
                 {"ok",       !hasError && !canceled},
@@ -1049,44 +1300,14 @@ asio::awaitable<void>
             kAsyncOwner
         );
         delivered = true;
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (auto it = entries_.find(entryId); it != entries_.end()) {
+            it->second.delivered = true;
+        }
     }
 
-    // ---- 台账 + 队列补位 ----
-    std::string queueKey;
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        auto                        it = entries_.find(entryId);
-        if (it != entries_.end()) {
-            auto& entry                  = it->second;
-            entry.state                  = canceled ? AsyncWorkState::Canceled
-                                                     : (hasError ? AsyncWorkState::Failed
-                                                                 : AsyncWorkState::Finished);
-            entry.finishedAtMs           = finishedAtMs;
-            entry.agentId                = result.agentId;
-            entry.hasError               = hasError;
-            entry.canceled               = canceled;
-            entry.error                  = error;
-            entry.delivered              = delivered;
-            entry.resultText             = truncateUtf8(content, entry.resultMaxBytes);
-            entry.lingerDeadlineSteadyMs = steadyNowMs() + entry.lingerMs;
-            queueKey                     = entry.queueKey;
-            if (entry.metrics) {
-                entry.metrics->noteAsyncWorkFinished(
-                    hasError,
-                    canceled,
-                    finishedAtMs - startedAtMs
-                );
-            }
-            auto rit                     = runningPerQueue_.find(queueKey);
-            if (rit != runningPerQueue_.end()) {
-                if (rit->second > 0) {
-                    --rit->second;
-                }
-                if (rit->second == 0) {
-                    runningPerQueue_.erase(rit);
-                }
-            }
-        }
+    if (metrics) {
+        metrics->noteAsyncWorkFinished(hasError, canceled, finishedAtMs - startedAtMs);
     }
     XX_LOGI(
         "[async_work] finished {} state={} hasError={} delivered={} elapsed={}ms",
@@ -1102,25 +1323,35 @@ asio::awaitable<void>
             "[async_work] {} finished but the creator has no event hub, result kept in the "
             "ledger only (creatorSession={})",
             entryId,
-            spec.creatorSessionId
+            sessionId
+        );
+    }
+
+    // 会话存储占用: 提交时就 claim, 排队期终态也要释放
+    // (否则同一存储根的下一个任务会被报 "session store ... is busy")
+    if (releaseClaim && !sessionStoreRoot.empty()) {
+        host->releaseSession(
+            sessionStoreRoot,
+            std::string{entryId},
+            fmt::format("async_work:{}", entryId)
         );
     }
 
     // 界面: 终态 (完成/失败/取消; 结束后会在台账里 linger 一段时间供回看)
-    postAsyncWorksChanged(host, creator, spec.creatorSessionId);
+    postAsyncWorksChanged(host, creator, sessionId);
 
     // 提交方回调: 终态 (取消优先: 取消时即使带错误也按取消上报)
-    if (spec.onEvent) {
+    if (onEvent) {
         fireAsyncWorkEvent(
-            spec.onEvent,
+            onEvent,
             canceled ? AsyncWorkEventPhase::Canceled : AsyncWorkEventPhase::Finished,
             utilxx_base::Json{
-                {"asyncId",  entryId              },
-                {"kind",     toString(spec.kind)  },
-                {"name",     spec.name            },
-                {"hasError", hasError             },
-                {"canceled", canceled             },
-                {"error",    error                },
+                {"asyncId",  entryId         },
+                {"kind",     toString(kind)  },
+                {"name",     name           },
+                {"hasError", hasError        },
+                {"canceled", canceled        },
+                {"error",    error           },
             }
         );
     }
@@ -1132,80 +1363,94 @@ asio::awaitable<void>
             host->asyncWork_->pump(key);
         });
     }
-    co_return;
 }
 
 bool AsyncWorkManager::cancel(std::string_view asyncId) {
-    std::string       queueKey;
-    bool              removedFromQueue = false;
-    bool              canceledRunning  = false;
-    AsyncWorkEventFn  canceledCb;
-    utilxx_base::Json canceledPayload;
+    bool                       canceledRunning = false;
     /// 创建者 (界面通知用; 锁内取得, 锁外投递)
     std::shared_ptr<AgentContext> canceledCreator;
     std::string                   canceledSessionId;
+    bool                          dequeued = false;
+    std::shared_ptr<AsyncWake>    wake;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         auto                        it = entries_.find(asyncId);
         if (it == entries_.end()) {
             return false;
         }
-        auto& e  = it->second;
-        queueKey = e.queueKey;
+        auto& e = it->second;
         if (e.state == AsyncWorkState::Queued) {
-            auto qit = queues_.find(queueKey);
-            if (qit != queues_.end()) {
-                auto& v = qit->second;
-                v.erase(std::remove(v.begin(), v.end(), e.asyncId), v.end());
-                if (v.empty()) {
-                    queues_.erase(qit);
-                }
-            }
-            e.state                  = AsyncWorkState::Canceled;
-            e.canceled               = true;
-            e.finishedAtMs           = systemNowMs();
-            e.error                  = "canceled while queued";
-            e.delayUntilSteadyMs     = 0;
-            e.lingerDeadlineSteadyMs = steadyNowMs() + e.lingerMs;
-            removedFromQueue         = true;
-            canceledCreator          = e.creatorCtx.lock();
-            canceledSessionId        = e.creatorSessionId;
-            // 排队中直接被取消: 任务不会起跑, 终态回调在这里发
-            canceledCb      = e.spec.onEvent;
-            canceledPayload = utilxx_base::Json{
-                {"asyncId",  e.asyncId           },
-                {"kind",     toString(e.kind)     },
-                {"name",     e.name              },
-                {"hasError", false                },
-                {"canceled", true                 },
-                {"error",    e.error             },
-            };
+            dequeued         = true;
+            canceledCreator  = e.creatorCtx.lock();
+            canceledSessionId = e.creatorSessionId;
         } else if (e.state == AsyncWorkState::Running) {
+            wake = e.wake;
             if (e.token && !e.token->is_cancelled()) {
                 e.token->cancel();
             }
             canceledRunning = true;
+        } else {
+            return false; // 已终态
         }
     }
-    if (!removedFromQueue && !canceledRunning) {
-        return false; // 已终态
+    if (dequeued) {
+        // 排队中: 统一走收尾入口 (出队 + 终态 + 发结果事件)
+        // - 结果事件不能省: 否则 `await` 等一条排队中被取消的任务会挂到自己的超时
+        XX_LOGI("[async_work] cancel {} (dequeued)", asyncId);
+        finishEntry(
+            asyncId,
+            /*hasError=*/false,
+            /*canceled=*/true,
+            std::string{},
+            "canceled while queued",
+            /*startedAtMs=*/0,
+            systemNowMs(),
+            std::string{},
+            /*releaseClaim=*/true
+        );
+        return true;
     }
-    XX_LOGI(
-        "[async_work] cancel {} ({})",
-        asyncId,
-        removedFromQueue ? "dequeued" : "cancel token set"
-    );
-    if (removedFromQueue) {
-        fireAsyncWorkEvent(canceledCb, AsyncWorkEventPhase::Canceled, canceledPayload);
-        // 出队后让后面的任务有机会起跑
-        if (auto h = host_.lock(); h) {
-            // 界面: 排队中的任务直接取消 (没入过运行态, 终态推送只在这里发)
-            postAsyncWorksChanged(h, canceledCreator, canceledSessionId);
-            asio::post(h->ioCtx()->get_executor(), [h, key = std::move(queueKey)]() {
-                h->asyncWork_->pump(key);
-            });
+    XX_LOGI("[async_work] cancel {} (cancel token set)", asyncId);
+    // 叫醒等待方: 工具任务立刻按取消收尾 (旧实现要等下一次 50 ms 轮询)
+    if (wake) {
+        wake->signal();
+    }
+    return canceledRunning;
+}
+
+bool AsyncWorkManager::setDelay(std::string_view asyncId, int64_t delayMs) {
+    std::string                   queueKey;
+    std::shared_ptr<AgentContext> creator;
+    std::string                   sessionId;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto                        it = entries_.find(asyncId);
+        if (it == entries_.end() || it->second.state != AsyncWorkState::Queued) {
+            return false;
         }
+        auto&      entry = it->second;
+        const auto now   = steadyNowMs();
+        entry.delayMs    = std::max<int64_t>(0, delayMs);
+        entry.delayUntilSteadyMs = entry.delayMs > 0 ? now + entry.delayMs : 0;
+        // 排队超时的计时起点跟着延时重算 (延时本来就不算排队时间)
+        entry.queueDeadlineSteadyMs
+            = entry.queueTimeoutMs > 0
+                  ? (entry.delayUntilSteadyMs > 0 ? entry.delayUntilSteadyMs : now)
+                        + entry.queueTimeoutMs
+                  : 0;
+        queueKey  = entry.queueKey;
+        creator   = entry.creatorCtx.lock();
+        sessionId = entry.creatorSessionId;
     }
+    auto host = host_.lock();
+    if (!host) {
+        return true;
+    }
+    XX_LOGI("[async_work] {} delay set to {}ms", asyncId, delayMs);
+    asio::post(host->ioCtx()->get_executor(), [host, key = std::move(queueKey)]() {
+        host->asyncWork_->pump(key);
+    });
+    postAsyncWorksChanged(host, creator, sessionId);
     return true;
 }
 
@@ -1322,13 +1567,24 @@ utilxx_base::Json AsyncWorkManager::entryJson(std::string_view asyncId) const {
     if (!e.error.empty()) {
         j["error"] = e.error;
     }
-    // 起跑延时: `delayMs` 是提交时的原值, `delayRemainingMs` 是此刻还剩多少
+    // 起跑延时与两个超时: `delayMs`/`xxTimeoutMs` 是提交时的原值,
+    // `delayRemainingMs` 是此刻还剩多少延时
     if (e.delayMs > 0) {
         j["delayMs"] = e.delayMs;
     }
+    if (e.queueTimeoutMs > 0) {
+        j["queueTimeoutMs"] = e.queueTimeoutMs;
+    }
+    if (e.runTimeoutMs > 0) {
+        j["runTimeoutMs"] = e.runTimeoutMs;
+    }
     if (e.state == AsyncWorkState::Queued && e.delayUntilSteadyMs > 0) {
-        const auto now = steadyNowMs();
+        const auto now        = steadyNowMs();
         j["delayRemainingMs"] = e.delayUntilSteadyMs > now ? e.delayUntilSteadyMs - now : 0;
+    }
+    if (e.state == AsyncWorkState::Queued && e.queueDeadlineSteadyMs != 0) {
+        const auto now        = steadyNowMs();
+        j["queueRemainingMs"] = e.queueDeadlineSteadyMs > now ? e.queueDeadlineSteadyMs - now : 0;
     }
     if (!e.resultText.empty()) {
         j["result"] = e.resultText;
@@ -1391,6 +1647,11 @@ utilxx_base::Json AsyncWorkManager::listJson(
                 const auto now = steadyNowMs();
                 item["delayRemainingMs"]
                     = e.delayUntilSteadyMs > now ? e.delayUntilSteadyMs - now : 0;
+            }
+            if (e.queueDeadlineSteadyMs != 0) {
+                const auto now = steadyNowMs();
+                item["queueRemainingMs"]
+                    = e.queueDeadlineSteadyMs > now ? e.queueDeadlineSteadyMs - now : 0;
             }
         }
         arr.push_back(std::move(item));

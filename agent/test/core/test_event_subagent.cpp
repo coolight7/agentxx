@@ -377,7 +377,7 @@ asio::awaitable<void> test_async_result_wakes_session() {
 }
 
 /// 3. 工具层: 父轮次拿到 `[Async started]` 文本, 结果经事件随之回到会话
-/// - 子代理本身已回到同步语义, 后台执行只能经 `agentxx_async_start` (参数与直接调用一致)
+/// - 子代理本身已回到同步语义, 后台执行只能经 `agentxx_async_run` (参数与直接调用一致)
 asio::awaitable<void> test_async_tool_result_text() {
     auto fx = std::make_shared<SubagentFixture>();
     XX_TEST_EXPECT_TRUE(buildFixture(fx));
@@ -402,7 +402,7 @@ asio::awaitable<void> test_async_tool_result_text() {
              {"type", "function"},
              {"function",
               Json{
-                  {"name", "agentxx_async_start"},
+                  {"name", "agentxx_async_run"},
                   {"arguments",
                    R"({"tool":"agentxx_subagent","args":{"subagent":"subagent_task","message":"work"}})"},
               }},

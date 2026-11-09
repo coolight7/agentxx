@@ -2003,8 +2003,12 @@ plugin:
 - `on_event` 回调 (**容器 io 线程, 必须快速返回**): `QUEUED` / `STARTED` / `FINISHED` /
   `CANCELED` 四个阶段, `payload_json` 带 `asyncId` / `kind` / `name` / `queueAhead` /
   `delayMs` (仅 `QUEUED` 阶段) / `hasError` / `canceled` / `error`; 实例释放/禁用后不再进入插件代码;
-- 起跑延时 (`delayMs`) 目前只在模型侧 `agentxx_async_start` 上开放, 接口表的
-  `AgentxxPluginAsyncWorkSpec` 还没有对应字段 —— 插件提交的任务总是立即进入排队;
+- 起跑延时 (`delayMs`) 与排队时限 (`queueTimeoutMs`) 目前只在模型侧 `agentxx_async_run` /
+  `agentxx_async_manager` 上开放, 接口表的 `AgentxxPluginAsyncWorkSpec` 还没有对应字段 ——
+  插件提交的任务总是立即进入排队, 也不会因排队超时失败; 运行时限走
+  `AgentxxPluginAsyncWorkSpec::time_limit_ms` (SDK `AsyncWorkOptions::timeLimitMs`,
+  从起跑算起): agent 任务到点被引擎在检查点停下, tool 任务到点只结束等待 (工具本体可能
+  继续跑, 结果丢弃);
 - 老主程序 (v1) 没有这 4 个成员: 用 `ifaceHas<&AgentxxPluginRuntimeIface::submit_async_work>`
   判定后降级; SDK 便捷层是 `submitAsyncWork` / `cancelAsyncWork` /
   `getAsyncWorkJson` / `listAsyncWorkJson` (`AsyncWorkOptions`)。
@@ -2032,7 +2036,7 @@ plugin:
 `emit_event("plugin.chat.group42.progress", payload)` 发一条自己那一族的事件，就等于
 往中枢发了一个同名的值：会话侧由插件用 `register_wait` 替它登记等待（值到达直接变成
 那个会话的输入）；模型侧不再自己挂等待（早期版本的 `watch` 已删除），
-后台任务的结果则由 `agentxx_async_start` 的 `notify` 自动送回。
+后台任务的结果则由 `agentxx_async_run` 的 `notify` 自动送回。
 名字规则（三族命名空间 / 写侧只能落在自己那一族的根下 / 读侧必须全名）见
 `agentxx/event/naming.h`，插件面“定义事件/登记等待”的正规入口是 `agentxx.agent.event` 表
 （见 §20）。

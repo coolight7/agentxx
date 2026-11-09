@@ -17,9 +17,9 @@ namespace tools {
 /// 声明"任何人也能发", 没声明就只有创建者能发。因此模型可以给插件的事件发值
 /// (插件声明了公开时), 也会被内建事件拒绝。
 ///
-/// 读侧不在这里: 后台任务的结果由 `agentxx_async_start` 主动插回会话,
-/// 查询 / 等待 / 取消分别见 `agentxx_async_query` / `agentxx_async_await` /
-/// `agentxx_async_cancel`（见 [async_tools.h](/agent/lib/include/agentxx/tools/async_tools.h)）。
+/// 读侧不在这里: 后台任务的结果由 `agentxx_async_run` 主动插回会话,
+/// 查询 / 等待 / 管理分别见 `agentxx_async_query` / `agentxx_async_await` /
+/// `agentxx_async_manager`（见 [async_tools.h](/agent/lib/include/agentxx/tools/async_tools.h)）。
 ///
 /// 独占执行 (会改 hub 状态), 不声明并行安全; 不做重复调用检查。
 class AsyncEmitTool : public XXToolBase {

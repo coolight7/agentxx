@@ -584,15 +584,17 @@ path/to/agentxx_test --log-level warn string_util regex
   `agentxx.agent.event.turn.start`/`.turn.end`/`.tool.end.<工具名>`/
   `.timer.<名字>` 先问 `wants()` 再发 (后台任务的 `agentxx.agent.async.done` 是唯一
   落在 `agentxx.agent.event.` 段外的内置值事件, 见下面的后台任务段)。
-  **模型侧工具族** (2026-11): `agentxx_async_start` (`tool` + `args` + `notify`, 默认 `true` =
-  结果自动插回上下文 + `delayMs` 起跑延时) / `agentxx_async_query` (`group` 六档或 `id`) /
-  `agentxx_async_await` (`id` + `timeout_ms` + `start_now`) / `agentxx_async_cancel`
-  (`id` 或 `group`), 以及只管发布侧的
+  **模型侧工具族** (2026-11): `agentxx_async_run` (`tool` + `args` + `notify`, 默认 `true` =
+  结果自动插回上下文 + `delayMs` 起跑延时 + `queueTimeoutMs`/`runTimeoutMs` 两个时限) /
+  `agentxx_async_query` (`group` 六档或 `id`; 延时中的项开头标签 `*`) /
+  `agentxx_async_await` (`id` + `timeoutMs` + `start_now`) / `agentxx_async_manager`
+  (`opt` = `cancel` / `delay`, `id` 单个或字符串数组, `delayMs`; 早期的 `group` 批量参数已删),
+  以及只管发布侧的
   `agentxx_async_emit` (`event` + `value` / `end:true`, 建事件时可选
   `public_publish` / `label`; 可以指向任意合法事件名, 能不能发看该事件创建时是否声明了
   公开 (`PublishMask`), 创建者自己与框架段内的内置源不受限)。早期的 `watch`/`await`/`status`/
   `list`/`works`/`cancel` 参数与 `after_ms`/`every_ms` 已删除 (模型不再等任意事件、不再自建定时器),
-  `agentxx_tool_async` 已改名为 `agentxx_async_start`。**事件中枢恒常驻**:
+  `agentxx_tool_async` 已改名为 `agentxx_async_run` (早期还叫过 `agentxx_async_start`)。**事件中枢恒常驻**:
   `event.enable` 配置键已删除 (插件面 `AGENTXX_PLUGIN_EVENT_ERR_UNSUPPORTED` 只给没有中枢的
   嵌入环境/老主程序)。配置键 `event.*`
   (value_max_bytes/wait_timeout_ms/max_waits_session/allow_headless_turn/delivery)。
@@ -611,16 +613,20 @@ path/to/agentxx_test --log-level warn string_util regex
   由 `AgentHost` 持有并通过 `friend` 访问其私有接口) = 台账 (`AsyncWorkEntry`: kind/state/
   queueKey/时间戳/结果) + 每队列 FIFO + 额度 + 结束 linger 清扫 + 取消/查询 + 指标记账;
   `kind` = `agent` (起一个 agent 跑任务) 或 `tool` (把一次工具调用放到后台跑,
-  入口 `agentxx_async_start`; 权限在提交时按目标工具
-  问一次、取消是 50 ms 轮询的尽力而为; 工具在创建者身上查 —— 内置/中间件工具走
+  入口 `agentxx_async_run`; 权限在提交时按目标工具
+  问一次、取消是通知式的尽力而为 (`AsyncWake`, 不再 50 ms 轮询); 工具在创建者身上查 —— 内置/中间件工具走
   `AgentContext::builtinToolIndex` (对象归图引擎, 任务期间锁住 `AgentContext::engine`),
-  插件/动态注册的在 `toolRegistry`; **除了 `agentxx_async_start` 自己, 任何工具都可以**
+  插件/动态注册的在 `toolRegistry`; **除了 `agentxx_async_run` 自己, 任何工具都可以**
   (含其他后台任务管理工具、内置工具), 参数原样转交并补 `sessionId` /
-  `tool_call_id`)。**延时**: `AsyncWorkSpec::delay` (`agentxx_async_start` 的 `delayMs`) 未到
+  `tool_call_id`)。**延时**: `AsyncWorkSpec::delay` (`agentxx_async_run` 的 `delayMs`) 未到
   时任务一直是 `queued`, pump 跳过它 (不占名额、不挡后面的); 到期靠管理器一条共享
   `asio::steady_timer` 唤醒重推; `AgentHost::startAsyncWorkNow`
-  (`agentxx_async_await` 的 `start_now`) 可抹掉剩余延时即时起跑。**子代理回归同步**: `agentxx_subagent` 不再隐式异步 (删掉了
-  `async_work.enable` 决定形态的老行为), 要后台跑就 `agentxx_async_start
+  (`agentxx_async_await` 的 `start_now`) 可抹掉剩余延时即时起跑。**三个时限**:
+  `queueTimeoutMs` (延时结束→起跑, 到点出队按 `failed` 收尾) / `runTimeoutMs`
+  (起跑→结束, 两种任务都算数: agent 任务置令牌由引擎停下, tool 任务只结束等待) /
+  `agentxx_async_await` 的 `timeoutMs` (只结束这次等待, 不动任务); 排队/运行两条超时走
+  同一个 `finishEntry` (发结果事件 + 界面通知 + 释放会话存储占用 + 队列补位)。**子代理回归同步**: `agentxx_subagent` 不再隐式异步 (删掉了
+  `async_work.enable` 决定形态的老行为), 要后台跑就 `agentxx_async_run
   {tool:"agentxx_subagent", args:{subagent, message, ...}}` —— 参数与直接调用完全一致,
   内部按 `kind=agent` 提交; 受理返回 `{started:true, asyncId}`、正文 `[Async started] id=...`。
   **notify 默认开**: 提交时就替会话登记一条 `next-step` 定向等待 (轮次在跑 → 下一次模型调用前
@@ -629,9 +635,12 @@ path/to/agentxx_test --log-level warn string_util regex
   事件), 值里用 `asyncId` 区分, 等待靠 `EventWaitSpec::match` 过滤 (不匹配的值不消耗
   等待、带过滤的等待不随事件结束收尾); `asyncId` 就是任务 agent 的 `sessionId`。
   并发只有每队列额度 (默认队列 = 创建者 agentId, `async_work.max_concurrent` 默认 3),
-  **不设**排队条数/嵌套深度/全局上限。取消: `agentxx_async_cancel {id}` /
-  `{group:"running"}` (只限本会话启动的)、`AgentHost::cancelAsyncWorks(ctx)` (排队中的
-  直接出队, 运行中的置取消令牌, 被取消同样发终态)。查询: `agentxx_async_query`
+  **不设**排队条数/嵌套深度/全局上限。取消/改延时: `agentxx_async_manager {opt:"cancel"|"delay", id, delayMs}`
+  (只限本会话启动的, `id` 可传数组)、`AgentHost::cancelAsyncWorks(ctx)` (排队中的
+  直接出队并立即发终态, 运行中的置取消令牌, 被取消同样发终态)。等待与取消都用 `AsyncWake`
+  (共享 `steady_timer` + 原子计数): 完成/取消/超时 `signal()` 立即唤醒等待方, 旧版的
+  50 ms 定时器轮询已删。`kind=tool` 的工具本体拿不到任务令牌
+  (`execute_async(const Json&)` 无取消参数), 取消只结束等待。查询: `agentxx_async_query`
   (`group` = `all`(本会话)/`queued`/`running`/`done`/`failed`/`canceled`, 或 `id`)。
   取消令牌独立于轮次, 子代理上下文继承父 hub; 压缩等内部直调一律同步。
   配置 `async_work.*`: `enable`/`max_concurrent`/`interrupt_policy`(bubble|deny|allow)/

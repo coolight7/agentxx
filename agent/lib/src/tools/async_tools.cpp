@@ -11,6 +11,7 @@
 #include "agentxx/util/tool_result.h"
 #include "fmt/format.h"
 #include "utilxx_base/json.h"
+#include <algorithm>
 #include <chrono>
 #include <optional>
 #include <stdexcept>
@@ -142,21 +143,38 @@ std::string renderEntryDetail(const Json& entry) {
         entry.value("name", std::string{}),
         state
     );
+    // 已跑时长只在真跑过时给 (排队中终止的任务 startedAtMs = 0)
     if (state == "running") {
         out += fmt::format(" elapsed={}", formatElapsed(nowMs() - start));
     } else if (isTerminalState(state)) {
-        out += fmt::format(" elapsed={}", formatElapsed(finish - start));
+        if (start > 0) {
+            out += fmt::format(" elapsed={}", formatElapsed(finish - start));
+        }
     } else if (state == "queued") {
         // 延时中: 还给模型一个"还有多久"的定量信息 (原地不动就是排队)
         const auto remaining = delayRemainingMs(entry);
         out += fmt::format(
-            " ahead={} delay={}",
+            " ahead={}{}",
             entry.value("queueAhead", int64_t{0}),
-            remaining > 0 ? fmt::format("{} left", formatDelay(remaining)) : std::string{"none"}
+            remaining > 0 ? fmt::format(" delay={} left", formatDelay(remaining))
+                          : std::string{}
         );
     }
     if (entry.value("hasError", false)) {
         out += " hasError=true";
+    }
+    // 两个任务侧时限只在设了的时候给 (0 = 不限, 不占位置)
+    if (entry.contains("queueTimeoutMs")) {
+        out += fmt::format(
+            " queueTimeout={}",
+            formatDelay(entry.value("queueTimeoutMs", int64_t{0}))
+        );
+    }
+    if (entry.contains("runTimeoutMs")) {
+        out += fmt::format(
+            " runTimeout={}",
+            formatDelay(entry.value("runTimeoutMs", int64_t{0}))
+        );
     }
     if (entry.value("canceled", false)) {
         out += " canceled=true";
@@ -216,9 +234,11 @@ std::string renderTaskList(std::string_view group, const Json& items) {
                 formatElapsed(nowMs() - item.value("startedAtMs", int64_t{0}))
             ));
         } else if (state == "queued") {
+            // 延时中的任务用 `*` 开头标记 (与普通排队项区分)
             const auto remaining = delayRemainingMs(item);
             lines.push_back(fmt::format(
-                "- {} [queued]  {} {} ahead={}{}",
+                "{} {} [queued]  {} {} ahead={}{}",
+                remaining > 0 ? "*" : "-",
                 id,
                 kind,
                 name,
@@ -314,12 +334,12 @@ AsyncCtx
 } // namespace
 
 // ===========================================================================
-// agentxx_async_start
+// agentxx_async_run
 // ===========================================================================
 
-AsyncStartTool::AsyncStartTool(std::weak_ptr<agentxx::agent::AgentContext> in_agentContext) :
+AsyncRunTool::AsyncRunTool(std::weak_ptr<agentxx::agent::AgentContext> in_agentContext) :
     XXToolBase(
-        "agentxx_async_start",
+        "agentxx_async_run",
         in_agentContext,
         /*autoSummaryOutput=*/false,
         /*canDelayLoad=*/false,
@@ -328,7 +348,7 @@ AsyncStartTool::AsyncStartTool(std::weak_ptr<agentxx::agent::AgentContext> in_ag
         /*supportsParallel=*/false
     ) {}
 
-neograph::ChatTool AsyncStartTool::get_definition() const {
+neograph::ChatTool AsyncRunTool::get_definition() const {
     auto        agentPtr = agentContext.lock();
     const auto& prompt   = agentPtr->agentConfig->prompt.toolPrompt[get_name()];
 
@@ -371,13 +391,27 @@ neograph::ChatTool AsyncStartTool::get_definition() const {
                         {"description", prompt.getArg("delayMs")},
                     },
                 },
+                {
+                    "queueTimeoutMs",
+                    {
+                        {"type", "integer"},
+                        {"description", prompt.getArg("queueTimeoutMs")},
+                    },
+                },
+                {
+                    "runTimeoutMs",
+                    {
+                        {"type", "integer"},
+                        {"description", prompt.getArg("runTimeoutMs")},
+                    },
+                },
             }, },
         {"required", Json::array({"tool"})},
     };
     return {get_name(), prompt.depict, agentxx::util::toNeographJson(params)};
 }
 
-asio::awaitable<agentxx::util::ToolResult> AsyncStartTool::execute_async(const Json& arguments) {
+asio::awaitable<agentxx::util::ToolResult> AsyncRunTool::execute_async(const Json& arguments) {
     const auto args  = arguments.is_object() ? arguments : Json::object();
     auto       state = acquire(agentContext.lock(), args);
 
@@ -411,6 +445,17 @@ asio::awaitable<agentxx::util::ToolResult> AsyncStartTool::execute_async(const J
     if (delayMs < 0) {
         delayMs = 0;
     }
+    // 两个任务侧时限 (毫秒; <= 0 = 不限制), 与等待侧的 timeoutMs 不是一回事
+    auto queueTimeoutMs = args.value<int64_t>("queueTimeoutMs", 0);
+    if (!args.contains("queueTimeoutMs")) {
+        queueTimeoutMs = args.value<int64_t>("queue_timeout_ms", queueTimeoutMs);
+    }
+    auto runTimeoutMs = args.value<int64_t>("runTimeoutMs", 0);
+    if (!args.contains("runTimeoutMs")) {
+        runTimeoutMs = args.value<int64_t>("run_timeout_ms", runTimeoutMs);
+    }
+    queueTimeoutMs = std::max<int64_t>(0, queueTimeoutMs);
+    runTimeoutMs   = std::max<int64_t>(0, runTimeoutMs);
 
     // 会话与调用 id 由执行层补齐 (与前台 ToolcallNode 一致): 下游工具会读它们
     const auto sessionId  = state.sessionId;
@@ -448,7 +493,7 @@ asio::awaitable<agentxx::util::ToolResult> AsyncStartTool::execute_async(const J
     spec.creatorAgentId   = state.ctx->agentId;
     spec.creatorSessionId = sessionId;
     spec.resultId         = callId;
-    spec.owner            = "tool:agentxx_async_start";
+    spec.owner            = "tool:agentxx_async_run";
     spec.baseConfig       = state.ctx->agentConfig;
     // 结果默认主动回上下文: 轮次在跑就插在下一次模型调用前, 已结束就开新一轮
     spec.notifyDelivery = notify ? std::string{"next-step"} : std::string{};
@@ -500,7 +545,9 @@ asio::awaitable<agentxx::util::ToolResult> AsyncStartTool::execute_async(const J
         }
         startedAs = fmt::format("tool={}", toolName);
     }
-    spec.delay = std::chrono::milliseconds{delayMs};
+    spec.delay        = std::chrono::milliseconds{delayMs};
+    spec.queueTimeout = std::chrono::milliseconds{queueTimeoutMs};
+    spec.runTimeout   = std::chrono::milliseconds{runTimeoutMs};
 
     auto submitted = state.host->submitAsyncWork(std::move(spec), state.ctx);
     if (!submitted.accepted) {
@@ -511,10 +558,11 @@ asio::awaitable<agentxx::util::ToolResult> AsyncStartTool::execute_async(const J
     if (submitted.delayMs > 0) {
         out += fmt::format(
             "Starts in {} (delayMs={}): the task stays queued until then. Use "
-            "agentxx_async_await {{id:\"{}\", start_now:true}} to drop the remaining delay and "
-            "start it right away.\n",
+            "agentxx_async_manager {{opt:\"delay\", id:\"{}\", delayMs:0}} to drop the remaining "
+            "delay, or agentxx_async_await {{id:\"{}\", start_now:true}}.\n",
             formatDelay(submitted.delayMs),
             submitted.delayMs,
+            submitted.asyncId,
             submitted.asyncId
         );
     }
@@ -523,9 +571,24 @@ asio::awaitable<agentxx::util::ToolResult> AsyncStartTool::execute_async(const J
     } else {
         out += "No automatic notification (notify=false): the result stays in the task ledger.\n";
     }
+    // 设了时限就说清各自的计时起点 (两个都是任务侧时限, 与 await 的 timeoutMs 不同)
+    if (queueTimeoutMs > 0) {
+        out += fmt::format(
+            "Queue limit: {} counted from the moment the delay ends (or from now when there "
+            "is no delay).\n",
+            formatDelay(queueTimeoutMs)
+        );
+    }
+    if (runTimeoutMs > 0) {
+        out += fmt::format(
+            "Run limit: {} counted from the moment it starts.\n",
+            formatDelay(runTimeoutMs)
+        );
+    }
     out += fmt::format(
         "Check with agentxx_async_query {{id:\"{}\"}} or {{group:\"running\"}}, block for it with "
-        "agentxx_async_await {{id:\"{}\"}}, cancel with agentxx_async_cancel {{id:\"{}\"}}.",
+        "agentxx_async_await {{id:\"{}\"}}, cancel with agentxx_async_manager "
+        "{{opt:\"cancel\", id:\"{}\"}}.",
         submitted.asyncId,
         submitted.asyncId,
         submitted.asyncId
@@ -656,10 +719,10 @@ neograph::ChatTool AsyncAwaitTool::get_definition() const {
                     },
                 },
                 {
-                    "timeout_ms",
+                    "timeoutMs",
                     {
                         {"type", "integer"},
-                        {"description", prompt.getArg("timeout_ms")},
+                        {"description", prompt.getArg("timeoutMs")},
                     },
                 },
                 {
@@ -694,7 +757,11 @@ asio::awaitable<agentxx::util::ToolResult> AsyncAwaitTool::execute_async(const J
         co_return agentxx::util::ToolResult::ok(renderEntryDetail(entry));
     }
 
-    auto timeoutMs = args.value<int64_t>("timeout_ms", kAwaitDefaultMs);
+    auto timeoutMs = args.value<int64_t>("timeoutMs", 0);
+    if (timeoutMs <= 0) {
+        // 兼容旧的下划线写法; 都没给就用默认值
+        timeoutMs = args.value<int64_t>("timeout_ms", kAwaitDefaultMs);
+    }
     if (timeoutMs <= 0) {
         timeoutMs = kAwaitDefaultMs;
     }
@@ -712,12 +779,14 @@ asio::awaitable<agentxx::util::ToolResult> AsyncAwaitTool::execute_async(const J
             // 剩余延时比等待时长还长: 挂上去只会必然超时, 直接给说明文本
             co_return agentxx::util::ToolResult::ok(fmt::format(
                 "{}\nThis task is still waiting for its start delay ({}, submitted delayMs={}). "
-                "It will not start before then; call agentxx_async_await {{id:\"{}\", "
-                "start_now:true}} to drop the remaining delay and start it right away, or use a "
-                "larger timeout_ms.",
+                "It will not start before then; call agentxx_async_manager "
+                "{{opt:\"delay\", id:\"{}\", delayMs:0}} (or agentxx_async_await "
+                "{{id:\"{}\", start_now:true}}) to drop the remaining delay, or use a larger "
+                "timeoutMs.",
                 renderEntryDetail(entry),
                 formatDelay(delayRemainingMs(entry)),
                 entry.value("delayMs", int64_t{0}),
+                asyncId,
                 asyncId
             ));
         }
@@ -753,12 +822,55 @@ asio::awaitable<agentxx::util::ToolResult> AsyncAwaitTool::execute_async(const J
 }
 
 // ===========================================================================
-// agentxx_async_cancel
+// agentxx_async_manager
 // ===========================================================================
 
-AsyncCancelTool::AsyncCancelTool(std::weak_ptr<agentxx::agent::AgentContext> in_agentContext) :
+namespace {
+
+/// `id` 参数 → id 列表
+/// - 接受单个字符串或字符串数组 (schema 声明为数组, 模型给单个字符串时由参数自愈
+///   转成数组); 空串与重复项丢弃
+std::vector<std::string> parseIdList(const Json& args) {
+    std::vector<std::string> ids;
+    const auto               collect = [&ids](const Json& item) {
+        if (!item.is_string()) {
+            return;
+        }
+        auto value = item.get<std::string>();
+        if (value.empty() || std::find(ids.begin(), ids.end(), value) != ids.end()) {
+            return;
+        }
+        ids.push_back(std::move(value));
+    };
+    if (auto it = args.find("id"); it != args.end()) {
+        if (it->is_array()) {
+            for (const auto& item : *it) {
+                collect(item);
+            }
+        } else {
+            collect(*it);
+        }
+    }
+    return ids;
+}
+
+/// 整数参数 (`camelCase` 优先, 兼容 `snake_case` 写法)
+int64_t
+    intArg(const Json& args, std::string_view camel, std::string_view snake, int64_t fallback) {
+    if (args.contains(camel)) {
+        return args.value<int64_t>(camel, fallback);
+    }
+    if (!snake.empty() && args.contains(snake)) {
+        return args.value<int64_t>(snake, fallback);
+    }
+    return fallback;
+}
+
+} // namespace
+
+AsyncManagerTool::AsyncManagerTool(std::weak_ptr<agentxx::agent::AgentContext> in_agentContext) :
     XXToolBase(
-        "agentxx_async_cancel",
+        "agentxx_async_manager",
         in_agentContext,
         /*autoSummaryOutput=*/false,
         /*canDelayLoad=*/false,
@@ -767,7 +879,7 @@ AsyncCancelTool::AsyncCancelTool(std::weak_ptr<agentxx::agent::AgentContext> in_
         /*supportsParallel=*/false
     ) {}
 
-neograph::ChatTool AsyncCancelTool::get_definition() const {
+neograph::ChatTool AsyncManagerTool::get_definition() const {
     auto        agentPtr = agentContext.lock();
     const auto& prompt   = agentPtr->agentConfig->prompt.toolPrompt[get_name()];
 
@@ -776,86 +888,131 @@ neograph::ChatTool AsyncCancelTool::get_definition() const {
         {
          "properties", {
                 {
-                    "id",
+                    "opt",
                     {
                         {"type", "string"},
+                        {"enum", Json::array({"cancel", "delay"})},
+                        {"description", prompt.getArg("opt")},
+                    },
+                },
+                {
+                    "id",
+                    {
+                        {"type", "array"},
+                        {"items", Json{{"type", "string"}}},
                         {"description", prompt.getArg("id")},
                     },
                 },
                 {
-                    "group",
+                    "delayMs",
                     {
-                        {"type", "string"},
-                        {"enum", Json::array({"all", "queued", "running"})},
-                        {"description", prompt.getArg("group")},
+                        {"type", "integer"},
+                        {"description", prompt.getArg("delayMs")},
                     },
                 },
             }, },
-        {"required", Json::array()},
+        {"required", Json::array({"opt", "id"})},
     };
     return {get_name(), prompt.depict, agentxx::util::toNeographJson(params)};
 }
 
-asio::awaitable<agentxx::util::ToolResult> AsyncCancelTool::execute_async(const Json& arguments) {
+asio::awaitable<agentxx::util::ToolResult>
+    AsyncManagerTool::execute_async(const Json& arguments) {
     const auto args  = arguments.is_object() ? arguments : Json::object();
     auto       state = acquire(agentContext.lock(), args);
 
-    const auto asyncId = args.value("id", std::string{});
-    if (!asyncId.empty()) {
-        const auto entry = requireOwnedEntry(state.host, asyncId, state.sessionId);
-        if (isTerminalState(entry.value("state", std::string{}))) {
-            throw std::invalid_argument{fmt::format(
-                "Background task `{}` already finished (state={})",
+    const auto opt = args.value("opt", std::string{});
+    if (opt != "cancel" && opt != "delay") {
+        throw std::invalid_argument{
+            fmt::format("Arg `opt` must be one of cancel|delay, got `{}`", opt)
+        };
+    }
+    const auto ids = parseIdList(args);
+    if (ids.empty()) {
+        throw std::invalid_argument{
+            "Arg `id` is required: a task id or an array of task ids"
+        };
+    }
+    int64_t delayMs = 0;
+    if (opt == "delay") {
+        if (!args.contains("delayMs") && !args.contains("delay_ms")) {
+            throw std::invalid_argument{
+                "Arg `delayMs` is required when `opt` is delay (0 removes the delay)"
+            };
+        }
+        delayMs = intArg(args, "delayMs", "delay_ms", 0);
+        if (delayMs < 0) {
+            throw std::invalid_argument{"Arg `delayMs` must be >= 0 (0 removes the delay)"};
+        }
+    }
+
+    std::vector<std::string> lines;
+    size_t                   okCount = 0;
+    for (const auto& asyncId : ids) {
+        // 归属与状态先看台账: 不存在 / 别会话的任务逐条报, 不打断整批
+        Json entry;
+        try {
+            entry = requireOwnedEntry(state.host, asyncId, state.sessionId);
+        } catch (const std::exception& e) {
+            lines.push_back(fmt::format("- {}: {}", asyncId, e.what()));
+            continue;
+        }
+        const auto stateText = entry.value("state", std::string{});
+        if (isTerminalState(stateText)) {
+            lines.push_back(fmt::format("- {}: already finished (state={})", asyncId, stateText));
+            continue;
+        }
+        if (opt == "cancel") {
+            if (!state.host->cancelAsyncWork(asyncId)) {
+                lines.push_back(fmt::format("- {}: cancel request failed", asyncId));
+                continue;
+            }
+            ++okCount;
+            lines.push_back(fmt::format(
+                "- {}: canceled ({})",
                 asyncId,
-                entry.value("state", std::string{})
-            )};
+                stateText == "queued" ? "was queued, removed from the queue"
+                                      : "running, cancel requested"
+            ));
+            continue;
         }
-        if (!state.host->cancelAsyncWork(asyncId)) {
-            throw std::runtime_error{fmt::format("failed to cancel `{}`", asyncId)};
+        // opt == delay: 只有排队中的任务能改延时
+        if (stateText != "queued") {
+            lines.push_back(fmt::format(
+                "- {}: not queued (state={}), the delay cannot be changed once it runs",
+                asyncId,
+                stateText
+            ));
+            continue;
         }
-        co_return agentxx::util::ToolResult::ok(
-            fmt::format("[Async cancel] id={} canceled", asyncId)
+        if (!state.host->setAsyncWorkDelay(asyncId, delayMs)) {
+            lines.push_back(fmt::format("- {}: delay change failed", asyncId));
+            continue;
+        }
+        ++okCount;
+        lines.push_back(
+            delayMs > 0
+                ? fmt::format("- {}: delay set to {}", asyncId, formatDelay(delayMs))
+                : fmt::format("- {}: delay removed, it can start now", asyncId)
         );
     }
 
-    const auto group = args.value("group", std::string{"all"});
-    if (group != "all" && group != "queued" && group != "running") {
-        throw std::invalid_argument{fmt::format(
-            "Arg `group` must be one of all|queued|running (finished tasks cannot be canceled), "
-            "got `{}`",
-            group
-        )};
+    std::string out
+        = fmt::format("[Async manager] opt={} ok={}/{}", opt, okCount, ids.size());
+    if (opt == "delay") {
+        out += fmt::format(" delayMs={}", delayMs);
     }
-    if (group == "all") {
-        const auto count = state.host->cancelAsyncWorksOfSession(state.sessionId);
-        co_return agentxx::util::ToolResult::ok(
-            fmt::format("[Async cancel] canceled {} unfinished task(s) of this session", count)
-        );
+    out += "\n";
+    for (const auto& line : lines) {
+        out += line;
+        out += "\n";
     }
-    // 只取消指定状态的: 逐条按台账状态筛, 再单条取消 (排队中的会直接出队)
-    auto   items  = state.host->asyncWorksJson({}, state.sessionId, /*includeFinished=*/false, 200);
-    size_t tried  = 0;
-    size_t failed = 0;
-    for (const auto& item : items) {
-        if (item.value("state", std::string{}) != group) {
-            continue;
-        }
-        const auto id = item.value("asyncId", std::string{});
-        if (id.empty()) {
-            continue;
-        }
-        ++tried;
-        if (!state.host->cancelAsyncWork(id)) {
-            ++failed;
-        }
+    out.pop_back();
+    if (okCount == 0) {
+        // 一条都没成功: 整体按失败报 (正文里逐条写原因)
+        co_return agentxx::util::ToolResult::fail(std::move(out));
     }
-    co_return agentxx::util::ToolResult::ok(fmt::format(
-        "[Async cancel] canceled {}/{} {} task(s) of this session{}",
-        tried - failed,
-        tried,
-        group,
-        failed > 0 ? fmt::format(" ({} failed)", failed) : std::string{}
-    ));
+    co_return agentxx::util::ToolResult::ok(std::move(out));
 }
 
 } // namespace tools

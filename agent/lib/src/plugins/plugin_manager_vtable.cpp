@@ -1698,7 +1698,8 @@ static int32_t PLUGINXX_CALL xx_runtime_submit_async_work(
         work.sessionStore = spec->session_store != 0;
     }
     work.interruptTimeout = std::chrono::milliseconds{spec->interrupt_timeout_ms};
-    work.timeLimit        = std::chrono::milliseconds{spec->time_limit_ms};
+    // 插件侧的 `time_limit_ms` 就是运行超时 (排队与延时不计入)
+    work.runTimeout = std::chrono::milliseconds{spec->time_limit_ms};
 
     std::string        err;
     utilxx_base::Json  json;

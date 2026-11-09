@@ -396,6 +396,10 @@ bool AgentHost::startAsyncWorkNow(std::string_view asyncId) {
     return asyncWork_ ? asyncWork_->startNow(asyncId) : false;
 }
 
+bool AgentHost::setAsyncWorkDelay(std::string_view asyncId, int64_t delayMs) {
+    return asyncWork_ ? asyncWork_->setDelay(asyncId, delayMs) : false;
+}
+
 size_t AgentHost::cancelAsyncWorks(const std::shared_ptr<AgentContext>& creator) {
     return asyncWork_ ? asyncWork_->cancelByCreator(creator) : 0;
 }

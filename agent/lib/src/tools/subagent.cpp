@@ -407,7 +407,7 @@ asio::awaitable<agentxx::util::ToolResult>
     auto sessionId = arguments.value("sessionId", std::string{});
     auto resultId  = arguments.value("tool_call_id", std::string{});
 
-    // 子代理始终同步返回结果: 要后台跑由 `agentxx_async_start`
+    // 子代理始终同步返回结果: 要后台跑由 `agentxx_async_run`
     // （`tool="agentxx_subagent"` + 同样的参数）提交, 不再随 `async_work.enable` 改变形态
 
     // 通过 requestInterrupt 触发/恢复中断

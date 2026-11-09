@@ -1366,16 +1366,16 @@ asio::awaitable<std::vector<std::unique_ptr<agentxx::tools::XXToolBase>>> BaseAg
     tools.push_back(std::make_unique<agentxx::tools::SessionShareStoreTool>(agentContext));
     // 事件发布工具: 发布值 / 结束事件流 (中枢常驻, 工具也常驻注册)
     tools.push_back(std::make_unique<agentxx::tools::AsyncEmitTool>(agentContext));
-    // 后台任务工具族: 开始 / 查询 / 阻塞等待 / 取消
+    // 后台任务工具族: 运行 / 查询 / 阻塞等待 / 管理
     // - 只看 `async_work.enable`: 容器 (AgentHost) 可能是 init 之后才挂上来的
     //   (嵌入式用法), 所以不在这里判容器; 工具内部取不到容器时给明确错误
     const bool asyncEnabled
         = agentContext->agentConfig && agentContext->agentConfig->enableAsyncWork;
     if (asyncEnabled) {
-        tools.push_back(std::make_unique<agentxx::tools::AsyncStartTool>(agentContext));
+        tools.push_back(std::make_unique<agentxx::tools::AsyncRunTool>(agentContext));
         tools.push_back(std::make_unique<agentxx::tools::AsyncQueryTool>(agentContext));
         tools.push_back(std::make_unique<agentxx::tools::AsyncAwaitTool>(agentContext));
-        tools.push_back(std::make_unique<agentxx::tools::AsyncCancelTool>(agentContext));
+        tools.push_back(std::make_unique<agentxx::tools::AsyncManagerTool>(agentContext));
     }
     // agentxx_get_current_datetime 已迁移至 agentxx_system 插件 (同名同行为,
     // 经 PluginManager 注册)
