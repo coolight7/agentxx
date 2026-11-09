@@ -64,7 +64,7 @@
 |---|---|
 | `agentxx_test --log-level warn event_hub event_delivery event_tools event_subagent async_tools plugin_event` | 通过（`event_hub` 265 条含新增用例） |
 | `agentxx_test --log-level warn tui_scroll tui_stream tui_settings config_keys` | 通过 |
-| 全量 `agentxx_test --log-level warn` | 42684 passed / 5 failed，失败全在 `boundaries`（接口表台账与 `third_party/cxx_pluginxx` 头文件不一致，规则 7/8/9/10/15），本次改动未触碰接口表与 `boundaries` 用例 |
+| 全量 `agentxx_test --log-level warn` | 42686 passed / 5 failed，失败全在 `boundaries`（接口表台账与 `third_party/cxx_pluginxx` 头文件不一致，规则 7/8/9/10/15），本次改动未触碰接口表与 `boundaries` 用例 |
 | 构建 | 内层 lib（`agentxx_static`）+ install + 内层 client（`agentxx`）+ 内层 test（`agentxx_test`）均无错误 |
 
 ## 4.1 收尾补充

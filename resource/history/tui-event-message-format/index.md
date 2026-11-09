@@ -56,5 +56,7 @@
 - 计划之外的调整（均记录在 work.md）：数组内对象渲染改为 `- n: 1`（原计划未细化）；
   长内容只能整段卸载一次（逐值卸载会在默认阈值下卸载两次）；
   TUI 折叠预览改为取 `[Content]` 段首行（计划里已提到，实现多了一条"跳过 `#n` 分块标记"）。
-- 全量回归：42684 passed / 5 failed，失败全在 `boundaries`（接口表台账与子模块头文件不一致，
-  属工作区既有状态，与本次改动无关）。
+- 全量回归：42686 passed / 5 failed，失败全在 `boundaries`（接口表台账与子模块头文件不一致，
+  属工作区既有状态 —— HEAD 的 `db234597` 刚把 `cxx_pluginxx` 子模块升到带
+  `capability_info` / `list_capabilities` 的版本，而 `test_boundaries.cpp` 台账未同步；
+  与本次改动无关）。
