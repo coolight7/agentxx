@@ -144,6 +144,48 @@ share_store input_delivery tui_scroll tui_stream tui_settings` 全通过（2645 
 - TUI 判定从 `text.find("[No Content]")` 改成 `text.ends_with(...)`：无值时它就是最后一段，
   用 `find` 会被值里恰好出现的同名字样误伤（改为结尾判定后重编 client/test 并复跑了上面那批模块）。
 
+## 4.4 再调整：空段统一写 `[标记: empty]`
+
+用户要求把“这一段没有内容”的写法统一成 `[标记: empty]`：事件投递的 `[Content]` 段无值时
+写 `[Content: empty]`（不再用中间版的 `[No Content]`），`agentxx_execute_command` 插件的
+`[StdOut]` / `[StdErr]` 段没有输出时同样写 `[StdOut: empty]` / `[StdErr: empty]`。
+
+| 文件 | 改动 |
+|---|---|
+| `agent/lib/include/agentxx/event/text_sections.h` | `kEventNoContentSection` → `kEventContentEmptySection`，取值 `"[Content: empty]"`（注释写明与命令工具同一种写法） |
+| `agent/lib/src/event/hub_text.cpp` | `renderEventText` 用新常量 |
+| `agent/client/src/io/tui/components/message_list.cpp` | 折叠预览的结尾判定改用新常量（仍是 `ends_with`） |
+| `agent/plugins/agentxx_execute_command/execute_command_impl.h` | 新增 `detail::appendOutputSection`：有内容 `[标记]\n正文\n`、截断到 share store 时与段标记同行、无内容 `[标记: empty]`；成功路径与 `makeTimeoutResult` 都改用它，`runProcPipeline` 的结果拼装从 `ostringstream` 改成 `std::string` |
+| `agent/plugins/example_js_execute_command/plugin.js` | 同一套写法（`outputSection`），保持“示例插件仿内置命令工具”的一致 |
+| 测试 | `event_hub` 两处 golden 改 `[Content: empty]`；`tui_scroll` 的样例与断言同步；`command` 模块新增 `test_exec_empty_sections`（两路都空 / 只有 stdout / 只有 stderr） |
+| 文档 | `docs/zh-cn/design/{events,tui,plugins}.md`、`AGENTS.md` |
+
+边界：
+
+- 空段写成 `[StdOut: empty]` 与“内容被裁掉”能分开 —— 后者仍是
+  `[StdOut][Content offloaded. ...]` 后接片段。
+- `full_output=false` 且退出码 0 时两段照旧整段不输出（没请求输出，不写 `: empty`）。
+- 超时结果（`makeTimeoutResult`）同样适用：超时往往只拿到一半输出，哪一路空也要说清楚。
+
+验证：
+
+| 项 | 结果 |
+|---|---|
+| 构建 | 内层 lib + install + client + test，以及 `build_plugins.ps1 agentxx_execute_command example_js_execute_command` 均无 error |
+| `agentxx_test command` | 72 passed / 0 failed（含新增 `test_exec_empty_sections`） |
+| `event_hub` `input_delivery` `tui_scroll` `tui_stream` `tui_settings` | 2162 passed / 0 failed |
+| `plugins` `plugin_sdk` `event_tools` `event_delivery` `async_tools` | 994 passed / 0 failed（`plugins` 加载刚重建的插件动态库与 JS 示例） |
+| 全量 `--log-level warn` | 42708 passed / 5 failed，5 项仍是 `boundaries` 的既有失败（规则 7/8/9/10 台账 + 规则 15 用词） |
+
+实测两路都空时的文本（`test_exec_empty_sections` 的 `TEST_INFO` 输出）:
+
+```text
+[ExitCode]
+0
+[StdOut: empty]
+[StdErr: empty]
+```
+
 ## 5. 遗留与注意
 
 - Windows 调试版测试必须从 `{build}/exec/` 目录运行（那里有 `clang_rt.asan_dynamic-x86_64.dll`）；

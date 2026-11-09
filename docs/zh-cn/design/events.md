@@ -166,8 +166,9 @@ label: ...
     否则 `"step":1` 会变成 `step: 1`、字符串 `"1"` 与数字 `1` 混为一谈
   - 字符串值给原文（它本身就是文本，不是 JSON 结构；多行就是多行）
   - 多个值（`mode=all` 等）给 JSON 数组（`[1,2]`）
-  - 本次投递没有值时, 段标记写 `[No Content]` (不再留一个空的 `[Content]` 与 `(no value)` 占位;
-    标记常量见 `agentxx/event/text_sections.h`, 展示端也按它跳过预览)
+  - 本次投递没有值时, 段标记写 `[Content: empty]` (不再留一个空的 `[Content]` 与 `(no value)` 占位;
+    标记常量见 `agentxx/event/text_sections.h`, 展示端也按它跳过预览。与命令工具的空段
+    `[StdOut: empty]` / `[StdErr: empty]` 是同一种写法, 一眼看出“这一段没有东西”)
   - **唯一例外**: 框架自己的后台任务结果事件（`agentxx.agent.async.*`）把产物正文放在
     `content` 字段里（工具输出 / 子代理回答，本身可能就是 JSON 文本）：该字段按原文单独
     给出（`content:` 一行 + 原文），其余字段仍是同一个 JSON。原文即原文，不经 JSON 转义，

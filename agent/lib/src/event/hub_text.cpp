@@ -103,7 +103,7 @@ std::string renderEventText(
     if (!note.empty()) {
         out += fmt::format("note: {}\n", note);
     }
-    out += contentText.empty() ? kEventNoContentSection : kEventContentSection;
+    out += contentText.empty() ? kEventContentEmptySection : kEventContentSection;
     out += '\n';
     out += contentText;
     // 去掉末尾换行: 投递文本作为一条 user 消息, 末尾空行没有意义

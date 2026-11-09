@@ -25,6 +25,10 @@
 /// [StdErr][Content offloaded. xxx]
 /// xxx
 ///
+/// - 某一流没有输出时, 该段写成 `[StdOut: empty]` / `[StdErr: empty]` (不再留一个空行):
+///   模型一眼看出这一路确实没东西, 不必怀疑内容被裁掉; 与事件投递的 `[Content: empty]`
+///   是同一种写法
+///
 /// - 这是为了方便 LLM 判断是否存在 [StdErr] 内容，由 ToolcallNode 压缩时如果 [StdOut] 过长，
 /// 可能导致 [StdErr] 全部被裁剪隐藏，LLM 需要额外读取全部才能判断是否存在 [StdErr] 内容
 #pragma once
@@ -743,6 +747,27 @@ inline void closePipesAfterKill(asio::readable_pipe& outpip, asio::readable_pipe
     errpip.close(ec);
 }
 
+/// 追加一段标准流 (`[StdOut]` / `[StdErr]`)
+/// - 有内容: `[标记]\n内容\n`; 内容被截断到 share store 时正文自带
+///   `[Content offloaded. ...]`, 与段标记同行更紧凑 (`[标记][Content offloaded. ...]`)
+/// - 没有内容: `[标记: empty]` (与事件投递的 `[Content: empty]` 同一种写法)
+///
+/// - `args`:
+///     - [out]  结果文本 (就地追加)
+///     - [mark] 段标记 (`StdOut` / `StdErr`, 不带方括号)
+///     - [body] 该流的内容 (已转 UTF-8、已按需截断)
+inline void appendOutputSection(std::string& out, std::string_view mark, std::string_view body) {
+    if (body.empty()) {
+        out += fmt::format("[{}: empty]\n", mark);
+        return;
+    }
+    if (body.rfind("[Content", 0) == 0) {
+        out += fmt::format("[{}]{}\n", mark, body);
+        return;
+    }
+    out += fmt::format("[{}]\n{}\n", mark, body);
+}
+
 /// 构造超时错误结果文本 (多行纯文本输出, 非 JSON)
 /// - 只写内容, 不写 `[Error]` 标记: 失败结果的首行由执行层统一加
 ///   (见 toolcall.cpp 的 formatToolResultText)
@@ -771,17 +796,14 @@ inline std::string makeTimeoutResult(
         }
         strerr = truncateStdErr(strerr, id);
     }
-    return fmt::format(
-        R"_(Command timed out after {} seconds. If this command is expected to take longer and is not waiting for interactive input, retry with a larger timeout value.
-[StdOut]
-{}
-[StdErr]
-{}
-)_",
-        timeout,
-        strout,
-        strerr
+    std::string result = fmt::format(
+        "Command timed out after {} seconds. If this command is expected to take longer and is "
+        "not waiting for interactive input, retry with a larger timeout value.\n",
+        timeout
     );
+    appendOutputSection(result, "StdOut", strout);
+    appendOutputSection(result, "StdErr", strerr);
+    return result;
 }
 
 /// 构造 Windows tool 的子进程启动参数: 可执行文件 + argv 列表
@@ -867,12 +889,12 @@ inline asio::awaitable<ToolResult> runProcPipeline(
             std::move(readStdOutFuture) && std::move(readStdErrFuture)
             && proc.async_wait(asio::use_awaitable)
         );
-        const auto         exitCode = proc.exit_code();
-        std::ostringstream result;
+        const auto  exitCode = proc.exit_code();
+        std::string result;
         if (timedOut.load(std::memory_order_acquire)) {
-            result << detail::makeTimeoutResult(timeout, strout, strerr, storeFn);
+            result = detail::makeTimeoutResult(timeout, strout, strerr, storeFn);
         } else {
-            result << "[ExitCode]\n" << exitCode << "\n";
+            result = fmt::format("[ExitCode]\n{}\n", exitCode);
             if (full_output || 0 != exitCode) {
                 // 手动裁剪: 每路 stdout/stderr 独立按 UTF-8 长度限制, 格式与
                 // ToolcallNode::execTool 的 [Content offloaded...] 保持一致，通过 storeFn
@@ -886,14 +908,10 @@ inline asio::awaitable<ToolResult> runProcPipeline(
                         }
                         strout = detail::truncateStdOut(strout, id);
                     }
-                    // 预期紧凑格式: [StdOut][Content offloaded...] 截断时同行，无截断时换行
-                    if (!strout.empty() && strout.rfind("[Content", 0) == 0) {
-                        result << "[StdOut]" << strout << "\n";
-                    } else {
-                        result << "[StdOut]\n" << strout << "\n";
-                    }
+                    // 这一段没有输出时写 [StdOut: empty], 有内容才接正文
+                    detail::appendOutputSection(result, "StdOut", strout);
                 } else {
-                    result << "[StdOut conversion to utf8 failed, discard]\n";
+                    result += "[StdOut conversion to utf8 failed, discard]\n";
                 }
                 if (strerr.empty() || utilxx_base::autoConvertToUtf8(strerr)) {
                     if (!strerr.empty()) {
@@ -904,17 +922,13 @@ inline asio::awaitable<ToolResult> runProcPipeline(
                         }
                         strerr = detail::truncateStdErr(strerr, id);
                     }
-                    if (!strerr.empty() && strerr.rfind("[Content", 0) == 0) {
-                        result << "[StdErr]" << strerr << "\n";
-                    } else {
-                        result << "[StdErr]\n" << strerr << "\n";
-                    }
+                    detail::appendOutputSection(result, "StdErr", strerr);
                 } else {
-                    result << "[StdErr conversion to utf8 failed, discard]\n";
+                    result += "[StdErr conversion to utf8 failed, discard]\n";
                 }
             }
         }
-        resultStr = result.str();
+        resultStr = std::move(result);
     };
     // 超时守护: 到点整组终止 (Linux 连子孙进程一起清理) 并置标记;
     // 之后挂起直至被并行组取消 —— 由主工作基于 timedOut 组装超时结果。

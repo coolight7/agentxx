@@ -825,6 +825,66 @@ asio::awaitable<void>
     co_return;
 }
 
+// ---- 空段标记 ----
+
+/// 没有输出的那一段写 `[StdOut: empty]` / `[StdErr: empty]`
+/// - 三种情况: 两路都空、只有 stdout、只有 stderr —— 有内容的那一段仍是 `[标记]`
+///   换行后再接正文, 空的那一段只剩 `[标记: empty]` 一行 (一眼看出不是被截掉的)
+/// - 与事件投递文本的 `[Content: empty]` 是同一种写法
+asio::awaitable<void> test_exec_empty_sections(std::weak_ptr<agentxx::agent::AgentContext>) {
+    // 直调插件实现体 (不经过工具对象), 两套实现 (协程版 / popen 回退) 由 facade 选择
+    auto runCommand = [](const utilxx_base::Json& args) -> asio::awaitable<std::string> {
+#if XX_IS_WIN_D
+        co_return co_await agentxx_execmd_test::windowsExecuteAsync(args, std::string{});
+#else
+        co_return co_await agentxx_execmd_test::bashExecuteAsync(args, std::string{});
+#endif
+    };
+
+    // 1) 两路都空: 两个段标记都带 `: empty`
+    {
+#if XX_IS_WIN_D
+        // PowerShell 包装层本身不输出任何东西; exit 0 避免走失败分支之外的差异
+        const auto text = co_await runCommand(utilxx_base::Json{{"command", "cmd /c exit 0"}});
+#else
+        const auto text = co_await runCommand(utilxx_base::Json{{"command", "true"}});
+#endif
+        XX_TEST_EXPECT_TRUE(text.find("[ExitCode]\n0") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(text.find("[StdOut: empty]") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(text.find("[StdErr: empty]") != std::string::npos);
+        // 不再留一个空行式的 `[StdOut]` 段头
+        XX_TEST_EXPECT_TRUE(text.find("[StdOut]\n") == std::string::npos);
+        XX_TEST_EXPECT_TRUE(text.find("[StdErr]\n") == std::string::npos);
+        TEST_INFO << "both-empty result: " << text << std::endl;
+    }
+
+    // 2) 只有 stdout: 标准输出段正常, 错误段标记为空
+    {
+#if XX_IS_WIN_D
+        const auto text = co_await runCommand(utilxx_base::Json{{"command", "Write-Output only_out"}});
+#else
+        const auto text = co_await runCommand(utilxx_base::Json{{"command", "echo only_out"}});
+#endif
+        XX_TEST_EXPECT_TRUE(text.find("[StdOut]\nonly_out") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(text.find("[StdErr: empty]") != std::string::npos);
+    }
+
+    // 3) 只有 stderr: 错误段正常, 标准输出段标记为空
+    {
+#if XX_IS_WIN_D
+        const auto text = co_await runCommand(
+            utilxx_base::Json{{"command", "[Console]::Error.WriteLine('err_only')"}}
+        );
+#else
+        const auto text = co_await runCommand(utilxx_base::Json{{"command", "echo err_only 1>&2"}});
+#endif
+        XX_TEST_EXPECT_TRUE(text.find("[StdErr]\nerr_only") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(text.find("[StdOut: empty]") != std::string::npos);
+    }
+
+    co_return;
+}
+
 // ---- PowerShell 探测 ----
 asio::awaitable<void> test_detect_powershell(std::weak_ptr<agentxx::agent::AgentContext>) {
     auto info  = utilxx_base::detectPowerShell();
@@ -1694,6 +1754,7 @@ asio::awaitable<TestResult>
 
     co_await run(test_command_subprocess_workdir);
     co_await run(test_exec_cwd_param);
+    co_await run(test_exec_empty_sections);
     co_await run(test_command_pwd_env);
     co_await run(test_detect_powershell);
     co_await run(test_exec_env_detection);

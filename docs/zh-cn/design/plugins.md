@@ -513,7 +513,9 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
   `offset`/`limit`): 主程序再截断一次会与工具自身的分页重复, 摘要后的行号也会与源内容对不上;
 - 自带裁剪逻辑的工具 (例如 `agentxx_execute_windows_command` / `agentxx_execute_bash_command`
   按 stdout/stderr 两路各自裁剪到 30k 字符): 主程序按整段结果压缩时, 过长的 `[StdOut]` 会把
-  `[StdErr]` 一起裁进隐藏区, 模型必须读回全部才能判断 stderr 是否有内容。
+  `[StdErr]` 一起裁进隐藏区, 模型必须读回全部才能判断 stderr 是否有内容。两路里没有输出的
+  那一路写成 `[StdOut: empty]` / `[StdErr: empty]` (不再留一个空行式的段头), 模型一眼看出
+  它不是被裁掉的; 事件投递文本的 `[Content: empty]` 用的是同一种写法。
 
 `PARALLEL_SAFE` 只应给"只读、不写会话、不改插件内部共享状态"的工具置位 (文件读 / list /
 glob / grep / 网络查询等); 写文件、命令执行、交互询问类工具保持不置位, 它们与同一批

@@ -812,7 +812,7 @@ agent 线程插入会话历史的展示条目: 轮次统计、错误/取消提�
   - 预览取正文 `[Content]` 段的第一行 (`eventContentPreview`, 标记常量见
     `agentxx/event/text_sections.h`): 跳过空行与 `[Content offloaded. ...]` 转存提示行,
     正文首行 `[Event] <名字>` 与头部重复、`[Info]` 只是元信息, 都不适合当预览;
-    正文是 `[No Content]` (本次没值) 时不画 ` · ` 与预览; 找不到段标记时退回正文首行
+    正文是 `[Content: empty]` (本次没值) 时不画 ` · ` 与预览; 找不到段标记时退回正文首行
   - 正文按纯文本渲染 (`renderPlainText`, 保留硬换行)
 - 折叠交互: 点击消息块任意位置切换 (与 Think/Tool/System/Tip/User 同一套命中登记,
   见 §3.2)

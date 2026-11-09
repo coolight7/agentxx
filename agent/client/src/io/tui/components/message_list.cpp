@@ -244,12 +244,12 @@ void appendAttachmentCount(Elements& header, const TUIMessage& msg, const TUIThe
 /// 事件正文是中枢渲染好的三段文本 (`[Event] <名字>` / `[Info]` 元信息 /
 /// `[Content]` 内容): 头部已经显示了事件名, 元信息也不是内容, 所以预览取
 /// `[Content]` 段里第一行实际内容 (跳过空行与 share store 转存提示行)。
-/// - 本次投递没有值时正文以 `[No Content]` 结尾: 本来就没内容, 不画预览
+/// - 本次投递没有值时正文以 `[Content: empty]` 结尾: 本来就没内容, 不画预览
 /// - 正文里找不到 `[Content]` 段标记 (旧格式正文 / 手工构造的测试文本): 退回正文首行
 std::string eventContentPreview(std::string_view text, size_t maxWidth) {
     using namespace agentxx::events;
-    // 无值投递的 `[No Content]` 就是最后一段, 后面没有内容
-    if (text.ends_with(kEventNoContentSection)) {
+    // 无值投递的 `[Content: empty]` 就是最后一段, 后面没有内容
+    if (text.ends_with(kEventContentEmptySection)) {
         return {};
     }
     std::string_view body = text;

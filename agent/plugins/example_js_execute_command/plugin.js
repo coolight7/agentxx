@@ -48,6 +48,14 @@
   function truncateStdOut(s) { return truncateWithStoreFormat(s, kMaxStdOut); }
   function truncateStdErr(s) { return truncateWithStoreFormat(s, kMaxStdErr); }
 
+  // 一段标准流: 有内容为 [标记]\n正文\n (截断到 share store 时与标记同行),
+  // 没有内容为 [标记: empty] —— 与 execute_command_impl.h 的写法一致
+  function outputSection(mark, body) {
+    if (!body) return "[" + mark + ": empty]\n";
+    if (body.indexOf("[Content") === 0) return "[" + mark + "]" + body + "\n";
+    return "[" + mark + "]\n" + body + "\n";
+  }
+
   function formatSuccess(exitCode, stdoutBuf, stderrBuf, fullOutput) {
     var out = "[ExitCode]\n" + exitCode + "\n";
     if (fullOutput || exitCode !== 0) {
@@ -55,16 +63,8 @@
       var se = stderrBuf || "";
       if (so) so = truncateStdOut(so);
       if (se) se = truncateStdErr(se);
-      if (so && so.indexOf("[Content") === 0) {
-        out += "[StdOut]" + so + "\n";
-      } else {
-        out += "[StdOut]\n" + so + "\n";
-      }
-      if (se && se.indexOf("[Content") === 0) {
-        out += "[StdErr]" + se + "\n";
-      } else {
-        out += "[StdErr]\n" + se + "\n";
-      }
+      out += outputSection("StdOut", so);
+      out += outputSection("StdErr", se);
     }
     return out;
   }
@@ -74,7 +74,7 @@
     var se = stderrBuf || "";
     if (so) so = truncateStdOut(so);
     if (se) se = truncateStdErr(se);
-    return "\n[Error]\nCommand timed out after " + timeoutSec + " seconds. If this command is expected to take longer and is not waiting for interactive input, retry with a larger timeout value.\n[StdOut]\n" + so + "\n[StdErr]\n" + se + "\n";
+    return "\n[Error]\nCommand timed out after " + timeoutSec + " seconds. If this command is expected to take longer and is not waiting for interactive input, retry with a larger timeout value.\n" + outputSection("StdOut", so) + outputSection("StdErr", se);
   }
 
   function stringifyResult(v) {
