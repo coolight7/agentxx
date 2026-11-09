@@ -630,7 +630,7 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
 | 模型 | 文件 | 负责 |
 |------|------|------|
 | `HistoryWindow` | [model/history_window.h](/agent/client/include/agentxx-client/io/tui/model/history_window.h) | 展示历史的已加载区间 `[windowStart, +loadedCount)`, "上方是否还有更早历史", 分页请求的去重与进行中标记; 页响应判定 (接受 / 空页 / 迟到会话 / 不连续页); 断线增量补拉的尾部**序号连续性** (首个/连续/断号/重复); 本地清理头部消息后的窗口记账 (`noteTrimmedHead`) |
-| 本地上限判定 | [model/message_window.h](/agent/client/include/agentxx-client/io/tui/model/message_window.h) | `kLocalMessageLimit` (客户端只保留最近 100 条展示消息) 与纯函数 `planLocalMessageTrim` (条数超出 + 吸附底部 + 只清理视口上方时返回可清理条数) |
+| 本地上限判定 | [model/message_window.h](/agent/client/include/agentxx-client/io/tui/model/message_window.h) | `kLocalMessageLimit` (视口在末尾时保留的展示消息条数, 默认 100)、`kLocalMessageViewportMargin` (视口上方额外保留的条数, 3) 与纯函数 `planLocalMessageTrim` (保留窗口 = max(末尾上限, 视口及其上方几条), 返回可清理的头部条数) |
 | `MessageQueueMirror` | [model/queue_mirror.h](/agent/client/include/agentxx-client/io/tui/model/queue_mirror.h) | 服务端排队输入的镜像 (整体快照 = 唯一权威), 按 id 删除/查找, 队列状态 (idle/running/paused/draining, 未知文本按 idle), **投递回执记账** (同一 requestId 只记一次, 容量上限按最旧淘汰) |
 
 它们都是**可拷贝的值类型**, 随渲染快照 (`TUIRenderState`) 一起复制, 因此 UI 线程读到的
@@ -639,8 +639,8 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
 - 历史窗口: 页响应必须紧贴当前窗口首条 (`startIndex + count == windowStart`) 才被接受,
   否则视为窗口已被整体替换后的过期响应; `windowStart == 0` 表示上方没有更早历史
   (完整同步、或已拉到会话开头)。切换会话时 `resetForSession` 使旧会话的迟到响应失效。
-- 本地条数上限: 见 §3.5 (只限条数不限字节; 仅末尾追加消息时判定, 头部插入 (历史分页)
-  不触发清理)。
+- 本地条数上限: 见 §3.5 (只限条数不限字节; 末尾追加消息与增量补拉后判定, 头部插入
+  (历史分页) 不触发清理)。
 - 队列镜像: 快照应用时保留**界面展开态** (按条目 id/文本为键), 队列整体刷新不会把用户
   正展开的条目折回; 投递回执的重复/迟到不会重复提示用户。
 - 边界纪律: 模型层不得包含 FTXUI/组件/端点头 (`boundaries` 测试模块有专门规则, 目录为空
@@ -1128,21 +1128,30 @@ UTF-8 字节按旧代码页解码 —— 中文整屏乱码, 且一个中文字�
 
 ### 3.5 客户端本地消息条数上限
 
-客户端只保留最近 `kLocalMessageLimit` (100) 条展示消息, 避免长会话把整段历史一直留在
+客户端只保留最近的一段展示消息 (默认末尾 100 条), 避免长会话把整段历史一直留在
 内存里 (服务端自己的内存窗口也有条数上限 `session.view_window_messages` (默认 400),
 更早的行留在会话库、按页回库读, 客户端不必镜像全部)。
 
 - **只限条数, 不限字节**: 单条消息本体的体积不参与判定, 渲染结果的内存仍由
   `LazyScrollable` 的缓存预算 (条数 + 字节双预算) 约束 —— 两者管的是不同的内存。
-- **只在末尾追加 (push) 时判定**: 历史分页前插 (`onViewMessagesPage`) 与整体替换
+- **保留窗口 = max(末尾上限, 视口及其上方几条)** (`model/message_window.h` 的
+  `planLocalMessageTrim`):
+  - 跟随最新内容 (视口在末尾) 时就是末尾 `kLocalMessageLimit` (100) 条;
+  - 上滚查看历史时按**视口位置**保留: 视口顶行在倒数第 N 条就保留末尾
+    N + `kLocalMessageViewportMargin` (3) 条 (视口顶行及其后的全部 + 上方 3 条),
+    更旧的头部消息照样清理。例: 视口从倒数第 160 条开始 -> 保留末尾 163 条。
+  - **不再判断是否吸附底部**: 上滚时也清理一部分 (以前只要用户上滚就完全不清理,
+    内存会跟着新消息一直涨)。
+  - 视口内的消息与上方 margin 条一律不动, 所以视口很靠前 (距会话开头很近) 时
+    清理量自然很小甚至为 0。
+- **只在末尾追加时判定**: 历史分页前插 (`onViewMessagesPage`) 与整体替换
   (`onSync`, 如会话切换/尾窗同步) 都不触发清理; 后者本身就把列表换成尾窗。
+  触发点 = agent 下发的历史行 (`insert_message`)、本地行/瞬态提示、增量补拉
+  (`onIncrementalSync`)。
 - **判定在 UI 线程**: "哪些消息可以安全清理"取决于消息列表当前的滚动位置 (视口顶行
-  所在消息) 与是否吸附底部 —— 只有 UI 线程独占的组件知道。client 线程在追加消息时只
-  投递一次检查 (原子去重, 一帧内多次 push 共用一次), 实际清理在帧首动作队列里执行
+  所在消息) —— 只有 UI 线程独占的组件知道。client 线程在追加消息时只投递一次检查
+  (原子去重, 一帧内多次 push 共用一次), 实际清理在帧首动作队列里执行
   (`TUIClientAgentIO::applyLocalTrimCheck`), 同帧布局/渲染随即按新列表进行。
-- **三条同时满足才清理** (`model/message_window.h` 的 `planLocalMessageTrim`):
-  条数超过上限、滚动位置在底部 (用户正跟随最新内容)、待清理部分不在视口内
-  (只清理视口顶行之前的那几条)。非底部 (用户正查看历史) 或整段内容都在屏幕上时不清理。
 - **清理内容**: 消息数据 (`TUIRenderState::messages` 头部若干条) + 该条目的渲染缓存
   (`LazyScrollable::notifyTrimmedHead`: 并行数组头删、被删条目的 Element 释放、锚点随索引
   前移 —— 视口顶行仍指向同一条消息, 画面零跳变) + 中断视图/附件行/折叠行等上一帧命中区

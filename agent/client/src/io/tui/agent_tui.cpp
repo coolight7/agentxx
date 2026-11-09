@@ -2190,9 +2190,9 @@ void TUIClientAgentIO::onMessageQueueUpdate(const agentxx::agent::WireMessageQue
 // 本地消息条数上限 (client 线程投递 + UI 线程执行; 见 model/message_window.h)
 //
 // 为什么判定在 UI 线程: "哪些消息可以安全清理"取决于消息列表当前的滚动位置
-// (视口顶行所在消息) 与是否吸附底部, 这两项只有 UI 线程独占的组件知道。
-// client 线程在末尾追加消息时只投递一次检查 (原子去重), 清理在帧首动作队列里
-// 执行, 同帧的布局/渲染随即按新列表 (与收缩后的并行数组) 进行。
+// (视口顶行所在消息), 这只有 UI 线程独占的组件知道。client 线程在末尾追加消息时
+// 只投递一次检查 (原子去重), 清理在帧首动作队列里执行, 同帧的布局/渲染随即按
+// 新列表 (与收缩后的并行数组) 进行。
 // ---------------------------------------------------------------------------
 
 void TUIClientAgentIO::pushLocalRowLocked(TUIRenderState& st, TUIMessage row) {
@@ -2225,22 +2225,20 @@ void TUIClientAgentIO::applyLocalTrimCheck() {
         auto snap    = sharedState_.readSnapshot();
         messageCount = snap->messages().size();
     }
-    // 清理条件: 超出上限 + 滚动位置在底部 + 只清理视口上方 (未被显示) 的头部消息
-    const bool   atBottom = messageList_->isStickToBottom();
-    const size_t safe     = messageList_->trimSafeHeadCount(messageCount);
-    const size_t plan     = agentxx::client::planLocalMessageTrim(messageCount, safe, atBottom);
-    if (plan == 0) {
-        return;
-    }
-    size_t dropped = 0;
-    size_t left    = 0;
+    // 清理范围只由视口位置决定: 保留 max(末尾上限条数, 视口及其上方的几条)。
+    // 不看是否吸附底部 —— 用户上滚查看历史时, 视口之前的更早消息同样被清理
+    // (视口内容本身不动, 见 planLocalMessageTrim)
+    const size_t visible = messageList_->trimSafeHeadCount(messageCount);
+    size_t       dropped = 0;
+    size_t       left    = 0;
     {
         std::lock_guard<std::mutex> lock(sharedState_.mutex());
         auto&                       st = sharedState_.mutableState();
-        // 复查: 动作排队期间列表可能已被整体替换 (onSync / 会话切换) 或已缩短
-        if (st.replica.rows().size() > agentxx::client::kLocalMessageLimit) {
-            const size_t planned
-                = std::min(plan, st.replica.rows().size() - agentxx::client::kLocalMessageLimit);
+        // 复查: 动作排队期间列表可能已被整体替换 (onSync / 会话切换) 或已缩短,
+        // 按最新条数重算可清理条数 (视口下标只会因头部删除而前移, 这里无需修正)
+        const size_t count   = st.replica.rows().size();
+        const size_t planned = agentxx::client::planLocalMessageTrim(count, visible);
+        if (planned > 0) {
             dropped = st.replica.trimHead(planned);
             // 历史窗口记账: 已加载区间首条右移 (这些消息在服务端仍在),
             // 用户上滚到窗口顶部时按页重新拉回
@@ -2261,8 +2259,8 @@ void TUIClientAgentIO::applyLocalTrimCheck() {
         left
     );
     postRedraw();
-    // 仍超上限 (视口顶行在更深处, 下一次布局会按底部窗口重取锚点) 时下一帧继续:
-    // 每次都会真删掉若干条, 不会空转
+    // 仍超上限 (视口在更深处, 只清理到视口上方的保留条数) 时下一帧再判一次:
+    // 那时锚点已前移到视口位置, 判定结果为 0 即自然停止
     if (left > agentxx::client::kLocalMessageLimit) {
         scheduleLocalTrimCheck();
     }
@@ -2708,8 +2706,8 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
             case Type::InsertMessage: {
                 clearGenPlaceholder();
                 if (delta.message) {
-                    // 用户自己的新消息: 先恢复吸附底部, 再追加 (追加触发的本地条数
-                    // 清理检查读到的是"跟随最新内容"的状态, 不被上一轮的上滚挡住)
+                    // 用户自己的新消息与事件行: 先恢复吸附底部 (用户要能看到自己刚
+                    // 发的消息及其后的回复), 再追加
                     if (delta.message->role == TUIMessage::Role::User
                         || delta.message->role == TUIMessage::Role::Event) {
                         enqueueUiAction([this]() {
@@ -2736,6 +2734,10 @@ void TUIClientAgentIO::onDelta(const agentxx::agent::WireDelta& delta) {
                         if (auto row = st.replica.rowById(delta.message->id)) {
                             foldLongUserMessage(*row);
                         }
+                    }
+                    // 新行入列即参与本地条数上限判定 (与本地行同一条路径)
+                    if (st.replica.rows().size() > agentxx::client::kLocalMessageLimit) {
+                        scheduleLocalTrimCheck();
                     }
                 }
             } break;
@@ -2947,6 +2949,10 @@ void TUIClientAgentIO::onIncrementalSync(const agentxx::agent::WireSyncPayload& 
             }
             st.history.noteTailAppended(st.replica.rows().size() - messagesBefore,
                                         payload.totalMessages);
+            // 补拉后同样按视口位置清理过旧的头部消息 (超出本地上限时)
+            if (st.replica.rows().size() > agentxx::client::kLocalMessageLimit) {
+                scheduleLocalTrimCheck();
+            }
             applied = true;
         }
     }

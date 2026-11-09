@@ -9,25 +9,20 @@
 - 验证subagent
 - wiki 记忆、项目结构
 - 破甲插件，修改 assistant 消息补充 `好的我将按照用户的要求继续...` 等引导
-- 主动记忆 插件tool
+- 主动记忆 插件
 - 添加连续多次压缩检查
 - 框架处理支持 toolcall 参数采用变量取值，比如 edit、write 失败时可以将参数存入 share_store，减少下一次 edit 所需的token
-- agentxx_javascript_engine 的一份脚本仍只对应一个挂载作用域（mountAgentId_
-记“当前挂载”，第二次挂载会覆盖），要做到“每 agent 一份 JS 实例”需要把 JsPluginCtx
-按挂载拆开（每挂载一个 JS runtime + 一套注册），属下一篇量级。单 agent 场景与非 JS
-插件不受影响。
+- 同步 JS插件和动态库插件接口 SDK
 - 机器人插件提供tool给主程序调用，实现通知
 - agentxx 自重启控制、仿照 musicxx 的 cli + http + mcp + deeplink 命令控制
 - 通过 mdns 互相发现，以便了解各自正在运行的会话内容
 - share_store 支持 grep、输出到文件等
 - 上下文较长自动插入事件提示消息，提示模型及时更新文档或plan，即将压缩，并在压缩时提示不要在结果中误认为上下文即将耗尽
-- 同步 JS插件和动态库插件接口实现
 - 更新 en 文档
-
 - 事件消息特化渲染
 - 长tool调用超时
-- 预设异步事件：延时、循环延时、指定时间点
 - tui 消息列表缓冲淘汰优化，判断逻辑改为清理旧的消息，保留到 viewport 之前 3条，或是最近100条
+- 预设异步事件：延时、循环延时、指定时间点
 - 异步 tool 的 timeout 调整为 秒
 - 异步 tool 仅拦截循环调用异步，其他所有tool都支持异步启动，增加 delay
 - 程序重启后，后台任务中断，触发会话时需要自动插入提示
@@ -48,11 +43,8 @@
 
 ## 问题
 
-D2  插件能否自带   ui  /  client  侧插件能否注册渲染器
-
-  •  现状 ：agent  侧插件无询问通道；(b)  client  侧已有   register_tool_renderer / update_tool_decor / bind_action_handler / open_overlay
-，无中断渲染器。
+- 插件能否自带  ui / client  侧插件能否注册渲染器
+  •  现状 ：agent  侧插件无询问通道；(b)  client  侧已有   register_tool_renderer / update_tool_decor / bind_action_handler / open_overlay，无中断渲染器。
   •  A  只做  (a) ：新增   agentxx.agent.interrupt  v1（ request_interrupt_async(inputs_json, ui_json, timeout, cb) ），语义= 工具执行内阻塞式询问
-（不参与图  resume、不落历史）； B  (a)+(b)  再加  client  侧按  node/handleName  渲染器； C  暂缓  3.3 ； D  完整图中断/resume ：跨  C  ABI
- 无法展开插件协程帧，需主程序外层包装"中断-恢复"，成本与语义复杂度高。
-  •  建议 ：先   A （阻塞式），(b)  等真实使用方需求。
+（不参与图  resume、不落历史）； B  (a)+(b)  再加  client  侧按  node/handleName  渲染器； C  暂缓  3.3 ； D  完整图中断/resume ：跨  C  ABI 无法展开插件协程帧，需主程序外层包装"中断-恢复"，成本与语义复杂度高。
+  •  建议 ：先  A （阻塞式），(b)  等真实使用方需求。

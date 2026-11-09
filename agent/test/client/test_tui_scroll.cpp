@@ -524,8 +524,8 @@ static void testHistoryPrependAnchoring() {
 
     // ---- 场景 D: 本地条数上限清理 (头部删除 k 条, 见 model/message_window.h) ----
     //
-    // 客户端在末尾追加消息后, 若超出本地上限且滚动位置在底部, 会把**视口上方**
-    // 的头部消息删掉 (消息数据 + 渲染缓存), 并同步:
+    // 客户端在末尾追加消息后, 若超出保留窗口 (max(末尾 100 条, 视口及其上方几条)),
+    // 会把**视口上方**的头部消息删掉 (消息数据 + 渲染缓存), 并同步:
     // - 消息列表并行数组与锚点前移 (视口内容零跳变)
     // - 历史窗口起点右移 (被删的一段在服务端仍在, 上滚时可重新分页拉回)
     {
@@ -541,13 +541,16 @@ static void testHistoryPrependAnchoring() {
         const size_t safe  = f.comp->trimSafeHeadCount(count);
         XX_TEST_EXPECT_TRUE(safe > 0);
         XX_TEST_EXPECT_TRUE(safe < count); // 视口内的消息不参与清理
-        // 判定组合 (与 applyLocalTrimCheck 同一套规则): 超出上限 + 吸附底部
+        // 判定 (与 applyLocalTrimCheck 同一套规则): 不再看是否吸附底部,
+        // 保留窗口 = max(末尾上限, 视口顶行及其后全部 + 视口上方 margin)
         XX_TEST_EXPECT_TRUE(f.comp->isStickToBottom());
+        XX_TEST_EXPECT_TRUE(safe > kLocalMessageViewportMargin); // 本夹具前提
         XX_TEST_EXPECT_EQ(
-            planLocalMessageTrim(kLocalMessageLimit + 30, safe, true),
-            std::min<size_t>(safe, 30)
+            planLocalMessageTrim(kLocalMessageLimit + 30, safe),
+            safe - kLocalMessageViewportMargin // 视口位置比末尾上限更大 -> 按视口保留
         );
-        XX_TEST_EXPECT_EQ(planLocalMessageTrim(kLocalMessageLimit + 30, safe, false), size_t{0});
+        // 上滚到顶后同一套判定: 视口顶行在第 0 条, 没有可清理的消息
+        XX_TEST_EXPECT_EQ(planLocalMessageTrim(kLocalMessageLimit + 30, 0), size_t{0});
 
         const std::string before       = f.render();
         const int         totalBefore  = f.comp->totalHeight();
@@ -578,6 +581,19 @@ static void testHistoryPrependAnchoring() {
             XX_TEST_EXPECT_EQ(snap->history.windowStart(), 100 + static_cast<uint64_t>(dropped));
             XX_TEST_EXPECT_EQ(snap->history.totalCount(), uint64_t{108});
             XX_TEST_EXPECT_TRUE(snap->history.hasMore());
+        }
+
+        // 上滚到顶 (不再吸附底部): 视口顶行在第 0 条, 没有可清理的消息。
+        // 判定不再要求吸附底部, 但视口及其上方 margin 条一律不动
+        for (int i = 0; i < 4000; ++i) {
+            (void)f.wheel(ftxui::Mouse::WheelUp);
+        }
+        f.render();
+        XX_TEST_EXPECT_FALSE(f.comp->isStickToBottom());
+        {
+            const size_t scrolled = f.comp->trimSafeHeadCount(count - dropped);
+            XX_TEST_EXPECT_EQ(scrolled, size_t{0});
+            XX_TEST_EXPECT_EQ(planLocalMessageTrim(kLocalMessageLimit + 30, scrolled), size_t{0});
         }
     }
 }

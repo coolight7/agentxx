@@ -13,9 +13,10 @@
 ///    - 本地清理头部消息后的窗口记账 (起点右移, 可重新分页拉回)
 ///    - 尾部序号连续性: 首个 / 连续 / 断号 / 重复
 ///    - 切换会话后旧响应被丢弃
-/// 2. 本地消息条数上限判定 (planLocalMessageTrim):
-///    - 未超上限 / 非吸附底部 -> 不清理
-///    - 只清理超出上限的部分, 且不超过视口上方的可清理条数
+/// 2. 本地消息条数上限: 清理判定 (planLocalMessageTrim):
+///    - 未超上限 / 视口顶行在第 0 条 -> 不清理
+///    - 保留窗口 = max(末尾上限条数, 视口顶行及其后全部 + 视口上方几条)
+///      (不再要求吸附底部: 上滚查看历史时也清理视口之前的更旧消息)
 /// 3. 消息队列镜像:
 ///    - 快照应用 (条目 + 队列状态), 未知状态文本与空状态的处理
 ///    - 按 id 删除 / 查找 / 清空
@@ -182,27 +183,36 @@ void testHistoryWindow() {
 
 /// 2. 本地消息条数上限: 清理判定 (纯函数)
 void testLocalMessageTrimPlan() {
-    const size_t limit = agentxx::client::kLocalMessageLimit;
+    const size_t limit  = agentxx::client::kLocalMessageLimit;
+    const size_t margin = agentxx::client::kLocalMessageViewportMargin;
 
     // 未超上限: 不清理 (边界: 恰好等于上限)
-    XX_TEST_EXPECT_EQ(planLocalMessageTrim(limit, 0, true), size_t{0});
-    XX_TEST_EXPECT_EQ(planLocalMessageTrim(limit - 1, 0, true), size_t{0});
+    XX_TEST_EXPECT_EQ(planLocalMessageTrim(limit, 0), size_t{0});
+    XX_TEST_EXPECT_EQ(planLocalMessageTrim(limit - 1, 0), size_t{0});
 
-    // 超出上限但滚动位置不在底部 (用户正查看历史): 不清理
-    XX_TEST_EXPECT_EQ(planLocalMessageTrim(limit + 20, 10, false), size_t{0});
+    // 跟随最新内容 (视口在末尾): 只保留末尾 limit 条
+    XX_TEST_EXPECT_EQ(planLocalMessageTrim(limit + 1, limit + 1), size_t{1});
+    XX_TEST_EXPECT_EQ(planLocalMessageTrim(limit + 30, limit + 27), size_t{30});
+    XX_TEST_EXPECT_EQ(planLocalMessageTrim(limit + 30, limit + 28), size_t{30});
+
+    // 视口顶行下标超出消息数 (锚点落在流式/占位子项上): 按消息数算,
+    // 仍只清理超出上限的部分
+    XX_TEST_EXPECT_EQ(planLocalMessageTrim(limit + 30, limit + 100), size_t{30});
 
     // 视口顶行在第 0 条 (整段内容都在屏幕上): 没有可安全清理的消息
-    XX_TEST_EXPECT_EQ(planLocalMessageTrim(limit + 20, 0, true), size_t{0});
+    XX_TEST_EXPECT_EQ(planLocalMessageTrim(limit + 20, 0), size_t{0});
 
-    // 只清理超出上限的部分 (视口上方还有更多可清理的也不多删)
-    XX_TEST_EXPECT_EQ(planLocalMessageTrim(limit + 3, 80, true), size_t{3});
-    // 视口上方可清理的条数不足时按可清理条数清理 (剩下的留在列表里)
-    XX_TEST_EXPECT_EQ(planLocalMessageTrim(limit + 30, 5, true), size_t{5});
-    // 视口顶行正好在"清理后应当保留的第一条"上: 恰好清理到上限
-    XX_TEST_EXPECT_EQ(planLocalMessageTrim(limit + 30, 30, true), size_t{30});
-    // 视口顶行下标超出消息数 (锚点落在流式/占位子项上): 按消息数算,
-    // 但仍只清理超出上限的部分
-    XX_TEST_EXPECT_EQ(planLocalMessageTrim(limit + 30, limit + 100, true), size_t{30});
+    // 上滚查看历史 (视口顶行在倒数第 160 条): 保留末尾 160 + margin 条,
+    // 于是清理掉视口之前的 visible - margin 条 (不再因为"不贴底"而完全不清理)
+    XX_TEST_EXPECT_EQ(planLocalMessageTrim(200, 200 - 160), size_t{200 - 160 - margin});
+    // 上滚不深 (视口顶行距末尾不足 limit 条): 仍按末尾 limit 条保留
+    XX_TEST_EXPECT_EQ(planLocalMessageTrim(limit + 20, 30), size_t{20});
+
+    // 视口上方留 margin 条: 视口顶行下标不足 margin 时一条都不清理
+    XX_TEST_EXPECT_EQ(planLocalMessageTrim(limit + 30, margin), size_t{0});
+    XX_TEST_EXPECT_EQ(planLocalMessageTrim(limit + 30, margin - 1), size_t{0});
+    // 刚过 margin: 只清理 margin 条之前的那一条
+    XX_TEST_EXPECT_EQ(planLocalMessageTrim(limit + 30, margin + 1), size_t{1});
 }
 
 /// 3. 消息队列镜像: 快照/删除/状态/回执记账

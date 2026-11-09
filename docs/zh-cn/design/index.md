@@ -467,11 +467,12 @@ TUI [F3] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
   LazyScrollable::notifyPrepended 做滚动锚定 (既有条目缓存/实测高度随索引
   平移保留, 偏移按新增区高度在 prepareLayout 内按新快照全额补偿并随
   实测增量收敛), 视口内容保持稳定
-- **客户端本地消息条数上限**: 客户端 (TUI) 只保留最近 100 条展示消息
-  (kLocalMessageLimit); 末尾追加消息后若超出上限, 且滚动位置在底部 (用户正
-  跟随最新内容), 则清理**视口上方未被显示**的头部消息 (消息数据 + 渲染缓存
-  + 命中区下标, 经 LazyScrollable::notifyTrimmedHead 平移, 视口零跳变),
-  同时把历史窗口起点右移 (HistoryWindow::noteTrimmedHead) —— 上滚到窗口顶部时
+- **客户端本地消息条数上限**: 客户端 (TUI) 的保留窗口 = max(末尾 100 条展示消息
+  (kLocalMessageLimit), 视口顶行及其后的全部 + 视口上方 3 条
+  (kLocalMessageViewportMargin)); 末尾追加消息或增量补拉后按这个窗口清理头部消息
+  (数据 + 渲染缓存 + 命中区下标, 经 LazyScrollable::notifyTrimmedHead 平移, 视口零跳变),
+  不再要求滚动位置在底部 —— 用户上滚查看历史时也清理视口之前的更旧消息。
+  清理同时把历史窗口起点右移 (HistoryWindow::noteTrimmedHead) —— 上滚到窗口顶部时
   仍按页拉回。历史分页前插与整体同步不触发清理; 只限条数不按字节
 - **Grace Period**: 断线后会话保持运行的宽限期，避免误取消进行中的轮次
 - **进程内直连**: ChannelAgentIOTransport 零序列化 Channel 传输，同进程内 client 与 agent 直连
