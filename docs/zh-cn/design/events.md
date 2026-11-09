@@ -367,6 +367,9 @@ content:
   （默认 5 分钟）供查询，到期自动清除。
 - **界面可见**：TUI Info 侧边栏的「后台任务」段经 `WireContextStats.asyncWorks`
   （追加字段，最多 10 条，为空不带）展示本会话创建的运行/排队/最近完成项；
+  台账状态变化（提交 / 起跑 / 终态 / 排队中被取消）经
+  `SessionInputSink::onAsyncWorksChanged` 通知创建者会话的驱动端点，端点合并后重推一次统计
+  （还有排队/运行中的条目时按秒续推，已跑时长跟着走）；
   只展示不给取消入口（取消走 `agentxx_async_cancel`），详见 [tui.md](tui.md) §2.7。
 - **`kind=tool`（异步工具）**：`agentxx_async_start` 把**一次工具调用**放到后台
   （`AsyncWorkSpec{toolName, toolArgs}`）。工具在**创建者**的**工具注册表**里查（插件与

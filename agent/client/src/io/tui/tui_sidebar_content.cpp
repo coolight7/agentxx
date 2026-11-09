@@ -53,6 +53,23 @@ ftxui::Element buildLogLine(const TUILogSink::Line& line, const TUITheme& theme)
     return paragraph(prefix + line.text) | color(c);
 }
 
+/// 已完成条目的单字符标记
+///
+/// 运行/排队段的条目没有标记 —— 状态已经由分组头 `|- 运行 n` / `|- 排队 n` 说明;
+/// 「完成」段里要区分是怎么结束的, 但只用**一个**字符 (ASCII: 侧边栏窄时多字节
+/// 字符会被截成半个), 颜色统一由调用方给。
+///
+/// - `return` 完成 `#`、失败 `x`、取消 `-`; 未知终态按完成处理
+std::string_view asyncWorkMark(std::string_view state) {
+    if (state == "failed") {
+        return "x";
+    }
+    if (state == "canceled") {
+        return "-";
+    }
+    return "#";
+}
+
 /// 渲染插件段落/面板 items 为一组子项 (通用, 零特化; 共享组件层统一入口)
 /// - 全部组件 kind 走 [ui_components.h] 的唯一实现 (与面板/装饰/overlay/中断一致)
 /// - 含可点区域的子项在 [ScrollItem::hits] 内登记局部坐标区域, 点击经
@@ -278,8 +295,11 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
         elements.push_back(text(""));
     }
 
-    // 后台任务段: 本会话创建的后台任务 (运行/排队/最近完成)
-    // - 数据来自服务端推送的 WireContextStats.asyncWorks (见 onContextStats)
+    // 后台任务段: 本会话创建的后台任务, 按 运行 / 排队 / 完成 分三段
+    // - 数据来自服务端推送的 WireContextStats.asyncWorks (见 onContextStats);
+    //   服务端在任务状态变化后主动重推 (运行期间每秒一次, 已跑时长跟着走)
+    // - 状态已由分组表达, 条目前不再带状态标记; 只有「完成」段的条目带一个单字符
+    //   标记 (见 [asyncWorkMark])
     // - 只展示状态与已跑时长, 不提供取消入口 (取消走模型工具 `agentxx_async_cancel`)
     // - 空数组时显示"( 无 )": 老服务端不带该字段, 或本会话确实没有任务
     {
@@ -290,19 +310,6 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
                 hbox({text("|- "), text(tr("info.asyncWorksEmpty"))}) | color(theme_.hintColor)
             );
         } else {
-            size_t running = 0;
-            size_t queued  = 0;
-            for (const auto& work : st.asyncWorks) {
-                if (work.state == "running") {
-                    ++running;
-                } else if (work.state == "queued") {
-                    ++queued;
-                }
-            }
-            workEls.push_back(
-                hbox({text("|- "), text(trf("info.asyncWorkSummary", running, queued))})
-                | color(theme_.normalColor)
-            );
             // 已跑时长按 mm:ss 显示 (超过一小时按 h:mm:ss)
             auto elapsedText = [](int64_t ms) -> std::string {
                 const int64_t total = std::max<int64_t>(0, ms) / 1000;
@@ -314,32 +321,50 @@ std::vector<ScrollItem> TUIClientAgentIO::renderInfoSidebar() {
                 }
                 return fmt::format("{:02d}:{:02d}", mins, secs);
             };
+            // 分组: 0 = 运行, 1 = 排队, 2 = 完成 (done/failed/canceled)
+            auto groupOf = [](std::string_view state) -> int {
+                if (state == "running") {
+                    return 0;
+                }
+                if (state == "queued") {
+                    return 1;
+                }
+                return 2;
+            };
+            size_t counts[3] = {0, 0, 0};
             for (const auto& work : st.asyncWorks) {
-                // 状态标记用 ASCII, 避免侧边栏窄时多字节字符被截成半个
-                std::string mark;
-                Color       rowColor = theme_.normalColor;
-                if (work.state == "running") {
-                    mark = ">";
-                } else if (work.state == "queued") {
-                    mark     = ".";
-                    rowColor = theme_.hintColor;
-                } else if (work.state == "failed") {
-                    mark     = "x";
-                    rowColor = theme_.errorColor;
-                } else if (work.state == "canceled") {
-                    mark     = "-";
-                    rowColor = theme_.hintColor;
-                } else {
-                    mark     = "ok";
-                    rowColor = theme_.hintColor;
+                ++counts[groupOf(work.state)];
+            }
+            static constexpr std::string_view kGroupTitleKeys[3] = {
+                "info.asyncWorkRunning",
+                "info.asyncWorkQueued",
+                "info.asyncWorkDone"
+            };
+            for (int group = 0; group < 3; ++group) {
+                // 分组头恒显示 (计数为 0 也是信息), 颜色与原汇总行一致
+                workEls.push_back(
+                    hbox({text("|- "), text(trf(kGroupTitleKeys[group], counts[group]))})
+                    | color(theme_.normalColor)
+                );
+                for (const auto& work : st.asyncWorks) {
+                    if (groupOf(work.state) != group) {
+                        continue;
+                    }
+                    std::string line{"|- "};
+                    if (group == 2) {
+                        // 完成段: 单字符标记区分 完成/失败/取消
+                        line += asyncWorkMark(work.state);
+                        line += ' ';
+                    }
+                    line += fmt::format("{} {}", work.id, work.name);
+                    // 排队中不显示时长 (还没开始跑), 也不显示排队位置 —— 排队段的
+                    // 条目顺序就是先后顺序
+                    if (work.elapsedMs > 0) {
+                        line += " " + elapsedText(work.elapsedMs);
+                    }
+                    // 所有列表项统一弱化色 (分组头已区分状态, 条目不再用状态色)
+                    workEls.push_back(text(std::move(line)) | color(theme_.hintColor));
                 }
-                std::string line = fmt::format("|- {} {} {}", mark, work.id, work.name);
-                if (work.state == "queued" && work.queueAhead > 0) {
-                    line += " " + std::string(trf("info.asyncWorkAhead", work.queueAhead));
-                } else if (work.elapsedMs > 0) {
-                    line += " " + elapsedText(work.elapsedMs);
-                }
-                workEls.push_back(text(std::move(line)) | color(rowColor));
             }
         }
         elements.push_back(vbox(std::move(workEls)));

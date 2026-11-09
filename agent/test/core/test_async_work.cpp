@@ -7,6 +7,8 @@
 #include "agentxx/agent/code_agent.h"
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/context.h"
+#include "agentxx/agent/io/context_stats_wire.h"
+#include "agentxx/agent/session_input_sink.h"
 #include "agentxx/plugin/tool_registry.h"
 #include "agentxx/tools/tool.h"
 #include "agentxx/util/tool_result.h"
@@ -211,6 +213,25 @@ public:
     utilxx_base::Json lastArgs = utilxx_base::Json::object();
     int               calls    = 0;
     std::mutex        mutex;
+};
+
+/// 探针: 模拟"驱动会话的端点" (生产里是 SessionServerAgentIO), 只关心台账变化通知
+class AwProbeSink : public agentxx::agent::SessionInputSink {
+public:
+
+    bool turnActive() const override {
+        return false;
+    }
+
+    bool submitTurnInput(std::string_view, std::string_view, bool) override {
+        return true;
+    }
+
+    void onAsyncWorksChanged() override {
+        notifications.fetch_add(1, std::memory_order_acq_rel);
+    }
+
+    std::atomic<int> notifications{0};
 };
 
 } // namespace
@@ -926,6 +947,111 @@ asio::awaitable<void> test_creator_gone_still_runs() {
     co_return;
 }
 
+/// 12. 台账变化通知驱动端点 (界面「后台任务」段靠它刷新)
+///
+/// - 提交 (入队) / 起跑 / 终态 / 排队中被取消都经
+///   `SessionInputSink::onAsyncWorksChanged` 通知创建者会话的端点
+/// - 组装下发条目时运行中的排在已完成的之前 (界面按状态分组, 上限 10 条也不会
+///   被已完成的条目挤掉)
+/// - 端点已解绑 (会话切走 / 端点停止) 后不再通知
+asio::awaitable<void> test_works_changed_notification() {
+    auto fx = std::make_shared<AwFixture>();
+    XX_TEST_EXPECT_TRUE(buildFixture(fx, /*maxConcurrent=*/1));
+
+    auto sink = std::make_shared<AwProbeSink>();
+    auto ctx  = fx->ctx();
+    XX_TEST_EXPECT_TRUE(ctx != nullptr && ctx->sessions != nullptr);
+    if (!ctx || !ctx->sessions) {
+        co_return;
+    }
+    // 端点登记为这个会话的驱动者 (生产里由 SessionServerAgentIO 在 run() 时挂上)
+    XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
+        auto session = ctx->sessions->getOrCreate(fx->sessionId);
+        if (!session) {
+            co_return false;
+        }
+        session->inputSink = sink;
+        co_return true;
+    }));
+
+    g_da_sim_delay_ms = 250;
+
+    // 额度 1 提交两个: 第一个起跑, 第二个排队; 端点至少被通知一次
+    std::vector<std::string> ids;
+    XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
+        for (int i = 0; i < 2; ++i) {
+            auto r = fx->host->submitAsyncWork(makeSpec(fx, "notify-job"), ctx);
+            if (!r.accepted) {
+                co_return false;
+            }
+            ids.push_back(r.asyncId);
+        }
+        co_return co_await waitUntil([&] {
+            return fx->host->runningAsyncWork() == 1 && fx->host->queuedAsyncWork() == 1
+                   && sink->notifications.load() > 0;
+        });
+    }));
+    XX_TEST_EXPECT_EQ(ids.size(), size_t{2});
+
+    // 下发的条目: 运行中的排在最前 (已完成的 linger 条目不能把运行中的挤掉)
+    XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
+        auto session = ctx->sessions->get(fx->sessionId);
+        if (!session) {
+            co_return false;
+        }
+        const auto stats
+            = agentxx::agent::io::makeWireContextStats(ctx, fx->sessionId, *session->contextStats);
+        co_return !stats.asyncWorks.empty() && stats.asyncWorks.front().state == "running";
+    }));
+
+    // 排队中被取消: 也是一次状态变化 (这条没入过运行态, 终态推送只在这里发)
+    const int beforeCancel = sink->notifications.load();
+    XX_TEST_EXPECT_TRUE(fx->host->cancelAsyncWork(ids[1]));
+    XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
+        co_return co_await waitUntil(
+            [&] {
+                return sink->notifications.load() > beforeCancel;
+            },
+            3000
+        );
+    }));
+
+    // 终态同样通知: 提交×2 + 起跑×1 + 取消×1 + 终态×1 = 5 次 (至少 4 次)
+    XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
+        co_return co_await waitUntil(
+            [&] {
+                return fx->host->runningAsyncWork() == 0 && fx->host->queuedAsyncWork() == 0
+                       && sink->notifications.load() >= 4;
+            },
+            8000
+        );
+    }));
+
+    // 端点解绑 (会话切走 / 端点停止) 后不再通知
+    XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
+        auto session = ctx->sessions->get(fx->sessionId);
+        if (!session) {
+            co_return false;
+        }
+        session->inputSink.reset();
+        const int before = sink->notifications.load();
+        auto      r      = fx->host->submitAsyncWork(makeSpec(fx, "silent-job"), ctx);
+        if (!r.accepted) {
+            co_return false;
+        }
+        const bool idle = co_await waitUntil(
+            [&] {
+                return fx->host->runningAsyncWork() == 0 && fx->host->queuedAsyncWork() == 0;
+            },
+            8000
+        );
+        co_return idle && sink->notifications.load() == before;
+    }));
+
+    g_da_sim_delay_ms = 0;
+    co_return;
+}
+
 asio::awaitable<TestResult> run_async_work_tests() {
     TestResult result;
 
@@ -942,6 +1068,7 @@ asio::awaitable<TestResult> run_async_work_tests() {
     co_await test_interrupt_responders();
     co_await test_session_store_claim();
     co_await test_creator_gone_still_runs();
+    co_await test_works_changed_notification();
 
     result.passed = g_aw_passed;
     result.failed = g_aw_failed;

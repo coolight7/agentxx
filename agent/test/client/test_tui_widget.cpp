@@ -667,6 +667,34 @@ std::string renderScrollItems(const std::vector<ScrollItem>& rows, int w, int h)
     return out;
 }
 
+/// 把滚动子项渲染到屏幕 (保留格子的前景色, 供颜色断言)
+ftxui::Screen renderScrollItemsScreen(const std::vector<ScrollItem>& rows, int w, int h) {
+    ftxui::Elements els;
+    for (const auto& row : rows) {
+        if (row.element) {
+            els.push_back(row.element);
+        }
+    }
+    auto screen = ftxui::Screen::Create(ftxui::Dimension::Fixed(w), ftxui::Dimension::Fixed(h));
+    ftxui::Render(screen, ftxui::vbox(std::move(els)));
+    return screen;
+}
+
+/// 屏幕里包含 sub 的第一行的行号 (-1 = 没找到)
+int screenRowOf(const ftxui::Screen& screen, std::string_view sub) {
+    for (int y = 0; y < screen.dimy(); ++y) {
+        std::string row;
+        for (int x = 0; x < screen.dimx(); ++x) {
+            const std::string& ch = screen.PixelAt(x, y).character;
+            row                  += ch.empty() ? std::string{" "} : ch;
+        }
+        if (row.find(sub) != std::string::npos) {
+            return y;
+        }
+    }
+    return -1;
+}
+
 /// 面板接入点: 新组件 (表格/计量条/横排/趋势图) 与控件经真实注册路径上屏,
 /// 并上报可用尺寸 (插件据此重排; 见 reportRegionSize)
 void test_panel_access_point_extended_components() {
@@ -905,9 +933,12 @@ void test_info_sidebar_session_title() {
 
 /// Info 侧边栏「后台任务」段:
 /// - 没任务 (或老服务端不带该字段) 时显示"( none )"
-/// - 收到 WireContextStats.asyncWorks 后逐条显示 id/名字/状态标记与时长,
-///   头部给出 "running N / queued M", 且排在 Context 之后、Append 之前
-/// - 后续推送 (流式 tps、任务结束后的下一次统计) 直接覆盖为最新快照
+/// - 有任务时分成 `|- running n` / `|- queued n` / `|- finished n` 三段, 每段下面是
+///   `|- <id> <名字> [时长]`; 分组头可以计数为 0
+/// - 条目前不再带状态标记 (状态已由分组表达), 只有「finished」段的条目带一个
+///   单字符标记 (`#` 完成 / `x` 失败 / `-` 取消); 排队中的条目不显示排队位
+/// - 所有列表项统一用 hint 色 (分组头保持 normal 色)
+/// - 后续推送直接覆盖为最新快照
 void test_info_sidebar_async_works() {
     const auto savedLang = TUISettings::instance().language();
     TUISettings::instance().setLanguage(TuiLanguage::EnUs);
@@ -915,6 +946,8 @@ void test_info_sidebar_async_works() {
     asio::io_context io;
     auto             tui = std::make_shared<TUIClientAgentIO>(io.get_executor(), "session");
     tui->refreshRenderContext();
+    // 构造时未显式传主题 → 默认暗色主题 (与断言用的期望色一致)
+    const auto theme = TUITheme::darkTheme();
 
     // 1) 尚未收到任何任务: 段落存在, 内容为 "( none )"
     {
@@ -923,7 +956,7 @@ void test_info_sidebar_async_works() {
         XX_TEST_EXPECT_TRUE(text.find("( none )") != std::string::npos);
     }
 
-    // 2) 一条运行中 + 一条排队: 头部计数、逐条 id/名字/时长/排队位
+    // 2) 一条运行中 + 一条排队: 分组头计数、逐条 id/名字/时长/排队位
     {
         agentxx::agent::WireContextStats stats;
         stats.contextTokens      = 1000;
@@ -949,27 +982,56 @@ void test_info_sidebar_async_works() {
         tui->onPeerMessage(agentxx::agent::WireMessage{stats});
         tui->refreshRenderContext();
 
-        const auto text = renderScrollItems(tui->renderInfoSidebar(), 60, 20);
+        const auto items = tui->renderInfoSidebar();
+        const auto text  = renderScrollItems(items, 60, 24);
         XX_TEST_EXPECT_TRUE(text.find("Async Work") != std::string::npos);
-        XX_TEST_EXPECT_TRUE(text.find("running 1 / queued 1") != std::string::npos);
-        // 运行中的条目: id + 名字 + 00:42
-        XX_TEST_EXPECT_TRUE(text.find("async-7") != std::string::npos);
-        XX_TEST_EXPECT_TRUE(text.find("research") != std::string::npos);
-        XX_TEST_EXPECT_TRUE(text.find("00:42") != std::string::npos);
-        // 排队中的条目: 不显示时长, 显示前面还有几个
-        XX_TEST_EXPECT_TRUE(text.find("async-9") != std::string::npos);
-        XX_TEST_EXPECT_TRUE(text.find("translate") != std::string::npos);
-        XX_TEST_EXPECT_TRUE(text.find("(2 ahead)") != std::string::npos);
+        // 三个分组头, 完成段计数为 0 也显示
+        XX_TEST_EXPECT_TRUE(text.find("|- running 1") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(text.find("|- queued 1") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(text.find("|- finished 0") != std::string::npos);
+        // 运行中的条目: 没有状态标记, 只有 id + 名字 + 00:42
+        XX_TEST_EXPECT_TRUE(text.find("|- async-7 research 00:42") != std::string::npos);
+        // 排队中的条目: 不比运行中的条目多什么 (不显示时长, 也不显示排队位 ——
+        // 排队段的条目顺序就是先后)
+        XX_TEST_EXPECT_TRUE(text.find("|- async-9 translate") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(text.find("(2 ahead)") == std::string::npos);
+        XX_TEST_EXPECT_TRUE(text.find("ahead") == std::string::npos);
         XX_TEST_EXPECT_TRUE(text.find("( none )") == std::string::npos);
+        // 分组顺序: running → queued → finished
+        const auto posRun  = text.find("|- running 1");
+        const auto posQueue = text.find("|- queued 1");
+        const auto posDone = text.find("|- finished 0");
+        XX_TEST_EXPECT_TRUE(posRun < posQueue);
+        XX_TEST_EXPECT_TRUE(posQueue < posDone);
+        // 条目在各自的分组头之后
+        XX_TEST_EXPECT_TRUE(text.find("async-7") > posRun);
+        XX_TEST_EXPECT_TRUE(text.find("async-7") < posQueue);
+        XX_TEST_EXPECT_TRUE(text.find("async-9") > posQueue);
+        XX_TEST_EXPECT_TRUE(text.find("async-9") < posDone);
         // 段落位置: Context 之后, Append 之前
         const auto posContext = text.find("Context");
         const auto posWorks   = text.find("Async Work");
         XX_TEST_EXPECT_TRUE(posContext != std::string::npos);
         XX_TEST_EXPECT_TRUE(posWorks != std::string::npos);
         XX_TEST_EXPECT_TRUE(posContext < posWorks);
+
+        // 颜色: 列表项一律 hint, 分组头保持 normal
+        const auto screen  = renderScrollItemsScreen(items, 60, 24);
+        const int  itemRow = screenRowOf(screen, "async-7 research");
+        XX_TEST_EXPECT_TRUE(itemRow >= 0);
+        if (itemRow >= 0) {
+            // "|-" 与正文同一个弱化色
+            XX_TEST_EXPECT_EQ(screen.PixelAt(0, itemRow).foreground_color, theme.hintColor);
+            XX_TEST_EXPECT_EQ(screen.PixelAt(3, itemRow).foreground_color, theme.hintColor);
+        }
+        const int headRow = screenRowOf(screen, "running 1");
+        XX_TEST_EXPECT_TRUE(headRow >= 0);
+        if (headRow >= 0) {
+            XX_TEST_EXPECT_EQ(screen.PixelAt(0, headRow).foreground_color, theme.normalColor);
+        }
     }
 
-    // 3) 任务结束后的推送 (只带完成态): 覆盖为最新快照, 不再有 running 条目
+    // 3) 任务结束后的推送 (三条终态): 覆盖为最新快照, 完成段用单字符标记区分结果
     {
         agentxx::agent::WireContextStats stats;
         stats.contextTokens = 1000;
@@ -980,15 +1042,31 @@ void test_info_sidebar_async_works() {
             .state     = "failed",
             .elapsedMs = 65000,
         });
+        stats.asyncWorks.push_back(agentxx::agent::WireAsyncWorkItem{
+            .id        = "async-8",
+            .kind      = "tool",
+            .name      = "grep",
+            .state     = "done",
+            .elapsedMs = 3000,
+        });
+        stats.asyncWorks.push_back(agentxx::agent::WireAsyncWorkItem{
+            .id        = "async-9",
+            .kind      = "agent",
+            .name      = "translate",
+            .state     = "canceled",
+            .elapsedMs = 1000,
+        });
         tui->onPeerMessage(agentxx::agent::WireMessage{stats});
         tui->refreshRenderContext();
 
-        const auto text = renderScrollItems(tui->renderInfoSidebar(), 60, 20);
-        XX_TEST_EXPECT_TRUE(text.find("running 0 / queued 0") != std::string::npos);
-        XX_TEST_EXPECT_TRUE(text.find("async-7") != std::string::npos);
-        XX_TEST_EXPECT_TRUE(text.find("01:05") != std::string::npos);
-        // 排队那条已不在快照里 (界面直接覆盖, 不做本地堆积)
-        XX_TEST_EXPECT_TRUE(text.find("async-9") == std::string::npos);
+        const auto text = renderScrollItems(tui->renderInfoSidebar(), 60, 24);
+        XX_TEST_EXPECT_TRUE(text.find("|- running 0") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(text.find("|- queued 0") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(text.find("|- finished 3") != std::string::npos);
+        // 完成段: `|- <单字符> <id> <名字> <时长>`
+        XX_TEST_EXPECT_TRUE(text.find("|- x async-7 research 01:05") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(text.find("|- # async-8 grep 00:03") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(text.find("|- - async-9 translate 00:01") != std::string::npos);
     }
 
     // 4) 空数组 (老服务端/没有任务): 回到 "( none )"
@@ -997,9 +1075,10 @@ void test_info_sidebar_async_works() {
         stats.contextTokens = 1000;
         tui->onPeerMessage(agentxx::agent::WireMessage{stats});
         tui->refreshRenderContext();
-        const auto text = renderScrollItems(tui->renderInfoSidebar(), 60, 16);
+        const auto text = renderScrollItems(tui->renderInfoSidebar(), 60, 24);
         XX_TEST_EXPECT_TRUE(text.find("( none )") != std::string::npos);
         XX_TEST_EXPECT_TRUE(text.find("async-7") == std::string::npos);
+        XX_TEST_EXPECT_TRUE(text.find("|- running") == std::string::npos);
     }
 
     TUISettings::instance().setLanguage(savedLang);

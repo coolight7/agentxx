@@ -373,10 +373,12 @@ constexpr Entry kTable[] = {
     {"info.cacheHitRate",               "Cache hit: {:.1f}%",                                                            "缓存命中率: {:.1f}%"                                                                                 },
     {"info.contextEmpty",               "( no data )",                                                                   "( 无数据 )"                                                                                            },
     // 后台任务段 (Info 侧边栏; 数据来自 WireContextStats.asyncWorks)
+    // - 分 运行 / 排队 / 完成 三组, 每组一个分组头 (计数) + 条目
     {"info.asyncWorks",                 "Async Work",                                                                    "后台任务"                                                                                            },
     {"info.asyncWorksEmpty",            "( none )",                                                                      "( 无 )"                                                                                                },
-    {"info.asyncWorkSummary",           "running {} / queued {}",                                                        "运行 {} / 排队 {}"                                                                                    },
-    {"info.asyncWorkAhead",             "({} ahead)",                                                                    "(前面 {} 个)"                                                                                        },
+    {"info.asyncWorkRunning",           "running {}",                                                                    "运行 {}"                                                                                              },
+    {"info.asyncWorkQueued",            "queued {}",                                                                     "排队 {}"                                                                                              },
+    {"info.asyncWorkDone",              "finished {}",                                                                   "完成 {}"                                                                                              },
     {"info.append",                     "Append",                                                                        "已加载"                                                                                                },
     {"info.appendFailed",               "Failed: {}",                                                                    "失败: {}"                                                                                               },
     {"info.viewFailed",                 "[ View ]",                                                                      "[ 查看 ]"                                                                                               },

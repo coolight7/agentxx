@@ -44,10 +44,13 @@ static constexpr size_t kIncrementalReplayMaxMessages = 512;
 ///   明确的拒绝结果, 好过无上限堆积
 static constexpr size_t kMaxStashedWhileSwitching = 64;
 
-/// 信息侧边栏「后台任务」段最多下发的条数
-/// - 侧边栏只有几行可见高度, 发多了反而看不到标的 (完整台账由 `agentxx_async_query`
-/// 与插件接口给出)
-static constexpr size_t kAsyncWorksInStats = 10;
+/// 后台任务状态变化后的合并窗口 (毫秒)
+/// - 一批变化 (连续提交 / 批量取消) 只推一次统计; 再久用户就会觉得"没反应"
+static constexpr int64_t kAsyncWorksChangeDelayMs = 100;
+
+/// 还有排队/运行中的任务时的续推间隔 (毫秒)
+/// - 界面上的"已跑时长"由服务端当场算, 不续推就会停在最后一次推送的值
+static constexpr int64_t kAsyncWorksTickMs = 1000;
 
 /// 单个消息级 op 进重放缓冲的字节上限 (超过则只广播, 不入缓冲)
 /// - 缓冲按条数计 (config_.deltaBufferCap), 一条 MB 级的工具行会把整窗口挤掉;
@@ -64,51 +67,6 @@ static bool deltaTooLargeForReplay(const WireDelta& delta) {
         }
     }
     return bytes > kDeltaBufferMaxMsgBytes;
-}
-
-/// 后台任务台账 JSON → 界面条目
-///
-/// 台账条目 (`AsyncWorkManager::listJson`) 是给模型/插件看的完整记录, 界面只需要
-/// 少量字段: 状态、名字、已跑时长与排队位。已跑时长由时间戳当场算出 (运行中 = 现在 -
-/// 开始, 已结束 = 结束 - 开始), 台账里不存"时长"避免每次写回。
-///
-/// - `args`:
-///     - [works] `AgentHost::asyncWorksJson` 返回的数组
-///     - [limit] 最多取几条 (界面限制 10 条, 避免侧边栏被挤满)
-///
-/// - `return` 可直接放进 `WireContextStats::asyncWorks` 的条目
-static std::vector<WireAsyncWorkItem>
-    asyncWorkItemsOf(const utilxx_base::Json& works, size_t limit) {
-    std::vector<WireAsyncWorkItem> out;
-    if (!works.is_array()) {
-        return out;
-    }
-    const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                           std::chrono::system_clock::now().time_since_epoch()
-    )
-                           .count();
-    for (const auto& item : works) {
-        if (out.size() >= limit) {
-            break;
-        }
-        WireAsyncWorkItem work;
-        work.id    = item.value("asyncId", std::string{});
-        work.kind  = item.value("kind", std::string{});
-        work.name  = item.value("name", std::string{});
-        work.state = item.value("state", std::string{});
-        if (work.id.empty()) {
-            continue;
-        }
-        const auto startedAtMs  = item.value("startedAtMs", int64_t{0});
-        const auto finishedAtMs = item.value("finishedAtMs", int64_t{0});
-        if (startedAtMs > 0) {
-            const auto endMs = finishedAtMs > startedAtMs ? finishedAtMs : nowMs;
-            work.elapsedMs   = std::max<int64_t>(0, endMs - startedAtMs);
-        }
-        work.queueAhead = static_cast<int32_t>(item.value("queueAhead", int64_t{0}));
-        out.push_back(std::move(work));
-    }
-    return out;
 }
 
 /// 会话标题规范化: 去首尾空白、换行/制表符折叠为空格、限长
@@ -238,7 +196,8 @@ SessionServerAgentIO::SessionServerAgentIO(
     agent_(std::move(agent)),
     config_(std::move(config)),
     collectTimer_(std::make_shared<asio::steady_timer>(ex_)),
-    wakeChannel_(std::make_shared<WakeChannel>(ex_, 64)) {}
+    wakeChannel_(std::make_shared<WakeChannel>(ex_, 64)),
+    asyncWorksStatsTimer_(std::make_shared<asio::steady_timer>(ex_)) {}
 
 SessionServerAgentIO::~SessionServerAgentIO() {
     stopImpl();
@@ -2445,6 +2404,8 @@ void SessionServerAgentIO::stopImpl() {
     // 待合并输入丢弃 (客户端已断开, 无需回执)
     collectPending_.clear();
     collectTimer_->cancel();
+    // 后台任务段刷新定时器同样停掉 (回调会把快照推给已断开的客户端)
+    asyncWorksStatsTimer_->cancel();
     // 切换会话期间暂存的消息一并丢弃 (端点已停止, 不再重放)
     switchTargetId_.clear();
     stashedWhileSwitching_.clear();
@@ -2819,23 +2780,69 @@ void SessionServerAgentIO::sendContextStats(const std::shared_ptr<AgentIOTranspo
             }
         }
     }
-    // 上下文占用 + 会话累计用量 (界面显示已消耗/输入/输出/缓存 token) 统一组装
-    WireContextStats stats = io::toWireContextStats(*sess->contextStats);
-    // 后台任务 (信息侧边栏「后台任务」段): 本会话创建的运行/排队/最近完成项;
-    // 无容器 (单机库调用/未挂载) 或没有任务时不带该字段, 界面显示"( 无 )"
-    if (auto agent = agent_.lock(); agent && agent->agentContext) {
-        if (auto host = agent->agentContext->host.lock()) {
-            stats.asyncWorks = asyncWorkItemsOf(
-                host->asyncWorksJson({}, config_.sessionId, true, kAsyncWorksInStats),
-                kAsyncWorksInStats
-            );
-        }
-    }
+    // 上下文占用 + 会话累计用量 + 后台任务段统一组装 (界面显示已消耗/输入/输出/缓存
+    // token 与信息侧边栏「后台任务」段); 任何一处统计推送都不能只带一部分字段 ——
+    // 客户端按整份覆盖, 少填的字段等于把它清空
+    auto agent = agent_.lock();
+    WireContextStats stats = io::makeWireContextStats(
+        (agent && agent->agentContext) ? agent->agentContext : nullptr,
+        config_.sessionId,
+        *sess->contextStats
+    );
     if (target) {
         sendToClient(target, stats);
     } else {
         sendToPeer(stats);
     }
+}
+
+void SessionServerAgentIO::onAsyncWorksChanged() {
+    // 调用方可能在任意线程 (后台任务管理器 / 插件): 统一回到本端点的执行器处理
+    asio::dispatch(ex_, [self = weak_from_this()]() {
+        auto io = self.lock();
+        if (!io) {
+            return;
+        }
+        io->scheduleAsyncWorksStatsPush(std::chrono::milliseconds{kAsyncWorksChangeDelayMs});
+    });
+}
+
+void SessionServerAgentIO::scheduleAsyncWorksStatsPush(std::chrono::milliseconds delay) {
+    if (stopped_.load(std::memory_order_acquire) || !hasAliveClient()) {
+        return; // 没人看着: 不推也不轮询 (下一次握手自然会拿到快照)
+    }
+    if (asyncWorksStatsPending_) {
+        return; // 已排定: 那次推送读到的就是此刻的最新快照, 不必重置计时
+    }
+    asyncWorksStatsPending_ = true;
+    asyncWorksStatsTimer_->expires_after(delay);
+    asyncWorksStatsTimer_->async_wait([self = shared_from_this()](ErrorCode ec) {
+        if (ec) {
+            return; // 端点停止 (定时器被取消)
+        }
+        self->asyncWorksStatsPending_ = false;
+        self->sendContextStats();
+        // 还有排队/运行中的任务: 继续按秒推送, 让界面上的已跑时长跟着走;
+        // 全部终态后这次就是最后一次 (完成态留在台账里供回看)
+        if (self->hasActiveAsyncWorks()) {
+            self->scheduleAsyncWorksStatsPush(std::chrono::milliseconds{kAsyncWorksTickMs});
+        }
+    });
+}
+
+bool SessionServerAgentIO::hasActiveAsyncWorks() const {
+    auto agent = agent_.lock();
+    if (!agent || !agent->agentContext || config_.sessionId.empty()) {
+        return false;
+    }
+    auto host = agent->agentContext->host.lock();
+    if (!host) {
+        return false;
+    }
+    // 只数排队与运行中的条目 (includeFinished=false): 完成态不再变化, 不必续推
+    const auto works
+        = host->asyncWorksJson({}, config_.sessionId, /*includeFinished=*/false, 1);
+    return works.size() > 0;
 }
 
 WireModelInfo SessionServerAgentIO::buildModelInfo(std::string_view sessionId) {

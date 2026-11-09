@@ -436,26 +436,41 @@ Context
 
 ```
 后台任务
-|- 运行 1 / 排队 1
-|- > async-7 research 00:42
-|- . async-9 translate (前面 2 个)
+|- 运行 1
+|- async-7 research 00:42
+|- 排队 1
+|- async-9 translate
+|- 完成 2
+|- # async-5 worker 00:31
+|- x async-3 worker 00:02
 ```
 
 - 数据通道 `WireContextStats.asyncWorks` (追加字段, 不改消息类型; 老服务端不带时为空数组,
-  界面显示 `( 无 )`): 最多 10 条, 服务端 `SessionServerAgentIO::sendContextStats` 向
-  `AgentHost` 取"本会话创建的"运行/排队/最近完成项;
+  界面显示 `( 无 )`): 最多 10 条, 服务端所有统计推送点都经
+  `io::makeWireContextStats` 组装 (置 `asyncWorks`, 取 `AgentHost` 台账里"本会话创建的"
+  条目); 挑选顺序为 **运行 → 排队 → 完成** (完成按结束时间倒序), 已完成的 linger 条目
+  不会把运行中的挤掉;
 - 条目字段 `{id, kind, name, state, elapsedMs, queueAhead}`: `state` 为
-  `queued` / `running` / `done` / `failed` / `canceled`; 标记分别为 `.` / `>` /
-  `ok` / `x` / `-` (ASCII, 侧边栏窄时不会被截成半个字符), 失败的条目用错误色;
-- 时长按 `mm:ss` (超过一小时 `h:mm:ss`) 显示, 排队中改为显示前面还有几个;
+  `queued` / `running` / `done` / `failed` / `canceled`; 状态由**分组**表达, 条目前不带
+  标记; 只有「完成」段的条目带一个单字符 (完成 `#` / 失败 `x` / 取消 `-`, ASCII,
+  侧边栏窄时不会被截成半个字符);
+- 颜色: 三个分组头 (`|- 运行 n` 等) 用 `normalColor`, 所有 `|- xxx` 列表项统一
+  `hintColor` (不分状态);
+- 时长按 `mm:ss` (超过一小时 `h:mm:ss`) 显示; 排队中的条目不显示时长, 也**不显示
+  排队位** (`queueAhead` 仍随线消息下发, 但界面不展示 —— 排队段的条目顺序就是先后);
+- **刷新时机**: 台账状态变化 (提交 / 起跑 / 终态 / 排队中被取消) 时 `AsyncWorkManager`
+  通知创建者会话的驱动端点 (`SessionInputSink::onAsyncWorksChanged`), 端点合并后重推一次
+  统计; 只要还有排队/运行中的条目就按秒续推 (已跑时长跟着走), 全部终态后推一次即停;
+  无存活客户端时不推也不轮询;
 - **只展示, 不提供取消入口**: 取消走模型工具 `agentxx_async_cancel {id}`
   (或 chatbot 自己的面板), 界面不做动作按钮, 避免两个入口两套状态;
 - 每次推送都是当前快照, 客户端**直接覆盖**本地列表; 任务结束后服务端按
-  `async_work.linger_ms` (默认 5 分钟) 继续带出完成态, 到期后自动从列表消失;
-- 文案键: `info.asyncWorks` / `info.asyncWorksEmpty` / `info.asyncWorkSummary` /
-  `info.asyncWorkAhead`;
+  `async_work.linger_ms` (默认 5 分钟) 继续带出完成态, 到期后在下一次推送里消失;
+- 文案键: `info.asyncWorks` / `info.asyncWorksEmpty` / `info.asyncWorkRunning` /
+  `info.asyncWorkQueued` / `info.asyncWorkDone`;
 - 回归测试: `agentxx_test tui_widget` 的 `test_info_sidebar_async_works`
-  (无任务 / 运行+排队 / 不用时长而用排队位 / 完成态覆盖 / 清空回到 `( 无 )`),
+  (无任务 / 三段计数与顺序 / 条目颜色 / 完成段单字符标记 / 无排队位 / 清空回到 `( 无 )`),
+  通知链路见 `agentxx_test async_work` 的 `test_works_changed_notification`,
   线消息往返见 `agentxx_test wire_roundtrip`。
 
 ### 2.8 Info 侧边栏底部 (工作目录 / 授权按钮 / 版本信息)

@@ -640,8 +640,12 @@ path/to/agentxx_test --log-level warn string_util regex
   诊断: `KeyMetrics` 与加载快照的 `async_work` 段; 测试 `async_work` /
   `async_tools` / `event_subagent` / `event_tools`。**界面**: TUI Info 侧边栏「后台任务」段 (排在 Context 段
   之后、Append 段之前) 经 `WireContextStats.asyncWorks` 追加字段下发 (最多 10 条, 为空不带,
-  老客户端忽略), 只展示不给取消入口 (`info.asyncWorks` 一组文案键; 测试
-  `tui_widget` 的 `test_info_sidebar_async_works`), 详见
+  老客户端忽略), 分类显示为 `|- 运行 n` / `|- 排队 n` / `|- 完成 n` 三段 (完成段条目带
+  单字符标记 `#`/`x`/`-`, 排队条目不显示排队位, 所有列表项统一 hint 色), 只展示不给取消入口 (`info.asyncWork*`
+  一组文案键; 测试 `tui_widget` 的 `test_info_sidebar_async_works`);
+  **刷新**由台账驱动: 提交/起跑/终态/排队中取消经 `SessionInputSink::onAsyncWorksChanged`
+  通知创建者会话的端点, 端点合并后重推统计, 有排队/运行条目时按秒续推 (测试 `async_work`
+  的 `test_works_changed_notification`); 详见
   [tui.md](docs/zh-cn/design/tui.md) §2.7。**插件接入示例** (`agentxx_chatbot`,
   测试 `chatbot_task` / `plugin_example_chatbot`): 业务台账在 `chatbot_task.{h,cpp}` (纯逻辑,
   编进测试), 模型工具 `chatbot_task` (`submit`/`status`/`cancel`/`list`) + 命令

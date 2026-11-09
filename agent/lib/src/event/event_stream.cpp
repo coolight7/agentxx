@@ -753,9 +753,13 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
         session_->persistThrottled("llm-output");
     }
 
-    // llm node 执行完成，推送上下文统计更新 (占用 + 会话累计用量)
+    // llm node 执行完成，推送上下文统计更新 (占用 + 会话累计用量 + 后台任务段)
     if (hasLLMOutput && io_ && session_->contextStats) {
-        io_->sendToPeer(agentxx::agent::io::toWireContextStats(*session_->contextStats));
+        io_->sendToPeer(agentxx::agent::io::makeWireContextStats(
+            ctx_.lock(),
+            sessionId_,
+            *session_->contextStats
+        ));
     }
 }
 
@@ -928,7 +932,13 @@ void EventBridge::pushTpsIfDue() {
                                  : 0.0;
     tpsLastPushSec_        = nowSec;
     tpsLastPushToken_      = tpsTokenCount_;
-    io_->sendToPeer(agentxx::agent::io::toWireContextStats(*session_->contextStats, tps));
+    // 统一下发: 除占用/用量/速度外还带上后台任务段 (界面按整份覆盖, 缺了就显示成空)
+    io_->sendToPeer(agentxx::agent::io::makeWireContextStats(
+        ctx_.lock(),
+        sessionId_,
+        *session_->contextStats,
+        tps
+    ));
 }
 
 void EventBridge::publishModelToken(const std::string& token, std::string_view kind) {

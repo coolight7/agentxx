@@ -182,6 +182,18 @@ public:
         bool             unpausePaused
     ) override;
 
+    /// 后台任务台账变化 ([SessionInputSink] 实现)
+    ///
+    /// 界面的「后台任务」段随上下文统计下发 (见 [sendContextStats]), 而台账变化本身
+    /// 不会触发任何下发 —— 排队转运行、任务结束这些变化界面就看不到。这里把最新快照
+    /// 重推一次给所有客户端, 并合并短时间内的多次变化。
+    ///
+    /// - 还有排队/运行中的任务时按秒续推, 让界面上的"已跑时长"继续走; 全部终态后
+    ///   推送一次即停
+    /// - 无存活客户端时不排定时器 (等下一次握手自然会拿到快照)
+    /// - 可从任意线程调用 (统一投递到本端点的执行器)
+    void onAsyncWorksChanged() override;
+
     /// 驱动循环 run() 是否仍在运行 (用于停止时等待其退出)
     bool running() const noexcept {
         return running_.load(std::memory_order_acquire);
@@ -394,6 +406,14 @@ private:
     void cancelGraceTimer();
     void failAllPending();
 
+    /// 排定一次「后台任务」段刷新 (仅 ex_ 线程)
+    /// - 已在排定中时忽略: 窗口内的多次变化合并成一次推送, 那一刻读到的就是最新快照
+    /// - 无存活客户端 / 端点已停止时不排
+    void scheduleAsyncWorksStatsPush(std::chrono::milliseconds delay);
+
+    /// 本会话是否还有排队或运行中的后台任务 (决定是否按秒续推已跑时长)
+    bool hasActiveAsyncWorks() const;
+
     /// 处理客户端历史分页请求 (WireGetViewMessages → WireViewMessagesPage, target
     /// 指定时仅回复给请求方)
     void handleGetViewMessages(
@@ -550,6 +570,11 @@ private:
 
     // grace 定时器 (仅 ex_ 线程访问: startGraceTimer/cancelGraceTimer)
     std::shared_ptr<asio::steady_timer> graceTimer_;
+
+    // 后台任务段刷新定时器 (仅 ex_ 线程访问; 见 [onAsyncWorksChanged])
+    std::shared_ptr<asio::steady_timer> asyncWorksStatsTimer_;
+    /// 已排定一次刷新 (窗口内的多次变化合并成一次)
+    bool asyncWorksStatsPending_ = false;
 
     // ----- 插件事件转发状态 (仅 ex_ 线程访问) -----
 

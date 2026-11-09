@@ -108,6 +108,7 @@ struct TUIAsyncWorkItem {
     /// 已运行时长 (毫秒); 排队中为 0
     int64_t elapsedMs = 0;
     /// 同队列里在它前面的条数 (仅排队时有意义)
+    /// - 随线消息下发保留, 但信息侧边栏不再显示 (排队段的条目顺序即先后)
     int32_t queueAhead = 0;
 };
 

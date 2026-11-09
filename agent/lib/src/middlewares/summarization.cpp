@@ -1331,9 +1331,14 @@ asio::awaitable<bool>
             .message = std::make_shared<agentxx::agent::ViewMessage>(vm),
             .type    = agentxx::agent::WireDelta::Type::UpdateMessage,
         });
-        // 压缩后占用回落, 推送更新 (累计用量一并下发, 界面上的已消耗 token 不回退)
+        // 压缩后占用回落, 推送更新 (累计用量一并下发, 界面上的已消耗 token 不回退;
+        // 后台任务段同样带上, 否则这次推送会把侧边栏那一段清空)
         if (session->contextStats) {
-            session->io->sendToPeer(agentxx::agent::io::toWireContextStats(*session->contextStats));
+            session->io->sendToPeer(agentxx::agent::io::makeWireContextStats(
+                agentCtxPtr,
+                sessionId,
+                *session->contextStats
+            ));
         }
     }
 

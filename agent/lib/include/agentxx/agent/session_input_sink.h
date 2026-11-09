@@ -34,6 +34,16 @@ public:
         std::string_view source,
         bool             unpausePaused
     ) = 0;
+
+    /// 会话的后台任务台账变了 (提交 / 起跑 / 终态)
+    ///
+    /// 后台任务段 (`WireContextStats::asyncWorks`) 由端点随上下文统计下发, 台账变化
+    /// 本身不会触发任何下发 —— 界面就看不到排队转运行、任务结束这些变化。端点实现
+    /// 本钩子后可以把最新快照重新下发 (TUI 信息侧边栏「后台任务」段)。
+    ///
+    /// - 未实现 (= 默认) 时什么都不做: 台账变化对界面不可见, 只影响展示, 不影响任务
+    /// - 可能在任意线程调用, 实现方需自行投递到自己的事件循环; 不得同步阻塞
+    virtual void onAsyncWorksChanged() {}
 };
 
 } // namespace agent

@@ -4,6 +4,7 @@
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/config_static.h"
 #include "agentxx/agent/context.h"
+#include "agentxx/agent/session_input_sink.h"
 #include "agentxx/event/hub.h"
 #include "agentxx/plugin/tool_registry.h"
 #include "agentxx/tools/tool.h"
@@ -142,6 +143,46 @@ int64_t steadyNowMs() {
                std::chrono::steady_clock::now().time_since_epoch()
     )
         .count();
+}
+
+/// 通知创建者会话的端点: 台账变了 (提交 / 起跑 / 终态)
+///
+/// 后台任务队列的状态变化不会自己触发任何下发 —— 界面上看到的「后台任务」段是随
+/// 上下文统计来的, 只有端点 (SessionServerAgentIO) 能推。端点实现了
+/// [SessionInputSink::onAsyncWorksChanged] 就会重发一次快照, 界面随之更新。
+///
+/// - 投递到容器 io 线程执行: `SessionsManager` 与 `Session::inputSink` 都只在该线程
+///   访问 (调用方可能在任意线程: 模型工具 / 插件线程 / 取消路径)
+/// - 会话或端点不在了 (创建者已销毁 / 未绑定端点) 时静默跳过
+///
+/// - `args`:
+///     - [host]      容器 (弱引用由调用方给, 可能在投递前被释放)
+///     - [creator]   任务创建者的上下文 (弱引用, 同上)
+///     - [sessionId] 创建者会话 id (台账里登记的那个)
+void postAsyncWorksChanged(
+    const std::shared_ptr<AgentHost>&    host,
+    const std::shared_ptr<AgentContext>& creator,
+    const std::string&                   sessionId
+) {
+    if (!host || !creator || sessionId.empty()) {
+        return;
+    }
+    asio::post(
+        host->ioCtx()->get_executor(),
+        [weakCreator = std::weak_ptr<AgentContext>{creator}, sessionId]() {
+            auto ctx = weakCreator.lock();
+            if (!ctx || !ctx->sessions) {
+                return;
+            }
+            auto session = ctx->sessions->get(sessionId);
+            if (!session) {
+                return;
+            }
+            if (auto sink = session->inputSink.lock()) {
+                sink->onAsyncWorksChanged();
+            }
+        }
+    );
 }
 
 /// 按字节上限截断 (退到 UTF-8 字符边界, 避免留下半个字符)
@@ -630,6 +671,9 @@ AsyncWorkSubmitResult
     asio::post(host->ioCtx()->get_executor(), [host, key = spec.queueKey]() {
         host->asyncWork_->pump(key);
     });
+
+    // 界面: 新任务入队 (排队数变了, 同一队列里其他人的"前面还有几个"也变了)
+    postAsyncWorksChanged(host, creator, spec.creatorSessionId);
     return out;
 }
 
@@ -641,6 +685,9 @@ void AsyncWorkManager::pump(std::string_view queueKey) {
     std::string        nextId;
     AsyncWorkEventFn   startCb;
     utilxx_base::Json  startPayload;
+    /// 创建者 (界面通知用; 锁内取得, 锁外投递)
+    std::shared_ptr<AgentContext> nextCreator;
+    std::string                   nextSessionId;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         auto                        qit = queues_.find(queueKey);
@@ -667,6 +714,8 @@ void AsyncWorkManager::pump(std::string_view queueKey) {
             runningPerQueue_[std::string{queueKey}] = running + 1;
             eit->second.state                       = AsyncWorkState::Running;
             eit->second.startedAtMs                 = systemNowMs();
+            nextCreator                             = eit->second.creatorCtx.lock();
+            nextSessionId                           = eit->second.creatorSessionId;
             // 提交方回调 (起跑) 在锁外触发, 避免外部代码重入引发死锁
             startCb      = eit->second.spec.onEvent;
             startPayload = utilxx_base::Json{
@@ -685,6 +734,8 @@ void AsyncWorkManager::pump(std::string_view queueKey) {
         return;
     }
     fireAsyncWorkEvent(startCb, AsyncWorkEventPhase::Started, startPayload);
+    // 界面: 排队 → 运行 (在跑/排队两边计数都变了)
+    postAsyncWorksChanged(host, nextCreator, nextSessionId);
     XX_LOGD("[async_work] launch {} (queue={})", nextId, queueKey);
     asio::co_spawn(
         host->ioCtx()->get_executor(),
@@ -862,6 +913,9 @@ asio::awaitable<void>
         );
     }
 
+    // 界面: 终态 (完成/失败/取消; 结束后会在台账里 linger 一段时间供回看)
+    postAsyncWorksChanged(host, creator, spec.creatorSessionId);
+
     // 提交方回调: 终态 (取消优先: 取消时即使带错误也按取消上报)
     if (spec.onEvent) {
         fireAsyncWorkEvent(
@@ -894,6 +948,9 @@ bool AsyncWorkManager::cancel(std::string_view asyncId) {
     bool              canceledRunning  = false;
     AsyncWorkEventFn  canceledCb;
     utilxx_base::Json canceledPayload;
+    /// 创建者 (界面通知用; 锁内取得, 锁外投递)
+    std::shared_ptr<AgentContext> canceledCreator;
+    std::string                   canceledSessionId;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         auto                        it = entries_.find(asyncId);
@@ -917,6 +974,8 @@ bool AsyncWorkManager::cancel(std::string_view asyncId) {
             e.error                  = "canceled while queued";
             e.lingerDeadlineSteadyMs = steadyNowMs() + e.lingerMs;
             removedFromQueue         = true;
+            canceledCreator          = e.creatorCtx.lock();
+            canceledSessionId        = e.creatorSessionId;
             // 排队中直接被取消: 任务不会起跑, 终态回调在这里发
             canceledCb      = e.spec.onEvent;
             canceledPayload = utilxx_base::Json{
@@ -946,6 +1005,8 @@ bool AsyncWorkManager::cancel(std::string_view asyncId) {
         fireAsyncWorkEvent(canceledCb, AsyncWorkEventPhase::Canceled, canceledPayload);
         // 出队后让后面的任务有机会起跑
         if (auto h = host_.lock(); h) {
+            // 界面: 排队中的任务直接取消 (没入过运行态, 终态推送只在这里发)
+            postAsyncWorksChanged(h, canceledCreator, canceledSessionId);
             asio::post(h->ioCtx()->get_executor(), [h, key = std::move(queueKey)]() {
                 h->asyncWork_->pump(key);
             });
