@@ -567,8 +567,10 @@ path/to/agentxx_test --log-level warn string_util regex
   `agentxx.agent.event.` 段 (与强类型主题分开), `turn.`/`tool.`/`async.`/`timer.`/`host.`
   子段保留给框架; 功能点 id 同一套规则 (`agentxx.agent.context.*` / `plugin.<名>.*`);
   投递文本是三段纯文本 `[Event] <名字>` / `[Info]` (mode/wait/status/ref/label/note) /
-  `[Content]` (值按纯文本渲染, 不套 JSON 转义; 多值用 `#1`/`#2`; 超长整段转 share store,
-  阈值 = `toolcallSummaryLimitOutputLength` 与 `event.value_max_bytes` 取小) ——
+  `[Content]` (值本身: 对象/数组给紧凑 JSON 原样、字符串给原文、多值给 JSON 数组 ——
+  **不解释字段, 不动别人自定义的 JSON**; 只对 `agentxx.agent.async.*` 把 `content`
+  产物正文按原文单独给出); 超长整段转 share store,
+  阈值 = `toolcallSummaryLimitOutputLength` 与 `event.value_max_bytes` 取小 ——
   首行仍以 `[Event]` 开头 (不命中工具失败前缀, 提示词也按这个首行识别事件输入);
   展示历史里它是 `ViewMessage::Role::Event` (LLM 上下文仍是 `user` 消息;
   角色由 `ViewMessage::roleOfInputSource(source)` 推导, 默认折叠, 界面上是

@@ -148,8 +148,7 @@ ref: call_1
 note: ...
 label: ...
 [Content]
-ok: true
-url: https://example.com/out.zip
+{"ok":true,"url":"https://example.com/out.zip"}
 ```
 
 三段结构（`renderEventText`, 实现见 `agent/lib/src/event/hub_text.cpp`）:
@@ -157,11 +156,17 @@ url: https://example.com/out.zip
 - `[Event] <名字>`: 首行只放事件名, 模型据此识别“这是事件而不是用户说话”; 折叠预览与日志也靠它认事件
 - `[Info]`: `mode` / `wait` / `status` 恒输出, `ref` / `label` / `note` 有值才写;
   `status` 取值 `value` / `values` / `stream-ended` / `stream-open` / `ended-empty` / `timeout`
-- `[Content]`: 值本体, 按**纯文本**渲染 (`renderEventValuesText`, 不套 JSON 转义):
-  字符串原样 (多行就是多行), 数字/布尔/null 同 JSON 文本, 对象逐行 `键: 值`,
-  数组逐行 `- 值`, 嵌套结构或多行字符串在键后换行并缩进两格;
-  多个值 (`mode=all` 等) 每段前一行 `#<序号>`; 无值时写 `(no value)`;
-  嵌套超过 8 层退回紧凑 JSON
+- `[Content]`: **值本身**, 不做任何字段解释（`renderEventValuesText`）:
+  - 值可能是别人自定义的 JSON（插件 / 模型 `agentxx_async_emit`）: 对象 / 数组一律给紧凑
+    JSON（`dump()`，键序 / 转义 / 数字格式与发布时一致），**不改字段、不改转义** ——
+    否则 `"step":1` 会变成 `step: 1`、字符串 `"1"` 与数字 `1` 混为一谈
+  - 字符串值给原文（它本身就是文本，不是 JSON 结构；多行就是多行）
+  - 多个值（`mode=all` 等）给 JSON 数组（`[1,2]`）；无值写 `(no value)`
+  - **唯一例外**: 框架自己的后台任务结果事件（`agentxx.agent.async.*`）把产物正文放在
+    `content` 字段里（工具输出 / 子代理回答，本身可能就是 JSON 文本）：该字段按原文单独
+    给出（`content:` 一行 + 原文），其余字段仍是同一个 JSON。原文即原文，不经 JSON 转义，
+    也不会把正文里的 JSON 重新排版（见 [eventTextPayloadField]）；
+    其他事件一律不解释字段
 - 末尾换行去掉（投递文本作为一条 `user` 消息）;
 - 内容过长时**整段**转会话 share store（不再逐值转存, 否则默认阈值下会卸载两次）:
   判定与提示与工具输出压缩共用 `agentxx::util::offloadShareStoreIfOversized`,
@@ -177,15 +182,12 @@ url: https://example.com/out.zip
 [Info]
 mode: first
 wait: w-3
-status: value
 ref: async-7
+status: value
 [Content]
-asyncId: async-7
-kind: tool
-name: agentxx_filesystem_grep
+{"asyncId":"async-7","kind":"tool","name":"agentxx_filesystem_grep","hasError":false,...}
 content:
-  <工具输出原样, 多行就是多行>
-hasError: false
+<工具输出原样, 多行就是多行; 本身是 JSON 就还是那段 JSON>
 ```
 
 `agentxx_async_await` 的返回值用同一个渲染函数（`EventHub::contentText` + `renderEventText`）,

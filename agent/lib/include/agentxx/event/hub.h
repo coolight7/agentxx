@@ -306,8 +306,13 @@ public:
 
     /// 值列表 → `[Content]` 段文本 (超长时整段转会话 share store)
     /// - 投递文本与工具返回值共用这一处, 保证两边展示一致
-    /// - 多值按 `#1` / `#2` 分块; 内容为空时返回空串 (由 [renderEventText] 补占位)
-    std::string contentText(std::string_view sessionId, const std::vector<Json>& values);
+    /// - 值本身是**别人的 JSON**: 对象/数组原样 `dump()` 输出, 不改字段/不改转义;
+    ///   只有后台任务结果事件 (见 [eventTextPayloadField]) 的正文字段按原文单独给出
+    std::string contentText(
+        std::string_view         sessionId,
+        std::string_view         eventName,
+        const std::vector<Json>& values
+    );
 
     // -------------------------------------------------------------------
     // 定义 / 发布 (hub 线程)
@@ -662,21 +667,32 @@ auto EventHub::callSync(Fn&& fn, bool* completed) {
 // 文本渲染 (纯函数: 便于测试逐字段断言, 也是给模型看的稳定格式)
 // ---------------------------------------------------------------------------
 
-/// 事件值列表 → 纯文本 (给模型看的 `[Content]` 段)
+/// 值列表 → 纯文本 (给模型看的 `[Content]` 段)
 ///
-/// 不套 JSON 转义: 字符串原样输出 (多行就是多行), 否则模型读多行结果 (后台任务返回的
-/// 工具输出 / 子代理文本) 时会看到 `\n` 这类字面量。格式规则:
-/// - 字符串: 原样; 数字/布尔/null: 与 JSON 文本一致
-/// - 对象: 逐行 `键: 值`, 值是嵌套结构或多行字符串时键后换行、内容缩进 2 格
-/// - 数组: 逐行 `- 值`, 嵌套同样缩进
-/// - 多值 (`mode=all` 等): 每段前一行 `#<序号>` (从 1 开始)
-/// - 空对象/空数组写 `{}` / `[]`; 嵌套超过 8 层退回紧凑 JSON
+/// 值可能是别人自定义的 JSON (插件/模型发布的东西), 所以**不做任何字段解释**:
+/// - 单个值: 字符串给原文; 对象/数组给紧凑 JSON (`dump()`, 键序/转义/数字格式与发布时一致)
+/// - 多个值 (`mode=all` 等): 整体给 JSON 数组
+/// - 只有 [textPayloadField] 非空时, 才把值里那个顶层字符串字段按原文单独给出
+///   (那是"产物正文" —— 工具输出 / 子代理回答, 本身可能是 JSON 文本, 原文即原文)
 ///
 /// - `args`:
-///     - [values] 事件值列表 (为空时返回空串)
+///     - [values]            事件值列表 (为空时返回空串, 由 [renderEventText] 补占位)
+///     - [textPayloadField]  值里"产物正文"的字段名 (空 = 不解释字段, 整个值按 JSON/原文给出);
+///                           仅 [eventTextPayloadField] 认出的框架事件会传
 ///
-/// - `return` 逐段拼接的纯文本 (段间一个换行, 末尾不带换行)
-std::string renderEventValuesText(const std::vector<Json>& values);
+/// - `return` 内容段文本 (末尾不带换行)
+std::string renderEventValuesText(
+    const std::vector<Json>& values,
+    std::string_view         textPayloadField = {}
+);
+
+/// 值里"产物正文"的字段名 (空 = 该事件的值就是别人的 JSON, 不做解释)
+///
+/// 只有框架自己的后台任务结果事件 (`agentxx.agent.async.*`) 把多行正文塞在 JSON 字符串里
+/// (`content` = 工具输出 / 子代理回答): 这些字段按原文给出, 不经 JSON 转义。
+/// 其余事件 (包括插件事件与模型 `agentxx_async_emit` 发的自定义 JSON) 的值一律原样输出,
+/// 以免把别人自定义的 JSON 改成另一种文本格式。
+std::string_view eventTextPayloadField(std::string_view eventName);
 
 /// 一次投递的文本, 也是模型收到的输入正文 —— 三段固定结构:
 ///

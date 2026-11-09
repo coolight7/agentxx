@@ -25,10 +25,12 @@
    wait: w-3
    status: value
    [Content]
-   asyncId: async-7
+   {"asyncId":"async-7","kind":"tool","name":"...","hasError":false}
    content:
-     <原样多行, 无 \n 转义>
+   <工具输出原文, 多行就是多行>
    ```
+   值本身是**别人的 JSON**: 对象/数组原样 `dump()`, 不解释字段; 只有框架自己的
+   `agentxx.agent.async.*` 把 `content`(产物正文) 按原文单独给出。
 4. **长内容压缩**：`[Content]` 段超过阈值时复用
    `agentxx::util::offloadShareStoreIfOversized`（与 toolcall 输出压缩同一份实现与提示），
    阈值 = `toolcallSummaryLimitOutputLength`（默认 2048 字符）与 `event.value_max_bytes`
@@ -48,14 +50,18 @@
 ## 结论与偏差（事后）
 
 - 四项改动全部完成：折叠头高亮 + 折叠态名字/内容 dim、` · ` 空格修正、
-  正文改 `[Event]` / `[Info]` / `[Content]` 三段纯文本、长内容复用工具输出的 share store 压缩。
+  正文改 `[Event]` / `[Info]` / `[Content]` 三段、长内容复用工具输出的 share store 压缩。
+- **正文格式后经一次修正**（用户指出后改的）：`[Content]` 不再把值改写成自己
+  造的 `键: 值` / `- 项` 文本 —— 值可能是别人自定义的 JSON（插件 / 模型 `agentxx_async_emit`），
+  对象/数组一律紧凑 JSON 原样输出；只有框架自己的 `agentxx.agent.async.*` 把
+  `content` 产物正文按原文单独给出（它本身可能是 JSON 文本，原文即原文）。
+  `eventTextPayloadField` 是唯一的“解释字段”入口，其余事件不碰。
 - 配置键无增删：`event.value_max_bytes` 保留（语义由"单值"改为"内容段字节上限"），
   实际阈值与 `toolcallSummaryLimitOutputLength` 取小，默认就是工具输出阈值（2 K 字符）。
 - 与计划一致：无协议变更（展示角色与 `source=event:<名>` 未动，只是正文内容变化）；
   `agentxx_async_await` 工具结果同步换格式。
-- 计划之外的调整（均记录在 work.md）：数组内对象渲染改为 `- n: 1`（原计划未细化）；
-  长内容只能整段卸载一次（逐值卸载会在默认阈值下卸载两次）；
-  TUI 折叠预览改为取 `[Content]` 段首行（计划里已提到，实现多了一条"跳过 `#n` 分块标记"）。
+- 计划之外的调整（均记录在 work.md）：长内容只能整段卸载一次（逐值卸载会在默认阈值下
+  卸载两次）；TUI 折叠预览改为取 `[Content]` 段首行（跳过空行与转存提示行）。
 - 全量回归：42686 passed / 5 failed，失败全在 `boundaries`（接口表台账与子模块头文件不一致，
   属工作区既有状态 —— HEAD 的 `db234597` 刚把 `cxx_pluginxx` 子模块升到带
   `capability_info` / `list_capabilities` 的版本，而 `test_boundaries.cpp` 台账未同步；

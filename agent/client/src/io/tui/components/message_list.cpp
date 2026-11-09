@@ -242,25 +242,19 @@ void appendAttachmentCount(Elements& header, const TUIMessage& msg, const TUIThe
 ///
 /// 事件正文是中枢渲染好的三段文本 (`[Event] <名字>` / `[Info]` 元信息 /
 /// `[Content]` 内容): 头部已经显示了事件名, 元信息也不是内容, 所以预览取
-/// `[Content]` 段里第一行实际内容 (跳过分段标记、多值分块标记 `#1` 与转存提示行)。
+/// `[Content]` 段里第一行实际内容 (跳过空行与 share store 转存提示行)。
 /// 找不到该段标记时 (旧格式正文 / 手工构造的测试文本) 退回正文首行。
 std::string eventContentPreview(std::string_view text, size_t maxWidth) {
     constexpr std::string_view kContentMark = "[Content]";
     std::string_view           body         = text;
     if (const auto pos = text.find(kContentMark); pos != std::string_view::npos) {
         body = text.substr(pos + kContentMark.size());
-        // 跳过紧跟分段标记的空行、转存提示行与多值分块标记 (`#1` / `#2`)
+        // 跳过紧跟分段标记的空行与转存提示行 (提示行不是内容)
         while (!body.empty()) {
             const auto nl   = body.find('\n');
             const auto line = body.substr(0, nl);
-            bool       skip = line.empty() || line == "\r"
-                        || line.starts_with(agentxx::util::kOffloadHintPrefix);
-            if (!skip && line.size() >= 2 && line.front() == '#') {
-                skip = std::all_of(line.begin() + 1, line.end(), [](char c) {
-                    return c >= '0' && c <= '9';
-                });
-            }
-            if (!skip) {
+            if (!line.empty() && line != "\r"
+                && !line.starts_with(agentxx::util::kOffloadHintPrefix)) {
                 break;
             }
             if (nl == std::string_view::npos) {

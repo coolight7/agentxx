@@ -892,7 +892,7 @@ void EventHub::dispatchEnded(RecordEntry& rec) {
 
 void EventHub::flushWait(WaitEntry& entry, std::string_view status, bool resetValues) {
     auto&      wait    = entry.wait;
-    const auto content = contentText(wait.spec.originSession, wait.values);
+    const auto content = contentText(wait.spec.originSession, wait.spec.event, wait.values);
     std::string note;
     if (status == "stream-ended" || status == "ended-empty") {
         if (const auto* rec = findRecord(wait.spec.event)) {
@@ -959,9 +959,13 @@ void EventHub::finishWait(
     }
 }
 
-std::string EventHub::contentText(std::string_view sessionId, const std::vector<Json>& values) {
-    // 先按纯文本渲染 (不套 JSON 转义), 再整段判定是否需要转存
-    auto text = renderEventValuesText(values);
+std::string EventHub::contentText(
+    std::string_view         sessionId,
+    std::string_view         eventName,
+    const std::vector<Json>& values
+) {
+    // 值按原样输出 (别人的 JSON 不改); 只有框架自己的后台任务结果事件把正文字段原文给出
+    auto text = renderEventValuesText(values, eventTextPayloadField(eventName));
     if (text.empty() || cfg_.contentLimitLength == 0) {
         return text;
     }

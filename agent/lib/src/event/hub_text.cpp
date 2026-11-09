@@ -10,159 +10,74 @@ namespace events {
 
 namespace {
 
-/// 纯文本渲染的嵌套深度上限: 超过后退回紧凑 JSON, 防止异常深的嵌套把渲染撑爆
-constexpr int kMaxPlainDepth = 8;
+/// 值的 "产物正文" 字段: 只有框架自己的后台任务结果事件是这种形状
+constexpr std::string_view kAsyncResultTextField = "content";
 
-/// 每级缩进的空格数
-constexpr std::string_view kIndentStep = "  ";
-
-/// 该值是否要在键/项后换行再展开 (对象、非空数组, 或含换行的字符串)
-bool isBlockValue(const Json& value) {
-    if (value.is_object()) {
-        return !value.empty();
-    }
-    if (value.is_array()) {
-        return !value.empty();
-    }
-    if (value.is_string()) {
-        return value.get_string_view().find('\n') != std::string_view::npos;
-    }
-    return false;
+/// 拼一段 "键:\n原文" (键名就是值里那个字段名, 原文多行就是多行)
+void appendTextField(
+    std::string&     out,
+    std::string_view fieldName,
+    std::string_view body
+) {
+    out += fieldName;
+    out += ":\n";
+    out += body;
 }
 
-/// 标量值文本 (字符串原样, 其余同 JSON 文本)
-std::string scalarText(const Json& value) {
+/// 单个值 → 文本 (见 [renderEventValuesText] 的规则说明)
+std::string renderOneValue(const Json& value, std::string_view textPayloadField) {
+    // 字符串: 它本身就是文本, 直接给原文 (不是 JSON 结构, 没有可保的东西)
     if (value.is_string()) {
         return std::string{value.get_string_view()};
     }
-    return value.dump();
-}
-
-/// 多行文本逐行前补缩进 (首行也补, 末尾换行不再补一行空内容)
-void appendIndented(std::string& out, std::string_view text, std::string_view indent) {
-    size_t pos = 0;
-    while (true) {
-        const auto nl   = text.find('\n', pos);
-        const auto line = text.substr(
-            pos,
-            nl == std::string_view::npos ? std::string_view::npos : nl - pos
-        );
-        out += indent;
-        out += line;
-        if (nl == std::string_view::npos) {
-            return;
-        }
-        out += '\n';
-        pos = nl + 1;
-        if (pos >= text.size()) {
-            return;
-        }
+    // 对象/数组: 别人的 JSON 原样输出 (键序/转义/数字格式都不动)
+    if (!value.is_object() || textPayloadField.empty() || !value.contains(textPayloadField)
+        || !value[textPayloadField].is_string()) {
+        return value.dump();
     }
-}
-
-void appendPlain(std::string& out, const Json& value, std::string_view indent, int depth);
-
-/// 对象: 逐行 `键: 值`
-void appendObject(std::string& out, const Json& value, std::string_view indent, int depth) {
-    if (value.empty()) {
-        out += "{}";
-        return;
-    }
-    std::string deeper{indent};
-    deeper += kIndentStep;
-    bool first = true;
+    // 声明的正文字段: 从信封里拿出来按原文给出, 其余字段仍是同一个 JSON
+    // (正文字段没丢: 它就在下面同名那一行里)
+    Json envelope = Json::object();
     for (auto it = value.begin(); it != value.end(); ++it) {
-        if (!first) {
-            out += '\n';
-        }
-        first = false;
-        out += indent;
-        out += it.key();
-        if (isBlockValue(*it)) {
-            out += ":\n";
-            if (it->is_string()) {
-                appendIndented(out, it->get_string_view(), deeper);
-            } else {
-                appendPlain(out, *it, deeper, depth + 1);
-            }
-        } else {
-            out += ": ";
-            out += scalarText(*it);
-        }
-    }
-}
-
-/// 数组: 逐行 `- 值`
-/// - 嵌套对象/多行字符串接在 `- ` 之后, 后续行按上一级缩进对齐 (与 YAML 写法一致)
-void appendArray(std::string& out, const Json& value, std::string_view indent, int depth) {
-    if (value.empty()) {
-        out += "[]";
-        return;
-    }
-    std::string deeper{indent};
-    deeper += kIndentStep;
-    bool first = true;
-    for (const auto& item : value) {
-        if (!first) {
-            out += '\n';
-        }
-        first = false;
-        out += indent;
-        out += '-';
-        if (!isBlockValue(item)) {
-            out += ' ';
-            out += scalarText(item);
+        if (it.key() == textPayloadField) {
             continue;
         }
-        out += ' ';
-        // 嵌套内容先按下一级缩进渲染, 再把首行缩进换成 "- " 对齐
-        std::string nested;
-        if (item.is_string()) {
-            appendIndented(nested, item.get_string_view(), deeper);
-        } else {
-            appendPlain(nested, item, deeper, depth + 1);
-        }
-        if (nested.starts_with(deeper)) {
-            nested.erase(0, deeper.size());
-        }
-        out += nested;
+        envelope[it.key()] = *it;
     }
-}
-
-/// 值 → 纯文本 (按类型分派; 深度超限时退回紧凑 JSON)
-void appendPlain(std::string& out, const Json& value, std::string_view indent, int depth) {
-    if (depth > kMaxPlainDepth) {
-        out += value.dump();
-        return;
+    std::string out;
+    if (!envelope.empty()) {
+        out += envelope.dump();
+        out += '\n';
     }
-    if (value.is_object()) {
-        appendObject(out, value, indent, depth);
-        return;
-    }
-    if (value.is_array()) {
-        appendArray(out, value, indent, depth);
-        return;
-    }
-    out += scalarText(value);
+    appendTextField(out, textPayloadField, value[textPayloadField].get_string_view());
+    return out;
 }
 
 } // namespace
 
-std::string renderEventValuesText(const std::vector<Json>& values) {
-    std::string out;
-    bool        first = true;
-    for (size_t i = 0; i < values.size(); ++i) {
-        if (!first) {
-            out += '\n';
-        }
-        first = false;
-        // 多值: 每段前一行 `#<序号>`, 模型据此区分是"同一条流的第几个值"
-        if (values.size() > 1) {
-            out += fmt::format("#{}\n", i + 1);
-        }
-        appendPlain(out, values[i], std::string_view{}, 0);
+std::string_view eventTextPayloadField(std::string_view eventName) {
+    // 后台任务结果事件把工具输出 / 子代理回答放在 `content` 里 (多行文本)
+    if (eventName.starts_with(naming::kAgentAsyncPrefix)) {
+        return kAsyncResultTextField;
     }
-    return out;
+    // 其余一律不解释字段: 值可能是插件/模型自定义的 JSON
+    return {};
+}
+
+std::string renderEventValuesText(const std::vector<Json>& values, std::string_view textPayloadField) {
+    if (values.empty()) {
+        return {};
+    }
+    // 多个值是一次投递的多条 (mode=all 等): 用 JSON 数组如实表达"这些值",
+    // 不再另造编号/缩进格式
+    if (values.size() > 1) {
+        Json arr = Json::array();
+        for (const auto& value : values) {
+            arr.push_back(value);
+        }
+        return arr.dump();
+    }
+    return renderOneValue(values.front(), textPayloadField);
 }
 
 std::string renderEventText(

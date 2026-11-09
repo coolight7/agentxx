@@ -293,9 +293,10 @@ asio::awaitable<void> test_hub_replay() {
     co_return;
 }
 
-/// 4.1 投递文本格式: `[Event]` / `[Info]` / `[Content]` 三段, 内容为纯文本
-/// - 值为 JSON 对象时按 `键: 值` 逐行, 多行字符串不套 `\n` 转义 (模型读得懂)
-/// - 多值按 `#1` / `#2` 分块; 无值写 `(no value)`
+/// 4.1 投递文本格式: `[Event]` / `[Info]` / `[Content]` 三段
+/// - 值可能是别人自定义的 JSON: 对象/数组原样 `dump()` 输出, 不改字段/不改转义
+/// - 字符串值给原文; 多个值给 JSON 数组; 无值写 `(no value)`
+/// - 只有后台任务结果事件 (`agentxx.agent.async.*`) 的 `content` 字段按原文单独给出
 asio::awaitable<void> test_hub_text_format() {
     agentxx::events::EventWait wait;
     wait.waitId      = "w-7";
@@ -304,7 +305,7 @@ asio::awaitable<void> test_hub_text_format() {
     wait.spec.ref    = "call_1";
     wait.spec.label  = "nightly";
 
-    // 对象值: 多行字符串、布尔、数字、嵌套数组
+    // 自定义 JSON 值 (嵌套对象/数组/多行字符串): 原样输出, 一个字节都不改
     Json value = Json::object();
     value["asyncId"] = "async-7";
     value["ok"]      = true;
@@ -312,13 +313,10 @@ asio::awaitable<void> test_hub_text_format() {
     value["count"]   = 2;
     value["items"]   = Json::array({Json::object({{ "n", 1 }}), Json::object({{ "n", 2 }})});
 
-    const auto content
-        = agentxx::events::renderEventValuesText(std::vector<Json>{value});
-    XX_TEST_EXPECT_EQ(
-        content,
-        std::string{"asyncId: async-7\nok: true\nlog:\n  line1\n  line2\ncount: 2\n"
-                    "items:\n  - n: 1\n  - n: 2"}
-    );
+    const auto content = agentxx::events::renderEventValuesText(std::vector<Json>{value});
+    XX_TEST_EXPECT_EQ(content, value.dump());
+    XX_TEST_EXPECT_TRUE(contains(content, "\"log\":\"line1\\nline2\""));
+
     const auto text = agentxx::events::renderEventText(wait, "value", content, "note here");
     XX_TEST_EXPECT_EQ(
         text,
@@ -328,15 +326,53 @@ asio::awaitable<void> test_hub_text_format() {
             + content
     );
 
-    // 多值: 每段前一行 `#<序号>`
+    // 字符串值: 它本身就是文本, 给原文
+    XX_TEST_EXPECT_EQ(
+        agentxx::events::renderEventValuesText(std::vector<Json>{Json("plain text")}),
+        std::string{"plain text"}
+    );
+    // 多个值: 用 JSON 数组如实表达
     XX_TEST_EXPECT_EQ(
         agentxx::events::renderEventValuesText(std::vector<Json>{Json("a"), Json("b")}),
-        std::string{"#1\na\n#2\nb"}
+        std::string{"[\"a\",\"b\"]"}
     );
     // 无值: 段落仍存在, 内容位置写占位
     XX_TEST_EXPECT_TRUE(agentxx::events::renderEventValuesText({}).empty());
     XX_TEST_EXPECT_TRUE(
         agentxx::events::renderEventText(wait, "ended-empty", "").ends_with("[Content]\n(no value)")
+    );
+
+    // 后台任务结果事件: `content` 是产物正文 (工具输出/子代理回答), 按原文单独给出,
+    // 其余字段仍是同一个 JSON; 自定义 JSON 事件则完全不解释字段
+    XX_TEST_EXPECT_EQ(
+        agentxx::events::eventTextPayloadField("agentxx.agent.async.done"),
+        std::string_view{"content"}
+    );
+    XX_TEST_EXPECT_TRUE(agentxx::events::eventTextPayloadField(ev("build.done")).empty());
+    XX_TEST_EXPECT_TRUE(
+        agentxx::events::eventTextPayloadField("plugin.demo.chat.ping").empty()
+    );
+
+    Json asyncValue = Json::object();
+    asyncValue["asyncId"] = "async-7";
+    asyncValue["hasError"] = false;
+    asyncValue["content"]  = "line1\nline2";
+    XX_TEST_EXPECT_EQ(
+        agentxx::events::renderEventValuesText(
+            std::vector<Json>{asyncValue},
+            agentxx::events::eventTextPayloadField("agentxx.agent.async.done")
+        ),
+        std::string{"{\"asyncId\":\"async-7\",\"hasError\":false}\ncontent:\nline1\nline2"}
+    );
+    // 声明的字段不是字符串时不动值 (仍按 JSON 原样给出)
+    Json oddValue = Json::object();
+    oddValue["content"] = Json::object({{ "nested", 1 }});
+    XX_TEST_EXPECT_EQ(
+        agentxx::events::renderEventValuesText(
+            std::vector<Json>{oddValue},
+            agentxx::events::eventTextPayloadField("agentxx.agent.async.done")
+        ),
+        oddValue.dump()
     );
     co_return;
 }
@@ -378,11 +414,11 @@ asio::awaitable<void> test_hub_content_offload() {
         XX_TEST_EXPECT_TRUE(contains(text, "ID 1"));
         XX_TEST_EXPECT_TRUE(text.ends_with("..."));
     }
-    // 原文完整写入 share store (模型用 id 取回全文)
+    // 原文完整写入 share store (模型用 id 取回全文); 值本身仍是 JSON
     auto stored = fx->ctx->middlewareHandleContext->getShareStoreItemValue(fx->sessionId, 1);
     XX_TEST_EXPECT_TRUE(stored.has_value());
     if (stored.has_value()) {
-        XX_TEST_EXPECT_TRUE(contains(*stored, "log:\n  line1"));
+        XX_TEST_EXPECT_TRUE(contains(*stored, "\"log\":\"line1"));
         XX_TEST_EXPECT_TRUE(contains(*stored, "line30"));
     }
     co_return;
@@ -449,9 +485,8 @@ asio::awaitable<void> test_hub_mode_all() {
         auto inputs = takeEventInputs(fx->session);
         XX_TEST_EXPECT_TRUE(inputs.size() == 1);
         XX_TEST_EXPECT_TRUE(contains(inputs.front(), "status: stream-ended"));
-        // 多个值: 每段前一行 `#<序号>`
-        XX_TEST_EXPECT_TRUE(contains(inputs.front(), "[Content]\n#1\n1"));
-        XX_TEST_EXPECT_TRUE(contains(inputs.front(), "#2\n2"));
+        // 多个值: 用 JSON 数组如实表达
+        XX_TEST_EXPECT_TRUE(contains(inputs.front(), "[Content]\n[1,2]"));
         XX_TEST_EXPECT_TRUE(contains(inputs.front(), "note: stream ended with 2 value(s)"));
     }
 
@@ -783,8 +818,8 @@ asio::awaitable<void> test_hub_timer_source() {
         auto inputs = takeEventInputs(fx->session);
         XX_TEST_EXPECT_TRUE(inputs.size() == 1);
         XX_TEST_EXPECT_TRUE(contains(inputs.front(), "[Event] " + ev("timer.tick")));
-        // 定时源的值对象按 `键: 值` 逐行给出
-        XX_TEST_EXPECT_TRUE(contains(inputs.front(), "firedAtMs: "));
+        // 定时源的值对象按 JSON 原样给出 (框架事件也不解释字段)
+        XX_TEST_EXPECT_TRUE(contains(inputs.front(), "\"firedAtMs\":"));
     }
     // 一次性定时源触发后自行移除
     XX_TEST_EXPECT_FALSE(hub.cancelTimer("tick"));
@@ -1011,9 +1046,8 @@ asio::awaitable<void> test_hub_bus_bridge() {
     if (!fx->sink->texts.empty()) {
         XX_TEST_EXPECT_TRUE(contains(fx->sink->texts.front(), "[Event] plugin.demo.chat.ping"));
         XX_TEST_EXPECT_TRUE(contains(fx->sink->texts.front(), "mode: each"));
-        // JSON 对象值按纯文本渲染 (不套转义, 不保留花括号)
-        XX_TEST_EXPECT_TRUE(contains(fx->sink->texts.front(), "text: again"));
-        XX_TEST_EXPECT_FALSE(contains(fx->sink->texts.front(), "{"));
+        // 插件发布的值是它自己的 JSON: 原样给出 (不改成别的文本格式)
+        XX_TEST_EXPECT_TRUE(contains(fx->sink->texts.front(), "{\"text\":\"again\"}"));
     }
     co_return;
 }

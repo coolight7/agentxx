@@ -1025,7 +1025,7 @@ void testTuiStreamEventSource(asio::io_context& ioCtx) {
     {
         auto m = userRow(
             "msg_1",
-            "[Event] chat.message\n[Info]\nmode: first\nstatus: value\n[Content]\nhi"
+            "[Event] chat.message\n[Info]\nmode: first\nstatus: value\n[Content]\n{\"text\":\"hi\"}"
         );
         m.role       = ViewMessage::Role::Event;
         m.source     = std::string{agentxx::agent::kInputSourceEventPrefix} + "chat.message";

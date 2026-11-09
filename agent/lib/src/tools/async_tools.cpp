@@ -635,7 +635,7 @@ asio::awaitable<agentxx::util::ToolResult> AsyncAwaitTool::execute_async(const J
             agentxx::events::renderAwaitTimeout(specCopy, timeoutMs)
         );
     }
-    const auto content = hub->contentText(state.sessionId, wait.values);
+    const auto content = hub->contentText(state.sessionId, wait.spec.event, wait.values);
     const std::string status
         = wait.values.empty() ? "ended-empty" : (wait.values.size() > 1 ? "values" : "value");
     co_return agentxx::util::ToolResult::ok(

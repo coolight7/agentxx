@@ -666,11 +666,12 @@ void testEventSourceBadge() {
 
     ScrollFixture f;
     f.sharedState.mutate([](TUIRenderState& st) {
-        // 正文是中枢渲染好的三段文本; 内容段第二行带一个只在展开态才看得见的尾部标记
+        // 正文是中枢渲染好的三段文本 (内容段是值本身 + 后台任务的产物正文)
         auto eventMsg = std::make_shared<TUIMessage>(TUIMessage::makeText(
             TUIMessage::Role::Event,
             "[Event] chat.message\n[Info]\nmode: first\nwait: w-3\nstatus: value\n"
-            "[Content]\ntext: hi there\ntail: EVBODY9XYZ",
+            "[Content]\n{\"asyncId\":\"async-7\",\"kind\":\"tool\",\"name\":\"grep\"}\n"
+            "content:\ntext: hi there\ntail: EVBODY9XYZ",
             1000
         ));
         eventMsg->source = std::string{agentxx::agent::kInputSourceEventPrefix} + "chat.message";
@@ -683,9 +684,9 @@ void testEventSourceBadge() {
     });
 
     // 中文界面的事件头 (i18n 键 msg.eventPrefix, 见 tui_i18n.cpp)
-    const std::string header  = "+ [事件] chat.message";
-    // 折叠预览取 `[Content]` 段第一行 (不重复事件名, 也不显示 [Info] 元信息)
-    const std::string preview = "text: hi there";
+    const std::string header = "+ [事件] chat.message";
+    // 折叠预览取 `[Content]` 段第一行 (值本身原样给出, 元信息不重复)
+    const std::string preview = "{\"asyncId\":\"async-7\",\"kind\":\"tool\",\"name\":\"grep\"}";
 
     // 折叠态 (默认): 头部标记 + 事件名 + " · " + 内容预览; 正文尾部标记不入屏
     std::string frame = stripAnsiCodes(f.render());
@@ -763,9 +764,10 @@ void testEventSourceBadge() {
     std::string expanded = stripAnsiCodes(f.render());
     XX_TEST_EXPECT_TRUE(expanded.find("- [事件] chat.message") != std::string::npos);
     XX_TEST_EXPECT_TRUE(expanded.find("EVBODY9XYZ") != std::string::npos);
-    // 展开态: 全文上屏 (含分段标记), 事件名不再 dim
+    // 展开态: 全文上屏 (含分段标记与产物正文), 事件名不再 dim
     XX_TEST_EXPECT_TRUE(expanded.find("[Info]") != std::string::npos);
     XX_TEST_EXPECT_TRUE(expanded.find("mode: first") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(expanded.find("content:") != std::string::npos);
     {
         auto        screen = f.renderScreen();
         int         rowY   = -1;
@@ -833,7 +835,8 @@ void testEventOffloadPreview() {
             TUIMessage::Role::Event,
             "[Event] big.done\n[Info]\nmode: first\nwait: w-1\nstatus: value\n[Content]\n"
             "[Content offloaded. Use the `agentxx_share_store` tool to fetch the content by "
-            "ID 3. Total 200 lines, show [1, 66], hide [67, 200].]\nlog: PREVIEWLINE7Q",
+            "ID 3. Total 200 lines, show [1, 66], hide [67, 200].]\n"
+            "{\"asyncId\":\"async-7\"}\ncontent:\nPREVIEWLINE7Q",
             1000
         ));
         eventMsg->source = std::string{agentxx::agent::kInputSourceEventPrefix} + "big.done";
@@ -842,7 +845,9 @@ void testEventOffloadPreview() {
 
     const std::string frame = stripAnsiCodes(f.render());
     // 预览是提示行后面的第一行内容
-    XX_TEST_EXPECT_TRUE(frame.find("+ [事件] big.done · log: PREVIEWLINE7Q") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(
+        frame.find("+ [事件] big.done · {\"asyncId\":\"async-7\"}") != std::string::npos
+    );
     XX_TEST_EXPECT_TRUE(frame.find("Content offloaded") == std::string::npos);
 
     settings.setLanguage(savedLang);
