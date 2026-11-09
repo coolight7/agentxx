@@ -42,10 +42,24 @@ P4 暂不考虑，等P1 P2 P3实施完成后再尝试思考对策。
 
 ## 偏差与遗留
 
-- 宽限公式在原式 `max(10s, t/5)` 之上加了「不超过 `t`」的上界：`read_chunk_timeout`
-  配得比 10 秒还短时，「短超时」不能反而比正常间隔更长（默认 60s 时仍是 12s）。
-- Responses API 没有「生成结束」的中间事件，P1 不适用（只享受 P2/P3）。
+- 宽限公式在原式 `max(10s, t/5)` 之上加了“不超过 `t`”的上界：`read_chunk_timeout`
+  配得比 10 秒还短时，“短超时”不能反而比正常间隔更长（默认 60s 时仍是 12s，100/200s 仍是 20/40s）。
+- 收尾判定新增一条优先规则：取消令牌已取消时不做收尾，按取消退出（避免“取消恰好落在
+  结束原因与结束标记之间”时把已取消的调用当成功继续跑）。
+- Responses API 没有“生成结束”的中间事件，P1 不适用（只享受 P2/P3）。
 - Anthropic 流式路径仍不写 `completion.stop_reason`（历史遗留，与本次问题无关），
   本次只在诊断里记录 `stop_reason` 原文。
+- `RequestConfig` 末尾追加字段属**二进制不兼容**（源码兼容）：仓库内工具库均随主程序
+  源码构建，插件静态链接自己的那一份，无额外处理。
 
-详见 [plan.md](plan.md)，实施记录见 [work.md](work.md)。
+## 验证
+
+- `agentxx_test --log-level warn http openai_provider anthropic_provider llm_error`
+  → `passed=1322 failed=0`（含新增 7 个用例）
+- 全量 `agentxx_test --log-level warn` → `Total: passed=42753 failed=0`
+- 实跑日志三态可见：`missing [DONE] after finish_reason=tool_calls; accepted`、
+  `ended without [DONE] after finish_reason=stop; accepted | err=SSE read-body timeout`、
+  `missing message_stop after stop_reason=end_turn; accepted`，且诊断后缀带出
+  `recv/events/idle/finish/tools/args/name`
+
+详见 [plan.md](plan.md)，实施记录与与计划的差异见 [work.md](work.md)。
