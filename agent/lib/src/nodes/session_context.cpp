@@ -1,5 +1,6 @@
 #include "agentxx/nodes/session_context.h"
 
+#include "agentxx/agent/conversation_types.h"
 #include "agentxx/agent/io/agent_io.h"
 #include "agentxx/agent/session_store.h"
 #include "agentxx/middlewares/middleware.h"
@@ -294,7 +295,11 @@ PendingInjections drainPendingSessionInputs(
     for (auto& input : injects) {
         const auto text = contextTextForInjectedInput(ctx, sessionId, input);
         auto       msg  = makeInjectedUserMessage(input, text);
-        if (!input.source.empty() && input.source != "user") {
+        // 来源标记前缀: 注入内容只在本请求可见 (不进权威上下文), 模型在历史里找不到它的来源,
+        // 所以把来源写在正文前。事件投递的正文已经是 `[Event] <名字>`, 自己说明了来源,
+        // 再加一层 `[event:<名字>]` 只是重复, 因此事件输入不再前置
+        if (!input.source.empty() && input.source != "user"
+            && agentxx::agent::eventNameOfInputSource(input.source).empty()) {
             msg.content = fmt::format("[{}] {}", input.source, msg.content);
         }
         out.requestScoped.push_back(std::move(msg));

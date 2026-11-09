@@ -1,6 +1,7 @@
 #pragma once
 
 #include "agentxx/event/naming.h"
+#include "agentxx/event/text_sections.h"
 #include "asio/any_io_executor.hpp"
 #include "asio/awaitable.hpp"
 #include "asio/steady_timer.hpp"
@@ -676,7 +677,7 @@ auto EventHub::callSync(Fn&& fn, bool* completed) {
 ///   (那是"产物正文" —— 工具输出 / 子代理回答, 本身可能是 JSON 文本, 原文即原文)
 ///
 /// - `args`:
-///     - [values]            事件值列表 (为空时返回空串, 由 [renderEventText] 补占位)
+///     - [values]            事件值列表 (为空时返回空串, 由 [renderEventText] 写成 `[No Content]`)
 ///     - [textPayloadField]  值里"产物正文"的字段名 (空 = 不解释字段, 整个值按 JSON/原文给出);
 ///                           仅 [eventTextPayloadField] 认出的框架事件会传
 ///
@@ -710,7 +711,8 @@ std::string_view eventTextPayloadField(std::string_view eventName);
 ///   用户说话", 折叠预览与日志也能一眼认出是哪个事件
 /// - `[Info]` 中 `mode` / `wait` / `status` 固定输出, `ref` / `label` / `note` 有值才写
 /// - `[Content]` 是 [renderEventValuesText] 的结果; 超长时已转会话 share store,
-///   文本里是取回提示与开头片段; 内容为空时写 `(no value)`
+///   文本里是取回提示与开头片段
+/// - 这次投递没有值时, 最后的段标记写 `[No Content]` 而不是空着的 `[Content]`
 /// - `status` 取值: `value` / `values` / `stream-ended` / `stream-open` /
 ///   `ended-empty` / `timeout`
 std::string renderEventText(

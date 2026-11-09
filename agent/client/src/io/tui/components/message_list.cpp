@@ -7,6 +7,7 @@
 #include "agentxx-client/io/tui/plugin_ui_items.h"
 #include "agentxx-client/io/tui/text_layout.h"
 #include "agentxx-client/io/tui/ui_components.h"
+#include "agentxx/event/text_sections.h"
 #include "agentxx/plugin/client_plugin_manager.h" // ClientToolDecor 完整定义 (头文件中仅前置声明)
 #include "agentxx/util/exception.h"
 #include "agentxx/util/invisible_text.h"
@@ -243,12 +244,17 @@ void appendAttachmentCount(Elements& header, const TUIMessage& msg, const TUIThe
 /// 事件正文是中枢渲染好的三段文本 (`[Event] <名字>` / `[Info]` 元信息 /
 /// `[Content]` 内容): 头部已经显示了事件名, 元信息也不是内容, 所以预览取
 /// `[Content]` 段里第一行实际内容 (跳过空行与 share store 转存提示行)。
-/// 找不到该段标记时 (旧格式正文 / 手工构造的测试文本) 退回正文首行。
+/// - 本次投递没有值时正文以 `[No Content]` 结尾: 本来就没内容, 不画预览
+/// - 正文里找不到 `[Content]` 段标记 (旧格式正文 / 手工构造的测试文本): 退回正文首行
 std::string eventContentPreview(std::string_view text, size_t maxWidth) {
-    constexpr std::string_view kContentMark = "[Content]";
-    std::string_view           body         = text;
-    if (const auto pos = text.find(kContentMark); pos != std::string_view::npos) {
-        body = text.substr(pos + kContentMark.size());
+    using namespace agentxx::events;
+    // 无值投递的 `[No Content]` 就是最后一段, 后面没有内容
+    if (text.ends_with(kEventNoContentSection)) {
+        return {};
+    }
+    std::string_view body = text;
+    if (const auto pos = text.find(kEventContentSection); pos != std::string_view::npos) {
+        body = text.substr(pos + kEventContentSection.size());
         // 跳过紧跟分段标记的空行与转存提示行 (提示行不是内容)
         while (!body.empty()) {
             const auto nl   = body.find('\n');

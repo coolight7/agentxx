@@ -841,6 +841,15 @@ void testEventOffloadPreview() {
         ));
         eventMsg->source = std::string{agentxx::agent::kInputSourceEventPrefix} + "big.done";
         pushRow(st, std::move(*eventMsg));
+
+        // 没有值的投递 (`[No Content]`): 折叠头不画预览
+        auto quiet       = std::make_shared<TUIMessage>(TUIMessage::makeText(
+            TUIMessage::Role::Event,
+            "[Event] quiet.evt\n[Info]\nmode: first\nwait: w-2\nstatus: ended-empty\n[No Content]",
+            2000
+        ));
+        quiet->source    = std::string{agentxx::agent::kInputSourceEventPrefix} + "quiet.evt";
+        pushRow(st, std::move(*quiet));
     });
 
     const std::string frame = stripAnsiCodes(f.render());
@@ -849,6 +858,9 @@ void testEventOffloadPreview() {
         frame.find("+ [事件] big.done · {\"asyncId\":\"async-7\"}") != std::string::npos
     );
     XX_TEST_EXPECT_TRUE(frame.find("Content offloaded") == std::string::npos);
+    // `[No Content]`: 只有折叠头, 没有 " · " 与预览
+    XX_TEST_EXPECT_TRUE(frame.find("+ [事件] quiet.evt") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(frame.find("quiet.evt · ") == std::string::npos);
 
     settings.setLanguage(savedLang);
 }

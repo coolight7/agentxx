@@ -36,6 +36,17 @@
    阈值 = `toolcallSummaryLimitOutputLength`（默认 2048 字符）与 `event.value_max_bytes`
    取较小者。
 
+## 后续调整（用户提出）
+
+5. **无值写 `[No Content]`**：本次投递没有值时，最后一段的标记从空的 `[Content]` +
+   `(no value)` 占位改成 `[No Content]`（标记常量放 `agentxx/event/text_sections.h`，
+   渲染侧与 TUI 折叠预览共用）。TUI 见到它就不画 ` · ` 与预览 —— 本来就没内容。
+6. **事件 inject 不再前置来源标记**：`drainPendingSessionInputs` 只对非事件来源加
+   `[<来源>] ` 前缀。来源前缀原本是给“只在本请求可见、历史里查不到来历”的注入内容
+   标出来源（commit `7ffa773d`，记录见 `resource/history/compare-agent/work.md` LOOP-2），
+   而事件正文首行已是 `[Event] <名字>`、`[Info]` 里还有 `mode`/`wait`/`status`，
+   再叠 `[event:<名字>]` 只是重复。
+
 ## 关注点
 
 - `renderEventText` 同时被事件投递（`EventHub::flushWait`）与 `agentxx_async_await`
@@ -58,11 +69,13 @@
   `eventTextPayloadField` 是唯一的“解释字段”入口，其余事件不碰。
 - 配置键无增删：`event.value_max_bytes` 保留（语义由"单值"改为"内容段字节上限"），
   实际阈值与 `toolcallSummaryLimitOutputLength` 取小，默认就是工具输出阈值（2 K 字符）。
+- 两处后续调整（见 work.md §4.3）：无值改 `[No Content]`（TUI 据此不画预览）；
+  事件 `inject` 去掉重复的 `[event:<名字>]` 来源前缀，非事件来源仍保留。
 - 与计划一致：无协议变更（展示角色与 `source=event:<名>` 未动，只是正文内容变化）；
   `agentxx_async_await` 工具结果同步换格式。
 - 计划之外的调整（均记录在 work.md）：长内容只能整段卸载一次（逐值卸载会在默认阈值下
   卸载两次）；TUI 折叠预览改为取 `[Content]` 段首行（跳过空行与转存提示行）。
-- 全量回归：42686 passed / 5 failed，失败全在 `boundaries`（接口表台账与子模块头文件不一致，
-  属工作区既有状态 —— HEAD 的 `db234597` 刚把 `cxx_pluginxx` 子模块升到带
+- 全量回归：42699 passed / 5 failed，5 项全在 `boundaries`（规则 7/8/9/10 是接口表台账、
+  规则 15 是用词），属工作区既有状态 —— HEAD 的 `db234597` 刚把 `cxx_pluginxx` 子模块升到带
   `capability_info` / `list_capabilities` 的版本，而 `test_boundaries.cpp` 台账未同步；
-  与本次改动无关）。
+  与本次改动无关。

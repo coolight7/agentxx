@@ -64,7 +64,7 @@
 |---|---|
 | `agentxx_test --log-level warn event_hub event_delivery event_tools event_subagent async_tools plugin_event` | 通过（`event_hub` 265 条含新增用例） |
 | `agentxx_test --log-level warn tui_scroll tui_stream tui_settings config_keys` | 通过 |
-| 全量 `agentxx_test --log-level warn` | 42686 passed / 5 failed，失败全在 `boundaries`（接口表台账与 `third_party/cxx_pluginxx` 头文件不一致，规则 7/8/9/10/15），本次改动未触碰接口表与 `boundaries` 用例 |
+| 全量 `agentxx_test --log-level warn` | 42699 passed / 5 failed，5 项全在 `boundaries`：规则 7/8/9/10（接口表数量/名集合/四件套/成员顺序各 4 条）与规则 15（用词 23 条，命中都在 `third_party/cxx_pluginxx` 的头注释里）。属工作区既有状态（子模块刚升到带 `capability_info` / `list_capabilities` 的版本，台账与用词未同步），本次未碰接口表与 `boundaries` 用例 |
 | 构建 | 内层 lib（`agentxx_static`）+ install + 内层 client（`agentxx`）+ 内层 test（`agentxx_test`）均无错误 |
 
 ## 4.1 收尾补充
@@ -97,6 +97,53 @@
 “声明字段非字符串不动值”三块）、`plugin_event`（`{"step":1}` 原样）、timer/bus 断言改回 JSON 形式、
 `tui_scroll` 事件正文样例改用 JSON，预览断言随之调整。
 
+## 4.3 调整：无值用 `[No Content]`，事件 inject 不再前置来源标记
+
+用户提出两点：无值时把 `[Content]` 段标记改成 `[No Content]`；事件输入的来源标记
+（`[event:<名字>]`）与 `[Info]` 段重复，删掉。
+
+### `[No Content]`
+
+| 文件 | 改动 |
+|---|---|
+| `agent/lib/include/agentxx/event/text_sections.h`（新） | `kEventContentSection = "[Content]"` / `kEventNoContentSection = "[No Content]"` |
+| `agent/lib/include/agentxx/event/hub.h` | include 新头（原来这里定义的 `[Content]` 常量删掉）；`renderEventText` 文档改为“无值时写 `[No Content]`” |
+| `agent/lib/src/event/hub_text.cpp` | 末尾按 `contentText.empty()` 选段标记，不再写 `(no value)` 占位 |
+| `agent/client/src/io/tui/components/message_list.cpp` | 预览用两个常量；正文含 `[No Content]` 时返回空预览（不画 ` · `） |
+
+常量单独放一个头，是为了让展示端不必为一个字符串包含整个 `hub.h`（`hub.h` 带 asio）。
+
+### 事件 inject 的来源标记
+
+`drainPendingSessionInputs` 只对**非事件来源**加 `[<来源>]` 前缀
+（判定用 `agentxx::agent::eventNameOfInputSource(input.source).empty()`）。
+
+原本的目的（查过 `7ffa773d` 与 `resource/history/compare-agent/work.md` 的 LOOP-2）：
+`inject` 的内容只进本次请求、不进权威上下文，模型在历史里找不到这段内容的来历，
+所以把来源写在正文前。事件投递的正文首行就是 `[Event] <名字>`、`[Info]` 里还写着
+`mode`/`wait`/`status`，来源已经说明过，再叠一层只是重复。非事件来源仍保留前缀。
+
+### 测试与文档
+
+- `test_event_hub`：格式 golden 与 `test_hub_watch_ended_event` 的结尾断言改成 `[No Content]`。
+- `test_tui_scroll`：`testEventOffloadPreview` 增加一条 `[No Content]` 消息，断言只有折叠头、
+  没有 `quiet.evt · ` 预览。
+- `test_input_delivery`：新增 `test_event_inject_has_no_source_prefix` —— 直接登记一条
+  `source = event:chat.message` 的 inject，断言请求里有 `[Event] chat.message`、
+  没有 `[event:chat.message]`，且权威上下文里仍没有这段内容（inject 语义未变）。
+- 文档：`events.md`（`[No Content]` + inject 来源标记说明）、`tui.md` §2.17（`[No Content]`
+  不画预览）、`AGENTS.md` 事件段摘要。
+
+验证：`event_hub event_delivery event_tools event_subagent async_tools plugin_event
+share_store input_delivery tui_scroll tui_stream tui_settings` 全通过（2645 passed / 0 failed）。
+
+两处收尾：
+
+- `hub.h` 里旧 `[Content]` 常量的注释残了一半（注释下面没有声明）→ 删掉，常量统一由
+  `text_sections.h` 说明；`renderEventValuesText` 的 `[values]` 说明从“补占位”改成“写成 `[No Content]`”。
+- TUI 判定从 `text.find("[No Content]")` 改成 `text.ends_with(...)`：无值时它就是最后一段，
+  用 `find` 会被值里恰好出现的同名字样误伤（改为结尾判定后重编 client/test 并复跑了上面那批模块）。
+
 ## 5. 遗留与注意
 
 - Windows 调试版测试必须从 `{build}/exec/` 目录运行（那里有 `clang_rt.asan_dynamic-x86_64.dll`）；
@@ -106,4 +153,5 @@
   必须先 `cmake --install <lib-build>` 再编它们（本次踩过一次：`event_hub` golden 断言
   比对的是旧 `appendArray` 结果的输出）。
 - `boundaries` 的 5 项失败属工作区既有状态（子模块 `cxx_pluginxx` 已带 `capability_info` /
-  `list_capabilities` 等新成员，`boundaries` 台账还没同步），与本次改动无关。
+  `list_capabilities` 等新成员，台账没同步；其头注释里还留着“埋点/宿主/应用侧”等停用词），
+  与本次改动无关。

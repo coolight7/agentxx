@@ -598,6 +598,41 @@ asio::awaitable<void> test_inject_only_in_request() {
 }
 
 // ---------------------------------------------------------------------------
+// 4.1 事件输入的 inject 投递: 正文首行已经是 `[Event] <名字>`, 不再前置来源标记
+// (来源前缀原本是给“只在本请求可见、历史里找不到来历”的注入内容标出来源用的)
+// ---------------------------------------------------------------------------
+
+asio::awaitable<void> test_event_inject_has_no_source_prefix() {
+    auto fx = co_await makeFixture("event-inject-prefix-session", {}, "event inject response");
+
+    // 直接登记一条事件来源的 inject 待注入输入 (只测来源前缀, 不经过事件中枢)
+    auto session = fx->agent->agentContext->sessions->get(fx->sessionId);
+    XX_TEST_EXPECT_TRUE(session != nullptr);
+    if (!session) {
+        co_return;
+    }
+    agentxx::agent::SessionPendingInput input;
+    input.text        = "[Event] chat.message\n[Info]\nmode: first\nstatus: value\n[Content]\nhi";
+    input.source      = std::string{agentxx::agent::kInputSourceEventPrefix} + "chat.message";
+    input.delivery    = std::string{agentxx::agent::InputDelivery::Inject};
+    input.createdAtMs = 1;
+    session->enqueuePendingInput(std::move(input));
+
+    // 下一条普通输入触发轮次: 注入内容随本次请求发出
+    fx->send("real turn", std::string{agentxx::agent::InputDelivery::NextTurn}, 1);
+    XX_TEST_EXPECT_TRUE(co_await waitFor([&] {
+        return fx->recorder->turnResults.load() >= 1;
+    }));
+
+    const auto dumped = g_da_sim_last_request.dump();
+    XX_TEST_EXPECT_TRUE(dumped.find("[Event] chat.message") != std::string::npos);
+    // 不再多一层 `[event:<名字>]`: 正文首行已经说明是哪个事件
+    XX_TEST_EXPECT_TRUE(dumped.find("[event:chat.message]") == std::string::npos);
+    // 权威上下文仍然没有它 (inject 语义不变)
+    XX_TEST_EXPECT_TRUE(!contextHasText(fx->agent, fx->sessionId, "[Event] chat.message"));
+}
+
+// ---------------------------------------------------------------------------
 // 5. collect: 静默窗口内合并同一客户端的连续输入
 // ---------------------------------------------------------------------------
 
@@ -1175,6 +1210,7 @@ asio::awaitable<TestResult> run_input_delivery_tests() {
     co_await test_queue_state_machine();
     co_await test_next_step_injection();
     co_await test_inject_only_in_request();
+    co_await test_event_inject_has_no_source_prefix();
     co_await test_collect_merging();
     co_await test_inbox_store_api();
     co_await test_durable_inbox_recovery();

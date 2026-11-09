@@ -295,7 +295,7 @@ asio::awaitable<void> test_hub_replay() {
 
 /// 4.1 投递文本格式: `[Event]` / `[Info]` / `[Content]` 三段
 /// - 值可能是别人自定义的 JSON: 对象/数组原样 `dump()` 输出, 不改字段/不改转义
-/// - 字符串值给原文; 多个值给 JSON 数组; 无值写 `(no value)`
+/// - 字符串值给原文; 多个值给 JSON 数组; 无值时段标记写 `[No Content]`
 /// - 只有后台任务结果事件 (`agentxx.agent.async.*`) 的 `content` 字段按原文单独给出
 asio::awaitable<void> test_hub_text_format() {
     agentxx::events::EventWait wait;
@@ -336,10 +336,10 @@ asio::awaitable<void> test_hub_text_format() {
         agentxx::events::renderEventValuesText(std::vector<Json>{Json("a"), Json("b")}),
         std::string{"[\"a\",\"b\"]"}
     );
-    // 无值: 段落仍存在, 内容位置写占位
+    // 无值: 段标记改为 `[No Content]`, 不再留一个空的 `[Content]`
     XX_TEST_EXPECT_TRUE(agentxx::events::renderEventValuesText({}).empty());
     XX_TEST_EXPECT_TRUE(
-        agentxx::events::renderEventText(wait, "ended-empty", "").ends_with("[Content]\n(no value)")
+        agentxx::events::renderEventText(wait, "ended-empty", "").ends_with("[No Content]")
     );
 
     // 后台任务结果事件: `content` 是产物正文 (工具输出/子代理回答), 按原文单独给出,
@@ -530,8 +530,8 @@ asio::awaitable<void> test_hub_watch_ended_event() {
         XX_TEST_EXPECT_TRUE(inputs.size() == 1);
         XX_TEST_EXPECT_TRUE(contains(inputs.front(), "status: ended-empty"));
         XX_TEST_EXPECT_TRUE(contains(inputs.front(), "the event ended without any value"));
-        // 没有值时 [Content] 段仍在, 但写占位, 不让后续段落错位
-        XX_TEST_EXPECT_TRUE(inputs.front().ends_with("[Content]\n(no value)"));
+        // 没有值时 [Content] 段标记改为 [No Content]
+        XX_TEST_EXPECT_TRUE(inputs.front().ends_with("[No Content]"));
     }
 
     // 流式带值: stream-ended
