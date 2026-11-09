@@ -126,6 +126,7 @@ public:
     /// - thinkingTexts/blockSignatures: 按 block index 累积 thinking 文本与 signature,
     ///   content_block_stop 时组装为带 signature 的 thinking 块存入 completion.message.extra
     /// - finalFlush: 连接关闭时对末尾未以 "\n\n" 结尾的最后一个事件块也解析
+    /// - progress: 非空时累加解析进度 (事件数 / stop_reason), 供超时诊断与收尾判定
     /// - 返回本次调用是否处理到了 "message_stop" 结束事件 (用于检测流截断)
     static bool processSseBuffer(
         std::string&                       buf,
@@ -137,7 +138,8 @@ public:
         std::map<int, std::string>&        thinkingTexts,
         std::map<int, std::string>&        blockSignatures,
         neograph::FormatDataStreamCallback on_chunk,
-        bool                               finalFlush = false
+        bool                               finalFlush = false,
+        StreamProgress*                    progress   = nullptr
     ) {
         bool done = false;
         while (true) {
@@ -166,7 +168,8 @@ public:
                 blockTypes,
                 thinkingTexts,
                 blockSignatures,
-                on_chunk
+                on_chunk,
+                progress
             );
         }
         if (finalFlush && !buf.empty()) {
@@ -182,7 +185,8 @@ public:
                 blockTypes,
                 thinkingTexts,
                 blockSignatures,
-                on_chunk
+                on_chunk,
+                progress
             );
         }
         return done;
@@ -199,7 +203,8 @@ public:
         std::map<int, std::string>&        blockTypes,
         std::map<int, std::string>&        thinkingTexts,
         std::map<int, std::string>&        blockSignatures,
-        neograph::FormatDataStreamCallback on_chunk
+        neograph::FormatDataStreamCallback on_chunk,
+        StreamProgress*                    progress = nullptr
     ) {
         std::string currentEvent;
         std::string payload;
@@ -255,6 +260,10 @@ public:
         );
         if (!parsed || !jv.is_object()) {
             return false;
+        }
+        // 解析进度: 一条可解析事件 (供超时诊断)
+        if (progress) {
+            ++progress->events;
         }
         auto viewStr = [](const utilxx_base::JsonView& v) -> std::string {
             if (!v.valid() || !v.is_string()) {
@@ -385,6 +394,15 @@ public:
                 }
             }
         } else if (currentEvent == "message_delta") {
+            // 结束原因: Anthropic 的"本次生成已结束"信号 (后面只剩 message_stop)。
+            // 只记录到进度里供收尾判定/诊断, 不改动 completion.stop_reason
+            if (progress && !progress->finishSeen) {
+                auto stopReason = viewStr(jv["delta"]["stop_reason"]);
+                if (!stopReason.empty()) {
+                    progress->finishSeen   = true;
+                    progress->finishReason = std::move(stopReason);
+                }
+            }
             auto usageView = jv["usage"];
             if (usageView.valid() && usageView.is_object()) {
                 // 缺失字段沿用已知值: output_tokens 缺失保持原值 (与原行为一致),

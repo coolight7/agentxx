@@ -844,7 +844,16 @@ model:
                                   # 也可用 extra_api_config 显式指定 include 数组覆盖
       ssl_verify: null            # true/false 显式控制 TLS 证书验证; 省略用默认策略
       connect_timeout: 16
-      read_chunk_timeout: 60
+      read_chunk_timeout: 60      # 相邻数据块的间隔上限 (块间超时, 不是总时长);
+                                  # 每个字节到达都会重新计时 —— SSE 注释心跳
+                                  # (: ping)、tool 参数增量都算数据。上游在生成较长
+                                  # 工具参数期间一个字节不发时, 这个值就是全部容忍度
+                                  # (实测网关把 tool_calls 参数攒到最后才发 -> 60 秒
+                                  # 必超时, 需按该上游调大到 180~300)
+                                  # - 已收到结束原因 (finish_reason / stop_reason)
+                                  #   后改用收尾宽限 max(10s, 本值/5) (且不超过本值):
+                                  #   默认 60 -> 12 秒, 只等正式结束标记;
+                                  #   宽限到点或连接断开都按"已完整"收尾
       max_concurrent_connections: 5   # 该模型 API 端点的最大并发连接数 (默认 5, 0=不限制)
                                       # LLM 请求启用 HTTP keep-alive 连接池: 空闲连接复用,
                                       # 超过上限的并发请求排队等待空闲连接
@@ -1776,6 +1785,35 @@ AgentContext
 - 台账 `usage` 表与会话累计用量都落在用户看得见的父会话上 (压缩子代理的 prompt/cached
   因此可查, 见 benchmark.md 第 18.4 节)
 - 嵌套委派沿用最外层已确定的目标, 一次调用只记一笔 (不重复计数)
+
+#### 8. LLM 流式请求的超时与收尾 (2026-11)
+
+LLM 请求路径上没有总时长上限, 只有三个期限 (都在 `utilxx::RequestConfig`):
+`connectTimeout` (DNS+TCP+TLS)、`sendTimeout` (写请求体)、`readChunkTimeout`
+(相邻数据块间隔)。`readChunkTimeout` **是块间超时而不是总时长**: 每个到达的字节都会重新
+计时, SSE 注释心跳 (`: ping`)、`event: ping`、`tool_calls.function.arguments` 增量都算数据,
+所以“上游在生成较长工具参数期间一个字节不发”是唯一能把长工具调用判成超时的形态
+(实测会上报 `SSE read-body timeout after 60000 ms`, 见
+[llm-stream-timeout-grace](../../resource/history/llm-stream-timeout-grace/index.md))。
+
+处理策略 (两个 provider 共用 `agentxx/protocol/provider_common.h` 的纯函数):
+
+- **发送期限**: `max(60s, ceil(body/16KiB) 秒)`, 即要求上行至少 16 KiB/s
+  (`llmSendTimeout`)。工具库默认的 `HttpClient::calcTimeoutBySize` 按 64 KiB/s 推算,
+  慢上行/网关暂不读 body 时会误判为写请求超时, 因此 provider 一律显式传入。
+- **收尾宽限**: 已收到结束原因 (`finish_reason` / `message_delta.stop_reason`) 后,
+  等正式结束标记 (`[DONE]` / `message_stop`) 的块间上限改为
+  `max(10s, readChunkTimeout/5)` 且不超过 `readChunkTimeout` 本身
+  (`streamFinishGraceTimeout`); 通过 `RequestConfig::readChunkTimeoutPerRead` 让 HTTP 层
+  **逐次读**取样, 不需要取消信号也不影响 `[DONE]` 的即时停止。
+- **收尾判定**: 已见结束原因时, 宽限到点或连接在结束标记前断开都按“已完整”收尾并记
+  warning (只可能缺 usage, 正文与工具参数都已完整)。只有“既没结束标记也没结束原因”
+  才继续报截断/超时交给 modelcall 重试。Responses API 没有“生成结束”的中间事件,
+  仍以 `response.completed` 为结束标记。
+- **诊断**: 超时/传输失败的错误文本末尾附一行 ASCII 进度
+  `| stream: recv=..B events=.. idle=..ms finish=.. tools=.. args=..B name=..`
+  (`streamFailureSuffix`), 用于区分“上游一直没发字”与“发到一半停了”;
+  `API error (HTTP ...)` 这类上游业务错误保持原文不加后缀。
 
 ### 连接与重连机制
 

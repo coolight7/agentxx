@@ -1041,6 +1041,7 @@ asio::awaitable<neograph::ChatCompletion>
         headers,
         HttpClient::RequestConfig{
             .connectTimeout           = std::chrono::seconds{config_.connectTimeoutSeconds},
+            .sendTimeout              = agentxx::protocol::llmSendTimeout(bodyStr.size()),
             .readChunkTimeout         = std::chrono::seconds{config_.readChunkTimeoutSeconds},
             .sslVerify                = config_.sslVerify,
             .keepAlive                = true,
@@ -1166,6 +1167,7 @@ asio::awaitable<neograph::ChatCompletion>
         headers,
         HttpClient::RequestConfig{
             .connectTimeout           = std::chrono::seconds{config_.connectTimeoutSeconds},
+            .sendTimeout              = agentxx::protocol::llmSendTimeout(bodyStr.size()),
             .readChunkTimeout         = std::chrono::seconds{config_.readChunkTimeoutSeconds},
             .sslVerify                = config_.sslVerify,
             .keepAlive                = true,
@@ -1343,8 +1345,18 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStream(
     std::string                       fullThinking;
     std::map<int, neograph::ToolCall> tcMap;
     std::string                       lineBuffer;
+    // 收包进度 (诊断用): 字节数 / 事件数 / 静默时长 / 是否已见结束原因
+    agentxx::protocol::StreamProgress progress;
     // 是否收到 OpenAI SSE 结束标记 "data: [DONE]", 用于检测流截断
     bool doneReceived = false;
+    // 连接层出错但已可按完整收尾 (避免与下面的收尾日志重复)
+    bool salvagedOnError = false;
+    // 读 body 的块间上限 (逐次取样): 已见结束原因后改用收尾宽限, 不再按完整间隔等
+    const auto readChunkTimeout = std::chrono::seconds{config_.readChunkTimeoutSeconds};
+    const auto finishGraceTimeout =
+        agentxx::protocol::streamFinishGraceTimeout(readChunkTimeout);
+    // 发送期限按 body 大小推导 (移动进 HTTP 层之前取, 移动后 size 为 0)
+    const auto sendTimeout = agentxx::protocol::llmSendTimeout(bodyStr.size());
 
     co_await agentxx::util::catchErrorAsync<bool>(
         [&]() -> asio::awaitable<bool> {
@@ -1356,14 +1368,24 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStream(
                 headers,
                 HttpClient::RequestConfig{
                     .connectTimeout   = std::chrono::seconds{config_.connectTimeoutSeconds},
-                    .readChunkTimeout = std::chrono::seconds{config_.readChunkTimeoutSeconds},
+                    .sendTimeout      = sendTimeout,
+                    .readChunkTimeout = readChunkTimeout,
                     .sslVerify        = config_.sslVerify,
                     .keepAlive        = true,
                     .maxConcurrentConnections = config_.maxConcurrentConnections,
+                    .readChunkTimeoutPerRead
+                    = [&progress, finishGraceTimeout]()
+                        -> std::optional<std::chrono::milliseconds> {
+                        if (!progress.finishSeen) {
+                            return std::nullopt;
+                        }
+                        return finishGraceTimeout;
+                    },
                 },
                 // 返回 true 通知 http 层流已结束 (收到 [DONE]): 立即断开连接停止读取,
                 // 避免对端 keep-alive 不关闭时白等 readChunkTimeout
                 [&](std::string_view chunk) -> bool {
+                    progress.noteChunk(chunk.size());
                     lineBuffer += chunk;
                     if (processSseBuffer(
                             lineBuffer,
@@ -1371,7 +1393,9 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStream(
                             fullContent,
                             fullThinking,
                             tcMap,
-                            on_chunk
+                            on_chunk,
+                            /*finalFlush=*/false,
+                            &progress
                         )) {
                         doneReceived = true;
                         return true;
@@ -1388,13 +1412,31 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStream(
                 "OpenAIProvider::doStream [HttpClient::requestSseAsync] Exception: {}",
                 errinfo
             );
-            // 已收到 [DONE] 说明业务数据已全部送达, 连接层在收尾阶段的错误
-            // (如 ssl stream_truncated: 对端未发 close_notify 就关闭连接) 不应使请求失败
-            if (!doneReceived) {
-                throw std::runtime_error{errinfo};
+            // 已收到结束标记或结束原因, 说明业务数据已生成完, 连接层在收尾阶段的错误
+            // (如 ssl stream_truncated: 对端未发 close_notify 就关闭连接, 或对端不发
+            // 结束标记但保持连接) 不应使请求失败, 也不应丢掉已完整的 tool_calls
+            if (doneReceived) {
+                XX_LOGW("LLM stream transport error after [DONE], ignored");
+                co_return false;
             }
-            XX_LOGW("LLM stream transport error after [DONE], ignored");
-            co_return false;
+            if (progress.finishSeen) {
+                salvagedOnError = true;
+                XX_LOGW(
+                    "LLM stream ended without [DONE] after finish_reason={}; accepted | model={} "
+                    "err={}{}",
+                    progress.finishReason,
+                    params.model.empty() ? config_.modelName : params.model,
+                    errinfo,
+                    agentxx::protocol::streamFailureSuffix(progress, tcMap)
+                );
+                co_return false;
+            }
+            // 上游业务错误 (HTTP 状态码 + error body) 不加诊断后缀, 保留原文
+            const bool apiError = errinfo.find("API error (HTTP ") != std::string::npos;
+            throw std::runtime_error(
+                apiError ? errinfo
+                         : errinfo + agentxx::protocol::streamFailureSuffix(progress, tcMap)
+            );
         },
         /*onRethrow=*/nullptr,
         /*cancelToken=*/params.cancel_token
@@ -1408,7 +1450,8 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStream(
                 fullThinking,
                 tcMap,
                 on_chunk,
-                /*finalFlush=*/true
+                /*finalFlush=*/true,
+                &progress
             )) {
             doneReceived = true;
         }
@@ -1416,13 +1459,24 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStream(
 
     // 未收到 [DONE] 即视为流被截断: 长连接被中间代理/网关中断、或对端提前关闭
     // connection-close 定长的响应时, HTTP 层可能仍判定"完整", 必须在 SSE 协议层检测,
-    // 否则会把截断的响应静默当作正常结果返回
-    if (!doneReceived) {
+    // 否则会把截断的响应静默当作正常结果返回。
+    // 例外: 已收到 finish_reason 说明模型已生成完 (只剩结束标记), 按完整收尾
+    if (!doneReceived && progress.finishSeen && !salvagedOnError) {
+        XX_LOGW(
+            "LLM stream missing [DONE] after finish_reason={}; accepted | model={} content_chars={}{}",
+            progress.finishReason,
+            params.model.empty() ? config_.modelName : params.model,
+            fullContent.size(),
+            agentxx::protocol::streamFailureSuffix(progress, tcMap)
+        );
+    }
+    if (!doneReceived && !progress.finishSeen) {
         XX_LOGT("OpenAIProvider::doStream throw exception: !doneReceived");
         throw std::runtime_error(fmt::format(
-            "SSE stream truncated: missing [DONE] marker | model={} content_chars={}",
+            "SSE stream truncated: missing [DONE] marker | model={} content_chars={}{}",
             params.model.empty() ? config_.modelName : params.model,
-            fullContent.size()
+            fullContent.size(),
+            agentxx::protocol::streamFailureSuffix(progress, tcMap)
         ));
     }
 
@@ -1478,8 +1532,12 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStreamResponses(
     std::map<int, neograph::ToolCall> tcMap;
     std::string                       lineBuffer;
     std::string                       apiError;
+    // 收包进度 (诊断用): 字节数 / 事件数 / 静默时长
+    agentxx::protocol::StreamProgress progress;
     // 是否收到 Responses API 结束事件 "response.completed", 用于检测流截断
     bool doneReceived = false;
+    // 发送期限按 body 大小推导 (移动进 HTTP 层之前取, 移动后 size 为 0)
+    const auto sendTimeout = agentxx::protocol::llmSendTimeout(bodyStr.size());
 
     co_await agentxx::util::catchErrorAsync<bool>(
         [&]() -> asio::awaitable<bool> {
@@ -1491,6 +1549,7 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStreamResponses(
                 headers,
                 HttpClient::RequestConfig{
                     .connectTimeout   = std::chrono::seconds{config_.connectTimeoutSeconds},
+                    .sendTimeout      = sendTimeout,
                     .readChunkTimeout = std::chrono::seconds{config_.readChunkTimeoutSeconds},
                     .sslVerify        = config_.sslVerify,
                     .keepAlive        = true,
@@ -1498,6 +1557,7 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStreamResponses(
                 },
                 // 返回 true 通知 http 层流已结束 (收到 response.completed): 立即断开
                 [&](std::string_view chunk) -> bool {
+                    progress.noteChunk(chunk.size());
                     lineBuffer += chunk;
                     if (processResponsesSseBuffer(
                             lineBuffer,
@@ -1507,7 +1567,8 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStreamResponses(
                             tcMap,
                             on_chunk,
                             /*finalFlush=*/false,
-                            &apiError
+                            &apiError,
+                            &progress
                         )) {
                         doneReceived = true;
                         return true;
@@ -1526,11 +1587,17 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStreamResponses(
             );
             // 已收到 response.completed 说明业务数据已全部送达, 连接层在收尾阶段的错误
             // (如 ssl stream_truncated) 不应使请求失败
-            if (!doneReceived) {
-                throw std::runtime_error{errinfo};
+            if (doneReceived) {
+                XX_LOGW("LLM stream transport error after response.completed, ignored");
+                co_return false;
             }
-            XX_LOGW("LLM stream transport error after response.completed, ignored");
-            co_return false;
+            // 上游业务错误 (HTTP 状态码 + error body) 不加诊断后缀, 保留原文
+            const bool apiErrorLogged = errinfo.find("API error (HTTP ") != std::string::npos;
+            throw std::runtime_error(
+                apiErrorLogged
+                    ? errinfo
+                    : errinfo + agentxx::protocol::streamFailureSuffix(progress, tcMap)
+            );
         },
         /*onRethrow=*/nullptr,
         /*cancelToken=*/params.cancel_token
@@ -1545,7 +1612,8 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStreamResponses(
                 tcMap,
                 on_chunk,
                 /*finalFlush=*/true,
-                &apiError
+                &apiError,
+                &progress
             )) {
             doneReceived = true;
         }
@@ -1558,9 +1626,10 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStreamResponses(
 
     if (!doneReceived) {
         throw std::runtime_error(fmt::format(
-            "SSE stream truncated: missing response.completed | model={} content_chars={}",
+            "SSE stream truncated: missing response.completed | model={} content_chars={}{}",
             params.model.empty() ? config_.modelName : params.model,
-            fullContent.size()
+            fullContent.size(),
+            agentxx::protocol::streamFailureSuffix(progress, tcMap)
         ));
     }
 
@@ -1601,7 +1670,8 @@ bool OpenAIProvider::processSseBuffer(
     std::string&                       fullThinking,
     std::map<int, neograph::ToolCall>& tcMap,
     neograph::FormatDataStreamCallback on_chunk,
-    bool                               finalFlush
+    bool                               finalFlush,
+    StreamProgress*                    progress
 ) {
     bool done = false;
     // 扫过已处理的整行, 只在末尾搬移一次剩余的不完整行
@@ -1618,7 +1688,8 @@ bool OpenAIProvider::processSseBuffer(
             fullContent,
             fullThinking,
             tcMap,
-            on_chunk
+            on_chunk,
+            progress
         );
         pos = nl + 1;
     }
@@ -1630,7 +1701,8 @@ bool OpenAIProvider::processSseBuffer(
             fullContent,
             fullThinking,
             tcMap,
-            on_chunk
+            on_chunk,
+            progress
         );
         pos = buf.size();
     }
@@ -1646,7 +1718,8 @@ bool OpenAIProvider::processSseLine(
     std::string&                       fullContent,
     std::string&                       fullThinking,
     std::map<int, neograph::ToolCall>& tcMap,
-    neograph::FormatDataStreamCallback on_chunk
+    neograph::FormatDataStreamCallback on_chunk,
+    StreamProgress*                    progress
 ) {
     // 就地裁剪行与负载 (旧实现在这里各拷一份 std::string, 每个事件多两次堆分配)
     std::string_view line = line_in;
@@ -1692,6 +1765,11 @@ bool OpenAIProvider::processSseLine(
         return false;
     }
 
+    // 解析进度: 一条可解析的事件 (供超时诊断区分"没发过"与"发到一半停了")
+    if (progress) {
+        ++progress->events;
+    }
+
     auto usage = jv["usage"];
     if (usage.valid() && usage.is_object()) {
         parseUsageView(usage, completion);
@@ -1720,6 +1798,11 @@ bool OpenAIProvider::processSseLine(
             }
             if (!frSv.empty()) {
                 completion.stop_reason = mapStopReason(frSv);
+                // 记录结束原因原文: 后续可按"已生成完"收尾 (不再等结束标记)
+                if (progress && !progress->finishSeen) {
+                    progress->finishSeen = true;
+                    progress->finishReason.assign(frSv);
+                }
             }
         }
     }
@@ -1879,7 +1962,8 @@ bool OpenAIProvider::processResponsesSseBuffer(
     std::map<int, neograph::ToolCall>& tcMap,
     neograph::FormatDataStreamCallback on_chunk,
     bool                               finalFlush,
-    std::string*                       errOut
+    std::string*                       errOut,
+    StreamProgress*                    progress
 ) {
     bool done = false;
     // 扫过已处理的整行, 只在末尾搬移一次剩余的不完整行 (同 [processSseBuffer])
@@ -1896,7 +1980,8 @@ bool OpenAIProvider::processResponsesSseBuffer(
             fullThinking,
             tcMap,
             on_chunk,
-            errOut
+            errOut,
+            progress
         );
         pos = nl + 1;
         // 收到错误事件后停止解析后续行
@@ -1912,7 +1997,8 @@ bool OpenAIProvider::processResponsesSseBuffer(
             fullThinking,
             tcMap,
             on_chunk,
-            errOut
+            errOut,
+            progress
         );
         pos = buf.size();
     }
@@ -1929,7 +2015,8 @@ bool OpenAIProvider::processResponsesSseLine(
     std::string&                       fullThinking,
     std::map<int, neograph::ToolCall>& tcMap,
     neograph::FormatDataStreamCallback on_chunk,
-    std::string*                       errOut
+    std::string*                       errOut,
+    StreamProgress*                    progress
 ) {
     // 就地裁剪行与负载 (旧实现在这里各拷一份 std::string, 每个事件多两次堆分配)
     std::string_view line = line_in;
@@ -1989,6 +2076,11 @@ bool OpenAIProvider::processResponsesSseLine(
                 }
             }
         }
+    }
+
+    // 解析进度: 一条可解析的事件 (供超时诊断)
+    if (progress) {
+        ++progress->events;
     }
 
     std::string type = viewStrField(jv, "type");

@@ -12,8 +12,10 @@
 #include "neograph/api.h"
 #include "neograph/provider.h"
 #include "utilxx/http_header.h"
+#include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <map>
 #include <random>
 #include <stdexcept>
 #include <string>
@@ -445,6 +447,106 @@ inline bool
     }
     const std::string key{carrierKey};
     return !(msg.extra.contains(key) && msg.extra[key].is_array() && !msg.extra[key].empty());
+}
+
+// ---------------------------------------------------------------------------
+// 流式请求的进度、收尾宽限与诊断
+// ---------------------------------------------------------------------------
+
+/// 流式请求的收包进度
+/// - 用途: 块间超时/传输故障时附到错误文本, 区分"上游一直没发字节"与
+///   "发到一半停了"; 另用于判断是否已可收尾 (见 [streamFinishGraceTimeout])
+struct StreamProgress {
+    /// 请求发出时刻
+    std::chrono::steady_clock::time_point startedAt{std::chrono::steady_clock::now()};
+    /// 最近一次收到数据的时刻 (未收到过数据时等于 startedAt)
+    std::chrono::steady_clock::time_point lastDataAt = startedAt;
+    /// 已收字节数 (含 SSE 注释与空行)
+    size_t bytes = 0;
+    /// 已解析的 data 事件数
+    size_t events = 0;
+    /// 是否已收到结束原因 (Chat Completions 的 finish_reason /
+    /// Anthropic 的 message_delta.stop_reason)
+    bool finishSeen = false;
+    /// 结束原因原文 (首个非空值)
+    std::string finishReason;
+
+    /// 记录一段到达的数据 (累计字节并刷新最近数据时刻)
+    void noteChunk(const size_t n) noexcept {
+        bytes += n;
+        lastDataAt = std::chrono::steady_clock::now();
+    }
+
+    /// 距最近一次数据的时长 (从未收到数据时是距请求发出)
+    std::chrono::milliseconds idleMs() const noexcept {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - lastDataAt
+        );
+    }
+};
+
+/// 已收到结束原因后, 等正式结束标记 (`[DONE]` / `message_stop`) 的块间上限
+/// - 取 `max(10s, readChunkTimeout/5)`: 常规间隔越宽, 收尾允许等得越久
+///   (默认 60s -> 12s)
+/// - 并以 `readChunkTimeout` 为本身上界: 配置比 10 秒还短时, "短超时"不能反而
+///   比正常间隔更长
+/// - 相关: 取值由调用方作为 `RequestConfig::readChunkTimeoutPerRead` 返回,
+///   让 HTTP 层从下一读开始改用该上限
+inline std::chrono::milliseconds
+    streamFinishGraceTimeout(const std::chrono::milliseconds readChunkTimeout) noexcept {
+    const auto fifth  = readChunkTimeout / 5;
+    const auto floorT = std::min(std::chrono::milliseconds{std::chrono::seconds{10}}, readChunkTimeout);
+    return std::max(floorT, fifth);
+}
+
+/// 发送请求体的期限: `max(60s, ceil(body/16KiB) 秒)`
+/// - 即要求上行至少 16 KiB/s; 工具库默认的 `HttpClient::calcTimeoutBySize`
+///   按 64 KiB/s 推算, 慢上行或网关暂不读 body 时会误判为发送超时
+/// - 与读取超时无关
+inline std::chrono::milliseconds llmSendTimeout(const size_t bodyBytes) noexcept {
+    const auto bySize   = std::chrono::seconds{(static_cast<int64_t>(bodyBytes) + 16383) / 16384};
+    const auto bySizeMs = std::chrono::duration_cast<std::chrono::milliseconds>(bySize);
+    return std::max(std::chrono::milliseconds{std::chrono::seconds{60}}, bySizeMs);
+}
+
+/// 组装流式失败的诊断后缀 (单行 ASCII, 直接拼在错误文本末尾)
+/// 例: ` | stream: recv=20480B events=133 idle=60003ms finish=tool_calls
+///        tools=1 args=2048B name=agentxx_filesystem_write`
+/// - 全 ASCII 且不含状态码/网络类关键词: 不影响 [classifyLlmError] 判类
+/// - `idle` 为距最近一次数据的时长 (从未收到数据 = 距请求发出)
+inline std::string streamFailureSuffix(
+    const StreamProgress&                    progress,
+    const std::map<int, neograph::ToolCall>& toolCalls
+) {
+    // 参数总字节数与工具名 (只取第一个有名字的调用; 名字截断避免错误文本过长)
+    size_t           argsBytes = 0;
+    std::string_view firstName{};
+    for (const auto& [idx, tc] : toolCalls) {
+        (void)idx;
+        argsBytes += tc.arguments.size();
+        if (firstName.empty() && !tc.name.empty()) {
+            firstName = tc.name;
+        }
+    }
+    constexpr size_t kMaxNameLen = 40;
+    if (firstName.size() > kMaxNameLen) {
+        firstName = firstName.substr(0, kMaxNameLen);
+    }
+    std::string_view finish = "none";
+    if (progress.finishSeen) {
+        finish = progress.finishReason.empty() ? std::string_view{"seen"}
+                                               : std::string_view{progress.finishReason};
+    }
+    return fmt::format(
+        " | stream: recv={}B events={} idle={}ms finish={} tools={} args={}B name={}",
+        progress.bytes,
+        progress.events,
+        progress.idleMs().count(),
+        finish,
+        toolCalls.size(),
+        argsBytes,
+        firstName
+    );
 }
 
 } // namespace protocol

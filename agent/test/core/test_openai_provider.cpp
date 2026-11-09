@@ -18,6 +18,7 @@
 #include <asio/write.hpp>
 #include <boost/beast/core.hpp>
 #include <boost/beast/http.hpp>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <iostream>
@@ -5173,6 +5174,266 @@ asio::awaitable<void> test_streaming_usage_cached_tokens(MockOpenAIServer& mock,
     }
 }
 
+// ---------------------------------------------------------------------------
+// 收尾判定 / 超时诊断 / 发送期限
+// ---------------------------------------------------------------------------
+
+/// 收尾宽限与发送期限的取值表 (纯函数, 不需服务端)
+void test_stream_finish_grace_and_send_timeout_values() {
+    using namespace std::chrono;
+    // 收尾宽限 = max(10s, read_chunk_timeout/5), 并以 read_chunk_timeout 为上界
+    XX_TEST_EXPECT_EQ(agentxx::protocol::streamFinishGraceTimeout(seconds{60}).count(), 12000LL);
+    XX_TEST_EXPECT_EQ(agentxx::protocol::streamFinishGraceTimeout(seconds{100}).count(), 20000LL);
+    XX_TEST_EXPECT_EQ(agentxx::protocol::streamFinishGraceTimeout(seconds{10}).count(), 10000LL);
+    XX_TEST_EXPECT_EQ(agentxx::protocol::streamFinishGraceTimeout(seconds{3}).count(), 3000LL);
+    XX_TEST_EXPECT_EQ(agentxx::protocol::streamFinishGraceTimeout(seconds{200}).count(), 40000LL);
+    // 发送期限 = max(60s, ceil(body/16KiB) 秒)
+    XX_TEST_EXPECT_EQ(agentxx::protocol::llmSendTimeout(0).count(), 60000LL);
+    XX_TEST_EXPECT_EQ(agentxx::protocol::llmSendTimeout(1024 * 1024).count(), 64000LL);
+    XX_TEST_EXPECT_EQ(agentxx::protocol::llmSendTimeout(16 * 1024 * 1024).count(), 1024000LL);
+}
+
+/// SSE 解析进度: 事件计数与结束原因原文 (供超时诊断与收尾判定)
+void test_sse_progress_finish_reason_and_events() {
+    std::string                       buf;
+    neograph::ChatCompletion          completion;
+    std::string                       fullContent;
+    std::string                       fullThinking;
+    std::map<int, neograph::ToolCall> tcMap;
+    agentxx::protocol::StreamProgress progress;
+
+    buf += MockOpenAIServer::sseData(
+        R"({"choices":[{"index":0,"delta":{"role":"assistant","content":"hi"}}]})"
+    );
+    buf += MockOpenAIServer::sseData(
+        R"({"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]})"
+    );
+    buf += MockOpenAIServer::sseData(
+        R"({"choices":[],"usage":{"prompt_tokens":1,"completion_tokens":2,"total_tokens":3}})"
+    );
+
+    const bool done = server::OpenAIProvider::processSseBuffer(
+        buf,
+        completion,
+        fullContent,
+        fullThinking,
+        tcMap,
+        nullptr,
+        /*finalFlush=*/true,
+        &progress
+    );
+    XX_TEST_EXPECT_FALSE(done); // 这组事件里没有 [DONE]
+    XX_TEST_EXPECT_EQ(progress.events, size_t{3});
+    XX_TEST_EXPECT_TRUE(progress.finishSeen);
+    XX_TEST_EXPECT_EQ(progress.finishReason, std::string{"tool_calls"});
+    XX_TEST_EXPECT_EQ(completion.stop_reason, std::string{"tool_use"});
+}
+
+/// 已收到 finish_reason 但缺少 [DONE] 就结束: 按"已完整"收尾, 不能丢掉工具调用
+asio::awaitable<void>
+    test_streaming_finish_reason_without_done_accepted(MockOpenAIServer& mock, uint16_t port) {
+    const std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+    mock.mode                 = MockMode::Streaming;
+    mock.sseChunks            = {
+        MockOpenAIServer::sseData(
+            R"({"choices":[{"index":0,"delta":{"role":"assistant","content":null,"tool_calls":[{"index":0,"id":"call_done","function":{"name":"agentxx_filesystem_write","arguments":""}}]}}]})"
+        ),
+        MockOpenAIServer::sseData(
+            R"({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"path\":\"a.txt\"}"}}]}}]})"
+        ),
+        // 故意不包含 [DONE]: 模拟网关发了结束原因却不再发结束标记
+        MockOpenAIServer::sseData(
+            R"({"choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}]})"
+        ),
+    };
+
+    auto provider = server::OpenAIProvider::create(makeOaiCfg("sk-test", baseUrl));
+
+    neograph::CompletionParams params;
+    params.model    = "gpt-4o-mini";
+    params.messages = {
+        neograph::ChatMessage{.role = "user", .content = "写文件"}
+    };
+
+    try {
+        auto result = co_await provider->invoke(params, [](const std::string&) {});
+        XX_TEST_EXPECT_EQ(result.stop_reason, std::string{"tool_use"});
+        XX_TEST_EXPECT_FALSE(result.message.tool_calls.empty());
+        if (!result.message.tool_calls.empty()) {
+            XX_TEST_EXPECT_EQ(
+                result.message.tool_calls[0].name,
+                std::string{"agentxx_filesystem_write"}
+            );
+            XX_TEST_EXPECT_TRUE(
+                result.message.tool_calls[0].arguments.find("a.txt") != std::string::npos
+            );
+        }
+    } catch (const std::exception& e) {
+        XX_TEST_FAILED++;
+        TEST_FAIL << "finish_reason without [DONE] must be accepted: " << e.what() << std::endl;
+    }
+}
+
+/// 构造只写头部与 body、之后不关连接也不发数据的 SSE 响应 (body 由连接关闭定长)
+std::string makeStallSseResponse(std::string_view sseEvents) {
+    std::string resp = "HTTP/1.1 200 OK\r\n"
+                       "Content-Type: text/event-stream\r\n"
+                       "Cache-Control: no-cache\r\n"
+                       "Connection: close\r\n"
+                       "\r\n";
+    resp += sseEvents;
+    return resp;
+}
+
+/// 原始 TCP 的 SSE 服务端: 先写出 sseBody, 然后**保持连接不关也不发数据**
+/// (模拟"上游在生成长工具参数期间一个字节都不发"), holdMs 之后关闭。
+class StallSseServer {
+public:
+
+    std::thread       thread;
+    uint16_t          boundPort = 0;
+    std::atomic<bool> stopped{false};
+    std::string       sseBody;      ///< 建连后先写出的完整 HTTP 响应
+    int               holdMs = 5000; ///< 写完 sseBody 后保持静默的时长
+
+    void start() {
+        acceptor = std::make_unique<asio::ip::tcp::acceptor>(
+            ioCtx,
+            asio::ip::tcp::endpoint(asio::ip::make_address("127.0.0.1"), 0)
+        );
+        ep        = acceptor->local_endpoint();
+        boundPort = ep.port();
+        thread    = std::thread([this]() {
+            while (!stopped.load()) {
+                utilxx_base::AsioErrorCode ec;
+                asio::ip::tcp::socket      sock(ioCtx);
+                acceptor->accept(sock, ec);
+                if (ec || stopped.load()) {
+                    break;
+                }
+                handleConn(sock);
+            }
+        });
+    }
+
+    void stop() {
+        stopped.store(true);
+        if (acceptor) {
+            utilxx_base::AsioErrorCode ec;
+            asio::ip::tcp::socket      dummy(ioCtx);
+            dummy.connect(ep, ec);
+            acceptor->close(ec);
+        }
+        if (thread.joinable()) {
+            thread.join();
+        }
+    }
+
+private:
+
+    asio::io_context                         ioCtx;
+    std::unique_ptr<asio::ip::tcp::acceptor> acceptor;
+    asio::ip::tcp::endpoint                  ep;
+
+    void handleConn(asio::ip::tcp::socket& sock) {
+        utilxx_base::AsioErrorCode ec;
+
+        boost::beast::flat_buffer                                   buf;
+        boost::beast::http::request<boost::beast::http::string_body> req;
+        boost::beast::http::read(sock, buf, req, ec);
+        if (ec) {
+            return;
+        }
+
+        asio::write(sock, asio::buffer(sseBody), ec);
+        // 静默保持: 不写数据也不关闭
+        for (int waited = 0; waited < holdMs; waited += 20) {
+            if (stopped.load()) {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        utilxx_base::AsioErrorCode ignore;
+        sock.close(ignore);
+    }
+};
+
+/// 已收到结束原因后上游保持静默: 收尾宽限到点即按完整收尾 (不报超时丢结果)
+asio::awaitable<void> test_streaming_stall_after_finish_accepted() {
+    StallSseServer srv;
+    srv.sseBody = makeStallSseResponse(
+        MockOpenAIServer::sseData(
+            R"({"choices":[{"index":0,"delta":{"role":"assistant","content":"ok"}}]})"
+        )
+            + MockOpenAIServer::sseData(
+                R"({"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]})"
+            )
+    );
+    srv.holdMs = 8000;
+    srv.start();
+
+    // read_chunk_timeout = 2s -> 收尾宽限也取 2s (远小于 holdMs)
+    auto provider = server::OpenAIProvider::create(
+        makeOaiCfg("sk-test", "http://127.0.0.1:" + std::to_string(srv.boundPort), 5, 2)
+    );
+
+    neograph::CompletionParams params;
+    params.model    = "gpt-4o-mini";
+    params.messages = {
+        neograph::ChatMessage{.role = "user", .content = "长输出"}
+    };
+
+    const auto started = std::chrono::steady_clock::now();
+    try {
+        auto result = co_await provider->invoke(params, [](const std::string&) {});
+        const auto elapsed = std::chrono::steady_clock::now() - started;
+        XX_TEST_EXPECT_EQ(result.message.content, std::string{"ok"});
+        XX_TEST_EXPECT_EQ(result.stop_reason, std::string{"end_turn"});
+        // 宽限到点就收尾, 不等满 holdMs
+        XX_TEST_EXPECT_TRUE(elapsed < std::chrono::seconds{6});
+    } catch (const std::exception& e) {
+        XX_TEST_FAILED++;
+        TEST_FAIL << "stall after finish_reason must be accepted: " << e.what() << std::endl;
+    }
+    srv.stop();
+}
+
+/// 没有任何结束原因的静默: 仍按超时失败, 且错误文本带收包进度
+asio::awaitable<void> test_streaming_stall_timeout_diagnostics() {
+    StallSseServer srv;
+    srv.sseBody = makeStallSseResponse(MockOpenAIServer::sseData(
+        R"({"choices":[{"index":0,"delta":{"role":"assistant","content":"partial"}}]})"
+    ));
+    srv.holdMs = 6000;
+    srv.start();
+
+    auto provider = server::OpenAIProvider::create(
+        makeOaiCfg("sk-test", "http://127.0.0.1:" + std::to_string(srv.boundPort), 5, 1)
+    );
+
+    neograph::CompletionParams params;
+    params.model    = "gpt-4o-mini";
+    params.messages = {
+        neograph::ChatMessage{.role = "user", .content = "静默"}
+    };
+
+    bool        threw = false;
+    std::string errMsg;
+    try {
+        co_await provider->invoke(params, [](const std::string&) {});
+    } catch (const std::exception& e) {
+        threw  = true;
+        errMsg = e.what();
+    }
+    XX_TEST_EXPECT_TRUE(threw);
+    XX_TEST_EXPECT_TRUE(errMsg.find("read-body timeout") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(errMsg.find("recv=") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(errMsg.find("events=") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(errMsg.find("idle=") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(errMsg.find("finish=none") != std::string::npos);
+    srv.stop();
+}
+
 asio::awaitable<TestResult> run_openai_provider_tests() {
     g_openai_passed = 0;
     g_openai_failed = 0;
@@ -5187,6 +5448,9 @@ asio::awaitable<TestResult> run_openai_provider_tests() {
     test_openai_sse_malformed_types_tolerated();
     test_usage_cached_tokens_parsing();
     test_responses_sse_incomplete_done();
+    // 收尾宽限 / 发送期限取值表 + SSE 进度统计
+    test_stream_finish_grace_and_send_timeout_values();
+    test_sse_progress_finish_reason_and_events();
 
     // ModelProviderRegistry::createProvider tests
     test_create_provider_openai();
@@ -5319,6 +5583,11 @@ asio::awaitable<TestResult> run_openai_provider_tests() {
     co_await test_streaming_reasoning_only_no_content(*mock, port);
     co_await test_streaming_malformed_chunk_skipped(*mock, port);
     co_await test_streaming_missing_done_throws(*mock, port);
+
+    // 收尾判定 / 超时诊断 (长工具参数生成期间的静默)
+    co_await test_streaming_finish_reason_without_done_accepted(*mock, port);
+    co_await test_streaming_stall_after_finish_accepted();
+    co_await test_streaming_stall_timeout_diagnostics();
 
     // <think> tag tests
     co_await test_non_streaming_think_tags_in_content(*mock, port);

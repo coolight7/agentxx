@@ -1,6 +1,7 @@
 #pragma once
 
 #include "agentxx/agent/config.h"
+#include "agentxx/protocol/provider_common.h"
 #include "asio/awaitable.hpp"
 #include "asio/use_awaitable.hpp"
 #include "utilxx/http_client.h"
@@ -80,6 +81,7 @@ public:
 
     /// 处理 Chat Completions API 的 SSE 缓冲区 (public 以便单测)
     /// - finalFlush: 连接关闭时对末尾未以 "\n" 结尾的最后一行也解析
+    /// - progress: 非空时累加解析进度 (事件数 / 结束原因), 供超时诊断与收尾判定
     /// - 返回本次调用是否处理到了 "data: [DONE]" 结束标记 (用于检测流截断)
     static bool processSseBuffer(
         std::string&                       buf,
@@ -88,7 +90,8 @@ public:
         std::string&                       fullThinking,
         std::map<int, neograph::ToolCall>& tcMap,
         neograph::FormatDataStreamCallback on_chunk,
-        bool                               finalFlush = false
+        bool                               finalFlush = false,
+        StreamProgress*                    progress   = nullptr
     );
 
     /// 解析 Chat Completions API 单行 SSE, 返回该行是否为 "data: [DONE]" 结束标记
@@ -98,11 +101,13 @@ public:
         std::string&                       fullContent,
         std::string&                       fullThinking,
         std::map<int, neograph::ToolCall>& tcMap,
-        neograph::FormatDataStreamCallback on_chunk
+        neograph::FormatDataStreamCallback on_chunk,
+        StreamProgress*                    progress = nullptr
     );
 
     /// 处理 Responses API 的 SSE 缓冲区 (public 以便单测)
     /// - 与 processSseBuffer 相同语义; errOut 非空时记录 API 错误事件 (response.failed/error)
+    /// - progress: 非空时累加解析进度 (事件数), 供超时诊断
     /// - 返回是否处理到了结束标记 (response.completed 或 [DONE])
     static bool processResponsesSseBuffer(
         std::string&                       buf,
@@ -112,7 +117,8 @@ public:
         std::map<int, neograph::ToolCall>& tcMap,
         neograph::FormatDataStreamCallback on_chunk,
         bool                               finalFlush = false,
-        std::string*                       errOut     = nullptr
+        std::string*                       errOut     = nullptr,
+        StreamProgress*                    progress   = nullptr
     );
 
     /// 解析 Responses API 单行 SSE
@@ -125,7 +131,8 @@ public:
         std::string&                       fullThinking,
         std::map<int, neograph::ToolCall>& tcMap,
         neograph::FormatDataStreamCallback on_chunk,
-        std::string*                       errOut = nullptr
+        std::string*                       errOut   = nullptr,
+        StreamProgress*                    progress = nullptr
     );
 
     /// tool_calls 缺失 id 时回填 call_N (与流式路径行为一致)

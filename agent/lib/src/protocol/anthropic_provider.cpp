@@ -525,6 +525,7 @@ asio::awaitable<neograph::ChatCompletion>
         headers,
         HttpClient::RequestConfig{
             .connectTimeout           = std::chrono::seconds{config_.connectTimeoutSeconds},
+            .sendTimeout              = agentxx::protocol::llmSendTimeout(bodyStr.size()),
             .readChunkTimeout         = std::chrono::seconds{config_.readChunkTimeoutSeconds},
             .sslVerify                = config_.sslVerify,
             .keepAlive                = true,
@@ -595,12 +596,22 @@ asio::awaitable<neograph::ChatCompletion> AnthropicProvider::doStream(
     std::map<int, std::string>        thinkingTexts;
     std::map<int, std::string>        blockSignatures;
     std::string                       lineBuffer;
+    // 收包进度 (诊断用): 字节数 / 事件数 / 静默时长 / 是否已见 stop_reason
+    agentxx::protocol::StreamProgress progress;
     // 是否收到 Anthropic SSE 结束事件 "message_stop", 用于检测流截断
     bool messageStopReceived = false;
+    // 连接层出错但已可按完整收尾 (避免与下面的收尾日志重复)
+    bool salvagedOnError = false;
+    // 读 body 的块间上限 (逐次取样): 已见 stop_reason 后改用收尾宽限
+    const auto readChunkTimeout = std::chrono::seconds{config_.readChunkTimeoutSeconds};
+    const auto finishGraceTimeout =
+        agentxx::protocol::streamFinishGraceTimeout(readChunkTimeout);
+    // 发送期限按 body 大小推导
+    const auto sendTimeout = agentxx::protocol::llmSendTimeout(bodyStr.size());
 
-    // catchErrorAsync: 已收到 message_stop 说明消息已结束、业务数据已全部送达,
+    // catchErrorAsync: 已收到 message_stop (或至少 stop_reason) 说明消息已生成完,
     // 连接层在收尾阶段的错误 (如 ssl stream_truncated: 对端未发 close_notify 就
-    // 关闭连接) 不应使请求失败; 未收到则原样抛出 (取消类异常同理保持抛出)
+    // 关闭连接) 不应使请求失败; 两者都未收到则原样抛出 (取消类异常同理保持抛出)
     co_await agentxx::util::catchErrorAsync<bool>(
         [&]() -> asio::awaitable<bool> {
             co_await HttpClient::requestSseAsync(
@@ -611,14 +622,24 @@ asio::awaitable<neograph::ChatCompletion> AnthropicProvider::doStream(
                 headers,
                 HttpClient::RequestConfig{
                     .connectTimeout   = std::chrono::seconds{config_.connectTimeoutSeconds},
-                    .readChunkTimeout = std::chrono::seconds{config_.readChunkTimeoutSeconds},
+                    .sendTimeout      = sendTimeout,
+                    .readChunkTimeout = readChunkTimeout,
                     .sslVerify        = config_.sslVerify,
                     .keepAlive        = true,
                     .maxConcurrentConnections = config_.maxConcurrentConnections,
+                    .readChunkTimeoutPerRead
+                    = [&progress, finishGraceTimeout]()
+                        -> std::optional<std::chrono::milliseconds> {
+                        if (!progress.finishSeen) {
+                            return std::nullopt;
+                        }
+                        return finishGraceTimeout;
+                    },
                 },
                 // 返回 true 通知 http 层流已结束 (收到 message_stop): 立即断开连接停止读取,
                 // 避免对端 keep-alive 不关闭时白等 readChunkTimeout
                 [&](std::string_view chunk) -> bool {
+                    progress.noteChunk(chunk.size());
                     lineBuffer += chunk;
                     if (processSseBuffer(
                             lineBuffer,
@@ -629,7 +650,9 @@ asio::awaitable<neograph::ChatCompletion> AnthropicProvider::doStream(
                             blockTypes,
                             thinkingTexts,
                             blockSignatures,
-                            on_chunk
+                            on_chunk,
+                            /*finalFlush=*/false,
+                            &progress
                         )) {
                         messageStopReceived = true;
                         return true;
@@ -640,15 +663,32 @@ asio::awaitable<neograph::ChatCompletion> AnthropicProvider::doStream(
             co_return true;
         },
         [&](std::string errmsg) -> asio::awaitable<bool> {
-            if (!messageStopReceived) {
-                throw std::runtime_error(std::move(errmsg));
+            if (messageStopReceived) {
+                XX_LOGW(
+                    "LLM stream transport error after message_stop, ignored | model={} err={}",
+                    params.model.empty() ? config_.modelName : params.model,
+                    errmsg
+                );
+                co_return false;
             }
-            XX_LOGW(
-                "LLM stream transport error after message_stop, ignored | model={} err={}",
-                params.model.empty() ? config_.modelName : params.model,
-                errmsg
+            if (progress.finishSeen) {
+                salvagedOnError = true;
+                XX_LOGW(
+                    "LLM stream ended without message_stop after stop_reason={}; accepted | "
+                    "model={} err={}{}",
+                    progress.finishReason,
+                    params.model.empty() ? config_.modelName : params.model,
+                    errmsg,
+                    agentxx::protocol::streamFailureSuffix(progress, tcMap)
+                );
+                co_return false;
+            }
+            // 上游业务错误 (HTTP 状态码 + error body) 不加诊断后缀, 保留原文
+            const bool apiError = errmsg.find("API error (HTTP ") != std::string::npos;
+            throw std::runtime_error(
+                apiError ? errmsg
+                         : errmsg + agentxx::protocol::streamFailureSuffix(progress, tcMap)
             );
-            co_return false;
         }
     );
 
@@ -663,7 +703,8 @@ asio::awaitable<neograph::ChatCompletion> AnthropicProvider::doStream(
                 thinkingTexts,
                 blockSignatures,
                 on_chunk,
-                /*finalFlush=*/true
+                /*finalFlush=*/true,
+                &progress
             )) {
             messageStopReceived = true;
         }
@@ -671,12 +712,24 @@ asio::awaitable<neograph::ChatCompletion> AnthropicProvider::doStream(
 
     // 未收到 message_stop 即视为流被截断: 长连接被中间代理/网关中断、或对端提前关闭
     // connection-close 定长的响应时, HTTP 层可能仍判定"完整", 必须在 SSE 协议层检测,
-    // 否则会把截断的响应静默当作正常结果返回
-    if (!messageStopReceived) {
-        throw std::runtime_error(fmt::format(
-            "SSE stream truncated: missing message_stop event | model={} content_chars={}",
+    // 否则会把截断的响应静默当作正常结果返回。
+    // 例外: 已收到 stop_reason 说明本次生成已完 (只剩结束事件), 按完整收尾
+    if (!messageStopReceived && progress.finishSeen && !salvagedOnError) {
+        XX_LOGW(
+            "LLM stream missing message_stop after stop_reason={}; accepted | model={} "
+            "content_chars={}{}",
+            progress.finishReason,
             params.model.empty() ? config_.modelName : params.model,
-            fullContent.size()
+            fullContent.size(),
+            agentxx::protocol::streamFailureSuffix(progress, tcMap)
+        );
+    }
+    if (!messageStopReceived && !progress.finishSeen) {
+        throw std::runtime_error(fmt::format(
+            "SSE stream truncated: missing message_stop event | model={} content_chars={}{}",
+            params.model.empty() ? config_.modelName : params.model,
+            fullContent.size(),
+            agentxx::protocol::streamFailureSuffix(progress, tcMap)
         ));
     }
 

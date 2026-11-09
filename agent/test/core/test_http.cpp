@@ -1625,6 +1625,60 @@ asio::awaitable<void> test_http_client_sse_interruption() {
     }
 }
 
+/// requestSseAsync: readChunkTimeoutPerRead 允许流中途收紧块间超时
+/// - 收到首个事件前用默认值 (5 秒), 之后改为 300ms
+/// - 服务端随后静默 (Mode::Stall): 应按 300ms 超时, 而不是等满默认值
+asio::awaitable<void> test_http_client_sse_per_read_timeout() {
+    SseTestServer srv;
+    srv.mode   = SseTestServer::Mode::Stall;
+    srv.events = {"data: first\n\n"};
+    srv.start();
+
+    std::string url      = "http://127.0.0.1:" + std::to_string(srv.boundPort) + "/sse";
+    bool        gotFirst = false;
+    bool        threw    = false;
+    std::string errMsg;
+    auto        start = std::chrono::steady_clock::now();
+    try {
+        co_await HttpClient::requestSseAsync(
+            "POST",
+            url,
+            "{}",
+            "application/json",
+            {},
+            HttpClient::RequestConfig{
+                .connectTimeout   = std::chrono::seconds{5},
+                .readChunkTimeout = std::chrono::seconds{5},
+                .readChunkTimeoutPerRead
+                = [&gotFirst]() -> std::optional<std::chrono::milliseconds> {
+                    if (!gotFirst) {
+                        return std::nullopt;
+                    }
+                    return std::chrono::milliseconds{300};
+                },
+            },
+            [&](std::string_view) -> bool {
+                gotFirst = true;
+                return false;
+            }
+        );
+    } catch (const std::exception& e) {
+        threw  = true;
+        errMsg = e.what();
+    }
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                       std::chrono::steady_clock::now() - start
+    )
+                       .count();
+    XX_TEST_EXPECT_TRUE(gotFirst);
+    XX_TEST_EXPECT_TRUE(threw);
+    XX_TEST_EXPECT_TRUE(errMsg.find("timeout after 300 ms") != std::string::npos);
+    // 收紧后不能退回去按默认 5 秒等
+    XX_TEST_EXPECT_TRUE(elapsed < 3000);
+
+    srv.stop();
+}
+
 /// DNS 黑洞下 requestSseAsync / requestAsync 不应无限挂起:
 /// - connectTimeout 到期应立即报 "DNS resolve timeout" (getaddrinfo 阻塞无法被
 ///   取消/超时中断, 见
@@ -2245,6 +2299,7 @@ asio::awaitable<TestResult> run_http_client_tests() {
     co_await test_http_server_expect_100_continue();
     co_await test_http_server_absolute_form_target();
     co_await test_http_client_sse_interruption();
+    co_await test_http_client_sse_per_read_timeout();
     co_await test_http_client_connection_pool();
     co_await test_http_client_dns_timeout();
 #if AGENTXX_BUILD_CLIENT

@@ -2508,6 +2508,54 @@ void test_anthropic_sse_message_stop_flag() {
     XX_TEST_EXPECT_TRUE(run("event: message_stop\ndata: {\"type\":\"message_stop\"}", true));
 }
 
+/// 已收到 message_delta.stop_reason 但缺少 message_stop 就结束:
+/// 按"已完整"收尾, 不能把已生成完的正文/工具调用丢掉
+asio::awaitable<void>
+    test_streaming_stop_reason_without_message_stop_accepted(
+        MockAnthropicServer& mock,
+        uint16_t             port
+    ) {
+    const std::string baseUrl = "http://127.0.0.1:" + std::to_string(port);
+    mock.mode                 = AnthropicMockMode::Streaming;
+    mock.sseChunks            = {
+        MockAnthropicServer::sseEvent(
+            "message_start",
+            R"({"type":"message_start","message":{"id":"msg_sr","type":"message","role":"assistant","usage":{"input_tokens":3}}})"
+        ),
+        MockAnthropicServer::sseEvent(
+            "content_block_start",
+            R"({"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}})"
+        ),
+        MockAnthropicServer::sseEvent(
+            "content_block_delta",
+            R"({"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Partial"}})"
+        ),
+        // 结束原因到了, 但故意不发 message_stop (模拟网关不发结束标记)
+        MockAnthropicServer::sseEvent(
+            "message_delta",
+            R"({"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":7}})"
+        ),
+    };
+
+    auto provider = server::AnthropicProvider::create(makeAntCfg("sk-ant-test", baseUrl));
+
+    neograph::CompletionParams params;
+    params.model    = "claude-sonnet-4-20250514";
+    params.messages = {
+        neograph::ChatMessage{.role = "user", .content = "stop_reason only"}
+    };
+
+    try {
+        auto result = co_await provider->invoke(params, [](const std::string&) {});
+        XX_TEST_EXPECT_EQ(result.message.content, std::string{"Partial"});
+        XX_TEST_EXPECT_EQ(result.usage.completion_tokens, 7);
+    } catch (const std::exception& e) {
+        XX_TEST_FAILED++;
+        TEST_FAIL << "stop_reason without message_stop must be accepted: " << e.what()
+                  << std::endl;
+    }
+}
+
 asio::awaitable<TestResult> run_anthropic_provider_tests() {
     g_anthropic_passed = 0;
     g_anthropic_failed = 0;
@@ -2573,6 +2621,7 @@ asio::awaitable<TestResult> run_anthropic_provider_tests() {
     co_await test_streaming_usage(*mock, port);
     co_await test_streaming_malformed_event_skipped(*mock, port);
     co_await test_streaming_missing_message_stop_throws(*mock, port);
+    co_await test_streaming_stop_reason_without_message_stop_accepted(*mock, port);
     co_await test_sendthinking_in_request_body(*mock, port);
     co_await test_thinking_callback_separation(*mock, port);
 
