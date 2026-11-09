@@ -1141,7 +1141,7 @@ static void refreshSection(ClientCtx& c) {
     }
     if (!c.section && c.ui->register_info_section) {
         auto idSv    = agentxx::plugin::PluginStringView::fromCstr("agentxx_codegraph.status");
-        auto titleSv = agentxx::plugin::PluginStringView::fromCstr(R"({"title":"CodeGraph"})");
+        auto titleSv = agentxx::plugin::PluginStringView::fromCstr(R"_({"title":"CodeGraph"})_");
         c.section    = c.ui->register_info_section(c.host, &idSv, &titleSv);
     }
     if (!c.section) {
@@ -1256,7 +1256,7 @@ static void* codegraphClientStart(
 ) {
     if (ctx.ui && ctx.ui->register_info_section) {
         auto idSv    = agentxx::plugin::PluginStringView::fromCstr("agentxx_codegraph.status");
-        auto titleSv = agentxx::plugin::PluginStringView::fromCstr(R"({"title":"CodeGraph"})");
+        auto titleSv = agentxx::plugin::PluginStringView::fromCstr(R"_({"title":"CodeGraph"})_");
         ctx.section  = ctx.ui->register_info_section(ctx.host, &idSv, &titleSv);
         if (ctx.section) {
             refreshSection(ctx);

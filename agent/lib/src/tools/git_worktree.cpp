@@ -140,32 +140,32 @@ neograph::ChatTool GitWorktreeTool::get_definition() const {
                   {"type", "string"},
                   {"enum", utilxx_base::Json::array({"create", "info", "status", "remove"})},
                   {"description",
-                   R"(Operation to perform:
+                   R"_(Operation to perform:
 `create`: Create an isolated worktree and bind THIS session to it. Use at the start of code-modifying tasks.
 `info`: Show the current binding and all worktrees of the repository.
 `status`: Summarize pending changes in the bound worktree.
-`remove`: Delete a worktree (refuses when it has uncommitted work unless `force`.)"},
+`remove`: Delete a worktree (refuses when it has uncommitted work unless `force`.)_"},
               }},
              {"name",
               {
                   {"type", "string"},
                   {"description",
-                   R"(Worktree name (used as directory name and in the branch `agentxx/wt-{name}`).
-Allowed chars: letters, digits, `.`, `_`, `-`. Required by `create` (a timestamped name is generated when empty) and `remove`; ignored by others.)"
+                   R"_(Worktree name (used as directory name and in the branch `agentxx/wt-{name}`).
+Allowed chars: letters, digits, `.`, `_`, `-`. Required by `create` (a timestamped name is generated when empty) and `remove`; ignored by others.)_"
                   },
               }},
              {"base_ref",
               {
                   {"type", "string"},
                   {"description",
-                   R"(`create` only. Branch/commit to base the new worktree on; default: current HEAD.)"
+                   R"_(`create` only. Branch/commit to base the new worktree on; default: current HEAD.)_"
                   },
               }},
              {"force",
               {
                   {"type", "boolean"},
                   {"description",
-                   R"(`remove` only. Default `false`. When true, delete even if the worktree has uncommitted/untracked changes or unpushed commits — data loss risk; prefer committing first.)"
+                   R"_(`remove` only. Default `false`. When true, delete even if the worktree has uncommitted/untracked changes or unpushed commits — data loss risk; prefer committing first.)_"
                   },
               }},
          }                                              },
@@ -225,13 +225,13 @@ asio::awaitable<agentxx::util::ToolResult>
                 if (root.empty()) {
                     if (effectiveDir.empty() || !fw::isInsideWorkTree(effectiveDir)) {
                         co_return agentxx::util::ToolResult::fail(
-                            R"({"error":"not inside a git repository","hint":"worktree mode requires a git repository with at least one commit"})"
+                            R"_({"error":"not inside a git repository","hint":"worktree mode requires a git repository with at least one commit"})_"
                         );
                     }
                     auto r = fw::repoRoot(effectiveDir);
                     if (!r) {
                         co_return agentxx::util::ToolResult::fail(
-                            R"({"error":"cannot resolve repository root"})"
+                            R"_({"error":"cannot resolve repository root"})_"
                         );
                     }
                     root = *r;
@@ -437,13 +437,13 @@ asio::awaitable<agentxx::util::ToolResult>
                     if (root.empty()) {
                         if (effectiveDir.empty() || !fw::isInsideWorkTree(effectiveDir)) {
                             co_return agentxx::util::ToolResult::fail(
-                                R"({"error":"not inside a git repository"})"
+                                R"_({"error":"not inside a git repository"})_"
                             );
                         }
                         auto r = fw::repoRoot(effectiveDir);
                         if (!r) {
                             co_return agentxx::util::ToolResult::fail(
-                                R"({"error":"cannot resolve repository root"})"
+                                R"_({"error":"cannot resolve repository root"})_"
                             );
                         }
                         root = *r;

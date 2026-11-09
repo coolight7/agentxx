@@ -147,8 +147,8 @@ struct AsyncWorkSpec {
     /// 起跑延时 (毫秒; <= 0 = 不延时)
     /// - 到点之前任务**一直算排队中** (`queued`), 只是不会被 `pump` 拉起;
     ///   它也不挡后面排队的任务 —— 延时项留在队列里被跳过, 名额让给能跑的
-    /// - 剩余延时可被 `AgentHost::startAsyncWorkNow` 提前抹掉 (见
-    ///   `agentxx_async_await` 的 `start_now`)
+    /// - 剩余延时可被 `AgentHost::startAsyncWorkNow` 提前抹掉 (模型侧用
+    ///   `agentxx_async_manager {opt:"delay", delayMs:0}`)
     std::chrono::milliseconds delay{0};
 
     /// 结果: 事件名固定 `agentxx.agent.async.done`, 此处只决定是否额外投递会话

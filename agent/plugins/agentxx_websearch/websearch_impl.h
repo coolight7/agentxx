@@ -161,7 +161,7 @@ inline asio::awaitable<std::string> webFetchExecuteAsync(const utilxx_base::Json
     }
     if (format != "markdown" && format != "raw") {
         throw std::invalid_argument{
-            fmt::format(R"(Arg `format`({}) is invalid: use `markdown` or `raw`.)", format)
+            fmt::format(R"_(Arg `format`({}) is invalid: use `markdown` or `raw`.)_", format)
         };
     }
 

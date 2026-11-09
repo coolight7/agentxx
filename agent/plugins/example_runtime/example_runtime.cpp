@@ -178,7 +178,7 @@ void onChannelEventImpl(RuntimeCtx& ctx, const agentxx::plugin::ChannelEvent& ev
                 ev.channelId,
                 ev.interruptId
             ));
-            agentxx::plugin::respondInterrupt(ctx, ev.channelId, ev.interruptId, R"({"values":{}})");
+            agentxx::plugin::respondInterrupt(ctx, ev.channelId, ev.interruptId, R"_({"values":{}})_");
             break;
         }
         case AGENTXX_PLUGIN_CHANNEL_EVT_CLOSED: {
@@ -210,7 +210,7 @@ void registerHostTools(RuntimeCtx& ctx, const agentxx::plugin::AgentRef& ref) {
         ref,
         "example_runtime_say",
         "把一句话投给 example_runtime 插件自己的会话通道, 返回通道 id 与受理结果",
-        R"({"type":"object","properties":{"text":{"type":"string","description":"要投递的消息正文"}},"required":["text"]})",
+        R"_({"type":"object","properties":{"text":{"type":"string","description":"要投递的消息正文"}},"required":["text"]})_",
         [](RuntimeCtx& c, std::string_view argsJson) -> std::string {
             const auto args = [&argsJson]() {
                 try {
@@ -229,7 +229,7 @@ void registerHostTools(RuntimeCtx& ctx, const agentxx::plugin::AgentRef& ref) {
             }
             const int32_t rc = agentxx::plugin::sendText(c, channelId, text);
             return fmt::format(
-                R"({{"channelId":{},"accepted":{},"rc":{}}})",
+                R"_({{"channelId":{},"accepted":{},"rc":{}}})_",
                 channelId,
                 rc == AGENTXX_PLUGIN_RUNTIME_OK ? "true" : "false",
                 rc
@@ -243,7 +243,7 @@ void registerHostTools(RuntimeCtx& ctx, const agentxx::plugin::AgentRef& ref) {
         ref,
         "example_runtime_ping",
         "发一条 example_runtime 事件, 触发器把窗口内的多条合并成一条投入通道",
-        R"({"type":"object","properties":{"text":{"type":"string","description":"事件正文, 缺省为 ping"}}})",
+        R"_({"type":"object","properties":{"text":{"type":"string","description":"事件正文, 缺省为 ping"}}})_",
         [](RuntimeCtx& c, std::string_view argsJson) -> std::string {
             std::string text = "ping";
             try {
@@ -261,7 +261,7 @@ void registerHostTools(RuntimeCtx& ctx, const agentxx::plugin::AgentRef& ref) {
             payload["text"]           = text;
             const int32_t rc = agentxx::plugin::emitEvent(c, c.triggerTopic, payload.dump());
             return fmt::format(
-                R"({{"topic":"{}","rc":{}}})",
+                R"_({{"topic":"{}","rc":{}}})_",
                 c.triggerTopic,
                 rc
             );
@@ -274,7 +274,7 @@ void registerHostTools(RuntimeCtx& ctx, const agentxx::plugin::AgentRef& ref) {
         ref,
         "example_runtime_status",
         "返回 example_runtime 插件的根、通道、触发器、定时器与最近一轮回答",
-        R"({"type":"object","properties":{}})",
+        R"_({"type":"object","properties":{}})_",
         [](RuntimeCtx& c, std::string_view) -> std::string {
             std::string rootId;
             std::string lastAnswer;

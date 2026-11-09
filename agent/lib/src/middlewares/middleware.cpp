@@ -84,9 +84,9 @@ void BaseMiddlewareHandleInterface::printMessage(const neograph::ChatMessage& ms
         toollist += "┣━ Toolcall: \n";
         for (const auto& tool : msg.tool_calls) {
             toollist += fmt::format(
-                R"(  - {}/{}
+                R"_(  - {}/{}
     {}
-)",
+)_",
                 tool.name,
                 tool.id,
                 tool.arguments
@@ -94,14 +94,14 @@ void BaseMiddlewareHandleInterface::printMessage(const neograph::ChatMessage& ms
         }
     }
     XX_OUT(
-        R"(
+        R"_(
 ┏━━━━━━ Message/{} ━━━━━━┓
 ┣━ Role: {}
 {}
 ┣━ Think: {}
 ┣━ Content: {}
 ┗━━━━━━ Message/{} ━━━━━━┛
-)",
+)_",
         index,
         msg.role,
         toollist,

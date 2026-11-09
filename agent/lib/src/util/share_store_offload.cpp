@@ -59,9 +59,9 @@ ShareStoreOffload offloadShareStoreIfOversized(
         if (lastLineIndex >= targetIndex / 3) {
             // 按行截断后仍剩得下内容: 给出隐藏行号区间, 便于模型按行分页取回
             out.text = fmt::format(
-                R"({} Use the `agentxx_share_store` tool to fetch the content by ID {}. Total {} lines, show [1, {}], hide [{}, {}].]
+                R"_({} Use the `agentxx_share_store` tool to fetch the content by ID {}. Total {} lines, show [1, {}], hide [{}, {}].]
 {}
-...)",
+...)_",
                 kOffloadHintPrefix,
                 out.storeId,
                 totalLineCount,
@@ -74,8 +74,8 @@ ShareStoreOffload offloadShareStoreIfOversized(
             // 内容集中在少数行 (例如只有一行但特别长): 按行截断几乎不剩内容,
             // 按字符截断并让模型用 id 取全文
             out.text = fmt::format(
-                R"({} Use the `agentxx_share_store` tool to fetch the full content by ID {}. Total {} lines.]
-{}...)",
+                R"_({} Use the `agentxx_share_store` tool to fetch the full content by ID {}. Total {} lines.]
+{}...)_",
                 kOffloadHintPrefix,
                 out.storeId,
                 totalLineCount,

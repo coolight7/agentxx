@@ -13,16 +13,16 @@ constexpr std::string_view kNameRegexp  = "agentxx_string_regexp";
 
 constexpr std::string_view kDepictHtml2Md = "Convert HTML content to Markdown format.";
 constexpr std::string_view kDepictRegexp =
-    R"(Search, replace, or remove text using regular expressions.
-Operates on in-memory text content (not files).)";
+    R"_(Search, replace, or remove text using regular expressions.
+Operates on in-memory text content (not files).)_";
 
 constexpr std::string_view kExpsDesc
-    = R"(Array of regex patterns. A match succeeds if ANY pattern matches.
-Every pattern is applied and the result is the union of their matches (overlapping matches are merged, so one span is reported once).)";
-constexpr std::string_view kOptDesc = R"(Operation mode:
+    = R"_(Array of regex patterns. A match succeeds if ANY pattern matches.
+Every pattern is applied and the result is the union of their matches (overlapping matches are merged, so one span is reported once).)_";
+constexpr std::string_view kOptDesc = R"_(Operation mode:
 `search`: Return all match results.
 `replace`: Replace matches with `replace_str` and return the resulting text.
-`remove`: Remove all matches and return the resulting text.)";
+`remove`: Remove all matches and return the resulting text.)_";
 constexpr std::string_view kReplaceStrDesc
     = "Default: empty string. The replacement string used when `opt` is `replace`.";
 constexpr std::string_view kIgnoreCaseDesc

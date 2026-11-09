@@ -248,8 +248,8 @@ content:
 |---|---|---|
 | `agentxx_async_run` | `tool`, `args`, `notify`（默认 `true`）, `label`, `delayMs`, `queueTimeoutMs`, `runTimeoutMs` | 把一次工具调用（或一条 `agentxx_subagent` 子代理任务）放到后台；`notify=true` 时结果自动插回会话；`queueTimeoutMs`/`runTimeoutMs` 是排队与运行的时限（默认 0 = 不限） |
 | `agentxx_async_query` | `group`（`all`/`queued`/`running`/`done`/`failed`/`canceled`, 默认 `all`）, `id` | 按分组列本会话的后台任务；给 `id` 查单条（含结果正文）；还在延时里的排队项列表项开头带 `*` |
-| `agentxx_async_await` | `id`, `timeoutMs`（默认 30000，上限 300000）, `start_now` | 等该任务的结果：`timeoutMs` 是整段等待的超时（延时+排队+运行全算）；已完成的直接返回台账结果 |
-| `agentxx_async_manager` | `opt`（`cancel` / `delay`）, `id`（单个或数组）, `delayMs` | 对已存在的任务动手：`cancel` 取消、`delay` 改起跑延时（`delayMs:0` = 去掉延时）；`group` 批量入口已删除，要批量就传 id 数组 |
+| `agentxx_async_await` | `id`, `timeoutMs`（默认 30000，上限 300000） | 等该任务的结果：`timeoutMs` 是整段等待的超时（延时+排队+运行全算）；已完成的直接返回台账结果 |
+| `agentxx_async_manager` | `opt`（`cancel` / `delay`）, `id`（**数组**）, `delayMs` | 对已存在的任务动手：`cancel` 取消、`delay` 改起跑延时（`delayMs:0` = 去掉延时）；`group` 批量入口已删除，模型给单个 id 时由执行层按 schema 转成数组 |
 | `agentxx_async_emit` | `event`, `value`, `end`, `public_publish`, `label` | 发布值 / 结束事件流（只管写侧，见 6.1） |
 
 `id` 是后台任务的 `asyncId`（`async-7`）：`agentxx_async_await` 用它登记
@@ -346,14 +346,14 @@ content:
   （拿不到就绪名额时继续排队）。台账额外字段：`delayMs`（提交时的原值）与
   `delayRemainingMs`（还在延时中才带）。`agentxx_async_query` 的列表项用开头字符区分：
   `-` 是普通排队、`*` 是还在延时里（后面再跟 `delay=<剩余> left`），一眼看出“为什么它还没跑”。
-  `agentxx_async_manager {opt:"delay", id, delayMs}` 改延时（`0` = 去掉），
-  `agentxx_async_await {start_now:true}` / `AgentHost::startAsyncWorkNow` 直接抹掉剩余延时
-  让它即时起跑；排队中取消仍直接出队；
+  `agentxx_async_manager {opt:"delay", id:["async-7"], delayMs}` 改延时（`0` = 去掉），
+  `AgentHost::startAsyncWorkNow`（内部 API，模型侧不暴露）直接抹掉剩余延时让它即时起跑；
+  排队中取消仍直接出队；
 - **`asyncId` 就是任务 agent 的 sessionId**（一个值，不另造；`kind=tool` 的任务没有 agent，
   `asyncId` 仍然是它自己的会话 id，只是不派生 agent）；
 - **取消与改延时**：`agentxx_async_manager {opt:"cancel", id}` 与
-  `{opt:"delay", id, delayMs}`，`id` 可以是单个字符串或数组（去重后逐条处理、逐条一行结果），
-  只能动本会话启动的任务；`group` 批量入口已删除（要批量就传 id 数组）。
+  `{opt:"delay", id, delayMs}`，`id` 是 **id 数组**（去重后逐条处理、逐条一行结果；模型给单个
+  id 时由执行层按 schema 转成数组），只能动本会话启动的任务；`group` 批量入口已删除。
   插件侧另有 `agentxx.agent.runtime` 的 `cancel_async_work`，agent 关停走
   `AgentHost::cancelAsyncWorks(ctx)`：排队中的直接出队并立即发终态，运行中的置取消令牌；
   被取消同样发终态，等待方不会挂到超时（机制见 8.2）；
@@ -424,8 +424,8 @@ content:
   （无延时就从受理时开始）。所以“延时 5 分钟 + 排队时限 1 分钟”不会因为延时而失败，
   只有延时结束后 1 分钟还没拿到名额才算超时；
 - **改延时会重算排队起点**：`agentxx_async_manager {opt:"delay"}` 把排队计时改成
-  “新延时结束 + `queueTimeoutMs`”，`agentxx_async_await {start_now:true}` 抹掉延时后从当下重算。
-  延时与排队时限的起点始终是同一个，不会出现“还在延时里就被判排队超时”；
+  “新延时结束 + `queueTimeoutMs`”。延时与排队时限的起点始终是同一个，不会出现
+  “还在延时里就被判排队超时”；
 - 台账里 `queueRemainingMs`（还没起跑才带）与 `delayRemainingMs`（还在延时中才带）分别
   是排队与延时的剩余，两者都不带时说明正在跑或已经结束；
 - 两条超时走同一个收尾函数（发结果事件、通知界面、释放会话存储占用、队列补位），

@@ -611,13 +611,13 @@ static YamlAppConfig parseYamlConfigNode(
             );
             if (ns.empty() || (url.empty() && command.empty())) {
                 XX_LOGW(
-                    R"([Config] Warning: mcp entry missing `namespace`, or both `url` and `command`, skipped)"
+                    R"_([Config] Warning: mcp entry missing `namespace`, or both `url` and `command`, skipped)_"
                 );
                 continue;
             }
             if (!url.empty() && !command.empty()) {
                 XX_LOGW(
-                    R"([Config] Warning: mcp entry has both `url` and `command` (namespace `{}`), `url` wins (HTTP transport)",
+                    R"_([Config] Warning: mcp entry has both `url` and `command` (namespace `{}`), `url` wins (HTTP transport)_",
                     ns
                 );
             }
@@ -636,7 +636,7 @@ static YamlAppConfig parseYamlConfigNode(
                     }
                 } else if (node["args"]) {
                     XX_LOGW(
-                        R"([Config] Warning: mcp `args` must be a list of strings (namespace `{}`), ignored)",
+                        R"_([Config] Warning: mcp `args` must be a list of strings (namespace `{}`), ignored)_",
                         ns
                     );
                 }
@@ -677,7 +677,7 @@ static YamlAppConfig parseYamlConfigNode(
             }
             if (cfg.mcpServers.contains(ns)) {
                 XX_LOGW(
-                    R"([Config] Warning: duplicate mcp namespace '{}', overriding its config)",
+                    R"_([Config] Warning: duplicate mcp namespace '{}', overriding its config)_",
                     ns
                 );
             }
@@ -1018,7 +1018,7 @@ static YamlAppConfig parseYamlConfigNode(
     if (pluginItems.IsSequence()) {
         for (const auto& node : pluginItems) {
             if (!node.IsMap()) {
-                XX_LOGW(R"([Config] Warning: plugins entry must be a map, skipped)");
+                XX_LOGW(R"_([Config] Warning: plugins entry must be a map, skipped)_");
                 continue;
             }
             auto p = resolveEnvVars(node["path"].as<std::string>(""), dotEnvVars, overrideEnvVars);
@@ -1032,7 +1032,7 @@ static YamlAppConfig parseYamlConfigNode(
             pc.path = std::move(p);
             if (pc.path.empty()) {
                 XX_LOGW(
-                    R"([Config] Warning: plugin entry missing required `path` (or `name` for builtin), skipped)"
+                    R"_([Config] Warning: plugin entry missing required `path` (or `name` for builtin), skipped)_"
                 );
                 continue;
             }
@@ -1060,7 +1060,7 @@ static YamlAppConfig parseYamlConfigNode(
                     pc.sides = agent::PluginSide::Client;
                 } else if (!utilxx_base::isIgnoreCaseEqual(val, "auto") && !utilxx_base::isIgnoreCaseEqual(val, "both")) {
                     XX_LOGW(
-                        R"([Config] Warning: plugin `{}` invalid sides `{}`, fallback to auto)",
+                        R"_([Config] Warning: plugin `{}` invalid sides `{}`, fallback to auto)_",
                         pc.path,
                         val
                     );
@@ -1127,7 +1127,7 @@ static YamlAppConfig parseYamlConfigNode(
                     cfg.pluginMountPolicy = agent::PluginMountPolicy::All;
                 } else {
                     XX_LOGW(
-                        R"([Config] Warning: plugin.mount invalid policy `{}`, fallback to all)",
+                        R"_([Config] Warning: plugin.mount invalid policy `{}`, fallback to all)_",
                         val
                     );
                 }

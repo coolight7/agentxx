@@ -107,8 +107,8 @@ event / async_* 及延迟加载加载 (`ToolSkillSearchSubAgentTask` 模板类, 
 | **事件/后台** | `agentxx_async_emit` | 发布值 / 结束事件流 (`value` + `end`)；能不能发由事件创建时声明的发布者决定 |
 | | `agentxx_async_run` | 把**一次工具调用或子代理任务**放后台跑, `notify`（默认 true）开启时结果自动插回上下文; `delayMs` 起跑延时、`queueTimeoutMs`/`runTimeoutMs` 排队与运行时限; 只在 `async_work.enable` 时注册 |
 | | `agentxx_async_query` | 查本会话的后台任务 (`group` 六档 / `id` 单条, 含结果正文; 延时中的项开头 `*`) |
-| | `agentxx_async_await` | 阻塞本轮等某条任务 (`timeoutMs` 默认 30s, 上限 5min; `start_now` 提前起跑) |
-| | `agentxx_async_manager` | `opt`=`cancel`（取消）或 `delay`（改起跑延时, `0` = 去掉）; `id` 单个或数组 |
+| | `agentxx_async_await` | 阻塞本轮等某条任务 (`timeoutMs` 默认 30s, 上限 5min) |
+| | `agentxx_async_manager` | `opt`=`cancel`（取消）或 `delay`（改起跑延时, `0` = 去掉）; `id` 是 id 数组 |
 | | `agentxx_string_html_to_markdown` | HTML 转 Markdown |
 | | `agentxx_string_regexp` | 正则搜索/替换/移除 |
 | **系统** | `agentxx_get_current_datetime` | 获取当前日期时间 |

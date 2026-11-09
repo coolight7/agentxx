@@ -57,8 +57,8 @@ public:
 ///
 /// - `id` 必填；`timeoutMs` 是**等待结果的整体超时**（延时 + 排队 + 运行全算在内），
 ///   默认 30 秒，硬上限 5 分钟
-/// - `start_now`（默认 false）：目标还在 `delayMs` 延时里时，抹掉剩余延时让它立刻起跑；
-///   不给时如果剩余延时比 `timeoutMs` 还长，直接回一段说明（不挂到必然超时）
+/// - 任务还在 `delayMs` 延时里、且剩余延时比 `timeoutMs` 还长时，直接回一段说明
+///   （不挂到必然超时）；要提前起跑用 `agentxx_async_manager {opt:"delay", delayMs:0}`
 /// - 已经结束的任务直接返回台账里的结果，不再等事件
 /// - 超时返回一段说明文本（不是工具失败），会话取消抛取消。
 class AsyncAwaitTool : public XXToolBase {
@@ -77,7 +77,8 @@ public:
 /// - `opt`（必填）：
 ///     - `cancel`：取消目标任务（排队中的直接出队并按取消收尾，运行中的置取消令牌）
 ///     - `delay`：调整目标任务的起跑延时，`delayMs` 必填，`0` = 移除延时（立即排队起跑）
-/// - `id`：单个 id 或 id 数组，逐条处理（`group` 批量入口已移除，要批量就传数组）
+/// - `id`：任务 id 数组，逐条处理（声明就是数组，模型给单个字符串时由执行层
+///   按 schema 自愈成数组；`group` 批量入口已移除，要批量就传数组）
 /// - 只能操作本会话启动的任务；逐条结果写进返回文本，全部失败时按工具失败返回。
 class AsyncManagerTool : public XXToolBase {
 public:

@@ -1506,10 +1506,10 @@ void ToolcallWrapNode::defStdoutLogOnToolcallStart(
         out << "┣━ Empty Argument List\n";
     }
     XX_LOGD(
-        R"(
+        R"_(
 ┏━━━━━━ Toolcall ━━━━━━┓
 {}
-)",
+)_",
         out.str()
     );
 }
@@ -1534,10 +1534,10 @@ void ToolcallWrapNode::defStdoutLogOnToolcallEnd(
     }
 
     XX_LOGD(
-        R"(
+        R"_(
 {}
 ┗━━━━━━ Toolcall ━━━━━━┛
-)",
+)_",
         out.str()
     );
 }

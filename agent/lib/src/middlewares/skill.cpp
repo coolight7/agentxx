@@ -39,13 +39,13 @@ std::string SkillMiddlewareHandle::formatSkillsMetadataList() {
     for (const auto& item : skillCache.skillData) {
         // 来源展示给模型: 同名技能已按优先级裁决, 每个名字一条
         oss += fmt::format(
-            R"(
+            R"_(
 - **{}** Skill: {}
   - source: {}
   - compatibility: {}
   - allowed-tools: {}
   - Read file `{}` for full instructions
-)",
+)_",
             item.second.name,
             item.second.description,
             item.second.source.empty() ? std::string{"builtin"} : item.second.source,
@@ -68,7 +68,7 @@ asio::awaitable<std::pair<std::string, agentxx::middleware::_SkillMetadata>>
             if (!stream) {
                 auto ec = std::error_code{errno, std::system_category()};
                 throw std::runtime_error{
-                    fmt::format(R"(Can not open file. Error: {})", ec.message())
+                    fmt::format(R"_(Can not open file. Error: {})_", ec.message())
                 };
             }
             auto filecontent = std::string{

@@ -148,10 +148,10 @@ static int exampleAgentSetup(AgentCtx& ctx, const agentxx::plugin::ScopeRef& ref
          ref,
         "example_echo",
         "Echo the input arguments back as JSON (example plugin tool).",
-        R"({"type":"object","properties":{},"additionalProperties":true})",
+        R"_({"type":"object","properties":{},"additionalProperties":true})_",
         [](AgentCtx& c, std::string_view args, std::string_view tid) -> std::string {
             return fmt::format(
-                R"({{"echo": {},"sessionId": {}}})",
+                R"_({{"echo": {},"sessionId": {}}})_",
                 args.empty() ? "{}" : args,
                 c.jsonEscape(tid)
             );
@@ -168,7 +168,7 @@ static int exampleAgentSetup(AgentCtx& ctx, const agentxx::plugin::ScopeRef& ref
          ref,
         "example_fail_demo",
         "Demonstrate returning a failed tool result without throwing (pass fail=true).",
-        R"({"type":"object","properties":{"fail":{"type":"boolean"}}})",
+        R"_({"type":"object","properties":{"fail":{"type":"boolean"}}})_",
         [](std::string_view args) -> agentxx::plugin::ToolResult {
             const bool shouldFail = args.find("\"fail\":true") != std::string_view::npos
                                     || args.find("\"fail\": true") != std::string_view::npos;
@@ -177,7 +177,7 @@ static int exampleAgentSetup(AgentCtx& ctx, const agentxx::plugin::ScopeRef& ref
                     "example_fail_demo was asked to fail (this text is the whole error content)"
                 );
             }
-            return agentxx::plugin::ToolResult::ok(R"({"ok":true})");
+            return agentxx::plugin::ToolResult::ok(R"_({"ok":true})_");
         }
     );
 
@@ -187,7 +187,7 @@ static int exampleAgentSetup(AgentCtx& ctx, const agentxx::plugin::ScopeRef& ref
          ref,
         "example_caller",
         "Call example_echo via call_tool to demonstrate plugin interop.",
-        R"({"type":"object","properties":{},"additionalProperties":true})",
+        R"_({"type":"object","properties":{},"additionalProperties":true})_",
         [ref](AgentCtx& c, std::string_view args, agentxx::plugin::OpCtl ctl
         ) -> agentxx::plugin::Task<std::string> {
             std::string resp = co_await agentxx::plugin::call_tool(
@@ -197,7 +197,7 @@ static int exampleAgentSetup(AgentCtx& ctx, const agentxx::plugin::ScopeRef& ref
                 args,
                 ctl.scopeKey
             );
-            co_return fmt::format(R"({{"via_call_tool": {}}})", resp);
+            co_return fmt::format(R"_({{"via_call_tool": {}}})_", resp);
         }
     );
 
@@ -207,7 +207,7 @@ static int exampleAgentSetup(AgentCtx& ctx, const agentxx::plugin::ScopeRef& ref
          ref,
         "example_sleep",
         "Sleep duration_ms milliseconds then return (slow plugin tool).",
-        R"({"type":"object","properties":{"durationMs":{"type":"integer"}}})",
+        R"_({"type":"object","properties":{"durationMs":{"type":"integer"}}})_",
         [ref](AgentCtx& c, std::string_view args, agentxx::plugin::OpCtl ctl
         ) -> agentxx::plugin::Task<std::string> {
             int ms = 200;
@@ -220,7 +220,7 @@ static int exampleAgentSetup(AgentCtx& ctx, const agentxx::plugin::ScopeRef& ref
             }
             co_await agentxx::plugin::sleep(c, ms > 0 ? ms : 0);
             ctl.throw_if_canceled();
-            co_return fmt::format(R"({{"slept_ms": {}}})", ms);
+            co_return fmt::format(R"_({{"slept_ms": {}}})_", ms);
         }
     );
 
@@ -236,7 +236,7 @@ static int exampleAgentSetup(AgentCtx& ctx, const agentxx::plugin::ScopeRef& ref
          ref,
         "example_bridge",
         "Report coroutine bridge diagnostics (driver tickets/steps, host IO thread).",
-        R"({"type":"object","properties":{"ticks":{"type":"integer"}}})",
+        R"_({"type":"object","properties":{"ticks":{"type":"integer"}}})_",
         [ref](AgentCtx& c, std::string_view args, agentxx::plugin::OpCtl ctl
         ) -> agentxx::plugin::Task<std::string> {
             int ticks = 1;
@@ -265,11 +265,11 @@ static int exampleAgentSetup(AgentCtx& ctx, const agentxx::plugin::ScopeRef& ref
                 c,
                 ref,
                 "example_echo",
-                R"({"from":"example_bridge"})",
+                R"_({"from":"example_bridge"})_",
                 ctl.scopeKey
             );
             co_return fmt::format(
-                R"({{"driverAvailable": {},"onHostIoThread": {},"ticks": {},"calls": {}}})",
+                R"_({{"driverAvailable": {},"onHostIoThread": {},"ticks": {},"calls": {}}})_",
                 bridge != nullptr ? "true" : "false",
                 onIoAtStart ? "true" : "false",
                 ticks,
@@ -293,7 +293,7 @@ static int exampleAgentSetup(AgentCtx& ctx, const agentxx::plugin::ScopeRef& ref
         "example_polled_timer",
         "Wait ticks * intervalMs with an asio steady_timer on the plugin local reactor "
         "(controlled polling sample) and report the measured elapsed time.",
-        R"({"type":"object","properties":{"ticks":{"type":"integer"},"intervalMs":{"type":"integer"}}})",
+        R"_({"type":"object","properties":{"ticks":{"type":"integer"},"intervalMs":{"type":"integer"}}})_",
         [](AgentCtx&        c,
            std::string_view args,
            std::string_view,
@@ -340,7 +340,7 @@ static int exampleAgentSetup(AgentCtx& ctx, const agentxx::plugin::ScopeRef& ref
             )
                                        .count();
             co_return fmt::format(
-                R"({{"driverAvailable": {},"onHostIoThread": {},"pumpOnStart": {},"ticks": {},"intervalMs": {},"elapsedMs": {}}})",
+                R"_({{"driverAvailable": {},"onHostIoThread": {},"pumpOnStart": {},"ticks": {},"intervalMs": {},"elapsedMs": {}}})_",
                 bridge != nullptr ? "true" : "false",
                 onIoThread ? "true" : "false",
                 pumpOnStart ? "true" : "false",
@@ -386,7 +386,7 @@ static int exampleAgentSetup(AgentCtx& ctx, const agentxx::plugin::ScopeRef& ref
             agentxx::plugin::PluginString::free(host, &full);
             if (prompt.find("\"example_echo\"") == std::string::npos) {
                 const char* promptJson
-                    = R"({"toolPrompt":{"example_echo":{"depict":"Echo the input arguments back as JSON (example plugin tool).","args":{}}}})";
+                    = R"_({"toolPrompt":{"example_echo":{"depict":"Echo the input arguments back as JSON (example plugin tool).","args":{}}}})_";
                 auto promptSv = agentxx::plugin::PluginStringView::fromCstr(promptJson);
                 ctx.iface.prompt->set_prompt(host, ref.ptr(), &promptSv);
             }
@@ -541,7 +541,7 @@ static int32_t PLUGINXX_CALL example_cmd_execute(
             text = fmt::format("{} ({})", text, suffix);
         }
         const std::string out
-            = fmt::format(R"({{"action":"send","text":{}}})", clientJsonEscape(*ctx, text));
+            = fmt::format(R"_({{"action":"send","text":{}}})_", clientJsonEscape(*ctx, text));
         auto outSv = agentxx::plugin::PluginStringView::from(out.data(), out.size());
         if (actionOut) {
             *actionOut = agentxx::plugin::PluginString::from(ctx->host, &outSv);
@@ -579,7 +579,7 @@ static int32_t PLUGINXX_CALL example_toast_execute(
             agentxx::plugin::PluginString::free(ctx->host, &argText);
         }
         const std::string out = fmt::format(
-            R"({{"action":"toast","text":{},"level":1}})",
+            R"_({{"action":"toast","text":{},"level":1}})_",
             clientJsonEscape(*ctx, text)
         );
         auto outSv = agentxx::plugin::PluginStringView::from(out.data(), out.size());
@@ -607,7 +607,7 @@ static void PLUGINXX_CALL on_client_ready(const PluginxxStringView* payload_json
                 "agentxx.client.plugin.example_plugin.hello"
             );
             auto paySv
-                = agentxx::plugin::PluginStringView::fromCstr(R"({"from":"client-example"})");
+                = agentxx::plugin::PluginStringView::fromCstr(R"_({"from":"client-example"})_");
             ctx->iface.wire->send_plugin_data(ctx->host, &evtSv, &paySv);
         }
     });
@@ -624,7 +624,7 @@ static void PLUGINXX_CALL on_client_turn_end(const PluginxxStringView* payload_j
         ++ctx->turn_count;
         if (ctx->status_item && ctx->ui && ctx->ui->update_status_item) {
             const std::string json = fmt::format(
-                R"({{"text":{}}})",
+                R"_({{"text":{}}})_",
                 clientJsonEscape(*ctx, fmt::format("turns: {}", ctx->turn_count))
             );
             auto jsonSv = agentxx::plugin::PluginStringView::from(json.data(), json.size());
@@ -702,18 +702,18 @@ static int exampleClientSetup(ClientCtx& ctx) {
     const PluginxxHost* host = ctx.host;
     ctx.ui                   = ctx.iface.ui;
     auto sidSv               = agentxx::plugin::PluginStringView::fromCstr("example_plugin.turns");
-    auto initSv     = agentxx::plugin::PluginStringView::fromCstr(R"({"text":"turns: 0"})");
+    auto initSv     = agentxx::plugin::PluginStringView::fromCstr(R"_({"text":"turns: 0"})_");
     ctx.status_item = ctx.ui && ctx.ui->register_status_item
                           ? ctx.ui->register_status_item(host, &sidSv, &initSv, 0, 10)
                           : nullptr;
 
     auto pidSv   = agentxx::plugin::PluginStringView::fromCstr("example_plugin.panel");
-    auto ppropSv = agentxx::plugin::PluginStringView::fromCstr(R"({"title":"Example"})");
+    auto ppropSv = agentxx::plugin::PluginStringView::fromCstr(R"_({"title":"Example"})_");
     ctx.panel    = ctx.ui && ctx.ui->register_panel ? ctx.ui->register_panel(host, &pidSv, &ppropSv)
                                                     : nullptr;
 
     auto iidSv       = agentxx::plugin::PluginStringView::fromCstr("example_plugin.info");
-    auto ipropSv     = agentxx::plugin::PluginStringView::fromCstr(R"({"title":"Example Info"})");
+    auto ipropSv     = agentxx::plugin::PluginStringView::fromCstr(R"_({"title":"Example Info"})_");
     ctx.info_section = ctx.ui && ctx.ui->register_info_section
                            ? ctx.ui->register_info_section(host, &iidSv, &ipropSv)
                            : nullptr;

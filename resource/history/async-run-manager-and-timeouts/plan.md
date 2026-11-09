@@ -1,5 +1,9 @@
 # 设计方案: 后台任务工具改名、延时调整与超时体系
 
+> 本计划实施后按用户反馈又做了三处调整（`agentxx_async_manager` 的 `id` 只收数组、
+> `agentxx_async_await` 删掉 `start_now`、插件面补 `delay_ms` / `queue_timeout_ms`），
+> 另把主程序与插件的原始字符串统一成 `R"_(...)_"`；以 work.md 的「追加改动」为准。
+
 ## 1. 背景
 
 上一轮已实现「任意工具可异步 + `delayMs` 延时排队 + `await {start_now}`」。这一轮把工具族

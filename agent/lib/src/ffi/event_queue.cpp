@@ -92,7 +92,7 @@ void AGENTXX_FFI_CALL agentxx_ffi_event_queue_on_event(
             q->items.emplace_back(
                 static_cast<int32_t>(AGENTXX_FFI_EVT_ERROR),
                 std::string(
-                    R"({"code":-99,"message":"event queue overflow, oldest events dropped"})"
+                    R"_({"code":-99,"message":"event queue overflow, oldest events dropped"})_"
                 )
             );
         }

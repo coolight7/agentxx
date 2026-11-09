@@ -190,7 +190,7 @@ static int featureAgentSetup(FeatureCtx& ctx, const agentxx::plugin::ScopeRef& r
             [](FeatureCtx& c, std::string_view) -> agentxx::plugin::Task<std::string> {
                 co_await sleep(c, 400);
                 // 已经是完整回答 (`{"value":...}`) 时 featureAnswer 原样返回
-                co_return featureAnswer(std::string{R"({"value":{"slept":true}})"});
+                co_return featureAnswer(std::string{R"_({"value":{"slept":true}})_"});
             }
         )
         != 0) {
@@ -203,7 +203,7 @@ static int featureAgentSetup(FeatureCtx& ctx, const agentxx::plugin::ScopeRef& r
             ref,
             "agentxx.agent.context.countTokens",
             [](FeatureCtx&, std::string_view) {
-                return std::string{R"({"tokens":424242})"};
+                return std::string{R"_({"tokens":424242})_"};
             }
         )
         != 0) {

@@ -576,6 +576,47 @@ asio::awaitable<void> runBody(
             XX_TEST_EXPECT_TRUE(toolEntry.find("\"tool\"") != std::string::npos);
         }
 
+        // 7c) 追加字段 delay_ms / queue_timeout_ms: 进台账, 延时中取消立即收尾
+        {
+            std::string toolName{"probe_no_such_tool"};
+            AgentxxPluginAsyncWorkSpec delaySpec{};
+            delaySpec.struct_size      = sizeof(AgentxxPluginAsyncWorkSpec);
+            delaySpec.kind             = 1;
+            delaySpec.tool_name        = PluginStringView::from(toolName);
+            delaySpec.delay_ms         = 60000;
+            delaySpec.queue_timeout_ms = 5000;
+            PluginxxString out{nullptr, 0};
+            XX_TEST_EXPECT_EQ(
+                runtime->submit_async_work(hostView, &delaySpec, &out),
+                AGENTXX_PLUGIN_RUNTIME_OK
+            );
+            const auto delayedId = takeString(hostView, out);
+            XX_TEST_EXPECT_FALSE(delayedId.empty());
+            if (!delayedId.empty()) {
+                const auto entry = mgr->runtimeGetAsyncWork(inst.get(), delayedId);
+                XX_TEST_EXPECT_TRUE(entry.find("\"delayMs\":60000") != std::string::npos);
+                XX_TEST_EXPECT_TRUE(
+                    entry.find("\"queueTimeoutMs\":5000") != std::string::npos
+                );
+                XX_TEST_EXPECT_TRUE(entry.find("\"queued\"") != std::string::npos);
+                // 延时中取消: 立即终态, 不会等到延时结束
+                auto id = PluginStringView::from(delayedId);
+                XX_TEST_EXPECT_EQ(
+                    runtime->cancel_async_work(hostView, &id),
+                    AGENTXX_PLUGIN_RUNTIME_OK
+                );
+                const bool canceled = co_await waitUntil(
+                    ex,
+                    std::chrono::seconds{10},
+                    [&] {
+                        const auto text = mgr->runtimeGetAsyncWork(inst.get(), delayedId);
+                        return text.find("\"canceled\"") != std::string::npos;
+                    }
+                );
+                XX_TEST_EXPECT_TRUE(canceled);
+            }
+        }
+
         // 8) 根配置的 asyncWork 段落到 AgentConfig (插件根自己提交任务时用)
         {
             AgentxxPluginMountRootSpec rootSpec{};

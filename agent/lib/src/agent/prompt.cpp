@@ -374,7 +374,7 @@ Absent (default): the sub-agent's default full tool set.)_"},
 ## Delayed start
 - `delayMs` > 0 keeps the task `queued` until that many milliseconds have passed; it does not start earlier and it does not block other queued tasks.
 - Use it for "do this in 10 minutes" style work, retries after a pause, or polling loops with a gap.
-- While it waits, `agentxx_async_manager {opt:"delay", id, delayMs:0}` (or `agentxx_async_await {id, start_now:true}`) drops the remaining delay; `agentxx_async_manager {opt:"cancel", id}` drops the task.
+- While it waits, `agentxx_async_manager {opt:"delay", id:["async-7"], delayMs:0}` drops the remaining delay; `agentxx_async_manager {opt:"cancel", id:["async-7"]}` drops the task.
 
 ## Limits
 - `queueTimeoutMs` > 0: how long the task may wait for a queue slot once its delay is over (the delay itself does not count). Default `0` = no limit. A task that misses it ends as `failed` with a `queue timeout` reason.
@@ -435,6 +435,7 @@ Absent (default): the sub-agent's default full tool set.)_"},
                   R"_(Block this turn until one background task finishes.
 
 - `id` is required; `timeoutMs` is how long *you* wait for the result — delay + queue time + run time all count inside it. Default `30000`, capped at `300000`.
+- If the task is still waiting for its `delayMs` and the remaining delay is longer than `timeoutMs`, you get a note at once instead of a wait; drop the delay with `agentxx_async_manager` if you want it now.
 - A task that already finished returns its result immediately (no waiting, no event needed).
 - Use it only when your next step really needs that result now; otherwise let `notify` deliver it, or keep working and query later.
 - On timeout you get a note instead of an error: query again or keep working. Cancelling the session interrupts the wait.)_",
@@ -443,8 +444,6 @@ Absent (default): the sub-agent's default full tool set.)_"},
                       {"id", "Task id to wait for (`async-7`)."},
                       {"timeoutMs",
                        "How long to wait for the result, in milliseconds (default `30000`, capped at `300000`). Covers the task's delay, queue wait and run time."},
-                      {"start_now",
-                       R"_(Optional boolean (default `false`). When the task was started with `delayMs` and is still waiting for that delay, `true` drops the remaining delay and lets it start immediately. Without it, a task whose remaining delay is longer than `timeoutMs` is reported back at once instead of being waited for.)_"},
                   },
           },
       },
@@ -459,14 +458,15 @@ Absent (default): the sub-agent's default full tool set.)_"},
 - `delay`: change the start delay of a queued task. `delayMs` is required: `> 0` waits that many milliseconds before it may start, `0` removes the delay so it can start right away. Tasks that are already running or finished cannot be changed.
 
 ## `id`
-- One task id or an array of ids; ids of this session only. Every id gets its own result line, so a partial failure does not abort the rest.
+- An array of task ids (`["async-7", "async-9"]`); ids of this session only. A single id is accepted too — the executor wraps it into an array.
+- Every id gets its own result line, so a partial failure does not abort the rest.
 - To check state first, use `agentxx_async_query`.)_",
               .args =
                   {
                       {"opt",
                        "What to do: `cancel` (drop the tasks) or `delay` (change their start delay)."},
                       {"id",
-                       "Task id or array of task ids (`[\"async-7\", \"async-9\"]`). Only tasks started by this session."},
+                       "Array of task ids (`[\"async-7\", \"async-9\"]`); a single id is turned into an array by the executor. Only tasks started by this session."},
                       {"delayMs",
                        R"_(Required for `opt:"delay"`. New start delay in milliseconds; `0` removes the delay so the task can start immediately.)_"},
                   },

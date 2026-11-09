@@ -102,7 +102,7 @@ bool AudioStreamHolder::start(
             )
                             .count();
             std::string payload = fmt::format(
-                R"({{"sample_rate":{},"channels":{},"bits_per_sample":{},"source":{},"process_id":{},"process_name":{},"timestamp_ms":{},"data_base64":{}}})",
+                R"_({{"sample_rate":{},"channels":{},"bits_per_sample":{},"source":{},"process_id":{},"process_name":{},"timestamp_ms":{},"data_base64":{}}})_",
                 data.sampleRate,
                 data.channels,
                 data.bitsPerSample,
@@ -200,7 +200,7 @@ static void* audioStreamAgentMount(
                 auto        source = parseSource(srcStr);
                 bool        ok     = holder.start(source, static_cast<uint32_t>(pid));
                 return agentxx::plugin::ToolResult::ok(fmt::format(
-                    R"({{"ok":{},"running":true,"source":"{}","process_id":{}}})",
+                    R"_({{"ok":{},"running":true,"source":"{}","process_id":{}}})_",
                     ok ? "true" : "false",
                     sourceName(source),
                     pid
@@ -209,19 +209,19 @@ static void* audioStreamAgentMount(
 
             if (command == "stop") {
                 holder.stop();
-                return agentxx::plugin::ToolResult::ok(R"({"ok":true,"running":false})");
+                return agentxx::plugin::ToolResult::ok(R"_({"ok":true,"running":false})_");
             }
 
             if (command == "status") {
                 bool running = holder.stream_.isRunning();
                 return agentxx::plugin::ToolResult::ok(fmt::format(
-                    R"({{"ok":true,"running":{},"source":"{}"}})",
+                    R"_({{"ok":true,"running":{},"source":"{}"}})_",
                     running ? "true" : "false",
                     sourceName(holder.source_)
                 ));
             }
 
-            return agentxx::plugin::ToolResult::fail(R"(unknown command: use start/stop/status)");
+            return agentxx::plugin::ToolResult::fail(R"_(unknown command: use start/stop/status)_");
         }
     );
 

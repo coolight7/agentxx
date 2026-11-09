@@ -1992,7 +1992,8 @@ plugin:
   与 C++ 侧 `AsyncWorkSpec` 一致): 任务正文 `message`、身份 `name` / `system_prompt` /
   `model`、显式挂载清单 (`tools_json` / `plugins_json` / `mcp_servers_json` / `skills_json` /
   `memory_files_json` / `rag_docs_json`)、目录与语言、权限清单、`session_store` /
-  `interrupt_policy` (-1 = 跟随创建者配置)、`notify_delivery`、`on_event` 回调;
+  `interrupt_policy` (-1 = 跟随创建者配置)、`notify_delivery`、`on_event` 回调、
+  起跑延时与两个任务侧时限 (见下一条);
 - 提交**只校验参数**, 不因额度或排队条数被拒 (额度只决定何时起跑); 返回的 `asyncId`
   同时是该任务 agent 的 `sessionId`;
 - 结果统一发 `agentxx.agent.async.done` (值里用 `asyncId` 区分); 模型侧的读取入口是
@@ -2003,12 +2004,12 @@ plugin:
 - `on_event` 回调 (**容器 io 线程, 必须快速返回**): `QUEUED` / `STARTED` / `FINISHED` /
   `CANCELED` 四个阶段, `payload_json` 带 `asyncId` / `kind` / `name` / `queueAhead` /
   `delayMs` (仅 `QUEUED` 阶段) / `hasError` / `canceled` / `error`; 实例释放/禁用后不再进入插件代码;
-- 起跑延时 (`delayMs`) 与排队时限 (`queueTimeoutMs`) 目前只在模型侧 `agentxx_async_run` /
-  `agentxx_async_manager` 上开放, 接口表的 `AgentxxPluginAsyncWorkSpec` 还没有对应字段 ——
-  插件提交的任务总是立即进入排队, 也不会因排队超时失败; 运行时限走
-  `AgentxxPluginAsyncWorkSpec::time_limit_ms` (SDK `AsyncWorkOptions::timeLimitMs`,
-  从起跑算起): agent 任务到点被引擎在检查点停下, tool 任务到点只结束等待 (工具本体可能
-  继续跑, 结果丢弃);
+- 三个时限与起跑延时都在接口表里 (尾部追加字段, 旧插件填短结构体时读不到 = 不限):
+  `time_limit_ms` = 运行时限 (SDK `AsyncWorkOptions::timeLimitMs`, 从起跑算起): agent 任务到点
+  被引擎在检查点停下, tool 任务到点只结束等待 (工具本体可能继续跑, 结果丢弃);
+  `delay_ms` = 起跑延时 (SDK `delayMs`), 到点之前一直是 `queued`、不占名额;
+  `queue_timeout_ms` = 排队时限 (SDK `queueTimeoutMs`), 计时起点是延时结束那一刻。
+  插件提交后没有“改延时”的成员: 要改就取消后重新提交;
 - 老主程序 (v1) 没有这 4 个成员: 用 `ifaceHas<&AgentxxPluginRuntimeIface::submit_async_work>`
   判定后降级; SDK 便捷层是 `submitAsyncWork` / `cancelAsyncWork` /
   `getAsyncWorkJson` / `listAsyncWorkJson` (`AsyncWorkOptions`)。

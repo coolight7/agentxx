@@ -49,7 +49,7 @@ constexpr std::string_view kNamePlanning = "agentxx_planning";
 constexpr int32_t kRepeatCheck = AGENTXX_PLUGIN_TOOL_FLAG_REPEAT_CALL_CHECK;
 
 constexpr std::string_view kDepictPlanning =
-    R"(Two-level task planning tool for complex multi-step work sessions.
+    R"_(Two-level task planning tool for complex multi-step work sessions.
 
 === Modes (`mode`, required) ===
 - `write`: Save/update the planning content (requires `roadmap`; optional
@@ -103,7 +103,7 @@ stateDiagram-v2
 - notes:
     - Follow user code style guide.
     - Add unit tests after change.
-)";
+)_";
 
 constexpr std::string_view kSystemPlanningPrompt = R"_(
 ## Planning
@@ -131,24 +131,24 @@ Start the final message with the substantive content the user asked for (data, c
 The user wants the result, not confirmation that the work is done.
 )_";
 
-constexpr std::string_view kArgModeDesc = R"(Operation mode:
+constexpr std::string_view kArgModeDesc = R"_(Operation mode:
 `write`: Save/update the planning content (requires `roadmap`; optional `todos`/`notes`).
-`read`: Return the planning content previously saved in this session (no other arguments).)";
+`read`: Return the planning content previously saved in this session (no other arguments).)_";
 
 constexpr std::string_view kArgRoadmapDesc =
-    R"((write only) STRATEGIC LAYER: Mermaid stateDiagram-v2 of the overall workflow.
+    R"_((write only) STRATEGIC LAYER: Mermaid stateDiagram-v2 of the overall workflow.
 Include ALL phases even if not yet started. Each phase gets state nodes for its
 statuses (pending/in_progress/completed/failed) with transitions showing
 dependencies and error recovery paths. Use `[*]` for start/end.
-Replace the entire diagram each call.)";
+Replace the entire diagram each call.)_";
 
-constexpr std::string_view kArgTodosDesc = R"((write only) TACTICAL LAYER: Near-term task items.
+constexpr std::string_view kArgTodosDesc = R"_((write only) TACTICAL LAYER: Near-term task items.
 Focus on what you are actively doing NOW and what comes NEXT.
 Do NOT list all phases from the diagram — only immediate execution items.
-Each item: `state` is one of `pending` / `in_progress` / `completed` / `failed`, `content` is the task description.)";
+Each item: `state` is one of `pending` / `in_progress` / `completed` / `failed`, `content` is the task description.)_";
 
-constexpr std::string_view kArgNotesDesc = R"((write only) MEMO LAYER: Any additional notes.
-Use this to record important information, tips, reminders, or identity/role-playing prompts.)";
+constexpr std::string_view kArgNotesDesc = R"_((write only) MEMO LAYER: Any additional notes.
+Use this to record important information, tips, reminders, or identity/role-playing prompts.)_";
 
 /// ==================== 规划持久化 ({dataDir}/plans/) ====================
 /// - 文件名: thread_id 经字符清洗 (非 [A-Za-z0-9._-] → '_') 截断后追加
@@ -1007,7 +1007,7 @@ static void ensureSection(ClientCtx& ctx) {
         return;
     }
     auto idSv    = agentxx::plugin::PluginStringView::fromCstr(kSectionId);
-    auto propsSv = agentxx::plugin::PluginStringView::fromCstr(R"({"title":"Plan"})");
+    auto propsSv = agentxx::plugin::PluginStringView::fromCstr(R"_({"title":"Plan"})_");
     ctx.section  = ctx.ui->register_info_section(ctx.host, &idSv, &propsSv);
 }
 

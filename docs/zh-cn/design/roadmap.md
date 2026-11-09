@@ -290,8 +290,15 @@
 - 2026-11-10 (改名 / 管理入口 / 三个时限 / 通知式等待): `agentxx_async_start` →
   **`agentxx_async_run`**，`agentxx_async_cancel` → **`agentxx_async_manager`**
   （`opt` = `cancel` / `delay`, `id` 支持数组, 删掉 `group`）；`await` 参数改 `timeoutMs`；
-  新增 `queueTimeoutMs`（受理→起跑，含延时）与 `runTimeoutMs`（起跑→结束，仅
-  `kind=agent`），`AsyncWorkSpec::timeLimit` 改名 `runTimeout` 并真正生效；
-  查询列表用 `*` 标记延时中的排队项；`kind=tool` 执行方的 50 ms 定时器轮询换成
-  `AsyncWake`（通知式，零延迟、无空转）；排队中被取消/超时也走统一收尾（发终态事件、
-  释放会话存储占用、队列补位）。详见 `resource/history/async-run-manager-and-timeouts/`。
+  新增 `queueTimeoutMs`（延时结束→起跑）与 `runTimeoutMs`（起跑→结束，两种任务都算数：
+  agent 任务由引擎在检查点停下，tool 任务只结束等待），`AsyncWorkSpec::timeLimit` 改名
+  `runTimeout` 并真正生效；查询列表用 `*` 标记延时中的排队项；`kind=tool` 执行方的
+  50 ms 定时器轮询换成 `AsyncWake`（通知式，零延迟、无空转）；排队中被取消/超时也走
+  统一收尾（发终态事件、释放会话存储占用、队列补位）。
+  详见 `resource/history/async-run-manager-and-timeouts/`。
+- 2026-11-10 (后台任务收尾): `agentxx_async_manager` 的 `id` 只声明为数组（模型给单个 id 由
+  执行层按 schema 转数组，代码不再单独处理字符串）；`agentxx_async_await` 删掉 `start_now`
+  （要提前起跑用 `agentxx_async_manager {opt:"delay", delayMs:0}`）；插件面
+  `AgentxxPluginAsyncWorkSpec` 尾部追加 `delay_ms` / `queue_timeout_ms`（SDK
+  `AsyncWorkOptions::delayMs` / `queueTimeoutMs`，旧插件填短结构体时读不到 = 不限）；
+  主程序与插件源码里的原始字符串统一写成 `R"_(...)_"`（避免正文出现 `)"` 时提前结束）。

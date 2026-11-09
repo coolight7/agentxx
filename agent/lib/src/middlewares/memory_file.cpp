@@ -271,10 +271,10 @@ asio::awaitable<std::optional<std::string>>
             continue;
         }
         oss << fmt::format(
-            R"(<MemoryFile src="{}">
+            R"_(<MemoryFile src="{}">
 {}
 </MemoryFile>
-)",
+)_",
             memoryFilePaths[i],
             itEntry->second.content
         );

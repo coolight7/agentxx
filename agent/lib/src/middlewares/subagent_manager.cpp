@@ -63,7 +63,7 @@ SubagentManagerMiddlewareHandle::SubagentManagerMiddlewareHandle(
         nodeName,
         std::make_shared<agentxx::tools::SubAgentNormalTask>(
             nodeName,
-            R"(Create a isolation messages context sub agent to exec. (need system prompt))"
+            R"_(Create a isolation messages context sub agent to exec. (need system prompt))_"
         )
     ));
     applyConfig(agentCtx->agentConfig);

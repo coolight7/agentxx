@@ -14,17 +14,17 @@ constexpr std::string_view kNameSearch = "agentxx_web_search";
 constexpr std::string_view kNameFetch  = "agentxx_web_fetch";
 
 constexpr std::string_view kDepictSearch =
-    R"(Perform a web search. Returns a markdown-formatted list of results.
-Use `agentxx_web_fetch` afterwards to retrieve full page content from a result.)";
-constexpr std::string_view kDepictFetch = R"(Perform an HTTP GET request and return the response.
+    R"_(Perform a web search. Returns a markdown-formatted list of results.
+Use `agentxx_web_fetch` afterwards to retrieve full page content from a result.)_";
+constexpr std::string_view kDepictFetch = R"_(Perform an HTTP GET request and return the response.
 With `format` = `markdown` (default) the page is converted to Markdown; with `format` = `raw` the raw response body is returned (for JSON/text APIs, or when the conversion is not wanted).
-Commonly used after `agentxx_web_search` to read a specific page.)";
+Commonly used after `agentxx_web_search` to read a specific page.)_";
 
 constexpr std::string_view kHeaderArgDesc =
-    R"(Custom HTTP request headers to send, as a JSON object of header name to value.
-Example: {"X-Api-Key": "xxx", "User-Agent": "agentxx"})";
+    R"_(Custom HTTP request headers to send, as a JSON object of header name to value.
+Example: {"X-Api-Key": "xxx", "User-Agent": "agentxx"})_";
 
-constexpr std::string_view kFetchUrlDesc = R"(Absolute HTTP/HTTPS URL to fetch.
+constexpr std::string_view kFetchUrlDesc = R"_(Absolute HTTP/HTTPS URL to fetch.
 
 When resolving relative links found in the returned Markdown, combine them with this `url`:
 - Page `http://example.com/help/`:
@@ -34,11 +34,11 @@ When resolving relative links found in the returned Markdown, combine them with 
   - `/model/view/` (leading /) → `http://example.com/model/view/`
 - Page `http://example.com/help/what.html`:
   - `model/delete/` (no leading /) → strip filename, append → `http://example.com/help/model/delete/`
-)";
+)_";
 
-constexpr std::string_view kFetchFormatDesc = R"(Default `markdown`. What to return:
+constexpr std::string_view kFetchFormatDesc = R"_(Default `markdown`. What to return:
 `markdown`: the page content converted to Markdown (best for HTML pages).
-`raw`: the response body exactly as received (best for JSON/text APIs, or when the conversion is not wanted).)";
+`raw`: the response body exactly as received (best for JSON/text APIs, or when the conversion is not wanted).)_";
 
 constexpr std::string_view kFetchTimeoutDesc = "Default `30` seconds. Request timeout in seconds.";
 

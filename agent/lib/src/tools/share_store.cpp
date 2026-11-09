@@ -195,7 +195,7 @@ asio::awaitable<agentxx::util::ToolResult>
         if (lineNum <= offset) {
             // offset 超出文本行数
             throw std::runtime_error{fmt::format(
-                R"(Arg `offset`({} lines) is out of range of text lines({} lines).)",
+                R"_(Arg `offset`({} lines) is out of range of text lines({} lines).)_",
                 offset,
                 lineNum
             )};

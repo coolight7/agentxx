@@ -339,13 +339,13 @@ asio::awaitable<utilxx_base::Json> StdIOClientAgentIO::handleInterrupt(
 
     // 显示中断通知
     std::cout << fmt::format(
-        R"(
+        R"_(
 ┏━━━━━━ Interrupted ━━━━━━┓
 ┣━ Interrupted at: {}
 ┣━ Value: {}
 {}
 ┗━━━━━━ Interrupted ━━━━━━┛
-)",
+)_",
         interruptNode,
         interruptValue,
         (!handleArg.name.empty()) ? fmt::format("┣━ Interrupt Handle: {}", handleArg.name)

@@ -124,7 +124,7 @@ void installAsyncInterruptResponders(
             }
             co_return agentxx::events::RespInterrupt{
                 .handled    = false,
-                .resultJson = R"({"__Canceled__":true})",
+                .resultJson = R"_({"__Canceled__":true})_",
             };
         });
 }

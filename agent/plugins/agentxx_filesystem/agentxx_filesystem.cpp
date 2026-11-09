@@ -34,67 +34,67 @@ constexpr std::string_view kNameCopy   = "agentxx_filesystem_copy";
 constexpr std::string_view kNameRemove = "agentxx_filesystem_remove";
 
 constexpr std::string_view kDepictList
-    = R"(List files and directories at a given path, output is multi-line text similar to `ls -l`, one entry per line: `type size last-modified-time path`.
+    = R"_(List files and directories at a given path, output is multi-line text similar to `ls -l`, one entry per line: `type size last-modified-time path`.
 Directory paths end with `/`, symlinks show their target. Types: `d` directory, `-` file, `l` symlink.
 Can also be used to check whether a specific file or directory exists.
 `path` may contain shell wildcards as in bash: `*` any characters, `?` one character, `[...]` a character class, `**` any directory depth (e.g. `src/*.cpp`, `src/**/*.h`). Matched entries themselves are then listed (like `ls -d`); with `recursive` = `true`, matched directories are expanded as well.
-Wildcard matching is case-sensitive and does not match hidden entries (name starting with `.`).)";
+Wildcard matching is case-sensitive and does not match hidden entries (name starting with `.`).)_";
 constexpr std::string_view kDepictRead
-    = R"(Read a text file (e.g. .txt, .md, .json, .log, source code) and return its contents.
+    = R"_(Read a text file (e.g. .txt, .md, .json, .log, source code) and return its contents.
 Supports `offset`/`limit` (both counted in lines) for reading portions of large files: `offset` lines are skipped from the beginning, then at most `limit` lines are returned. Both are optional; omitting them reads the whole file.
-One call returns at most 2000 lines / 256 KiB: a larger result is refused with an error (never silently truncated) -- read such files in parts with `offset`/`limit`, and use `agentxx_filesystem_grep` to locate the wanted lines first.)";
+One call returns at most 2000 lines / 256 KiB: a larger result is refused with an error (never silently truncated) -- read such files in parts with `offset`/`limit`, and use `agentxx_filesystem_grep` to locate the wanted lines first.)_";
 constexpr std::string_view kDepictWrite
     = "Create a new file or overwrite an existing file with the given content.";
 constexpr std::string_view kDepictEdit
-    = R"(Perform exact string replacement in a text file (e.g. *.txt, *.md, *.cpp, *.h).
+    = R"_(Perform exact string replacement in a text file (e.g. *.txt, *.md, *.cpp, *.h).
 Use this for surgical edits without rewriting the entire file.
 One call can change several places of the same file: pass them as `edits` (applied in order), or a single replacement as `old_str`/`new_str`.
-Note! This tool will replace all `\r\n` to `\n` when find `old_str` and replace.)";
+Note! This tool will replace all `\r\n` to `\n` when find `old_str` and replace.)_";
 constexpr std::string_view kDepictGlob = "Find files and directories matching glob patterns.";
 constexpr std::string_view kDepictGrep
-    = R"(Search file contents using literal text and/or regular expression patterns (when both are given, the result is the union). Supports glob-based file filtering.
-Use this to locate code, find references, or search logs across a project.)";
+    = R"_(Search file contents using literal text and/or regular expression patterns (when both are given, the result is the union). Supports glob-based file filtering.
+Use this to locate code, find references, or search logs across a project.)_";
 constexpr std::string_view kDepictMove
-    = R"(Move or rename a file or directory. On the same filesystem the entry is moved without copying; across filesystems it is copied and the source is removed.
-Missing parent directories of `dst` are created; an existing `dst` is refused unless `overwrite` is `true`.)";
+    = R"_(Move or rename a file or directory. On the same filesystem the entry is moved without copying; across filesystems it is copied and the source is removed.
+Missing parent directories of `dst` are created; an existing `dst` is refused unless `overwrite` is `true`.)_";
 constexpr std::string_view kDepictCopy
-    = R"(Copy a file or directory to another path. Directories are copied recursively; symlinks are copied as links.
-Missing parent directories of `dst` are created; an existing `dst` is refused unless `overwrite` is `true`.)";
-constexpr std::string_view kDepictRemove = R"(Delete a file or directory.
-A directory (together with everything inside) is deleted only when `recursive` is `true`; a symlink is removed without following it.)";
+    = R"_(Copy a file or directory to another path. Directories are copied recursively; symlinks are copied as links.
+Missing parent directories of `dst` are created; an existing `dst` is refused unless `overwrite` is `true`.)_";
+constexpr std::string_view kDepictRemove = R"_(Delete a file or directory.
+A directory (together with everything inside) is deleted only when `recursive` is `true`; a symlink is removed without following it.)_";
 
 constexpr std::string_view kPathDesc
-    = R"(Path to a file or directory. Relative paths are resolved against the current working directory; `~` expands to the home directory.)";
+    = R"_(Path to a file or directory. Relative paths are resolved against the current working directory; `~` expands to the home directory.)_";
 constexpr std::string_view kPathDescList
-    = R"(Path to a file or directory. Relative paths are resolved against the current working directory; `~` expands to the home directory.
-Shell wildcards are supported (`*`, `?`, `[...]`, and `**` for any directory depth), e.g. `src/*.cpp`; matching entries are listed instead of expanding their contents.)";
+    = R"_(Path to a file or directory. Relative paths are resolved against the current working directory; `~` expands to the home directory.
+Shell wildcards are supported (`*`, `?`, `[...]`, and `**` for any directory depth), e.g. `src/*.cpp`; matching entries are listed instead of expanding their contents.)_";
 constexpr std::string_view kTimeoutDesc
-    = R"(Default `60` seconds. Execution timeout in seconds. Set `0` for no limit.)";
+    = R"_(Default `60` seconds. Execution timeout in seconds. Set `0` for no limit.)_";
 
 constexpr std::string_view kMoveSrcDesc
-    = R"(Path to the file or directory to move. Relative paths are resolved against the current working directory; `~` expands to the home directory.)";
+    = R"_(Path to the file or directory to move. Relative paths are resolved against the current working directory; `~` expands to the home directory.)_";
 constexpr std::string_view kMoveDstDesc
-    = R"(New path of the file or directory. Relative paths are resolved against the current working directory; `~` expands to the home directory. Missing parent directories are created.)";
+    = R"_(New path of the file or directory. Relative paths are resolved against the current working directory; `~` expands to the home directory. Missing parent directories are created.)_";
 constexpr std::string_view kCopySrcDesc
-    = R"(Path to the file or directory to copy. Relative paths are resolved against the current working directory; `~` expands to the home directory.)";
+    = R"_(Path to the file or directory to copy. Relative paths are resolved against the current working directory; `~` expands to the home directory.)_";
 constexpr std::string_view kCopyDstDesc
-    = R"(Path to copy to. Relative paths are resolved against the current working directory; `~` expands to the home directory. Missing parent directories are created.)";
+    = R"_(Path to copy to. Relative paths are resolved against the current working directory; `~` expands to the home directory. Missing parent directories are created.)_";
 constexpr std::string_view kRemovePathDesc
-    = R"(Path to the file or directory to delete. Relative paths are resolved against the current working directory; `~` expands to the home directory.)";
+    = R"_(Path to the file or directory to delete. Relative paths are resolved against the current working directory; `~` expands to the home directory.)_";
 constexpr std::string_view kReplaceOverwriteDesc
-    = R"(Default `false`. With `false` the call fails when the target path already exists; with `true` the existing target (a file, or a directory with everything inside) is deleted first.)";
+    = R"_(Default `false`. With `false` the call fails when the target path already exists; with `true` the existing target (a file, or a directory with everything inside) is deleted first.)_";
 constexpr std::string_view kRemoveRecursiveDesc
-    = R"(Default `false`. Needed to delete a directory: with `false` the call fails on a directory path.)";
+    = R"_(Default `false`. Needed to delete a directory: with `false` the call fails on a directory path.)_";
 
 /// write 的 `overwrite` 描述: 声明上必须显式给出 (实现里省略按 `false` 处理, 不报错)
 constexpr std::string_view kWriteOverwriteDesc
-    = R"(Must be given explicitly: state whether an existing file may be replaced.
+    = R"_(Must be given explicitly: state whether an existing file may be replaced.
 `true`: Create the file if it doesn't exist; overwrite if it does.
-`false`: Create a new file only; returns an error if the file already exists.)";
+`false`: Create a new file only; returns an error if the file already exists.)_";
 
 /// glob/grep 共用的通配符表 (两者的示例路径不同, 因此各自一份常量)
 constexpr std::string_view kGlobFilePatternsDesc
-    = R"(Path with glob patterns to match. Relative paths are resolved against the current working directory; `~` expands to the home directory.
+    = R"_(Path with glob patterns to match. Relative paths are resolved against the current working directory; `~` expands to the home directory.
 
 | Wildcard | Matches | Example |
 |----------|---------|---------|
@@ -105,24 +105,24 @@ constexpr std::string_view kGlobFilePatternsDesc
 | `[A-Z]` | One char from range | `[A-Z]*` matches files starting with uppercase |
 | `[!ABC]` | One char NOT in set | `[!ABC]*` matches files not starting with A, B, or C |
 
-Examples: `/upload/**/*.txt`, `/src/*[0-9].cpp`, `/usr/include/nc*.h`, `/output/file[0-9].*`.)";
+Examples: `/upload/**/*.txt`, `/src/*[0-9].cpp`, `/usr/include/nc*.h`, `/output/file[0-9].*`.)_";
 constexpr std::string_view kGlobTypeDesc
-    = R"(Filter results by file type. Valid values: `file`, `dir`, `symlink`, `other`, `any`.
-Default: `any` (no filter). Example: `["file", "symlink"]` returns files and symlinks.)";
+    = R"_(Filter results by file type. Valid values: `file`, `dir`, `symlink`, `other`, `any`.
+Default: `any` (no filter). Example: `["file", "symlink"]` returns files and symlinks.)_";
 constexpr std::string_view kGlobExcludeDesc
-    = R"(Glob patterns to exclude from results. Matched paths are removed.
-Example: `["**/node_modules/**", "**/.git/**", "**/build/**"]`.)";
+    = R"_(Glob patterns to exclude from results. Matched paths are removed.
+Example: `["**/node_modules/**", "**/.git/**", "**/build/**"]`.)_";
 constexpr std::string_view kGlobMaxDepthDesc
-    = R"(Maximum directory depth relative to the pattern's base directory.
+    = R"_(Maximum directory depth relative to the pattern's base directory.
 Default `-1` (no limit). Example: `max_depth=1` matches only direct children.
-Similar to `find -maxdepth`.)";
+Similar to `find -maxdepth`.)_";
 constexpr std::string_view kGlobSortDesc
-    = R"(Default `false`. If `true`, sort results alphabetically.
-Results are always deduplicated regardless of this setting.)";
+    = R"_(Default `false`. If `true`, sort results alphabetically.
+Results are always deduplicated regardless of this setting.)_";
 constexpr std::string_view kGlobMaxFilesDesc
-    = R"(Default `1000`. Maximum number of matched paths; when more paths match, the walk stops there and the paths found so far are returned with a leading `[Note]` (`0` = no limit).)";
+    = R"_(Default `1000`. Maximum number of matched paths; when more paths match, the walk stops there and the paths found so far are returned with a leading `[Note]` (`0` = no limit).)_";
 constexpr std::string_view kGrepFilePatternsDesc
-    = R"(Path with glob patterns to select which files to search. Relative paths are resolved against the current working directory; `~` expands to the home directory.
+    = R"_(Path with glob patterns to select which files to search. Relative paths are resolved against the current working directory; `~` expands to the home directory.
 
 | Wildcard | Matches | Example |
 |----------|---------|---------|
@@ -133,15 +133,15 @@ constexpr std::string_view kGrepFilePatternsDesc
 | `[A-Z]` | One char from range | `[A-Z]*` matches files starting with uppercase |
 | `[!ABC]` | One char NOT in set | `[!ABC]*` matches files not starting with A, B, or C |
 
-Examples: `/src/**/*.cpp`, `/project/*.h`, `/logs/**/*.log`.)";
+Examples: `/src/**/*.cpp`, `/project/*.h`, `/logs/**/*.log`.)_";
 constexpr std::string_view kGrepTextPatternsDesc
-    = R"(One or more literal text patterns (NOT regular expressions). A match is found if ANY pattern occurs.
-Optional if `regex_patterns` is given; `text_patterns` and `regex_patterns` can be specified together, and the result is the union of both matches.)";
+    = R"_(One or more literal text patterns (NOT regular expressions). A match is found if ANY pattern occurs.
+Optional if `regex_patterns` is given; `text_patterns` and `regex_patterns` can be specified together, and the result is the union of both matches.)_";
 constexpr std::string_view kGrepRegexPatternsDesc
-    = R"(One or more regular expression patterns (like `grep -E`). A match is found if ANY pattern matches.
+    = R"_(One or more regular expression patterns (like `grep -E`). A match is found if ANY pattern matches.
 Optional if `text_patterns` is given; `text_patterns` and `regex_patterns` can be specified together, and the result is the union of both matches.
-Use this for pattern-based matching (e.g. `line[0-9]+`, `throw|co_return`); use `text_patterns` for literal search.)";
-constexpr std::string_view kGrepOutputModeDesc = R"(Default: `files_with_matches`.
+Use this for pattern-based matching (e.g. `line[0-9]+`, `throw|co_return`); use `text_patterns` for literal search.)_";
+constexpr std::string_view kGrepOutputModeDesc = R"_(Default: `files_with_matches`.
 `files_with_matches`: Return file paths with match counts (format: `file:count`).
 `content`: Return matching lines grouped by file to reduce path repetition. Each file
 starts with a header line `{filepath}:`, followed by that file's lines (`{line}:{content}`). Example:
@@ -150,33 +150,33 @@ starts with a header line `{filepath}:`, followed by that file's lines (`{line}:
 40:int bar() {
 /path/to/file2:
 7:return 0;
-`count`: Return only the totals (matched files and matches); use it to gauge how many hits exist before reading paths or lines.)";
+`count`: Return only the totals (matched files and matches); use it to gauge how many hits exist before reading paths or lines.)_";
 constexpr std::string_view kGrepCaseSensitiveDesc
-    = R"(Default `true`. If `false`, matching is case-insensitive (like `grep -i`).)";
+    = R"_(Default `true`. If `false`, matching is case-insensitive (like `grep -i`).)_";
 constexpr std::string_view kGrepExcludeDesc
-    = R"(Glob patterns to exclude while walking. A matched entry is skipped; a matched directory has its whole subtree pruned, so excluding a big generated directory (e.g. `**/build/**`, `**/third_party/**`) also saves the walk.)";
+    = R"_(Glob patterns to exclude while walking. A matched entry is skipped; a matched directory has its whole subtree pruned, so excluding a big generated directory (e.g. `**/build/**`, `**/third_party/**`) also saves the walk.)_";
 constexpr std::string_view kGrepMaxCountPerFileDesc
-    = R"(Default `0` (no limit). Maximum matches to report per file.
-Similar to `grep -m N`. Example: `max_count_per_file=3` stops after 3 matches per file.)";
+    = R"_(Default `0` (no limit). Maximum matches to report per file.
+Similar to `grep -m N`. Example: `max_count_per_file=3` stops after 3 matches per file.)_";
 constexpr std::string_view kGrepMaxFilesDesc
-    = R"(Default `1000`. Maximum number of files to scan (after `file_patterns` expansion). When more files match, the walk stops there and only the files found so far are scanned, with a leading `[Note]` telling you how many were scanned: narrow `file_patterns`, add `exclude_patterns`, or raise this value to scan more. Set `0` for no limit.)";
+    = R"_(Default `1000`. Maximum number of files to scan (after `file_patterns` expansion). When more files match, the walk stops there and only the files found so far are scanned, with a leading `[Note]` telling you how many were scanned: narrow `file_patterns`, add `exclude_patterns`, or raise this value to scan more. Set `0` for no limit.)_";
 constexpr std::string_view kGrepMaxFileSizeDesc
-    = R"(Default `32`. Files larger than this many MB are skipped (a trailing `[Note]` reports how many were skipped). Set `0` for no limit.)";
+    = R"_(Default `32`. Files larger than this many MB are skipped (a trailing `[Note]` reports how many were skipped). Set `0` for no limit.)_";
 constexpr std::string_view kGrepContextLinesDesc
-    = R"(Default `0`. Number of context lines before and after each match.
+    = R"_(Default `0`. Number of context lines before and after each match.
 Only applies to `content` output mode. Similar to `grep -C N`.
-Context lines use `-` separator; match lines use `:` separator.)";
+Context lines use `-` separator; match lines use `:` separator.)_";
 constexpr std::string_view kEditEditsDesc
-    = R"(A list of replacements applied in order, each item is `{"old_str": "...", "new_str": "..."}`.
+    = R"_(A list of replacements applied in order, each item is `{"old_str": "...", "new_str": "..."}`.
 Every `old_str` must be non-empty and match the file content exactly (including whitespace and indentation); each item replaces the first match, and item N is matched against the content produced by items 1..N-1, so a later item may target text written by an earlier one.
 All items must match: when any item does not match, nothing is written and the error names that item.
 An item whose `old_str` equals `new_str` changes nothing: it is skipped with a warning in the result (not an error) while the other items are still applied.
-Pass this instead of `old_str`/`new_str` to change several places in one file; do not pass both forms in one call.)";
+Pass this instead of `old_str`/`new_str` to change several places in one file; do not pass both forms in one call.)_";
 constexpr std::string_view kEditOldStrDesc
-    = R"(Single-replacement shorthand of `edits`: the exact string to find and replace (the first match is replaced). Must be non-empty and match precisely (including whitespace and indentation).
-Note! The replacement is done only when `edits` is not given.)";
+    = R"_(Single-replacement shorthand of `edits`: the exact string to find and replace (the first match is replaced). Must be non-empty and match precisely (including whitespace and indentation).
+Note! The replacement is done only when `edits` is not given.)_";
 constexpr std::string_view kEditNewStrDesc
-    = R"(Single-replacement shorthand of `edits`: the replacement string (an equal `old_str` only produces a warning: nothing is changed).)";
+    = R"_(Single-replacement shorthand of `edits`: the replacement string (an equal `old_str` only produces a warning: nothing is changed).)_";
 
 constexpr int32_t kAutoSummary = AGENTXX_PLUGIN_TOOL_FLAG_AUTO_SUMMARY;
 
@@ -333,14 +333,14 @@ static int32_t fsSetup(FsPluginCtx& ctx, const ScopeRef& ref) {
               .string("path", kPathDesc, /*required=*/true)
               .integer(
                   "offset",
-                  R"(Number of lines to skip from the beginning. Default `0` (no offset). Returns an error if offset exceeds the file's line count.)",
+                  R"_(Number of lines to skip from the beginning. Default `0` (no offset). Returns an error if offset exceeds the file's line count.)_",
                   false,
                   0
               )
               .integer(
                   "limit",
-                  R"(Maximum number of lines to read. Range: [1, ∞]. Default `null` (read all). Values exceeding the file's line count are allowed without error.
-The whole result of one call must stay within 2000 lines / 256 KiB; a larger result is refused with an error, so read large files in parts.)"
+                  R"_(Maximum number of lines to read. Range: [1, ∞]. Default `null` (read all). Values exceeding the file's line count are allowed without error.
+The whole result of one call must stay within 2000 lines / 256 KiB; a larger result is refused with an error, so read large files in parts.)_"
               )
               .build();
 

@@ -1147,6 +1147,13 @@ typedef struct AgentxxPluginAsyncWorkSpec {
     PluginxxStringView tool_name;
     /// 工具参数 JSON 对象原文 (空 = `{}`); 不是对象时按 `ERR_ARG` 拒
     PluginxxStringView tool_args_json;
+    /// ---- 以下两项也是追加字段 (排队与起跑时机) ----
+    /// 起跑延时 (毫秒; <= 0 = 不延时): 到点之前任务一直是 `queued`, 不占名额
+    /// - 提交后没有改延时的成员: 要改就 `cancel_async_work` 后重新提交
+    int64_t delay_ms;
+    /// 排队时限 (毫秒; <= 0 = 不限): 计时起点是**延时结束那一刻** (无延时 = 提交时)
+    /// - 到点还没拿到名额: 任务出队并按 `failed` 收尾 (`error` 写 queue timeout)
+    int64_t queue_timeout_ms;
 } AgentxxPluginAsyncWorkSpec;
 
 /* 基线: 重置时 = 完整布局; 以后追加字段保持不变 (改为 offsetof(第一个追加字段)) */

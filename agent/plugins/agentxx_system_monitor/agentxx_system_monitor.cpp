@@ -510,7 +510,7 @@ static void refreshUsageDisplay(SysMonClientCtx& ctx) {
     }
     if (!ctx.section && ctx.iface.ui && ctx.iface.ui->register_info_section) {
         auto idSv    = PluginStringView::fromCstr("agentxx_system_monitor.usage");
-        auto propsSv = PluginStringView::fromCstr(R"({"title":"System"})");
+        auto propsSv = PluginStringView::fromCstr(R"_({"title":"System"})_");
         ctx.section  = ctx.iface.ui->register_info_section(ctx.host, &idSv, &propsSv);
     }
     if (!ctx.section || !ctx.iface.ui || !ctx.iface.ui->update_info_section
@@ -536,7 +536,7 @@ static int32_t sysMonClientSetup(SysMonClientCtx& ctx) {
     }
 
     auto idSv    = PluginStringView::fromCstr("agentxx_system_monitor.usage");
-    auto propsSv = PluginStringView::fromCstr(R"({"title":"System"})");
+    auto propsSv = PluginStringView::fromCstr(R"_({"title":"System"})_");
     ctx.section  = ctx.iface.ui->register_info_section(ctx.host, &idSv, &propsSv);
 
     if (ctx.iface.events && ctx.iface.events->subscribe) {
@@ -586,7 +586,7 @@ static int32_t sysMonClientSetup(SysMonClientCtx& ctx) {
                 ctx->usage_enabled.store(next, std::memory_order_relaxed);
                 refreshUsageDisplay(*ctx);
                 if (ctx->iface.wire && ctx->iface.wire->send_plugin_data) {
-                    std::string payload = next ? R"({"enabled":true})" : R"({"enabled":false})";
+                    std::string payload = next ? R"_({"enabled":true})_" : R"_({"enabled":false})_";
                     auto        evtSv   = PluginStringView::fromCstr(
                         "agentxx.client.plugin.agentxx_system_monitor.usage_enabled"
                     );

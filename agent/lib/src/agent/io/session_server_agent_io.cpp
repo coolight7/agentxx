@@ -1968,7 +1968,7 @@ void SessionServerAgentIO::handleHello(
         publishHostEvent(
             agent->agentContext->bus,
             kEvtClientAttached,
-            fmt::format(R"({{"sessionId":"{}"}})", config_.sessionId)
+            fmt::format(R"_({{"sessionId":"{}"}})_", config_.sessionId)
         );
     }
 }
@@ -2152,7 +2152,7 @@ void SessionServerAgentIO::subscribePluginEvents() {
     publishHostEvent(
         bus,
         kEvtClientAttached,
-        fmt::format(R"({{"sessionId":"{}"}})", config_.sessionId)
+        fmt::format(R"_({{"sessionId":"{}"}})_", config_.sessionId)
     );
 }
 

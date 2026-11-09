@@ -1770,7 +1770,7 @@ void benchResourceFfi() {
     }
 
     // 预热一轮
-    std::string       warmupInput = R"({"text":"hello"})";
+    std::string       warmupInput = R"_({"text":"hello"})_";
     AgentxxStringView wInputSv{warmupInput.data(), static_cast<uint64_t>(warmupInput.size())};
     tracker.turnDone = false;
     agentxx_ffi_send_input(ffiAgent, &wInputSv, &logOut);

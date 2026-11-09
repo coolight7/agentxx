@@ -411,7 +411,7 @@ inline std::string readFileContent(const std::string& filepath) {
     std::error_code fsEc;
     bool            exists = std::filesystem::exists(p, fsEc);
     if (fsEc) {
-        throw std::runtime_error{fmt::format(R"(Can not access file: {})", fsEc.message())};
+        throw std::runtime_error{fmt::format(R"_(Can not access file: {})_", fsEc.message())};
     }
     if (!exists) {
         throw std::runtime_error{"File not exist"};
@@ -424,7 +424,7 @@ inline std::string readFileContent(const std::string& filepath) {
     stream.open(p, std::ios_base::binary);
     if (!stream) {
         auto ec = std::error_code{errno, std::generic_category()};
-        throw std::runtime_error(fmt::format(R"(Can not open file. Error: {})", ec.message()));
+        throw std::runtime_error(fmt::format(R"_(Can not open file. Error: {})_", ec.message()));
     }
     auto result
         = std::string{std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>()};
@@ -796,7 +796,7 @@ inline ToolResult fileListExecuteImpl(
         // 与 shell "无匹配时保留模式原样" 的行为一致
         std::error_code ec;
         if (false == std::filesystem::exists(utilxx_base::utf8ToPath(targetPath), ec)) {
-            return detail::failText(fmt::format(R"(no match `path`({}) file found)", rawPath));
+            return detail::failText(fmt::format(R"_(no match `path`({}) file found)_", rawPath));
         }
     }
 
@@ -857,7 +857,7 @@ constexpr size_t kReadMaxBytes = 256 * 1024;
     const auto sizeText = lines > 0 ? fmt::format("{} line(s) / {} bytes", lines, bytes)
                                     : fmt::format("{} bytes", bytes);
     throw std::invalid_argument{fmt::format(
-        R"(Read result is too large for one call: {} (limit {} lines / {} bytes). Read it in parts with `offset`/`limit` (both counted in lines), or locate the wanted part with `agentxx_filesystem_grep`. A single line longer than the limit can not be split by this tool: use `agentxx_execute_command` (e.g. `head -c`, `cut`, `split`) instead.)",
+        R"_(Read result is too large for one call: {} (limit {} lines / {} bytes). Read it in parts with `offset`/`limit` (both counted in lines), or locate the wanted part with `agentxx_filesystem_grep`. A single line longer than the limit can not be split by this tool: use `agentxx_execute_command` (e.g. `head -c`, `cut`, `split`) instead.)_",
         sizeText,
         kReadMaxLines,
         kReadMaxBytes
@@ -911,7 +911,7 @@ inline ToolResult fileReadExecuteImpl(
     std::error_code fsEc;
     bool            exists = std::filesystem::exists(fsPath, fsEc);
     if (fsEc) {
-        throw std::runtime_error{fmt::format(R"(Can not access file: {})", fsEc.message())};
+        throw std::runtime_error{fmt::format(R"_(Can not access file: {})_", fsEc.message())};
     }
     if (!exists) {
         throw std::runtime_error{"File not exist"};
@@ -927,7 +927,7 @@ inline ToolResult fileReadExecuteImpl(
     stream.open(fsPath, std::ios_base::binary);
     if (!stream) {
         auto ec = std::error_code{errno, std::generic_category()};
-        throw std::runtime_error(fmt::format(R"(Can not open file. Error: {})", ec.message()));
+        throw std::runtime_error(fmt::format(R"_(Can not open file. Error: {})_", ec.message()));
     }
 
     if (text_line_offset >= 0 || text_line_limit > 0) {
@@ -968,7 +968,7 @@ inline ToolResult fileReadExecuteImpl(
         if (lineNum <= offset) {
             // offset 超出文件行数
             throw std::runtime_error{fmt::format(
-                R"(Arg `offset`({} lines) is out of range of file lines({} lines).)",
+                R"_(Arg `offset`({} lines) is out of range of file lines({} lines).)_",
                 offset,
                 lineNum
             )};
@@ -1019,7 +1019,7 @@ inline ToolResult fileWriteExecuteImpl(
         && false == std::filesystem::create_directories(path.parent_path())) {
         // 创建父目录
         throw std::runtime_error{fmt::format(
-            R"(Can not create `path`({})'s parent dirs.)",
+            R"_(Can not create `path`({})'s parent dirs.)_",
             detail::toUtf8(path.parent_path())
         )};
     }
@@ -1028,7 +1028,7 @@ inline ToolResult fileWriteExecuteImpl(
     if (!stream) {
         auto ec = std::error_code{errno, std::system_category()};
         throw std::runtime_error{
-            fmt::format(R"(Can not create or open file. Error: {})", ec.message())
+            fmt::format(R"_(Can not create or open file. Error: {})_", ec.message())
         };
     }
 
@@ -1038,7 +1038,7 @@ inline ToolResult fileWriteExecuteImpl(
         if (!stream) {
             auto ec = std::error_code{errno, std::system_category()};
             throw std::runtime_error{
-                fmt::format(R"(File created success, but write failed. Error: {})", ec.message())
+                fmt::format(R"_(File created success, but write failed. Error: {})_", ec.message())
             };
         }
     }
@@ -1100,12 +1100,12 @@ inline std::vector<EditSegment> parseEditSegments(const utilxx_base::Json& argum
     auto takeSegment = [](const utilxx_base::Json& item, size_t index) -> EditSegment {
         if (!item.contains("old_str") || !item["old_str"].is_string()) {
             throw std::invalid_argument{
-                fmt::format(R"(Arg `old_str` of edit #{} must be a string)", index)
+                fmt::format(R"_(Arg `old_str` of edit #{} must be a string)_", index)
             };
         }
         if (!item.contains("new_str") || !item["new_str"].is_string()) {
             throw std::invalid_argument{fmt::format(
-                R"(Arg `new_str` of edit #{} must be a string (pass an empty string to delete the matched text))",
+                R"_(Arg `new_str` of edit #{} must be a string (pass an empty string to delete the matched text))_",
                 index
             )};
         }
@@ -1140,7 +1140,7 @@ inline std::vector<EditSegment> parseEditSegments(const utilxx_base::Json& argum
         }
         if (segments.size() > kEditMaxSegments) {
             throw std::invalid_argument{
-                fmt::format(R"(Arg `edits` has too many segments (max {}))", kEditMaxSegments)
+                fmt::format(R"_(Arg `edits` has too many segments (max {}))_", kEditMaxSegments)
             };
         }
     } else {
@@ -1161,7 +1161,7 @@ inline std::vector<EditSegment> parseEditSegments(const utilxx_base::Json& argum
     for (size_t i = 0; i < segments.size(); ++i) {
         const auto& seg = segments[i];
         if (seg.oldStr.empty()) {
-            throw std::invalid_argument{fmt::format(R"(Arg `old_str` of edit #{} is empty)", i + 1)
+            throw std::invalid_argument{fmt::format(R"_(Arg `old_str` of edit #{} is empty)_", i + 1)
             };
         }
     }
@@ -1237,7 +1237,7 @@ inline void applyEditSegments(std::string& content, const std::vector<EditSegmen
         const auto pos = content.find(seg.oldStr);
         if (pos == std::string::npos) {
             throw std::runtime_error{fmt::format(
-                R"(No match `old_str` of edit #{} (`{}`) found, no change was written; try re-reading to get the latest file content.)",
+                R"_(No match `old_str` of edit #{} (`{}`) found, no change was written; try re-reading to get the latest file content.)_",
                 i + 1,
                 editOldStrExcerpt(seg.oldStr)
             )};
@@ -1281,7 +1281,7 @@ inline ToolResult fileEditExecuteImpl(
     std::error_code fsEc;
     bool            exists = std::filesystem::exists(path, fsEc);
     if (fsEc) {
-        throw std::runtime_error{fmt::format(R"(Can not access file: {})", fsEc.message())};
+        throw std::runtime_error{fmt::format(R"_(Can not access file: {})_", fsEc.message())};
     }
     if (!exists) {
         throw std::runtime_error{"File not exist"};
@@ -1313,7 +1313,7 @@ inline ToolResult fileEditExecuteImpl(
         if (!stream) {
             auto ec = std::error_code{errno, std::system_category()};
             throw std::runtime_error{
-                fmt::format(R"(Can not open temp file to write: {})", ec.message())
+                fmt::format(R"_(Can not open temp file to write: {})_", ec.message())
             };
         }
         stream << content;
@@ -1322,7 +1322,7 @@ inline ToolResult fileEditExecuteImpl(
             std::error_code rmEc;
             std::filesystem::remove(fsTmpPath, rmEc);
             auto ec = std::error_code{errno, std::system_category()};
-            throw std::runtime_error{fmt::format(R"(Write temp file failed: {})", ec.message())};
+            throw std::runtime_error{fmt::format(R"_(Write temp file failed: {})_", ec.message())};
         }
     }
 
@@ -1332,7 +1332,7 @@ inline ToolResult fileEditExecuteImpl(
         std::error_code rmEc;
         std::filesystem::remove(fsTmpPath, rmEc);
         throw std::runtime_error{
-            fmt::format(R"(Failed to replace original file: {})", renameEc.message())
+            fmt::format(R"_(Failed to replace original file: {})_", renameEc.message())
         };
     }
 
@@ -1421,7 +1421,7 @@ inline ToolResult fileGlobExecuteImpl(
     }
 
     if (resultList.empty()) {
-        return detail::failText(R"(no file matched `file_patterns`)");
+        return detail::failText(R"_(no file matched `file_patterns`)_");
     }
 
     // 默认去重: 多 pattern 可能匹配到相同路径
@@ -1498,11 +1498,11 @@ inline ToolResult fileGlobExecuteImpl(
         if (walkPolicy.limitReached) {
             // 被截断且过滤后无剩余: 提示里带上"未收集完整"的信息, 避免误判为"无匹配"
             return detail::failText(fmt::format(
-                R"(no file matched `file_patterns` after filtering. Note: the walk stopped early at `max_files` = {}, so more matches may exist beyond the ones collected (raise `max_files` or narrow `file_patterns`).)",
+                R"_(no file matched `file_patterns` after filtering. Note: the walk stopped early at `max_files` = {}, so more matches may exist beyond the ones collected (raise `max_files` or narrow `file_patterns`).)_",
                 maxFiles
             ));
         }
-        return detail::failText(R"(no file matched `file_patterns` after filtering)");
+        return detail::failText(R"_(no file matched `file_patterns` after filtering)_");
     }
 
     // 结果数量达到上限时在首行说明: 遍历已停止, 只列出已匹配到的部分路径
@@ -1560,7 +1560,7 @@ inline ToolResult fileGrepExecuteImpl(
     auto output_mode = arguments.value("output_mode", std::string{"files_with_matches"});
     if (output_mode != "files_with_matches" && output_mode != "content" && output_mode != "count") {
         throw std::invalid_argument{fmt::format(
-            R"(Arg `output_mode`({}) is invalid: use `files_with_matches`, `content` or `count`.)",
+            R"_(Arg `output_mode`({}) is invalid: use `files_with_matches`, `content` or `count`.)_",
             output_mode
         )};
     }
@@ -2102,7 +2102,7 @@ inline void prepareDestination(const std::string& dst, bool overwrite) {
     }
     if (false == overwrite) {
         throw std::runtime_error{fmt::format(
-            R"(Destination already exists: {}. Pass `overwrite` = true to replace it.)",
+            R"_(Destination already exists: {}. Pass `overwrite` = true to replace it.)_",
             dst
         )};
     }
@@ -2110,7 +2110,7 @@ inline void prepareDestination(const std::string& dst, bool overwrite) {
     std::filesystem::remove_all(dstPath, ec);
     if (ec) {
         throw std::runtime_error{
-            fmt::format(R"(Can not replace the existing destination {}: {})", dst, ec.message())
+            fmt::format(R"_(Can not replace the existing destination {}: {})_", dst, ec.message())
         };
     }
 }
@@ -2123,7 +2123,7 @@ inline void rejectNestedDestination(const std::string& src, const std::string& d
     const char next = dst[src.size()];
     if (next == '/' || next == '\\') {
         throw std::invalid_argument{fmt::format(
-            R"(Arg `dst`({}) is inside `src`({}): that would recurse into itself.)",
+            R"_(Arg `dst`({}) is inside `src`({}): that would recurse into itself.)_",
             dst,
             src
         )};
@@ -2139,7 +2139,7 @@ inline void ensureParentDir(const std::filesystem::path& dstPath) {
     std::filesystem::create_directories(dstPath.parent_path(), ec);
     if (ec) {
         throw std::runtime_error{fmt::format(
-            R"(Can not create `dst`({})'s parent dirs: {})",
+            R"_(Can not create `dst`({})'s parent dirs: {})_",
             toUtf8(dstPath.parent_path()),
             ec.message()
         )};
@@ -2187,7 +2187,7 @@ inline void copyThenRemoveSource(
     std::filesystem::remove_all(srcPath, rmEc);
     if (rmEc) {
         throw std::runtime_error{fmt::format(
-            R"(Copied to {}, but can not remove the source {}: {})",
+            R"_(Copied to {}, but can not remove the source {}: {})_",
             dst,
             src,
             rmEc.message()
@@ -2259,7 +2259,7 @@ inline std::string
     const bool isDir     = (false == isSymlink) && std::filesystem::is_directory(fsPath, ec);
     if (isDir && false == arguments.value<bool>("recursive", false)) {
         throw std::runtime_error{fmt::format(
-            R"(Path is a directory: {}. Pass `recursive` = true to delete it with everything inside.)",
+            R"_(Path is a directory: {}. Pass `recursive` = true to delete it with everything inside.)_",
             path
         )};
     }
@@ -2401,7 +2401,7 @@ inline asio::awaitable<std::string>
     std::error_code fsEc;
     bool            exists = std::filesystem::exists(fsPath, fsEc);
     if (fsEc) {
-        throw std::runtime_error{fmt::format(R"(Can not access file: {})", fsEc.message())};
+        throw std::runtime_error{fmt::format(R"_(Can not access file: {})_", fsEc.message())};
     }
     if (!exists) {
         throw std::runtime_error{"File not exist"};
@@ -2413,7 +2413,7 @@ inline asio::awaitable<std::string>
     utilxx_base::AsioErrorCode errCode;
     stream.open(utf8FilePath, asio::stream_file::read_only, errCode);
     if (false == stream.is_open()) {
-        throw std::runtime_error{fmt::format(R"(Can not open file: {})", errCode.message())};
+        throw std::runtime_error{fmt::format(R"_(Can not open file: {})_", errCode.message())};
     }
     std::string data;
     co_await asio::async_read(
@@ -2446,7 +2446,7 @@ inline asio::awaitable<ToolResult>
     std::error_code fsEc;
     bool            exists = std::filesystem::exists(fsPath, fsEc);
     if (fsEc) {
-        throw std::runtime_error{fmt::format(R"(Can not access file: {})", fsEc.message())};
+        throw std::runtime_error{fmt::format(R"_(Can not access file: {})_", fsEc.message())};
     }
     if (!exists) {
         throw std::runtime_error{"File not exist"};
@@ -2465,7 +2465,7 @@ inline asio::awaitable<ToolResult>
         utilxx_base::AsioErrorCode errCode;
         stream.open(filepath, asio::stream_file::read_only, errCode);
         if (false == stream.is_open()) {
-            throw std::runtime_error{fmt::format(R"(Can not open file: {})", errCode.message())};
+            throw std::runtime_error{fmt::format(R"_(Can not open file: {})_", errCode.message())};
         }
 
         const auto offset = (text_line_offset >= 0) ? static_cast<size_t>(text_line_offset) : 0;
@@ -2521,7 +2521,7 @@ inline asio::awaitable<ToolResult>
         if (lineNum <= offset) {
             // offset 超出文件行数
             throw std::runtime_error{fmt::format(
-                R"(Arg `offset`({} lines) is out of range of file lines({} lines).)",
+                R"_(Arg `offset`({} lines) is out of range of file lines({} lines).)_",
                 offset,
                 lineNum
             )};
@@ -2566,7 +2566,7 @@ inline asio::awaitable<ToolResult>
     if (!path.parent_path().empty() && false == std::filesystem::exists(path.parent_path())
         && false == std::filesystem::create_directories(path.parent_path())) {
         throw std::runtime_error{fmt::format(
-            R"(Can not create `path`({})'s parent dirs.)",
+            R"_(Can not create `path`({})'s parent dirs.)_",
             detail::toUtf8(path.parent_path())
         )};
     }
@@ -2581,7 +2581,7 @@ inline asio::awaitable<ToolResult>
         errCode
     );
     if (false == stream.is_open()) {
-        throw std::runtime_error{fmt::format(R"(Can not open file: {})", errCode.message())};
+        throw std::runtime_error{fmt::format(R"_(Can not open file: {})_", errCode.message())};
     }
 
     if (false == content.empty()) {
@@ -2633,7 +2633,7 @@ inline asio::awaitable<ToolResult>
     std::error_code fsEc;
     bool            exists = std::filesystem::exists(path, fsEc);
     if (fsEc) {
-        throw std::runtime_error{fmt::format(R"(Can not access file: {})", fsEc.message())};
+        throw std::runtime_error{fmt::format(R"_(Can not access file: {})_", fsEc.message())};
     }
     if (!exists) {
         throw std::runtime_error{"File not exist"};
@@ -2669,7 +2669,7 @@ inline asio::awaitable<ToolResult>
         );
         if (false == stream.is_open()) {
             throw std::runtime_error{
-                fmt::format(R"(Can not open temp file to write: {})", errCode.message())
+                fmt::format(R"_(Can not open temp file to write: {})_", errCode.message())
             };
         }
         co_await asio::async_write(
@@ -2691,7 +2691,7 @@ inline asio::awaitable<ToolResult>
         std::error_code rmEc;
         std::filesystem::remove(fsTmpPath, rmEc);
         throw std::runtime_error{
-            fmt::format(R"(Failed to replace original file: {})", renameEc.message())
+            fmt::format(R"_(Failed to replace original file: {})_", renameEc.message())
         };
     }
 

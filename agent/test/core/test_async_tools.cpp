@@ -661,17 +661,19 @@ asio::awaitable<void> test_delay() {
     co_return;
 }
 
-/// 4d. 等待延时中的任务: start_now 抹掉剩余延时; 不给时直接给说明不挂到超时
-asio::awaitable<void> test_await_start_now() {
+/// 4d. 等待延时中的任务: 剩余延时比 timeoutMs 长时直接给说明 (不挂到超时);
+///     要提前起跑用 `agentxx_async_manager {opt:"delay", delayMs:0}`
+asio::awaitable<void> test_await_delayed_task() {
     auto fx = std::make_shared<AtFixture>();
     XX_TEST_EXPECT_TRUE(buildFixture(fx));
 
-    agentxx::tools::AsyncRunTool start{fx->ctx()};
-    agentxx::tools::AsyncAwaitTool awaitTool{fx->ctx()};
-    std::string                     earlyText;
-    std::string                     doneText;
-    std::string                     asyncId;
-    int64_t                         earlyElapsedMs = 0;
+    agentxx::tools::AsyncRunTool     start{fx->ctx()};
+    agentxx::tools::AsyncAwaitTool   awaitTool{fx->ctx()};
+    agentxx::tools::AsyncManagerTool manager{fx->ctx()};
+    std::string                      earlyText;
+    std::string                      doneText;
+    std::string                      asyncId;
+    int64_t                          earlyElapsedMs = 0;
 
     XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
         asyncId = parseAsyncId(co_await execTool(
@@ -691,19 +693,27 @@ asio::awaitable<void> test_await_start_now() {
         const auto startedAt = std::chrono::steady_clock::now();
         earlyText            = co_await execTool(
             awaitTool,
-            Json{{"id", asyncId}, {"timeout_ms", 100}, {"sessionId", fx->sessionId}}
+            Json{{"id", asyncId}, {"timeoutMs", 100}, {"sessionId", fx->sessionId}}
         );
         earlyElapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
                              std::chrono::steady_clock::now() - startedAt
         )
                              .count();
-        // start_now: 抹掉剩余延时, 立即起跑并拿到结果
+        // 去掉延时 (经管理工具): 立即起跑, await 随后拿到结果
+        (void)co_await execTool(
+            manager,
+            Json{
+                {"opt",       "delay"                 },
+                {"id",        Json::array({asyncId}) },
+                {"delayMs",   0                       },
+                {"sessionId", fx->sessionId           },
+            }
+        );
         doneText = co_await execTool(
             awaitTool,
             Json{
                 {"id",         asyncId         },
-                {"start_now",  true            },
-                {"timeout_ms", 8000            },
+                {"timeoutMs",  8000            },
                 {"sessionId",  fx->sessionId   },
             }
         );
@@ -712,7 +722,7 @@ asio::awaitable<void> test_await_start_now() {
 
     XX_TEST_EXPECT_TRUE(contains(earlyText, "state=queued"));
     XX_TEST_EXPECT_TRUE(contains(earlyText, "start delay"));
-    XX_TEST_EXPECT_TRUE(contains(earlyText, "start_now"));
+    XX_TEST_EXPECT_TRUE(contains(earlyText, "agentxx_async_manager"));
     // 说明是"直接给"的, 不是等满 timeout 后给的超时文本
     XX_TEST_EXPECT_FALSE(contains(earlyText, "await timeout"));
     XX_TEST_EXPECT_TRUE(earlyElapsedMs < 2000);
@@ -922,7 +932,11 @@ asio::awaitable<void> test_manager_cancel() {
         const auto slowId = parseAsyncId(a);
         idText            = co_await execTool(
             manager,
-            Json{{"opt", "cancel"}, {"id", slowId}, {"sessionId", fx->sessionId}}
+            Json{
+                {"opt",       "cancel"               },
+                {"id",        Json::array({slowId}) },
+                {"sessionId", fx->sessionId         },
+            }
         );
         auto ok = co_await waitUntil([&] {
             return fx->host->asyncWorkJson(slowId).value("state", std::string{}) == "canceled";
@@ -969,15 +983,15 @@ asio::awaitable<void> test_manager_cancel() {
         });
         finished = co_await execTool(
             manager,
-            Json{{"opt", "cancel"}, {"id", fastId}, {"sessionId", fx->sessionId}}
+            Json{{"opt", "cancel"}, {"id", Json::array({fastId})}, {"sessionId", fx->sessionId}}
         );
         notFound = co_await execTool(
             manager,
-            Json{{"opt", "cancel"}, {"id", "async-9999"}, {"sessionId", fx->sessionId}}
+            Json{{"opt", "cancel"}, {"id", Json::array({"async-9999"})}, {"sessionId", fx->sessionId}}
         );
         badOpt = co_await execTool(
             manager,
-            Json{{"opt", "bogus"}, {"id", fastId}, {"sessionId", fx->sessionId}}
+            Json{{"opt", "bogus"}, {"id", Json::array({fastId})}, {"sessionId", fx->sessionId}}
         );
         missingId = co_await execTool(
             manager,
@@ -993,7 +1007,7 @@ asio::awaitable<void> test_manager_cancel() {
         otherId               = fx->host->submitAsyncWork(std::move(spec), fx->ctx()).asyncId;
         foreign = co_await execTool(
             manager,
-            Json{{"opt", "cancel"}, {"id", otherId}, {"sessionId", fx->sessionId}}
+            Json{{"opt", "cancel"}, {"id", Json::array({otherId})}, {"sessionId", fx->sessionId}}
         );
         fx->host->cancelAsyncWork(otherId);
         co_return true;
@@ -1033,13 +1047,13 @@ asio::awaitable<void> test_manager_delay() {
         // 调大到 40s
         setText       = co_await execTool(
             manager,
-            Json{{"opt", "delay"}, {"id", asyncId}, {"delayMs", 40000}, {"sessionId", fx->sessionId}}
+            Json{{"opt", "delay"}, {"id", Json::array({asyncId})}, {"delayMs", 40000}, {"sessionId", fx->sessionId}}
         );
         remainingWhileSet = fx->host->asyncWorkJson(asyncId).value("delayRemainingMs", int64_t{0});
         // 归零 → 立即起跑并跑完
         clearedText = co_await execTool(
             manager,
-            Json{{"opt", "delay"}, {"id", asyncId}, {"delayMs", 0}, {"sessionId", fx->sessionId}}
+            Json{{"opt", "delay"}, {"id", Json::array({asyncId})}, {"delayMs", 0}, {"sessionId", fx->sessionId}}
         );
         if (!co_await waitUntil([&] {
                 return fx->host->asyncWorkJson(asyncId).value("state", std::string{}) == "done";
@@ -1049,7 +1063,7 @@ asio::awaitable<void> test_manager_delay() {
         // 已终态: 不能再改延时
         doneText = co_await execTool(
             manager,
-            Json{{"opt", "delay"}, {"id", asyncId}, {"delayMs", 100}, {"sessionId", fx->sessionId}}
+            Json{{"opt", "delay"}, {"id", Json::array({asyncId})}, {"delayMs", 100}, {"sessionId", fx->sessionId}}
         );
         co_return true;
     }));
@@ -1232,7 +1246,7 @@ asio::awaitable<TestResult> run_async_tools_tests() {
     co_await test_start_errors();
     co_await test_start_builtin_and_async_tools();
     co_await test_delay();
-    co_await test_await_start_now();
+    co_await test_await_delayed_task();
     co_await test_query();
     co_await test_await();
     co_await test_manager_cancel();

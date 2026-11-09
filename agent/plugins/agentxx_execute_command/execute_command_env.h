@@ -331,9 +331,9 @@ inline ExecEnvInfo detectExecEnv() {
 
 /// `full_output` 参数描述 (bash / windows 工具共用)
 inline constexpr std::string_view kFullOutputArgDesc =
-    R"(Default `true`.
+    R"_(Default `true`.
 `true`: Always return stdout and stderr output.
-`false`: Only return output when the command fails.)";
+`false`: Only return output when the command fails.)_";
 
 /// `timeout` 参数描述 (bash / windows 工具共用)
 inline constexpr std::string_view kTimeoutArgDesc
@@ -342,8 +342,8 @@ inline constexpr std::string_view kTimeoutArgDesc
 /// `cwd` 参数描述 (bash / windows 工具共用)
 /// - 相对路径基于会话工作目录展开; 必须已存在 (否则按参数错误失败)
 inline constexpr std::string_view kCwdArgDesc =
-    R"(Default: the session work dir.
-Directory to run the command in. Relative paths are resolved against the session work dir, and the directory must already exist.)";
+    R"_(Default: the session work dir.
+Directory to run the command in. Relative paths are resolved against the session work dir, and the directory must already exist.)_";
 
 /// bash 工具 depict (POSIX 侧工具描述)
 inline constexpr std::string_view kBashToolDepict
@@ -359,9 +359,9 @@ inline std::string winCommandPrefix(const ExecEnvInfo& env) {
     if (false == env.isWSL) {
         return "The Windows command to execute.";
     }
-    return R"(Command to execute in the Windows terminal (via WSL interop).
+    return R"_(Command to execute in the Windows terminal (via WSL interop).
 Current system is WSL. This tool runs the command on the Windows side.
-If the user provides a Windows path (e.g. `C:\...` or `D:\...`), convert it to a WSL path (`/mnt/c/...` or `/mnt/d/...`) for file operations, but use the original Windows path when passing to Windows executables.)";
+If the user provides a Windows path (e.g. `C:\...` or `D:\...`), convert it to a WSL path (`/mnt/c/...` or `/mnt/d/...`) for file operations, but use the original Windows path when passing to Windows executables.)_";
 }
 
 /// 解释器可用性说明段: 追加到 `command` 参数描述
@@ -464,7 +464,7 @@ inline std::string winCommandProcessArgDesc(const ExecEnvInfo& env) {
     if (env.powershell.available) {
         const auto& ps  = env.powershell;
         std::string out = fmt::format(
-            R"({}
+            R"_({}
 
 The command is executed by {} (PowerShell {}) as ONE `-Command` argument — do NOT prepend `{}`, `-Command`, `powershell.exe`, or `cmd.exe /c` yourself.
 Write plain PowerShell code. Syntax essentials (follow them to avoid quoting/`$` errors):
@@ -481,7 +481,7 @@ Write plain PowerShell code. Syntax essentials (follow them to avoid quoting/`$`
 - `$v = $PSVersionTable.PSVersion.ToString(); Write-Output $v`: Print PowerShell version
 - `explorer.exe C:\Users`: Open File Explorer at path
 - `Taskmgr.exe`: Open Task Manager
-- `notepad.exe C:\file.txt`: Open file in Notepad)",
+- `notepad.exe C:\file.txt`: Open file in Notepad)_",
             winCommandPrefix(env),
             ps.exeName,
             ps.version,
@@ -493,7 +493,7 @@ Write plain PowerShell code. Syntax essentials (follow them to avoid quoting/`$`
     }
 
     std::string out = fmt::format(
-        R"({}
+        R"_({}
 
 The command is passed directly to `cmd.exe` — do NOT prepend `cmd.exe /c` yourself.
 cmd.exe syntax essentials:
@@ -510,7 +510,7 @@ cmd.exe syntax essentials:
 - `Control.exe`: Open Control Panel
 - `regedit.exe`: Open Registry Editor
 - `calc.exe`: Open Calculator
-- `notepad.exe C:\file.txt`: Open file in Notepad)",
+- `notepad.exe C:\file.txt`: Open file in Notepad)_",
         winCommandPrefix(env)
     );
     out += interpreterEnvSection(env);
@@ -527,7 +527,7 @@ inline std::string winCommandPopenArgDesc(const ExecEnvInfo& env) {
         std::string out;
         if (env.isWSL) {
             out = fmt::format(
-                R"({}
+                R"_({}
 
 Windows commands are executed via PowerShell ({} {}) through the Linux/WSL shell.
 Format: {} -NoProfile -Command '<powershell code>'
@@ -540,7 +540,7 @@ Format: {} -NoProfile -Command '<powershell code>'
 - `{} -NoProfile -Command 'Get-Process'`: List processes
 - `{} -NoProfile -Command 'Get-ChildItem C:\Users'`: List a directory
 - `explorer.exe C:\Users`: Open File Explorer at path
-- `Taskmgr.exe`: Open Task Manager)",
+- `Taskmgr.exe`: Open Task Manager)_",
                 winCommandPrefix(env),
                 ps.exeName,
                 ps.version,
@@ -550,7 +550,7 @@ Format: {} -NoProfile -Command '<powershell code>'
             );
         } else {
             out = fmt::format(
-                R"({}
+                R"_({}
 
 Windows commands are executed via PowerShell ({} {}) through cmd.exe.
 Format: {} -NoProfile -Command "<powershell code>"
@@ -562,7 +562,7 @@ Format: {} -NoProfile -Command "<powershell code>"
 - `{} -NoProfile -Command "Get-Process"`: List processes
 - `{} -NoProfile -Command "Get-ChildItem 'C:\Users'"`: List a directory
 - `explorer.exe C:\Users`: Open File Explorer at path
-- `Taskmgr.exe`: Open Task Manager)",
+- `Taskmgr.exe`: Open Task Manager)_",
                 winCommandPrefix(env),
                 ps.exeName,
                 ps.version,
@@ -578,7 +578,7 @@ Format: {} -NoProfile -Command "<powershell code>"
 
     std::string out;
     if (env.isWSL) {
-        out = R"(Command to execute in the Windows terminal (via WSL interop).
+        out = R"_(Command to execute in the Windows terminal (via WSL interop).
 Current system is WSL. This tool runs the command on the Windows side via cmd.exe.
 Windows commands must be invoked through `cmd.exe`. Format: `cmd.exe /c "win_command"`
 - The outer command runs in the Linux/WSL shell, but `win_command` executes inside the Windows terminal.
@@ -593,9 +593,9 @@ If the user provides a Windows path (e.g. `C:\...` or `D:\...`), convert it to a
 - `Control.exe`: Open Control Panel
 - `regedit.exe`: Open Registry Editor
 - `calc.exe`: Open Calculator
-- `notepad.exe C:\file.txt`: Open file in Notepad)";
+- `notepad.exe C:\file.txt`: Open file in Notepad)_";
     } else {
-        out = R"(The Windows command to execute (executed via cmd.exe).
+        out = R"_(The Windows command to execute (executed via cmd.exe).
 
 ## Examples:
 - `echo hello`: Print text
@@ -605,7 +605,7 @@ If the user provides a Windows path (e.g. `C:\...` or `D:\...`), convert it to a
 - `Control.exe`: Open Control Panel
 - `regedit.exe`: Open Registry Editor
 - `calc.exe`: Open Calculator
-- `notepad.exe C:\file.txt`: Open file in Notepad)";
+- `notepad.exe C:\file.txt`: Open file in Notepad)_";
     }
     out += interpreterEnvSection(env);
     out += consoleEncodingSection(env);
@@ -618,12 +618,12 @@ inline ExecPromptText bashToolPrompt(const ExecEnvInfo& env) {
     ExecPromptText prompt;
     prompt.depict          = std::string{kBashToolDepict};
     prompt.args["command"] = fmt::format(
-        R"(The shell command to execute.
+        R"_(The shell command to execute.
 Current system: {}{}. Use standard shell/bash syntax.
 The command string is passed as-is to `bash -c` (no extra escaping layer):
 - `$` starts variable expansion — wrap literal `$` in single quotes (`echo 'a$b'`) or escape it (`echo \$HOME`).
 - Prefer single quotes for text with spaces/special characters; use double quotes when `$` expansion is intended.
-- Chain commands with `&&` / `||` / `;`; redirect with `>` / `2>&1`.{})",
+- Chain commands with `&&` / `||` / `;`; redirect with `>` / `2>&1`.{})_",
         env.systemName,
         env.isWSL ? " (WSL)" : "",
         interpreterEnvSection(env)

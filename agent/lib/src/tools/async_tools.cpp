@@ -558,11 +558,10 @@ asio::awaitable<agentxx::util::ToolResult> AsyncRunTool::execute_async(const Jso
     if (submitted.delayMs > 0) {
         out += fmt::format(
             "Starts in {} (delayMs={}): the task stays queued until then. Use "
-            "agentxx_async_manager {{opt:\"delay\", id:\"{}\", delayMs:0}} to drop the remaining "
-            "delay, or agentxx_async_await {{id:\"{}\", start_now:true}}.\n",
+            "agentxx_async_manager {{opt:\"delay\", id:[\"{}\"], delayMs:0}} to drop the "
+            "remaining delay.\n",
             formatDelay(submitted.delayMs),
             submitted.delayMs,
-            submitted.asyncId,
             submitted.asyncId
         );
     }
@@ -588,7 +587,7 @@ asio::awaitable<agentxx::util::ToolResult> AsyncRunTool::execute_async(const Jso
     out += fmt::format(
         "Check with agentxx_async_query {{id:\"{}\"}} or {{group:\"running\"}}, block for it with "
         "agentxx_async_await {{id:\"{}\"}}, cancel with agentxx_async_manager "
-        "{{opt:\"cancel\", id:\"{}\"}}.",
+        "{{opt:\"cancel\", id:[\"{}\"]}}.",
         submitted.asyncId,
         submitted.asyncId,
         submitted.asyncId
@@ -725,13 +724,6 @@ neograph::ChatTool AsyncAwaitTool::get_definition() const {
                         {"description", prompt.getArg("timeoutMs")},
                     },
                 },
-                {
-                    "start_now",
-                    {
-                        {"type", "boolean"},
-                        {"description", prompt.getArg("start_now")},
-                    },
-                },
             }, },
         {"required", Json::array({"id"})},
     };
@@ -769,27 +761,19 @@ asio::awaitable<agentxx::util::ToolResult> AsyncAwaitTool::execute_async(const J
         timeoutMs = kAwaitMaxMs;
     }
 
-    // 起跑延时: 等待方可以要求"现在就开始" (抹掉剩余延时, 任务立即进入排队起跑)
-    if (delayRemainingMs(entry) > 0) {
-        if (args.value("start_now", false)) {
-            if (state.host->startAsyncWorkNow(asyncId)) {
-                entry = requireOwnedEntry(state.host, asyncId, state.sessionId);
-            }
-        } else if (delayRemainingMs(entry) > timeoutMs) {
-            // 剩余延时比等待时长还长: 挂上去只会必然超时, 直接给说明文本
-            co_return agentxx::util::ToolResult::ok(fmt::format(
-                "{}\nThis task is still waiting for its start delay ({}, submitted delayMs={}). "
-                "It will not start before then; call agentxx_async_manager "
-                "{{opt:\"delay\", id:\"{}\", delayMs:0}} (or agentxx_async_await "
-                "{{id:\"{}\", start_now:true}}) to drop the remaining delay, or use a larger "
-                "timeoutMs.",
-                renderEntryDetail(entry),
-                formatDelay(delayRemainingMs(entry)),
-                entry.value("delayMs", int64_t{0}),
-                asyncId,
-                asyncId
-            ));
-        }
+    // 剩余延时比这次等待还长: 挂上去只会必然超时, 直接给说明文本
+    // (要提前起跑用 `agentxx_async_manager {opt:"delay", delayMs:0}`)
+    if (const auto remaining = delayRemainingMs(entry); remaining > 0 && remaining > timeoutMs) {
+        co_return agentxx::util::ToolResult::ok(fmt::format(
+            "{}\nThis task is still waiting for its start delay ({}, submitted delayMs={}). "
+            "It will not start before then; call agentxx_async_manager "
+            "{{opt:\"delay\", id:[\"{}\"], delayMs:0}} to drop the remaining delay, or use a "
+            "larger timeoutMs.",
+            renderEntryDetail(entry),
+            formatDelay(remaining),
+            entry.value("delayMs", int64_t{0}),
+            asyncId
+        ));
     }
 
     agentxx::events::EventWaitSpec spec;
@@ -828,8 +812,8 @@ asio::awaitable<agentxx::util::ToolResult> AsyncAwaitTool::execute_async(const J
 namespace {
 
 /// `id` 参数 → id 列表
-/// - 接受单个字符串或字符串数组 (schema 声明为数组, 模型给单个字符串时由参数自愈
-///   转成数组); 空串与重复项丢弃
+/// - 声明是字符串数组: 模型给单个字符串时由执行层按 schema 自愈成数组
+/// - 空串与重复项丢弃
 std::vector<std::string> parseIdList(const Json& args) {
     std::vector<std::string> ids;
     const auto               collect = [&ids](const Json& item) {
@@ -847,8 +831,6 @@ std::vector<std::string> parseIdList(const Json& args) {
             for (const auto& item : *it) {
                 collect(item);
             }
-        } else {
-            collect(*it);
         }
     }
     return ids;
@@ -930,7 +912,8 @@ asio::awaitable<agentxx::util::ToolResult>
     const auto ids = parseIdList(args);
     if (ids.empty()) {
         throw std::invalid_argument{
-            "Arg `id` is required: a task id or an array of task ids"
+            "Arg `id` is required: an array of task ids (a single id is turned into an array "
+            "by the executor)"
         };
     }
     int64_t delayMs = 0;

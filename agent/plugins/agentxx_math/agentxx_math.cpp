@@ -10,7 +10,7 @@ namespace {
 
 constexpr std::string_view kNameCalculate = "agentxx_math_calculate";
 constexpr std::string_view kDepictCalculate =
-    R"(Evaluate a mathematical expression and return the computed result.
+    R"_(Evaluate a mathematical expression and return the computed result.
 Supports:
 - Arithmetic: `+`, `-`, `*`, `/`, `%` (modulo), `//` (floor division)
 - Power: `^` or `**` (e.g. `2^10`, `2**3**2`)
@@ -19,7 +19,7 @@ Supports:
 - Comparisons & Logic: `==`, `!=`, `<`, `<=`, `>`, `>=`, `&&`, `||`, `!`, `? :`
 - Constants: `pi`, `e`, `tau`, `phi`, `inf`, `nan`, `true`, `false`
 - Functions: `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sinh`, `cosh`, `tanh`, `sqrt`, `cbrt`, `exp`, `log`, `ln`, `log10`, `log2`, `abs`, `floor`, `ceil`, `round`, `min`, `max`, `sum`, `avg`, `gcd`, `lcm`, `comb` (nCr), `perm` (nPr), `clamp`, `rad`, `deg`, etc.
-- Implicit multiplication: `2pi`, `2(3+4)`, `(1+2)(3+4)`)";
+- Implicit multiplication: `2pi`, `2(3+4)`, `(1+2)(3+4)`)_";
 
 } // namespace
 

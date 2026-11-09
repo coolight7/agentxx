@@ -587,8 +587,8 @@ path/to/agentxx_test --log-level warn string_util regex
   **模型侧工具族** (2026-11): `agentxx_async_run` (`tool` + `args` + `notify`, 默认 `true` =
   结果自动插回上下文 + `delayMs` 起跑延时 + `queueTimeoutMs`/`runTimeoutMs` 两个时限) /
   `agentxx_async_query` (`group` 六档或 `id`; 延时中的项开头标签 `*`) /
-  `agentxx_async_await` (`id` + `timeoutMs` + `start_now`) / `agentxx_async_manager`
-  (`opt` = `cancel` / `delay`, `id` 单个或字符串数组, `delayMs`; 早期的 `group` 批量参数已删),
+  `agentxx_async_await` (`id` + `timeoutMs`) / `agentxx_async_manager`
+  (`opt` = `cancel` / `delay`, `id` 数组, `delayMs`; 早期的 `group` 批量参数已删),
   以及只管发布侧的
   `agentxx_async_emit` (`event` + `value` / `end:true`, 建事件时可选
   `public_publish` / `label`; 可以指向任意合法事件名, 能不能发看该事件创建时是否声明了
@@ -621,7 +621,8 @@ path/to/agentxx_test --log-level warn string_util regex
   `tool_call_id`)。**延时**: `AsyncWorkSpec::delay` (`agentxx_async_run` 的 `delayMs`) 未到
   时任务一直是 `queued`, pump 跳过它 (不占名额、不挡后面的); 到期靠管理器一条共享
   `asio::steady_timer` 唤醒重推; `AgentHost::startAsyncWorkNow`
-  (`agentxx_async_await` 的 `start_now`) 可抹掉剩余延时即时起跑。**三个时限**:
+  仍可抹掉剩余延时 (内部 API; 模型侧已删 `start_now`, 用
+  `agentxx_async_manager {opt:"delay", id:["..."], delayMs:0}`)。**三个时限**:
   `queueTimeoutMs` (延时结束→起跑, 到点出队按 `failed` 收尾) / `runTimeoutMs`
   (起跑→结束, 两种任务都算数: agent 任务置令牌由引擎停下, tool 任务只结束等待) /
   `agentxx_async_await` 的 `timeoutMs` (只结束这次等待, 不动任务); 排队/运行两条超时走
@@ -709,8 +710,8 @@ path/to/agentxx_test --log-level warn string_util regex
   (`submit_async_work`/`cancel_async_work`/`get_async_work`/`list_async_work`; 基线用
   `offsetof` 停在追加前, 插件用 `ifaceHas` 判定降级; 只能碰本实例提交的, owner =
   `plugin:<实例名>`, 禁用/卸载按 owner 批量取消; 参数 `AgentxxPluginAsyncWorkSpec` 尾部
-  又追加了 `tool_name`/`tool_args_json` 支撑 `kind=tool`, 基线停在 `offsetof(tool_name)`,
-  读侧用 `specHas` 判定), 详见
+  追加了 `tool_name`/`tool_args_json` 支撑 `kind=tool`、再追加 `delay_ms`/`queue_timeout_ms`
+  支撑起跑延时与排队时限, 基线停在 `offsetof(tool_name)`, 读侧用 `specHas` 判定), 详见
   [plugins.md](docs/zh-cn/design/plugins.md) §19,
   `agentxx.agent.event` 事件中枢 —— 插件声明事件源 / 发布值 / 结束流 / 替会话登记等待
   (`define_event`/`emit_value`/`end_event`/`remove_event`/`query_event`/`list_events`/

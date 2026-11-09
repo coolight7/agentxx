@@ -298,7 +298,7 @@ utilxx_base::Json normalizePromptPatch(const utilxx_base::Json& parsed) {
 // ======================== 默认 prompt 定义 ========================
 
 std::string EvolutionTrainingConfig::defaultScoringPrompt() {
-    return R"(
+    return R"_(
 You are an expert evaluator for an AI agent. Score the agent's response against the test case criteria.
 
 ## Scoring Rubric (0.0 to 1.0)
@@ -328,11 +328,11 @@ Output ONLY a JSON object (no markdown fences, no prose outside JSON):
     "format": <0.0-1.0>
   }
 }
-)";
+)_";
 }
 
 std::string EvolutionTrainingConfig::defaultOptimizerPrompt() {
-    return R"(
+    return R"_(
 You are a prompt engineering expert. Improve the prompts for an AI agent based on observed performance.
 
 ## Inputs
@@ -372,11 +372,11 @@ Output ONLY a JSON object (no markdown fences):
 }
 Keys for appendSystemPrompts include "planning", "skill", "codegraph", etc. Leave any field empty ("") to keep it unchanged. Only modify prompts that need improvement.
 Include the "appendSystemPrompts" / "toolPrompt" objects only if you want to modify them.
-)";
+)_";
 }
 
 std::string EvolutionTrainingConfig::defaultMutationPrompt() {
-    return R"(
+    return R"_(
 You are a prompt variation generator. Create a DIVERSE variation of the given AI agent prompts that explores different phrasings while preserving the core intent.
 
 ## Goal
@@ -413,7 +413,7 @@ Output ONLY a JSON object (no markdown fences):
 
 Leave any field empty ("") to keep it unchanged.
 Include the "toolPrompt" object only if you want to vary tool prompts.
-)";
+)_";
 }
 
 // ======================== PromptVariant 序列化 ========================

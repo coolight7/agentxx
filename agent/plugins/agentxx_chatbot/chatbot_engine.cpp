@@ -1273,8 +1273,8 @@ void ChatbotEngine::onChannelInterrupt(
     if (node == "permission") {
         const bool allow = config_.behavior.humanInLoop != "auto-deny";
         const std::string values = allow
-                                       ? R"({"values":{"decision":"true","remember":false,"fullAuth":false}})"
-                                       : R"({"values":{"decision":"false","remember":false,"fullAuth":false}})";
+                                       ? R"_({"values":{"decision":"true","remember":false,"fullAuth":false}})_"
+                                       : R"_({"values":{"decision":"false","remember":false,"fullAuth":false}})_";
         if (runtime_.respondInterrupt) {
             runtime_.respondInterrupt(channelId, interruptId, values);
         }
@@ -1288,7 +1288,7 @@ void ChatbotEngine::onChannelInterrupt(
     }
     // 其它中断 (未来的表单类 HIL) 一律按取消应答, 避免会话卡住
     if (runtime_.respondInterrupt) {
-        runtime_.respondInterrupt(channelId, interruptId, R"({"values":{}})");
+        runtime_.respondInterrupt(channelId, interruptId, R"_({"values":{}})_");
     }
     XX_LOGW(
         "[{}] 未知中断类型 '{}' 已按取消应答 (通道 {})",

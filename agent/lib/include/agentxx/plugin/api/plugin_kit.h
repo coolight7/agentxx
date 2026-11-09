@@ -1472,8 +1472,13 @@ struct AsyncWorkOptions {
     /// 运行时限 (毫秒; 0 = 不限制): 计时从起跑开始, 排队与延时不算
     /// - `kind=agent`: 到点置取消令牌, 引擎在检查点停下
     /// - `kind=tool`: 到点只结束等待, 工具本体可能继续跑 (结果丢弃)
-    /// - 排队时限 (`queueTimeout`) 还没在插件面开放, 插件提交的任务不因排队超时失败
     int64_t timeLimitMs        = 0;
+    /// 起跑延时 (毫秒; 0 = 不延时): 到点之前任务一直是 `queued`, 不占名额
+    /// - 提交后没有改延时的成员; 要改就取消后重新提交
+    int64_t delayMs            = 0;
+    /// 排队时限 (毫秒; 0 = 不限制): 计时起点是**延时结束那一刻** (无延时 = 提交时)
+    /// - 到点还没拿到名额: 任务出队并按 `failed` 收尾 (`error` 写 queue timeout)
+    int64_t queueTimeoutMs     = 0;
     /// 非空 = 提交一个 `kind=tool` 的后台任务: 把这一次工具调用放到后台跑
     /// - 工具在你挂的这个根的工具表里查 (找不到时任务按失败收尾)
     /// - `message` / 派生配置 / 工具策略都不参与 (不会另起 agent)
@@ -1536,6 +1541,8 @@ inline std::string submitAsyncWork(Ctx& ctx, const AsyncWorkOptions& opt, int32_
     spec.notify_delivery       = PluginStringView::from(opt.notifyDelivery);
     spec.tool_name             = PluginStringView::from(opt.toolName);
     spec.tool_args_json        = PluginStringView::from(toolArgs);
+    spec.delay_ms              = opt.delayMs;
+    spec.queue_timeout_ms      = opt.queueTimeoutMs;
     spec.on_event              = opt.onEvent;
     spec.user_data             = opt.userData;
 

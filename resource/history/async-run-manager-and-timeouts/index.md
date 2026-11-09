@@ -51,6 +51,6 @@
 - `AgentxxPluginAsyncWorkSpec::time_limit_ms` 从“写了没人读”变成真生效（行为变化），
   `plugin_runtime` / `plugin_agent_runtime` 全绿。
 
-仍开放给用户决定：`agentxx_async_await` 的 `start_now` 是否保留（`manager {opt:"delay",
-id, delayMs:0}` 已能等效）；插件面是否补 `delay_ms` / `queue_timeout_ms`；
-是否给工具加真取消通道（见 plan.md §7.5）。
+仍开放（本轮已按用户反馈落地）：`agentxx_async_await` 的 `start_now` 已删除；插件面已补
+`delay_ms` / `queue_timeout_ms`；工具的真取消通道（带令牌的 `execute_async`）仍未做，
+见 plan.md §7.5。

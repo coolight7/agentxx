@@ -122,7 +122,7 @@ std::string jsonlEncodeMessage(const WireMessage& msg) {
     auto text = io::serialize(msg);
     if (text.empty()) {
         // serialize 不会为空 (至少含 type); 这里补一次判断, 避免写出一条空行让对端停摆
-        text = R"({"type":"error","message":"serialize produced empty text"})";
+        text = R"_({"type":"error","message":"serialize produced empty text"})_";
     }
     text.push_back('\n');
     return text;

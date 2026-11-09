@@ -74,7 +74,7 @@ bool TextSelectionHolder::start(int debounceMs) {
                 )
                                 .count();
                 std::string payload = fmt::format(
-                    R"({{"text":{},"source":{},"timestamp_ms":{}}})",
+                    R"_({{"text":{},"source":{},"timestamp_ms":{}}})_",
                     ctx->jsonEscape(evt.text),
                     ctx->jsonEscape(sourceName(evt.source)),
                     tsMs
@@ -150,23 +150,23 @@ static void* textSelectionAgentMount(
                 int64_t debounceMs = args.value("debounce_ms", int64_t{0});
                 bool    ok         = holder.start(static_cast<int>(debounceMs));
                 return agentxx::plugin::ToolResult::ok(
-                    fmt::format(R"({{"ok":{},"running":true}})", ok ? "true" : "false")
+                    fmt::format(R"_({{"ok":{},"running":true}})_", ok ? "true" : "false")
                 );
             }
 
             if (command == "stop") {
                 holder.stop();
-                return agentxx::plugin::ToolResult::ok(R"({"ok":true,"running":false})");
+                return agentxx::plugin::ToolResult::ok(R"_({"ok":true,"running":false})_");
             }
 
             if (command == "status") {
                 bool running = holder.monitor_.isRunning();
                 return agentxx::plugin::ToolResult::ok(
-                    fmt::format(R"({{"ok":true,"running":{}}})", running ? "true" : "false")
+                    fmt::format(R"_({{"ok":true,"running":{}}})_", running ? "true" : "false")
                 );
             }
 
-            return agentxx::plugin::ToolResult::fail(R"(unknown command: use start/stop/status)");
+            return agentxx::plugin::ToolResult::fail(R"_(unknown command: use start/stop/status)_");
         }
     );
 

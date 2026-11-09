@@ -53,7 +53,7 @@ inline bool ScreenCaptureHolder::startStreaming(int frameRate) {
                 }
                 for (const auto& frame : frames) {
                     std::string payload = fmt::format(
-                        R"({{"width":{},"height":{},"offset_x":{},"offset_y":{},"screen_index":{},"screen_name":"{}","is_primary":{},"pixel_bytes":{}}})",
+                        R"_({{"width":{},"height":{},"offset_x":{},"offset_y":{},"screen_index":{},"screen_name":"{}","is_primary":{},"pixel_bytes":{}}})_",
                         frame.width,
                         frame.height,
                         frame.offsetX,
@@ -244,7 +244,7 @@ static void registerScreenCaptureTool(ScreenCapturePluginCtx& ctx, const agentxx
 
             if (command == "get_screen_count") {
                 return agentxx::plugin::ToolResult::ok(fmt::format(
-                    R"({{"ok":true,"count":{}}})",
+                    R"_({{"ok":true,"count":{}}})_",
                     capture.capture_.getScreenCount()
                 ));
             }
@@ -253,7 +253,7 @@ static void registerScreenCaptureTool(ScreenCapturePluginCtx& ctx, const agentxx
                 int  rate = std::clamp(static_cast<int>(fr), 1, 30);
                 bool ok   = capture.startStreaming(rate);
                 return agentxx::plugin::ToolResult::ok(fmt::format(
-                    R"({{"ok":{},"streaming":true,"frame_rate":{}}})",
+                    R"_({{"ok":{},"streaming":true,"frame_rate":{}}})_",
                     ok ? "true" : "false",
                     rate
                 ));
@@ -261,7 +261,7 @@ static void registerScreenCaptureTool(ScreenCapturePluginCtx& ctx, const agentxx
 
             if (command == "stop_streaming") {
                 capture.stopStreaming();
-                return agentxx::plugin::ToolResult::ok(R"({"ok":true,"streaming":false})");
+                return agentxx::plugin::ToolResult::ok(R"_({"ok":true,"streaming":false})_");
             }
 
             return agentxx::plugin::ToolResult::fail(

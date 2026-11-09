@@ -103,7 +103,7 @@ std::optional<agentxx::middleware::SummarizationToolHandle>
     //     .truncateRequest =
     //         [](neograph::ToolCall &toolcall) {
     //           toolcall.arguments =
-    //               R"({"tip":"[Outdated Message Truncated]"})";
+    //               R"_({"tip":"[Outdated Message Truncated]"})_";
     //         },
     //     .truncateResponse =
     //         [](neograph::ChatMessage &msg) {

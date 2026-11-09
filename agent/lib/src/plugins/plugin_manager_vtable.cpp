@@ -1700,6 +1700,14 @@ static int32_t PLUGINXX_CALL xx_runtime_submit_async_work(
     work.interruptTimeout = std::chrono::milliseconds{spec->interrupt_timeout_ms};
     // 插件侧的 `time_limit_ms` 就是运行超时 (排队与延时不计入)
     work.runTimeout = std::chrono::milliseconds{spec->time_limit_ms};
+    // 追加字段: 起跑延时与排队时限 (旧插件填短结构体时读不到, 保持默认不限)
+    if (specHas(&AgentxxPluginAsyncWorkSpec::delay_ms, spec->struct_size)) {
+        work.delay = std::chrono::milliseconds{std::max<int64_t>(0, spec->delay_ms)};
+    }
+    if (specHas(&AgentxxPluginAsyncWorkSpec::queue_timeout_ms, spec->struct_size)) {
+        work.queueTimeout
+            = std::chrono::milliseconds{std::max<int64_t>(0, spec->queue_timeout_ms)};
+    }
 
     std::string        err;
     utilxx_base::Json  json;

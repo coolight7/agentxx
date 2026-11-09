@@ -380,7 +380,7 @@ private:
     }
 
     static std::string escapeRegexChar(char c) {
-        static const std::string special = R"(\.^$+()[]{}|)";
+        static const std::string special = R"_(\.^$+()[]{}|)_";
         if (special.find(c) != std::string::npos) {
             return fmt::format("\\{}", c);
         }

@@ -66,9 +66,9 @@ inline std::string currentDatetimeExecute() {
 #endif
 
     return fmt::format(
-        R"(Timestamp: {} millisecond
+        R"_(Timestamp: {} millisecond
 Local Time (24Hour): {}
-UTC Time (24Hour): {})",
+UTC Time (24Hour): {})_",
         // 用 duration_cast 保证跨平台正确 (system_clock 周期在 Windows/Android 上非纳秒)
         std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch()).count(),
         localTimeStr,

@@ -78,7 +78,7 @@ struct Codec<CountTokensRequest> {
 template<>
 struct Codec<CountTokensValue> {
     static std::string toJson(const CountTokensValue& value) {
-        return fmt::format(R"({{"tokens":{}}})", value.tokens);
+        return fmt::format(R"_({{"tokens":{}}})_", value.tokens);
     }
 
     static std::optional<CountTokensValue> fromJson(std::string_view text);

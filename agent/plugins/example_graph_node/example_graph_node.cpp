@@ -228,7 +228,7 @@ std::string intentRouterRun(
             if (removed) {
                 // overwrite messages (去掉意图消息)
                 const std::string payload = fmt::format(
-                    R"({{"writes":[{{"channel":"__route__","value":{}}},{{"channel":"__intent_checked","value":true}},{{"channel":"messages","value":{},"mode":"overwrite"}}]}})",
+                    R"_({{"writes":[{{"channel":"__route__","value":{}}},{{"channel":"__intent_checked","value":true}},{{"channel":"messages","value":{},"mode":"overwrite"}}]}})_",
                     utilxx_base::Json(route).dump(),
                     messages.dump()
                 );
@@ -237,7 +237,7 @@ std::string intentRouterRun(
         }
         // 未命中/未移除: 仅写路由标记
         const std::string payload = fmt::format(
-            R"({{"writes":[{{"channel":"__route__","value":{}}},{{"channel":"__intent_checked","value":true}}]}})",
+            R"_({{"writes":[{{"channel":"__route__","value":{}}},{{"channel":"__intent_checked","value":true}}]}})_",
             utilxx_base::Json(route).dump()
         );
         return payload;
@@ -246,7 +246,7 @@ std::string intentRouterRun(
     // 后续轮次: 等价图条件 xx_has_tool_calls (插件自己从会话上下文判断)
     route                     = lastAssistantHasToolCalls(messages) ? "tools" : "end";
     const std::string payload = fmt::format(
-        R"({{"writes":[{{"channel":"__route__","value":{}}}]}})",
+        R"_({{"writes":[{{"channel":"__route__","value":{}}}]}})_",
         utilxx_base::Json(route).dump()
     );
     return payload;
@@ -284,7 +284,7 @@ std::string datetimeNodeRun(AgentCtx& ctx, const agentxx::plugin::RootRequest& r
     utilxx_base::Json msgs = utilxx_base::Json::array();
     msgs.push_back(std::move(msg));
 
-    return fmt::format(R"({{"writes":[{{"channel":"messages","value":{}}}]}})", msgs.dump());
+    return fmt::format(R"_({{"writes":[{{"channel":"messages","value":{}}}]}})_", msgs.dump());
 }
 
 /// =====================================================================
@@ -474,7 +474,7 @@ static int exampleGraphAgentSetup(AgentCtx& ctx, const agentxx::plugin::ScopeRef
             ctx,
             ref,
             "example_intent_router",
-            R"({"type":"object","properties":{"intents":{"type":"array","items":{"type":"string"}},"fallback":{"type":"string"}}})",
+            R"_({"type":"object","properties":{"intents":{"type":"array","items":{"type":"string"}},"fallback":{"type":"string"}}})_",
             [ref](AgentCtx& c, const agentxx::plugin::RootRequest& req) {
                 return intentRouterRun(c, ref, req);
             }
@@ -487,7 +487,7 @@ static int exampleGraphAgentSetup(AgentCtx& ctx, const agentxx::plugin::ScopeRef
             ctx,
             ref,
             "example_datetime",
-            R"({"type":"object"})",
+            R"_({"type":"object"})_",
             datetimeNodeRun
         )
         != 0) {

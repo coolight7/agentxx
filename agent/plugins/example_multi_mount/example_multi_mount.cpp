@@ -139,7 +139,7 @@ static void* multiMountForAgent(
         state->ref,
         "multi_mount_incr",
         "Increase this mount's counter and return the new value (example_multi_mount)",
-        R"({"type":"object","properties":{"by":{"type":"integer","description":"increment step, default 1"}}})",
+        R"_({"type":"object","properties":{"by":{"type":"integer","description":"increment step, default 1"}}})_",
         [state](std::string_view argsJson) -> std::string {
             int step = 1;
             try {
@@ -154,7 +154,7 @@ static void* multiMountForAgent(
             }
             state->count += step;
             return fmt::format(
-                R"({{"agentId":"{}","seq":{},"count":{}}})",
+                R"_({{"agentId":"{}","seq":{},"count":{}}})_",
                 state->ref.id(),
                 state->ref.seq(),
                 state->count
@@ -168,10 +168,10 @@ static void* multiMountForAgent(
         state->ref,
         "multi_mount_state",
         "Return this mount's agentId, mount sequence, counter and config JSON (example_multi_mount)",
-        R"({"type":"object","properties":{}})",
+        R"_({"type":"object","properties":{}})_",
         [state](std::string_view) -> std::string {
             return fmt::format(
-                R"({{"agentId":"{}","seq":{},"count":{},"config":{}}})",
+                R"_({{"agentId":"{}","seq":{},"count":{},"config":{}}})_",
                 state->ref.id(),
                 state->ref.seq(),
                 state->count,

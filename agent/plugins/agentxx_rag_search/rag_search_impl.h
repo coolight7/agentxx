@@ -472,7 +472,7 @@ public:
                         if (!stream) {
                             auto ec = std::error_code{errno, std::system_category()};
                             throw std::runtime_error{
-                                fmt::format(R"(Can not open file. Error: {})", ec.message())
+                                fmt::format(R"_(Can not open file. Error: {})_", ec.message())
                             };
                         }
                         auto content = std::string{

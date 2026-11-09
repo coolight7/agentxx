@@ -135,6 +135,35 @@ Copy-Item agentxx_test_repo-prefix\src\agentxx_test_repo-build\Debug\agentxx_tes
 - 列表：延时中的项以 `*` 开头，普通排队项 `-` 开头；
 - 排队中被取消：结果事件照发（`await` 不再挂到超时）、会话存储占用被释放。
 
+## 追加改动 (同日第二轮, 按用户反馈)
+
+1. **`agentxx_async_manager` 的 `id` 只按数组声明/解析**: schema 本来就是 `array`, 但代码里
+   还留了一条“接受单个字符串”的兼容分支（`parseIdList` 的 `else collect(*it)`）。现在删掉
+   这条分支 —— 模型给单个 id 时由执行层 `autoFixToolArgsTypes` 按 schema 自动包成数组
+   (`tool_args_fix.cpp` 的 `string -> [string]`), 文档与提示词同步写成数组；测试里的 manager
+   调用也改成传数组。
+2. **`agentxx_async_await` 删掉 `start_now`**: schema、实现、提示词、头文件注释、events.md /
+   index.md / AGENTS.md 全部同步；要提前起跑用
+   `agentxx_async_manager {opt:"delay", id:["async-7"], delayMs:0}`。
+   `AgentHost::startAsyncWorkNow` 保留（内部 API，测试 `test_delay_and_start_now` 仍用它）。
+   剩余延时 > `timeoutMs` 时仍然直接回说明文本（不再提 `start_now`）。
+   `test_await_start_now` → `test_await_delayed_task`：先用 manager 去掉延时，再 `await` 拿结果。
+3. **插件面补 `delay_ms` / `queue_timeout_ms`**: `AgentxxPluginAsyncWorkSpec` 尾部追加两个
+   `int64_t`（基线仍停在 `offsetof(tool_name)`，读侧 `specHas`）；`plugin_manager_vtable.cpp`
+   映射到 `AsyncWorkSpec::delay` / `queueTimeout`；SDK `AsyncWorkOptions` 增加 `delayMs` /
+   `queueTimeoutMs` 并填进 spec。`plugin_agent_runtime` 新增 7c 用例：延时 60s + 排队时限 5s
+   的任务在台账里看得到两个字段、状态 `queued`，延时中取消立即终态。
+4. **原始字符串统一写成 `R"_(...)_"`**: 用一次性脚本按字面量顺序改写 `agent/lib` /
+   `agent/client` / `agent/plugins` / `agent/benchmark`（不含 `third_party`）共 **43 个文件、
+   211 处**，无遗留 `R"(`；脚本对每个字面量校验正文里不出现 `)_"`。测试目录（`agent/test`）
+   未改（用户只要主程序与插件），如需可同样批量处理。
+
+验证（同上流程 + 重编全部插件）：
+
+- `async_tools` 145、`plugin_agent_runtime` 221（+7）、`plugin_runtime` 736、`plugin_sdk` 141、
+  `async_work` 138、`event_subagent` 52、`boundaries` 19，全部 0 failed；
+- `agentxx` 客户端与 25 个插件动态库均重新编译通过（`build_plugins.ps1`）。
+
 ## 备注
 
 - **延时与排队时限的关系**：实现取“延时结束那一刻”作为排队计时起点

@@ -2556,7 +2556,7 @@ static void* PLUGINXX_CALL jsCapStart(
                         return;
                     }
                     std::string tools      = engine->loadedToolsJsonOnJsThread(name);
-                    std::string payloadStr = fmt::format(R"({{"ok": true, "tools": {}}})", tools);
+                    std::string payloadStr = fmt::format(R"_({{"ok": true, "tools": {}}})_", tools);
                     auto        resSv      = agentxx::plugin::PluginStringView::from(
                         payloadStr.data(),
                         payloadStr.size()
