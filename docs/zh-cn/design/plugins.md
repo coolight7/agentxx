@@ -2002,14 +2002,18 @@ plugin:
   (只置取消令牌, 终态照常记录);
 - `on_event` 回调 (**容器 io 线程, 必须快速返回**): `QUEUED` / `STARTED` / `FINISHED` /
   `CANCELED` 四个阶段, `payload_json` 带 `asyncId` / `kind` / `name` / `queueAhead` /
-  `hasError` / `canceled` / `error`; 实例释放/禁用后不再进入插件代码;
+  `delayMs` (仅 `QUEUED` 阶段) / `hasError` / `canceled` / `error`; 实例释放/禁用后不再进入插件代码;
+- 起跑延时 (`delayMs`) 目前只在模型侧 `agentxx_async_start` 上开放, 接口表的
+  `AgentxxPluginAsyncWorkSpec` 还没有对应字段 —— 插件提交的任务总是立即进入排队;
 - 老主程序 (v1) 没有这 4 个成员: 用 `ifaceHas<&AgentxxPluginRuntimeIface::submit_async_work>`
   判定后降级; SDK 便捷层是 `submitAsyncWork` / `cancelAsyncWork` /
   `getAsyncWorkJson` / `listAsyncWorkJson` (`AsyncWorkOptions`)。
 - **`kind=tool` (异步工具)**: `spec.kind = 1` + 追加字段 `tool_name` / `tool_args_json`
   (SDK: `AsyncWorkOptions::toolName` / `toolArgs`, `toolName` 非空即按 tool 提交)。
-  工具在**插件这个根的工具注册表**里查 (插件工具与动态注册的工具; lib 内置快工具不在
-  表里, 不支持后台跑), 找不到时任务按失败收尾; 参数原样转交 (执行层
+  工具在**插件这个根**上按名字查: 内置/中间件工具经
+  `AgentContext::builtinToolIndex` (对象归图引擎, 任务期间锁住 `AgentContext::engine`),
+  插件工具与动态注册的工具在该根的工具注册表里; 两处都找不到时任务按失败收尾;
+  参数原样转交 (执行层
   补 `sessionId` / `tool_call_id`), `message` / 派生配置 / 工具策略 / 挂载清单都不参与。
   `kind=1` 但读不到 `tool_name` (旧插件用旧布局) 或 `tool_args_json` 不是 JSON 对象时
   返回 `ERR_ARG`。两个追加字段的基线是 `offsetof(tool_name)`, 老主程序填的短结构体

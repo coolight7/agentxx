@@ -21,11 +21,10 @@
 - 更新 en 文档
 - 事件消息特化渲染
 - 预设异步事件：延时、循环延时、指定时间点
-- 异步 tool 的 timeout 调整为 秒
-- 异步 tool 仅拦截循环调用异步，其他所有tool都支持异步启动，增加 delay
 - 程序重启后，后台任务中断，触发会话时需要自动插入提示
 - 后台任务重新设计排队设计，放开并发数量？仅限制agent并发？创建时指定是否需要排队？
 - agentxx_filesystem_remove 重命名 delete
+- 异步事件、任务的最新结果不再限制 linger_ms 存活时间，直接转存 share_store，并重构 share_store 增加命名空间，区分 tool、事件、插件调用 等添加到 share_store 时的命名空间划分
 
 - SVG绘制支持
 

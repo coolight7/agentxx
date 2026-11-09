@@ -470,7 +470,7 @@ Context
   `info.asyncWorkQueued` / `info.asyncWorkDone`;
 - 回归测试: `agentxx_test tui_widget` 的 `test_info_sidebar_async_works`
   (无任务 / 三段计数与顺序 / 条目颜色 / 完成段单字符标记 / 无排队位 / 清空回到 `( 无 )`),
-  通知链路见 `agentxx_test async_work` 的 `test_works_changed_notification`,
+  通知流程见 `agentxx_test async_work` 的 `test_works_changed_notification`,
   线消息往返见 `agentxx_test wire_roundtrip`。
 
 ### 2.8 Info 侧边栏底部 (工作目录 / 授权按钮 / 版本信息)

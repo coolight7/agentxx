@@ -30,8 +30,13 @@ class EventHub;
 
 namespace neograph::graph {
 class CancelToken;
+class GraphEngine;
 class GraphRegistry;
 } // namespace neograph::graph
+
+namespace neograph {
+class Tool;
+} // namespace neograph
 
 namespace agentxx {
 namespace middleware {
@@ -919,6 +924,18 @@ public:
     /// - 供子代理"全部继承父 agent 工具" (tools=["*"]) 使用:
     ///   AgentHost 据此填充子代理的 toolWhitelist
     std::vector<std::string> toolNames;
+
+    /// 内置工具索引 (名称 → 图引擎持有的工具对象)
+    /// - 内置工具 (share_store / 事件发布 / 后台任务族 / 中间件贡献的) 没有进
+    ///   [toolRegistry], 由执行图引擎持有; 后台任务 (`kind=tool`) 要按名字把它们拿出来跑,
+    ///   所以在这里留一份只借不持有的索引 (BaseAgent::init 的 `bind_tools` 步骤填充)
+    /// - **有效期凭 [engine] 保证**: 先锁住引擎再取指针; 引擎没了就先清空索引
+    std::map<std::string, neograph::Tool*, std::less<>> builtinToolIndex;
+
+    /// 执行图引擎 (弱引用)
+    /// - 工具对象归引擎所有 (engine->own_tools), 引擎活着工具就活着;
+    ///   后台任务靠它判"创建者还在不在"，并把工具寿命锁到任务结束
+    std::weak_ptr<neograph::graph::GraphEngine> engine;
 
     /// 工具加载记录 (含被白名单过滤掉的工具; BaseAgent::init 填充)
     /// - 供启动加载快照、工具清单诊断与 --dump-config 使用

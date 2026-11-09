@@ -300,6 +300,61 @@ asio::awaitable<void> test_quota_and_fifo() {
     co_return;
 }
 
+/// 2b. 起跑延时: `delayMs` 期间一直是排队中, 且不挡后面能跑的任务;
+///     `startAsyncWorkNow` 能抹掉剩余延时
+asio::awaitable<void> test_delay_and_start_now() {
+    auto fx = std::make_shared<AwFixture>();
+    XX_TEST_EXPECT_TRUE(buildFixture(fx, /*maxConcurrent=*/1));
+
+    bool        accepted = false;
+    std::string delayedId;
+    std::string plainId;
+    bool        stateKeptQueued = false;
+    bool        plainRanFirst   = false;
+    bool        startedNow      = false;
+
+    runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
+        auto ctx          = fx->ctx();
+        auto delayedSpec  = makeSpec(fx, "delayed-task");
+        delayedSpec.delay = std::chrono::milliseconds{30000};
+        auto delayed      = fx->host->submitAsyncWork(std::move(delayedSpec), ctx);
+        auto plain        = fx->host->submitAsyncWork(makeSpec(fx, "plain-task"), ctx);
+        accepted          = delayed.accepted && plain.accepted && delayed.delayMs == 30000;
+        delayedId         = delayed.asyncId;
+        plainId           = plain.asyncId;
+        if (!accepted) {
+            co_return false;
+        }
+        // 延时项不占名额: 普通任务先跑 (额度 1 也不被挡住)
+        plainRanFirst = co_await waitUntil([&] {
+            return fx->host->asyncWorkJson(plainId).value("state", std::string{}) == "done";
+        }, 30000);
+        // 此刻延时项仍在排队中
+        const auto entry = fx->host->asyncWorkJson(delayedId);
+        stateKeptQueued  = entry.value("state", std::string{}) == "queued"
+                          && entry.value("delayMs", int64_t{0}) == 30000
+                          && entry.value("delayRemainingMs", int64_t{0}) > 0
+                          && fx->host->queuedAsyncWork() == 1;
+        // 抹掉剩余延时: 立即起跑并完成
+        startedNow = fx->host->startAsyncWorkNow(delayedId);
+        co_return co_await waitUntil([&] {
+            return fx->host->asyncWorkJson(delayedId).value("state", std::string{}) == "done";
+        }, 30000);
+    });
+
+    XX_TEST_EXPECT_TRUE(accepted);
+    XX_TEST_EXPECT_TRUE(plainRanFirst);
+    XX_TEST_EXPECT_TRUE(stateKeptQueued);
+    XX_TEST_EXPECT_TRUE(startedNow);
+    XX_TEST_EXPECT_EQ(
+        fx->host->asyncWorkJson(delayedId).value("state", std::string{}),
+        std::string{"done"}
+    );
+    // 已终态的任务不能再"提前开始"
+    XX_TEST_EXPECT_FALSE(fx->host->startAsyncWorkNow(delayedId));
+    co_return;
+}
+
 /// 2. 队列之间互不影响: 两条队列各 1 个任务时同时在跑
 asio::awaitable<void> test_queues_independent() {
     auto fx = std::make_shared<AwFixture>();
@@ -1056,6 +1111,7 @@ asio::awaitable<TestResult> run_async_work_tests() {
     TestResult result;
 
     co_await test_quota_and_fifo();
+    co_await test_delay_and_start_now();
     co_await test_queues_independent();
     co_await test_unbounded_queue();
     co_await test_linger_sweep();

@@ -88,6 +88,48 @@ std::string_view stateMark(std::string_view state) {
     return state;
 }
 
+/// 延时毫秒 → 可读文本 (`1.5s` / `2m10s` / `1h02m`)
+std::string formatDelay(int64_t ms) {
+    if (ms <= 0) {
+        return "0s";
+    }
+    if (ms < 60 * 1000) {
+        return fmt::format("{:.1f}s", static_cast<double>(ms) / 1000.0);
+    }
+    if (ms < 3600 * 1000) {
+        const auto totalSeconds = ms / 1000;
+        return fmt::format("{}m{:02d}s", totalSeconds / 60, totalSeconds % 60);
+    }
+    const auto totalMinutes = ms / (60 * 1000);
+    return fmt::format("{}h{:02d}m", totalMinutes / 60, totalMinutes % 60);
+}
+
+/// 排队中的条目还差多久起跑 (毫秒; > 0 = 还在延时)
+int64_t delayRemainingMs(const Json& entry) {
+    return entry.value("delayRemainingMs", int64_t{0});
+}
+
+/// 目标工具是否在创建者身上可用
+///
+/// 两个来源都算: 内置/中间件工具由执行图引擎持有 (见
+/// `AgentContext::builtinToolIndex`), 插件与动态注册的工具在工具注册表里。
+/// 引擎弱引用锁不上时说明创建者已释放, 内置索引不能再信。
+bool creatorHasTool(
+    const std::shared_ptr<agentxx::agent::AgentContext>& ctx,
+    std::string_view                                     toolName
+) {
+    if (!ctx || toolName.empty()) {
+        return false;
+    }
+    if (ctx->engine.lock()) {
+        if (auto it = ctx->builtinToolIndex.find(toolName);
+            it != ctx->builtinToolIndex.end()) {
+            return it->second != nullptr;
+        }
+    }
+    return ctx->toolRegistry && ctx->toolRegistry->contains(toolName);
+}
+
 /// 单条任务详情 (台账 JSON → 文本; 含结果正文)
 std::string renderEntryDetail(const Json& entry) {
     const auto  state  = entry.value("state", std::string{});
@@ -104,6 +146,14 @@ std::string renderEntryDetail(const Json& entry) {
         out += fmt::format(" elapsed={}", formatElapsed(nowMs() - start));
     } else if (isTerminalState(state)) {
         out += fmt::format(" elapsed={}", formatElapsed(finish - start));
+    } else if (state == "queued") {
+        // 延时中: 还给模型一个"还有多久"的定量信息 (原地不动就是排队)
+        const auto remaining = delayRemainingMs(entry);
+        out += fmt::format(
+            " ahead={} delay={}",
+            entry.value("queueAhead", int64_t{0}),
+            remaining > 0 ? fmt::format("{} left", formatDelay(remaining)) : std::string{"none"}
+        );
     }
     if (entry.value("hasError", false)) {
         out += " hasError=true";
@@ -166,12 +216,15 @@ std::string renderTaskList(std::string_view group, const Json& items) {
                 formatElapsed(nowMs() - item.value("startedAtMs", int64_t{0}))
             ));
         } else if (state == "queued") {
+            const auto remaining = delayRemainingMs(item);
             lines.push_back(fmt::format(
-                "- {} [queued]  {} {} ahead={}",
+                "- {} [queued]  {} {} ahead={}{}",
                 id,
                 kind,
                 name,
-                item.value("queueAhead", int64_t{0})
+                item.value("queueAhead", int64_t{0}),
+                remaining > 0 ? fmt::format(" delay={} left", formatDelay(remaining))
+                              : std::string{}
             ));
         } else {
             const auto start  = item.value("startedAtMs", int64_t{0});
@@ -311,6 +364,13 @@ neograph::ChatTool AsyncStartTool::get_definition() const {
                         {"description", prompt.getArg("label")},
                     },
                 },
+                {
+                    "delayMs",
+                    {
+                        {"type", "integer"},
+                        {"description", prompt.getArg("delayMs")},
+                    },
+                },
             }, },
         {"required", Json::array({"tool"})},
     };
@@ -325,11 +385,13 @@ asio::awaitable<agentxx::util::ToolResult> AsyncStartTool::execute_async(const J
     if (toolName.empty()) {
         throw std::invalid_argument{"Arg `tool` is required and must be a non-empty string"};
     }
-    // 不给自己套自己, 也不套查询/等待/取消 (只会变成无意义的递归)
-    if (toolName == get_name() || toolName == "agentxx_async_query"
-        || toolName == "agentxx_async_await" || toolName == "agentxx_async_cancel") {
+    // 只拦"把本工具自己套进去": 那样只会变成无意义的递归, 且外层立即返回、内层再提交一条
+    // 同样的任务, 模型看不到任何有用信息。其余工具 (含其他后台任务管理工具、内置工具、
+    // 插件工具、子代理) 都允许异步启动
+    if (toolName == get_name()) {
         throw std::invalid_argument{
-            fmt::format("Arg `tool` must not be a background-task tool (`{}`)", toolName)
+            fmt::format("Arg `tool` must not be `{}` itself (that only nests the same call)",
+                        toolName)
         };
     }
     Json toolArgs = Json::object();
@@ -341,6 +403,14 @@ asio::awaitable<agentxx::util::ToolResult> AsyncStartTool::execute_async(const J
     }
     const bool notify = args.value("notify", true);
     const auto label  = args.value("label", std::string{});
+    // 起跑延时 (毫秒; <= 0 = 不延时): 到点之前任务一直是排队中
+    auto delayMs = args.value<int64_t>("delayMs", 0);
+    if (!args.contains("delayMs")) {
+        delayMs = args.value<int64_t>("delay_ms", delayMs); // 兼容下划线写法
+    }
+    if (delayMs < 0) {
+        delayMs = 0;
+    }
 
     // 会话与调用 id 由执行层补齐 (与前台 ToolcallNode 一致): 下游工具会读它们
     const auto sessionId  = state.sessionId;
@@ -414,11 +484,11 @@ asio::awaitable<agentxx::util::ToolResult> AsyncStartTool::execute_async(const J
         }
         startedAs = fmt::format("subagent={}", subagent);
     } else {
-        // 普通工具: 必须在工具注册表里 (插件 / 动态注册; lib 内置工具由引擎独立持有)
-        if (!state.ctx->toolRegistry || !state.ctx->toolRegistry->find(toolName)) {
+        // 普通工具: 内置/中间件工具 (图引擎持有) 与插件/动态注册工具都行
+        if (!creatorHasTool(state.ctx, toolName)) {
             throw std::invalid_argument{fmt::format(
-                "tool `{}` is not in the tool registry (only plugin / dynamically registered "
-                "tools can run in the background; call built-in tools directly)",
+                "tool `{}` is not available to this agent (not a built-in tool and not in the "
+                "dynamic tool registry)",
                 toolName
             )};
         }
@@ -430,6 +500,7 @@ asio::awaitable<agentxx::util::ToolResult> AsyncStartTool::execute_async(const J
         }
         startedAs = fmt::format("tool={}", toolName);
     }
+    spec.delay = std::chrono::milliseconds{delayMs};
 
     auto submitted = state.host->submitAsyncWork(std::move(spec), state.ctx);
     if (!submitted.accepted) {
@@ -437,6 +508,16 @@ asio::awaitable<agentxx::util::ToolResult> AsyncStartTool::execute_async(const J
     }
 
     std::string out = fmt::format("[Async started] id={} {}\n", submitted.asyncId, startedAs);
+    if (submitted.delayMs > 0) {
+        out += fmt::format(
+            "Starts in {} (delayMs={}): the task stays queued until then. Use "
+            "agentxx_async_await {{id:\"{}\", start_now:true}} to drop the remaining delay and "
+            "start it right away.\n",
+            formatDelay(submitted.delayMs),
+            submitted.delayMs,
+            submitted.asyncId
+        );
+    }
     if (notify) {
         out += "The result will be inserted into this conversation as an input when it is done.\n";
     } else {
@@ -581,6 +662,13 @@ neograph::ChatTool AsyncAwaitTool::get_definition() const {
                         {"description", prompt.getArg("timeout_ms")},
                     },
                 },
+                {
+                    "start_now",
+                    {
+                        {"type", "boolean"},
+                        {"description", prompt.getArg("start_now")},
+                    },
+                },
             }, },
         {"required", Json::array({"id"})},
     };
@@ -601,7 +689,7 @@ asio::awaitable<agentxx::util::ToolResult> AsyncAwaitTool::execute_async(const J
     }
 
     // 已结束 (或已被 linger 清掉) 的任务直接看台账, 不再挂等待
-    const auto entry = requireOwnedEntry(state.host, asyncId, state.sessionId);
+    auto entry = requireOwnedEntry(state.host, asyncId, state.sessionId);
     if (isTerminalState(entry.value("state", std::string{}))) {
         co_return agentxx::util::ToolResult::ok(renderEntryDetail(entry));
     }
@@ -612,6 +700,27 @@ asio::awaitable<agentxx::util::ToolResult> AsyncAwaitTool::execute_async(const J
     }
     if (timeoutMs > kAwaitMaxMs) {
         timeoutMs = kAwaitMaxMs;
+    }
+
+    // 起跑延时: 等待方可以要求"现在就开始" (抹掉剩余延时, 任务立即进入排队起跑)
+    if (delayRemainingMs(entry) > 0) {
+        if (args.value("start_now", false)) {
+            if (state.host->startAsyncWorkNow(asyncId)) {
+                entry = requireOwnedEntry(state.host, asyncId, state.sessionId);
+            }
+        } else if (delayRemainingMs(entry) > timeoutMs) {
+            // 剩余延时比等待时长还长: 挂上去只会必然超时, 直接给说明文本
+            co_return agentxx::util::ToolResult::ok(fmt::format(
+                "{}\nThis task is still waiting for its start delay ({}, submitted delayMs={}). "
+                "It will not start before then; call agentxx_async_await {{id:\"{}\", "
+                "start_now:true}} to drop the remaining delay and start it right away, or use a "
+                "larger timeout_ms.",
+                renderEntryDetail(entry),
+                formatDelay(delayRemainingMs(entry)),
+                entry.value("delayMs", int64_t{0}),
+                asyncId
+            ));
+        }
     }
 
     agentxx::events::EventWaitSpec spec;

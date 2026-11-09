@@ -362,7 +362,8 @@ Absent (default): the sub-agent's default full tool set.)_"},
 
 ## When to use
 - The call takes long (a slow command, a big search, a long fetch, a whole sub-agent task) and you want to keep working instead of blocking the turn.
-- `tool` is any tool you can call directly (`agentxx_filesystem_grep`, `agentxx_execute_bash_command`, ...), or `agentxx_subagent` (then `args` is exactly what you would pass to it: `{"subagent":"task","message":"..."}`).
+- `tool` is any tool you can call directly — built-in (`agentxx_share_store`, `agentxx_async_emit`, ...), plugin-provided (`agentxx_filesystem_grep`, `agentxx_execute_bash_command`, ...) or `agentxx_subagent` (then `args` is exactly what you would pass to it: `{"subagent":"task","message":"..."}`).
+- The only tool you cannot start in the background is `agentxx_async_start` itself.
 - `args` is handed to that tool unchanged.
 
 ## What happens to the result
@@ -370,21 +371,27 @@ Absent (default): the sub-agent's default full tool set.)_"},
 - `notify:false`: the result stays in the task ledger; read it with `agentxx_async_query` or block with `agentxx_async_await`.
 - Permission for the target tool is checked once now, at submit time (same rules as calling it directly); the background run does not ask again.
 
+## Delayed start
+- `delayMs` > 0 keeps the task `queued` until that many milliseconds have passed; it does not start earlier and it does not block other queued tasks.
+- Use it for "do this in 10 minutes" style work, retries after a pause, or polling loops with a gap.
+- While it waits, `agentxx_async_await {id, start_now:true}` drops the remaining delay and starts it immediately; `agentxx_async_cancel` still cancels it right away.
+
 ## Notes
-- Only plugin / dynamically registered tools can run in the background; `agentxx_subagent` is the exception (it runs as a sub-agent task). Lib built-in tools (share_store / event / ...) must be called directly.
 - Do not wrap a call that finishes in a second or two — call the tool directly instead.
 - Concurrency is limited per agent (`async_work.max_concurrent`, default 3); extra tasks are accepted and wait in a queue.
 - Availability: only registered when background work is enabled (`async_work.enable`).)_",
               .args =
                   {
                       {"tool",
-                       "Tool to run in the background: any tool you can call directly, or `agentxx_subagent`."},
+                       "Tool to run in the background: any tool you can call directly (built-in or plugin), or `agentxx_subagent`. `agentxx_async_start` itself is rejected."},
                       {"args",
                        "Argument object for that tool, passed through unchanged (same schema as calling it directly)."},
                       {"notify",
                        "Insert the result into this conversation when the task finishes (default `true`). Set `false` to keep it in the ledger only."},
                       {"label",
                        "Optional short display name for the task (default: the tool name or the sub-agent name)."},
+                      {"delayMs",
+                       R"_(Optional. Wait this many milliseconds before the task may start (default `0` = as soon as the queue allows). The whole delay counts as `queued`, never as `running`; other queued tasks are not blocked by it. Keep it to what you really need — a long delay just means a late answer.)_"},
                   },
           },
       },
@@ -400,6 +407,7 @@ Absent (default): the sub-agent's default full tool set.)_"},
 
 ## Notes
 - `group` values: `all` (default, every task of this session), `queued`, `running`, `done`, `failed`, `canceled`.
+- A task started with `delayMs` counts as `queued` until the delay is over (the output shows how much is left).
 - Tasks started with `notify:true` also deliver their result as an input by themselves; querying again is harmless.
 - Finished tasks stay in the ledger for a while (`async_work.linger_ms`, default 5 minutes), then disappear.)_",
               .args =
@@ -426,6 +434,8 @@ Absent (default): the sub-agent's default full tool set.)_"},
                       {"id", "Task id to wait for (`async-7`)."},
                       {"timeout_ms",
                        "How long to block, in milliseconds (default `30000`, capped at `300000`)."},
+                      {"start_now",
+                       R"_(Optional boolean (default `false`). When the task was started with `delayMs` and is still waiting for that delay, `true` drops the remaining delay and lets it start immediately. Without it, a task whose remaining delay is longer than `timeout_ms` is reported back at once instead of being waited for.)_"},
                   },
           },
       },

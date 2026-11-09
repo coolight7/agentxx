@@ -585,8 +585,9 @@ path/to/agentxx_test --log-level warn string_util regex
   `.timer.<名字>` 先问 `wants()` 再发 (后台任务的 `agentxx.agent.async.done` 是唯一
   落在 `agentxx.agent.event.` 段外的内置值事件, 见下面的后台任务段)。
   **模型侧工具族** (2026-11): `agentxx_async_start` (`tool` + `args` + `notify`, 默认 `true` =
-  结果自动插回上下文) / `agentxx_async_query` (`group` 六档或 `id`) / `agentxx_async_await`
-  (`id` + `timeout_ms`) / `agentxx_async_cancel` (`id` 或 `group`), 以及只管发布侧的
+  结果自动插回上下文 + `delayMs` 起跑延时) / `agentxx_async_query` (`group` 六档或 `id`) /
+  `agentxx_async_await` (`id` + `timeout_ms` + `start_now`) / `agentxx_async_cancel`
+  (`id` 或 `group`), 以及只管发布侧的
   `agentxx_async_emit` (`event` + `value` / `end:true`, 建事件时可选
   `public_publish` / `label`; 可以指向任意合法事件名, 能不能发看该事件创建时是否声明了
   公开 (`PublishMask`), 创建者自己与框架段内的内置源不受限)。早期的 `watch`/`await`/`status`/
@@ -611,9 +612,14 @@ path/to/agentxx_test --log-level warn string_util regex
   queueKey/时间戳/结果) + 每队列 FIFO + 额度 + 结束 linger 清扫 + 取消/查询 + 指标记账;
   `kind` = `agent` (起一个 agent 跑任务) 或 `tool` (把一次工具调用放到后台跑,
   入口 `agentxx_async_start`; 权限在提交时按目标工具
-  问一次、取消是 50 ms 轮询的尽力而为; 工具在创建者的**工具注册表**里查 (插件/动态注册
-  的工具; lib 内置快工具不在表里, 不支持后台跑), 参数原样转交并补 `sessionId` /
-  `tool_call_id`)。**子代理回归同步**: `agentxx_subagent` 不再隐式异步 (删掉了
+  问一次、取消是 50 ms 轮询的尽力而为; 工具在创建者身上查 —— 内置/中间件工具走
+  `AgentContext::builtinToolIndex` (对象归图引擎, 任务期间锁住 `AgentContext::engine`),
+  插件/动态注册的在 `toolRegistry`; **除了 `agentxx_async_start` 自己, 任何工具都可以**
+  (含其他后台任务管理工具、内置工具), 参数原样转交并补 `sessionId` /
+  `tool_call_id`)。**延时**: `AsyncWorkSpec::delay` (`agentxx_async_start` 的 `delayMs`) 未到
+  时任务一直是 `queued`, pump 跳过它 (不占名额、不挡后面的); 到期靠管理器一条共享
+  `asio::steady_timer` 唤醒重推; `AgentHost::startAsyncWorkNow`
+  (`agentxx_async_await` 的 `start_now`) 可抹掉剩余延时即时起跑。**子代理回归同步**: `agentxx_subagent` 不再隐式异步 (删掉了
   `async_work.enable` 决定形态的老行为), 要后台跑就 `agentxx_async_start
   {tool:"agentxx_subagent", args:{subagent, message, ...}}` —— 参数与直接调用完全一致,
   内部按 `kind=agent` 提交; 受理返回 `{started:true, asyncId}`、正文 `[Async started] id=...`。

@@ -17,6 +17,7 @@
 #include "asio/detached.hpp"
 #include "asio/post.hpp"
 #include "fmt/format.h"
+#include "neograph/graph/engine.h"
 #include "utilxx_base/log.h"
 #include "utilxx_base/string_util.h"
 #include <algorithm>
@@ -249,6 +250,59 @@ events::SubagentBatchItem taskOfSpec(const AsyncWorkSpec& spec) {
     return task;
 }
 
+/// 后台工具任务的执行体解析结果
+struct ToolTarget {
+    /// 执行体 (只借; 寿命由下面两个 shared_ptr 之一保证)
+    neograph::Tool* tool = nullptr;
+    /// 动态注册表里的工具 (插件/动态注册): 由注册表 weak 共享持有
+    std::shared_ptr<agentxx::tools::XXToolBase> keepAlive;
+    /// 内置工具: 工具对象归执行图引擎所有, 任务期间锁住引擎即保证不悬垂
+    std::shared_ptr<neograph::graph::GraphEngine> engine;
+};
+
+/// 在创建者身上按名字找出要后台执行的工具 (与前台 ToolcallWrapNode 同顺序)
+///
+/// - 内置 / 中间件工具 (share_store / 事件发布 / 后台任务族 / subagent) 由执行图
+///   引擎持有, 经 `AgentContext::builtinToolIndex` 拿到; 引擎弱引用锁不上时说明
+///   创建者已释放, 不能去解引用索引里的旧指针
+/// - 插件 / 动态注册的工具在 `AgentContext::toolRegistry` 里, 以 shared_ptr 保活
+///   (插件卸载会等 inflight 归零, 执行期间代码段保持有效)
+///
+/// - `return` 找到为 true; false 时 [error] 已写明原因
+bool resolveCreatorTool(
+    const std::shared_ptr<AgentContext>& creator,
+    std::string_view                     toolName,
+    ToolTarget&                          out,
+    std::string&                         error
+) {
+    out = ToolTarget{};
+    if (!creator) {
+        error = "async tool: creator context is gone";
+        return false;
+    }
+    if (auto engine = creator->engine.lock()) {
+        if (auto it = creator->builtinToolIndex.find(toolName);
+            it != creator->builtinToolIndex.end() && it->second != nullptr) {
+            out.tool   = it->second;
+            out.engine = std::move(engine);
+            return true;
+        }
+    }
+    if (creator->toolRegistry) {
+        if (auto registered = creator->toolRegistry->find(toolName)) {
+            out.tool      = registered.get();
+            out.keepAlive = std::move(registered);
+            return true;
+        }
+    }
+    error = fmt::format(
+        "async tool: tool `{}` not found for the creator (not a built-in tool of this agent, "
+        "not in its dynamic tool registry, or the agent was released)",
+        toolName
+    );
+    return false;
+}
+
 /// 跑一个工具任务 (`kind == Tool`): 在创建者的工具表里执行同名工具
 ///
 /// 取消是"尽力而为": 每 50ms 查一次取消令牌, 置位后立即按取消收尾 (工具本身如果
@@ -267,17 +321,10 @@ asio::awaitable<events::RespSubagentBatchItem> runToolWork(
             .errorMessage = std::move(message),
         };
     };
-    if (!creator || !creator->toolRegistry) {
-        co_return fail("async tool: creator has no tool registry");
-    }
-    auto tool = creator->toolRegistry->find(spec.toolName);
-    if (!tool) {
-        // lib 内置工具由引擎持有, 不在注册表里: 它们本来就是快工具, 不支持后台跑
-        co_return fail(fmt::format(
-            "async tool: tool `{}` not found in the creator's tool registry "
-            "(only plugin / dynamically registered tools can run in the background)",
-            spec.toolName
-        ));
+    ToolTarget  target;
+    std::string lookupError;
+    if (!resolveCreatorTool(creator, spec.toolName, target, lookupError)) {
+        co_return fail(std::move(lookupError));
     }
     // 取消已经开始就不必启动执行体
     if (token && token->is_cancelled()) {
@@ -293,7 +340,8 @@ asio::awaitable<events::RespSubagentBatchItem> runToolWork(
     // 参数类型自动修正: 与前台 ToolcallWrapNode 执行前同一份实现 (内置工具与插件工具
     // 一视同仁), 后台跑的工具同样按自己声明的 schema 拿到正确类型
     try {
-        const auto parameters = agentxx::util::fromNeographJson(tool->get_definition().parameters);
+        const auto parameters
+            = agentxx::util::fromNeographJson(target.tool->get_definition().parameters);
         agentxx::util::autoFixToolArgsTypes(parameters, args, spec.toolName);
     } catch (const std::exception& e) {
         XX_LOGW("Async tool auto-fix arg type failed: {}", e.what());
@@ -310,13 +358,21 @@ asio::awaitable<events::RespSubagentBatchItem> runToolWork(
     // lambda 协程的帧只保存闭包指针, 内联调用产生的是临时闭包 —— 语句结束即析构,
     // 而这具协程要在本函数返回后继续跑 (取消时本函数先退出, 工具仍在后台跑到自己的
     // 超时)。传可调用对象时闭包由 co_spawn 复制进自己的协程帧, 生命周期与任务一致,
-    // 后台协程访问 state/tool/args 才不悬垂 (同 [TaskScope::spawn] 的约定)
+    // 后台协程访问 state/target/args 才不悬垂 (同 [TaskScope::spawn] 的约定)
     asio::co_spawn(
         ex,
-        [state, tool, args = std::move(args)]() -> asio::awaitable<void> {
+        [state, target = std::move(target), args = std::move(args)]() -> asio::awaitable<void> {
             state->result = co_await agentxx::util::catchErrorAsync<agentxx::util::ToolResult>(
                 [&]() -> asio::awaitable<agentxx::util::ToolResult> {
-                    co_return co_await tool->execute_async(args);
+                    if (auto* xxTool = dynamic_cast<agentxx::tools::XXToolBase*>(target.tool)) {
+                        co_return co_await xxTool->execute_async(args);
+                    }
+                    // 原生 neograph::Tool (如未包装的 MCP 原样转发工具): 经桥接调用,
+                    // 原生工具没有状态通道, 文本一律按成功
+                    auto neoArgs = agentxx::util::toNeographJson(args);
+                    co_return agentxx::util::ToolResult::ok(
+                        co_await target.tool->execute_async(neoArgs)
+                    );
                 },
                 [](std::string errmsg) -> asio::awaitable<agentxx::util::ToolResult> {
                     co_return agentxx::util::ToolResult::fail(std::move(errmsg));
@@ -572,6 +628,10 @@ AsyncWorkSubmitResult
         entry.maxConcurrent    = std::max<size_t>(1, spec.maxConcurrent);
         entry.lingerMs         = spec.lingerMs;
         entry.resultMaxBytes   = spec.resultMaxBytes;
+        // 起跑延时: 到点之前一直是排队中 (pump 跳过它)
+        const auto delayMs   = std::max<int64_t>(0, spec.delay.count());
+        entry.delayMs        = delayMs;
+        entry.delayUntilSteadyMs = delayMs > 0 ? steadyNowMs() + delayMs : 0;
         entry.token            = std::make_shared<neograph::graph::CancelToken>();
         entry.creatorCtx       = creator;
         entry.metrics          = creator ? creator->metrics : nullptr;
@@ -597,6 +657,7 @@ AsyncWorkSubmitResult
         out.asyncId    = entry.asyncId;
         out.state      = AsyncWorkState::Queued;
         out.queueAhead = queues_[spec.queueKey].size();
+        out.delayMs    = delayMs;
 
         queues_[spec.queueKey].push_back(entry.asyncId);
         entries_.insert_or_assign(entry.asyncId, std::move(entry));
@@ -608,13 +669,14 @@ AsyncWorkSubmitResult
     }
 
     XX_LOGI(
-        "[async_work] submitted {} ({}) queue={} creator={} session={} ahead={}",
+        "[async_work] submitted {} ({}) queue={} creator={} session={} ahead={} delay={}ms",
         out.asyncId,
         toString(spec.kind),
         spec.queueKey,
         spec.creatorAgentId,
         spec.creatorSessionId,
-        out.queueAhead
+        out.queueAhead,
+        out.delayMs
     );
 
     // 提交方回调: 受理 (排到位) —— 投递到容器 io 线程, 与后续 Started/Finished 保序
@@ -625,6 +687,7 @@ AsyncWorkSubmitResult
             {"kind",    toString(spec.kind)},
             {"name",    spec.name    },
             {"queueAhead", out.queueAhead},
+            {"delayMs", out.delayMs  },
         };
         const auto executor = host->ioCtx()->get_executor();
         asio::post(
@@ -682,68 +745,198 @@ void AsyncWorkManager::pump(std::string_view queueKey) {
     if (!host) {
         return;
     }
-    std::string        nextId;
-    AsyncWorkEventFn   startCb;
-    utilxx_base::Json  startPayload;
-    /// 创建者 (界面通知用; 锁内取得, 锁外投递)
-    std::shared_ptr<AgentContext> nextCreator;
-    std::string                   nextSessionId;
+    /// 本趟要起跑的条目 (锁内只收集, 锁外再触发回调与建协程)
+    struct Launch {
+        std::string                   id;
+        AsyncWorkEventFn              cb;
+        utilxx_base::Json             payload;
+        std::shared_ptr<AgentContext> creator;
+        std::string                   sessionId;
+    };
+    std::vector<Launch> launches;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         auto                        qit = queues_.find(queueKey);
         if (qit == queues_.end()) {
             return;
         }
-        auto& queue = qit->second;
-        while (!queue.empty()) {
-            const std::string headId = queue.front();
-            auto              eit    = entries_.find(headId);
+        auto&      queue   = qit->second;
+        const auto now     = steadyNowMs();
+        auto       rit     = runningPerQueue_.find(queueKey);
+        size_t     running = rit == runningPerQueue_.end() ? 0 : rit->second;
+        size_t     index   = 0;
+        while (index < queue.size()) {
+            const std::string& queuedId = queue[index];
+            auto               eit      = entries_.find(queuedId);
             if (eit == entries_.end() || eit->second.state != AsyncWorkState::Queued) {
                 // 台账已回收 / 已被别的路径置终态: 跳过
-                queue.erase(queue.begin());
+                queue.erase(queue.begin() + static_cast<std::ptrdiff_t>(index));
                 continue;
             }
-            auto         rit     = runningPerQueue_.find(queueKey);
-            const size_t running = rit == runningPerQueue_.end() ? 0 : rit->second;
-            const size_t quota   = std::max<size_t>(1, eit->second.maxConcurrent);
+            auto& entry = eit->second;
+            if (entry.delayUntilSteadyMs > now) {
+                // 延时未到: 留在队列里等唤醒, 名额让给后面能跑的
+                ++index;
+                continue;
+            }
+            const size_t quota = std::max<size_t>(1, entry.maxConcurrent);
             if (running >= quota) {
                 break; // 队列满额: 等某个任务收尾时再推
             }
-            nextId = headId;
-            queue.erase(queue.begin());
-            runningPerQueue_[std::string{queueKey}] = running + 1;
-            eit->second.state                       = AsyncWorkState::Running;
-            eit->second.startedAtMs                 = systemNowMs();
-            nextCreator                             = eit->second.creatorCtx.lock();
-            nextSessionId                           = eit->second.creatorSessionId;
-            // 提交方回调 (起跑) 在锁外触发, 避免外部代码重入引发死锁
-            startCb      = eit->second.spec.onEvent;
-            startPayload = utilxx_base::Json{
-                {"asyncId", headId              },
-                {"kind",    toString(eit->second.kind)},
-                {"name",    eit->second.name    },
+            Launch launch;
+            launch.id        = queuedId;
+            launch.cb        = entry.spec.onEvent;
+            launch.payload   = utilxx_base::Json{
+                {"asyncId", queuedId          },
+                {"kind",    toString(entry.kind)},
+                {"name",    entry.name       },
             };
-            break;
+            launch.creator   = entry.creatorCtx.lock();
+            launch.sessionId = entry.creatorSessionId;
+            launches.push_back(std::move(launch));
+
+            ++running;
+            entry.state             = AsyncWorkState::Running;
+            entry.startedAtMs       = systemNowMs();
+            entry.delayUntilSteadyMs = 0;
+            queue.erase(queue.begin() + static_cast<std::ptrdiff_t>(index));
+        }
+        if (running == 0) {
+            runningPerQueue_.erase(std::string{queueKey});
+        } else {
+            runningPerQueue_[std::string{queueKey}] = running;
         }
         auto qit2 = queues_.find(queueKey);
         if (qit2 != queues_.end() && qit2->second.empty()) {
             queues_.erase(qit2);
         }
     }
-    if (nextId.empty()) {
+    for (auto& launch : launches) {
+        // 提交方回调 (起跑) 在锁外触发, 避免外部代码重入引发死锁
+        fireAsyncWorkEvent(launch.cb, AsyncWorkEventPhase::Started, launch.payload);
+        // 界面: 排队 → 运行 (在跑/排队两边计数都变了)
+        postAsyncWorksChanged(host, launch.creator, launch.sessionId);
+        XX_LOGD("[async_work] launch {} (queue={})", launch.id, queueKey);
+        asio::co_spawn(
+            host->ioCtx()->get_executor(),
+            [host, id = std::move(launch.id)]() -> asio::awaitable<void> {
+                co_await host->asyncWork_->runner(std::move(host), id);
+            },
+            asio::detached
+        );
+    }
+    // 队列里还留着未到期的条目: 排一次唤醒 (到点后再推一次这条队列)
+    armDelayTimer();
+}
+
+void AsyncWorkManager::pumpAllQueues() {
+    for (const auto& key : queueKeysSnapshot()) {
+        pump(key);
+    }
+}
+
+void AsyncWorkManager::armDelayTimer() {
+    auto host = host_.lock();
+    if (!host) {
         return;
     }
-    fireAsyncWorkEvent(startCb, AsyncWorkEventPhase::Started, startPayload);
-    // 界面: 排队 → 运行 (在跑/排队两边计数都变了)
-    postAsyncWorksChanged(host, nextCreator, nextSessionId);
-    XX_LOGD("[async_work] launch {} (queue={})", nextId, queueKey);
-    asio::co_spawn(
-        host->ioCtx()->get_executor(),
-        [host, id = std::move(nextId)]() -> asio::awaitable<void> {
-            co_await host->asyncWork_->runner(std::move(host), id);
-        },
-        asio::detached
-    );
+    int64_t earliest = 0;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto                  now = steadyNowMs();
+        for (const auto& [id, entry] : entries_) {
+            (void)id;
+            if (entry.state != AsyncWorkState::Queued || entry.delayUntilSteadyMs == 0) {
+                continue;
+            }
+            // 已到期 (等一次 pump 就能起跑): 取"现在"作为唤醒时刻
+            const auto at = entry.delayUntilSteadyMs > now ? entry.delayUntilSteadyMs : now;
+            if (earliest == 0 || at < earliest) {
+                earliest = at;
+            }
+        }
+    }
+    if (earliest == 0) {
+        // 没有待唤醒的延时项: 取消已排定的唤醒
+        if (delayTimer_) {
+            delayTimer_->cancel();
+        }
+        delayTimerDeadlineMs_ = 0;
+        return;
+    }
+    if (delayTimerDeadlineMs_ != 0 && delayTimerDeadlineMs_ <= earliest) {
+        return; // 已排定的唤醒不晚于这个时刻, 不必重排
+    }
+    const auto now = steadyNowMs();
+    if (!delayTimer_) {
+        delayTimer_ = std::make_unique<asio::steady_timer>(host->ioCtx()->get_executor());
+    }
+    delayTimerDeadlineMs_ = earliest;
+    delayTimer_->expires_after(std::chrono::milliseconds{std::max<int64_t>(0, earliest - now)});
+    // 只持容器弱引用: 不让 host → manager → timer → handler → host 成环
+    delayTimer_->async_wait([weakHost = std::weak_ptr<AgentHost>{host}](
+                                const utilxx_base::AsioErrorCode& ec
+                            ) {
+        if (ec) {
+            return; // 被重排或管理器停止取消
+        }
+        auto host = weakHost.lock();
+        if (!host || !host->asyncWork_) {
+            return;
+        }
+        host->asyncWork_->onDelayTimerFired();
+    });
+}
+
+void AsyncWorkManager::onDelayTimerFired() {
+    delayTimerDeadlineMs_ = 0;
+    pumpAllQueues();
+}
+
+std::vector<std::string> AsyncWorkManager::queueKeysSnapshot() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    std::vector<std::string>    keys;
+    keys.reserve(queues_.size());
+    for (const auto& [key, queue] : queues_) {
+        (void)queue;
+        keys.push_back(key);
+    }
+    return keys;
+}
+
+bool AsyncWorkManager::startNow(std::string_view asyncId) {
+    std::string                   queueKey;
+    bool                          queued   = false;
+    bool                          changed  = false;
+    std::shared_ptr<AgentContext> creator;
+    std::string                   sessionId;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto                        it = entries_.find(asyncId);
+        if (it == entries_.end() || it->second.state != AsyncWorkState::Queued) {
+            return false;
+        }
+        auto& entry = it->second;
+        queued      = true;
+        changed     = entry.delayUntilSteadyMs != 0;
+        entry.delayUntilSteadyMs = 0;
+        queueKey                 = entry.queueKey;
+        creator                  = entry.creatorCtx.lock();
+        sessionId                = entry.creatorSessionId;
+    }
+    auto host = host_.lock();
+    if (!host) {
+        return queued;
+    }
+    if (changed) {
+        XX_LOGI("[async_work] {} start now (delay cleared)", asyncId);
+    }
+    asio::post(host->ioCtx()->get_executor(), [host, key = std::move(queueKey)]() {
+        host->asyncWork_->pump(key);
+    });
+    // 界面: 延时信息没了 / 可能已经从排队变成运行
+    postAsyncWorksChanged(host, creator, sessionId);
+    return queued;
 }
 
 asio::awaitable<void>
@@ -972,6 +1165,7 @@ bool AsyncWorkManager::cancel(std::string_view asyncId) {
             e.canceled               = true;
             e.finishedAtMs           = systemNowMs();
             e.error                  = "canceled while queued";
+            e.delayUntilSteadyMs     = 0;
             e.lingerDeadlineSteadyMs = steadyNowMs() + e.lingerMs;
             removedFromQueue         = true;
             canceledCreator          = e.creatorCtx.lock();
@@ -1128,6 +1322,14 @@ utilxx_base::Json AsyncWorkManager::entryJson(std::string_view asyncId) const {
     if (!e.error.empty()) {
         j["error"] = e.error;
     }
+    // 起跑延时: `delayMs` 是提交时的原值, `delayRemainingMs` 是此刻还剩多少
+    if (e.delayMs > 0) {
+        j["delayMs"] = e.delayMs;
+    }
+    if (e.state == AsyncWorkState::Queued && e.delayUntilSteadyMs > 0) {
+        const auto now = steadyNowMs();
+        j["delayRemainingMs"] = e.delayUntilSteadyMs > now ? e.delayUntilSteadyMs - now : 0;
+    }
     if (!e.resultText.empty()) {
         j["result"] = e.resultText;
     }
@@ -1182,6 +1384,14 @@ utilxx_base::Json AsyncWorkManager::listJson(
                 }
             }
             item["queueAhead"] = ahead;
+            if (e.delayMs > 0) {
+                item["delayMs"] = e.delayMs;
+            }
+            if (e.delayUntilSteadyMs > 0) {
+                const auto now = steadyNowMs();
+                item["delayRemainingMs"]
+                    = e.delayUntilSteadyMs > now ? e.delayUntilSteadyMs - now : 0;
+            }
         }
         arr.push_back(std::move(item));
         ++n;

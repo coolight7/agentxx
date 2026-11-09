@@ -256,6 +256,11 @@ public:
     /// 取消单条 (运行中 → 置取消令牌; 排队中 → 直接出队)
     bool cancelAsyncWork(std::string_view asyncId);
 
+    /// 抹掉一条排队中任务的剩余延时, 让它立即进入排队起跑
+    /// - 只对排队中 (`queued`) 的条目有效; 运行中/终态/不存在返回 false
+    /// - 原本就没延时也返回 true (语义是"让它现在就能跑")
+    bool startAsyncWorkNow(std::string_view asyncId);
+
     /// 按创建者批量取消 (`creator` 为空 = 全部)
     size_t cancelAsyncWorks(const std::shared_ptr<AgentContext>& creator = nullptr);
 

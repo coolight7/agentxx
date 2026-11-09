@@ -309,14 +309,14 @@ content:
 ## 8. 后台任务（async work）
 
 模型侧“开始即提交”：任何工具调用（含 `agentxx_subagent`）都可以通过
-`agentxx_async_start {tool, args, notify}` 放到后台跑；`notify` 默认 `true`，结果完成时
+`agentxx_async_start {tool, args, notify, delayMs}` 放到后台跑（唯一不允许的是
+`agentxx_async_start` 自己）；`notify` 默认 `true`，结果完成时
 **主动插回上下文**（轮次在跑就插到下一次 `ModelCallNode` 之前，轮次已结束就入队开新一轮）。
 `agentxx_subagent` 自己不再隐式异步（隐式异步已删除）：直接调用就是同步等结果，
 后台跑只是把同一组参数交给 `agentxx_async_start`。
 
 一次后台执行叫一个 async work，`kind` 区分 `agent`（启动一个 agent 跑任务）与
 `tool`（把一次工具调用放到后台跑）。
-
 ```text
 父会话 toolcall: agentxx_async_start {tool:"agentxx_subagent", args:{subagent:"task", message:"..."}}
   或:          agentxx_async_start {tool:"agentxx_execute_bash_command", args:{command:"...", timeout:0}}
@@ -339,6 +339,13 @@ content:
 - **排队与额度**：每队列（默认 = 创建者 agentId）一条 FIFO，额度
   `async_work.max_concurrent`（默认 3）；不设排队条数上限、不设嵌套深度上限、
   也没有全局并发上限；
+- **起跑延时**（`agentxx_async_start` 的 `delayMs`，> 0 才生效）：延时未到的条目
+  **状态仍是 `queued`**，`pump` 扫队列时跳过它 —— 它留在队里、不占名额，也不挡住
+  后面能跑的任务；到期由管理器的一条共享 `asio::steady_timer` 唤醒后重新 `pump`
+  （拿不到就绪名额时继续排队）。台账额外字段：`delayMs`（提交时的原值）与
+  `delayRemainingMs`（还在延时中才带）。`AgentHost::startAsyncWorkNow`
+  （模型侧 = `agentxx_async_await {start_now:true}`）可直接抹掉剩余延时让它即时起跑；
+  排队中取消仍直接出队；
 - **`asyncId` 就是任务 agent 的 sessionId**（一个值，不另造；`kind=tool` 的任务没有 agent，
   `asyncId` 仍然是它自己的会话 id，只是不派生 agent）；
 - **取消**：`agentxx_async_cancel {id}` / `{group:"running"}`（只能取消本会话启动的），
@@ -369,12 +376,16 @@ content:
   （追加字段，最多 10 条，为空不带）展示本会话创建的运行/排队/最近完成项；
   台账状态变化（提交 / 起跑 / 终态 / 排队中被取消）经
   `SessionInputSink::onAsyncWorksChanged` 通知创建者会话的驱动端点，端点合并后重推一次统计
-  （还有排队/运行中的条目时按秒续推，已跑时长跟着走）；
+  （还有排队/运行中的条目时按秒续推，已跑时长跟着走；**只有延时中的排队项不续推** ——
+  它的已跑时长不走，一个 1 小时的延时不该每秒推一次，到期时由管理器主动通知一次）；
   只展示不给取消入口（取消走 `agentxx_async_cancel`），详见 [tui.md](tui.md) §2.7。
 - **`kind=tool`（异步工具）**：`agentxx_async_start` 把**一次工具调用**放到后台
-  （`AsyncWorkSpec{toolName, toolArgs}`）。工具在**创建者**的**工具注册表**里查（插件与
-  动态注册的工具；lib 内置快工具由引擎独立持有，不在表里，不支持后台跑），找不到就在
-  运行期按失败收尾；参数原样转交，执行层补 `sessionId` / `tool_call_id`（与前台调用一致，
+  （`AsyncWorkSpec{toolName, toolArgs}`）。工具在**创建者**身上按名字查，两个来源都算：
+  内置/中间件工具（`share_store` / 事件发布 / 后台任务族 / `agentxx_subagent` 之外那些
+  中间件贡献的工具）由执行图引擎持有，经 `AgentContext::builtinToolIndex` 拿到（工具对象
+  归引擎所有，任务期间先锁住 `AgentContext::engine` 再解引用，引擎没了按失败收尾）；
+  插件与动态注册的工具在 `AgentContext::toolRegistry` 里（shared_ptr 保活）。两处都没有时
+  运行期按失败收尾。参数原样转交，执行层补 `sessionId` / `tool_call_id`（与前台调用一致，
   下游工具会读这两个字段）。**权限在提交时按目标工具问一次**（`Topic::ToolPermissionCheck`，
   与前台同一套中间件）—— 否则模型只要拿到 `agentxx_async_start` 的调用权就能绕过目标工具
   自己的限制；后台执行期间不再问人。取消是尽力而为：执行层每 50 ms 看一次取消令牌，
@@ -383,6 +394,9 @@ content:
   `co_spawn` 必须传**可调用对象**而不是内联调用的临时闭包 —— lambda 协程帧只存闭包
   指针，临时闭包在语句结束即析构，后台协程恢复后访问它捕获的 `args` / `tool` 就是
   use-after-free（测试 `async_tools` 的 `test_tool_closure_lifetime` 覆盖这条路径）。
+  **唯一不给异步启动的工具是 `agentxx_async_start` 自己**（套自己只是递归地再提交一条
+  同样的任务）；`agentxx_async_query` / `_await` / `_cancel` / `_emit` 等其余后台任务工具
+  都允许，等同于"在后台跑一次这个工具调用"。
   插件侧同一能力走 `submit_async_work` 的追加字段 `tool_name` / `tool_args_json`
   （旧布局填不出来时按 `ERR_ARG` 拒）。
 - **`kind=agent`（子代理）**：`agentxx_async_start {tool:"agentxx_subagent", args:{...}}`

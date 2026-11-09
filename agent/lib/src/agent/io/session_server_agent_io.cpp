@@ -2840,9 +2840,19 @@ bool SessionServerAgentIO::hasActiveAsyncWorks() const {
         return false;
     }
     // 只数排队与运行中的条目 (includeFinished=false): 完成态不再变化, 不必续推
+    // - 还在延时中的排队项不算"活动": 它的已跑时长不会走, 一个 1 小时的延时
+    //   不该让端点每秒推一次 (延时到期时任务管理器会主动通知一次)
     const auto works
-        = host->asyncWorksJson({}, config_.sessionId, /*includeFinished=*/false, 1);
-    return works.size() > 0;
+        = host->asyncWorksJson({}, config_.sessionId, /*includeFinished=*/false, 50);
+    for (const auto& item : works) {
+        if (item.value("state", std::string{}) == "running") {
+            return true;
+        }
+        if (item.value("delayRemainingMs", int64_t{0}) <= 0) {
+            return true;
+        }
+    }
+    return false;
 }
 
 WireModelInfo SessionServerAgentIO::buildModelInfo(std::string_view sessionId) {

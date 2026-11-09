@@ -392,6 +392,10 @@ bool AgentHost::cancelAsyncWork(std::string_view asyncId) {
     return asyncWork_ ? asyncWork_->cancel(asyncId) : false;
 }
 
+bool AgentHost::startAsyncWorkNow(std::string_view asyncId) {
+    return asyncWork_ ? asyncWork_->startNow(asyncId) : false;
+}
+
 size_t AgentHost::cancelAsyncWorks(const std::shared_ptr<AgentContext>& creator) {
     return asyncWork_ ? asyncWork_->cancelByCreator(creator) : 0;
 }

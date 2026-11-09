@@ -475,15 +475,15 @@ asio::awaitable<void> test_start_errors() {
             tool,
             Json{{"tool", "at_test_sleep"}, {"args", "nope"}, {"sessionId", fx->sessionId}}
         ));
-        // 不允许把后台任务工具本身套进去
+        // 只能拦"把本工具自己套进去"
         texts.push_back(co_await execTool(
             tool,
             Json{{"tool", "agentxx_async_start"}, {"sessionId", fx->sessionId}}
         ));
-        // 工具不在注册表里 (含 lib 内置工具)
+        // 不存在的工具名 (既不是内置, 也不在动态注册表里)
         texts.push_back(co_await execTool(
             tool,
-            Json{{"tool", "agentxx_share_store"}, {"sessionId", fx->sessionId}}
+            Json{{"tool", "agentxx_no_such_tool"}, {"sessionId", fx->sessionId}}
         ));
         // 子代理缺 subagent / 缺 message
         texts.push_back(co_await execTool(
@@ -503,13 +503,223 @@ asio::awaitable<void> test_start_errors() {
     XX_TEST_EXPECT_TRUE(texts[1].starts_with("[threw] "));
     XX_TEST_EXPECT_TRUE(contains(texts[1], "args"));
     XX_TEST_EXPECT_TRUE(texts[2].starts_with("[threw] "));
-    XX_TEST_EXPECT_TRUE(contains(texts[2], "background-task tool"));
+    XX_TEST_EXPECT_TRUE(contains(texts[2], "itself"));
     XX_TEST_EXPECT_TRUE(texts[3].starts_with("[threw] "));
-    XX_TEST_EXPECT_TRUE(contains(texts[3], "not in the tool registry"));
+    XX_TEST_EXPECT_TRUE(contains(texts[3], "not available"));
     XX_TEST_EXPECT_TRUE(texts[4].starts_with("[threw] "));
     XX_TEST_EXPECT_TRUE(contains(texts[4], "subagent"));
     XX_TEST_EXPECT_TRUE(texts[5].starts_with("[threw] "));
     XX_TEST_EXPECT_TRUE(contains(texts[5], "message"));
+    co_return;
+}
+
+/// 4b. 内置工具与其他后台任务管理工具也能后台跑
+/// - 内置工具由执行图引擎持有, 不在动态工具注册表里 (以前会被拒绝)
+/// - `agentxx_async_query` 这类后台任务管理工具同样放行 (只拦 `agentxx_async_start`)
+asio::awaitable<void> test_start_builtin_and_async_tools() {
+    auto fx = std::make_shared<AtFixture>();
+    XX_TEST_EXPECT_TRUE(buildFixture(fx));
+
+    agentxx::tools::AsyncStartTool start{fx->ctx()};
+    std::string                     shareText;
+    std::string                     shareId;
+    std::string                     queryText;
+    std::string                     queryId;
+
+    XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
+        // 内置工具: share_store 在后台写一条
+        shareText = co_await execTool(
+            start,
+            Json{
+                {"tool",      "agentxx_share_store"                     },
+                {"args",      Json{{"opt", "new"}, {"text", "bg builtin"}}},
+                {"notify",    false                                     },
+                {"sessionId", fx->sessionId                             },
+            }
+        );
+        shareId = parseAsyncId(shareText);
+        if (shareId.empty()) {
+            co_return false;
+        }
+        if (!co_await waitUntil([&] {
+                return fx->host->asyncWorkJson(shareId).value("state", std::string{}) == "done";
+            })) {
+            co_return false;
+        }
+        // 另一张后台任务管理工具: query 在后台跑
+        queryText = co_await execTool(
+            start,
+            Json{
+                {"tool",      "agentxx_async_query"        },
+                {"args",      Json{{"group", "all"}}       },
+                {"notify",    false                        },
+                {"sessionId", fx->sessionId                },
+            }
+        );
+        queryId = parseAsyncId(queryText);
+        if (queryId.empty()) {
+            co_return false;
+        }
+        co_return co_await waitUntil([&] {
+            return fx->host->asyncWorkJson(queryId).value("state", std::string{}) == "done";
+        });
+    }));
+
+    XX_TEST_EXPECT_TRUE(contains(shareText, "tool=agentxx_share_store"));
+    XX_TEST_EXPECT_TRUE(contains(queryText, "tool=agentxx_async_query"));
+    const auto shareEntry = fx->host->asyncWorkJson(shareId);
+    XX_TEST_EXPECT_EQ(shareEntry.value("state", std::string{}), std::string{"done"});
+    // share_store 的 new 返回 {"id":N}
+    XX_TEST_EXPECT_TRUE(contains(shareEntry.value("result", std::string{}), "\"id\""));
+    const auto queryEntry = fx->host->asyncWorkJson(queryId);
+    XX_TEST_EXPECT_EQ(queryEntry.value("state", std::string{}), std::string{"done"});
+    XX_TEST_EXPECT_TRUE(
+        contains(queryEntry.value("result", std::string{}), "[Async tasks] group=all")
+    );
+    co_return;
+}
+
+/// 4c. delayMs: 延时未到一直排队中, 到期自己起跑; 且不阻塞同队列其他任务
+asio::awaitable<void> test_delay() {
+    auto fx = std::make_shared<AtFixture>();
+    XX_TEST_EXPECT_TRUE(buildFixture(fx));
+
+    agentxx::tools::AsyncStartTool start{fx->ctx()};
+    agentxx::tools::AsyncQueryTool query{fx->ctx()};
+    std::string                     delayedText;
+    std::string                     delayedId;
+    std::string                     fastId;
+    std::string                     stateWhenFastDone;
+    std::string                     detailWhileDelayed;
+    int64_t                         delayMsOnEntry = 0;
+    int64_t                         remainingWhileDelayed = 0;
+    int                             callsWhileDelayed = 0;
+
+    XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
+        // 延时 400ms 的任务
+        delayedText = co_await execTool(
+            start,
+            Json{
+                {"tool",      "at_test_sleep"           },
+                {"args",      Json{{"sleepMs", 5}}      },
+                {"delayMs",   400                        },
+                {"notify",    false                      },
+                {"sessionId", fx->sessionId              },
+            }
+        );
+        delayedId = parseAsyncId(delayedText);
+        // 同队列的普通任务: 不该被延时项挡住
+        fastId = parseAsyncId(co_await execTool(
+            start,
+            Json{
+                {"tool",      "at_test_sleep"      },
+                {"args",      Json{{"sleepMs", 5}} },
+                {"notify",    false                },
+                {"sessionId", fx->sessionId        },
+            }
+        ));
+        if (delayedId.empty() || fastId.empty()) {
+            co_return false;
+        }
+        if (!co_await waitUntil([&] {
+                return fx->host->asyncWorkJson(fastId).value("state", std::string{})
+                       == "done";
+            })) {
+            co_return false;
+        }
+        // fast 已完成, 延时项应还在排队中
+        stateWhenFastDone
+            = fx->host->asyncWorkJson(delayedId).value("state", std::string{});
+        const auto entry = fx->host->asyncWorkJson(delayedId);
+        delayMsOnEntry   = entry.value("delayMs", int64_t{0});
+        remainingWhileDelayed = entry.value("delayRemainingMs", int64_t{0});
+        callsWhileDelayed     = fx->sleepTool->callCount();
+        detailWhileDelayed    = co_await execTool(
+            query,
+            Json{{"id", delayedId}, {"sessionId", fx->sessionId}}
+        );
+        // 到期后自动起跑
+        co_return co_await waitUntil([&] {
+            return fx->host->asyncWorkJson(delayedId).value("state", std::string{})
+                   == "done";
+        }, 8000);
+    }));
+
+    XX_TEST_EXPECT_TRUE(delayedText.starts_with("[Async started] id="));
+    XX_TEST_EXPECT_TRUE(contains(delayedText, "Starts in"));
+    XX_TEST_EXPECT_EQ(stateWhenFastDone, std::string{"queued"});
+    XX_TEST_EXPECT_EQ(delayMsOnEntry, int64_t{400});
+    XX_TEST_EXPECT_TRUE(remainingWhileDelayed > 0);
+    XX_TEST_EXPECT_EQ(callsWhileDelayed, 1); // 只有 fast 跑过
+    XX_TEST_EXPECT_TRUE(contains(detailWhileDelayed, "state=queued"));
+    XX_TEST_EXPECT_TRUE(contains(detailWhileDelayed, "delay="));
+    XX_TEST_EXPECT_EQ(
+        fx->host->asyncWorkJson(delayedId).value("state", std::string{}),
+        std::string{"done"}
+    );
+    co_return;
+}
+
+/// 4d. 等待延时中的任务: start_now 抹掉剩余延时; 不给时直接给说明不挂到超时
+asio::awaitable<void> test_await_start_now() {
+    auto fx = std::make_shared<AtFixture>();
+    XX_TEST_EXPECT_TRUE(buildFixture(fx));
+
+    agentxx::tools::AsyncStartTool start{fx->ctx()};
+    agentxx::tools::AsyncAwaitTool awaitTool{fx->ctx()};
+    std::string                     earlyText;
+    std::string                     doneText;
+    std::string                     asyncId;
+    int64_t                         earlyElapsedMs = 0;
+
+    XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
+        asyncId = parseAsyncId(co_await execTool(
+            start,
+            Json{
+                {"tool",      "at_test_sleep"                    },
+                {"args",      Json{{"sleepMs", 5}}               },
+                {"delayMs",   30000                              },
+                {"notify",    false                              },
+                {"sessionId", fx->sessionId                       },
+            }
+        ));
+        if (asyncId.empty()) {
+            co_return false;
+        }
+        // 剩余延时 (30s) 远大于 timeout_ms: 不应挂到超时, 直接给说明
+        const auto startedAt = std::chrono::steady_clock::now();
+        earlyText            = co_await execTool(
+            awaitTool,
+            Json{{"id", asyncId}, {"timeout_ms", 100}, {"sessionId", fx->sessionId}}
+        );
+        earlyElapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                             std::chrono::steady_clock::now() - startedAt
+        )
+                             .count();
+        // start_now: 抹掉剩余延时, 立即起跑并拿到结果
+        doneText = co_await execTool(
+            awaitTool,
+            Json{
+                {"id",         asyncId         },
+                {"start_now",  true            },
+                {"timeout_ms", 8000            },
+                {"sessionId",  fx->sessionId   },
+            }
+        );
+        co_return true;
+    }));
+
+    XX_TEST_EXPECT_TRUE(contains(earlyText, "state=queued"));
+    XX_TEST_EXPECT_TRUE(contains(earlyText, "start delay"));
+    XX_TEST_EXPECT_TRUE(contains(earlyText, "start_now"));
+    // 说明是"直接给"的, 不是等满 timeout 后给的超时文本
+    XX_TEST_EXPECT_FALSE(contains(earlyText, "await timeout"));
+    XX_TEST_EXPECT_TRUE(earlyElapsedMs < 2000);
+    XX_TEST_EXPECT_TRUE(contains(doneText, "tool says hi"));
+    XX_TEST_EXPECT_EQ(
+        fx->host->asyncWorkJson(asyncId).value("state", std::string{}),
+        std::string{"done"}
+    );
     co_return;
 }
 
@@ -825,6 +1035,9 @@ asio::awaitable<TestResult> run_async_tools_tests() {
     co_await test_start_notify_off();
     co_await test_start_subagent_target();
     co_await test_start_errors();
+    co_await test_start_builtin_and_async_tools();
+    co_await test_delay();
+    co_await test_await_start_now();
     co_await test_query();
     co_await test_await();
     co_await test_cancel();

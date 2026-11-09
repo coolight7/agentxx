@@ -772,6 +772,11 @@ asio::awaitable<void> BaseAgent::init() {
         .rollback =
             [this]() {
                 engine.reset();
+                if (agentContext) {
+                    // 索引指向的工具随引擎一起释放
+                    agentContext->builtinToolIndex.clear();
+                    agentContext->engine.reset();
+                }
             },
     });
 
@@ -839,10 +844,19 @@ asio::awaitable<void> BaseAgent::init() {
             }
 
             auto crudeTools = std::vector<std::unique_ptr<neograph::Tool>>{};
+            crudeTools.reserve(tools.size());
+            // 内置工具索引 (后台任务 `kind=tool` 按名字取工具): 工具对象接下来归图引擎
+            // 所有 (unique_ptr 转移不挪对象地址), 这里只留指针 + 引擎弱引用作有效期凭据
+            // (先锁引擎再解引用, 见 [agent::AsyncWorkManager] 的工具任务路径)
+            agentContext->builtinToolIndex.clear();
             for (auto& tool : tools) {
+                if (!tool->get_name().empty()) {
+                    agentContext->builtinToolIndex[tool->get_name()] = tool.get();
+                }
                 crudeTools.push_back(std::move(tool));
             }
             engine->own_tools(std::move(crudeTools));
+            agentContext->engine = engine;
             co_return;
         },
     });

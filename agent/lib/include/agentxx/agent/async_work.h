@@ -3,6 +3,7 @@
 #include "agentxx/event/events.h"
 #include "agentxx/event/event_stream.h"
 #include "asio/awaitable.hpp"
+#include "asio/steady_timer.hpp"
 #include "utilxx_base/json.h"
 #include <chrono>
 #include <cstdint>
@@ -130,6 +131,13 @@ struct AsyncWorkSpec {
     std::chrono::milliseconds           interruptTimeout{0};
     std::chrono::milliseconds           timeLimit{0};
 
+    /// 起跑延时 (毫秒; <= 0 = 不延时)
+    /// - 到点之前任务**一直算排队中** (`queued`), 只是不会被 `pump` 拉起;
+    ///   它也不挡后面排队的任务 —— 延时项留在队列里被跳过, 名额让给能跑的
+    /// - 剩余延时可被 `AgentHost::startAsyncWorkNow` 提前抹掉 (见
+    ///   `agentxx_async_await` 的 `start_now`)
+    std::chrono::milliseconds delay{0};
+
     /// 结果: 事件名固定 `agentxx.agent.async.done`, 此处只决定是否额外投递会话
     /// - 空 = 不投递; `next-step` / `inject` / `next-turn`
     std::string notifyDelivery;
@@ -144,10 +152,13 @@ struct AsyncWorkSpec {
 
     /// ---- 以下两项只在 `kind == Tool` 时使用 ----
     ///
-    /// 要后台执行的工具名 (在**创建者**的工具注册表里查; 表里没有时任务直接失败)。
-    /// 只有插件工具与动态注册的工具在表里; lib 内置快工具由引擎独立持有, 不支持后台跑。
-    /// 工具参数原样传给它 —— 与前台调用同一套执行语义 (权限已在提交时问过, 结果压缩
-    /// 在事件/台账侧按大小截断)。
+    /// 要后台执行的工具名, 在**创建者**身上按名字查, 两个来源都算:
+    /// - 内置 / 中间件工具 (share_store / 事件发布 / 后台任务族等) 由执行图引擎持有,
+    ///   经 `AgentContext::builtinToolIndex` 拿到 (任务期间锁住 `AgentContext::engine`);
+    /// - 插件与动态注册的工具在 `AgentContext::toolRegistry` 里。
+    ///
+    /// 两处都查不到 (或创建者已释放) 时任务直接失败。工具参数原样传给它 —— 与前台调用
+    /// 同一套执行语义 (权限已在提交时问过, 结果压缩在事件/台账侧按大小截断)。
     std::string       toolName;
     utilxx_base::Json toolArgs = utilxx_base::Json::object();
 
@@ -195,6 +206,8 @@ struct AsyncWorkSubmitResult {
     std::string    asyncId; ///< `async-<n>`; 同时是该任务 agent 的 sessionId
     AsyncWorkState state   = AsyncWorkState::Queued;
     size_t         queueAhead = 0;
+    /// 实际生效的起跑延时 (毫秒; 0 = 不延时)
+    int64_t        delayMs = 0;
     std::string    error; ///< accepted=false 时的原因
 };
 
@@ -214,6 +227,8 @@ struct AsyncWorkEntry {
     int64_t        createdAtMs  = 0;
     int64_t        startedAtMs  = 0;
     int64_t        finishedAtMs = 0;
+    /// 提交时的起跑延时原值 (毫秒; 0 = 不延时; 台账展示用)
+    int64_t        delayMs = 0;
     std::string    resultText; ///< 截断后的结果正文
     std::string    error;
     bool           hasError  = false;
@@ -232,6 +247,8 @@ struct AsyncWorkEntry {
     size_t                                        resultMaxBytes  = 8192;
     /// 台账清扫时刻 (steady 毫秒; 0 = 不必清扫)
     int64_t                                       lingerDeadlineSteadyMs = 0;
+    /// 起跑到期时刻 (steady 毫秒; 0 = 不延时; 到期后 `pump` 才会拉起它)
+    int64_t                                       delayUntilSteadyMs = 0;
 };
 
 /// 异步任务管理器 (进程一份, 挂在 [AgentHost] 上)
@@ -257,6 +274,11 @@ public:
 
     /// 取消单条 (运行中 → 置取消令牌; 排队中 → 直接出队)
     bool cancel(std::string_view asyncId);
+
+    /// 抹掉一条排队中任务的剩余延时, 让它在本次 pump 里就能起跑
+    /// - 只对 `Queued` 条目有效 (运行中/终态/不存在返回 false)
+    /// - 原本就没有延时也返回 true (调用方语义是"让它立刻排队起跑")
+    bool startNow(std::string_view asyncId);
 
     /// 按创建者批量取消 (`creator` 为空 = 全部)
     size_t cancelByCreator(const std::shared_ptr<AgentContext>& creator);
@@ -290,7 +312,20 @@ public:
 private:
 
     /// 调度一条队列 (在容器 io 线程上执行)
+    /// - 一次把名额允许的条目都拉起; **跳过延时未到的条目** (它们留在队列里)
     void pump(std::string_view queueKey);
+
+    /// 所有队列各推一次 (延时唤醒定时器到点时用)
+    void pumpAllQueues();
+
+    /// 排定下一次延时唤醒 (容器 io 线程; 没有待唤醒项时取消定时器)
+    void armDelayTimer();
+
+    /// 延时唤醒定时器到点 (容器 io 线程)
+    void onDelayTimerFired();
+
+    /// 当前有排队条目的队列键快照
+    std::vector<std::string> queueKeysSnapshot() const;
 
     /// 台账清扫 (结束超过 linger 的条目); 调用方必须已持锁
     void sweepLingerLocked();
@@ -308,6 +343,14 @@ private:
     /// 每队列运行中的条数
     std::map<std::string, size_t, std::less<>> runningPerQueue_;
     uint64_t                                   seq_ = 0;
+
+    /// ---- 以下两项只在容器 io 线程访问 (pump 的调用点都是 post 过来的) ----
+
+    /// 延时唤醒定时器 (共用一条: 到点后按需重排)
+    /// - 句柄只持容器弱引用, 不让 host → manager → timer → handler → host 成环
+    std::unique_ptr<asio::steady_timer> delayTimer_;
+    /// 已排定的唤醒时刻 (steady 毫秒; 0 = 未排)
+    int64_t                             delayTimerDeadlineMs_ = 0;
 };
 
 } // namespace agent
