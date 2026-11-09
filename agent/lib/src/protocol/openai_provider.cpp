@@ -1412,6 +1412,10 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStream(
                 "OpenAIProvider::doStream [HttpClient::requestSseAsync] Exception: {}",
                 errinfo
             );
+            // 用户取消优先于收尾: 取消后不得再把本次生成当作完整结果继续执行
+            if (params.cancel_token) {
+                params.cancel_token->throw_if_cancelled("llm stream");
+            }
             // 已收到结束标记或结束原因, 说明业务数据已生成完, 连接层在收尾阶段的错误
             // (如 ssl stream_truncated: 对端未发 close_notify 就关闭连接, 或对端不发
             // 结束标记但保持连接) 不应使请求失败, 也不应丢掉已完整的 tool_calls
@@ -1585,6 +1589,10 @@ asio::awaitable<neograph::ChatCompletion> OpenAIProvider::doStreamResponses(
                 "OpenAIProvider::doStreamResponses [HttpClient::requestSseAsync] Exception: {}",
                 errinfo
             );
+            // 用户取消优先于收尾
+            if (params.cancel_token) {
+                params.cancel_token->throw_if_cancelled("llm stream");
+            }
             // 已收到 response.completed 说明业务数据已全部送达, 连接层在收尾阶段的错误
             // (如 ssl stream_truncated) 不应使请求失败
             if (doneReceived) {

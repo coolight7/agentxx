@@ -663,6 +663,10 @@ asio::awaitable<neograph::ChatCompletion> AnthropicProvider::doStream(
             co_return true;
         },
         [&](std::string errmsg) -> asio::awaitable<bool> {
+            // 用户取消优先于收尾: 取消后不得再把本次生成当作完整结果继续执行
+            if (params.cancel_token) {
+                params.cancel_token->throw_if_cancelled("llm stream");
+            }
             if (messageStopReceived) {
                 XX_LOGW(
                     "LLM stream transport error after message_stop, ignored | model={} err={}",

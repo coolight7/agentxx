@@ -494,9 +494,9 @@ struct StreamProgress {
 ///   让 HTTP 层从下一读开始改用该上限
 inline std::chrono::milliseconds
     streamFinishGraceTimeout(const std::chrono::milliseconds readChunkTimeout) noexcept {
-    const auto fifth  = readChunkTimeout / 5;
-    const auto floorT = std::min(std::chrono::milliseconds{std::chrono::seconds{10}}, readChunkTimeout);
-    return std::max(floorT, fifth);
+    const auto fifth = readChunkTimeout / 5;
+    const auto upper = std::chrono::milliseconds{std::chrono::seconds{10}};
+    return std::max(std::min(upper, readChunkTimeout), fifth);
 }
 
 /// 发送请求体的期限: `max(60s, ceil(body/16KiB) 秒)`
@@ -509,10 +509,11 @@ inline std::chrono::milliseconds llmSendTimeout(const size_t bodyBytes) noexcept
     return std::max(std::chrono::milliseconds{std::chrono::seconds{60}}, bySizeMs);
 }
 
-/// 组装流式失败的诊断后缀 (单行 ASCII, 直接拼在错误文本末尾)
+/// 组装流式失败的诊断后缀 (单行, 直接拼在错误文本末尾)
 /// 例: ` | stream: recv=20480B events=133 idle=60003ms finish=tool_calls
 ///        tools=1 args=2048B name=agentxx_filesystem_write`
-/// - 全 ASCII 且不含状态码/网络类关键词: 不影响 [classifyLlmError] 判类
+/// - 我们自己生成的字段全是 ASCII: 不影响 [classifyLlmError] 判类
+///   (`finish` 是上游给的原文, 内容不受控)
 /// - `idle` 为距最近一次数据的时长 (从未收到数据 = 距请求发出)
 inline std::string streamFailureSuffix(
     const StreamProgress&                    progress,
@@ -521,8 +522,8 @@ inline std::string streamFailureSuffix(
     // 参数总字节数与工具名 (只取第一个有名字的调用; 名字截断避免错误文本过长)
     size_t           argsBytes = 0;
     std::string_view firstName{};
-    for (const auto& [idx, tc] : toolCalls) {
-        (void)idx;
+    for (const auto& entry : toolCalls) {
+        const auto& tc = entry.second;
         argsBytes += tc.arguments.size();
         if (firstName.empty() && !tc.name.empty()) {
             firstName = tc.name;
