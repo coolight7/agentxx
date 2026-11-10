@@ -98,7 +98,7 @@ permission:
   #     - "/home/user/.ssh"
 
 subagent:
-  enable: false # 未完善
+  enable: true
 
 # === 模型列表 (model.list) 与各用途使用的模型 (model.use)
 model:
