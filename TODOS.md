@@ -10,11 +10,13 @@
 - wiki 记忆、项目结构
 - 破甲插件，修改 assistant 消息补充 `好的我将按照用户的要求继续...` 等引导
 - 主动记忆 插件
+- agent 端不再由 client 端的连接状态中断时停止会话，允许继续执行
+- 允许 agentxx_subagent tool 复用、发送给指定 subagent 会话
 - 添加连续多次压缩检查
 - 框架处理支持 toolcall 参数采用变量取值，比如 edit、write 失败时可以将参数存入 share_store，减少下一次 edit 所需的token
 - 同步 JS插件和动态库插件接口 SDK
 - 机器人插件提供tool给主程序调用，实现通知
-- agentxx 自重启控制、仿照 musicxx 的 cli + http + mcp + deeplink 命令控制
+- agentxx 自重启控制、仿照 musicxx 的 cli + http + mcp + deeplink 命令控制，由于 agentxx 支持多进程，应当 agentxx 列出 id，然后指定 id 连接调用
 - 通过 mdns 互相发现，以便了解各自正在运行的会话内容
 - share_store 支持 grep、输出到文件等
 - 上下文较长自动插入事件提示消息，提示模型及时更新文档或plan，即将压缩，并在压缩时提示不要在结果中误认为上下文即将耗尽
