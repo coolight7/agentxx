@@ -1582,7 +1582,6 @@ ExternalProject_Add(
 ExternalProject_Add(
   cxx_utilxx_repo
   DEPENDS
-    cxx_pluginxx_repo
     cxx_utilxx_base_repo
     fmt_repo
     html2md_repo

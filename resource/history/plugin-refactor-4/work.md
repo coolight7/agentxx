@@ -147,7 +147,28 @@
 
 ### 步骤 4：网络
 
-- 状态：待开始（`<应用名>.net` 的 IID / 接口名已就位，`PluginNetService` 与服务表分发未实现）
+- 状态：待开始（`<应用名>.net` 的 IID / 接口名已就位，`g_ifaceNet` 与服务表分发未实现）
+- **已完成：`cxx_utilxx` 的偏层清理（按用户要求先做）**
+  - 分析结论: `utilxx::PluginNetHub` 的本体是**通用网络管理器** —— 它的输入只有
+    “属主 id + op + 参数 JSON”, 输出只有“结果 JSON + 事件”, 内部不碰任何插件 ABI 类型;
+    属于插件专有的只有三处**边缘耦合**: ① 公开头 `#include "pluginxx/api/net.h"` 只为拿结果码;
+    ② 参数/成员名叫 `pluginId` / `shutdownPlugin` / `allPlugins` / `*PerPlugin`;
+    ③ 注释里到处写“插件”。因此保留在 `cxx_utilxx` 并改成通用名，**不迁移**。
+  - `include/utilxx/plugin_net_hub.h` → `net_hub.h`，`plugin_net_hub_tls.*` → `net_hub_tls.*`;
+    类 `PluginNetHub` → `NetHub`；`pluginId` → `ownerId`(成员) / `owner`(参数)，
+    `shutdownPlugin` → `shutdownOwner`，`allPlugins` → `allOwners`，`*PerPlugin` → `*PerOwner`，
+    `closeByPlugin` → `closeByOwner`，事件原因 `plugin_unloaded` → `owner_unloaded`
+  - 结果码不再借用插件 ABI 的宏: 新增 `utilxx::net::Ok/ErrArg/ErrState/ErrJson/ErrNotFound/
+    ErrTimeout/ErrPermission/ErrQueueFull/ErrNoMemory/ErrInternal` (
+    数值不变，方便主程序适配层一一对应 `PLUGINXX_NET_*`)
+  - `CMakeLists.txt` 去掉 `find_package(cxx_pluginxx)` 与 `cxx_pluginxx_static` 链接；
+    顶层 `agent/CMakeLists.txt` 的 `cxx_utilxx_repo` 不再 `DEPENDS cxx_pluginxx_repo`;
+    README 同步（“不依赖任何插件/框架头文件 —— `net_hub` 只认属主 id”）
+  - 插件面适配（`<应用名>.net` 表的 `g_ifaceNet`、`PluginxxOperatorNotify` → `NetHub::DoneFn`、
+    `plugin.<插件 id>.net` 广播）**留在主程序**，属本步骤待做的部分
+  - 验证: `cxx_utilxx_repo` 编过（`net_hub.cpp` 本身无警告；顺手修了机器改名弄出来的
+    `owner != owner` 永假比较与 `co_await expected` 的 C4834）；`agentxx_lib_repo` /
+    `agentxx_test_repo` 编过；`plugins` 610 / `plugin_point` 63 / `boundaries` 19 全绿
 
 ### 步骤 5：client 侧
 
