@@ -441,6 +441,15 @@ public:
     /// 从频道 id 里取插件名 (`plugin.<插件名>.rest` → `<插件名>`; 其他形式返回空)
     static std::string pluginNameOfBroadcast(std::string_view id);
 
+    /// 频道未声明时按名字补一条声明 (幂等)
+    ///
+    /// - `plugin.<插件名>.*`: 属主就是名字里的插件 (它才能发布);
+    /// - 其他名字: 按主程序频道声明, 任何人可发 (跨端频道由另一端声明)。
+    ///
+    /// 用在“运行时替插件接受一条主题”的地方 (`register_trigger` / `runtime_emit_event`),
+    /// 免得插件发布自己的频道时被“属主不是它”拒掉。
+    void ensureTopicBroadcast(std::string_view id);
+
     /// 结束一条广播 (属主/应用可结束; 失败只记日志)
     void endBroadcastValue(std::string_view id, std::string_view reasonJson);
 

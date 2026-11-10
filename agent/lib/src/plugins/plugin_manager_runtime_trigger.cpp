@@ -171,14 +171,13 @@ int32_t PluginManager::runtimeRegisterTrigger(
     trigger->maxQueue   = spec->max_queue > 0 ? spec->max_queue : 20;
     trigger->delivery   = delivery;
 
-    // 触发器订阅的是广播频道 (与插件自己订阅是同一套): 频道未声明时先补一条
-    // 应用频道声明, 再按属主为空 (= 应用/主程序) 订阅
+    // 订阅前先补一条声明 (按名字定属主), 否则框架拒绝未声明频道的订阅
     auto registry = broadcasts();
     if (!registry) {
         err = "register_trigger: 本进程没有广播注册表";
         return AGENTXX_PLUGIN_RUNTIME_ERR_UNSUPPORTED;
     }
-    ensureBroadcast(trigger->topic, pluginxx::BroadcastCache_e::Latest, false, false);
+    ensureTopicBroadcast(trigger->topic);
     std::weak_ptr<PluginManager> weakSelf = weak_from_this();
     auto                         triggerId = trigger->triggerId;
     std::string                  subError;
@@ -248,6 +247,8 @@ int32_t
         return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
     }
     // 插件发事件 = 向广播频道发布: 与插件自己直接 publish 同一套校验 (只能写 plugin.*)
+    // 频道还没人声明时按名字补一条 (属主 = 名字里的插件), 否则这次发布会被“未声明”拒掉
+    ensureTopicBroadcast(topic);
     std::string publishError;
     const int   rc = publishBroadcastFrom(inst, topic, payload, &publishError);
     if (rc != PLUGINXX_RESULT_OK) {

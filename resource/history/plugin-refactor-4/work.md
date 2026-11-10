@@ -120,7 +120,14 @@
 
 ### 步骤 3：功能埋点
 
-- 状态：待开始（钩子 / 功能点 / 事件三张业务表仍是现状，见步骤 2 的偏差说明）
+- 状态：待开始（钩子 / 功能点 / 事件三张业务表仍是现状）。已先做完两侧的前提：
+  - 框架侧 `declarePoint` / `emitPointAsync` / `endPoint` 已可用（步骤 0 的 L4）；
+  - 主程序侧广播通道与中枢已开通，点 id 清单 `agentxx_point_ids.h` 已就位（未接调用点）
+- 顺手修的运行时问题（属步骤 2 的尾巴）：`runtime.register_trigger` / `runtime_emit_event`
+  在频道未声明时**按名字定属主**（`plugin.<名>.*` 归该插件），否则插件发布自己的频道
+  会被“属主不是它”拒成 `ERR_FAILED(-7)`（`plugin_agent_runtime` 14 条失败即此）；
+  新增 `PluginManager::ensureTopicBroadcast`，三处（触发器登记 / 运行时发事件 / 插件订阅）
+  共用一个声明规则
 
 ### 步骤 4：网络
 

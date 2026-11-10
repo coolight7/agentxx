@@ -88,6 +88,26 @@ std::string PluginManager::pluginNameOfBroadcast(std::string_view id) {
     return std::string{rest.substr(0, dot)};
 }
 
+void PluginManager::ensureTopicBroadcast(std::string_view id) {
+    if (id.empty() || !broadcasts_ || broadcasts_->declares(id)) {
+        return;
+    }
+    if (const auto owner = pluginNameOfBroadcast(id); !owner.empty()) {
+        pluginxx::BroadcastDecl decl;
+        decl.id      = std::string{id};
+        decl.owner   = owner;
+        decl.cache   = pluginxx::BroadcastCache_e::Latest;
+        decl.publish = pluginxx::BroadcastPublisher_e::Owner;
+        decl.scope   = pluginxx::BroadcastScope_e::App;
+        std::string err;
+        if (!broadcasts_->declare(decl, &err)) {
+            XX_LOGD("broadcast `{}` could not be declared: {}", id, err);
+        }
+        return;
+    }
+    ensureBroadcast(id, pluginxx::BroadcastCache_e::Latest, /*anyonePublish=*/true);
+}
+
 void PluginManager::declareBuiltinBroadcasts() {
     // 插件在加载阶段 (start) 就可能订阅这些频道, 而事件中枢要晚到 `init()` 才建出来,
     // 中枢的"按需声明"来不及 —— 未声明的频道订阅会被拒, 于是这里先声明好 (幂等)。
@@ -178,26 +198,11 @@ PluginxxSubscription* PluginManager::subscribeBroadcast(
     void(PLUGINXX_CALL* onEnd)(const PluginxxStringView* reasonJson, void* ud)
 ) {
     // 订阅一条还没人声明过的频道时先补声明 (框架要求"先声明再订阅"):
-    // - `agentxx.*` 是主程序频道: 按"任何人可发"补一条 (跨端频道由另一端声明);
-    // - `plugin.<插件名>.*` 是插件频道: 属主按名字推断, 发布权仍属那个插件
-    //   (JS 脚本一类调用方无法替别的插件声明, 只能由主程序补);
-    // - 其他名字不代劳 (订阅会带原因失败)。
-    if (!broadcastId.empty() && broadcasts_ && !broadcasts_->declares(broadcastId)) {
-        if (broadcastId.rfind("agentxx.", 0) == 0) {
-            ensureBroadcast(broadcastId, pluginxx::BroadcastCache_e::Latest, /*anyonePublish=*/true);
-        } else if (const auto owner = pluginNameOfBroadcast(broadcastId); !owner.empty()) {
-            pluginxx::BroadcastDecl decl;
-            decl.id      = std::string{broadcastId};
-            decl.owner   = owner;
-            decl.cache   = pluginxx::BroadcastCache_e::Latest;
-            decl.publish = pluginxx::BroadcastPublisher_e::Owner;
-            decl.scope   = pluginxx::BroadcastScope_e::App;
-            std::string err;
-            if (!broadcasts_->declare(decl, &err)) {
-                XX_LOGD("broadcast `{}` could not be declared: {}", broadcastId, err);
-            }
-        }
-    }
+    // `agentxx.*` 按"任何人可发"补一条 (跨端频道由另一端声明);
+    // `plugin.<插件名>.*` 的属主按名字推断, 发布权仍属那个插件
+    // (JS 脚本一类调用方无法替别的插件声明, 只能由主程序补);
+    // 其他名字不代劳 (订阅会带原因失败)。
+    ensureTopicBroadcast(broadcastId);
     return pluginxx::PluginHostCore<PluginInstance>::subscribeBroadcast(
         inst,
         scope,
