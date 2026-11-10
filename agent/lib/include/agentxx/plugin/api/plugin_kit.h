@@ -1472,7 +1472,7 @@ struct AsyncWorkOptions {
     /// 运行时限 (毫秒; 0 = 不限制): 计时从起跑开始, 排队与延时不算
     /// - `kind=agent`: 到点置取消令牌, 引擎在检查点停下
     /// - `kind=tool`: 到点只结束等待, 工具本体可能继续跑 (结果丢弃)
-    int64_t timeLimitMs        = 0;
+    int64_t runTimeoutMs       = 0;
     /// 起跑延时 (毫秒; 0 = 不延时): 到点之前任务一直是 `queued`, 不占名额
     /// - 提交后没有改延时的成员; 要改就取消后重新提交
     int64_t delayMs            = 0;
@@ -1521,7 +1521,7 @@ inline std::string submitAsyncWork(Ctx& ctx, const AsyncWorkOptions& opt, int32_
     spec.interrupt_policy     = opt.interruptPolicy;
     spec.session_store        = opt.sessionStore;
     spec.interrupt_timeout_ms = opt.interruptTimeoutMs;
-    spec.time_limit_ms        = opt.timeLimitMs;
+    spec.run_timeout_ms        = opt.runTimeoutMs;
     spec.session_id           = PluginStringView::from(opt.sessionId);
     spec.queue_key            = PluginStringView::from(opt.queueKey);
     spec.name                 = PluginStringView::from(opt.name);

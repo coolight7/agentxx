@@ -1113,7 +1113,8 @@ typedef struct AgentxxPluginAsyncWorkSpec {
     /// 运行时限 (`AsyncWorkSpec::runTimeout`): 从起跑算起, 0 = 不限
     /// - `kind=0` (agent): 到点置取消令牌, 引擎在检查点停下, 任务按失败收尾
     /// - `kind=1` (tool): 到点只结束等待, 工具本体可能继续跑 (结果丢弃)
-    int64_t time_limit_ms;
+    /// - 原名 `time_limit_ms`: 只改字段名, 类型与偏移未变 (旧插件编好的库照样能用)
+    int64_t run_timeout_ms;
     /// 创建者会话 (通道的会话): 结果事件与 HIL 都按它找创建者; 空 = 不关联会话
     PluginxxStringView session_id;
     /// 排队与额度分组; 空 = 创建者 agentId

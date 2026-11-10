@@ -605,9 +605,28 @@ void checkInterfaceTableQuadruple(const fs::path& root, Violations& v) {
             std::string_view rest{text};
             size_t           pos = 0;
             while (pos <= rest.size()) {
-                const auto  nl   = rest.find('\n', pos);
-                const auto  end  = (nl == std::string_view::npos) ? rest.size() : nl;
-                const auto  line = std::string{rest.substr(pos, end - pos)};
+                const auto nl  = rest.find('\n', pos);
+                const auto end = (nl == std::string_view::npos) ? rest.size() : nl;
+                // 一条 `#define` 允许用反斜杠折成多行: 先拼回一行再解析
+                std::string line{rest.substr(pos, end - pos)};
+                size_t      nextPos = (nl == std::string_view::npos) ? rest.size() : nl + 1;
+                const auto  trimEnd = [](std::string& s) {
+                    while (!s.empty() && (s.back() == ' ' || s.back() == '\t' || s.back() == '\r')) {
+                        s.pop_back();
+                    }
+                };
+                trimEnd(line);
+                while (!line.empty() && line.back() == '\\' && nextPos < rest.size()) {
+                    line.pop_back();
+                    trimEnd(line);
+                    const auto nl2  = rest.find('\n', nextPos);
+                    const auto end2 = (nl2 == std::string_view::npos) ? rest.size() : nl2;
+                    std::string part{rest.substr(nextPos, end2 - nextPos)};
+                    trimEnd(part);
+                    line += " ";
+                    line += part;
+                    nextPos = (nl2 == std::string_view::npos) ? rest.size() : nl2 + 1;
+                }
                 std::smatch m;
                 if (std::regex_search(line, m, defineRe) && m.size() > 2) {
                     const std::string name = m[1].str();
@@ -641,10 +660,10 @@ void checkInterfaceTableQuadruple(const fs::path& root, Violations& v) {
                         versions.push_back(body);
                     }
                 }
-                if (nl == std::string_view::npos) {
+                if (nextPos >= rest.size()) {
                     break;
                 }
-                pos = nl + 1;
+                pos = nextPos;
             }
         }
 

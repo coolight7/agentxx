@@ -157,6 +157,14 @@ Copy-Item agentxx_test_repo-prefix\src\agentxx_test_repo-build\Debug\agentxx_tes
    `agent/client` / `agent/plugins` / `agent/benchmark`（不含 `third_party`）共 **43 个文件、
    211 处**，无遗留 `R"(`；脚本对每个字面量校验正文里不出现 `)_"`。测试目录（`agent/test`）
    未改（用户只要主程序与插件），如需可同样批量处理。
+5. **插件面字段改名**: `AgentxxPluginAsyncWorkSpec::time_limit_ms` → `run_timeout_ms`,
+   SDK `AsyncWorkOptions::timeLimitMs` → `runTimeoutMs`（与模型侧 `runTimeoutMs` /
+   C++ `AsyncWorkSpec::runTimeout` 同一套命名）。只改字段名: 类型与偏移未变,
+   `AGENTXX_PLUGIN_ASYNC_WORK_SPEC_BASELINE_SIZE` 仍停在 `offsetof(tool_name)`,
+   已编好的旧插件库不受影响。
+6. **`boundaries` 兼容反斜杠续行的 `#define`**: 规则 9/10 原来按物理行解析 `X_BASELINE_SIZE`,
+   宏被格式化工具折成两行时会被判成“不是 sizeof/offsetof 形态”（实测过一次）。现在先把
+   `\` 续行拼回一行再解析；已用“临时把宏折成两行 → 跑 boundaries → 恢复”验证。
 
 验证（同上流程 + 重编全部插件）：
 

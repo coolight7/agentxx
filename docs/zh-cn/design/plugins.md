@@ -2005,7 +2005,7 @@ plugin:
   `CANCELED` 四个阶段, `payload_json` 带 `asyncId` / `kind` / `name` / `queueAhead` /
   `delayMs` (仅 `QUEUED` 阶段) / `hasError` / `canceled` / `error`; 实例释放/禁用后不再进入插件代码;
 - 三个时限与起跑延时都在接口表里 (尾部追加字段, 旧插件填短结构体时读不到 = 不限):
-  `time_limit_ms` = 运行时限 (SDK `AsyncWorkOptions::timeLimitMs`, 从起跑算起): agent 任务到点
+  `run_timeout_ms` = 运行时限 (SDK `AsyncWorkOptions::runTimeoutMs`, 从起跑算起): agent 任务到点
   被引擎在检查点停下, tool 任务到点只结束等待 (工具本体可能继续跑, 结果丢弃);
   `delay_ms` = 起跑延时 (SDK `delayMs`), 到点之前一直是 `queued`、不占名额;
   `queue_timeout_ms` = 排队时限 (SDK `queueTimeoutMs`), 计时起点是延时结束那一刻。
