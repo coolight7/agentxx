@@ -73,16 +73,19 @@ int32_t PLUGINXX_CALL fakeRegisterHook(
     return 0;
 }
 
-int32_t PLUGINXX_CALL fakeRegisterCapabilityEx(
+/// 能力登记 (新形状: spec 里带开始/取消处理器与上下文)
+int32_t PLUGINXX_CALL fakeRegisterCapability(
     const PluginxxHost*,
-    const PluginxxStringView*,
-    PluginxxCapabilityStartFunction start,
-    PluginxxOperatorCancelFunction  cancel,
-    void*                           ctx
+    const PluginxxScopeRef*,
+    const PluginxxCapabilitySpec* spec,
+    PluginxxString*
 ) {
-    g_captured.capStart      = start;
-    g_captured.capCancel     = cancel;
-    g_captured.capUd         = ctx;
+    if (!spec) {
+        return -1;
+    }
+    g_captured.capStart      = spec->run_start;
+    g_captured.capCancel     = spec->cancel;
+    g_captured.capUd         = spec->user_data;
     g_captured.hasCapability = true;
     return 0;
 }
@@ -117,12 +120,14 @@ const AgentxxPluginHooksIface g_fakeHooks = {
 const PluginxxCapabilitiesIface g_fakeCapabilities = {
     /* version */ PLUGINXX_IFACE_CAPABILITIES_VERSION,
     /* struct_size */ sizeof(PluginxxCapabilitiesIface),
-    /* register_capability */ nullptr,
-    /* register_capability_ex */ fakeRegisterCapabilityEx,
+    /* register_capability */ fakeRegisterCapability,
     /* unregister_capability */ nullptr,
-    /* has_capability */ nullptr,
-    /* invoke_capability_async */ nullptr,
+    /* invoke_capability */ nullptr,
+    /* capability_info */ nullptr,
+    /* list_capabilities */ nullptr,
     /* op_cancel */ nullptr,
+    /* invoke_capability_ex */ nullptr,
+    /* unregister_capability_ex */ nullptr,
 };
 
 const AgentxxPluginGraphIface g_fakeGraph = {

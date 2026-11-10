@@ -62,11 +62,20 @@ const void* queryIface(const PluginxxHost* host, const char* iid) {
 }
 
 /// 发布进度事件 (供测试断言每一步都真实执行过)
+/// - 插件不再有事件表: 进度走广播频道 (先声明再发; 同一频道重复声明是幂等)
 void report(const PluginxxHost* host, const char* step, bool ok) {
-    const auto* events
-        = static_cast<const PluginxxEventsIface*>(queryIface(host, PLUGINXX_IFACE_EVENTS));
-    if (!events || !events->publish) {
+    const auto* broadcasts
+        = static_cast<const PluginxxBroadcastsIface*>(queryIface(host, PLUGINXX_IFACE_BROADCASTS));
+    if (!broadcasts || !broadcasts->publish_broadcast) {
         return;
+    }
+    const auto decl = sv(R"({"id":"plugin.test_start_fail_plugin.probe","cache":"latest"})");
+    if (broadcasts->declare_broadcast) {
+        PluginxxString declErr{nullptr, 0};
+        broadcasts->declare_broadcast(host, &decl, &declErr);
+        if (declErr.data) {
+            host->vtable->free(declErr.data);
+        }
     }
     const auto topic = sv("plugin.test_start_fail_plugin.probe");
     char       buffer[64];
@@ -80,7 +89,11 @@ void report(const PluginxxHost* host, const char* step, bool ok) {
     PluginxxStringView payload{};
     payload.data = buffer;
     payload.size = static_cast<uint64_t>(length > 0 ? length : 0);
-    events->publish(host, &topic, &payload);
+    PluginxxString pubErr{nullptr, 0};
+    broadcasts->publish_broadcast(host, &topic, &payload, &pubErr);
+    if (pubErr.data) {
+        host->vtable->free(pubErr.data);
+    }
 }
 
 const char* failStep(const PluginxxHost* host, const char* step) {
@@ -217,15 +230,32 @@ static void* probeMount(
         return nullptr;
     }
 
-    // 3. 事件订阅
-    const auto* events
-        = static_cast<const PluginxxEventsIface*>(queryIface(host, PLUGINXX_IFACE_EVENTS));
-    if (!events || !events->subscribe) {
-        setError(host, error_out, failStep(host, "events_iface"));
+    // 3. 广播订阅
+    const auto* broadcasts
+        = static_cast<const PluginxxBroadcastsIface*>(queryIface(host, PLUGINXX_IFACE_BROADCASTS));
+    if (!broadcasts || !broadcasts->subscribe_broadcast) {
+        setError(host, error_out, failStep(host, "broadcasts_iface"));
         return nullptr;
     }
     const auto watchTopic = sv("plugin.test_start_fail_plugin.watch");
-    if (!events->subscribe(host, &ref, &watchTopic, &onProbeEvent, ctx)) {
+    // 广播频道必须先声明再订阅 (声明为属主发布 + 不缓存)
+    if (broadcasts->declare_broadcast) {
+        const auto     watchDecl = sv(R"({"id":"plugin.test_start_fail_plugin.watch","cache":"none"})");
+        PluginxxString declErr{nullptr, 0};
+        broadcasts->declare_broadcast(host, &watchDecl, &declErr);
+        if (declErr.data) {
+            host->vtable->free(declErr.data);
+        }
+    }
+    if (!broadcasts->subscribe_broadcast(
+            host,
+            &ref,
+            &watchTopic,
+            &onProbeEvent,
+            ctx,
+            nullptr,
+            nullptr
+        )) {
         setError(host, error_out, failStep(host, "subscribe"));
         return nullptr;
     }
@@ -267,15 +297,32 @@ static void* probeMount(
     const auto* capabilities = static_cast<const PluginxxCapabilitiesIface*>(
         queryIface(host, PLUGINXX_IFACE_CAPABILITIES)
     );
-    if (!capabilities || !capabilities->register_capability_ex) {
+    if (!capabilities || !capabilities->register_capability) {
         setError(host, error_out, failStep(host, "capabilities_iface"));
         return nullptr;
     }
-    const auto capability = sv("dso.rollback.cap");
-    if (capabilities->register_capability_ex(host, &capability, &probeCapabilityStart, nullptr, ctx)
-        != 0) {
+    const auto             capability = sv("dso.rollback.cap");
+    PluginxxCapabilitySpec capSpec{};
+    capSpec.version     = PLUGINXX_API_VERSION;
+    capSpec.struct_size = sizeof(PluginxxCapabilitySpec);
+    capSpec.id          = capability;
+    capSpec.impls       = PLUGINXX_CAPABILITY_IMPLS_ONE;
+    capSpec.merge       = PLUGINXX_CAPABILITY_MERGE_NONE;
+    capSpec.phases      = PLUGINXX_CAPABILITY_PHASE_MASK_IMPL;
+    capSpec.phase       = PLUGINXX_CAPABILITY_PHASE_IMPL;
+    capSpec.sync        = 0;
+    capSpec.run_start   = &probeCapabilityStart;
+    capSpec.user_data   = ctx;
+    PluginxxString capErr{nullptr, 0};
+    if (capabilities->register_capability(host, &ref, &capSpec, &capErr) != 0) {
+        if (capErr.data) {
+            host->vtable->free(capErr.data);
+        }
         setError(host, error_out, failStep(host, "capability"));
         return nullptr;
+    }
+    if (capErr.data) {
+        host->vtable->free(capErr.data);
     }
 
     // 7. 资源注册 (skill 扫描目录; 所有权归本插件, 卸载/回滚时摘除)

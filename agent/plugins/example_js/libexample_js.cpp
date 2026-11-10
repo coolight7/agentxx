@@ -19,7 +19,7 @@
 namespace {
 
 /// JS 引擎声明的能力全名
-/// - 引擎以短名 `interpreter.js` 声明, 宿主补成 `plugin.<插件 id>.<名字>`;
+/// - 引擎以短名 `interpreter.js` 声明, 主程序补成 `plugin.<插件 id>.<名字>`;
 ///   调用方必须写全名
 constexpr const char* kInterpreterCapability
     = "plugin.agentxx_javascript_engine.interpreter.js";
@@ -107,53 +107,77 @@ void PLUGINXX_CALL onScriptLoadDone(void* ud, int32_t status, const PluginxxStri
 
 /// 脚本卸载完成 (stop 事务的收尾, fire-and-forget: 结果只记录)
 void PLUGINXX_CALL onScriptUnloadDone(void* ud, int32_t status, const PluginxxStringView* payload) {
-    auto* ctx = static_cast<ShellCtx*>(ud);
-    if (!ctx || status == PLUGINXX_OPERATOR_OK) {
+    // ud 是 {脚本上下文, stop 的完成通知}: 卸载结果只记录, stop 本身一律按成功收尾
+    // (脚本上下文由引擎释放; 主程序侧注册随实例卸载一起撤销)
+    auto* state = static_cast<std::pair<ShellCtx*, PluginxxOperatorNotify>*>(ud);
+    if (!state) {
         return;
     }
-    std::string text;
-    if (payload && payload->data) {
-        text.assign(payload->data, static_cast<size_t>(payload->size));
+    ShellCtx*              ctx    = state->first;
+    PluginxxOperatorNotify notify = state->second;
+    delete state;
+    if (ctx && status != PLUGINXX_OPERATOR_OK) {
+        std::string text;
+        if (payload && payload->data) {
+            text.assign(payload->data, static_cast<size_t>(payload->size));
+        }
+        shellLog(
+            ctx,
+            3,
+            fmt::format(
+                "example_js: interpreter unload failed: {}",
+                text.empty() ? "?" : text
+            )
+        );
     }
-    shellLog(
-        ctx,
-        3,
-        fmt::format("example_js: interpreter unload failed: {}", text.empty() ? "?" : text)
-    );
+    if (notify.done) {
+        notify.done(notify.host_ud, PLUGINXX_OPERATOR_OK, nullptr);
+    }
 }
 
 /// 通知引擎卸载本脚本 (best-effort: 引擎不可用时主程序已完成撤销)
-void dispatchScriptUnload(ShellCtx& ctx) {
+bool dispatchScriptUnload(ShellCtx& ctx, const PluginxxOperatorNotify* stopNotify) {
     if (!ctx.scriptLoaded) {
-        return;
+        return false;
     }
     ctx.scriptLoaded = false;
     if (!ctx.iface.capabilities || !ctx.iface.capabilities->invoke_capability) {
-        return;
+        return false;
     }
-    auto        capSv  = agentxx::plugin::PluginStringView::fromCstr(kInterpreterCapability);
-    std::string args   = fmt::format(
-        "{{\"op\":\"unload\",\"name\":{}}}",
-        jsonEscapedString(ctx, ctx.name)
-    );
+    auto capSv = agentxx::plugin::PluginStringView::fromCstr(kInterpreterCapability);
+    std::string args
+        = fmt::format("{{\"op\":\"unload\",\"name\":{}}}", jsonEscapedString(ctx, ctx.name));
     auto           argsSv = agentxx::plugin::PluginStringView::from(args.data(), args.size());
     PluginxxString err{nullptr, 0};
-    auto*          h = ctx.iface.capabilities->invoke_capability(
+    auto*          state = new std::pair<ShellCtx*, PluginxxOperatorNotify>(
+        &ctx,
+        stopNotify != nullptr && stopNotify->done ? *stopNotify : PluginxxOperatorNotify{}
+    );
+    auto* h = ctx.iface.capabilities->invoke_capability(
         ctx.host,
         nullptr,
         &capSv,
         &argsSv,
         0,
         &onScriptUnloadDone,
-        &ctx,
+        state,
         &err
     );
     if (err.data) {
         if (!h) {
-            shellLog(&ctx, 3, fmt::format("example_js: unload dispatch failed: {}", err.data));
+            shellLog(
+                &ctx,
+                3,
+                fmt::format("example_js: unload dispatch failed: {}", err.data)
+            );
         }
         agentxx::plugin::PluginString::free(ctx.host, &err);
     }
+    if (!h) {
+        delete state;
+        return false;
+    }
+    return true;
 }
 
 } // namespace
@@ -327,7 +351,9 @@ static void*
     if (!notify || !notify->done) {
         return nullptr;
     }
-    dispatchScriptUnload(ctx);
+    if (dispatchScriptUnload(ctx, notify)) {
+        return &ctx.opToken; ///< 已受理: 完成通知在卸载回调里发出 (脚本注册先撤净)
+    }
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }

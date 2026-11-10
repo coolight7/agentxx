@@ -10,7 +10,7 @@
 | 方案设计（plan.md） | 已完成 |
 | 步骤 0 库改动（`cxx_pluginxx` L1~L4/L6/L7、`cxx_utilxx` L5）+ 子模块指针 | 已完成 |
 | 步骤 1 构建与接口表骨架 | 已完成 |
-| 步骤 2 agent 侧（DomainServices + 广播 + 中枢） | 进行中（广播通道打通，事件中枢对接完成） |
+| 步骤 2 agent 侧（DomainServices + 广播 + 中枢） | 已完成（广播通道打通，事件中枢对接完成，`plugins` 模块全绿） |
 | 步骤 3 功能埋点（替换钩子与功能点） | 待开始（三表暂留，见"与计划的偏差"） |
 | 步骤 4 网络（`agentxx.net` + 4 个插件迁移） | 待开始 |
 | 步骤 5 client 侧（广播 + net） | 待开始 |
@@ -91,6 +91,24 @@
     `query()` 填两项；新增 `publishPluginBroadcast` / `subscribePluginBroadcast` +
     `PluginEventsCompat`（旧 `iface.events->publish/subscribe` 调用形状的兼容包装，内部走广播表）
 - 验证：`agentxx_lib_repo` 全量编译通过（含 26 个插件目标）
+- 已有用例回归：`plugins` 610/610、`event_hub` / `event_tools` / `event_delivery` / `plugin_runtime` /
+  `plugin_sdk` / `plugin_host_mount` / `plugin_multi_mount` / `plugin_cleanup` / `boundaries` 全绿
+  （`ffi_c_api` 在 ASan 下被搜狗输入法 TSF DLL 的 use-after-free 打断，属环境噪声）；`plugins` 模块 610/610 通过
+- 测试迁移中的两处语义变化（已同步改测试）：
+  - 插件发布不再进 `EventBus`：原来 `events` 表把载荷发到总线上，现在只进广播表 + 事件中枢。
+    `test_plugins` 第 40 项（DSO 探针）的进度订阅从 `bus->get<std::string>(...)` 改成
+    广播订阅（主程序先把 `plugin.test_start_fail_plugin.probe` 声明成“任何人可发”再订阅）
+  - 能力调用的 `caller_host` 已经不再是 `nullptr`（见下面的框架修复），引擎改用调用方句柄
+- **框架修复（0.3.0 内，边迁边修的三处真问题）**：
+  1. `run_start` 的 `caller_host` 之前恒为 `nullptr`，而 JS 引擎需要“代表调用方”注册工具 ——
+     结果脚本工具全挂在引擎实例上（`getPluginJson("example_js")["tools"]` 为空，卸载脚本壳".
+     也掤不掉工具）。改成传调用方实例的主程序视图（主程序自己发起时仍为空）
+  2. 插件在 `stop` 里调能力被 `OpCore::create` 挡成 “provider is closed or disabled”:
+     外层操作挂的就是调用方租约，而调用方此时已 `enabled=false`。新增 `callerMayStop`
+     （只放宽调用方、`Closed` 仍拒），`invoke_capability` 的两个建 op 处都传 `true`
+  3. `enableImpl` 同步级联启用依赖者 —— 子插件的 `start` 往往直接用父插件的能力，
+     父插件 `start` 还在飞行中就拿到“能力不存在”（disable→enable 紧邻时必现）。
+     改成父插件 `start` 成功后由 `requestStartForEnable` 的收尾（`resumeDependents`）再级联
 - 与计划的偏差（重要）：
   - **采"先扩后收"**：`agentxx.agent.hooks` / `.feature` / `.event` 与 client 侧
     `events` / `json` / `log` 三表本轮**暂留**，等"功能埋点"一轮再删。理由：一次性删光会让
@@ -169,5 +187,8 @@
   - 安装前缀 `agentxx-project-install/include` 里会残留已删除的旧头（`pluginxx/host/event_bus.h`、
     `domain_hooks.h`、旧的 `agentxx/plugin/plugin_framework.h`），会盖住源码的新头并被
     "未定义类型 / 不是成员"一类错误误导；改完库头后如遇怪错误，先删这两处残留再编
+  - **改完头文件要让 mtime 变新**：本轮的编辑工具写文件后有时 mtime 不变，MSVC 的
+    增量判定就认为头没变 —— 现象是“改了头但尺寸/行为没变”或“库没重编”。
+    改完用 `(Get-Item <文件>).LastWriteTime = (Get-Date)` 推一下再编
   - 库头里 `PluginxxCapabilityStartFunction` 等 **C ABI 结构体在全局命名空间**，不在
     `namespace pluginxx` 内 —— `using pluginxx::PluginxxNetIface` 这类写法一定编不过

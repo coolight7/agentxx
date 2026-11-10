@@ -453,10 +453,12 @@ void checkInterfaceTableNames(const fs::path& root, Violations& v) {
         size_t      expect;
         const char* prefix;
         bool        documented; ///< 是否要求写进 plugins.md
+        const char* appPrefix = "agentxx."; ///< `PLUGINXX_APP_ID(...)` 形式拼出来的前缀
     };
 
+    // 通用表的 IID 由 `<应用名>.` + 表名拼出 (`PLUGINXX_APP_ID`), agentxx 下即 `agentxx.`
     const Group groups[] = {
-        {&genericHeader, "PLUGINXX_IFACE_",             10, "pluginxx.",       false},
+        {&genericHeader, "PLUGINXX_IFACE_",             10, "agentxx.",       false},
         {&agentHeader,   "AGENTXX_PLUGIN_IFACE_AGENT_", 13, "agentxx.agent.",  true },
         {&clientHeader,  "AGENTXX_IFACE_CLIENT_",       9,  "agentxx.client.", true },
     };
@@ -469,9 +471,15 @@ void checkInterfaceTableNames(const fs::path& root, Violations& v) {
             v.push_back(where + ": 无法读取接口表声明头 (接口表名检查依赖它)");
             continue;
         }
-        const std::regex pattern{
+        // IID 有两种写法: 字面量 (`#define X_IFACE_A "pluginxx.a"`) 与
+        // 应用名拼接 (`#define X_IFACE_A PLUGINXX_APP_ID("a")`, 实际值 = `<应用名>.a`)
+        const std::regex literalPattern{
             std::string{R"re(^[ \t]*#[ \t]*define[ \t]+)re"} + group.macro
             + R"re([A-Z0-9_]+[ \t]+"([^"]+)")re"
+        };
+        const std::regex appIdPattern{
+            std::string{R"re(^[ \t]*#[ \t]*define[ \t]+)re"} + group.macro
+            + R"re([A-Z0-9_]+[ \t]+PLUGINXX_APP_ID\("([^"]+)"\))re"
         };
         std::vector<std::string> names;
         std::string_view         rest{text};
@@ -481,8 +489,10 @@ void checkInterfaceTableNames(const fs::path& root, Violations& v) {
             const auto  end = (nl == std::string_view::npos) ? rest.size() : nl;
             std::smatch m;
             const auto  line = std::string{rest.substr(pos, end - pos)};
-            if (std::regex_search(line, m, pattern)) {
+            if (std::regex_search(line, m, literalPattern)) {
                 names.push_back(m[1].str());
+            } else if (std::regex_search(line, m, appIdPattern)) {
+                names.emplace_back(std::string{group.appPrefix} + m[1].str());
             }
             if (nl == std::string_view::npos) {
                 break;
@@ -631,7 +641,9 @@ void checkInterfaceTableQuadruple(const fs::path& root, Violations& v) {
                 if (std::regex_search(line, m, defineRe) && m.size() > 2) {
                     const std::string name = m[1].str();
                     const std::string body = m[2].str();
-                    if (!body.empty() && body.front() == '"') {
+                    if (!body.empty()
+                        && (body.front() == '"'
+                            || body.rfind("PLUGINXX_APP_ID(", 0) == 0)) {
                         iids.push_back(name);
                     } else if (name.ends_with("_BASELINE_SIZE")) {
                         // 两种合法写法, 都是编译器算的:
@@ -804,13 +816,14 @@ void checkInterfaceTableLayout(const fs::path& root, Violations& v) {
         {"AgentxxPluginToolsIface",       "register_tool|unregister_tool|call_tool_async"                                                                                                                                                                                                                                                                           },
         {"PluginxxCancelIface",           "op_cancel"                                                                                                                                                                                                                                                                                              },
         {"PluginxxCapabilitiesIface",
-         "register_capability|register_capability_ex|unregister_capability|has_capability|invoke_capability_async|op_cancel"
+         "register_capability|unregister_capability|invoke_capability|capability_info|list_capabilities|op_cancel|invoke_capability_ex|unregister_capability_ex"
         },
         {"PluginxxConfigIface",
          "get_config|get_plugin_args|get_plugin_config_path|get_language|set_language"
         },
         {"PluginxxCoroutineRuntimeIface", "request_driver|cancel_driver|is_io_thread"                                                                                                                                                                                                                                                                                         },
-        {"PluginxxEventsIface",           "subscribe|unsubscribe|publish"                                                                                                                                                                                                                                                                                                     },
+        {"PluginxxBroadcastsIface",
+         "declare_broadcast|publish_broadcast|subscribe_broadcast|read_broadcast|unsubscribe_broadcast|end_broadcast|subscribe_broadcast_ex"},
         {"PluginxxJsonIface",             "json_get_string|json_escape"                                                                                                                                                                                                                                                                                                       },
         {"PluginxxLogIface",              "log"                                                                                                                                                                                                                                                                                                                               },
         {"PluginxxPluginsIface",          "list_plugins|get_plugin|get_own_info"                                                                                                                                                                                                                                                                                              },

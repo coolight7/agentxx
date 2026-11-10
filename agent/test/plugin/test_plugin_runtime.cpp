@@ -2115,12 +2115,14 @@ TestResult testPluginRuntime() {
 
         const auto* host   = f.provider->hostView();
         const auto  ifaces = AgentIfaces::query(host);
-        XX_TEST_EXPECT_TRUE(ifaces.events != nullptr);
-        if (!ifaces.events) {
+        XX_TEST_EXPECT_TRUE(ifaces.broadcasts != nullptr);
+        if (!ifaces.broadcasts) {
             return result;
         }
         const auto topicSv      = PluginStringView::fromCstr("plugin.provider.topic");
         int        handlerCalls = 0;
+        // 广播频道必须先声明 (测试直接建管理器, 没有任何插件声明过它)
+        f.manager->ensureBroadcast("plugin.provider.topic");
         // EventBus 派发为协程异步执行; 循环推进后必须 restart, 保持上下文
         // 处于非 stopped 状态 (否则 vtable 入口按"IO 不可用"拒绝退订/订阅)。
         auto flushEvents = [&] {
@@ -2130,39 +2132,43 @@ TestResult testPluginRuntime() {
             }
             f.io.restart();
         };
-        auto* sub = ifaces.events->subscribe(
+        auto* sub = ifaces.broadcasts->subscribe_broadcast(
             host,
             nullptr, ///< 主程序总线 (与 agent 无关的进程级事件)
             &topicSv,
             +[](const PluginxxStringView*, void* ud) {
                 ++*static_cast<int*>(ud);
             },
-            &handlerCalls
+            &handlerCalls,
+            nullptr,
+            nullptr
         );
         XX_TEST_EXPECT_TRUE(sub != nullptr);
         XX_TEST_EXPECT_TRUE(sub && sub->alive.load());
 
-        XX_TEST_EXPECT_EQ(f.manager->publish("plugin.provider.topic", "{}"), 0);
+        f.manager->publishBroadcastValue("plugin.provider.topic", "{}");
         flushEvents();
         XX_TEST_EXPECT_EQ(handlerCalls, 1);
 
         // 重复退订: 第二次必须是空操作 (alive 先失效再移除主程序引用)。
-        ifaces.events->unsubscribe(sub);
-        ifaces.events->unsubscribe(sub);
+        ifaces.broadcasts->unsubscribe_broadcast(sub);
+        ifaces.broadcasts->unsubscribe_broadcast(sub);
         XX_TEST_EXPECT_FALSE(sub->alive.load());
-        XX_TEST_EXPECT_EQ(f.manager->publish("plugin.provider.topic", "{}"), 0);
+        f.manager->publishBroadcastValue("plugin.provider.topic", "{}");
         flushEvents();
         XX_TEST_EXPECT_EQ(handlerCalls, 1); ///< 退订后不再回调
 
         // 卸载实例 (detachAll 统一退订) 后, 对插件保存的旧句柄再次退订必须安全。
-        auto* late = ifaces.events->subscribe(
+        auto* late = ifaces.broadcasts->subscribe_broadcast(
             host,
             nullptr, ///< 主程序总线
             &topicSv,
             +[](const PluginxxStringView*, void* ud) {
                 ++*static_cast<int*>(ud);
             },
-            &handlerCalls
+            &handlerCalls,
+            nullptr,
+            nullptr
         );
         XX_TEST_EXPECT_TRUE(late != nullptr);
         bool unloaded = false;
@@ -2176,12 +2182,12 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_TRUE(unloaded);
         if (late) {
             XX_TEST_EXPECT_FALSE(late->alive.load()); ///< detachAll 已失效句柄
-            ifaces.events->unsubscribe(late);         ///< 迟到调用必须安全空操作
-            ifaces.events->unsubscribe(late);
+            ifaces.broadcasts->unsubscribe_broadcast(late); ///< 迟到调用必须安全空操作
+            ifaces.broadcasts->unsubscribe_broadcast(late);
         }
         // 主题只要求落在 plugin.*: 实例卸载后写同一主题仍允许
         // (同组织多插件可共用一个段, 主程序不把主题绑定到具体实例)
-        XX_TEST_EXPECT_EQ(f.manager->publish("plugin.provider.topic", "{}"), 0);
+        f.manager->publishBroadcastValue("plugin.provider.topic", "{}");
         flushEvents();
         XX_TEST_EXPECT_EQ(handlerCalls, 1);
     }

@@ -44,15 +44,16 @@ extern "C" {
 /// 历史: v1 = 初版; v2 = 跟随 agent 侧契约换代 (agent 一次加载/多 agent 挂载),
 /// client 侧表布局未变, 但两端需用同一代头文件重编; v3 = 跟随 agent 侧通用表
 /// 去业务成员 (client 侧表布局同样未变, 两端重编即可); v4 = 跟随 agent 侧工具
-/// 结果状态位换代 (client 侧表布局未变, 两端重编即可)
-#define AGENTXX_CLIENT_PLUGIN_API_VERSION 4
+/// 结果状态位换代 (client 侧表布局未变, 两端重编即可); v5 = 跟随 agent 侧
+/// 扩展点统一成功能扩展点 (client 侧表布局未变, 两端重编即可)
+#define AGENTXX_CLIENT_PLUGIN_API_VERSION 5
 
 /// 主程序支持的**最低**插件 API 版本 (插件 `AgentxxClientPluginInfo.api_version` 检查)
 ///
 /// 判据只有这一条: `api_version >= AGENTXX_CLIENT_PLUGIN_MIN_API_VERSION`。插件声明更高
 /// 版本不被拒绝 (它可能用了主程序没有的能力, 由插件自己读 `AGENTXX_CLIENT_PLUGIN_API_VERSION`
 /// 决定是否降级)。与 agent 侧 `PLUGINXX_MIN_API_VERSION` 同一规则。
-#define AGENTXX_CLIENT_PLUGIN_MIN_API_VERSION 4
+#define AGENTXX_CLIENT_PLUGIN_MIN_API_VERSION 5
 
 #pragma pack(push, 8)
 

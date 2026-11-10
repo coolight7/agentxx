@@ -128,8 +128,12 @@ asio::awaitable<TestResult> run_plugin_tests() {
     XX_TEST_EXPECT_EQ(inst->version, "1.0.0");
     XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("example_echo"));
     XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("example_caller"));
-    XX_TEST_EXPECT_TRUE(ctx->pluginManager->capabilities()->has("example.demo"));
-    XX_TEST_EXPECT_TRUE(ctx->pluginManager->hasCapability("example.demo") == 1);
+    XX_TEST_EXPECT_TRUE(
+        ctx->pluginManager->capabilities()->has("plugin.example_plugin.example.demo")
+    );
+    XX_TEST_EXPECT_TRUE(
+        ctx->pluginManager->hasCapability("plugin.example_plugin.example.demo") == 1
+    );
 
     // ---- 2.5 接口表: agentxx.agent.config get_language / set_language ----
     {
@@ -333,7 +337,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
     // ---- 4.6 example_js_execute_command 插件全流程 (仿 execute_command 的 JS 实现) ----
     {
         auto jsEnginePath = findPluginDir("agentxx_javascript_engine");
-        if (!ctx->pluginManager->hasCapability("interpreter.js")) {
+        if (!ctx->pluginManager->hasCapability("plugin.agentxx_javascript_engine.interpreter.js")) {
             auto eInst = co_await ctx->pluginManager->loadPluginAsync(jsEnginePath);
             XX_TEST_EXPECT_TRUE(eInst != nullptr);
         }
@@ -451,22 +455,38 @@ asio::awaitable<TestResult> run_plugin_tests() {
         }
     }
 
-    // ---- 6. 事件订阅/发布回环 (plugin.<插件名>.<事件>) ----
+    // ---- 6. 广播发布/订阅回环 (plugin.<插件名>.<事件>) ----
     {
-        // 测试侧订阅同一 topic (JSON 字符串载荷)
-        bool received = false;
-        auto subId    = ctx->bus->get<std::string>("plugin.example_plugin.demo")
-                         .subscribe([&](const std::string& data) -> asio::awaitable<void> {
-                             if (data.find("\"k\"") != std::string::npos) {
-                                 received = true;
-                             }
-                             co_return;
-                         });
-        int rc = ctx->pluginManager->publish("plugin.example_plugin.demo", R"({"k":"v"})");
-        XX_TEST_EXPECT_EQ(rc, 0);
-        co_await sleepMs(150);
-        XX_TEST_EXPECT_TRUE(received);
-        ctx->bus->get<std::string>("plugin.example_plugin.demo").unsubscribe(subId);
+        // 频道由主程序侧声明 (应用频道没有属主; 插件自己的频道由插件 publish 时声明)
+        ctx->pluginManager->ensureBroadcast("plugin.example_plugin.demo");
+        bool        received = false;
+        std::string subError;
+        const auto  token    = ctx->pluginManager->broadcasts()->subscribe(
+            "plugin.example_plugin.demo",
+            std::string{},
+            [&](std::string_view data) {
+                if (data.find("\"k\"") != std::string_view::npos) {
+                    received = true;
+                }
+            },
+            pluginxx::BroadcastSubscribeOptions{},
+            &subError
+        );
+        XX_TEST_EXPECT_TRUE(token != 0);
+        // 频道属主是 example_plugin: 以属主身份发 (应用不能写别人的属主频道)
+        std::string pubError;
+        XX_TEST_EXPECT_TRUE(
+            ctx->pluginManager->broadcasts()
+                ->publish(
+                    "plugin.example_plugin.demo",
+                    R"({"k":"v"})",
+                    std::string_view{"example_plugin"},
+                    &pubError
+                )
+            || !pubError.empty()
+        );
+        XX_TEST_EXPECT_TRUE(received); ///< 广播同步派发 (不经协程总线)
+        ctx->pluginManager->broadcasts()->unsubscribe("plugin.example_plugin.demo", token);
     }
 
     // ---- 7. 禁用 → 工具摘除/钩子处理器摘除; 启用 → 恢复 ----
@@ -590,7 +610,7 @@ asio::awaitable<TestResult> run_plugin_tests() {
             XX_TEST_EXPECT_TRUE(false);
             co_return TestResult{g_plugin_passed, g_plugin_failed};
         }
-        XX_TEST_EXPECT_TRUE(ctx->pluginManager->hasCapability("interpreter.js") == 1);
+        XX_TEST_EXPECT_TRUE(ctx->pluginManager->hasCapability("plugin.agentxx_javascript_engine.interpreter.js") == 1);
 
         // ---- 13. JS 插件 (plugin.yaml 目录分派) ----
         // 需主程序 example_echo 供 js_call_host 互调
@@ -739,9 +759,11 @@ throw new Error("top-level rollback probe");
             auto* op = ctx->pluginManager->invokeCapabilityAsync(
                 jsInst,
                 nullptr, ///< 主程序外部发起 (不归属于某个 agent)
-                "interpreter.js",
-                "load",
-                args,
+                /// 能力的全名: 引擎以短名 `interpreter.js` 声明, 主程序补成 plugin.<插件 id>.<名字>
+                "plugin.agentxx_javascript_engine.interpreter.js",
+                args, ///< 参数里带 op: load
+                0,    ///< phase = 0: 走完整链
+                -1,   ///< timeoutMs < 0: 用声明里的值
                 [](void* ud, int32_t status, const PluginxxStringView* payload) {
                     auto* s   = static_cast<LoadState*>(ud);
                     s->status = status;
@@ -796,7 +818,7 @@ throw new Error("top-level rollback probe");
         {
             auto ok = co_await ctx->pluginManager->unloadAsync("agentxx_javascript_engine");
             XX_TEST_EXPECT_TRUE(ok);
-            XX_TEST_EXPECT_FALSE(ctx->pluginManager->capabilities()->has("interpreter.js"));
+            XX_TEST_EXPECT_FALSE(ctx->pluginManager->capabilities()->has("plugin.agentxx_javascript_engine.interpreter.js"));
         }
 
         // ---- 20. 依赖图级联卸载: 引擎卸载连带 depends 它的JS 插件 ----
@@ -848,7 +870,7 @@ throw new Error("top-level rollback probe");
                     XX_TEST_EXPECT_EQ(j["name"].get<std::string>(), "agentxx_javascript_engine");
                     bool hasInterp = false;
                     for (const auto& c : j["capabilities"]) {
-                        if (c.get<std::string>() == "interpreter.js") {
+                        if (c.get<std::string>() == "plugin.agentxx_javascript_engine.interpreter.js") {
                             hasInterp = true;
                         }
                     }
@@ -1060,7 +1082,7 @@ throw new Error("top-level rollback probe");
             co_await sleepMs(25);
         }
         XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("js_hello"));
-        XX_TEST_EXPECT_TRUE(ctx->pluginManager->hasCapability("interpreter.js") == 1);
+        XX_TEST_EXPECT_TRUE(ctx->pluginManager->hasCapability("plugin.agentxx_javascript_engine.interpreter.js") == 1);
 
         // 禁用引擎 → 级联禁用JS 插件 → 两者 stop (引擎退出 JS 线程并释放 runtime)
         ctx->pluginManager->disable("agentxx_javascript_engine");
@@ -1074,7 +1096,7 @@ throw new Error("top-level rollback probe");
             engine25b->lifetime->state() == pluginxx::PluginInstanceState::Disabled
         );
         // 停用期间: 能力与脚本工具都不可见, 但实例/上下文保留 (未 destroy)
-        XX_TEST_EXPECT_FALSE(ctx->pluginManager->capabilities()->has("interpreter.js"));
+        XX_TEST_EXPECT_FALSE(ctx->pluginManager->capabilities()->has("plugin.agentxx_javascript_engine.interpreter.js"));
         XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains("js_hello"));
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("agentxx_javascript_engine") == engine25b);
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("example_js") == js25b);
@@ -1084,7 +1106,7 @@ throw new Error("top-level rollback probe");
         for (int i = 0; i < 400 && !ctx->toolRegistry->contains("js_hello"); ++i) {
             co_await sleepMs(10);
         }
-        XX_TEST_EXPECT_TRUE(ctx->pluginManager->hasCapability("interpreter.js") == 1);
+        XX_TEST_EXPECT_TRUE(ctx->pluginManager->hasCapability("plugin.agentxx_javascript_engine.interpreter.js") == 1);
         XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("js_hello"));
         auto hello25b = ctx->toolRegistry->find("js_hello");
         XX_TEST_EXPECT_TRUE(hello25b != nullptr);
@@ -1104,7 +1126,7 @@ throw new Error("top-level rollback probe");
         }
         XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("js_hello"));
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("example_js")->enabled);
-        XX_TEST_EXPECT_TRUE(ctx->pluginManager->hasCapability("interpreter.js") == 1);
+        XX_TEST_EXPECT_TRUE(ctx->pluginManager->hasCapability("plugin.agentxx_javascript_engine.interpreter.js") == 1);
         auto hello25b2 = ctx->toolRegistry->find("js_hello");
         XX_TEST_EXPECT_TRUE(hello25b2 != nullptr);
         if (hello25b2) {
@@ -1122,7 +1144,7 @@ throw new Error("top-level rollback probe");
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("agentxx_javascript_engine") == nullptr);
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("example_js") == nullptr);
         XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains("js_hello"));
-        XX_TEST_EXPECT_FALSE(ctx->pluginManager->capabilities()->has("interpreter.js"));
+        XX_TEST_EXPECT_FALSE(ctx->pluginManager->capabilities()->has("plugin.agentxx_javascript_engine.interpreter.js"));
     }
 
     // ---- 26. H2 回归: shutdownAsync (含 JS 引擎) 先子后父, stop/destroy 后 dlclose ----
@@ -1149,7 +1171,7 @@ throw new Error("top-level rollback probe");
         );
         // 对外注册已摘除 (工具/能力不可见), 但插件上下文与 DSO 仍保留
         XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains("js_hello"));
-        XX_TEST_EXPECT_FALSE(ctx->pluginManager->capabilities()->has("interpreter.js"));
+        XX_TEST_EXPECT_FALSE(ctx->pluginManager->capabilities()->has("plugin.agentxx_javascript_engine.interpreter.js"));
 
         // 异步关闭: 先子后父完成 stop/destroy, 实例表清空
         const bool closed26 = co_await ctx->pluginManager->shutdownAsync(std::chrono::seconds(30));
@@ -1652,12 +1674,14 @@ throw new Error("top-level rollback probe");
             ctx->pluginMount->unregisterTool(inst31.get(), "error_looking_text_tool");
         }
 
-        // 31.7 异常守卫: 事件 handler 违约抛异常 → 主程序在派发时统一保护,
-        //      同 topic 其他订阅者仍正常收到
+        // 31.7 异常守卫: handler 违约抛异常 → 主程序在派发时统一保护,
+        //      同一频道其他订阅者仍正常收到
         {
             static bool s_goodHandlerRan = false;
             s_goodHandlerRan             = false;
-            auto* subBad                 = ctx->pluginManager->subscribe(
+            // 频道由主程序声明 (应用频道): 这一用例只验证派发保护, 与插件归属无关
+            ctx->pluginManager->ensureBroadcast("plugin.example_plugin.guard_throw");
+            auto* subBad                 = ctx->pluginManager->subscribeBroadcast(
                 inst31.get(),
                 nullptr, ///< 主程序总线（进程级事件）
                 "plugin.example_plugin.guard_throw",
@@ -1666,7 +1690,7 @@ throw new Error("top-level rollback probe");
                 },
                 nullptr
             );
-            auto* subGood = ctx->pluginManager->subscribe(
+            auto* subGood = ctx->pluginManager->subscribeBroadcast(
                 inst31.get(),
                 nullptr, ///< 主程序总线（进程级事件）
                 "plugin.example_plugin.guard_throw",
@@ -1677,11 +1701,11 @@ throw new Error("top-level rollback probe");
             );
             XX_TEST_EXPECT_TRUE(subBad != nullptr);
             XX_TEST_EXPECT_TRUE(subGood != nullptr);
-            XX_TEST_EXPECT_EQ(ctx->pluginManager->publish("plugin.example_plugin.guard_throw", "{}"), 0);
-            co_await sleepMs(150);                 ///< 派发为 EventBus 协程异步执行
-            XX_TEST_EXPECT_TRUE(s_goodHandlerRan); ///< 违约不影响其他订阅者
-            ctx->pluginManager->unsubscribe(subBad);
-            ctx->pluginManager->unsubscribe(subGood);
+            ctx->pluginManager->publishBroadcastValue("plugin.example_plugin.guard_throw", "{}");
+            // 广播同步派发: 违约异常被逐个订阅者的保护代码吞掉, 不影响其他订阅者
+            XX_TEST_EXPECT_TRUE(s_goodHandlerRan);
+            pluginxx::unsubscribePluginBroadcast(subBad);
+            pluginxx::unsubscribePluginBroadcast(subGood);
         }
 
         auto ok31 = co_await ctx->pluginManager->unloadAsync("example_plugin");
@@ -3445,11 +3469,20 @@ throw new Error("top-level rollback probe");
         );
         sctx->resourceApplier = applier;
 
-        sctx->bus->get<std::string>("plugin.test_start_fail_plugin.probe")
-            .subscribe([&](const std::string& data) -> asio::awaitable<void> {
-                reports.push_back(data);
-                co_return;
-            });
+        // 插件在最后一个步骤发布进度 (`plugin.test_start_fail_plugin.probe`):
+        // 进度必须在加载前就有人听, 所以主程序先把频道声明成“任何人可发”再订阅
+        // (插件自己的 declare 会被忽略, 发布权已由这条声明给足)
+        sctx->pluginManager->ensureBroadcast(
+            "plugin.test_start_fail_plugin.probe",
+            pluginxx::BroadcastCache_e::Latest,
+            /*anyonePublish=*/true
+        );
+        const auto probeToken = sctx->pluginManager->broadcasts()->subscribe(
+            "plugin.test_start_fail_plugin.probe",
+            std::string{},
+            [&reports](std::string_view data) { reports.push_back(std::string{data}); }
+        );
+        XX_TEST_EXPECT_TRUE(probeToken != 0);
         const std::string promptBefore = sctx->pluginMount->getPromptJson();
         auto              waitReports  = [&](size_t count) -> asio::awaitable<void> {
             for (int i = 0; i < 500 && reports.size() < count; ++i) {
@@ -3474,10 +3507,23 @@ throw new Error("top-level rollback probe");
         // 注: GraphRegistry 无删除类型接口 (设计如此), 类型名保留在注册表中;
         // 回滚语义由 GraphTypeSlot 失效 + 第二次加载能重新注册同名类型共同证明。
         XX_TEST_EXPECT_EQ(sctx->pluginMount->getPromptJson(), promptBefore);
-        // 订阅已撤销: 发布 watch 主题不得调用已卸载 DSO 的 handler (ASan 下泄漏即崩溃)
-        XX_TEST_EXPECT_EQ(sctx->pluginManager->publish("plugin.test_start_fail_plugin.watch", "{}"), 0);
-        // 能力已注销: 失败加载不得留下能力注册
-        XX_TEST_EXPECT_FALSE(sctx->pluginManager->hasCapability("dso.rollback.cap") != 0);
+        // 订阅已撤销: 频道随实例卸载整批回收 (发布必然失败, 也不会回调已卸载的 handler)
+        {
+            std::string watchErr;
+            XX_TEST_EXPECT_FALSE(
+                sctx->pluginManager->broadcasts()->publish(
+                    "plugin.test_start_fail_plugin.watch",
+                    "{}",
+                    std::string_view{},
+                    &watchErr
+                )
+            );
+        }
+        // 能力已注销: 失败加载不得留下能力注册 (短名 `dso.rollback.cap` 注册时被补全)
+        XX_TEST_EXPECT_FALSE(
+            sctx->pluginManager->hasCapability("plugin.test_start_fail_plugin.dso.rollback.cap")
+            != 0
+        );
         // hook 处理器已摘除: 失败实例的处理器不得留在注册表里 (派发器也随之摘除)
         {
             sctx->pluginManager->flushPendingCleanup();
@@ -3640,28 +3686,30 @@ throw new Error("top-level rollback probe");
         RoundProbeCtx probe;
         probe.init(probeInst->hostView());
 
-        // 1) 事件表可用
-        auto* evIface = agentxx::plugin::queryInterface<PluginxxEventsIface>(
+        // 1) 广播表可用
+        auto* bcIface = agentxx::plugin::queryInterface<PluginxxBroadcastsIface>(
             probeInst->hostView(),
-            PLUGINXX_IFACE_EVENTS
+            PLUGINXX_IFACE_BROADCASTS
         );
-        XX_TEST_EXPECT_TRUE(evIface != nullptr);
+        XX_TEST_EXPECT_TRUE(bcIface != nullptr);
 
-        // 2) round_start 事件能经总线送达订阅者 (验证发布/订阅流程本身)
-        std::atomic<int>  hits{0};
-        PluginxxStringView topicSv{"agentxx.agent.round.start",
-                                   sizeof("agentxx.agent.round.start") - 1};
-        auto*              sub = (evIface && evIface->subscribe)
-                                     ? evIface->subscribe(
-                                           probeInst->hostView(),
-                                           nullptr,
-                                           &topicSv,
-                                           [](const PluginxxStringView*, void* ud) {
-                                               static_cast<std::atomic<int>*>(ud)->fetch_add(1);
-                                           },
-                                           &hits
-                                       )
-                                     : nullptr;
+        // 2) round_start 值能经广播频道送达订阅者 (验证发布/订阅流程本身)
+        std::atomic<int>    hits{0};
+        PluginxxStringView  topicSv{"agentxx.agent.round.start",
+                                    sizeof("agentxx.agent.round.start") - 1};
+        auto*               sub = (bcIface && bcIface->subscribe_broadcast)
+                                      ? bcIface->subscribe_broadcast(
+                                            probeInst->hostView(),
+                                            nullptr,
+                                            &topicSv,
+                                            [](const PluginxxStringView*, void* ud) {
+                                                static_cast<std::atomic<int>*>(ud)->fetch_add(1);
+                                            },
+                                            &hits,
+                                            nullptr,
+                                            nullptr
+                                        )
+                                      : nullptr;
         XX_TEST_EXPECT_TRUE(sub != nullptr);
 
         // 3) PluginBase 订阅的清理回调生效: 已取消标记在轮次开始后被清掉
@@ -3670,7 +3718,8 @@ throw new Error("top-level rollback probe");
         XX_TEST_EXPECT_TRUE(probe.cancelRegistry.isCanceled(sid));
 
         auto payload = utilxx_base::Json{{"sessionId", sid}}.dump();
-        co_await roundCtx->bus->publish("agentxx.agent.round.start", payload);
+        // 轮次开始的通知面就是这个广播频道 (事件中枢的值会镜像到这里)
+        roundCtx->pluginManager->publishBroadcastValue("agentxx.agent.round.start", payload);
         XX_TEST_EXPECT_EQ(hits.load(), 1);
         XX_TEST_EXPECT_FALSE(probe.cancelRegistry.isCanceled(sid));
 

@@ -13,6 +13,7 @@
 #include "agentxx/agent/context.h"
 #include "agentxx/event/hub.h"
 #include "agentxx/event/naming.h"
+#include "agentxx/plugin/api/agentxx_broadcast_ids.h"
 #include "agentxx/plugin/plugin_mount.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -70,6 +71,33 @@ void PluginManager::ensureBroadcast(
     std::string err;
     if (!broadcasts_->declare(decl, &err)) {
         XX_LOGW("broadcast `{}` could not be declared: {}", id, err);
+    }
+}
+
+/// 从频道 id 里取出插件名 (`plugin.<插件名>.rest` → `<插件名>`; 其他形式返回空)
+std::string PluginManager::pluginNameOfBroadcast(std::string_view id) {
+    constexpr std::string_view prefix = "plugin.";
+    if (id.rfind(prefix, 0) != 0) {
+        return {};
+    }
+    const auto rest = id.substr(prefix.size());
+    const auto dot  = rest.find('.');
+    if (dot == std::string_view::npos || dot == 0) {
+        return {};
+    }
+    return std::string{rest.substr(0, dot)};
+}
+
+void PluginManager::declareBuiltinBroadcasts() {
+    // 插件在加载阶段 (start) 就可能订阅这些频道, 而事件中枢要晚到 `init()` 才建出来,
+    // 中枢的"按需声明"来不及 —— 未声明的频道订阅会被拒, 于是这里先声明好 (幂等)。
+    // 缓存策略与中枢按需声明保持一致 (`cache: latest`), 免得两边对同一频道给出不同属性。
+    for (const auto id : {
+             broadcasts::AgentRoundStart,
+             broadcasts::AgentAsyncDone,
+             broadcasts::AgentClientAttached,
+         }) {
+        ensureBroadcast(id, pluginxx::BroadcastCache_e::Latest);
     }
 }
 
@@ -138,6 +166,47 @@ int PluginManager::publishBroadcastFrom(
         }
     }
     return rc;
+}
+
+PluginxxSubscription* PluginManager::subscribeBroadcast(
+    PluginInstance*          inst,
+    const PluginxxScopeRef*  scope,
+    std::string_view         broadcastId,
+    void(PLUGINXX_CALL* handler)(const PluginxxStringView* payloadJson, void* ud),
+    void*                    ud,
+    std::string_view         optionsJson,
+    void(PLUGINXX_CALL* onEnd)(const PluginxxStringView* reasonJson, void* ud)
+) {
+    // 订阅一条还没人声明过的频道时先补声明 (框架要求"先声明再订阅"):
+    // - `agentxx.*` 是主程序频道: 按"任何人可发"补一条 (跨端频道由另一端声明);
+    // - `plugin.<插件名>.*` 是插件频道: 属主按名字推断, 发布权仍属那个插件
+    //   (JS 脚本一类调用方无法替别的插件声明, 只能由主程序补);
+    // - 其他名字不代劳 (订阅会带原因失败)。
+    if (!broadcastId.empty() && broadcasts_ && !broadcasts_->declares(broadcastId)) {
+        if (broadcastId.rfind("agentxx.", 0) == 0) {
+            ensureBroadcast(broadcastId, pluginxx::BroadcastCache_e::Latest, /*anyonePublish=*/true);
+        } else if (const auto owner = pluginNameOfBroadcast(broadcastId); !owner.empty()) {
+            pluginxx::BroadcastDecl decl;
+            decl.id      = std::string{broadcastId};
+            decl.owner   = owner;
+            decl.cache   = pluginxx::BroadcastCache_e::Latest;
+            decl.publish = pluginxx::BroadcastPublisher_e::Owner;
+            decl.scope   = pluginxx::BroadcastScope_e::App;
+            std::string err;
+            if (!broadcasts_->declare(decl, &err)) {
+                XX_LOGD("broadcast `{}` could not be declared: {}", broadcastId, err);
+            }
+        }
+    }
+    return pluginxx::PluginHostCore<PluginInstance>::subscribeBroadcast(
+        inst,
+        scope,
+        broadcastId,
+        handler,
+        ud,
+        optionsJson,
+        onEnd
+    );
 }
 
 

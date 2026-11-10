@@ -2484,9 +2484,12 @@ static void* PLUGINXX_CALL jsCapStart(
     // 内含接口查询/文件读取/字符串操作等可抛路径, 异常转 error_out 失败
     auto* engine = static_cast<JsEngine*>(ctx); ///< 提升至 try 外 (catch 日志闭包使用)
     try {
-        // 能力链里的处理器只知道自己的实例: 主程序传的 caller_host 恒为 nullptr,
-        // 需要接口表/堆字符串时一律用本实例的 host
+        // 本实例的句柄: 查接口表、分配堆字符串一律用它
         const PluginxxHost* selfHost = engine != nullptr ? engine->host() : caller_host;
+        // 脚本里的注册 (工具/订阅/定时器) 归属于**调用方插件实例**: 主程序
+        // 卸载那个插件时整批清理。能力链会把调用方的主程序视图作为 caller_host
+        // 传进来; 主程序自己发起 (无调用方) 时才落到本实例。
+        const PluginxxHost* scriptHost = caller_host != nullptr ? caller_host : selfHost;
         auto                setErr   = [&](const char* msg) {
             if (error_out && selfHost) {
                 *error_out = agentxx::plugin::PluginString::fromCstr(selfHost, msg);
@@ -2545,7 +2548,7 @@ static void* PLUGINXX_CALL jsCapStart(
             // JS 线程任务: 直接调用 doLoadScript (已在 JS 线程, 无需 postSync),
             // 完成后取工具清单并经通知器上报
             PluginxxOperatorNotify ntfCopy = *notify;
-            if (!engine->post([engine, selfHost, ntfCopy, name, path, code]() {
+            if (!engine->post([engine, scriptHost, ntfCopy, name, path, code]() {
                     if (engine->stopping()) {
                         // 停止中: 不执行脚本加载, 但仍终结本次能力 op
                         auto errSv = agentxx::plugin::PluginStringView::fromCstr(
@@ -2556,7 +2559,7 @@ static void* PLUGINXX_CALL jsCapStart(
                     }
                     std::string err2;
                     const int   rc2
-                        = engine->loadScriptOnJsThread(selfHost, name, path, code, err2);
+                        = engine->loadScriptOnJsThread(scriptHost, name, path, code, err2);
                     if (rc2 != 0) {
                         auto errSv2
                             = agentxx::plugin::PluginStringView::from(err2.data(), err2.size());
@@ -2710,7 +2713,7 @@ static void* PLUGINXX_CALL jsEngineStart(
             // invoke_capability(_async) 把脚本代码交给本引擎执行 —— 插件间通信,
             // 主程序不参与; load/unload 均为异步完成 (JS 线程执行)
             auto capSv = agentxx::plugin::PluginStringView::fromCstr("interpreter.js");
-            // 登记形状: 短名 (宿主补成 `plugin.<本插件 id>.interpreter.js`) + 只实现
+            // 登记形状: 短名 (主程序补成 `plugin.<本插件 id>.interpreter.js`) + 只实现
             // impl 阶段 + 异步处理器 (jsCapStart 自己回调 notify)
             PluginxxCapabilitySpec spec{};
             spec.version     = PLUGINXX_API_VERSION;

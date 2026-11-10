@@ -362,8 +362,8 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
             auto jsB = co_await ctxB->pluginManager->loadPluginAsync(jsLibDir);
             XX_TEST_EXPECT_TRUE(jsB != nullptr);
             XX_TEST_EXPECT_TRUE(jsA && jsB && jsA.get() != jsB.get());
-            XX_TEST_EXPECT_TRUE(ctxA->pluginManager->hasCapability("interpreter.js") == 1);
-            XX_TEST_EXPECT_TRUE(ctxB->pluginManager->hasCapability("interpreter.js") == 1);
+            XX_TEST_EXPECT_TRUE(ctxA->pluginManager->hasCapability("plugin.agentxx_javascript_engine.interpreter.js") == 1);
+            XX_TEST_EXPECT_TRUE(ctxB->pluginManager->hasCapability("plugin.agentxx_javascript_engine.interpreter.js") == 1);
 
             auto scriptA = co_await ctxA->pluginManager->loadPluginAsync(jsDir);
             XX_TEST_EXPECT_TRUE(scriptA != nullptr);
@@ -400,9 +400,9 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
                 co_await sleepMsMI(10);
             }
             XX_TEST_EXPECT_TRUE(jsA && jsA->lifecycleStopped);
-            XX_TEST_EXPECT_FALSE(ctxA->pluginManager->capabilities()->has("interpreter.js"));
+            XX_TEST_EXPECT_FALSE(ctxA->pluginManager->capabilities()->has("plugin.agentxx_javascript_engine.interpreter.js"));
             XX_TEST_EXPECT_FALSE(ctxA->toolRegistry->contains("js_hello"));
-            XX_TEST_EXPECT_TRUE(ctxB->pluginManager->capabilities()->has("interpreter.js"));
+            XX_TEST_EXPECT_TRUE(ctxB->pluginManager->capabilities()->has("plugin.agentxx_javascript_engine.interpreter.js"));
             XX_TEST_EXPECT_TRUE(ctxB->toolRegistry->contains("js_hello"));
             auto toolB2 = ctxB->toolRegistry->find("js_hello");
             if (toolB2) {
@@ -417,7 +417,7 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
             for (int i = 0; i < 400 && !ctxA->toolRegistry->contains("js_hello"); ++i) {
                 co_await sleepMsMI(10);
             }
-            XX_TEST_EXPECT_TRUE(ctxA->pluginManager->hasCapability("interpreter.js") == 1);
+            XX_TEST_EXPECT_TRUE(ctxA->pluginManager->hasCapability("plugin.agentxx_javascript_engine.interpreter.js") == 1);
             XX_TEST_EXPECT_TRUE(ctxA->toolRegistry->contains("js_hello"));
             XX_TEST_EXPECT_TRUE(ctxB->toolRegistry->contains("js_hello"));
 
@@ -427,7 +427,7 @@ asio::awaitable<TestResult> run_plugin_multi_instance_tests() {
                 std::chrono::seconds{30}
             ));
             XX_TEST_EXPECT_TRUE(ctxA->pluginManager->find("agentxx_javascript_engine") == nullptr);
-            XX_TEST_EXPECT_FALSE(ctxA->pluginManager->capabilities()->has("interpreter.js"));
+            XX_TEST_EXPECT_FALSE(ctxA->pluginManager->capabilities()->has("plugin.agentxx_javascript_engine.interpreter.js"));
             XX_TEST_EXPECT_TRUE(ctxB->pluginManager->find("agentxx_javascript_engine") == jsB);
             XX_TEST_EXPECT_TRUE(ctxB->toolRegistry->contains("js_hello"));
 

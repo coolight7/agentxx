@@ -26,7 +26,10 @@
 - 程序重启后，后台任务中断，触发会话时需要自动插入提示
 - 后台任务重新设计排队设计，放开并发数量？仅限制agent并发？创建时指定是否需要排队？
 - 异步事件、任务的最新结果不再限制 linger_ms 存活时间，直接转存 share_store，并重构 share_store 增加命名空间，区分 tool、事件、插件调用 等添加到 share_store 时的命名空间划分
+- agentxx_async_await 得到结果却事件插入 done 仍然执行，导致重复
 - 中断特化渲染展开，把内容显示到下方
+- content 输出中断后续写时，tui 消息追加异常覆盖
+- cxx_utilxx 不能依赖 cxx_pluginxx
 
 - SVG绘制支持
 

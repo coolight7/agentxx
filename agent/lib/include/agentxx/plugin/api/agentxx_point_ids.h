@@ -1,18 +1,18 @@
-/// agentxx 功能埋点 id 清单 (唯一真源)
+/// agentxx 功能扩展点 id 清单 (唯一真源)
 ///
-/// 一个"功能埋点"= 一个 id, 同时是
+/// 一个"功能扩展点"= 一个 id, 同时是
 /// - 一条**能力** (`<应用名>.capabilities`, 声明为 `impls: many` + `merge: first`, 只开 `impl`);
 /// - 一个**同名广播频道** (`<应用名>.broadcasts`)。
 ///
 /// 插件两种参与方式 (可都选):
-/// - **实现**: 登记一条实现行, 返回 JSON 文本 (需要返回值的埋点才看这个);
-/// - **订阅**: 订阅同名频道, 只收通知 (纯通知型埋点的等价物就是它)。
+/// - **实现**: 登记一条实现行, 返回 JSON 文本 (需要返回值的扩展点才看这个);
+/// - **订阅**: 订阅同名频道, 只收通知 (纯通知型扩展点的等价物就是它)。
 ///
 /// 载荷字段 (广播与实现行入参见下表) 里一律带 `agentId`: 订阅侧用它过滤掉其它 agent
 /// 的通知 (同一个插件可能同时挂在多个 agent 上)。
 ///
-/// 与宿主声明表的一致性由测试模块 `boundaries` 校验: 本头的 id 清单必须与
-/// `PluginManager` 的埋点声明表逐条相同。
+/// 与主程序声明表的一致性由测试模块 `boundaries` 校验: 本头的 id 清单必须与
+/// `PluginManager` 的扩展点声明表逐条相同。
 #ifndef AGENTXX_PLUGIN_API_AGENTXX_POINT_IDS_H
 #define AGENTXX_PLUGIN_API_AGENTXX_POINT_IDS_H
 
@@ -45,7 +45,7 @@ inline constexpr std::string_view ContextSummarize = "agentxx.agent.point.contex
 /// 取值型: 工具输出摘要 (入参 `{agentId, tool, bytes, text}`, 实现行回答 `{summary}`)
 inline constexpr std::string_view ToolSummarizeOutput = "agentxx.agent.point.tool.summarizeOutput";
 
-/// 全部通知型埋点 (声明表与测试按它清点)
+/// 全部通知型扩展点 (声明表与测试按它清点)
 inline constexpr std::string_view kNotifyPoints[] = {
     TurnStart,
     TurnEnd,
@@ -56,7 +56,7 @@ inline constexpr std::string_view kNotifyPoints[] = {
     ToolEnd,
 };
 
-/// 全部取值型埋点
+/// 全部取值型扩展点
 inline constexpr std::string_view kValuePoints[] = {
     ContextCountTokens,
     ContextSummarize,

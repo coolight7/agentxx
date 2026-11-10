@@ -154,6 +154,8 @@ PluginManager::PluginManager(std::weak_ptr<agentxx::agent::AgentContext> primary
     // 通用表 (capabilities / broadcasts / scheduler / tasks 等) 需要主程序数据的入口
     // 经本类取数 (见 pluginxx/host/domain_services.h): 在任何 vtable 入口被调用之前注入。
     setDomainServices(this);
+    // 内置广播频道: 插件加载 (start) 时就会订阅, 早于事件中枢创建
+    declareBuiltinBroadcasts();
 }
 
 // =====================================================================

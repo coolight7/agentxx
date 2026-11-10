@@ -432,6 +432,15 @@ public:
         bool                pushOnSubscribe = false
     );
 
+    /// 声明内置广播频道 (构造时调一次)
+    ///
+    /// 插件在加载阶段 (start) 就会订阅这些频道, 那时事件中枢还没建 (中枢的按需声明
+    /// 来不及), 因此由管理器先声明好。幂等。
+    void declareBuiltinBroadcasts();
+
+    /// 从频道 id 里取插件名 (`plugin.<插件名>.rest` → `<插件名>`; 其他形式返回空)
+    static std::string pluginNameOfBroadcast(std::string_view id);
+
     /// 结束一条广播 (属主/应用可结束; 失败只记日志)
     void endBroadcastValue(std::string_view id, std::string_view reasonJson);
 
@@ -441,6 +450,21 @@ public:
         std::string_view broadcastId,
         std::string_view payloadJson,
         std::string*     error
+    );
+
+    /// 插件订阅广播的入口 (表入口的落点; 遮蔽基类同名方法)
+    ///
+    /// 只多做一件事: 应用命名空间 (`agentxx.*`) 的频道本端还没人声明时先补一条
+    /// (跨端频道由另一端声明, 本进程看不到) —— 否则这种订阅会被拒。
+    /// `plugin.*` 频道不代劳: 声明属主是插件自己。
+    PluginxxSubscription* subscribeBroadcast(
+        PluginInstance*          inst,
+        const PluginxxScopeRef*  scope,
+        std::string_view         broadcastId,
+        void(PLUGINXX_CALL* handler)(const PluginxxStringView* payloadJson, void* ud),
+        void*                    ud,
+        std::string_view         optionsJson  = {},
+        void(PLUGINXX_CALL* onEnd)(const PluginxxStringView* reasonJson, void* ud) = nullptr
     );
     /// 阻塞工作委托到工作线程池 (插件 offload: 阻塞工具 / 插件自己的耗时工作)
     /// - 返回 false 表示没有任何可用的线程池 (插件侧据此报 offload 失败)

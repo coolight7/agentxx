@@ -509,7 +509,7 @@ asio::awaitable<TestResult> run_plugin_host_mount_tests() {
             PLUGINXX_IFACE_JSON,
             PLUGINXX_IFACE_CONFIG,
             PLUGINXX_IFACE_PLUGINS,
-            PLUGINXX_IFACE_EVENTS,
+            PLUGINXX_IFACE_BROADCASTS,
             PLUGINXX_IFACE_SCHEDULER,
             PLUGINXX_IFACE_COROUTINE_RUNTIME,
             PLUGINXX_IFACE_TASKS,

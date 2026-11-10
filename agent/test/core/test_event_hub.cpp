@@ -992,9 +992,10 @@ asio::awaitable<void> test_hub_naming() {
     co_return;
 }
 
-/// 17. 总线桥接: 插件往 `plugin.<插件名>.<事件>` 发字符串, 中枢记成同名的值事件
-/// - 这是“插件不需要新接口表也能往中枢发值”的验证
-/// - 内置源直接调 publishValue, 不走总线 (`agentxx.*` 不管字符串消息)
+/// 17. 广播桥接: 插件往 `plugin.<插件名>.<事件>` 发值, 中枢记成同名的值事件
+/// - 插件发布经广播表 (`publishBroadcastFrom` → `publishPluginValue`), 总线上只剩
+///   中枢自己发的强类型主题
+/// - 内置源直接调 publishValue (`agentxx.*` 不走广播桥)
 asio::awaitable<void> test_hub_bus_bridge() {
     auto  fx  = co_await makeFixture();
     auto& hub = *fx->hub;
@@ -1006,7 +1007,7 @@ asio::awaitable<void> test_hub_bus_bridge() {
     XX_TEST_EXPECT_TRUE(hub.define(EventDefineSpec{.name = "plugin.demo.chat.ping"}, &err));
 
     // JSON 载荷按结构化值存
-    co_await bus->publish(std::string{"plugin.demo.chat.ping"}, std::string{R"({"text":"hi"})"});
+    hub.publishPluginValue("plugin.demo.chat.ping", R"({"text":"hi"})", "plugin:demo");
     auto rec = hub.queryEvent("plugin.demo.chat.ping");
     XX_TEST_EXPECT_TRUE(rec.has_value());
     if (rec.has_value()) {
@@ -1016,7 +1017,7 @@ asio::awaitable<void> test_hub_bus_bridge() {
 
     // 非 JSON 按纯文本值
     XX_TEST_EXPECT_TRUE(hub.define(EventDefineSpec{.name = "plugin.demo.chat.pong"}, &err));
-    co_await bus->publish(std::string{"plugin.demo.chat.pong"}, std::string{"plain text"});
+    hub.publishPluginValue("plugin.demo.chat.pong", "plain text", "plugin:demo");
     auto pong = hub.queryEvent("plugin.demo.chat.pong");
     XX_TEST_EXPECT_TRUE(pong.has_value());
     if (pong.has_value() && !pong->history.empty()) {
@@ -1041,7 +1042,7 @@ asio::awaitable<void> test_hub_bus_bridge() {
     });
     XX_TEST_EXPECT_TRUE(watched.has_value());
     XX_TEST_EXPECT_TRUE(fx->sink->texts.empty());
-    co_await bus->publish(std::string{"plugin.demo.chat.ping"}, std::string{R"({"text":"again"})"});
+    hub.publishPluginValue("plugin.demo.chat.ping", R"({"text":"again"})", "plugin:demo");
     XX_TEST_EXPECT_EQ(fx->sink->texts.size(), size_t{1});
     if (!fx->sink->texts.empty()) {
         XX_TEST_EXPECT_TRUE(contains(fx->sink->texts.front(), "[Event] plugin.demo.chat.ping"));

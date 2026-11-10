@@ -81,6 +81,27 @@ extern "C" PLUGINXX_EXPORT const PluginxxInfo* agentxx_plugin_agent_get_info(voi
 
 /// ---------------- event handlers ----------------
 
+/// ---------------- capability handlers ----------------
+
+/// 能力 "example.demo" 的实现行: 同步完成, 回一段固定 JSON
+/// - 能力没有独立的方法名, 要做什么看 `args_json`
+static void* PLUGINXX_CALL on_demo_capability(
+    void*,
+    const PluginxxHost*,
+    const PluginxxStringView*,
+    const PluginxxStringView*,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*
+) {
+    if (notify && notify->done) {
+        auto payload = agentxx::plugin::PluginStringView::fromCstr(
+            R"_({"ok":true,"from":"example_plugin"})_"
+        );
+        notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, &payload);
+    }
+    return nullptr; ///< 同步完成: 不返回句柄
+}
+
 static void PLUGINXX_CALL on_demo_event(const PluginxxStringView*, void* ud) {
     auto* ctxRaw = static_cast<AgentCtx*>(ud);
     agentxx::plugin::guardCallVoid(agentGuardLogger(ctxRaw), [&] {
@@ -364,14 +385,17 @@ static int exampleAgentSetup(AgentCtx& ctx, const agentxx::plugin::ScopeRef& ref
     }
 
     // 3. 事件订阅 (读侧可跨族, 但必须是全名)
-    auto topic1 = agentxx::plugin::PluginStringView::fromCstr("plugin.example_plugin.demo");
+    //    自己的频道要先声明再订阅 (声明是显式动作; 主程序频道由主程序声明)
+    const char* demoChannel = "plugin.example_plugin.demo";
+    agentxx::plugin::declarePluginBroadcast(host, ctx.iface.broadcasts, demoChannel);
+    auto topic1 = agentxx::plugin::PluginStringView::fromCstr(demoChannel);
     ctx.iface.events->subscribe(host, ref.ptr(), &topic1, on_demo_event, &ctx);
     // client 插件上行: client 侧自己的族 `agentxx.client.plugin.<插件名>.<事件>`
     auto topic2
         = agentxx::plugin::PluginStringView::fromCstr("agentxx.client.plugin.example_plugin.hello");
     ctx.iface.events->subscribe(host, ref.ptr(), &topic2, on_client_hello, &ctx);
 
-    // 4. 能力 (声明 + 实现行: 这里只演示声明, 不给实现处理器)
+    // 4. 能力 (声明 + 实现行)
     if (ctx.iface.capabilities && ctx.iface.capabilities->register_capability) {
         auto capSv = agentxx::plugin::PluginStringView::fromCstr("example.demo");
         PluginxxCapabilitySpec spec{};
@@ -382,6 +406,7 @@ static int exampleAgentSetup(AgentCtx& ctx, const agentxx::plugin::ScopeRef& ref
         spec.merge       = PLUGINXX_CAPABILITY_MERGE_FIRST;
         spec.phases      = PLUGINXX_CAPABILITY_PHASE_MASK_IMPL;
         spec.phase       = PLUGINXX_CAPABILITY_PHASE_IMPL;
+        spec.run_start   = &on_demo_capability;
         // 作用域: 挂载引用 = 这一行只对该作用域生效 (空 = 进程级)
         ctx.iface.capabilities->register_capability(host, ref.ptr(), &spec, nullptr);
     }

@@ -159,8 +159,9 @@ asio::awaitable<TestResult>
             inst.get(), ///< 能力调用必须携带 caller 实例 (租约保护)
             nullptr,    ///< 调用方不在 agent 上下文 (测试进程级调用)
             "agentxx.system_usage",
-            "query",
-            "{}",
+            "{}", ///< 参数: 能力没有独立的方法名, 读一份当前快照
+            0,    ///< phase = 0: 走完整链 (before → impl → after)
+            -1,   ///< timeoutMs < 0: 用声明里的值
             [](void* ud, int32_t st, const PluginxxStringView* pl) {
                 auto* s          = static_cast<StateTuple*>(ud);
                 *std::get<0>(*s) = st;

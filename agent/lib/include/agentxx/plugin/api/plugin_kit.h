@@ -114,6 +114,35 @@ using pluginxx::yield;
  * `agentxx.agent.*` / `agentxx.client.*` 是主程序频道, 插件只能订阅。
  */
 
+/// 声明一条广播频道 (幂等; 已声明时保持原声明)
+///
+/// - 插件只能声明自己的频道: 短名 (`demo`) 由主程序补成 `plugin.<插件 id>.demo`,
+///   写全名 (`plugin.<插件名>.demo`) 也可以;
+/// - `agentxx.*` 是主程序频道, 插件声明会被拒 (需要时请主程序声明);
+/// - `anyonePublish` = true 时两端都能发 (跨端共享频道用)。
+/// - 订阅自己的频道前先声明它, 否则订阅会被拒 (声明是显式动作)。
+inline bool declarePluginBroadcast(
+    const PluginxxHost*            host,
+    const PluginxxBroadcastsIface* broadcasts,
+    std::string_view               id,
+    bool                           anyonePublish = false,
+    bool                           cacheLatest   = true
+) {
+    if (!host || !broadcasts || !broadcasts->declare_broadcast || id.empty()) {
+        return false;
+    }
+    const std::string decl = "{\"id\":\"" + std::string{id} + "\",\"cache\":\""
+                             + (cacheLatest ? "latest" : "none") + "\",\"publish\":\""
+                             + (anyonePublish ? "anyone" : "owner") + "\"}";
+    const auto declSv = PluginStringView::from(decl.data(), decl.size());
+    PluginxxString err{nullptr, 0};
+    const int32_t  rc = broadcasts->declare_broadcast(host, &declSv, &err);
+    if (err.data) {
+        PluginString::free(host, &err);
+    }
+    return rc == PLUGINXX_RESULT_OK;
+}
+
 /// 发布一条广播 (频道不存在时自动声明; 失败只记日志并返回 false)
 ///
 /// - `anyonePublish` 为 true 时声明成"任何人都能发" (跨端共享频道用)
@@ -128,14 +157,8 @@ inline bool publishPluginBroadcast(
         return false;
     }
     const auto idSv = PluginStringView::from(id.data(), id.size());
-    if (broadcasts->declare_broadcast) {
-        // 先声明 (已声明时主程序按幂等处理); 不关心结果 —— 应用频道不能改声明
-        const std::string decl = "{\"id\":\"" + std::string{id}
-                                 + "\",\"cache\":\"latest\",\"publish\":\""
-                                 + (anyonePublish ? "anyone" : "owner") + "\"}";
-        const auto declSv = PluginStringView::from(decl.data(), decl.size());
-        broadcasts->declare_broadcast(host, &declSv, nullptr);
-    }
+    // 先声明 (已声明时主程序按幂等处理); 不关心结果 —— 应用频道不能改声明
+    declarePluginBroadcast(host, broadcasts, id, anyonePublish);
     const auto payloadSv = PluginStringView::from(payload.data(), payload.size());
     return broadcasts->publish_broadcast(host, &idSv, &payloadSv, nullptr) == PLUGINXX_RESULT_OK;
 }
