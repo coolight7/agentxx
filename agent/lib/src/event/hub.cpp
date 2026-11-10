@@ -130,63 +130,58 @@ void EventHub::attachBus(const std::shared_ptr<agentxx::events::EventBus>& bus) 
     if (!bus) {
         return;
     }
+    // 总线只用于中枢自己发强类型主题 (`Topic::HubValue` / `HubEnded`);
+    // 插件发来的值现在走广播, 由 [publishPluginValue] 转入
     bus_ = bus;
-    auto handleTopic = [this](std::string_view topic, const std::any& data) {
-        if (closed_) {
-            return;
-        }
-        const auto* payload = std::any_cast<std::string>(&data);
-        if (nullptr == payload) {
-            // 非字符串载荷不是值事件 (强类型主题走自己的流)
-            return;
-        }
-        // 只收插件族: 内置源直接调 publishValue, 不经总线
-        if (!naming::isPluginTopic(topic)) {
-            return;
-        }
-        // 没人等、也没声明过的主题不当成值事件: 插件之间的普通消息
-        // (面板刷新/数据通道) 不应在事件表里各占一条记录
-        if (!wants(topic)) {
-            return;
-        }
-        // 载荷不是合法 JSON 时按纯文本值处理 (插件可能发普通字符串)
-        Json       value     = Json(*payload);
-        const bool looksJson = !payload->empty()
-                               && (payload->front() == '{' || payload->front() == '['
-                                   || payload->front() == '"');
-        if (looksJson) {
-            auto parsed = agentxx::util::catchError<std::optional<Json>>(
-                [&]() -> std::optional<Json> {
-                    return Json::parse(*payload);
-                },
-                [&](std::string errmsg) -> std::optional<Json> {
-                    XX_LOGD("[event_hub] bus payload for `{}` is not JSON: {}", topic, errmsg);
-                    return std::nullopt;
-                }
-            );
-            if (parsed.has_value()) {
-                value = std::move(*parsed);
+}
+
+void EventHub::attachBroadcasts(
+    const std::shared_ptr<pluginxx::BroadcastRegistry>& broadcasts
+) {
+    broadcasts_ = broadcasts;
+}
+
+bool EventHub::publishPluginValue(
+    std::string_view name,
+    std::string_view valueJson,
+    std::string_view owner
+) {
+    if (closed_ || name.empty()) {
+        return false;
+    }
+    // 没人等、也没声明过的主题不当成值事件: 插件之间的普通消息
+    // (面板刷新/数据通道) 不应在事件表里各占一条记录
+    if (!wants(name)) {
+        return false;
+    }
+    Json       value     = Json(std::string{valueJson});
+    const bool looksJson = !valueJson.empty()
+                           && (valueJson.front() == '{' || valueJson.front() == '['
+                               || valueJson.front() == '"');
+    if (looksJson) {
+        auto parsed = agentxx::util::catchError<std::optional<Json>>(
+            [&]() -> std::optional<Json> {
+                return Json::parse(valueJson);
+            },
+            [&](std::string errmsg) -> std::optional<Json> {
+                XX_LOGD("[event_hub] broadcast payload for `{}` is not JSON: {}", name, errmsg);
+                return std::nullopt;
             }
+        );
+        if (parsed.has_value()) {
+            value = std::move(*parsed);
         }
-        std::string err;
-        // 总线消息没有发送者身份: 插件族的主题按名字推断归属 (`plugin.<名>.x` → `plugin:<名>`),
-        // 否则会被当成内置源发布
-        if (!publishValue(topic, std::move(value), ownerOfName(topic, {}), &err)) {
-            XX_LOGW("[event_hub] publish from bus topic `{}` rejected: {}", topic, err);
-        }
-    };
-    // 插件往 `plugin.` 发字符串就等于往中枢发值; 内置主题不走这条路,
-    // 因此不必订阅 `agentxx.*` 前缀 (也不会被强类型主题的高频发布拖慢)
-    valueSubId_ = bus->listenPrefix(naming::kPluginRoot, handleTopic);
+    }
+    std::string err;
+    // 广播没有发送者身份: 插件族的主题按名字推断归属 (`plugin.<名>.x` → `plugin:<名>`)
+    if (!publishValue(name, std::move(value), ownerOfName(name, owner), &err)) {
+        XX_LOGW("[event_hub] publish from broadcast `{}` rejected: {}", name, err);
+        return false;
+    }
+    return true;
 }
 
 void EventHub::detachBus() {
-    if (bus_) {
-        if (valueSubId_ != 0) {
-            bus_->unlistenPrefix(valueSubId_);
-        }
-    }
-    valueSubId_ = 0;
     bus_.reset();
 }
 
@@ -529,6 +524,23 @@ std::expected<PublishOutcome, std::string>
         return item.second.wait.state == WaitState::Armed && item.second.wait.spec.event == nameCopy;
     });
     outcome.remainingWaits = static_cast<size_t>(remaining);
+    // 通知面: 同名广播频道 (值原样给出; 已结束的频道由 endEvent 处理)
+    if (broadcasts_) {
+        // 频道按需声明: 事件名是运行期才知道的, 未声明就补一条 (幂等)
+        if (!broadcasts_->declares(nameCopy)) {
+            pluginxx::BroadcastDecl decl;
+            decl.id      = nameCopy;
+            decl.cache   = pluginxx::BroadcastCache_e::Latest;
+            decl.publish = pluginxx::BroadcastPublisher_e::Owner;
+            decl.scope   = pluginxx::BroadcastScope_e::App;
+            broadcasts_->declare(decl, nullptr);
+        }
+        std::string reason;
+        if (!broadcasts_->publish(nameCopy, value.dump(), std::string{}, &reason)
+            && !reason.empty()) {
+            XX_LOGD("[event_hub] broadcast `{}` not published: {}", nameCopy, reason);
+        }
+    }
     if (bus_ && bus_->hasListeners<EventHubValue>(Topic::HubValue)) {
         EventHubValue ev{.name = nameCopy, .valueJson = value.dump(), .valueCount = count};
         auto          bus = bus_;
@@ -649,6 +661,13 @@ std::expected<EndOutcome, std::string>
     const auto count       = rec->rec.published;
     const auto summaryText = rec->rec.summary.dump();
     dispatchEnded(*rec);
+    // 广播面: 同一个名字的频道也结束 (订阅方收到 on_end; 再次发布会被拒)
+    if (broadcasts_ && broadcasts_->declares(nameCopy)) {
+        std::string reason;
+        if (!broadcasts_->end(nameCopy, summaryText, std::string{}, &reason) && !reason.empty()) {
+            XX_LOGD("[event_hub] broadcast `{}` not ended: {}", nameCopy, reason);
+        }
+    }
     if (bus_ && bus_->hasListeners<EventHubEnded>(Topic::HubEnded)) {
         EventHubEnded ev{.name = nameCopy, .summaryJson = summaryText, .valueCount = count};
         auto          bus = bus_;

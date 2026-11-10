@@ -617,17 +617,24 @@ if (CMAKE_CROSSCOMPILING AND XX_IS_WIN_D)
   add_compile_definitions(_WIN32_WINNT=0x0A00 WINVER=0x0A00 NTDDI_VERSION=0x0A000000 _WIN32_IE=0x0A00)
 endif()
 
-# 插件 API 契约代次 (v3): 通用表去掉业务成员 (会话工作目录/取消查询/工具提示词
-# 已迁到 agentxx 自己的业务表), 作用域引用与通用根请求的字段名泛化
+# 插件 API 契约代次 (v5): 钩子 / 功能点 / 事件中枢三张业务表删除, 扩展点统一成
+# "功能埋点" (能力实现行 + 同名广播频道); 插件面所有发布/订阅走广播表, 网络能力
+# 走 `<应用名>.net`。client 侧删 events / json / log 三张自有表
 # - **库代码里的默认值不改**: cxx_pluginxx 被多个主程序共用, `abi.h` 的
 #   `PLUGINXX_API_VERSION` / `PLUGINXX_MIN_API_VERSION` 默认恒为 1, 不跟随任一主程序;
-# - agentxx 在自己的构建里用宏覆盖成 4 (这里是唯一改代次的地方): 嵌套构建
+# - agentxx 在自己的构建里用宏覆盖成 5 (这里是唯一改代次的地方): 嵌套构建
 #   (cxx_pluginxx / 插件 / 测试 / 客户端) 都经 _AGENTXX_COMMON_CMAKE_ARGS 继承同一份
 #   FLAGS, 因此框架、使用方与插件看到的值一致; 插件不链接框架库也能拿到 (只用头文件)
 set(
-  AGENTXX_PLUGIN_API_VERSION "4"
+  AGENTXX_PLUGIN_API_VERSION "5"
   CACHE STRING "agentxx 使用的插件 API 契约代次 (宏覆盖 cxx_pluginxx 的默认值 1)"
 )
+# 配置缓存不会因为默认值改了而自动更新: 老的 build 目录里还是上一代的值, 不纠正会让
+# 插件与主程序编译到不同代次 (表现为加载阶段就被“API 版本过低”拦住)
+if (NOT AGENTXX_PLUGIN_API_VERSION STREQUAL "5")
+  set(AGENTXX_PLUGIN_API_VERSION "5" CACHE STRING
+    "agentxx 使用的插件 API 契约代次 (宏覆盖 cxx_pluginxx 的默认值 1)" FORCE)
+endif()
 if (NOT(CMAKE_CXX_FLAGS MATCHES "-DPLUGINXX_API_VERSION=${AGENTXX_PLUGIN_API_VERSION}"
         AND CMAKE_CXX_FLAGS MATCHES
             "-DPLUGINXX_MIN_API_VERSION=${AGENTXX_PLUGIN_API_VERSION}"))
@@ -646,6 +653,25 @@ if (NOT(CMAKE_CXX_FLAGS MATCHES "-DPLUGINXX_API_VERSION=${AGENTXX_PLUGIN_API_VER
   unset(_agentxx_flags_var)
   unset(_agentxx_sep)
 endif()
+
+# 插件应用名: 通用表 IID 与官方标识的前缀 (`<应用名>.log` / `<应用名>.capabilities`)。
+# - cxx_pluginxx 的默认值是 `pluginxx` (库自己就是应用), 主程序必须覆盖;
+# - 插件源码只包含框架头、不链接框架目标 (构建定义传不到), 因此同 API 代次一样经
+#   全局 FLAGS 下发, 另外给 cxx_pluginxx 自己的嵌套构建传一份;
+# - agent/plugins/CMakeLists.txt 会检查这个值, 不一致直接报错 (两端编译名不同就等于
+#   插件按错前缀查不到表)。
+set(AGENTXX_PLUGIN_APP_NAME "agentxx" CACHE STRING "插件应用名 (通用表 IID 与官方标识前缀)")
+# 每次都先剔旧值再追加: 配置缓存不会自动过期, 旧值 (尤其是漏引号的写法) 会一直留在
+# CMAKE_*_FLAGS 里, 表现为 `PLUGINXX_APP_ID` 拼出一个裸标识符 (编译报“未声明的标识符”)
+foreach(_agentxx_flags_var CMAKE_C_FLAGS CMAKE_CXX_FLAGS)
+  string(REGEX REPLACE " *-DPLUGINXX_APP_NAME=[^ ]*" "" ${_agentxx_flags_var}
+    "${${_agentxx_flags_var}}")
+  # 带引号: `PLUGINXX_APP_NAME` 是字符串字面量
+  set(${_agentxx_flags_var}
+    "${${_agentxx_flags_var}} -DPLUGINXX_APP_NAME=\\\"${AGENTXX_PLUGIN_APP_NAME}\\\""
+    CACHE STRING "" FORCE)
+endforeach()
+unset(_agentxx_flags_var)
 
 # 快速链接器 (GCC/Clang): mold > gold > 默认 bfd，大幅减少大体积二进制链接时间
 # - auto: 自动检测 mold / ld.gold，均未安装时使用默认链接器
@@ -1534,25 +1560,6 @@ ExternalProject_Add(
 )
 
 ExternalProject_Add(
-  cxx_utilxx_repo
-  DEPENDS
-    cxx_utilxx_base_repo
-    fmt_repo
-    html2md_repo
-  SOURCE_DIR "${AGENTXX_THIRD_PARTY_DIR}/cxx_utilxx/"
-  INSTALL_DIR "${AGENTXX_INSTALL_DIR}"
-  BUILD_ALWAYS TRUE
-  INSTALL_ALWAYS TRUE
-  CMAKE_ARGS
-    ${_AGENTXX_COMMON_CMAKE_ARGS}
-    -DCXX_UTILXX_ENABLE_HYPERSCAN=${AGENTXX_ENABLE_HYPERSCAN}
-  CMAKE_CACHE_ARGS
-    ${_AGENTXX_COMMON_CMAKE_CACHE_ARGS}
-    "-DOPENSSL_ROOT_DIR:PATH=${OPENSSL_ROOT_DIR}"
-  TEST_COMMAND ""
-)
-
-ExternalProject_Add(
   cxx_pluginxx_repo
   DEPENDS
     cxx_utilxx_base_repo
@@ -1566,8 +1573,29 @@ ExternalProject_Add(
     ${_AGENTXX_COMMON_CMAKE_ARGS}
     -DPLUGINXX_API_VERSION=${AGENTXX_PLUGIN_API_VERSION}
     -DPLUGINXX_MIN_API_VERSION=${AGENTXX_PLUGIN_API_VERSION}
+    -DPLUGINXX_APP_NAME=${AGENTXX_PLUGIN_APP_NAME}
   CMAKE_CACHE_ARGS
     ${_AGENTXX_COMMON_CMAKE_CACHE_ARGS}
+  TEST_COMMAND ""
+)
+
+ExternalProject_Add(
+  cxx_utilxx_repo
+  DEPENDS
+    cxx_pluginxx_repo
+    cxx_utilxx_base_repo
+    fmt_repo
+    html2md_repo
+  SOURCE_DIR "${AGENTXX_THIRD_PARTY_DIR}/cxx_utilxx/"
+  INSTALL_DIR "${AGENTXX_INSTALL_DIR}"
+  BUILD_ALWAYS TRUE
+  INSTALL_ALWAYS TRUE
+  CMAKE_ARGS
+    ${_AGENTXX_COMMON_CMAKE_ARGS}
+    -DCXX_UTILXX_ENABLE_HYPERSCAN=${AGENTXX_ENABLE_HYPERSCAN}
+  CMAKE_CACHE_ARGS
+    ${_AGENTXX_COMMON_CMAKE_CACHE_ARGS}
+    "-DOPENSSL_ROOT_DIR:PATH=${OPENSSL_ROOT_DIR}"
   TEST_COMMAND ""
 )
 

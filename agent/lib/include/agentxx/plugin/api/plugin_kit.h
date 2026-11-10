@@ -15,6 +15,7 @@
 #include "agentxx/plugin/api/agentxx_ui_kit.g.h"
 #include "agentxx/plugin/api/client_plugin_api.h"
 #include "agentxx/plugin/api/plugin_api.h"
+#include "pluginxx/api/net.h"
 #include "agentxx/util/tool_result.h"
 #include "asio/awaitable.hpp"
 #include "asio/co_spawn.hpp"
@@ -103,6 +104,143 @@ using pluginxx::Task;
 using pluginxx::validateInterface;
 using pluginxx::yield;
 
+/* ==================== 广播便捷入口 (插件侧) ==================== *
+ * 插件面的发布 / 订阅一律走框架的 `<应用名>.broadcasts` 表
+ * (取代早期的 `pluginxx.events` 事件表):
+ * - `publishPluginBroadcast`: 频道不存在时先声明 (幂等) 再发布;
+ * - `subscribePluginBroadcast`: 订阅 (句柄由主程序随实例回收, 不需手动释放)。
+ *
+ * 频道 id 写全名: `plugin.<插件名>.*` 可用 (`publish: owner` 时归属就是本插件),
+ * `agentxx.agent.*` / `agentxx.client.*` 是主程序频道, 插件只能订阅。
+ */
+
+/// 发布一条广播 (频道不存在时自动声明; 失败只记日志并返回 false)
+///
+/// - `anyonePublish` 为 true 时声明成"任何人都能发" (跨端共享频道用)
+inline bool publishPluginBroadcast(
+    const PluginxxHost*            host,
+    const PluginxxBroadcastsIface* broadcasts,
+    std::string_view               id,
+    std::string_view               payload,
+    bool                           anyonePublish = false
+) {
+    if (!host || !broadcasts || !broadcasts->publish_broadcast || id.empty()) {
+        return false;
+    }
+    const auto idSv = PluginStringView::from(id.data(), id.size());
+    if (broadcasts->declare_broadcast) {
+        // 先声明 (已声明时主程序按幂等处理); 不关心结果 —— 应用频道不能改声明
+        const std::string decl = "{\"id\":\"" + std::string{id}
+                                 + "\",\"cache\":\"latest\",\"publish\":\""
+                                 + (anyonePublish ? "anyone" : "owner") + "\"}";
+        const auto declSv = PluginStringView::from(decl.data(), decl.size());
+        broadcasts->declare_broadcast(host, &declSv, nullptr);
+    }
+    const auto payloadSv = PluginStringView::from(payload.data(), payload.size());
+    return broadcasts->publish_broadcast(host, &idSv, &payloadSv, nullptr) == PLUGINXX_RESULT_OK;
+}
+
+/// 订阅一条广播 (返回句柄; 主程序在实例卸载时一并回收)
+inline PluginxxSubscription* subscribePluginBroadcast(
+    const PluginxxHost*            host,
+    const PluginxxBroadcastsIface* broadcasts,
+    const PluginxxScopeRef*        scope,
+    std::string_view               id,
+    void(PLUGINXX_CALL* handler)(const PluginxxStringView*, void*),
+    void* ud
+) {
+    if (!host || !broadcasts || !broadcasts->subscribe_broadcast || id.empty() || !handler) {
+        return nullptr;
+    }
+    const auto idSv = PluginStringView::from(id.data(), id.size());
+    return broadcasts->subscribe_broadcast(host, scope, &idSv, handler, ud, nullptr, nullptr);
+}
+
+/// 插件广播接口的兼容包装 (旧 `pluginxx.events` 表已由框架删除)
+///
+/// 框架 0.2.0 把通用事件表换成了广播表: 频道的声明 / 发布 / 订阅变成显式动作
+/// (未声明的频道发布会被拒)。插件侧的调用形状 `iface.events->publish(host, id, payload)`
+/// 仍然可用 —— 它就是本结构体, 内部先补声明再发。
+///
+/// - 新代码直接用 `iface.broadcasts` + [publishPluginBroadcast] / [subscribePluginBroadcast];
+/// - 本包装只为存量调用点保留, 全部迁移完后连同 `AgentIfaces::events` 一起删。
+/// - **只补了发布与订阅**: 撤销订阅用 `iface.broadcasts->unsubscribe_broadcast(sub)`
+///   (广播句柄的撤销不需要 host, 而本包装的调用形状里拿不到 host)。
+struct PluginEventsCompat {
+    using SubscribeFn = PluginxxSubscription*(PLUGINXX_CALL*)(
+        const PluginxxHost*,
+        const PluginxxScopeRef*,
+        const PluginxxStringView*,
+        void(PLUGINXX_CALL*)(const PluginxxStringView*, void*),
+        void*
+    );
+    using PublishFn = int32_t(PLUGINXX_CALL*)(
+        const PluginxxHost*,
+        const PluginxxStringView*,
+        const PluginxxStringView*
+    );
+    SubscribeFn subscribe = nullptr;
+    PublishFn   publish   = nullptr;
+};
+
+namespace detail {
+
+/// 按 IID 查一张通用表 (兼容包装用; 插件只在启动/发布时走这一条路)
+inline const PluginxxBroadcastsIface* queryBroadcastsIface(const PluginxxHost* host) {
+    if (!host || !host->vtable || !host->vtable->query_interface) {
+        return nullptr;
+    }
+    std::string_view iid = PLUGINXX_IFACE_BROADCASTS;
+    PluginxxStringView id{iid.data(), static_cast<uint64_t>(iid.size())};
+    return static_cast<const PluginxxBroadcastsIface*>(host->vtable->query_interface(host, &id));
+}
+
+inline PluginxxSubscription* PLUGINXX_CALL eventsCompatSubscribe(
+    const PluginxxHost*       host,
+    const PluginxxScopeRef*   scope,
+    const PluginxxStringView* id,
+    void(PLUGINXX_CALL* handler)(const PluginxxStringView*, void*),
+    void* ud
+) {
+    const auto* bc = queryBroadcastsIface(host);
+    if (!bc || !id || !handler) {
+        return nullptr;
+    }
+    return bc->subscribe_broadcast(host, scope, id, handler, ud, nullptr, nullptr);
+}
+
+inline int32_t PLUGINXX_CALL eventsCompatPublish(
+    const PluginxxHost*       host,
+    const PluginxxStringView* id,
+    const PluginxxStringView* payload
+) {
+    const auto* bc = queryBroadcastsIface(host);
+    if (!bc || !id || !id->data) {
+        return -1;
+    }
+    return publishPluginBroadcast(
+               host,
+               bc,
+               std::string_view{id->data, static_cast<size_t>(id->size)},
+               payload && payload->data
+                   ? std::string_view{payload->data, static_cast<size_t>(payload->size)}
+                   : std::string_view{}
+    )
+               ? PLUGINXX_RESULT_OK
+               : -1;
+}
+
+} // namespace detail
+
+/// 兼容包装的唯一实例 (插件只拿指针, 生命周期与进程相同)
+inline const PluginEventsCompat* pluginEventsCompat() {
+    static const PluginEventsCompat instance{
+        &detail::eventsCompatSubscribe,
+        &detail::eventsCompatPublish,
+    };
+    return &instance;
+}
+
 /* ==================== 工具结果状态 (agentxx::util) ====================
  *
  * 插件工具的实现体可以返回 `std::string` (成功) 或 `ToolResult` (带状态):
@@ -123,7 +261,6 @@ struct AgentIfaces {
     const AgentxxPluginPermissionIface* permission = nullptr; ///< "agentxx.agent.permission"
     /// "agentxx.agent.hooks": 钩子登记 (基础两项 + 有序登记与清单三项, 同一张表)
     const AgentxxPluginHooksIface*   hooks        = nullptr;
-    const PluginxxEventsIface*       events       = nullptr; ///< "pluginxx.events"
     const PluginxxCapabilitiesIface* capabilities = nullptr; ///< "pluginxx.capabilities"
     const PluginxxSchedulerIface*    scheduler    = nullptr; ///< "pluginxx.scheduler"
     /// "agentxx.agent.session": 会话共享存储 / 提示 / 工作目录 / 取消查询
@@ -150,6 +287,15 @@ struct AgentIfaces {
     const AgentxxPluginRuntimeIface* runtime = nullptr;
     /// "agentxx.agent.event": 事件中枢 (声明事件源 / 发布值 / 登记等待)
     const AgentxxPluginEventIface* event = nullptr;
+    /// "<应用名>.broadcasts": 广播 (频道声明 / 发布 / 订阅 / 读当前值 / 结束)
+    /// - 插件的通知面走它 (钩子、事件、跨端数据都可用)
+    const PluginxxBroadcastsIface* broadcasts = nullptr;
+    /// "<应用名>.net": 网络 (HTTP / TCP / WS / UDP; 插件不直接建连接)
+    const PluginxxNetIface* net = nullptr;
+    /// 旧事件表的**兼容包装** (内部走 `broadcasts`; 主程序有广播表时非空)
+    /// - 存量调用点 `iface.events->publish / subscribe` 仍可用;
+    /// - 新代码用 `broadcasts` + [publishPluginBroadcast] / [subscribePluginBroadcast]
+    const PluginEventsCompat* events = nullptr;
 
     /// 从主程序查询全部已知 agent 侧接口表 (host 为空时返回全 NULL 聚合)
     static AgentIfaces query(const PluginxxHost* host) {
@@ -163,7 +309,10 @@ struct AgentIfaces {
             AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION
         );
         f.hooks  = queryInterface<AgentxxPluginHooksIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_HOOKS);
-        f.events = queryInterface<PluginxxEventsIface>(host, PLUGINXX_IFACE_EVENTS);
+        f.broadcasts
+            = queryInterface<PluginxxBroadcastsIface>(host, PLUGINXX_IFACE_BROADCASTS);
+        f.net = queryInterface<PluginxxNetIface>(host, PLUGINXX_IFACE_NET);
+        f.events = f.broadcasts ? pluginEventsCompat() : nullptr;
         f.capabilities
             = queryInterface<PluginxxCapabilitiesIface>(host, PLUGINXX_IFACE_CAPABILITIES);
         f.scheduler = queryInterface<PluginxxSchedulerIface>(host, PLUGINXX_IFACE_SCHEDULER);
@@ -616,14 +765,17 @@ public:
 
 protected:
 
-    /// 业务挂钩: 基类 [init] 末尾调用 —— 挂钩会话轮次开始事件, 自动为当前会话重置
+    /// 业务挂钩: 基类 [init] 末尾调用 —— 订阅会话轮次开始广播, 自动为当前会话重置
     /// 实例级取消登记 (主程序下发 cancel 时已通过 execute_cancel 写入 CancelRegistry)
     void onHostReady() override {
-        if (!iface.events || !iface.events->subscribe) {
+        if (!iface.broadcasts || !iface.broadcasts->subscribe_broadcast) {
             return;
         }
-        auto topicSv = PluginStringView::from("agentxx.agent.round.start", sizeof("agentxx.agent.round.start") - 1);
-        roundStartSub_ = iface.events->subscribe(
+        auto topicSv = PluginStringView::from(
+            "agentxx.agent.round.start",
+            sizeof("agentxx.agent.round.start") - 1
+        );
+        roundStartSub_ = iface.broadcasts->subscribe_broadcast(
             host,
             nullptr, ///< 基类不知道 agent 引用: 订阅主程序总线 (会话事件一并到达)
             &topicSv,
@@ -643,7 +795,9 @@ protected:
                 } catch (...) {
                 }
             },
-            this
+            this,
+            nullptr,
+            nullptr
         );
         if (!roundStartSub_) {
             // 订阅失败时取消标记只能靠每个工具根开始时自清 (见 polled_tool/blocking_tool),

@@ -171,26 +171,32 @@ int32_t PluginManager::runtimeRegisterTrigger(
     trigger->maxQueue   = spec->max_queue > 0 ? spec->max_queue : 20;
     trigger->delivery   = delivery;
 
-    // 订阅走通用事件表的后端 (与插件自己订阅是同一套: 主题补齐、实例租约、撤销)
-    auto source = eventSource(nullptr);
-    if (!source) {
-        err = "register_trigger: 本进程没有事件总线";
+    // 触发器订阅的是广播频道 (与插件自己订阅是同一套): 频道未声明时先补一条
+    // 应用频道声明, 再按属主为空 (= 应用/主程序) 订阅
+    auto registry = broadcasts();
+    if (!registry) {
+        err = "register_trigger: 本进程没有广播注册表";
         return AGENTXX_PLUGIN_RUNTIME_ERR_UNSUPPORTED;
     }
+    ensureBroadcast(trigger->topic, pluginxx::BroadcastCache_e::Latest, false, false);
     std::weak_ptr<PluginManager> weakSelf = weak_from_this();
     auto                         triggerId = trigger->triggerId;
-    trigger->subscriptionId                = source->subscribe(
+    std::string                  subError;
+    trigger->subscriptionId                = registry->subscribe(
         trigger->topic,
+        std::string{},
         [weakSelf, triggerId](std::string_view payload) {
             auto self = weakSelf.lock();
             if (!self) {
                 return;
             }
             self->onTriggerEvent(triggerId, payload);
-        }
+        },
+        pluginxx::BroadcastSubscribeOptions{},
+        &subError
     );
     if (trigger->subscriptionId == 0) {
-        err = fmt::format("register_trigger: 订阅主题 '{}' 失败", trigger->topic);
+        err = fmt::format("register_trigger: 订阅频道 '{}' 失败: {}", trigger->topic, subError);
         return AGENTXX_PLUGIN_RUNTIME_ERR_FAILED;
     }
     if (trigger->policy == AGENTXX_PLUGIN_TRIGGER_POLICY_COALESCE) {
@@ -224,8 +230,8 @@ int32_t PluginManager::runtimeUnregisterTrigger(PluginInstance* inst, int64_t tr
     }
     auto trigger = *it;
     if (trigger->subscriptionId != 0) {
-        if (auto source = eventSource(nullptr); source) {
-            source->unsubscribe(trigger->topic, trigger->subscriptionId);
+        if (auto registry = broadcasts()) {
+            registry->unsubscribe(trigger->topic, trigger->subscriptionId);
         }
         trigger->subscriptionId = 0;
     }
@@ -241,7 +247,14 @@ int32_t
     if (inst == nullptr || topic.empty()) {
         return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
     }
-    return publish(topic, payload);
+    // 插件发事件 = 向广播频道发布: 与插件自己直接 publish 同一套校验 (只能写 plugin.*)
+    std::string publishError;
+    const int   rc = publishBroadcastFrom(inst, topic, payload, &publishError);
+    if (rc != PLUGINXX_RESULT_OK) {
+        XX_LOGW("runtime emit rejected: `{}` ({})", topic, publishError);
+    }
+    return rc == PLUGINXX_RESULT_OK ? AGENTXX_PLUGIN_RUNTIME_OK
+                                    : AGENTXX_PLUGIN_RUNTIME_ERR_FAILED;
 }
 
 void PluginManager::onTriggerEvent(int64_t triggerId, std::string_view payload) {

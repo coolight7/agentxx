@@ -227,7 +227,7 @@ typedef struct AgentxxPluginHookSpecEx {
 
 /* ==================== 接口表: 工具 (agentxx.agent.tools) ==================== */
 
-#define AGENTXX_PLUGIN_IFACE_AGENT_TOOLS             "agentxx.agent.tools"
+#define AGENTXX_PLUGIN_IFACE_AGENT_TOOLS             PLUGINXX_APP_ID("agent.tools")
 /// v2: 全部成员增加 `agent` 参数; 删除 `op_cancel` (统一用 `pluginxx.cancel` 的取消)
 /// v3: 工具结果的成败由最终通知的状态位表达 (`PLUGINXX_OPERATOR_OK`/`FAILED`/`CANCELED`),
 ///     结果文本只给模型读 —— 插件不要再把 `[Error: ...]` 之类前缀写进 payload,
@@ -273,7 +273,7 @@ typedef struct AgentxxPluginToolsIface {
 
 /* ==================== 接口表: 工具权限声明 (agentxx.agent.permission) ==================== */
 
-#define AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION             "agentxx.agent.permission"
+#define AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION             PLUGINXX_APP_ID("agent.permission")
 /// v2: 全部成员增加 `agent` 参数 (权限中间件与工作区都是 per-agent)
 #define AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION_VERSION     2
 #define AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION_MIN_VERSION 2
@@ -428,7 +428,7 @@ typedef struct AgentxxPluginHooksIface {
 
 /* ==================== 接口表: 会话访问 (agentxx.agent.session) ==================== */
 
-#define AGENTXX_PLUGIN_IFACE_AGENT_SESSION             "agentxx.agent.session"
+#define AGENTXX_PLUGIN_IFACE_AGENT_SESSION             PLUGINXX_APP_ID("agent.session")
 /// v2: 全部成员增加 `agent` 参数 (会话属于某个 agent)
 /// v3: 表尾追加会话工作目录与"是否已取消"查询 (原在插件框架通用表里的业务成员);
 ///     基线随本代重置为完整布局
@@ -486,7 +486,7 @@ typedef struct AgentxxPluginSessionIface {
 
 /* ==================== 接口表: 会话上下文查询 (agentxx.agent.context) ==================== */
 
-#define AGENTXX_PLUGIN_IFACE_AGENT_CONTEXT             "agentxx.agent.context"
+#define AGENTXX_PLUGIN_IFACE_AGENT_CONTEXT             PLUGINXX_APP_ID("agent.context")
 /// v2: 全部成员增加 `agent` 参数
 #define AGENTXX_PLUGIN_IFACE_AGENT_CONTEXT_VERSION     2
 #define AGENTXX_PLUGIN_IFACE_AGENT_CONTEXT_MIN_VERSION 2
@@ -522,7 +522,7 @@ typedef struct AgentxxPluginContextIface {
 
 /* ==================== 接口表: 主模型配置 (agentxx.agent.model) ==================== */
 
-#define AGENTXX_PLUGIN_IFACE_AGENT_MODEL             "agentxx.agent.model"
+#define AGENTXX_PLUGIN_IFACE_AGENT_MODEL             PLUGINXX_APP_ID("agent.model")
 /// v2: `get_config` 增加 `agent` 参数
 #define AGENTXX_PLUGIN_IFACE_AGENT_MODEL_VERSION     2
 #define AGENTXX_PLUGIN_IFACE_AGENT_MODEL_MIN_VERSION 2
@@ -542,7 +542,7 @@ typedef struct AgentxxPluginModelIface {
 
 /* ==================== 接口表: 主程序提示词读写 (agentxx.agent.prompt) ==================== */
 
-#define AGENTXX_PLUGIN_IFACE_AGENT_PROMPT             "agentxx.agent.prompt"
+#define AGENTXX_PLUGIN_IFACE_AGENT_PROMPT             PLUGINXX_APP_ID("agent.prompt")
 /// v2: 全部成员增加 `agent` 参数 (提示词按 agent 贡献/合成)
 /// v3: 表尾追加工具提示词查询 (原在插件框架通用表里的业务成员);
 ///     基线随本代重置为完整布局
@@ -577,7 +577,7 @@ typedef struct AgentxxPluginPromptIface {
 
 /* ==================== 接口表: 会话资源贡献 (agentxx.agent.resources) ==================== */
 
-#define AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES             "agentxx.agent.resources"
+#define AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES             PLUGINXX_APP_ID("agent.resources")
 /// v2: 全部成员增加 `agent` 参数 (资源按挂载应用, 每个 agent 各一份)
 #define AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES_VERSION     2
 #define AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES_MIN_VERSION 2
@@ -673,7 +673,7 @@ typedef struct AgentxxPluginGraphNodeTypeSpec {
 /// - get/set graph JSON 用于插件查看/修改主程序执行图 (默认名 "agentxx.default");
 ///   修改后的 JSON 在主程序构建 engine 前生效 (插件须保证图合法性, 非法时主程序
 ///   回退默认图并记日志)
-#define AGENTXX_PLUGIN_IFACE_AGENT_GRAPH             "agentxx.agent.graph"
+#define AGENTXX_PLUGIN_IFACE_AGENT_GRAPH             PLUGINXX_APP_ID("agent.graph")
 /// v2: 全部成员增加 `agent` 参数 (图注册表与图定义都是 per-agent)
 #define AGENTXX_PLUGIN_IFACE_AGENT_GRAPH_VERSION     2
 #define AGENTXX_PLUGIN_IFACE_AGENT_GRAPH_MIN_VERSION 2
@@ -878,7 +878,7 @@ typedef struct AgentxxPluginFeatureIface {
 ///
 /// 插件自己就拿着 agent 引用 (挂载时下发), 不需要问主程序"我在谁身上";
 /// 本表的用途是诊断与自查 (例如启动日志、测试断言)。
-#define AGENTXX_PLUGIN_IFACE_AGENT_MOUNT             "agentxx.agent.mount"
+#define AGENTXX_PLUGIN_IFACE_AGENT_MOUNT             PLUGINXX_APP_ID("agent.mount")
 #define AGENTXX_PLUGIN_IFACE_AGENT_MOUNT_VERSION     1
 #define AGENTXX_PLUGIN_IFACE_AGENT_MOUNT_MIN_VERSION 1
 /* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
@@ -915,7 +915,7 @@ typedef struct AgentxxPluginMountIface {
 /// 边界: 本表用句柄寻址 (`root_id` / `channel_id`), 因此**不带** agent 引用参数 ——
 /// 它是容器级接口, 不是"当前 agent"接口。`root_id` 与该根的 `agentId` 是同一个值,
 /// 需要 agent 级操作 (查挂了哪些插件等) 时直接当 agentId 用。
-#define AGENTXX_PLUGIN_IFACE_AGENT_RUNTIME             "agentxx.agent.runtime"
+#define AGENTXX_PLUGIN_IFACE_AGENT_RUNTIME             PLUGINXX_APP_ID("agent.runtime")
 /// v2: 表尾追加 4 个后台任务入口 (submit/cancel/get/list_async_work)
 #define AGENTXX_PLUGIN_IFACE_AGENT_RUNTIME_VERSION     2
 #define AGENTXX_PLUGIN_IFACE_AGENT_RUNTIME_MIN_VERSION 1

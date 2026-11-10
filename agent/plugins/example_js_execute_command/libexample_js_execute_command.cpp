@@ -21,6 +21,11 @@
 
 namespace {
 
+/// JS 引擎声明的能力全名 (引擎以短名 `interpreter.js` 声明, 宿主补全成
+/// `plugin.<插件 id>.<名字>`; 调用方必须写全名)
+constexpr const char* kInterpreterCapability
+    = "plugin.agentxx_javascript_engine.interpreter.js";
+
 struct ShellCtx {
     const PluginxxHost*          host = nullptr;
     agentxx::plugin::AgentIfaces iface{};
@@ -56,10 +61,10 @@ std::string jsonEscapedString(const ShellCtx& ctx, const std::string& value) {
     return agentxx::plugin::jsonEscape(ctx.host, ctx.iface.json, value);
 }
 
-/// "interpreter.js" 能力调用参数: {"name": <插件名>, "path": <脚本路径>}
+/// "interpreter.js" 能力调用参数: {"op": "load", "name": <插件名>, "path": <脚本路径>}
 std::string scriptArgsJson(const ShellCtx& ctx) {
     return fmt::format(
-        "{{\"name\":{},\"path\":{}}}",
+        "{{\"op\":\"load\",\"name\":{},\"path\":{}}}",
         jsonEscapedString(ctx, ctx.name),
         jsonEscapedString(ctx, ctx.scriptPath)
     );
@@ -131,20 +136,20 @@ void dispatchScriptUnload(ShellCtx& ctx) {
         return;
     }
     ctx.scriptLoaded = false;
-    if (!ctx.iface.capabilities || !ctx.iface.capabilities->invoke_capability_async) {
+    if (!ctx.iface.capabilities || !ctx.iface.capabilities->invoke_capability) {
         return;
     }
-    auto           capSv    = agentxx::plugin::PluginStringView::fromCstr("interpreter.js");
-    auto           unloadSv = agentxx::plugin::PluginStringView::fromCstr("unload");
-    std::string    args     = fmt::format("{{\"name\":{}}}", jsonEscapedString(ctx, ctx.name));
-    auto           argsSv   = agentxx::plugin::PluginStringView::from(args.data(), args.size());
+    auto capSv = agentxx::plugin::PluginStringView::fromCstr(kInterpreterCapability);
+    std::string args
+        = fmt::format("{{\"op\":\"unload\",\"name\":{}}}", jsonEscapedString(ctx, ctx.name));
+    auto           argsSv = agentxx::plugin::PluginStringView::from(args.data(), args.size());
     PluginxxString err{nullptr, 0};
-    auto*          h = ctx.iface.capabilities->invoke_capability_async(
+    auto*          h = ctx.iface.capabilities->invoke_capability(
         ctx.host,
         nullptr,
         &capSv,
-        &unloadSv,
         &argsSv,
+        0,
         &onScriptUnloadDone,
         &ctx,
         &err
@@ -278,12 +283,18 @@ static void*
     if (!notify || !notify->done) {
         return setErr("example_js_execute_command start: notify required");
     }
-    if (!ctx.iface.capabilities || !ctx.iface.capabilities->has_capability
-        || !ctx.iface.capabilities->invoke_capability_async) {
+    if (!ctx.iface.capabilities || !ctx.iface.capabilities->capability_info
+        || !ctx.iface.capabilities->invoke_capability) {
         return setErr("example_js_execute_command start: host lacks capabilities interface");
     }
-    auto capSv = agentxx::plugin::PluginStringView::fromCstr("interpreter.js");
-    if (!ctx.iface.capabilities->has_capability(ctx.host, &capSv)) {
+    auto capSv = agentxx::plugin::PluginStringView::fromCstr(kInterpreterCapability);
+    PluginxxString capInfo{nullptr, 0};
+    const bool     hasCap
+        = ctx.iface.capabilities->capability_info(ctx.host, &capSv, &capInfo) == 0;
+    if (capInfo.data) {
+        agentxx::plugin::PluginString::free(ctx.host, &capInfo);
+    }
+    if (!hasCap) {
         return setErr("example_js_execute_command start: interpreter.js capability not available "
                       "(need agentxx_javascript_engine)");
     }
@@ -299,16 +310,15 @@ static void*
     }
 
     std::string    args   = scriptArgsJson(ctx);
-    auto           loadSv = agentxx::plugin::PluginStringView::fromCstr("load");
     auto           argsSv = agentxx::plugin::PluginStringView::from(args.data(), args.size());
     PluginxxString err{nullptr, 0};
     auto*          state = new std::pair<ShellCtx*, PluginxxOperatorNotify>(&ctx, *notify);
-    auto*          h     = ctx.iface.capabilities->invoke_capability_async(
+    auto*          h     = ctx.iface.capabilities->invoke_capability(
         ctx.host,
         nullptr,
         &capSv,
-        &loadSv,
         &argsSv,
+        0,
         &onScriptLoadDone,
         state,
         &err

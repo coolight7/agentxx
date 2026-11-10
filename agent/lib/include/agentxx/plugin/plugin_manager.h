@@ -12,7 +12,7 @@
 #include "agentxx/tools/tool.h"
 #include "asio/awaitable.hpp"
 #include "asio/thread_pool.hpp"
-#include "pluginxx/host/domain_hooks.h"
+#include "pluginxx/host/domain_services.h"
 #include "pluginxx/host/host_core.h"
 #include "pluginxx/host/manifest.h"
 #include "utilxx_base/json.h"
@@ -155,11 +155,11 @@ private:
 /// `stopForDisable` / `startForEnable` / `hasPendingClose` 都是继承来的。
 class PluginManager : public pluginxx::PluginHostLifecycle<PluginInstance>,
                       public std::enable_shared_from_this<PluginManager>,
-                      public pluginxx::DomainHooks {
+                      public pluginxx::DomainServices {
 public:
 
     /// 本主程序向插件提供的接口表数量 (文档里的数字有常量可校验)
-    /// - 10 张通用表 (`pluginxx.*`, 由插件框架实现: log/json/config/plugins/events/
+    /// - 10 张通用表 (由插件框架实现: log/json/config/plugins/broadcasts/
     ///   scheduler/coroutine_runtime/tasks/cancel/capabilities)
     /// - 13 张 agent 业务表 (`agentxx.agent.*`: tools/permission/hooks/session/
     ///   context/model/prompt/resources/graph/feature/mount/runtime/event)
@@ -403,34 +403,45 @@ public:
 
     std::string getModelConfigJson();
 
-    // ==================== pluginxx::DomainHooks 实现 ====================
-    // 通用表 (log/json/config/plugins/events/scheduler/coroutine_runtime/tasks/cancel/
-    // capabilities) 的实现位于 cxx_pluginxx, 需要主程序数据的入口经这些方法取数
-    // (见 pluginxx/host/domain_hooks.h)。实现体在 plugin_manager_domain_hooks.cpp。
+    // ==================== pluginxx::DomainServices 实现 ====================
+    // 通用表 (log/json/config/plugins/broadcasts/scheduler/coroutine_runtime/tasks/
+    // cancel/capabilities) 的实现位于 cxx_pluginxx, 需要主程序数据的入口经这些方法取数
+    // (见 pluginxx/host/domain_services.h)。实现体在 plugin_manager_domain_services.cpp。
 
-    /// 事件后端 (包装 agentxx::events::EventBus; 无总线时返回 nullptr)
-    /// - 非空引用: 该挂载所属 agent 的总线 (会话/轮次事件)
-    /// - 空引用: 主 agent 的总线 (进程级事件)
-    std::shared_ptr<pluginxx::EventSource> eventSource(const PluginxxScopeRef* agent) override;
-    /// 事件主题**不做任何补齐** (基类默认就是原样返回)
+    /// 广播主题**不做任何补齐** (基类默认就是原样返回)
     /// - 命名约定统一为全名: `agentxx.agent.*` / `agentxx.client.*` / `plugin.<插件名>.*`
-    /// - 写侧校验在 [subscribe] / [publish] 与业务表入口, 这里不参与
+    /// - 写侧校验在 [publish] 与业务表入口, 这里不参与
     std::string qualifyEventTopic(std::string_view topic) override;
 
-    /// 事件订阅 (通用 events 表入口的落点)
-    /// - 主题必须是全名 (三族之一); 裸名 (如 `demo.topic`) 直接拒绝并记日志
-    PluginxxSubscription* subscribe(
-        PluginInstance*                                            inst,
-        const PluginxxScopeRef*                                    scope,
-        std::string_view                                           topic,
-        void(PLUGINXX_CALL* handler)(const PluginxxStringView*, void*),
-        void*                                                      ud
+    // ==================== 广播 ====================
+    //
+    // 插件面的发布 / 订阅 / 读当前值 / 结束都走框架的 `<应用名>.broadcasts` 表
+    // (由 PluginHostCore 实现); 这里是主程序自用的几个入口。
+
+    /// 发布一条广播 (主程序代发; 同时转给中枢, 让等这个事件的人能收到)
+    ///
+    /// - 频道未声明时自动补一条 (`cache: latest` + `publish: owner`);
+    /// - 失败只记日志 (广播是通知面, 不能让业务流程因它失败)。
+    void publishBroadcastValue(std::string_view id, std::string_view payloadJson);
+
+    /// 确保频道已声明 (幂等; 已声明时保留原声明)
+    void ensureBroadcast(
+        std::string_view    id,
+        pluginxx::BroadcastCache_e cache          = pluginxx::BroadcastCache_e::Latest,
+        bool                anyonePublish  = false,
+        bool                pushOnSubscribe = false
     );
 
-    /// 事件发布 (通用 events 表入口的落点)
-    /// - 只能落在插件族里 (`plugin.<名字>.*`), 不允许写内置主题
-    /// - 不限定插件名: 同一组织的多个插件可以共用一段 (建议用自己的插件名)
-    int32_t publish(std::string_view topic, std::string_view eventJson);
+    /// 结束一条广播 (属主/应用可结束; 失败只记日志)
+    void endBroadcastValue(std::string_view id, std::string_view reasonJson);
+
+    /// 插件发布广播的入口 (表入口的落点;**遮蔽基类同名方法**以多一步转给中枢)
+    int publishBroadcastFrom(
+        PluginInstance*  inst,
+        std::string_view broadcastId,
+        std::string_view payloadJson,
+        std::string*     error
+    );
     /// 阻塞工作委托到工作线程池 (插件 offload: 阻塞工具 / 插件自己的耗时工作)
     /// - 返回 false 表示没有任何可用的线程池 (插件侧据此报 offload 失败)
     bool postToWorkerThread(std::function<void()> fn) override;

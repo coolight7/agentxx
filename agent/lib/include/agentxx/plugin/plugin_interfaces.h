@@ -35,6 +35,7 @@
 
 #include "agentxx/plugin/api/client_plugin_api.h"
 #include "agentxx/plugin/api/plugin_api.h"
+#include "pluginxx/api/net.h"
 #include "pluginxx/host/manifest.h"
 
 #include <set>
@@ -86,9 +87,15 @@ inline constexpr std::string_view AgentCore = "agentxx.agent.core";
 inline constexpr std::string_view AgentTools = AGENTXX_PLUGIN_IFACE_AGENT_TOOLS;
 /// 钩子登记 (基础两项 + 有序登记与清单三项, 同一张表; 见
 /// AGENTXX_PLUGIN_IFACE_AGENT_HOOKS)
+/// - 待归并: 钩子与功能点正在并入“功能埋点”(`agentxx.agent.point.*` + 能力行),
+///   归并完成后本项与 AgentFeature 一起删除
 inline constexpr std::string_view AgentHooks        = AGENTXX_PLUGIN_IFACE_AGENT_HOOKS;
-inline constexpr std::string_view AgentEvents       = PLUGINXX_IFACE_EVENTS;
+/// 广播 (频道声明 / 发布 / 订阅 / 读 / 结束) —— 取代已删的 `agentxx.agent.event`
+inline constexpr std::string_view AgentBroadcasts   = PLUGINXX_IFACE_BROADCASTS;
+/// 能力 (声明 + 实现行 + 调用)
 inline constexpr std::string_view AgentCapabilities = PLUGINXX_IFACE_CAPABILITIES;
+/// 网络 (HTTP / TCP / WS / UDP; 插件不直接建连接)
+inline constexpr std::string_view AgentNet          = PLUGINXX_IFACE_NET;
 inline constexpr std::string_view AgentScheduler    = PLUGINXX_IFACE_SCHEDULER;
 inline constexpr std::string_view AgentSession      = AGENTXX_PLUGIN_IFACE_AGENT_SESSION;
 inline constexpr std::string_view AgentPlugins      = PLUGINXX_IFACE_PLUGINS;
@@ -99,6 +106,7 @@ inline constexpr std::string_view AgentLog          = PLUGINXX_IFACE_LOG;
 inline constexpr std::string_view AgentResources    = AGENTXX_PLUGIN_IFACE_AGENT_RESOURCES;
 inline constexpr std::string_view AgentModel        = AGENTXX_PLUGIN_IFACE_AGENT_MODEL;
 /// 功能点: 登记实现 / 声明插件点 / 调用点 / 读清单 (见 AGENTXX_PLUGIN_IFACE_AGENT_FEATURE)
+/// - 待归并: 与钩子一起并入“功能埋点”, 完成后删除
 inline constexpr std::string_view AgentFeature = AGENTXX_PLUGIN_IFACE_AGENT_FEATURE;
 inline constexpr std::string_view AgentCancel  = PLUGINXX_IFACE_CANCEL;
 inline constexpr std::string_view AgentTasks   = PLUGINXX_IFACE_TASKS;
@@ -111,6 +119,10 @@ inline constexpr std::string_view AgentCoroutineRuntime = PLUGINXX_IFACE_COROUTI
 /// 细粒度能力名精确声明自己实际使用的子能力 —— 声明表整体会让"主程序缺某子能力"
 /// 变成"整个插件不可加载/告警"
 inline constexpr std::string_view ClientUi         = AGENTXX_IFACE_CLIENT_UI;
+/// 客户端广播: 插件端的客户端事件与跨端插件数据都走 `<应用名>.broadcasts`
+inline constexpr std::string_view ClientBroadcasts = PLUGINXX_IFACE_BROADCASTS;
+/// 客户端网络: 与 agent 侧同一个 `PluginNetService`
+inline constexpr std::string_view ClientNet        = PLUGINXX_IFACE_NET;
 inline constexpr std::string_view ClientStatusItem = "agentxx.client.status_item";
 inline constexpr std::string_view ClientPanel      = "agentxx.client.panel";
 inline constexpr std::string_view ClientToast      = "agentxx.client.toast";

@@ -2211,8 +2211,10 @@ JSValue JsEngine::bridgeCall(
                 JS_NewInt32(ctx, static_cast<int32_t>(subPtr >> 32))
             );
             JS_SetPropertyUint32(ctx, pctx->agents, len, entry);
-            pctx->rollbackActions.push_back([eventsIface = iface.events, sub]() {
-                eventsIface->unsubscribe(sub);
+            pctx->rollbackActions.push_back([bc = iface.broadcasts, sub]() {
+                if (bc && bc->unsubscribe_broadcast) {
+                    bc->unsubscribe_broadcast(sub);
+                }
             });
             pctx->hookBindings.push_back(std::move(binding));
             return JS_NewInt32(ctx, static_cast<int32_t>(len));
@@ -2238,7 +2240,11 @@ JSValue JsEngine::bridgeCall(
                 JS_FreeValue(ctx, hiV);
                 subPtr = (static_cast<uint64_t>(hi) << 32) | lo;
                 if (subPtr) {
-                    iface.events->unsubscribe(reinterpret_cast<PluginxxSubscription*>(subPtr));
+                    if (iface.broadcasts && iface.broadcasts->unsubscribe_broadcast) {
+                        iface.broadcasts->unsubscribe_broadcast(
+                            reinterpret_cast<PluginxxSubscription*>(subPtr)
+                        );
+                    }
                 }
                 JS_SetPropertyUint32(ctx, pctx->agents, token, JS_UNDEFINED);
             }
@@ -2478,44 +2484,46 @@ static void* PLUGINXX_CALL jsCapStart(
     // 内含接口查询/文件读取/字符串操作等可抛路径, 异常转 error_out 失败
     auto* engine = static_cast<JsEngine*>(ctx); ///< 提升至 try 外 (catch 日志闭包使用)
     try {
-        auto setErr = [&](const char* msg) {
-            if (error_out && caller_host) {
-                *error_out = agentxx::plugin::PluginString::fromCstr(caller_host, msg);
+        // 能力链里的处理器只知道自己的实例: 主程序传的 caller_host 恒为 nullptr,
+        // 需要接口表/堆字符串时一律用本实例的 host
+        const PluginxxHost* selfHost = engine != nullptr ? engine->host() : caller_host;
+        auto                setErr   = [&](const char* msg) {
+            if (error_out && selfHost) {
+                *error_out = agentxx::plugin::PluginString::fromCstr(selfHost, msg);
             }
             return nullptr;
         };
-        if (!engine || !notify || agentxx::plugin::PluginStringView::empty(method)) {
+        if (!engine || !notify) {
             return setErr("interpreter.js: invalid invoke");
         }
-        std::string methodStr{
-            method && method->data ? method->data : "",
-            method ? static_cast<size_t>(method->size) : 0
-        };
+        // 能力不再有独立的 method 参数: 要做什么写在 args 的 `op` 里 (`load` / `unload`,
+        // 缺省按 `load`)
         std::string argsStr{
             args_json && args_json->data ? args_json->data : "{}",
             args_json ? static_cast<size_t>(args_json->size) : 0
         };
-        // 参数解析经主程序 client 无关的 agentxx.agent.json 接口表 (对转义/嵌套结构可靠;
-        // caller_host 与本插件同进程, 接口表为同一批静态数据)
-        const agentxx::plugin::AgentIfaces callerIf
-            = agentxx::plugin::AgentIfaces::query(caller_host);
-        if (!callerIf.json || !callerIf.json->json_get_string) {
+        // 参数解析经主程序 agent 侧的 agentxx.agent.json 接口表 (对转义/嵌套结构可靠)
+        const agentxx::plugin::AgentIfaces selfIf
+            = agentxx::plugin::AgentIfaces::query(selfHost);
+        if (!selfIf.json || !selfIf.json->json_get_string) {
             return setErr("interpreter.js: host lacks agentxx.agent.json interface");
         }
         auto argStr = [&](const char* key, std::string& out) -> bool {
             PluginxxString v{nullptr, 0};
             auto argsSv = agentxx::plugin::PluginStringView::from(argsStr.data(), argsStr.size());
             auto keySv  = agentxx::plugin::PluginStringView::from(key, std::strlen(key));
-            callerIf.json->json_get_string(caller_host, &argsSv, &keySv, &v);
+            selfIf.json->json_get_string(selfHost, &argsSv, &keySv, &v);
             if (!v.data) {
                 return false;
             }
             out.assign(v.data, static_cast<size_t>(v.size));
-            agentxx::plugin::PluginString::free(caller_host, &v);
+            agentxx::plugin::PluginString::free(selfHost, &v);
             return true;
         };
+        std::string op = "load";
+        argStr("op", op);
 
-        if (methodStr == "load") {
+        if (op == "load") {
             std::string name, path;
             if (!argStr("name", name) || !argStr("path", path)) {
                 return setErr("interpreter.js load: name and path (string) required");
@@ -2537,7 +2545,7 @@ static void* PLUGINXX_CALL jsCapStart(
             // JS 线程任务: 直接调用 doLoadScript (已在 JS 线程, 无需 postSync),
             // 完成后取工具清单并经通知器上报
             PluginxxOperatorNotify ntfCopy = *notify;
-            if (!engine->post([engine, caller_host, ntfCopy, name, path, code]() {
+            if (!engine->post([engine, selfHost, ntfCopy, name, path, code]() {
                     if (engine->stopping()) {
                         // 停止中: 不执行脚本加载, 但仍终结本次能力 op
                         auto errSv = agentxx::plugin::PluginStringView::fromCstr(
@@ -2548,7 +2556,7 @@ static void* PLUGINXX_CALL jsCapStart(
                     }
                     std::string err2;
                     const int   rc2
-                        = engine->loadScriptOnJsThread(caller_host, name, path, code, err2);
+                        = engine->loadScriptOnJsThread(selfHost, name, path, code, err2);
                     if (rc2 != 0) {
                         auto errSv2
                             = agentxx::plugin::PluginStringView::from(err2.data(), err2.size());
@@ -2571,7 +2579,7 @@ static void* PLUGINXX_CALL jsCapStart(
             return engine->capOpToken();
         }
 
-        if (methodStr == "unload") {
+        if (op == "unload") {
             std::string name;
             if (!argStr("name", name) || name.empty()) {
                 return setErr("interpreter.js unload: name (string) required");
@@ -2598,7 +2606,12 @@ static void* PLUGINXX_CALL jsCapStart(
         }
 
         {
-            std::string _msg = fmt::format("interpreter.js: unknown method `{}`", methodStr);
+            std::string capId{
+                method && method->data ? method->data : "",
+                method ? static_cast<size_t>(method->size) : 0
+            };
+            std::string _msg
+                = fmt::format("interpreter.js ({}): unknown op `{}`", capId, op);
             setErr(_msg.c_str());
         }
         return nullptr;
@@ -2609,11 +2622,14 @@ static void* PLUGINXX_CALL jsCapStart(
                 engine->guardLog(m);
             }
         });
-        if (error_out && caller_host) {
-            *error_out = agentxx::plugin::PluginString::fromCstr(
-                caller_host,
-                "interpreter.js: internal exception"
-            );
+        if (error_out) {
+            const PluginxxHost* errHost = engine != nullptr ? engine->host() : caller_host;
+            if (errHost != nullptr) {
+                *error_out = agentxx::plugin::PluginString::fromCstr(
+                    errHost,
+                    "interpreter.js: internal exception"
+                );
+            }
         }
         return nullptr;
     }
@@ -2643,7 +2659,7 @@ extern "C" PLUGINXX_EXPORT int
             // COM 风格接口表查询: entry 内一次性查询全部已知 IID (存入局部;
             // 不可用函数级 static —— 多实例加载时各主程序接口表指针不同)
             const agentxx::plugin::AgentIfaces s_if = agentxx::plugin::AgentIfaces::query(host);
-            if (!s_if.capabilities || !s_if.capabilities->register_capability_ex || !s_if.log) {
+            if (!s_if.capabilities || !s_if.capabilities->register_capability || !s_if.log) {
                 delete engine;
                 raw = nullptr;
                 return -1;
@@ -2683,7 +2699,7 @@ static void* PLUGINXX_CALL jsEngineStart(
         }
         const PluginxxHost*                host  = engine->host();
         const agentxx::plugin::AgentIfaces iface = agentxx::plugin::AgentIfaces::query(host);
-        if (!iface.capabilities || !iface.capabilities->register_capability_ex) {
+        if (!iface.capabilities || !iface.capabilities->register_capability) {
             engine->requestStop(nullptr);
             return setErr("interpreter.js start: host lacks capabilities interface");
         }
@@ -2694,8 +2710,25 @@ static void* PLUGINXX_CALL jsEngineStart(
             // invoke_capability(_async) 把脚本代码交给本引擎执行 —— 插件间通信,
             // 主程序不参与; load/unload 均为异步完成 (JS 线程执行)
             auto capSv = agentxx::plugin::PluginStringView::fromCstr("interpreter.js");
-            int  rc    = iface.capabilities
-                         ->register_capability_ex(host, &capSv, &jsCapStart, nullptr, engine);
+            // 登记形状: 短名 (宿主补成 `plugin.<本插件 id>.interpreter.js`) + 只实现
+            // impl 阶段 + 异步处理器 (jsCapStart 自己回调 notify)
+            PluginxxCapabilitySpec spec{};
+            spec.version     = PLUGINXX_API_VERSION;
+            spec.struct_size = sizeof(PluginxxCapabilitySpec);
+            spec.id          = capSv;
+            spec.impls       = PLUGINXX_CAPABILITY_IMPLS_ONE;
+            spec.merge       = PLUGINXX_CAPABILITY_MERGE_NONE;
+            spec.phases      = PLUGINXX_CAPABILITY_PHASE_MASK_IMPL;
+            spec.phase       = PLUGINXX_CAPABILITY_PHASE_IMPL;
+            spec.sync        = 0;
+            spec.run_start   = &jsCapStart;
+            spec.cancel      = nullptr;
+            spec.user_data   = engine;
+            PluginxxString regErr{nullptr, 0};
+            int            rc = iface.capabilities->register_capability(host, nullptr, &spec, &regErr);
+            if (regErr.data) {
+                agentxx::plugin::PluginString::free(host, &regErr);
+            }
             if (rc != 0) {
                 // start 事务失败: 撤销本事务已启动的引擎线程 (destroy 随后会
                 // 等待收尾完成, 不留线程/运行时残留)

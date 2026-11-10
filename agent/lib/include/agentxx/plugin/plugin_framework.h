@@ -17,10 +17,12 @@
 #ifndef AGENTXX_PLUGIN_FRAMEWORK_H
 #define AGENTXX_PLUGIN_FRAMEWORK_H
 
+#include "pluginxx/api/net.h"
 #include "pluginxx/host/abi_util.h"
+#include "pluginxx/host/broadcast_registry.h"
+#include "pluginxx/host/capability_chain.h"
 #include "pluginxx/host/capability_registry.h"
-#include "pluginxx/host/domain_hooks.h"
-#include "pluginxx/host/event_bus.h"
+#include "pluginxx/host/domain_services.h"
 #include "pluginxx/host/host_core.h"
 #include "pluginxx/host/lifecycle.h"
 #include "pluginxx/host/loader.h"
@@ -93,16 +95,34 @@ using pluginxx::PluginSortItem;
 using pluginxx::resolvePluginEntryPath;
 using pluginxx::topoSortPlugins;
 
-// ==================== 能力注册表 (pluginxx/host/capability_registry.h) ====================
+// ==================== 能力 / 广播注册表 ====================
+// (pluginxx/host/capability_registry.h, broadcast_registry.h, capability_chain.h)
+using pluginxx::BroadcastCache_e;
+using pluginxx::BroadcastDecl;
+using pluginxx::BroadcastLimitMode_e;
+using pluginxx::BroadcastPublisher_e;
+using pluginxx::BroadcastRegistry;
+using pluginxx::BroadcastScope_e;
+using pluginxx::BroadcastSub;
+using pluginxx::BroadcastSubscribeOptions;
+using pluginxx::unsubscribePluginBroadcast;
+using pluginxx::CapabilityDecl;
+using pluginxx::CapabilityImpls_e;
+using pluginxx::CapabilityMerge_e;
+using pluginxx::CapabilityPhase_e;
+using pluginxx::CapabilityProvider;
 using pluginxx::CapabilityRegistry;
 using pluginxx::PluginCapabilityRegistration;
 
 // ==================== 插件框架的通用部分与业务数据入口 (pluginxx/host/host_core.h)
 // ====================
-using pluginxx::DomainHooks;
-using pluginxx::EventSource;
+using pluginxx::DomainServices;
 using pluginxx::PluginHostCore;
-using pluginxx::unsubscribePluginSubscription;
+using pluginxx::PluginPointDecl;
+
+// ==================== 网络能力表 (pluginxx/api/net.h) ====================
+// `PluginxxNetIface` 是 C ABI 结构体 (全局命名空间), 不在 pluginxx 命名空间内 ——
+// 本头包含 net.h 后即可直接用名字, 不需要 using
 
 // ==================== 插件框架的生命周期公共实现 (pluginxx/host/lifecycle.h) ====================
 using pluginxx::PluginHostLifecycle;

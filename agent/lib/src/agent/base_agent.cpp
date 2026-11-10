@@ -1084,6 +1084,10 @@ void BaseAgent::initEventHub(asio::any_io_executor executor) {
         );
     });
     hub->attachBus(agentContext->bus);
+    // 值事件的通知面: 同名广播频道 (插件订阅它, 中枢只管记录与投递)
+    if (agentContext->pluginManager) {
+        hub->attachBroadcasts(agentContext->pluginManager->broadcasts());
+    }
     agentContext->eventHub = std::move(hub);
     XX_LOGD(
         "[event_hub] ready: maxEvents={} maxWaits={} maxWaitsPerSession={} contentLimit={} "

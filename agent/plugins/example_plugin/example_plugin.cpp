@@ -371,10 +371,19 @@ static int exampleAgentSetup(AgentCtx& ctx, const agentxx::plugin::ScopeRef& ref
         = agentxx::plugin::PluginStringView::fromCstr("agentxx.client.plugin.example_plugin.hello");
     ctx.iface.events->subscribe(host, ref.ptr(), &topic2, on_client_hello, &ctx);
 
-    // 4. 能力
+    // 4. 能力 (声明 + 实现行: 这里只演示声明, 不给实现处理器)
     if (ctx.iface.capabilities && ctx.iface.capabilities->register_capability) {
         auto capSv = agentxx::plugin::PluginStringView::fromCstr("example.demo");
-        ctx.iface.capabilities->register_capability(host, &capSv);
+        PluginxxCapabilitySpec spec{};
+        spec.version     = PLUGINXX_API_VERSION;
+        spec.struct_size = sizeof(PluginxxCapabilitySpec);
+        spec.id          = capSv;
+        spec.impls       = PLUGINXX_CAPABILITY_IMPLS_MANY;
+        spec.merge       = PLUGINXX_CAPABILITY_MERGE_FIRST;
+        spec.phases      = PLUGINXX_CAPABILITY_PHASE_MASK_IMPL;
+        spec.phase       = PLUGINXX_CAPABILITY_PHASE_IMPL;
+        // 作用域: 挂载引用 = 这一行只对该作用域生效 (空 = 进程级)
+        ctx.iface.capabilities->register_capability(host, ref.ptr(), &spec, nullptr);
     }
 
     // 5. 提示词读写

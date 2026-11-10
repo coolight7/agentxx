@@ -5,6 +5,7 @@
 #include "asio/any_io_executor.hpp"
 #include "asio/awaitable.hpp"
 #include "asio/steady_timer.hpp"
+#include "pluginxx/host/broadcast_registry.h"
 #include "utilxx_base/json.h"
 #include "utilxx_base/log.h"
 #include <chrono>
@@ -299,8 +300,28 @@ public:
     /// 注入"跑一轮"回调 (BaseAgent::init)
     void setTurnRunner(TurnRunner runner);
 
-    /// 挂到 agent 总线上 (订阅 `plugin.` 前缀: 插件发到总线的值即中枢的事件)
+    /// 挂到 agent 总线上 (只用它发中枢自己的强类型主题)
+    ///
+    /// 插件发到广播的值**不经这里**: 它们由 `PluginManager` 在发布时转给
+    /// [publishPluginValue](见插件面 `<应用名>.broadcasts` 表)。
     void attachBus(const std::shared_ptr<agentxx::events::EventBus>& bus);
+
+    /// 挂上广播注册表: 中枢发的值会同时广播到同名频道 (`plugin.*` / `agentxx.agent.*`)
+    ///
+    /// - 订阅方靠广播拿到通知, 中枢只保留自己的记录与等待;
+    /// - 频道未声明时跳过 (不报错): 没有订阅者的名字不值得每次发布都声明一次。
+    void attachBroadcasts(const std::shared_ptr<pluginxx::BroadcastRegistry>& broadcasts);
+
+    /// 插件发到广播的值转进中枢 (由 `PluginManager::publishBroadcastFrom` 调用)
+    ///
+    /// - `name` 为广播 id, `valueJson` 为载荷原文, `owner` 为插件名;
+    /// - 不是合法事件名 / 载荷不是 JSON 时静默忽略 (广播是通用通道, 中枢只接它认识的);
+    /// - 返回是否真的写进了记录。
+    bool publishPluginValue(
+        std::string_view name,
+        std::string_view valueJson,
+        std::string_view owner
+    );
 
     /// 退订总线前缀 (关闭时调用)
     void detachBus();
@@ -536,8 +557,8 @@ private:
     std::map<std::string, TimerSource, std::less<>> timers_;
 
     std::shared_ptr<agentxx::events::EventBus> bus_;
-    /// 总线 `plugin.` 前缀订阅 id (插件发到总线的值事件)
-    size_t valueSubId_ = 0;
+    /// 广播注册表 (中枢发的值镜像到同名频道; 空 = 不广播)
+    std::shared_ptr<pluginxx::BroadcastRegistry> broadcasts_;
 
     std::shared_ptr<asio::steady_timer> sweepTimer_;
     EventHubStats                       stats_;

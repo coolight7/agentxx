@@ -194,7 +194,7 @@ typedef struct AgentxxOverlaySpec {
 
 /* ==================== 接口表: 展示/命令/toast (agentxx.client.ui) ==================== */
 
-#define AGENTXX_IFACE_CLIENT_UI             "agentxx.client.ui"
+#define AGENTXX_IFACE_CLIENT_UI             PLUGINXX_APP_ID("client.ui")
 #define AGENTXX_IFACE_CLIENT_UI_VERSION     1 /* 追加成员 / 语义变化 -> +1 */
 #define AGENTXX_IFACE_CLIENT_UI_MIN_VERSION 1 /* 只在破坏性改动时 +1 (优先换 IID) */
 /* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
@@ -391,7 +391,7 @@ typedef struct AgentxxClientUiIface {
 
 /* ==================== 接口表: 事件订阅 (agentxx.client.events) ==================== */
 
-#define AGENTXX_IFACE_CLIENT_EVENTS             "agentxx.client.events"
+#define AGENTXX_IFACE_CLIENT_EVENTS             PLUGINXX_APP_ID("client.events")
 #define AGENTXX_IFACE_CLIENT_EVENTS_VERSION     1
 #define AGENTXX_IFACE_CLIENT_EVENTS_MIN_VERSION 1
 /* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
@@ -414,7 +414,7 @@ typedef struct AgentxxClientEventsIface {
 
 /* ==================== 接口表: 会话上下文与操作 (agentxx.client.session) ==================== */
 
-#define AGENTXX_IFACE_CLIENT_SESSION             "agentxx.client.session"
+#define AGENTXX_IFACE_CLIENT_SESSION             PLUGINXX_APP_ID("client.session")
 #define AGENTXX_IFACE_CLIENT_SESSION_VERSION     1
 #define AGENTXX_IFACE_CLIENT_SESSION_MIN_VERSION 1
 /* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
@@ -455,7 +455,7 @@ typedef struct AgentxxClientSessionIface {
 
 /* ==================== 接口表: 跨端数据通道 (agentxx.client.wire) ==================== */
 
-#define AGENTXX_IFACE_CLIENT_WIRE             "agentxx.client.wire"
+#define AGENTXX_IFACE_CLIENT_WIRE             PLUGINXX_APP_ID("client.wire")
 #define AGENTXX_IFACE_CLIENT_WIRE_VERSION     1
 #define AGENTXX_IFACE_CLIENT_WIRE_MIN_VERSION 1
 /* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
@@ -479,7 +479,7 @@ typedef struct AgentxxClientWireIface {
 
 /* ==================== 接口表: 自描述/配置 (agentxx.client.self) ==================== */
 
-#define AGENTXX_IFACE_CLIENT_SELF             "agentxx.client.self"
+#define AGENTXX_IFACE_CLIENT_SELF             PLUGINXX_APP_ID("client.self")
 #define AGENTXX_IFACE_CLIENT_SELF_VERSION     1
 #define AGENTXX_IFACE_CLIENT_SELF_MIN_VERSION 1
 /* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
@@ -512,7 +512,7 @@ typedef struct AgentxxClientSelfIface {
 
 /* ==================== 接口表: JSON 辅助 (agentxx.client.json) ==================== */
 
-#define AGENTXX_IFACE_CLIENT_JSON             "agentxx.client.json"
+#define AGENTXX_IFACE_CLIENT_JSON             PLUGINXX_APP_ID("client.json")
 #define AGENTXX_IFACE_CLIENT_JSON_VERSION     1
 #define AGENTXX_IFACE_CLIENT_JSON_MIN_VERSION 1
 /* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
@@ -539,7 +539,7 @@ typedef struct AgentxxClientJsonIface {
 
 /* ==================== 接口表: 日志 (agentxx.client.log) ==================== */
 
-#define AGENTXX_IFACE_CLIENT_LOG             "agentxx.client.log"
+#define AGENTXX_IFACE_CLIENT_LOG             PLUGINXX_APP_ID("client.log")
 #define AGENTXX_IFACE_CLIENT_LOG_VERSION     1
 #define AGENTXX_IFACE_CLIENT_LOG_MIN_VERSION 1
 /* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
@@ -556,7 +556,7 @@ typedef struct AgentxxClientLogIface {
 
 /* ==================== 接口表: 定时器 (agentxx.client.timer) ==================== */
 
-#define AGENTXX_IFACE_CLIENT_TIMER             "agentxx.client.timer"
+#define AGENTXX_IFACE_CLIENT_TIMER             PLUGINXX_APP_ID("client.timer")
 #define AGENTXX_IFACE_CLIENT_TIMER_VERSION     1
 #define AGENTXX_IFACE_CLIENT_TIMER_MIN_VERSION 1
 /* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
@@ -612,7 +612,7 @@ typedef struct AgentxxClientTimerIface {
 
 /* ==================== 接口表: 全局快捷键 (agentxx.client.keybind) ==================== */
 
-#define AGENTXX_IFACE_CLIENT_KEYBIND             "agentxx.client.keybind"
+#define AGENTXX_IFACE_CLIENT_KEYBIND             PLUGINXX_APP_ID("client.keybind")
 #define AGENTXX_IFACE_CLIENT_KEYBIND_VERSION     1
 #define AGENTXX_IFACE_CLIENT_KEYBIND_MIN_VERSION 1
 /* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */

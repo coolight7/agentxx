@@ -151,9 +151,9 @@ std::vector<std::shared_ptr<GraphTypeSlot>> PluginInstance::allGraphSlots() cons
 
 PluginManager::PluginManager(std::weak_ptr<agentxx::agent::AgentContext> primaryAgent) :
     primaryAgent_(std::move(primaryAgent)) {
-    // 通用表 (events/scheduler/tasks/capabilities 等) 需要主程序数据的入口经本类取数
-    // (见 pluginxx/host/domain_hooks.h): 在任何 vtable 入口被调用之前注入。
-    setDomainHooks(this);
+    // 通用表 (capabilities / broadcasts / scheduler / tasks 等) 需要主程序数据的入口
+    // 经本类取数 (见 pluginxx/host/domain_services.h): 在任何 vtable 入口被调用之前注入。
+    setDomainServices(this);
 }
 
 // =====================================================================

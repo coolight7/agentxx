@@ -19,7 +19,6 @@
 #include "agentxx/util/exception.h"
 #include "asio/this_coro.hpp"
 #include "fmt/format.h"
-#include "pluginxx/host/event_bus.h"
 #include "pluginxx/runtime/op_driver.h"
 #include "utilxx_base/json.h"
 #include "utilxx_base/log.h"
@@ -316,7 +315,7 @@ asio::awaitable<bool> PluginMount::mountOneAsync(std::shared_ptr<PluginInstance>
             if (auto host = host_.lock(); host != nullptr) {
                 const auto caps = inst->capabilityRegistrations; // 拷贝: 撤销会改表
                 for (const auto& cap : caps) {
-                    host->unregisterCapability(inst.get(), cap.name);
+                    host->unregisterCapability(inst.get(), cap.name, {});
                 }
             }
         }
@@ -430,7 +429,7 @@ void PluginMount::revokeEntry(Entry& entry) {
         }
     }
     for (auto* sub : mine) {
-        pluginxx::unsubscribePluginSubscription(sub);
+        pluginxx::unsubscribePluginBroadcast(sub);
     }
 
     // ② 声明式资源 (MCP / memory / skill): 按所有权整体摘除 (MCP 连接随挂载断开)

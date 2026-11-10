@@ -1,10 +1,9 @@
-/// 插件主程序业务数据入口实现 (pluginxx::DomainHooks)
+/// 插件主程序业务数据入口实现 (pluginxx::DomainServices) + 广播接口
 ///
-/// 背景: 通用表 (log/json/config/plugins/events/scheduler/coroutine_runtime/tasks/
-/// cancel/capabilities) 的实现位于 cxx_pluginxx (见 pluginxx/host/host_core.h); 其中
-/// 需要主程序数据的入口经 [pluginxx::DomainHooks] 取数。本文件把这些钩子接到
-/// agentxx 的 AgentContext / EventBus / 工作线程池上, 另含事件表的事件后端适配
-/// (AgentEventBusSource)。
+/// 背景: 通用表 (log/json/config/plugins/broadcasts/scheduler/coroutine_runtime/
+/// tasks/cancel/capabilities) 的实现位于 cxx_pluginxx (见 pluginxx/host/host_core.h);
+/// 其中需要主程序数据的入口经 [pluginxx::DomainServices] 取数。本文件把它们接到
+/// agentxx 的 AgentContext / 工作线程池上, 另含主程序自己的广播发布/结束入口。
 ///
 /// 线程约定: 钩子都在主程序 IO 线程被调用 (通用表入口先投递到 IO 线程); 只有
 /// `postToWorkerThread` 例外, 它把一段阻塞工作投递到工作线程池。
@@ -12,8 +11,9 @@
 
 #include "agentxx/agent/config_static.h"
 #include "agentxx/agent/context.h"
-#include "agentxx/event/event_stream.h"
+#include "agentxx/event/hub.h"
 #include "agentxx/event/naming.h"
+#include "agentxx/plugin/plugin_mount.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/post.hpp"
@@ -27,73 +27,9 @@
 
 namespace agentxx {
 namespace plugin {
-namespace {
-
-/// 插件事件表的主程序后端: agentxx::events::EventBus 适配
-///
-/// - 主题到事件流的映射: `bus->get<std::string>(topic)` (插件事件载荷为 JSON 文本);
-/// - 订阅的 handler 由 EventBus 在其所属执行器 (agent IO 线程) 上调用, 本适配器
-///   只做类型转换与转发, 不做线程切换与实例生命周期保护 —— 后者由通用表实现
-///   ([pluginxx::PluginHostCore::subscribe]) 经实例执行 lease 完成;
-/// - 发布为异步 (与 agentxx 既有行为一致: 发布不阻塞插件 IO 线程)。
-class AgentEventBusSource : public EventSource {
-public:
-
-    AgentEventBusSource(std::shared_ptr<agentxx::events::EventBus> bus, asio::any_io_executor ex) :
-        bus_(std::move(bus)),
-        executor_(std::move(ex)) {}
-
-    size_t
-        subscribe(std::string_view topic, std::function<void(std::string_view)> handler) override {
-        if (!bus_ || !handler) {
-            return 0;
-        }
-        return bus_->get<std::string>(topic).subscribe(
-            [handler = std::move(handler)](const std::string& data) -> asio::awaitable<void> {
-                try {
-                    handler(std::string_view{data});
-                } catch (const std::exception& e) {
-                    XX_LOGW("Plugin event handler threw: {}", e.what());
-                } catch (...) {
-                    XX_LOGW("Plugin event handler threw unknown exception");
-                }
-                co_return;
-            }
-        );
-    }
-
-    void unsubscribe(std::string_view topic, size_t subscriptionId) override {
-        if (!bus_ || subscriptionId == 0) {
-            return;
-        }
-        bus_->get<std::string>(topic).unsubscribe(subscriptionId);
-    }
-
-    int publish(std::string_view topic, std::string_view eventJson) override {
-        if (!bus_ || !executor_) {
-            return -1;
-        }
-        asio::co_spawn(
-            executor_,
-            [bus = bus_, fullTopic = std::string{topic}, payload = std::string{eventJson}](
-            ) -> asio::awaitable<void> {
-                co_await bus->publish(fullTopic, payload);
-            },
-            asio::detached
-        );
-        return 0;
-    }
-
-private:
-
-    std::shared_ptr<agentxx::events::EventBus> bus_;
-    asio::any_io_executor                      executor_;
-};
-
-} // namespace
 
 // =====================================================================
-// 事件表
+// 委员会 / 广播主题
 // =====================================================================
 
 std::shared_ptr<agentxx::agent::AgentContext>
@@ -109,54 +45,101 @@ std::shared_ptr<agentxx::agent::AgentContext>
     return mount->agentContext();
 }
 
-std::shared_ptr<EventSource> PluginManager::eventSource(const PluginxxScopeRef* agent) {
-    // 事件落在具体 agent 上: 带引用时用该挂载的总线, 空引用才用主 agent 的总线
-    auto ctx = agentContextOf(agent);
-    if (!ctx || !ctx->bus) {
-        return nullptr;
-    }
-    // 发布走本管理器的 IO executor (与既有行为一致: publish 不阻塞插件调用线程);
-    // 未加载 executor 时退回事件总线自身的执行器。
-    auto executor = ioExecutor() ? ioExecutor() : ctx->bus->executor();
-    return std::make_shared<AgentEventBusSource>(ctx->bus, std::move(executor));
-}
-
 std::string PluginManager::qualifyEventTopic(std::string_view topic) {
     // 不补前缀: 命名约定要求插件自己写全名 (`plugin.<插件名>.*` / `agentxx.*`),
-    // 框架只在写侧校验 (见 [publish] 与业务表入口), 读侧接受三族全名。
+    // 框架只在写侧校验 (见 [publishBroadcastValue] 与业务表入口), 读侧接受三族全名。
     return std::string{topic};
 }
 
-PluginxxSubscription* PluginManager::subscribe(
-    PluginInstance*                                            inst,
-    const PluginxxScopeRef*                                    scope,
-    std::string_view                                           topic,
-    void(PLUGINXX_CALL* handler)(const PluginxxStringView*, void*),
-    void*                                                      ud
+void PluginManager::ensureBroadcast(
+    std::string_view           id,
+    pluginxx::BroadcastCache_e cache,
+    bool                       anyonePublish,
+    bool                       pushOnSubscribe
 ) {
-    std::string err;
-    if (!agentxx::events::naming::validateReadableTopic(topic, &err)) {
-        XX_LOGW(
-            "Plugin `{}` subscribe rejected: topic `{}` is not a full name ({})",
-            inst != nullptr ? inst->name : std::string{},
-            topic,
-            err
-        );
-        return nullptr;
+    if (id.empty() || !broadcasts_ || broadcasts_->declares(id)) {
+        return;
     }
-    return pluginxx::PluginHostCore<PluginInstance>::subscribe(inst, scope, topic, handler, ud);
+    pluginxx::BroadcastDecl decl;
+    decl.id              = std::string{id};
+    decl.cache           = cache;
+    decl.publish         = anyonePublish ? pluginxx::BroadcastPublisher_e::Anyone
+                                         : pluginxx::BroadcastPublisher_e::Owner;
+    decl.pushOnSubscribe = pushOnSubscribe && cache == pluginxx::BroadcastCache_e::Latest;
+    decl.scope           = pluginxx::BroadcastScope_e::App;
+    std::string err;
+    if (!broadcasts_->declare(decl, &err)) {
+        XX_LOGW("broadcast `{}` could not be declared: {}", id, err);
+    }
 }
 
-int32_t PluginManager::publish(std::string_view topic, std::string_view eventJson) {
-    std::string err;
-    // 写侧只要求落在插件族里 (`plugin.*`); 不限定后面的名字是不是本实例的 ——
-    // 同一组织的多个插件可能共用一段, 建议仍用自己的插件名
-    if (!agentxx::events::naming::validatePluginWriteTopic(topic, &err)) {
-        XX_LOGW("Plugin publish rejected: topic `{}` ({})", topic, err);
-        return -1;
+void PluginManager::publishBroadcastValue(std::string_view id, std::string_view payloadJson) {
+    if (id.empty()) {
+        return;
     }
-    return pluginxx::PluginHostCore<PluginInstance>::publish(topic, eventJson);
+    ensureBroadcast(id, pluginxx::BroadcastCache_e::Latest);
+    std::string err;
+    if (!broadcasts_->publish(id, payloadJson, std::string{}, &err)) {
+        XX_LOGD("broadcast `{}` not published: {}", id, err);
+    }
 }
+
+void PluginManager::endBroadcastValue(std::string_view id, std::string_view reasonJson) {
+    if (id.empty() || !broadcasts_ || !broadcasts_->declares(id)) {
+        return;
+    }
+    std::string err;
+    if (!broadcasts_->end(id, reasonJson, std::string{}, &err) && !err.empty()) {
+        XX_LOGD("broadcast `{}` not ended: {}", id, err);
+    }
+}
+
+int PluginManager::publishBroadcastFrom(
+    PluginInstance*  inst,
+    std::string_view broadcastId,
+    std::string_view payloadJson,
+    std::string*     error
+) {
+    // 写侧只要求落在插件族里 (`plugin.*`); 不限定后面的名字是不是本实例的 ——
+    // 同一组织的多个插件可能共用一段, 建议仍用自己的插件名。
+    std::string naming;
+    if (!agentxx::events::naming::validatePluginWriteTopic(broadcastId, &naming)) {
+        if (error) {
+            *error = naming;
+        }
+        XX_LOGW("Plugin publish rejected: `{}` ({})", broadcastId, naming);
+        return PLUGINXX_RESULT_ERR_PERMISSION;
+    }
+    const int rc
+        = pluginxx::PluginHostCore<PluginInstance>::publishBroadcastFrom(
+            inst,
+            broadcastId,
+            payloadJson,
+            error
+        );
+    if (rc == PLUGINXX_RESULT_OK) {
+        // 中枢仍保留"记录 + 等待 + 投递"的职责: 没人等也没声明过的名字它自己会滤掉
+        for (const auto& mount : mounts()) {
+            auto ctx = mount != nullptr ? mount->agentContext() : nullptr;
+            if (ctx && ctx->eventHub) {
+                ctx->eventHub->publishPluginValue(
+                    broadcastId,
+                    payloadJson,
+                    inst != nullptr ? inst->name : std::string{}
+                );
+            }
+        }
+        if (auto ctx = primaryAgent_.lock(); ctx && ctx->eventHub) {
+            ctx->eventHub->publishPluginValue(
+                broadcastId,
+                payloadJson,
+                inst != nullptr ? inst->name : std::string{}
+            );
+        }
+    }
+    return rc;
+}
+
 
 // =====================================================================
 // 调度表
