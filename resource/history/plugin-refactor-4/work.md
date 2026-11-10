@@ -147,7 +147,7 @@
 
 ### 步骤 4：网络
 
-- 状态：待开始（`<应用名>.net` 的 IID / 接口名已就位，`g_ifaceNet` 与服务表分发未实现）
+- 状态：**进行中**（agent 侧表与服务已打通；client 侧同款与 4 个插件迁移待做）
 - **已完成：`cxx_utilxx` 的偏层清理（按用户要求先做）**
   - 分析结论: `utilxx::PluginNetHub` 的本体是**通用网络管理器** —— 它的输入只有
     “属主 id + op + 参数 JSON”, 输出只有“结果 JSON + 事件”, 内部不碰任何插件 ABI 类型;
@@ -169,6 +169,32 @@
   - 验证: `cxx_utilxx_repo` 编过（`net_hub.cpp` 本身无警告；顺手修了机器改名弄出来的
     `owner != owner` 永假比较与 `co_await expected` 的 C4834）；`agentxx_lib_repo` /
     `agentxx_test_repo` 编过；`plugins` 610 / `plugin_point` 63 / `boundaries` 19 全绿
+- **已完成：agent 侧 `<应用名>.net` 表 + 服务**
+  - 新增 `lib/include/agentxx/plugin/net_service.h` + `lib/src/plugins/net_service.cpp`
+    (`PluginNetService`): 属主 id = 插件实例名; 事件经 `Hooks::publishEvent` 交给管理器;
+    完成回调经 `Hooks::postToCaller` 回到管理器 io 线程后按 `PLUGINXX_OPERATOR_OK/
+    CANCELED/FAILED` 上报; `cancel` 把网络侧结果 JSON 里的 `not_found` 换成
+    `net::ErrNotFound` (插件面契约是参数层错误码); `shutdownOwner` 把未完成回调按"已取消"结算
+  - 新增 `lib/src/plugins/plugin_manager_net.cpp`: `netService()` 懒创建 (首个网络调用起网络线程,
+    `dataDir` 取自主 agent 配置)、`netCall/netCallAsync/netCancel/netShutdownPlugin/netShutdownAll`、
+    `postToPluginIo` (没 io 线程时就地执行)、`publishNetEvent` (`plugin.<插件 id>.net` 代发 +
+    镜像到事件中枢; 不依赖插件实例还在)
+  - `plugin_manager_vtable.cpp`: 新增 `g_ifaceNet` 与 `call`/`call_async`/`cancel` 三个入口,
+    `query_interface` 先查通用表再分 `PLUGINXX_IFACE_NET`; 同步入口不占管理器 io 线程
+    (网络服务自带线程与有界等待); 异步入口把 `notify` 拷成自有副本, 结算后释放
+  - 生命周期: `detachDomainRegistrations` → `netShutdownPlugin` (禁用/卸载跟着收),
+    `~PluginManager` → `netShutdownAll`
+  - 新增测试模块 `plugin_net` (35 条): `net.info` 现状/未知 op 参数层拒绝、
+    `http.serve` + `http.route` + `http.fetch` 回环往返 (status 200 + 正文一致)、
+    事件落到 `plugin.<属主>.net` 且带 `kind`、`shutdownOwner` 后服务消失与端口释放 (连接失败按
+    `FAILED` + 错误 JSON 上报)、未完成请求按取消结算且再 `cancel` 返回 `ErrNotFound`
+  - 验证: `boundaries` 19 / `plugin_runtime` 733 / `plugins` 610 / `plugin_cleanup` 99 /
+    `plugin_point` 63 / `plugin_net` 35 / `plugin_host_mount` 148 全绿 (共 1707 条)
+- 待完成（下一轮）:
+  - client 侧同款 (`ClientPluginManager` 一个 `PluginNetService` + `agentxx.client.*` 事件)
+  - 4 个网络插件迁移: `agentxx_websearch`、`agentxx_rag_search`、`agentxx_chatbot`
+    (HTTP + QQ 网关 WS)、`agentxx_text_selection_monitor` (CDP)
+  - `plugin_kit.h` 的 `netCall/netFetch/netDownload/netWsOpen/...` 便捷层 (高频三个给 `co_await`)
 
 ### 步骤 5：client 侧
 

@@ -582,6 +582,8 @@ asio::awaitable<void> PluginManager::onInstanceEnabledAsync(
 PluginManager::~PluginManager() {
     // 同步卸载全部实例 (骨架实现: 仍有 lease / 欠 stop 的实例保留上下文与 DSO)
     shutdownAll();
+    // 网络服务自带线程: 先停掉 (它的回调不会再回到已开始拆的管理器)
+    netShutdownAll();
     warnPendingCloseOnDestroy("agent");
 }
 
@@ -613,6 +615,8 @@ void PluginManager::detachDomainRegistrations(PluginInstance* inst) {
     // (禁用后插件不再驱动那个会话, 留着只会继续跑; 启用时插件在自己的 start 里
     // 重新挂根, 与其它注册项的建回方式一致)
     releaseRuntimeOfOwner(inst->name);
+    // 网络资源同样跟着实例: 服务与连接关掉, 未完成请求按"已取消"结算
+    netShutdownPlugin(inst->name);
     for (const auto& mount : mounts_) {
         if (mount) {
             mount->detachInstance(inst);

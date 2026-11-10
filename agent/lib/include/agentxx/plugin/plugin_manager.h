@@ -4,6 +4,7 @@
 #include "agentxx/agent/async_work.h"
 #include "agentxx/plugin/api/plugin_api.h"
 #include "agentxx/plugin/api/plugin_kit.h"
+#include "agentxx/plugin/net_service.h"
 #include "agentxx/plugin/plugin_framework.h"
 #include "agentxx/plugin/plugin_interfaces.h"
 #include "agentxx/plugin/plugin_mount.h"
@@ -19,6 +20,7 @@
 #include <chrono>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -471,6 +473,49 @@ public:
         std::string_view payloadJson
     );
 
+    // =====================================================================
+    // 网络能力 (`<应用名>.net` 表; 实现在通用网络服务 utilxx::NetHub)
+    // =====================================================================
+
+    /// 网络服务 (懒创建; 首个网络调用时起网络线程)
+    std::shared_ptr<PluginNetService> netService();
+
+    /// 同步网络操作 (返回 `utilxx::net::*` 结果码)
+    int32_t netCall(
+        std::string_view              owner,
+        std::string_view              op,
+        std::string_view              argsJson,
+        std::string*                  outJson,
+        std::weak_ptr<PluginInstance> guard = {}
+    );
+
+    /// 异步网络操作 (受理成功写 requestId, 结果恰好一次经 cb 给出)
+    int32_t netCallAsync(
+        std::string_view              owner,
+        std::string_view              op,
+        std::string_view              argsJson,
+        PluginxxOperatorCallback      cb,
+        void*                         ud,
+        std::string*                  outJson,
+        int64_t*                      outRequestId,
+        std::weak_ptr<PluginInstance> guard = {}
+    );
+
+    /// 取消一个进行中的网络请求
+    int32_t netCancel(std::string_view owner, int64_t requestId, std::string* outJson);
+
+    /// 收掉某个插件的全部网络资源 (禁用/卸载时调; 未完成请求按"已取消"结算)
+    void netShutdownPlugin(std::string_view owner);
+
+    /// 停掉网络服务 (管理器关闭时)
+    void netShutdownAll();
+
+    /// 把一个函数投递到本管理器的 io 线程 (没有 io 线程时就地执行)
+    void postToPluginIo(std::function<void()> fn);
+
+    /// 把一条网络事件发给插件 (频道 `plugin.<插件 id>.net`; 必须在本管理器 io 线程调)
+    void publishNetEvent(std::string_view owner, std::string_view payloadJson);
+
     /// 频道未声明时按名字补一条声明 (幂等)
     ///
     /// - `plugin.<插件名>.*`: 属主就是名字里的插件 (它才能发布);
@@ -813,6 +858,10 @@ private:
 
     /// offload 工作线程池 (由创建方注入; 空时按需创建私有池)
     std::shared_ptr<asio::thread_pool> workerPool_;
+
+    /// 网络服务 (懒创建; 与 [netMutex_] 一起使用)
+    std::shared_ptr<PluginNetService> netService_;
+    std::mutex                        netMutex_;
 
     /// 保证 [workerPool_] 可用 (未注入/原有池不可用时的备用池; 只创建一次)
     void ensureWorkerPool();
