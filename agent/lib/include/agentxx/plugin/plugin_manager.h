@@ -441,6 +441,36 @@ public:
     /// 从频道 id 里取插件名 (`plugin.<插件名>.rest` → `<插件名>`; 其他形式返回空)
     static std::string pluginNameOfBroadcast(std::string_view id);
 
+    // =====================================================================
+    // 功能扩展点 (point): 一个 id = 能力 (实现面) + 同名广播频道 (通知面)
+    // =====================================================================
+
+    /// 声明本主程序的全部扩展点 (构造函数里调一次; 幂等)
+    ///
+    /// 清单在 `agentxx/plugin/api/agentxx_point_ids.h`, 与这里的声明表必须一致
+    /// (测试模块 `boundaries` 核对)。
+    void declareAppPoints();
+
+    /// 发一次扩展点 (**IO 线程**)
+    /// - 先发通知面广播, 再按 `agentId` 调实现行; 没有实现行时按 `OK` + `null` 完成;
+    /// - `agentId` 为空 = 不按作用域过滤 (只有通知面);
+    /// - 完成回调 `cb` 可为空 (通知型调用点不需要结果)。
+    PluginxxOperatorHandle* emitPointAsync(
+        std::string_view         pointId,
+        std::string_view         agentId,
+        std::string_view         payloadJson,
+        PluginxxOperatorCallback cb,
+        void*                    ud,
+        PluginxxString*          error
+    );
+
+    /// 发一次通知型扩展点 (不等结果, 失败只记日志)
+    void publishPoint(
+        std::string_view pointId,
+        std::string_view agentId,
+        std::string_view payloadJson
+    );
+
     /// 频道未声明时按名字补一条声明 (幂等)
     ///
     /// - `plugin.<插件名>.*`: 属主就是名字里的插件 (它才能发布);

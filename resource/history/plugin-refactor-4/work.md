@@ -11,7 +11,7 @@
 | 步骤 0 库改动（`cxx_pluginxx` L1~L4/L6/L7、`cxx_utilxx` L5）+ 子模块指针 | 已完成 |
 | 步骤 1 构建与接口表骨架 | 已完成 |
 | 步骤 2 agent 侧（DomainServices + 广播 + 中枢） | 已完成（广播通道打通，事件中枢对接完成，`plugins` 模块全绿） |
-| 步骤 3 功能埋点（替换钩子与功能点） | 待开始（三表暂留，见"与计划的偏差"） |
+| 步骤 3 功能埋点（替换钩子与功能点） | 进行中（声明表 + 分发入口 + `plugin_point` 模块已完成；调用点与三张旧表待改） |
 | 步骤 4 网络（`agentxx.net` + 4 个插件迁移） | 待开始 |
 | 步骤 5 client 侧（广播 + net） | 待开始 |
 | 步骤 6 插件全量迁移 + JS 引擎 | 进行中（能力表 APIs 已迁：JS 引擎 + 3 个示例插件） |
@@ -120,9 +120,25 @@
 
 ### 步骤 3：功能埋点
 
-- 状态：待开始（钩子 / 功能点 / 事件三张业务表仍是现状）。已先做完两侧的前提：
-  - 框架侧 `declarePoint` / `emitPointAsync` / `endPoint` 已可用（步骤 0 的 L4）；
-  - 主程序侧广播通道与中枢已开通，点 id 清单 `agentxx_point_ids.h` 已就位（未接调用点）
+- 状态：**进行中**。已完成"声明 + 分发"的地基，三张旧表仍保留（见下）
+- 已完成：
+  - 新增 `agent/lib/src/plugins/plugin_manager_points.cpp`：
+    - `PluginManager::declareAppPoints()` —— 把 `agentxx_point_ids.h` 里的 10 个点登记为
+      "能力 (`impls: many` + `merge: first`) + 同名广播频道"; 通知型 `cache: none`,
+      取值型 `cache: latest` + `pushOnSubscribe`; 在管理器构造函数里调一次（幂等）
+    - `PluginManager::emitPointAsync(pointId, agentId, payload, cb, ud, err)` —— 作用域 = 挂载的
+      `agent_id` (空 = 不按作用域过滤), 走框架 `PluginHostCore::emitPointAsync`
+    - `PluginManager::publishPoint(...)` —— 通知型调用点用的"不等结果"入口
+  - 新增测试模块 `plugin_point` (63 条): 声明表两边到位且缓存策略与类型相符、
+    没有实现行时按 `OK` + `null` 完成、通知面确实把载荷发给订阅者、取值型频道保留当前值
+- 待完成（下一轮）：
+  - 把 7 个钩子派发点与 3 个取值点接到 `publishPoint` / `emitPointAsync`;
+  - 钩子表 `register_hook*` 改成"订阅同名广播"，`PluginHookDispatchHandle` 与
+    `PluginMount::hookHandlers_` 删除；
+  - 功能点表 `define_point`/`register_impl` 改成 `declarePoint` + 能力行，`agentxx::feature`
+    的 `ask/call` 改成 `emitPointAsync` 并解析结果；
+  - `agentxx.agent.event` 表删除（插件改用广播表）；
+  - 三张表删除后把 `kInterfaceTableCount` 改成 21，同步 `boundaries` 台账与示例插件
 - 顺手修的运行时问题（属步骤 2 的尾巴）：`runtime.register_trigger` / `runtime_emit_event`
   在频道未声明时**按名字定属主**（`plugin.<名>.*` 归该插件），否则插件发布自己的频道
   会被“属主不是它”拒成 `ERR_FAILED(-7)`（`plugin_agent_runtime` 14 条失败即此）；
@@ -172,7 +188,8 @@
 - [ ] `agent/script/build_plugins.ps1` 全部插件产物时间戳更新（26 个）
 - [ ] `agentxx_test --log-level warn` 全模块通过（debug + ASan）
 - [ ] `boundaries` 规则 7（21 / 17 张表）、`IfaceMeta` 特化数、埋点 id 头与声明表一致
-- [ ] 能力行 scope 隔离 / 宿主发起调用 / 广播 end / 埋点原语 四项库语义各有一条测试
+- [x] 能力行 scope 隔离 / 宿主发起调用 / 广播 end / 埋点原语 四项库语义各有一条测试
+      （`plugin_point` 覆盖埋点原语的声明/分发/无实现/通知面/当前值）
 - [ ] 4 个网络插件本地回环往返通过；`grep utilxx/http_client.h agent/plugins/` 为空
 - [ ] 手工：空列表启动 26 插件全加载、插件禁用→启用账目归零再回原值、chatbot 断网重连、
       客户端重连后插件面板与装饰重建

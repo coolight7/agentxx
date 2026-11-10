@@ -156,6 +156,8 @@ PluginManager::PluginManager(std::weak_ptr<agentxx::agent::AgentContext> primary
     setDomainServices(this);
     // 内置广播频道: 插件加载 (start) 时就会订阅, 早于事件中枢创建
     declareBuiltinBroadcasts();
+    // 功能扩展点: 能力声明 + 同名广播频道 (插件在 start 里就能登记实现行/订阅)
+    declareAppPoints();
 }
 
 // =====================================================================
