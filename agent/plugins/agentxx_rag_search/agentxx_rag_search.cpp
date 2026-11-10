@@ -28,8 +28,52 @@ struct RagPluginCtx : public PluginBase {};
 
 /// per-agent 状态 (每个挂载一份): 向量索引与挂载引用
 struct RagAgentState {
-    AgentRef                    ref;
+    AgentRef                     ref;
     std::unique_ptr<VectorStore> store;
+    std::vector<std::string>     docsPaths;
+
+    /// 索引只在**首次检索时**建立 (在工作线程上, 见 [ensureIndex])。
+    std::mutex buildMutex;
+    bool       built  = false;
+    bool       failed = false;
+    std::string failReason;
+
+    /// 建立索引 (幂等, 可并发调用; 只允许在工作线程上跑)
+    ///
+    /// 挂载事务跑在主程序 io 线程上, 而 embedding 请求要等工作线程之外的网络服务回调
+    /// 才能拿到结果 (在主程序 io 线程上等 = 互锁), 所以索引改到第一次检索时建。
+    bool ensureIndex(RagPluginCtx& ctx) {
+        std::lock_guard<std::mutex> lock(buildMutex);
+        if (built) {
+            return true;
+        }
+        if (failed) {
+            return false;
+        }
+        if (!store) {
+            failed     = true;
+            failReason = "RAG vector store is not initialized";
+            return false;
+        }
+        ctx.log.info("RAG: loading documents and generating vector index ...");
+        auto docs         = store->scanDocument(docsPaths);
+        auto docxSize     = docs.size();
+        bool isAddSuccess = store->addDocuments(std::move(docs));
+        ctx.log.log(
+            isAddSuccess ? 2 : 3,
+            fmt::format(
+                "RAG: loading {} documents to vector index {}",
+                docxSize,
+                isAddSuccess ? "done" : "failed"
+            )
+        );
+        built = true;
+        if (!isAddSuccess) {
+            failed     = true;
+            failReason = "RAG: building the vector index failed (embedding service unavailable?)";
+        }
+        return !failed;
+    }
 };
 
 /// 注册事务 (mount 的实际内容): 读取配置、构建索引并注册检索工具。
@@ -78,20 +122,10 @@ static int32_t ragSetup(RagPluginCtx& ctx, RagAgentState& st) {
         return 0;
     }
 
-    st.store = std::make_unique<VectorStore>(makeHttpEmbedder(baseUrl, modelName));
-
-    ctx.log.info("RAG: loading documents and generating vector index ...");
-    auto docs         = st.store->scanDocument(ragDocsPaths);
-    auto docxSize     = docs.size();
-    bool isAddSuccess = st.store->addDocuments(std::move(docs));
-    ctx.log.log(
-        isAddSuccess ? 2 : 3,
-        fmt::format(
-            "RAG: loading {} documents to vector index {}",
-            docxSize,
-            isAddSuccess ? "done" : "failed"
-        )
+    st.store = std::make_unique<VectorStore>(
+        makeHttpEmbedder(ctx.host, ctx.iface.net, ctx.iface.scheduler, baseUrl, modelName)
     );
+    st.docsPaths = std::move(ragDocsPaths);
 
     if (!ctx.iface.tools || !ctx.iface.tools->register_tool) {
         return 0;
@@ -119,7 +153,6 @@ static int32_t ragSetup(RagPluginCtx& ctx, RagAgentState& st) {
         schema,
         [&st](RagPluginCtx& c, std::string_view args_json, const PluginxxCancelToken* cancel_token
         ) -> agentxx::plugin::ToolResult {
-            (void)c;
             if (pluginxx_cancel_is_requested(cancel_token)) {
                 throw agentxx::plugin::CanceledException("rag_search Canceled");
             }
@@ -132,6 +165,11 @@ static int32_t ragSetup(RagPluginCtx& ctx, RagAgentState& st) {
 
             if (!st.store) {
                 throw std::runtime_error{"RAG index is not initialized"};
+            }
+            if (!st.ensureIndex(c)) {
+                throw std::runtime_error{
+                    st.failReason.empty() ? "RAG index is not initialized" : st.failReason
+                };
             }
             auto results = st.store->search(query, static_cast<size_t>(limit));
             if (pluginxx_cancel_is_requested(cancel_token)) {

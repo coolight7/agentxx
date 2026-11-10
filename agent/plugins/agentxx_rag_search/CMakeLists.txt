@@ -1,20 +1,17 @@
 # agentxx_rag_search —— RAG 语义检索工具插件 (embedding + 余弦相似度)
-# - 默认: 独立动态库 (MODULE), 仅依赖纯 C ABI 头 + cxx_utilxx_static (HttpClient)
+# - 默认: 独立动态库 (MODULE), 仅依赖纯 C ABI 头 + cxx_utilxx_base_static (Json/JsonView)
 # - 内置模式:
 #   源文件编译为 OBJECT 库合并进 libagentxx
 set(PLUGIN_NAME agentxx_rag_search)
 
 # ===== 平台支持判定 =====
-# 依赖 HttpClient (asio), 全平台可用 (平台支持情况说明见 docs/zh-cn/design/plugins.md §14)
+# 纯计算 + 文件扫描; 网络经主程序 `<应用名>.net` 表, 全平台可用
+# (平台支持情况说明见 docs/zh-cn/design/plugins.md §14)
 include("${CMAKE_CURRENT_LIST_DIR}/../cmake/plugin_platform_support.cmake")
 agentxx_plugin_platform_gate(${PLUGIN_NAME} _AGENTXX_PLATFORM_OK windows linux macos android ios)
 if (NOT _AGENTXX_PLATFORM_OK)
   return() # 跳过本插件全部目标 (内置合并/独立动态库两模式均在此拦截)
 endif ()
-
-# boost 分发布局: ${BOOST_ROOT}/include/boost/...; 源码用 asio/... 前缀
-# (映射 include/boost/), 而 asio 头内部用 <boost/asio/...> 形式 (映射 include/)
-set(_BOOST_INCLUDES "${BOOST_ROOT}/include/" "${BOOST_ROOT}/include/boost/")
 
 if (_AGENTXX_ADD_AS_BUILTIN)
   # ===== 内置合并编译分支 =====
@@ -34,21 +31,10 @@ if (_AGENTXX_ADD_AS_BUILTIN)
   )
   target_include_directories(${_target} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"          # rag_plugin.h / rag_search_impl.h
-    "${AGENTXX_LIB_INCLUDE_DIR}"           # agentxx/plugin/plugin_api.h
-    "${AGENTXX_INSTALL_DIR}/include"       # cxx_utilxx_static (Json/JsonView)
-    ${_BOOST_INCLUDES}
+    "${AGENTXX_LIB_INCLUDE_DIR}"           # agentxx/plugin/**（含 plugin_kit.h）
+    "${AGENTXX_INSTALL_DIR}/include"       # cxx_utilxx_base_static (Json/JsonView)
   )
-  # 复用 cxx_utilxx_static 工具库 (libagentxx 已链接本库; 此处经 PRIVATE 链接仅
-  # 传递编译宏/头路径/依赖 include: HttpClient 实现于 util http_client.cpp)
-  target_link_libraries(${_target} PRIVATE cxx_utilxx_static)
-  find_package(html2md REQUIRED)
-  # Windows: asio socket 相关系统库 (经 libagentxx 收集通道)
-  if (XX_IS_WIN_D)
-    set(AGENTXX_BUILTIN_PLUGIN_LINK_LIBS
-      "${AGENTXX_BUILTIN_PLUGIN_LINK_LIBS}" ws2_32 mswsock bcrypt PARENT_SCOPE)
-  endif()
-  set(AGENTXX_BUILTIN_PLUGIN_LINK_LIBS
-    "${AGENTXX_BUILTIN_PLUGIN_LINK_LIBS}" html2md PARENT_SCOPE)
+  target_link_libraries(${_target} PRIVATE cxx_utilxx_base_static)
   set_target_properties(${_target} PROPERTIES
     POSITION_INDEPENDENT_CODE ON
     CXX_STANDARD 26
@@ -79,18 +65,15 @@ add_library(${PLUGIN_NAME} SHARED
 # ===== 依赖查找与链接 (顺序: 先依赖库的依赖, 再依赖库本体) =====
 # 工具库条件依赖 (io_uring / hyperscan) 由 plugins/CMakeLists.txt 统一查找;
 # 本处只导入依赖库本体, 随后按 imported target / 裸库名链接
-if (NOT TARGET cxx_utilxx_static)
+if (NOT TARGET cxx_utilxx_base_static)
   # 内置合并编译时 util 目标随 libagentxx 已存在 (且 install 目录尚未生成
   # config), 仅独立构建本插件时经安装 config 导入
-  find_package(cxx_utilxx REQUIRED)
+  find_package(cxx_utilxx_base REQUIRED)
 endif()
-find_package(html2md REQUIRED)
-
 target_include_directories(${PLUGIN_NAME} PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}"          # rag_plugin.h / rag_search_impl.h
-  "${AGENTXX_LIB_INCLUDE_DIR}"           # agentxx/plugin/plugin_api.h
-  "${AGENTXX_INSTALL_DIR}/include/"      # cxx_utilxx_static (Json/JsonView)
-  ${_BOOST_INCLUDES}                     # asio 头 (HttpClient 协程)
+  "${AGENTXX_LIB_INCLUDE_DIR}"           # agentxx/plugin/**（含 plugin_kit.h）
+  "${AGENTXX_INSTALL_DIR}/include/"      # cxx_utilxx_base_static (Json/JsonView)
 )
 
 # 裸库名依赖 (如 hs_runtime) 的解析目录: 与 cxx_utilxx* 导出接口的 link 目录一致
@@ -99,13 +82,8 @@ target_link_directories(${PLUGIN_NAME} PRIVATE
 )
 
 target_link_libraries(${PLUGIN_NAME} PRIVATE
-  cxx_utilxx_static
-  html2md
+  cxx_utilxx_base_static
 )
-if (XX_IS_WIN_D)
-  # asio socket 相关系统库 (asio 直需, 非 boost.process 传递)
-  target_link_libraries(${PLUGIN_NAME} PRIVATE ws2_32 mswsock bcrypt)
-endif()
 set_target_properties(${PLUGIN_NAME} PROPERTIES
   PREFIX "lib"
   CXX_STANDARD 26
@@ -119,9 +97,11 @@ foreach(config DEBUG RELEASE MINSIZEREL RELWITHDEBINFO)
     LIBRARY_OUTPUT_DIRECTORY_${config} "${AGENTXX_EXEC_INSTALL_PREFIX}/plugins/${PLUGIN_NAME}/"
   )
 endforeach()
+
+# plugin.yaml 拷贝到输出目录 (动态库旁)
+set(_yaml_in "${CMAKE_CURRENT_SOURCE_DIR}/plugin.yaml")
+set(_yaml_out "${AGENTXX_EXEC_INSTALL_PREFIX}/plugins/${PLUGIN_NAME}/plugin.yaml")
 add_custom_command(TARGET ${PLUGIN_NAME} POST_BUILD
-  COMMAND ${CMAKE_COMMAND} -E copy_if_different
-    "${CMAKE_CURRENT_SOURCE_DIR}/plugin.yaml"
-    "${AGENTXX_EXEC_INSTALL_PREFIX}/plugins/${PLUGIN_NAME}/plugin.yaml"
-  COMMENT "Copy ${PLUGIN_NAME} plugin resources to ${AGENTXX_EXEC_INSTALL_PREFIX}/plugins/${PLUGIN_NAME}"
+  COMMAND ${CMAKE_COMMAND} -E copy_if_different "${_yaml_in}" "${_yaml_out}"
+  COMMENT "Copy ${PLUGIN_NAME} plugin.yaml to output directory"
 )

@@ -4,16 +4,111 @@
 // 原 lib 内置工具已迁移至 agentxx_websearch 插件 (同名同行为); 测试直测
 // 插件同一实现 (websearch_impl.h), 保证插件行为与测试覆盖一致
 #include "agentxx_websearch/websearch_impl.h"
+#include "utilxx/http_client.h"
 #include "utilxx/http_server.h"
 #include <asio/awaitable.hpp>
 #include <asio/redirect_error.hpp>
 #include <asio/use_awaitable.hpp>
 #include <boost/beast/http.hpp>
+#include <chrono>
+#include <expected>
 #include <iostream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
+
+/// 本模块的网络注入: 用 HttpClient + 局部 io_context 同步驱动 (测试里没有主程序
+/// `<应用名>.net` 表; 服务端跑在另一个线程, 不会互锁)
+namespace {
+agentxx_websearch_plugin::HttpResult
+    localHttpExecute(const agentxx_websearch_plugin::HttpRequestSpec& spec) {
+    using namespace agentxx_websearch_plugin;
+    HttpResult out;
+
+    utilxx::HeaderMap headers;
+    try {
+        auto parsed = utilxx_base::Json::parse(spec.headersJson);
+        if (parsed.is_object()) {
+            for (const auto& [k, v] : parsed.items()) {
+                if (v.is_string()) {
+                    headers.set(k, v.get<std::string>());
+                }
+            }
+        }
+    } catch (...) {
+    }
+    utilxx::HttpClient::RequestConfig config;
+    const auto timeout           = std::chrono::seconds{spec.timeoutSeconds > 0 ? spec.timeoutSeconds
+                                                                              : 30};
+    config.connectTimeout        = timeout;
+    config.readChunkTimeout      = timeout;
+
+    asio::io_context io;
+
+    if (spec.format == "markdown") {
+        std::expected<std::string, std::string> result;
+        auto operation = utilxx::HttpClient::fetchMarkdown(spec.url, headers, config);
+        asio::co_spawn(
+            io,
+            [&result, w = std::move(operation)]() mutable -> asio::awaitable<void> {
+                result = co_await std::move(w);
+            },
+            asio::detached
+        );
+        io.run();
+        if (!result.has_value()) {
+            out.error = result.error();
+            return out;
+        }
+        out.ok     = true;
+        out.status = 200;
+        out.body   = std::move(*result);
+        return out;
+    }
+
+    std::expected<utilxx::HttpResponse, std::string> response
+        = std::unexpected{std::string{"not started"}};
+    if (!spec.jsonBody.empty() || spec.method == "POST") {
+        utilxx_base::Json body = utilxx_base::Json::object();
+        if (!spec.jsonBody.empty()) {
+            try {
+                body = utilxx_base::Json::parse(spec.jsonBody);
+            } catch (...) {
+                body = utilxx_base::Json::object();
+            }
+        }
+        auto operation = utilxx::HttpClient::postAsync(spec.url, body, headers, config);
+        asio::co_spawn(
+            io,
+            [&response, w = std::move(operation)]() mutable -> asio::awaitable<void> {
+                response = co_await std::move(w);
+            },
+            asio::detached
+        );
+        io.run();
+    } else {
+        auto operation = utilxx::HttpClient::getAsync(spec.url, headers, config);
+        asio::co_spawn(
+            io,
+            [&response, w = std::move(operation)]() mutable -> asio::awaitable<void> {
+                response = co_await std::move(w);
+            },
+            asio::detached
+        );
+        io.run();
+    }
+
+    if (!response.has_value()) {
+        out.error = response.error();
+        return out;
+    }
+    out.ok     = true;
+    out.status = response->status;
+    out.body   = response->body;
+    return out;
+}
+} // namespace
 
 /// web 工具通用参数集 (与插件入口 schema 一致): url/query + timeout/header
 namespace {
@@ -49,7 +144,8 @@ static neograph::json webToolParams(const char* queryKey, const char* timeoutDes
 namespace agentxx {
 namespace tools {
 
-/// 测试适配: 原工具类的同名薄包装 (构造签名与 execute_async 行为保持不变)
+/// 测试适配: 原工具类的同名薄包装 (构造签名保持不变; 执行体改为同步, 网络注入
+/// 本地实现 [localHttpExecute])
 
 /// WebSearchTool: api url 路径 (convertHtml2markdown 控制输出格式)
 struct WebSearchTool {
@@ -83,8 +179,9 @@ struct WebSearchTool {
         return searchDefinition();
     }
 
-    asio::awaitable<std::string> execute_async(const utilxx_base::Json& args) const {
-        co_return co_await agentxx_websearch_plugin::webSearchExecuteAsync(
+    std::string execute(const utilxx_base::Json& args) const {
+        return agentxx_websearch_plugin::webSearchExecute(
+            &localHttpExecute,
             args,
             searchApiUrl,
             convertHtml2markdown
@@ -105,8 +202,8 @@ struct WebFetchUrlTool {
         };
     }
 
-    asio::awaitable<std::string> execute_async(const utilxx_base::Json& args) const {
-        co_return co_await agentxx_websearch_plugin::webFetchExecuteAsync(args);
+    std::string execute(const utilxx_base::Json& args) const {
+        return agentxx_websearch_plugin::webFetchExecute(&localHttpExecute, args);
     }
 };
 
@@ -134,8 +231,8 @@ struct ModelWebSearchTool {
         };
     }
 
-    asio::awaitable<std::string> execute_async(const utilxx_base::Json& args) const {
-        co_return co_await agentxx_websearch_plugin::modelWebSearchExecuteAsync(args, modelCfg);
+    std::string execute(const utilxx_base::Json& args) const {
+        return agentxx_websearch_plugin::modelWebSearchExecute(&localHttpExecute, args, modelCfg);
     }
 
 private:
@@ -173,7 +270,7 @@ asio::awaitable<void>
     };
     bool threw = false;
     try {
-        (void)co_await tool.execute_async(args);
+        (void)tool.execute(args);
     } catch (const std::invalid_argument& e) {
         threw = true;
         if (std::string_view{e.what()}.find("`query` is empty") == std::string::npos) {
@@ -242,7 +339,7 @@ asio::awaitable<void>
     };
     bool threw = false;
     try {
-        (void)co_await tool.execute_async(args);
+        (void)tool.execute(args);
     } catch (const std::invalid_argument& e) {
         threw = true;
         if (std::string_view{e.what()}.find("`url` is empty") == std::string::npos) {
@@ -303,7 +400,7 @@ asio::awaitable<void>
     };
     bool threw = false;
     try {
-        (void)co_await tool.execute_async(args);
+        (void)tool.execute(args);
     } catch (const std::invalid_argument& e) {
         threw = true;
         if (std::string_view{e.what()}.find("`format`") == std::string::npos) {
@@ -461,7 +558,7 @@ asio::awaitable<void>
             {"url",    baseUrl + "/echo-header"                                      },
             {"header", utilxx_base::Json{{"X-Test-Header", "fetch-url-header-value"}}},
         };
-        auto result = co_await tool.execute_async(args);
+        auto result = tool.execute(args);
         if (result.find("fetch-url-header-value") != std::string::npos) {
             g_ws_passed++;
             TEST_PASS << "WebFetchUrlTool sends custom header" << std::endl;
@@ -478,7 +575,7 @@ asio::awaitable<void>
             {"format", "markdown"                                                   },
             {"header", utilxx_base::Json{{"X-Test-Header", "fetch-md-header-value"}}},
         };
-        auto result = co_await tool.execute_async(args);
+        auto result = tool.execute(args);
         if (result.find("fetch-md-header-value") != std::string::npos) {
             g_ws_passed++;
             TEST_PASS << "WebFetchUrlTool (markdown) sends custom header" << std::endl;
@@ -497,7 +594,7 @@ asio::awaitable<void>
             {"timeout", 10                                                             },
             {"header",  utilxx_base::Json{{"X-Test-Header", "search-raw-header-value"}}},
         };
-        auto result = co_await tool.execute_async(args);
+        auto result = tool.execute(args);
         if (result.find("search-raw-header-value") != std::string::npos) {
             g_ws_passed++;
             TEST_PASS << "WebSearchTool(raw) sends custom header & accepts timeout" << std::endl;
@@ -515,7 +612,7 @@ asio::awaitable<void>
             {"timeout", 10                                                            },
             {"header",  utilxx_base::Json{{"X-Test-Header", "search-md-header-value"}}},
         };
-        auto result = co_await tool.execute_async(args);
+        auto result = tool.execute(args);
         if (result.find("search-md-header-value") != std::string::npos) {
             g_ws_passed++;
             TEST_PASS << "WebSearchTool(markdown) sends custom header & accepts timeout"
@@ -533,7 +630,7 @@ asio::awaitable<void>
             {"url",     baseUrl + "/hello"},
             {"timeout", 5                 },
         };
-        auto result = co_await tool.execute_async(args);
+        auto result = tool.execute(args);
         if (result.find("\"error\"") == std::string::npos) {
             g_ws_passed++;
             TEST_PASS << "WebFetchUrlTool accepts timeout param" << std::endl;

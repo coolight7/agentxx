@@ -1,6 +1,5 @@
 /// agentxx_websearch —— 网络访问工具插件
 #include "agentxx_websearch_plugin.h"
-#include "asio/awaitable.hpp"
 #include "utilxx_base/json.h"
 #include "websearch_impl.h"
 #include <string>
@@ -57,12 +56,44 @@ struct WebsearchPluginCtx : public PluginBase {
     bool              use_model_search = false;
 };
 
+/// 把一次请求交给主程序网络服务 (`<应用名>.net` 的 `http.fetch`)
+///
+/// 工具实现体跑在主程序工作线程上, 所以用阻塞等结果的形态 (`netFetchBlocking`);
+/// 结果里的 `ok` 是"请求跑完了", 状态码与正文由各自执行体判断。
+static HttpResult netHttpExecute(WebsearchPluginCtx& ctx, const HttpRequestSpec& spec) {
+    HttpResult out;
+    if (!ctx.iface.net) {
+        out.error = "Host network capability (`agentxx.net`) is unavailable";
+        return out;
+    }
+    agentxx::plugin::NetHttpOptions options;
+    options.method    = spec.method;
+    options.json      = spec.jsonBody;
+    options.headers   = spec.headersJson.empty() ? std::string{"{}"} : spec.headersJson;
+    options.format    = spec.format;
+    options.timeoutMs = spec.timeoutSeconds > 0 ? spec.timeoutSeconds * 1000 : 0;
+
+    const auto result
+        = netFetchBlocking(ctx.host, ctx.iface.net, ctx.iface.scheduler, spec.url, options);
+    if (!result.accepted()) {
+        out.error = fmt::format("net call failed: {}", result.error());
+        return out;
+    }
+    out.status = result.status();
+    if (!result.ok()) {
+        out.error = result.error();
+        return out;
+    }
+    out.ok   = true;
+    out.body = result.str("body");
+    return out;
+}
+
 /// 注册事务 (start 的实际内容): 读取主程序配置并注册三个工具。
 ///
-/// 三个工具的实现体都是 asio 协程 (`co_await HttpClient::*Async`), 等待的是
-/// 插件本地 reactor 上的 socket 就绪事件, 因此注册为**声明式受控轮询**工具
-/// (`polled_tool`): 网络等待不再占用主程序工作线程池, 同一实例的并发请求共享
-/// 一个本地 reactor 与 HTTP keep-alive 连接池。
+/// 两个工具的实现体都是**同步**函数: 网络经主程序 `<应用名>.net` 表的
+/// `http.fetch` (异步受理 + 工作线程上等结果), 因此注册为 `blocking_tool` ——
+/// 等待期间只占一个工作线程, 不在主程序 io 线程上阻塞。
 static int32_t websearchSetup(WebsearchPluginCtx& ctx, const agentxx::plugin::ScopeRef& ref) {
     if (ctx.iface.model && ctx.iface.model->get_config) {
         auto           modelRef = ref.raw();
@@ -99,27 +130,27 @@ static int32_t websearchSetup(WebsearchPluginCtx& ctx, const agentxx::plugin::Sc
               .object("header", kHeaderArgDesc)
               .build();
 
-    polled_tool(
+    blocking_tool(
         ctx,
         ref,
         kNameFetch,
         kDepictFetch,
         fetchSchema,
-        [](WebsearchPluginCtx&,
-           std::string_view args_json,
-           std::string_view,
-           std::string_view,
-           const PluginxxCancelToken* cancel_token) -> asio::awaitable<std::string> {
+        [](WebsearchPluginCtx&      c,
+           std::string_view         args_json,
+           const PluginxxCancelToken* cancel_token) -> ToolResult {
             if (pluginxx_cancel_is_requested(cancel_token)) {
                 throw CanceledException("web_fetch Canceled");
             }
             ArgReader args(args_json);
-            // args 是本协程帧的局部量: 其生命周期覆盖整个 co_await
-            auto result = co_await webFetchExecuteAsync(args.raw());
+            auto      http = [&c](const HttpRequestSpec& spec) {
+                return netHttpExecute(c, spec);
+            };
+            auto result = webFetchExecute(http, args.raw());
             if (pluginxx_cancel_is_requested(cancel_token)) {
                 throw CanceledException("web_fetch Canceled");
             }
-            co_return result;
+            return ToolResult::ok(std::move(result));
         },
         0,
         kAutoSummary
@@ -133,27 +164,29 @@ static int32_t websearchSetup(WebsearchPluginCtx& ctx, const agentxx::plugin::Sc
                                 .object("header", kHeaderArgDesc)
                                 .build();
 
-        polled_tool(
+        blocking_tool(
             ctx,
             ref,
             kNameSearch,
             kDepictSearch,
             searchSchema,
-            [](WebsearchPluginCtx& c,
-               std::string_view    args_json,
-               std::string_view,
-               std::string_view,
-               const PluginxxCancelToken* cancel_token) -> asio::awaitable<std::string> {
+            [](WebsearchPluginCtx&      c,
+               std::string_view         args_json,
+               const PluginxxCancelToken* cancel_token) -> ToolResult {
                 if (pluginxx_cancel_is_requested(cancel_token)) {
                     throw CanceledException("web_search Canceled");
                 }
                 ArgReader   args(args_json);
+                auto        http = [&c](const HttpRequestSpec& spec) {
+                    return netHttpExecute(c, spec);
+                };
                 std::string result;
                 if (c.use_model_search) {
                     ModelSearchConfig mcfg = c.model_cfg;
-                    result                 = co_await modelWebSearchExecuteAsync(args.raw(), mcfg);
+                    result                 = modelWebSearchExecute(http, args.raw(), mcfg);
                 } else {
-                    result = co_await webSearchExecuteAsync(
+                    result = webSearchExecute(
+                        http,
                         args.raw(),
                         c.search_api_url,
                         c.convert_html2markdown
@@ -162,7 +195,7 @@ static int32_t websearchSetup(WebsearchPluginCtx& ctx, const agentxx::plugin::Sc
                 if (pluginxx_cancel_is_requested(cancel_token)) {
                     throw CanceledException("web_search Canceled");
                 }
-                co_return result;
+                return ToolResult::ok(std::move(result));
             },
             0,
             kAutoSummary

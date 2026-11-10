@@ -16,6 +16,7 @@
 #include "agentxx/plugin/api/client_plugin_api.h"
 #include "agentxx/plugin/api/plugin_api.h"
 #include "pluginxx/api/net.h"
+#include "pluginxx/net/ops.h"
 #include "agentxx/util/tool_result.h"
 #include "asio/awaitable.hpp"
 #include "asio/co_spawn.hpp"
@@ -400,6 +401,683 @@ struct ClientIfaces {
         return f;
     }
 };
+
+/* ==================== 网络便捷入口 (插件侧) ====================
+ *
+ * 插件不自己建连接: HTTP / TCP / WebSocket / UDP 一律经主程序的 `<应用名>.net` 表
+ * (实现在 `utilxx::NetHub`, 按插件实例划分资源与生命周期)。本节的入口只做三件事:
+ * 拼参数 JSON、调表、把结果包成 [NetResult]。
+ *
+ * - **同步操作** (`ws.connect` / `ws.send` / `ws.close` / `http.serve` / `http.route` /
+ *   `http.respond` / `socket.*` / `udp.*` / `net.info`): 用 [netCall] ——
+ *   它会等网络侧执行完毕, 不要在主程序 IO 线程上拿它对慢操作使用;
+ * - **慢操作** (`http.request` / `http.fetch` / `http.download`): 用 [netCallAsync]
+ *   (或其包装 [netFetch] / [netDownload]), 都可以 `co_await`;
+ * - **事件**: 频道 `plugin.<插件 id>.net` (见 [netEventTopic]), 由主程序声明并代发,
+ *   插件订阅即可 —— 载荷里带 `kind` 字段 (`ws.open` / `ws.message` / `http.request` …)。
+ *
+ * 两层状态不要混: [NetResult::code] 是表入口的结果码 (参数 / 状态层面被拒),
+ * 结果 JSON 里的 `ok` 才是业务结论 —— 连不上、超时这类失败是
+ * `code == PLUGINXX_NET_OK` 而 `ok == false`。
+ */
+
+/// 一次网络调用的结果
+struct NetResult {
+    int32_t     code = PLUGINXX_NET_ERR_STATE; ///< 表入口结果码 (`PLUGINXX_NET_*`)
+    std::string json;                          ///< 结果 JSON (受理失败时可能为空)
+
+    /// 操作执行完毕 (业务结论还要看 [ok])
+    bool accepted() const noexcept {
+        return code == PLUGINXX_NET_OK;
+    }
+
+    /// 业务成功 (= 受理成功且结果 JSON 里 `ok:true`)
+    bool ok() const;
+
+    /// 结果 JSON 里的字符串字段 (不存在 / 不是对象时返回空串)
+    std::string str(std::string_view key) const;
+
+    /// 结果 JSON 里的 `status` (HTTP 状态码; 没有就返回 0)
+    int64_t status() const;
+
+    /// 失败原因: 表入口失败给结果码名字, 业务失败给 `error: message`
+    std::string error() const;
+};
+
+namespace detail {
+
+/// 解析结果 JSON (非法 JSON 返回空; 结果 JSON 由本层自己产出, 解析失败只可能是被截断)
+inline std::optional<utilxx_base::Json> parseNetJson(const std::string& text) {
+    if (text.empty()) {
+        return std::nullopt;
+    }
+    try {
+        return utilxx_base::Json::parse(text);
+    } catch (...) {
+        return std::nullopt;
+    }
+}
+
+/// 表入口结果码的名字 (写日志 / 拼错误串用)
+inline std::string_view netCodeName(int32_t code) {
+    switch (code) {
+        case PLUGINXX_NET_OK:
+            return "ok";
+        case PLUGINXX_NET_ERR_ARG:
+            return "bad_args";
+        case PLUGINXX_NET_ERR_STATE:
+            return "not_available";
+        case PLUGINXX_NET_ERR_JSON:
+            return "bad_json";
+        case PLUGINXX_NET_ERR_NOT_FOUND:
+            return "not_found";
+        case PLUGINXX_NET_ERR_TIMEOUT:
+            return "timeout";
+        case PLUGINXX_NET_ERR_PERMISSION:
+            return "permission_denied";
+        case PLUGINXX_NET_ERR_QUEUE_FULL:
+            return "queue_full";
+        case PLUGINXX_NET_ERR_NO_MEMORY:
+            return "no_memory";
+        default:
+            return "internal_error";
+    }
+}
+
+} // namespace detail
+
+inline bool NetResult::ok() const {
+    if (!accepted()) {
+        return false;
+    }
+    const auto doc = detail::parseNetJson(json);
+    return doc.has_value() && doc->is_object() && doc->value("ok", false);
+}
+
+inline std::string NetResult::str(std::string_view key) const {
+    const auto doc = detail::parseNetJson(json);
+    if (!doc.has_value() || !doc->is_object()) {
+        return {};
+    }
+    return doc->value(key, "");
+}
+
+inline int64_t NetResult::status() const {
+    const auto doc = detail::parseNetJson(json);
+    if (!doc.has_value() || !doc->is_object()) {
+        return 0;
+    }
+    return doc->value("status", int64_t{0});
+}
+
+inline std::string NetResult::error() const {
+    if (!accepted()) {
+        return std::string{detail::netCodeName(code)};
+    }
+    const auto doc = detail::parseNetJson(json);
+    if (!doc.has_value() || !doc->is_object()) {
+        return json.empty() ? std::string{"net call failed"} : json;
+    }
+    const std::string reason  = doc->value("error", "");
+    const std::string message = doc->value("message", "");
+    if (reason.empty()) {
+        return message.empty() ? std::string{"net call failed"} : message;
+    }
+    return message.empty() ? reason : reason + ": " + message;
+}
+
+/// 同步网络操作
+///
+/// - 适用: 结果立刻可得的操作 (`ws.connect` / `ws.send` / `http.serve` / `net.info` …);
+/// - 会**等**网络侧执行完毕 (有界等待), 因此慢操作 (`http.fetch` / `http.download`)
+///   请在协程里用 [netFetch] / [netDownload];
+/// - 返回 `code == PLUGINXX_NET_ERR_STATE` 表示主程序没提供网络能力。
+inline NetResult netCall(
+    const PluginxxHost*     host,
+    const PluginxxNetIface* net,
+    std::string_view        op,
+    std::string_view        argsJson = "{}"
+) {
+    NetResult result;
+    if (!host || !net || !net->call || op.empty()) {
+        return result;
+    }
+    const auto     opSv   = PluginStringView::from(op.data(), op.size());
+    const auto     argsSv = PluginStringView::from(argsJson.data(), argsJson.size());
+    PluginxxString out{nullptr, 0};
+    result.code = net->call(host, &opSv, &argsSv, &out);
+    if (out.data) {
+        result.json.assign(out.data, static_cast<size_t>(out.size));
+        PluginString::free(host, &out);
+    }
+    return result;
+}
+
+namespace detail {
+
+/// `call_async` 的状态 (堆上持有: 完成回调与 awaiter 各持一份 shared_ptr)
+struct NetAsyncState {
+    const PluginxxHost*     host = nullptr;
+    const PluginxxNetIface* net  = nullptr;
+    pluginxx::detail::PollOneBridge* bridge = nullptr; ///< 协程驱动桥 (可空)
+
+    std::string op;
+    std::string argsJson;
+
+    int32_t     code     = PLUGINXX_NET_ERR_INTERNAL; ///< 受理结果
+    std::string accepted;                             ///< 受理时写出的 JSON (失败原因)
+    int64_t     requestId = 0;
+
+    int32_t     doneStatus = PLUGINXX_OPERATOR_OK; ///< 完成通知的状态
+    std::string payload;                           ///< 完成通知的载荷 (结果 JSON)
+
+    void* coroAddr = nullptr;
+
+    /// 0 = 未开始, 1 = 调用中, 2 = 已挂起, 3 = 已完成 (完成回调先到)
+    std::atomic<uint32_t> state{0};
+};
+
+/// `co_await netCallAsync(ctx, op, args)` 的 awaiter
+///
+/// 与 `co_await invoke_cap(...)` 同一套挂起协议: 完成回调不直接恢复插件协程,
+/// 而是交给协程驱动桥 (见 `pluginxx::resumePluginCoroutine`)。
+struct NetAsyncAwaiter {
+    std::shared_ptr<NetAsyncState> st;
+
+    NetAsyncAwaiter(
+        const PluginxxHost*              host,
+        const PluginxxNetIface*          net,
+        std::string_view                 in_op,
+        std::string_view                 in_args,
+        pluginxx::detail::PollOneBridge* in_bridge = nullptr
+    ) :
+        st(std::make_shared<NetAsyncState>()) {
+        st->host     = host;
+        st->net      = net;
+        st->bridge   = in_bridge;
+        st->op       = std::string{in_op};
+        st->argsJson = std::string{in_args};
+    }
+
+    bool await_ready() const noexcept {
+        return !st || !st->net || !st->net->call_async;
+    }
+
+    template<typename Promise>
+    bool await_suspend(std::coroutine_handle<Promise> h) {
+        st->coroAddr = h.address();
+        st->state.store(1, std::memory_order_release);
+
+        auto* holder = new std::shared_ptr<NetAsyncState>(st);
+        PluginxxOperatorNotify notify{};
+        notify.host_ud = holder;
+        notify.done    = [](void* ud, int32_t done_status, const PluginxxStringView* payload) {
+            auto* hp = static_cast<std::shared_ptr<NetAsyncState>*>(ud);
+            auto  s  = *hp;
+            delete hp;
+
+            s->doneStatus = done_status;
+            if (payload && payload->data && payload->size > 0) {
+                s->payload.assign(payload->data, static_cast<size_t>(payload->size));
+            }
+
+            uint32_t expected = 1;
+            if (s->state.compare_exchange_strong(
+                    expected,
+                    3,
+                    std::memory_order_acq_rel
+                )) {
+                return; // 还没挂起就先完成了: 由 await_suspend 的后续判断接着走
+            }
+
+            auto handle = std::coroutine_handle<Promise>::from_address(s->coroAddr);
+            handle.promise().clear_outstanding();
+            pluginxx::detail::resumePluginCoroutine(s->bridge, handle);
+        };
+
+        const auto     opSv   = PluginStringView::from(st->op.data(), st->op.size());
+        const auto     argsSv = PluginStringView::from(st->argsJson.data(), st->argsJson.size());
+        PluginxxString out{nullptr, 0};
+        st->code = st->net->call_async(
+            st->host,
+            &opSv,
+            &argsSv,
+            &notify,
+            &out,
+            &st->requestId
+        );
+        if (out.data) {
+            st->accepted.assign(out.data, static_cast<size_t>(out.size));
+            PluginString::free(st->host, &out);
+        }
+        if (st->code != PLUGINXX_NET_OK) {
+            delete holder;
+            st->state.store(3, std::memory_order_release);
+            return false;
+        }
+
+        uint32_t expected = 1;
+        if (st->state.compare_exchange_strong(expected, 2, std::memory_order_acq_rel)) {
+            h.promise().set_outstanding([st = this->st]() {
+                if (st->net && st->net->cancel && st->requestId != 0) {
+                    PluginxxString ignored{nullptr, 0};
+                    st->net->cancel(st->host, st->requestId, &ignored);
+                    if (ignored.data) {
+                        PluginString::free(st->host, &ignored);
+                    }
+                }
+            });
+            return true;
+        }
+        return false;
+    }
+
+    NetResult await_resume() {
+        NetResult result;
+        if (!st) {
+            return result;
+        }
+        if (st->code != PLUGINXX_NET_OK) {
+            result.code = st->code;
+            result.json = st->accepted;
+            return result;
+        }
+        result.code = PLUGINXX_NET_OK;
+        if (st->doneStatus == PLUGINXX_OPERATOR_OK) {
+            result.json = st->payload;
+            return result;
+        }
+        if (st->doneStatus == PLUGINXX_OPERATOR_CANCELED) {
+            result.json = "{\"ok\":false,\"error\":\"canceled\"}";
+            return result;
+        }
+        // 失败时主程序给的载荷本身就是错误 JSON; 没有就补一个
+        result.json = st->payload.empty() ? "{\"ok\":false,\"error\":\"failed\"}" : st->payload;
+        return result;
+    }
+};
+
+} // namespace detail
+
+/// 异步网络操作 (可 `co_await`)
+///
+/// - 适用: `http.request` / `http.fetch` / `http.download` (其它 op 请用 [netCall]);
+/// - 结果**恰好一次**; 协程被取消时请求随之取消, 拿到的结果里 `ok == false`、
+///   `error == "canceled"`;
+/// - 主程序没提供网络能力时 [NetResult::code] 为 `PLUGINXX_NET_ERR_STATE`。
+template<typename Ctx>
+inline detail::NetAsyncAwaiter netCallAsync(
+    const Ctx&       ctx,
+    std::string_view op,
+    std::string_view argsJson = "{}"
+) {
+    return detail::NetAsyncAwaiter{ctx.host, ctx.iface.net, op, argsJson, &ctx.bridge()};
+}
+
+/// 同步等一个异步 op 的结果 (给"本来就是阻塞实现"的位置用)
+///
+/// - 插件工具的实现体跑在主程序工作线程上 (没有协程上下文) 时用本函数,
+///   协程里请用 [netCallAsync] / [netFetch];
+/// - **不得在主程序 io 线程上调用**: 那会把整个主程序卡在这条请求上,
+///   这种情况直接返回 `PLUGINXX_NET_ERR_STATE` (与 `invoke_capability_blocking` 同一条约束);
+/// - 等待期间本次工具调用被取消不会打断等待 (网络侧仍会给出结果),
+///   由调用方自己决定要不要继续用。
+inline NetResult netCallBlocking(
+    const PluginxxHost*           host,
+    const PluginxxNetIface*       net,
+    const PluginxxSchedulerIface* scheduler,
+    std::string_view              op,
+    std::string_view              argsJson = "{}"
+) {
+    NetResult result;
+    if (!host || !net || !net->call_async || op.empty()) {
+        return result;
+    }
+    if (scheduler && scheduler->is_io_thread && scheduler->is_io_thread(host) != 0) {
+        result.code = PLUGINXX_NET_ERR_STATE;
+        result.json = R"({"ok":false,"error":"wrong_thread","message":"netCallBlocking must not run on the host io thread; use co_await netFetch in a coroutine"})";
+        return result;
+    }
+
+    struct SyncState {
+        std::mutex              mutex;
+        std::condition_variable cv;
+        bool                    done   = false;
+        int32_t                 status = PLUGINXX_OPERATOR_OK;
+        std::string             payload;
+    } state;
+
+    PluginxxOperatorNotify notify{};
+    notify.host_ud = &state;
+    notify.done    = [](void* ud, int32_t doneStatus, const PluginxxStringView* payload) {
+        auto* s = static_cast<SyncState*>(ud);
+        {
+            std::lock_guard<std::mutex> lock(s->mutex);
+            s->done   = true;
+            s->status = doneStatus;
+            if (payload && payload->data && payload->size > 0) {
+                s->payload.assign(payload->data, static_cast<size_t>(payload->size));
+            }
+        }
+        s->cv.notify_one();
+    };
+
+    const auto     opSv   = PluginStringView::from(op.data(), op.size());
+    const auto     argsSv = PluginStringView::from(argsJson.data(), argsJson.size());
+    PluginxxString out{nullptr, 0};
+    int64_t        requestId = 0;
+    result.code = net->call_async(host, &opSv, &argsSv, &notify, &out, &requestId);
+    if (out.data) {
+        result.json.assign(out.data, static_cast<size_t>(out.size));
+        PluginString::free(host, &out);
+    }
+    if (result.code != PLUGINXX_NET_OK) {
+        return result;
+    }
+
+    {
+        std::unique_lock<std::mutex> lock(state.mutex);
+        state.cv.wait(lock, [&state]() {
+            return state.done;
+        });
+    }
+
+    result.code = PLUGINXX_NET_OK;
+    if (state.status == PLUGINXX_OPERATOR_OK) {
+        result.json = std::move(state.payload);
+    } else if (state.status == PLUGINXX_OPERATOR_CANCELED) {
+        result.json = "{\"ok\":false,\"error\":\"canceled\"}";
+    } else {
+        result.json = state.payload.empty() ? "{\"ok\":false,\"error\":\"failed\"}"
+                                           : std::move(state.payload);
+    }
+    return result;
+}
+
+/// 同 [netCallBlocking], 直接取当前的接口表与调度表
+template<typename Ctx>
+inline NetResult netCallBlocking(
+    const Ctx&       ctx,
+    std::string_view op,
+    std::string_view argsJson = "{}"
+) {
+    return netCallBlocking(ctx.host, ctx.iface.net, ctx.iface.scheduler, op, argsJson);
+}
+
+/// HTTP 请求参数 (`http.fetch` / `http.download` 的入参; 只有 url 必填)
+///
+/// 字段含义与 `<应用名>.net` 的参数一一对应:
+/// - [body] 原样发送; [json] 是 JSON 文本, 发送时自动补 `Content-Type: application/json`;
+/// - [format] 只支持 `"markdown"` (HTML 转 Markdown) 与空串 (原样);
+/// - [tlsVerify] 只对 `https://` 有效 (自签名服务端需要关掉)。
+struct NetHttpOptions {
+    std::string method          = "GET";
+    std::string body;                ///< 请求体原文 (与 [json] 二选一)
+    std::string json;                ///< 请求体 JSON 文本 (自动补 Content-Type)
+    std::string headers         = "{}"; ///< 请求头 JSON 对象文本
+    std::string format;              ///< "" 或 "markdown"
+    int32_t     timeoutMs       = 0;  ///< <= 0 = 不设超时
+    int64_t     maxBytes        = 0;  ///< <= 0 = 不限正文大小
+    bool        followRedirects = true;
+    int32_t     maxRedirects    = 3;
+    bool        tlsVerify       = true;
+
+    /// 拼成 `<应用名>.net` 的参数字符串
+    std::string toArgsJson(std::string_view url) const;
+};
+
+/// 同 [NetHttpOptions::toArgsJson] 的字符串形态 (没有请求头 / 请求体时用它更省事)
+inline std::string netHttpArgs(
+    std::string_view             url,
+    std::string_view             method = "GET",
+    std::string_view             jsonBody = {},
+    std::string_view             headersJson = {},
+    std::string_view             format = {},
+    int32_t                      timeoutMs = 0
+) {
+    NetHttpOptions options;
+    options.method = std::string{method};
+    options.json   = std::string{jsonBody};
+    options.headers = headersJson.empty() ? std::string{"{}"} : std::string{headersJson};
+    options.format = std::string{format};
+    options.timeoutMs = timeoutMs;
+    return options.toArgsJson(url);
+}
+
+inline std::string NetHttpOptions::toArgsJson(std::string_view url) const {
+    utilxx_base::Json args = utilxx_base::Json::object();
+    args["url"]            = std::string{url};
+    if (!method.empty()) {
+        args["method"] = method;
+    }
+    if (!body.empty()) {
+        args["body"] = body;
+    } else if (!json.empty()) {
+        try {
+            args["json"] = utilxx_base::Json::parse(json);
+        } catch (...) {
+            args["body"] = json; // 不是合法 JSON: 按原文发, 至少不会丢请求体
+        }
+    }
+    if (!headers.empty()) {
+        try {
+            auto parsed = utilxx_base::Json::parse(headers);
+            if (parsed.is_object()) {
+                args["headers"] = std::move(parsed);
+            }
+        } catch (...) {
+        }
+    }
+    if (!format.empty()) {
+        args["format"] = format;
+    }
+    if (timeoutMs > 0) {
+        args["timeoutMs"] = static_cast<int64_t>(timeoutMs);
+    }
+    if (maxBytes > 0) {
+        args["maxBytes"] = maxBytes;
+    }
+    args["followRedirects"] = followRedirects;
+    args["maxRedirects"]    = static_cast<int64_t>(maxRedirects < 0 ? 0 : maxRedirects);
+    args["tlsVerify"]       = tlsVerify;
+    return args.dump();
+}
+
+/// `co_await netFetch(ctx, url, options)` —— HTTP 请求并等最终结果
+///
+/// 结果 JSON: `{ok, url, status, statusText, headers, contentType, body, bodyBytes,
+/// truncated, redirects, elapsedMs}`; 失败是 `{ok:false, error, message}`。
+template<typename Ctx>
+inline detail::NetAsyncAwaiter netFetch(
+    const Ctx&           ctx,
+    std::string_view     url,
+    const NetHttpOptions& options = {}
+) {
+    return netCallAsync(ctx, pluginxx::net_op::httpFetch, options.toArgsJson(url));
+}
+
+/// `co_await netDownload(ctx, url, fileName)` —— 下载到插件数据目录
+///
+/// 落盘位置 `<data_dir>/<插件 id>/data/downloads/<fileName>` (不给文件名时按 URL 推);
+/// 结果 JSON 带 `path` / `bytes`。
+template<typename Ctx>
+inline detail::NetAsyncAwaiter netDownload(
+    const Ctx&        ctx,
+    std::string_view  url,
+    std::string_view  fileName = {},
+    NetHttpOptions    options  = {}
+) {
+    options.method = "GET";
+    std::string argsJson = options.toArgsJson(url);
+    if (!fileName.empty()) {
+        try {
+            auto args = utilxx_base::Json::parse(argsJson);
+            args["fileName"] = std::string{fileName};
+            argsJson         = args.dump();
+        } catch (...) {
+        }
+    }
+    return netCallAsync(ctx, pluginxx::net_op::httpDownload, argsJson);
+}
+
+/// 同 [netFetch] 的阻塞形态 (`blocking_tool` 的实现体没有协程上下文, 用这个)
+inline NetResult netFetchBlocking(
+    const PluginxxHost*           host,
+    const PluginxxNetIface*       net,
+    const PluginxxSchedulerIface* scheduler,
+    std::string_view              url,
+    const NetHttpOptions&         options = {}
+) {
+    return netCallBlocking(
+        host,
+        net,
+        scheduler,
+        pluginxx::net_op::httpFetch,
+        options.toArgsJson(url)
+    );
+}
+
+template<typename Ctx>
+inline NetResult netFetchBlocking(
+    const Ctx&            ctx,
+    std::string_view      url,
+    const NetHttpOptions& options = {}
+) {
+    return netFetchBlocking(ctx.host, ctx.iface.net, ctx.iface.scheduler, url, options);
+}
+
+/* ---------- WebSocket / HTTP 服务端的几个直白入口 (内部就是 netCall) ---------- */
+
+/// 网络事件广播频道 (`plugin.<插件 id>.net`)
+///
+/// 频道由主程序声明并代发 (插件不用自己声明), 插件订阅得到 `kind` 事件:
+/// `ws.open` / `ws.message` / `ws.close` / `http.request` / `http.listening` / …
+inline std::string netEventTopic(std::string_view pluginId) {
+    std::string topic = "plugin.";
+    topic += pluginId;
+    topic += ".net";
+    return topic;
+}
+
+/// 建立 WebSocket 连接 (幂等: 同 id 已存在时返回 `exists`)
+///
+/// - `url` 形如 `ws://127.0.0.1:9222/devtools/page/<id>`; 也可给
+///   `netWsConnectHost(host, net, "127.0.0.1", 9222, "/path")` 的拆开写法;
+/// - 结果 JSON: `{ok, id}`; 连接建立后 `ws.open` 事件到达, 之后 `ws.message` 收消息。
+inline NetResult netWsConnect(
+    const PluginxxHost*     host,
+    const PluginxxNetIface* net,
+    std::string_view        url,
+    std::string_view        id            = {},
+    std::string_view        headersJson   = {},
+    std::string_view        subprotocols  = {},
+    int32_t                 timeoutMs     = 0
+) {
+    utilxx_base::Json args = utilxx_base::Json::object();
+    args["url"]            = std::string{url};
+    if (!id.empty()) {
+        args["id"] = std::string{id};
+    }
+    if (!headersJson.empty()) {
+        try {
+            auto parsed = utilxx_base::Json::parse(headersJson);
+            if (parsed.is_object()) {
+                args["headers"] = std::move(parsed);
+            }
+        } catch (...) {
+        }
+    }
+    if (!subprotocols.empty()) {
+        args["subprotocols"] = std::string{subprotocols};
+    }
+    if (timeoutMs > 0) {
+        args["timeoutMs"] = static_cast<int64_t>(timeoutMs);
+    }
+    const std::string text = args.dump();
+    return netCall(host, net, pluginxx::net_op::wsConnect, text);
+}
+
+/// 发 WebSocket 文本帧
+inline NetResult netWsSend(
+    const PluginxxHost*     host,
+    const PluginxxNetIface* net,
+    std::string_view        id,
+    std::string_view        text
+) {
+    utilxx_base::Json args = utilxx_base::Json::object();
+    args["id"]             = std::string{id};
+    args["text"]           = std::string{text};
+    const std::string json = args.dump();
+    return netCall(host, net, pluginxx::net_op::wsSend, json);
+}
+
+/// 关闭 WebSocket 连接 (`code` 缺省 1000)
+inline NetResult netWsClose(
+    const PluginxxHost*     host,
+    const PluginxxNetIface* net,
+    std::string_view        id,
+    std::string_view        reason = {},
+    int32_t                 code   = 1000
+) {
+    utilxx_base::Json args = utilxx_base::Json::object();
+    args["id"]             = std::string{id};
+    args["code"]           = static_cast<int64_t>(code);
+    if (!reason.empty()) {
+        args["reason"] = std::string{reason};
+    }
+    const std::string json = args.dump();
+    return netCall(host, net, pluginxx::net_op::wsClose, json);
+}
+
+/// 起一个 HTTP 服务 (`host` 缺省 `127.0.0.1`; 只有回环才能不暴露)
+///
+/// 结果 JSON: `{ok, id, host, port, url}`; 收到请求时 `http.request` 事件到达,
+/// 用 [netHttpRespond] 作答 (不答 = 客户端等到超时)。
+inline NetResult netHttpServe(
+    const PluginxxHost*     host,
+    const PluginxxNetIface* net,
+    int32_t                 port,
+    std::string_view        listenHost = "127.0.0.1"
+) {
+    utilxx_base::Json args = utilxx_base::Json::object();
+    args["host"]           = std::string{listenHost};
+    args["port"]           = static_cast<int64_t>(port);
+    const std::string json = args.dump();
+    return netCall(host, net, pluginxx::net_op::httpServe, json);
+}
+
+/// 回答一条 `http.request` 事件
+inline NetResult netHttpRespond(
+    const PluginxxHost*     host,
+    const PluginxxNetIface* net,
+    int64_t                 requestId,
+    std::string_view        body,
+    int32_t                 status         = 200,
+    std::string_view        contentType    = "text/plain; charset=utf-8",
+    std::string_view        extraHeaders   = {}
+) {
+    utilxx_base::Json args = utilxx_base::Json::object();
+    args["requestId"]      = requestId;
+    args["status"]         = static_cast<int64_t>(status);
+    args["body"]           = std::string{body};
+    args["contentType"]    = std::string{contentType};
+    if (!extraHeaders.empty()) {
+        try {
+            auto parsed = utilxx_base::Json::parse(extraHeaders);
+            if (parsed.is_object()) {
+                args["headers"] = std::move(parsed);
+            }
+        } catch (...) {
+        }
+    }
+    const std::string json = args.dump();
+    return netCall(host, net, pluginxx::net_op::httpRespond, json);
+}
+
+/// 网络现状快照 (服务 / 连接 / 计数器; 排查问题用)
+inline NetResult netInfo(const PluginxxHost* host, const PluginxxNetIface* net) {
+    return netCall(host, net, pluginxx::net_op::info, "{}");
+}
 
 /* ==================== 提示词描述解析结构 ==================== */
 

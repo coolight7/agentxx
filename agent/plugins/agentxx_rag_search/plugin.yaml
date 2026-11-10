@@ -9,3 +9,6 @@ interfaces:
     - agentxx.agent.tools
   optional:
     - agentxx.agent.model
+    # 网络经主程序 `<应用名>.net` 表; 清单里不写进 require —— 无前缀名字两侧都检查,
+    # 写进 require 会让本插件也被当成 client 端插件去加载
+    - agentxx.net

@@ -1,12 +1,12 @@
 # agentxx_websearch —— 网络访问工具插件 (search / fetch / fetch markdown)
-# - 默认: 独立动态库 (MODULE), 仅依赖纯 C ABI 头 + cxx_utilxx_static + html2md
-#   (HttpClient 的 fetchMarkdown 内部使用 html2md 转换)
+# - 默认: 独立动态库 (MODULE), 仅依赖纯 C ABI 头 + cxx_utilxx_base_static (Json/字符串)
+#   网络经主程序 `<应用名>.net` 表 (`http.fetch`, markdown 转换也由它完成)
 # - 内置模式:
 #   源文件编译为 OBJECT 库合并进 libagentxx
 set(PLUGIN_NAME agentxx_websearch)
 
 # ===== 平台支持判定 =====
-# 纯网络 IO (asio/beast 经 cxx_utilxx_static), 全平台可用
+# 无本地网络代码 (只发参数、收结果), 全平台可用
 include("${CMAKE_CURRENT_LIST_DIR}/../cmake/plugin_platform_support.cmake")
 agentxx_plugin_platform_gate(${PLUGIN_NAME} _AGENTXX_PLATFORM_OK windows linux macos android ios)
 if (NOT _AGENTXX_PLATFORM_OK)
@@ -37,13 +37,10 @@ if (_AGENTXX_ADD_AS_BUILTIN)
   target_include_directories(${_target} PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}"          # agentxx_websearch_plugin.h / websearch_impl.h
     "${AGENTXX_LIB_INCLUDE_DIR}"           # agentxx/plugin/plugin_api.h
-    "${AGENTXX_INSTALL_DIR}/include"       # cxx_utilxx_static (Json/JsonView) html2md
+    "${AGENTXX_INSTALL_DIR}/include"       # cxx_utilxx_base_static (Json/字符串工具)
   )
-  # 复用 cxx_utilxx_static 工具库 (HttpClient 实现经静态裁剪自动收录);
-  # html2md 以裸库名追加进 libagentxx 收集通道 (与 agentxx_string 同理)
-  target_link_libraries(${_target} PRIVATE cxx_utilxx_static)
-  set(AGENTXX_BUILTIN_PLUGIN_LINK_LIBS
-    "${AGENTXX_BUILTIN_PLUGIN_LINK_LIBS}" html2md PARENT_SCOPE)
+  # 复用 cxx_utilxx_base_static 工具库 (Json / 字符串编码转换)
+  target_link_libraries(${_target} PRIVATE cxx_utilxx_base_static)
   set_target_properties(${_target} PROPERTIES
     POSITION_INDEPENDENT_CODE ON
     CXX_STANDARD 26
@@ -71,17 +68,16 @@ add_library(${PLUGIN_NAME} SHARED
 # ===== 依赖查找与链接 (顺序: 先依赖库的依赖, 再依赖库本体) =====
 # 工具库条件依赖 (io_uring / hyperscan) 由 plugins/CMakeLists.txt 统一查找;
 # 本处只导入依赖库本体, 随后按 imported target / 裸库名链接
-if (NOT TARGET cxx_utilxx_static)
+if (NOT TARGET cxx_utilxx_base_static)
   # 内置合并编译时 util 目标随 libagentxx 已存在 (且 install 目录尚未生成
   # config), 仅独立构建本插件时经安装 config 导入
-  find_package(cxx_utilxx REQUIRED)
+  find_package(cxx_utilxx_base REQUIRED)
 endif()
-find_package(html2md REQUIRED)
 
 target_include_directories(${PLUGIN_NAME} PRIVATE
   "${CMAKE_CURRENT_SOURCE_DIR}"          # agentxx_websearch_plugin.h / websearch_impl.h
-  "${AGENTXX_LIB_INCLUDE_DIR}"           # agentxx/plugin/plugin_api.h
-  "${AGENTXX_INSTALL_DIR}/include/"      # cxx_utilxx_static (Json/JsonView) html2md
+  "${AGENTXX_LIB_INCLUDE_DIR}"           # agentxx/plugin/**（含 plugin_kit.h）
+  "${AGENTXX_INSTALL_DIR}/include/"      # cxx_utilxx_base_static (Json/字符串工具)
 )
 
 # 裸库名依赖 (如 hs_runtime) 的解析目录: 与 cxx_utilxx* 导出接口的 link 目录一致
@@ -90,8 +86,7 @@ target_link_directories(${PLUGIN_NAME} PRIVATE
 )
 
 target_link_libraries(${PLUGIN_NAME} PRIVATE
-  cxx_utilxx_static
-  html2md
+  cxx_utilxx_base_static
 )
 set_target_properties(${PLUGIN_NAME} PROPERTIES
   PREFIX "lib"

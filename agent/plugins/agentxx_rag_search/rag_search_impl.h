@@ -1,22 +1,20 @@
 /// agentxx_rag_search 插件 —— 工具实现 (纯函数, 不含 C ABI 胶水)
 /// - 从 libagentxx src/tools/rag_search 拆分: 同名工具同行为 (agentxx_rag_search)
 /// - 头文件-only: 插件入口与测试共同包含, 保证插件行为与测试覆盖一致
-/// - 依赖: cxx_utilxx (HttpClient) + cxx_utilxx_base (Json / 字符串工具 / 日志) +
-///   agentxx/util/exception.h (主程序侧异常分类) + fmt
+/// - 依赖: agentxx/plugin/api/plugin_kit.h (网络经主程序 `<应用名>.net` 表) +
+///   cxx_utilxx_base (Json / 字符串工具 / 日志) + agentxx/util/exception.h +
+///   agentxx/util/tool_result.h + fmt
 /// - 与原实现的差异点:
 ///   - 原版 asio 协程接口改为同步实现 (插件 execute 回调已运行在主程序线程池,
-///     阻塞安全); embedding 网络调用经局部 io_context 驱动至完成 (与
-///     agentxx_websearch 的 runSync 同模式)
+///     阻塞安全); embedding 请求经 `netFetchBlocking` (主程序网络服务) 完成,
+///     插件不再自建连接
 ///   - embedding 客户端经 EmbedFn 函数对象注入: 插件入口加载真实 HTTP 版本,
 ///     测试可注入假实现 (不依赖网络), 与 filesystem_impl.h 的 IsCanceledFn
 ///     注入同思路; 分块/相似度/检索逻辑为纯函数, 行为与原版一致
 #pragma once
 
+#include "agentxx/plugin/api/plugin_kit.h"
 #include "agentxx/util/exception.h"
-#include "asio/co_spawn.hpp"
-#include "asio/detached.hpp"
-#include "asio/io_context.hpp"
-#include "utilxx/http_client.h"
 #include "utilxx_base/log.h"
 #include "utilxx_base/string_util.h"
 #include <algorithm>
@@ -638,53 +636,64 @@ protected:
 // 真实 embedding 客户端 (原 EmbeddingClient: OpenAI 兼容 /embeddings 接口)
 // =========================================================================
 
-/// 构造真实 EmbedFn (OpenAI 兼容 POST {baseUrl}/embeddings; 局部 io_context
-/// 同步驱动, 仅主程序线程池内调用; readChunkTimeout=15s 与原实现一致)
-inline EmbedFn makeHttpEmbedder(std::string baseUrl, std::string model) {
-    return [baseUrl = std::move(baseUrl),
+/// 构造真实 EmbedFn (OpenAI 兼容 POST {baseUrl}/embeddings)
+///
+/// - 网络经主程序的 `<应用名>.net` 表发 (插件不自己建连接):
+///   `http.fetch` 走异步受理 + 本函数在**工作线程**上等结果, 与原来的
+///   "局部 io_context 同步驱动" 等价, 区别只是连接与超时归主程序的网络服务管;
+/// - `timeoutMs` 与原实现的 `readChunkTimeout = 15s` 对齐 (整条请求上限)。
+inline EmbedFn makeHttpEmbedder(
+    const PluginxxHost*           host,
+    const PluginxxNetIface*       net,
+    const PluginxxSchedulerIface* scheduler,
+    std::string                   baseUrl,
+    std::string                   model
+) {
+    return [host,
+            net,
+            scheduler,
+            baseUrl = std::move(baseUrl),
             model   = std::move(model)](const std::vector<std::string>& texts
            ) -> std::expected<std::vector<std::vector<double>>, std::string> {
         if (texts.empty()) {
             return std::vector<std::vector<double>>{};
         }
+        if (!net) {
+            return std::unexpected{std::string{"[embedding] host net capability is unavailable"}};
+        }
 
+        // 请求体: {model, input:[...]}
+        // 与原 EmbeddingClient 一致: 不携带额外请求头 (embedding 服务多为
+        // 本地部署, 原实现即空 headers)
         auto body     = utilxx_base::Json::object();
         body["model"] = model;
         body["input"] = utilxx_base::Json(texts);
 
-        // 与原 EmbeddingClient 一致: 不携带额外请求头 (embedding 服务多为
-        // 本地部署, 原实现即空 headers)
-        asio::io_context io;
-        auto             respExp = utilxx::HttpClient::postAsync(
-            fmt::format("{}/embeddings", baseUrl),
-            body,
-            utilxx::HeaderMap{},
-            utilxx::HttpClient::RequestConfig{.readChunkTimeout = std::chrono::seconds{15}}
-        );
-        std::expected<utilxx::HttpResponse, std::string> resp;
-        // awaitable 为 move-only: 必须 move 捕获并 co_await 右值 (不可拷贝)
-        asio::co_spawn(
-            io,
-            [&resp, w = std::move(respExp)]() mutable -> asio::awaitable<void> {
-                resp = co_await std::move(w);
-            },
-            asio::detached
-        );
-        io.run();
+        agentxx::plugin::NetHttpOptions options;
+        options.method    = "POST";
+        options.json      = body.dump();
+        options.timeoutMs = 15000;
 
-        if (false == resp.has_value() || false == utilxx::HttpClient::respIsSucc(resp.value())) {
-            std::string str;
-            if (resp.has_value()) {
-                str = std::to_string(resp.value().status);
-            } else {
-                str = resp.error();
-            }
-
-            return std::unexpected{fmt::format("[embedding] API error: {}", str)};
+        const agentxx::plugin::NetResult resp
+            = agentxx::plugin::netFetchBlocking(host, net, scheduler, fmt::format("{}/embeddings", baseUrl), options);
+        if (!resp.accepted()) {
+            return std::unexpected{fmt::format("[embedding] net call failed: {}", resp.error())};
+        }
+        if (!resp.ok()) {
+            return std::unexpected{fmt::format("[embedding] API error: {}", resp.error())};
+        }
+        const int64_t status = resp.status();
+        if (status < 200 || status >= 300) {
+            const std::string errBody = resp.str("body");
+            return std::unexpected{
+                fmt::format("[embedding] API error: {}", errBody.empty()
+                                                            ? std::to_string(status)
+                                                            : errBody)
+            };
         }
 
         try {
-            auto                             respBody = utilxx_base::Json::parse(resp.value().body);
+            auto                             respBody = utilxx_base::Json::parse(resp.str("body"));
             std::vector<std::vector<double>> embeddings;
 
             for (const auto& item : respBody["data"]) {
