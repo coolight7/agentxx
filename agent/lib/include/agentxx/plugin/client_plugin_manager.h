@@ -446,20 +446,10 @@ public:
     /// 直连库路径为空) —— 主程序限制依据, 经 list() 暴露供展示/排查
     PluginManifestInterfaces interfaces;
 
-    /// 事件订阅记录 (卸载自动退订; 仅 io 线程)
-    /// - shared_ptr 存储: 订阅节点地址稳定 (vector 扩容/erase 不悬垂);
-    ///   dispatch 时拷贝 shared_ptr 保活, 派发中退订/卸载不 UAF
-    struct Subscription {
-        int32_t event                                                                  = 0;
-        void(PLUGINXX_CALL* handler)(const PluginxxStringView* payload_json, void* ud) = nullptr;
-        void* ud                                                                       = nullptr;
-        bool  alive = true; ///< 已退订标记 (unsubscribe 置 false, 卸载清理用)
-    };
-
     /// 注册残留 (卸载时统一清理; 仅 io 线程)
     /// - disable 时【完整注册信息】(statusItemRegs/panelRegs/infoSectionRegs/
     ///   commandRegs) 保留, enable 可恢复; 仅 unload/进程销毁时随实例释放
-    /// - 活跃句柄 (statusItemHandles/panelHandles/infoSectionHandles/subHandles)
+    /// - 活跃句柄 (statusItemHandles/panelHandles/infoSectionHandles)
     ///   为主程序对象 (id/plugin 等), enable 期间有效
     std::vector<ClientStatusItem>  statusItemRegs;  ///< 状态栏项注册信息 (disable 保留)
     std::vector<ClientPanel>       panelRegs;       ///< 面板注册信息 (disable 保留)
@@ -473,13 +463,6 @@ public:
     std::vector<ClientToolRenderReg> toolRenderRegs;
     /// 通用动作绑定 (disable 保留, enable 恢复; 以 plugin+targetId 键控)
     std::vector<ClientActionBinding> actionRegs;
-    /// 事件订阅登记 (client 自有事件表 `agentxx.client.events` 的订阅)
-    ///
-    /// 命名与基类的通用订阅登记区分: 基类 `PluginInstanceBase::subscriptions`
-    /// 存的是通用事件表 (`agentxx.agent.events`, 按主题) 的句柄; 本成员存的是
-    /// client 事件表 (按事件枚举) 的订阅记录。两者语义不同, 因此这里用独立名字,
-    /// 避免派生成员隐藏基类成员导致通用表实现读到错误的类型。
-    std::vector<std::shared_ptr<Subscription>> clientSubscriptions; ///< 已订阅事件 (disable 保留)
     /// 定时器 (client 自有 `agentxx.client.timer` 表): 实例级运行时资源
     /// - 与注册信息不同, 定时器**不跨 disable 保留**: 禁用/卸载时全部取消
     ///   (见 [ClientPluginManager::detachDomainRegistrations]), enable 后由插件
@@ -490,7 +473,6 @@ public:
     std::vector<std::shared_ptr<void>> statusItemHandles; ///< 状态栏项主程序句柄 (enable 期)
     std::vector<std::shared_ptr<void>> panelHandles;      ///< 面板主程序句柄 (enable 期)
     std::vector<std::shared_ptr<void>> infoSectionHandles; ///< Info 段落主程序句柄 (enable 期)
-    std::vector<std::shared_ptr<void>> subHandles;         ///< 订阅句柄保活
 
     /// 管理器弱引用 (host vtable 回调取用)
     std::weak_ptr<ClientPluginManager> manager{};
@@ -515,16 +497,6 @@ public:
     }
 };
 
-/// 事件订阅主程序句柄实现 (仅主程序内部; 与
-/// [plugin_api.h](/agent/lib/include/agentxx/plugin/api/plugin_api.h) 的
-/// C 不透明类型对应, 命名避免与 agent 侧 PluginManager 的全局定义 ODR 冲突)
-/// - sub 为强引用: 订阅对象从 subscriptions 摘除后仍被本句柄保活,
-///   unload 回调内退订不会解引用已释放内存
-struct ClientSubscriptionImpl {
-    ClientPluginInstance*                               inst = nullptr;
-    std::shared_ptr<ClientPluginInstance::Subscription> sub;
-};
-
 /// client 插件管理器 (全局唯一; 挂 client 端点侧)
 ///
 /// 生命周期: load → (status/panel/command 生效) → disable/enable → unload
@@ -537,15 +509,18 @@ struct ClientSubscriptionImpl {
 ///   client io 线程同步调用, 返回值动作 JSON 由主程序解析并分发到 UI 适配器
 class ClientPluginManager : public agentxx::agent::ClientEventSink,
                             public pluginxx::PluginHostLifecycle<ClientPluginInstance>,
+                            public pluginxx::DomainServices,
                             public std::enable_shared_from_this<ClientPluginManager> {
 public:
 
-    /// 本主程序向客户端插件提供的接口表数量 (文档里的数字有常量可校验)
-    /// - 7 张基础表 (`agentxx.client.*`: ui/events/session/wire/self/json/log)
-    /// - 2 张交互表 (`agentxx.client.timer` / `agentxx.client.keybind`)
+    /// 主程序向客户端插件提供的接口表数量 (文档里的数字有常量可校验)
+    /// - 11 张通用表 (由插件框架实现: log/json/config/plugins/broadcasts/
+    ///   scheduler/coroutine_runtime/tasks/cancel/capabilities; 两侧同一套)
+    /// - 6 张自有表 (`agentxx.client.*`: ui/session/wire/self/timer/keybind)
+    /// - `net` 由本主程序实现, 单独一张 (`agentxx.net`), 不计入上面两组
     /// - 增删接口表时同时更新本常量与 `docs/zh-cn/design/plugins.md` §9 与根 `AGENTS.md`
     ///   (测试模块 `boundaries` 会校验三者一致)
-    inline static constexpr size_t kInterfaceTableCount = 7 + 2;
+    inline static constexpr size_t kInterfaceTableCount = 11 + 6;
 
     struct PluginListView {
         std::string              name;
@@ -868,12 +843,12 @@ public:
     // ==================== 展示区域尺寸 (任意线程) ====================
     //
     // 用途: 面板/Info 段落由主程序布局, 插件拿不到可用宽度; 主程序在每次布局后把各归属的
-    // 可用宽高记入快照, 值变化时向订阅 AGENTXX_CLIENT_EVT_UI_LAYOUT 的插件投递事件,
+    // 可用宽高记入快照, 值变化时向 `agentxx.client.ui_layout` 频道发布一条通知,
     // 并把它放进 get_client_state().regions 供按需查询 (SDK: ClientPluginBase::regionSize)。
 
     /// 上报某归属的可用尺寸 (UI 线程调用; 值未变化时不做任何事)
-    /// - 首次上报总是会投递一次事件 (当前值从"未知"变为已知)
-    /// - 事件投递到 io 线程执行 (订阅回调的线程约定不变)
+    /// - 首次上报总是会发布一条通知 (当前值从"未知"变为已知)
+    /// - 发布投递到 io 线程执行 (订阅回调的线程约定不变)
     void reportRegionSize(const std::string& id, int width, int height);
 
     /// 当前区域尺寸快照 (任意线程; 按 id 升序)
@@ -906,14 +881,35 @@ public:
         return unregisterCommand(inst, strToSv(name));
     }
 
-    /// 事件订阅; 返回句柄 (主程序持有; 卸载自动退订)
-    PluginxxSubscription* subscribe(
-        ClientPluginInstance* inst,
-        int32_t               event,
-        void(PLUGINXX_CALL* handler)(const PluginxxStringView*, void*),
-        void* ud
+    /// 广播注册表 (插件的通知面: 客户端频道 + 跨端插件数据 + 网络事件)
+    /// - 实现在插件框架的 `PluginHostCore` (与本平台管理器同一份; 构造时就建好)
+    ///   见 [pluginxx::PluginHostCore::broadcasts]
+
+    /// 确保频道已声明 (幂等; 已声明时保留原声明)
+    void ensureClientBroadcast(
+        std::string_view           id,
+        pluginxx::BroadcastCache_e cache         = pluginxx::BroadcastCache_e::Latest,
+        bool                       anyonePublish = false,
+        bool                       pushOnSubscribe = false
     );
-    void unsubscribe(PluginxxSubscription* sub);
+
+    /// 发一条客户端频道值 (主程序代发; 失败只记日志)
+    void publishClientChannelValue(std::string_view id, std::string_view payloadJson);
+
+    /// 插件订阅广播的入口 (表入口的落点; **遮蔽基类同名方法**)
+    ///
+    /// 只多做一件事: 频道本端还没人声明时先补一条声明 —— 客户端频道跨进程
+    /// 使用 (`plugin.<插件名>.*` / `agentxx.client.plugin.<插件名>.*` 常常由另一端
+    /// 声明, 本进程看不到), 不补声明则插件在 start 里的订阅会被拒。
+    PluginxxSubscription* subscribeBroadcast(
+        ClientPluginInstance*    inst,
+        const PluginxxScopeRef*  scope,
+        std::string_view         broadcastId,
+        void(PLUGINXX_CALL* handler)(const PluginxxStringView* payloadJson, void* ud),
+        void*                    ud,
+        std::string_view         optionsJson  = {},
+        void(PLUGINXX_CALL* onEnd)(const PluginxxStringView* reasonJson, void* ud) = nullptr
+    );
 
     // ==================== 定时器 (`agentxx.client.timer`, io 线程) ====================
     //
@@ -970,7 +966,9 @@ public:
         return language_.empty() ? "en" : language_;
     }
 
-    void setLanguage(std::string_view lang) {
+    /// 指定语言 (规范化后保存; 侧边栏与插件提示词按它选语言)
+    /// - 同时覆盖 [pluginxx::DomainServices::setLanguage] (通用 config 表的写入口)
+    void setLanguage(std::string_view lang) override {
         language_ = agent::normalizeLanguage(lang);
     }
 
@@ -1057,7 +1055,7 @@ protected:
     }
 
     /// 摘除实例的业务注册: UI 注册表 (状态栏项/面板/Info 段/命令/装饰/渲染器/
-    /// 动作绑定) + client 事件订阅 + adapter 通知 + 语义渲染缓存失效
+    /// 动作绑定) + 广播订阅 (由框架按归属回收) + adapter 通知 + 语义渲染缓存失效
     void detachDomainRegistrations(ClientPluginInstance* inst) override;
 
     /// 实例加载完成: 登记实例代次 (UI 点击据此复查, 防旧点击转交同名新实例)
@@ -1075,9 +1073,19 @@ private:
 
     friend class ClientPluginInstance;
 
-    /// 事件分发: 遍历全部插件订阅, 匹配 event → InflightGuard → handler
-    /// (io 线程; payload 为主程序构造的 JSON 字符串)
-    void dispatchEvent(int event, const std::string& payloadJson);
+    /// 发一条客户端频道值 (io 线程; 幂等声明 + 发布, 失败只记日志)
+    void publishClientChannel(std::string_view channel, const std::string& payloadJson);
+
+    /// 声明客户端频道 (`cache: latest` / 未缓存; 在构造函数里调一次; 幂等)
+    void declareClientChannels();
+
+    /// 按频道名的形态补声明 (**幂等**; 已声明时保持原声明):
+    /// - `agentxx.client.plugin.<插件名>.<事件>`: 属主是该插件, 两端都可发, 不缓存
+    /// - `plugin.<插件名>.<名字>`: 属主是该插件, 只有属主可发, `cache: latest`
+    /// - 其他 (`agentxx.client.*` 等应用频道): `cache: latest`, 任何人可发
+    ///
+    /// 用于跨进程频道 (另一端声明, 本进程看不到) 与主程序代发的网络事件。
+    void ensureClientChannelDeclared(std::string_view id);
 
     /// 命令动作解析与分发 (io 线程; execute 已返回):
     /// {"action":"send","text"} → adapter->sendPluginMessage
@@ -1098,6 +1106,9 @@ private:
 
     /// 内部线程池 (dlopen/entry 卸载执行; shutdownAll 时 join)
     std::unique_ptr<asio::thread_pool> pool_;
+
+    /// 插件阻塞工作的线程池 (懒创建; DomainServices::postToWorkerThread 用)
+    std::shared_ptr<asio::thread_pool> workerPool_;
 
     std::shared_ptr<PluginUiAdapter> uiAdapter_; ///< 注入后不可变 (io 线程读写)
 
@@ -1204,8 +1215,33 @@ public:
     /// 停掉网络服务 (管理器关闭时)
     void netShutdownAll();
 
-    /// 把一条网络事件发给插件 (client 侧暂无广播表: 记调试日志)
+    /// 网络事件频道 (`plugin.<插件 id>.net`)
     void publishNetEvent(std::string_view owner, std::string_view payloadJson);
+
+    // ==================== pluginxx::DomainServices ====================
+    //
+    // 通用表 (log/json/config/plugins/broadcasts/scheduler/coroutine_runtime/
+    // tasks/cancel/capabilities) 的实现位于 cxx_pluginxx；其中需要主程序数据的
+    // 入口经本接口取数。与 agent 侧 `PluginManager` 同一套约定，数据源是 client
+    // 自己的配置/插件清单。
+
+    /// 把一段阻塞工作投递到客户端插件工作线程池
+    bool postToWorkerThread(std::function<void()> fn) override;
+
+    /// 主程序配置 JSON (`get_config` 的业务部分)
+    std::string configJson() override;
+
+    /// 当前语言代码 (空串由调用方回退为 "en")
+    std::string language() override;
+
+    /// 指定语言 (就地写入; 覆盖 [pluginxx::DomainServices::setLanguage])
+    /// 具体实现见上方 [setLanguage]
+
+    /// 全部 client 插件 JSON 数组 (`list_plugins`)
+    std::string pluginsJson() override;
+
+    /// 单个 client 插件 JSON 对象 (`get_plugin` / `get_own_info`)
+    std::string pluginJson(std::string_view name) override;
 
 private:
 

@@ -67,24 +67,16 @@ typedef struct AgentxxClientPluginInfo {
     PluginxxStringView description;
 } AgentxxClientPluginInfo;
 
-/* ==================== client 事件类型枚举 ==================== */
+/* ==================== client 事件通道 ==================== */
 
-/// 事件类型 (payload 均为 JSON 字符串, 主程序构造)
-typedef enum AgentxxClientEvent {
-    AGENTXX_CLIENT_EVT_READY = 0,      ///< 服务端就绪 {"interfaces":[...],"sessionId"}
-    AGENTXX_CLIENT_EVT_CONN_STATE,     ///< 连接状态变化 {"connState","startupProgress"}
-    AGENTXX_CLIENT_EVT_USER_INPUT,     ///< 用户输入已发出 {"sessionId","text"}
-    AGENTXX_CLIENT_EVT_DELTA,          ///< 增量事件 (同 wire delta JSON 字段)
-    AGENTXX_CLIENT_EVT_TURN_END,       ///< 轮次结束 {"sessionId","hasError","interrupted",...}
-    AGENTXX_CLIENT_EVT_SESSION_SWITCH, ///< 会话切换 {"sessionId"}
-    AGENTXX_CLIENT_EVT_PLUGIN_DATA, ///< 插件事件转发 (WirePluginData) {"topic","data"}
-    /// 展示区域尺寸变化 {"regions":[{"id":"<面板/段落 id>","w":60,"h":20}]}
-    /// - 插件按新的可用宽度重新排列自己的组件 (例如换用不同的列宽/省略策略)
-    /// - 仅在数值变化时投递 (同一帧内多次上报会合并为一次);
-    ///   老主程序对新事件值返回订阅失败 (NULL), 插件应据此降级为固定宽度
-    AGENTXX_CLIENT_EVT_UI_LAYOUT,
-    AGENTXX_CLIENT_EVT_COUNT
-} AgentxxClientEvent;
+/// 原 `AgentxxClientEvent` 枚举已删除: 客户端事件改为广播频道, 插件订阅同名频道
+/// (`declare_broadcast` 不需要, 主程序启动时已声明), 完整清单与载荷说明见
+/// `agentxx/plugin/api/agentxx_broadcast_ids.h` 的 `broadcasts::Client*`。
+///
+/// 对照: READY→`agentxx.client.ready` / CONN_STATE→`...connection_state` /
+/// USER_INPUT→`...user_input` / DELTA→`...delta` / TURN_END→`...turn_end` /
+/// SESSION_SWITCH→`...session_switch` / UI_LAYOUT→`...ui_layout` /
+/// PLUGIN_DATA→`agentxx.client.plugin.<插件名>.<事件>`
 
 /* ==================== 展示扩展句柄 (不透明) ==================== */
 
@@ -390,29 +382,6 @@ typedef struct AgentxxClientUiIface {
     void(PLUGINXX_CALL* close_overlay)(const PluginxxHost* host);
 } AgentxxClientUiIface;
 
-/* ==================== 接口表: 事件订阅 (agentxx.client.events) ==================== */
-
-#define AGENTXX_IFACE_CLIENT_EVENTS             PLUGINXX_APP_ID("client.events")
-#define AGENTXX_IFACE_CLIENT_EVENTS_VERSION     1
-#define AGENTXX_IFACE_CLIENT_EVENTS_MIN_VERSION 1
-/* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
-#define AGENTXX_IFACE_CLIENT_EVENTS_BASELINE_SIZE sizeof(AgentxxClientEventsIface)
-
-typedef struct AgentxxClientEventsIface {
-    int32_t  version; ///< 主程序填 AGENTXX_IFACE_CLIENT_EVENTS_VERSION
-    uint32_t struct_size;
-
-    /// 订阅 client 事件 (payload JSON 字符串; 卸载自动退订); event 为
-    /// AgentxxClientEvent 枚举值; 失败返回 NULL
-    PluginxxSubscription*(PLUGINXX_CALL* subscribe)(
-        const PluginxxHost* host,
-        int32_t             event, /* AgentxxClientEvent */
-        void(PLUGINXX_CALL* handler)(const PluginxxStringView* payloadJson, void* ud),
-        void* ud
-    );
-    void(PLUGINXX_CALL* unsubscribe)(PluginxxSubscription* sub);
-} AgentxxClientEventsIface;
-
 /* ==================== 接口表: 会话上下文与操作 (agentxx.client.session) ==================== */
 
 #define AGENTXX_IFACE_CLIENT_SESSION             PLUGINXX_APP_ID("client.session")
@@ -510,50 +479,6 @@ typedef struct AgentxxClientSelfIface {
         const PluginxxStringView* language
     );
 } AgentxxClientSelfIface;
-
-/* ==================== 接口表: JSON 辅助 (agentxx.client.json) ==================== */
-
-#define AGENTXX_IFACE_CLIENT_JSON             PLUGINXX_APP_ID("client.json")
-#define AGENTXX_IFACE_CLIENT_JSON_VERSION     1
-#define AGENTXX_IFACE_CLIENT_JSON_MIN_VERSION 1
-/* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
-#define AGENTXX_IFACE_CLIENT_JSON_BASELINE_SIZE sizeof(AgentxxClientJsonIface)
-
-typedef struct AgentxxClientJsonIface {
-    int32_t  version; ///< 主程序填 AGENTXX_IFACE_CLIENT_JSON_VERSION
-    uint32_t struct_size;
-
-    /// 从 JSON 字符串提取指定 key 的字符串值 (主程序解析; 结果 host->alloc)
-    int32_t(PLUGINXX_CALL* json_get_string)(
-        const PluginxxHost*       host,
-        const PluginxxStringView* json,
-        const PluginxxStringView* key,
-        PluginxxString*           out
-    );
-    /// 字符串 → JSON 字符串字面量 (含引号包裹与转义; 结果 host->alloc)
-    int32_t(PLUGINXX_CALL* json_escape)(
-        const PluginxxHost*       host,
-        const PluginxxStringView* s,
-        PluginxxString*           out
-    );
-} AgentxxClientJsonIface;
-
-/* ==================== 接口表: 日志 (agentxx.client.log) ==================== */
-
-#define AGENTXX_IFACE_CLIENT_LOG             PLUGINXX_APP_ID("client.log")
-#define AGENTXX_IFACE_CLIENT_LOG_VERSION     1
-#define AGENTXX_IFACE_CLIENT_LOG_MIN_VERSION 1
-/* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
-#define AGENTXX_IFACE_CLIENT_LOG_BASELINE_SIZE sizeof(AgentxxClientLogIface)
-
-typedef struct AgentxxClientLogIface {
-    int32_t  version; ///< 主程序填 AGENTXX_IFACE_CLIENT_LOG_VERSION
-    uint32_t struct_size;
-
-    /// 日志 (线程安全; 0=trace 1=debug 2=info 3=warn 4=error)
-    void(PLUGINXX_CALL*
-             log)(const PluginxxHost* host, int32_t level, const PluginxxStringView* msg);
-} AgentxxClientLogIface;
 
 /* ==================== 接口表: 定时器 (agentxx.client.timer) ==================== */
 

@@ -14,11 +14,12 @@
 ///        a. 类型级渲染器 (register_tool_renderer, 按 tool_name): 由消息自带的
 ///           参数/结果推导折叠头显示名/摘要与展开体 items (状态图/todos/notes),
 ///           **实时调用与历史回溯 (重启/重连/切换会话后 Sync 回放) 统一生效**;
-///        b. 运行时装饰 (update_tool_decor, 订阅 EVT_DELTA): 仅覆盖本进程实时
+///        b. 运行时装饰 (update_tool_decor, 订阅 `agentxx.client.delta` 频道): 仅覆盖本进程实时
 ///           调用, 用于展开头显示语义名 ("Plan")
 ///        TUI 按通用渲染器展示, 无任何 plan 特化代码;
 ///     ② Info 栏段落渲染最近一次规划概览
 #include "agentxx_planning_plugin.h"
+#include "agentxx/plugin/api/agentxx_broadcast_ids.h"
 #include "utilxx_base/json.h"
 #include <cstdio>
 #include <cstring>
@@ -1055,42 +1056,22 @@ static void refreshPlanSection(ClientCtx& ctx) {
     ctx.ui->update_info_section(ctx.host, ctx.section, &jsonSv);
 }
 
-/// EVT_PLUGIN_DATA: 过滤本插件规划事件 (主题 `plugin.agentxx_planning.planning`)
-/// → 更新 Info 栏段落
-static void PLUGINXX_CALL on_client_plugin_data(const PluginxxStringView* payload_json, void* ud) {
+/// 规划频道 (`plugin.agentxx_planning.planning`): 对端发布的规划 JSON
+/// → 更新 Info 栏段落 (频道值就是规划 JSON 本身, 不再包 `{topic,data}`)
+static void PLUGINXX_CALL on_client_plan(const PluginxxStringView* payload_json, void* ud) {
     auto* ctxRaw = static_cast<ClientCtx*>(ud);
     agentxx::plugin::guardCallVoid(clientGuardLogger(ctxRaw), [&] {
         auto* ctx = static_cast<ClientCtx*>(ud);
-        if (!ctx || !ctx->host) {
+        if (!ctx || !ctx->host || agentxx::plugin::PluginStringView::empty(payload_json)) {
             return;
         }
-        PluginxxString topic{nullptr, 0};
-        PluginxxString data{nullptr, 0};
-        auto           kTopic = agentxx::plugin::PluginStringView::fromCstr("topic");
-        auto           kData  = agentxx::plugin::PluginStringView::fromCstr("data");
-        if (ctx->iface.json && ctx->iface.json->json_get_string && payload_json) {
-            ctx->iface.json->json_get_string(ctx->host, payload_json, &kTopic, &topic);
-            ctx->iface.json->json_get_string(ctx->host, payload_json, &kData, &data);
-        }
-        const bool mine
-            = topic.data && data.data
-              && agentxx::plugin::PluginStringView::str(topic)
-                     == std::string_view{"plugin.agentxx_planning.planning"};
-        if (mine) {
-            ctx->last_plan_json.assign(data.data, static_cast<size_t>(data.size));
-            refreshPlanSection(*ctx);
-        }
-        if (topic.data) {
-            agentxx::plugin::PluginString::free(ctx->host, &topic);
-        }
-        if (data.data) {
-            agentxx::plugin::PluginString::free(ctx->host, &data);
-        }
+        ctx->last_plan_json.assign(payload_json->data, static_cast<size_t>(payload_json->size));
+        refreshPlanSection(*ctx);
     });
 }
 
-/// EVT_DELTA: planning 工具行的插入/更新 → 工具消息装饰 (实时调用路径; 历史回溯
-/// 由类型级渲染器覆盖, 见 buildPlanningToolRender)
+/// 流式增量频道 (`agentxx.client.delta`): planning 工具行的插入/更新 → 工具消息装饰
+/// (实时调用路径; 历史回溯由类型级渲染器覆盖, 见 buildPlanningToolRender)
 /// - insert_message (工具行未完成): 缓存参数并推送装饰 —— write 推完整内容
 ///   (折叠头 Plan · todos 摘要 + 展开体 状态图/todos/notes), read 推占位
 /// - update_message (工具行已完成): 用行上的结果重建装饰 (read 展示已保存规划)
@@ -1156,7 +1137,7 @@ static void PLUGINXX_CALL on_client_delta(const PluginxxStringView* payload_json
     });
 }
 
-/// EVT_SESSION_SWITCH: 会话切换 → 清理装饰与段落 (新会话尚未有规划)
+/// 会话切换频道 (`agentxx.client.session_switch`): 清理装饰与段落 (新会话尚未有规划)
 static void PLUGINXX_CALL
     on_client_session_switch(const PluginxxStringView* payload_json, void* ud) {
     (void)payload_json;
@@ -1266,7 +1247,7 @@ static int planningClientSetup(ClientCtx* ctx) {
         }
     }
 
-    // 事件订阅 (卸载时主程序自动退订); events/ui 缺失时仅失去渲染能力,
+    // 频道订阅 (卸载时主程序自动退订); broadcasts/ui 缺失时仅失去渲染能力,
     // 不阻塞加载 (CLI 等精简主程序场景)
     auto subWarn = [ctxPtr = ctx](const char* what) {
         if (ctxPtr && ctxPtr->host && ctxPtr->iface.log && ctxPtr->iface.log->log) {
@@ -1274,21 +1255,36 @@ static int planningClientSetup(ClientCtx* ctx) {
             ctxPtr->iface.log->log(ctxPtr->host, 3, &sv);
         }
     };
-    if (ctx->iface.events && ctx->iface.events->subscribe) {
-        if (!ctx->iface.events->subscribe(host, AGENTXX_CLIENT_EVT_DELTA, on_client_delta, ctx)) {
-            subWarn("agentxx_planning client: subscribe DELTA failed");
-        }
-        if (!ctx->iface.events
-                 ->subscribe(host, AGENTXX_CLIENT_EVT_PLUGIN_DATA, on_client_plugin_data, ctx)) {
-            subWarn("agentxx_planning client: subscribe PLUGIN_DATA failed");
-        }
-        if (!ctx->iface.events->subscribe(
+    if (ctx->iface.broadcasts && ctx->iface.broadcasts->subscribe_broadcast) {
+        if (!agentxx::plugin::subscribePluginBroadcast(
                 host,
-                AGENTXX_CLIENT_EVT_SESSION_SWITCH,
+                ctx->iface.broadcasts,
+                nullptr,
+                agentxx::plugin::broadcasts::ClientDelta,
+                on_client_delta,
+                ctx
+            )) {
+            subWarn("agentxx_planning client: subscribe `client.delta` failed");
+        }
+        if (!agentxx::plugin::subscribePluginBroadcast(
+                host,
+                ctx->iface.broadcasts,
+                nullptr,
+                "plugin.agentxx_planning.planning",
+                on_client_plan,
+                ctx
+            )) {
+            subWarn("agentxx_planning client: subscribe planning topic failed");
+        }
+        if (!agentxx::plugin::subscribePluginBroadcast(
+                host,
+                ctx->iface.broadcasts,
+                nullptr,
+                agentxx::plugin::broadcasts::ClientSessionSwitch,
                 on_client_session_switch,
                 ctx
             )) {
-            subWarn("agentxx_planning client: subscribe SESSION_SWITCH failed");
+            subWarn("agentxx_planning client: subscribe `client.session_switch` failed");
         }
     }
 

@@ -1,8 +1,7 @@
 /// 客户端插件的网络能力: 管理器侧的适配 (`<应用名>.net` 表的落点)
 ///
 /// - 与 agent 侧同一个 [PluginNetService] (`utilxx::NetHub`), 属主 id = client 插件实例名;
-/// - 客户端暂时没有广播表, 所以 `plugin.<插件 id>.net` 频道还不存在: 网络事件当前只记
-///   调试日志 (是谁、什么 `kind`), HTTP 请求/服务端这类按请求与按服务的工作不受影响;
+/// - 网络事件发到 `plugin.<插件 id>.net` 频道 (主程序以插件身份代发), 插件订阅即可;
 /// - 插件禁用/卸载时 [ClientPluginManager::netShutdownPlugin] 收掉它的服务、连接与
 ///   未完成请求, 未完成的按"已取消"结算。
 #include "agentxx/plugin/client_plugin_manager.h"
@@ -43,17 +42,10 @@ void ClientPluginManager::publishNetEvent(std::string_view owner, std::string_vi
     if (owner.empty() || payloadJson.empty()) {
         return;
     }
-    // client 侧还没有广播表: 事件没有去处, 只留一条可查的日志
-    // (接上广播后这里改成 declare + publish, 与 agent 侧同一份写法)
-    std::string kind;
-    try {
-        auto parsed = utilxx_base::Json::parse(payloadJson);
-        if (parsed.is_object()) {
-            kind = parsed.value("kind", "");
-        }
-    } catch (...) {
-    }
-    XX_LOGD("Client plugin `{}` net event dropped (no broadcast table yet): {}", owner, kind);
+    // 频道归插件 (`plugin.<插件名>.net`), 由主程序以该插件身份代发
+    // (与 agent 侧同一份写法; 名单以 `kind` 区分事件类型)
+    const std::string topic = fmt::format("plugin.{}.net", owner);
+    publishClientChannel(topic, std::string{payloadJson});
 }
 
 int32_t ClientPluginManager::netCall(

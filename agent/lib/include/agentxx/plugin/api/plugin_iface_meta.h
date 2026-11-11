@@ -130,15 +130,6 @@ static_assert(AGENTXX_IFACE_CLIENT_UI_BASELINE_SIZE >= 8u);
 static_assert(AGENTXX_IFACE_CLIENT_UI_BASELINE_SIZE <= sizeof(AgentxxClientUiIface));
 
 template<>
-struct IfaceMeta<AgentxxClientEventsIface> {
-    static constexpr int32_t  min_version   = AGENTXX_IFACE_CLIENT_EVENTS_MIN_VERSION;
-    static constexpr uint32_t baseline_size = AGENTXX_IFACE_CLIENT_EVENTS_BASELINE_SIZE;
-};
-
-static_assert(AGENTXX_IFACE_CLIENT_EVENTS_BASELINE_SIZE >= 8u);
-static_assert(AGENTXX_IFACE_CLIENT_EVENTS_BASELINE_SIZE <= sizeof(AgentxxClientEventsIface));
-
-template<>
 struct IfaceMeta<AgentxxClientSessionIface> {
     static constexpr int32_t  min_version   = AGENTXX_IFACE_CLIENT_SESSION_MIN_VERSION;
     static constexpr uint32_t baseline_size = AGENTXX_IFACE_CLIENT_SESSION_BASELINE_SIZE;
@@ -164,24 +155,6 @@ struct IfaceMeta<AgentxxClientSelfIface> {
 
 static_assert(AGENTXX_IFACE_CLIENT_SELF_BASELINE_SIZE >= 8u);
 static_assert(AGENTXX_IFACE_CLIENT_SELF_BASELINE_SIZE <= sizeof(AgentxxClientSelfIface));
-
-template<>
-struct IfaceMeta<AgentxxClientJsonIface> {
-    static constexpr int32_t  min_version   = AGENTXX_IFACE_CLIENT_JSON_MIN_VERSION;
-    static constexpr uint32_t baseline_size = AGENTXX_IFACE_CLIENT_JSON_BASELINE_SIZE;
-};
-
-static_assert(AGENTXX_IFACE_CLIENT_JSON_BASELINE_SIZE >= 8u);
-static_assert(AGENTXX_IFACE_CLIENT_JSON_BASELINE_SIZE <= sizeof(AgentxxClientJsonIface));
-
-template<>
-struct IfaceMeta<AgentxxClientLogIface> {
-    static constexpr int32_t  min_version   = AGENTXX_IFACE_CLIENT_LOG_MIN_VERSION;
-    static constexpr uint32_t baseline_size = AGENTXX_IFACE_CLIENT_LOG_BASELINE_SIZE;
-};
-
-static_assert(AGENTXX_IFACE_CLIENT_LOG_BASELINE_SIZE >= 8u);
-static_assert(AGENTXX_IFACE_CLIENT_LOG_BASELINE_SIZE <= sizeof(AgentxxClientLogIface));
 
 template<>
 struct IfaceMeta<AgentxxClientTimerIface> {

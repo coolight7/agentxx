@@ -49,7 +49,6 @@ _Static_assert(
 );
 _Static_assert(sizeof(AgentxxPluginGraphIface) % 8 == 0, "GraphIface 必须 8 字节对齐");
 _Static_assert(sizeof(AgentxxClientUiIface) % 8 == 0, "ClientUiIface 必须 8 字节对齐");
-_Static_assert(sizeof(AgentxxClientEventsIface) % 8 == 0, "ClientEventsIface 必须 8 字节对齐");
 
 /* ==================== 字符串视图 / 字符串 ==================== */
 

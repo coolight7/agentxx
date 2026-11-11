@@ -707,7 +707,7 @@ path/to/agentxx_test --log-level warn string_util regex
   追加了 `tool_name`/`tool_args_json` 支撑 `kind=tool`、再追加 `delay_ms`/`queue_timeout_ms`
   支撑起跑延时与排队时限, 基线停在 `offsetof(tool_name)`, 读侧用 `specHas` 判定), 详见
   [plugins.md](docs/zh-cn/design/plugins.md) §19,
-  client 侧 9 张 (ui/events/session/wire/self/json/log + timer/keybind)
+  client 侧 17 张 (11 张通用表 + 6 张自有表 `agentxx.client.*`: ui/session/wire/self/timer/keybind)
 - **网络能力 `agentxx.net` 是通用表** (两侧都提供, 不计入上面的 10 张业务表):
   插件不自己建连接 —— HTTP / WebSocket / TCP / UDP / HTTP 服务端都经这张表转给
   `utilxx::NetHub` (自有网络线程, 按插件实例记账; 禁用/卸载时 `shutdownOwner` 整批收掉)。

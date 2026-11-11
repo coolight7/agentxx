@@ -3,8 +3,8 @@
 /// 这一端只做展示, 数据只有一条来源:
 /// - **agent 侧**插件把运行态整理成快照, 发布到事件总线主题 `agentxx_chatbot.panel`;
 ///   主程序把它原样转发成 `WirePluginData{plugin,event,data}` 下发;
-/// - **本端**订阅 `AGENTXX_CLIENT_EVT_PLUGIN_DATA`, 认领 `plugin=agentxx_chatbot` /
-///   `event=panel` 的那条 JSON, 解析成 `PanelSnapshot` 后重画面板。
+/// - **本端**订阅频道 `plugin.agentxx_chatbot.panel` (主程序把对端发的数据原样发布到
+///   同名频道), 解析成 `PanelSnapshot` 后重画面板。
 ///
 /// 面板内容 (详见 chatbot_panel_ui.cpp):
 /// - 段标题统一 `标题: 数量`, 列表项统一 `|- 内容` 前缀, 段与段之间是一行空白
@@ -16,6 +16,7 @@
 ///
 /// 「实时」只由 agent 侧的节拍驱动 (有会话在跑时 ~120ms 一份), 本端不轮询; 启动、
 /// 连接就绪/重连时各发一次 refresh 请求补一份快照, 晚接入的客户端不会停在占位提示上。
+#include "agentxx/plugin/api/agentxx_broadcast_ids.h"
 #include "agentxx/plugin/api/client_plugin_api.h"
 #include "agentxx/plugin/api/plugin_kit.h"
 
@@ -37,7 +38,7 @@ constexpr const char* kPanelId    = "agentxx_chatbot.bots";
 constexpr const char* kPanelTitle = "机器人";
 constexpr const char* kLogTag     = "chatbot-client";
 
-/// agent 侧发布面板快照的主题 (`plugin.<插件名>.<事件>`)
+/// agent 侧发布面板快照的频道 (`plugin.<插件名>.<事件>`; 主程序转发到同名频道)
 constexpr const char* kPanelTopic = "plugin.agentxx_chatbot.panel";
 /// 本端请求 agent 侧重发快照的主题 (client 侧自己的族)
 constexpr const char* kRefreshTopic = "agentxx.client.plugin.agentxx_chatbot.refresh";
@@ -64,28 +65,15 @@ struct ChatbotClientCtx : public agentxx::plugin::ClientPluginBase {
         setPanelJson(panel, json);
     }
 
-    /// 处理一条插件事件 (载荷形如 `{"topic":"…","data":"<快照 JSON>"}`)
-    void onPluginData(std::string_view payloadJson) {
-        utilxx_base::Json payload;
-        try {
-            payload = utilxx_base::Json::parse(payloadJson);
-        } catch (const std::exception&) {
-            return;
-        }
-        if (!payload.is_object()
-            || payload.value("topic", std::string{}) != std::string{kPanelTopic}) {
-            return; // 不是本插件的面板快照
-        }
-        if (!payload.contains("data") || !payload["data"].is_string()) {
-            return;
-        }
+    /// 处理一条频道值 (payload 就是面板快照 JSON 文本)
+    void onPanelSnapshot(std::string_view payloadJson) {
         // data 是快照 JSON 文本 (主程序按字符串原样转发, 不解析语义)
         ac::PanelSnapshot parsed;
-        const std::string data = payload["data"].get<std::string>();
-        if (!ac::parsePanelSnapshot(data, parsed)) {
+        if (!ac::parsePanelSnapshot(std::string{payloadJson}, parsed)) {
             log.warn(
                 std::string{"panel snapshot ignored (invalid json or newer schema version), size="}
-                + std::to_string(data.size()) + ": " + data.substr(0, 120)
+                + std::to_string(payloadJson.size()) + ": "
+                + std::string{payloadJson.substr(0, 120)}
             );
             return;
         }
@@ -104,14 +92,14 @@ struct ChatbotClientCtx : public agentxx::plugin::ClientPluginBase {
     }
 };
 
-/// 插件事件回调 (client io 线程)
-void PLUGINXX_CALL onPluginData(const PluginxxStringView* payload, void* ud) {
+/// 面板快照频道回调 (client io 线程)
+void PLUGINXX_CALL onPanelSnapshot(const PluginxxStringView* payload, void* ud) {
     auto* ctx = static_cast<ChatbotClientCtx*>(ud);
     if (ctx == nullptr || payload == nullptr || payload->data == nullptr || payload->size <= 0) {
         return;
     }
     try {
-        ctx->onPluginData(
+        ctx->onPanelSnapshot(
             std::string_view{payload->data, static_cast<size_t>(payload->size)}
         );
     } catch (const std::exception& e) {
@@ -166,21 +154,37 @@ int32_t chatbotClientSetup(ChatbotClientCtx& ctx) {
         // 先给一份占位内容: 免得 tab 里一片空白, 也让用户知道在等谁的数据
         ctx.render(true);
     }
-    if (!ctx.iface.events || !ctx.iface.events->subscribe) {
+    if (!ctx.iface.broadcasts || !ctx.iface.broadcasts->subscribe_broadcast) {
         return 0;
     }
-    if (ctx.iface.events->subscribe(
+    if (agentxx::plugin::subscribePluginBroadcast(
             ctx.host,
-            AGENTXX_CLIENT_EVT_PLUGIN_DATA,
-            onPluginData,
+            ctx.iface.broadcasts,
+            nullptr,
+            kPanelTopic,
+            onPanelSnapshot,
             &ctx
         )
         == nullptr) {
         return -1;
     }
-    // 这两个事件老主程序也支持 (READY 早就有了); 订阅失败只影响"主动补快照"
-    ctx.iface.events->subscribe(ctx.host, AGENTXX_CLIENT_EVT_READY, onServerReady, &ctx);
-    ctx.iface.events->subscribe(ctx.host, AGENTXX_CLIENT_EVT_CONN_STATE, onConnState, &ctx);
+    // 这两个频道早就有 (READY / 连接状态); 订阅失败只影响"主动补快照"
+    agentxx::plugin::subscribePluginBroadcast(
+        ctx.host,
+        ctx.iface.broadcasts,
+        nullptr,
+        agentxx::plugin::broadcasts::ClientReady,
+        onServerReady,
+        &ctx
+    );
+    agentxx::plugin::subscribePluginBroadcast(
+        ctx.host,
+        ctx.iface.broadcasts,
+        nullptr,
+        agentxx::plugin::broadcasts::ClientConnectionState,
+        onConnState,
+        &ctx
+    );
     return 0;
 }
 

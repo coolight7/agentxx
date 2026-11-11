@@ -3,7 +3,7 @@
 /// 覆盖:
 /// 1. 加载 example_plugin 的 client 入口 (agentxx_plugin_client_create)
 /// 2. UI 注册表: 状态栏项 / 面板 / Info 栏段落 / 命令 (含快照读取)
-/// 3. 事件分发: READY / TURN_END / PLUGIN_DATA / USER_INPUT → 插件回调
+/// 3. 频道分发: `agentxx.client.ready` / `turn_end` / `user_input` → 插件回调
 /// 4. 命令执行: /example (send 动作) / example_toast (toast 动作)
 /// 5. 跨端数据: send_plugin_data → adapter sendPluginData (WirePluginDataUp 路径)
 /// 6. disable/enable 恢复与 unload 清理 (含 Info 栏段落注册/摘除信号)
@@ -22,6 +22,7 @@
 
 #include "agentxx-client/io/tui/plugin_ui_items.h"
 #include "agentxx-client/io/tui/tui_plugin_adapter.h"
+#include "agentxx/plugin/api/agentxx_broadcast_ids.h"
 #include "agentxx/plugin/api/plugin_kit.h"
 #include "agentxx/plugin/builtin_tool_renderers.h"
 #include "agentxx/plugin/client_plugin_manager.h"
@@ -825,140 +826,110 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
     XX_TEST_EXPECT_TRUE(adapter->infoSectionRemoved() >= 2);
     XX_TEST_EXPECT_TRUE(mgr->find("example_plugin") == nullptr);
 
-    // ---- 订阅生命周期安全 ----
-    // - 多次订阅触发订阅 vector 扩容, 逐个退订不得悬垂/错位
-    // - 派发中动态订阅 (handler 内再订阅) 不得使 dispatch 快照中的后续
-    //   回调悬垂
-    // - unload 回调内主动退订安全 (detachAll 已断链)
+    // ---- 广播频道 (客户端事件的唯一通道) ----
+    // - 状态类 / 事件类频道在管理器构造时声明好, 插件在 start 里就能订阅;
+    // - 跨进程频道 (`plugin.<插件名>.*` / `agentxx.client.plugin.<插件名>.*`)
+    //   本进程常常还没人声明, 订阅入口先补一条声明;
+    // - 卸载时框架按归属撤销订阅 (句柄由实例保活, 裸指针不悬垂)。
     {
+        auto registry = mgr->broadcasts();
+        XX_TEST_EXPECT_TRUE(registry != nullptr);
+        if (registry != nullptr) {
+            for (const auto id : {
+                     "agentxx.client.ready",
+                     "agentxx.client.connection_state",
+                     "agentxx.client.user_input",
+                     "agentxx.client.delta",
+                     "agentxx.client.turn_end",
+                     "agentxx.client.session_switch",
+                     "agentxx.client.ui_layout",
+                 }) {
+                XX_TEST_EXPECT_TRUE(registry->declares(id));
+            }
+            // 状态类频道保留当前值 (插件上线能读到最新状态), 事件类不缓存
+            const auto readyDecl = registry->declOf("agentxx.client.ready");
+            XX_TEST_EXPECT_TRUE(
+                readyDecl != nullptr
+                && readyDecl->cache == pluginxx::BroadcastCache_e::Latest
+            );
+            const auto deltaDecl = registry->declOf("agentxx.client.delta");
+            XX_TEST_EXPECT_TRUE(
+                deltaDecl != nullptr && deltaDecl->cache == pluginxx::BroadcastCache_e::None
+            );
+        }
+
         auto inst2 = co_await mgr->loadNativeAsync(path);
         XX_TEST_EXPECT_TRUE(inst2 != nullptr);
         if (!inst2) {
             co_return TestResult{g_client_plugin_passed, g_client_plugin_failed};
         }
 
-        // 8.1 多次订阅 (1→2→4 扩容) + 逐个退订
+        // 8.1 一次发布到达多个订阅; 逐个退订后不再到达
         std::atomic<int>      hits{0};
-        PluginxxSubscription* subs[4] = {};
+        PluginxxSubscription* subs[3] = {};
         auto                  subFn   = +[](const PluginxxStringView*, void* ud) {
             ++(*static_cast<std::atomic<int>*>(ud));
         };
-        const auto events8 = agentxx::plugin::ClientIfaces::query(inst2->hostView()).events;
-        XX_TEST_EXPECT_TRUE(events8 != nullptr && events8->subscribe != nullptr);
-        for (int i = 0; i < 4; ++i) {
-            subs[i] = events8 ? events8->subscribe(
-                                    inst2->hostView(),
-                                    AGENTXX_CLIENT_EVT_CONN_STATE,
-                                    subFn,
-                                    &hits
-                                )
-                              : nullptr;
+        const auto broadcasts8
+            = agentxx::plugin::ClientIfaces::query(inst2->hostView()).broadcasts;
+        XX_TEST_EXPECT_TRUE(
+            broadcasts8 != nullptr && broadcasts8->subscribe_broadcast != nullptr
+        );
+        for (int i = 0; i < 3; ++i) {
+            subs[i] = broadcasts8
+                          ? agentxx::plugin::subscribePluginBroadcast(
+                                inst2->hostView(),
+                                broadcasts8,
+                                nullptr,
+                                agentxx::plugin::broadcasts::ClientConnectionState,
+                                subFn,
+                                &hits
+                            )
+                          : nullptr;
             XX_TEST_EXPECT_TRUE(subs[i] != nullptr);
         }
-        for (int i = 0; i < 4; ++i) {
-            if (events8) {
-                events8->unsubscribe(subs[i]);
+        mgr->onConnStateChanged("connected", "100%");
+        XX_TEST_EXPECT_EQ(hits.load(), 3);
+        for (auto* sub : subs) {
+            if (broadcasts8 && sub) {
+                broadcasts8->unsubscribe_broadcast(sub);
             }
         }
         mgr->onConnStateChanged("connected", "100%");
-        XX_TEST_EXPECT_EQ(hits.load(), 0); // 全部退订后事件不再达
+        XX_TEST_EXPECT_EQ(hits.load(), 3); ///< 全部退订后不再到达
 
-        // 派发中动态订阅: 订阅回调内再 subscribe → 快照不受影响
-        struct DynSubState {
-            agentxx::plugin::ClientPluginInstance* inst   = nullptr;
-            const AgentxxClientEventsIface*        events = nullptr;
-            std::atomic<int>                       hits{0};
-            PluginxxSubscription*                  dynSub   = nullptr;
-            void (*incFn)(const PluginxxStringView*, void*) = nullptr;
-        };
-
-        auto st    = std::make_shared<DynSubState>();
-        st->inst   = inst2.get();
-        st->events = agentxx::plugin::ClientIfaces::query(inst2->hostView()).events;
-        st->incFn  = +[](const PluginxxStringView*, void* ud) {
-            ++(*static_cast<std::atomic<int>*>(ud));
-        };
-        auto aFn = +[](const PluginxxStringView*, void* ud) {
-            auto* s = static_cast<DynSubState*>(ud);
-            ++s->hits;
-            if (!s->dynSub) {
-                s->dynSub = s->events->subscribe(
-                    s->inst->hostView(),
-                    AGENTXX_CLIENT_EVT_USER_INPUT,
-                    s->incFn,
-                    &s->hits
-                );
-            }
-        };
-        PluginxxSubscription* a
-            = st->events
-                  ? st->events
-                        ->subscribe(inst2->hostView(), AGENTXX_CLIENT_EVT_USER_INPUT, aFn, st.get())
-                  : nullptr;
-        XX_TEST_EXPECT_TRUE(a != nullptr);
-        mgr->onUserInput("sess-test", "x");
-        // 首次派发: 仅快照中的 a 被调 (dynSub 派发后才注册)
-        XX_TEST_EXPECT_EQ(st->hits.load(), 1);
-        mgr->onUserInput("sess-test", "y");
-        // 第二次派发: a + dynSub 都被调
-        XX_TEST_EXPECT_EQ(st->hits.load(), 3);
-        if (st->events) {
-            st->events->unsubscribe(a);
-        }
-        if (st->dynSub && st->events) {
-            st->events->unsubscribe(st->dynSub);
+        // 8.2 未声明的跨进程频道: 订阅入口先补声明 (否则跨端事件永远收不到)
+        {
+            constexpr std::string_view kTopic = "plugin.agentxx_other.telemetry";
+            XX_TEST_EXPECT_FALSE(mgr->broadcasts()->declares(kTopic));
+            auto sub = agentxx::plugin::subscribePluginBroadcast(
+                inst2->hostView(),
+                broadcasts8,
+                nullptr,
+                kTopic,
+                subFn,
+                &hits
+            );
+            XX_TEST_EXPECT_TRUE(sub != nullptr);
+            XX_TEST_EXPECT_TRUE(mgr->broadcasts()->declares(kTopic));
+            const auto decl = mgr->broadcasts()->declOf(kTopic);
+            XX_TEST_EXPECT_TRUE(
+                decl != nullptr && decl->owner == "agentxx_other"
+                && decl->publish == pluginxx::BroadcastPublisher_e::Owner
+            );
+            // 主程序代发 (发布者 = 属主) → 订阅收到
+            mgr->publishClientChannelValue(kTopic, R"({"n":1})");
+            XX_TEST_EXPECT_EQ(hits.load(), 4);
+            broadcasts8->unsubscribe_broadcast(sub);
         }
 
-        // 8.4 同轮派发中退订后续 handler: 未开始的回调不得执行
-        struct UnsubNextState {
-            const AgentxxClientEventsIface* events = nullptr;
-            PluginxxSubscription*           next   = nullptr;
-            std::atomic<int>                first{0};
-            std::atomic<int>                second{0};
-        };
-
-        auto us       = std::make_shared<UnsubNextState>();
-        us->events    = events8;
-        auto secondFn = +[](const PluginxxStringView*, void* ud) {
-            ++static_cast<UnsubNextState*>(ud)->second;
-        };
-        auto firstFn = +[](const PluginxxStringView*, void* ud) {
-            auto* s = static_cast<UnsubNextState*>(ud);
-            ++s->first;
-            if (s->next && s->events) {
-                s->events->unsubscribe(s->next);
-                s->next = nullptr;
-            }
-        };
-        // 先订阅"执行退订的 handler", 再订阅"被退订的 handler" —— 派发按
-        // 订阅顺序执行, 保证 first 在 second 之前被调用。
-        auto firstSub = events8 ? events8->subscribe(
-                                      inst2->hostView(),
-                                      AGENTXX_CLIENT_EVT_CONN_STATE,
-                                      firstFn,
-                                      us.get()
-                                  )
-                                : nullptr;
-        XX_TEST_EXPECT_TRUE(firstSub != nullptr);
-        us->next = events8 ? events8->subscribe(
-                                 inst2->hostView(),
-                                 AGENTXX_CLIENT_EVT_CONN_STATE,
-                                 secondFn,
-                                 us.get()
-                             )
-                           : nullptr;
-        XX_TEST_EXPECT_TRUE(us->next != nullptr);
-        mgr->onConnStateChanged("connected", "100%");
-        XX_TEST_EXPECT_EQ(us->first.load(), 1);
-        XX_TEST_EXPECT_EQ(us->second.load(), 0); ///< 已退订的后续 handler 不执行
-        if (firstSub && events8) {
-            events8->unsubscribe(firstSub);
-        }
-
-        // 8.3 收尾: 卸载 (unload 回调内 vtable 反注册路径已由段 7 覆盖)
-        bool unloaded2 = co_await mgr->unloadAsync("example_plugin");
+        // 8.3 收尾: 卸载时订阅被撤销, 之后再发布不再进入插件代码
+        const int beforeUnload = hits.load();
+        bool      unloaded2    = co_await mgr->unloadAsync("example_plugin");
         XX_TEST_EXPECT_TRUE(unloaded2);
         XX_TEST_EXPECT_TRUE(mgr->find("example_plugin") == nullptr);
+        mgr->onConnStateChanged("connected", "100%");
+        XX_TEST_EXPECT_EQ(hits.load(), beforeUnload);
     }
 
     // ---- 9. loadConfiguredClientPlugins: sides 过滤 + args 传递 (client 侧对称) ----
@@ -1171,29 +1142,32 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 }
                 XX_TEST_EXPECT_TRUE(foundDecl);
 
-                // READY payload 含 interfaces 数组 (经 agentxx.client.events 接口表订阅;
-                // onReady 同步分发到当前 io 线程)
+                // READY 频道载荷含 interfaces 数组 (频道值由 onReady 发布到
+                // `agentxx.client.ready`; onReady 同步分发到当前 io 线程)
                 std::string readyPayload;
                 auto        readyFn = +[](const PluginxxStringView* payload, void* ud) {
                     if (payload && payload->data) {
                         static_cast<std::string*>(ud)->assign(payload->data, payload->size);
                     }
                 };
-                const auto events11
-                    = agentxx::plugin::ClientIfaces::query(okInst->hostView()).events;
-                auto sub = events11 ? events11->subscribe(
-                                          okInst->hostView(),
-                                          AGENTXX_CLIENT_EVT_READY,
-                                          readyFn,
-                                          &readyPayload
-                                      )
-                                    : nullptr;
+                const auto broadcasts11
+                    = agentxx::plugin::ClientIfaces::query(okInst->hostView()).broadcasts;
+                auto sub = broadcasts11
+                               ? agentxx::plugin::subscribePluginBroadcast(
+                                     okInst->hostView(),
+                                     broadcasts11,
+                                     nullptr,
+                                     agentxx::plugin::broadcasts::ClientReady,
+                                     readyFn,
+                                     &readyPayload
+                                 )
+                               : nullptr;
                 XX_TEST_EXPECT_TRUE(sub != nullptr);
                 mgr->onReady();
                 XX_TEST_EXPECT_TRUE(readyPayload.find("\"interfaces\"") != std::string::npos);
                 XX_TEST_EXPECT_TRUE(readyPayload.find("agentxx.client.panel") != std::string::npos);
-                if (events11) {
-                    events11->unsubscribe(sub);
+                if (broadcasts11 && sub) {
+                    broadcasts11->unsubscribe_broadcast(sub);
                 }
 
                 co_await mgr->unloadAsync("example_plugin");

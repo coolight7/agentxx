@@ -308,11 +308,11 @@ const void* PLUGINXX_CALL
         return nullptr;
     }
     const std::string_view name{iid->data, static_cast<size_t>(iid->size)};
-    if (name == AGENTXX_IFACE_CLIENT_UI || name == AGENTXX_IFACE_CLIENT_EVENTS
-        || name == AGENTXX_IFACE_CLIENT_SESSION || name == AGENTXX_IFACE_CLIENT_WIRE
-        || name == AGENTXX_IFACE_CLIENT_SELF || name == AGENTXX_IFACE_CLIENT_JSON
-        || name == AGENTXX_IFACE_CLIENT_LOG || name == AGENTXX_IFACE_CLIENT_TIMER
-        || name == AGENTXX_IFACE_CLIENT_KEYBIND) {
+    if (name == AGENTXX_IFACE_CLIENT_UI || name == AGENTXX_IFACE_CLIENT_SESSION
+        || name == AGENTXX_IFACE_CLIENT_WIRE || name == AGENTXX_IFACE_CLIENT_SELF
+        || name == AGENTXX_IFACE_CLIENT_TIMER || name == AGENTXX_IFACE_CLIENT_KEYBIND
+        || name == PLUGINXX_IFACE_LOG || name == PLUGINXX_IFACE_JSON
+        || name == PLUGINXX_IFACE_BROADCASTS) {
         return nullptr;
     }
     return fakeQueryInterface(host, iid);

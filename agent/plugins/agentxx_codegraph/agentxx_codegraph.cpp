@@ -1152,60 +1152,55 @@ static void refreshSection(ClientCtx& c) {
     c.ui->update_info_section(c.host, c.section, &jsonSv);
 }
 
-static void PLUGINXX_CALL onClientPluginData(const PluginxxStringView* payload_json, void* ud) {
+/// 取频道载荷 JSON 对象 (非法/空值返回空对象)
+static utilxx_base::Json payloadObject(const PluginxxStringView* payload) {
+    if (!payload || !payload->data || payload->size == 0) {
+        return utilxx_base::Json::object();
+    }
+    try {
+        auto j = utilxx_base::Json::parse(
+            std::string{payload->data, static_cast<size_t>(payload->size)}
+        );
+        return j.is_object() ? j : utilxx_base::Json::object();
+    } catch (...) {
+        return utilxx_base::Json::object();
+    }
+}
+
+/// 索引状态频道 (`plugin.agentxx_codegraph.status`)
+static void PLUGINXX_CALL onClientStatus(const PluginxxStringView* payload_json, void* ud) {
     auto* ctx = static_cast<ClientCtx*>(ud);
     if (!ctx || !ctx->host) {
         return;
     }
-    std::string raw(
-        payload_json && payload_json->data ? payload_json->data : "{}",
-        payload_json ? static_cast<size_t>(payload_json->size) : 0
-    );
-    try {
-        auto j     = utilxx_base::Json::parse(raw);
-        auto topic = j.value("topic", std::string{});
-        // 只认本插件那一族: `plugin.agentxx_codegraph.<事件>`
-        constexpr std::string_view kPrefix = "plugin.agentxx_codegraph.";
-        if (!topic.starts_with(kPrefix)) {
-            return;
-        }
-        const auto event = std::string_view{topic}.substr(kPrefix.size());
-        utilxx_base::Json d;
-        if (j.contains("data")) {
-            auto dv = j["data"];
-            if (dv.is_string()) {
-                try {
-                    d = utilxx_base::Json::parse(dv.get<std::string>());
-                } catch (...) {
-                    d = utilxx_base::Json::object();
-                }
-            } else if (dv.is_object()) {
-                d = dv;
-            }
-        }
-        if (event == "status") {
-            bool loaded = d.value("loaded", false);
-            ctx->loaded = loaded;
-            if (!loaded) {
-                ctx->has_progress = false;
-                ctx->processed    = 0;
-                ctx->total        = 0;
-                ctx->current_file.clear();
-            }
-            refreshSection(*ctx);
-        } else if (event == "progress") {
-            int64_t     processed = d.value<int64_t>("processed", 0);
-            int64_t     total     = d.value<int64_t>("total", 0);
-            std::string cur       = d.value("current_file", std::string{});
-            ctx->processed        = processed;
-            ctx->total            = total;
-            ctx->current_file     = std::move(cur);
-            ctx->has_progress     = true;
-            ctx->loaded           = true;
-            refreshSection(*ctx);
-        }
-    } catch (...) {
+    const auto d    = payloadObject(payload_json);
+    bool       loaded = d.value("loaded", false);
+    ctx->loaded     = loaded;
+    if (!loaded) {
+        ctx->has_progress = false;
+        ctx->processed    = 0;
+        ctx->total        = 0;
+        ctx->current_file.clear();
     }
+    refreshSection(*ctx);
+}
+
+/// 索引进度频道 (`plugin.agentxx_codegraph.progress`)
+static void PLUGINXX_CALL onClientProgress(const PluginxxStringView* payload_json, void* ud) {
+    auto* ctx = static_cast<ClientCtx*>(ud);
+    if (!ctx || !ctx->host) {
+        return;
+    }
+    const auto  d         = payloadObject(payload_json);
+    int64_t     processed = d.value<int64_t>("processed", 0);
+    int64_t     total     = d.value<int64_t>("total", 0);
+    std::string cur       = d.value("current_file", std::string{});
+    ctx->processed        = processed;
+    ctx->total            = total;
+    ctx->current_file     = std::move(cur);
+    ctx->has_progress     = true;
+    ctx->loaded           = true;
+    refreshSection(*ctx);
 }
 
 extern "C" PLUGINXX_EXPORT const AgentxxClientPluginInfo* agentxx_plugin_client_get_info(void) {
@@ -1262,10 +1257,27 @@ static void* codegraphClientStart(
             refreshSection(ctx);
         }
     }
-    if (!ctx.iface.events || !ctx.iface.events->subscribe
-        || !ctx.iface.events
-                ->subscribe(ctx.host, AGENTXX_CLIENT_EVT_PLUGIN_DATA, onClientPluginData, &ctx)) {
-        agentxx::plugin::PluginString::set(ctx.host, err, "events subscribe failed");
+    if (!ctx.iface.broadcasts || !ctx.iface.broadcasts->subscribe_broadcast) {
+        agentxx::plugin::PluginString::set(ctx.host, err, "broadcasts table missing");
+        return nullptr;
+    }
+    if (!agentxx::plugin::subscribePluginBroadcast(
+            ctx.host,
+            ctx.iface.broadcasts,
+            nullptr,
+            "plugin.agentxx_codegraph.status",
+            onClientStatus,
+            &ctx
+        )
+        || !agentxx::plugin::subscribePluginBroadcast(
+            ctx.host,
+            ctx.iface.broadcasts,
+            nullptr,
+            "plugin.agentxx_codegraph.progress",
+            onClientProgress,
+            &ctx
+        )) {
+        agentxx::plugin::PluginString::set(ctx.host, err, "status/progress subscribe failed");
         return nullptr;
     }
     if (ctx.iface.log && ctx.iface.log->log) {

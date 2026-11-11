@@ -433,7 +433,99 @@
 
 ### 步骤 5：client 侧
 
-- 状态：待开始
+- 状态：**完成**（client 侧表、广播、DomainServices；6 处客户端订阅点已迁频道）
+
+已改动（按文件）：
+
+- `agent/lib/include/agentxx/plugin/client_plugin_manager.h`
+  - 继承 `pluginxx::DomainServices`；`kInterfaceTableCount = 11 + 6`（17 张）
+  - 删实例内订阅簿记（`Subscription` / `clientSubscriptions` / `subHandles` /
+    `ClientSubscriptionImpl`）与 `subscribe` / `unsubscribe` 声明
+  - 新增：`ensureClientBroadcast` / `publishClientChannelValue`（公开）、
+    `publishClientChannel` / `declareClientChannels` / `ensureClientChannelDeclared`（私有）、
+    遮蔽基类的 `subscribeBroadcast`（先补声明再订阅，跨进程频道才收得到）
+  - 新增 `workerPool_`（懒建 2 线程）与 6 个 DomainServices 覆写
+  - `setLanguage` 就地覆写 `DomainServices::setLanguage`（原来重复声明，MSVC 报 C2535）
+  - `broadcasts()` 不再重复声明（基类 `PluginHostCore` 已有同一实现）
+- `agent/lib/src/plugins/client_plugin_manager_domain_services.cpp`（新）
+  - `postToWorkerThread`（懒建池）/ `configJson`（language + platform；路径类配置属于
+    agent 侧，界面进程不读）/ `language` / `pluginsJson` / `pluginJson`（基于 `list()`）
+  - `declareClientChannels`：7 个客户端频道（状态类 `cache: latest`，事件类 `none`）
+  - `ensureClientChannelDeclared`：按名字形态补声明 ——
+    `agentxx.client.plugin.<插件名>.*`（属主=该插件，两端可发，不缓存）、
+    `plugin.<插件名>.*`（属主发布，`cache: latest`，与 agent 侧 `ensureTopicBroadcast` 一致）、
+    其他应用频道（任何人可发）
+  - `publishClientChannel`：按形态取发布者身份（应用 / 代哪个插件发）后发布
+- `agent/lib/src/plugins/client_plugin_manager.cpp`
+  - 删 `xx_csubscribe` / `xx_cunsubscribe` / `xx_clog` / `xx_cjson_*` /
+    `g_clientIfaceEvents` / `g_clientIfaceJson` / `g_clientIfaceLog` /
+    `g_clientIfaceCoroutineRuntime` / `ClientPluginManager::subscribe|unsubscribe`
+    （约 600 行）
+  - `xx_cquery_interface` 先查 `pluginxx::queryGenericPluginIface<ClientPluginInstance,
+    ClientPluginManager>`，再分发 6 张自有表 + `agentxx.net`
+  - 6 处端点事件改 `publishClientChannel`（ready / connection_state / user_input / delta /
+    turn_end / session_switch）；`reportRegionSize` 改发 `ui_layout`
+  - `onPluginData`：订阅方判定改用 `broadcasts()->listJson(topic)`，载荷改发到同名频道
+- `agent/lib/src/plugins/client_plugin_manager_net.cpp`：`publishNetEvent` 改发
+  `plugin.<插件名>.net`（原先只记调试日志）
+- `agent/lib/include/agentxx/plugin/api/client_plugin_api.h`：删 `agentxx.client.events`
+  / `.json` / `.log` 三张表与 `AgentxxClientEvent` 枚举（原枚举处留一张频道对照表）
+- `agent/lib/include/agentxx/plugin/api/plugin_iface_meta.h`：删三个 `IfaceMeta` 特化
+- `agent/lib/include/agentxx/plugin/api/plugin_guard.h`：删 client 日志表重载（两侧统一
+  `pluginxx.log`，`using pluginxx::logTo` 即可）
+- `agent/lib/include/agentxx/plugin/api/plugin_kit.h`：`ClientIfaces` 删 `events`、
+  `json`/`log` 改指 `PluginxxJsonIface`/`PluginxxLogIface`、新增 `broadcasts`；
+  `logClientCreateFailure` 改查 `PLUGINXX_IFACE_LOG`
+- 客户端插件订阅点改频道（6 个文件）：
+  - `agentxx_chatbot/chatbot_client.cpp`：`plugin.agentxx_chatbot.panel` + `client.ready` +
+    `client.connection_state`；载荷不再包 `{topic,data}`，直接是快照 JSON
+  - `agentxx_planning/agentxx_planning.cpp`：`client.delta` + `plugin.agentxx_planning.planning`
+    + `client.session_switch`（规划频道值就是规划 JSON）
+  - `agentxx_codegraph/agentxx_codegraph.cpp`：拆成 `status` / `progress` 两条频道订阅
+  - `agentxx_system_monitor/agentxx_system_monitor.cpp`：`plugin.agentxx_system_monitor.usage`
+  - `example_plugin/example_plugin.cpp`：`client.ready` / `client.turn_end` /
+    `plugin.example_plugin.progress`；agent 侧两条订阅改用 `subscribePluginBroadcast`
+  - `test/plugin/dso_plugins/test_client_start_fail/test_client_start_fail.cpp`：订阅
+    `agentxx.client.ready`
+- 测试与文档：
+  - `test/core/test_boundaries.cpp`：client 表 9 → 6、合计 29 → 26、台账删三行、
+    `kInterfaceTableCount` 17、文档数字校验改 17
+  - `test/plugin/test_plugin_abi_c17.c`：删 `ClientEventsIface` 对齐断言
+  - `test/plugin/test_plugin_sdk.cpp`：老主程序模拟改为"不提供 client 表 + 通用 log/json/
+    broadcasts"
+  - `test/plugin/test_client_plugins.cpp`：原"订阅生命周期安全"段（多次订阅扩容/派发中订阅/
+    派发中退订）整体换成广播语义（频道已声明、一次发布多订阅、退订后不到达、
+    未声明跨进程频道由订阅入口补声明、卸载撤销订阅）；11.3 的 READY 用例改频道订阅
+  - `test/core/test_observability.cpp`：`hookHandlers[` → `hookPoints[`（步骤 3-3 重命名时漏改）
+  - `docs/zh-cn/design/plugins.md` §9 重写（17 张表 + 客户端频道表）；
+    `tui.md`、`index.md`、根 `AGENTS.md` 数字与频道名同步
+
+验证：
+
+- `agentxx_static` / `agentxx_lib_repo` / `agentxx_client_repo` / `agentxx_test_repo` 编过
+- `build_plugins.ps1`：26 个插件全部重新产出
+- `agentxx_test --log-level warn`：`boundaries` 19、`client_plugins` 763、
+  `plugin_sdk` 133、`plugin_bridge` 193、`tui_widget` 208、`tui_form` 84、
+  `plugins`/`plugin_multi_mount` 47、`plugin_cleanup` 90、`plugin_dispatch` 112、
+  `plugin_feature` 34、`plugin_point` 63、`plugin_host_mount` 146、`plugin_runtime` 726、
+  `plugin_example_runtime` 50、`event_hub` 268、`event_delivery` 48、`event_tools` 97、
+  `view_replica` 114、`summarization` 454、`observability` 114、`assembly_snapshot_io` 57
+  全部通过
+
+与计划的偏差 / 注意：
+
+- `pluginxx.json` / `pluginxx.log` 两张通用表在 client 侧的成员与原 `agentxx.client.json` /
+  `.log` 逐字相同，所以插件源码只需换指针类型名（`ClientIfaces` 已换）
+- 跨端插件数据的**下行**方向：`WirePluginData.topic` 是 agent 侧主题
+  （`plugin.<插件名>.<事件>`），主程序按原样发布到同名频道（不是改写成
+  `agentxx.client.plugin.*`）；**上行**方向仍走 `agentxx.client.wire` 的
+  `send_plugin_data`（要求 `agentxx.client.plugin.<插件名>.<事件>` 全名）
+- client 侧广播注册表**没有**注入 scheduler（与 agent 侧一致），订阅限频的 `delay`
+  补发退化为"下一次发布时顺便补"；当前没有插件用限频订阅
+- `configJson()` 只给 `language` / `platform`：客户端的路径类配置不属于本进程
+  （见 configuration.md 第 5 节），需要路径的客户端插件应查 `get_client_state()`
+- `example_event/plugin.yaml` 里"客户端侧要到步骤 5 才提供广播表"的注释已是旧信息，
+  随步骤 6 一起改
 
 ### 步骤 6：插件全量迁移
 

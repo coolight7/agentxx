@@ -379,16 +379,25 @@ struct AgentIfaces {
 };
 
 /// client 侧接口表聚合 (一次查询; 成员为 NULL 表示主程序未实现该接口)
+///
+/// 与 agent 侧同一套通用表 (log/json/config/plugins/broadcasts/scheduler/
+/// coroutine_runtime/tasks/cancel/capabilities), 另加 client 自有表
+/// (`agentxx.client.*`: ui/session/wire/self/timer/keybind) 与网络表 (`agentxx.net`)。
 struct ClientIfaces {
     const AgentxxClientUiIface*      ui      = nullptr; ///< "agentxx.client.ui"
-    const AgentxxClientEventsIface*  events  = nullptr; ///< "agentxx.client.events"
     const AgentxxClientSessionIface* session = nullptr; ///< "agentxx.client.session"
     const AgentxxClientWireIface*    wire    = nullptr; ///< "agentxx.client.wire"
     const AgentxxClientSelfIface*    self    = nullptr; ///< "agentxx.client.self"
-    const AgentxxClientJsonIface*    json    = nullptr; ///< "agentxx.client.json"
-    const AgentxxClientLogIface*     log     = nullptr; ///< "agentxx.client.log"
+    const PluginxxJsonIface*         json    = nullptr; ///< "pluginxx.json"
+    const PluginxxLogIface*          log     = nullptr; ///< "pluginxx.log"
     const AgentxxClientTimerIface*   timer   = nullptr; ///< "agentxx.client.timer"
     const AgentxxClientKeybindIface* keybind = nullptr; ///< "agentxx.client.keybind"
+    /// 广播 (声明 / 发布 / 订阅 / 读当前值 / 结束): client 侧事件的唯一通道
+    /// - 客户端频道 (`agentxx.client.ready` / `connection_state` / `user_input` /
+    ///   `delta` / `turn_end` / `session_switch` / `ui_layout`) 由主程序启动时声明,
+    ///   插件订阅即可, 不需要先声明; 跨端数据走
+    ///   `agentxx.client.plugin.<插件名>.<事件>`
+    const PluginxxBroadcastsIface* broadcasts = nullptr;
 
     /// 从主程序查询全部已知 client 侧接口表 (host 为空时返回全 NULL 聚合)
     static ClientIfaces query(const PluginxxHost* host) {
@@ -397,14 +406,15 @@ struct ClientIfaces {
             return f;
         }
         f.ui      = queryInterface<AgentxxClientUiIface>(host, AGENTXX_IFACE_CLIENT_UI);
-        f.events  = queryInterface<AgentxxClientEventsIface>(host, AGENTXX_IFACE_CLIENT_EVENTS);
         f.session = queryInterface<AgentxxClientSessionIface>(host, AGENTXX_IFACE_CLIENT_SESSION);
         f.wire    = queryInterface<AgentxxClientWireIface>(host, AGENTXX_IFACE_CLIENT_WIRE);
         f.self    = queryInterface<AgentxxClientSelfIface>(host, AGENTXX_IFACE_CLIENT_SELF);
-        f.json    = queryInterface<AgentxxClientJsonIface>(host, AGENTXX_IFACE_CLIENT_JSON);
-        f.log     = queryInterface<AgentxxClientLogIface>(host, AGENTXX_IFACE_CLIENT_LOG);
+        f.json    = queryInterface<PluginxxJsonIface>(host, PLUGINXX_IFACE_JSON);
+        f.log     = queryInterface<PluginxxLogIface>(host, PLUGINXX_IFACE_LOG);
         f.timer   = queryInterface<AgentxxClientTimerIface>(host, AGENTXX_IFACE_CLIENT_TIMER);
         f.keybind = queryInterface<AgentxxClientKeybindIface>(host, AGENTXX_IFACE_CLIENT_KEYBIND);
+        f.broadcasts
+            = queryInterface<PluginxxBroadcastsIface>(host, PLUGINXX_IFACE_BROADCASTS);
         return f;
     }
 };
@@ -4805,7 +4815,7 @@ public:
 
     /// 展示区域尺寸 (宽/高; 未上报时返回 0)
     /// - 区域 id 为面板/Info 段落的注册 id (`update_panel` / `update_info_section` 的 id)
-    /// - 主程序在每次布局后更新快照, 值变化时会另发 `AGENTXX_CLIENT_EVT_UI_LAYOUT` 事件;
+    /// - 主程序在每次布局后更新快照, 值变化时会另发 `agentxx.client.ui_layout` 频道;
     ///   老主程序 (未声明 `agentxx.client.layout`) 该接口返回 0, 插件应降级为固定宽度
     /// - 查询走 `get_client_state()`, 因此仅在 client io 线程可调 (与其它表接口一致)
     struct RegionSize {
@@ -5059,7 +5069,7 @@ private:
     mutable pluginxx::ui::Capabilities uiCapsCache_{};
 };
 
-/// client 侧 create 阶段异常上报 (client 日志接口表为独立类型)
+/// client 侧 create 阶段异常上报 (两侧统一用插件框架的 `pluginxx.log` 表)
 inline void logClientCreateFailure(
     const PluginxxHost* host,
     std::string_view    plugin,
@@ -5068,9 +5078,9 @@ inline void logClientCreateFailure(
     if (!host || !host->vtable || !host->vtable->query_interface) {
         return;
     }
-    auto  iid = PluginStringView::fromCstr(AGENTXX_IFACE_CLIENT_LOG);
+    auto  iid = PluginStringView::fromCstr(PLUGINXX_IFACE_LOG);
     auto* iface
-        = static_cast<const AgentxxClientLogIface*>(host->vtable->query_interface(host, &iid));
+        = static_cast<const PluginxxLogIface*>(host->vtable->query_interface(host, &iid));
     if (!iface || !iface->log) {
         return;
     }

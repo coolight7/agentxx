@@ -16,6 +16,7 @@
 #include "agentxx/agent/io/wire_protocol.h"
 #include "agentxx/event/events.h"
 #include "agentxx/event/naming.h"
+#include "agentxx/plugin/api/agentxx_broadcast_ids.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
 #include "asio/post.hpp"
@@ -320,11 +321,9 @@ ClientPluginInstance::~ClientPluginInstance() {
         NativeLoader::close(dlHandle);
         dlHandle = nullptr;
     }
-    clientSubscriptions.clear();
     statusItemHandles.clear();
     panelHandles.clear();
     infoSectionHandles.clear();
-    subHandles.clear();
 }
 
 // =====================================================================
@@ -334,12 +333,21 @@ ClientPluginInstance::~ClientPluginInstance() {
 ClientPluginManager::ClientPluginManager(asio::any_io_executor ex) :
     pluginxx::PluginHostLifecycle<ClientPluginInstance>(std::move(ex)),
     pool_(std::make_unique<asio::thread_pool>(1)),
-    uiRegistry_(std::make_shared<const ClientUiRegistry>()) {}
+    uiRegistry_(std::make_shared<const ClientUiRegistry>()) {
+    // 通用表 (log/json/config/plugins/broadcasts/...) 需要主程序数据时经这里取
+    // (必须在任何 vtable 入口被调用之前注入)
+    setDomainServices(this);
+    // 客户端频道: 插件在 start 里就会订阅, 因此管理器构造时就声明好 (幂等)
+    declareClientChannels();
+}
 
 ClientPluginManager::~ClientPluginManager() {
     shutdownAll();
     netShutdownAll();
     warnPendingCloseOnDestroy("client");
+    if (workerPool_) {
+        workerPool_->join();
+    }
     if (pool_) {
         pool_->join();
     }
@@ -1334,7 +1342,7 @@ std::string ClientPluginManager::clientStateJson() const {
         return arr;
     }();
     // 展示区域尺寸快照 [{id,w,h},...]: 面板/Info 段落的可用宽高 (主程序布局后写入;
-    // 插件据此按可用宽度自行重排; 事件 AGENTXX_CLIENT_EVT_UI_LAYOUT 会主动通知变化)
+    // 插件据此按可用宽度自行重排; 频道 `agentxx.client.ui.layout` 会主动通知变化)
     j["regions"] = [&] {
         auto arr = utilxx_base::Json::array();
         for (const auto& r : regionSizes()) {
@@ -1364,7 +1372,7 @@ void ClientPluginManager::onReady() {
         return arr;
     }();
     j["sessionId"] = sessionId_;
-    dispatchEvent(AGENTXX_CLIENT_EVT_READY, j.dump());
+    publishClientChannel(broadcasts::ClientReady, j.dump());
     // 三期6: 向服务端上报本 client 支持的接口集 (client 端主程序约定主题,
     // 镜像 server_plugins; 服务端存储并经事件总线发布, agent 侧插件订阅
     // `agentxx.client.host.client_interfaces` 据此自适应 —— 如 emit_message_tip
@@ -1386,18 +1394,18 @@ void ClientPluginManager::onConnStateChanged(std::string_view state, std::string
     utilxx_base::Json j  = utilxx_base::Json::object();
     j["connState"]       = connState_;
     j["startupProgress"] = startupProgress_;
-    dispatchEvent(AGENTXX_CLIENT_EVT_CONN_STATE, j.dump());
+    publishClientChannel(broadcasts::ClientConnectionState, j.dump());
 }
 
 void ClientPluginManager::onUserInput(std::string_view sessionId, std::string_view text) {
     utilxx_base::Json j = utilxx_base::Json::object();
     j["sessionId"]      = std::string{sessionId};
     j["text"]           = std::string{text};
-    dispatchEvent(AGENTXX_CLIENT_EVT_USER_INPUT, j.dump());
+    publishClientChannel(broadcasts::ClientUserInput, j.dump());
 }
 
 void ClientPluginManager::onDelta(const agentxx::agent::WireDelta& delta) {
-    dispatchEvent(AGENTXX_CLIENT_EVT_DELTA, agentxx::agent::io::deltaToJson(delta).dump());
+    publishClientChannel(broadcasts::ClientDelta, agentxx::agent::io::deltaToJson(delta).dump());
 }
 
 void ClientPluginManager::onTurnResult(const agentxx::agent::WireTurnResult& result) {
@@ -1410,7 +1418,7 @@ void ClientPluginManager::onTurnResult(const agentxx::agent::WireTurnResult& res
     }
     j["startTimeMs"] = result.startTimeMs;
     j["durationMs"]  = result.durationMs;
-    dispatchEvent(AGENTXX_CLIENT_EVT_TURN_END, j.dump());
+    publishClientChannel(broadcasts::ClientTurnEnd, j.dump());
 }
 
 void ClientPluginManager::onSessionSwitched(std::string_view sessionId) {
@@ -1419,7 +1427,7 @@ void ClientPluginManager::onSessionSwitched(std::string_view sessionId) {
     toolRenderCache_->clear();
     utilxx_base::Json j = utilxx_base::Json::object();
     j["sessionId"]      = sessionId_;
-    dispatchEvent(AGENTXX_CLIENT_EVT_SESSION_SWITCH, j.dump());
+    publishClientChannel(broadcasts::ClientSessionSwitch, j.dump());
 }
 
 void ClientPluginManager::onPluginData(const agentxx::agent::WirePluginData& data) {
@@ -1457,21 +1465,24 @@ void ClientPluginManager::onPluginData(const agentxx::agent::WirePluginData& dat
         }
     }
 
-    // 对端缺失提示 (每插件名一次): 无任何 client 插件订阅 EVT_PLUGIN_DATA 时,
-    // 该插件事件在本地无人处理 —— 多半是对应插件未在本端加载 (分进程/分设备
-    // 部署时单侧缺失)。仅警告一次, 不随事件频率刷屏; 正常情况 (有插件订阅,
-    // 各自按名过滤) 不受影响。
+    // 对端缺失提示 (每插件名一次): 这条频道在本端没有订阅方时, 该插件事件
+    // 在本地无人处理 —— 多半是对应插件未在本端加载 (分进程/分设备部署时单侧缺失)。
+    // 仅警告一次, 不随事件频率刷屏; 正常情况 (有插件订阅, 各自按名过滤) 不受影响。
     bool hasSubscriber = false;
-    for (const auto& [name, inst] : plugins_) {
-        (void)name;
-        for (const auto& sub : inst->clientSubscriptions) {
-            if (sub && sub->alive && sub->event == AGENTXX_CLIENT_EVT_PLUGIN_DATA) {
-                hasSubscriber = true;
-                break;
+    if (broadcasts_) {
+        try {
+            const auto listed = utilxx_base::Json::parse(broadcasts_->listJson(data.topic));
+            if (listed.contains("broadcasts") && listed["broadcasts"].is_array()) {
+                for (const auto& item : listed["broadcasts"]) {
+                    if (item.value("subscribers", 0) > 0) {
+                        hasSubscriber = true;
+                        break;
+                    }
+                }
             }
-        }
-        if (hasSubscriber) {
-            break;
+        } catch (...) {
+            // 自省输出异常: 当作有订阅方, 只是不提示
+            hasSubscriber = true;
         }
     }
     if (!hasSubscriber) {
@@ -1490,10 +1501,8 @@ void ClientPluginManager::onPluginData(const agentxx::agent::WirePluginData& dat
         }
     }
 
-    utilxx_base::Json j = utilxx_base::Json::object();
-    j["topic"]          = data.topic;
-    j["data"]           = data.data;
-    dispatchEvent(AGENTXX_CLIENT_EVT_PLUGIN_DATA, j.dump());
+    // 跨端插件数据: 主题就是频道全名 (`plugin.<插件名>.<事件>`), 原样发给订阅方
+    publishClientChannel(data.topic, data.data);
 }
 
 // ==================== 内部 ====================
@@ -1563,13 +1572,8 @@ void ClientPluginManager::detachDomainRegistrations(ClientPluginInstance* inst) 
         }
     }
 
-    // 订阅句柄断链: stop 回调内插件主动 unsubscribe 时 impl->inst 已置空,
-    // xx_cunsubscribe 安全跳过 (句柄由 subHandles 保活到实例析构, 不解引用已释放内存)
-    for (const auto& h : inst->subHandles) {
-        auto impl  = std::static_pointer_cast<ClientSubscriptionImpl>(h);
-        impl->inst = nullptr;
-        impl->sub.reset();
-    }
+    // 订阅句柄 (广播订阅) 由插件框架的注册表按归属回收: 禁用/卸载时
+    // `removeChannelsOwnedBy` 与订阅句柄一并清掉, 这里不再逐个断链。
     inst->statusItemRegs.clear();
     inst->panelRegs.clear();
     inst->infoSectionRegs.clear();
@@ -1578,61 +1582,8 @@ void ClientPluginManager::detachDomainRegistrations(ClientPluginInstance* inst) 
     inst->toolDecorRegs.clear();
     inst->toolRenderRegs.clear();
     inst->actionRegs.clear();
-    inst->clientSubscriptions.clear();
-    inst->subHandles.clear();
     // 快捷键句柄与 panel/status 句柄同规则: 不在此释放 (插件的 stop 回调可能仍在
     // 注销它们), 由 ~ClientPluginInstance 统一回收
-}
-
-/// 反向必选依赖收集 → 公共 collectReverseRequiredDeps
-/// (见 [plugin_interfaces.h](/agent/lib/include/agentxx/plugin/plugin_interfaces.h))
-
-void ClientPluginManager::dispatchEvent(int event, const std::string& payloadJson) {
-    ioThreadId_.store(std::this_thread::get_id(), std::memory_order_release);
-
-    // 快照订阅列表 (shared_ptr 副本: 派发中退订/卸载不会使后续回调悬垂;
-    // 订阅对象被 impl 句柄/派发副本保活, alive 位标记已退订)
-    struct SubRef {
-        std::weak_ptr<ClientPluginInstance>                 inst;
-        std::shared_ptr<ClientPluginInstance::Subscription> sub;
-    };
-
-    std::vector<SubRef> refs;
-    for (const auto& [name, inst] : plugins_) {
-        (void)name;
-        if (!inst->enabled) {
-            continue;
-        }
-        for (const auto& s : inst->clientSubscriptions) {
-            if (s->alive && s->event == event) {
-                refs.push_back(SubRef{inst, s});
-            }
-        }
-    }
-    for (const auto& ref : refs) {
-        // 前一个 handler 可能在同轮内退订此项、禁用或卸载所属插件。
-        // 每次开始 callback 前都重新检查当前订阅和实例状态。
-        auto inst = ref.inst.lock();
-        if (!ref.sub || !ref.sub->alive || !inst || !inst->enabled || !inst->lifetime
-            || !inst->lifetime->acceptsOperations()) {
-            continue;
-        }
-        PluginInstanceBase::InflightGuard guard(inst);
-        if (!guard || !ref.sub->alive || !inst->enabled || !inst->lifetime->acceptsOperations()) {
-            continue;
-        }
-        // C ABI 回调异常保护: 单个插件 handler 违约不得打断整轮派发
-        // (影响其他订阅者与 client io 事件循环)
-        try {
-            auto payloadSv
-                = agentxx::plugin::PluginStringView::from(payloadJson.data(), payloadJson.size());
-            ref.sub->handler(&payloadSv, ref.sub->ud);
-        } catch (const std::exception& e) {
-            XX_LOGW("[client_plugin] `{}` event handler threw: {}", inst->name, e.what());
-        } catch (...) {
-            XX_LOGW("[client_plugin] `{}` event handler threw unknown exception", inst->name);
-        }
-    }
 }
 
 // =====================================================================
@@ -1646,10 +1597,6 @@ namespace {
 // =====================================================================
 
 using ClientHostCall = PluginHostCall<ClientPluginInstance, ClientPluginManager>;
-
-/// 插件框架通用表入口 (client 侧复用的部分: 协程驱动等与主程序业务无关的入口)
-using ClientGenericEntries
-    = pluginxx::GenericTableEntries<ClientPluginInstance, ClientPluginManager>;
 
 /// 解析主程序控制块，并持有实例/管理器强引用与 admission lease。
 ///
@@ -1728,17 +1675,12 @@ static int32_t queryClientString(const PluginxxHost* host, PluginxxString* out, 
 static const AgentxxClientUiIface* clientUiIface();
 
 /// 其余标准接口表 (定义于下方加载区; 此处前向引用供 query_interface 分发)
-extern const AgentxxClientEventsIface  g_clientIfaceEvents;
 extern const AgentxxClientSessionIface g_clientIfaceSession;
 extern const AgentxxClientWireIface    g_clientIfaceWire;
 extern const AgentxxClientSelfIface    g_clientIfaceSelf;
-extern const AgentxxClientJsonIface    g_clientIfaceJson;
-extern const AgentxxClientLogIface     g_clientIfaceLog;
 /// 定时器 / 全局快捷键接口表 (agentxx.client.timer / agentxx.client.keybind)
 extern const AgentxxClientTimerIface   g_clientIfaceTimer;
 extern const AgentxxClientKeybindIface g_clientIfaceKeybind;
-/// 协程驱动接口表 (agentxx.agent.coroutine_runtime; 与 agent 侧同 IID)
-extern const PluginxxCoroutineRuntimeIface g_clientIfaceCoroutineRuntime;
 /// 网络接口表 (`<应用名>.net`; 与 agent 侧同一个 `PluginNetService`)
 extern const PluginxxNetIface g_clientIfaceNet;
 
@@ -1752,91 +1694,6 @@ static void PLUGINXX_CALL xx_cfree(void* ptr) {
     agentxx::plugin::hostMemoryFree(ptr);
 }
 
-// ---- 日志 / JSON ----
-
-void PLUGINXX_CALL xx_clog(const PluginxxHost* host, int32_t level, const PluginxxStringView* msg) {
-    (void)host;
-    std::string_view s = (msg && msg->data)
-                             ? std::string_view{msg->data, static_cast<size_t>(msg->size)}
-                             : std::string_view{};
-    switch (level) {
-        case 0:
-            XX_LOGT("[client_plugin] {}", s);
-            break;
-        case 1:
-            XX_LOGD("[client_plugin] {}", s);
-            break;
-        case 3:
-            XX_LOGW("[client_plugin] {}", s);
-            break;
-        case 4:
-            XX_LOGE("[client_plugin] {}", s);
-            break;
-        default:
-            XX_LOGI("[client_plugin] {}", s);
-            break;
-    }
-}
-
-/// JSON 辅助: 提取字符串字段 (线程安全, 纯函数; 供插件替代手写 JSON 解析)
-int32_t PLUGINXX_CALL xx_cjson_get_string(
-    const PluginxxHost*       host,
-    const PluginxxStringView* json,
-    const PluginxxStringView* key,
-    PluginxxString*           out
-) {
-    if (!out) {
-        return -1;
-    }
-    auto call = enterClientHost(host, /*allowClosing=*/true);
-    auto inst = call.instance();
-    if (!inst || agentxx::plugin::PluginStringView::empty(json)
-        || agentxx::plugin::PluginStringView::empty(key)) {
-        return -1;
-    }
-    try {
-        auto j = utilxx_base::Json::parse(std::string{json->data, static_cast<size_t>(json->size)});
-        auto v = j.value(std::string_view{key->data, static_cast<size_t>(key->size)}, "");
-        if (v.empty() && !j.contains(std::string{key->data, static_cast<size_t>(key->size)})) {
-            return -1;
-        }
-        hostMemorySetString(out, v);
-        return 0;
-    } catch (...) {
-        return -1;
-    }
-}
-
-/// JSON 辅助: 字符串 → JSON 字符串字面量 (含引号与转义; 线程安全纯函数)
-int32_t PLUGINXX_CALL
-    xx_cjson_escape(const PluginxxHost* host, const PluginxxStringView* s, PluginxxString* out) {
-    if (!out) {
-        return -1;
-    }
-    auto call = enterClientHost(host, /*allowClosing=*/true);
-    auto inst = call.instance();
-    if (!inst || agentxx::plugin::PluginStringView::empty(s)) {
-        return -1;
-    }
-    try {
-        utilxx_base::Json j       = std::string{s->data, static_cast<size_t>(s->size)};
-        auto              dumpStr = j.dump();
-        hostMemorySetString(out, dumpStr);
-        return 0;
-    } catch (...) {
-        return -1;
-    }
-}
-
-// ---- 协程驱动 (agentxx.agent.coroutine_runtime; 与 agent 侧同 IID/同语义) ----
-//
-// 驱动请求/取消/线程判定的实现整体复用插件框架的通用表入口
-// ([pluginxx::GenericTableEntries]): 这三项只依赖"主程序控制块 + 实例生命周期 +
-// 主程序 runtime/io 线程判定", 与主程序业务无关, 因此 client / agent 两侧共用同一份
-// 逻辑与语义 (见 pluginxx/host/tables_impl.h 的 requestDriverEntry 等)。
-// 语义要点: 申请恒异步、每张请求至多执行一次、排队期间持有实例 lease、
-// 关闭中仍允许驱动 (取消收尾需要驱动继续流动)、已关闭拒绝。
-
 // ---- COM 风格接口表查询 ----
 const void* PLUGINXX_CALL
     xx_cquery_interface(const PluginxxHost* host, const PluginxxStringView* iid) {
@@ -1844,11 +1701,14 @@ const void* PLUGINXX_CALL
         return nullptr;
     }
     std::string_view n{iid->data, static_cast<size_t>(iid->size)};
+    // 通用表 (log/json/config/plugins/broadcasts/scheduler/coroutine_runtime/tasks/
+    // cancel/capabilities) 由 cxx_pluginxx 提供 (见 pluginxx/host/tables_impl.h),
+    // 主程序侧的业务表在下面逐个分发。
+    if (const void* generic = pluginxx::queryGenericPluginIface<ClientPluginInstance, ClientPluginManager>(n)) {
+        return generic;
+    }
     if (n == AGENTXX_IFACE_CLIENT_UI) {
         return clientUiIface();
-    }
-    if (n == AGENTXX_IFACE_CLIENT_EVENTS) {
-        return &g_clientIfaceEvents;
     }
     if (n == AGENTXX_IFACE_CLIENT_SESSION) {
         return &g_clientIfaceSession;
@@ -1859,20 +1719,11 @@ const void* PLUGINXX_CALL
     if (n == AGENTXX_IFACE_CLIENT_SELF) {
         return &g_clientIfaceSelf;
     }
-    if (n == AGENTXX_IFACE_CLIENT_JSON) {
-        return &g_clientIfaceJson;
-    }
-    if (n == AGENTXX_IFACE_CLIENT_LOG) {
-        return &g_clientIfaceLog;
-    }
     if (n == AGENTXX_IFACE_CLIENT_TIMER) {
         return &g_clientIfaceTimer;
     }
     if (n == AGENTXX_IFACE_CLIENT_KEYBIND) {
         return &g_clientIfaceKeybind;
-    }
-    if (n == PLUGINXX_IFACE_COROUTINE_RUNTIME) {
-        return &g_clientIfaceCoroutineRuntime;
     }
     if (n == PLUGINXX_IFACE_NET) {
         return &g_clientIfaceNet;
@@ -2131,46 +1982,6 @@ void PLUGINXX_CALL
     });
 }
 
-// ---- 事件订阅 ----
-
-PluginxxSubscription* PLUGINXX_CALL xx_csubscribe(
-    const PluginxxHost* host,
-    int32_t             event,
-    void(PLUGINXX_CALL* handler)(const PluginxxStringView*, void*),
-    void* ud
-) {
-    if (!handler || event < 0 || event >= AGENTXX_CLIENT_EVT_COUNT) {
-        return nullptr;
-    }
-    return onClientIo<PluginxxSubscription*>(
-        host,
-        nullptr,
-        [event,
-         handler,
-         ud](ClientPluginInstance* inst, ClientPluginManager* mgr) -> PluginxxSubscription* {
-            return static_cast<PluginxxSubscription*>(mgr->subscribe(inst, event, handler, ud));
-        }
-    );
-}
-
-void PLUGINXX_CALL xx_cunsubscribe(PluginxxSubscription* sub) {
-    agentxx::plugin::guardVtableCallVoid([&]() {
-        if (!sub) {
-            return;
-        }
-        auto impl = reinterpret_cast<ClientSubscriptionImpl*>(sub);
-        // 持有管理器强引用：ioCallSyncVoid 投递期间管理器必须存活。
-        auto mgr = impl->inst ? impl->inst->manager.lock() : nullptr;
-        if (mgr) {
-            ioCallSyncVoid(mgr.get(), [mgr, impl]() {
-                mgr->unsubscribe(reinterpret_cast<PluginxxSubscription*>(impl));
-            });
-        }
-        impl->inst = nullptr;
-        impl->sub.reset();
-    });
-}
-
 // ---- 会话上下文 ----
 
 int32_t PLUGINXX_CALL xx_cget_client_state(const PluginxxHost* host, PluginxxString* out) {
@@ -2426,13 +2237,6 @@ static const AgentxxClientUiIface* clientUiIface() {
 
 // ---- 其余标准接口表 (进程级静态只读; 经 query_interface 分发) ----
 
-const AgentxxClientEventsIface g_clientIfaceEvents = {
-    /* version */ AGENTXX_IFACE_CLIENT_EVENTS_VERSION,
-    /* struct_size */ sizeof(AgentxxClientEventsIface),
-    /* subscribe */ xx_csubscribe,
-    /* unsubscribe */ xx_cunsubscribe,
-};
-
 const AgentxxClientSessionIface g_clientIfaceSession = {
     /* version */ AGENTXX_IFACE_CLIENT_SESSION_VERSION,
     /* struct_size */ sizeof(AgentxxClientSessionIface),
@@ -2457,19 +2261,6 @@ const AgentxxClientSelfIface g_clientIfaceSelf = {
     /* set_language */ xx_cset_language,
 };
 
-const AgentxxClientJsonIface g_clientIfaceJson = {
-    /* version */ AGENTXX_IFACE_CLIENT_JSON_VERSION,
-    /* struct_size */ sizeof(AgentxxClientJsonIface),
-    /* json_get_string */ xx_cjson_get_string,
-    /* json_escape */ xx_cjson_escape,
-};
-
-const AgentxxClientLogIface g_clientIfaceLog = {
-    /* version */ AGENTXX_IFACE_CLIENT_LOG_VERSION,
-    /* struct_size */ sizeof(AgentxxClientLogIface),
-    /* log */ xx_clog,
-};
-
 const AgentxxClientTimerIface g_clientIfaceTimer = {
     /* version */ AGENTXX_IFACE_CLIENT_TIMER_VERSION,
     /* struct_size */ sizeof(AgentxxClientTimerIface),
@@ -2486,17 +2277,6 @@ const AgentxxClientKeybindIface g_clientIfaceKeybind = {
     /* list_keybinds */ xx_clist_keybinds,
 };
 
-/// 协程驱动接口表 (与 agent 侧同 IID; client 插件用同一套 kit 桥接)
-/// - 三个入口整体复用插件框架的通用表实现 (见文件上方"协程驱动"说明)
-const PluginxxCoroutineRuntimeIface g_clientIfaceCoroutineRuntime = {
-    /* version */ PLUGINXX_IFACE_COROUTINE_RUNTIME_VERSION,
-    /* struct_size */ sizeof(PluginxxCoroutineRuntimeIface),
-    /* request_driver */ &ClientGenericEntries::requestDriverEntry,
-    /* cancel_driver */ &ClientGenericEntries::cancelDriverEntry,
-    /* is_io_thread */ &ClientGenericEntries::isIoThreadEntry,
-};
-
-/// 网络接口表 (`<应用名>.net`; 与 agent 侧同一个 `PluginNetService`)
 /// 网络接口表 (`<应用名>.net`; 与 agent 侧同一个 `PluginNetService`)
 ///
 /// 三个入口与 agent 侧同形: 网络服务自有线程 (内部有界等待), 所以同步 `call`
@@ -3688,53 +3468,6 @@ void ClientPluginManager::postKeybindInvocation(std::string keys) {
     });
 }
 
-PluginxxSubscription* ClientPluginManager::subscribe(
-    ClientPluginInstance* inst,
-    int32_t               event,
-    void(PLUGINXX_CALL* handler)(const PluginxxStringView*, void*),
-    void* ud
-) {
-    if (!inst || !handler) {
-        return nullptr;
-    }
-    if (!acceptsRegistration(inst)) {
-        XX_LOGW("[client_plugin] `{}` subscribe rejected: closing or disabled", inst->name);
-        return nullptr;
-    }
-    auto sub   = std::make_shared<ClientSubscriptionImpl>();
-    sub->inst  = inst;
-    auto s     = std::make_shared<ClientPluginInstance::Subscription>();
-    s->event   = event;
-    s->handler = handler;
-    s->ud      = ud;
-    s->alive   = true;
-    inst->clientSubscriptions.push_back(s);
-    sub->sub = s; // 强引用: 订阅对象从 vector 摘除后仍被句柄保活 (unload 回调内退订安全)
-    inst->subHandles.push_back(sub);
-    return reinterpret_cast<PluginxxSubscription*>(sub.get());
-}
-
-void ClientPluginManager::unsubscribe(PluginxxSubscription* sub) {
-    auto impl = reinterpret_cast<ClientSubscriptionImpl*>(sub);
-    if (!impl || !impl->inst || !impl->sub) {
-        return;
-    }
-    impl->sub->alive = false;
-    auto& subs       = impl->inst->clientSubscriptions;
-    subs.erase(
-        std::remove_if(
-            subs.begin(),
-            subs.end(),
-            [&](const std::shared_ptr<ClientPluginInstance::Subscription>& s) {
-                return s == impl->sub;
-            }
-        ),
-        subs.end()
-    );
-    impl->inst = nullptr;
-    impl->sub.reset();
-}
-
 std::string ClientPluginManager::getOwnInfoJson(ClientPluginInstance* inst) {
     if (!inst) {
         return "{}";
@@ -4249,7 +3982,7 @@ void ClientPluginManager::reportRegionSize(const std::string& id, int width, int
     const std::string text = payload.dump();
     auto              self = shared_from_this();
     asio::post(executor, [self, text]() {
-        self->dispatchEvent(AGENTXX_CLIENT_EVT_UI_LAYOUT, text);
+        self->publishClientChannel(broadcasts::ClientUiLayout, text);
     });
 }
 

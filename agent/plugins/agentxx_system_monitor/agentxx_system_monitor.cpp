@@ -539,29 +539,20 @@ static int32_t sysMonClientSetup(SysMonClientCtx& ctx) {
     auto propsSv = PluginStringView::fromCstr(R"_({"title":"System"})_");
     ctx.section  = ctx.iface.ui->register_info_section(ctx.host, &idSv, &propsSv);
 
-    if (ctx.iface.events && ctx.iface.events->subscribe) {
-        ctx.iface.events->subscribe(
+    if (ctx.iface.broadcasts && ctx.iface.broadcasts->subscribe_broadcast) {
+        agentxx::plugin::subscribePluginBroadcast(
             ctx.host,
-            AGENTXX_CLIENT_EVT_PLUGIN_DATA,
+            ctx.iface.broadcasts,
+            nullptr,
+            "plugin.agentxx_system_monitor.usage",
             [](const PluginxxStringView* payload_json, void* ud) {
                 auto* ctx = static_cast<SysMonClientCtx*>(ud);
                 if (!ctx || PluginStringView::empty(payload_json)) {
                     return;
                 }
-                try {
-                    auto j = utilxx_base::Json::parse(
-                        std::string_view(payload_json->data, payload_json->size)
-                    );
-                    // 只认本插件那一族主题 (`plugin.<插件名>.<事件>`)
-                    if (j.value("topic", std::string{}) != "plugin.agentxx_system_monitor.usage") {
-                        return;
-                    }
-                    if (j.contains("data") && j["data"].is_string()) {
-                        ctx->last_usage_json = j["data"].get<std::string>();
-                        refreshUsageDisplay(*ctx);
-                    }
-                } catch (...) {
-                }
+                // 频道值就是用量 JSON (主程序按原文转发)
+                ctx->last_usage_json.assign(payload_json->data, payload_json->size);
+                refreshUsageDisplay(*ctx);
             },
             &ctx
         );

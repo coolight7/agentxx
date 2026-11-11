@@ -8,7 +8,7 @@
 ///     2. 侧边栏面板 `test_client_start_fail.panel` (+ update 自检)
 ///     3. Info 栏段落 `test_client_start_fail.info` (+ update 自检)
 ///     4. 斜杠命令 `test_client_start_fail_cmd`
-///     5. 事件订阅 `AGENTXX_CLIENT_EVT_READY`
+///     5. 事件订阅 (`agentxx.client.ready` 频道)
 ///   句柄自检保证"走到最后一步"意味着前面的注册真实生效, 主程序回滚必须
 ///   全部撤销; 测试随后断言无任何残留。
 /// - 已设置该环境变量: start 直接成功返回 (供第二次加载验证回滚后同名
@@ -134,13 +134,15 @@ bool registerAll(const PluginxxHost* host, ProbeCtx* ctx) {
         return false;
     }
 
-    const auto* events
-        = static_cast<const AgentxxClientEventsIface*>(queryIface(host, AGENTXX_IFACE_CLIENT_EVENTS)
+    const auto* broadcasts
+        = static_cast<const PluginxxBroadcastsIface*>(queryIface(host, PLUGINXX_IFACE_BROADCASTS)
         );
-    if (!events || !events->subscribe) {
+    if (!broadcasts || !broadcasts->subscribe_broadcast) {
         return false;
     }
-    if (!events->subscribe(host, AGENTXX_CLIENT_EVT_READY, &onReadyEvent, ctx)) {
+    const auto readyId = sv("agentxx.client.ready");
+    if (!broadcasts->subscribe_broadcast(host, nullptr, &readyId, &onReadyEvent, ctx, nullptr, nullptr)
+    ) {
         return false;
     }
     return true;

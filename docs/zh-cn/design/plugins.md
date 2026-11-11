@@ -27,7 +27,7 @@ Agentxx 插件系统采用 **纯 C ABI + COM 风格接口表查询**：
   核心 vtable (冻结) ── alloc / free / query_interface (IID → 接口表)
                        │
          ┌─────────────┼─────────────┬──────────────┬─────────────┐
-         │ tools       │ session     │ broadcasts   │ scheduler   │  ...20 张 agent + 9 张 client
+         │ tools       │ session     │ broadcasts   │ scheduler   │  ...20 张 agent + 17 张 client
          │ register/   │ 会话上下文  │ publish/     │ sleep/      │  capabilities/
          │ call_tool   │ 与取消      │ subscribe    │ offload     │  plugins/
          └─────────────┘             └──────────────┘             │  config/model/cancel/...
@@ -610,17 +610,40 @@ tool_call 中的前后调用形成顺序屏障。并发只发生在同一条 ass
 
 ## 9. Client 侧接口表一览
 
+client 侧共 17 张表: 11 张**通用表** (由插件框架实现, 与 agent 侧同一套: log / json /
+config / plugins / broadcasts / capabilities / scheduler / coroutine_runtime / tasks /
+cancel) + 6 张自有表 (`agentxx.client.*`), 另有一张 `agentxx.net` (网络, 两侧都提供,
+不计入上面数字)。
+
 | IID | 版本 | 能力 |
 |-----|------|------|
 | `agentxx.client.ui` | 1 | `register_status_item/update/unregister`, `register_panel/update/unregister`, `register_info_section/update/unregister`, `register_command/unregister`, `show_toast`, `update_tool_decor(tool_call_id, decor_json)`, `register_tool_renderer(spec)/unregister_tool_renderer(tool_name)`, `bind_action_handler/unbind_action_handler`, `open_overlay/close_overlay` |
-| `agentxx.client.events` | 1 | `subscribe/unsubscribe` (事件见 `AgentxxClientEvent`: READY/CONN_STATE/USER_INPUT/DELTA/TURN_END/SESSION_SWITCH/PLUGIN_DATA) |
 | `agentxx.client.session` | 1 | `get_client_state` (快照 JSON), `send_user_input`, `request_cancel` |
 | `agentxx.client.wire` | 1 | `send_plugin_data(topic, json)` → 服务端原样发到 agent 总线的同一个主题 (topic 必须是全名 `agentxx.client.plugin.<名字>.<事件>`, 不限定插件名) |
 | `agentxx.client.self` | 1 | `get_own_info/get_plugin_args/get_plugin_config_path` (后者返回 yaml `config` 归一化绝对路径) |
-| `agentxx.client.json` | 1 | `json_get_string/json_escape` |
-| `agentxx.client.log` | 1 | `log(level, msg)` |
 | `agentxx.client.timer` | 1 | 一次性/周期定时器与区域可见性查询 (暂停策略见 §9.5) |
 | `agentxx.client.keybind` | 1 | 全局快捷键注册/注销/列表 (键位规范与优先级见 §9.6) |
+
+**客户端事件走广播频道, 不再有事件表** (原来的 `agentxx.client.events` /
+`agentxx.client.json` / `agentxx.client.log` 已删除, 后两者改用通用表
+`pluginxx.json` / `pluginxx.log`)。频道由主程序启动时声明, 插件订阅即可
+(不需要先 `declare_broadcast`), 完整清单见
+`agentxx/plugin/api/agentxx_broadcast_ids.h`:
+
+| 频道 | cache | 载荷 |
+|------|-------|------|
+| `agentxx.client.ready` | latest | `{"interfaces":[...],"sessionId":"…"}` |
+| `agentxx.client.connection_state` | latest | `{"connState","startupProgress"}` |
+| `agentxx.client.session_switch` | latest | `{"sessionId"}` |
+| `agentxx.client.ui_layout` | latest | `{"regions":[{"id","w","h"}]}` |
+| `agentxx.client.user_input` | none | `{"sessionId","text"}` |
+| `agentxx.client.delta` | none | 流式增量 (同 wire delta 的 JSON) |
+| `agentxx.client.turn_end` | none | `{"sessionId","hasError","interrupted",…}` |
+| `agentxx.client.plugin.<插件名>.<事件>` | none | 跨端插件数据 (上行/下行同一个名字, 两端都能发) |
+
+跨端数据的方向: 上行由插件经 `agentxx.client.wire` 的 `send_plugin_data` 发出 (主程序
+原样交给服务端); 下行由服务端把 `WirePluginData` 交给 client 端点, 主程序把 `data` 原样
+发布到同名的 `plugin.<插件名>.<事件>` 频道 —— 对端插件订阅那个频道就能收到。
 
 **版本约定**: 表自身 `version` 恒为 1 (表结构未变)。新增展示能力优先走**数据层**
 (新组件 kind / 新字段) 或**新增接口表**; 确实要往 `agentxx.client.ui` 表里加成员时,
@@ -788,10 +811,10 @@ tool_call 中的前后调用形成顺序屏障。并发只发生在同一条 ass
 面板与 Info 段落由主程序布局, 插件默认拿不到可用宽度。主程序 (声明能力名
 `agentxx.client.layout`) 提供两件套:
 
-- **事件 `AGENTXX_CLIENT_EVT_UI_LAYOUT`**: 载荷
+- **频道 `agentxx.client.ui_layout`**: 载荷
   `{"regions":[{"id":"<面板/段落 id>","w":60,"h":20}]}`
-  - 首次布局完成、终端尺寸变化、侧边栏宽度拖拽、面板激活/打开时投递
-  - 仅在数值变化时投递 (每帧上报会自然合并), 投递线程仍是 client io 线程
+  - 首次布局完成、终端尺寸变化、侧边栏宽度拖拽、面板激活/打开时发布
+  - 仅在数值变化时发布 (每帧上报会自然合并), 发布到 client io 线程执行
 - **快照查询**: `get_client_state().regions` 与 SDK
   `ClientPluginBase::regionSize(regionId)` (返回 `{width, height}`; 未上报为 0)
 
@@ -1205,14 +1228,15 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 插件经内置 `agentxx_jav
 
 数据只有一条来源：agent 侧把运行态整理成 `PanelSnapshot`（`chatbot_panel.h`，结构版本
 `kPanelSnapshotVersion = 1`），按主题 `plugin.agentxx_chatbot.panel` 发布；主程序把它转成
-`WirePluginData{topic,data}` 下发（`data` 是快照 JSON 文本），client 侧在
-`AGENTXX_CLIENT_EVT_PLUGIN_DATA` 里认领 `topic == "plugin.agentxx_chatbot.panel"` 的那条。
+`WirePluginData{topic,data}` 下发（`data` 是快照 JSON 文本），client 侧订阅同名频道
+`plugin.agentxx_chatbot.panel`（主程序把 `data` 原样发布上去）就能拿到快照。
 解析失败或结构版本更高时只记一条警告（含字节数与前 120 字），面板保留上一次的内容。
 
 - **推送节拍**：agent 侧 `kPanelTickMs = 120` 的定时器。只有存在正在跑一轮的会话时才持续推
   （加载帧要逐帧走），否则由 `engine.setChangeHook` 的变更钩子（收消息 / 平台状态 / 通道就绪 /
   轮起止 / 模式切换 / 发消息都会触发）推一份就停；
-- **晚接入兜底**：client 侧在 `EVT_READY` 与 `EVT_CONN_STATE`（`connState == "connected"`）时
+- **晚接入兜底**：client 侧在频道 `agentxx.client.ready` 与
+  `agentxx.client.connection_state`（`connState == "connected"`）时
   各发一次 `send_plugin_data("agentxx.client.plugin.agentxx_chatbot.refresh")`。上行主题
   由 client 侧写全（client 插件自己那一族），服务端原样发布到 agent 总线，所以 agent 侧订阅的
   就是同一个全名；另订阅主程序约定主题 `agentxx.agent.host.client_attached`，有客户端接上
@@ -1224,7 +1248,7 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 插件经内置 `agentxx_jav
   再调 `coroutineRuntime->request_driver`（任意线程可调、不阻塞），主程序在它自己的 IO 线程上
   回调 `onPanelDrive()`，那里 `publish` 是就地执行；`stop` 时 `cancel_driver` 取消在途的票；
 - 清单里 client 侧声明的可选能力用真实能力名 `agentxx.client.panel`（不能写接口表名
-  `agentxx.client.events`），否则接口协商会判定缺失。
+  `agentxx.client.ui`），否则接口协商会判定缺失。
 
 面板文案与组件是纯逻辑（`chatbot_panel.cpp` 的格式化函数 + `chatbot_panel_ui.cpp` 的
 `panelItemsOf`），不引用主程序头，`chatbot_core` 模块直测；真实插件全流程（面板注册、

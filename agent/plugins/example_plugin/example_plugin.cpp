@@ -13,6 +13,7 @@
 /// 4. 能力: 声明 capability "example.demo"
 /// 5. 卸载: destroy 释放实例
 /// 6. client 入口 (双端插件, agentxx_plugin_client_create)
+#include "agentxx/plugin/api/agentxx_broadcast_ids.h"
 #include "agentxx/plugin/api/agentxx_point_ids.h"
 #include "agentxx/plugin/api/client_plugin_api.h"
 #include "agentxx/plugin/api/plugin_api.h"
@@ -34,6 +35,9 @@
 /// =====================================================================
 
 struct AgentCtx : public agentxx::plugin::PluginBase {};
+
+/// client 侧示例面板监听的频道 (`plugin.<插件名>.<事件>`): 对端与本端都可发布
+constexpr const char* kExampleProgressTopic = "plugin.example_plugin.progress";
 
 struct ClientCtx : public agentxx::plugin::ClientPluginBase {
     const AgentxxClientUiIface* ui           = nullptr;
@@ -150,7 +154,7 @@ extern "C" PLUGINXX_EXPORT int
             raw = ctx.get();
 
             // create 只做构造与接口查询: 注册事务由 start 执行
-            if (!ctx->iface.tools || !ctx->iface.tools->register_tool || !ctx->iface.events) {
+            if (!ctx->iface.tools || !ctx->iface.tools->register_tool || !ctx->iface.broadcasts) {
                 return -1;
             }
             *plugin_ctx = ctx.release();
@@ -392,12 +396,23 @@ static int exampleAgentSetup(AgentCtx& ctx, const agentxx::plugin::ScopeRef& ref
     //    自己的频道要先声明再订阅 (声明是显式动作; 主程序频道由主程序声明)
     const char* demoChannel = "plugin.example_plugin.demo";
     agentxx::plugin::declarePluginBroadcast(host, ctx.iface.broadcasts, demoChannel);
-    auto topic1 = agentxx::plugin::PluginStringView::fromCstr(demoChannel);
-    ctx.iface.events->subscribe(host, ref.ptr(), &topic1, on_demo_event, &ctx);
+    agentxx::plugin::subscribePluginBroadcast(
+        host,
+        ctx.iface.broadcasts,
+        ref.ptr(),
+        demoChannel,
+        on_demo_event,
+        &ctx
+    );
     // client 插件上行: client 侧自己的族 `agentxx.client.plugin.<插件名>.<事件>`
-    auto topic2
-        = agentxx::plugin::PluginStringView::fromCstr("agentxx.client.plugin.example_plugin.hello");
-    ctx.iface.events->subscribe(host, ref.ptr(), &topic2, on_client_hello, &ctx);
+    agentxx::plugin::subscribePluginBroadcast(
+        host,
+        ctx.iface.broadcasts,
+        ref.ptr(),
+        "agentxx.client.plugin.example_plugin.hello",
+        on_client_hello,
+        &ctx
+    );
 
     // 4. 能力 (声明 + 实现行)
     if (ctx.iface.capabilities && ctx.iface.capabilities->register_capability) {
@@ -686,26 +701,20 @@ static void PLUGINXX_CALL on_client_turn_end(const PluginxxStringView* payload_j
     });
 }
 
+/// 示例频道 (`plugin.example_plugin.progress`): 对端/本端发出的进度值
 static void PLUGINXX_CALL on_client_plugin_data(const PluginxxStringView* payload_json, void* ud) {
     auto* ctx = static_cast<ClientCtx*>(ud);
     if (!ctx || !ctx->host || !ctx->panel) {
         return;
     }
-    if (!ctx->iface.json || !ctx->iface.json->json_get_string) {
-        return;
-    }
-    PluginxxString topic{nullptr, 0};
-    PluginxxString data{nullptr, 0};
-    auto           kTopic = agentxx::plugin::PluginStringView::fromCstr("topic");
-    auto           kData  = agentxx::plugin::PluginStringView::fromCstr("data");
-    if (payload_json) {
-        ctx->iface.json->json_get_string(ctx->host, payload_json, &kTopic, &topic);
-        ctx->iface.json->json_get_string(ctx->host, payload_json, &kData, &data);
-    }
     agentxx::plugin::guardCallVoid(clientGuardLogger(ctx), [&] {
-        std::string line = topic.data ? std::string{topic.data} : std::string{"?"};
-        if (data.data && data.size > 0) {
-            line = fmt::format("{}: {}", line, data.data);
+        std::string line{kExampleProgressTopic};
+        if (payload_json && payload_json->data && payload_json->size > 0) {
+            line = fmt::format(
+                "{}: {}",
+                kExampleProgressTopic,
+                std::string_view{payload_json->data, static_cast<size_t>(payload_json->size)}
+            );
         }
         // 组件项用描述层与 kit 组装 (不必手写 JSON 字符串与转义)
         std::vector<pluginxx::ui::Item> items;
@@ -723,12 +732,6 @@ static void PLUGINXX_CALL on_client_plugin_data(const PluginxxStringView* payloa
             ctx->ui->update_panel(ctx->host, ctx->panel, &jsonSv);
         }
     });
-    if (topic.data) {
-        agentxx::plugin::PluginString::free(ctx->host, &topic);
-    }
-    if (data.data) {
-        agentxx::plugin::PluginString::free(ctx->host, &data);
-    }
 }
 
 /// client 侧生命周期事务 (与 agent 侧对称):
@@ -773,17 +776,37 @@ static int exampleClientSetup(ClientCtx& ctx) {
         return -1;
     }
 
-    if (!ctx.iface.events || !ctx.iface.events->subscribe) {
+    if (!ctx.iface.broadcasts || !ctx.iface.broadcasts->subscribe_broadcast) {
         return -1;
     }
-    if (!ctx.iface.events->subscribe(host, AGENTXX_CLIENT_EVT_READY, on_client_ready, &ctx)) {
+    if (!agentxx::plugin::subscribePluginBroadcast(
+            host,
+            ctx.iface.broadcasts,
+            nullptr,
+            agentxx::plugin::broadcasts::ClientReady,
+            on_client_ready,
+            &ctx
+        )) {
         return -1;
     }
-    if (!ctx.iface.events->subscribe(host, AGENTXX_CLIENT_EVT_TURN_END, on_client_turn_end, &ctx)) {
+    if (!agentxx::plugin::subscribePluginBroadcast(
+            host,
+            ctx.iface.broadcasts,
+            nullptr,
+            agentxx::plugin::broadcasts::ClientTurnEnd,
+            on_client_turn_end,
+            &ctx
+        )) {
         return -1;
     }
-    if (!ctx.iface.events
-             ->subscribe(host, AGENTXX_CLIENT_EVT_PLUGIN_DATA, on_client_plugin_data, &ctx)) {
+    if (!agentxx::plugin::subscribePluginBroadcast(
+            host,
+            ctx.iface.broadcasts,
+            nullptr,
+            kExampleProgressTopic,
+            on_client_plugin_data,
+            &ctx
+        )) {
         return -1;
     }
 
@@ -852,7 +875,7 @@ extern "C" PLUGINXX_EXPORT int
             raw     = ctx.get();
 
             // create 只做构造与接口查询: UI 注册事务由 start 执行
-            if (!ctx->iface.events || !ctx->iface.events->subscribe) {
+            if (!ctx->iface.broadcasts || !ctx->iface.broadcasts->subscribe_broadcast) {
                 return -1;
             }
             *plugin_ctx = ctx.release();
