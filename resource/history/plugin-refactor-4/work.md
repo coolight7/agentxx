@@ -12,8 +12,8 @@
 | 步骤 1 构建与接口表骨架 | 已完成 |
 | 步骤 2 agent 侧（DomainServices + 广播 + 中枢） | 已完成（广播通道打通，事件中枢对接完成，`plugins` 模块全绿） |
 | 步骤 3 功能埋点（替换钩子与功能点） | 进行中（声明表 + 分发入口 + `plugin_point` 模块已完成；调用点与三张旧表待改） |
-| 步骤 4 网络（`agentxx.net` + 4 个插件迁移） | 待开始 |
-| 步骤 5 client 侧（广播 + net） | 待开始 |
+| 步骤 4 网络（`agentxx.net` + 4 个插件迁移） | 进行中（agent/client 双侧表 + SDK 便捷层完成；2/4 插件已迁） |
+| 步骤 5 client 侧（广播 + net） | 进行中（net 已提供；广播与 DomainServices 待做） |
 | 步骤 6 插件全量迁移 + JS 引擎 | 进行中（能力表 APIs 已迁：JS 引擎 + 3 个示例插件） |
 | 步骤 7 测试、文档、收尾 | 待开始 |
 
@@ -190,11 +190,53 @@
     `FAILED` + 错误 JSON 上报)、未完成请求按取消结算且再 `cancel` 返回 `ErrNotFound`
   - 验证: `boundaries` 19 / `plugin_runtime` 733 / `plugins` 610 / `plugin_cleanup` 99 /
     `plugin_point` 63 / `plugin_net` 35 / `plugin_host_mount` 148 全绿 (共 1707 条)
-- 待完成（下一轮）:
-  - client 侧同款 (`ClientPluginManager` 一个 `PluginNetService` + `agentxx.client.*` 事件)
-  - 4 个网络插件迁移: `agentxx_websearch`、`agentxx_rag_search`、`agentxx_chatbot`
-    (HTTP + QQ 网关 WS)、`agentxx_text_selection_monitor` (CDP)
-  - `plugin_kit.h` 的 `netCall/netFetch/netDownload/netWsOpen/...` 便捷层 (高频三个给 `co_await`)
+- **已完成: 插件侧 SDK 网络便捷层** (`agent/lib/include/agentxx/plugin/api/plugin_kit.h`)
+  - `NetResult` (`accepted()` = 表入口成功, `ok()` = 业务成功, `str/status/error`) —— 两层状态
+    分开, 与 `<应用名>.net` 自己的约定一致 (传输失败是 `code=OK` + `ok:false`)
+  - 同步: `netCall(host, net, op, args)` / `netWsConnect` / `netWsSend` / `netWsClose` /
+    `netHttpServe` / `netHttpRespond` / `netInfo` / `netEventTopic`
+  - 异步 (`co_await`): `netCallAsync(ctx, op, args)` / `netFetch(ctx, url, options)` /
+    `netDownload(ctx, url, fileName)`; `NetAsyncAwaiter` 与 `invoke_cap` 同一套挂起协议
+    (完成回调交 `pluginxx::detail::resumePluginCoroutine`, 协程取消时撤请求)
+  - 阻塞: `netCallBlocking(...)` / `netFetchBlocking(...)` —— 给"本身就是阻塞实现"的工具体用
+    (跑在主程序工作线程), **在主程序 io 线程调用直接拒绝** `PLUGINXX_NET_ERR_STATE`:
+    完成回调是投递到 io 线程的, 在 io 线程上等会互锁
+  - `NetHttpOptions` 拼参 (method/body/json/headers/format/timeoutMs/maxBytes/
+    followRedirects/tlsVerify; 字段名与 `utilxx::NetHub` 的 op 参数一一对应, TLS 开关库里叫
+    `tlsVerify` 而不是计划里写的 `sslVerify`)
+- **已完成: 2 个网络插件迁移**
+  - `agentxx_rag_search`: embedding 客户端改 `netFetchBlocking` (`http.fetch` + `json` body);
+    插件不再链接 `cxx_utilxx_static` / asio / html2md, 只留 `cxx_utilxx_base_static`
+    - 碰到一个真问题: 索引在 mount 事务里建, 而 mount 跑在主程序 **io 线程** —— 经网络服务
+      等结果会是互锁。改成**首次检索时建索引** (`RagAgentState::ensureIndex`, 幂等 + 工作线程),
+      mount 只记路径; 失败原因在首次调用时以工具错误返回
+    - 测试用的 `makeHttpEmbedder` 签名变化 (host/net/scheduler 进来); `rag_search` 模块 85 条全绿
+  - `agentxx_websearch`: 从 `polled_tool` + `HttpClient` 协程改为 `blocking_tool` + 网络表
+    (`websearch_impl.h` 只剩纯逻辑, 网络经 `HttpFn` 回调注入):
+    - 三个执行体改同步 (`webFetchExecute` / `webSearchExecute` / `modelWebSearchExecute`),
+      URL 编码、header 解析、超时映射、错误文案逐项保留 (header 解析产出 JSON 对象文本)
+    - markdown 形态交给网络服务的 `format:"markdown"` (插件不再需要 cmark/html2md)
+    - 依赖降为 `cxx_utilxx_base_static`; 测试注入本地实现 (`localHttpExecute`, 用本地 HttpServer
+      + 局部 io_context), `web_search` 模块 18 条全绿
+  - 与计划偏差: 计划写的是 "`co_await netFetch`" —— 实际上 `polled_tool` 的业务体是
+    `asio::awaitable` (promise 不是 kit 的), 不能用 kit 的 awaiter; 改 `blocking_tool` 后
+    每次请求占一个工作线程 (与 `agentxx_rag_search`、`agentxx_execute_command` 同一模式)
+- **已完成: client 侧 `<应用名>.net` 表** (`client_plugin_manager_net.cpp`, 与 agent 侧同一个
+  `PluginNetService`)
+  - `g_clientIfaceNet` + 三个入口 (`xx_cnet_call` / `_call_async` / `_cancel`), 属主 id =
+    client 插件实例名; `detachDomainRegistrations` → `netShutdownPlugin`, 析构 → `netShutdownAll`
+  - **客户端还没有广播表** (`agentxx.client.events` 是 8 个固定事件的旧面), 所以
+    `plugin.<插件 id>.net` 频道当前不存在: 网络事件只记调试日志; `http.fetch` / `download` /
+    `serve` 这类按请求/按服务的工作正常。client 广播改造时同一个 hook 点接上
+  - `kInterfaceTableCount` 不变 (净表与 `coroutine_runtime` 同属通用表, 不计入 7+2)
+  - 新增 `client_plugins` 用例: `queryInterface<PluginxxNetIface>` 非空 + `net.info` 成功 +
+    未知 op 被拒 + `cancel(999999)` 返回 `NOT_FOUND` (754 条全绿)
+- 验证: `boundaries` / `plugins` 610 / `plugin_runtime` 733 / `plugin_host_mount` 148 /
+  `plugin_cleanup` 99 / `plugin_point` 63 / `plugin_net` 35 / `plugin_multi_mount` 47 /
+  `client_plugins` 754 = 1895+ 条全绿; `rag_search` 85 / `web_search` 18 全绿
+- 待完成 (下一轮):
+  - `agentxx_chatbot` (HTTP + QQ 网关 WS) 与 `agentxx_text_selection_monitor` (CDP WS) 迁移
+  - 客户端广播表接上后, 把 `ClientPluginManager::publishNetEvent` 改成 declare + publish
 
 ### 步骤 5：client 侧
 
