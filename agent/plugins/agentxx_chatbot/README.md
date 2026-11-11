@@ -17,6 +17,10 @@ QQ 群/私聊 ──► IPlatform (qq) ──► ChatbotEngine ──► 会话�
                     └── 出站队列 ◄──────┴── chatbot_send_message ◄┘
 ```
 
+网络（HTTP 接口 + 网关 WebSocket）不自己建连接：一律经主程序的网络表（`agentxx.net`，
+插件侧入口见 `chatbot_net.h`），连接、TLS、超时与取消都由主程序统一管，插件只跑协议状态机
+（token 缓存 / Hello / Identify / 心跳 / Resume / 重连退避）。
+
 三条规则先记住：
 
 1. **每个人设 = 一个根 agent**。插件在自己的 `start` 里对人设调 `mount_root`，提示词、模型、

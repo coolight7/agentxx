@@ -12,7 +12,7 @@
 | 步骤 1 构建与接口表骨架 | 已完成 |
 | 步骤 2 agent 侧（DomainServices + 广播 + 中枢） | 已完成（广播通道打通，事件中枢对接完成，`plugins` 模块全绿） |
 | 步骤 3 功能埋点（替换钩子与功能点） | 进行中（声明表 + 分发入口 + `plugin_point` 模块 + 7 个通知型埋点已接到派发；旧三表与取值型埋点待改） |
-| 步骤 4 网络（`agentxx.net` + 4 个插件迁移） | 进行中（agent/client 双侧表 + SDK 便捷层完成；2/4 插件已迁） |
+| 步骤 4 网络（`agentxx.net` + 4 个插件迁移） | 已完成（agent/client 双侧表 + SDK 便捷层 + 4 个插件全迁：websearch / rag_search / text_selection_monitor / chatbot） |
 | 步骤 5 client 侧（广播 + net） | 进行中（net 已提供；广播与 DomainServices 待做） |
 | 步骤 6 插件全量迁移 + JS 引擎 | 进行中（能力表 APIs 已迁：JS 引擎 + 3 个示例插件） |
 | 步骤 7 测试、文档、收尾 | 待开始 |
@@ -253,12 +253,35 @@
   - CMakeLists 不再链 `ws2_32` / `winhttp`; `text_selection` 模块 14 条全绿
   - 验证: `grep -rn 'utilxx/http_client.h|utilxx/ws_client.h|winhttp' agent/plugins/` 只剩
     `agentxx_chatbot` 的 3 个文件
+- **已完成: `agentxx_chatbot` 迁移** (网络面最后一块)
+  - 新增 `plugins/agentxx_chatbot/chatbot_net.{h,cpp}`: 插件自己的网络入口
+    (`ChatbotNet{host, net, scheduler, broadcasts, eventTopic}` + `fetch` 协程 / `download` 阻塞 /
+    `subscribeEvents`), 插件入口把 `ctx.host` / `iface.net` / `iface.scheduler` /
+    `iface.broadcasts` 填好放进 `ChatbotCtx::net`, 平台对象只持指针; 缺网络表时 `start` 直接失败
+    (以前是静默没有网络, 现在把原因写进加载错误)
+  - HTTP: `QqApi::doRequest` 改 `co_await net_->fetch(...)` (协程在插件自己的 io 线程上),
+    请求头拼成 JSON 对象、二进制分片走 `bodyBase64`; 删掉没人用的 `getUrl`
+  - 附件下载: `QqPlatform::downloadAttachment` 改 `http.download` (主程序直接写盘, 不经 JSON),
+    再搬到 `{data_dir}/chatbot/media/<类>/`; 失败保留平台地址 (行为不变), 少了 base64 往返
+  - WS: `QqGateway` 不再持 `utilxx::WsClient`: 改成 `ws.connect` (只发起) → 等 `ws.open` 置
+    `connected_` → `ws.message` 进 `onFrame` → `ws.close` 走重连; 每条连接一个 `connId_`
+    (`qqgw-<generation>`), 事件按 id 过滤, 旧事件不会误伤新连接; 发帧 `netWsSend`,
+    关连接 `netWsClose`; Hello/Identify/心跳/Resume/退避重连逻辑一行未改
+  - `plugin.yaml` 1.1.0 → 1.2.0 (现在依赖网络表); README 补一段网络归属
+  - SDK 补充: `NetHttpOptions` 增加 `bodyBase64` / `contentType` / `responseType`;
+    `netWsConnect` 的 `subprotocols` 改成真数组 (库里要数组, 之前发的是字符串), 另加
+    `maxMessageBytes`
+  - 测试: `chatbot_media_io` 加 `TestNet` (把 `<应用名>.net` 三个入口接到本地 `utilxx::NetHub`),
+    `QqApi` 走真实网络路径跑完整上传 (54 → 60 条), 另加 `download` 用例:
+    二进制正文原样落盘 (含 NUL / 非 UTF-8)、404 与连不上都给可读原因
+  - 验证: `grep -rn 'utilxx/http_client.h|utilxx/ws_client.h' agent/plugins/` 为空;
+    `chatbot_core` 874 / `chatbot_task` 138 / `chatbot_qq` 136 / `chatbot_media` 69 /
+    `chatbot_media_io` 60 / `plugin_example_chatbot` 265 全绿
 - 待完成 (下一轮):
-  - **`agentxx_chatbot` 迁移** (最后一块网络面): HTTP (`qq_api.cpp` / `qq_platform.cpp` /
-    `chatbot_engine.cpp` 附件下载) 按 websearch 的写法改成 `netFetchBlocking` / `netDownload`;
-    QQ 网关 WS (`qq_gateway.cpp` 的 `utilxx::WsClient`) 改 `ws.connect/send/ping/close` + `ws.*` 事件,
-    Hello/Identify/心跳/Resume/退避重连状态机**留在插件** (与 text_selection 同一套同步等事件写法)
   - 客户端广播表接上后, 把 `ClientPluginManager::publishNetEvent` 改成 declare + publish
+  - QQ 网关的事件路由没有自动化测试: 需要主程序同时充当 WS 服务端与广播表 (`ws.listen` +
+    `ws.*` 事件), 测试侧要把两张表都实现出来; 状态机未改, 只换了传输, 暂以本地回环上传/
+    下载用例 + 真机配置验证为主
 
 ### 步骤 5：client 侧
 
