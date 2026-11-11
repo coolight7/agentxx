@@ -210,7 +210,7 @@
     - 碰到一个真问题: 索引在 mount 事务里建, 而 mount 跑在主程序 **io 线程** —— 经网络服务
       等结果会是互锁。改成**首次检索时建索引** (`RagAgentState::ensureIndex`, 幂等 + 工作线程),
       mount 只记路径; 失败原因在首次调用时以工具错误返回
-    - 测试用的 `makeHttpEmbedder` 签名变化 (host/net/scheduler 进来); `rag_search` 模块 85 条全绿
+  - 测试用的 `makeHttpEmbedder` 签名变化 (host/net/scheduler 进来); `rag_search` 模块 85 条全绿
   - `agentxx_websearch`: 从 `polled_tool` + `HttpClient` 协程改为 `blocking_tool` + 网络表
     (`websearch_impl.h` 只剩纯逻辑, 网络经 `HttpFn` 回调注入):
     - 三个执行体改同步 (`webFetchExecute` / `webSearchExecute` / `modelWebSearchExecute`),
@@ -234,8 +234,21 @@
 - 验证: `boundaries` / `plugins` 610 / `plugin_runtime` 733 / `plugin_host_mount` 148 /
   `plugin_cleanup` 99 / `plugin_point` 63 / `plugin_net` 35 / `plugin_multi_mount` 47 /
   `client_plugins` 754 = 1895+ 条全绿; `rag_search` 85 / `web_search` 18 全绿
+- **已完成: `agentxx_text_selection_monitor` 迁移** (CDP 路径)
+  - `text_selection_monitor.{h,cpp}` 不再知道网络: 新增 `CdpNetFns{httpGet, wsRoundTrip}`,
+    插件在 `start` 时注入; 删掉 raw winsock 握手/帧解析 (`wsConnect/wsSend/wsRecv`)、
+    WinHTTP `httpGet`、`tcpConnectWithTimeout`/`ensureWSA` 与 `#pragma comment(lib, "ws2_32/winhttp")`
+  - 插件入口实现两个动作: `cdpHttpGet` = `netFetchBlocking`; `cdpWsRoundTrip` =
+    订阅 `plugin.<插件 id>.net` → `netWsConnect` → 等 `ws.open` → `netWsSend` → 等 `ws.message`
+    → `netWsClose` → 退订 (事件回调在 io 线程写状态 + 唤醒条件变量, `alive` 标记防晚到回调)
+  - CMakeLists 不再链 `ws2_32` / `winhttp`; `text_selection` 模块 14 条全绿
+  - 验证: `grep -rn 'utilxx/http_client.h|utilxx/ws_client.h|winhttp' agent/plugins/` 只剩
+    `agentxx_chatbot` 的 3 个文件
 - 待完成 (下一轮):
-  - `agentxx_chatbot` (HTTP + QQ 网关 WS) 与 `agentxx_text_selection_monitor` (CDP WS) 迁移
+  - **`agentxx_chatbot` 迁移** (最后一块网络面): HTTP (`qq_api.cpp` / `qq_platform.cpp` /
+    `chatbot_engine.cpp` 附件下载) 按 websearch 的写法改成 `netFetchBlocking` / `netDownload`;
+    QQ 网关 WS (`qq_gateway.cpp` 的 `utilxx::WsClient`) 改 `ws.connect/send/ping/close` + `ws.*` 事件,
+    Hello/Identify/心跳/Resume/退避重连状态机**留在插件** (与 text_selection 同一套同步等事件写法)
   - 客户端广播表接上后, 把 `ClientPluginManager::publishNetEvent` 改成 declare + publish
 
 ### 步骤 5：client 侧
