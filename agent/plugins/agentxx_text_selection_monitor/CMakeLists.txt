@@ -62,10 +62,10 @@ if (_AGENTXX_ADD_AS_BUILTIN)
   )
   if (XX_IS_WIN_D)
     # text_selection_monitor: UIAutomation (uiautomationcore) / IAccessible (oleacc) /
-    # COM (ole32) / CDP WebSocket (ws2_32, winhttp) / 窗口与钩子 (user32)
+    # COM (ole32) / 窗口与钩子 (user32); CDP 经主程序 `<应用名>.net` 表, 不再需要 ws2_32 / winhttp
     # - 独立模式经下方独立分支 PRIVATE 链接; 内置模式经本收集通道并入 libagentxx
     set(AGENTXX_BUILTIN_PLUGIN_LINK_LIBS
-      "${AGENTXX_BUILTIN_PLUGIN_LINK_LIBS}" uiautomationcore oleacc ole32 user32 ws2_32 winhttp PARENT_SCOPE)
+      "${AGENTXX_BUILTIN_PLUGIN_LINK_LIBS}" uiautomationcore oleacc ole32 user32 PARENT_SCOPE)
   endif()
   set(AGENTXX_BUILTIN_PLUGIN_OBJECT_TARGETS "${AGENTXX_BUILTIN_PLUGIN_OBJECT_TARGETS}" "${_target}" PARENT_SCOPE)
   # 登记进内置插件清单 (子目录自登记: 平台不支持时本文件开头已提前 return,
@@ -120,14 +120,12 @@ target_include_directories(${PLUGIN_NAME} PRIVATE
 
 if (XX_IS_WIN_D)
   # text_selection_monitor: UIAutomation (uiautomationcore) / IAccessible (oleacc) /
-  # COM (ole32) / CDP WebSocket (ws2_32, winhttp) / 窗口与钩子 (user32)
+  # COM (ole32) / 窗口与钩子 (user32); CDP 经主程序 `<应用名>.net` 表, 不再需要 ws2_32/winhttp
   target_link_libraries(${PLUGIN_NAME} PRIVATE
     uiautomationcore
     oleacc
     ole32
     user32
-    ws2_32
-    winhttp
   )
 endif()
 # 注: Linux 分支 (当前平台支持情况中未启用) 需要的 io_uring 符号同样由

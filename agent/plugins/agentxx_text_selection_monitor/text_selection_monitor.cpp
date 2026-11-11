@@ -8,13 +8,9 @@
 #include <ole2.h>
 #include <oleacc.h>
 #include <windows.h>
-#include <winhttp.h>
 
 #undef max
 #undef min
-
-#pragma comment(lib, "ws2_32.lib")
-#pragma comment(lib, "winhttp.lib")
 
 #endif
 #include "text_selection_monitor_plugin.h"
@@ -190,7 +186,19 @@ public:
         return running_.load();
     }
 
+    /// CDP 网络动作 (插件注入; 未注入时不走 DevTools 路径)
+    void setCdpNetFns(CdpNetFns fns) {
+        std::lock_guard<std::mutex> lk(cdpFnsMutex_);
+        cdpFns_ = std::move(fns);
+    }
+
 private:
+
+    /// 取一份 CDP 动作副本 (持有锁; 回调里不要持锁调网络)
+    CdpNetFns cdpFnsCopy() {
+        std::lock_guard<std::mutex> lk(cdpFnsMutex_);
+        return cdpFns_;
+    }
 
     void workerLoop() {
         hook_ = SetWinEventHook(
@@ -705,52 +713,13 @@ private:
         return isBrowserWindow(hwnd) || isElectronAppWindow(hwnd);
     }
 
-    static bool ensureWSA() {
-        static bool initialized = false;
-        if (!initialized) {
-            WSADATA wsaData;
-            initialized = (WSAStartup(MAKEWORD(2, 2), &wsaData) == 0);
-        }
-        return initialized;
-    }
-
-    static bool tcpConnectWithTimeout(SOCKET sock, sockaddr_in& addr, int timeoutMs) {
-        u_long nonBlocking = 1;
-        ioctlsocket(sock, FIONBIO, &nonBlocking);
-
-        int result = connect(sock, reinterpret_cast<sockaddr*>(&addr), sizeof(addr));
-        if (result == SOCKET_ERROR) {
-            int err = WSAGetLastError();
-            if (err != WSAEWOULDBLOCK) {
-                u_long blocking = 0;
-                ioctlsocket(sock, FIONBIO, &blocking);
-                return false;
-            }
-
-            fd_set writeSet;
-            FD_ZERO(&writeSet);
-            FD_SET(sock, &writeSet);
-            timeval tv = {};
-            tv.tv_sec  = timeoutMs / 1000;
-            tv.tv_usec = (timeoutMs % 1000) * 1000;
-
-            result = select(0, nullptr, &writeSet, nullptr, &tv);
-            if (result <= 0) {
-                u_long blocking = 0;
-                ioctlsocket(sock, FIONBIO, &blocking);
-                return false;
-            }
-        }
-
-        u_long blocking = 0;
-        ioctlsocket(sock, FIONBIO, &blocking);
-        return true;
-    }
-
     std::mutex                            cdpCacheMutex_;
     int                                   cdpCachedPort_ = 0;
     std::chrono::steady_clock::time_point cdpCacheTime_{};
+    std::mutex                            cdpFnsMutex_;
+    CdpNetFns                             cdpFns_;
 
+    /// 找一个在跑的 CDP 端口 (`/json/version` 有响应就算命中; 结果缓存 30 秒)
     int findCDPPort() {
         constexpr auto kCacheTtl = std::chrono::seconds(30);
 
@@ -767,73 +736,23 @@ private:
             }
         }
 
+        const auto fns = cdpFnsCopy();
+        if (!fns.ready()) {
+            return 0;
+        }
+
         for (int port : {9222, 9223, 9224, 9225, 9226, 9227, 9228, 9229, 9230}) {
-            SOCKET sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-            if (sock == INVALID_SOCKET) {
+            const std::string url
+                = fmt::format("http://127.0.0.1:{}/json/version", port);
+            if (fns.httpGet(url, 1500).empty()) {
                 continue;
             }
-
-            sockaddr_in addr = {};
-            addr.sin_family  = AF_INET;
-            addr.sin_port    = htons(static_cast<u_short>(port));
-            inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
-
-            if (tcpConnectWithTimeout(sock, addr, 200)) {
-                closesocket(sock);
-
-                HINTERNET hSession = WinHttpOpen(
-                    L"AgentXX/CDP",
-                    WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
-                    WINHTTP_NO_PROXY_NAME,
-                    WINHTTP_NO_PROXY_BYPASS,
-                    0
-                );
-                if (!hSession) {
-                    continue;
-                }
-
-                std::wstring server = L"127.0.0.1";
-                HINTERNET    hConnect
-                    = WinHttpConnect(hSession, server.c_str(), static_cast<INTERNET_PORT>(port), 0);
-                if (hConnect) {
-                    HINTERNET hRequest = WinHttpOpenRequest(
-                        hConnect,
-                        L"GET",
-                        L"/json/version",
-                        nullptr,
-                        WINHTTP_NO_REFERER,
-                        WINHTTP_DEFAULT_ACCEPT_TYPES,
-                        0
-                    );
-                    if (hRequest) {
-                        if (WinHttpSendRequest(
-                                hRequest,
-                                WINHTTP_NO_ADDITIONAL_HEADERS,
-                                0,
-                                WINHTTP_NO_REQUEST_DATA,
-                                0,
-                                0,
-                                0
-                            )
-                            && WinHttpReceiveResponse(hRequest, nullptr)) {
-                            {
-                                std::lock_guard<std::mutex> lk(cdpCacheMutex_);
-                                cdpCachedPort_ = port;
-                                cdpCacheTime_  = std::chrono::steady_clock::now();
-                            }
-                            WinHttpCloseHandle(hRequest);
-                            WinHttpCloseHandle(hConnect);
-                            WinHttpCloseHandle(hSession);
-                            return port;
-                        }
-                        WinHttpCloseHandle(hRequest);
-                    }
-                    WinHttpCloseHandle(hConnect);
-                }
-                WinHttpCloseHandle(hSession);
-            } else {
-                closesocket(sock);
+            {
+                std::lock_guard<std::mutex> lk(cdpCacheMutex_);
+                cdpCachedPort_ = port;
+                cdpCacheTime_  = std::chrono::steady_clock::now();
             }
+            return port;
         }
 
         {
@@ -842,212 +761,6 @@ private:
             cdpCacheTime_  = std::chrono::steady_clock::now();
         }
         return 0;
-    }
-
-    static std::string httpGet(int port, const std::wstring& path) {
-        HINTERNET hSession = WinHttpOpen(
-            L"AgentXX/CDP",
-            WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
-            WINHTTP_NO_PROXY_NAME,
-            WINHTTP_NO_PROXY_BYPASS,
-            0
-        );
-        if (!hSession) {
-            return {};
-        }
-
-        HINTERNET hConnect
-            = WinHttpConnect(hSession, L"127.0.0.1", static_cast<INTERNET_PORT>(port), 0);
-        if (!hConnect) {
-            WinHttpCloseHandle(hSession);
-            return {};
-        }
-
-        HINTERNET hRequest = WinHttpOpenRequest(
-            hConnect,
-            L"GET",
-            path.c_str(),
-            nullptr,
-            WINHTTP_NO_REFERER,
-            WINHTTP_DEFAULT_ACCEPT_TYPES,
-            0
-        );
-        if (!hRequest) {
-            WinHttpCloseHandle(hConnect);
-            WinHttpCloseHandle(hSession);
-            return {};
-        }
-
-        std::string result;
-        if (WinHttpSendRequest(
-                hRequest,
-                WINHTTP_NO_ADDITIONAL_HEADERS,
-                0,
-                WINHTTP_NO_REQUEST_DATA,
-                0,
-                0,
-                0
-            )
-            && WinHttpReceiveResponse(hRequest, nullptr)) {
-            DWORD bytesRead = 0;
-            char  buffer[4096];
-            while (WinHttpReadData(hRequest, buffer, sizeof(buffer), &bytesRead) && bytesRead > 0) {
-                result.append(buffer, bytesRead);
-            }
-        }
-
-        WinHttpCloseHandle(hRequest);
-        WinHttpCloseHandle(hConnect);
-        WinHttpCloseHandle(hSession);
-        return result;
-    }
-
-    static SOCKET wsConnect(int port, std::string_view wsPath) {
-        if (!ensureWSA()) {
-            return INVALID_SOCKET;
-        }
-
-        SOCKET sock = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
-        if (sock == INVALID_SOCKET) {
-            return INVALID_SOCKET;
-        }
-
-        sockaddr_in addr = {};
-        addr.sin_family  = AF_INET;
-        addr.sin_port    = htons(static_cast<u_short>(port));
-        inet_pton(AF_INET, "127.0.0.1", &addr.sin_addr);
-
-        if (!tcpConnectWithTimeout(sock, addr, 3000)) {
-            closesocket(sock);
-            return INVALID_SOCKET;
-        }
-
-        std::string key        = "dGhlIHNhbXBsZSBub25jZQ==";
-        std::string upgradeReq = fmt::format(
-            "GET {} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {}\r\nSec-WebSocket-Version: 13\r\n\r\n",
-            wsPath,
-            port,
-            key
-        );
-
-        if (send(sock, upgradeReq.c_str(), static_cast<int>(upgradeReq.size()), 0) <= 0) {
-            closesocket(sock);
-            return INVALID_SOCKET;
-        }
-
-        wsSetRecvTimeout(sock, 3000);
-        char recvBuf[4096] = {};
-        int  recvLen       = recv(sock, recvBuf, sizeof(recvBuf) - 1, 0);
-        if (recvLen <= 0) {
-            closesocket(sock);
-            return INVALID_SOCKET;
-        }
-        recvBuf[recvLen] = '\0';
-
-        if (!strstr(recvBuf, "101")) {
-            closesocket(sock);
-            return INVALID_SOCKET;
-        }
-
-        return sock;
-    }
-
-    static bool wsSetRecvTimeout(SOCKET sock, int timeoutMs) {
-        DWORD tv = static_cast<DWORD>(timeoutMs);
-        return setsockopt(
-                   sock,
-                   SOL_SOCKET,
-                   SO_RCVTIMEO,
-                   reinterpret_cast<const char*>(&tv),
-                   sizeof(tv)
-               )
-               == 0;
-    }
-
-    static bool wsSend(SOCKET sock, std::string_view message) {
-        std::vector<unsigned char> frame;
-        frame.push_back(0x81);
-        size_t len = message.size();
-        if (len <= 125) {
-            frame.push_back(static_cast<unsigned char>(0x80 | len));
-        } else if (len <= 65535) {
-            frame.push_back(0xFE);
-            frame.push_back(static_cast<unsigned char>((len >> 8) & 0xFF));
-            frame.push_back(static_cast<unsigned char>(len & 0xFF));
-        } else {
-            frame.push_back(0xFF);
-            for (int i = 7; i >= 0; --i) {
-                frame.push_back(static_cast<unsigned char>((len >> (i * 8)) & 0xFF));
-            }
-        }
-
-        unsigned char mask[4] = {0x12, 0x34, 0x56, 0x78};
-        frame.insert(frame.end(), mask, mask + 4);
-
-        for (size_t i = 0; i < len; ++i) {
-            frame.push_back(static_cast<unsigned char>(message[i]) ^ mask[i % 4]);
-        }
-
-        return send(
-                   sock,
-                   reinterpret_cast<const char*>(frame.data()),
-                   static_cast<int>(frame.size()),
-                   0
-               )
-               > 0;
-    }
-
-    static std::string wsRecv(SOCKET sock) {
-        wsSetRecvTimeout(sock, 5000);
-        unsigned char header[2] = {};
-        if (recv(sock, reinterpret_cast<char*>(header), 2, 0) != 2) {
-            return {};
-        }
-
-        size_t payloadLen = header[1] & 0x7F;
-        if (payloadLen == 126) {
-            unsigned char ext[2] = {};
-            if (recv(sock, reinterpret_cast<char*>(ext), 2, 0) != 2) {
-                return {};
-            }
-            payloadLen = (static_cast<size_t>(ext[0]) << 8) | ext[1];
-        } else if (payloadLen == 127) {
-            unsigned char ext[8] = {};
-            if (recv(sock, reinterpret_cast<char*>(ext), 8, 0) != 8) {
-                return {};
-            }
-            payloadLen = 0;
-            for (int i = 0; i < 8; ++i) {
-                payloadLen = (payloadLen << 8) | ext[i];
-            }
-        }
-
-        if (payloadLen == 0 || payloadLen > 16 * 1024 * 1024) {
-            return {};
-        }
-
-        std::vector<char> payload(payloadLen);
-        size_t            totalRecv = 0;
-        while (totalRecv < payloadLen) {
-            int n = recv(
-                sock,
-                payload.data() + totalRecv,
-                static_cast<int>(payloadLen - totalRecv),
-                0
-            );
-            if (n <= 0) {
-                return {};
-            }
-            totalRecv += n;
-        }
-
-        return std::string(payload.data(), payloadLen);
-    }
-
-    static void wsClose(SOCKET sock) {
-        if (sock != INVALID_SOCKET) {
-            closesocket(sock);
-        }
     }
 
     static std::optional<std::string> extractCdpResult(std::string_view json) {
@@ -1064,6 +777,10 @@ private:
     }
 
     std::pair<std::string, TextSource> getSelectedTextByCDP(HWND hwnd) {
+        const auto fns = cdpFnsCopy();
+        if (!fns.ready()) {
+            return {};
+        }
         int port = findCDPPort();
         if (port <= 0) {
             return {};
@@ -1073,7 +790,8 @@ private:
         GetWindowTextW(hwnd, windowTitle, 512);
         std::wstring wTitle(windowTitle);
 
-        std::string targetsJson = httpGet(port, L"/json");
+        std::string targetsJson
+            = fns.httpGet(fmt::format("http://127.0.0.1:{}/json", port), 3000);
         if (targetsJson.empty()) {
             return {};
         }
@@ -1136,24 +854,15 @@ private:
             return {};
         }
 
-        std::string wsPath = fmt::format("/devtools/page/{}", targetId);
-        SOCKET      sock   = wsConnect(port, wsPath);
-        if (sock == INVALID_SOCKET) {
-            return {};
-        }
-
+        // 一次 CDP 往返: 连到该页面的 DevTools WebSocket, 发一条 Runtime.evaluate,
+        // 等回包。连接、帧、重连都归主程序的网络服务 (插件不自己建连接)。
+        const std::string wsUrl
+            = fmt::format("ws://127.0.0.1:{}/devtools/page/{}", port, targetId);
         const char* cdpCmd =
             R"_({"id":1,"method":"Runtime.evaluate","params":{"expression":"window.getSelection().toString()",
        "returnByValue" : true
   }})_";
-        if (!wsSend(sock, cdpCmd)) {
-            wsClose(sock);
-            return {};
-        }
-
-        std::string response = wsRecv(sock);
-        wsClose(sock);
-
+        std::string response = fns.wsRoundTrip(wsUrl, cdpCmd, 5000);
         if (response.empty()) {
             return {};
         }
@@ -1584,6 +1293,8 @@ public:
 
     void setDebounceMs(int /*ms*/) {}
 
+    void setCdpNetFns(CdpNetFns /*fns*/) {}
+
     bool start() {
         XX_LOGW("TextSelectionMonitor: not supported on this platform");
         return false;
@@ -1613,6 +1324,10 @@ void TextSelectionMonitor::removeAllListeners() {
 
 void TextSelectionMonitor::setDebounceMs(int ms) {
     impl_->setDebounceMs(ms);
+}
+
+void TextSelectionMonitor::setCdpNetFns(CdpNetFns fns) {
+    impl_->setCdpNetFns(std::move(fns));
 }
 
 bool TextSelectionMonitor::start() {
