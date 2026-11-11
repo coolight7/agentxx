@@ -529,8 +529,51 @@
 
 ### 步骤 6：插件全量迁移
 
-已完成（能力表 API 变更导致原本就编不过的目标，顺手迁掉）：
+- 状态：**完成**（iface.events 兼容层已删除，agent 侧插件全部改走广播表）
 
+删掉的兼容层：
+
+- plugin_kit.h 的 PluginEventsCompat / pluginEventsCompat() / detail::eventsCompat* /
+  AgentIfaces::events（detail::takeHostString 保留，它不是兼容层的一部分）
+- publishPluginBroadcast / subscribePluginBroadcast 各加一个 PluginxxStringView
+  重载（插件里普遍持有 ABI 视图，省掉调用点的 PluginStringView::str(...)）
+
+迁移的发布点（iface.events->publish(host, &id, &payload) →
+publishPluginBroadcast(host, iface.broadcasts, id, payload)）：
+
+- gentxx_audio_stream（音频帧）、gentxx_chatbot（面板快照）、
+  gentxx_codegraph（status / progress ×2）、gentxx_javascript_engine（JS mit）、
+  gentxx_planning（规划）、gentxx_screen_capture（帧）、
+  gentxx_system_monitor（usage ×2）、gentxx_text_selection_monitor（选中文本）
+
+迁移的订阅点（→ subscribePluginBroadcast(host, iface.broadcasts, scope, id, handler, ud)）：
+
+- gentxx_codegraph（gentxx.agent.host.client_attached）、
+  gentxx_planning（同上）、gentxx_chatbot（面板 refresh + client_attached）、
+  gentxx_system_monitor（客户端开关 + client_attached）、xample_feature（point.turn.start）、
+  xample_plugin（自己的 demo 频道 + client 上行频道）
+- 守卫条件同步改成 iface.broadcasts && iface.broadcasts->publish_broadcast /
+  subscribe_broadcast（PluginxxBroadcastsIface 的成员是 *_broadcast，
+  原来写的 ->publish / ->subscribe 不存在）
+
+其它：
+
+- gent/plugins/example_event/plugin.yaml：去掉"客户端侧要到步骤 5 才提供这张表"的过时注释
+  （客户端现在提供广播表，但仍不写成 equire，精简主程序可能没有）
+- gent/test/plugin/test_plugins.cpp 第 30 段（"禁用插件 publish 被拒"）改用
+  PluginxxBroadcastsIface（先 declare_broadcast 再 publish_broadcast，禁用后返回非 OK）
+- docs/zh-cn/design/plugins.md 里 pluginxx/api/tables.h 的表清单改成当前一组
+  （broadcasts/tasks 替换掉已删的 events）
+
+验证：
+
+- uild_plugins.ps1：26 个插件全部重新产出
+- gentxx_test --log-level warn：plugins 599、plugin_multi_mount 47、
+  plugin_cleanup 90、plugin_feature 34、plugin_point 63、plugin_dispatch 112、
+  client_plugins 763、plugin_sdk 133、plugin_runtime 726、plugin_bridge 193、
+  oundaries 19、vent_hub 268 全部通过
+
+已完成（能力表 API 变更导致原本就编不过的目标，顺手迁掉）：
 - `agent/plugins/agentxx_javascript_engine/agentxx_javascript_engine.cpp`：
   - `register_capability_ex(host, id, start, cancel, ud)` → `register_capability(host, scope, spec, err)`
     （`PluginxxCapabilitySpec`：短名 `interpreter.js` + `IMPLS_ONE` + 只开 impl 阶段 + 异步处理器）

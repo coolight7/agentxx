@@ -107,6 +107,26 @@ using pluginxx::Task;
 using pluginxx::validateInterface;
 using pluginxx::yield;
 
+namespace detail {
+
+/// 取一个 host 分配的字符串出参 (用完释放)
+template<typename Fn>
+inline std::string takeHostString(const PluginxxHost* host, Fn&& fn) {
+    PluginxxString out{nullptr, 0};
+    const int32_t  rc = fn(&out);
+    if (rc != 0 || nullptr == out.data) {
+        if (nullptr != out.data) {
+            PluginString::free(host, &out);
+        }
+        return std::string{};
+    }
+    std::string text{out.data, static_cast<size_t>(out.size)};
+    PluginString::free(host, &out);
+    return text;
+}
+
+} // namespace detail
+
 /* ==================== 广播便捷入口 (插件侧) ==================== *
  * 插件面的发布 / 订阅一律走框架的 `<应用名>.broadcasts` 表
  * (取代早期的 `pluginxx.events` 事件表):
@@ -182,105 +202,36 @@ inline PluginxxSubscription* subscribePluginBroadcast(
     return broadcasts->subscribe_broadcast(host, scope, &idSv, handler, ud, nullptr, nullptr);
 }
 
-/// 插件广播接口的兼容包装 (旧 `pluginxx.events` 表已由框架删除)
+/// 发布一条广播 (ABI 视图形态; 与 `string_view` 版同义)
 ///
-/// 框架 0.2.0 把通用事件表换成了广播表: 频道的声明 / 发布 / 订阅变成显式动作
-/// (未声明的频道发布会被拒)。插件侧的调用形状 `iface.events->publish(host, id, payload)`
-/// 仍然可用 —— 它就是本结构体, 内部先补声明再发。
-///
-/// - 新代码直接用 `iface.broadcasts` + [publishPluginBroadcast] / [subscribePluginBroadcast];
-/// - 本包装只为存量调用点保留, 全部迁移完后连同 `AgentIfaces::events` 一起删。
-/// - **只补了发布与订阅**: 撤销订阅用 `iface.broadcasts->unsubscribe_broadcast(sub)`
-///   (广播句柄的撤销不需要 host, 而本包装的调用形状里拿不到 host)。
-struct PluginEventsCompat {
-    using SubscribeFn = PluginxxSubscription*(PLUGINXX_CALL*)(
-        const PluginxxHost*,
-        const PluginxxScopeRef*,
-        const PluginxxStringView*,
-        void(PLUGINXX_CALL*)(const PluginxxStringView*, void*),
-        void*
+/// `id` / `payload` 为跨边界视图 (插件里常见的是 `PluginStringView::fromCstr` 的产物),
+/// 内部零拷贝转成 `string_view`。
+inline bool publishPluginBroadcast(
+    const PluginxxHost*            host,
+    const PluginxxBroadcastsIface* broadcasts,
+    const PluginxxStringView&      id,
+    const PluginxxStringView&      payload,
+    bool                           anyonePublish = false
+) {
+    return publishPluginBroadcast(
+        host,
+        broadcasts,
+        PluginStringView::str(id),
+        PluginStringView::str(payload),
+        anyonePublish
     );
-    using PublishFn = int32_t(PLUGINXX_CALL*)(
-        const PluginxxHost*,
-        const PluginxxStringView*,
-        const PluginxxStringView*
-    );
-    SubscribeFn subscribe = nullptr;
-    PublishFn   publish   = nullptr;
-};
-
-namespace detail {
-
-/// 取一个 host 分配的字符串出参 (用完释放)
-template<typename Fn>
-inline std::string takeHostString(const PluginxxHost* host, Fn&& fn) {
-    PluginxxString out{nullptr, 0};
-    const int32_t  rc = fn(&out);
-    if (rc != 0 || nullptr == out.data) {
-        if (nullptr != out.data) {
-            PluginString::free(host, &out);
-        }
-        return std::string{};
-    }
-    std::string text{out.data, static_cast<size_t>(out.size)};
-    PluginString::free(host, &out);
-    return text;
 }
 
-/// 按 IID 查一张通用表 (兼容包装用; 插件只在启动/发布时走这一条路)
-inline const PluginxxBroadcastsIface* queryBroadcastsIface(const PluginxxHost* host) {
-    if (!host || !host->vtable || !host->vtable->query_interface) {
-        return nullptr;
-    }
-    std::string_view iid = PLUGINXX_IFACE_BROADCASTS;
-    PluginxxStringView id{iid.data(), static_cast<uint64_t>(iid.size())};
-    return static_cast<const PluginxxBroadcastsIface*>(host->vtable->query_interface(host, &id));
-}
-
-inline PluginxxSubscription* PLUGINXX_CALL eventsCompatSubscribe(
-    const PluginxxHost*       host,
-    const PluginxxScopeRef*   scope,
-    const PluginxxStringView* id,
+/// 订阅一条广播 (ABI 视图形态; 与 `string_view` 版同义)
+inline PluginxxSubscription* subscribePluginBroadcast(
+    const PluginxxHost*            host,
+    const PluginxxBroadcastsIface* broadcasts,
+    const PluginxxScopeRef*        scope,
+    const PluginxxStringView&      id,
     void(PLUGINXX_CALL* handler)(const PluginxxStringView*, void*),
     void* ud
 ) {
-    const auto* bc = queryBroadcastsIface(host);
-    if (!bc || !id || !handler) {
-        return nullptr;
-    }
-    return bc->subscribe_broadcast(host, scope, id, handler, ud, nullptr, nullptr);
-}
-
-inline int32_t PLUGINXX_CALL eventsCompatPublish(
-    const PluginxxHost*       host,
-    const PluginxxStringView* id,
-    const PluginxxStringView* payload
-) {
-    const auto* bc = queryBroadcastsIface(host);
-    if (!bc || !id || !id->data) {
-        return -1;
-    }
-    return publishPluginBroadcast(
-               host,
-               bc,
-               std::string_view{id->data, static_cast<size_t>(id->size)},
-               payload && payload->data
-                   ? std::string_view{payload->data, static_cast<size_t>(payload->size)}
-                   : std::string_view{}
-    )
-               ? PLUGINXX_RESULT_OK
-               : -1;
-}
-
-} // namespace detail
-
-/// 兼容包装的唯一实例 (插件只拿指针, 生命周期与进程相同)
-inline const PluginEventsCompat* pluginEventsCompat() {
-    static const PluginEventsCompat instance{
-        &detail::eventsCompatSubscribe,
-        &detail::eventsCompatPublish,
-    };
-    return &instance;
+    return subscribePluginBroadcast(host, broadcasts, scope, PluginStringView::str(id), handler, ud);
 }
 
 /* ==================== 工具结果状态 (agentxx::util) ====================
@@ -328,10 +279,7 @@ struct AgentIfaces {
     const PluginxxBroadcastsIface* broadcasts = nullptr;
     /// "<应用名>.net": 网络 (HTTP / TCP / WS / UDP; 插件不直接建连接)
     const PluginxxNetIface* net = nullptr;
-    /// 旧事件表的**兼容包装** (内部走 `broadcasts`; 主程序有广播表时非空)
-    /// - 存量调用点 `iface.events->publish / subscribe` 仍可用;
-    /// - 新代码用 `broadcasts` + [publishPluginBroadcast] / [subscribePluginBroadcast]
-    const PluginEventsCompat* events = nullptr;
+
 
     /// 从主程序查询全部已知 agent 侧接口表 (host 为空时返回全 NULL 聚合)
     static AgentIfaces query(const PluginxxHost* host) {
@@ -347,7 +295,6 @@ struct AgentIfaces {
         f.broadcasts
             = queryInterface<PluginxxBroadcastsIface>(host, PLUGINXX_IFACE_BROADCASTS);
         f.net = queryInterface<PluginxxNetIface>(host, PLUGINXX_IFACE_NET);
-        f.events = f.broadcasts ? pluginEventsCompat() : nullptr;
         f.capabilities
             = queryInterface<PluginxxCapabilitiesIface>(host, PLUGINXX_IFACE_CAPABILITIES);
         f.scheduler = queryInterface<PluginxxSchedulerIface>(host, PLUGINXX_IFACE_SCHEDULER);

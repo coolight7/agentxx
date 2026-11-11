@@ -1287,21 +1287,31 @@ throw new Error("top-level rollback probe");
         }
     }
 
-    // ---- 30. B5 回归: 禁用插件 vtable publish 被拒绝 ----
+    // ---- 30. B5 回归: 禁用插件 vtable publish 被拒 ----
     {
         auto inst30 = co_await ctx->pluginManager->loadPluginAsync(path);
         XX_TEST_EXPECT_TRUE(inst30 != nullptr);
         if (inst30) {
-            // 启用状态: publish 正常 (agentxx.agent.events 接口表)
-            const auto ev30 = agentxx::plugin::AgentIfaces::query(inst30->hostView()).events;
-            XX_TEST_EXPECT_TRUE(ev30 != nullptr && ev30->publish != nullptr);
+            // 启用状态: publish 正常 (`pluginxx.broadcasts` 通用表)
+            const auto bc30 = agentxx::plugin::AgentIfaces::query(inst30->hostView()).broadcasts;
+            XX_TEST_EXPECT_TRUE(bc30 != nullptr && bc30->publish_broadcast != nullptr);
             auto topicSv = agentxx::plugin::PluginStringView::fromCstr("plugin.example_plugin.demo");
             auto paySv   = agentxx::plugin::PluginStringView::fromCstr(R"({"k":"v"})");
-            XX_TEST_EXPECT_EQ(ev30 ? ev30->publish(inst30->hostView(), &topicSv, &paySv) : -1, 0);
+            const auto declSv = agentxx::plugin::PluginStringView::fromCstr(
+                R"({"id":"plugin.example_plugin.demo","cache":"latest"})"
+            );
+            if (bc30) {
+                bc30->declare_broadcast(inst30->hostView(), &declSv, nullptr);
+            }
+            XX_TEST_EXPECT_EQ(
+                bc30 ? bc30->publish_broadcast(inst30->hostView(), &topicSv, &paySv, nullptr) : -1,
+                PLUGINXX_RESULT_OK
+            );
             ctx->pluginManager->disable("example_plugin");
-            // 禁用状态: 接口表 publish 拒绝 (返回非 0)
-            int rc = ev30 ? ev30->publish(inst30->hostView(), &topicSv, &paySv) : -1;
-            XX_TEST_EXPECT_TRUE(rc != 0);
+            // 禁用状态: 接口表 publish 拒绝 (返回非 OK)
+            int rc = bc30 ? bc30->publish_broadcast(inst30->hostView(), &topicSv, &paySv, nullptr)
+                          : -1;
+            XX_TEST_EXPECT_TRUE(rc != PLUGINXX_RESULT_OK);
             co_await ctx->pluginManager->unloadAsync("example_plugin");
         }
     }

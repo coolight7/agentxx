@@ -302,16 +302,16 @@ std::string loadPlanningFile(const PluginCtx& ctx, const std::string& tid) {
 namespace {
 
 /// ==================== 插件事件发布 ====================
-/// 规划内容变化 → 发布 `plugin.agentxx_planning.planning` (载荷为完整规划 JSON)。
-/// server 侧经事件总线转发为 WirePluginData{topic, data}, client 侧
-/// 插件订阅 EVT_PLUGIN_DATA 处理并渲染 Info 栏段落 (见下方 client 入口)。
+/// 规划内容变化 → 发布频道 `plugin.agentxx_planning.planning` (载荷为完整规划 JSON)。
+/// server 侧把对端数据转发为 WirePluginData{topic, data}, client 侧插件订阅
+/// 同名频道处理并渲染 Info 栏段落 (见下方 client 入口)。
 void publishPlanningEvent(PluginCtx& ctx, const std::string& planJson) {
-    if (!ctx.iface.events || !ctx.iface.events->publish || planJson.empty()) {
+    if (!ctx.iface.broadcasts || planJson.empty()) {
         return;
     }
     auto topicSv = agentxx::plugin::PluginStringView::fromCstr("plugin.agentxx_planning.planning");
     auto planSv  = agentxx::plugin::PluginStringView::from(planJson.data(), planJson.size());
-    ctx.iface.events->publish(ctx.host, &topicSv, &planSv);
+    agentxx::plugin::publishPluginBroadcast(ctx.host, ctx.iface.broadcasts, topicSv, planSv);
 }
 
 /// 主程序约定事件 client_attached: 客户端接入/重连 → 重发当前会话已保存规划
@@ -537,9 +537,17 @@ static int planningSetup(PluginCtx* ctx, const agentxx::plugin::ScopeRef& ref) {
     }
 
     // 主程序约定事件 client_attached 订阅: 客户端接入/重连时重发当前会话快照
-    if (ctx->iface.events && ctx->iface.events->subscribe) {
-        auto topicSv = agentxx::plugin::PluginStringView::fromCstr("agentxx.agent.host.client_attached");
-        if (!ctx->iface.events->subscribe(host, ref.ptr(), &topicSv, on_client_attached, ctx)) {
+    if (ctx->iface.broadcasts) {
+        auto topicSv
+            = agentxx::plugin::PluginStringView::fromCstr("agentxx.agent.host.client_attached");
+        if (!agentxx::plugin::subscribePluginBroadcast(
+                host,
+                ctx->iface.broadcasts,
+                ref.ptr(),
+                topicSv,
+                on_client_attached,
+                ctx
+            )) {
             pluginLog(
                 ctx,
                 3,

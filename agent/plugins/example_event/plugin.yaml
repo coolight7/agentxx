@@ -5,6 +5,5 @@ entry: libexample_event.so
 interfaces:
   require:
     - agentxx.agent.core
-  # 广播表 (`agentxx.broadcasts`) 是通用表: 主程序有就用, 没有就空转 (见 example_event.cpp 的
-  # "broadcasts iface unavailable" 分支)。客户端侧要到步骤 5 才提供这张表, 因此这里先不声明
-  # 为 require —— 声明了会让客户端加载前的接口协商把它判成"本侧不支持"。
+  # 广播表 (`agentxx.broadcasts`) 是通用表: 两侧主程序都提供, 但谨慎起见这里不写成 require
+  # —— 第三方精简主程序可以不带广播表, 插件里的 `broadcasts iface unavailable` 分支会空转。

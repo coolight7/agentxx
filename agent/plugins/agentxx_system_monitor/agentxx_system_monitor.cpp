@@ -267,12 +267,13 @@ static int32_t sysMonStartSetup(SysMonCtx& ctx) {
     );
 
     // 3. 事件订阅
-    if (ctx.iface.events && ctx.iface.events->subscribe) {
+    if (ctx.iface.broadcasts && ctx.iface.broadcasts->subscribe_broadcast) {
         auto t1 = PluginStringView::fromCstr("agentxx.client.plugin.agentxx_system_monitor.usage_enabled");
-        ctx.iface.events->subscribe(
+        agentxx::plugin::subscribePluginBroadcast(
             ctx.host,
+            ctx.iface.broadcasts,
             nullptr, ///< 进程级订阅 (客户端开关事件走主程序总线)
-            &t1,
+            t1,
             [](const PluginxxStringView* event_json, void* ud) {
                 auto* c = static_cast<SysMonCtx*>(ud);
                 if (!c) {
@@ -292,10 +293,11 @@ static int32_t sysMonStartSetup(SysMonCtx& ctx) {
         );
 
         auto t2 = PluginStringView::fromCstr("agentxx.agent.host.client_attached");
-        ctx.iface.events->subscribe(
+        agentxx::plugin::subscribePluginBroadcast(
             ctx.host,
+            ctx.iface.broadcasts,
             nullptr, ///< 进程级订阅 (客户端接入事件走主程序总线)
-            &t2,
+            t2,
             [](const PluginxxStringView*, void* ud) {
                 auto* c = static_cast<SysMonCtx*>(ud);
                 if (!c || !c->usageEnabled.load(std::memory_order_relaxed)) {
@@ -312,14 +314,14 @@ static int32_t sysMonStartSetup(SysMonCtx& ctx) {
                     },
                     [](void* ud, int32_t status, void* res, const PluginxxStringView*) {
                         auto* c = static_cast<SysMonCtx*>(ud);
-                        if (status == PLUGINXX_OPERATOR_OK && res && c && c->host && c->iface.events
-                            && c->iface.events->publish) {
+                        if (status == PLUGINXX_OPERATOR_OK && res && c && c->host && c->iface.broadcasts
+                            && c->iface.broadcasts->publish_broadcast) {
                             auto*       u    = static_cast<CpuGpuUsage*>(res);
                             std::string json = usageToJson(*u);
                             auto        topicSv
                                 = PluginStringView::fromCstr("plugin.agentxx_system_monitor.usage");
                             auto jsonSv = PluginStringView::from(json.data(), json.size());
-                            c->iface.events->publish(c->host, &topicSv, &jsonSv);
+                            agentxx::plugin::publishPluginBroadcast(c->host, c->iface.broadcasts, topicSv, jsonSv);
                             delete u;
                         } else {
                             delete static_cast<CpuGpuUsage*>(res);
@@ -347,8 +349,8 @@ static int32_t sysMonStartSetup(SysMonCtx& ctx) {
                 std::string json    = usageToJson(usage);
                 auto        topicSv = PluginStringView::fromCstr("plugin.agentxx_system_monitor.usage");
                 auto        jsonSv  = PluginStringView::from(json.data(), json.size());
-                if (c.iface.events && c.iface.events->publish) {
-                    c.iface.events->publish(c.host, &topicSv, &jsonSv);
+                if (c.iface.broadcasts && c.iface.broadcasts->publish_broadcast) {
+                    agentxx::plugin::publishPluginBroadcast(c.host, c.iface.broadcasts, topicSv, jsonSv);
                 }
             }
             co_await sleep(c, kUsageIntervalSec * 1000);

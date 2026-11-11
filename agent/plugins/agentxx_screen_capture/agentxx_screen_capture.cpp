@@ -41,14 +41,14 @@ struct ScreenCapturePluginCtx : public agentxx::plugin::PluginBase {
 };
 
 inline bool ScreenCaptureHolder::startStreaming(int frameRate) {
-    if (!ctx || !ctx->host || !ctx->iface.events || !ctx->iface.events->publish) {
+    if (!ctx || !ctx->host || !ctx->iface.broadcasts || !ctx->iface.broadcasts->publish_broadcast) {
         return false;
     }
     return capture_.startStreaming(
         frameRate,
         [ctx = this->ctx](const std::vector<agentxx_screen_capture_plugin::ScreenFrame>& frames) {
             try {
-                if (!ctx || !ctx->host || !ctx->iface.events || !ctx->iface.events->publish) {
+                if (!ctx || !ctx->host || !ctx->iface.broadcasts || !ctx->iface.broadcasts->publish_broadcast) {
                     return;
                 }
                 for (const auto& frame : frames) {
@@ -68,7 +68,7 @@ inline bool ScreenCaptureHolder::startStreaming(int frameRate) {
                         );
                     auto payloadSv
                         = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
-                    ctx->iface.events->publish(ctx->host, &topicSv, &payloadSv);
+                    agentxx::plugin::publishPluginBroadcast(ctx->host, ctx->iface.broadcasts, topicSv, payloadSv);
                 }
             } catch (...) {
             }

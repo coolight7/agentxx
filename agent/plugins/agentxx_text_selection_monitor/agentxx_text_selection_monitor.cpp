@@ -259,7 +259,7 @@ bool TextSelectionHolder::start(int debounceMs) {
     monitor_.addListener(
         [ctx = this->ctx](const agentxx_text_selection_monitor_plugin::TextSelectionEvent& evt) {
             try {
-                if (!ctx || !ctx->host || !ctx->iface.events || !ctx->iface.events->publish) {
+                if (!ctx || !ctx->host || !ctx->iface.broadcasts || !ctx->iface.broadcasts->publish_broadcast) {
                     return;
                 }
                 auto tsMs = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -275,7 +275,7 @@ bool TextSelectionHolder::start(int debounceMs) {
                 auto topicSv
                     = PluginStringView::fromCstr("plugin.agentxx_text_selection_monitor.selection");
                 auto payloadSv = PluginStringView::from(payload.data(), payload.size());
-                ctx->iface.events->publish(ctx->host, &topicSv, &payloadSv);
+                agentxx::plugin::publishPluginBroadcast(ctx->host, ctx->iface.broadcasts, topicSv, payloadSv);
             } catch (...) {
             }
         }

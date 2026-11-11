@@ -719,8 +719,8 @@ static void
             pluginLog(ctx ? ctx->host : nullptr, ctx ? ctx->iface.log : nullptr, 4, m ? m : "");
         },
         [&] {
-            if (status == PLUGINXX_OPERATOR_OK && ctx && ctx->host && ctx->iface.events
-                && ctx->iface.events->publish) {
+            if (status == PLUGINXX_OPERATOR_OK && ctx && ctx->host && ctx->iface.broadcasts
+                && ctx->iface.broadcasts->publish_broadcast) {
                 codegraph::Json j = codegraph::Json::object();
                 j["loaded"]       = true;
                 if (!ctx->projectRoot.empty()) {
@@ -731,7 +731,7 @@ static void
                     = agentxx::plugin::PluginStringView::fromCstr("plugin.agentxx_codegraph.status");
                 auto payloadSv
                     = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
-                ctx->iface.events->publish(ctx->host, &statusTopic, &payloadSv);
+                agentxx::plugin::publishPluginBroadcast(ctx->host, ctx->iface.broadcasts, statusTopic, payloadSv);
                 if (files && *files > 0) {
                     codegraph::Json p = codegraph::Json::object();
                     p["processed"]    = *files;
@@ -741,7 +741,7 @@ static void
                     auto        progTopic
                         = agentxx::plugin::PluginStringView::fromCstr("plugin.agentxx_codegraph.progress");
                     auto ppSv = agentxx::plugin::PluginStringView::from(pp.data(), pp.size());
-                    ctx->iface.events->publish(ctx->host, &progTopic, &ppSv);
+                    agentxx::plugin::publishPluginBroadcast(ctx->host, ctx->iface.broadcasts, progTopic, ppSv);
                 }
             }
         }
@@ -824,8 +824,8 @@ extern "C" PLUGINXX_EXPORT int
         ctx->init(host);
         raw = ctx.get();
 
-        if (!ctx->iface.tools || !ctx->iface.tools->register_tool || !ctx->iface.events) {
-            pluginLog(host, ctx->iface.log, 4, "agentxx_codegraph: lacks tools/events iface");
+        if (!ctx->iface.tools || !ctx->iface.tools->register_tool || !ctx->iface.broadcasts) {
+            pluginLog(host, ctx->iface.log, 4, "agentxx_codegraph: lacks tools/broadcasts iface");
             return -1;
         }
 
@@ -863,8 +863,8 @@ extern "C" PLUGINXX_EXPORT int
         ctx->mgr->setProgressCallback(
             [ctxRaw](int processed, int total, std::string_view currentFile) {
                 try {
-                    if (!ctxRaw || !ctxRaw->host || !ctxRaw->iface.events
-                        || !ctxRaw->iface.events->publish) {
+                    if (!ctxRaw || !ctxRaw->host || !ctxRaw->iface.broadcasts
+                        || !ctxRaw->iface.broadcasts->publish_broadcast) {
                         return;
                     }
                     codegraph::Json j   = codegraph::Json::object();
@@ -876,7 +876,12 @@ extern "C" PLUGINXX_EXPORT int
                         = agentxx::plugin::PluginStringView::fromCstr("plugin.agentxx_codegraph.progress");
                     auto payloadSv
                         = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
-                    ctxRaw->iface.events->publish(ctxRaw->host, &progTopic, &payloadSv);
+                    agentxx::plugin::publishPluginBroadcast(
+                        ctxRaw->host,
+                        ctxRaw->iface.broadcasts,
+                        progTopic,
+                        payloadSv
+                    );
                 } catch (...) {
                 }
             }
@@ -921,10 +926,17 @@ static int codegraphAgentMountSetup(PluginCtx& ctx, const agentxx::plugin::Scope
     injectCodegraphSystemPrompt(ctx.host, ctx.iface, ref.ptr());
     registerAllTools(ctx, ref);
 
-    if (ctx.iface.events && ctx.iface.events->subscribe) {
+    if (ctx.iface.broadcasts) {
         auto attachTopic
             = agentxx::plugin::PluginStringView::fromCstr("agentxx.agent.host.client_attached");
-        ctx.iface.events->subscribe(ctx.host, ref.ptr(), &attachTopic, on_client_attached, &ctx);
+        agentxx::plugin::subscribePluginBroadcast(
+            ctx.host,
+            ctx.iface.broadcasts,
+            ref.ptr(),
+            attachTopic,
+            on_client_attached,
+            &ctx
+        );
     }
     return 0;
 }
@@ -959,14 +971,14 @@ static int codegraphAgentStartSetup(PluginCtx& ctx) {
         );
     });
 
-    if (ctx.iface.events && ctx.iface.events->publish) {
+    if (ctx.iface.broadcasts) {
         codegraph::Json j   = codegraph::Json::object();
         j["loaded"]         = true;
         j["project_root"]   = ctx.projectRoot;
         std::string payload = j.dump();
         auto statusTopic = agentxx::plugin::PluginStringView::fromCstr("plugin.agentxx_codegraph.status");
         auto payloadSv   = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
-        ctx.iface.events->publish(ctx.host, &statusTopic, &payloadSv);
+        agentxx::plugin::publishPluginBroadcast(ctx.host, ctx.iface.broadcasts, statusTopic, payloadSv);
     }
     pluginLog(ctx.host, ctx.iface.log, 2, "agentxx_codegraph started (6 tools)");
     return 0;

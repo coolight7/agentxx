@@ -2183,7 +2183,7 @@ JSValue JsEngine::bridgeCall(
             }
             auto topicSv = agentxx::plugin::PluginStringView::from(topic.data(), topic.size());
             auto paySv   = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
-            iface.events->publish(host, &topicSv, &paySv);
+            agentxx::plugin::publishPluginBroadcast(host, iface.broadcasts, topicSv, paySv);
             return JS_UNDEFINED;
         }
 

@@ -181,10 +181,11 @@ static int featureAgentSetup(FeatureCtx& ctx, const agentxx::plugin::ScopeRef& r
     if (ctx.iface.broadcasts && ctx.iface.broadcasts->subscribe_broadcast) {
         const std::string_view pointId = agentxx::plugin::points::TurnStart;
         auto                   idSv    = agentxx::plugin::PluginStringView::from(pointId);
-        ctx.iface.broadcasts->subscribe_broadcast(
+        agentxx::plugin::subscribePluginBroadcast(
             ctx.host,
+            ctx.iface.broadcasts,
             ref.ptr(),
-            &idSv,
+            idSv,
             [](const PluginxxStringView* payload, void* ud) {
                 auto* c = static_cast<FeatureCtx*>(ud);
                 if (c == nullptr) {
@@ -196,9 +197,7 @@ static int featureAgentSetup(FeatureCtx& ctx, const agentxx::plugin::ScopeRef& r
                 };
                 c->log.info("example_feature: turn.start " + std::string{text});
             },
-            &ctx,
-            nullptr,
-            nullptr
+            &ctx
         );
     }
     return 0;

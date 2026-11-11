@@ -94,7 +94,8 @@ bool AudioStreamHolder::start(
     }
     stream_.addListener([ctx = this->ctx](const agentxx_audio_stream_plugin::AudioData& data) {
         try {
-            if (!ctx || !ctx->host || !ctx->iface.events || !ctx->iface.events->publish) {
+            if (!ctx || !ctx->host || !ctx->iface.broadcasts
+                || !ctx->iface.broadcasts->publish_broadcast) {
                 return;
             }
             auto tsMs = std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -116,7 +117,12 @@ bool AudioStreamHolder::start(
                 = agentxx::plugin::PluginStringView::fromCstr("plugin.agentxx_audio_stream.audio");
             auto payloadSv
                 = agentxx::plugin::PluginStringView::from(payload.data(), payload.size());
-            ctx->iface.events->publish(ctx->host, &topicSv, &payloadSv);
+            agentxx::plugin::publishPluginBroadcast(
+                ctx->host,
+                ctx->iface.broadcasts,
+                topicSv,
+                payloadSv
+            );
         } catch (...) {
         }
     });

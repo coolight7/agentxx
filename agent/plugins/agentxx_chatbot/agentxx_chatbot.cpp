@@ -409,10 +409,10 @@ void ChatbotCtx::onPanelDrive() {
     panelOutbox.driverPending.store(false, std::memory_order_release);
 
     // 在 IO 线程上 publish 是就地执行 (不再等线程), 不会与工具互等
-    if (!json.empty() && iface.events && iface.events->publish && host) {
+    if (!json.empty() && iface.broadcasts && host) {
         auto topicSv = PluginStringView::fromCstr(kPanelTopic);
         auto jsonSv  = PluginStringView::from(json.data(), json.size());
-        iface.events->publish(host, &topicSv, &jsonSv);
+        agentxx::plugin::publishPluginBroadcast(host, iface.broadcasts, topicSv, jsonSv);
     }
 
     // 发布期间插件 io 线程可能又攒了一份: 再要一张票
@@ -1034,7 +1034,7 @@ Json personaMountPlugins(const ac::PersonaConfig& persona) {
 /// - 客户端插件请求重发快照 (client → agent, 见 [kPanelRefreshTopic]);
 /// - 主程序有客户端接入/重连: 新来的客户端立刻拿到一份当前状态。
 void subscribePanelEvents(ChatbotCtx& ctx) {
-    if (!ctx.iface.events || !ctx.iface.events->subscribe || !ctx.host) {
+    if (!ctx.iface.broadcasts || !ctx.host) {
         return;
     }
     auto handler = [](const PluginxxStringView*, void* ud) {
@@ -1049,8 +1049,16 @@ void subscribePanelEvents(ChatbotCtx& ctx) {
     };
     for (const char* topic : {kPanelRefreshTopic, kClientAttachedTopic}) {
         auto topicSv = PluginStringView::fromCstr(topic);
-        if (ctx.iface.events->subscribe(ctx.host, nullptr, &topicSv, handler, &ctx) == nullptr) {
-            ctx.log.warn(fmt::format("订阅面板事件 '{}' 失败 (侧边栏面板可能不会自动刷新)", topic));
+        if (agentxx::plugin::subscribePluginBroadcast(
+                ctx.host,
+                ctx.iface.broadcasts,
+                nullptr,
+                topicSv,
+                handler,
+                &ctx
+            )
+            == nullptr) {
+            ctx.log.warn(fmt::format("订阅面板频道 '{}' 失败 (侧边栏面板可能不会自动刷新)", topic));
         }
     }
 }
