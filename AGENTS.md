@@ -718,6 +718,18 @@ path/to/agentxx_test --log-level warn string_util regex
   `register_wait`/`cancel_wait`/`list_waits`, 归属按 `plugin:<实例名>` 记账, 禁用卸载整批回收,
   详见 [plugins.md](docs/zh-cn/design/plugins.md) §20),
   client 侧 9 张 (ui/events/session/wire/self/json/log + timer/keybind)
+- **网络能力 `agentxx.net` 是通用表** (两侧都提供, 不计入上面的 13 张业务表):
+  插件不自己建连接 —— HTTP / WebSocket / TCP / UDP / HTTP 服务端都经这张表转给
+  `utilxx::NetHub` (自有网络线程, 按插件实例记账; 禁用/卸载时 `shutdownOwner` 整批收掉)。
+  三个成员 `call` / `call_async` / `cancel`; **表入口结果码只表示受理层面**, 业务结论在
+  结果 JSON 的 `ok` 里 (连不上/超时是 `code=OK` + `ok:false`)。事件发到
+  `plugin.<插件 id>.net` 广播 (载荷带 `kind` + `id`; `ws.connect` 只发起, 握手完成看
+  `ws.open`)。SDK: `netCall`/`netFetchBlocking`/`netWsConnect`/`netWsSend`/`netWsClose` +
+  `co_await netFetch` / `asyncNetFetch` (asio 形态, 给自带 io_context 的插件);
+  `netFetchBlocking` **不得在主程序 io 线程调用** (完成回调投递到那条线程, 会互锁)。
+  4 个网络插件已全部迁完 (`websearch` / `rag_search` / `text_selection_monitor` / `chatbot`),
+  插件里不再出现 `utilxx/http_client.h` / `ws_client.h`; 详见
+  [plugins.md](docs/zh-cn/design/plugins.md) §22
 - 接口表版本与基线 (**当前代次 3**, 全局 API 版本 = 3: v2 是多 agent 挂载换代,
   v3 把通用表里的业务成员 (会话工作目录 / 取消查询 / 工具提示词) 迁回 agentxx 业务表
   并把 "agent" 用词泛化为 "作用域"; 需区分 agent 的业务表 `version` = `MIN_VERSION` = 2 或 3,

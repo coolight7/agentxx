@@ -2298,3 +2298,83 @@ plugin:
 `agentxx.agent.context.summarize` / `agentxx.agent.tool.summarizeOutput`), 插件点
 `plugin.<插件名>.*` (`definePluginPoint` 会拒掉不在插件族里的名字; 不限定插件名,
 建议用自己的)。
+
+## 22. 网络能力 (`agentxx.net`)
+
+插件不自己建连接: HTTP 请求、WebSocket、TCP、UDP、HTTP 服务端都经主程序的一张通用表
+`agentxx.net` (agent 侧 `PluginManager`、client 侧 `ClientPluginManager` 各一份)。
+实现分两层:
+
+- **通用网络服务** `utilxx::NetHub` (在 `cxx_utilxx` 里, 与插件无关): 自有网络线程,
+  socket 状态全在那条线程上, 按**属主 id** 隔离资源;
+- **本项目的适配** `agentxx::plugin::PluginNetService`
+  (`agent/lib/{include/agentxx/plugin/net_service.h,src/plugins/net_service.cpp}`):
+  属主 id = 插件实例名, 事件发到 `plugin.<插件 id>.net` 广播, 完成回调按
+  `PLUGINXX_OPERATOR_OK/CANCELED/FAILED` 上报, 插件禁用/卸载时 `shutdownOwner`
+  把它名下的服务、连接与未完成请求一起收掉。
+
+### 22.1 接口表
+
+| 成员 | 形态 | 说明 |
+|---|---|---|
+| `call` | 同步 | 结果立即可得的操作 (`ws.connect` / `ws.send` / `http.serve` / `net.info` …); 内部投递到网络线程并**有界等待** |
+| `call_async` | 异步 | `http.request` / `http.fetch` / `http.download`; 受理成功写 `requestId`, 结果**恰好一次**经 `notify->done` 给出 |
+| `cancel` | 同步 | 撤一条进行中的异步请求 |
+
+结果码 `PLUGINXX_NET_OK/ERR_ARG/ERR_STATE/ERR_JSON/ERR_NOT_FOUND/ERR_TIMEOUT/ERR_PERMISSION/
+ERR_QUEUE_FULL/ERR_NO_MEMORY/ERR_INTERNAL` 只表示"受理层面"的成败; **业务结论在结果 JSON 的
+`ok` 里** —— 连不上、超时这类失败是 `code == PLUGINXX_NET_OK` 而 `ok == false`。
+
+操作名常量在 `pluginxx/net/ops.h`; 常用参数:
+
+| op | 主要参数 |
+|---|---|
+| `http.fetch` | `url`, `method`, `headers`, `body` / `bodyBase64` / `json`, `timeoutMs`, `maxBytes`, `followRedirects`, `maxRedirects`, `format` (`markdown`), `responseType` (`text`/`bytes`), `tlsVerify` |
+| `http.download` | `url`, `fileName`, `timeoutMs` → 落盘 `<data_dir>/<插件 id>/data/downloads/`, 结果带 `path` / `bytes` |
+| `http.serve` / `http.route` / `http.respond` | `host` (缺省 `127.0.0.1`) / `port` / `path` / `requestId` |
+| `ws.connect` | `url` 或 `host`+`port`+`path`, `id`, `headers`, `subprotocols` (数组), `timeoutMs`, `maxMessageBytes` |
+| `ws.send` / `ws.ping` / `ws.close` | `id` + `text` / `dataBase64` / `code` + `reason` |
+| `socket.*` / `udp.*` | 见 `pluginxx/api/net.h` 的表 |
+
+**`ws.connect` 只发起握手**: 返回时状态是 `connecting`, 真正可用要等 `ws.open` 事件;
+握手前 `ws.send` 会以 `not_connected` 失败。事件全在 `plugin.<插件 id>.net` 上, 载荷带
+`kind` + `id`: `ws.open` / `ws.message` (`text` / `dataBase64` / `bytes`) / `ws.close`
+(`by` = `local`/`remote`/`error`/`owner`, `code`, `reason`) / `http.request` /
+`http.listening` / `socket.connected` …
+
+### 22.2 SDK 便捷层
+
+| 场景 | 入口 |
+|---|---|
+| 同步操作 | `netCall(host, net, op, args)` / `netWsConnect` / `netWsSend` / `netWsClose` / `netHttpServe` / `netHttpRespond` / `netInfo` |
+| 工具实现体是阻塞的 | `netFetchBlocking(ctx, url, options)` / `netCallBlocking(...)` —— **不得在主程序 io 线程调用** (完成回调投递到那条线程, 会互锁), 这种情况直接返回 `PLUGINXX_NET_ERR_STATE` |
+| 插件自带 `io_context` 的协程 | `co_await netFetch(ctx, url, options)` (kit 协程) 或 `co_await asyncNetFetch(ex, host, net, url, options, token)` (asio 原生形态, 完成签名 `void(NetResult)`, 回调投递回传入的执行器) |
+| 订阅事件 | `declarePluginBroadcast` + `subscribePluginBroadcast`, 频道 `netEventTopic(插件 id)` |
+
+`NetResult{code, json}` 把两层状态分开: `accepted()` = 表入口成功, `ok()` = 业务成功,
+`status()` / `str(key)` 取结果字段, `error()` 拼可读原因。`NetHttpOptions` 覆盖
+method / body / bodyBase64 / json / headers / contentType / format / responseType /
+timeoutMs / maxBytes / followRedirects / maxRedirects / tlsVerify。
+
+### 22.3 已迁移的插件
+
+| 插件 | 迁移前 | 迁移后 |
+|---|---|---|
+| `agentxx_websearch` | `polled_tool` + `HttpClient` 协程 | `blocking_tool` + `netFetchBlocking`, markdown 交给 `format` |
+| `agentxx_rag_search` | `HttpClient::postAsync` | `netFetchBlocking` (索引改为首次检索时建, mount 不再等网络) |
+| `agentxx_text_selection_monitor` | 手写 winsock 握手 + WinHTTP | `netFetchBlocking` + `ws.connect`/`ws.open`/`ws.message` 往返 |
+| `agentxx_chatbot` | `HttpClient` + `utilxx::WsClient` | `co_await netFetch` (`chatbot_net.h` 的 `ChatbotNet::fetch`) + `ws.*` 事件驱动网关 (`connId` 过滤旧事件), 附件走 `http.download` 落盘 |
+
+迁移后这些插件不再 `#include "utilxx/http_client.h"` / `ws_client.h` (`cxx_utilxx` 的静态链接
+保留, 加密/散列等仍在用)。`grep -rn 'utilxx/http_client.h\|utilxx/ws_client.h' agent/plugins/` 应为空。
+
+### 22.4 验证与限制
+
+- 测试模块 `plugin_net` (35 条): `net.info` 现状 / 未知 op 参数层拒绝 / `http.serve` +
+  `http.route` + `http.fetch` 回环往返 / 事件落 `plugin.<属主>.net` / `shutdownOwner` 后服务消失与
+  端口释放 / 未完成请求按取消结算;
+- `chatbot_media_io` 用测试侧的 `TestNet` (把 `.net` 三个入口接到本地 `NetHub`) 直测
+  `QqApi` 的上传与附件下载 (含二进制正文与失败原因);
+- 限制: 服务端默认只监听回环 (`127.0.0.1`), 要同网段访问必须显式给 `host: "0.0.0.0"`;
+  每个属主同时最多 16 条 HTTP 客户端请求、连接与服务数量有上限 (`net.info` 可查);
+  单次 `call` 等网络线程的上界是 5 秒 (超时返回 `PLUGINXX_NET_ERR_TIMEOUT`)。
