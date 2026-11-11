@@ -185,8 +185,12 @@
   `plugin_net` 35 / `plugin_host_mount` 147 / `plugin_multi_mount` 47 / `plugin_runtime` 733 /
   `plugins` 610 / `plugin_sdk` 141 / `plugin_cleanup` 99 / `plugin_feature` 145 /
   `feature_points` 136 全绿
-- 已知：`plugin_agent_runtime` 在本机 Debug+ASan 下跑得很慢（单模块 >20 分钟，stderr 显示
-  在正常推进）；本轮未等到结果，留给下一轮带更长超时重跑
+- 已知：`plugin_agent_runtime` 在本机 Debug+ASan 下没有得到结论（跑 20 分钟以上仍未到结尾，stderr
+  在固定的同一处停下、stdout 因重定向被缓冲看不到进度；不是本次改动新增的模块，
+  上一轮回归也没包含它）；下一轮请用控制台直跑（不加管道）并给足超时再确认
+- 后续事项（步骤 5 收尾时做）：客户端侧补上广播表后，把 `example_event/plugin.yaml`
+  的 `agentxx.broadcasts` 加回 `require`（现在只靠代码里的“表缺失就空转”降级，
+  因为客户端接口协商在步骤 5 之前没有这张表，声明成 require 会让它的客户端侧检查失败）
 
 - 顺手修的运行时问题（属步骤 2 的尾巴）：`runtime.register_trigger` / `runtime_emit_event`
   在频道未声明时**按名字定属主**（`plugin.<名>.*` 归该插件），否则插件发布自己的频道
