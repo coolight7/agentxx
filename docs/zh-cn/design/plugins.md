@@ -27,7 +27,7 @@ Agentxx 插件系统采用 **纯 C ABI + COM 风格接口表查询**：
   核心 vtable (冻结) ── alloc / free / query_interface (IID → 接口表)
                        │
          ┌─────────────┼─────────────┬──────────────┬─────────────┐
-         │ tools       │ hooks       │ broadcasts   │ scheduler   │  ...22 张 agent + 9 张 client
+         │ tools       │ hooks       │ broadcasts   │ scheduler   │  ...21 张 agent + 9 张 client
          │ register/   │ 7 钩子点     │ publish/     │ sleep/      │  capabilities/
          │ call_tool   │             │ subscribe    │ offload     │  session/plugins/
          └─────────────┘             └──────────────┘             │  config/model/cancel/...
@@ -417,7 +417,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 
 ## 8. Agent 侧接口表一览
 
-> 共 22 张 agent 侧接口表: 12 张业务表 (`agentxx.agent.*`) + 10 张通用表
+> 共 21 张 agent 侧接口表: 11 张业务表 (`agentxx.agent.*`) + 10 张通用表
 > (`pluginxx.*`, 由插件框架实现, 表内其余行)。**通用表的查询 IID 就是 `pluginxx.<名>`**
 > (如 `pluginxx.log`), `pluginxx.kit` 正在用这组名字查询; 下表把它们写在主程序命名空间下
 > 只是为了与业务表并列阅读 —— 按 `agentxx.agent.log` 查询不会命中。
@@ -443,7 +443,6 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 | `agentxx.agent.resources` | 2 | `register_skill_dir/memory_file/mcp_server` (仅初始化阶段) + `get_own_resources` (冻结后不可变) |
 | `agentxx.agent.graph` | 2 | 执行图扩展: `register_node_type/unregister_node_type` (插件自定义节点类型, 注入 per-agent GraphRegistry) + `get_graph_json/get_graph_name/set_graph_json` (查看/修改主程序执行图, 默认名 `agentxx.default`; 插件加载阶段生效, 主程序构建 engine 前处理)。**图状态不含对话上下文**: `state_json` 里没有 `messages` 通道 (LLM 上下文由会话持有), 只有控制类通道与只读影子通道 `xx_messagesMeta` (条数/版本/角色分布/末尾消息摘要, 载荷与上下文大小无关); 需要上下文内容用 `agentxx.agent.context` 查询。插件写 `{"channel":"messages", ...}` 的 writes 会被主程序改写成会话上下文写入 (默认 append, `"mode":"overwrite"` 整体替换; 空列表的 overwrite 忽略), 因此按旧契约写 `messages` 的插件仍可用。**条件边用 `xx_has_tool_calls`** (agentxx 注册, 语义 = 最后一条 assistant 是否带 tool_calls; 读 `xx_messagesMeta.last_assistant_tool_calls`, 缺该通道时回退扫描 `messages` 通道), 内置 `has_tool_calls` 在新架构下恒为 false, 不要使用 |
 | `agentxx.agent.tasks` | 1 | 后台任务主程序托管: `register_task/cancel_task` (kit `spawn` 自动注册; 主程序登记句柄 + 持 inflight + `notify.done` 完成通知 —— 卸载时 detachAll 统一取消 + `waitInflightZero` 精确等待, 无协程帧悬挂; `notify` 为出参, `notify.done` 可从插件任意线程回调) |
-| `agentxx.agent.feature` | 2 | 功能点 (扩展点) 体系: `list_points/define_point/undefine_point` (插件声明自己的点, id 须落在 `plugin.<插件名>.*`) + `register_impl/unregister_impl` (为任意已声明的点登记实现, 按层/优先级排序) + `call_point_async` (按名调用一个**通用 JSON 点**, 只拿数据: 不写值缓存/不记置空/不改调用方会话; 强类型核心点返回受理错误; 取消用 `pluginxx.cancel.op_cancel`) |
 | `agentxx.agent.mount` | 1 | 挂载查询 (诊断用): `list` (全部挂载摘要 JSON 数组, 每项含 agentId/agentName/workDir/language/mountSeq/plugins) + `get` (按 agentId 查单个挂载摘要, 没有该挂载返回 -1) |
 | `agentxx.agent.runtime` | 2 | 会话运行时 (插件挂自己的根并驱动会话): `mount_root/unmount_root` (带自己的 `AgentConfig` 覆盖与插件挂载策略) + `open_channel/close_channel` (一个 sessionId 一条通道, 事件经回调交付) + `send_input/cancel/select_model/respond_interrupt` + `get_channel_state/get_context_messages/list_runtime` (只读查询) + `register_trigger/unregister_trigger/emit_event/register_timer/unregister_timer` (事件驱动)。入口用 `root_id` / `channel_id` 句柄寻址, 不带 agent 引用 —— 它看的是整个容器。v2 表尾追加后台任务四成员 (`submit/cancel/get/list_async_work`, 基线不变, `ifaceHas` 判定)。详见 §19 |
 | `agentxx.broadcasts` | 3 | 广播: `declare_broadcast` (声明频道: 缓存/发布权限/订阅补当前值/限频) + `publish_broadcast` + `subscribe_broadcast(_ex)` (带流结束回调) + `read_broadcast` + `unsubscribe_broadcast` + `end_broadcast`。插件的通知面与跨端数据都走它, 见 §20 |
@@ -2171,7 +2170,7 @@ plugin:
 | 收到一条消息就当输入塞进会话 (无值/无状态) | `agentxx.agent.runtime` 的 `register_trigger` / `register_timer` (§19) |
 | "某频道的值变了"：插件之间互相通知、跨端数据、自己维护的值 | **本节的广播表** |
 | 主程序自己的轮次/工具/后台任务事件 | 订阅同名广播频道（`agentxx.agent.*`、`agentxx.agent.async.done`） |
-| 需要结果或补丁 | 能力表 (§17) 或领域表（工具/提示词/…） |
+| 需要结果或补丁 | 能力表 (§17) 或业务表（工具/提示词/…） |
 
 事件中枢 (`agentxx/event/hub.*`) 保留为**主程序内部**的"记录 + 等待 + 投递给会话"机制：
 模型工具 `agentxx_async_emit`、`turn.*` / `tool.end.*` / 定时器 / 后台任务结果仍走它；

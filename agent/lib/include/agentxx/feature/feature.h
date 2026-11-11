@@ -318,6 +318,13 @@ public:
     const std::string& origin() const noexcept;
     void               setOrigin(std::string origin);
 
+    /// 插件面扩展点 id (实现行登记在这个 id 上; 空 = 用点自己的 id)
+    ///
+    /// 点的 `id` 是库内名字 (`agentxx.agent.context.*`), 插件面的扩展点 id 是另一个
+    /// 段 (`agentxx.agent.point.*`, 见 `agentxx_point_ids.h`): 两者由声明处配对。
+    const std::string& pluginPointId() const noexcept;
+    void               setPluginPointId(std::string id);
+
     /// 是否允许被外部主动调用
     bool callable() const noexcept;
     /// 等单个插件实现的超时 (毫秒; 0 = 不限)
@@ -342,6 +349,18 @@ public:
 
     /// 某归属是否在本点登记了实现
     bool hasImplOf(std::string_view owner) const;
+
+    /// 插件层入口: 发一次同名扩展点并等实现行的结果 (由注册表在主程序侧设置)
+    ///
+    /// - 实现行 = 框架能力表里的 `impl` 行 (按 `scope` 过滤、按优先级排、超时由调用方给);
+    /// - 返回 `std::nullopt` = 没人给出结果 (没实现行 / 全部回空 / 失败)。
+    using PluginEmitFn = std::function<asio::awaitable<std::optional<std::string>>(
+        std::string_view pointId,
+        std::string_view payloadJson
+    )>;
+
+    /// 设置插件层入口 (来自 `PluginManager::emitPoint`; 空 = 没有插件层)
+    void setPluginEmitter(PluginEmitFn fn);
 
     /// 插件层实现条数
     size_t implCount() const noexcept;
@@ -415,9 +434,11 @@ protected:
     /// 实现链: 先 `plugin` 层 (本类提供的 [runPluginLayer]), 再由派生类问 `core` 层
     virtual asio::awaitable<ChainOutcome> runChain(const ChainEnv& env) = 0;
 
-    /// 插件层实现 (JSON 实现): 按 `(priority, 登记顺序)` 依次问
-    /// - `call` 时跳过调用方自己的实现 (保护 ②: 不把自己的实现又问回自己)
+    /// 插件层 (主程序发一次扩展点) —— 新流程: 实现行就是能力行
     asio::awaitable<ChainOutcome> runPluginLayer(const ChainEnv& env);
+
+    /// 本点自己登记的插件层实现 (旧流程; 供直接使用点 API 的调用方与单测)
+    asio::awaitable<ChainOutcome> runLocalImpls(const ChainEnv& env);
 
     /// 问单个插件层实现 (含 `implTimeoutMs` 与实现自报超时; 异常按"没意见"处理)
     asio::awaitable<std::optional<ChainOutcome>>
@@ -439,6 +460,9 @@ protected:
 
     /// 清空置空标记与值缓存 (点被重新声明)
     void resetState();
+
+    /// 主程序侧插件层入口 (空 = 没装插件管理器)
+    PluginEmitFn pluginEmit_;
 
     /// 清单里的一条实现 (插件层与核心层共用一份展示形状)
     struct ImplView {
@@ -465,6 +489,8 @@ protected:
     PointType                                                     type_ = PointType::Provide;
     PointOptions                                                  opts_;
     std::string                                                   origin_;
+    /// 插件面扩展点 id (空 = 用 id_)
+    std::string                                                   pluginPointId_;
     std::vector<ImplEntry>                                        impls_;
     uint64_t                                                      seqCounter_ = 0;
     std::string                                                   disabledBy_;
@@ -596,8 +622,13 @@ protected:
     }
 
     asio::awaitable<ChainOutcome> runChain(const ChainEnv& env) override {
-        // 1) 插件层 (插件 / FFI 主程序登记的实现)
+        // 1) 插件层: 主程序发一次扩展点 (实现行 = 能力行)
         auto outcome = co_await runPluginLayer(env);
+        if (outcome.hasValue || outcome.disabled) {
+            co_return outcome;
+        }
+        // 2) 本点自己登记的插件层实现 (旧流程; 生产上通常为空)
+        outcome = co_await runLocalImpls(env);
         if (outcome.hasValue || outcome.disabled) {
             co_return outcome;
         }

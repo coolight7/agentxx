@@ -319,8 +319,6 @@ struct AgentIfaces {
     const PluginxxCancelIface*         cancel    = nullptr; ///< "pluginxx.cancel"
     const AgentxxPluginGraphIface*     graph     = nullptr; ///< "agentxx.agent.graph"
     const PluginxxTasksIface*          tasks     = nullptr; ///< "pluginxx.tasks"
-    /// "agentxx.agent.feature": 功能点 (登记实现 / 声明插件点 / 调用 / 读清单)
-    const AgentxxPluginFeatureIface* feature = nullptr;
     /// "pluginxx.coroutine_runtime": 协程驱动 (host driver/wake 协议)。
     const PluginxxCoroutineRuntimeIface* coroutineRuntime = nullptr;
     /// "agentxx.agent.mount": 挂载查询 (诊断与自查)
@@ -373,8 +371,6 @@ struct AgentIfaces {
         f.model  = queryInterface<AgentxxPluginModelIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_MODEL);
         f.cancel = queryInterface<PluginxxCancelIface>(host, PLUGINXX_IFACE_CANCEL);
         f.graph  = queryInterface<AgentxxPluginGraphIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_GRAPH);
-        f.feature
-            = queryInterface<AgentxxPluginFeatureIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_FEATURE);
         f.tasks = queryInterface<PluginxxTasksIface>(host, PLUGINXX_IFACE_TASKS);
         f.coroutineRuntime
             = queryInterface<PluginxxCoroutineRuntimeIface>(host, PLUGINXX_IFACE_COROUTINE_RUNTIME);
@@ -2613,407 +2609,109 @@ inline detail::CallToolAwaiter call_tool(
     };
 }
 
-/* ==================== 功能点 (agentxx.agent.feature) ==================== */
+/* ==================== 扩展点 (实现行 = 能力行) ====================
+ *
+ * 插件的"给结果 / 补数据"走能力表: 为**主程序或自己声明的扩展点**登记一行实现
+ * (`agentxx.agent.point.*` / `plugin.<自己>.point.*`), 取值时按 scope 过滤与优先级
+ * 排序后调用这行; 一行给出 JSON 结果, 首行非空的那行生效。
+ *
+ * 只想**知道**扩展点被触发了, 订阅同名广播频道即可 (§20), 不需要登记实现。
+ */
 
-/// 功能点实现的登记选项
-struct FeatureImplOptions {
-    /// 层内顺序, 小者先 (插件默认 0; 主程序默认 1000); 越界由主程序裁剪并记警告
+/// 扩展点实现行的登记选项
+struct PointImplOptions {
+    /// 行内顺序, 小者先 (默认 0); 越界由主程序裁剪并记警告
     int32_t priority = 0;
-    /// 自报的最大耗时 (毫秒; 0 = 不限, 默认): 与点的 impl_timeout_ms 取较小非 0 值
-    int32_t defaultTimeoutMs = 0;
+    /// 自报的最大耗时 (毫秒; 0 = 用扩展点声明里的值)
+    int32_t timeoutMs = 0;
+    /// 同一实例内区分多个处理器 (可空)
+    std::string_view ownerTag{};
 };
 
-/// 插件声明自己的功能点 (本轮只允许 provide 类型)
-struct FeaturePointSpec {
-    /// 点 id, 必须落在 `plugin.*` (不限定插件名, 建议用自己的; 不含空白字符)
-    std::string id;
-    /// 展示名 (可空, 缺省用 id)
-    std::string title;
-    /// 一句话说明
-    std::string depict;
-    /// 参数说明 (文本; 进清单与作者文档)
-    std::string argsDoc;
-    /// 结果说明 (文本)
-    std::string resultDoc;
-    /// 等实现方的超时 (毫秒; 0 = 不限, 默认)
-    int32_t implTimeoutMs = 0;
-};
+/// 规范化实现行的回答: 已带 `value` / `disable` 的原样返回, 其它按整份当值
+inline std::string pointAnswer(std::string_view raw) {
+    if (raw.empty()) {
+        return {};
+    }
+    std::optional<utilxx_base::Json> parsed;
+    try {
+        parsed = utilxx_base::Json::parse(raw);
+    } catch (const std::exception&) {
+        return std::string{raw};
+    }
+    if (!parsed.has_value()) {
+        return std::string{raw};
+    }
+    if (parsed->is_object() && (parsed->contains("value") || parsed->contains("disable"))) {
+        return std::string{raw};
+    }
+    utilxx_base::Json wrapped = utilxx_base::Json::object();
+    wrapped["value"]          = *parsed;
+    return wrapped.dump();
+}
 
 namespace detail {
 
-/// 把插件业务体返回的文本包成主程序认识的回答 JSON
-/// - 已经是完整回答 (`{"value":...}` / `{"disable":...}` / `{"verdict":...}`) 时原样返回;
-/// - 合法 JSON 标量/数组/对象 → `{"value": <该 JSON>}`;
-/// - 非 JSON 文本 → `{"value": "<文本>"}`
-inline std::string wrapFeatureAnswer(std::string_view raw) {
-    if (raw.empty()) {
-        return std::string{"{}"}; // 空 = 没意见
-    }
-    try {
-        auto json = Json::parse(raw);
-        if (json.is_object()
-            && (json.contains("value") || json.contains("disable") || json.contains("verdict"))) {
-            return std::string{raw};
+/// 把 `(ctx, 载荷)` / `(载荷)` 形态的实现体适配成能力表要的三参处理器
+/// (能力表的处理器固定收 `(ctx, method, args)`, 扩展点的 method 就是点 id)
+template<typename Ctx, typename Fn>
+struct PointImplAdapter {
+    Fn fn;
+
+    template<typename C>
+    decltype(auto) operator()(C& c, std::string_view /*method*/, std::string_view payload) {
+        if constexpr (std::is_invocable_v<Fn&, Ctx&, std::string_view>) {
+            return fn(c, payload);
+        } else {
+            return fn(payload);
         }
-        Json wrapped     = Json::object();
-        wrapped["value"] = std::move(json);
-        return wrapped.dump();
-    } catch (...) {
-        Json wrapped     = Json::object();
-        wrapped["value"] = std::string{raw};
-        return wrapped.dump();
-    }
-}
-
-struct FeatureCallState {
-    const PluginxxHost*              host    = nullptr;
-    const AgentxxPluginFeatureIface* feature = nullptr;
-    /// 目标 agent 引用 (值类型: 自己持有 id 字符串, 调用时再取借用视图)
-    ScopeRef agent{};
-    /// 取消句柄用的表 (操作取消统一收拢到 `pluginxx.cancel`)
-    const PluginxxCancelIface* cancel = nullptr;
-    /// 协程驱动桥 (可空): 完成回调经它投递 continuation 并唤醒 driver。
-    PollOneBridge*            bridge = nullptr;
-    std::string               pointId;
-    std::string               argsJson;
-    PluginxxOperatorHandle*   opHandle = nullptr;
-    int32_t                   status   = PLUGINXX_OPERATOR_OK;
-    std::string               payload;
-    std::string               startError;
-    std::atomic<AwaiterState> state{AwaiterState::INIT};
-    void*                     coroAddr = nullptr;
-};
-
-/// 调用一次功能点的 awaiter (结果 JSON 文本; 完成回调经桥回到插件协程)
-struct FeatureCallAwaiter {
-    std::shared_ptr<FeatureCallState> st;
-
-    FeatureCallAwaiter(
-        const PluginxxHost*              in_host,
-        const AgentxxPluginFeatureIface* in_feature,
-        std::string_view                 in_pointId,
-        std::string_view                 in_args,
-        PollOneBridge*                   in_bridge = nullptr,
-        ScopeRef                         in_agent  = {},
-        const PluginxxCancelIface*       in_cancel = nullptr
-    ) :
-        st(std::make_shared<FeatureCallState>()) {
-        st->host     = in_host;
-        st->feature  = in_feature;
-        st->pointId  = std::string(in_pointId);
-        st->argsJson = std::string(in_args);
-        st->bridge   = in_bridge;
-        st->agent    = in_agent;
-        st->cancel   = in_cancel;
-    }
-
-    bool await_ready() const noexcept {
-        return !st || !st->feature || !st->feature->call_point_async;
-    }
-
-    template<typename Promise>
-    bool await_suspend(std::coroutine_handle<Promise> h) {
-        st->coroAddr = h.address();
-        st->state.store(AwaiterState::CALLING, std::memory_order_release);
-
-        auto*          holder = new std::shared_ptr<FeatureCallState>(st);
-        PluginxxString err{nullptr, 0};
-        auto           idSv   = PluginStringView::from(st->pointId.data(), st->pointId.size());
-        auto           argsSv = PluginStringView::from(st->argsJson.data(), st->argsJson.size());
-
-        st->opHandle = st->feature->call_point_async(
-            st->host,
-            st->agent.ptr(),
-            &idSv,
-            &argsSv,
-            [](void* ud, int32_t cbSt, const PluginxxStringView* pl) {
-                auto* hp = static_cast<std::shared_ptr<FeatureCallState>*>(ud);
-                auto  s  = *hp;
-                delete hp;
-
-                s->status = cbSt;
-                if (pl && pl->data && pl->size > 0) {
-                    s->payload.assign(pl->data, static_cast<size_t>(pl->size));
-                }
-
-                auto expected = AwaiterState::CALLING;
-                if (s->state.compare_exchange_strong(
-                        expected,
-                        AwaiterState::COMPLETED,
-                        std::memory_order_acq_rel
-                    )) {
-                    return;
-                }
-
-                auto handle = std::coroutine_handle<Promise>::from_address(s->coroAddr);
-                handle.promise().clear_outstanding();
-
-                // 桥接路径不在主程序回调栈内恢复插件协程 (见 [resumePluginCoroutine])。
-                resumePluginCoroutine(s->bridge, handle);
-            },
-            holder,
-            &err
-        );
-
-        if (!st->opHandle) {
-            delete holder;
-            if (err.data) {
-                st->startError.assign(err.data, static_cast<size_t>(err.size));
-                PluginString::free(st->host, &err);
-            }
-            return false;
-        }
-
-        auto expected = AwaiterState::CALLING;
-        if (st->state.compare_exchange_strong(
-                expected,
-                AwaiterState::SUSPENDED,
-                std::memory_order_acq_rel
-            )) {
-            h.promise().set_outstanding([st = this->st]() {
-                if (st->cancel && st->cancel->op_cancel && st->opHandle) {
-                    st->cancel->op_cancel(st->opHandle);
-                }
-            });
-            return true;
-        }
-
-        return false;
-    }
-
-    /// - `return`: 受限结果 JSON 文本 (`{"ok":...}`; 失败时 `{"ok":false,"error":...}`)
-    std::string await_resume() {
-        if (!st->startError.empty()) {
-            // 受理失败: 与主程序的坏参数/不支持的语义区分开, 这里直接抛
-            throw std::runtime_error("call_feature start failed: " + st->startError);
-        }
-        if (st->status == PLUGINXX_OPERATOR_CANCELED) {
-            throw CanceledException(st->payload.empty() ? "call_feature Canceled" : st->payload);
-        }
-        // 注意: 调用本身的失败 (no_impl / disabled / busy / ...) 是"结果"不是"异常",
-        // 因此这里只要拿到回包就原样返回, 由调用方读 `ok` 字段判断。
-        return std::move(st->payload);
     }
 };
 
 } // namespace detail
 
-/// 声明插件自己的功能点 (本轮只允许 provide; 声明期间恒可被调用)
+/// 为一个扩展点登记一行实现 (实现行 = 能力行)
 ///
-/// `return`: 0 成功; 非 0 失败 (id 非法 / 类型不支持 / 与主程序点冲突)
-inline int32_t defineFeaturePoint(
-    const PluginBase&      ctx,
-    const ScopeRef&        agent,
-    const FeaturePointSpec& spec
-) {
-    if (!ctx.iface.feature || !ctx.iface.feature->define_point) {
-        return -1;
-    }
-    auto ref = agent.raw();
-    AgentxxPluginFeaturePointSpec native{};
-    native.struct_size     = sizeof(AgentxxPluginFeaturePointSpec);
-    native.type            = AGENTXX_PLUGIN_FEATURE_TYPE_PROVIDE;
-    native.impl_timeout_ms = spec.implTimeoutMs;
-    native.id              = PluginStringView::from(spec.id.data(), spec.id.size());
-    native.title           = PluginStringView::from(spec.title.data(), spec.title.size());
-    native.depict          = PluginStringView::from(spec.depict.data(), spec.depict.size());
-    native.args_doc        = PluginStringView::from(spec.argsDoc.data(), spec.argsDoc.size());
-    native.result_doc      = PluginStringView::from(spec.resultDoc.data(), spec.resultDoc.size());
-    return ctx.iface.feature->define_point(ctx.host, &ref, &native);
-}
-
-/// 撤销插件自己的点 (连带撤掉这些点上的全部实现)
-inline int32_t undefineFeaturePoint(const PluginBase& ctx, const ScopeRef& agent, std::string_view id) {
-    if (!ctx.iface.feature || !ctx.iface.feature->undefine_point) {
-        return -1;
-    }
-    auto ref  = agent.raw();
-    auto idSv = PluginStringView::from(id.data(), id.size());
-    return ctx.iface.feature->undefine_point(ctx.host, &ref, &idSv);
-}
-
-/// 把协程实现 (`Task<T>`) 的返回值包成主程序认识的回答 JSON
+/// - 主程序点写全名 (`agentxx.agent.point.*` 等), 自己的点写 `plugin.<插件名>.*`;
+/// - `fn` 收 `(ctx, 载荷 JSON)` (也可以只收载荷), 可返回字符串 (同步, 必须快速返回)
+///   或 `Task<T>` (异步), 返回值就是结果正文; 想显式置空 (`禁用该点`) 就回 `{"disable":true}`;
+/// - 行跟着**挂载**走: 禁用/卸载时由主程序按挂载记录撤销, 不必自己反注册。
 ///
-/// 同步实现 (`std::string` 形态) 由 kit 自动包装, 协程实现则是"返回什么就发什么",
-/// 因此协程里请用它包一层, 两种形态写起来一致:
-/// ```cpp
-/// provideFeature(ctx, point, [](Ctx& c, std::string_view call) -> Task<std::string> {
-///     auto out = utilxx_base::Json::object();
-///     out["tokens"] = 42;
-///     co_return featureAnswer(out.dump());   // → {"value":{"tokens":42}}
-/// });
-/// ```
-/// - 已经是完整回答 (`{"value":...}` / `{"disable":...}` / `{"verdict":...}`) 时原样返回;
-/// - **注意**: `value` / `disable` / `verdict` 是回答的保留键 —— 业务数据里要用同名字段时,
-///   请自己包一层 `{"value": <你的数据>}` (或换个字段名), 否则会被当成回答解读;
-/// - 想表达"没意见"返回空串 (`co_return std::string{}`) 或 `{}`
-inline std::string featureAnswer(std::string_view raw) {
-    return detail::wrapFeatureAnswer(raw);
-}
-
+/// - `args`:
+///     - [ctx] plugin 上下文
+///     - [ref] 本次挂载的 agent 引用 (行只对这个 agent 生效)
+///     - [pointId] 扩展点 id
+///     - [fn] 实现体
+///     - [opts] 顺序与耗时声明
+///     - [error] 非空时写入拒绝原因
+///
+/// - `return` 0 = 成功, 其它 = 主程序的错误码
 template<typename Ctx, typename Fn>
-inline int32_t provideFeature(
+inline int32_t providePoint(
     Ctx&                      ctx,
-    const ScopeRef&           agent,
+    const ScopeRef&           ref,
     std::string_view          pointId,
     Fn&&                      fn,
-    FeatureImplOptions        opts = {}
+    const PointImplOptions&   opts  = {},
+    std::string*              error = nullptr
 ) {
-    if (!ctx.iface.feature || !ctx.iface.feature->register_impl) {
-        return -1;
-    }
-
-    struct ImplShim {
-        Ctx*             ctx = nullptr;
-        std::decay_t<Fn> fn;
-    };
-
-    /// 异步实现的 provider 句柄 (拥有输入 Request, 由 promise.opCleanup_ 回收)
-    struct ImplJob {
-        ImplShim*                          shim = nullptr;
-        std::shared_ptr<std::atomic<bool>> cancelFlag;
-        void*                              coroAddr = nullptr;
-        detail::RootRequest                request;
-    };
-
-    auto shim = ctx.storeShim(std::make_unique<ImplShim>(ImplShim{&ctx, std::forward<Fn>(fn)}));
-
-    AgentxxPluginFeatureImplSpec spec{};
-    spec.struct_size        = sizeof(AgentxxPluginFeatureImplSpec);
-    spec.priority           = opts.priority;
-    spec.default_timeout_ms = opts.defaultTimeoutMs;
-    spec.point_id           = PluginStringView::from(pointId.data(), pointId.size());
-    spec.user_data          = shim;
-
-    spec.impl_start = [](void* user_data,
-                         const PluginxxStringView* /*point_id*/,
-                         const PluginxxStringView*     call_json,
-                         const PluginxxOperatorNotify* notify,
-                         PluginxxString*               error_out) -> void* {
-        auto* shimPtr = static_cast<ImplShim*>(user_data);
-        (void)error_out;
-        if (!shimPtr || !shimPtr->ctx) {
-            detail::CompletionGuard guard(notify);
-            guard.failed("feature impl context released");
-            return nullptr;
-        }
-        const std::string callText
-            = call_json ? std::string(PluginStringView::str(call_json)) : std::string{};
-
-        using Ret = decltype(shimPtr->fn(*shimPtr->ctx, callText));
-        if constexpr (std::is_same_v<std::decay_t<Ret>, std::string>) {
-            /// 同步实现: 调用返回即完成 (业务体必须快速返回, 不做 IO / 不等待)
-            detail::CompletionGuard guard(notify);
-            try {
-                const std::string answer
-                    = detail::wrapFeatureAnswer(shimPtr->fn(*shimPtr->ctx, callText));
-                guard.ok(answer);
-            } catch (...) {
-                guard.fromCurrentException();
-            }
-            return nullptr;
-        } else {
-            /// 协程实现 (Task<T>): 由 promise 在协程结束后完成通知
-            /// - 入参必须**活到协程结束**: 这里用 Job 拥有的 Request 副本
-            ///   (协程是延迟启动的, 传 `callText` 这类栈上临时量的视图会悬垂)
-            auto* job = new ImplJob{
-                shimPtr,
-                std::make_shared<std::atomic<bool>>(false),
-                nullptr,
-                detail::hookRootRequest(shimPtr->ctx->host, call_json)
-            };
-            auto task = shimPtr->fn(*shimPtr->ctx, job->request.args());
-            if (!task.handle_) {
-                delete job;
-                detail::CompletionGuard guard(notify);
-                guard.failed("feature impl returned an empty task");
-                return nullptr;
-            }
-            auto h        = task.handle_;
-            task.handle_  = nullptr;
-            auto& p       = h.promise();
-            p.notify_     = notify ? *notify : PluginxxOperatorNotify{nullptr, nullptr};
-            p.host_       = job->request.host;
-            p.cancelFlag_ = job->cancelFlag;
-            job->coroAddr = h.address();
-
-            // 根的首步由主程序 driver 推进 (与 hook/tool 的异步形态一致)
-            detail::startBridgedRoot(shimPtr->ctx->bridge(), p.notify_, h, [job] {
-                delete job;
-            });
-            return job;
-        }
-    };
-
-    spec.impl_cancel = [](void* user_data, void* op) {
-        (void)user_data;
-        if (!op) {
-            return;
-        }
-        auto* job = static_cast<ImplJob*>(op);
-        if (job->cancelFlag) {
-            job->cancelFlag->store(true, std::memory_order_release);
-        }
-        if (job->coroAddr) {
-            // 注意: 帧的 promise 是 Task<T>::promise_type (T 由业务签名决定), 这里按
-            // 与 tool/hook 相同的做法用 PromiseBase<void> 视图访问基类成员 ——
-            // PromiseBase<T> 的布局与 T 无关, 只用到基类里的取消登记。
-            auto handle
-                = std::coroutine_handle<detail::PromiseBase<void>>::from_address(job->coroAddr);
-            handle.promise().cancel_outstanding();
-        }
-    };
-
-    return ctx.iface.feature->register_impl(ctx.host, agent.ptr(), &spec);
-}
-
-/// 撤销本实例在某点上的实现
-inline int32_t
-    unprovideFeature(const PluginBase& ctx, const ScopeRef& agent, std::string_view pointId) {
-    if (!ctx.iface.feature || !ctx.iface.feature->unregister_impl) {
-        return -1;
-    }
-    auto idSv = PluginStringView::from(pointId.data(), pointId.size());
-    return ctx.iface.feature->unregister_impl(ctx.host, agent.ptr(), &idSv);
-}
-
-/// 读功能点清单 (JSON 文本; 主程序不支持或查询失败返回空串)
-inline std::string listFeaturePoints(const PluginBase& ctx, const ScopeRef& agent) {
-    if (!ctx.iface.feature || !ctx.iface.feature->list_points) {
-        return {};
-    }
-    PluginxxString out{nullptr, 0};
-    if (ctx.iface.feature->list_points(ctx.host, agent.ptr(), &out) != 0 || !out.data) {
-        if (out.data) {
-            PluginString::free(ctx.host, &out);
-        }
-        return {};
-    }
-    std::string text{out.data, static_cast<size_t>(out.size)};
-    PluginString::free(ctx.host, &out);
-    return text;
-}
-
-/// 调用一个功能点 (协程形态; 结果 JSON 文本 `{"ok":...}`)
-/// - 只拿数据: 调用不写值缓存、不记置空、不改调用方会话
-/// - 调用本身的失败 (no_impl / disabled / busy / not_callable / bad_args / failed)
-///   在结果的 `ok:false` + `error` 里, 不是异常; 受理失败 (参数非法 / 主程序不支持) 抛异常
-/// - **本实例自己的实现不会被问到** (避免无用往返): 同一插件内部要取值请直接调本地函数;
-///   没有其它实现时结果是 `no_impl`
-inline detail::FeatureCallAwaiter callFeature(
-    const PluginBase& ctx,
-    const ScopeRef&   agent,
-    std::string_view  pointId,
-    std::string_view  argsJson = "{}"
-) {
-    return detail::FeatureCallAwaiter{
-        ctx.host,
-        ctx.iface.feature,
+    pluginxx::CapabilityOptions cap;
+    cap.impls     = PLUGINXX_CAPABILITY_IMPLS_MANY;
+    cap.merge     = PLUGINXX_CAPABILITY_MERGE_FIRST;
+    cap.phases    = PLUGINXX_CAPABILITY_PHASE_MASK_IMPL;
+    cap.phase     = PLUGINXX_CAPABILITY_PHASE_IMPL;
+    cap.priority  = opts.priority;
+    cap.timeoutMs = opts.timeoutMs;
+    cap.ownerTag  = opts.ownerTag;
+    // 空的引用 = 进程级行 (对所有 agent 生效); 有引用时只对这个挂载生效
+    cap.scope     = ref.empty() ? nullptr : ref.ptr();
+    return pluginxx::capability(
+        ctx,
         pointId,
-        argsJson,
-        &ctx.bridge(),
-        agent
-    };
+        detail::PointImplAdapter<Ctx, std::decay_t<Fn>>{std::forward<Fn>(fn)},
+        cap,
+        error
+    );
 }
 
 /// ==================== (kit::tool / fast_tool / blocking_tool / hook / capability)

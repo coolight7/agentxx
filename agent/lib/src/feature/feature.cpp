@@ -161,6 +161,14 @@ void PointBase::setOrigin(std::string origin) {
     origin_ = std::move(origin);
 }
 
+const std::string& PointBase::pluginPointId() const noexcept {
+    return pluginPointId_;
+}
+
+void PointBase::setPluginPointId(std::string id) {
+    pluginPointId_ = std::move(id);
+}
+
 bool PointBase::callable() const noexcept {
     return opts_.callable;
 }
@@ -457,7 +465,102 @@ asio::awaitable<std::optional<ChainOutcome>>
     co_return out;
 }
 
+void PointBase::setPluginEmitter(PluginEmitFn fn) {
+    pluginEmit_ = std::move(fn);
+}
+
 asio::awaitable<ChainOutcome> PointBase::runPluginLayer(const ChainEnv& env) {
+    ChainOutcome out;
+    out.error   = CallError::NoImpl;
+    out.message = fmt::format("功能点 `{}` 现在没有实现给出值", id_);
+    if (!pluginEmit_) {
+        co_return out; // 没装插件管理器 (单测 / 嵌入场景)
+    }
+
+    // 插件层 = 框架能力表里的实现行: 排序 / 作用域过滤 / 超时 / 合并都由平台做
+    // 发出去的 id 是插件面的扩展点 id (`agentxx.agent.point.*`), 不是库内点 id
+    const std::string& emitId = pluginPointId_.empty() ? id_ : pluginPointId_;
+    // 入参: 库内的两份 JSON (`args` / `request`) 包成一个对象发出去, 插件按名取;
+    // 只给一份时另一份不出现 (插件侧不必区分"空"与"没有")
+    utilxx_base::Json payload = utilxx_base::Json::object();
+    payload["point"]         = emitId;
+    if (!env.argsJson.empty()) {
+        payload["args"] = utilxx_base::catchError<utilxx_base::Json>(
+            [&env]() -> utilxx_base::Json { return utilxx_base::Json::parse(env.argsJson); },
+            [&env](std::string) -> utilxx_base::Json {
+                return utilxx_base::Json{env.argsJson};
+            }
+        );
+    }
+    if (!env.requestJson.empty()) {
+        payload["request"] = utilxx_base::catchError<utilxx_base::Json>(
+            [&env]() -> utilxx_base::Json { return utilxx_base::Json::parse(env.requestJson); },
+            [&env](std::string) -> utilxx_base::Json {
+                return utilxx_base::Json{env.requestJson};
+            }
+        );
+    }
+    const std::string payloadJson = payload.dump();
+    std::optional<std::string> answer;
+    try {
+        answer = co_await pluginEmit_(emitId, payloadJson);
+    } catch (const std::exception& e) {
+        XX_LOGW("功能点 `{}`: 插件层调用失败, 按没意见继续: {}", id_, e.what());
+        co_return out;
+    }
+    if (!answer.has_value()) {
+        co_return out;
+    }
+
+    // 回答形状:
+    // - `{"disable": true}`: 显式置空;
+    // - `{"value": ...}`: 取 `value` (早期包装形式);
+    // - 其它合法 JSON: 整份就是值 (实现行直接回 `{"tokens":42}`)
+    auto parsed = utilxx_base::catchError<std::optional<utilxx_base::Json>>(
+        [&answer]() -> std::optional<utilxx_base::Json> {
+            return utilxx_base::Json::parse(*answer);
+        },
+        [this](std::string err) -> std::optional<utilxx_base::Json> {
+            XX_LOGW("功能点 `{}`: 插件层回了非法 JSON, 按没意见处理: {}", id_, err);
+            return std::nullopt;
+        }
+    );
+    if (!parsed.has_value()) {
+        co_return out;
+    }
+    const auto& json = *parsed;
+    if (json.is_null()) {
+        co_return out;
+    }
+    if (json.is_object()) {
+        if (auto it = json.find("disable"); it != json.end() && it->is_boolean() && it->get<bool>()) {
+            out.disabled = true;
+            out.error    = CallError::Disabled;
+            out.message  = fmt::format("功能点 `{}` 被插件实现置空", id_);
+            co_return out;
+        }
+        if (auto it = json.find("value"); it != json.end()) {
+            if (it->is_null()) {
+                co_return out; // `{"value":null}` = 算过了但没结果, 按没意见
+            }
+            out.hasValue  = true;
+            out.valueJson = it->dump();
+            out.by        = "plugin";
+            out.error     = CallError::None;
+            co_return out;
+        }
+        if (json.empty()) {
+            co_return out; // `{}` = 没意见
+        }
+    }
+    out.hasValue  = true;
+    out.valueJson = json.dump();
+    out.by        = "plugin";
+    out.error     = CallError::None;
+    co_return out;
+}
+
+asio::awaitable<ChainOutcome> PointBase::runLocalImpls(const ChainEnv& env) {
     ChainOutcome out;
     for (const auto* entry : orderedPluginImpls()) {
         if (entry->layer != ImplLayer::Plugin || !entry->fn) {
@@ -861,8 +964,12 @@ JsonProvidePoint::JsonProvidePoint(std::string id, PointOptions opts, std::strin
 }
 
 asio::awaitable<ChainOutcome> JsonProvidePoint::runChain(const ChainEnv& env) {
-    // 插件点没有核心实现: 只问插件层, 没人给值就是 no_impl
-    co_return co_await runPluginLayer(env);
+    // 插件点没有核心实现: 先问主程序发出去的扩展点, 再问本点自己登记的实现
+    auto outcome = co_await runPluginLayer(env);
+    if (outcome.hasValue || outcome.disabled) {
+        co_return outcome;
+    }
+    co_return co_await runLocalImpls(env);
 }
 
 namespace {

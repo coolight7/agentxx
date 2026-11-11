@@ -192,6 +192,57 @@
   的 `agentxx.broadcasts` 加回 `require`（现在只靠代码里的“表缺失就空转”降级，
   因为客户端接口协商在步骤 5 之前没有这张表，声明成 require 会让它的客户端侧检查失败）
 
+- **步骤 3-2 已完成：删 `agentxx.agent.feature` 表，实现行 = 能力行**
+  - 库：`pluginxx::capability()` 增加 `CapabilityOptions`（impls/merge/phases/phase/priority/
+    timeoutMs/ownerTag/scope）与 `error` 出参，返回登记结果码（原来恒为 void 且丢掉错误）；
+    老的调用形状不变（默认值 = 声明自己的名字 + 单行覆盖 + 只开 impl 阶段）
+  - SDK：`plugin_kit.h` 的“功能扩展点”段改为两件东西 —— `PointImplOptions`（优先级 / 超时 /
+    ownerTag）与 `providePoint(ctx, ref, pointId, fn, opts, error)`：把 `(ctx, 载荷)` 形态的
+    实现体适配成能力表的三参处理器，登记为 `impls: many` + `merge: first` + impl 阶段，
+    **带本次挂载的作用域**（行只对这个 agent 生效）；`pointAnswer()` 保持不变
+  - 主程序：`PluginManager::emitPoint(agentId, pointId, payload)`（`asio::awaitable`，
+    用 `asio::async_initiate` + `use_awaitable`，完成回调自己释放状态）；
+    `feature::PointBase` 新增 `pluginPointId`（库内点 id 与插件面扩展点 id 的配对）与
+    `PluginEmitFn` 注入点，`runChain` = 插件层 (`runPluginLayer`) → 本点自登记的实现
+    (`runLocalImpls`) → 核心实现
+  - 点 id 配对：`agentxx.agent.context.countTokens`/`.summarize` 两个库内点分别对应插件面
+    `agentxx.agent.point.*`（`registerContextPoints` 里 `setPluginPointId`）
+  - 插件层载荷：`{"point": <扩展点 id>, "args": <argsJson>, "request": <requestJson>}`，
+    另一份缺省时不出现；回答解析保留 `{"disable":true}` / `{"value":...}` / 整份当值
+  - 删表：`plugin_api.h` 的 feature 整段（IID/版本/基线/`FeaturePointSpec`/`FeatureImplSpec`/
+    `Iface`）、`plugin_iface_meta.h` 特化、`plugin_spec.h` 基线、`plugin_manager_feature.cpp`
+    （`git rm`）、vtable 的 6 个成员与 query 分支、`PluginMount` 的 feature 记账、
+    统一注册清单的 `featurePoints/featureImpls`、`Registry::definePluginPoint/undefinePluginPoint`
+    （`removePointsOwnedBy` 保留：按 `origin` 撤销点，单测用）
+  - 示例：`example_feature` 2.0.0 改为“声明并实现自己的扩展点 + 给主程序点登记实现行”，
+    `plugin.yaml` 只 require `agentxx.agent.core`（旧的 `agentxx.agent.feature` 没了）
+  - 测试：`plugin_feature` 重写为 34 条（实现行随挂载生效 / 禁用回落核心实现 / 启用重新登记 /
+    卸载回基线 / 自己的扩展点同步与异步行 / 未声明的点按没意见返回 / 核心实现不进能力调用链）；
+    `feature_points` 的插件点用例改成“为主程序点登记实现 + 按归属撤销”；
+    `boundaries` 21 张（10 通用 + 11 业务）、合计 30、台账删 `AgentxxPluginFeatureIface`；
+    `plugin_host_mount` 21 张、`plugin_cleanup`/`plugin_runtime` 删 feature 计数与 sizeof
+  - 文档：`plugins.md`（21 张 / 11 业务 / 表格删 feature 行 / 架构图 21）、`index.md`（21 张 +
+    业务表清单去 feature）、根 `AGENTS.md`（21 张 / 11 业务）
+  - 验证：lib/plugins/test 全编过（26 个插件目标重建）；`boundaries` 19、`plugin_feature` 34、
+    `plugin_point` 63、`feature_points` 129、`plugins` 610、`plugin_host_mount` 146、
+    `plugin_multi_mount` 47、`plugin_cleanup` 93、`plugin_sdk` 141、`plugin_runtime` 731、
+    `client_plugins` 754、`summarization` 454、`observability` 114、`event_hub` 268、
+    `event_tools` 97、`event_delivery` 48 全绿
+  - 踩到的坑（记录下来免得下次再踩）：
+    - 用行区间删除 vtable 里的大段时把 `xx_get_prompt` 与 8 张表的 const 定义一起切掉了 ——
+      已用 `git checkout` 恢复后按锚点重删；批量删除后必须重编整个 lib 目标确认
+    - `asio::awaitable` 的 `await_transform` 不接受自定义 awaiter：等 C 回调要写
+      `asio::async_initiate<use_awaitable_t<>, void(结果)>(initiation, token)`，且 token 必须
+      是非 const 变量（`const` 令牌是左值，`async_initiate` 第二参要求非 const 引用）
+    - `PointBase` 的 `id_` 与插件面扩展点 id 不是一个字符串（`agentxx.agent.context.*` vs
+      `agentxx.agent.point.*`），必须显式配对，否则插件登记的实现行永远查不到
+    - 能力表的处理器固定收 `(ctx, method, args)`：两参 lambda 会被 `invokeCap` 判成
+      “不可调用”并退到 `fn(method, args)` 分支报 C2664，SDK 侧要用适配器统一成三参
+    - 统一注册清单的 `capabilities` 计数只统计主程序侧登记记录（框架能力表里直接登记的
+      实现行不计），断言别指望它反映实现行条数
+    - `boundaries` 规则 15 会拦停用词（`埋点`/`宿主`/`链路`/`领域`），注释里也要改成
+      “扩展点 / 主程序 / 流程 / 业务”
+
 - 顺手修的运行时问题（属步骤 2 的尾巴）：`runtime.register_trigger` / `runtime_emit_event`
   在频道未声明时**按名字定属主**（`plugin.<名>.*` 归该插件），否则插件发布自己的频道
   会被“属主不是它”拒成 `ERR_FAILED(-7)`（`plugin_agent_runtime` 14 条失败即此）；

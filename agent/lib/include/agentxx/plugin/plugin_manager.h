@@ -168,7 +168,7 @@ public:
     /// - `net` 由本主程序实现, 单独一张 (`agentxx.net`), 不计入上面两组
     /// - 增删接口表时同时更新本常量与 `docs/zh-cn/design/plugins.md` §8 与根 `AGENTS.md`
     ///   (测试模块 `boundaries` 会校验三者一致)
-    inline static constexpr size_t kInterfaceTableCount = 10 + 12;
+    inline static constexpr size_t kInterfaceTableCount = 10 + 11;
 
     /// 清单行 (诊断与界面展示; 主程序视图)
     struct PluginListView {
@@ -203,9 +203,6 @@ public:
         size_t eventSubCount = 0;
         /// 已声明权限限制的工具数
         size_t permissionToolCount = 0;
-        /// 本实例声明的功能点数 / 登记的实现数
-        size_t featurePointCount = 0;
-        size_t featureImplCount  = 0;
         /// 统一注册清单: 各项的合计 (0 = 已回到基线)
         size_t registrationTotal = 0;
         /// 其中的提示词键占用数
@@ -323,9 +320,6 @@ public:
     void onTurnBegin();
     void onTurnEnd();
     void flushPendingCleanup();
-
-    /// 功能点清单 (单挂载 = 该挂载; 多挂载 = 合并数组)
-    std::string listFeaturePoints();
 
     /// 全部挂载的摘要 JSON 数组 (`agentxx.agent.mount.list`)
     std::string listMountsJson();
@@ -471,6 +465,17 @@ public:
     void publishPoint(
         std::string_view pointId,
         std::string_view agentId,
+        std::string_view payloadJson
+    );
+
+    /// 发一次扩展点并等实现行的结果 (IO 线程)
+    ///
+    /// - 实现行 = 框架能力表里的行 (`register_capability`, 按 `scope` 过滤, 按优先级排);
+    /// - 返回 `std::nullopt` = 没人给出结果 (没实现行 / 全部回了空 / 失败);
+    /// - 返回值是第一个给出非空结果的行那价 JSON (框架已经做好排序与合并)。
+    asio::awaitable<std::optional<std::string>> emitPoint(
+        std::string_view agentId,
+        std::string_view pointId,
         std::string_view payloadJson
     );
 

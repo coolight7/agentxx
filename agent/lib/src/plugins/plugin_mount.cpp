@@ -455,23 +455,10 @@ void PluginMount::revokeEntry(Entry& entry) {
     removePromptContributions(inst->name);
     entry.promptKeys.clear();
 
-    // ⑥ 功能点: 先撤实现, 再撤自己声明的点
-    if (ctx && ctx->features) {
-        const std::string owner = fmt::format("plugin:{}", inst->name);
-        for (const auto& pointId : entry.featureImpls) {
-            ctx->features->removeImpl(pointId, owner);
-        }
-        for (const auto& pointId : entry.featurePoints) {
-            ctx->features->undefinePluginPoint(pointId);
-        }
-    }
-    entry.featureImpls.clear();
-    entry.featurePoints.clear();
-
-    // ⑦ 钩子处理器: 从本挂载的注册表摘除 (记录保留, 句柄置 0)
+    // ⑥ 钩子处理器: 从本挂载的注册表摘除 (记录保留, 句柄置 0)
     detachHookHandlers(inst.get());
 
-    // ⑧ 工具权限声明: 工具不再可调用, 声明无需保留
+    // ⑦ 工具权限声明: 工具不再可调用, 声明无需保留
     if (auto* permission = permissionMiddleware(); permission != nullptr) {
         for (const auto& name : entry.permissionTools) {
             permission->unregisterToolPermission(name);
@@ -479,7 +466,7 @@ void PluginMount::revokeEntry(Entry& entry) {
     }
     entry.permissionTools.clear();
 
-    // ⑨ 工具: 从注册表摘除; 工具对象移入回收站, 保活仍在执行中的调用
+    // ⑧ 工具: 从注册表摘除; 工具对象移入回收站, 保活仍在执行中的调用
     for (const auto& name : entry.tools) {
         toolRegistry()->unregisterTool(name);
     }

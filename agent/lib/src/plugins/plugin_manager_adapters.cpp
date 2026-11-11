@@ -697,24 +697,6 @@ PluginMount::RegistrationInventory PluginMount::registrationInventory(const Plug
     out.ownsGraphDefinition
         = (!graphDefinitionOwner_.empty() && graphDefinitionOwner_ == inst.name);
 
-    // 功能点: 只数"当前生效"的项 —— 实现按注册表里存在的归属计数, 点按注册表里
-    // 来源等于本实例的点计数 (禁用/卸载时已被摘除)
-    if (auto ctx = agent_.lock(); ctx && ctx->features) {
-        const std::string owner = fmt::format("plugin:{}", inst.name);
-        for (const auto& pointId : entry->featureImpls) {
-            if (auto* point = ctx->features->find(pointId);
-                point != nullptr && point->hasImplOf(owner)) {
-                ++out.featureImpls;
-            }
-        }
-        for (const auto& pointId : entry->featurePoints) {
-            if (auto* point = ctx->features->find(pointId);
-                point != nullptr && point->origin() == owner) {
-                ++out.featurePoints;
-            }
-        }
-    }
-
     return out;
 }
 

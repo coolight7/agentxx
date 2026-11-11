@@ -946,58 +946,37 @@ asio::awaitable<void> test_bad_args_shape() {
     co_return;
 }
 
-/// 插件点: 声明 / 实现 / 撤销 / 命名空间校验
+/// 插件点: 旧的声明表已经不在了 (插件自己的扩展点直接是 `plugin.<自己>.*` 能力),
+/// 注册表只管主程序点 —— 这里只验证“为已有主程序点登记实现 / 按归属撤销”这一半。
 asio::awaitable<void> test_plugin_points() {
-    Registry                          registry;
-    agentxx::feature::PluginPointDecl decl;
-    decl.id        = "plugin.my_plugin.beat";
-    decl.owner     = "plugin:my_plugin";
-    decl.title     = "节拍检测";
-    decl.depict    = "算出这段音频的 BPM 与节拍时刻";
-    decl.argsDoc   = "path";
-    decl.resultDoc = "{bpm, beats}";
-    XX_TEST_EXPECT_EQ(registry.definePluginPoint(decl), 0);
+    Registry registry;
 
-    // 命名空间校验: 只要在 plugin.* 里就行 (不限定插件名: 同一组织多插件可共用一段),
-    // 其余族与不合格名字一律拒绝
-    agentxx::feature::PluginPointDecl shared = decl;
-    shared.id                                = "plugin.org_shared.beat";
-    shared.owner                             = "plugin:other_plugin";
-    XX_TEST_EXPECT_EQ(registry.definePluginPoint(shared), 0);
-    XX_TEST_EXPECT_EQ(registry.undefinePluginPoint(shared.id), 0);
-
-    agentxx::feature::PluginPointDecl bad = decl;
-    bad.id                                = "agentxx.agent.context.countTokens";
-    XX_TEST_EXPECT_EQ(registry.definePluginPoint(bad), -1);
-    bad.id = "plugin.my_plugin.";
-    XX_TEST_EXPECT_EQ(registry.definePluginPoint(bad), -1);
-    bad.id = "beat";
-    XX_TEST_EXPECT_EQ(registry.definePluginPoint(bad), -1);
-
-    // 声明后恒为可调; 没有实现时 no_impl
-    auto* point
-        = dynamic_cast<agentxx::feature::JsonProvidePoint*>(registry.find("plugin.my_plugin.beat"));
-    XX_TEST_EXPECT_TRUE(point != nullptr);
-    auto rc = co_await point->call(R"({"path":"a.wav"})", CallOptions{.caller = "plugin:other"});
+    // 主程序点: 声明后恒为可调; 没有实现时 no_impl
+    agentxx::feature::PointOptions opts;
+    opts.title    = "节拍检测";
+    opts.depict   = "算出这段音频的 BPM 与节拍时刻";
+    opts.callable = true;
+    auto& point   = registry.provideJson("plugin.org_shared.beat", std::move(opts), "plugin:my_plugin");
+    auto  rc      = co_await point.call(R"({"path":"a.wav"})", CallOptions{.caller = "plugin:other"});
     XX_TEST_EXPECT_EQ(static_cast<int>(rc.error), static_cast<int>(CallError::NoImpl));
 
-    // 另一个插件为它登记实现
-    registry.addImpl("plugin.my_plugin.beat", jsonImpl("plugin:other", 0, [](std::string callJson) {
+    // 另一个调用方为它登记实现
+    registry.addImpl("plugin.org_shared.beat", jsonImpl("plugin:other", 0, [](std::string callJson) {
                          return callJson.find("a.wav") != std::string::npos
                                     ? std::string{R"({"value":{"bpm":128}})"}
                                     : std::string{R"({})"};
                      }));
-    auto r = co_await point->call(R"({"path":"a.wav"})", CallOptions{.caller = "plugin:consumer"});
+    auto r = co_await point.call(R"({"path":"a.wav"})", CallOptions{.caller = "plugin:consumer"});
     XX_TEST_EXPECT_TRUE(r.ok());
     XX_TEST_EXPECT_EQ(r.ok() ? r.value->value<int>("bpm", 0) : -1, 128);
     // 参数给不出目标 (返回空对象 = 没意见) -> no_impl
     auto rEmpty
-        = co_await point->call(R"({"path":"b.wav"})", CallOptions{.caller = "plugin:consumer"});
+        = co_await point.call(R"({"path":"b.wav"})", CallOptions{.caller = "plugin:consumer"});
     XX_TEST_EXPECT_EQ(static_cast<int>(rEmpty.error), static_cast<int>(CallError::NoImpl));
 
     // 撤销点: 声明方走了, 点与实现一起消失
     XX_TEST_EXPECT_EQ(registry.removePointsOwnedBy("plugin:my_plugin"), size_t{1});
-    XX_TEST_EXPECT_TRUE(registry.find("plugin.my_plugin.beat") == nullptr);
+    XX_TEST_EXPECT_TRUE(registry.find("plugin.org_shared.beat") == nullptr);
     co_return;
 }
 

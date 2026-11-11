@@ -1343,8 +1343,6 @@ TestResult testPluginRuntime() {
             XX_TEST_EXPECT_EQ(sizeof(AgentxxToolRenderSpec), size_t{56});
             XX_TEST_EXPECT_EQ(sizeof(AgentxxTimerSpec), size_t{56});
             XX_TEST_EXPECT_EQ(sizeof(AgentxxKeybindSpec), size_t{56});
-            XX_TEST_EXPECT_EQ(sizeof(AgentxxPluginFeaturePointSpec), size_t{96});
-            XX_TEST_EXPECT_EQ(sizeof(AgentxxPluginFeatureImplSpec), size_t{56});
         }
     }
 

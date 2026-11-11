@@ -385,8 +385,6 @@ PluginMount::RegistrationInventory
         out.skillDirs += one.skillDirs;
         out.memoryFiles += one.memoryFiles;
         out.mcpNamespaces += one.mcpNamespaces;
-        out.featurePoints += one.featurePoints;
-        out.featureImpls += one.featureImpls;
         out.ownsGraphDefinition = out.ownsGraphDefinition || one.ownsGraphDefinition;
     }
     return out;
@@ -475,19 +473,6 @@ void PluginManager::flushPendingCleanup() {
             mount->flushPendingCleanup();
         }
     }
-}
-
-std::string PluginManager::listFeaturePoints() {
-    if (auto* mount = soleMount(); mount != nullptr) {
-        return mount->listFeaturePoints();
-    }
-    utilxx_base::Json arr = utilxx_base::Json::array();
-    for (const auto& mount : mounts_) {
-        if (mount) {
-            arr.push_back(utilxx_base::Json::parse(mount->listFeaturePoints()));
-        }
-    }
-    return arr.dump();
 }
 
 std::string PluginManager::listMountsJson() {
@@ -1073,8 +1058,6 @@ void mergeMountView(
     view.skillDirCount += inventory.skillDirs;
     view.memoryFileCount += inventory.memoryFiles;
     view.mcpNamespaceCount += inventory.mcpNamespaces;
-    view.featurePointCount += inventory.featurePoints;
-    view.featureImplCount += inventory.featureImpls;
     view.ownsGraphDefinition = view.ownsGraphDefinition || inventory.ownsGraphDefinition;
 }
 

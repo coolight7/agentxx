@@ -434,6 +434,21 @@ asio::awaitable<void> BaseAgent::init() {
             agentxx::agent::AgentConfigStatic::devMode
                 = agentContext->agentConfig && agentContext->agentConfig->devMode;
             agentContext->features = std::make_shared<agentxx::feature::Registry>();
+            // 插件层入口: 取值时先发一次同名扩展点 (实现行 = 能力行), 由插件管理器
+            // 排序/过滤/合并; 管理器还没建时弱引用取不到, 等于没有插件层
+            std::weak_ptr<agentxx::agent::AgentContext> weakCtx = agentContext;
+            agentContext->features->setPluginEmitter(
+                [weakCtx](std::string_view pointId,
+                          std::string_view payloadJson) -> asio::awaitable<std::optional<std::string>> {
+                    auto ctx = weakCtx.lock();
+                    if (nullptr == ctx || nullptr == ctx->pluginManager) {
+                        co_return std::nullopt;
+                    }
+                    const std::string agentId
+                        = ctx->agentId.empty() ? std::string{"root"} : ctx->agentId;
+                    co_return co_await ctx->pluginManager->emitPoint(agentId, pointId, payloadJson);
+                }
+            );
             co_return;
         },
         .rollback =

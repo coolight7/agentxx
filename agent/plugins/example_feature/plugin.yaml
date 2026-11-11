@@ -1,11 +1,11 @@
 name: example_feature
-version: 1.0.0
-description: "Example feature-point plugin: declares a point, implements host points, calls points"
+version: 2.0.0
+description: "Example plugin: declares its own extension point and provides impl rows for app points"
 entry: libexample_feature.so
 interfaces:
+  # 扩展点实现行 = 能力行: 只需要能力表与日志
   require:
     - agentxx.agent.core
-    - agentxx.agent.feature
   # 钩子表属可选能力: 主程序不支持有序登记成员时插件不登记 (加载照常成功)
   optional:
     - agentxx.agent.hooks

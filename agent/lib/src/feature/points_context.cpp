@@ -7,6 +7,7 @@
 #include "agentxx/feature/points.h"
 
 #include "agentxx/feature/registry.h"
+#include "agentxx/plugin/api/agentxx_point_ids.h"
 #include "agentxx/util/exception.h"
 #include "fmt/format.h"
 
@@ -292,6 +293,8 @@ ContextPoints registerContextPoints(Registry& registry, const ContextPointOption
             return estimator->identityOf(req);
         }
     );
+    // 插件面的扩展点 id (`agentxx.agent.point.*` 一房): 实现行登记在它上面
+    out.countTokens->setPluginPointId(std::string{agentxx::plugin::points::ContextCountTokens});
     out.countTokens->addCoreImpl(
         std::string{points::kOwnerCountTokens},
         0, // 核心层内的顺序 (跨层顺序由层决定: 插件层恒在 core 层之前)
@@ -323,6 +326,7 @@ ContextPoints registerContextPoints(Registry& registry, const ContextPointOption
             return summarizeIdentity(req);
         }
     );
+    out.summarize->setPluginPointId(std::string{agentxx::plugin::points::ContextSummarize});
     if (options.summarizeImpl) {
         auto impl = options.summarizeImpl;
         out.summarize->addCoreImpl(

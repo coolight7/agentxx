@@ -427,43 +427,6 @@ public:
     );
 
     // =====================================================================
-    // 功能点 (agentxx.agent.feature)
-    // =====================================================================
-
-    /// 为某个点登记实现 (同一 `(点, 实例)` 重复登记 = 覆盖)
-    int registerFeatureImpl(PluginInstance* inst, const AgentxxPluginFeatureImplSpec* spec);
-
-    /// 撤销本实例在某点上的实现
-    int unregisterFeatureImpl(PluginInstance* inst, PluginxxStringView pointId);
-
-    int unregisterFeatureImpl(PluginInstance* inst, std::string_view pointId) {
-        return unregisterFeatureImpl(inst, strToSv(pointId));
-    }
-
-    /// 声明一个插件功能点 (id 必须落在 `plugin.*`; 建议用自己的插件名作前缀)
-    int defineFeaturePoint(PluginInstance* inst, const AgentxxPluginFeaturePointSpec* spec);
-
-    /// 撤销本实例声明的点 (连带撤掉这些点上的全部实现)
-    int undefineFeaturePoint(PluginInstance* inst, PluginxxStringView pointId);
-
-    int undefineFeaturePoint(PluginInstance* inst, std::string_view pointId) {
-        return undefineFeaturePoint(inst, strToSv(pointId));
-    }
-
-    /// 功能点清单 JSON (插件 `list_points`、加载快照与诊断共用同一份实现)
-    std::string listFeaturePoints();
-
-    /// 调用一个功能点 (异步; 完成回调经 notify 在主程序 IO 线程发布)
-    PluginxxOperatorHandle* callFeatureAsync(
-        PluginInstance*          caller,
-        PluginxxStringView       pointId,
-        PluginxxStringView       argsJson,
-        PluginxxOperatorCallback cb,
-        void*                    ud,
-        PluginxxString*          error_out
-    );
-
-    // =====================================================================
     // 执行图 (agentxx.agent.graph)
     // =====================================================================
 
@@ -568,15 +531,13 @@ public:
         size_t skillDirs           = 0; ///< skill 扫描目录 (资源应用器)
         size_t memoryFiles         = 0; ///< memory 上下文文件 (资源应用器)
         size_t mcpNamespaces       = 0; ///< MCP 命名空间 (资源应用器)
-        size_t featurePoints       = 0; ///< 本实例声明的功能点 (生效中)
-        size_t featureImpls        = 0; ///< 本实例登记的功能点实现 (生效中)
         bool   ownsGraphDefinition = false; ///< 是否占用执行图定义 (独占 slot)
 
         /// 主程序可撤销注册的总数 (不含 [graphNodeTypes] 的注册表残留)
         size_t total() const {
             return tools + permissionTools + hooks + graphNodeTypes + eventSubscriptions
                    + capabilities + promptKeys + skillDirs + memoryFiles + mcpNamespaces
-                   + featurePoints + featureImpls + (ownsGraphDefinition ? 1 : 0);
+                   + (ownsGraphDefinition ? 1 : 0);
         }
     };
 

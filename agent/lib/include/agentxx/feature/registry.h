@@ -1,14 +1,14 @@
 /// agentxx 功能点注册表 —— 点表 + 清单 + 插件面入口
 ///
 /// 一个 [Registry] 随一个 `AgentContext` 一份 (多 agent 实例互不影响, 不使用全局
-/// 状态)。核心点由加载代码声明 (中间件 / 节点注册), 插件点由插件经
-/// [definePluginPoint] 在运行期声明; 两处的实现登记都落到点上。
+/// 状态)。点由加载代码声明 (中间件 / 节点注册), 插件的实现经能力表登记成
+/// 实现行 ([PointBase::runPluginLayer]), 两处都落在同一份取值链上。
 ///
 /// 注册表只提供:
-/// - 声明点 ([provide] / [provideJson] / [definePluginPoint]);
-/// - 实现登记与撤销 (插件 / FFI 主程序, 按归属记账, 供禁用与卸载时整批摘除);
-/// - 清单 ([listPointsJson]) —— 插件 `list_points`、加载快照与 `--dump-diagnostics`
-///   共用同一份实现, 保证"各条出口看到的是同一份事实"。
+/// - 声明点 ([provide] / [provideJson]);
+/// - 库内实现登记与撤销 (主程序自己、或单测直接用的那条链);
+/// - 清单 ([listPointsJson]) —— 加载快照与 `--dump-diagnostics` 共用同一份实现,
+///   保证"各条出口看到的是同一份事实"。
 #pragma once
 
 #include "agentxx/feature/feature.h"
@@ -23,25 +23,7 @@
 namespace agentxx {
 namespace feature {
 
-/// 插件声明自己的功能点 (本轮只允许 `provide` 类型)
-struct PluginPointDecl {
-    /// 点 id, 必须为 `plugin.<名字>.<事件>` (不限定插件名, 建议用自己的)
-    std::string id;
-    /// 声明方归属 (`plugin:<插件名>`)
-    std::string owner;
-    /// 类型 (本轮只允许 [PointType::Provide]; 其它取值被拒绝并记日志)
-    PointType type = PointType::Provide;
-    /// 展示名 (缺省用 id)
-    std::string title;
-    /// 一句话说明
-    std::string depict;
-    /// 参数说明 (进清单与作者文档)
-    std::string argsDoc;
-    /// 结果说明
-    std::string resultDoc;
-    /// 等实现方的超时 (毫秒; 0 = 不限)
-    int32_t implTimeoutMs = 0;
-};
+/// 插件声明自己的功能点 -> 由能力表承担, 这里不再提供声明入口
 
 /// 功能点 id 的命名检查 (核心点必须是 `agentxx.agent.*`)
 /// - 不合格时只记一条警告日志, 不阻断声明 (第三方主程序自建点不至于因此跑不起来)
@@ -95,20 +77,12 @@ public:
     /// - id 必须在 `agentxx.agent.*` 段内 (与事件/主题同一套命名约定), 否则只记一条警告
     JsonProvidePoint& provideJson(std::string_view id, PointOptions opts, std::string origin);
 
-    /// 插件声明自己的功能点
-    /// - id 必须落在 `plugin.*` (不限定插件名); 不在插件族里直接拒绝并记日志
-    ///   (框架不补前缀, 与事件主题同一套规则)
-    /// - 本轮只允许 `provide` 类型 (`decide` 被拒绝并记日志)
-    /// - 声明的点在存活期间恒为可调; 值缓存固定不缓存 (调用方要缓存用结果里的 identity)
-    /// - 同一 id 重复声明 = 覆盖 (记一条日志, 方便排查两个插件抢同一个点)
+    /// 设置插件层入口 (主程序侧: `PluginManager::emitPoint`)
     ///
-    /// `return`: 0 成功; 非 0 失败 (id 非法 / 类型不支持 / 与核心点冲突)
-    int32_t definePluginPoint(const PluginPointDecl& decl);
-
-    /// 撤销插件点 (含这些点上的全部实现); 只允许撤销 `plugin:` 来源的点
-    ///
-    /// `return`: 0 成功; 非 0 失败 (点不存在 / 不是插件点)
-    int32_t undefinePluginPoint(std::string_view id);
+    /// - 对已声明的点与之后声明的点都生效;
+    /// - `co_await point->ask(...)` 时先发一次同名扩展点 (实现行 = 能力行), 没人给值再问
+    ///   本点自己登记的实现与核心实现。
+    void setPluginEmitter(PointBase::PluginEmitFn fn);
 
     /// 按 id 取点 (不存在返回 nullptr)
     PointBase* find(std::string_view id) const;
@@ -116,10 +90,10 @@ public:
     /// 点总数
     size_t pointsCount() const noexcept;
 
-    // ==================== 实现登记 (插件 / FFI 主程序) ====================
+    // ==================== 实现登记 (库内与单测直接使用) ====================
 
     /// 登记实现
-    /// - 点不存在时失败 (应用点未加载 / 插件点未 `define_point`)
+    /// - 点不存在时失败
     /// - 同一 `(点, owner)` 重复登记 = 覆盖; 数量不设上限
     ///
     /// `return`: 0 成功; 非 0 失败
@@ -135,7 +109,7 @@ public:
     /// `return`: 撤销的条数
     size_t removeImplsByOwner(std::string_view owner);
 
-    /// 撤销某归属声明的点 (插件禁用/卸载; 连带撤掉这些点上的全部实现)
+    /// 撤销某归属声明的点 (连带撤掉这些点上的全部实现)
     ///
     /// `return`: 撤销的点数
     size_t removePointsOwnedBy(std::string_view owner);
@@ -155,6 +129,8 @@ private:
 
     std::vector<std::unique_ptr<PointBase>>        storage_;
     std::map<std::string, PointBase*, std::less<>> byId_;
+    /// 插件层入口 (主程序设置; 空 = 没有插件层)
+    PointBase::PluginEmitFn                        pluginEmit_;
 };
 
 } // namespace feature

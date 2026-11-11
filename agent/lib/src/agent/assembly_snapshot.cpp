@@ -167,9 +167,6 @@ void appendMountPluginEntries(const AgentContext& ctx, utilxx_base::Json& plugin
         item["hook_priorities"]       = std::move(hookPriorities);
         item["graph_node_count"]      = v.graphNodeCount;
         item["permission_tools"]      = v.permissionToolCount;
-        // 功能点: 本实例在本挂载上声明的点数 / 登记的实现数（禁用/拆挂载后回 0）
-        item["feature_point_count"]   = v.featurePointCount;
-        item["feature_impl_count"]    = v.featureImplCount;
         // 统一注册清单合计: 0 = 该实例当前没有向本 agent 贡献任何注册
         item["registration_total"]    = v.registrationTotal;
         item["prompt_key_count"]      = v.promptKeyCount;
