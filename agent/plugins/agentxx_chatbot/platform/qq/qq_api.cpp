@@ -1,6 +1,7 @@
 #include "qq_api.h"
 
-#include "utilxx/http_client.h"
+#include "../../chatbot_net.h"
+
 #include "utilxx_base/log.h"
 #include "utilxx_base/string_util.h"
 
@@ -32,6 +33,27 @@ std::string joinUrl(std::string_view base, std::string_view path) {
     return out;
 }
 
+/// 请求头 → JSON 对象文本 (网络表的入参形态)
+std::string headersJsonOf(const std::vector<std::pair<std::string, std::string>>& headers) {
+    if (headers.empty()) {
+        return {};
+    }
+    utilxx_base::Json json = utilxx_base::Json::object();
+    for (const auto& [name, value] : headers) {
+        json[name] = value;
+    }
+    return json.dump();
+}
+
+/// 网络层结果 → 接口结果 (字段一一对应)
+QqResponse toResponse(const ChatbotHttpResult& result) {
+    QqResponse out;
+    out.status = result.status;
+    out.body   = result.body;
+    out.error  = result.error;
+    return out;
+}
+
 } // namespace
 
 std::optional<utilxx_base::Json> QqResponse::json() const {
@@ -46,11 +68,13 @@ std::optional<utilxx_base::Json> QqResponse::json() const {
 }
 
 QqApi::QqApi(
+    const ChatbotNet* net,
     asio::any_io_executor ex,
     std::string           appId,
     std::string           appSecret,
     std::string           apiBase
 ) :
+    net_(net),
     ex_(std::move(ex)),
     appId_(std::move(appId)),
     appSecret_(std::move(appSecret)),
@@ -66,33 +90,28 @@ asio::awaitable<QqResponse> QqApi::doRequest(
     std::string_view                                        url,
     std::string_view                                        body,
     std::string_view                                        contentType,
-    const std::vector<std::pair<std::string, std::string>>& headers
+    const std::vector<std::pair<std::string, std::string>>& headers,
+    bool                                                    binaryBody
 ) {
-    utilxx::HeaderMap headerMap;
-    for (const auto& [name, value] : headers) {
-        headerMap.set(name, value);
-    }
-    utilxx::RequestConfig config;
-    config.connectTimeout   = std::chrono::seconds{15};
-    config.readChunkTimeout = std::chrono::seconds{30};
-    config.maxResponseBody  = 32 * 1024 * 1024; // 上传/下载响应可能带大 JSON
-
-    QqResponse out;
-    auto       result = co_await utilxx::HttpClient::requestAsync(
-        method,
-        url,
-        body,
-        contentType,
-        headerMap,
-        config
-    );
-    if (!result.has_value()) {
-        out.error = result.error();
+    if (net_ == nullptr) {
+        QqResponse out;
+        out.error = "插件没有网络入口";
         co_return out;
     }
-    out.status = result->status;
-    out.body   = std::move(result->body);
-    co_return out;
+    ChatbotHttpRequest request;
+    request.method      = std::string{method};
+    request.contentType = std::string{contentType};
+    request.headersJson = headersJsonOf(headers);
+    // 上传与带大 JSON 的响应都要留余量; 这是整次请求的预算 (连接 + 收完正文)
+    request.timeoutMs = 60000;
+    request.maxBytes  = 32 * 1024 * 1024;
+    if (binaryBody) {
+        // 二进制不能进 JSON 字符串: 交给主程序按 base64 还原
+        request.bodyBase64 = utilxx_base::base64Encode(body);
+    } else {
+        request.body = std::string{body};
+    }
+    co_return toResponse(co_await net_->fetch(ex_, std::string{url}, request));
 }
 
 asio::awaitable<std::optional<std::string>> QqApi::accessToken(bool force) {
@@ -294,32 +313,14 @@ asio::awaitable<QqResponse> QqApi::putToPresignedUrl(
     std::string_view binaryBody
 ) {
     // 预签名 URL 自带鉴权参数, 不再带 Authorization 头
-    co_return co_await doRequest("PUT", url, binaryBody, "application/octet-stream", {});
-}
-
-asio::awaitable<QqResponse> QqApi::getUrl(
-    std::string_view url,
-    std::string          maxBytesNotice,
-    size_t               maxBytes
-) {
-    utilxx::RequestConfig config;
-    config.connectTimeout   = std::chrono::seconds{20};
-    config.readChunkTimeout = std::chrono::seconds{60};
-    if (maxBytes > 0) {
-        config.maxResponseBody = maxBytes;
-    }
-    QqResponse out;
-    auto       response = co_await utilxx::HttpClient::getAsync(url, {}, config);
-    if (!response.has_value()) {
-        out.error = response.error();
-        co_return out;
-    }
-    out.status = response->status;
-    out.body   = std::move(response->body);
-    if (!maxBytesNotice.empty() && maxBytes > 0 && out.body.size() >= maxBytes) {
-        XX_LOGW("[{}] {} (已截断到 {} 字节)", kLogTag, maxBytesNotice, maxBytes);
-    }
-    co_return out;
+    co_return co_await doRequest(
+        "PUT",
+        url,
+        binaryBody,
+        "application/octet-stream",
+        {},
+        /*binaryBody=*/true
+    );
 }
 
 } // namespace chatbot

@@ -154,6 +154,8 @@ target_sources(agentxx_test PRIVATE
   "${AGENTXX_CHATBOT_SOURCE_DIR}/platform/qq/qq_media_request.cpp"
   # 富媒体上传完整流程 (预上传/PUT/分片完成/合并/直传): 由本地模拟服务端驱动的
   # `chatbot_media_io` 用例直测同一实现 (只起 127.0.0.1 本地服务, 不访问外网)
+  # 网络经主程序的 `<应用名>.net` 表, 测试里由本目录的 `TestNet` 接一个本地 NetHub
+  "${AGENTXX_CHATBOT_SOURCE_DIR}/chatbot_net.cpp"
   "${AGENTXX_CHATBOT_SOURCE_DIR}/platform/qq/qq_api.cpp"
   "${AGENTXX_CHATBOT_SOURCE_DIR}/platform/qq/qq_media.cpp"
 )

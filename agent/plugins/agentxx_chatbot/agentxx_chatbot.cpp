@@ -19,6 +19,7 @@
 #include "chatbot_config.h"
 #include "chatbot_core.h"
 #include "chatbot_engine.h"
+#include "chatbot_net.h"
 #include "chatbot_outbound.h"
 #include "chatbot_panel.h"
 #include "chatbot_router.h"
@@ -156,6 +157,12 @@ struct ChatbotCtx : public PluginBase {
 
     /// 工具依赖 (地址稳定: 指向本实例成员)
     ac::ChatbotToolDeps toolDeps;
+
+    /// 插件网络入口 (平台层共享; 必须在平台对象之前创建)
+    ///
+    /// 只存主程序给的几个表句柄与事件频道名, 不持任何连接: 连接都在主程序的
+    /// 网络服务里, 按本插件实例记账 (禁用/卸载时由主程序收掉)。
+    ac::ChatbotNet net;
 
     /// 是否已启动 (stop 幂等)
     std::atomic<bool> started{false};
@@ -1388,8 +1395,23 @@ void* chatbotStart(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, Plugin
     ctx.config                       = std::move(config);
 
     // ---- 2. 校验通过: 起插件 io 线程 + 初始化调度层 ----
+    // ---- 2. 起插件 io 线程与网络入口 ----
     ctx.startIo();
     const auto ex      = ctx.io->get_executor();
+    // 平台层的 HTTP / WebSocket 都走主程序的 `<应用名>.net` 表
+    ctx.net.host        = ctx.host;
+    ctx.net.net         = ctx.iface.net;
+    ctx.net.scheduler   = ctx.iface.scheduler;
+    ctx.net.broadcasts  = ctx.iface.broadcasts;
+    ctx.net.eventTopic  = agentxx::plugin::netEventTopic(kPluginName);
+    if (!ctx.net.ready()) {
+        const char* message
+            = "start: 主程序没有提供网络能力 (`.net` 表): 平台连接无法建立";
+        ctx.log.error(message);
+        PluginString::set(ctx.host, error, message);
+        ctx.stopIo();
+        return nullptr;
+    }
     const auto dataDir = [&mainConfigJson]() {
         try {
             const auto cfg = Json::parse(mainConfigJson);
@@ -1441,7 +1463,7 @@ void* chatbotStart(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, Plugin
     for (const auto& account : ctx.config.accounts) {
         auto runtime      = std::make_unique<AccountRuntime>();
         runtime->config   = account;
-        runtime->platform = ac::createPlatform(account.type, ex, dataDir);
+        runtime->platform = ac::createPlatform(account.type, ex, dataDir, &ctx.net);
         if (!runtime->platform) {
             const auto message = fmt::format(
                 "start: 账号 '{}' 的平台类型 '{}' 没有实现",

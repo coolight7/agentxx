@@ -11,6 +11,7 @@
 /// - 被动回复: `msg_id` + `msg_seq` (同一个 msg_id+msg_seq 重复发送会失败)。
 ///
 /// 线程: 全部协程在插件 io 线程上跑 (由 `QqPlatform` 的 io_context 驱动)。
+/// 网络经主程序的 `<应用名>.net` 表 (见 `chatbot_net.h`), 本层不开连接。
 #include "../../chatbot_types.h"
 
 #include "asio/awaitable.hpp"
@@ -27,6 +28,8 @@ namespace asio = ::boost::asio;
 
 namespace agentxx {
 namespace chatbot {
+
+struct ChatbotNet;
 
 /// 一次接口调用的结果
 struct QqResponse {
@@ -50,7 +53,14 @@ struct QqResponse {
 class QqApi {
 public:
 
-    QqApi(asio::any_io_executor ex, std::string appId, std::string appSecret, std::string apiBase);
+    /// - `net`: 插件网络入口 (必须比本对象活得久; `QqPlatform` 持有它)
+    QqApi(
+        const ChatbotNet* net,
+        asio::any_io_executor ex,
+        std::string           appId,
+        std::string           appSecret,
+        std::string           apiBase
+    );
 
     /// 取 access token (内部缓存; 剩余 < 90 秒时自动刷新)
     ///
@@ -96,10 +106,6 @@ public:
     asio::awaitable<QqResponse>
         putToPresignedUrl(std::string_view url, std::string_view binaryBody);
 
-    /// 带查询参数的 GET (下载附件)
-    asio::awaitable<QqResponse>
-        getUrl(std::string_view url, std::string maxBytesNotice = {}, size_t maxBytes = 0);
-
     const std::string& apiBase() const noexcept {
         return apiBase_;
     }
@@ -119,9 +125,11 @@ private:
         std::string_view                                        url,
         std::string_view                                        body,
         std::string_view                                        contentType,
-        const std::vector<std::pair<std::string, std::string>>& headers
+        const std::vector<std::pair<std::string, std::string>>& headers,
+        bool                                                    binaryBody = false
     );
 
+    const ChatbotNet*     net_ = nullptr;
     asio::any_io_executor ex_;
     std::string           appId_;
     std::string           appSecret_;

@@ -18,6 +18,8 @@
 #include "pluginxx/api/net.h"
 #include "pluginxx/net/ops.h"
 #include "agentxx/util/tool_result.h"
+#include "asio/associated_executor.hpp"
+#include "asio/async_result.hpp"
 #include "asio/awaitable.hpp"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -812,12 +814,15 @@ inline NetResult netCallBlocking(
 /// - [tlsVerify] 只对 `https://` 有效 (自签名服务端需要关掉)。
 struct NetHttpOptions {
     std::string method          = "GET";
-    std::string body;                ///< 请求体原文 (与 [json] 二选一)
+    std::string body;                ///< 请求体原文 (与 [json] / [bodyBase64] 三选一)
     std::string json;                ///< 请求体 JSON 文本 (自动补 Content-Type)
+    std::string bodyBase64;          ///< 二进制请求体 (base64; 上传分片/图片用)
     std::string headers         = "{}"; ///< 请求头 JSON 对象文本
+    std::string contentType;         ///< 非空且请求头里没有 Content-Type 时补上
     std::string format;              ///< "" 或 "markdown"
-    int32_t     timeoutMs       = 0;  ///< <= 0 = 不设超时
-    int64_t     maxBytes        = 0;  ///< <= 0 = 不限正文大小
+    std::string responseType;        ///< "" / "text" / "bytes" (bytes = 结果带 bodyBase64)
+    int32_t     timeoutMs       = 0;  ///< <= 0 = 不设超时; 这是**整次请求**的预算
+    int64_t     maxBytes        = 0;  ///< <= 0 = 不限正文大小 (超限时结果里 truncated)
     bool        followRedirects = true;
     int32_t     maxRedirects    = 3;
     bool        tlsVerify       = true;
@@ -850,7 +855,10 @@ inline std::string NetHttpOptions::toArgsJson(std::string_view url) const {
     if (!method.empty()) {
         args["method"] = method;
     }
-    if (!body.empty()) {
+    // 请求体三选一: 二进制 (base64) → 原文字节 → JSON 文本
+    if (!bodyBase64.empty()) {
+        args["bodyBase64"] = bodyBase64;
+    } else if (!body.empty()) {
         args["body"] = body;
     } else if (!json.empty()) {
         try {
@@ -859,17 +867,28 @@ inline std::string NetHttpOptions::toArgsJson(std::string_view url) const {
             args["body"] = json; // 不是合法 JSON: 按原文发, 至少不会丢请求体
         }
     }
+    // 请求头: 传的是 JSON 对象文本; [contentType] 只在没有同名头时补上
+    utilxx_base::Json headerObj = utilxx_base::Json::object();
     if (!headers.empty()) {
         try {
             auto parsed = utilxx_base::Json::parse(headers);
             if (parsed.is_object()) {
-                args["headers"] = std::move(parsed);
+                headerObj = std::move(parsed);
             }
         } catch (...) {
         }
     }
+    if (!contentType.empty() && headerObj.is_object() && !headerObj.contains("Content-Type")) {
+        headerObj["Content-Type"] = contentType;
+    }
+    if (headerObj.is_object() && !headerObj.empty()) {
+        args["headers"] = std::move(headerObj);
+    }
     if (!format.empty()) {
         args["format"] = format;
+    }
+    if (!responseType.empty()) {
+        args["responseType"] = responseType;
     }
     if (timeoutMs > 0) {
         args["timeoutMs"] = static_cast<int64_t>(timeoutMs);
@@ -946,6 +965,138 @@ inline NetResult netFetchBlocking(
     return netFetchBlocking(ctx.host, ctx.iface.net, ctx.iface.scheduler, url, options);
 }
 
+/** ---------- 给自带 io_context 的插件: asio 异步形态 ---------- */
+
+/// 把一次网络调用做成 asio 异步操作
+///
+/// - 适用: 插件自己跑一个 `io_context` (例如长连接调度), 协程里用
+///   `co_await asyncNetFetch(ex, host, net, url, options, asio::use_awaitable)`;
+/// - 完成签名是 `void(NetResult)`; 完成回调投递到 handler 的 executor (`ex`) ——
+///   不会从主程序回调栈里直接进入插件代码;
+/// - 只需要 `ctx.bridge()` 拿不到时 (不是 kit 的协程) 就用这个, 其余情况用
+///   [netCallAsync] / [netFetch]。
+template<typename CompletionToken>
+auto asyncNetCall(
+    asio::any_io_executor   ex,
+    const PluginxxHost*     host,
+    const PluginxxNetIface* net,
+    std::string             op,
+    std::string             argsJson,
+    CompletionToken&&       token
+) {
+    return asio::async_initiate<CompletionToken, void(NetResult)>(
+        [host, net](
+            auto       handler,
+            asio::any_io_executor ioEx,
+            std::string opStr,
+            std::string argsStr
+        ) {
+            using Handler = std::decay_t<decltype(handler)>;
+            struct Op {
+                Handler                 handler;
+                asio::any_io_executor   ex;
+            };
+
+            auto self     = std::make_shared<Op>(Op{std::move(handler), std::move(ioEx)});
+            auto complete = [](std::shared_ptr<Op> state, NetResult result) {
+                asio::post(
+                    state->ex,
+                    [state = std::move(state), result = std::move(result)]() mutable {
+                        auto handler = std::move(state->handler);
+                        handler(std::move(result));
+                    }
+                );
+            };
+
+            if (!host || !net || !net->call_async) {
+                NetResult result;
+                result.code = PLUGINXX_NET_ERR_STATE;
+                complete(std::move(self), std::move(result));
+                return;
+            }
+
+            auto* holder = new std::shared_ptr<Op>(self);
+            PluginxxOperatorNotify notify{};
+            notify.host_ud = holder;
+            notify.done    = [](void* ud, int32_t status, const PluginxxStringView* payload) {
+                auto* hp = static_cast<std::shared_ptr<Op>*>(ud);
+                auto  s  = *hp;
+                delete hp;
+
+                NetResult result;
+                result.code = PLUGINXX_NET_OK;
+                const std::string body
+                    = (payload && payload->data && payload->size > 0)
+                          ? std::string{payload->data, static_cast<size_t>(payload->size)}
+                          : std::string{};
+                if (status == PLUGINXX_OPERATOR_OK) {
+                    result.json = body;
+                } else if (status == PLUGINXX_OPERATOR_CANCELED) {
+                    result.json = R"({"ok":false,"error":"canceled"})";
+                } else {
+                    result.json
+                        = body.empty() ? std::string{R"({"ok":false,"error":"failed"})"} : body;
+                }
+                asio::post(
+                    s->ex,
+                    [s, result = std::move(result)]() mutable {
+                        auto handler = std::move(s->handler);
+                        handler(std::move(result));
+                    }
+                );
+            };
+
+            const auto     opSv   = PluginStringView::from(opStr.data(), opStr.size());
+            const auto     argsSv = PluginStringView::from(argsStr.data(), argsStr.size());
+            PluginxxString out{nullptr, 0};
+            int64_t        requestId = 0;
+            const int32_t  rc = net->call_async(
+                host,
+                &opSv,
+                &argsSv,
+                &notify,
+                &out,
+                &requestId
+            );
+            if (rc == PLUGINXX_NET_OK) {
+                return; // 完成通知随后到 (恰好一次)
+            }
+            delete holder;
+            NetResult result;
+            result.code = rc;
+            if (out.data) {
+                result.json.assign(out.data, static_cast<size_t>(out.size));
+                PluginString::free(host, &out);
+            }
+            complete(std::move(self), std::move(result));
+        },
+        token,
+        std::move(ex),
+        std::move(op),
+        std::move(argsJson)
+    );
+}
+
+/// 同 [asyncNetCall], 直接是一个 HTTP 请求 (`http.fetch`)
+template<typename CompletionToken>
+auto asyncNetFetch(
+    asio::any_io_executor   ex,
+    const PluginxxHost*     host,
+    const PluginxxNetIface* net,
+    std::string_view        url,
+    const NetHttpOptions&   options,
+    CompletionToken&&       token
+) {
+    return asyncNetCall(
+        std::move(ex),
+        host,
+        net,
+        std::string{pluginxx::net_op::httpFetch},
+        options.toArgsJson(url),
+        std::forward<CompletionToken>(token)
+    );
+}
+
 /* ---------- WebSocket / HTTP 服务端的几个直白入口 (内部就是 netCall) ---------- */
 
 /// 网络事件广播频道 (`plugin.<插件 id>.net`)
@@ -959,11 +1110,15 @@ inline std::string netEventTopic(std::string_view pluginId) {
     return topic;
 }
 
-/// 建立 WebSocket 连接 (幂等: 同 id 已存在时返回 `exists`)
+/// 建立 WebSocket 连接 (同 id 已存在时返回 `exists`)
 ///
 /// - `url` 形如 `ws://127.0.0.1:9222/devtools/page/<id>`; 也可给
 ///   `netWsConnectHost(host, net, "127.0.0.1", 9222, "/path")` 的拆开写法;
-/// - 结果 JSON: `{ok, id}`; 连接建立后 `ws.open` 事件到达, 之后 `ws.message` 收消息。
+/// - `subprotocols`: 逗号分隔 (主程序要的是数组);
+/// - `timeoutMs`: 握手超时 (`<= 0` 用主程序默认);
+/// - 结果 JSON: `{ok, id, state}` —— **`ok` 只表示已发起**, 握手结果看 `ws.open` /
+///   `ws.close` 事件, 之后 `ws.message` 收消息;
+/// - 握手完成前 `netWsSend` 会失败 (`not_connected`), 发送请等 `ws.open`。
 inline NetResult netWsConnect(
     const PluginxxHost*     host,
     const PluginxxNetIface* net,
@@ -971,7 +1126,8 @@ inline NetResult netWsConnect(
     std::string_view        id            = {},
     std::string_view        headersJson   = {},
     std::string_view        subprotocols  = {},
-    int32_t                 timeoutMs     = 0
+    int32_t                 timeoutMs     = 0,
+    int64_t                 maxMessageBytes = 0
 ) {
     utilxx_base::Json args = utilxx_base::Json::object();
     args["url"]            = std::string{url};
@@ -988,10 +1144,34 @@ inline NetResult netWsConnect(
         }
     }
     if (!subprotocols.empty()) {
-        args["subprotocols"] = std::string{subprotocols};
+        utilxx_base::Json list = utilxx_base::Json::array();
+        std::string_view  rest = subprotocols;
+        while (!rest.empty()) {
+            const auto comma = rest.find(',');
+            auto       item  = rest.substr(0, comma);
+            while (!item.empty() && (item.front() == ' ' || item.front() == '\t')) {
+                item.remove_prefix(1);
+            }
+            while (!item.empty() && (item.back() == ' ' || item.back() == '\t')) {
+                item.remove_suffix(1);
+            }
+            if (!item.empty()) {
+                list.push_back(std::string{item});
+            }
+            if (comma == std::string_view::npos) {
+                break;
+            }
+            rest.remove_prefix(comma + 1);
+        }
+        if (!list.empty()) {
+            args["subprotocols"] = std::move(list);
+        }
     }
     if (timeoutMs > 0) {
         args["timeoutMs"] = static_cast<int64_t>(timeoutMs);
+    }
+    if (maxMessageBytes > 0) {
+        args["maxMessageBytes"] = maxMessageBytes;
     }
     const std::string text = args.dump();
     return netCall(host, net, pluginxx::net_op::wsConnect, text);

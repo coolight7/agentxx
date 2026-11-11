@@ -468,7 +468,7 @@ asio::awaitable<void> runPluginHookHandler(
 
 } // namespace
 
-/// 钩子点 → 功能扩展点 id (同一次事件既走旧处理器注册表, 也发新埋点的通知面)
+/// 钩子点 → 功能扩展点 id (同一次事件既走旧处理器注册表, 也发扩展点的通知面)
 std::string_view pointIdOfHook(AgentxxPluginHookPoint point) {
     switch (point) {
         case AGENTXX_PLUGIN_HOOK_AGENT_START:
@@ -497,7 +497,7 @@ asio::awaitable<void> PluginMount::dispatchHook(
     if (point < 0 || point >= AGENTXX_PLUGIN_HOOK_COUNT) {
         co_return;
     }
-    // 功能埋点的通知面: 订阅同名广播的插件在这里收到 (不管有没有登记旧式钩子处理器)。
+    // 功能扩展点的通知面: 订阅同名广播的插件在这里收到 (不管有没有登记旧式钩子处理器)。
     // 先发通知再跑实现: 订阅方看到的是"事件发生", 不需要等处理器跑完。
     if (const auto pointId = pointIdOfHook(point); !pointId.empty()) {
         if (auto mgr = host_.lock()) {

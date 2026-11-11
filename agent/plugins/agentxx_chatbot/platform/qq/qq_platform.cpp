@@ -1,20 +1,18 @@
 #include "qq_platform.h"
 
 #include "../../chatbot_core.h"
+#include "../../chatbot_net.h"
 #include "qq_normalize.h"
-#include "utilxx/http_client.h"
 #include "utilxx_base/json.h"
 #include "utilxx_base/log.h"
 #include "utilxx_base/string_util.h"
 
 #include "asio/co_spawn.hpp"
-#include "asio/executor_work_guard.hpp"
-#include "asio/io_context.hpp"
+#include "asio/detached.hpp"
 
 #include <chrono>
 #include <ctime>
 #include <filesystem>
-#include <fstream>
 #include <mutex>
 
 namespace agentxx {
@@ -72,9 +70,10 @@ bool looksLikeExpiredPassive(int status, std::string_view body) {
 
 } // namespace
 
-QqPlatform::QqPlatform(asio::any_io_executor ex, std::string dataDir) :
+QqPlatform::QqPlatform(asio::any_io_executor ex, std::string dataDir, const ChatbotNet* net) :
     ex_(std::move(ex)),
-    dataDir_(std::move(dataDir)) {}
+    dataDir_(std::move(dataDir)),
+    net_(net) {}
 
 QqPlatform::~QqPlatform() {
     stop();
@@ -117,7 +116,7 @@ bool QqPlatform::start(const AccountConfig& cfg, PlatformEventSink& sink) {
             XX_LOGE("[{}] 账号 '{}' 启动失败: {}", kLogTag, cfg.id, stateReason_);
             return false;
         }
-        api_ = std::make_unique<QqApi>(ex_, cfg.appId, cfg.appSecret, cfg.apiBase);
+        api_ = std::make_unique<QqApi>(net_, ex_, cfg.appId, cfg.appSecret, cfg.apiBase);
 
         // 媒体目录: {data_dir}/chatbot/media/{accountId}
         if (!dataDir_.empty()) {
@@ -129,7 +128,7 @@ bool QqPlatform::start(const AccountConfig& cfg, PlatformEventSink& sink) {
             }
         }
         uploader_ = std::make_unique<QqMediaUploader>(*api_, cfg.id);
-        gateway_  = std::make_unique<QqGateway>(ex_, *api_);
+        gateway_  = std::make_unique<QqGateway>(ex_, *api_, net_);
     }
 
     QqGatewayHooks hooks;
@@ -385,67 +384,31 @@ void QqPlatform::downloadAttachment(const std::string& accountId, MediaRef& ref)
     const fs::path dir = utilxx_base::utf8ToPath(mediaRoot_) / mediaKindName(ref.kind);
     std::error_code ec;
     fs::create_directories(dir, ec);
+    if (ec) {
+        XX_LOGW("[{}] 附件目录创建失败 ({}), 保留平台地址", kLogTag, ec.message());
+        return;
+    }
     const fs::path    target     = dir / (std::to_string(unixNowMs()) + "-" + fileName);
     const std::string targetUtf8 = utilxx_base::pathToUtf8Generic(target);
 
-    const auto& url = ref.url;
     // 下载必须**同步**完成后再回填 `localPath`:
     // - 调用方 (prepareAttachments) 紧接着就会把这条消息投给模型, 附件路径必须是
     //   已经落盘的文件; 之前提前填路径, 主程序读文件时报
     //   `cannot get file size ... The system cannot find the file specified`,
     //   模型请求直接 400 (media url 不是 http/https), 用户看到"加载一下就没了"
-    // - 这里不开在 plugin io 线程上: 用一次性的 io_context 在本线程跑到完成,
-    //   不阻塞插件 io 线程的其它协程 (附件通常几百 KB, 单次等待可接受)
-    asio::io_context dlCtx;
-    // work guard: 协程在被调度起来之前 run() 不能"因为没有工作"就返回
-    auto             dlWork = asio::make_work_guard(dlCtx);
-    asio::co_spawn(
-        dlCtx,
-        [&]() -> asio::awaitable<void> {
-            utilxx::RequestConfig config;
-            config.connectTimeout   = std::chrono::seconds{20};
-            config.readChunkTimeout = std::chrono::seconds{60};
-            config.maxResponseBody  = kMaxDownloadBytes;
-            auto response = co_await utilxx::HttpClient::getAsync(url, {}, config);
-            if (!response.has_value() || response->status < 200 || response->status >= 300) {
-                XX_LOGW(
-                    "[{}] 附件 '{}' 下载失败 ({}), 保留平台地址",
-                    kLogTag,
-                    fileName,
-                    response.has_value() ? std::to_string(response->status) : response.error()
-                );
-                co_return;
-            }
-            std::ofstream out(target, std::ios::binary);
-            if (!out) {
-                XX_LOGW("[{}] 附件 '{}' 无法写入本地文件", kLogTag, fileName);
-                co_return;
-            }
-            out.write(response->body.data(), static_cast<std::streamsize>(response->body.size()));
-            out.close();
-            ref.localPath = targetUtf8;
-            XX_LOGD(
-                "[{}] 附件 '{}' 已下载到 {} ({} 字节)",
-                kLogTag,
-                fileName,
-                targetUtf8,
-                response->body.size()
-            );
-        },
-        [&dlWork](const std::exception_ptr& ep) {
-            if (ep) {
-                try {
-                    std::rethrow_exception(ep);
-                } catch (const std::exception& e) {
-                    XX_LOGW("[{}] 附件下载协程异常: {}", kLogTag, e.what());
-                } catch (...) {
-                    XX_LOGW("[{}] 附件下载协程异常 (未知)", kLogTag);
-                }
-            }
-            dlWork.reset(); // 协程结束: 让 run() 可以返回
-        }
-    );
-    dlCtx.run();
+    // - 正文由主程序直接写到磁盘 (`http.download`), 大文件也不经过这边内存
+    // - 本函数本来就在插件 io 线程上同步返回 (调用方需要落盘之后的路径)
+    if (net_ == nullptr) {
+        XX_LOGW("[{}] 附件 '{}' 没有网络入口, 保留平台地址", kLogTag, fileName);
+        return;
+    }
+    const auto error = net_->download(ref.url, targetUtf8, static_cast<int64_t>(kMaxDownloadBytes), 300000);
+    if (!error.empty()) {
+        XX_LOGW("[{}] 附件 '{}' 下载失败 ({}), 保留平台地址", kLogTag, fileName, error);
+        return;
+    }
+    ref.localPath = targetUtf8;
+    XX_LOGD("[{}] 附件 '{}' 已下载到 {}", kLogTag, fileName, targetUtf8);
 }
 
 RecallResult QqPlatform::recallMessage(

@@ -17,11 +17,13 @@
 namespace agentxx {
 namespace chatbot {
 
+struct ChatbotNet;
+
 /// QQ 平台连接 (一个账号一份)
 class QqPlatform : public IPlatform {
 public:
 
-    QqPlatform(asio::any_io_executor ex, std::string dataDir);
+    QqPlatform(asio::any_io_executor ex, std::string dataDir, const ChatbotNet* net);
     ~QqPlatform() override;
 
     std::string type() const override {
@@ -78,6 +80,8 @@ private:
     asio::any_io_executor  ex_;
     std::string            dataDir_;
     std::string            mediaRoot_;
+    /// 插件网络入口 (插件实例持有; 本对象不比它活得久)
+    const ChatbotNet*      net_ = nullptr;
     AccountConfig          config_;
     PlatformEventSink*     sink_ = nullptr;
     mutable std::mutex     mutex_;

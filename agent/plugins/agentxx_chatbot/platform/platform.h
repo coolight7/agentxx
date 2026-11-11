@@ -23,6 +23,8 @@ namespace asio = ::boost::asio;
 namespace agentxx {
 namespace chatbot {
 
+struct ChatbotNet;
+
 /// 平台回调入口 (由调度层实现, 平台实现持有引用)
 struct PlatformEventSink {
     /// 收到一条已归一化的消息
@@ -107,10 +109,15 @@ public:
 
 /// 平台工厂: 按 `accounts[].type` 造一个连接
 ///
-/// - `ex`: 插件 io 执行器 (网络与定时器都挂在它上面)
+/// - `ex`: 插件 io 执行器 (定时器与协程挂它上面)
+/// - `net`: 插件网络入口 (`<应用名>.net` 表; 平台不自己建连接)
 /// - 不认识的类型返回 nullptr
-std::unique_ptr<IPlatform>
-    createPlatform(std::string_view type, asio::any_io_executor ex, std::string_view dataDir);
+std::unique_ptr<IPlatform> createPlatform(
+    std::string_view     type,
+    asio::any_io_executor ex,
+    std::string_view     dataDir,
+    const ChatbotNet*    net
+);
 
 } // namespace chatbot
 } // namespace agentxx

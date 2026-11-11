@@ -1,7 +1,9 @@
 #include "qq_gateway.h"
 
 #include "qq_api.h"
-#include "utilxx/ws_client.h"
+
+#include "../../chatbot_net.h"
+
 #include "utilxx_base/log.h"
 
 #include <algorithm>
@@ -18,6 +20,9 @@ constexpr const char* kLogTag = "chatbot";
 ///
 /// 频道相关位不订阅: 没权限时连接会被直接关闭 (设计文档 §3.3)。
 constexpr int64_t kIntentsGroupAndC2c = 1LL << 25;
+
+/// 握手超时 (网络表默认 8 秒, 平台偶有慢节点, 留足余量)
+constexpr int32_t kHandshakeTimeoutMs = 20000;
 
 int64_t steadyNowMs() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -39,9 +44,10 @@ int64_t backoffMs(int32_t attempt) {
 
 } // namespace
 
-QqGateway::QqGateway(asio::any_io_executor ex, QqApi& api) :
+QqGateway::QqGateway(asio::any_io_executor ex, QqApi& api, const ChatbotNet* net) :
     ex_(std::move(ex)),
-    api_(api) {}
+    api_(api),
+    net_(net) {}
 
 QqGateway::~QqGateway() {
     stop();
@@ -53,13 +59,94 @@ void QqGateway::setState(PlatformState state, std::string reason) {
     }
 }
 
+void QqGateway::subscribeNetEvents() {
+    if (netSub_ != nullptr || net_ == nullptr) {
+        return;
+    }
+    netSub_ = net_->subscribeEvents(&QqGateway::onNetEvent, this);
+    if (netSub_ == nullptr) {
+        XX_LOGW(
+            "[{}] 订阅网络事件失败 (网关收不到连接/消息事件; 检查主程序是否提供广播表)",
+            kLogTag
+        );
+    }
+}
+
+void QqGateway::onNetEvent(const PluginxxStringView* payload, void* ud) {
+    auto* self = static_cast<QqGateway*>(ud);
+    if (self == nullptr || payload == nullptr || payload->data == nullptr || payload->size <= 0) {
+        return;
+    }
+    // 回调在主程序 io 线程: 网关状态只能在插件 io 线程上改
+    auto text = std::make_shared<std::string>(payload->data, static_cast<size_t>(payload->size));
+    asio::post(self->ex_, [self, text]() {
+        self->handleNetEvent(*text);
+    });
+}
+
+void QqGateway::handleNetEvent(const std::string& payload) {
+    if (stopped_) {
+        return;
+    }
+    utilxx_base::Json event;
+    try {
+        event = utilxx_base::Json::parse(payload);
+    } catch (const std::exception&) {
+        return;
+    }
+    if (!event.is_object()) {
+        return;
+    }
+    // 同一频道里可能有多个连接 (多账号), 只认自己这一条
+    const std::string id = event.value("id", std::string{});
+    if (connId_.empty() || id != connId_) {
+        return;
+    }
+    const std::string kind = event.value("kind", std::string{});
+    if (kind == "ws.open") {
+        connected_ = true;
+        online_    = true;
+        XX_LOGI("[{}] 网关连接已建立 ({})", kLogTag, event.value("remote", std::string{}));
+        return;
+    }
+    if (kind == "ws.message") {
+        // 网关帧都是文本; 二进制帧不属于协议
+        const std::string text = event.value("text", std::string{});
+        if (!text.empty()) {
+            onFrame(text);
+        }
+        return;
+    }
+    if (kind == "ws.close") {
+        connected_ = false;
+        online_    = false;
+        const std::string by    = event.value("by", std::string{});
+        const int64_t     code  = event.value("code", int64_t{0});
+        const std::string error = event.value("error", std::string{});
+        std::string       reason = "网关连接已断开 (" + (by.empty() ? std::string{"unknown"} : by);
+        if (code != 0) {
+            reason += ", code " + std::to_string(code);
+        }
+        if (!error.empty()) {
+            reason += ", " + error;
+        }
+        reason += ")";
+        lastError_ = reason;
+        scheduleReconnect(reason, -1);
+        return;
+    }
+    // 其它 kind (服务端连接 / http 服务) 与网关无关
+}
+
 void QqGateway::start(const AccountConfig& cfg, QqGatewayHooks hooks) {
-    config_  = cfg;
-    hooks_   = std::move(hooks);
-    stopped_ = false;
+    config_         = cfg;
+    hooks_          = std::move(hooks);
+    stopped_        = false;
     reconnectCount_ = 0;
     sequence_       = 0;
     sessionId_.clear();
+    connected_      = false;
+    subscribeNetEvents();
     setState(PlatformState::Connecting, "start");
     connect();
 }
@@ -76,42 +163,40 @@ void QqGateway::stop() {
         // 定时器带着 io 的 executor: 插件 io 线程停后不能再留着它
         reconnectTimer_.reset();
     }
+    // 先退订: 之后不会再有网络事件进到本对象 (已经在路上的由 stopped_ 挡掉)
+    if (netSub_ != nullptr) {
+        if (net_ != nullptr && net_->broadcasts != nullptr
+            && net_->broadcasts->unsubscribe_broadcast != nullptr) {
+            net_->broadcasts->unsubscribe_broadcast(netSub_);
+        }
+        netSub_ = nullptr;
+    }
     closeSocket();
     online_ = false;
 }
 
 void QqGateway::closeSocket() {
-    if (!ws_) {
+    if (connId_.empty()) {
+        connected_ = false;
         return;
     }
-    // 先 abort 关掉底层 socket, 挂起的收发会以错误收尾; 对象本身的释放交给强引用
-    // (发送/接收协程各持一份), 所以这里放开引用不会让协程读到已释放的连接
-    ws_->abort();
-    ws_.reset();
+    if (net_ != nullptr && net_->ready()) {
+        // 还在握手的那条也一并关掉: 主程序按 id 找不到就当作已经没了
+        (void)agentxx::plugin::netWsClose(net_->host, net_->net, connId_, "gateway restart");
+    }
+    connId_.clear();
+    connected_ = false;
 }
 
 void QqGateway::sendFrame(const utilxx_base::Json& frame) {
-    if (!ws_ || !ws_->isOpen()) {
+    if (net_ == nullptr || !net_->ready() || connId_.empty() || !connected_) {
         return;
     }
-    // 发送期间持有连接: 重连/停止会换掉 ws_, 但这次发送仍然走完 (以错误或成功收尾)
-    auto       client     = ws_;
-    const auto text       = frame.dump();
-    auto       self       = this;
-    const auto generation = generation_;
-    asio::co_spawn(
-        ex_,
-        [self, client, text, generation]() -> asio::awaitable<void> {
-            if (self->generation_ != generation || self->ws_ != client) {
-                co_return;
-            }
-            auto result = co_await client->sendText(text);
-            if (!result.has_value()) {
-                XX_LOGW("[{}] 网关发送失败: {}", kLogTag, result.error());
-            }
-        },
-        asio::detached
-    );
+    auto result
+        = agentxx::plugin::netWsSend(net_->host, net_->net, connId_, frame.dump());
+    if (!result.ok()) {
+        XX_LOGW("[{}] 网关发送失败: {}", kLogTag, result.error());
+    }
 }
 
 void QqGateway::connect() {
@@ -147,67 +232,28 @@ void QqGateway::connect() {
                 self->scheduleReconnect(self->lastError_, -1);
                 co_return;
             }
+            if (self->stopped_ || self->generation_ != generation) {
+                co_return;
+            }
             XX_LOGI("[{}] 连接网关: {}", kLogTag, url);
 
-            utilxx::WsClientConfig wsConfig;
-            wsConfig.connectTimeout = std::chrono::seconds{20};
-            // 心跳间隔可能到 41 秒, 接收超时要比它宽松 (心跳 ACK 之外的静默是正常的)
-            wsConfig.recvTimeout    = std::chrono::seconds{90};
-            wsConfig.sendTimeout    = std::chrono::seconds{30};
-            wsConfig.maxMessageSize = 8 * 1024 * 1024;
-
-            auto client = co_await utilxx::wsConnect(self->ex_, url, {}, wsConfig);
-            if (!client.has_value()) {
-                self->lastError_ = "连接网关失败: " + client.error();
+            // 每次连接换一个 id: 上一次连接的收尾事件不会误伤这一条
+            self->connId_ = "qqgw-" + std::to_string(generation);
+            // 只发起握手; 成功与否看 `ws.open` / `ws.close` 事件
+            auto result = agentxx::plugin::netWsConnect(
+                self->net_->host,
+                self->net_->net,
+                url,
+                self->connId_,
+                {},
+                {},
+                kHandshakeTimeoutMs
+            );
+            if (!result.ok()) {
+                self->lastError_ = "连接网关失败: " + result.error();
+                self->connId_.clear();
                 self->scheduleReconnect(self->lastError_, -1);
                 co_return;
-            }
-            if (self->stopped_ || self->generation_ != generation) {
-                if (client.has_value()) {
-                    client->get()->abort();
-                }
-                co_return;
-            }
-            self->ws_     = std::shared_ptr<utilxx::WsClient>(std::move(*client));
-            self->online_ = true;
-            self->readLoop();
-        },
-        asio::detached
-    );
-}
-
-void QqGateway::readLoop() {
-    if (!ws_ || stopped_) {
-        return;
-    }
-    const auto generation = generation_;
-    // 与发送同理: 手里持一份强引用, 重连换掉 ws_ 后本循环也能安全收尾
-    auto client = ws_;
-    auto self   = this;
-    asio::co_spawn(
-        ex_,
-        [self, client, generation]() -> asio::awaitable<void> {
-            while (!self->stopped_ && self->generation_ == generation && self->ws_ == client) {
-                auto message = co_await client->recv();
-                if (self->generation_ != generation || self->stopped_) {
-                    co_return;
-                }
-                if (!message.has_value()) {
-                    const auto reason = message.error();
-                    if (self->stopped_) {
-                        co_return;
-                    }
-                    self->lastError_ = "网关接收失败: " + reason;
-                    self->scheduleReconnect(self->lastError_, -1);
-                    co_return;
-                }
-                if (message->type == utilxx::WsMessage::Type::Close) {
-                    self->lastError_ = "网关对端关闭连接 (code " + std::to_string(message->closeCode)
-                                       + " " + message->closeReason + ")";
-                    self->scheduleReconnect(self->lastError_, -1);
-                    co_return;
-                }
-                self->onFrame(message->payload);
             }
         },
         asio::detached

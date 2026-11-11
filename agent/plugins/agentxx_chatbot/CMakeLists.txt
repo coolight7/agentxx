@@ -23,6 +23,7 @@ set(_CHATBOT_SOURCES
   ${CMAKE_CURRENT_SOURCE_DIR}/chatbot_core.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/chatbot_time.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/chatbot_config.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/chatbot_net.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/chatbot_router.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/chatbot_engine.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/chatbot_outbound.cpp

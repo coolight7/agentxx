@@ -332,8 +332,8 @@ void ChatbotEngine::prepareAttachments(const std::string& chatKey, InboundEvent&
         if (!attachment.localPath.empty()) {
             continue;
         }
-        // download / auto: 交给入口文件注入的下载实现 (它在插件 io 线程上用
-        // HttpClient 协程做, 落盘后回填 `localPath`; 失败时保留 URL 由模型自己拉)
+        // download / auto: 交给入口文件注入的下载实现 (它在插件 io 线程上经主程序的
+        // 网络表落盘, 完成后再回填 `localPath`; 失败时保留 URL 由模型自己拉)
         if (runtime_.downloadAttachment) {
             runtime_.downloadAttachment(event.accountId, attachment);
         }
