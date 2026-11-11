@@ -11,7 +11,7 @@
 | 步骤 0 库改动（`cxx_pluginxx` L1~L4/L6/L7、`cxx_utilxx` L5）+ 子模块指针 | 已完成 |
 | 步骤 1 构建与接口表骨架 | 已完成 |
 | 步骤 2 agent 侧（DomainServices + 广播 + 中枢） | 已完成（广播通道打通，事件中枢对接完成，`plugins` 模块全绿） |
-| 步骤 3 功能埋点（替换钩子与功能点） | 进行中（声明表 + 分发入口 + `plugin_point` 模块已完成；调用点与三张旧表待改） |
+| 步骤 3 功能埋点（替换钩子与功能点） | 进行中（声明表 + 分发入口 + `plugin_point` 模块 + 7 个通知型埋点已接到派发；旧三表与取值型埋点待改） |
 | 步骤 4 网络（`agentxx.net` + 4 个插件迁移） | 进行中（agent/client 双侧表 + SDK 便捷层完成；2/4 插件已迁） |
 | 步骤 5 client 侧（广播 + net） | 进行中（net 已提供；广播与 DomainServices 待做） |
 | 步骤 6 插件全量迁移 + JS 引擎 | 进行中（能力表 APIs 已迁：JS 引擎 + 3 个示例插件） |
@@ -131,6 +131,15 @@
     - `PluginManager::publishPoint(...)` —— 通知型调用点用的"不等结果"入口
   - 新增测试模块 `plugin_point` (63 条): 声明表两边到位且缓存策略与类型相符、
     没有实现行时按 `OK` + `null` 完成、通知面确实把载荷发给订阅者、取值型频道保留当前值
+- **已完成: 7 个通知型埋点接到派发路径** (`plugin_manager_hooks.cpp` 的 `dispatchHook`)
+  - 钩子点 → 埋点 id 一张表 (`pointIdOfHook`); 每次派发先 `publishPoint(pointId, agentId, 输入摘要)`
+    再跑旧式处理器 —— 订阅 `agentxx.agent.point.*` 的插件现在真的能收到通知 (以前两条面并存但没接上)
+  - `plugin_hooks` 新增一条用例: 订阅 `tool.end` → `dispatchHook(TOOL_END)` → 收到 1 条载荷
+    且带会话 id; 模块 165 条全绿
+  - 说明: 旧式钩子处理器注册表 (`PluginMount::hookHandlers_`) 与 `dispatchHook` 里的插件层/
+    core 层执行**本轮暂留** —— 换成"能力实现行 + core 本地调用"要同步改
+    `plugin_hooks`/`plugin_feature`/`plugin_event` 三个模块与 `example_feature`/`example_event`,
+    是一次独立的迁移
 - 待完成（下一轮）：
   - 把 7 个钩子派发点与 3 个取值点接到 `publishPoint` / `emitPointAsync`;
   - 钩子表 `register_hook*` 改成"订阅同名广播"，`PluginHookDispatchHandle` 与
