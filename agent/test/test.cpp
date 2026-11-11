@@ -94,7 +94,7 @@
 #include "agentxx-test/plugin/test_plugin_agent_runtime.h"
 #include "agentxx-test/plugin/test_plugin_bridge.h"
 #include "agentxx-test/plugin/test_plugin_cleanup.h"
-#include "agentxx-test/plugin/test_plugin_event.h"
+#include "agentxx-test/plugin/test_plugin_broadcast.h"
 #include "agentxx-test/plugin/test_plugin_feature.h"
 #include "agentxx-test/plugin/test_plugin_point.h"
 #include "agentxx-test/plugin/test_plugin_net.h"
@@ -587,7 +587,7 @@ int main(int argn, char** argv) {
                 co_await run("plugin_feature", agentxx::test::run_plugin_feature_tests);
         co_await run("plugin_point", agentxx::test::run_plugin_point_tests);
         co_await run("plugin_net", agentxx::test::run_plugin_net_tests);
-                co_await run("plugin_event", agentxx::test::run_plugin_event_tests);
+                co_await run("plugin_broadcast", agentxx::test::run_plugin_broadcast_tests);
                 co_await run("plugin_hooks", agentxx::test::run_plugin_hooks_tests);
                 co_await run("plugin_resources", agentxx::test::run_plugin_resource_tests);
                 co_await run("plugin_host_mount", agentxx::test::run_plugin_host_mount_tests);

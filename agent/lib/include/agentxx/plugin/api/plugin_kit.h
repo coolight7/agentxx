@@ -211,6 +211,22 @@ struct PluginEventsCompat {
 
 namespace detail {
 
+/// 取一个 host 分配的字符串出参 (用完释放)
+template<typename Fn>
+inline std::string takeHostString(const PluginxxHost* host, Fn&& fn) {
+    PluginxxString out{nullptr, 0};
+    const int32_t  rc = fn(&out);
+    if (rc != 0 || nullptr == out.data) {
+        if (nullptr != out.data) {
+            PluginString::free(host, &out);
+        }
+        return std::string{};
+    }
+    std::string text{out.data, static_cast<size_t>(out.size)};
+    PluginString::free(host, &out);
+    return text;
+}
+
 /// 按 IID 查一张通用表 (兼容包装用; 插件只在启动/发布时走这一条路)
 inline const PluginxxBroadcastsIface* queryBroadcastsIface(const PluginxxHost* host) {
     if (!host || !host->vtable || !host->vtable->query_interface) {
@@ -311,8 +327,6 @@ struct AgentIfaces {
     const AgentxxPluginMountIface* mount = nullptr;
     /// "agentxx.agent.runtime": 会话运行时 (挂自己的根 / 开会话通道 / 事件驱动)
     const AgentxxPluginRuntimeIface* runtime = nullptr;
-    /// "agentxx.agent.event": 事件中枢 (声明事件源 / 发布值 / 登记等待)
-    const AgentxxPluginEventIface* event = nullptr;
     /// "<应用名>.broadcasts": 广播 (频道声明 / 发布 / 订阅 / 读当前值 / 结束)
     /// - 插件的通知面走它 (钩子、事件、跨端数据都可用)
     const PluginxxBroadcastsIface* broadcasts = nullptr;
@@ -367,8 +381,6 @@ struct AgentIfaces {
         f.mount = queryInterface<AgentxxPluginMountIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_MOUNT);
         f.runtime
             = queryInterface<AgentxxPluginRuntimeIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_RUNTIME);
-        f.event
-            = queryInterface<AgentxxPluginEventIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_EVENT);
         return f;
     }
 };
@@ -2203,266 +2215,6 @@ inline int32_t removeRuntimeTimer(Ctx& ctx, int64_t timerId) {
     return ctx.iface.runtime->unregister_timer(ctx.host, timerId);
 }
 
-/* ==================== 事件中枢 (agentxx.agent.event) ====================
- *
- * 什么时候用这张表 (选型与 `agentxx.agent.runtime` 的触发器/定时器的区别):
- * - 只需要"收到消息就把它当输入塞进会话": 用 `addTrigger` / `addRuntimeTimer`;
- * - 有一个**带值的事件**, 谁需要谁来等 (模型 `agentxx_async_emit` 工具 / 插件
- *   `registerEventWait`), 并且要查状态、要回放、要结束流: 用本表。
- *
- * 事件与等待都记在本插件实例名下, 禁用/卸载时由主程序整批回收, `stop` 里不必手清。
- */
-
-/// 事件声明选项
-struct EventDefineOptions {
-    /// 事件名 (hub 内唯一): 必须写全名 `plugin.<名字>.<事件>`
-    /// - 不限定插件名 (同一组织多插件可共用一段, 建议用自己的)
-    /// - 框架**不补前缀**: 不在插件族里直接拒绝
-    /// - 内置专用子段 (`agentxx.agent.event.turn.` / `.tool.` / `.subagent.` /
-    ///   `.timer.` / `.host.`) 不可用
-    std::string name;
-    /// 一行说明 (模型经事件列表看到的就是它)
-    std::string description;
-    /// 单值事件: 首个值到达后自动结束 (默认流式, 由 `endEvent` 结束)
-    bool single = false;
-    /// 除本插件外还允许谁发布 (`AGENTXX_PLUGIN_EVENT_PUBLISH_*` 位掩码)
-    /// - 默认 `0` = 只有创建它的插件能发
-    /// - 比如填 `AGENTXX_PLUGIN_EVENT_PUBLISH_MODEL` 后, 模型可以用
-    ///   `agentxx_async_emit` 往这个事件发值
-    uint32_t allowPublish = 0;
-    /// 保留多少个历史值供后注册的等待回放 (0 = 主程序默认)
-    int32_t historyLimit = 0;
-    /// 到期仍未结束 → 按过期回收 (0 = 不限)
-    std::chrono::milliseconds ttl{0};
-    /// 结束后保留多久 (-1 = 主程序默认; 0 = 结束后立刻回收, 之后查不到)
-    std::chrono::milliseconds linger{-1};
-};
-
-/// 等待登记选项
-struct EventWaitOptions {
-    /// 事件名 (必需)
-    std::string event;
-    /// `first` = 要一个值 / `each` = 每条都要 / `all` = 攒到流结束
-    std::string mode = "first";
-    /// 投递目标会话 (投递模式不是 `none` 时必需)
-    std::string sessionId;
-    /// `next-step`(默认) / `inject` / `next-turn` / `none` (空 = 主程序默认)
-    std::string delivery;
-    /// 投递文本里的一句话说明 (可空)
-    std::string label;
-    /// 关联 id (可空; 投递文本里原样显示)
-    std::string ref;
-    /// 等待超时 (0 = 不限)
-    std::chrono::milliseconds timeout{0};
-    /// `each`/`all` 的累计上限 (0 = 主程序默认)
-    int32_t maxItems = 0;
-    /// 合并窗口 (仅 `each`; 0 = 不合并)
-    std::chrono::milliseconds coalesce{0};
-    /// 是否消费注册之前已经到达的值
-    bool replay = true;
-    /// 超时是否投递一条提示
-    bool notifyOnTimeout = true;
-    /// 会话处于暂停态 (上一轮失败/中断) 时是否解除暂停
-    bool unpause = false;
-    /// 会话在跑一轮时直接丢弃这次投递
-    bool dropIfBusy = false;
-};
-
-/// 主程序是否提供事件中枢 (老主程序没有这张表时为假; 现主程序中恒常驻)
-template<typename Ctx>
-inline bool hasEventHub(const Ctx& ctx) {
-    return ctx.iface.event != nullptr && ctx.iface.event->define_event != nullptr;
-}
-
-/// 声明一个事件源 (幂等: 同名同种类重复声明只补充说明)
-template<typename Ctx>
-inline int32_t defineEvent(Ctx& ctx, const ScopeRef& agent, const EventDefineOptions& opt) {
-    if (!hasEventHub(ctx) || opt.name.empty()) {
-        return AGENTXX_PLUGIN_EVENT_ERR_UNSUPPORTED;
-    }
-    AgentxxPluginEventSpec spec{};
-    spec.struct_size   = sizeof(AgentxxPluginEventSpec);
-    spec.kind          = opt.single ? AGENTXX_PLUGIN_EVENT_KIND_SINGLE
-                                    : AGENTXX_PLUGIN_EVENT_KIND_STREAM;
-    spec.history_limit = opt.historyLimit;
-    spec.ttl_ms        = opt.ttl.count();
-    spec.linger_ms     = opt.linger.count();
-    spec.name          = PluginStringView::from(opt.name);
-    spec.description   = PluginStringView::from(opt.description);
-    spec.publish_mask  = opt.allowPublish;
-    auto ref           = agent.raw();
-    return ctx.iface.event->define_event(ctx.host, &ref, &spec);
-}
-
-/// 发布一个值 (任意线程; 值经主程序排队写入中枢, 调用方不等待投递结果)
-/// - `value` 为空 JSON 时按 `null` 发布
-template<typename Ctx>
-inline int32_t emitEventValue(
-    Ctx&                    ctx,
-    const ScopeRef&         agent,
-    std::string_view        name,
-    const utilxx_base::Json& value
-) {
-    if (!hasEventHub(ctx) || !ctx.iface.event->emit_value || name.empty()) {
-        return AGENTXX_PLUGIN_EVENT_ERR_UNSUPPORTED;
-    }
-    const auto text  = value.is_null() ? std::string{} : value.dump();
-    auto       ref   = agent.raw();
-    auto       nameSv = PluginStringView::from(name.data(), name.size());
-    auto       valueSv = PluginStringView::from(text);
-    return ctx.iface.event->emit_value(ctx.host, &ref, &nameSv, &valueSv);
-}
-
-/// 结束一条流 (幂等; 之后再发布值会重新打开这条流)
-template<typename Ctx>
-inline int32_t endEvent(
-    Ctx&                     ctx,
-    const ScopeRef&          agent,
-    std::string_view         name,
-    const utilxx_base::Json& summary = utilxx_base::Json::object()
-) {
-    if (!hasEventHub(ctx) || !ctx.iface.event->end_event || name.empty()) {
-        return AGENTXX_PLUGIN_EVENT_ERR_UNSUPPORTED;
-    }
-    const auto text    = summary.is_null() ? std::string{} : summary.dump();
-    auto       ref     = agent.raw();
-    auto       nameSv  = PluginStringView::from(name.data(), name.size());
-    auto       summarySv = PluginStringView::from(text);
-    return ctx.iface.event->end_event(ctx.host, &ref, &nameSv, &summarySv);
-}
-
-/// 立即移除一条事件记录 (不等保留期; 还挂在它上面的等待按"已结束且无值"收尾)
-template<typename Ctx>
-inline int32_t removeEvent(Ctx& ctx, const ScopeRef& agent, std::string_view name) {
-    if (!hasEventHub(ctx) || !ctx.iface.event->remove_event || name.empty()) {
-        return AGENTXX_PLUGIN_EVENT_ERR_UNSUPPORTED;
-    }
-    auto ref    = agent.raw();
-    auto nameSv = PluginStringView::from(name.data(), name.size());
-    return ctx.iface.event->remove_event(ctx.host, &ref, &nameSv);
-}
-
-namespace detail {
-
-/// 取一个 host 分配的字符串出参 (用完释放)
-template<typename Fn>
-inline std::string takeHostString(const PluginxxHost* host, Fn&& fn) {
-    PluginxxString out{nullptr, 0};
-    const int32_t  rc = fn(&out);
-    if (rc != 0 || nullptr == out.data) {
-        if (nullptr != out.data) {
-            PluginString::free(host, &out);
-        }
-        return std::string{};
-    }
-    std::string text{out.data, static_cast<size_t>(out.size)};
-    PluginString::free(host, &out);
-    return text;
-}
-
-} // namespace detail
-
-/// 一条事件的状态与最近的值 (JSON 文本; 失败/不存在返回空串)
-template<typename Ctx>
-inline std::string queryEvent(Ctx& ctx, const ScopeRef& agent, std::string_view name) {
-    if (!hasEventHub(ctx) || !ctx.iface.event->query_event || name.empty()) {
-        return {};
-    }
-    auto ref    = agent.raw();
-    auto nameSv = PluginStringView::from(name.data(), name.size());
-    return detail::takeHostString(ctx.host, [&](PluginxxString* out) {
-        return ctx.iface.event->query_event(ctx.host, &ref, &nameSv, out);
-    });
-}
-
-/// 本 agent 的事件清单 (JSON: `{"count":N,"events":[...]}`; `prefix` 可空)
-template<typename Ctx>
-inline std::string listEvents(Ctx& ctx, const ScopeRef& agent, std::string_view prefix = {}) {
-    if (!hasEventHub(ctx) || !ctx.iface.event->list_events) {
-        return {};
-    }
-    auto ref      = agent.raw();
-    auto prefixSv = PluginStringView::from(prefix.data(), prefix.size());
-    return detail::takeHostString(ctx.host, [&](PluginxxString* out) {
-        return ctx.iface.event->list_events(ctx.host, &ref, &prefixSv, out);
-    });
-}
-
-/// 登记一个等待; 返回等待 id (`w-<n>`, 空串 = 失败)
-/// - `outState`: 出参可空; 注册那一刻的状态 (`AGENTXX_PLUGIN_EVENT_WAIT_*`)
-/// - 投递模式不是 `none` 时 `sessionId` 必需
-template<typename Ctx>
-inline std::string registerEventWait(
-    Ctx&                        ctx,
-    const ScopeRef&             agent,
-    const EventWaitOptions&     opt,
-    int32_t*                    outState = nullptr,
-    int32_t*                    outCode  = nullptr
-) {
-    if (outCode != nullptr) {
-        *outCode = AGENTXX_PLUGIN_EVENT_ERR_UNSUPPORTED;
-    }
-    if (!hasEventHub(ctx) || !ctx.iface.event->register_wait || opt.event.empty()) {
-        return {};
-    }
-    AgentxxPluginEventWaitSpec spec{};
-    spec.struct_size        = sizeof(AgentxxPluginEventWaitSpec);
-    spec.mode               = opt.mode == "each" ? AGENTXX_PLUGIN_EVENT_MODE_EACH
-                              : opt.mode == "all" ? AGENTXX_PLUGIN_EVENT_MODE_ALL
-                                                  : AGENTXX_PLUGIN_EVENT_MODE_FIRST;
-    spec.max_items          = opt.maxItems;
-    spec.coalesce_ms        = static_cast<int32_t>(opt.coalesce.count());
-    spec.drop_if_busy       = opt.dropIfBusy ? 1 : 0;
-    spec.timeout_ms         = opt.timeout.count();
-    spec.replay             = opt.replay ? 1 : 0;
-    spec.notify_on_timeout  = opt.notifyOnTimeout ? 1 : 0;
-    spec.unpause            = opt.unpause ? 1 : 0;
-    spec.event              = PluginStringView::from(opt.event);
-    spec.session_id         = PluginStringView::from(opt.sessionId);
-    spec.delivery           = PluginStringView::from(opt.delivery);
-    spec.label              = PluginStringView::from(opt.label);
-    spec.ref                = PluginStringView::from(opt.ref);
-    auto     ref            = agent.raw();
-    int32_t  state          = AGENTXX_PLUGIN_EVENT_WAIT_ARMED;
-    PluginxxString out{nullptr, 0};
-    const int32_t  rc = ctx.iface.event->register_wait(ctx.host, &ref, &spec, &out, &state);
-    std::string waitId;
-    if (nullptr != out.data) {
-        waitId.assign(out.data, static_cast<size_t>(out.size));
-        PluginString::free(ctx.host, &out);
-    }
-    if (outState != nullptr) {
-        *outState = state;
-    }
-    if (outCode != nullptr) {
-        *outCode = rc;
-    }
-    return waitId;
-}
-
-/// 取消一个等待
-template<typename Ctx>
-inline int32_t cancelWait(Ctx& ctx, const ScopeRef& agent, std::string_view waitId) {
-    if (!hasEventHub(ctx) || !ctx.iface.event->cancel_wait || waitId.empty()) {
-        return AGENTXX_PLUGIN_EVENT_ERR_UNSUPPORTED;
-    }
-    auto ref    = agent.raw();
-    auto idSv   = PluginStringView::from(waitId.data(), waitId.size());
-    return ctx.iface.event->cancel_wait(ctx.host, &ref, &idSv);
-}
-
-/// 等待清单 (JSON: `{"count":N,"waits":[...]}`; `sessionId` 可空 = 本 agent 全部)
-template<typename Ctx>
-inline std::string listEventWaits(Ctx& ctx, const ScopeRef& agent, std::string_view sessionId = {}) {
-    if (!hasEventHub(ctx) || !ctx.iface.event->list_waits) {
-        return {};
-    }
-    auto ref       = agent.raw();
-    auto sessionSv = PluginStringView::from(sessionId.data(), sessionId.size());
-    return detail::takeHostString(ctx.host, [&](PluginxxString* out) {
-        return ctx.iface.event->list_waits(ctx.host, &ref, &sessionSv, out);
-    });
-}
 
 /* ==================== 后台任务 (async work) ====================
  *

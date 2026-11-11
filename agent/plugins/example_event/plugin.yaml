@@ -1,10 +1,9 @@
 name: example_event
-version: 1.0.0
-description: "Example event-hub plugin: declares event sources, publishes values, waits for values"
+version: 2.0.0
+description: "Example broadcast plugin: declares channels, publishes values, subscribes, reads, ends streams"
 entry: libexample_event.so
 interfaces:
   require:
     - agentxx.agent.core
-  # 事件中枢: 主程序关闭 `event.enable` 或版本早于本表时插件降级 (不声明事件, 加载照常成功)
-  optional:
-    - agentxx.agent.event
+    # 广播表: 声明频道 / 发布 / 订阅 / 读当前值 / 结束
+    - agentxx.broadcasts

@@ -139,7 +139,7 @@ path/to/agentxx_test string_util regex  # 只跑指定模块
 | `plugin_llm_uncensored` | 异步 | 通用 |
 | `plugin_cleanup` | 异步 | 通用 |
 | `plugin_feature` | 异步 | 通用 |
-| `plugin_event` | 异步 | 通用 |
+| `plugin_broadcast` | 异步 | 通用 |
 | `plugin_hooks` | 异步 | 通用 |
 | `plugin_resources` | 异步 | 通用 |
 | `plugin_host_mount` | 异步 | 通用 |

@@ -387,8 +387,6 @@ PluginMount::RegistrationInventory
         out.mcpNamespaces += one.mcpNamespaces;
         out.featurePoints += one.featurePoints;
         out.featureImpls += one.featureImpls;
-        out.eventRecords += one.eventRecords;
-        out.eventWaits += one.eventWaits;
         out.ownsGraphDefinition = out.ownsGraphDefinition || one.ownsGraphDefinition;
     }
     return out;
@@ -617,6 +615,11 @@ void PluginManager::detachDomainRegistrations(PluginInstance* inst) {
     releaseRuntimeOfOwner(inst->name);
     // 网络资源同样跟着实例: 服务与连接关掉, 未完成请求按"已取消"结算
     netShutdownPlugin(inst->name);
+    // 广播频道也按属主回收: 插件 disabled/卸载后没人再发布, 留着只会让
+    // 订阅方一直等一个不会变的旧值 (启用时插件在自己的 mount 里重新声明)
+    if (auto registry = broadcasts()) {
+        registry->removeChannelsOwnedBy(inst->name);
+    }
     for (const auto& mount : mounts_) {
         if (mount) {
             mount->detachInstance(inst);

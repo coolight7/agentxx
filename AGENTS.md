@@ -600,14 +600,10 @@ path/to/agentxx_test --log-level warn string_util regex
   (value_max_bytes/wait_timeout_ms/max_waits_session/allow_headless_turn/delivery)。
   诊断: `KeyMetrics` 的 `events.*` 三计数 + 加载快照 `event_hub` 段 +
   `--dump-diagnostics` 的 `## event hub`; 测试模块 `event_hub` /
-  `event_tools` / `event_delivery` / `event_subagent` / `async_tools` / `plugin_event`。插件面接口表
-  `agentxx.agent.event` 已实现 (2026-11-03): `define_event`/`emit_value`/`end_event`/
-  `remove_event`/`query_event`/`list_events`/`register_wait`/`cancel_wait`/`list_waits`,
-  事件与等待按 `plugin:<实例名>` 记账 (禁用/卸载整批回收, 注册清单 `eventRecords`/`eventWaits`),
-  **发布权限** (2026-11-06): `AgentxxPluginEventSpec` 尾部 `publish_mask`
-  (`AGENTXX_PLUGIN_EVENT_PUBLISH_MODEL/PLUGIN/BUILTIN`, 基线 `offsetof`), 默认 0 = 只有本插件;
-  越权返回 `AGENTXX_PLUGIN_EVENT_ERR_DENIED`; kit 侧 `EventDefineOptions.allowPublish`。
-  示例插件 `example_event`; **未做**: 触发器/定时器收敛到中枢。
+  `event_tools` / `event_delivery` / `event_subagent` / `async_tools` / `plugin_broadcast`。
+  插件面**没有**事件中枢表 (`agentxx.agent.event` 已删): 发值/收值/结束都走广播表
+  (`agentxx.broadcasts`), 中枢只做“记录 + 等待 + 投递给会话”的内部机制。
+  示例插件 `example_event` (声明频道 / 发布 / 订阅 / 读当前值 / 结束)。
 - 后台任务 (async work, 2026-11, 详见 [events.md](docs/zh-cn/design/events.md) 第 8 节):
   `agentxx::agent::AsyncWorkManager` (`agent/lib/{include/agentxx/agent/async_work.h,src/agent/async_work.cpp}`,
   由 `AgentHost` 持有并通过 `friend` 访问其私有接口) = 台账 (`AsyncWorkEntry`: kind/state/
@@ -697,7 +693,7 @@ path/to/agentxx_test --log-level warn string_util regex
   容器 io 线程、实例释放后不再进入插件代码。
   注: 提示词只按 **agent 级** 支持修改 (根 `config_json` 的 `prompt`), **不做**会话级
   提示词来源 —— 一个 agent 管理的会话、提示词、插件等保持一致
-- 接口表数量: agent 侧 23 张 (10 张通用表 `pluginxx.*` + 13 张业务表 `agentxx.agent.*`;
+- 接口表数量: agent 侧 22 张 (10 张通用表 `pluginxx.*` + 12 张业务表 `agentxx.agent.*`;
   业务表含 `agentxx.agent.context` 会话 LLM 上下文查询 `get_messages`/`messages_count`
   与 `agentxx.agent.feature` 功能点: `list_points`/`define_point`/`undefine_point`/
   `register_impl`/`unregister_impl`/`call_point_async`/`op_cancel`,
@@ -713,12 +709,8 @@ path/to/agentxx_test --log-level warn string_util regex
   追加了 `tool_name`/`tool_args_json` 支撑 `kind=tool`、再追加 `delay_ms`/`queue_timeout_ms`
   支撑起跑延时与排队时限, 基线停在 `offsetof(tool_name)`, 读侧用 `specHas` 判定), 详见
   [plugins.md](docs/zh-cn/design/plugins.md) §19,
-  `agentxx.agent.event` 事件中枢 —— 插件声明事件源 / 发布值 / 结束流 / 替会话登记等待
-  (`define_event`/`emit_value`/`end_event`/`remove_event`/`query_event`/`list_events`/
-  `register_wait`/`cancel_wait`/`list_waits`, 归属按 `plugin:<实例名>` 记账, 禁用卸载整批回收,
-  详见 [plugins.md](docs/zh-cn/design/plugins.md) §20),
   client 侧 9 张 (ui/events/session/wire/self/json/log + timer/keybind)
-- **网络能力 `agentxx.net` 是通用表** (两侧都提供, 不计入上面的 13 张业务表):
+- **网络能力 `agentxx.net` 是通用表** (两侧都提供, 不计入上面的 12 张业务表):
   插件不自己建连接 —— HTTP / WebSocket / TCP / UDP / HTTP 服务端都经这张表转给
   `utilxx::NetHub` (自有网络线程, 按插件实例记账; 禁用/卸载时 `shutdownOwner` 整批收掉)。
   三个成员 `call` / `call_async` / `cancel`; **表入口结果码只表示受理层面**, 业务结论在

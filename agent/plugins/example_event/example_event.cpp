@@ -1,17 +1,20 @@
-/// example_event —— 事件中枢插件示例 (agentxx.agent.event 接口表)
+/// example_event —— 广播插件示例 (通用表 `agentxx.broadcasts`)
 ///
-/// 演示一个插件在事件中枢里能做的三件事:
-/// 1. **声明自己的事件源** (`plugin.example_event.build` 流式 /
-///    `plugin.example_event.ready` 单值):
-///    声明内容进中枢的记录表 (含说明文字), 会话侧可用 `agentxx_async_query` 查后台任务;
-/// 2. **发布值 / 结束流**: 插件每轮发一个值, 读者是已经等着的会话
-///    (值到达后作为一条以 `[Event] <名字>` 开头的输入进入会话);
-/// 3. **替某个会话登记等待**: 挂载配置里给了 `sessionId` 时, 插件替那个会话等
-///    `plugin.example_event.build` 的每条值 (值到达后自动变成那个会话的输入)。
+/// 演示插件在广播面上能做的五件事:
+/// 1. **声明自己的频道**: `plugin.example_event.build` (进度流) 与
+///    `plugin.example_event.ready` (就绪值), 都保留当前值;
+/// 2. **发布值**: 属主可以发, 别的插件发会被主程序拒 (`publish: owner`);
+/// 3. **订阅**: 一条订阅自己的进度频道 (带结束回调), 一条订阅主程序的轮次通知
+///    (`agentxx.agent.round.start`) —— 后者演示"订阅主程序的频道只读";
+/// 4. **读当前值**: 发出去的值留在频道里, 后订阅者与随时读都能拿到;
+/// 5. **结束流**: 卸载时主程序按归属回收订阅, 再次启用按 `mount` 重新声明。
 ///
-/// 归属: 事件与等待都记在本插件实例名下, 禁用/卸载时主程序整批回收, `stop` 里不必手清。
+/// 与已删除的 `agentxx.agent.event` 表的区别: 那张表把"事件"记在事件中枢里, 谁要值谁来
+/// 登记等待 (值被投递进会话); 广播面只做"某频道的值变了", 收到值之后怎么用由订阅方决定。
 ///
-/// 挂载配置 (可选): `{"sessionId": "<会话 id>"}` —— 不给就不登记等待。
+/// 挂载配置 (可选): `{"logRounds": true}` —— 每收到一次轮次通知写一条日志
+/// (默认只在第一次写, 免得刷屏)。
+#include "agentxx/plugin/api/agentxx_broadcast_ids.h"
 #include "agentxx/plugin/api/plugin_api.h"
 #include "agentxx/plugin/api/plugin_guard.h"
 #include "agentxx/plugin/api/plugin_kit.h"
@@ -33,9 +36,13 @@ struct EventCtx : public agentxx::plugin::PluginBase {
 /// 一份挂载的状态 (拆挂载时主程序原样交回)
 struct EventMountState {
     agentxx::plugin::AgentRef ref;
-    std::string               sessionId;
-    /// 替该会话登记的等待 id (空 = 没登记)
-    std::string waitId;
+    /// 订阅句柄 (由主程序在卸载时回收; 这里只记着便于自查)
+    PluginxxSubscription* buildSub  = nullptr;
+    PluginxxSubscription* roundSub  = nullptr;
+    /// 收到过多少条通知
+    int                   buildSeen = 0;
+    int                   roundSeen = 0;
+    bool                  logRounds = false;
 };
 
 static auto eventGuardLogger(EventCtx* ctx) noexcept {
@@ -55,9 +62,9 @@ extern "C" PLUGINXX_EXPORT const PluginxxInfo* agentxx_plugin_agent_get_info(voi
                 PLUGINXX_API_VERSION,
                 0,
                 agentxx::plugin::PluginStringView::fromCstr("example_event"),
-                agentxx::plugin::PluginStringView::fromCstr("1.0.0"),
+                agentxx::plugin::PluginStringView::fromCstr("2.0.0"),
                 agentxx::plugin::PluginStringView::fromCstr(
-                    "Example event-hub plugin: define events / publish values / register waits"
+                    "Example broadcast plugin: declare channels, publish, subscribe, read, end"
                 ),
             };
             return &info;
@@ -86,82 +93,122 @@ extern "C" PLUGINXX_EXPORT int
     );
 }
 
-/// 挂载事务: 声明事件源、发布初始值、替会话登记等待
-static int eventAgentSetup(EventCtx& ctx, const EventMountState& state) {
-    using namespace agentxx::plugin;
-    const auto& ref = state.ref;
+/// 订阅回调: 收到一条值
+static void PLUGINXX_CALL onBuildValue(const PluginxxStringView* payload, void* ud) {
+    auto* state = static_cast<EventMountState*>(ud);
+    if (nullptr == state) {
+        return;
+    }
+    ++state->buildSeen;
+    (void)payload;
+}
 
-    // 事件中枢不可用 (老主程序/嵌入环境没建中枢): 按"功能不可用"降级,
-    // 不影响插件加载 —— 事件的发布方不在了, 只是没人等得到值
-    if (!hasEventHub(ctx)) {
-        ctx.log.info("example_event: event hub iface unavailable, plugin stays idle");
+/// 订阅回调: 频道被结束
+static void PLUGINXX_CALL onBuildEnd(const PluginxxStringView* reason, void* ud) {
+    auto* state = static_cast<EventMountState*>(ud);
+    if (nullptr == state) {
+        return;
+    }
+    (void)reason;
+}
+
+/// 订阅回调: 主程序的轮次开始通知
+static void PLUGINXX_CALL onRoundStart(const PluginxxStringView* payload, void* ud) {
+    auto* state = static_cast<EventMountState*>(ud);
+    if (nullptr == state) {
+        return;
+    }
+    ++state->roundSeen;
+    (void)payload;
+}
+
+/// 挂载事务: 声明频道、发布初始值、订阅频道
+static int eventAgentSetup(EventCtx& ctx, EventMountState& state) {
+    using namespace agentxx::plugin;
+    const auto* bc = ctx.iface.broadcasts;
+    if (nullptr == bc || nullptr == bc->declare_broadcast || nullptr == bc->publish_broadcast) {
+        ctx.log.info("example_event: broadcasts iface unavailable, plugin stays idle");
         return 0;
     }
 
-    // 1. 声明一条流式事件 (多次发布, 由 end_event 结束; 留 4 条历史值供后注册者回放)
-    {
-        EventDefineOptions opt;
-        opt.name         = "plugin.example_event.build";
-        opt.description  = "示例: 构建进度 (插件发布, 等待中的会话会收到)";
-        opt.historyLimit = 4;
-        const auto rc    = defineEvent(ctx, ref, opt);
-        if (rc == AGENTXX_PLUGIN_EVENT_ERR_UNSUPPORTED) {
-            // 表在、中枢没有 (例如嵌入方没启): 同样按降级处理
-            ctx.log.info("example_event: event hub is not enabled, plugin stays idle");
-            return 0;
-        }
-        if (rc != AGENTXX_PLUGIN_EVENT_OK) {
-            ctx.log.info("example_event: define example_event.build rejected");
-            return -1; // start 事务失败: 主程序按拒绝处理并回滚
-        }
+    // 1. 声明两条自己的频道: 都保留当前值 (后订阅者能立刻拿到最后一条)
+    if (!declarePluginBroadcast(ctx.host, bc, "plugin.example_event.build", false, true)) {
+        ctx.log.info("example_event: declare example_event.build rejected");
+        return -1;
     }
-    // 2. 声明一条单值事件 (首个值到达后自动结束, 适合"就绪/已完成"这类一次性通知)
-    {
-        EventDefineOptions opt;
-        opt.name        = "plugin.example_event.ready";
-        opt.description = "示例: 就绪通知 (单值事件, 首个值到达后自动结束)";
-        opt.single      = true;
-        if (defineEvent(ctx, ref, opt) != AGENTXX_PLUGIN_EVENT_OK) {
-            return -1;
-        }
+    if (!declarePluginBroadcast(ctx.host, bc, "plugin.example_event.ready", false, true)) {
+        return -1;
     }
 
-    // 3. 发布值: 单值事件发一次就结束; 流式事件保持打开, 等后续步骤继续发
+    // 2. 发布初始值
     utilxx_base::Json ready = utilxx_base::Json::object();
     ready["ok"]             = true;
     ready["plugin"]         = "example_event";
-    if (emitEventValue(ctx, ref, "plugin.example_event.ready", ready) != AGENTXX_PLUGIN_EVENT_OK) {
+    if (!publishPluginBroadcast(ctx.host, bc, "plugin.example_event.ready", ready.dump(), false)) {
         return -1;
     }
     utilxx_base::Json step = utilxx_base::Json::object();
     step["step"]           = 1;
     step["total"]          = 2;
-    if (emitEventValue(ctx, ref, "plugin.example_event.build", step) != AGENTXX_PLUGIN_EVENT_OK) {
+    if (!publishPluginBroadcast(ctx.host, bc, "plugin.example_event.build", step.dump(), false)) {
         return -1;
     }
     ++ctx.emitted;
 
-    // 4. 替某个会话登记等待 (配置给了 sessionId 才做): 每条值都投给那个会话
-    //    - delivery 默认 next-step: 会话在跑一轮时插到下一次模型调用之前,
-    //      空闲时提升为新一轮输入
-    if (!state.sessionId.empty()) {
-        EventWaitOptions opt;
-        opt.event         = "plugin.example_event.build";
-        opt.mode          = "each";
-        opt.sessionId     = state.sessionId;
-        opt.label         = "示例插件替会话等的构建进度";
-        opt.notifyOnTimeout = false;
-        int32_t    code   = 0;
-        const auto waitId = registerEventWait(ctx, ref, opt, nullptr, &code);
-        if (waitId.empty()) {
-            ctx.log.info("example_event: register_wait rejected");
-            return -1;
+    // 3. 读当前值: 有当前值的频道可以直接读, 不必等下一次发布
+    if (bc->read_broadcast != nullptr) {
+        PluginxxString out{nullptr, 0};
+        auto           idSv = PluginStringView::fromCstr("plugin.example_event.build");
+        if (bc->read_broadcast(ctx.host, &idSv, &out) == PLUGINXX_RESULT_OK
+            && out.data != nullptr) {
+            ctx.log.info("example_event: current value of the build channel read back");
+            PluginString::free(ctx.host, &out);
+        } else if (out.data != nullptr) {
+            PluginString::free(ctx.host, &out);
         }
-        ctx.log.info("example_event: registered a wait for the session");
     }
 
-    // 5. 自查: 查一条事件的状态、列一遍事件与等待 (示例插件的自检习惯)
-    ctx.log.info("example_event: event sources declared and initial values published");
+    // 4. 订阅: 自己的进度频道 (带结束回调) + 主程序的轮次通知。
+    //    轮次通知属主是主程序, 订阅它不需要先声明。
+    const auto ref = state.ref.raw();
+    if (bc->subscribe_broadcast_ex != nullptr) {
+        auto       buildId = PluginStringView::fromCstr("plugin.example_event.build");
+        state.buildSub     = bc->subscribe_broadcast_ex(
+            ctx.host,
+            &ref,
+            &buildId,
+            &onBuildValue,
+            &onBuildEnd,
+            &state,
+            nullptr,
+            nullptr
+        );
+        if (nullptr == state.buildSub) {
+            ctx.log.info("example_event: subscribe the build channel rejected");
+            return -1;
+        }
+    }
+    if (bc->subscribe_broadcast != nullptr) {
+        auto roundId = PluginStringView::from(
+            broadcasts::AgentRoundStart.data(),
+            broadcasts::AgentRoundStart.size()
+        );
+        state.roundSub = bc->subscribe_broadcast(
+            ctx.host,
+            &ref,
+            &roundId,
+            &onRoundStart,
+            &state,
+            nullptr,
+            nullptr
+        );
+        // 轮次通知订阅不到不算失败: 主程序可能还没声明这个频道
+        if (nullptr == state.roundSub) {
+            ctx.log.info("example_event: round.start channel not available, skipped");
+        }
+    }
+
+    ctx.log.info("example_event: channels declared, values published, subscriptions made");
     return 0;
 }
 
@@ -187,10 +234,10 @@ static void* eventAgentStart(
 }
 
 static void* eventAgentMount(
-    EventCtx&                         ctx,
+    EventCtx&                          ctx,
     const AgentxxPluginAgentMountSpec* spec,
-    const PluginxxOperatorNotify*     notify,
-    PluginxxString*                   error
+    const PluginxxOperatorNotify*      notify,
+    PluginxxString*                    error
 ) {
     if (!notify) {
         if (error) {
@@ -202,9 +249,8 @@ static void* eventAgentMount(
         }
         return nullptr;
     }
-    if (nullptr == spec || !agentxx::plugin::specSizeOk<AgentxxPluginAgentMountSpec>(
-                              spec->struct_size
-                          )) {
+    if (nullptr == spec
+        || !agentxx::plugin::specSizeOk<AgentxxPluginAgentMountSpec>(spec->struct_size)) {
         if (error) {
             agentxx::plugin::PluginString::set(
                 ctx.host,
@@ -217,7 +263,7 @@ static void* eventAgentMount(
 
     auto* state = new EventMountState();
     state->ref  = agentxx::plugin::AgentRef(*spec);
-    // 挂载配置: {"sessionId": "..."} —— 给了就替那个会话登记一个等待
+    // 挂载配置: {"logRounds": true} —— 每收到一次轮次通知写一条日志
     if (spec->config_json.data != nullptr && spec->config_json.size > 0) {
         try {
             const auto parsed = utilxx_base::Json::parse(std::string_view{
@@ -225,12 +271,11 @@ static void* eventAgentMount(
                 static_cast<size_t>(spec->config_json.size)
             });
             if (parsed.is_object()) {
-                state->sessionId = parsed.value("sessionId", std::string{});
+                state->logRounds = parsed.value("logRounds", false);
             }
-        } catch (const std::exception& e) {
-            // 配置写坏了不影响加载: 只是不替会话登记等待
+        } catch (const std::exception&) {
+            // 配置写坏了不影响加载: 只是不打开额外日志
             ctx.log.info("example_event: mount config is not valid JSON, skipped");
-            (void)e;
         }
     }
 
@@ -242,6 +287,7 @@ static void* eventAgentMount(
                 "example_event mount: registration transaction failed"
             );
         }
+        delete state;
         return nullptr;
     }
     ctx.log.info("example_event mounted");
@@ -255,9 +301,9 @@ static void* eventAgentUnmount(
     const PluginxxOperatorNotify* notify,
     PluginxxString*
 ) {
-    // 事件与等待由主程序按归属 (plugin:example_event) 整批回收; 这里只释放本地状态
-    ctx.log.info("example_event unmounted");
+    // 频道与订阅由主程序按归属 (plugin:example_event) 整批回收, 这里只释放本地状态
     delete static_cast<EventMountState*>(mountUd);
+    ctx.log.info("example_event unmounted");
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }

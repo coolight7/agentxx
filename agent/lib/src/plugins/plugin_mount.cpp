@@ -4,7 +4,7 @@
 ///
 /// - 一个 agent 一个挂载 ([PluginMount]), 同进程里可以有多个;
 /// - 全部动作只在主程序 io 线程执行 (注册入口由 vtable 层投递, 插件回调由主程序驱动);
-/// - 撤销顺序固定 (见 [PluginMount::revokeEntry]): 先断事件与资源, 再恢复图定义、
+/// - 撤销顺序固定 (见 [PluginMount::revokeEntry]): 先断广播订阅与资源, 再恢复图定义、
 ///   摘注册, 最后摘工具 —— 单一栈式回滚会漏掉类别之间的先后依赖。
 #include "agentxx/plugin/plugin_mount.h"
 
@@ -488,13 +488,6 @@ void PluginMount::revokeEntry(Entry& entry) {
         retiredTools_.push_back(std::move(tool));
     }
     entry.toolObjects.clear();
-
-    // ⑩ 事件中枢 (agentxx.agent.event): 本实例声明的事件记录删掉, 它的等待取消
-    // - 事件记录留着会让模型还能查到"已经没人发"的事件, 等待留着会一直挂到超时
-    // - 中枢恒常驻 (早期版本可关, 已删除该开关): 仍空指针则直接跳过
-    if (ctx && ctx->eventHub) {
-        ctx->eventHub->removeOwned(fmt::format("plugin:{}", inst->name));
-    }
 }
 
 void PluginMount::detachInstance(PluginInstance* inst) {

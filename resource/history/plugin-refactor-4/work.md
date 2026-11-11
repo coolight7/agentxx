@@ -11,7 +11,7 @@
 | 步骤 0 库改动（`cxx_pluginxx` L1~L4/L6/L7、`cxx_utilxx` L5）+ 子模块指针 | 已完成 |
 | 步骤 1 构建与接口表骨架 | 已完成 |
 | 步骤 2 agent 侧（DomainServices + 广播 + 中枢） | 已完成（广播通道打通，事件中枢对接完成，`plugins` 模块全绿） |
-| 步骤 3 功能埋点（替换钩子与功能点） | 进行中（声明表 + 分发入口 + `plugin_point` 模块 + 7 个通知型埋点已接到派发；旧三表与取值型埋点待改） |
+| 步骤 3 功能埋点（替换钩子与功能点） | 进行中（7 个通知型埋点已接到派发；`agentxx.agent.event` 已删，见步骤 3-A；旧钩子表与功能点表待改） |
 | 步骤 4 网络（`agentxx.net` + 4 个插件迁移） | 已完成（agent/client 双侧表 + SDK 便捷层 + 4 个插件全迁：websearch / rag_search / text_selection_monitor / chatbot） |
 | 步骤 5 client 侧（广播 + net） | 进行中（net 已提供；广播与 DomainServices 待做） |
 | 步骤 6 插件全量迁移 + JS 引擎 | 进行中（能力表 APIs 已迁：JS 引擎 + 3 个示例插件） |
@@ -146,8 +146,48 @@
     `PluginMount::hookHandlers_` 删除；
   - 功能点表 `define_point`/`register_impl` 改成 `declarePoint` + 能力行，`agentxx::feature`
     的 `ask/call` 改成 `emitPointAsync` 并解析结果；
-  - `agentxx.agent.event` 表删除（插件改用广播表）；
+  - `agentxx.agent.event` 表删除（插件改用广播表）—— **已完成，见下**；
   - 三张表删除后把 `kInterfaceTableCount` 改成 21，同步 `boundaries` 台账与示例插件
+
+#### 3-A 删 `agentxx.agent.event`（已完成）
+
+- 接口表与实现：
+  - `plugin/api/plugin_api.h` 删整段事件中枢表（IID/版本/基线/返回码/发布掩码/种类/等待模式/
+    `AgentxxPluginEventSpec`/`WaitSpec`/`Iface` 共 ~200 行）；`plugin_spec.h` 删 `EventSpec`
+    基线特化；`plugin_iface_meta.h` 删该表的 `IfaceMeta` 与两条 `static_assert`
+  - `plugin_manager_vtable.cpp` 删 `xx_event_*`9 个入口 + `g_ifaceEvent` + `query_interface`
+    分支（注意：`g_ifaceRuntime` 原本紧跟在事件段后面，删段时一并删了，已补回）
+  - `plugin_mount.h`：`RegistrationInventory` 去掉 `eventRecords` / `eventWaits`；
+    `plugin_manager_lifecycle.cpp` 的汇总与 `plugin_manager_adapters.cpp` 的统计同步删；
+    `plugin_mount.cpp` 的 `revokeEntry` 去掉“按 owner 删中枢记录”的最后一步
+  - SDK `plugin_kit.h`：删 `AgentIfaces::event` 与 `hasEventHub`/`defineEvent`/`emitEventValue`/
+    `endEvent`/`removeEvent`/`queryEvent`/`listEvents`/`registerEventWait`/`cancelEventWait`/
+    `listEventWaits` + 两个选项结构（`detail::takeHostString` 被一起删掉，已补回：其他查询
+    辅助还在用它）
+- **新增的回收动作**：`PluginManager::detachDomainRegistrations` 里按属主删频道
+  （`BroadcastRegistry::removeChannelsOwnedBy`）—— 之前库里实现了但没人调，插件禁用/
+  卸载后频道一直留着（订阅方等一个永不更新的值）。现在与订阅回收一起做，启用时插件
+  在自己的 `mount` 里重新声明
+- 示例插件 `example_event` 2.0.0：改为广播示例（声明两条自己的频道、发布初始值、读回
+  当前值、订阅自己的进度频道 + 主程序 `agentxx.agent.round.start`），`plugin.yaml` 的
+  依赖从 `agentxx.agent.event` 改成 `agentxx.broadcasts`
+- 测试：删 `test_plugin_event.{h,cpp}`（124 条，测的是已删的表）→ 新增
+  `test_plugin_broadcast.{h,cpp}`（模块名 `plugin_broadcast`，73 条）：声明与发布、
+  发布权限、订阅与读（`pushOnSubscribe` / 退订 / 无缓存 / 未声明）、结束流
+  （`on_end` 恰好一次、幂等、再声明开新流）、禁用→启用→卸载的可逆性
+- 台账与文档：`kInterfaceTableCount` 23→**22**（10 + 12），`boundaries` 规则 7/8/9/10 的
+  数量与成员顺序台账同步；`plugins.md` §8 表清单去掉事件行 + 新增广播行、§20 重写为
+  “插件通知面：广播”、§19 的“与事件中枢的关系”段改写；`events.md` §12 重写（插件侧只有
+  广播与触发器两条路）、测试模块表同步；`test-modules.md`、`index.md`、根 `AGENTS.md`
+  的数量与表清单同步
+- 验证：`agentxx_lib_repo` / `agentxx_test_repo` / `agentxx_client_repo` 编过（含 26 个插件
+  目标，`example_event` 产物刷新）；`plugin_broadcast` 73 / `boundaries` 19 / `plugin_point` 63 /
+  `plugin_net` 35 / `plugin_host_mount` 147 / `plugin_multi_mount` 47 / `plugin_runtime` 733 /
+  `plugins` 610 / `plugin_sdk` 141 / `plugin_cleanup` 99 / `plugin_feature` 145 /
+  `feature_points` 136 全绿
+- 已知：`plugin_agent_runtime` 在本机 Debug+ASan 下跑得很慢（单模块 >20 分钟，stderr 显示
+  在正常推进）；本轮未等到结果，留给下一轮带更长超时重跑
+
 - 顺手修的运行时问题（属步骤 2 的尾巴）：`runtime.register_trigger` / `runtime_emit_event`
   在频道未声明时**按名字定属主**（`plugin.<名>.*` 归该插件），否则插件发布自己的频道
   会被“属主不是它”拒成 `ERR_FAILED(-7)`（`plugin_agent_runtime` 14 条失败即此）；

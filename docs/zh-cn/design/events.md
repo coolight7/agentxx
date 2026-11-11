@@ -509,59 +509,43 @@ content:
 
 ## 12. 插件侧
 
-插件有两条可用的路，选哪条看"要不要值/状态"：
+插件面**没有**事件中枢的接口表（`agentxx.agent.event` 已删除）。中枢是主程序内部机制，
+插件与它打交道的只有两处：
 
 | 需求 | 用法 |
 |---|---|
 | 只把一条消息塞进会话（不需要值/状态） | `agentxx.agent.runtime` 的 `register_trigger` / `register_timer` |
-| 有一个**带值的事件**：谁等谁拿、要查状态、要回放、要结束流 | `agentxx.agent.event` 表（见下） |
+| 通知别人"某频道的值变了" / 拿别人的当前值 | 广播表 `agentxx.broadcasts`（声明 / 发布 / 订阅 / 读 / 结束） |
 
-### 12.1 经总线发值（不改接口表）
-
-插件把值发到总线即可；中枢只订阅 `plugin.` 前缀，所以插件写自己那一族就等于发值：
+### 12.1 插件发值：广播
 
 ```text
-插件 emitEvent("plugin.chat.group42.progress", payload)  // agentxx.agent.runtime 表 / SDK kit
-  -> 插件管理器校验名字在本实例的 `plugin.<实例插件名>.*` 里, 原样发到该 agent 的总线
-  -> 中枢前缀订阅收到, 记为同一个名字的事件
+插件 publish_broadcast("plugin.chat.group42.progress", payload)   // 或 SDK publishPluginBroadcast
+  -> 插件管理器按实例名补全属主 (短名 `progress` -> `plugin.<本实例>.<名字>`)
+  -> BroadcastRegistry 写缓存并通知全部订阅者
+  -> 事件中枢若正为某个名字登记等待, 它的按名订阅同时收到这份值 (内部机制, 插件不参与)
 ```
 
-模型侧的订阅入口已合并到后台任务：模型不再自己挂等待，需要“把插件事件变成会话输入”时
-由插件 `register_wait` 替会话登记（值到达直接作为会话输入），或后续在
-`agentxx_async_run` 上扩展“事件订阅”目标。
-写侧只能落在插件族里（`plugin.*`），框架**不补前缀**；读侧（订阅/等待/触发器）可以跨族，
-但必须是全名（裸名直接拒绝）。
+写侧只能落在 `plugin.*` 里（`plugin.<名>.*`；框架**不补前缀**），读侧（订阅 / 读当前值 /
+触发器）可以用全名指向主程序频道，如 `agentxx.agent.round.start`。
 
-插件族**只校验 `plugin.` 根，不限定后面的名字是不是本实例的**：同一组织的多个插件可能
-复用代码、同一功能由不同插件包提供实现，共用一段是正当需求。建议仍用自己的插件名
-（`plugin.<本实例插件名>.xxx`），这样记录归属（`plugin:<名>`）与禁用/卸载时的整批回收
+插件族只校验 `plugin.` 根，不限定后面的名字是不是本实例的：同一组织的多个插件可能复用
+代码、同一功能由不同插件包提供实现，共用一段是正当需求。建议仍用自己的插件名
+（`plugin.<本实例插件名>.xxx`），这样频道属主记录（按属主回收）与禁用/卸载时的整批回收
 都清楚，但框架不强制。
 
-### 12.2 事件中枢表 `agentxx.agent.event`
+### 12.2 事件中枢的值事件与模型侧
 
-带值事件的正规入口（`plugin_api.h` 的表 + `plugin_kit.h` 的便捷函数），成员、返回码、
-归属回收与 SDK 函数见 [plugins.md](plugins.md) §20。要点：
-
-- `define_event` 声明事件源：说明文字会进中枢记录表（诊断与 `list_runtime` 可见）；
-- `emit_value` 发布 JSON 值（任意线程；值排队写入中枢，调用方不等投递结果），
-  `end_event` / `remove_event` 收尾；
-- `register_wait` 替某个会话登记等待：`first` / `each` / `all` 三档 + `delivery`
-  （`next-step` / `inject` / `next-turn` / `none`）+ `replay`（是否消费注册前已有的值）——
-  模型侧的自动通知用的就是这套机制；
-- 归属记成 `plugin:<实例名>`：插件禁用/卸载时主程序先取消它的等待、再删它的记录
-  （`PluginMount::revokeEntry` 最后一步），加载快照的 `eventRecords` / `eventWaits` 给出
-  当前生效条数；
-- 中枢在现主程序中恒常驻，写入口不会再返回 `AGENTXX_PLUGIN_EVENT_ERR_UNSUPPORTED`
-  （该常量保留给"嵌入方没建中枢"的环境；老主程序上仍会看到）。
-
-### 12.3 模型侧的事件名规则
-
-- 发布（`agentxx_async_emit`）：可以指向任意合法事件名（`agentxx.agent.event.*`、
+- 中枢自己发布的内置值事件仍在 `agentxx.agent.event.*`（轮次 / 工具结束 / 定时器）与
+  `agentxx.agent.async.done`（后台任务结果）两段，插件可以订阅同名的广播频道观察它们；
+- 模型侧发布（`agentxx_async_emit`）：可以指向任意合法事件名（`agentxx.agent.event.*`、
   `agentxx.agent.async.*`、`plugin.<名>.*`），能不能发由该事件的 `publishMask` 决定（见 6.1）；
   模型**自建**事件仍限在 `agentxx.agent.event.*` 且不占框架保留子段
-  （`turn.` / `tool.` / `subagent.` / `timer.` / `host.`），插件族的事件只能由插件建；
-- 读不再由模型直接发起：后台任务结果由 `agentxx_async_run` 主动送回，要单拿一条用
-  `agentxx_async_await {id}`；插件的订阅走 `agentxx.agent.event` 接口表的 `register_wait`。
+  （`turn.` / `tool.` / `subagent.` / `timer.` / `host.`）；
+- 模型不再自己挂等待：后台任务结果由 `agentxx_async_run` 主动送回，要单拿一条用
+  `agentxx_async_await {id}`；
+- 一段时间内仍保留的能力：`register_wait` 这类"把值投递成会话输入"的动作只由主程序内部
+  使用（触发器/定时器、后台任务通知）；插件要影响会话就让会话自己说（工具）或用触发器。
 
 尚未做的部分见第 13 节。
 
@@ -589,7 +573,7 @@ content:
 | `event_subagent` | 后台任务立即受理、单一事件名与值里的 `asyncId`、经 `agentxx_async_run` 的受理文本、结果自动投递（驱动端或待注入）、非法事件名拒绝、取消后仍发终态 |
 | `async_work` | 台账与状态机、每队列 FIFO 与额度、排队/运行的取消、linger 清扫、指标计数、`listJson` 的 `queueAhead`、`kind=tool` 的执行/失败/取消 |
 | `async_tools` | `agentxx_async_run`（工具/子代理两种目标、notify 默认与关闭、权限与参数）、`_query`（六档 group、单条 id、归属隔离）、`_await`（已完成/运行中/超时）、`_manager`（cancel / delay、id 数组、排队与运行超时、`*` 延时标记、终态与归属） |
-| `plugin_event` | 插件面全流程（示例插件 `example_event`）：声明事件源与自查、发布/结束/移除/查询、替会话登记等待与投递、失败路径、禁用/启用/卸载的可逆性 |
+| `plugin_broadcast` | 插件通知面（广播表 + 示例插件 `example_event`）：声明与发布、发布权限、订阅与读当前值、结束流、禁用/启用/卸载的可逆性 |
 
 `event_delivery` / `event_subagent` 每个用例都起一次本地模拟 LLM 服务，单模块耗时十几秒，
 属预期。
