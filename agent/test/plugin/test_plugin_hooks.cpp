@@ -28,6 +28,7 @@
 #include "agentxx/feature/points.h"
 #include "agentxx/feature/registry.h"
 #include "agentxx/middlewares/middleware.h"
+#include "agentxx/plugin/api/agentxx_point_ids.h"
 #include "agentxx/plugin/api/plugin_kit.h"
 #include "agentxx/plugin/plugin_manager.h"
 #include "agentxx/plugin/tool_registry.h"
@@ -617,6 +618,67 @@ asio::awaitable<void> test_dispatch_order_and_failure_isolation() {
 } // namespace
 
 // ===========================================================================
+// 5.1 派发同时发功能埋点通知 (订阅 `agentxx.agent.point.*` 的插件收得到)
+// ===========================================================================
+namespace {
+
+/// 广播载荷记录 (订阅回调在 io 线程; 测试线程派发后读)
+struct PointCapture {
+    std::mutex               mtx;
+    std::vector<std::string> payloads;
+};
+
+asio::awaitable<void> test_dispatch_publishes_point_notification() {
+    auto f    = co_await makeFixture();
+    auto inst = co_await f.mgr->loadPluginAsync(findPluginDir("example_plugin"));
+    XX_TEST_EXPECT_TRUE(inst != nullptr);
+    if (!inst) {
+        co_return;
+    }
+
+    PointCapture capture;
+    std::string  error;
+    const std::string pointId{agentxx::plugin::points::ToolEnd};
+    const uint64_t    token = f.mgr->broadcasts()->subscribe(
+        pointId,
+        std::string{},
+        [&capture](std::string_view payload) {
+            std::lock_guard<std::mutex> lock(capture.mtx);
+            capture.payloads.emplace_back(payload);
+        },
+        {},
+        &error
+    );
+    XX_TEST_EXPECT_TRUE(token != 0);
+    if (token == 0) {
+        XX_TEST_EXPECT_TRUE(co_await f.mgr->unloadAsync("example_plugin"));
+        co_return;
+    }
+
+    neograph::graph::GraphState state;
+    neograph::graph::RunContext runCtx;
+    fillNodeInput(runCtx);
+    neograph::graph::NodeInput in{state, runCtx, nullptr};
+    co_await f.ctx->pluginMount->dispatchHook(AGENTXX_PLUGIN_HOOK_TOOL_END, in);
+
+    {
+        std::lock_guard<std::mutex> lock(capture.mtx);
+        XX_TEST_EXPECT_EQ(capture.payloads.size(), size_t{1});
+        if (!capture.payloads.empty()) {
+            // 载荷是这次派发的节点输入摘要 (带会话 id)
+            XX_TEST_EXPECT_TRUE(
+                capture.payloads[0].find("hook_test_session") != std::string::npos
+            );
+        }
+    }
+
+    f.mgr->broadcasts()->unsubscribe(pointId, token);
+    XX_TEST_EXPECT_TRUE(co_await f.mgr->unloadAsync("example_plugin", std::chrono::seconds{5}));
+}
+
+} // namespace
+
+// ===========================================================================
 // 6. 清单字段 + 开发者模式对派发记录的开关
 // ===========================================================================
 namespace {
@@ -837,6 +899,7 @@ asio::awaitable<TestResult> run_plugin_hooks_tests() {
         co_await test_multiple_registrations_and_clamp();
         co_await test_single_dispatcher_lifecycle();
         co_await test_dispatch_order_and_failure_isolation();
+        co_await test_dispatch_publishes_point_notification();
         co_await test_manifest_and_dev_mode();
         co_await test_lifecycle_disable_enable_unload();
         co_await test_plugin_side_kit();

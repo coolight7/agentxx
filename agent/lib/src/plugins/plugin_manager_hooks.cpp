@@ -20,6 +20,7 @@
 #include "agentxx/agent/config_static.h"
 #include "agentxx/agent/context.h"
 #include "agentxx/feature/feature.h"
+#include "agentxx/plugin/api/agentxx_point_ids.h"
 #include "agentxx/util/cancel_adapter.h"
 #include "asio/this_coro.hpp"
 #include "fmt/format.h"
@@ -467,12 +468,41 @@ asio::awaitable<void> runPluginHookHandler(
 
 } // namespace
 
+/// 钩子点 → 功能扩展点 id (同一次事件既走旧处理器注册表, 也发新埋点的通知面)
+std::string_view pointIdOfHook(AgentxxPluginHookPoint point) {
+    switch (point) {
+        case AGENTXX_PLUGIN_HOOK_AGENT_START:
+            return points::TurnStart;
+        case AGENTXX_PLUGIN_HOOK_AGENT_END:
+            return points::TurnEnd;
+        case AGENTXX_PLUGIN_HOOK_MODEL_START:
+            return points::ModelStart;
+        case AGENTXX_PLUGIN_HOOK_MODEL_RUN:
+            return points::ModelRun;
+        case AGENTXX_PLUGIN_HOOK_MODEL_END:
+            return points::ModelEnd;
+        case AGENTXX_PLUGIN_HOOK_TOOL_START:
+            return points::ToolStart;
+        case AGENTXX_PLUGIN_HOOK_TOOL_END:
+            return points::ToolEnd;
+        default:
+            return {};
+    }
+}
+
 asio::awaitable<void> PluginMount::dispatchHook(
     AgentxxPluginHookPoint            point,
     const neograph::graph::NodeInput& in
 ) {
     if (point < 0 || point >= AGENTXX_PLUGIN_HOOK_COUNT) {
         co_return;
+    }
+    // 功能埋点的通知面: 订阅同名广播的插件在这里收到 (不管有没有登记旧式钩子处理器)。
+    // 先发通知再跑实现: 订阅方看到的是"事件发生", 不需要等处理器跑完。
+    if (const auto pointId = pointIdOfHook(point); !pointId.empty()) {
+        if (auto mgr = host_.lock()) {
+            mgr->publishPoint(pointId, agentId(), summarizeNodeInput(point, in).dump());
+        }
     }
     // 派发开始时取快照: 派发过程中登记/撤销不影响本次 (每个处理器执行前仍检查实例可用)
     const auto  handlers = orderedHandlers(point);
