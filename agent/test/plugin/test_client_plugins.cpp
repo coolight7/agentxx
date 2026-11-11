@@ -527,6 +527,62 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
     XX_TEST_EXPECT_TRUE(mgr->hasCommand("example"));
     XX_TEST_EXPECT_TRUE(mgr->hasCommand("example_toast"));
 
+    // ---- 2.4 接口表: `<应用名>.net` (客户端也提供网络能力) ----
+    {
+        auto ifaceNet = agentxx::plugin::queryInterface<PluginxxNetIface>(
+            inst->hostView(),
+            PLUGINXX_IFACE_NET
+        );
+        XX_TEST_EXPECT_TRUE(ifaceNet != nullptr);
+        if (ifaceNet) {
+            XX_TEST_EXPECT_EQ(ifaceNet->version, PLUGINXX_IFACE_NET_VERSION);
+
+            // net.info: 服务/连接快照, 空闲时也是合法结果
+            {
+                PluginxxStringView opSv = agentxx::plugin::PluginStringView::from("net.info", 8);
+                PluginxxStringView argsSv = agentxx::plugin::PluginStringView::from("{}", 2);
+                PluginxxString     out{};
+                const int32_t      rc = ifaceNet->call(
+                    inst->hostView(),
+                    &opSv,
+                    &argsSv,
+                    &out
+                );
+                XX_TEST_EXPECT_EQ(rc, PLUGINXX_NET_OK);
+                XX_TEST_EXPECT_TRUE(out.data != nullptr);
+                if (out.data) {
+                    XX_TEST_EXPECT_TRUE(std::string(out.data, out.size).find("\"ok\":true")
+                                        != std::string::npos);
+                    agentxx::plugin::PluginString::free(inst->hostView(), &out);
+                }
+            }
+
+            // 未知 op: 参数层拒绝 (不是"业务失败")
+            {
+                PluginxxStringView opSv
+                    = agentxx::plugin::PluginStringView::from("net.no_such_op", 15);
+                PluginxxStringView argsSv = agentxx::plugin::PluginStringView::from("{}", 2);
+                PluginxxString     out{};
+                XX_TEST_EXPECT_TRUE(
+                    ifaceNet->call(inst->hostView(), &opSv, &argsSv, &out) != PLUGINXX_NET_OK
+                );
+                if (out.data) {
+                    agentxx::plugin::PluginString::free(inst->hostView(), &out);
+                }
+            }
+
+            // cancel 不存在的请求: 参数层给出 NOT_FOUND
+            {
+                PluginxxString out{};
+                XX_TEST_EXPECT_EQ(ifaceNet->cancel(inst->hostView(), 999999, &out),
+                                  PLUGINXX_NET_ERR_NOT_FOUND);
+                if (out.data) {
+                    agentxx::plugin::PluginString::free(inst->hostView(), &out);
+                }
+            }
+        }
+    }
+
     // ---- 2.5 接口表: agentxx.client.self get_language / set_language ----
     {
         auto ifaceSelf = agentxx::plugin::queryInterface<AgentxxClientSelfIface>(

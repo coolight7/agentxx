@@ -6,6 +6,7 @@
 // 主程序侧 vtable/管理器实现使用 SDK 提供的跨边界字符串工具 (PluginStringView /
 // PluginString); 该头后续会拆为 pluginxx/kit/kit.h (通用部分) + 本头的业务 helper
 #include "agentxx/plugin/api/plugin_kit.h"
+#include "agentxx/plugin/net_service.h"
 #include "agentxx/plugin/plugin_framework.h"
 #include "agentxx/plugin/plugin_interfaces.h"
 
@@ -1157,6 +1158,60 @@ private:
     std::atomic<bool> animationEnabled_{true};
 
     std::string language_ = "en";
+
+public:
+
+    // =====================================================================
+    // 网络能力 (`<应用名>.net` 表; 实现在通用网络服务 utilxx::NetHub)
+    // =====================================================================
+    //
+    // 与 agent 侧同一个 `PluginNetService`, 属主 id = client 插件实例名。
+    // 客户端目前还没有广播表 (见 `docs/zh-cn/design/plugins.md`), 所以
+    // `plugin.<插件 id>.net` 频道还不存在: **网络事件暂时只记调试日志**,
+    // `http.fetch` / `http.download` / `http.serve` 这类按请求/服务的工作正常。
+    // 客户端的广播表与事件发布在 client 侧广播改造时接上 (同一个 hook 点)。
+
+    /// 网络服务 (懒创建; 首个网络调用时起网络线程)
+    std::shared_ptr<PluginNetService> netService();
+
+    /// 同步网络操作 (返回 `utilxx::net::*` 结果码)
+    int32_t netCall(
+        std::string_view               owner,
+        std::string_view               op,
+        std::string_view               argsJson,
+        std::string*                   outJson,
+        std::weak_ptr<ClientPluginInstance> guard = {}
+    );
+
+    /// 异步网络操作 (受理成功写 requestId, 结果恰好一次经 cb 给出)
+    int32_t netCallAsync(
+        std::string_view               owner,
+        std::string_view               op,
+        std::string_view               argsJson,
+        PluginxxOperatorCallback       cb,
+        void*                          ud,
+        std::string*                   outJson,
+        int64_t*                       outRequestId,
+        std::weak_ptr<ClientPluginInstance> guard = {}
+    );
+
+    /// 取消一个进行中的网络请求
+    int32_t netCancel(std::string_view owner, int64_t requestId, std::string* outJson);
+
+    /// 收掉某个插件的全部网络资源 (禁用/卸载时调; 未完成请求按"已取消"结算)
+    void netShutdownPlugin(std::string_view owner);
+
+    /// 停掉网络服务 (管理器关闭时)
+    void netShutdownAll();
+
+    /// 把一条网络事件发给插件 (client 侧暂无广播表: 记调试日志)
+    void publishNetEvent(std::string_view owner, std::string_view payloadJson);
+
+private:
+
+    /// 网络服务 (懒创建; 与 [netMutex_] 一起使用)
+    std::shared_ptr<PluginNetService> netService_;
+    std::mutex                        netMutex_;
 };
 
 /// UI 适配器抽象接口 (UI 无关语义层 → 具体 UI 实现)

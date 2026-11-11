@@ -25,6 +25,7 @@
 #include "fmt/format.h"
 #include "fmt/ranges.h"
 #include "utilxx/async_offload.h"
+#include "utilxx/net_hub.h"
 #include "utilxx_base/log.h"
 #include "utilxx_base/string_util.h"
 #include <algorithm>
@@ -337,6 +338,7 @@ ClientPluginManager::ClientPluginManager(asio::any_io_executor ex) :
 
 ClientPluginManager::~ClientPluginManager() {
     shutdownAll();
+    netShutdownAll();
     warnPendingCloseOnDestroy("client");
     if (pool_) {
         pool_->join();
@@ -1508,6 +1510,8 @@ void ClientPluginManager::detachDomainRegistrations(ClientPluginInstance* inst) 
     if (!inst) {
         return;
     }
+    // 网络资源跟着实例: 服务、连接与未完成请求一起收掉 (未完成按"已取消"结算)
+    netShutdownPlugin(inst->name);
     for (auto& renderer : inst->toolRenderRegs) {
         if (renderer.lease) {
             renderer.lease->alive.store(false, std::memory_order_release);
@@ -1735,6 +1739,8 @@ extern const AgentxxClientTimerIface   g_clientIfaceTimer;
 extern const AgentxxClientKeybindIface g_clientIfaceKeybind;
 /// 协程驱动接口表 (agentxx.agent.coroutine_runtime; 与 agent 侧同 IID)
 extern const PluginxxCoroutineRuntimeIface g_clientIfaceCoroutineRuntime;
+/// 网络接口表 (`<应用名>.net`; 与 agent 侧同一个 `PluginNetService`)
+extern const PluginxxNetIface g_clientIfaceNet;
 
 // ---- 内存 ----
 
@@ -1832,7 +1838,6 @@ int32_t PLUGINXX_CALL
 // 关闭中仍允许驱动 (取消收尾需要驱动继续流动)、已关闭拒绝。
 
 // ---- COM 风格接口表查询 ----
-
 const void* PLUGINXX_CALL
     xx_cquery_interface(const PluginxxHost* host, const PluginxxStringView* iid) {
     if (!iid || !iid->data) {
@@ -1868,6 +1873,9 @@ const void* PLUGINXX_CALL
     }
     if (n == PLUGINXX_IFACE_COROUTINE_RUNTIME) {
         return &g_clientIfaceCoroutineRuntime;
+    }
+    if (n == PLUGINXX_IFACE_NET) {
+        return &g_clientIfaceNet;
     }
     return nullptr;
 }
@@ -2486,6 +2494,126 @@ const PluginxxCoroutineRuntimeIface g_clientIfaceCoroutineRuntime = {
     /* request_driver */ &ClientGenericEntries::requestDriverEntry,
     /* cancel_driver */ &ClientGenericEntries::cancelDriverEntry,
     /* is_io_thread */ &ClientGenericEntries::isIoThreadEntry,
+};
+
+/// 网络接口表 (`<应用名>.net`; 与 agent 侧同一个 `PluginNetService`)
+/// 网络接口表 (`<应用名>.net`; 与 agent 侧同一个 `PluginNetService`)
+///
+/// 三个入口与 agent 侧同形: 网络服务自有线程 (内部有界等待), 所以同步 `call`
+/// **不**投递到 client io 线程, 也就不会把界面线程卡在一条请求上。
+static int32_t PLUGINXX_CALL xx_cnet_call(
+    const PluginxxHost*       host,
+    const PluginxxStringView* op,
+    const PluginxxStringView* args_json,
+    PluginxxString*           out_json
+) {
+    return agentxx::plugin::guardVtableCall(utilxx::net::ErrInternal, [&]() -> int32_t {
+        auto call = enterClientHost(host);
+        auto mgr  = call.manager();
+        auto inst = call.instance();
+        if (!mgr || !inst || agentxx::plugin::PluginStringView::empty(op)) {
+            return utilxx::net::ErrArg;
+        }
+        const std::string opStr{op->data, static_cast<size_t>(op->size)};
+        const std::string argsStr
+            = args_json && args_json->data
+                  ? std::string{args_json->data, static_cast<size_t>(args_json->size)}
+                  : std::string{"{}"};
+        std::string   result;
+        const int32_t rc = mgr->netCall(inst->name, opStr, argsStr, &result);
+        if (out_json != nullptr && !result.empty()) {
+            hostMemorySetString(out_json, result);
+        }
+        return rc;
+    });
+}
+
+/// 异步网络操作: 受理成功写 requestId, 结果恰好一次经 `notify->done` 给出
+static int32_t PLUGINXX_CALL xx_cnet_call_async(
+    const PluginxxHost*           host,
+    const PluginxxStringView*     op,
+    const PluginxxStringView*     args_json,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*               out_json,
+    int64_t*                      out_request_id
+) {
+    return agentxx::plugin::guardVtableCall(utilxx::net::ErrInternal, [&]() -> int32_t {
+        auto call = enterClientHost(host);
+        auto mgr  = call.manager();
+        auto inst = call.instance();
+        if (!mgr || !inst || agentxx::plugin::PluginStringView::empty(op) || !notify
+            || !notify->done) {
+            return utilxx::net::ErrArg;
+        }
+        const std::string opStr{op->data, static_cast<size_t>(op->size)};
+        const std::string argsStr
+            = args_json && args_json->data
+                  ? std::string{args_json->data, static_cast<size_t>(args_json->size)}
+                  : std::string{"{}"};
+        // 完成通知要跨线程保管: 拷贝成自有副本 (插件侧只要求恰好一次)
+        PluginxxOperatorNotify notifyCopy = *notify;
+        std::string             accepted;
+        int64_t                 requestId = 0;
+        const int32_t           rc        = mgr->netCallAsync(
+            inst->name,
+            opStr,
+            argsStr,
+            [](void* ud, int32_t status, const PluginxxStringView* payload) {
+                auto* copy = static_cast<PluginxxOperatorNotify*>(ud);
+                if (copy && copy->done) {
+                    copy->done(copy->host_ud, status, payload);
+                }
+                delete copy;
+            },
+            new PluginxxOperatorNotify(notifyCopy),
+            &accepted,
+            &requestId,
+            std::weak_ptr<ClientPluginInstance>(inst->sharedSelf<ClientPluginInstance>())
+        );
+        if (rc != utilxx::net::Ok) {
+            if (out_json != nullptr && !accepted.empty()) {
+                hostMemorySetString(out_json, accepted);
+            }
+            return rc;
+        }
+        if (out_request_id != nullptr) {
+            *out_request_id = requestId;
+        }
+        if (out_json != nullptr && !accepted.empty()) {
+            hostMemorySetString(out_json, accepted);
+        }
+        return rc;
+    });
+}
+
+/// 取消进行中的网络请求
+static int32_t PLUGINXX_CALL xx_cnet_cancel(
+    const PluginxxHost* host,
+    int64_t             request_id,
+    PluginxxString*     out_json
+) {
+    return agentxx::plugin::guardVtableCall(utilxx::net::ErrInternal, [&]() -> int32_t {
+        auto call = enterClientHost(host, /*allowClosing=*/true);
+        auto mgr  = call.manager();
+        auto inst = call.instance();
+        if (!mgr || !inst || request_id <= 0) {
+            return utilxx::net::ErrArg;
+        }
+        std::string   result;
+        const int32_t rc = mgr->netCancel(inst->name, request_id, &result);
+        if (out_json != nullptr && !result.empty()) {
+            hostMemorySetString(out_json, result);
+        }
+        return rc;
+    });
+}
+
+const PluginxxNetIface g_clientIfaceNet = {
+    /* version */ PLUGINXX_IFACE_NET_VERSION,
+    /* struct_size */ sizeof(PluginxxNetIface),
+    /* call */ xx_cnet_call,
+    /* call_async */ xx_cnet_call_async,
+    /* cancel */ xx_cnet_cancel,
 };
 
 /// 核心 vtable (契约冻结: 仅内存操作 + query_interface)
