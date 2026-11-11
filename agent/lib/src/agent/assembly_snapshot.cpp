@@ -158,13 +158,6 @@ void appendMountPluginEntries(const AgentContext& ctx, utilxx_base::Json& plugin
         item["blocked_by_deps"] = v.blockedByDependencies;
         item["tools"]          = v.tools;
         item["tool_count"]     = v.tools.size();
-        item["hook_count"]     = v.hookCount;
-        // 钩子处理器的生效优先级（按派发顺序; 一眼看出谁先跑）
-        utilxx_base::Json hookPriorities = utilxx_base::Json::array();
-        for (const auto priority : v.hookPriorities) {
-            hookPriorities.push_back(priority);
-        }
-        item["hook_priorities"]       = std::move(hookPriorities);
         item["graph_node_count"]      = v.graphNodeCount;
         item["permission_tools"]      = v.permissionToolCount;
         // 统一注册清单合计: 0 = 该实例当前没有向本 agent 贡献任何注册
@@ -469,16 +462,16 @@ utilxx_base::Json buildRuntimeSnapshot(const AgentContext& ctx) {
         root["feature_points"]  = std::move(empty);
     }
 
-    // ---- 钩子处理器 (清单: 各点处理器与顺序; 只读快照 —— 派发只看注册表当前状态) ----
-    utilxx_base::Json hooksJson = utilxx_base::Json::object();
+    // ---- 通知型扩展点 (7 个点 + 派发记录; 插件靠订阅同名广播收到) ----
+    utilxx_base::Json hookPointsJson = utilxx_base::Json::object();
     if (ctx.pluginMount) {
         try {
-            hooksJson = utilxx_base::Json::parse(ctx.pluginMount->hooksJson());
+            hookPointsJson = utilxx_base::Json::parse(ctx.pluginMount->hooksJson());
         } catch (const std::exception&) {
-            hooksJson = utilxx_base::Json::object();
+            hookPointsJson = utilxx_base::Json::object();
         }
     }
-    root["hooks"] = std::move(hooksJson);
+    root["hook_points"] = std::move(hookPointsJson);
 
     // ---- 运行时提示词来源 (段落来源注册表: 每来源的生效状态, 不含正文) ----
     if (ctx.promptSources) {
@@ -565,26 +558,6 @@ std::vector<std::string> renderAssemblySnapshot(const utilxx_base::Json& snapsho
     std::vector<std::string> lines;
     auto                     add = [&lines](std::string text) {
         lines.push_back(std::move(text));
-    };
-
-    /// 插件行的钩子优先级片段 (` prio=[0,-10]`; 该插件没有处理器时为空)
-    auto hookPrioritiesText = [](const utilxx_base::Json& pluginItem) -> std::string {
-        if (!pluginItem.contains("hook_priorities") || !pluginItem["hook_priorities"].is_array()) {
-            return {};
-        }
-        const auto& values = pluginItem["hook_priorities"];
-        if (values.empty()) {
-            return {};
-        }
-        std::string out = " prio=[";
-        for (size_t i = 0; i < values.size(); ++i) {
-            if (i > 0) {
-                out += ",";
-            }
-            out += std::to_string(values[i].get<int>());
-        }
-        out += "]";
-        return out;
     };
 
     // ---- 配置侧 ----
@@ -749,16 +722,14 @@ std::vector<std::string> renderAssemblySnapshot(const utilxx_base::Json& snapsho
         if (mount.contains("plugins") && mount["plugins"].is_array()) {
             for (const auto& p : mount["plugins"]) {
                 add(fmt::format(
-                    "  - {} tools={} hooks={} graphNodes={} permTools={} features={}/{} total={}{}",
+                    "  - {} tools={} graphNodes={} permTools={} features={}/{} total={}",
                     p.value("name", std::string{}),
                     p.value("tool_count", 0),
-                    p.value("hook_count", 0),
                     p.value("graph_node_count", 0),
                     p.value("permission_tools", 0),
                     p.value("feature_point_count", 0),
                     p.value("feature_impl_count", 0),
-                    p.value("registration_total", 0),
-                    hookPrioritiesText(p)
+                    p.value("registration_total", 0)
                 ));
             }
         }
@@ -797,58 +768,36 @@ std::vector<std::string> renderAssemblySnapshot(const utilxx_base::Json& snapsho
             ));
         }
     }
-    // 钩子处理器: 各点上有哪些处理器、谁排在前面 (排障时与 featurePoints 一起看)
-    if (snapshot.contains("hooks") && snapshot["hooks"].is_object()) {
-        const auto& section = snapshot["hooks"];
+    // 通知型扩展点: 7 个点各派发过多少次 (派发记录只在开发者模式下有)
+    if (snapshot.contains("hook_points") && snapshot["hook_points"].is_object()) {
+        const auto& section = snapshot["hook_points"];
         const auto& points  = section.contains("points") && section["points"].is_array()
                                   ? section["points"]
                                   : utilxx_base::Json::array();
         const auto  devMode = section.value("devMode", false);
         add(fmt::format(
-            "hookHandlers[{}] devMode={}:",
-            section.value("handlers", 0),
+            "hookPoints[{}] devMode={}:",
+            section.value("count", 0),
             devMode ? "yes" : "no"
         ));
-        for (const auto& p : points) {
-            if (!p.is_object()) {
-                continue;
-            }
-            const auto& handlers = p.contains("handlers") && p["handlers"].is_array()
-                                       ? p["handlers"]
-                                       : utilxx_base::Json::array();
-            if (handlers.empty()) {
-                continue; // 空点不占行
-            }
-            std::string order;
-            for (const auto& h : handlers) {
-                if (!order.empty()) {
-                    order += " -> ";
+        if (devMode) {
+            for (const auto& p : points) {
+                if (!p.is_object() || !p.contains("stat") || !p["stat"].is_object()) {
+                    continue;
                 }
-                order += fmt::format(
-                    "{}#{}[prio={}{}]",
-                    h.value("owner", std::string{}),
-                    h.value("handle", 0),
-                    h.value("priority", 0),
-                    h.value("enabled", true) ? "" : ",disabled"
-                );
-            }
-            std::string statText;
-            if (devMode && p.contains("stat") && p["stat"].is_object()) {
                 const auto& stat = p["stat"];
-                statText         = fmt::format(
-                    " dispatches={} lastMs={} lastOrder={}",
+                // 一次没派发过的点不占行
+                if (stat.value("dispatches", 0) == 0) {
+                    continue;
+                }
+                add(fmt::format(
+                    "  - {} ({}) dispatches={} lastMs={}",
+                    p.value("name", std::string{}),
+                    p.value("id", std::string{}),
                     stat.value("dispatches", 0),
-                    stat.value("lastMs", 0),
-                    stat.value("lastOrder", std::string{"-"})
-                );
+                    stat.value("lastMs", 0)
+                ));
             }
-            add(fmt::format(
-                "  - {} ({}): {}{}",
-                p.value("name", std::string{}),
-                p.value("count", 0),
-                order,
-                statText
-            ));
         }
     }
     if (snapshot.contains("graph") && snapshot["graph"].is_object()) {

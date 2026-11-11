@@ -3,14 +3,16 @@
 /// 覆盖：
 /// - 输入所有权：tool 根操作的 args/session/tool_call_id 由 Request 拥有，
 ///   主程序借用缓冲区失效后协程继续读取仍然正确；
-/// - 完成协议：同步钩子（正常/抛异常）与异步 Task 钩子都是 exactly-once 完成；
-/// - 钩子返回类型分发：同步 void 立即完成，返回 Task<void> 时由协程真正结束
-///   后才完成，并返回主程序可取消的 provider 句柄。
+/// - 完成协议：同步能力（正常/抛异常）与异步 Task 能力都是 exactly-once 完成；
+/// - 扩展点实现行：`providePoint` 两种业务体形态（收上下文+载荷 / 只收载荷）都能登记；
+/// - 返回类型分发：返回字符串立即完成，返回 `Task<T>` 时由协程真正结束后
+///   才完成，并返回主程序可取消的 provider 句柄。
 ///
 /// 用例不依赖真实管理器：用伪主程序接口表捕获 SDK 注册出来的 spec，再直接按 ABI
-/// 调用 `execute_start`/`hook_start`，因此可以精确控制借用缓冲区的生命周期。
+/// 调用 `execute_start`/`run_start`，因此可以精确控制借用缓冲区的生命周期。
 #include "agentxx-test/plugin/test_plugin_sdk.h"
 
+#include "agentxx/plugin/api/agentxx_point_ids.h"
 #include "agentxx/plugin/api/plugin_kit.h"
 
 #include <atomic>
@@ -33,8 +35,6 @@ const ScopeRef g_agentRef{"root", 0};
 struct CapturedRegistration {
     AgentxxPluginToolSpec           tool{};
     bool                            hasTool = false;
-    AgentxxPluginHookSpecEx         hook{};
-    bool                            hasHook       = false;
     PluginxxCapabilityStartFunction capStart      = nullptr;
     PluginxxOperatorCancelFunction  capCancel     = nullptr;
     void*                           capUd         = nullptr;
@@ -56,24 +56,7 @@ int32_t PLUGINXX_CALL fakeRegisterTool(
     return 0;
 }
 
-int32_t PLUGINXX_CALL fakeRegisterHook(
-    const PluginxxHost*,
-    const PluginxxScopeRef*        agent,
-    const AgentxxPluginHookSpecEx* spec,
-    int64_t*                       outHandle
-) {
-    if (!agent || !spec) {
-        return -1;
-    }
-    g_captured.hook    = *spec;
-    g_captured.hasHook = true;
-    if (outHandle) {
-        *outHandle = 1;
-    }
-    return 0;
-}
-
-/// 能力登记 (新形状: spec 里带开始/取消处理器与上下文)
+/// 能力登记 (spec 里带开始/取消处理器与上下文)
 int32_t PLUGINXX_CALL fakeRegisterCapability(
     const PluginxxHost*,
     const PluginxxScopeRef*,
@@ -107,14 +90,6 @@ const AgentxxPluginToolsIface g_fakeTools = {
     /* register_tool */ fakeRegisterTool,
     /* unregister_tool */ nullptr,
     /* call_tool_async */ nullptr,
-};
-
-const AgentxxPluginHooksIface g_fakeHooks = {
-    /* version */ AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_VERSION,
-    /* struct_size */ sizeof(AgentxxPluginHooksIface),
-    /* register_hook */ fakeRegisterHook,
-    /* unregister_hook */ nullptr,
-    /* list_hooks */ nullptr,
 };
 
 const PluginxxCapabilitiesIface g_fakeCapabilities = {
@@ -309,9 +284,6 @@ const void* PLUGINXX_CALL fakeQueryInterface(const PluginxxHost*, const Pluginxx
     if (name == AGENTXX_PLUGIN_IFACE_AGENT_TOOLS) {
         return &g_fakeTools;
     }
-    if (name == AGENTXX_PLUGIN_IFACE_AGENT_HOOKS) {
-        return &g_fakeHooks;
-    }
     if (name == PLUGINXX_IFACE_CAPABILITIES) {
         return &g_fakeCapabilities;
     }
@@ -475,107 +447,62 @@ TestResult testPluginSdk() {
         XX_TEST_EXPECT_EQ(probe.payload, std::string{R"({"n":42})"});
     }
 
-    /// 完成协议：同步 void 钩子正常返回 -> OK；抛异常 -> FAILED；
-    /// 两种情况都恰好一次完成，且不返回 provider 句柄。
+    /// providePoint: 扩展点实现行 = 能力行, 两种业务体形态都能登记
+    /// (收上下文+载荷 / 只收载荷), 结果就是实现行给出的回答。
     {
-        SdkCtx okCtx;
-        okCtx.init(&host);
-        g_captured = CapturedRegistration{};
-        agentxx::plugin::hook(
-            okCtx,
+        SdkCtx ctx;
+        ctx.init(&host);
+        g_captured       = CapturedRegistration{};
+        const int32_t rc = agentxx::plugin::providePoint(
+            ctx,
             g_agentRef,
-            AGENTXX_PLUGIN_HOOK_AGENT_START,
-            [](SdkCtx&, AgentxxPluginHookPoint, std::string_view) {}
+            points::ContextCountTokens,
+            [](std::string_view payload) -> std::string {
+                // 只收载荷的形态; pointAnswer 把裸值包成 `{"value": ...}`
+                return pointAnswer(fmt::format(R"({{"echo":{},"priority":5}})", payload));
+            },
+            PointImplOptions{.priority = 5}
         );
-        XX_TEST_EXPECT_TRUE(g_captured.hasHook);
+        XX_TEST_EXPECT_EQ(rc, 0);
+        XX_TEST_EXPECT_TRUE(g_captured.hasCapability);
+
         {
-            auto        spec = g_captured.hook;
-            auto        in   = PluginStringView::fromCstr(R"({"k":1})");
             NotifyProbe probe;
             auto        notify = probe.notify();
-            void*       op     = spec.hook_start(spec.user_data, spec.point, &in, &notify, nullptr);
+            auto        method = PluginStringView::fromCstr(points::ContextCountTokens.data());
+            auto        args   = PluginStringView::fromCstr(R"({"n":2})");
+            void* op = g_captured.capStart(g_captured.capUd, nullptr, &method, &args, &notify, nullptr);
             XX_TEST_EXPECT_TRUE(op == nullptr);
             XX_TEST_EXPECT_EQ(probe.calls, 1);
             XX_TEST_EXPECT_EQ(probe.status, PLUGINXX_OPERATOR_OK);
+            XX_TEST_EXPECT_TRUE(probe.payload.find("\"value\"") != std::string::npos);
+            XX_TEST_EXPECT_TRUE(probe.payload.find("\"priority\":5") != std::string::npos);
         }
 
-        SdkCtx throwCtx;
-        throwCtx.init(&host);
+        // 收上下文+载荷的形态
         g_captured = CapturedRegistration{};
-        agentxx::plugin::hook(
-            throwCtx,
-            g_agentRef,
-            AGENTXX_PLUGIN_HOOK_AGENT_START,
-            [](SdkCtx&, std::string_view) {
-                throw std::runtime_error("hook boom");
-            }
+        XX_TEST_EXPECT_EQ(
+            agentxx::plugin::providePoint(
+                ctx,
+                g_agentRef,
+                points::ToolSummarizeOutput,
+                [](SdkCtx&, std::string_view payload) -> std::string {
+                    return std::string{payload};
+                }
+            ),
+            0
         );
-        XX_TEST_EXPECT_TRUE(g_captured.hasHook);
+        XX_TEST_EXPECT_TRUE(g_captured.hasCapability);
         {
-            auto        spec = g_captured.hook;
-            auto        in   = PluginStringView::fromCstr("{}");
             NotifyProbe probe;
             auto        notify = probe.notify();
-            void*       op     = spec.hook_start(spec.user_data, spec.point, &in, &notify, nullptr);
+            auto        method = PluginStringView::fromCstr(points::ToolSummarizeOutput.data());
+            auto        args   = PluginStringView::fromCstr(R"({"raw":"x"})");
+            void* op = g_captured.capStart(g_captured.capUd, nullptr, &method, &args, &notify, nullptr);
             XX_TEST_EXPECT_TRUE(op == nullptr);
             XX_TEST_EXPECT_EQ(probe.calls, 1);
-            XX_TEST_EXPECT_EQ(probe.status, PLUGINXX_OPERATOR_FAILED);
-            XX_TEST_EXPECT_TRUE(probe.payload.find("hook boom") != std::string::npos);
+            XX_TEST_EXPECT_EQ(probe.payload, std::string{R"({"raw":"x"})"});
         }
-    }
-
-    /// 返回 Task<void> 的钩子是异步的 —— start 返回 provider 句柄且不完成，
-    /// 协程真正结束后才 exactly-once 完成；hook_cancel 可用。
-    {
-        bool                    released = false;
-        std::coroutine_handle<> handle{};
-        std::string             seenInput;
-        bool                    finished = false;
-
-        struct AsyncBox {
-            bool*                    released = nullptr;
-            std::coroutine_handle<>* handle   = nullptr;
-            std::string*             input    = nullptr;
-            bool*                    finished = nullptr;
-        } box{&released, &handle, &seenInput, &finished};
-
-        SdkCtx ctx;
-        ctx.init(&host);
-        g_captured = CapturedRegistration{};
-        agentxx::plugin::hook(
-            ctx,
-            g_agentRef,
-            AGENTXX_PLUGIN_HOOK_TOOL_START,
-            [&box](SdkCtx&, AgentxxPluginHookPoint, std::string_view input) -> Task<void> {
-                box.input->assign(input.data(), input.size());
-                co_await Gate{box.released, box.handle};
-                *box.finished = true;
-                co_return;
-            }
-        );
-        XX_TEST_EXPECT_TRUE(g_captured.hasHook);
-
-        auto spec = g_captured.hook;
-        XX_TEST_EXPECT_TRUE(spec.hook_cancel != nullptr);
-        auto        in = PluginStringView::fromCstr(R"({"hook":true})");
-        NotifyProbe probe;
-        auto        notify = probe.notify();
-        void*       op     = spec.hook_start(spec.user_data, spec.point, &in, &notify, nullptr);
-
-        XX_TEST_EXPECT_TRUE(op != nullptr); ///< 未完成 -> 返回 provider 句柄
-        XX_TEST_EXPECT_EQ(probe.calls, 0);  ///< 不得提前完成
-        XX_TEST_EXPECT_TRUE(runDriver());   ///< 首步由 host driver 推进 (挂起到 Gate)
-        XX_TEST_EXPECT_EQ(seenInput, std::string{R"({"hook":true})"});
-        XX_TEST_EXPECT_FALSE(finished);
-
-        // 借用缓冲区失效后协程仍能完成（输入由 Request 拥有）
-        released = true;
-        XX_TEST_EXPECT_TRUE(handle != nullptr);
-        handle.resume();
-        XX_TEST_EXPECT_TRUE(finished);
-        finishRoot<Task<void>::promise_type>(handle);
-        XX_TEST_EXPECT_EQ(probe.calls, 1);
-        XX_TEST_EXPECT_EQ(probe.status, PLUGINXX_OPERATOR_OK);
     }
 
     /// capability: 同步字符串能力 + 异步 Task<string> 能力 (统一 root adapter)。

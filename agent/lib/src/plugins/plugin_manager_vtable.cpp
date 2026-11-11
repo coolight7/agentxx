@@ -458,86 +458,6 @@ static ::PluginxxOperatorHandle* PLUGINXX_CALL xx_call_tool_async(
     });
 }
 
-// ==================== 钩子登记与清单 (agentxx.agent.hooks) ====================
-
-static int32_t PLUGINXX_CALL xx_register_hook(
-    const PluginxxHost*            host,
-    const PluginxxScopeRef*        agent,
-    const AgentxxPluginHookSpecEx* spec,
-    int64_t*                       out_handle
-) {
-    if (spec == nullptr || out_handle == nullptr) {
-        return -1;
-    }
-    *out_handle = 0;
-    return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
-        auto call = enterHost(host);
-        auto mgr  = call.manager();
-        auto inst = call.instance();
-        if (!mgr || !inst || spec->point < 0 || spec->point >= AGENTXX_PLUGIN_HOOK_COUNT
-            || !spec->hook_start) {
-            return -1;
-        }
-        if (!scopeOk(mgr, agent)) {
-            XX_LOGW("agentxx.agent.hooks.register_hook: 引用无效, 请在 mount 里注册");
-            return AGENTXX_PLUGIN_ERR_NO_AGENT;
-        }
-        auto                    mgrPtr   = mgr;
-        auto                    instPtr  = inst;
-        AgentxxPluginHookSpecEx specCopy = *spec;
-        return ioCallSyncKeep<int32_t>(
-            call,
-            mgrPtr,
-            [mgrPtr, instPtr, specCopy, out_handle, agent]() {
-                return mountCall(mgrPtr, agent, noAgent, [&](PluginMount& mount) {
-                    return mount.registerHook(instPtr, &specCopy, out_handle);
-                });
-            }
-        );
-    });
-}
-
-static int32_t PLUGINXX_CALL xx_unregister_hook(const PluginxxHost* host, int64_t handle) {
-    if (handle <= 0) {
-        return -1;
-    }
-    // 句柄由挂载分配 (唯一), 因此不需要引用: 逐个挂载试着撤销, 命中即返回
-    return onInstanceIo(host, [handle](PluginInstance* inst, PluginManager* mgr) {
-        for (const auto& mount : mgr->mounts()) {
-            if (mount && mount->unregisterHook(inst, handle) == 0) {
-                return int32_t{0};
-            }
-        }
-        return int32_t{-1};
-    });
-}
-
-static int32_t PLUGINXX_CALL xx_list_hooks(
-    const PluginxxHost*     host,
-    const PluginxxScopeRef* agent,
-    PluginxxString*         out
-) {
-    return queryStringIo(host, out, [agent](PluginInstance*, PluginManager* mgr) {
-        if (agent != nullptr && !pluginxx_scope_ref_ok(agent)) {
-            return std::string{};
-        }
-        if (agent != nullptr) {
-            auto* mount = mountIn(mgr, agent);
-            return mount != nullptr ? mount->hooksJson() : std::string{};
-        }
-        // 引用为空 = 全部挂载的合并视图 (诊断用: 每个挂载一段)
-        auto              mounts = mgr->mounts();
-        utilxx_base::Json arr    = utilxx_base::Json::array();
-        for (const auto& mount : mounts) {
-            if (!mount) {
-                continue;
-            }
-            arr.push_back(utilxx_base::Json::parse(mount->hooksJson()));
-        }
-        return arr.dump();
-    });
-}
-
 static int32_t PLUGINXX_CALL xx_get_share_store(
     const PluginxxHost*       host,
     const PluginxxScopeRef*   agent,
@@ -1077,14 +997,6 @@ static const AgentxxPluginPermissionIface g_ifacePermission = {
     /* register_tool_permission */ xx_register_tool_permission,
     /* unregister_tool_permission */ xx_unregister_tool_permission,
     /* check_paths */ xx_check_paths,
-};
-
-static const AgentxxPluginHooksIface g_ifaceHooks = {
-    /* version */ AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_VERSION,
-    /* struct_size */ sizeof(AgentxxPluginHooksIface),
-    /* register_hook */ xx_register_hook,
-    /* unregister_hook */ xx_unregister_hook,
-    /* list_hooks */ xx_list_hooks,
 };
 
 static const AgentxxPluginSessionIface g_ifaceSession = {
@@ -1900,9 +1812,6 @@ const void* PLUGINXX_CALL xx_query_interface(const PluginxxHost*, const Pluginxx
     }
     if (n == AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION) {
         return &g_ifacePermission;
-    }
-    if (n == AGENTXX_PLUGIN_IFACE_AGENT_HOOKS) {
-        return &g_ifaceHooks;
     }
     if (n == AGENTXX_PLUGIN_IFACE_AGENT_SESSION) {
         return &g_ifaceSession;

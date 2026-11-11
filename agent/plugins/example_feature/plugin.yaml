@@ -3,9 +3,6 @@ version: 2.0.0
 description: "Example plugin: declares its own extension point and provides impl rows for app points"
 entry: libexample_feature.so
 interfaces:
-  # 扩展点实现行 = 能力行: 只需要能力表与日志
+  # 扩展点实现行 = 能力行 (广播订阅走通用表, 无需声明)
   require:
     - agentxx.agent.core
-  # 钩子表属可选能力: 主程序不支持有序登记成员时插件不登记 (加载照常成功)
-  optional:
-    - agentxx.agent.hooks

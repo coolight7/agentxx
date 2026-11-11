@@ -19,7 +19,7 @@
 /// - 插件框架的通用部分 (与主程序业务无关): `pluginxx/api/abi.h` / `pluginxx/api/tables.h`
 ///   (本头已包含, 插件源码只需包含本头即可拿到全部声明)
 /// - **本头只声明 agent 业务表**: 工具 (agentxx.agent.tools)、工具权限声明
-///   (agentxx.agent.permission)、中间件钩子与钩子有序登记 (agentxx.agent.hooks)、会话访问
+///   (agentxx.agent.permission)、会话访问
 ///   (agentxx.agent.session)、主模型配置 (agentxx.agent.model)、主程序提示词读写
 ///   (agentxx.agent.prompt)、会话资源贡献 (agentxx.agent.resources)、执行图
 ///   (agentxx.agent.graph)、挂载查询 (agentxx.agent.mount)、
@@ -100,7 +100,7 @@ typedef void*(PLUGINXX_CALL* AgentxxPluginAgentMountFn)(
 );
 
 /// 卸载入口: `mount_ud` 就是 mount 的返回值; 只释放该 agent 的状态,
-/// 主程序会自动撤销注册 (工具/权限/钩子/提示词/功能点/图/资源/事件)。
+/// 主程序会自动撤销注册 (工具/权限/提示词/能力行/图/资源/事件)。
 typedef void*(PLUGINXX_CALL* AgentxxPluginAgentUnmountFn)(
     void*                         plugin_ctx,
     void*                         mount_ud,
@@ -158,72 +158,6 @@ typedef struct AgentxxPluginToolSpec {
 
 /* 基线: 重置时 = 完整布局; 以后追加字段保持不变 (改为 offsetof(第一个追加字段)) */
 #define AGENTXX_PLUGIN_TOOL_SPEC_BASELINE_SIZE sizeof(AgentxxPluginToolSpec)
-
-/* ==================== 中间件钩子 ==================== */
-
-typedef enum AgentxxPluginHookPoint {
-    AGENTXX_PLUGIN_HOOK_AGENT_START = 0, ///< 会话轮次开始
-    AGENTXX_PLUGIN_HOOK_AGENT_END,       ///< 会话轮次结束
-    AGENTXX_PLUGIN_HOOK_MODEL_START,     ///< LLM 调用开始
-    AGENTXX_PLUGIN_HOOK_MODEL_RUN,       ///< LLM 调用执行 (重试时多次触发)
-    AGENTXX_PLUGIN_HOOK_MODEL_END,       ///< LLM 调用结束
-    AGENTXX_PLUGIN_HOOK_TOOL_START,      ///< 工具分发开始
-    AGENTXX_PLUGIN_HOOK_TOOL_END,        ///< 工具分发结束
-    AGENTXX_PLUGIN_HOOK_COUNT
-} AgentxxPluginHookPoint;
-
-typedef struct AgentxxPluginHookSpec {
-    /// 本结构体字节数 (`sizeof(AgentxxPluginHookSpec)`); `0` = 基线布局
-    uint32_t struct_size;
-    int32_t  point; ///< AgentxxPluginHookPoint (明确 32 位整型)
-    void*(PLUGINXX_CALL* hook_start)(
-        void*                         user_data,
-        int32_t                       point,
-        const PluginxxStringView*     node_input_json,
-        const PluginxxOperatorNotify* notify,
-        PluginxxString*               error_out
-    );
-    void(PLUGINXX_CALL* hook_cancel)(void* user_data, void* op); ///< 可为 NULL
-    void* user_data;
-} AgentxxPluginHookSpec;
-
-/* 基线: 重置时 = 完整布局; 以后追加字段保持不变 (改为 offsetof(第一个追加字段)) */
-#define AGENTXX_PLUGIN_HOOK_SPEC_BASELINE_SIZE sizeof(AgentxxPluginHookSpec)
-
-/// 钩子处理器登记选项 (有序登记: 同一实例同一个点可以登记多个处理器)
-///
-/// 与 [AgentxxPluginHookSpec] 的区别: 多了层内顺序 ([priority]) 与展示信息
-/// ([owner_tag] / [depict]), 且**不覆盖**同点已有处理器 —— 每次登记都得到一个
-/// 独立句柄, 经 [AgentxxPluginHooksIface::unregister_hook_ex] 精确撤销。
-typedef struct AgentxxPluginHookSpecEx {
-    uint32_t struct_size; ///< sizeof(AgentxxPluginHookSpecEx); 0 = 基线布局
-    int32_t  point;       ///< AgentxxPluginHookPoint
-    /// 层内顺序, 小者先 (默认 0 = 按登记顺序 = 插件加载顺序)
-    /// - 越界裁剪到主程序允许范围并记一条警告, 不拒绝登记
-    int32_t priority;
-    int32_t flags; ///< 预留 (本轮无定义标志, 传 0)
-    /// 展示归属标签 (可空; 清单里显示, 便于看出"这是谁的处理器")
-    PluginxxStringView owner_tag;
-    /// 一句话说明 (可空; 清单里显示)
-    PluginxxStringView depict;
-
-    /// 执行体 (语义与 [AgentxxPluginHookSpec::hook_start] 完全一致):
-    /// - 主程序 io 线程调用; 结果被丢弃 (钩子只用于通知)
-    /// - 快同步: 算完 → notify->done(PLUGINXX_OPERATOR_OK, NULL) → 返回 NULL
-    /// - 锚定协程/自管异步: 创建或挂起任务 → 返回 op 句柄
-    void*(PLUGINXX_CALL* hook_start)(
-        void*                         user_data,
-        int32_t                       point,
-        const PluginxxStringView*     node_input_json,
-        const PluginxxOperatorNotify* notify,
-        PluginxxString*               error_out
-    );
-    void(PLUGINXX_CALL* hook_cancel)(void* user_data, void* op); ///< 可为 NULL
-    void* user_data;
-} AgentxxPluginHookSpecEx;
-
-/* 基线: 重置时 = 完整布局; 以后追加字段保持不变 (改为 offsetof(第一个追加字段)) */
-#define AGENTXX_PLUGIN_HOOK_SPEC_EX_BASELINE_SIZE sizeof(AgentxxPluginHookSpecEx)
 
 /* ==================== 接口表: 工具 (agentxx.agent.tools) ==================== */
 
@@ -377,54 +311,6 @@ typedef struct AgentxxPluginPermissionIface {
         int32_t*                                out_decisions
     );
 } AgentxxPluginPermissionIface;
-
-/* ==================== 接口表: 中间件钩子 (agentxx.agent.hooks) ==================== */
-
-#define AGENTXX_PLUGIN_IFACE_AGENT_HOOKS             "agentxx.agent.hooks"
-/// v2: 全部成员增加 `agent` 参数; 基础/扩展双入口合并为句柄式一种
-#define AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_VERSION     2
-#define AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_MIN_VERSION 2
-/* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
-#define AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_BASELINE_SIZE sizeof(AgentxxPluginHooksIface)
-
-/// 钩子注册表
-///
-/// 钩子 (7 个固定点) 是"核心在某一步通知所有关心的人"的机制: 载荷是
-/// `{sessionId, point}`、结果被丢弃、点固定 7 个。
-///
-/// 登记语义:
-/// - 每个登记的处理器给一根句柄, 按句柄精确撤销;
-/// - 同一实例同一个点可以登记任意多个; 顺序 = `plugin` 层 (插件 / 嵌入方程序) 按
-///   `(priority 升序, 登记序号)`; 不声明 `priority` (= 0) 时顺序就是登记顺序;
-/// - 处理器跟着挂载走: 挂载卸载时由主程序自动摘除, 重新挂载时由插件在 `mount` 里重新登记。
-typedef struct AgentxxPluginHooksIface {
-    int32_t  version; ///< 主程序填 AGENTXX_PLUGIN_IFACE_AGENT_HOOKS_VERSION
-    uint32_t struct_size;
-
-    /// 登记一个钩子处理器 (只在本挂载所属的 agent 的轮次里派发)
-    /// - `priority` 越界裁剪到上下限并记一条警告 (不拒绝登记);
-    /// - 拒绝的情形: `agent` 引用无效 (`AGENTXX_PLUGIN_ERR_NO_AGENT`)、`point` 越界、
-    ///   `hook_start` 为空、实例正在关闭或已禁用
-    ///
-    /// `return`: 0 成功 (`*out_handle` 收到句柄, 之后凭它精确撤销); 非 0 失败
-    int32_t(PLUGINXX_CALL* register_hook)(
-        const PluginxxHost*            host,
-        const PluginxxScopeRef*        agent,
-        const AgentxxPluginHookSpecEx* spec,
-        int64_t*                       out_handle
-    );
-    /// 撤销本挂载登记的一个处理器 (按句柄; 别人的句柄会被拒绝)
-    ///
-    /// `return`: 0 成功; 非 0 失败 (句柄不存在 / 不属于本挂载)
-    int32_t(PLUGINXX_CALL* unregister_hook)(const PluginxxHost* host, int64_t handle);
-    /// 处理器清单 JSON (host->alloc; 形状见 docs/zh-cn/design/plugins.md §8)
-    /// - `agent` 非空 = 本挂载视图; 空 = 全部挂载的合并视图 (诊断用)
-    int32_t(PLUGINXX_CALL* list_hooks)(
-        const PluginxxHost*     host,
-        const PluginxxScopeRef* agent,
-        PluginxxString*         out_json
-    );
-} AgentxxPluginHooksIface;
 
 /* ==================== 接口表: 会话访问 (agentxx.agent.session) ==================== */
 

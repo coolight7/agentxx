@@ -47,7 +47,7 @@ const PluginxxBuiltinManifest* get_builtin_manifests(uint64_t* count);
 /// 一个已加载的插件实例 (进程一份)
 ///
 /// 本类只放**与 agent 无关**的东西: 加载元信息、插件上下文、生命周期入口。
-/// 凡是落在某个 agent 上的东西 (工具/权限/钩子/提示词/功能点/图/资源/挂载状态)
+/// 凡是落在某个 agent 上的东西 (工具/权限/提示词/功能点/图/资源/事件订阅/挂载状态)
 /// 都在 [PluginMount::Entry] 里 —— 同一个实例可以同时挂在多个 agent 上, 各自一份。
 class PluginInstance : public PluginInstanceBase {
 public:
@@ -90,8 +90,6 @@ public:
     std::vector<std::string> allToolNames() const;
     /// 全部挂载上的工具对象
     std::vector<std::shared_ptr<PluginTool>> allToolObjects() const;
-    /// 全部挂载上登记的钩子处理器句柄
-    std::vector<int64_t> allHookHandles() const;
     /// 全部挂载上登记的图节点类型槽位
     std::vector<std::shared_ptr<GraphTypeSlot>> allGraphSlots() const;
 
@@ -163,12 +161,12 @@ public:
     /// 本主程序向插件提供的接口表数量 (文档里的数字有常量可校验)
     /// - 10 张通用表 (由插件框架实现: log/json/config/plugins/broadcasts/
     ///   scheduler/coroutine_runtime/tasks/cancel/capabilities)
-    /// - 12 张 agent 业务表 (`agentxx.agent.*`: tools/permission/hooks/session/
-    ///   context/model/prompt/resources/graph/feature/mount/runtime)
+    /// - 10 张 agent 业务表 (`agentxx.agent.*`: tools/permission/session/
+    ///   context/model/prompt/resources/graph/mount/runtime)
     /// - `net` 由本主程序实现, 单独一张 (`agentxx.net`), 不计入上面两组
     /// - 增删接口表时同时更新本常量与 `docs/zh-cn/design/plugins.md` §8 与根 `AGENTS.md`
     ///   (测试模块 `boundaries` 会校验三者一致)
-    inline static constexpr size_t kInterfaceTableCount = 10 + 11;
+    inline static constexpr size_t kInterfaceTableCount = 10 + 10;
 
     /// 清单行 (诊断与界面展示; 主程序视图)
     struct PluginListView {
@@ -193,10 +191,6 @@ public:
         bool blockedByDependencies = false;
         /// 加载总耗时 (dlopen + create + start + 注册收尾), 毫秒; 0 表示未记录
         uint64_t loadMs = 0;
-        /// 钩子处理器数 (已注册且生效; 禁用/卸下后为 0)
-        size_t hookCount = 0;
-        /// 各钩子处理器的生效优先级 (按派发顺序; 与 [hookCount] 等长, 便于一眼看出顺序)
-        std::vector<int32_t> hookPriorities;
         /// 自定义图节点类型登记数
         size_t graphNodeCount = 0;
         /// 事件订阅数
@@ -300,22 +294,8 @@ public:
     /// 执行图定义的占用者 (多挂载时取第一个非空占用者)
     std::string graphDefinitionOwner() const;
 
-    /// 钩子处理器清单 (单挂载 = 该挂载; 多挂载 = 逐挂载一段的数组)
+    /// 通知型扩展点清单 (单挂载 = 该挂载; 多挂载 = 逐挂载一段的数组)
     std::string hooksJson();
-
-    /// 某个点上的处理器 (多挂载时按挂载顺序拼接)
-    std::vector<PluginMount::HookHandlerView> handlersOf(AgentxxPluginHookPoint point) const;
-
-    /// 登记一个 core 层处理器 (单挂载时生效; 多挂载时投到第一个挂载并记警告)
-    int64_t addCoreHookHandler(
-        AgentxxPluginHookPoint point,
-        int32_t                priority,
-        std::string            module,
-        AgentxxPluginHookSpec  spec
-    );
-
-    /// 撤销一个 core 层处理器 (逐挂载尝试, 命中即返回)
-    bool removeCoreHookHandler(int64_t handle);
 
     void onTurnBegin();
     void onTurnEnd();
@@ -596,7 +576,7 @@ protected:
     // =====================================================================
     //
     // 加载/启停/禁用启用/卸载/级联依赖骨架在 cxx_pluginxx (见
-    // pluginxx/host/lifecycle.h); 插件框架不认识"工具/权限/钩子/图/提示词/资源",
+    // pluginxx/host/lifecycle.h); 插件框架不认识"工具/权限/图/提示词/资源",
     // 因此这些业务动作经下列覆写注入。
 
     /// 自引用 (插件框架的异步事务与空闲收尾需要在此期间保活)

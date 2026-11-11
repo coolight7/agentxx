@@ -1189,7 +1189,7 @@ TestResult testPluginRuntime() {
             {5, sizeof(PluginxxHostVtable)},
             {6, sizeof(AgentxxPluginToolSpec)},
             {7, offsetof(AgentxxPluginToolSpec, execute_start)},
-            {8, sizeof(AgentxxPluginHookSpec)},
+            {8, sizeof(PluginxxCapabilitySpec)},
             {9, sizeof(PluginxxOperatorNotify)},
             {10, sizeof(AgentxxPluginToolsIface)},
             {11, offsetof(AgentxxPluginToolsIface, struct_size)},
@@ -1302,11 +1302,6 @@ TestResult testPluginRuntime() {
         XX_TEST_EXPECT_EQ(offsetof(AgentxxOverlaySpec, type), size_t{8});
         XX_TEST_EXPECT_EQ(offsetof(AgentxxOverlaySpec, title), size_t{16});
 
-        XX_TEST_EXPECT_EQ(offsetof(AgentxxPluginHookSpec, struct_size), size_t{0});
-        XX_TEST_EXPECT_EQ(offsetof(AgentxxPluginHookSpec, point), size_t{4});
-        XX_TEST_EXPECT_EQ(offsetof(AgentxxPluginHookSpec, hook_start), size_t{8});
-        XX_TEST_EXPECT_EQ(offsetof(AgentxxPluginHookSpec, user_data), 8u + 2 * kPtr);
-
         XX_TEST_EXPECT_EQ(offsetof(AgentxxToolRenderSpec, struct_size), size_t{0});
         XX_TEST_EXPECT_EQ(offsetof(AgentxxToolRenderSpec, version), size_t{4});
         XX_TEST_EXPECT_EQ(offsetof(AgentxxToolRenderSpec, tool_name), size_t{8});
@@ -1339,7 +1334,6 @@ TestResult testPluginRuntime() {
             XX_TEST_EXPECT_EQ(sizeof(AgentxxPluginToolSpec), size_t{96});
             XX_TEST_EXPECT_EQ(sizeof(AgentxxPluginGraphNodeTypeSpec), size_t{64});
             XX_TEST_EXPECT_EQ(sizeof(AgentxxOverlaySpec), size_t{64});
-            XX_TEST_EXPECT_EQ(sizeof(AgentxxPluginHookSpec), size_t{32});
             XX_TEST_EXPECT_EQ(sizeof(AgentxxToolRenderSpec), size_t{56});
             XX_TEST_EXPECT_EQ(sizeof(AgentxxTimerSpec), size_t{56});
             XX_TEST_EXPECT_EQ(sizeof(AgentxxKeybindSpec), size_t{56});

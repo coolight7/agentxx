@@ -85,11 +85,6 @@ inline constexpr std::string_view AgentCore = "agentxx.agent.core";
 /// COM 风格接口表 IID (与 plugin_api.h 的 AGENTXX_IFACE_AGENT_* 宏一一对应;
 /// 清单 interfaces.require 可按插件实际查询的表精确声明)
 inline constexpr std::string_view AgentTools = AGENTXX_PLUGIN_IFACE_AGENT_TOOLS;
-/// 钩子登记 (基础两项 + 有序登记与清单三项, 同一张表; 见
-/// AGENTXX_PLUGIN_IFACE_AGENT_HOOKS)
-/// - 待归并: 钩子与功能点正在并入“功能扩展点”(`agentxx.agent.point.*` + 能力行),
-///   归并完成后本项与 AgentFeature 一起删除
-inline constexpr std::string_view AgentHooks        = AGENTXX_PLUGIN_IFACE_AGENT_HOOKS;
 /// 广播 (频道声明 / 发布 / 订阅 / 读 / 结束) —— 取代已删的 `agentxx.agent.event`
 inline constexpr std::string_view AgentBroadcasts   = PLUGINXX_IFACE_BROADCASTS;
 /// 能力 (声明 + 实现行 + 调用)

@@ -392,13 +392,12 @@ std::string buildDiagnosticsText(
                                  ? ctx.pluginMount->registrationInventory(*instance)
                                  : plugin::PluginMount::RegistrationInventory{};
             lines.push_back(fmt::format(
-                "- {} v{} [{}] tools={} hooks={} caps={} events={} prompt_keys={} resources="
+                "- {} v{} [{}] tools={} caps={} events={} prompt_keys={} resources="
                 "skill:{} mem:{} mcp:{} graph_owner={}",
                 view.name,
                 view.version,
                 view.enabled ? "enabled" : "disabled",
                 inv.tools,
-                inv.hooks,
                 inv.capabilities,
                 inv.eventSubscriptions,
                 inv.promptKeys,

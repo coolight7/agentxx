@@ -498,7 +498,7 @@ asio::awaitable<void> BaseAgent::init() {
         .run   = [&]() -> asio::awaitable<void> {
             // 插件系统加载: 工具注册表 + 插件管理器 (挂在 AgentContext, 供
             // ToolcallWrapNode/ModelCallWrapNode/中间件栈取用)
-            // - 在 initMiddleware 之前创建: 插件钩子注册 (加载插件时) push 到
+            // - 在 initMiddleware 之前创建: 插件加载时挂上的扩展点派发器 push 到
             //   handles 栈, 与既有中间件并存
             // - 配置插件的实际加载在 init 末尾 (engine 构建后, 见下方)
             notifyInitProgress("初始化插件系统 ...");
@@ -674,7 +674,7 @@ asio::awaitable<void> BaseAgent::init() {
         .after = "graph_definition",
         .run   = [&]() -> asio::awaitable<void> {
             // 先加载插件 (进程级; 加载失败仅记日志不影响主流程), 再建立挂载:
-            // 所有 agent 级注册 (工具/权限/钩子/提示词/功能点/图/资源/事件) 都在
+            // 所有 agent 级注册 (工具/权限/提示词/功能点/图/资源/事件) 都在
             // 插件的 mount 回调里发生, 因此必须提前到 engine 构建之前。
             notifyInitProgress("加载插件 ...");
             // 只有自建管理器时才在这里加载 (外部注入时插件已加载好)

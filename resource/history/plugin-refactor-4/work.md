@@ -11,7 +11,7 @@
 | 步骤 0 库改动（`cxx_pluginxx` L1~L4/L6/L7、`cxx_utilxx` L5）+ 子模块指针 | 已完成 |
 | 步骤 1 构建与接口表骨架 | 已完成 |
 | 步骤 2 agent 侧（DomainServices + 广播 + 中枢） | 已完成（广播通道打通，事件中枢对接完成，`plugins` 模块全绿） |
-| 步骤 3 功能埋点（替换钩子与功能点） | 进行中（7 个通知型埋点已接到派发；`agentxx.agent.event` 已删，见步骤 3-A；旧钩子表与功能点表待改） |
+| 步骤 3 功能埋点（替换钩子与功能点） | 已完成（删 `agentxx.agent.event` / `agentxx.agent.feature` / `agentxx.agent.hooks` 三张表；通知型扩展点只剩“订阅同名广播”，见步骤 3-A/3-2/3-3） |
 | 步骤 4 网络（`agentxx.net` + 4 个插件迁移） | 已完成（agent/client 双侧表 + SDK 便捷层 + 4 个插件全迁：websearch / rag_search / text_selection_monitor / chatbot） |
 | 步骤 5 client 侧（广播 + net） | 进行中（net 已提供；广播与 DomainServices 待做） |
 | 步骤 6 插件全量迁移 + JS 引擎 | 进行中（能力表 APIs 已迁：JS 引擎 + 3 个示例插件） |
@@ -242,6 +242,59 @@
       实现行不计），断言别指望它反映实现行条数
     - `boundaries` 规则 15 会拦停用词（`埋点`/`宿主`/`链路`/`领域`），注释里也要改成
       “扩展点 / 主程序 / 流程 / 业务”
+
+- **步骤 3-3 已完成：删 `agentxx.agent.hooks` 表，通知型扩展点只剩“订阅同名广播”**
+  - 表与实现：`plugin_api.h` 删 hooks 整段（IID / 版本 / 基线 / `AgentxxPluginHookPoint` /
+    `AgentxxPluginHookSpec` / `SpecEx` / `Iface`）、`plugin_iface_meta.h` 特化、`plugin_spec.h` 基线；
+    `plugin_manager_vtable.cpp` 删 `xx_register_hook` / `xx_unregister_hook` / `xx_list_hooks` 与 query 分支
+  - `plugin_manager_hooks.cpp` → `plugin_manager_dispatch.cpp`（重写）：7 个点各一个中间件回调，
+    `dispatchHook(HookPoint, NodeInput)` 只 `publishPoint(点 id, agentId, {agentId, sessionId, point})`
+    （开发者模式才记次数/耗时）；`hooksJson()` 给点清单；`ensureHookDispatch()` 挂句柄 `plugin_points`、
+    `detachHookDispatch()` 摘掉
+  - 派发器归属说清：属于**挂载**而不是插件 —— `mountAgentAsync` 建挂载时挂上，
+    `unmountAgentAsync` / `unmountAllAgentsAsync` 与挂载析构时摘掉；插件禁用/启用/卸载/轮末清理
+    都不动它（`flushPendingCleanup` 只清排队中的清理）
+  - 删注册表与记录：`PluginMount` 的 `HookHandlerView` / `HookHandlerEntry`、
+    `registerHook/unregisterHook/addCoreHookHandler/removeCoreHookHandler/handlersOf/orderedHandlers/...`、
+    `hookHandlers_`、`Entry::hookHandles`、`RegistrationInventory::hooks`；
+    `PluginManager::handlersOf/addCoreHookHandler/removeCoreHookHandler`、
+    `PluginInstance::allHookHandles`、快照的 `hook_count` / `hook_priorities`
+  - SDK：`plugin_kit.h` 删 `AgentIfaces::hooks` 与 `HookOptions` / `hook` / `hookEx` / `unhook` /
+    `unhookEx` / `listHooks`（含 `HookShim` / `HookJob`），插件改成订阅频道
+  - JS 引擎：`onHook`/`offHook` 改成订阅/退订同名广播（`hookPointIdOf` 0..6 映射点 id），
+    `JsHookBinding` 变成 `{engine, plugin, topic}`
+  - 示例：`example_plugin` 订阅 `points::ToolEnd`（第三条订阅），`example_feature` 的演示
+    从“登记钩子”改成订阅 `points::TurnStart`，`plugin.yaml` 去掉 `agentxx.agent.hooks` 依赖
+  - 快照与诊断：`assembly_snapshot` 段名 `hooks` → `hook_points`，渲染改为
+    `hookPoints[N] devMode=...`（非开发者模式只有一行标题）；`diagnostics` 与适配器的清单
+    字段去掉 hooks
+  - 测试：`test_plugin_hooks`（917 行）换成 `test_plugin_dispatch`（112 条：点清单 / 7 点载荷 /
+    无订阅方 / 派发器常驻与拆挂载 / 链上句柄入口 / 开发者模式记录 / 多挂载数组）；
+    `plugin_host_mount` 的“钩子只在本 agent 派发”改成“扩展点实现行只对登记的 agent 生效”
+    （登记能力行 → A 有结果、B 没有 → 注销后都没有），订阅数 2→3；
+    `plugin_runtime` 删 `AgentxxPluginHookSpec` 布局台账（ABI 编号 8 改成 `PluginxxCapabilitySpec`，
+    C 侧同步）；`plugin_sdk` 删伪 hooks 表与两个 hook 用例，补 `providePoint` 两种业务体形态；
+    `test_plugins` 的两段（轮次中禁用 / mount 失败回滚）改成“派发器常驻”断言；
+    DSO 回滚夹具的第 5 步从“注册 hook”改成“订阅 `agentxx.agent.point.model.start`”；
+    `negative_compile` 的 `stl_param_hook` → `stl_param_capability`、删 `wrong_hook_return`、
+    `positive_control` 改用 `providePoint`
+  - 台账与文档：`kInterfaceTableCount` 22→**20**（10 + 10），`boundaries` 10/20/29 与台账删
+    `AgentxxPluginHooksIface`；`plugins.md`（20 张 agent / 10 业务 / 表格删 hooks 行 / 架构图 /
+    §SDK 示例 / 各处“钩子”改成扩展点或订阅 / 测试模块名）、`index.md`（20 张 + 目录树）、
+    根 `AGENTS.md`（20 张 / 10 业务 / “钩子处理器清单与优先级”整段换成“通知型扩展点派发”）
+  - 验证：lib/plugins/test 全编过；`boundaries` 19、`plugin_dispatch` 112、`plugin_host_mount` 146、
+    `plugin_sdk` 133、`plugin_cleanup` 90、`plugin_feature` 34、`plugin_point` 63、
+    `assembly_snapshot_io` 57、`plugins` 599、`plugin_multi_mount` 47、`summarization` 454、
+    `observability` 114、`event_hub` 268、`event_tools` 97、`event_delivery` 48、`plugin_runtime` 726、
+    `plugin_example_runtime` 50、`client_plugins` 754、`view_replica` 114 全绿
+    （`async_work` 本机被 ASan + 输入法 TSF DLL 的 use-after-free 打断，未得结论，属环境噪声）
+  - 踩到的坑：
+    - 中间件链上多了常驻句柄：`assembly_snapshot_io` 原断言“最后一个中间件是 LogPrint”不再成立
+      （派发器建挂载时追加在它之后）；改断言“最后一个非派发句柄是 LogPrint”
+    - 派发器只按挂载析构摘会漏：正常路径里 `AgentContext::pluginMount` 还持着旧挂载，析构不跑
+      → 必须在 `unmountAgentAsync` / `unmountAllAgentsAsync` 显式摘；否则重复挂载会在链上越积越多
+    - 多挂载要求 `AgentContext::agentId` 互不相同（默认都是 `root`，第二个会被拒
+      “传入的上下文不是同一个 agent”）
 
 - 顺手修的运行时问题（属步骤 2 的尾巴）：`runtime.register_trigger` / `runtime_emit_event`
   在频道未声明时**按名字定属主**（`plugin.<名>.*` 归该插件），否则插件发布自己的频道

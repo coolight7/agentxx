@@ -37,9 +37,8 @@ _Static_assert(sizeof(PluginxxHost) % 8 == 0, "PluginHost 必须 8 字节对齐"
 _Static_assert(sizeof(PluginxxHostVtable) % 8 == 0, "HostVtable 必须 8 字节对齐");
 _Static_assert(sizeof(PluginxxOperatorNotify) % 8 == 0, "Notify 必须 8 字节对齐");
 _Static_assert(sizeof(AgentxxPluginToolSpec) % 8 == 0, "ToolSpec 必须 8 字节对齐");
-_Static_assert(sizeof(AgentxxPluginHookSpec) % 8 == 0, "HookSpec 必须 8 字节对齐");
+_Static_assert(sizeof(PluginxxCapabilitySpec) % 8 == 0, "CapabilitySpec 必须 8 字节对齐");
 _Static_assert(sizeof(AgentxxPluginToolsIface) % 8 == 0, "ToolsIface 必须 8 字节对齐");
-_Static_assert(sizeof(AgentxxPluginHooksIface) % 8 == 0, "HooksIface 必须 8 字节对齐");
 _Static_assert(sizeof(PluginxxBroadcastsIface) % 8 == 0, "BroadcastsIface 必须 8 字节对齐");
 _Static_assert(sizeof(PluginxxCapabilitiesIface) % 8 == 0, "CapabilitiesIface 必须 8 字节对齐");
 _Static_assert(sizeof(PluginxxSchedulerIface) % 8 == 0, "SchedulerIface 必须 8 字节对齐");
@@ -124,7 +123,7 @@ enum {
     AGENTXX_ABI_VALUE_HOST_VTABLE_SIZE                    = 5,
     AGENTXX_ABI_VALUE_TOOL_SPEC_SIZE                      = 6,
     AGENTXX_ABI_VALUE_TOOL_SPEC_START_OFFSET              = 7,
-    AGENTXX_ABI_VALUE_HOOK_SPEC_SIZE                      = 8,
+    AGENTXX_ABI_VALUE_CAPABILITY_SPEC_SIZE                = 8,
     AGENTXX_ABI_VALUE_NOTIFY_SIZE                         = 9,
     AGENTXX_ABI_VALUE_TOOLS_IFACE_SIZE                    = 10,
     AGENTXX_ABI_VALUE_TOOLS_IFACE_SIZE_OFFSET             = 11,
@@ -167,8 +166,8 @@ uint64_t agentxx_test_abi_value(int32_t id) {
             return (uint64_t)sizeof(AgentxxPluginToolSpec);
         case AGENTXX_ABI_VALUE_TOOL_SPEC_START_OFFSET:
             return (uint64_t)offsetof(AgentxxPluginToolSpec, execute_start);
-        case AGENTXX_ABI_VALUE_HOOK_SPEC_SIZE:
-            return (uint64_t)sizeof(AgentxxPluginHookSpec);
+        case AGENTXX_ABI_VALUE_CAPABILITY_SPEC_SIZE:
+            return (uint64_t)sizeof(PluginxxCapabilitySpec);
         case AGENTXX_ABI_VALUE_NOTIFY_SIZE:
             return (uint64_t)sizeof(PluginxxOperatorNotify);
         case AGENTXX_ABI_VALUE_TOOLS_IFACE_SIZE:

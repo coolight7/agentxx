@@ -13,6 +13,7 @@
 /// 4. 能力: 声明 capability "example.demo"
 /// 5. 卸载: destroy 释放实例
 /// 6. client 入口 (双端插件, agentxx_plugin_client_create)
+#include "agentxx/plugin/api/agentxx_point_ids.h"
 #include "agentxx/plugin/api/client_plugin_api.h"
 #include "agentxx/plugin/api/plugin_api.h"
 #include "agentxx/plugin/api/plugin_guard.h"
@@ -372,18 +373,21 @@ static int exampleAgentSetup(AgentCtx& ctx, const agentxx::plugin::ScopeRef& ref
         }
     );
 
-    // 2. 钩子 (agent_start)
-    if (ctx.iface.hooks && ctx.iface.hooks->register_hook) {
-        agentxx::plugin::hook(
-            ctx,
-            ref,
-            AGENTXX_PLUGIN_HOOK_AGENT_START,
-            [](AgentCtx& c, AgentxxPluginHookPoint, std::string_view) {
-                c.log.info("example hook: agent_start fired");
-            }
+    // 2. 通知型扩展点: 插件"想知道某个点发生了"就订阅同名广播频道
+    //    (已经不再有"钩子处理器登记"这回事; 序号已换成点 id)
+    {
+        const std::string_view pointId = agentxx::plugin::points::ToolEnd;
+        auto                   idSv    = agentxx::plugin::PluginStringView::from(pointId);
+        ctx.iface.broadcasts->subscribe_broadcast(
+            host,
+            ref.ptr(),
+            &idSv,
+            on_demo_event, ///< 与自己的频道共用同一个处理器 (只打印载荷)
+            &ctx,
+            nullptr,
+            nullptr
         );
     }
-
     // 3. 事件订阅 (读侧可跨族, 但必须是全名)
     //    自己的频道要先声明再订阅 (声明是显式动作; 主程序频道由主程序声明)
     const char* demoChannel = "plugin.example_plugin.demo";

@@ -8,8 +8,10 @@
 /// - **实现**: 登记一条实现行, 返回 JSON 文本 (需要返回值的扩展点才看这个);
 /// - **订阅**: 订阅同名频道, 只收通知 (纯通知型扩展点的等价物就是它)。
 ///
-/// 载荷字段 (广播与实现行入参见下表) 里一律带 `agentId`: 订阅侧用它过滤掉其它 agent
-/// 的通知 (同一个插件可能同时挂在多个 agent 上)。
+/// 载荷字段 (广播与实现行入参见下表) 里一律带 `agentId`。**通知型**点的载荷固定为
+/// `{"agentId": <挂载的 agent id>, "sessionId": <会话 id>, "point": <点名称>}`
+/// (agentId / sessionId 之外的细节在各调用点自己带了才加, 不给整份会话内容);
+/// 订阅侧用它过滤掉其它 agent 的通知 (同一个插件可能同时挂在多个 agent 上)。
 ///
 /// 与主程序声明表的一致性由测试模块 `boundaries` 校验: 本头的 id 清单必须与
 /// `PluginManager` 的扩展点声明表逐条相同。
@@ -22,19 +24,19 @@ namespace agentxx {
 namespace plugin {
 namespace points {
 
-/// 通知型: 一轮会话开始 (载荷 `{agentId, sessionId, turnId}`)
+/// 通知型: 一轮会话开始
 inline constexpr std::string_view TurnStart = "agentxx.agent.point.turn.start";
-/// 通知型: 一轮会话结束 (载荷 `{agentId, sessionId, turnId, hasError, interrupted}`)
+/// 通知型: 一轮会话结束
 inline constexpr std::string_view TurnEnd = "agentxx.agent.point.turn.end";
-/// 通知型: 一次模型调用开始 (载荷 `{agentId, sessionId, model}`)
+/// 通知型: 一次模型调用开始
 inline constexpr std::string_view ModelStart = "agentxx.agent.point.model.start";
-/// 通知型: 一次模型尝试 (重试会多次触发; 载荷 `{agentId, sessionId, model, attempt}`)
+/// 通知型: 一次模型尝试 (重试会多次触发)
 inline constexpr std::string_view ModelRun = "agentxx.agent.point.model.run";
-/// 通知型: 一次模型调用结束 (载荷 `{agentId, sessionId, model, usage}`)
+/// 通知型: 一次模型调用结束
 inline constexpr std::string_view ModelEnd = "agentxx.agent.point.model.end";
-/// 通知型: 一次工具调用开始 (载荷 `{agentId, sessionId, tool, callId}`)
+/// 通知型: 一次工具调用开始
 inline constexpr std::string_view ToolStart = "agentxx.agent.point.tool.start";
-/// 通知型: 一次工具调用结束 (载荷 `{agentId, sessionId, tool, callId, status, elapsedMs}`)
+/// 通知型: 一次工具调用结束
 inline constexpr std::string_view ToolEnd = "agentxx.agent.point.tool.end";
 
 /// 取值型: token 估算 (入参 `{agentId, model, kind, text?}`, 实现行回答 `{tokens}`)

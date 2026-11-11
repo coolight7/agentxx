@@ -51,6 +51,9 @@ PluginMount::~PluginMount() {
         // 插件侧没有收到 unmount 通知 (记一条便于定位)
         XX_LOGW("插件挂载 '{}' 析构时仍有 {} 个实例未拆挂载", agentId_, entries_.size());
     }
+    // 派发器属于本挂载: 挂载销毁时从中间件链上摘掉
+    // (正常路径已由拆挂载摘过一次, 这里只是兜底)
+    detachHookDispatch();
 }
 
 std::shared_ptr<ToolRegistry> PluginMount::toolRegistry() const {
@@ -136,10 +139,6 @@ PluginMount::Entry& PluginMount::entryOf(PluginInstance* inst) {
         inst->mounts.push_back(weak_from_this());
     }
     return *entry;
-}
-
-std::vector<PluginMount::HookHandlerView> PluginMount::hookHandlersOf(const PluginInstance& inst) const {
-    return allHookHandlersOf(inst);
 }
 
 size_t PluginMount::mountedCount() const {
@@ -455,10 +454,7 @@ void PluginMount::revokeEntry(Entry& entry) {
     removePromptContributions(inst->name);
     entry.promptKeys.clear();
 
-    // ⑥ 钩子处理器: 从本挂载的注册表摘除 (记录保留, 句柄置 0)
-    detachHookHandlers(inst.get());
-
-    // ⑦ 工具权限声明: 工具不再可调用, 声明无需保留
+    // ⑥ 工具权限声明: 工具不再可调用, 声明无需保留
     if (auto* permission = permissionMiddleware(); permission != nullptr) {
         for (const auto& name : entry.permissionTools) {
             permission->unregisterToolPermission(name);
@@ -502,14 +498,9 @@ void PluginMount::clearInstanceRecords(PluginInstance* inst) {
         entry->tools.clear();
         entry->toolObjects.clear();
         entry->permissionTools.clear();
-        entry->hookHandles.clear();
-        entry->featurePoints.clear();
-        entry->featureImpls.clear();
         entry->graphNodes.clear();
         entry->promptKeys.clear();
     }
-    // 记录清空后, 本挂载上的钩子属于"已撤登记但实例仍挂着"的中间态; 句柄置 0
-    detachHookHandlers(inst);
 }
 
 void PluginMount::releaseInstanceInstances(PluginInstance& inst) {
@@ -604,17 +595,8 @@ void PluginMount::applyManifestResourcesNow(PluginInstance& inst) {
 // =====================================================================
 
 void PluginMount::flushPendingCleanup() {
-    for (auto& item : pendingCleanups_) {
-        auto handle = item.handle.lock();
-        if (!handle) {
-            continue;
-        }
-        eraseHookDispatch(handle.get());
-        // 排队摘除的句柄就是当前派发器时一并释放 (没有处理器才会排队, 这里再确认一次)
-        if (hookHandlers_.empty() && hookDispatch_.get() == handle.get()) {
-            hookDispatch_ = nullptr;
-        }
-    }
+    // 派发器现在建挂载时就挂上并常驻 (插件靠订阅广播收到通知, 撤不撤订阅不影响它),
+    // 因此这里只清理排队记录 —— 保留入口是因为轮末调用点与中间件通用收尾共用它。
     pendingCleanups_.clear();
 }
 

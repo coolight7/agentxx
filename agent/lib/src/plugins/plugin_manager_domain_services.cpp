@@ -5,7 +5,7 @@
 /// 其中需要主程序数据的入口经 [pluginxx::DomainServices] 取数。本文件把它们接到
 /// agentxx 的 AgentContext / 工作线程池上, 另含主程序自己的广播发布/结束入口。
 ///
-/// 线程约定: 钩子都在主程序 IO 线程被调用 (通用表入口先投递到 IO 线程); 只有
+/// 线程约定: 注册与派发都在主程序 IO 线程执行 (通用表入口先投递到 IO 线程); 只有
 /// `postToWorkerThread` 例外, 它把一段阻塞工作投递到工作线程池。
 #include "agentxx/plugin/plugin_manager.h"
 

@@ -62,7 +62,7 @@ namespace feature {
 enum class PointType : int32_t {
     Provide = 0, ///< 取值: 请求 → 值, 第一个给出合法值的实现生效
     Decide  = 1, ///< 裁决: 通过 / 拒绝 / 弃权 (本轮只有核心点使用)
-    Notify  = 2, ///< 预留: 通知型 (当前由事件表与固定钩子承担)
+    Notify  = 2, ///< 预留: 通知型 (当前由事件表与通知型扩展点承担)
 };
 
 /// 实现所在的层 (排序时 `plugin` 恒在 `core` 之前)

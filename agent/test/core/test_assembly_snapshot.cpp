@@ -244,13 +244,24 @@ asio::awaitable<TestResult> run_assembly_snapshot_tests() {
             std::string{"test-model"}
         );
 
-        // 中间件顺序: 非空, 且日志中间件固定在末尾 (其注释要求作为最后一层)
-        XX_TEST_EXPECT_GE(snapshot["middlewares"].size(), size_t{2});
-        XX_TEST_EXPECT_EQ(
-            snapshot["middlewares"][snapshot["middlewares"].size() - 1]
-                .value("name", std::string{}),
-            std::string{"LogPrint"}
-        );
+        // 中间件顺序: 非空; 日志中间件在末尾 (建挂载时追加的扩展点派发器只发广播,
+        // 不改流程, 排在它之后不影响"日志作为最后一层"的约定)
+        const auto& middlewares = snapshot["middlewares"];
+        XX_TEST_EXPECT_GE(middlewares.size(), size_t{2});
+        size_t lastNonDispatch = middlewares.size();
+        for (size_t i = middlewares.size(); i > 0; --i) {
+            if (middlewares[i - 1].value("name", std::string{}) != "plugin_points") {
+                lastNonDispatch = i - 1;
+                break;
+            }
+        }
+        XX_TEST_EXPECT_TRUE(lastNonDispatch < middlewares.size());
+        if (lastNonDispatch < middlewares.size()) {
+            XX_TEST_EXPECT_EQ(
+                middlewares[lastNonDispatch].value("name", std::string{}),
+                std::string{"LogPrint"}
+            );
+        }
         bool hasPermissionMiddleware = false;
         for (const auto& item : snapshot["middlewares"]) {
             if (item.value("name", std::string{}) == "PermissionMiddlewareHandle") {
@@ -308,15 +319,16 @@ asio::awaitable<TestResult> run_assembly_snapshot_tests() {
         XX_TEST_EXPECT_GE(snapshot["graph"].value("nodes", 0), 4);
         XX_TEST_EXPECT_FALSE(snapshot["persistence"].value("enabled", true));
 
-        // 钩子清单: 7 个固定点都在, 没有插件登记处理器时为 0 (派发器也不在链上)
-        XX_TEST_EXPECT_TRUE(snapshot.contains("hooks"));        XX_TEST_EXPECT_EQ(snapshot["hooks"].value("count", 0), 7);
-        XX_TEST_EXPECT_EQ(snapshot["hooks"].value("handlers", 0), 0);
-        XX_TEST_EXPECT_TRUE(snapshot["hooks"]["points"].is_array());
-        XX_TEST_EXPECT_EQ(snapshot["hooks"]["points"].size(), size_t{7});
+        // 通知型扩展点清单: 7 个固定点都在 (插件靠订阅同名频道收到, 没有处理器注册表)
+        XX_TEST_EXPECT_TRUE(snapshot.contains("hook_points"));
+        XX_TEST_EXPECT_EQ(snapshot["hook_points"].value("count", 0), 7);
+        XX_TEST_EXPECT_TRUE(snapshot["hook_points"]["points"].is_array());
+        XX_TEST_EXPECT_EQ(snapshot["hook_points"]["points"].size(), size_t{7});
         bool hookPointsNamed = false;
-        for (const auto& point : snapshot["hooks"]["points"]) {
-            XX_TEST_EXPECT_TRUE(point.value("count", -1) == 0);
-            if (point.value("name", std::string{}) == "AGENT_START") {
+        for (const auto& point : snapshot["hook_points"]["points"]) {
+            // 非开发者模式: 没有派发记录
+            XX_TEST_EXPECT_FALSE(point.contains("stat"));
+            if (point.value("name", std::string{}) == "TOOL_END") {
                 hookPointsNamed = true;
             }
         }
@@ -327,8 +339,8 @@ asio::awaitable<TestResult> run_assembly_snapshot_tests() {
         XX_TEST_EXPECT_TRUE(has(rendered, "models: default=test-model"));
         XX_TEST_EXPECT_TRUE(has(rendered, "graph: agentxx.default"));
         XX_TEST_EXPECT_TRUE(has(rendered, "persistence: OFF"));
-        // 钩子处理器清单也渲染出来 (没有处理器时只有一行标题)
-        XX_TEST_EXPECT_TRUE(has(rendered, "hookHandlers[0] devMode=no:"));
+        // 通知型扩展点清单也渲染出来 (非开发者模式只有一行标题)
+        XX_TEST_EXPECT_TRUE(has(rendered, "hookPoints[7] devMode=no:"));
         agentxx::agent::logAssemblySnapshot(snapshot, "test");
     }
 

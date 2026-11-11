@@ -437,22 +437,16 @@ asio::awaitable<TestResult> run_plugin_tests() {
         // 保持引擎加载，供后续 JS 用例复用
     }
 
-    // ---- 5. 钩子登记: 主程序级派发器入链 + 处理器清单 ----
+    // ---- 5. 通知型扩展点: 主程序级派发器入链 (建挂载就挂上并常驻) ----
     {
         const auto& handles = ctx->middlewareHandleContext->handles;
         bool        found   = std::any_of(handles.begin(), handles.end(), [](const auto& h) {
-            return h->name == "plugin_hooks";
+            return h->name == "plugin_points";
         });
         XX_TEST_EXPECT_TRUE(found); ///< 中间件链上只有一个主程序级派发器
-        XX_TEST_EXPECT_EQ(inst->allHookHandles().size(), size_t{1});
-        XX_TEST_EXPECT_GE(inst->allHookHandles().front(), int64_t{1});
-        const auto handlers = ctx->pluginManager->handlersOf(AGENTXX_PLUGIN_HOOK_AGENT_START);
-        XX_TEST_EXPECT_EQ(handlers.size(), size_t{1});
-        if (!handlers.empty()) {
-            XX_TEST_EXPECT_EQ(handlers.front().owner, std::string{"plugin:example_plugin"});
-            XX_TEST_EXPECT_EQ(handlers.front().layer, std::string{"plugin"});
-            XX_TEST_EXPECT_TRUE(handlers.front().enabled);
-        }
+        // 点清单: 7 个通知型扩展点 (插件靠订阅同名广播收到, 不登记处理器)
+        const auto pointsJson = utilxx_base::Json::parse(ctx->pluginMount->hooksJson());
+        XX_TEST_EXPECT_EQ(pointsJson.value<int>("count", 0), 7);
     }
 
     // ---- 6. 广播发布/订阅回环 (plugin.<插件名>.<事件>) ----
@@ -489,41 +483,28 @@ asio::awaitable<TestResult> run_plugin_tests() {
         ctx->pluginManager->broadcasts()->unsubscribe("plugin.example_plugin.demo", token);
     }
 
-    // ---- 7. 禁用 → 工具摘除/钩子处理器摘除; 启用 → 恢复 ----
+    // ---- 7. 禁用 → 工具摘除 / 广播订阅撤掉; 启用 → 恢复 ----
     {
         ctx->pluginManager->disable("example_plugin");
         XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains("example_echo"));
         XX_TEST_EXPECT_FALSE(ctx->pluginManager->registry()->contains("example_caller"));
-        // 无轮次执行时 disable 立即摘除派发器; 处理器随实例一起摘除 (记录保留, 句柄置 0)
-        XX_TEST_EXPECT_TRUE(ctx->pluginManager->handlersOf(AGENTXX_PLUGIN_HOOK_AGENT_START).empty()
-        );
-        XX_TEST_EXPECT_EQ(inst->allHookHandles().size(), size_t{1});
-        XX_TEST_EXPECT_EQ(inst->allHookHandles().front(), int64_t{0});
         XX_TEST_EXPECT_FALSE(inst->enabled);
+        // 派发器是挂载级的: 实例禁用不影响它 (点照常发, 只是没有订阅方)
+        {
+            const auto& handles = ctx->middlewareHandleContext->handles;
+            const bool  found   = std::any_of(handles.begin(), handles.end(), [](const auto& h) {
+                return h->name == "plugin_points";
+            });
+            XX_TEST_EXPECT_TRUE(found);
+        }
 
         ctx->pluginManager->enable("example_plugin");
         // 启用是 start 事务 (投递到所属 IO 线程执行): 等待插件重新声明注册
         for (int i = 0; i < 200 && !ctx->toolRegistry->contains("example_echo"); ++i) {
             co_await sleepMs(5);
         }
-        for (int i = 0;
-             i < 200 && ctx->pluginManager->handlersOf(AGENTXX_PLUGIN_HOOK_AGENT_START).empty();
-             ++i) {
-            co_await sleepMs(5);
-        }
         XX_TEST_EXPECT_TRUE(ctx->toolRegistry->contains("example_echo"));
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->registry()->contains("example_caller"));
-        XX_TEST_EXPECT_EQ(
-            ctx->pluginManager->handlersOf(AGENTXX_PLUGIN_HOOK_AGENT_START).size(),
-            size_t{1}
-        );
-        {
-            const auto& handles = ctx->middlewareHandleContext->handles;
-            const bool  found   = std::any_of(handles.begin(), handles.end(), [](const auto& h) {
-                return h->name == "plugin_hooks" && !h->disabled;
-            });
-            XX_TEST_EXPECT_TRUE(found); ///< 重新登记后派发器回到链上并生效
-        }
         XX_TEST_EXPECT_TRUE(inst->enabled);
     }
 
@@ -534,15 +515,13 @@ asio::awaitable<TestResult> run_plugin_tests() {
         XX_TEST_EXPECT_FALSE(ctx->toolRegistry->contains("example_echo"));
         XX_TEST_EXPECT_TRUE(ctx->pluginManager->find("example_plugin") == nullptr);
         XX_TEST_EXPECT_FALSE(ctx->pluginManager->capabilities()->has("example.demo"));
-        // 没有处理器后派发器从 handles 摘除 (轮次执行中先置 disabled, 由 flush 摘除)
+        // 派发器是挂载级的, 插件卸载不影响它 (点照常可发, 没有订阅方而已)
         ctx->pluginManager->flushPendingCleanup();
         const auto& handles = ctx->middlewareHandleContext->handles;
         bool        found   = std::any_of(handles.begin(), handles.end(), [](const auto& h) {
-            return h->name == "plugin_hooks";
+            return h->name == "plugin_points";
         });
-        XX_TEST_EXPECT_FALSE(found);
-        XX_TEST_EXPECT_TRUE(ctx->pluginManager->handlersOf(AGENTXX_PLUGIN_HOOK_AGENT_START).empty()
-        );
+        XX_TEST_EXPECT_TRUE(found);
         // 工具对象应已释放 (inflight 归零后 dlclose)
         XX_TEST_EXPECT_EQ(inst->allToolObjects().size(), size_t{0});
     }
@@ -992,56 +971,43 @@ throw new Error("top-level rollback probe");
         }
     }
 
-    // ---- 24. H4 回归: 轮次中 disable → 摘除留到轮末; enable 后钩子重新登记 ----
+    // ---- 24. 回归: 轮次中禁用 → 扩展点派发器常驻, 不随插件走 ----
+    // 派发器挂在挂载上, 挂上后不再摘下: 禁用/启用只撤掉或重新建立插件自己的
+    // 广播订阅, 派发器没有"待摘除"状态, 所以轮次执行中禁用也不需要延后到轮末。
     {
         auto inst24 = co_await ctx->pluginManager->loadPluginAsync(path);
         XX_TEST_EXPECT_TRUE(inst24 != nullptr);
         if (inst24) {
-            XX_TEST_EXPECT_EQ(
-                ctx->pluginManager->handlersOf(AGENTXX_PLUGIN_HOOK_AGENT_START).size(),
-                size_t{1}
-            );
+            // 链上是否有一份派发器 (wantDisabled 指定期望的停用状态)
+            const auto hasDispatch = [&](bool wantDisabled) {
+                const auto& handles = ctx->middlewareHandleContext->handles;
+                return std::any_of(handles.begin(), handles.end(), [&](const auto& h) {
+                    return h->name == "plugin_points" && h->disabled == wantDisabled;
+                });
+            };
+            XX_TEST_EXPECT_TRUE(hasDispatch(false));
             ctx->pluginManager->onTurnBegin(); // 轮次执行中
             ctx->pluginManager->disable("example_plugin");
-            // 轮次执行中不修改中间件链: 处理器立即摘除, 派发器停用待摘除
-            XX_TEST_EXPECT_TRUE(
-                ctx->pluginManager->handlersOf(AGENTXX_PLUGIN_HOOK_AGENT_START).empty()
-            );
-            {
-                const auto& handles = ctx->middlewareHandleContext->handles;
-                const bool  disabledOnChain
-                    = std::any_of(handles.begin(), handles.end(), [](const auto& h) {
-                          return h->name == "plugin_hooks" && h->disabled;
-                      });
-                XX_TEST_EXPECT_TRUE(disabledOnChain);
-            }
-            ctx->pluginManager->flushPendingCleanup(); // 轮末摘除派发器
+            XX_TEST_EXPECT_FALSE(inst24->enabled);
+            // 派发器仍在链上, 且没有被停用
+            XX_TEST_EXPECT_TRUE(hasDispatch(false));
+            ctx->pluginManager->flushPendingCleanup(); // 轮末清理
             ctx->pluginManager->onTurnEnd();
-            {
-                const auto& handles = ctx->middlewareHandleContext->handles;
-                const bool  found = std::any_of(handles.begin(), handles.end(), [](const auto& h) {
-                    return h->name == "plugin_hooks";
-                });
-                XX_TEST_EXPECT_FALSE(found); // 已物理摘除
-            }
-            XX_TEST_EXPECT_TRUE(inst24->allHookHandles().size() == size_t{1});
-            XX_TEST_EXPECT_EQ(inst24->allHookHandles().front(), int64_t{0});
-            // 启用: start 事务重新登记钩子 (派发器随首次登记回到链上)
+            XX_TEST_EXPECT_TRUE(hasDispatch(false));
+            // 启用: start 事务重新订阅, 派发器依旧只有一份
             ctx->pluginManager->enable("example_plugin");
-            for (int i = 0;
-                 i < 200 && ctx->pluginManager->handlersOf(AGENTXX_PLUGIN_HOOK_AGENT_START).empty();
-                 ++i) {
-                co_await sleepMs(5);
-            }
-            XX_TEST_EXPECT_EQ(
-                ctx->pluginManager->handlersOf(AGENTXX_PLUGIN_HOOK_AGENT_START).size(),
-                size_t{1}
-            );
+            XX_TEST_EXPECT_TRUE(inst24->enabled);
             const auto& handles = ctx->middlewareHandleContext->handles;
-            bool        found   = std::any_of(handles.begin(), handles.end(), [](const auto& h) {
-                return h->name == "plugin_hooks" && !h->disabled;
-            });
-            XX_TEST_EXPECT_TRUE(found);
+            XX_TEST_EXPECT_EQ(
+                std::count_if(handles.begin(), handles.end(), [](const auto& h) {
+                    return h->name == "plugin_points";
+                }),
+                std::ptrdiff_t{1}
+            );
+            XX_TEST_EXPECT_TRUE(hasDispatch(false));
+            // 点清单与插件是否启用无关: 永远是 7 个通知型扩展点
+            const auto pointsJson = utilxx_base::Json::parse(ctx->pluginMount->hooksJson());
+            XX_TEST_EXPECT_EQ(pointsJson.value<int>("count", 0), 7);
             co_await ctx->pluginManager->unloadAsync("example_plugin");
         }
     }
@@ -3433,9 +3399,9 @@ throw new Error("top-level rollback probe");
     }
 
     // ---- 40. 挂载期 (mount) 失败的真实 DSO 回滚 ----
-    // 测试插件在 mount 里依次注册 工具/图类型/订阅/prompt/hook/能力/资源 后主动失败:
+    // 测试插件在 mount 里依次注册 工具/图类型/订阅/prompt/扩展点订阅/能力/资源 后主动失败:
     // - v2 起 agent 级注册只能在 mount 里做, 因此"加载成功"之后才有这次失败事务;
-    //   主程序必须回滚该 agent 上全部已生效注册 (工具/图类型/订阅/prompt/hook/能力/资源);
+    //   主程序必须回滚该 agent 上全部已生效注册 (工具/图类型/订阅/prompt/扩展点订阅/能力/资源);
     // - 再次加载同一 DSO, 同名注册必须全部重新成功 (插件经 probe 事件
     //   `{"step":"all","ok":true}` 证明走到了最后一步)。
     {
@@ -3524,17 +3490,14 @@ throw new Error("top-level rollback probe");
             sctx->pluginManager->hasCapability("plugin.test_start_fail_plugin.dso.rollback.cap")
             != 0
         );
-        // hook 处理器已摘除: 失败实例的处理器不得留在注册表里 (派发器也随之摘除)
+        // 派发器常驻: 它属于挂载而不是插件, 失败实例既不会带走它, 也不会让它停用
         {
             sctx->pluginManager->flushPendingCleanup();
             const auto& handles = sctx->middlewareHandleContext->handles;
             const bool  found   = std::any_of(handles.begin(), handles.end(), [](const auto& h) {
-                return h->name == "plugin_hooks";
+                return h->name == "plugin_points" && !h->disabled;
             });
-            XX_TEST_EXPECT_FALSE(found);
-            XX_TEST_EXPECT_TRUE(
-                sctx->pluginManager->handlersOf(AGENTXX_PLUGIN_HOOK_AGENT_START).empty()
-            );
+            XX_TEST_EXPECT_TRUE(found);
         }
         // 资源已摘除: 失败实例不得留下 skill 目录所有权记录
         XX_TEST_EXPECT_TRUE(applier->ownedBy("test_start_fail_plugin").skillDirs.empty());

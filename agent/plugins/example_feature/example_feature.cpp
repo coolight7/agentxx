@@ -14,8 +14,7 @@
 /// 另含一个异步形态的实现行 (`plugin.example_feature.slow`): 用 kit 协程原语
 /// (`co_await sleep`) 等待, 由插件协程驱动桥推进 (与 tool 的写法一致)。
 ///
-/// 还演示**钩子有序登记** (`agentxx.agent.hooks` 的表尾三成员): 以优先级 -10 登记一个
-/// `AGENT_START` 处理器, 让它排在其它插件的钩子之前 (基础 `hook()` 只能按加载顺序排)。
+/// 还演示**订阅通知型扩展点**: 订阅 `agentxx.agent.point.turn.start`, 只关心"发生了"。
 #include "agentxx/plugin/api/agentxx_point_ids.h"
 #include "agentxx/plugin/api/plugin_api.h"
 #include "agentxx/plugin/api/plugin_guard.h"
@@ -175,37 +174,33 @@ static int featureAgentSetup(FeatureCtx& ctx, const agentxx::plugin::ScopeRef& r
         }
     }
 
-    // 4. 有序登记一个钩子处理器 (`agentxx.agent.hooks` 的表尾三成员)
-    //    - 优先级 -10: 排在默认优先级 (0) 的其它插件钩子之前
-    //    - 同一个点可以登记多个 (各持一根句柄, 用 unhookEx 精确撤销); 不撤销也行:
-    //      处理器跟着实例走, 禁用/卸载时由主程序自动摘除
-    //    - 主程序不支持时返回 0, 这里按"功能不可用"降级 (加载照常成功)
-    if (ctx.iface.hooks && ctx.iface.hooks->register_hook) {
-        HookOptions opts;
-        opts.priority        = -10;
-        opts.ownerTag        = "example_feature";
-        opts.depict          = "演示有序登记: 排在其它插件的钩子之前";
-        const int64_t handle = hookEx(
-            ctx,
-            ref,
-            AGENTXX_PLUGIN_HOOK_AGENT_START,
-            [](FeatureCtx& c, AgentxxPluginHookPoint point, std::string_view) {
-                // 载荷固定为 {sessionId, point}: 钩子只做通知, 需要更多信息请用扩展点
-                c.log.info(
-                    point == AGENTXX_PLUGIN_HOOK_AGENT_START
-                        ? "example_feature hook: agent_start fired"
-                        : "example_feature hook: unexpected point"
-                );
+    // 4. 只想"知道某个点发生了"就不必登记实现: 订阅同名广播频道即可
+    //    (通知型扩展点 `agentxx.agent.point.*` 由主程序声明, 插件只订阅)
+    //    - 一个插件可能同时挂在多个 agent 上: 载荷里带 `agentId`, 订阅侧自己过滤
+    //    - 订阅跟着实例走: 禁用/卸载时由主程序自动退订
+    if (ctx.iface.broadcasts && ctx.iface.broadcasts->subscribe_broadcast) {
+        const std::string_view pointId = agentxx::plugin::points::TurnStart;
+        auto                   idSv    = agentxx::plugin::PluginStringView::from(pointId);
+        ctx.iface.broadcasts->subscribe_broadcast(
+            ctx.host,
+            ref.ptr(),
+            &idSv,
+            [](const PluginxxStringView* payload, void* ud) {
+                auto* c = static_cast<FeatureCtx*>(ud);
+                if (c == nullptr) {
+                    return;
+                }
+                const std::string_view text{
+                    payload && payload->data ? payload->data : "",
+                    payload ? static_cast<size_t>(payload->size) : 0
+                };
+                c->log.info("example_feature: turn.start " + std::string{text});
             },
-            opts
+            &ctx,
+            nullptr,
+            nullptr
         );
-        if (handle <= 0) {
-            ctx.log.info("example_feature: ordered hook registration rejected by host");
-        }
-    } else {
-        ctx.log.info("example_feature: agentxx.agent.hooks ordered members unavailable, skipped");
     }
-
     return 0;
 }
 

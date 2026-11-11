@@ -10,7 +10,10 @@ void usePositive(Ctx& ctx) {
     tool(ctx, "pos.tool", "d", "{}", [](Ctx&, std::string_view args, OpCtl) -> Task<std::string> {
         co_return std::string{args};
     });
-    hook(ctx, AGENTXX_PLUGIN_HOOK_AGENT_START, [](Ctx&, std::string_view) -> void {});
+    // 扩展点实现行 = 能力行 (实现体收载荷, 返回结果正文)
+    providePoint(ctx, ScopeRef{}, "pos.point", [](Ctx&, std::string_view payload) -> std::string {
+        return std::string{payload};
+    });
     capability(ctx, "pos.cap", [](Ctx&, std::string_view, std::string_view) -> std::string {
         return {};
     });

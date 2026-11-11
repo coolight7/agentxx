@@ -1,4 +1,4 @@
-/// agent 侧插件主程序 —— 业务部分 (工具/权限/钩子/图/提示词/资源) 与生命周期扩展点
+/// agent 侧插件主程序 —— 业务部分 (工具/权限/图/提示词/资源) 与生命周期扩展点
 ///
 /// 加载/启停/禁用启用/卸载/级联依赖的骨架在 cxx_pluginxx
 /// (见
@@ -7,7 +7,7 @@
 /// 1. 实例的析构 (stop 欠账时拒绝 destroy/dlclose 的守卫);
 /// 2. 管理器构造/析构与业务注册表初始化;
 /// 3. 骨架的主程序扩展点覆写 —— "把主程序配置类型转成插件框架加载参数"以及
-///    "把业务注册(工具/权限/钩子/图/提示词/资源)摘除或清空";
+///    "把业务注册(工具/权限/图/提示词/资源)摘除或清空";
 /// 4. agentxx 自己的查询与配置驱动加载 (list / JSON / loadConfiguredPlugins)。
 #include "agentxx/plugin/plugin_graph_node.h"
 #include "agentxx/plugin/plugin_manager.h"
@@ -115,20 +115,6 @@ std::vector<std::shared_ptr<PluginTool>> PluginInstance::allToolObjects() const 
     return out;
 }
 
-std::vector<int64_t> PluginInstance::allHookHandles() const {
-    std::vector<int64_t> out;
-    for (const auto& weak : mounts) {
-        auto mount = weak.lock();
-        if (mount == nullptr) {
-            continue;
-        }
-        if (const auto* entry = mount->findEntry(this); entry != nullptr) {
-            out.insert(out.end(), entry->hookHandles.begin(), entry->hookHandles.end());
-        }
-    }
-    return out;
-}
-
 std::vector<std::shared_ptr<GraphTypeSlot>> PluginInstance::allGraphSlots() const {
     std::vector<std::shared_ptr<GraphTypeSlot>> out;
     for (const auto& weak : mounts) {
@@ -217,6 +203,8 @@ std::shared_ptr<PluginMount>
         nextMountSeq_++
     );
     mounts_.push_back(mount);
+    // 通知型扩展点的派发器: 建挂载就挂上并常驻 (插件靠订阅同名广播收到, 不需要登记)
+    mount->ensureHookDispatch();
     return mount;
 }
 
@@ -248,6 +236,7 @@ asio::awaitable<std::shared_ptr<PluginMount>>
             nextMountSeq_++
         );
         mounts_.push_back(mount);
+        mount->ensureHookDispatch();
     }
 
     // 逐实例驱动插件的 mount 回调 (顺序 = 实例表顺序; 单个实例失败只影响它自己)
@@ -305,6 +294,8 @@ asio::awaitable<void> PluginManager::unmountAgentAsync(std::string_view agentId)
         co_return;
     }
     co_await mount->unmountAllAsync();
+    // 派发器属于挂载: 拆挂载时一并从中间件链上摸掉
+    mount->detachHookDispatch();
     std::erase(mounts_, mount);
     XX_LOGI("agent '{}' 已拆全部插件挂载", mount->agentId());
     co_return;
@@ -315,6 +306,7 @@ asio::awaitable<void> PluginManager::unmountAllAgentsAsync() {
     for (const auto& mount : snapshot) {
         if (mount) {
             co_await mount->unmountAllAsync();
+            mount->detachHookDispatch();
         }
     }
     mounts_.clear();
@@ -377,14 +369,13 @@ PluginMount::RegistrationInventory
         const auto one = mount->registrationInventory(inst);
         out.tools += one.tools;
         out.permissionTools += one.permissionTools;
-        out.hooks += one.hooks;
-        out.graphNodeTypes += one.graphNodeTypes;
+        out.mcpNamespaces += one.mcpNamespaces;
         out.eventSubscriptions += one.eventSubscriptions;
         out.capabilities += one.capabilities;
         out.promptKeys += one.promptKeys;
         out.skillDirs += one.skillDirs;
         out.memoryFiles += one.memoryFiles;
-        out.mcpNamespaces += one.mcpNamespaces;
+        out.graphNodeTypes += one.graphNodeTypes;
         out.ownsGraphDefinition = out.ownsGraphDefinition || one.ownsGraphDefinition;
     }
     return out;
@@ -410,45 +401,6 @@ std::string PluginManager::hooksJson() {
         }
     }
     return arr.dump();
-}
-
-std::vector<PluginMount::HookHandlerView>
-    PluginManager::handlersOf(AgentxxPluginHookPoint point) const {
-    std::vector<PluginMount::HookHandlerView> out;
-    for (const auto& mount : mounts_) {
-        if (!mount) {
-            continue;
-        }
-        const auto one = mount->handlersOf(point);
-        out.insert(out.end(), one.begin(), one.end());
-    }
-    return out;
-}
-
-int64_t PluginManager::addCoreHookHandler(
-    AgentxxPluginHookPoint point,
-    int32_t                priority,
-    std::string            module,
-    AgentxxPluginHookSpec  spec
-) {
-    auto* mount = soleMount();
-    if (mount == nullptr) {
-        XX_LOGW(
-            "addCoreHookHandler: 需要恰好一份挂载 (当前 {} 份), 本次登记被忽略",
-            mounts_.size()
-        );
-        return 0;
-    }
-    return mount->addCoreHookHandler(point, priority, std::move(module), spec);
-}
-
-bool PluginManager::removeCoreHookHandler(int64_t handle) {
-    for (const auto& mount : mounts_) {
-        if (mount && mount->removeCoreHookHandler(handle)) {
-            return true;
-        }
-    }
-    return false;
 }
 
 void PluginManager::onTurnBegin() {
@@ -612,8 +564,8 @@ void PluginManager::detachDomainRegistrations(PluginInstance* inst) {
     }
 }
 
-/// 摘除实例专属资源的所有权: 各挂载资源应用器上的启用标记 (钩子派发器属于具体
-/// 挂载, 处理器由 [PluginMount::detachInstance] 从该挂载的注册表摘除)
+/// 摘除实例专属资源的所有权: 各挂载资源应用器上的启用标记与广播订阅 (派发器属于具体
+/// 挂载且与插件无关, 由 [PluginMount::detachHookDispatch] 在拆挂载时摘除)
 void PluginManager::detachDomainOwnedResources(PluginInstance* inst) {
     if (!inst) {
         return;
@@ -734,7 +686,7 @@ void toLoadOptions(
 ///
 /// 在加载入口收尾时调用: 写回 [PluginInstance::loadMs] 并把"加载完成后到底注册了
 /// 什么"打到日志 —— 此时还没有任何挂载, 因此只可能有事件订阅/能力这类进程级登记;
-/// agent 级注册 (工具/钩子/图/资源) 在插件 `mount` 回调里才发生。
+/// agent 级注册 (工具/图/资源/事件订阅) 在插件 `mount` 回调里才发生。
 void notePluginLoaded(
     const std::shared_ptr<PluginInstance>& inst,
     std::chrono::steady_clock::time_point  begin
@@ -1044,11 +996,6 @@ void mergeMountView(
         if (std::find(view.tools.begin(), view.tools.end(), name) == view.tools.end()) {
             view.tools.push_back(name);
         }
-    }
-    const auto handlers = mount.hookHandlersOf(inst);
-    view.hookCount += handlers.size();
-    for (const auto& handler : handlers) {
-        view.hookPriorities.push_back(handler.priority);
     }
     view.graphNodeCount += entry->graphNodes.size();
     view.permissionToolCount += entry->permissionTools.size();

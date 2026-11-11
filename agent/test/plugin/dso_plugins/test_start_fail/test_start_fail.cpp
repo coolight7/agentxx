@@ -5,14 +5,14 @@
 ///   2. 注册图节点类型      `dso_rollback_type`
 ///   3. 订阅事件            `plugin.test_start_fail_plugin.watch`
 ///   4. prompt 贡献         `appendSystemPrompts.dso_rollback`
-///   5. 注册 hook           点 `AGENTXX_PLUGIN_HOOK_MODEL_START`
+///   5. 订阅通知型扩展点频道 `agentxx.agent.point.model.start`
 ///   6. 注册能力            `dso.rollback.cap`
 ///   7. 注册资源            skill 目录 `/tmp/agentxx_dso_rollback_skills`
 ///   8. 发布 `{"step":"all","ok":true}` 到 `plugin.test_start_fail_plugin.probe`，然后返回 NULL + error
 ///
 /// 若任一步骤失败，则发布 `{"step":"<name>","ok":false}` 并返回该失败。
 /// 测试据此验证：
-/// - start 失败必须回滚全部已生效注册（工具/图/订阅/prompt/hook/能力/资源）；
+/// - start 失败必须回滚全部已生效注册（工具/图/订阅/prompt/扩展点订阅/能力/资源）；
 /// - 回滚后再次加载同一 DSO 仍能重新注册同名条目（第一次的注册没有残留）。
 ///
 /// 仅使用纯 C ABI 头；不依赖 libagentxx。
@@ -121,14 +121,6 @@ void* PLUGINXX_CALL
 
 void PLUGINXX_CALL onProbeEvent(const PluginxxStringView*, void*) {
     // 回滚用例只需要"订阅存在/被撤销"这一事实；handler 本身不做任何事。
-}
-
-void* PLUGINXX_CALL
-    probeHookStart(void*, int32_t, const PluginxxStringView*, const PluginxxOperatorNotify* notify, PluginxxString*) {
-    if (notify && notify->done) {
-        notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-    }
-    return nullptr;
 }
 
 void* PLUGINXX_CALL
@@ -274,22 +266,18 @@ static void* probeMount(
         return nullptr;
     }
 
-    // 5. hook 注册 (中间件句柄入栈)
-    const auto* hooks = static_cast<const AgentxxPluginHooksIface*>(
-        queryIface(host, AGENTXX_PLUGIN_IFACE_AGENT_HOOKS)
-    );
-    if (!hooks || !hooks->register_hook) {
-        setError(host, error_out, failStep(host, "hooks_iface"));
-        return nullptr;
-    }
-    AgentxxPluginHookSpecEx hookSpec{};
-    hookSpec.struct_size = sizeof(AgentxxPluginHookSpecEx);
-    hookSpec.point       = AGENTXX_PLUGIN_HOOK_MODEL_START;
-    hookSpec.hook_start  = &probeHookStart;
-    hookSpec.user_data   = ctx;
-    int64_t hookHandle   = 0;
-    if (hooks->register_hook(host, &ref, &hookSpec, &hookHandle) != 0) {
-        setError(host, error_out, failStep(host, "hook"));
+    // 5. 订阅通知型扩展点 (频道由主程序声明, 这里只订阅; 回滚时随实例整批撤销)
+    const auto pointTopic = sv("agentxx.agent.point.model.start");
+    if (!broadcasts->subscribe_broadcast(
+            host,
+            &ref,
+            &pointTopic,
+            &onProbeEvent,
+            ctx,
+            nullptr,
+            nullptr
+        )) {
+        setError(host, error_out, failStep(host, "point_subscribe"));
         return nullptr;
     }
 

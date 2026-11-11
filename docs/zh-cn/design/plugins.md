@@ -27,9 +27,9 @@ Agentxx 插件系统采用 **纯 C ABI + COM 风格接口表查询**：
   核心 vtable (冻结) ── alloc / free / query_interface (IID → 接口表)
                        │
          ┌─────────────┼─────────────┬──────────────┬─────────────┐
-         │ tools       │ hooks       │ broadcasts   │ scheduler   │  ...21 张 agent + 9 张 client
-         │ register/   │ 7 钩子点     │ publish/     │ sleep/      │  capabilities/
-         │ call_tool   │             │ subscribe    │ offload     │  session/plugins/
+         │ tools       │ session     │ broadcasts   │ scheduler   │  ...20 张 agent + 9 张 client
+         │ register/   │ 会话上下文  │ publish/     │ sleep/      │  capabilities/
+         │ call_tool   │ 与取消      │ subscribe    │ offload     │  plugins/
          └─────────────┘             └──────────────┘             │  config/model/cancel/...
 插件动态库 (任意编译器) ── PLUGINXX_EXPORT 入口 ── PluginBase 上下文堆 ── SDK 注册族
 ```
@@ -56,7 +56,7 @@ Agentxx 插件系统采用 **纯 C ABI + COM 风格接口表查询**：
 同一插件动态库在单进程内可能被多个独立 Agent 主程序分别加载并创建多个并存实例 (如 FFI 多句柄、AgentHost 子代理)：
 
 1. **禁止可变全局/函数级 static**：所有可变状态必须封装在随实例创建的上下文堆对象 (`*plugin_ctx`，通常继承 `kit::PluginBase`)
-2. **状态经上下文闭包恢复**：所有工具/钩子/事件回调必须通过 `spec.user_data` 恢复当前实例上下文
+2. **状态经上下文闭包恢复**：所有工具/扩展点/事件回调必须通过 `spec.user_data` 恢复当前实例上下文
 3. **接口表缓存存入实例上下文**：`AgentIfaces` 查询结果存实例成员，各实例互不干扰；offload线程池异步接口 (`plugin_kit.h`) 适配器为调用方内嵌存储，随实例销毁释放
 
 **唯一例外：进程级单调计数器**。用于生成进程内唯一名称/序号（如
@@ -153,7 +153,7 @@ auto b64 = utilxx_base::base64Encode(data);
   - 纯虚: `selfRef()` (管理器自引用, 因插件框架不能自己继承 `enable_shared_from_this`,
       否则与主程序管理器的同名基类形成多基类歧义)、`createInstance(name)` (生成业务实例)、
       `hostVtable()` (交给自己插件的 vtable);
-  - 可选覆写: `detachDomainRegistrations` (摘除业务注册: 工具/权限/钩子/图/提示词 或
+  - 可选覆写: `detachDomainRegistrations` (摘除业务注册: 工具/权限/图/提示词 或
       client 侧 UI 注册表)、`clearDomainRegistrations`、`detachDomainOwnedResources`、
       `applyDeclaredResources`、`releaseInstanceResources`、`onInstanceEnabledChanged`、
       `onInstanceLoaded`/`onInstanceUnloaded`、`cascadeUnloadEnabledOnly`、`logTag`。
@@ -166,10 +166,10 @@ auto b64 = utilxx_base::base64Encode(data);
   > `pluginxx::PluginInstanceBase`, agent/client 两侧实例只需给出本端符号名
   > (`pluginDestroySymbol()`)。
 
-- 业务表 (tools/permission/hooks/session/model/prompt/resources/graph 与 client 侧全部表)
+- 业务表 (tools/permission/session/model/prompt/resources/graph 与 client 侧全部表)
   由主程序定义与实现，见 `agentxx/plugin/api/plugin_api.h` / `client_plugin_api.h`
 - **SDK 分层**: 通用部分 (`pluginxx/kit/kit.h` / `guard.h`) 在 `cxx_pluginxx`，业务 helper
-  (工具注册 `tool`/`fast_tool`/`blocking_tool`/`polled_tool`、`ToolSchemaBuilder`、`hook`、
+  (工具注册 `tool`/`fast_tool`/`blocking_tool`/`polled_tool`、`ToolSchemaBuilder`、`providePoint`、
   图节点、工具权限声明、`call_tool_blocking`、client 侧渲染与 `ClientPluginBase`) 在
   `agentxx/plugin/api/plugin_kit.h` / `plugin_guard.h`；后者是 **umbrella** 头 (包含
   pluginxx 头 + 业务部分)，并把通用名以逐条 `using` 引入 `agentxx::plugin` —— 因此
@@ -226,7 +226,7 @@ auto b64 = utilxx_base::base64Encode(data);
 | 部分 | 位置 | 内容 |
 |---|---|---|
 | 通用 (与主程序业务无关) | `pluginxx/kit/kit.h`、`pluginxx/kit/guard.h` | `PluginStringView`/`PluginString`、通用接口表查询与聚合 `PluginIfaceCore`、`Logger`、`Task<T>` 与锚定原语 (`sleep`/`yield`/`offload`/`invoke_cap`)、`CancelRegistry`/`OpCtl`/`ArgReader`、后台任务 `spawn`、能力注册 `capability`、实例上下文基类 `PluginBaseT<IfacesT>`、通用导出宏、边界异常守卫 |
-| agentxx 业务 | `agentxx/plugin/api/plugin_kit.h`、`plugin_guard.h` | 接口表聚合 `AgentIfaces`/`ClientIfaces`、工具注册族 (`tool`/`fast_tool`/`blocking_tool`/`polled_tool`)、`ToolSchemaBuilder`、`hook`、图节点、工具权限声明、`call_tool`/`call_tool_blocking`、client 侧渲染与 `ClientPluginBase` |
+| agentxx 业务 | `agentxx/plugin/api/plugin_kit.h`、`plugin_guard.h` | 接口表聚合 `AgentIfaces`/`ClientIfaces`、工具注册族 (`tool`/`fast_tool`/`blocking_tool`/`polled_tool`)、`ToolSchemaBuilder`、`providePoint`、图节点、工具权限声明、`call_tool`/`call_tool_blocking`、client 侧渲染与 `ClientPluginBase` |
 
 `agentxx::plugin::PluginBase` 即 `pluginxx::PluginBaseT<AgentIfaces>` 的 agentxx 派生类
 (补业务 helper 并在 `onHostReady()` 中挂钩会话轮次开始事件)。插件源码继续写
@@ -331,10 +331,17 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
             }
         });
 
-        // 6. 钩子 (7 个钩子点: agent_start/end, model_start/run/end, tool_start/end)
-        hook(ctx, AGENTXX_PLUGIN_HOOK_MODEL_START, [](MyPluginCtx& c, std::string_view in) {
-            // ...
-        });
+        // 6. 通知型扩展点 (7 个点: turn_start/end, model_start/run/end, tool_start/end)
+        //    只想知道“发生了”就订阅同名频道; 需要给出结果就 providePoint 登记实现行
+        subscribePluginBroadcast(
+            ctx,
+            ref,
+            points::ModelStart,
+            [](MyPluginCtx& c, std::string_view in) {
+                // ...
+            },
+            &ctx
+        );
 
         // 7. 能力 (跨插件通用 RPC 通道)
         capability(ctx, "my.cap", [](MyPluginCtx& c, const PluginxxHost* caller,
@@ -372,11 +379,11 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
    - 支持 `registerCallback(key, cb)` 注册基于会话标识的取消回调，支持 RAII `ScopedRegistration` 守卫，提供排他互斥与防悬挂锁保护，避免回调访问已析构的局部资源
    - 适用于长时间运行的外部进程或底层阻塞 IO（如 `agentxx_execute_command`），一旦主程序发起取消即可毫秒级即时终止子进程组，无需等待轮询间隔
 5. **统一异步操作模型 (操作 start/cancel)**：
-   - 工具/钩子/能力均为 `start` (IO 线程非阻塞启动) + `cancel` (协作式) 操作，终结经 `PluginxxOperatorNotify.done(status,payload)` 恰好一次上报
+   - 工具/能力均为 `start` (IO 线程非阻塞启动) + `cancel` (协作式) 操作，终结经 `PluginxxOperatorNotify.done(status,payload)` 恰好一次上报
    - `Task` 协程帧先销毁后 `done` 上报，支持 `offload` 阻塞池委托与 `call_tool`/`invoke_cap` 锚定互调
    - `polled_tool`（受控轮询）与 `blocking_tool`/`fast_tool` 并列：业务体是 `asio::awaitable`，
      等待插件本地 reactor 上的 I/O 就绪通知，由桥按声明式受控轮询推进（§16.5）
-   - hook / capability 的 SDK helper 按**返回类型严格分发**：返回 `void`/字符串的同步业务在
+   - capability (含扩展点实现行) 的 SDK helper 按**返回类型严格分发**：返回字符串的同步业务在
      调用内完成；返回 `Task<T>` 的异步业务由统一 root adapter 收尾（provider 句柄可取消，
      完成通知在协程真正结束后发出，输入视图由拥有型 `Request` 保证跨挂起点有效）
    - `graph_node` 使用同一 root adapter 注册自定义图节点类型：快同步节点返回节点输出
@@ -405,7 +412,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 ## 7. 插件分类与编译模式
 
 1. **按功能划分**：
-   - **Agent 插件**：扩展会话执行流 (Tool / Hook / Event / Capability / Resources)
+   - **Agent 插件**：扩展会话执行流 (Tool / Broadcast / Event / Capability / Resources)
    - **Client 插件**：扩展 TUI/CLI 界面 (StatusItem / Panel / InfoSection / Command / ToolDecor)
    - **双端插件**：同时导出 Agent 与 Client 入口，一份动态库同时服务两端；跨端通信统一走 Wire (`PluginData` agent→client / `PluginDataUp` client→agent)
 
@@ -417,7 +424,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 
 ## 8. Agent 侧接口表一览
 
-> 共 21 张 agent 侧接口表: 11 张业务表 (`agentxx.agent.*`) + 10 张通用表
+> 共 20 张 agent 侧接口表: 10 张业务表 (`agentxx.agent.*`) + 10 张通用表
 > (`pluginxx.*`, 由插件框架实现, 表内其余行)。**通用表的查询 IID 就是 `pluginxx.<名>`**
 > (如 `pluginxx.log`), `pluginxx.kit` 正在用这组名字查询; 下表把它们写在主程序命名空间下
 > 只是为了与业务表并列阅读 —— 按 `agentxx.agent.log` 查询不会命中。
@@ -426,7 +433,6 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 |-----|------|------|
 | `agentxx.agent.tools` | 3 | `register_tool/unregister_tool`, `call_tool_async` (插件互调, cb 保证 IO 线程 post; 取消统一用 `pluginxx.cancel.op_cancel`); v3 = 工具成败只由最终通知的状态位表达，结果文本不带 `[Error]` 前缀 |
 | `agentxx.agent.permission` | 2 | `register_tool_permission/unregister_tool_permission` (工具权限限制由工具来源方声明) + `check_paths` (批量路径权限三态查询, 不发起询问/中断; 见下方说明) |
-| `agentxx.agent.hooks` | 2 | 句柄式三成员: `register_hook(agent, spec_ex, out_handle)` (同一实例同一个点可登记**任意多个**处理器, 每个一根句柄; `priority` 小的先跑, 相同按登记顺序) + `unregister_hook(handle)` (按句柄精确撤销) + `list_hooks(agent, out)` (处理器清单 JSON) |
 | `agentxx.agent.events` | 3 | `subscribe(agent 可空, topic, handler)` / `unsubscribe` / `publish` (topic 必须是全名; 写侧只能落在 `plugin.*`, 不限定插件名; 框架不补前缀, 见 §21)。带引用 = 订阅该 agent 的总线 (会话/轮次事件, 引用只能用 `mount` 回调里下发的那份); 空引用 = 主程序总线 (主 agent 的总线在 `BaseAgent` 构造时就建好, 因此 `start` 里可直接订阅进程级事件, 如 `agentxx.agent.round.start`) |
 | `agentxx.agent.capabilities` | 2 | `register_capability(_ex)/unregister/has_capability` (进程级, 同一实例重复声明按幂等成功), `invoke_capability_async(agent 可空)/op_cancel` (引用仅用于标明是哪个 agent 发起的) |
 | `agentxx.agent.scheduler` | 1 | `is_io_thread/post_to_io/sleep/op_cancel/offload` (sleep=主程序计时器; offload=阻塞池委托, 需 cancel_token) |
@@ -1052,11 +1058,11 @@ Agentxx 客户端采用统一的分层工具特化渲染机制，TUI 核心层�
 Agentxx 仅维护单一 C++ 插件基础设施；JS 插件经内置 `agentxx_javascript_engine` JS 运行时插件加载：
 
 - **统一插件模型**：所有插件都是 C++ 插件；JS 插件表现为标准 C++ 动态库外壳 (如 `example_js`) 附带 `plugin.js`
-- **执行流程**：主程序加载 JS 插件壳 → 壳 `create` 只构造上下文 (解析自身 `plugin.js` 路径) → 壳 `start` 校验 `interpreter.js` 能力后经该能力把 `plugin.js` 交给引擎 → 引擎在专用线程中解析并执行脚本，把脚本声明的工具/钩子反向注册到主程序；脚本注册属于壳实例的 start 事务，因此壳的 start 完成必须等脚本加载结束 (异步 done)，失败由主程序回滚
+- **执行流程**：主程序加载 JS 插件壳 → 壳 `create` 只构造上下文 (解析自身 `plugin.js` 路径) → 壳 `start` 校验 `interpreter.js` 能力后经该能力把 `plugin.js` 交给引擎 → 引擎在专用线程中解析并执行脚本，把脚本声明的工具与广播订阅反向注册到主程序；脚本注册属于壳实例的 start 事务，因此壳的 start 完成必须等脚本加载结束 (异步 done)，失败由主程序回滚
 - **引擎线程属于 start 事务**：`agentxx_javascript_engine` 的 `create` 只构造，`start` 才创建 JSRuntime 与专用 JS 线程并注册 `interpreter.js` 能力，`stop` 停止线程并释放 runtime；`disable → enable` 往返即一次 `stop + start`，引擎线程与脚本上下文按事务重建 (壳插件在自身 start 中重新加载脚本)
 - **stop 不阻塞 IO 线程**：JS 线程可能在主程序 vtable 调用中等待 IO 线程，因此 `stop` 由独立收尾线程完成 `join` 与 runtime 释放，完成通知从该线程上报；JS 线程空闲时走调用线程直接收尾的快路径，使紧邻的 stop→start 顺序确定。停止后不再执行插件 JS：新任务被拒绝，队列任务按 `CANCELLED`/`FAILED` 终结，事件投递丢弃
 - **`agentxx.callTool` 始终返回 Promise**：命中本引擎工具时同线程执行并把结果/内部 Promise 链到外层 Promise；命中主程序插件工具时经 `call_tool_async` 异步互调，完成/失败/取消事件投递回 JS 线程 settle。JS 线程不会同步等待主程序，A/B 脚本互调不存在线程自锁
-- **脚本初始化是注册事务**：脚本顶层注册的工具/钩子/订阅/资源/定时器在顶层异常或脚本卸载时统一回滚（先撤销主程序注册，再释放 JSContext），不留悬垂 user_data；`hookStart` 与能力 `unload` 的完成通知在 JS 执行真正结束后发出
+- **脚本初始化是注册事务**：脚本顶层注册的工具/订阅/资源/定时器在顶层异常或脚本卸载时统一回滚（先撤销主程序注册，再释放 JSContext），不留悬垂 user_data；订阅登记与能力 `unload` 的完成通知在 JS 执行真正结束后发出
 - 可自研脚本JS 运行时插件 (Python/Lua 等) 替换或扩充脚本能力
 
 ---
@@ -1065,7 +1071,7 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 插件经内置 `agentxx_jav
 
 | 插件 | 说明 |
 |------|------|
-| `example_plugin` | 原生 C++ 综合示例 (fast_tool/Task 协程/call_tool/sleep/**协程驱动桥**/**受控轮询 polled_tool**/钩子/事件/能力/client 入口) |
+| `example_plugin` | 原生 C++ 综合示例 (fast_tool/Task 协程/call_tool/sleep/**协程驱动桥**/**受控轮询 polled_tool**/扩展点订阅/事件/能力/client 入口) |
 | `example_graph_node` | Graph 扩展示例 (自定义节点类型 + set_graph_json 改图, 需 `agentxx.agent.graph` 接口) |
 | `example_js` | JS 插件示例 (C++ 壳 + `plugin.js`) |
 | `example_resources` | 会话资源贡献示例 (声明式与编程式 MCP/Skill/规则/会话环境) |
@@ -1255,7 +1261,7 @@ MediaType 只有 image/audio/video），而是把本地路径写进输入 ——
 **人设根能用哪些工具**：由 `personas[].mount` 决定 —— `none` 只有 `chatbot_*` 工具；
 `listed` + `list: [插件名, …]` 只挂这几个（chatbot 自己会自动补进名单）；`all` 与实际加载的
 全部插件一致（与内置主会话相同）。被挂插件在根上有自己的实例与 args（`mount.args` 里按插件名
-覆盖），登记的工具/权限/钩子都只对这个根生效。权限沿用主配置的 `permission` 段；群里没人点
+覆盖），登记的工具/权限/订阅都只对这个根生效。权限沿用主配置的 `permission` 段；群里没人点
 弹窗，需要批准的操作按 `behavior.humanInLoop`（`auto-allow` / `auto-deny`）自动处理。
 
 **已知限制**：当前只实现 QQ（`accounts[].type = "qq"`）与内存假平台（`"fake"`，测试与本地
@@ -1268,7 +1274,7 @@ MediaType 只有 image/audio/video），而是把本地路径写进输入 ——
 
 > SDK 类型约束的编译期验证：`agent/script/check_sdk_negative_compile.sh` 从测试构建的
 > `compile_commands.json` 提取真实编译环境，编译 `agent/test/plugin/negative_compile/`
-> 下的片段并断言行为（`positive_control.cpp` 必须编译成功；错误签名如 hook 返回 `int`、
+> 下的片段并断言行为（`positive_control.cpp` 必须编译成功；错误签名如 capability 返回 `int`、
 > capability 返回 `int`、tool 返回普通值、跨边界传 STL 参数必须编译失败）。
 >
 > 插件框架定向探针：`AGENTXX_ENABLE_SANITIZER=ON`（默认开启，与 ASan/UBSan 同一开关）
@@ -1300,11 +1306,11 @@ Ready/Disabled → Closing → Closed
 Closing → CloseFailed → Closing (可重试)
 ```
 
-- `create`：只分配上下文、查询接口、初始化纯本地字段；不提交工具/hook/能力/事件/
+- `create`：只分配上下文、查询接口、初始化纯本地字段；不提交工具/能力/事件/
   UI/prompt/graph 注册，不启动不受托管的线程。
 - `start`：在主程序 IO 线程执行注册事务；同步 `notify.done` 返回即视为成功。
   失败时返回 `NULL + error`（视为拒绝，主程序回滚本次已生效的注册并撤销实例）。
-  回滚范围覆盖工具、hook、能力、事件订阅、资源、prompt 贡献、图类型槽位与
+  回滚范围覆盖工具、能力、事件订阅、资源、prompt 贡献、图类型槽位与
   Client UI 项/命令/订阅（回归含真实 DSO 双端：全部注册后失败 → 无残留 →
   再次加载同名注册全部成功）。
 - `stop`：实例停用或关闭时调用，用于撤销插件自管的线程/定时器/订阅；
@@ -1344,7 +1350,7 @@ Closing → CloseFailed → Closing (可重试)
 
 ### 15.4 启用/禁用事务
 
-- `disable(name)`：主程序同步摘除该实例的注册（工具/hook/能力/事件/资源/prompt 贡献/
+- `disable(name)`：主程序同步摘除该实例的注册（工具/能力/事件/资源/prompt 贡献/
   graph/UI），并把 `stop` 事务投递到所属 IO 线程；级联按直接依赖者递归处理。
 - `enable(name)`：主程序恢复启用状态后，由插件的 start 事务重新声明注册
   （start 成功前不恢复主程序侧记录）；启用顺序为"先依赖、后依赖者"，
@@ -1405,7 +1411,7 @@ Closing → CloseFailed → Closing (可重试)
 
 **注册可逆（贡献集合与重算）**：插件向主程序贡献的东西分三类，撤销方式都只有一处实现：
 
-- **叠加型**（工具 / 权限声明 / 钩子 / 图节点类型 / 事件订阅 / 能力 / 清单资源 skill·memory·mcp）：
+- **叠加型**（工具 / 权限声明 / 图节点类型 / 事件订阅（含通知型扩展点频道） / 能力 / 清单资源 skill·memory·mcp）：
   注册时按 owner 记账，禁用时"摘生效、留记录"，启用时由插件 `start` 事务重新声明，
   卸载时全部摘除（`AgentResourceApplier::removeAllOwned`）。禁用/卸载后**不会**再把
   某个旧值"还原写回" —— 摘除即不再存在，避免把别人后来的贡献覆盖掉。
@@ -1582,14 +1588,14 @@ polledRoots_ 归零
 
 | kit 组件 | 桥接语义 |
 |----------|----------|
-| `tool` / `hook` / `capability` / `graph_node`（返回 `Task<T>`） | 首步由 host driver 推进；start 内不跑插件协程 |
+| `tool` / `capability` / `graph_node`（返回 `Task<T>`） | 首步由 host driver 推进；start 内不跑插件协程 |
 | `spawn`（后台任务） | 同上（首步不在调用方栈内执行） |
 | `sleep(ctx, ms)` | 主程序计时器适配：到期回调只 post + wake |
 | `call_tool` / `invoke_cap` | 主程序回调式互调：完成回调只 post + wake |
 | `yield(ctx)` | 让出一轮：投递 continuation 后由下一次请求推进 |
 | `offload(ctx, work)` | **工作体仍在主程序工作线程池**（显式例外），只有完成后的恢复回到 driver 序列；池由主程序在创建插件管理器时注入（见下方"offload 线程池来源"） |
 | `polled_tool(ctx, name, …)` | **声明式受控轮询**：业务体是 `asio::awaitable<std::string>`，跑在桥的本地执行器上，由"有进展立即续 + 无进展 10ms 退避 + 突发上限 256 后让出 1ms"推进（见 §16.5） |
-| `fast_tool` / 同步 hook / `blocking_tool` | 不变（同步路径本就不需要驱动） |
+| `fast_tool` / 同步 `capability` / `blocking_tool` | 不变（同步路径本就不需要驱动） |
 
 `bridge().local_executor()` 暴露本地执行器，插件可用 `asio::co_spawn` 把自己的
 `asio::awaitable` 排进同一序列；这些 awaitable 需要等待"有主程序可见唤醒源"的操作
@@ -1661,7 +1667,7 @@ polled_tool(ctx, name, depict, schema,
 
 ### 16.6 内置插件迁移状态
 
-- **所有使用 kit 的插件自动接桥**：`tool`/`hook`/`capability`/`graph`/`spawn` 与
+- **所有使用 kit 的插件自动接桥**：`tool`/`capability`/`graph`/`spawn` 与
   `sleep`/`call_tool`/`invoke_cap`/`yield`/`offload` 的恢复路径都已走驱动序列，插件
   业务代码无需改动。
 - **已迁移到受控轮询（`polled_tool`）**：
@@ -1827,13 +1833,13 @@ AgentHost（进程级容器, 一份; FFI 每个句柄一份）
 └── PluginManager（插件管理器, 进程一份）
      ├── 实例表: 每个插件一条 (dlopen + create + start 各一次)
      └── 挂载表: 每个 agent 一条 PluginMount
-          ├── 记录: 本挂载上该实例注册了什么 (工具/权限/钩子/提示词/功能点/图/资源)
+          ├── 记录: 本挂载上该实例注册了什么 (工具/权限/提示词/功能点/图/资源/订阅)
           └── 该 agent 的实体: 工具注册表项 / 中间件链上的派发器 / 提示词贡献 …
 ```
 
 - **进程级 (在 `start` 里做)**: 起线程、建连接、订阅主程序总线、声明能力
   (`register_capability`)。能力是进程级的, 同一实例重复声明按幂等成功;
-- **agent 级 (在 `mount` 里做)**: 工具、工具权限、钩子、提示词贡献、功能点、
+- **agent 级 (在 `mount` 里做)**: 工具、工具权限、提示词贡献、功能点、广播订阅、
   图节点类型、图定义、声明式资源 (skill/memory/mcp)。**在 `start` 里做这些会被拒绝**
   (`AGENTXX_PLUGIN_ERR_NO_AGENT`, 无副作用);
 - 拆挂载只撤销该 agent 的实体, 插件实例与它的线程/连接留在进程里给别的 agent 用。
@@ -1927,10 +1933,10 @@ plugin:
 
 | 用例 | 覆盖 |
 |---|---|
-| `plugin_host_mount` | 一份管理器 + 多个 agent: 工具/提示词/钩子/事件按挂载分开, 重复挂载幂等, 工具名冲突, 挂载失败只回滚该 agent, 引用校验, 22 张表可查, 拆挂载与关闭收尾 |
+| `plugin_host_mount` | 一份管理器 + 多个 agent: 工具/提示词/扩展点实现行/事件按挂载分开, 重复挂载幂等, 工具名冲突, 挂载失败只回滚该 agent, 引用校验, 20 张表可查, 拆挂载与关闭收尾 |
 | `plugin_multi_mount` | 真实示例插件 `example_multi_mount`: 计数与 `config_json` 按挂载隔离、重挂归零、旧引用失效 |
 | `plugin_multi_instance` | 多实例三铁律 (两个管理器各一实例) |
-| `plugin_runtime` / `plugin_cleanup` / `plugin_hooks` / `plugin_feature` / `plugin_resources` | 挂载语义下的注册可逆与清单 |
+| `plugin_runtime` / `plugin_cleanup` / `plugin_dispatch` / `plugin_feature` / `plugin_resources` | 挂载语义下的注册可逆与清单 |
 | `agent_host` | 会话存储根独占 (冲突拒绝 / 幂等 / 释放后可复用) |
 
 
@@ -2192,7 +2198,7 @@ plugin:
 - 插件声明的频道记在本实例名下（`decl.owner = <插件 id>`），订阅同样按实例记账；
 - 插件**禁用 / 卸载**时主程序回收两样：实例的全部订阅（框架骨架）与按属主登记的频道
   （`BroadcastRegistry::removeChannelsOwnedBy`）—— 因此 `stop` 里不必自己清；
-- 启用时插件在自己的 `mount` 里重新声明（与工具/权限/钩子一致）；
+- 启用时插件在自己的 `mount` 里重新声明（与工具/权限一致）；
 - 加载快照的注册计数里 `eventSubscriptions` 是本实例当前生效的订阅条数。
 
 ### 20.3 SDK 便捷层

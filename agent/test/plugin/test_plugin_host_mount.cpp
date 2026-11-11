@@ -2,13 +2,13 @@
 ///
 /// 这一层是"加载一次是进程的事, 注册一次是 agent 的事"的正面验证:
 /// 插件实例只 `create`/`start` 一次, 每个 agent 各有一份挂载, 挂在某个 agent 上的
-/// 工具 / 提示词贡献 / 钩子 / 事件订阅互不影响, 拆挂载只影响被拆的那一个。
+/// 工具 / 提示词贡献 / 扩展点实现行 / 事件订阅互不影响, 拆挂载只影响被拆的那一个。
 ///
 /// 覆盖 (编号对应设计文档 `04-implementation.md` §3.1):
-/// 1 一主程序两 agent / 2 工具隔离 / 3 提示词只影响本 agent / 4 钩子只在本 agent 派发 /
+/// 1 一主程序两 agent / 2 工具隔离 / 3 提示词只影响本 agent / 4 扩展点实现行只对本 agent 生效 /
 /// 5 卸载一个 agent / 6 主程序关闭 / 7 挂载失败只回滚该 agent / 8 事件订阅按挂载分开 /
 /// 9 无引用的注册被拒 / 10 重复挂载幂等 / 11 工具名冲突 / 12 第三个 agent /
-/// 13 版本门槛 / 14 引用校验 (空 / 未知 id / 过期序号) / 15 23 张表与挂载表查询
+/// 13 版本门槛 / 14 引用校验 (空 / 未知 id / 过期序号) / 15 20 张表与挂载表查询
 #include "agentxx-test/plugin/test_plugin_host_mount.h"
 
 #include "agentxx/agent/context.h"
@@ -17,6 +17,7 @@
 #include "agentxx/feature/points.h"
 #include "agentxx/feature/registry.h"
 #include "agentxx/middlewares/middleware.h"
+#include "agentxx/plugin/api/agentxx_point_ids.h"
 #include "agentxx/plugin/api/plugin_iface_meta.h"
 #include "agentxx/plugin/api/plugin_kit.h"
 #include "agentxx/plugin/plugin_manager.h"
@@ -182,29 +183,21 @@ const void* queryTable(const PluginxxHost* host, const char* iid) {
     return host->vtable->query_interface(host, &view);
 }
 
-/// core 层钩子处理器的调用计数 (验证"钩子只在本 agent 派发")
-struct HookTrace {
-    int calls = 0;
-};
-
-void* PLUGINXX_CALL traceHookStart(
-    void*                         user_data,
-    int32_t,
+/// 一个扩展点实现行: 只为验证"实现行只对登记它的 agent 生效"
+void* PLUGINXX_CALL probePointImpl(
+    void*,
+    const PluginxxHost*,
     const PluginxxStringView*,
-    const PluginxxOperatorNotify*,
+    const PluginxxStringView*,
+    const PluginxxOperatorNotify* notify,
     PluginxxString*
 ) {
-    if (auto* trace = static_cast<HookTrace*>(user_data)) {
-        ++trace->calls;
+    if (notify && notify->done) {
+        const auto payload
+            = agentxx::plugin::PluginStringView::fromCstr(R"({"value":{"probe":true}})");
+        notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, &payload);
     }
     return nullptr;
-}
-
-/// 一次派发用的最小图输入
-neograph::graph::NodeInput makeNodeInput(neograph::graph::GraphState& state) {
-    static neograph::graph::RunContext runCtx;
-    runCtx.thread_id = "host_mount_session";
-    return neograph::graph::NodeInput{state, runCtx, nullptr};
 }
 
 } // namespace
@@ -310,49 +303,74 @@ asio::awaitable<TestResult> run_plugin_host_mount_tests() {
                             != std::string::npos);
     }
 
-    // ================= 4. 钩子只在本 agent 派发 =================
+    // ================= 4. 扩展点实现行只对登记它的 agent 生效 =================
     {
-        HookTrace trace;
-        AgentxxPluginHookSpec spec{};
-        spec.struct_size = sizeof(AgentxxPluginHookSpec);
-        spec.point       = AGENTXX_PLUGIN_HOOK_AGENT_START;
-        spec.hook_start  = &traceHookStart;
-        spec.user_data   = &trace;
-        const int64_t handle
-            = agentA->pluginMount->addCoreHookHandler(AGENTXX_PLUGIN_HOOK_AGENT_START, 0, "host_mount_test", spec);
-        XX_TEST_EXPECT_TRUE(handle > 0);
+        const PluginxxHost* hostView = inst->hostView();
+        const auto*         caps     = static_cast<const PluginxxCapabilitiesIface*>(
+            queryTable(hostView, PLUGINXX_IFACE_CAPABILITIES)
+        );
+        XX_TEST_EXPECT_TRUE(caps != nullptr);
+        if (caps != nullptr && caps->register_capability != nullptr
+            && caps->unregister_capability != nullptr) {
+            const auto pointId = agentxx::plugin::PluginStringView::from(
+                agentxx::plugin::points::ToolEnd.data(),
+                agentxx::plugin::points::ToolEnd.size()
+            );
+            PluginxxCapabilitySpec spec{};
+            spec.version     = PLUGINXX_API_VERSION;
+            spec.struct_size = sizeof(PluginxxCapabilitySpec);
+            spec.id          = pointId;
+            spec.impls       = PLUGINXX_CAPABILITY_IMPLS_MANY;
+            spec.merge       = PLUGINXX_CAPABILITY_MERGE_FIRST;
+            spec.phases      = PLUGINXX_CAPABILITY_PHASE_MASK_IMPL;
+            spec.phase       = PLUGINXX_CAPABILITY_PHASE_IMPL;
+            spec.sync        = 1;
+            spec.run_start   = &probePointImpl;
+            spec.user_data   = nullptr;
 
-        neograph::graph::GraphState stateA;
-        auto                        inputA = makeNodeInput(stateA);
-        co_await agentA->pluginMount->dispatchHook(AGENTXX_PLUGIN_HOOK_AGENT_START, inputA);
-        XX_TEST_EXPECT_EQ(trace.calls, 1);
+            // 只挂在 A 上
+            auto refA = scopeRefOf("agent_a", seqA);
+            PluginxxString err{nullptr, 0};
+            const int32_t  rc = caps->register_capability(hostView, &refA, &spec, &err);
+            if (err.data != nullptr) {
+                hostView->vtable->free(err.data);
+            }
+            XX_TEST_EXPECT_EQ(rc, int32_t{0});
 
-        // 同一个点在 B 上派发: B 的注册表里没有这个处理器, 计数不变
-        neograph::graph::GraphState stateB;
-        auto                        inputB = makeNodeInput(stateB);
-        co_await agentB->pluginMount->dispatchHook(AGENTXX_PLUGIN_HOOK_AGENT_START, inputB);
-        XX_TEST_EXPECT_EQ(trace.calls, 1);
+            const auto pointIdSv = agentxx::plugin::points::ToolEnd;
+            // A 上: 实现行给出结果
+            const auto valueA = co_await host->emitPoint("agent_a", pointIdSv, "{}");
+            XX_TEST_EXPECT_TRUE(valueA.has_value());
+            // B 上没有这一行: 没有结果 (实现行按挂载的作用域过滤)
+            const auto valueB = co_await host->emitPoint("agent_b", pointIdSv, "{}");
+            XX_TEST_EXPECT_FALSE(valueB.has_value());
 
-        XX_TEST_EXPECT_TRUE(agentA->pluginMount->removeCoreHookHandler(handle));
-        co_await agentA->pluginMount->dispatchHook(AGENTXX_PLUGIN_HOOK_AGENT_START, inputA);
-        XX_TEST_EXPECT_EQ(trace.calls, 1);
+            // 收尾: 注销后 A 上也拿不到结果 (证明上面拿到的结果确实来自这行)
+            XX_TEST_EXPECT_EQ(
+                caps->unregister_capability(hostView, &pointId, nullptr),
+                int32_t{0}
+            );
+            const auto valueAfter = co_await host->emitPoint("agent_a", pointIdSv, "{}");
+            XX_TEST_EXPECT_FALSE(valueAfter.has_value());
+        }
     }
 
     // ================= 8. 事件订阅按挂载分开 =================
     {
-        // example_plugin 在 mount 里订阅两个主题: 每个挂载各一份 (作用域标识区分)
+        // example_plugin 在 mount 里订阅三处: 自己的演示频道、client 下行主题,
+        // 以及通知型扩展点 `agentxx.agent.point.tool.end` —— 每个挂载各一份 (作用域标识区分)
         const size_t subA = subscriptionsOf(*inst, "agent_a");
         const size_t subB = subscriptionsOf(*inst, "agent_b");
-        XX_TEST_EXPECT_EQ(subA, size_t{2});
-        XX_TEST_EXPECT_EQ(subB, size_t{2});
+        XX_TEST_EXPECT_EQ(subA, size_t{3});
+        XX_TEST_EXPECT_EQ(subB, size_t{3});
         XX_TEST_EXPECT_TRUE(subA + subB <= inst->subscriptions.size());
 
         // 拆掉 A 的一个实例: 只有 A 那份订阅被撤销
         co_await host->unmountOneAsync(agentA->pluginMount, inst);
         XX_TEST_EXPECT_EQ(subscriptionsOf(*inst, "agent_a"), size_t{0});
-        XX_TEST_EXPECT_EQ(subscriptionsOf(*inst, "agent_b"), size_t{2});
+        XX_TEST_EXPECT_EQ(subscriptionsOf(*inst, "agent_b"), size_t{3});
         XX_TEST_EXPECT_TRUE(co_await host->mountOneAsync(agentA->pluginMount, inst));
-        XX_TEST_EXPECT_EQ(subscriptionsOf(*inst, "agent_a"), size_t{2});
+        XX_TEST_EXPECT_EQ(subscriptionsOf(*inst, "agent_a"), size_t{3});
     }
 
     // ================= 10. 重复挂载幂等 =================
@@ -500,9 +518,9 @@ asio::awaitable<TestResult> run_plugin_host_mount_tests() {
         );
     }
 
-    // ================= 15. 21 张表可查 + 挂载表内容 =================
+    // ================= 15. 20 张表可查 + 挂载表内容 =================
     {
-        XX_TEST_EXPECT_EQ(plugin::PluginManager::kInterfaceTableCount, size_t{21});
+        XX_TEST_EXPECT_EQ(plugin::PluginManager::kInterfaceTableCount, size_t{20});
         const PluginxxHost* hostView = inst->hostView();
         const char*         iids[]   = {
             PLUGINXX_IFACE_LOG,
@@ -517,7 +535,6 @@ asio::awaitable<TestResult> run_plugin_host_mount_tests() {
             PLUGINXX_IFACE_CAPABILITIES,
             AGENTXX_PLUGIN_IFACE_AGENT_TOOLS,
             AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION,
-            AGENTXX_PLUGIN_IFACE_AGENT_HOOKS,
             AGENTXX_PLUGIN_IFACE_AGENT_SESSION,
             AGENTXX_PLUGIN_IFACE_AGENT_CONTEXT,
             AGENTXX_PLUGIN_IFACE_AGENT_MODEL,

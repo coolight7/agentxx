@@ -7,8 +7,8 @@
 ///
 /// 插件管理器 ([PluginManager]) 是**进程一份**: 插件只 `dlopen`/`create`/`start` 一次,
 /// 它的线程、连接、能力声明属于整个进程。但每一样"落在 agent 上的东西" —— 工具、
-/// 工具权限、钩子处理器、提示词贡献、功能点、图节点类型/图定义、声明式资源、
-/// 事件订阅 —— 都属于某个具体的 agent: 换一个 agent 就是另一套工具表、另一条中间件
+/// 工具权限、提示词贡献、功能点、图节点类型/图定义、声明式资源、
+/// 事件订阅 (含通知型扩展点频道) —— 都属于某个具体的 agent: 换一个 agent 就是另一套工具表、另一条中间件
 /// 链、另一份提示词。
 ///
 /// 因此把这些东西收进 [PluginMount]: 一个 agent 一个挂载, 挂载记录"哪个实例在这个
@@ -29,7 +29,7 @@
 ///
 /// ## 线程
 ///
-/// 挂载的全部状态只在主程序 io 线程读写: 注册入口由 vtable 层投递, 轮次钩子与派发也在
+/// 挂载的全部状态只在主程序 io 线程读写: 注册入口由 vtable 层投递, 通知型扩展点的派发也在
 /// 这条线程。插件回调 (mount/unmount) 同样由主程序在这条线程驱动。
 #include "agentxx/agent/prompt.h"
 #include "agentxx/middlewares/middleware.h"
@@ -67,16 +67,15 @@ class PluginManager;
 class PluginTool;
 struct GraphTypeSlot;
 
-/// 主程序级钩子派发器 (agent 的中间件链上只挂一个)
+/// 通知型扩展点派发器 (agent 的中间件链上只挂一个)
 ///
-/// 挂钩子的中间件句柄从"每个插件一个"改成"每次挂载一个": 注册表 (见
-/// [PluginMount::hookHandlers_]) 按 `(层, priority, 登记序号)` 排序后由本句柄依次
-/// 执行处理器 —— 同一个点的处理器串行、都在主程序 io 线程、异常只记日志继续。
+/// 7 个通知点在 7 处调用点各发一次广播 (`agentxx.agent.point.*`): 插件订阅同名频道
+/// 即收到, 主程序不再维护处理器注册表。本句柄只是这 7 个调用点的入口 ——
+/// 每个回调把对应点发一次, 不等结果、不关心有没有订阅方。
 ///
-/// - 首次登记时插入中间件链, 没有处理器时移除 (轮次执行中先置 `disabled` 跳过,
-///   轮末由 [PluginMount::flushPendingCleanup] 摘除);
-/// - 处理器列表在派发开始时取快照: 处理器在派发过程中登记/撤销不影响本次派发
-///   (撤销后已快照的处理器仍会执行一次, 但每次执行前仍检查实例是否可用)。
+/// - 属于**挂载**而不是插件: 建挂载时挂上 ([PluginMount::ensureHookDispatch]),
+///   拆挂载时摘掉 ([PluginMount::detachHookDispatch]); 插件禁用/启用/卸载不动它;
+/// - 派发在主程序 io 线程执行 (中间件链本来就在这条线程)。
 class PluginHookDispatchHandle
     : public agentxx::middleware::BaseMiddlewareHandle<agentxx::middleware::BaseMiddlewareState> {
 public:
@@ -124,7 +123,7 @@ public:
     ///   产物与状态;
     /// - 其余是撤销记录: 注册时逐条追加, 拆挂载时按 §"撤销顺序" 逐类撤销
     ///   (事件订阅 → MCP → memory → skill → 图定义 → 图节点类型 → 提示词 →
-    ///   功能点实现 → 功能点声明 → 钩子 → 工具权限 → 工具)。
+    ///   功能点实现 → 功能点声明 → 工具权限 → 工具)。
     struct Entry {
         std::shared_ptr<PluginInstance> inst;
         /// 插件 `mount` 返回的 per-agent 状态 (卸载时原样交回)
@@ -145,14 +144,8 @@ public:
         std::vector<std::shared_ptr<PluginTool>> toolObjects;
         /// 本挂载上声明的工具权限 (按工具名)
         std::vector<std::string> permissionTools;
-        /// 本挂载登记的钩子处理器句柄
-        std::vector<int64_t> hookHandles;
         /// 本挂载占用的提示词键 (`system` / `append:<key>` / `tool:<名>`)
         std::vector<std::string> promptKeys;
-        /// 本挂载声明的功能点 id (`plugin.<自己>.*`)
-        std::vector<std::string> featurePoints;
-        /// 本挂载登记的功能点实现所在点 id
-        std::vector<std::string> featureImpls;
         /// 本挂载注册的自定义图节点类型
         struct GraphNodeRegistration {
             std::string                       type;
@@ -241,7 +234,7 @@ public:
     void releaseInstanceInstances(PluginInstance& inst);
 
     // =====================================================================
-    // 轮次状态 (钩子派发器的摘除时机)
+    // 轮次状态 (轮末清理排队中的注册)
     // =====================================================================
 
     bool hasRunningTurn() const {
@@ -258,7 +251,7 @@ public:
         }
     }
 
-    /// 轮末摘除排队中的中间件句柄 (钩子派发器)
+    /// 轮末执行排队中的清理 (轮次执行中不改中间件链上的注册)
     void flushPendingCleanup();
 
     // =====================================================================
@@ -452,67 +445,42 @@ public:
         return graphDefinitionOwner_;
     }
 
-    // =====================================================================
-    // 钩子处理器 (agentxx.agent.hooks)
-    // =====================================================================
-
-    /// 钩子清单里的一个处理器 (只读视图; 清单 JSON 与诊断共用同一份事实)
-    struct HookHandlerView {
-        int64_t     handle = 0; ///< 登记时分配的句柄
-        int32_t     point  = 0; ///< AgentxxPluginHookPoint
-        std::string layer;      ///< `plugin` / `core`
-        std::string owner;      ///< `plugin:<插件名>` / `core:<模块>`
-        std::string ownerTag;   ///< 展示归属标签 (可空)
-        std::string depict;     ///< 一句话说明 (可空)
-        std::string load;       ///< `dynamic` / `builtin` (只说明怎么加载, 不影响顺序)
-        int32_t     priority = 0;    ///< 生效优先级 (越界已裁剪到上下限)
-        uint64_t    seq      = 0;    ///< 登记序号 (同优先级时按它排)
-        bool        enabled  = true; ///< 派发时是否生效 (实例已禁用 -> false)
+    /// ==================== 通知型扩展点 (原钩子点) ====================
+    ///
+    /// 7 个通知型扩展点在 7 处调用点各发一次广播 (`agentxx.agent.point.*`,
+    /// 见 `agentxx_point_ids.h`): 插件**订阅同名频道**即可收到, 不再有"处理器注册表"、
+    /// 优先级与撤销句柄 —— 收不收、谁先谁后由广播订阅与派发顺序决定。
+    enum class HookPoint {
+        TurnStart = 0, ///< 会话轮次开始
+        TurnEnd,       ///< 会话轮次结束
+        ModelStart,    ///< 一次模型调用开始
+        ModelRun,      ///< 一次模型尝试 (重试会多次触发)
+        ModelEnd,      ///< 一次模型调用结束
+        ToolStart,     ///< 一次工具调用开始
+        ToolEnd,       ///< 一次工具调用结束
     };
 
-    /// 登记一个钩子处理器 (单一入口: 同一点可登记任意多个, 各自句柄)
-    /// - `priority` 越界裁剪到上下限并记一条警告 (不拒绝登记)
-    ///
-    /// `return`: 0 成功 (`*outHandle` 收到句柄); 非 0 失败
-    int registerHook(
-        PluginInstance*                inst,
-        const AgentxxPluginHookSpecEx* spec,
-        int64_t*                       outHandle
-    );
+    /// 通知型扩展点个数
+    static constexpr size_t kHookPointCount = 7;
 
-    /// 撤销一个处理器 (按句柄; 别人的句柄被拒绝)
-    int unregisterHook(PluginInstance* inst, int64_t handle);
+    /// 一次派发的记录 (只在开发者模式下收集)
+    struct HookPointStat {
+        uint64_t dispatches = 0; ///< 派发次数
+        uint64_t lastMs     = 0; ///< 上次派发耗时 (毫秒)
+    };
 
-    /// 登记一个 core 层处理器 (库内自用; 与功能点的 addCoreImpl 同一规则)
-    /// - `plugin` 层 (插件 / FFI 主程序) 之后才是 `core` 层, `priority` 只在层内比较
-    /// - **必须是同步处理器** (在主程序 io 线程直接调用, 不走操作协议)
-    ///
-    /// `return` 登记句柄 (> 0); 0 = 失败 (点越界 / 回调为空)
-    int64_t addCoreHookHandler(
-        AgentxxPluginHookPoint point,
-        int32_t                priority,
-        std::string            module,
-        AgentxxPluginHookSpec  spec
-    );
-
-    /// 撤销一个 core 层处理器 (按句柄)
-    bool removeCoreHookHandler(int64_t handle);
-
-    /// 钩子处理器清单 JSON
-    /// - 插件 `agentxx.agent.hooks` 的 `list_hooks`、加载快照 `hooks` 段与
-    ///   `--dump-diagnostics` 共用同一份实现
+    /// 通知型扩展点清单 JSON (加载快照的 `points` 段与 `--dump-diagnostics` 共用)
     /// - 派发记录 (`stat` 段) 只在开发者模式下出现
     std::string hooksJson();
 
-    /// 某个点上当前生效的处理器 (按派发顺序)
-    std::vector<HookHandlerView> handlersOf(AgentxxPluginHookPoint point) const;
+    /// 发一次通知型扩展点 (中间件链上唯一派发器的入口)
+    asio::awaitable<void> dispatchHook(HookPoint point, const neograph::graph::NodeInput& in);
 
-    /// 本挂载上属于这个实例的全部处理器 (清单 / 加载快照用)
-    std::vector<HookHandlerView> hookHandlersOf(const PluginInstance& inst) const;
+    /// 把派发器挂到中间件链上 (建挂载时调一次; 已经挂上就什么也不做)
+    void ensureHookDispatch();
 
-    /// 派发一个钩子点 (中间件链上唯一派发器的入口)
-    asio::awaitable<void>
-        dispatchHook(AgentxxPluginHookPoint point, const neograph::graph::NodeInput& in);
+    /// 把派发器从中间件链上摸掉 (拆挂载时调; 重复调用无害)
+    void detachHookDispatch();
 
     /// 注册清单 (本挂载上的生效计数; 0 = 已回到基线)
     ///
@@ -523,7 +491,6 @@ public:
     struct RegistrationInventory {
         size_t tools               = 0; ///< 工具注册表内的工具
         size_t permissionTools     = 0; ///< 已声明的工具权限限制
-        size_t hooks               = 0; ///< 钩子处理器 (注册表里本实例生效的条数)
         size_t graphNodeTypes      = 0; ///< 自定义图节点类型 (激活中)
         size_t eventSubscriptions  = 0; ///< 事件订阅
         size_t capabilities        = 0; ///< 能力声明
@@ -535,7 +502,7 @@ public:
 
         /// 主程序可撤销注册的总数 (不含 [graphNodeTypes] 的注册表残留)
         size_t total() const {
-            return tools + permissionTools + hooks + graphNodeTypes + eventSubscriptions
+            return tools + permissionTools + graphNodeTypes + eventSubscriptions
                    + capabilities + promptKeys + skillDirs + memoryFiles + mcpNamespaces
                    + (ownsGraphDefinition ? 1 : 0);
         }
@@ -568,63 +535,6 @@ private:
     /// agent 加载的权限中间件 (未加载返回 nullptr)
     agentxx::middleware::PermissionMiddlewareHandle* permissionMiddleware();
 
-    /// ==================== 钩子注册表 ====================
-    ///
-    /// 一个钩子点上的处理器按 `(层, priority 升序, 登记序号)` 排序执行:
-    /// - 层: `plugin` (插件 / FFI 主程序登记的) 在前, `core` (库自己登记的) 在后;
-    /// - 不声明 `priority` (= 0) 时顺序就是登记顺序 = 插件挂载顺序。
-    struct HookHandlerEntry {
-        int64_t                       handle    = 0;
-        int32_t                       point     = 0;
-        int32_t                       priority  = 0;
-        uint64_t                      seq       = 0;
-        bool                          coreLayer = false; ///< core 层 (排在 plugin 层之后)
-        std::string                   owner;             ///< `plugin:<名>` / `core:<模块>`
-        std::string                   ownerTag;
-        std::string                   depict;
-        std::string                   load; ///< `dynamic` / `builtin`
-        std::weak_ptr<PluginInstance> inst; ///< plugin 层: 所属实例
-        AgentxxPluginHookSpec         spec; ///< 执行体 (start / cancel / user_data)
-    };
-
-    /// 某点处理器的排序快照 (派发与清单都从它取数)
-    std::vector<HookHandlerEntry> orderedHandlers(AgentxxPluginHookPoint point) const;
-
-    /// 注册表里属于某实例的处理器条数
-    size_t liveHookHandlersOf(const PluginInstance& inst) const;
-
-    /// 注册表里属于某实例的全部处理器 (按点号、再按该点的派发顺序)
-    std::vector<HookHandlerView> allHookHandlersOf(const PluginInstance& inst) const;
-
-    /// 处理器视图 (清单 / 加载快照 / 测试共用)
-    HookHandlerView viewOf(const HookHandlerEntry& entry) const;
-
-    /// 插入一条处理器并挂上派发器 (登记入口的公共收尾)
-    int64_t insertHookHandler(HookHandlerEntry entry);
-
-    /// 从注册表移除一条 (按句柄)
-    bool removeHookHandler(int64_t handle, PluginInstance* ownerInst, bool checkOwner);
-
-    /// 摘除某个实例的全部处理器 (拆挂载时; 记录里的句柄置 0)
-    void detachHookHandlers(PluginInstance* inst);
-
-    /// 确保派发器挂在中间件链上 (首次登记时插入)
-    void ensureHookDispatch();
-
-    /// 没有处理器时摘除派发器 (轮次执行中先置 `disabled`, 轮末真正摘除)
-    void retireHookDispatchIfIdle();
-
-    /// 从中间件链摘除一个句柄
-    void eraseHookDispatch(PluginHookDispatchHandle* handle);
-
-    /// 一次派发的记录 (只在开发者模式下收集)
-    struct HookPointStat {
-        uint64_t    dispatches = 0; ///< 派发次数
-        uint64_t    handlers   = 0; ///< 上次派发的处理器数
-        uint64_t    lastMs     = 0; ///< 上次派发耗时 (毫秒)
-        std::string lastOrder;      ///< 上次派发的执行顺序 (`owner#handle`, ", " 分隔)
-    };
-
     /// 释放执行图定义 slot (占用者拆挂载时调用): 恢复基础定义并清空占用者
     void releaseGraphDefinitionSlot(PluginInstance* inst);
 
@@ -653,11 +563,8 @@ private:
     std::string graphDefinitionBase_;
     bool        graphDefinitionBaseCaptured_ = false;
 
-    std::vector<HookHandlerEntry>                        hookHandlers_;
-    int64_t                                              nextHookHandle_ = 1;
-    uint64_t                                             hookSeq_        = 0;
-    std::shared_ptr<PluginHookDispatchHandle>            hookDispatch_;
-    std::array<HookPointStat, AGENTXX_PLUGIN_HOOK_COUNT> hookStats_{};
+    std::shared_ptr<PluginHookDispatchHandle> hookDispatch_;
+    std::array<HookPointStat, kHookPointCount> hookStats_{};
 
     struct PendingMiddlewareCleanup {
         std::string                             name;

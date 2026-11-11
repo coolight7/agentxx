@@ -188,11 +188,10 @@ asio::awaitable<void> test_registration_inventory_baseline() {
     // 加载后: 统一注册清单的每一项都对得上 example_plugin 实际注册的内容
     const auto inv = f.mgr->registrationInventory(*inst);
     TEST_INFO << "[plugin_cleanup] example_plugin inventory: tools=" << inv.tools
-              << " hooks=" << inv.hooks << " events=" << inv.eventSubscriptions
+              << " events=" << inv.eventSubscriptions << " caps=" << inv.capabilities
               << " caps=" << inv.capabilities << " promptKeys=" << inv.promptKeys
               << " total=" << inv.total() << std::endl;
     XX_TEST_EXPECT_GE(inv.tools, size_t{5}); // echo / caller / sleep / bridge / polled_timer
-    XX_TEST_EXPECT_EQ(inv.hooks, size_t{1});
     XX_TEST_EXPECT_GE(inv.eventSubscriptions, size_t{2});
     XX_TEST_EXPECT_EQ(inv.capabilities, size_t{1});
     XX_TEST_EXPECT_EQ(inv.permissionTools, size_t{0});
@@ -230,7 +229,6 @@ asio::awaitable<void> test_registration_inventory_baseline() {
     {
         const auto disabled = f.mgr->registrationInventory(*inst);
         XX_TEST_EXPECT_EQ(disabled.tools, size_t{0});
-        XX_TEST_EXPECT_EQ(disabled.hooks, size_t{0});
         XX_TEST_EXPECT_EQ(disabled.eventSubscriptions, size_t{0});
         XX_TEST_EXPECT_EQ(disabled.capabilities, size_t{0});
         XX_TEST_EXPECT_EQ(disabled.promptKeys, size_t{0});
@@ -249,12 +247,11 @@ asio::awaitable<void> test_registration_inventory_baseline() {
     }
     XX_TEST_EXPECT_TRUE(enabledAgain);
     {
-        // 重新启用后按"插件 start 到底声明了什么"计数: 工具/hook/能力由 start 重新声明
+        // 重新启用后按"插件 start 到底声明了什么"计数: 工具/能力由 start 重新声明
         // 因而与加载时一致; 事件订阅与提示词贡献是**条件性**的 (插件只补缺失项,
         // 主程序也可能自己增减订阅), 因此只断言"至少恢复", 不断言与加载时完全相等。
         const auto enabled = f.mgr->registrationInventory(*inst);
         XX_TEST_EXPECT_GE(enabled.tools, inv.tools);
-        XX_TEST_EXPECT_EQ(enabled.hooks, inv.hooks);
         XX_TEST_EXPECT_GE(enabled.eventSubscriptions, size_t{2});
         XX_TEST_EXPECT_GE(enabled.capabilities, inv.capabilities);
         XX_TEST_EXPECT_GE(enabled.total(), size_t{9});

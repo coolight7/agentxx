@@ -8,7 +8,7 @@
 ///   `agentxx::plugin::Xxx` 与拆分前完全一致;
 /// - **本头只提供 agent 业务 helper**: 接口表聚合 (AgentIfaces / ClientIfaces)、
 ///   工具模式构建 (ToolSchemaBuilder)、工具注册 (tool / fast_tool / blocking_tool /
-///   polled_tool)、钩子 (hook)、图节点 (graph node)、工具权限声明、阻塞便捷调用
+///   polled_tool)、图节点 (graph node)、工具权限声明、阻塞便捷调用
 ///   (call_tool_blocking)、client 侧特化渲染与实例上下文 (ClientPluginBase)、
 ///   界面组件加载 (描述层 `pluginxx::ui` 与扩展 kit `agentxx::ui::kit`)。
 #pragma once
@@ -301,8 +301,6 @@ using agentxx::util::ToolStatus;
 struct AgentIfaces {
     const AgentxxPluginToolsIface*      tools      = nullptr; ///< "agentxx.agent.tools"
     const AgentxxPluginPermissionIface* permission = nullptr; ///< "agentxx.agent.permission"
-    /// "agentxx.agent.hooks": 钩子登记 (基础两项 + 有序登记与清单三项, 同一张表)
-    const AgentxxPluginHooksIface*   hooks        = nullptr;
     const PluginxxCapabilitiesIface* capabilities = nullptr; ///< "pluginxx.capabilities"
     const PluginxxSchedulerIface*    scheduler    = nullptr; ///< "pluginxx.scheduler"
     /// "agentxx.agent.session": 会话共享存储 / 提示 / 工作目录 / 取消查询
@@ -326,7 +324,7 @@ struct AgentIfaces {
     /// "agentxx.agent.runtime": 会话运行时 (挂自己的根 / 开会话通道 / 事件驱动)
     const AgentxxPluginRuntimeIface* runtime = nullptr;
     /// "<应用名>.broadcasts": 广播 (频道声明 / 发布 / 订阅 / 读当前值 / 结束)
-    /// - 插件的通知面走它 (钩子、事件、跨端数据都可用)
+    /// - 插件的通知面走它 (通知型扩展点、事件、跨端数据都可用)
     const PluginxxBroadcastsIface* broadcasts = nullptr;
     /// "<应用名>.net": 网络 (HTTP / TCP / WS / UDP; 插件不直接建连接)
     const PluginxxNetIface* net = nullptr;
@@ -346,7 +344,6 @@ struct AgentIfaces {
             host,
             AGENTXX_PLUGIN_IFACE_AGENT_PERMISSION
         );
-        f.hooks  = queryInterface<AgentxxPluginHooksIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_HOOKS);
         f.broadcasts
             = queryInterface<PluginxxBroadcastsIface>(host, PLUGINXX_IFACE_BROADCASTS);
         f.net = queryInterface<PluginxxNetIface>(host, PLUGINXX_IFACE_NET);
@@ -2430,14 +2427,6 @@ inline RootRequest toolRootRequest(
     return req;
 }
 
-/// 钩子操作的根请求 (载荷 JSON)
-inline RootRequest hookRootRequest(const PluginxxHost* host, const PluginxxStringView* inputJson) {
-    RootRequest req;
-    req.host     = host;
-    req.argsJson = RootRequest::copyView(inputJson, "{}");
-    return req;
-}
-
 /// 图节点操作的根请求 (节点名 / config / 只读 state 快照 / 作用域键)
 inline RootRequest graphNodeRootRequest(
     const PluginxxHost*       host,
@@ -2714,7 +2703,7 @@ inline int32_t providePoint(
     );
 }
 
-/// ==================== (kit::tool / fast_tool / blocking_tool / hook / capability)
+/// ==================== (kit::tool / fast_tool / blocking_tool / point / capability)
 /// ====================
 
 namespace detail {
@@ -3590,250 +3579,6 @@ inline void polled_tool(
     }
 }
 
-/* ==================== 钩子业务签名分发 (同步/异步共用) ==================== */
-
-namespace detail {
-
-/// 按可调用性选择钩子业务签名：fn(ctx, point, input) / fn(ctx, input) / fn(input)。
-/// 返回类型原样转发：同步钩子通常是 void，异步钩子返回 Task<T>（按返回类型
-/// 严格区分同步与异步，签名不匹配时在 if constexpr 分支给出明确错误）。
-template<typename HookFn, typename Ctx>
-inline decltype(auto) invokeHook(HookFn& fn, Ctx& ctx, int32_t pt, std::string_view input) {
-    if constexpr (std::is_invocable_v<HookFn, Ctx&, AgentxxPluginHookPoint, std::string_view>) {
-        return fn(ctx, static_cast<AgentxxPluginHookPoint>(pt), input);
-    } else if constexpr (std::is_invocable_v<HookFn, Ctx&, std::string_view>) {
-        return fn(ctx, input);
-    } else {
-        return fn(input);
-    }
-}
-
-} // namespace detail
-
-/* ==================== 钩子处理器登记 (基础 / 有序) ==================== */
-
-namespace detail {
-
-/// 钩子执行体 (基础登记与有序登记共用)
-///
-/// 登记入口只差"交给哪张接口表", 执行体完全一致, 所以放在这里:
-/// - [hook] 用 [AgentxxPluginHookSpec] (一个实例一个点一个处理器, 覆盖式);
-/// - [hookEx] 用 [AgentxxPluginHookSpecEx] (一个点可以登记多个, 各自句柄)。
-template<typename Ctx, typename HookFn>
-struct HookShim {
-    Ctx*                 ctx = nullptr;
-    std::decay_t<HookFn> fn;
-};
-
-/// 异步钩子的 provider 句柄: 拥有输入 Request, 由 promise.opCleanup_ 回收
-template<typename Ctx, typename HookFn>
-struct HookJob {
-    HookShim<Ctx, HookFn>*             shim = nullptr;
-    std::shared_ptr<std::atomic<bool>> cancelFlag;
-    void*                              coroAddr = nullptr;
-    RootRequest                        request;
-};
-
-/// 提供给主程序的执行体 (与 AgentxxPluginHookSpec/Ex::hook_start 同签名)
-template<typename Ctx, typename HookFn>
-inline void* hookStart(
-    void*                         user_data,
-    int32_t                       pt,
-    const PluginxxStringView*     node_input_json,
-    const PluginxxOperatorNotify* notify,
-    PluginxxString*               error_out
-) {
-    using ShimT = HookShim<Ctx, HookFn>;
-    using JobT  = HookJob<Ctx, HookFn>;
-
-    auto* shim = static_cast<ShimT*>(user_data);
-    (void)error_out;
-    if (!shim || !shim->ctx) {
-        CompletionGuard guard(notify);
-        guard.failed("hook context released");
-        return nullptr;
-    }
-
-    /// 输入纳入拥有型 Request：同步钩子在调用期间有效，异步 Task 由 Job 持有到
-    /// 协程真正结束。
-    auto request = hookRootRequest(shim->ctx->host, node_input_json);
-
-    using HookRet = decltype(invokeHook(shim->fn, *shim->ctx, pt, std::string_view{}));
-    if constexpr (std::is_void_v<HookRet>) {
-        /// 同步 void 钩子：调用返回即完成；异常统一映射为终态。
-        CompletionGuard guard(notify);
-        try {
-            invokeHook(shim->fn, *shim->ctx, pt, request.args());
-            guard.ok();
-        } catch (...) {
-            guard.fromCurrentException();
-        }
-        return nullptr;
-    } else {
-        /// Task<T> 钩子（通常 Task<void>）：由 promise 在协程结束后完成
-        /// 通知，返回 Job 作为主程序可取消的 provider 句柄。
-        auto* job = new JobT{
-            shim,
-            std::make_shared<std::atomic<bool>>(false),
-            nullptr,
-            std::move(request)
-        };
-        auto task = invokeHook(shim->fn, *shim->ctx, pt, job->request.args());
-        if (!task.handle_) {
-            delete job;
-            CompletionGuard guard(notify);
-            guard.failed("hook returned an empty task");
-            return nullptr;
-        }
-        auto h        = task.handle_;
-        task.handle_  = nullptr;
-        auto& p       = h.promise();
-        p.notify_     = notify ? *notify : PluginxxOperatorNotify{nullptr, nullptr};
-        p.host_       = job->request.host;
-        p.cancelFlag_ = job->cancelFlag;
-        job->coroAddr = h.address();
-
-        // 根的首步由 host driver 推进 (不在 start 里同步跑插件协程,
-        // 因此没有 completion 重入, 也不占住主程序 IO 线程)。
-        startBridgedRoot(shim->ctx->bridge(), p.notify_, h, [job] {
-            delete job;
-        });
-        return job;
-    }
-}
-
-/// 提供给主程序的取消回调 (与 AgentxxPluginHookSpec/Ex::hook_cancel 同签名)
-template<typename Ctx, typename HookFn>
-inline void hookCancel(void* user_data, void* op) {
-    (void)user_data;
-    if (!op) {
-        return;
-    }
-    auto* job = static_cast<HookJob<Ctx, HookFn>*>(op);
-    if (job->cancelFlag) {
-        job->cancelFlag->store(true, std::memory_order_release);
-    }
-    if (job->coroAddr) {
-        auto handle = std::coroutine_handle<PromiseBase<void>>::from_address(job->coroAddr);
-        handle.promise().cancel_outstanding();
-    }
-}
-
-} // namespace detail
-
-template<typename Ctx, typename HookFn>
-inline void hook(Ctx& ctx, const ScopeRef& agent, AgentxxPluginHookPoint point, HookFn&& fn) {
-    using ShimT = detail::HookShim<Ctx, HookFn>;
-
-    auto shim = ctx.storeShim(std::make_unique<ShimT>(ShimT{&ctx, std::forward<HookFn>(fn)}));
-
-    AgentxxPluginHookSpecEx spec{};
-    spec.struct_size = sizeof(AgentxxPluginHookSpecEx);
-    spec.point       = point;
-    spec.priority    = 0;
-    spec.flags       = 0;
-    spec.user_data   = shim;
-    spec.hook_start  = &detail::hookStart<Ctx, HookFn>;
-    spec.hook_cancel = &detail::hookCancel<Ctx, HookFn>;
-
-    if (ctx.iface.hooks && ctx.iface.hooks->register_hook) {
-        auto    ref    = agent.raw();
-        int64_t handle = 0;
-        ctx.iface.hooks->register_hook(ctx.host, &ref, &spec, &handle);
-    }
-}
-
-/// 钩子登记选项 (有序登记; 见 `agentxx.agent.hooks` 接口表)
-struct HookOptions {
-    /// 层内顺序, 小者先 (插件默认 0 = 按登记顺序 = 插件加载顺序)
-    /// - 越界由主程序裁剪到上下限并记一条警告 (不拒绝登记)
-    int32_t priority = 0;
-    /// 展示归属标签 (处理器清单里显示; 可空)
-    std::string ownerTag;
-    /// 一句话说明 (处理器清单里显示; 可空)
-    std::string depict;
-};
-
-/// 登记一个钩子处理器 (有序登记: 同一个点可以登记任意多个, 每个一根句柄)
-///
-/// 与 [hook] 的区别:
-/// - 不覆盖: 同一实例同一个点可以登记多个处理器, 各自句柄;
-/// - 可排顺序: `priority` 小的先跑, 相同则按登记顺序;
-/// - 可写清单信息: `ownerTag` / `depict` 出现在主程序清单 (`listHooks`) 里。
-///
-/// `return`: 句柄 (> 0); **0 = 主程序不支持或登记被拒**。
-///
-/// 撤销: [unhookEx] 按句柄精确撤销; 不撤销也会随实例卸载一并摘除。
-template<typename Ctx, typename HookFn>
-inline int64_t hookEx(
-    Ctx&                  ctx,
-    const ScopeRef&       agent,
-    AgentxxPluginHookPoint point,
-    HookFn&&              fn,
-    const HookOptions&    opts = {}
-) {
-    if (!ctx.iface.hooks || !ctx.iface.hooks->register_hook) {
-        return 0; // 主程序不支持钩子登记
-    }
-    using ShimT = detail::HookShim<Ctx, HookFn>;
-
-    auto shim = ctx.storeShim(std::make_unique<ShimT>(ShimT{&ctx, std::forward<HookFn>(fn)}));
-
-    AgentxxPluginHookSpecEx spec{};
-    spec.struct_size = sizeof(AgentxxPluginHookSpecEx);
-    spec.point       = point;
-    spec.priority    = opts.priority;
-    spec.flags       = 0;
-    spec.owner_tag   = PluginStringView::from(opts.ownerTag.data(), opts.ownerTag.size());
-    spec.depict      = PluginStringView::from(opts.depict.data(), opts.depict.size());
-    spec.user_data   = shim;
-    spec.hook_start  = &detail::hookStart<Ctx, HookFn>;
-    spec.hook_cancel = &detail::hookCancel<Ctx, HookFn>;
-
-    auto    ref    = agent.raw();
-    int64_t handle = 0;
-    if (ctx.iface.hooks->register_hook(ctx.host, &ref, &spec, &handle) != 0) {
-        return 0;
-    }
-    return handle;
-}
-
-/// 撤销一个钩子处理器 (按句柄; 不是本挂载的句柄会被主程序拒绝)
-///
-/// `return`: 0 成功; 非 0 失败 (主程序不支持 / 句柄不存在)
-template<typename Ctx>
-inline int32_t unhook(Ctx& ctx, int64_t handle) {
-    if (!ctx.iface.hooks || !ctx.iface.hooks->unregister_hook || handle <= 0) {
-        return -1;
-    }
-    return ctx.iface.hooks->unregister_hook(ctx.host, handle);
-}
-
-/// 处理器清单 JSON (主程序侧 `agentxx.agent.hooks` 的 `list_hooks`)
-///
-/// 用于回答"这个点上有哪些处理器、谁的、什么顺序": 派发记录 (`stat` 段) 只在
-/// 主程序开发者模式下出现。主程序不支持 / 未加载时返回 `{}`。
-/// - `agent` 为空 = 全部挂载的合并视图 (诊断用)
-template<typename Ctx>
-inline std::string listHooks(const Ctx& ctx, const ScopeRef* agent = nullptr) {
-    if (!ctx.iface.hooks || !ctx.iface.hooks->list_hooks) {
-        return "{}";
-    }
-    PluginxxString text{nullptr, 0};
-    PluginxxScopeRef refData{};
-    const PluginxxScopeRef* refPtr = nullptr;
-    if (agent && !agent->empty()) {
-        refData = agent->raw();
-        refPtr  = &refData;
-    }
-    if (ctx.iface.hooks->list_hooks(ctx.host, refPtr, &text) != 0 || text.data == nullptr) {
-        return "{}";
-    }
-    std::string out(text.data, static_cast<size_t>(text.size));
-    PluginString::free(ctx.host, &text);
-    return out;
-}
-
 namespace detail {
 
 /// 按可调用性选择图节点业务签名：fn(ctx, request, ctl) / fn(ctx, request)。
@@ -3867,7 +3612,7 @@ inline std::string_view nodeStateOf(const RootRequest& req) noexcept {
 
 /// 注册插件自定义图节点类型（统一 root adapter）。
 ///
-/// 与 tool/hook/capability 使用同一套生命周期与完成协议：
+/// 与 tool/point/capability 使用同一套生命周期与完成协议：
 /// - 输入（node/config/state/thread_id）由 [RootRequest] 拥有，跨挂起点有效；
 /// - 返回 `std::string`：快同步节点，调用返回即完成（异常 → FAILED）；
 /// - 返回 `Task<std::string>`：锚定协程节点，主程序获得可取消的 provider 句柄，

@@ -955,7 +955,7 @@ public:
     bool pluginManagerOwned = true;
 
     /// 本 agent 的插件挂载 (agent 级注册实体都在这里)
-    /// - `plugin_mount` 步骤由主程序建立并赋值; 插件工具/钩子/提示词/功能点/图/资源
+    /// - `plugin_mount` 步骤由主程序建立并赋值; 插件工具/提示词/功能点/图/资源
     ///   都挂在这份挂载上, 关闭时随它一并拆掉
     std::shared_ptr<plugin::PluginMount> pluginMount = nullptr;
 

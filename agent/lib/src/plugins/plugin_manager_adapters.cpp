@@ -648,7 +648,7 @@ void PluginMount::releaseGraphDefinitionSlot(PluginInstance* inst) {
 PluginMount::RegistrationInventory PluginMount::registrationInventory(const PluginInstance& inst
 ) const {
     // 只统计"当前生效"的注册 (禁用/卸载后实例仍保留注册记录, 但那些记录不在
-    // 主程序侧生效: 工具已被摘出注册表、钩子处理器已从注册表移除、图节点 slot 已失效)。
+    // 主程序侧生效: 工具已被摘出注册表、广播订阅已退订、图节点 slot 已失效)。
     // 因此每一项都按"生效事实"取数, 而不是按记录条数。
     RegistrationInventory out;
     const auto*           entry = findEntry(&inst);
@@ -662,8 +662,6 @@ PluginMount::RegistrationInventory PluginMount::registrationInventory(const Plug
     }
     out.permissionTools    = entry->permissionTools.size();
     out.eventSubscriptions = inst.subscriptions.size();
-    // 钩子: 注册表里属于本实例的处理器条数 (禁用/卸载后为 0)
-    out.hooks = liveHookHandlersOf(inst);
 
     for (const auto& graph : entry->graphNodes) {
         if (graph.slot && graph.slot->snapshot().active) {

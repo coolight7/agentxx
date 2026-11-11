@@ -112,7 +112,7 @@ inline asio::awaitable<pluginxx::PluginOpResult> awaitHostPluginOpResult(ArgsT a
     }
 }
 
-/// "非 OK 就抛" 的统一入口 (图节点 / 钩子派发)
+/// "非 OK 就抛" 的统一入口 (图节点 / 扩展点派发)
 /// - `PLUGINXX_OPERATOR_OK` -> 返回 payload
 /// - `PLUGINXX_OPERATOR_CANCELED` -> 抛 `neograph::graph::CancelledException` (取消是控制流)
 /// - 其余 -> 抛 `std::runtime_error(payload)`

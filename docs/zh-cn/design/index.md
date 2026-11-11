@@ -2071,15 +2071,15 @@ agent/
 │   │   │   ├── modelcall.h       # ModelCallWrapNode (LLM 调用, 动态模型切换)
 │   │   │   ├── toolcall.h        # ToolcallWrapNode (工具分发, 自动压缩)
 │   │   │   └── agentcall.h       # AgentStart/EndCallWrapNode (会话生命周期)
-│   │   ├── plugin/               # 插件系统 (热插拔原生 C++ 插件, 纯 C ABI, API v1 —— 冻结核心 vtable + 21 张 agent 接口表 + 9 张 client 接口表)
+│   │   ├── plugin/               # 插件系统 (热插拔原生 C++ 插件, 纯 C ABI, API v1 —— 冻结核心 vtable + 20 张 agent 接口表 + 9 张 client 接口表)
 │   │   │   │                     #   插件框架 (C ABI 契约 / SDK 核心 / 主程序运行时 / 加载 / 清单解析) 已拆为
 │   │   │   │                     #   agent/third_party/cxx_pluginxx (命名空间 pluginxx); 本目录只保留主程序业务实现
 │   │   │   ├── api/              # 插件 API 头 (插件/主程序共用 C ABI 契约 + 插件 SDK; 主程序侧引用也走 api/ 前缀)
 │   │   │   │   ├── plugin_api.h      # umbrella: 包含 pluginxx/api/{abi,tables}.h + agent 业务表
-│   │   │   │   │                     #   (tools/permission/hooks/session/model/prompt/resources/graph)
+│   │   │   │   │                     #   (tools/permission/session/model/prompt/resources/graph)
 │   │   │   │   ├── client_plugin_api.h # 仅含 pluginxx/api/{abi,tables}.h + client 业务表 (UI 无关语义层)
 │   │   │   │   ├── plugin_kit.h      # agentxx 业务 SDK header-only: 接口表聚合 AgentIfaces/ClientIfaces、
-│   │   │   │   │                     #   tool/fast_tool/blocking_tool/polled_tool、ToolSchemaBuilder、hook、
+│   │   │   │   │                     #   tool/fast_tool/blocking_tool/polled_tool、ToolSchemaBuilder、providePoint、
 │   │   │   │   │                     #   图节点、工具权限声明、call_tool_blocking、client 渲染/ClientPluginBase;
 │   │   │   │   │                     #   含 pluginxx/kit/kit.h 并以 using 把通用名引入 agentxx::plugin
 │   │   │   │   │                     #   (PluginStringView/PluginString/Task/sleep/offload/spawn/PluginBaseT/...)
@@ -2092,9 +2092,9 @@ agent/
 │   │   │   │                     #    host/{loader,manifest,abi_util,capability_registry,event_bus,domain_hooks,
 │   │   │   │                     #          host_core,tables_impl,lifecycle}.h)
 │   │   │   ├── plugin_interfaces.h # 接口协商 (三层协商的声明/校验) + 接口名目录 (plugin_interfaces)
-│   │   │   ├── plugin_manager.h  # PluginManager 业务部分 (工具/权限/钩子/图/提示词/资源/功能点) /
+│   │   │   ├── plugin_manager.h  # PluginManager 业务部分 (工具/权限/图/提示词/资源/功能点) /
 │   │   │   │                     #   PluginTool (C 回调→线程池卸载执行) /
-│   │   │   │                     #   PluginHookDispatchHandle (主程序级单派发器, 7 钩子点);
+│   │   │   │                     #   PluginHookDispatchHandle (挂载级单派发器, 7 个通知型扩展点);
 │   │   │   │                     #   十张通用表的状态与方法继承自 pluginxx::PluginHostCore,
 │   │   │   │                     #   加载/启停/禁用启用/卸载/级联继承自 pluginxx::PluginHostLifecycle
 │   │   │   │                     #   (业务数据经 pluginxx::DomainHooks + 生命周期扩展点提供)
@@ -2285,7 +2285,7 @@ agent/
 │       │   ├── test_string_tools.h            # 字符串工具测试 (html2md/regexp, 直测插件同一实现)
 │       │   └── test_datetime_tool.h           # 日期时间工具测试 (直测插件同一实现)
 │       ├── plugin/                            # 插件测试头 (与 plugin/*.cpp 同名模块)
-│       │   ├── test_plugins.h                 # 插件系统测试 (加载/工具/钩子/事件/热插拔, 模块名 `plugins`)
+│       │   ├── test_plugins.h                 # 插件系统测试 (加载/工具/事件/热插拔, 模块名 `plugins`)
 │       │   ├── test_plugin_runtime.h          # 插件运行时测试 (生命周期/重试/取消/多实例句柄)
 │       │   ├── test_plugin_sdk.h              # 插件 SDK 测试 (kit 工具/表单/组件/键位定时器 + 老主程序降级)
 │       │   ├── test_plugin_bridge.h           # 插件桥接测试 (协程驱动桥/受控轮询/跨插件互调)
@@ -2359,7 +2359,7 @@ agent/
 │
 ├── plugins/                      # 插件 (独立动态库/目录, 仅依赖 plugin_api.h;
 │                                 #   编译产物统一输出到 exec/plugins/<插件名>/)
-│   ├── example_plugin/           # 示例 C++ 插件 (双端): 工具/钩子/事件/能力/client 入口
+│   ├── example_plugin/           # 示例 C++ 插件 (双端): 工具/扩展点订阅/事件/能力/client 入口
 │   ├── example_graph_node/       # Graph 扩展示例插件 (自定义节点类型 + set_graph_json 改图, 依赖 agent.graph 接口)
 │   ├── example_js/               # JS 示例插件 (C++ 壳 + plugin.js; depends: javascript_engine)
 │   ├── example_js_execute_command/ # JS 代码执行工具插件 (example_js_execute_command; depends: javascript_engine)
@@ -2557,7 +2557,7 @@ EventBus (事件总线)
 ## 附录 B: 插件系统 v1 要点 (详见 plugins.md)
 
 - COM 风格接口表查询: 核心 vtable 冻结 (alloc/free + query_interface; 原 strdup 槽位已移出 vtable, 改为基于 alloc 的头文件内联 `pluginxx_strdup`), 能力按 IID 字符串查询独立接口表 (每张表四件套: IID + `struct_size` + `version`/`_VERSION` + `_MIN_VERSION` + `_BASELINE_SIZE`; 判定 = `version >= MIN_VERSION` 且 `struct_size >= BASELINE_SIZE`); 插件级要求 `api_version >= PLUGINXX_MIN_API_VERSION`
-- Agent 侧 21 张接口表: 10 张通用表 (`pluginxx.*`: log / json / config / plugins / broadcasts / capabilities / scheduler / coroutine_runtime / tasks / cancel) + 11 张业务表 (`agentxx.agent.*`: tools / permission / hooks / session / context / model / prompt / resources / graph / mount / runtime)
+- Agent 侧 20 张接口表: 10 张通用表 (`pluginxx.*`: log / json / config / plugins / broadcasts / capabilities / scheduler / coroutine_runtime / tasks / cancel) + 10 张业务表 (`agentxx.agent.*`: tools / permission / session / context / model / prompt / resources / graph / mount / runtime)
 - Client 侧 9 张接口表: ui / events / session / wire / self / json / log / timer / keybind (详见 client_plugin_api.h)
 - 附加成员与结构体规则: 表成员只能追加在表尾 (基线不变 + `ifaceHas` 判定), 重排/改签名/删成员要换 IID; 跨边界结构体 (spec/input) 统一带 `struct_size` (填充方填长度, 读取方 `specSizeOk`/`specHas` 判定) —— 见 plugins.md §17
 - 现代 SDK (plugin_kit.h): 
@@ -2566,7 +2566,7 @@ EventBus (事件总线)
   - `ArgReader` 强类型参数读取: 字符串转整数/浮点要求**整个**字符串都是数值 (不接受 `"100 lines"` 这种前缀匹配, 整数还要求落在目标类型范围内), JSON 浮点值转整数按“相近整数”取整 (与向上取整相差不超过 1e-6 时向上, 否则向下), 字符串转布尔忽略大小写认 `true`/`yes`/`y`/`on`/`enable`/`enabled`/`1` 与 `false`/`no`/`n`/`off`/`disable`/`disabled`/`0`, 读不到时交回默认值或报参数错误
   - `CancelRegistry` 框架级事件驱动取消注册表，提供会话取消即时回调与 `ScopedRegistration` 防悬挂互斥保护
   - `PluginBase` 状态基类 + `Task<T>` 锚定协程 + `sleep/yield/offload/call_tool/invoke_cap` awaiter
-  - `tool/fast_tool/blocking_tool/hook/capability/spawn` 便捷注册族
+  - `tool/fast_tool/blocking_tool/capability/providePoint/spawn` 便捷注册族
 - 多实例三铁律: 禁止可变全局 static / 状态经 user_data 闭包恢复 / 接口表缓存入实例上下文
 - 导出控制: -fvisibility=hidden + version script 白名单 (PLUGINXX_EXPORT), 单端插件兼容 Android lld
 - 平台矩阵: 各插件 CMakeLists 开头经 plugin_platform_support.cmake 判定 (screen_capture/computer_use/text_selection_monitor 仅 Windows, system_monitor 覆盖 Windows/Linux/Android/macOS 等)

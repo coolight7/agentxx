@@ -17,6 +17,7 @@
 ///
 /// 沙箱: 内存限制 (JS_SetMemoryLimit) + 栈限制 + 指令中断超时; 不引入
 /// quickjs-libc (无 os/std 模块); 全局仅注入标准 ECMA 内置 + agentxx 桥
+#include "agentxx/plugin/api/agentxx_point_ids.h"
 #include "agentxx/plugin/api/plugin_api.h"
 #include "agentxx/plugin/api/plugin_guard.h"
 #include "agentxx/plugin/api/plugin_kit.h"
@@ -185,6 +186,32 @@ constexpr size_t  kStackLimit         = 4 * 1024 * 1024;
 constexpr size_t  kTaskTimeoutMs      = 60000;  ///< 单任务 (工具执行等) 超时
 constexpr int64_t kPromiseWaitLimitMs = 120000; ///< Promise 等待上限 (绝对截止时间)
 
+/// JS 面的钩子点序号 → 通知型扩展点 id
+///
+/// 钩子点已经是"通知型扩展点": 脚本里 `agentxx.onHook(point, fn)` 等价于订阅同名
+/// 广播频道, 序号约定保持不变 (0 = 轮次开始 … 6 = 工具结束), 与
+/// `agentxx/plugin/api/agentxx_point_ids.h` 的 7 个通知型点一一对应。
+std::string_view hookPointIdOf(int32_t point) {
+    switch (point) {
+        case 0:
+            return agentxx::plugin::points::TurnStart;
+        case 1:
+            return agentxx::plugin::points::TurnEnd;
+        case 2:
+            return agentxx::plugin::points::ModelStart;
+        case 3:
+            return agentxx::plugin::points::ModelRun;
+        case 4:
+            return agentxx::plugin::points::ModelEnd;
+        case 5:
+            return agentxx::plugin::points::ToolStart;
+        case 6:
+            return agentxx::plugin::points::ToolEnd;
+        default:
+            return {};
+    }
+}
+
 /// agentxx 桥方法 magic
 enum BridgeMagic {
     B_REGISTER_TOOL = 1,
@@ -233,13 +260,13 @@ struct JsToolBinding {
     std::string name;
 };
 
-/// 钩子/事件绑定 (注册时创建, 由 JsPluginCtx 持有; 回调期间存活由主程序
+/// 扩展点/广播绑定 (订阅时创建, 由 JsPluginCtx 持有; 回调期间存活由主程序
 /// inflight 计数保证)
 struct JsHookBinding {
     JsEngine*   engine = nullptr;
     std::string plugin;
-    int         point = -1;  ///< 事件订阅时为 -1
-    int64_t     hook  = 0;   ///< 主程序钩子句柄 (0 = 未登记; 事件订阅恒为 0)
+    /// 订阅的频道全名 (派发时按它过滤: 一次派发只调该频道的处理器)
+    std::string topic;
 };
 
 /// JS 内 callTool 的跨线程完成桥:
@@ -267,7 +294,6 @@ struct JsPluginCtx {
     /// 工具表: 普通对象 name -> {execute, name, description}
     JSValue tools = JS_UNDEFINED;
     /// 钩子表: Array(7) 元素为 fn 或 null
-    JSValue hooks = JS_UNDEFINED;
     /// 订阅表: Array of {topic, handler, token}
     JSValue                                     agents = JS_UNDEFINED;
     std::vector<std::unique_ptr<JsToolBinding>> toolBindings;
@@ -697,17 +723,6 @@ public:
         PluginxxString*               error_out
     );
 
-    /// 钩子回调桥 —— 异步启动 (统一异步操作模型):
-    /// 【主程序 io 线程】调用; post 到 JS 线程 (fire-and-forget, 与旧语义一致)
-    /// 后立即内联完成通知
-    static void* PLUGINXX_CALL hookStart(
-        void*                         ud,
-        int32_t                       point,
-        const PluginxxStringView*     node_input_json,
-        const PluginxxOperatorNotify* notify,
-        PluginxxString*               error_out
-    );
-
     /// 事件回调桥: io 线程调用; post 到 JS 线程 (fire-and-forget) (类外定义)
     static void PLUGINXX_CALL eventFire(const PluginxxStringView* event_json, void* ud);
 
@@ -990,12 +1005,6 @@ private:
         }
         JS_SetContextOpaque(pctx->ctx, pctx.get());
         pctx->tools  = JS_NewObject(pctx->ctx);
-        pctx->hooks  = JS_NewArray(pctx->ctx);
-        pctx->agents = JS_NewArray(pctx->ctx);
-        // 钩子数组预填 null
-        for (int i = 0; i < 7; ++i) {
-            JS_SetPropertyUint32(pctx->ctx, pctx->hooks, static_cast<uint32_t>(i), JS_NULL);
-        }
 
         if (!injectBridge(pctx.get())) {
             err = "failed to inject agentxx bridge";
@@ -1140,66 +1149,6 @@ private:
 
     // ==================== 钩子/事件 (JS 线程) ====================
 
-    void doHookFire(
-        JsHookBinding*               binding,
-        int                          point,
-        const std::string&           payload,
-        const PluginxxOperatorNotify notify
-    ) {
-        bool        ok = true;
-        std::string errText;
-        auto        pctx = findPlugin(binding->plugin);
-        if (!pctx || pctx->deleted || !pctx->ctx) {
-            ok      = false;
-            errText = "js plugin unloaded";
-        } else {
-            pctx->inflight++;
-
-            struct InflightGuard {
-                JsPluginCtx* p;
-
-                explicit InflightGuard(JsPluginCtx* pctx) :
-                    p(pctx) {}
-
-                ~InflightGuard() {
-                    p->inflight--;
-                }
-            } guard(pctx.get());
-
-            JSValue fn = JS_GetPropertyUint32(pctx->ctx, pctx->hooks, static_cast<uint32_t>(point));
-            if (JS_IsFunction(pctx->ctx, fn)) {
-                JSValue arg = JS_ParseJSON(pctx->ctx, payload.c_str(), payload.size(), "<hook>");
-                if (JS_IsException(arg)) {
-                    JS_FreeValue(pctx->ctx, arg);
-                    arg = JS_NewString(pctx->ctx, payload.c_str());
-                }
-                JSValue ret     = JS_Call(pctx->ctx, fn, JS_UNDEFINED, 1, &arg);
-                auto    outcome = drivePromise(pctx->ctx, ret);
-                if (outcome.kind != PromiseOutcome::Kind::Value) {
-                    ok      = false;
-                    errText = rejectedText(pctx->ctx, outcome);
-                    guardLog(
-                        fmt::format("[interpreter.js] hook callback failed: {}", errText).c_str()
-                    );
-                }
-                JS_FreeValue(pctx->ctx, outcome.value);
-                JS_FreeValue(pctx->ctx, ret);
-                JS_FreeValue(pctx->ctx, arg);
-            }
-            JS_FreeValue(pctx->ctx, fn);
-        }
-        // done 只在 JS 回调真正结束 (或确认插件已卸载) 之后触发:
-        // 主程序 middleware 会等待该 op 的完成通知。
-        if (notify.done) {
-            auto errSv = agentxx::plugin::PluginStringView::from(errText.data(), errText.size());
-            notify.done(
-                notify.host_ud,
-                ok ? PLUGINXX_OPERATOR_OK : PLUGINXX_OPERATOR_FAILED,
-                ok ? nullptr : &errSv
-            );
-        }
-    }
-
     void doEventFire(JsHookBinding* binding, const std::string& payload) {
         auto pctx = findPlugin(binding->plugin);
         if (!pctx || pctx->deleted || !pctx->ctx) {
@@ -1218,7 +1167,7 @@ private:
             }
         } guard(pctx.get());
 
-        // 遍历订阅表, 触发全部 handler (payload 为事件 JSON 字符串)
+        // 遍历订阅表, 触发本频道的 handler (payload 为扩展点载荷 JSON 字符串)
         JSValue  lenVal = JS_GetPropertyStr(pctx->ctx, pctx->agents, "length");
         uint32_t len    = 0;
         JS_ToUint32(pctx->ctx, &len, lenVal);
@@ -1226,6 +1175,17 @@ private:
         for (uint32_t i = 0; i < len; ++i) {
             JSValue entry = JS_GetPropertyUint32(pctx->ctx, pctx->agents, i);
             if (JS_IsObject(entry)) {
+                // 只调这个频道的处理器 (同一插件可以订阅多个频道)
+                JSValue     topicVal = JS_GetPropertyStr(pctx->ctx, entry, "topic");
+                std::string entryTopic;
+                if (JS_IsString(topicVal)) {
+                    entryTopic = jsToCppString(pctx->ctx, topicVal);
+                }
+                JS_FreeValue(pctx->ctx, topicVal);
+                if (entryTopic != binding->topic) {
+                    JS_FreeValue(pctx->ctx, entry);
+                    continue;
+                }
                 JSValue handler = JS_GetPropertyStr(pctx->ctx, entry, "handler");
                 if (JS_IsFunction(pctx->ctx, handler)) {
                     JSValue arg
@@ -1728,60 +1688,6 @@ void* JsEngine::toolExecuteStart(
     }
 }
 
-void* JsEngine::hookStart(
-    void*                         ud,
-    int32_t                       point,
-    const PluginxxStringView*     node_input_json,
-    const PluginxxOperatorNotify* notify,
-    PluginxxString*               error_out
-) {
-    (void)error_out;
-    // C ABI 回调异常守卫: start 由主程序 io 线程调用, 异常经通知器上报
-    auto* binding = static_cast<JsHookBinding*>(ud);
-    auto* engine = binding ? binding->engine : nullptr; ///< 提升至 try 外 (catch 日志闭包使用)
-    try {
-        if (!engine || !notify) {
-            return nullptr;
-        }
-        std::string payload{
-            node_input_json && node_input_json->data ? node_input_json->data : "",
-            node_input_json ? static_cast<size_t>(node_input_json->size) : 0
-        };
-        int  pt      = static_cast<int>(point);
-        auto ntfCopy = *notify;
-        if (!engine->post([engine, binding, payload, pt, ntfCopy]() {
-                if (engine->stopping()) {
-                    // 停止中: 不执行插件 JS 回调, 仍按失败终结本次 hook op
-                    auto errSv = agentxx::plugin::PluginStringView::fromCstr(
-                        "interpreter.js engine stopped"
-                    );
-                    ntfCopy.done(ntfCopy.host_ud, PLUGINXX_OPERATOR_FAILED, &errSv);
-                    return;
-                }
-                engine->doHookFire(binding, pt, payload, ntfCopy);
-            })) {
-            // 引擎已停止: 已接受的 op 必须终结 (失败), 不返回悬挂句柄
-            auto errSv = agentxx::plugin::PluginStringView::from(nullptr, 0);
-            notify->done(notify->host_ud, PLUGINXX_OPERATOR_FAILED, &errSv);
-            return nullptr;
-        }
-        // 已接受: 返回非空 provider 句柄 (binding 由脚本上下文持有到卸载;
-        // 主程序 detachAll 时的 provider lease 保证其存活), 完成通知在 JS 线程
-        // 于回调真正结束后触发 (见 doHookFire)。
-        return binding;
-    } catch (...) {
-        ::agentxx::plugin::reportCurrentException([engine](const char* m) noexcept {
-            if (engine) {
-                engine->guardLog(m);
-            }
-        });
-        if (notify && notify->done) {
-            auto errSv = agentxx::plugin::PluginStringView::from(nullptr, 0);
-            notify->done(notify->host_ud, PLUGINXX_OPERATOR_FAILED, &errSv);
-        }
-        return nullptr;
-    }
-}
 
 void JsEngine::eventFire(const PluginxxStringView* event_json, void* ud) {
     auto* binding = static_cast<JsHookBinding*>(ud);
@@ -1817,9 +1723,6 @@ JsPluginCtx::~JsPluginCtx() {
     if (ctx) {
         if (!JS_IsUndefined(tools)) {
             JS_FreeValue(ctx, tools);
-        }
-        if (!JS_IsUndefined(hooks)) {
-            JS_FreeValue(ctx, hooks);
         }
         if (!JS_IsUndefined(agents)) {
             JS_FreeValue(ctx, agents);
@@ -1862,6 +1765,112 @@ JSValue JsEngine::bridgeCall(
     // COM 风格接口表查询 (进程级静态数据; 各能力经稳定 IID 分发)
     const agentxx::plugin::AgentIfaces iface  = agentxx::plugin::AgentIfaces::query(host);
     auto*                              engine = pctx->engine;
+
+    /// 订阅一个频道并把 (topic / handler / 主程序订阅句柄) 记进 agents 数组
+    /// - `return` token (>= 0, 之后传给 unsubscribe / offHook); -1 = 主程序拒绝订阅
+    auto subscribeChannel = [&](const std::string& topic, JSValueConst fn) -> int32_t {
+        auto binding    = std::make_unique<JsHookBinding>();
+        binding->engine = engine;
+        binding->plugin = pctx->name;
+        binding->topic  = topic;
+        auto  topicSv   = agentxx::plugin::PluginStringView::from(topic.data(), topic.size());
+        auto* sub       = iface.broadcasts->subscribe_broadcast(
+            host,
+            engine->agentRef(),
+            &topicSv,
+            &JsEngine::eventFire,
+            binding.get(),
+            nullptr,
+            nullptr
+        );
+        if (!sub) {
+            return -1;
+        }
+        // token = agents 数组下标
+        JSValue  lenVal = JS_GetPropertyStr(ctx, pctx->agents, "length");
+        uint32_t len    = 0;
+        JS_ToUint32(ctx, &len, lenVal);
+        JS_FreeValue(ctx, lenVal);
+        JSValue entry = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, entry, "topic", JS_NewString(ctx, topic.c_str()));
+        JS_SetPropertyStr(ctx, entry, "handler", JS_DupValue(ctx, fn));
+        JS_SetPropertyStr(ctx, entry, "token", JS_NewInt32(ctx, static_cast<int32_t>(len)));
+        // 主程序订阅句柄: 拆高低 32 位存储 (JS number 为 double, 直接存指针
+        // 会丢低位精度; BigInt 依赖 libbf 未裁剪)
+        uint64_t subPtr = reinterpret_cast<uint64_t>(sub);
+        JS_SetPropertyStr(
+            ctx,
+            entry,
+            "subPtrLo",
+            JS_NewInt32(ctx, static_cast<int32_t>(subPtr & 0xFFFFFFFFu))
+        );
+        JS_SetPropertyStr(
+            ctx,
+            entry,
+            "subPtrHi",
+            JS_NewInt32(ctx, static_cast<int32_t>(subPtr >> 32))
+        );
+        JS_SetPropertyUint32(ctx, pctx->agents, len, entry);
+        pctx->rollbackActions.push_back([bc = iface.broadcasts, sub]() {
+            if (bc && bc->unsubscribe_broadcast) {
+                bc->unsubscribe_broadcast(sub);
+            }
+        });
+        pctx->hookBindings.push_back(std::move(binding));
+        return static_cast<int32_t>(len);
+    };
+
+    /// 退订一个 token (agents 数组下标); 已经是空的就什么也不做
+    auto unsubscribeToken = [&](uint32_t token) {
+        JSValue entry = JS_GetPropertyUint32(ctx, pctx->agents, token);
+        if (JS_IsObject(entry)) {
+            // 释放主程序订阅 (防频道继续投递到已退订的 JS 插件;
+            // 退订后主程序不再回调, 插件卸载时也无残留)
+            uint64_t subPtr = 0;
+            JSValue  loV    = JS_GetPropertyStr(ctx, entry, "subPtrLo");
+            JSValue  hiV    = JS_GetPropertyStr(ctx, entry, "subPtrHi");
+            uint32_t lo = 0, hi = 0;
+            JS_ToUint32(ctx, &lo, loV);
+            JS_ToUint32(ctx, &hi, hiV);
+            JS_FreeValue(ctx, loV);
+            JS_FreeValue(ctx, hiV);
+            subPtr = (static_cast<uint64_t>(hi) << 32) | lo;
+            if (subPtr) {
+                if (iface.broadcasts && iface.broadcasts->unsubscribe_broadcast) {
+                    iface.broadcasts->unsubscribe_broadcast(
+                        reinterpret_cast<PluginxxSubscription*>(subPtr)
+                    );
+                }
+            }
+            JS_SetPropertyUint32(ctx, pctx->agents, token, JS_UNDEFINED);
+        }
+        JS_FreeValue(ctx, entry);
+    };
+
+    /// 取消订阅某个频道的全部处理器
+    auto unsubscribeTopic = [&](const std::string& topic) {
+        JSValue  lenVal = JS_GetPropertyStr(ctx, pctx->agents, "length");
+        uint32_t len    = 0;
+        JS_ToUint32(ctx, &len, lenVal);
+        JS_FreeValue(ctx, lenVal);
+        for (uint32_t i = 0; i < len; ++i) {
+            JSValue entry = JS_GetPropertyUint32(ctx, pctx->agents, i);
+            if (!JS_IsObject(entry)) {
+                JS_FreeValue(ctx, entry);
+                continue;
+            }
+            JSValue     topicVal = JS_GetPropertyStr(ctx, entry, "topic");
+            std::string entryTopic;
+            if (JS_IsString(topicVal)) {
+                entryTopic = jsToCppString(ctx, topicVal);
+            }
+            JS_FreeValue(ctx, topicVal);
+            JS_FreeValue(ctx, entry);
+            if (entryTopic == topic) {
+                unsubscribeToken(i);
+            }
+        }
+    };
 
     switch (magic) {
         case B_REGISTER_TOOL: {
@@ -2097,53 +2106,25 @@ JSValue JsEngine::bridgeCall(
         }
 
         case B_REGISTER_HOOK: {
+            // onHook(point, fn): 钩子点已是"通知型扩展点", 等价于订阅同名广播频道
+            // (序号约定不变: 0 = 轮次开始 … 6 = 工具结束)
             if (argc < 2 || !JS_IsNumber(argv[0]) || !JS_IsFunction(ctx, argv[1])) {
                 return JS_ThrowTypeError(ctx, "onHook: (point, fn) required");
             }
             int32_t point = 0;
             JS_ToInt32(ctx, &point, argv[0]);
-            if (point < 0 || point >= 7) {
+            const auto pointId = hookPointIdOf(point);
+            if (pointId.empty()) {
                 return JS_ThrowTypeError(ctx, "onHook: point out of range");
             }
-            // 覆盖语义: 注销同点旧钩子 (每插件每钩子点至多一个; 按句柄精确撤销)
-            for (auto& old : pctx->hookBindings) {
-                if (old && old->point == point && old->hook != 0) {
-                    iface.hooks->unregister_hook(host, old->hook);
-                    old->hook = 0;
-                }
+            const std::string topic{pointId};
+            // 覆盖语义: 同一个点的旧处理器先退订 (每插件每个点至多一个)
+            unsubscribeTopic(topic);
+            const int32_t token = subscribeChannel(topic, argv[1]);
+            if (token < 0) {
+                return throwJsError(ctx, "onHook: host subscription failed");
             }
-            JSValue oldFn = JS_GetPropertyUint32(ctx, pctx->hooks, static_cast<uint32_t>(point));
-            JS_FreeValue(ctx, oldFn);
-
-            auto binding    = std::make_unique<JsHookBinding>();
-            binding->engine = engine;
-            binding->plugin = pctx->name;
-            binding->point  = point;
-            AgentxxPluginHookSpecEx hspec{};
-            hspec.struct_size = sizeof(AgentxxPluginHookSpecEx);
-            hspec.point       = static_cast<AgentxxPluginHookPoint>(point);
-            hspec.hook_start  = &JsEngine::hookStart;
-            hspec.hook_cancel = nullptr;
-            hspec.user_data   = binding.get();
-            int64_t handle    = 0;
-            int     rc = iface.hooks->register_hook(host, engine->agentRef(), &hspec, &handle);
-            if (rc != 0 || handle == 0) {
-                return throwJsError(ctx, "onHook: host registration failed");
-            }
-            binding->hook = handle;
-            JS_SetPropertyUint32(
-                ctx,
-                pctx->hooks,
-                static_cast<uint32_t>(point),
-                JS_DupValue(ctx, argv[1])
-            );
-            pctx->rollbackActions.push_back([host, hooksIface = iface.hooks, handle]() {
-                if (handle != 0) {
-                    hooksIface->unregister_hook(host, handle);
-                }
-            });
-            pctx->hookBindings.push_back(std::move(binding));
-            return JS_UNDEFINED;
+            return JS_NewInt32(ctx, token);
         }
 
         case B_UNREGISTER_HOOK: {
@@ -2152,13 +2133,10 @@ JSValue JsEngine::bridgeCall(
             }
             int32_t point = 0;
             JS_ToInt32(ctx, &point, argv[0]);
-            for (auto& old : pctx->hookBindings) {
-                if (old && old->point == point && old->hook != 0) {
-                    iface.hooks->unregister_hook(host, old->hook);
-                    old->hook = 0;
-                }
+            const auto pointId = hookPointIdOf(point);
+            if (!pointId.empty()) {
+                unsubscribeTopic(std::string{pointId});
             }
-            JS_SetPropertyUint32(ctx, pctx->hooks, static_cast<uint32_t>(point), JS_NULL);
             return JS_UNDEFINED;
         }
 
@@ -2166,58 +2144,15 @@ JSValue JsEngine::bridgeCall(
             if (argc < 2 || !JS_IsString(argv[0]) || !JS_IsFunction(ctx, argv[1])) {
                 return JS_ThrowTypeError(ctx, "subscribe: (topic, handler) required");
             }
-            std::string topic   = jsToCppString(ctx, argv[0]);
-            auto        binding = std::make_unique<JsHookBinding>();
-            binding->engine     = engine;
-            binding->plugin     = pctx->name;
-            binding->point      = -1;
-            auto  topicSv = agentxx::plugin::PluginStringView::from(topic.data(), topic.size());
-            auto* sub
-                = iface.events->subscribe(
-                    host,
-                    engine->agentRef(),
-                    &topicSv,
-                    &JsEngine::eventFire,
-                    binding.get()
-                );
-            if (!sub) {
+            const std::string topic = jsToCppString(ctx, argv[0]);
+            const int32_t     token = subscribeChannel(topic, argv[1]);
+            if (token < 0) {
                 return throwJsError(
                     ctx,
                     fmt::format("subscribe: host subscription failed: {}", topic)
                 );
             }
-            // token = agents 数组索引
-            JSValue  lenVal = JS_GetPropertyStr(ctx, pctx->agents, "length");
-            uint32_t len    = 0;
-            JS_ToUint32(ctx, &len, lenVal);
-            JS_FreeValue(ctx, lenVal);
-            JSValue entry = JS_NewObject(ctx);
-            JS_SetPropertyStr(ctx, entry, "topic", JS_NewString(ctx, topic.c_str()));
-            JS_SetPropertyStr(ctx, entry, "handler", JS_DupValue(ctx, argv[1]));
-            JS_SetPropertyStr(ctx, entry, "token", JS_NewInt32(ctx, static_cast<int32_t>(len)));
-            // 主程序订阅句柄: 拆高低 32 位存储 (JS number 为 double, 直接存指针
-            // 会丢低位精度; BigInt 依赖 libbf 未裁剪)
-            uint64_t subPtr = reinterpret_cast<uint64_t>(sub);
-            JS_SetPropertyStr(
-                ctx,
-                entry,
-                "subPtrLo",
-                JS_NewInt32(ctx, static_cast<int32_t>(subPtr & 0xFFFFFFFFu))
-            );
-            JS_SetPropertyStr(
-                ctx,
-                entry,
-                "subPtrHi",
-                JS_NewInt32(ctx, static_cast<int32_t>(subPtr >> 32))
-            );
-            JS_SetPropertyUint32(ctx, pctx->agents, len, entry);
-            pctx->rollbackActions.push_back([bc = iface.broadcasts, sub]() {
-                if (bc && bc->unsubscribe_broadcast) {
-                    bc->unsubscribe_broadcast(sub);
-                }
-            });
-            pctx->hookBindings.push_back(std::move(binding));
-            return JS_NewInt32(ctx, static_cast<int32_t>(len));
+            return JS_NewInt32(ctx, token);
         }
 
         case B_UNSUBSCRIBE: {
@@ -2226,29 +2161,7 @@ JSValue JsEngine::bridgeCall(
             }
             uint32_t token = 0;
             JS_ToUint32(ctx, &token, argv[0]);
-            JSValue entry = JS_GetPropertyUint32(ctx, pctx->agents, token);
-            if (JS_IsObject(entry)) {
-                // 释放主程序订阅 (防事件持续投递到已退订的JS 插件:
-                // 退订后主程序不再回调, 插件卸载时也无残留)
-                uint64_t subPtr = 0;
-                JSValue  loV    = JS_GetPropertyStr(ctx, entry, "subPtrLo");
-                JSValue  hiV    = JS_GetPropertyStr(ctx, entry, "subPtrHi");
-                uint32_t lo = 0, hi = 0;
-                JS_ToUint32(ctx, &lo, loV);
-                JS_ToUint32(ctx, &hi, hiV);
-                JS_FreeValue(ctx, loV);
-                JS_FreeValue(ctx, hiV);
-                subPtr = (static_cast<uint64_t>(hi) << 32) | lo;
-                if (subPtr) {
-                    if (iface.broadcasts && iface.broadcasts->unsubscribe_broadcast) {
-                        iface.broadcasts->unsubscribe_broadcast(
-                            reinterpret_cast<PluginxxSubscription*>(subPtr)
-                        );
-                    }
-                }
-                JS_SetPropertyUint32(ctx, pctx->agents, token, JS_UNDEFINED);
-            }
-            JS_FreeValue(ctx, entry);
+            unsubscribeToken(token);
             return JS_UNDEFINED;
         }
 
