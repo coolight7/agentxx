@@ -3,8 +3,10 @@
 > Related: [design](index.md) (Core Architecture) · [ffi.md](ffi.md) (FFI) · Source: [agent/plugins/](/agent/plugins/) · C ABI Contracts: [plugin_api.h](/agent/lib/include/agentxx/plugin/api/plugin_api.h) / [client_plugin_api.h](/agent/lib/include/agentxx/plugin/api/client_plugin_api.h) / SDK: [plugin_kit.h](/agent/lib/include/agentxx/plugin/api/plugin_kit.h)
 >
 > Translation status: the Chinese guide (`docs/zh-cn/design/plugins.md`) is the reference;
-> it has 16 sections, including the instance lifecycle / async contract (§15) that this page
-> does not cover yet. Check the Chinese page when a section here looks out of date.
+> it has 22 sections, including the instance lifecycle / async contract (§15), the version and
+> baseline rules (§17), multi-agent mounts (§18), the session runtime (§19), broadcasts (§20),
+> the naming contract (§21) and the network capability (§22) that this page only summarises.
+> Check the Chinese page when a section here looks out of date.
 
 ---
 
@@ -314,35 +316,59 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 
 ## 8. Agent-Side Interface Tables
 
+There are 20 agent-side tables: 10 **business tables** (`agentxx.agent.*`, implemented by the
+host) plus 10 **generic tables** (declared and implemented by the plugin framework, `<app>.*` —
+with the `agentxx` app name that is `agentxx.log`, `agentxx.broadcasts`, ...; querying
+`pluginxx.log` or `agentxx.agent.log` does not hit). One more table, `agentxx.net` (network,
+provided on both sides), is not counted in those 20.
+
+### 8.1 Business tables (`agentxx.agent.*`, 10)
+
 | IID | Version | Capability |
 |---|---|---|
-| `agentxx.agent.tools` | 1 | `register_tool/unregister_tool`, `call_tool_async/op_cancel` (cross-plugin invocation; completion guaranteed posted to IO thread). |
-| `agentxx.agent.hooks` | 1 | `register_hook/unregister_hook` (7 hook points, two-piece start/cancel lifecycle). |
-| `agentxx.agent.events` | 1 | `subscribe/unsubscribe/publish` (topics automatically prefixed with `plugin.`, JSON payloads). |
-| `agentxx.agent.capabilities` | 1 | `register_capability(_ex)/unregister/has_capability`, `invoke_capability_async/op_cancel`. |
-| `agentxx.agent.scheduler` | 1 | `is_io_thread/post_to_io/sleep/op_cancel/offload` (`sleep` = host timer; `offload` = blocking-pool delegation, requires a `cancel_token`). |
-| `agentxx.agent.coroutine_runtime` | 1 | Generic coroutine driver: `request_driver/cancel_driver/is_io_thread` (driver-ticket / wake protocol, see §15). |
-| `agentxx.agent.session` | 1 | `get_share_store/add_share_store/emit_message_tip` (IO thread) + `get_session_work_dir(agent, session_id)` (effective session workdir: worktree binding wins, empty session ID returns the default) + `is_canceled(agent, thread_id)` (advisory; the authoritative notification is still the cancel callback). The last two moved here from the framework tables in v3. |
-| `agentxx.agent.plugins` | 1 | `list_plugins/get_plugin/get_own_info` (JSON). |
-| `agentxx.agent.config` | 3 | `get_config/get_plugin_args/get_plugin_config_path/get_language/set_language` (`get_plugin_config_path` returns normalized absolute path configured via YAML `config`, pointing to a file or directory; `get_language/set_language` queries/overrides runtime language). Since v3 it carries no business members (`get_tool_prompt`/`get_session_work_dir` moved to `agentxx.agent.prompt` / `agentxx.agent.session`). |
-| `agentxx.agent.model` | 1 | `get_config` (Active model and associated config JSON). |
-| `agentxx.agent.cancel` | 3 | `op_cancel` (cancel one operation handle). Since v3 `is_canceled` moved to `agentxx.agent.session`: sessions are a business concept, the framework table only handles generic cancel handles. |
-| `agentxx.agent.prompt` | 3 | `get_prompt/set_prompt` (Host prompt read/write access) + `get_tool_prompt(tool_name)` (per-tool prompt config JSON `{depict, args}`, host-level; moved here from the framework table in v3). |
-| `agentxx.agent.json` | 1 | `json_get_string/json_escape`. |
-| `agentxx.agent.log` | 1 | `log(level, msg)` (0: trace .. 4: error). |
-| `agentxx.agent.resources` | 1 | `register_skill_dir/memory_file/mcp_server` (Initialization phase only) + `get_own_resources` (Immutable after freeze). |
-| `agentxx.agent.graph` | 1 | Execution Graph Extensibility: `register_node_type/unregister_node_type` (Injects custom node types into per-agent `GraphRegistry`) + `get_graph_json/get_graph_name/set_graph_json` (Inspect/modify host execution graph, default name `agentxx.default`; active during plugin load, consumed prior to host engine construction). |
-| `agentxx.agent.tasks` | 1 | Host-Managed Background Tasks: `register_task/cancel_task` (Auto-registered via kit `spawn`; host tracks handle, holds inflight count, and receives `notify.done`—on unload, host cancels via `detachAll` and cleanly awaits zero active ops via `waitInflightZero`; `notify` is an out-parameter whose `done` method can be invoked from any thread). |
+| `agentxx.agent.tools` | 3 | `register_tool/unregister_tool`, `call_tool_async` (cross-plugin invocation; completion guaranteed posted to the IO thread; cancel goes through `agentxx.cancel.op_cancel`). v3: success is expressed by the final result status, the text carries no `[Error]` prefix. |
+| `agentxx.agent.permission` | 2 | `register_tool_permission/unregister_tool_permission` (the tool provider declares its own limits) + `check_paths` (batched three-state path check, never asks/interrupts). |
+| `agentxx.agent.session` | 3 | `get_share_store/add_share_store/emit_message_tip` (IO thread) + `get_session_work_dir(agent, session_id)` (effective session workdir: worktree binding wins, empty session id returns the default) + `is_canceled(agent, thread_id)` (advisory; the authoritative notification is still the cancel callback). The last two moved here from the framework tables in v3. |
+| `agentxx.agent.context` | 2 | Session LLM context queries: `get_messages/messages_count` (IO thread). The session owns the context (the graph state has no `messages` channel); use `messages_count` when only the size matters. |
+| `agentxx.agent.model` | 2 | `get_config(agent)` (the agent's main model and related config JSON). |
+| `agentxx.agent.prompt` | 3 | `get_prompt/set_prompt` (host prompt read/write) + `get_tool_prompt(tool_name)` (per-tool prompt config JSON `{depict, args}`, host-level; moved here from the framework table in v3). |
+| `agentxx.agent.resources` | 2 | `register_skill_dir/memory_file/mcp_server` (initialization phase only) + `get_own_resources` (immutable after freeze). |
+| `agentxx.agent.graph` | 2 | Execution graph extensibility: `register_node_type/unregister_node_type` (custom node types injected into the per-agent `GraphRegistry`) + `get_graph_json/get_graph_name/set_graph_json` (inspect/modify the host execution graph, default name `agentxx.default`; applied during plugin load, consumed before the host builds the engine). **The graph state carries no conversation context**: `state_json` has no `messages` channel, only control channels and the read-only shadow channel `xx_messagesMeta`; use `agentxx.agent.context` for content. Conditional edges use `xx_has_tool_calls`. |
+| `agentxx.agent.mount` | 1 | Mount queries (diagnostics): `list` (all mount summaries as a JSON array, each with agentId/agentName/workDir/language/mountSeq/plugins) + `get` (one summary by agent id, -1 when absent). |
+| `agentxx.agent.runtime` | 2 | Session runtime (a plugin mounts its own root and drives sessions): `mount_root/unmount_root` + `open_channel/close_channel` (one channel per session id) + `send_input/cancel/select_model/respond_interrupt` + `get_channel_state/get_context_messages/list_runtime` + `register_trigger/unregister_trigger/emit_event/register_timer/unregister_timer`. v2 appended four background-task members (`submit/cancel/get/list_async_work`, baseline kept, gate with `ifaceHas`). See §19 of the Chinese doc. |
+
+### 8.2 Generic tables (`agentxx.*`, 10)
+
+Declared and implemented by the plugin framework (C ABI entry in `pluginxx/host/tables_impl.h`
+→ `PluginHostCore`); the agent side and the client side each provide one copy, so plugins use
+the same calls on both ends.
+
+| IID | Version | Capability |
+|---|---|---|
+| `agentxx.broadcasts` | 3 | `declare_broadcast` (cache / publish permission / push current value on subscribe / rate limit / scope) + `publish_broadcast` + `subscribe_broadcast(_ex)` (with an end callback) + `read_broadcast` + `unsubscribe_broadcast` + `end_broadcast`. Plugin notifications and cross-side data both go through it; v3 added `end_broadcast` and `subscribe_broadcast_ex`. |
+| `agentxx.capabilities` | 6 | `register_capability/unregister_capability/invoke_capability/capability_info/list_capabilities/op_cancel` (plus the `_ex` variants). Capability rows are isolated by **scope** (one row per mounted agent); a capability may have rows from several providers, and the chain is ordered by `(priority asc, registration order)`. **An extension point implementation row is a capability row.** |
+| `agentxx.scheduler` | 1 | `is_io_thread/post_to_io/sleep/op_cancel/offload` (`sleep` = host timer; `offload` = blocking-pool delegation, requires a `cancel_token`). |
+| `agentxx.coroutine_runtime` | 1 | Generic coroutine driver: `request_driver/cancel_driver/is_io_thread` (driver-ticket / wake protocol, see §15). |
+| `agentxx.plugins` | 1 | `list_plugins/get_plugin/get_own_info` (JSON; each `list_plugins` item carries `mount_count` / `mount_agents`). |
+| `agentxx.config` | 3 | `get_config/get_plugin_args/get_plugin_config_path/get_language/set_language` (`get_plugin_config_path` returns the normalized absolute path configured via YAML `config`, pointing to a file or a directory). Since v3 it carries no business members. |
+| `agentxx.cancel` | 3 | `op_cancel` (cancel one operation handle; every table with cancellable entries funnels here). Since v3 `is_canceled` moved to `agentxx.agent.session`. |
+| `agentxx.json` | 1 | `json_get_string/json_escape`. |
+| `agentxx.log` | 1 | `log(level, msg)` (0: trace .. 4: error). |
+| `agentxx.tasks` | 1 | Host-managed background tasks: `register_task/cancel_task` (auto-registered by kit `spawn`; the host tracks the handle, holds the inflight count and receives `notify.done`, which may be called from any thread). |
+
+> Not counted in the 20: `agentxx.net` (v1) — `call / call_async / cancel`; HTTP / WebSocket /
+> TCP / UDP / HTTP server all go through `utilxx::NetHub` (see §22 of the Chinese doc).
 
 > **Built-in capabilities (callable by other plugins / the host side)**
 >
-> A capability is a name + JSON payload RPC: the provider registers it in `start` with
-> `capability(ctx, "name", fn)`, the caller goes through `agentxx.agent.capabilities`
-> (`invoke_capability_async`; kit: `invoke_cap` / `invoke_capability_blocking`; host side:
-> `PluginManager::invokeCapabilityAsync`). A call must carry the **calling plugin
-> instance** (the host holds its execution lease so unloading waits for the call); the
-> host itself passes the provider instance (`PluginManager::find(pluginName)`). The FFI
-> C API has no dedicated capability entry point today.
+> A capability is a name + JSON payload RPC: the provider registers it in `start` / `mount`
+> with the kit helper `capability(ctx, "name", fn, opts)` (`PluginxxCapabilitySpec`), the caller
+> goes through the `agentxx.capabilities` table's `invoke_capability` (kit: `invoke_cap`
+> coroutine awaiter / `invoke_capability_blocking`). On the host side, `PluginManager::capabilities()`
+> gives `infoJson` / `listJson` for discovery, and extension points go through
+> `emitPoint` / `emitPointAsync`. A call must carry the **calling plugin instance** (the host
+> holds its execution lease so unloading waits for the call). The FFI C API has no dedicated
+> capability entry point today.
 >
 > - `agentxx.system_usage` (`agentxx_system_monitor`): snapshot of the current system load.
 >   `method` does not branch (by convention `query`), arguments are ignored. Fields
@@ -363,29 +389,26 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 
 ## 9. Client-Side Interface Tables
 
+17 tables: 11 **generic tables** (same set as the agent side: log / json / config / plugins /
+broadcasts / capabilities / scheduler / coroutine_runtime / tasks / cancel / net) plus 6 own
+tables (`agentxx.client.*`). Client events are broadcast channels now — the old
+`agentxx.client.events` / `.json` / `.log` tables are gone (the latter two use `agentxx.json` /
+`agentxx.log`).
+
 | IID | Version | Capability |
 |---|---|---|
 | `agentxx.client.ui` | 1 | `register_status_item/update/unregister`, `register_panel/update/unregister`, `register_info_section/update/unregister`, `register_command/unregister`, `show_toast`, `update_tool_decor(tool_call_id, decor_json)`, `register_tool_renderer(spec)/unregister_tool_renderer(tool_name)`, `bind_action_handler/unbind_action_handler`, `open_overlay/close_overlay`. |
-| `agentxx.client.events` | 1 | `subscribe/unsubscribe` (See `AgentxxClientEvent`: `READY`, `CONN_STATE`, `USER_INPUT`, `DELTA`, `TURN_END`, `SESSION_SWITCH`, `PLUGIN_DATA`, `UI_LAYOUT`). |
 | `agentxx.client.session` | 1 | `get_client_state` (snapshot JSON), `send_user_input`, `request_cancel`. |
 | `agentxx.client.wire` | 1 | `send_plugin_data(topic, json)` → published on the agent bus under the same topic (topic must be the full name `agentxx.client.plugin.<plugin name>.<event>`). |
 | `agentxx.client.self` | 1 | `get_own_info/get_plugin_args/get_plugin_config_path` (Returns normalized absolute path configured via YAML `config`). |
-| `agentxx.client.json` | 1 | `json_get_string/json_escape`. |
-| `agentxx.client.log` | 1 | `log(level, msg)`. |
 | `agentxx.client.timer` | 1 | One-shot / periodic timers plus region visibility queries (pause policy: plugins.md §9.5 in the Chinese doc). |
 | `agentxx.client.keybind` | 1 | Global keybind register/unregister/list (normalization and priority: §9.6 in the Chinese doc). |
 
-Manifest declaration conventions (`interfaces.require/optional`; the side is determined by prefix):
-
-- The client side should declare **fine-grained capability names** (`agentxx.client.msg_decor`,
-  `...panel`, `...toast`, ... — each maps to a non-NULL member of the ui table) so the host can
-  decide whether the feature is usable; reserved/unimplemented names are always treated as
-  "not supported by host" (fail safe).
-- `agentxx.client.ui` (the ui table IID) means the **whole table**: only hosts covering every
-  sub-capability advertise it (TUI). Declaring it is equivalent to requiring all sub-capabilities,
-  so hosts missing some of them (CLI) treat it as missing (`optional` → warning, `require` → skip
-  loading). A plugin that only uses specialized tool rendering should therefore declare
-  `agentxx.client.msg_decor` rather than the table IID.
+Client channels declared by the host at startup (subscribe directly, no `declare_broadcast`
+needed): `agentxx.client.ready`, `agentxx.client.connection_state`,
+`agentxx.client.session_switch`, `agentxx.client.ui_layout`, `agentxx.client.user_input`,
+`agentxx.client.delta`, `agentxx.client.turn_end`, and
+`agentxx.client.plugin.<plugin name>.<event>` for cross-side plugin data.
 
 ### Specialized Tool Rendering Architecture (Tool Rendering & Decor)
 

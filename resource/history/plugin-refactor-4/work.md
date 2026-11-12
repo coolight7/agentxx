@@ -13,9 +13,9 @@
 | 步骤 2 agent 侧（DomainServices + 广播 + 中枢） | 已完成（广播通道打通，事件中枢对接完成，`plugins` 模块全绿） |
 | 步骤 3 功能埋点（替换钩子与功能点） | 已完成（删 `agentxx.agent.event` / `agentxx.agent.feature` / `agentxx.agent.hooks` 三张表；通知型扩展点只剩“订阅同名广播”，见步骤 3-A/3-2/3-3） |
 | 步骤 4 网络（`agentxx.net` + 4 个插件迁移） | 已完成（agent/client 双侧表 + SDK 便捷层 + 4 个插件全迁：websearch / rag_search / text_selection_monitor / chatbot） |
-| 步骤 5 client 侧（广播 + net） | 进行中（net 已提供；广播与 DomainServices 待做） |
-| 步骤 6 插件全量迁移 + JS 引擎 | 进行中（能力表 APIs 已迁：JS 引擎 + 3 个示例插件） |
-| 步骤 7 测试、文档、收尾 | 待开始 |
+| 步骤 5 client 侧（广播 + DomainServices） | 已完成（17 张表 = 10 框架通用 + `net` + 6 自有；`agentxx.client.*` 频道 7 条；实例内订阅簿记与三张自有表删除） |
+| 步骤 6 插件全量迁移 + JS 引擎 | 已完成（26 个插件全部重编；`PluginEventsCompat` 与 `iface.events` 删除，发布/订阅只剩广播表） |
+| 步骤 7 测试、文档、收尾 | 已完成（全量构建 + 全模块测试 + `plugins.md`/`index.md`/`events.md`/`AGENTS.md`/英文分册同步） |
 
 ## 实施记录（按步骤回填）
 
@@ -596,22 +596,96 @@ publishPluginBroadcast(host, iface.broadcasts, id, payload)）：
 
 ### 步骤 7：测试、文档、收尾
 
-- 状态：待开始
+- 状态：**已完成**
+
+**测试**
+
+- `cmake --build build/windows-debug --config Debug`（全量，含 lib / client / test / benchmark /
+  插件目标）：exit=0
+- `pwsh -File agent/script/build_plugins.ps1`：26 个插件全部重新产出
+- `agentxx_test --log-level warn` 全模块：除 `test_modules` 外无 `[FAIL]`；`test_modules`
+  失败原因是 `docs/zh-cn/design/test-modules.md` 落后（新增了 `plugin_point` / `plugin_net` /
+  `plugin_dispatch` 三个模块）—— 用 `AGENTXX_UPDATE_TEST_MODULES=1` 重新生成（143 个模块）后
+  重跑通过
+- 一批启子进程 / 开服务端的模块在 ASan 构建下 abort：`ffi_c_api` / `websocket` /
+  `remote_agent` / `network_timeout` / `mcp` / `input_delivery` / `session_sync` /
+  `shutdown_stages` / `async_work` / `event_subagent`。堆栈里的分配、释放、读取全部落在
+  搜狗输入法的 `SogouPY.ime` / `SogouTSF.ime` 上（进程加载了 IME 的 TSF DLL），没有任何
+  agentxx 帧；abort 之前这些模块无 `[FAIL]`（`cancel` 第二次单独跑 45 条全过）。属于环境噪声
+- 逐模块跑完剩下的全部模块：25468 passed / 0 failed
+
+**文档**
+
+- `docs/zh-cn/design/plugins.md`
+  - §2：版本限制与“不改库”的实施方式 4 → 5（v5 = 迁到 `cxx_pluginxx` 0.3.0）
+  - §5.1：`pluginxx/host/` 文件清单改成当前一组（`broadcast_registry` / `capability_chain` /
+    `domain_services`，去掉已删的 `event_bus` / `domain_hooks`）；十张通用表清单把 `events`
+    换成 `broadcasts`，主程序侧实现指向 `plugin_manager_domain_services.cpp`
+  - §8：拆成“8.1 业务表（10 张）/ 8.2 通用表（10 张）”两段，通用表 IID 改成真实值
+    `agentxx.<表名>`（原文写 `pluginxx.<表名>`，按那个名字查询不会命中），版本号按头文件
+    改成 broadcasts 3 / capabilities 6 / config 3 / cancel 3，删掉已删的 `agentxx.agent.events`
+    行，补“另一张 `agentxx.net` 不计入 20 张”；代次说明改成当前 v5 并补 v3/v4 历史
+  - §9：表数量写法改成“10 张框架通用表 + 1 张网络表 + 6 张自有表”，`pluginxx.json/log`
+    改成 `agentxx.json` / `agentxx.log`
+  - §17.7：`IfaceMeta` 特化数 29 → 26，长度门槛用例 `plugin_feature` → `plugin_runtime`
+  - §18.6：`pluginxx.plugins.list` → `agentxx.plugins.list`
+  - §20.3：删掉“`iface.events` 兼容层仍可用”一段（兼容层已在步骤 6 删除）
+  - §21/§21.4：标题“功能点 id” → “扩展点 id”，内容改成当前模型（一个 id = 一条能力行 +
+    一个同名广播频道，SDK `providePoint` / `pointAnswer`），不再提 `definePluginPoint`
+  - §8 内置能力段：能力登记/调用改成 v6 语义（`capability(..., opts)`、`invoke_capability`、
+    主程序侧 `capabilities()->infoJson` / `emitPoint`）
+- `docs/zh-cn/design/index.md`：附录 B 的两侧表数量与清单、目录树里的 plugin/host 文件清单
+  （`event_bus`/`domain_hooks` → `broadcast_registry`/`capability_chain`/`domain_services`）、
+  `DomainHooks` → `DomainServices`、Client 侧“9 张表” → 17 张
+- `docs/zh-cn/design/events.md`：“功能点 id” → “扩展点 id”
+- `docs/en/design/plugins.md`：§8/§9 的表清单按 20/17 重写（去掉 `hooks` / `client.events` /
+  `client.json` / `client.log`），补广播频道清单与能力调用说明，翻译状态说明的“16 节” → 22 节
+- 根 `AGENTS.md`：功能点体系段改成“扩展点体系（插件面走能力行）”、注册可逆的类型清单、
+  相对表的 IID 命名（`pluginxx.*` → `agentxx.*`）、当前代次 3 → 5（补 v4/v5 历史）、
+  `DomainHooks`/`event_bus` 相关描述、扩展点 id 规则
+- `agent/plugins/AGENTS.md`：无需改动（未提四张已删表）
+
+**代码注释同步**（只改注释，无行为变化）
+
+- `plugin_manager.h`：类头注释里的通用表清单（`events` → `broadcasts`）与 `DomainHooks` →
+  `DomainServices`（两处）
+- `agentxx_system_monitor.cpp`：能力调用入口注释里的 `invoke_capability_async` /
+  `PluginManager::invokeCapabilityAsync` → `invoke_capability` / `capabilities()->infoJson`
+
+**静态自检（plan §7.7）**
+
+- `grep -rn 'utilxx/http_client\.h|utilxx/ws_client\.h' agent/plugins/`：无输出
+- `grep -rn 'iface\.events|feature_points|hookEx' agent/plugins/ agent/lib/src/plugins/`：无输出
+- `grep -rn '23 张|9 张接口表|13 张业务' docs/ AGENTS.md agent/plugins/AGENTS.md`：无输出
+- `boundaries` / `config_keys` / `test_modules` 重跑：241 passed / 0 failed
+
+**与计划的偏差**
+
+- 表数量：计划写“agent 侧 21 张（10 框架 + net + 10 业务）”，实际常量为 20 —— `agentxx.net`
+  在 agent 侧不计入 `kInterfaceTableCount`（头文件与文档都写明“单独一张”），client 侧 17 张
+  里则包含 net。两侧口径不同但各自与常量、`boundaries` 规则一致；若以后要统一成
+  “11 通用 + 10 业务 = 21”，改常量、`boundaries` 规则 7 与四处文档即可
+- 计划里的“功能埋点”在全项目统一写成**扩展点**（`boundaries` 规则 15 拦停用词），
+  `plugin_hooks` 合并进 `plugin_point`；`plugin_feature` 保留为“插件面登记实现行”的用例
+- 计划里的 `PluginNetHub` 落到两处：`cxx_utilxx` 的 `utilxx::NetHub`（与插件无关的通用网络
+  服务，按 owner 记账）+ 主程序的 `agentxx::plugin::PluginNetService`（适配接口表、事件、租约）
 
 ## 验证清单（实施完成后逐条勾）
 
 - [x] 两个库 Debug 编过，`api_abi_check` 与新增静态断言通过
-- [ ] `windows_debug_build.bat` 全绿（lib + client + test + benchmark + 插件目标）
-- [ ] `agent/script/build_plugins.ps1` 全部插件产物时间戳更新（26 个）
-- [ ] `agentxx_test --log-level warn` 全模块通过（debug + ASan）
-- [ ] `boundaries` 规则 7（21 / 17 张表）、`IfaceMeta` 特化数、埋点 id 头与声明表一致
-- [x] 能力行 scope 隔离 / 宿主发起调用 / 广播 end / 埋点原语 四项库语义各有一条测试
-      （`plugin_point` 覆盖埋点原语的声明/分发/无实现/通知面/当前值）
-- [ ] 4 个网络插件本地回环往返通过；`grep utilxx/http_client.h agent/plugins/` 为空
+- [x] `windows_debug_build.bat` 全绿（lib + client + test + benchmark + 插件目标）
+- [x] `agent/script/build_plugins.ps1` 全部插件产物时间戳更新（26 个）
+- [x] `agentxx_test --log-level warn` 全模块通过（debug + ASan；除一批被搜狗输入法
+      TSF DLL 带崩的模块，见步骤 7 的测试段）
+- [x] `boundaries` 规则 7（20 / 17 张表，net 在 agent 侧单独计）、`IfaceMeta` 特化数 26、
+      扩展点 id 头与声明表一致
+- [x] 能力行 scope 隔离 / 宿主发起调用 / 广播 end / 扩展点原语 四项库语义各有一条测试
+      （`plugin_point` 覆盖扩展点原语的声明/分发/无实现/通知面/当前值）
+- [x] 4 个网络插件本地回环往返通过；`grep utilxx/http_client.h agent/plugins/` 为空
 - [ ] 手工：空列表启动 26 插件全加载、插件禁用→启用账目归零再回原值、chatbot 断网重连、
-      客户端重连后插件面板与装饰重建
-- [ ] 文档：`plugins.md`、`index.md`、`events.md`、`AGENTS.md`、`plugins/AGENTS.md`、
-      `docs/zh-cn/design/` 内相关分册
+      客户端重连后插件面板与装饰重建（需人工开 TUI / 真实平台，自动化用例已覆盖等价语义）
+- [x] 文档：`plugins.md`、`index.md`、`events.md`、`AGENTS.md`、`plugins/AGENTS.md`、
+      `docs/zh-cn/design/` 内相关分册（另同步了 `docs/en/design/plugins.md` 的表清单）
 
 ## 遗留与注意事项
 

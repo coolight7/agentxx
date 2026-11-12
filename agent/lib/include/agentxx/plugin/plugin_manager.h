@@ -141,9 +141,9 @@ private:
 
 /// 插件管理器 (agent 侧主程序, 进程一份)
 ///
-/// - 通用部分 (log/json/config/plugins/events/scheduler/coroutine_runtime/tasks/
-///   cancel/capabilities 十张通用表的状态与实现) 继承自
-///   [pluginxx::PluginHostCore], 业务数据经 [pluginxx::DomainHooks] 提供;
+/// - 通用部分 (broadcasts/capabilities/scheduler/coroutine_runtime/tasks/cancel/
+///   plugins/config/json/log 十张通用表的状态与实现) 继承自
+///   [pluginxx::PluginHostCore], 主程序数据经 [pluginxx::DomainServices] 提供;
 /// - 加载/启停/禁用启用/卸载/级联依赖骨架继承自
 ///   [pluginxx::PluginHostLifecycle] (与主程序业务无关, 见 pluginxx/host/lifecycle.h);
 /// - 本类只保留**与 agent 无关**的部分: 实例表、挂载表、插件侧接口表的 vtable 分发、
@@ -375,7 +375,7 @@ public:
     std::string getPluginArgsJson(PluginInstance* inst);
     std::string getPluginConfigPath(PluginInstance* inst);
     std::string getLanguage();
-    /// 指定语言 (pluginxx::DomainHooks 要求; 同时服务 config 表的 set_language)
+    /// 指定语言 (pluginxx::DomainServices 要求; 同时服务 config 表的 set_language)
     void setLanguage(std::string_view lang) override;
 
     std::string getModelConfigJson();

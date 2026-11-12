@@ -2089,15 +2089,15 @@ agent/
 │   │   │   ├── plugin_framework.h # 把插件框架 (pluginxx) 类型以逐条 using 引入 agentxx::plugin;
 │   │   │   │                     #   通用部分实现见 agent/third_party/cxx_pluginxx/include/pluginxx/
 │   │   │   │                     #   (kit/{kit,guard}.h; runtime/{runtime,driver,instance_base,manager_base,op_driver}.h
-│   │   │   │                     #    host/{loader,manifest,abi_util,capability_registry,event_bus,domain_hooks,
-│   │   │   │                     #          host_core,tables_impl,lifecycle}.h)
+│   │   │   │                     #    host/{loader,manifest,abi_util,capability_registry,capability_chain,
+│   │   │   │                     #          broadcast_registry,domain_services,host_core,tables_impl,lifecycle}.h)
 │   │   │   ├── plugin_interfaces.h # 接口协商 (三层协商的声明/校验) + 接口名目录 (plugin_interfaces)
-│   │   │   ├── plugin_manager.h  # PluginManager 业务部分 (工具/权限/图/提示词/资源/功能点) /
+│   │   │   ├── plugin_manager.h  # PluginManager 业务部分 (工具/权限/图/提示词/资源/扩展点) /
 │   │   │   │                     #   PluginTool (C 回调→线程池卸载执行) /
 │   │   │   │                     #   PluginHookDispatchHandle (挂载级单派发器, 7 个通知型扩展点);
 │   │   │   │                     #   十张通用表的状态与方法继承自 pluginxx::PluginHostCore,
 │   │   │   │                     #   加载/启停/禁用启用/卸载/级联继承自 pluginxx::PluginHostLifecycle
-│   │   │   │                     #   (业务数据经 pluginxx::DomainHooks + 生命周期扩展点提供)
+│   │   │   │                     #   (业务数据经 pluginxx::DomainServices + 生命周期扩展点提供)
 │   │   │   ├── client_plugin_manager.h # ClientPluginManager (client 侧加载/UI 注册表/命令管线;
 │   │   │   │                     #   卸载与启停继承 pluginxx::PluginHostLifecycle, 加载为 client 特有实现)
 │   │   │   ├── plugin_graph_node.h # PluginGraphNode (插件自定义图节点, 统一 Operation 完成协议)
@@ -2150,8 +2150,8 @@ agent/
 │   │                             #   git 工作树封装属本项目, 见 lib/include/agentxx/tools/worktree.h)
 │   ├── cxx_pluginxx/             # 插件框架: api/(abi.h,tables.h) + kit/(kit.h,guard.h) +
 │   │                             #   runtime/(runtime,driver,instance_base,manager_base,op_driver) +
-│   │                             #   host/(loader,manifest,abi_util,capability_registry,
-│   │                             #         event_bus,domain_hooks,host_core,tables_impl,lifecycle)
+│   │                             #   host/(loader,manifest,abi_util,capability_registry,capability_chain,
+│   │                             #         broadcast_registry,domain_services,host_core,tables_impl,lifecycle)
 │   │                             #   —— 十张通用表的定义与实现 (PluginHostCore/入口) 以及
 │   │                             #      加载/启停/卸载/级联骨架 (PluginHostLifecycle) 都在此
 │   └── (其余: boost/fmt/simdjson/sqlite3/OpenSSL/neograph/yaml-cpp/...)
@@ -2364,7 +2364,7 @@ agent/
 │   ├── example_js/               # JS 示例插件 (C++ 壳 + plugin.js; depends: javascript_engine)
 │   ├── example_js_execute_command/ # JS 代码执行工具插件 (example_js_execute_command; depends: javascript_engine)
 │   ├── example_resources/        # 会话资源贡献示例 (声明式与编程式 MCP/Skill/规则)
-│   ├── example_feature/          # 功能点示例插件 (声明自己的点 + 为任意点登记实现)
+│   ├── example_feature/          # 扩展点示例插件 (登记实现行 + 订阅同名频道)
 │   ├── example_multi_mount/      # 一插件多 agent 挂载示例插件 (挂载作用域/会话/事件)
 │   ├── agentxx_javascript_engine/ # QuickJS JS 运行时插件 (能力 interpreter.js; 专用 JS 线程+沙箱)
 │   ├── agentxx_codegraph/        # CodeGraph 代码分析插件 (search/context/callers/callees/path 共 5 工具 + client Info 栏段落)
@@ -2557,8 +2557,8 @@ EventBus (事件总线)
 ## 附录 B: 插件系统 v1 要点 (详见 plugins.md)
 
 - COM 风格接口表查询: 核心 vtable 冻结 (alloc/free + query_interface; 原 strdup 槽位已移出 vtable, 改为基于 alloc 的头文件内联 `pluginxx_strdup`), 能力按 IID 字符串查询独立接口表 (每张表四件套: IID + `struct_size` + `version`/`_VERSION` + `_MIN_VERSION` + `_BASELINE_SIZE`; 判定 = `version >= MIN_VERSION` 且 `struct_size >= BASELINE_SIZE`); 插件级要求 `api_version >= PLUGINXX_MIN_API_VERSION`
-- Agent 侧 20 张接口表: 10 张通用表 (`pluginxx.*`: log / json / config / plugins / broadcasts / capabilities / scheduler / coroutine_runtime / tasks / cancel) + 10 张业务表 (`agentxx.agent.*`: tools / permission / session / context / model / prompt / resources / graph / mount / runtime)
-- Client 侧 9 张接口表: ui / events / session / wire / self / json / log / timer / keybind (详见 client_plugin_api.h)
+- Agent 侧 20 张接口表: 10 张通用表 (`agentxx.*`: log / json / config / plugins / broadcasts / capabilities / scheduler / coroutine_runtime / tasks / cancel, 另有不计入的 `agentxx.net`) + 10 张业务表 (`agentxx.agent.*`: tools / permission / session / context / model / prompt / resources / graph / mount / runtime)
+- Client 侧 17 张接口表: 11 张通用表 (与 agent 侧同一套: log / json / config / plugins / broadcasts / capabilities / scheduler / coroutine_runtime / tasks / cancel / net) + 6 张自有表 (`agentxx.client.*`: ui / session / wire / self / timer / keybind; 详见 client_plugin_api.h)。客户端事件走广播频道, 不再有 `events` / `json` / `log` 三张表
 - 附加成员与结构体规则: 表成员只能追加在表尾 (基线不变 + `ifaceHas` 判定), 重排/改签名/删成员要换 IID; 跨边界结构体 (spec/input) 统一带 `struct_size` (填充方填长度, 读取方 `specSizeOk`/`specHas` 判定) —— 见 plugins.md §17
 - 现代 SDK (plugin_kit.h): 
   - `AGENTXX_PLUGIN_AGENT_EXPORT` / `AGENTXX_PLUGIN_CLIENT_EXPORT` 声明式导出宏, 自动包裹 C ABI 异常守卫与实例上下文生命周期

@@ -11,7 +11,7 @@ path/to/agentxx_test --fail-fast        # 遇到失败立即终止
 path/to/agentxx_test string_util regex  # 只跑指定模块
 ```
 
-模块总数: 141 (同步 72 / 异步 69)
+模块总数: 143 (同步 72 / 异步 71)
 
 | 模块 | 调度 | 构建 |
 |---|---|---|
@@ -139,8 +139,10 @@ path/to/agentxx_test string_util regex  # 只跑指定模块
 | `plugin_llm_uncensored` | 异步 | 通用 |
 | `plugin_cleanup` | 异步 | 通用 |
 | `plugin_feature` | 异步 | 通用 |
+| `plugin_point` | 异步 | 通用 |
+| `plugin_net` | 异步 | 通用 |
 | `plugin_broadcast` | 异步 | 通用 |
-| `plugin_hooks` | 异步 | 通用 |
+| `plugin_dispatch` | 异步 | 通用 |
 | `plugin_resources` | 异步 | 通用 |
 | `plugin_host_mount` | 异步 | 通用 |
 | `plugin_multi_mount` | 异步 | 通用 |
