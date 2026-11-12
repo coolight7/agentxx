@@ -10,7 +10,7 @@ void usePositive(Ctx& ctx) {
     tool(ctx, "pos.tool", "d", "{}", [](Ctx&, std::string_view args, OpCtl) -> Task<std::string> {
         co_return std::string{args};
     });
-    // 扩展点实现行 = 能力行 (实现体收载荷, 返回结果正文)
+    // 功能埋点实现行 = 能力行 (实现体收载荷, 返回结果正文)
     providePoint(ctx, ScopeRef{}, "pos.point", [](Ctx&, std::string_view payload) -> std::string {
         return std::string{payload};
     });

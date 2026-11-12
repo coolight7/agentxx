@@ -244,7 +244,7 @@ asio::awaitable<TestResult> run_assembly_snapshot_tests() {
             std::string{"test-model"}
         );
 
-        // 中间件顺序: 非空; 日志中间件在末尾 (建挂载时追加的扩展点派发器只发广播,
+        // 中间件顺序: 非空; 日志中间件在末尾 (建挂载时追加的功能埋点派发器只发广播,
         // 不改流程, 排在它之后不影响"日志作为最后一层"的约定)
         const auto& middlewares = snapshot["middlewares"];
         XX_TEST_EXPECT_GE(middlewares.size(), size_t{2});
@@ -319,7 +319,7 @@ asio::awaitable<TestResult> run_assembly_snapshot_tests() {
         XX_TEST_EXPECT_GE(snapshot["graph"].value("nodes", 0), 4);
         XX_TEST_EXPECT_FALSE(snapshot["persistence"].value("enabled", true));
 
-        // 通知型扩展点清单: 7 个固定点都在 (插件靠订阅同名频道收到, 没有处理器注册表)
+        // 通知型功能埋点清单: 7 个固定点都在 (插件靠订阅同名频道收到, 没有处理器注册表)
         XX_TEST_EXPECT_TRUE(snapshot.contains("hook_points"));
         XX_TEST_EXPECT_EQ(snapshot["hook_points"].value("count", 0), 7);
         XX_TEST_EXPECT_TRUE(snapshot["hook_points"]["points"].is_array());
@@ -339,7 +339,7 @@ asio::awaitable<TestResult> run_assembly_snapshot_tests() {
         XX_TEST_EXPECT_TRUE(has(rendered, "models: default=test-model"));
         XX_TEST_EXPECT_TRUE(has(rendered, "graph: agentxx.default"));
         XX_TEST_EXPECT_TRUE(has(rendered, "persistence: OFF"));
-        // 通知型扩展点清单也渲染出来 (非开发者模式只有一行标题)
+        // 通知型功能埋点清单也渲染出来 (非开发者模式只有一行标题)
         XX_TEST_EXPECT_TRUE(has(rendered, "hookPoints[7] devMode=no:"));
         agentxx::agent::logAssemblySnapshot(snapshot, "test");
     }

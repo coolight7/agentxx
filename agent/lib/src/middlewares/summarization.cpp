@@ -136,7 +136,7 @@ SummarizationMiddlewareHandle::SummarizationMiddlewareHandle(
     assert(tokensPerImage >= 0);
     assert(extraTokensPerMessage >= 0);
 
-    // token 估算规则: 一份实例, 功能点核心实现与同步快路径共用
+    // token 估算规则: 一份实例, 功能埋点核心实现与同步快路径共用
     // (规则本身在 agentxx::feature::TokenEstimator 里, 这里只注入本中间件的系数)
     tokenEstimator                        = std::make_shared<agentxx::feature::TokenEstimator>();
     tokenEstimator->asciiCharsPerToken    = asciiCharsPerToken;
@@ -167,12 +167,12 @@ SummarizationMiddlewareHandle::SummarizationMiddlewareHandle(
         };
         featurePoints = agentxx::feature::registerContextPoints(*ctx->features, pointOptions);
     } else {
-        XX_LOGD("SummarizationMiddlewareHandle: 未取到功能点注册表, 只用同步估算路径");
+        XX_LOGD("SummarizationMiddlewareHandle: 未取到功能埋点注册表, 只用同步估算路径");
     }
 }
 
 size_t SummarizationMiddlewareHandle::countTokensForUtf8Str(std::string_view in_str) const {
-    // 转发到功能点核心实现所用的同一份估算规则 (只保留一份实现)
+    // 转发到功能埋点核心实现所用的同一份估算规则 (只保留一份实现)
     return tokenEstimator->estimateText(in_str);
 }
 
@@ -858,7 +858,7 @@ asio::awaitable<void>
         }
     }
 
-    // 预算计算经功能点取 token 数: 插件提供的 tokenizer 在这里可见
+    // 预算计算经功能埋点取 token 数: 插件提供的 tokenizer 在这里可见
     // (TPS 显示的同步快路径不参与, 见 plan §8.1)
     const auto countTokenUsage
         = co_await countTokensViaPoint(in.ctx.thread_id, messages, enableCountThinking);
@@ -990,7 +990,7 @@ asio::awaitable<void>
             // (实测命中从 23235 掉到只剩 system + 工具段的 6784)
 
             /// llm 压缩 (同上下文 subagent, 中断后由 Session 派生并 resume)
-            /// - 经功能点取摘要文本: 插件 / FFI 主程序的实现可在这里替换核心压缩;
+            /// - 经功能埋点取摘要文本: 插件 / FFI 主程序的实现可在这里替换核心压缩;
             ///   调度 (提示消息 / 写回 / 回退) 仍在本中间件
             auto summary = co_await summarizeViaPoint(sessionId, toSummarize, /*direct=*/false);
 
@@ -1067,7 +1067,7 @@ asio::awaitable<void>
         // ---- 回退: 压缩后仍超限 (>= 95%) → 降级硬截断, 保证请求能发出 ----
         // 场景: system 本身很大, 或摘要本身很长, 压缩结果仍 >= 95% 上限;
         // 硬截断 (system + 截断说明 + 最近消息 30% 预算 + 单条二分截断) 是最后回退
-        // - 与触发判定用同一个取数入口 (功能点), 避免两条规则混用
+        // - 与触发判定用同一个取数入口 (功能埋点), 避免两条规则混用
         const size_t compressedTokens
             = co_await countTokensViaPoint(sessionId, compressedMessages, enableCountThinking);
         if (compressedTokens >= modelContextMaxToken * 0.95) {
@@ -1253,7 +1253,7 @@ asio::awaitable<bool>
 
         // 手动压缩在 agent 空闲时触发 (无 AgentRunner 中断循环), 不能走
         // NodeInterrupt 中断委派 (无人处理会逃逸 detached 被吞), 直派模式
-        // (经功能点取摘要文本: 调度仍在本中间件)
+        // (经功能埋点取摘要文本: 调度仍在本中间件)
         auto summary = co_await summarizeViaPoint(sessionId, toSummarize, /*direct=*/true);
         if (!summary.empty()) {
             if (systemCount > 0) {

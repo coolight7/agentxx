@@ -451,7 +451,7 @@ utilxx_base::Json buildRuntimeSnapshot(const AgentContext& ctx) {
     }
     root["persistence"] = std::move(persist);
 
-    // ---- 功能点 (清单: 点数 / 各点生效实现 / 可调性; 见 plan §11) ----
+    // ---- 功能埋点 (清单: 点数 / 各点生效实现 / 可调性; 见 plan §11) ----
     if (ctx.features) {
         root["feature_points"] = ctx.features->listPointsJson();
     } else {
@@ -462,7 +462,7 @@ utilxx_base::Json buildRuntimeSnapshot(const AgentContext& ctx) {
         root["feature_points"]  = std::move(empty);
     }
 
-    // ---- 通知型扩展点 (7 个点 + 派发记录; 插件靠订阅同名广播收到) ----
+    // ---- 通知型功能埋点 (7 个点 + 派发记录; 插件靠订阅同名广播收到) ----
     utilxx_base::Json hookPointsJson = utilxx_base::Json::object();
     if (ctx.pluginMount) {
         try {
@@ -734,7 +734,7 @@ std::vector<std::string> renderAssemblySnapshot(const utilxx_base::Json& snapsho
             }
         }
     }
-    // 功能点: 声明了几个点、每个点谁在生效 / 有几条实现 (排障时先看这里)
+    // 功能埋点: 声明了几个点、每个点谁在生效 / 有几条实现 (排障时先看这里)
     if (snapshot.contains("feature_points") && snapshot["feature_points"].is_object()) {
         const auto& section = snapshot["feature_points"];
         const auto& points  = section.contains("points") && section["points"].is_array()
@@ -768,7 +768,7 @@ std::vector<std::string> renderAssemblySnapshot(const utilxx_base::Json& snapsho
             ));
         }
     }
-    // 通知型扩展点: 7 个点各派发过多少次 (派发记录只在开发者模式下有)
+    // 通知型功能埋点: 7 个点各派发过多少次 (派发记录只在开发者模式下有)
     if (snapshot.contains("hook_points") && snapshot["hook_points"].is_object()) {
         const auto& section = snapshot["hook_points"];
         const auto& points  = section.contains("points") && section["points"].is_array()

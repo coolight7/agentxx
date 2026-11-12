@@ -2,10 +2,10 @@
 ///
 /// 这一层是"加载一次是进程的事, 注册一次是 agent 的事"的正面验证:
 /// 插件实例只 `create`/`start` 一次, 每个 agent 各有一份挂载, 挂在某个 agent 上的
-/// 工具 / 提示词贡献 / 扩展点实现行 / 事件订阅互不影响, 拆挂载只影响被拆的那一个。
+/// 工具 / 提示词贡献 / 功能埋点实现行 / 事件订阅互不影响, 拆挂载只影响被拆的那一个。
 ///
 /// 覆盖 (编号对应设计文档 `04-implementation.md` §3.1):
-/// 1 一主程序两 agent / 2 工具隔离 / 3 提示词只影响本 agent / 4 扩展点实现行只对本 agent 生效 /
+/// 1 一主程序两 agent / 2 工具隔离 / 3 提示词只影响本 agent / 4 功能埋点实现行只对本 agent 生效 /
 /// 5 卸载一个 agent / 6 主程序关闭 / 7 挂载失败只回滚该 agent / 8 事件订阅按挂载分开 /
 /// 9 无引用的注册被拒 / 10 重复挂载幂等 / 11 工具名冲突 / 12 第三个 agent /
 /// 13 版本门槛 / 14 引用校验 (空 / 未知 id / 过期序号) / 15 20 张表与挂载表查询
@@ -183,7 +183,7 @@ const void* queryTable(const PluginxxHost* host, const char* iid) {
     return host->vtable->query_interface(host, &view);
 }
 
-/// 一个扩展点实现行: 只为验证"实现行只对登记它的 agent 生效"
+/// 一个功能埋点实现行: 只为验证"实现行只对登记它的 agent 生效"
 void* PLUGINXX_CALL probePointImpl(
     void*,
     const PluginxxHost*,
@@ -303,7 +303,7 @@ asio::awaitable<TestResult> run_plugin_host_mount_tests() {
                             != std::string::npos);
     }
 
-    // ================= 4. 扩展点实现行只对登记它的 agent 生效 =================
+    // ================= 4. 功能埋点实现行只对登记它的 agent 生效 =================
     {
         const PluginxxHost* hostView = inst->hostView();
         const auto*         caps     = static_cast<const PluginxxCapabilitiesIface*>(
@@ -358,7 +358,7 @@ asio::awaitable<TestResult> run_plugin_host_mount_tests() {
     // ================= 8. 事件订阅按挂载分开 =================
     {
         // example_plugin 在 mount 里订阅三处: 自己的演示频道、client 下行主题,
-        // 以及通知型扩展点 `agentxx.agent.point.tool.end` —— 每个挂载各一份 (作用域标识区分)
+        // 以及通知型功能埋点 `agentxx.agent.point.tool.end` —— 每个挂载各一份 (作用域标识区分)
         const size_t subA = subscriptionsOf(*inst, "agent_a");
         const size_t subB = subscriptionsOf(*inst, "agent_b");
         XX_TEST_EXPECT_EQ(subA, size_t{3});

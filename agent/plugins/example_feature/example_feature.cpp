@@ -1,20 +1,20 @@
-/// example_feature —— 扩展点插件示例 (实现行 = 能力行, 不再有单独的功能点接口表)
+/// example_feature —— 功能埋点插件示例 (实现行 = 能力行, 不再有单独的接口表)
 ///
-/// 演示一个插件在扩展点体系里能做的两件事:
-/// 1. **声明并实现自己的扩展点** (`plugin.example_feature.beat`):
+/// 演示一个插件在功能埋点体系里能做的两件事:
+/// 1. **声明并实现自己的功能埋点** (`plugin.example_feature.beat`):
 ///    第一次 `providePoint` 就顺带声明了它 (`impls: many` + `merge: first` + 只开放
 ///    impl 阶段), 之后同 id 的其它实现行都排在一条链上;
-/// 2. **给主程序的扩展点登记实现行** (`agentxx.agent.context.countTokens`):
+/// 2. **给主程序的功能埋点登记实现行** (`agentxx.agent.context.countTokens`):
 ///    登记带本次挂载的作用域, 因此只对被挂载的这个 agent 生效; 摘除后自动回落
 ///    到核心实现。
 ///
-/// 只想"知道扩展点被触发了"的插件不需要登记实现, 订阅同名广播频道即可
+/// 只想"知道功能埋点被触发了"的插件不需要登记实现, 订阅同名广播频道即可
 /// (见 `example_event`)。
 ///
 /// 另含一个异步形态的实现行 (`plugin.example_feature.slow`): 用 kit 协程原语
 /// (`co_await sleep`) 等待, 由插件协程驱动桥推进 (与 tool 的写法一致)。
 ///
-/// 还演示**订阅通知型扩展点**: 订阅 `agentxx.agent.point.turn.start`, 只关心"发生了"。
+/// 还演示**订阅通知型功能埋点**: 订阅 `agentxx.agent.point.turn.start`, 只关心"发生了"。
 #include "agentxx/plugin/api/agentxx_point_ids.h"
 #include "agentxx/plugin/api/plugin_api.h"
 #include "agentxx/plugin/api/plugin_guard.h"
@@ -95,7 +95,7 @@ static int featureAgentSetup(FeatureCtx& ctx, const agentxx::plugin::ScopeRef& r
         return 0;
     }
 
-    // 1. 自己的扩展点: 同步实现行
+    // 1. 自己的功能埋点: 同步实现行
     //    - 收到的是调用载荷 JSON: {point, args, request, caller, viaCall, identity, sessionId}
     //    - 返回值就是这次调用的结果正文; 想显式置空就回 `{"disable":true}`
     //    - `pointAnswer` 把业务 JSON 包成 `{"value": ...}` 形式 (与早期写法一致),
@@ -154,7 +154,7 @@ static int featureAgentSetup(FeatureCtx& ctx, const agentxx::plugin::ScopeRef& r
         }
     }
 
-    // 3. 给主程序的扩展点登记实现行 (固定 token 数, 便于测试断言)
+    // 3. 给主程序的功能埋点登记实现行 (固定 token 数, 便于测试断言)
     //    - 主程序点写全名; 行只对本挂载生效, 优先级默认 0
     //    - 点还没声明 (如裸 PluginManager 环境) 时登记被拒, 记一条日志继续
     {
@@ -175,7 +175,7 @@ static int featureAgentSetup(FeatureCtx& ctx, const agentxx::plugin::ScopeRef& r
     }
 
     // 4. 只想"知道某个点发生了"就不必登记实现: 订阅同名广播频道即可
-    //    (通知型扩展点 `agentxx.agent.point.*` 由主程序声明, 插件只订阅)
+    //    (通知型功能埋点 `agentxx.agent.point.*` 由主程序声明, 插件只订阅)
     //    - 一个插件可能同时挂在多个 agent 上: 载荷里带 `agentId`, 订阅侧自己过滤
     //    - 订阅跟着实例走: 禁用/卸载时由主程序自动退订
     if (ctx.iface.broadcasts && ctx.iface.broadcasts->subscribe_broadcast) {

@@ -117,7 +117,7 @@ resource/history/<任务短名>/        # 英文小写 + 短横线，能看出�
   `AgentContext::usageAccountSessions` + `usageAccountSessionId` 记到父会话台账, 自动压缩
   经总线到达 (`spawnBatch(req)` 不带父上下文) 时回退根会话, 详见 index.md 架构设计第 7 小节
 - **一插件加载多 agent 挂载**: 插件只 `create`/`start` 一次, 每个 agent 各一份
-  `PluginMount`; agent 级注册 (工具/权限/扩展点实现行/提示词/图/资源/广播订阅) 只能在插件 `mount`
+  `PluginMount`; agent 级注册 (工具/权限/功能埋点实现行/提示词/图/资源/广播订阅) 只能在插件 `mount`
   回调里做, 在 `start` 里做返回 `AGENTXX_PLUGIN_ERR_NO_AGENT` 且无副作用。会话、事件、
   工作目录、取消状态都按引用 (`PluginxxScopeRef` = agentId + 挂载序号) 落到对应 agent
   (事件源/会话查询都走 `PluginManager::agentContextOf`), 能力声明是进程级的 (同一实例
@@ -214,7 +214,7 @@ path/to/agentxx_test --log-level warn string_util regex
           逐条 `using` 引入 agentxx::plugin, 插件源码零改动)
         - 通用表实现 (十张表的**定义与实现**) 也在插件框架: `host/host_core.h`
           (`PluginHostCore<InstanceT>`: 广播/能力实现链/调度/任务/取消投递的通用实现 +
-          扩展点原语 `declarePoint`/`emitPointAsync`) +
+          功能埋点原语 `declarePoint`/`emitPointAsync`) +
           `host/tables_impl.h` (C ABI 入口 + `queryGenericPluginIface<I,M>`) +
           `host/domain_services.h` (`DomainServices`: 通用表需要主程序数据的入口) +
           `host/broadcast_registry.h` + `host/capability_chain.h` (频道登记表 / 实现链);
@@ -369,16 +369,16 @@ path/to/agentxx_test --log-level warn string_util regex
   三态判定 (DENY/ALLOW/ASK, 不发起询问; SDK: `filterPathPermissions` 等), 逐项丢弃
   被拒或未获批准的路径 —— 声明目标只决定"是否询问一次", 逐路径复核才保证子目录
   拒绝规则不被 `**` 模式绕过; 详见 `docs/zh-cn/design/plugins.md` §8 节
-- 扩展点体系 (2026-10, 2026-11 插件面改走能力行): 核心在关键位置留出的扩展点
+- 功能埋点体系 (2026-10, 2026-11 插件面改走能力行): 核心在关键位置留出的功能埋点
   (`agentxx/feature/feature.h`: `PointBase` / `ProvidePoint<TReq,TValue>` / `JsonProvidePoint`,
   `registry.h`: 点表 + 清单, `points.h`: 三个取值型核心点与 `TokenEstimator`)。
   实现链 `plugin`(0) → `core`(1), 层内按 `(priority 升序, 登记序号)`; 调用两态:
   应用自己 `ask` (读+写值缓存、记置空标记) / 外部 `call` (只读缓存、不记置空、零副作用);
   三道保护: 载荷带 caller/viaCall、调用方自己的实现不问、同 (点, 调用方) 重入 → `busy`。
   错误码字符串 `not_callable|bad_args|no_impl|disabled|busy|failed`; 实现抛异常/非法 JSON/
-  空对象都只等于"没意见"。压缩中间件经扩展点取 token 与摘要 (见 `middlewares/summarization.cpp`)。
+  空对象都只等于"没意见"。压缩中间件经功能埋点取 token 与摘要 (见 `middlewares/summarization.cpp`)。
   统计只在开发者模式 (`dev_mode`, 启动期冻结) 收集。
-  **插件面只有一套原语**: 扩展点 id (唯一真源 `plugin/api/agentxx_point_ids.h`) 同时是
+  **插件面只有一套原语**: 功能埋点 id (唯一真源 `plugin/api/agentxx_point_ids.h`) 同时是
   一条能力行 (`agentxx.capabilities`, `impls: many` + `merge: first`, 只开 impl 阶段) 与
   一个同名广播频道 (`agentxx.broadcasts`) —— 要给值就 `providePoint` 登记实现行
   (回调回 JSON, `pointAnswer` 包成 `{"value":…}`, `{"disable":true}` 表示不参与),
@@ -388,7 +388,7 @@ path/to/agentxx_test --log-level warn string_util regex
   `agentxx.agent.point.context.countTokens`)。测试: `feature_points` (核心侧),
   `plugin_point` (管理器侧), `plugin_feature` (插件面全流程), 示例插件 `example_feature`
 - 注册可逆与独占 slot (2026-10-07): 插件贡献分三类 —— **叠加型** (工具/权限声明/
-  扩展点实现行/图节点类型/广播订阅/能力/清单资源 skill·memory·mcp) 按 owner 记账: 禁用摘生效留记录,
+  功能埋点实现行/图节点类型/广播订阅/能力/清单资源 skill·memory·mcp) 按 owner 记账: 禁用摘生效留记录,
   启用由 `start` 重新声明, 卸载全摘; **贡献型** (提示词) 记 `(owner,key,sequence,value)`
   并按基础值重新合成, 禁用/卸载只删自己的贡献 (不写回旧值, 不顶掉别人的贡献与用户直写);
   **独占型** (`set_graph_json` 执行图定义) 同时只允许一个占用者, 后到者被拒绝,
@@ -570,7 +570,7 @@ path/to/agentxx_test --log-level warn string_util regex
   `plugin.*`, 不限定插件名, 只建议用自己的)、读侧可跨族但必须全名,
   **框架只校验不补前缀**; 中枢事件名**就是**总线主题, 内置值事件统一在
   `agentxx.agent.event.` 段 (与强类型主题分开), `turn.`/`tool.`/`async.`/`timer.`/`host.`
-  子段保留给框架; 扩展点 id 同一套规则 (`agentxx.agent.point.*` / `plugin.<名>.*`);
+  子段保留给框架; 功能埋点 id 同一套规则 (`agentxx.agent.point.*` / `plugin.<名>.*`);
   投递文本是三段纯文本 `[Event] <名字>` / `[Info]` (mode/wait/status/ref/label/note) /
   `[Content]` (值本身: 对象/数组给紧凑 JSON 原样、字符串给原文、多值给 JSON 数组 ——
   **不解释字段, 不动别人自定义的 JSON**; 只对 `agentxx.agent.async.*` 把 `content`
@@ -755,7 +755,7 @@ path/to/agentxx_test --log-level warn string_util regex
     `agentxx/plugin/api/plugin_spec.h` 的 `specSizeOk` / `specHas` 判定
   - 自检: `boundaries` 逐表校验四件套与**成员顺序台账**; `plugin_runtime` 校验判定
     三态与布局偏移; 详见 docs/zh-cn/design/plugins.md §17
-- 通知型扩展点派发 (2026-11, 原 `agentxx.agent.hooks` 表已删除):
+- 通知型功能埋点派发 (2026-11, 原 `agentxx.agent.hooks` 表已删除):
   - 7 个通知点各在调用点发一次广播 (`agentxx.agent.point.turn.start` / `turn.end` /
     `model.start` / `model.run` / `model.end` / `tool.start` / `tool.end`), 插件**订阅同名频道**
     即收到; 没有处理器注册表、优先级、撤销句柄 —— 收不收、谁先谁后由广播订阅与派发顺序决定

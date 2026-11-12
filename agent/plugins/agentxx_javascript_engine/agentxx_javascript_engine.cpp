@@ -186,9 +186,9 @@ constexpr size_t  kStackLimit         = 4 * 1024 * 1024;
 constexpr size_t  kTaskTimeoutMs      = 60000;  ///< 单任务 (工具执行等) 超时
 constexpr int64_t kPromiseWaitLimitMs = 120000; ///< Promise 等待上限 (绝对截止时间)
 
-/// JS 面的钩子点序号 → 通知型扩展点 id
+/// JS 面的钩子点序号 → 通知型功能埋点 id
 ///
-/// 钩子点已经是"通知型扩展点": 脚本里 `agentxx.onHook(point, fn)` 等价于订阅同名
+/// 钩子点已经是"通知型功能埋点": 脚本里 `agentxx.onHook(point, fn)` 等价于订阅同名
 /// 广播频道, 序号约定保持不变 (0 = 轮次开始 … 6 = 工具结束), 与
 /// `agentxx/plugin/api/agentxx_point_ids.h` 的 7 个通知型点一一对应。
 std::string_view hookPointIdOf(int32_t point) {
@@ -260,7 +260,7 @@ struct JsToolBinding {
     std::string name;
 };
 
-/// 扩展点/广播绑定 (订阅时创建, 由 JsPluginCtx 持有; 回调期间存活由主程序
+/// 功能埋点/广播绑定 (订阅时创建, 由 JsPluginCtx 持有; 回调期间存活由主程序
 /// inflight 计数保证)
 struct JsHookBinding {
     JsEngine*   engine = nullptr;
@@ -1167,7 +1167,7 @@ private:
             }
         } guard(pctx.get());
 
-        // 遍历订阅表, 触发本频道的 handler (payload 为扩展点载荷 JSON 字符串)
+        // 遍历订阅表, 触发本频道的 handler (payload 为功能埋点载荷 JSON 字符串)
         JSValue  lenVal = JS_GetPropertyStr(pctx->ctx, pctx->agents, "length");
         uint32_t len    = 0;
         JS_ToUint32(pctx->ctx, &len, lenVal);
@@ -2106,7 +2106,7 @@ JSValue JsEngine::bridgeCall(
         }
 
         case B_REGISTER_HOOK: {
-            // onHook(point, fn): 钩子点已是"通知型扩展点", 等价于订阅同名广播频道
+            // onHook(point, fn): 钩子点已是"通知型功能埋点", 等价于订阅同名广播频道
             // (序号约定不变: 0 = 轮次开始 … 6 = 工具结束)
             if (argc < 2 || !JS_IsNumber(argv[0]) || !JS_IsFunction(ctx, argv[1])) {
                 return JS_ThrowTypeError(ctx, "onHook: (point, fn) required");

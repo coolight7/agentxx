@@ -142,7 +142,7 @@ PluginManager::PluginManager(std::weak_ptr<agentxx::agent::AgentContext> primary
     setDomainServices(this);
     // 内置广播频道: 插件加载 (start) 时就会订阅, 早于事件中枢创建
     declareBuiltinBroadcasts();
-    // 功能扩展点: 能力声明 + 同名广播频道 (插件在 start 里就能登记实现行/订阅)
+    // 功能埋点: 能力声明 + 同名广播频道 (插件在 start 里就能登记实现行/订阅)
     declareAppPoints();
 }
 
@@ -203,7 +203,7 @@ std::shared_ptr<PluginMount>
         nextMountSeq_++
     );
     mounts_.push_back(mount);
-    // 通知型扩展点的派发器: 建挂载就挂上并常驻 (插件靠订阅同名广播收到, 不需要登记)
+    // 通知型功能埋点的派发器: 建挂载就挂上并常驻 (插件靠订阅同名广播收到, 不需要登记)
     mount->ensureHookDispatch();
     return mount;
 }

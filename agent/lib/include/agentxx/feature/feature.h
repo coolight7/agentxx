@@ -1,13 +1,13 @@
-/// agentxx 功能点 (feature point) 子系统 —— 点 / 实现 / 调用三层
+/// agentxx 功能埋点 (feature point) 子系统 —— 点 / 实现 / 调用三层
 ///
-/// 背景: 核心在关键位置留出的扩展点 (token 估算 / 上下文压缩 / 工具输出摘要 ...)
+/// 背景: 核心在关键位置留出的功能埋点 (token 估算 / 上下文压缩 / 工具输出摘要 ...)
 /// 过去写死在中间件与节点里, 插件既提供不了也调用不了, 也没有统一的清单、顺序、
-/// 置空与调用规则。本子系统把这些扩展点统一成"功能点":
+/// 置空与调用规则。本子系统给这套机制的定义是:
 ///
 /// - **点 (Point)**: 一个带 id 的对象 ([ProvidePoint] / [JsonProvidePoint]), 自己
 ///   持有实现列表、值缓存、统计与说明; 用哪个类由代码决定, `type` 只用于展示与日志;
 /// - **实现 (Impl)**: 分两层 —— `plugin` (插件与 FFI 主程序登记的实现) → `core`
-///   (libagentxx 自身实现); 层内按 `(priority 升序, 登记顺序)`。扩展点天生接受外部
+///   (libagentxx 自身实现); 层内按 `(priority 升序, 登记顺序)`。功能埋点天生接受外部
 ///   实现 (没有"只允许核心实现"这类开关), `core` 实现只是"没人给值时的默认值";
 /// - **调用 (Call)**: 应用自己用 [ProvidePoint::ask] (读值缓存、记置空), 外部
 ///   (插件 / FFI 主程序 / 命令行) 用 [ProvidePoint::call] (只读值缓存、不记置空、
@@ -58,11 +58,11 @@ namespace feature {
 
 // ==================== 常量与枚举 ====================
 
-/// 功能点的类型 (本轮只实现 provide; decide 只有核心点使用; notify 预留)
+/// 功能埋点的类型 (本轮只实现 provide; decide 只有核心点使用; notify 预留)
 enum class PointType : int32_t {
     Provide = 0, ///< 取值: 请求 → 值, 第一个给出合法值的实现生效
     Decide  = 1, ///< 裁决: 通过 / 拒绝 / 弃权 (本轮只有核心点使用)
-    Notify  = 2, ///< 预留: 通知型 (当前由事件表与通知型扩展点承担)
+    Notify  = 2, ///< 预留: 通知型 (当前由事件表与通知型功能埋点承担)
 };
 
 /// 实现所在的层 (排序时 `plugin` 恒在 `core` 之前)
@@ -122,7 +122,7 @@ struct PointOptions {
 
 /// 实现在运行期收到的调用上下文 (核心实现直接拿到它)
 struct ImplContext {
-    std::string point; ///< 功能点 id
+    std::string point; ///< 功能埋点 id
     std::string owner; ///< 本实现的归属 (`plugin:<名>` / `host:<名>` / `core:<域>:<实现>`)
     std::string caller;          ///< 调用方 (空串 = 应用自己)
     bool        viaCall = false; ///< true = 外部主动调用 (零副作用契约)
@@ -263,14 +263,14 @@ using JsonResult = FeatureResult<utilxx_base::Json>;
 
 /// 请求与值的 JSON 编解码 (按类型特化)
 /// - 核心点在自己的头里给出特化 (示例见 agentxx/feature/points.h)
-/// - 未特化的类型不能作为功能点的请求 / 值 (编译期报"使用了被删除的函数")
+/// - 未特化的类型不能作为功能埋点的请求 / 值 (编译期报"使用了被删除的函数")
 template<class T>
 struct Codec {
     static std::string      toJson(const T&)           = delete;
     static std::optional<T> fromJson(std::string_view) = delete;
 };
 
-/// 该类型是否可用作功能点的请求 / 值
+/// 该类型是否可用作功能埋点的请求 / 值
 template<class T>
 concept JsonCodable = requires(const T& v, std::string_view s) {
     { Codec<T>::toJson(v) } -> std::convertible_to<std::string>;
@@ -298,7 +298,7 @@ ImplAnswer parseImplAnswer(std::string_view text);
 
 // ==================== 点基类 (类型擦除部分) ====================
 
-/// 功能点基类: id / 选项 / 插件层实现链 / 值缓存 / 置空标记 / 统计 / 清单
+/// 功能埋点基类: id / 选项 / 插件层实现链 / 值缓存 / 置空标记 / 统计 / 清单
 ///
 /// 类型化的取值逻辑在派生类 ([ProvidePoint] / [JsonProvidePoint]); 这里只保留
 /// "与请求类型无关"的部分, 使注册表、清单与插件面都能按 id 统一处理。
@@ -318,9 +318,9 @@ public:
     const std::string& origin() const noexcept;
     void               setOrigin(std::string origin);
 
-    /// 插件面扩展点 id (实现行登记在这个 id 上; 空 = 用点自己的 id)
+    /// 插件面功能埋点 id (实现行登记在这个 id 上; 空 = 用点自己的 id)
     ///
-    /// 点的 `id` 是库内名字 (`agentxx.agent.context.*`), 插件面的扩展点 id 是另一个
+    /// 点的 `id` 是库内名字 (`agentxx.agent.context.*`), 插件面的功能埋点 id 是另一个
     /// 段 (`agentxx.agent.point.*`, 见 `agentxx_point_ids.h`): 两者由声明处配对。
     const std::string& pluginPointId() const noexcept;
     void               setPluginPointId(std::string id);
@@ -350,7 +350,7 @@ public:
     /// 某归属是否在本点登记了实现
     bool hasImplOf(std::string_view owner) const;
 
-    /// 插件层入口: 发一次同名扩展点并等实现行的结果 (由注册表在主程序侧设置)
+    /// 插件层入口: 发一次同名功能埋点并等实现行的结果 (由注册表在主程序侧设置)
     ///
     /// - 实现行 = 框架能力表里的 `impl` 行 (按 `scope` 过滤、按优先级排、超时由调用方给);
     /// - 返回 `std::nullopt` = 没人给出结果 (没实现行 / 全部回空 / 失败)。
@@ -434,7 +434,7 @@ protected:
     /// 实现链: 先 `plugin` 层 (本类提供的 [runPluginLayer]), 再由派生类问 `core` 层
     virtual asio::awaitable<ChainOutcome> runChain(const ChainEnv& env) = 0;
 
-    /// 插件层 (主程序发一次扩展点) —— 新流程: 实现行就是能力行
+    /// 插件层 (主程序发一次功能埋点) —— 新流程: 实现行就是能力行
     asio::awaitable<ChainOutcome> runPluginLayer(const ChainEnv& env);
 
     /// 本点自己登记的插件层实现 (旧流程; 供直接使用点 API 的调用方与单测)
@@ -489,7 +489,7 @@ protected:
     PointType                                                     type_ = PointType::Provide;
     PointOptions                                                  opts_;
     std::string                                                   origin_;
-    /// 插件面扩展点 id (空 = 用 id_)
+    /// 插件面功能埋点 id (空 = 用 id_)
     std::string                                                   pluginPointId_;
     std::vector<ImplEntry>                                        impls_;
     uint64_t                                                      seqCounter_ = 0;
@@ -500,9 +500,9 @@ protected:
     std::map<std::string, std::shared_ptr<InFlight>, std::less<>> inFlight_;
 };
 
-// ==================== 取值型功能点 (核心侧强类型) ====================
+// ==================== 取值型功能埋点 (核心侧强类型) ====================
 
-/// 取值型功能点: 请求 `TReq` → 值 `TValue`
+/// 取值型功能埋点: 请求 `TReq` → 值 `TValue`
 ///
 /// - 核心实现的签名是强类型的 (不经过 JSON), 因此热路径上可以零拷贝;
 ///   跨插件边界仍一律 JSON (插件层实现收到调用上下文 JSON 文本);
@@ -622,7 +622,7 @@ protected:
     }
 
     asio::awaitable<ChainOutcome> runChain(const ChainEnv& env) override {
-        // 1) 插件层: 主程序发一次扩展点 (实现行 = 能力行)
+        // 1) 插件层: 主程序发一次功能埋点 (实现行 = 能力行)
         auto outcome = co_await runPluginLayer(env);
         if (outcome.hasValue || outcome.disabled) {
             co_return outcome;
@@ -639,7 +639,7 @@ protected:
         if (reqPtr == nullptr) {
             decoded = Codec<TReq>::fromJson(env.requestJson);
             if (!decoded.has_value()) {
-                XX_LOGW("功能点 `{}`: 请求解码失败, 跳过核心实现", id_);
+                XX_LOGW("功能埋点 `{}`: 请求解码失败, 跳过核心实现", id_);
                 co_return outcome;
             }
             reqPtr = &*decoded;
@@ -668,7 +668,7 @@ protected:
                      &ownerRef](std::string errmsg) -> asio::awaitable<std::optional<TValue>> {
                         // 实现抛异常只等于"没意见": 记一条警告后继续问下一个实现
                         XX_LOGW(
-                            "功能点 `{}` 的核心实现 `{}` 失败, 按没意见继续: {}",
+                            "功能埋点 `{}` 的核心实现 `{}` 失败, 按没意见继续: {}",
                             id_,
                             ownerRef,
                             errmsg
@@ -733,7 +733,7 @@ private:
         if (!value.has_value()) {
             out.error   = CallError::Failed;
             out.message = fmt::format(
-                "功能点 `{}` 的实现返回了无法解码的值: {}",
+                "功能埋点 `{}` 的实现返回了无法解码的值: {}",
                 id_,
                 std::string_view{rv.valueJson}.substr(0, 200)
             );

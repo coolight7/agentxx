@@ -1,4 +1,4 @@
-/// 功能点子系统测试 (阶段 1: 点 / 实现 / 调用三层骨架)
+/// 功能埋点子系统测试 (阶段 1: 点 / 实现 / 调用三层骨架)
 ///
 /// 覆盖点:
 /// - 顺序与默认优先级带 (插件 0 / FFI 主程序 1000 / core 层), 同优先级按登记顺序;
@@ -946,7 +946,7 @@ asio::awaitable<void> test_bad_args_shape() {
     co_return;
 }
 
-/// 插件点: 旧的声明表已经不在了 (插件自己的扩展点直接是 `plugin.<自己>.*` 能力),
+/// 插件点: 旧的声明表已经不在了 (插件自己的功能埋点直接是 `plugin.<自己>.*` 能力),
 /// 注册表只管主程序点 —— 这里只验证“为已有主程序点登记实现 / 按归属撤销”这一半。
 asio::awaitable<void> test_plugin_points() {
     Registry registry;
@@ -980,9 +980,9 @@ asio::awaitable<void> test_plugin_points() {
     co_return;
 }
 
-/// 同步快路径与功能点取值必须是同一份实现 (一份规则, 两个入口)
+/// 同步快路径与功能埋点取值必须是同一份实现 (一份规则, 两个入口)
 /// - 压缩中间件上的 `countTokens` / `countTokensForUtf8Str` 供 TPS 与内部裁剪同步调用;
-///   功能点 `agentxx.agent.context.countTokens` 供预算计算与插件调用
+///   功能埋点 `agentxx.agent.context.countTokens` 供预算计算与插件调用
 /// - 这条测试守住"估算规则只写一次": 两边结果必须相等
 asio::awaitable<void> test_sync_path_matches_point() {
     auto ctx         = std::make_shared<agentxx::agent::AgentContext>();

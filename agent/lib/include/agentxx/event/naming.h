@@ -9,7 +9,7 @@ namespace agentxx {
 namespace events {
 namespace naming {
 
-/// 命名契约: 总线主题 / 事件中枢事件名 / 功能点 id 共用一套前缀规则
+/// 命名契约: 总线主题 / 事件中枢事件名 / 功能埋点 id 共用一套前缀规则
 ///
 /// 三族命名空间, **写** (注册/发布) 只能落在自己那一族的根下, **读** (订阅/等待)
 /// 可以跨族:
@@ -293,7 +293,7 @@ inline bool validateBuiltinTopic(std::string_view topic, std::string* err = null
     return false;
 }
 
-/// 功能点 id 校验 (与事件名同一套前缀规则)
+/// 功能埋点 id 校验 (与事件名同一套前缀规则)
 /// - 内置点: `agentxx.agent.*` (核心实现声明)
 /// - 插件点: `plugin.<插件名>.*` (不限定插件名, 见 [validatePluginWriteTopic])
 inline bool validateFeaturePointId(

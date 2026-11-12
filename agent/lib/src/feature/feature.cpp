@@ -1,10 +1,10 @@
-/// agentxx 功能点子系统的类型擦除部分实现
+/// agentxx 功能埋点子系统的类型擦除部分实现
 ///
 /// 本文件提供 [PointBase] 与 [JsonProvidePoint] 的实现: id / 选项 / 插件层实现链 /
 /// 值缓存 / 置空标记 / in-flight 去重 / 统计 / 清单。类型化的取值逻辑在
 /// `feature.h` 的 [ProvidePoint] 模板里 (核心实现不经 JSON, 热路径零拷贝)。
 ///
-/// 线程模型: 功能点的状态只在主程序 io 线程上访问 (与事件总线/会话一致),
+/// 线程模型: 功能埋点的状态只在主程序 io 线程上访问 (与事件总线/会话一致),
 /// 因此这里没有任何锁; 插件侧入口经主程序投递 (见 plugin_manager_feature.cpp)。
 #include "agentxx/feature/feature.h"
 
@@ -81,7 +81,7 @@ utilxx_base::Json parseOrNull(std::string_view text) {
             return utilxx_base::Json::parse(text);
         },
         [](std::string errmsg) -> utilxx_base::Json {
-            XX_LOGW("功能点: 参数不是合法 JSON, 按空值处理: {}", errmsg);
+            XX_LOGW("功能埋点: 参数不是合法 JSON, 按空值处理: {}", errmsg);
             return utilxx_base::Json{};
         }
     );
@@ -100,7 +100,7 @@ ImplAnswer parseImplAnswer(std::string_view text) {
         },
         [](std::string errmsg) -> std::optional<utilxx_base::Json> {
             // 非法 JSON 等价于"没意见": 调用方记一条警告并继续问下一个实现
-            XX_LOGW("功能点: 实现返回的回答不是合法 JSON, 按没意见继续: {}", errmsg);
+            XX_LOGW("功能埋点: 实现返回的回答不是合法 JSON, 按没意见继续: {}", errmsg);
             return std::nullopt;
         }
     );
@@ -214,7 +214,7 @@ size_t PointBase::invalidateCacheOf(std::string_view owner) {
 
 int32_t PointBase::addImpl(ImplSpec spec) {
     if (id_.empty() || !spec.fn) {
-        XX_LOGW("功能点 `{}`: 实现登记被拒绝 (调用函数为空)", id_);
+        XX_LOGW("功能埋点 `{}`: 实现登记被拒绝 (调用函数为空)", id_);
         return -1;
     }
     if (spec.owner.empty()) {
@@ -225,7 +225,7 @@ int32_t PointBase::addImpl(ImplSpec spec) {
     int32_t priority = spec.priority;
     if (priority < kPriorityMin || priority > kPriorityMax) {
         XX_LOGW(
-            "功能点 `{}`: 实现 `{}` 的 priority {} 越界, 已裁剪到 [{}, {}]",
+            "功能埋点 `{}`: 实现 `{}` 的 priority {} 越界, 已裁剪到 [{}, {}]",
             id_,
             spec.owner,
             priority,
@@ -238,7 +238,7 @@ int32_t PointBase::addImpl(ImplSpec spec) {
     for (auto& item : impls_) {
         if (item.owner == spec.owner) {
             // 同一 (点, owner) 重复登记 = 覆盖 (记日志便于排查两个插件抢同一个点)
-            XX_LOGI("功能点 `{}`: 实现 `{}` 重复登记, 已覆盖", id_, spec.owner);
+            XX_LOGI("功能埋点 `{}`: 实现 `{}` 重复登记, 已覆盖", id_, spec.owner);
             item = ImplEntry{
                 spec.layer,
                 std::move(spec.owner),
@@ -389,7 +389,7 @@ asio::awaitable<std::optional<std::string>>
             co_return co_await entry.fn(std::move(callJson));
         },
         [this, owner](std::string errmsg) -> asio::awaitable<std::optional<std::string>> {
-            XX_LOGW("功能点 `{}`: 实现 `{}` 抛异常, 按没意见继续: {}", id_, owner, errmsg);
+            XX_LOGW("功能埋点 `{}`: 实现 `{}` 抛异常, 按没意见继续: {}", id_, owner, errmsg);
             co_return std::nullopt;
         }
     );
@@ -420,7 +420,7 @@ asio::awaitable<std::optional<ChainOutcome>>
             timeout,
             [&pointId, &owner, effectiveMs]() -> std::optional<std::string> {
                 XX_LOGW(
-                    "功能点 `{}`: 实现 `{}` 超过 {} ms 未完成, 已取消并按没意见继续",
+                    "功能埋点 `{}`: 实现 `{}` 超过 {} ms 未完成, 已取消并按没意见继续",
                     pointId,
                     owner,
                     effectiveMs
@@ -445,14 +445,14 @@ asio::awaitable<std::optional<ChainOutcome>>
         out.disabled = true;
         out.error    = CallError::Disabled;
         out.message  = parsed.reason.empty()
-                           ? fmt::format("功能点 `{}` 被 `{}` 置空", id_, entry.owner)
+                           ? fmt::format("功能埋点 `{}` 被 `{}` 置空", id_, entry.owner)
                            : parsed.reason;
         co_return out;
     }
     if (parsed.kind == ImplAnswer::Kind::Verdict) {
         // 本轮只有核心点使用裁决型; 插件层给出裁决回答按"没意见"处理并记日志
         XX_LOGW(
-            "功能点 `{}`: 实现 `{}` 返回了裁决型回答 `{}`, 本点按没意见处理",
+            "功能埋点 `{}`: 实现 `{}` 返回了裁决型回答 `{}`, 本点按没意见处理",
             id_,
             entry.owner,
             parsed.verdict
@@ -472,13 +472,13 @@ void PointBase::setPluginEmitter(PluginEmitFn fn) {
 asio::awaitable<ChainOutcome> PointBase::runPluginLayer(const ChainEnv& env) {
     ChainOutcome out;
     out.error   = CallError::NoImpl;
-    out.message = fmt::format("功能点 `{}` 现在没有实现给出值", id_);
+    out.message = fmt::format("功能埋点 `{}` 现在没有实现给出值", id_);
     if (!pluginEmit_) {
         co_return out; // 没装插件管理器 (单测 / 嵌入场景)
     }
 
     // 插件层 = 框架能力表里的实现行: 排序 / 作用域过滤 / 超时 / 合并都由平台做
-    // 发出去的 id 是插件面的扩展点 id (`agentxx.agent.point.*`), 不是库内点 id
+    // 发出去的 id 是插件面的功能埋点 id (`agentxx.agent.point.*`), 不是库内点 id
     const std::string& emitId = pluginPointId_.empty() ? id_ : pluginPointId_;
     // 入参: 库内的两份 JSON (`args` / `request`) 包成一个对象发出去, 插件按名取;
     // 只给一份时另一份不出现 (插件侧不必区分"空"与"没有")
@@ -505,7 +505,7 @@ asio::awaitable<ChainOutcome> PointBase::runPluginLayer(const ChainEnv& env) {
     try {
         answer = co_await pluginEmit_(emitId, payloadJson);
     } catch (const std::exception& e) {
-        XX_LOGW("功能点 `{}`: 插件层调用失败, 按没意见继续: {}", id_, e.what());
+        XX_LOGW("功能埋点 `{}`: 插件层调用失败, 按没意见继续: {}", id_, e.what());
         co_return out;
     }
     if (!answer.has_value()) {
@@ -521,7 +521,7 @@ asio::awaitable<ChainOutcome> PointBase::runPluginLayer(const ChainEnv& env) {
             return utilxx_base::Json::parse(*answer);
         },
         [this](std::string err) -> std::optional<utilxx_base::Json> {
-            XX_LOGW("功能点 `{}`: 插件层回了非法 JSON, 按没意见处理: {}", id_, err);
+            XX_LOGW("功能埋点 `{}`: 插件层回了非法 JSON, 按没意见处理: {}", id_, err);
             return std::nullopt;
         }
     );
@@ -536,7 +536,7 @@ asio::awaitable<ChainOutcome> PointBase::runPluginLayer(const ChainEnv& env) {
         if (auto it = json.find("disable"); it != json.end() && it->is_boolean() && it->get<bool>()) {
             out.disabled = true;
             out.error    = CallError::Disabled;
-            out.message  = fmt::format("功能点 `{}` 被插件实现置空", id_);
+            out.message  = fmt::format("功能埋点 `{}` 被插件实现置空", id_);
             co_return out;
         }
         if (auto it = json.find("value"); it != json.end()) {
@@ -579,7 +579,7 @@ asio::awaitable<ChainOutcome> PointBase::runLocalImpls(const ChainEnv& env) {
         }
     }
     out.error   = CallError::NoImpl;
-    out.message = fmt::format("功能点 `{}` 现在没有实现给出值", id_);
+    out.message = fmt::format("功能埋点 `{}` 现在没有实现给出值", id_);
     co_return out;
 }
 
@@ -602,7 +602,7 @@ ResolvedValue
         }
         if (agentxx::agent::AgentConfigStatic::devMode) {
             XX_LOGI(
-                "功能点调用: {} ← {}: {} · {} ms ok{}",
+                "功能埋点调用: {} ← {}: {} · {} ms ok{}",
                 id_,
                 req.caller.empty() ? "app" : req.caller,
                 out.by,
@@ -617,20 +617,20 @@ ResolvedValue
         out.error   = CallError::Disabled;
         out.by      = outcome.by;
         out.message = outcome.message.empty()
-                          ? fmt::format("功能点 `{}` 被 `{}` 置空", id_, outcome.by)
+                          ? fmt::format("功能埋点 `{}` 被 `{}` 置空", id_, outcome.by)
                           : outcome.message;
         // 置空标记只由 `ask` 记录 (`call` 看到置空只影响本次)
         if (req.rememberDisable && !outcome.by.empty()) {
             disabledBy_ = outcome.by;
         }
         if (!req.viaCall) {
-            XX_LOGW("功能点 {}: {}", id_, out.message);
+            XX_LOGW("功能埋点 {}: {}", id_, out.message);
         }
         return out;
     }
 
     out.error = (outcome.error == CallError::None) ? CallError::NoImpl : outcome.error;
-    out.message = outcome.message.empty() ? fmt::format("功能点 `{}` 现在没有实现给出值", id_)
+    out.message = outcome.message.empty() ? fmt::format("功能埋点 `{}` 现在没有实现给出值", id_)
                                           : outcome.message;
     return out;
 }
@@ -674,7 +674,7 @@ asio::awaitable<ResolvedValue> PointBase::runResolve(ResolveRequest req) {
         out.identity = req.identity;
         out.error    = CallError::Failed;
         out.message  = fmt::format(
-            "功能点 `{}` 的请求过大 ({} 字节, 上限 {} 字节)",
+            "功能埋点 `{}` 的请求过大 ({} 字节, 上限 {} 字节)",
             id_,
             req.requestJson.size(),
             kFeatureMaxPayloadBytes
@@ -696,7 +696,7 @@ asio::awaitable<ResolvedValue> PointBase::runResolve(ResolveRequest req) {
                 return true;
             },
             [](std::string errmsg) -> bool {
-                XX_LOGW("功能点: 参数不是合法 JSON, 按参数不合法拒绝: {}", errmsg);
+                XX_LOGW("功能埋点: 参数不是合法 JSON, 按参数不合法拒绝: {}", errmsg);
                 return false;
             }
         );
@@ -704,7 +704,7 @@ asio::awaitable<ResolvedValue> PointBase::runResolve(ResolveRequest req) {
             ResolvedValue out;
             out.identity = req.identity;
             out.error    = CallError::BadArgs;
-            out.message  = fmt::format("功能点 `{}` 的参数不是合法 JSON", id_);
+            out.message  = fmt::format("功能埋点 `{}` 的参数不是合法 JSON", id_);
             noteOutcome(false, "", req.caller, elapsedMs());
             co_return out;
         }
@@ -716,8 +716,8 @@ asio::awaitable<ResolvedValue> PointBase::runResolve(ResolveRequest req) {
         out.identity = req.identity;
         out.error    = CallError::NotCallable;
         out.message  = opts_.callDoc.empty()
-                           ? fmt::format("功能点 `{}` 没有对外开放调用", id_)
-                           : fmt::format("功能点 `{}` 没有对外开放调用: {}", id_, opts_.callDoc);
+                           ? fmt::format("功能埋点 `{}` 没有对外开放调用", id_)
+                           : fmt::format("功能埋点 `{}` 没有对外开放调用: {}", id_, opts_.callDoc);
         noteOutcome(false, "", req.caller, elapsedMs());
         co_return out;
     }
@@ -730,7 +730,7 @@ asio::awaitable<ResolvedValue> PointBase::runResolve(ResolveRequest req) {
         out.identity = req.identity;
         out.error    = CallError::Busy;
         out.message  = fmt::format(
-            "功能点 `{}` 上一次调用 (调用方 `{}`) 还没结束",
+            "功能埋点 `{}` 上一次调用 (调用方 `{}`) 还没结束",
             id_,
             req.caller.empty() ? "app" : req.caller
         );
@@ -806,7 +806,7 @@ asio::awaitable<ResolvedValue> PointBase::runResolve(ResolveRequest req) {
             out.error    = CallError::Failed;
             out.ms       = elapsedMs();
             out.message  = fmt::format("timeout after {}ms", req.timeout.count());
-            XX_LOGW("功能点 `{}`: {}", id_, out.message);
+            XX_LOGW("功能埋点 `{}`: {}", id_, out.message);
             noteOutcome(false, "", req.caller, out.ms);
             co_return out;
         }
@@ -856,7 +856,7 @@ asio::awaitable<ResolvedValue> PointBase::runResolve(ResolveRequest req) {
                 ChainOutcome o;
                 o.error   = CallError::Failed;
                 o.message = fmt::format("timeout after {}ms", tmo.count());
-                XX_LOGW("功能点 `{}`: 调用超时 ({} ms)", pointId, tmo.count());
+                XX_LOGW("功能埋点 `{}`: 调用超时 ({} ms)", pointId, tmo.count());
                 return o;
             }
         );
@@ -964,7 +964,7 @@ JsonProvidePoint::JsonProvidePoint(std::string id, PointOptions opts, std::strin
 }
 
 asio::awaitable<ChainOutcome> JsonProvidePoint::runChain(const ChainEnv& env) {
-    // 插件点没有核心实现: 先问主程序发出去的扩展点, 再问本点自己登记的实现
+    // 插件点没有核心实现: 先问主程序发出去的功能埋点, 再问本点自己登记的实现
     auto outcome = co_await runPluginLayer(env);
     if (outcome.hasValue || outcome.disabled) {
         co_return outcome;
@@ -991,7 +991,7 @@ JsonResult makeJsonResult(const ResolvedValue& rv) {
             return utilxx_base::Json::parse(rv.valueJson);
         },
         [](std::string errmsg) -> std::optional<utilxx_base::Json> {
-            XX_LOGW("功能点: 实现返回的值不是合法 JSON: {}", errmsg);
+            XX_LOGW("功能埋点: 实现返回的值不是合法 JSON: {}", errmsg);
             return std::nullopt;
         }
     );

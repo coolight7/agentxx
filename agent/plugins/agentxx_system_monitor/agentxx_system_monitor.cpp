@@ -249,7 +249,7 @@ static int32_t sysMonStartSetup(SysMonCtx& ctx) {
     // 2. 能力: agentxx.system_usage —— 读取当前系统负担 (cpu/gpu 占用、内存与显存占用)
     //    - 其他插件经 `agentxx.capabilities` 的 invoke (kit: invoke_cap /
     //      invoke_capability_blocking) 调用; 主程序侧查清单用
-    //      `PluginManager::capabilities()->infoJson`, 扩展点走 `emitPoint`
+    //      `PluginManager::capabilities()->infoJson`, 功能埋点走 `emitPoint`
     //    - `method` 不参与分支 (约定 "query"), 参数忽略: 每次都读一份当前快照
     //    - 载荷字段见 [usageToJson] (内存与显存都给出可用量与总量)
     //    - 查询要读系统/GPU 计数器 (约 100ms 以上), 交给主程序阻塞池执行,

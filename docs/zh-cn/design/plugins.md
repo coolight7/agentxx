@@ -56,7 +56,7 @@ Agentxx 插件系统采用 **纯 C ABI + COM 风格接口表查询**：
 同一插件动态库在单进程内可能被多个独立 Agent 主程序分别加载并创建多个并存实例 (如 FFI 多句柄、AgentHost 子代理)：
 
 1. **禁止可变全局/函数级 static**：所有可变状态必须封装在随实例创建的上下文堆对象 (`*plugin_ctx`，通常继承 `kit::PluginBase`)
-2. **状态经上下文闭包恢复**：所有工具/扩展点/事件回调必须通过 `spec.user_data` 恢复当前实例上下文
+2. **状态经上下文闭包恢复**：所有工具/功能埋点/事件回调必须通过 `spec.user_data` 恢复当前实例上下文
 3. **接口表缓存存入实例上下文**：`AgentIfaces` 查询结果存实例成员，各实例互不干扰；offload线程池异步接口 (`plugin_kit.h`) 适配器为调用方内嵌存储，随实例销毁释放
 
 **唯一例外：进程级单调计数器**。用于生成进程内唯一名称/序号（如
@@ -132,7 +132,7 @@ auto b64 = utilxx_base::base64Encode(data);
 | `pluginxx/api/` | 纯 C (`Agentxx*`) | 跨边界契约: `abi.h` (导出宏/调用约定/字符串/操作原语/主程序 vtable/入口符号)、`tables.h` (通用接口表: broadcasts/capabilities/scheduler/coroutine_runtime/tasks/cancel/plugins/config/json/log) |
 | `pluginxx/kit/` | `pluginxx` | 插件侧 C++ SDK (header-only): `kit.h` (通用部分: 跨边界字符串工具 `PluginStringView`/`PluginString`、通用接口表聚合 `PluginIfaceCore`、实例级 `Logger`、`Task<T>` 锚定协程与锚定原语 `sleep`/`yield`/`offload`/`invoke_cap`、`CancelRegistry`/`OpCtl`/`ArgReader`、后台任务 `spawn`、能力注册 `capability`、实例上下文基类 `PluginBaseT<IfacesT>`、通用导出宏)、`guard.h` (C ABI 边界异常守卫 `guardCall`/`guardCallVoid`/`logTo`) |
 | `pluginxx/runtime/` | `pluginxx` | 主程序侧运行时: `runtime.h` (实例状态机/执行 lease/投递通道)、`driver.h` (协程驱动 ticket)、`instance_base.h` (实例基类 + 主程序控制块 + C ABI 内存 + 通用表相关登记: 事件订阅/睡眠句柄/能力声明)、`manager_base.h` (管理器基类 + vtable 入口上下文)、`op_driver.h` (统一 Operation 驱动器) |
-| `pluginxx/host/` | `pluginxx` | 主程序侧通用设施: `loader.h` (dlopen/LoadLibrary 封装)、`manifest.h` (plugin.yaml 解析/名称推导/拓扑排序)、`abi_util.h` (C 串转换/异常保护/io 线程同步投递)、`capability_registry.h` + `capability_chain.h` (能力登记表与实现链: 实现行按 scope / 优先级排序后调用)、`broadcast_registry.h` (广播频道登记表: 声明 / 发布 / 订阅 / 当前值 / 结束)、`domain_services.h` (业务数据入口 `DomainServices`: 通用表需要主程序数据的入口)、`host_core.h` (主程序核心 `PluginHostCore<InstanceT>`: 通用表的状态与方法实现 + 扩展点原语 `declarePoint`/`emitPointAsync`)、`tables_impl.h` (十张通用表的 vtable 入口 trampoline + `queryGenericPluginIface<I, M>(iid)`)、`lifecycle.h` (主程序生命周期骨架 `PluginHostLifecycle<InstanceT>`: 加载/启停/禁用启用/卸载/级联依赖) |
+| `pluginxx/host/` | `pluginxx` | 主程序侧通用设施: `loader.h` (dlopen/LoadLibrary 封装)、`manifest.h` (plugin.yaml 解析/名称推导/拓扑排序)、`abi_util.h` (C 串转换/异常保护/io 线程同步投递)、`capability_registry.h` + `capability_chain.h` (能力登记表与实现链: 实现行按 scope / 优先级排序后调用)、`broadcast_registry.h` (广播频道登记表: 声明 / 发布 / 订阅 / 当前值 / 结束)、`domain_services.h` (业务数据入口 `DomainServices`: 通用表需要主程序数据的入口)、`host_core.h` (主程序核心 `PluginHostCore<InstanceT>`: 通用表的状态与方法实现 + 功能埋点原语 `declarePoint`/`emitPointAsync`)、`tables_impl.h` (十张通用表的 vtable 入口 trampoline + `queryGenericPluginIface<I, M>(iid)`)、`lifecycle.h` (主程序生命周期骨架 `PluginHostLifecycle<InstanceT>`: 加载/启停/禁用启用/卸载/级联依赖) |
 
 - **通用表实现整体在 `cxx_pluginxx`**: broadcasts/capabilities/scheduler/
   coroutine_runtime/tasks/cancel/plugins/config/json/log 十张表的**定义与实现**都在插件框架 ——
@@ -331,7 +331,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
             }
         });
 
-        // 6. 通知型扩展点 (7 个点: turn_start/end, model_start/run/end, tool_start/end)
+        // 6. 通知型功能埋点 (7 个点: turn_start/end, model_start/run/end, tool_start/end)
         //    只想知道“发生了”就订阅同名频道; 需要给出结果就 providePoint 登记实现行
         subscribePluginBroadcast(
             ctx,
@@ -383,7 +383,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
    - `Task` 协程帧先销毁后 `done` 上报，支持 `offload` 阻塞池委托与 `call_tool`/`invoke_cap` 锚定互调
    - `polled_tool`（受控轮询）与 `blocking_tool`/`fast_tool` 并列：业务体是 `asio::awaitable`，
      等待插件本地 reactor 上的 I/O 就绪通知，由桥按声明式受控轮询推进（§16.5）
-   - capability (含扩展点实现行) 的 SDK helper 按**返回类型严格分发**：返回字符串的同步业务在
+   - capability (含功能埋点实现行) 的 SDK helper 按**返回类型严格分发**：返回字符串的同步业务在
      调用内完成；返回 `Task<T>` 的异步业务由统一 root adapter 收尾（provider 句柄可取消，
      完成通知在协程真正结束后发出，输入视图由拥有型 `Request` 保证跨挂起点有效）
    - `graph_node` 使用同一 root adapter 注册自定义图节点类型：快同步节点返回节点输出
@@ -454,7 +454,7 @@ agent 侧与 client 侧各提供一份。广播 / 能力 / 调度 / 配置 / 日
 | IID | 版本 | 能力 |
 |-----|------|------|
 | `agentxx.broadcasts` | 3 | 广播: `declare_broadcast` (声明频道: 缓存/发布权限/订阅补当前值/限频/scope) + `publish_broadcast` + `subscribe_broadcast(_ex)` (带流结束回调) + `read_broadcast` + `unsubscribe_broadcast` + `end_broadcast`。插件的通知面与跨端数据都走它, 见 §20。v3 = 加 `end_broadcast` 与 `subscribe_broadcast_ex` (订阅侧收 `on_end`) |
-| `agentxx.capabilities` | 6 | `register_capability/unregister_capability/invoke_capability/capability_info/list_capabilities/op_cancel` (另有 `invoke_capability_ex` / `unregister_capability_ex`)。能力行按 **scope** 隔离 (同一个插件挂在多个 agent 上时各一行), 一个能力可以由多家登记实现行, 取值链按 `(priority 升序, 登记序号)` 排序后取首行 —— **扩展点的实现行就是能力行** (见 §21.4) |
+| `agentxx.capabilities` | 6 | `register_capability/unregister_capability/invoke_capability/capability_info/list_capabilities/op_cancel` (另有 `invoke_capability_ex` / `unregister_capability_ex`)。能力行按 **scope** 隔离 (同一个插件挂在多个 agent 上时各一行), 一个能力可以由多家登记实现行, 取值链按 `(priority 升序, 登记序号)` 排序后取首行 —— **功能埋点的实现行就是能力行** (见 §21.4) |
 | `agentxx.scheduler` | 1 | `is_io_thread/post_to_io/sleep/op_cancel/offload` (sleep=主程序计时器; offload=阻塞池委托, 需 cancel_token) |
 | `agentxx.coroutine_runtime` | 1 | 通用协程驱动: `request_driver/cancel_driver/is_io_thread` (driver ticket/wake 协议, 见 §16) |
 | `agentxx.plugins` | 1 | `list_plugins/get_plugin/get_own_info` (JSON; `list_plugins` 每项带 `mount_count` / `mount_agents`, 一眼看出装了但没挂到谁身上) |
@@ -472,7 +472,7 @@ agent 侧与 client 侧各提供一份。广播 / 能力 / 调度 / 配置 / 日
 > 下成立, 已不再兼容), 其余表为 v1 (基线 = 完整表长)。
 >
 > **代次 (全局 API 版本) 与当前状态**: 现在是 **v5** (2026-11 迁到 `cxx_pluginxx` 0.3.0) ——
-> 钩子表与事件表删除, 通知面统一成广播频道 (`agentxx.broadcasts`), 扩展点的实现行统一成
+> 钩子表与事件表删除, 通知面统一成广播频道 (`agentxx.broadcasts`), 功能埋点的实现行统一成
 > 能力行 (`agentxx.capabilities`); client 侧的 `agentxx.client.events` / `.json` / `.log`
 > 三张表删除 (后两者改用通用表 `agentxx.json` / `agentxx.log`)。
 > 更早的档位: v3 把通用表里的业务成员 (`get_tool_prompt` / `get_session_work_dir` /
@@ -492,7 +492,7 @@ agent 侧与 client 侧各提供一份。广播 / 能力 / 调度 / 配置 / 日
 > `capability(ctx, "名", fn, opts)` 登记 (`PluginxxCapabilitySpec`: `impls` / `merge` /
 > `phases` / `priority` / `timeoutMs` / `scope`), 调用方经 `agentxx.capabilities` 表的
 > `invoke_capability` 调用 (kit: `invoke_cap` 协程 awaiter / `invoke_capability_blocking`);
-> 主程序侧查清单用 `PluginManager::capabilities()->infoJson/listJson`, 扩展点走
+> 主程序侧查清单用 `PluginManager::capabilities()->infoJson/listJson`, 功能埋点走
 > `emitPoint` / `emitPointAsync`。调用必须携带**调用方插件实例** (主程序据此
 > 持有它的执行租约, 卸载等待覆盖本次调用)。FFI 的 C 接口目前没有单独的能力调用入口。
 >
@@ -1111,7 +1111,7 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 插件经内置 `agentxx_jav
 
 | 插件 | 说明 |
 |------|------|
-| `example_plugin` | 原生 C++ 综合示例 (fast_tool/Task 协程/call_tool/sleep/**协程驱动桥**/**受控轮询 polled_tool**/扩展点订阅/事件/能力/client 入口) |
+| `example_plugin` | 原生 C++ 综合示例 (fast_tool/Task 协程/call_tool/sleep/**协程驱动桥**/**受控轮询 polled_tool**/功能埋点订阅/事件/能力/client 入口) |
 | `example_graph_node` | Graph 扩展示例 (自定义节点类型 + set_graph_json 改图, 需 `agentxx.agent.graph` 接口) |
 | `example_js` | JS 插件示例 (C++ 壳 + `plugin.js`) |
 | `example_resources` | 会话资源贡献示例 (声明式与编程式 MCP/Skill/规则/会话环境) |
@@ -1452,7 +1452,7 @@ Closing → CloseFailed → Closing (可重试)
 
 **注册可逆（贡献集合与重算）**：插件向主程序贡献的东西分三类，撤销方式都只有一处实现：
 
-- **叠加型**（工具 / 权限声明 / 图节点类型 / 事件订阅（含通知型扩展点频道） / 能力 / 清单资源 skill·memory·mcp）：
+- **叠加型**（工具 / 权限声明 / 图节点类型 / 事件订阅（含通知型功能埋点频道） / 能力 / 清单资源 skill·memory·mcp）：
   注册时按 owner 记账，禁用时"摘生效、留记录"，启用时由插件 `start` 事务重新声明，
   卸载时全部摘除（`AgentResourceApplier::removeAllOwned`）。禁用/卸载后**不会**再把
   某个旧值"还原写回" —— 摘除即不再存在，避免把别人后来的贡献覆盖掉。
@@ -1874,13 +1874,13 @@ AgentHost（进程级容器, 一份; FFI 每个句柄一份）
 └── PluginManager（插件管理器, 进程一份）
      ├── 实例表: 每个插件一条 (dlopen + create + start 各一次)
      └── 挂载表: 每个 agent 一条 PluginMount
-          ├── 记录: 本挂载上该实例注册了什么 (工具/权限/提示词/功能点/图/资源/订阅)
+          ├── 记录: 本挂载上该实例注册了什么 (工具/权限/提示词/功能埋点/图/资源/订阅)
           └── 该 agent 的实体: 工具注册表项 / 中间件链上的派发器 / 提示词贡献 …
 ```
 
 - **进程级 (在 `start` 里做)**: 起线程、建连接、订阅主程序总线、声明能力
   (`register_capability`)。能力是进程级的, 同一实例重复声明按幂等成功;
-- **agent 级 (在 `mount` 里做)**: 工具、工具权限、提示词贡献、功能点、广播订阅、
+- **agent 级 (在 `mount` 里做)**: 工具、工具权限、提示词贡献、功能埋点、广播订阅、
   图节点类型、图定义、声明式资源 (skill/memory/mcp)。**在 `start` 里做这些会被拒绝**
   (`AGENTXX_PLUGIN_ERR_NO_AGENT`, 无副作用);
 - 拆挂载只撤销该 agent 的实体, 插件实例与它的线程/连接留在进程里给别的 agent 用。
@@ -1974,7 +1974,7 @@ plugin:
 
 | 用例 | 覆盖 |
 |---|---|
-| `plugin_host_mount` | 一份管理器 + 多个 agent: 工具/提示词/扩展点实现行/事件按挂载分开, 重复挂载幂等, 工具名冲突, 挂载失败只回滚该 agent, 引用校验, 20 张表可查, 拆挂载与关闭收尾 |
+| `plugin_host_mount` | 一份管理器 + 多个 agent: 工具/提示词/功能埋点实现行/事件按挂载分开, 重复挂载幂等, 工具名冲突, 挂载失败只回滚该 agent, 引用校验, 20 张表可查, 拆挂载与关闭收尾 |
 | `plugin_multi_mount` | 真实示例插件 `example_multi_mount`: 计数与 `config_json` 按挂载隔离、重挂归零、旧引用失效 |
 | `plugin_multi_instance` | 多实例三铁律 (两个管理器各一实例) |
 | `plugin_runtime` / `plugin_cleanup` / `plugin_dispatch` / `plugin_feature` / `plugin_resources` | 挂载语义下的注册可逆与清单 |
@@ -2265,7 +2265,7 @@ plugin:
 - 中枢本体与模型侧事件工具见 [events.md](events.md)；`event_hub` / `event_tools` /
   `event_delivery` 三个用例覆盖它们。
 
-## 21. 名字契约 (总线主题 / 事件名 / 扩展点 id)
+## 21. 名字契约 (总线主题 / 事件名 / 功能埋点 id)
 
 三者共用一套前缀规则, 唯一实现在 `agentxx/event/naming.h`。
 
@@ -2318,7 +2318,7 @@ plugin:
 `agentxx.agent.event.*` 与 `plugin.<名>.*`, 所以“让模型能等的值”要么是内置源、
 要么由插件用自己的族发布。
 
-### 21.4 扩展点 id
+### 21.4 功能埋点 id
 
 同一套规则。唯一真源是 `agentxx/plugin/api/agentxx_point_ids.h` (`boundaries` 会校验本头与
 `PluginManager` 的声明表逐条一致: `points::kNotifyPoints` / `kValuePoints`):
@@ -2328,7 +2328,7 @@ plugin:
 | 通知型 | `agentxx.agent.point.turn.start` / `.turn.end` / `.model.start` / `.model.run` / `.model.end` / `.tool.start` / `.tool.end` | 订阅同名广播频道即可; 载荷固定 `{agentId, sessionId, point}`, 订阅侧按 `agentId` 过滤其它 agent |
 | 取值型 | `agentxx.agent.point.context.countTokens` / `.context.summarize` / `.tool.summarizeOutput` | 登记一条实现行 (kit `providePoint`), 回调拿载荷 JSON, 返回值就是结果 (`pointAnswer` 包成 `{"value":…}`) |
 
-插件自己的扩展点点写 `plugin.<插件名>.*` (不限定插件名, 建议用自己的)。一个 id 同时是
+插件自己的功能埋点写 `plugin.<插件名>.*` (不限定插件名, 建议用自己的)。一个 id 同时是
 **一条能力** (`impls: many` + `merge: first`, 只开 `impl` 阶段) 与**一个同名广播频道**;
 实现行跟着挂载走 (禁用/卸载由主程序按挂载记录撑销), 不想给值就回 `{"disable":true}`。
 

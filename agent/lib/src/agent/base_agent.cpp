@@ -426,7 +426,7 @@ asio::awaitable<void> BaseAgent::init() {
         .name  = "feature_registry",
         .after = "event_bus",
         .run   = [&]() -> asio::awaitable<void> {
-            // 功能点注册表 (点 / 实现 / 调用): 早于中间件加载, 因此中间件可以声明
+            // 功能埋点注册表 (点 / 实现 / 调用): 早于中间件加载, 因此中间件可以声明
             // 核心点 (如 agentxx.agent.context.countTokens); 也早于插件加载, 因此插件
             // 登记实现时点已存在
             // - 开发者模式在启动时读取配置后冻结: 库内热路径只读进程级标记
@@ -434,7 +434,7 @@ asio::awaitable<void> BaseAgent::init() {
             agentxx::agent::AgentConfigStatic::devMode
                 = agentContext->agentConfig && agentContext->agentConfig->devMode;
             agentContext->features = std::make_shared<agentxx::feature::Registry>();
-            // 插件层入口: 取值时先发一次同名扩展点 (实现行 = 能力行), 由插件管理器
+            // 插件层入口: 取值时先发一次同名功能埋点 (实现行 = 能力行), 由插件管理器
             // 排序/过滤/合并; 管理器还没建时弱引用取不到, 等于没有插件层
             std::weak_ptr<agentxx::agent::AgentContext> weakCtx = agentContext;
             agentContext->features->setPluginEmitter(
@@ -498,7 +498,7 @@ asio::awaitable<void> BaseAgent::init() {
         .run   = [&]() -> asio::awaitable<void> {
             // 插件系统加载: 工具注册表 + 插件管理器 (挂在 AgentContext, 供
             // ToolcallWrapNode/ModelCallWrapNode/中间件栈取用)
-            // - 在 initMiddleware 之前创建: 插件加载时挂上的扩展点派发器 push 到
+            // - 在 initMiddleware 之前创建: 插件加载时挂上的功能埋点派发器 push 到
             //   handles 栈, 与既有中间件并存
             // - 配置插件的实际加载在 init 末尾 (engine 构建后, 见下方)
             notifyInitProgress("初始化插件系统 ...");
@@ -674,7 +674,7 @@ asio::awaitable<void> BaseAgent::init() {
         .after = "graph_definition",
         .run   = [&]() -> asio::awaitable<void> {
             // 先加载插件 (进程级; 加载失败仅记日志不影响主流程), 再建立挂载:
-            // 所有 agent 级注册 (工具/权限/提示词/功能点/图/资源/事件) 都在
+            // 所有 agent 级注册 (工具/权限/提示词/功能埋点/图/资源/事件) 都在
             // 插件的 mount 回调里发生, 因此必须提前到 engine 构建之前。
             notifyInitProgress("加载插件 ...");
             // 只有自建管理器时才在这里加载 (外部注入时插件已加载好)

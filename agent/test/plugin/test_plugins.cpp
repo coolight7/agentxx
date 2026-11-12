@@ -437,14 +437,14 @@ asio::awaitable<TestResult> run_plugin_tests() {
         // 保持引擎加载，供后续 JS 用例复用
     }
 
-    // ---- 5. 通知型扩展点: 主程序级派发器入链 (建挂载就挂上并常驻) ----
+    // ---- 5. 通知型功能埋点: 主程序级派发器入链 (建挂载就挂上并常驻) ----
     {
         const auto& handles = ctx->middlewareHandleContext->handles;
         bool        found   = std::any_of(handles.begin(), handles.end(), [](const auto& h) {
             return h->name == "plugin_points";
         });
         XX_TEST_EXPECT_TRUE(found); ///< 中间件链上只有一个主程序级派发器
-        // 点清单: 7 个通知型扩展点 (插件靠订阅同名广播收到, 不登记处理器)
+        // 点清单: 7 个通知型功能埋点 (插件靠订阅同名广播收到, 不登记处理器)
         const auto pointsJson = utilxx_base::Json::parse(ctx->pluginMount->hooksJson());
         XX_TEST_EXPECT_EQ(pointsJson.value<int>("count", 0), 7);
     }
@@ -971,7 +971,7 @@ throw new Error("top-level rollback probe");
         }
     }
 
-    // ---- 24. 回归: 轮次中禁用 → 扩展点派发器常驻, 不随插件走 ----
+    // ---- 24. 回归: 轮次中禁用 → 功能埋点派发器常驻, 不随插件走 ----
     // 派发器挂在挂载上, 挂上后不再摘下: 禁用/启用只撤掉或重新建立插件自己的
     // 广播订阅, 派发器没有"待摘除"状态, 所以轮次执行中禁用也不需要延后到轮末。
     {
@@ -1005,7 +1005,7 @@ throw new Error("top-level rollback probe");
                 std::ptrdiff_t{1}
             );
             XX_TEST_EXPECT_TRUE(hasDispatch(false));
-            // 点清单与插件是否启用无关: 永远是 7 个通知型扩展点
+            // 点清单与插件是否启用无关: 永远是 7 个通知型功能埋点
             const auto pointsJson = utilxx_base::Json::parse(ctx->pluginMount->hooksJson());
             XX_TEST_EXPECT_EQ(pointsJson.value<int>("count", 0), 7);
             co_await ctx->pluginManager->unloadAsync("example_plugin");
@@ -3409,9 +3409,9 @@ throw new Error("top-level rollback probe");
     }
 
     // ---- 40. 挂载期 (mount) 失败的真实 DSO 回滚 ----
-    // 测试插件在 mount 里依次注册 工具/图类型/订阅/prompt/扩展点订阅/能力/资源 后主动失败:
+    // 测试插件在 mount 里依次注册 工具/图类型/订阅/prompt/功能埋点订阅/能力/资源 后主动失败:
     // - v2 起 agent 级注册只能在 mount 里做, 因此"加载成功"之后才有这次失败事务;
-    //   主程序必须回滚该 agent 上全部已生效注册 (工具/图类型/订阅/prompt/扩展点订阅/能力/资源);
+    //   主程序必须回滚该 agent 上全部已生效注册 (工具/图类型/订阅/prompt/功能埋点订阅/能力/资源);
     // - 再次加载同一 DSO, 同名注册必须全部重新成功 (插件经 probe 事件
     //   `{"step":"all","ok":true}` 证明走到了最后一步)。
     {

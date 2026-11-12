@@ -269,7 +269,7 @@ void testDiagnosticsPackage() {
     ctx->agentConfig->model.modelName    = "test-model";
     ctx->agentConfig->dataDir            = dir.string();
     ctx->agentConfig->enableSessionStore = true;
-    // 功能点: 加载上下文两个核心点 (与 BaseAgent::init 同一顺序), 让诊断包的
+    // 功能埋点: 加载上下文两个核心点 (与 BaseAgent::init 同一顺序), 让诊断包的
     // featurePoints 段有真实内容可断言
     ctx->features = std::make_shared<agentxx::feature::Registry>();
     agentxx::feature::registerContextPoints(
@@ -334,11 +334,11 @@ void testDiagnosticsPackage() {
     );
     XX_TEST_EXPECT_TRUE(text.find("tools:") != std::string::npos);
     XX_TEST_EXPECT_TRUE(text.find("plugins[") != std::string::npos);
-    // 功能点清单也进加载段 (插件作者与排障看得到"哪个实现现在生效")
+    // 功能埋点清单也进加载段 (插件作者与排障看得到"哪个实现现在生效")
     XX_TEST_EXPECT_TRUE(text.find("featurePoints[") != std::string::npos);
     XX_TEST_EXPECT_TRUE(text.find("agentxx.agent.context.countTokens") != std::string::npos);
     XX_TEST_EXPECT_TRUE(text.find("agentxx.agent.context.summarize") != std::string::npos);
-    // 通知型扩展点清单同理 (没有订阅者时只有一行标题, 空的点不占行)
+    // 通知型功能埋点清单同理 (没有订阅者时只有一行标题, 空的点不占行)
     XX_TEST_EXPECT_TRUE(text.find("hookPoints[") != std::string::npos);
     XX_TEST_EXPECT_TRUE(text.find("config_json:") != std::string::npos);
 

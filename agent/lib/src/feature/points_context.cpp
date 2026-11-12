@@ -1,9 +1,9 @@
-/// 上下文核心功能点的实现 (token 估算规则 / 请求编解码 / 核心实现登记)
+/// 上下文核心功能埋点的实现 (token 估算规则 / 请求编解码 / 核心实现登记)
 ///
 /// 一条实现、两个入口:
-/// - 同步快路径: TPS 计算直接调 [TokenEstimator::estimateText] (不经功能点,
+/// - 同步快路径: TPS 计算直接调 [TokenEstimator::estimateText] (不经功能埋点,
 ///   插件实现不参与这条路径);
-/// - 功能点: `agentxx.agent.context.countTokens` 的核心实现调用同一份规则。
+/// - 功能埋点: `agentxx.agent.context.countTokens` 的核心实现调用同一份规则。
 #include "agentxx/feature/points.h"
 
 #include "agentxx/feature/registry.h"
@@ -145,7 +145,7 @@ std::optional<CountTokensRequest> Codec<CountTokensRequest>::fromJson(std::strin
             return req;
         },
         [](std::string errmsg) -> std::optional<CountTokensRequest> {
-            XX_LOGW("功能点: Token 估算请求解码失败: {}", errmsg);
+            XX_LOGW("功能埋点: Token 估算请求解码失败: {}", errmsg);
             return std::nullopt;
         }
     );
@@ -166,7 +166,7 @@ std::optional<CountTokensValue> Codec<CountTokensValue>::fromJson(std::string_vi
             return value;
         },
         [](std::string errmsg) -> std::optional<CountTokensValue> {
-            XX_LOGW("功能点: Token 估算结果解码失败: {}", errmsg);
+            XX_LOGW("功能埋点: Token 估算结果解码失败: {}", errmsg);
             return std::nullopt;
         }
     );
@@ -214,7 +214,7 @@ std::optional<SummarizeRequest> Codec<SummarizeRequest>::fromJson(std::string_vi
             return req;
         },
         [](std::string errmsg) -> std::optional<SummarizeRequest> {
-            XX_LOGW("功能点: 上下文压缩请求解码失败: {}", errmsg);
+            XX_LOGW("功能埋点: 上下文压缩请求解码失败: {}", errmsg);
             return std::nullopt;
         }
     );
@@ -240,7 +240,7 @@ std::optional<SummarizeValue> Codec<SummarizeValue>::fromJson(std::string_view t
             return value;
         },
         [](std::string errmsg) -> std::optional<SummarizeValue> {
-            XX_LOGW("功能点: 上下文压缩结果解码失败: {}", errmsg);
+            XX_LOGW("功能埋点: 上下文压缩结果解码失败: {}", errmsg);
             return std::nullopt;
         }
     );
@@ -293,7 +293,7 @@ ContextPoints registerContextPoints(Registry& registry, const ContextPointOption
             return estimator->identityOf(req);
         }
     );
-    // 插件面的扩展点 id (`agentxx.agent.point.*` 一房): 实现行登记在它上面
+    // 插件面的功能埋点 id (`agentxx.agent.point.*` 一房): 实现行登记在它上面
     out.countTokens->setPluginPointId(std::string{agentxx::plugin::points::ContextCountTokens});
     out.countTokens->addCoreImpl(
         std::string{points::kOwnerCountTokens},

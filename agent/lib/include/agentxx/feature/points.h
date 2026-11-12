@@ -1,4 +1,4 @@
-/// agentxx 核心功能点的 id、请求/结果结构与实现加载
+/// agentxx 核心功能埋点的 id、请求/结果结构与实现加载
 ///
 /// 这一份头是"核心点的稳定清单": 点 id、展示名、说明全部集中在这里, 文档表格与
 /// 测试引用同一份常量 (避免命名与文档不一致)。插件不写进这份表 —— 插件的点是运行期
@@ -88,8 +88,8 @@ struct Codec<CountTokensValue> {
 ///
 /// - 同步快路径: TPS 计算 (`service.token.count`) 直连这里的 [estimateText],
 ///   插件实现不参与这条路径 (见设计文档 §8.1);
-/// - 功能点: `agentxx.agent.context.countTokens` 的核心实现调用同一份规则, 因此
-///   "中间件旧函数" 与 "功能点取值" 结果必然一致。
+/// - 功能埋点: `agentxx.agent.context.countTokens` 的核心实现调用同一份规则, 因此
+///   "中间件旧函数" 与 "功能埋点取值" 结果必然一致。
 struct TokenEstimator {
     /// 每个 token 大约为多少个 ascii 字符
     double asciiCharsPerToken = 4.0;

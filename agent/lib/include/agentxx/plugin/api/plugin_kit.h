@@ -275,7 +275,7 @@ struct AgentIfaces {
     /// "agentxx.agent.runtime": 会话运行时 (挂自己的根 / 开会话通道 / 事件驱动)
     const AgentxxPluginRuntimeIface* runtime = nullptr;
     /// "<应用名>.broadcasts": 广播 (频道声明 / 发布 / 订阅 / 读当前值 / 结束)
-    /// - 插件的通知面走它 (通知型扩展点、事件、跨端数据都可用)
+    /// - 插件的通知面走它 (通知型功能埋点、事件、跨端数据都可用)
     const PluginxxBroadcastsIface* broadcasts = nullptr;
     /// "<应用名>.net": 网络 (HTTP / TCP / WS / UDP; 插件不直接建连接)
     const PluginxxNetIface* net = nullptr;
@@ -2555,20 +2555,20 @@ inline detail::CallToolAwaiter call_tool(
     };
 }
 
-/* ==================== 扩展点 (实现行 = 能力行) ====================
+/* ==================== 功能埋点 (实现行 = 能力行) ====================
  *
- * 插件的"给结果 / 补数据"走能力表: 为**主程序或自己声明的扩展点**登记一行实现
+ * 插件的"给结果 / 补数据"走能力表: 为**主程序或自己声明的功能埋点**登记一行实现
  * (`agentxx.agent.point.*` / `plugin.<自己>.point.*`), 取值时按 scope 过滤与优先级
  * 排序后调用这行; 一行给出 JSON 结果, 首行非空的那行生效。
  *
- * 只想**知道**扩展点被触发了, 订阅同名广播频道即可 (§20), 不需要登记实现。
+ * 只想**知道**功能埋点被触发了, 订阅同名广播频道即可 (§20), 不需要登记实现。
  */
 
-/// 扩展点实现行的登记选项
+/// 功能埋点实现行的登记选项
 struct PointImplOptions {
     /// 行内顺序, 小者先 (默认 0); 越界由主程序裁剪并记警告
     int32_t priority = 0;
-    /// 自报的最大耗时 (毫秒; 0 = 用扩展点声明里的值)
+    /// 自报的最大耗时 (毫秒; 0 = 用功能埋点声明里的值)
     int32_t timeoutMs = 0;
     /// 同一实例内区分多个处理器 (可空)
     std::string_view ownerTag{};
@@ -2599,7 +2599,7 @@ inline std::string pointAnswer(std::string_view raw) {
 namespace detail {
 
 /// 把 `(ctx, 载荷)` / `(载荷)` 形态的实现体适配成能力表要的三参处理器
-/// (能力表的处理器固定收 `(ctx, method, args)`, 扩展点的 method 就是点 id)
+/// (能力表的处理器固定收 `(ctx, method, args)`, 功能埋点的 method 就是点 id)
 template<typename Ctx, typename Fn>
 struct PointImplAdapter {
     Fn fn;
@@ -2616,7 +2616,7 @@ struct PointImplAdapter {
 
 } // namespace detail
 
-/// 为一个扩展点登记一行实现 (实现行 = 能力行)
+/// 为一个功能埋点登记一行实现 (实现行 = 能力行)
 ///
 /// - 主程序点写全名 (`agentxx.agent.point.*` 等), 自己的点写 `plugin.<插件名>.*`;
 /// - `fn` 收 `(ctx, 载荷 JSON)` (也可以只收载荷), 可返回字符串 (同步, 必须快速返回)
@@ -2626,7 +2626,7 @@ struct PointImplAdapter {
 /// - `args`:
 ///     - [ctx] plugin 上下文
 ///     - [ref] 本次挂载的 agent 引用 (行只对这个 agent 生效)
-///     - [pointId] 扩展点 id
+///     - [pointId] 功能埋点 id
 ///     - [fn] 实现体
 ///     - [opts] 顺序与耗时声明
 ///     - [error] 非空时写入拒绝原因

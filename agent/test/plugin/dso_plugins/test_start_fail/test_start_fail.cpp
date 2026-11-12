@@ -5,14 +5,14 @@
 ///   2. 注册图节点类型      `dso_rollback_type`
 ///   3. 订阅事件            `plugin.test_start_fail_plugin.watch`
 ///   4. prompt 贡献         `appendSystemPrompts.dso_rollback`
-///   5. 订阅通知型扩展点频道 `agentxx.agent.point.model.start`
+///   5. 订阅通知型功能埋点频道 `agentxx.agent.point.model.start`
 ///   6. 注册能力            `dso.rollback.cap`
 ///   7. 注册资源            skill 目录 `/tmp/agentxx_dso_rollback_skills`
 ///   8. 发布 `{"step":"all","ok":true}` 到 `plugin.test_start_fail_plugin.probe`，然后返回 NULL + error
 ///
 /// 若任一步骤失败，则发布 `{"step":"<name>","ok":false}` 并返回该失败。
 /// 测试据此验证：
-/// - start 失败必须回滚全部已生效注册（工具/图/订阅/prompt/扩展点订阅/能力/资源）；
+/// - start 失败必须回滚全部已生效注册（工具/图/订阅/prompt/功能埋点订阅/能力/资源）；
 /// - 回滚后再次加载同一 DSO 仍能重新注册同名条目（第一次的注册没有残留）。
 ///
 /// 仅使用纯 C ABI 头；不依赖 libagentxx。
@@ -266,7 +266,7 @@ static void* probeMount(
         return nullptr;
     }
 
-    // 5. 订阅通知型扩展点 (频道由主程序声明, 这里只订阅; 回滚时随实例整批撤销)
+    // 5. 订阅通知型功能埋点 (频道由主程序声明, 这里只订阅; 回滚时随实例整批撤销)
     const auto pointTopic = sv("agentxx.agent.point.model.start");
     if (!broadcasts->subscribe_broadcast(
             host,

@@ -913,7 +913,7 @@ asio::awaitable<void> test_hub_queries() {
 }
 
 /// 16. 命名规则: 三族命名空间 / 写侧与读侧校验 / 保留子段
-/// - 总线主题、中枢事件名、功能点 id 共用这一套 (`agentxx/event/naming.h`)
+/// - 总线主题、中枢事件名、功能埋点 id 共用这一套 (`agentxx/event/naming.h`)
 asio::awaitable<void> test_hub_naming() {
     namespace naming = agentxx::events::naming;
 
@@ -983,7 +983,7 @@ asio::awaitable<void> test_hub_naming() {
     XX_TEST_EXPECT_FALSE(naming::validateClientPluginWriteTopic("agentxx.client.plugin.x", &err));
     XX_TEST_EXPECT_FALSE(naming::validateClientPluginWriteTopic("plugin.demo.x", &err));
 
-    // 功能点 id 与事件名同一套规则 (插件点只要在 plugin.*, 不限定插件名)
+    // 功能埋点 id 与事件名同一套规则 (插件点只要在 plugin.*, 不限定插件名)
     XX_TEST_EXPECT_TRUE(naming::validateFeaturePointId("agentxx.agent.context.summarize", {}));
     XX_TEST_EXPECT_FALSE(naming::validateFeaturePointId("context.summarize", {}, &err));
     XX_TEST_EXPECT_TRUE(naming::validateFeaturePointId("plugin.demo.my_point", "demo"));

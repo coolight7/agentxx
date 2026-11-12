@@ -1,4 +1,4 @@
-/// 通知型扩展点 (原钩子点) 的派发 —— 7 处调用点各发一次广播
+/// 通知型功能埋点 (原钩子点) 的派发 —— 7 处调用点各发一次广播
 ///
 /// 插件参与方式只有一种: **订阅同名广播频道** (`agentxx.agent.point.*`, 见
 /// `agentxx/plugin/api/agentxx_point_ids.h`)。插件侧的处理器注册表 (含优先级、
@@ -7,7 +7,7 @@
 ///
 /// 本文件三件事:
 /// 1. 一个中间件句柄 [PluginHookDispatchHandle]: 挂在中间件链上的 7 个回调,
-///    每个回调把对应扩展点发一次 (`PluginManager::publishPoint`);
+///    每个回调把对应功能埋点发一次 (`PluginManager::publishPoint`);
 /// 2. 点 id 与载荷 (载荷固定 `{sessionId, agentId, point}`, 不进会话内容);
 /// 3. 清单 [PluginMount::hooksJson]: 点 id / 派发次数 (派发记录只在开发者模式下收集)。
 ///
@@ -30,7 +30,7 @@ namespace plugin {
 
 namespace {
 
-/// 通知型扩展点 → id 与展示名 (顺序与 PluginMount::HookPoint 一致)
+/// 通知型功能埋点 → id 与展示名 (顺序与 PluginMount::HookPoint 一致)
 struct HookPointMeta {
     std::string_view id;
     std::string_view name;
@@ -105,7 +105,7 @@ void PluginMount::ensureHookDispatch() {
     auto ctx = agent_.lock();
     if (!ctx || !ctx->middlewareHandleContext) {
         // 中间件链还没加载 (理论上不会: 插件在 initMiddleware 之后才加载)
-        XX_LOGW("扩展点派发器无法挂载: 中间件上下文尚未加载");
+        XX_LOGW("功能埋点派发器无法挂载: 中间件上下文尚未加载");
         return;
     }
     if (hookDispatch_ == nullptr) {

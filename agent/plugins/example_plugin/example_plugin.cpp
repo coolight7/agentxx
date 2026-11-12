@@ -377,7 +377,7 @@ static int exampleAgentSetup(AgentCtx& ctx, const agentxx::plugin::ScopeRef& ref
         }
     );
 
-    // 2. 通知型扩展点: 插件"想知道某个点发生了"就订阅同名广播频道
+    // 2. 通知型功能埋点: 插件"想知道某个点发生了"就订阅同名广播频道
     //    (已经不再有"钩子处理器登记"这回事; 序号已换成点 id)
     {
         const std::string_view pointId = agentxx::plugin::points::ToolEnd;

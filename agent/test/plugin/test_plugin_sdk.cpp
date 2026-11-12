@@ -4,7 +4,7 @@
 /// - 输入所有权：tool 根操作的 args/session/tool_call_id 由 Request 拥有，
 ///   主程序借用缓冲区失效后协程继续读取仍然正确；
 /// - 完成协议：同步能力（正常/抛异常）与异步 Task 能力都是 exactly-once 完成；
-/// - 扩展点实现行：`providePoint` 两种业务体形态（收上下文+载荷 / 只收载荷）都能登记；
+/// - 功能埋点实现行：`providePoint` 两种业务体形态（收上下文+载荷 / 只收载荷）都能登记；
 /// - 返回类型分发：返回字符串立即完成，返回 `Task<T>` 时由协程真正结束后
 ///   才完成，并返回主程序可取消的 provider 句柄。
 ///
@@ -447,7 +447,7 @@ TestResult testPluginSdk() {
         XX_TEST_EXPECT_EQ(probe.payload, std::string{R"({"n":42})"});
     }
 
-    /// providePoint: 扩展点实现行 = 能力行, 两种业务体形态都能登记
+    /// providePoint: 功能埋点实现行 = 能力行, 两种业务体形态都能登记
     /// (收上下文+载荷 / 只收载荷), 结果就是实现行给出的回答。
     {
         SdkCtx ctx;

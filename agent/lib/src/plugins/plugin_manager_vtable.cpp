@@ -1050,7 +1050,7 @@ static const AgentxxPluginGraphIface g_ifaceGraph = {
 // 16 个入口全部落在主程序 IO 线程 (经 onInstanceIo 投递): 根/通道/触发器记录
 // 只在那一线程读写, 因此不需要锁。
 // 参数校验与业务错误经两个通道回给插件: 入口返回值只给错误码, 具体原因写
-// 日志 (插件侧拿到的接口没有 error_out, 这是与工具/功能点表的一处差别)。
+// 日志 (插件侧拿到的接口没有 error_out, 这是与工具/功能埋点表的一处差别)。
 
 /// 取参数里的字符串 (空视图 = 空串)
 static std::string svText(const PluginxxStringView* value) {

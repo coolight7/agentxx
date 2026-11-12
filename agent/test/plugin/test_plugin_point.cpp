@@ -1,11 +1,11 @@
-/// test_plugin_point —— 功能扩展点 (point) 的主程序侧基础
+/// test_plugin_point —— 功能埋点 (point) 的主程序侧基础
 ///
-/// 一个扩展点 = 一个 id, 同时是
+/// 一个功能埋点 = 一个 id, 同时是
 /// - 一条**能力** (`agentxx.capabilities`, `impls: many` + `merge: first`, 只开 impl 阶段);
 /// - 一个**同名广播频道** (`agentxx.broadcasts`, 通知型不缓存 / 取值型缓存当前值)。
 ///
 /// 覆盖:
-/// 1. 声明表: id 头里的 10 个扩展点在管理器构造后两边都已声明, 缓存策略与类型相符
+/// 1. 声明表: id 头里的 10 个功能埋点在管理器构造后两边都已声明, 缓存策略与类型相符
 /// 2. 没有实现行: `emitPointAsync` 按"没人实现 = 没意见"完成 (`OK` + `null`)
 /// 3. 通知面: 订阅同名频道后能收到载荷; `publishPoint` 是它的"不等结果"入口
 /// 4. 取值型频道保留当前值 (`readBroadcast` 拿得到最后一次载荷)

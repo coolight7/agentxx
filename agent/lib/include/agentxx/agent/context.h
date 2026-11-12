@@ -51,7 +51,7 @@ class PluginMount;
 } // namespace plugin
 
 namespace feature {
-/// 功能点注册表 (点 / 实现 / 调用; 详见
+/// 功能埋点注册表 (点 / 实现 / 调用; 详见
 /// [feature.h](/agent/lib/include/agentxx/feature/feature.h))
 class Registry;
 } // namespace feature
@@ -955,7 +955,7 @@ public:
     bool pluginManagerOwned = true;
 
     /// 本 agent 的插件挂载 (agent 级注册实体都在这里)
-    /// - `plugin_mount` 步骤由主程序建立并赋值; 插件工具/提示词/功能点/图/资源
+    /// - `plugin_mount` 步骤由主程序建立并赋值; 插件工具/提示词/功能埋点/图/资源
     ///   都挂在这份挂载上, 关闭时随它一并拆掉
     std::shared_ptr<plugin::PluginMount> pluginMount = nullptr;
 
@@ -975,7 +975,7 @@ public:
     /// - 只记"发生了什么"的计数与耗时, 不含任何内容, 因此可安全导出 (见 diagnostics.h)
     std::shared_ptr<agentxx::util::KeyMetrics> metrics = nullptr;
 
-    /// 功能点注册表 (点 / 实现 / 调用; 见
+    /// 功能埋点注册表 (点 / 实现 / 调用; 见
     /// [feature.h](/agent/lib/include/agentxx/feature/feature.h))
     /// - 由 BaseAgent::init 创建 (早于中间件加载, 因此中间件可以声明核心点;
     ///   也早于插件加载, 因此插件登记实现时点已存在)

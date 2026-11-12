@@ -1,6 +1,6 @@
-/// test_plugin_feature —— 扩展点的插件面 (实现行 = 能力行)
+/// test_plugin_feature —— 功能埋点的插件面 (实现行 = 能力行)
 ///
-/// 背景: 扩展点框架侧的语义在 `feature_points` 覆盖, 管理器侧的基础在 `plugin_point`
+/// 背景: 功能埋点框架侧的语义在 `feature_points` 覆盖, 管理器侧的基础在 `plugin_point`
 /// 覆盖; 本模块验证**插件登记实现行 → 点取值时用到这一行**这条路上的事实一致。
 ///
 /// 覆盖:
@@ -8,7 +8,7 @@
 ///    被解开成业务值;
 /// 2. 状态可逆: 禁用摘掉实现行后回落核心实现, 启用由 `start` 事务重新登记,
 ///    卸载后回到基线;
-/// 3. 插件自己的扩展点: 第一次登记即声明, `emitPoint` 拿得到同步行的值;
+/// 3. 插件自己的功能埋点: 第一次登记即声明, `emitPoint` 拿得到同步行的值;
 /// 4. 异步实现行 (`Task<T>`): 协程行真的等过 (耗时断言) 且给出值;
 /// 5. 没有实现行 / 点未声明: `emitPoint` 按"没人实现 = 没意见"返回空;
 ///    核心实现不进能力调用链 (只由点自己调用)。
@@ -77,7 +77,7 @@ std::string findPluginDir(const char* pluginName) {
     return std::string{"plugins/"} + pluginName;
 }
 
-/// 最小主程序夹具: AgentContext + 中间件上下文 + 总线 + 工具注册表 + 功能点注册表
+/// 最小主程序夹具: AgentContext + 中间件上下文 + 总线 + 工具注册表 + 功能埋点注册表
 ///
 /// 点注册表与上下文核心点在这里先加载 (与 BaseAgent::init 同一顺序:
 /// 核心点先声明, 插件加载时才有地方登记实现), 插件层入口也按同一接线装上。
@@ -180,7 +180,7 @@ asio::awaitable<TokenProbe> askTokens(Fixture& f, std::string_view text) {
     co_return out;
 }
 
-/// 发一次扩展点并解析结果 (空 = 没人给值)
+/// 发一次功能埋点并解析结果 (空 = 没人给值)
 ///
 /// `emitPoint` 是**能力调用链本身**, 拿到的就是实现行回的原文; 实现行习惯用
 /// `{"value": ...}` 包一层 (`pointAnswer`), 这里按同一规则解开, 断言才看业务字段。
@@ -260,7 +260,7 @@ asio::awaitable<void> test_impl_row_lifecycle() {
 }
 
 // ===========================================================================
-// 2. 插件自己的扩展点: 声明与实现, 同步行 / 异步行
+// 2. 插件自己的功能埋点: 声明与实现, 同步行 / 异步行
 // ===========================================================================
 asio::awaitable<void> test_plugin_own_points() {
     auto f = co_await makeFixture();
@@ -320,7 +320,7 @@ asio::awaitable<void> test_plugin_own_points() {
 asio::awaitable<void> test_no_impl_rows() {
     auto f = co_await makeFixture();
 
-    // 能力调用链上没有实现行 → "没人给值" (这里用的是插件面的扩展点 id)
+    // 能力调用链上没有实现行 → "没人给值" (这里用的是插件面的功能埋点 id)
     auto emitted = co_await emitPointJson(
         f,
         agentxx::plugin::points::ContextCountTokens,

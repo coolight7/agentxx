@@ -1,4 +1,4 @@
-/// agentxx 功能点注册表 —— 点表 + 清单 + 插件面入口
+/// agentxx 功能埋点注册表 —— 点表 + 清单 + 插件面入口
 ///
 /// 一个 [Registry] 随一个 `AgentContext` 一份 (多 agent 实例互不影响, 不使用全局
 /// 状态)。点由加载代码声明 (中间件 / 节点注册), 插件的实现经能力表登记成
@@ -23,13 +23,13 @@
 namespace agentxx {
 namespace feature {
 
-/// 插件声明自己的功能点 -> 由能力表承担, 这里不再提供声明入口
+/// 插件声明自己的功能埋点 -> 由能力表承担, 这里不再提供声明入口
 
-/// 功能点 id 的命名检查 (核心点必须是 `agentxx.agent.*`)
+/// 功能埋点 id 的命名检查 (核心点必须是 `agentxx.agent.*`)
 /// - 不合格时只记一条警告日志, 不阻断声明 (第三方主程序自建点不至于因此跑不起来)
 void warnIfCorePointMisnamed(std::string_view id);
 
-/// 功能点注册表
+/// 功能埋点注册表
 class Registry {
 public:
 
@@ -41,12 +41,12 @@ public:
 
     // ==================== 声明点 ====================
 
-    /// 声明一个取值型功能点 (核心点在自己的加载代码里调用; 早于插件加载)
+    /// 声明一个取值型功能埋点 (核心点在自己的加载代码里调用; 早于插件加载)
     /// - 同一 id 重复声明: 类型一致时返回已有点 (无害重声明), 否则记一条错误日志
     ///   并返回新点 (新点不注册进点表, 不会顶掉已有点)
     ///
     /// - `args`:
-    ///     - [id] 功能点 id (核心点用 `agentxx.agent.<域>.<名字>`, 稳定清单见 points.h)
+    ///     - [id] 功能埋点 id (核心点用 `agentxx.agent.<域>.<名字>`, 稳定清单见 points.h)
     ///     - [opts] 声明选项 (展示名 / 说明 / 可调性 / 值缓存策略 / 等实现超时)
     ///     - [identityOf] 身份规则: 由点声明"这次要算的是哪一份输入"
     ///
@@ -59,10 +59,10 @@ public:
         if (auto* existing = find(id)) {
             if (auto* typed = dynamic_cast<ProvidePoint<TReq, TValue>*>(existing);
                 typed != nullptr) {
-                XX_LOGI("功能点 `{}` 重复声明, 复用已有点", id);
+                XX_LOGI("功能埋点 `{}` 重复声明, 复用已有点", id);
                 return *typed;
             }
-            XX_LOGE("功能点 `{}` 重复声明且类型不一致, 本次声明未注册进点表", id);
+            XX_LOGE("功能埋点 `{}` 重复声明且类型不一致, 本次声明未注册进点表", id);
         }
         auto point = std::make_unique<ProvidePoint<TReq, TValue>>(
             std::string{id},
@@ -80,7 +80,7 @@ public:
     /// 设置插件层入口 (主程序侧: `PluginManager::emitPoint`)
     ///
     /// - 对已声明的点与之后声明的点都生效;
-    /// - `co_await point->ask(...)` 时先发一次同名扩展点 (实现行 = 能力行), 没人给值再问
+    /// - `co_await point->ask(...)` 时先发一次同名功能埋点 (实现行 = 能力行), 没人给值再问
     ///   本点自己登记的实现与核心实现。
     void setPluginEmitter(PointBase::PluginEmitFn fn);
 
@@ -116,7 +116,7 @@ public:
 
     // ==================== 清单 ====================
 
-    /// 功能点清单 (插件 `list_points`、加载快照与诊断共用这一份实现)
+    /// 功能埋点清单 (插件 `list_points`、加载快照与诊断共用这一份实现)
     utilxx_base::Json listPointsJson() const;
 
     /// 开发者模式是否开启 (启动期冻结; 清单的 `stat` 段按它出现)

@@ -1,7 +1,7 @@
 /// agentxx 广播频道 id 清单 (主程序声明的应用频道)
 ///
 /// 频道的职责划分 (见 docs/zh-cn/design/events.md 与 plugins.md):
-/// - **功能扩展点**频道 (`agentxx.agent.point.*`): 见 `agentxx_point_ids.h`;
+/// - **功能埋点**频道 (`agentxx.agent.point.*`): 见 `agentxx_point_ids.h`;
 /// - **生命周期通知** (本头): "某一刻发生了什么", 没有等待者、没有值语义;
 /// - **事件中枢的值事件** (`agentxx.agent.event.*` / `agentxx.agent.async.done`):
 ///   由中枢自己发布, 名字规则在 `agentxx/event/naming.h`, 不在本头。

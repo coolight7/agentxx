@@ -2092,9 +2092,9 @@ agent/
 │   │   │   │                     #    host/{loader,manifest,abi_util,capability_registry,capability_chain,
 │   │   │   │                     #          broadcast_registry,domain_services,host_core,tables_impl,lifecycle}.h)
 │   │   │   ├── plugin_interfaces.h # 接口协商 (三层协商的声明/校验) + 接口名目录 (plugin_interfaces)
-│   │   │   ├── plugin_manager.h  # PluginManager 业务部分 (工具/权限/图/提示词/资源/扩展点) /
+│   │   │   ├── plugin_manager.h  # PluginManager 业务部分 (工具/权限/图/提示词/资源/功能埋点) /
 │   │   │   │                     #   PluginTool (C 回调→线程池卸载执行) /
-│   │   │   │                     #   PluginHookDispatchHandle (挂载级单派发器, 7 个通知型扩展点);
+│   │   │   │                     #   PluginHookDispatchHandle (挂载级单派发器, 7 个通知型功能埋点);
 │   │   │   │                     #   十张通用表的状态与方法继承自 pluginxx::PluginHostCore,
 │   │   │   │                     #   加载/启停/禁用启用/卸载/级联继承自 pluginxx::PluginHostLifecycle
 │   │   │   │                     #   (业务数据经 pluginxx::DomainServices + 生命周期扩展点提供)
@@ -2359,12 +2359,12 @@ agent/
 │
 ├── plugins/                      # 插件 (独立动态库/目录, 仅依赖 plugin_api.h;
 │                                 #   编译产物统一输出到 exec/plugins/<插件名>/)
-│   ├── example_plugin/           # 示例 C++ 插件 (双端): 工具/扩展点订阅/事件/能力/client 入口
+│   ├── example_plugin/           # 示例 C++ 插件 (双端): 工具/功能埋点订阅/事件/能力/client 入口
 │   ├── example_graph_node/       # Graph 扩展示例插件 (自定义节点类型 + set_graph_json 改图, 依赖 agent.graph 接口)
 │   ├── example_js/               # JS 示例插件 (C++ 壳 + plugin.js; depends: javascript_engine)
 │   ├── example_js_execute_command/ # JS 代码执行工具插件 (example_js_execute_command; depends: javascript_engine)
 │   ├── example_resources/        # 会话资源贡献示例 (声明式与编程式 MCP/Skill/规则)
-│   ├── example_feature/          # 扩展点示例插件 (登记实现行 + 订阅同名频道)
+│   ├── example_feature/          # 功能埋点示例插件 (登记实现行 + 订阅同名频道)
 │   ├── example_multi_mount/      # 一插件多 agent 挂载示例插件 (挂载作用域/会话/事件)
 │   ├── agentxx_javascript_engine/ # QuickJS JS 运行时插件 (能力 interpreter.js; 专用 JS 线程+沙箱)
 │   ├── agentxx_codegraph/        # CodeGraph 代码分析插件 (search/context/callers/callees/path 共 5 工具 + client Info 栏段落)

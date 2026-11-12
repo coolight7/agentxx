@@ -47,7 +47,7 @@ const PluginxxBuiltinManifest* get_builtin_manifests(uint64_t* count);
 /// 一个已加载的插件实例 (进程一份)
 ///
 /// 本类只放**与 agent 无关**的东西: 加载元信息、插件上下文、生命周期入口。
-/// 凡是落在某个 agent 上的东西 (工具/权限/提示词/功能点/图/资源/事件订阅/挂载状态)
+/// 凡是落在某个 agent 上的东西 (工具/权限/提示词/功能埋点/图/资源/事件订阅/挂载状态)
 /// 都在 [PluginMount::Entry] 里 —— 同一个实例可以同时挂在多个 agent 上, 各自一份。
 class PluginInstance : public PluginInstanceBase {
 public:
@@ -294,7 +294,7 @@ public:
     /// 执行图定义的占用者 (多挂载时取第一个非空占用者)
     std::string graphDefinitionOwner() const;
 
-    /// 通知型扩展点清单 (单挂载 = 该挂载; 多挂载 = 逐挂载一段的数组)
+    /// 通知型功能埋点清单 (单挂载 = 该挂载; 多挂载 = 逐挂载一段的数组)
     std::string hooksJson();
 
     void onTurnBegin();
@@ -419,16 +419,16 @@ public:
     static std::string pluginNameOfBroadcast(std::string_view id);
 
     // =====================================================================
-    // 功能扩展点 (point): 一个 id = 能力 (实现面) + 同名广播频道 (通知面)
+    // 功能埋点 (point): 一个 id = 能力 (实现面) + 同名广播频道 (通知面)
     // =====================================================================
 
-    /// 声明本主程序的全部扩展点 (构造函数里调一次; 幂等)
+    /// 声明本主程序的全部功能埋点 (构造函数里调一次; 幂等)
     ///
     /// 清单在 `agentxx/plugin/api/agentxx_point_ids.h`, 与这里的声明表必须一致
     /// (测试模块 `boundaries` 核对)。
     void declareAppPoints();
 
-    /// 发一次扩展点 (**IO 线程**)
+    /// 发一次功能埋点 (**IO 线程**)
     /// - 先发通知面广播, 再按 `agentId` 调实现行; 没有实现行时按 `OK` + `null` 完成;
     /// - `agentId` 为空 = 不按作用域过滤 (只有通知面);
     /// - 完成回调 `cb` 可为空 (通知型调用点不需要结果)。
@@ -441,14 +441,14 @@ public:
         PluginxxString*          error
     );
 
-    /// 发一次通知型扩展点 (不等结果, 失败只记日志)
+    /// 发一次通知型功能埋点 (不等结果, 失败只记日志)
     void publishPoint(
         std::string_view pointId,
         std::string_view agentId,
         std::string_view payloadJson
     );
 
-    /// 发一次扩展点并等实现行的结果 (IO 线程)
+    /// 发一次功能埋点并等实现行的结果 (IO 线程)
     ///
     /// - 实现行 = 框架能力表里的行 (`register_capability`, 按 `scope` 过滤, 按优先级排);
     /// - 返回 `std::nullopt` = 没人给出结果 (没实现行 / 全部回了空 / 失败);

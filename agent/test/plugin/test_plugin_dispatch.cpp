@@ -1,5 +1,5 @@
 ///
-/// 通知型扩展点的派发 —— 7 处调用点各发一次广播 (`agentxx.agent.point.*`)
+/// 通知型功能埋点的派发 —— 7 处调用点各发一次广播 (`agentxx.agent.point.*`)
 ///
 /// 插件参与方式只有一种: **订阅同名频道**。主程序侧只保留一个派发器
 /// (中间件句柄 `plugin_points`, 建挂载时挂上), 它把每个调用点转成一次广播。
@@ -89,7 +89,7 @@ std::string findPluginDir(const char* pluginName) {
     return std::string{"plugins/"} + pluginName;
 }
 
-/// 最小主程序夹具: AgentContext + 中间件上下文 + 总线 + 工具注册表 + 功能点注册表
+/// 最小主程序夹具: AgentContext + 中间件上下文 + 总线 + 工具注册表 + 功能埋点注册表
 /// + 插件管理器 + 一份挂载
 struct Fixture {
     std::shared_ptr<agentxx::agent::AgentContext>   ctx;
@@ -630,7 +630,7 @@ asio::awaitable<void> test_manifest_per_mount() {
 // ===========================================================================
 
 asio::awaitable<TestResult> run_plugin_dispatch_tests() {
-    TEST_INFO << "[plugin_dispatch] 通知型扩展点派发 (agentxx.agent.point.*)" << std::endl;
+    TEST_INFO << "[plugin_dispatch] 通知型功能埋点派发 (agentxx.agent.point.*)" << std::endl;
     try {
         co_await test_point_manifest();
         co_await test_dispatch_payload_per_point();

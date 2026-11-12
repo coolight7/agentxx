@@ -1,4 +1,4 @@
-/// agentxx 功能点注册表实现 (点表 / 清单 / 插件面入口)
+/// agentxx 功能埋点注册表实现 (点表 / 清单 / 插件面入口)
 #include "agentxx/feature/registry.h"
 
 #include "agentxx/agent/config_static.h"
@@ -18,7 +18,7 @@ void warnIfCorePointMisnamed(std::string_view id) {
     if (agentxx::events::naming::validateFeaturePointId(id, {}, &err)) {
         return;
     }
-    XX_LOGW("功能点 `{}` 的 id 不合命名约定: {}", id, err);
+    XX_LOGW("功能埋点 `{}` 的 id 不合命名约定: {}", id, err);
 }
 
 Registry::Registry() = default;
@@ -42,7 +42,7 @@ JsonProvidePoint&
     Registry::provideJson(std::string_view id, PointOptions opts, std::string origin) {
     warnIfCorePointMisnamed(id);
     if (auto* existing = find(id); existing != nullptr) {
-        XX_LOGE("功能点 `{}` 已存在 (来源 `{}`), 本次声明未注册进点表", id, existing->origin());
+        XX_LOGE("功能埋点 `{}` 已存在 (来源 `{}`), 本次声明未注册进点表", id, existing->origin());
         return static_cast<JsonProvidePoint&>(addPoint(std::make_unique<JsonProvidePoint>(
             std::string{id},
             std::move(opts),
@@ -76,7 +76,7 @@ int32_t Registry::addImpl(std::string_view pointId, ImplSpec spec) {
     auto* point = find(pointId);
     if (point == nullptr) {
         XX_LOGW(
-            "功能点 `{}` 的实现登记被拒绝: 点不存在 (插件目录先 define_point, "
+            "功能埋点 `{}` 的实现登记被拒绝: 点不存在 (插件目录先 define_point, "
             "应用点需先由主程序加载声明)",
             pointId
         );

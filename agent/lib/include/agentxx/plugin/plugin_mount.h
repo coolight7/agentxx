@@ -7,8 +7,8 @@
 ///
 /// 插件管理器 ([PluginManager]) 是**进程一份**: 插件只 `dlopen`/`create`/`start` 一次,
 /// 它的线程、连接、能力声明属于整个进程。但每一样"落在 agent 上的东西" —— 工具、
-/// 工具权限、提示词贡献、功能点、图节点类型/图定义、声明式资源、
-/// 事件订阅 (含通知型扩展点频道) —— 都属于某个具体的 agent: 换一个 agent 就是另一套工具表、另一条中间件
+/// 工具权限、提示词贡献、功能埋点、图节点类型/图定义、声明式资源、
+/// 事件订阅 (含通知型功能埋点频道) —— 都属于某个具体的 agent: 换一个 agent 就是另一套工具表、另一条中间件
 /// 链、另一份提示词。
 ///
 /// 因此把这些东西收进 [PluginMount]: 一个 agent 一个挂载, 挂载记录"哪个实例在这个
@@ -29,7 +29,7 @@
 ///
 /// ## 线程
 ///
-/// 挂载的全部状态只在主程序 io 线程读写: 注册入口由 vtable 层投递, 通知型扩展点的派发也在
+/// 挂载的全部状态只在主程序 io 线程读写: 注册入口由 vtable 层投递, 通知型功能埋点的派发也在
 /// 这条线程。插件回调 (mount/unmount) 同样由主程序在这条线程驱动。
 #include "agentxx/agent/prompt.h"
 #include "agentxx/middlewares/middleware.h"
@@ -67,7 +67,7 @@ class PluginManager;
 class PluginTool;
 struct GraphTypeSlot;
 
-/// 通知型扩展点派发器 (agent 的中间件链上只挂一个)
+/// 通知型功能埋点派发器 (agent 的中间件链上只挂一个)
 ///
 /// 7 个通知点在 7 处调用点各发一次广播 (`agentxx.agent.point.*`): 插件订阅同名频道
 /// 即收到, 主程序不再维护处理器注册表。本句柄只是这 7 个调用点的入口 ——
@@ -123,7 +123,7 @@ public:
     ///   产物与状态;
     /// - 其余是撤销记录: 注册时逐条追加, 拆挂载时按 §"撤销顺序" 逐类撤销
     ///   (事件订阅 → MCP → memory → skill → 图定义 → 图节点类型 → 提示词 →
-    ///   功能点实现 → 功能点声明 → 工具权限 → 工具)。
+    ///   功能埋点实现 → 功能埋点声明 → 工具权限 → 工具)。
     struct Entry {
         std::shared_ptr<PluginInstance> inst;
         /// 插件 `mount` 返回的 per-agent 状态 (卸载时原样交回)
@@ -445,9 +445,9 @@ public:
         return graphDefinitionOwner_;
     }
 
-    /// ==================== 通知型扩展点 (原钩子点) ====================
+    /// ==================== 通知型功能埋点 (原钩子点) ====================
     ///
-    /// 7 个通知型扩展点在 7 处调用点各发一次广播 (`agentxx.agent.point.*`,
+    /// 7 个通知型功能埋点在 7 处调用点各发一次广播 (`agentxx.agent.point.*`,
     /// 见 `agentxx_point_ids.h`): 插件**订阅同名频道**即可收到, 不再有"处理器注册表"、
     /// 优先级与撤销句柄 —— 收不收、谁先谁后由广播订阅与派发顺序决定。
     enum class HookPoint {
@@ -460,7 +460,7 @@ public:
         ToolEnd,       ///< 一次工具调用结束
     };
 
-    /// 通知型扩展点个数
+    /// 通知型功能埋点个数
     static constexpr size_t kHookPointCount = 7;
 
     /// 一次派发的记录 (只在开发者模式下收集)
@@ -469,11 +469,11 @@ public:
         uint64_t lastMs     = 0; ///< 上次派发耗时 (毫秒)
     };
 
-    /// 通知型扩展点清单 JSON (加载快照的 `points` 段与 `--dump-diagnostics` 共用)
+    /// 通知型功能埋点清单 JSON (加载快照的 `points` 段与 `--dump-diagnostics` 共用)
     /// - 派发记录 (`stat` 段) 只在开发者模式下出现
     std::string hooksJson();
 
-    /// 发一次通知型扩展点 (中间件链上唯一派发器的入口)
+    /// 发一次通知型功能埋点 (中间件链上唯一派发器的入口)
     asio::awaitable<void> dispatchHook(HookPoint point, const neograph::graph::NodeInput& in);
 
     /// 把派发器挂到中间件链上 (建挂载时调一次; 已经挂上就什么也不做)
