@@ -14,7 +14,7 @@
 
 - C++ 协程异步实现的 AI Agent，可编译为`单程序、动态库`直接启动使用。内存占用和程序包体积小、摆脱了庞大的 动态库、python、js 等依赖，可在普通性能的手机、电脑等设备上高效运行
 - 目标支持嵌入App辅助扩展实现高性能的Agent功能，顺带实现 cli/TUI 的 Code Agent; GUI客户端计划将由[Lumenxx](https://github.com/coolight7/lumenxx-docx)支持，并实现 音视频处理、自动化控制 等 Agent 
-- 实测最长单轮任务自动运行超 24 小时完成，本项目已由 Agentxx 自身介入开发，已实践在 C/C++、flutter、python、Web 等项目上使用
+- 实测最长单轮任务自动运行 `24+ 小时、消耗10亿+ token` 稳定运行完成，本项目已由 Agentxx 自身介入开发，已实践在 C/C++、flutter、python、Web 等项目上使用
 
 - [特点](#特点)
 - [兼容性](#兼容性)

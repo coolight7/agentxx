@@ -36,6 +36,7 @@
 - 补充提示词，长任务未全部完成时停下，需要说明停下的原因
 - 任务规划文件 关联 git commit 以便检索
 - 异步 tool 结果不再重复 offload，因为 toolcallNode 本身就会裁剪
+- 疑似部分情况下（"hasError":false,"canceled":true），异步事件结果总是得在会话运行中或是发送user消息时才添加进上下文
 
 - SVG绘制支持
 
