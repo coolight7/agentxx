@@ -9,11 +9,13 @@
 /// 2. 没有实现行: `emitPointAsync` 按"没人实现 = 没意见"完成 (`OK` + `null`)
 /// 3. 通知面: 订阅同名频道后能收到载荷; `publishPoint` 是它的"不等结果"入口
 /// 4. 取值型频道保留当前值 (`readBroadcast` 拿得到最后一次载荷)
+/// 5. 应用能力 (非功能埋点): 主程序构造时已声明, 形状同样是 many + first
 #include "agentxx-test/plugin/test_plugin_point.h"
 
 #include "agentxx/agent/context.h"
 #include "agentxx/event/event_stream.h"
 #include "agentxx/middlewares/middleware.h"
+#include "agentxx/plugin/api/agentxx_capability_ids.h"
 #include "agentxx/plugin/api/agentxx_point_ids.h"
 #include "agentxx/plugin/api/plugin_kit.h"
 #include "agentxx/plugin/plugin_manager.h"
@@ -43,6 +45,7 @@ namespace test {
 namespace {
 
 namespace points = agentxx::plugin::points;
+namespace appcaps = agentxx::plugin::capabilities;
 
 struct Fixture {
     std::shared_ptr<agentxx::agent::AgentContext>   ctx;
@@ -192,6 +195,25 @@ asio::awaitable<void> test_point_value_cache() {
     co_return;
 }
 
+// ===========================================================================
+// 5. 应用能力 (非功能埋点): 主程序构造时已声明, 形状是 many + first + impl
+// ===========================================================================
+asio::awaitable<void> test_app_capability_declarations() {
+    auto f = co_await makeFixture();
+    for (const auto id : appcaps::kAppCapabilities) {
+        const std::string key{id};
+        XX_TEST_EXPECT_TRUE(f.mgr->capabilities()->declares(key));
+        // 只声明、没人实现: `has` 看的是实现行, 因此这里必须为假
+        XX_TEST_EXPECT_FALSE(f.mgr->capabilities()->has(key));
+        const auto info = f.mgr->capabilities()->infoJson(key);
+        XX_TEST_EXPECT_FALSE(info.empty());
+        // 声明方是应用: 自省里 declaredBy 取值 "app" (插件声明时写的是插件名)
+        XX_TEST_EXPECT_TRUE(info.find("many") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(info.find("\"declaredBy\":\"app\"") != std::string::npos);
+    }
+    co_return;
+}
+
 } // namespace
 
 asio::awaitable<TestResult> run_plugin_point_tests() {
@@ -201,6 +223,7 @@ asio::awaitable<TestResult> run_plugin_point_tests() {
     co_await test_point_without_impl();
     co_await test_point_broadcast_face();
     co_await test_point_value_cache();
+    co_await test_app_capability_declarations();
     co_return TestResult{g_pp_passed, g_pp_failed};
 }
 

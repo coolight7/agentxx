@@ -370,6 +370,16 @@ the same calls on both ends.
 > holds its execution lease so unloading waits for the call). The FFI C API has no dedicated
 > capability entry point today.
 >
+> **Official ids (`agentxx.*`) are declared by the host first**: the list lives in
+> `agent/lib/include/agentxx/plugin/api/agentxx_capability_ids.h` (feature points have the same
+> shape but their list is `agentxx_point_ids.h`, which also declares the same-named broadcast
+> channel). The declaration is always `impls: many` + `merge: first` + `impl` phase only: several
+> implementation rows may coexist, the first one that answers wins, and a later implementation
+> does not replace an earlier one. Plugins can only add implementation rows for such ids;
+> declaring one yourself is rejected (`register_capability: ... is not declared by the application`).
+> To add a new official capability, add a line to that header — `PluginManager` declares the whole
+> list at construction time (`declareAppCapabilities`).
+>
 > - `agentxx.system_usage` (`agentxx_system_monitor`): snapshot of the current system load.
 >   `method` does not branch (by convention `query`), arguments are ignored. Fields
 >   (usage in percent, capacities in MB):

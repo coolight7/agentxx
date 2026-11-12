@@ -144,6 +144,8 @@ PluginManager::PluginManager(std::weak_ptr<agentxx::agent::AgentContext> primary
     declareBuiltinBroadcasts();
     // 功能埋点: 能力声明 + 同名广播频道 (插件在 start 里就能登记实现行/订阅)
     declareAppPoints();
+    // 官方能力 (不属于功能埋点的那几个): 插件只登记实现行, 声明由主程序给
+    declareAppCapabilities();
 }
 
 // =====================================================================

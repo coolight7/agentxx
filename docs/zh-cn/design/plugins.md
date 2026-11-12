@@ -496,6 +496,14 @@ agent 侧与 client 侧各提供一份。广播 / 能力 / 调度 / 配置 / 日
 > `emitPoint` / `emitPointAsync`。调用必须携带**调用方插件实例** (主程序据此
 > 持有它的执行租约, 卸载等待覆盖本次调用)。FFI 的 C 接口目前没有单独的能力调用入口。
 >
+> **官方 id (`agentxx.*`) 由主程序先声明**: 清单在
+> `agent/lib/include/agentxx/plugin/api/agentxx_capability_ids.h` (功能埋点那批同形, 清单在
+> `agentxx_point_ids.h` —— 那边还要一并声明同名广播频道)。声明形状统一是
+> `impls: many` + `merge: first` + 只开放 `impl` 阶段: 多个实现行可以并存, 第一个给出结果的
+> 生效, 后来的实现不会把前面的顶掉。插件只能给这类 id 登记实现行, 自己声明会被拒
+> (`register_capability: ... is not declared by the application`)。要加一条新的官方能力,
+> 就在那个头里加一行 —— `PluginManager` 构造时按清单声明一遍 (`declareAppCapabilities`)。
+>
 > - `agentxx.system_usage` (`agentxx_system_monitor`): 读取当前系统负担的快照,
 >   `method` 不参与分支 (约定 `query`), 参数忽略。载荷字段 (占用为百分比, 容量为 MB):
 >   - `cpu` / `cpu_cores`: CPU 占用与逻辑核心数

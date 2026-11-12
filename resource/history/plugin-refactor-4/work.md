@@ -675,8 +675,8 @@ publishPluginBroadcast(host, iface.broadcasts, id, payload)）：
 - [x] 两个库 Debug 编过，`api_abi_check` 与新增静态断言通过
 - [x] `windows_debug_build.bat` 全绿（lib + client + test + benchmark + 插件目标）
 - [x] `agent/script/build_plugins.ps1` 全部插件产物时间戳更新（26 个）
-- [x] `agentxx_test --log-level warn` 全模块通过（debug + ASan；除一批被搜狗输入法
-      TSF DLL 带崩的模块，见步骤 7 的测试段）
+- [x] `agentxx_test --log-level warn` 全模块通过（debug + ASan；此前被搜狗输入法 TSF DLL
+      带崩的一批模块已定位并修好触发源，见"补充: 搜狗输入法崩溃排查"）
 - [x] `boundaries` 规则 7（20 / 17 张表，net 在 agent 侧单独计）、`IfaceMeta` 特化数 26、
       扩展点 id 头与声明表一致
 - [x] 能力行 scope 隔离 / 宿主发起调用 / 广播 end / 扩展点原语 四项库语义各有一条测试
@@ -707,3 +707,56 @@ publishPluginBroadcast(host, iface.broadcasts, id, payload)）：
     改完用 `(Get-Item <文件>).LastWriteTime = (Get-Date)` 推一下再编
   - 库头里 `PluginxxCapabilityStartFunction` 等 **C ABI 结构体在全局命名空间**，不在
     `namespace pluginxx` 内 —— `using pluginxx::PluginxxNetIface` 这类写法一定编不过
+
+## 补充: 搜狗输入法崩溃排查与三处修复 (全量测试收尾)
+
+### 现象
+
+debug + ASan 下全量跑 `agentxx_test`, 若干模块 (`ffi_c_api` / `websocket` / `remote_agent` /
+`network_timeout` / `mcp` / `shutdown_stages` 等) 直接 abort, 控制台只有一行
+`AddressSanitizer: heap-use-after-free ... SogouPY.ime+0x180382b7e` 之类的报告, 断言/真正的
+失败信息全被它盖掉; 单独跑同一模块有时又不复现。
+
+### 因果链 (cdb 抓栈 + 独立探针证实)
+
+1. `utilxx::HttpServer` 析构时成员声明顺序问题: `workers_`(io_context) 在 `connMutex_` /
+   `trackedConns_` **之前**声明, 析构逆序先把 mutex/vector 拆掉, 再销毁 `workers_` —— 挂起的
+   `serveTcp` 协程帧在这时销毁, 其 `Untracker` 回调 `untrackConnection` 去碰已析构成员,
+   debug STL 断言 `vector erase iterator outside range` (release 下是 UB)。
+2. 调试 CRT 的断言默认**弹模态对话框** (`ucrtbased!CrtDbgReport` → `USER32!MessageBoxW`)。
+   MessageBox 创建窗口 → `IMM32!CtfImmDispatchDefImeMessage` 延迟加载 `MSCTF.dll` →
+   `SogouTSF.ime` / `SogouPY.ime` → 搜狗自身在 IME 窗口过程里 heap-use-after-free,
+   ASan 抓住即 abort, 断言文本反而看不到。
+3. 独立探针 (`CoInitializeEx` + `TF_CreateThreadMgr` + `Activate`/`Deactivate` +
+   `CoUninitialize`, MSVC ASan, 不含任何本项目代码) 稳定复现**同一偏移**
+   `SogouPY.ime+0x180382b7e` 的 UAF → 搜狗自身缺陷, 本项目只能避免触发它。
+4. 另有本项目真实缺陷 `WrapHandleBaseNode::run`: 缓存 `len = handles.size()` 后跨 `co_await`
+   用实时列表 `handles[i]` 索引, 回合中插件禁用/卸载会缩短列表 → `vector subscript out of
+   range` (`shutdown_stages` 触发)。
+
+### 修复
+
+- `agent/third_party/cxx_utilxx/src/http_server.cpp`: `~HttpServer()` 在 `stop()` 之后先
+  `acceptor_.reset(); workers_.clear();`, 让协程帧在其它成员仍存活时销毁 (子模块提交, 见下)
+- `agent/test/test.cpp`: `main` 开头把 `_CRT_WARN/_CRT_ERROR/_CRT_ASSERT` 的 report mode 改成
+  `_CRTDBG_MODE_FILE` + `_CRTDBG_FILE_STDERR` —— 断言文本进日志, 终止语义不变
+  (`_STL_REPORT_ERROR` 报完仍 abort), 也不再拉起输入法
+- `agent/lib/include/agentxx/nodes/wrap_handle.h`: `run` 进入时拷一份 handle 列表作为本轮
+  快照, start/baseRun/end 三段都用它 (`handles[i]` / `baseRun(handles, ...)`), 越界消失,
+  且 start/end 配对不受中途列表变化影响
+- `cpu_gpu` 的 4 条失败 (`capability is not declared: agentxx.system_usage`): 插件框架要求
+  `agentxx.*` 这类官方 id **由应用先声明**, 本项目的 `PluginManager` 没声明 →
+  - 新增 `agent/lib/include/agentxx/plugin/api/agentxx_capability_ids.h` (官方能力 id 清单)
+  - `PluginManager::declareAppCapabilities()` (构造函数调用): 按 `impls: many` +
+    `merge: first` + 只开 impl 阶段声明, 与功能埋点同形
+  - `agentxx_system_monitor` 改用头里的常量登记实现行
+  - `plugin_point` 加一条用例: 构造后这些 id 已声明、`has()` 为假 (还没人实现)、
+    自省里 `declaredBy` 是 `app`
+
+### 验证
+
+- 修完逐个重跑此前崩溃的模块: `ffi_c_api 208` / `websocket 254` / `remote_agent 602` /
+  `network_timeout 49` / `mcp 404` / `input_delivery 139` / `session_sync 30` / `async_work 138` /
+  `event_subagent 52` / `shutdown_stages 17` 全绿, 无 ASan 报告
+- `cpu_gpu 55` / `plugin_point 68` 全绿
+- 全量 `agentxx_test --log-level warn`: 见下方"当前进度"与 `index.md` 的结论

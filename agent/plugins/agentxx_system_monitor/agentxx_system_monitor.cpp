@@ -2,6 +2,7 @@
 #include "cpu_gpu_monitor.h"
 #include "system_monitor_plugin.h"
 
+#include "agentxx/plugin/api/agentxx_capability_ids.h"
 #include "agentxx/plugin/api/client_plugin_api.h"
 #include "agentxx/plugin/api/plugin_guard.h"
 #include "agentxx/plugin/api/plugin_kit.h"
@@ -247,6 +248,8 @@ static int32_t sysMonMountSetup(SysMonCtx& ctx, const ScopeRef& ref) {
 /// 进程级启动工作: 能力、事件订阅与后台采样任务 (与挂载数无关)
 static int32_t sysMonStartSetup(SysMonCtx& ctx) {
     // 2. 能力: agentxx.system_usage —— 读取当前系统负担 (cpu/gpu 占用、内存与显存占用)
+    //    - 这个 id 由主程序声明 (agentxx/plugin/api/agentxx_capability_ids.h),
+    //      插件只登记实现行
     //    - 其他插件经 `agentxx.capabilities` 的 invoke (kit: invoke_cap /
     //      invoke_capability_blocking) 调用; 主程序侧查清单用
     //      `PluginManager::capabilities()->infoJson`, 功能埋点走 `emitPoint`
@@ -256,7 +259,7 @@ static int32_t sysMonStartSetup(SysMonCtx& ctx) {
     //      异步返回: 调用方可以随时调用, 不会占住主程序 IO 线程
     capability(
         ctx,
-        "agentxx.system_usage",
+        agentxx::plugin::capabilities::SystemUsage,
         [](SysMonCtx& c, const PluginxxHost*, std::string_view, std::string_view)
             -> Task<std::string> {
             auto usage = co_await offload(c, [&c](const PluginxxCancelToken*) {

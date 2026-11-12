@@ -61,13 +61,17 @@
   删除 `agentxx.agent.hooks` / `agentxx.agent.feature` / `agentxx.agent.event` /
   `agentxx.client.events|json|log` 与对应实现（约 600 行）
 - 插件：26 个全部重编，通知面与网络全部改走广播表与 `agentxx.net`
+- 官方能力 id（`agentxx.*`，清单 `plugin/api/agentxx_capability_ids.h`）由主程序声明，
+  插件只登记实现行：新增一条官方能力 = 头里加一行，`PluginManager` 构造时按清单声明
 
 **与计划的偏差**
 
 1. 表数量：计划写 agent 侧 21 张，实际常量 20 —— `agentxx.net` 在 agent 侧不计入
    `kInterfaceTableCount`（头文件与文档都写明“单独一张”），client 侧 17 张里包含 net
-2. 计划里的“功能埋点”落地时统一叫**扩展点**（`boundaries` 规则 15 拦停用词）；
-   `plugin_hooks` 合并进 `plugin_point`，`plugin_feature` 保留为插件面用例
+2. 计划里的“功能埋点”落地时最先写成**扩展点**（`boundaries` 规则 15 拦停用词），后来改回
+   **功能埋点**：这个词能表达“实现可被覆盖/替换”的那层含义，`扩展点` 只留给框架覆写点
+   （`PluginHostLifecycle` 钩子一类）这类通用含义。`plugin_hooks` 合并进 `plugin_point`，
+   `plugin_feature` 保留为插件面用例
 3. 计划里的 `PluginNetHub` 拆成两层：库里的 `utilxx::NetHub` + 主程序的
    `agentxx::plugin::PluginNetService`（适配接口表、事件、租约）
 4. `interpreter.js` 能力的“方法”从能力 method 挪进 args 的 `op` 字段（库侧取消 method
@@ -77,6 +81,11 @@
 
 - 手工验收（空列表启动 26 插件全加载、禁用→启用账目归零、chatbot 断网重连、客户端重连
   后插件面板/装饰重建）需要人工开 TUI 或接真实平台；自动化用例已覆盖等价语义
-- ASan 构建下有一批模块因搜狗输入法 TSF DLL 的 heap-use-after-free 中断（无 agentxx 帧），
-  与本次改动无关，排查时勿当代码缺陷
+- ASan 构建下曾有一批模块被搜狗输入法 TSF DLL 的 heap-use-after-free 中断，**原因已查清、
+  触发源已修**：调试 CRT 的断言弹模态对话框 → 拉起输入法窗口 → 搜狗自身在其窗口过程里 UAF。
+  同批还修了 `utilxx::HttpServer` 的析构顺序与 `WrapHandleBaseNode::run` 的句柄列表越界，
+  详见 `work.md` 的“补充”段。装了搜狗输入法的机器上再遇到同类 abort，先看是不是又在哪里
+  弹了窗口 / 走了调试断言对话框
+- `cxx_utilxx` 的 `HttpServer` 析构修复在子模块仓库里单独提交，主仓只更新了指针，发布或
+  交付时要把子模块那个提交一起带上
 

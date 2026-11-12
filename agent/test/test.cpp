@@ -158,6 +158,10 @@
 #include <map>
 #include <string>
 
+#if XX_IS_WIN_D && defined(_DEBUG)
+#include <crtdbg.h>
+#endif
+
 namespace {
 
 /// 测试期日志 sink: 仅把 Warn/Error 输出到 stderr
@@ -211,6 +215,16 @@ extern "C" const char* __asan_default_options() {
 int main(int argn, char** argv) {
 #if XX_IS_WIN_D
     SetConsoleOutputCP(CP_UTF8);
+#endif
+#if XX_IS_WIN_D && defined(_DEBUG)
+    // 调试 CRT 的断言默认弹模态对话框: 无人值守跑测试时会卡住, 而且对话框会创建
+    // 输入法窗口 —— 装了搜狗输入法的机器上, 该窗口过程在 ASan 下会报自己的
+    // heap-use-after-free, 把真正的断言信息盖掉。改成写 stderr:
+    // 断言文本进日志, 终止语义不变 (STL 的 _STL_REPORT_ERROR 报完仍会 abort)。
+    for (const int reportType : {_CRT_WARN, _CRT_ERROR, _CRT_ASSERT}) {
+        _CrtSetReportMode(reportType, _CRTDBG_MODE_FILE);
+        _CrtSetReportFile(reportType, _CRTDBG_FILE_STDERR);
+    }
 #endif
     // 隐藏模式: 当子进程跑一个最小 MCP stdio 服务器
     // (mcp 模块的 stdio 传输入口用例把本程序当子进程启动, 不依赖 python/node)

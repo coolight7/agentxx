@@ -428,6 +428,13 @@ public:
     /// (测试模块 `boundaries` 核对)。
     void declareAppPoints();
 
+    /// 声明本主程序的应用能力 (构造函数里调一次; 幂等)
+    ///
+    /// 清单在 `agentxx/plugin/api/agentxx_capability_ids.h`。插件框架要求 `agentxx.*`
+    /// 这类官方 id 必须由应用先声明, 插件才能登记实现行; 声明形状是
+    /// `impls: many` + `merge: first` + 只开放 impl 阶段 (第一个给出结果的实现生效)。
+    void declareAppCapabilities();
+
     /// 发一次功能埋点 (**IO 线程**)
     /// - 先发通知面广播, 再按 `agentId` 调实现行; 没有实现行时按 `OK` + `null` 完成;
     /// - `agentId` 为空 = 不按作用域过滤 (只有通知面);

@@ -387,6 +387,9 @@ path/to/agentxx_test --log-level warn string_util regex
   两边用 `setPluginPointId` 对上 (`agentxx.agent.context.countTokens` ↔
   `agentxx.agent.point.context.countTokens`)。测试: `feature_points` (核心侧),
   `plugin_point` (管理器侧), `plugin_feature` (插件面全流程), 示例插件 `example_feature`
+  **官方能力 id (`agentxx.*`) 只能由主程序声明** (清单 `plugin/api/agentxx_capability_ids.h`,
+  `PluginManager` 构造时按它声明, 形状同功能埋点): 插件只登记实现行, 自己声明会被框架拒
+  (`... is not declared by the application`) —— 加官方能力 = 头里加一行
 - 注册可逆与独占 slot (2026-10-07): 插件贡献分三类 —— **叠加型** (工具/权限声明/
   功能埋点实现行/图节点类型/广播订阅/能力/清单资源 skill·memory·mcp) 按 owner 记账: 禁用摘生效留记录,
   启用由 `start` 重新声明, 卸载全摘; **贡献型** (提示词) 记 `(owner,key,sequence,value)`
@@ -1032,6 +1035,16 @@ sudo echo 3 > /proc/sys/vm/drop_caches
   前两位为 1, 当判据会每帧误报 -> 每帧清屏 -> 启动动画持续闪烁 (已踩过);
   写回失败要停止重试。
   详见 `resource/history/fix-tui-console-codepage/index.md`
+- 测试程序在 debug 下**断言不要弹框** (2026-11-12): 调试 CRT 的断言默认弹模态对话框
+  (`ucrtbased!CrtDbgReport` → `MessageBoxW`), 无人值守跑测试时会卡住; 更麻烦的是
+  MessageBox 会创建输入法窗口 (延迟加载 `MSCTF.dll` → `SogouTSF.ime`/`SogouPY.ime`),
+  装了搜狗输入法的机器上它自己在窗口过程里有 heap-use-after-free, ASan 抓住直接 abort,
+  真正的断言文本被盖掉 (现象是"某模块随机 abort, 栈里全是搜狗 DLL")。`agent/test/test.cpp`
+  的 `main` 已把 `_CRT_WARN/_CRT_ERROR/_CRT_ASSERT` 的 report mode 改成
+  `_CRTDBG_MODE_FILE` + `_CRTDBG_FILE_STDERR` (断言文本进日志, 终止语义不变)。
+  同批排查还发现 `utilxx::HttpServer` 析构要先 `workers_.clear()` (`serveTcp` 协程帧里的
+  `Untracker` 会回调已析构的 `connMutex_`/`trackedConns_`), 详见
+  `resource/history/plugin-refactor-4/work.md` 的补充段
 - TUI 消息列表出现"一整段空白/间距被撑大", 先查是不是**视觉为空的消息**
   (2026-10-25): 模型偶尔把 U+200B 之类的零宽占位符当正文输出, 独占一条 assistant
   消息 —— 每条消息自带一行尾部空行, 这种消息就渲染成 2 行纯空白, 相邻 tool 消息之间

@@ -3,8 +3,12 @@
 /// 一个功能埋点 = 一个 id, 同时是能力 (实现面) 与同名广播频道 (通知面), 见
 /// `agentxx/plugin/api/agentxx_point_ids.h`。这里只放"声明表"与"发一次"的薄封装,
 /// 具体调用点 (轮次/模型/工具/压缩) 在后续迁移里逐个接上来。
+///
+/// 另有几个官方能力 (不属于功能埋点, 主程序只声明、不代发), 清单在
+/// `agentxx/plugin/api/agentxx_capability_ids.h`。
 #include "agentxx/plugin/plugin_manager.h"
 
+#include "agentxx/plugin/api/agentxx_capability_ids.h"
 #include "agentxx/plugin/api/agentxx_point_ids.h"
 
 #include "fmt/format.h"
@@ -87,6 +91,25 @@ void PluginManager::declareAppPoints() {
         std::string error;
         if (!declarePoint(decl, &error)) {
             XX_LOGW("point `{}` could not be declared: {}", id, error);
+        }
+    }
+}
+
+void PluginManager::declareAppCapabilities() {
+    // 官方 id (`agentxx.*`) 的声明由主程序给: 插件按名给它登记实现行,
+    // 没声明时框架直接拒绝 (`... is not declared by the application`)。
+    // 形状取 `impls: many` + `merge: first`: 多个实现行并存, 第一个给出结果的生效,
+    // 与功能埋点的取值语义一致 (后来的实现不会把前面的顶掉, 只多一个候选)。
+    // 用全名: 类里有个同名的成员函数 `capabilities()`, 短名会先找到它
+    for (const auto id : agentxx::plugin::capabilities::kAppCapabilities) {
+        pluginxx::CapabilityDecl decl;
+        decl.id     = std::string{id};
+        decl.impls  = pluginxx::CapabilityImpls_e::Many;
+        decl.merge  = pluginxx::CapabilityMerge_e::First;
+        decl.phases = pluginxx::kCapabilityPhaseMaskImpl;
+        std::string error;
+        if (!declareCapability(decl, &error)) {
+            XX_LOGW("capability `{}` could not be declared: {}", id, error);
         }
     }
 }

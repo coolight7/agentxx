@@ -164,8 +164,13 @@ public:
         bool                        errorRethrow = false;
         neograph::graph::NodeOutput out;
 
-        auto       agentCtxPtr = agentContext.lock();
-        const auto len         = agentCtxPtr->middlewareHandleContext->handles.size();
+        auto agentCtxPtr = agentContext.lock();
+        // 拷一份 handle 列表作为本轮快照: `co_await onHandleStart` 期间插件可能被禁用/
+        // 卸载而把中间件从列表里摸掉, 按实时列表缓存长度再取下标会越界。
+        // 快照同时保证 start/baseRun/end 三段配对一致: 被摸掉的中间件已持有
+        // shared_ptr, 它仍会正常走完 end。
+        auto       handles = agentCtxPtr->middlewareHandleContext->handles;
+        const auto len     = handles.size();
         // 已实际执行 onHandleStart 的下标记录: end 阶段按此回放, 不依赖
         // 当前 disabled 位 —— 运行中插件禁用 (置 disabled) 不会破坏 start/end
         // 配对 (start 已执行的中间件, end 必定执行; 未被 start 的绝不 end)
@@ -173,7 +178,7 @@ public:
         startedIdxs.reserve(len);
         size_t i = 0;
         for (; i < len; ++i) {
-            auto& item = agentCtxPtr->middlewareHandleContext->handles[i];
+            auto& item = handles[i];
             // 跳过已禁用中间件 (插件热卸载/禁用; len 已缓存, 跳过不影响
             // 下标遍历安全)
             if (item->disabled) {
@@ -200,7 +205,7 @@ public:
         do {
             if (i >= len) {
                 try {
-                    co_await baseRun(agentCtxPtr->middlewareHandleContext->handles, in, out);
+                    co_await baseRun(handles, in, out);
                     i = len;
                     break;
                 } catch (...) {
@@ -225,7 +230,7 @@ public:
         // end 阶段: 按 startedIdxs 逆序回放 (仅回放实际执行过 start 的中间件,
         // 不再检查 disabled —— 运行中禁用不破坏配对)
         for (auto it = startedIdxs.rbegin(); it != startedIdxs.rend(); ++it) {
-            auto& item = agentCtxPtr->middlewareHandleContext->handles[*it];
+            auto& item = handles[*it];
             XX_LOGT(R"_({}/end, {}/{})_", nodeName, item->name, *it);
             if (nullptr != errorPtr) {
                 onHandleEndError(errorRethrow, false, errInfo, *item, in, out);
