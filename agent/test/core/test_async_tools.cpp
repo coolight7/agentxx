@@ -11,6 +11,7 @@
 #include "agentxx/plugin/tool_registry.h"
 #include "agentxx/tools/async_tools.h"
 #include "agentxx/tools/tool.h"
+#include "agentxx/util/share_store_offload.h"
 #include "agentxx/util/tool_result.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -180,6 +181,44 @@ private:
 
     std::string markerAfterSleep;
     bool        finished = false;
+};
+
+/// 测试工具: 返回一大段多行文本 (行数够多, 超过默认的工具输出压缩阈值 2 K 字符)
+/// - [autoSummary]: 是否声明自动压缩 (与 filesystem 一类工具同款标记)
+class AtBigOutputTool final : public agentxx::tools::XXToolBase {
+public:
+
+    AtBigOutputTool(
+        std::string_view                            in_name,
+        std::weak_ptr<agentxx::agent::AgentContext> in_ctx,
+        bool                                        autoSummary
+    ) :
+        XXToolBase(
+            in_name,
+            std::move(in_ctx),
+            /*autoSummaryOutput=*/autoSummary,
+            /*canDelayLoad=*/false,
+            /*maxRetry=*/0,
+            /*repeatCallCheck=*/false,
+            /*supportsParallel=*/true
+        ) {}
+
+    neograph::ChatTool get_definition() const override {
+        return {
+            get_name(),
+            "Return a long multi-line text.",
+            neograph::json::parse(R"({"type":"object","properties":{}})"),
+        };
+    }
+
+    asio::awaitable<agentxx::util::ToolResult>
+        execute_async(const utilxx_base::Json&) override {
+        std::string body;
+        for (int i = 1; i <= 400; ++i) {
+            body += fmt::format("big-output-line-{:04d} ------------------------------\n", i);
+        }
+        co_return agentxx::util::ToolResult::ok(std::move(body));
+    }
 };
 
 /// 夹具: 模拟 LLM + AgentHost + 一个根 CodeAgent + 一个真实会话 (含驱动端)
@@ -1236,6 +1275,110 @@ asio::awaitable<void> test_tool_closure_lifetime() {
     co_return;
 }
 
+/// 15. 后台工具任务的结果按工具自己的声明裁剪一次, 事件投递不再二次卸载
+/// - 声明了自动压缩的工具: 只有工具层那一层提示 (旧实现会再套一层事件侧提示)
+/// - 没声明的工具: 与前台调用一致, 原样给出
+asio::awaitable<void> test_tool_result_offloaded_once() {
+    auto fx = std::make_shared<AtFixture>();
+    XX_TEST_EXPECT_TRUE(buildFixture(fx));
+
+    // 两个大输出工具: 一个声明自动压缩, 一个不声明
+    XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
+        auto ctx = fx->ctx();
+        auto big = std::make_shared<AtBigOutputTool>("at_test_big_summary", ctx, /*autoSummary=*/true);
+        auto raw = std::make_shared<AtBigOutputTool>("at_test_big_raw", ctx, /*autoSummary=*/false);
+        co_return ctx->toolRegistry->registerTool(big->get_name(), big)
+                  && ctx->toolRegistry->registerTool(raw->get_name(), raw);
+    }));
+
+    const auto countOf = [](std::string_view hay, std::string_view needle) {
+        size_t count = 0;
+        for (size_t pos = hay.find(needle); pos != std::string_view::npos;
+             pos = hay.find(needle, pos + needle.size())) {
+            ++count;
+        }
+        return count;
+    };
+
+    agentxx::tools::AsyncRunTool tool{fx->ctx()};
+
+    // ---- ① 声明了自动压缩: 工具层裁剪一次, 事件侧不再叠加 ----
+    std::string asyncId;
+    XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
+        auto text = co_await execTool(
+            tool,
+            Json{
+                {"tool",      "at_test_big_summary"      },
+                {"args",      Json::object()             },
+                {"sessionId", fx->sessionId              },
+            }
+        );
+        asyncId = parseAsyncId(text);
+        if (asyncId.empty()) {
+            co_return false;
+        }
+        co_return co_await waitUntil([&] {
+            return fx->host->asyncWorkJson(asyncId).value("state", std::string{}) == "done";
+        });
+    }));
+    XX_TEST_EXPECT_FALSE(asyncId.empty());
+    XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
+        co_return co_await waitUntil([&] { return !fx->sink->texts.empty(); });
+    }));
+    {
+        std::string delivered;
+        for (const auto& item : fx->sink->texts) {
+            if (contains(item, "[Event] agentxx.agent.async.done")) {
+                delivered = item;
+            }
+        }
+        XX_TEST_EXPECT_FALSE(delivered.empty());
+        // 恰好一个卸载提示 (工具层留下的), 编辑后的正文原样在 `content:` 段里
+        XX_TEST_EXPECT_EQ(
+            countOf(delivered, agentxx::util::kOffloadHintPrefix),
+            size_t{1}
+        );
+        XX_TEST_EXPECT_TRUE(contains(delivered, "`agentxx_share_store`"));
+        XX_TEST_EXPECT_TRUE(contains(delivered, "big-output-line-0001"));
+    }
+
+    // ---- ② 没声明自动压缩: 与前台调用一致, 原样给出 (事件侧也不裁剪) ----
+    fx->sink->texts.clear();
+    asyncId.clear();
+    XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
+        auto text = co_await execTool(
+            tool,
+            Json{
+                {"tool",      "at_test_big_raw"          },
+                {"args",      Json::object()             },
+                {"sessionId", fx->sessionId              },
+            }
+        );
+        asyncId = parseAsyncId(text);
+        if (asyncId.empty()) {
+            co_return false;
+        }
+        co_return co_await waitUntil([&] {
+            return fx->host->asyncWorkJson(asyncId).value("state", std::string{}) == "done";
+        });
+    }));
+    XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
+        co_return co_await waitUntil([&] { return !fx->sink->texts.empty(); });
+    }));
+    {
+        std::string delivered;
+        for (const auto& item : fx->sink->texts) {
+            if (contains(item, "[Event] agentxx.agent.async.done")) {
+                delivered = item;
+            }
+        }
+        XX_TEST_EXPECT_FALSE(delivered.empty());
+        XX_TEST_EXPECT_EQ(countOf(delivered, agentxx::util::kOffloadHintPrefix), size_t{0});
+        XX_TEST_EXPECT_TRUE(contains(delivered, "big-output-line-0400"));
+    }
+    co_return;
+}
+
 asio::awaitable<TestResult> run_async_tools_tests() {
     TestResult result;
 
@@ -1253,6 +1396,7 @@ asio::awaitable<TestResult> run_async_tools_tests() {
     co_await test_manager_delay();
     co_await test_task_timeouts_and_marker();
     co_await test_tool_closure_lifetime();
+    co_await test_tool_result_offloaded_once();
 
     result.passed = g_at_passed;
     result.failed = g_at_failed;

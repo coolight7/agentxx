@@ -196,8 +196,11 @@ const agentxx::agent::ViewMessage* firstEventViewMessage(
     return nullptr;
 }
 
-asio::awaitable<std::shared_ptr<DeliveryFixture>>
-    makeDeliveryFixture(std::string sessionId, bool startEndpoint = true) {
+asio::awaitable<std::shared_ptr<DeliveryFixture>> makeDeliveryFixture(
+    std::string sessionId,
+    bool        startEndpoint = true,
+    int         llmMaxRetry   = 1
+) {
     auto fx                       = std::make_shared<DeliveryFixture>();
     fx->sim                       = startDaSimServer();
     g_da_sim_response_content     = "ok response";
@@ -211,7 +214,7 @@ asio::awaitable<std::shared_ptr<DeliveryFixture>>
     fx->cfg->model.baseUrl   = baseUrl;
     fx->cfg->model.apiKey    = "EMPTY";
     fx->cfg->model.modelName = "default-model";
-    fx->cfg->llmMaxRetry     = 1;
+    fx->cfg->llmMaxRetry     = llmMaxRetry;
 
     fx->agent = std::make_shared<agentxx::agent::BaseAgent>(fx->cfg);
     co_await fx->agent->init();
@@ -496,6 +499,113 @@ asio::awaitable<void> test_delivery_close_all() {
     co_return;
 }
 
+/// 8. 暂停态 (上一轮失败留下的) + 空闲: 后台任务结果的投递仍要开新一轮
+/// - 背景: 会话因上一轮失败/取消停在暂停态时, 驱动循环不再自动继续队列; 事件输入
+///   若也按"不解除暂停"处理, 结果只能等用户下次发消息才被顺带取走
+/// - 这类结果必须进上下文 (值是不是取消终态都一样, 见 hasError/canceled 字段)
+asio::awaitable<void> test_delivery_async_result_resumes_paused_queue() {
+    // llmMaxRetry=0: 让第一轮一次就失败 (否则要等 3 秒退避)
+    auto fx  = co_await makeDeliveryFixture("ev-paused", /*startEndpoint=*/true, /*llmMaxRetry=*/0);
+    auto hub = fx->hub();
+    XX_TEST_EXPECT_TRUE(hub != nullptr);
+
+    // 一轮失败: 驱动端轮末把队列置为暂停
+    g_da_sim_fail_count = 100;
+    {
+        agentxx::agent::WireUserInput input;
+        input.sessionId = fx->sessionId;
+        input.text      = "make it fail";
+        fx->clientT->send(agentxx::agent::WireMessage{std::move(input)});
+    }
+    XX_TEST_EXPECT_TRUE(co_await waitFor([&] {
+        return fx->recorder->turnCount() >= 1;
+    }));
+    XX_TEST_EXPECT_TRUE(co_await waitFor([&] {
+        return fx->endpoint->isQueuePausedForTest();
+    }));
+    g_da_sim_fail_count = 0;
+    const int turnsBefore = fx->recorder->turnCount();
+
+    // 后台任务结果 (取消终态) 投递: 空闲 -> 解除暂停并开新一轮
+    const std::string asyncDone{agentxx::events::naming::kAgentAsyncDoneEvent};
+    XX_TEST_EXPECT_TRUE(
+        hub->watch(agentxx::events::EventWaitSpec{
+                       .event         = asyncDone,
+                       .mode          = "first",
+                       .delivery      = "next-step",
+                       .originSession = fx->sessionId,
+                       .match         = Json{{"asyncId", "async-9"}},
+                   })
+            .has_value()
+    );
+    std::string err;
+    Json        value        = Json::object();
+    value["asyncId"]         = "async-9";
+    value["kind"]            = "tool";
+    value["name"]            = "agentxx_execute_command";
+    value["hasError"]        = false;
+    value["canceled"]        = true;
+    value["content"]         = "Async work canceled";
+    XX_TEST_EXPECT_TRUE(hub->publishValue(asyncDone, std::move(value), &err));
+
+    XX_TEST_EXPECT_TRUE(co_await waitFor([&] {
+        return fx->recorder->turnCount() > turnsBefore;
+    }));
+    XX_TEST_EXPECT_TRUE(co_await waitFor([&] {
+        return contextHasText(fx->agent, fx->sessionId, "[Event] " + asyncDone);
+    }));
+    co_return;
+}
+
+/// 9. 轮末兜底 + 暂停态: 后台任务结果的残留 next-step 输入照样被执行
+/// - 轮末兜底发生在"按结果置暂停"附近 (提交那一刻队列可能还没暂停, 也可能已经
+///   暂停), 所以"结果必须进上下文"的意向要记在条目上, 由轮末收尾统一判断
+/// - 这里用"取消本轮"制造暂停态: WireCancel 会当场把队列置为暂停, 随后本轮以
+///   失败收尾 —— 残留输入若只按"不解除暂停"处理, 就要等用户下次发消息才被执行
+asio::awaitable<void> test_delivery_rollover_async_result_resumes() {
+    auto fx      = co_await makeDeliveryFixture("ev-rollover-async", true, /*llmMaxRetry=*/0);
+    auto session = fx->agent->agentContext->sessions->get(fx->sessionId);
+
+    // 第一轮: 响应慢一点, 留出"请求已发出"的窗口塞残留输入, 再取消本轮
+    g_da_sim_delay_ms       = 600;
+    const int reqBeforeTurn = g_da_sim_request_count.load();
+    {
+        agentxx::agent::WireUserInput input;
+        input.sessionId = fx->sessionId;
+        input.text      = "long running turn";
+        fx->clientT->send(agentxx::agent::WireMessage{std::move(input)});
+    }
+    XX_TEST_EXPECT_TRUE(co_await waitFor([&] {
+        return g_da_sim_request_count.load() > reqBeforeTurn;
+    }));
+
+    // 请求已发出后再塞残留输入: 本轮不会再有 modelcall, 只能靠轮末兜底提升
+    const std::string asyncDone{agentxx::events::naming::kAgentAsyncDoneEvent};
+    agentxx::agent::SessionPendingInput leftover;
+    leftover.text = "[Event] " + asyncDone
+                    + "\n[Info]\nmode: first\nwait: w-1\nstatus: value\n[Content]\n"
+                      "{\"asyncId\":\"async-1\",\"kind\":\"tool\",\"canceled\":true}";
+    leftover.source      = std::string{agentxx::agent::kInputSourceEventPrefix} + asyncDone;
+    leftover.delivery    = std::string{agentxx::agent::InputDelivery::NextStep};
+    leftover.createdAtMs = 1;
+    session->enqueuePendingInput(leftover);
+    XX_TEST_EXPECT_TRUE(session->pendingInputCount() == 1);
+
+    // 取消本轮: 队列当场置暂停, 轮末收尾也按"失败/中断"走
+    fx->clientT->send(agentxx::agent::WireMessage{agentxx::agent::WireCancel{fx->sessionId}});
+    g_da_sim_delay_ms = 0;
+
+    // 残留输入被提升并执行 (第二轮): 上下文里出现那条事件文本
+    XX_TEST_EXPECT_TRUE(co_await waitFor([&] {
+        return fx->recorder->turnCount() >= 2;
+    }));
+    XX_TEST_EXPECT_TRUE(co_await waitFor([&] {
+        return contextHasText(fx->agent, fx->sessionId, "[Event] " + asyncDone);
+    }));
+    XX_TEST_EXPECT_TRUE(session->pendingInputCount() == 0);
+    co_return;
+}
+
 asio::awaitable<TestResult> run_event_delivery_tests() {
     TestResult result;
 
@@ -506,6 +616,8 @@ asio::awaitable<TestResult> run_event_delivery_tests() {
     co_await test_delivery_rollover();
     co_await test_delivery_after_stop();
     co_await test_delivery_close_all();
+    co_await test_delivery_async_result_resumes_paused_queue();
+    co_await test_delivery_rollover_async_result_resumes();
 
     result.passed = g_ed_passed;
     result.failed = g_ed_failed;

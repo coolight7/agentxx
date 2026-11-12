@@ -35,8 +35,16 @@
 - 透视UI，虚拟现实/玻璃显示(车挡风玻璃、眼镜)
 - 补充提示词，长任务未全部完成时停下，需要说明停下的原因
 - 任务规划文件 关联 git commit 以便检索
-- 异步 tool 结果不再重复 offload，因为 toolcallNode 本身就会裁剪
-- 疑似部分情况下（"hasError":false,"canceled":true），异步事件结果总是得在会话运行中或是发送user消息时才添加进上下文
+- codegraph 显示一直在 wait for load
+- - [提示] 错误 
+Node 'llm' failed after 1 attempt(s): SSE read-body timeout after 60000
+recv=403684B events=565 idle=60013ms finish=none tools=0 args=0B name=
+
+- 移除日志 [I] BroadcastRegistry: declaration
+of
+`plugin.agentxx_system_monitor.usa
+replaced (agentxx_system_monitor
+-> agentxx_system_monitor)
 
 - SVG绘制支持
 

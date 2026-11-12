@@ -755,32 +755,23 @@ asio::awaitable<agentxx::util::ToolResult> ToolcallWrapNode::finalizeToolCall(
     if (!agentCtxPtr || !agentCtxPtr->agentConfig) {
         co_return std::move(rawResult);
     }
-    auto*       tool   = prepared.tool;
-    const auto& args   = prepared.args;
-    std::string result = std::move(rawResult.text);
+    auto*       tool = prepared.tool;
+    const auto& args = prepared.args;
 
-    const size_t limitLength = agentCtxPtr->agentConfig->toolcallSummaryLimitOutputLength;
-    // 用 find 读取 (operator[] 会插入缺失键); 缺失 = 未启用压缩
+    // 超过限制长度时原文存入 share store, 结果只留开头片段与取回提示; 是否压缩由
+    // 工具自己的 autoSummaryOutput 声明决定 (后台工具任务走同一个函数, 见
+    // [agentxx::util::offloadToolResultIfOversized])
     const auto autoSummaryIt = tool->extra.find("autoSummaryOutput");
-    const bool autoSummary
-        = (autoSummaryIt != tool->extra.end() && autoSummaryIt->second == "true");
-    if (autoSummary && result.size() >= limitLength) {
+    if (autoSummaryIt != tool->extra.end() && autoSummaryIt->second == "true") {
         const auto session_id = args.value("sessionId", std::string{});
         assert(false == session_id.empty());
-        // 超过限制长度: 原文存入 share store, 结果只留开头片段与取回提示
-        // (判定/提示格式与 agent 队列输入压缩共用, 见 offloadShareStoreIfOversized)
-        auto offload = agentxx::util::offloadShareStoreIfOversized(
+        agentxx::util::offloadToolResultIfOversized(
             agentCtxPtr,
+            tool->extra,
             session_id,
-            result,
-            limitLength
+            rawResult
         );
-        if (offload.offloaded) {
-            rawResult.text = std::move(offload.text);
-            co_return std::move(rawResult);
-        }
     }
-    rawResult.text = std::move(result);
     co_return std::move(rawResult);
 }
 

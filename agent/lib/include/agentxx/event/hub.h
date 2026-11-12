@@ -154,6 +154,9 @@ struct EventWaitSpec {
     /// 超时是否投递一条提示
     bool notifyOnTimeout = true;
     /// 暂停态 (上一轮失败/中断) 是否解除暂停
+    /// - 默认 false: 走"积压消息不自动继续"同一语义, 由调用方显式要求唤醒
+    /// - 后台任务结果事件 (`agentxx.agent.async.*`) 不看这个字段: 投递时一律按
+    ///   "结果必须进上下文"处理 (会话空闲就解除暂停, 轮末提升为下一轮时不置暂停)
     bool unpausePaused = false;
     /// 会话在跑一轮时直接丢弃这次投递 (插件触发器的 DROP_IF_BUSY 语义)
     bool dropIfBusy = false;
@@ -262,6 +265,8 @@ public:
         /// 投递内容 (`[Content]` 段) 的压缩阈值, 单位为 utf8 字符数 (0 = 不压缩)
         /// - 与工具输出压缩同一套判定与提示, 见 [agentxx::util::offloadShareStoreIfOversized]
         /// - 主程序按 `AgentConfig::eventContentLimitLength()` 填充
+        /// - 后台工具任务 (`kind=tool`) 的结果不在这里压缩: 它的正文已由工具执行层
+        ///   按工具自己的声明裁剪过 (见 [agentxx::util::offloadToolResultIfOversized])
         size_t contentLimitLength    = 2 * 1024;
         size_t valueHardBytes        = 1024 * 1024;
         size_t deliveryBacklogPerSession = 64;
@@ -330,6 +335,7 @@ public:
     /// - 投递文本与工具返回值共用这一处, 保证两边展示一致
     /// - 值本身是**别人的 JSON**: 对象/数组原样 `dump()` 输出, 不改字段/不改转义;
     ///   只有后台任务结果事件 (见 [eventTextPayloadField]) 的正文字段按原文单独给出
+    /// - 例外: 后台工具任务 (`kind=tool`) 的结果不转存 (工具执行层已裁剪过)
     std::string contentText(
         std::string_view         sessionId,
         std::string_view         eventName,

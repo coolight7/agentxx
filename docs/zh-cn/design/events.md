@@ -127,8 +127,13 @@ stateDiagram-v2
 
 补充规则：
 
-- **暂停态**（上一轮失败/中断留下的暂停）不自动解除：事件输入照常入队但不唤醒；等待
+- **暂停态**（上一轮失败/中断留下的暂停）默认不自动解除：事件输入照常入队但不唤醒；等待
   显式要求 `unpause=true` 才解除（与"积压消息不自动继续执行"同一语义）；
+- **后台任务结果例外**：`agentxx.agent.async.*` 的投递一律按"结果必须进上下文"处理 ——
+  空闲时即使队列停在暂停态也解除暂停开新一轮；轮次在跑时（结果落在最后一次模型调用之后、
+  轮末才被提升为下一轮输入）该条目带 `resumeRequested` 标记，轮末按"失败/中断"收尾时
+  因此不置暂停。否则这类结果只能等用户下次发消息才被顺带执行（表现为"异步结果总是要等
+  会话在跑或者发消息才进上下文"）；
 - **`dropIfBusy`**（插件触发器的 `DROP_IF_BUSY` 语义）在轮次在跑时直接丢弃并计数；
 - **轮末兜底**：待注入输入只在模型调用开头被取用，落在最后一次模型调用之后的输入会在
   轮次结束时提升为下一轮输入（`BaseAgent::runTurnAsync` 的 `rolloverLeftoverNextStepInputs`），
@@ -181,6 +186,11 @@ label: ...
   `event.value_max_bytes`（字节, 默认 32 K）取较小者（`AgentConfig::eventContentLimitLength`）;
   文本里留 `[Content offloaded. ...]` 与开头片段, 模型用 `agentxx_share_store` 按行取回;
   超过 1 MB 硬上限直接拒绝发布。
+- **唯一不卸载的一段**：后台**工具**任务的结果（`kind=tool`）—— 它的正文在工具执行层就按
+  工具自己的声明裁剪过（`autoSummaryOutput` + 同一阈值，前台 `ToolcallWrapNode` 与后台
+  `runToolWork` 共用 `agentxx::util::offloadToolResultIfOversized`）；事件侧再整段卸载等于
+  给同一段输出套第二层取回提示（工具层的 id + 事件层的 id），模型要多取一次才能看到内容。
+  子代理回答（`kind=agent`）与插件/模型发布的自定义值不受这条影响，照常按长度卸载。
 
 后台任务完成时的回执文本（`async_start` 返回的是受理信息，结果由它自己投递）:
 

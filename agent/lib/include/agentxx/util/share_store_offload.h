@@ -1,6 +1,9 @@
 #pragma once
 
+#include "agentxx/util/tool_result.h"
+
 #include <cstddef>
+#include <map>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -58,6 +61,34 @@ ShareStoreOffload offloadShareStoreIfOversized(
     std::string_view                                     sessionId,
     std::string_view                                     text,
     size_t                                               limitLength
+);
+
+/// 工具输出过长时转存会话 share store (前台工具调用与后台工具任务共用的唯一实现)
+///
+/// 是否压缩由**工具自己的声明**决定, 与它在哪条路径上执行无关:
+/// - 工具声明了自动压缩 (`neograph::Tool::extra["autoSummaryOutput"] == "true"`,
+///   来源 [agentxx::tools::XXToolBase::autoSummaryOutput]) 才动手;
+/// - 阈值 = [agentxx::agent::AgentConfig::toolcallSummaryLimitOutputLength]
+///   (utf8 字符数, 0 = 不压缩);
+/// - 压缩规则与提示格式见 [offloadShareStoreIfOversized]。
+///
+/// 调用点:
+/// - 前台工具调用: [agentxx::nodes::ToolcallWrapNode::finalizeToolCall]
+/// - 后台工具任务 (`agentxx_async_run` 的 `kind=tool`): 后台任务执行的工具调用
+///   (`runToolWork`), 这样同一段输出无论前后台都只被裁剪一次; 事件投递侧对
+///   `kind=tool` 的结果不再整段卸载 (见 [agentxx::events::EventHub])
+///
+/// - `args`:
+///     - [agentContext] 会话所在的 agent 上下文 (为空或没有配置时不做压缩)
+///     - [toolExtra]    被调用工具的 `extra` 开关表 (`neograph::Tool::extra`)
+///     - [sessionId]    会话 id (空 = 不压缩: share store 按会话隔离)
+///     - [result]       工具结果, 就地把 `text` 换成压缩后的文本 (状态位不变)
+/// - `return` 是否发生了压缩
+bool offloadToolResultIfOversized(
+    const std::shared_ptr<agentxx::agent::AgentContext>& agentContext,
+    const std::map<std::string, std::string>&            toolExtra,
+    std::string_view                                     sessionId,
+    ToolResult&                                          result
 );
 
 } // namespace util

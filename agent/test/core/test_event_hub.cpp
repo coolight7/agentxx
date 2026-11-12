@@ -6,6 +6,7 @@
 #include "agentxx/event/hub.h"
 #include "agentxx/event/naming.h"
 #include "agentxx/middlewares/middleware.h"
+#include "agentxx/util/share_store_offload.h"
 #include "neograph/graph/cancel.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -1052,6 +1053,120 @@ asio::awaitable<void> test_hub_bus_bridge() {
     }
     co_return;
 }
+/// 4.3 后台工具任务的结果不在事件侧二次卸载: 工具执行层已按工具自己的声明裁过
+/// (见 `offloadToolResultIfOversized`), 事件侧再整段卸载就等于给同一段输出套两层提示
+asio::awaitable<void> test_hub_async_tool_result_not_offloaded() {
+    EventHub::Config cfg;
+    cfg.contentLimitLength = 64;
+    auto  fx  = co_await makeFixture(cfg);
+    auto& hub = *fx->hub;
+    fx->ctx->middlewareHandleContext
+        = std::make_shared<agentxx::middleware::MiddlewareContext>();
+    fx->sink->busy = true; // 轮次在跑: 投递写进待注入输入, 便于直接断言文本
+    std::string err;
+
+    std::string body;
+    for (int i = 1; i <= 30; ++i) {
+        body += fmt::format("line{}\n", i);
+    }
+    const std::string asyncDone{agentxx::events::naming::kAgentAsyncDoneEvent};
+
+    // kind=tool: 结果正文由工具层负责压缩, 这里原样给出 (只有一个工具层提示, 不是两个)
+    {
+        auto watched = hub.watch(EventWaitSpec{
+            .event         = asyncDone,
+            .mode          = "first",
+            .delivery      = "next-step",
+            .originSession = fx->sessionId,
+            .match         = Json{{"asyncId", "async-1"}},
+        });
+        XX_TEST_EXPECT_TRUE(watched.has_value());
+        Json value        = Json::object();
+        value["asyncId"]  = "async-1";
+        value["kind"]     = "tool";
+        value["content"]  = body;
+        XX_TEST_EXPECT_TRUE(hub.publishValue(asyncDone, std::move(value), &err));
+        auto inputs = takeEventInputs(fx->session);
+        XX_TEST_EXPECT_EQ(inputs.size(), size_t{1});
+        if (!inputs.empty()) {
+            XX_TEST_EXPECT_FALSE(contains(inputs.front(), agentxx::util::kOffloadHintPrefix));
+            XX_TEST_EXPECT_TRUE(contains(inputs.front(), "line30"));
+        }
+    }
+
+    // kind=agent (子代理回答) 仍按长度限制整段转 share store
+    {
+        auto watched = hub.watch(EventWaitSpec{
+            .event         = asyncDone,
+            .mode          = "first",
+            .delivery      = "next-step",
+            .originSession = fx->sessionId,
+            .match         = Json{{"asyncId", "async-2"}},
+        });
+        XX_TEST_EXPECT_TRUE(watched.has_value());
+        Json value        = Json::object();
+        value["asyncId"]  = "async-2";
+        value["kind"]     = "agent";
+        value["content"]  = body;
+        XX_TEST_EXPECT_TRUE(hub.publishValue(asyncDone, std::move(value), &err));
+        auto inputs = takeEventInputs(fx->session);
+        XX_TEST_EXPECT_EQ(inputs.size(), size_t{1});
+        if (!inputs.empty()) {
+            XX_TEST_EXPECT_TRUE(contains(inputs.front(), agentxx::util::kOffloadHintPrefix));
+            XX_TEST_EXPECT_TRUE(contains(inputs.front(), "`agentxx_share_store`"));
+        }
+    }
+    co_return;
+}
+
+/// 4.4 后台任务结果的投递要求解除暂停 (会话空闲时也要进上下文), 其他事件不主动解除
+asio::awaitable<void> test_hub_async_result_unpauses_idle_session() {
+    auto  fx  = co_await makeFixture();
+    auto& hub = *fx->hub;
+    fx->sink->busy = false; // 空闲: 投递要开新一轮
+    std::string err;
+
+    // 普通事件: 暂停态由用户显式恢复, 投递不要求解除
+    XX_TEST_EXPECT_TRUE(
+        hub.watch(EventWaitSpec{
+                      .event         = ev("build.done"),
+                      .mode          = "first",
+                      .delivery      = "next-step",
+                      .originSession = fx->sessionId,
+                  })
+            .has_value()
+    );
+    XX_TEST_EXPECT_TRUE(hub.publishValue(ev("build.done"), Json{{"ok", true}}, &err));
+    XX_TEST_EXPECT_EQ(fx->sink->texts.size(), size_t{1});
+    XX_TEST_EXPECT_EQ(fx->sink->unpaused.size(), size_t{1});
+    if (!fx->sink->unpaused.empty()) {
+        XX_TEST_EXPECT_FALSE(fx->sink->unpaused.back());
+    }
+
+    // 后台任务结果: 必须解除暂停 (否则它要等用户下次发消息才被取走)
+    const std::string asyncDone{agentxx::events::naming::kAgentAsyncDoneEvent};
+    XX_TEST_EXPECT_TRUE(
+        hub.watch(EventWaitSpec{
+                      .event         = asyncDone,
+                      .mode          = "first",
+                      .delivery      = "next-step",
+                      .originSession = fx->sessionId,
+                  })
+            .has_value()
+    );
+    Json value       = Json::object();
+    value["asyncId"] = "async-3";
+    value["kind"]    = "agent";
+    value["content"] = "done";
+    XX_TEST_EXPECT_TRUE(hub.publishValue(asyncDone, std::move(value), &err));
+    XX_TEST_EXPECT_EQ(fx->sink->texts.size(), size_t{2});
+    XX_TEST_EXPECT_EQ(fx->sink->unpaused.size(), size_t{2});
+    if (fx->sink->unpaused.size() >= 2) {
+        XX_TEST_EXPECT_TRUE(fx->sink->unpaused.back());
+    }
+    co_return;
+}
+
 asio::awaitable<TestResult> run_event_hub_tests() {
     TestResult result;
 
@@ -1061,6 +1176,8 @@ asio::awaitable<TestResult> run_event_hub_tests() {
     co_await test_hub_replay();
     co_await test_hub_text_format();
     co_await test_hub_content_offload();
+    co_await test_hub_async_tool_result_not_offloaded();
+    co_await test_hub_async_result_unpauses_idle_session();
     co_await test_hub_mode_each();
     co_await test_hub_mode_all();
     co_await test_hub_watch_ended_event();

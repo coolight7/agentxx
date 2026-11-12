@@ -89,5 +89,34 @@ ShareStoreOffload offloadShareStoreIfOversized(
     return out;
 }
 
+bool offloadToolResultIfOversized(
+    const std::shared_ptr<agentxx::agent::AgentContext>& agentContext,
+    const std::map<std::string, std::string>&            toolExtra,
+    std::string_view                                     sessionId,
+    ToolResult&                                          result
+) {
+    if (!agentContext || sessionId.empty() || result.text.empty()) {
+        return false;
+    }
+    // 用 find 读取 (operator[] 会在共享的 extra 表上插入缺失键); 缺失 = 未启用压缩
+    const auto autoSummaryIt = toolExtra.find("autoSummaryOutput");
+    if (autoSummaryIt == toolExtra.end() || autoSummaryIt->second != "true") {
+        return false;
+    }
+    const size_t limitLength = agentContext->agentConfig
+                                   ? agentContext->agentConfig->toolcallSummaryLimitOutputLength
+                                   : 0;
+    if (0 == limitLength || result.text.size() < limitLength) {
+        return false;
+    }
+    auto offload
+        = offloadShareStoreIfOversized(agentContext, sessionId, result.text, limitLength);
+    if (!offload.offloaded) {
+        return false;
+    }
+    result.text = std::move(offload.text);
+    return true;
+}
+
 } // namespace util
 } // namespace agentxx

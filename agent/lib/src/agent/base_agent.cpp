@@ -132,6 +132,8 @@ void publishHubValueIfWanted(
 ///
 /// - 只在有驱动端 (`Session::inputSink`) 时提升: 无驱动端时没人接, 留在原处
 /// - 提升后不再写回待注入队列 (避免自己又留在原地)
+/// - 来源里有后台任务结果 (`agentxx.agent.async.*`) 时连带解除暂停: 这类结果必须
+///   进上下文, 而会话可能因为上一轮失败/取消停在暂停态 (那样的队列不会自己继续)
 void rolloverLeftoverNextStepInputs(
     const std::shared_ptr<agentxx::agent::Session>& session,
     std::string_view                                sessionId
@@ -148,16 +150,21 @@ void rolloverLeftoverNextStepInputs(
         return;
     }
     std::string text;
+    bool        hasAsyncResult = false;
     for (const auto& input : inputs) {
         if (!text.empty()) {
             text += "\n\n";
         }
         text += input.text;
+        if (agentxx::agent::eventNameOfInputSource(input.source)
+                .starts_with(agentxx::events::naming::kAgentAsyncPrefix)) {
+            hasAsyncResult = true;
+        }
     }
     if (!sink->submitTurnInput(
             text,
             std::string{agentxx::agent::kInputSourceEventPrefix} + "pending-rollover",
-            false
+            hasAsyncResult
         )) {
         // 提交失败: 原样放回, 内容不丢
         for (auto& input : inputs) {

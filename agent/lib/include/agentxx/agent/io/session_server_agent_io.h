@@ -334,6 +334,9 @@ private:
     /// - `source` 来源标记 (事件投递用 `event:<名字>`; 只在服务端内部使用)
     /// - `unpauseHalted` 空闲且队列处于暂停态时是否解除暂停 (默认 true = 用户输入语义;
     ///   事件投递默认 false, 保持"积压不自动继续")
+    /// - `resumeIfPaused` 轮次还在跑时也登记"结果必须进上下文": 条目带上
+    ///   [MessageQueueItem::resumeRequested], 轮末就不置暂停 (事件投递进来时
+    ///   还没到轮末, 那一刻队列没处于暂停态, 只传 `unpauseHalted` 会丢掉这个意向)
     /// - `return` 分配的条目 id (内容为空时返回空串, 不追加)
     std::string pushMessageQueueItem(
         std::string                  text,
@@ -342,7 +345,8 @@ private:
         std::string                  delivery     = std::string{InputDelivery::NextTurn},
         bool                         recovered    = false,
         std::string                  source       = {},
-        bool                         unpauseHalted = true
+        bool                         unpauseHalted = true,
+        bool                         resumeIfPaused = false
     );
     void interruptAndRunNext();
     void clearMessageQueue();

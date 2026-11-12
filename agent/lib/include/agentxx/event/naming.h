@@ -48,6 +48,9 @@ inline constexpr std::string_view kAgentEventPrefix = "agentxx.agent.event.";
 /// - 已实现: `agentxx.agent.async.done` (单事件名, 靠值里的 `asyncId` 区分任务)
 inline constexpr std::string_view kAgentAsyncPrefix = "agentxx.agent.async.";
 
+/// 后台任务结果事件名 (所有任务都发这一条, 靠值里的 `asyncId` 区分)
+inline constexpr std::string_view kAgentAsyncDoneEvent = "agentxx.agent.async.done";
+
 /// client 端插件数据的主题段 (客户端插件上行到 agent 总线)
 /// - 组装结果: `agentxx.client.plugin.<插件名>.<事件名>`
 inline constexpr std::string_view kClientPluginDataPrefix = "agentxx.client.plugin.";

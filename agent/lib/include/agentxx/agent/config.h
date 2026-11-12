@@ -387,7 +387,9 @@ public:
     size_t llmMaxRetry = 5;
     /// - 当 toolcall 启用了 [agentxx::tools::XXToolBase::autoSummaryOutput]
     /// 且输出超过限制值 [toolcallSummaryLimitOutputLength] 时压缩
-    /// - 功能实现见 [agentxx::nodes::ToolcallWrapNode::execTool]
+    /// - 前台工具调用与后台工具任务 (`agentxx_async_run` 的 `kind=tool`) 用同一份实现,
+    ///   见 [agentxx::util::offloadToolResultIfOversized]; 后台任务结果投递到会话时
+    ///   不再被事件层二次卸载 (见 `eventValueMaxBytes` 的说明)
     size_t toolcallSummaryLimitOutputLength = 2 * 1024;
 
     /// 队列输入 (用户发来的消息) 单条过长时的压缩阈值, 单位为 utf8 字符数 (默认 8K)
@@ -478,6 +480,9 @@ public:
     ///   默认取工具输出压缩阈值 (2 K)
     /// - 0 表示这一项不限制 (仍受工具输出压缩阈值约束; 两者都为 0 时不压缩)
     /// - 合成规则见 [eventContentLimitLength]
+    /// - 例外: 后台**工具**任务的结果 (`agentxx.agent.async.*` 里 `kind=tool` 的值)
+    ///   不在这里卸载 —— 它的正文已由工具执行层按工具声明裁剪过
+    ///   (见 [toolcallSummaryLimitOutputLength]), 事件层再整段卸载会多套一层取回提示
     size_t eventValueMaxBytes = 32 * 1024;
 
     /// 事件内容 (`[Content]` 段) 的压缩阈值, 单位为 utf8 字符数 (0 = 不压缩)

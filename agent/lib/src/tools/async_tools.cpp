@@ -27,7 +27,7 @@ namespace {
 using utilxx_base::Json;
 
 /// 后台任务的结果事件名 (单一事件名, 靠值里的 `asyncId` 区分)
-constexpr std::string_view kAsyncDoneEvent = "agentxx.agent.async.done";
+constexpr std::string_view kAsyncDoneEvent = agentxx::events::naming::kAgentAsyncDoneEvent;
 /// 中枢里这类等待的归属标记
 constexpr std::string_view kAsyncOwner = "async";
 
@@ -695,7 +695,9 @@ AsyncAwaitTool::AsyncAwaitTool(std::weak_ptr<agentxx::agent::AgentContext> in_ag
     XXToolBase(
         "agentxx_async_await",
         in_agentContext,
-        /*autoSummaryOutput=*/false,
+        // 返回的是任务结果正文 (与自动投递同一份渲染): 子代理回答可能很长,
+        // 工具任务的结果也可能没被工具自己裁剪过 —— 按同一个阈值转 share store
+        /*autoSummaryOutput=*/true,
         /*canDelayLoad=*/false,
         /*maxRetry=*/0,
         /*repeatCallCheck=*/false,

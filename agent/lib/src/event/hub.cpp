@@ -94,6 +94,30 @@ std::string timerShortName(std::string_view eventName) {
     return std::string{eventName};
 }
 
+/// 是否是后台任务结果事件 (`agentxx.agent.async.*`)
+/// - 这类值由框架自己产出 (工具输出 / 子代理回答), 投递时按"已完成的事"处理:
+///   会话空闲时即使停在暂停态 (上一轮失败/取消留下的) 也要把它放进上下文
+bool isAsyncResultEvent(std::string_view eventName) {
+    return eventName.starts_with(naming::kAgentAsyncPrefix);
+}
+
+/// 这批值是否全是后台**工具**任务的结果 (`kind == "tool"`)
+/// - 工具结果的裁剪由工具执行层负责 (见 [agentxx::util::offloadToolResultIfOversized]),
+///   事件侧不再整段卸载, 否则同一段输出会被套上第二层取回提示
+/// - 空值列表 / 混合来源 / 字段缺失都按"不是"处理 (照常按长度卸载)
+bool asyncValuesAreToolKind(const std::vector<Json>& values) {
+    if (values.empty()) {
+        return false;
+    }
+    for (const auto& value : values) {
+        if (!value.is_object() || !value.contains("kind") || !value["kind"].is_string()
+            || value["kind"].get_string_view() != "tool") {
+            return false;
+        }
+    }
+    return true;
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
@@ -988,6 +1012,12 @@ std::string EventHub::contentText(
     if (text.empty() || cfg_.contentLimitLength == 0) {
         return text;
     }
+    // 后台工具任务 (`kind=tool`) 的结果正文在工具执行层就按工具自己的声明裁剪过
+    // (见 [agentxx::util::offloadToolResultIfOversized]): 这里不再整段卸载, 否则
+    // 同一段输出会被套上第二层取回提示 (工具层的提示 + 事件层的提示各一个 id)
+    if (isAsyncResultEvent(eventName) && asyncValuesAreToolKind(values)) {
+        return text;
+    }
     // 字节数不足阈值时不可能达到阈值字符数 (utf8 每字符至少 1 字节), 提前返回
     if (text.size() < cfg_.contentLimitLength) {
         return text;
@@ -1098,7 +1128,11 @@ DeliverResult EventHub::deliver(const EventDelivery& d, std::string* reasonOut) 
     if (!busy) {
         // 空闲: 有驱动端就开新一轮 (没有"下一次 modelcall"可言), 否则写待注入输入等
         if (sink) {
-            if (sink->submitTurnInput(d.text, d.source, d.unpausePaused)) {
+            // 后台任务结果 (`agentxx.agent.async.*`) 是"已经跑完的事"的产物, 必须进
+            // 上下文: 会话若因上一轮失败/取消停在暂停态, 也要解除暂停把它跑起来,
+            // 否则它只能躺在队列里等到用户下次发消息 (那时才被顺带取走)
+            const bool unpause = d.unpausePaused || isAsyncResultEvent(d.eventName);
+            if (sink->submitTurnInput(d.text, d.source, unpause)) {
                 setReason({});
                 noteDelivered();
                 return DeliverResult::Queued;

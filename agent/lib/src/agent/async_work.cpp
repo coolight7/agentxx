@@ -11,6 +11,7 @@
 #include "agentxx/util/exception.h"
 #include "agentxx/util/neograph_json_bridge.h"
 #include "agentxx/util/observability.h"
+#include "agentxx/util/share_store_offload.h"
 #include "agentxx/util/tool_args_fix.h"
 #include "agentxx/util/tool_result.h"
 #include "asio/co_spawn.hpp"
@@ -23,6 +24,7 @@
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
+#include <map>
 
 namespace agentxx {
 namespace agent {
@@ -190,7 +192,7 @@ void purgeExpiredSessionDirs(const std::string& root, size_t keepDays) {
 }
 
 /// 结果事件名 (单一事件名, 靠值里的 `asyncId` 区分是哪一条任务)
-constexpr std::string_view kAsyncDoneEvent = "agentxx.agent.async.done";
+constexpr std::string_view kAsyncDoneEvent = agentxx::events::naming::kAgentAsyncDoneEvent;
 
 /// 结果事件与台账的归属标记 (`plugin.` 之外的自有标记, 只用于日志/诊断)
 constexpr std::string_view kAsyncOwner = "async_work";
@@ -415,6 +417,9 @@ asio::awaitable<events::RespSubagentBatchItem> runToolWork(
             args["tool_call_id"] = spec.resultId;
         }
     }
+    // 工具的行为开关 (autoSummaryOutput 等) 拷一份出来: `target` 随后被移交给后台
+    // 协程, 而结果压缩要在等待结束后用它判断"这个工具的输出要不要转 share store"
+    const std::map<std::string, std::string> toolExtra = target.tool->extra;
     const auto ex = co_await asio::this_coro::executor;
     // 必须把**可调用对象**交给 co_spawn (不要在这里内联调用成 `{...}()`):
     // lambda 协程的帧只保存闭包指针, 内联调用产生的是临时闭包 —— 语句结束即析构,
@@ -477,7 +482,15 @@ asio::awaitable<events::RespSubagentBatchItem> runToolWork(
         co_await wake->wait(std::chrono::milliseconds{waitMs});
     }
 
-    const auto& result = state->result;
+    // 工具输出压缩: 与前台工具调用同一份实现/同一套阈值 (工具的 autoSummaryOutput
+    // 声明说了算), 因此它的结果正文进事件投递时已经裁剪过 —— 事件侧不再整段卸载
+    agentxx::util::ToolResult result = state->result;
+    agentxx::util::offloadToolResultIfOversized(
+        creator,
+        toolExtra,
+        spec.creatorSessionId,
+        result
+    );
     events::RespSubagentBatchItem out;
     out.resultId = spec.resultId;
     switch (result.status) {

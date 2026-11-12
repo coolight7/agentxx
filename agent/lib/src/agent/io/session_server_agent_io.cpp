@@ -492,7 +492,8 @@ std::string SessionServerAgentIO::pushMessageQueueItem(
     std::string                  delivery,
     bool                         recovered,
     std::string                  source,
-    bool                         unpauseHalted
+    bool                         unpauseHalted,
+    bool                         resumeIfPaused
 ) {
     if (text.empty() && attachments.empty()) {
         return {};
@@ -510,6 +511,9 @@ std::string SessionServerAgentIO::pushMessageQueueItem(
     item.delivery    = std::move(delivery);
     item.recovered   = recovered;
     item.source      = std::move(source);
+    // 轮次还在跑时只能记下"结果必须进上下文"的意向: 那一刻队列还没进入暂停态
+    // (暂停由轮末按结果置位), 轮末据此决定不置暂停 (见 run() 的轮次收尾)
+    item.resumeRequested = resumeIfPaused;
 
     // 注意: 空闲状态下收到用户新输入时, 无论队列是否已有积压消息, 均解除暂停并唤醒执行:
     // - 暂停态来自上一轮的异常/取消/中断 (run() 轮末按结果置位), 用于阻止
@@ -560,7 +564,8 @@ bool SessionServerAgentIO::submitTurnInput(
         std::string{InputDelivery::NextTurn},
         false,
         std::string{source},
-        unpausePaused
+        unpausePaused,
+        /*resumeIfPaused=*/unpausePaused
     );
     if (itemId.empty()) {
         return false;
@@ -2363,6 +2368,17 @@ asio::awaitable<void> SessionServerAgentIO::run() {
             setQueueState(
                 messageQueue_.empty() ? SessionQueueState::Idle : SessionQueueState::Running,
                 "turn completed"
+            );
+        } else if (std::any_of(
+                       messageQueue_.begin(),
+                       messageQueue_.end(),
+                       [](const MessageQueueItem& item) { return item.resumeRequested; }
+                   )) {
+            // 队列里有事件输入要求"结果必须进上下文" (后台任务结果等): 不置暂停,
+            // 否则它只能等到用户下次发消息才被顺带执行
+            setQueueState(
+                messageQueue_.empty() ? SessionQueueState::Idle : SessionQueueState::Running,
+                "event input asked to resume"
             );
         } else {
             setQueueState(SessionQueueState::Paused, "turn failed or interrupted");
