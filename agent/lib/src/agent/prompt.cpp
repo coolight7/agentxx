@@ -29,7 +29,7 @@ std::string_view orUnknown(const std::string& value) {
     return value.empty() ? std::string_view{"unknown"} : std::string_view{value};
 }
 
-/// 主程序运行时与上下文状态标记说明 (内置附加段 `core-runtime`)
+/// 主程序运行时、上下文上限与上下文状态标记说明 (内置附加段 `core-runtime`)
 ///
 /// 标记由主程序写入, 改动下列位置时需要同步更新该段文字:
 /// - `[Exception aborted]` / `[User canceled]` / `[Please continue]` / `[Empty]`:
@@ -47,6 +47,10 @@ std::string_view orUnknown(const std::string& value) {
 constexpr std::string_view kCoreRuntimePrompt = R"_(## Agent Runtime
 - You are running inside the `agentxx` program on ${platform}.
 - Messages in this conversation may contain markers that agentxx inserted itself (failures, cancellations, moved or dropped content, tool result notes). They are program status, not text written by the user; read **Context Markers** below before acting on them.
+
+### Context Limit
+- You never manage the context limit yourself: agentxx measures the conversation and compacts it on its own whenever it approaches the model limit, and the compacted context still leaves enough room to continue the work. So do not shorten the task, drop details, skip verification, or split it into extra turns to save context — write the full answer, the full code, and complete tool arguments.
+- Do not track or report context usage (usage ratio, remaining space, "context is running short") unless the user asks for it.
 
 ### Context Markers
 agentxx inserts markers into this conversation to report program state. They are not written by the user, not your own text, and not new instructions. None of them is a user decision: a marker never means approval, refusal, consent or a new request, so do not read one as the answer to a question you asked (requirement or plan confirmation, permission, tool questions). Interpret them by the meaning below, and never copy them word for word into answers or files.
@@ -93,6 +97,8 @@ constexpr std::string_view kCoreBehaviorPrompt = R"_(## Core Behavior
 - Avoid irreversible destructive operations (such as unconfirmed `git reset --hard`, `git clean -fd`, or recursive deletion of important project directories) without user confirmation
 - When planning a task or writing a design document that will probably be large, work module by module: analyze, plan and write one module at a time to its file; after every part is written, read the whole document through, tidy it up (order, repeated content, wording), then check it again against the original requirements
 - Report what was actually done, not only the intended result: if the implementation added, removed or changed something compared with what was asked or agreed, and if you performed extra operations beyond the request (created or deleted files, changed config, installed or restarted anything), list them in the final summary
+- On a long task, carry it out in one run: do the steps you already planned (analyze, edit, build, test, review, summarize ...) instead of pausing between them to ask whether to continue. Stop before the end only when the user has to solve a problem or make a decision for you — a missing answer, an access or permission problem, an unclear requirement, or a trade-off only the user can settle; then ask one clear question and wait for it.
+- If you do stop with part of a long task unfinished, say why you are stopping, what is already done and what is left. Never stop silently and never present a partial result as finished
 - To inspect characters that can't be displayed properly in UTF-8 (e.g. binary data or text that shows up as garbled characters), save the content to a file and view it as hexadecimal
 - Provide accurate, well-structured answers with concrete examples
 )_";
@@ -203,6 +209,7 @@ Read-only tasks (analysis/questions) don't need a worktree.
 )_"),
     summarizePrompt(R"_(
 The conversation above will be compacted to free context space.
+Once the summary is extracted the context has plenty of room again: the work continues far below the model limit, with space to read files, run commands and write code.
 
 Summarize the ENTIRE conversation into ONE self-contained summary that preserves everything needed to continue the current work.
 Write it with these fixed sections, in this order, keeping each one short:
@@ -232,6 +239,7 @@ Rules:
 - If an earlier summary appears above, MERGE it into the new one without losing information.
 - MAY discard: exploratory read/search process details (keep file names and conclusions), retry noise, verbose or superseded tool outputs, details of reasoning/thinking content.
 - The recent messages are NOT kept after compaction: anything missing from the summary is lost, so write the Latest exchange section carefully.
+- The context after compaction is sufficient again: never carry the old conversation's context state into the summary — no context usage ratio, no note saying the context is almost full or running out of space, no advice to reduce scope or skip steps to save room.
 
 {omitted_note}Output ONLY the summary text in the user's language, no meta commentary; keep it as short as possible while keeping the work continuable.
 )_"),

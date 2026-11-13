@@ -90,7 +90,8 @@ public:
     /// 内置附加段的键
     /// - 键名以 `core-` 开头是内置段的保留前缀 (见 [isBuiltinSectionKey])
     /// - 出厂时就写在 [appendSystemPrompts] 里, 不单独设 order/source
-    /// - `core-runtime`: 主程序运行时与上下文状态标记说明 (`Agent Runtime` + `Context Markers`)
+    /// - `core-runtime`: 主程序运行时、上下文上限与上下文状态标记说明 (`Agent Runtime` +
+    ///   `Context Limit` + `Context Markers`)
     /// - `core-workdir`: 会话工作目录与临时目录约定 (含路径占位符)
     /// - `core-behavior`: 通用作业准则 (与具体代码任务无关的条目)
     inline static constexpr std::string_view kSectionCoreRuntime  = "core-runtime";
