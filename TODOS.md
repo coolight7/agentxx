@@ -37,11 +37,6 @@
   - 无需自行管理上下文上限，超限时agentxx会自动压缩处理
   - 压缩提示词中明确不要保留 上下文占比、上下文不足 等
 - 任务规划文件 关联 git commit 以便检索
-- codegraph 显示一直在 wait for load
-- 网络错误时偶现直接停止轮次，而没有进一步重试: [提示] 错误 
-Node 'llm' failed after 1 attempt(s): SSE read-body timeout after 60000
-recv=403684B events=565 idle=60013ms finish=none tools=0 args=0B name=
-- 移除日志噪声 [I] BroadcastRegistry: declaration of `plugin.agentxx_system_monitor.usage replaced (agentxx_system_monitor -> agentxx_system_monitor)
 
 - SVG绘制支持
 
