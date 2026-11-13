@@ -59,19 +59,19 @@ std::string sanitizeIdPart(std::string_view text) {
 /// 运行时错误码对应的可读文本 (日志与事件载荷用)
 const char* runtimeErrorText(int32_t code) {
     switch (code) {
-        case AGENTXX_PLUGIN_RUNTIME_ERR_ARG:
+        case AGENTXX_RESULT_ERR_ARG:
             return "参数非法";
-        case AGENTXX_PLUGIN_RUNTIME_ERR_STATE:
+        case AGENTXX_RESULT_ERR_STATE:
             return "状态错误";
-        case AGENTXX_PLUGIN_RUNTIME_ERR_NOT_FOUND:
+        case AGENTXX_RESULT_ERR_NOT_FOUND:
             return "对象不存在";
-        case AGENTXX_PLUGIN_RUNTIME_ERR_BUDGET:
+        case AGENTXX_RESULT_ERR_LIMIT:
             return "超出资源上限";
-        case AGENTXX_PLUGIN_RUNTIME_ERR_CONFLICT:
+        case AGENTXX_RESULT_ERR_CONFLICT:
             return "会话已被占用";
-        case AGENTXX_PLUGIN_RUNTIME_ERR_UNSUPPORTED:
+        case AGENTXX_RESULT_ERR_UNSUPPORTED:
             return "主程序未提供运行时能力";
-        case AGENTXX_PLUGIN_RUNTIME_ERR_FAILED:
+        case AGENTXX_RESULT_ERR_FAILED:
             return "执行失败";
         default:
             return "未知错误";
@@ -176,26 +176,26 @@ int32_t PluginManager::runtimeMountRoot(
 ) {
     if (inst == nullptr || spec == nullptr) {
         err = "mount_root: 参数为空";
-        return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     outRootId.clear();
     // 建根只能在进程级时机: 在插件 mount 回调里建根会变成"每个 agent 再建一个根",
     // 递归没有终点 —— 这是第一道防护
     if (mountingDepth_ > 0) {
         err = "mount_root: 不能在插件 mount 回调里调用 (请在 start 里建根)";
-        return AGENTXX_PLUGIN_RUNTIME_ERR_STATE;
+        return AGENTXX_RESULT_ERR_STATE;
     }
     auto host = runtimeHost();
     if (!host) {
         err = "mount_root: 本进程没有 agent 容器 (插件管理器未挂到 AgentHost 上)";
-        return AGENTXX_PLUGIN_RUNTIME_ERR_UNSUPPORTED;
+        return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
     if (host->rootCount() >= host->maxRoots()) {
         err = fmt::format(
             "mount_root: 根数已达上限 {} (AgentHost::Config::maxRoots)",
             host->maxRoots()
         );
-        return AGENTXX_PLUGIN_RUNTIME_ERR_BUDGET;
+        return AGENTXX_RESULT_ERR_LIMIT;
     }
 
     // ---- 根 id ----
@@ -224,13 +224,13 @@ int32_t PluginManager::runtimeMountRoot(
     }
     if (rootId.empty()) {
         err = "mount_root: 无法分配新的根 id";
-        return AGENTXX_PLUGIN_RUNTIME_ERR_FAILED;
+        return AGENTXX_RESULT_ERR_FAILED;
     }
 
     // 派生配置 (可能失败: JSON 非法 / 字段越界 / 模型不存在)
     auto cfg = deriveRootConfig(*spec, rootId, *inst, err);
     if (!cfg) {
-        return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     // 创建者是否也挂到自己根上: 默认不挂 (切断递归的第二道防护)
     if (spec->include_creator == 0
@@ -262,12 +262,12 @@ int32_t PluginManager::runtimeMountRoot(
     auto agent = host->createAgent(cfg);
     if (!agent) {
         err = "mount_root: 容器未能创建 agent 实例";
-        return AGENTXX_PLUGIN_RUNTIME_ERR_FAILED;
+        return AGENTXX_RESULT_ERR_FAILED;
     }
     auto ctx = agent->getContext();
     if (!ctx) {
         err = "mount_root: 新建 agent 没有上下文";
-        return AGENTXX_PLUGIN_RUNTIME_ERR_FAILED;
+        return AGENTXX_RESULT_ERR_FAILED;
     }
     // 先认身份再 init: `init` 的 plugin_mount 步骤会拿 `ctx->agentId` 找/建挂载表项,
     // 空值会被当成内置根 `root` —— 那样创建者插件挂自己时会撞上内置根的挂载
@@ -380,29 +380,29 @@ int32_t PluginManager::runtimeMountRoot(
 
     // 插件面看到的就是这个 id (容器登记时也用同一个值)
     outRootId = rootId;
-    return AGENTXX_PLUGIN_RUNTIME_OK;
+    return AGENTXX_RESULT_OK;
 }
 
 int32_t PluginManager::runtimeUnmountRoot(PluginInstance* inst, std::string_view rootId) {
     if (inst == nullptr || rootId.empty()) {
-        return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     // 内置根与"别人的根"都按不存在处理
     auto* record = runtimeRootOf(inst, rootId);
     if (record == nullptr) {
         XX_LOGW("[runtime] unmount_root: root '{}' 不存在或不属于本实例", rootId);
-        return AGENTXX_PLUGIN_RUNTIME_ERR_NOT_FOUND;
+        return AGENTXX_RESULT_ERR_NOT_FOUND;
     }
     auto host = runtimeHost();
     if (!host || !record->ready) {
         // 尚未挂进容器: 只回收记录 (init 协程会因记录失效而自行收尾)
         runtimeDropRoot(*record, false);
-        return AGENTXX_PLUGIN_RUNTIME_OK;
+        return AGENTXX_RESULT_OK;
     }
     if (host->findRoot(rootId) == nullptr) {
         // 容器里已经没有它 (自己关了): 记录一并清掉
         runtimeDropRoot(*record, false);
-        return AGENTXX_PLUGIN_RUNTIME_OK;
+        return AGENTXX_RESULT_OK;
     }
     // 先关通道再摘根: 通道的驱动壳持有该 agent, 反过来不行
     std::vector<int64_t> channels = record->channels;
@@ -412,7 +412,7 @@ int32_t PluginManager::runtimeUnmountRoot(PluginInstance* inst, std::string_view
         }
     }
     runtimeDropRoot(*record, true);
-    return AGENTXX_PLUGIN_RUNTIME_OK;
+    return AGENTXX_RESULT_OK;
 }
 
 void PluginManager::runtimeDropRoot(RuntimeRoot& root, bool unmountFromHost) {
@@ -440,21 +440,21 @@ int32_t PluginManager::runtimeOpenChannel(
 ) {
     if (inst == nullptr || spec == nullptr || outChannelId == nullptr) {
         err = "open_channel: 参数为空";
-        return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     if (spec->on_event == nullptr) {
         err = "open_channel: on_event 回调必填";
-        return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     const std::string rootId = svToStr(PluginxxStringView{spec->root_id.data, spec->root_id.size});
     auto*             root   = runtimeRootOf(inst, rootId);
     if (root == nullptr) {
         err = fmt::format("open_channel: root '{}' 不存在或不属于本实例", rootId);
-        return AGENTXX_PLUGIN_RUNTIME_ERR_NOT_FOUND;
+        return AGENTXX_RESULT_ERR_NOT_FOUND;
     }
     if (root->failed) {
         err = fmt::format("open_channel: root '{}' 已失败: {}", rootId, root->error);
-        return AGENTXX_PLUGIN_RUNTIME_ERR_STATE;
+        return AGENTXX_RESULT_ERR_STATE;
     }
     if (root->channels.size() + root->waitingChannels.size() >= kMaxChannelsPerRoot) {
         err = fmt::format(
@@ -462,7 +462,7 @@ int32_t PluginManager::runtimeOpenChannel(
             rootId,
             kMaxChannelsPerRoot
         );
-        return AGENTXX_PLUGIN_RUNTIME_ERR_BUDGET;
+        return AGENTXX_RESULT_ERR_LIMIT;
     }
 
     auto channel           = std::make_shared<RuntimeChannel>();
@@ -498,7 +498,7 @@ int32_t PluginManager::runtimeOpenChannel(
                 channel->sessionId,
                 root->sessionKey()
             );
-            return AGENTXX_PLUGIN_RUNTIME_ERR_CONFLICT;
+            return AGENTXX_RESULT_ERR_CONFLICT;
         }
     }
 
@@ -516,11 +516,11 @@ int32_t PluginManager::runtimeOpenChannel(
             rootId
         );
         *outChannelId = channel->channelId;
-        return AGENTXX_PLUGIN_RUNTIME_OK;
+        return AGENTXX_RESULT_OK;
     }
 
     const int32_t rc = runtimeStartChannel(*root, *channel, err);
-    if (rc != AGENTXX_PLUGIN_RUNTIME_OK) {
+    if (rc != AGENTXX_RESULT_OK) {
         // 启动失败: 释放会话占用与记录, 不留下半成品
         if (auto host = runtimeHost()) {
             host->releaseSession(
@@ -536,7 +536,7 @@ int32_t PluginManager::runtimeOpenChannel(
         return rc;
     }
     *outChannelId = channel->channelId;
-    return AGENTXX_PLUGIN_RUNTIME_OK;
+    return AGENTXX_RESULT_OK;
 }
 
 int32_t PluginManager::runtimeStartChannel(
@@ -547,7 +547,7 @@ int32_t PluginManager::runtimeStartChannel(
     auto host = runtimeHost();
     if (!host || !root.agent) {
         err = "open_channel: 根不可用";
-        return AGENTXX_PLUGIN_RUNTIME_ERR_STATE;
+        return AGENTXX_RESULT_ERR_STATE;
     }
     channel.waiting = false;
 
@@ -647,7 +647,7 @@ int32_t PluginManager::runtimeStartChannel(
     auto runtime = agent::AgentSessionRuntime::create(root.agent, clientIO, std::move(cfg));
     if (!runtime) {
         err = "open_channel: 驱动壳装配失败 (参数不完整)";
-        return AGENTXX_PLUGIN_RUNTIME_ERR_FAILED;
+        return AGENTXX_RESULT_ERR_FAILED;
     }
     channel.runtime = runtime;
     // 初始模型 (空 = 用根配置的当前模型)
@@ -661,7 +661,7 @@ int32_t PluginManager::runtimeStartChannel(
         root.rootId,
         channel.sessionId
     );
-    return AGENTXX_PLUGIN_RUNTIME_OK;
+    return AGENTXX_RESULT_OK;
 }
 
 void PluginManager::runtimeFlushWaitingChannels(RuntimeRoot& root) {
@@ -673,7 +673,7 @@ void PluginManager::runtimeFlushWaitingChannels(RuntimeRoot& root) {
             continue;
         }
         std::string err;
-        if (runtimeStartChannel(root, *channel, err) != AGENTXX_PLUGIN_RUNTIME_OK) {
+        if (runtimeStartChannel(root, *channel, err) != AGENTXX_RESULT_OK) {
             XX_LOGE("[runtime] channel {} 启动失败: {}", channelId, err);
             runtimeCloseChannelNow(*channel, err);
         }
@@ -728,14 +728,14 @@ void PluginManager::runtimeCloseChannelNow(RuntimeChannel& channel, std::string_
 
 int32_t PluginManager::runtimeCloseChannel(PluginInstance* inst, int64_t channelId) {
     if (inst == nullptr || channelId <= 0) {
-        return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     auto* channel = runtimeChannelOf(inst, channelId);
     if (channel == nullptr) {
-        return AGENTXX_PLUGIN_RUNTIME_ERR_NOT_FOUND;
+        return AGENTXX_RESULT_ERR_NOT_FOUND;
     }
     runtimeCloseChannelNow(*channel, "closed");
-    return AGENTXX_PLUGIN_RUNTIME_OK;
+    return AGENTXX_RESULT_OK;
 }
 
 // =====================================================================
@@ -751,7 +751,7 @@ int32_t PluginManager::runtimeSendInput(
     // inst 为空 = 主程序内部投递 (触发器/定时器): 不做归属校验, 但仍要求通道存在
     if (channelId <= 0) {
         err = "send_input: channel_id 非法";
-        return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     auto* channel = runtimeChannelOf(inst, channelId);
     if (channel == nullptr) {
@@ -760,17 +760,17 @@ int32_t PluginManager::runtimeSendInput(
             channelId,
             inst != nullptr ? "或不属于本实例" : ""
         );
-        return AGENTXX_PLUGIN_RUNTIME_ERR_NOT_FOUND;
+        return AGENTXX_RESULT_ERR_NOT_FOUND;
     }
     if (channel->closed || !channel->runtime) {
         err = fmt::format("send_input: 通道 {} 已关闭", channelId);
-        return AGENTXX_PLUGIN_RUNTIME_ERR_STATE;
+        return AGENTXX_RESULT_ERR_STATE;
     }
     // 与 FFI 同一份输入解析: text/attachments 至少一个非空, 条数与大小先拦一次
     auto parsed = agent::parseUserInputJson(inputJson);
     if (!parsed.has_value()) {
         err = parsed.error().message;
-        return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     auto input = std::move(*parsed);
     if (!input.delivery.empty() && !agent::InputDelivery::known(input.delivery)) {
@@ -778,42 +778,42 @@ int32_t PluginManager::runtimeSendInput(
             "send_input: delivery 取值非法 '{}' (支持 next-turn/next-step/inject/collect)",
             input.delivery
         );
-        return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     channel->runtime->sendInput(std::move(input));
-    return AGENTXX_PLUGIN_RUNTIME_OK;
+    return AGENTXX_RESULT_OK;
 }
 
 int32_t PluginManager::runtimeCancel(PluginInstance* inst, int64_t channelId) {
     if (inst == nullptr || channelId <= 0) {
-        return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     auto* channel = runtimeChannelOf(inst, channelId);
     if (channel == nullptr) {
-        return AGENTXX_PLUGIN_RUNTIME_ERR_NOT_FOUND;
+        return AGENTXX_RESULT_ERR_NOT_FOUND;
     }
     if (channel->closed || !channel->runtime) {
-        return AGENTXX_PLUGIN_RUNTIME_ERR_STATE;
+        return AGENTXX_RESULT_ERR_STATE;
     }
     channel->runtime->cancel();
-    return AGENTXX_PLUGIN_RUNTIME_OK;
+    return AGENTXX_RESULT_OK;
 }
 
 int32_t
     PluginManager::runtimeSelectModel(PluginInstance* inst, int64_t channelId, std::string_view model) {
     if (inst == nullptr || channelId <= 0 || model.empty()) {
-        return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     auto* channel = runtimeChannelOf(inst, channelId);
     if (channel == nullptr) {
-        return AGENTXX_PLUGIN_RUNTIME_ERR_NOT_FOUND;
+        return AGENTXX_RESULT_ERR_NOT_FOUND;
     }
     if (channel->closed || !channel->runtime) {
-        return AGENTXX_PLUGIN_RUNTIME_ERR_STATE;
+        return AGENTXX_RESULT_ERR_STATE;
     }
     channel->model = std::string{model};
     channel->runtime->selectModel(std::string{model});
-    return AGENTXX_PLUGIN_RUNTIME_OK;
+    return AGENTXX_RESULT_OK;
 }
 
 int32_t PluginManager::runtimeRespondInterrupt(
@@ -825,16 +825,16 @@ int32_t PluginManager::runtimeRespondInterrupt(
 ) {
     if (inst == nullptr || channelId <= 0 || interruptId <= 0) {
         err = "respond_interrupt: 参数为空";
-        return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     auto* channel = runtimeChannelOf(inst, channelId);
     if (channel == nullptr) {
         err = fmt::format("respond_interrupt: 通道 {} 不存在或不属于本实例", channelId);
-        return AGENTXX_PLUGIN_RUNTIME_ERR_NOT_FOUND;
+        return AGENTXX_RESULT_ERR_NOT_FOUND;
     }
     if (channel->closed || !channel->clientIO) {
         err = fmt::format("respond_interrupt: 通道 {} 已关闭", channelId);
-        return AGENTXX_PLUGIN_RUNTIME_ERR_STATE;
+        return AGENTXX_RESULT_ERR_STATE;
     }
     // 应答形状与界面一致: {"values": {...}} (中断结果由值对象表达, 空对象 = 取消)
     utilxx_base::Json values = utilxx_base::Json::object();
@@ -843,12 +843,12 @@ int32_t PluginManager::runtimeRespondInterrupt(
             values = utilxx_base::Json::parse(std::string{valuesJson});
         } catch (const std::exception& e) {
             err = fmt::format("respond_interrupt: values_json 不是合法 JSON: {}", e.what());
-            return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+            return AGENTXX_RESULT_ERR_ARG;
         }
     }
     if (!values.is_object()) {
         err = "respond_interrupt: values_json 必须是对象 ({\"values\":{...}})";
-        return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     if (!values.contains("values")) {
         // 允许直接给值对象 (插件写 {"name":"answer"} 也能工作)
@@ -856,9 +856,9 @@ int32_t PluginManager::runtimeRespondInterrupt(
     }
     if (!channel->clientIO->submitInterrupt(interruptId, std::move(values))) {
         err = fmt::format("respond_interrupt: 中断 {} 已过期或已应答", interruptId);
-        return AGENTXX_PLUGIN_RUNTIME_ERR_STATE;
+        return AGENTXX_RESULT_ERR_STATE;
     }
-    return AGENTXX_PLUGIN_RUNTIME_OK;
+    return AGENTXX_RESULT_OK;
 }
 
 // =====================================================================
@@ -1084,26 +1084,26 @@ PluginManager::AsyncSubmitOutcome
     PluginManager::runtimeSubmitAsyncWork(PluginInstance* inst, agent::AsyncWorkSpec work) {
     AsyncSubmitOutcome out;
     if (inst == nullptr) {
-        out.code  = AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+        out.code  = AGENTXX_RESULT_ERR_ARG;
         out.error = "instance is null";
         return out;
     }
     auto host = runtimeHost();
     if (!host) {
-        out.code  = AGENTXX_PLUGIN_RUNTIME_ERR_UNSUPPORTED;
+        out.code  = AGENTXX_RESULT_ERR_UNSUPPORTED;
         out.error = "no agent host";
         return out;
     }
     auto primary = primaryAgent_.lock();
     auto ctx     = primary;
     if (!ctx || !ctx->agentConfig) {
-        out.code  = AGENTXX_PLUGIN_RUNTIME_ERR_UNSUPPORTED;
+        out.code  = AGENTXX_RESULT_ERR_UNSUPPORTED;
         out.error = "no agent attached";
         return out;
     }
     if (work.kind == agent::AsyncWorkKind::Tool && work.toolName.empty()) {
         // 旧插件用旧布局提交 kind=1 时读不到追加的 tool_name: 按参数错拒并说明原因
-        out.code  = AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+        out.code  = AGENTXX_RESULT_ERR_ARG;
         out.error = "kind `tool` needs `tool_name` (async work spec field)";
         return out;
     }
@@ -1132,11 +1132,11 @@ PluginManager::AsyncSubmitOutcome
     }
     auto res = host->submitAsyncWork(std::move(work), ctx);
     if (!res.accepted) {
-        out.code  = AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+        out.code  = AGENTXX_RESULT_ERR_ARG;
         out.error = res.error;
         return out;
     }
-    out.code    = AGENTXX_PLUGIN_RUNTIME_OK;
+    out.code    = AGENTXX_RESULT_OK;
     out.asyncId = res.asyncId;
     XX_LOGI(
         "[runtime] submitted background task {} (owner={}, ahead={})",
@@ -1149,22 +1149,22 @@ PluginManager::AsyncSubmitOutcome
 
 int32_t PluginManager::runtimeCancelAsyncWork(PluginInstance* inst, std::string_view asyncId) {
     if (inst == nullptr || asyncId.empty()) {
-        return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     auto host = runtimeHost();
     if (!host) {
-        return AGENTXX_PLUGIN_RUNTIME_ERR_UNSUPPORTED;
+        return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
     // 只能取消本实例提交的: 别人的任务不允许跨插件干预
     const auto entry = host->asyncWorkJson(asyncId);
     if (entry.is_object() && entry.size() == 0) {
-        return AGENTXX_PLUGIN_RUNTIME_ERR_NOT_FOUND;
+        return AGENTXX_RESULT_ERR_NOT_FOUND;
     }
     if (entry.value("owner", std::string{}) != fmt::format("plugin:{}", inst->name)) {
-        return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+        return AGENTXX_RESULT_ERR_ARG;
     }
-    return host->cancelAsyncWork(asyncId) ? AGENTXX_PLUGIN_RUNTIME_OK
-                                          : AGENTXX_PLUGIN_RUNTIME_ERR_STATE;
+    return host->cancelAsyncWork(asyncId) ? AGENTXX_RESULT_OK
+                                          : AGENTXX_RESULT_ERR_STATE;
 }
 
 std::string PluginManager::runtimeGetAsyncWork(PluginInstance* inst, std::string_view asyncId) {

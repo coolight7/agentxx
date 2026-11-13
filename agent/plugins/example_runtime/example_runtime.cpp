@@ -231,7 +231,7 @@ void registerHostTools(RuntimeCtx& ctx, const agentxx::plugin::AgentRef& ref) {
             return fmt::format(
                 R"_({{"channelId":{},"accepted":{},"rc":{}}})_",
                 channelId,
-                rc == AGENTXX_PLUGIN_RUNTIME_OK ? "true" : "false",
+                rc == AGENTXX_RESULT_OK ? "true" : "false",
                 rc
             );
         }

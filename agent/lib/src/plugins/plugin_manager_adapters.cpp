@@ -173,7 +173,7 @@ asio::awaitable<agentxx::util::ToolResult> PluginTool::execute_async(const utilx
 
 int PluginMount::registerTool(PluginInstance* inst, const AgentxxPluginToolSpec* spec) {
     if (!inst || !spec || agentxx::plugin::PluginStringView::empty(spec->name)) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     // 执行期复查：请求可能排在 IO 队列里，等执行时实例已进入 Closing/Disabled。
     if (!acceptsRegistration(inst)) {
@@ -185,38 +185,38 @@ int PluginMount::registerTool(PluginInstance* inst, const AgentxxPluginToolSpec*
             inst->lifetime ? pluginxx::pluginInstanceStateName(inst->lifetime->state())
                            : "no-lifetime"
         );
-        return -1;
+        return AGENTXX_RESULT_ERR_STATE;
     }
     std::string toolName{spec->name.data, spec->name.size};
 
     if (toolRegistry()->contains(toolName)) {
         XX_LOGW("ToolRegistry: tool `{}` conflicts with built-in tool", toolName);
-        return -1;
+        return AGENTXX_RESULT_ERR_CONFLICT;
     }
 
     auto shared = inst->self.lock();
     if (!shared) {
-        return -1;
+        return AGENTXX_RESULT_ERR_STATE;
     }
     auto tool = std::make_shared<PluginTool>(agent_, shared, *spec);
     if (!toolRegistry()->registerTool(toolName, tool)) {
-        return -1;
+        return AGENTXX_RESULT_ERR_CONFLICT;
     }
     entryOf(inst).tools.push_back(toolName);
     entryOf(inst).toolObjects.push_back(tool);
     XX_LOGI("Plugin `{}` registered tool `{}`", inst->name, toolName);
-    return 0;
+    return AGENTXX_RESULT_OK;
 }
 
 int PluginMount::unregisterTool(PluginInstance* inst, PluginxxStringView name) {
     if (!inst || agentxx::plugin::PluginStringView::empty(name)) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     std::string toolName = svToStr(name);
     auto        it = std::find(entryOf(inst).tools.begin(), entryOf(inst).tools.end(), toolName);
     if (it == entryOf(inst).tools.end()) {
         XX_LOGW("Plugin `{}` unregister tool `{}` not owned by this plugin", inst->name, toolName);
-        return -1;
+        return AGENTXX_RESULT_ERR_NOT_OWNER;
     }
     entryOf(inst).tools.erase(it);
     toolRegistry()->unregisterTool(toolName);
@@ -233,7 +233,7 @@ int PluginMount::unregisterTool(PluginInstance* inst, PluginxxStringView name) {
         entryOf(inst).toolObjects.end()
     );
     XX_LOGI("Plugin `{}` unregistered tool `{}`", inst->name, toolName);
-    return 0;
+    return AGENTXX_RESULT_OK;
 }
 
 int PluginMount::registerToolPermission(
@@ -241,7 +241,7 @@ int PluginMount::registerToolPermission(
     const AgentxxPluginToolPermissionSpec* spec
 ) {
     if (!inst || !spec || agentxx::plugin::PluginStringView::empty(spec->tool_name)) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     // 长度门槛: 0 = 基线布局, 低于基线一律拒绝 (见 plugin_spec.h)
     if (!agentxx::plugin::specSizeOk<AgentxxPluginToolPermissionSpec>(spec->struct_size)) {
@@ -250,7 +250,7 @@ int PluginMount::registerToolPermission(
             inst->name,
             static_cast<int>(spec->struct_size)
         );
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     // 执行期复查: 请求可能排在 IO 队列里, 等执行时实例已进入 Closing/Disabled。
     if (!acceptsRegistration(inst)) {
@@ -258,7 +258,7 @@ int PluginMount::registerToolPermission(
             "Plugin `{}` register tool permission rejected: instance is closing or disabled",
             inst->name
         );
-        return -1;
+        return AGENTXX_RESULT_ERR_STATE;
     }
     std::string toolName{spec->tool_name.data, spec->tool_name.size};
     // 只接受本实例注册过的工具: 防止插件为其他插件/内置工具声明权限
@@ -269,7 +269,7 @@ int PluginMount::registerToolPermission(
             inst->name,
             toolName
         );
-        return -1;
+        return AGENTXX_RESULT_ERR_NOT_OWNER;
     }
     auto* permission = permissionMiddleware();
     if (!permission) {
@@ -278,7 +278,7 @@ int PluginMount::registerToolPermission(
             inst->name,
             toolName
         );
-        return -1;
+        return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
 
     // C ABI 声明 -> 中间件声明 (枚举值非法时拒绝, 避免插件笔误静默生效)
@@ -297,7 +297,7 @@ int PluginMount::registerToolPermission(
                 toolName,
                 static_cast<int>(spec->scope)
             );
-            return -1;
+            return AGENTXX_RESULT_ERR_ARG;
     }
     switch (spec->target_kind) {
         case AGENTXX_PLUGIN_PERMISSION_TARGET_NONE:
@@ -316,7 +316,7 @@ int PluginMount::registerToolPermission(
                 toolName,
                 static_cast<int>(spec->target_kind)
             );
-            return -1;
+            return AGENTXX_RESULT_ERR_ARG;
     }
     if (!agentxx::plugin::PluginStringView::empty(spec->target_arg)) {
         decl.targetArgs.emplace_back(spec->target_arg.data, spec->target_arg.size);
@@ -334,12 +334,12 @@ int PluginMount::registerToolPermission(
         entryOf(inst).permissionTools.push_back(toolName);
     }
     XX_LOGI("Plugin `{}` registered tool permission for `{}`", inst->name, toolName);
-    return 0;
+    return AGENTXX_RESULT_OK;
 }
 
 int PluginMount::unregisterToolPermission(PluginInstance* inst, PluginxxStringView toolName) {
     if (!inst || agentxx::plugin::PluginStringView::empty(toolName)) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     std::string name = svToStr(toolName);
     auto        it   = std::find(
@@ -348,7 +348,7 @@ int PluginMount::unregisterToolPermission(PluginInstance* inst, PluginxxStringVi
         name
     );
     if (it == entryOf(inst).permissionTools.end()) {
-        return -1;
+        return AGENTXX_RESULT_ERR_NOT_FOUND;
     }
     entryOf(inst).permissionTools.erase(it);
     // 中间件未加载时无声明可撤销 (禁用/卸载阶段始终调用本函数做收尾)
@@ -356,7 +356,7 @@ int PluginMount::unregisterToolPermission(PluginInstance* inst, PluginxxStringVi
         permission->unregisterToolPermission(name);
     }
     XX_LOGI("Plugin `{}` unregistered tool permission for `{}`", inst->name, name);
-    return 0;
+    return AGENTXX_RESULT_OK;
 }
 
 int PluginMount::checkPermissionPaths(
@@ -367,7 +367,7 @@ int PluginMount::checkPermissionPaths(
     std::vector<int32_t>&           outDecisions
 ) {
     if (!inst || paths.empty()) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     size_t permissionScope = 0;
     switch (scope) {
@@ -385,12 +385,12 @@ int PluginMount::checkPermissionPaths(
                 inst->name,
                 static_cast<int>(scope)
             );
-            return -1;
+            return AGENTXX_RESULT_ERR_ARG;
     }
     // 权限中间件未加载: 无规则可判定, 返回失败让调用方跳过过滤 (按原行为处理)
     auto* permission = permissionMiddleware();
     if (!permission) {
-        return -1;
+        return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
     auto decisions = permission->decidePaths(paths, permissionScope, sessionId);
     outDecisions.clear();
@@ -408,7 +408,7 @@ int PluginMount::checkPermissionPaths(
                 break;
         }
     }
-    return 0;
+    return AGENTXX_RESULT_OK;
 }
 
 // =====================================================================
@@ -421,24 +421,24 @@ int PluginMount::registerGraphNodeType(
 ) {
     if (!inst || !spec || agentxx::plugin::PluginStringView::empty(spec->type)
         || !spec->run_start) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     if (!acceptsRegistration(inst)) {
         XX_LOGW(
             "Plugin `{}` registerGraphNodeType rejected: instance is closing or disabled",
             inst->name
         );
-        return -1;
+        return AGENTXX_RESULT_ERR_STATE;
     }
     auto ctx = agent_.lock();
     if (!ctx || !ctx->graphRegistry) {
         XX_LOGW("Plugin `{}` register graph node type: graphRegistry not ready", inst->name);
-        return -1;
+        return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
     std::string type{spec->type.data, spec->type.size};
     auto        shared = inst->self.lock();
     if (!shared) {
-        return -1;
+        return AGENTXX_RESULT_ERR_STATE;
     }
     auto slotIt = graphTypeSlots_.find(type);
     if (slotIt == graphTypeSlots_.end()) {
@@ -448,7 +448,7 @@ int PluginMount::registerGraphNodeType(
                 inst->name,
                 type
             );
-            return -1;
+            return AGENTXX_RESULT_ERR_CONFLICT;
         }
         slotIt = graphTypeSlots_.emplace(type, std::make_shared<GraphTypeSlot>()).first;
     }
@@ -464,7 +464,7 @@ int PluginMount::registerGraphNodeType(
             inst->name,
             type
         );
-        return -1;
+        return AGENTXX_RESULT_ERR_NOT_OWNER;
     }
     // 记录注册 (卸载/禁用时清理; 注册表本身无法删除类型, 清理仅移出实例表,
     // 已编译 engine 不受影响 —— 节点工厂持有 weak_ptr, 实例释放后创建即失败)
@@ -532,12 +532,12 @@ int PluginMount::registerGraphNodeType(
         );
     }
     XX_LOGI("Plugin `{}` registered graph node type `{}`", inst->name, type);
-    return 0;
+    return AGENTXX_RESULT_OK;
 }
 
 int PluginMount::unregisterGraphNodeType(PluginInstance* inst, PluginxxStringView type) {
     if (!inst || agentxx::plugin::PluginStringView::empty(type)) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     std::string typeStr = svToStr(type);
     auto        it      = std::find_if(
@@ -553,7 +553,7 @@ int PluginMount::unregisterGraphNodeType(PluginInstance* inst, PluginxxStringVie
             inst->name,
             typeStr
         );
-        return -1;
+        return AGENTXX_RESULT_ERR_NOT_OWNER;
     }
     if (it->slot) {
         it->slot->invalidate(inst);
@@ -562,7 +562,7 @@ int PluginMount::unregisterGraphNodeType(PluginInstance* inst, PluginxxStringVie
     // GraphRegistry 无删除 API: 仅移出实例注册表; 若引擎尚未编译 (插件加载
     // 阶段) 而类型已被替换/删除, 图编译引用该类型将失败 → 主程序回退默认图
     XX_LOGI("Plugin `{}` unregistered graph node type `{}`", inst->name, typeStr);
-    return 0;
+    return AGENTXX_RESULT_OK;
 }
 
 std::string PluginMount::getGraphJson() {
@@ -575,11 +575,11 @@ std::string PluginMount::getGraphJson() {
 
 int PluginMount::setGraphJson(PluginInstance* inst, PluginxxStringView graph_json) {
     if (!inst || agentxx::plugin::PluginStringView::empty(graph_json)) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     auto ctx = agent_.lock();
     if (!ctx) {
-        return -1;
+        return AGENTXX_RESULT_ERR_STATE;
     }
     // 独占 slot: 图定义同时只允许一个插件实例占用。
     // 两个插件交替覆盖时, 任何一方卸载都无法判断该恢复成哪一份定义;
@@ -591,13 +591,13 @@ int PluginMount::setGraphJson(PluginInstance* inst, PluginxxStringView graph_jso
             inst->name,
             graphDefinitionOwner_
         );
-        return -1;
+        return AGENTXX_RESULT_ERR_NOT_OWNER;
     }
     try {
         auto j = utilxx_base::Json::parse(std::string_view{graph_json.data, graph_json.size});
         if (!j.is_object()) {
             XX_LOGW("Plugin `{}` set_graph_json: not a JSON object", inst->name);
-            return -1;
+            return AGENTXX_RESULT_ERR_JSON;
         }
         if (graphDefinitionOwner_.empty()) {
             // 首次占用: 记住当前定义 (内置图或主程序/前一个占用者留下的定义),
@@ -613,10 +613,10 @@ int PluginMount::setGraphJson(PluginInstance* inst, PluginxxStringView graph_jso
             inst->name,
             graphDefinitionOwner_
         );
-        return 0;
+        return AGENTXX_RESULT_OK;
     } catch (const std::exception& e) {
         XX_LOGW("Plugin `{}` set_graph_json parse failed: {}", inst->name, e.what());
-        return -1;
+        return AGENTXX_RESULT_ERR_JSON;
     }
 }
 

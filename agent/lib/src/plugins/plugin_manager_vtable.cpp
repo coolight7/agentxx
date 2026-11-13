@@ -11,7 +11,6 @@
 #include "agentxx/plugin/plugin_interfaces.h"
 #include "agentxx/util/exception.h"
 #include "fmt/format.h"
-#include "utilxx/net_hub.h"
 #include "utilxx_base/json.h"
 #include "utilxx_base/log.h"
 
@@ -91,11 +90,11 @@ static PluginMount* mountIn(const PluginManager* mgr, const PluginxxScopeRef* ag
 
 /// 注册类入口解析失败时的统一返回值
 static int32_t noAgent() {
-    return AGENTXX_PLUGIN_ERR_NO_AGENT;
+    return AGENTXX_RESULT_ERR_NO_AGENT;
 }
 
 /// 解析挂载并执行; 解析失败时返回 `fail` 给出的失败值
-/// - 注册类传 [noAgent] (`AGENTXX_PLUGIN_ERR_NO_AGENT`)
+/// - 注册类传 [noAgent] (`AGENTXX_RESULT_ERR_NO_AGENT`)
 /// - 读取类传 `-1` / 空串 / 空句柄 (与"引用无效"的既有约定一致)
 template<typename Fail, typename Fn>
 static auto mountCall(const PluginManager* mgr, const PluginxxScopeRef* agent, Fail&& fail, Fn&& fn)
@@ -113,10 +112,10 @@ static auto mountCall(const PluginManager* mgr, const PluginxxScopeRef* agent, F
 ///   业务参数校验由 `fn` 自己完成, 失败返回非 0 状态码。
 template<typename Fn>
 static int32_t onInstanceIo(const PluginxxHost* host, Fn&& fn) {
-    return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
+    return agentxx::plugin::guardVtableCall(AGENTXX_RESULT_ERR_INTERNAL, [&]() -> int32_t {
         auto call = enterHost(host);
         if (!call.ok()) {
-            return -1;
+            return AGENTXX_RESULT_ERR_ARG;
         }
         auto keep = call; // 投递期间持实例/管理器强引用与 admission lease
         return ioCallSyncKeep<int32_t>(
@@ -134,12 +133,12 @@ static int32_t onInstanceIo(const PluginxxHost* host, Fn&& fn) {
 template<typename Fn>
 static int32_t queryStringIo(const PluginxxHost* host, PluginxxString* out, Fn&& fn) {
     if (!out) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
-    return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
+    return agentxx::plugin::guardVtableCall(AGENTXX_RESULT_ERR_INTERNAL, [&]() -> int32_t {
         auto call = enterHost(host, /*allowClosing=*/true);
         if (!call.ok()) {
-            return -1;
+            return AGENTXX_RESULT_ERR_ARG;
         }
         auto keep = call;
         auto text = ioCallSyncKeep<std::string>(
@@ -150,16 +149,16 @@ static int32_t queryStringIo(const PluginxxHost* host, PluginxxString* out, Fn&&
             }
         );
         if (text.empty()) {
-            return -1;
+            return AGENTXX_RESULT_ERR_NOT_FOUND;
         }
         hostMemorySetString(out, text);
-        return 0;
+        return AGENTXX_RESULT_OK;
     });
 }
 
 // C ABI 内存操作
 
-/// 带作用域校验的注册入口: 引用无效时直接返回 `AGENTXX_PLUGIN_ERR_NO_AGENT`
+/// 带作用域校验的注册入口: 引用无效时直接返回 `AGENTXX_RESULT_ERR_NO_AGENT`
 /// (不产生任何副作用)
 template<typename Fn>
 static int32_t
@@ -169,7 +168,7 @@ static int32_t
         [agent, fn = std::forward<Fn>(fn)](PluginInstance* inst, PluginManager* mgr) -> int32_t {
             if (!scopeOk(mgr, agent)) {
                 XX_LOGW("agentxx 注册接口: agent 引用无效, 请在 mount 里注册");
-                return AGENTXX_PLUGIN_ERR_NO_AGENT;
+                return AGENTXX_RESULT_ERR_NO_AGENT;
             }
             return fn(inst, mgr);
         }
@@ -208,20 +207,20 @@ static int32_t PLUGINXX_CALL xx_register_tool(
     const PluginxxScopeRef*      agent,
     const AgentxxPluginToolSpec* spec
 ) {
-    return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
+    return agentxx::plugin::guardVtableCall(AGENTXX_RESULT_ERR_INTERNAL, [&]() -> int32_t {
         auto call = enterHost(host);
         auto mgr  = call.manager();
         auto inst = call.instance();
         if (!mgr || !inst || !spec || agentxx::plugin::PluginStringView::empty(&spec->name)) {
-            return -1;
+            return AGENTXX_RESULT_ERR_ARG;
         }
         if (!scopeOk(mgr, agent)) {
             XX_LOGW("agentxx.agent.tools.register_tool: 引用无效, 请在 mount 里注册");
-            return AGENTXX_PLUGIN_ERR_NO_AGENT;
+            return AGENTXX_RESULT_ERR_NO_AGENT;
         }
         // 长度门槛: 0 = 基线布局, 低于基线一律拒绝 (见 plugin_spec.h)
         if (!specSizeOk<AgentxxPluginToolSpec>(spec->struct_size)) {
-            return -1;
+            return AGENTXX_RESULT_ERR_ARG;
         }
         auto                  mgrPtr   = mgr;
         auto                  instPtr  = inst;
@@ -240,12 +239,12 @@ static int32_t PLUGINXX_CALL xx_unregister_tool(
     const PluginxxStringView* name
 ) {
     if (agentxx::plugin::PluginStringView::empty(name)) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     auto nameValCopy = *name;
     return onInstanceIo(host, [nameValCopy, agent](PluginInstance* inst, PluginManager* mgr) {
         if (!scopeOk(mgr, agent)) {
-            return static_cast<int32_t>(AGENTXX_PLUGIN_ERR_NO_AGENT);
+            return static_cast<int32_t>(AGENTXX_RESULT_ERR_NO_AGENT);
         }
         return mountCall(mgr, agent, noAgent, [inst, nameValCopy](PluginMount& mount) {
             return mount.unregisterTool(inst, nameValCopy);
@@ -258,15 +257,15 @@ static int32_t PLUGINXX_CALL xx_register_tool_permission(
     const PluginxxScopeRef*                agent,
     const AgentxxPluginToolPermissionSpec* spec
 ) {
-    return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
+    return agentxx::plugin::guardVtableCall(AGENTXX_RESULT_ERR_INTERNAL, [&]() -> int32_t {
         auto call = enterHost(host);
         auto mgr  = call.manager();
         auto inst = call.instance();
         if (!mgr || !inst || !spec || agentxx::plugin::PluginStringView::empty(&spec->tool_name)) {
-            return -1;
+            return AGENTXX_RESULT_ERR_ARG;
         }
         if (!scopeOk(mgr, agent)) {
-            return AGENTXX_PLUGIN_ERR_NO_AGENT;
+            return AGENTXX_RESULT_ERR_NO_AGENT;
         }
         auto mgrPtr  = mgr;
         auto instPtr = inst;
@@ -306,12 +305,12 @@ static int32_t PLUGINXX_CALL xx_unregister_tool_permission(
     const PluginxxStringView* tool_name
 ) {
     if (agentxx::plugin::PluginStringView::empty(tool_name)) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     auto nameValCopy = *tool_name;
     return onInstanceIo(host, [nameValCopy, agent](PluginInstance* inst, PluginManager* mgr) {
         if (!scopeOk(mgr, agent)) {
-            return static_cast<int32_t>(AGENTXX_PLUGIN_ERR_NO_AGENT);
+            return static_cast<int32_t>(AGENTXX_RESULT_ERR_NO_AGENT);
         }
         return mountCall(mgr, agent, noAgent, [inst, nameValCopy](PluginMount& mount) {
             return mount.unregisterToolPermission(inst, nameValCopy);
@@ -330,14 +329,14 @@ static int32_t PLUGINXX_CALL xx_check_paths(
     int32_t*                                out_decisions
 ) {
     if (!query || !out_decisions || !query->paths || query->path_count <= 0) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     if (query->path_count > kPermissionCheckPathsMax) {
-        return -1;
+        return AGENTXX_RESULT_ERR_LIMIT;
     }
     // 长度门槛: 0 = 基线布局, 低于基线一律拒绝 (见 plugin_spec.h)
     if (!agentxx::plugin::specSizeOk<AgentxxPluginPermissionPathQuery>(query->struct_size)) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     // 入参按值复制后交给 io 线程执行 (跨边界视图只在本次调用期间有效)
     auto paths = std::make_shared<std::vector<std::string>>();
@@ -351,16 +350,16 @@ static int32_t PLUGINXX_CALL xx_check_paths(
         static_cast<size_t>(query->session_id.size)
     );
     const int32_t scope = query->scope;
-    return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
+    return agentxx::plugin::guardVtableCall(AGENTXX_RESULT_ERR_INTERNAL, [&]() -> int32_t {
         // 只读查询: 允许关闭中调用 (实例收尾时其工具仍可能在执行)
         auto call = enterHost(host, /*allowClosing=*/true);
         auto mgr  = call.manager();
         auto inst = call.instance();
         if (!mgr || !inst) {
-            return -1;
+            return AGENTXX_RESULT_ERR_STATE;
         }
         if (!scopeOk(mgr, agent)) {
-            return AGENTXX_PLUGIN_ERR_NO_AGENT;
+            return AGENTXX_RESULT_ERR_NO_AGENT;
         }
         auto                 mgrPtr  = mgr;
         auto                 instPtr = inst;
@@ -380,11 +379,11 @@ static int32_t PLUGINXX_CALL xx_check_paths(
                 });
             }
         );
-        if (rc != 0 || decisions.size() != paths->size()) {
-            return -1;
+        if (rc != AGENTXX_RESULT_OK || decisions.size() != paths->size()) {
+            return rc != AGENTXX_RESULT_OK ? rc : AGENTXX_RESULT_ERR_INTERNAL;
         }
         std::copy(decisions.begin(), decisions.end(), out_decisions);
-        return 0;
+        return AGENTXX_RESULT_OK;
     });
 }
 
@@ -404,7 +403,7 @@ static int32_t PLUGINXX_CALL xx_mount_get(
     PluginxxString*           out
 ) {
     if (agentxx::plugin::PluginStringView::empty(agent_id)) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     auto idStr = std::string(agent_id->data, static_cast<size_t>(agent_id->size));
     return queryStringIo(host, out, [idStr](PluginInstance*, PluginManager* mgr) {
@@ -465,18 +464,18 @@ static int32_t PLUGINXX_CALL xx_get_share_store(
     int64_t                   id,
     PluginxxString*           out
 ) {
-    return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
+    return agentxx::plugin::guardVtableCall(AGENTXX_RESULT_ERR_INTERNAL, [&]() -> int32_t {
         if (!out) {
-            return -1;
+            return AGENTXX_RESULT_ERR_ARG;
         }
         auto call = enterHost(host, /*allowClosing=*/true);
         auto mgr  = call.manager();
         auto inst = call.instance();
         if (!mgr || !inst || agentxx::plugin::PluginStringView::empty(session_id)) {
-            return -1;
+            return AGENTXX_RESULT_ERR_ARG;
         }
         if (!scopeOk(mgr, agent)) {
-            return -1;
+            return AGENTXX_RESULT_ERR_NO_AGENT;
         }
         auto mgrPtr  = mgr;
         auto instPtr = inst;
@@ -495,7 +494,7 @@ static int32_t PLUGINXX_CALL xx_get_share_store(
                 );
             }
         );
-        return (out->data != nullptr) ? 0 : -1;
+        return (out->data != nullptr) ? AGENTXX_RESULT_OK : AGENTXX_RESULT_ERR_NOT_FOUND;
     });
 }
 
@@ -603,18 +602,18 @@ static int32_t PLUGINXX_CALL xx_context_get_messages(
     const PluginxxStringView* session_id,
     PluginxxString*           out
 ) {
-    return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
+    return agentxx::plugin::guardVtableCall(AGENTXX_RESULT_ERR_INTERNAL, [&]() -> int32_t {
         if (!out) {
-            return -1;
+            return AGENTXX_RESULT_ERR_ARG;
         }
         auto call = enterHost(host, /*allowClosing=*/true);
         auto mgr  = call.manager();
         auto inst = call.instance();
         if (!mgr || !inst || agentxx::plugin::PluginStringView::empty(session_id)) {
-            return -1;
+            return AGENTXX_RESULT_ERR_ARG;
         }
         if (!scopeOk(mgr, agent)) {
-            return -1;
+            return AGENTXX_RESULT_ERR_NO_AGENT;
         }
         auto mgrPtr = mgr;
         auto sid    = *session_id;
@@ -626,7 +625,7 @@ static int32_t PLUGINXX_CALL xx_context_get_messages(
                 [sid](PluginMount& mount) { return mount.getSessionMessages(sid); }
             );
         });
-        return (out->data != nullptr) ? 0 : -1;
+        return (out->data != nullptr) ? AGENTXX_RESULT_OK : AGENTXX_RESULT_ERR_NOT_FOUND;
     });
 }
 
@@ -700,20 +699,20 @@ static void PLUGINXX_CALL xx_emit_message_tip(
 
 static int32_t PLUGINXX_CALL
     xx_register_node_type(const PluginxxHost* host, const PluginxxScopeRef* agent, const AgentxxPluginGraphNodeTypeSpec* spec) {
-    return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
+    return agentxx::plugin::guardVtableCall(AGENTXX_RESULT_ERR_INTERNAL, [&]() -> int32_t {
         auto call = enterHost(host);
         auto mgr  = call.manager();
         auto inst = call.instance();
         if (!mgr || !inst || !spec || agentxx::plugin::PluginStringView::empty(&spec->type)
             || !spec->run_start) {
-            return -1;
+            return AGENTXX_RESULT_ERR_ARG;
         }
         if (!scopeOk(mgr, agent)) {
-            return AGENTXX_PLUGIN_ERR_NO_AGENT;
+            return AGENTXX_RESULT_ERR_NO_AGENT;
         }
         // 长度门槛: 0 = 基线布局, 低于基线一律拒绝 (见 plugin_spec.h)
         if (!specSizeOk<AgentxxPluginGraphNodeTypeSpec>(spec->struct_size)) {
-            return -1;
+            return AGENTXX_RESULT_ERR_ARG;
         }
         auto                           mgrPtr   = mgr;
         auto                           instPtr  = inst;
@@ -733,18 +732,18 @@ static int32_t PLUGINXX_CALL xx_get_graph_json(
     const PluginxxScopeRef* agent,
     PluginxxString*         out
 ) {
-    return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
+    return agentxx::plugin::guardVtableCall(AGENTXX_RESULT_ERR_INTERNAL, [&]() -> int32_t {
         if (!out) {
-            return -1;
+            return AGENTXX_RESULT_ERR_ARG;
         }
         auto call = enterHost(host, /*allowClosing=*/true);
         auto mgr  = call.manager();
         auto inst = call.instance();
         if (!mgr || !inst) {
-            return -1;
+            return AGENTXX_RESULT_ERR_STATE;
         }
         if (!scopeOk(mgr, agent)) {
-            return -1;
+            return AGENTXX_RESULT_ERR_NO_AGENT;
         }
         auto mgrPtr = mgr;
         auto json   = ioCallSyncKeep<std::string>(call, mgrPtr, [mgrPtr, agent]() -> std::string {
@@ -752,10 +751,10 @@ static int32_t PLUGINXX_CALL xx_get_graph_json(
             return mount != nullptr ? mount->getGraphJson() : std::string{};
         });
         if (json.empty()) {
-            return -1;
+            return AGENTXX_RESULT_ERR_NOT_FOUND;
         }
         hostMemorySetString(out, json);
-        return 0;
+        return AGENTXX_RESULT_OK;
     });
 }
 
@@ -764,18 +763,18 @@ static int32_t PLUGINXX_CALL xx_get_graph_name(
     const PluginxxScopeRef* agent,
     PluginxxString*         out
 ) {
-    return agentxx::plugin::guardVtableCall(-1, [&]() -> int32_t {
+    return agentxx::plugin::guardVtableCall(AGENTXX_RESULT_ERR_INTERNAL, [&]() -> int32_t {
         if (!out) {
-            return -1;
+            return AGENTXX_RESULT_ERR_ARG;
         }
         auto call = enterHost(host, /*allowClosing=*/true);
         auto mgr  = call.manager();
         auto inst = call.instance();
         if (!mgr || !inst) {
-            return -1;
+            return AGENTXX_RESULT_ERR_STATE;
         }
         if (!scopeOk(mgr, agent)) {
-            return -1;
+            return AGENTXX_RESULT_ERR_NO_AGENT;
         }
         auto mgrPtr = mgr;
         auto name   = ioCallSyncKeep<std::string>(call, mgrPtr, [mgrPtr, agent]() -> std::string {
@@ -794,7 +793,7 @@ static int32_t PLUGINXX_CALL xx_get_graph_name(
             return result;
         });
         hostMemorySetString(out, name);
-        return 0;
+        return AGENTXX_RESULT_OK;
     });
 }
 
@@ -804,7 +803,7 @@ static int32_t PLUGINXX_CALL xx_unregister_node_type(
     const PluginxxStringView* type
 ) {
     if (agentxx::plugin::PluginStringView::empty(type)) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     auto typeCopy = *type;
     return onScopedInstanceIo(host, agent, [agent, typeCopy](PluginInstance* inst, PluginManager* mgr) {
@@ -820,7 +819,7 @@ static int32_t PLUGINXX_CALL xx_set_graph_json(
     const PluginxxStringView* graph_json
 ) {
     if (agentxx::plugin::PluginStringView::empty(graph_json)) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     auto jsonValCopy = *graph_json;
     return onScopedInstanceIo(host, agent, [agent, jsonValCopy](PluginInstance* inst, PluginManager* mgr) {
@@ -844,7 +843,7 @@ static int32_t PLUGINXX_CALL xx_set_prompt(
     const PluginxxStringView* prompt_json
 ) {
     if (agentxx::plugin::PluginStringView::empty(prompt_json)) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     auto pJsonCopy = *prompt_json;
     return onScopedInstanceIo(host, agent, [agent, pJsonCopy](PluginInstance* inst, PluginManager* mgr) {
@@ -860,7 +859,7 @@ static int32_t PLUGINXX_CALL xx_prompt_tool(
     PluginxxString*           out
 ) {
     if (agentxx::plugin::PluginStringView::empty(tool_name)) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     // 工具提示词是主程序级配置 (与具体 agent 无关), 不取作用域引用
     auto name = svToStr(tool_name);
@@ -882,7 +881,7 @@ static int32_t PLUGINXX_CALL xx_register_skill_dir(
     const PluginxxStringView* path
 ) {
     if (agentxx::plugin::PluginStringView::empty(path)) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     auto pathValCopy = *path;
     return onScopedInstanceIo(host, agent, [agent, pathValCopy](PluginInstance* inst, PluginManager* mgr) {
@@ -898,7 +897,7 @@ static int32_t PLUGINXX_CALL xx_unregister_skill_dir(
     const PluginxxStringView* path
 ) {
     if (agentxx::plugin::PluginStringView::empty(path)) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     auto pathValCopy = *path;
     return onScopedInstanceIo(host, agent, [agent, pathValCopy](PluginInstance* inst, PluginManager* mgr) {
@@ -914,7 +913,7 @@ static int32_t PLUGINXX_CALL xx_register_memory_file(
     const PluginxxStringView* path
 ) {
     if (agentxx::plugin::PluginStringView::empty(path)) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     auto pathValCopy = *path;
     return onScopedInstanceIo(host, agent, [agent, pathValCopy](PluginInstance* inst, PluginManager* mgr) {
@@ -930,7 +929,7 @@ static int32_t PLUGINXX_CALL xx_unregister_memory_file(
     const PluginxxStringView* path
 ) {
     if (agentxx::plugin::PluginStringView::empty(path)) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     auto pathValCopy = *path;
     return onScopedInstanceIo(host, agent, [agent, pathValCopy](PluginInstance* inst, PluginManager* mgr) {
@@ -946,7 +945,7 @@ static int32_t PLUGINXX_CALL xx_register_mcp_server(
     const PluginxxStringView* spec_json
 ) {
     if (agentxx::plugin::PluginStringView::empty(spec_json)) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     auto specValCopy = *spec_json;
     return onScopedInstanceIo(host, agent, [agent, specValCopy](PluginInstance* inst, PluginManager* mgr) {
@@ -962,7 +961,7 @@ static int32_t PLUGINXX_CALL xx_unregister_mcp_server(
     const PluginxxStringView* name_space
 ) {
     if (agentxx::plugin::PluginStringView::empty(name_space)) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     auto nsValCopy = *name_space;
     return onScopedInstanceIo(host, agent, [agent, nsValCopy](PluginInstance* inst, PluginManager* mgr) {
@@ -1064,7 +1063,7 @@ static int32_t PLUGINXX_CALL xx_runtime_mount_root(
 ) {
     if (!spec || !out_root_id
         || !agentxx::plugin::specSizeOk<AgentxxPluginMountRootSpec>(spec->struct_size)) {
-        return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     // 入参按值拷一份: 跨边界视图只在本次调用期间有效, 投递到 IO 线程后原视图可能已失效
     AgentxxPluginMountRootSpec specCopy = *spec;
@@ -1085,22 +1084,22 @@ static int32_t PLUGINXX_CALL xx_runtime_mount_root(
     owned->spec.config_json  = PluginStringView::from(std::string_view{owned->config});
     owned->spec.mount_plugins = PluginStringView::from(std::string_view{owned->mounts});
 
-    return agentxx::plugin::guardVtableCall(AGENTXX_PLUGIN_RUNTIME_ERR_STATE, [&]() -> int32_t {
+    return agentxx::plugin::guardVtableCall(AGENTXX_RESULT_ERR_STATE, [&]() -> int32_t {
         auto call = enterHost(host);
         if (!call.ok()) {
-            return AGENTXX_PLUGIN_RUNTIME_ERR_STATE;
+            return AGENTXX_RESULT_ERR_STATE;
         }
         auto       keep  = call;
         std::string rootId;
         const auto rc = ioCallSyncKeep<int32_t>(keep, keep.manager(), [keep, owned, &rootId]() {
             std::string err;
             const auto  value = keep.manager()->runtimeMountRoot(keep.instance(), &owned->spec, rootId, err);
-            if (value != AGENTXX_PLUGIN_RUNTIME_OK) {
+            if (value != AGENTXX_RESULT_OK) {
                 XX_LOGW("[runtime] mount_root 被拒 ({}): {}", value, err);
             }
             return value;
         });
-        if (rc == AGENTXX_PLUGIN_RUNTIME_OK) {
+        if (rc == AGENTXX_RESULT_OK) {
             // 主程序堆字符串: 插件侧用完由 PluginString::free 释放
             hostMemorySetString(out_root_id, rootId);
         }
@@ -1113,7 +1112,7 @@ static int32_t PLUGINXX_CALL xx_runtime_unmount_root(
     const PluginxxStringView* root_id
 ) {
     if (agentxx::plugin::PluginStringView::empty(root_id)) {
-        return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     auto id = svText(root_id);
     return onInstanceIo(host, [id](PluginInstance* inst, PluginManager* mgr) -> int32_t {
@@ -1128,7 +1127,7 @@ static int32_t PLUGINXX_CALL xx_runtime_open_channel(
 ) {
     if (!spec || !out_channel_id
         || !agentxx::plugin::specSizeOk<AgentxxPluginChannelSpec>(spec->struct_size)) {
-        return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     // 拷贝字符串视图 (投递到 IO 线程后调用方内存可能已失效)
     struct OwnedChannelSpec {
@@ -1149,10 +1148,10 @@ static int32_t PLUGINXX_CALL xx_runtime_open_channel(
     owned->spec.title     = PluginStringView::from(std::string_view{owned->title});
     owned->spec.model     = PluginStringView::from(std::string_view{owned->model});
 
-    return agentxx::plugin::guardVtableCall(AGENTXX_PLUGIN_RUNTIME_ERR_STATE, [&]() -> int32_t {
+    return agentxx::plugin::guardVtableCall(AGENTXX_RESULT_ERR_STATE, [&]() -> int32_t {
         auto call = enterHost(host);
         if (!call.ok()) {
-            return AGENTXX_PLUGIN_RUNTIME_ERR_STATE;
+            return AGENTXX_RESULT_ERR_STATE;
         }
         auto keep = call;
         int64_t channelId = 0;
@@ -1164,12 +1163,12 @@ static int32_t PLUGINXX_CALL xx_runtime_open_channel(
                 &channelId,
                 err
             );
-            if (value != AGENTXX_PLUGIN_RUNTIME_OK) {
+            if (value != AGENTXX_RESULT_OK) {
                 XX_LOGW("[runtime] open_channel 被拒 ({}): {}", value, err);
             }
             return value;
         });
-        if (rc == AGENTXX_PLUGIN_RUNTIME_OK) {
+        if (rc == AGENTXX_RESULT_OK) {
             *out_channel_id = channelId;
         }
         return rc;
@@ -1193,7 +1192,7 @@ static int32_t PLUGINXX_CALL xx_runtime_send_input(
         [channel_id, input = std::move(input)](PluginInstance* inst, PluginManager* mgr) -> int32_t {
             std::string err;
             const auto  rc = mgr->runtimeSendInput(inst, channel_id, input, err);
-            if (rc != AGENTXX_PLUGIN_RUNTIME_OK) {
+            if (rc != AGENTXX_RESULT_OK) {
                 XX_LOGW("[runtime] send_input 被拒 ({}): {}", rc, err);
             }
             return rc;
@@ -1236,7 +1235,7 @@ static int32_t PLUGINXX_CALL xx_runtime_respond_interrupt(
         ) -> int32_t {
             std::string err;
             const auto  rc = mgr->runtimeRespondInterrupt(inst, channel_id, interrupt_id, values, err);
-            if (rc != AGENTXX_PLUGIN_RUNTIME_OK) {
+            if (rc != AGENTXX_RESULT_OK) {
                 XX_LOGW("[runtime] respond_interrupt 被拒 ({}): {}", rc, err);
             }
             return rc;
@@ -1275,7 +1274,7 @@ static int32_t PLUGINXX_CALL xx_runtime_register_trigger(
 ) {
     if (!spec || !out_trigger_id
         || !agentxx::plugin::specSizeOk<AgentxxPluginTriggerSpec>(spec->struct_size)) {
-        return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     struct OwnedTriggerSpec {
         std::string             topic;
@@ -1289,10 +1288,10 @@ static int32_t PLUGINXX_CALL xx_runtime_register_trigger(
     owned->spec.topic    = PluginStringView::from(std::string_view{owned->topic});
     owned->spec.delivery = PluginStringView::from(std::string_view{owned->delivery});
 
-    return agentxx::plugin::guardVtableCall(AGENTXX_PLUGIN_RUNTIME_ERR_STATE, [&]() -> int32_t {
+    return agentxx::plugin::guardVtableCall(AGENTXX_RESULT_ERR_STATE, [&]() -> int32_t {
         auto call = enterHost(host);
         if (!call.ok()) {
-            return AGENTXX_PLUGIN_RUNTIME_ERR_STATE;
+            return AGENTXX_RESULT_ERR_STATE;
         }
         auto     keep      = call;
         int64_t  triggerId = 0;
@@ -1304,12 +1303,12 @@ static int32_t PLUGINXX_CALL xx_runtime_register_trigger(
                 &triggerId,
                 err
             );
-            if (value != AGENTXX_PLUGIN_RUNTIME_OK) {
+            if (value != AGENTXX_RESULT_OK) {
                 XX_LOGW("[runtime] register_trigger 被拒 ({}): {}", value, err);
             }
             return value;
         });
-        if (rc == AGENTXX_PLUGIN_RUNTIME_OK) {
+        if (rc == AGENTXX_RESULT_OK) {
             *out_trigger_id = triggerId;
         }
         return rc;
@@ -1346,7 +1345,7 @@ static int32_t PLUGINXX_CALL xx_runtime_register_timer(
 ) {
     if (!spec || !out_timer_id
         || !agentxx::plugin::specSizeOk<AgentxxPluginTimerSpec>(spec->struct_size)) {
-        return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     struct OwnedTimerSpec {
         std::string           input;
@@ -1357,10 +1356,10 @@ static int32_t PLUGINXX_CALL xx_runtime_register_timer(
     owned->spec        = *spec;
     owned->spec.input_json = PluginStringView::from(std::string_view{owned->input});
 
-    return agentxx::plugin::guardVtableCall(AGENTXX_PLUGIN_RUNTIME_ERR_STATE, [&]() -> int32_t {
+    return agentxx::plugin::guardVtableCall(AGENTXX_RESULT_ERR_STATE, [&]() -> int32_t {
         auto call = enterHost(host);
         if (!call.ok()) {
-            return AGENTXX_PLUGIN_RUNTIME_ERR_STATE;
+            return AGENTXX_RESULT_ERR_STATE;
         }
         auto      keep    = call;
         int64_t   timerId = 0;
@@ -1368,12 +1367,12 @@ static int32_t PLUGINXX_CALL xx_runtime_register_timer(
             std::string err;
             const auto  value
                 = keep.manager()->runtimeRegisterTimer(keep.instance(), &owned->spec, &timerId, err);
-            if (value != AGENTXX_PLUGIN_RUNTIME_OK) {
+            if (value != AGENTXX_RESULT_OK) {
                 XX_LOGW("[runtime] register_timer 被拒 ({}): {}", value, err);
             }
             return value;
         });
-        if (rc == AGENTXX_PLUGIN_RUNTIME_OK) {
+        if (rc == AGENTXX_RESULT_OK) {
             *out_timer_id = timerId;
         }
         return rc;
@@ -1441,7 +1440,7 @@ static int32_t PLUGINXX_CALL xx_runtime_submit_async_work(
 ) {
     if (!spec || !out_async_id
         || !agentxx::plugin::specSizeOk<AgentxxPluginAsyncWorkSpec>(spec->struct_size)) {
-        return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     const auto text = [](const PluginxxStringView& view) { return pluginxx::svToStr(&view); };
 
@@ -1468,12 +1467,12 @@ static int32_t PLUGINXX_CALL xx_runtime_submit_async_work(
         std::string       toolErr;
         if (!parseSpecJson(spec->tool_args_json, toolArgs, toolErr, "tool_args_json")) {
             XX_LOGW("[runtime] submit_async_work 被拒: {}", toolErr);
-            return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+            return AGENTXX_RESULT_ERR_ARG;
         }
         if (!toolArgs.is_null()) {
             if (!toolArgs.is_object()) {
                 XX_LOGW("[runtime] submit_async_work 被拒: `tool_args_json` must be a JSON object");
-                return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+                return AGENTXX_RESULT_ERR_ARG;
             }
             work.toolArgs = std::move(toolArgs);
         }
@@ -1502,24 +1501,24 @@ static int32_t PLUGINXX_CALL xx_runtime_submit_async_work(
     std::vector<std::string> list;
     if (!parseSpecJson(spec->tools_json, json, err, "tools_json")) {
         XX_LOGW("[runtime] submit_async_work 被拒: {}", err);
-        return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     if (!json.is_null()) {
         if (!json.is_array()) {
             XX_LOGW("[runtime] submit_async_work 被拒: `tools_json` must be a JSON array");
-            return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+            return AGENTXX_RESULT_ERR_ARG;
         }
         work.tools = json;
     }
     json = utilxx_base::Json{};
     if (!parseSpecJson(spec->plugins_json, json, err, "plugins_json")) {
         XX_LOGW("[runtime] submit_async_work 被拒: {}", err);
-        return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     if (!json.is_null()) {
         if (!json.is_object()) {
             XX_LOGW("[runtime] submit_async_work 被拒: `plugins_json` must be a JSON object");
-            return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+            return AGENTXX_RESULT_ERR_ARG;
         }
         work.plugins = json;
     }
@@ -1541,14 +1540,14 @@ static int32_t PLUGINXX_CALL xx_runtime_submit_async_work(
         json = utilxx_base::Json{};
         if (!parseSpecJson(*field.view, json, err, field.name)) {
             XX_LOGW("[runtime] submit_async_work 被拒: {}", err);
-            return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+            return AGENTXX_RESULT_ERR_ARG;
         }
         if (json.is_null() || (json.is_array() && json.empty())) {
             continue;
         }
         if (!specStringList(json, *field.target, err, field.name)) {
             XX_LOGW("[runtime] submit_async_work 被拒: {}", err);
-            return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+            return AGENTXX_RESULT_ERR_ARG;
         }
     }
     (void)list;
@@ -1571,7 +1570,7 @@ static int32_t PLUGINXX_CALL xx_runtime_submit_async_work(
         host,
         [specPtr, result](PluginInstance* inst, PluginManager* mgr) -> int32_t {
             auto outcome = mgr->runtimeSubmitAsyncWork(inst, std::move(*specPtr));
-            if (outcome.code != AGENTXX_PLUGIN_RUNTIME_OK) {
+            if (outcome.code != AGENTXX_RESULT_OK) {
                 XX_LOGW(
                     "[runtime] submit_async_work 被拒 ({}): {}",
                     outcome.code,
@@ -1580,10 +1579,10 @@ static int32_t PLUGINXX_CALL xx_runtime_submit_async_work(
                 return outcome.code;
             }
             *result = outcome.asyncId;
-            return AGENTXX_PLUGIN_RUNTIME_OK;
+            return AGENTXX_RESULT_OK;
         }
     );
-    if (rc == AGENTXX_PLUGIN_RUNTIME_OK && !result->empty()) {
+    if (rc == AGENTXX_RESULT_OK && !result->empty()) {
         hostMemorySetString(out_async_id, *result);
     }
     return rc;
@@ -1668,12 +1667,12 @@ static int32_t PLUGINXX_CALL xx_net_call(
     const PluginxxStringView* args_json,
     PluginxxString*           out_json
 ) {
-    return agentxx::plugin::guardVtableCall(utilxx::net::ErrInternal, [&]() -> int32_t {
+    return agentxx::plugin::guardVtableCall(PLUGINXX_RESULT_ERR_INTERNAL, [&]() -> int32_t {
         auto call = enterHost(host);
         auto mgr  = call.manager();
         auto inst = call.instance();
         if (!mgr || !inst || agentxx::plugin::PluginStringView::empty(op)) {
-            return utilxx::net::ErrArg;
+            return PLUGINXX_RESULT_ERR_ARG;
         }
         const std::string opStr{op->data, static_cast<size_t>(op->size)};
         const std::string argsStr
@@ -1682,9 +1681,9 @@ static int32_t PLUGINXX_CALL xx_net_call(
                   : std::string{"{}"};
         std::string       result;
         const int32_t     rc = mgr->netCall(inst->name, opStr, argsStr, &result);
-        if (rc == utilxx::net::Ok && out_json != nullptr) {
+        if (rc == PLUGINXX_RESULT_OK && out_json != nullptr) {
             hostMemorySetString(out_json, result);
-        } else if (rc != utilxx::net::Ok && out_json != nullptr && !result.empty()) {
+        } else if (rc != PLUGINXX_RESULT_OK && out_json != nullptr && !result.empty()) {
             // 失败但带了可读原因: 平台侧只看结果码, 这里顺手把原因写出来便于排查
             hostMemorySetString(out_json, result);
         }
@@ -1701,13 +1700,13 @@ static int32_t PLUGINXX_CALL xx_net_call_async(
     PluginxxString*               out_json,
     int64_t*                      out_request_id
 ) {
-    return agentxx::plugin::guardVtableCall(utilxx::net::ErrInternal, [&]() -> int32_t {
+    return agentxx::plugin::guardVtableCall(PLUGINXX_RESULT_ERR_INTERNAL, [&]() -> int32_t {
         auto call = enterHost(host);
         auto mgr  = call.manager();
         auto inst = call.instance();
         if (!mgr || !inst || agentxx::plugin::PluginStringView::empty(op) || !notify
             || !notify->done) {
-            return utilxx::net::ErrArg;
+            return PLUGINXX_RESULT_ERR_ARG;
         }
         const std::string opStr{op->data, static_cast<size_t>(op->size)};
         const std::string argsStr
@@ -1734,7 +1733,7 @@ static int32_t PLUGINXX_CALL xx_net_call_async(
             &requestId,
             std::weak_ptr<PluginInstance>(inst->sharedSelf<PluginInstance>())
         );
-        if (rc != utilxx::net::Ok) {
+        if (rc != PLUGINXX_RESULT_OK) {
             if (out_json != nullptr && !accepted.empty()) {
                 hostMemorySetString(out_json, accepted);
             }
@@ -1756,12 +1755,12 @@ static int32_t PLUGINXX_CALL xx_net_cancel(
     int64_t             request_id,
     PluginxxString*     out_json
 ) {
-    return agentxx::plugin::guardVtableCall(utilxx::net::ErrInternal, [&]() -> int32_t {
+    return agentxx::plugin::guardVtableCall(PLUGINXX_RESULT_ERR_INTERNAL, [&]() -> int32_t {
         auto call = enterHost(host, /*allowClosing=*/true);
         auto mgr  = call.manager();
         auto inst = call.instance();
         if (!mgr || !inst || request_id <= 0) {
-            return utilxx::net::ErrArg;
+            return PLUGINXX_RESULT_ERR_ARG;
         }
         std::string   result;
         const int32_t rc = mgr->netCancel(inst->name, request_id, &result);
@@ -1862,135 +1861,135 @@ static std::shared_ptr<agentxx::agent::AgentResourceApplier> getResourceApplier(
 
 int PluginMount::registerSkillDir(PluginInstance* inst, PluginxxStringView path) {
     if (!inst || agentxx::plugin::PluginStringView::empty(&path)) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     if (!acceptsRegistration(inst)) {
         XX_LOGW(
             "Plugin `{}` registerSkillDir rejected: instance is closing or disabled",
             inst->name
         );
-        return -1;
+        return AGENTXX_RESULT_ERR_STATE;
     }
     if (resourcesFrozen(inst)) {
         XX_LOGW(
             "Plugin `{}` registerSkillDir rejected: resources frozen (immutable after init)",
             inst->name
         );
-        return -1;
+        return AGENTXX_RESULT_ERR_STATE;
     }
     auto ap = getResourceApplier(agent_, "register_skill_dir");
     if (!ap) {
-        return -1;
+        return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
     std::string pathStr = svToStr(path);
     std::string err;
     if (!ap->addSkillDir(inst->name, pathStr, err)) {
         XX_LOGW("Plugin `{}` register skill dir failed: {}", inst->name, err);
-        return -1;
+        return AGENTXX_RESULT_ERR_FAILED;
     }
     XX_LOGI("Plugin `{}` registered skill dir `{}`", inst->name, pathStr);
-    return 0;
+    return AGENTXX_RESULT_OK;
 }
 
 int PluginMount::unregisterSkillDir(PluginInstance* inst, PluginxxStringView path) {
     if (!inst || agentxx::plugin::PluginStringView::empty(&path)) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     if (resourcesFrozen(inst)) {
         XX_LOGW(
             "Plugin `{}` unregisterSkillDir rejected: resources frozen (immutable after init)",
             inst->name
         );
-        return -1;
+        return AGENTXX_RESULT_ERR_STATE;
     }
     auto ap = getResourceApplier(agent_, "unregister_skill_dir");
     if (!ap) {
-        return -1;
+        return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
     std::string pathStr = svToStr(path);
     if (!ap->removeSkillDir(inst->name, pathStr)) {
-        return -1;
+        return AGENTXX_RESULT_ERR_NOT_FOUND;
     }
     XX_LOGI("Plugin `{}` unregistered skill dir `{}`", inst->name, pathStr);
-    return 0;
+    return AGENTXX_RESULT_OK;
 }
 
 int PluginMount::registerMemoryFile(PluginInstance* inst, PluginxxStringView path) {
     if (!inst || agentxx::plugin::PluginStringView::empty(&path)) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     if (!acceptsRegistration(inst)) {
         XX_LOGW(
             "Plugin `{}` registerMemoryFile rejected: instance is closing or disabled",
             inst->name
         );
-        return -1;
+        return AGENTXX_RESULT_ERR_STATE;
     }
     if (resourcesFrozen(inst)) {
         XX_LOGW(
             "Plugin `{}` registerMemoryFile rejected: resources frozen (immutable after init)",
             inst->name
         );
-        return -1;
+        return AGENTXX_RESULT_ERR_STATE;
     }
     auto ap = getResourceApplier(agent_, "register_memory_file");
     if (!ap) {
-        return -1;
+        return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
     std::string pathStr = svToStr(path);
     std::string err;
     if (!ap->addMemoryFile(inst->name, pathStr, err)) {
         XX_LOGW("Plugin `{}` register memory file failed: {}", inst->name, err);
-        return -1;
+        return AGENTXX_RESULT_ERR_FAILED;
     }
     XX_LOGI("Plugin `{}` registered memory file `{}`", inst->name, pathStr);
-    return 0;
+    return AGENTXX_RESULT_OK;
 }
 
 int PluginMount::unregisterMemoryFile(PluginInstance* inst, PluginxxStringView path) {
     if (!inst || agentxx::plugin::PluginStringView::empty(&path)) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     if (resourcesFrozen(inst)) {
         XX_LOGW(
             "Plugin `{}` unregisterMemoryFile rejected: resources frozen (immutable after init)",
             inst->name
         );
-        return -1;
+        return AGENTXX_RESULT_ERR_STATE;
     }
     auto ap = getResourceApplier(agent_, "unregister_memory_file");
     if (!ap) {
-        return -1;
+        return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
     std::string pathStr = svToStr(path);
     if (!ap->removeMemoryFile(inst->name, pathStr)) {
-        return -1;
+        return AGENTXX_RESULT_ERR_NOT_FOUND;
     }
     XX_LOGI("Plugin `{}` unregistered memory file `{}`", inst->name, pathStr);
-    return 0;
+    return AGENTXX_RESULT_OK;
 }
 
 int PluginMount::registerMcpServer(PluginInstance* inst, PluginxxStringView specJson) {
     if (!inst || agentxx::plugin::PluginStringView::empty(&specJson)) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     if (!acceptsRegistration(inst)) {
         XX_LOGW(
             "Plugin `{}` registerMcpServer rejected: instance is closing or disabled",
             inst->name
         );
-        return -1;
+        return AGENTXX_RESULT_ERR_STATE;
     }
     if (resourcesFrozen(inst)) {
         XX_LOGW(
             "Plugin `{}` registerMcpServer rejected: resources frozen (immutable after init)",
             inst->name
         );
-        return -1;
+        return AGENTXX_RESULT_ERR_STATE;
     }
     auto ap = getResourceApplier(agent_, "register_mcp_server");
     if (!ap) {
-        return -1;
+        return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
     try {
         auto j = utilxx_base::Json::parse(
@@ -2004,7 +2003,7 @@ int PluginMount::registerMcpServer(PluginInstance* inst, PluginxxStringView spec
         }
         if (ns.empty() || url.empty()) {
             XX_LOGW("Plugin `{}` register_mcp_server failed: namespace/url required", inst->name);
-            return -1;
+            return AGENTXX_RESULT_ERR_ARG;
         }
         agentxx::agent::McpServerConfig cfg;
         cfg.url         = url;
@@ -2012,37 +2011,37 @@ int PluginMount::registerMcpServer(PluginInstance* inst, PluginxxStringView spec
         std::string err;
         if (!ap->addMcpServer(inst->name, ns, cfg, err)) {
             XX_LOGW("Plugin `{}` register mcp server failed: {}", inst->name, err);
-            return -1;
+            return AGENTXX_RESULT_ERR_FAILED;
         }
         XX_LOGI("Plugin `{}` registered mcp server `{}` ({})", inst->name, ns, url);
-        return 0;
+        return AGENTXX_RESULT_OK;
     } catch (const std::exception& e) {
         XX_LOGE("Plugin `{}` register_mcp_server invalid json: {}", inst->name, e.what());
-        return -1;
+        return AGENTXX_RESULT_ERR_JSON;
     }
 }
 
 int PluginMount::unregisterMcpServer(PluginInstance* inst, PluginxxStringView nameSpace) {
     if (!inst || agentxx::plugin::PluginStringView::empty(&nameSpace)) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     if (resourcesFrozen(inst)) {
         XX_LOGW(
             "Plugin `{}` unregisterMcpServer rejected: resources frozen (immutable after init)",
             inst->name
         );
-        return -1;
+        return AGENTXX_RESULT_ERR_STATE;
     }
     auto ap = getResourceApplier(agent_, "unregister_mcp_server");
     if (!ap) {
-        return -1;
+        return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
     std::string nsStr = svToStr(nameSpace);
     if (!ap->removeMcpServer(inst->name, nsStr)) {
-        return -1;
+        return AGENTXX_RESULT_ERR_NOT_FOUND;
     }
     XX_LOGI("Plugin `{}` unregistered mcp server `{}`", inst->name, nsStr);
-    return 0;
+    return AGENTXX_RESULT_OK;
 }
 
 std::string PluginMount::ownResourcesJson(const PluginInstance* inst) {
@@ -2276,22 +2275,22 @@ void PluginMount::removePromptContributions(std::string_view owner) {
 
 int PluginMount::setPromptJson(PluginInstance* inst, PluginxxStringView prompt_json) {
     if (!inst || agentxx::plugin::PluginStringView::empty(&prompt_json)) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     if (!acceptsRegistration(inst)) {
         XX_LOGW("Plugin `{}` setPromptJson rejected: instance is closing or disabled", inst->name);
-        return -1;
+        return AGENTXX_RESULT_ERR_STATE;
     }
     auto c = agent_.lock();
     if (!c || !c->agentConfig) {
-        return -1;
+        return AGENTXX_RESULT_ERR_STATE;
     }
     try {
         auto j = utilxx_base::Json::parse(
             std::string_view{prompt_json.data, static_cast<size_t>(prompt_json.size)}
         );
         if (!j.is_object()) {
-            return -1;
+            return AGENTXX_RESULT_ERR_JSON;
         }
 
         std::vector<std::string> touched;
@@ -2333,9 +2332,9 @@ int PluginMount::setPromptJson(PluginInstance* inst, PluginxxStringView prompt_j
         for (const auto& key : touched) {
             recomposePromptKey(key);
         }
-        return 0;
+        return AGENTXX_RESULT_OK;
     } catch (...) {
-        return -1;
+        return AGENTXX_RESULT_ERR_JSON;
     }
 }
 

@@ -35,6 +35,8 @@
 #include "pluginxx/api/abi.h"
 #include "pluginxx/api/tables.h"
 
+#include "agentxx/plugin/api/agentxx_result.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -210,7 +212,7 @@ typedef struct AgentxxClientUiIface {
         int32_t                   align,
         int32_t                   order
     );
-    /// 更新状态栏项文本 ({"text": "..."}); 句柄无效返回非 0
+    /// 更新状态栏项文本 ({"text": "..."}); 句柄无效返回 `AGENTXX_RESULT_ERR_ARG`
     int32_t(PLUGINXX_CALL* update_status_item)(
         const PluginxxHost*       host,
         AgentxxStatusItem*        item,
@@ -276,7 +278,7 @@ typedef struct AgentxxClientUiIface {
     /// - name: 全局唯一; description: 帮助/自动补全用
     /// - execute: client io 线程同步调用; 返回动作 JSON (host->alloc), 失败返回
     ///   空串并经 errorOut 输出错误 (host->alloc); 主程序解释动作 (见文件头)
-    /// - 返回 0 成功; 名字冲突或参数非法返回非 0
+    /// - 返回 `AGENTXX_RESULT_OK`; 名字冲突 `ERR_CONFLICT`; 参数非法 `ERR_ARG`
     int32_t(PLUGINXX_CALL* register_command)(
         const PluginxxHost*       host,
         const PluginxxStringView* name,
@@ -319,7 +321,7 @@ typedef struct AgentxxClientUiIface {
     ///   主程序在插件卸载/禁用时自动摘除其全部装饰, 启用时恢复
     /// - 典型数据源: 订阅 EVT_DELTA (tool_start 携带完整 arguments) 推送;
     ///   参考实现: agentxx_planning (Plan 渲染完全由插件驱动, TUI 无特化代码)
-    /// 返回 0 成功; 非 0 失败 (主程序不支持/JSON 非法)
+    /// 返回 `AGENTXX_RESULT_OK`; 失败给 `ERR_UNSUPPORTED` / `ERR_JSON`
     int32_t(PLUGINXX_CALL* update_tool_decor)(
         const PluginxxHost*       host,
         const PluginxxStringView* tool_call_id,
@@ -336,7 +338,7 @@ typedef struct AgentxxClientUiIface {
     ///      主程序按模版自动提取参数字段并格式化 (如 {"displayName":"Search","summaryKey":"query"})
     /// - 展开体 items_json 支持 {"kind":"Diff","path":"...","oldStr":"...","newStr":"..."}
     /// - 插件卸载/禁用时主程序自动注销
-    /// 返回 0 成功, 非 0 失败
+    /// 返回 `AGENTXX_RESULT_OK`; 失败给 `ERR_UNSUPPORTED` / `ERR_ARG` / `ERR_CONFLICT`
     int32_t(PLUGINXX_CALL* register_tool_renderer)(
         const PluginxxHost*          host,
         const AgentxxToolRenderSpec* spec
@@ -358,8 +360,8 @@ typedef struct AgentxxClientUiIface {
     /// 绑定动作处理器 (client io 线程约束):
     /// - target_id: 归属键 (section_id / panel_id / tool_call_id); 空串 = 本实例
     ///   默认绑定 (方案 A fallback: 精确匹配优先, 未命中回落到 "")
-    /// - 同一 (plugin, target_id) 重复绑定覆盖; on_action 为 NULL 时返回非 0
-    /// - 返回 0 成功
+    /// - 同一 (plugin, target_id) 重复绑定覆盖; on_action 为 NULL 时返回 `AGENTXX_RESULT_ERR_ARG`
+    /// - 返回 `AGENTXX_RESULT_OK`
     int32_t(PLUGINXX_CALL* bind_action_handler)(
         const PluginxxHost*       host,
         const PluginxxStringView* target_id,
@@ -374,7 +376,7 @@ typedef struct AgentxxClientUiIface {
     /// 通用 overlay (client io 线程约束; 插件 on_action 内直接调用):
     /// - 已有 overlay/核心弹窗时的策略由 spec->extra_json 的 `stack` 决定:
     ///   缺省替换当前 overlay (last-wins), `stack=true` 时保留现有 overlay 并丢弃本次
-    /// - spec->version 必须 == 1; type 越界返回非 0
+    /// - spec->version 必须 == 1; type 越界返回 `AGENTXX_RESULT_ERR_ARG`
     /// - 主程序拷贝字符串后 postToUi, 不阻塞插件
     /// - 返回 0 成功
     int32_t(PLUGINXX_CALL* open_overlay)(const PluginxxHost* host, const AgentxxOverlaySpec* spec);
@@ -410,7 +412,7 @@ typedef struct AgentxxClientSessionIface {
     int32_t(PLUGINXX_CALL* get_client_state)(const PluginxxHost* host, PluginxxString* out);
     /// 代发一条用户消息 (sessionId 与当前会话不符时仍按当前会话发送并记日志)
     /// - 与用户输入同排队语义 (流式中进 pendingInputs), 不绕过 UI 状态机
-    /// - 返回 0 成功; 非 0 表示主程序不可用 (未连接等)
+    /// - 返回 `AGENTXX_RESULT_OK`; 非 0 表示主程序不可用 (未连接等)
     int32_t(PLUGINXX_CALL* send_user_input)(
         const PluginxxHost*       host,
         const PluginxxStringView* sessionId,
@@ -439,7 +441,7 @@ typedef struct AgentxxClientWireIface {
     /// 载荷 JSON 原样转发, 语义由插件定义)
     /// - topic 必须是全名 `agentxx.client.plugin.<名字>.<事件>` (不限定插件名, 建议用自己的)
     ///   (框架只校验、不补前缀, 不在自己的段里直接返回非 0)
-    /// - 返回 0 成功; 非 0 表示未连接或名字/载荷非法
+    /// - 返回 `AGENTXX_RESULT_OK`; 未连接 `ERR_FAILED`; 名字/载荷非法 `ERR_ARG`
     int32_t(PLUGINXX_CALL* send_plugin_data)(
         const PluginxxHost*       host,
         const PluginxxStringView* topic,

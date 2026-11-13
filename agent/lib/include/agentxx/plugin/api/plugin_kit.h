@@ -114,7 +114,7 @@ template<typename Fn>
 inline std::string takeHostString(const PluginxxHost* host, Fn&& fn) {
     PluginxxString out{nullptr, 0};
     const int32_t  rc = fn(&out);
-    if (rc != 0 || nullptr == out.data) {
+    if (rc != AGENTXX_RESULT_OK || nullptr == out.data) {
         if (nullptr != out.data) {
             PluginString::free(host, &out);
         }
@@ -380,19 +380,19 @@ struct ClientIfaces {
  * - **事件**: 频道 `plugin.<插件 id>.net` (见 [netEventTopic]), 由主程序声明并代发,
  *   插件订阅即可 —— 载荷里带 `kind` 字段 (`ws.open` / `ws.message` / `http.request` …)。
  *
- * 两层状态不要混: [NetResult::code] 是表入口的结果码 (参数 / 状态层面被拒),
- * 结果 JSON 里的 `ok` 才是业务结论 —— 连不上、超时这类失败是
- * `code == PLUGINXX_NET_OK` 而 `ok == false`。
+ * 两层状态不要混: [NetResult::code] 是表入口的结果码 (参数 / 状态层面被拒, 取值见
+ * `pluginxx/api/result.h` 的通用段), 结果 JSON 里的 `ok` 才是业务结论 —— 连不上、超时
+ * 这类失败是 `code == PLUGINXX_RESULT_OK` 而 `ok == false`。
  */
 
 /// 一次网络调用的结果
 struct NetResult {
-    int32_t     code = PLUGINXX_NET_ERR_STATE; ///< 表入口结果码 (`PLUGINXX_NET_*`)
-    std::string json;                          ///< 结果 JSON (受理失败时可能为空)
+    int32_t     code = PLUGINXX_RESULT_ERR_STATE; ///< 表入口结果码 (`PLUGINXX_RESULT_*` 通用段)
+    std::string json;                             ///< 结果 JSON (受理失败时可能为空)
 
     /// 操作执行完毕 (业务结论还要看 [ok])
     bool accepted() const noexcept {
-        return code == PLUGINXX_NET_OK;
+        return code == PLUGINXX_RESULT_OK;
     }
 
     /// 业务成功 (= 受理成功且结果 JSON 里 `ok:true`)
@@ -423,29 +423,21 @@ inline std::optional<utilxx_base::Json> parseNetJson(const std::string& text) {
 }
 
 /// 表入口结果码的名字 (写日志 / 拼错误串用)
+///
+/// 网络表的入口码取自 `pluginxx/api/result.h` 的**通用段**, 名字也用那份表
+/// (`pluginxx::result::nameOf`), 本项目不再自己造一套。
 inline std::string_view netCodeName(int32_t code) {
-    switch (code) {
-        case PLUGINXX_NET_OK:
-            return "ok";
-        case PLUGINXX_NET_ERR_ARG:
-            return "bad_args";
-        case PLUGINXX_NET_ERR_STATE:
-            return "not_available";
-        case PLUGINXX_NET_ERR_JSON:
-            return "bad_json";
-        case PLUGINXX_NET_ERR_NOT_FOUND:
-            return "not_found";
-        case PLUGINXX_NET_ERR_TIMEOUT:
-            return "timeout";
-        case PLUGINXX_NET_ERR_PERMISSION:
-            return "permission_denied";
-        case PLUGINXX_NET_ERR_QUEUE_FULL:
-            return "queue_full";
-        case PLUGINXX_NET_ERR_NO_MEMORY:
-            return "no_memory";
-        default:
-            return "internal_error";
+    if (const char* name = pluginxx::result::nameOf(code)) {
+        return name;
     }
+    // 只有不走结果码表的两处会走到这里:
+    // - -99: 老主程序直接透传网络实现的内部错误 (`utilxx::net::ErrInternal`),
+    //   新主程序会在表入口换成本表的 `PLUGINXX_RESULT_ERR_INTERNAL` (-999);
+    // - 其它: 主程序自定义码, 名字只有它自己知道。
+    if (code == -99) {
+        return "internal";
+    }
+    return "unknown";
 }
 
 } // namespace detail
@@ -495,7 +487,7 @@ inline std::string NetResult::error() const {
 /// - 适用: 结果立刻可得的操作 (`ws.connect` / `ws.send` / `http.serve` / `net.info` …);
 /// - 会**等**网络侧执行完毕 (有界等待), 因此慢操作 (`http.fetch` / `http.download`)
 ///   请在协程里用 [netFetch] / [netDownload];
-/// - 返回 `code == PLUGINXX_NET_ERR_STATE` 表示主程序没提供网络能力。
+/// - 返回 `code == PLUGINXX_RESULT_ERR_STATE` 表示主程序没提供网络能力。
 inline NetResult netCall(
     const PluginxxHost*     host,
     const PluginxxNetIface* net,
@@ -528,8 +520,8 @@ struct NetAsyncState {
     std::string op;
     std::string argsJson;
 
-    int32_t     code     = PLUGINXX_NET_ERR_INTERNAL; ///< 受理结果
-    std::string accepted;                             ///< 受理时写出的 JSON (失败原因)
+    int32_t     code     = PLUGINXX_RESULT_ERR_STATE; ///< 受理结果 (默认值 = 没有网络能力)
+    std::string accepted;                              ///< 受理时写出的 JSON (失败原因)
     int64_t     requestId = 0;
 
     int32_t     doneStatus = PLUGINXX_OPERATOR_OK; ///< 完成通知的状态
@@ -614,7 +606,7 @@ struct NetAsyncAwaiter {
             st->accepted.assign(out.data, static_cast<size_t>(out.size));
             PluginString::free(st->host, &out);
         }
-        if (st->code != PLUGINXX_NET_OK) {
+        if (st->code != PLUGINXX_RESULT_OK) {
             delete holder;
             st->state.store(3, std::memory_order_release);
             return false;
@@ -641,12 +633,12 @@ struct NetAsyncAwaiter {
         if (!st) {
             return result;
         }
-        if (st->code != PLUGINXX_NET_OK) {
+        if (st->code != PLUGINXX_RESULT_OK) {
             result.code = st->code;
             result.json = st->accepted;
             return result;
         }
-        result.code = PLUGINXX_NET_OK;
+        result.code = PLUGINXX_RESULT_OK;
         if (st->doneStatus == PLUGINXX_OPERATOR_OK) {
             result.json = st->payload;
             return result;
@@ -668,7 +660,7 @@ struct NetAsyncAwaiter {
 /// - 适用: `http.request` / `http.fetch` / `http.download` (其它 op 请用 [netCall]);
 /// - 结果**恰好一次**; 协程被取消时请求随之取消, 拿到的结果里 `ok == false`、
 ///   `error == "canceled"`;
-/// - 主程序没提供网络能力时 [NetResult::code] 为 `PLUGINXX_NET_ERR_STATE`。
+/// - 主程序没提供网络能力时 [NetResult::code] 为 `PLUGINXX_RESULT_ERR_STATE`。
 template<typename Ctx>
 inline detail::NetAsyncAwaiter netCallAsync(
     const Ctx&       ctx,
@@ -683,7 +675,7 @@ inline detail::NetAsyncAwaiter netCallAsync(
 /// - 插件工具的实现体跑在主程序工作线程上 (没有协程上下文) 时用本函数,
 ///   协程里请用 [netCallAsync] / [netFetch];
 /// - **不得在主程序 io 线程上调用**: 那会把整个主程序卡在这条请求上,
-///   这种情况直接返回 `PLUGINXX_NET_ERR_STATE` (与 `invoke_capability_blocking` 同一条约束);
+///   这种情况直接返回 `PLUGINXX_RESULT_ERR_STATE` (与 `invoke_capability_blocking` 同一条约束);
 /// - 等待期间本次工具调用被取消不会打断等待 (网络侧仍会给出结果),
 ///   由调用方自己决定要不要继续用。
 inline NetResult netCallBlocking(
@@ -698,7 +690,7 @@ inline NetResult netCallBlocking(
         return result;
     }
     if (scheduler && scheduler->is_io_thread && scheduler->is_io_thread(host) != 0) {
-        result.code = PLUGINXX_NET_ERR_STATE;
+        result.code = PLUGINXX_RESULT_ERR_STATE;
         result.json = R"({"ok":false,"error":"wrong_thread","message":"netCallBlocking must not run on the host io thread; use co_await netFetch in a coroutine"})";
         return result;
     }
@@ -735,7 +727,7 @@ inline NetResult netCallBlocking(
         result.json.assign(out.data, static_cast<size_t>(out.size));
         PluginString::free(host, &out);
     }
-    if (result.code != PLUGINXX_NET_OK) {
+    if (result.code != PLUGINXX_RESULT_OK) {
         return result;
     }
 
@@ -746,7 +738,7 @@ inline NetResult netCallBlocking(
         });
     }
 
-    result.code = PLUGINXX_NET_OK;
+    result.code = PLUGINXX_RESULT_OK;
     if (state.status == PLUGINXX_OPERATOR_OK) {
         result.json = std::move(state.payload);
     } else if (state.status == PLUGINXX_OPERATOR_CANCELED) {
@@ -972,7 +964,7 @@ auto asyncNetCall(
 
             if (!host || !net || !net->call_async) {
                 NetResult result;
-                result.code = PLUGINXX_NET_ERR_STATE;
+                result.code = PLUGINXX_RESULT_ERR_STATE;
                 complete(std::move(self), std::move(result));
                 return;
             }
@@ -986,7 +978,7 @@ auto asyncNetCall(
                 delete hp;
 
                 NetResult result;
-                result.code = PLUGINXX_NET_OK;
+                result.code = PLUGINXX_RESULT_OK;
                 const std::string body
                     = (payload && payload->data && payload->size > 0)
                           ? std::string{payload->data, static_cast<size_t>(payload->size)}
@@ -1020,7 +1012,7 @@ auto asyncNetCall(
                 &out,
                 &requestId
             );
-            if (rc == PLUGINXX_NET_OK) {
+            if (rc == PLUGINXX_RESULT_OK) {
                 return; // 完成通知随后到 (恰好一次)
             }
             delete holder;
@@ -1910,7 +1902,7 @@ inline std::string mountRoot(Ctx& ctx, const MountRootOptions& opt) {
     spec.include_creator = opt.includeCreator ? 1 : 0;
     PluginxxString out{nullptr, 0};
     const auto     rc = ctx.iface.runtime->mount_root(ctx.host, &spec, &out);
-    if (rc != AGENTXX_PLUGIN_RUNTIME_OK || !out.data) {
+    if (rc != AGENTXX_RESULT_OK || !out.data) {
         if (out.data) {
             PluginString::free(ctx.host, &out);
         }
@@ -1925,7 +1917,7 @@ inline std::string mountRoot(Ctx& ctx, const MountRootOptions& opt) {
 template<typename Ctx>
 inline int32_t unmountRoot(Ctx& ctx, std::string_view rootId) {
     if (!hasRuntime(ctx) || !ctx.iface.runtime->unmount_root || rootId.empty()) {
-        return AGENTXX_PLUGIN_RUNTIME_ERR_UNSUPPORTED;
+        return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
     auto idSv = PluginStringView::from(rootId);
     return ctx.iface.runtime->unmount_root(ctx.host, &idSv);
@@ -1957,7 +1949,7 @@ inline int64_t openChannel(Ctx& ctx, const ChannelOptions& opt, Fn&& onEvent) {
     spec.user_data           = shim.get();
     int64_t channelId        = 0;
     const auto rc            = ctx.iface.runtime->open_channel(ctx.host, &spec, &channelId);
-    if (rc != AGENTXX_PLUGIN_RUNTIME_OK || channelId <= 0) {
+    if (rc != AGENTXX_RESULT_OK || channelId <= 0) {
         return 0;
     }
     ctx.runtimeChannelShims[channelId] = std::move(shim);
@@ -1968,7 +1960,7 @@ inline int64_t openChannel(Ctx& ctx, const ChannelOptions& opt, Fn&& onEvent) {
 template<typename Ctx>
 inline int32_t closeChannel(Ctx& ctx, int64_t channelId) {
     if (!hasRuntime(ctx) || !ctx.iface.runtime->close_channel || channelId <= 0) {
-        return AGENTXX_PLUGIN_RUNTIME_ERR_UNSUPPORTED;
+        return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
     const auto rc = ctx.iface.runtime->close_channel(ctx.host, channelId);
     // 通道已废弃: 回调转接对象随之释放 (主程序保证此后不再回调)
@@ -1980,7 +1972,7 @@ inline int32_t closeChannel(Ctx& ctx, int64_t channelId) {
 template<typename Ctx>
 inline int32_t sendInput(Ctx& ctx, int64_t channelId, std::string_view inputJson) {
     if (!hasRuntime(ctx) || !ctx.iface.runtime->send_input || channelId <= 0) {
-        return AGENTXX_PLUGIN_RUNTIME_ERR_UNSUPPORTED;
+        return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
     auto jsonSv = PluginStringView::from(inputJson);
     return ctx.iface.runtime->send_input(ctx.host, channelId, &jsonSv);
@@ -2006,7 +1998,7 @@ inline int32_t sendText(
 template<typename Ctx>
 inline int32_t cancelChannel(Ctx& ctx, int64_t channelId) {
     if (!hasRuntime(ctx) || !ctx.iface.runtime->cancel || channelId <= 0) {
-        return AGENTXX_PLUGIN_RUNTIME_ERR_UNSUPPORTED;
+        return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
     return ctx.iface.runtime->cancel(ctx.host, channelId);
 }
@@ -2015,7 +2007,7 @@ inline int32_t cancelChannel(Ctx& ctx, int64_t channelId) {
 template<typename Ctx>
 inline int32_t selectChannelModel(Ctx& ctx, int64_t channelId, std::string_view model) {
     if (!hasRuntime(ctx) || !ctx.iface.runtime->select_model || channelId <= 0 || model.empty()) {
-        return AGENTXX_PLUGIN_RUNTIME_ERR_UNSUPPORTED;
+        return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
     auto modelSv = PluginStringView::from(model);
     return ctx.iface.runtime->select_model(ctx.host, channelId, &modelSv);
@@ -2031,7 +2023,7 @@ inline int32_t respondInterrupt(
 ) {
     if (!hasRuntime(ctx) || !ctx.iface.runtime->respond_interrupt || channelId <= 0
         || interruptId <= 0) {
-        return AGENTXX_PLUGIN_RUNTIME_ERR_UNSUPPORTED;
+        return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
     auto valuesSv = PluginStringView::from(valuesJson);
     return ctx.iface.runtime->respond_interrupt(ctx.host, channelId, interruptId, &valuesSv);
@@ -2107,7 +2099,7 @@ inline int64_t addTrigger(Ctx& ctx, const TriggerOptions& opt) {
     spec.channel_id  = opt.channelId;
     spec.delivery    = PluginStringView::from(opt.delivery);
     int64_t id       = 0;
-    if (ctx.iface.runtime->register_trigger(ctx.host, &spec, &id) != AGENTXX_PLUGIN_RUNTIME_OK) {
+    if (ctx.iface.runtime->register_trigger(ctx.host, &spec, &id) != AGENTXX_RESULT_OK) {
         return 0;
     }
     return id;
@@ -2117,7 +2109,7 @@ inline int64_t addTrigger(Ctx& ctx, const TriggerOptions& opt) {
 template<typename Ctx>
 inline int32_t removeTrigger(Ctx& ctx, int64_t triggerId) {
     if (!hasRuntime(ctx) || !ctx.iface.runtime->unregister_trigger || triggerId <= 0) {
-        return AGENTXX_PLUGIN_RUNTIME_ERR_UNSUPPORTED;
+        return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
     return ctx.iface.runtime->unregister_trigger(ctx.host, triggerId);
 }
@@ -2128,7 +2120,7 @@ inline int32_t removeTrigger(Ctx& ctx, int64_t triggerId) {
 template<typename Ctx>
 inline int32_t emitEvent(Ctx& ctx, std::string_view topic, std::string_view payloadJson = {}) {
     if (!hasRuntime(ctx) || !ctx.iface.runtime->emit_event || topic.empty()) {
-        return AGENTXX_PLUGIN_RUNTIME_ERR_UNSUPPORTED;
+        return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
     auto topicSv = PluginStringView::from(topic);
     auto paySv   = PluginStringView::from(payloadJson);
@@ -2150,7 +2142,7 @@ inline int64_t addRuntimeTimer(Ctx& ctx, const RuntimeTimerOptions& opt) {
     spec.interval_ms    = opt.intervalMs;
     spec.input_json     = PluginStringView::from(opt.inputJson);
     int64_t id          = 0;
-    if (ctx.iface.runtime->register_timer(ctx.host, &spec, &id) != AGENTXX_PLUGIN_RUNTIME_OK) {
+    if (ctx.iface.runtime->register_timer(ctx.host, &spec, &id) != AGENTXX_RESULT_OK) {
         return 0;
     }
     return id;
@@ -2160,7 +2152,7 @@ inline int64_t addRuntimeTimer(Ctx& ctx, const RuntimeTimerOptions& opt) {
 template<typename Ctx>
 inline int32_t removeRuntimeTimer(Ctx& ctx, int64_t timerId) {
     if (!hasRuntime(ctx) || !ctx.iface.runtime->unregister_timer || timerId <= 0) {
-        return AGENTXX_PLUGIN_RUNTIME_ERR_UNSUPPORTED;
+        return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
     return ctx.iface.runtime->unregister_timer(ctx.host, timerId);
 }
@@ -2230,12 +2222,12 @@ struct AsyncWorkOptions {
 /// 提交一个后台任务; 返回 `asyncId` (失败返回空串)
 ///
 /// - 只校验参数, 不因额度/排队被拒 (额度只影响何时起跑)
-/// - `outCode` 非空时写入返回码 (`AGENTXX_PLUGIN_RUNTIME_*`), 便于区分"不支持"与"参数错"
+/// - `outCode` 非空时写入返回码 (`agentxx_result.h` 的 `AGENTXX_RESULT_*`), 便于区分"不支持"与"参数错"
 template<typename Ctx>
 inline std::string submitAsyncWork(Ctx& ctx, const AsyncWorkOptions& opt, int32_t* outCode = nullptr) {
     if (!hasRuntime(ctx) || !ctx.iface.runtime->submit_async_work) {
         if (outCode != nullptr) {
-            *outCode = AGENTXX_PLUGIN_RUNTIME_ERR_UNSUPPORTED;
+            *outCode = AGENTXX_RESULT_ERR_UNSUPPORTED;
         }
         return {};
     }
@@ -2288,7 +2280,7 @@ inline std::string submitAsyncWork(Ctx& ctx, const AsyncWorkOptions& opt, int32_
     if (outCode != nullptr) {
         *outCode = rc;
     }
-    if (rc != AGENTXX_PLUGIN_RUNTIME_OK || !out.data) {
+    if (rc != AGENTXX_RESULT_OK || !out.data) {
         if (out.data) {
             PluginString::free(ctx.host, &out);
         }
@@ -2303,7 +2295,7 @@ inline std::string submitAsyncWork(Ctx& ctx, const AsyncWorkOptions& opt, int32_
 template<typename Ctx>
 inline int32_t cancelAsyncWork(Ctx& ctx, std::string_view asyncId) {
     if (!hasRuntime(ctx) || !ctx.iface.runtime->cancel_async_work || asyncId.empty()) {
-        return AGENTXX_PLUGIN_RUNTIME_ERR_UNSUPPORTED;
+        return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
     auto id = PluginStringView::from(asyncId.data(), asyncId.size());
     return ctx.iface.runtime->cancel_async_work(ctx.host, &id);
@@ -2631,7 +2623,7 @@ struct PointImplAdapter {
 ///     - [opts] 顺序与耗时声明
 ///     - [error] 非空时写入拒绝原因
 ///
-/// - `return` 0 = 成功, 其它 = 主程序的错误码
+/// - `return` `AGENTXX_RESULT_OK` = 成功, 其它 = `agentxx_result.h` 的错误码
 template<typename Ctx, typename Fn>
 inline int32_t providePoint(
     Ctx&                      ctx,
@@ -3586,7 +3578,7 @@ inline int32_t graph_node(
     NodeFn&&         fn
 ) {
     if (!ctx.iface.graph || !ctx.iface.graph->register_node_type) {
-        return -1;
+        return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
 
     struct NodeShim {
@@ -3748,8 +3740,11 @@ inline int32_t registerToolPermission(
     const PluginxxScopeRef*             agent,
     const ToolPermissionSpec&           spec
 ) {
-    if (!host || !iface || !iface->register_tool_permission || spec.toolName.empty()) {
-        return -1;
+    if (!host || !iface || !iface->register_tool_permission) {
+        return AGENTXX_RESULT_ERR_UNSUPPORTED;
+    }
+    if (spec.toolName.empty()) {
+        return AGENTXX_RESULT_ERR_ARG;
     }
     AgentxxPluginToolPermissionSpec abiSpec{};
     abiSpec.tool_name   = PluginStringView::from(spec.toolName);
@@ -3811,9 +3806,11 @@ inline int32_t registerWritePathPermission(
 template<typename Ctx>
 inline int32_t
     unregisterToolPermission(const Ctx& ctx, const ScopeRef& agent, std::string_view toolName) {
-    if (!ctx.host || !ctx.iface.permission || !ctx.iface.permission->unregister_tool_permission
-        || toolName.empty()) {
-        return -1;
+    if (!ctx.host || !ctx.iface.permission || !ctx.iface.permission->unregister_tool_permission) {
+        return AGENTXX_RESULT_ERR_UNSUPPORTED;
+    }
+    if (toolName.empty()) {
+        return AGENTXX_RESULT_ERR_ARG;
     }
     auto ref    = agent.raw();
     auto nameSv = PluginStringView::from(toolName);
@@ -3868,7 +3865,7 @@ inline std::vector<PathDecision> checkPathDecisions(
     query.paths       = views.data();
 
     std::vector<int32_t> decisions(views.size(), AGENTXX_PLUGIN_PERMISSION_DECISION_ASK);
-    if (iface->check_paths(host, agent, &query, decisions.data()) != 0) {
+    if (iface->check_paths(host, agent, &query, decisions.data()) != AGENTXX_RESULT_OK) {
         return {};
     }
     std::vector<PathDecision> out;
@@ -4104,7 +4101,7 @@ inline int32_t registerToolRenderer(
     std::vector<std::unique_ptr<void, void (*)(void*)>>& shimStorage
 ) {
     if (!host || !ui || !ui->register_tool_renderer) {
-        return -1;
+        return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
     using DecayedFn = std::decay_t<Fn>;
 
@@ -4122,7 +4119,7 @@ inline int32_t registerToolRenderer(
         = [](void* user_data, const AgentxxToolRenderInput* input, AgentxxToolRenderOutput* output
           ) -> int32_t {
         if (!user_data || !input || !output) {
-            return -1;
+            return AGENTXX_RESULT_ERR_ARG;
         }
         auto*           shim = static_cast<RenderShim*>(user_data);
         ToolRenderInput in{
@@ -4138,7 +4135,7 @@ inline int32_t registerToolRenderer(
         try {
             shim->fn(in, out);
         } catch (...) {
-            return -1;
+            return AGENTXX_RESULT_ERR_INTERNAL;
         }
         if (!out.displayName.empty()) {
             output->displayName = PluginString::from(shim->host, out.displayName);
@@ -4149,7 +4146,7 @@ inline int32_t registerToolRenderer(
         if (!out.items.empty()) {
             output->items_json = PluginString::from(shim->host, out.items.dump());
         }
-        return 0;
+        return AGENTXX_RESULT_OK;
     };
 
     AgentxxToolRenderSpec spec{};
@@ -4172,7 +4169,7 @@ inline int32_t registerToolTemplate(
     std::string_view            summaryKey
 ) {
     if (!host || !ui || !ui->register_tool_renderer) {
-        return -1;
+        return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
     utilxx_base::Json j;
     j["displayName"]    = std::string(displayName);
@@ -4416,7 +4413,7 @@ public:
 
     int32_t sendUserInput(std::string_view sessionId, std::string_view text) const {
         if (!host || !iface.session || !iface.session->send_user_input) {
-            return -1;
+            return AGENTXX_RESULT_ERR_UNSUPPORTED;
         }
         auto sidSv = PluginStringView::from(sessionId.data(), sessionId.size());
         auto txtSv = PluginStringView::from(text.data(), text.size());
@@ -4453,8 +4450,11 @@ public:
 
     /// 更新面板内容 (组件树直接提交)
     int32_t setPanelItems(AgentxxPanel* panel, const std::vector<pluginxx::ui::Item>& items) const {
-        if (!host || !iface.ui || !iface.ui->update_panel || panel == nullptr) {
-            return -1;
+        if (!host || !iface.ui || !iface.ui->update_panel) {
+            return AGENTXX_RESULT_ERR_UNSUPPORTED;
+        }
+        if (panel == nullptr) {
+            return AGENTXX_RESULT_ERR_ARG;
         }
         const std::string json = itemsJson(items);
         auto              sv   = PluginStringView::from(json.data(), json.size());
@@ -4463,8 +4463,11 @@ public:
 
     /// 更新面板内容 (原始 items JSON, 形态同 `{"items":[...]}` 或裸数组)
     int32_t setPanelJson(AgentxxPanel* panel, std::string_view itemsJson) const {
-        if (!host || !iface.ui || !iface.ui->update_panel || panel == nullptr) {
-            return -1;
+        if (!host || !iface.ui || !iface.ui->update_panel) {
+            return AGENTXX_RESULT_ERR_UNSUPPORTED;
+        }
+        if (panel == nullptr) {
+            return AGENTXX_RESULT_ERR_ARG;
         }
         auto sv = PluginStringView::from(itemsJson.data(), itemsJson.size());
         return iface.ui->update_panel(host, panel, &sv);
@@ -4475,8 +4478,11 @@ public:
         AgentxxInfoSection*                    section,
         const std::vector<pluginxx::ui::Item>& items
     ) const {
-        if (!host || !iface.ui || !iface.ui->update_info_section || section == nullptr) {
-            return -1;
+        if (!host || !iface.ui || !iface.ui->update_info_section) {
+            return AGENTXX_RESULT_ERR_UNSUPPORTED;
+        }
+        if (section == nullptr) {
+            return AGENTXX_RESULT_ERR_ARG;
         }
         const std::string json = itemsJson(items);
         auto              sv   = PluginStringView::from(json.data(), json.size());
@@ -4485,8 +4491,11 @@ public:
 
     /// 更新状态栏项文本 (参数为 `{"text":"...","tooltip":"..."}` 形态的 JSON)
     int32_t setStatusJson(AgentxxStatusItem* item, std::string_view json) const {
-        if (!host || !iface.ui || !iface.ui->update_status_item || item == nullptr) {
-            return -1;
+        if (!host || !iface.ui || !iface.ui->update_status_item) {
+            return AGENTXX_RESULT_ERR_UNSUPPORTED;
+        }
+        if (item == nullptr) {
+            return AGENTXX_RESULT_ERR_ARG;
         }
         auto sv = PluginStringView::from(json.data(), json.size());
         return iface.ui->update_status_item(host, item, &sv);
@@ -4517,7 +4526,7 @@ public:
         std::string_view extraJson = {}
     ) const {
         if (!host || !iface.ui || !iface.ui->open_overlay) {
-            return -1;
+            return AGENTXX_RESULT_ERR_UNSUPPORTED;
         }
         AgentxxOverlaySpec spec{};
         spec.version     = 1;
@@ -4622,14 +4631,14 @@ public:
             return *this;
         }
 
-        /// 提交 (幂等; 返回主程序状态码, 0 = 成功)
+        /// 提交 (幂等; 返回主程序状态码, `AGENTXX_RESULT_OK` = 成功)
         int32_t commit() {
             if (committed_) {
-                return 0;
+                return AGENTXX_RESULT_OK;
             }
             committed_ = true;
             if (base_ == nullptr) {
-                return -1;
+                return AGENTXX_RESULT_ERR_UNSUPPORTED;
             }
             return base_->setPanelItems(panel_, items_);
         }
@@ -4657,8 +4666,11 @@ public:
     /// 更新某次工具调用的消息装饰 (见 [DecorSpec])
     /// - 空 `toolCallId` 或主程序不支持消息装饰时返回非 0 (插件应降级为不装饰)
     int32_t setToolDecor(std::string_view toolCallId, const DecorSpec& decor) const {
-        if (!host || !iface.ui || !iface.ui->update_tool_decor || toolCallId.empty()) {
-            return -1;
+        if (!host || !iface.ui || !iface.ui->update_tool_decor) {
+            return AGENTXX_RESULT_ERR_UNSUPPORTED;
+        }
+        if (toolCallId.empty()) {
+            return AGENTXX_RESULT_ERR_ARG;
         }
         utilxx_base::Json j = utilxx_base::Json::object();
         if (!decor.displayName.empty()) {
@@ -4677,7 +4689,7 @@ public:
     /// 清除某次工具调用的消息装饰 (空 `toolCallId` = 清除本插件全部装饰)
     int32_t clearToolDecor(std::string_view toolCallId = {}) const {
         if (!host || !iface.ui || !iface.ui->update_tool_decor) {
-            return -1;
+            return AGENTXX_RESULT_ERR_UNSUPPORTED;
         }
         auto tid = PluginStringView::from(toolCallId.data(), toolCallId.size());
         auto sv  = PluginStringView::from("", 0);

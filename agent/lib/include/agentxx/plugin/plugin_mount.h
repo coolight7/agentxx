@@ -25,7 +25,7 @@
 ///
 /// 插件引用 (`PluginxxScopeRef` = 挂载时下发的 `agent_id` + `mount_seq`) 就是指向本
 /// 对象的凭据: 主程序用 [PluginManager::mountOf] 把引用解析成挂载, 解析不到一律拒绝
-/// (注册类返回 `AGENTXX_PLUGIN_ERR_NO_AGENT`, 读取类返回 `-1`)。
+/// (注册类返回 `AGENTXX_RESULT_ERR_NO_AGENT`, 读取类返回 `-1`)。
 ///
 /// ## 线程
 ///

@@ -478,7 +478,9 @@ void test_utf8Check() {
         0u
     ); // 截断的 3 字节序列
     XX_TEST_EXPECT_FALSE(utilxx_base::utf8IsAvail(std::string("\xFF\xFE", 2)));
-    XX_TEST_EXPECT_TRUE(utilxx_base::utf8IsAvail(""));
+    // 空串视为"不可用" (它筛的是"有内容且合法"的文本; 只看合法性用 utf8GetLengthCheckAvail)
+    XX_TEST_EXPECT_FALSE(utilxx_base::utf8IsAvail(""));
+    XX_TEST_EXPECT_EQ(utilxx_base::utf8GetLengthCheckAvail(""), 0u);
 
     // 含内嵌 '\0': 在 '\0' 处停止计数 (修复 #8: 直接传 string_view 而非 str.data())
     {
@@ -614,7 +616,10 @@ void test_utf8Repair() {
     {
         std::string s("\xE4\xB8\xFF", 3);
         XX_TEST_EXPECT_TRUE(utilxx_base::utf8Repair(s));
-        XX_TEST_EXPECT_TRUE(utilxx_base::utf8IsAvail(s));
+        // 修复产物含 U+FFFD: 它是合法 UTF-8 (放行占位符要传 allowBackstop=true),
+        // 但默认判定 (allowBackstop=false) 把它归为"不可用"
+        XX_TEST_EXPECT_TRUE(utilxx_base::utf8IsAvail(s, /*allowBackstop=*/true));
+        XX_TEST_EXPECT_FALSE(utilxx_base::utf8IsAvail(s));
         const std::string repaired = s;
         XX_TEST_EXPECT_FALSE(utilxx_base::utf8Repair(s));
         XX_TEST_EXPECT_EQ(s, repaired);

@@ -118,7 +118,7 @@ resource/history/<任务短名>/        # 英文小写 + 短横线，能看出�
   经总线到达 (`spawnBatch(req)` 不带父上下文) 时回退根会话, 详见 index.md 架构设计第 7 小节
 - **一插件加载多 agent 挂载**: 插件只 `create`/`start` 一次, 每个 agent 各一份
   `PluginMount`; agent 级注册 (工具/权限/功能埋点实现行/提示词/图/资源/广播订阅) 只能在插件 `mount`
-  回调里做, 在 `start` 里做返回 `AGENTXX_PLUGIN_ERR_NO_AGENT` 且无副作用。会话、事件、
+  回调里做, 在 `start` 里做返回 `AGENTXX_RESULT_ERR_NO_AGENT` 且无副作用。会话、事件、
   工作目录、取消状态都按引用 (`PluginxxScopeRef` = agentId + 挂载序号) 落到对应 agent
   (事件源/会话查询都走 `PluginManager::agentContextOf`), 能力声明是进程级的 (同一实例
   重复声明按幂等成功)。会话存储根按 agent 独占 (`AgentHost::claimSessionStoreRoot`,
@@ -727,7 +727,12 @@ path/to/agentxx_test --log-level warn string_util regex
   插件不自己建连接 —— HTTP / WebSocket / TCP / UDP / HTTP 服务端都经这张表转给
   `utilxx::NetHub` (自有网络线程, 按插件实例记账; 禁用/卸载时 `shutdownOwner` 整批收掉)。
   三个成员 `call` / `call_async` / `cancel`; **表入口结果码只表示受理层面**, 业务结论在
-  结果 JSON 的 `ok` 里 (连不上/超时是 `code=OK` + `ok:false`)。事件发到
+  结果 JSON 的 `ok` 里 (连不上/超时是 `code=OK` + `ok:false`)。入口码取
+  `pluginxx/api/result.h` 的通用段 (`PLUGINXX_RESULT_*`; 网络实现的内部错误 -99 在表入口换成
+  `ERR_INTERNAL` -999), 结果 JSON 的 `error` 给**名字** (通用段名称 + 网络段
+  `utilxx/net_error.h`; 2026-11 起 `bad_args`→`invalid_argument`、`too_many`→`busy`、
+  `cancelled`→`canceled`、`not_running`/`closed`→`not_connected`、`no_data_dir`→`write_failed`,
+  旧名不再产生)。事件发到
   `plugin.<插件 id>.net` 广播 (载荷带 `kind` + `id`; `ws.connect` 只发起, 握手完成看
   `ws.open`)。SDK: `netCall`/`netFetchBlocking`/`netWsConnect`/`netWsSend`/`netWsClose` +
   `co_await netFetch` / `asyncNetFetch` (asio 形态, 给自带 io_context 的插件);
@@ -760,6 +765,11 @@ path/to/agentxx_test --log-level warn string_util regex
     重排/改签名/删成员 → 换 IID; `MIN_VERSION` 只在破坏性改动时 +1
   - 跨边界结构体 (spec / input) 统一带 `struct_size`: 填充方填长度, 读取方用
     `agentxx/plugin/api/plugin_spec.h` 的 `specSizeOk` / `specHas` 判定
+  - 业务表入口一律返 `agentxx_result.h` 的 `AGENTXX_RESULT_*` (`OK` = 0, 失败在
+    `-5000 ~ -5010`, 段位由 `pluginxx/api/result.h` 约定给应用): 新写/改动入口不写裸 `-1`/`0`,
+    判定用宏名, 拼文本用 `agentxx::plugin::resultName(code)`; 句柄 id / 条数 / 0-1 查询不是返回码;
+    框架通用表 (`agentxx.*`) 与 `agentxx.net` 仍用 `PLUGINXX_RESULT_*`; 全表与分类见
+    docs/zh-cn/design/plugins.md §8.3
   - 自检: `boundaries` 逐表校验四件套与**成员顺序清单**; `plugin_runtime` 校验判定
     三态与布局偏移; 详见 docs/zh-cn/design/plugins.md §17
 - 通知型功能埋点派发 (2026-11, 原 `agentxx.agent.hooks` 表已删除):
@@ -1083,6 +1093,12 @@ sudo echo 3 > /proc/sys/vm/drop_caches
   注意 `msgIdCounter` 缺失时要用**解析行数**推算 (被过滤的消息也占过 id)。
   "思考"消息带耗时 (`durationMs > 0`) 或加密思考 token 统计时保留。
   详见 `resource/history/fix-tui-blank-message/index.md`
+- `utf8IsAvail` 的默认参数筛的是"**有内容且合法且不含 U+FFFD**" (`cxx_utilxx_base` 2026-11 起:
+  空串 / 首字节 `'\0'` 返回 false; 默认 `allowBackstop = false`, 含替换字符也算不可用):
+  判断"这段文本是不是合法 UTF-8"(落库、内联文本附件、修复前检查) 一律传
+  `allowBackstop = true`, 只有真的想把 U+FFFD 当乱码时才用默认值; 只看合法性、不筛空串用
+  `utf8GetLengthCheckAvail`。详见
+  [work.md](resource/history/cxx-libs-result-codes/work.md) 第 7 步
 - TUI 提示消息 (`ViewMessage::Role::Tip`) 的展示约定 (2026-10-25): 折叠标记、级别文本与正文都按
   级别着色 (Info = `hintColor`, Warning = `thinkingColor`, Error = `errorColor`), 折叠态的单行
   预览 (含分隔符 `· `) 再叠加 `theme.dim()`, 展开态全文不加 dim; 头部前缀 `msg.tipPrefix`

@@ -1185,7 +1185,7 @@ public:
     /// 网络服务 (懒创建; 首个网络调用时起网络线程)
     std::shared_ptr<PluginNetService> netService();
 
-    /// 同步网络操作 (返回 `utilxx::net::*` 结果码)
+    /// 同步网络操作 (返回插件面结果码 `PLUGINXX_RESULT_*` 通用段)
     int32_t netCall(
         std::string_view               owner,
         std::string_view               op,

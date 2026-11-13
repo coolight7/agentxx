@@ -35,6 +35,8 @@
 #include "pluginxx/api/abi.h"
 #include "pluginxx/api/tables.h"
 
+#include "agentxx/plugin/api/agentxx_result.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -53,9 +55,9 @@ extern "C" {
 
 /// 需要 agent 引用的接口上, 引用缺失/无效/指向已卸载的挂载/序号不匹配
 ///
-/// - 注册类接口返回它, 且**不产生任何副作用**;
+/// - 注册类接口返回 `AGENTXX_RESULT_ERR_NO_AGENT`, 且**不产生任何副作用**;
 /// - 典型成因: 在 `start` 里注册 (那时还没有任何挂载), 或保存了上一轮挂载的旧引用。
-#define AGENTXX_PLUGIN_ERR_NO_AGENT (-2)
+/// - 返回码表见 `agentxx_result.h` (`AGENTXX_RESULT_OK` / `AGENTXX_RESULT_ERR_*`)。
 
 #pragma pack(push, 8)
 
@@ -176,15 +178,15 @@ typedef struct AgentxxPluginToolsIface {
     uint32_t struct_size; ///< 主程序填 sizeof(AgentxxPluginToolsIface) 或更大的已知表长
 
     /// 注册工具 (io 线程约束, 非 io 线程由主程序投递同步等待)
-    /// - `agent` 必须非空 (引用无效返回 `AGENTXX_PLUGIN_ERR_NO_AGENT`, 无副作用)
-    /// `return`: 0 成功, 非 0 冲突或失败
+    /// - `agent` 必须非空 (引用无效返回 `AGENTXX_RESULT_ERR_NO_AGENT`, 无副作用)
+    /// `return`: `AGENTXX_RESULT_OK`; 重名 `ERR_CONFLICT`; 参数非法 `ERR_ARG`; 没有挂载 `ERR_NO_AGENT`
     int32_t(PLUGINXX_CALL* register_tool)(
         const PluginxxHost*          host,
         const PluginxxScopeRef*      agent,
         const AgentxxPluginToolSpec* spec
     );
     /// 注销工具 (按名称; 只允许注销本挂载在注册的工具)
-    /// `return`: 0 成功, 非 0 不存在
+    /// `return`: `AGENTXX_RESULT_OK`; 没这个工具 `ERR_NOT_FOUND`; 别人的 `ERR_NOT_OWNER`
     int32_t(PLUGINXX_CALL* unregister_tool)(
         const PluginxxHost*       host,
         const PluginxxScopeRef*   agent,
@@ -276,14 +278,15 @@ typedef struct AgentxxPluginPermissionIface {
     /// - 未声明的工具不参与权限判定 (直接放行); 声明后由主程序按权限规则
     ///   (白/黑名单、permission.mode、记住的选择、工作区隔离) 统一判定
     /// - 权限声明属于附加能力: 主程序未加载权限中间件时返回非 0, 插件可忽略
-    /// `return`: 0 成功, 非 0 不支持或失败
+    /// `return`: `AGENTXX_RESULT_OK`; 未加载权限中间件 `ERR_UNSUPPORTED`; 参数非法 `ERR_ARG`;
+    /// 工具不属于本实例 `ERR_NOT_OWNER`
     int32_t(PLUGINXX_CALL* register_tool_permission)(
         const PluginxxHost*                    host,
         const PluginxxScopeRef*                agent,
         const AgentxxPluginToolPermissionSpec* spec
     );
     /// 撤销工具权限声明 (工具注销/插件禁用/卸载时由主程序自动撤销, 一般无需手动调用)
-    /// `return`: 0 成功, 非 0 不存在
+    /// `return`: `AGENTXX_RESULT_OK`; 没有这条声明 `ERR_NOT_FOUND`; 别人的 `ERR_NOT_OWNER`
     int32_t(PLUGINXX_CALL* unregister_tool_permission)(
         const PluginxxHost*       host,
         const PluginxxScopeRef*   agent,
@@ -303,7 +306,8 @@ typedef struct AgentxxPluginPermissionIface {
     ///     - [query] 查询入参 (路径数组/作用域/会话)
     ///     - [out_decisions] 调用方提供的等长出参数组 (path_count 项)
     ///
-    /// `return`: 0 成功; 非 0 不支持或失败 (失败时调用方应跳过过滤, 按原行为处理)
+    /// `return`: `AGENTXX_RESULT_OK`; 未加载权限中间件 `ERR_UNSUPPORTED`;
+    /// 失败时调用方应跳过过滤, 按原行为处理
     int32_t(PLUGINXX_CALL* check_paths)(
         const PluginxxHost*                     host,
         const PluginxxScopeRef*                 agent,
@@ -328,7 +332,8 @@ typedef struct AgentxxPluginSessionIface {
     uint32_t struct_size;
 
     /// 读取会话级 share_store 条目 (仅 io 线程); 返回 0 成功, out 接收数据 (host->alloc)
-    /// - 条目不存在或 id 未分配 (大于自增 id, 见 add_share_store) 时返回 -1
+    /// - 条目不存在或 id 未分配 (大于自增 id, 见 add_share_store) 时返回
+    ///   `AGENTXX_RESULT_ERR_NOT_FOUND`
     ///   (out 不分配内存, 主程序不抛异常)
     int32_t(PLUGINXX_CALL* get_share_store)(
         const PluginxxHost*       host,
@@ -350,8 +355,8 @@ typedef struct AgentxxPluginSessionIface {
         const PluginxxStringView* session_id,
         const PluginxxStringView* content
     );
-    /// (v3) 指定会话生效的工作目录 (io 线程; host->alloc; 失败/未加载返回 -1):
-    /// - `agent` 必须非空 (引用无效返回 -1 并记警告): 会话属于某个 agent
+    /// (v3) 指定会话生效的工作目录 (io 线程; host->alloc; 失败时回 `AGENTXX_RESULT_ERR_*`):
+    /// - `agent` 必须非空 (引用无效返回 `AGENTXX_RESULT_ERR_NO_AGENT` 并记警告): 会话属于某个 agent
     /// - session_id 非空: 会话级覆写优先 (worktree 绑定), 未设置时回退主程序默认工作目录
     /// - session_id 为空: 返回解析后的默认会话工作目录
     int32_t(PLUGINXX_CALL* get_session_work_dir)(
@@ -453,7 +458,7 @@ typedef struct AgentxxPluginPromptIface {
     );
     /// (v3) 指定工具的提示词配置 JSON (主程序级配置; io 线程; host->alloc):
     /// {"depict": "...", "args": {"参数名": "参数说明", ...}}
-    /// - 未配置该工具时返回 -1 (不分配 out)
+    /// - 未配置该工具时返回 `AGENTXX_RESULT_ERR_NOT_FOUND` (不分配 out)
     int32_t(PLUGINXX_CALL* get_tool_prompt)(
         const PluginxxHost*       host,
         const PluginxxStringView* tool_name,
@@ -571,14 +576,14 @@ typedef struct AgentxxPluginGraphIface {
     uint32_t struct_size;
 
     /// 注册节点类型 (io 线程约束, 非 io 线程由主程序投递同步等待)
-    /// `return`: 类型名冲突返回非 0
+    /// `return`: 类型名冲突返回 `AGENTXX_RESULT_ERR_CONFLICT`
     int32_t(PLUGINXX_CALL* register_node_type)(
         const PluginxxHost*                   host,
         const PluginxxScopeRef*               agent,
         const AgentxxPluginGraphNodeTypeSpec* spec
     );
     /// 注销节点类型 (按类型名; 挂载卸载时主程序自动清理)
-    /// `return`: 不存在返回非 0
+    /// `return`: 不存在返回 `AGENTXX_RESULT_ERR_NOT_FOUND`
     int32_t(PLUGINXX_CALL* unregister_node_type)(
         const PluginxxHost*       host,
         const PluginxxScopeRef*   agent,
@@ -597,7 +602,7 @@ typedef struct AgentxxPluginGraphIface {
         PluginxxString*         out
     );
     /// 设置执行图 JSON 定义 (覆盖; 主程序构建 engine 前生效)
-    /// `return`: JSON 非法返回非 0 (host 侧解析失败)
+    /// `return`: JSON 非法返回 `AGENTXX_RESULT_ERR_JSON` (host 侧解析失败)
     int32_t(PLUGINXX_CALL* set_graph_json)(
         const PluginxxHost*       host,
         const PluginxxScopeRef*   agent,
@@ -625,7 +630,7 @@ typedef struct AgentxxPluginMountIface {
     /// 全部挂载的摘要 (JSON 数组; host->alloc)
     /// 每项: {"agentId","agentName","workDir","language","mountSeq","plugins":[...]}
     int32_t(PLUGINXX_CALL* list)(const PluginxxHost* host, PluginxxString* out);
-    /// 按 agentId 查一个挂载的摘要 (host->alloc); 没有这个挂载返回 -1
+    /// 按 agentId 查一个挂载的摘要 (host->alloc); 没有这个挂载返回 `AGENTXX_RESULT_ERR_NOT_FOUND`
     int32_t(PLUGINXX_CALL* get)(
         const PluginxxHost*       host,
         const PluginxxStringView* agent_id,
@@ -656,15 +661,18 @@ typedef struct AgentxxPluginMountIface {
 /* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
 #define AGENTXX_PLUGIN_IFACE_AGENT_RUNTIME_BASELINE_SIZE offsetof(AgentxxPluginRuntimeIface, submit_async_work)
 
-/* ---- 返回码 (本表全部入口) ---- */
-#define AGENTXX_PLUGIN_RUNTIME_OK              0
-#define AGENTXX_PLUGIN_RUNTIME_ERR_ARG        (-1) ///< 参数非法 (配置派生失败/字段越界)
-#define AGENTXX_PLUGIN_RUNTIME_ERR_STATE      (-2) ///< 状态错误 (未就绪/关闭中/挂载中)
-#define AGENTXX_PLUGIN_RUNTIME_ERR_NOT_FOUND  (-3) ///< root/channel/trigger id 不存在
-#define AGENTXX_PLUGIN_RUNTIME_ERR_BUDGET     (-4) ///< 超预算 (根数/通道数/触发器数)
-#define AGENTXX_PLUGIN_RUNTIME_ERR_CONFLICT   (-5) ///< (存储根, sessionId) 已被占用
-#define AGENTXX_PLUGIN_RUNTIME_ERR_UNSUPPORTED (-6) ///< 主程序未提供运行时能力
-#define AGENTXX_PLUGIN_RUNTIME_ERR_FAILED     (-7) ///< 执行失败 (init 失败/内部错误)
+/* ---- 返回码 ---- */
+/*
+ * 全部入口共用 `agentxx_result.h` 的码表 (`AGENTXX_RESULT_OK` / `AGENTXX_RESULT_ERR_*`):
+ * - `ERR_ARG`: 配置派生失败 / 字段越界 / `struct_size` 低于基线
+ * - `ERR_STATE`: 未就绪 / 关闭中 / 在 `mount` 里调只能 `start` 用的入口
+ * - `ERR_NOT_FOUND`: root / channel / trigger / timer / 任务 id 不存在
+ * - `ERR_LIMIT`: 超预算 (根数 / 通道数 / 触发器数 / 定时器数)
+ * - `ERR_CONFLICT`: (存储根, sessionId) 已被占用
+ * - `ERR_UNSUPPORTED`: 主程序未提供运行时能力
+ * - `ERR_FAILED`: 执行失败 (init 失败等)
+ * 句柄类入口 (`open_channel` / `register_trigger` / `register_timer`) 返回 id, 失败给 `-1`。
+ */
 
 /// 通道事件类型 (回调的 `kind` 取值)
 ///

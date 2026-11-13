@@ -1259,7 +1259,7 @@ ac::TaskRuntime makeTaskRuntime(ChatbotCtx& ctx) {
         int32_t    code = 0;
         const auto asyncId = agentxx::plugin::submitAsyncWork(ctx, opt, &code);
         if (asyncId.empty()) {
-            err = code == AGENTXX_PLUGIN_RUNTIME_ERR_UNSUPPORTED
+            err = code == AGENTXX_RESULT_ERR_UNSUPPORTED
                       ? std::string{"当前主程序不支持后台任务 (运行时表没有 submit_async_work)"}
                       : fmt::format("主程序拒绝提交 (错误码 {})", code);
         }

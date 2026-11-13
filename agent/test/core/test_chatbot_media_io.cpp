@@ -470,7 +470,7 @@ private:
         int64_t*                      outRequestId
     ) {
         if (notify == nullptr || notify->done == nullptr) {
-            return PLUGINXX_NET_ERR_ARG;
+            return PLUGINXX_RESULT_ERR_ARG;
         }
         auto* self = static_cast<TestNet*>(host->opaque);
         auto* copy = new NotifyCopy{*notify};
@@ -498,7 +498,7 @@ private:
             accepted,
             &requestId
         );
-        if (rc != PLUGINXX_NET_OK) {
+        if (rc != PLUGINXX_RESULT_OK) {
             delete copy;
             if (!accepted.empty()) {
                 setOut(host, out, accepted);

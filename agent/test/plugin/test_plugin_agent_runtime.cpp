@@ -425,7 +425,7 @@ asio::awaitable<void> runBody(
             PluginxxString out{nullptr, 0};
             XX_TEST_EXPECT_EQ(
                 runtime->submit_async_work(hostView, &spec, &out),
-                AGENTXX_PLUGIN_RUNTIME_ERR_ARG
+                AGENTXX_RESULT_ERR_ARG
             );
             XX_TEST_EXPECT_TRUE(out.data == nullptr);
             spec.kind = 0;
@@ -443,7 +443,7 @@ asio::awaitable<void> runBody(
             PluginxxString out{nullptr, 0};
             XX_TEST_EXPECT_EQ(
                 runtime->submit_async_work(hostView, &toolSpec, &out),
-                AGENTXX_PLUGIN_RUNTIME_ERR_ARG
+                AGENTXX_RESULT_ERR_ARG
             );
         }
 
@@ -476,7 +476,7 @@ asio::awaitable<void> runBody(
 
         PluginxxString out{nullptr, 0};
         const auto     submitRc = runtime->submit_async_work(hostView, &spec, &out);
-        XX_TEST_EXPECT_EQ(submitRc, AGENTXX_PLUGIN_RUNTIME_OK);
+        XX_TEST_EXPECT_EQ(submitRc, AGENTXX_RESULT_OK);
         const auto asyncId = takeString(hostView, out);
         XX_TEST_EXPECT_FALSE(asyncId.empty());
         spec.user_data = nullptr;
@@ -499,7 +499,7 @@ asio::awaitable<void> runBody(
             auto           id = PluginStringView::from(asyncId);
             XX_TEST_EXPECT_EQ(
                 runtime->get_async_work(hostView, &id, &json),
-                AGENTXX_PLUGIN_RUNTIME_OK
+                AGENTXX_RESULT_OK
             );
             const auto text = takeString(hostView, json);
             XX_TEST_EXPECT_TRUE(text.find(asyncId) != std::string::npos);
@@ -515,7 +515,7 @@ asio::awaitable<void> runBody(
             PluginxxStringView empty{};
             XX_TEST_EXPECT_EQ(
                 runtime->list_async_work(hostView, &empty, &json),
-                AGENTXX_PLUGIN_RUNTIME_OK
+                AGENTXX_RESULT_OK
             );
             const auto text = takeString(hostView, json);
             XX_TEST_EXPECT_TRUE(text.find(asyncId) != std::string::npos);
@@ -532,11 +532,11 @@ asio::awaitable<void> runBody(
             auto id          = PluginStringView::from(asyncId);
             XX_TEST_EXPECT_EQ(
                 runtime->cancel_async_work(otherView, &id),
-                AGENTXX_PLUGIN_RUNTIME_ERR_ARG
+                AGENTXX_RESULT_ERR_ARG
             );
             PluginxxString json{nullptr, 0};
             XX_TEST_EXPECT_TRUE(
-                runtime->get_async_work(otherView, &id, &json) != AGENTXX_PLUGIN_RUNTIME_OK
+                runtime->get_async_work(otherView, &id, &json) != AGENTXX_RESULT_OK
             );
         }
 
@@ -545,7 +545,7 @@ asio::awaitable<void> runBody(
             auto id = PluginStringView::from(asyncId);
             XX_TEST_EXPECT_EQ(
                 runtime->cancel_async_work(hostView, &id),
-                AGENTXX_PLUGIN_RUNTIME_ERR_STATE
+                AGENTXX_RESULT_ERR_STATE
             );
         }
 
@@ -559,7 +559,7 @@ asio::awaitable<void> runBody(
             PluginxxString out{nullptr, 0};
             XX_TEST_EXPECT_EQ(
                 runtime->submit_async_work(hostView, &toolSpec, &out),
-                AGENTXX_PLUGIN_RUNTIME_OK
+                AGENTXX_RESULT_OK
             );
             const auto toolAsyncId = takeString(hostView, out);
             XX_TEST_EXPECT_FALSE(toolAsyncId.empty());
@@ -588,7 +588,7 @@ asio::awaitable<void> runBody(
             PluginxxString out{nullptr, 0};
             XX_TEST_EXPECT_EQ(
                 runtime->submit_async_work(hostView, &delaySpec, &out),
-                AGENTXX_PLUGIN_RUNTIME_OK
+                AGENTXX_RESULT_OK
             );
             const auto delayedId = takeString(hostView, out);
             XX_TEST_EXPECT_FALSE(delayedId.empty());
@@ -603,7 +603,7 @@ asio::awaitable<void> runBody(
                 auto id = PluginStringView::from(delayedId);
                 XX_TEST_EXPECT_EQ(
                     runtime->cancel_async_work(hostView, &id),
-                    AGENTXX_PLUGIN_RUNTIME_OK
+                    AGENTXX_RESULT_OK
                 );
                 const bool canceled = co_await waitUntil(
                     ex,
@@ -669,7 +669,7 @@ asio::awaitable<void> runBody(
             PluginxxString out{nullptr, 0};
             XX_TEST_EXPECT_EQ(
                 lonelyRuntime->mount_root(lonelyView, &spec, &out),
-                int32_t{AGENTXX_PLUGIN_RUNTIME_ERR_UNSUPPORTED}
+                int32_t{AGENTXX_RESULT_ERR_UNSUPPORTED}
             );
         }
         lonelyMgr->plugins_.erase(lonelyInst->name);
@@ -687,21 +687,21 @@ asio::awaitable<void> runBody(
         PluginxxString out{nullptr, 0};
         XX_TEST_EXPECT_EQ(
             runtime->mount_root(hostView, &spec, &out),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_ERR_ARG}
+            int32_t{AGENTXX_RESULT_ERR_ARG}
         );
 
         // (b) 合法 JSON 但模型不在可用列表里
         spec.config_json = PluginStringView::fromCstr(R"({"model":"no-such-model"})");
         XX_TEST_EXPECT_EQ(
             runtime->mount_root(hostView, &spec, &out),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_ERR_ARG}
+            int32_t{AGENTXX_RESULT_ERR_ARG}
         );
 
         // (c) 挂载策略混进 config_json: 只有一个来源, 两处都给按参数错误处理
         spec.config_json = PluginStringView::fromCstr(R"({"pluginMount":"all"})");
         XX_TEST_EXPECT_EQ(
             runtime->mount_root(hostView, &spec, &out),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_ERR_ARG}
+            int32_t{AGENTXX_RESULT_ERR_ARG}
         );
 
         // (d) mount_plugins 的 mode 非法
@@ -709,7 +709,7 @@ asio::awaitable<void> runBody(
         spec.mount_plugins = PluginStringView::fromCstr(R"({"mode":"every"})");
         XX_TEST_EXPECT_EQ(
             runtime->mount_root(hostView, &spec, &out),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_ERR_ARG}
+            int32_t{AGENTXX_RESULT_ERR_ARG}
         );
 
         // 全部被拒: 容器里没有留下任何根
@@ -729,7 +729,7 @@ asio::awaitable<void> runBody(
         PluginxxString out{nullptr, 0};
         XX_TEST_EXPECT_EQ(
             runtime->mount_root(hostView, &spec, &out),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_OK}
+            int32_t{AGENTXX_RESULT_OK}
         );
         rootA = takeString(hostView, out);
         XX_TEST_EXPECT_TRUE(!rootA.empty());
@@ -752,7 +752,7 @@ asio::awaitable<void> runBody(
         spec.user_data   = &sinkA;
         XX_TEST_EXPECT_EQ(
             runtime->open_channel(hostView, &spec, &channelA),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_OK}
+            int32_t{AGENTXX_RESULT_OK}
         );
         XX_TEST_EXPECT_TRUE(channelA > 0);
     }
@@ -806,18 +806,18 @@ asio::awaitable<void> runBody(
         int64_t dupId    = 0;
         XX_TEST_EXPECT_EQ(
             runtime->open_channel(hostView, &spec, &dupId),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_ERR_CONFLICT}
+            int32_t{AGENTXX_RESULT_ERR_CONFLICT}
         );
         // 换个 sessionId 就能开; 用完就关 (不占会话占用)
         spec.session_id = PluginStringView::fromCstr("rt_sess_dup_free");
         XX_TEST_EXPECT_EQ(
             runtime->open_channel(hostView, &spec, &dupId),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_OK}
+            int32_t{AGENTXX_RESULT_OK}
         );
         if (dupId > 0) {
             XX_TEST_EXPECT_EQ(
                 runtime->close_channel(hostView, dupId),
-                int32_t{AGENTXX_PLUGIN_RUNTIME_OK}
+                int32_t{AGENTXX_RESULT_OK}
             );
         }
         // 缺 on_event 回调: 参数错误
@@ -828,7 +828,7 @@ asio::awaitable<void> runBody(
         int64_t badId   = 0;
         XX_TEST_EXPECT_EQ(
             runtime->open_channel(hostView, &bad, &badId),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_ERR_ARG}
+            int32_t{AGENTXX_RESULT_ERR_ARG}
         );
         // 未知根: 不存在
         bad.on_event = &onChannelEvent;
@@ -836,7 +836,7 @@ asio::awaitable<void> runBody(
         bad.root_id   = PluginStringView::fromCstr("ext:nobody:1");
         XX_TEST_EXPECT_EQ(
             runtime->open_channel(hostView, &bad, &badId),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_ERR_NOT_FOUND}
+            int32_t{AGENTXX_RESULT_ERR_NOT_FOUND}
         );
     }
 
@@ -851,7 +851,7 @@ asio::awaitable<void> runBody(
         const std::string input = R"({"text":"你好"})";
         XX_TEST_EXPECT_EQ(
             runtime->send_input(hostView, channelA, &SvArg(std::string_view{input})),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_OK}
+            int32_t{AGENTXX_RESULT_OK}
         );
         XX_TEST_EXPECT_TRUE(co_await waitUntil(
             ex,
@@ -880,11 +880,11 @@ asio::awaitable<void> runBody(
                 channelA,
                 &SvArg(R"({"text":""})")
             ),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_ERR_ARG}
+            int32_t{AGENTXX_RESULT_ERR_ARG}
         );
         XX_TEST_EXPECT_EQ(
             runtime->send_input(hostView, channelA, &SvArg("{")),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_ERR_ARG}
+            int32_t{AGENTXX_RESULT_ERR_ARG}
         );
         XX_TEST_EXPECT_EQ(
             runtime->send_input(
@@ -892,7 +892,7 @@ asio::awaitable<void> runBody(
                 channelA,
                 &SvArg(R"({"text":"x","delivery":"no-such"})")
             ),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_ERR_ARG}
+            int32_t{AGENTXX_RESULT_ERR_ARG}
         );
         XX_TEST_EXPECT_EQ(
             runtime->send_input(
@@ -900,7 +900,7 @@ asio::awaitable<void> runBody(
                 999999,
                 &SvArg(std::string_view{input})
             ),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_ERR_NOT_FOUND}
+            int32_t{AGENTXX_RESULT_ERR_NOT_FOUND}
         );
     }
 
@@ -971,7 +971,7 @@ asio::awaitable<void> runBody(
         PluginxxString out{nullptr, 0};
         XX_TEST_EXPECT_EQ(
             runtime->mount_root(hostView, &spec, &out),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_OK}
+            int32_t{AGENTXX_RESULT_OK}
         );
         rootB = takeString(hostView, out);
         XX_TEST_EXPECT_TRUE(!rootB.empty());
@@ -988,7 +988,7 @@ asio::awaitable<void> runBody(
             chSpec.user_data  = &sinkB;
             XX_TEST_EXPECT_EQ(
                 runtime->open_channel(hostView, &chSpec, &channelB),
-                int32_t{AGENTXX_PLUGIN_RUNTIME_OK}
+                int32_t{AGENTXX_RESULT_OK}
             );
         }
         XX_TEST_EXPECT_TRUE(co_await waitUntil(
@@ -1011,7 +1011,7 @@ asio::awaitable<void> runBody(
                     channelA,
                     &SvArg(R"({"text":"first"})")
                 ),
-                int32_t{AGENTXX_PLUGIN_RUNTIME_OK}
+                int32_t{AGENTXX_RESULT_OK}
             );
             XX_TEST_EXPECT_EQ(
                 runtime->send_input(
@@ -1019,7 +1019,7 @@ asio::awaitable<void> runBody(
                     channelB,
                     &SvArg(R"({"text":"second"})")
                 ),
-                int32_t{AGENTXX_PLUGIN_RUNTIME_OK}
+                int32_t{AGENTXX_RESULT_OK}
             );
             XX_TEST_EXPECT_TRUE(co_await waitUntil(
                 ex,
@@ -1051,7 +1051,7 @@ asio::awaitable<void> runBody(
         PluginxxString out{nullptr, 0};
         XX_TEST_EXPECT_EQ(
             runtime->mount_root(hostView, &spec, &out),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_ERR_BUDGET}
+            int32_t{AGENTXX_RESULT_ERR_LIMIT}
         );
         XX_TEST_EXPECT_EQ(host->rootCount(), size_t{2});
 
@@ -1059,7 +1059,7 @@ asio::awaitable<void> runBody(
         if (channelB > 0) {
             XX_TEST_EXPECT_EQ(
                 runtime->close_channel(hostView, channelB),
-                int32_t{AGENTXX_PLUGIN_RUNTIME_OK}
+                int32_t{AGENTXX_RESULT_OK}
             );
             channelB = 0;
         }
@@ -1067,7 +1067,7 @@ asio::awaitable<void> runBody(
 
     // ===================== 11. 触发器: 三种策略 =====================
     {
-        XX_TEST_EXPECT_EQ(runtime->list_runtime(hostView, nullptr), int32_t{-1});
+        XX_TEST_EXPECT_EQ(runtime->list_runtime(hostView, nullptr), AGENTXX_RESULT_ERR_ARG);
 
         // (a) QUEUE: 每条事件立即投递
         const std::string topic = "plugin.runtime_probe.tick";
@@ -1079,7 +1079,7 @@ asio::awaitable<void> runBody(
         int64_t queueTrigger = 0;
         XX_TEST_EXPECT_EQ(
             runtime->register_trigger(hostView, &spec, &queueTrigger),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_OK}
+            int32_t{AGENTXX_RESULT_OK}
         );
         XX_TEST_EXPECT_TRUE(queueTrigger > 0);
 
@@ -1089,25 +1089,25 @@ asio::awaitable<void> runBody(
         int64_t tmpId                = 0;
         XX_TEST_EXPECT_EQ(
             runtime->register_trigger(hostView, &bad, &tmpId),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_ERR_ARG}
+            int32_t{AGENTXX_RESULT_ERR_ARG}
         );
         bad       = spec;
         bad.policy = 99;
         XX_TEST_EXPECT_EQ(
             runtime->register_trigger(hostView, &bad, &tmpId),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_ERR_ARG}
+            int32_t{AGENTXX_RESULT_ERR_ARG}
         );
         bad            = spec;
         bad.channel_id = 999999;
         XX_TEST_EXPECT_EQ(
             runtime->register_trigger(hostView, &bad, &tmpId),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_ERR_NOT_FOUND}
+            int32_t{AGENTXX_RESULT_ERR_NOT_FOUND}
         );
         bad            = spec;
         bad.delivery   = PluginStringView::fromCstr("no-such");
         XX_TEST_EXPECT_EQ(
             runtime->register_trigger(hostView, &bad, &tmpId),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_ERR_ARG}
+            int32_t{AGENTXX_RESULT_ERR_ARG}
         );
 
         // 发一条事件: 载荷里的 text 直接成为输入
@@ -1118,7 +1118,7 @@ asio::awaitable<void> runBody(
                 &SvArg(std::string_view{topic}),
                 &SvArg(R"({"text":"来自触发器的消息"})")
             ),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_OK}
+            int32_t{AGENTXX_RESULT_OK}
         );
         XX_TEST_EXPECT_TRUE(co_await waitUntil(
             ex,
@@ -1139,7 +1139,7 @@ asio::awaitable<void> runBody(
         int64_t mergeTrigger           = 0;
         XX_TEST_EXPECT_EQ(
             runtime->register_trigger(hostView, &merge, &mergeTrigger),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_OK}
+            int32_t{AGENTXX_RESULT_OK}
         );
         sinkA.clear();
         for (int i = 0; i < 3; ++i) {
@@ -1149,7 +1149,7 @@ asio::awaitable<void> runBody(
                     &SvArg("plugin.runtime_probe.batch"),
                     &SvArg(std::string_view{fmt::format(R"({{"text":"batch-{}"}})", i)})
                 ),
-                int32_t{AGENTXX_PLUGIN_RUNTIME_OK}
+                int32_t{AGENTXX_RESULT_OK}
             );
         }
         XX_TEST_EXPECT_TRUE(co_await waitUntil(
@@ -1171,7 +1171,7 @@ asio::awaitable<void> runBody(
         int64_t dropTrigger           = 0;
         XX_TEST_EXPECT_EQ(
             runtime->register_trigger(hostView, &drop, &dropTrigger),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_OK}
+            int32_t{AGENTXX_RESULT_OK}
         );
         // 让这一轮慢下来: 先起一轮, 等它变忙, 再发事件 (应被丢弃)
         g_da_sim_delay_ms = 300;
@@ -1183,7 +1183,7 @@ asio::awaitable<void> runBody(
                 channelA,
                 &SvArg(R"({"text":"slow turn"})")
             ),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_OK}
+            int32_t{AGENTXX_RESULT_OK}
         );
         XX_TEST_EXPECT_TRUE(co_await waitUntil(
             ex,
@@ -1196,7 +1196,7 @@ asio::awaitable<void> runBody(
                 &SvArg("plugin.runtime_probe.drop"),
                 &SvArg(R"({"text":"应当被丢弃"})")
             ),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_OK}
+            int32_t{AGENTXX_RESULT_OK}
         );
         XX_TEST_EXPECT_TRUE(co_await waitUntil(
             ex,
@@ -1225,7 +1225,7 @@ asio::awaitable<void> runBody(
         XX_TEST_EXPECT_EQ(runtime->unregister_trigger(hostView, queueTrigger), int32_t{0});
         XX_TEST_EXPECT_EQ(
             runtime->unregister_trigger(hostView, queueTrigger),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_ERR_NOT_FOUND}
+            int32_t{AGENTXX_RESULT_ERR_NOT_FOUND}
         );
         // 注销之后事件不再投递
         sinkA.clear();
@@ -1235,7 +1235,7 @@ asio::awaitable<void> runBody(
                 &SvArg(std::string_view{topic}),
                 &SvArg(R"({"text":"已经没有触发器了"})")
             ),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_OK}
+            int32_t{AGENTXX_RESULT_OK}
         );
         co_await waitUntil(ex, 300ms, [&]() {
             return sinkA.count(AGENTXX_PLUGIN_CHANNEL_EVT_TURN_START) > 0;
@@ -1255,7 +1255,7 @@ asio::awaitable<void> runBody(
         int64_t onceId      = 0;
         XX_TEST_EXPECT_EQ(
             runtime->register_timer(hostView, &once, &onceId),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_OK}
+            int32_t{AGENTXX_RESULT_OK}
         );
         XX_TEST_EXPECT_TRUE(onceId > 0);
         sinkA.clear();
@@ -1271,7 +1271,7 @@ asio::awaitable<void> runBody(
         // 一次性定时器触发后不在了
         XX_TEST_EXPECT_EQ(
             runtime->unregister_timer(hostView, onceId),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_ERR_NOT_FOUND}
+            int32_t{AGENTXX_RESULT_ERR_NOT_FOUND}
         );
 
         // (b) 周期: 触发多次, 注销后停止
@@ -1282,7 +1282,7 @@ asio::awaitable<void> runBody(
         int64_t periodicId              = 0;
         XX_TEST_EXPECT_EQ(
             runtime->register_timer(hostView, &periodic, &periodicId),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_OK}
+            int32_t{AGENTXX_RESULT_OK}
         );
         XX_TEST_EXPECT_TRUE(co_await waitUntil(
             ex,
@@ -1304,7 +1304,7 @@ asio::awaitable<void> runBody(
         XX_TEST_EXPECT_EQ(runtime->unregister_timer(hostView, periodicId), int32_t{0});
         XX_TEST_EXPECT_EQ(
             runtime->unregister_timer(hostView, periodicId),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_ERR_NOT_FOUND}
+            int32_t{AGENTXX_RESULT_ERR_NOT_FOUND}
         );
 
         // 参数校验: input_json 必填 / 非法 JSON / 通道不存在 / 负数延迟
@@ -1313,25 +1313,25 @@ asio::awaitable<void> runBody(
         int64_t tmpId              = 0;
         XX_TEST_EXPECT_EQ(
             runtime->register_timer(hostView, &bad, &tmpId),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_ERR_ARG}
+            int32_t{AGENTXX_RESULT_ERR_ARG}
         );
         bad            = once;
         bad.input_json = PluginStringView::fromCstr("{");
         XX_TEST_EXPECT_EQ(
             runtime->register_timer(hostView, &bad, &tmpId),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_ERR_ARG}
+            int32_t{AGENTXX_RESULT_ERR_ARG}
         );
         bad            = once;
         bad.channel_id = 999999;
         XX_TEST_EXPECT_EQ(
             runtime->register_timer(hostView, &bad, &tmpId),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_ERR_NOT_FOUND}
+            int32_t{AGENTXX_RESULT_ERR_NOT_FOUND}
         );
         bad                 = once;
         bad.first_delay_ms  = -5;
         XX_TEST_EXPECT_EQ(
             runtime->register_timer(hostView, &bad, &tmpId),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_ERR_ARG}
+            int32_t{AGENTXX_RESULT_ERR_ARG}
         );
     }
 
@@ -1346,7 +1346,7 @@ asio::awaitable<void> runBody(
         int64_t triggerId = 0;
         XX_TEST_EXPECT_EQ(
             runtime->register_trigger(hostView, &spec, &triggerId),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_OK}
+            int32_t{AGENTXX_RESULT_OK}
         );
         AgentxxPluginTimerSpec timerSpec{};
         timerSpec.struct_size    = sizeof(AgentxxPluginTimerSpec);
@@ -1356,13 +1356,13 @@ asio::awaitable<void> runBody(
         int64_t timerId          = 0;
         XX_TEST_EXPECT_EQ(
             runtime->register_timer(hostView, &timerSpec, &timerId),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_OK}
+            int32_t{AGENTXX_RESULT_OK}
         );
 
         sinkA.clear();
         XX_TEST_EXPECT_EQ(
             runtime->close_channel(hostView, channelA),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_OK}
+            int32_t{AGENTXX_RESULT_OK}
         );
         // 关闭事件恰好一条, 且之后不再有事件
         XX_TEST_EXPECT_EQ(sinkA.count(AGENTXX_PLUGIN_CHANNEL_EVT_CLOSED), size_t{1});
@@ -1376,20 +1376,20 @@ asio::awaitable<void> runBody(
                 channelA,
                 &SvArg(R"({"text":"after close"})")
             ),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_ERR_NOT_FOUND}
+            int32_t{AGENTXX_RESULT_ERR_NOT_FOUND}
         );
         XX_TEST_EXPECT_EQ(
             runtime->close_channel(hostView, channelA),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_ERR_NOT_FOUND}
+            int32_t{AGENTXX_RESULT_ERR_NOT_FOUND}
         );
         // 连带注销: 触发器与定时器都随通道消失
         XX_TEST_EXPECT_EQ(
             runtime->unregister_trigger(hostView, triggerId),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_ERR_NOT_FOUND}
+            int32_t{AGENTXX_RESULT_ERR_NOT_FOUND}
         );
         XX_TEST_EXPECT_EQ(
             runtime->unregister_timer(hostView, timerId),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_ERR_NOT_FOUND}
+            int32_t{AGENTXX_RESULT_ERR_NOT_FOUND}
         );
         // 根还在, 但下面已经没有通道
         PluginxxString out{nullptr, 0};
@@ -1409,7 +1409,7 @@ asio::awaitable<void> runBody(
         int64_t reopened   = 0;
         XX_TEST_EXPECT_EQ(
             runtime->open_channel(hostView, &chSpec, &reopened),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_OK}
+            int32_t{AGENTXX_RESULT_OK}
         );
         XX_TEST_EXPECT_TRUE(co_await waitUntil(
             ex,
@@ -1428,16 +1428,16 @@ asio::awaitable<void> runBody(
         XX_TEST_EXPECT_EQ(runtime->cancel(hostView, reopened), int32_t{0});
         XX_TEST_EXPECT_EQ(
             runtime->select_model(hostView, reopened, &SvArg("")),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_ERR_ARG}
+            int32_t{AGENTXX_RESULT_ERR_ARG}
         );
         XX_TEST_EXPECT_EQ(
             runtime->cancel(hostView, 999999),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_ERR_NOT_FOUND}
+            int32_t{AGENTXX_RESULT_ERR_NOT_FOUND}
         );
         // 谁也不能应答一个不存在的中断
         XX_TEST_EXPECT_EQ(
             runtime->respond_interrupt(hostView, reopened, 1, &SvArg("{}")),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_ERR_STATE}
+            int32_t{AGENTXX_RESULT_ERR_STATE}
         );
     }
 
@@ -1454,7 +1454,7 @@ asio::awaitable<void> runBody(
         int64_t victimId   = 0;
         XX_TEST_EXPECT_EQ(
             runtime->open_channel(hostView, &chSpec, &victimId),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_OK}
+            int32_t{AGENTXX_RESULT_OK}
         );
         XX_TEST_EXPECT_TRUE(co_await waitUntil(
             ex,
@@ -1464,7 +1464,7 @@ asio::awaitable<void> runBody(
 
         XX_TEST_EXPECT_EQ(
             runtime->unmount_root(hostView, &SvArg(std::string_view{rootA})),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_OK}
+            int32_t{AGENTXX_RESULT_OK}
         );
         XX_TEST_EXPECT_TRUE(victim.count(AGENTXX_PLUGIN_CHANNEL_EVT_CLOSED) >= 1);
         XX_TEST_EXPECT_EQ(host->rootCount(), size_t{1});
@@ -1472,12 +1472,12 @@ asio::awaitable<void> runBody(
         // 已卸掉的根: 再卸一次报不存在
         XX_TEST_EXPECT_EQ(
             runtime->unmount_root(hostView, &SvArg(std::string_view{rootA})),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_ERR_NOT_FOUND}
+            int32_t{AGENTXX_RESULT_ERR_NOT_FOUND}
         );
         // 别的实例的根同样按不存在处理
         XX_TEST_EXPECT_EQ(
             runtime->unmount_root(hostView, &SvArg(std::string_view{rootB})),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_OK}
+            int32_t{AGENTXX_RESULT_OK}
         );
         XX_TEST_EXPECT_EQ(host->rootCount(), size_t{0});
     }
@@ -1493,7 +1493,7 @@ asio::awaitable<void> runBody(
         std::string    rootC;
         XX_TEST_EXPECT_EQ(
             runtime->mount_root(hostView, &spec, &out),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_OK}
+            int32_t{AGENTXX_RESULT_OK}
         );
         rootC = takeString(hostView, out);
         XX_TEST_EXPECT_FALSE(rootC.empty());
@@ -1508,7 +1508,7 @@ asio::awaitable<void> runBody(
         int64_t channelC   = 0;
         XX_TEST_EXPECT_EQ(
             runtime->open_channel(hostView, &chSpec, &channelC),
-            int32_t{AGENTXX_PLUGIN_RUNTIME_OK}
+            int32_t{AGENTXX_RESULT_OK}
         );
         XX_TEST_EXPECT_TRUE(co_await waitUntil(
             ex,
@@ -1531,7 +1531,7 @@ asio::awaitable<void> runBody(
         // 拿到的是"被拒"而不是"通道不存在"; 两种情况都只要求它不再受理
         XX_TEST_EXPECT_TRUE(
             runtime->send_input(hostView, channelC, &SvArg(R"({"text":"x"})"))
-            != int32_t{AGENTXX_PLUGIN_RUNTIME_OK}
+            != int32_t{AGENTXX_RESULT_OK}
         );
         PluginxxString listOut{nullptr, 0};
         XX_TEST_EXPECT_EQ(runtime->list_runtime(hostView, &listOut), int32_t{0});

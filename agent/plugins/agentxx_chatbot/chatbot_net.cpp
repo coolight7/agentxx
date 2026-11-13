@@ -119,7 +119,7 @@ std::string ChatbotNet::download(
         args.dump()
     );
     if (!result.accepted()) {
-        // 表入口拒绝时结果 JSON 里带可读原因 (例如 no_data_dir / 只支持 GET)
+        // 表入口拒绝时结果 JSON 里带可读原因 (例如 write_failed / 只支持 GET)
         std::string reason;
         const auto  doc = agentxx::plugin::detail::parseNetJson(result.json);
         if (doc.has_value() && doc->is_object()) {

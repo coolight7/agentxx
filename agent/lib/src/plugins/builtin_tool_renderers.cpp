@@ -146,7 +146,7 @@ int32_t renderShareStore(const AgentxxToolRenderInput& in, RenderText& out) {
 
     auto args = parseToolArgs(PluginStringView::str(in.args_json));
     if (!args) {
-        return 0;
+        return AGENTXX_RESULT_OK;
     }
     const std::string opt    = args->value("opt", std::string{});
     const int64_t     id     = args->value<int64_t>("id", 0);
@@ -180,7 +180,7 @@ int32_t renderShareStore(const AgentxxToolRenderInput& in, RenderText& out) {
     }
 
     out.summary = std::move(summary);
-    return 0;
+    return AGENTXX_RESULT_OK;
 }
 
 /// `agentxx_subagent` 渲染: 显示名 "Subagent" + 委派摘要
@@ -192,7 +192,7 @@ int32_t renderSubagent(const AgentxxToolRenderInput& in, RenderText& out) {
 
     auto args = parseToolArgs(PluginStringView::str(in.args_json));
     if (!args) {
-        return 0;
+        return AGENTXX_RESULT_OK;
     }
 
     // 批量模式判定与工具执行逻辑一致: `tasks` 数组非空时忽略顶层单任务字段
@@ -224,7 +224,7 @@ int32_t renderSubagent(const AgentxxToolRenderInput& in, RenderText& out) {
             if (!names.empty()) {
                 out.summary += ": " + names;
             }
-            return 0;
+            return AGENTXX_RESULT_OK;
         }
     }
 
@@ -243,7 +243,7 @@ int32_t renderSubagent(const AgentxxToolRenderInput& in, RenderText& out) {
         summary += " " + task;
     }
     out.summary = std::move(summary);
-    return 0;
+    return AGENTXX_RESULT_OK;
 }
 
 /// 渲染回调公共外壳: 调用具体渲染逻辑 → 经主程序堆字符串写入 C ABI 输出
@@ -257,18 +257,18 @@ int32_t runRenderer(
     Fn&&                          fn
 ) {
     if (!input || !output) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     (void)userData; // 内置渲染器无实例状态 (多实例契约: 不依赖可变全局)
 
     RenderText    result;
     const int32_t rc = fn(*input, result);
-    if (rc != 0) {
+    if (rc != AGENTXX_RESULT_OK) {
         return rc;
     }
     hostMemorySetString(&output->displayName, result.displayName);
     hostMemorySetString(&output->summary, result.summary);
-    return 0;
+    return AGENTXX_RESULT_OK;
 }
 
 } // namespace

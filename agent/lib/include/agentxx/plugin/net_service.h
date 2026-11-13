@@ -4,7 +4,8 @@
 /// - 通用部分在 `cxx_utilxx` 的 `utilxx::NetHub`: HTTP 客户端/服务端、TCP、WebSocket、
 ///   UDP, 自有网络线程, 按**属主** (这里是插件实例名) 隔离资源;
 /// - 本类只做三件"插件面"的事: 属主 id 用插件实例名、事件发到 `plugin.<插件 id>.net`
-///   广播、完成回调映射到 `PluginxxOperatorNotify` 的状态位;
+///   广播、完成回调映射到 `PluginxxOperatorNotify` 的状态位, 入口码换算成
+///   `pluginxx/api/result.h` 的通用段 (取值与 `utilxx::net::*` 一致);
 /// - 表入口 (`<应用名>.net`) 与生命周期挂在 `PluginManager` 上 (见 plugin_manager_net.cpp)。
 ///
 /// 线程: 本类的方法可在任意线程调用 (`NetHub` 自己投递到网络线程);
@@ -45,7 +46,7 @@ public:
     PluginNetService(const PluginNetService&)            = delete;
     PluginNetService& operator=(const PluginNetService&) = delete;
 
-    /// 同步操作 (返回 `utilxx::net::*` 结果码; 结果 JSON 写进 `outJson`)
+    /// 同步操作 (返回插件面结果码 `PLUGINXX_RESULT_*` 通用段; 结果 JSON 写进 `outJson`)
     int32_t call(std::string_view owner, std::string_view op, std::string_view argsJson,
                  std::string* outJson);
 
@@ -63,7 +64,7 @@ public:
                       int64_t*                    outRequestId,
                       std::weak_ptr<void>         guard = {});
 
-    /// 取消一个进行中的请求 (不存在/已完成返回 `utilxx::net::ErrNotFound`)
+    /// 取消一个进行中的请求 (不存在/已完成返回 `PLUGINXX_RESULT_ERR_NOT_FOUND`)
     int32_t cancel(std::string_view owner, int64_t requestId, std::string* outJson);
 
     /// 关掉某个插件 (属主) 的全部服务、连接与未完成请求

@@ -26,7 +26,6 @@
 #include "fmt/format.h"
 #include "fmt/ranges.h"
 #include "utilxx/async_offload.h"
-#include "utilxx/net_hub.h"
 #include "utilxx_base/log.h"
 #include "utilxx_base/string_util.h"
 #include <algorithm>
@@ -1128,13 +1127,13 @@ void ClientPluginManager::performToolRender(
         input.max_width    = req.maxWidth;
 
         AgentxxToolRenderOutput output{};
-        int32_t                 rc = -1;
+        int32_t                 rc = AGENTXX_RESULT_ERR_INTERNAL;
         try {
             rc = hit->renderFn(hit->userData, &input, &output);
         } catch (...) {
-            rc = -1;
+            rc = AGENTXX_RESULT_ERR_INTERNAL;
         }
-        if (rc == 0) {
+        if (rc == AGENTXX_RESULT_OK) {
             entry.matched = true;
             if (output.displayName.data) {
                 entry.displayName.assign(
@@ -1654,18 +1653,18 @@ static void onClientIoVoid(const PluginxxHost* host, Fn&& fn) {
 template<typename Fn>
 static int32_t queryClientString(const PluginxxHost* host, PluginxxString* out, Fn&& fn) {
     if (!out) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     return onClientIo<int32_t>(
         host,
-        -1,
+        AGENTXX_RESULT_ERR_INTERNAL,
         [out, fn = std::forward<Fn>(fn)](ClientPluginInstance* inst, ClientPluginManager* mgr) {
             auto text = fn(inst, mgr);
             if (text.empty()) {
-                return -1;
+                return AGENTXX_RESULT_ERR_NOT_FOUND;
             }
             hostMemorySetString(out, text);
-            return 0;
+            return AGENTXX_RESULT_OK;
         }
     );
 }
@@ -1763,7 +1762,7 @@ int32_t PLUGINXX_CALL xx_cupdate_status_item(
     const PluginxxStringView* json
 ) {
     if (!item || !json) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     auto jsonVal = *json;
     return onClientIo<int32_t>(
@@ -1811,7 +1810,7 @@ int32_t PLUGINXX_CALL xx_cupdate_panel(
     const PluginxxStringView* items_json
 ) {
     if (!panel || !items_json) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     auto itemsVal = *items_json;
     return onClientIo<int32_t>(
@@ -1861,7 +1860,7 @@ int32_t PLUGINXX_CALL xx_cupdate_info_section(
     const PluginxxStringView* items_json
 ) {
     if (!section || !items_json) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     auto itemsVal = *items_json;
     return onClientIo<int32_t>(
@@ -1902,7 +1901,7 @@ int32_t PLUGINXX_CALL xx_cupdate_tool_decor(
 int32_t PLUGINXX_CALL
     xx_cregister_tool_renderer(const PluginxxHost* host, const AgentxxToolRenderSpec* spec) {
     if (!spec) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     return onClientIo<int32_t>(
         host,
@@ -1916,7 +1915,7 @@ int32_t PLUGINXX_CALL
 int32_t PLUGINXX_CALL
     xx_cunregister_tool_renderer(const PluginxxHost* host, const PluginxxStringView* tool_name) {
     if (!tool_name) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     auto tnameVal = *tool_name;
     return onClientIo<int32_t>(
@@ -1939,7 +1938,7 @@ int32_t PLUGINXX_CALL xx_cregister_command(
     void* ud
 ) {
     if (!execute || agentxx::plugin::PluginStringView::empty(name)) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     auto nameVal = *name;
     auto descVal = description ? *description : agentxx::plugin::PluginStringView::from("", 0);
@@ -1955,7 +1954,7 @@ int32_t PLUGINXX_CALL xx_cregister_command(
 int32_t PLUGINXX_CALL
     xx_cunregister_command(const PluginxxHost* host, const PluginxxStringView* name) {
     if (agentxx::plugin::PluginStringView::empty(name)) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     auto nameVal = *name;
     return onClientIo<int32_t>(
@@ -1998,7 +1997,7 @@ int32_t PLUGINXX_CALL xx_csend_user_input(
     const PluginxxStringView* text
 ) {
     if (agentxx::plugin::PluginStringView::empty(text)) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     auto tidVal  = thread_id ? *thread_id : agentxx::plugin::PluginStringView::from("", 0);
     auto textVal = *text;
@@ -2007,7 +2006,7 @@ int32_t PLUGINXX_CALL xx_csend_user_input(
         -1,
         [tidVal, textVal](ClientPluginInstance* inst, ClientPluginManager* mgr) {
             mgr->sendUserInputToPeer(inst, tidVal, textVal);
-            return 0;
+            return AGENTXX_RESULT_OK;
         }
     );
 }
@@ -2028,7 +2027,7 @@ int32_t PLUGINXX_CALL xx_csend_plugin_data(
     const PluginxxStringView* json
 ) {
     if (agentxx::plugin::PluginStringView::empty(topic)) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     auto topicVal = *topic;
     auto jsonVal  = json ? *json : agentxx::plugin::PluginStringView::from("{}", 2);
@@ -2073,9 +2072,9 @@ static int32_t PLUGINXX_CALL
     std::string lang = (language && language->data)
                            ? std::string(language->data, static_cast<size_t>(language->size))
                            : std::string{};
-    return onClientIo<int32_t>(host, -1, [lang](ClientPluginInstance*, ClientPluginManager* mgr) {
+    return onClientIo<int32_t>(host, AGENTXX_RESULT_ERR_INTERNAL, [lang](ClientPluginInstance*, ClientPluginManager* mgr) {
         mgr->setLanguage(lang);
-        return 0;
+        return AGENTXX_RESULT_OK;
     });
 }
 
@@ -2088,7 +2087,7 @@ int32_t PLUGINXX_CALL xx_cbind_action_handler(
     void*                     user_data
 ) {
     if (!on_action) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     auto targetVal = target_id ? *target_id : agentxx::plugin::PluginStringView::from("", 0);
     return onClientIo<int32_t>(
@@ -2114,7 +2113,7 @@ int32_t PLUGINXX_CALL
 
 int32_t PLUGINXX_CALL xx_copen_overlay(const PluginxxHost* host, const AgentxxOverlaySpec* spec) {
     if (!spec) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     return onClientIo<int32_t>(
         host,
@@ -2287,12 +2286,12 @@ static int32_t PLUGINXX_CALL xx_cnet_call(
     const PluginxxStringView* args_json,
     PluginxxString*           out_json
 ) {
-    return agentxx::plugin::guardVtableCall(utilxx::net::ErrInternal, [&]() -> int32_t {
+    return agentxx::plugin::guardVtableCall(PLUGINXX_RESULT_ERR_INTERNAL, [&]() -> int32_t {
         auto call = enterClientHost(host);
         auto mgr  = call.manager();
         auto inst = call.instance();
         if (!mgr || !inst || agentxx::plugin::PluginStringView::empty(op)) {
-            return utilxx::net::ErrArg;
+            return PLUGINXX_RESULT_ERR_ARG;
         }
         const std::string opStr{op->data, static_cast<size_t>(op->size)};
         const std::string argsStr
@@ -2317,13 +2316,13 @@ static int32_t PLUGINXX_CALL xx_cnet_call_async(
     PluginxxString*               out_json,
     int64_t*                      out_request_id
 ) {
-    return agentxx::plugin::guardVtableCall(utilxx::net::ErrInternal, [&]() -> int32_t {
+    return agentxx::plugin::guardVtableCall(PLUGINXX_RESULT_ERR_INTERNAL, [&]() -> int32_t {
         auto call = enterClientHost(host);
         auto mgr  = call.manager();
         auto inst = call.instance();
         if (!mgr || !inst || agentxx::plugin::PluginStringView::empty(op) || !notify
             || !notify->done) {
-            return utilxx::net::ErrArg;
+            return PLUGINXX_RESULT_ERR_ARG;
         }
         const std::string opStr{op->data, static_cast<size_t>(op->size)};
         const std::string argsStr
@@ -2350,7 +2349,7 @@ static int32_t PLUGINXX_CALL xx_cnet_call_async(
             &requestId,
             std::weak_ptr<ClientPluginInstance>(inst->sharedSelf<ClientPluginInstance>())
         );
-        if (rc != utilxx::net::Ok) {
+        if (rc != PLUGINXX_RESULT_OK) {
             if (out_json != nullptr && !accepted.empty()) {
                 hostMemorySetString(out_json, accepted);
             }
@@ -2372,12 +2371,12 @@ static int32_t PLUGINXX_CALL xx_cnet_cancel(
     int64_t             request_id,
     PluginxxString*     out_json
 ) {
-    return agentxx::plugin::guardVtableCall(utilxx::net::ErrInternal, [&]() -> int32_t {
+    return agentxx::plugin::guardVtableCall(PLUGINXX_RESULT_ERR_INTERNAL, [&]() -> int32_t {
         auto call = enterClientHost(host, /*allowClosing=*/true);
         auto mgr  = call.manager();
         auto inst = call.instance();
         if (!mgr || !inst || request_id <= 0) {
-            return utilxx::net::ErrArg;
+            return PLUGINXX_RESULT_ERR_ARG;
         }
         std::string   result;
         const int32_t rc = mgr->netCancel(inst->name, request_id, &result);
@@ -2501,10 +2500,10 @@ int ClientPluginManager::updateStatusItem(
 ) {
     auto h = static_cast<AgentxxStatusItem*>(item);
     if (!inst || !h) {
-        return -1;
+        return AGENTXX_RESULT_ERR_STATE;
     }
     if (!acceptUiJsonSize(svToSv(json), "update_status_item", inst->name)) {
-        return -1;
+        return AGENTXX_RESULT_ERR_LIMIT;
     }
     utilxx_base::Json props;
     std::string       text;
@@ -2522,7 +2521,7 @@ int ClientPluginManager::updateStatusItem(
           && (props.contains("segments") || props.contains("sparkline") || props.contains("meter"));
     // 富片段存在时 text 可省略 (状态栏以富内容为主, 文本仅作降级)
     if (!hasRich && text.empty()) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     {
         std::lock_guard<std::mutex> lock(uiMutex_);
@@ -2548,7 +2547,7 @@ int ClientPluginManager::updateStatusItem(
     if (uiAdapter_) {
         uiAdapter_->onStatusItemUpdated(h->id, props);
     }
-    return 0;
+    return AGENTXX_RESULT_OK;
 }
 
 void ClientPluginManager::unregisterStatusItem(ClientPluginInstance* inst, void* item) {
@@ -2658,10 +2657,10 @@ int ClientPluginManager::updatePanel(
 ) {
     auto h = static_cast<AgentxxPanel*>(panel);
     if (!inst || !h) {
-        return -1;
+        return AGENTXX_RESULT_ERR_STATE;
     }
     if (!acceptUiJsonSize(svToSv(items_json), "update_panel", inst->name)) {
-        return -1;
+        return AGENTXX_RESULT_ERR_LIMIT;
     }
     utilxx_base::Json items = utilxx_base::Json::array();
     try {
@@ -2672,7 +2671,7 @@ int ClientPluginManager::updatePanel(
             items = j["items"];
         }
     } catch (...) {
-        return -1;
+        return AGENTXX_RESULT_ERR_JSON;
     }
     {
         std::lock_guard<std::mutex> lock(uiMutex_);
@@ -2698,7 +2697,7 @@ int ClientPluginManager::updatePanel(
     if (uiAdapter_) {
         uiAdapter_->onPanelUpdated(h->id, payload);
     }
-    return 0;
+    return AGENTXX_RESULT_OK;
 }
 
 void ClientPluginManager::unregisterPanel(ClientPluginInstance* inst, void* panel) {
@@ -2808,10 +2807,10 @@ int ClientPluginManager::updateInfoSection(
 ) {
     auto h = static_cast<AgentxxInfoSection*>(section);
     if (!inst || !h) {
-        return -1;
+        return AGENTXX_RESULT_ERR_STATE;
     }
     if (!acceptUiJsonSize(svToSv(items_json), "update_info_section", inst->name)) {
-        return -1;
+        return AGENTXX_RESULT_ERR_LIMIT;
     }
     utilxx_base::Json items = utilxx_base::Json::array();
     try {
@@ -2822,7 +2821,7 @@ int ClientPluginManager::updateInfoSection(
             items = j["items"];
         }
     } catch (...) {
-        return -1;
+        return AGENTXX_RESULT_ERR_JSON;
     }
     {
         std::lock_guard<std::mutex> lock(uiMutex_);
@@ -2848,7 +2847,7 @@ int ClientPluginManager::updateInfoSection(
     if (uiAdapter_) {
         uiAdapter_->onInfoSectionUpdated(h->id, payload);
     }
-    return 0;
+    return AGENTXX_RESULT_OK;
 }
 
 void ClientPluginManager::unregisterInfoSection(ClientPluginInstance* inst, void* section) {
@@ -2891,12 +2890,12 @@ int ClientPluginManager::updateToolDecor(
     PluginxxStringView    decor_json
 ) {
     if (!inst) {
-        return -1;
+        return AGENTXX_RESULT_ERR_STATE;
     }
     const std::string tid  = svToStr(tool_call_id);
     const std::string json = svToStr(decor_json);
     if (!acceptUiJsonSize(json, "update_tool_decor", inst->name)) {
-        return -1;
+        return AGENTXX_RESULT_ERR_LIMIT;
     }
 
     // 删除语义: decor_json 空串 (tid 空 = 本插件全部)
@@ -2928,7 +2927,7 @@ int ClientPluginManager::updateToolDecor(
             ),
             regs.end()
         );
-        return 0;
+        return AGENTXX_RESULT_OK;
     }
 
     // 更新/插入
@@ -2936,10 +2935,10 @@ int ClientPluginManager::updateToolDecor(
     try {
         auto j = utilxx_base::Json::parse(json);
         if (!j.is_object()) {
-            return -1;
+            return AGENTXX_RESULT_ERR_JSON;
         }
         if (tid.empty()) {
-            return -1; ///< 更新必须指明 tool_call_id (删除才允许空 = 全部)
+            return AGENTXX_RESULT_ERR_ARG; ///< 更新必须指明 tool_call_id (删除才允许空 = 全部)
         }
         decor.plugin      = inst->name;
         decor.toolCallId  = tid;
@@ -2949,7 +2948,7 @@ int ClientPluginManager::updateToolDecor(
             decor.items = j["items"];
         }
     } catch (...) {
-        return -1; ///< JSON 非法
+        return AGENTXX_RESULT_ERR_JSON; ///< JSON 非法
     }
 
     bool replaced = false;
@@ -2988,7 +2987,7 @@ int ClientPluginManager::updateToolDecor(
     if (!replaced) {
         regs.push_back(decor);
     }
-    return 0;
+    return AGENTXX_RESULT_OK;
 }
 
 int ClientPluginManager::registerCommand(
@@ -3000,11 +2999,11 @@ int ClientPluginManager::registerCommand(
     void* ud
 ) {
     if (!inst || !exec || agentxx::plugin::PluginStringView::empty(name)) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     if (!acceptsRegistration(inst)) {
         XX_LOGW("[client_plugin] `{}` registerCommand rejected: closing or disabled", inst->name);
-        return -1;
+        return AGENTXX_RESULT_ERR_STATE;
     }
     std::string nameStr = svToStr(name);
     std::string descStr = svToStr(description);
@@ -3015,14 +3014,14 @@ int ClientPluginManager::registerCommand(
             "[client_plugin] command `{}` rejected: interface agentxx.client.command unsupported",
             nameStr
         );
-        return -1;
+        return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
     {
         std::lock_guard<std::mutex> lock(uiMutex_);
         for (const auto& c : uiRegistry_->commands) {
             if (c.name == nameStr) {
                 XX_LOGW("[client_plugin] command `{}` already registered", nameStr);
-                return -1;
+                return AGENTXX_RESULT_ERR_CONFLICT;
             }
         }
     }
@@ -3039,12 +3038,12 @@ int ClientPluginManager::registerCommand(
         uiRegistry_ = std::move(cur);
     }
     inst->commandRegs.push_back(std::move(reg));
-    return 0;
+    return AGENTXX_RESULT_OK;
 }
 
 int ClientPluginManager::unregisterCommand(ClientPluginInstance* inst, PluginxxStringView name) {
     if (!inst || agentxx::plugin::PluginStringView::empty(name)) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     std::string nameStr = svToStr(name);
     {
@@ -3070,7 +3069,7 @@ int ClientPluginManager::unregisterCommand(ClientPluginInstance* inst, PluginxxS
         ),
         regs.end()
     );
-    return 0;
+    return AGENTXX_RESULT_OK;
 }
 
 // ==================== 定时器 (agentxx.client.timer) ====================
@@ -3524,7 +3523,7 @@ int ClientPluginManager::sendPluginDataToPeer(
     PluginxxStringView    json
 ) {
     if (!inst || !uiAdapter_) {
-        return -1;
+        return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
     const std::string topicStr = svToStr(topic);
     // 只能写 client 插件族 (`agentxx.client.plugin.<名字>.<事件>`); 不限定插件名,
@@ -3532,10 +3531,11 @@ int ClientPluginManager::sendPluginDataToPeer(
     std::string err;
     if (!agentxx::events::naming::validateClientPluginWriteTopic(topicStr, &err)) {
         XX_LOGW("[client_plugin] {} send_plugin_data rejected: {}", inst->name, err);
-        return -2;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     const std::string j = agentxx::plugin::PluginStringView::empty(json) ? "{}" : svToStr(json);
-    return uiAdapter_->sendPluginData(topicStr, j) ? 0 : -1;
+    return uiAdapter_->sendPluginData(topicStr, j) ? AGENTXX_RESULT_OK
+                                                   : AGENTXX_RESULT_ERR_FAILED;
 }
 
 namespace {
@@ -3562,7 +3562,7 @@ int ClientPluginManager::registerBuiltinToolRenderer(
     void*               userData
 ) {
     if (toolName.empty() || !fn) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     ClientToolRenderReg reg;
     reg.plugin   = std::string{kBuiltinRendererOwner};
@@ -3586,7 +3586,7 @@ int ClientPluginManager::registerBuiltinToolRenderer(
         cur->builtinToolRenderers.push_back(std::move(reg));
     }
     uiRegistry_ = std::move(cur);
-    return 0;
+    return AGENTXX_RESULT_OK;
 }
 
 int ClientPluginManager::registerToolRenderer(
@@ -3596,14 +3596,14 @@ int ClientPluginManager::registerToolRenderer(
     if (!inst || !spec || spec->version != 1
         || !agentxx::plugin::specSizeOk<AgentxxToolRenderSpec>(spec->struct_size)
         || agentxx::plugin::PluginStringView::empty(&spec->tool_name)) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     if (!acceptsRegistration(inst)) {
         XX_LOGW(
             "[client_plugin] `{}` registerToolRenderer rejected: closing or disabled",
             inst->name
         );
-        return -1;
+        return AGENTXX_RESULT_ERR_STATE;
     }
     const std::string   tname = svToStr(spec->tool_name);
     ClientToolRenderReg reg;
@@ -3619,7 +3619,7 @@ int ClientPluginManager::registerToolRenderer(
     if (!spec->render_fn && !agentxx::plugin::PluginStringView::empty(&spec->template_json)) {
         reg.templateJson = svToStr(spec->template_json);
         if (!acceptUiJsonSize(reg.templateJson, "register_tool_renderer template", inst->name)) {
-            return -1;
+            return AGENTXX_RESULT_ERR_LIMIT;
         }
         try {
             auto j = utilxx_base::Json::parse(reg.templateJson);
@@ -3629,7 +3629,7 @@ int ClientPluginManager::registerToolRenderer(
                 reg.templateSummaryTemplate = j.value("summaryTemplate", std::string{});
             }
         } catch (...) {
-            return -1;
+            return AGENTXX_RESULT_ERR_LIMIT;
         }
     }
 
@@ -3667,7 +3667,7 @@ int ClientPluginManager::registerToolRenderer(
     if (!replacedInst) {
         inst->toolRenderRegs.push_back(reg);
     }
-    return 0;
+    return AGENTXX_RESULT_OK;
 }
 
 int ClientPluginManager::unregisterToolRenderer(
@@ -3675,7 +3675,7 @@ int ClientPluginManager::unregisterToolRenderer(
     PluginxxStringView    tool_name
 ) {
     if (!inst || agentxx::plugin::PluginStringView::empty(&tool_name)) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     const std::string tname = svToStr(tool_name);
     for (auto& r : inst->toolRenderRegs) {
@@ -3708,7 +3708,7 @@ int ClientPluginManager::unregisterToolRenderer(
         ),
         inst->toolRenderRegs.end()
     );
-    return 0;
+    return AGENTXX_RESULT_OK;
 }
 
 int ClientPluginManager::bindActionHandler(
@@ -3718,11 +3718,11 @@ int ClientPluginManager::bindActionHandler(
     void*                 user_data
 ) {
     if (!inst || !on_action) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     if (!acceptsRegistration(inst)) {
         XX_LOGW("[client_plugin] `{}` bindActionHandler rejected: closing or disabled", inst->name);
-        return -1;
+        return AGENTXX_RESULT_ERR_STATE;
     }
     const std::string target = svToStr(target_id); // 空串 = 实例级 fallback
     if (!hostSupportedInterfaces().contains(std::string{plugin_interfaces::ClientAction})) {
@@ -3730,7 +3730,7 @@ int ClientPluginManager::bindActionHandler(
             "[client_plugin] bind_action `{}` rejected: interface agentxx.client.action unsupported",
             target.empty() ? "(fallback)" : target
         );
-        return -1;
+        return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
     ClientActionBinding reg;
     reg.targetId = target;
@@ -3764,7 +3764,7 @@ int ClientPluginManager::bindActionHandler(
     if (!replacedInst) {
         inst->actionRegs.push_back(reg);
     }
-    return 0;
+    return AGENTXX_RESULT_OK;
 }
 
 int ClientPluginManager::unbindActionHandler(
@@ -3772,7 +3772,7 @@ int ClientPluginManager::unbindActionHandler(
     PluginxxStringView    target_id
 ) {
     if (!inst) {
-        return -1;
+        return AGENTXX_RESULT_ERR_STATE;
     }
     const std::string target = svToStr(target_id);
     {
@@ -3800,7 +3800,7 @@ int ClientPluginManager::unbindActionHandler(
         ),
         inst->actionRegs.end()
     );
-    return 0;
+    return AGENTXX_RESULT_OK;
 }
 
 void ClientPluginManager::dispatchAction(
@@ -3909,23 +3909,23 @@ void ClientPluginManager::dispatchAction(
 int ClientPluginManager::openOverlay(ClientPluginInstance* inst, const AgentxxOverlaySpec* spec) {
     if (!inst || !spec || spec->version != 1
         || !agentxx::plugin::specSizeOk<AgentxxOverlaySpec>(spec->struct_size)) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     if (!acceptsRegistration(inst)) {
         XX_LOGW("[client_plugin] `{}` openOverlay rejected: closing or disabled", inst->name);
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     if (spec->type < AGENTXX_OVERLAY_MERMAID || spec->type > AGENTXX_OVERLAY_CUSTOM) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     if (!hostSupportedInterfaces().contains(std::string{plugin_interfaces::ClientOverlay})) {
         XX_LOGW(
             "[client_plugin] open_overlay rejected: interface agentxx.client.overlay unsupported"
         );
-        return -1;
+        return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
     if (!uiAdapter_) {
-        return -1;
+        return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
     const std::string title   = svToStr(spec->title);
     const std::string payload = svToStr(spec->payload);
@@ -3934,11 +3934,11 @@ int ClientPluginManager::openOverlay(ClientPluginInstance* inst, const AgentxxOv
                                     : svToStr(spec->extra_json);
     if (!acceptUiJsonSize(payload, "open_overlay payload", inst->name)
         || !acceptUiJsonSize(extra, "open_overlay extra_json", inst->name)) {
-        return -1;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     // 拷贝字符串后直调 adapter (TUI 实现内部 postToUi, 不阻塞插件)
     uiAdapter_->onOverlayOpen(inst->name, spec->type, title, payload, extra);
-    return 0;
+    return AGENTXX_RESULT_OK;
 }
 
 void ClientPluginManager::closeOverlay(ClientPluginInstance* inst) {
@@ -4127,13 +4127,13 @@ ClientToolRenderResult renderClientTool(
                         input.max_width   = maxWidth;
 
                         AgentxxToolRenderOutput output{};
-                        int32_t                 rc = -1;
+                        int32_t                 rc = AGENTXX_RESULT_ERR_INTERNAL;
                         try {
                             rc = r.renderFn(r.userData, &input, &output);
                         } catch (...) {
-                            rc = -1;
+                            rc = AGENTXX_RESULT_ERR_INTERNAL;
                         }
-                        if (rc == 0) {
+                        if (rc == AGENTXX_RESULT_OK) {
                             res.matched = true;
                             if (output.displayName.data) {
                                 res.displayName.assign(

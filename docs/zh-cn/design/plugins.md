@@ -442,7 +442,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 | `agentxx.agent.prompt` | 3 | `get_prompt/set_prompt` (主程序提示词读写) + `get_tool_prompt(tool_name)` (工具提示词配置 JSON `{depict, args}`, 主程序级配置; v3 从插件框架通用表迁入) |
 | `agentxx.agent.resources` | 2 | `register_skill_dir/memory_file/mcp_server` (仅初始化阶段) + `get_own_resources` (冻结后不可变) |
 | `agentxx.agent.graph` | 2 | 执行图扩展: `register_node_type/unregister_node_type` (插件自定义节点类型, 注入 per-agent GraphRegistry) + `get_graph_json/get_graph_name/set_graph_json` (查看/修改主程序执行图, 默认名 `agentxx.default`; 插件加载阶段生效, 主程序构建 engine 前处理)。**图状态不含对话上下文**: `state_json` 里没有 `messages` 通道 (LLM 上下文由会话持有), 只有控制类通道与只读影子通道 `xx_messagesMeta` (条数/版本/角色分布/末尾消息摘要, 载荷与上下文大小无关); 需要上下文内容用 `agentxx.agent.context` 查询。插件写 `{"channel":"messages", ...}` 的 writes 会被主程序改写成会话上下文写入 (默认 append, `"mode":"overwrite"` 整体替换; 空列表的 overwrite 忽略), 因此按旧契约写 `messages` 的插件仍可用。**条件边用 `xx_has_tool_calls`** (agentxx 注册, 语义 = 最后一条 assistant 是否带 tool_calls; 读 `xx_messagesMeta.last_assistant_tool_calls`, 缺该通道时回退扫描 `messages` 通道), 内置 `has_tool_calls` 在新架构下恒为 false, 不要使用 |
-| `agentxx.agent.mount` | 1 | 挂载查询 (诊断用): `list` (全部挂载摘要 JSON 数组, 每项含 agentId/agentName/workDir/language/mountSeq/plugins) + `get` (按 agentId 查单个挂载摘要, 没有该挂载返回 -1) |
+| `agentxx.agent.mount` | 1 | 挂载查询 (诊断用): `list` (全部挂载摘要 JSON 数组, 每项含 agentId/agentName/workDir/language/mountSeq/plugins) + `get` (按 agentId 查单个挂载摘要, 没有该挂载返回 `AGENTXX_RESULT_ERR_NOT_FOUND`) |
 | `agentxx.agent.runtime` | 2 | 会话运行时 (插件挂自己的根并驱动会话): `mount_root/unmount_root` (带自己的 `AgentConfig` 覆盖与插件挂载策略) + `open_channel/close_channel` (一个 sessionId 一条通道, 事件经回调投递) + `send_input/cancel/select_model/respond_interrupt` + `get_channel_state/get_context_messages/list_runtime` (只读查询) + `register_trigger/unregister_trigger/emit_event/register_timer/unregister_timer` (事件驱动)。入口用 `root_id` / `channel_id` 句柄寻址, 不带 agent 引用 —— 它看的是整个容器。v2 表尾追加后台任务四成员 (`submit/cancel/get/list_async_work`, 基线不变, `ifaceHas` 判定)。详见 §19 |
 
 ### 8.2 通用表 (`agentxx.*`, 10 张)
@@ -483,8 +483,9 @@ agent 侧与 client 侧各提供一份。广播 / 能力 / 调度 / 配置 / 日
 >
 > **业务表的 agent 级成员第一个参数是 `const PluginxxScopeRef* agent`** (挂载时下发的
 > `agent_id` + 挂载序号); 传空/未知 id/过期序号时注册类返回
-> `AGENTXX_PLUGIN_ERR_NO_AGENT`、读取类返回 `-1`, 且**不产生任何副作用**。
-> 四件套要求、判定规则与追加策略见 **§17**, 进程级容器与 agent 挂载的分工见 **§18**。
+> `AGENTXX_RESULT_ERR_NO_AGENT`、读句柄/计数的成员返回 `-1`, 且**不产生任何副作用**。
+> 返回码全表见 **§8.3**; 四件套要求、判定规则与追加策略见 **§17**, 进程级容器与 agent
+> 挂载的分工见 **§18**。
 
 > **内置能力 (供其他插件 / 主程序侧调用)**
 >
@@ -631,6 +632,39 @@ tool_call 中的前后调用形成顺序屏障。并发只发生在同一条 ass
   (`permission denied[: reason]`), 工具无需处理。
 - 内置工具 (`lib/src/tools`) 与内置插件 (`agent/plugins/*`) 已按该约定改造 (2026-11):
   插件里的 `*_impl.h` 直接返回 `ToolResult`, 不再自己拼 `[Error] ` 前缀。
+
+### 8.3 返回码 (`agentxx_result.h`)
+
+业务表 (agent 侧 `agentxx.agent.*` / client 侧 `agentxx.client.*`) 的入口一律回
+`agentxx/lib/include/agentxx/plugin/api/agentxx_result.h` 的码表:
+
+| 码 | 值 | 含义 | 名称 (`resultName`) |
+|----|----|------|--------------------|
+| `AGENTXX_RESULT_OK` | 0 | 成功 (= `PLUGINXX_RESULT_OK`) | `ok` |
+| `AGENTXX_RESULT_ERR_ARG` | -5000 | 参数非法 (缺字段 / 类型不对 / 值超范围 / 必需出参为空) | `invalid_argument` |
+| `AGENTXX_RESULT_ERR_JSON` | -5001 | 传入的 JSON 解析失败或形状不对 | `invalid_json` |
+| `AGENTXX_RESULT_ERR_STATE` | -5002 | 当前状态不允许 (挂载已拆 / 插件已禁用 / 已经做过) | `invalid_state` |
+| `AGENTXX_RESULT_ERR_NOT_FOUND` | -5003 | 目标不存在 (工具 / 频道 / 会话 / 面板 / 资源) | `not_found` |
+| `AGENTXX_RESULT_ERR_NO_AGENT` | -5004 | agent 引用无效 (空 / 未知 id / 过期挂载序号) | `invalid_agent` |
+| `AGENTXX_RESULT_ERR_NOT_OWNER` | -5005 | 目标不属于本实例或本次挂载 (别人的工具 / 图定义占用者不是自己) | `not_owner` |
+| `AGENTXX_RESULT_ERR_CONFLICT` | -5006 | 同名目标已存在 (重复注册) | `conflict` |
+| `AGENTXX_RESULT_ERR_LIMIT` | -5007 | 超出上限 (预算 / 条数 / 字节数 / 批量大小) | `limit_exceeded` |
+| `AGENTXX_RESULT_ERR_UNSUPPORTED` | -5008 | 本主程序没提供这项能力 (老版本 / 未加载对应中间件) | `unsupported` |
+| `AGENTXX_RESULT_ERR_FAILED` | -5009 | 操作本身失败 (写盘 / 下发对端 / 资源加载) | `failed` |
+| `AGENTXX_RESULT_ERR_INTERNAL` | -5010 | 主程序内部错误 (不该发生; 边界兜底异常也是它) | `internal` |
+
+规则:
+
+- **段位**: 整个段在 `pluginxx/api/result.h` 约定给应用的 `-5000 ~ -9999` 里;
+  框架通用表 (`agentxx.*`) 与 `agentxx.net` 仍用 `PLUGINXX_RESULT_*`, 不要混用;
+- **不写数字**: 插件侧只写宏名, 判定用 `== AGENTXX_RESULT_OK` / `!= AGENTXX_RESULT_OK`,
+  需要拼文本时用 `agentxx::plugin::resultName(code)`; 不存在旧名别名 (`-1` / `-2` 那代已删);
+- **句柄与计数不是返回码**: 返回 id (通道 / 触发器 / 定时器 / 共享存储条目) 的成员失败给 `-1`,
+  返回条数的成员失败给 `0` 或 `-1` —— 以各成员注释为准, 不要拿它们与码表比较;
+- **0/1 查询**: `is_canceled` / `is_visible` 一类只给真假, 不是返回码;
+- **框架生命周期入口** (`create` / `start` / `stop` / 挂载事务) 仍是 "0 = 成功, 非 0 = 失败",
+  主程序只判非 0 并记日志, 具体码不参与分支;
+- 新增码只在业务表的语义确实不重合时加, 优先复用上表。
 
 ---
 
@@ -1890,7 +1924,7 @@ AgentHost（进程级容器, 一份; FFI 每个句柄一份）
   (`register_capability`)。能力是进程级的, 同一实例重复声明按幂等成功;
 - **agent 级 (在 `mount` 里做)**: 工具、工具权限、提示词贡献、功能埋点、广播订阅、
   图节点类型、图定义、声明式资源 (skill/memory/mcp)。**在 `start` 里做这些会被拒绝**
-  (`AGENTXX_PLUGIN_ERR_NO_AGENT`, 无副作用);
+  (`AGENTXX_RESULT_ERR_NO_AGENT`, 无副作用);
 - 拆挂载只撤销该 agent 的实体, 插件实例与它的线程/连接留在进程里给别的 agent 用。
   插件 `stop` 与 `destroy` 只在整个插件被卸载/主程序关闭时发生。
 
@@ -1920,7 +1954,7 @@ static void* mountForAgent(MyCtx& ctx, const AgentxxPluginAgentMountSpec* spec,
   不要保存返回值;
 - 同一个 `agent_id` 卸载后重新挂载会拿到**新序号**, 上一轮的引用自动失效 (注册被拒);
   `seq == 0` 表示不校验 (仅 FFI / 测试自行构造引用时用);
-- 引用无效时: 注册类返回 `AGENTXX_PLUGIN_ERR_NO_AGENT` 并记一条 WARN
+- 引用无效时: 注册类返回 `AGENTXX_RESULT_ERR_NO_AGENT` 并记一条 WARN
   (带收到的 `agent_id`/`seq` 与本进程现有挂载), 读取类返回 `-1`;
 - 会话、事件、工作目录、取消状态这些**落在具体 agent 上**的查询都按引用定位,
   多 agent 下不会串到主 agent。
@@ -2036,9 +2070,9 @@ plugin:
 | | `cancel_async_work(id)` | 只能取消本实例提交的 (别人的任务返回 `ERR_ARG`) |
 | | `get_async_work(id, out_json)` / `list_async_work(session_id, out_json)` | 任务表查询; `session_id` 空 = 本实例提交的全部 |
 
-错误码 (`AGENTXX_PLUGIN_RUNTIME_*`): `OK(0)` / `ERR_ARG` / `ERR_STATE` / `ERR_NOT_FOUND` /
-`ERR_BUDGET` / `ERR_CONFLICT` / `ERR_UNSUPPORTED` / `ERR_FAILED`。具体原因写日志
-(这张表的入口没有 `error_out` 参数)。
+错误码 (`agentxx_result.h` 的 `AGENTXX_RESULT_*`, 与框架表同段): `OK(0)` / `ERR_ARG` /
+`ERR_STATE` / `ERR_NOT_FOUND` / `ERR_LIMIT` / `ERR_CONFLICT` / `ERR_UNSUPPORTED` / `ERR_FAILED`。
+具体原因写日志 (这张表的入口没有 `error_out` 参数)。
 
 **后台任务四成员 (v2)**:
 
@@ -2242,6 +2276,12 @@ plugin:
 | `read_broadcast(id, out_json)` | 读当前值：`cache: none` 返回 `ERR_NO_VALUE`，未声明返回 `ERR_NOT_DECLARED`，已结束返回 `ERR_ENDED` |
 | `end_broadcast(id, reason_json, err)` | 结束一条流（属主或主程序）：之后发布与读都被拒，全部订阅收到 `on_end`；重复结束幂等；再次 `declare` 同一 id = 开新流 |
 
+返回码判断一律用宏名（`PLUGINXX_RESULT_*`），不要写数字：码表只有一份，在
+`pluginxx/api/result.h` —— 通用段 `-1 ~ -99`（`ERR_ARG` / `ERR_STATE` / `ERR_JSON` /
+`ERR_NOT_FOUND` / `ERR_TIMEOUT` / `ERR_PERMISSION` / `ERR_BUSY` / `ERR_NO_MEMORY`）、
+广播段 `-200 ~ -299`（`not_declared` -200 / `no_value` -201 / `ended` -202 / `not_owner` -203）、
+内部错误 `ERR_INTERNAL` -999（2026-11 重编号；旧版广播段用的是 -2/-4/-5）。
+
 ### 20.2 归属与回收
 
 - 插件声明的频道记在本实例名下（`decl.owner = <插件 id>`），订阅同样按实例记账；
@@ -2388,9 +2428,19 @@ plugin:
 | `call_async` | 异步 | `http.request` / `http.fetch` / `http.download`; 受理成功写 `requestId`, 结果**恰好一次**经 `notify->done` 给出 |
 | `cancel` | 同步 | 撤一条进行中的异步请求 |
 
-结果码 `PLUGINXX_NET_OK/ERR_ARG/ERR_STATE/ERR_JSON/ERR_NOT_FOUND/ERR_TIMEOUT/ERR_PERMISSION/
-ERR_QUEUE_FULL/ERR_NO_MEMORY/ERR_INTERNAL` 只表示"受理层面"的成败; **业务结论在结果 JSON 的
-`ok` 里** —— 连不上、超时这类失败是 `code == PLUGINXX_NET_OK` 而 `ok == false`。
+入口码取 `pluginxx/api/result.h` 的**通用段**（`PLUGINXX_RESULT_OK` / `ERR_ARG` / `ERR_STATE` /
+`ERR_JSON` / `ERR_NOT_FOUND` / `ERR_TIMEOUT` / `ERR_PERMISSION` / `ERR_BUSY` / `ERR_NO_MEMORY` /
+`ERR_INTERNAL`），只表示"受理层面"的成败；**业务结论在结果 JSON 的 `ok` 里** —— 连不上、超时
+这类失败是 `code == PLUGINXX_RESULT_OK` 而 `ok == false`。（网络实现 `utilxx::NetHub` 的入口码与
+通用段取值一一对应，只有"内部错误" -99 在表入口换成本表的 `PLUGINXX_RESULT_ERR_INTERNAL`。）
+
+结果 JSON 的 `error` 是**名字**（数字只到 C 边界），词表只有两份：通用段名字来自
+`pluginxx/api/result.h` 的 `nameOf()`（`invalid_argument` / `invalid_json` / `busy` /
+`not_found` / `timeout` / `permission_denied` / `canceled` …），网络的业务失败名来自
+`utilxx/net_error.h` 的 `nameOf()`（`invalid_url` / `invalid_host` / `invalid_port` /
+`invalid_id` / `exists` / `not_connected` / `wrong_kind` / `bind_failed` / `write_failed` /
+`unsupported_op` / `canceled`）。插件按名字判断即可：2026-11 起 `bad_args` / `bad_json` /
+`too_many` / `cancelled` / `not_running` / `bad_url` / `listen_failed` 这类旧名不再产生。
 
 操作名常量在 `pluginxx/net/ops.h`; 常用参数:
 
@@ -2414,7 +2464,7 @@ ERR_QUEUE_FULL/ERR_NO_MEMORY/ERR_INTERNAL` 只表示"受理层面"的成败; **�
 | 场景 | 入口 |
 |---|---|
 | 同步操作 | `netCall(host, net, op, args)` / `netWsConnect` / `netWsSend` / `netWsClose` / `netHttpServe` / `netHttpRespond` / `netInfo` |
-| 工具实现体是阻塞的 | `netFetchBlocking(ctx, url, options)` / `netCallBlocking(...)` —— **不得在主程序 io 线程调用** (完成回调投递到那条线程, 会互锁), 这种情况直接返回 `PLUGINXX_NET_ERR_STATE` |
+| 工具实现体是阻塞的 | `netFetchBlocking(ctx, url, options)` / `netCallBlocking(...)` —— **不得在主程序 io 线程调用** (完成回调投递到那条线程, 会互锁), 这种情况直接返回 `PLUGINXX_RESULT_ERR_STATE` |
 | 插件自带 `io_context` 的协程 | `co_await netFetch(ctx, url, options)` (kit 协程) 或 `co_await asyncNetFetch(ex, host, net, url, options, token)` (asio 原生形态, 完成签名 `void(NetResult)`, 回调投递回传入的执行器) |
 | 订阅事件 | `declarePluginBroadcast` + `subscribePluginBroadcast`, 频道 `netEventTopic(插件 id)` |
 
@@ -2444,4 +2494,4 @@ timeoutMs / maxBytes / followRedirects / maxRedirects / tlsVerify。
   `QqApi` 的上传与附件下载 (含二进制正文与失败原因);
 - 限制: 服务端默认只监听回环 (`127.0.0.1`), 要同网段访问必须显式给 `host: "0.0.0.0"`;
   每个属主同时最多 16 条 HTTP 客户端请求、连接与服务数量有上限 (`net.info` 可查);
-  单次 `call` 等网络线程的上界是 5 秒 (超时返回 `PLUGINXX_NET_ERR_TIMEOUT`)。
+  单次 `call` 等网络线程的上界是 5 秒 (超时返回 `PLUGINXX_RESULT_ERR_TIMEOUT`)。

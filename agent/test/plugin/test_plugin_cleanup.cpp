@@ -403,7 +403,7 @@ asio::awaitable<void> test_graph_definition_slot() {
         XX_TEST_EXPECT_FALSE(invB.ownsGraphDefinition);
     }
 
-    // B 尝试占用: 被拒绝, 且不覆盖 A 的定义 (独占语义)
+    // B 尝试占用: 被拒绝 (不是它的图定义), 且不覆盖 A 的定义 (独占语义)
     XX_TEST_EXPECT_EQ(
         f.ctx->pluginMount->setGraphJson(
             instB.get(),
@@ -411,7 +411,7 @@ asio::awaitable<void> test_graph_definition_slot() {
                 R"({"name":"plugin-graph-b","nodes":{},"edges":[]})"
             )
         ),
-        -1
+        AGENTXX_RESULT_ERR_NOT_OWNER
     );
     XX_TEST_EXPECT_EQ(f.mgr->graphDefinitionOwner(), std::string{"example_plugin"});
     XX_TEST_EXPECT_TRUE(f.ctx->pluginMount->getGraphJson().find("plugin-graph-b") == std::string::npos);

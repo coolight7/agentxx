@@ -451,7 +451,7 @@ asio::awaitable<TestResult> run_plugin_host_mount_tests() {
             // 9. 不带引用 = 等同于在 `start` 里注册: 拒绝且无副作用
             XX_TEST_EXPECT_EQ(
                 tools->register_tool(hostView, nullptr, &spec),
-                int32_t{AGENTXX_PLUGIN_ERR_NO_AGENT}
+                int32_t{AGENTXX_RESULT_ERR_NO_AGENT}
             );
             XX_TEST_EXPECT_FALSE(agentA->toolRegistry->contains("host_mount_probe"));
 
@@ -460,7 +460,7 @@ asio::awaitable<TestResult> run_plugin_host_mount_tests() {
             XX_TEST_EXPECT_TRUE(host->mountOf(&unknown) == nullptr);
             XX_TEST_EXPECT_EQ(
                 tools->register_tool(hostView, &unknown, &spec),
-                int32_t{AGENTXX_PLUGIN_ERR_NO_AGENT}
+                int32_t{AGENTXX_RESULT_ERR_NO_AGENT}
             );
             XX_TEST_EXPECT_FALSE(agentA->toolRegistry->contains("host_mount_probe"));
 
@@ -481,7 +481,7 @@ asio::awaitable<TestResult> run_plugin_host_mount_tests() {
                 // 过期引用登记被拒, 新引用登记成功 (证明拒绝不是"永远失败")
                 XX_TEST_EXPECT_EQ(
                     tools->register_tool(hostView, &stale, &spec),
-                    int32_t{AGENTXX_PLUGIN_ERR_NO_AGENT}
+                    int32_t{AGENTXX_RESULT_ERR_NO_AGENT}
                 );
                 XX_TEST_EXPECT_EQ(tools->register_tool(hostView, &fresh, &spec), int32_t{0});
                 XX_TEST_EXPECT_TRUE(agentA->toolRegistry->contains("host_mount_probe"));

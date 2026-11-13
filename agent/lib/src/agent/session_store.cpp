@@ -207,7 +207,9 @@ ViewMessage stripAttachmentDataUrl(const ViewMessage& msg) {
 ///   保证落库内容始终可被解析
 std::string dumpJsonUtf8(const utilxx_base::Json& j) {
     std::string text = j.dump();
-    if (!utilxx_base::utf8IsAvail(text)) {
+    // allowBackstop = true: 这里只看"是不是合法 UTF-8", 文本里本来就有 U+FFFD 也算合法
+    // (默认参数还会把 U+FFFD 当成"不可用", 对每段含占位符的文本都白跑一遍修复)
+    if (!utilxx_base::utf8IsAvail(text, /*allowBackstop=*/true)) {
         // 返回值表示"是否真的发生过替换" (此处仅关心修复后的文本内容)
         (void)utilxx_base::utf8Repair(text);
     }
@@ -1152,7 +1154,8 @@ void SessionStore::saveLlmMessages(std::string_view sessionId, std::string_view 
                 auto insert = db.prepare("INSERT INTO llm_context(id, json) VALUES (1, ?)");
                 // 直接绑定会话给出的文本 (与旧路径 dumpJsonUtf8(llmMessages) 等价:
                 // 文本非法 UTF-8 时同样按 U+FFFD 修复, 保证库内可被 simdjson 解析)
-                if (utilxx_base::utf8IsAvail(llmMessagesJson)) {
+                // allowBackstop = true: 含 U+FFFD 的文本仍是合法 UTF-8, 不需要修复
+                if (utilxx_base::utf8IsAvail(llmMessagesJson, /*allowBackstop=*/true)) {
                     insert.bindText(1, llmMessagesJson);
                 } else {
                     std::string repaired{llmMessagesJson};

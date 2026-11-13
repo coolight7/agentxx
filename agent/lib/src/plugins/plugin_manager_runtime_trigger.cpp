@@ -118,18 +118,18 @@ int32_t PluginManager::runtimeRegisterTrigger(
 ) {
     if (inst == nullptr || spec == nullptr || outTriggerId == nullptr) {
         err = "register_trigger: 参数为空";
-        return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     const std::string topic = svToStr(spec->topic);
     if (topic.empty()) {
         err = "register_trigger: topic 必填";
-        return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     if (spec->policy != AGENTXX_PLUGIN_TRIGGER_POLICY_QUEUE
         && spec->policy != AGENTXX_PLUGIN_TRIGGER_POLICY_COALESCE
         && spec->policy != AGENTXX_PLUGIN_TRIGGER_POLICY_DROP_IF_BUSY) {
         err = fmt::format("register_trigger: policy 取值非法 {}", spec->policy);
-        return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     auto* channel = runtimeChannelOf(inst, spec->channel_id);
     if (channel == nullptr) {
@@ -137,7 +137,7 @@ int32_t PluginManager::runtimeRegisterTrigger(
             "register_trigger: 通道 {} 不存在或不属于本实例",
             spec->channel_id
         );
-        return AGENTXX_PLUGIN_RUNTIME_ERR_NOT_FOUND;
+        return AGENTXX_RESULT_ERR_NOT_FOUND;
     }
     const std::string delivery = svToStr(spec->delivery);
     if (!delivery.empty() && !agent::InputDelivery::known(delivery)) {
@@ -145,14 +145,14 @@ int32_t PluginManager::runtimeRegisterTrigger(
             "register_trigger: delivery 取值非法 '{}' (支持 next-turn/next-step/inject/collect)",
             delivery
         );
-        return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     if (runtimeTriggers_.size() + runtimeTimers_.size() >= kMaxTriggersPerInstance) {
         err = fmt::format(
             "register_trigger: 触发器与定时器合计已达上限 {}",
             kMaxTriggersPerInstance
         );
-        return AGENTXX_PLUGIN_RUNTIME_ERR_BUDGET;
+        return AGENTXX_RESULT_ERR_LIMIT;
     }
 
     auto trigger        = std::make_shared<RuntimeTrigger>();
@@ -162,7 +162,7 @@ int32_t PluginManager::runtimeRegisterTrigger(
     std::string topicErr;
     if (!agentxx::events::naming::validateReadableTopic(topic, &topicErr)) {
         err = fmt::format("register_trigger: {}", topicErr);
-        return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     trigger->topic      = topic;
     trigger->channelId  = spec->channel_id;
@@ -175,7 +175,7 @@ int32_t PluginManager::runtimeRegisterTrigger(
     auto registry = broadcasts();
     if (!registry) {
         err = "register_trigger: 本进程没有广播注册表";
-        return AGENTXX_PLUGIN_RUNTIME_ERR_UNSUPPORTED;
+        return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
     ensureTopicBroadcast(trigger->topic);
     std::weak_ptr<PluginManager> weakSelf = weak_from_this();
@@ -196,7 +196,7 @@ int32_t PluginManager::runtimeRegisterTrigger(
     );
     if (trigger->subscriptionId == 0) {
         err = fmt::format("register_trigger: 订阅频道 '{}' 失败: {}", trigger->topic, subError);
-        return AGENTXX_PLUGIN_RUNTIME_ERR_FAILED;
+        return AGENTXX_RESULT_ERR_FAILED;
     }
     if (trigger->policy == AGENTXX_PLUGIN_TRIGGER_POLICY_COALESCE) {
         trigger->debounceTimer = std::make_shared<asio::steady_timer>(ioExecutor());
@@ -210,12 +210,12 @@ int32_t PluginManager::runtimeRegisterTrigger(
         trigger->channelId,
         trigger->policy
     );
-    return AGENTXX_PLUGIN_RUNTIME_OK;
+    return AGENTXX_RESULT_OK;
 }
 
 int32_t PluginManager::runtimeUnregisterTrigger(PluginInstance* inst, int64_t triggerId) {
     if (inst == nullptr || triggerId <= 0) {
-        return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     auto it = std::find_if(
         runtimeTriggers_.begin(),
@@ -225,7 +225,7 @@ int32_t PluginManager::runtimeUnregisterTrigger(PluginInstance* inst, int64_t tr
         }
     );
     if (it == runtimeTriggers_.end() || (*it)->owner != inst->name) {
-        return AGENTXX_PLUGIN_RUNTIME_ERR_NOT_FOUND;
+        return AGENTXX_RESULT_ERR_NOT_FOUND;
     }
     auto trigger = *it;
     if (trigger->subscriptionId != 0) {
@@ -238,13 +238,13 @@ int32_t PluginManager::runtimeUnregisterTrigger(PluginInstance* inst, int64_t tr
         trigger->debounceTimer->cancel();
     }
     runtimeTriggers_.erase(it);
-    return AGENTXX_PLUGIN_RUNTIME_OK;
+    return AGENTXX_RESULT_OK;
 }
 
 int32_t
     PluginManager::runtimeEmitEvent(PluginInstance* inst, std::string_view topic, std::string_view payload) {
     if (inst == nullptr || topic.empty()) {
-        return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     // 插件发事件 = 向广播频道发布: 与插件自己直接 publish 同一套校验 (只能写 plugin.*)
     // 频道还没人声明时按名字补一条 (属主 = 名字里的插件), 否则这次发布会被“未声明”拒掉
@@ -254,8 +254,8 @@ int32_t
     if (rc != PLUGINXX_RESULT_OK) {
         XX_LOGW("runtime emit rejected: `{}` ({})", topic, publishError);
     }
-    return rc == PLUGINXX_RESULT_OK ? AGENTXX_PLUGIN_RUNTIME_OK
-                                    : AGENTXX_PLUGIN_RUNTIME_ERR_FAILED;
+    return rc == PLUGINXX_RESULT_OK ? AGENTXX_RESULT_OK
+                                    : AGENTXX_RESULT_ERR_FAILED;
 }
 
 void PluginManager::onTriggerEvent(int64_t triggerId, std::string_view payload) {
@@ -279,7 +279,7 @@ void PluginManager::onTriggerEvent(int64_t triggerId, std::string_view payload) 
     // QUEUE: 每条立即投; 会话队列保证串行
     if (trigger->policy == AGENTXX_PLUGIN_TRIGGER_POLICY_QUEUE) {
         std::string err;
-        if (runtimeSendInput(nullptr, channel->channelId, input, err) != AGENTXX_PLUGIN_RUNTIME_OK) {
+        if (runtimeSendInput(nullptr, channel->channelId, input, err) != AGENTXX_RESULT_OK) {
             trigger->dropped++;
             XX_LOGW("[runtime] trigger {} 投递失败: {}", triggerId, err);
         }
@@ -294,7 +294,7 @@ void PluginManager::onTriggerEvent(int64_t triggerId, std::string_view payload) 
             return;
         }
         std::string err;
-        if (runtimeSendInput(nullptr, channel->channelId, input, err) != AGENTXX_PLUGIN_RUNTIME_OK) {
+        if (runtimeSendInput(nullptr, channel->channelId, input, err) != AGENTXX_RESULT_OK) {
             trigger->dropped++;
             XX_LOGW("[runtime] trigger {} 投递失败: {}", triggerId, err);
         }
@@ -354,7 +354,7 @@ void PluginManager::flushTrigger(int64_t triggerId) {
     }
     std::string err;
     const auto  joined = joinInputs(parts, trigger->delivery);
-    if (runtimeSendInput(nullptr, channel->channelId, joined, err) != AGENTXX_PLUGIN_RUNTIME_OK) {
+    if (runtimeSendInput(nullptr, channel->channelId, joined, err) != AGENTXX_RESULT_OK) {
         trigger->dropped += parts.size();
         XX_LOGW("[runtime] trigger {} 合并投递失败: {}", triggerId, err);
     }
@@ -372,37 +372,37 @@ int32_t PluginManager::runtimeRegisterTimer(
 ) {
     if (inst == nullptr || spec == nullptr || outTimerId == nullptr) {
         err = "register_timer: 参数为空";
-        return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     auto* channel = runtimeChannelOf(inst, spec->channel_id);
     if (channel == nullptr) {
         err = fmt::format("register_timer: 通道 {} 不存在或不属于本实例", spec->channel_id);
-        return AGENTXX_PLUGIN_RUNTIME_ERR_NOT_FOUND;
+        return AGENTXX_RESULT_ERR_NOT_FOUND;
     }
     const std::string inputJson = svToStr(spec->input_json);
     if (inputJson.empty()) {
         err = "register_timer: input_json 必填 (形状同 send_input)";
-        return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     // 输入先解析一次: 参数写错现在就能报, 不用等到第一次触发
     if (auto parsed = agent::parseUserInputJson(inputJson); !parsed.has_value()) {
         err = fmt::format("register_timer: {}", parsed.error().message);
-        return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     if (spec->first_delay_ms < 0 || spec->interval_ms < 0) {
         err = "register_timer: first_delay_ms / interval_ms 不能为负";
-        return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     if (runtimeTriggers_.size() + runtimeTimers_.size() >= kMaxTriggersPerInstance) {
         err = fmt::format(
             "register_timer: 触发器与定时器合计已达上限 {}",
             kMaxTriggersPerInstance
         );
-        return AGENTXX_PLUGIN_RUNTIME_ERR_BUDGET;
+        return AGENTXX_RESULT_ERR_LIMIT;
     }
     if (!ioExecutor()) {
         err = "register_timer: 本进程没有可用的 io 执行器";
-        return AGENTXX_PLUGIN_RUNTIME_ERR_UNSUPPORTED;
+        return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
 
     auto timer        = std::make_shared<RuntimeTimer>();
@@ -422,7 +422,7 @@ int32_t PluginManager::runtimeRegisterTimer(
     const auto timerId = timer->timerId;
     scheduleTimer(timerId, std::chrono::milliseconds(spec->first_delay_ms));
     *outTimerId = timerId;
-    return AGENTXX_PLUGIN_RUNTIME_OK;
+    return AGENTXX_RESULT_OK;
 }
 
 void PluginManager::scheduleTimer(int64_t timerId, std::chrono::milliseconds delay) {
@@ -478,7 +478,7 @@ void PluginManager::fireTimer(int64_t timerId) {
     if (timer->policy != AGENTXX_PLUGIN_TRIGGER_POLICY_DROP_IF_BUSY || !busy) {
         std::string err;
         if (runtimeSendInput(nullptr, channel->channelId, timer->inputJson, err)
-            != AGENTXX_PLUGIN_RUNTIME_OK) {
+            != AGENTXX_RESULT_OK) {
             XX_LOGW("[runtime] timer {} 投递失败: {}", timerId, err);
         }
     } else {
@@ -494,7 +494,7 @@ void PluginManager::fireTimer(int64_t timerId) {
 
 int32_t PluginManager::runtimeUnregisterTimer(PluginInstance* inst, int64_t timerId) {
     if (inst == nullptr || timerId <= 0) {
-        return AGENTXX_PLUGIN_RUNTIME_ERR_ARG;
+        return AGENTXX_RESULT_ERR_ARG;
     }
     auto it = std::find_if(
         runtimeTimers_.begin(),
@@ -504,13 +504,13 @@ int32_t PluginManager::runtimeUnregisterTimer(PluginInstance* inst, int64_t time
         }
     );
     if (it == runtimeTimers_.end() || (*it)->owner != inst->name) {
-        return AGENTXX_PLUGIN_RUNTIME_ERR_NOT_FOUND;
+        return AGENTXX_RESULT_ERR_NOT_FOUND;
     }
     if ((*it)->timer) {
         (*it)->timer->cancel();
     }
     runtimeTimers_.erase(it);
-    return AGENTXX_PLUGIN_RUNTIME_OK;
+    return AGENTXX_RESULT_OK;
 }
 
 } // namespace plugin

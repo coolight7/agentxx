@@ -47,6 +47,8 @@
 - **插件支持**; 高兼容性的异步 C ABI 插件接口，可通过 C/C++/Rust 等语言开发`动态库插件`. 通过 C++ Quickjs 插件可以开发和加载 `JS插件`. 已内置实现 C++插件:
     - 文件读写、命令执行、codegraph、系统CPU/GPU/RAM信息、屏幕截取、鼠标选择文本事件流
     - `聊天机器人`: 可接入 QQ私聊、群聊 自动对话、完整的 agent 功能（读写文件、命令执行等）
+- **异步事件通知/后台任务**; 模型注册接收事件后，每当事件触发时自动插入上下文通知模型，以便插件自定义实现外部事件响应; 模型可以异步启动工具/subagent的执行，让工具在后台运行，模型继续实施其他任务，需要时再决定阻塞等待、查询、取消后台任务，可选工具执行完成时自动插入上下文通知模型
+- **多Agent支持**; 模型可启动多个子agent会话，与异步工具类似，支持异步接收子agent结果，主会话继续自己的任务
 - **FFI支持**; 通过 FFI 可以在你的项目加载 libagentxx 动态库后高性能扩展 Agent 功能，同时仍然支持加载现有的插件
 - **跨系统支持**; 计划支持 Windows/Macos/Linux/Android/IOS, 已实现支持4个系统，仅ios待测试兼容; 针对 windows 优化兼容，对字符编码转换、pwsh、cmd 等做了许多处理适配，且可在 WSL 中直接执行 windows 命令、打开 windows 程序、自动转换文件路径
 - **丰富的 tool**; 内置 文件读写、命令行执行、任务规划、codegraph 代码语法解析 等，编译、运行时可选自由组合，支持自动纠正 LLM 的参数类型、字符编码
@@ -116,11 +118,13 @@
 ## 计划实现
 ### 基础模块
 - **Toolcall**
+    - ✅拦截输出，超过限制长度时自动压缩、截取存储，避免占用大量上下文，模型需要时可分页读取
+    - ✅特化渲染，工具结果优化UI显示，而不是直接显示原始文本; 插件自定义tool可以自定义特化渲染
+    - ✅自动转换参数类型（String、Array、Number互转），提高兼容性
+    - ✅支持依托`事件`实现异步获取结果
     - ✅返回值自动转换字符编码到 utf8
     - ✅部分Tool支持连续重复调用检查
-    - ✅拦截输出，超过限制长度时自动压缩、截取摘要存储到 agentxx_share_store
-    - ✅自动转换参数类型（String、Array、Number互转），提高兼容性
-    - ⬜支持依托`事件流`实现异步获取结果、分块获取结果
+    - ✅Sub-Agent (启动子agent，支持批量并发执行，并保证返回顺序正确)
     - ✅filesystem (`同步`/`asio io_uring/IOCP 协程异步` 文件读写、超时限制)
         - list (file/dir/recursive-dir/limit)
         - read (full / offset-limit)
@@ -131,12 +135,12 @@
         - WSL 系统环境下自动转换 windows 文件路径
         - 读取文件内容时自动转换字符编码到 utf8
         - ⬜写入文件内容时保持文件原有字符编码
-    - ✅execute_command (`同步`/`Boost.process 协程异步`执行、超时限制)
+    - ✅execute_command (`同步`/`协程异步`执行、超时限制)
         - execute_bash_command
         - execute_windows_command (检测到 WSL 环境时，允许在 linux/wsl 直接执行 windows 命令)
         - 超时限制
         - 区分 stdout、stderr，自动转换输出字符编码到 Utf8
-    - ✅web_search (asio 协程异步网络请求)
+    - ✅web_search
         - web_search (内置 HTML 转 markdown, 支持直接使用普通网页搜索api)
         - web_fetch_url_markdown (html to markdown)
         - web_fetch_url (raw resp body)
@@ -152,8 +156,6 @@
             - 字符分割
             - 结构分割 (较长的再进行 字符分割/定长分割)
             - ⬜语义分割
-    - ✅Sub-Agent (支持协程并发执行，并保证返回顺序正确; 支持批量 tasks 并行)
-    - `tool_skill_search` 逻辑已内联为延迟检索模板 (未独立注册为 tool)
     - ✅get_current_datetime 获取系统时间戳、本地时间、UTC时间
 - ✅**Tree-Messages**
     - agentxx_share_store (允许存取变量，在 llm-messages、skill、tool 之间传递数据)

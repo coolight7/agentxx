@@ -4,6 +4,8 @@
 /// `cxx_utilxx` 的 `utilxx::NetHub` (HTTP / TCP / WebSocket / UDP, 自有网络线程)。
 #include "agentxx/plugin/net_service.h"
 
+#include "pluginxx/api/result.h"
+
 #include "utilxx/net_hub.h"
 
 #include "utilxx_base/json.h"
@@ -28,6 +30,18 @@ int32_t operatorStatusOf(utilxx::NetDoneStatus status) {
     default:
         return PLUGINXX_OPERATOR_FAILED;
     }
+}
+
+/// 网络实现的入口码 → 插件面的入口码
+///
+/// 插件面 (`<应用名>.net`) 的入口码就取 `pluginxx/api/result.h` 的通用段; `utilxx::net::*` 的取值
+/// 与通用段一一对应 (`Ok` 0 / `ErrArg` -1 / … / `ErrNoMemory` -8), 只把实现内部错误
+/// (-99) 换成结果码表的 `PLUGINXX_RESULT_ERR_INTERNAL`, 其余原样透传。
+int32_t pluginNetCode(int32_t netCode) {
+    if (netCode == utilxx::net::ErrInternal) {
+        return PLUGINXX_RESULT_ERR_INTERNAL;
+    }
+    return netCode;
 }
 
 } // namespace
@@ -122,7 +136,7 @@ int32_t PluginNetService::call(
     if (rc == utilxx::net::Ok && outJson != nullptr) {
         *outJson = std::move(result);
     }
-    return rc;
+    return pluginNetCode(rc);
 }
 
 int32_t PluginNetService::callAsync(
@@ -190,7 +204,7 @@ int32_t PluginNetService::callAsync(
     } else if (outJson != nullptr) {
         *outJson = std::move(accepted);
     }
-    return rc;
+    return pluginNetCode(rc);
 }
 
 int32_t PluginNetService::cancel(
@@ -223,7 +237,7 @@ int32_t PluginNetService::cancel(
     if (outJson != nullptr) {
         *outJson = std::move(result);
     }
-    return rc;
+    return pluginNetCode(rc);
 }
 
 void PluginNetService::shutdownOwner(std::string_view owner) {

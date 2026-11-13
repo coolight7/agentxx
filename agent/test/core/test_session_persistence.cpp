@@ -1338,7 +1338,10 @@ static void testPersistenceResilience() {
             // 非法字节被替换, 合法文本保留
             XX_TEST_EXPECT_TRUE(loaded.viewMessages[1].text.starts_with("GBK: "));
             XX_TEST_EXPECT_TRUE(loaded.viewMessages[1].text.find(" end") != std::string::npos);
-            XX_TEST_EXPECT_TRUE(utilxx_base::utf8IsAvail(loaded.viewMessages[1].text));
+            // 修复后的文本含 U+FFFD: 合法 UTF-8, 所以带 allowBackstop 判定
+            XX_TEST_EXPECT_TRUE(
+                utilxx_base::utf8IsAvail(loaded.viewMessages[1].text, /*allowBackstop=*/true)
+            );
         }
 
         // ②③ 脏数据注入: 直接经 SQLite 写入无法解析的行 (模拟历史脏数据)

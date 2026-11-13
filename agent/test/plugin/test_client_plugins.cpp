@@ -549,7 +549,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     &argsSv,
                     &out
                 );
-                XX_TEST_EXPECT_EQ(rc, PLUGINXX_NET_OK);
+                XX_TEST_EXPECT_EQ(rc, PLUGINXX_RESULT_OK);
                 XX_TEST_EXPECT_TRUE(out.data != nullptr);
                 if (out.data) {
                     XX_TEST_EXPECT_TRUE(std::string(out.data, out.size).find("\"ok\":true")
@@ -565,7 +565,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 PluginxxStringView argsSv = agentxx::plugin::PluginStringView::from("{}", 2);
                 PluginxxString     out{};
                 XX_TEST_EXPECT_TRUE(
-                    ifaceNet->call(inst->hostView(), &opSv, &argsSv, &out) != PLUGINXX_NET_OK
+                    ifaceNet->call(inst->hostView(), &opSv, &argsSv, &out) != PLUGINXX_RESULT_OK
                 );
                 if (out.data) {
                     agentxx::plugin::PluginString::free(inst->hostView(), &out);
@@ -576,7 +576,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             {
                 PluginxxString out{};
                 XX_TEST_EXPECT_EQ(ifaceNet->cancel(inst->hostView(), 999999, &out),
-                                  PLUGINXX_NET_ERR_NOT_FOUND);
+                                  PLUGINXX_RESULT_ERR_NOT_FOUND);
                 if (out.data) {
                     agentxx::plugin::PluginString::free(inst->hostView(), &out);
                 }

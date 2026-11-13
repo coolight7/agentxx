@@ -59,7 +59,9 @@ bool inlineTextFile(const MediaRef& attachment, std::string& out) {
     if (content.find('\0') != std::string::npos) {
         return false;
     }
-    if (!utilxx_base::utf8IsAvail(content)) {
+    // 只看"是不是合法 UTF-8": 文件里出现 U+FFFD (合法的替换字符) 不算乱码,
+    // 所以放行占位符 (allowBackstop = true), 只拒真正的非法字节
+    if (!utilxx_base::utf8IsAvail(content, /*allowBackstop=*/true)) {
         return false;
     }
     out = std::move(content);

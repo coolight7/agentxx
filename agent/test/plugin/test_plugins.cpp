@@ -233,12 +233,12 @@ asio::awaitable<TestResult> run_plugin_tests() {
         if (ifacePrompt) {
             XX_TEST_EXPECT_EQ(ifacePrompt->version, AGENTXX_PLUGIN_IFACE_AGENT_PROMPT_VERSION);
             XX_TEST_EXPECT_TRUE(ifacePrompt->get_tool_prompt != nullptr);
-            // 未配置的工具 → -1 且不分配
+            // 未配置的工具 → AGENTXX_RESULT_ERR_NOT_FOUND 且不分配
             auto unknownSv = makeSv("no_such_tool");
             PluginxxString noneOut{nullptr, 0};
             XX_TEST_EXPECT_EQ(
                 ifacePrompt->get_tool_prompt(inst->hostView(), &unknownSv, &noneOut),
-                -1
+                AGENTXX_RESULT_ERR_NOT_FOUND
             );
             XX_TEST_EXPECT_TRUE(noneOut.data == nullptr);
         }

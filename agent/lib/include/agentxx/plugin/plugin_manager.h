@@ -241,7 +241,7 @@ public:
 
     /// 把插件给的引用解析成挂载
     /// - 引用为空 / 长度不足 / id 不匹配 / seq 不匹配 → nullptr
-    /// - 解析失败时调用方转成 `AGENTXX_PLUGIN_ERR_NO_AGENT` (注册类) 或 `-1` (读取类)
+    /// - 解析失败时调用方转成 `AGENTXX_RESULT_ERR_NO_AGENT` (注册类) 或 `-1` (读取类)
     PluginMount* mountOf(const PluginxxScopeRef* ref) const;
 
     /// 为某个 agent 建立挂载 (幂等: 同一 agentId 已有挂载时复用并补挂新实例)
@@ -489,7 +489,7 @@ public:
     /// 网络服务 (懒创建; 首个网络调用时起网络线程)
     std::shared_ptr<PluginNetService> netService();
 
-    /// 同步网络操作 (返回 `utilxx::net::*` 结果码)
+    /// 同步网络操作 (返回插件面结果码 `PLUGINXX_RESULT_*` 通用段)
     int32_t netCall(
         std::string_view              owner,
         std::string_view              op,
@@ -773,7 +773,7 @@ public:
 
     /// 提交结果 (入口需要同时给出错误码、任务 id 与可读原因)
     struct AsyncSubmitOutcome {
-        int32_t     code = AGENTXX_PLUGIN_RUNTIME_OK;
+        int32_t     code = AGENTXX_RESULT_OK;
         std::string asyncId;
         std::string error;
     };
