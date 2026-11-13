@@ -27,6 +27,36 @@ bool containsAny(std::string_view text, std::initializer_list<std::string_view> 
     return false;
 }
 
+/// ASCII 字母/数字 (状态码两边的边界判定; 不随 locale 变化)
+bool isAsciiAlnum(char c) noexcept {
+    return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
+}
+
+/// 文本里是否有一个独立出现的状态码 (两边都不是 ASCII 字母/数字)
+///
+/// 裸子串匹配会把流式失败诊断里的字节数当成状态码: `recv=403684B` 含 `403`,
+/// 于是"可重试的读超时"被判成"鉴权失败"直接结束本轮 (实测偶现)。这里要求代码
+/// 独立成词 —— `HTTP 401` / `(402)` / `code=429` / `status: 503` 命中,
+/// `403684` / `14011` 不命中。
+bool containsStatusCode(
+    std::string_view                        text,
+    std::initializer_list<std::string_view> codes
+) {
+    for (const auto code : codes) {
+        size_t pos = 0;
+        while ((pos = text.find(code, pos)) != std::string_view::npos) {
+            const size_t end   = pos + code.size();
+            const bool   left  = pos == 0 || !isAsciiAlnum(text[pos - 1]);
+            const bool   right = end >= text.size() || !isAsciiAlnum(text[end]);
+            if (left && right) {
+                return true;
+            }
+            ++pos;
+        }
+    }
+    return false;
+}
+
 /// 从错误文本里读 `retry-after` (支持 JSON 字段与 HTTP 头两种写法, 单位: 秒)
 /// - 形如 `retry-after: 12` / `"retry_after": 12` / `Retry-After: 12` / `retry-after=12`
 /// - 大小写不敏感; 键与数字之间允许 `"`/`:`/`=` 与空白
@@ -80,7 +110,13 @@ LlmErrorKind classifyLlmError(std::string_view errInfo) noexcept {
     if (errInfo.empty()) {
         return LlmErrorKind::Unknown;
     }
-    const std::string text = toLowerCopy(errInfo);
+    std::string text = toLowerCopy(errInfo);
+    // 我们自己拼在末尾的流式诊断后缀 (` | stream: recv=...B events=... idle=...ms
+    // finish=... tools=... args=...B name=...`, 见 provider_common.h) 只用于展示与排查,
+    // 不该参与判类: 里面的字节数与上游原文都会带数字
+    if (const auto cut = text.find(" | stream: "); cut != std::string::npos) {
+        text.resize(cut);
+    }
 
     // 1) 上下文超限 (必须先判: 400/413 都可能带这些关键词, 它们是可恢复的)
     if (containsAny(
@@ -92,11 +128,11 @@ LlmErrorKind classifyLlmError(std::string_view errInfo) noexcept {
              "prompt is too long",
              "reduce the length",
              "exceeds the maximum",
-             "413",
              "request entity too large",
              "请求过长",
              "上下文过长"}
-        )) {
+        )
+        || containsStatusCode(text, {"413"})) {
         return LlmErrorKind::ContextOverflow;
     }
 
@@ -179,24 +215,22 @@ LlmErrorKind classifyLlmError(std::string_view errInfo) noexcept {
     // 3) 鉴权 (重试无意义)
     if (containsAny(
             text,
-            {"401",
-             "403",
-             "unauthorized",
+            {"unauthorized",
              "authentication",
              "invalid api key",
              "invalid_api_key",
              "api key is invalid",
              "鉴权",
              "密钥无效"}
-        )) {
+        )
+        || containsStatusCode(text, {"401", "403"})) {
         return LlmErrorKind::Auth;
     }
 
     // 4) 额度/计费 (重试无意义)
     if (containsAny(
             text,
-            {"402",
-             "insufficient_quota",
+            {"insufficient_quota",
              "quota exceeded",
              "quota has been exceeded",
              "out of credit",
@@ -205,15 +239,15 @@ LlmErrorKind classifyLlmError(std::string_view errInfo) noexcept {
              "余额不足",
              "额度不足",
              "已耗尽"}
-        )) {
+        )
+        || containsStatusCode(text, {"402"})) {
         return LlmErrorKind::Quota;
     }
 
     // 5) 请求非法 (重试无意义; 模型名/参数写错等)
     if (containsAny(
             text,
-            {"400",
-             "invalid_request_error",
+            {"invalid_request_error",
              "invalid request",
              "bad request",
              "unsupported parameter",
@@ -221,22 +255,23 @@ LlmErrorKind classifyLlmError(std::string_view errInfo) noexcept {
              "malformed",
              "参数错误",
              "请求非法"}
-        )) {
+        )
+        || containsStatusCode(text, {"400"})) {
         return LlmErrorKind::InvalidRequest;
     }
 
     // 6) 限流 (可重试; 使用更大的基数并优先采信 retry-after)
     if (containsAny(
             text,
-            {"429",
-             "rate limit",
+            {"rate limit",
              "rate_limit",
              "too many requests",
              "slow down",
              "速率限制",
              "限速",
              "请求频率"}
-        )) {
+        )
+        || containsStatusCode(text, {"429"})) {
         return LlmErrorKind::RateLimit;
     }
 
@@ -248,18 +283,15 @@ LlmErrorKind classifyLlmError(std::string_view errInfo) noexcept {
     // 8) 服务端错误 (可重试)
     if (containsAny(
             text,
-            {"500",
-             "502",
-             "503",
-             "504",
-             "internal server error",
+            {"internal server error",
              "bad gateway",
              "service unavailable",
              "gateway timeout",
              "overloaded",
              "server error",
              "服务不可用"}
-        )) {
+        )
+        || containsStatusCode(text, {"500", "502", "503", "504"})) {
         return LlmErrorKind::Server;
     }
 
