@@ -126,8 +126,14 @@ void PluginManager::publishBroadcastValue(std::string_view id, std::string_view 
         return;
     }
     ensureBroadcast(id, pluginxx::BroadcastCache_e::Latest);
+    // 应用频道以总线为源: 服务端端点要经它转发给客户端, 广播侧由 [attachEventBus]
+    // 的镜像落一份 (自己再写一次广播会把同一个值投递两次)
+    if (auto primary = primaryAgent_.lock(); primary && primary->bus) {
+        publishOnBus(primary->bus, id, payloadJson);
+        return;
+    }
     std::string err;
-    if (!broadcasts_->publish(id, payloadJson, std::string{}, &err)) {
+    if (!broadcasts_ || !broadcasts_->publish(id, payloadJson, std::string{}, &err)) {
         XX_LOGD("broadcast `{}` not published: {}", id, err);
     }
 }
@@ -166,6 +172,9 @@ int PluginManager::publishBroadcastFrom(
             error
         );
     if (rc == PLUGINXX_RESULT_OK) {
+        // 客户端只能经 wire 拿到插件数据: 端点按总线 `plugin.` 前缀转发, 因此插件
+        // 发布成功后把同一主题发一份到各 agent 总线 (重构前事件表就是这个路径)
+        forwardBroadcastToBuses(broadcastId, payloadJson);
         // 中枢仍保留"记录 + 等待 + 投递"的职责: 没人等也没声明过的名字它自己会滤掉
         for (const auto& mount : mounts()) {
             auto ctx = mount != nullptr ? mount->agentContext() : nullptr;

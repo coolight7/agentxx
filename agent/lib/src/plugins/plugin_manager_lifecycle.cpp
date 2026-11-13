@@ -146,6 +146,10 @@ PluginManager::PluginManager(std::weak_ptr<agentxx::agent::AgentContext> primary
     declareAppPoints();
     // 官方能力 (不属于功能埋点的那几个): 插件只登记实现行, 声明由主程序给
     declareAppCapabilities();
+    // 主 agent 的总线: 主程序发在总线上的应用话题镜像到广播频道 (插件只能订阅广播)
+    if (auto primary = primaryAgent_.lock(); primary) {
+        attachEventBus(primary->bus);
+    }
 }
 
 // =====================================================================
@@ -205,6 +209,8 @@ std::shared_ptr<PluginMount>
         nextMountSeq_++
     );
     mounts_.push_back(mount);
+    // 挂载 agent 的总线: 与主 agent 同一套镜像 (多 agent 下各订阅一份, 注册表只有一份)
+    attachEventBus(ctx->bus);
     // 通知型功能埋点的派发器: 建挂载就挂上并常驻 (插件靠订阅同名广播收到, 不需要登记)
     mount->ensureHookDispatch();
     return mount;
@@ -517,6 +523,8 @@ asio::awaitable<void> PluginManager::onInstanceEnabledAsync(
 }
 
 PluginManager::~PluginManager() {
+    // 撤掉总线矛盾镜像订阅: 总线可能比管理器活得久 (上下文先清管理器时)
+    detachEventBuses();
     // 同步卸载全部实例 (骨架实现: 仍有 lease / 欠 stop 的实例保留上下文与 DSO)
     shutdownAll();
     // 网络服务自带线程: 先停掉 (它的回调不会再回到已开始拆的管理器)

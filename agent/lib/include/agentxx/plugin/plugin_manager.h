@@ -31,6 +31,9 @@ class AgentContext;
 class AgentHost;
 class BaseAgent;
 } // namespace agent
+namespace events {
+class EventBus;
+} // namespace events
 namespace plugin {
 
 class PluginInstance;
@@ -400,6 +403,19 @@ public:
     /// - 频道未声明时自动补一条 (`cache: latest` + `publish: owner`);
     /// - 失败只记日志 (广播是通知面, 不能让业务流程因它失败)。
     void publishBroadcastValue(std::string_view id, std::string_view payloadJson);
+
+    /// 挂上 agent 事件总线: 总线上的应用话题镜像到同名广播频道 (**幂等**)
+    ///
+    /// 插件只能经 `<应用名>.broadcasts` 表订阅, 而 `agentxx.agent.*` / `agentxx.client.*`
+    /// 这类应用话题由主程序发在事件总线上, 中间需要这一跳。缺了它
+    /// `agentxx.agent.host.client_attached` 一类约定事件送不到插件
+    /// (双端插件靠它重发状态快照, 见 `agentxx/event/events.h` 的 `Topic`),
+    /// 客户端上行的 `agentxx.client.plugin.<插件名>.*` 也收不到。
+    ///
+    /// - 只镜像**已经声明**为广播频道的名字 (插件订阅时会按需声明), 其余一次查找就跳过;
+    /// - 只接受 `std::string` 载荷 (约定事件与插件数据的 JSON 原文), 强类型事件不参与;
+    /// - 与插件发布方向 (`plugin.*`) 前缀不重叠, 不会形成环。
+    void attachEventBus(const std::shared_ptr<agentxx::events::EventBus>& bus);
 
     /// 确保频道已声明 (幂等; 已声明时保留原声明)
     void ensureBroadcast(
@@ -848,6 +864,34 @@ private:
 
     /// 主 agent 上下文 (主程序级配置来源)
     std::weak_ptr<agentxx::agent::AgentContext> primaryAgent_;
+
+    /// 一条已挂上镜像的总线 (总线通常与 agent 同生命周期, 这里只弱引用)
+    struct BusBridge {
+        std::weak_ptr<agentxx::events::EventBus> bus;
+        /// 总线前缀订阅 id (`agentxx.agent.` / `agentxx.client.`)
+        size_t agentPrefixId  = 0;
+        size_t clientPrefixId = 0;
+    };
+
+    /// 已挂上镜像的总线; 访问前取 [busBridgeMutex_]
+    std::vector<BusBridge> busBridges_;
+    std::mutex             busBridgeMutex_;
+
+    /// 总线话题 → 广播频道 ([attachEventBus] 前缀订阅的落点)
+    void mirrorBusValue(std::string_view topic, std::string_view payloadJson);
+
+    /// 撤掉全部总线镜像订阅 (析构时调; 总线已销毁时是空操作)
+    void detachEventBuses();
+
+    /// 插件发布 → 各 agent 总线 (服务端端点据此转发给客户端)
+    void forwardBroadcastToBuses(std::string_view id, std::string_view payloadJson);
+
+    /// 异步投递一条值到一条总线 (`bus` 为空时跳过)
+    static void publishOnBus(
+        const std::shared_ptr<agentxx::events::EventBus>& bus,
+        std::string_view                                  topic,
+        std::string_view                                  payloadJson
+    );
 
     /// offload 工作线程池 (由创建方注入; 空时按需创建私有池)
     std::shared_ptr<asio::thread_pool> workerPool_;

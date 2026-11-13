@@ -15,6 +15,7 @@
 #include "agentxx-test/plugin/test_plugin_broadcast.h"
 
 #include "agentxx/agent/context.h"
+#include "agentxx/event/event_stream.h"
 #include "agentxx/event/hub.h"
 #include "agentxx/plugin/api/plugin_kit.h"
 #include "agentxx/plugin/plugin_manager.h"
@@ -30,6 +31,7 @@
 #include <chrono>
 #include <filesystem>
 #include <functional>
+#include <map>
 #include <memory>
 #include <string>
 #include <string_view>
@@ -104,6 +106,8 @@ asio::awaitable<BroadcastFixture> makeFixture() {
         = std::make_shared<agentxx::middleware::MiddlewareContext>();
     f.ctx->toolRegistry  = std::make_shared<agentxx::plugin::ToolRegistry>();
     f.ctx->graphRegistry = std::make_shared<neograph::graph::GraphRegistry>();
+    // 事件总线: 主程序发在总线上的应用话题要能镜像进广播 (管理器构造时自动挂上)
+    f.ctx->bus = std::make_shared<agentxx::events::EventBus>(ex);
 
     f.mgr                = std::make_shared<PluginManager>(f.ctx);
     f.ctx->pluginManager = f.mgr;
@@ -604,6 +608,91 @@ asio::awaitable<void> test_lifecycle_reversible() {
     XX_TEST_EXPECT_FALSE(registry->declares("plugin.example_event.ready"));
 }
 
+// ===========================================================================
+// 6. 广播 ↔ 事件总线两向转发
+// =========================================================================
+// 插件只认广播表, 主程序与客户端上行的话题却在事件总线上; 两端都缺一跳时
+// `agentxx.agent.host.client_attached` 送不到插件, 插件发布的广播也发不出 wire。
+asio::awaitable<void> test_bus_bridge() {
+    auto f = co_await makeFixture();
+    XX_TEST_EXPECT_TRUE(f.ctx->bus != nullptr);
+    auto registry = f.mgr->broadcasts();
+    XX_TEST_EXPECT_TRUE(registry != nullptr);
+    if (nullptr == f.ctx->bus || nullptr == registry) {
+        co_return;
+    }
+    auto bus = f.ctx->bus;
+
+    // ---- 6.1 总线 → 广播: 已声明的应用频道收到值 ----
+    f.mgr->ensureBroadcast(
+        "agentxx.agent.host.client_attached",
+        pluginxx::BroadcastCache_e::Latest,
+        /*anyonePublish=*/true
+    );
+    // 前缀回调在发布方栈上同步执行, co_await 返回时镜像已完成
+    co_await bus->publish(
+        std::string{"agentxx.agent.host.client_attached"},
+        std::string{R"({"sessionId":"sess-bridge"})"}
+    );
+    std::string value;
+    XX_TEST_EXPECT_TRUE(registry->read("agentxx.agent.host.client_attached", &value));
+    XX_TEST_EXPECT_EQ(
+        Json::parse(value).value("sessionId", std::string{}),
+        std::string{"sess-bridge"}
+    );
+
+    // 客户端上行族同样落到广播 (agent 侧插件订阅 usage_enabled 一类开关)
+    f.mgr->ensureBroadcast(
+        "agentxx.client.plugin.agentxx_system_monitor.usage_enabled",
+        pluginxx::BroadcastCache_e::Latest,
+        /*anyonePublish=*/true
+    );
+    co_await bus->publish(
+        std::string{"agentxx.client.plugin.agentxx_system_monitor.usage_enabled"},
+        std::string{R"({"enabled":false})"}
+    );
+    XX_TEST_EXPECT_TRUE(
+        registry->read("agentxx.client.plugin.agentxx_system_monitor.usage_enabled", &value)
+    );
+    XX_TEST_EXPECT_EQ(Json::parse(value).value("enabled", true), false);
+
+    // 没声明过的名字不建频道 (高频强类型话题 / 没人订阅的事件不占缓存)
+    co_await bus->publish(std::string{"agentxx.agent.io.delta"}, std::string{"{}"});
+    XX_TEST_EXPECT_FALSE(registry->declares("agentxx.agent.io.delta"));
+
+    // ---- 6.2 插件发布 → 总线: 端点据此发 WirePluginData 给客户端 ----
+    std::map<std::string, std::string> onBus;
+    const size_t                       subId = bus->listenPrefix(
+        "plugin.example_event.",
+        [&onBus](std::string_view topic, const std::any& data) {
+            if (data.type() == typeid(std::string)) {
+                onBus[std::string{topic}] = std::any_cast<const std::string&>(data);
+            }
+        }
+    );
+    auto inst = co_await loadExampleEvent(f);
+    XX_TEST_EXPECT_TRUE(inst != nullptr);
+    // 插件的发布在 mount 里, 转发经总线 executor 异步落地 → 等一拍
+    const auto readyTopic = std::string{"plugin.example_event.ready"};
+    const auto buildTopic = std::string{"plugin.example_event.build"};
+    XX_TEST_EXPECT_TRUE(co_await waitFor([&onBus, &readyTopic, &buildTopic] {
+        return onBus.contains(readyTopic) && onBus.contains(buildTopic);
+    }));
+    if (onBus.contains(readyTopic)) {
+        const auto ready = Json::parse(onBus[readyTopic]);
+        XX_TEST_EXPECT_EQ(ready.value("ok", false), true);
+        XX_TEST_EXPECT_EQ(ready.value("plugin", std::string{}), std::string{"example_event"});
+    }
+    if (onBus.contains(buildTopic)) {
+        const auto build = Json::parse(onBus[buildTopic]);
+        XX_TEST_EXPECT_EQ(build.value("step", 0), 1);
+        XX_TEST_EXPECT_EQ(build.value("total", 0), 2);
+    }
+    bus->unlistenPrefix(subId);
+
+    co_await unloadExampleEvent(f);
+}
+
 } // namespace
 
 asio::awaitable<TestResult> run_plugin_broadcast_tests() {
@@ -615,6 +704,7 @@ asio::awaitable<TestResult> run_plugin_broadcast_tests() {
     co_await test_subscribe_and_read();
     co_await test_end_stream();
     co_await test_lifecycle_reversible();
+    co_await test_bus_bridge();
 
     co_return TestResult{g_pb_passed, g_pb_failed};
 }
