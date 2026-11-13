@@ -523,7 +523,7 @@ asio::awaitable<void> PluginManager::onInstanceEnabledAsync(
 }
 
 PluginManager::~PluginManager() {
-    // 撤掉总线矛盾镜像订阅: 总线可能比管理器活得久 (上下文先清管理器时)
+    // 撤掉总线镜像订阅: 总线可能比管理器活得久 (上下文先清管理器时)
     detachEventBuses();
     // 同步卸载全部实例 (骨架实现: 仍有 lease / 欠 stop 的实例保留上下文与 DSO)
     shutdownAll();
