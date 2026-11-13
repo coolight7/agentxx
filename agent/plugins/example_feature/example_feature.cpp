@@ -84,7 +84,7 @@ extern "C" PLUGINXX_EXPORT int
     );
 }
 
-/// 挂载事务 (mount): 登记实现行与有序钩子
+/// 挂载事务 (mount): 登记实现行与通知订阅
 /// - `ref` 为本次挂载的 agent 引用, 全部登记都记在该 agent 名下
 static int featureAgentSetup(FeatureCtx& ctx, const agentxx::plugin::ScopeRef& ref) {
     using namespace agentxx::plugin;
@@ -259,7 +259,7 @@ static void* featureAgentMount(
 static void* featureAgentUnmount(
     FeatureCtx&, void*, const PluginxxOperatorNotify* notify, PluginxxString*
 ) {
-    // 实现行与钩子由主程序按挂载记录撤销
+    // 实现行与订阅由主程序按挂载记录撤销
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }

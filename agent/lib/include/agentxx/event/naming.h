@@ -53,7 +53,7 @@ inline constexpr std::string_view kAgentAsyncDoneEvent = "agentxx.agent.async.do
 
 /// 后台任务结果事件的归属标记 (发布方与日志用)
 /// - 事件现在只是广播: 结果回到会话由 `AsyncWorkManager::finishEntry` 直接做
-/// - `agentxx_async_await` 不再订阅这条事件 (它等任务条目上的票据)
+/// - `agentxx_async_await` 不再订阅这条事件 (它等任务条目上的等待登记)
 inline constexpr std::string_view kAgentAsyncNotifyOwner = "async_work";
 
 /// client 端插件数据的主题段 (客户端插件上行到 agent 总线)

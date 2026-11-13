@@ -70,7 +70,7 @@ public:
 
     // ---- 提示词来源刷新 ----
 
-    /// 一次运行时提示词段落刷新 (model call 的 start 钩子)
+    /// 一次运行时提示词段落刷新 (model call 的 start 回调)
     /// - durationMs: 本次刷新耗时; changedSections: 其中内容变化 (会让 system 前缀
     ///   失效) 的段落数; failures: 失败/超时数; sectionChars: 刷新后段落总字符数
     void notePromptRefresh(

@@ -100,7 +100,7 @@ resource/history/<任务短名>/        # 英文小写 + 短横线，能看出�
   (`agent/lib/include/agentxx/agent/prompt_sources.h`, 挂 `AgentContext::promptSources`);
   静态附加段 (`Stable`) 与运行时文档段 (`Dynamic`) 分开存、只统一视图; 内置来源
   `memory` (perSession, 压缩后刷新) / `skills`; 刷新唯一入口 =
-  `PromptSourceRefreshHandle::onModelcallStartFunc` (model call start 钩子), 脏标记来自
+  `PromptSourceRefreshHandle::onModelcallStartFunc` (model call 的 start 回调), 脏标记来自
   资源变更 / 压缩写回 / 显式请求; **不做文件监听与轮询** (mtime+size 只用于被要求刷新时
   省去读盘); 压缩子代理按父会话前缀发请求 (`keepProvidedSystemMessage` +
   `requestToolsOverride` + `toolExecutionDisabled`), 命中率实测见
@@ -637,9 +637,9 @@ path/to/agentxx_test --log-level warn string_util regex
   **notify 默认开**: 任务收尾时由 `AsyncWorkManager::finishEntry` 直接交给会话 (不经
   事件等待; 轮次在跑 → 下一次模型调用前插入; 轮次已结束 → 入队开新一轮;
   `notify:false` 只落任务表)。**有人等着就不重复投**: `agentxx_async_await` 在任务未结束
-  时在条目上挂一张票据 (`AsyncResultTicket` + `AsyncWake`，和任务表同一把锁)，
+  时在条目上登记一次等待 (`AsyncResultTicket` + `AsyncWake`，和任务表同一把锁)，
   收尾时正文直接交给等待方、本次不再投递；任务早已结束时 await 读任务表再给一份
-  (工具语义)。交付复用 `EventHub::deliver` 的投递决策段，`source` 仍是
+  (工具语义)。投递复用 `EventHub::deliver` 的决策段，`source` 仍是
   `event:agentxx.agent.async.done` (界面/协议零改动)；事件本身只做广播，仍是单一事件名
   `agentxx.agent.async.done` (`naming.h` 的 `kAgentAsyncPrefix`，值里用 `asyncId` 区分，
   `asyncId` 就是任务 agent 的 `sessionId`)。
@@ -738,7 +738,7 @@ path/to/agentxx_test --log-level warn string_util regex
 - 接口表版本与基线 (**当前代次 5**, 全局 API 版本 = 5: v2 是多 agent 挂载换代;
   v3 把通用表里的业务成员 (会话工作目录 / 取消查询 / 工具提示词) 迁回 agentxx 业务表
   并把 "agent" 用词泛化为 "作用域"; v4 = 工具结果换代 (成败改由状态位表达);
-  v5 = 迁移到 `cxx_pluginxx` 0.3.0 (钩子表与事件表删除 → 广播频道 + 能力实现行,
+  v5 = 迁移到 `cxx_pluginxx` 0.3.0 (旧通知表与事件表删除 → 广播频道 + 能力实现行,
   client 侧 `events`/`json`/`log` 三张表删除, 能力行带 scope);
   业务表 `version` = `MIN_VERSION` = 2 或 3, 通用表见 `pluginxx/api/tables.h`,
   基线 = 重置时的完整布局):

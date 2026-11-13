@@ -392,7 +392,7 @@ asio::awaitable<void> runBody(
     // ===================== 5. 卸载插件 → 通道关闭、根回收 =====================
     {
         XX_TEST_EXPECT_TRUE(co_await mgr->unloadAsync("example_runtime", 10s));
-        // 通道记录被回收 (最后一条事件 CLOSED 已交付给插件)
+        // 通道记录被回收 (最后一条事件 CLOSED 已发给插件)
         XX_TEST_EXPECT_TRUE(channelOf(mgr, "example_runtime") == nullptr);
         // 根从容器里消失
         XX_TEST_EXPECT_TRUE(co_await waitUntil(ex, 20s, [&]() {

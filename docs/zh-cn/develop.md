@@ -35,7 +35,7 @@
 ## 2. 新增工具 / 中间件
 
 - **内置工具**：已全部迁移至插件 (`agent/plugins/agentxx_*`)，新增工具优先以插件形式实现 (经 `plugin_kit.h` 的 `tool/fast_tool/blocking_tool/polled_tool` 注册)，同名同行为，测试直测同一 `*_impl.h` 实现
-- **中间件**：继承 `MiddlewareWrapHandle<TState>` 并用 `MiddlewareHooks` 指定要挂载的钩子
+- **中间件**：继承 `MiddlewareWrapHandle<TState>` 并用 `MiddlewareHooks` 指定要挂载的回调
   (`onAgentcallStart/End`、`onModelcallStart/Run/End`、`onToolcallStart/End`; 未指定的阶段天然不执行),
   在 `BaseAgent::initMiddleware` / `CodeAgent::initMiddleware` 中按栈顺序注册; 中间件的 toolcalls 由
   `initMiddlewareTools` 自动收集进工具列表

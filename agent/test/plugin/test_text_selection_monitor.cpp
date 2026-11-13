@@ -96,7 +96,7 @@ asio::awaitable<TestResult>
         }
     }
 
-    // ---- 4. 工具 start + stop (启动系统级文本选择钩子后立即停止) ----
+    // ---- 4. 工具 start + stop (启动系统级文本选择监听后立即停止) ----
     {
         auto tool = ctx->toolRegistry->find("agentxx_text_selection_monitor");
         if (tool) {

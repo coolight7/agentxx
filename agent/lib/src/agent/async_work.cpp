@@ -135,9 +135,9 @@ constexpr std::string_view kAsyncDoneEvent = agentxx::events::naming::kAgentAsyn
 /// 结果事件与任务表的归属标记 (`plugin.` 之外的自有标记, 只用于日志/诊断)
 constexpr std::string_view kAsyncOwner = agentxx::events::naming::kAgentAsyncNotifyOwner;
 
-/// 等终态票据的分片等待上限 (毫秒)
+/// 等终态时每次分片等待的上限 (毫秒)
 /// - 取消令牌只有轮询接口 (`is_cancelled`), 分片让取消最多晚这么久被看到;
-///   任务真正结束时票据会立刻叫醒, 所以这只是一次检查上限
+///   任务真正结束时等待登记会立刻叫醒, 所以这只是一次检查上限
 constexpr int64_t kTicketSliceMs = 100;
 
 /// 任务是否已到终态
@@ -1172,7 +1172,7 @@ void AsyncWorkManager::finishEntry(
         onEvent          = entry.spec.onEvent;
         metrics          = entry.metrics;
         entry.wake.reset();
-        // 正在等终态的调用: 取走票据 (锁外叫醒它们), 本次不再自动投递
+        // 正在等终态的调用: 取走等待登记 (锁外叫醒它们), 本次不再自动投递
         waiters.swap(entry.waiters);
         if (entry.state == AsyncWorkState::Queued) {
             // 排队中终止: 从队列摘除 (取消 / 排队超时都走这里)
@@ -1248,7 +1248,7 @@ void AsyncWorkManager::finishEntry(
         synthetic.spec.event = evName;
         synthetic.spec.mode  = "first";
         synthetic.spec.ref   = std::string{entryId};
-        // 这里不是事件等待 (直接交付): `[Info]` 的 wait 行给 `-`, 不再编一个不存在的 id
+        // 这里不是事件等待 (直接投递): `[Info]` 的 wait 行给 `-`, 不再编一个不存在的 id
         synthetic.waitId = "-";
         const std::vector<utilxx_base::Json> values{value};
         const auto contentText = creator->eventHub->contentText(sessionId, evName, values);
@@ -1592,7 +1592,7 @@ asio::awaitable<AsyncWorkManager::WaitOutcome> AsyncWorkManager::waitTerminal(
         co_return WaitOutcome::AlreadyTerminal;
     }
 
-    // 票据只在内存里, 任务收尾时被取走; 不参与正文 (正文只有任务表一份)
+    // 等待登记只在内存里, 任务收尾时被取走; 不参与正文 (正文只有任务表一份)
     auto ticket = std::make_shared<AsyncResultTicket>(host->ioCtx()->get_executor());
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -1604,7 +1604,7 @@ asio::awaitable<AsyncWorkManager::WaitOutcome> AsyncWorkManager::waitTerminal(
         it->second.waiters.push_back(ticket);
     }
 
-    /// 离开时摘票 (已终态时票据已被管理器取走, 摘不到也没关系)
+    /// 离开时摘掉等待登记 (已终态时已被管理器取走, 摘不到也没关系)
     struct WaiterGuard {
         AsyncWorkManager*                        self = nullptr;
         std::string                              asyncId;
@@ -1629,7 +1629,7 @@ asio::awaitable<AsyncWorkManager::WaitOutcome> AsyncWorkManager::waitTerminal(
             co_return WaitOutcome::TimedOut;
         }
         // 分片等待: 取消令牌只有轮询接口 (没有回调), 分片让取消最多晚一片被看到;
-        // 任务真正结束时票据会立刻叫醒, 所以这只是一次上限
+        // 任务真正结束时等待登记会立刻叫醒, 所以这只是一次上限
         int64_t slice = kTicketSliceMs;
         if (deadline > 0) {
             slice = std::min<int64_t>(slice, deadline - now);

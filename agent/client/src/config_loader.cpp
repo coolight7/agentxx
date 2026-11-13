@@ -943,7 +943,7 @@ static YamlAppConfig parseYamlConfigNode(
     }
 
     // 开发者模式 (yaml `dev_mode`, 默认 false; 顶层标量键)
-    // - 开启时才收集"记录数据" (功能埋点调用统计 / 钩子派发记录 / 成功调用日志);
+    // - 开启时才收集"记录数据" (功能埋点调用统计 / 通知派发记录 / 成功调用日志);
     //   启动时读取后冻结, 只控制记录收集, 不改变任何行为
     if (root["dev_mode"]) {
         auto val = utilxx_base::toLower(

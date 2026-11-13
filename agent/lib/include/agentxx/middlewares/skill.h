@@ -104,7 +104,7 @@ public:
 ///   (键 `skills`) 注入 system 消息末尾, 属于稳定前缀
 /// - 清单文本由 [agentxx::agent::PromptSourceRegistry] 持有 (与会话无关, 全体共享);
 ///   本中间件只负责扫描/裁决/生成清单
-/// - 取文本的时机由 model call 的 start 钩子决定 (首次 / 压缩完成 / 资源变更),
+/// - 取文本的时机由 model call 的 start 回调决定 (首次 / 压缩完成 / 资源变更),
 ///   **不监听文件变化、不按轮次重扫**
 class SkillMiddlewareHandle : public BaseMiddlewareHandle<SkillMiddlewareState> {
 protected:

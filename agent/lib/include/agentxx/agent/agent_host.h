@@ -268,7 +268,7 @@ public:
 
     /// 等一条后台任务进入终态 ([agentxx_async_await] 用)
     /// - 只负责等: 任务到了就返回, 超时/取消也返回; 正文由调用方读任务表
-    /// - 等待期间在条目上挂一张票据: 任务收尾时有人接了正文, 本次不再自动投递
+    /// - 等待期间在条目上登记一次等待: 任务收尾时有人接了正文, 本次不再自动投递
     asio::awaitable<AsyncWorkManager::WaitOutcome> waitAsyncWorkResult(
         std::string_view                               asyncId,
         int64_t                                        timeoutMs,

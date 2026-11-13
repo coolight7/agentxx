@@ -1271,7 +1271,7 @@ asio::awaitable<void> BaseAgent::initMiddleware() {
     auto config = agentContext->agentConfig;
     {
         // 运行时提示词来源刷新入口 (必须是第一个 handle)
-        // - 本钩子 (model call 的 start) 是运行时提示词段落**唯一**的刷新位置:
+        // - 本回调 (model call 的 start) 是运行时提示词段落**唯一**的刷新位置:
         //   首次读取 / 压缩完成 / 资源变更 / 显式请求都在这里判断
         // - 没有待刷新标记时只有一次布尔判断, 不产生 I/O; 内容未变时不动段落
         //   (不会制造 system 前缀变化)

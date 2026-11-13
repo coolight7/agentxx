@@ -505,18 +505,18 @@ void TUIClientAgentIO::start() {
         ctx_.postRedraw = [this] {
             postRedraw();
         };
-        // 历史分页钩子: MessageListComponent 滚动接近窗口顶部时触发
+        // 历史分页回调: MessageListComponent 滚动接近窗口顶部时触发
         // (requestOlderHistory 内部做请求去重与边界判断; sendToPeer 经
         // transport 写队列投递, 线程安全)
         ctx_.requestMoreHistory = [this] {
             requestOlderHistory();
         };
-        // 会话列表分页钩子: SessionSelectorOverlay 选择项接近已加载列表末尾时
+        // 会话列表分页回调: SessionSelectorOverlay 选择项接近已加载列表末尾时
         // 触发预取下一页 (requestNextSessionListPage 内部做请求去重与边界判断)
         ctx_.requestMoreSessions = [this] {
             requestNextSessionListPage();
         };
-        // 会话改名钩子: 弹窗内确认改名后发送 WireRenameSession, 结果经
+        // 会话改名回调: 弹窗内确认改名后发送 WireRenameSession, 结果经
         // onSessionRenameResult 回填列表标题/提示
         ctx_.renameSession = [this](std::string sessionId, std::string title) {
             requestRenameSession(std::move(sessionId), std::move(title));

@@ -1091,7 +1091,7 @@ asio::awaitable<void>
         session->persistNow("compaction");
 
         // 压缩完成: 后续请求的上下文已经改变, 这也是唯一值得改写提示词注入内容的
-        // 时机 —— 只标记, 不读盘 (实际重取在下一个 model call 的 start 钩子里)。
+        // 时机 —— 只标记, 不读盘 (实际重取在下一个 model call 的 start 回调里)。
         // 内容没变时段落不动 (代价为零); 变了也只付一次 system 前缀重建, 而压缩后
         // 上下文已经很短, 这是最便宜的时机
         if (agentCtxPtr->promptSources) {
@@ -1293,7 +1293,7 @@ asio::awaitable<bool>
     session->replaceMessages(std::move(compressedMessages));
     // 手动压缩在轮次外执行: 立即落盘 (无轮末权威保存作为保证)
     session->persistNow("manual-compaction");
-    // 压缩完成: 标记提示词来源需要重取 (只置位, 下一次 model call 的 start 钩子读盘)
+    // 压缩完成: 标记提示词来源需要重取 (只置位, 下一次 model call 的 start 回调读盘)
     if (agentCtxPtr->promptSources) {
         agentCtxPtr->promptSources->markDirty(
             sessionId,

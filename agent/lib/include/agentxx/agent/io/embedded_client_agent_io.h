@@ -105,10 +105,10 @@ public:
     // 文本增量合批
     // -----------------------------------------------------------------------
 
-    /// 设置合批窗口 (毫秒; <= 0 关闭合批, 逐条交付)
+    /// 设置合批窗口 (毫秒; <= 0 关闭合批, 逐条发出)
     void setDeltaBatch(int32_t maxDelayMs);
 
-    /// 立即交付积压的合批文本 (client io 线程)
+    /// 立即发出积压的合批文本 (client io 线程)
     void flushDeltaBatch();
 
 protected:
@@ -120,7 +120,7 @@ protected:
     // 被动接收回调
     // -----------------------------------------------------------------------
 
-    /// 增量分发: 文本/思考 token 进合批窗口, 其余立即交付
+    /// 增量分发: 文本/思考 token 进合批窗口, 其余立即发出
     void onDelta(const agent::WireDelta& delta) override;
 
     /// 完整/部分同步 (历史消息校准)
@@ -161,7 +161,7 @@ protected:
 
 private:
 
-    /// 交付一段合批后的增量文本
+    /// 发出一段合批后的增量文本
     /// - [msgId] 所属流式消息 id (不允许跨 id 合并); [kind] = "text" / "thinking"
     virtual void emitDeltaText(
         std::string_view msgId,
@@ -169,7 +169,7 @@ private:
         std::string_view text
     ) = 0;
 
-    /// 交付一条非合批的增量 (消息级 op / 轮次边界等)
+    /// 发出一条非合批的增量 (消息级 op / 轮次边界等)
     virtual void emitDeltaEvent(const agent::WireDelta& delta) = 0;
 
     /// 当前挂起等待的中断 ID (0 表示无; 原子量, 跨线程无锁查询)

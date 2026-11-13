@@ -260,7 +260,7 @@ public:
     bool languageExplicit = false;
 
     /// 开发者模式 (yaml `dev_mode` / FFI 配置 JSON `devMode` / 命令行 `--dev`)
-    /// - 开启时才收集各种"记录数据": 功能埋点调用统计、钩子派发记录、
+    /// - 开启时才收集各种"记录数据": 功能埋点调用统计、通知派发记录、
     ///   功能埋点成功调用的一行 info 日志
     /// - **只控制记录数据的收集, 不改变任何行为**; 启动时镜像到进程级只读标记
     ///   [AgentConfigStatic::devMode] 后冻结 (运行期改配置不生效)

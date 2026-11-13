@@ -34,14 +34,14 @@ class AgentConfig;
 class AgentContext;
 class AgentHost;
 
-/// 等终态的票据: 任务进入终态时由管理器置位并叫醒一次
+/// 等终态的等待登记: 任务进入终态时由管理器置位并叫醒一次
 /// - 只做唤醒, **不带正文**: 等待方醒来后自己读任务表 (正文只有一份来源)
 struct AsyncResultTicket {
     explicit AsyncResultTicket(asio::io_context::executor_type executor) :
         wake(std::make_shared<AsyncWake>(std::move(executor))) {}
 
     std::shared_ptr<AsyncWake> wake;
-    /// 任务已进入终态 (或已被管理器取走票据)
+    /// 任务已进入终态 (或管理器已取走等待登记)
     std::atomic<bool>          ready{false};
 };
 
@@ -335,12 +335,12 @@ public:
     /// 等一条任务进入终态 ([agentxx_async_await] 用)
     ///
     /// 只负责"等": 任务到自己就返回, 超时/取消也返回; 正文由调用方读任务表。
-    /// 等待期间会在条目上挂一张票据; 任务收尾时看到有票据就把正文交给等待方,
+    /// 等待期间在条目上登记一次等待; 任务收尾时看到有等待登记就把正文交给等待方,
     /// **本次自动通知不再插入会话** (运行中调用时正文只出现一份)。
     /// 任务已终态/已回收时直接返回 [WaitOutcome::AlreadyTerminal]。
     ///
     /// - `timeoutMs` <= 0 = 不限
-    /// - 必须在容器 io 线程调 (票据的定时器挂在那条 io_context 上)
+    /// - 必须在容器 io 线程调 (等待的定时器挂在那条 io_context 上)
     enum class WaitOutcome { Filled, AlreadyTerminal, TimedOut, Canceled };
     asio::awaitable<WaitOutcome> waitTerminal(
         std::string_view                               asyncId,
@@ -387,7 +387,7 @@ private:
     /// 任务表清扫 (结束超过 linger 的条目); 调用方必须已持锁
     void sweepLingerLocked();
 
-    /// 摘掉一张票据 (等待结束/超时/取消时调; 已终态被取走时不必摘)
+    /// 摘掉一次等待登记 (等待结束/超时/取消时调; 已终态被取走时不必摘)
     void removeWaiter(std::string_view asyncId, const std::shared_ptr<AsyncResultTicket>& ticket);
 
     /// 任务主体: 跑子代理 / 工具, 结果发事件 + 回任务表 (容器 io 线程)

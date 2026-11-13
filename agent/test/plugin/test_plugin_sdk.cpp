@@ -124,7 +124,7 @@ void PLUGINXX_CALL fakeFree(void* ptr) {
     std::free(ptr);
 }
 
-/// 伪主程序驱动票据: 记录待执行的驱动回调, 由用例经 [runDriver] 手动执行
+/// 伪主程序的驱动登记: 记录待执行的驱动回调, 由用例经 [runDriver] 手动执行
 /// (等价于主程序 IO 线程执行一次 `poll_one`)。
 struct FakeDriverTicket {
     PluginxxDriveOnceFn drive = nullptr;

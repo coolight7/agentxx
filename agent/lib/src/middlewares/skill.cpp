@@ -196,7 +196,7 @@ asio::awaitable<bool> SkillMiddlewareHandle::scanSkillsAsync() {
     }
 
     // ---- 2. 结构未变 (同一批 SKILL.md, 时间戳与字节数都相同) → 不重读 ----
-    // 注意: 这里只是"省去读盘", 不是刷新触发条件 (刷新由 model call 的 start 钩子决定)
+    // 注意: 这里只是"省去读盘", 不是刷新触发条件 (刷新由 model call 的 start 回调决定)
     if (newSnapshot == scanSnapshot_ && !skillCache.skillData.empty()) {
         co_return false;
     }
@@ -443,7 +443,7 @@ void SkillMiddlewareHandle::addSkillDirs(
             return a.priority < b.priority;
         }
     );
-    // 资源变更: 只标记, 实际重扫在下一个请求加载前 (model call 的 start 钩子)
+    // 资源变更: 只标记, 实际重扫在下一个请求加载前 (model call 的 start 回调)
     if (auto registry = promptSources_.lock()) {
         registry->markAllDirty(agentxx::agent::PromptRefreshReason::ResourcesChanged);
     }

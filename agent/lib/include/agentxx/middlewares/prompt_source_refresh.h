@@ -7,7 +7,7 @@ namespace middleware {
 
 /// 提示词来源刷新入口
 ///
-/// **这是运行时提示词段落唯一的刷新入口** (model call 的 start 钩子):
+/// **这是运行时提示词段落唯一的刷新入口** (model call 的 start 回调):
 /// - 首次读取 (Initial)
 /// - 压缩完成后的刷新 (AfterCompaction)
 /// - 资源变更后的刷新 (ResourcesChanged: 插件增删记忆文件/技能目录)

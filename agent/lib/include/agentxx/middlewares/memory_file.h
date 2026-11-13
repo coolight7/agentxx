@@ -24,7 +24,7 @@ public:
 /// - 把配置/插件声明的记忆文件内容作为运行时提示词段落 (键 `memory`) 注入
 ///   system 消息末尾, 属于稳定前缀 (上游前缀缓存可命中)
 /// - 文本由 [agentxx::agent::PromptSourceRegistry] 持有, 本中间件只登记来源并
-///   负责取文本; 取文本的时机由 model call 的 start 钩子决定
+///   负责取文本; 取文本的时机由 model call 的 start 回调决定
 ///   (首次 / 压缩完成 / 资源变更), **不监听文件变化、不按轮次读盘**
 /// - 文件路径支持绝对路径或相对路径 (相对路径按会话工作目录解析)
 class MemoryFileMiddlewareHandle : public BaseMiddlewareHandle<MemoryFileMiddlewareState> {

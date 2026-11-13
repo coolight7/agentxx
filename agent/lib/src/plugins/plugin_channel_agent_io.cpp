@@ -168,7 +168,7 @@ void PluginChannelAgentIO::emitDeltaEvent(const agent::WireDelta& delta) {
                 }
                 break;
             }
-            // 其它角色 (assistant/think 的定稿行): 正文已经以 token 交付, 不重复派生
+            // 其它角色 (assistant/think 的定稿行): 正文已经以 token 发出, 不重复派生
             break;
         }
         case T::StreamBegin:

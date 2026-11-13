@@ -233,9 +233,9 @@ event / async_* 及延迟加载加载 (`ToolSkillSearchSubAgentTask` 模板类, 
 **结果回到会话只有一条路径**：任务收尾时 `AsyncWorkManager::finishEntry` 直接交给
 会话（复用 `EventHub::deliver` 的投递决策段，`source` 仍是
 `event:agentxx.agent.async.done`）；`agentxx_async_await` 在任务未结束时先挂一张
-票据（`AsyncResultTicket`，与任务表同一把锁），收尾时正文交给等待方、本次不再投递；
+等待登记（`AsyncResultTicket`，与任务表同一把锁），收尾时正文交给等待方、本次不再投递；
 任务早已结束时 await 直接读任务表（再给一份是工具语义）。事件本身只做广播，
-不再承担会话交付。
+不再负责会话投递。
 事件中枢**常驻**（早期 `event.enable` 开关已删）。
 
 细节（状态机、投递决策表、文本格式、预算、诊断、配置项）见 [events.md](events.md) 第 8 节；
@@ -1460,7 +1460,7 @@ start1 → start2 → start3
 end1  ←   end2  ←   end3
 ```
 
-- 每个中间件实现 `onHandleStart` / `onHandleEnd` 钩子 (可分别挂载到 agent_start、modelcall、toolcall)
+- 每个中间件实现 `onHandleStart` / `onHandleEnd` 回调 (可分别挂载到 agent_start、modelcall、toolcall)
 - start 阶段异常时跳过 baseRun，直接执行对应的 end
 - 支持 `neograph::graph::CancelledException` / `NodeInterrupt` 的重新抛出
 - 中间件按会话 (sessionId) 维护独立 State
@@ -1740,7 +1740,7 @@ AgentContext
   perSession, 压缩后刷新) 与 `skills` (技能清单, 全局)。两者都按"解析后路径集合指纹 +
   每个文件 mtime/size"缓存内容, 路径集合不变且文件未变时不读盘
 - **刷新入口只有一处**: `PromptSourceRefreshHandle::onModelcallStartFunc`
-  (model call 的 start 钩子, 一轮一次) → `ensureFresh(ctx)`。脏标记来源三类:
+  (model call 的 start 回调, 一轮一次) → `ensureFresh(ctx)`。脏标记来源三类:
   资源变更 (`addMemoryFiles` / `addSkillDirs` 等)、上下文压缩写回之后
   (`AfterCompaction`)、显式请求 (`Explicit`)
 - 刷新带超时 (由来源自己声明) 并传播取消; 单个来源失败只保留上次文本并计数, 不影响请求

@@ -3,6 +3,6 @@
 #include "agentxx-test/test_framework.h"
 
 namespace agentxx::test {
-/// 插件 C++ SDK 根操作适配测试（Request 输入所有权 / 完成守卫 / 钩子同步异步分发）。
+/// 插件 C++ SDK 根操作适配测试（Request 输入所有权 / 完成守卫 / 通知的同步异步分发）。
 TestResult testPluginSdk();
 } // namespace agentxx::test

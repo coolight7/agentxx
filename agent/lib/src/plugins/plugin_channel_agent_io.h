@@ -26,7 +26,7 @@ class PluginChannelAgentIO : public agent::EmbeddedClientAgentIO,
                              public std::enable_shared_from_this<PluginChannelAgentIO> {
 public:
 
-    /// 事件交付回调 (由管理器提供)
+    /// 事件投递回调 (由管理器提供)
     /// - `text` 与 `payload` 只在调用期间有效 (`payload` 为 nullptr 表示空载荷)
     /// - `kind` 取 `AGENTXX_PLUGIN_CHANNEL_EVT_*`
     using EventFn = std::function<void(
@@ -106,7 +106,7 @@ protected:
 
 private:
 
-    /// 交付一条事件 (无回调时丢弃)
+    /// 投递一条事件 (无回调时丢弃)
     void
         emit(int32_t kind, int64_t interruptId, std::string_view text, const utilxx_base::Json* payload);
 

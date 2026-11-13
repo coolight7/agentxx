@@ -1,7 +1,7 @@
 // 运行时提示词来源注册表 (PromptSourceRegistry) 测试
 //
 // 设计要点 (见 [prompt_sources.h](/agent/lib/include/agentxx/agent/prompt_sources.h)):
-// - 唯一的刷新入口是 model call 的 start 钩子, 注册表本身不做文件监听;
+// - 唯一的刷新入口是 model call 的 start 回调, 注册表本身不做文件监听;
 //   本模块直接调用 ensureFresh, 逐个验证"什么时候重取、什么时候不动"
 // - 内容未变化时不制造段落变化 (否则每次刷新都会让 system 前缀失效)
 // - 单来源失败/超时/没有意见 → 保留上次文本, 只记失败次数

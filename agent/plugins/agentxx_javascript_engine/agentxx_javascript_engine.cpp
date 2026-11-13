@@ -9,7 +9,7 @@
 ///   JS 线程执行完毕经 PluginxxOperatorNotify 上报完成 (线程安全) —— 全程无阻塞
 ///   等待, 主程序 io 协程与 JS 任务交错执行; 旧版 postSync 阻塞桥已移除
 /// - JS 线程 → io 线程: host vtable 内部经 post_to_io + 同步等待 (主程序实现)
-/// - 钩子/事件回调: io 线程 → post 到 JS 线程 (fire-and-forget, 不等待)
+/// - 通知/事件回调: io 线程 → post 到 JS 线程 (fire-and-forget, 不等待)
 /// - JS 内 callTool 命中本引擎工具: 同线程内联执行 (防自锁)
 /// - 卸载安全: JsPluginCtx 由 shared_ptr 管理; 跨线程经 mirror 表 (互斥锁) 查
 ///   强引用; 插件卸载 (deleted) 后已入队任务检查标志跳过; JSContext 释放由
@@ -186,9 +186,9 @@ constexpr size_t  kStackLimit         = 4 * 1024 * 1024;
 constexpr size_t  kTaskTimeoutMs      = 60000;  ///< 单任务 (工具执行等) 超时
 constexpr int64_t kPromiseWaitLimitMs = 120000; ///< Promise 等待上限 (绝对截止时间)
 
-/// JS 面的钩子点序号 → 通知型功能埋点 id
+/// JS 面的通知点序号 → 通知型功能埋点 id
 ///
-/// 钩子点已经是"通知型功能埋点": 脚本里 `agentxx.onHook(point, fn)` 等价于订阅同名
+/// 通知点已经是"通知型功能埋点": 脚本里 `agentxx.onHook(point, fn)` 等价于订阅同名
 /// 广播频道, 序号约定保持不变 (0 = 轮次开始 … 6 = 工具结束), 与
 /// `agentxx/plugin/api/agentxx_point_ids.h` 的 7 个通知型点一一对应。
 std::string_view hookPointIdOf(int32_t point) {
@@ -293,12 +293,12 @@ struct JsPluginCtx {
     size_t              inflight = 0;     ///< 进行中的任务数 (execute/hook/event)
     /// 工具表: 普通对象 name -> {execute, name, description}
     JSValue tools = JS_UNDEFINED;
-    /// 钩子表: Array(7) 元素为 fn 或 null
+    /// 通知回调表: Array(7) 元素为 fn 或 null
     /// 订阅表: Array of {topic, handler, token}
     JSValue                                     agents = JS_UNDEFINED;
     std::vector<std::unique_ptr<JsToolBinding>> toolBindings;
     std::vector<std::unique_ptr<JsHookBinding>> hookBindings;
-    /// 脚本初始化事务的撤销动作 (注册工具/钩子/订阅/资源成功时按序追加)。
+    /// 脚本初始化事务的撤销动作 (注册工具/通知/订阅/资源成功时按序追加)。
     /// 顶层执行失败或脚本卸载时逆序执行, 主程序侧不留任何残留注册。
     std::vector<std::function<void()>> rollbackActions;
 
@@ -369,7 +369,7 @@ public:
         mountRef_      = PluginxxScopeRef{};
     }
 
-    /// 当前挂载引用 (未挂载时为 nullptr); 脚本注册工具/钩子/订阅时使用
+    /// 当前挂载引用 (未挂载时为 nullptr); 脚本注册工具/通知/订阅时使用
     const PluginxxScopeRef* agentRef() const {
         return mountAgentId_.empty() ? nullptr : &mountRef_;
     }
@@ -1018,7 +1018,7 @@ private:
             err = extractException(pctx->ctx, ret);
             JS_FreeValue(pctx->ctx, ret);
             // 脚本初始化是注册事务 —— 顶层异常时先撤销已产生的全部副作用
-            // (工具/钩子/订阅/资源/定时器), 再释放 JSContext。
+            // (工具/通知/订阅/资源/定时器), 再释放 JSContext。
             rollbackScriptEffects(pctx);
             return -1;
         }
@@ -1059,7 +1059,7 @@ private:
         auto pctx     = it->second;
         pctx->deleted = true;
         pctx->host    = nullptr; // 后续任务不得再调用主程序
-        // 脚本卸载同样是注册事务的收尾: 注销该脚本注册的工具/钩子/订阅/资源,
+        // 脚本卸载同样是注册事务的收尾: 注销该脚本注册的工具/通知/订阅/资源,
         // 不留悬垂 user_data (主程序 detachAll 只覆盖引擎实例整体卸载的场景)。
         rollbackScriptEffects(pctx);
         plugins_.erase(it);
@@ -1147,7 +1147,7 @@ private:
         JS_FreeValue(pctx->ctx, execFn);
     }
 
-    // ==================== 钩子/事件 (JS 线程) ====================
+    // ==================== 通知/事件 (JS 线程) ====================
 
     void doEventFire(JsHookBinding* binding, const std::string& payload) {
         auto pctx = findPlugin(binding->plugin);
@@ -2106,7 +2106,7 @@ JSValue JsEngine::bridgeCall(
         }
 
         case B_REGISTER_HOOK: {
-            // onHook(point, fn): 钩子点已是"通知型功能埋点", 等价于订阅同名广播频道
+            // onHook(point, fn): 通知点已是"通知型功能埋点", 等价于订阅同名广播频道
             // (序号约定不变: 0 = 轮次开始 … 6 = 工具结束)
             if (argc < 2 || !JS_IsNumber(argv[0]) || !JS_IsFunction(ctx, argv[1])) {
                 return JS_ThrowTypeError(ctx, "onHook: (point, fn) required");
@@ -2770,7 +2770,7 @@ extern "C" PLUGINXX_EXPORT void* agentxx_plugin_agent_mount(
                 );
                 return nullptr;
             }
-            // 脚本注册的归属 agent: 之后加载/登记的 JS 工具与钩子挂在它名下
+            // 脚本注册的归属 agent: 之后加载/登记的 JS 工具与通知挂在它名下
             engine->setMountScope(spec);
             notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
             return nullptr;
@@ -2792,7 +2792,7 @@ extern "C" PLUGINXX_EXPORT void* agentxx_plugin_agent_unmount(
         static_cast<void*>(nullptr),
         [&]() -> void* {
             // 说明: 脚本本身不随挂载销毁 (一份脚本目前对应一个挂载作用域);
-            // 工具/钩子/订阅由主程序按挂载记录撤销, 这里只清掉作用域引用
+            // 工具/通知/订阅由主程序按挂载记录撤销, 这里只清掉作用域引用
             auto* engine = static_cast<JsEngine*>(plugin_ctx);
             if (engine) {
                 engine->clearMountScope();

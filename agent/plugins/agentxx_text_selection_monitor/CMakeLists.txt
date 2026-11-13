@@ -62,7 +62,7 @@ if (_AGENTXX_ADD_AS_BUILTIN)
   )
   if (XX_IS_WIN_D)
     # text_selection_monitor: UIAutomation (uiautomationcore) / IAccessible (oleacc) /
-    # COM (ole32) / 窗口与钩子 (user32); CDP 经主程序 `<应用名>.net` 表, 不再需要 ws2_32 / winhttp
+    # COM (ole32) / 窗口与系统级监听 (user32); CDP 经主程序 `<应用名>.net` 表, 不再需要 ws2_32 / winhttp
     # - 独立模式经下方独立分支 PRIVATE 链接; 内置模式经本收集通道并入 libagentxx
     set(AGENTXX_BUILTIN_PLUGIN_LINK_LIBS
       "${AGENTXX_BUILTIN_PLUGIN_LINK_LIBS}" uiautomationcore oleacc ole32 user32 PARENT_SCOPE)
@@ -120,7 +120,7 @@ target_include_directories(${PLUGIN_NAME} PRIVATE
 
 if (XX_IS_WIN_D)
   # text_selection_monitor: UIAutomation (uiautomationcore) / IAccessible (oleacc) /
-  # COM (ole32) / 窗口与钩子 (user32); CDP 经主程序 `<应用名>.net` 表, 不再需要 ws2_32/winhttp
+  # COM (ole32) / 窗口与系统级监听 (user32); CDP 经主程序 `<应用名>.net` 表, 不再需要 ws2_32/winhttp
   target_link_libraries(${PLUGIN_NAME} PRIVATE
     uiautomationcore
     oleacc

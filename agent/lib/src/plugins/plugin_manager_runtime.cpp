@@ -126,7 +126,7 @@ RuntimeChannel* PluginManager::runtimeChannelOf(const PluginInstance* inst, int6
 }
 
 // =====================================================================
-// 通道事件交付
+// 通道事件投递
 // =====================================================================
 
 void PluginManager::deliverChannelEvent(

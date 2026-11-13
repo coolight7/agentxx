@@ -211,7 +211,7 @@ content:
 所以 `[Info]` 的 `wait` 行是 `-`；`[Event]` 首行与分段标记保持旧形态，界面与 wire 不变。
 
 `agentxx_async_await` 的返回值是任务表的条目文本（`renderEntryDetail`），不再复用事件渲染：
-正文、错误、取消状态都只有任务表一份来源，任务没结束时它等票据而不是订阅事件。
+正文、错误、取消状态都只有任务表一份来源，任务没结束时它登记一次等待，而不是订阅事件。
 
 两种文本的终态都是成功: 工具返回 `ToolResult::ok(...)`, 成败只看状态, 不看正文里有什么字样。
 以前的实现靠首行前缀判定 (`[Error` / `[Permission denied` / `[Repeated call denied` /
@@ -269,19 +269,19 @@ content:
 
 **结果怎么回到会话**：只有一条路径 —— 任务收尾时由 `AsyncWorkManager::finishEntry`
 直接交给会话（复用中枢的投递决策段 `EventHub::deliver`）；事件 `agentxx.agent.async.done`
-仍然发布，但只是广播（给插件与外部订阅者），不再承担交付。
+仍然发布，但只是广播（给插件与外部订阅者），不再负责投递。
 
 - `notify`（默认 `true`）：收尾时直接投递一条 `[Event] ... / [Content] ...` 输入，
   与旧行为同一形态（界面、协议、轮末提升的 source 前缀判断都不变）；
-- `agentxx_async_await` 在任务还没结束时先在条目上挂一张**票据**
+- `agentxx_async_await` 在任务还没结束时先在条目上做一次**等待登记**
   （`AsyncResultTicket`，见 `AsyncWorkManager::waitTerminal`）等终态，醒来后读任务表；
-  任务收尾时看到有票据，就**把正文交给等待方、本次不再自动投递** ——
-  票据只在内存里，终态即清空，不是持久状态；
+  任务收尾时看到有等待登记，就**把正文交给等待方、本次不再自动投递** ——
+  等待登记只在内存里，终态即清空，不是持久状态；
 - await 是“读”不是“消费”：任务已结束时再 await 会再返回一份正文（工具语义，
   与模型重复调用其他读取类工具一致）；`notify:false` 的任务没有自动投递，await 照常给；
 - 投递失败（会话关停 / 背压丢弃 / 无驱动端）只记 WARN 与 `dropped` 计数，不重试；
   正文仍在任务表，`agentxx_async_query` / `agentxx_async_await` 都能取回；
-- 正文只有任务表一份：票据不带正文，事件值里的 `content` 只用于广播与旧文本渲染。
+- 正文只有任务表一份：等待登记不带正文，事件值里的 `content` 只用于广播与旧文本渲染。
 
 工具开关：事件中枢**常驻**（删了早期版本的 `event.enable`），`agentxx_async_emit` 总是注册；
 `agentxx_async_*` 需要 `async_work.enable`（容器在 init 之后才挂上也可以，工具内部取不到时
@@ -390,10 +390,10 @@ content:
   由 `AsyncWorkManager::finishEntry` 直接交给会话（不经过事件等待）：轮次在跑 → 插到
   下一次模型调用前；轮次已结束 → 入队并开新一轮；会话没有驱动端 → 落待注入输入
   （计数 `deferred`）。`notify:false` 只落任务表。
-  **有人等着就不重复投**：`agentxx_async_await` 在任务未结束时挂了票据，收尾时正文直接
+  **有人等着就不重复投**：`agentxx_async_await` 在任务未结束时登记了等待，收尾时正文直接
   交给等待方，本次不再插入会话；任务早就结束（已经投过）时再 await 会再给一份，
   这是工具语义。规则与并发边界见 §6 的“结果怎么回到会话”。
-  **插件提交的任务不能用这条路**：交付用的是创建者会话的驱动端点，插件自己开的会话
+  **插件提交的任务不能用这条路**：投递用的是创建者会话的驱动端点，插件自己开的会话
   不属于创建者时报 `session not found` —— 那种场景由插件在 `on_event` 里自己投
   （参考 `agent/plugins/agentxx_chatbot/chatbot_task.cpp`）。
 - 子代理上下文**继承父事件中枢**（嵌套沿用最外层），所以子代理 emit 的事件父会话能等；

@@ -69,7 +69,7 @@ public:
     /// 名称
     std::string                                 name;
     std::weak_ptr<agentxx::agent::AgentContext> agentContext;
-    /// 是否已禁用 (禁用后 WrapHandleBaseNode 遍历跳过, 不执行任何钩子)
+    /// 是否已禁用 (禁用后 WrapHandleBaseNode 遍历跳过, 不执行任何回调)
     /// - 供插件热卸载/禁用使用: 运行中置位安全 (len 已缓存), 轮末由
     ///   PluginManager::flushPendingCleanup 从 handles 摘除
     /// - 普通中间件不使用, 保持 false
@@ -250,7 +250,7 @@ public:
     }
 };
 
-/// 中间件生命周期拦截钩子集合
+/// 中间件生命周期拦截回调集合
 /// - 采用聚合体设计, 未指定的阶段天然默认为 nullptr
 /// - 支持 C++20 指定初始化器 (Designated Initializers)
 struct MiddlewareHooks {

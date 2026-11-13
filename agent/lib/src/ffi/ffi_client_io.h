@@ -82,14 +82,14 @@ protected:
 
 private:
 
-    /// 合批后的增量文本交付 (EVT_DELTA_TEXT_BATCH; 同一消息 id 内才会合批)
+    /// 合批后的增量文本发出 (EVT_DELTA_TEXT_BATCH; 同一消息 id 内才会合批)
     void emitDeltaText(
         std::string_view msgId,
         std::string_view kind,
         std::string_view text
     ) override;
 
-    /// 非合批的增量交付 (EVT_DELTA)
+    /// 非合批的增量发出 (EVT_DELTA)
     void emitDeltaEvent(const agent::WireDelta& delta) override;
 
     /// 发事件到 C 回调 (异常不外泄)

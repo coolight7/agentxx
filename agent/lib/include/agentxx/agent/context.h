@@ -986,7 +986,7 @@ public:
     /// - 构造 AgentContext 时即创建 (早于中间件构造与插件加载), 中间件在构造函数里
     ///   登记来源, 插件禁用/卸载时按 owner 撤销
     /// - 段落文本只在这里持有 (不再经 graphData 中转); 唯一的读盘入口是 model call
-    ///   的 start 钩子 (见 agentxx/middlewares/prompt_source_refresh.h)
+    ///   的 start 回调 (见 agentxx/middlewares/prompt_source_refresh.h)
     std::shared_ptr<PromptSourceRegistry> promptSources = std::make_shared<PromptSourceRegistry>();
 
     /// 本 agent 上一次请求实际发送的工具定义
@@ -1197,7 +1197,7 @@ public:
 
     /// 运行时稳定附加段 (来源 → 正文; 按 (order, 键名) 稳定排列)
     /// - 取自 [promptSources] 的稳定段视图; 会话内不变 (只在 model call 的
-    ///   start 钩子里按标记重取): 拼进 system 末尾, 与 static 段一起进前缀
+    ///   start 回调里按标记重取): 拼进 system 末尾, 与 static 段一起进前缀
     std::vector<std::pair<std::string, std::string>>
         buildStableContextSections(std::string_view sessionId = "") const;
 

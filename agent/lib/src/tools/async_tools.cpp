@@ -775,7 +775,7 @@ asio::awaitable<agentxx::util::ToolResult> AsyncAwaitTool::execute_async(const J
         ));
     }
 
-    // 等它进入终态: 等待期间在任务表条目上挂一张票据; 任务收尾时有人接了正文,
+    // 等它进入终态: 等待期间在任务表条目上登记一次等待; 任务收尾时有人接了正文,
     // 本次的自动通知就不再插入会话 (运行中调用时正文只出现一份)
     auto token   = getSessionCancelToken(state.ctx, args);
     auto outcome = co_await state.host->waitAsyncWorkResult(asyncId, timeoutMs, std::move(token));

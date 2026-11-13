@@ -28,7 +28,7 @@ concept BaseGraphNodeType = std::same_as<T, neograph::graph::GraphNode>
 
 /// 节点包装基类: 提供默认 run 原样转发 (不包装时直接调用 T::run)
 /// - 内部实现 start -> baseRun -> end 的栈式调用与异常分发框架
-/// - 各 virtual 钩子由子类覆写以插入中间件行为
+/// - 各 virtual 回调由子类覆写以插入中间件行为
 class WrapBaseNodeInterface : public neograph::graph::GraphNode {
 protected:
 
@@ -44,7 +44,7 @@ public:
 };
 
 /// 节点包装模板: 继承具体节点类型 T, 在 T::run 外围注入中间件
-/// handle 的 start/end 钩子与异常处理框架 (见 [WrapBaseNodeInterface])
+/// handle 的 start/end 回调与异常处理框架 (见 [WrapBaseNodeInterface])
 template<BaseGraphNodeType T>
 class NEOGRAPH_API WrapHandleBaseNode : public T {
 protected:
@@ -84,13 +84,13 @@ public:
         co_return;
     }
 
-    /// 单个中间件 handle 的 start 阶段钩子 (按 handles 顺序调用)
+    /// 单个中间件 handle 的 start 阶段回调 (按 handles 顺序调用)
     virtual asio::awaitable<void> onHandleStart(
         agentxx::middleware::BaseMiddlewareHandleInterface& item,
         neograph::graph::NodeInput&                         in
     ) = 0;
 
-    /// 单个中间件 handle 的 end 阶段钩子 (与 start 反向回放)
+    /// 单个中间件 handle 的 end 阶段回调 (与 start 反向回放)
     virtual asio::awaitable<void> onHandleEnd(
         agentxx::middleware::BaseMiddlewareHandleInterface& item,
         const neograph::graph::NodeInput&                   in,

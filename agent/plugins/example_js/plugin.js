@@ -1,5 +1,5 @@
 // example_js —— JS 插件示例
-// 通过全局 agentxx 桥注册工具/钩子/事件; 引擎 (agentxx_javascript_engine) 负责执行
+// 通过全局 agentxx 桥注册工具/通知/事件; 引擎 (agentxx_javascript_engine) 负责执行
 
 // ---- 工具 1: 纯 JS 计算 ----
 agentxx.registerTool({
@@ -77,7 +77,7 @@ agentxx.registerTool({
   }),
 });
 
-// ---- 钩子: agent_start (point 0) ----
+// ---- 通知点: agent_start (point 0) ----
 agentxx.onHook(0, (info) => {
   agentxx.log(2, "js hook agent_start fired: " + JSON.stringify(info));
 });

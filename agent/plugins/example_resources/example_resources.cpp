@@ -27,7 +27,7 @@
 #include <string>
 
 // 多实例约定 (2026-08 API v1): 零可变全局; 实例状态 (host/iface) 存于
-// ResCtx, create 经 *plugin_ctx 交付主程序 / destroy 释放
+// ResCtx, create 经 *plugin_ctx 交给主程序 / destroy 释放
 struct ResCtx {
     const PluginxxHost*          host = nullptr;
     agentxx::plugin::AgentIfaces iface{};

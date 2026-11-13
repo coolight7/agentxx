@@ -142,7 +142,7 @@ struct YamlAppConfig {
     ///   [git_worktree.h](/agent/lib/include/agentxx/tools/git_worktree.h))
     bool worktreeEnable = false;
     /// 开发者模式 (yaml `dev_mode`, 默认 false)
-    /// - 开启时才收集"记录数据": 功能埋点调用统计、钩子派发记录、成功调用日志
+    /// - 开启时才收集"记录数据": 功能埋点调用统计、通知派发记录、成功调用日志
     /// - 启动时读取后冻结 (镜像到 AgentConfigStatic::devMode), 只控制记录收集,
     ///   不改变任何行为
     bool devMode = false;

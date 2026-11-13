@@ -362,7 +362,7 @@ asio::awaitable<void> WsAgentIOTransport::readLoop() {
             if (auto* delta = std::get_if<WireDelta>(&wireMsg.value())) {
                 uint64_t seq = delta->seq;
                 uint64_t cur = lastDeltaSeq_.load(std::memory_order_acquire);
-                // 重连重放可能重复投递已交付的 delta; 丢弃已见序号, 避免 UI 重复渲染。
+                // 重连重放可能重复投递已发出的 delta; 丢弃已见序号, 避免 UI 重复渲染。
                 // (seq==0 表示无序号, 不参与去重)
                 if (seq > 0 && seq <= cur) {
                     continue;

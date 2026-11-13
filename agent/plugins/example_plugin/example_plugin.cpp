@@ -8,7 +8,7 @@
 ///    - example_sleep (锚定 Task 协程, 经 co_await sleep 精确唤醒)
 ///    - example_bridge (协程驱动桥样例: 主程序 timer + 主程序回调两个真实唤醒源)
 ///    - example_polled_timer (受控轮询样例: 插件本地 reactor 上的 asio steady_timer)
-/// 2. 钩子: agent_start 钩子
+/// 2. 通知: agent_start 通知点
 /// 3. 事件: 订阅 plugin.demo.topic 与跨端事件
 /// 4. 能力: 声明 capability "example.demo"
 /// 5. 卸载: destroy 释放实例
@@ -164,7 +164,7 @@ extern "C" PLUGINXX_EXPORT int
 }
 
 /// 注册事务 (start 的实际内容): 任一步骤失败返回 -1, 由主程序回滚已生效的注册。
-/// 挂载事务 (mount): 工具/钩子/订阅/能力/提示词
+/// 挂载事务 (mount): 工具/通知/订阅/能力/提示词
 /// - `ref` 为本次挂载的 agent 引用, 全部登记都记在该 agent 名下
 static int exampleAgentSetup(AgentCtx& ctx, const agentxx::plugin::ScopeRef& ref) {
     const PluginxxHost* host = ctx.host;
@@ -378,7 +378,7 @@ static int exampleAgentSetup(AgentCtx& ctx, const agentxx::plugin::ScopeRef& ref
     );
 
     // 2. 通知型功能埋点: 插件"想知道某个点发生了"就订阅同名广播频道
-    //    (已经不再有"钩子处理器登记"这回事; 序号已换成点 id)
+    //    (已经不再有"处理器登记"这回事; 序号已换成点 id)
     {
         const std::string_view pointId = agentxx::plugin::points::ToolEnd;
         auto                   idSv    = agentxx::plugin::PluginStringView::from(pointId);
@@ -502,7 +502,7 @@ static void* exampleAgentMount(
 static void* exampleAgentUnmount(
     AgentCtx&, void*, const PluginxxOperatorNotify* notify, PluginxxString*
 ) {
-    // 工具/钩子/订阅/提示词由主程序按挂载记录撤销
+    // 工具/通知/订阅/提示词由主程序按挂载记录撤销
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }

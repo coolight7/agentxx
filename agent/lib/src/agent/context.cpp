@@ -1054,7 +1054,7 @@ std::vector<std::pair<std::string, std::string>>
         return out;
     }
     // 运行时段由来源注册表持有 (不再经 graphData 中转): 顺序 (order, 键名) 稳定,
-    // 内容只在 model call 的 start 钩子里按标记重取
+    // 内容只在 model call 的 start 回调里按标记重取
     for (const auto& section : promptSources->stableSections(sessionId)) {
         out.emplace_back(std::string{section.key}, std::string{section.text});
     }
@@ -1137,7 +1137,7 @@ std::string AgentContext::buildSystemPromptStable(std::string_view sessionId) co
     }
     // 运行时稳定附加段 (记忆文件内容 / 技能清单): 随 system 消息一起进稳定前缀,
     // 上游的 KV/前缀缓存能命中; 文本由来源注册表持有, 只在 model call 的 start
-    // 钩子里按标记重取 (首次 / 压缩完成 / 资源变更 / 显式请求)
+    // 回调里按标记重取 (首次 / 压缩完成 / 资源变更 / 显式请求)
     for (const auto& [source, text] : buildStableContextSections(sessionId)) {
         (void)source;
         appendPromptSegment(combined, text);
