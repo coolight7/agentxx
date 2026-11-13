@@ -583,8 +583,27 @@ void EventBridge::handleChannelWrite(const neograph::graph::GraphEvent& event) {
                 ViewMessage row     = *existing;
                 bool        changed = false;
                 if (!finalText.empty() && row.text != finalText) {
-                    row.text = finalText;
-                    changed  = true;
+                    if (finalText.starts_with(row.text)) {
+                        // 定稿文本完整包含流式累积 (上游补发了尾部文本 / 网关缓冲后
+                        // 整段下发): 换成本次定稿不会少一个字
+                        row.text = finalText;
+                        changed  = true;
+                    } else {
+                        // 其它不一致一律保留行文本, 只追加不覆盖:
+                        // 流式输出中途中断后重试会从头再生成一遍, 定稿文本只含
+                        // 最后一次尝试的内容, 而先前那次已经吐出的文字用户看到过、
+                        // 也已经追加在这一行里 (LLM 上下文丢弃还是保留那次尝试,
+                        // 展示历史都一样)。改成定稿文本等于把用户看到的内容抹掉,
+                        // 这一行会"缩回去"
+                        XX_LOGD(
+                            "[event_bridge] reconcile keeps streamed text (role={}, "
+                            "streamed={} chars, final={} chars, finalIsTail={})",
+                            static_cast<int>(segRole),
+                            row.text.size(),
+                            finalText.size(),
+                            row.text.ends_with(finalText)
+                        );
+                    }
                 }
                 if (jsonStartMs > 0 && row.startTimeMs != jsonStartMs) {
                     row.startTimeMs = jsonStartMs;

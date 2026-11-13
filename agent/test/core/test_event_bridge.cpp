@@ -1376,6 +1376,243 @@ asio::awaitable<void> test_eventbridge_gen_status_error() {
     co_return;
 }
 
+/// 验证流式输出中途中断后重试/续写时, 展示历史只追加、不回退
+/// - 中断时已吐出的半截输出先定稿成行, 重试的 token 继续追加到同一行
+/// - 定稿对账不得把行文本换成"最后一次尝试"的文本: 否则用户已看到的文字被抹掉
+///   (LLM 上下文丢掉还是保留上次半截输出都不影响展示历史的追加语义)
+/// - 只有"定稿文本完整包含行文本"(上游补发尾部)时才整条替换
+asio::awaitable<void> test_eventbridge_reconcile_keep_streamed_text() {
+    using ET = neograph::graph::GraphEvent::Type;
+    using VM = agentxx::agent::ViewMessage;
+
+    auto makeChunk = [](int type, std::string data) {
+        return neograph::json{
+            {"type", type           },
+            {"data", std::move(data)}
+        };
+    };
+
+    /// 一条桥及其上下文 (上下文须与桥同生命周期: 桥只持弱引用)
+    struct Flow {
+        std::shared_ptr<agentxx::agent::AgentContext>  ctx;
+        std::shared_ptr<agentxx::agent::Session>      session;
+        std::shared_ptr<TestEbIO>                     io;
+        std::shared_ptr<agentxx::events::EventBridge> bridge;
+    };
+    auto makeFlow = [&]() {
+        Flow f;
+        f.ctx              = std::make_shared<agentxx::agent::AgentContext>();
+        f.ctx->agentConfig = std::make_shared<agentxx::agent::AgentConfig>();
+        f.session          = std::make_shared<agentxx::agent::Session>();
+        f.io               = std::make_shared<TestEbIO>();
+        f.session->io      = f.io;
+        f.bridge           = makeTestBridge(f.ctx, f.session, f.io);
+        return f;
+    };
+    // 轮次主题: 先吐第一段, 中途失败 (重试提示定稿已吐出的内容), 再吐第二段
+    auto startInterrupted = [&](Flow& f, std::string first, std::string second) {
+        auto cb = f.bridge->makeCallback();
+        cb(neograph::graph::GraphEvent{ET::NODE_START, "llm", neograph::json::object()});
+        cb(neograph::graph::GraphEvent{
+            ET::LLM_TOKEN,
+            "llm",
+            makeChunk(neograph::ChatStreamChunk::TYPE_CONTENT, std::move(first))
+        });
+        // 失败提示 (llm 节点重试前写入的 message_tip): 先把已吐出的内容定稿成行
+        cb(neograph::graph::GraphEvent{
+            ET::CHANNEL_WRITE,
+            "llm",
+            neograph::json{
+                {"channel", "message_tip"},
+                {"value",
+                 neograph::json{
+                     {"tipType", "warning"},
+                     {"text", "LLM API 请求失败, 3 秒后自动重试"},
+                 }},
+            }
+        });
+        // 重试的 token: 应当继续追加到刚定稿的那一行 (同 id), 不覆盖
+        cb(neograph::graph::GraphEvent{
+            ET::LLM_TOKEN,
+            "llm",
+            makeChunk(neograph::ChatStreamChunk::TYPE_CONTENT, std::move(second))
+        });
+    };
+    // 本步骤里被整条覆盖过的行文本 (应为空: 没有覆盖就是没有 update_message)
+    auto overwrittenTexts = [](const Flow& f) {
+        std::vector<std::string> texts;
+        for (const auto& d : f.io->deltas) {
+            if (d.type == agentxx::agent::WireDelta::Type::UpdateMessage && d.message) {
+                texts.push_back(d.message->text);
+            }
+        }
+        return texts;
+    };
+    auto rowText = [](const Flow& f, size_t index) {
+        const auto& window = f.session->viewWindow();
+        return index < window.size() ? window[index].text : std::string{"<missing>"};
+    };
+
+    // ---- 流程 1: 重试成功后 LLM 上下文只留最后一次输出 (半截输出被丢弃) ----
+    {
+        Flow  f;
+        f = makeFlow();
+        startInterrupted(f, "part-1", "part-2");
+        // 中断时定稿的半截输出 + 重试输出都在同一行 (插入过一次, 之后按 id 追加)
+        XX_TEST_EXPECT_EQ(f.session->viewWindow().size(), size_t{1});
+        XX_TEST_EXPECT_EQ(rowText(f, 0), std::string{"part-1part-2"});
+
+        // 定稿对账: content 只有最后一次尝试的文本 -> 行文本必须保持追加结果
+        auto cb = f.bridge->makeCallback();
+        cb(neograph::graph::GraphEvent{
+            ET::CHANNEL_WRITE,
+            "llm",
+            neograph::json{
+                {"channel", "messages"},
+                {"value",
+                 neograph::json::array({
+                     neograph::json{
+                         {"role", "assistant"},
+                         {"content", "part-2"},
+                     },
+                 })},
+            }
+        });
+        XX_TEST_EXPECT_EQ(f.session->viewWindow().size(), size_t{1});
+        XX_TEST_EXPECT_EQ(rowText(f, 0), std::string{"part-1part-2"});
+        XX_TEST_EXPECT_EQ(overwrittenTexts(f).size(), size_t{0});
+    }
+
+    // ---- 流程 2: 重试成功后 LLM 上下文保留半截输出 (两条 assistant 消息) ----
+    {
+        Flow  f;
+        f = makeFlow();
+        startInterrupted(f, "abc", "def");
+        XX_TEST_EXPECT_EQ(rowText(f, 0), std::string{"abcdef"});
+
+        auto cb = f.bridge->makeCallback();
+        cb(neograph::graph::GraphEvent{
+            ET::CHANNEL_WRITE,
+            "llm",
+            neograph::json{
+                {"channel", "messages"},
+                {"value",
+                 neograph::json::array({
+                     neograph::json{
+                         {"role", "assistant"},
+                         {"content", "abc\n请求失败, 已保留部分输出"},
+                     },
+                     neograph::json{
+                         {"role", "assistant"},
+                         {"content", "def"},
+                     },
+                 })},
+            }
+        });
+        // 两条定稿消息都只含片段, 都不能把整行换掉
+        XX_TEST_EXPECT_EQ(f.session->viewWindow().size(), size_t{1});
+        XX_TEST_EXPECT_EQ(rowText(f, 0), std::string{"abcdef"});
+        XX_TEST_EXPECT_EQ(overwrittenTexts(f).size(), size_t{0});
+    }
+
+    // ---- 流程 3: 定稿文本是流式累积的延伸 -> 整条替换 (补上尾部, 不少字) ----
+    // 同时验证思考行走同一规则 (半截思考被丢弃时保持追加结果)
+    {
+        Flow  f;
+        f = makeFlow();
+        auto cb = f.bridge->makeCallback();
+        cb(neograph::graph::GraphEvent{ET::NODE_START, "llm", neograph::json::object()});
+        cb(neograph::graph::GraphEvent{
+            ET::LLM_TOKEN,
+            "llm",
+            makeChunk(neograph::ChatStreamChunk::TYPE_THINKING, "t-1")
+        });
+        cb(neograph::graph::GraphEvent{
+            ET::CHANNEL_WRITE,
+            "llm",
+            neograph::json{
+                {"channel", "message_tip"},
+                {"value",
+                 neograph::json{
+                     {"tipType", "warning"},
+                     {"text", "retry"},
+                 }},
+            }
+        });
+        cb(neograph::graph::GraphEvent{
+            ET::LLM_TOKEN,
+            "llm",
+            makeChunk(neograph::ChatStreamChunk::TYPE_THINKING, "t-2")
+        });
+        cb(neograph::graph::GraphEvent{
+            ET::LLM_TOKEN,
+            "llm",
+            makeChunk(neograph::ChatStreamChunk::TYPE_CONTENT, "body")
+        });
+        cb(neograph::graph::GraphEvent{ET::NODE_END, "llm", neograph::json::object()});
+        XX_TEST_EXPECT_EQ(f.session->viewWindow().size(), size_t{2});
+        XX_TEST_EXPECT_TRUE(f.session->viewWindow()[0].role == VM::Role::Think);
+        XX_TEST_EXPECT_EQ(rowText(f, 0), std::string{"t-1t-2"});
+        XX_TEST_EXPECT_EQ(rowText(f, 1), std::string{"body"});
+
+        cb(neograph::graph::GraphEvent{
+            ET::CHANNEL_WRITE,
+            "llm",
+            neograph::json{
+                {"channel", "messages"},
+                {"value",
+                 neograph::json::array({
+                     neograph::json{
+                         {"role", "assistant"},
+                         {"content", "body-extended"},
+                         {"reasoning_content", "t-2"},
+                     },
+                 })},
+            }
+        });
+        // 思考行: 定稿只有最后一次尝试 -> 保持追加结果
+        XX_TEST_EXPECT_EQ(rowText(f, 0), std::string{"t-1t-2"});
+        // 正文行: 定稿文本完整包含流式累积 -> 换成定稿文本 (只剩新增部分)
+        XX_TEST_EXPECT_EQ(rowText(f, 1), std::string{"body-extended"});
+        const auto texts = overwrittenTexts(f);
+        XX_TEST_EXPECT_EQ(texts.size(), size_t{1});
+        if (texts.size() == 1) {
+            XX_TEST_EXPECT_EQ(texts[0], std::string{"body-extended"});
+        }
+    }
+
+    // ---- 流程 4: 定稿文本与流式累积互不包含 (上游改写) -> 仍保留用户看到过的文本 ----
+    {
+        Flow  f;
+        f = makeFlow();
+        auto cb = f.bridge->makeCallback();
+        cb(neograph::graph::GraphEvent{ET::NODE_START, "llm", neograph::json::object()});
+        cb(neograph::graph::GraphEvent{
+            ET::LLM_TOKEN,
+            "llm",
+            makeChunk(neograph::ChatStreamChunk::TYPE_CONTENT, "abc")
+        });
+        cb(neograph::graph::GraphEvent{ET::NODE_END, "llm", neograph::json::object()});
+        cb(neograph::graph::GraphEvent{
+            ET::CHANNEL_WRITE,
+            "llm",
+            neograph::json{
+                {"channel", "messages"},
+                {"value",
+                 neograph::json::array({
+                     neograph::json{
+                         {"role", "assistant"},
+                         {"content", "xyz"},
+                     },
+                 })},
+            }
+        });
+        XX_TEST_EXPECT_EQ(rowText(f, 0), std::string{"abc"});
+    }
+
+    co_return;
+}
+
 asio::awaitable<TestResult> run_event_bridge_tests() {
     g_eb_passed = 0;
     g_eb_failed = 0;
@@ -1393,6 +1630,7 @@ asio::awaitable<TestResult> run_event_bridge_tests() {
         co_await test_eventbridge_tps();
         co_await test_eventbridge_gen_status();
         co_await test_eventbridge_gen_status_error();
+        co_await test_eventbridge_reconcile_keep_streamed_text();
         co_await test_eventbridge_turn_tps();
     } catch (const std::exception& e) {
         TEST_FAIL << "event_bridge suite exception: " << e.what() << std::endl;
