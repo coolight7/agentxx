@@ -237,22 +237,26 @@ asio::awaitable<void> test_fake_provider_tool_loop() {
 }
 
 // ---------------------------------------------------------------------------
-// 3) 错误注入: 不可重试立即结束; 可重试按 retry-after 等待后成功
+// 3) 错误注入: 任何错误都重试 (鉴权类也一样), 退避时长按类别与 retry-after
 // ---------------------------------------------------------------------------
 asio::awaitable<void> test_fake_provider_error_policy() {
-    // ---- 3a) 401 鉴权失败: 不可重试, 只请求一次 ----
+    // ---- 3a) 401 鉴权失败: 照样重试, 次数到 llm.max_retry 才停 ----
+    // 退避: 鉴权类基数 2 秒 + 抖动 0~2 秒 -> 本用例真实等待 2~4 秒
     {
         auto provider = std::make_shared<FakeProvider>();
         provider->pushError(401, R"({"error":{"message":"Invalid API key"}})");
+        provider->pushError(401, R"({"error":{"message":"Invalid API key"}})");
 
-        auto cfg   = makeCfg();
-        auto agent = std::make_shared<FakeProviderAgent>(cfg);
+        auto cfg         = makeCfg();
+        cfg->llmMaxRetry = 1;
+        auto agent       = std::make_shared<FakeProviderAgent>(cfg);
         co_await agent->init();
         FakeProvider::inject(*agent, kFakeModelName, provider);
 
         auto result = co_await agent->runTurnAsync("fake_err_auth", "hello", nullptr);
         XX_TEST_EXPECT_TRUE(result.hasError);
-        XX_TEST_EXPECT_EQ(provider->requestCount(), size_t{1});
+        // 原始请求 + 1 次重试 (旧行为下鉴权类一次就停, 这里断了回归)
+        XX_TEST_EXPECT_EQ(provider->requestCount(), size_t{2});
     }
 
     // ---- 3b) 500 可重试: 退避 (retry-after 1 秒) 后第二次成功 ----
@@ -277,43 +281,6 @@ asio::awaitable<void> test_fake_provider_error_policy() {
 
         auto session = agent->agentContext->sessions->get("fake_err_retry");
         XX_TEST_EXPECT_EQ(lastAssistantContent(session), std::string{"重试后成功"});
-    }
-    co_return;
-}
-
-// ---------------------------------------------------------------------------
-// 4) 溢出压缩: 400 + context_length_exceeded 触发一次压缩后重试成功
-// ---------------------------------------------------------------------------
-asio::awaitable<void> test_fake_provider_overflow_compaction() {
-    auto provider = std::make_shared<FakeProvider>();
-    provider->pushError(
-        400,
-        R"({"error":{"code":"context_length_exceeded","message":"maximum context length is 8192 tokens"}})"
-    );
-    provider->pushText("摘要内容");
-    provider->pushText("压缩后重试成功");
-
-    auto cfg   = makeCfg();
-    auto agent = std::make_shared<FakeProviderAgent>(cfg);
-    co_await agent->init();
-    FakeProvider::inject(*agent, kFakeModelName, provider);
-
-    auto result = co_await agent->runTurnAsync("fake_overflow", "hello", nullptr);
-    XX_TEST_EXPECT_FALSE(result.hasError);
-    // 请求数 = 原始请求 + (压缩/重试), 远小于 1 + llmMaxRetry(5): 走的是压缩路径
-    XX_TEST_EXPECT_GE(provider->requestCount(), size_t{2});
-    XX_TEST_EXPECT_TRUE(provider->requestCount() <= size_t{4});
-    // 压缩确实发生: 摘要正文进入了会话语义上下文
-    auto session = agent->agentContext->sessions->get("fake_overflow");
-    XX_TEST_EXPECT_TRUE(session != nullptr);
-    if (session) {
-        bool hasSummary = false;
-        for (const auto& msg : session->messages()) {
-            if (msg.content.find("摘要内容") != std::string::npos) {
-                hasSummary = true;
-            }
-        }
-        XX_TEST_EXPECT_TRUE(hasSummary);
     }
     co_return;
 }
@@ -443,7 +410,6 @@ asio::awaitable<TestResult> run_fake_provider_tests() {
     co_await test_fake_provider_stream();
     co_await test_fake_provider_tool_loop();
     co_await test_fake_provider_error_policy();
-    co_await test_fake_provider_overflow_compaction();
     co_await test_fake_provider_cancel();
     co_await test_fake_provider_usage_ledger();
     co_return TestResult{g_fp_passed, g_fp_failed};

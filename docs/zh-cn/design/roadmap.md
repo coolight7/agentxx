@@ -79,8 +79,8 @@
 
 | 编号 | 内容 | 状态 | 代码位置 / 验收 |
 |---|---|---|---|
-| LLM-2 | 错误分类与重试策略 | 已实施 | `nodes/llm_error.{h,cpp}`（分类 + 有界指数退避 + `retry-after`；网络/传输层故障单列一类，一律可重试，类别只影响等待基数；状态码只在**独立成词**时才算，我们自己的 ` &#124; stream: recv=…B` 诊断后缀不参与判类 —— 否则字节数里的 `403` 会把可重试的读超时判成鉴权失败、首轮就结束）+ `nodes/modelcall.cpp`（不可重试类直接结束）；模块 `llm_error`、`agent` |
-| LLM-3 | 溢出一次性压缩重试 | 已实施 | `nodes/modelcall.cpp`（首个溢出触发 `service.summarization.compact` 后立即重试，每轮仅一次）；模块 `agent` |
+| LLM-2 | 错误分类与重试策略 | 已实施 | `nodes/llm_error.{h,cpp}`（分类 + 有界指数退避 + `retry-after`；**任何失败都重试**，`llm.max_retry` 是次数上限的唯一来源，分类只影响等待基数（网络 1s / 超时与未知 2s / 服务端 3s / 限流 5s）；网络/传输层故障单列一类并判在所有状态码规则之前，只为拿最短退避（连接/读写、域名解析、TLS 与证书、代理与隧道、HTTP/2 流控、平台 socket 错误码、响应流没走完的 ` &#124; stream: recv=…B` 后缀；状态码只在**独立成词**时才算，否则字节数里的 `403` 会把读超时判成鉴权）；**不允许**再加"这类不重试"的判断，也不允许从错误文本推断上下文超限）+ `nodes/modelcall.cpp`（停止重试只有取消与达到 `llm.max_retry`）；模块 `llm_error`、`agent`、`fake_provider` |
+| LLM-3 | 溢出一次性压缩重试 | 已移除 | 已删除：按错误文本/状态码判定"上下文超限"经常误判（400/413 与 `context length` 一类字样并不等于真超限），误判的代价是白压一次历史；上下文长度只由自动压缩处理（超过上限 75% 触发）。说明与警告见 `nodes/llm_error.h` |
 | LLM-5 | 假 provider | 已实施 | `agent/test/include/agentxx-test/core/fake_provider.h`（脚本化固定流/错误/延迟/工具调用 + 请求记录）+ 模块 `fake_provider`；本地 HTTP 模拟器继续覆盖 provider 内部解析 |
 | LLM-7 | 处理方退出取消 | 已实施 | `agentxx/nodes/provider_call_scope.h`（`ProviderCallScope`：`fork` 出单次调用取消域，RAII 在处理方放弃时只中止本次调用）+ `nodes/modelcall.cpp` 接线；模块 `provider_call_scope` |
 | LLM-8 | 缓存断点与缓存用量 | 已实施 | Anthropic 请求加载（`ModelConfig::cacheControl` + `AnthropicProvider::applyCacheBreakpoints`：系统提示/工具定义/最后一条正文消息加 `cache_control` 断点，跳过末尾动态段）+ 用量换算（`input_tokens + cache_read + cache_creation` → `prompt_tokens`，缓存写入量经 `provider_common.h` 额外字段进用量记录 `usage.cache_write_prompt_tokens`，schema v3）；模块 `anthropic_provider`、`fake_provider`、`session_schema`、`config_loader` |

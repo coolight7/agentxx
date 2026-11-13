@@ -2,9 +2,11 @@
 ///
 /// 覆盖:
 /// - classifyLlmError: 各家 provider 的常见错误文本落到正确分类
-///   (鉴权 / 额度 / 请求非法 / 上下文超限 / 限流 / 超时 / 网络 / 服务端 / 未知)
-/// - 可重试性: 只有鉴权、额度、请求非法不可重试; 其余 (含网络/传输层故障) 都可重试
-/// - 上下文超限识别 (触发一次压缩后重试的入口条件)
+///   (鉴权 / 额度 / 请求非法 / 限流 / 超时 / 网络 / 服务端 / 未知)
+/// - 分类只用于决定退避: **任何错误都会重试** (重试次数只由 `llm.max_retry` 控制),
+///   所以本模块只断言分类与退避, 不再有"这类不值得重试"的判定
+/// - 不识别"上下文超限": 413 / `context length` 一类文本不做特殊判定 (见 llm_error.h
+///   的警告), 只落到普通分类并照常重试
 /// - llmRetryDelaySeconds: 有界指数退避、类别只影响等待基数 (网络最短、限流最长)、
 ///   `retry-after` 优先、上限夹取、抖动不会让等待变成 0
 #include "agentxx-test/core/test_llm_error.h"
@@ -31,31 +33,7 @@ TestResult testLlmError() {
     g_le_passed = 0;
     g_le_failed = 0;
 
-    // ---------------- 分类: 上下文超限 (最先判定, 可恢复) ----------------
-
-    {
-        struct Case {
-            const char*                  text;
-            agentxx::nodes::LlmErrorKind want;
-        };
-
-        const Case overflowCases[] = {
-            {R"({"error":{"message":"This model's maximum context length is 128000 tokens"}})",
-             LlmErrorKind::ContextOverflow                                                                                   },
-            {R"({"error":{"code":"context_length_exceeded"}})",                                 LlmErrorKind::ContextOverflow},
-            {R"(HTTP 400: prompt is too long)",                                                 LlmErrorKind::ContextOverflow},
-            {R"(413 Request Entity Too Large)",                                                 LlmErrorKind::ContextOverflow},
-            {"上下文过长，请缩减历史",                                               LlmErrorKind::ContextOverflow},
-        };
-        for (const auto& c : overflowCases) {
-            const auto kind = classifyLlmError(c.text);
-            XX_TEST_EXPECT_TRUE(kind == c.want);
-            XX_TEST_EXPECT_TRUE(isLlmContextOverflow(kind));
-            XX_TEST_EXPECT_TRUE(isLlmErrorRetryable(kind));
-        }
-    }
-
-    // ---------------- 分类: 不可重试类 ----------------
+    // ---------------- 分类: 鉴权 / 额度 / 请求非法 (退避基数 2 秒) ----------------
 
     {
         const char* authCases[] = {
@@ -66,8 +44,6 @@ TestResult testLlmError() {
         for (const auto* text : authCases) {
             const auto kind = classifyLlmError(text);
             XX_TEST_EXPECT_TRUE(kind == LlmErrorKind::Auth);
-            XX_TEST_EXPECT_FALSE(isLlmErrorRetryable(kind));
-            XX_TEST_EXPECT_FALSE(isLlmContextOverflow(kind));
         }
 
         const char* quotaCases[] = {
@@ -78,7 +54,6 @@ TestResult testLlmError() {
         for (const auto* text : quotaCases) {
             const auto kind = classifyLlmError(text);
             XX_TEST_EXPECT_TRUE(kind == LlmErrorKind::Quota);
-            XX_TEST_EXPECT_FALSE(isLlmErrorRetryable(kind));
         }
 
         const char* invalidCases[] = {
@@ -88,11 +63,10 @@ TestResult testLlmError() {
         for (const auto* text : invalidCases) {
             const auto kind = classifyLlmError(text);
             XX_TEST_EXPECT_TRUE(kind == LlmErrorKind::InvalidRequest);
-            XX_TEST_EXPECT_FALSE(isLlmErrorRetryable(kind));
         }
     }
 
-    // ---------------- 分类: 可重试类 ----------------
+    // ---------------- 分类: 限流 / 超时 / 网络 / 服务端 ----------------
 
     {
         const char* rateCases[] = {
@@ -103,7 +77,6 @@ TestResult testLlmError() {
         for (const auto* text : rateCases) {
             const auto kind = classifyLlmError(text);
             XX_TEST_EXPECT_TRUE(kind == LlmErrorKind::RateLimit);
-            XX_TEST_EXPECT_TRUE(isLlmErrorRetryable(kind));
         }
 
         const char* timeoutCases[] = {
@@ -114,7 +87,6 @@ TestResult testLlmError() {
         for (const auto* text : timeoutCases) {
             const auto kind = classifyLlmError(text);
             XX_TEST_EXPECT_TRUE(kind == LlmErrorKind::Timeout);
-            XX_TEST_EXPECT_TRUE(isLlmErrorRetryable(kind));
         }
 
         // 真实观测到的文本: 流式读超时的诊断后缀里带收到的字节数, 里面恰好出现
@@ -136,9 +108,10 @@ TestResult testLlmError() {
         };
         for (const auto* text : streamSuffixCases) {
             const auto kind = classifyLlmError(text);
-            XX_TEST_EXPECT_TRUE(kind == LlmErrorKind::Timeout);
-            XX_TEST_EXPECT_TRUE(isLlmErrorRetryable(kind));
-            XX_TEST_EXPECT_FALSE(isLlmContextOverflow(kind));
+            // 带自己的诊断后缀 = 响应流没走完 = 网络层失败, 判网络 (不按正文里的
+            // "timeout" 判超时); 网络类拿最短的退避基数 (1 秒)
+            // 后缀里的字节数 (`413777B` / `403684B`) 也不参与其余判定
+            XX_TEST_EXPECT_TRUE(kind == LlmErrorKind::Network);
         }
 
         // 状态码独立成词时仍按状态码判 (括号 / 冒号 / 等号 / 空格分隔)
@@ -153,7 +126,8 @@ TestResult testLlmError() {
             {"http 400 bad request",                         LlmErrorKind::InvalidRequest},
             {"http 429 too many requests",                   LlmErrorKind::RateLimit    },
             {"http 503 service unavailable",                 LlmErrorKind::Server       },
-            {"http 413 payload too large",                   LlmErrorKind::ContextOverflow},
+            // 413 不再单独识别 (不做"上下文超限"判定): 落到 Unknown, 同样会重试
+            {"http 413 payload too large",                   LlmErrorKind::Unknown      },
         };
         for (const auto& c : codeCases) {
             XX_TEST_EXPECT_TRUE(classifyLlmError(c.text) == c.want);
@@ -168,7 +142,6 @@ TestResult testLlmError() {
         };
         for (const auto* text : bareByteCountCases) {
             const auto kind = classifyLlmError(text);
-            XX_TEST_EXPECT_TRUE(isLlmErrorRetryable(kind));
             XX_TEST_EXPECT_TRUE(
                 kind == LlmErrorKind::Timeout || kind == LlmErrorKind::Unknown
             );
@@ -195,31 +168,56 @@ TestResult testLlmError() {
         for (const auto* text : networkCases) {
             const auto kind = classifyLlmError(text);
             XX_TEST_EXPECT_TRUE(kind == LlmErrorKind::Network);
-            XX_TEST_EXPECT_TRUE(isLlmErrorRetryable(kind));
-            XX_TEST_EXPECT_FALSE(isLlmContextOverflow(kind));
         }
 
-        const char* serverCases[] = {
-            R"(API error (HTTP 500): {"error":{"message":"simulated failure"}})",
-            "503 Service Unavailable",
-            "upstream overloaded",
+        // TLS / 证书 / 代理 / HTTP-2 / 平台 socket 错误码: 同属网络这一层, 一律重试
+        const char* const moreNetworkCases[] = {
+            "SSL certificate verify failed",
+            "certificate has expired",
+            "tlsv1 alert unknown ca",
+            "error:0A00010B:SSL routines::wrong version number",
+            "no shared cipher",
+            "hostname mismatch in certificate",
+            "CONNECT tunnel failed, response 502",
+            "proxy connect error: 407 proxy authentication required",
+            "http2 GOAWAY received (last stream id 13)",
+            "RST_STREAM with error code 2",
+            "wsarecv: 10054",
+            "recv failed, error 10053",
+            "send error: 10060",
+            "epipe while writing body",
+            "unexpected eof while reading response",
+            "premature end of the response stream",
+            "chunked encoding error: bad chunk",
+            "socket read error",
         };
-        for (const auto* text : serverCases) {
+        for (const auto* text : moreNetworkCases) {
             const auto kind = classifyLlmError(text);
-            XX_TEST_EXPECT_TRUE(kind == LlmErrorKind::Server);
-            XX_TEST_EXPECT_TRUE(isLlmErrorRetryable(kind));
+            XX_TEST_EXPECT_TRUE(kind == LlmErrorKind::Network);
         }
-    }
 
-    // ---------------- 分类: 未知 (按可重试处理, 与历史行为一致) ----------------
+        // 网络层的判定优先于状态码 / 鉴权 / 额度 / 请求非法:
+        // 文本里同时出现它们时仍判网络 (退避最短)
+        const char* const networkWinsCases[] = {
+            "HTTP 401 Unauthorized | stream: recv=1024B events=1 idle=60000ms finish=none",
+            "HTTP 403 Forbidden: connection reset by peer",
+            "HTTP 400 Bad Request (tls handshake failed)",
+            "insufficient_quota: proxy connect error",
+            "invalid_request_error: socket read error",
+            "413 Request Entity Too Large: connection closed before body",
+            "401 unauthorized; getaddrinfo failed for api.example.com",
+        };
+        for (const auto* text : networkWinsCases) {
+            const auto kind = classifyLlmError(text);
+            XX_TEST_EXPECT_TRUE(kind == LlmErrorKind::Network);
+        }
 
-    {
-        XX_TEST_EXPECT_TRUE(classifyLlmError("") == LlmErrorKind::Unknown);
-        const auto kind = classifyLlmError("something totally unexpected happened");
-        XX_TEST_EXPECT_TRUE(kind == LlmErrorKind::Unknown);
-        XX_TEST_EXPECT_TRUE(isLlmErrorRetryable(kind));
-        XX_TEST_EXPECT_FALSE(isLlmContextOverflow(kind));
-        XX_TEST_EXPECT_FALSE(llmErrorKindText(kind).empty());
+        // 字节数里出现 socket 错误码的片段: 不算代码 (独立成词才算)
+        {
+            const auto kind = classifyLlmError("recv=110054B events=9 idle=1200ms");
+            XX_TEST_EXPECT_TRUE(kind == LlmErrorKind::Unknown || kind == LlmErrorKind::Timeout);
+        }
+
     }
 
     // ---------------- 退避策略 ----------------

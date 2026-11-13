@@ -195,8 +195,8 @@ std::atomic<int> g_da_sim_request_count{0};
 /// 剩余失败次数: >0 时接下来的请求直接返回 HTTP 500 并递减, 用于模拟 LLM API 持续失败
 DaSimValue<int> g_da_sim_fail_count{0};
 /// 失败响应的 HTTP 状态码 (0 = 默认 500) 与响应体 (空 = 默认错误文本)
-/// - 供测试区分"可重试"与"不可重试"错误 (如 401 应立即停止重试,
-///   400 + 上下文超限关键词应触发压缩后重试)
+/// - 供测试验证"任何错误都重试": 401 与 400+上下文超限字样都只会按普通失败重试,
+///   没有"不可重试"的类别, 也不会触发压缩
 DaSimValue<int>         g_da_sim_fail_status{0};
 DaSimValue<std::string> g_da_sim_fail_body{std::string{}};
 /// 前 N 次请求返回 tool_calls (之后返回纯文本); -1 = 不限制 (旧行为)
@@ -1276,10 +1276,9 @@ asio::awaitable<void> test_agent_has_tool_calls_condition() {
     co_return;
 }
 
-/// 验收: LLM 错误分类与重试策略
-/// - 不可重试错误 (401 鉴权失败): 立即结束本轮, 不反复请求
-/// - 上下文超限 (400 + 关键词): 触发一次压缩后立即重试, 第二次请求成功
-/// - 上下文持续超限: 只压缩重试一次, 第二次失败即结束 (不消耗全部重试次数)
+/// 验收: LLM 重试策略 —— **任何失败都重试**, 错误分类只决定退避时长
+/// - 401 鉴权失败同样会重试: 次数只由 `llm.max_retry` 决定, 没有"不可重试"的类别
+/// - 上游回"上下文超限"字样也不做特殊处理: 不压缩上下文, 按普通失败重试
 asio::awaitable<void> test_agent_llm_error_policy() {
     auto sim     = startDaSimServer();
     auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
@@ -1294,67 +1293,54 @@ asio::awaitable<void> test_agent_llm_error_policy() {
         return cfg;
     };
 
-    // ---- 1) 401 鉴权失败: 不可重试, 请求次数为 1 ----
+    // ---- 1) 401 鉴权失败: 照样重试, 次数到 llm.max_retry 才停 ----
+    // 退避: 鉴权类基数 2 秒 + 抖动 0~2 秒 -> 本用例真实等待 2~4 秒
     {
         g_da_sim_request_count = 0;
-        g_da_sim_fail_count    = 1;
+        g_da_sim_fail_count    = 100; // 一直失败
         g_da_sim_fail_status   = 401;
         g_da_sim_fail_body
             = R"({"error":{"type":"authentication_error","message":"Invalid API key"}})";
 
-        auto cfg   = makeCfg();
-        auto agent = std::make_shared<agentxx::agent::CodeAgent>(cfg);
+        auto cfg         = makeCfg();
+        cfg->llmMaxRetry = 1;
+        auto agent       = std::make_shared<agentxx::agent::CodeAgent>(cfg);
         co_await agent->init();
-        (void)co_await agent->runTurnAsync("llm_err_auth", "hello", nullptr);
+        const auto result = co_await agent->runTurnAsync("llm_err_auth", "hello", nullptr);
 
-        const int requests = g_da_sim_request_count.load();
-        XX_TEST_EXPECT_EQ(requests, 1); // 鉴权失败不重试
+        XX_TEST_EXPECT_TRUE(result.hasError);
+        // 原始请求 + 1 次重试 (旧行为下鉴权类一次就停, 这里断了回归)
+        XX_TEST_EXPECT_EQ(g_da_sim_request_count.load(), 2);
+
+        g_da_sim_fail_count  = 0;
+        g_da_sim_fail_status = 0;
+        g_da_sim_fail_body.clear();
     }
 
-    // ---- 2) 上下文超限: 压缩一次后重试成功 ----
+    // ---- 2) 上游回"上下文超限"字样: 不压缩上下文, 按普通失败重试 ----
+    // 不压缩的判据: 压缩子代理自己也要调一次模型, 若真触发了压缩, 请求数会 >= 3
     {
         g_da_sim_request_count = 0;
         g_da_sim_fail_count    = 1;
         g_da_sim_fail_status   = 400;
         g_da_sim_fail_body
             = R"({"error":{"code":"context_length_exceeded","message":"This model's maximum context length is 8192 tokens"}})";
-        g_da_sim_response_content = "Recovered after compaction.";
+        g_da_sim_response_content = "Recovered after retry.";
 
-        auto cfg   = makeCfg();
-        auto agent = std::make_shared<agentxx::agent::CodeAgent>(cfg);
+        auto cfg         = makeCfg();
+        cfg->llmMaxRetry = 1;
+        auto agent       = std::make_shared<agentxx::agent::CodeAgent>(cfg);
         co_await agent->init();
-        const auto result = co_await agent->runTurnAsync("llm_err_overflow", "hello", nullptr);
+        const auto result
+            = co_await agent->runTurnAsync("llm_err_overflow_text", "hello", nullptr);
 
-        // 第二次请求成功 → 本轮正常结束 (不是重试耗尽)
+        // 第二次请求成功 → 本轮正常结束
         XX_TEST_EXPECT_FALSE(result.hasError);
-        XX_TEST_EXPECT_TRUE(g_da_sim_request_count.load() >= 2);
-        // 请求次数远小于 1 + llmMaxRetry: 溢出走的是"压缩一次立即重试"路径
-        XX_TEST_EXPECT_TRUE(g_da_sim_request_count.load() <= 4);
-
-        g_da_sim_fail_status = 0;
-        g_da_sim_fail_body.clear();
-    }
-
-    // ---- 3) 上下文持续超限: 只压缩重试一次即结束 ----
-    {
-        g_da_sim_request_count = 0;
-        g_da_sim_fail_count    = 100; // 一直失败
-        g_da_sim_fail_status   = 400;
-        g_da_sim_fail_body
-            = R"({"error":{"code":"context_length_exceeded","message":"maximum context length exceeded"}})";
-
-        auto cfg       = makeCfg();
-        auto realAgent = std::make_shared<agentxx::agent::CodeAgent>(cfg);
-        co_await realAgent->init();
-        const auto result = co_await realAgent->runTurnAsync("llm_err_overflow2", "hello", nullptr);
-
-        XX_TEST_EXPECT_TRUE(result.hasError);
-        // 只允许两次请求: 原始请求 + 压缩后的一次重试
         XX_TEST_EXPECT_EQ(g_da_sim_request_count.load(), 2);
 
-        g_da_sim_fail_count  = 0;
-        g_da_sim_fail_status = 0;
+        g_da_sim_fail_status      = 0;
         g_da_sim_fail_body.clear();
+        g_da_sim_response_content = "Hello! I am a simulated LLM response for testing.";
     }
 
     sim.stop();

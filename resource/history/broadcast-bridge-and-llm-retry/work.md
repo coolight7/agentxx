@@ -115,6 +115,51 @@ Total: passed=42820 failed=3
 | `string_util` | 617 | `utf8Repair` 幂等 |
 | `session_persistence` | 1341 | 非法字节被替换为 `GBK: ...` |
 
+## 后续变更一：重试策略一律化（任何错误都重试）
+
+用户反馈：网络错误偶现仍会结束本轮。根因不在分类本身，而在“存在不值得重试的类别”这条规则 ——
+只要判类出错，就会把一次本来能恢复的失败变成结束本轮。结论：**删掉“值不值得重试”的判断**。
+
+| 文件 | 改动 |
+|---|---|
+| `agent/lib/include/agentxx/nodes/llm_error.h` | 删除 `isLlmErrorRetryable` 声明；`LlmErrorKind` 文档改为“任何失败都重试，分类只决定退避”；新增两条警告（不得加不重试判断、不得按错误文本推断上下文超限） |
+| `agent/lib/src/nodes/llm_error.cpp` | 删除 `isLlmErrorRetryable(kind)` / `isLlmErrorRetryable(kind, errInfo)` / `looksLikeNetworkFailure`；退避注释改为“类别只决定等多久”；网络判定移到 `classifyLlmError` 最前（在切诊断后缀之前） |
+| `agent/lib/src/nodes/modelcall.cpp` | 停止条件只剩 `isCancel` 与 `retry >= llm.max_retry`（`retryable` 项删除） |
+| `agent/test/core/test_llm_error.cpp` | 删除对 `isLlmErrorRetryable` 的全部引用（0 处）；`&#124; stream: ...` 用例的期望由 `Timeout` 改为 `Network` |
+
+## 后续变更二：删除“上下文超限 → 压缩后重试”
+
+用户反馈：`isLlmContextOverflow` 这类判断有时会判错，而默认在上下文达到 75% 时就会自动压缩，
+真到超限的情况基本遇不到；误判的代价是白压一次历史。结论：**整块删除**，并写明警告。
+
+| 文件 | 改动 |
+|---|---|
+| `agent/lib/include/agentxx/nodes/llm_error.h` | 删除 `LlmErrorKind::ContextOverflow` 与 `isLlmContextOverflow` 声明；头部警告写清“不要从错误文本/网络响应判断上下文超限，上下文长度只由自动压缩处理（上限 75% 触发）” |
+| `agent/lib/src/nodes/llm_error.cpp` | 删除上下文超限判定块（`context_length_exceeded` / `maximum context length` / `request entity too large` / `413` 等关键词）与 `isLlmContextOverflow` 定义；`llmErrorKindText` / `llmRetryDelaySeconds` 去掉该类分支；余下规则重新编号（1 网络 → 2 鉴权 → 3 额度 → 4 请求非法 → 5 限流 → 6 超时 → 7 服务端） |
+| `agent/lib/src/nodes/modelcall.cpp` | 删除 `overflowCompactUsed`、`overflow` 判定、停止条件里的溢出项，以及发 `EventCompactContext` 的“压缩后立即重试”分支；注释写清“停止重试只有取消与达到 `llm.max_retry`”与本轮警告；`agentxx/event/{event_stream,events}.h` 两个头随该功能加入，现已无用，一并删除 |
+| `agent/test/core/test_llm_error.cpp` | 删除上下文超限用例组；`413 payload too large` 改为断言 `Unknown`（不再单独识别，同样会重试）；模块头注释同步 |
+| `agent/test/core/test_agent.cpp` | `test_agent_llm_error_policy` 重写：块 1 由“401 只请求 1 次”改为 `llmMaxRetry = 1` + 一直 401 → 断言 `2` 次且 `hasError`；块 2 原“压缩后重试成功”改为“上游回 `context_length_exceeded` 也只按普通失败重试”（断言 `2` 次 = 没有多出压缩请求）；原块 3（持续超限只压一次）删除；全局 `g_da_sim_fail_*` 注释同步 |
+| `agent/test/core/test_fake_provider.cpp` | 3a 由“401 只请求 1 次”改为 `llmMaxRetry = 1` + 两次 401 → 断言 `requestCount() == 2`；删除 `test_fake_provider_overflow_compaction` 及其 runner 调用 |
+| `docs/zh-cn/design/index.md` | llm 节点条改为“任何失败都重试 + 分类只决定退避 + 两条不得再加的判定” |
+| `docs/zh-cn/design/roadmap.md` | LLM-2 验收描述同步；LLM-3（溢出一次性压缩重试）状态改为**已移除**并写原因 |
+
+注意（留给以后改这段代码的人）：
+
+- 手动 `/compact` 路径仍用 `events::EventCompactContext`（`session_server_agent_io.cpp`、
+  `middlewares/summarization.cpp`），**没有**随之删除，删的只是“模型调用失败时自动触发压缩”；
+- 现在一轮请求的停止条件只有两个：取消、达到 `llm.max_retry`。任何“按错误文本决定不重试”
+  或“按错误文本推断上下文超限”的代码都属于回退，见 `llm_error.h` 头部的两条警告。
+
+验证（已完成）：
+
+- 顶层 `windows-debug` 构建通过（无新增警告/错误）；
+- `boundaries llm_error agent fake_provider` → `Total: passed=370 failed=0`；
+- 全量 `agentxx_test --log-level warn`：`Total: passed=42749 failed=6`，其中 3 个是既有失败
+  （`string_util` 481/617、`session_persistence` 1341）；`boundaries` 的 1 个是本轮新写的
+  注释里用了禁用词 `口径`（已改成“判定规则”）；`input_delivery` 的 2 个在单跑该模块时
+  `passed=139 failed=0`（全量跑时对 `g_da_sim_last_request` 的时序敏感，与本次改动无关，
+  第一轮全量里也是通过的）。
+
 ## 与计划的偏差
 
 - 计划里另建 `plugin_broadcast_bridge.cpp` 文件（重构计划 §4.8 的旧名字），实施为

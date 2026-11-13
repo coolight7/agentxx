@@ -3,8 +3,6 @@
 #include "agentxx/agent/conversation_types.h"
 #include "agentxx/agent/model_registry.h"
 #include "agentxx/agent/session_store.h"
-#include "agentxx/event/event_stream.h"
-#include "agentxx/event/events.h"
 #include "agentxx/nodes/llm_error.h"
 #include "agentxx/nodes/provider_call_scope.h"
 #include "agentxx/nodes/session_context.h"
@@ -1224,9 +1222,6 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
     // 连续重试次数 (用于退避延时计算): 达到配置上限后停止重试, 不因部分输出重置,
     // 保证总失败次数严格不超过 llmMaxRetry, 避免消息无限堆积
     size_t retry = 0;
-    /// 本轮是否已经用掉"上下文超限 → 压缩一次后重试"的机会:
-    /// 每次溢出只压缩一次, 再次溢出直接按失败处理, 避免反复压缩
-    bool overflowCompactUsed = false;
 
     // 插入 assistant 回退消息 (保留部分输出, 或插入异常/取消提示):
     // - 保证消息上下文完整, 用户能看到本次 LLM 调用失败
@@ -1309,29 +1304,21 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
             agentxx::middleware::MiddlewareContext::graphDataKey_tempLLMContent
         );
 
-        // 错误分类与重试策略 (见 llm_error.h):
-        // - 鉴权/额度/请求非法: 重试无意义, 直接结束本轮 (省掉无用的等待与请求)
-        // - 上下文超限: 压缩一次后立即重试; 再次超限则按失败结束
-        // - 其余 (限流/超时/网络/服务端/未知): 一律自动重试, 类别的差别只是等待时长
-        const auto errKind   = classifyLlmError(errInfo);
-        const bool retryable = isLlmErrorRetryable(errKind);
-        const bool overflow  = isLlmContextOverflow(errKind);
-        // 本轮已用掉"溢出压缩重试"机会: 不再压缩, 避免反复压缩 (压缩本身也要花时间)
-        if (overflow) {
-            if (overflowCompactUsed) {
-                // 已压缩过一次仍超限: 走失败路径 (由上层按需硬截断)
-                XX_LOGW(
-                    "LLMCallNode context overflow again after compaction; stop retrying: {}",
-                    errInfo
-                );
-            } else {
-                overflowCompactUsed = true;
-            }
-        }
+        // 重试策略 (见 llm_error.h): **任何失败都重试**, 错误分类只决定退避多久。
+        // 停止重试只有两种情况:
+        // - 用户/上层取消;
+        // - 连续重试次数达到 `llm.max_retry` (上限的唯一来源)。
+        //
+        // 不要在这里加"这类错误不重试"的判断, 也不要根据错误文本/网络响应推断
+        // "上下文超限 → 先压缩再重试": 前者会把本来重试一次就能过去的失败直接结束
+        // 本轮 (上游的 401/400 也可能来自代理、网关或半个响应), 后者经常误判
+        // (400/413 与 "context length" 一类字样并不等于我们真的超限), 误判就是白压缩
+        // 一次历史。上下文长度统一由自动压缩处理 (默认超过上限 75% 时触发, 见
+        // SummarizationMiddlewareHandle)。
+        const auto errKind = classifyLlmError(errInfo);
 
-        // - 取消 / 不可重试 / 连续重试达到配置上限: 停止重试, 抛出原始异常结束本轮执行
-        if (isCancel || !retryable || (overflow && overflowCompactUsed && retry > 0)
-            || retry >= agentCtxPtr->agentConfig->llmMaxRetry) {
+        // - 取消 / 连续重试达到配置上限: 停止重试, 抛出原始异常结束本轮执行
+        if (isCancel || retry >= agentCtxPtr->agentConfig->llmMaxRetry) {
             // 抛出前检查末尾消息角色: 若末尾不是 assistant, 或末尾 assistant
             // 仍带 tool_calls (悬挂), 插入回退提示消息
             // - 覆盖 无输出/短输出 失败的情况 (上轮未插入过)
@@ -1366,41 +1353,6 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
 
         // 自动重试
         retry++;
-
-        // 上下文超限 (首次): 触发一次压缩后立即重试, 不再按退避等待 ——
-        // 压缩把历史换成摘要, 请求长度立刻下降, 是唯一能真正解决问题的一步
-        if (overflow && overflowCompactUsed) {
-            auto bus = (agentCtxPtr && agentCtxPtr->bus) ? agentCtxPtr->bus : nullptr;
-            if (bus) {
-                XX_LOGW(
-                    "LLMCallNode context overflow: compact session context once and retry: {}",
-                    errInfo
-                );
-                if (nullptr != in.stream_cb) {
-                    neograph::json tipJson = neograph::json{
-                        {"channel", "message_tip"},
-                        {"value",
-                         neograph::json{
-                             {"tipType", "warning"},
-                             {"text", "LLM 请求超出上下文长度，已压缩会话上下文后重试一次"},
-                         }                       },
-                    };
-                    (*in.stream_cb)(neograph::graph::GraphEvent{
-                        neograph::graph::GraphEvent::Type::CHANNEL_WRITE,
-                        nodeName,
-                        std::move(tipJson),
-                    });
-                }
-                co_await bus->publish<events::EventCompactContext>(
-                    events::Topic::SummarizationCompact,
-                    events::EventCompactContext{.sessionId = std::string{in.ctx.thread_id}}
-                );
-                continue; // 立即重试 (不等待退避)
-            }
-            // 无总线 (嵌入式/无压缩服务): 无处触发压缩, 按不可恢复处理
-            XX_LOGW("LLMCallNode context overflow without event bus; stop retrying");
-            std::rethrow_exception(errorPtr);
-        }
 
         size_t delaySec = static_cast<size_t>(llmRetryDelaySeconds(errKind, retry, errInfo));
         XX_LOGD(

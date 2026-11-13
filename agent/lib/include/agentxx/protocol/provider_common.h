@@ -512,8 +512,8 @@ inline std::chrono::milliseconds llmSendTimeout(const size_t bodyBytes) noexcept
 /// 组装流式失败的诊断后缀 (单行, 直接拼在错误文本末尾)
 /// 例: ` | stream: recv=20480B events=133 idle=60003ms finish=tool_calls
 ///        tools=1 args=2048B name=agentxx_filesystem_write`
-/// - 我们自己生成的字段全是 ASCII: 不影响 [classifyLlmError] 判类
-///   (`finish` 是上游给的原文, 内容不受控)
+/// - 这个后缀本身就是"响应流没走完"的硬指标: [classifyLlmError] 据此判 `Network`
+///   (网络类退避最短), 但后缀里的字节数与 `finish` 原文不参与其余规则判定
 /// - `idle` 为距最近一次数据的时长 (从未收到数据 = 距请求发出)
 inline std::string streamFailureSuffix(
     const StreamProgress&                    progress,

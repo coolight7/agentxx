@@ -1000,6 +1000,11 @@ agent/script/build_plugins.sh --config Release --jobs 8 --list
 - 为了减少编译输出内容展示，只捕捉关键词，可以参考: `./path/to/linux_debug_build.sh 2>&1 | grep -E -i "Built target|error|warn" | tail -10`
 
 ## 常见问题
+- LLM 请求失败**一律重试**，一轮请求的停止条件只有两个：取消、达到 `llm.max_retry`
+  (2026-11 策略调整)：错误分类 (`agentxx/nodes/llm_error.h`) 只决定退避等多久，不参与
+  "值不值得重试"。不要在错误文本/状态码上加"这类不重试"的判断，也不要按 400/413 与
+  `context length` 一类字样推断"上下文超限 → 先压缩再重试"（误判代价是白压一次历史，
+  而上下文长度只由默认超过上限 75% 触发的自动压缩处理）。两条警告原文在该文件头部
 - Windows/MSVC 禁止添加 `/FS` `/MP` 编译选项: 命令行出现重复 `/FS` 时
   VS18/MSVC 14.51 的 FileTracker 会失效 (子编译进程不写 per-file 跟踪记录),
   导致每次构建都全部重编 (增量编译完全失效)。参数经 superbuild 多层 CMake

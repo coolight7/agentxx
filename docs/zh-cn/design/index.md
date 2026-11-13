@@ -1438,6 +1438,18 @@ __start__ → agent_start → llm → [conditional: xx_has_tool_calls?]
 
 - **agent_start**: 初始化会话状态、注入 system prompt、刷新临时数据
 - **llm (ModelCallWrapNode)**: 调用 LLM API，支持动态模型切换、消息修复、重试
+  - 重试策略见 `nodes/llm_error.h`：**任何失败都重试**，`llm.max_retry` 是次数上限的
+    唯一来源（取消除外）；错误分类只决定退避等待（网络 1s / 超时与未知 2s / 服务端 3s /
+    限流 5s，`retry-after` 优先），**不参与"值不值得重试"的判断**
+  - 网络/传输层故障单列一类，判在所有状态码规则之前，只为拿最短退避：连接/读写、域名
+    解析、TLS 与证书、代理与隧道、HTTP/2 流控、平台 socket 错误码、响应流没走完的
+    `| stream: ...` 诊断后缀；这类文本里同时出现的 `401`/`403`/`400` 状态码或鉴权字样
+    不会改变分类
+  - 不要按错误文本或网络响应做"这类不重试"、"上下文超限 → 先压缩再重试"的判断：
+    前者会把本来重试一次就能过去的失败直接结束本轮；后者经常误判（400/413 与
+    `context length` 一类字样并不等于真超限），误判的代价是白压缩一次历史（信息真的
+    丢了）。上下文长度只由自动压缩处理 —— 超过模型上限 75% 时触发
+    （`SummarizationMiddlewareHandle`）
   - 本轮循环路由由节点按"是否有 tool_calls"返回 `Command.goto_node` (tools / agent_end)
     给出（默认图只用静态默认边，不声明条件边）；`xx_autoRoute=false` 可关闭该行为，
     交给图定义的条件边接管

@@ -104,41 +104,25 @@ int jitterOf(std::string_view errInfo) noexcept {
     return static_cast<int>(h % 3);
 }
 
-} // namespace
+/// 我们自己拼在错误文本末尾的流式诊断后缀的标记 (见 provider_common.h)
+///
+/// 它只会在"响应流没走完"时出现, 因此这个标记本身就是网络层失败的硬指标。
+constexpr std::string_view kStreamSuffixMarker = " | stream: ";
 
-LlmErrorKind classifyLlmError(std::string_view errInfo) noexcept {
-    if (errInfo.empty()) {
-        return LlmErrorKind::Unknown;
+/// 文本是否表示网络层面的失败 (**入参已小写**)
+///
+/// 判定规则: 只要失败发生在网络这一层就算 —— 连接/读写、域名解析、TLS 握手与证书、
+/// 代理与隧道、HTTP/2 流控制、平台 socket 错误码, 以及响应流没走完 (我们的
+/// ` | stream: ...` 诊断后缀)。
+///
+/// 判这一类的意义: 这些失败与"请求本身对不对"无关, 退避应当最短 (1 秒) 以便尽快
+/// 重来; 因此 [classifyLlmError] 把它排在**所有状态码/鉴权/额度规则之前**, 文本里同时
+/// 出现的 `401` / `403` / `400` 等状态码与鉴权字样只当噪声。
+bool networkFailureIn(std::string_view text) noexcept {
+    // 响应流没走完 (我们自己拼的后缀): 请求已经发出、上游可能已经回了一半
+    if (text.find(kStreamSuffixMarker) != std::string_view::npos) {
+        return true;
     }
-    std::string text = toLowerCopy(errInfo);
-    // 我们自己拼在末尾的流式诊断后缀 (` | stream: recv=...B events=... idle=...ms
-    // finish=... tools=... args=...B name=...`, 见 provider_common.h) 只用于展示与排查,
-    // 不该参与判类: 里面的字节数与上游原文都会带数字
-    if (const auto cut = text.find(" | stream: "); cut != std::string::npos) {
-        text.resize(cut);
-    }
-
-    // 1) 上下文超限 (必须先判: 400/413 都可能带这些关键词, 它们是可恢复的)
-    if (containsAny(
-            text,
-            {"context_length_exceeded",
-             "maximum context length",
-             "context window",
-             "too many tokens",
-             "prompt is too long",
-             "reduce the length",
-             "exceeds the maximum",
-             "request entity too large",
-             "请求过长",
-             "上下文过长"}
-        )
-        || containsStatusCode(text, {"413"})) {
-        return LlmErrorKind::ContextOverflow;
-    }
-
-    // 2) 网络/传输层故障 (可重试)
-    // 排在状态码类之前: 这类文本常夹带地址与端口数字 (`https://host:10403 connect failed`
-    // 含 "403"), 若先判鉴权/额度/请求非法, 网络故障会被误判成"重试也没用"而直接停止
     if (containsAny(
             text,
             {
@@ -152,6 +136,8 @@ LlmErrorKind classifyLlmError(std::string_view errInfo) noexcept {
                 "connection error",
                 "connection timed out",
                 "connection timeout",
+                "connection dropped",
+                "connection lost",
                 "cannot connect",
                 "could not connect",
                 "couldn't connect",
@@ -163,7 +149,22 @@ LlmErrorKind classifyLlmError(std::string_view errInfo) noexcept {
                 "broken pipe",
                 "stream truncated",
                 "stream closed",
+                "stream error",
+                "stream reset",
                 "end of file",
+                "unexpected eof",
+                "premature",
+                "incomplete message",
+                "incomplete response",
+                "partial response",
+                "bad chunk",
+                "chunked encoding",
+                "socket",
+                "econnreset",
+                "econnaborted",
+                "etimedout",
+                "eai_again",
+                "epipe",
                 "eof",
                 "asio.ssl",
                 "asio.netdb",
@@ -172,6 +173,16 @@ LlmErrorKind classifyLlmError(std::string_view errInfo) noexcept {
                 "no route to host",
                 "transport error",
                 "i/o error",
+                "input/output error",
+                "read error",
+                "write error",
+                "recv error",
+                "send error",
+                "recv failed",
+                "send failed",
+                "remote closed",
+                "closed by peer",
+                "peer closed",
                 // 域名解析
                 "name resolution",
                 "no such host",
@@ -182,10 +193,28 @@ LlmErrorKind classifyLlmError(std::string_view errInfo) noexcept {
                 "resolve the host",
                 "getaddrinfo",
                 "nodename nor servname",
-                // TLS 握手
+                // TLS / 证书 (网络这一层的问题: 握手没成、证书链/有效期/主机名对不上,
+                // 也可能是代理或时间偏移导致的, 一律先重试)
                 "handshake",
-                "ssl error",
-                "tls error",
+                "ssl",
+                "tls",
+                "certificate",
+                "cert verify",
+                "self signed",
+                "self-signed",
+                "unknown ca",
+                "wrong version number",
+                "no shared cipher",
+                "unsupported protocol",
+                "hostname mismatch",
+                // 代理 / 隧道 / HTTP 层连接性
+                "proxy",
+                "tunnel",
+                "goaway",
+                "rst_stream",
+                "http2",
+                "protocol error",
+                "compression_error",
                 // 中文系统文案 (Windows socket / .NET 常见说法)
                 "网络",
                 "无法连接",
@@ -207,12 +236,45 @@ LlmErrorKind classifyLlmError(std::string_view errInfo) noexcept {
                 "没有反应",
                 "已中止 i/o",
                 "握手失败",
+                "证书",
+                "代理",
             }
         )) {
+        return true;
+    }
+    // 平台 socket 错误码 (WSA / errno): 按独立数字判, 免得 `recv=110054B` 这类字节数命中
+    return containsStatusCode(
+        text,
+        {"10050", "10051", "10052", "10053", "10054", "10055", "10060", "10061", "10065"}
+    );
+}
+
+} // namespace
+
+LlmErrorKind classifyLlmError(std::string_view errInfo) noexcept {
+    if (errInfo.empty()) {
+        return LlmErrorKind::Unknown;
+    }
+    std::string text = toLowerCopy(errInfo);
+
+    // 1) 网络层失败 (最先判: 退避基数最短, 1 秒)
+    // - 判定规则见 [networkFailureIn]: 连接/读写、域名解析、TLS 与证书、代理与隧道、
+    //   HTTP/2 流控、平台 socket 错误码、响应流没走完 —— 都属于网络这一层的问题
+    // - 必须在切诊断后缀**之前**判: 后缀本身就是"响应流没走完"的硬指标
+    // - 排在最前面: 这类文本常夹带地址与端口数字 (`https://host:10403 connect failed`
+    //   含 "403"), 也会夹带上游回的半个响应 (一个没读完的 401/400 正文)
+    if (networkFailureIn(text)) {
         return LlmErrorKind::Network;
     }
 
-    // 3) 鉴权 (重试无意义)
+    // 我们自己拼在末尾的流式诊断后缀 (` | stream: recv=...B events=... idle=...ms
+    // finish=... tools=... args=...B name=...`, 见 provider_common.h) 只用于展示与排查,
+    // 剩下的规则不该看它: 里面的字节数与上游原文都会带数字
+    if (const auto cut = text.find(kStreamSuffixMarker); cut != std::string::npos) {
+        text.resize(cut);
+    }
+
+    // 2) 鉴权 (退避基数 2 秒)
     if (containsAny(
             text,
             {"unauthorized",
@@ -227,7 +289,7 @@ LlmErrorKind classifyLlmError(std::string_view errInfo) noexcept {
         return LlmErrorKind::Auth;
     }
 
-    // 4) 额度/计费 (重试无意义)
+    // 3) 额度/计费 (退避基数 2 秒)
     if (containsAny(
             text,
             {"insufficient_quota",
@@ -244,7 +306,7 @@ LlmErrorKind classifyLlmError(std::string_view errInfo) noexcept {
         return LlmErrorKind::Quota;
     }
 
-    // 5) 请求非法 (重试无意义; 模型名/参数写错等)
+    // 4) 请求非法 (退避基数 2 秒; 模型名/参数写错等)
     if (containsAny(
             text,
             {"invalid_request_error",
@@ -260,7 +322,7 @@ LlmErrorKind classifyLlmError(std::string_view errInfo) noexcept {
         return LlmErrorKind::InvalidRequest;
     }
 
-    // 6) 限流 (可重试; 使用更大的基数并优先采信 retry-after)
+    // 5) 限流 (使用更大的基数并优先采信 retry-after)
     if (containsAny(
             text,
             {"rate limit",
@@ -275,12 +337,12 @@ LlmErrorKind classifyLlmError(std::string_view errInfo) noexcept {
         return LlmErrorKind::RateLimit;
     }
 
-    // 7) 超时 (可重试; 连接层的超时已在网络类里判过)
+    // 6) 超时 (连接层与流式读超时已在网络类里判过)
     if (containsAny(text, {"timeout", "timed out", "超时"})) {
         return LlmErrorKind::Timeout;
     }
 
-    // 8) 服务端错误 (可重试)
+    // 7) 服务端错误
     if (containsAny(
             text,
             {"internal server error",
@@ -298,21 +360,6 @@ LlmErrorKind classifyLlmError(std::string_view errInfo) noexcept {
     return LlmErrorKind::Unknown;
 }
 
-bool isLlmErrorRetryable(LlmErrorKind kind) noexcept {
-    switch (kind) {
-        case LlmErrorKind::Auth:
-        case LlmErrorKind::Quota:
-        case LlmErrorKind::InvalidRequest:
-            return false;
-        default:
-            return true;
-    }
-}
-
-bool isLlmContextOverflow(LlmErrorKind kind) noexcept {
-    return kind == LlmErrorKind::ContextOverflow;
-}
-
 std::string_view llmErrorKindText(LlmErrorKind kind) noexcept {
     switch (kind) {
         case LlmErrorKind::Auth:
@@ -321,8 +368,6 @@ std::string_view llmErrorKindText(LlmErrorKind kind) noexcept {
             return "quota or billing problem";
         case LlmErrorKind::InvalidRequest:
             return "invalid request";
-        case LlmErrorKind::ContextOverflow:
-            return "context length exceeded";
         case LlmErrorKind::RateLimit:
             return "rate limited";
         case LlmErrorKind::Timeout:
@@ -343,12 +388,14 @@ int llmRetryDelaySeconds(LlmErrorKind kind, size_t attempt, std::string_view err
         return std::min(retryAfter, kLlmRetryMaxDelaySeconds);
     }
 
-    // 基数按类别区分: 只影响"等多久", 不影响"是否重试"
+    // 基数按类别区分 —— **类别只决定等多久, 不决定是否重试** (任何错误都会重试,
+    // 上限由 `llm.max_retry` 控制):
     // - 限流 5 秒: 上游明确要求放慢, 等最久 (通常还会给出 retry-after, 优先采用)
     // - 服务端错误 3 秒: 上游自身出问题, 给一点恢复时间
-    // - 超时/未知/上下文超限 2 秒: 与历史行为一致
+    // - 鉴权/额度/请求非法 2 秒: 大多重试也过不了, 但仍会重试 (上游的 401/400/402
+    //   也可能来自代理、网关或半个响应), 与"未知"同基数
+    // - 超时/未知 2 秒: 与历史行为一致
     // - 网络故障 1 秒: 多为瞬时 (连接被掐、路由抖动、域名解析失败), 尽快重来
-    // - 不重试的三类不会走到这里, 与"未知"同基数只为避免出现 0 秒
     int base = 2;
     switch (kind) {
         case LlmErrorKind::Network:
@@ -362,7 +409,6 @@ int llmRetryDelaySeconds(LlmErrorKind kind, size_t attempt, std::string_view err
             break;
         case LlmErrorKind::Unknown:
         case LlmErrorKind::Timeout:
-        case LlmErrorKind::ContextOverflow:
         case LlmErrorKind::Auth:
         case LlmErrorKind::Quota:
         case LlmErrorKind::InvalidRequest:

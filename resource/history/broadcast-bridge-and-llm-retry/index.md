@@ -21,3 +21,12 @@
 | 侧边栏停在 `wait for load` | 广播化重构后少了两向转发：① 总线上的 `agentxx.agent.*` / `agentxx.client.*` 不再进广播注册表（`agentxx.agent.host.client_attached` 送不到 agent 侧插件，重发快照不触发）；② 插件发布的广播不再上总线（`SessionServerAgentIO` 的 `plugin.` 前缀转发收不到，`WirePluginData` 永远不发） | 新增 `PluginManager::attachEventBus`（总线 → 广播镜像，只镜像已声明频道）与 `forwardBroadcastToBuses`（插件发布 → 总线，供端点转发客户端） |
 | 网络错误不重试 | `classifyLlmError` 用裸子串匹配状态码，而流式失败诊断后缀带 `recv=403684B` → 命中 `403` 被判成"鉴权失败"（不可重试）→ 首次尝试就抛出 | 状态码改成独立 token 匹配（前后不能是字母数字）；分类前先切掉我们自己生成的 ` &#124; stream: ...` 诊断后缀 |
 | 声明重复日志 | SDK `publishPluginBroadcast` 每次发布前都声明一次，注册表对"完全相同的声明"也打 `declaration ... replaced` | 相同声明视为幂等成功，不打日志、不动状态（已结束的频道仍按"开新流"处理） |
+
+两轮后续策略调整（已把上表的“不可重试”口径整个改掉）：
+
+| 轮次 | 用户的理由 | 改法 |
+|---|---|---|
+| 一：任何错误都重试 | 只要“有类别不值得重试”，判类一旦出错就会把本来能恢复的失败变成结束本轮 | 删 `isLlmErrorRetryable` / `looksLikeNetworkFailure` 与全部调用点；`modelcall` 停止重试只剩取消与 `llm.max_retry`；分类只决定退避基数 |
+| 二：删“上下文超限 → 压缩后重试” | 这种判定会出错，而默认 75% 就自动压缩，真超限基本遇不到；误判代价是白压一次历史 | 删 `LlmErrorKind::ContextOverflow` / `isLlmContextOverflow` / 判定关键词 / 压缩重试分支与相关用例；`llm_error.h` 与设计文档明确写警告：不得再加“不重试”判断，也不得根据错误文本/网络响应推断上下文超限 |
+
+细节与改动清单见 `work.md` 的两个“后续变更”节。
