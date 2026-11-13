@@ -44,11 +44,8 @@ bool isNoiseMessage(const neograph::ChatMessage& m) {
 /// - 不走 fmt::format: 压缩模板可被用户经 `prompt.summarizePrompt` 覆盖, 模板里
 ///   可能留着已废弃的占位符或成对花括号 (JSON/代码示例), fmt 遇到未知参数或
 ///   未配对花括号会抛异常, 整次压缩会因此失败
-std::string replacePlaceholder(
-    std::string_view tpl,
-    std::string_view placeholder,
-    std::string_view value
-) {
+std::string
+    replacePlaceholder(std::string_view tpl, std::string_view placeholder, std::string_view value) {
     std::string out;
     out.reserve(tpl.size() + value.size());
     size_t pos = 0;
@@ -224,9 +221,9 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::summarizeViaPoint(
         co_return co_await doSummarizeWithLLM(sessionId, messages, direct);
     }
     agentxx::feature::SummarizeRequest req;
-    req.sessionId        = std::string{sessionId};
-    req.messages         = messages;
-    req.manual           = direct;
+    req.sessionId = std::string{sessionId};
+    req.messages  = messages;
+    req.manual    = direct;
     if (auto ctx = agentContext.lock(); ctx != nullptr) {
         req.model    = ctx->getSessionCurrentModelName(sessionId);
         req.language = ctx->getLanguage(sessionId);
@@ -581,7 +578,7 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
     }
 
     neograph::ChatMessage promptMsg;
-    promptMsg.role    = "user";
+    promptMsg.role = "user";
     // 模板来自 AgentPrompt (运行时字符串): 只替换 {omitted_note} 占位符
     promptMsg.content = replacePlaceholder(summarizePrompt, "{omitted_note}", omittedNote);
     promptMsg.flags   = neograph::MessageFlag::AutoInserted;
@@ -625,9 +622,9 @@ asio::awaitable<std::string> SummarizationMiddlewareHandle::doSummarizeWithLLM(
             batchReq.parentSessionId = std::string{sessionId};
             batchReq.tasks.push_back(events::SubagentBatchItem{
                 .subagentName = "subagent_task",
-                .messages     = reqMsgsJson, // 结构化原样转发 (含压缩指令), 无文本转录
-                .sessionId    = std::string{sessionId},
-                .tools        = utilxx_base::Json::array(), // []: 无工具
+                .messages = reqMsgsJson, // 结构化原样转发 (含压缩指令), 无文本转录
+                .sessionId           = std::string{sessionId},
+                .tools               = utilxx_base::Json::array(), // []: 无工具
                 .enableSummarization = false,
                 // 前缀复用: 保留调用方给的 system 消息 + 继承父会话上一次请求的工具
                 // 定义 (请求前缀一致 → 上游前缀缓存命中); 本次运行不执行任何工具
@@ -893,7 +890,7 @@ asio::awaitable<void>
         vm.tip->tipLevel = agentxx::agent::ViewMessage::TipLevel::Info;
         // 运行中标记: 界面在折叠标记处显示加载动画, 结束更新时清除
         vm.tip->running = true;
-        vm.collapsed     = true;
+        vm.collapsed    = true;
         if (session) {
             const std::string pendingTipId
                 = agentCtxPtr->middlewareHandleContext->getGraphDataItemValue<std::string>(
@@ -1043,6 +1040,8 @@ asio::awaitable<void>
                 // system | user | assistant
                 // - 不再追加最近消息: 末尾的消息已交给 subagent, 要点写在摘要里;
                 //   追加会让刚压下去的上下文立刻被最近消息重新填满
+                // - 之前压缩后的上下文开头提示写 `[Please compact context to save space]`，
+                // 容易误导模型以为当前会话也是上下文不足
                 compressedMessages.push_back(neograph::ChatMessage{
                     .role    = "user",
                     .content = "[Please describe previous conversation]",
@@ -1224,8 +1223,8 @@ asio::awaitable<bool>
     vm.tip->tipLevel = agentxx::agent::ViewMessage::TipLevel::Info;
     // 运行中标记: 界面在折叠标记处显示加载动画, 结束更新时清除
     vm.tip->running = true;
-    vm.collapsed     = true;
-    vm.id            = session->appendViewMessage(vm);
+    vm.collapsed    = true;
+    vm.id           = session->appendViewMessage(vm);
     if (session->io) {
         session->io->sendToPeer(agentxx::agent::WireDelta{
             .seq     = session->nextDeltaSeq(),
