@@ -266,6 +266,15 @@ public:
     /// - 排队超时的计时起点跟着延时重算
     bool setAsyncWorkDelay(std::string_view asyncId, int64_t delayMs);
 
+    /// 等一条后台任务进入终态 ([agentxx_async_await] 用)
+    /// - 只负责等: 任务到了就返回, 超时/取消也返回; 正文由调用方读任务表
+    /// - 等待期间在条目上挂一张票据: 任务收尾时有人接了正文, 本次不再自动投递
+    asio::awaitable<AsyncWorkManager::WaitOutcome> waitAsyncWorkResult(
+        std::string_view                               asyncId,
+        int64_t                                        timeoutMs,
+        std::shared_ptr<neograph::graph::CancelToken>  token
+    );
+
     /// 按创建者批量取消 (`creator` 为空 = 全部)
     size_t cancelAsyncWorks(const std::shared_ptr<AgentContext>& creator = nullptr);
 
@@ -483,7 +492,7 @@ private:
     uint64_t agentIdSeq_ = 0;
     /// 挂载根自增序号 (生成 `ext:<owner>:<n>`)
     uint64_t rootSeq_ = 0;
-    /// 异步任务管理器 (进程级: 队列/额度/台账)
+    /// 异步任务管理器 (进程级: 队列/额度/任务表)
     /// - 声明在 roots_ 之前: 成员逆序析构, agent 先释放再关管理器
     std::unique_ptr<AsyncWorkManager> asyncWork_;
     /// 已占用的会话存储根 (规范化路径 -> agentId)

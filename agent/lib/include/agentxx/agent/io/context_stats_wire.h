@@ -45,7 +45,7 @@ inline WireContextStats toWireContextStats(const ContextStats& stats, double tps
 /// 会话上下文统计 → 线消息 (服务端所有推送点的统一入口)
 ///
 /// 与 [toWireContextStats] 的区别只有一个: 这里额外填「后台任务」段
-/// (`WireContextStats::asyncWorks`)。该段需要 agent 容器 (台账在 `AgentHost` 上)
+/// (`WireContextStats::asyncWorks`)。该段需要 agent 容器 (任务表在 `AgentHost` 上)
 /// 与会话 id, 只有本函数拿得到, 因此**服务端的每次统计推送都要走这里** ——
 /// 少走一处就会让界面上的后台任务段在那种推送之后变成空快照 (界面按整份覆盖)。
 ///
@@ -55,7 +55,7 @@ inline WireContextStats toWireContextStats(const ContextStats& stats, double tps
 ///
 /// - `args`:
 ///     - [ctx]       会话所属的 agent 上下文 (可为空)
-///     - [sessionId] 会话 id (空 = 不查台账)
+///     - [sessionId] 会话 id (空 = 不查任务表)
 ///     - [stats]     会话持有的统计 (Session::contextStats; 必须非空)
 ///     - [tps]       当前 ModelCall 的平均生成速度 (token/s); 0 表示本次不报速度
 ///

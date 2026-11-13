@@ -398,7 +398,7 @@ asio::awaitable<void> runBody(
 
     // ===================== 1b. 后台任务入口 (v2 尾部追加) =====================
     // 结论: 4 个成员可用; kind=tool 需追加字段 `tool_name` (旧布局按参数错拒);
-    // 任务能真跑完, 台账/清单/取消都只能碰本实例提交的那几条 (别的插件看不到也取消不了)
+    // 任务能真跑完, 任务表/清单/取消都只能碰本实例提交的那几条 (别的插件看不到也取消不了)
     {
         XX_TEST_EXPECT_TRUE(runtime->submit_async_work != nullptr);
         XX_TEST_EXPECT_TRUE(runtime->cancel_async_work != nullptr);
@@ -482,7 +482,7 @@ asio::awaitable<void> runBody(
         spec.user_data = nullptr;
         spec.on_event  = nullptr;
 
-        // 3) 等跑完 (模拟模型立即回复), 台账可查且归属本实例
+        // 3) 等跑完 (模拟模型立即回复), 任务表可查且归属本实例
         const bool done = co_await waitUntil(
             ex,
             std::chrono::seconds{60},
@@ -505,7 +505,7 @@ asio::awaitable<void> runBody(
             XX_TEST_EXPECT_TRUE(text.find(asyncId) != std::string::npos);
             XX_TEST_EXPECT_TRUE(text.find("plugin:runtime_probe") != std::string::npos);
             XX_TEST_EXPECT_TRUE(text.find("\"done\"") != std::string::npos);
-            // 结果正文已落台账 (具体内容取决于模拟模型, 只看字段在不在)
+            // 结果正文已落任务表 (具体内容取决于模拟模型, 只看字段在不在)
             XX_TEST_EXPECT_TRUE(text.find("\"result\"") != std::string::npos);
         }
 
@@ -576,7 +576,7 @@ asio::awaitable<void> runBody(
             XX_TEST_EXPECT_TRUE(toolEntry.find("\"tool\"") != std::string::npos);
         }
 
-        // 7c) 追加字段 delay_ms / queue_timeout_ms: 进台账, 延时中取消立即收尾
+        // 7c) 追加字段 delay_ms / queue_timeout_ms: 进任务表, 延时中取消立即收尾
         {
             std::string toolName{"probe_no_such_tool"};
             AgentxxPluginAsyncWorkSpec delaySpec{};

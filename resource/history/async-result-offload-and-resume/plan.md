@@ -77,6 +77,36 @@ bool offloadToolResultIfOversized(agentContext, toolExtra, sessionId, ToolResult
 5. `async_tools.cpp`：`agentxx_async_await` 打开 `autoSummaryOutput`；
 6. 测试 + 文档。
 
+## 5.1 第二轮：结果正文只进会话一次（await 与 notify 去重）
+
+**问题**：`notify`（默认 true）在提交时就登记了自动通知等待；`agentxx_async_await`
+又登记一条自己的等待。同一条结果因此有两个消费者：
+
+- 任务还在跑时 await：值一到，两个等待同时满足 —— 通知把 `[Event] ... [Content]`
+  插进会话，await 把同一段正文当工具结果返回 → 上下文里两份；
+- 任务已结束再 await：await 走"直接看台账"分支，`renderEntryDetail` 里带
+  `result:` 正文；如果通知早已投递，同样两份。
+
+**方案：任务表条目上记一个"正文已放进会话"的布尔标记（只放一次）**
+
+- `AsyncWorkEntry::resultTaken`(布尔) + `AgentHost::claimAsyncResult` /
+  `releaseAsyncResult` 是唯一入口（`asyncWorkJson` 里以 `resultTaken` 暴露给测试与诊断）；
+- **谁要放正文谁先领**：await 在拿结果前领（终态与等待共用一处），
+  领不到 = 正文已经在会话里 → 返一句回执（`renderResultAlreadyDelivered`：状态 +
+  "已由自动通知或更早的一次 await 放进会话" + `agentxx_async_query` 取回建议），
+  不贴正文；
+- await 超时 / 被取消 / 抛异常 → 守卫（`AsyncResultClaimGuard`）归还，
+  自动通知照常投递（结果不会因为等过而丢）；
+- **自动通知在投递前领**：`EventHub::deliver` 认出"框架自己的通知等待"
+  （`EventDelivery::owner == async_work` + `agentxx.agent.async.*` + `ref=asyncId`），
+  领不到就整条不投递（`DeliverResult::Suppressed` + `stats.suppressed`，只记 info 日志，
+  不算 dropped）；投递结果是 `Queued`/`Deferred` 才留着标记，被拒/丢弃时归还；
+- 任务表条目被 linger 清扫后查不到时按"领到"处理（没法记标记时让内容照常出去）。
+
+**边界**：`agentxx_async_query {id}` 仍是显式"看任务表"，返回副本，不受标记影响；
+插件自己订阅 `agentxx.agent.async.done` 的等待不属于这条规则（owner 不同）——
+插件提交的任务本来就不走这条路。
+
 ## 6. 验证
 
 - `event_hub`：`kind=tool` 长内容无提示且 `kind=agent` 有提示；空闲投递的
@@ -85,6 +115,11 @@ bool offloadToolResultIfOversized(agentContext, toolExtra, sessionId, ToolResult
   卸载提示恰好 1 个 / 0 个。
 - `event_delivery`：失败轮次后暂停的队列收到 async 结果仍开新一轮；取消一轮 +
   残留 next-step（来源 async）仍被执行。
+- `async_tools`：后台大输出工具（声明/不声明 `autoSummaryOutput` 各一次）投递文本里
+  卸载提示恰好 1 个 / 0 个；`test_await_single_delivery`（跑的时候 await：正文只出现在
+  工具结果里、`[Event]` 输入 0 条、`stats.suppressed >= 1`、任务表 `resultTaken=true`、
+  再 await 一次给回执）；`test_await_after_notify_returns_receipt`（通知先到：await 给回执且
+  `[Event]` 只有 1 条；`notify:false` 的任务 await 照常给正文）。
 - 回归：`event_tools` / `async_work` / `share_store` / `input_delivery` /
   `session_admin` / `session_sync` / `interrupt_ui` / `event_subagent` /
   `message_supplement` / `view_replica` / `misc_fixes` / `assembly_snapshot` /

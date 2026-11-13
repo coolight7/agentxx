@@ -1,5 +1,6 @@
 #include "agentxx/event/hub.h"
 
+#include "agentxx/agent/agent_host.h"
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/session_input_sink.h"
 #include "agentxx/event/event_stream.h"
@@ -97,6 +98,7 @@ std::string timerShortName(std::string_view eventName) {
 /// 是否是后台任务结果事件 (`agentxx.agent.async.*`)
 /// - 这类值由框架自己产出 (工具输出 / 子代理回答), 投递时按"已完成的事"处理:
 ///   会话空闲时即使停在暂停态 (上一轮失败/取消留下的) 也要把它放进上下文
+/// 后台任务结果事件 (只用于正文渲染的规则与暂停态例外)
 bool isAsyncResultEvent(std::string_view eventName) {
     return eventName.starts_with(naming::kAgentAsyncPrefix);
 }
@@ -117,6 +119,9 @@ bool asyncValuesAreToolKind(const std::vector<Json>& values) {
     }
     return true;
 }
+
+/// 后台任务结果正文的投递由 `AsyncWorkManager` 直接交给会话 (见 `finishEntry`),
+/// 中枢这里只把它们当普通事件广播 / 普通等待处理。
 
 } // namespace
 
@@ -955,6 +960,7 @@ void EventHub::flushWait(WaitEntry& entry, std::string_view status, bool resetVa
     delivery.eventName     = wait.spec.event;
     delivery.mode          = wait.spec.mode;
     delivery.ref           = wait.spec.ref;
+    delivery.owner         = wait.spec.owner;
     delivery.unpausePaused = wait.spec.unpausePaused;
     delivery.dropIfBusy    = wait.spec.dropIfBusy;
 
@@ -1103,92 +1109,96 @@ DeliverResult EventHub::deliver(const EventDelivery& d, std::string* reasonOut) 
     auto sink      = session->inputSink.lock();
     const bool busy = sink && sink->turnActive();
 
-    auto enqueuePending = [&](std::string_view mode) {
-        if (session->pendingInputCount("event:") >= cfg_.deliveryBacklogPerSession) {
-            return false;
+    auto deliverNow = [&]() -> DeliverResult {
+        auto enqueuePending = [&](std::string_view mode) {
+            if (session->pendingInputCount("event:") >= cfg_.deliveryBacklogPerSession) {
+                return false;
+            }
+            agentxx::agent::SessionPendingInput input;
+            input.text        = d.text;
+            input.source      = d.source.empty()
+                                    ? (std::string{agentxx::agent::kInputSourceEventPrefix}
+                                       + d.eventName)
+                                    : d.source;
+            input.delivery    = std::string{mode};
+            input.createdAtMs = systemNowMs();
+            session->enqueuePendingInput(std::move(input));
+            return true;
+        };
+
+        const bool nextTurn = (d.delivery == agentxx::agent::InputDelivery::NextTurn);
+
+        if (d.dropIfBusy && busy) {
+            setReason("busy");
+            return drop("busy");
         }
-        agentxx::agent::SessionPendingInput input;
-        input.text        = d.text;
-        input.source      = d.source.empty()
-                                ? (std::string{agentxx::agent::kInputSourceEventPrefix} + d.eventName)
-                                : d.source;
-        input.delivery    = std::string{mode};
-        input.createdAtMs = systemNowMs();
-        session->enqueuePendingInput(std::move(input));
-        return true;
-    };
 
-    const bool nextTurn = (d.delivery == agentxx::agent::InputDelivery::NextTurn);
-
-    if (d.dropIfBusy && busy) {
-        setReason("busy");
-        return drop("busy");
-    }
-
-    if (!busy) {
-        // 空闲: 有驱动端就开新一轮 (没有"下一次 modelcall"可言), 否则写待注入输入等
-        if (sink) {
-            // 后台任务结果 (`agentxx.agent.async.*`) 是"已经跑完的事"的产物, 必须进
-            // 上下文: 会话若因上一轮失败/取消停在暂停态, 也要解除暂停把它跑起来,
-            // 否则它只能躺在队列里等到用户下次发消息 (那时才被顺带取走)
-            const bool unpause = d.unpausePaused || isAsyncResultEvent(d.eventName);
-            if (sink->submitTurnInput(d.text, d.source, unpause)) {
+        if (!busy) {
+            // 空闲: 有驱动端就开新一轮 (没有"下一次 modelcall"可言), 否则写待注入输入等
+            if (sink) {
+                // 后台任务结果 (`agentxx.agent.async.*`) 是"已经跑完的事"的产物, 必须进
+                // 上下文: 会话若因上一轮失败/取消停在暂停态, 也要解除暂停把它跑起来,
+                // 否则它只能躺在队列里等到用户下次发消息 (那时才被顺带取走)
+                const bool unpause = d.unpausePaused || isAsyncResultEvent(d.eventName);
+                if (sink->submitTurnInput(d.text, d.source, unpause)) {
+                    setReason({});
+                    noteDelivered();
+                    return DeliverResult::Queued;
+                }
+                setReason("sink-rejected");
+                return drop("sink-rejected");
+            }
+            if (cfg_.allowHeadlessTurn && turnRunner_) {
+                // 无驱动端自起一轮: 来源标记一并下去, 展示历史与有驱动端时一致
+                turnRunner_(
+                    d.sessionId,
+                    d.text,
+                    d.source.empty()
+                        ? (std::string{agentxx::agent::kInputSourceEventPrefix} + d.eventName)
+                        : d.source
+                );
                 setReason({});
                 noteDelivered();
                 return DeliverResult::Queued;
             }
-            setReason("sink-rejected");
-            return drop("sink-rejected");
+            if (enqueuePending(agentxx::agent::InputDelivery::NextStep)) {
+                setReason("no-driver");
+                ++stats_.deferred;
+                return DeliverResult::Deferred;
+            }
+            setReason("backlog");
+            return drop("backlog");
         }
-        if (cfg_.allowHeadlessTurn && turnRunner_) {
-            // 无驱动端自起一轮: 来源标记一并下去, 展示历史与有驱动端时一致
-            turnRunner_(
-                d.sessionId,
-                d.text,
-                d.source.empty()
-                    ? (std::string{agentxx::agent::kInputSourceEventPrefix} + d.eventName)
-                    : d.source
-            );
-            setReason({});
-            noteDelivered();
-            return DeliverResult::Queued;
-        }
-        if (enqueuePending(agentxx::agent::InputDelivery::NextStep)) {
-            setReason("no-driver");
-            ++stats_.deferred;
-            return DeliverResult::Deferred;
-        }
-        setReason("backlog");
-        return drop("backlog");
-    }
 
-    // 轮次在跑
-    if (nextTurn) {
-        // 排队等这一轮跑完
-        if (sink && sink->submitTurnInput(d.text, d.source, d.unpausePaused)) {
-            setReason({});
-            noteDelivered();
-            return DeliverResult::Queued;
+        // 轮次在跑
+        if (nextTurn) {
+            // 排队等这一轮跑完
+            if (sink && sink->submitTurnInput(d.text, d.source, d.unpausePaused)) {
+                setReason({});
+                noteDelivered();
+                return DeliverResult::Queued;
+            }
+            if (enqueuePending(agentxx::agent::InputDelivery::NextStep)) {
+                setReason({});
+                noteDelivered();
+                return DeliverResult::Queued;
+            }
+            setReason("backlog");
+            return drop("backlog");
         }
-        if (enqueuePending(agentxx::agent::InputDelivery::NextStep)) {
+        // next-step 在下一次 modelcall 前插入上下文; inject 只进下一次请求
+        const auto mode = d.delivery == agentxx::agent::InputDelivery::Inject
+                              ? agentxx::agent::InputDelivery::Inject
+                              : agentxx::agent::InputDelivery::NextStep;
+        if (enqueuePending(mode)) {
             setReason({});
             noteDelivered();
             return DeliverResult::Queued;
         }
         setReason("backlog");
         return drop("backlog");
-    }
-    // next-step 在下一次 modelcall 前插入上下文; inject 只进下一次请求
-    const auto mode = d.delivery == agentxx::agent::InputDelivery::Inject
-                          ? agentxx::agent::InputDelivery::Inject
-                          : agentxx::agent::InputDelivery::NextStep;
-    if (enqueuePending(mode)) {
-        setReason({});
-        noteDelivered();
-        return DeliverResult::Queued;
-    }
-    setReason("backlog");
-    return drop("backlog");
+    };
+    return deliverNow();
 }
 
 // ---------------------------------------------------------------------------

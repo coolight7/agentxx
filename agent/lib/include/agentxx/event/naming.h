@@ -51,6 +51,11 @@ inline constexpr std::string_view kAgentAsyncPrefix = "agentxx.agent.async.";
 /// 后台任务结果事件名 (所有任务都发这一条, 靠值里的 `asyncId` 区分)
 inline constexpr std::string_view kAgentAsyncDoneEvent = "agentxx.agent.async.done";
 
+/// 后台任务结果事件的归属标记 (发布方与日志用)
+/// - 事件现在只是广播: 结果回到会话由 `AsyncWorkManager::finishEntry` 直接做
+/// - `agentxx_async_await` 不再订阅这条事件 (它等任务条目上的票据)
+inline constexpr std::string_view kAgentAsyncNotifyOwner = "async_work";
+
 /// client 端插件数据的主题段 (客户端插件上行到 agent 总线)
 /// - 组装结果: `agentxx.client.plugin.<插件名>.<事件名>`
 inline constexpr std::string_view kClientPluginDataPrefix = "agentxx.client.plugin.";

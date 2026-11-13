@@ -532,11 +532,11 @@ public:
     /// 落盘目录的保留天数 (yaml `async_work.session_store_keep_days`, 默认 0 = 不自动清理)
     size_t asyncWorkSessionStoreKeepDays = 0;
 
-    /// 结束后台账条目保留时长, 单位毫秒 (yaml `async_work.linger_ms`, 默认 300000)
+    /// 结束后任务表条目里保留的时长, 单位毫秒 (yaml `async_work.linger_ms`, 默认 300000)
     /// - 纯内存回收 (不是限制); 0 = 结束时立即清掉
     int64_t asyncWorkLingerMs = 300000;
 
-    /// 台账里保留的结果正文上限, 单位字节 (yaml `async_work.result_max_bytes`, 默认 8192)
+    /// 任务表里保留的结果正文上限, 单位字节 (yaml `async_work.result_max_bytes`, 默认 8192)
     size_t asyncWorkResultMaxBytes = 8192;
 
     /// 是否启用 git worktree 模式 (yaml `worktree.enable`, 默认关闭)

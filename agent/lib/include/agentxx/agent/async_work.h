@@ -1,10 +1,12 @@
 #pragma once
 
+#include "agentxx/agent/async_wake.h"
 #include "agentxx/event/events.h"
 #include "agentxx/event/event_stream.h"
 #include "asio/awaitable.hpp"
 #include "asio/steady_timer.hpp"
 #include "utilxx_base/json.h"
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <map>
@@ -31,7 +33,17 @@ namespace agent {
 class AgentConfig;
 class AgentContext;
 class AgentHost;
-class AsyncWake;
+
+/// 等终态的票据: 任务进入终态时由管理器置位并叫醒一次
+/// - 只做唤醒, **不带正文**: 等待方醒来后自己读任务表 (正文只有一份来源)
+struct AsyncResultTicket {
+    explicit AsyncResultTicket(asio::io_context::executor_type executor) :
+        wake(std::make_shared<AsyncWake>(std::move(executor))) {}
+
+    std::shared_ptr<AsyncWake> wake;
+    /// 任务已进入终态 (或已被管理器取走票据)
+    std::atomic<bool>          ready{false};
+};
 
 /// 异步任务种类
 /// - `Agent`: 启动一个 agent 跑任务 (子代理形态)
@@ -171,17 +183,17 @@ struct AsyncWorkSpec {
     /// - 插件与动态注册的工具在 `AgentContext::toolRegistry` 里。
     ///
     /// 两处都查不到 (或创建者已释放) 时任务直接失败。工具参数原样传给它 —— 与前台调用
-    /// 同一套执行语义 (权限已在提交时问过, 结果压缩在事件/台账侧按大小截断)。
+    /// 同一套执行语义 (权限已在提交时问过, 结果压缩在事件/任务表侧按大小截断)。
     std::string       toolName;
     utilxx_base::Json toolArgs = utilxx_base::Json::object();
 
-    /// 任务结果标识 (回填到父 toolcall 的 tool_call_id; 仅日志与台账用)
+    /// 任务结果标识 (回填到父 toolcall 的 tool_call_id; 仅日志与任务表用)
     std::string resultId;
 
     /// 以下三项由提交入口按 `AgentConfig` 填入 (调用方可不管)
     size_t  maxConcurrent  = 3;     ///< 本队列的并发额度
-    int64_t lingerMs       = 300000; ///< 结束后台账保留时长 (毫秒)
-    size_t  resultMaxBytes = 8192;  ///< 台账结果正文上限 (字节)
+    int64_t lingerMs       = 300000; ///< 结束后任务表里保留的时长 (毫秒)
+    size_t  resultMaxBytes = 8192;  ///< 任务表里保留的结果正文上限 (字节)
 
     /// 结果事件名
     /// - 空 = 固定名 `agentxx.agent.async.done` (单一事件名, 靠值里的 `asyncId` 区分)
@@ -224,7 +236,7 @@ struct AsyncWorkSubmitResult {
     std::string    error; ///< accepted=false 时的原因
 };
 
-/// 任务条目 (台账: 查询与界面展示用; 不含上下文正文)
+/// 任务条目 (任务表: 查询与界面展示用; 不含上下文正文)
 struct AsyncWorkEntry {
     std::string    asyncId;
     AsyncWorkKind  kind  = AsyncWorkKind::Agent;
@@ -240,16 +252,18 @@ struct AsyncWorkEntry {
     int64_t        createdAtMs  = 0;
     int64_t        startedAtMs  = 0;
     int64_t        finishedAtMs = 0;
-    /// 提交时的起跑延时原值 (毫秒; 0 = 不延时; 台账展示用)
+    /// 提交时的起跑延时原值 (毫秒; 0 = 不延时; 任务表展示用)
     int64_t        delayMs = 0;
-    /// 排队超时与运行超时 (毫秒; 0 = 不限制; 台账展示用)
+    /// 排队超时与运行超时 (毫秒; 0 = 不限制; 任务表展示用)
     int64_t        queueTimeoutMs = 0;
     int64_t        runTimeoutMs   = 0;
     std::string    resultText; ///< 截断后的结果正文
     std::string    error;
     bool           hasError  = false;
     bool           canceled  = false;
-    bool           delivered = false; ///< 结果是否真的投递到了中枢
+    bool           delivered = false; ///< 结果事件是否已发布到中枢
+    /// 正在等这条任务终态的调用 (等待只在内存里, 终态时就清空)
+    std::vector<std::weak_ptr<AsyncResultTicket>> waiters;
 
     /// ---- 下列为管理器内部字段 (查询与展示不使用) ----
 
@@ -261,7 +275,7 @@ struct AsyncWorkEntry {
     size_t                                        maxConcurrent   = 3;
     int64_t                                       lingerMs        = 300000;
     size_t                                        resultMaxBytes  = 8192;
-    /// 台账清扫时刻 (steady 毫秒; 0 = 不必清扫)
+    /// 任务表清扫时刻 (steady 毫秒; 0 = 不必清扫)
     int64_t                                       lingerDeadlineSteadyMs = 0;
     /// 起跑到期时刻 (steady 毫秒; 0 = 不延时; 到期后 `pump` 才会拉起它)
     int64_t                                       delayUntilSteadyMs = 0;
@@ -318,6 +332,22 @@ public:
     /// 单条任务 JSON (不存在返回空对象)
     utilxx_base::Json entryJson(std::string_view asyncId) const;
 
+    /// 等一条任务进入终态 ([agentxx_async_await] 用)
+    ///
+    /// 只负责"等": 任务到自己就返回, 超时/取消也返回; 正文由调用方读任务表。
+    /// 等待期间会在条目上挂一张票据; 任务收尾时看到有票据就把正文交给等待方,
+    /// **本次自动通知不再插入会话** (运行中调用时正文只出现一份)。
+    /// 任务已终态/已回收时直接返回 [WaitOutcome::AlreadyTerminal]。
+    ///
+    /// - `timeoutMs` <= 0 = 不限
+    /// - 必须在容器 io 线程调 (票据的定时器挂在那条 io_context 上)
+    enum class WaitOutcome { Filled, AlreadyTerminal, TimedOut, Canceled };
+    asio::awaitable<WaitOutcome> waitTerminal(
+        std::string_view                               asyncId,
+        int64_t                                        timeoutMs,
+        std::shared_ptr<neograph::graph::CancelToken>  token
+    );
+
     /// 任务清单 JSON
     /// - `creatorAgentId` 为空 = 全部
     /// - `includeFinished` 为 false 时只给排队 + 运行中
@@ -354,14 +384,17 @@ private:
     /// 当前有排队条目的队列键快照
     std::vector<std::string> queueKeysSnapshot() const;
 
-    /// 台账清扫 (结束超过 linger 的条目); 调用方必须已持锁
+    /// 任务表清扫 (结束超过 linger 的条目); 调用方必须已持锁
     void sweepLingerLocked();
 
-    /// 任务主体: 跑子代理 / 工具, 结果发事件 + 回台账 (容器 io 线程)
+    /// 摘掉一张票据 (等待结束/超时/取消时调; 已终态被取走时不必摘)
+    void removeWaiter(std::string_view asyncId, const std::shared_ptr<AsyncResultTicket>& ticket);
+
+    /// 任务主体: 跑子代理 / 工具, 结果发事件 + 回任务表 (容器 io 线程)
     /// - 协程帧持有容器强引用: 容器 (含本管理器) 在任务结束前不会被释放
     asio::awaitable<void> runner(std::shared_ptr<AgentHost> host, std::string entryId);
 
-    /// 任务收尾 (唯一入口): 台账 + 结果事件 + 界面通知 + 提交方回调 + 队列补位
+    /// 任务收尾 (唯一入口): 任务表 + 结果事件 + 界面通知 + 提交方回调 + 队列补位
     /// - `runner` (正常/失败/取消)、排队中被取消、排队超时三条路径都走它
     /// - 只有它发 `agentxx.agent.async.done`: 否则等它的人 (await / notify) 会挂到超时
     /// - `releaseClaim`: 释放提交时占用的会话存储根 (排队期终态也要释放)
@@ -379,7 +412,7 @@ private:
 
     std::weak_ptr<AgentHost> host_;
     mutable std::mutex       mutex_;
-    /// 台账 (asyncId -> 条目)
+    /// 任务表 (asyncId -> 条目)
     std::map<std::string, AsyncWorkEntry, std::less<>> entries_;
     /// 每队列的排队 id (FIFO)
     std::map<std::string, std::vector<std::string>, std::less<>> queues_;

@@ -5,7 +5,7 @@
 ///   以及"不是本实例提交的 id"不认
 /// - 取消: 单条 / 本会话全部 / 已结束不再取消
 /// - 文本: `formatTaskElapsed` / list / status / 结果通知
-/// - 台账回收: 过期终态清理与 `maxRecords` 挤掉最旧
+/// - 任务记录回收: 过期终态清理与 `maxRecords` 挤掉最旧
 /// - 面板: 「后台任务」行文本、状态中文标记、快照 JSON 往返 (空数组不写)
 ///
 /// 全部同步 (不 co_await): 这一层不碰网络也不碰主程序。
@@ -45,7 +45,7 @@ bool contains(const std::string& haystack, std::string_view needle) {
     return haystack.find(needle) != std::string::npos;
 }
 
-/// 假的主程序侧 (记提交/取消, 返回固定 id 或台账 JSON)
+/// 假的主程序侧 (记提交/取消, 返回固定 id 或任务记录 JSON)
 struct FakeHost {
     int64_t     clockMs      = 1000;
     int         submitCalls  = 0;
@@ -56,7 +56,7 @@ struct FakeHost {
     /// 依次返回的 id (每提交一次取一个; 空了 = 提交失败)
     std::vector<std::string> ids{};
     std::string              submitError = "后端拒绝";
-    /// `resultOf` 返回的台账 JSON (空 = 拿不到)
+    /// `resultOf` 返回的任务记录 JSON (空 = 拿不到)
     std::string              ledgerJson{};
     std::vector<std::string> canceled{};
 
@@ -245,7 +245,7 @@ void testEventStateMachine() {
     request.prompt  = "巡一遍仓库";
     XX_TEST_EXPECT_TRUE(manager.submit(request).ok);
 
-    // 排队 → 起跑 → 结果 (台账里有 result 字段)
+    // 排队 → 起跑 → 结果 (任务记录里有 result 字段)
     XX_TEST_EXPECT_TRUE(manager.onEvent("async-7", kPhaseQueued, R"({"queueAhead":2})"));
     XX_TEST_EXPECT_EQ(manager.recordOf("async-7")->queueAhead, 2);
 
@@ -271,7 +271,7 @@ void testEventStateMachine() {
     // 未知阶段: 不认
     XX_TEST_EXPECT_FALSE(manager.onEvent("async-7", 99, "{}"));
 
-    // 失败: 错误正文进台账
+    // 失败: 错误正文进任务记录
     TaskSubmit failing;
     failing.chatKey = "qq_main|group|G1";
     failing.prompt  = "再跑一次";
@@ -421,7 +421,7 @@ void testTexts() {
     XX_TEST_EXPECT_TRUE(contains(canceledNote, "已取消"));
 }
 
-/* ==================== 台账回收 ==================== */
+/* ==================== 任务记录回收 ==================== */
 
 void testPrune() {
     FakeHost           host;

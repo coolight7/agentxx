@@ -579,7 +579,7 @@ cmake --build agent/build/windows-release --config Release --parallel 6
 即依赖重写前), 只作量级对照。原始数据存于 `resource/benchmark/` 下两个目录
 (`2026-09-26_88fee6e0_windows-longctx/`、`2026-09-26_88fee6e0_linux-resource/`)。
 
-负载与方法 (与 §10 同一套台账): Windows release, `agentxx cli` + 本地 mock LLM
+负载与方法 (与 §10 同一套记录项): Windows release, `agentxx cli` + 本地 mock LLM
 (只回 SSE 且立即返回), 无插件, data_dir 指向临时目录, 经 stdin 逐条送入固定大小消息
 (每条一轮), 全部轮次被 mock 服务收到后空转 4 秒取稳态。分配次数取自
 `MIMALLOC_SHOW_STATS=1` 的退出统计 (只有 mimalloc 变体能取到)。
@@ -1538,7 +1538,7 @@ token 估算与压缩改走功能埋点; `104d5c79`: 启用重复调用检查), 
   请求; 新请求到达时按"工具定义 JSON → system 文本 → messages 逐条公共前缀"顺序比较,
   按 4 字节 ≈ 1 token 折算, 把命中的量写进 `usage.prompt_tokens_details.cached_tokens`。
 - 主程序侧沿用已有的缓存用量解析 (`openai_provider.cpp` 的 `parseCachedUsage`), 命中量
-  进入用量台账与 `KeyMetrics`, 测试直接断言, 不额外插桩。
+  进入用量记录与 `KeyMetrics`, 测试直接断言, 不额外插桩。
 - 模块: `agentxx_test.exe prompt_cache_prefix` (25 断言, 约 8s)。
 
 ### 18.2 结果 (长历史会话: 两轮普通对话后手动压缩)
@@ -1563,7 +1563,7 @@ agentxx_test.exe prompt_cache_prefix
 ### 18.4 真实 provider 实测 (2026-10-17/18, 三轮: 修复前 / 补子代理记账 / 对齐压缩请求前缀)
 
 环境: `deepseek/deepseek-v4.1-flash` (OpenAI 兼容网关 `api.commandcode.ai`, 上游会回报
-`prompt_cache_hit_tokens`, 主程序按 `usage` 解析后写入用量台账 `usage.cached_prompt_tokens`),
+`prompt_cache_hit_tokens`, 主程序按 `usage` 解析后写入用量记录 `usage.cached_prompt_tokens`),
 Windows Debug + ASan, 临时 `data_dir` (会话库 `{data}/sqlite/sessions/<sessionId>/session.db`),
 工具集 = `agentxx_filesystem` 6 个 + `agentxx_execute_command` 1 个 (工具定义约 5.2K token)。
 
@@ -1597,7 +1597,7 @@ Windows Debug + ASan, 临时 `data_dir` (会话库 `{data}/sqlite/sessions/<sess
 
 - 压缩请求现在能读到了: `AgentHost::spawnOneTask` 把父会话的记账目标写进子代理上下文
   (`AgentContext::usageAccountSessions`), 自动压缩经总线到达 (`spawnBatch(req)` 不带父上下文)
-  时回退到根会话; 台账 `usage` 表与会话累计用量都落在父会话 (prompt 39300 = 前一条 39090 +
+  时回退到根会话; 用量记录 `usage` 表与会话累计用量都落在父会话 (prompt 39300 = 前一条 39090 +
   压缩指令, 摘要 completion 416)。
 - **该轮压缩请求的缓存命中是 0** (父请求 0.914), 与测试内模拟器 (0.969) 不一致;
   当时的最可疑项是压缩请求多出的 `tool_choice: "none"`. 该猜测在第三轮被证伪, 见下节。
@@ -1671,7 +1671,7 @@ Windows Debug + ASan, 临时 `data_dir` (会话库 `{data}/sqlite/sessions/<sess
 
 #### 实测中修掉的两个问题 (第一/二轮已实施)
 
-1. **子代理用量没进台账**: 子代理的 `AgentContext` 没有 `sessionStore`, `recordUsage` 直接
+1. **子代理用量没进用量记录**: 子代理的 `AgentContext` 没有 `sessionStore`, `recordUsage` 直接
    返回。已修: 派生时写入父会话记账目标 (见上), 嵌套委派沿用最外层目标不重复计数。
 2. **`jsonl` / `server` 模式缺 `AgentHost`**: 只有进程内 `tui`/`cli` 与 FFI 加载过主程序,
    `jsonl` 里的加载还被 `enableSubagent` 门控。已修: 新增
@@ -1698,7 +1698,7 @@ set BASE={临时目录}
   `permission.mode: pass`、插件只留 `agentxx_filesystem` + `agentxx_execute_command`、
   `skill.list`/`memory.list` 置空 (去掉与工具无关的前缀差异)
 - `input.txt`: 每行一条长输入 (40K 字符填充), 5 行足以触发一次自动压缩
-- 读台账 (逐请求的 prompt / cached): `python read_usage.py {data}/sqlite/sessions/<sessionId>/session.db`
+- 读用量记录 (逐请求的 prompt / cached): `python read_usage.py {data}/sqlite/sessions/<sessionId>/session.db`
 
 
 

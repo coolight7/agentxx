@@ -36,7 +36,7 @@ enum class TaskState : uint8_t {
     Canceled,
 };
 
-/// 状态名 (与主程序台账同一套: `queued` / `running` / `done` / `failed` / `canceled`)
+/// 状态名 (与主程序任务表同一套: `queued` / `running` / `done` / `failed` / `canceled`)
 const char* taskStateName(TaskState state) noexcept;
 
 /// 是不是还在进行 (排队或运行中)
@@ -85,7 +85,7 @@ struct TaskRuntime {
     std::function<std::string(const TaskSubmit&, std::string& err)> submit;
     /// 取消 (返回主程序错误码; 0 = 成功)
     std::function<int32_t(std::string_view asyncId)> cancel;
-    /// 单条任务 JSON (主程序台账; 终态取结果正文用; 拿不到返回空串)
+    /// 单条任务 JSON (主程序任务表; 终态取结果正文用; 拿不到返回空串)
     std::function<std::string(std::string_view asyncId)> resultOf;
 };
 
@@ -107,7 +107,7 @@ public:
     struct Options {
         /// 每个会话同时进行 (排队 + 运行) 的任务上限; 超出直接拒绝 (不排队)
         size_t maxPendingPerChat = 4;
-        /// 台账最多留多少条 (超出丢最旧的已结束记录; 进行中的不丢)
+        /// 任务记录最多留多少条 (超出丢最旧的已结束记录; 进行中的不丢)
         size_t maxRecords = 40;
         /// 终态记录保留多久 (毫秒; 0 = 一直留到被 maxRecords 挤掉)
         int64_t keepFinishedMs = 30 * 60 * 1000;

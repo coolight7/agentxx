@@ -807,7 +807,7 @@ std::vector<SessionPendingInput> Session::takePendingInputs(std::string_view del
     return out;
 }
 
-/// 用量台账聚合 → 会话累计用量 (界面展示"已消耗 token"用)
+/// 用量记录聚合 → 会话累计用量 (界面展示"已消耗 token"用)
 static SessionUsageTotals usageTotalsOf(const SessionStore::UsageSummary& summary) {
     SessionUsageTotals out;
     out.promptTokens       = summary.promptTokens;
@@ -841,7 +841,7 @@ std::shared_ptr<Session> SessionsManager::getOrCreate(std::string_view sessionId
         session->setStoreHooks(
             makeSessionStoreHooks(sessionStore, std::string{sessionId}, session, toolArgsNormalizer)
         );
-        // 累计用量同样从台账恢复 (之后每次模型调用累加, 见 nodes/modelcall.cpp):
+        // 累计用量同样从用量记录恢复 (之后每次模型调用累加, 见 nodes/modelcall.cpp):
         // 界面显示"本会话已消耗多少 token"跨进程重启连续
         if (session->contextStats) {
             session->contextStats->usage = usageTotalsOf(loaded.usage);
@@ -898,7 +898,7 @@ asio::awaitable<std::shared_ptr<Session>>
         session->setStoreHooks(
             makeSessionStoreHooks(sessionStore, std::string{sessionId}, session, toolArgsNormalizer)
         );
-        // 累计用量从台账恢复 (与 getOrCreate 同一处理)
+        // 累计用量从用量记录恢复 (与 getOrCreate 同一处理)
         if (session->contextStats) {
             session->contextStats->usage = usageTotalsOf(loaded.usage);
             session->contextStats->title = loaded.title;

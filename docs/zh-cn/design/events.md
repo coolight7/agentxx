@@ -198,7 +198,7 @@ label: ...
 [Event] agentxx.agent.async.done
 [Info]
 mode: first
-wait: w-3
+wait: -
 ref: async-7
 status: value
 [Content]
@@ -207,8 +207,11 @@ content:
 <工具输出原样, 多行就是多行; 本身是 JSON 就还是那段 JSON>
 ```
 
-`agentxx_async_await` 的返回值用同一个渲染函数（`EventHub::contentText` + `renderEventText`）,
-所以等待工具的结果与自动投递的输入格式一致。
+这条文本由 `AsyncWorkManager::finishEntry` 直接交给会话（不再是事件等待的投递），
+所以 `[Info]` 的 `wait` 行是 `-`；`[Event]` 首行与分段标记保持旧形态，界面与 wire 不变。
+
+`agentxx_async_await` 的返回值是任务表的条目文本（`renderEntryDetail`），不再复用事件渲染：
+正文、错误、取消状态都只有任务表一份来源，任务没结束时它等票据而不是订阅事件。
 
 两种文本的终态都是成功: 工具返回 `ToolResult::ok(...)`, 成败只看状态, 不看正文里有什么字样。
 以前的实现靠首行前缀判定 (`[Error` / `[Permission denied` / `[Repeated call denied` /
@@ -258,12 +261,27 @@ content:
 |---|---|---|
 | `agentxx_async_run` | `tool`, `args`, `notify`（默认 `true`）, `label`, `delayMs`, `queueTimeoutMs`, `runTimeoutMs` | 把一次工具调用（或一条 `agentxx_subagent` 子代理任务）放到后台；`notify=true` 时结果自动插回会话；`queueTimeoutMs`/`runTimeoutMs` 是排队与运行的时限（默认 0 = 不限） |
 | `agentxx_async_query` | `group`（`all`/`queued`/`running`/`done`/`failed`/`canceled`, 默认 `all`）, `id` | 按分组列本会话的后台任务；给 `id` 查单条（含结果正文）；还在延时里的排队项列表项开头带 `*` |
-| `agentxx_async_await` | `id`, `timeoutMs`（默认 30000，上限 300000） | 等该任务的结果：`timeoutMs` 是整段等待的超时（延时+排队+运行全算）；已完成的直接返回台账结果 |
+| `agentxx_async_await` | `id`, `timeoutMs`（默认 30000，上限 300000） | 等该任务结束并返回结果：`timeoutMs` 是整段等待的超时（延时+排队+运行全算）；已结束的直接读任务表返回。运行中等待时自动通知那一份不再插入会话，见下方“结果怎么回到会话” |
 | `agentxx_async_manager` | `opt`（`cancel` / `delay`）, `id`（**数组**）, `delayMs` | 对已存在的任务动手：`cancel` 取消、`delay` 改起跑延时（`delayMs:0` = 去掉延时）；`group` 批量入口已删除，模型给单个 id 时由执行层按 schema 转成数组 |
 | `agentxx_async_emit` | `event`, `value`, `end`, `public_publish`, `label` | 发布值 / 结束事件流（只管写侧，见 6.1） |
 
-`id` 是后台任务的 `asyncId`（`async-7`）：`agentxx_async_await` 用它登记
-`match={"asyncId":id}` 的定向等待（不匹配的值不消耗等待）。
+`id` 是后台任务的 `asyncId`（`async-7`）。
+
+**结果怎么回到会话**：只有一条路径 —— 任务收尾时由 `AsyncWorkManager::finishEntry`
+直接交给会话（复用中枢的投递决策段 `EventHub::deliver`）；事件 `agentxx.agent.async.done`
+仍然发布，但只是广播（给插件与外部订阅者），不再承担交付。
+
+- `notify`（默认 `true`）：收尾时直接投递一条 `[Event] ... / [Content] ...` 输入，
+  与旧行为同一形态（界面、协议、轮末提升的 source 前缀判断都不变）；
+- `agentxx_async_await` 在任务还没结束时先在条目上挂一张**票据**
+  （`AsyncResultTicket`，见 `AsyncWorkManager::waitTerminal`）等终态，醒来后读任务表；
+  任务收尾时看到有票据，就**把正文交给等待方、本次不再自动投递** ——
+  票据只在内存里，终态即清空，不是持久状态；
+- await 是“读”不是“消费”：任务已结束时再 await 会再返回一份正文（工具语义，
+  与模型重复调用其他读取类工具一致）；`notify:false` 的任务没有自动投递，await 照常给；
+- 投递失败（会话关停 / 背压丢弃 / 无驱动端）只记 WARN 与 `dropped` 计数，不重试；
+  正文仍在任务表，`agentxx_async_query` / `agentxx_async_await` 都能取回；
+- 正文只有任务表一份：票据不带正文，事件值里的 `content` 只用于广播与旧文本渲染。
 
 工具开关：事件中枢**常驻**（删了早期版本的 `event.enable`），`agentxx_async_emit` 总是注册；
 `agentxx_async_*` 需要 `async_work.enable`（容器在 init 之后才挂上也可以，工具内部取不到时
@@ -353,7 +371,7 @@ content:
 - **起跑延时**（`agentxx_async_run` 的 `delayMs`，> 0 才生效）：延时未到的条目
   **状态仍是 `queued`**，`pump` 扫队列时跳过它 —— 它留在队里、不占名额，也不挡住
   后面能跑的任务；到期由管理器的一条共享 `asio::steady_timer` 唤醒后重新 `pump`
-  （拿不到就绪名额时继续排队）。台账额外字段：`delayMs`（提交时的原值）与
+  （拿不到就绪名额时继续排队）。任务表额外字段：`delayMs`（提交时的原值）与
   `delayRemainingMs`（还在延时中才带）。`agentxx_async_query` 的列表项用开头字符区分：
   `-` 是普通排队、`*` 是还在延时里（后面再跟 `delay=<剩余> left`），一眼看出“为什么它还没跑”。
   `agentxx_async_manager {opt:"delay", id:["async-7"], delayMs}` 改延时（`0` = 去掉），
@@ -368,12 +386,15 @@ content:
   `AgentHost::cancelAsyncWorks(ctx)`：排队中的直接出队并立即发终态，运行中的置取消令牌；
   被取消同样发终态，等待方不会挂到超时（机制见 8.2）；
 - **查询**：`agentxx_async_query {group}` / `{id}`；没开 `notify` 或错过投递时靠它拿结果；
-- **结果怎么回到会话**：`agentxx_async_run` 的 `notify`（默认 `true`）在提交时就登记一条
-  `next-step` 定向等待，值到达时：轮次在跑 → 插到下一次模型调用前；轮次已结束 → 入队并开
-  新一轮；会话没有驱动端 → 落待注入输入（计数 `deferred`）。`notify:false` 只落台账。
-  **插件提交的任务不能用这条路**：它们挂的是**内置根**的中枢（`runtimeSubmitAsyncWork` 取
-  `primaryAgent_` 的上下文），而插件自己开的会话属于它自己的根，中枢投递会因
-  `session not found` 丢掉 —— 那种场景由插件在 `on_event` 里自己投
+- **结果怎么回到会话**：`agentxx_async_run` 的 `notify`（默认 `true`）在任务收尾时
+  由 `AsyncWorkManager::finishEntry` 直接交给会话（不经过事件等待）：轮次在跑 → 插到
+  下一次模型调用前；轮次已结束 → 入队并开新一轮；会话没有驱动端 → 落待注入输入
+  （计数 `deferred`）。`notify:false` 只落任务表。
+  **有人等着就不重复投**：`agentxx_async_await` 在任务未结束时挂了票据，收尾时正文直接
+  交给等待方，本次不再插入会话；任务早就结束（已经投过）时再 await 会再给一份，
+  这是工具语义。规则与并发边界见 §6 的“结果怎么回到会话”。
+  **插件提交的任务不能用这条路**：交付用的是创建者会话的驱动端点，插件自己开的会话
+  不属于创建者时报 `session not found` —— 那种场景由插件在 `on_event` 里自己投
   （参考 `agent/plugins/agentxx_chatbot/chatbot_task.cpp`）。
 - 子代理上下文**继承父事件中枢**（嵌套沿用最外层），所以子代理 emit 的事件父会话能等；
 - **中断策略**（`async_work.interrupt_policy`，单次提交可覆盖）：`bubble`（默认）把
@@ -385,11 +406,11 @@ content:
   只服务事后回看，不做重启续跑；创建者没有 `dataDir` / `sessionStoreDirectory` 时
   明确拒绝，不默默不落盘；`async_work.session_store_keep_days`（默认 0 = 不清理）开启后，
   提交带落盘的任务时顺手清掉超过该天数的旧任务会话目录；
-- 台账（entry）是纯内存记录：运行中一直在，结束后保留 `async_work.linger_ms`
+- 任务表（entry）是纯内存记录：运行中一直在，结束后保留 `async_work.linger_ms`
   （默认 5 分钟）供查询，到期自动清除。
 - **界面可见**：TUI Info 侧边栏的「后台任务」段经 `WireContextStats.asyncWorks`
   （追加字段，最多 10 条，为空不带）展示本会话创建的运行/排队/最近完成项；
-  台账状态变化（提交 / 起跑 / 终态 / 排队中被取消）经
+  任务表状态变化（提交 / 起跑 / 终态 / 排队中被取消）经
   `SessionInputSink::onAsyncWorksChanged` 通知创建者会话的驱动端点，端点合并后重推一次统计
   （还有排队/运行中的条目时按秒续推，已跑时长跟着走；**只有延时中的排队项不续推** ——
   它的已跑时长不走，一个 1 小时的延时不该每秒推一次，到期时由管理器主动通知一次）；
@@ -436,7 +457,7 @@ content:
 - **改延时会重算排队起点**：`agentxx_async_manager {opt:"delay"}` 把排队计时改成
   “新延时结束 + `queueTimeoutMs`”。延时与排队时限的起点始终是同一个，不会出现
   “还在延时里就被判排队超时”；
-- 台账里 `queueRemainingMs`（还没起跑才带）与 `delayRemainingMs`（还在延时中才带）分别
+- 任务表里 `queueRemainingMs`（还没起跑才带）与 `delayRemainingMs`（还在延时中才带）分别
   是排队与延时的剩余，两者都不带时说明正在跑或已经结束；
 - 两条超时走同一个收尾函数（发结果事件、通知界面、释放会话存储占用、队列补位），
   所以 `notify` 的自动投递与 `agentxx_async_await` 都能立刻拿到终态，不会挂到自己的超时；
@@ -581,8 +602,8 @@ content:
 | `event_tools` | `agentxx_async_emit`：定义字段（`event`/`value`/`end`/`public_publish`/`label`）、创建与计数、投递统计、收尾与幂等、发布权限（默认只有创建者、`public_publish` 后公开、插件族拒绝内置源）、失败形态 |
 | `event_delivery` | 空闲/在跑/无驱动端/暂停态四种投递路径、轮末兜底、端点停止后解绑、关停丢弃、展示消息的来源标记 |
 | `event_subagent` | 后台任务立即受理、单一事件名与值里的 `asyncId`、经 `agentxx_async_run` 的受理文本、结果自动投递（驱动端或待注入）、非法事件名拒绝、取消后仍发终态 |
-| `async_work` | 台账与状态机、每队列 FIFO 与额度、排队/运行的取消、linger 清扫、指标计数、`listJson` 的 `queueAhead`、`kind=tool` 的执行/失败/取消 |
-| `async_tools` | `agentxx_async_run`（工具/子代理两种目标、notify 默认与关闭、权限与参数）、`_query`（六档 group、单条 id、归属隔离）、`_await`（已完成/运行中/超时）、`_manager`（cancel / delay、id 数组、排队与运行超时、`*` 延时标记、终态与归属） |
+| `async_work` | 任务表与状态机、每队列 FIFO 与额度、排队/运行的取消、linger 清扫、指标计数、`listJson` 的 `queueAhead`、`kind=tool` 的执行/失败/取消 |
+| `async_tools` | `agentxx_async_run`（工具/子代理两种目标、notify 默认与关闭、权限与参数）、`_query`（六档 group、单条 id、归属隔离）、`_await`（已完成/运行中/超时、运行中等待时自动通知不再插一份、结束后再 await 再给一份、`notify:false` 仍给正文）、`_manager`（cancel / delay、id 数组、排队与运行超时、`*` 延时标记、终态与归属） |
 | `plugin_broadcast` | 插件通知面（广播表 + 示例插件 `example_event`）：声明与发布、发布权限、订阅与读当前值、结束流、禁用/启用/卸载的可逆性 |
 
 `event_delivery` / `event_subagent` 每个用例都起一次本地模拟 LLM 服务，单模块耗时十几秒，

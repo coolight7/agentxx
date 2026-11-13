@@ -215,7 +215,7 @@ event / async_* 及延迟加载加载 (`ToolSkillSearchSubAgentTask` 模板类, 
   内置值事件），值里用 `asyncId` 区分是哪一条。
 
 后台任务由 `agentxx::agent::AsyncWorkManager`（`AgentHost` 持有，见
-`agent/lib/include/agentxx/agent/async_work.h`）管：台账 + 每队列 FIFO + 额度
+`agent/lib/include/agentxx/agent/async_work.h`）管：任务表 + 每队列 FIFO + 额度
 （`async_work.max_concurrent`，默认 3，队列 = 创建者 agentId），不设排队条数/嵌套深度/
 全局上限。`agentxx_async_run {tool:"agentxx_subagent", args:{subagent, message, ...}}`
 把子代理放后台（参数与直接调用完全一致；`agentxx_subagent` 自己已回到同步语义），
@@ -230,6 +230,12 @@ event / async_* 及延迟加载加载 (`ToolSkillSearchSubAgentTask` 模板类, 
 `tool_name` / `tool_args_json`）。三个时限各管一段：`queueTimeoutMs`（延时结束→起跑，
 超时出队）、`runTimeoutMs`（起跑→结束，两种任务都算数）、`agentxx_async_await` 的
 `timeoutMs`（只结束这次等待）。等待与取消都是通知式的（`AsyncWake`），不再轮询。
+**结果回到会话只有一条路径**：任务收尾时 `AsyncWorkManager::finishEntry` 直接交给
+会话（复用 `EventHub::deliver` 的投递决策段，`source` 仍是
+`event:agentxx.agent.async.done`）；`agentxx_async_await` 在任务未结束时先挂一张
+票据（`AsyncResultTicket`，与任务表同一把锁），收尾时正文交给等待方、本次不再投递；
+任务早已结束时 await 直接读任务表（再给一份是工具语义）。事件本身只做广播，
+不再承担会话交付。
 事件中枢**常驻**（早期 `event.enable` 开关已删）。
 
 细节（状态机、投递决策表、文本格式、预算、诊断、配置项）见 [events.md](events.md) 第 8 节；
@@ -1787,7 +1793,7 @@ AgentContext
 写进子上下文 (`AgentContext::usageAccountSessions` + `usageAccountSessionId`),
 模型调用 (`modelcall.cpp` 的 `recordUsage`) 优先记到该目标:
 
-- 台账 `usage` 表与会话累计用量都落在用户看得见的父会话上 (压缩子代理的 prompt/cached
+- 用量记录 (`usage` 表) 与会话累计用量都落在用户看得见的父会话上 (压缩子代理的 prompt/cached
   因此可查, 见 benchmark.md 第 18.4 节)
 - 嵌套委派沿用最外层已确定的目标, 一次调用只记一笔 (不重复计数)
 

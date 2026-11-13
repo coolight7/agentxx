@@ -296,7 +296,7 @@ asio::awaitable<neograph::ChatCompletion> ModelCallWrapNode::onReceiveToken(
         if (accountSessions && accountSessions->sessionStore) {
             accountSessions->sessionStore->addUsage(accountSessionId, rec);
         }
-        // 会话累计用量 (界面显示"本会话已消耗多少 token"): 与用量台账在同一处记账,
+        // 会话累计用量 (界面显示"本会话已消耗多少 token"): 与用量记录在同一处记账,
         // 保证界面数字与落盘记录使用同一套规则 (不持久化时界面照样有数字);
         // 失败记录的用量为 0, 累加不影响结果
         if (accountSessions) {

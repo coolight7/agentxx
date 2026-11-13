@@ -10,6 +10,7 @@
 #include "agentxx/plugin/tool_registry.h"
 #include "agentxx/util/tool_result.h"
 #include "fmt/format.h"
+#include "neograph/graph/cancel.h"
 #include "utilxx_base/json.h"
 #include <algorithm>
 #include <chrono>
@@ -26,10 +27,8 @@ namespace {
 
 using utilxx_base::Json;
 
-/// 后台任务的结果事件名 (单一事件名, 靠值里的 `asyncId` 区分)
+/// 后台任务的结果事件名 (单一事件名, 靠值里的 `asyncId` 区分; `await` 超时文本用它)
 constexpr std::string_view kAsyncDoneEvent = agentxx::events::naming::kAgentAsyncDoneEvent;
-/// 中枢里这类等待的归属标记
-constexpr std::string_view kAsyncOwner = "async";
 
 /// `await` 默认与硬上限 (毫秒): 它会让本轮停在这里, 必须有界
 constexpr int64_t kAwaitDefaultMs = 30 * 1000;
@@ -131,8 +130,9 @@ bool creatorHasTool(
     return ctx->toolRegistry && ctx->toolRegistry->contains(toolName);
 }
 
-/// 单条任务详情 (台账 JSON → 文本; 含结果正文)
-std::string renderEntryDetail(const Json& entry) {
+/// 单条任务详情 (任务表 JSON → 文本)
+/// - `withResult=false`: 不带 `result:` 段 (结果正文已经进过会话, 再贴一遍就是重复)
+std::string renderEntryDetail(const Json& entry, bool withResult = true) {
     const auto  state  = entry.value("state", std::string{});
     const auto  start  = entry.value("startedAtMs", int64_t{0});
     const auto  finish = entry.value("finishedAtMs", int64_t{0});
@@ -187,13 +187,13 @@ std::string renderEntryDetail(const Json& entry) {
         out += fmt::format("\nerror: {}", error);
     }
     const auto result = entry.value("result", std::string{});
-    if (!result.empty() && state != "queued" && state != "running") {
+    if (withResult && !result.empty() && state != "queued" && state != "running") {
         out += fmt::format("\nresult:\n{}", result);
     }
     return out;
 }
 
-/// 任务清单 (台账 JSON 数组 → 文本)
+/// 任务清单 (任务表 JSON 数组 → 文本)
 std::string renderTaskList(std::string_view group, const Json& items) {
     size_t                   running  = 0;
     size_t                   queued   = 0;
@@ -286,7 +286,7 @@ std::string renderTaskList(std::string_view group, const Json& items) {
     return out;
 }
 
-/// 台账里取本会话的一条任务; 不存在或属别的会话时按参数错误拒绝
+/// 任务表里取本会话的一条任务; 不存在或属别的会话时按参数错误拒绝
 Json requireOwnedEntry(
     const std::shared_ptr<agentxx::agent::AgentHost>& host,
     std::string_view                                  asyncId,
@@ -568,7 +568,7 @@ asio::awaitable<agentxx::util::ToolResult> AsyncRunTool::execute_async(const Jso
     if (notify) {
         out += "The result will be inserted into this conversation as an input when it is done.\n";
     } else {
-        out += "No automatic notification (notify=false): the result stays in the task ledger.\n";
+        out += "No automatic notification (notify=false): the result stays in the task table.\n";
     }
     // 设了时限就说清各自的计时起点 (两个都是任务侧时限, 与 await 的 timeoutMs 不同)
     if (queueTimeoutMs > 0) {
@@ -682,7 +682,7 @@ asio::awaitable<agentxx::util::ToolResult> AsyncQueryTool::execute_async(const J
         )};
     }
 
-    // 本会话的任务 (含已结束的): 台账按会话过滤, 状态过滤在本工具里做
+    // 本会话的任务 (含已结束的): 任务表按会话过滤, 状态过滤在本工具里做
     auto items = state.host->asyncWorksJson({}, state.sessionId, /*includeFinished=*/true, 200);
     co_return agentxx::util::ToolResult::ok(renderTaskList(group, items));
 }
@@ -740,12 +740,9 @@ asio::awaitable<agentxx::util::ToolResult> AsyncAwaitTool::execute_async(const J
     if (asyncId.empty()) {
         throw std::invalid_argument{"Arg `id` is required"};
     }
-    auto hub = state.ctx->eventHub;
-    if (!hub) {
-        throw std::runtime_error{"event hub is not initialised"};
-    }
 
-    // 已结束 (或已被 linger 清掉) 的任务直接看台账, 不再挂等待
+    // 已结束 (或已被 linger 清掉) 的任务: 直接读任务表返回
+    // - 模型主动再要一次时拿到第二份是预期行为 (工具语义), 不做"只给一次"的限制
     auto entry = requireOwnedEntry(state.host, asyncId, state.sessionId);
     if (isTerminalState(entry.value("state", std::string{}))) {
         co_return agentxx::util::ToolResult::ok(renderEntryDetail(entry));
@@ -778,33 +775,26 @@ asio::awaitable<agentxx::util::ToolResult> AsyncAwaitTool::execute_async(const J
         ));
     }
 
-    agentxx::events::EventWaitSpec spec;
-    spec.event         = std::string{kAsyncDoneEvent};
-    spec.originSession = state.sessionId;
-    spec.owner         = std::string{kAsyncOwner};
-    spec.ref           = asyncId;
-    spec.mode          = "first";
-    spec.delivery      = "none";
-    spec.match         = Json{
-                {"asyncId", asyncId}
-    };
-    spec.replay  = true;
-    spec.timeout = std::chrono::milliseconds{timeoutMs};
+    // 等它进入终态: 等待期间在任务表条目上挂一张票据; 任务收尾时有人接了正文,
+    // 本次的自动通知就不再插入会话 (运行中调用时正文只出现一份)
+    auto token   = getSessionCancelToken(state.ctx, args);
+    auto outcome = co_await state.host->waitAsyncWorkResult(asyncId, timeoutMs, std::move(token));
 
-    auto specCopy = spec;
-    auto token    = getSessionCancelToken(state.ctx, args);
-    auto wait     = co_await hub->awaitOnce(std::move(spec), std::move(token));
-    if (wait.state == agentxx::events::WaitState::TimedOut) {
-        co_return agentxx::util::ToolResult::ok(
-            agentxx::events::renderAwaitTimeout(specCopy, timeoutMs)
-        );
+    // 醒来后统一读任务表: 正文、错误、取消状态都只有这一份来源
+    entry = requireOwnedEntry(state.host, asyncId, state.sessionId);
+    if (isTerminalState(entry.value("state", std::string{}))) {
+        co_return agentxx::util::ToolResult::ok(renderEntryDetail(entry));
     }
-    const auto content = hub->contentText(state.sessionId, wait.spec.event, wait.values);
-    const std::string status
-        = wait.values.empty() ? "ended-empty" : (wait.values.size() > 1 ? "values" : "value");
-    co_return agentxx::util::ToolResult::ok(
-        agentxx::events::renderEventText(wait, status, content)
-    );
+    if (outcome == agentxx::agent::AsyncWorkManager::WaitOutcome::Canceled) {
+        throw neograph::graph::CancelledException{"async await canceled"};
+    }
+
+    agentxx::events::EventWaitSpec spec;
+    spec.event  = std::string{kAsyncDoneEvent};
+    spec.ref    = asyncId;
+    spec.mode   = "first";
+    spec.timeout = std::chrono::milliseconds{timeoutMs};
+    co_return agentxx::util::ToolResult::ok(agentxx::events::renderAwaitTimeout(spec, timeoutMs));
 }
 
 // ===========================================================================
@@ -934,7 +924,7 @@ asio::awaitable<agentxx::util::ToolResult>
     std::vector<std::string> lines;
     size_t                   okCount = 0;
     for (const auto& asyncId : ids) {
-        // 归属与状态先看台账: 不存在 / 别会话的任务逐条报, 不打断整批
+        // 归属与状态先看任务表: 不存在 / 别会话的任务逐条报, 不打断整批
         Json entry;
         try {
             entry = requireOwnedEntry(state.host, asyncId, state.sessionId);

@@ -106,7 +106,7 @@ asio::awaitable<TestResult> test_usage_ledger() {
             XX_TEST_EXPECT_TRUE(recent[0].errorKind.empty());
         }
 
-        // ---- 会话累计用量 (界面显示"已消耗 token"): 与用量台账同一套记账规则 ----
+        // ---- 会话累计用量 (界面显示"已消耗 token"): 与用量记录同一套记账规则 ----
         auto sess = agent.agentContext->sessions->get("ledger_sess");
         XX_TEST_EXPECT_TRUE(sess != nullptr);
         if (sess && sess->contextStats) {
@@ -116,7 +116,7 @@ asio::awaitable<TestResult> test_usage_ledger() {
             XX_TEST_EXPECT_EQ(usage.totalTokens, int64_t{166});
         }
 
-        // ---- 会话重新加载: 累计用量由用量台账恢复 (跨进程重启后继续累计) ----
+        // ---- 会话重新加载: 累计用量由用量记录恢复 (跨进程重启后继续累计) ----
         agent.agentContext->sessions->remove("ledger_sess");
         auto reloaded = agent.agentContext->sessions->getOrCreate("ledger_sess");
         XX_TEST_EXPECT_TRUE(reloaded != nullptr);

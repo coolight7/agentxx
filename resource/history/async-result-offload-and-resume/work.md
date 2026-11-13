@@ -8,8 +8,9 @@
 - [x] 投递: 后台结果在空闲 + 暂停态也开新一轮
 - [x] 轮末兜底: 后台结果来源的残留输入不置暂停
 - [x] `agentxx_async_await` 打开 `autoSummaryOutput`
-- [x] 测试（三个模块新增 5 个用例/断言组）
-- [x] 文档（events.md §4/§5、config.h、hub.h 注释）
+- [x] 结果正文只进会话一次（await 与自动通知去重，台账记投递权）
+- [x] 测试（`event_hub` / `async_tools` / `event_delivery` 新增用例）
+- [x] 文档（events.md §4/§5/§6/§8、config.h、hub.h、async_work.h、agent_host.h 注释）
 
 ## 改了什么（文件 → 内容）
 
@@ -42,19 +43,68 @@
   - `agent/test/core/test_event_delivery.cpp`：`makeDeliveryFixture` 增 `llmMaxRetry` 参数、
     `test_delivery_async_result_resumes_paused_queue`、
     `test_delivery_rollover_async_result_resumes`。
-- 文档：`docs/zh-cn/design/events.md`（§4 暂停态例外、§5 不卸载的一段）、
-  `agent/lib/include/agentxx/agent/config.h`（两个阈值的说明）、
-  `agent/lib/include/agentxx/event/hub.h`（`contentText` / `contentLimitLength` / `unpausePaused` 注释）。
+- 文档：`docs/zh-cn/design/events.md`（§4 暂停态例外、§5 不卸载的一段、§6 "结果只进会话一次"、
+  §8 结果回到会话）、`agent/lib/include/agentxx/agent/config.h`（两个阈值的说明）、
+  `agent/lib/include/agentxx/event/hub.h`（`contentText` / `contentLimitLength` /
+  `unpausePaused` / `DeliverResult::Suppressed` 注释）。
+
+### 第二轮：结果正文只进会话一次（await vs 自动通知）
+
+- `agent/lib/include/agentxx/agent/async_work.h` / `src/agent/async_work.cpp`：
+  `AsyncWorkEntry::resultTaken`(布尔) + `AsyncWorkManager::claimResult` / `releaseResult`；
+  `entryJson` 输出 `resultTaken`。
+- `agent/lib/include/agentxx/agent/agent_host.h` / `src/agent/agent_host.cpp`：
+  `claimAsyncResult` / `releaseAsyncResult` 转发。
+- `agent/lib/include/agentxx/event/naming.h`：新增 `kAgentAsyncNotifyOwner`（框架自动通知
+  等待的归属标记，`async_work.cpp` 的 `kAsyncOwner` 改为引用它）。
+- `agent/lib/include/agentxx/event/hub.h`：`EventDelivery::owner`、
+  `DeliverResult::Suppressed`、`EventHubStats::suppressed`。
+- `agent/lib/src/event/hub.cpp`：`flushWait` 带上 owner；`deliver` 投递前先领投递权
+  （领不到 → `Suppressed` + info 日志 + 计数），没进会话（丢弃/被拒）时归还；
+  `statsJson` 输出 `suppressed`。
+- `agent/lib/src/tools/async_tools.cpp`：`AsyncResultClaimGuard`、
+  `renderEntryDetail(entry, withResult)`、`renderResultAlreadyDelivered`；await 在拿正文前
+  领一次投递权（终态与等待共用一处），超时/取消归还。
+- `agent/lib/src/agent/prompt.cpp`：`agentxx_async_await` 的 depict 增加"结果只进会话一次 /
+  已投递时给回执"一条。
+- 测试 `test_async_tools.cpp`：`countEventInputs` 辅助 + `test_await_single_delivery` +
+  `test_await_after_notify_returns_receipt`。
+- 文档：`docs/zh-cn/design/events.md` §6（"结果只进会话一次"）、§8（结果回到会话）、
+  §12 测试模块表。
+
+### 第三轮：简化机制 + 术语换名
+
+- **简化**（用户反馈"有点复杂了"）: 把"谁领了正文"从字符串（`resultConsumer`，取值
+  `await` / `async_work`）改成任务表条目上的一个布尔标记 `AsyncWorkEntry::resultTaken`：
+  - `AsyncWorkManager::claimResult(asyncId)` / `releaseResult(asyncId)`（不再传消费者）；
+    `AgentHost::claimAsyncResult` / `releaseAsyncResult` 转发；
+  - `entryJson` 的 `resultClaimedBy` → `resultTaken`（仅在 true 时输出）；
+  - `EventHub::deliver` 改成**投递前先领**（领不到 → `Suppressed`），没进会话（丢弃/被拒）
+    才归还 —— 去掉了原实现"先查再补领"的双次查询与字符串比较；
+  - await 不再分两处领（终态分支 + 等待分支），统一在拿正文前领一次；回执文案
+    （`renderResultAlreadyDelivered`）不再区分是谁先给的，改成一句"已由自动通知或更早的一次
+    `agentxx_async_await` 交付"；删除 `kAwaitConsumer`。
+- **术语**：`台账` → 任务表/条目（异步任务这一套）；同批把仓库里其余 `台账` 按语境统一为
+  用量记录（`usage` 表与管理用量）、任务记录（chatbot 插件自己的业务记录）、成员顺序清单
+  （`boundaries` 的接口表成员顺序）。涉及 `agent/lib` `agent/client` `agent/test`
+  `agent/plugins` `docs` `AGENTS.md`；`resource/history/` 其他历史记录不改。
+- 模型可见文案里的 `task ledger` 一并改成 `task table`（`prompt.cpp`、`async_tools.cpp`、
+  `subagent.h`），与中文术语一致。
 
 ## 验证
 
 - 构建：`agent/script/windows_debug_build.bat`（Debug，含 client/test）通过。
 - 测试（`--log-level error`）：
-  - `event_hub` 288 / `event_tools` 97 / `event_delivery` 62 / `async_tools` 159 /
-    `async_work` 138 / `share_store` 63 —— 全绿；
+  - `event_hub` 288 / `event_tools` 97 / `event_delivery` 62 / `async_tools` 181（首轮 159 +
+    第二轮新增 22）/ `async_work` 138 / `share_store` 63 —— 全绿；
   - `input_delivery` 139 / `session_admin` 38 / `session_sync` 30 / `interrupt_ui` 338 /
     `event_subagent` 52 / `message_supplement` 95 / `view_replica` 114 / `misc_fixes` 114 /
     `assembly_snapshot` 38 / `plugin_runtime` 726 / `prompt_stability` 19 —— 全绿。
+- 第三轮重验（简化布尔标记 + 术语换名后，构建 exit=0）：
+  `async_tools` 181 / `event_hub` 288 / `event_tools` 97 / `event_delivery` 62 /
+  `async_work` 138 / `share_store` 63 / `input_delivery` 139 / `boundaries` 19 /
+  `chatbot_task` 138 = 1125 全绿；`config_keys` / `config_loader` / `event_subagent` /
+  `message_supplement` / `view_replica` / `session_admin` / `session_sync` = 990 全绿。
 
 ## 遇到的问题 / 注意
 
@@ -69,3 +119,10 @@
 - 只传 `unpausePaused` 不够：轮末兜底发生在"按结果置暂停"之前，那一刻队列尚未暂停，
   所以必须把意向记在条目上（`resumeRequested`），由轮末统一判断。
 - Windows 上构建脚本末尾 `copy exec` 失败属正常（agentxx 进程占用），不影响产物。
+- 批量改文案时踩到的坑（已修复）: PowerShell 里 `@(@('旧','新'))` 会把单元素嵌套数组摊平成
+  两项，循环里 `$pair[0]`/`$pair[1]` 取到的是**单个字符**，于是变成逐字替换
+  （`业`→`务`、`主`→`程`、`台`→`账` 之类），13 个文件被改坏。修法判断条件: 先从 HEAD 回滚，
+  用"文件|旧串|新串"管道分隔的字符串做规则（每条按索引取字段），只对回滚后的文件重放。
+  教训: 批量替换前后都要比一次 `git diff --numstat` 的改动行数是否与预期一致。
+- 已知取舍: 若 await 正好在"自动通知已投递完成（被 `Suppressed`）"之后超时，本次等待会拿
+  超时文本并归还标记，正文只能靠 `agentxx_async_query` 取；窗口极小，回执里已给取回指引。

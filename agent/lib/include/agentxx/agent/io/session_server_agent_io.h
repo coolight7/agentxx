@@ -182,9 +182,9 @@ public:
         bool             unpausePaused
     ) override;
 
-    /// 后台任务台账变化 ([SessionInputSink] 实现)
+    /// 后台任务表变化 ([SessionInputSink] 实现)
     ///
-    /// 界面的「后台任务」段随上下文统计下发 (见 [sendContextStats]), 而台账变化本身
+    /// 界面的「后台任务」段随上下文统计下发 (见 [sendContextStats]), 而任务表变化本身
     /// 不会触发任何下发 —— 排队转运行、任务结束这些变化界面就看不到。这里把最新快照
     /// 重推一次给所有客户端, 并合并短时间内的多次变化。
     ///

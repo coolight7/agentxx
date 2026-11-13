@@ -306,7 +306,7 @@ asio::awaitable<void> test_async_dispatch_returns_immediately() {
     XX_TEST_EXPECT_FALSE(value.value("hasError", true));
     XX_TEST_EXPECT_FALSE(value.value("canceled", true));
     XX_TEST_EXPECT_EQ(value.value("content", std::string{}), std::string{"async child result"});
-    // 台账里能按 asyncId 查回来, 且 asyncId 就是该任务的 sessionId (一个值, 不另造)
+    // 任务表里能按 asyncId 查回来, 且 asyncId 就是该任务的 sessionId (一个值, 不另造)
     const auto ledger = fx->host->asyncWorkJson(asyncId);
     XX_TEST_EXPECT_EQ(ledger.value("state", std::string{}), std::string{"done"});
     XX_TEST_EXPECT_EQ(ledger.value("name", std::string{}), std::string{"subagent_task"});

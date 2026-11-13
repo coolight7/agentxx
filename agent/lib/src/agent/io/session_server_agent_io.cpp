@@ -2839,7 +2839,7 @@ void SessionServerAgentIO::scheduleAsyncWorksStatsPush(std::chrono::milliseconds
         self->asyncWorksStatsPending_ = false;
         self->sendContextStats();
         // 还有排队/运行中的任务: 继续按秒推送, 让界面上的已跑时长跟着走;
-        // 全部终态后这次就是最后一次 (完成态留在台账里供回看)
+        // 全部终态后这次就是最后一次 (完成态留在任务表里供回看)
         if (self->hasActiveAsyncWorks()) {
             self->scheduleAsyncWorksStatsPush(std::chrono::milliseconds{kAsyncWorksTickMs});
         }

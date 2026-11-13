@@ -223,7 +223,7 @@ void AgentRegistry::clear() {
 
 std::shared_ptr<AgentHost> AgentHost::create(Config cfg) {
     std::shared_ptr<AgentHost> host(new AgentHost(std::move(cfg)));
-    // 异步任务管理器 (进程一份): 队列/额度/台账都挂在它上面
+    // 异步任务管理器 (进程一份): 队列/额度/任务表都挂在它上面
     host->asyncWork_ = std::make_unique<AsyncWorkManager>(host);
     // agent 节点容器总线: 派生与跨 agent 消息服务
     std::weak_ptr<AgentHost> self = host;
@@ -398,6 +398,17 @@ bool AgentHost::startAsyncWorkNow(std::string_view asyncId) {
 
 bool AgentHost::setAsyncWorkDelay(std::string_view asyncId, int64_t delayMs) {
     return asyncWork_ ? asyncWork_->setDelay(asyncId, delayMs) : false;
+}
+
+asio::awaitable<AsyncWorkManager::WaitOutcome> AgentHost::waitAsyncWorkResult(
+    std::string_view                              asyncId,
+    int64_t                                       timeoutMs,
+    std::shared_ptr<neograph::graph::CancelToken> token
+) {
+    if (!asyncWork_) {
+        co_return AsyncWorkManager::WaitOutcome::AlreadyTerminal;
+    }
+    co_return co_await asyncWork_->waitTerminal(asyncId, timeoutMs, std::move(token));
 }
 
 size_t AgentHost::cancelAsyncWorks(const std::shared_ptr<AgentContext>& creator) {
@@ -1161,7 +1172,7 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
         subCtx->eventHub = parentAgentCtx->eventHub;
     }
 
-    // 用量记账目标: 子代理的模型调用计入父会话 (用户看的会话与台账都是父会话)
+    // 用量记账目标: 子代理的模型调用计入父会话 (用户看的会话与用量记录都是父会话)
     // - 子代理自己有独立 AgentContext/SessionsManager, 没有 sessionStore, 记不下来
     // - 嵌套委派沿用最外层已确定的目标, 保证一次调用只记一笔 (不重复计数)
     // - 自动压缩这类内部委派经总线到达 (`spawnBatch(req)` 不带父上下文),

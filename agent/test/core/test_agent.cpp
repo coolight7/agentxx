@@ -425,7 +425,7 @@ DaSimServer startDaSimServer() {
                 // ---- 模拟前缀缓存 (provider prompt cache) ----
                 // 与上一条成功请求逐字节比较: 工具定义 -> 消息前缀; 命中的部分按
                 // 每 4 字节 1 token 估算, 写进 usage.prompt_tokens_details.cached_tokens
-                // (主程序侧 parseCachedUsage 会记入用量台账与关键指标)
+                // (主程序侧 parseCachedUsage 会记入用量记录与关键指标)
                 int respPromptTokens = snap.promptTokens;
                 int respCachedTokens = 0;
                 if (snap.prefixCache) {

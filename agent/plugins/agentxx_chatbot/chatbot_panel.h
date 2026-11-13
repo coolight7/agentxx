@@ -70,7 +70,7 @@ struct PanelAccountView {
 /// 一条后台任务 (面板「后台任务」段的一行)
 ///
 /// 只是显示用的快照: 并发额度、排队与执行都在主程序, 数据源是 `ChatbotTaskManager`
-/// 的业务台账 (它与 TUI Info 段看到的全局台账不是同一份)。
+/// 的业务任务记录 (它与 TUI Info 段看到的全局任务表不是同一份)。
 struct PanelTaskView {
     std::string asyncId; ///< 任务 id (`async-7`)
     std::string title;   ///< 显示名 (任务正文开头)

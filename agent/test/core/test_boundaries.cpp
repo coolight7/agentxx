@@ -762,14 +762,14 @@ void checkInterfaceTableQuadruple(const fs::path& root, Violations& v) {
     }
 }
 
-/// 规则 10: 接口表成员顺序台账
+/// 规则 10: 接口表成员顺序清单
 ///
 /// 重排成员、改成员签名、删除成员都**可能不改变结构体大小** —— 版本号与
 /// `struct_size` 都拦不住, 旧调用方会静默调到隔壁函数。唯一可行的防线是把"成员顺序"
-/// 冻结成台账: 这里从三个表头按声明顺序抽出每张表的顶层函数指针成员, 与下方期望台账
+/// 冻结成清单: 这里从三个表头按声明顺序抽出每张表的顶层函数指针成员, 与下方期望清单
 /// 逐项比对。
 ///
-/// 追加成员时同步更新本台账 (在期望顺序末尾加一项), 同时 `X_VERSION` +1、
+/// 追加成员时同步更新本清单 (在期望顺序末尾加一项), 同时 `X_VERSION` +1、
 /// `X_BASELINE_SIZE` 保持不变、调用点改用 `ifaceHas`。
 void checkInterfaceTableLayout(const fs::path& root, Violations& v) {
     struct TableLayout {
@@ -777,7 +777,7 @@ void checkInterfaceTableLayout(const fs::path& root, Violations& v) {
         const char* members; ///< 顶层函数指针成员, 按声明顺序以 `|` 分隔
     };
 
-    // 台账由表头按声明顺序生成 (生成脚本见 resource/history/plugin-version/work.md)
+    // 清单由表头按声明顺序生成 (生成脚本见 resource/history/plugin-version/work.md)
     static const TableLayout kExpected[] = {
         {"AgentxxClientKeybindIface",     "register_keybind|unregister_keybind|list_keybinds"                                                                                                                                                                                                                                                                                 },
         {"AgentxxClientSelfIface",
@@ -863,7 +863,7 @@ void checkInterfaceTableLayout(const fs::path& root, Violations& v) {
     for (const auto& header : headers) {
         const auto text = readTextFile(header);
         if (text.empty()) {
-            v.push_back(toGeneric(header.lexically_relative(root)) + ": 无法读取 (成员台账依赖它)");
+            v.push_back(toGeneric(header.lexically_relative(root)) + ": 无法读取 (成员清单依赖它)");
             continue;
         }
         static const std::regex kTable{
@@ -890,7 +890,7 @@ void checkInterfaceTableLayout(const fs::path& root, Violations& v) {
         const auto it = actual.find(item.table);
         if (it == actual.end()) {
             v.push_back(
-                std::string{"接口表 `"} + item.table + "` 未在表头里找到 (改名后需同步本台账)"
+                std::string{"接口表 `"} + item.table + "` 未在表头里找到 (改名后需同步本清单)"
             );
             continue;
         }
@@ -898,14 +898,14 @@ void checkInterfaceTableLayout(const fs::path& root, Violations& v) {
             v.push_back(
                 std::string{"接口表 `"} + item.table
                 + "` 成员顺序变了:\n      期望: " + item.members + "\n      实际: " + it->second
-                + "\n      (追加成员只允许加在末尾, 并同步本台账; 重排/改签名/删成员请换 IID)"
+                + "\n      (追加成员只允许加在末尾, 并同步本清单; 重排/改签名/删成员请换 IID)"
             );
         }
     }
     if (actual.size() != expectedCount) {
         v.push_back(
-            "表头里找到 " + std::to_string(actual.size()) + " 张接口表, 台账列了 "
-            + std::to_string(expectedCount) + " 张 (新增表时同步本台账)"
+            "表头里找到 " + std::to_string(actual.size()) + " 张接口表, 清单列了 "
+            + std::to_string(expectedCount) + " 张 (新增表时同步本清单)"
         );
     }
 }
@@ -1369,7 +1369,7 @@ void checkInterfaceTableCount(const fs::path& root, Violations& v) {
 }
 
 // ---------------------------------------------------------------------------
-// 规则台账
+// 规则清单
 // ---------------------------------------------------------------------------
 
 /// 一条边界规则的名称 (编号 = 本表下标 + 1)

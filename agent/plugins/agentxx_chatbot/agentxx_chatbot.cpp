@@ -143,7 +143,7 @@ struct ChatbotCtx : public PluginBase {
     ac::ChatbotRouter   router;
     ac::ChatbotOutbound outbound;
     ac::ChatbotEngine   engine;
-    /// 后台任务业务台账 (只在插件 io 线程访问; 执行/并发在主程序)
+    /// 后台任务业务任务记录 (只在插件 io 线程访问; 执行/并发在主程序)
     ac::ChatbotTaskManager tasks;
 
     /// 账号 → 平台对象 (只在插件 io 线程访问; 工具线程通过 `platformOf` 读取时
@@ -1067,7 +1067,7 @@ void subscribePanelEvents(ChatbotCtx& ctx) {
  *
  * 分工 (见 `resource/history/async-work/plan.md` §11):
  * - 执行、并发额度与排队都在主程序 (`submit_async_work`);
- * - 插件只管业务台账 (`ChatbotTaskManager`) 与"结果怎么回到会话":
+ * - 插件只管业务任务记录 (`ChatbotTaskManager`) 与"结果怎么回到会话":
  *   通道还在就投成一条会话输入, 由人设组织语言回复; 通道已回收就直接发一条
  *   (被动→主动降级)。**没用** `notify_delivery`: 插件提交的任务挂在内置根的中枢上,
  *   而聊天会话属于人设根, 那边投递会因"会话不存在"被丢掉。
@@ -1230,7 +1230,7 @@ void PLUGINXX_CALL onChatbotAsyncWorkEvent(
     });
 }
 
-/// 建后台任务的注入点 (提交/取消/台账回查都转成 SDK 调用)
+/// 建后台任务的注入点 (提交/取消/记录回查都转成 SDK 调用)
 ac::TaskRuntime makeTaskRuntime(ChatbotCtx& ctx) {
     ac::TaskRuntime runtime;
     runtime.submit = [&ctx](const ac::TaskSubmit& request, std::string& err) -> std::string {
@@ -1633,7 +1633,7 @@ void* chatbotStart(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, Plugin
             std::move(runtime)
         );
         ctx.engine.buildRoutes();
-        // 后台任务的业务台账 (执行与额度在主程序)
+        // 后台任务的业务任务记录 (执行与额度在主程序)
         ctx.tasks.init(makeTaskRuntime(ctx));
         // 调度状态一变就要重画侧边栏面板 (通知在插件 io 线程发出)
         ctx.engine.setChangeHook([&ctx]() {
@@ -1677,7 +1677,7 @@ void* chatbotStop(ChatbotCtx& ctx, const PluginxxOperatorNotify* notify, Pluginx
             }
             ctx.outbound.shutdown();
             ctx.engine.shutdown();
-            // 任务台账清空: 未完成的任务由主程序按 owner 回收, 这里只丢业务字段
+            // 任务记录清空: 未完成的任务由主程序按 owner 回收, 这里只丢业务字段
             ctx.tasks.clear();
         });
         // 2. 关全部通道

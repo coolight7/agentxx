@@ -132,9 +132,9 @@ struct YamlAppConfig {
     bool asyncWorkSessionStore = false;
     /// 落盘目录保留天数 (yaml `async_work.session_store_keep_days`, 默认 0 = 不清理)
     int64_t asyncWorkSessionStoreKeepDays = 0;
-    /// 结束后台账保留时长 (毫秒; yaml `async_work.linger_ms`, 默认 300000)
+    /// 结束后任务表里保留的时长 (毫秒; yaml `async_work.linger_ms`, 默认 300000)
     int64_t asyncWorkLingerMs = 300000;
-    /// 台账结果正文上限 (字节; yaml `async_work.result_max_bytes`, 默认 8192)
+    /// 任务表里保留的结果正文上限 (字节; yaml `async_work.result_max_bytes`, 默认 8192)
     int64_t asyncWorkResultMaxBytes = 8192;
     /// git worktree 模式开关 (yaml `worktree.enable`, 默认 false)
     /// - 开启后注册 agentxx_git_worktree 工具 + 注入行为提示词, 模型在代码

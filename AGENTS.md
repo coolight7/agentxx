@@ -114,7 +114,7 @@ resource/history/<任务短名>/        # 英文小写 + 短横线，能看出�
   `AgentConfig::enableSubagent` 无关** (该开关只控制是否把 `agentxx_subagent` 工具注入模型;
   缺主程序时上下文压缩会报 `service.subagent ... no server registered` 并退化为硬截断),
   返回值必须活到会话结束; 子代理 (含压缩) 的模型用量经
-  `AgentContext::usageAccountSessions` + `usageAccountSessionId` 记到父会话台账, 自动压缩
+  `AgentContext::usageAccountSessions` + `usageAccountSessionId` 记到父会话用量记录, 自动压缩
   经总线到达 (`spawnBatch(req)` 不带父上下文) 时回退根会话, 详见 index.md 架构设计第 7 小节
 - **一插件加载多 agent 挂载**: 插件只 `create`/`start` 一次, 每个 agent 各一份
   `PluginMount`; agent 级注册 (工具/权限/功能埋点实现行/提示词/图/资源/广播订阅) 只能在插件 `mount`
@@ -459,11 +459,11 @@ path/to/agentxx_test --log-level warn string_util regex
   同步、改名后由 `handleRenameSession` 写入), 见 tui.md §2.7
 - Info 面板 Context 段 (2026-10): 显示本会话累计消耗的 token
   (已消耗/缓存/输入/输出 + 缓存命中率), Append 段与插件段落排在它之后 (见 tui.md §2.7);
-  数据源 = 会话累计用量 `SessionUsageTotals` (`Session::contextStats->usage`, 与用量台账
+  数据源 = 会话累计用量 `SessionUsageTotals` (`Session::contextStats->usage`, 与用量记录
   `SessionStore` 的 `usage` 表在同一处结算 —— modelcall.cpp 的 `recordUsage`), 经
   `WireContextStats` 的追加字段 (`promptTokens`/`completionTokens`/`totalTokens`/
   `cachedPromptTokens`) 下发 (统一组装点 `agentxx/agent/io/context_stats_wire.h` 的
-  `toWireContextStats`); 会话首次加载时由台账聚合恢复, 跨进程重启连续; 与状态栏的
+  `toWireContextStats`); 会话首次加载时由用量记录聚合恢复, 跨进程重启连续; 与状态栏的
   "上下文占用" 不是一个量 (后者随压缩回落); 未收到用量时显示"( 无数据 )";
   缓存量取上游 `usage` 回报的缓存字段 (字段名各家不同, 逐个候选解析:
   OpenAI `prompt_tokens_details.cached_tokens` / Responses `input_tokens_details.cached_tokens` /
@@ -614,7 +614,7 @@ path/to/agentxx_test --log-level warn string_util regex
   示例插件 `example_event` (声明频道 / 发布 / 订阅 / 读当前值 / 结束)。
 - 后台任务 (async work, 2026-11, 详见 [events.md](docs/zh-cn/design/events.md) 第 8 节):
   `agentxx::agent::AsyncWorkManager` (`agent/lib/{include/agentxx/agent/async_work.h,src/agent/async_work.cpp}`,
-  由 `AgentHost` 持有并通过 `friend` 访问其私有接口) = 台账 (`AsyncWorkEntry`: kind/state/
+  由 `AgentHost` 持有并通过 `friend` 访问其私有接口) = 任务表 (`AsyncWorkEntry`: kind/state/
   queueKey/时间戳/结果) + 每队列 FIFO + 额度 + 结束 linger 清扫 + 取消/查询 + 指标记账;
   `kind` = `agent` (起一个 agent 跑任务) 或 `tool` (把一次工具调用放到后台跑,
   入口 `agentxx_async_run`; 权限在提交时按目标工具
@@ -634,11 +634,15 @@ path/to/agentxx_test --log-level warn string_util regex
   `async_work.enable` 决定形态的老行为), 要后台跑就 `agentxx_async_run
   {tool:"agentxx_subagent", args:{subagent, message, ...}}` —— 参数与直接调用完全一致,
   内部按 `kind=agent` 提交; 受理返回 `{started:true, asyncId}`、正文 `[Async started] id=...`。
-  **notify 默认开**: 提交时就替会话登记一条 `next-step` 定向等待 (轮次在跑 → 下一次模型调用前
-  插入; 轮次已结束 → 入队开新一轮; `notify:false` 只落台账)。**单一事件名** `agentxx.agent.async.done`
-  (`naming.h` 的 `kAgentAsyncPrefix`; 它是唯一落在 `agentxx.agent.event.` 段外的内置值
-  事件), 值里用 `asyncId` 区分, 等待靠 `EventWaitSpec::match` 过滤 (不匹配的值不消耗
-  等待、带过滤的等待不随事件结束收尾); `asyncId` 就是任务 agent 的 `sessionId`。
+  **notify 默认开**: 任务收尾时由 `AsyncWorkManager::finishEntry` 直接交给会话 (不经
+  事件等待; 轮次在跑 → 下一次模型调用前插入; 轮次已结束 → 入队开新一轮;
+  `notify:false` 只落任务表)。**有人等着就不重复投**: `agentxx_async_await` 在任务未结束
+  时在条目上挂一张票据 (`AsyncResultTicket` + `AsyncWake`，和任务表同一把锁)，
+  收尾时正文直接交给等待方、本次不再投递；任务早已结束时 await 读任务表再给一份
+  (工具语义)。交付复用 `EventHub::deliver` 的投递决策段，`source` 仍是
+  `event:agentxx.agent.async.done` (界面/协议零改动)；事件本身只做广播，仍是单一事件名
+  `agentxx.agent.async.done` (`naming.h` 的 `kAgentAsyncPrefix`，值里用 `asyncId` 区分，
+  `asyncId` 就是任务 agent 的 `sessionId`)。
   并发只有每队列额度 (默认队列 = 创建者 agentId, `async_work.max_concurrent` 默认 3),
   **不设**排队条数/嵌套深度/全局上限。取消/改延时: `agentxx_async_manager {opt:"cancel"|"delay", id, delayMs}`
   (只限本会话启动的, `id` 可传数组)、`AgentHost::cancelAsyncWorks(ctx)` (排队中的
@@ -663,11 +667,11 @@ path/to/agentxx_test --log-level warn string_util regex
   老客户端忽略), 分类显示为 `|- 运行 n` / `|- 排队 n` / `|- 完成 n` 三段 (完成段条目带
   单字符标记 `#`/`x`/`-`, 排队条目不显示排队位, 所有列表项统一 hint 色), 只展示不给取消入口 (`info.asyncWork*`
   一组文案键; 测试 `tui_widget` 的 `test_info_sidebar_async_works`);
-  **刷新**由台账驱动: 提交/起跑/终态/排队中取消经 `SessionInputSink::onAsyncWorksChanged`
+  **刷新**由任务表驱动: 提交/起跑/终态/排队中取消经 `SessionInputSink::onAsyncWorksChanged`
   通知创建者会话的端点, 端点合并后重推统计, 有排队/运行条目时按秒续推 (测试 `async_work`
   的 `test_works_changed_notification`); 详见
   [tui.md](docs/zh-cn/design/tui.md) §2.7。**插件接入示例** (`agentxx_chatbot`,
-  测试 `chatbot_task` / `plugin_example_chatbot`): 业务台账在 `chatbot_task.{h,cpp}` (纯逻辑,
+  测试 `chatbot_task` / `plugin_example_chatbot`): 业务任务记录在 `chatbot_task.{h,cpp}` (纯逻辑,
   编进测试), 模型工具 `chatbot_task` (`submit`/`status`/`cancel`/`list`) + 命令
   `/agentxx-cmd task ...` + 侧边栏「机器人」栏的「后台任务」段; 提交快照里的人设插件清单
   用 `plugins.exclude` 把自己排除 (后台任务没有聊天会话, `chatbot_*` 在那边定位不到对象);
@@ -756,7 +760,7 @@ path/to/agentxx_test --log-level warn string_util regex
     重排/改签名/删成员 → 换 IID; `MIN_VERSION` 只在破坏性改动时 +1
   - 跨边界结构体 (spec / input) 统一带 `struct_size`: 填充方填长度, 读取方用
     `agentxx/plugin/api/plugin_spec.h` 的 `specSizeOk` / `specHas` 判定
-  - 自检: `boundaries` 逐表校验四件套与**成员顺序台账**; `plugin_runtime` 校验判定
+  - 自检: `boundaries` 逐表校验四件套与**成员顺序清单**; `plugin_runtime` 校验判定
     三态与布局偏移; 详见 docs/zh-cn/design/plugins.md §17
 - 通知型功能埋点派发 (2026-11, 原 `agentxx.agent.hooks` 表已删除):
   - 7 个通知点各在调用点发一次广播 (`agentxx.agent.point.turn.start` / `turn.end` /

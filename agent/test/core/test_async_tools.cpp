@@ -8,6 +8,7 @@
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/session_input_sink.h"
+#include "agentxx/event/hub.h"
 #include "agentxx/plugin/tool_registry.h"
 #include "agentxx/tools/async_tools.h"
 #include "agentxx/tools/tool.h"
@@ -110,6 +111,18 @@ public:
         return true;
     }
 };
+
+/// 投递到会话的 `[Event] <事件名>` 输入条数 (用来确认同一结果只进会话一次)
+size_t countEventInputs(const std::shared_ptr<AtFakeSink>& sink, std::string_view eventName) {
+    const std::string header = "[Event] " + std::string{eventName};
+    size_t            count  = 0;
+    for (const auto& text : sink->texts) {
+        if (contains(text, header)) {
+            ++count;
+        }
+    }
+    return count;
+}
 
 /// 测试工具: 睡一段再返回固定文本 (可返回失败), 并记下收到的参数
 class AtSleepTool final : public agentxx::tools::XXToolBase {
@@ -349,7 +362,7 @@ asio::awaitable<void> test_start_tool_notify_default() {
     XX_TEST_EXPECT_TRUE(contains(text, "inserted into this conversation"));
     XX_TEST_EXPECT_FALSE(asyncId.empty());
 
-    // 台账: done + 结果正文
+    // 任务表: done + 结果正文
     const auto entry = fx->host->asyncWorkJson(asyncId);
     XX_TEST_EXPECT_EQ(entry.value("kind", std::string{}), std::string{"tool"});
     XX_TEST_EXPECT_EQ(entry.value("state", std::string{}), std::string{"done"});
@@ -422,7 +435,7 @@ asio::awaitable<void> test_async_tool_args_normalize() {
     co_return;
 }
 
-/// 2. notify=false: 只落台账, 不打扰会话
+/// 2. notify=false: 只落任务表, 不打扰会话
 asio::awaitable<void> test_start_notify_off() {
     auto fx = std::make_shared<AtFixture>();
     XX_TEST_EXPECT_TRUE(buildFixture(fx));
@@ -909,7 +922,7 @@ asio::awaitable<void> test_await() {
     }));
 
     XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
-        // 已结束: 直接给台账结果, 不再挂等待
+        // 已结束: 直接给任务表结果, 不再挂等待
         doneText = co_await execTool(
             awaitTool,
             Json{{"id", finishedId}, {"sessionId", fx->sessionId}}
@@ -925,7 +938,9 @@ asio::awaitable<void> test_await() {
     XX_TEST_EXPECT_TRUE(doneText.starts_with("[Async task] id=" + finishedId));
     XX_TEST_EXPECT_TRUE(contains(doneText, "state=done"));
     XX_TEST_EXPECT_TRUE(contains(doneText, "tool says hi"));
-    XX_TEST_EXPECT_TRUE(contains(runningText, "[Event] agentxx.agent.async.done"));
+    // 运行中等到结果: 与终态同一份渲染 (任务表条目), 不再是 `[Event]` 文本
+    XX_TEST_EXPECT_TRUE(runningText.starts_with("[Async task] id=" + runningId));
+    XX_TEST_EXPECT_TRUE(contains(runningText, "state=done"));
     XX_TEST_EXPECT_TRUE(contains(runningText, "tool says hi"));
 
     // 超时: 启动一个慢任务, 只等 100ms
@@ -1379,6 +1394,140 @@ asio::awaitable<void> test_tool_result_offloaded_once() {
     co_return;
 }
 
+/// 15. 运行中 await: 这次自动通知不插一份 (正文只有工具结果那一份)
+asio::awaitable<void> test_await_single_delivery() {
+    auto fx = std::make_shared<AtFixture>();
+    XX_TEST_EXPECT_TRUE(buildFixture(fx));
+
+    agentxx::tools::AsyncRunTool   run{fx->ctx()};
+    agentxx::tools::AsyncAwaitTool awaitTool{fx->ctx()};
+    const std::string              asyncDone{agentxx::events::naming::kAgentAsyncDoneEvent};
+    std::string                    asyncId;
+    std::string                    awaitText;
+
+    XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
+        auto started = co_await execTool(
+            run,
+            Json{
+                {"tool",      "at_test_sleep"            },
+                {"args",      Json{{"sleepMs", 60}}      },
+                {"sessionId", fx->sessionId              },
+            }
+        );
+        asyncId = parseAsyncId(started);
+        if (asyncId.empty()) {
+            co_return false;
+        }
+        // 还在跑的时候等它: 正文交给这次等待, 自动通知不再插一份
+        awaitText = co_await execTool(
+            awaitTool,
+            Json{{"id", asyncId}, {"sessionId", fx->sessionId}}
+        );
+        co_return true;
+    }));
+
+    XX_TEST_EXPECT_TRUE(contains(awaitText, "tool says hi"));
+    // 再让事件循环跑一会儿, 确认没有任何 [Event] 结果输入
+    XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
+        co_await sleepMs(150);
+        co_return true;
+    }));
+    XX_TEST_EXPECT_EQ(countEventInputs(fx->sink, asyncDone), size_t{0});
+    // 任务表保留正文 (查询/诊断要看), 与工具结果同一份来源
+    const auto entry = fx->host->asyncWorkJson(asyncId);
+    XX_TEST_EXPECT_EQ(entry.value("result", std::string{}), std::string{"tool says hi"});
+
+    // 再等一次同一个任务: 已经结束, 直接读任务表再给一份 (工具语义, 不做去重)
+    std::string again;
+    XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
+        again = co_await execTool(
+            awaitTool,
+            Json{{"id", asyncId}, {"sessionId", fx->sessionId}}
+        );
+        co_return true;
+    }));
+    XX_TEST_EXPECT_TRUE(contains(again, "tool says hi"));
+    XX_TEST_EXPECT_EQ(countEventInputs(fx->sink, asyncDone), size_t{0});
+    co_return;
+}
+
+/// 16. 自动通知先到之后 await: 仍然照实返回正文 (工具语义); notify=false 同理
+asio::awaitable<void> test_await_after_notify_returns_body() {
+    auto fx = std::make_shared<AtFixture>();
+    XX_TEST_EXPECT_TRUE(buildFixture(fx));
+
+    agentxx::tools::AsyncRunTool   run{fx->ctx()};
+    agentxx::tools::AsyncAwaitTool awaitTool{fx->ctx()};
+    const std::string              asyncDone{agentxx::events::naming::kAgentAsyncDoneEvent};
+    std::string                    asyncId;
+
+    XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
+        auto started = co_await execTool(
+            run,
+            Json{
+                {"tool",      "at_test_sleep"            },
+                {"args",      Json{{"sleepMs", 20}}      },
+                {"sessionId", fx->sessionId              },
+            }
+        );
+        asyncId = parseAsyncId(started);
+        if (asyncId.empty()) {
+            co_return false;
+        }
+        // 等任务跑完并且自动通知真的投递到了会话
+        co_return co_await waitUntil([&] {
+            return fx->host->asyncWorkJson(asyncId).value("state", std::string{}) == "done"
+                   && !fx->sink->texts.empty();
+        });
+    }));
+    XX_TEST_EXPECT_EQ(countEventInputs(fx->sink, asyncDone), size_t{1});
+
+    // 已经投递过的结果: await 是"读", 照实再给一份 (模型自己又要了一次)
+    std::string awaitText;
+    XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
+        awaitText = co_await execTool(
+            awaitTool,
+            Json{{"id", asyncId}, {"sessionId", fx->sessionId}}
+        );
+        co_return true;
+    }));
+    XX_TEST_EXPECT_TRUE(contains(awaitText, "tool says hi"));
+    XX_TEST_EXPECT_EQ(countEventInputs(fx->sink, asyncDone), size_t{1});
+
+    // notify=false 的任务没有自动投递, await 照常给正文
+    std::string noNotifyId;
+    std::string noNotifyText;
+    XX_TEST_EXPECT_TRUE(runOnIo(fx->io, [&]() -> asio::awaitable<bool> {
+        auto started = co_await execTool(
+            run,
+            Json{
+                {"tool",      "at_test_sleep"            },
+                {"args",      Json{{"sleepMs", 10}}      },
+                {"notify",    false                      },
+                {"sessionId", fx->sessionId              },
+            }
+        );
+        noNotifyId = parseAsyncId(started);
+        if (noNotifyId.empty()) {
+            co_return false;
+        }
+        if (!co_await waitUntil([&] {
+                return fx->host->asyncWorkJson(noNotifyId).value("state", std::string{})
+                       == "done";
+            })) {
+            co_return false;
+        }
+        noNotifyText = co_await execTool(
+            awaitTool,
+            Json{{"id", noNotifyId}, {"sessionId", fx->sessionId}}
+        );
+        co_return true;
+    }));
+    XX_TEST_EXPECT_TRUE(contains(noNotifyText, "tool says hi"));
+    XX_TEST_EXPECT_EQ(countEventInputs(fx->sink, asyncDone), size_t{1});
+    co_return;
+}
+
 asio::awaitable<TestResult> run_async_tools_tests() {
     TestResult result;
 
@@ -1397,6 +1546,8 @@ asio::awaitable<TestResult> run_async_tools_tests() {
     co_await test_task_timeouts_and_marker();
     co_await test_tool_closure_lifetime();
     co_await test_tool_result_offloaded_once();
+    co_await test_await_single_delivery();
+    co_await test_await_after_notify_returns_body();
 
     result.passed = g_at_passed;
     result.failed = g_at_failed;

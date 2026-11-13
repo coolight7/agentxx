@@ -1817,7 +1817,7 @@ polled_tool(ctx, name, depict, schema,
    (会拒掉所有低于它的主程序/插件), 并在 `CHANGELOG` 与本节点名;
 5. **禁止**: 重排成员、改成员签名、删除成员 —— 三者都可能不改变结构体大小, 版本号与
    `struct_size` 都拦不住, 会静默调到隔壁函数。要改就换新 IID;
-6. `boundaries` 的"成员顺序台账"规则冻结了每张表的成员顺序: 重排/删除会让它失败。
+6. `boundaries` 的"成员顺序清单"规则冻结了每张表的成员顺序: 重排/删除会让它失败。
 
 ### 17.5 跨边界结构体 (spec / input)
 
@@ -1863,7 +1863,7 @@ polled_tool(ctx, name, depict, schema,
 | 判定规则 | `plugin_runtime`：整表判定 (`version` 低 / 表长不足 / 更高版本 + 完整长度)、`ifaceHas` 三态、`ifaceHasVersion` 两态、`specSizeOk` 三态、`specHas` 两态 |
 | 布局冻结 | `plugin_runtime`：9 个跨边界结构体的字段偏移与大小断言 (含 6 个零成本改动、3 个 +8) |
 | 四件套 | `boundaries`：逐表 IID / `VERSION` / `MIN_VERSION` / `BASELINE_SIZE` 齐全、`MIN_VERSION <= VERSION`、`IfaceMeta` 特化数 = 表数 = 26 |
-| 成员顺序 | `boundaries`：成员顺序台账逐表比对 (防重排 / 防删除) |
+| 成员顺序 | `boundaries`：成员顺序清单逐表比对 (防重排 / 防删除) |
 | 长度门槛 | `plugin_runtime`：`specSizeOk` 三态与 `specHas` 两态的正反例 |
 | C ABI | `test_plugin_abi_c17.c` + `plugin_runtime`：C 与 C++ 两侧逐项对照 |
 
@@ -2034,7 +2034,7 @@ plugin:
 | | `unregister_timer(id)` | 注销定时器 |
 | 后台任务 (v2) | `submit_async_work(spec, out_id)` | 提交后台任务; 结果发到固定事件 `agentxx.agent.async.done`, 标识用返回的 `asyncId` |
 | | `cancel_async_work(id)` | 只能取消本实例提交的 (别人的任务返回 `ERR_ARG`) |
-| | `get_async_work(id, out_json)` / `list_async_work(session_id, out_json)` | 台账查询; `session_id` 空 = 本实例提交的全部 |
+| | `get_async_work(id, out_json)` / `list_async_work(session_id, out_json)` | 任务表查询; `session_id` 空 = 本实例提交的全部 |
 
 错误码 (`AGENTXX_PLUGIN_RUNTIME_*`): `OK(0)` / `ERR_ARG` / `ERR_STATE` / `ERR_NOT_FOUND` /
 `ERR_BUDGET` / `ERR_CONFLICT` / `ERR_UNSUPPORTED` / `ERR_FAILED`。具体原因写日志

@@ -867,8 +867,8 @@ static YamlAppConfig parseYamlConfigNode(
     // - interrupt_policy:     权限询问/中断处理策略 bubble|deny|allow (默认 bubble)
     // - session_store:        后台任务会话是否落盘 (默认 false)
     // - session_store_keep_days: 落盘目录保留天数 (默认 0 = 不自动清理)
-    // - linger_ms:            结束后台账保留时长 (默认 300000)
-    // - result_max_bytes:     台账结果正文上限 (默认 8192)
+    // - linger_ms:            结束后任务表里保留的时长 (默认 300000)
+    // - result_max_bytes:     任务表里保留的结果正文上限 (默认 8192)
     const auto asyncWorkNode = mapChild(root, "async_work");
     if (isNodePresent(asyncWorkNode)) {
         auto readBool = [&](std::string_view key, bool& out) {

@@ -15,12 +15,12 @@ namespace io {
 namespace {
 
 /// 信息侧边栏「后台任务」段最多下发的条数
-/// - 侧边栏只有几行可见高度, 发多了反而看不到标的 (完整台账由 `agentxx_async_query`
+/// - 侧边栏只有几行可见高度, 发多了反而看不到标的 (完整任务表由 `agentxx_async_query`
 ///   与插件接口给出)
 constexpr size_t kAsyncWorksInStats = 10;
 
-/// 挑选之前先从台账取的条数
-/// - 台账按 `asyncId` 字典序 (async-10 排在 async-2 之前) 且含已结束的 linger 条目,
+/// 挑选之前先从任务表取的条数
+/// - 任务表按 `asyncId` 字典序 (async-10 排在 async-2 之前) 且含已结束的 linger 条目,
 ///   直接按上限取会把正在运行的挤掉; 先多取一批再按状态挑
 constexpr size_t kAsyncWorksFetch = 100;
 
@@ -35,11 +35,11 @@ int asyncWorkStateRank(std::string_view state) {
     return 2; // done / failed / canceled
 }
 
-/// 台账条目 → 界面条目
+/// 任务表条目 → 界面条目
 ///
-/// 台账 (`AsyncWorkManager::listJson`) 是给模型/插件看的完整记录, 界面只需要少量
+/// 任务表 (`AsyncWorkManager::listJson`) 是给模型/插件看的完整记录, 界面只需要少量
 /// 字段: 状态、名字、已跑时长与排队位。已跑时长由时间戳当场算出 (运行中 = 现在 -
-/// 开始, 已结束 = 结束 - 开始), 台账里不存"时长"避免每次写回。
+/// 开始, 已结束 = 结束 - 开始), 任务表里不存"时长"避免每次写回。
 ///
 /// - `args`:
 ///     - [works] `AgentHost::asyncWorksJson` 返回的数组
@@ -92,7 +92,7 @@ std::vector<WireAsyncWorkItem>
         row.item = std::move(work);
         rows.push_back(std::move(row));
     }
-    // 稳定排序: 同一权重与时间戳的条目保持台账原顺序
+    // 稳定排序: 同一权重与时间戳的条目保持任务表原顺序
     std::stable_sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) {
         if (a.rank != b.rank) {
             return a.rank < b.rank;

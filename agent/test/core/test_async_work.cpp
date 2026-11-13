@@ -215,7 +215,7 @@ public:
     std::mutex        mutex;
 };
 
-/// 探针: 模拟"驱动会话的端点" (生产里是 SessionServerAgentIO), 只关心台账变化通知
+/// 探针: 模拟"驱动会话的端点" (生产里是 SessionServerAgentIO), 只关心任务表变化通知
 class AwProbeSink : public agentxx::agent::SessionInputSink {
 public:
 
@@ -434,7 +434,7 @@ asio::awaitable<void> test_unbounded_queue() {
     co_return;
 }
 
-/// 4. 台账 linger 清扫: linger=0 时收尾的条目在下一次提交时被清掉
+/// 4. 任务表 linger 清扫: linger=0 时收尾的条目在下一次提交时被清掉
 asio::awaitable<void> test_linger_sweep() {
     auto fx = std::make_shared<AwFixture>();
     XX_TEST_EXPECT_TRUE(buildFixture(fx, /*maxConcurrent=*/2));
@@ -491,7 +491,7 @@ asio::awaitable<void> test_session_id_is_async_id() {
     });
     XX_TEST_EXPECT_FALSE(asyncId.empty());
 
-    // 运行期节点: agentId 与 sessionId 都在台账/节点里
+    // 运行期节点: agentId 与 sessionId 都在任务表/节点里
     const auto ledger  = fx->host->asyncWorkJson(asyncId);
     const auto agentId = ledger.value("agentId", std::string{});
     XX_TEST_EXPECT_EQ(ledger.value("state", std::string{}), std::string{"running"});
@@ -513,7 +513,7 @@ asio::awaitable<void> test_session_id_is_async_id() {
     co_return;
 }
 
-/// 6. 取消: 排队中直接出队; 运行中置令牌, 终态仍落台账
+/// 6. 取消: 排队中直接出队; 运行中置令牌, 终态仍落任务表
 asio::awaitable<void> test_cancel_queued_and_running() {
     auto fx = std::make_shared<AwFixture>();
     XX_TEST_EXPECT_TRUE(buildFixture(fx, /*maxConcurrent=*/1));
@@ -561,7 +561,7 @@ asio::awaitable<void> test_cancel_queued_and_running() {
     co_return;
 }
 
-/// 7. `kind=tool`: 在创建者工具表里执行同名工具, 结果写入台账/事件
+/// 7. `kind=tool`: 在创建者工具表里执行同名工具, 结果写入任务表/事件
 asio::awaitable<void> test_tool_kind_runs() {
     auto fx = std::make_shared<AwFixture>();
     XX_TEST_EXPECT_TRUE(buildFixture(fx));
@@ -642,7 +642,7 @@ asio::awaitable<void> test_tool_kind_failures() {
     auto r3                  = fx->host->submitAsyncWork(std::move(unknown), ctx);
     XX_TEST_EXPECT_TRUE(r3.accepted);
 
-    // 工具自己返回失败: 台账按 failed 记, 正文进 error
+    // 工具自己返回失败: 任务表按 failed 记, 正文进 error
     agentxx::agent::AsyncWorkSpec failing;
     failing.kind             = agentxx::agent::AsyncWorkKind::Tool;
     failing.toolName         = "aw_test_sleep";
@@ -969,9 +969,9 @@ asio::awaitable<void> test_session_store_claim() {
     co_return;
 }
 
-/// 11. 创建者已销毁: 只靠提交快照继续跑完, 结果只落台账 (无中枢可投递)
+/// 11. 创建者已销毁: 只靠提交快照继续跑完, 结果只落任务表 (无中枢可投递)
 /// - `creator` 传空 + 快照里带配置: 仍能派生并跑完
-/// - 没有创建者上下文就没有中枢: `delivered=false`, 正文仍可在台账查到
+/// - 没有创建者上下文就没有中枢: `delivered=false`, 正文仍可在任务表查到
 asio::awaitable<void> test_creator_gone_still_runs() {
     auto fx = std::make_shared<AwFixture>();
     XX_TEST_EXPECT_TRUE(buildFixture(fx));
@@ -1002,7 +1002,7 @@ asio::awaitable<void> test_creator_gone_still_runs() {
     co_return;
 }
 
-/// 12. 台账变化通知驱动端点 (界面「后台任务」段靠它刷新)
+/// 12. 任务表变化通知驱动端点 (界面「后台任务」段靠它刷新)
 ///
 /// - 提交 (入队) / 起跑 / 终态 / 排队中被取消都经
 ///   `SessionInputSink::onAsyncWorksChanged` 通知创建者会话的端点

@@ -8,7 +8,7 @@
 //   并且在本次运行内不执行任何工具 (工具定义只用于保持前缀一致)
 //
 // 本模块用模拟器的"模拟前缀缓存"度量命中比例 (主程序侧缓存用量解析会把
-// cached_tokens 记入用量台账), 因此断言的是真实的请求前缀一致性。
+// cached_tokens 记入用量记录), 因此断言的是真实的请求前缀一致性。
 
 #include "agentxx-test/core/test_prompt_cache_prefix.h"
 
@@ -165,7 +165,7 @@ asio::awaitable<void> run_prefix_body(
     cfg->model.apiKey    = "EMPTY";
     cfg->model.modelName = "default-model";
     cfg->permissionMode  = agentxx::agent::PermissionMode::Pass;
-    // 打开会话持久化: 用量台账 (usage 表) 才能按请求逐条核对
+    // 打开会话持久化: 用量记录 (usage 表) 才能按请求逐条核对
     cfg->enableSessionStore    = true;
     cfg->sessionStoreDirectory = storeRoot;
     cfg->prompt.systemPrompt   = "SYSTEM-PROMPT-BASE";
@@ -275,7 +275,7 @@ asio::awaitable<void> run_prefix_body(
             XX_TEST_EXPECT_TRUE(agent->agentContext->metrics->compactions() >= 1);
         }
     }
-    // ⑦ 压缩子代理的用量记到父会话台账 (子代理没有自己的 sessionStore):
+    // ⑦ 压缩子代理的用量记到父会话用量记录 (子代理没有自己的 sessionStore):
     //    父会话此前 2 条请求 → 现在应有第 3 条, 且内容就是压缩请求本身
     {
         auto store = agent->agentContext->sessions->sessionStore;
@@ -294,7 +294,7 @@ asio::awaitable<void> run_prefix_body(
         }
     }
     // ⑧ 自动压缩经总线到达时 `spawnBatch(req)` 不带父上下文:
-    //    用量仍须回退到根会话台账 (否则自动压缩的调用又记不下来)
+    //    用量仍须回退到根会话用量记录 (否则自动压缩的调用又记不下来)
     if (auto rootCtx = agent->agentContext; rootCtx && rootCtx->sessions->sessionStore) {
         auto store      = rootCtx->sessions->sessionStore;
         auto beforeRows = store->recentUsage(sessionId, 20).size();

@@ -120,8 +120,8 @@ struct SessionStoreHooks {
 /// - 与 [ContextStats::contextTokens] 的区别: 后者是"当前装了多少" (随压缩回落),
 ///   这里是"累计花掉多少", 只增不减
 /// - 每次模型调用结算时累加 (见 nodes/modelcall.cpp 的用量记账)
-/// - 会话第一次加载时由用量台账 (SessionStore 的 usage 表聚合) 恢复, 因此跨进程
-///   重启后继续累计; 本结构自身不单独落库, 重启后的数值由台账重新聚合得到
+/// - 会话第一次加载时由用量记录 (SessionStore 的 usage 表聚合) 恢复, 因此跨进程
+///   重启后继续累计; 本结构自身不单独落库, 重启后的数值由用量记录重新聚合得到
 /// - 字段含义与 wire 协议 [agentxx::agent::WireContextStats] 的用量段一致
 struct SessionUsageTotals {
     /// 输入 (prompt) token 累计; 含命中缓存与写入缓存的输入
@@ -906,7 +906,7 @@ public:
     /// 用量记账目标 (子代理把用量算到父/根会话): 为空时按本 agent 自己的会话记账
     /// - 由 `AgentHost::spawnOneTask` 派生 subagent 时填入父上下文的 sessions 与
     ///   父会话 id: 子代理 (含上下文压缩) 的模型调用计入用户看得见的会话,
-    ///   台账 `usage` 表与会话累计用量都落在父会话上
+    ///   用量记录 `usage` 表与会话累计用量都落在父会话上
     /// - 子代理自己的 SessionsManager 没有 sessionStore, 不设这个目标就记不下来
     std::shared_ptr<SessionsManager> usageAccountSessions = nullptr;
     /// 用量记账的会话 id (usageAccountSessions 非空时生效)

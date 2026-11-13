@@ -203,7 +203,7 @@ TaskSubmitResult ChatbotTaskManager::submit(const TaskSubmit& request) {
     record.submittedAtMs = nowMs();
     records_.push_back(std::move(record));
 
-    // 台账只留最近的若干条: 先丢过期的已结束记录, 再丢最旧的已结束记录
+    // 任务记录只留最近的若干条: 先丢过期的已结束记录, 再丢最旧的已结束记录
     if (options_.maxRecords > 0 && records_.size() > options_.maxRecords) {
         const size_t overflow = records_.size() - options_.maxRecords;
         size_t       dropped  = 0;
@@ -287,7 +287,7 @@ bool ChatbotTaskManager::onEvent(
 ) {
     auto* record = mutableRecordOf(asyncId);
     if (record == nullptr) {
-        // 不是本实例经手提交的 (或已被台账挤掉): 不认
+        // 不是本实例经手提交的 (或已被任务记录挤掉): 不认
         return false;
     }
     Json payload;
@@ -322,7 +322,7 @@ bool ChatbotTaskManager::onEvent(
                 // 排队中被取消: 没有起跑时间, 用提交时间当作结束时间的起点
                 record->startedAtMs = record->submittedAtMs;
             }
-            // 结果正文不在事件载荷里 (可能很大): 终态时向主程序台账要一次
+            // 结果正文不在事件载荷里 (可能很大): 终态时向主程序任务表要一次
             if (record->state == TaskState::Done && runtime_.resultOf) {
                 const auto json = runtime_.resultOf(record->asyncId);
                 if (!json.empty()) {
@@ -331,7 +331,7 @@ bool ChatbotTaskManager::onEvent(
                         record->resultHead
                             = headOf(textOf(entry, "result"), options_.resultHeadChars);
                     } catch (const std::exception&) {
-                        // 台账读不到就当没有正文 (会话里仍然有完整结果)
+                        // 任务记录读不到就当没有正文 (会话里仍然有完整结果)
                     }
                 }
             }

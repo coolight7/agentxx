@@ -182,6 +182,9 @@ struct EventWait {
 struct EventDelivery {
     std::string sessionId, text, source, delivery;
     std::string waitId, eventName, mode, ref;
+    /// 等待的归属标记 (`tool` / `plugin:<名>` / `runtime` / 框架自己的 `async_work`)
+    /// - 诊断用: 写进日志与等待记录, 投递决策不看它
+    std::string owner;
     bool        unpausePaused = false;
     /// 会话在跑一轮时直接丢弃 (插件触发器的 DROP_IF_BUSY 语义)
     bool        dropIfBusy = false;

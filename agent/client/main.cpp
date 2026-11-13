@@ -290,7 +290,7 @@ static void applyServerRuntimeConfig(
     config->eventAllowHeadlessTurn  = yamlCfg.eventAllowHeadlessTurn;
     config->eventDelivery           = yamlCfg.eventDelivery;
     // 异步任务 (yaml `async_work.*`): 开关 / 每队列额度 / 中断策略 / 会话落盘 /
-    // 台账保留时长与结果上限
+    // 任务表里保留的时长与结果上限
     config->enableAsyncWork = yamlCfg.enableAsyncWork;
     config->asyncWorkMaxConcurrent
         = static_cast<size_t>(std::max<int64_t>(1, yamlCfg.asyncWorkMaxConcurrent));

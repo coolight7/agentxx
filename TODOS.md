@@ -29,7 +29,6 @@
 - agentxx_async_await 得到结果却事件插入 done 仍然执行，导致重复
 - 中断特化渲染展开，把内容显示到下方
 - content 输出中断后续写时，tui 消息追加异常覆盖
-- cxx_utilxx 不能依赖 cxx_pluginxx
 - 插件自定义 tool 特化渲染逻辑顺序重构，提前注册声明特化名
 - share_store id 特化渲染
 - 透视UI，虚拟现实/玻璃显示(车挡风玻璃、眼镜)

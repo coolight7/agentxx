@@ -368,7 +368,7 @@ Absent (default): the sub-agent's default full tool set.)_"},
 
 ## What happens to the result
 - `notify` defaults to `true`: when the task finishes, its result is inserted into this conversation as an input — before your next model call if the turn is still running, or as a new turn if the turn already ended. You do not need to poll.
-- `notify:false`: the result stays in the task ledger; read it with `agentxx_async_query` or block with `agentxx_async_await`.
+- `notify:false`: the result stays in the task table; read it with `agentxx_async_query` or block with `agentxx_async_await`.
 - Permission for the target tool is checked once now, at submit time (same rules as calling it directly); the background run does not ask again.
 
 ## Delayed start
@@ -392,7 +392,7 @@ Absent (default): the sub-agent's default full tool set.)_"},
                       {"args",
                        "Argument object for that tool, passed through unchanged (same schema as calling it directly)."},
                       {"notify",
-                       "Insert the result into this conversation when the task finishes (default `true`). Set `false` to keep it in the ledger only."},
+                       "Insert the result into this conversation when the task finishes (default `true`). Set `false` to keep it in the task table only."},
                       {"label",
                        "Optional short display name for the task (default: the tool name or the sub-agent name)."},
                       {"delayMs",
@@ -418,7 +418,7 @@ Absent (default): the sub-agent's default full tool set.)_"},
 - `group` values: `all` (default, every task of this session), `queued`, `running`, `done`, `failed`, `canceled`.
 - A task still waiting for its `delayMs` shows up as `queued` with a `*` bullet and the time left.
 - Tasks started with `notify:true` also deliver their result as an input by themselves; querying again is harmless.
-- Finished tasks stay in the ledger for a while (`async_work.linger_ms`, default 5 minutes), then disappear.)_",
+- Finished tasks stay in the task table for a while (`async_work.linger_ms`, default 5 minutes), then disappear.)_",
               .args =
                   {
                       {"group",
@@ -437,6 +437,8 @@ Absent (default): the sub-agent's default full tool set.)_"},
 - `id` is required; `timeoutMs` is how long *you* wait for the result — delay + queue time + run time all count inside it. Default `30000`, capped at `300000`.
 - If the task is still waiting for its `delayMs` and the remaining delay is longer than `timeoutMs`, you get a note at once instead of a wait; drop the delay with `agentxx_async_manager` if you want it now.
 - A task that already finished returns its result immediately (no waiting, no event needed).
+- A task that is still running returns its result as soon as it finishes; that wait also cancels the automatic notification for it, so the body is not added twice.
+- A task that already finished returns its result from the task table right away. Asking again later returns it again — a tool call returns what it asks for; nothing is filtered.
 - Use it only when your next step really needs that result now; otherwise let `notify` deliver it, or keep working and query later.
 - On timeout you get a note instead of an error: query again or keep working. Cancelling the session interrupts the wait.)_",
               .args =
@@ -454,7 +456,7 @@ Absent (default): the sub-agent's default full tool set.)_"},
                   R"_(Change the background tasks of this session: cancel them, or adjust their start delay.
 
 ## `opt`
-- `cancel`: drop the task. A queued task is removed from the queue immediately (it never runs); a running task gets a cancellation request and stops at its next cancellation point (best effort). Either way it ends in the `canceled` state and stays in the ledger.
+- `cancel`: drop the task. A queued task is removed from the queue immediately (it never runs); a running task gets a cancellation request and stops at its next cancellation point (best effort). Either way it ends in the `canceled` state and stays in the task table.
 - `delay`: change the start delay of a queued task. `delayMs` is required: `> 0` waits that many milliseconds before it may start, `0` removes the delay so it can start right away. Tasks that are already running or finished cannot be changed.
 
 ## `id`

@@ -420,9 +420,9 @@ Context
   模型节点结束 (`EventBridge::handleNodeEnd`)、流式期间的 tps 定时推送、
   握手/切换会话 (`SessionServerAgentIO::sendContextStats`)、压缩完成。
 - agent 侧的累计值由 `Session::contextStats->usage` (`SessionUsageTotals`) 持有,
-  与用量台账 (`SessionStore` 的 `usage` 表) 在**同一处结算** (见
+  与用量记录 (`SessionStore` 的 `usage` 表) 在**同一处结算** (见
   [modelcall.cpp](/agent/lib/src/nodes/modelcall.cpp) 的 `recordUsage`), 因此界面数字与
-  落盘记录按同一套规则统计; 会话第一次加载时该累计值由台账聚合恢复
+  落盘记录按同一套规则统计; 会话第一次加载时该累计值由用量记录聚合恢复
   (`SessionsManager::getOrCreate*` 里的 `loaded.usage`), 进程重启后继续累计。
 - 文案键: `info.context` / `info.usedTokens` / `info.cacheTokens` / `info.inputTokens` /
   `info.outputTokens` / `info.cacheHitRate` / `info.contextEmpty`。
@@ -447,7 +447,7 @@ Context
 
 - 数据通道 `WireContextStats.asyncWorks` (追加字段, 不改消息类型; 老服务端不带时为空数组,
   界面显示 `( 无 )`): 最多 10 条, 服务端所有统计推送点都经
-  `io::makeWireContextStats` 组装 (置 `asyncWorks`, 取 `AgentHost` 台账里"本会话创建的"
+  `io::makeWireContextStats` 组装 (置 `asyncWorks`, 取 `AgentHost` 任务表里"本会话创建的"
   条目); 挑选顺序为 **运行 → 排队 → 完成** (完成按结束时间倒序), 已完成的 linger 条目
   不会把运行中的挤掉;
 - 条目字段 `{id, kind, name, state, elapsedMs, queueAhead}`: `state` 为
@@ -458,7 +458,7 @@ Context
   `hintColor` (不分状态);
 - 时长按 `mm:ss` (超过一小时 `h:mm:ss`) 显示; 排队中的条目不显示时长, 也**不显示
   排队位** (`queueAhead` 仍随线消息下发, 但界面不展示 —— 排队段的条目顺序就是先后);
-- **刷新时机**: 台账状态变化 (提交 / 起跑 / 终态 / 排队中被取消) 时 `AsyncWorkManager`
+- **刷新时机**: 任务表状态变化 (提交 / 起跑 / 终态 / 排队中被取消) 时 `AsyncWorkManager`
   通知创建者会话的驱动端点 (`SessionInputSink::onAsyncWorksChanged`), 端点合并后重推一次
   统计; 只要还有排队/运行中的条目就按秒续推 (已跑时长跟着走), 全部终态后推一次即停;
   无存活客户端时不推也不轮询;

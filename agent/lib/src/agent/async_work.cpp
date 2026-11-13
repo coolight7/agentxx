@@ -1,5 +1,6 @@
 #include "agentxx/agent/async_work.h"
 
+#include "agentxx/agent/async_wake.h"
 #include "agentxx/agent/agent_host.h"
 #include "agentxx/agent/config.h"
 #include "agentxx/agent/config_static.h"
@@ -28,69 +29,6 @@
 
 namespace agentxx {
 namespace agent {
-
-// ===========================================================================
-// AsyncWake
-// ===========================================================================
-
-/// 一次后台执行的唤醒器: 完成 / 取消 / 到期都叫醒等待方一次
-///
-/// 为什么不用轮询: 后台工具任务要等**两个信号** —— 执行体跑完 (只有一个原子标志)
-/// 与取消置位 (取消令牌里的原子标志)。等待普通条件没有现成的异步原语, 旧实现在
-/// 一个 50 ms 定时器循环里查标志: 每个运行中的工具任务每秒 20 次空转唤醒, 取消
-/// 还要等下一次醒来。这里改成通知式: 谁改变状态谁 `signal()`, 等待方只醒一次。
-///
-/// 线程约定:
-/// - `signal()` 任意线程可调: 只加锁记一次信号, 再投递到容器 io 线程取消等待
-/// - `wait()` **只能在容器 io 线程调**: 醒一次就返回, 由调用方复核 done / token / 到期
-/// - 信号不会丢也不会累积: 每轮等待最多消费一次已发生的信号 (旧信号不会把后续
-///   等待连续打醒成忙循环)
-class AsyncWake {
-public:
-
-    explicit AsyncWake(asio::io_context::executor_type executor) :
-        timer_(std::make_shared<asio::steady_timer>(std::move(executor))) {}
-
-    /// 叫醒等待方一次 (完成 / 取消 / 到期)
-    void signal() {
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            ++signaled_;
-        }
-        // 投递体捕获定时器本身: 管理器/任务已经释放时也能安全取消
-        asio::post(timer_->get_executor(), [timer = timer_]() { timer->cancel(); });
-    }
-
-    /// 等一次唤醒
-    /// - `timeout` <= 0: 不设到期, 只等 `signal()`
-    /// - 到期 (`timeout` > 0) 时也返回, 由调用方按自己的截止时刻判断
-    asio::awaitable<void> wait(std::chrono::milliseconds timeout) {
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            if (consumed_ != signaled_) {
-                consumed_ = signaled_;
-                co_return; // 信号已经发生: 不必再等
-            }
-        }
-        if (timeout.count() > 0) {
-            timer_->expires_after(timeout);
-        } else {
-            timer_->expires_at(std::chrono::steady_clock::time_point::max());
-        }
-        utilxx_base::AsioErrorCode ec;
-        co_await timer_->async_wait(asio::redirect_error(asio::use_awaitable, ec));
-        std::lock_guard<std::mutex> lock(mutex_);
-        consumed_ = signaled_;
-    }
-
-private:
-
-    std::shared_ptr<asio::steady_timer> timer_;
-    std::mutex                          mutex_;
-    /// 已发生的信号数与已消费的信号数 (差值 = 还没被看到的信号)
-    uint64_t                            signaled_ = 0;
-    uint64_t                            consumed_ = 0;
-};
 
 void installAsyncInterruptResponders(
     const std::shared_ptr<agentxx::events::EventBus>& bus,
@@ -194,8 +132,19 @@ void purgeExpiredSessionDirs(const std::string& root, size_t keepDays) {
 /// 结果事件名 (单一事件名, 靠值里的 `asyncId` 区分是哪一条任务)
 constexpr std::string_view kAsyncDoneEvent = agentxx::events::naming::kAgentAsyncDoneEvent;
 
-/// 结果事件与台账的归属标记 (`plugin.` 之外的自有标记, 只用于日志/诊断)
-constexpr std::string_view kAsyncOwner = "async_work";
+/// 结果事件与任务表的归属标记 (`plugin.` 之外的自有标记, 只用于日志/诊断)
+constexpr std::string_view kAsyncOwner = agentxx::events::naming::kAgentAsyncNotifyOwner;
+
+/// 等终态票据的分片等待上限 (毫秒)
+/// - 取消令牌只有轮询接口 (`is_cancelled`), 分片让取消最多晚这么久被看到;
+///   任务真正结束时票据会立刻叫醒, 所以这只是一次检查上限
+constexpr int64_t kTicketSliceMs = 100;
+
+/// 任务是否已到终态
+bool isTerminalState(AsyncWorkState state) {
+    return state == AsyncWorkState::Finished || state == AsyncWorkState::Failed
+           || state == AsyncWorkState::Canceled;
+}
 int64_t systemNowMs() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
                std::chrono::system_clock::now().time_since_epoch()
@@ -210,7 +159,7 @@ int64_t steadyNowMs() {
         .count();
 }
 
-/// 通知创建者会话的端点: 台账变了 (提交 / 起跑 / 终态)
+/// 通知创建者会话的端点: 任务表变了 (提交 / 起跑 / 终态)
 ///
 /// 后台任务队列的状态变化不会自己触发任何下发 —— 界面上看到的「后台任务」段是随
 /// 上下文统计来的, 只有端点 (SessionServerAgentIO) 能推。端点实现了
@@ -223,7 +172,7 @@ int64_t steadyNowMs() {
 /// - `args`:
 ///     - [host]      容器 (弱引用由调用方给, 可能在投递前被释放)
 ///     - [creator]   任务创建者的上下文 (弱引用, 同上)
-///     - [sessionId] 创建者会话 id (台账里登记的那个)
+///     - [sessionId] 创建者会话 id (任务表里登记的那个)
 void postAsyncWorksChanged(
     const std::shared_ptr<AgentHost>&    host,
     const std::shared_ptr<AgentContext>& creator,
@@ -801,36 +750,8 @@ AsyncWorkSubmitResult
         );
     }
 
-    // 结果直接唤醒创建者会话 (`notify_delivery`): 入队前就替它登记定向等待,
-    // 任务完成时值经中枢投递成一条会话输入 (don't rely on the model to watch)
-    if (!spec.notifyDelivery.empty() && creator && creator->eventHub) {
-        auto hub           = creator->eventHub;
-        const auto asyncId = out.asyncId;
-        const auto session = spec.creatorSessionId;
-        const auto delivery = spec.notifyDelivery;
-        agentxx::events::EventWaitSpec waitSpec;
-        waitSpec.event         = std::string{kAsyncDoneEvent};
-        waitSpec.mode          = "first";
-        waitSpec.delivery      = delivery;
-        waitSpec.originSession = session;
-        waitSpec.owner         = std::string{kAsyncOwner};
-        waitSpec.ref           = asyncId;
-        waitSpec.match         = utilxx_base::Json{{"asyncId", asyncId}};
-        waitSpec.replay        = false;
-        bool executed          = false;
-        hub->callSync(
-            [&](agentxx::events::EventHub& h) {
-                h.watch(std::move(waitSpec));
-            },
-            &executed
-        );
-        if (!executed) {
-            XX_LOGW(
-                "[async_work] {}: could not register the session wake-up wait (hub busy)",
-                asyncId
-            );
-        }
-    }
+    // 结果回到会话 (`notifyDelivery`): 不做任何登记 —— 任务收尾时直接交给
+    // 会话端点 (见 [finishEntry]); 若那时有 await 在等, 正文交给等待方, 不再重复投递
 
     // 推进队列 (容器 io 线程); 提交方不等待
     // - 投递体持有容器强引用: 容器 (含本管理器) 在任务排空之前不会被释放, `this` 始终有效
@@ -857,7 +778,7 @@ void AsyncWorkManager::pump(std::string_view queueKey) {
         std::string                   sessionId;
     };
     std::vector<Launch>      launches;
-    /// 排队超时到期的条目 (锁外走 finishEntry: 它会再持锁并重写台账)
+    /// 排队超时到期的条目 (锁外走 finishEntry: 它会再持锁并重写任务表)
     std::vector<std::string> queueTimeouts;
     std::vector<int64_t>     queueTimeoutLimits;
     {
@@ -875,7 +796,7 @@ void AsyncWorkManager::pump(std::string_view queueKey) {
             const std::string& queuedId = queue[index];
             auto               eit      = entries_.find(queuedId);
             if (eit == entries_.end() || eit->second.state != AsyncWorkState::Queued) {
-                // 台账已回收 / 已被别的路径置终态: 跳过
+                // 任务表已回收 / 已被别的路径置终态: 跳过
                 queue.erase(queue.begin() + static_cast<std::ptrdiff_t>(index));
                 continue;
             }
@@ -1224,7 +1145,9 @@ void AsyncWorkManager::finishEntry(
     std::string                                queueKey;
     std::string                                sessionId;
     std::string                                eventName;
+    std::string                                notifyDelivery;
     std::string                                sessionStoreRoot;
+    std::vector<std::weak_ptr<AsyncResultTicket>> waiters;
     std::shared_ptr<AgentContext>              creator;
     AsyncWorkEventFn                           onEvent;
     std::shared_ptr<agentxx::util::KeyMetrics> metrics;
@@ -1243,11 +1166,14 @@ void AsyncWorkManager::finishEntry(
         queueKey         = entry.queueKey;
         sessionId        = entry.creatorSessionId;
         eventName        = entry.spec.eventName;
+        notifyDelivery   = entry.spec.notifyDelivery;
         sessionStoreRoot = entry.spec.sessionStoreRoot;
         creator          = entry.creatorCtx.lock();
         onEvent          = entry.spec.onEvent;
         metrics          = entry.metrics;
         entry.wake.reset();
+        // 正在等终态的调用: 取走票据 (锁外叫醒它们), 本次不再自动投递
+        waiters.swap(entry.waiters);
         if (entry.state == AsyncWorkState::Queued) {
             // 排队中终止: 从队列摘除 (取消 / 排队超时都走这里)
             if (auto qit = queues_.find(queueKey); qit != queues_.end()) {
@@ -1284,23 +1210,64 @@ void AsyncWorkManager::finishEntry(
         entry.lingerDeadlineSteadyMs = steadyNowMs() + entry.lingerMs;
     }
 
-    // ---- 结果投递: 事件 (主路) ----
-    // 排队中取消/超时的任务同样要发: 否则 `await` 会挂到自己的超时, `notify` 也收不到
+    // ---- 叫醒等终态的调用 ----
+    // 它们醒来后自己读任务表 (正文只有一份来源); 有人接了正文时本次不再自动投递。
+    // 排队中取消/超时的任务同样叫醒: 否则等待方只能挂到自己的超时
+    size_t woken = 0;
+    for (auto& weak : waiters) {
+        if (auto ticket = weak.lock()) {
+            ticket->ready.store(true, std::memory_order_release);
+            ticket->wake->signal();
+            ++woken;
+        }
+    }
+
+    // ---- 结果事件: 纯广播 (插件 / 外部订阅者) ----
+    // 不再承担"把结果交给会话"的职责 (那个直接在下面做)
+    const std::string evName = eventName.empty() ? std::string{kAsyncDoneEvent} : eventName;
+    auto              value  = utilxx_base::Json{
+        {"asyncId",          entryId    },
+        {"kind",             toString(kind)},
+        {"name",             name       },
+        {"content",          content    },
+        {"hasError",         hasError   },
+        {"canceled",         canceled   },
+        {"errorMessage",     error      },
+        {"creatorSessionId", sessionId  },
+        {"startedAtMs",      startedAtMs},
+        {"finishedAtMs",     finishedAtMs},
+    };
+
+    // ---- 结果回到创建者会话 (`notify_delivery`) ----
+    // 没有等待方时直接交给会话端点: 文本与旧的事件输入同一形态
+    // (`[Event] ... / [Info] ... / [Content] ...`), 界面与协议零改动
+    bool        deliveredToSession = false;
+    std::string deliveryReason;
+    if (woken == 0 && !notifyDelivery.empty() && creator && creator->eventHub) {
+        agentxx::events::EventWait synthetic;
+        synthetic.spec.event = evName;
+        synthetic.spec.mode  = "first";
+        synthetic.spec.ref   = std::string{entryId};
+        // 这里不是事件等待 (直接交付): `[Info]` 的 wait 行给 `-`, 不再编一个不存在的 id
+        synthetic.waitId = "-";
+        const std::vector<utilxx_base::Json> values{value};
+        const auto contentText = creator->eventHub->contentText(sessionId, evName, values);
+        agentxx::events::EventDelivery delivery;
+        delivery.sessionId     = sessionId;
+        delivery.text          = agentxx::events::renderEventText(synthetic, "value", contentText);
+        delivery.source        = std::string{agentxx::agent::kInputSourceEventPrefix} + evName;
+        delivery.delivery      = notifyDelivery;
+        delivery.eventName     = evName;
+        delivery.ref           = std::string{entryId};
+        // 已跑完的事必须进上下文: 会话停在暂停态也要解除
+        delivery.unpausePaused = true;
+        const auto result      = creator->eventHub->deliver(delivery, &deliveryReason);
+        deliveredToSession     = result == agentxx::events::DeliverResult::Queued
+                             || result == agentxx::events::DeliverResult::Deferred;
+    }
+
     bool delivered = false;
     if (creator && creator->eventHub) {
-        const std::string evName = eventName.empty() ? std::string{kAsyncDoneEvent} : eventName;
-        auto              value  = utilxx_base::Json{
-            {"asyncId",          entryId    },
-            {"kind",             toString(kind)},
-            {"name",             name       },
-            {"content",          content    },
-            {"hasError",         hasError   },
-            {"canceled",         canceled   },
-            {"errorMessage",     error      },
-            {"creatorSessionId", sessionId  },
-            {"startedAtMs",      startedAtMs},
-            {"finishedAtMs",     finishedAtMs},
-        };
         creator->eventHub->postValue(evName, std::move(value), kAsyncOwner);
         creator->eventHub->postEnd(
             evName,
@@ -1323,19 +1290,29 @@ void AsyncWorkManager::finishEntry(
         metrics->noteAsyncWorkFinished(hasError, canceled, finishedAtMs - startedAtMs);
     }
     XX_LOGI(
-        "[async_work] finished {} state={} hasError={} delivered={} elapsed={}ms",
+        "[async_work] finished {} state={} hasError={} delivered={} toSession={} awaited={} "
+        "elapsed={}ms",
         entryId,
         toString(canceled ? AsyncWorkState::Canceled
                           : (hasError ? AsyncWorkState::Failed : AsyncWorkState::Finished)),
         hasError,
         delivered,
+        deliveredToSession,
+        woken,
         finishedAtMs - startedAtMs
     );
     if (!delivered) {
         XX_LOGW(
             "[async_work] {} finished but the creator has no event hub, result kept in the "
-            "ledger only (creatorSession={})",
+            "task table only (creatorSession={})",
             entryId,
+            sessionId
+        );
+    } else if (!notifyDelivery.empty() && woken == 0 && !deliveredToSession) {
+        XX_LOGW(
+            "[async_work] {} result not put into the session ({}; creatorSession={})",
+            entryId,
+            deliveryReason.empty() ? std::string{"not delivered"} : deliveryReason,
             sessionId
         );
     }
@@ -1350,7 +1327,7 @@ void AsyncWorkManager::finishEntry(
         );
     }
 
-    // 界面: 终态 (完成/失败/取消; 结束后会在台账里 linger 一段时间供回看)
+    // 界面: 终态 (完成/失败/取消; 结束后会在任务表里 linger 一段时间供回看)
     postAsyncWorksChanged(host, creator, sessionId);
 
     // 提交方回调: 终态 (取消优先: 取消时即使带错误也按取消上报)
@@ -1603,6 +1580,82 @@ utilxx_base::Json AsyncWorkManager::entryJson(std::string_view asyncId) const {
         j["result"] = e.resultText;
     }
     return j;
+}
+
+asio::awaitable<AsyncWorkManager::WaitOutcome> AsyncWorkManager::waitTerminal(
+    std::string_view                              asyncId,
+    int64_t                                       timeoutMs,
+    std::shared_ptr<neograph::graph::CancelToken> token
+) {
+    auto host = host_.lock();
+    if (!host || asyncId.empty()) {
+        co_return WaitOutcome::AlreadyTerminal;
+    }
+
+    // 票据只在内存里, 任务收尾时被取走; 不参与正文 (正文只有任务表一份)
+    auto ticket = std::make_shared<AsyncResultTicket>(host->ioCtx()->get_executor());
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto                        it = entries_.find(asyncId);
+        if (it == entries_.end() || isTerminalState(it->second.state)) {
+            // 已经结束 (或已被 linger 清扫): 调用方直接去读任务表
+            co_return WaitOutcome::AlreadyTerminal;
+        }
+        it->second.waiters.push_back(ticket);
+    }
+
+    /// 离开时摘票 (已终态时票据已被管理器取走, 摘不到也没关系)
+    struct WaiterGuard {
+        AsyncWorkManager*                        self = nullptr;
+        std::string                              asyncId;
+        std::shared_ptr<AsyncResultTicket>        ticket;
+        ~WaiterGuard() {
+            if (self != nullptr) {
+                self->removeWaiter(asyncId, ticket);
+            }
+        }
+    } guard{this, std::string{asyncId}, ticket};
+
+    const auto deadline = timeoutMs > 0 ? steadyNowMs() + timeoutMs : int64_t{0};
+    while (true) {
+        if (ticket->ready.load(std::memory_order_acquire)) {
+            co_return WaitOutcome::Filled;
+        }
+        if (token && token->is_cancelled()) {
+            co_return WaitOutcome::Canceled;
+        }
+        const auto now = steadyNowMs();
+        if (deadline > 0 && now >= deadline) {
+            co_return WaitOutcome::TimedOut;
+        }
+        // 分片等待: 取消令牌只有轮询接口 (没有回调), 分片让取消最多晚一片被看到;
+        // 任务真正结束时票据会立刻叫醒, 所以这只是一次上限
+        int64_t slice = kTicketSliceMs;
+        if (deadline > 0) {
+            slice = std::min<int64_t>(slice, deadline - now);
+        }
+        co_await ticket->wake->wait(std::chrono::milliseconds{std::max<int64_t>(1, slice)});
+    }
+}
+
+void AsyncWorkManager::removeWaiter(
+    std::string_view                   asyncId,
+    const std::shared_ptr<AsyncResultTicket>& ticket
+) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto                        it = entries_.find(asyncId);
+    if (it == entries_.end()) {
+        return;
+    }
+    auto& waiters = it->second.waiters;
+    waiters.erase(
+        std::remove_if(
+            waiters.begin(),
+            waiters.end(),
+            [&](const auto& weak) { return weak.lock() == ticket; }
+        ),
+        waiters.end()
+    );
 }
 
 utilxx_base::Json AsyncWorkManager::listJson(

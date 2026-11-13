@@ -3016,7 +3016,7 @@ void TUIClientAgentIO::onContextStats(const agentxx::agent::WireContextStats& st
             st.sessionTitle = stats.sessionTitle;
         }
         // 本会话创建的后台任务 (Info 侧边栏「后台任务」段): 每次推送都是当前快照,
-        // 直接覆盖 —— 台账状态变化 (排队/起跑/终态) 后服务端会主动重推, 运行期间
+        // 直接覆盖 —— 任务表状态变化 (排队/起跑/终态) 后服务端会主动重推, 运行期间
         // 每秒一次 (已跑时长跟着走); 完成后在 linger 期间仍会带出, 供回看
         st.asyncWorks.clear();
         st.asyncWorks.reserve(stats.asyncWorks.size());
