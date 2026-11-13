@@ -24,6 +24,10 @@ find_program(CCACHE_PROGRAM ccache)
 # 建议使用 c++ 26 
 set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED OFF)
+# 关闭 C++20 模块扫描 (本项目不用 import std / 模块单元): VS 生成器会给每个
+# 工程跑 ComputeStdModulesCompileInputs / GetLibraryModuleSources, 每次构建都
+# 白花时间 (实测与源文件是否修改无关)。独立构建本目录时也生效
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
 if(XX_IS_MSVC_D)
   list(PREPEND CMAKE_FIND_LIBRARY_SUFFIXES .lib .a)
@@ -95,50 +99,45 @@ add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../plugins" agentxx_plugins_builti
 list(APPEND agentxx_SOURCES ${AGENTXX_BUILTIN_PLUGIN_MANIFEST_SOURCE})
 
 # ===== 目标创建 =====
-# - GCC/Clang: 通过 OBJECT 库把 62 个源文件只编译一次，共享/静态库复用同一批 .o，
-#   编译时间近乎减半。AGENTXX_EXPORTS 等宏在当前代码中已无实际引用，故可安全共用。
-#   注意: 不能用 target_link_libraries(shared PRIVATE obj) 关联 OBJECT 库，
-#   否则 PackageProject 生成的 install(EXPORT) 会因 obj 不在导出集中而报错；
-#   改为把 usage requirements (宏/头文件路径) 统一设置到 obj 与共享/静态库上。
+# - 全部编译器都走 OBJECT 库: 源文件只编译一次, 共享库/静态库复用同一批 .obj
+#   (编译时间近乎减半)。注意: 不能用 target_link_libraries(shared PRIVATE obj)
+#   关联 OBJECT 库, 否则 PackageProject 生成的 install(EXPORT) 会因 obj 不在导出集中
+#   而报错; 改为把 usage requirements (宏/头文件路径) 统一设置到 obj 与共享/静态库上。
 #   对共享/静态库用 PUBLIC 即可: 它们无源文件可编，编译部分静默忽略，
 #   INTERFACE 部分照常传播给 client/test；obj 的 INTERFACE 部分无人处理，均无害。
-# - MSVC: 保留原有双编译路径 (dllexport 等符号语义差异，避免行为回归)。
-if (XX_IS_MSVC_D)
-  # 创建 动态库/静态库
-  add_library(agentxx_shared SHARED ${agentxx_SOURCES})
-  add_library(agentxx_static STATIC ${agentxx_SOURCES})
-  set(_AGENTXX_USAGE_TARGETS agentxx_shared agentxx_static)
-else ()
-  add_library(agentxx_obj OBJECT ${agentxx_SOURCES})
-  set_target_properties(agentxx_obj PROPERTIES POSITION_INDEPENDENT_CODE ON)
-  add_library(agentxx_shared SHARED $<TARGET_OBJECTS:agentxx_obj>)
-  add_library(agentxx_static STATIC $<TARGET_OBJECTS:agentxx_obj>)
-  set(_AGENTXX_USAGE_TARGETS agentxx_obj agentxx_shared agentxx_static)
+# - MSVC 曾经为静态/动态各编译一遍 (担心 dllexport 语义差异), 但导出标记是
+#   ffi_api.h 里无条件的 `__declspec(dllexport)` (与目标无关), 而 `AGENTXX_EXPORTS`
+#   宏在代码里已无引用 —— 两种产物的编译参数完全一致, 所以也共用同一批 .obj
+#   (导出面未变: dumpbin /exports 仍有全部 agentxx_ffi_* 符号)
 
-  # PCH: 只预编译稳定第三方头 (std/fmt/asio/boost.exception)，项目自身头不参与，
-  # 避免项目头文件改动时触发全部重编。
-  # 第三方头须用 <...> 形式: 非 <> 形式会被 CMake 当作源目录相对路径解析，
-  # 而 fmt/asio/boost 位于 SYSTEM 安装目录 (install/include)，会解析失败
-  if (AGENTXX_ENABLE_PCH)
-    target_precompile_headers(agentxx_obj PRIVATE
-      <algorithm> <atomic> <chrono> <cstdint> <cstring> <deque> <exception>
-      <filesystem> <fstream> <functional> <map> <memory> <mutex> <optional>
-      <set> <sstream> <string> <string_view> <thread> <unordered_map>
-      <utility> <variant> <vector>
-      <fmt/format.h>
-      <asio/awaitable.hpp>
-      <boost/exception/exception.hpp>
-    )
-    # ccache + PCH 兼容 (GCC 特有): 不加 -fpch-preprocess 时 ccache 无法预处理
-    # 含 -include PCH 的源文件，全部标记 uncacheable，改动即全部重编。
-    # 仅对本目标生效，不影响第三方依赖的缓存
-    if (CCACHE_PROGRAM AND XX_IS_GCC_D)
-      target_compile_options(agentxx_obj PRIVATE -fpch-preprocess)
-    endif()
-  endif()
-endif ()
+# PCH 头列表由 agentxx_pch_headers() 提供 (agent/cmake/agentxx_split_sources.cmake):
+# 只预编译稳定第三方头 (std/fmt/asio/boost.exception), 项目自身头不参与,
+# 避免项目头文件改动时触发全部重编
 
-# 动态库控制导出符号
+# 三件套: 一个或多个 OBJECT 目标 (源文件只编一次) + agentxx_shared (libagentxx)
+# + agentxx_static (libagentxx_static; client/test/benchmark 只用它)
+#
+# 为什么 MSVC 要拆成多个 OBJECT 目标: VS 生成器只在"工程之间"并行编译 (见
+# cmake/agentxx_split_sources.cmake 开头说明)。GCC/Clang 不拆分。
+include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/agentxx_split_sources.cmake")
+
+# 每块最多 8 个源文件 (每块一个 MSBuild 工程; 块越小并行度越高, 但每块都要单独
+# 生成一份 PCH, 故不宜太小)
+set(_AGENTXX_OBJ_CHUNK 8)
+agentxx_split_object_sources(
+  agentxx ${_AGENTXX_OBJ_CHUNK} _AGENTXX_OBJ_TARGETS _AGENTXX_OBJ_FILES ${agentxx_SOURCES})
+
+# 把各 OBJECT 目标的 .obj 合进两个产物 (共享/静态库无源文件可编)
+add_library(agentxx_shared SHARED ${_AGENTXX_OBJ_FILES})
+add_library(agentxx_static STATIC ${_AGENTXX_OBJ_FILES})
+set(_AGENTXX_USAGE_TARGETS ${_AGENTXX_OBJ_TARGETS} agentxx_shared agentxx_static)
+
+if (AGENTXX_ENABLE_PCH)
+  agentxx_pch_headers(_AGENTXX_PCH_HEADERS)
+  agentxx_apply_pch("${_AGENTXX_PCH_HEADERS}" ${_AGENTXX_OBJ_TARGETS})
+endif()
+
+# 动态库控制导出符号 (仅为向后兼容保留; 代码里已无 AGENTXX_EXPORTS 引用)
 target_compile_definitions(agentxx_shared PUBLIC AGENTXX_EXPORTS)
 
 if (XX_IS_MSVC_D)
@@ -146,6 +145,15 @@ if (XX_IS_MSVC_D)
   # VS18/MSVC 14.51 的 FileTracker 在命令行出现重复 /FS 时会失效 (子编译进程
   # 不写 per-file 跟踪记录)，导致每次构建都判定全部源文件过期而全部重编;
   # 且参数经 superbuild 多层传递极易重复叠加，故统一不使用这两个选项
+  # 注: obj 目标才是真正编译源文件的地方，POSIX 名兼容宏必须落在它们上面
+  # (共享/静态库已无源文件可编, 保留 PUBLIC 只为向 client/test 等消费方继续传搪)
+  foreach(_agentxx_obj_target ${_AGENTXX_OBJ_TARGETS})
+    target_compile_definitions(${_agentxx_obj_target} PUBLIC
+      strdup=_strdup
+      strcasecmp=_stricmp
+      strncasecmp=_strnicmp
+    )
+  endforeach()
   target_compile_definitions(agentxx_shared PUBLIC
     strdup=_strdup
     strcasecmp=_stricmp
@@ -330,14 +338,10 @@ target_link_directories(agentxx_shared PUBLIC "${AGENTXX_INSTALL_DIR}/lib/")
 target_link_directories(agentxx_static PUBLIC "${AGENTXX_INSTALL_DIR}/lib/")
 
 # OBJECT 库自身也要链接这些依赖 (PRIVATE):
-# 依赖的 usage requirements (include 目录等) 需要作用于 agentxx_obj 的编译，
+# 依赖的 usage requirements (include 目录等) 需要作用于 obj 目标的编译，
 # 否则编译期找不到 Glob/uchardet/OpenSSL/neograph 等头文件。
-# 注意: 不能让共享/静态库链接 agentxx_obj (见上方说明)，此处仅 obj -> 依赖。
-if (TARGET agentxx_obj)
-  set(_AGENTXX_OBJ_LINK_TARGETS agentxx_obj)
-else()
-  set(_AGENTXX_OBJ_LINK_TARGETS "")
-endif()
+# 注意: 不能让共享/静态库链接这些 OBJECT 库 (见上方说明)，此处仅 obj -> 依赖。
+set(_AGENTXX_OBJ_LINK_TARGETS "${_AGENTXX_OBJ_TARGETS}")
 
 # 正则 (hyperscan / std::regex) 实现已随工具库拆分迁往 cxx_utilxx:
 # 其 INTERFACE 以目标名 (PkgConfig::hyperscan + 裸库名 hs_runtime) 携带该依赖与
@@ -415,9 +419,9 @@ target_link_libraries(agentxx_static PUBLIC ${AGENTXX_BUILTIN_PLUGIN_LINK_LIBS})
 if (TARGET agentxx_builtin_plugin_resources)
   add_dependencies(agentxx_shared agentxx_builtin_plugin_resources)
   add_dependencies(agentxx_static agentxx_builtin_plugin_resources)
-  if (TARGET agentxx_obj)
-    add_dependencies(agentxx_obj agentxx_builtin_plugin_resources)
-  endif()
+  foreach(_agentxx_obj_target ${_AGENTXX_OBJ_TARGETS})
+    add_dependencies(${_agentxx_obj_target} agentxx_builtin_plugin_resources)
+  endforeach()
 endif()
 unset(_AGENTXX_OBJ_LINK_TARGETS)
 

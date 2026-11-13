@@ -25,6 +25,8 @@ find_program(CCACHE_PROGRAM ccache)
 # 建议使用 c++ 26 
 set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED OFF)
+# 关闭 C++20 模块扫描 (不用 import std / 模块单元, 见 lib/CMakeLists.txt 同名段)
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
 if(XX_IS_MSVC_D)
   list(PREPEND CMAKE_FIND_LIBRARY_SUFFIXES .lib .a)
@@ -33,6 +35,9 @@ else()
 endif()
 
 add_executable(agentxx_test)
+# 测试源文件累到这里, 末尾统一拆成若干 OBJECT 目标并行编译
+# (VS 生成器同一 .vcxproj 内是串行的, 见 cmake/agentxx_split_sources.cmake)
+set(agentxx_test_SOURCES "")
 
 # 注: 示例插件 (example_plugin/javascript_engine/example_js) 已独立到 agent/plugins/
 # 独立编译 (每个插件子目录自带 CMakeLists.txt), 见 plugins/CMakeLists.txt;
@@ -91,7 +96,7 @@ if (AGENTXX_ENABLE_SANITIZER AND NOT XX_IS_MSVC_D AND NOT XX_IS_RELEASE_D)
 	unset(_agentxx_plugin_probe_test_sources)
 endif()
 
-target_sources(agentxx_test PRIVATE
+list(APPEND agentxx_test_SOURCES
 	${test_root_SOURCES}
 	${test_core_SOURCES}
 	${test_plugin_SOURCES}
@@ -134,7 +139,7 @@ target_include_directories(agentxx_test PRIVATE
 # 测的是插件真实实现 (源码始终在仓库里, 与插件是否启用编译无关)
 # 例外: qq_api.cpp / qq_media.cpp 会发 HTTP, 但只打本地模拟服务端 (见 chatbot_media_io)
 set(AGENTXX_CHATBOT_SOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../plugins/agentxx_chatbot")
-target_sources(agentxx_test PRIVATE
+list(APPEND agentxx_test_SOURCES
   "${AGENTXX_CHATBOT_SOURCE_DIR}/chatbot_core.cpp"
   # 时间与时区: 时间戳解析 (带时区后缀) + 按配置时区显示, 纯逻辑
   "${AGENTXX_CHATBOT_SOURCE_DIR}/chatbot_time.cpp"
@@ -174,7 +179,7 @@ if (AGENTXX_BUILD_CLIENT)
     CONFIGURE_DEPENDS
     "${AGENTXX_CLIENT_SOURCE_DIR}/src/*.cpp" "${AGENTXX_CLIENT_SOURCE_DIR}/src/*.cc" "${AGENTXX_CLIENT_SOURCE_DIR}/src/*.cxx"
   )
-  target_sources(agentxx_test PRIVATE
+  list(APPEND agentxx_test_SOURCES
     ${test_client_SOURCES}
     ${client_SOURCES}
   )
@@ -212,23 +217,9 @@ target_compile_definitions(agentxx_test PRIVATE
   AGENTXX_TEST_SOURCE_ROOT="${AGENTXX_TEST_SOURCE_ROOT}"
 )
 
-# PCH: 只预编译稳定第三方头，加速测试编译 (GCC/Clang，与 lib 保持一致)。
+# PCH: 只预编译稳定第三方头，加速测试编译 (与 lib 保持一致)
 # 第三方头须用 <...> 形式 (见 lib/CMakeLists.txt 说明)
-if (AGENTXX_ENABLE_PCH AND NOT XX_IS_MSVC_D)
-  target_precompile_headers(agentxx_test PRIVATE
-    <algorithm> <atomic> <chrono> <cstdint> <cstring> <deque> <exception>
-    <filesystem> <fstream> <functional> <map> <memory> <mutex> <optional>
-    <set> <sstream> <string> <string_view> <thread> <unordered_map>
-    <utility> <variant> <vector>
-    <fmt/format.h>
-    <asio/awaitable.hpp>
-    <boost/exception/exception.hpp>
-  )
-  # ccache + PCH 兼容 (GCC 特有)，仅对本目标生效
-  if (CCACHE_PROGRAM AND XX_IS_GCC_D)
-    target_compile_options(agentxx_test PRIVATE -fpch-preprocess)
-  endif()
-endif()
+# 注: 真正编译源文件的是下面拆出来的 OBJECT 目标, 所以 PCH 在末尾统一挂到它们上
 
 # ===== 依赖查找 (顺序: 先依赖库的依赖, 再依赖库本体) =====
 # 1) 工具库的条件依赖 (io_uring / HyperScan): 工具库导出接口只声明目标名,
@@ -394,5 +385,19 @@ agentxx_set_own_dir_rpath(agentxx_test)
 # 装到 exec 目录 (与产物同目录, 随产物分发)
 include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/agentxx_mimalloc.cmake")
 agentxx_mimalloc_attach(agentxx_test)
+
+# ===== 测试源文件拆成多个 OBJECT 目标并行编译 =====
+# - VS 生成器只在工程之间并行, 单个 .vcxproj 内的编译是串行的 (150+ 个 TU 串行
+#   构建实测要 25 分钟); GCC/Clang 的 -j 本身就按文件并行, 不拆
+# - 编译/链接要求用生成器表达式从 agentxx_test 上拷, 所以本段放在文件末尾
+include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/agentxx_split_sources.cmake")
+agentxx_split_object_sources(
+  agentxx_test 8 _agentxx_test_obj_targets _agentxx_test_obj_files ${agentxx_test_SOURCES})
+target_sources(agentxx_test PRIVATE ${_agentxx_test_obj_files})
+agentxx_inherit_usage_requirements(agentxx_test ${_agentxx_test_obj_targets})
+if (AGENTXX_ENABLE_PCH)
+  agentxx_pch_headers(_agentxx_test_pch_headers)
+  agentxx_apply_pch("${_agentxx_test_pch_headers}" ${_agentxx_test_obj_targets})
+endif()
 
 install(TARGETS agentxx_test DESTINATION "${AGENTXX_EXEC_INSTALL_PREFIX}")

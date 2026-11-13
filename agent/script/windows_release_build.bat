@@ -170,7 +170,12 @@ if %ERRORLEVEL% neq 0 (
     exit /b 1
 )
 
-cmake --build "%build_dir%" --config Release --parallel 6
+rem parallel build jobs: default = CPU core count (min 4); set AGENTXX_BUILD_PARALLEL to override
+if not defined NUMBER_OF_PROCESSORS set NUMBER_OF_PROCESSORS=4
+if "%AGENTXX_BUILD_PARALLEL%"=="" set AGENTXX_BUILD_PARALLEL=%NUMBER_OF_PROCESSORS%
+if %AGENTXX_BUILD_PARALLEL% LSS 4 set AGENTXX_BUILD_PARALLEL=4
+
+cmake --build "%build_dir%" --config Release --parallel %AGENTXX_BUILD_PARALLEL%
 if %ERRORLEVEL% neq 0 (
     echo cmake build failed!
     exit /b 1

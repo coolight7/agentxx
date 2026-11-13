@@ -819,6 +819,9 @@ path/to/agentxx_test --log-level warn string_util regex
   - 客户端自造行 (中断表单/瞬态提示) 一律用 `local_` 前缀 id, agent 的 op 永不命中它们;
     整份同步会重建副本, 本地行随界面态丢弃 (新中断请求到达时重新建行)
   - 取消/出错时已产出的半截内容定稿成行并落盘: 展示历史会比 LLM 上下文多一条未说完的 assistant 消息
+  - 定稿对账**只增不减**: `messages` 通道写入时只有"定稿文本完整包含行文本"才整条替换,
+    其它不一致保留行文本 —— 流式中断后重试时定稿文本只含最后一次尝试的内容, 覆盖等于
+    把用户已看到的内容抹掉 (LLM 上下文丢掉还是保留那次半截输出, 展示都是追加)
   - 不做旧版本兼容: wire `kVersion`/`kMinVersion` 同抬到 4, FFI API 抬到 3
     (`AGENTXX_FFI_CAP_VIEW_REPLICA`); 改协议时同时改 `agent/schema/wire-schema.json`
     与 `docs/zh-cn/design/wire-protocol-fields.md` (`AGENTXX_UPDATE_WIRE_SCHEMA=1` 重新生成)
@@ -1009,6 +1012,22 @@ agent/script/build_plugins.sh --config Release --jobs 8 --list
   VS18/MSVC 14.51 的 FileTracker 会失效 (子编译进程不写 per-file 跟踪记录),
   导致每次构建都全部重编 (增量编译完全失效)。参数经 superbuild 多层 CMake
   传递极易重复叠加, 故项目统一不使用这两个选项, 各 CMakeLists 中已有注释标记
+- **VS 生成器不会在同一个工程内并行编译** (2026-11-13): 单个 `.vcxproj` 里的
+  ClCompile 是一个接一个跑的, `cmake --build --parallel N` 只在工程之间并行。
+  所以 lib/test/client 的源文件都经 `agent/cmake/agentxx_split_sources.cmake`
+  拆成"每块 ≤ 8 个源文件"的多个 OBJECT 工程 (开关 `AGENTXX_MSVC_SPLIT_OBJECTS`,
+  默认 ON, 只对 MSVC 生效) —— 实测 lib 全量重建 861 s → 194 s, test 1510 s → 317 s。
+  **不要用 `/p:UseMultiToolTask=true` 代替**: 它会隐式带上 `/FS`, 实测改 6 个文件
+  重编 56 个 (见上一条), 增量编译直接失效
+- 编译速度相关的其他固定配置 (2026-11-13): `CMAKE_CXX_SCAN_FOR_MODULES=OFF`
+  (本项目不用 C++20 模块, 但 VS 生成器每个工程都会跑 `ComputeStdModulesCompileInputs`
+  / `GetLibraryModuleSources`, 实测每次构建白花 ~10 s)、MSVC 也启用 PCH
+  (`AGENTXX_ENABLE_PCH`, 只预编译 std/fmt/asio/boost.exception)、MSVC 的
+  静态库与动态库共用同一批 .obj (导出标记是 `ffi_api.h` 里无条件的
+  `__declspec(dllexport)`, 与目标无关, 不必各编一遍)。数据见
+  [resource/history/build-speed/work.md](resource/history/build-speed/work.md)
+- Windows/MSVC 编译并行度: `windows_debug_build.bat` / `windows_release_build.bat`
+  默认 `--parallel %NUMBER_OF_PROCESSORS%` (可用 `AGENTXX_BUILD_PARALLEL` 覆盖)
 - Windows 增量编译还会被 **vcpkg 用户级集成**的开关切换破坏 (2026-10-10): 由
   `vcpkg integrate install` 装在 `%LOCALAPPDATA%\vcpkg\vcpkg.user.props` / `.targets`,
   集成是否生效只看环境变量 `VCPkgLocalAppDataDisabled` / `VcpkgEnabled` —— 生效时

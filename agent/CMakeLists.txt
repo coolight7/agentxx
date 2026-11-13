@@ -121,8 +121,14 @@ set_property(CACHE AGENTXX_MIMALLOC_LINK PROPERTY STRINGS STATIC SHARED)
 # -fno-omit-frame-pointer 便于性能分析)
 option(AGENTXX_ENABLE_SANITIZER "Enable Debug sanitizers: ASan + UBSan + plugin-framework probe (GCC/Clang; MSVC: ASan only)." ON)
 # - 预编译稳定的第三方头文件 (fmt/asio/boost.exception 等) 加速 lib/client/test 编译;
-#   项目自身头文件不参与 PCH，改动时不会触发全量重编。仅 GCC/Clang 生效
-option(AGENTXX_ENABLE_PCH "Enable precompiled headers (GCC/Clang)." ON)
+#   项目自身头文件不参与 PCH，改动时不会触发全量重编 (GCC/Clang/MSVC 均生效)
+option(AGENTXX_ENABLE_PCH "Enable precompiled headers." ON)
+# - MSVC 下把 lib/client/test 的源文件拆成多个 OBJECT 工程并行编译:
+#   VS 生成器只在工程之间并行, 同一个 .vcxproj 内的编译是串行的 (不能开
+#   UseMultiToolTask: 它隐式带 /FS, 会破坏 FileTracker 的按文件增量跟踪),
+#   实测 107 个 TU 的 lib 全量重建由 861 s 降到 194 s。GCC/Clang 不受影响
+option(AGENTXX_MSVC_SPLIT_OBJECTS
+  "MSVC: split sources into several object targets so they compile in parallel." ON)
 # - LTO (链接期优化): Release 配置下启用
 #   - GCC/Clang: -flto=auto (GCC) / -flto=thin (Clang)
 #   - MSVC: /GL (编译) + /LTCG (链接)
@@ -854,6 +860,13 @@ set(_AGENTXX_COMMON_CMAKE_ARGS
     "-DCMAKE_INSTALL_PREFIX=${AGENTXX_INSTALL_DIR}"
     -DCMAKE_POSITION_INDEPENDENT_CODE=ON
     -DCMAKE_EXPORT_COMPILE_COMMANDS=${CMAKE_EXPORT_COMPILE_COMMANDS}
+    # 关闭 C++20 模块扫描: 本项目不使用 `import std` / 模块单元, 但 VS 生成器
+    # 会给每个工程跑 ComputeStdModulesCompileInputs / GetLibraryModuleSources
+    # (嵌套构建里实测每次多花约 10 秒, 且与源文件是否修改无关)
+    -DCMAKE_CXX_SCAN_FOR_MODULES=OFF
+    # MSVC 下把源文件拆成多个 OBJECT 工程并行编译 (VS 生成器同一工程内是串行的);
+    # 顶层开关透传给嵌套构建, 需要对照排查时可 -DAGENTXX_MSVC_SPLIT_OBJECTS=OFF
+    -DAGENTXX_MSVC_SPLIT_OBJECTS=${AGENTXX_MSVC_SPLIT_OBJECTS}
 
     "-DCMAKE_MSVC_RUNTIME_LIBRARY=${CMAKE_MSVC_RUNTIME_LIBRARY}"
     -DCMAKE_POLICY_DEFAULT_CMP0074=NEW

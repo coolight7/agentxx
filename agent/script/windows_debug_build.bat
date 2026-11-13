@@ -157,9 +157,14 @@ if %ERRORLEVEL% neq 0 (
     exit /b 1
 )
 
-rem parallel build jobs, default 4; set AGENTXX_BUILD_PARALLEL to override
-rem e.g. set AGENTXX_BUILD_PARALLEL=12 && windows_debug_build.bat
-if "%AGENTXX_BUILD_PARALLEL%"=="" set AGENTXX_BUILD_PARALLEL=4
+rem parallel build jobs: default = CPU core count (min 4);
+rem set AGENTXX_BUILD_PARALLEL to override, e.g. set AGENTXX_BUILD_PARALLEL=8
+rem - MSBuild /m:N parallelizes across projects; each lib/client/test source is
+rem   split into several object projects (AGENTXX_MSVC_SPLIT_OBJECTS) so the
+rem   compile stage actually uses all cores
+if not defined NUMBER_OF_PROCESSORS set NUMBER_OF_PROCESSORS=4
+if "%AGENTXX_BUILD_PARALLEL%"=="" set AGENTXX_BUILD_PARALLEL=%NUMBER_OF_PROCESSORS%
+if %AGENTXX_BUILD_PARALLEL% LSS 4 set AGENTXX_BUILD_PARALLEL=4
 
 cmake --build "%build_dir%" --config Debug --parallel %AGENTXX_BUILD_PARALLEL%
 if %ERRORLEVEL% neq 0 (

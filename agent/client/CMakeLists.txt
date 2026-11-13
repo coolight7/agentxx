@@ -24,6 +24,8 @@ find_program(CCACHE_PROGRAM ccache)
 # 建议使用 c++ 26 
 set(CMAKE_CXX_STANDARD 26)
 set(CMAKE_CXX_STANDARD_REQUIRED OFF)
+# 关闭 C++20 模块扫描 (不用 import std / 模块单元, 见 lib/CMakeLists.txt 同名段)
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
 if(XX_IS_MSVC_D)
   list(PREPEND CMAKE_FIND_LIBRARY_SUFFIXES .lib .a)
@@ -37,10 +39,7 @@ file(GLOB_RECURSE client_SOURCES
 	CONFIGURE_DEPENDS
 	"${CMAKE_CURRENT_SOURCE_DIR}/*.cpp" "${CMAKE_CURRENT_SOURCE_DIR}/*.cc" "${CMAKE_CURRENT_SOURCE_DIR}/*.cxx"
 )
-target_sources(agentxx PRIVATE
-	${client_SOURCES}
-)
-
+# 源文件在文件末尾统一拆成多个 OBJECT 目标并行编译 (见 cmake/agentxx_split_sources.cmake)
 target_include_directories(agentxx PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include/")
 # neograph/json.h 内部 #include <yyjson.h> (构建期头, 见 lib/CMakeLists 说明):
 # client 经 find_package(agentxx_static) 只得 install/include, 需补 neograph 源码 deps 路径
@@ -51,23 +50,9 @@ endif()
 # 注意: 不要添加 /FS /MP 编译选项 —— 顶层已统一管理; 命令行出现重复 /FS 时
 # VS18 FileTracker 失效，每次构建都会全部重编 (勿删此注释)
 
-# PCH: 只预编译稳定第三方头，加速编译 (GCC/Clang，与 lib 保持一致)。
+# PCH: 只预编译稳定第三方头，加速编译 (与 lib 保持一致)。
 # 第三方头须用 <...> 形式 (见 lib/CMakeLists.txt 说明)
-if (AGENTXX_ENABLE_PCH AND NOT XX_IS_MSVC_D)
-  target_precompile_headers(agentxx PRIVATE
-    <algorithm> <atomic> <chrono> <cstdint> <cstring> <deque> <exception>
-    <filesystem> <fstream> <functional> <map> <memory> <mutex> <optional>
-    <set> <sstream> <string> <string_view> <thread> <unordered_map>
-    <utility> <variant> <vector>
-    <fmt/format.h>
-    <asio/awaitable.hpp>
-    <boost/exception/exception.hpp>
-  )
-  # ccache + PCH 兼容 (GCC 特有)，仅对本目标生效
-  if (CCACHE_PROGRAM AND XX_IS_GCC_D)
-    target_compile_options(agentxx PRIVATE -fpch-preprocess)
-  endif()
-endif()
+# 注: 真正编译源文件的是文件末尾拆出来的 OBJECT 目标, PCH 统一挂到它们上
 
 # ===== 依赖查找 (顺序: 先依赖库的依赖, 再依赖库本体) =====
 # 1) 工具库的条件依赖 (io_uring / HyperScan): 工具库导出接口只声明目标名,
@@ -170,5 +155,19 @@ agentxx_set_own_dir_rpath(agentxx)
 # 装到 exec 目录 (与产物同目录, 随产物分发)
 include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/agentxx_mimalloc.cmake")
 agentxx_mimalloc_attach(agentxx)
+
+# ===== 源文件拆成多个 OBJECT 目标并行编译 =====
+# - VS 生成器只在工程之间并行, 单个 .vcxproj 内的编译是串行的;
+#   GCC/Clang 的 -j 本身就按文件并行, 不拆 (见 cmake/agentxx_split_sources.cmake)
+# - 编译/链接要求用生成器表达式从 agentxx 上拷, 所以本段放在文件末尾
+include("${CMAKE_CURRENT_SOURCE_DIR}/../cmake/agentxx_split_sources.cmake")
+agentxx_split_object_sources(
+  agentxx_client 8 _agentxx_client_obj_targets _agentxx_client_obj_files ${client_SOURCES})
+target_sources(agentxx PRIVATE ${_agentxx_client_obj_files})
+agentxx_inherit_usage_requirements(agentxx ${_agentxx_client_obj_targets})
+if (AGENTXX_ENABLE_PCH)
+  agentxx_pch_headers(_agentxx_client_pch_headers)
+  agentxx_apply_pch("${_agentxx_client_pch_headers}" ${_agentxx_client_obj_targets})
+endif()
 
 install(TARGETS agentxx DESTINATION "${AGENTXX_EXEC_INSTALL_PREFIX}")
