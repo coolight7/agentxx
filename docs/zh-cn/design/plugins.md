@@ -2235,7 +2235,7 @@ plugin:
 
 | 成员 | 语义 |
 |---|---|
-| `declare_broadcast(decl_json, err)` | 声明频道：`id`（短名 `build` 由主程序补成 `plugin.<本插件 id>.build`；写全名也可以）、`cache`（`latest` 有当前值 / `none`）、`publish`（`owner` 只有属主能发 / `anyone` 谁都能发）、`pushOnSubscribe`（订阅时先推当前值，要求 `cache: latest`）、`coalesce`、`scope`（`app` / `system`）。应用频道（`agentxx.*`）不能被插件改写；同一 id 重复声明幂等，第二段流从 `end` 之后重新开始 |
+| `declare_broadcast(decl_json, err)` | 声明频道：`id`（短名 `build` 由主程序补成 `plugin.<本插件 id>.build`；写全名也可以）、`cache`（`latest` 有当前值 / `none`）、`publish`（`owner` 只有属主能发 / `anyone` 谁都能发）、`pushOnSubscribe`（订阅时先推当前值，要求 `cache: latest`）、`coalesce`、`scope`（`app` / `system`）。应用频道（`agentxx.*`）不能被插件改写；同一 id 重复声明幂等（**声明内容完全相同时不改状态、不打"replaced"日志** —— 插件侧每次发布前都会先声明，周期频道不该因此刷日志），第二段流从 `end` 之后重新开始 |
 | `publish_broadcast(id, payload_json, err)` | 发布：属主发 `owner` 频道、任何插件发 `anyone` 频道；未声明 / 已结束 / 没权限分别返回 `ERR_NOT_DECLARED` / `ERR_ENDED` / `ERR_PERMISSION` |
 | `subscribe_broadcast(scope, id, handler, ud, options_json, err)` | 订阅：`options_json` 形如 `{"intervalMs":200,"mode":"delay|drop"}`（每个订阅自己的通知间隔，互不影响）。返回句柄，用 `unsubscribe_broadcast(sub)` 撤销 |
 | `subscribe_broadcast_ex(..., on_end, ...)` | 同上，另收流结束回调（频道被 `end` 时回调一次，随后该订阅消失） |
@@ -2269,9 +2269,35 @@ plugin:
 - 示例插件 `agent/plugins/example_event`：`mount` 里声明两条自己的频道（进度流 + 就绪值）、
   发布初始值、读回当前值、订阅自己的进度频道与主程序的轮次通知；
 - 用例 `plugin_broadcast`：声明与发布、发布权限、订阅与读（含 `pushOnSubscribe`）、
-  结束流（`on_end` 恰好一次、再声明开新流）、禁用/启用/卸载的可逆性。
+  结束流（`on_end` 恰好一次、再声明开新流）、禁用/启用/卸载的可逆性、
+  **广播与事件总线的两向转发**。
 - 中枢本体与模型侧事件工具见 [events.md](events.md)；`event_hub` / `event_tools` /
   `event_delivery` 三个用例覆盖它们。
+
+### 20.5 与事件总线之间的两向转发
+
+插件只认广播表, 而主程序与客户端上行的话题在**事件总线**上; 客户端能拿到的插件数据也只能由
+服务端端点从总线的 `plugin.` 前缀转发 (`WirePluginData`)。两跳都在
+`agent/lib/src/plugins/plugin_manager_broadcast_bridge.cpp`:
+
+```text
+总线 agentxx.agent.* / agentxx.client.*  ──[mirrorBusValue]──▶  广播频道
+插件发布 plugin.*  ──[forwardBroadcastToBuses]──▶  总线  ──▶  端点  ──▶  客户端
+```
+
+- 挂接点: `PluginManager` 构造 (主 agent 总线) 与 `attachMountSync` (每个挂载 agent 的总线),
+  幂等; 析构时撤订阅。没有管理器的环境 (单元测试直接建注册表) 不受影响。
+- 总线 → 广播: 只镜像**已经声明**成广播频道的名字 (插件订阅时按需声明), 只取
+  `std::string` 载荷 (约定事件与插件数据的 JSON 原文; `display` / `delta` 这类强类型事件
+  类型不同, 天然跳过)。因此没人订阅的话题一次查找就返回, 不建频道也不占缓存。
+- 插件发布 → 总线: 只有 `plugin.` 段 (应用频道本来就发在总线上, 再转一次会环回)。
+- 两向前缀互不重叠, **不成环**。
+- 由此恢复的两件事: ① `agentxx.agent.host.client_attached` 送得到 agent 侧插件
+  (双端插件重发状态快照, 晚接入/重连的客户端不再停在初始占位);
+  ② 插件发布的频道 (如 `plugin.agentxx_codegraph.status`、`plugin.agentxx_system_monitor.usage`)
+  经端点发到客户端插件的同名订阅上。
+- 客户端侧的上行 (`agentxx.client.plugin.<插件名>.<事件>`) 也是这条路径: 服务端收到
+  `WirePluginDataUp` 后发总线 → 镜像进广播 → agent 侧插件订阅收到。
 
 ## 21. 名字契约 (总线主题 / 事件名 / 功能埋点 id)
 

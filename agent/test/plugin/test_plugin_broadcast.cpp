@@ -389,6 +389,17 @@ asio::awaitable<void> test_publish_permission() {
     XX_TEST_EXPECT_TRUE(registry->declares("plugin.example_event.third"));
     XX_TEST_EXPECT_EQ(declareOf(inst.get(), "third"), int32_t{PLUGINXX_RESULT_OK});
     XX_TEST_EXPECT_EQ(registry->declOf("plugin.example_event.third")->owner, std::string{"example_event"});
+    // 完全相同的重复声明不改状态: 当前值保留 (插件每次发布前都会声明一次, 不能把值刷掉)
+    XX_TEST_EXPECT_EQ(
+        publishOf(inst.get(), "plugin.example_event.third", R"({"n":1})"),
+        int32_t{PLUGINXX_RESULT_OK}
+    );
+    XX_TEST_EXPECT_EQ(declareOf(inst.get(), "third"), int32_t{PLUGINXX_RESULT_OK});
+    {
+        std::string kept;
+        XX_TEST_EXPECT_TRUE(registry->read("plugin.example_event.third", &kept));
+        XX_TEST_EXPECT_EQ(Json::parse(kept).value("n", 0), 1);
+    }
 
     // 未声明的 id 发布: 被拒
     XX_TEST_EXPECT_TRUE(publishOf(inst.get(), "plugin.example_event.none", "{}") != PLUGINXX_RESULT_OK);
@@ -672,7 +683,7 @@ asio::awaitable<void> test_bus_bridge() {
     );
     auto inst = co_await loadExampleEvent(f);
     XX_TEST_EXPECT_TRUE(inst != nullptr);
-    // 插件的发布在 mount 里, 转发经总线 executor 异步落地 → 等一拍
+    // 插件的发布在 mount 里, 转发经总线 executor 异步执行 → 等一拍
     const auto readyTopic = std::string{"plugin.example_event.ready"};
     const auto buildTopic = std::string{"plugin.example_event.build"};
     XX_TEST_EXPECT_TRUE(co_await waitFor([&onBus, &readyTopic, &buildTopic] {

@@ -126,16 +126,24 @@ void PluginManager::publishBroadcastValue(std::string_view id, std::string_view 
         return;
     }
     ensureBroadcast(id, pluginxx::BroadcastCache_e::Latest);
-    // 应用频道以总线为源: 服务端端点要经它转发给客户端, 广播侧由 [attachEventBus]
-    // 的镜像落一份 (自己再写一次广播会把同一个值投递两次)
-    if (auto primary = primaryAgent_.lock(); primary && primary->bus) {
-        publishOnBus(primary->bus, id, payloadJson);
-        return;
+    // 应用频道 (`agentxx.agent.*` / `agentxx.client.*`) 以总线为源: 端点要经它转发给
+    // 客户端, 广播侧由 [attachEventBus] 的镜像落一份 —— 自己再写一次广播会把同一个值
+    // 投递两次
+    const bool mirrored = id.starts_with("agentxx.agent.") || id.starts_with("agentxx.client.");
+    if (mirrored) {
+        if (auto primary = primaryAgent_.lock(); primary && primary->bus) {
+            publishOnBus(primary->bus, id, payloadJson);
+            return;
+        }
     }
+    // 其余 (插件自建的 `plugin.*` 频道 / 没有总线): 直接写广播, 同步派发给订阅方;
+    // 同一主题另外发一份到总线, 端点据此把它转给客户端
     std::string err;
-    if (!broadcasts_ || !broadcasts_->publish(id, payloadJson, std::string{}, &err)) {
+    if (broadcasts_ && !broadcasts_->publish(id, payloadJson, std::string{}, &err)
+        && !err.empty()) {
         XX_LOGD("broadcast `{}` not published: {}", id, err);
     }
+    forwardBroadcastToBuses(id, payloadJson);
 }
 
 void PluginManager::endBroadcastValue(std::string_view id, std::string_view reasonJson) {

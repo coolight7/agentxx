@@ -79,7 +79,7 @@
 
 | 编号 | 内容 | 状态 | 代码位置 / 验收 |
 |---|---|---|---|
-| LLM-2 | 错误分类与重试策略 | 已实施 | `nodes/llm_error.{h,cpp}`（分类 + 有界指数退避 + `retry-after`；网络/传输层故障单列一类，一律可重试，类别只影响等待基数）+ `nodes/modelcall.cpp`（不可重试类直接结束）；模块 `llm_error`、`agent` |
+| LLM-2 | 错误分类与重试策略 | 已实施 | `nodes/llm_error.{h,cpp}`（分类 + 有界指数退避 + `retry-after`；网络/传输层故障单列一类，一律可重试，类别只影响等待基数；状态码只在**独立成词**时才算，我们自己的 ` &#124; stream: recv=…B` 诊断后缀不参与判类 —— 否则字节数里的 `403` 会把可重试的读超时判成鉴权失败、首轮就结束）+ `nodes/modelcall.cpp`（不可重试类直接结束）；模块 `llm_error`、`agent` |
 | LLM-3 | 溢出一次性压缩重试 | 已实施 | `nodes/modelcall.cpp`（首个溢出触发 `service.summarization.compact` 后立即重试，每轮仅一次）；模块 `agent` |
 | LLM-5 | 假 provider | 已实施 | `agent/test/include/agentxx-test/core/fake_provider.h`（脚本化固定流/错误/延迟/工具调用 + 请求记录）+ 模块 `fake_provider`；本地 HTTP 模拟器继续覆盖 provider 内部解析 |
 | LLM-7 | 处理方退出取消 | 已实施 | `agentxx/nodes/provider_call_scope.h`（`ProviderCallScope`：`fork` 出单次调用取消域，RAII 在处理方放弃时只中止本次调用）+ `nodes/modelcall.cpp` 接线；模块 `provider_call_scope` |
