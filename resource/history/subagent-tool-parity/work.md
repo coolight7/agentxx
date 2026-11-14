@@ -275,3 +275,15 @@ JS SDK 对齐 (与 C++ 插件 SDK 同名同义):
 2. 真建根 / 开通道会真起 agent, 因此自动化只验形状 (无效句柄路径); 真流程仍靠
    `plugin_agent_runtime` (C++ 侧) 覆盖。要加 JS 真流程用例, 需在 `AgentHost` 容器上
    起一个 JS 插件再 `mountRoot`。
+3. 补广播写入方与剩余读取面时发现: `declareBroadcast({})` (空声明) 不会报错, 框架
+   把它当一次合法声明。因此探针不用空对象, 改为真声明一条自己的频道 (声明 → 发布 →
+   读当前值 → 结束 → 再读得 `null`), 这才是有效用例。
+
+### 又补的一小批 (广播写入方 / share_store 写入 / 资源 / 模型配置)
+
+- `declareBroadcast(decl)` (`id` 可短名; 失败抛异常并带主程序给的错误文本) /
+  `readBroadcast(id)` (未声明 / 无值 / 已结束 → `null`) / `endBroadcast(id, reason?)`
+- `addShareStore(sessionId, content)` (返回条目 id) / `getOwnResources()` /
+  `getModelConfig()`
+- `example_js` 的 `js_sdk_probe` 增加真广播往返 (声明 → 发布 → 读 → 结束 → 再读)
+  与上述三个读取面的形状断言; `test_plugins` 相应断言增加到 649 条

@@ -294,6 +294,13 @@ enum BridgeMagic {
     B_REGISTER_TIMER,
     B_UNREGISTER_TIMER,
     B_EMIT_EVENT,
+    // 广播声明 / 读当前值 / 结束流, 会话 share_store 写入, 资源与模型查询
+    B_DECLARE_BROADCAST,
+    B_READ_BROADCAST,
+    B_END_BROADCAST,
+    B_ADD_SHARE_STORE,
+    B_GET_OWN_RESOURCES,
+    B_GET_MODEL_CONFIG,
 };
 
 /// 工具执行请求/结果 (execute 桥跨线程传递)
@@ -2281,6 +2288,13 @@ private:
         def("registerTimer", B_REGISTER_TIMER, 1);
         def("unregisterTimer", B_UNREGISTER_TIMER, 1);
         def("emitEvent", B_EMIT_EVENT, 2);
+        // 广播写入方 / share_store 写入 / 资源与模型查询
+        def("declareBroadcast", B_DECLARE_BROADCAST, 1);
+        def("readBroadcast", B_READ_BROADCAST, 1);
+        def("endBroadcast", B_END_BROADCAST, 2);
+        def("addShareStore", B_ADD_SHARE_STORE, 2);
+        def("getOwnResources", B_GET_OWN_RESOURCES, 0);
+        def("getModelConfig", B_GET_MODEL_CONFIG, 0);
 
         int ok = JS_SetPropertyStr(ctx, global, "agentxx", bridge) >= 0;
         // 常用工具函数注入全局 (沙箱内可用): 裸 setTimeout/clearTimeout
@@ -4261,6 +4275,123 @@ JSValue JsEngine::bridgeCall(
             return iface.runtime->emit_event(host, &topicSv, &paySv) == AGENTXX_RESULT_OK
                        ? JS_TRUE
                        : JS_FALSE;
+        }
+
+        // ---- 广播声明 / 读当前值 / 结束流 ----
+        // `publish` / `subscribe` 已有; 这里补上写入方需要的声明与收尾
+        case B_DECLARE_BROADCAST: {
+            if (!iface.broadcasts || !iface.broadcasts->declare_broadcast || argc < 1) {
+                return JS_FALSE;
+            }
+            const std::string decl = argsJsonText(ctx, argv[0]);
+            auto              declSv = agentxx::plugin::PluginStringView::from(
+                decl.data(),
+                decl.size()
+            );
+            PluginxxString err{nullptr, 0};
+            const int32_t  rc = iface.broadcasts->declare_broadcast(host, &declSv, &err);
+            if (rc != PLUGINXX_RESULT_OK) {
+                std::string errText
+                    = err.data ? std::string(err.data, static_cast<size_t>(err.size))
+                               : std::string{"declare failed"};
+                if (err.data) {
+                    agentxx::plugin::PluginString::free(host, &err);
+                }
+                return throwJsError(ctx, fmt::format("declareBroadcast: {}", errText));
+            }
+            if (err.data) {
+                agentxx::plugin::PluginString::free(host, &err);
+            }
+            return JS_TRUE;
+        }
+
+        case B_READ_BROADCAST: {
+            if (!iface.broadcasts || !iface.broadcasts->read_broadcast || argc < 1) {
+                return JS_NULL;
+            }
+            const std::string id   = jsToCppString(ctx, argv[0]);
+            auto              idSv = agentxx::plugin::PluginStringView::from(id.data(), id.size());
+            PluginxxString    out{nullptr, 0};
+            const int32_t     rc = iface.broadcasts->read_broadcast(host, &idSv, &out);
+            std::string       json;
+            if (out.data) {
+                json.assign(out.data, static_cast<size_t>(out.size));
+                agentxx::plugin::PluginString::free(host, &out);
+            }
+            // 没声明 / 没当前值 / 已结束 都返回 null (调用方不需要区分)
+            if (rc != PLUGINXX_RESULT_OK) {
+                return JS_NULL;
+            }
+            return jsonTextToValue(ctx, json, "<broadcast>");
+        }
+
+        case B_END_BROADCAST: {
+            if (!iface.broadcasts || !iface.broadcasts->end_broadcast || argc < 1) {
+                return JS_FALSE;
+            }
+            const std::string id    = jsToCppString(ctx, argv[0]);
+            const std::string reason = argc >= 2 ? argsJsonText(ctx, argv[1]) : std::string{};
+            auto              idSv  = agentxx::plugin::PluginStringView::from(id.data(), id.size());
+            auto              reaSv = agentxx::plugin::PluginStringView::from(
+                reason.data(),
+                reason.size()
+            );
+            PluginxxString err{nullptr, 0};
+            const int32_t  rc = iface.broadcasts->end_broadcast(host, &idSv, &reaSv, &err);
+            if (err.data) {
+                agentxx::plugin::PluginString::free(host, &err);
+            }
+            return rc == PLUGINXX_RESULT_OK ? JS_TRUE : JS_FALSE;
+        }
+
+        // ---- 会话 share_store 写入 / 本插件资源 / 模型配置 ----
+        case B_ADD_SHARE_STORE: {
+            if (!iface.session || !iface.session->add_share_store || argc < 2) {
+                return JS_NewInt64(ctx, -1);
+            }
+            const std::string sessionId = jsToCppString(ctx, argv[0]);
+            const std::string content   = JS_IsString(argv[1]) ? jsToCppString(ctx, argv[1])
+                                                             : valueToJsonString(ctx, argv[1]);
+            auto sidSv = agentxx::plugin::PluginStringView::from(sessionId.data(), sessionId.size());
+            auto conSv = agentxx::plugin::PluginStringView::from(content.data(), content.size());
+            return JS_NewInt64(
+                ctx,
+                iface.session->add_share_store(host, pctx->scope(), &sidSv, &conSv)
+            );
+        }
+
+        case B_GET_OWN_RESOURCES: {
+            if (!iface.resources || !iface.resources->get_own_resources) {
+                return JS_NULL;
+            }
+            PluginxxString out{nullptr, 0};
+            const int32_t  rc = iface.resources->get_own_resources(host, pctx->scope(), &out);
+            std::string    json;
+            if (out.data) {
+                json.assign(out.data, static_cast<size_t>(out.size));
+                agentxx::plugin::PluginString::free(host, &out);
+            }
+            if (rc != AGENTXX_RESULT_OK || json.empty()) {
+                return JS_NULL;
+            }
+            return jsonTextToValue(ctx, json, "<resources>");
+        }
+
+        case B_GET_MODEL_CONFIG: {
+            if (!iface.model || !iface.model->get_config) {
+                return JS_NULL;
+            }
+            PluginxxString out{nullptr, 0};
+            const int32_t  rc = iface.model->get_config(host, pctx->scope(), &out);
+            std::string    json;
+            if (out.data) {
+                json.assign(out.data, static_cast<size_t>(out.size));
+                agentxx::plugin::PluginString::free(host, &out);
+            }
+            if (rc != AGENTXX_RESULT_OK || json.empty()) {
+                return JS_NULL;
+            }
+            return jsonTextToValue(ctx, json, "<model_config>");
         }
 
         default:

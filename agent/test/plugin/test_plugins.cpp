@@ -769,6 +769,16 @@ asio::awaitable<TestResult> run_plugin_tests() {
                 XX_TEST_EXPECT_TRUE(kindIs("registerTimerInvalid", {"number"}));
                 XX_TEST_EXPECT_TRUE(kindIs("unregisterTimerInvalid", {"boolean"}));
                 XX_TEST_EXPECT_TRUE(kindIs("emitEvent", {"boolean"}));
+                // 广播写入方: 声明 → 发布 → 读 → 结束
+                XX_TEST_EXPECT_TRUE(j["declareBroadcast"].is_boolean());
+                XX_TEST_EXPECT_TRUE(j["declareBroadcast"].get<bool>());
+                XX_TEST_EXPECT_TRUE(kindIs("readBroadcast", {"object", "null"}));
+                XX_TEST_EXPECT_TRUE(kindIs("endBroadcast", {"boolean"}));
+                XX_TEST_EXPECT_TRUE(kindIs("readAfterEnd", {"null"}));
+                // share_store 写入 / 资源 / 模型配置
+                XX_TEST_EXPECT_TRUE(kindIs("addShareStore", {"number"}));
+                XX_TEST_EXPECT_TRUE(kindIs("ownResources", {"null", "object"}));
+                XX_TEST_EXPECT_TRUE(kindIs("modelConfig", {"null", "object"}));
             }
         }
 

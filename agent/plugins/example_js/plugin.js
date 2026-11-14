@@ -116,6 +116,22 @@ agentxx.registerTool({
     out.registerTimerInvalid = typeof agentxx.registerTimer({ channelId: 0, firstDelayMs: 1 });
     out.unregisterTimerInvalid = typeof agentxx.unregisterTimer(0);
     out.emitEvent = typeof agentxx.emitEvent("plugin.example_js.probe", { probe: true });
+    // 广播写入方: 声明自己的频道 → 发布 → 读当前值 → 结束流 (可重复执行)
+    const stream = "plugin.example_js.probe_stream";
+    try {
+      agentxx.declareBroadcast({ id: stream, cache: "latest", publish: "owner" });
+      out.declareBroadcast = true;
+    } catch (e) {
+      out.declareBroadcast = false;
+    }
+    agentxx.publish(stream, { probe: 1 });
+    out.readBroadcast = kindOf(agentxx.readBroadcast(stream));
+    out.endBroadcast = typeof agentxx.endBroadcast(stream, { reason: "probe done" });
+    out.readAfterEnd = kindOf(agentxx.readBroadcast(stream));
+    // share_store 写入 / 资源 / 模型配置
+    out.addShareStore = typeof agentxx.addShareStore("no-such-session", "probe");
+    out.ownResources = kindOf(agentxx.getOwnResources());
+    out.modelConfig = kindOf(agentxx.getModelConfig());
     return out;
   },
 });
