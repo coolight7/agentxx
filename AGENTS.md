@@ -307,7 +307,12 @@ path/to/agentxx_test --log-level warn string_util regex
   `openChannel` / `registerTrigger` 等), 只剩工具特化渲染未做: 它注册在 **client 侧**
   (`agentxx.client.ui` 的 `register_tool_renderer`), 而引擎只有 agent 侧入口; 另外内容回调
   在 client IO 线程同步返回结果 (UI 线程只读语义缓存、未命中就投递请求), JS 要实现得
-  同步转到 JS 线程并对 `await` 加超时或扩 ABI 支持"先 pending、稍后回填"。详见 plugins.md §12
+  同步转到 JS 线程并对 `await` 加超时, 或扩 ABI 支持"先 pending、稍后回填"。详见 plugins.md §12
+  - **正解是让 JS 脚本也能作为 client 侧插件运行** (client 侧 JS 引擎): 到时脚本直接用
+    同一张 `agentxx.client.ui` 表, 不需要跨端登记。**不要再为它加 agent 侧接口表**:
+    2026-11 曾按"agent 侧登记 + wire 往返"实现过一版 (agentxx.agent.tool_render +
+    三条 wire 消息), 评估后整体回退 —— 渲染器注册面只在 client 侧一处 (见
+    `resource/history/subagent-tool-parity/work.md` 的"第五步 (已回退)")
 - 插件接口为 **API v1**: 入口为 `agentxx_plugin_agent_create` /
   `agentxx_plugin_agent_destroy` 实例对 (client 侧 `agentxx_plugin_client_create` / `_destroy`)。
   【API v1 规范】全局 API 版本及全部接口表版本均重置为 1；明确 8 字节结构体对齐与定长基础类型 (`int32_t/int64_t/uint64_t`)；跨边界函数统一 `PLUGINXX_CALL` 调用约定；结构体参数一律传递指针 (`const Struct*`)，结构体返回值一律改为指针出参 (`Struct* out`) 并返回 `int32_t` 状态码；核心 vtable 精简为 `alloc/free` 操作 (去除了 `strdup`，采用头文件内联 `pluginxx_strdup`)。

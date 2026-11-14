@@ -13,7 +13,9 @@
 - [x] 7. JS 引擎改为每 (脚本, agent 挂载) 一份实例 + 权限/配置类 JS API 对齐
 - [x] 8. 构建 (lib / 插件 / test) + 相关测试模块全绿
 - [x] 9. 文档 (`plugins.md` §12、`index.md` 子代理段、AGENTS.md 摘要)
-- [ ] 10. 后续项: JS SDK 剩余面 (graph 节点类型 / 工具特化渲染)
+- [ ] 10. 后续项: JS SDK 剩余面 (graph 节点类型 / scheduler·tasks 协程驱动)
+- [ ] 11. 将支持: JS 脚本作为 **client 侧插件** 运行 (client 侧 JS 引擎) —— 届时脚本可直接
+  用 `agentxx.client.ui` 注册工具特化渲染, 不需要跨端登记
 
 ## 第 1 步: 继承开关的数据结构与传递
 
@@ -310,3 +312,50 @@ JS SDK 对齐 (与 C++ 插件 SDK 同名同义):
   `getModelConfig()`
 - `example_js` 的 `js_sdk_probe` 增加真广播往返 (声明 → 发布 → 读 → 结束 → 再读)
   与上述三个读取面的形状断言; `test_plugins` 相应断言增加到 649 条
+
+## 第五步 (已回退): agent 侧工具特化渲染 (曾用名"方案 B")
+
+### 当时做了什么
+
+为了让 **JS 脚本** 也能定制工具行, 曾按"跨端渲染"实现过一版:
+
+- 新接口表 `agentxx.agent.tool_render` (`register_tool_renderer` / `unregister_tool_renderer`)
+  + `PluginMount` 里的渲染器登记表 + 登记变化出口 `SessionToolRenderSink`
+- 三条 wire 消息 `tool_renderer_register` / `tool_render_request` / `tool_render_result`
+- agent 端点推全量快照; 客户端按需回问, 内容在 agent 的**工作线程**算 (持插件实例租约)
+- 客户端新增 `remoteToolRenderers` (最低优先级) + 3 秒超时收尾
+- JS SDK `registerToolRenderer` / `unregisterToolRenderer` (回调预算 200 ms)
+- 配套测试与文档 (接口表 20 → 21 张)
+
+当时验证全绿 (`plugins` 660 / `client_plugins` 788 / `boundaries` 19 / `wire_schema` 1484)。
+
+### 为什么回退
+
+渲染器的注册面本应只有 **client 侧一处**: 工具行是客户端的东西, 内容也是客户端算。
+agent 侧那张表只为了绕开"JS 引擎只有 agent 侧入口"这一个缺口, 却带来了:
+
+- 多一张接口表 (agent 侧 21 张) 与三条 wire 消息, 两侧各多一套登记/失效逻辑;
+- 一次跨进程往返 (本地直连也要走 wire), 缓存失效要跟着快照走;
+- 同一个工具名可能出现两份登记 (本地 + 远程), 得再定一条"谁优先"。
+
+正解是**让 JS 脚本也能作为 client 侧插件运行** (client 侧 JS 引擎): 到那时脚本直接调
+`agentxx.client.ui` 的 `register_tool_renderer`, 与 C++ client 插件完全同一套, 不存在跨端。
+
+### 怎么退的
+
+`git revert 5f5e8a0a` → `d53e63bd` (整件事就是一个提交, 34 个文件全部还原)。
+
+回退后重新构建并跑基线, 数字回到加功能之前:
+
+| 模块 | 结果 |
+|---|---|
+| `plugins` / `client_plugins` | 649 / 774, 全 0 失败 |
+| `boundaries` / `wire_schema` / `plugin_host_mount` | 19 / 1325 / 146, 全 0 失败 |
+
+构建: lib (`agentxx_static` + install)、插件 (`agentxx_javascript_engine` / `example_js`)、
+客户端、测试均通过。(中间一次 `LNK1102 内存不足`, 机器占用高时链接失败, 空闲后重跑即通过。)
+
+### 留给后来人的约束
+
+- **不要再为"JS 脚本做工具特化渲染"加 agent 侧接口表**: 方向是 client 侧 JS 引擎;
+- 在那之前, 需要特化渲染的 JS 插件仍把渲染器写在 C++ 壳的 client 入口里 (脚本只管工具逻辑)。

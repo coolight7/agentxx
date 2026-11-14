@@ -175,3 +175,35 @@ struct SubagentInherit {
   `agentxx_subagent` 路径发生, 压缩/内部路径不受影响
 - MCP 继承 = 每个子代理重新握手; 保持开关可关 (调用方不写 inherit 即关闭)
 - JS 引擎重构触及桥的所有注册路径, 需全量跑插件类测试
+
+---
+
+## 8. 结论: 不做"工具特化渲染跨端"
+
+曾计划过方案 B —— agent 侧新增 `agentxx.agent.tool_render` 接口表, 把渲染器登记搬到
+agent 侧, 客户端需要内容时经 wire 回问 (解决"JS 脚本注册不了 client 侧渲染器")。
+该方案已实现并验证通过, 之后按设计判断**整体回退** (`git revert 5f5e8a0a`)。
+
+### 8.1 判断依据
+
+- 工具行是客户端的东西: 显示名在注册时确定、内容在客户端算; 注册面只应有一处
+  (`agentxx.client.ui` 的 `register_tool_renderer`)。
+- 跨端方案为绕开一个缺口付出的代价不小: 多一张接口表 (agent 侧 21 张)、三条 wire 消息、
+  本地直连也要走一次往返、远程条目要跟着快照做缓存失效、同名工具还要再定一条优先规则。
+- 缺口本身 ("JS 引擎只有 agent 侧入口") 应当从**引擎侧**解决, 而不是让 agent 承担客户端的职责。
+
+### 8.2 正解方向
+
+**让 JS 脚本也能作为 client 侧插件运行** (client 侧 JS 引擎):
+
+- 引擎复用现有 `agentxx_javascript_engine` 的脚本执行与桥核心, 增加 client 侧入口
+  (`agentxx_plugin_client_create/start/stop/destroy`), 由 `ClientPluginManager` 加载;
+- 脚本侧的 SDK 表换成 client 侧那套 (`agentxx.client.ui` 等), 因此
+  `registerToolRenderer` 与 C++ client 插件完全同义、同线程语义;
+- 一客户端一份实例 (客户端只有一个界面, 不像 agent 侧"一脚本 × 一 agent 挂载");
+- 回调仍在 client IO 线程同步执行, 脚本侧要保证尽快返回 (与 C++ 插件同一约定)。
+
+### 8.3 在那之前的过渡
+
+需要工具行特化渲染的 JS 插件, 把渲染器写在它的 C++ 壳的 client 入口里 (壳声明
+`interfaces` 含 `agentxx.client.ui`), 脚本只负责工具逻辑与数据。
