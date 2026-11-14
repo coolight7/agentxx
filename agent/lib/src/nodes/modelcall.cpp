@@ -28,7 +28,7 @@ namespace agentxx {
 namespace nodes {
 
 inline static constexpr std::string_view defaultExceptionTip{"[Exception aborted]"};
-inline static constexpr std::string_view defaultUserCancelTip{"[User canceled]"};
+inline static constexpr std::string_view defaultUserCancelTip{"[Canceled]"};
 inline static constexpr std::string_view defaultContinueTip{"[Please continue]"};
 
 // 生成唯一的 tool_call id: 毫秒时间戳 + 32 位随机数
@@ -97,9 +97,9 @@ bool repairNeeded(const std::vector<neograph::ChatMessage>& msgs) {
 /// 上下文健康时只更新诊断信息 (不拷上下文)
 /// - 与修复流程里的诊断部分保持一致: 条数缩减告警 + system 提示词哈希变化告警
 void updateMessageCheckInfo(
-    const std::vector<neograph::ChatMessage>&              msgs,
-    std::string_view                                       threadId,
-    agentxx::middleware::MiddlewareContext*                mwCtx
+    const std::vector<neograph::ChatMessage>& msgs,
+    std::string_view                          threadId,
+    agentxx::middleware::MiddlewareContext*   mwCtx
 ) {
     if (mwCtx == nullptr) {
         return;
@@ -498,10 +498,10 @@ neograph::CompletionParams ModelCallWrapNode::build_params(std::string_view sess
             });
             return before - urls.size();
         };
-        size_t dropped = 0;
-        dropped += keepOnlyUpstreamUrls(m.image_urls);
-        dropped += keepOnlyUpstreamUrls(m.audio_urls);
-        dropped += keepOnlyUpstreamUrls(m.video_urls);
+        size_t dropped  = 0;
+        dropped        += keepOnlyUpstreamUrls(m.image_urls);
+        dropped        += keepOnlyUpstreamUrls(m.audio_urls);
+        dropped        += keepOnlyUpstreamUrls(m.video_urls);
         if (dropped > 0) {
             XX_LOGW(
                 "[modelcall] 会话 {} 的上下文里有 {} 个本地路径形式的附件地址, 已跳过 "
@@ -552,7 +552,7 @@ neograph::CompletionParams ModelCallWrapNode::build_params(std::string_view sess
             }
         }
     }
-    params.tools    = std::move(tool_defs);
+    params.tools = std::move(tool_defs);
     if (!sessionId.empty()) {
         params.extra_fields[std::string(agentxx::protocol::kExtraFieldSessionId)]
             = std::string{sessionId};
@@ -1192,7 +1192,7 @@ asio::awaitable<void> ModelCallWrapNode::baseRun(
         // - 否则在开头插入一条
         // - 走 Session::setSystemMessage 而不是先拷整份上下文再整体替换:
         //   长会话下每次 modelcall 拷一份 MB 级上下文没有实际作用
-        const auto& messages = session->messages();
+        const auto& messages      = session->messages();
         const bool  haveSystemMsg = !messages.empty() && messages.front().role == "system";
 
         neograph::ChatMessage newSystemMsg{.role = "system"};
