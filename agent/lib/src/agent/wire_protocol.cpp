@@ -243,6 +243,18 @@ utilxx_base::Json toJson(const WireHostToolResult& msg) {
     return makeHostToolResultMsg(msg);
 }
 
+utilxx_base::Json toJson(const WireToolRendererRegister& msg) {
+    return makeToolRendererRegisterMsg(msg);
+}
+
+utilxx_base::Json toJson(const WireToolRenderRequest& msg) {
+    return makeToolRenderRequestMsg(msg);
+}
+
+utilxx_base::Json toJson(const WireToolRenderResult& msg) {
+    return makeToolRenderResultMsg(msg);
+}
+
 // ---------------------------------------------------------------------------
 // 对称 fromJson 实现
 // ---------------------------------------------------------------------------
@@ -497,6 +509,18 @@ WireHostToolResult hostToolResultMsgFromJson(const utilxx_base::Json& j) {
     return hostToolResultFromJson(j);
 }
 
+WireToolRendererRegister toolRendererRegisterMsgFromJson(const utilxx_base::Json& j) {
+    return toolRendererRegisterFromJson(j);
+}
+
+WireToolRenderRequest toolRenderRequestMsgFromJson(const utilxx_base::Json& j) {
+    return toolRenderRequestFromJson(j);
+}
+
+WireToolRenderResult toolRenderResultMsgFromJson(const utilxx_base::Json& j) {
+    return toolRenderResultFromJson(j);
+}
+
 // ---------------------------------------------------------------------------
 // 顶层序列化与反序列化
 // ---------------------------------------------------------------------------
@@ -708,6 +732,18 @@ static const std::unordered_map<std::string_view, DeserializerFn>& getDeserializ
         {MsgType::HostToolResult,
          [](const utilxx_base::Json& j) -> std::optional<WireMessage> {
              return hostToolResultMsgFromJson(j);
+         }},
+        {MsgType::ToolRendererRegister,
+         [](const utilxx_base::Json& j) -> std::optional<WireMessage> {
+             return toolRendererRegisterMsgFromJson(j);
+         }},
+        {MsgType::ToolRenderRequest,
+         [](const utilxx_base::Json& j) -> std::optional<WireMessage> {
+             return toolRenderRequestMsgFromJson(j);
+         }},
+        {MsgType::ToolRenderResult,
+         [](const utilxx_base::Json& j) -> std::optional<WireMessage> {
+             return toolRenderResultMsgFromJson(j);
          }},
     };
     return s_map;

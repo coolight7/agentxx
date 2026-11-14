@@ -462,6 +462,9 @@ void PluginMount::revokeEntry(Entry& entry) {
     }
     entry.permissionTools.clear();
 
+    // ⑦ 工具特化渲染: 按 owner 整批删除 (客户端下一帧回退默认渲染)
+    removeToolRenderers(inst->name);
+
     // ⑧ 工具: 从注册表摘除; 工具对象移入回收站, 保活仍在执行中的调用
     for (const auto& name : entry.tools) {
         toolRegistry()->unregisterTool(name);

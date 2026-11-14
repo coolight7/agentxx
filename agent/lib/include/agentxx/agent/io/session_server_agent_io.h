@@ -3,6 +3,7 @@
 #include "agentxx/agent/io/agent_io.h"
 #include "agentxx/agent/io/wire_protocol.h"
 #include "agentxx/agent/session_input_sink.h"
+#include "agentxx/agent/session_tool_render_sink.h"
 #include "asio/any_io_executor.hpp"
 #include "asio/awaitable.hpp"
 #include "asio/experimental/concurrent_channel.hpp"
@@ -56,6 +57,7 @@ class Session;
 ///   无需锁保护; stop() 通过 asio::dispatch(ex_) 保证在 ex_ 线程执行清理
 class SessionServerAgentIO : public AgentIOBase,
                              public agentxx::agent::SessionInputSink,
+                             public agentxx::agent::SessionToolRenderSink,
                              public std::enable_shared_from_this<SessionServerAgentIO> {
 public:
 
@@ -194,6 +196,14 @@ public:
     /// - 可从任意线程调用 (统一投递到本端点的执行器)
     void onAsyncWorksChanged() override;
 
+    /// 插件工具渲染登记变化 ([SessionToolRenderSink] 实现)
+    ///
+    /// 登记/注册/注销/插件禁用卸载都会走到这里: 端点把最新的**全量**快照推给所有
+    /// 客户端 (增量没有意义: 客户端只保留一份表)。无存活客户端时直接忽略 ——
+    /// 下一次握手 [handleHello] 会再推一次。
+    /// - 可从任意线程调用 (统一投递到本端点的执行器)
+    void onToolRenderersChanged() override;
+
     /// 驱动循环 run() 是否仍在运行 (用于停止时等待其退出)
     bool running() const noexcept {
         return running_.load(std::memory_order_acquire);
@@ -326,6 +336,19 @@ private:
 
     /// 向客户端推送当前上下文统计 (target 指定时仅发向该客户端; 为空时向所有客户端广播)
     void sendContextStats(const std::shared_ptr<AgentIOTransportBase>& target = nullptr);
+
+    /// 推送工具特化渲染登记表快照 (全量; 空表也要发, 客户端据此清空)
+    /// - `target` 非空时只发该客户端 (握手补推), 否则面向所有存活客户端
+    /// - 无存活客户端且无 target 时直接忽略
+    void sendToolRenderers(const std::shared_ptr<AgentIOTransportBase>& target = nullptr);
+
+    /// 处理客户端的渲染请求 (WireToolRenderRequest)
+    /// - 在 io 线程取出登记凭据, 再把回调执行投递到工作线程, 结果回给发起请求的客户端
+    /// - 没有对应登记项/实例正在关闭/回调失败都回 `ok=false` (客户端回退默认渲染)
+    void handleToolRenderRequest(
+        const WireToolRenderRequest&                 req,
+        const std::shared_ptr<AgentIOTransportBase>& sender
+    );
 
     /// 向客户端推送当前消息队列更新
     void sendMessageQueueUpdate();

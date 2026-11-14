@@ -1,4 +1,5 @@
 #include "agentxx/plugin/plugin_manager.h"
+#include "agentxx/agent/session_tool_render_sink.h"
 #include "pluginxx/runtime/op_driver.h"
 
 #include "agentxx/agent/config_static.h"
@@ -416,6 +417,30 @@ static const AgentxxPluginMountIface g_ifaceMount = {
     /* struct_size */ sizeof(AgentxxPluginMountIface),
     /* list */ xx_mount_list,
     /* get */ xx_mount_get,
+};
+
+// ==================== 工具特化渲染表 (`agentxx.agent.tool_render`) ====================
+
+// 登记表本身在 PluginMount (实现于本文件末尾), 这里先给表和入口;
+// `query_interface` 在本文件后半段引用 `g_ifaceToolRender`。
+
+static int32_t PLUGINXX_CALL xx_tool_render_register(
+    const PluginxxHost*                host,
+    const PluginxxScopeRef*            agent,
+    const AgentxxPluginToolRenderSpec* spec
+);
+
+static int32_t PLUGINXX_CALL xx_tool_render_unregister(
+    const PluginxxHost*       host,
+    const PluginxxScopeRef*   agent,
+    const PluginxxStringView* tool_name
+);
+
+static const AgentxxPluginToolRenderIface g_ifaceToolRender = {
+    /* version */ AGENTXX_PLUGIN_IFACE_AGENT_TOOL_RENDER_VERSION,
+    /* struct_size */ sizeof(AgentxxPluginToolRenderIface),
+    /* register_tool_renderer */ xx_tool_render_register,
+    /* unregister_tool_renderer */ xx_tool_render_unregister,
 };
 
 static ::PluginxxOperatorHandle* PLUGINXX_CALL xx_call_tool_async(
@@ -1833,6 +1858,9 @@ const void* PLUGINXX_CALL xx_query_interface(const PluginxxHost*, const Pluginxx
     if (n == AGENTXX_PLUGIN_IFACE_AGENT_MOUNT) {
         return &g_ifaceMount;
     }
+    if (n == AGENTXX_PLUGIN_IFACE_AGENT_TOOL_RENDER) {
+        return &g_ifaceToolRender;
+    }
     if (n == AGENTXX_PLUGIN_IFACE_AGENT_RUNTIME) {
         return &g_ifaceRuntime;
     }
@@ -2082,6 +2110,175 @@ std::string PluginMount::getPromptJson() {
         return {};
     }
     return c->agentConfig->prompt.toJson().dump();
+}
+
+// =====================================================================
+// 工具特化渲染 (agentxx.agent.tool_render)
+// =====================================================================
+
+int PluginMount::registerToolRenderer(
+    PluginInstance*                     inst,
+    const AgentxxPluginToolRenderSpec* spec
+) {
+    if (inst == nullptr || spec == nullptr || !acceptsRegistration(inst)) {
+        return AGENTXX_RESULT_ERR_ARG;
+    }
+    if (!agentxx::plugin::specSizeOk<AgentxxPluginToolRenderSpec>(spec->struct_size)) {
+        return AGENTXX_RESULT_ERR_ARG;
+    }
+    const std::string toolName = pluginxx::svToStr(&spec->tool_name);
+    if (toolName.empty()) {
+        return AGENTXX_RESULT_ERR_ARG;
+    }
+    if (spec->collapsed == nullptr && spec->expanded == nullptr
+        && pluginxx::svToStr(&spec->display_name).empty()) {
+        return AGENTXX_RESULT_ERR_ARG; // 既不改名也不给内容 = 无意义注册
+    }
+    const auto existing = toolRenderers_.find(toolName);
+    if (existing != toolRenderers_.end() && existing->second.owner != inst->name) {
+        // 同一工具名的渲染器只能有一个归属; 别人的不抢 (与工具/能力注册同一条规矩)
+        return AGENTXX_RESULT_ERR_CONFLICT;
+    }
+    ToolRendererEntry entry;
+    entry.owner       = inst->name;
+    entry.toolName    = toolName;
+    entry.displayName = pluginxx::svToStr(&spec->display_name);
+    if (entry.displayName.empty()) {
+        entry.displayName = toolName;
+    }
+    entry.collapsed = spec->collapsed;
+    entry.expanded  = spec->expanded;
+    entry.userData  = spec->user_data;
+    if (auto owner = inst->ownerSelf.lock()) {
+        entry.inst = std::static_pointer_cast<PluginInstance>(owner);
+    }
+    toolRenderers_[toolName] = std::move(entry);
+    notifyToolRenderersChanged();
+    return AGENTXX_RESULT_OK;
+}
+
+int PluginMount::unregisterToolRenderer(PluginInstance* inst, PluginxxStringView toolName) {
+    if (inst == nullptr) {
+        return AGENTXX_RESULT_ERR_ARG;
+    }
+    const std::string name   = pluginxx::svToStr(&toolName);
+    const auto        it     = toolRenderers_.find(name);
+    if (it == toolRenderers_.end()) {
+        return AGENTXX_RESULT_ERR_NOT_FOUND;
+    }
+    if (it->second.owner != inst->name) {
+        return AGENTXX_RESULT_ERR_NOT_OWNER;
+    }
+    toolRenderers_.erase(it);
+    notifyToolRenderersChanged();
+    return AGENTXX_RESULT_OK;
+}
+
+const PluginMount::ToolRendererEntry*
+    PluginMount::findToolRenderer(std::string_view toolName) const {
+    const auto it = toolRenderers_.find(toolName);
+    return it == toolRenderers_.end() ? nullptr : &it->second;
+}
+
+std::string PluginMount::toolRenderersJson() const {
+    utilxx_base::Json list = utilxx_base::Json::array();
+    for (const auto& [name, entry] : toolRenderers_) {
+        (void)name;
+        utilxx_base::Json item = utilxx_base::Json::object();
+        item["toolName"]    = entry.toolName;
+        item["displayName"] = entry.displayName;
+        item["collapsed"]   = entry.collapsed != nullptr;
+        item["expanded"]    = entry.expanded != nullptr;
+        item["owner"]       = entry.owner;
+        list.push_back(std::move(item));
+    }
+    return list.dump();
+}
+
+size_t PluginMount::removeToolRenderers(std::string_view owner) {
+    size_t removed = 0;
+    for (auto it = toolRenderers_.begin(); it != toolRenderers_.end();) {
+        if (it->second.owner == owner) {
+            it = toolRenderers_.erase(it);
+            ++removed;
+        } else {
+            ++it;
+        }
+    }
+    if (removed > 0) {
+        notifyToolRenderersChanged();
+    }
+    return removed;
+}
+
+void PluginMount::notifyToolRenderersChanged() {
+    auto ctx = agent_.lock();
+    if (!ctx) {
+        return;
+    }
+    if (auto sink = ctx->toolRenderSink.lock()) {
+        sink->onToolRenderersChanged();
+    }
+}
+
+static int32_t PLUGINXX_CALL xx_tool_render_register(
+    const PluginxxHost*                host,
+    const PluginxxScopeRef*            agent,
+    const AgentxxPluginToolRenderSpec* spec
+) {
+    return agentxx::plugin::guardVtableCall(AGENTXX_RESULT_ERR_INTERNAL, [&]() -> int32_t {
+        auto call = enterHost(host);
+        auto mgr  = call.manager();
+        auto inst = call.instance();
+        if (!mgr || !inst || !spec) {
+            return AGENTXX_RESULT_ERR_ARG;
+        }
+        if (!scopeOk(mgr, agent)) {
+            XX_LOGW("agentxx.agent.tool_render.register_tool_renderer: 引用无效, 请在 mount 里注册");
+            return AGENTXX_RESULT_ERR_NO_AGENT;
+        }
+        if (!specSizeOk<AgentxxPluginToolRenderSpec>(spec->struct_size)) {
+            return AGENTXX_RESULT_ERR_ARG;
+        }
+        // 回调指针与 user_data 在插件生命周期内稳定, 登记表直接存 (不做包装)
+        auto                        mgrPtr   = mgr;
+        auto                        instPtr  = inst;
+        AgentxxPluginToolRenderSpec specCopy = *spec;
+        return ioCallSyncKeep<int32_t>(call, mgrPtr, [mgrPtr, instPtr, specCopy, agent]() {
+            return mountCall(mgrPtr, agent, noAgent, [instPtr, specCopy](PluginMount& mount) {
+                return mount.registerToolRenderer(instPtr, &specCopy);
+            });
+        });
+    });
+}
+
+static int32_t PLUGINXX_CALL xx_tool_render_unregister(
+    const PluginxxHost*       host,
+    const PluginxxScopeRef*   agent,
+    const PluginxxStringView* tool_name
+) {
+    if (agentxx::plugin::PluginStringView::empty(tool_name)) {
+        return AGENTXX_RESULT_ERR_ARG;
+    }
+    return agentxx::plugin::guardVtableCall(AGENTXX_RESULT_ERR_INTERNAL, [&]() -> int32_t {
+        auto call = enterHost(host);
+        auto mgr  = call.manager();
+        auto inst = call.instance();
+        if (!mgr || !inst) {
+            return AGENTXX_RESULT_ERR_ARG;
+        }
+        if (!scopeOk(mgr, agent)) {
+            return AGENTXX_RESULT_ERR_NO_AGENT;
+        }
+        auto               mgrPtr   = mgr;
+        auto               instPtr  = inst;
+        PluginxxStringView nameCopy = *tool_name;
+        return ioCallSyncKeep<int32_t>(call, mgrPtr, [mgrPtr, instPtr, nameCopy, agent]() {
+            return mountCall(mgrPtr, agent, noAgent, [instPtr, nameCopy](PluginMount& mount) {
+                return mount.unregisterToolRenderer(instPtr, nameCopy);
+            });
+        });
+    });
 }
 
 namespace {

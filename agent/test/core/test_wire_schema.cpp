@@ -104,6 +104,11 @@ using agentxx::agent::WireHostToolResult;
 using agentxx::agent::WireHostToolUnregister;
 using agentxx::agent::WireRemoveModel;
 using agentxx::agent::WireRemoveModelResult;
+// 工具特化渲染 (追加在变体末尾)
+using agentxx::agent::WireToolRenderItem;
+using agentxx::agent::WireToolRenderRequest;
+using agentxx::agent::WireToolRenderResult;
+using agentxx::agent::WireToolRendererRegister;
 
 namespace {
 
@@ -620,6 +625,45 @@ std::vector<WireSample> wireSamples() {
         m.resultJson   = R"({"opened":true})";
         m.errorMessage = "";
         out.push_back({"host_tool_result", WireMessage{std::move(m)}});
+    }
+    // 49) 服务端下发工具特化渲染登记表快照 (全量)
+    {
+        WireToolRenderItem item;
+        item.toolName    = "agentxx_filesystem_edit";
+        item.displayName = "Edit";
+        item.collapsed   = true;
+        item.expanded    = true;
+        item.owner       = "agentxx_filesystem";
+        WireToolRendererRegister m;
+        m.sessionId = "t1";
+        m.renderers.push_back(std::move(item));
+        out.push_back({"tool_renderer_register", WireMessage{std::move(m)}});
+    }
+    // 50) 客户端请求算出某条工具行的内容
+    {
+        WireToolRenderRequest m;
+        m.requestId  = 11;
+        m.sessionId  = "t1";
+        m.toolCallId = "call-1";
+        m.toolName   = "agentxx_filesystem_edit";
+        m.part       = "collapsed";
+        m.inputHash  = 123456789;
+        m.argsJson   = R"({"path":"/tmp/a.txt"})";
+        m.resultText = "ok";
+        m.isFinished = true;
+        m.isError    = false;
+        m.maxWidth   = 80;
+        out.push_back({"tool_render_request", WireMessage{std::move(m)}});
+    }
+    // 51) 服务端回渲染结果
+    {
+        WireToolRenderResult m;
+        m.requestId    = 11;
+        m.ok           = true;
+        m.text         = "+2 -1 /tmp/a.txt";
+        m.itemsJson    = "[]";
+        m.errorMessage = "";
+        out.push_back({"tool_render_result", WireMessage{std::move(m)}});
     }
     return out;
 }

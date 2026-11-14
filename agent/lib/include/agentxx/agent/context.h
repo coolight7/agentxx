@@ -73,6 +73,8 @@ class SessionStore;
 class AgentHost;
 /// 会话输入入口 (由当前驱动这个会话的端点实现)
 class SessionInputSink;
+/// 工具特化渲染变更的出口 (由当前驱动这个 agent 的端点实现)
+class SessionToolRenderSink;
 /// 会话资源应用器 (Skill/Memory/MCP 扩展; 完整定义见
 /// [resource_applier.h](/agent/lib/include/agentxx/agent/resource_applier.h))
 class AgentResourceApplier;
@@ -948,6 +950,11 @@ public:
     /// 插件管理器 (生命周期/热插拔; 进程内唯一)
     /// - 由 BaseAgent::init 取得或自建并注入
     std::shared_ptr<plugin::PluginManager> pluginManager = nullptr;
+
+    /// 工具特化渲染变更的出口 (由当前驱动本 agent 的端点实现)
+    /// - 弱引用: 端点停止时必须清空; 未登记时注册变化只影响本地状态 (不推给客户端)
+    /// - 仅 io 线程读写 (与其他挂载级状态同一约束)
+    std::weak_ptr<SessionToolRenderSink> toolRenderSink;
 
     /// 本上下文是否"拥有"[pluginManager] (自建时为 true, 外部注入共享管理器时置 false)
     /// - 只有拥有者才会在上下文析构时调 `shutdownAll()`; 共享管理器属于主程序,

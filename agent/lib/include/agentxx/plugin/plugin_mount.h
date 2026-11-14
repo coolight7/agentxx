@@ -374,6 +374,55 @@ public:
         std::map<std::string, std::pair<uint64_t, PromptValue>, std::less<>> contributions;
     };
 
+    // =====================================================================
+    // 工具特化渲染 (agentxx.agent.tool_render)
+    // =====================================================================
+    //
+    // 每项按工具名唯一, 归属是注册它的插件。客户端拿到的是本表的快照
+    // (下发 `tool_renderer_register`), 算内容时回来查本表并调回调。
+    // 线程: 与其他挂载级状态一样只在 io 线程改; 回调**不在** io 线程执行 ——
+    // 主程序把它投递到工作线程池 (客户端在等结果, 不能挡住会话推进)。
+
+    /// 一项渲染登记
+    struct ToolRendererEntry {
+        std::string               owner;       ///< 注册它的插件名
+        std::string               toolName;
+        std::string               displayName; ///< 归一后恒非空
+        AgentxxPluginToolRenderFn collapsed = nullptr;
+        AgentxxPluginToolRenderFn expanded  = nullptr;
+        void*                     userData  = nullptr;
+        /// 注册它的实例 (弱引用)
+        /// - 渲染请求会在工作线程执行回调, 需要先把实例升级成强引用并登记一次
+        ///   执行租约, 否则插件可能在回调期间被卸载 (dlclose 越过执行中的代码)
+        /// - 单元测试构造的伪实例可能没有自持引用, 此时为空 (无租约约束)
+        std::weak_ptr<PluginInstance> inst;
+    };
+
+    /// 注册/覆盖 (自己的项覆盖自己; 别人的项不抢)
+    int registerToolRenderer(PluginInstance* inst, const AgentxxPluginToolRenderSpec* spec);
+
+    /// 撤销本插件的项 (没有返回 ERR_NOT_FOUND; 别人的 ERR_NOT_OWNER)
+    int unregisterToolRenderer(PluginInstance* inst, PluginxxStringView toolName);
+
+    /// 按工具名取登记项 (没有返回 nullptr; 只在 io 线程用)
+    const ToolRendererEntry* findToolRenderer(std::string_view toolName) const;
+
+    /// 登记快照 JSON: `[{toolName,displayName,collapsed,expanded,owner}]`
+    std::string toolRenderersJson() const;
+
+    /// 删除某 owner 的全部登记项 (禁用/卸载); 返回删除条数
+    size_t removeToolRenderers(std::string_view owner);
+
+    /// 登记表是否为空 (下发前先问一下, 空表不发)
+    bool toolRenderersEmpty() const noexcept {
+        return toolRenderers_.empty();
+    }
+
+    /// 全部登记项 (键 = 工具名; 只在 io 线程用)
+    const std::map<std::string, ToolRendererEntry, std::less<>>& toolRenderers() const noexcept {
+        return toolRenderers_;
+    }
+
     std::string getPromptJson();
     int         setPromptJson(PluginInstance* inst, PluginxxStringView prompt_json);
 
@@ -541,6 +590,9 @@ private:
     /// 撤销本挂载上一个实例的全部实体 (拆挂载 / 挂载失败回滚)
     void revokeEntry(Entry& entry);
 
+    /// 渲染登记表变化后通知 agent 端点重发快照 (端点没挂时什么也不做)
+    void notifyToolRenderersChanged();
+
     std::weak_ptr<PluginManager>                host_;
     std::weak_ptr<agentxx::agent::AgentContext> agent_;
     std::string                                 agentId_;
@@ -554,6 +606,8 @@ private:
     std::vector<std::shared_ptr<PluginTool>> retiredTools_;
 
     std::map<std::string, std::shared_ptr<GraphTypeSlot>, std::less<>> graphTypeSlots_;
+    /// 工具特化渲染登记 (键 = 工具名)
+    std::map<std::string, ToolRendererEntry, std::less<>> toolRenderers_;
     size_t                                                             runningTurns_ = 0;
     std::map<std::string, PromptKeyState, std::less<>>                 promptKeys_;
     uint64_t                                                           promptSequence_ = 0;

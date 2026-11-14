@@ -3,6 +3,7 @@
 
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/resource_applier.h"
+#include "agentxx/agent/tool_render_bridge.h"
 #include "agentxx/event/event_stream.h"
 #include "agentxx/middlewares/memory_file.h"
 #include "agentxx/middlewares/middleware.h"
@@ -14,6 +15,7 @@
 #include "agentxx/nodes/toolcall.h"
 #include "agentxx/plugin/api/plugin_kit.h"
 #include "agentxx/plugin/plugin_manager.h"
+#include "agentxx/plugin/plugin_mount.h"
 #include "agentxx/util/neograph_json_bridge.h"
 #include "asio/co_spawn.hpp"
 #include "asio/detached.hpp"
@@ -796,6 +798,90 @@ asio::awaitable<TestResult> run_plugin_tests() {
                 XX_TEST_EXPECT_TRUE(j["resultIsObject"].get<bool>());
                 XX_TEST_EXPECT_FALSE(j["ok"].get<bool>());
                 XX_TEST_EXPECT_TRUE(j["error"].is_string());
+            }
+        }
+
+        // ---- 16d. JS 工具特化渲染 (agentxx.agent.tool_render) ----
+        // 脚本用 registerToolRenderer 登记显示名与内容回调; 主程序侧落成一条登记项,
+        // 客户端只能看到"有没有回调", 内容由这里 (工作线程) 算出来
+        {
+            auto mount = ctx->pluginManager->findMountById(ctx->agentId);
+            XX_TEST_EXPECT_TRUE(mount != nullptr);
+            if (mount) {
+                const auto* entry = mount->findToolRenderer("js_render_demo");
+                XX_TEST_EXPECT_TRUE(entry != nullptr);
+                if (entry) {
+                    XX_TEST_EXPECT_TRUE(entry->collapsed != nullptr);
+                    XX_TEST_EXPECT_TRUE(entry->expanded != nullptr);
+                    XX_TEST_EXPECT_TRUE(!entry->displayName.empty());
+
+                    const std::string argsJson   = R"({"text":"hi"})";
+                    const std::string toolName   = "js_render_demo";
+                    const std::string callId     = "call-render-1";
+                    AgentxxPluginToolRenderInput input{};
+                    input.struct_size  = sizeof(AgentxxPluginToolRenderInput);
+                    input.tool_call_id = agentxx::plugin::PluginStringView::from(
+                        callId.data(),
+                        callId.size()
+                    );
+                    input.tool_name = agentxx::plugin::PluginStringView::from(
+                        toolName.data(),
+                        toolName.size()
+                    );
+                    input.args_json = agentxx::plugin::PluginStringView::from(
+                        argsJson.data(),
+                        argsJson.size()
+                    );
+                    input.is_finished = 1;
+                    input.max_width   = 80;
+
+                    // 折叠内容: 一行文本 (脚本回 "echo hi")
+                    AgentxxPluginToolRenderOutput collapsedOut{};
+                    const int32_t collapsedRc
+                        = entry->collapsed(entry->userData, &input, &collapsedOut);
+                    XX_TEST_EXPECT_EQ(collapsedRc, AGENTXX_RESULT_OK);
+                    std::string collapsedText;
+                    if (collapsedOut.text.data) {
+                        collapsedText.assign(
+                            collapsedOut.text.data,
+                            static_cast<size_t>(collapsedOut.text.size)
+                        );
+                    }
+                    pluginxx::hostMemoryFree(collapsedOut.text.data);
+                    XX_TEST_EXPECT_EQ(collapsedText, std::string{"echo hi"});
+
+                    // 展开体: items JSON 数组
+                    AgentxxPluginToolRenderOutput expandedOut{};
+                    const int32_t expandedRc
+                        = entry->expanded(entry->userData, &input, &expandedOut);
+                    XX_TEST_EXPECT_EQ(expandedRc, AGENTXX_RESULT_OK);
+                    utilxx_base::Json expandedItems = utilxx_base::Json::array();
+                    if (expandedOut.items_json.data) {
+                        try {
+                            expandedItems = utilxx_base::Json::parse(
+                                std::string_view{
+                                    expandedOut.items_json.data,
+                                    static_cast<size_t>(expandedOut.items_json.size)
+                                }
+                            );
+                        } catch (...) {
+                        }
+                    }
+                    pluginxx::hostMemoryFree(expandedOut.items_json.data);
+                    XX_TEST_EXPECT_TRUE(expandedItems.is_array());
+                    XX_TEST_EXPECT_TRUE(!expandedItems.empty());
+                }
+
+                // 快照 (下发给客户端的就是它): 有该工具一项
+                const auto items = agentxx::agent::collectToolRenderItems(*ctx);
+                const auto found = std::find_if(
+                    items.begin(),
+                    items.end(),
+                    [](const agentxx::agent::WireToolRenderItem& item) {
+                        return item.toolName == "js_render_demo" && item.collapsed && item.expanded;
+                    }
+                );
+                XX_TEST_EXPECT_TRUE(found != items.end());
             }
         }
 

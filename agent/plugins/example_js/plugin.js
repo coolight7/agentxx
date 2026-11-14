@@ -172,6 +172,33 @@ agentxx.registerTool({
   }),
 });
 
+// ---- 工具 10: 工具行特化渲染 (registerToolRenderer) ----
+// agent 侧插件也能给工具行定制显示名与内容, 远程 TUI 同样生效:
+// 主程序把登记下发到客户端, 客户端需要内容时回来问, 这里算完回给它。
+agentxx.registerTool({
+  name: "js_render_demo",
+  description: "JS plugin demo: a tool whose row is rendered by registerToolRenderer.",
+  parameters: {
+    text: { type: "string", description: "text to echo" },
+  },
+  execute: (args) => "echo: " + (args.text || ""),
+});
+
+agentxx.registerToolRenderer({
+  tool: "js_render_demo",
+  displayName: "JS 渲染演示",
+  // 折叠内容: 一行纯文本 (不要带 " · " 分隔符)
+  collapsed: (input) => {
+    const arg = (input.args && input.args.text) || "";
+    return "echo " + arg + (input.isFinished ? "" : " ...");
+  },
+  // 展开体: 界面描述层 items 数组
+  expanded: (input) => [
+    { type: "text", text: "args: " + JSON.stringify(input.args) },
+    { type: "text", text: "result: " + (input.result || "(pending)") },
+  ],
+});
+
 // ---- 通知点: agent_start (point 0) ----
 agentxx.onHook(0, (info) => {
   agentxx.log(2, "js hook agent_start fired: " + JSON.stringify(info));

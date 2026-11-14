@@ -775,6 +775,48 @@ struct WireHostToolResult {
     std::string errorMessage;
 };
 
+/// 一项工具特化渲染登记 (agent 侧插件提供的显示名与内容能力)
+struct WireToolRenderItem {
+    std::string toolName;
+    std::string displayName;
+    bool        collapsed = false; ///< 有没有折叠内容回调
+    bool        expanded  = false; ///< 有没有展开内容回调
+    std::string owner;             ///< 注册它的插件名 (只用于诊断)
+};
+
+/// agent 下发渲染登记表快照 (Server -> Client; 全量, 空数组 = 清空)
+struct WireToolRendererRegister {
+    std::string                     sessionId;
+    std::vector<WireToolRenderItem> renderers;
+};
+
+/// 客户端请求算出某条工具行的内容 (Client -> Server)
+struct WireToolRenderRequest {
+    int64_t     requestId = 0;
+    std::string sessionId;
+    std::string toolCallId;
+    std::string toolName;
+    /// `collapsed` = 折叠内容 (一行文本) / `expanded` = 展开体 (items JSON)
+    std::string part;
+    /// 输入特征 (调用 id 缺失时客户端用它区分不同输入)
+    uint64_t    inputHash = 0;
+    std::string argsJson;
+    std::string resultText;
+    bool        isFinished = false;
+    bool        isError    = false;
+    int32_t     maxWidth   = 0;
+};
+
+/// 服务端回渲染结果 (Server -> Client)
+/// - `ok=false` 表示这次没算出内容 (或超时/失败), 客户端回退默认渲染并缓存
+struct WireToolRenderResult {
+    int64_t     requestId = 0;
+    bool        ok        = false;
+    std::string text;      ///< 折叠内容 (一行纯文本, 不带分隔符)
+    std::string itemsJson; ///< 展开体 (界面描述层 items JSON)
+    std::string errorMessage;
+};
+
 /// 所有可能的线消息类型 (tagged variant)
 using WireMessage = std::variant<
     WireHello,
@@ -826,7 +868,11 @@ using WireMessage = std::variant<
     WireHostToolRegister,
     WireHostToolUnregister,
     WireHostToolCall,
-    WireHostToolResult>;
+    WireHostToolResult,
+    /// 工具特化渲染 (agent 侧插件登记 → 客户端按需要内容)
+    WireToolRendererRegister,
+    WireToolRenderRequest,
+    WireToolRenderResult>;
 
 // ---------------------------------------------------------------------------
 // AgentIOTransportBase: 两个 AgentIOBase 端点之间的协议传输层

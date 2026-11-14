@@ -101,6 +101,18 @@ static_assert(AGENTXX_PLUGIN_IFACE_AGENT_GRAPH_BASELINE_SIZE >= 8u);
 static_assert(AGENTXX_PLUGIN_IFACE_AGENT_GRAPH_BASELINE_SIZE <= sizeof(AgentxxPluginGraphIface));
 
 template<>
+struct IfaceMeta<AgentxxPluginToolRenderIface> {
+    static constexpr int32_t  min_version = AGENTXX_PLUGIN_IFACE_AGENT_TOOL_RENDER_MIN_VERSION;
+    static constexpr uint32_t baseline_size
+        = AGENTXX_PLUGIN_IFACE_AGENT_TOOL_RENDER_BASELINE_SIZE;
+};
+
+static_assert(AGENTXX_PLUGIN_IFACE_AGENT_TOOL_RENDER_BASELINE_SIZE >= 8u);
+static_assert(
+    AGENTXX_PLUGIN_IFACE_AGENT_TOOL_RENDER_BASELINE_SIZE <= sizeof(AgentxxPluginToolRenderIface)
+);
+
+template<>
 struct IfaceMeta<AgentxxPluginMountIface> {
     static constexpr int32_t  min_version   = AGENTXX_PLUGIN_IFACE_AGENT_MOUNT_MIN_VERSION;
     static constexpr uint32_t baseline_size = AGENTXX_PLUGIN_IFACE_AGENT_MOUNT_BASELINE_SIZE;

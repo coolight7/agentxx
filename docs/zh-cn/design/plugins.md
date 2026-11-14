@@ -27,7 +27,7 @@ Agentxx 插件系统采用 **纯 C ABI + COM 风格接口表查询**：
   核心 vtable (冻结) ── alloc / free / query_interface (IID → 接口表)
                        │
          ┌─────────────┼─────────────┬──────────────┬─────────────┐
-         │ tools       │ session     │ broadcasts   │ scheduler   │  ...20 张 agent + 17 张 client
+         │ tools       │ session     │ broadcasts   │ scheduler   │  ...21 张 agent + 17 张 client
          │ register/   │ 会话上下文  │ publish/     │ sleep/      │  capabilities/
          │ call_tool   │ 与取消      │ subscribe    │ offload     │  plugins/
          └─────────────┘             └──────────────┘             │  config/model/cancel/...
@@ -424,13 +424,13 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 
 ## 8. Agent 侧接口表一览
 
-> 共 20 张 agent 侧接口表: 10 张**业务表** (`agentxx.agent.*`, 主程序实现) + 10 张**通用表**
+> 共 21 张 agent 侧接口表: 11 张**业务表** (`agentxx.agent.*`, 主程序实现) + 10 张**通用表**
 > (由插件框架声明与实现, agent 侧与 client 侧各一份)。通用表的 IID 是 `<应用名>.<表名>`,
 > 本项目应用名 `agentxx`, 也就是 `agentxx.log` / `agentxx.broadcasts` 这一组 (源码里写作
 > `PLUGINXX_APP_ID("log")`, 表名部分冻结) —— **按 `pluginxx.log` 或 `agentxx.agent.log` 查询都不会命中**。
-> 另有一张 `agentxx.net` (网络, 两侧都提供, 不计入上面的 20 张), 见 §22。
+> 另有一张 `agentxx.net` (网络, 两侧都提供, 不计入上面的 21 张), 见 §22。
 
-### 8.1 业务表 (`agentxx.agent.*`, 10 张)
+### 8.1 业务表 (`agentxx.agent.*`, 11 张)
 
 | IID | 版本 | 能力 |
 |-----|------|------|
@@ -443,6 +443,7 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 | `agentxx.agent.resources` | 2 | `register_skill_dir/memory_file/mcp_server` (仅初始化阶段) + `get_own_resources` (冻结后不可变) |
 | `agentxx.agent.graph` | 2 | 执行图扩展: `register_node_type/unregister_node_type` (插件自定义节点类型, 注入 per-agent GraphRegistry) + `get_graph_json/get_graph_name/set_graph_json` (查看/修改主程序执行图, 默认名 `agentxx.default`; 插件加载阶段生效, 主程序构建 engine 前处理)。**图状态不含对话上下文**: `state_json` 里没有 `messages` 通道 (LLM 上下文由会话持有), 只有控制类通道与只读影子通道 `xx_messagesMeta` (条数/版本/角色分布/末尾消息摘要, 载荷与上下文大小无关); 需要上下文内容用 `agentxx.agent.context` 查询。插件写 `{"channel":"messages", ...}` 的 writes 会被主程序改写成会话上下文写入 (默认 append, `"mode":"overwrite"` 整体替换; 空列表的 overwrite 忽略), 因此按旧契约写 `messages` 的插件仍可用。**条件边用 `xx_has_tool_calls`** (agentxx 注册, 语义 = 最后一条 assistant 是否带 tool_calls; 读 `xx_messagesMeta.last_assistant_tool_calls`, 缺该通道时回退扫描 `messages` 通道), 内置 `has_tool_calls` 在新架构下恒为 false, 不要使用 |
 | `agentxx.agent.mount` | 1 | 挂载查询 (诊断用): `list` (全部挂载摘要 JSON 数组, 每项含 agentId/agentName/workDir/language/mountSeq/plugins) + `get` (按 agentId 查单个挂载摘要, 没有该挂载返回 `AGENTXX_RESULT_ERR_NOT_FOUND`) |
+| `agentxx.agent.tool_render` | 1 | 工具行特化渲染 (agent 侧插件也能定制工具行): `register_tool_renderer` (工具名 + 显示名 + 折叠/展开两个内容回调; 同名已由别的插件注册返回 `ERR_CONFLICT`, 自己的项覆盖自己) + `unregister_tool_renderer` (没有该项 `ERR_NOT_FOUND`, 别人的 `ERR_NOT_OWNER`)。登记表由主程序下发客户端 (`tool_renderer_register`), 客户端按需发 `tool_render_request` 回来, 回调在**工作线程**执行并把结果回给客户端 (`tool_render_result`) —— 远程 TUI 与本地直连同一套路径, 详见 §9.7 |
 | `agentxx.agent.runtime` | 2 | 会话运行时 (插件挂自己的根并驱动会话): `mount_root/unmount_root` (带自己的 `AgentConfig` 覆盖与插件挂载策略) + `open_channel/close_channel` (一个 sessionId 一条通道, 事件经回调投递) + `send_input/cancel/select_model/respond_interrupt` + `get_channel_state/get_context_messages/list_runtime` (只读查询) + `register_trigger/unregister_trigger/emit_event/register_timer/unregister_timer` (事件驱动)。入口用 `root_id` / `channel_id` 句柄寻址, 不带 agent 引用 —— 它看的是整个容器。v2 表尾追加后台任务四成员 (`submit/cancel/get/list_async_work`, 基线不变, `ifaceHas` 判定)。详见 §19 |
 
 ### 8.2 通用表 (`agentxx.*`, 10 张)
@@ -1055,9 +1056,18 @@ Agentxx 客户端采用统一的分层工具特化渲染机制，TUI 核心层�
      这类消息的特化渲染必须由**类型级渲染器**从消息自带的参数/结果推导
      (见第 1 条; `agentxx_planning` 因此同时注册类型级渲染器与实时装饰, 两条路径共用同一内容构建函数)。
 4. **优先级与降级路径**：
-   - 渲染时查询顺序：`toolDecors` (按 `tool_call_id`) > `toolRenderers` (按 `tool_name`, 插件注册) >
-     `builtinToolRenderers` (按 `tool_name`, 主程序内置) > 通用降级展示 (原始 `toolName` + 参数/结果文本)。
+   - 渲染时查询顺序：`toolDecors` (按 `tool_call_id`) > `toolRenderers` (按 `tool_name`, 本进程插件注册) >
+     `builtinToolRenderers` (按 `tool_name`, 主程序内置) > `remoteToolRenderers` (按 `tool_name`,
+     agent 侧插件登记) > 通用降级展示 (原始 `toolName` + 参数/结果文本)。
    - 插件卸载/禁用时主程序自动摘除注册并还原降级展示，启用时无损恢复 (主程序内置渲染器不受影响)。
+   - **agent 侧登记项 (远程) 的内容不算在客户端算**：插件代码在 agent 进程里 (远程模式下本来就是
+     两个进程), 客户端只保留一份登记表快照 (`tool_renderer_register`: 工具名 + 显示名 + 两部分有没有
+     回调), 算内容时发 `tool_render_request` 回来, 主程序在**工作线程**执行回调并把结果回给
+     客户端 (`tool_render_result`)。请求带 `requestId`, 客户端 3 秒超时就当"没内容"收尾 (对端旧版本 /
+     结果丢失不会让这一行一直 pending); 登记表快照变化时丢弃远程渲染缓存条目并收尾等待中的请求。
+     本地直连与远程连接走同一条路 (差别只在传输层), 所以两种模式行为一致。
+   - **折叠与展开各一份缓存、各一份回调**: 远程路径同样按 `part` 只请求用户真正在看的那一部分,
+     展开体只在展开时才算。
 
 5. **items 渲染与中断内容的复用边界 (重构后)**：
    - **同一份描述层**：插件的 `items` (面板/Info 段/工具装饰/overlay) 与中断描述
@@ -1177,10 +1187,20 @@ Agentxx 仅维护单一 C++ 插件基础设施；JS 插件经内置 `agentxx_jav
 - **查询面已对齐**：`getPrompt()` / `setPrompt(objOrString)` / `getToolPrompt(name)` (提示词贡献与工具提示词)、`getSessionWorkDir(sessionId?)` / `isCanceled(sessionId?)`、`getMessages(sessionId)` / `messagesCount(sessionId)`、`getGraphJson()` / `getGraphName()` / `setGraphJson(objOrString)`、`listMounts()` / `getMount(agentId?)` (缺省查本实例所属 agent)、`addShareStore(sessionId, content)` (返回条目 id)、`getOwnResources()`、`getModelConfig()`
 - **会话运行时 (`agentxx.agent.runtime`) 已对齐**：`mountRoot({name, config, mountPlugins, includeCreator})` (返回 `rootId`，被拒为空串，需在容器级时机调，在 `mount` 里调会被拒)、`unmountRoot(rootId)`；`openChannel({rootId, sessionId?, title?, model?, maxQueue?, interruptTimeoutMs?, onEvent})` (返回 `channelId`，被拒为 0)、`closeChannel` / `cancelChannel` / `sendInput(channelId, textOrInput)` / `selectModel` / `respondInterrupt(channelId, interruptId, values)` / `getChannelState` / `getChannelMessages`；`registerTrigger({channelId, topic, policy?, debounceMs?, maxQueue?, delivery?})` / `unregisterTrigger`、`registerTimer({channelId, firstDelayMs, intervalMs?, policy?, input?})` / `unregisterTimer`、`emitEvent(topic, payload)`。`onEvent(ev)` 的 `ev` 是 `{channelId, kind, text?, interruptId?, payload}`，`kind` 取 `ready` / `turn_start` / `delta_text` / `delta_thinking` / `tool_start` / `tool_end` / `gen_status` / `turn_end` / `context_stats` / `input_ack` / `queue_state` / `interrupt` / `interrupt_expired` / `tip` / `error` / `closed`；与后台任务一样在主程序 io 线程收事件、转投 JS 线程后才调脚本（`closed` 是最后一条，到这就释放登记）。`listRuntime()` 返回清单对象 `{roots, triggers, timers}`（`roots[]` 每项带 `rootId` / `name` / `ready` / `configSummary` / `channels[]`）
 - **广播**：`declareBroadcast(decl)` (声明自己的频道，失败报异常，`id` 可短名) / `readBroadcast(id)` (没声明、没当前值或已结束都返回 `null`) / `publish` / `subscribe` / `unsubscribe` / `endBroadcast(id, reason?)`
-- **未对齐的面：工具特化渲染**（显示名 + 折叠/展开内容）。两条原因都不是"UI 线程不能跑 JS"：
-    - **注册在 client 侧**：渲染器由客户端插件经 `agentxx.client.ui` 的 `register_tool_renderer` 注册 (`AgentxxToolRenderSpec`)，而 `agentxx_javascript_engine` 只有 agent 侧入口 (`agentxx_plugin_agent_*`)，agent 侧的脚本拿不到客户端注册表；目前也没有 client 侧 JS 引擎。
-    - **内容回调是同步返回的**：它在 **client IO 线程**执行，并在同一次调用里返回文本 / items（UI 线程只读语义缓存 `ClientToolRenderCache`，未命中就提交 `ClientToolRenderRequest`，结果到达后 `onToolRenderUpdated` 重绘，见 §9.6；没有语义缓存的环境如单元测试 / 精简嵌入会同步内联调用）。显示名是注册时就有的，首帧直接可见。JS 要实现它，得在那个回调里同步转到 JS 线程取值；脚本里 `await` 会把 client IO 线程卡住，因此需要超时保护，或给 ABI 加"先返回 pending、稍后回填缓存"的形态。
-  - 现在的做法：需要特化渲染的插件把渲染器写在 C++ 壳里（壳要有 client 侧入口并注册到客户端注册表），脚本只管工具逻辑。
+- **工具特化渲染已对齐 (跨端)**: `registerToolRenderer({tool, displayName, collapsed, expanded})` /
+  `unregisterToolRenderer(toolName)`。agent 侧插件 (C++ 与 JS 同一条路) 经 `agentxx.agent.tool_render`
+  登记, 主程序把登记表快照下发给客户端 (`tool_renderer_register`), 客户端需要内容时发
+  `tool_render_request` 回来, 主程序在**工作线程**执行回调并回 `tool_render_result`; 因此远程
+  TUI 同样生效, 客户端 IO 线程不再进插件代码。脚本侧约定:
+    - `collapsed(input)` 返回**一行纯文本** (不带 ` · ` 分隔符), `expanded(input)` 返回界面
+      描述层 items 数组; 返回 `null` / 空串 / 空数组 = 这次没有自定义内容 (客户端走默认渲染并缓存);
+    - `input` = `{toolCallId, toolName, argsJson, args, result, isFinished, isError, maxWidth}`,
+      `args` 已解析成对象; 回调里不要 `await` (预算 200 ms, 超时按没内容处理);
+    - 显示名在注册时确定并随快照下发, 工具行第一帧就有名字
+  - 客户端匹配优先级: 实例级装饰 > 本进程插件注册项 > 主程序内置渲染器 > 远程 (agent 侧) 登记项;
+    远程内容有 3 秒超时 (对端旧版本/结果丢失时按没内容收尾, 不会一直 pending)
+  - C++ 插件侧同一套 ABI 在 `plugin_api.h` 的 `agentxx.agent.tool_render`; 壳插件仍有 client 侧入口时,
+    两边注册同一个工具名以本进程注册项为准 (内容少一次往返)
 - 可自研脚本JS 运行时插件 (Python/Lua 等) 替换或扩充脚本能力
 
 ---

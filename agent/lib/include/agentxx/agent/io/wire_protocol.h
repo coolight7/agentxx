@@ -103,6 +103,12 @@ struct MsgType { // ===== Client -> Server =====
     inline static constexpr std::string_view HostToolCall = "host_tool_call";
     /// 客户端返回 host tool 执行结果
     inline static constexpr std::string_view HostToolResult = "host_tool_result";
+    /// 服务端下发工具特化渲染登记表快照 (全量)
+    inline static constexpr std::string_view ToolRendererRegister = "tool_renderer_register";
+    /// 客户端请求算出某条工具行的内容
+    inline static constexpr std::string_view ToolRenderRequest = "tool_render_request";
+    /// 服务端返回渲染结果
+    inline static constexpr std::string_view ToolRenderResult = "tool_render_result";
 };
 
 /// 中断/取消原因 (供 BaseAgent 区分中断来源)
@@ -1697,6 +1703,103 @@ inline WireHostToolResult hostToolResultFromJson(const utilxx_base::Json& j) {
     return m;
 }
 
+// ---------------------------------------------------------------------------
+// WireToolRendererRegister / WireToolRenderRequest / WireToolRenderResult
+// ---------------------------------------------------------------------------
+
+inline utilxx_base::Json makeToolRendererRegisterMsg(const WireToolRendererRegister& m) {
+    utilxx_base::Json renderers = utilxx_base::Json::array();
+    for (const auto& r : m.renderers) {
+        renderers.push_back(
+            utilxx_base::Json{
+                {"toolName",    r.toolName   },
+                {"displayName", r.displayName},
+                {"collapsed",   r.collapsed  },
+                {"expanded",    r.expanded   },
+                {"owner",       r.owner      },
+        }
+        );
+    }
+    return {
+        {"type",      MsgType::ToolRendererRegister},
+        {"sessionId", m.sessionId                    },
+        {"renderers", std::move(renderers)           },
+    };
+}
+
+inline WireToolRendererRegister toolRendererRegisterFromJson(const utilxx_base::Json& j) {
+    WireToolRendererRegister m;
+    m.sessionId = j.value("sessionId", std::string{});
+    if (j.contains("renderers") && j["renderers"].is_array()) {
+        for (const auto& item : j["renderers"]) {
+            WireToolRenderItem info;
+            info.toolName    = item.value("toolName", std::string{});
+            info.displayName = item.value("displayName", std::string{});
+            info.collapsed   = item.value("collapsed", false);
+            info.expanded    = item.value("expanded", false);
+            info.owner       = item.value("owner", std::string{});
+            if (!info.toolName.empty()) {
+                m.renderers.push_back(std::move(info));
+            }
+        }
+    }
+    return m;
+}
+
+inline utilxx_base::Json makeToolRenderRequestMsg(const WireToolRenderRequest& m) {
+    return {
+        {"type",       MsgType::ToolRenderRequest},
+        {"requestId",  m.requestId                },
+        {"sessionId",  m.sessionId                },
+        {"toolCallId", m.toolCallId               },
+        {"toolName",   m.toolName                 },
+        {"part",       m.part                     },
+        {"inputHash",  m.inputHash                },
+        {"argsJson",   m.argsJson                 },
+        {"resultText", m.resultText               },
+        {"isFinished", m.isFinished               },
+        {"isError",    m.isError                  },
+        {"maxWidth",   m.maxWidth                 },
+    };
+}
+
+inline WireToolRenderRequest toolRenderRequestFromJson(const utilxx_base::Json& j) {
+    WireToolRenderRequest m;
+    m.requestId  = j.value("requestId", int64_t{0});
+    m.sessionId  = j.value("sessionId", std::string{});
+    m.toolCallId = j.value("toolCallId", std::string{});
+    m.toolName   = j.value("toolName", std::string{});
+    m.part       = j.value("part", std::string{});
+    m.inputHash  = j.value("inputHash", uint64_t{0});
+    m.argsJson   = j.value("argsJson", std::string{});
+    m.resultText = j.value("resultText", std::string{});
+    m.isFinished = j.value("isFinished", false);
+    m.isError    = j.value("isError", false);
+    m.maxWidth   = j.value("maxWidth", int32_t{0});
+    return m;
+}
+
+inline utilxx_base::Json makeToolRenderResultMsg(const WireToolRenderResult& m) {
+    return {
+        {"type",         MsgType::ToolRenderResult},
+        {"requestId",    m.requestId               },
+        {"ok",           m.ok                      },
+        {"text",         m.text                    },
+        {"itemsJson",    m.itemsJson               },
+        {"errorMessage", m.errorMessage            },
+    };
+}
+
+inline WireToolRenderResult toolRenderResultFromJson(const utilxx_base::Json& j) {
+    WireToolRenderResult m;
+    m.requestId    = j.value("requestId", int64_t{0});
+    m.ok           = j.value("ok", false);
+    m.text         = j.value("text", std::string{});
+    m.itemsJson    = j.value("itemsJson", std::string{});
+    m.errorMessage = j.value("errorMessage", std::string{});
+    return m;
+}
+
 /// 高频路由: JsonView 零拷贝提取 type (§4.3, ws_io_transport 收包路径先命中再物化)
 inline std::string msgTypeView(const utilxx_base::JsonView& jv) {
     if (!jv.is_object()) {
@@ -1838,6 +1941,15 @@ WireHostToolCall  hostToolCallMsgFromJson(const utilxx_base::Json& j);
 
 utilxx_base::Json  toJson(const WireHostToolResult& msg);
 WireHostToolResult hostToolResultMsgFromJson(const utilxx_base::Json& j);
+
+utilxx_base::Json        toJson(const WireToolRendererRegister& msg);
+WireToolRendererRegister toolRendererRegisterMsgFromJson(const utilxx_base::Json& j);
+
+utilxx_base::Json     toJson(const WireToolRenderRequest& msg);
+WireToolRenderRequest toolRenderRequestMsgFromJson(const utilxx_base::Json& j);
+
+utilxx_base::Json    toJson(const WireToolRenderResult& msg);
+WireToolRenderResult toolRenderResultMsgFromJson(const utilxx_base::Json& j);
 
 /// 统一序列化为 JSON 字符串
 std::string serialize(const WireMessage& msg);
