@@ -819,9 +819,17 @@ path/to/agentxx_test --log-level warn string_util regex
   - **工具行的参数文本按工具 schema 自愈**: 建行 (`EventBridge::handleChannelWrite`)、
     历史尾窗加载、分页读取三处都经 `agentxx::util::autoFixedToolArgsJson`
     (schema 来自 `ToolRegistry::parametersOf`: 静态登记表 + 插件工具定义), 与执行前的
-    `util::autoFixToolArgsTypes` 是同一份实现 —— 特化渲染器 / 预设模版摘要 / 展开体看到的
+    `util::autoFixToolArgsTypes` 是同一份实现 —— 特化渲染器 / 工具装饰 / 展开体看到的
     参数类型就是工具实际收到的, **渲染器里不要再写 string↔数组、单对象↔对象数组一类的兼容**;
     未登记 schema 的工具 (或插件已卸载后的历史) 保留模型原文即为正确行为
+  - **工具特化渲染的注册形状**: 显示名 + 折叠内容回调 + 展开内容回调
+    (`AgentxxToolRenderSpec`: `display_name` / `collapsed_fn` / `expanded_fn` / `user_data`,
+    64 字节)。显示名注册时确定、UI 线程同步可读 (第一帧就见名字, 回调不再改名,
+    按调用改名走 `update_tool_decor`); 折叠内容只给一行**不含 `" · "`** 的文本
+    (` · ` 由 TUI 统一加), 展开体只给 items 且**只在展开时调用**; 两部分各有缓存键
+    (`#c`/`#e`)、输入特征与版本号。已删除: 声明式模版 (`template_json`/`summaryKey`)、
+    “名称结果” (`#工具名` 键) 机制、运行中参数预览。布局变过, **旧插件 DLL 必须重建**
+    (见 [plugins.md](docs/zh-cn/design/plugins.md) 的“工具特化渲染架构”)
   - **参数自愈的适用范围**: 凡是把参数交给工具的地方都用这一份实现 —— 前台工具调用
     (`ToolcallWrapNode`, 内置工具与插件工具不区分) 与后台工具任务 (`AsyncWorkManager` 的
     `kind=tool`, 提交后执行前); 数值取整与布尔认词规则见

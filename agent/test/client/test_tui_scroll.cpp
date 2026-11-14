@@ -3492,8 +3492,8 @@ TestResult testTuiScroll() {
         // 场景 23 (回归): 占位提示的工具名换成工具特化显示名
         //
         // 占位行原先直接显示 genToolName (如 "agentxx_filesystem_list"), 与
-        // 正常工具消息的折叠头 ("List") 不一致。现在经同一套工具特化渲染查询
-        // (queryToolRender) 换显示名, 未命中渲染器时回退原始工具名
+        // 正常工具消息的折叠头 ("List") 不一致。现在经同一套工具渲染器注册表
+        // 查显示名 (toolDisplayNameFor), 未命中渲染器时回退原始工具名
         ScrollFixture f;
         f.sharedState.mutate([&](TUIRenderState& st) {
             auto m  = std::make_shared<TUIMessage>();
@@ -3504,14 +3504,15 @@ TestResult testTuiScroll() {
             st.genPhase    = agentxx::agent::WireDelta::GenPhase::ToolCall;
         });
 
-        // 已知工具 (模板类渲染器): 显示名 "List"，不出现原始工具名
+        // 已知工具 (注册了类型级渲染器): 显示名 "List", 不出现原始工具名
         // (显示名与阶段说明是相邻的两个文本节点, 样式不同 -> 屏幕文本中夹 ANSI
-        //  转义序列, 故先剥离再按纯文本断言)
+        //  转义序列, 故先剥离再按纯文本断言; 两者之间是骨架里的 " · ")
         f.sharedState.mutate([&](TUIRenderState& st) {
             st.genToolName = "agentxx_filesystem_list";
         });
         XX_TEST_EXPECT_TRUE(
-            stripAnsiCodes(f.render()).find("List receiving tool call...") != std::string::npos
+            stripAnsiCodes(f.render()).find("List · receiving tool call...")
+            != std::string::npos
         );
         XX_TEST_EXPECT_TRUE(
             stripAnsiCodes(f.render()).find("agentxx_filesystem_list") == std::string::npos
@@ -3522,7 +3523,8 @@ TestResult testTuiScroll() {
             st.genToolName = "agentxx_share_store";
         });
         XX_TEST_EXPECT_TRUE(
-            stripAnsiCodes(f.render()).find("Store receiving tool call...") != std::string::npos
+            stripAnsiCodes(f.render()).find("Store · receiving tool call...")
+            != std::string::npos
         );
 
         // 未注册渲染器的工具: 回退原始工具名
@@ -3530,7 +3532,7 @@ TestResult testTuiScroll() {
             st.genToolName = "unknown_tool_xyz";
         });
         XX_TEST_EXPECT_TRUE(
-            stripAnsiCodes(f.render()).find("unknown_tool_xyz receiving tool call...")
+            stripAnsiCodes(f.render()).find("unknown_tool_xyz · receiving tool call...")
             != std::string::npos
         );
 

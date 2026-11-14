@@ -666,7 +666,7 @@ public:
 
     /// 该键的这次输入特征是否已有渲染请求在执行 (UI 线程; 零拷贝)。
     /// UI 侧查询工具渲染时先问一次: 请求尚未返回时本帧用通用回退, 不必为投递
-    /// 拷贝 args/result 大文本 (见 message_list 的 queryToolRender)
+    /// 拷贝 args/result 大文本 (见 message_list 的 queryToolCollapsed / queryToolExpanded)
     bool toolRenderInFlight(std::string_view key, uint64_t inputHash) const;
 
     /// 命令是否存在 (UI 线程判断是否拦截 "/" 输入; 短锁)

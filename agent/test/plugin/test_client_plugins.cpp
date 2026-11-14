@@ -1787,7 +1787,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             auto reg = mgr->uiRegistrySnapshot();
             XX_TEST_EXPECT_TRUE(reg != nullptr);
 
-            // 15.1 list (预设模版)
+            // 15.1 list (折叠内容 = 路径)
             auto listRes = co_await renderToolAsync(
                 mgr,
                 "call_list_1",
@@ -2075,7 +2075,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         }
     }
 
-    // ---- 16. agentxx_websearch client 插件: 工具特化渲染 (模版) ----
+    // ---- 16. agentxx_websearch client 插件: 工具特化渲染 (折叠内容) ----
     {
         auto wsPath = findPluginPath("agentxx_websearch");
         auto wsInst = co_await mgr->loadNativeAsync(wsPath);
@@ -2103,7 +2103,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
         }
     }
 
-    // ---- 17. agentxx_execute_command client 插件: 工具特化渲染 (模版) ----
+    // ---- 17. agentxx_execute_command client 插件: 工具特化渲染 (折叠内容) ----
     {
         auto cmdPath = findPluginPath("agentxx_execute_command");
         auto cmdInst = co_await mgr->loadNativeAsync(cmdPath);

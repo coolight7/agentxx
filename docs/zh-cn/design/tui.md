@@ -164,6 +164,12 @@
 - `tree` 的折叠态: 上下文提供 `collapseExpanded` (TUI 侧就是主程序维护的展开表) 时,
   有子节点的行可点击展开/收起, 状态键为"从根到该节点的路径"(如 `src/io/`);
   未提供时按全展开渲染 (行式前端行为不变)。
+- 工具消息头部骨架固定 (见 `message_list.cpp`): 折叠 `+ [工具] <显示名> · <内容>`、
+  展开 `- [工具] <显示名> <耗时>`。显示名与两部分内容都来自插件的工具渲染器
+  (显示名注册时确定, 折叠内容/展开内容各一个回调, 见
+  [plugins.md](plugins.md) 的"工具特化渲染架构"); ` · ` 由本组件统一加, 回调只给内容。
+  折叠内容按 `失败结果首行 > 自定义折叠内容 > 未就绪留空 > 默认 (运行中提示 / 结果首行)`
+  选择; 展开体同理 (失败 → 默认参数+结果, 自定义 items → 未就绪留空 → 默认)。
 
 弹窗统一用 [surface.h](/agent/client/include/agentxx-client/io/tui/surface.h) 的面性风格外框
 (圆角 + 标题栏/内容区/底栏分区, 不画边框与分割线); 文案统一走
@@ -332,9 +338,9 @@ struct UiActionItem {
     消息列表的 `handleCollapsibleClick` —— 否则展开态的控件点击会被折叠判定抢走;
     已处理展开态没有控件命中区 (控件值已在结果文本里)
 - 中断描述里的工具名分段 (`kind: "tool"`) 由客户端换成该工具的**特化显示名**
-  (`agentxx_filesystem_write` → `Write`, 与工具消息头部同一套渲染器与缓存): 显示名未就绪时
-  **该段留空**(绝不先显示原名再跳变), 没有注册渲染器的工具才用原始名; 建行时 client io
-  预取一次"名称查询" (`prefetchInterruptToolNames`)。权限名不再上屏原始分类标识:
+  (`agentxx_filesystem_write` → `Write`): 显示名由渲染器**注册时**给出, UI 线程同步查表
+  (`toolDisplayNameFor`: 实例装饰 > 注册名 > 原始工具名), 所以建行那一帧就有名字,
+  不存在"先留空后跳变"或预取。权限名不再上屏原始分类标识:
   agent 侧 `preset::permissionCard` 为内置分类给 i18n 键 (`读取文件`/`写入文件`),
   **读/写只靠颜色区分** (`hint` / `thinking`), 不加粗、不加括号或背景色
 - **定时器与快捷键**: 插件不能自己起线程/定时器, 需要"按时间刷新"或"响应按键"时经
@@ -685,21 +691,19 @@ Info tab 底部三行: 工作目录行、`Agentxx <版本> · 连接方式` 行,
     随后随 `messages` 通道到达的工具行 (`insert_message` 一条 role=tool 的行) 接替该提示
   - `Done`: 节点结束/出错时下发 (补充清除)
 - 渲染: [MessageListComponent::buildGenPlaceholderItem](/agent/client/include/agentxx-client/io/tui/components/message_list.h)
-  在列表末尾渲染单行占位项 (`- [思考] 等待响应...` / `- [工具] read_file 正在调用工具...`),
+  在列表末尾渲染单行占位项 (`- [思考] 等待响应...` / `- [工具] Read · 正在调用工具...`),
   位置 = 消息与流式内容之后 (`genPlaceholderIndex`); 生成中头部用加载动画, 该子项不跨帧缓存
-  - 工具名按正常工具消息的同一套解析换成特化显示名 (`genPlaceholderToolDisplayName`
-    经 `queryToolRender`, 如 `agentxx_filesystem_list` -> `List`); 该阶段参数/结果尚未
-    接收完, 因此只查显示名不查摘要, 未命中渲染器/模版时回退原始工具名。
-    该工具有特化渲染器、但显示名还没算出来时**不显示工具名** (占位行只有
-    `[工具] 正在调用工具...`): 显示名随后就到, 先显示原始工具名 (`agentxx_filesystem_list`)
-    会让这一行随后"跳"成 `List` —— 与工具消息折叠头同一规则, 见
-    [plugins.md](plugins.md) 的"工具特化渲染架构"第 6 条
-  - 占位行被工具消息取代时不留下"空白帧": 工具消息的特化结果未就绪且还没有过渡内容
-    (既没有上一份结果, 也没有名称结果) 时, 折叠头沿用占位行的同一句说明文字
-    (`msg.genToolCalling`), 该帧与刚消失的占位行内容一致 (动画等级 >= High 时逐字
-    一致: 两行首列都是加载点阵; 等级更低时占位行首列是静态 `-`, 折叠的工具行首列是
-    可折叠标记 `+`, 只有这一列变化); 结果就绪后该处直接换成
-    特化摘要 (同一规则的完整说明见 [plugins.md](plugins.md) 的"工具特化渲染架构"第 6 条)
+  - 工具名同步换成特化显示名 (`genPlaceholderToolDisplayName`, 经
+    `toolDisplayNameFor`, 如 `agentxx_filesystem_list` -> `List`): 显示名在渲染器注册时
+    就确定了, 占位阶段无需等 client io 算内容; 没有注册渲染器的工具用原始工具名。
+    名字还没解析出来时 (`genToolName` 为空) **不画 ` · `**, 只留
+    `[工具] 正在调用工具...` (` · ` 是"名字 + 内容"两段之间的分隔符)
+  - 占位行被工具消息取代时不会多出一帧默认内容: 工具消息的折叠内容未就绪
+    (`pending`) 且没有上一份可沿用时, 折叠分头只画名字、**不画 ` · `** —— 也不用
+    占位行那句提示顶替 (首列从加载点阵变为可折叠标记 `+`, 名字右側固定为空);
+    内容算出后直接在 ` · ` 后出现 (同一规则的完整说明见 [plugins.md](plugins.md)
+    的"工具特化渲染架构"第 6 条)。没有注册折叠内容回调的工具仍走默认渲染,
+    运行中就在 ` · ` 后显示同一句 `正在调用工具...`
 - 子项间距的统一约定: 列表内**所有**子项都自带尾部空行 (消息块 `buildMessageItem`、
   增量稳定块 `buildStreamingStable`、流式区末尾项 `buildStreamingFrontier`/降级
   `buildStreamingItem`、占位项本身), 因此下一项直接接排即可, 渲染与高度估算都不必
@@ -1083,7 +1087,7 @@ gpt-oss / harmony 形态的模型以及部分网关转发的 `reasoning_content`
   每帧零成本)。回归保护: `tui_lazy_view` 的"内容收缩后回夹"用例 (折叠末条长消息
   后逐行都是内容, 末行是折叠条目的最后一行)。
 - **高度估算 (`quickHeight`) 必须廉价**: 不得解析 markdown 之外的内容、不得查
-  插件语义渲染 (`queryToolRender`)、不得 `measureItems`/`layoutForm` 真渲染 ——
+  插件工具渲染内容 (`queryToolCollapsed` / `queryToolExpanded`)、不得 `measureItems`/`layoutForm` 真渲染 ——
   这些成本只发生在条目真正进入视口被构建时 (布局即测量)。估算值只服务滚动条长度。
 - 回归保护: `agentxx_test tui_lazy_view` (每帧构建/校验次数有界且与条数无关、顶行
   严格由锚点决定、定位只用实测高度、前插零校正、宽度变化锚点不变、估算只影响滚动条、
@@ -1199,4 +1203,4 @@ UTF-8 字节按旧代码页解码 —— 中文整屏乱码, 且一个中文字�
 | 状态栏/输入栏/消息列表的按钮点击散落在全局事件处理里 | `agent_tui.cpp` | 各组件自行处理自身区域内点击 (回调在加载时注入) |
 | 上下文弹窗点击消息, 展开/折叠的是"别的消息" (消息多、滚动后尤其明显) | `ContextOverlay` 折叠头命中框 (子项元素内的 `reflect`: 视口外子项残留测量大框) | 改为按 `Scrollable::visibleBoxes()` + 子项->消息下标映射命中 (回归测试见 `agentxx_test tui_context_overlay`) |
 | 设置条目变多或终端过矮时, 末尾条目被裁掉 (看不到也点不到); 之前靠压缩条目间距回避 | `SettingsOverlay` | 条目改为分组显示 (标题只占一行), 内容区限高 + `vscroll_indicator \| yframe` 滚动 (选中项带 `focus` 自动滚入视口, 滚轮 = 上/下移动选中项); 回归测试见 `agentxx_test tui_settings` |
-| 工具消息刚出现时会闪一下非特化内容 (占位提示显示 `[工具] Read 正在调用工具...`, 工具消息却先显示 `agentxx_filesystem_read · {"path":...}`, 下一帧才"变回来"); 结果到达 (输入特征变化) 时再闪一次原始结果首行; 用预设模版注册的工具 (Bash) 不闪 | 折叠头/占位行的特化渲染查询 (`queryToolRender` + `renderClientTool`) | 自定义 renderer 只在 client io 线程执行, 结果写入语义缓存前是"未就绪"帧。该帧不再回退原始工具名 + 原始参数, 也不再留空: 显示名与摘要先用"上一份已知内容" (本次调用上一份结果 → 占位提示阶段算出的"名称结果"显示名), 两者都没有且工具仍在运行时沿用占位行的同一句说明文字 (`msg.genToolCalling`), 保证不出现"比上一帧信息更少"的一帧; 见 plugins.md §工具特化渲染架构第 6 条; 回归测试见 `agentxx_test tui_tool_header` 的 `testTuiToolHeaderPendingRender` |
+| 工具消息刚出现时会闪一下非特化内容 (占位提示显示 `[工具] Read · 正在调用工具...`, 工具消息却先显示 `agentxx_filesystem_read · {"path":...}`, 下一帧才"变回来"); 结果到达 (输入特征变化) 时再闪一次原始结果首行 | 折叠头/占位行的工具内容查询 (`queryToolCollapsed` / `queryToolExpanded` + `renderClientToolCollapsed` / `renderClientToolExpanded`) | 两部分回调只在 client io 线程执行, 结果写入语义缓存前是 `pending` 帧。该帧不画 ` · ` (折叠只画名字)、展开体留空, **不拿默认内容顶替**; 同一调用同一部分的上一份内容在输入特征变化的那一帧继续用 —— 因此不会出现"比上一帧信息更少"或"内容消失一帧再回来"; 见 plugins.md §工具特化渲染架构第 6 条; 回归测试见 `agentxx_test tui_tool_header` 的 `testTuiToolHeaderPendingContent` |

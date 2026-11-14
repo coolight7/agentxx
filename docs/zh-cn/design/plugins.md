@@ -968,7 +968,22 @@ typedef struct AgentxxClientKeybindIface {
 Agentxx 客户端采用统一的分层工具特化渲染机制，TUI 核心层完全解耦，不包含任何具体工具名称的硬编码：
 
 1. **类型级工具渲染器 (`register_tool_renderer`)**：
-   - 插件在 client 初始化时按 `tool_name` 注册特化渲染定义 (`AgentxxToolRenderSpec`)，TUI 渲染该工具消息 (实时流式或历史回溯) 时统一生效。
+   - 插件在 client 初始化时按 `tool_name` 注册特化渲染 (`AgentxxToolRenderSpec`)：
+     **显示名 + 折叠内容回调 + 展开内容回调**, TUI 渲染该工具消息 (实时流式或历史回溯) 时统一生效。
+   - **显示名在注册时确定, UI 线程同步可读**：`displayName` 直接进注册表
+     (`toolDisplayNameFor`: 实例级装饰 > 注册名 > 原始工具名), 工具行**第一帧**就显示 `Read`
+     这类名字 —— 名字不再由内容回调返回, 回调跑了之后也不会再改名字; 按单次调用改名走
+     实例级装饰 (`update_tool_decor`)。
+   - **折叠内容与展开内容是两个回调、两份缓存**：
+     - 折叠回调 `AgentxxToolCollapsedRenderFn` 只给**一行文本** (`AgentxxToolCollapsedOutput.text`),
+       超宽由 TUI 截断;
+     - 展开回调 `AgentxxToolExpandedRenderFn` 只给界面描述层 items (`AgentxxToolExpandedOutput.items_json`),
+       **只在用户展开该工具行时才调用** —— `edit` 的逐段差异、`planning` 的状态图这类
+       开销大的内容不为折叠行付代价;
+     - 两部分各有自己的缓存键 (`#c` / `#e`)、输入特征与版本号, 一侧更新不让另一侧失效;
+     - 两个回调都可以为空 (空 = 该部分走默认渲染); 都空 = 只改名。
+   - **折叠内容里不要写分隔符**：折叠行骨架固定为 `+ [工具] <显示名> · <内容>`, `" · "`
+     由 TUI 统一加; 回调只返回内容本身, 返回空 = 该部分这次没有自定义内容 (走默认渲染)。
    - **历史回溯是主要场景之一**：会话重启恢复/重连/切换会话后回放的 `Tool` 消息没有实例级装饰
      (见第 3 条), 特化渲染完全依赖此处注册的渲染器 (输入只有消息自带的 `args_json`/`result_text`)。
    - **参数已按工具 schema 自愈, 渲染器不需要再写类型兼容**：工具展示行的参数文本在
@@ -980,24 +995,38 @@ Agentxx 客户端采用统一的分层工具特化渲染机制，TUI 核心层�
      (数组参数不会是单字符串、对象数组不会是单对象、数值参数不会是字符串),
      直接按 schema 声明的类型读即可; 只有**没有登记 schema 的工具 / 插件已卸载后的历史**
      会保留模型原文。
-   - 框架规则差异：**展开状态的头部显示名只由实例级装饰覆盖** (类型级渲染器命中时展开头保持
-     原始 `toolName`)，渲染器始终覆盖**折叠头显示名/摘要**与**展开体 items**；折叠态是历史消息的
-     默认形态 (见 `event_stream` 历史展开时 `collapsed=true`)，因此历史回溯观感与实时一致。
-   - **双轨机制**：
-     - **`<key, render_fn>` 回调函数**：提供 `AgentxxToolRenderFn`，接收 `AgentxxToolRenderInput` (`tool_name`, `args_json`, `result_text`, `is_finished`, `is_error`, `max_width`)，输出 `AgentxxToolRenderOutput` (`displayName`, `summary`, `items_json`)。适用于需要复杂参数解析、条件格式化或动态生成 UI 项的工具 (如 `read` 区间参数、`glob`/`grep` 模式与文件摘要、`edit` diff 差异对比)。
-     - **预设模版 (`template_json`)**：当 `render_fn == NULL` 时，主程序按声明式模板自动从 `args_json` 中提取字段并格式化摘要，如 `{"displayName":"Search","summaryKey":"query"}` 或 `{"displayName":"Bash","summaryKey":"command"}`。
+   - 显示名与展开状态无关：折叠头 `+ [工具] <显示名> · <内容>` 与展开头
+     `- [工具] <显示名> <耗时>` 用**同一份**显示名 (装饰 > 注册名 > 原始工具名), 展开/折回不会改名;
+     折叠态是历史消息的默认形态 (见 `event_stream` 历史展开时 `collapsed=true`)，因此历史回溯观感与实时一致。
+   - **双轨已合并成一条**：早期还有一条声明式模版 (`template_json` + `summaryKey`, 由主程序
+     按路径从 `args_json` 取值) —— 它只能拼一行、拿不到结果, 与回调两条路径行为不一致
+     (未就绪帧/参数类型/结果依赖都不同)。现在只有回调一条路径 (短到一行的渲染器就写一个
+     lambda), 模版机制已删除。
    - **通用 Diff 渲染**：展开体组件项支持 `{"kind":"Diff","path":"...","oldStr":"...","newStr":"..."}`（或直接用扩展 kit 的 `agentxx::ui::kit::pathDiffRow`），TUI 会通用化渲染为自适应屏幕宽度的 side-by-side 或统一差异对比，任何插件均可自由复用。
    - **SDK 辅助函数 (`registerToolRenderer`)**：
      `plugin_kit.h` 提供了基于现代 C++ Lambda 的辅助封装，抹平 C ABI 结构体与内存分配细节：
      ```cpp
-     agentxx::plugin::registerToolRenderer(host, ui, "agentxx_filesystem_read",
-         [](const agentxx::plugin::ToolRenderInput& in, agentxx::plugin::ToolRenderOutput& out) {
-             out.displayName = "Read";
-             ArgReader args(in.argsJson);
-             out.summary = args.get<std::string>("path").value_or("");
+     // 显示名 + 两个内容回调 (Edit: 折叠行给 ±行数/路径, 展开体给逐段差异)
+     agentxx::plugin::registerToolRenderer(
+         host, ui, "agentxx_filesystem_edit", "Edit",
+         {
+             .collapsed =
+                 [](const agentxx::plugin::ToolRenderInput& in,
+                    agentxx::plugin::ToolCollapsedOutput& out) {
+                     ArgReader args(in.argsJson);
+                     out.text = diffStatOf(args) + " " + args.get<std::string>("path").value_or("");
+                 },
+             .expanded =
+                 [](const agentxx::plugin::ToolRenderInput& in,
+                    agentxx::plugin::ToolExpandedOutput& out) {
+                     out.items = diffItemsOf(in); // {"kind":"Diff", ...}
+                 },
          },
-         ctx.shimStorage
+         ctx.renderShims // 适配层持有回调副本, 随实例释放
      );
+     // 只要一侧 (只改名/只给折叠内容): 另一侧留空
+     agentxx::plugin::registerToolRenderer(host, ui, "agentxx_filesystem_read", "Read",
+                                           {.collapsed = readCollapsed}, ctx.renderShims);
      ```
 2. **主程序内置工具渲染器 (lib 内置工具, 无对应插件)**：
    - 少数工具由 **lib 内置实现**提供、没有对应插件 (当前为 `agentxx_share_store` 会话共享存储
@@ -1011,11 +1040,13 @@ Agentxx 客户端采用统一的分层工具特化渲染机制，TUI 核心层�
      语义渲染缓存), 展开体保持主程序通用展示 (不提供 items)。
    - 匹配优先级低于插件注册项 (插件可为同名工具注册渲染器覆盖内置渲染)；
      内置项与进程同生命周期，不随插件禁用/卸载失效。
-   - 当前覆盖：`agentxx_share_store` → `Store`，摘要形态 ` · [start, end] opt #id`，
+   - 当前覆盖：`agentxx_share_store` → `Store`，折叠内容形态 `[start, end] opt #id`
+     (前面的 ` · ` 由 TUI 统一加)，
      其中**区间只有 `get` 展示**（`offset`/`limit` 只对它生效，如 `[0, 100] get #12` /
      仅给 offset 时 `[40, ~] get #12`），`new`/`update` 为 `opt #id`（`new #7` / `update #3`；
      `new` 的 id 取自结果 JSON，完成后才有，运行中只有 `new`）、`agentxx_subagent` →
-     `Subagent` (`explorer · <任务首行>` / `4 tasks: explorer, coder, planner, ...`)。
+     `Subagent` (`explorer · <任务首行>` / `4 tasks: explorer, coder, planner, ...`)；
+     两者都只注册折叠内容回调, 展开体走主程序通用展示。
 3. **实例级工具装饰 (`update_tool_decor`)**：
    - 订阅 `EVT_DELTA` 的 `insert_message` / `update_message` 后，按特定调用的 `tool_call_id` 推送语义 JSON (优先级高于类型级渲染器)；
      典型实现见 `agentxx_planning` (Mermaid 状态图 + 动态待办列表)。
@@ -1052,46 +1083,40 @@ Agentxx 客户端采用统一的分层工具特化渲染机制，TUI 核心层�
    - 结果契约: 中断结果恒为 `{"values": {"<控件 id>": 值}}` (空对象 = 未应答)。
 
 6. **语义渲染缓存**：
-   - 自定义 `render_fn` **只在 client IO 线程执行**：UI 线程提交
-     `ClientToolRenderRequest` (tool_call_id / tool_name / args / result / 宽度等拥有型拷贝)，
-     主程序在 IO 线程复查 renderer lease、实例 `enabled` 与可注册状态后持 lease 调用，
-     把 `displayName/summary/items` 拷成主程序对象写入 `ClientToolRenderCache`；
-     输出 JSON 的每个分配字段在成功/失败/异常路径都由主程序释放。
-   - UI 线程只读缓存：未命中时本次通用回退，结果写入后由
-     `PluginUiAdapter::onToolRenderUpdated` 通知重绘；消息块缓存 key 计入
-     `ClientToolRenderCache::version(key)`，因此"回退 → 语义内容"能及时上屏。
-   - **未就绪帧不展示原始工具名/原始参数**：自定义 renderer 的第一次查询必然未命中
-     (要等 IO 线程执行)，若该帧回退通用展示，工具消息刚出现时会闪一下
-     `agentxx_filesystem_read · {"path":...}`、下一帧才变成 `Read · [0, 100] /path`；
-     结果到达 (输入特征变化) 时同样再闪一次。因此：
-     - `renderClientTool` 在未命中时额外返回**过渡内容** (`pendingRender` +
-       `displayName`/`summary`)：先取本次调用上一份结果 (结果到达/终端宽度变化使输入
-       特征变化的那一帧，这份结果就是屏幕上已显示的内容)，再退回该工具"名称结果"的
-       显示名 (名称结果 = 占位提示阶段按工具名的那次查询, 键 `#工具名`, 查法见
-       `ClientToolRenderCache::lookupLatest`)；归属插件不一致 (重载/被覆盖) 时不沿用。
-       过渡内容只含显示名与摘要：展开体 items 不在未就绪帧渲染，因此也不拷贝 (未就绪
-       帧每帧都会走到这里，Edit 这类带 diff 内容的 items 深拷一次就是几十 KB)。调用
-       没有 `tool_call_id` 时缓存键退化为 `#工具名`、与名称结果同键 —— 该键下可能是占位
-       提示阶段"参数/结果为空"的结果，也可能是另一次无 id 调用的结果，摘要都不代表本次
-       调用 (如 `Read` 的 ` ·`、`Grep` 的 ` · [] `)，因此这种情形只借该键的显示名。
-     - 客户端 (TUI) 的 `pendingRender` 帧按"上一份已知内容"过渡，**不出现比上一帧
-       信息更少的一帧** (显示名或摘要消失一帧再回来同样是可见的跳变)：显示名/摘要用
-       上面返回的过渡内容；两者都没有且工具仍在运行时，沿用占位提示的同一句说明文字
-       (`msg.genToolCalling`) —— 该帧与刚被取代的占位行内容一致 (动画等级 >= High 时
-       逐字一致：两行首列都是加载点阵；等级更低时占位行首列是静态 `-`、折叠的工具行
-       首列是可折叠标记 `+`，只有这一列变化)；仍然**不展示**原始参数/结果预览。工具
-       结果到达那一帧也走同一规则，不会闪原始结果首行。用预设模版
-       (`template_json`) 注册的工具在 UI 线程同步算出摘要，不存在该中间帧 (这也是
-       Bash 等工具"不闪"的原因)。
-     - 消息块缓存 key 计入该调用的结果版本与"名称结果"版本：未就绪帧可能正用名称结果
-       的显示名 (上一份结果没给显示名时也走它)，少了后一项会停在"无显示名"形态。
-     - 回归测试：`agentxx_test tui_tool_header` 的 `testTuiToolHeaderPendingRender` 与
-       `client_plugins` 的语义缓存用例。
+   - 两个内容回调都**只在 client IO 线程执行**：UI 线程按部分提交 `ClientToolRenderRequest`
+     (tool_call_id / tool_name / args / result / 宽度等拥有型拷贝, 带 `part` = 折叠/展开)，
+     主程序在 IO 线程复查 renderer lease、实例 `enabled` 与可注册状态后持 lease 调用,
+     把 `text` 或 `items` 拷成主程序对象写入 `ClientToolRenderCache`；
+     输出字段在成功/失败/异常路径都由主程序释放。
+   - **两部分各自独立**：键 `#c` (折叠) / `#e` (展开)、输入特征 (含终端宽度) 与版本号都按部分算,
+     折叠内容到达只让折叠条失效; 折叠行不查询展开内容, 因此展开回调只在用户展开时跑。
+   - UI 线程只读缓存：未命中时提交请求, 结果写入后由
+     `PluginUiAdapter::onToolRenderUpdated` 通知重绘；消息块缓存 key 计入两部分的
+     `ClientToolRenderCache::version(key)` (折叠态只计折叠键) 与显示名, 因此
+     "未就绪 → 特化内容" 能及时上屏。
+   - **未就绪帧不展示原始参数/结果** (也不闪一下再换掉)：
+     - `renderClientToolCollapsed` / `renderClientToolExpanded` 命中注册项但缓存未命中时
+       返回 `pending = true`；折叠行**只画名字** (不画 ` · `), 展开态首行之后留空。
+       不用默认内容顶替 —— 否则会先闪一句参数/结果预览再换成特化内容。
+     - 过渡: 同一调用同一部分的 上一份内容 (`lookupLatest`, 按部分键) 在输入特征变化
+       (结果到达/宽度变化) 的那一帧继续用 —— 不出现"内容消失一帧再回来"的跳变。
+       归属插件不一致 (重载/被其他插件覆盖) 时不沿用; 没有 `tool_call_id` 时不沿用
+       (键退化成 `#工具名`, 可能是另一次调用的结果)。
+     - 显示名**不进缓存也不等回调**：注册时就有, 第一帧就可见 (见第 1 条)。早期那套
+       "名称结果 (`#工具名` 键) / 模版同步算摘要"的做法已删除。
+     - 没注册该部分回调, 或回调返回空内容 (`pending == false` 且内容为空) → 默认渲染:
+       折叠行运行中 `正在调用工具...` (`msg.genToolCalling`) / 已完成结果首行;
+       展开体参数 JSON + (运行中同一句提示 / 结果文本)。
+     - 执行失败 (`ToolStatus::Failed`) 时两部分都走默认渲染 (折叠行显示错误结果首行)。
+   - 没挂载 client 插件管理器 (单元测试/精简嵌入) 时没有语义缓存, 查询直接在 UI 线程
+     同步调用回调 (调用方自己保证不在渲染热路径上跑重活)。
+   - 回归测试：`agentxx_test tui_tool_header` 的 `testTuiToolHeaderPendingContent` 与
+     `client_plugins` 的分部分缓存用例。
    - 缓存条目记录产出插件与实例代次；禁用/卸载按插件失效并递增版本号，会话切换清空。
      旧 UI 快照因此只能回退，不会调用已卸载插件的函数指针。缓存条目与版本记录
      按写入顺序有界回收（默认上限 512，远超单屏可见块数），长时间会话不会按
      `tool_call_id` 无限增长。
-   - 预设模版与 `toolDecors` 是纯主程序数据，仍在 UI 线程直接计算。
+   - `toolDecors` (实例级装饰) 是纯主程序数据, 仍在 UI 线程直接读 (取 summary / items 两部分)。
 
 ---
 

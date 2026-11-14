@@ -425,13 +425,18 @@ needed): `agentxx.client.ready`, `agentxx.client.connection_state`,
 The Agentxx client adopts a unified, layered tool-specialized rendering mechanism. The TUI core is completely decoupled, containing zero hardcoded tool names:
 
 1. **Type-Level Tool Renderers (`register_tool_renderer`)**:
-   - During client initialization, plugins register specialized rendering definitions (`AgentxxToolRenderSpec`) keyed by `tool_name`, universally taking effect when the TUI renders messages for that tool (both during real-time streaming and history replay).
+   - During client initialization, plugins register specialized rendering definitions (`AgentxxToolRenderSpec`) keyed by `tool_name`: a **display name plus a collapsed-content callback and an expanded-content callback**, universally taking effect when the TUI renders messages for that tool (both during real-time streaming and history replay).
+   - **The display name is fixed at registration time and readable synchronously on the UI thread** (`toolDisplayNameFor`: instance decoration > registered name > raw tool name), so a tool row shows `Read` on its very first frame. Content callbacks never rename a row; per-invocation renaming goes through instance-level decoration (`update_tool_decor`).
+   - **Collapsed content and expanded content are two callbacks with two cache entries**:
+     - the collapsed callback `AgentxxToolCollapsedRenderFn` returns **one line of text** (`AgentxxToolCollapsedOutput.text`), truncated by the TUI when too wide;
+     - the expanded callback `AgentxxToolExpandedRenderFn` returns UI-layer items (`AgentxxToolExpandedOutput.items_json`) and is **only called when the user expands the row** — expensive bodies such as `edit` diffs or the `planning` state diagram never cost the collapsed row anything;
+     - each part has its own cache key (`#c` / `#e`), input fingerprint and version, so one side never invalidates the other;
+     - both callbacks may be null (that part then uses the default rendering); both null = rename only.
+   - **Do not put the separator in the collapsed text**: the collapsed header is always `+ [Tool] <display name> · <content>`; `" · "` is added by the TUI and the callback returns the content alone (empty = no custom content this time).
    - **History replay is one of the main scenarios**: `Tool` messages replayed after a session restart / reconnect / session switch carry no instance-level decoration (see item 2) — their specialized rendering relies entirely on the renderer registered here, whose only inputs are the message's own `args_json` / `result_text`.
    - **Arguments are already self-healed against the tool schema, so renderers need no type-compatibility code**: the argument text of a tool row is run through `agentxx::util::autoFixedToolArgsJson` in all three places — **when the display history is written (EventBridge creates the row) / history window load / paginated read** — with the schema coming from `ToolRegistry::parametersOf` (static tool table plus plugin tool definitions), the same implementation used before execution by `ToolcallWrapNode::autoFixArgsType` (built-in and plugin tools alike; background tool tasks run it too in `AsyncWorkManager`). So the `args_json` a renderer receives already matches the types the tool actually received (an array parameter is never a bare string, an object array is never a single object, a numeric parameter is never a string); read it directly by the type the schema declares. Only **tools with no registered schema / history of a plugin that has been unloaded** keep the model's original text.
-   - Framework nuance: **the expanded-state header display name is overridden only by instance-level decorations** (a type-level renderer match keeps the raw `toolName` in the expanded header), while renderers always drive the **collapsed header name/summary** and the **expanded body items**. Since replayed history messages start collapsed (`collapsed=true` in `event_stream`), the replayed view matches the live one.
-   - **Dual-Track Mechanism**:
-     - **`<key, render_fn>` Callback Function**: Provides an `AgentxxToolRenderFn` receiving `AgentxxToolRenderInput` (`tool_name`, `args_json`, `result_text`, `is_finished`, `is_error`, `max_width`) and returning `AgentxxToolRenderOutput` (`displayName`, `summary`, `items_json`). Suitable for tools requiring complex argument parsing, conditional formatting, or dynamic UI item generation (e.g. `read` offset-limit parameters, `glob`/`grep` patterns and file summaries, `edit` diff comparisons).
-     - **Declarative Template (`template_json`)**: When `render_fn == NULL`, the host automatically extracts fields from `args_json` and formats the summary according to the declarative template, e.g. `{"displayName":"Search","summaryKey":"query"}` or `{"displayName":"Bash","summaryKey":"command"}`.
+   - Display name does not depend on the collapsed/expanded state: the collapsed header `+ [Tool] <name> · <content>` and the expanded header `- [Tool] <name> <duration>` use the **same** name, so toggling never renames the row. Since replayed history messages start collapsed (`collapsed=true` in `event_stream`), the replayed view matches the live one.
+   - **The early dual-track mechanism is gone**: a declarative template (`template_json` + `summaryKey`, the host extracting a path out of `args_json`) could only build one line, ignored the result, and behaved differently from callbacks (pending frames, argument types, result-dependent content). Callbacks are the only path now — a one-line renderer is a single lambda.
    - **Generic Diff Rendering**: Expanded `items_json` supports `{"kind":"Diff","path":"...","oldStr":"...","newStr":"..."}` (or use the kit helper `agentxx::ui::kit::pathDiffRow`). The TUI generically renders this as an adaptive side-by-side or unified diff comparison, freely reusable by any plugin.
    - **Diff Overlay (`open_overlay` DIFF) — single or multiple segments**: segments follow the same "one level less" rule as the edit tool arguments; the UI accepts both forms because the UI descriptor layer is a **public component contract** — a plugin may build a `DIFF` payload directly (not necessarily from tool arguments), so the host cannot insist on one form. Tool arguments themselves are self-healed against the schema before the display history is written (`ToolRegistry::parametersOf` + `util::autoFixToolArgsTypes`), so a renderer receives an array when `edits` was passed as a single object:
      - multiple: `{"path":"a.cpp","edits":[{"old_str":"..","new_str":".."}, ...]}`
@@ -442,15 +447,29 @@ The Agentxx client adopts a unified, layered tool-specialized rendering mechanis
    - **SDK Helper (`registerToolRenderer`)**:
      `plugin_kit.h` provides an ergonomic modern C++ lambda wrapper:
      ```cpp
-     agentxx::plugin::registerToolRenderer(host, ui, "agentxx_filesystem_read",
-         [](const agentxx::plugin::ToolRenderInput& in, agentxx::plugin::ToolRenderOutput& out) {
-             out.displayName = "Read";
-             ArgReader args(in.argsJson);
-             out.summary = args.get<std::string>("path").value_or("");
+     // Display name + two content callbacks (Edit: collapsed = ±lines/path, expanded = diff)
+     agentxx::plugin::registerToolRenderer(
+         host, ui, "agentxx_filesystem_edit", "Edit",
+         {
+             .collapsed =
+                 [](const agentxx::plugin::ToolRenderInput& in,
+                    agentxx::plugin::ToolCollapsedOutput& out) {
+                     ArgReader args(in.argsJson);
+                     out.text = diffStatOf(args) + " " + args.get<std::string>("path").value_or("");
+                 },
+             .expanded =
+                 [](const agentxx::plugin::ToolRenderInput& in,
+                    agentxx::plugin::ToolExpandedOutput& out) {
+                     out.items = diffItemsOf(in); // {"kind":"Diff", ...}
+                 },
          },
-         ctx.shimStorage
+         ctx.renderShims // the adapter owns a copy of the callbacks, freed with the instance
      );
+     // Only one side (rename only / collapsed content only): leave the other empty
+     agentxx::plugin::registerToolRenderer(host, ui, "agentxx_filesystem_read", "Read",
+                                           {.collapsed = readCollapsed}, ctx.renderShims);
      ```
+   - **Pending frames show no raw arguments**: both parts are computed on the client IO thread, so the first query always misses. A registered part that is not computed yet is reported as `pending`: the collapsed row draws only the name (no ` · `) and the expanded body stays empty below the header — never a flash of default content that is replaced one frame later. The previous result of the same invocation/part is carried over while the fingerprint changes (result arrival, width change), so content never disappears for a frame.
 2. **Instance-Level Tool Decorations (`update_tool_decor`)**:
    - Subscribing to `tool_start` / `tool_end` in `EVT_DELTA`, the plugin pushes semantic JSON keyed by the specific invocation's `tool_call_id` (taking higher priority than type-level renderers). A prominent implementation is `agentxx_planning` (Mermaid state diagrams and reactive todo lists).
    - **Only real-time invocations of the current process are covered**: on client restart (session restore), reconnect or session switch, historical `Tool` messages are replayed by `WireSyncPayload` / `WireViewMessagesPage` with no delta events and therefore no pushed decorations. Such messages must be rendered by a **type-level renderer** derived from the message's own arguments/result (see item 1; `agentxx_planning` registers both, sharing one content builder).
