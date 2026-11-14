@@ -13,7 +13,7 @@
 - [x] 7. JS 引擎改为每 (脚本, agent 挂载) 一份实例 + 权限/配置类 JS API 对齐
 - [x] 8. 构建 (lib / 插件 / test) + 相关测试模块全绿
 - [x] 9. 文档 (`plugins.md` §12、`index.md` 子代理段、AGENTS.md 摘要)
-- [ ] 10. 后续项: JS SDK 剩余面 (net / runtime / async work / graph / 工具特化渲染)
+- [ ] 10. 后续项: JS SDK 剩余面 (graph 节点类型 / 工具特化渲染)
 
 ## 第 1 步: 继承开关的数据结构与传递
 
@@ -158,9 +158,10 @@ JS SDK 对齐 (与 C++ 插件 SDK 同名同义):
 
 ## 剩余事项
 
-- JS SDK 与 C++ 侧仍不对齐的面: `runtime` (自建根 / 会话通道 / 触发器 / 定时器)、
-  工具特化渲染 (UI 线程回调)、`scheduler`/`tasks` 的协程驱动。这些目前必须写在 C++ 壳里;
-  后续按需逐表补齐。(`net` / 后台任务 / 提示词 / 会话 / 上下文 / 执行图 / 挂载查询已补齐, 见下节)
+- JS SDK 与 C++ 侧仍不对齐的面: 工具特化渲染 (注册在 client 侧 + 内容回调同步返回,
+  不是 UI 线程限制, 见文末"第四步")、`scheduler`/`tasks` 的协程驱动。这些目前必须写在
+  C++ 壳里; 后续按需逐表补齐。(`net` / 后台任务 / 提示词 / 会话 / 上下文 / 执行图 /
+  挂载查询 / 会话运行时 / 广播写入方已补齐, 见下节)
 - 未加多 agent 视角的 JS 自动化用例 (`plugins` 模块覆盖了单 agent 的 load/disable/enable
   全流程; 多挂载由 `ScopeHandle` + `scopes_` 逻辑保证, 建议后续在 `plugin_multi_mount`
   里加一条 JS 插件双 agent 用例)。
@@ -229,7 +230,29 @@ JS SDK 对齐 (与 C++ 插件 SDK 同名同义):
   JS 线程后因查不到实例而丢弃。要取消就在卸载前自己调 `cancelAsyncWork`。
 - 同一引擎里的所有脚本共享一份网络资源 (属主 = 引擎这个插件实例), `ws.connect` 一类
   连接 id 需要脚本自己加前缀避免相撞。
-- 工具特化渲染未做。
+- 工具特化渲染未做 (注册在 client 侧 + 内容回调同步返回, 不是 UI 线程限制)。
+
+## 第四步: 校对文档 (工具特化渲染为什么没做)
+
+之前写的理由 ("UI 线程回调" / "需 UI 线程上下文") 不对。查代码后确认 UI 线程
+**从不**调插件回调:
+
+- `message_list.cpp` 的 `queryToolCollapsed` / `queryToolExpanded` 只读
+  `ClientPluginManager::toolRenderCache()`; 未命中先 `toolRenderInFlight` 去重, 再
+  `requestToolRender` 把参数拷成拥有型 `ClientToolRenderRequest` 投递到 **client IO 线程**;
+- 回调 (`collapsedFn` / `expandedFn`) 在那边跑完把结果写进 `ClientToolRenderCache`,
+  再经 `PluginUiAdapter::onToolRenderUpdated` 通知 UI 重绘; 显示名注册时就有、首帧可读。
+
+真正阻塞 JS 的两条是:
+
+1. 渲染器注册在 **client 侧** (`agentxx.client.ui` 的 `register_tool_renderer` /
+   `ClientPluginManager::registerToolRenderer`), 而 `agentxx_javascript_engine` 只有
+   agent 侧入口 (`agentxx_plugin_agent_*`), 目前也没有 client 侧 JS 引擎;
+2. 内容回调是**同步返回**的 (`int32_t(..., *output)`), JS 桥得在 client IO 线程上同步
+   转到 JS 线程取值; 脚本里 `await` 会阻塞该线程 → 需超时, 或把 ABI 改成
+   "先返回 pending, 稍后回填缓存"。
+
+已改: `docs/zh-cn/design/plugins.md` §12 与 `AGENTS.md` 的措辞 (不再说"UI 线程限制")。
 
 ## 第三步: JS SDK 补齐会话运行时 (自建根 / 通道 / 触发器 / 定时器)
 
