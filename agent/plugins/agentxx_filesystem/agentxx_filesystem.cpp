@@ -815,172 +815,213 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 struct FsClientCtx : public ClientPluginBase {};
 
 /// client 侧注册事务 (start 的实际内容)。
+///
+/// 注册项 = 显示名 + 折叠内容回调 (+ 必要时的展开内容回调):
+/// - 显示名注册时定下, 首帧即可显示 (不再等回调)
+/// - 折叠内容是一行纯文本, **不带**分隔符 " · " (头行格式由界面统一拼装)
+/// - 展开内容只在用户展开该工具行时算 (如 Edit 的逐段差异)
 static int32_t fsClientSetup(FsClientCtx& ctx) {
+    // 折叠内容 = 参数里的路径 (参数还没到时为空, 界面走默认渲染)
+    auto pathCollapsed = [](const ToolRenderInput& in, ToolCollapsedOutput& out) {
+        ArgReader args(in.argsJson);
+        out.text = args.value("path", "");
+    };
+
     // 1. List
-    ctx.registerTemplate(kNameList, "List", "path");
+    ctx.registerRenderer(kNameList, "List", {.collapsed = pathCollapsed});
 
     // 2. Write
-    ctx.registerTemplate(kNameWrite, "Write", "path");
+    ctx.registerRenderer(kNameWrite, "Write", {.collapsed = pathCollapsed});
 
-    // 3. Read
-    ctx.registerRenderer(kNameRead, [](const ToolRenderInput& in, ToolRenderOutput& out) {
-        ArgReader   args(in.argsJson);
-        std::string path = args.value("path", "");
-        int64_t     off  = args.value("offset", -1);
-        int64_t     lim  = args.value("limit", -1);
-        std::string rangeStr;
-        if (off <= 0 && lim <= 0) {
-        } else if (off <= 0) {
-            rangeStr = fmt::format("0, {}", lim);
-        } else if (lim <= 0) {
-            rangeStr = fmt::format("{}, ~", off);
-        } else {
-            rangeStr = fmt::format("{}, {}", off, off + lim);
-        }
-        std::string summary = " ·";
-        if (!rangeStr.empty()) {
-            summary += " [" + rangeStr + "]";
-        }
-        if (!path.empty()) {
-            summary += " " + path;
-        }
-        out.displayName = "Read";
-        out.summary     = std::move(summary);
-    });
+    // 3. Read: 折叠内容 "[0, 100] /a.cpp" (行区间 + 路径)
+    ctx.registerRenderer(
+        kNameRead,
+        "Read",
+        {.collapsed
+         = [](const ToolRenderInput& in, ToolCollapsedOutput& out) {
+               ArgReader   args(in.argsJson);
+               std::string path = args.value("path", "");
+               int64_t     off  = args.value("offset", -1);
+               int64_t     lim  = args.value("limit", -1);
+               std::string rangeStr;
+               if (off <= 0 && lim <= 0) {
+               } else if (off <= 0) {
+                   rangeStr = fmt::format("0, {}", lim);
+               } else if (lim <= 0) {
+                   rangeStr = fmt::format("{}, ~", off);
+               } else {
+                   rangeStr = fmt::format("{}, {}", off, off + lim);
+               }
+               if (!rangeStr.empty()) {
+                   out.text = "[" + rangeStr + "]";
+               }
+               if (!path.empty()) {
+                   if (!out.text.empty()) {
+                       out.text += ' ';
+                   }
+                   out.text += path;
+               }
+           }}
+    );
 
-    // 4. Glob
-    ctx.registerRenderer(kNameGlob, [](const ToolRenderInput& in, ToolRenderOutput& out) {
-        ArgReader    args(in.argsJson);
-        auto         files = agentxx_fs_plugin::stringListArg(args.raw(), "file_patterns");
-        std::string  joined;
-        const size_t n = std::min<size_t>(files.size(), 2);
-        for (size_t i = 0; i < n; ++i) {
-            if (i > 0) {
-                joined += ", ";
-            }
-            joined += files[i];
-        }
-        if (files.size() > 2) {
-            joined += ", ...";
-        }
-        out.displayName = "Glob";
-        if (!joined.empty()) {
-            out.summary = " · " + joined;
-        }
-    });
+    // 4. Glob: 折叠内容 = 参数里的文件模式 (最多列 2 个)
+    ctx.registerRenderer(
+        kNameGlob,
+        "Glob",
+        {.collapsed
+         = [](const ToolRenderInput& in, ToolCollapsedOutput& out) {
+               ArgReader   args(in.argsJson);
+               auto        files = agentxx_fs_plugin::stringListArg(args.raw(), "file_patterns");
+               std::string joined;
+               const size_t n = std::min<size_t>(files.size(), 2);
+               for (size_t i = 0; i < n; ++i) {
+                   if (i > 0) {
+                       joined += ", ";
+                   }
+                   joined += files[i];
+               }
+               if (files.size() > 2) {
+                   joined += ", ...";
+               }
+               out.text = std::move(joined);
+           }}
+    );
 
-    // 5. Grep
-    ctx.registerRenderer(kNameGrep, [](const ToolRenderInput& in, ToolRenderOutput& out) {
-        ArgReader args(in.argsJson);
-        auto      textPats  = agentxx_fs_plugin::stringListArg(args.raw(), "text_patterns");
-        auto      regexPats = agentxx_fs_plugin::stringListArg(args.raw(), "regex_patterns");
-        auto      files     = agentxx_fs_plugin::stringListArg(args.raw(), "file_patterns");
-        std::vector<std::string> shown;
-        for (const auto& p : textPats) {
-            if (shown.size() >= 2) {
-                break;
-            }
-            shown.push_back(p);
-        }
-        for (const auto& p : regexPats) {
-            if (shown.size() >= 2) {
-                break;
-            }
-            shown.push_back(p);
-        }
-        const size_t totalPatterns = textPats.size() + regexPats.size();
-        std::string  quoted;
-        for (size_t i = 0; i < shown.size(); ++i) {
-            if (i > 0) {
-                quoted += ", ";
-            }
-            quoted += '"' + shown[i] + '"';
-        }
-        if (totalPatterns > 2) {
-            quoted += ", ...";
-        }
-        std::string filesStr;
-        for (size_t i = 0; i < std::min<size_t>(files.size(), 2); ++i) {
-            if (i > 0) {
-                filesStr += ", ";
-            }
-            filesStr += files[i];
-        }
-        if (files.size() > 2) {
-            filesStr += ", ...";
-        }
-        std::string summary = fmt::format(" · [{}] {}", quoted, filesStr);
-        out.displayName     = "Grep";
-        out.summary         = std::move(summary);
-    });
+    // 5. Grep: 折叠内容 "[\"pat\"] file_patterns"
+    ctx.registerRenderer(
+        kNameGrep,
+        "Grep",
+        {.collapsed
+         = [](const ToolRenderInput& in, ToolCollapsedOutput& out) {
+               ArgReader args(in.argsJson);
+               auto      textPats  = agentxx_fs_plugin::stringListArg(args.raw(), "text_patterns");
+               auto      regexPats = agentxx_fs_plugin::stringListArg(args.raw(), "regex_patterns");
+               auto      files     = agentxx_fs_plugin::stringListArg(args.raw(), "file_patterns");
+               std::vector<std::string> shown;
+               for (const auto& p : textPats) {
+                   if (shown.size() >= 2) {
+                       break;
+                   }
+                   shown.push_back(p);
+               }
+               for (const auto& p : regexPats) {
+                   if (shown.size() >= 2) {
+                       break;
+                   }
+                   shown.push_back(p);
+               }
+               const size_t totalPatterns = textPats.size() + regexPats.size();
+               std::string  quoted;
+               for (size_t i = 0; i < shown.size(); ++i) {
+                   if (i > 0) {
+                       quoted += ", ";
+                   }
+                   quoted += '"' + shown[i] + '"';
+               }
+               if (totalPatterns > 2) {
+                   quoted += ", ...";
+               }
+               std::string filesStr;
+               for (size_t i = 0; i < std::min<size_t>(files.size(), 2); ++i) {
+                   if (i > 0) {
+                       filesStr += ", ";
+                   }
+                   filesStr += files[i];
+               }
+               if (files.size() > 2) {
+                   filesStr += ", ...";
+               }
+               out.text = fmt::format("[{}] {}", quoted, filesStr);
+           }}
+    );
 
     // 6. Edit
     // 展开体按替换段展开: 界面描述层的 `Diff` 组件只描述一段 `oldStr`/`newStr`,
     // 因此多段替换表达为**多个 Diff 组件项** —— 文件路径只在首段显示, 段与段之间
     // 用分隔线隔开 (渲染层无需改动: 每个 Diff 项各渲染一份逐行差异)
-    ctx.registerRenderer(kNameEdit, [](const ToolRenderInput& in, ToolRenderOutput& out) {
-        ArgReader   args(in.argsJson);
-        std::string path     = args.value("path", "");
-        auto        segments = agentxx_fs_plugin::editSegmentsArg(args.raw());
+    //
+    // 折叠内容: git 风格的 "+行 -行" 提示在前, 路径在后 (如 "[+3 -1] /home/user/a.cpp")
+    // - 行数统计见 [diffStatTextOfSegments]: 各段各替换一处, 逐行 diff 求和
+    //   (与展开体渲染的差异同源, 因此显示的行数就是展开后能看到的)
+    ctx.registerRenderer(
+        kNameEdit,
+        "Edit",
+        {.collapsed
+         = [](const ToolRenderInput& in, ToolCollapsedOutput& out) {
+               ArgReader   args(in.argsJson);
+               std::string path     = args.value("path", "");
+               auto        segments = agentxx_fs_plugin::editSegmentsArg(args.raw());
 
-        // 折叠头摘要: git 风格的 "+行 -行" 提示在前, 路径在后 (如 " · [+3 -1] /home/user/a.cpp")
-        // - 行数统计见 [diffStatTextOfSegments]: 各段各替换一处, 逐行 diff 求和
-        //   (与展开体渲染的差异同源, 因此显示的行数就是展开后能看到的)
-        const std::string diffStat = agentxx_fs_plugin::diffStatTextOfSegments(segments);
-        std::string       summary  = " ·";
-        if (!diffStat.empty()) {
-            summary += " " + diffStat;
-        }
-        if (!path.empty()) {
-            summary += " " + path;
-        }
-        out.displayName = "Edit";
-        out.summary     = std::move(summary);
+               const std::string diffStat = agentxx_fs_plugin::diffStatTextOfSegments(segments);
+               if (!diffStat.empty()) {
+                   out.text = diffStat;
+               }
+               if (!path.empty()) {
+                   if (!out.text.empty()) {
+                       out.text += ' ';
+                   }
+                   out.text += path;
+               }
+           },
+         .expanded
+         = [](const ToolRenderInput& in, ToolExpandedOutput& out) {
+               ArgReader   args(in.argsJson);
+               std::string path     = args.value("path", "");
+               auto        segments = agentxx_fs_plugin::editSegmentsArg(args.raw());
 
-        bool firstSegment = true;
-        for (const auto& seg : segments) {
-            if (seg.oldStr.empty() && seg.newStr.empty()) {
-                continue;
-            }
-            if (!firstSegment) {
-                utilxx_base::Json divider;
-                divider["kind"] = "Divider";
-                out.items.push_back(std::move(divider));
-            }
-            utilxx_base::Json diffItem;
-            diffItem["kind"]   = "Diff";
-            diffItem["path"]   = firstSegment ? std::string{path} : std::string{};
-            diffItem["oldStr"] = seg.oldStr;
-            diffItem["newStr"] = seg.newStr;
-            out.items.push_back(std::move(diffItem));
-            firstSegment = false;
-        }
-    });
+               bool firstSegment = true;
+               for (const auto& seg : segments) {
+                   if (seg.oldStr.empty() && seg.newStr.empty()) {
+                       continue;
+                   }
+                   if (!firstSegment) {
+                       utilxx_base::Json divider;
+                       divider["kind"] = "Divider";
+                       out.items.push_back(std::move(divider));
+                   }
+                   utilxx_base::Json diffItem;
+                   diffItem["kind"]   = "Diff";
+                   diffItem["path"]   = firstSegment ? std::string{path} : std::string{};
+                   diffItem["oldStr"] = seg.oldStr;
+                   diffItem["newStr"] = seg.newStr;
+                   out.items.push_back(std::move(diffItem));
+                   firstSegment = false;
+               }
+           }}
+    );
 
     // 7. Move
-    ctx.registerRenderer(kNameMove, [](const ToolRenderInput& in, ToolRenderOutput& out) {
-        ArgReader   args(in.argsJson);
-        std::string src = args.value("src", "");
-        std::string dst = args.value("dst", "");
-        out.displayName = "Move";
-        if (!src.empty() || !dst.empty()) {
-            out.summary = fmt::format(" · {} -> {}", src, dst);
-        }
-    });
+    ctx.registerRenderer(
+        kNameMove,
+        "Move",
+        {.collapsed
+         = [](const ToolRenderInput& in, ToolCollapsedOutput& out) {
+               ArgReader   args(in.argsJson);
+               std::string src = args.value("src", "");
+               std::string dst = args.value("dst", "");
+               if (!src.empty() || !dst.empty()) {
+                   out.text = fmt::format("{} -> {}", src, dst);
+               }
+           }}
+    );
 
     // 8. Copy
-    ctx.registerRenderer(kNameCopy, [](const ToolRenderInput& in, ToolRenderOutput& out) {
-        ArgReader   args(in.argsJson);
-        std::string src = args.value("src", "");
-        std::string dst = args.value("dst", "");
-        out.displayName = "Copy";
-        if (!src.empty() || !dst.empty()) {
-            out.summary = fmt::format(" · {} -> {}", src, dst);
-        }
-    });
+    ctx.registerRenderer(
+        kNameCopy,
+        "Copy",
+        {.collapsed
+         = [](const ToolRenderInput& in, ToolCollapsedOutput& out) {
+               ArgReader   args(in.argsJson);
+               std::string src = args.value("src", "");
+               std::string dst = args.value("dst", "");
+               if (!src.empty() || !dst.empty()) {
+                   out.text = fmt::format("{} -> {}", src, dst);
+               }
+           }}
+    );
 
     // 9. Remove
-    ctx.registerTemplate(kNameRemove, "Remove", "path");
+    ctx.registerRenderer(kNameRemove, "Remove", {.collapsed = pathCollapsed});
 
     return 0;
 }

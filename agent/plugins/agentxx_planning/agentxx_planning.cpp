@@ -18,8 +18,8 @@
 ///           调用, 用于展开头显示语义名 ("Plan")
 ///        TUI 按通用渲染器展示, 无任何 plan 特化代码;
 ///     ② Info 栏段落渲染最近一次规划概览
-#include "agentxx_planning_plugin.h"
 #include "agentxx/plugin/api/agentxx_broadcast_ids.h"
+#include "agentxx_planning_plugin.h"
 #include "utilxx_base/json.h"
 #include <cstdio>
 #include <cstring>
@@ -584,11 +584,8 @@ extern "C" PLUGINXX_EXPORT int32_t PLUGINXX_CALL
     );
 }
 
-extern "C" PLUGINXX_EXPORT void* PLUGINXX_CALL agentxx_plugin_agent_start(
-    void*,
-    const PluginxxOperatorNotify* notify,
-    PluginxxString*
-) {
+extern "C" PLUGINXX_EXPORT void* PLUGINXX_CALL
+    agentxx_plugin_agent_start(void*, const PluginxxOperatorNotify* notify, PluginxxString*) {
     return agentxx::plugin::guardCall(
         [](const char*) noexcept {},
         static_cast<void*>(nullptr),
@@ -614,7 +611,11 @@ extern "C" PLUGINXX_EXPORT void* PLUGINXX_CALL agentxx_plugin_agent_mount(
         [&]() -> void* {
             auto* ctx = static_cast<PluginCtx*>(plugin_ctx);
             if (!ctx) {
-                agentxx::plugin::PluginString::set(nullptr, error_out, "planning mount: null context");
+                agentxx::plugin::PluginString::set(
+                    nullptr,
+                    error_out,
+                    "planning mount: null context"
+                );
                 return nullptr;
             }
             if (!notify || !spec) {
@@ -640,12 +641,8 @@ extern "C" PLUGINXX_EXPORT void* PLUGINXX_CALL agentxx_plugin_agent_mount(
     );
 }
 
-extern "C" PLUGINXX_EXPORT void* PLUGINXX_CALL agentxx_plugin_agent_unmount(
-    void*,
-    void*,
-    const PluginxxOperatorNotify* notify,
-    PluginxxString*
-) {
+extern "C" PLUGINXX_EXPORT void* PLUGINXX_CALL
+    agentxx_plugin_agent_unmount(void*, void*, const PluginxxOperatorNotify* notify, PluginxxString*) {
     return agentxx::plugin::guardCall(
         [](const char*) noexcept {},
         static_cast<void*>(nullptr),
@@ -687,13 +684,12 @@ extern "C" PLUGINXX_EXPORT void PLUGINXX_CALL agentxx_plugin_agent_destroy(void*
 /// 消息列表特化 + Info 侧边栏段落全部拆分至本插件, TUI 无任何 plan 概念)
 ///
 /// - 工具消息渲染 (两条路径内容同源, 见 buildPlanDecorParts):
-///   ① 类型级渲染器 (register_tool_renderer, 按 tool_name): 由工具参数/结果
-///      直接推导折叠头 displayName/summary 与展开体 items (状态图/todos/notes)。
+///   ① 类型级渲染器 (register_tool_renderer, 按 tool_name): 显示名注册时定下,
+///      折叠内容与展开体各一个回调 (todos 摘要 / 状态图 + 待办 + 备忘)。
 ///      历史回溯路径走这里 —— 重启恢复/重连/切换会话后, 工具消息由 Sync 回放,
 ///      没有 update_tool_decor 推送, 依赖类型级渲染器才能特化渲染
 ///   ② 运行时装饰 (update_tool_decor): 订阅 EVT_DELTA, 工具行插入/更新时
-///      推送装饰 (折叠头显示名 + 展开体 items); 本进程内实时调用的展开头
-///      因此显示语义名 ("Plan")
+///      推送装饰 (显示名 + 折叠内容 + 展开体 items)
 /// - Info 栏段落 "Plan" (懒注册): EVT_PLUGIN_DATA planning 事件驱动,
 ///   展示最近一次规划概览; client_attached 重发快照自愈
 /// - EVT_SESSION_SWITCH → 清理装饰与段落
@@ -976,27 +972,32 @@ static void
 ///   切换会话后由 Sync 回放的历史工具消息没有 update_tool_decor 推送,
 ///   经本渲染器同样特化渲染 (见 [plugins.md] §9 工具特化渲染架构)
 /// - write 模式取参数, read 模式取结果 (结果未返回时占位提示)
-/// - 参数/结果无法解析时只保留显示名, 展开体回退通用参数/结果展示
-/// - 注意 (框架规则): 展开状态的头部显示名仅由实例级装饰覆盖, 类型级渲染器
-///   只覆盖折叠头显示名与展开体 —— 历史恢复场景展开头保留原始工具名
-///   ("agentxx_planning"), 折叠头与展开体与实时调用一致
-static void buildPlanningToolRender(
-    const agentxx::plugin::ToolRenderInput& in,
-    agentxx::plugin::ToolRenderOutput&      out
-) {
-    out.displayName = kDisplayName;
-
+/// - 参数/结果无法解析时不给内容, 界面走默认渲染
+///
+/// 折叠内容与展开内容分两个薄封装 (共用 [buildPlanDecorParts]): 折叠行只算
+/// todos 摘要, 状态图与待办 items 只在用户展开那一行时才算
+static std::string buildPlanningCollapsedText(const agentxx::plugin::ToolRenderInput& in) {
     utilxx_base::Json plan;
     bool              readPlaceholder = false;
     if (!planFromToolCall(in.argsJson, in.resultText, plan, readPlaceholder)) {
-        return;
+        return {};
     }
     if (readPlaceholder) {
         plan = makeReadingPlaceholderPlan();
     }
-    const auto parts = buildPlanDecorParts(plan);
-    out.summary      = parts.summary;
-    out.items        = parts.items;
+    return buildPlanDecorParts(plan).summary;
+}
+
+static utilxx_base::Json buildPlanningExpandedItems(const agentxx::plugin::ToolRenderInput& in) {
+    utilxx_base::Json plan;
+    bool              readPlaceholder = false;
+    if (!planFromToolCall(in.argsJson, in.resultText, plan, readPlaceholder)) {
+        return utilxx_base::Json::array();
+    }
+    if (readPlaceholder) {
+        plan = makeReadingPlaceholderPlan();
+    }
+    return buildPlanDecorParts(plan).items;
 }
 
 /// 清理本插件全部装饰 (会话切换时调用)
@@ -1121,14 +1122,13 @@ static void PLUGINXX_CALL on_client_delta(const PluginxxStringView* payload_json
         if (tool.value("tool_name", std::string{}) != "agentxx_planning") {
             return;
         }
-        const auto callId  = tool.value("tool_call_id", std::string{});
-        const auto argsStr = msg.value("text", std::string{});
+        const auto callId   = tool.value("tool_call_id", std::string{});
+        const auto argsStr  = msg.value("text", std::string{});
         const bool finished = tool.value("tool_finished", false);
 
         utilxx_base::Json plan;
         bool              readPlaceholder = false;
-        const auto        resultText      = finished ? tool.value("tool_result", std::string{})
-                                                     : std::string{};
+        const auto resultText = finished ? tool.value("tool_result", std::string{}) : std::string{};
         if (!planFromToolCall(argsStr, resultText, plan, readPlaceholder)) {
             return;
         }
@@ -1186,17 +1186,29 @@ extern "C" PLUGINXX_EXPORT const AgentxxClientPluginInfo* PLUGINXX_CALL
 static int planningClientSetup(ClientCtx* ctx) {
     const PluginxxHost* host = ctx->host;
 
-    // 类型级工具渲染器 (按 tool_name 注册): 由工具参数/结果直接推导折叠头与
+    // 类型级工具渲染器 (按 tool_name 注册): 由工具参数/结果直接推导折叠内容与
     // 展开体, **重启恢复/重连/切换会话后由 Sync 回放的历史工具消息同样特化
-    // 渲染** (这些消息没有 EVT_DELTA 装饰推送); 实时调用也走同一渲染器, 与
-    // 装饰推送 (展开头显示语义名) 内容同源。主程序无消息渲染面 (cli) 或未加载
+    // 渲染** (这些消息没有 EVT_DELTA 装饰推送)。显示名注册时定下, 折叠内容与
+    // 展开内容各一个回调 (折叠行不算展开体)。主程序无消息渲染面 (cli) 或未加载
     // ui 表时注册失败 → 仅记日志, 不影响其他功能
     if (ctx->ui && ctx->ui->register_tool_renderer) {
         const int32_t rc = agentxx::plugin::registerToolRenderer(
             host,
             ctx->ui,
             kNamePlanning,
-            &buildPlanningToolRender,
+            kDisplayName,
+            {
+                .collapsed =
+                    [](const agentxx::plugin::ToolRenderInput& in,
+                       agentxx::plugin::ToolCollapsedOutput&   out) {
+                        out.text = buildPlanningCollapsedText(in);
+                    },
+                .expanded =
+                    [](const agentxx::plugin::ToolRenderInput& in,
+                       agentxx::plugin::ToolExpandedOutput&    out) {
+                        out.items = buildPlanningExpandedItems(in);
+                    },
+            },
             ctx->renderShims
         );
         if (rc != 0) {

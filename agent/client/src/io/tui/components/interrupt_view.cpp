@@ -454,8 +454,8 @@ std::vector<InterruptView::ResolvedSegment> InterruptView::resolveSegments(
     out.reserve(segments.size());
     for (const auto& seg : segments) {
         std::string label = resolveLabel(seg.labelKey, seg.text);
-        // 工具名分段: 换成该工具的特化显示名 (如 agentxx_filesystem_write -> Write)。
-        // 显示名未就绪时本帧**不画该段** —— 先画原始工具名会在下一帧跳变成显示名
+        // 工具名分段: 换成该工具的显示名 (如 agentxx_filesystem_write -> Write)。
+        // 未命中注册表时解析器直接返回原始工具名 (同步查表, 没有未就绪态)
         if (seg.kind == "tool" && toolDisplayName_) {
             label = toolDisplayName_(label);
         }

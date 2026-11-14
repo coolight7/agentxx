@@ -7,22 +7,98 @@
 - [x] 现状调查（C ABI / SDK / 注册表 / 渲染查询 / TUI 消费点 / 插件 / 测试 / 文档）
 - [x] 方案定稿（显示名进注册；折叠与展开拆成两个回调、两份缓存；删 `summaryKey`/模版；
       头行骨架固定；老逻辑清单见 plan §4）
-- [ ] 步骤 1：C ABI + SDK（两个回调类型/输出、spec 字段、`ToolRenderers`、kit 封装）
-- [ ] 步骤 2：注册表 + 两部分渲染查询 + `toolDisplayNameFor` + 按部分缓存/指纹
-- [ ] 步骤 3：内置渲染器 + 4 个插件（模版 → 折叠内容 lambda，去掉 `" · "` 前导）
-- [ ] 步骤 4：TUI（固定骨架、两部分查询、itemKey、删预取与嗅探）
+- [x] 步骤 1：C ABI + SDK（两个回调类型/输出、spec 字段、`ToolRenderers`、kit 封装）
+- [x] 步骤 2：注册表 + 两部分渲染查询 + `toolDisplayNameFor` + 按部分缓存/指纹
+- [x] 步骤 3：内置渲染器 + 4 个插件（模版 → 折叠内容 lambda，去掉 `" · "` 前导）
+- [x] 步骤 4：TUI（固定骨架、两部分查询、itemKey、删预取与嗅探）
 - [ ] 步骤 5：测试（`plugin_runtime` / `client_plugins` / `tui_tool_header`）
 - [ ] 步骤 6：文档（`plugins.md` §9、`tui.md` §2.2/§2.14、`docs/en`、`AGENTS.md`）
 - [ ] 步骤 7：编译 + 插件重建 + 跑测试
 
 ## 每步改动与验证
 
-（实施时逐条填写：改了哪些文件、怎么验证的、验证结果。）
+### 步骤 1：C ABI + SDK
+
+改动的文件：
+
+- `agent/lib/include/agentxx/plugin/api/client_plugin_api.h`
+  - 删除 `AgentxxToolRenderOutput` / `AgentxxToolRenderFn`，新增
+    `AgentxxToolCollapsedOutput`（`text`）、`AgentxxToolExpandedOutput`（`items_json`）、
+    `AgentxxToolCollapsedRenderFn`、`AgentxxToolExpandedRenderFn`；
+  - `AgentxxToolRenderSpec` 改为 `{struct_size, version, tool_name, display_name,
+    collapsed_fn, expanded_fn, user_data}`（64 字节）；删除 `template_json`；
+  - `register_tool_renderer` 的注释按新语义重写。
+- `agent/lib/include/agentxx/plugin/api/plugin_kit.h`
+  - `ToolRenderOutput` → `ToolCollapsedOutput` / `ToolExpandedOutput` + `ToolRenderers`；
+  - `registerToolRenderer` 签名改为 `(host, ui, toolName, displayName, ToolRenderers, shimStorage)`，
+    shim 持有回调副本，两个 trampoline 分别调用；只注册给了回调的那一侧（另一侧传 NULL）；
+  - 删除 `registerToolTemplate` 与 `ClientPluginBase::registerTemplate`；
+    `ClientPluginBase::registerRenderer(tool, displayName, renderers)`。
+
+验证：`agentxx_static` 目标编译通过。
+
+### 步骤 2：注册表 + 两部分渲染查询
+
+- `client_plugin_manager.h`
+  - `ClientToolRenderReg`：`displayName`（归一后恒非空）+ `collapsedFn` / `expandedFn` /
+    `userData`；删除 `renderFn` 与四个 `template*` 字段；
+  - 新增 `ClientToolRenderPart`（`Collapsed` / `Expanded`）、`ClientToolCollapsedResult`、
+    `ClientToolExpandedResult`；删除 `ClientToolRenderResult`；
+  - `ClientToolRenderEntry`：删除 `displayName`/`summary`，改为 `matched` + `text` + `items`；
+  - `ClientToolRenderRequest` 增加 `part`；`keyFor(toolCallId, toolName, part)` 追加
+    `#c` / `#e` 后缀（两部分条目、版本号、请求去重全部按部分独立）；
+  - `renderClientTool` → `renderClientToolCollapsed` / `renderClientToolExpanded`；
+    新增 `toolDisplayNameFor(reg, toolCallId, toolName)`；
+  - `registerBuiltinToolRenderer(toolName, displayName, collapsedFn, expandedFn, userData)`。
+- `client_plugin_manager.cpp`
+  - `performToolRender` 按 `req.part` 只查/只调对应部分的回调，写对应字段；
+  - 注册路径删除模版 JSON 解析与体积校验，`displayName` 空 → 归一为工具名；
+  - 删除 `truncateToolSummary`（只服务模版）；
+  - 查询流程：decor 有该部分内容 → 用它；否则注册项有该部分回调 → 缓存命中用条目
+    （空 = 回调返回 null → 默认渲染）、未命中 `pending` + 沿用同调用同部分的上一份；
+    否则没注册。没有 `toolCallId` 时不沿用上一份（键会退化成 `#工具名`）。
+- `builtin_tool_renderers.{h,cpp}`：只注册显示名 + 折叠内容（`Store` / `Subagent`），
+  文本去掉前导 `" · "`。
+
+验证：`agentxx_static` 编译通过。
+
+### 步骤 3：内置渲染器与插件
+
+- `agentxx_filesystem`：`List`/`Write`/`Remove` 模版 → 折叠内容 lambda（取 `path`）；
+  `Read`（区间 + 路径）、`Glob`、`Grep`、`Move`、`Copy` 只注册折叠内容；
+  `Edit` 折叠内容（`±行数` + 路径）+ 展开内容（逐段 `Diff` items）。
+- `agentxx_websearch`：`Search` 折叠内容取 `query`、`Fetch` 取 `url`。
+- `agentxx_execute_command`：两条命令工具折叠内容取 `command` 首行（多行补 ` ...`）。
+- `agentxx_planning`：`buildPlanningCollapsedText` / `buildPlanningExpandedItems` 两个薄封装
+  （共用 `buildPlanDecorParts`），注册时给显示名 `Plan` + 两个回调。
+
+验证：`build_plugins.ps1` 编译 4 个插件通过，`exec/plugins/*` 时间戳已更新。
+
+### 步骤 4：TUI
+
+- `message_list.cpp`
+  - `queryToolRender` → `queryToolCollapsed` / `queryToolExpanded`（后者只在展开态调用，
+    按部分键去重 + 投递）；
+  - 折叠头固定骨架 `+ [工具] <名字> · <内容>`：失败结果首行 > 自定义折叠内容 >
+    pending 且无上一份则**不画** ` · ` > 默认（运行中 `msg.genToolCalling` / 已完成结果首行）；
+    删除 `starts_with(" ·")` 嗅探与"运行中显示参数预览"分支；
+  - 展开头固定 `- [工具] <名字> <耗时>`；展开体：失败 → 默认（参数 + 结果）>
+    自定义 items > pending 留空 > 默认（参数 + 运行中 `msg.genToolCalling` / 结果，结果为空不画）；
+  - `toolDisplayNameOf` / `genPlaceholderToolDisplayName` 改为 `toolDisplayNameFor` 同步查表；
+  - 占位行改为 `{符号} [工具] <名字> · 正在调用工具...`（名字为空时不画 ` · `）；
+  - `itemKey`：折叠态计入折叠内容版本 + 显示名哈希，展开态再加展开内容版本；
+    删除 `#工具名` 名称结果版本项。
+- `message_list.h`：两处注释按新语义重写。
+- `agent_tui.cpp`：删除 `prefetchInterruptToolNames` 及调用点。
+- `interrupt_view.{h,cpp}`：`ToolDisplayNameFn` 去掉"返回空串 = 未就绪"的约定。
+- `tui_i18n.cpp`：删除 `tool.running` 条目。
+
+验证：`agentxx_client`（内层构建目录）编译通过。
 
 ## 验证清单
 
 - [ ] `windows_debug_build.bat` 编译通过（无新增警告）
-- [ ] `build_plugins.ps1` 重建 `agentxx_filesystem` / `agentxx_planning` /
+- [x] `build_plugins.ps1` 重建 `agentxx_filesystem` / `agentxx_planning` /
       `agentxx_execute_command` / `agentxx_websearch`，`exec/plugins/*` 时间戳已更新
 - [ ] `agentxx_test --log-level warn plugin_runtime client_plugins tui_tool_header`
 - [ ] `agentxx_test --log-level warn plugin_sdk tui_widget tui_form tui_ui_items ui_items`

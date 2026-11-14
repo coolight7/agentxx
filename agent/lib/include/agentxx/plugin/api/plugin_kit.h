@@ -4085,104 +4085,117 @@ struct ToolRenderInput {
     int              maxWidth   = 0;
 };
 
-struct ToolRenderOutput {
-    std::string       displayName;
-    std::string       summary;
+/// C ABI 输入 → kit 输入 (全部 string_view 借用, 只在本次回调内有效)
+inline ToolRenderInput toolRenderInputOf(const AgentxxToolRenderInput& input) {
+    return ToolRenderInput{
+        .toolCallId = PluginStringView::str(input.tool_call_id),
+        .toolName   = PluginStringView::str(input.tool_name),
+        .argsJson   = PluginStringView::str(input.args_json),
+        .resultText = PluginStringView::str(input.result_text),
+        .isFinished = input.is_finished != 0,
+        .isError    = input.is_error != 0,
+        .maxWidth   = input.max_width,
+    };
+}
+
+/// 折叠内容 (工具行折叠态 ` · ` 之后的一行文本; 不带分隔符)
+struct ToolCollapsedOutput {
+    std::string text;
+};
+
+/// 展开内容 (工具行展开态首行之后的 items; 界面描述层 schema)
+struct ToolExpandedOutput {
     utilxx_base::Json items = utilxx_base::Json::array();
 };
 
-/// 注册基于回调函数的工具特化渲染器 (<key, 渲染func>)
-template<typename Fn>
+/// 工具特化渲染的两个内容回调 (都可空; 空 = 该部分走默认渲染)
+///
+/// - 折叠回调只给一行文本, 折叠行不会触发展开回调 (展开体可能是差异对比/状态图)
+/// - 回调内抛出的异常由适配层吞掉, 本部分按"无自定义内容"处理
+struct ToolRenderers {
+    std::function<void(const ToolRenderInput&, ToolCollapsedOutput&)> collapsed;
+    std::function<void(const ToolRenderInput&, ToolExpandedOutput&)>  expanded;
+};
+
+/// 注册工具特化渲染器 (显示名 + 折叠内容回调 + 展开内容回调)
+///
+/// - `displayName` 注册时确定, UI 线程直接读 (首帧即可显示); 空 = 用工具名
+/// - 两个回调都空 = 只改名, 内容全走默认渲染
+/// - 回调在 client io 线程执行; shim 持有 `renderers` 副本, 随 `shimStorage` 释放
 inline int32_t registerToolRenderer(
     const PluginxxHost*                                  host,
     const AgentxxClientUiIface*                          ui,
     std::string_view                                     toolName,
-    Fn&&                                                 fn,
+    std::string_view                                     displayName,
+    ToolRenderers                                        renderers,
     std::vector<std::unique_ptr<void, void (*)(void*)>>& shimStorage
 ) {
     if (!host || !ui || !ui->register_tool_renderer) {
         return AGENTXX_RESULT_ERR_UNSUPPORTED;
     }
-    using DecayedFn = std::decay_t<Fn>;
 
     struct RenderShim {
         const PluginxxHost* host = nullptr;
-        DecayedFn           fn;
+        ToolRenderers       renderers;
     };
 
-    auto* shim = new RenderShim{host, std::forward<Fn>(fn)};
+    auto* shim = new RenderShim{host, std::move(renderers)};
     shimStorage.emplace_back(shim, [](void* p) {
         delete static_cast<RenderShim*>(p);
     });
 
-    auto renderCb
-        = [](void* user_data, const AgentxxToolRenderInput* input, AgentxxToolRenderOutput* output
+    auto collapsedCb
+        = [](void* user_data, const AgentxxToolRenderInput* input, AgentxxToolCollapsedOutput* output
           ) -> int32_t {
         if (!user_data || !input || !output) {
             return AGENTXX_RESULT_ERR_ARG;
         }
-        auto*           shim = static_cast<RenderShim*>(user_data);
-        ToolRenderInput in{
-            .toolCallId = PluginStringView::str(input->tool_call_id),
-            .toolName   = PluginStringView::str(input->tool_name),
-            .argsJson   = PluginStringView::str(input->args_json),
-            .resultText = PluginStringView::str(input->result_text),
-            .isFinished = input->is_finished != 0,
-            .isError    = input->is_error != 0,
-            .maxWidth   = input->max_width,
-        };
-        ToolRenderOutput out;
+        auto* shim = static_cast<RenderShim*>(user_data);
+        if (!shim->renderers.collapsed) {
+            return AGENTXX_RESULT_OK; // 无自定义内容 (输出留空)
+        }
+        ToolCollapsedOutput out;
         try {
-            shim->fn(in, out);
+            shim->renderers.collapsed(toolRenderInputOf(*input), out);
         } catch (...) {
             return AGENTXX_RESULT_ERR_INTERNAL;
         }
-        if (!out.displayName.empty()) {
-            output->displayName = PluginString::from(shim->host, out.displayName);
+        if (!out.text.empty()) {
+            output->text = PluginString::from(shim->host, out.text);
         }
-        if (!out.summary.empty()) {
-            output->summary = PluginString::from(shim->host, out.summary);
+        return AGENTXX_RESULT_OK;
+    };
+
+    auto expandedCb
+        = [](void* user_data, const AgentxxToolRenderInput* input, AgentxxToolExpandedOutput* output
+          ) -> int32_t {
+        if (!user_data || !input || !output) {
+            return AGENTXX_RESULT_ERR_ARG;
         }
-        if (!out.items.empty()) {
+        auto* shim = static_cast<RenderShim*>(user_data);
+        if (!shim->renderers.expanded) {
+            return AGENTXX_RESULT_OK; // 无自定义内容 (输出留空)
+        }
+        ToolExpandedOutput out;
+        try {
+            shim->renderers.expanded(toolRenderInputOf(*input), out);
+        } catch (...) {
+            return AGENTXX_RESULT_ERR_INTERNAL;
+        }
+        if (out.items.is_array() && !out.items.empty()) {
             output->items_json = PluginString::from(shim->host, out.items.dump());
         }
         return AGENTXX_RESULT_OK;
     };
 
     AgentxxToolRenderSpec spec{};
-    spec.struct_size   = sizeof(AgentxxToolRenderSpec);
-    spec.version       = 1;
-    spec.tool_name     = PluginStringView::from(toolName.data(), toolName.size());
-    spec.render_fn     = renderCb;
-    spec.user_data     = shim;
-    spec.template_json = PluginStringView::from(nullptr, 0);
-
-    return ui->register_tool_renderer(host, &spec);
-}
-
-/// 注册基于预设模版的工具特化渲染器
-inline int32_t registerToolTemplate(
-    const PluginxxHost*         host,
-    const AgentxxClientUiIface* ui,
-    std::string_view            toolName,
-    std::string_view            displayName,
-    std::string_view            summaryKey
-) {
-    if (!host || !ui || !ui->register_tool_renderer) {
-        return AGENTXX_RESULT_ERR_UNSUPPORTED;
-    }
-    utilxx_base::Json j;
-    j["displayName"]    = std::string(displayName);
-    j["summaryKey"]     = std::string(summaryKey);
-    std::string jsonStr = j.dump();
-
-    AgentxxToolRenderSpec spec{};
-    spec.struct_size   = sizeof(AgentxxToolRenderSpec);
-    spec.version       = 1;
-    spec.tool_name     = PluginStringView::from(toolName.data(), toolName.size());
-    spec.render_fn     = nullptr;
-    spec.user_data     = nullptr;
-    spec.template_json = PluginStringView::from(jsonStr.data(), jsonStr.size());
+    spec.struct_size  = sizeof(AgentxxToolRenderSpec);
+    spec.version      = 1;
+    spec.tool_name    = PluginStringView::from(toolName.data(), toolName.size());
+    spec.display_name = PluginStringView::from(displayName.data(), displayName.size());
+    spec.collapsed_fn = shim->renderers.collapsed ? collapsedCb : nullptr;
+    spec.expanded_fn  = shim->renderers.expanded ? expandedCb : nullptr;
+    spec.user_data    = shim;
 
     return ui->register_tool_renderer(host, &spec);
 }
@@ -4428,8 +4441,19 @@ public:
         iface.session->request_cancel(host, &sidSv);
     }
 
-    void registerTemplate(std::string_view tool, std::string_view display, std::string_view key) {
-        registerToolTemplate(host, iface.ui, tool, display, key);
+    void registerRenderer(
+        std::string_view tool,
+        std::string_view displayName,
+        ToolRenderers    renderers
+    ) {
+        registerToolRenderer(
+            host,
+            iface.ui,
+            tool,
+            displayName,
+            std::move(renderers),
+            shims_
+        );
     }
 
     // ==================== 展示扩展便捷方法 ====================
@@ -4804,11 +4828,6 @@ public:
             break;
         }
         return out;
-    }
-
-    template<typename Fn>
-    void registerRenderer(std::string_view tool, Fn&& fn) {
-        registerToolRenderer(host, iface.ui, tool, std::forward<Fn>(fn), shims_);
     }
 
     // ==================== 定时器 (`agentxx.client.timer`) ====================

@@ -110,21 +110,23 @@ struct ClientCommand {
 };
 
 /// 工具特化渲染器注册记录 (UI 注册表快照条目)
+///
+/// - `displayName` 在注册时归一 (空 → 工具名), 因此命中项的显示名恒非空 ——
+///   UI 线程同步读得到, 首帧即可显示
+/// - 两个内容回调都可空: 折叠内容 (一行文本) 与展开内容 (items) 分开渲染、各自缓存
 struct ClientToolRenderReg {
-    std::string                              plugin;
-    std::string                              toolName;
-    AgentxxToolRenderFn                      renderFn = nullptr;
-    void*                                    userData = nullptr;
+    std::string                 plugin;
+    std::string                 toolName;
+    std::string                 displayName; ///< 归一后恒非空
+    AgentxxToolCollapsedRenderFn collapsedFn = nullptr;
+    AgentxxToolExpandedRenderFn  expandedFn  = nullptr;
+    void*                       userData    = nullptr; ///< 两个回调共用
     std::shared_ptr<ClientToolRendererLease> lease;
     /// 主程序内置渲染器标记 (lib 内置工具无对应插件, 由主程序自身注册;
     /// 见 [ClientPluginManager::registerBuiltinToolRenderer]):
     /// - true 时无插件实例与 lease, 渲染时不做租约/启用状态复查
     /// - 归属名固定为 [kBuiltinRendererOwner]; 不随插件禁用/卸载失效
-    bool        builtin = false;
-    std::string templateJson;
-    std::string templateDisplayName;
-    std::string templateSummaryKey;
-    std::string templateSummaryTemplate;
+    bool builtin = false;
 };
 
 /// 主程序内置渲染器的保留归属名 (写入 [ClientToolRenderReg::plugin] 与语义渲染
@@ -229,77 +231,81 @@ inline constexpr size_t kUiJsonMaxBytes = 1024 * 1024;
 ///     - [plugin] 插件名 (日志用)
 bool acceptUiJsonSize(std::string_view json, std::string_view what, std::string_view plugin);
 
-/// 工具特化渲染统一结果
-struct ClientToolRenderResult {
-    /// 显示名 (工具消息/占位提示头部)
-    /// - `matched` = true: 特化渲染结果里的显示名
-    /// - `pendingRender` = true: 过渡显示名 —— 本次调用上一份结果, 或该工具"名称
-    ///   结果"(占位提示阶段按工具名解析过一次)里的显示名。特化结果就绪前沿用它,
-    ///   而不是回退原始工具名 (折叠头会先闪一下非特化内容); 仍为空表示该工具
-    ///   还没有任何可用的显示名
-    std::string displayName;
-    /// 摘要 (折叠头的 " · 摘要" 部分)
-    /// - `matched` = true: 特化渲染结果里的摘要
-    /// - `pendingRender` = true: 本次调用上一份结果的摘要 —— 结果就绪前继续显示
-    ///   屏幕上已有的内容, 避免摘要消失一帧再回来 (此时 `matched` 恒为 false)。
-    ///   调用没有 tool_call_id 时为空: 缓存键退化为 `#工具名`, 与"名称结果"同键,
-    ///   该键下可能是占位提示阶段(参数/结果为空)或另一次无 id 调用的结果, 摘要都
-    ///   不代表本次调用
-    std::string summary;
-    /// 展开体内容 (客户端展开工具消息时渲染)
-    /// - 只有命中特化结果时填充; 过渡帧 (`pendingRender`) 不填 —— 调用方此时不
-    ///   渲染 items, 逐帧深拷贝大 items (如 Edit 的 diff 内容) 只是浪费
-    utilxx_base::Json items   = utilxx_base::Json::array();
-    bool              matched = false;
-    bool              isDecor = false; ///< 是否来自动态 toolDecors (update_tool_decor)
-    /// 命中"按 tool_name 注册的自定义 renderer"但语义结果尚未计算出来:
-    /// 调用方本帧用过渡内容渲染 (见 [displayName]/[summary]), 并按
-    /// [ClientToolRenderRequest] 提交一次请求; 两者都为空时才回退通用渲染
-    /// (原始工具名 + 原始参数/结果预览)。自定义 renderer 不在 UI 线程执行
-    /// (只在 client IO 线程)。
-    bool pendingRender = false;
-    /// pendingRender=true 时的 renderer 归属插件 (空 = 未知)
-    std::string pendingPlugin;
-    /// decor 来源 (isDecor=true 时有效; UI 侧组装 owner_id=toolCallId 用):
-    /// button 派发 owner_id 统一为 tool_call_id (以 toolCallId 作 owner_id,
-    /// 插件 bind 一次永久生效, 见方案 A); 非 decor 时为空
+/// 工具特化渲染的部分 (折叠内容 / 展开内容)
+///
+/// 两部分各有自己的缓存条目、输入特征与版本号: 折叠内容到达时只让折叠条失效,
+/// 展开体不受影响; 反过来也一样。缓存键在 [ClientToolRenderRequest::keyFor] 里
+/// 按部分追加后缀 (`#c` / `#e`)。
+enum class ClientToolRenderPart : uint8_t {
+    Collapsed = 0, ///< 折叠内容 (一行文本)
+    Expanded  = 1, ///< 展开内容 (items)
+};
+
+/// 折叠内容查询结果 (UI 线程可调, 不进入插件代码)
+struct ClientToolCollapsedResult {
+    /// 折叠内容 (不含分隔符 `" · "`; 空 = 无内容)
+    /// - `pending == false` 且为空: 没注册折叠内容回调, 或回调返回了空内容 → 走默认渲染
+    /// - `pending == true`: 自定义内容还在 client io 线程算, 此处可能是上一份内容
+    std::string text;
+    /// 命中注册项但结果尚未算出 (调用方应提交一次渲染请求)
+    bool        pending = false;
+    std::string pendingPlugin; ///< `pending` 时的渲染器归属插件 (诊断)
+    bool        isDecor = false; ///< `text` 来自 `update_tool_decor` 的 summary
+};
+
+/// 展开内容查询结果 (UI 线程可调; 只在展开态调用)
+struct ClientToolExpandedResult {
+    /// 展开内容 items (界面描述层 schema; 空 = 无内容, 走默认展开体)
+    utilxx_base::Json items = utilxx_base::Json::array();
+    bool              pending = false; ///< 同 [ClientToolCollapsedResult::pending]
+    std::string       pendingPlugin;
+    bool              isDecor = false; ///< `items` 来自 `update_tool_decor`
+    /// decor 来源 (isDecor=true 时有效): 按钮派发 owner 统一为 tool_call_id,
+    /// 插件 bind 一次永久生效; 非 decor 时为空
     std::string decorPlugin;
     std::string decorToolCallId;
 };
 
 /// 工具语义渲染结果条目 (主程序拥有; 写入后不再修改, UI 线程只读快照)
-/// - 由 client io 线程在持有 renderer lease 时执行插件回调, 并把
-///   displayName/summary/items 拷成主程序字符串/JSON 后写入
-/// - 插件卸载/禁用/重载时按插件失效, 旧快照因此回退通用渲染
+///
+/// - 由 client io 线程在持有 renderer lease 时执行插件回调, 并把结果拷成主程序
+///   文本/JSON 后写入
+/// - 按部分只有一侧非空 (`text` 用于折叠部分, `items` 用于展开部分)
+/// - 插件卸载/禁用/重载时按插件失效, 旧快照因此回退默认渲染
 struct ClientToolRenderEntry {
-    std::string       key;            ///< 缓存键 (toolCallId, 空则 "#toolName")
+    std::string       key;            ///< 缓存键 (含部分后缀, 见 keyFor)
     std::string       plugin;         ///< 产出该结果的插件名
     uint64_t          generation = 0; ///< 产出时的实例代次
     uint64_t          inputHash  = 0; ///< 输入特征 (args/结果/宽度等)
-    bool              matched    = false;
-    std::string       displayName;
-    std::string       summary;
-    utilxx_base::Json items = utilxx_base::Json::array();
+    bool              matched    = false; ///< 回调有返回内容 (false = 本次无自定义内容)
+    std::string       text;            ///< 折叠内容 (折叠部分)
+    utilxx_base::Json items = utilxx_base::Json::array(); ///< 展开内容 (展开部分)
 };
 
 /// 工具语义渲染请求 (UI 线程构造; 所有字段为拥有型拷贝, 不在 UI 线程进入插件代码)
 struct ClientToolRenderRequest {
-    std::string toolCallId;
-    std::string toolName;
-    std::string argsJson;
-    std::string resultText;
-    bool        isFinished = false;
-    bool        isError    = false;
-    int         maxWidth   = 0;
+    std::string          toolCallId;
+    std::string          toolName;
+    std::string          argsJson;
+    std::string          resultText;
+    ClientToolRenderPart part       = ClientToolRenderPart::Collapsed;
+    bool                 isFinished = false;
+    bool                 isError    = false;
+    int                  maxWidth   = 0;
 
-    /// 缓存键: 优先按 tool_call_id (每次调用独立), 无 id 时退回 tool_name
-    static std::string keyFor(std::string_view toolCallId, std::string_view toolName);
+    /// 缓存键: 优先按 tool_call_id (每次调用独立), 无 id 时退回 tool_name;
+    /// 按部分追加后缀 (`#c` 折叠内容 / `#e` 展开内容)
+    static std::string keyFor(
+        std::string_view     toolCallId,
+        std::string_view     toolName,
+        ClientToolRenderPart part
+    );
 
     /// 输入特征: 任一输入变化都必须重新渲染 (含宽度, 渲染器按宽度换行)
     uint64_t inputHash() const;
 
     /// 输入特征 (直接吃 string_view, 不做任何拷贝) —— 供"先算特征查缓存,
-    /// 确认需要投递时才拷贝请求"的路径使用 (见 renderClientTool / queryToolRender):
+    /// 确认需要投递时才拷贝请求"的路径使用 (见 renderClientToolCollapsed / queryToolCollapsed):
     /// 大 args/result 文本的拷贝只在真的提交渲染请求时发生
     static uint64_t hashInputs(
         std::string_view toolName,
@@ -332,12 +338,9 @@ public:
     /// 取该键"最近一次写入"的条目, **不校验输入特征** (UI 线程; 只读主程序拷贝)
     ///
     /// 用途: 特化渲染结果尚未就绪时沿用该键上一次的结果 —— 同一调用取上一份
-    /// 结果 (结果到达使输入特征变化的那一帧继续显示屏幕上已有的内容), 或工具
-    /// 消息读占位提示阶段算出的"名称结果" (键 = "#工具名", 输入只有工具名), 使
-    /// 折叠头在结果就绪前沿用同一显示名, 而不是回退原始工具名 + 原始参数。
+    /// 结果 (结果到达使输入特征变化的那一帧继续显示屏幕上已有的内容)。
     ///
-    /// 注意: 只应用于"过渡展示"(显示名/摘要), 不能当作精确结果 —— 输入不同
-    /// (参数/宽度/完成状态变化) 的条目内容也不同。
+    /// 注意: 只用于过渡展示; 输入不同 (参数/宽度/完成状态变化) 的条目不等于本次结果。
     std::shared_ptr<const ClientToolRenderEntry> lookupLatest(const std::string& key) const;
 
     /// 该键的内容版本号 (0 = 从未写入; 计入 TUI 消息块缓存 key)
@@ -379,17 +382,13 @@ private:
     std::unordered_map<std::string, uint64_t> pending_;
 };
 
-/// 渲染客户端工具特化内容 (折叠头/展开体; UI 线程可调, 不进入插件代码)
-/// 查询顺序:
-/// 1. toolDecors (按 toolCallId 匹配动态实例级装饰, 如 planning 推送)
-/// 2. toolRenderers / builtinToolRenderers (按 toolName; 插件注册项优先) 预设模版
-///    (纯主程序计算, 直接在 UI 线程算)
-/// 3. 同上的自定义 renderer: 只读 `cache` 中的语义结果;
-///    未命中返回 matched=false + pendingRender=true (调用方提交渲染请求),
-///    同时尽量带上该工具"名称结果"的过渡显示名 (显示名在结果就绪前不变 --
-///    displayName 与 pendingRender 的配合见 [ClientToolRenderResult::displayName])
-/// 4. 若均未命中, 返回 matched = false
-ClientToolRenderResult renderClientTool(
+/// 查询行为规范 (折叠部分; UI 线程可调, 不进入插件代码):
+/// 1. `toolDecors` 命中且 summary 非空 → 用它 (`isDecor = true`)
+/// 2. 否则命中按 tool_name 注册的渲染器 (插件项优先于内置项) 且它给了折叠回调:
+///    缓存命中 → 用条目内容 (`matched == false` 即回调返回空 → 默认渲染);
+///    未命中 → `pending = true`, 内容取同调用同部分的上一份结果 (没有就为空)
+/// 3. 否则 → 没注册 (`pending = false`, 内容为空) → 默认渲染
+ClientToolCollapsedResult renderClientToolCollapsed(
     const ClientUiRegistry*      reg,
     const ClientToolRenderCache* cache,
     std::string_view             toolCallId,
@@ -399,6 +398,35 @@ ClientToolRenderResult renderClientTool(
     bool                         isFinished,
     bool                         isError,
     int                          maxWidth
+);
+
+/// 查询行为规范 (展开部分, 只在展开态调用; 判定顺序同折叠部分):
+/// 1. `toolDecors` 命中且 items 非空 → 用它 (`isDecor = true`)
+/// 2. 否则命中注册项且它给了展开回调: 缓存命中 → 用条目 items; 未命中 →
+///    `pending = true` + 同调用同部分的上一份 items
+/// 3. 否则 → 没注册 → 默认展开体 (参数 JSON + 运行中提示或结果文本)
+ClientToolExpandedResult renderClientToolExpanded(
+    const ClientUiRegistry*      reg,
+    const ClientToolRenderCache* cache,
+    std::string_view             toolCallId,
+    std::string_view             toolName,
+    std::string_view             argsJson,
+    std::string_view             resultText,
+    bool                         isFinished,
+    bool                         isError,
+    int                          maxWidth
+);
+
+/// 生效显示名: `update_tool_decor` 的 displayName > 注册表注册名
+///
+/// - 两者都空时返回空串 (调用方回退渲染消息里的原始工具名)
+/// - `toolCallId` 为空时只查注册表 (占位行/中断分段没有调用 id)
+/// - 显示名是哪一注册时确定的静态信息, 同步返回, 不投递渲染请求
+/// - `return` 指向注册表快照内部 (快照存活期内有效)
+std::string_view toolDisplayNameFor(
+    const ClientUiRegistry* reg,
+    std::string_view        toolCallId,
+    std::string_view        toolName
 );
 
 /// 定时器主程序句柄实现 (仅主程序内部; 与
@@ -783,14 +811,17 @@ public:
     /// 注册主程序内置工具特化渲染器 (非插件; lib 内置工具无对应插件, 由主程序自身声明)
     /// - 存入 [ClientUiRegistry::builtinToolRenderers], 归属名固定为
     ///   [kBuiltinRendererOwner]; 匹配优先级低于插件注册项 (插件可覆盖内置渲染)
-    /// - renderFn 为进程生命周期函数 (主程序自身实现), userData 由调用方保证存活;
+    /// - 回调为进程生命周期函数 (主程序自身实现), userData 由调用方保证存活;
     ///   无插件实例/lease 语义: 不受插件禁用/卸载影响, 渲染前不做租约复查
+    /// - `displayName` 空 → 用 `toolName`; 两个回调都可空 (= 只改名)
     /// - 任意线程可调 (uiMutex_ 保护); 同一 tool_name 重复注册覆盖旧项
     /// 返回 0 成功
     int registerBuiltinToolRenderer(
-        std::string_view    toolName,
-        AgentxxToolRenderFn fn,
-        void*               userData = nullptr
+        std::string_view             toolName,
+        std::string_view             displayName,
+        AgentxxToolCollapsedRenderFn collapsedFn = nullptr,
+        AgentxxToolExpandedRenderFn  expandedFn  = nullptr,
+        void*                        userData    = nullptr
     );
 
     /// 绑定动作处理器 (io 线程; cb 空则失败; 同 (plugin,targetId) 覆盖)
@@ -1094,10 +1125,10 @@ private:
     void dispatchCommandAction(const std::string& actionJson);
 
     /// 执行一次工具语义渲染 (仅 client io 线程; 见 [requestToolRender]):
-    /// 从当前注册表取自定义 renderer (插件注册项优先, 未命中再查主程序内置项),
+    /// 从当前注册表取自定义渲染器 (插件注册项优先, 未命中再查主程序内置项),
     /// 插件渲染器需复查 lease/实例状态后代次, 持 lease 调用插件回调;
-    /// 主程序内置渲染器 (无插件归属) 直接调用。输出统一拷成主程序对象写入缓存
-    /// 并通知 UI 重绘。
+    /// 主程序内置渲染器 (无插件归属) 直接调用。按请求的 `part` 只调对应部分的
+    /// 回调, 输出拷成主程序文本/JSON 写入缓存并通知 UI 重绘。
     void performToolRender(ClientToolRenderRequest req, std::string key, uint64_t inputHash);
 
     /// 登记/清除插件实例代次 (io 线程; 供 UI 点击携带与复查; 见
@@ -1126,8 +1157,9 @@ private:
     std::shared_ptr<const ClientUiRegistry> uiRegistry_;
 
     /// 工具语义渲染缓存 (client io 线程写, UI 线程读; 见
-    /// [ClientToolRenderCache])。自定义 renderer 的插件回调只在 client io
+    /// [ClientToolRenderCache])。自定义渲染器的插件回调只在 client io
     /// 线程执行, UI 线程只处理这里已经拷成主程序对象的语义结果。
+    /// 条目按部分分条 (`#c` 折叠内容 / `#e` 展开内容), 各自版本号与输入特征独立。
     std::shared_ptr<ClientToolRenderCache> toolRenderCache_
         = std::make_shared<ClientToolRenderCache>();
 

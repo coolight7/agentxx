@@ -82,12 +82,11 @@ const agentxx::plugin::ClientToolDecor*
     return nullptr;
 }
 
-/// 工具语义渲染统一入口 (UI 线程):
-/// - decor / 预设模版由主程序直接计算 (纯主程序数据)
-/// - 自定义 renderer 只读 [ClientToolRenderCache] 的语义快照; 未命中时提交一次
-///   后台渲染请求, 本帧用通用回退; 结果写入缓存后 adapter 触发重绘, 下一帧
-///   由缓存命中上屏 (不在 UI 线程执行插件回调, plugin.md 第 8.2 节)
-agentxx::plugin::ClientToolRenderResult queryToolRender(
+/// 折叠内容查询 (UI 线程):
+/// - 只读 [ClientToolRenderCache] 的语义快照; 未命中时提交一次后台渲染请求,
+///   本帧用现有内容 (没有就留空) 渲染, 结果写入缓存后 adapter 触发重绘
+/// - 不在 UI 线程执行插件回调 (见 plugins.md §9)
+agentxx::plugin::ClientToolCollapsedResult queryToolCollapsed(
     const TUICtx&         ctx,
     const TUIRenderState& st,
     std::string_view      toolCallId,
@@ -100,7 +99,7 @@ agentxx::plugin::ClientToolRenderResult queryToolRender(
 ) {
     namespace plugin = agentxx::plugin;
     auto cache       = ctx.pluginManager ? ctx.pluginManager->toolRenderCache() : nullptr;
-    auto res         = plugin::renderClientTool(
+    auto res         = plugin::renderClientToolCollapsed(
         st.pluginRegistry.get(),
         cache.get(),
         toolCallId,
@@ -111,13 +110,17 @@ agentxx::plugin::ClientToolRenderResult queryToolRender(
         isError,
         maxWidth
     );
-    if (!res.pendingRender || !ctx.pluginManager) {
+    if (!res.pending || !ctx.pluginManager) {
         return res;
     }
-    // 投递前零拷贝判断: 同键同输入特征已有请求在执行时, 本帧直接用通用回退,
+    // 投递前零拷贝判断: 同键同输入特征已有请求在执行时, 本帧直接用现有内容,
     // 不为投递拷贝 args/result 大文本 (未命中期间 UI 每帧都会走到这里)
-    const std::string key       = plugin::ClientToolRenderRequest::keyFor(toolCallId, toolName);
-    const uint64_t    inputHash = plugin::ClientToolRenderRequest::hashInputs(
+    const std::string key = plugin::ClientToolRenderRequest::keyFor(
+        toolCallId,
+        toolName,
+        plugin::ClientToolRenderPart::Collapsed
+    );
+    const uint64_t inputHash = plugin::ClientToolRenderRequest::hashInputs(
         toolName,
         argsJson,
         resultText,
@@ -133,17 +136,77 @@ agentxx::plugin::ClientToolRenderResult queryToolRender(
     req.toolName   = std::string{toolName};
     req.argsJson   = std::string{argsJson};
     req.resultText = std::string{resultText};
+    req.part       = plugin::ClientToolRenderPart::Collapsed;
     req.isFinished = isFinished;
     req.isError    = isError;
     req.maxWidth   = maxWidth;
     // 同一输入特征的重复请求在缓存内去重; UI 线程与 client io 线程为同一线程时
     // 请求会内联执行完成, 此时直接使用刚写入的结果
     if (auto entry = ctx.pluginManager->requestToolRender(req); entry && entry->matched) {
-        res.matched       = true;
-        res.pendingRender = false;
-        res.displayName   = entry->displayName;
-        res.summary       = entry->summary;
-        res.items         = entry->items;
+        res.text    = entry->text;
+        res.pending = false;
+    }
+    return res;
+}
+
+/// 展开内容查询 (UI 线程; 只在展开态调用)
+/// - 与折叠内容同一个缓存、但按部分分条 (`#e`), 两边互不影响
+/// - 折叠行不会走到这里: Edit 的逐段差异、Plan 的状态图只在展开时计算
+agentxx::plugin::ClientToolExpandedResult queryToolExpanded(
+    const TUICtx&         ctx,
+    const TUIRenderState& st,
+    std::string_view      toolCallId,
+    std::string_view      toolName,
+    std::string_view      argsJson,
+    std::string_view      resultText,
+    bool                  isFinished,
+    bool                  isError,
+    int                   maxWidth
+) {
+    namespace plugin = agentxx::plugin;
+    auto cache       = ctx.pluginManager ? ctx.pluginManager->toolRenderCache() : nullptr;
+    auto res         = plugin::renderClientToolExpanded(
+        st.pluginRegistry.get(),
+        cache.get(),
+        toolCallId,
+        toolName,
+        argsJson,
+        resultText,
+        isFinished,
+        isError,
+        maxWidth
+    );
+    if (!res.pending || !ctx.pluginManager) {
+        return res;
+    }
+    const std::string key = plugin::ClientToolRenderRequest::keyFor(
+        toolCallId,
+        toolName,
+        plugin::ClientToolRenderPart::Expanded
+    );
+    const uint64_t inputHash = plugin::ClientToolRenderRequest::hashInputs(
+        toolName,
+        argsJson,
+        resultText,
+        isFinished,
+        isError,
+        maxWidth
+    );
+    if (ctx.pluginManager->toolRenderInFlight(key, inputHash)) {
+        return res;
+    }
+    plugin::ClientToolRenderRequest req;
+    req.toolCallId = std::string{toolCallId};
+    req.toolName   = std::string{toolName};
+    req.argsJson   = std::string{argsJson};
+    req.resultText = std::string{resultText};
+    req.part       = plugin::ClientToolRenderPart::Expanded;
+    req.isFinished = isFinished;
+    req.isError    = isError;
+    req.maxWidth   = maxWidth;
+    if (auto entry = ctx.pluginManager->requestToolRender(req); entry && entry->matched) {
+        res.items   = entry->items;
+        res.pending = false;
     }
     return res;
 }
@@ -1024,29 +1087,43 @@ uint64_t MessageListComponent::itemKey(size_t index) {
         // 先建消息, 随后 update_tool_decor 到达), 消息指针不变 —— 版本号变化
         // 触发该块重建, 保证装饰内容及时上屏
         if (m.role == TUIMessage::Role::Tool) {
-            if (const auto* d = findToolDecor(st, m.tool ? m.tool->toolCallId : std::string{})) {
+            const std::string callId   = m.tool ? m.tool->toolCallId : std::string{};
+            const std::string toolName = m.tool ? m.tool->toolName : std::string{};
+            if (const auto* d = findToolDecor(st, callId)) {
                 h = combine(h, d->version);
             }
-            // 自定义 renderer 的语义结果异步写入缓存 (client io 线程): 版本号变化
-            // 触发该块重建, 从"通用回退"切换为插件语义内容
+            // 显示名是同步查表的静态信息, 注册项变化 (插件启用/禁用) 不会改缓存版本:
+            // 把名字的字符计进 key, 让名字切换时该块重建
+            const std::string_view nameSv = agentxx::plugin::toolDisplayNameFor(
+                st.pluginRegistry.get(),
+                callId,
+                toolName
+            );
+            for (const char c : nameSv) {
+                h = combine(h, static_cast<uint64_t>(static_cast<uint8_t>(c)));
+            }
+            // 内容版本按部分分条: 折叠态只看折叠内容键, 展开态再加展开内容键
+            // (两部分各自异步写入, 互不影响)
             if (ctx_.pluginManager && m.tool) {
-                const auto cache   = ctx_.pluginManager->toolRenderCache();
-                const auto callKey = agentxx::plugin::ClientToolRenderRequest::keyFor(
-                    m.tool->toolCallId,
-                    m.tool->toolName
-                );
-                h = combine(h, cache->version(callKey));
-                // "名称结果"(占位提示阶段按工具名解析出的过渡显示名, 键 = "#工具名")
-                // 的到达同样要使块重建: 未就绪帧正用它的显示名 (上一份结果没给显示名
-                // 时也走它), 少了这一项末帧会停在"无显示名"形态。该键的版本号变化很少
-                // (名称结果重算 / 插件失效 / 会话切换清空), 每次查询成本可忽略
-                h = combine(
+                const auto cache = ctx_.pluginManager->toolRenderCache();
+                h                = combine(
                     h,
                     cache->version(agentxx::plugin::ClientToolRenderRequest::keyFor(
-                        std::string_view{},
-                        m.tool->toolName
+                        callId,
+                        toolName,
+                        agentxx::plugin::ClientToolRenderPart::Collapsed
                     ))
                 );
+                if (!m.collapsed) {
+                    h = combine(
+                        h,
+                        cache->version(agentxx::plugin::ClientToolRenderRequest::keyFor(
+                            callId,
+                            toolName,
+                            agentxx::plugin::ClientToolRenderPart::Expanded
+                        ))
+                    );
+                }
             }
         }
         return h;
@@ -1060,15 +1137,6 @@ uint64_t MessageListComponent::itemKey(size_t index) {
             h = combine(h, static_cast<uint64_t>(static_cast<uint8_t>(c)));
         }
         h = combine(h, runSpinner_->animationEnabled() ? 1ULL : 0ULL);
-        // 工具显示名由工具特化渲染器给出 (异步写入缓存): 版本号变化触发重建,
-        // 使占位行由原始工具名切换为特化名称 (如 "Read")
-        if (ctx_.pluginManager && !st.genToolName.empty()) {
-            const auto key = agentxx::plugin::ClientToolRenderRequest::keyFor(
-                std::string_view{},
-                st.genToolName
-            );
-            h = combine(h, ctx_.pluginManager->toolRenderCache()->version(key));
-        }
         return h;
     }
     // ---- 流式区 ----
@@ -1108,7 +1176,7 @@ uint64_t MessageListComponent::itemKey(size_t index) {
 size_t MessageListComponent::quickHeight(size_t index, int width) {
     const auto& st = *ctx_.frameState;
     // 未进入视口的条目高度**粗略**估算: 只服务总高度 (滚动条长度) 与吸附底部
-    // 以外的定位需求, **不做任何渲染**: 不查插件语义渲染 (queryToolRender 会加锁
+    // 以外的定位需求, **不做任何渲染**: 不查插件语义渲染 (toolRenderCache 会加锁
     // 查缓存、必要时投递渲染请求)、不 measureItems (真渲染装饰), 也不做中断表单
     // 的 layoutForm —— 这些成本只应发生在条目真正进入视口被构建时 (布局即测量,
     // 实测值随 key 缓存)。视口内的定位只由锚点与实测高度决定, 估算偏差不影响
@@ -1595,15 +1663,21 @@ LazyBuiltItem MessageListComponent::buildGenPlaceholderItem(const TUIRenderState
     // 单行占位项: 折叠标记 (生成中恒为运行态) + 角色标签 + 阶段说明 (工具调用阶段
     // 附带已解析出的工具名)。首个正文/思考 token 或工具消息到达后由 client 线程
     // 清除占位 (见 TUIRenderState::genPhase 注释), 位置由真实内容接替
+    //
+    // 工具调用阶段的格式与工具行同一套骨架: `{符号} [工具] <名字> · 正在调用工具...`
+    // (工具名还没解析出来时不画 " · "); 它是单行提示, 没有折叠/展开状态与命中区
     Elements   header;
     const bool animMark = runSpinner_->animationEnabled();
     header.push_back((animMark ? runningHeaderMark(true) : text("-")) | color(c));
     header.push_back(text(toolCall ? tr("msg.roleTool") : tr("msg.roleThink")) | color(c));
-    if (toolCall && !st.genToolName.empty()) {
-        // 工具名按正常工具消息的同一套解析换成特化显示名 (如 agentxx_filesystem_read
-        // -> "Read"): 此阶段参数尚未接收完, 渲染器只能拿到工具名, 拿不到摘要
+    const std::string toolDisplayName
+        = toolCall ? genPlaceholderToolDisplayName(st) : std::string{};
+    if (toolCall && !toolDisplayName.empty()) {
+        // 工具名按正常工具消息的同一套规则换成显示名 (如 agentxx_filesystem_read
+        // -> "Read"): 名字是注册时确定的静态信息, 同步可读
+        header.push_back(text(toolDisplayName) | color(theme.accentColor) | bold);
         header.push_back(
-            text(genPlaceholderToolDisplayName(st) + " ") | color(theme.accentColor) | bold
+            text(" · ") | color(c) | theme.dim()
         );
     }
     header.push_back(
@@ -1630,35 +1704,18 @@ std::string MessageListComponent::toolDisplayNameOf(
     if (toolName.empty()) {
         return {};
     }
-    // 只按工具名查 (无 tool_call_id / 参数 / 结果): 与正常工具消息走同一套工具特化
-    // 渲染查询。不传宽度 (0 = 不限): 显示名与宽度无关, 固定的输入特征使请求只投递
-    // 一次, 终端宽度变化也不会重复请求
-    auto res = queryToolRender(
-        ctx_,
-        st,
-        std::string_view{}, // 无 toolCallId: 名称结果按工具名索引 (键 "#工具名")
-        toolName,
-        std::string_view{},
-        std::string_view{},
-        false,
-        false,
-        0
-    );
-    // 显示名取特化渲染结果 (含"结果未就绪"时的过渡显示名); 尚无显示名时**不回退**
-    // 原始工具名: 该工具存在特化渲染器, 显示名随后就到, 先显示原始工具名会让它
-    // 下一帧跳变 (见头文件 [toolDisplayNameOf])
-    if (!res.displayName.empty()) {
-        return res.displayName;
-    }
-    return res.pendingRender ? std::string{} : std::string{toolName};
+    // 只按工具名查注册表 (无 tool_call_id: 没有实例级装饰): 名字在注册时确定,
+    // 同步读得到, 不需要投递渲染请求, 也没有"未就绪"状态
+    const auto name
+        = agentxx::plugin::toolDisplayNameFor(st.pluginRegistry.get(), {}, toolName);
+    return name.empty() ? std::string{toolName} : std::string{name};
 }
 
 std::string MessageListComponent::genPlaceholderToolDisplayName(const TUIRenderState& st) const {
     if (st.genToolName.empty()) {
         return {};
     }
-    // 参数与结果此时都还没有 (工具调用参数仍在接收), 只按工具名换显示名 ——
-    // 与正常工具消息走同一套工具特化渲染查询, 未命中渲染器/模版时回退原始工具名
+    // 只按工具名换显示名 (参数还没接收完): 未命中注册表时回退原始工具名
     return toolDisplayNameOf(st, st.genToolName);
 }
 
@@ -2161,8 +2218,9 @@ Element MessageListComponent::buildMessageBlock(
             const auto visual   = finished ? toolVisualOf(msg) : ToolVisual::Normal;
             const bool isError  = visual == ToolVisual::Error;
 
-            // 统一工具特化渲染查询 (包含动态 per-call decor 与按 tool_name 注册的渲染器/模版)
-            auto renderRes = queryToolRender(
+            // 两部分独立查询: 折叠内容总是查, 展开内容只在展开态查
+            // (展开体可能是差异对比、状态图这类开销较大的内容, 折叠行不该为它付代价)
+            auto collapsed = queryToolCollapsed(
                 ctx_,
                 *ctx_.frameState,
                 msg.tool->toolCallId,
@@ -2173,6 +2231,20 @@ Element MessageListComponent::buildMessageBlock(
                 isError,
                 maxWidth
             );
+            agentxx::plugin::ClientToolExpandedResult expandedRes;
+            if (expanded) {
+                expandedRes = queryToolExpanded(
+                    ctx_,
+                    *ctx_.frameState,
+                    msg.tool->toolCallId,
+                    msg.tool->toolName,
+                    msg.text,
+                    msg.tool->toolResult,
+                    finished,
+                    isError,
+                    maxWidth
+                );
+            }
 
             Elements lines;
             Elements header;
@@ -2188,95 +2260,73 @@ Element MessageListComponent::buildMessageBlock(
                 header.push_back(text(tr("msg.roleTool")) | color(theme.toolColor));
             }
 
-            // 显示名: renderRes 提供的显示名优先 (命中特化结果, 或结果未就绪时的
-            // 过渡显示名 —— 来自本次调用上一份结果/该工具的名称结果), 回退原始
-            // toolName; 若该工具存在特化渲染器但还没有任何可用的显示名, 则暂不显示
-            // 名称 —— 见下方 [pendingRender] 分支的说明
-            std::string displayName
-                = !renderRes.displayName.empty()
-                      ? renderRes.displayName
-                      : (renderRes.pendingRender ? std::string{} : msg.tool->toolName);
+            // 显示名: 同步查表 (实例级装饰 > 注册表注册名), 都未命中时用消息里的
+            // 原始工具名。名字是注册时确定的静态信息, 首帧即可显示
+            const std::string_view displayNameSv = agentxx::plugin::toolDisplayNameFor(
+                ctx_.frameState->pluginRegistry.get(),
+                msg.tool->toolCallId,
+                msg.tool->toolName
+            );
+            const std::string displayName
+                = displayNameSv.empty() ? msg.tool->toolName : std::string{displayNameSv};
 
             if (!expanded) {
-                // 折叠状态, 特化渲染 (摘要内部预览按内容区剩余列宽自适应截断)
+                // 折叠态骨架固定: `+ [工具] <名字> · <内容>`
+                // 内容顺序: 失败结果首行 > 自定义折叠内容 > (未就绪则留空) > 默认渲染
                 const int nameCols = static_cast<int>(markdown::utf8_display_width(displayName));
                 // 头部前缀列数 (折叠标记 1 列 + 角色标签; 标签随语言切换, 不按英文宽度写死)
                 // + 右侧附件数量 (带附件时)
                 const int prefixCols
                     = 1 + static_cast<int>(markdown::utf8_display_width(tr("msg.roleTool")))
                       + attachmentCountColumnsOf(msg);
-                std::string resOrArgsSummary;
+                // " · " 占 3 列, 内容预算按它扣除
+                const int contentBudget
+                    = collapsedPreviewBudget(maxWidth, prefixCols + nameCols + 3);
+
+                std::string content; // 含分隔符 (空 = 不画 " · ")
+                const auto  withSeparator = [&content, &displayName](std::string_view body) {
+                    if (body.empty() || displayName.empty()) {
+                        return;
+                    }
+                    content.assign(" · ");
+                    content += body;
+                };
 
                 if (isError) {
-                    // 执行失败: 保持特化 toolName, 后续内容显示为异常结果 (红色)
-                    const int budget
-                        = collapsedPreviewBudget(maxWidth, prefixCols + nameCols + 1); // " "
-                    auto resPreview
-                        = oneLinePreview(msg.tool->toolResult, static_cast<size_t>(budget));
-                    if (!resPreview.empty()) {
-                        resOrArgsSummary = " · " + std::move(resPreview);
-                    }
-                } else if (renderRes.matched && !renderRes.summary.empty()) {
-                    if (renderRes.summary.starts_with(" ·")) {
-                        resOrArgsSummary = renderRes.summary;
-                    } else {
-                        resOrArgsSummary = " · " + renderRes.summary;
-                    }
-                } else if (renderRes.pendingRender) {
-                    // 特化渲染结果尚未就绪 (自定义 renderer 只在 client io 线程执行):
-                    // 本帧既不展示原始参数/结果预览 (会让折叠头闪一下非特化内容),
-                    // 也不留空 (空一帧同样是跳变 —— 摘要消失再回来)。处理:
-                    // - 有过渡摘要 (本次调用上一份结果, 见 renderClientTool): 照常
-                    //   显示, 结果就绪后替换, 屏幕上的内容只增不减;
-                    // - 首次查询且结果未就绪: 运行中沿用占位提示的同一句说明文字,
-                    //   该帧与刚被取代的占位行内容一致 (动画等级 >= High 时逐字一致:
-                    //   两行首列都是加载点阵; 等级更低时占位行首列是静态 "-", 本行是
-                    //   可折叠工具行的 "+", 只有这一列不同), 不出现空档;
-                    //   已完成则不显示说明文字 (工具已结束), 等结果上屏
-                    if (!renderRes.summary.empty()) {
-                        resOrArgsSummary = renderRes.summary.starts_with(" ·")
-                                               ? renderRes.summary
-                                               : " · " + renderRes.summary;
-                    } else if (!finished) {
-                        // tr 返回 string_view: 先加空格再拼接说明文字
-                        resOrArgsSummary.assign(" ");
-                        resOrArgsSummary += tr("msg.genToolCalling");
-                    }
+                    // 执行失败: 内容固定为结果首行 (错误色), 不显示自定义内容
+                    withSeparator(oneLinePreview(
+                        msg.tool->toolResult,
+                        static_cast<size_t>(contentBudget)
+                    ));
+                } else if (!collapsed.text.empty()) {
+                    // 自定义折叠内容 (装饰的 summary 或注册项算出的内容)
+                    withSeparator(oneLinePreview(
+                        collapsed.text,
+                        static_cast<size_t>(contentBudget)
+                    ));
+                } else if (collapsed.pending) {
+                    // 自定义内容还在 client io 线程算, 且没有上一份可沿用:
+                    // 只画名字。不用默认内容顶替 —— 否则会先闪一句默认内容再换掉
                 } else if (!finished) {
-                    // 运行中无特化摘要回退
-                    resOrArgsSummary = " ·";
-                    if (!msg.text.empty()) {
-                        const int budget = collapsedPreviewBudget(
-                            maxWidth,
-                            prefixCols + nameCols + 3
-                        ); // " · "
-                        resOrArgsSummary
-                            += " " + oneLinePreview(msg.text, static_cast<size_t>(budget));
-                    }
+                    // 默认渲染 · 运行中 (与占位行同一句文案)
+                    withSeparator(tr("msg.genToolCalling"));
                 } else {
-                    // 已完成无特化摘要回退: 展示结果预览
-                    const int budget
-                        = collapsedPreviewBudget(maxWidth, prefixCols + nameCols + 1); // " "
-                    auto resPreview
-                        = oneLinePreview(msg.tool->toolResult, static_cast<size_t>(budget));
-                    if (!resPreview.empty()) {
-                        resOrArgsSummary = " " + std::move(resPreview);
-                    }
+                    // 默认渲染 · 已完成: 结果首行 (结果为空则不画)
+                    withSeparator(oneLinePreview(
+                        msg.tool->toolResult,
+                        static_cast<size_t>(contentBudget)
+                    ));
                 }
 
-                // toolName: 运行中高亮
+                // 工具名: 运行中高亮
                 if (!finished) {
-                    header.push_back(
-                        text(std::move(displayName)) | color(theme.accentColor) | bold
-                    );
+                    header.push_back(text(displayName) | color(theme.accentColor) | bold);
                 } else {
-                    header.push_back(
-                        text(std::move(displayName)) | color(theme.toolColor) | theme.dim()
-                    );
+                    header.push_back(text(displayName) | color(theme.toolColor) | theme.dim());
                 }
 
-                if (!resOrArgsSummary.empty()) {
-                    // 折叠头预览按终态配色: Failed = 错误色, Interrupted = 警告色,
+                if (!content.empty()) {
+                    // 折叠头内容按终态配色: Failed = 错误色, Interrupted = 警告色,
                     // Ok/Canceled = 普通色 (与展开体同一分类, 见 toolVisualOf)
                     const auto previewColor = [&]() {
                         switch (visual) {
@@ -2290,22 +2340,18 @@ Element MessageListComponent::buildMessageBlock(
                         }
                     }();
                     header.push_back(
-                        text(std::move(resOrArgsSummary)) | color(previewColor) | theme.dim()
+                        text(std::move(content)) | color(previewColor) | theme.dim()
                         | xflex_shrink
                     );
                 }
                 // 带附件时的数量贴在本行最右侧 (列表只在展开态画)
                 appendAttachmentCount(header, msg, theme);
             } else {
-                // 展开头: 动态装饰显示名优先, 否则回退原始 toolName
-                const auto& shownName
-                    = (renderRes.matched && renderRes.isDecor && !renderRes.displayName.empty())
-                          ? renderRes.displayName
-                          : msg.tool->toolName;
+                // 展开头骨架固定: `- [工具] <名字> <耗时>`
                 if (!finished) {
-                    header.push_back(text(shownName) | color(theme.accentColor) | bold);
+                    header.push_back(text(displayName) | color(theme.accentColor) | bold);
                 } else {
-                    header.push_back(text(shownName) | color(theme.toolColor));
+                    header.push_back(text(displayName) | color(theme.toolColor));
                     if (msg.durationMs > 0) {
                         header.push_back(text(" "));
                         header.push_back(
@@ -2318,26 +2364,10 @@ Element MessageListComponent::buildMessageBlock(
 
             lines.push_back(hbox(std::move(header)));
             if (expanded) {
-                if (renderRes.matched && !renderRes.items.empty() && !(finished && isError)) {
-                    // 插件装饰/特化工具体 (items 渲染; 失败时回退通用错误展示)
-                    // decor 按钮 owner=tool_call_id (renderRes 携带来源);
-                    // 非 decor (toolRenderer) 按钮 owner 同样为 tool_call_id
-                    // (TUI 侧组装, 无需插件操心)
-                    agentxx::plugin::ClientToolDecor decorForBody;
-                    if (renderRes.isDecor) {
-                        decorForBody.plugin      = renderRes.decorPlugin;
-                        decorForBody.toolCallId  = renderRes.decorToolCallId.empty()
-                                                       ? msg.tool->toolCallId
-                                                       : renderRes.decorToolCallId;
-                        decorForBody.displayName = renderRes.displayName;
-                        decorForBody.summary     = renderRes.summary;
-                        decorForBody.items       = renderRes.items;
-                    } else {
-                        decorForBody.toolCallId = msg.tool->toolCallId;
-                        decorForBody.items      = renderRes.items;
-                    }
-                    appendDecorToolBody(decorForBody, lines, maxWidth, mdBuilders);
-                } else {
+                // 展开体: 首行之后留空 (自定义内容未就绪) > 自定义 items > 默认展开体
+                // - 失败 (Failed) 时固定走默认展开体 (参数 + 结果), 不渲染自定义 items
+                // - 自定义展开内容还在算且没有上一份时: 首行之后留空, 不用默认内容顶替
+                const auto appendDefaultBody = [&]() {
                     if (!msg.text.empty()) {
                         // 参数 JSON 缩进格式化 (2 空格) 便于阅读; 解析失败回退原文
                         lines.push_back(hbox({
@@ -2346,27 +2376,53 @@ Element MessageListComponent::buildMessageBlock(
                                 | xflex_shrink,
                         }));
                     }
-                    if (finished) {
-                        // 结果正文按终态配色: Failed = 错误色, Interrupted = 警告色,
-                        // Ok/Canceled = 普通色 (取消的情绪由占位文本自己表达)
-                        const auto bodyColor = [&]() {
-                            switch (toolVisualOf(msg)) {
-                                case ToolVisual::Error:
-                                    return theme.errorColor;
-                                case ToolVisual::Warning:
-                                    return theme.thinkingColor;
-                                case ToolVisual::Normal:
-                                default:
-                                    return theme.toolColor;
-                            }
-                        }();
-                        lines.push_back(hbox({
-                            text(tr("tool.result")) | color(theme.toolColor),
-                            paragraph(msg.tool->toolResult) | color(bodyColor) | xflex_shrink,
-                        }));
-                    } else {
-                        lines.push_back(text(tr("tool.running")) | color(theme.toolColor));
+                    if (!finished) {
+                        // 运行中与占位行同一句文案 (默认渲染才会走到这里)
+                        lines.push_back(text(tr("msg.genToolCalling")) | color(theme.toolColor));
+                        return;
                     }
+                    if (msg.tool->toolResult.empty()) {
+                        return; // 结果为空不画
+                    }
+                    // 结果正文按终态配色: Failed = 错误色, Interrupted = 警告色,
+                    // Ok/Canceled = 普通色 (取消的情绪由占位文本自己表达)
+                    const auto bodyColor = [&]() {
+                        switch (toolVisualOf(msg)) {
+                            case ToolVisual::Error:
+                                return theme.errorColor;
+                            case ToolVisual::Warning:
+                                return theme.thinkingColor;
+                            case ToolVisual::Normal:
+                            default:
+                                return theme.toolColor;
+                        }
+                    }();
+                    lines.push_back(hbox({
+                        text(tr("tool.result")) | color(theme.toolColor),
+                        paragraph(msg.tool->toolResult) | color(bodyColor) | xflex_shrink,
+                    }));
+                };
+
+                if (finished && isError) {
+                    appendDefaultBody();
+                } else if (!expandedRes.items.empty()) {
+                    // 插件装饰/特化展开 items (按钮 owner=tool_call_id, 见下方说明)
+                    agentxx::plugin::ClientToolDecor decorForBody;
+                    if (expandedRes.isDecor) {
+                        decorForBody.plugin     = expandedRes.decorPlugin;
+                        decorForBody.toolCallId = expandedRes.decorToolCallId.empty()
+                                                      ? msg.tool->toolCallId
+                                                      : expandedRes.decorToolCallId;
+                        decorForBody.items      = expandedRes.items;
+                    } else {
+                        decorForBody.toolCallId = msg.tool->toolCallId;
+                        decorForBody.items      = expandedRes.items;
+                    }
+                    appendDecorToolBody(decorForBody, lines, maxWidth, mdBuilders);
+                } else if (expandedRes.pending) {
+                    // 自定义展开内容还在 client io 线程算, 且没有上一份: 首行之后留空
+                } else {
+                    appendDefaultBody();
                 }
                 appendAttachmentList(lines, msg, msgIndex);
             }

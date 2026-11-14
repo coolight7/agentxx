@@ -271,11 +271,31 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 
 struct WebsearchClientCtx : public ClientPluginBase {};
 
-/// client 侧 start: 注册工具的折叠头模版 (stop 无需撤销, 主程序负责摘除)
-static void*
-    websearchClientStart(WebsearchClientCtx& ctx, const PluginxxOperatorNotify* notify, PluginxxString*) {
-    ctx.registerTemplate(kNameSearch, "Search", "query");
-    ctx.registerTemplate(kNameFetch, "Fetch", "url");
+/// client 侧 start: 注册工具显示名与折叠内容 (stop 无需撤销, 主程序负责摘除)
+/// - 折叠内容是一行纯文本, **不带**分隔符 " · " (头行格式由界面统一拼装)
+static void* websearchClientStart(
+    WebsearchClientCtx&           ctx,
+    const PluginxxOperatorNotify* notify,
+    PluginxxString*
+) {
+    ctx.registerRenderer(
+        kNameSearch,
+        "Search",
+        {.collapsed
+         = [](const ToolRenderInput& in, ToolCollapsedOutput& out) {
+               ArgReader args(in.argsJson);
+               out.text = args.value("query", "");
+           }}
+    );
+    ctx.registerRenderer(
+        kNameFetch,
+        "Fetch",
+        {.collapsed
+         = [](const ToolRenderInput& in, ToolCollapsedOutput& out) {
+               ArgReader args(in.argsJson);
+               out.text = args.value("url", "");
+           }}
+    );
     notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
     return nullptr;
 }

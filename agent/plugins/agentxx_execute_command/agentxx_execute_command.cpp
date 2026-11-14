@@ -382,9 +382,19 @@ AGENTXX_PLUGIN_AGENT_EXPORT(
 struct ExecClientCtx : public ClientPluginBase {};
 
 /// client 侧注册事务 (start 的实际内容)。
+/// - 两条命令工具共用一个折叠内容: 命令正文首行前缀 (完整命令在展开体里看)
 static int32_t setupExecClient(ExecClientCtx& ctx) {
-    ctx.registerTemplate(kNameBash, "Bash", "command");
-    ctx.registerTemplate(kNameWindows, "Bash", "command");
+    auto commandCollapsed = [](const ToolRenderInput& in, ToolCollapsedOutput& out) {
+        ArgReader   args(in.argsJson);
+        std::string command = args.value("command", "");
+        if (command.empty()) {
+            return;
+        }
+        const auto nl = command.find('\n');
+        out.text      = (nl == std::string::npos) ? command : command.substr(0, nl) + " ...";
+    };
+    ctx.registerRenderer(kNameBash, "Bash", {.collapsed = commandCollapsed});
+    ctx.registerRenderer(kNameWindows, "Bash", {.collapsed = commandCollapsed});
     return 0;
 }
 

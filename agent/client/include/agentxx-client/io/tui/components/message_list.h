@@ -322,7 +322,7 @@ private:
     uint64_t itemKey(size_t index);
     /// 未进入视口条目的**粗略**高度估算 (行; O(1) 或轻量线性扫描, 不做渲染):
     /// 只服务总高度/滚动条长度, 进入视口后由布局实测修正。
-    /// 不查插件语义渲染 (queryToolRender)、不 measureItems、不做中断表单 layoutForm
+    /// 不查插件语义渲染 (toolRenderCache)、不 measureItems、不做中断表单 layoutForm
     size_t        quickHeight(size_t index, int width);
     LazyBuiltItem buildItem(size_t index);
     bool          fillViewport(size_t index);
@@ -362,26 +362,20 @@ private:
     bool hasGenPlaceholder(const TUIRenderState& st) const;
     /// 占位提示子项下标 (= 消息数 + 流式子项数; 无占位提示时无意义)
     size_t genPlaceholderIndex(const TUIRenderState& st) const;
-    /// 占位提示中显示的工具名 (工具调用阶段): 走工具特化渲染器的显示名解析
+    /// 占位提示中显示的工具名 (工具调用阶段): 查工具特化渲染注册表的显示名
     /// (如 agentxx_filesystem_read -> "Read")
-    /// - 该阶段参数/结果尚未接收完, 只有工具名可用, 因此只查显示名不查摘要
-    /// - 特化结果尚未就绪且还没有显示名时返回空串 (不显示工具名) —— 显示名随后
-    ///   就到, 先显示原始工具名会让占位行闪一下非特化内容; 无渲染器的工具
-    ///   (特化渲染不适用) 仍返回原始工具名
-    /// - 与工具消息折叠头共用同一条回退规则 (见 [buildMessageBlock] 的
-    ///   pendingRender 分支): 占位行被工具消息取代时不会少一段内容, 动画等级
-    ///   >= High 时两行逐字一致
+    /// - 显示名在注册时确定、同步可读, 首帧就能显示
+    /// - 未命中注册表时返回原始工具名 (结果不会再变)
+    /// - 与工具消息头行共用同一条回退规则, 占位行被工具行取代时文字连续
     std::string   genPlaceholderToolDisplayName(const TUIRenderState& st) const;
 
     /// 工具显示名 (只按工具名查询; 与 [genPlaceholderToolDisplayName] 同一路径)
     ///
-    /// 用途: 中断摘要/头行的 `kind == "tool"` 分段要把原始工具名换成特化显示名
-    /// (如 agentxx_filesystem_write -> Write)。缓存键为 "#工具名", 命中后只是一次
-    /// map 查找; 未命中时投递一次后台渲染请求 (不在 UI 线程执行插件回调)。
+    /// 用途: 中断摘要/头行的 `kind == "tool"` 分段要把原始工具名换成显示名
+    /// (如 agentxx_filesystem_write -> Write)。名字是注册时确定的静态信息,
+    /// 同步查表即可, 不投递渲染请求。
     ///
-    /// - 返回空串: 该工具有特化渲染器但显示名尚未就绪 (本帧不显示, 也不显示原名
-    ///   —— 先显示原名会在下一帧跳变)
-    /// - 无渲染器 / 渲染器没给名字: 返回原始工具名 (结果不会再变)
+    /// - 未命中注册表: 返回原始工具名 (结果不会再变)
     std::string toolDisplayNameOf(const TUIRenderState& st, std::string_view toolName) const;
     LazyBuiltItem buildGenPlaceholderItem(const TUIRenderState& st);
 

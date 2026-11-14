@@ -86,7 +86,7 @@ typedef struct AgentxxStatusItem  AgentxxStatusItem;  ///< 状态栏项句柄
 typedef struct AgentxxPanel       AgentxxPanel;       ///< 侧边栏面板句柄
 typedef struct AgentxxInfoSection AgentxxInfoSection; ///< 侧边栏 Info 栏段落句柄
 
-/* ==================== 工具特化渲染器 (Tool Renderer / Template) ==================== */
+/* ==================== 工具特化渲染器 (Tool Renderer) ==================== */
 
 /// 工具渲染输入 (主程序填, 插件读; 全部只读借用)
 ///
@@ -108,26 +108,54 @@ typedef struct AgentxxToolRenderInput {
 /* 基线: 重置时 = 完整布局; 以后追加字段保持不变 (改为 offsetof(第一个追加字段)) */
 #define AGENTXX_TOOL_RENDER_INPUT_BASELINE_SIZE sizeof(AgentxxToolRenderInput)
 
-typedef struct AgentxxToolRenderOutput {
-    PluginxxString displayName; ///< 显示名 (如 "Read", "Edit", "Bash", 空则回退原始 toolName)
-    PluginxxString summary; ///< 一行摘要 (如 " · [0, 100] /path/file", 可带或不带前导 " · ")
-    PluginxxString items_json; ///< 展开体 items JSON 数组 (可选, 空则走默认 args/result 展示;
-                               ///< 界面描述层 schema, 如 Text/Button/Diagram/Divider/Diff)
-} AgentxxToolRenderOutput;
+/// 折叠内容输出 (工具行折叠态 `+ [工具] <显示名> · <内容>` 的 `<内容>`)
+///
+/// - 只给**一行纯文本**, 不带分隔符 `" · "` (主程序统一补)
+/// - 输出字符串用主程序堆分配 (host 的 alloc); 换行与超长由主程序按剩余列宽截断
+/// - 留空 (data 为 NULL 或 size == 0) 表示"这次没有自定义内容":
+///   主程序走默认渲染 (未完成 `正在调用工具...` / 已完成 结果首行)
+typedef struct AgentxxToolCollapsedOutput {
+    PluginxxString text; ///< 一行内容 (不含前导 " · ")
+} AgentxxToolCollapsedOutput;
 
-typedef int32_t(PLUGINXX_CALL* AgentxxToolRenderFn)(
+/// 展开内容输出 (工具行展开态首行之后的内容)
+///
+/// - 只给 items JSON 数组 (界面描述层 schema, 如 Text/Button/Diagram/Divider/Diff)
+/// - 留空 (data 为 NULL 或 size == 0) 表示"这次没有自定义内容":
+///   主程序走默认渲染 (参数 JSON + 运行中提示或结果文本)
+typedef struct AgentxxToolExpandedOutput {
+    PluginxxString items_json; ///< items JSON 数组
+} AgentxxToolExpandedOutput;
+
+/// 折叠内容渲染回调 (client io 线程调用; 不得抛异常出边界, 主程序统一保护)
+typedef int32_t(PLUGINXX_CALL* AgentxxToolCollapsedRenderFn)(
     void*                         user_data,
     const AgentxxToolRenderInput* input,
-    AgentxxToolRenderOutput*      output
+    AgentxxToolCollapsedOutput*   output
 );
 
+/// 展开内容渲染回调 (client io 线程调用; 只在用户展开该工具行时调用)
+typedef int32_t(PLUGINXX_CALL* AgentxxToolExpandedRenderFn)(
+    void*                         user_data,
+    const AgentxxToolRenderInput* input,
+    AgentxxToolExpandedOutput*    output
+);
+
+/// 工具特化渲染注册项: 一个显示名 + 两个可选的内容回调
+///
+/// - 显示名在注册时确定 (UI 线程同步可读, 首帧即可显示); 按调用改名/装饰走
+///   `update_tool_decor`
+/// - 两个回调都为空 = 只改名, 内容全走默认渲染
+/// - 折叠内容与展开内容分开渲染、各自缓存: 折叠行不会触发展开内容渲染
+///   (展开体可能是差异对比、状态图这类开销较大的内容)
 typedef struct AgentxxToolRenderSpec {
-    uint32_t            struct_size; ///< sizeof(AgentxxToolRenderSpec); 0 = 基线布局
-    int32_t             version;     ///< 结构体版本 (当前 == 1)
-    PluginxxStringView  tool_name;   ///< 目标工具名 (必填, 如 "agentxx_filesystem_read")
-    AgentxxToolRenderFn render_fn;   ///< 渲染回调 (可为 NULL; 非空时优先调用)
-    void*               user_data;   ///< 回调上下文 (render_fn 非空时有效)
-    PluginxxStringView template_json; ///< 预设模版 JSON (render_fn 为 NULL 时由主程序解析执行)
+    uint32_t                    struct_size;  ///< sizeof(AgentxxToolRenderSpec); 0 = 基线布局
+    int32_t                     version;      ///< 结构体版本 (当前 == 1)
+    PluginxxStringView          tool_name;    ///< 目标工具名 (必填, 如 "agentxx_filesystem_read")
+    PluginxxStringView          display_name; ///< 显示名 (空 = 用 tool_name)
+    AgentxxToolCollapsedRenderFn collapsed_fn; ///< 折叠内容渲染 (可 NULL)
+    AgentxxToolExpandedRenderFn  expanded_fn;  ///< 展开内容渲染 (可 NULL)
+    void*                       user_data;    ///< 两个回调共用的上下文
 } AgentxxToolRenderSpec;
 
 /* 基线: 重置时 = 完整布局; 以后追加字段保持不变 (改为 offsetof(第一个追加字段)) */
@@ -330,13 +358,13 @@ typedef struct AgentxxClientUiIface {
 
     /* ---- 工具特化渲染器 (按 tool_name 注册) ---- */
     /// 注册工具特化渲染器 (按 tool_name 键控):
-    /// - 主程序在渲染该工具消息 (折叠头/展开体) 时调用, 无论实时流式还是历史消息
-    /// - 支持两种模式:
-    ///   1. <key, render_fn>: spec->render_fn != NULL, 主程序回调该函数输出
-    ///   displayName/summary/items_json
-    ///   2. 预设模版: spec->render_fn == NULL 且 template_json 非空,
-    ///      主程序按模版自动提取参数字段并格式化 (如 {"displayName":"Search","summaryKey":"query"})
-    /// - 展开体 items_json 支持 {"kind":"Diff","path":"...","oldStr":"...","newStr":"..."}
+    /// - 主程序在渲染该工具消息时调用, 无论实时流式还是历史消息
+    /// - 注册项 = 显示名 + 折叠内容回调 + 展开内容回调 (见 AgentxxToolRenderSpec):
+    ///   显示名在注册时确定 (UI 首帧即可显示); 两个回调都空 = 只改名;
+    ///   未给的那部分 (或回调返回失败/空内容) 走默认渲染
+    /// - 折叠内容 = 一行纯文本 (主程序补 " · " 分隔符);
+    ///   展开内容 = items JSON 数组 (如 {"kind":"Diff","path":"...","oldStr":"..."})
+    /// - 折叠内容与展开内容分开渲染、各自缓存: 折叠行不触发展开内容渲染
     /// - 插件卸载/禁用时主程序自动注销
     /// 返回 `AGENTXX_RESULT_OK`; 失败给 `ERR_UNSUPPORTED` / `ERR_ARG` / `ERR_CONFLICT`
     int32_t(PLUGINXX_CALL* register_tool_renderer)(

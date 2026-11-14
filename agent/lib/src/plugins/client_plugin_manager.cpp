@@ -874,13 +874,20 @@ void hashBytes(uint64_t& h, std::string_view bytes) {
 
 } // namespace
 
-std::string
-    ClientToolRenderRequest::keyFor(std::string_view toolCallId, std::string_view toolName) {
+std::string ClientToolRenderRequest::keyFor(
+    std::string_view     toolCallId,
+    std::string_view     toolName,
+    ClientToolRenderPart part
+) {
+    std::string key;
     if (!toolCallId.empty()) {
-        return std::string{toolCallId};
+        key.assign(toolCallId);
+    } else {
+        key = "#";
+        key.append(toolName);
     }
-    std::string key{"#"};
-    key.append(toolName);
+    // 部分后缀: 折叠内容与展开内容各有缓存条目, 到达时间与输入特征互不影响
+    key += (part == ClientToolRenderPart::Collapsed) ? "#c" : "#e";
     return key;
 }
 
@@ -1035,7 +1042,7 @@ std::shared_ptr<const ClientToolRenderEntry>
     if (req.toolName.empty()) {
         return nullptr;
     }
-    const std::string key   = ClientToolRenderRequest::keyFor(req.toolCallId, req.toolName);
+    const std::string key = ClientToolRenderRequest::keyFor(req.toolCallId, req.toolName, req.part);
     const uint64_t    input = req.inputHash();
     if (auto cached = toolRenderCache_->lookup(key, input)) {
         return cached;
@@ -1060,9 +1067,10 @@ std::shared_ptr<const ClientToolRenderEntry>
     return toolRenderCache_->lookup(key, input);
 }
 
-/// 在 client io 线程执行自定义 renderer 并把结果拷成主程序语义快照。
-/// - 渲染器已摘除/失效/实例禁用 → 写入未命中条目 (UI 回退通用渲染)
-/// - 插件回调返回失败 → 同样写未命中条目, 避免每帧重复请求
+/// 在 client io 线程执行自定义渲染器并把结果拷成主程序语义快照。
+/// - 按请求的 `part` 只调对应部分的回调 (折叠内容不触发展开体渲染)
+/// - 渲染器已摘除/失效/实例禁用 → 写入未命中条目 (UI 回退默认渲染)
+/// - 插件回调返回失败/内容为空 → 同样写未命中条目, 避免每帧重复请求
 void ClientPluginManager::performToolRender(
     ClientToolRenderRequest req,
     std::string             key,
@@ -1089,17 +1097,22 @@ void ClientPluginManager::performToolRender(
         snapshot = uiRegistry_;
     }
     // 快照强引用保活: hit 指向快照内的注册记录, 后续插件回调期间不得失效
-    // 查找顺序与 [renderClientTool] 一致: 插件注册项优先, 未命中再查主程序内置项
-    const ClientToolRenderReg* hit = nullptr;
+    // 查找顺序与 [renderClientToolCollapsed/Expanded] 一致: 插件注册项优先,
+    // 未命中再查主程序内置项
+    const bool                 wantCollapsed = (req.part == ClientToolRenderPart::Collapsed);
+    const ClientToolRenderReg* hit           = nullptr;
+    const auto                 hasFn         = [wantCollapsed](const ClientToolRenderReg& r) {
+        return wantCollapsed ? (r.collapsedFn != nullptr) : (r.expandedFn != nullptr);
+    };
     for (const auto& r : snapshot->toolRenderers) {
-        if (r.toolName == req.toolName && r.renderFn) {
+        if (r.toolName == req.toolName && hasFn(r)) {
             hit = &r;
             break;
         }
     }
     if (!hit) {
         for (const auto& r : snapshot->builtinToolRenderers) {
-            if (r.toolName == req.toolName && r.renderFn) {
+            if (r.toolName == req.toolName && hasFn(r)) {
                 hit = &r;
                 break;
             }
@@ -1126,47 +1139,43 @@ void ClientPluginManager::performToolRender(
         input.is_error     = req.isError ? 1 : 0;
         input.max_width    = req.maxWidth;
 
-        AgentxxToolRenderOutput output{};
-        int32_t                 rc = AGENTXX_RESULT_ERR_INTERNAL;
-        try {
-            rc = hit->renderFn(hit->userData, &input, &output);
-        } catch (...) {
-            rc = AGENTXX_RESULT_ERR_INTERNAL;
-        }
-        if (rc == AGENTXX_RESULT_OK) {
-            entry.matched = true;
-            if (output.displayName.data) {
-                entry.displayName.assign(
-                    output.displayName.data,
-                    static_cast<size_t>(output.displayName.size)
-                );
+        if (wantCollapsed) {
+            AgentxxToolCollapsedOutput output{};
+            int32_t                    rc = AGENTXX_RESULT_ERR_INTERNAL;
+            try {
+                rc = hit->collapsedFn(hit->userData, &input, &output);
+            } catch (...) {
+                rc = AGENTXX_RESULT_ERR_INTERNAL;
             }
-            if (output.summary.data) {
-                entry.summary.assign(output.summary.data, static_cast<size_t>(output.summary.size));
+            if (rc == AGENTXX_RESULT_OK && output.text.data) {
+                entry.text.assign(output.text.data, static_cast<size_t>(output.text.size));
             }
-            if (output.items_json.data) {
-                if (acceptUiJsonSize(
-                        std::string_view{
-                            output.items_json.data,
-                            static_cast<size_t>(output.items_json.size)
-                        },
-                        "tool_renderer output",
-                        hit->plugin
-                    )) {
+            hostMemoryFree(output.text.data);
+            entry.matched = !entry.text.empty();
+        } else {
+            AgentxxToolExpandedOutput output{};
+            int32_t                   rc = AGENTXX_RESULT_ERR_INTERNAL;
+            try {
+                rc = hit->expandedFn(hit->userData, &input, &output);
+            } catch (...) {
+                rc = AGENTXX_RESULT_ERR_INTERNAL;
+            }
+            if (rc == AGENTXX_RESULT_OK && output.items_json.data) {
+                const std::string_view itemsJson{
+                    output.items_json.data,
+                    static_cast<size_t>(output.items_json.size)
+                };
+                if (acceptUiJsonSize(itemsJson, "tool_renderer output", hit->plugin)) {
                     try {
-                        entry.items = utilxx_base::Json::parse(std::string_view{
-                            output.items_json.data,
-                            static_cast<size_t>(output.items_json.size)
-                        });
+                        entry.items = utilxx_base::Json::parse(itemsJson);
                     } catch (...) {
                     }
                 }
             }
+            // 输出字段无论成功/失败/异常路径都由主程序释放
+            hostMemoryFree(output.items_json.data);
+            entry.matched = entry.items.is_array() && !entry.items.empty();
         }
-        // 输出字段无论成功/失败/异常路径都由主程序释放
-        hostMemoryFree(output.displayName.data);
-        hostMemoryFree(output.summary.data);
-        hostMemoryFree(output.items_json.data);
 
         toolRenderCache_->store(std::move(entry));
         if (uiAdapter_) {
@@ -3540,36 +3549,26 @@ int ClientPluginManager::sendPluginDataToPeer(
 
 namespace {
 
-std::string truncateToolSummary(std::string_view s, size_t maxCols = 80) {
-    const auto  nl = s.find('\n');
-    std::string line{(nl == std::string_view::npos) ? s : s.substr(0, nl)};
-    if (maxCols == 0 || line.empty()) {
-        return {};
-    }
-    const auto idx = utilxx_base::findIndexByUtf8Length(line, maxCols);
-    if (idx > 0 && idx < line.size()) {
-        line.resize(idx);
-        line += "...";
-    }
-    return line;
-}
-
 } // namespace
 
 int ClientPluginManager::registerBuiltinToolRenderer(
-    std::string_view    toolName,
-    AgentxxToolRenderFn fn,
-    void*               userData
+    std::string_view             toolName,
+    std::string_view             displayName,
+    AgentxxToolCollapsedRenderFn collapsedFn,
+    AgentxxToolExpandedRenderFn  expandedFn,
+    void*                        userData
 ) {
-    if (toolName.empty() || !fn) {
+    if (toolName.empty()) {
         return AGENTXX_RESULT_ERR_ARG;
     }
     ClientToolRenderReg reg;
-    reg.plugin   = std::string{kBuiltinRendererOwner};
-    reg.toolName = std::string{toolName};
-    reg.renderFn = fn;
-    reg.userData = userData;
-    reg.builtin  = true;
+    reg.plugin      = std::string{kBuiltinRendererOwner};
+    reg.toolName    = std::string{toolName};
+    reg.displayName = displayName.empty() ? reg.toolName : std::string{displayName};
+    reg.collapsedFn = collapsedFn;
+    reg.expandedFn  = expandedFn;
+    reg.userData    = userData;
+    reg.builtin     = true;
     // 内置渲染器无插件实例与 lease: 不做租约登记, 也不进入实例的
     // toolRenderRegs (disable/enable 不涉及进程级内置渲染器)
     std::lock_guard<std::mutex> lock(uiMutex_);
@@ -3607,30 +3606,18 @@ int ClientPluginManager::registerToolRenderer(
     }
     const std::string   tname = svToStr(spec->tool_name);
     ClientToolRenderReg reg;
-    reg.plugin   = inst->name;
-    reg.toolName = tname;
-    reg.renderFn = spec->render_fn;
-    reg.userData = spec->user_data;
-    if (reg.renderFn) {
+    reg.plugin      = inst->name;
+    reg.toolName    = tname;
+    // 显示名注册时定下 (空则用工具名), UI 线程同步读: 首帧就能显示名字
+    reg.displayName = agentxx::plugin::PluginStringView::empty(&spec->display_name)
+                          ? tname
+                          : svToStr(spec->display_name);
+    reg.collapsedFn = spec->collapsed_fn;
+    reg.expandedFn  = spec->expanded_fn;
+    reg.userData    = spec->user_data;
+    if (reg.collapsedFn || reg.expandedFn) {
         reg.lease           = std::make_shared<ClientToolRendererLease>();
         reg.lease->instance = inst->self;
-    }
-
-    if (!spec->render_fn && !agentxx::plugin::PluginStringView::empty(&spec->template_json)) {
-        reg.templateJson = svToStr(spec->template_json);
-        if (!acceptUiJsonSize(reg.templateJson, "register_tool_renderer template", inst->name)) {
-            return AGENTXX_RESULT_ERR_LIMIT;
-        }
-        try {
-            auto j = utilxx_base::Json::parse(reg.templateJson);
-            if (j.is_object()) {
-                reg.templateDisplayName     = j.value("displayName", std::string{});
-                reg.templateSummaryKey      = j.value("summaryKey", std::string{});
-                reg.templateSummaryTemplate = j.value("summaryTemplate", std::string{});
-            }
-        } catch (...) {
-            return AGENTXX_RESULT_ERR_LIMIT;
-        }
     }
 
     {
@@ -3996,7 +3983,89 @@ std::vector<ClientRegionSize> ClientPluginManager::regionSizes() const {
     return out;
 }
 
-ClientToolRenderResult renderClientTool(
+namespace {
+
+/// 按工具名查特化渲染注册项 (插件注册项优先, 未命中再查主程序内置项)
+/// - `wantCollapsed` 决定"该注册项给了对应部分回调"的判据
+const ClientToolRenderReg* findToolRenderReg(
+    const ClientUiRegistry* reg,
+    std::string_view        toolName,
+    bool                    wantCollapsed
+) {
+    if (!reg || toolName.empty()) {
+        return nullptr;
+    }
+    for (const auto* list : {&reg->toolRenderers, &reg->builtinToolRenderers}) {
+        for (const auto& r : *list) {
+            const bool hasFn
+                = wantCollapsed ? (r.collapsedFn != nullptr) : (r.expandedFn != nullptr);
+            if (r.toolName == toolName && hasFn) {
+                return &r;
+            }
+        }
+    }
+    return nullptr;
+}
+
+/// 构造传给渲染回调的输入 (字段全部 string_view 借用, 只在本次回调内有效)
+AgentxxToolRenderInput makeRenderInput(
+    std::string_view toolCallId,
+    std::string_view toolName,
+    std::string_view argsJson,
+    std::string_view resultText,
+    bool             isFinished,
+    bool             isError,
+    int              maxWidth
+) {
+    AgentxxToolRenderInput input{};
+    input.struct_size  = sizeof(AgentxxToolRenderInput);
+    input.version      = 1;
+    input.tool_call_id = agentxx::plugin::PluginStringView::from(
+        toolCallId.data(),
+        toolCallId.size()
+    );
+    input.tool_name = agentxx::plugin::PluginStringView::from(toolName.data(), toolName.size());
+    input.args_json = agentxx::plugin::PluginStringView::from(argsJson.data(), argsJson.size());
+    input.result_text
+        = agentxx::plugin::PluginStringView::from(resultText.data(), resultText.size());
+    input.is_finished = isFinished ? 1 : 0;
+    input.is_error    = isError ? 1 : 0;
+    input.max_width   = maxWidth;
+    return input;
+}
+
+} // namespace
+
+std::string_view toolDisplayNameFor(
+    const ClientUiRegistry* reg,
+    std::string_view        toolCallId,
+    std::string_view        toolName
+) {
+    if (!reg) {
+        return {};
+    }
+    // 1. 实例级装饰 (update_tool_decor) 的 displayName 优先 (按调用改名)
+    if (!toolCallId.empty()) {
+        for (const auto& d : reg->toolDecors) {
+            if (d.toolCallId == toolCallId && !d.displayName.empty()) {
+                return d.displayName;
+            }
+        }
+    }
+    // 2. 类型级注册项的名字 (插件项优先, 未命中再查内置项)
+    if (!toolName.empty()) {
+        for (const auto* list : {&reg->toolRenderers, &reg->builtinToolRenderers}) {
+            for (const auto& r : *list) {
+                if (r.toolName == toolName && !r.displayName.empty()) {
+                    return r.displayName;
+                }
+            }
+        }
+    }
+    return {};
+}
+
+ClientToolCollapsedResult renderClientToolCollapsed(
     const ClientUiRegistry*      reg,
     const ClientToolRenderCache* cache,
     std::string_view             toolCallId,
@@ -4007,19 +4076,106 @@ ClientToolRenderResult renderClientTool(
     bool                         isError,
     int                          maxWidth
 ) {
-    ClientToolRenderResult res;
+    ClientToolCollapsedResult res;
     if (!reg) {
         return res;
     }
 
-    // 1. 优先匹配动态 per-call decor (由 update_tool_decor 针对 toolCallId 注册)
+    // 1. 实例级装饰: summary 非空时直接用; 装饰缺这一项时回落注册项 (不是清空)
     if (!toolCallId.empty()) {
         for (const auto& d : reg->toolDecors) {
-            if (d.toolCallId == toolCallId) {
-                res.displayName     = d.displayName;
-                res.summary         = d.summary;
+            if (d.toolCallId == toolCallId && !d.summary.empty()) {
+                res.text    = d.summary;
+                res.isDecor = true;
+                return res;
+            }
+        }
+    }
+
+    // 2. 按 tool_name 注册的折叠内容回调
+    const auto* r = findToolRenderReg(reg, toolName, /*wantCollapsed=*/true);
+    if (!r) {
+        return res; // 没注册 → 默认渲染
+    }
+    if (!cache) {
+        // 无语义缓存 (单元测试/未挂载管理器环境): 同步调用回调
+        auto                        input = makeRenderInput(
+            toolCallId,
+            toolName,
+            argsJson,
+            resultText,
+            isFinished,
+            isError,
+            maxWidth
+        );
+        AgentxxToolCollapsedOutput output{};
+        int32_t                    rc = AGENTXX_RESULT_ERR_INTERNAL;
+        try {
+            rc = r->collapsedFn(r->userData, &input, &output);
+        } catch (...) {
+            rc = AGENTXX_RESULT_ERR_INTERNAL;
+        }
+        if (rc == AGENTXX_RESULT_OK && output.text.data) {
+            res.text.assign(output.text.data, static_cast<size_t>(output.text.size));
+        }
+        hostMemoryFree(output.text.data);
+        return res;
+    }
+
+    // 零拷贝查缓存: 先用 string_view 算输入特征 + 查缓存, 命中即返回
+    // (不拷贝 args/result 大文本); UI 侧只在 pending 时构造请求
+    const std::string key = ClientToolRenderRequest::keyFor(
+        toolCallId,
+        toolName,
+        ClientToolRenderPart::Collapsed
+    );
+    const uint64_t inputHash = ClientToolRenderRequest::hashInputs(
+        toolName,
+        argsJson,
+        resultText,
+        isFinished,
+        isError,
+        maxWidth
+    );
+    if (auto cached = cache->lookup(key, inputHash); cached && cached->plugin == r->plugin) {
+        // 命中: 空内容 = 回调本次没给内容 (matched == false) → 默认渲染
+        res.text = cached->text;
+        return res;
+    }
+    res.pending       = true;
+    res.pendingPlugin = r->plugin;
+    // 过渡: 沿用同一调用同一部分的上一份内容 (结果到达/宽度变化使输入特征变化
+    // 的那一帧继续显示屏幕上已有的内容)。没有 tool_call_id 时缓存键退化为
+    // "#工具名#c", 可能是另一次调用的结果, 不沿用
+    if (!toolCallId.empty()) {
+        if (auto last = cache->lookupLatest(key); last && last->plugin == r->plugin) {
+            res.text = last->text;
+        }
+    }
+    return res;
+}
+
+ClientToolExpandedResult renderClientToolExpanded(
+    const ClientUiRegistry*      reg,
+    const ClientToolRenderCache* cache,
+    std::string_view             toolCallId,
+    std::string_view             toolName,
+    std::string_view             argsJson,
+    std::string_view             resultText,
+    bool                         isFinished,
+    bool                         isError,
+    int                          maxWidth
+) {
+    ClientToolExpandedResult res;
+    if (!reg) {
+        return res;
+    }
+
+    // 1. 实例级装饰: items 非空时直接用; 装饰缺这一项时回落注册项 (不是清空)
+    if (!toolCallId.empty()) {
+        for (const auto& d : reg->toolDecors) {
+            if (d.toolCallId == toolCallId && d.items.is_array() && !d.items.empty()) {
                 res.items           = d.items;
-                res.matched         = true;
                 res.isDecor         = true;
                 res.decorPlugin     = d.plugin;
                 res.decorToolCallId = d.toolCallId;
@@ -4028,192 +4184,67 @@ ClientToolRenderResult renderClientTool(
         }
     }
 
-    // 2. 匹配按 toolName 注册的工具特化渲染器 (render_fn 或 预设模版):
-    //    插件注册项优先, 未命中再查主程序内置项 (插件可覆盖内置渲染)
-    if (!toolName.empty()) {
-        for (const auto* rendererList : {&reg->toolRenderers, &reg->builtinToolRenderers}) {
-            for (const auto& r : *rendererList) {
-                if (r.toolName == toolName) {
-                    if (r.renderFn) {
-                        if (cache) {
-                            // 零拷贝查缓存: 先用 string_view 算输入特征 + 查缓存,
-                            // 命中即返回 (不拷贝 args/result 大文本); UI 侧只在
-                            // pendingRender 时构造 ClientToolRenderRequest
-                            const std::string key
-                                = ClientToolRenderRequest::keyFor(toolCallId, toolName);
-                            const uint64_t inputHash = ClientToolRenderRequest::hashInputs(
-                                toolName,
-                                argsJson,
-                                resultText,
-                                isFinished,
-                                isError,
-                                maxWidth
-                            );
-                            auto cached = cache->lookup(key, inputHash);
-                            if (!cached || cached->plugin != r.plugin) {
-                                res.matched       = false;
-                                res.pendingRender = true;
-                                res.pendingPlugin = r.plugin;
-                                // 过渡内容 (显示名/摘要): 结果就绪前先给出"上一份已知
-                                // 内容", 不要让本帧比上一帧信息更少 (显示名或摘要消失
-                                // 一帧再回来同样是可见的跳变)。两级来源:
-                                // 1. 本次调用上一份结果 —— 结果到达 (isFinished 变化) 或
-                                //    终端宽度变化都会改变输入特征使缓存不命中, 而这份
-                                //    结果正是屏幕上已经显示的内容;
-                                // 2. 该工具的"名称结果" (键 = "#工具名", 输入只有工具名,
-                                //    占位提示阶段已解析过一次) —— 工具消息沿用它, 而不是
-                                //    回退原始工具名 + 原始参数, 否则占位提示刚展示过特化
-                                //    显示名, 折叠头会先闪一下非特化内容。
-                                // 归属插件必须一致: 插件重载/被覆盖后旧结果不可用。
-                                //
-                                // 只取显示名与摘要: items 属展开体内容, matched=false
-                                // 时调用方不会渲染它, 而未就绪帧每帧都会走到这里, 深拷
-                                // Edit 这类带 diff 内容的 items 没有意义。
-                                //
-                                // 调用没有 tool_call_id 时缓存键退化为 "#工具名", 与上面
-                                // 第 2 条来源同键 —— 该键下可能是占位提示阶段"参数/结果
-                                // 为空"的结果, 也可能是另一次无 id 调用的结果, 摘要都不
-                                // 代表本次调用 (如 Read 的 " ·"), 因此这种情形只借该键的
-                                // 显示名, 不取摘要。
-                                if (!toolCallId.empty()) {
-                                    if (auto last = cache->lookupLatest(key);
-                                        last && last->matched && last->plugin == r.plugin) {
-                                        res.displayName = last->displayName;
-                                        res.summary     = last->summary;
-                                    }
-                                }
-                                if (res.displayName.empty()) {
-                                    if (auto nameEntry
-                                        = cache->lookupLatest(ClientToolRenderRequest::keyFor(
-                                            std::string_view{},
-                                            toolName
-                                        ));
-                                        nameEntry && nameEntry->matched
-                                        && nameEntry->plugin == r.plugin) {
-                                        res.displayName = nameEntry->displayName;
-                                    }
-                                }
-                                return res;
-                            }
-                            res.matched     = cached->matched;
-                            res.displayName = cached->displayName;
-                            res.summary     = cached->summary;
-                            res.items       = cached->items;
-                            return res;
-                        }
-
-                        // 无语义缓存 (如单元测试/未加载 pluginManager 环境): 同步执行 renderer
-                        AgentxxToolRenderInput input{};
-                        input.struct_size  = sizeof(AgentxxToolRenderInput);
-                        input.version      = 1;
-                        input.tool_call_id = agentxx::plugin::PluginStringView::from(
-                            toolCallId.data(),
-                            toolCallId.size()
-                        );
-                        input.tool_name = agentxx::plugin::PluginStringView::from(
-                            toolName.data(),
-                            toolName.size()
-                        );
-                        input.args_json = agentxx::plugin::PluginStringView::from(
-                            argsJson.data(),
-                            argsJson.size()
-                        );
-                        input.result_text = agentxx::plugin::PluginStringView::from(
-                            resultText.data(),
-                            resultText.size()
-                        );
-                        input.is_finished = isFinished ? 1 : 0;
-                        input.is_error    = isError ? 1 : 0;
-                        input.max_width   = maxWidth;
-
-                        AgentxxToolRenderOutput output{};
-                        int32_t                 rc = AGENTXX_RESULT_ERR_INTERNAL;
-                        try {
-                            rc = r.renderFn(r.userData, &input, &output);
-                        } catch (...) {
-                            rc = AGENTXX_RESULT_ERR_INTERNAL;
-                        }
-                        if (rc == AGENTXX_RESULT_OK) {
-                            res.matched = true;
-                            if (output.displayName.data) {
-                                res.displayName.assign(
-                                    output.displayName.data,
-                                    static_cast<size_t>(output.displayName.size)
-                                );
-                            }
-                            if (output.summary.data) {
-                                res.summary.assign(
-                                    output.summary.data,
-                                    static_cast<size_t>(output.summary.size)
-                                );
-                            }
-                            if (output.items_json.data) {
-                                const std::string_view itemsJson{
-                                    output.items_json.data,
-                                    static_cast<size_t>(output.items_json.size)
-                                };
-                                if (acceptUiJsonSize(itemsJson, "tool_renderer output", r.plugin)) {
-                                    try {
-                                        res.items = utilxx_base::Json::parse(itemsJson);
-                                    } catch (...) {
-                                    }
-                                }
-                            }
-                        }
-                        hostMemoryFree(output.displayName.data);
-                        hostMemoryFree(output.summary.data);
-                        hostMemoryFree(output.items_json.data);
-                        return res;
-                    } else if (!r.templateDisplayName.empty() || !r.templateSummaryKey.empty()) {
-                        res.displayName = r.templateDisplayName;
-                        res.matched     = true;
-
-                        if (!r.templateSummaryKey.empty() && !argsJson.empty()) {
-                            try {
-                                auto j = utilxx_base::Json::parse(argsJson);
-                                if (j.is_object() && j.contains(r.templateSummaryKey)) {
-                                    const auto& val = j[r.templateSummaryKey];
-                                    std::string rawVal;
-                                    if (val.is_string()) {
-                                        rawVal = val.get<std::string>();
-                                    } else if (val.is_array()) {
-                                        std::string joined;
-                                        size_t      count = 0;
-                                        for (const auto& item : val) {
-                                            if (count > 0) {
-                                                joined += ", ";
-                                            }
-                                            if (item.is_string()) {
-                                                joined += item.get<std::string>();
-                                            } else {
-                                                joined += item.dump();
-                                            }
-                                            if (++count >= 2 && val.size() > 2) {
-                                                joined += ", ...";
-                                                break;
-                                            }
-                                        }
-                                        rawVal = std::move(joined);
-                                    } else {
-                                        rawVal = val.dump();
-                                    }
-                                    const size_t limit
-                                        = (maxWidth > 20) ? static_cast<size_t>(maxWidth - 15) : 80;
-                                    res.summary = truncateToolSummary(rawVal, limit);
-                                }
-                            } catch (...) {
-                                res.matched = false;
-                                res.displayName.clear();
-                                return res;
-                            }
-                        }
-                        return res;
-                    }
+    // 2. 按 tool_name 注册的展开内容回调
+    const auto* r = findToolRenderReg(reg, toolName, /*wantCollapsed=*/false);
+    if (!r) {
+        return res; // 没注册 → 默认展开体
+    }
+    if (!cache) {
+        // 无语义缓存 (单元测试/未挂载管理器环境): 同步调用回调
+        auto                       input = makeRenderInput(
+            toolCallId,
+            toolName,
+            argsJson,
+            resultText,
+            isFinished,
+            isError,
+            maxWidth
+        );
+        AgentxxToolExpandedOutput output{};
+        int32_t                   rc = AGENTXX_RESULT_ERR_INTERNAL;
+        try {
+            rc = r->expandedFn(r->userData, &input, &output);
+        } catch (...) {
+            rc = AGENTXX_RESULT_ERR_INTERNAL;
+        }
+        if (rc == AGENTXX_RESULT_OK && output.items_json.data) {
+            const std::string_view itemsJson{
+                output.items_json.data,
+                static_cast<size_t>(output.items_json.size)
+            };
+            if (acceptUiJsonSize(itemsJson, "tool_renderer output", r->plugin)) {
+                try {
+                    res.items = utilxx_base::Json::parse(itemsJson);
+                } catch (...) {
                 }
             }
         }
+        hostMemoryFree(output.items_json.data);
+        return res;
     }
 
+    const std::string key
+        = ClientToolRenderRequest::keyFor(toolCallId, toolName, ClientToolRenderPart::Expanded);
+    const uint64_t inputHash = ClientToolRenderRequest::hashInputs(
+        toolName,
+        argsJson,
+        resultText,
+        isFinished,
+        isError,
+        maxWidth
+    );
+    if (auto cached = cache->lookup(key, inputHash); cached && cached->plugin == r->plugin) {
+        res.items = cached->items;
+        return res;
+    }
+    res.pending       = true;
+    res.pendingPlugin = r->plugin;
+    // 过渡: 上一份 items (没有 tool_call_id 时不沿用, 同折叠部分)
+    if (!toolCallId.empty()) {
+        if (auto last = cache->lookupLatest(key); last && last->plugin == r->plugin) {
+            res.items = last->items;
+        }
+    }
     return res;
 }
 
