@@ -1,7 +1,7 @@
 # 子代理工具对齐主 agent + JS 插件多挂载作用域
 
-- 状态: 进行中
-- 时间: 2026-11-14
+- 状态: 已完成 (JS SDK 仅剩 runtime / 工具特化渲染未对齐)
+- 时间: 2026-11-14 (JS SDK 网络/后台任务/查询面补齐: 2026-11-15)
 - 类型: 功能 + 重构 (lib 配置派生 / 事件结构 / 工具注册表 / JS 解释器插件)
 
 ## 目标
@@ -41,11 +41,13 @@
   (跳过插件挂载); 自定义名单现在也能拦住插件动态工具 (ToolRegistry 名称过滤)。
 - `agentxx_javascript_engine` 已改成"每 (脚本, agent 挂载) 一份实例": 同一 JS 插件可以同时挂在
   主 agent 与子代理上, 注册各自独立; agent 卸载只清自己的实例。JS SDK 向 C++ 侧对齐了
-  权限/配置/作用域/广播/资源等基础面, 剩余 (net / runtime / async work / graph) 记在 work.md。
+  权限/配置/作用域/广播/资源等基础面, 又补上了网络 (`netCall` / `netFetch` / WebSocket /
+  HTTP 服务端)、后台任务 (`submitAsyncWork` + 事件回调) 与提示词·会话·上下文·执行图·挂载
+  查询; 剩下的只有会话运行时 `runtime` 与工具特化渲染 (仍写在 C++ 壳里)。
 - 验证: lib + 插件 + test 均编译通过; `agent_host` / `plugins` / `plugin_*` / `async_*` /
-  `event_*` / `agent` / `boundaries` / `config_keys` 合计 2000+ 断言全绿。
+  `event_*` / `agent` / `boundaries` / `config_keys` 合计 3400+ 断言全绿。
 
 ## 偏差
 
 - 未新增任何 yaml 配置键: 继承意图由委派调用本身表达 (`agentxx_subagent` 固定全开)。
-- JS SDK 未一次性对齐全部 20 张表 (剩余面见 work.md 的"剩余事项")。
+- JS SDK 未一次性对齐全部 20 张表 (仅剩 `runtime` 与工具特化渲染, 见 work.md 的"剩余事项")。

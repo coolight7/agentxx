@@ -302,8 +302,10 @@ path/to/agentxx_test --log-level warn string_util regex
   (`plugins_` 键 = `脚本名@agentId#mountSeq`), 脚本顶层就是该 agent 的实例初始化,
   注册归属用实例自己的 `PluginxxScopeRef`; agent 卸载只销毁自己的实例、不执行 JS 侧注销
   (主程序已按挂载记录撤销)。JS SDK 与 C++ 侧同名同义 (`registerTool` / `subscribe` / `publish` /
-  `addSkillDir` / `registerToolPermission` / `getConfig` / `scope()` 等), 未对齐的面
-  (net / runtime / async work / graph) 仍需写在 C++ 壳里; 详见 plugins.md §12
+  `addSkillDir` / `registerToolPermission` / `getConfig` / `scope()` / `netCall` / `netFetch` /
+  `submitAsyncWork` / `getPrompt` / `getMessages` / `getGraphJson` 等), 只剩会话运行时
+  (`agentxx.agent.runtime` 的 `mount_root` / 通道 / 触发器) 与工具特化渲染写在 C++ 壳里;
+  详见 plugins.md §12
 - 插件接口为 **API v1**: 入口为 `agentxx_plugin_agent_create` /
   `agentxx_plugin_agent_destroy` 实例对 (client 侧 `agentxx_plugin_client_create` / `_destroy`)。
   【API v1 规范】全局 API 版本及全部接口表版本均重置为 1；明确 8 字节结构体对齐与定长基础类型 (`int32_t/int64_t/uint64_t`)；跨边界函数统一 `PLUGINXX_CALL` 调用约定；结构体参数一律传递指针 (`const Struct*`)，结构体返回值一律改为指针出参 (`Struct* out`) 并返回 `int32_t` 状态码；核心 vtable 精简为 `alloc/free` 操作 (去除了 `strdup`，采用头文件内联 `pluginxx_strdup`)。

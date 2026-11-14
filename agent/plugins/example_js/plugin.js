@@ -62,7 +62,68 @@ agentxx.registerTool({
   execute: () => ({ kind: typeof agentxx.callTool("js_hello", {}, "") }),
 });
 
-// ---- 工具 7: 返回带状态的结果 {status, text} ----
+// ---- 工具 7: SDK 查询面自查 ----
+// 与 C++ 插件 SDK 同名的查询接口: 提示词 / 会话 / 上下文 / 执行图 / 挂载 / 网络。
+// 返回值只描述"形状" (类型/是否数组), 测试用它确认这些桥方法都能调通。
+agentxx.registerTool({
+  name: "js_sdk_probe",
+  description: "JS plugin demo: report the shapes returned by the SDK query helpers.",
+  execute: () => {
+    const out = {};
+    const kindOf = (v) => (v === null ? "null" : (Array.isArray(v) ? "array" : typeof v));
+    const scope = agentxx.scope();
+    out.scope = scope === null ? "null" : typeof scope.agentId;
+    out.language = kindOf(agentxx.getLanguage());
+    out.setLanguage = typeof agentxx.setLanguage("zh-cn");
+    out.pluginArgs = kindOf(agentxx.getPluginArgs());
+    out.workDir = kindOf(agentxx.getSessionWorkDir(""));
+    out.canceled = typeof agentxx.isCanceled("probe-thread");
+    out.graphName = kindOf(agentxx.getGraphName());
+    out.graph = kindOf(agentxx.getGraphJson());
+    out.mountsIsArray = Array.isArray(agentxx.listMounts());
+    const mount = agentxx.getMount();
+    out.mount = mount === null ? "null" : typeof mount.agentId;
+    out.messagesIsArray = Array.isArray(agentxx.getMessages("probe-session"));
+    out.messagesCount = typeof agentxx.messagesCount("probe-session");
+    out.prompt = kindOf(agentxx.getPrompt());
+    out.toolPrompt = kindOf(agentxx.getToolPrompt("no_such_tool_for_probe"));
+    out.shareStore = kindOf(agentxx.getShareStore("probe-session", 0));
+    // 网络: 入口总是给出结果对象, 业务结论在 ok 里
+    const netInfo = agentxx.netInfo();
+    out.netInfoIsObject = typeof netInfo === "object" && netInfo !== null;
+    out.netInfoOkType = typeof netInfo.ok;
+    out.netCallOkType = typeof agentxx.netCall("net.info", {}).ok;
+    // 后台任务: 空参数会被拒 (空 id), 查询/取消都是纯读取
+    out.submitAsyncWork = typeof agentxx.submitAsyncWork({});
+    out.listAsyncWorkIsArray = Array.isArray(agentxx.listAsyncWork());
+    out.getAsyncWork = kindOf(agentxx.getAsyncWork("async-does-not-exist"));
+    out.cancelAsyncWork = agentxx.cancelAsyncWork("async-does-not-exist");
+    return out;
+  },
+});
+
+// ---- 工具 8: 网络 (async HTTP) ----
+// 拒绝连接 / 超时都按业务失败返回 (`ok:false` + `error`), 不会抛异常
+agentxx.registerTool({
+  name: "js_net_fetch",
+  description: "JS plugin demo: HTTP via agentxx.netFetch; failures come back as ok:false.",
+  parameters: {
+    url: { type: "string", description: "absolute http(s) url" },
+  },
+  execute: async (args) => {
+    const res = await agentxx.netFetch({
+      url: args.url || "http://127.0.0.1:1/",
+      timeoutMs: 2000,
+    });
+    return {
+      ok: res.ok === true,
+      error: typeof res.error === "string" ? res.error : null,
+      resultIsObject: typeof res === "object",
+    };
+  },
+});
+
+// ---- 工具 9: 返回带状态的结果 {status, text} ----
 // - 与返回普通值的区别: 状态显式给了, 主程序不再把结果当成功
 // - text 是给模型读的正文; 失败时只写错误内容 (不要自己加 "[Error: ...]")
 agentxx.registerTool({

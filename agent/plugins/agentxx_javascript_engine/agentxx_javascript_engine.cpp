@@ -34,6 +34,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <sstream>
 #include <string>
 #include <thread>
@@ -246,6 +247,36 @@ enum BridgeMagic {
     B_UNREGISTER_TOOL_PERMISSION,
     B_REGISTER_READ_PATH_PERMISSION,
     B_REGISTER_WRITE_PATH_PERMISSION,
+    // 网络 (`agentxx.net`): 插件不自己建连接, 一律经主程序的网络服务
+    B_NET_CALL,
+    B_NET_CALL_ASYNC,
+    B_NET_CANCEL,
+    B_NET_FETCH,
+    B_NET_DOWNLOAD,
+    B_NET_WS_CONNECT,
+    B_NET_WS_SEND,
+    B_NET_WS_CLOSE,
+    B_NET_HTTP_SERVE,
+    B_NET_HTTP_RESPOND,
+    B_NET_INFO,
+    // 后台任务 (`agentxx.agent.runtime` v2): 提交 / 取消 / 查询
+    B_SUBMIT_ASYNC_WORK,
+    B_CANCEL_ASYNC_WORK,
+    B_GET_ASYNC_WORK,
+    B_LIST_ASYNC_WORK,
+    // 提示词 / 会话 / 上下文 / 执行图 / 挂载查询 (与 C++ 插件 SDK 同名)
+    B_GET_PROMPT,
+    B_SET_PROMPT,
+    B_GET_TOOL_PROMPT,
+    B_GET_SESSION_WORK_DIR,
+    B_IS_CANCELED,
+    B_GET_MESSAGES,
+    B_MESSAGES_COUNT,
+    B_GET_GRAPH_JSON,
+    B_GET_GRAPH_NAME,
+    B_SET_GRAPH_JSON,
+    B_LIST_MOUNTS,
+    B_GET_MOUNT,
 };
 
 /// 工具执行请求/结果 (execute 桥跨线程传递)
@@ -293,6 +324,28 @@ struct JsCallBridge {
     std::atomic<bool> settled{false};
 };
 
+/// JS 内 netCallAsync 的跨线程完成桥 (与 [JsCallBridge] 同构)
+/// - 完成回调在主程序 io 线程, 只复制结果并向 JS 线程投递 settle 任务
+/// - 网络失败不是异常: Promise 总是 resolve 成结果对象, 业务结论看 `ok`
+///   (与 C++ 侧 `NetResult` 的用法一致)
+struct JsNetBridge {
+    JsEngine*            engine  = nullptr;
+    JSContext*           ctx     = nullptr;
+    JSValue              resolve = JS_UNDEFINED;
+    JSValue              reject  = JS_UNDEFINED;
+    std::atomic<bool>    settled{false};
+    std::atomic<int64_t> requestId{0}; ///< 受理时给出的请求号 (之后用于 netCancel)
+};
+
+/// 后台任务事件回调的用户数据
+/// - 与 JS 实例生命周期解耦: 实例先销毁时事件在 JS 线程查不到回调, 直接丢弃
+/// - 终态 (finished/canceled) 到达时释放; 引擎销毁时清理尚未收到终态的残留
+struct JsAsyncWorkHook {
+    JsEngine*   engine = nullptr;
+    std::string instanceKey;
+    int64_t     token = 0; ///< JS 侧回调表的键
+};
+
 /// JS 插件上下文 (生命周期: plugins_ / mirror / 进行中任务共享持有)
 /// - 一个实例 = 一份 (脚本, 挂载作用域) 组合: 每个 agent 各自一份 JSContext,
 ///   脚本里的全局状态因而天然按 agent 隔离 (与 C++ 插件"一插件多 agent 挂载"一致)
@@ -317,6 +370,10 @@ struct JsPluginCtx {
     JSValue                                     agents = JS_UNDEFINED;
     std::vector<std::unique_ptr<JsToolBinding>> toolBindings;
     std::vector<std::unique_ptr<JsHookBinding>> hookBindings;
+    /// 后台任务事件回调: token -> fn (提交时登记; 随上下文释放)
+    std::map<int64_t, JSValue> asyncWorkCallbacks;
+    /// 回调 token 自增源 (仅 JS 线程使用)
+    int64_t nextAsyncWorkToken = 0;
     /// 脚本初始化事务的撤销动作 (注册工具/通知/订阅/资源成功时按序追加)。
     /// 顶层执行失败或脚本卸载时逆序执行, 主程序侧不留任何残留注册。
     std::vector<std::function<void()>> rollbackActions;
@@ -376,6 +433,16 @@ public:
     /// 主程序协议要求 destroy 前 stop 已完成, 正常路径此处是空操作。
     ~JsEngine() {
         stopAndWait();
+        // 停止后再无主程序回调, 残留的任务事件登记可以安全释放
+        // (未收到终态的任务在插件 stop 时已被主程序取消, 事件到此为止)
+        std::set<JsAsyncWorkHook*> rest;
+        {
+            std::lock_guard<std::mutex> lk(asyncWorkMtx_);
+            rest.swap(asyncWorkHooks_);
+        }
+        for (auto* hook : rest) {
+            delete hook;
+        }
     }
 
     // ==================== 生命周期 (start / stop) ====================
@@ -887,6 +954,170 @@ public:
         }
         JS_FreeValue(ctx, resolve);
         JS_FreeValue(ctx, reject);
+    }
+
+    /// 网络调用完成 (任意线程): 复制结果并投递回 JS 线程 settle Promise
+    /// - 完成回调由主程序在调用方 IO 线程派发; 引擎已停止时 post 失败,
+    ///   只释放桥, 不触碰 JSValue (JSContext 即将整体释放)
+    static void PLUGINXX_CALL
+        onNetCallDone(void* ud, int32_t status, const PluginxxStringView* payload) noexcept {
+        auto* bridge = static_cast<JsNetBridge*>(ud);
+        if (!bridge || !bridge->engine) {
+            return;
+        }
+        bool expected = false;
+        if (!bridge->settled.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+            return;
+        }
+        std::string text;
+        try {
+            if (payload && payload->data) {
+                text.assign(payload->data, static_cast<size_t>(payload->size));
+            }
+        } catch (...) {
+        }
+        if (!bridge->engine->post([bridge, status, text = std::move(text)]() mutable {
+                bridge->engine->settleNetCall(bridge, status, std::move(text));
+            })) {
+            delete bridge;
+        }
+    }
+
+    /// 【JS 线程】settle netCallAsync: 总是 resolve 成结果对象
+    /// - 业务失败与传输失败同一种形状 (`ok:false`), 脚本不用挨个 catch
+    /// - 受理时给出的请求号以 `requestId` 补进结果 (脚本要取消时用)
+    void settleNetCall(JsNetBridge* bridge, int32_t status, std::string text) {
+        if (!bridge) {
+            return;
+        }
+        JSContext* ctx = bridge->ctx;
+        JSValue    out = JS_UNDEFINED;
+        if (status == PLUGINXX_OPERATOR_OK) {
+            out = netResultValue(ctx, text);
+        } else {
+            const char* reason
+                = status == PLUGINXX_OPERATOR_CANCELED ? "canceled" : "failed";
+            // 失败时主程序可能带了错误 JSON: 能解析出对象就用它
+            JSValue parsed = text.empty()
+                                 ? JS_NULL
+                                 : JS_ParseJSON(ctx, text.c_str(), text.size(), "<net>");
+            if (!JS_IsException(parsed) && JS_IsObject(parsed)) {
+                out = parsed;
+                JS_SetPropertyStr(ctx, out, "ok", JS_FALSE);
+            } else {
+                JS_FreeValue(ctx, parsed);
+                out = netErrorObject(ctx, reason, text);
+            }
+        }
+        const int64_t requestId = bridge->requestId.load(std::memory_order_acquire);
+        if (requestId > 0 && JS_IsObject(out)) {
+            JSValue existing = JS_GetPropertyStr(ctx, out, "requestId");
+            if (JS_IsUndefined(existing)) {
+                JS_SetPropertyStr(ctx, out, "requestId", JS_NewInt64(ctx, requestId));
+            }
+            JS_FreeValue(ctx, existing);
+        }
+        JSValue argv[1] = {out};
+        JSValue rc      = JS_Call(ctx, bridge->resolve, JS_UNDEFINED, 1, argv);
+        JS_FreeValue(ctx, rc);
+        JS_FreeValue(ctx, out);
+        JS_FreeValue(ctx, bridge->resolve);
+        JS_FreeValue(ctx, bridge->reject);
+        delete bridge;
+    }
+
+    /// 登记一个后台任务事件回调 (返回交给主程序的 user_data)
+    JsAsyncWorkHook* registerAsyncWorkHook(const std::string& instanceKey, int64_t token) {
+        auto hook         = new JsAsyncWorkHook{};
+        hook->engine      = this;
+        hook->instanceKey = instanceKey;
+        hook->token       = token;
+        std::lock_guard<std::mutex> lk(asyncWorkMtx_);
+        asyncWorkHooks_.insert(hook);
+        return hook;
+    }
+
+    /// 释放后台任务事件回调登记 (终态到达 / 提交失败 / 引擎销毁)
+    void releaseAsyncWorkHook(JsAsyncWorkHook* hook) {
+        if (!hook) {
+            return;
+        }
+        {
+            std::lock_guard<std::mutex> lk(asyncWorkMtx_);
+            asyncWorkHooks_.erase(hook);
+        }
+        delete hook;
+    }
+
+    /// 后台任务事件 (容器 io 线程): 复制载荷并投递回 JS 线程
+    /// - 必须在 JS 线程调脚本回调: 脚本侧没有任何线程保护
+    /// - 终态 (finished / canceled) 之后再不会有事件, 在此释放登记
+    static void PLUGINXX_CALL onAsyncWorkEvent(
+        void*                     ud,
+        int32_t                   phase,
+        const PluginxxStringView* payload_json
+    ) noexcept {
+        auto* hook = static_cast<JsAsyncWorkHook*>(ud);
+        if (!hook || !hook->engine) {
+            return;
+        }
+        std::string payload;
+        try {
+            if (payload_json && payload_json->data) {
+                payload.assign(payload_json->data, static_cast<size_t>(payload_json->size));
+            }
+        } catch (...) {
+        }
+        auto* engine = hook->engine;
+        engine->post([engine, instanceKey = hook->instanceKey, token = hook->token, phase, payload]() {
+            engine->doAsyncWorkEvent(instanceKey, token, phase, payload);
+        });
+        if (phase == AGENTXX_PLUGIN_ASYNC_WORK_EVT_FINISHED
+            || phase == AGENTXX_PLUGIN_ASYNC_WORK_EVT_CANCELED) {
+            engine->releaseAsyncWorkHook(hook);
+        }
+    }
+
+    /// 【JS 线程】调用脚本登记的任务事件回调
+    /// - 实例已销毁 (agent 卸载 / 脚本卸载): 事件丢弃, 任务本身仍由主程序收尾
+    void doAsyncWorkEvent(
+        const std::string& instanceKey,
+        int64_t            token,
+        int32_t            phase,
+        const std::string& payload
+    ) {
+        if (stopping()) {
+            return;
+        }
+        auto it = plugins_.find(instanceKey);
+        if (it == plugins_.end() || !it->second) {
+            return;
+        }
+        auto*      pctx = it->second.get();
+        const auto fit  = pctx->asyncWorkCallbacks.find(token);
+        if (fit == pctx->asyncWorkCallbacks.end()) {
+            return;
+        }
+        JSContext* ctx    = pctx->ctx;
+        JSValue    phaseV = JS_NewString(ctx, asyncWorkPhaseName(phase));
+        JSValue    dataV  = jsonTextToValue(ctx, payload, "<async_work>");
+        JSValue    argv[2] = {phaseV, dataV};
+        JSValue    rc      = JS_Call(ctx, fit->second, JS_UNDEFINED, 2, argv);
+        if (JS_IsException(rc)) {
+            JSValue exc = JS_GetException(ctx);
+            logAt(
+                3,
+                fmt::format(
+                    "interpreter.js: async work onEvent threw: {}",
+                    valueToJsonString(ctx, exc)
+                )
+                    .c_str()
+            );
+            JS_FreeValue(ctx, exc);
+        }
+        JS_FreeValue(ctx, rc);
+        JS_FreeValue(ctx, phaseV);
+        JS_FreeValue(ctx, dataV);
     }
 
     /// 工具 execute 桥 —— 异步启动 (统一异步操作模型):
@@ -1582,7 +1813,7 @@ private:
     }
 
     /// 值 → 字符串 (对象 JSON 序列化; 字符串原样; 其他 String() 转换)
-    std::string valueToJsonString(JSContext* ctx, JSValueConst v) {
+    static std::string valueToJsonString(JSContext* ctx, JSValueConst v) {
         if (JS_IsString(v) || JS_IsUndefined(v) || JS_IsNull(v) || JS_IsBool(v) || JS_IsNumber(v)) {
             const char* s   = JS_ToCString(ctx, v);
             std::string out = s ? s : "";
@@ -1609,6 +1840,140 @@ private:
         std::string out = s ? s : "";
         JS_FreeCString(ctx, s);
         return out;
+    }
+
+    /// 读对象属性为字符串 (属性不存在 / 非字符串时返回空)
+    static std::string propString(JSContext* ctx, JSValueConst obj, const char* key) {
+        JSValue     v = JS_GetPropertyStr(ctx, obj, key);
+        std::string out;
+        if (JS_IsString(v)) {
+            out = jsToCppString(ctx, v);
+        }
+        JS_FreeValue(ctx, v);
+        return out;
+    }
+
+    /// 读对象属性为 64 位整数 (不存在 / 非数字时返回默认值; 布尔按 1/0)
+    static int64_t propInt64(JSContext* ctx, JSValueConst obj, const char* key, int64_t def) {
+        JSValue v   = JS_GetPropertyStr(ctx, obj, key);
+        int64_t out = def;
+        if (JS_IsNumber(v)) {
+            JS_ToInt64(ctx, &out, v);
+        } else if (JS_IsBool(v)) {
+            out = JS_ToBool(ctx, v) != 0 ? 1 : 0;
+        }
+        JS_FreeValue(ctx, v);
+        return out;
+    }
+
+    /// 读对象属性为布尔 (不存在时返回默认值; 数字非 0 也算真)
+    static bool propBool(JSContext* ctx, JSValueConst obj, const char* key, bool def) {
+        JSValue v   = JS_GetPropertyStr(ctx, obj, key);
+        bool    out = def;
+        if (JS_IsBool(v) || JS_IsNumber(v)) {
+            out = JS_ToBool(ctx, v) != 0;
+        }
+        JS_FreeValue(ctx, v);
+        return out;
+    }
+
+    /// 读对象属性为 JSON 文本 (对象/数组序列化, 字符串原样, 其它返回空)
+    /// - 用于把 JS 对象原样交给主程序的 JSON 参数 (工具策略 / 插件挂载 / 名称列表)
+    static std::string propJson(JSContext* ctx, JSValueConst obj, const char* key) {
+        JSValue     v = JS_GetPropertyStr(ctx, obj, key);
+        std::string out;
+        if (JS_IsString(v)) {
+            out = jsToCppString(ctx, v);
+        } else if (JS_IsObject(v) && !JS_IsFunction(ctx, v)) {
+            out = valueToJsonString(ctx, v);
+        }
+        JS_FreeValue(ctx, v);
+        return out;
+    }
+
+    /// 参数 JSON 文本: 字符串按原样 (已是 JSON 文本), 对象/数组序列化, 缺省 `{}`
+    static std::string argsJsonText(JSContext* ctx, JSValueConst v) {
+        if (JS_IsUndefined(v) || JS_IsNull(v)) {
+            return "{}";
+        }
+        std::string text
+            = JS_IsString(v) ? jsToCppString(ctx, v) : valueToJsonString(ctx, v);
+        return text.empty() ? std::string{"{}"} : text;
+    }
+
+    /// JSON 文本 → JS 值 (不是合法 JSON 时按字符串返回; 空文本返回 null)
+    static JSValue jsonTextToValue(JSContext* ctx, const std::string& text, const char* tag) {
+        if (text.empty()) {
+            return JS_NULL;
+        }
+        JSValue out = JS_ParseJSON(ctx, text.c_str(), text.size(), tag);
+        if (JS_IsException(out)) {
+            JS_FreeValue(ctx, out);
+            out = JS_NewStringLen(ctx, text.data(), text.size());
+        }
+        return out;
+    }
+
+    /// 失败结果对象 `{ok:false, error, message}` (网络与后台任务共用同一种形状)
+    static JSValue netErrorObject(
+        JSContext*         ctx,
+        const std::string& error,
+        const std::string& message
+    ) {
+        JSValue obj = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, obj, "ok", JS_FALSE);
+        JS_SetPropertyStr(ctx, obj, "error", JS_NewStringLen(ctx, error.data(), error.size()));
+        if (!message.empty()) {
+            JS_SetPropertyStr(
+                ctx,
+                obj,
+                "message",
+                JS_NewStringLen(ctx, message.data(), message.size())
+            );
+        }
+        return obj;
+    }
+
+    /// 网络结果 JSON → JS 值
+    /// - 结果 JSON 一律是对象 (`{ok:...}`); 解析不出来时按失败兜底
+    static JSValue netResultValue(JSContext* ctx, const std::string& json) {
+        if (json.empty()) {
+            JSValue obj = JS_NewObject(ctx);
+            JS_SetPropertyStr(ctx, obj, "ok", JS_TRUE);
+            return obj;
+        }
+        JSValue out = JS_ParseJSON(ctx, json.c_str(), json.size(), "<net>");
+        if (!JS_IsException(out) && JS_IsObject(out)) {
+            return out;
+        }
+        JS_FreeValue(ctx, out);
+        return netErrorObject(ctx, "invalid_result", json);
+    }
+
+    /// 网络表入口的结果码 + 结果 JSON → JS 值
+    /// - 入口失败与业务失败同一种形状: 调用方只看 `ok`
+    static JSValue netOutcomeToValue(JSContext* ctx, int32_t code, const std::string& json) {
+        if (code == PLUGINXX_RESULT_OK) {
+            return netResultValue(ctx, json);
+        }
+        const char* name = pluginxx::result::nameOf(code);
+        return netErrorObject(ctx, name ? name : "unknown", json);
+    }
+
+    /// 后台任务事件阶段 → JS 侧名字
+    static const char* asyncWorkPhaseName(int32_t phase) {
+        switch (phase) {
+            case AGENTXX_PLUGIN_ASYNC_WORK_EVT_QUEUED:
+                return "queued";
+            case AGENTXX_PLUGIN_ASYNC_WORK_EVT_STARTED:
+                return "started";
+            case AGENTXX_PLUGIN_ASYNC_WORK_EVT_FINISHED:
+                return "finished";
+            case AGENTXX_PLUGIN_ASYNC_WORK_EVT_CANCELED:
+                return "canceled";
+            default:
+                return "unknown";
+        }
     }
 
     /// 工具 execute 的正常返回 -> 结果正文与终态
@@ -1703,6 +2068,36 @@ private:
         def("unregisterToolPermission", B_UNREGISTER_TOOL_PERMISSION, 1);
         def("registerReadPathPermission", B_REGISTER_READ_PATH_PERMISSION, 2);
         def("registerWritePathPermission", B_REGISTER_WRITE_PATH_PERMISSION, 2);
+        // 网络 (`agentxx.net`): 与 C++ 插件 SDK 同名; 结果对象里 `ok` 是业务结论
+        def("netCall", B_NET_CALL, 2);
+        def("netCallAsync", B_NET_CALL_ASYNC, 2);
+        def("netCancel", B_NET_CANCEL, 1);
+        def("netFetch", B_NET_FETCH, 2);
+        def("netDownload", B_NET_DOWNLOAD, 2);
+        def("netWsConnect", B_NET_WS_CONNECT, 1);
+        def("netWsSend", B_NET_WS_SEND, 2);
+        def("netWsClose", B_NET_WS_CLOSE, 3);
+        def("netHttpServe", B_NET_HTTP_SERVE, 1);
+        def("netHttpRespond", B_NET_HTTP_RESPOND, 1);
+        def("netInfo", B_NET_INFO, 0);
+        // 后台任务: 只能碰本实例提交的 (`agentxx.agent.runtime` v2)
+        def("submitAsyncWork", B_SUBMIT_ASYNC_WORK, 1);
+        def("cancelAsyncWork", B_CANCEL_ASYNC_WORK, 1);
+        def("getAsyncWork", B_GET_ASYNC_WORK, 1);
+        def("listAsyncWork", B_LIST_ASYNC_WORK, 1);
+        // 提示词 / 会话 / 上下文 / 执行图 / 挂载查询
+        def("getPrompt", B_GET_PROMPT, 0);
+        def("setPrompt", B_SET_PROMPT, 1);
+        def("getToolPrompt", B_GET_TOOL_PROMPT, 1);
+        def("getSessionWorkDir", B_GET_SESSION_WORK_DIR, 1);
+        def("isCanceled", B_IS_CANCELED, 1);
+        def("getMessages", B_GET_MESSAGES, 1);
+        def("messagesCount", B_MESSAGES_COUNT, 1);
+        def("getGraphJson", B_GET_GRAPH_JSON, 0);
+        def("getGraphName", B_GET_GRAPH_NAME, 0);
+        def("setGraphJson", B_SET_GRAPH_JSON, 1);
+        def("listMounts", B_LIST_MOUNTS, 0);
+        def("getMount", B_GET_MOUNT, 1);
 
         int ok = JS_SetPropertyStr(ctx, global, "agentxx", bridge) >= 0;
         // 常用工具函数注入全局 (沙箱内可用): 裸 setTimeout/clearTimeout
@@ -1811,6 +2206,9 @@ private:
     /// 跨线程镜像 <name, weak_ptr> (互斥锁保护)
     std::mutex                                                     mirrorMtx_;
     std::map<std::string, std::weak_ptr<JsPluginCtx>, std::less<>> mirror_;
+    /// 后台任务事件登记 (主程序 io 线程回调时不解引用, 仅作释放记录)
+    std::mutex                 asyncWorkMtx_;
+    std::set<JsAsyncWorkHook*> asyncWorkHooks_;
 };
 
 /// 工具 execute 异步桥 (统一异步操作模型):
@@ -1964,6 +2362,11 @@ JsPluginCtx::~JsPluginCtx() {
         if (!JS_IsUndefined(agents)) {
             JS_FreeValue(ctx, agents);
         }
+        for (auto& [token, fn] : asyncWorkCallbacks) {
+            (void)token;
+            JS_FreeValue(ctx, fn);
+        }
+        asyncWorkCallbacks.clear();
         JS_FreeContext(ctx);
         ctx = nullptr;
     }
@@ -2107,6 +2510,108 @@ JSValue JsEngine::bridgeCall(
                 unsubscribeToken(i);
             }
         }
+    };
+
+    /// 同步网络调用: 阻塞 JS 线程直到网络侧给出结果 (只用于快速操作)
+    auto netSync = [&](const std::string& op, const std::string& argsJson) -> JSValue {
+        if (!iface.net || !iface.net->call) {
+            return netOutcomeToValue(ctx, PLUGINXX_RESULT_ERR_STATE, std::string{});
+        }
+        auto           opSv   = agentxx::plugin::PluginStringView::from(op.data(), op.size());
+        auto           argsSv = agentxx::plugin::PluginStringView::from(argsJson.data(), argsJson.size());
+        PluginxxString out{nullptr, 0};
+        const int32_t  code = iface.net->call(host, &opSv, &argsSv, &out);
+        std::string    json;
+        if (out.data) {
+            json.assign(out.data, static_cast<size_t>(out.size));
+            agentxx::plugin::PluginString::free(host, &out);
+        }
+        return netOutcomeToValue(ctx, code, json);
+    };
+
+    /// 异步网络调用 (Promise): 只受理, 结果经完成回调 settle
+    /// - Promise 总是 resolve 成结果对象; 受理失败也是对象 (`ok:false`)
+    auto netAsync = [&](const std::string& op, const std::string& argsJson) -> JSValue {
+        JSValue resolving[2];
+        JSValue promise = JS_NewPromiseCapability(ctx, resolving);
+        if (JS_IsException(promise)) {
+            return promise;
+        }
+        // 受理失败 (或主程序没提供网络能力): 立即 resolve 错误对象
+        const auto resolveNow = [&](JSValue out) {
+            JSValue argv[1] = {out};
+            JSValue rc      = JS_Call(ctx, resolving[0], JS_UNDEFINED, 1, argv);
+            JS_FreeValue(ctx, rc);
+            JS_FreeValue(ctx, out);
+            JS_FreeValue(ctx, resolving[0]);
+            JS_FreeValue(ctx, resolving[1]);
+        };
+        if (!iface.net || !iface.net->call_async) {
+            resolveNow(netOutcomeToValue(ctx, PLUGINXX_RESULT_ERR_STATE, std::string{}));
+            return promise;
+        }
+        auto* bridge    = new JsNetBridge{engine, ctx};
+        bridge->resolve = resolving[0];
+        bridge->reject  = resolving[1];
+        auto           opSv   = agentxx::plugin::PluginStringView::from(op.data(), op.size());
+        auto           argsSv = agentxx::plugin::PluginStringView::from(argsJson.data(), argsJson.size());
+        PluginxxOperatorNotify notify{&JsEngine::onNetCallDone, bridge};
+        PluginxxString         acceptedOut{nullptr, 0};
+        int64_t                requestId = 0;
+        const int32_t          code = iface.net->call_async(
+            host,
+            &opSv,
+            &argsSv,
+            &notify,
+            &acceptedOut,
+            &requestId
+        );
+        std::string accepted;
+        if (acceptedOut.data) {
+            accepted.assign(acceptedOut.data, static_cast<size_t>(acceptedOut.size));
+            agentxx::plugin::PluginString::free(host, &acceptedOut);
+        }
+        if (code != PLUGINXX_RESULT_OK) {
+            bool expected = false;
+            if (bridge->settled.compare_exchange_strong(
+                    expected,
+                    true,
+                    std::memory_order_acq_rel
+                )) {
+                bridge->engine->settleNetCall(bridge, PLUGINXX_OPERATOR_FAILED, std::move(accepted));
+            }
+            return promise;
+        }
+        bridge->requestId.store(requestId, std::memory_order_release);
+        return promise;
+    };
+
+    /// 网络参数 JSON: 第一个参数可以是 url 字符串或选项对象 (字段原样保留),
+    /// 再叠加一个字符串字段 (文件名 / 不需要时传空)
+    auto netArgs = [&](JSValueConst urlOrOptions,
+                       const char*  extraKey,
+                       const std::string& extraValue) -> std::string {
+        utilxx_base::Json args = utilxx_base::Json::object();
+        std::string       url;
+        if (JS_IsString(urlOrOptions)) {
+            url = jsToCppString(ctx, urlOrOptions);
+        } else if (JS_IsObject(urlOrOptions) && !JS_IsFunction(ctx, urlOrOptions)) {
+            try {
+                auto doc = utilxx_base::Json::parse(valueToJsonString(ctx, urlOrOptions));
+                if (doc.is_object()) {
+                    args = std::move(doc);
+                    url  = args.value("url", std::string{});
+                }
+            } catch (...) {
+            }
+        }
+        if (!url.empty()) {
+            args["url"] = url;
+        }
+        if (extraKey != nullptr && !extraValue.empty()) {
+            args[extraKey] = extraValue;
+        }
+        return args.dump();
     };
 
     switch (magic) {
@@ -2740,6 +3245,503 @@ JSValue JsEngine::bridgeCall(
             return iface.permission->unregister_tool_permission(host, pctx->scope(), &nameSv) == 0
                        ? JS_TRUE
                        : JS_FALSE;
+        }
+
+        // ---- 网络 (`agentxx.net`): 插件不自己建连接 ----
+        // 同步入口用于快速操作 (`ws.connect` / `ws.send` / `http.serve` / `net.info` …);
+        // 慢操作 (`http.fetch` / `http.download`) 走 Promise, 不占住 JS 线程。
+        // 注意: 同一引擎里的脚本共享一份网络资源 (归属是该插件实例), 连接 id 要自己带前缀。
+        case B_NET_CALL: {
+            if (argc < 1 || !JS_IsString(argv[0])) {
+                return JS_ThrowTypeError(ctx, "netCall: op string required");
+            }
+            return netSync(
+                jsToCppString(ctx, argv[0]),
+                argc >= 2 ? argsJsonText(ctx, argv[1]) : std::string{"{}"}
+            );
+        }
+
+        case B_NET_CALL_ASYNC: {
+            if (argc < 1 || !JS_IsString(argv[0])) {
+                return JS_ThrowTypeError(ctx, "netCallAsync: op string required");
+            }
+            return netAsync(
+                jsToCppString(ctx, argv[0]),
+                argc >= 2 ? argsJsonText(ctx, argv[1]) : std::string{"{}"}
+            );
+        }
+
+        case B_NET_FETCH:
+        case B_NET_DOWNLOAD: {
+            // netFetch(urlOrOptions) / netDownload(urlOrOptions, fileName?)
+            // - 选项对象的字段原样交给网络侧 (`method` / `headers` / `timeoutMs` …)
+            const char* op = magic == B_NET_DOWNLOAD ? pluginxx::net_op::httpDownload
+                                                     : pluginxx::net_op::httpFetch;
+            if (argc < 1) {
+                return JS_ThrowTypeError(ctx, "netFetch/netDownload: url required");
+            }
+            std::string fileName;
+            if (argc >= 2 && JS_IsString(argv[1])) {
+                fileName = jsToCppString(ctx, argv[1]);
+            }
+            return netAsync(op, netArgs(argv[0], "fileName", fileName));
+        }
+
+        case B_NET_WS_CONNECT: {
+            // netWsConnect(urlOrOptions): ok 只表示已发起, 握手结果看 `ws.open` 事件
+            if (argc < 1) {
+                return JS_ThrowTypeError(ctx, "netWsConnect: url required");
+            }
+            return netSync(pluginxx::net_op::wsConnect, netArgs(argv[0], nullptr, std::string{}));
+        }
+
+        case B_NET_WS_SEND: {
+            if (argc < 2) {
+                return JS_ThrowTypeError(ctx, "netWsSend: (id, text) required");
+            }
+            utilxx_base::Json args = utilxx_base::Json::object();
+            args["id"]             = jsToCppString(ctx, argv[0]);
+            args["text"]           = jsToCppString(ctx, argv[1]);
+            return netSync(pluginxx::net_op::wsSend, args.dump());
+        }
+
+        case B_NET_WS_CLOSE: {
+            if (argc < 1) {
+                return JS_ThrowTypeError(ctx, "netWsClose: id required");
+            }
+            utilxx_base::Json args = utilxx_base::Json::object();
+            args["id"]             = jsToCppString(ctx, argv[0]);
+            int64_t closeCode      = 1000;
+            if (argc >= 2 && JS_IsNumber(argv[1])) {
+                JS_ToInt64(ctx, &closeCode, argv[1]);
+            }
+            args["code"] = closeCode;
+            if (argc >= 3) {
+                args["reason"] = jsToCppString(ctx, argv[2]);
+            }
+            return netSync(pluginxx::net_op::wsClose, args.dump());
+        }
+
+        case B_NET_HTTP_SERVE:
+        case B_NET_HTTP_RESPOND: {
+            const char* op = magic == B_NET_HTTP_SERVE ? pluginxx::net_op::httpServe
+                                                      : pluginxx::net_op::httpRespond;
+            return netSync(op, argc >= 1 ? argsJsonText(ctx, argv[0]) : std::string{"{}"});
+        }
+
+        case B_NET_INFO:
+            return netSync(pluginxx::net_op::info, "{}");
+
+        case B_NET_CANCEL: {
+            int64_t requestId = 0;
+            if (argc >= 1) {
+                JS_ToInt64(ctx, &requestId, argv[0]);
+            }
+            if (!iface.net || !iface.net->cancel || requestId <= 0) {
+                return netOutcomeToValue(ctx, PLUGINXX_RESULT_ERR_ARG, std::string{});
+            }
+            PluginxxString out{nullptr, 0};
+            const int32_t  code = iface.net->cancel(host, requestId, &out);
+            std::string    json;
+            if (out.data) {
+                json.assign(out.data, static_cast<size_t>(out.size));
+                agentxx::plugin::PluginString::free(host, &out);
+            }
+            return netOutcomeToValue(ctx, code, json);
+        }
+
+        // ---- 后台任务 (`agentxx.agent.runtime` v2): 只能碰本实例提交的 ----
+        case B_SUBMIT_ASYNC_WORK: {
+            if (!iface.runtime || !iface.runtime->submit_async_work) {
+                return JS_NewString(ctx, ""); // 主程序不支持: 空 id (与 C++ SDK 同义)
+            }
+            if (argc < 1 || !JS_IsObject(argv[0])) {
+                return JS_ThrowTypeError(ctx, "submitAsyncWork: options object required");
+            }
+            JSValueConst opt = argv[0];
+            // kind: 字符串 `agent`/`tool` 或数字; 给了 toolName 即 `tool`
+            int32_t kind = static_cast<int32_t>(propInt64(ctx, opt, "kind", 0));
+            {
+                JSValue kv = JS_GetPropertyStr(ctx, opt, "kind");
+                if (JS_IsString(kv)) {
+                    kind = jsToCppString(ctx, kv) == "tool" ? 1 : 0;
+                }
+                JS_FreeValue(ctx, kv);
+            }
+            const std::string toolName = propString(ctx, opt, "toolName");
+            if (!toolName.empty()) {
+                kind = 1;
+            }
+            // interruptPolicy: `bubble`/`deny`/`allow` 或数字; 缺省跟随创建者
+            int32_t interruptPolicy = -1;
+            {
+                JSValue pv = JS_GetPropertyStr(ctx, opt, "interruptPolicy");
+                if (JS_IsString(pv)) {
+                    const std::string text = jsToCppString(ctx, pv);
+                    interruptPolicy = text == "bubble" ? 0 : (text == "deny" ? 1 : (text == "allow" ? 2 : -1));
+                } else if (JS_IsNumber(pv)) {
+                    JS_ToInt32(ctx, &interruptPolicy, pv);
+                }
+                JS_FreeValue(ctx, pv);
+            }
+            const std::string name           = propString(ctx, opt, "name");
+            const std::string systemPrompt   = propString(ctx, opt, "systemPrompt");
+            const std::string message        = propString(ctx, opt, "message");
+            const std::string model          = propString(ctx, opt, "model");
+            const std::string sessionId      = propString(ctx, opt, "sessionId");
+            const std::string queueKey       = propString(ctx, opt, "queueKey");
+            const std::string workDir        = propString(ctx, opt, "workDir");
+            const std::string language       = propString(ctx, opt, "language");
+            const std::string notifyDelivery = propString(ctx, opt, "notifyDelivery");
+            const std::string toolsJson      = propJson(ctx, opt, "tools");
+            const std::string pluginsJson    = propJson(ctx, opt, "plugins");
+            const std::string mcpJson        = propJson(ctx, opt, "mcpServers");
+            const std::string skillsJson     = propJson(ctx, opt, "skills");
+            const std::string memoryJson     = propJson(ctx, opt, "memoryFiles");
+            const std::string ragJson        = propJson(ctx, opt, "ragDocs");
+            const std::string allowJson      = propJson(ctx, opt, "permissionAllow");
+            const std::string denyJson       = propJson(ctx, opt, "permissionDeny");
+            const std::string toolArgsJson   = propJson(ctx, opt, "toolArgs");
+
+            // 任务事件回调: 存本实例的回调表, 主程序事件投递回 JS 线程再调
+            int64_t          callbackToken = 0;
+            JsAsyncWorkHook* hook          = nullptr;
+            JSValue          eventFn       = JS_GetPropertyStr(ctx, opt, "onEvent");
+            if (JS_IsFunction(ctx, eventFn)) {
+                callbackToken = ++pctx->nextAsyncWorkToken;
+                pctx->asyncWorkCallbacks[callbackToken] = JS_DupValue(ctx, eventFn);
+                hook = engine->registerAsyncWorkHook(pctx->instanceKey, callbackToken);
+            }
+            JS_FreeValue(ctx, eventFn);
+
+            auto sv = [](const std::string& s) {
+                return agentxx::plugin::PluginStringView::from(s.data(), s.size());
+            };
+            AgentxxPluginAsyncWorkSpec spec{};
+            spec.struct_size          = sizeof(AgentxxPluginAsyncWorkSpec);
+            spec.kind                 = kind;
+            spec.interrupt_policy     = interruptPolicy;
+            spec.session_store        = static_cast<int32_t>(propInt64(ctx, opt, "sessionStore", -1));
+            spec.interrupt_timeout_ms = propInt64(ctx, opt, "interruptTimeoutMs", 0);
+            spec.run_timeout_ms       = propInt64(ctx, opt, "runTimeoutMs", 0);
+            spec.delay_ms             = propInt64(ctx, opt, "delayMs", 0);
+            spec.queue_timeout_ms     = propInt64(ctx, opt, "queueTimeoutMs", 0);
+            spec.session_id           = sv(sessionId);
+            spec.queue_key            = sv(queueKey);
+            spec.name                 = sv(name);
+            spec.system_prompt        = sv(systemPrompt);
+            spec.message              = sv(message);
+            spec.model                = sv(model);
+            spec.tools_json           = sv(toolsJson);
+            spec.plugins_json         = sv(pluginsJson);
+            spec.mcp_servers_json     = sv(mcpJson);
+            spec.skills_json          = sv(skillsJson);
+            spec.memory_files_json    = sv(memoryJson);
+            spec.rag_docs_json        = sv(ragJson);
+            spec.work_dir             = sv(workDir);
+            spec.language             = sv(language);
+            spec.permission_allow_json = sv(allowJson);
+            spec.permission_deny_json  = sv(denyJson);
+            spec.notify_delivery       = sv(notifyDelivery);
+            spec.tool_name             = sv(toolName);
+            spec.tool_args_json        = sv(toolArgsJson);
+            spec.on_event              = hook ? &JsEngine::onAsyncWorkEvent : nullptr;
+            spec.user_data             = hook;
+
+            PluginxxString out{nullptr, 0};
+            const int32_t  rc = iface.runtime->submit_async_work(host, &spec, &out);
+            std::string    asyncId;
+            if (out.data) {
+                asyncId.assign(out.data, static_cast<size_t>(out.size));
+                agentxx::plugin::PluginString::free(host, &out);
+            }
+            if (rc != AGENTXX_RESULT_OK) {
+                // 提交被拒: 回调不会再被调用, 当场释放登记与 JS 回调
+                if (hook) {
+                    engine->releaseAsyncWorkHook(hook);
+                    auto it = pctx->asyncWorkCallbacks.find(callbackToken);
+                    if (it != pctx->asyncWorkCallbacks.end()) {
+                        JS_FreeValue(ctx, it->second);
+                        pctx->asyncWorkCallbacks.erase(it);
+                    }
+                }
+                return JS_NewString(ctx, "");
+            }
+            return JS_NewStringLen(ctx, asyncId.data(), asyncId.size());
+        }
+
+        case B_CANCEL_ASYNC_WORK: {
+            if (!iface.runtime || !iface.runtime->cancel_async_work || argc < 1) {
+                return JS_FALSE;
+            }
+            const std::string id   = jsToCppString(ctx, argv[0]);
+            auto              idSv = agentxx::plugin::PluginStringView::from(id.data(), id.size());
+            return iface.runtime->cancel_async_work(host, &idSv) == AGENTXX_RESULT_OK ? JS_TRUE
+                                                                                    : JS_FALSE;
+        }
+
+        case B_GET_ASYNC_WORK: {
+            if (!iface.runtime || !iface.runtime->get_async_work || argc < 1) {
+                return JS_NULL;
+            }
+            const std::string id   = jsToCppString(ctx, argv[0]);
+            auto              idSv = agentxx::plugin::PluginStringView::from(id.data(), id.size());
+            PluginxxString    out{nullptr, 0};
+            const int32_t     rc = iface.runtime->get_async_work(host, &idSv, &out);
+            std::string       json;
+            if (out.data) {
+                json.assign(out.data, static_cast<size_t>(out.size));
+                agentxx::plugin::PluginString::free(host, &out);
+            }
+            // 主程序对不存在的任务返回 `{}`; 这里给 null 更直观
+            if (rc != AGENTXX_RESULT_OK || json.empty() || json == "{}") {
+                return JS_NULL;
+            }
+            return jsonTextToValue(ctx, json, "<async_work>");
+        }
+
+        case B_LIST_ASYNC_WORK: {
+            if (!iface.runtime || !iface.runtime->list_async_work) {
+                return JS_NewArray(ctx);
+            }
+            const std::string sessionId
+                = argc >= 1 && JS_IsString(argv[0]) ? jsToCppString(ctx, argv[0]) : std::string{};
+            auto           sidSv = agentxx::plugin::PluginStringView::from(
+                sessionId.data(),
+                sessionId.size()
+            );
+            PluginxxString out{nullptr, 0};
+            const int32_t  rc = iface.runtime->list_async_work(host, &sidSv, &out);
+            std::string    json;
+            if (out.data) {
+                json.assign(out.data, static_cast<size_t>(out.size));
+                agentxx::plugin::PluginString::free(host, &out);
+            }
+            if (rc != AGENTXX_RESULT_OK) {
+                return JS_NewArray(ctx);
+            }
+            JSValue arr = jsonTextToValue(ctx, json, "<async_works>");
+            if (!JS_IsArray(arr)) {
+                JS_FreeValue(ctx, arr);
+                return JS_NewArray(ctx);
+            }
+            return arr;
+        }
+
+        // ---- 提示词 / 会话 / 上下文 / 执行图 / 挂载查询 ----
+        case B_GET_PROMPT: {
+            if (!iface.prompt || !iface.prompt->get_prompt) {
+                return JS_NULL;
+            }
+            PluginxxString out{nullptr, 0};
+            const int32_t  rc = iface.prompt->get_prompt(host, pctx->scope(), &out);
+            std::string    json;
+            if (out.data) {
+                json.assign(out.data, static_cast<size_t>(out.size));
+                agentxx::plugin::PluginString::free(host, &out);
+            }
+            if (rc != AGENTXX_RESULT_OK) {
+                return JS_NULL;
+            }
+            return jsonTextToValue(ctx, json, "<prompt>");
+        }
+
+        case B_SET_PROMPT: {
+            if (!iface.prompt || !iface.prompt->set_prompt || argc < 1) {
+                return JS_FALSE;
+            }
+            const std::string json   = argsJsonText(ctx, argv[0]);
+            auto              jsonSv = agentxx::plugin::PluginStringView::from(
+                json.data(),
+                json.size()
+            );
+            return iface.prompt->set_prompt(host, pctx->scope(), &jsonSv) == AGENTXX_RESULT_OK
+                       ? JS_TRUE
+                       : JS_FALSE;
+        }
+
+        case B_GET_TOOL_PROMPT: {
+            if (!iface.prompt || !iface.prompt->get_tool_prompt || argc < 1) {
+                return JS_NULL;
+            }
+            const std::string tool = jsToCppString(ctx, argv[0]);
+            auto toolSv = agentxx::plugin::PluginStringView::from(tool.data(), tool.size());
+            PluginxxString out{nullptr, 0};
+            const int32_t  rc = iface.prompt->get_tool_prompt(host, &toolSv, &out);
+            std::string    json;
+            if (out.data) {
+                json.assign(out.data, static_cast<size_t>(out.size));
+                agentxx::plugin::PluginString::free(host, &out);
+            }
+            if (rc != AGENTXX_RESULT_OK || json.empty()) {
+                return JS_NULL;
+            }
+            return jsonTextToValue(ctx, json, "<tool_prompt>");
+        }
+
+        case B_GET_SESSION_WORK_DIR: {
+            if (!iface.session || !iface.session->get_session_work_dir) {
+                return JS_NewString(ctx, "");
+            }
+            const std::string sessionId
+                = argc >= 1 && JS_IsString(argv[0]) ? jsToCppString(ctx, argv[0]) : std::string{};
+            auto sidSv = agentxx::plugin::PluginStringView::from(
+                sessionId.data(),
+                sessionId.size()
+            );
+            PluginxxString out{nullptr, 0};
+            const int32_t  rc
+                = iface.session->get_session_work_dir(host, pctx->scope(), &sidSv, &out);
+            if (rc != AGENTXX_RESULT_OK || !out.data) {
+                return JS_NewString(ctx, "");
+            }
+            JSValue dir = JS_NewStringLen(ctx, out.data, static_cast<size_t>(out.size));
+            agentxx::plugin::PluginString::free(host, &out);
+            return dir;
+        }
+
+        case B_IS_CANCELED: {
+            if (!iface.session || !iface.session->is_canceled) {
+                return JS_FALSE;
+            }
+            const std::string threadId
+                = argc >= 1 && JS_IsString(argv[0]) ? jsToCppString(ctx, argv[0]) : std::string{};
+            auto tidSv = agentxx::plugin::PluginStringView::from(
+                threadId.data(),
+                threadId.size()
+            );
+            return iface.session->is_canceled(host, pctx->scope(), &tidSv) != 0 ? JS_TRUE
+                                                                               : JS_FALSE;
+        }
+
+        case B_GET_MESSAGES: {
+            if (!iface.context || !iface.context->get_messages || argc < 1) {
+                return JS_NewArray(ctx);
+            }
+            const std::string sessionId = jsToCppString(ctx, argv[0]);
+            auto sidSv = agentxx::plugin::PluginStringView::from(
+                sessionId.data(),
+                sessionId.size()
+            );
+            PluginxxString out{nullptr, 0};
+            const int32_t  rc
+                = iface.context->get_messages(host, pctx->scope(), &sidSv, &out);
+            std::string json;
+            if (out.data) {
+                json.assign(out.data, static_cast<size_t>(out.size));
+                agentxx::plugin::PluginString::free(host, &out);
+            }
+            if (rc != 0) {
+                return JS_NewArray(ctx);
+            }
+            JSValue arr = jsonTextToValue(ctx, json, "<messages>");
+            if (!JS_IsArray(arr)) {
+                JS_FreeValue(ctx, arr);
+                return JS_NewArray(ctx);
+            }
+            return arr;
+        }
+
+        case B_MESSAGES_COUNT: {
+            if (!iface.context || !iface.context->messages_count || argc < 1) {
+                return JS_NewInt32(ctx, -1);
+            }
+            const std::string sessionId = jsToCppString(ctx, argv[0]);
+            auto sidSv = agentxx::plugin::PluginStringView::from(
+                sessionId.data(),
+                sessionId.size()
+            );
+            return JS_NewInt64(
+                ctx,
+                iface.context->messages_count(host, pctx->scope(), &sidSv)
+            );
+        }
+
+        case B_GET_GRAPH_JSON: {
+            if (!iface.graph || !iface.graph->get_graph_json) {
+                return JS_NULL;
+            }
+            PluginxxString out{nullptr, 0};
+            const int32_t  rc = iface.graph->get_graph_json(host, pctx->scope(), &out);
+            std::string    json;
+            if (out.data) {
+                json.assign(out.data, static_cast<size_t>(out.size));
+                agentxx::plugin::PluginString::free(host, &out);
+            }
+            if (rc != AGENTXX_RESULT_OK) {
+                return JS_NULL;
+            }
+            return jsonTextToValue(ctx, json, "<graph>");
+        }
+
+        case B_GET_GRAPH_NAME: {
+            if (!iface.graph || !iface.graph->get_graph_name) {
+                return JS_NewString(ctx, "");
+            }
+            PluginxxString out{nullptr, 0};
+            const int32_t  rc = iface.graph->get_graph_name(host, pctx->scope(), &out);
+            if (rc != AGENTXX_RESULT_OK || !out.data) {
+                return JS_NewString(ctx, "");
+            }
+            JSValue name = JS_NewStringLen(ctx, out.data, static_cast<size_t>(out.size));
+            agentxx::plugin::PluginString::free(host, &out);
+            return name;
+        }
+
+        case B_SET_GRAPH_JSON: {
+            if (!iface.graph || !iface.graph->set_graph_json || argc < 1) {
+                return JS_FALSE;
+            }
+            const std::string json   = argsJsonText(ctx, argv[0]);
+            auto              jsonSv = agentxx::plugin::PluginStringView::from(
+                json.data(),
+                json.size()
+            );
+            return iface.graph->set_graph_json(host, pctx->scope(), &jsonSv) == AGENTXX_RESULT_OK
+                       ? JS_TRUE
+                       : JS_FALSE;
+        }
+
+        case B_LIST_MOUNTS: {
+            if (!iface.mount || !iface.mount->list) {
+                return JS_NewArray(ctx);
+            }
+            PluginxxString out{nullptr, 0};
+            if (iface.mount->list(host, &out) != AGENTXX_RESULT_OK || !out.data) {
+                return JS_NewArray(ctx);
+            }
+            std::string json(out.data, static_cast<size_t>(out.size));
+            agentxx::plugin::PluginString::free(host, &out);
+            JSValue arr = jsonTextToValue(ctx, json, "<mounts>");
+            if (!JS_IsArray(arr)) {
+                JS_FreeValue(ctx, arr);
+                return JS_NewArray(ctx);
+            }
+            return arr;
+        }
+
+        case B_GET_MOUNT: {
+            if (!iface.mount || !iface.mount->get) {
+                return JS_NULL;
+            }
+            // 缺省查询本实例所属的 agent
+            const std::string agentId
+                = argc >= 1 && JS_IsString(argv[0]) ? jsToCppString(ctx, argv[0])
+                                                    : pctx->scopeAgentId;
+            if (agentId.empty()) {
+                return JS_NULL;
+            }
+            auto agentSv = agentxx::plugin::PluginStringView::from(
+                agentId.data(),
+                agentId.size()
+            );
+            PluginxxString out{nullptr, 0};
+            if (iface.mount->get(host, &agentSv, &out) != AGENTXX_RESULT_OK || !out.data) {
+                return JS_NULL;
+            }
+            std::string json(out.data, static_cast<size_t>(out.size));
+            agentxx::plugin::PluginString::free(host, &out);
+            return jsonTextToValue(ctx, json, "<mount>");
         }
 
         default:

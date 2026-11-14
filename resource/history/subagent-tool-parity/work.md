@@ -158,11 +158,75 @@ JS SDK 对齐 (与 C++ 插件 SDK 同名同义):
 
 ## 剩余事项
 
-- JS SDK 与 C++ 侧仍不对齐的面: `net` (网络)、`runtime` (自建根/会话通道)、
-  `async work`、`graph` (改图/节点类型)、工具特化渲染、`scheduler`/`tasks` 的协程驱动。
-  这些目前必须写在 C++ 壳里; 后续按需逐表补齐。
+- JS SDK 与 C++ 侧仍不对齐的面: `runtime` (自建根 / 会话通道 / 触发器 / 定时器)、
+  工具特化渲染 (UI 线程回调)、`scheduler`/`tasks` 的协程驱动。这些目前必须写在 C++ 壳里;
+  后续按需逐表补齐。(`net` / 后台任务 / 提示词 / 会话 / 上下文 / 执行图 / 挂载查询已补齐, 见下节)
 - 未加多 agent 视角的 JS 自动化用例 (`plugins` 模块覆盖了单 agent 的 load/disable/enable
   全流程; 多挂载由 `ScopeHandle` + `scopes_` 逻辑保证, 建议后续在 `plugin_multi_mount`
   里加一条 JS 插件双 agent 用例)。
 - 每个子代理多一次 N 个插件 mount (纯注册) 与 MCP 重新握手; 只在 `agentxx_subagent`
   路径发生, 压缩/内部路径不受影响。需要时可用性能基准测一轮 spawn 增量。
+
+## 第二步: JS SDK 补齐网络 / 后台任务 / 查询面
+
+### 改了什么
+
+- `agent/plugins/agentxx_javascript_engine/agentxx_javascript_engine.cpp`
+    - 新增 bridge magic: 网络 (`B_NET_CALL` / `B_NET_CALL_ASYNC` / `B_NET_CANCEL` /
+      `B_NET_FETCH` / `B_NET_DOWNLOAD` / `B_NET_WS_CONNECT` / `B_NET_WS_SEND` /
+      `B_NET_WS_CLOSE` / `B_NET_HTTP_SERVE` / `B_NET_HTTP_RESPOND` / `B_NET_INFO`)、
+      后台任务 (`B_SUBMIT_ASYNC_WORK` / `B_CANCEL_ASYNC_WORK` / `B_GET_ASYNC_WORK` /
+      `B_LIST_ASYNC_WORK`)、查询面 (`B_GET_PROMPT` / `B_SET_PROMPT` / `B_GET_TOOL_PROMPT` /
+      `B_GET_SESSION_WORK_DIR` / `B_IS_CANCELED` / `B_GET_MESSAGES` / `B_MESSAGES_COUNT` /
+      `B_GET_GRAPH_JSON` / `B_GET_GRAPH_NAME` / `B_SET_GRAPH_JSON` / `B_LIST_MOUNTS` /
+      `B_GET_MOUNT`)
+    - 网络: 结果始终是对象 (`ok` 是业务结论), Promise 不 reject; 异步完成经
+      `JsNetBridge` + `onNetCallDone` 投递回 JS 线程 settle, 受理时给出的请求号补成
+      `requestId` 字段 (之后可 `netCancel`)
+    - 后台任务: 选项对象 → `AgentxxPluginAsyncWorkSpec`; `onEvent(phase, payload)` 的
+      JS 回调存在实例的 `asyncWorkCallbacks` 表, 主程序 io 线程事件经
+      `JsAsyncWorkHook` + `onAsyncWorkEvent` 转投 JS 线程; 终态 (`finished` / `canceled`)
+      到达即释放登记, 引擎析构清理未收到终态的残留
+    - 新增通用小工具: `propString` / `propInt64` / `propBool` / `propJson` /
+      `argsJsonText` / `jsonTextToValue` / `netResultValue` / `netOutcomeToValue` /
+      `netErrorObject` / `asyncWorkPhaseName` (`valueToJsonString` 改为 static, 供它们复用)
+- `agent/plugins/example_js/plugin.js`: 新增 `js_sdk_probe` (查询面形状自查) 与
+  `js_net_fetch` (async HTTP; 连不上按 `ok:false` 返回) 两个示例工具
+- `agent/test/plugin/test_plugins.cpp`: 新增 `16b` / `16c` 两段断言 (形状约定 +
+  网络失败不抛异常), `plugins` 模块 599 → 627
+- 文档: `docs/zh-cn/design/plugins.md` §12 增加网络/后台任务/查询面对齐说明与剩余面;
+  `AGENTS.md` 同步
+
+### 验证
+
+| 模块 | 结果 |
+|---|---|
+| `plugins` (含新增 `16b` / `16c`) | 627 通过 / 0 失败 |
+| `plugin_runtime` / `plugin_sdk` / `plugin_bridge` | 730 / 133 / 193, 全 0 失败 |
+| `plugin_host_mount` / `plugin_multi_mount` / `plugin_cleanup` | 146 / 47 / 90, 全 0 失败 |
+| `plugin_dispatch` / `plugin_feature` / `plugin_point` / `plugin_broadcast` / `plugin_agent_runtime` | 112 / 34 / 68 / 90 / 221, 全 0 失败 |
+| `async_work` / `async_tools` / `agent` / `event_subagent` / `event_tools` | 138 / 178 / 223 / 52 / 97, 全 0 失败 |
+| `boundaries` / `config_keys` | 19 / 217, 全 0 失败 |
+
+插件重编与测试拷贝: 内层 lib 构建目录 `--target agentxx_javascript_engine` 与
+`--target example_js` (后者拷贝 `plugin.js`), 内层 test 目录 `--target agentxx_test`,
+再把 `agentxx_test.exe` 拷到 `exec/`。
+
+### 遇到的问题
+
+1. `build_plugins.ps1` 经 `pwsh -File` 启动时卡住不动 (无 cmake/cl 子进程, 日志一直为空),
+   直接 `cmake --build <内层 lib build> --config Debug --target ... --parallel 12` 正常。
+   本次构建与验证都改为直调 cmake。
+2. `valueToJsonString` 原本是非静态成员, 而新增的形状小工具是 static 且从 lambda 里调用 →
+   MSVC `C2352`; 改成 static (没有状态依赖)。
+3. `bridgeCall` 是静态成员函数, lambda 里不能写 `this->settleNetCall(...)`, 改为
+   `bridge->engine->settleNetCall(...)`。
+
+### 遗留的小口子
+
+- 脚本实例被销毁 (agent 卸载 / 脚本卸载) 时, 它提交的后台任务**不会**随之取消
+  (接口表只有按 asyncId 取消, 而实例销毁时主程序不代怔); 任务会继续跑完, 事件到
+  JS 线程后因查不到实例而丢弃。要取消就在卸载前自己调 `cancelAsyncWork`。
+- 同一引擎里的所有脚本共享一份网络资源 (属主 = 引擎这个插件实例), `ws.connect` 一类
+  连接 id 需要脚本自己加前缀避免相撞。
+- 工具特化渲染与 `runtime` (自建根 / 通道 / 触发器) 未做。

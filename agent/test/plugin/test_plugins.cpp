@@ -699,6 +699,80 @@ asio::awaitable<TestResult> run_plugin_tests() {
             }
         }
 
+        // ---- 16b. JS SDK 查询面 (提示词 / 会话 / 上下文 / 执行图 / 挂载 / 网络 / 后台任务) ----
+        // 这些桥方法与 C++ 插件 SDK 同名同义; 脚本只能看到返回值的形状
+        // (空会话 / 未配置这类"没有数据"的情况都应是 null 或空串, 不能是 undefined)
+        {
+            auto tool = ctx->toolRegistry->find("js_sdk_probe");
+            XX_TEST_EXPECT_TRUE(tool != nullptr);
+            if (tool) {
+                const auto result = co_await tool->execute_async(
+                    utilxx_base::Json{{"sessionId", "t-sdk"}}
+                );
+                XX_TEST_EXPECT_TRUE(result.status == agentxx::util::ToolStatus::Ok);
+                auto       j      = utilxx_base::Json::parse(result.text);
+                const auto kindIs = [&j](
+                                        const char*                 key,
+                                        std::initializer_list<const char*> want
+                                    ) {
+                    if (!j.contains(key) || !j[key].is_string()) {
+                        return false;
+                    }
+                    const std::string got = j[key].get<std::string>();
+                    for (const char* w : want) {
+                        if (got == w) {
+                            return true;
+                        }
+                    }
+                    return false;
+                };
+                // 挂载作用域 (实例属于哪个 agent)
+                XX_TEST_EXPECT_TRUE(kindIs("scope", {"string"}));
+                XX_TEST_EXPECT_TRUE(kindIs("mount", {"string", "null"}));
+                XX_TEST_EXPECT_TRUE(kindIs("language", {"string"}));
+                XX_TEST_EXPECT_TRUE(kindIs("setLanguage", {"boolean"}));
+                XX_TEST_EXPECT_TRUE(kindIs("workDir", {"string"}));
+                XX_TEST_EXPECT_TRUE(kindIs("canceled", {"boolean"}));
+                // 执行图 (未构建图时为 null)
+                XX_TEST_EXPECT_TRUE(kindIs("graphName", {"string"}));
+                XX_TEST_EXPECT_TRUE(kindIs("graph", {"null", "object"}));
+                // 上下文查询: 空会话给空数组, 条数给数字
+                XX_TEST_EXPECT_TRUE(j["messagesIsArray"].get<bool>());
+                XX_TEST_EXPECT_TRUE(kindIs("messagesCount", {"number"}));
+                // 提示词与工具提示词
+                XX_TEST_EXPECT_TRUE(kindIs("prompt", {"null", "object", "string"}));
+                XX_TEST_EXPECT_TRUE(kindIs("toolPrompt", {"null"}));
+                XX_TEST_EXPECT_TRUE(kindIs("shareStore", {"null"}));
+                // 网络: 入口总是给结果对象 (`ok` 是 boolean)
+                XX_TEST_EXPECT_TRUE(j["netInfoIsObject"].get<bool>());
+                XX_TEST_EXPECT_TRUE(kindIs("netInfoOkType", {"boolean"}));
+                XX_TEST_EXPECT_TRUE(kindIs("netCallOkType", {"boolean"}));
+                // 后台任务: 空参数被拒 (空 id); 查询/取消都是纯读取
+                XX_TEST_EXPECT_TRUE(kindIs("submitAsyncWork", {"string"}));
+                XX_TEST_EXPECT_TRUE(j["listAsyncWorkIsArray"].get<bool>());
+                XX_TEST_EXPECT_TRUE(kindIs("getAsyncWork", {"null"}));
+                XX_TEST_EXPECT_TRUE(j["cancelAsyncWork"].is_boolean());
+                XX_TEST_EXPECT_FALSE(j["cancelAsyncWork"].get<bool>());
+            }
+        }
+
+        // ---- 16c. JS 网络 (agentxx.net): 连不上按业务失败返回, Promise 不 reject ----
+        {
+            auto tool = ctx->toolRegistry->find("js_net_fetch");
+            XX_TEST_EXPECT_TRUE(tool != nullptr);
+            if (tool) {
+                const auto result = co_await tool->execute_async(
+                    utilxx_base::Json{{"url", "http://127.0.0.1:1/"}}
+                );
+                // 工具本身必须成功: 网络失败体现在返回值的 ok 上
+                XX_TEST_EXPECT_TRUE(result.status == agentxx::util::ToolStatus::Ok);
+                auto j = utilxx_base::Json::parse(result.text);
+                XX_TEST_EXPECT_TRUE(j["resultIsObject"].get<bool>());
+                XX_TEST_EXPECT_FALSE(j["ok"].get<bool>());
+                XX_TEST_EXPECT_TRUE(j["error"].is_string());
+            }
+        }
+
         // ---- JS 脚本顶层异常的事务化回滚 ----
         // 脚本先注册工具/事件/定时器再抛异常: load 必须失败, 且主程序注册表里
         // 不留下任何该脚本的注册
