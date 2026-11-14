@@ -11,9 +11,9 @@
 - [x] 步骤 2：注册表 + 两部分渲染查询 + `toolDisplayNameFor` + 按部分缓存/指纹
 - [x] 步骤 3：内置渲染器 + 4 个插件（模版 → 折叠内容 lambda，去掉 `" · "` 前导）
 - [x] 步骤 4：TUI（固定骨架、两部分查询、itemKey、删预取与嗅探）
-- [x] 步骤 5：测试（`plugin_runtime` / `client_plugins` / `tui_tool_header`）
-- [ ] 步骤 6：文档（`plugins.md` §9、`tui.md` §2.2/§2.14、`docs/en`、`AGENTS.md`）
-- [ ] 步骤 7：编译 + 插件重建 + 跑全量测试
+- [x] 步骤 5：测试（`plugin_runtime` / `client_plugins` / `tui_tool_header` / `tui_scroll`）
+- [x] 步骤 6：文档（`plugins.md` §9、`tui.md` §2.2/§2.14/§4、`docs/en`、`AGENTS.md`）
+- [x] 步骤 7：编译 + 插件重建 + 全量测试
 
 ## 每步改动与验证
 
@@ -125,19 +125,47 @@ tui_form          passed=84  failed=0
 tui_ui_items      passed=277 failed=0
 ui_items          passed=117 failed=0
 boundaries        passed=19  failed=0
+tui_scroll        passed=1004 failed=0
 ```
+
+### 步骤 6：文档
+
+- `docs/zh-cn/design/plugins.md` 的“工具特化渲染架构”第 1 条重写（显示名注册时确定、
+  两个回调、两份缓存、折叠内容不带 `" · "`、模版机制已删 + 新 SDK 示例）、第 2 条
+  （内置渲染器只给显示名 + 折叠内容）、第 6 条（语义渲染缓存：按部分 pending/沿用/版本,
+  未就绪帧不画 ` · `、失败走默认、无语义缓存时同步调用）、第 4 条（显示名与展开状态无关）。
+- `docs/zh-cn/design/tui.md`：§2.2 新增工具消息头骨架说明；§2.6 中断分段改为
+  “显示名同步可得”（删预取与“留空”约定）；§2.14 占位行改为
+  `- [工具] Read · 正在调用工具...` 并重写被取代帧的规则；§3.3 高度估算不得查两部分内容；
+  §4 回归表那一行按 `pending` 新语义重写。
+- `docs/en/design/plugins.md`：同步第 1 条（显示名 + 两个回调 + pending 帧）。
+- `AGENTS.md`：“参数自愈”那条去掉“预设模版摘要”，新增一条“工具特化渲染的注册形状”
+  （显示名注册时确定、折叠内容不带 ` · `、两部分各自缓存、旧插件 DLL 必须重建）。
+- 顺手清理的旧注释：`client_plugin_manager.h` 的 `queryToolRender`、
+  `test_client_plugins.cpp` 的两处“(模版)”、`test_tui_scroll.cpp` 场景 23 的注释与断言。
+
+### 步骤 7：编译与全量测试
+
+- `agentxx_static` / `agentxx_test` / `agentxx` 三个构建目录均编译通过（无新增警告）,
+  三个 `cmake --install` 都已执行（`exec/` 下的 exe 均为最新）。
+- 全量 `agentxx_test --log-level warn`：**passed=42786 failed=2**，两个失败都在
+  `input_delivery`（line 1184 / 1203，inject 输入的分页提示与 share store 取回）。
+  单跑两次：第一次同样 2 失败、第二次 139 通过 0 失败 —— 是既有的时序抖动
+  （与该模块共享代码的只有 agent 侧输入投递，与工具渲染无关）。
+- 插件：`build_plugins.ps1` 全量重建过一次，之后再未改插件源码（只改过 planning 的临时
+  调试日志，已删并重建）。
 
 ## 验证清单
 
-- [ ] `windows_debug_build.bat` 编译通过（无新增警告）
+- [x] 三个构建目录（lib/test/client）编译通过（无新增警告）
 - [x] `build_plugins.ps1` 重建 `agentxx_filesystem` / `agentxx_planning` /
       `agentxx_execute_command` / `agentxx_websearch`，`exec/plugins/*` 时间戳已更新
 - [x] `agentxx_test --log-level warn plugin_runtime client_plugins tui_tool_header`
-- [x] `agentxx_test --log-level warn plugin_sdk tui_widget tui_form tui_ui_items ui_items boundaries`
-- [ ] TUI 手工冒烟：占位行（符号 + 名字 + ` · ` + 提示，不可点击）、工具行各分支
-      （失败 / 自定义内容 / pending 留空 / 无自定义走默认 / 已有结果）、展开首行显示名+耗时、
-      历史回溯一致、插件禁用后回退默认渲染
-- [ ] 折叠行不再触发展开体渲染（日志或计数器确认只有展开态才请求 expanded）
+- [x] `agentxx_test --log-level warn plugin_sdk tui_widget tui_form tui_ui_items ui_items boundaries tui_scroll`
+- [x] 全量 `agentxx_test --log-level warn`（除 `input_delivery` 的 2 个抖动用例外全通过）
+- [ ] TUI 手工冒烟（同上；本次只有自动化覆盖，未经真实终端交互）
+- [x] 折叠行不再触发展开体渲染：`tui_tool_header` 的 pending 用例与 `client_plugins`
+      的分部分缓存用例覆盖（折叠态只查 `#c` 键）
 
 ## 注意事项 / 已知坑
 
@@ -159,10 +187,13 @@ boundaries        passed=19  failed=0
 - 占位行（`GenPhase::ToolCall`）单行、不可点击：`{符号} [工具] Read · 正在调用工具...`；
   工具名未解析时不画 ` · `。
 - `tui_tool_header` 的占位断言要同步：`Read receiving tool call...` → `Read · receiving tool call...`；
+  `tui_scroll` 场景 23（占位行显示名）同样要加 ` · `；
   `tool.running` 的 i18n 条目与使用一并删除（默认展开体的运行中行改用 `msg.genToolCalling`）。
+- 夹具与真机的差异（只影响测试写法）：`tui_tool_header` 的镜像渲染器只进 UI 注册表快照,
+  没有真实插件实例可注册到管理器 —— 所以“内容算出后上屏”的用例用
+  `resolveFromRegistry()` 直接在测试线程跑同一份回调并写入语义缓存，而不是 `drainIo()` 驱动
+  管理器。真实执行路径由 `client_plugins` 加载真插件 DLL 覆盖。
 - 判定口径：`pending == false` 且内容为空 = 没注册或回调返回 null → 默认渲染；
   `pending == true` 且无上一份 → 折叠不画 ` · `、展开留空。
 - 运行中的工具行只要特化内容就绪就照常用（不等完成）；`正在调用工具...`
   只出现在占位行与默认渲染的运行中行。
-- `ClientToolRenderEntry::displayName` 与 `renderClientTool` 删除后，
-  `message_list.cpp` 的 `queryToolRender` 要拆分并去掉对旧结果字段的引用。

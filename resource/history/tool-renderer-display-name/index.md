@@ -3,7 +3,7 @@
 | 项 | 内容 |
 |---|---|
 | 任务短名 | `tool-renderer-display-name` |
-| 状态 | **已规划，待实施**（2026-11-14：方案见 [plan.md](plan.md)，实施记录见 [work.md](work.md)） |
+| 状态 | **已完成**（2026-11-14：方案见 [plan.md](plan.md)，实施记录见 [work.md](work.md)） |
 | 范围 | `agent/lib`（C ABI / 注册表 / 渲染查询 / 缓存）、`agent/client`（TUI 工具行 + 占位行 + 中断分段）、内置渲染器与 4 个插件、测试、文档 |
 | 目标 | 注册表改成 `<toolName, {displayName, 折叠内容渲染, 展开内容渲染}>`：显示名注册时确定（首帧可见），折叠与展开内容分开渲染、各自缓存，工具行头行骨架固定 |
 
@@ -59,3 +59,23 @@
 不用它顶替。
 
 详见 [plan.md](plan.md)。
+
+## 结论
+
+- 注册结构体落地为 `AgentxxToolRenderSpec{struct_size, version, tool_name(8), display_name(24),
+  collapsed_fn(40), expanded_fn(48), user_data(56)}`（sizeof 64）；接口代次保持 5,
+  **旧插件 DLL 必须重建**。
+- 折叠内容与展开内容各自一个回调、各自一条缓存（键后缀 `#c`/`#e`、独立输入指纹与版本号）,
+  折叠行不再触发 diff/状态图这类展开体计算。
+- 工具行骨架固定，`" · "` 只在 TUI 加；显示名注册时确定, 首帧就可见 —— 老的
+  "名称结果 (`#工具名`)"、`starts_with(" ·")` 嗅探、`prefetchInterruptToolNames`、
+  `tool.running` 文案都删了。
+- 迁移完成的调用点：内置渲染器 (Store/Subagent)、`agentxx_filesystem`(10 个工具)、
+  `agentxx_websearch`、`agentxx_execute_command`、`agentxx_planning`、TUI 消息列表与占位行、
+  中断分段显示名。
+- 回归：`plugin_runtime` / `client_plugins` / `tui_tool_header` / `tui_scroll` / `plugin_sdk` /
+  `tui_widget` / `tui_form` / `tui_ui_items` / `ui_items` / `boundaries` 全通过；
+  全量 `agentxx_test` 42786 通过 2 失败（`input_delivery` 的 inject 分页用例，单跑复现不稳定,
+  与工具渲染无关）。
+- 偏差：无（`plan.md` 的方案全部落地）；额外多改了一处 —— `test_tui_scroll.cpp` 场景 23
+  的占位行断言（名字与提示现在是 ` · ` 连接）。
