@@ -1145,6 +1145,12 @@ public:
         JS_FreeValue(ctx, rc);
         JS_FreeValue(ctx, phaseV);
         JS_FreeValue(ctx, dataV);
+        // 终态之后不会再有事件: 把回调从表里删掉 (否则每提交一个任务就留一份函数)
+        if (phase == AGENTXX_PLUGIN_ASYNC_WORK_EVT_FINISHED
+            || phase == AGENTXX_PLUGIN_ASYNC_WORK_EVT_CANCELED) {
+            JS_FreeValue(ctx, fit->second);
+            pctx->asyncWorkCallbacks.erase(fit);
+        }
     }
 
     /// 一条通道事件的自有副本 (跨线程传递用)
@@ -1251,6 +1257,11 @@ public:
         }
         JS_FreeValue(ctx, rc);
         JS_FreeValue(ctx, ev);
+        // `closed` 是通道的最后一条事件: 回调用完就删, 不给长会话留垃圾
+        if (event.kind == AGENTXX_PLUGIN_CHANNEL_EVT_CLOSED) {
+            JS_FreeValue(ctx, fit->second);
+            pctx->channelCallbacks.erase(fit);
+        }
     }
 
     /// 工具 execute 桥 —— 异步启动 (统一异步操作模型):
