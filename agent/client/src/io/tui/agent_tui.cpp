@@ -1981,28 +1981,6 @@ void TUIClientAgentIO::onPeerMessage(agentxx::agent::WireMessage msg) {
                     sink.onPluginData(m);
                 });
                 postRedraw();
-            } else if constexpr (std::is_same_v<T, agentxx::agent::WireToolRendererRegister>) {
-                // agent 侧插件登记的工具渲染器快照 (显示名 + 有无内容回调)。
-                // 内容本身要回 agent 算, 见 ClientPluginManager 的远程渲染分支
-                if (auto mgr = pluginManager_) {
-                    std::vector<agentxx::plugin::ClientRemoteToolRenderer> list;
-                    list.reserve(m.renderers.size());
-                    for (const auto& r : m.renderers) {
-                        agentxx::plugin::ClientRemoteToolRenderer item;
-                        item.toolName     = r.toolName;
-                        item.displayName  = r.displayName;
-                        item.hasCollapsed = r.collapsed;
-                        item.hasExpanded  = r.expanded;
-                        item.owner        = r.owner;
-                        list.push_back(std::move(item));
-                    }
-                    mgr->applyRemoteToolRenderers(std::move(list));
-                }
-            } else if constexpr (std::is_same_v<T, agentxx::agent::WireToolRenderResult>) {
-                // 远程渲染结果: 写语义缓存 + 通知 UI 重建该消息块
-                if (auto mgr = pluginManager_) {
-                    mgr->applyRemoteToolRenderResult(m.requestId, m.ok, m.text, m.itemsJson);
-                }
             } else if constexpr (std::is_same_v<T, agentxx::agent::WireContextMessages>) {
                 {
                     std::lock_guard<std::mutex> lock(sharedState_.mutex());

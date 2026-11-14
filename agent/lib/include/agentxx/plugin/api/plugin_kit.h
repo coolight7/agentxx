@@ -272,8 +272,6 @@ struct AgentIfaces {
     const PluginxxCoroutineRuntimeIface* coroutineRuntime = nullptr;
     /// "agentxx.agent.mount": 挂载查询 (诊断与自查)
     const AgentxxPluginMountIface* mount = nullptr;
-    /// "agentxx.agent.tool_render": 工具特化渲染 (显示名 + 折叠/展开内容)
-    const AgentxxPluginToolRenderIface* toolRender = nullptr;
     /// "agentxx.agent.runtime": 会话运行时 (挂自己的根 / 开会话通道 / 事件驱动)
     const AgentxxPluginRuntimeIface* runtime = nullptr;
     /// "<应用名>.broadcasts": 广播 (频道声明 / 发布 / 订阅 / 读当前值 / 结束)
@@ -321,10 +319,6 @@ struct AgentIfaces {
         f.coroutineRuntime
             = queryInterface<PluginxxCoroutineRuntimeIface>(host, PLUGINXX_IFACE_COROUTINE_RUNTIME);
         f.mount = queryInterface<AgentxxPluginMountIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_MOUNT);
-        f.toolRender = queryInterface<AgentxxPluginToolRenderIface>(
-            host,
-            AGENTXX_PLUGIN_IFACE_AGENT_TOOL_RENDER
-        );
         f.runtime
             = queryInterface<AgentxxPluginRuntimeIface>(host, AGENTXX_PLUGIN_IFACE_AGENT_RUNTIME);
         return f;

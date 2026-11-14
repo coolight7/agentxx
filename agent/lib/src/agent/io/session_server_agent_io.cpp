@@ -7,7 +7,6 @@
 #include "agentxx/agent/context.h"
 #include "agentxx/agent/io/context_stats_wire.h"
 #include "agentxx/agent/session_store.h"
-#include "agentxx/agent/tool_render_bridge.h"
 #include "agentxx/event/event_stream.h"
 #include "agentxx/event/events.h"
 #include "agentxx/middlewares/permission.h"
@@ -1328,8 +1327,6 @@ void SessionServerAgentIO::onPeerMessage(
                 handleHostToolUnregister(m, sender);
             } else if constexpr (std::is_same_v<T, WireHostToolResult>) {
                 handleHostToolResult(m);
-            } else if constexpr (std::is_same_v<T, WireToolRenderRequest>) {
-                handleToolRenderRequest(m, sender);
             } else if constexpr (std::is_same_v<T, WireGetAppendComponentInfo>) {
                 if (!acceptSessionScope(m.sessionId, sender, "get_append_component_info")) {
                     return;
@@ -1931,14 +1928,6 @@ void SessionServerAgentIO::handleHello(
         sendContextStats();
     }
 
-    // 工具特化渲染登记表: 客户端首帧就要知道哪些工具有显示名/自定义内容,
-    // 晚于 Sync 下发也能用 (少了它只会在下次变化前一直走默认渲染)
-    if (sender) {
-        sendToolRenderers(sender);
-    } else {
-        sendToolRenderers();
-    }
-
     // 权限状态随握手下发: 客户端接入即知道当前是否已完全授权 (Info 侧边栏
     // 授权按钮的初值; 后续变更由权限状态事件广播保持同步)
     // - 仅在 agent 加载了权限中间件时下发: 该状态本就由权限中间件持有, 未加载
@@ -2089,10 +2078,6 @@ void SessionServerAgentIO::switchSession(std::string newThreadId) {
     // 模型列表外还要带上各模型的多模态能力 —— 客户端切换会话后收到的
     // WireModelInfo 若缺 capabilities, 其能力表将为空, 输入栏的附件按钮消失
     sendToPeer(buildModelInfo(config_.sessionId));
-
-    // 渲染登记表按 agent 而非会话归属 (插件挂在 agent 上), 但快照带 sessionId,
-    // 切换后重发一次, 客户端不必自己判断何时清空
-    sendToolRenderers();
 
     sendContextStats();
 }
@@ -2257,10 +2242,6 @@ asio::awaitable<void> SessionServerAgentIO::run() {
     // 轮次在跑 → 待注入输入, 空闲 → 开新轮)
     if (auto sess = session()) {
         sess->inputSink = weak_from_this();
-    }
-    // 工具渲染登记变化也由本端点收口 (插件注册表只管推快照, 怎么发给客户端是端点的事)
-    if (auto agent = agent_.lock(); agent && agent->agentContext) {
-        agent->agentContext->toolRenderSink = weak_from_this();
     }
     while (!stopped_.load(std::memory_order_acquire)) {
         if (pendingInsert_) {
@@ -2431,13 +2412,6 @@ void SessionServerAgentIO::stopImpl() {
             if (bound && bound.get() == static_cast<SessionInputSink*>(this)) {
                 sess->inputSink.reset();
             }
-        }
-    }
-    // 渲染登记变更出口同样解绑 (停止后再登记只影响本地状态, 不再尝试推给客户端)
-    if (auto agent = agent_.lock(); agent && agent->agentContext) {
-        auto bound = agent->agentContext->toolRenderSink.lock();
-        if (bound && bound.get() == static_cast<SessionToolRenderSink*>(this)) {
-            agent->agentContext->toolRenderSink.reset();
         }
     }
     cancelGraceTimer();
@@ -3204,109 +3178,6 @@ void SessionServerAgentIO::handleHostToolResult(const WireHostToolResult& resp) 
     } else {
         XX_LOGW("[host_tool] received result for unknown callId {}", resp.callId);
     }
-}
-
-// ---------------------------------------------------------------------------
-// 工具特化渲染 (agent 侧插件登记 → 客户端按需要内容)
-// ---------------------------------------------------------------------------
-
-void SessionServerAgentIO::sendToolRenderers(const std::shared_ptr<AgentIOTransportBase>& target) {
-    auto agent = agent_.lock();
-    if (!agent || !agent->agentContext) {
-        return;
-    }
-    WireToolRendererRegister msg;
-    msg.sessionId = config_.sessionId;
-    msg.renderers = collectToolRenderItems(*agent->agentContext);
-    if (target) {
-        if (target->alive()) {
-            sendToClient(target, std::move(msg));
-        }
-        return;
-    }
-    // 无存活客户端: 不排任何东西, 等下一次握手自然拿到快照
-    if (!hasAliveClient()) {
-        return;
-    }
-    broadcastToClients(msg);
-}
-
-void SessionServerAgentIO::onToolRenderersChanged() {
-    // 调用方可能在任意线程 (插件注册入口已投递到 io 线程, 这里仍按统一规矩回投)
-    asio::dispatch(ex_, [self = weak_from_this()]() {
-        if (auto io = self.lock()) {
-            io->sendToolRenderers();
-        }
-    });
-}
-
-void SessionServerAgentIO::handleToolRenderRequest(
-    const WireToolRenderRequest&                 req,
-    const std::shared_ptr<AgentIOTransportBase>& sender
-) {
-    const auto reply = [&](WireToolRenderResult res) {
-        if (sender) {
-            if (sender->alive()) {
-                sendToClient(sender, std::move(res));
-            }
-            return;
-        }
-        sendToPeer(std::move(res));
-    };
-
-    auto agent = agent_.lock();
-    if (!agent || !agent->agentContext) {
-        WireToolRenderResult res;
-        res.requestId    = req.requestId;
-        res.errorMessage = "no agent";
-        reply(std::move(res));
-        return;
-    }
-
-    // 凭据必须在 io 线程取 (挂载登记表只在 io 线程读写); 没登记项就当场回失败,
-    // 不走线程池 —— 客户端只会缓存"没内容", 不会反复来问
-    auto plan = findToolRenderCallable(
-        *agent->agentContext,
-        req.toolName,
-        req.part != "expanded"
-    );
-    if (!plan.has_value()) {
-        WireToolRenderResult res;
-        res.requestId    = req.requestId;
-        res.errorMessage = "no renderer";
-        reply(std::move(res));
-        return;
-    }
-
-    // 回调执行投递到工作线程: 插件回调可能耗时 (JS 引擎还要等 JS 线程),
-    // 不能挡住会话推进
-    auto self = shared_from_this();
-    auto pool = agent->agentContext->threadPool;
-    asio::co_spawn(
-        ex_,
-        [self, call = std::move(*plan), req, sender, pool]() -> asio::awaitable<void> {
-            WireToolRenderResult res;
-            if (pool) {
-                res = co_await utilxx::offloadAsync<WireToolRenderResult>(
-                    *pool,
-                    [call, req]() -> asio::awaitable<WireToolRenderResult> {
-                        co_return invokeToolRender(call, req);
-                    }
-                );
-            } else {
-                // 没有线程池 (精简嵌入环境): 只能当场算
-                res = invokeToolRender(call, req);
-            }
-            if (sender) {
-                if (sender->alive()) {
-                    self->sendToClient(sender, std::move(res));
-                }
-                co_return;
-            }
-            self->sendToPeer(std::move(res));
-        },
-        asio::detached
-    );
 }
 
 std::shared_ptr<Session> SessionServerAgentIO::session() {

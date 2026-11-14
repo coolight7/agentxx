@@ -1,6 +1,6 @@
 {
   "protocolVersion": 5,
-  "messageCount": 51,
+  "messageCount": 48,
   "note": "生成物, 请勿手工编辑; 重新生成: AGENTXX_UPDATE_WIRE_SCHEMA=1 agentxx_test wire_schema",
   "messages": [
     {
@@ -1025,83 +1025,6 @@
         "callId": 7,
         "ok": true,
         "resultJson": "{\"opened\":true}",
-        "errorMessage": ""
-      }
-    },
-    {
-      "index": 48,
-      "name": "tool_renderer_register",
-      "type": "tool_renderer_register",
-      "fields": {
-        "type": "string",
-        "sessionId": "string",
-        "renderers": "array<object{toolName:string, displayName:string, collapsed:boolean, expanded:boolean, owner:string}>"
-      },
-      "sample": {
-        "type": "tool_renderer_register",
-        "sessionId": "t1",
-        "renderers": [
-          {
-            "toolName": "agentxx_filesystem_edit",
-            "displayName": "Edit",
-            "collapsed": true,
-            "expanded": true,
-            "owner": "agentxx_filesystem"
-          }
-        ]
-      }
-    },
-    {
-      "index": 49,
-      "name": "tool_render_request",
-      "type": "tool_render_request",
-      "fields": {
-        "type": "string",
-        "requestId": "integer",
-        "sessionId": "string",
-        "toolCallId": "string",
-        "toolName": "string",
-        "part": "string",
-        "inputHash": "integer",
-        "argsJson": "string",
-        "resultText": "string",
-        "isFinished": "boolean",
-        "isError": "boolean",
-        "maxWidth": "integer"
-      },
-      "sample": {
-        "type": "tool_render_request",
-        "requestId": 11,
-        "sessionId": "t1",
-        "toolCallId": "call-1",
-        "toolName": "agentxx_filesystem_edit",
-        "part": "collapsed",
-        "inputHash": 123456789,
-        "argsJson": "{\"path\":\"/tmp/a.txt\"}",
-        "resultText": "ok",
-        "isFinished": true,
-        "isError": false,
-        "maxWidth": 80
-      }
-    },
-    {
-      "index": 50,
-      "name": "tool_render_result",
-      "type": "tool_render_result",
-      "fields": {
-        "type": "string",
-        "requestId": "integer",
-        "ok": "boolean",
-        "text": "string",
-        "itemsJson": "string",
-        "errorMessage": "string"
-      },
-      "sample": {
-        "type": "tool_render_result",
-        "requestId": 11,
-        "ok": true,
-        "text": "+2 -1 /tmp/a.txt",
-        "itemsJson": "[]",
         "errorMessage": ""
       }
     }

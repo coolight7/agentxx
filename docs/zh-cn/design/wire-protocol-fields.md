@@ -8,7 +8,7 @@
 >
 > 相关文档: [index.md](index.md) · [配置与设置边界](configuration.md)
 
-协议版本: `5` · 消息类型数: 51
+协议版本: `5` · 消息类型数: 48
 
 字段类型按序列化后的 JSON 取值推导 (`array<T>` 表示数组, `object{...}` 展开一层
 字段); 省略的字段表示该字段可缺省 (取零值/默认值), 老对端不认识的新字段会被忽略。
@@ -63,9 +63,6 @@
 | 45 | host_tool_unregister | `host_tool_unregister` | `type` string, `sessionId` string, `names` array<string> |
 | 46 | host_tool_call | `host_tool_call` | `type` string, `callId` integer, `sessionId` string, `name` string, `argsJson` string, `timeoutSec` integer |
 | 47 | host_tool_result | `host_tool_result` | `type` string, `callId` integer, `ok` boolean, `resultJson` string, `errorMessage` string |
-| 48 | tool_renderer_register | `tool_renderer_register` | `type` string, `sessionId` string, `renderers` array<object{toolName:string, displayName:string, collapsed:boolean, expanded:boolean, owner:string}> |
-| 49 | tool_render_request | `tool_render_request` | `type` string, `requestId` integer, `sessionId` string, `toolCallId` string, `toolName` string, `part` string, `inputHash` integer, `argsJson` string, `resultText` string, `isFinished` boolean, `isError` boolean, `maxWidth` integer |
-| 50 | tool_render_result | `tool_render_result` | `type` string, `requestId` integer, `ok` boolean, `text` string, `itemsJson` string, `errorMessage` string |
 
 ## 说明
 

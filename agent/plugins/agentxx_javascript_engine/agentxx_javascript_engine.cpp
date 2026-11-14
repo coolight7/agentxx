@@ -301,9 +301,6 @@ enum BridgeMagic {
     B_ADD_SHARE_STORE,
     B_GET_OWN_RESOURCES,
     B_GET_MODEL_CONFIG,
-    // 工具特化渲染 (agentxx.agent.tool_render): 显示名 + 折叠/展开内容回调
-    B_REGISTER_TOOL_RENDERER,
-    B_UNREGISTER_TOOL_RENDERER,
 };
 
 /// 工具执行请求/结果 (execute 桥跨线程传递)
@@ -374,23 +371,6 @@ struct JsCallbackHook {
     int64_t     token = 0; ///< JS 侧回调表的键
 };
 
-/// 工具特化渲染登记 (registerToolRenderer 时创建)
-///
-/// 与 [JsCallbackHook] 同类: 与 JS 实例生命周期解耦 —— 主程序把一个指针作为
-/// `user_data` 交给插件渲染回调, 回调在工作线程执行; 注销后登记表里查不到,
-/// 运行中的调用据此直接当"没内容"处理, 不会碰已释放对象。
-/// - 一件登记同时描述折叠/展开两个部分 (ABI 里两个回调共用一个 `user_data`)
-struct JsToolRenderEntry {
-    JsEngine*   engine = nullptr;
-    std::string instanceKey;
-    std::string toolName;
-    int64_t     collapsedToken = 0; ///< JS 回调表里的键 (0 = 没给折叠内容)
-    int64_t     expandedToken  = 0; ///< 同上 (展开体)
-    /// 已注销: 登记项本身保留到引擎析构 (运行中的调用可能正拿着它),
-    /// 但查表时直接当"没内容"
-    bool dead = false;
-};
-
 /// JS 插件上下文 (生命周期: plugins_ / mirror / 进行中任务共享持有)
 /// - 一个实例 = 一份 (脚本, 挂载作用域) 组合: 每个 agent 各自一份 JSContext,
 ///   脚本里的全局状态因而天然按 agent 隔离 (与 C++ 插件"一插件多 agent 挂载"一致)
@@ -419,9 +399,6 @@ struct JsPluginCtx {
     std::map<int64_t, JSValue> asyncWorkCallbacks;
     /// 会话通道事件回调: token -> fn (开通道时登记; 随上下文释放)
     std::map<int64_t, JSValue> channelCallbacks;
-    /// 工具特化渲染回调: token -> fn (registerToolRenderer 时登记; 随上下文释放)
-    /// - 主程序把 token 交给 C 回调, C 回调回到 JS 线程按 token 取函数调用
-    std::map<int64_t, JSValue> toolRenderCallbacks;
     /// 回调 token 自增源 (仅 JS 线程使用)
     int64_t nextCallbackToken = 0;
     /// 脚本初始化事务的撤销动作 (注册工具/通知/订阅/资源成功时按序追加)。
@@ -492,15 +469,6 @@ public:
         }
         for (auto* hook : rest) {
             delete hook;
-        }
-        // 工具渲染登记同样在停止后统一释放 (之后不会再有主程序回调)
-        std::set<JsToolRenderEntry*> restRender;
-        {
-            std::lock_guard<std::mutex> lk(renderMtx_);
-            restRender.swap(renderEntries_);
-        }
-        for (auto* entry : restRender) {
-            delete entry;
         }
     }
 
@@ -1311,133 +1279,6 @@ public:
     /// 事件回调桥: io 线程调用; post 到 JS 线程 (fire-and-forget) (类外定义)
     static void PLUGINXX_CALL eventFire(const PluginxxStringView* event_json, void* ud);
 
-    // ==================== 工具特化渲染 ====================
-
-    /// 一次渲染请求的入参快照 (从主程序借用的字段拷成自有字符串;
-    /// 回调在工作线程执行, 不能留存借用视图)
-    struct ToolRenderArg {
-        std::string toolCallId;
-        std::string toolName;
-        std::string argsJson;
-        std::string resultText;
-        bool        isFinished = false;
-        bool        isError    = false;
-        int32_t     maxWidth   = 0;
-    };
-
-    /// 一次渲染请求的输出 (字符串或 items JSON, 由主程序侧拷贝走)
-    struct ToolRenderOut {
-        bool        ok = false;
-        std::string text;
-        std::string itemsJson;
-    };
-
-    /// 渲染回调桥: 主程序工作线程调用, 同步等 JS 线程算完 (类外定义)
-    /// - 超时/实例已卸载/脚本抛异常都返回“没内容”, 不抛到主程序
-    /// - 折叠与展开是两个不同函数: ABI 输入里没有“哪一部分”字段, 由函数本身区分
-    static int32_t PLUGINXX_CALL toolRenderCollapsedBridge(
-        void*                               user_data,
-        const AgentxxPluginToolRenderInput* input,
-        AgentxxPluginToolRenderOutput*      output
-    );
-    static int32_t PLUGINXX_CALL toolRenderExpandedBridge(
-        void*                               user_data,
-        const AgentxxPluginToolRenderInput* input,
-        AgentxxPluginToolRenderOutput*      output
-    );
-
-    /// 两个桥的公共实现 (`user_data` 是 [JsCallbackHook])
-    static int32_t runToolRenderBridge(
-        void*                               user_data,
-        bool                                expanded,
-        const AgentxxPluginToolRenderInput* input,
-        AgentxxPluginToolRenderOutput*      output
-    );
-
-    /// 【JS 线程】调用脚本登记的渲染回调 (token 决定是折叠还是展开)
-    void doToolRender(
-        const std::string&       instanceKey,
-        int64_t                  token,
-        const ToolRenderArg&     arg,
-        ToolRenderOut&           out
-    );
-
-    /// 登记一件渲染回调 (registerToolRenderer 时调用; 返回交给主程序的 user_data)
-    JsToolRenderEntry* registerRenderEntry(
-        const std::string& instanceKey,
-        const std::string& toolName,
-        int64_t            collapsedToken,
-        int64_t            expandedToken
-    ) {
-        auto* entry             = new JsToolRenderEntry{};
-        entry->engine           = this;
-        entry->instanceKey      = instanceKey;
-        entry->toolName         = toolName;
-        entry->collapsedToken   = collapsedToken;
-        entry->expandedToken    = expandedToken;
-        std::lock_guard<std::mutex> lk(renderMtx_);
-        renderEntries_.insert(entry);
-        return entry;
-    }
-
-    /// 释放渲染登记 (注册失败回滚时用: 还没人能调到它, 可以直接释放)
-    void releaseRenderEntry(JsToolRenderEntry* entry) {
-        if (!entry) {
-            return;
-        }
-        {
-            std::lock_guard<std::mutex> lk(renderMtx_);
-            renderEntries_.erase(entry);
-        }
-        delete entry;
-    }
-
-    /// 【JS 线程】注销一件渲染登记, 并取出它的两个 token (调用方负责释放 JS 函数)
-    /// - 登记项不删: 运行中的回调可能正拿着这个指针 (只置 dead, 引擎析构时统一释放)
-    bool takeRenderTokens(
-        const std::string& instanceKey,
-        const std::string& toolName,
-        int64_t&           collapsedToken,
-        int64_t&           expandedToken
-    ) {
-        std::lock_guard<std::mutex> lk(renderMtx_);
-        for (auto* entry : renderEntries_) {
-            if (entry->dead || entry->instanceKey != instanceKey
-                || entry->toolName != toolName) {
-                continue;
-            }
-            collapsedToken      = entry->collapsedToken;
-            expandedToken       = entry->expandedToken;
-            entry->dead         = true;
-            entry->collapsedToken = 0;
-            entry->expandedToken  = 0;
-            return true;
-        }
-        return false;
-    }
-
-    /// 校验并取出一次调用需要的字段 (任意线程)
-    /// - 登记已注销 / 该部分没给回调 → false
-    bool snapshotRenderEntry(
-        void*        user_data,
-        bool         expanded,
-        std::string& instanceKey,
-        int64_t&     token
-    ) {
-        std::lock_guard<std::mutex> lk(renderMtx_);
-        auto*                       entry = static_cast<JsToolRenderEntry*>(user_data);
-        if (!entry || entry->dead || renderEntries_.find(entry) == renderEntries_.end()) {
-            return false;
-        }
-        const int64_t found = expanded ? entry->expandedToken : entry->collapsedToken;
-        if (found == 0) {
-            return false;
-        }
-        instanceKey = entry->instanceKey;
-        token       = found;
-        return true;
-    }
-
     // ==================== 任务队列 ====================
 
     /// 投递任务到 JS 线程 (非阻塞); 返回 false = 引擎已停止 (未入队)
@@ -1478,55 +1319,6 @@ public:
         cv.wait(lk, [&]() {
             return done;
         });
-        return true;
-    }
-
-    /// 带超时的同步投递: 等待槽由调用方持有 (shared_ptr), 超时先返回时
-    /// JS 线程只会丢弃该任务
-    ///
-    /// - `return` false = 超时 / 引擎已停止 (任务未执行或已放弃)
-    /// - 任务只能经 `slot` 与调用方交接数据: 不能捕获调用方栈上的引用
-    ///   (调用方超时返回后, JS 线程可能刚好要执行它)
-    struct SyncWaitSlot {
-        std::mutex              m;
-        std::condition_variable cv;
-        bool                    done      = false;
-        bool                    abandoned = false;
-    };
-
-    bool postSyncFor(
-        const std::shared_ptr<SyncWaitSlot>& slot,
-        std::function<void()>                fn,
-        int64_t                              timeoutMs
-    ) {
-        {
-            std::lock_guard<std::mutex> lk(mtx_);
-            if (stop_.load(std::memory_order_acquire)) {
-                return false;
-            }
-            queue_.push_back([slot, fn = std::move(fn)]() {
-                {
-                    std::lock_guard<std::mutex> lk2(slot->m);
-                    if (slot->abandoned) {
-                        return; // 调用方已超时离开
-                    }
-                }
-                fn();
-                {
-                    std::lock_guard<std::mutex> lk2(slot->m);
-                    slot->done = true;
-                }
-                slot->cv.notify_one();
-            });
-        }
-        cv_.notify_one();
-        std::unique_lock<std::mutex> lk(slot->m);
-        if (!slot->cv.wait_for(lk, std::chrono::milliseconds(timeoutMs), [&] {
-                return slot->done;
-            })) {
-            slot->abandoned = true;
-            return false;
-        }
         return true;
     }
 
@@ -2514,9 +2306,6 @@ private:
         def("addShareStore", B_ADD_SHARE_STORE, 2);
         def("getOwnResources", B_GET_OWN_RESOURCES, 0);
         def("getModelConfig", B_GET_MODEL_CONFIG, 0);
-        // 工具特化渲染: 与 C++ 插件 registerToolRenderer 同名同义
-        def("registerToolRenderer", B_REGISTER_TOOL_RENDERER, 1);
-        def("unregisterToolRenderer", B_UNREGISTER_TOOL_RENDERER, 1);
 
         int ok = JS_SetPropertyStr(ctx, global, "agentxx", bridge) >= 0;
         // 常用工具函数注入全局 (沙箱内可用): 裸 setTimeout/clearTimeout
@@ -2590,10 +2379,6 @@ private:
 
     std::map<uint64_t, JsTimer> timers_;
     uint64_t                    timerSeq_ = 0;
-
-    /// 工具特化渲染登记 (registerToolRenderer 创建; 任意线程查表校验)
-    std::set<JsToolRenderEntry*> renderEntries_;
-    mutable std::mutex           renderMtx_;
 
     /// 工具表属性名快照 (JS 线程; tools 为普通对象 name -> entry)
     std::vector<std::string> jsToolsSnapshot(JsPluginCtx* pctx) {
@@ -2777,11 +2562,6 @@ void JsEngine::eventFire(const PluginxxStringView* event_json, void* ud) {
 
 namespace {
 
-/// 工具渲染回调的等待预算 (毫秒)
-/// - 主程序在客户端等结果; 脚本里写重任务时不能把工作线程一直占着
-/// - 超时后按"这次没内容"返回 (客户端回退默认渲染)
-constexpr int64_t kJsToolRenderBudgetMs = 200;
-
 JsPluginCtx::~JsPluginCtx() {
     if (ctx) {
         if (!JS_IsUndefined(tools)) {
@@ -2800,11 +2580,6 @@ JsPluginCtx::~JsPluginCtx() {
             JS_FreeValue(ctx, fn);
         }
         channelCallbacks.clear();
-        for (auto& [token, fn] : toolRenderCallbacks) {
-            (void)token;
-            JS_FreeValue(ctx, fn);
-        }
-        toolRenderCallbacks.clear();
         JS_FreeContext(ctx);
         ctx = nullptr;
     }
@@ -2820,168 +2595,6 @@ static JSValue throwJsError(JSContext* ctx, const std::string& msg) {
 }
 
 } // namespace
-
-// =====================================================================
-// 工具特化渲染 (agentxx.agent.tool_render)
-// =====================================================================
-
-void JsEngine::doToolRender(
-    const std::string&   instanceKey,
-    int64_t              token,
-    const ToolRenderArg& arg,
-    ToolRenderOut&       out
-) {
-    auto pctx = findPlugin(instanceKey);
-    if (!pctx || pctx->deleted || !pctx->ctx) {
-        return;
-    }
-    const auto fit = pctx->toolRenderCallbacks.find(token);
-    if (fit == pctx->toolRenderCallbacks.end()) {
-        return;
-    }
-    JSContext* ctx = pctx->ctx;
-
-    // 入参对象: 常用字段直接给出, 脚本不必自己 JSON.parse(argsJson)
-    JSValue in = JS_NewObject(ctx);
-    JS_SetPropertyStr(
-        ctx,
-        in,
-        "toolCallId",
-        JS_NewStringLen(ctx, arg.toolCallId.data(), arg.toolCallId.size())
-    );
-    JS_SetPropertyStr(
-        ctx,
-        in,
-        "toolName",
-        JS_NewStringLen(ctx, arg.toolName.data(), arg.toolName.size())
-    );
-    JS_SetPropertyStr(
-        ctx,
-        in,
-        "argsJson",
-        JS_NewStringLen(ctx, arg.argsJson.data(), arg.argsJson.size())
-    );
-    JS_SetPropertyStr(ctx, in, "args", jsonTextToValue(ctx, arg.argsJson, "<tool_render args>"));
-    JS_SetPropertyStr(
-        ctx,
-        in,
-        "result",
-        JS_NewStringLen(ctx, arg.resultText.data(), arg.resultText.size())
-    );
-    JS_SetPropertyStr(ctx, in, "isFinished", JS_NewBool(ctx, arg.isFinished));
-    JS_SetPropertyStr(ctx, in, "isError", JS_NewBool(ctx, arg.isError));
-    JS_SetPropertyStr(ctx, in, "maxWidth", JS_NewInt32(ctx, arg.maxWidth));
-
-    JSValue argv[1] = {in};
-    JSValue ret     = JS_Call(ctx, fit->second, JS_UNDEFINED, 1, argv);
-    JS_FreeValue(ctx, in);
-    if (JS_IsException(ret)) {
-        JSValue exc = JS_GetException(ctx);
-        logAt(
-            3,
-            fmt::format(
-                "interpreter.js: tool renderer for `{}` threw: {}",
-                arg.toolName,
-                valueToJsonString(ctx, exc)
-            )
-                .c_str()
-        );
-        JS_FreeValue(ctx, exc);
-        JS_FreeValue(ctx, ret);
-        return;
-    }
-    // 字符串 = 折叠内容; 数组/对象 = 展开体 items; 其它 (null/undefined/false) = 没内容
-    if (JS_IsString(ret)) {
-        out.text = jsToCppString(ctx, ret);
-        out.ok   = !out.text.empty();
-    } else if (JS_IsObject(ret)) {
-        const std::string json = valueToJsonString(ctx, ret);
-        if (!json.empty() && json != "null") {
-            out.itemsJson = json;
-            out.ok        = true;
-        }
-    }
-    JS_FreeValue(ctx, ret);
-}
-
-int32_t PLUGINXX_CALL JsEngine::runToolRenderBridge(
-    void*                               user_data,
-    bool                                expanded,
-    const AgentxxPluginToolRenderInput* input,
-    AgentxxPluginToolRenderOutput*      output
-) {
-    auto* engine = user_data ? static_cast<JsToolRenderEntry*>(user_data)->engine : nullptr;
-    if (!engine || !input || !output) {
-        return AGENTXX_RESULT_OK; // 没内容: 客户端回退默认渲染
-    }    std::string instanceKey;
-    int64_t     token = 0;
-    if (!engine->snapshotRenderEntry(user_data, expanded, instanceKey, token)) {
-        return AGENTXX_RESULT_OK; // 已注销 / 该部分没给回调
-    }
-
-    // 入参拷成自有字符串: 回调在工作线程等 JS 线程算完, 不能留借用视图
-    ToolRenderArg arg;
-    if (input->tool_call_id.data && input->tool_call_id.size > 0) {
-        arg.toolCallId.assign(input->tool_call_id.data, input->tool_call_id.size);
-    }
-    if (input->tool_name.data && input->tool_name.size > 0) {
-        arg.toolName.assign(input->tool_name.data, input->tool_name.size);
-    }
-    if (input->args_json.data && input->args_json.size > 0) {
-        arg.argsJson.assign(input->args_json.data, input->args_json.size);
-    }
-    if (input->result_text.data && input->result_text.size > 0) {
-        arg.resultText.assign(input->result_text.data, input->result_text.size);
-    }
-    arg.isFinished = input->is_finished != 0;
-    arg.isError    = input->is_error != 0;
-    arg.maxWidth   = input->max_width;
-
-    auto out  = std::make_shared<ToolRenderOut>();
-    auto slot = std::make_shared<SyncWaitSlot>();
-    // 任务只经 slot/out 交接数据 (超时后调用方先返回, JS 线程只会丢弃它)
-    const bool done = engine->postSyncFor(
-        slot,
-        [engine, instanceKey, token, arg, out]() {
-            engine->doToolRender(instanceKey, token, arg, *out);
-        },
-        kJsToolRenderBudgetMs
-    );
-    if (!done || !out->ok) {
-        return AGENTXX_RESULT_OK;
-    }
-    if (expanded) {
-        agentxx::plugin::PluginString::set(engine->engineHost_, &output->items_json, out->itemsJson);
-    } else {
-        agentxx::plugin::PluginString::set(engine->engineHost_, &output->text, out->text);
-    }
-    return AGENTXX_RESULT_OK;
-}
-
-int32_t PLUGINXX_CALL JsEngine::toolRenderCollapsedBridge(
-    void*                               user_data,
-    const AgentxxPluginToolRenderInput* input,
-    AgentxxPluginToolRenderOutput*      output
-) {
-    // C ABI 边界: 异常不得外泄到主程序
-    try {
-        return runToolRenderBridge(user_data, false, input, output);
-    } catch (...) {
-        return AGENTXX_RESULT_OK;
-    }
-}
-
-int32_t PLUGINXX_CALL JsEngine::toolRenderExpandedBridge(
-    void*                               user_data,
-    const AgentxxPluginToolRenderInput* input,
-    AgentxxPluginToolRenderOutput*      output
-) {
-    try {
-        return runToolRenderBridge(user_data, true, input, output);
-    } catch (...) {
-        return AGENTXX_RESULT_OK;
-    }
-}
 
 // =====================================================================
 // agentxx 桥实现 (C 函数, magic 分派)
@@ -4790,150 +4403,6 @@ JSValue JsEngine::bridgeCall(
                 return JS_NULL;
             }
             return jsonTextToValue(ctx, json, "<model_config>");
-        }
-
-        // ---- 工具特化渲染 (agentxx.agent.tool_render) ----
-        case B_REGISTER_TOOL_RENDERER: {
-            if (!iface.toolRender || !iface.toolRender->register_tool_renderer) {
-                return throwJsError(
-                    ctx,
-                    "registerToolRenderer: host does not provide agentxx.agent.tool_render"
-                );
-            }
-            if (argc < 1 || !JS_IsObject(argv[0])) {
-                return JS_ThrowTypeError(ctx, "registerToolRenderer: spec object required");
-            }
-            auto        specObj = argv[0];
-            JSValue     toolVal = JS_GetPropertyStr(ctx, specObj, "tool");
-            std::string toolName = jsToCppString(ctx, toolVal);
-            JS_FreeValue(ctx, toolVal);
-            if (toolName.empty()) {
-                toolVal = JS_GetPropertyStr(ctx, specObj, "toolName");
-                toolName = jsToCppString(ctx, toolVal);
-                JS_FreeValue(ctx, toolVal);
-            }
-            JSValue     nameVal     = JS_GetPropertyStr(ctx, specObj, "displayName");
-            std::string displayName = jsToCppString(ctx, nameVal);
-            JS_FreeValue(ctx, nameVal);
-            JSValue collapsedFn = JS_GetPropertyStr(ctx, specObj, "collapsed");
-            JSValue expandedFn  = JS_GetPropertyStr(ctx, specObj, "expanded");
-            const bool hasCollapsed = JS_IsFunction(ctx, collapsedFn) != 0;
-            const bool hasExpanded  = JS_IsFunction(ctx, expandedFn) != 0;
-            if (toolName.empty() || (!hasCollapsed && !hasExpanded && displayName.empty())) {
-                JS_FreeValue(ctx, collapsedFn);
-                JS_FreeValue(ctx, expandedFn);
-                return JS_ThrowTypeError(
-                    ctx,
-                    "registerToolRenderer: {tool} plus displayName or a collapsed/expanded "
-                    "function required"
-                );
-            }
-
-            // 两个部分各一个 token; JS 函数按 token 保留在实例上下文里
-            int64_t collapsedToken = 0;
-            int64_t expandedToken  = 0;
-            if (hasCollapsed) {
-                collapsedToken = ++pctx->nextCallbackToken;
-                pctx->toolRenderCallbacks[collapsedToken] = JS_DupValue(ctx, collapsedFn);
-            }
-            if (hasExpanded) {
-                expandedToken = ++pctx->nextCallbackToken;
-                pctx->toolRenderCallbacks[expandedToken] = JS_DupValue(ctx, expandedFn);
-            }
-            JS_FreeValue(ctx, collapsedFn);
-            JS_FreeValue(ctx, expandedFn);
-
-            auto* entry = engine->registerRenderEntry(
-                pctx->instanceKey,
-                toolName,
-                collapsedToken,
-                expandedToken
-            );
-
-            AgentxxPluginToolRenderSpec spec{};
-            spec.struct_size = sizeof(AgentxxPluginToolRenderSpec);
-            spec.version     = 1;
-            spec.tool_name   = agentxx::plugin::PluginStringView::from(
-                toolName.data(),
-                toolName.size()
-            );
-            spec.display_name = agentxx::plugin::PluginStringView::from(
-                displayName.data(),
-                displayName.size()
-            );
-            spec.collapsed = hasCollapsed ? &JsEngine::toolRenderCollapsedBridge : nullptr;
-            spec.expanded  = hasExpanded ? &JsEngine::toolRenderExpandedBridge : nullptr;
-            spec.user_data = entry;
-            const int32_t rc = iface.toolRender->register_tool_renderer(
-                host,
-                pctx->scope(),
-                &spec
-            );
-            if (rc != AGENTXX_RESULT_OK) {
-                engine->releaseRenderEntry(entry);
-                if (collapsedToken != 0) {
-                    auto it = pctx->toolRenderCallbacks.find(collapsedToken);
-                    if (it != pctx->toolRenderCallbacks.end()) {
-                        JS_FreeValue(ctx, it->second);
-                        pctx->toolRenderCallbacks.erase(it);
-                    }
-                }
-                if (expandedToken != 0) {
-                    auto it = pctx->toolRenderCallbacks.find(expandedToken);
-                    if (it != pctx->toolRenderCallbacks.end()) {
-                        JS_FreeValue(ctx, it->second);
-                        pctx->toolRenderCallbacks.erase(it);
-                    }
-                }
-                return throwJsError(
-                    ctx,
-                    fmt::format(
-                        "registerToolRenderer: host registration failed for `{}` (code {})",
-                        toolName,
-                        rc
-                    )
-                );
-            }
-            // 脚本卸载时脚本自己会调 unregisterToolRenderer; 主程序侧由
-            // 挂载注销自动撤销 (这里不额外登记 rollbackAction)
-            return JS_TRUE;
-        }
-
-        case B_UNREGISTER_TOOL_RENDERER: {
-            std::string toolName = argc >= 1 ? jsToCppString(ctx, argv[0]) : "";
-            if (toolName.empty()) {
-                return JS_FALSE;
-            }
-            if (!iface.toolRender || !iface.toolRender->unregister_tool_renderer) {
-                return JS_FALSE;
-            }
-            auto toolSv = agentxx::plugin::PluginStringView::from(toolName.data(), toolName.size());
-            const int32_t rc = iface.toolRender->unregister_tool_renderer(
-                host,
-                pctx->scope(),
-                &toolSv
-            );
-            // JS 侧回调一并释放 (主程序侧没这个项也照样清, 两边可分别重试)
-            int64_t collapsedToken = 0;
-            int64_t expandedToken  = 0;
-            if (engine->takeRenderTokens(
-                    pctx->instanceKey,
-                    toolName,
-                    collapsedToken,
-                    expandedToken
-                )) {
-                for (const int64_t token : {collapsedToken, expandedToken}) {
-                    if (token == 0) {
-                        continue;
-                    }
-                    auto it = pctx->toolRenderCallbacks.find(token);
-                    if (it != pctx->toolRenderCallbacks.end()) {
-                        JS_FreeValue(ctx, it->second);
-                        pctx->toolRenderCallbacks.erase(it);
-                    }
-                }
-            }
-            return rc == AGENTXX_RESULT_OK ? JS_TRUE : JS_FALSE;
         }
 
         default:

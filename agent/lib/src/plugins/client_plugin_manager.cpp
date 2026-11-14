@@ -26,7 +26,6 @@
 #include "fmt/format.h"
 #include "fmt/ranges.h"
 #include "utilxx/async_offload.h"
-#include "utilxx_base/asio_error.h"
 #include "utilxx_base/log.h"
 #include "utilxx_base/string_util.h"
 #include <algorithm>
@@ -967,19 +966,6 @@ void ClientToolRenderCache::invalidatePlugin(std::string_view plugin) {
     evictLocked();
 }
 
-void ClientToolRenderCache::invalidateRemote() {
-    std::lock_guard<std::mutex> lock(mutex_);
-    for (auto it = entries_.begin(); it != entries_.end();) {
-        if (it->second->remote) {
-            ++versions_[it->first]; // 版本号变化驱动 UI 重建为默认渲染
-            it = entries_.erase(it);
-        } else {
-            ++it;
-        }
-    }
-    evictLocked();
-}
-
 void ClientToolRenderCache::clear() {
     std::lock_guard<std::mutex> lock(mutex_);
     for (auto& key : order_) {
@@ -1085,37 +1071,21 @@ std::shared_ptr<const ClientToolRenderEntry>
 /// - 按请求的 `part` 只调对应部分的回调 (折叠内容不触发展开体渲染)
 /// - 渲染器已摘除/失效/实例禁用 → 写入未命中条目 (UI 回退默认渲染)
 /// - 插件回调返回失败/内容为空 → 同样写未命中条目, 避免每帧重复请求
-
-namespace {
-
-/// 按工具名查远程 (agent 侧) 登记项 (定义在文件后半段, 与本地注册项查找放在一起)
-const ClientRemoteToolRenderer* findRemoteToolRenderReg(
-    const ClientUiRegistry* reg,
-    std::string_view        toolName,
-    bool                    wantCollapsed
-);
-
-} // namespace
-
 void ClientPluginManager::performToolRender(
     ClientToolRenderRequest req,
     std::string             key,
     uint64_t                inputHash
 ) {
     // 无论成功/失败/提前返回都要清掉"进行中"标记, 否则该键再也不会重新渲染
-    // - 远程分支等到回包才收尾, 那时主动关掉本守卫 (见下面的 `disarm`)
     struct PendingGuard {
         ClientToolRenderCache* cache;
         std::string            key;
         uint64_t               inputHash;
-        bool                   disarm = false;
 
         ~PendingGuard() {
-            if (!disarm) {
-                cache->endRequest(key, inputHash);
-            }
+            cache->endRequest(key, inputHash);
         }
-    } pendingGuard{toolRenderCache_.get(), key, inputHash, false};
+    } pendingGuard{toolRenderCache_.get(), key, inputHash};
 
     ClientToolRenderEntry entry;
     entry.key       = key;
@@ -1149,16 +1119,6 @@ void ClientPluginManager::performToolRender(
         }
     }
     if (!hit) {
-        // 远程 (agent 侧) 登记项: 内容要回 agent 算, 这里发一次请求等回包。
-        // 发送失败 (无连接/旧版本对端) 当场收尾为"没内容"。
-        if (const auto* remote
-            = findRemoteToolRenderReg(snapshot.get(), req.toolName, wantCollapsed)) {
-            if (sendRemoteToolRender(*remote, req, key, inputHash)) {
-                // in-flight 标记留给回包/超时收尾
-                pendingGuard.disarm = true;
-                return;
-            }
-        }
         toolRenderCache_->store(std::move(entry));
         return;
     }
@@ -1253,207 +1213,6 @@ void ClientPluginManager::performToolRender(
 
     // 租约仍有效: 回调期间实例由 guard 保活 (禁止卸载 dlclose)
     runRenderer();
-}
-
-// =====================================================================
-// 远程 (agent 侧) 工具渲染
-// =====================================================================
-
-namespace {
-
-/// 远程渲染等回包的超时 (毫秒)
-/// - 对端是旧版本 (没有这张表) 或结果丢了的时候不能让这一行永远 pending
-/// - 比 agent 侧的工作线程预算宽裕: 回调里可能还要等 JS 线程
-constexpr int64_t kRemoteToolRenderTimeoutMs = 3000;
-
-/// 两份远程登记表内容是否完全一致 (字段逐个比)
-bool sameRemoteRenderers(
-    const std::vector<ClientRemoteToolRenderer>& a,
-    const std::vector<ClientRemoteToolRenderer>& b
-) {
-    if (a.size() != b.size()) {
-        return false;
-    }
-    for (size_t i = 0; i < a.size(); ++i) {
-        if (a[i].toolName != b[i].toolName || a[i].displayName != b[i].displayName
-            || a[i].hasCollapsed != b[i].hasCollapsed || a[i].hasExpanded != b[i].hasExpanded
-            || a[i].owner != b[i].owner) {
-            return false;
-        }
-    }
-    return true;
-}
-
-} // namespace
-
-void ClientPluginManager::setRemoteRenderSender(RemoteRenderSender sender) {
-    remoteRenderSender_ = std::move(sender);
-}
-
-bool ClientPluginManager::sendRemoteToolRender(
-    const ClientRemoteToolRenderer& remote,
-    const ClientToolRenderRequest&  req,
-    const std::string&              key,
-    uint64_t                        inputHash
-) {
-    if (!remoteRenderSender_) {
-        return false;
-    }
-
-    ClientRemoteRenderRequest wire;
-    wire.requestId  = ++nextRemoteRenderId_;
-    wire.sessionId  = sessionId_;
-    wire.toolCallId = req.toolCallId;
-    wire.toolName   = req.toolName;
-    wire.expanded   = (req.part == ClientToolRenderPart::Expanded);
-    wire.inputHash  = inputHash;
-    wire.argsJson   = req.argsJson;
-    wire.resultText = req.resultText;
-    wire.isFinished = req.isFinished;
-    wire.isError    = req.isError;
-    wire.maxWidth   = req.maxWidth;
-
-    const int64_t requestId = wire.requestId;
-    PendingRemoteRender pending;
-    pending.key       = key;
-    pending.inputHash = inputHash;
-    pending.toolCallId = req.toolCallId;
-    pending.toolName   = req.toolName;
-    pending.owner      = remote.owner;
-    pending.expanded   = wire.expanded;
-    pending.timer      = std::make_shared<asio::steady_timer>(
-        ioExecutor_,
-        std::chrono::milliseconds{kRemoteToolRenderTimeoutMs}
-    );
-    pending.timer->async_wait([self = shared_from_this(), requestId](
-                                  const utilxx_base::AsioErrorCode& ec
-                              ) {
-        if (ec) {
-            return;
-        }
-        self->finishRemoteRender(requestId, false, {}, {}, "timeout");
-    });
-    pendingRemoteRenders_[requestId] = std::move(pending);
-
-    bool sent = false;
-    try {
-        sent = remoteRenderSender_(wire);
-    } catch (const std::exception& e) {
-        XX_LOGW("[client_plugin] remote tool render request threw: {}", e.what());
-        sent = false;
-    }
-    if (!sent) {
-        finishRemoteRender(requestId, false, {}, {}, "send failed");
-    }
-    return true;
-}
-
-void ClientPluginManager::finishRemoteRender(
-    int64_t          requestId,
-    bool             ok,
-    std::string      text,
-    std::string      itemsJson,
-    std::string_view reason
-) {
-    const auto it = pendingRemoteRenders_.find(requestId);
-    if (it == pendingRemoteRenders_.end()) {
-        return; // 已超时收尾 / 会话已切: 本次结果作废
-    }
-    PendingRemoteRender pending = std::move(it->second);
-    pendingRemoteRenders_.erase(it);
-    if (pending.timer) {
-        pending.timer->cancel();
-    }
-
-    ClientToolRenderEntry entry;
-    entry.key       = pending.key;
-    entry.plugin    = pending.owner;
-    entry.inputHash = pending.inputHash;
-    entry.remote    = true;
-    if (pending.expanded) {
-        if (ok && !itemsJson.empty()) {
-            try {
-                utilxx_base::Json parsed = utilxx_base::Json::parse(itemsJson);
-                if (parsed.is_array() && !parsed.empty()) {
-                    entry.items   = std::move(parsed);
-                    entry.matched = true;
-                }
-            } catch (const std::exception& e) {
-                XX_LOGW(
-                    "[client_plugin] remote expanded items for '{}' are not valid JSON: {}",
-                    pending.toolName,
-                    e.what()
-                );
-            }
-        }
-    } else if (ok && !text.empty()) {
-        entry.text    = std::move(text);
-        entry.matched = true;
-    }
-    if (!entry.matched && !reason.empty()) {
-        XX_LOGD(
-            "[client_plugin] remote tool render for '{}' finished without content ({})",
-            pending.toolName,
-            reason
-        );
-    }
-
-    toolRenderCache_->store(std::move(entry));
-    toolRenderCache_->endRequest(pending.key, pending.inputHash);
-    if (uiAdapter_) {
-        uiAdapter_->onToolRenderUpdated(pending.toolCallId, pending.toolName);
-    }
-}
-
-void ClientPluginManager::applyRemoteToolRenderers(
-    std::vector<ClientRemoteToolRenderer> renderers
-) {
-    bool changed = false;
-    size_t count = 0;
-    {
-        std::lock_guard<std::mutex> lock(uiMutex_);
-        changed = !sameRemoteRenderers(uiRegistry_->remoteToolRenderers, renderers);
-        if (changed) {
-            auto reg                 = std::make_shared<ClientUiRegistry>(*uiRegistry_);
-            count                    = renderers.size();
-            reg->remoteToolRenderers = std::move(renderers);
-            uiRegistry_              = std::move(reg);
-        }
-    }
-    if (!changed) {
-        return;
-    }
-    // 登记表变了: 旧内容可能不对 -> 淘汰远程条目 (本进程插件的条目不受影响)
-    toolRenderCache_->invalidateRemote();
-    // 等待中的请求属于旧快照: 逐个收尾, 否则对应键会一直占着 in-flight 标记
-    std::vector<int64_t> pendingIds;
-    pendingIds.reserve(pendingRemoteRenders_.size());
-    for (const auto& [id, unused] : pendingRemoteRenders_) {
-        (void)unused;
-        pendingIds.push_back(id);
-    }
-    for (const auto id : pendingIds) {
-        finishRemoteRender(id, false, {}, {}, "renderers changed");
-    }
-    XX_LOGI(
-        "[client_plugin] applied {} remote tool renderer(s) from the agent side",
-        count
-    );
-}
-
-void ClientPluginManager::applyRemoteToolRenderResult(
-    int64_t     requestId,
-    bool        ok,
-    std::string text,
-    std::string itemsJson
-) {
-    finishRemoteRender(
-        requestId,
-        ok,
-        std::move(text),
-        std::move(itemsJson),
-        ok ? std::string_view{} : std::string_view{"no content"}
-    );
 }
 
 bool ClientPluginManager::hasCommand(std::string_view name) const {
@@ -4248,24 +4007,6 @@ const ClientToolRenderReg* findToolRenderReg(
     return nullptr;
 }
 
-/// 按工具名查远程 (agent 侧) 登记项 (没有回调, 只看是否给了对应部分)
-const ClientRemoteToolRenderer* findRemoteToolRenderReg(
-    const ClientUiRegistry* reg,
-    std::string_view        toolName,
-    bool                    wantCollapsed
-) {
-    if (!reg || toolName.empty()) {
-        return nullptr;
-    }
-    for (const auto& r : reg->remoteToolRenderers) {
-        const bool hasFn = wantCollapsed ? r.hasCollapsed : r.hasExpanded;
-        if (r.toolName == toolName && hasFn) {
-            return &r;
-        }
-    }
-    return nullptr;
-}
-
 /// 构造传给渲染回调的输入 (字段全部 string_view 借用, 只在本次回调内有效)
 AgentxxToolRenderInput makeRenderInput(
     std::string_view toolCallId,
@@ -4311,18 +4052,13 @@ std::string_view toolDisplayNameFor(
             }
         }
     }
-    // 2. 类型级注册项的名字 (插件项优先, 未命中再查内置项, 最后查远程项)
+    // 2. 类型级注册项的名字 (插件项优先, 未命中再查内置项)
     if (!toolName.empty()) {
         for (const auto* list : {&reg->toolRenderers, &reg->builtinToolRenderers}) {
             for (const auto& r : *list) {
                 if (r.toolName == toolName && !r.displayName.empty()) {
                     return r.displayName;
                 }
-            }
-        }
-        for (const auto& r : reg->remoteToolRenderers) {
-            if (r.toolName == toolName && !r.displayName.empty()) {
-                return r.displayName;
             }
         }
     }
@@ -4358,16 +4094,10 @@ ClientToolCollapsedResult renderClientToolCollapsed(
 
     // 2. 按 tool_name 注册的折叠内容回调
     const auto* r = findToolRenderReg(reg, toolName, /*wantCollapsed=*/true);
-    // 3. 远程 (agent 侧) 登记项: 没有回调, 内容要回 agent 算
-    const auto* remote
-        = r ? nullptr : findRemoteToolRenderReg(reg, toolName, /*wantCollapsed=*/true);
-    if (!r && !remote) {
+    if (!r) {
         return res; // 没注册 → 默认渲染
     }
     if (!cache) {
-        if (!r) {
-            return res; // 远程项没有渲染缓存环境 (单元测试): 只走默认渲染
-        }
         // 无语义缓存 (单元测试/未挂载管理器环境): 同步调用回调
         auto                        input = makeRenderInput(
             toolCallId,
@@ -4394,8 +4124,7 @@ ClientToolCollapsedResult renderClientToolCollapsed(
 
     // 零拷贝查缓存: 先用 string_view 算输入特征 + 查缓存, 命中即返回
     // (不拷贝 args/result 大文本); UI 侧只在 pending 时构造请求
-    const std::string owner = r ? r->plugin : remote->owner;
-    const std::string key   = ClientToolRenderRequest::keyFor(
+    const std::string key = ClientToolRenderRequest::keyFor(
         toolCallId,
         toolName,
         ClientToolRenderPart::Collapsed
@@ -4408,18 +4137,18 @@ ClientToolCollapsedResult renderClientToolCollapsed(
         isError,
         maxWidth
     );
-    if (auto cached = cache->lookup(key, inputHash); cached && cached->plugin == owner) {
+    if (auto cached = cache->lookup(key, inputHash); cached && cached->plugin == r->plugin) {
         // 命中: 空内容 = 回调本次没给内容 (matched == false) → 默认渲染
         res.text = cached->text;
         return res;
     }
     res.pending       = true;
-    res.pendingPlugin = owner;
+    res.pendingPlugin = r->plugin;
     // 过渡: 沿用同一调用同一部分的上一份内容 (结果到达/宽度变化使输入特征变化
     // 的那一帧继续显示屏幕上已有的内容)。没有 tool_call_id 时缓存键退化为
     // "#工具名#c", 可能是另一次调用的结果, 不沿用
     if (!toolCallId.empty()) {
-        if (auto last = cache->lookupLatest(key); last && last->plugin == owner) {
+        if (auto last = cache->lookupLatest(key); last && last->plugin == r->plugin) {
             res.text = last->text;
         }
     }
@@ -4457,16 +4186,10 @@ ClientToolExpandedResult renderClientToolExpanded(
 
     // 2. 按 tool_name 注册的展开内容回调
     const auto* r = findToolRenderReg(reg, toolName, /*wantCollapsed=*/false);
-    // 3. 远程 (agent 侧) 登记项: 没有回调, 内容要回 agent 算
-    const auto* remote
-        = r ? nullptr : findRemoteToolRenderReg(reg, toolName, /*wantCollapsed=*/false);
-    if (!r && !remote) {
+    if (!r) {
         return res; // 没注册 → 默认展开体
     }
     if (!cache) {
-        if (!r) {
-            return res; // 远程项没有渲染缓存环境 (单元测试): 只走默认展开体
-        }
         // 无语义缓存 (单元测试/未挂载管理器环境): 同步调用回调
         auto                       input = makeRenderInput(
             toolCallId,
@@ -4500,7 +4223,6 @@ ClientToolExpandedResult renderClientToolExpanded(
         return res;
     }
 
-    const std::string owner = r ? r->plugin : remote->owner;
     const std::string key
         = ClientToolRenderRequest::keyFor(toolCallId, toolName, ClientToolRenderPart::Expanded);
     const uint64_t inputHash = ClientToolRenderRequest::hashInputs(
@@ -4511,15 +4233,15 @@ ClientToolExpandedResult renderClientToolExpanded(
         isError,
         maxWidth
     );
-    if (auto cached = cache->lookup(key, inputHash); cached && cached->plugin == owner) {
+    if (auto cached = cache->lookup(key, inputHash); cached && cached->plugin == r->plugin) {
         res.items = cached->items;
         return res;
     }
     res.pending       = true;
-    res.pendingPlugin = owner;
+    res.pendingPlugin = r->plugin;
     // 过渡: 上一份 items (没有 tool_call_id 时不沿用, 同折叠部分)
     if (!toolCallId.empty()) {
-        if (auto last = cache->lookupLatest(key); last && last->plugin == owner) {
+        if (auto last = cache->lookupLatest(key); last && last->plugin == r->plugin) {
             res.items = last->items;
         }
     }

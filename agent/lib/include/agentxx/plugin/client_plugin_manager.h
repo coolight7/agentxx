@@ -12,7 +12,6 @@
 
 #include "asio/any_io_executor.hpp"
 #include "asio/awaitable.hpp"
-#include "asio/steady_timer.hpp"
 #include "asio/thread_pool.hpp"
 #include "utilxx_base/json.h"
 #include <atomic>
@@ -185,34 +184,6 @@ struct ClientKeybindConflict {
 /// (见 TUI 侧 `keybindOfEvent`)。
 std::string normalizeKeybindSpec(std::string_view keys);
 
-/// 远程 (agent 侧) 插件注册的工具渲染器 (快照条目)
-///
-/// 与 [ClientToolRenderReg] 的区别: 这里**没有回调** —— 插件代码在 agent 进程里,
-/// 内容要回 agent 算 (wire `tool_render_request` / `tool_render_result`)。客户端只保留
-/// 显示名与"有没有内容回调"两个信息, 用于首帧与是否发起请求。
-struct ClientRemoteToolRenderer {
-    std::string toolName;
-    std::string displayName; ///< 注册时已归一 (空 → 工具名), 恒非空
-    bool        hasCollapsed = false;
-    bool        hasExpanded  = false;
-    std::string owner;       ///< 注册它的 agent 侧插件名 (诊断与缓存归属)
-};
-
-/// 一次远程渲染请求 (client io 线程构造; 字段均为拥有型拷贝)
-struct ClientRemoteRenderRequest {
-    int64_t     requestId = 0;
-    std::string sessionId;
-    std::string toolCallId;
-    std::string toolName;
-    bool        expanded   = false; ///< false = 折叠内容 (一行文本)
-    uint64_t    inputHash  = 0;
-    std::string argsJson;
-    std::string resultText;
-    bool        isFinished = false;
-    bool        isError    = false;
-    int         maxWidth   = 0;
-};
-
 /// UI 注册表快照 (UI 线程渲染读取; COW shared_ptr 语义)
 struct ClientUiRegistry {
     std::vector<ClientStatusItem>  statusItems;
@@ -230,10 +201,6 @@ struct ClientUiRegistry {
     /// - 与 toolRenderers 分表存放: 匹配优先级低于插件注册项 (插件可覆盖内置渲染)
     /// - 随 UI 注册表快照 (COW) 一并拷贝; 生命周期 = 进程, 不随插件禁用/卸载变化
     std::vector<ClientToolRenderReg> builtinToolRenderers;
-    /// agent 侧插件登记的工具渲染器 (没有回调, 内容回 agent 算)
-    /// - 匹配优先级最低: 本进程的注册项与内置项都能覆盖它
-    /// - 由 wire `tool_renderer_register` 全量替换
-    std::vector<ClientRemoteToolRenderer> remoteToolRenderers;
     /// 通用动作绑定 (COW 快照: UI 线程渲染时查"该按钮是否可点", 无锁读)
     std::vector<ClientActionBinding> actionBindings;
     /// 插件名 → 实例代次 (重载同名插件后代次改变)。UI 渲染时把代次记进按钮命中框,
@@ -313,8 +280,6 @@ struct ClientToolRenderEntry {
     bool              matched    = false; ///< 回调有返回内容 (false = 本次无自定义内容)
     std::string       text;            ///< 折叠内容 (折叠部分)
     utilxx_base::Json items = utilxx_base::Json::array(); ///< 展开内容 (展开部分)
-    /// 远程 (agent 侧) 插件产出的条目: 不随本进程插件代次变化, 按快照更新注销
-    bool remote = false;
 };
 
 /// 工具语义渲染请求 (UI 线程构造; 所有字段为拥有型拷贝, 不在 UI 线程进入插件代码)
@@ -386,10 +351,6 @@ public:
 
     /// 丢弃某插件的全部条目 (禁用/卸载/重载/会话切换)
     void invalidatePlugin(std::string_view plugin);
-
-    /// 丢弃全部远程 (agent 侧插件产出) 条目
-    /// - 远程登记表变化时用: 本进程插件的条目不受影响 (不会白重算一轮)
-    void invalidateRemote();
 
     void clear();
 
@@ -707,32 +668,6 @@ public:
     /// UI 侧查询工具渲染时先问一次: 请求尚未返回时本帧用通用回退, 不必为投递
     /// 拷贝 args/result 大文本 (见 message_list 的 queryToolCollapsed / queryToolExpanded)
     bool toolRenderInFlight(std::string_view key, uint64_t inputHash) const;
-
-    // ----- 远程 (agent 侧) 工具渲染 -----
-
-    /// 远程渲染请求的发送通道
-    ///
-    /// 由客户端端点注入 (端点知道怎么把 wire 消息发出去); 返回 false 表示目前
-    /// 没有可用连接 —— 该次渲染直接按"没有自定义内容"处理, 不会无限 pending。
-    using RemoteRenderSender = std::function<bool(const ClientRemoteRenderRequest&)>;
-    void setRemoteRenderSender(RemoteRenderSender sender);
-
-    /// 应用 agent 下发的渲染登记表快照 (client io 线程; 全量替换)
-    ///
-    /// - 快照未变时直接返回 (握手/切会话都会重发一次, 不必每次清缓存)
-    /// - 变了则丢弃远程渲染缓存条目 (内容可能跟着变), 本进程插件条目不受影响
-    void applyRemoteToolRenderers(std::vector<ClientRemoteToolRenderer> renderers);
-
-    /// 应用一条远程渲染结果 (client io 线程)
-    ///
-    /// - `requestId` 不在等待表中 (已超时/会话已切) → 丢弃
-    /// - `ok == false` / 内容为空 → 写"没有自定义内容"条目 (客户端回退默认渲染并缓存)
-    void applyRemoteToolRenderResult(
-        int64_t     requestId,
-        bool        ok,
-        std::string text,
-        std::string itemsJson
-    );
 
     /// 命令是否存在 (UI 线程判断是否拦截 "/" 输入; 短锁)
     bool hasCommand(std::string_view name) const;
@@ -1196,36 +1131,6 @@ private:
     /// 回调, 输出拷成主程序文本/JSON 写入缓存并通知 UI 重绘。
     void performToolRender(ClientToolRenderRequest req, std::string key, uint64_t inputHash);
 
-    /// 一次等待回包的远程渲染请求 (client io 线程读写)
-    struct PendingRemoteRender {
-        std::string                         key;
-        uint64_t                            inputHash = 0;
-        std::string                         toolCallId;
-        std::string                         toolName;
-        std::string                         owner;
-        bool                                expanded = false; ///< 请求的是展开体
-        std::shared_ptr<asio::steady_timer> timer; ///< 超时后按"没内容"收尾
-    };
-
-    /// 发起一次远程渲染请求 (client io 线程)
-    /// - `return` false: 没有发送通道或发送失败 → 调用方写"没内容"条目
-    /// - 成功时保持 in-flight 标记直到 [applyRemoteToolRenderResult] / 超时
-    bool sendRemoteToolRender(
-        const ClientRemoteToolRenderer& remote,
-        const ClientToolRenderRequest&  req,
-        const std::string&              key,
-        uint64_t                        inputHash
-    );
-
-    /// 收尾一次远程渲染 (成功/失败/超时共用): 写缓存 + 清 in-flight + 通知 UI
-    void finishRemoteRender(
-        int64_t           requestId,
-        bool              ok,
-        std::string       text,
-        std::string       itemsJson,
-        std::string_view  reason
-    );
-
     /// 登记/清除插件实例代次 (io 线程; 供 UI 点击携带与复查; 见
     /// [ClientUiRegistry::instanceGenerations])
     void setRegistryGeneration(std::string_view plugin, uint64_t generation, bool present);
@@ -1257,13 +1162,6 @@ private:
     /// 条目按部分分条 (`#c` 折叠内容 / `#e` 展开内容), 各自版本号与输入特征独立。
     std::shared_ptr<ClientToolRenderCache> toolRenderCache_
         = std::make_shared<ClientToolRenderCache>();
-
-    /// 远程 (agent 侧) 渲染: 请求发送通道 (由端点注入, 启动后不变)
-    RemoteRenderSender remoteRenderSender_;
-
-    /// 远程渲染: 回包匹配表 + 请求 id 序列 (仅 client io 线程)
-    std::map<int64_t, PendingRemoteRender> pendingRemoteRenders_;
-    int64_t                                nextRemoteRenderId_ = 0;
 
     /// 会话上下文 (io 线程)
     std::string sessionId_ = "session";

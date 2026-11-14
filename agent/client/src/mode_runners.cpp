@@ -102,36 +102,6 @@ static std::shared_ptr<agentxx::plugin::ClientPluginManager> setupClientPlugins(
     mgr->setUiAdapter(std::make_shared<AdapterT>(io));
     mgr->setSessionId(sessionId);
     agentxx::plugin::registerBuiltinToolRenderers(*mgr);
-    // agent 侧插件登记的工具渲染器: 内容要回 agent 算, 这里给出"怎么把请求发出去"。
-    // 本地直连与远程连接走同一个端点接口 (换的是传输层), 所以两端都能用。
-    mgr->setRemoteRenderSender(
-        [weakIo = std::weak_ptr<IoT>(io)](const agentxx::plugin::ClientRemoteRenderRequest& req
-                                       ) -> bool {
-            auto sp = weakIo.lock();
-            if (!sp) {
-                return false;
-            }
-            agentxx::agent::WireToolRenderRequest wire;
-            wire.requestId  = req.requestId;
-            wire.sessionId  = req.sessionId;
-            wire.toolCallId = req.toolCallId;
-            wire.toolName   = req.toolName;
-            wire.part       = req.expanded ? "expanded" : "collapsed";
-            wire.inputHash  = req.inputHash;
-            wire.argsJson   = req.argsJson;
-            wire.resultText = req.resultText;
-            wire.isFinished = req.isFinished;
-            wire.isError    = req.isError;
-            wire.maxWidth   = req.maxWidth;
-            try {
-                sp->sendToPeer(std::move(wire));
-            } catch (const std::exception& e) {
-                XX_LOGW("[client_plugin] tool render request dropped: {}", e.what());
-                return false;
-            }
-            return true;
-        }
-    );
     // TUI 端点: 组件上下文 (ctx_.pluginManager) 在 start() 的 UI 线程构建时
     // 读取, 故 setPluginManager 必须在 start() 之前调用 (见各模式加载顺序)
     if constexpr (std::is_same_v<IoT, TUIClientAgentIO>) {

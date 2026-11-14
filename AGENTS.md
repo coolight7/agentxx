@@ -304,16 +304,10 @@ path/to/agentxx_test --log-level warn string_util regex
   (主程序已按挂载记录撤销)。JS SDK 与 C++ 侧同名同义 (`registerTool` / `subscribe` / `publish` /
   `addSkillDir` / `registerToolPermission` / `getConfig` / `scope()` / `netCall` / `netFetch` /
   `submitAsyncWork` / `getPrompt` / `getMessages` / `getGraphJson` / `mountRoot` /
-  `openChannel` / `registerTrigger` / `registerToolRenderer` 等)
-- **工具特化渲染两侧都能注册** (2026-11): client 侧插件 (`agentxx.client.ui` 的
-  `register_tool_renderer`) 仍在本进程算内容; agent 侧插件 (C++ 与 JS 同一条路) 经
-  `agentxx.agent.tool_render` 登记, 主程序把登记表快照下发客户端 (`tool_renderer_register`),
-  客户端按需回来问内容 (`tool_render_request` → **工作线程**执行回调 → `tool_render_result`),
-  远程 TUI 因此同样生效 (客户端 io 线程不进入插件代码)。客户端匹配优先级: 实例装饰 >
-  本进程插件注册项 > 主程序内置渲染器 > 远程登记项; 远程内容 3 秒超时按"没内容"收尾。
-  JS 入口 `registerToolRenderer({tool, displayName, collapsed, expanded})` /
-  `unregisterToolRenderer(tool)` (回调预算 200 ms, 返回字符串 = 折叠一行、数组/对象 = 展开体 items)。
-  详见 plugins.md §9 与 §12
+  `openChannel` / `registerTrigger` 等), 只剩工具特化渲染未做: 它注册在 **client 侧**
+  (`agentxx.client.ui` 的 `register_tool_renderer`), 而引擎只有 agent 侧入口; 另外内容回调
+  在 client IO 线程同步返回结果 (UI 线程只读语义缓存、未命中就投递请求), JS 要实现得
+  同步转到 JS 线程并对 `await` 加超时或扩 ABI 支持"先 pending、稍后回填"。详见 plugins.md §12
 - 插件接口为 **API v1**: 入口为 `agentxx_plugin_agent_create` /
   `agentxx_plugin_agent_destroy` 实例对 (client 侧 `agentxx_plugin_client_create` / `_destroy`)。
   【API v1 规范】全局 API 版本及全部接口表版本均重置为 1；明确 8 字节结构体对齐与定长基础类型 (`int32_t/int64_t/uint64_t`)；跨边界函数统一 `PLUGINXX_CALL` 调用约定；结构体参数一律传递指针 (`const Struct*`)，结构体返回值一律改为指针出参 (`Struct* out`) 并返回 `int32_t` 状态码；核心 vtable 精简为 `alloc/free` 操作 (去除了 `strdup`，采用头文件内联 `pluginxx_strdup`)。
@@ -729,13 +723,11 @@ path/to/agentxx_test --log-level warn string_util regex
   容器 io 线程、实例释放后不再进入插件代码。
   注: 提示词只按 **agent 级** 支持修改 (根 `config_json` 的 `prompt`), **不做**会话级
   提示词来源 —— 一个 agent 管理的会话、提示词、插件等保持一致
-- 接口表数量: agent 侧 21 张 (10 张通用表 `<应用名>.*` 即 `agentxx.*`: broadcasts/capabilities/
-  scheduler/coroutine_runtime/tasks/cancel/plugins/config/json/log + 11 张业务表 `agentxx.agent.*`,
+- 接口表数量: agent 侧 20 张 (10 张通用表 `<应用名>.*` 即 `agentxx.*`: broadcasts/capabilities/
+  scheduler/coroutine_runtime/tasks/cancel/plugins/config/json/log + 10 张业务表 `agentxx.agent.*`,
   不含两侧都有的 `agentxx.net`;
   业务表含 `agentxx.agent.context` 会话 LLM 上下文查询 `get_messages`/`messages_count`、
-  `agentxx.agent.mount` 挂载查询 `list`/`get`、
-  `agentxx.agent.tool_render` 工具行特化渲染 `register_tool_renderer`/`unregister_tool_renderer`
-  (agent 侧插件也能定制工具行: 登记表下发客户端, 内容回 agent 算),
+  `agentxx.agent.mount` 挂载查询 `list`/`get`,
   以及 `agentxx.agent.runtime` 会话运行时 —— 插件挂自己的根 agent
   (`mount_root`/`unmount_root`)、在上面开关会话通道 (`open_channel`/`close_channel`/
   `send_input`/`cancel`/`select_model`/`respond_interrupt`)、查询
