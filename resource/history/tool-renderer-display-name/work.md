@@ -11,9 +11,9 @@
 - [x] 步骤 2：注册表 + 两部分渲染查询 + `toolDisplayNameFor` + 按部分缓存/指纹
 - [x] 步骤 3：内置渲染器 + 4 个插件（模版 → 折叠内容 lambda，去掉 `" · "` 前导）
 - [x] 步骤 4：TUI（固定骨架、两部分查询、itemKey、删预取与嗅探）
-- [ ] 步骤 5：测试（`plugin_runtime` / `client_plugins` / `tui_tool_header`）
+- [x] 步骤 5：测试（`plugin_runtime` / `client_plugins` / `tui_tool_header`）
 - [ ] 步骤 6：文档（`plugins.md` §9、`tui.md` §2.2/§2.14、`docs/en`、`AGENTS.md`）
-- [ ] 步骤 7：编译 + 插件重建 + 跑测试
+- [ ] 步骤 7：编译 + 插件重建 + 跑全量测试
 
 ## 每步改动与验证
 
@@ -95,13 +95,45 @@
 
 验证：`agentxx_client`（内层构建目录）编译通过。
 
+### 步骤 5：测试
+
+- `test_plugin_runtime.cpp`：`AgentxxToolRenderSpec` 布局断言 → `display_name` 24、
+  `collapsed_fn` 40、`expanded_fn` 48、`user_data` 56、`sizeof` 64。
+- `test_client_plugins.cpp`
+  - 新 helper `RenderedTool{displayName, summary, items, matched, collapsedPending,
+    expandedPending}` + `queryExpandedAsync`，`renderToolAsync` 改为折叠/展开各查一次；
+  - 断言去掉折叠文本的 `" · "` 前导；`hasRenderer` = 任一侧回调非空；
+  - 重写 21b（折叠/展开分部分缓存、pending、回调返回空、装饰缺项回落、卸载失效）、
+    重写 28.10（插件注册项优先于内置）；`entry.displayName` → `entry.text`。
+- `test_tui_tool_header.cpp`
+  - `makeTestToolRegistry()` 全部改为 `displayName` + `collapsedFn`/`expandedFn`；
+  - `pushRenderEntry` → `pushCollapsedEntry(key, plugin, text)`，删 `pushToolNameResult`；
+  - 新 helper `resolveFromRegistry(...)`：用镜像渲染器在测试线程算出内容并写入语义缓存
+    （镜像只存在于 UI 注册表快照里，管理器执行请求时找不到它们 —— 见下面“已知坑”）；
+  - `testTuiToolHeaderPendingRender` → `testTuiToolHeaderPendingContent`；
+    占位行断言 `Read · receiving tool call...`、展开首行 `- [Tool] Read 1.2s` 等。
+
+验证（`exec` 下实际运行）：
+
+```text
+plugin_runtime    passed=730 failed=0
+tui_tool_header   passed=166 failed=0
+client_plugins    passed=774 failed=0
+plugin_sdk        passed=133 failed=0
+tui_widget        passed=208 failed=0
+tui_form          passed=84  failed=0
+tui_ui_items      passed=277 failed=0
+ui_items          passed=117 failed=0
+boundaries        passed=19  failed=0
+```
+
 ## 验证清单
 
 - [ ] `windows_debug_build.bat` 编译通过（无新增警告）
 - [x] `build_plugins.ps1` 重建 `agentxx_filesystem` / `agentxx_planning` /
       `agentxx_execute_command` / `agentxx_websearch`，`exec/plugins/*` 时间戳已更新
-- [ ] `agentxx_test --log-level warn plugin_runtime client_plugins tui_tool_header`
-- [ ] `agentxx_test --log-level warn plugin_sdk tui_widget tui_form tui_ui_items ui_items`
+- [x] `agentxx_test --log-level warn plugin_runtime client_plugins tui_tool_header`
+- [x] `agentxx_test --log-level warn plugin_sdk tui_widget tui_form tui_ui_items ui_items boundaries`
 - [ ] TUI 手工冒烟：占位行（符号 + 名字 + ` · ` + 提示，不可点击）、工具行各分支
       （失败 / 自定义内容 / pending 留空 / 无自定义走默认 / 已有结果）、展开首行显示名+耗时、
       历史回溯一致、插件禁用后回退默认渲染
@@ -110,7 +142,12 @@
 ## 注意事项 / 已知坑
 
 - 接口代次保持 5，但 `AgentxxToolRenderSpec` 布局变了（64 字节）：**旧插件 DLL 必须重建**，
-  否则新主程序会按新布局读旧内存。
+  否则新主程序会按新布局读旧内存 —— 实测现象：旧测试可执行文件 + 新插件时，旧布局把
+  `display_name`(偏移 24) 当函数指针调用，直接跳到字符串常量 `"Plan"` 上（ASan 报
+  `access-violation`，PC 落在插件 `.rdata`）。
+- 改完 `agent/lib` 与 `agent/test` **必须各跑一次 `cmake --install`**：测试/客户端用安装前缀里的
+  头与库，`exec/agentxx_test.exe` 也只有 install 才更新；只 `cmake --build` 会留下旧可执行文件，
+  与新建的插件 DLL 混跑（上面的崩溃即由此造成，排查耗时远大于一次 install）。
 - `test_plugin_runtime.cpp` 的 `offsetof`/`sizeof` 断言要按 plan §2.2 改：
   `display_name` 24、`collapsed_fn` 40、`expanded_fn` 48、`user_data` 56、`sizeof` 64。
 - 缓存键按部分分条（`#c` / `#e`）：`ClientToolRenderCache::version`、`beginRequest`、

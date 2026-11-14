@@ -18,7 +18,7 @@
 - 机器人插件提供tool给主程序调用，实现通知
 - agentxx 自重启控制、仿照 musicxx 的 cli + http + mcp + deeplink 命令控制，由于 agentxx 支持多进程，应当 agentxx 列出 id，然后指定 id 连接调用
 - 通过 mdns 互相发现，以便了解各自正在运行的会话内容
-- share_store 支持 grep、输出到文件等
+- share_store 支持 grep、输出到文件等 
 - 上下文较长自动插入事件提示消息，提示模型及时更新文档或plan，即将压缩，并在压缩时提示不要在结果中误认为上下文即将耗尽
 - 更新 en 文档
 - share_store id 特化渲染
@@ -31,6 +31,7 @@
 - 异步事件、任务的最新结果不再限制 linger_ms 存活时间，直接转存 share_store，并重构 share_store 增加命名空间，区分 tool、事件、插件调用 等添加到 share_store 时的命名空间划分
 - 透视UI，虚拟现实/玻璃显示(车挡风玻璃、眼镜)
 - 任务规划文件 关联 git commit 以便检索
+- subagent 注册的 tool
 
 - SVG绘制支持
 

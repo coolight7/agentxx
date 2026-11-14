@@ -60,129 +60,36 @@ static PluginxxString makeTestString(std::string_view s) {
 std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
     auto reg = std::make_shared<agentxx::plugin::ClientUiRegistry>();
 
-    // List (模板)
-    reg->toolRenderers.push_back({
-        .plugin              = "agentxx_filesystem",
-        .toolName            = "agentxx_filesystem_list",
-        .renderFn            = nullptr,
-        .userData            = nullptr,
-        .templateDisplayName = "List",
-        .templateSummaryKey  = "path",
-    });
-
-    // Write (模板)
-    reg->toolRenderers.push_back({
-        .plugin              = "agentxx_filesystem",
-        .toolName            = "agentxx_filesystem_write",
-        .renderFn            = nullptr,
-        .userData            = nullptr,
-        .templateDisplayName = "Write",
-        .templateSummaryKey  = "path",
-    });
-
-    // Read (回调)
-    static auto readFn
-        = [](void*, const AgentxxToolRenderInput* in, AgentxxToolRenderOutput* out) -> int32_t {
-        std::string_view  args(in->args_json.data ? in->args_json.data : "", in->args_json.size);
-        utilxx_base::Json j;
+    /// 参数 JSON → 对象 (空串/非法 JSON/非对象返回 nullopt: 回调不给内容,
+    /// 界面走默认渲染)
+    static auto argObject
+        = [](const AgentxxToolRenderInput* in) -> std::optional<utilxx_base::Json> {
+        std::string_view args(in->args_json.data ? in->args_json.data : "", in->args_json.size);
+        if (args.empty()) {
+            return std::nullopt;
+        }
         try {
-            j = utilxx_base::Json::parse(args);
-        } catch (...) {
-            return -1;
-        }
-        if (!j.is_object()) {
-            return -1;
-        }
-        std::string path = j.value("path", std::string{});
-        int64_t     off  = j.value("offset", int64_t{-1});
-        int64_t     lim  = j.value("limit", int64_t{-1});
-        std::string range;
-        if (off <= 0 && lim <= 0) {
-            // empty
-        } else if (off <= 0) {
-            range = fmt::format("0, {}", lim);
-        } else if (lim <= 0) {
-            range = fmt::format("{}, ~", off);
-        } else {
-            range = fmt::format("{}, {}", off, off + lim);
-        }
-        std::string summary = " ·";
-        if (!range.empty()) {
-            summary += " [" + range + "]";
-        }
-        if (!path.empty()) {
-            summary += " " + path;
-        }
-        out->displayName = makeTestString("Read");
-        out->summary     = makeTestString(summary);
-        return 0;
-    };
-    reg->toolRenderers.push_back({
-        .plugin   = "agentxx_filesystem",
-        .toolName = "agentxx_filesystem_read",
-        .renderFn = readFn,
-    });
-
-    // Glob (回调; 与真实插件回调同语义: 兼容单字符串/数组)
-    // - 提取逻辑镜像 agentxx_fs_plugin::stringListArg (单字符串包装为单元素
-    //   列表, 数组逐项提取字符串), 保证夹具摘要与真实渲染一致
-    static auto globFilesOf = [](const utilxx_base::Json& j) -> std::vector<std::string> {
-        std::vector<std::string> out;
-        if (!j.is_object() || !j.contains("file_patterns")) {
-            return out;
-        }
-        const auto& v = j["file_patterns"];
-        if (v.is_string()) {
-            out.push_back(v.get<std::string>());
-        } else if (v.is_array()) {
-            for (const auto& item : v) {
-                if (item.is_string()) {
-                    out.push_back(item.get<std::string>());
-                }
+            auto j = utilxx_base::Json::parse(args);
+            if (!j.is_object()) {
+                return std::nullopt;
             }
-        }
-        return out;
-    };
-    static auto globFn
-        = [](void*, const AgentxxToolRenderInput* in, AgentxxToolRenderOutput* out) -> int32_t {
-        std::string_view  args(in->args_json.data ? in->args_json.data : "", in->args_json.size);
-        utilxx_base::Json j;
-        try {
-            j = utilxx_base::Json::parse(args);
+            return j;
         } catch (...) {
-            return -1;
+            return std::nullopt;
         }
-        if (!j.is_object()) {
-            return -1;
-        }
-        auto         files = globFilesOf(j);
-        std::string  joined;
-        const size_t n = std::min<size_t>(files.size(), 2);
-        for (size_t i = 0; i < n; ++i) {
-            if (i > 0) {
-                joined += ", ";
-            }
-            joined += files[i];
-        }
-        if (files.size() > 2) {
-            joined += (n > 0 ? ", ..." : "...");
-        }
-        out->displayName = makeTestString("Glob");
-        out->summary     = makeTestString(" · " + joined);
-        return 0;
     };
-    reg->toolRenderers.push_back({
-        .plugin   = "agentxx_filesystem",
-        .toolName = "agentxx_filesystem_glob",
-        .renderFn = globFn,
-    });
 
-    // Grep (回调; 与真实插件回调同语义: 兼容单字符串/数组)
-    static auto grepListOf
+    /// 取单个字符串参数 (缺失/类型不符返回空串)
+    static auto stringArg = [](const utilxx_base::Json& j, std::string_view key) -> std::string {
+        return j.value(std::string{key}, std::string{});
+    };
+
+    /// 取字符串数组参数 (单字符串按单元素处理)
+    static auto stringListArg
         = [](const utilxx_base::Json& j, std::string_view key) -> std::vector<std::string> {
         std::vector<std::string> out;
-        std::string              k{key};
-        if (!j.is_object() || !j.contains(k)) {
+        const std::string        k{key};
+        if (!j.contains(k)) {
             return out;
         }
         const auto& v = j[k];
@@ -197,21 +104,125 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
         }
         return out;
     };
-    static auto grepFn
-        = [](void*, const AgentxxToolRenderInput* in, AgentxxToolRenderOutput* out) -> int32_t {
-        std::string_view  args(in->args_json.data ? in->args_json.data : "", in->args_json.size);
-        utilxx_base::Json j;
-        try {
-            j = utilxx_base::Json::parse(args);
-        } catch (...) {
-            return -1;
+
+    // List / Write / Remove (折叠内容 = 路径)
+    static auto pathCollapsed
+        = [](void*,
+                                       const AgentxxToolRenderInput* in,
+                                       AgentxxToolCollapsedOutput* out) -> int32_t {
+        auto j = argObject(in);
+        if (!j) {
+            return 0;
         }
-        if (!j.is_object()) {
-            return -1;
+        const std::string path = stringArg(*j, "path");
+        if (!path.empty()) {
+            out->text = makeTestString(path);
         }
-        auto                     textPats  = grepListOf(j, "text_patterns");
-        auto                     regexPats = grepListOf(j, "regex_patterns");
-        auto                     files     = grepListOf(j, "file_patterns");
+        return 0;
+    };
+    reg->toolRenderers.push_back({
+        .plugin      = "agentxx_filesystem",
+        .toolName    = "agentxx_filesystem_list",
+        .displayName = "List",
+        .collapsedFn = pathCollapsed,
+    });
+    reg->toolRenderers.push_back({
+        .plugin      = "agentxx_filesystem",
+        .toolName    = "agentxx_filesystem_write",
+        .displayName = "Write",
+        .collapsedFn = pathCollapsed,
+    });
+
+    // Read (折叠内容 = "[offset, limit] path")
+    static auto readCollapsed
+        = [](void*,
+                                       const AgentxxToolRenderInput* in,
+                                       AgentxxToolCollapsedOutput* out) -> int32_t {
+        auto j = argObject(in);
+        if (!j) {
+            return 0;
+        }
+        const std::string path = stringArg(*j, "path");
+        const int64_t     off  = j->value("offset", int64_t{-1});
+        const int64_t     lim  = j->value("limit", int64_t{-1});
+        std::string       range;
+        if (off <= 0 && lim <= 0) {
+            // 无区间
+        } else if (off <= 0) {
+            range = fmt::format("0, {}", lim);
+        } else if (lim <= 0) {
+            range = fmt::format("{}, ~", off);
+        } else {
+            range = fmt::format("{}, {}", off, off + lim);
+        }
+        std::string text;
+        if (!range.empty()) {
+            text = "[" + range + "]";
+        }
+        if (!path.empty()) {
+            if (!text.empty()) {
+                text += ' ';
+            }
+            text += path;
+        }
+        if (!text.empty()) {
+            out->text = makeTestString(text);
+        }
+        return 0;
+    };
+    reg->toolRenderers.push_back({
+        .plugin      = "agentxx_filesystem",
+        .toolName    = "agentxx_filesystem_read",
+        .displayName = "Read",
+        .collapsedFn = readCollapsed,
+    });
+
+    // Glob (折叠内容 = 文件模式, 最多列两个)
+    static auto globCollapsed
+        = [](void*,
+                                       const AgentxxToolRenderInput* in,
+                                       AgentxxToolCollapsedOutput* out) -> int32_t {
+        auto j = argObject(in);
+        if (!j) {
+            return 0;
+        }
+        const auto   files = stringListArg(*j, "file_patterns");
+        std::string  joined;
+        const size_t n = std::min<size_t>(files.size(), 2);
+        for (size_t i = 0; i < n; ++i) {
+            if (i > 0) {
+                joined += ", ";
+            }
+            joined += files[i];
+        }
+        if (files.size() > 2) {
+            joined += (n > 0 ? ", ..." : "...");
+        }
+        if (!joined.empty()) {
+            out->text = makeTestString(joined);
+        }
+        return 0;
+    };
+    reg->toolRenderers.push_back({
+        .plugin      = "agentxx_filesystem",
+        .toolName    = "agentxx_filesystem_glob",
+        .displayName = "Glob",
+        .collapsedFn = globCollapsed,
+    });
+
+    // Grep (折叠内容 = '["pat"] file_patterns')
+    static auto grepCollapsed
+        = [](void*,
+                                       const AgentxxToolRenderInput* in,
+                                       AgentxxToolCollapsedOutput* out) -> int32_t {
+        auto j = argObject(in);
+        if (!j) {
+            return 0;
+        }
+        const auto textPats  = stringListArg(*j, "text_patterns");
+        const auto regexPats = stringListArg(*j, "regex_patterns");
+        const auto files     = stringListArg(*j, "file_patterns");
+
         std::vector<std::string> shown;
         for (const auto& p : textPats) {
             if (shown.size() >= 2) {
@@ -247,197 +258,254 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
         if (files.size() > 2) {
             joinedFiles += (n > 0 ? ", ..." : "...");
         }
-        std::string summary = fmt::format(" · [{}] {}", quoted, joinedFiles);
-        out->displayName    = makeTestString("Grep");
-        out->summary        = makeTestString(summary);
+        out->text = makeTestString(fmt::format("[{}] {}", quoted, joinedFiles));
         return 0;
     };
     reg->toolRenderers.push_back({
-        .plugin   = "agentxx_filesystem",
-        .toolName = "agentxx_filesystem_grep",
-        .renderFn = grepFn,
+        .plugin      = "agentxx_filesystem",
+        .toolName    = "agentxx_filesystem_grep",
+        .displayName = "Grep",
+        .collapsedFn = grepCollapsed,
     });
 
-    // Edit (回调)
-    static auto editFn
-        = [](void*, const AgentxxToolRenderInput* in, AgentxxToolRenderOutput* out) -> int32_t {
-        std::string_view  args(in->args_json.data ? in->args_json.data : "", in->args_json.size);
-        utilxx_base::Json j;
-        try {
-            j = utilxx_base::Json::parse(args);
-        } catch (...) {
-            return -1;
+    // Edit: 折叠内容 = "[+行 -行] path"; 展开内容 = 逐段 diff items
+    static auto editCollapsed
+        = [](void*,
+                                       const AgentxxToolRenderInput* in,
+                                       AgentxxToolCollapsedOutput* out) -> int32_t {
+        auto j = argObject(in);
+        if (!j) {
+            return 0;
         }
-        if (!j.is_object()) {
-            return -1;
-        }
-        std::string path     = j.value("path", std::string{});
-        auto        segments = agentxx_fs_plugin::editSegmentsArg(j);
-        out->displayName     = makeTestString("Edit");
-        // 折叠头摘要与真实插件一致: " · [+行 -行] path"
-        // (增删行数经共享 helper 计算 —— 与插件渲染器、展开体 diff 三者同源,
-        // 见 agentxx_fs_plugin.h 的 diffStatTextOfSegments; 各段各替换一处, 按段求和)
-        std::string       summary  = " ·";
+        const std::string path     = stringArg(*j, "path");
+        const auto        segments = agentxx_fs_plugin::editSegmentsArg(*j);
+        // 增删行数经共享 helper 计算 —— 与插件渲染器、展开体 diff 三者同源
+        // (见 agentxx_fs_plugin.h 的 diffStatTextOfSegments; 各段各替换一处, 按段求和)
         const std::string diffStat = agentxx_fs_plugin::diffStatTextOfSegments(segments);
+        std::string       text;
         if (!diffStat.empty()) {
-            summary += " " + diffStat;
+            text = diffStat;
         }
         if (!path.empty()) {
-            summary += " " + path;
+            if (!text.empty()) {
+                text += ' ';
+            }
+            text += path;
         }
-        out->summary = makeTestString(summary);
-        if (!in->is_error) {
-            // 展开体与真实插件一致: 每段一个 Diff 片段 (路径只在首段), 段间分隔线
-            utilxx_base::Json arr          = utilxx_base::Json::array();
-            bool              firstSegment = true;
-            for (const auto& seg : segments) {
-                if (seg.oldStr.empty() && seg.newStr.empty()) {
-                    continue;
-                }
-                if (!firstSegment) {
-                    arr.push_back(utilxx_base::Json{
-                        {"kind", "Divider"}
-                    });
-                }
+        if (!text.empty()) {
+            out->text = makeTestString(text);
+        }
+        return 0;
+    };
+    static auto editExpanded
+        = [](void*,
+                                       const AgentxxToolRenderInput* in,
+                                       AgentxxToolExpandedOutput* out) -> int32_t {
+        auto j = argObject(in);
+        if (!j) {
+            return 0;
+        }
+        const std::string path     = stringArg(*j, "path");
+        const auto        segments = agentxx_fs_plugin::editSegmentsArg(*j);
+        if (in->is_error) {
+            return 0; // 失败时界面走默认展开体, 不给自定义内容
+        }
+        utilxx_base::Json arr          = utilxx_base::Json::array();
+        bool              firstSegment = true;
+        for (const auto& seg : segments) {
+            if (seg.oldStr.empty() && seg.newStr.empty()) {
+                continue;
+            }
+            if (!firstSegment) {
                 arr.push_back(utilxx_base::Json{
-                    {"kind",   "Diff"                             },
-                    {"path",   firstSegment ? path : std::string{}},
-                    {"oldStr", seg.oldStr                         },
-                    {"newStr", seg.newStr                         },
+                    {"kind", "Divider"}
                 });
-                firstSegment = false;
             }
-            if (!arr.empty()) {
-                out->items_json = makeTestString(arr.dump());
-            }
+            arr.push_back(utilxx_base::Json{
+                {"kind",   "Diff"                             },
+                {"path",   firstSegment ? path : std::string{}},
+                {"oldStr", seg.oldStr                         },
+                {"newStr", seg.newStr                         },
+            });
+            firstSegment = false;
+        }
+        if (!arr.empty()) {
+            out->items_json = makeTestString(arr.dump());
         }
         return 0;
     };
     reg->toolRenderers.push_back({
-        .plugin   = "agentxx_filesystem",
-        .toolName = "agentxx_filesystem_edit",
-        .renderFn = editFn,
+        .plugin      = "agentxx_filesystem",
+        .toolName    = "agentxx_filesystem_edit",
+        .displayName = "Edit",
+        .collapsedFn = editCollapsed,
+        .expandedFn  = editExpanded,
     });
 
-    // Search (模板)
+    // Search / Fetch / FetchMD / Bash / Windows (折叠内容 = 单个参数)
+    static auto queryCollapsed
+        = [](void*,
+                                       const AgentxxToolRenderInput* in,
+                                       AgentxxToolCollapsedOutput* out) -> int32_t {
+        auto j = argObject(in);
+        if (!j) {
+            return 0;
+        }
+        const std::string query = stringArg(*j, "query");
+        if (!query.empty()) {
+            out->text = makeTestString(query);
+        }
+        return 0;
+    };
+    static auto urlCollapsed
+        = [](void*,
+                                       const AgentxxToolRenderInput* in,
+                                       AgentxxToolCollapsedOutput* out) -> int32_t {
+        auto j = argObject(in);
+        if (!j) {
+            return 0;
+        }
+        const std::string url = stringArg(*j, "url");
+        if (!url.empty()) {
+            out->text = makeTestString(url);
+        }
+        return 0;
+    };
+    static auto commandCollapsed
+        = [](void*,
+                                       const AgentxxToolRenderInput* in,
+                                       AgentxxToolCollapsedOutput* out) -> int32_t {
+        auto j = argObject(in);
+        if (!j) {
+            return 0;
+        }
+        const std::string command = stringArg(*j, "command");
+        if (!command.empty()) {
+            out->text = makeTestString(command);
+        }
+        return 0;
+    };
     reg->toolRenderers.push_back({
-        .plugin              = "agentxx_websearch",
-        .toolName            = "agentxx_web_search",
-        .renderFn            = nullptr,
-        .userData            = nullptr,
-        .templateDisplayName = "Search",
-        .templateSummaryKey  = "query",
+        .plugin      = "agentxx_websearch",
+        .toolName    = "agentxx_web_search",
+        .displayName = "Search",
+        .collapsedFn = queryCollapsed,
     });
-
-    // Fetch (模板)
     reg->toolRenderers.push_back({
-        .plugin              = "agentxx_websearch",
-        .toolName            = "agentxx_web_fetch",
-        .renderFn            = nullptr,
-        .userData            = nullptr,
-        .templateDisplayName = "Fetch",
-        .templateSummaryKey  = "url",
+        .plugin      = "agentxx_websearch",
+        .toolName    = "agentxx_web_fetch",
+        .displayName = "Fetch",
+        .collapsedFn = urlCollapsed,
     });
-
-    // FetchMD (模板)
     reg->toolRenderers.push_back({
-        .plugin              = "agentxx_websearch",
-        .toolName            = "agentxx_web_fetch_markdown",
-        .renderFn            = nullptr,
-        .userData            = nullptr,
-        .templateDisplayName = "FetchMD",
-        .templateSummaryKey  = "url",
+        .plugin      = "agentxx_websearch",
+        .toolName    = "agentxx_web_fetch_markdown",
+        .displayName = "FetchMD",
+        .collapsedFn = urlCollapsed,
     });
-
-    // Bash (模板)
     reg->toolRenderers.push_back({
-        .plugin              = "agentxx_execute_command",
-        .toolName            = "agentxx_execute_bash_command",
-        .renderFn            = nullptr,
-        .userData            = nullptr,
-        .templateDisplayName = "Bash",
-        .templateSummaryKey  = "command",
+        .plugin      = "agentxx_execute_command",
+        .toolName    = "agentxx_execute_bash_command",
+        .displayName = "Bash",
+        .collapsedFn = commandCollapsed,
     });
-
-    // Windows (模板)
     reg->toolRenderers.push_back({
-        .plugin              = "agentxx_execute_command",
-        .toolName            = "agentxx_execute_windows_command",
-        .renderFn            = nullptr,
-        .userData            = nullptr,
-        .templateDisplayName = "Bash",
-        .templateSummaryKey  = "command",
+        .plugin      = "agentxx_execute_command",
+        .toolName    = "agentxx_execute_windows_command",
+        .displayName = "Bash",
+        .collapsedFn = commandCollapsed,
     });
 
-    // Planning (回调; 镜像 agentxx_planning 插件注册的类型级渲染器):
-    // 由工具参数/结果推导折叠头与展开体, 覆盖"重启恢复会话后历史 Tool 消息
-    // 没有运行时装饰"的渲染路径 (实时调用的装饰优先级更高, 见 renderClientTool)
-    static auto planningFn
-        = [](void*, const AgentxxToolRenderInput* in, AgentxxToolRenderOutput* out) -> int32_t {
-        std::string_view  args(in->args_json.data ? in->args_json.data : "", in->args_json.size);
-        utilxx_base::Json a;
+    // Planning (镜像 agentxx_planning 插件注册的类型级渲染器):
+    // 折叠内容 = todos 摘要, 展开内容 = 状态图 + todos + notes, 覆盖"重启恢复会话
+    // 后历史 Tool 消息没有运行时装饰"的渲染路径
+    static auto planOf
+        = [](const AgentxxToolRenderInput* in) -> std::optional<utilxx_base::Json> {
+        auto a = argObject(in);
+        if (!a) {
+            return std::nullopt;
+        }
+        if (a->value("mode", std::string{}) != "read") {
+            return a; // write: 参数即规划内容
+        }
+        // read: 结果即保存的规划 JSON
+        std::string_view result(in->result_text.data ? in->result_text.data : "",
+                                in->result_text.size);
+        if (result.empty()) {
+            return utilxx_base::Json::object();
+        }
         try {
-            a = args.empty() ? utilxx_base::Json::object() : utilxx_base::Json::parse(args);
+            auto j = utilxx_base::Json::parse(result);
+            if (!j.is_object()) {
+                return std::nullopt;
+            }
+            return j;
         } catch (...) {
-            return -1; // 参数不可解析: 回退通用渲染
+            return std::nullopt;
         }
-        if (!a.is_object()) {
-            return -1;
-        }
-        // write: 参数即规划内容; read: 结果即保存的规划 JSON
-        utilxx_base::Json plan;
-        if (a.value("mode", std::string{}) == "read") {
-            const std::string_view result(
-                in->result_text.data ? in->result_text.data : "",
-                in->result_text.size
-            );
-            try {
-                plan = result.empty() ? utilxx_base::Json::object()
-                                      : utilxx_base::Json::parse(result);
-            } catch (...) {
-                return -1;
-            }
-        } else {
-            plan = a;
-        }
-
+    };
+    static auto planSummaryOf = [](const utilxx_base::Json& plan) -> std::string {
         std::string summary;
-        if (plan.contains("todos") && plan["todos"].is_array()) {
-            for (const auto& td : plan["todos"]) {
-                if (!td.is_object()) {
-                    continue;
-                }
-                const auto content = td.value("content", std::string{});
-                if (content.empty()) {
-                    continue;
-                }
-                const auto state = td.value("state", std::string{});
-                if (!summary.empty()) {
-                    summary += "; ";
-                }
-                summary += fmt::format(
-                    "{} {}",
-                    state == "completed" ? "[#]" : (state == "in_progress" ? "[~]" : "[ ]"),
-                    content
-                );
-            }
+        if (!plan.contains("todos") || !plan["todos"].is_array()) {
+            return summary;
         }
-
+        for (const auto& td : plan["todos"]) {
+            if (!td.is_object()) {
+                continue;
+            }
+            const auto content = td.value("content", std::string{});
+            if (content.empty()) {
+                continue;
+            }
+            const auto state = td.value("state", std::string{});
+            if (!summary.empty()) {
+                summary += "; ";
+            }
+            summary += fmt::format(
+                "{} {}",
+                state == "completed" ? "[#]" : (state == "in_progress" ? "[~]" : "[ ]"),
+                content
+            );
+        }
+        return summary;
+    };
+    static auto planningCollapsed
+        = [](void*,
+                                       const AgentxxToolRenderInput* in,
+                                       AgentxxToolCollapsedOutput* out) -> int32_t {
+        auto plan = planOf(in);
+        if (!plan) {
+            return 0;
+        }
+        const std::string summary = planSummaryOf(*plan);
+        if (!summary.empty()) {
+            out->text = makeTestString(summary);
+        }
+        return 0;
+    };
+    static auto planningExpanded
+        = [](void*,
+                                       const AgentxxToolRenderInput* in,
+                                       AgentxxToolExpandedOutput* out) -> int32_t {
+        auto plan = planOf(in);
+        if (!plan) {
+            return 0;
+        }
         utilxx_base::Json items   = utilxx_base::Json::array();
-        const auto        roadmap = plan.value("roadmap", std::string{});
+        const auto        roadmap = plan->value("roadmap", std::string{});
         if (!roadmap.empty()) {
             utilxx_base::Json diagram;
             diagram["kind"]    = "diagram";
             diagram["mermaid"] = roadmap;
             items.push_back(std::move(diagram));
         }
-        if (plan.contains("todos") && plan["todos"].is_array() && !plan["todos"].empty()) {
+        if (plan->contains("todos") && (*plan)["todos"].is_array() && !(*plan)["todos"].empty()) {
             utilxx_base::Json head;
             head["kind"] = "text";
             head["role"] = "normal";
             head["text"] = "|- Todo";
             items.push_back(std::move(head));
-            for (const auto& td : plan["todos"]) {
+            for (const auto& td : (*plan)["todos"]) {
                 if (!td.is_object() || td.value("content", std::string{}).empty()) {
                     continue;
                 }
@@ -452,38 +520,41 @@ std::shared_ptr<agentxx::plugin::ClientUiRegistry> makeTestToolRegistry() {
                 items.push_back(std::move(row));
             }
         }
-        if (plan.contains("notes") && plan["notes"].is_string()) {
+        if (plan->contains("notes") && (*plan)["notes"].is_string()) {
             utilxx_base::Json row;
             row["kind"] = "text";
             row["role"] = "hint";
-            row["text"] = "|- Note " + plan["notes"].get<std::string>();
+            row["text"] = "|- Note " + (*plan)["notes"].get<std::string>();
             items.push_back(std::move(row));
         }
-
-        out->displayName = makeTestString("Plan");
-        out->summary     = makeTestString(summary);
-        out->items_json  = makeTestString(items.dump());
+        if (!items.empty()) {
+            out->items_json = makeTestString(items.dump());
+        }
         return 0;
     };
     reg->toolRenderers.push_back({
-        .plugin   = "agentxx_planning",
-        .toolName = "agentxx_planning",
-        .renderFn = planningFn,
+        .plugin      = "agentxx_planning",
+        .toolName    = "agentxx_planning",
+        .displayName = "Plan",
+        .collapsedFn = planningCollapsed,
+        .expandedFn  = planningExpanded,
     });
 
     // 主程序内置工具 (lib 内置实现, 没有对应插件): 主程序自身注册的渲染器
-    // - 见 agentxx/plugin/builtin_tool_renderers.h
+    // - 见 agentxx/plugin/builtin_tool_renderers.h (只给显示名 + 折叠内容)
     reg->builtinToolRenderers.push_back({
-        .plugin   = std::string{agentxx::plugin::kBuiltinRendererOwner},
-        .toolName = "agentxx_share_store",
-        .renderFn = &agentxx::plugin::builtinRenderShareStore,
-        .builtin  = true,
+        .plugin      = std::string{agentxx::plugin::kBuiltinRendererOwner},
+        .toolName    = "agentxx_share_store",
+        .displayName = "Store",
+        .collapsedFn = &agentxx::plugin::builtinRenderShareStoreCollapsed,
+        .builtin     = true,
     });
     reg->builtinToolRenderers.push_back({
-        .plugin   = std::string{agentxx::plugin::kBuiltinRendererOwner},
-        .toolName = "agentxx_subagent",
-        .renderFn = &agentxx::plugin::builtinRenderSubagent,
-        .builtin  = true,
+        .plugin      = std::string{agentxx::plugin::kBuiltinRendererOwner},
+        .toolName    = "agentxx_subagent",
+        .displayName = "Subagent",
+        .collapsedFn = &agentxx::plugin::builtinRenderSubagentCollapsed,
+        .builtin     = true,
     });
 
     return reg;
@@ -717,32 +788,107 @@ struct ToolHeaderFixture {
         mgrIo.restart();
     }
 
-    /// 写入一条特化渲染条目 (用于构造"未就绪帧"的缓存状态)
+    /// 写入一条折叠内容条目 (用于构造"未就绪帧"的缓存状态)
     /// - 不设 inputHash (保持 0): UI 查询用真实输入特征算哈希, 因此该条目只会被
     ///   "上一份结果"查询 (lookupLatest) 取到, 不会被当作精确命中
-    void pushRenderEntry(
-        std::string key,
-        std::string plugin,
-        std::string displayName,
-        std::string summary = {}
-    ) {
+    void pushCollapsedEntry(std::string key, std::string plugin, std::string text) {
         agentxx::plugin::ClientToolRenderEntry entry;
-        entry.key         = std::move(key);
-        entry.plugin      = std::move(plugin);
-        entry.matched     = true;
-        entry.displayName = std::move(displayName);
-        entry.summary     = std::move(summary);
+        entry.key     = std::move(key);
+        entry.plugin  = std::move(plugin);
+        entry.matched = true;
+        entry.text    = std::move(text);
         mgr->toolRenderCache()->store(std::move(entry));
     }
 
-    /// 写入"名称结果"条目: 占位提示阶段按工具名解析出的特化显示名
-    /// (键 = "#工具名", 输入只有工具名, 无参数/结果)
-    void pushToolNameResult(std::string toolName, std::string plugin, std::string displayName) {
-        pushRenderEntry(
-            agentxx::plugin::ClientToolRenderRequest::keyFor(std::string_view{}, toolName),
-            std::move(plugin),
-            std::move(displayName)
+    /// 用镜像渲染器算出一份内容并写入语义缓存 (相当于 client io 线程把请求算完)
+    ///
+    /// 夹具的镜像渲染器只登记在 UI 注册表快照里 —— 没有真实插件实例, 无法注册到
+    /// 管理器, 管理器执行渲染请求时找不到它们。所以这里用同一份回调在测试线程算出
+    /// 内容再写入缓存, 验证"内容算出的那一帧上屏"的可见效果。
+    /// - 条目不带输入特征 (inputHash = 0), 由 UI 的"沿用上一份内容"查询取到
+    /// - `args`/`result` 要与消息上的参数/结果一致 (渲染器按它们推导内容)
+    /// - `expanded` = true 算展开内容 (items), 否则算折叠内容 (一行文本)
+    void resolveFromRegistry(
+        std::string_view toolName,
+        std::string      args,
+        std::string      result,
+        bool             finished,
+        bool             expanded = false,
+        bool             failed   = false
+    ) {
+        auto                                  reg = makeTestToolRegistry();
+        const bool                            wantCollapsed = !expanded;
+        agentxx::plugin::ClientToolRenderReg* hit           = nullptr;
+        const auto                            hasFn         = [wantCollapsed](const auto& r) {
+            return wantCollapsed ? (r.collapsedFn != nullptr) : (r.expandedFn != nullptr);
+        };
+        for (auto& r : reg->toolRenderers) {
+            if (r.toolName == toolName && hasFn(r)) {
+                hit = &r;
+                break;
+            }
+        }
+        if (!hit) {
+            for (auto& r : reg->builtinToolRenderers) {
+                if (r.toolName == toolName && hasFn(r)) {
+                    hit = &r;
+                    break;
+                }
+            }
+        }
+        if (!hit) {
+            return;
+        }
+
+        const std::string callId = "call_1"; // 与 [pushTool] 一致
+        auto              callSv = agentxx::plugin::PluginStringView::from(callId);
+        auto              nameSv = agentxx::plugin::PluginStringView::from(toolName);
+        auto              argsSv = agentxx::plugin::PluginStringView::from(args);
+        auto              resSv  = agentxx::plugin::PluginStringView::from(result);
+
+        AgentxxToolRenderInput input{};
+        input.struct_size  = sizeof(AgentxxToolRenderInput);
+        input.version      = 1;
+        input.tool_call_id = callSv;
+        input.tool_name    = nameSv;
+        input.args_json    = argsSv;
+        input.result_text  = resSv;
+        input.is_finished  = finished ? 1 : 0;
+        input.is_error     = failed ? 1 : 0;
+        input.max_width    = 0;
+
+        agentxx::plugin::ClientToolRenderEntry entry;
+        entry.key = agentxx::plugin::ClientToolRenderRequest::keyFor(
+            callId,
+            toolName,
+            expanded ? agentxx::plugin::ClientToolRenderPart::Expanded
+                     : agentxx::plugin::ClientToolRenderPart::Collapsed
         );
+        entry.plugin = hit->plugin;
+        if (wantCollapsed) {
+            AgentxxToolCollapsedOutput out{};
+            hit->collapsedFn(hit->userData, &input, &out);
+            if (out.text.data) {
+                entry.text.assign(out.text.data, static_cast<size_t>(out.text.size));
+            }
+            agentxx::plugin::hostMemoryFree(out.text.data);
+            entry.matched = !entry.text.empty();
+        } else {
+            AgentxxToolExpandedOutput out{};
+            hit->expandedFn(hit->userData, &input, &out);
+            if (out.items_json.data) {
+                try {
+                    entry.items = utilxx_base::Json::parse(std::string_view{
+                        out.items_json.data,
+                        static_cast<size_t>(out.items_json.size)
+                    });
+                } catch (...) {
+                }
+            }
+            agentxx::plugin::hostMemoryFree(out.items_json.data);
+            entry.matched = entry.items.is_array() && !entry.items.empty();
+        }
+        mgr->toolRenderCache()->store(std::move(entry));
     }
 
     /// 剥离 ANSI 转义序列, 获取纯文本表示
@@ -883,9 +1029,11 @@ void testTuiToolHeaderFallback() {
     f.pushTool("unknown_tool_xyz", R"({"path":"/home"})");
     XX_TEST_EXPECT_TRUE(f.render().find("unknown_tool_xyz") != std::string::npos);
 
-    // 参数不是 JSON (普通文本) 时解析失败, 同样回退 toolName
+    // 参数不是 JSON (普通文本): 折叠内容回调不给内容 → 默认渲染 (结果为空, 不画 " · ");
+    // 显示名仍是注册时定下的 "Read" (名字与参数可解析无关)
     f.pushTool("agentxx_filesystem_read", "not-a-json");
-    XX_TEST_EXPECT_TRUE(f.render().find("agentxx_filesystem_read") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(f.plainRender().find("+ [Tool] Read") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(f.plainRender().find("agentxx_filesystem_read") == std::string::npos);
 }
 
 // 回归: 折叠头部内容超宽时前缀不得被压缩 (向左覆盖压缩 bug)
@@ -1042,100 +1190,90 @@ void testTuiToolHeaderRunning() {
         fPlan.plainRender().find("Plan · [~] reproduce issue") != std::string::npos
     );
 
-    // 未知工具在 running 状态下折叠展示 "toolName · "
+    // 未知工具 (没有特化渲染器) 在 running 状态下走默认渲染:
+    // "toolName · receiving tool call..." (与占位行同一句文案)
     ToolHeaderFixture f2;
     f2.pushTool("custom_tool_run", R"({})", false);
-    XX_TEST_EXPECT_TRUE(f2.plainRender().find("custom_tool_run · ") != std::string::npos);
+    XX_TEST_EXPECT_TRUE(
+        f2.plainRender().find("custom_tool_run · receiving tool call...") != std::string::npos
+    );
 
-    // 未知工具带参数在 running 状态下折叠展示 "toolName · args..."
+    // 未知工具带参数: 运行中不再展示参数预览 (改为同一句说明文字)
     ToolHeaderFixture f3;
     f3.pushTool("custom_tool_run", R"({"key":"val"})", false);
     XX_TEST_EXPECT_TRUE(
-        f3.plainRender().find("custom_tool_run · {\"key\":\"val\"}") != std::string::npos
+        f3.plainRender().find("custom_tool_run · receiving tool call...") != std::string::npos
     );
+    XX_TEST_EXPECT_TRUE(f3.plainRender().find("\"key\"") == std::string::npos);
 }
-
-// 特化渲染结果尚未就绪时的折叠头 / 占位行 (回归):
+// 折叠内容 / 展开内容尚未就绪 (pending) 时的头行与占位行 (回归):
 //
-// 自定义 renderer 只在 client io 线程执行, 结果写入语义缓存前每帧都会走到
-// renderClientTool 的 "pendingRender" 分支。修复前该分支直接回退通用展示
-// (原始工具名 + 原始参数 JSON), 而占位提示刚展示过特化显示名, 于是工具消息
-// 出现时会闪一下非特化内容 (如 "agentxx_filesystem_read · {\"path\":...}"),
-// 下一帧才变成 "Read · [0, 100] /home/a.cpp"; 工具结果到达时 (finished 输入变了)
-// 会因同样的原因再闪一次 (显示原始结果首行)。Bash 等用预设模版注册的工具在 UI
-// 线程同步算出摘要, 没有该中间帧, 因此不闪。
-//
-// 未就绪帧同样不能"留空": 空一帧同样是跳变 (显示名或摘要消失再回来)。该分支
-// 现在按"上一份已知内容"过渡 —— 本次调用上一份结果优先, 其次该工具的名称结果;
-// 两者都没有时, 运行中沿用占位提示的同一句说明文字 (该帧与占位行逐字一致),
-// 已完成则不显示说明文字 (见 renderClientTool 与 message_list 的 [pendingRender] 分支)。
-void testTuiToolHeaderPendingRender() {
-    // 1. 占位提示 (工具调用阶段): 名称结果已解析 -> 沿用特化显示名, 不显示原始工具名
+// 显示名在注册时确定, UI 线程同步可读 —— 占位行与工具行首帧就能显示名字。
+// 内容回调只在 client io 线程执行, 结果写入语义缓存前每帧都是 pending:
+// - 没有上一份内容时该部分留空: 折叠行只画名字 (不画 " · "), 展开行首行之后留空
+//   —— 不拿默认内容 (参数/结果) 顶替, 否则会先闪一句默认内容再换成特化内容
+// - 有上一份内容时沿用它 (结果到达使输入特征变化的那一帧继续显示屏幕上已有的内容)
+// - 没注册该部分回调, 或回调返回空内容 → 默认渲染:
+//   折叠 运行中 "receiving tool call..." / 已完成 结果首行; 展开 参数 + 运行中提示/结果
+void testTuiToolHeaderPendingContent() {
+    // 1. 占位提示 (工具调用阶段): 显示名同步可读, 直接显示
     {
         ToolHeaderFixture f;
         f.usePendingPluginManager();
-        f.pushToolNameResult("agentxx_filesystem_read", "agentxx_filesystem", "Read");
         f.sharedState.mutate([&](TUIRenderState& st) {
             st.genPhase    = agentxx::agent::WireDelta::GenPhase::ToolCall;
             st.genToolName = "agentxx_filesystem_read";
             st.isStreaming = true;
         });
         const std::string out = f.plainRender();
-        XX_TEST_EXPECT_TRUE(out.find("Read receiving tool call...") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(out.find("Read · receiving tool call...") != std::string::npos);
         XX_TEST_EXPECT_TRUE(out.find("agentxx_filesystem_read") == std::string::npos);
     }
 
-    // 2. 占位提示: 名称结果还没算出来 -> 不显示原始工具名 (等特化显示名上屏)
+    // 2. 占位提示: 工具名还没解析出来 → 不画 " · ", 只有角色标签 + 说明文字
     {
         ToolHeaderFixture f;
         f.usePendingPluginManager();
         f.sharedState.mutate([&](TUIRenderState& st) {
             st.genPhase    = agentxx::agent::WireDelta::GenPhase::ToolCall;
-            st.genToolName = "agentxx_filesystem_read";
+            st.genToolName = "";
             st.isStreaming = true;
         });
         const std::string out = f.plainRender();
         XX_TEST_EXPECT_TRUE(out.find("receiving tool call...") != std::string::npos);
-        XX_TEST_EXPECT_TRUE(out.find("agentxx_filesystem_read") == std::string::npos);
+        XX_TEST_EXPECT_TRUE(out.find(" · receiving tool call...") == std::string::npos);
     }
 
-    // 3. 运行中的工具消息: 沿用名称结果的显示名, 不展示原始工具名与原始参数 JSON,
-    //    摘要未就绪时沿用占位提示的同一句说明文字 (该帧与占位行逐字一致, 不留空档)
+    // 3. 运行中的工具消息: 名字同步显示, 内容未就绪时不画 " · " (也不拿参数顶替)
     {
         ToolHeaderFixture f;
         f.usePendingPluginManager();
-        f.pushToolNameResult("agentxx_filesystem_read", "agentxx_filesystem", "Read");
         f.pushTool(
             "agentxx_filesystem_read",
             R"({"path":"/home/a.cpp","offset":0,"limit":100})",
             false // 运行中
         );
         const std::string out = f.plainRender();
-        // 运行中头部使用加载动画 (非 "+"), 故只断言角色标签之后的内容
         XX_TEST_EXPECT_TRUE(out.find("[Tool] Read") != std::string::npos);
-        XX_TEST_EXPECT_TRUE(out.find("Read receiving tool call...") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(out.find("receiving tool call...") == std::string::npos);
         XX_TEST_EXPECT_TRUE(out.find("agentxx_filesystem_read") == std::string::npos);
         XX_TEST_EXPECT_TRUE(out.find("\"path\"") == std::string::npos);
+
+        // 折叠内容算出后上屏 (真机上由 client io 线程执行回调, 见 [resolveFromRegistry])
+        f.resolveFromRegistry(
+            "agentxx_filesystem_read",
+            R"({"path":"/home/a.cpp","offset":0,"limit":100})",
+            "",
+            false // 运行中
+        );
+        const std::string ready = f.plainRender();
+        XX_TEST_EXPECT_TRUE(ready.find("Read · [0, 100] /home/a.cpp") != std::string::npos);
     }
 
-    // 4. 运行中且名称结果也没有 (某工具本会话首次调用): 只显示角色标签 + 占位提示
-    //    的同一句说明文字, 同样不展示原始工具名与原始参数 JSON
+    // 4. 已完成的工具消息: 内容未就绪时同样只画名字 (不显示结果预览)
     {
         ToolHeaderFixture f;
         f.usePendingPluginManager();
-        f.pushTool("agentxx_filesystem_read", R"({"path":"/home/b.cpp"})", false);
-        const std::string out = f.plainRender();
-        XX_TEST_EXPECT_TRUE(out.find("[Tool]") != std::string::npos);
-        XX_TEST_EXPECT_TRUE(out.find("receiving tool call...") != std::string::npos);
-        XX_TEST_EXPECT_TRUE(out.find("agentxx_filesystem_read") == std::string::npos);
-        XX_TEST_EXPECT_TRUE(out.find("\"path\"") == std::string::npos);
-    }
-
-    // 5. 已完成但结果的特化渲染未就绪: 不展示原始结果预览
-    {
-        ToolHeaderFixture f;
-        f.usePendingPluginManager();
-        f.pushToolNameResult("agentxx_filesystem_read", "agentxx_filesystem", "Read");
         f.pushTool(
             "agentxx_filesystem_read",
             R"({"path":"/home/c.cpp"})",
@@ -1146,20 +1284,48 @@ void testTuiToolHeaderPendingRender() {
         const std::string out = f.plainRender();
         XX_TEST_EXPECT_TRUE(out.find("+ [Tool] Read") != std::string::npos);
         XX_TEST_EXPECT_TRUE(out.find("file content line one") == std::string::npos);
-        XX_TEST_EXPECT_TRUE(out.find("agentxx_filesystem_read") == std::string::npos);
     }
 
-    // 6. 没有特化渲染器的工具不受影响 (原始工具名 + 参数预览照常展示)
+    // 5. 展开态且展开内容未就绪: 首行之后留空 (不拿参数 JSON 顶替)
+    {
+        ToolHeaderFixture f;
+        f.usePendingPluginManager();
+        f.pushTool(
+            "agentxx_filesystem_edit",
+            R"({"path":"/home/seg.cpp","old_str":"oldA();","new_str":"newA();"})",
+            true,
+            false // 展开
+        );
+        const std::string pending = f.plainRender();
+        XX_TEST_EXPECT_TRUE(pending.find("- [Tool] Edit") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(pending.find("oldA();") == std::string::npos);
+        XX_TEST_EXPECT_TRUE(pending.find("\"path\"") == std::string::npos);
+
+        // 展开体 (逐段 diff) 算出后上屏
+        f.resolveFromRegistry(
+            "agentxx_filesystem_edit",
+            R"({"path":"/home/seg.cpp","old_str":"oldA();","new_str":"newA();"})",
+            "",
+            true,
+            true // 展开内容
+        );
+        const std::string ready = f.plainRender();
+        XX_TEST_EXPECT_TRUE(ready.find("oldA();") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(ready.find("newA();") != std::string::npos);
+    }
+
+    // 6. 没有特化渲染器的工具: 默认渲染照旧 (运行中显示同一句说明文字)
     {
         ToolHeaderFixture f;
         f.usePendingPluginManager();
         f.pushTool("custom_tool_run", R"({"key":"val"})", false);
         XX_TEST_EXPECT_TRUE(
-            f.plainRender().find("custom_tool_run · {\"key\":\"val\"}") != std::string::npos
+            f.plainRender().find("custom_tool_run · receiving tool call...")
+            != std::string::npos
         );
     }
 
-    // 7. 全流程 (主程序内置渲染器): 未就绪帧不展示原始参数, 请求执行后切到特化摘要
+    // 7. 全流程 (主程序内置渲染器): 未就绪帧不展示原始参数, 请求执行后切到特化内容
     {
         ToolHeaderFixture f;
         f.usePendingPluginManager();
@@ -1171,8 +1337,6 @@ void testTuiToolHeaderPendingRender() {
         // 测量, 请求的输入特征与后续帧不同)
         XX_TEST_EXPECT_TRUE(f.plainRender().find("\"opt\"") == std::string::npos);
 
-        // 布局 (内容宽度/滚动条列) 需要几帧才稳定, 而宽度属于渲染请求的输入特征:
-        // 逐帧"渲染 -> 驱动 io 执行已入队请求"直到特化摘要上屏
         std::string ready;
         for (int i = 0; i < 8; ++i) {
             ready = f.plainRender();
@@ -1185,10 +1349,10 @@ void testTuiToolHeaderPendingRender() {
         XX_TEST_EXPECT_TRUE(ready.find("agentxx_share_store") == std::string::npos);
     }
 
-    // 8. 工具结束 (结果文本到达使输入特征变化) 的那一帧: 继续显示上一份摘要,
-    //    不空白也不要原始结果预览 —— 摘要消失一帧再回来同样是可见的跳变。
-    //    用主程序内置渲染器 (share_store) 走完整流程: 运行中的摘要由 client io
-    //    线程算出并写入缓存, 结果到达后的完成态摘要补上结果里的新 id (可区分)
+    // 8. 工具结束 (结果文本到达使输入特征变化) 的那一帧: 继续显示上一份内容,
+    //    不空白也不要原始结果预览 —— 内容消失一帧再回来同样是可见的跳变。
+    //    用主程序内置渲染器 (share_store) 走完整流程: 运行中的内容由 client io
+    //    线程算出并写入缓存, 完成态内容补上结果里的新 id (可区分)
     {
         ToolHeaderFixture f;
         f.usePendingPluginManager();
@@ -1197,7 +1361,6 @@ void testTuiToolHeaderPendingRender() {
             R"({"opt":"new","text":"a\nb"})",
             false // 运行中
         );
-        // 逐帧驱动 io 直到运行中的特化摘要上屏 (布局宽度实测稳定后才定稿)
         std::string running;
         for (int i = 0; i < 8; ++i) {
             running = f.plainRender();
@@ -1208,23 +1371,22 @@ void testTuiToolHeaderPendingRender() {
         }
         XX_TEST_EXPECT_TRUE(running.find("Store · new") != std::string::npos);
 
-        // 结果到达, 本帧特化结果尚未算出 (不驱动 io): 头部保持上一份摘要
+        // 结果到达, 本帧内容尚未算出 (不驱动 io): 头部保持上一份内容
         f.finishLastTool(R"({"id":7})");
         const std::string endFrame = f.plainRender();
         XX_TEST_EXPECT_TRUE(endFrame.find("Store · new") != std::string::npos);
         XX_TEST_EXPECT_TRUE(endFrame.find("\"id\"") == std::string::npos);
         XX_TEST_EXPECT_TRUE(endFrame.find("agentxx_share_store") == std::string::npos);
 
-        // 完成态的特化结果上屏: 摘要补上结果里的新 id (正常的内容更新, 不是空白帧)
+        // 完成态的内容上屏: 补上结果里的新 id (正常的内容更新, 不是空白帧)
         f.drainIo();
         const std::string done = f.plainRender();
         XX_TEST_EXPECT_TRUE(done.find("Store · new #7") != std::string::npos);
         XX_TEST_EXPECT_TRUE(done.find("agentxx_share_store") == std::string::npos);
     }
 
-    // 9. 已完成消息 (块可跨帧缓存, 只有这类块才走"版本号变化 -> 重建"判定) 在两个
-    //    缓存条目都还没有时: 先显示空显示名, 名称结果到达后补上特化显示名 ——
-    //    消息块缓存 key 必须计入名称结果的版本号, 否则折叠头会一直停在无显示名形态
+    // 9. 已完成消息 (块可跨帧缓存) 的第一帧: 显示名同步可见, 内容未就绪时不画 " · ";
+    //    内容到达后块重建 (块缓存 key 计入折叠内容的版本号)
     {
         ToolHeaderFixture f;
         f.usePendingPluginManager();
@@ -1236,22 +1398,35 @@ void testTuiToolHeaderPendingRender() {
             "     1|file content line one"
         );
         const std::string before = f.plainRender();
-        XX_TEST_EXPECT_TRUE(before.find("+ [Tool]") != std::string::npos);
-        XX_TEST_EXPECT_TRUE(before.find("[Tool] Read") == std::string::npos);
-        XX_TEST_EXPECT_TRUE(before.find("agentxx_filesystem_read") == std::string::npos);
+        XX_TEST_EXPECT_TRUE(before.find("+ [Tool] Read") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(before.find(" · ") == std::string::npos);
 
-        f.pushToolNameResult("agentxx_filesystem_read", "agentxx_filesystem", "Read");
-        const std::string after = f.plainRender();
-        XX_TEST_EXPECT_TRUE(after.find("+ [Tool] Read") != std::string::npos);
-        XX_TEST_EXPECT_TRUE(after.find("agentxx_filesystem_read") == std::string::npos);
+        std::string after;
+        // 折叠内容算出: 已完成消息的块可缓存, 缓存条目的版本号变化使块重建
+        f.resolveFromRegistry(
+            "agentxx_filesystem_read",
+            R"({"path":"/home/e.cpp"})",
+            "     1|file content line one",
+            true
+        );
+        after = f.plainRender();
+        XX_TEST_EXPECT_TRUE(after.find("+ [Tool] Read · /home/e.cpp") != std::string::npos);
     }
 
-    // 10. 该调用有"上一份结果"、但那份结果没给显示名 (renderer 返回空显示名) 时,
-    //     名称结果到达同样要使块重建 —— 只要有显示名来自名称结果的可能, 它的版本号
-    //     就要计入 key (否则末帧停在无显示名形态, 直到该调用自己的结果算出为止)
+    // 10. 上一份内容的归属插件不一致 (插件重载/被其它插件覆盖) 时不得沿用:
+    //     该帧仍只画名字, 等本次调用的内容算出
     {
         ToolHeaderFixture f;
         f.usePendingPluginManager();
+        f.pushCollapsedEntry(
+            agentxx::plugin::ClientToolRenderRequest::keyFor(
+                "call_1",
+                "agentxx_filesystem_read",
+                agentxx::plugin::ClientToolRenderPart::Collapsed
+            ),
+            "some_other_plugin",
+            "[0, 100] /home/stale.cpp"
+        );
         f.pushTool(
             "agentxx_filesystem_read",
             R"({"path":"/home/f.cpp"})",
@@ -1259,16 +1434,9 @@ void testTuiToolHeaderPendingRender() {
             true,
             "     1|file content line one"
         );
-        // 上一份结果: matched 但显示名为空, 输入特征与本次查询不同 (仍是未就绪帧)
-        f.pushRenderEntry("call_1", "agentxx_filesystem", "");
-        const std::string before = f.plainRender();
-        XX_TEST_EXPECT_TRUE(before.find("[Tool] Read") == std::string::npos);
-        XX_TEST_EXPECT_TRUE(before.find("agentxx_filesystem_read") == std::string::npos);
-
-        f.pushToolNameResult("agentxx_filesystem_read", "agentxx_filesystem", "Read");
-        const std::string after = f.plainRender();
-        XX_TEST_EXPECT_TRUE(after.find("+ [Tool] Read") != std::string::npos);
-        XX_TEST_EXPECT_TRUE(after.find("agentxx_filesystem_read") == std::string::npos);
+        const std::string out = f.plainRender();
+        XX_TEST_EXPECT_TRUE(out.find("+ [Tool] Read") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(out.find("home/stale.cpp") == std::string::npos);
     }
 }
 
@@ -1470,7 +1638,7 @@ void testTuiToolHeaderFailed() {
     XX_TEST_EXPECT_TRUE(fExpanded.render().find("255;85;85") != std::string::npos);
 
     // 反向用例: 同样的结果文本, 执行层未标失败 (status = ok)
-    // —— 界面不按文本判错: 不加 " · " 失败后缀, 也不用错误色
+    // —— 界面不按文本判错: 不加错误色, 也不用错误色
     ToolHeaderFixture fTextOnly;
     fTextOnly.pushTool(
         "custom_plugin_tool",
@@ -1479,12 +1647,12 @@ void testTuiToolHeaderFailed() {
         true,
         "[Error] this line is log content, not a failure"
     );
+    // 未注册渲染器 / 已完成 → 默认渲染: " · 结果首行"
     XX_TEST_EXPECT_TRUE(
-        fTextOnly.plainRender().find("custom_plugin_tool [Error] this line is log content")
+        fTextOnly.plainRender().find(
+            "custom_plugin_tool · [Error] this line is log content"
+        )
         != std::string::npos
-    );
-    XX_TEST_EXPECT_TRUE(
-        fTextOnly.plainRender().find("custom_plugin_tool · [Error]") == std::string::npos
     );
     XX_TEST_EXPECT_TRUE(fTextOnly.render().find("255;85;85") == std::string::npos);
 }
@@ -1502,7 +1670,7 @@ void testTuiToolHeaderDuration() {
         1200
     );
     XX_TEST_EXPECT_TRUE(
-        f1.plainRender().find("- [Tool] agentxx_filesystem_read 1.2s") != std::string::npos
+        f1.plainRender().find("- [Tool] Read 1.2s") != std::string::npos
     );
 
     // 1.1 短耗时 (< 100ms) 工具展开, 耗时显示为毫秒单位 (50ms)
@@ -1516,7 +1684,7 @@ void testTuiToolHeaderDuration() {
         50
     );
     XX_TEST_EXPECT_TRUE(
-        f1ms.plainRender().find("- [Tool] agentxx_filesystem_read 50ms") != std::string::npos
+        f1ms.plainRender().find("- [Tool] Read 50ms") != std::string::npos
     );
 
     // 2. 长耗时工具展开, 耗时 1m5s
@@ -1530,7 +1698,7 @@ void testTuiToolHeaderDuration() {
         65000
     );
     XX_TEST_EXPECT_TRUE(
-        f2.plainRender().find("- [Tool] agentxx_execute_bash_command 1m5s") != std::string::npos
+        f2.plainRender().find("- [Tool] Bash 1m5s") != std::string::npos
     );
 
     // 3. 插件装饰工具展开, 耗时 0.3s
@@ -1557,7 +1725,7 @@ void testTuiToolHeaderDuration() {
         450
     );
     XX_TEST_EXPECT_TRUE(
-        f4.plainRender().find("- [Tool] agentxx_filesystem_edit 0.5s") != std::string::npos
+        f4.plainRender().find("- [Tool] Edit 0.5s") != std::string::npos
     );
 
     // 5. 运行中的工具展开, 无耗时后缀
@@ -1571,7 +1739,7 @@ void testTuiToolHeaderDuration() {
         0
     );
     XX_TEST_EXPECT_TRUE(
-        f5.plainRender().find("[Tool] agentxx_filesystem_read") != std::string::npos
+        f5.plainRender().find("[Tool] Read") != std::string::npos
     );
     XX_TEST_EXPECT_TRUE(f5.plainRender().find("0.0s") == std::string::npos);
 
@@ -1586,7 +1754,7 @@ void testTuiToolHeaderDuration() {
         0
     );
     XX_TEST_EXPECT_TRUE(
-        f6.plainRender().find("- [Tool] agentxx_filesystem_read") != std::string::npos
+        f6.plainRender().find("- [Tool] Read") != std::string::npos
     );
     XX_TEST_EXPECT_TRUE(f6.plainRender().find("0.0s") == std::string::npos);
 
@@ -1841,7 +2009,7 @@ void testTuiToolHeaderEditDiffStat() {
             false // 展开
         );
         std::string out = f.render();
-        XX_TEST_EXPECT_TRUE(out.find("- [Tool] agentxx_filesystem_edit") != std::string::npos);
+        XX_TEST_EXPECT_TRUE(out.find("- [Tool] Edit") != std::string::npos);
         XX_TEST_EXPECT_TRUE(out.find("[+1 -1]") == std::string::npos);
     }
 }
@@ -1859,7 +2027,7 @@ TestResult testTuiToolHeader() {
     testTuiToolHeaderFallback();
     testTuiToolHeaderOverflow();
     testTuiToolHeaderRunning();
-    testTuiToolHeaderPendingRender();
+    testTuiToolHeaderPendingContent();
     testTuiToolHeaderDecor();
     testTuiToolHeaderDecorExtended();
     testTuiToolHeaderEditMultiSegmentBody();

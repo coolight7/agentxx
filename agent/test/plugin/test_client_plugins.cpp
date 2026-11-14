@@ -403,23 +403,30 @@ private:
     std::string        lastOverlayClosePlugin_;
 };
 
-/// 工具语义渲染模型:
-/// - decor / 预设模版: 纯主程序计算, 直接返回
-/// - 自定义 renderer: 只在 client io 线程执行; 未命中时提交请求并等待结果写入
-///   缓存, 再从缓存读取 (UI 线程只读主程序语义快照, 不进入插件代码)
-asio::awaitable<agentxx::plugin::ClientToolRenderResult> renderToolAsync(
+/// 工具特化渲染的测试视图 (折叠内容与展开内容各查一次, 与 UI 线程同一路径)
+struct RenderedTool {
+    std::string       displayName; ///< 同步查表的生效显示名 (未命中时为原始工具名)
+    std::string       summary;     ///< 折叠内容 (不含分隔符 " · ")
+    utilxx_base::Json items;       ///< 展开内容
+    bool              matched          = false; ///< 折叠内容非空 (有自定义内容)
+    bool              collapsedPending = false; ///< 折叠内容未就绪且没有上一份
+    bool              expandedPending  = false; ///< 展开内容未就绪且没有上一份
+};
+
+/// 展开内容查询模型: UI 线程只读缓存, 未命中时提交一次请求再等结果写入
+asio::awaitable<agentxx::plugin::ClientToolExpandedResult> queryExpandedAsync(
     const std::shared_ptr<agentxx::plugin::ClientPluginManager>& mgr,
-    std::string                                                  toolCallId,
-    std::string                                                  toolName,
-    std::string                                                  argsJson,
-    std::string                                                  resultText,
+    const std::string&                                           toolCallId,
+    const std::string&                                           toolName,
+    const std::string&                                           argsJson,
+    const std::string&                                           resultText,
     bool                                                         isFinished,
     bool                                                         isError,
     int                                                          maxWidth
 ) {
     auto reg   = mgr->uiRegistrySnapshot();
     auto cache = mgr->toolRenderCache();
-    auto res   = agentxx::plugin::renderClientTool(
+    auto res   = agentxx::plugin::renderClientToolExpanded(
         reg.get(),
         cache.get(),
         toolCallId,
@@ -430,19 +437,23 @@ asio::awaitable<agentxx::plugin::ClientToolRenderResult> renderToolAsync(
         isError,
         maxWidth
     );
-    if (!res.pendingRender) {
+    if (!res.pending) {
         co_return res;
     }
     agentxx::plugin::ClientToolRenderRequest req;
-    req.toolCallId = std::move(toolCallId);
-    req.toolName   = std::move(toolName);
-    req.argsJson   = std::move(argsJson);
-    req.resultText = std::move(resultText);
+    req.toolCallId = toolCallId;
+    req.toolName   = toolName;
+    req.argsJson   = argsJson;
+    req.resultText = resultText;
+    req.part       = agentxx::plugin::ClientToolRenderPart::Expanded;
     req.isFinished = isFinished;
     req.isError    = isError;
     req.maxWidth   = maxWidth;
-    const std::string key
-        = agentxx::plugin::ClientToolRenderRequest::keyFor(req.toolCallId, req.toolName);
+    const std::string key = agentxx::plugin::ClientToolRenderRequest::keyFor(
+        toolCallId,
+        toolName,
+        agentxx::plugin::ClientToolRenderPart::Expanded
+    );
     const uint64_t hash = req.inputHash();
     mgr->requestToolRender(req);
     // 请求可能内联执行 (本协程与 manager 同 executor), 否则让出执行权等它完成
@@ -450,17 +461,103 @@ asio::awaitable<agentxx::plugin::ClientToolRenderResult> renderToolAsync(
         co_await sleepMs(1);
     }
     auto reg2 = mgr->uiRegistrySnapshot();
-    co_return agentxx::plugin::renderClientTool(
+    co_return agentxx::plugin::renderClientToolExpanded(
         reg2.get(),
         cache.get(),
-        req.toolCallId,
-        req.toolName,
-        req.argsJson,
-        req.resultText,
+        toolCallId,
+        toolName,
+        argsJson,
+        resultText,
         isFinished,
         isError,
         maxWidth
     );
+}
+
+/// 工具特化渲染模型:
+/// - 显示名: 同步查表 (decor > 注册表), 不投递请求
+/// - 折叠内容 / 展开内容: 各自只读缓存, 未命中时提交一次请求并等结果写入,
+///   再从缓存读取 (UI 线程只读主程序语义快照, 不进入插件代码)
+asio::awaitable<RenderedTool> renderToolAsync(
+    const std::shared_ptr<agentxx::plugin::ClientPluginManager>& mgr,
+    std::string                                                  toolCallId,
+    std::string                                                  toolName,
+    std::string                                                  argsJson,
+    std::string                                                  resultText,
+    bool                                                         isFinished,
+    bool                                                         isError,
+    int                                                          maxWidth
+) {
+    RenderedTool out;
+    auto         reg = mgr->uiRegistrySnapshot();
+    auto         cache = mgr->toolRenderCache();
+    const auto   name
+        = agentxx::plugin::toolDisplayNameFor(reg.get(), toolCallId, toolName);
+    out.displayName = name.empty() ? toolName : std::string{name};
+
+    // 折叠内容
+    auto collapsed = agentxx::plugin::renderClientToolCollapsed(
+        reg.get(),
+        cache.get(),
+        toolCallId,
+        toolName,
+        argsJson,
+        resultText,
+        isFinished,
+        isError,
+        maxWidth
+    );
+    if (collapsed.pending) {
+        agentxx::plugin::ClientToolRenderRequest req;
+        req.toolCallId = toolCallId;
+        req.toolName   = toolName;
+        req.argsJson   = argsJson;
+        req.resultText = resultText;
+        req.part       = agentxx::plugin::ClientToolRenderPart::Collapsed;
+        req.isFinished = isFinished;
+        req.isError    = isError;
+        req.maxWidth   = maxWidth;
+        const std::string key = agentxx::plugin::ClientToolRenderRequest::keyFor(
+            toolCallId,
+            toolName,
+            agentxx::plugin::ClientToolRenderPart::Collapsed
+        );
+        const uint64_t hash = req.inputHash();
+        mgr->requestToolRender(req);
+        for (int i = 0; i < 500 && !cache->lookup(key, hash); ++i) {
+            co_await sleepMs(1);
+        }
+        auto reg2  = mgr->uiRegistrySnapshot();
+        collapsed  = agentxx::plugin::renderClientToolCollapsed(
+            reg2.get(),
+            cache.get(),
+            toolCallId,
+            toolName,
+            argsJson,
+            resultText,
+            isFinished,
+            isError,
+            maxWidth
+        );
+    }
+    out.summary          = collapsed.text;
+    out.matched          = !collapsed.text.empty();
+    out.collapsedPending = collapsed.pending;
+
+    // 展开内容 (调用方会渲染展开体时才需要; 测试里总是查一次)
+    auto expanded          = co_await queryExpandedAsync(
+        mgr,
+        toolCallId,
+        toolName,
+        argsJson,
+        resultText,
+        isFinished,
+        isError,
+        maxWidth
+    );
+    out.items           = std::move(expanded.items);
+    out.expandedPending = expanded.pending;
+    co_return out;
 }
 
 asio::awaitable<TestResult> run_client_plugin_tests() {
@@ -1575,7 +1672,8 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 bool hasRenderer = false;
                 for (const auto& r : reg->toolRenderers) {
                     if (r.plugin == "agentxx_planning" && r.toolName == "agentxx_planning") {
-                        hasRenderer = r.renderFn != nullptr;
+                        hasRenderer
+                            = (r.collapsedFn != nullptr || r.expandedFn != nullptr);
                     }
                 }
                 XX_TEST_EXPECT_TRUE(hasRenderer);
@@ -1627,7 +1725,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                     false,
                     100
                 );
-                XX_TEST_EXPECT_TRUE(planReading.matched);
+                XX_TEST_EXPECT_FALSE(planReading.matched); ///< 占位内容只有 items, 没有折叠内容
                 XX_TEST_EXPECT_TRUE(
                     planReading.items.dump().find("Reading saved planning...") != std::string::npos
                 );
@@ -2449,20 +2547,46 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             auto           cache      = mgr->toolRenderCache();
             XX_TEST_EXPECT_TRUE(reg != nullptr && cache != nullptr);
 
+            // 显示名是注册时确定的静态信息: UI 线程同步读得到, 首帧就能显示名字,
+            // 不投递渲染请求
+            XX_TEST_EXPECT_EQ(
+                agentxx::plugin::toolDisplayNameFor(reg.get(), "call_read_cache_1",
+                                                   "agentxx_filesystem_read"),
+                std::string_view{"Read"}
+            );
+            XX_TEST_EXPECT_EQ(
+                agentxx::plugin::toolDisplayNameFor(reg.get(), {}, "agentxx_filesystem_read"),
+                std::string_view{"Read"}
+            );
+            XX_TEST_EXPECT_TRUE(
+                agentxx::plugin::toolDisplayNameFor(reg.get(), {}, "no_such_tool").empty()
+            );
+
             agentxx::plugin::ClientToolRenderRequest req;
             req.toolCallId = "call_read_cache_1";
             req.toolName   = "agentxx_filesystem_read";
             req.argsJson   = R"({"path":"/home/user/a.cpp","offset":10,"limit":50})";
             req.resultText = "";
+            req.part       = agentxx::plugin::ClientToolRenderPart::Collapsed;
             req.isFinished = true;
             req.isError    = false;
             req.maxWidth   = 100;
-            const std::string key
-                = agentxx::plugin::ClientToolRenderRequest::keyFor(req.toolCallId, req.toolName);
+            const std::string collapsedKey = agentxx::plugin::ClientToolRenderRequest::keyFor(
+                req.toolCallId,
+                req.toolName,
+                agentxx::plugin::ClientToolRenderPart::Collapsed
+            );
+            const std::string expandedKey = agentxx::plugin::ClientToolRenderRequest::keyFor(
+                req.toolCallId,
+                req.toolName,
+                agentxx::plugin::ClientToolRenderPart::Expanded
+            );
+            XX_TEST_EXPECT_TRUE(collapsedKey != expandedKey);
             const uint64_t hash = req.inputHash();
 
-            // 首次查询: 自定义 renderer 未计算 → 通用回退 + 请求渲染 (不进入插件代码)
-            auto first = agentxx::plugin::renderClientTool(
+            // 首次查询折叠内容: 回调还没算出来 → pending 且没有上一份 → 内容为空
+            // (界面此时只画名字, 不画 " · ")
+            auto first = agentxx::plugin::renderClientToolCollapsed(
                 reg.get(),
                 cache.get(),
                 req.toolCallId,
@@ -2473,27 +2597,34 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 req.isError,
                 req.maxWidth
             );
-            XX_TEST_EXPECT_FALSE(first.matched);
-            XX_TEST_EXPECT_TRUE(first.pendingRender);
+            XX_TEST_EXPECT_TRUE(first.pending);
             XX_TEST_EXPECT_EQ(first.pendingPlugin, std::string{"agentxx_filesystem"});
-            XX_TEST_EXPECT_TRUE(cache->lookup(key, hash) == nullptr);
+            XX_TEST_EXPECT_TRUE(first.text.empty());
+            XX_TEST_EXPECT_FALSE(first.isDecor);
+            XX_TEST_EXPECT_TRUE(cache->lookup(collapsedKey, hash) == nullptr);
+            // 折叠行不触发展开内容渲染: 展开部分的键还没有任何条目
+            XX_TEST_EXPECT_EQ(cache->version(expandedKey), uint64_t{0});
 
-            // 提交渲染请求: 结果由 client io 线程写入缓存 (含插件名与实例代次)
+            // 提交折叠内容请求: 结果由 client io 线程写入缓存 (含插件名与实例代次)
             mgr->requestToolRender(req);
-            for (int i = 0; i < 500 && !cache->lookup(key, hash); ++i) {
+            for (int i = 0; i < 500 && !cache->lookup(collapsedKey, hash); ++i) {
                 co_await sleepMs(1);
             }
-            auto entry = cache->lookup(key, hash);
+            auto entry = cache->lookup(collapsedKey, hash);
             XX_TEST_EXPECT_TRUE(entry != nullptr);
             if (entry) {
                 XX_TEST_EXPECT_TRUE(entry->matched);
                 XX_TEST_EXPECT_EQ(entry->plugin, std::string{"agentxx_filesystem"});
                 XX_TEST_EXPECT_EQ(entry->generation, generation);
+                XX_TEST_EXPECT_TRUE(entry->text.find("[10, 60]") != std::string::npos);
+                XX_TEST_EXPECT_TRUE(entry->items.empty()); ///< 折叠部分不带 items
             }
-            const uint64_t versionAfterRender = cache->version(key);
+            const uint64_t versionAfterRender = cache->version(collapsedKey);
             XX_TEST_EXPECT_TRUE(versionAfterRender > 0);
+            // 折叠内容写入不影响展开内容的键 (两部分各自独立)
+            XX_TEST_EXPECT_EQ(cache->version(expandedKey), uint64_t{0});
 
-            auto second = agentxx::plugin::renderClientTool(
+            auto second = agentxx::plugin::renderClientToolCollapsed(
                 reg.get(),
                 cache.get(),
                 req.toolCallId,
@@ -2504,14 +2635,12 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 req.isError,
                 req.maxWidth
             );
-            XX_TEST_EXPECT_TRUE(second.matched);
-            XX_TEST_EXPECT_FALSE(second.pendingRender);
-            XX_TEST_EXPECT_EQ(second.displayName, std::string{"Read"});
-            XX_TEST_EXPECT_TRUE(second.summary.find("[10, 60]") != std::string::npos);
+            XX_TEST_EXPECT_FALSE(second.pending);
+            XX_TEST_EXPECT_TRUE(second.text.find("[10, 60]") != std::string::npos);
 
-            // 输入变化 (参数/宽度) → 缓存不命中, 需要重新渲染
-            req.argsJson = R"({"path":"/home/user/a.cpp","offset":1,"limit":2})";
-            auto changed = agentxx::plugin::renderClientTool(
+            // 展开内容: 同一输入但独立的键与请求 (Read 只注册了折叠内容 →
+            // 展开部分没有自定义内容, 界面走默认展开体)
+            auto expandedFirst = agentxx::plugin::renderClientToolExpanded(
                 reg.get(),
                 cache.get(),
                 req.toolCallId,
@@ -2522,162 +2651,206 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 req.isError,
                 req.maxWidth
             );
-            XX_TEST_EXPECT_TRUE(changed.pendingRender);
+            XX_TEST_EXPECT_FALSE(expandedFirst.pending);
+            XX_TEST_EXPECT_TRUE(expandedFirst.items.empty());
 
-            // 未命中时的过渡显示名: 该工具"名称结果"(占位提示阶段按工具名解析出
-            // 的那条, 键 = "#工具名") 的显示名随 pendingRender 一起返回, 使 UI 在
-            // 特化结果就绪前沿用它, 而不是回退原始工具名 + 原始参数
+            // 展开内容的空结果同样写缓存 (matched == false), 不会每帧重复请求
+            auto expandedSecond = agentxx::plugin::renderClientToolExpanded(
+                reg.get(),
+                cache.get(),
+                req.toolCallId,
+                req.toolName,
+                req.argsJson,
+                req.resultText,
+                req.isFinished,
+                req.isError,
+                req.maxWidth
+            );
+            XX_TEST_EXPECT_TRUE(expandedSecond.items.empty());
+            XX_TEST_EXPECT_FALSE(expandedSecond.isDecor);
+
+            // 输入变化 (参数) → 折叠内容不命中 → pending, 但沿用同一调用同一部分的
+            // 上一份内容 (界面上内容只增不减)
+            auto changed = agentxx::plugin::renderClientToolCollapsed(
+                reg.get(),
+                cache.get(),
+                req.toolCallId,
+                req.toolName,
+                R"({"path":"/home/user/a.cpp","offset":1,"limit":2})",
+                req.resultText,
+                req.isFinished,
+                req.isError,
+                req.maxWidth
+            );
+            XX_TEST_EXPECT_TRUE(changed.pending);
+            XX_TEST_EXPECT_TRUE(changed.text.find("[10, 60]") != std::string::npos);
+
+            // 上一份内容的归属插件不一致 (插件重载/被其它插件覆盖) 时不得沿用
             {
-                agentxx::plugin::ClientToolRenderEntry nameEntry;
-                nameEntry.key = agentxx::plugin::ClientToolRenderRequest::keyFor(
-                    std::string_view{},
-                    "agentxx_filesystem_read"
+                agentxx::plugin::ClientToolRenderEntry foreign;
+                foreign.key = agentxx::plugin::ClientToolRenderRequest::keyFor(
+                    "call_read_foreign",
+                    req.toolName,
+                    agentxx::plugin::ClientToolRenderPart::Collapsed
                 );
-                nameEntry.plugin      = "agentxx_filesystem";
-                nameEntry.matched     = true;
-                nameEntry.displayName = "Read";
-                cache->store(std::move(nameEntry));
+                foreign.plugin  = "some_other_plugin";
+                foreign.matched = true;
+                foreign.text    = "stale content";
+                cache->store(std::move(foreign));
 
-                auto transitional = agentxx::plugin::renderClientTool(
+                auto foreignSticky = agentxx::plugin::renderClientToolCollapsed(
                     reg.get(),
                     cache.get(),
-                    "call_read_transitional",
-                    "agentxx_filesystem_read",
+                    "call_read_foreign",
+                    req.toolName,
                     R"({"path":"/home/user/b.cpp"})",
                     "",
                     false,
                     false,
                     100
                 );
-                XX_TEST_EXPECT_TRUE(transitional.pendingRender);
-                XX_TEST_EXPECT_FALSE(transitional.matched);
-                XX_TEST_EXPECT_EQ(transitional.displayName, std::string{"Read"});
-                XX_TEST_EXPECT_TRUE(transitional.summary.empty());
-
-                // 归属插件不一致 (插件重载/被其它插件覆盖) 时不得沿用旧显示名
-                agentxx::plugin::ClientToolRenderEntry foreign;
-                foreign.key = agentxx::plugin::ClientToolRenderRequest::keyFor(
-                    std::string_view{},
-                    "agentxx_filesystem_glob"
-                );
-                foreign.plugin      = "some_other_plugin";
-                foreign.matched     = true;
-                foreign.displayName = "Glob";
-                cache->store(std::move(foreign));
-
-                auto noSeed = agentxx::plugin::renderClientTool(
-                    reg.get(),
-                    cache.get(),
-                    "call_glob_transitional",
-                    "agentxx_filesystem_glob",
-                    R"({"file_patterns":["src/**/*.cpp"]})",
-                    "",
-                    false,
-                    false,
-                    100
-                );
-                XX_TEST_EXPECT_TRUE(noSeed.pendingRender);
-                XX_TEST_EXPECT_TRUE(noSeed.displayName.empty());
+                XX_TEST_EXPECT_TRUE(foreignSticky.pending);
+                XX_TEST_EXPECT_TRUE(foreignSticky.text.empty());
             }
 
-            // 未就绪帧的过渡内容 (2): 本次调用已有上一份结果 (工具结果到达使输入
-            // 特征变化) 时, 连同显示名一起返回上一份摘要 —— UI 继续显示屏幕上已有
-            // 的内容, 不会出现摘要消失一帧再回来的跳变
+            // 没有 tool_call_id 时键退化为 "#工具名#c", 可能是另一次调用的内容:
+            // 只报 pending, 不沿用
             {
-                agentxx::plugin::ClientToolRenderEntry last;
-                last.key = agentxx::plugin::ClientToolRenderRequest::keyFor(
-                    "call_read_sticky",
-                    "agentxx_filesystem_read"
-                );
-                last.plugin      = "agentxx_filesystem";
-                last.matched     = true;
-                last.displayName = "Read";
-                last.summary     = " · [0, 100] /home/user/b.cpp";
-                // 上一份结果的展开体内容: 过渡帧不该拷贝它 (matched=false 时调用方
-                // 不渲染 items, 而 Edit 这类工具的 items 可达几十 KB)
-                {
-                    utilxx_base::Json diffItem;
-                    diffItem["kind"]   = "Diff";
-                    diffItem["path"]   = "/home/user/b.cpp";
-                    diffItem["oldStr"] = "old";
-                    diffItem["newStr"] = "new";
-                    last.items.push_back(std::move(diffItem));
-                }
-                cache->store(std::move(last));
-
-                auto sticky = agentxx::plugin::renderClientTool(
+                auto noId = agentxx::plugin::renderClientToolCollapsed(
                     reg.get(),
                     cache.get(),
-                    "call_read_sticky",
-                    "agentxx_filesystem_read",
-                    R"({"path":"/home/user/b.cpp","offset":0,"limit":100})",
-                    "     1|file content line one", // 结果到达: 输入特征与上一份不同
-                    true,
-                    false,
-                    100
-                );
-                XX_TEST_EXPECT_TRUE(sticky.pendingRender);
-                XX_TEST_EXPECT_FALSE(sticky.matched);
-                XX_TEST_EXPECT_EQ(sticky.displayName, std::string{"Read"});
-                XX_TEST_EXPECT_EQ(sticky.summary, std::string{" · [0, 100] /home/user/b.cpp"});
-                // 过渡帧不带展开体内容 (items 只在命中特化结果时填充)
-                XX_TEST_EXPECT_TRUE(sticky.items.empty());
-
-                // 调用没有 tool_call_id: 缓存键退化为 "#工具名", 与"名称结果"同键 ——
-                // 该情形只取名称结果的显示名, 不把它的摘要 (参数/结果都为空的渲染结果)
-                // 当成本次调用的摘要
-                auto noId = agentxx::plugin::renderClientTool(
-                    reg.get(),
-                    cache.get(),
-                    std::string_view{}, // 无 tool_call_id
-                    "agentxx_filesystem_read",
+                    std::string_view{},
+                    req.toolName,
                     R"({"path":"/home/user/d.cpp"})",
                     "",
                     false,
                     false,
                     100
                 );
-                XX_TEST_EXPECT_TRUE(noId.pendingRender);
-                XX_TEST_EXPECT_FALSE(noId.matched);
-                XX_TEST_EXPECT_EQ(noId.displayName, std::string{"Read"});
-                XX_TEST_EXPECT_TRUE(noId.summary.empty());
-                XX_TEST_EXPECT_TRUE(noId.items.empty());
+                XX_TEST_EXPECT_TRUE(noId.pending);
+                XX_TEST_EXPECT_TRUE(noId.text.empty());
+            }
 
-                // 上一份结果的归属插件不一致 (插件重载/被其它插件覆盖) 时不得沿用,
-                // 此时仍可回落到该工具的名称结果提供过渡显示名
-                agentxx::plugin::ClientToolRenderEntry foreignLast;
-                foreignLast.key = agentxx::plugin::ClientToolRenderRequest::keyFor(
-                    "call_read_sticky_foreign",
-                    "agentxx_filesystem_read"
+            // 回调返回失败/空内容 = "null": 写入 unmatched 条目, 之后不再 pending,
+            // 内容为空由界面走默认渲染 (Edit 参数为空 → 折叠内容为空)
+            {
+                const std::string editArgs = R"({"path":"","old_str":"","new_str":""})";
+                agentxx::plugin::ClientToolRenderRequest editReq;
+                editReq.toolCallId = "call_edit_null";
+                editReq.toolName   = "agentxx_filesystem_edit";
+                editReq.argsJson   = editArgs;
+                editReq.part       = agentxx::plugin::ClientToolRenderPart::Collapsed;
+                editReq.isFinished = true;
+                editReq.maxWidth   = 100;
+                const std::string editKey = agentxx::plugin::ClientToolRenderRequest::keyFor(
+                    editReq.toolCallId,
+                    editReq.toolName,
+                    agentxx::plugin::ClientToolRenderPart::Collapsed
                 );
-                foreignLast.plugin      = "some_other_plugin";
-                foreignLast.matched     = true;
-                foreignLast.displayName = "Read";
-                foreignLast.summary     = " · stale summary";
-                cache->store(std::move(foreignLast));
-
-                auto foreignSticky = agentxx::plugin::renderClientTool(
+                const uint64_t editHash = editReq.inputHash();
+                auto           pendingRes = agentxx::plugin::renderClientToolCollapsed(
                     reg.get(),
                     cache.get(),
-                    "call_read_sticky_foreign",
-                    "agentxx_filesystem_read",
-                    R"({"path":"/home/user/b.cpp"})",
+                    editReq.toolCallId,
+                    editReq.toolName,
+                    editArgs,
                     "",
-                    false,
+                    true,
                     false,
                     100
                 );
-                XX_TEST_EXPECT_TRUE(foreignSticky.pendingRender);
-                XX_TEST_EXPECT_TRUE(foreignSticky.summary.empty());
-                XX_TEST_EXPECT_EQ(foreignSticky.displayName, std::string{"Read"});
+                XX_TEST_EXPECT_TRUE(pendingRes.pending);
+                mgr->requestToolRender(editReq);
+                for (int i = 0; i < 500 && !cache->lookup(editKey, editHash); ++i) {
+                    co_await sleepMs(1);
+                }
+                auto nullEntry = cache->lookup(editKey, editHash);
+                XX_TEST_EXPECT_TRUE(nullEntry != nullptr);
+                if (nullEntry) {
+                    XX_TEST_EXPECT_FALSE(nullEntry->matched);
+                    XX_TEST_EXPECT_TRUE(nullEntry->text.empty());
+                }
+                auto nullRes = agentxx::plugin::renderClientToolCollapsed(
+                    reg.get(),
+                    cache.get(),
+                    editReq.toolCallId,
+                    editReq.toolName,
+                    editArgs,
+                    "",
+                    true,
+                    false,
+                    100
+                );
+                XX_TEST_EXPECT_FALSE(nullRes.pending); ///< 已算出 (无自定义内容), 不再请求
+                XX_TEST_EXPECT_TRUE(nullRes.text.empty());
             }
 
-            // 卸载后旧快照 + 旧缓存只能回退: 版本号递增驱动 UI 重建为通用渲染
+            // 装饰 (update_tool_decor) 优先, 但缺某一项时回落注册项 (不是清空)
+            {
+                auto                 self = mgr;
+                PluginxxStringView   emptyTcid{nullptr, 0};
+                PluginxxStringView   decorSv = agentxx::plugin::PluginStringView::fromCstr(
+                    R"({"displayName":"ReadDecor"})"
+                );
+                auto                 tcidSv
+                    = agentxx::plugin::PluginStringView::fromCstr("call_read_decor");
+                auto                 ui = agentxx::plugin::ClientIfaces::query(fsInst->hostView()).ui;
+                XX_TEST_EXPECT_TRUE(ui != nullptr && ui->update_tool_decor != nullptr);
+                (void)emptyTcid;
+                (void)self;
+                if (ui && ui->update_tool_decor) {
+                    XX_TEST_EXPECT_EQ(
+                        ui->update_tool_decor(fsInst->hostView(), &tcidSv, &decorSv),
+                        0
+                    );
+                    auto decorReg = mgr->uiRegistrySnapshot();
+                    // 名字: 装饰优先
+                    XX_TEST_EXPECT_EQ(
+                        agentxx::plugin::toolDisplayNameFor(
+                            decorReg.get(),
+                            "call_read_decor",
+                            "agentxx_filesystem_read"
+                        ),
+                        std::string_view{"ReadDecor"}
+                    );
+                    // 折叠内容: 装饰没给 summary → 回落注册项 (pending + 请求)
+                    auto decorCollapsed = agentxx::plugin::renderClientToolCollapsed(
+                        decorReg.get(),
+                        cache.get(),
+                        "call_read_decor",
+                        "agentxx_filesystem_read",
+                        R"({"path":"/home/user/e.cpp"})",
+                        "",
+                        true,
+                        false,
+                        100
+                    );
+                    XX_TEST_EXPECT_TRUE(decorCollapsed.pending);
+                    XX_TEST_EXPECT_FALSE(decorCollapsed.isDecor);
+                    // 展开内容: 装饰没给 items → 同样回落注册项 (Read 无展开内容)
+                    auto decorExpanded = agentxx::plugin::renderClientToolExpanded(
+                        decorReg.get(),
+                        cache.get(),
+                        "call_read_decor",
+                        "agentxx_filesystem_read",
+                        R"({"path":"/home/user/e.cpp"})",
+                        "",
+                        true,
+                        false,
+                        100
+                    );
+                    XX_TEST_EXPECT_FALSE(decorExpanded.pending);
+                    XX_TEST_EXPECT_FALSE(decorExpanded.isDecor);
+                    XX_TEST_EXPECT_TRUE(decorExpanded.items.empty());
+                }
+            }
+
+            // 卸载后旧快照 + 旧缓存只能回退: 版本号递增驱动 UI 重建为默认渲染
             co_await mgr->unloadAsync("agentxx_filesystem");
             XX_TEST_EXPECT_TRUE(mgr->find("agentxx_filesystem") == nullptr);
-            XX_TEST_EXPECT_TRUE(cache->lookup(key, hash) == nullptr);
-            XX_TEST_EXPECT_TRUE(cache->version(key) > versionAfterRender);
-            auto afterUnload = agentxx::plugin::renderClientTool(
+            XX_TEST_EXPECT_TRUE(cache->lookup(collapsedKey, hash) == nullptr);
+            XX_TEST_EXPECT_TRUE(cache->version(collapsedKey) > versionAfterRender);
+            auto afterUnload = agentxx::plugin::renderClientToolCollapsed(
                 reg.get(),
                 cache.get(),
                 req.toolCallId,
@@ -2688,7 +2861,8 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 req.isError,
                 req.maxWidth
             );
-            XX_TEST_EXPECT_FALSE(afterUnload.matched);
+            // 旧快照里的注册项还在, 但租约已失效 → 结果为默认渲染 (无自定义内容)
+            XX_TEST_EXPECT_FALSE(afterUnload.isDecor);
         }
     }
 
@@ -3100,7 +3274,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             entry.plugin      = plugin;
             entry.inputHash   = 1;
             entry.matched     = true;
-            entry.displayName = key;
+            entry.text        = key;
             return entry;
         };
 
@@ -3174,7 +3348,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                         r.plugin,
                         std::string{agentxx::plugin::kBuiltinRendererOwner}
                     );
-                    XX_TEST_EXPECT_TRUE(r.renderFn != nullptr);
+                    XX_TEST_EXPECT_TRUE(r.collapsedFn != nullptr);
                 }
             }
         }
@@ -3195,7 +3369,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             );
             XX_TEST_EXPECT_TRUE(res.matched);
             XX_TEST_EXPECT_EQ(res.displayName, "Store");
-            XX_TEST_EXPECT_EQ(res.summary, " · new #7");
+            XX_TEST_EXPECT_EQ(res.summary, "new #7");
             XX_TEST_EXPECT_TRUE(res.items.empty()); ///< 展开体保持通用展示 (无 items)
         }
 
@@ -3212,7 +3386,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 100
             );
             XX_TEST_EXPECT_TRUE(res.matched);
-            XX_TEST_EXPECT_EQ(res.summary, " · new");
+            XX_TEST_EXPECT_EQ(res.summary, "new");
         }
 
         // 28.5 get/set/delete: 区间只有 get 展示; 操作与 id 依次排列 (仅一侧分页参数时另一侧开放)
@@ -3228,7 +3402,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 100
             );
             XX_TEST_EXPECT_EQ(getRes.displayName, "Store");
-            XX_TEST_EXPECT_EQ(getRes.summary, " · [0, 100] get #12");
+            XX_TEST_EXPECT_EQ(getRes.summary, "[0, 100] get #12");
 
             auto getOpen = co_await renderToolAsync(
                 mgr2,
@@ -3240,7 +3414,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 false,
                 100
             );
-            XX_TEST_EXPECT_EQ(getOpen.summary, " · [40, ~] get #12");
+            XX_TEST_EXPECT_EQ(getOpen.summary, "[40, ~] get #12");
 
             auto setRes = co_await renderToolAsync(
                 mgr2,
@@ -3252,7 +3426,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 false,
                 100
             );
-            XX_TEST_EXPECT_EQ(setRes.summary, " · update #3");
+            XX_TEST_EXPECT_EQ(setRes.summary, "update #3");
 
             // `delete` 操作已移除: 与其它未识别的 opt 一样原样展示 (不带 id 摘要)
             auto delRes = co_await renderToolAsync(
@@ -3265,7 +3439,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 false,
                 100
             );
-            XX_TEST_EXPECT_EQ(delRes.summary, " · delete");
+            XX_TEST_EXPECT_EQ(delRes.summary, "delete");
         }
 
         // 28.6 参数未就绪 (空串 / 半截 JSON): 只提供显示名, 摘要为空 (不报错)
@@ -3280,7 +3454,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 false,
                 100
             );
-            XX_TEST_EXPECT_TRUE(emptyArgs.matched);
+            XX_TEST_EXPECT_FALSE(emptyArgs.matched); ///< 折叠内容为空 = 无自定义内容 (界面走默认渲染)
             XX_TEST_EXPECT_EQ(emptyArgs.displayName, "Store");
             XX_TEST_EXPECT_TRUE(emptyArgs.summary.empty());
 
@@ -3294,7 +3468,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 false,
                 100
             );
-            XX_TEST_EXPECT_TRUE(partialArgs.matched);
+            XX_TEST_EXPECT_FALSE(partialArgs.matched);
             XX_TEST_EXPECT_EQ(partialArgs.displayName, "Store");
             XX_TEST_EXPECT_TRUE(partialArgs.summary.empty());
         }
@@ -3313,7 +3487,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
             );
             XX_TEST_EXPECT_TRUE(res.matched);
             XX_TEST_EXPECT_EQ(res.displayName, "Subagent");
-            XX_TEST_EXPECT_EQ(res.summary, " · explorer · fix login");
+            XX_TEST_EXPECT_EQ(res.summary, "explorer · fix login");
         }
 
         // 28.8 subagent 批量: 任务数 + 子代理名 (最多 3 个, 其余折叠为 ...)
@@ -3328,7 +3502,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 false,
                 100
             );
-            XX_TEST_EXPECT_EQ(batch.summary, " · 4 tasks: explorer, coder, planner, ...");
+            XX_TEST_EXPECT_EQ(batch.summary, "4 tasks: explorer, coder, planner, ...");
         }
 
         // 28.9 subagent 仅 messages 形态 (任务文本取最后一条 content) / 无名任务 /
@@ -3344,7 +3518,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 false,
                 100
             );
-            XX_TEST_EXPECT_EQ(msgOnly.summary, " · x · hi there");
+            XX_TEST_EXPECT_EQ(msgOnly.summary, "x · hi there");
 
             // 无子代理名 (仅任务文本): 摘要直接接在 " ·" 之后, 不留双分隔符
             auto noName = co_await renderToolAsync(
@@ -3357,7 +3531,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 false,
                 100
             );
-            XX_TEST_EXPECT_EQ(noName.summary, " · summarize the module");
+            XX_TEST_EXPECT_EQ(noName.summary, "summarize the module");
 
             // 宽度预算不足 (<20) 时按固定 80 列预算截断
             const std::string longTask(200, 't');
@@ -3377,29 +3551,39 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
 
         // 28.10 匹配优先级: 插件注册项优先于主程序内置项 (同一 tool_name)
         {
-            agentxx::plugin::ClientUiRegistry reg;
-            reg.builtinToolRenderers.push_back({
-                .plugin   = std::string{agentxx::plugin::kBuiltinRendererOwner},
-                .toolName = "agentxx_share_store",
-                .renderFn = &agentxx::plugin::builtinRenderShareStore,
-                .builtin  = true,
-            });
-            auto pluginFn = +[](void*, const AgentxxToolRenderInput*, AgentxxToolRenderOutput* out
-                             ) -> int32_t {
-                agentxx::plugin::hostMemorySetString(&out->displayName, "PluginStore");
-                agentxx::plugin::hostMemorySetString(&out->summary, " · plugin wins");
+            auto pluginCollapsed = +[](void*,
+                                       const AgentxxToolRenderInput*,
+                                       AgentxxToolCollapsedOutput* out) -> int32_t {
+                agentxx::plugin::hostMemorySetString(&out->text, "plugin wins");
                 return 0;
             };
+
+            agentxx::plugin::ClientUiRegistry reg;
+            reg.builtinToolRenderers.push_back({
+                .plugin      = std::string{agentxx::plugin::kBuiltinRendererOwner},
+                .toolName    = "agentxx_share_store",
+                .displayName = "Store",
+                .collapsedFn = &agentxx::plugin::builtinRenderShareStoreCollapsed,
+                .builtin     = true,
+            });
             reg.toolRenderers.push_back({
-                .plugin   = "some_plugin",
-                .toolName = "agentxx_share_store",
-                .renderFn = pluginFn,
+                .plugin      = "some_plugin",
+                .toolName    = "agentxx_share_store",
+                .displayName = "PluginStore",
+                .collapsedFn = pluginCollapsed,
             });
 
-            const std::string args       = R"({"opt":"new","text":"a\nb"})";
-            auto              withPlugin = agentxx::plugin::renderClientTool(
+            const std::string args = R"({"opt":"new","text":"a\nb"})";
+            // 显示名: 插件注册项优先
+            XX_TEST_EXPECT_EQ(
+                agentxx::plugin::toolDisplayNameFor(&reg, {}, "agentxx_share_store"),
+                std::string_view{"PluginStore"}
+            );
+
+            // 无语义缓存 = 同步执行回调 (不进入异步请求路径)
+            auto withPlugin = agentxx::plugin::renderClientToolCollapsed(
                 &reg,
-                nullptr, // 无语义缓存: renderer 同步执行 (不进入异步请求路径)
+                nullptr,
                 "call_prec_1",
                 "agentxx_share_store",
                 args,
@@ -3408,13 +3592,16 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 false,
                 100
             );
-            XX_TEST_EXPECT_TRUE(withPlugin.matched);
-            XX_TEST_EXPECT_EQ(withPlugin.displayName, "PluginStore");
-            XX_TEST_EXPECT_EQ(withPlugin.summary, " · plugin wins");
+            XX_TEST_EXPECT_EQ(withPlugin.text, std::string{"plugin wins"});
+            XX_TEST_EXPECT_FALSE(withPlugin.pending);
 
             // 插件项不存在时回退主程序内置渲染器
             reg.toolRenderers.clear();
-            auto builtinOnly = agentxx::plugin::renderClientTool(
+            XX_TEST_EXPECT_EQ(
+                agentxx::plugin::toolDisplayNameFor(&reg, {}, "agentxx_share_store"),
+                std::string_view{"Store"}
+            );
+            auto builtinOnly = agentxx::plugin::renderClientToolCollapsed(
                 &reg,
                 nullptr,
                 "call_prec_2",
@@ -3425,9 +3612,8 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 false,
                 100
             );
-            XX_TEST_EXPECT_TRUE(builtinOnly.matched);
-            XX_TEST_EXPECT_EQ(builtinOnly.displayName, "Store");
-            XX_TEST_EXPECT_EQ(builtinOnly.summary, " · new");
+            XX_TEST_EXPECT_EQ(builtinOnly.text, std::string{"new"});
+            XX_TEST_EXPECT_FALSE(builtinOnly.pending);
         }
 
         // 28.11 内置渲染器不受插件禁用/卸载影响 (进程级注册, 与插件生命周期无关)
@@ -3449,7 +3635,7 @@ asio::awaitable<TestResult> run_client_plugin_tests() {
                 100
             );
             XX_TEST_EXPECT_TRUE(afterUnload.matched);
-            XX_TEST_EXPECT_EQ(afterUnload.summary, " · new #9");
+            XX_TEST_EXPECT_EQ(afterUnload.summary, "new #9");
             XX_TEST_EXPECT_EQ(mgr2->uiRegistrySnapshot()->builtinToolRenderers.size(), size_t{2});
         }
     }
