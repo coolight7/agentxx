@@ -753,6 +753,22 @@ asio::awaitable<TestResult> run_plugin_tests() {
                 XX_TEST_EXPECT_TRUE(kindIs("getAsyncWork", {"null"}));
                 XX_TEST_EXPECT_TRUE(j["cancelAsyncWork"].is_boolean());
                 XX_TEST_EXPECT_FALSE(j["cancelAsyncWork"].get<bool>());
+                // 会话运行时: 无效句柄走拒绝分支 (不抛异常, 返回空串/0/false)
+                // - listRuntime() 是清单对象 (`{roots,triggers,timers}`)
+                XX_TEST_EXPECT_TRUE(kindIs("listRuntimeKind", {"object"}));
+                XX_TEST_EXPECT_TRUE(kindIs("openChannelInvalid", {"number"}));
+                XX_TEST_EXPECT_TRUE(kindIs("getChannelStateInvalid", {"null", "object"}));
+                XX_TEST_EXPECT_TRUE(j["getChannelMessagesIsArray"].get<bool>());
+                XX_TEST_EXPECT_TRUE(kindIs("closeChannelInvalid", {"boolean"}));
+                XX_TEST_EXPECT_TRUE(kindIs("cancelChannelInvalid", {"boolean"}));
+                XX_TEST_EXPECT_TRUE(kindIs("selectModelInvalid", {"boolean"}));
+                XX_TEST_EXPECT_TRUE(kindIs("respondInterruptInvalid", {"boolean"}));
+                XX_TEST_EXPECT_TRUE(kindIs("unmountRootInvalid", {"boolean"}));
+                XX_TEST_EXPECT_TRUE(kindIs("registerTriggerInvalid", {"number"}));
+                XX_TEST_EXPECT_TRUE(kindIs("unregisterTriggerInvalid", {"boolean"}));
+                XX_TEST_EXPECT_TRUE(kindIs("registerTimerInvalid", {"number"}));
+                XX_TEST_EXPECT_TRUE(kindIs("unregisterTimerInvalid", {"boolean"}));
+                XX_TEST_EXPECT_TRUE(kindIs("emitEvent", {"boolean"}));
             }
         }
 

@@ -98,6 +98,24 @@ agentxx.registerTool({
     out.listAsyncWorkIsArray = Array.isArray(agentxx.listAsyncWork());
     out.getAsyncWork = kindOf(agentxx.getAsyncWork("async-does-not-exist"));
     out.cancelAsyncWork = agentxx.cancelAsyncWork("async-does-not-exist");
+    // 会话运行时: 只打无效句柄的路径 (真建根/开通道会真的起 agent, 留给真实用例)
+    out.listRuntimeKind = kindOf(agentxx.listRuntime());
+    out.openChannelInvalid = typeof agentxx.openChannel({ rootId: "no-such-root" });
+    out.getChannelStateInvalid = kindOf(agentxx.getChannelState(0));
+    out.getChannelMessagesIsArray = Array.isArray(agentxx.getChannelMessages(0));
+    out.closeChannelInvalid = typeof agentxx.closeChannel(0);
+    out.cancelChannelInvalid = typeof agentxx.cancelChannel(0);
+    out.selectModelInvalid = typeof agentxx.selectModel(0, "no-such-model");
+    out.respondInterruptInvalid = typeof agentxx.respondInterrupt(0, 0, { values: {} });
+    out.unmountRootInvalid = typeof agentxx.unmountRoot("no-such-root");
+    out.registerTriggerInvalid = typeof agentxx.registerTrigger({
+      channelId: 0,
+      topic: "plugin.example_js.probe",
+    });
+    out.unregisterTriggerInvalid = typeof agentxx.unregisterTrigger(0);
+    out.registerTimerInvalid = typeof agentxx.registerTimer({ channelId: 0, firstDelayMs: 1 });
+    out.unregisterTimerInvalid = typeof agentxx.unregisterTimer(0);
+    out.emitEvent = typeof agentxx.emitEvent("plugin.example_js.probe", { probe: true });
     return out;
   },
 });

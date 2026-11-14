@@ -229,4 +229,49 @@ JS SDK 对齐 (与 C++ 插件 SDK 同名同义):
   JS 线程后因查不到实例而丢弃。要取消就在卸载前自己调 `cancelAsyncWork`。
 - 同一引擎里的所有脚本共享一份网络资源 (属主 = 引擎这个插件实例), `ws.connect` 一类
   连接 id 需要脚本自己加前缀避免相撞。
-- 工具特化渲染与 `runtime` (自建根 / 通道 / 触发器) 未做。
+- 工具特化渲染未做。
+
+## 第三步: JS SDK 补齐会话运行时 (自建根 / 通道 / 触发器 / 定时器)
+
+### 改了什么
+
+- `agent/plugins/agentxx_javascript_engine/agentxx_javascript_engine.cpp`
+    - 把回调登记结构改名为通用 `JsCallbackHook` (后台任务事件与会话通道事件共用),
+      引擎成员改为 `callbackMtx_` / `callbackHooks_`, 实例回调表分
+      `asyncWorkCallbacks` / `channelCallbacks`, token 源统一为 `nextCallbackToken`
+    - 新增 `onChannelEvent` (主程序 io 线程) + `ChannelEventCopy` + `doChannelEvent`
+      (JS 线程): 只拷 `kind` / `channelId` / `interruptId` / `text` / `payload_json`,
+      事件对象交给脚本时是 `{channelId, kind, text?, interruptId?, payload}`;
+      `closed` 是最后一条, 到那就释放登记
+    - 新增 bridge magic: `B_MOUNT_ROOT` / `B_UNMOUNT_ROOT` / `B_OPEN_CHANNEL` /
+      `B_CLOSE_CHANNEL` / `B_SEND_INPUT` / `B_CANCEL_CHANNEL` / `B_SELECT_MODEL` /
+      `B_RESPOND_INTERRUPT` / `B_GET_CHANNEL_STATE` / `B_GET_CHANNEL_MESSAGES` /
+      `B_LIST_RUNTIME` / `B_REGISTER_TRIGGER` / `B_UNREGISTER_TRIGGER` /
+      `B_REGISTER_TIMER` / `B_UNREGISTER_TIMER` / `B_EMIT_EVENT`
+    - 失败统一降级: `mountRoot` 返回空串、`openChannel` / `registerTrigger` /
+      `registerTimer` 返回 0、其余布尔入口返回 `false` (不抛异常)
+- `agent/plugins/example_js/plugin.js`: `js_sdk_probe` 增加运行时面的形状检查
+  (只用无效句柄, 不真的建根/开通道)
+- `agent/test/plugin/test_plugins.cpp`: 16b 段扩充对应断言 (`plugins` 627 → 641)
+- 文档: `docs/zh-cn/design/plugins.md` §12 增加运行时面对齐说明 (含事件 `kind` 取值与
+  `listRuntime()` 的形状); `AGENTS.md` 同步
+
+### 验证
+
+| 模块 | 结果 |
+|---|---|
+| `plugins` (含新增运行时形状断言) | 641 通过 / 0 失败 |
+| `plugin_runtime` / `plugin_sdk` / `plugin_bridge` | 730 / 133 / 193, 全 0 失败 |
+| `plugin_host_mount` / `plugin_multi_mount` / `plugin_cleanup` | 146 / 47 / 90, 全 0 失败 |
+| `plugin_dispatch` / `plugin_feature` / `plugin_point` / `plugin_broadcast` | 112 / 34 / 68 / 90, 全 0 失败 |
+| `async_work` / `async_tools` / `plugin_agent_runtime` / `boundaries` / `config_keys` | 138 / 178 / 221 / 19 / 217, 全 0 失败 |
+
+### 遇到的问题 / 发现
+
+1. `plugin_api.h` 里 `list_runtime` 的注释写的是数组 (`[{"rootId",...}]`), 实际实现
+   (`PluginManager::listRuntimeJson`) 返回的是对象 `{roots, triggers, timers}`。
+   本次以实现为准 (JS 侧直接给这个对象), 文档写清; 头文件注释未改 (改它会触发
+   全库重编, 另开一次改)。
+2. 真建根 / 开通道会真起 agent, 因此自动化只验形状 (无效句柄路径); 真流程仍靠
+   `plugin_agent_runtime` (C++ 侧) 覆盖。要加 JS 真流程用例, 需在 `AgentHost` 容器上
+   起一个 JS 插件再 `mountRoot`。

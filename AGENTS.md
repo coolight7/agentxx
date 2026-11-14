@@ -303,8 +303,8 @@ path/to/agentxx_test --log-level warn string_util regex
   注册归属用实例自己的 `PluginxxScopeRef`; agent 卸载只销毁自己的实例、不执行 JS 侧注销
   (主程序已按挂载记录撤销)。JS SDK 与 C++ 侧同名同义 (`registerTool` / `subscribe` / `publish` /
   `addSkillDir` / `registerToolPermission` / `getConfig` / `scope()` / `netCall` / `netFetch` /
-  `submitAsyncWork` / `getPrompt` / `getMessages` / `getGraphJson` 等), 只剩会话运行时
-  (`agentxx.agent.runtime` 的 `mount_root` / 通道 / 触发器) 与工具特化渲染写在 C++ 壳里;
+  `submitAsyncWork` / `getPrompt` / `getMessages` / `getGraphJson` / `mountRoot` /
+  `openChannel` / `registerTrigger` 等), 只剩工具特化渲染 (UI 线程回调) 写在 C++ 壳里;
   详见 plugins.md §12
 - 插件接口为 **API v1**: 入口为 `agentxx_plugin_agent_create` /
   `agentxx_plugin_agent_destroy` 实例对 (client 侧 `agentxx_plugin_client_create` / `_destroy`)。

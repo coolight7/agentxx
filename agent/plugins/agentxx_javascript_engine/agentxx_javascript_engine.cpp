@@ -277,6 +277,23 @@ enum BridgeMagic {
     B_SET_GRAPH_JSON,
     B_LIST_MOUNTS,
     B_GET_MOUNT,
+    // 会话运行时 (`agentxx.agent.runtime`): 自建根 / 会话通道 / 触发器 / 定时器
+    B_MOUNT_ROOT,
+    B_UNMOUNT_ROOT,
+    B_OPEN_CHANNEL,
+    B_CLOSE_CHANNEL,
+    B_SEND_INPUT,
+    B_CANCEL_CHANNEL,
+    B_SELECT_MODEL,
+    B_RESPOND_INTERRUPT,
+    B_GET_CHANNEL_STATE,
+    B_GET_CHANNEL_MESSAGES,
+    B_LIST_RUNTIME,
+    B_REGISTER_TRIGGER,
+    B_UNREGISTER_TRIGGER,
+    B_REGISTER_TIMER,
+    B_UNREGISTER_TIMER,
+    B_EMIT_EVENT,
 };
 
 /// 工具执行请求/结果 (execute 桥跨线程传递)
@@ -337,10 +354,11 @@ struct JsNetBridge {
     std::atomic<int64_t> requestId{0}; ///< 受理时给出的请求号 (之后用于 netCancel)
 };
 
-/// 后台任务事件回调的用户数据
+/// 主程序回调 → JS 线程的登记 (后台任务事件 / 会话通道事件共用)
 /// - 与 JS 实例生命周期解耦: 实例先销毁时事件在 JS 线程查不到回调, 直接丢弃
-/// - 终态 (finished/canceled) 到达时释放; 引擎销毁时清理尚未收到终态的残留
-struct JsAsyncWorkHook {
+/// - 终态事件 (后台任务 finished/canceled、通道 closed) 到达时释放;
+///   引擎销毁时清理尚未收到终态的残留
+struct JsCallbackHook {
     JsEngine*   engine = nullptr;
     std::string instanceKey;
     int64_t     token = 0; ///< JS 侧回调表的键
@@ -372,8 +390,10 @@ struct JsPluginCtx {
     std::vector<std::unique_ptr<JsHookBinding>> hookBindings;
     /// 后台任务事件回调: token -> fn (提交时登记; 随上下文释放)
     std::map<int64_t, JSValue> asyncWorkCallbacks;
+    /// 会话通道事件回调: token -> fn (开通道时登记; 随上下文释放)
+    std::map<int64_t, JSValue> channelCallbacks;
     /// 回调 token 自增源 (仅 JS 线程使用)
-    int64_t nextAsyncWorkToken = 0;
+    int64_t nextCallbackToken = 0;
     /// 脚本初始化事务的撤销动作 (注册工具/通知/订阅/资源成功时按序追加)。
     /// 顶层执行失败或脚本卸载时逆序执行, 主程序侧不留任何残留注册。
     std::vector<std::function<void()>> rollbackActions;
@@ -433,12 +453,12 @@ public:
     /// 主程序协议要求 destroy 前 stop 已完成, 正常路径此处是空操作。
     ~JsEngine() {
         stopAndWait();
-        // 停止后再无主程序回调, 残留的任务事件登记可以安全释放
+        // 停止后再无主程序回调, 残留的回调登记可以安全释放
         // (未收到终态的任务在插件 stop 时已被主程序取消, 事件到此为止)
-        std::set<JsAsyncWorkHook*> rest;
+        std::set<JsCallbackHook*> rest;
         {
-            std::lock_guard<std::mutex> lk(asyncWorkMtx_);
-            rest.swap(asyncWorkHooks_);
+            std::lock_guard<std::mutex> lk(callbackMtx_);
+            rest.swap(callbackHooks_);
         }
         for (auto* hook : rest) {
             delete hook;
@@ -1026,25 +1046,25 @@ public:
         delete bridge;
     }
 
-    /// 登记一个后台任务事件回调 (返回交给主程序的 user_data)
-    JsAsyncWorkHook* registerAsyncWorkHook(const std::string& instanceKey, int64_t token) {
-        auto hook         = new JsAsyncWorkHook{};
+    /// 登记一个主程序回调 (返回交给主程序的 user_data)
+    JsCallbackHook* registerCallbackHook(const std::string& instanceKey, int64_t token) {
+        auto hook         = new JsCallbackHook{};
         hook->engine      = this;
         hook->instanceKey = instanceKey;
         hook->token       = token;
-        std::lock_guard<std::mutex> lk(asyncWorkMtx_);
-        asyncWorkHooks_.insert(hook);
+        std::lock_guard<std::mutex> lk(callbackMtx_);
+        callbackHooks_.insert(hook);
         return hook;
     }
 
-    /// 释放后台任务事件回调登记 (终态到达 / 提交失败 / 引擎销毁)
-    void releaseAsyncWorkHook(JsAsyncWorkHook* hook) {
+    /// 释放回调登记 (终态到达 / 提交失败 / 引擎销毁)
+    void releaseCallbackHook(JsCallbackHook* hook) {
         if (!hook) {
             return;
         }
         {
-            std::lock_guard<std::mutex> lk(asyncWorkMtx_);
-            asyncWorkHooks_.erase(hook);
+            std::lock_guard<std::mutex> lk(callbackMtx_);
+            callbackHooks_.erase(hook);
         }
         delete hook;
     }
@@ -1057,7 +1077,7 @@ public:
         int32_t                   phase,
         const PluginxxStringView* payload_json
     ) noexcept {
-        auto* hook = static_cast<JsAsyncWorkHook*>(ud);
+        auto* hook = static_cast<JsCallbackHook*>(ud);
         if (!hook || !hook->engine) {
             return;
         }
@@ -1074,7 +1094,7 @@ public:
         });
         if (phase == AGENTXX_PLUGIN_ASYNC_WORK_EVT_FINISHED
             || phase == AGENTXX_PLUGIN_ASYNC_WORK_EVT_CANCELED) {
-            engine->releaseAsyncWorkHook(hook);
+            engine->releaseCallbackHook(hook);
         }
     }
 
@@ -1118,6 +1138,112 @@ public:
         JS_FreeValue(ctx, rc);
         JS_FreeValue(ctx, phaseV);
         JS_FreeValue(ctx, dataV);
+    }
+
+    /// 一条通道事件的自有副本 (跨线程传递用)
+    struct ChannelEventCopy {
+        int32_t     kind        = 0;
+        int64_t     channelId   = 0;
+        int64_t     interruptId = 0;
+        std::string text;
+        std::string payload;
+    };
+
+    /// 会话通道事件 (该根所属 io 线程): 拷一份载荷并投递回 JS 线程
+    /// - 事件只在回调期间有效, 只拷字符串, 不动主程序对象
+    /// - `closed` 是通道的最后一条事件, 到这就释放登记
+    static void PLUGINXX_CALL onChannelEvent(
+        void*                            ud,
+        const AgentxxPluginChannelEvent* event
+    ) noexcept {
+        auto* hook = static_cast<JsCallbackHook*>(ud);
+        if (!hook || !hook->engine || !event) {
+            return;
+        }
+        ChannelEventCopy copy;
+        try {
+            copy.kind        = event->kind;
+            copy.channelId   = event->channel_id;
+            copy.interruptId = event->interrupt_id;
+            if (event->text.data) {
+                copy.text.assign(event->text.data, static_cast<size_t>(event->text.size));
+            }
+            if (event->payload_json.data) {
+                copy.payload.assign(
+                    event->payload_json.data,
+                    static_cast<size_t>(event->payload_json.size)
+                );
+            }
+        } catch (...) {
+        }
+        auto* engine = hook->engine;
+        engine->post([engine,
+                      instanceKey = hook->instanceKey,
+                      token       = hook->token,
+                      copy]() {
+            engine->doChannelEvent(instanceKey, token, copy);
+        });
+        if (copy.kind == AGENTXX_PLUGIN_CHANNEL_EVT_CLOSED) {
+            engine->releaseCallbackHook(hook);
+        }
+    }
+
+    /// 【JS 线程】调用脚本登记的通道事件回调
+    /// - 实例已销毁时事件丢弃 (通道仍由主程序自己收尾)
+    void doChannelEvent(
+        const std::string&     instanceKey,
+        int64_t                token,
+        const ChannelEventCopy& event
+    ) {
+        if (stopping()) {
+            return;
+        }
+        auto it = plugins_.find(instanceKey);
+        if (it == plugins_.end() || !it->second) {
+            return;
+        }
+        auto*      pctx = it->second.get();
+        const auto fit  = pctx->channelCallbacks.find(token);
+        if (fit == pctx->channelCallbacks.end()) {
+            return;
+        }
+        JSContext* ctx = pctx->ctx;
+        JSValue    ev  = JS_NewObject(ctx);
+        JS_SetPropertyStr(ctx, ev, "channelId", JS_NewInt64(ctx, event.channelId));
+        JS_SetPropertyStr(ctx, ev, "kind", JS_NewString(ctx, channelEventName(event.kind)));
+        if (event.interruptId != 0) {
+            JS_SetPropertyStr(ctx, ev, "interruptId", JS_NewInt64(ctx, event.interruptId));
+        }
+        if (!event.text.empty()) {
+            JS_SetPropertyStr(
+                ctx,
+                ev,
+                "text",
+                JS_NewStringLen(ctx, event.text.data(), event.text.size())
+            );
+        }
+        JS_SetPropertyStr(
+            ctx,
+            ev,
+            "payload",
+            jsonTextToValue(ctx, event.payload, "<channel_event>")
+        );
+        JSValue argv[1] = {ev};
+        JSValue rc      = JS_Call(ctx, fit->second, JS_UNDEFINED, 1, argv);
+        if (JS_IsException(rc)) {
+            JSValue exc = JS_GetException(ctx);
+            logAt(
+                3,
+                fmt::format(
+                    "interpreter.js: channel onEvent threw: {}",
+                    valueToJsonString(ctx, exc)
+                )
+                    .c_str()
+            );
+            JS_FreeValue(ctx, exc);
+        }
+        JS_FreeValue(ctx, rc);
+        JS_FreeValue(ctx, ev);
     }
 
     /// 工具 execute 桥 —— 异步启动 (统一异步操作模型):
@@ -1976,6 +2102,46 @@ private:
         }
     }
 
+    /// 会话通道事件类型 → JS 侧名字
+    static const char* channelEventName(int32_t kind) {
+        switch (kind) {
+            case AGENTXX_PLUGIN_CHANNEL_EVT_READY:
+                return "ready";
+            case AGENTXX_PLUGIN_CHANNEL_EVT_TURN_START:
+                return "turn_start";
+            case AGENTXX_PLUGIN_CHANNEL_EVT_DELTA_TEXT:
+                return "delta_text";
+            case AGENTXX_PLUGIN_CHANNEL_EVT_DELTA_THINKING:
+                return "delta_thinking";
+            case AGENTXX_PLUGIN_CHANNEL_EVT_TOOL_START:
+                return "tool_start";
+            case AGENTXX_PLUGIN_CHANNEL_EVT_TOOL_END:
+                return "tool_end";
+            case AGENTXX_PLUGIN_CHANNEL_EVT_GEN_STATUS:
+                return "gen_status";
+            case AGENTXX_PLUGIN_CHANNEL_EVT_TURN_END:
+                return "turn_end";
+            case AGENTXX_PLUGIN_CHANNEL_EVT_CONTEXT_STATS:
+                return "context_stats";
+            case AGENTXX_PLUGIN_CHANNEL_EVT_INPUT_ACK:
+                return "input_ack";
+            case AGENTXX_PLUGIN_CHANNEL_EVT_QUEUE_STATE:
+                return "queue_state";
+            case AGENTXX_PLUGIN_CHANNEL_EVT_INTERRUPT:
+                return "interrupt";
+            case AGENTXX_PLUGIN_CHANNEL_EVT_INTERRUPT_EXPIRED:
+                return "interrupt_expired";
+            case AGENTXX_PLUGIN_CHANNEL_EVT_TIP:
+                return "tip";
+            case AGENTXX_PLUGIN_CHANNEL_EVT_ERROR:
+                return "error";
+            case AGENTXX_PLUGIN_CHANNEL_EVT_CLOSED:
+                return "closed";
+            default:
+                return "unknown";
+        }
+    }
+
     /// 工具 execute 的正常返回 -> 结果正文与终态
     ///
     /// 两种写法都支持:
@@ -2098,6 +2264,23 @@ private:
         def("setGraphJson", B_SET_GRAPH_JSON, 1);
         def("listMounts", B_LIST_MOUNTS, 0);
         def("getMount", B_GET_MOUNT, 1);
+        // 会话运行时: 自建根 / 会话通道 / 触发器 / 定时器 (容器级接口)
+        def("mountRoot", B_MOUNT_ROOT, 1);
+        def("unmountRoot", B_UNMOUNT_ROOT, 1);
+        def("openChannel", B_OPEN_CHANNEL, 1);
+        def("closeChannel", B_CLOSE_CHANNEL, 1);
+        def("sendInput", B_SEND_INPUT, 2);
+        def("cancelChannel", B_CANCEL_CHANNEL, 1);
+        def("selectModel", B_SELECT_MODEL, 2);
+        def("respondInterrupt", B_RESPOND_INTERRUPT, 3);
+        def("getChannelState", B_GET_CHANNEL_STATE, 1);
+        def("getChannelMessages", B_GET_CHANNEL_MESSAGES, 1);
+        def("listRuntime", B_LIST_RUNTIME, 0);
+        def("registerTrigger", B_REGISTER_TRIGGER, 1);
+        def("unregisterTrigger", B_UNREGISTER_TRIGGER, 1);
+        def("registerTimer", B_REGISTER_TIMER, 1);
+        def("unregisterTimer", B_UNREGISTER_TIMER, 1);
+        def("emitEvent", B_EMIT_EVENT, 2);
 
         int ok = JS_SetPropertyStr(ctx, global, "agentxx", bridge) >= 0;
         // 常用工具函数注入全局 (沙箱内可用): 裸 setTimeout/clearTimeout
@@ -2207,8 +2390,8 @@ private:
     std::mutex                                                     mirrorMtx_;
     std::map<std::string, std::weak_ptr<JsPluginCtx>, std::less<>> mirror_;
     /// 后台任务事件登记 (主程序 io 线程回调时不解引用, 仅作释放记录)
-    std::mutex                 asyncWorkMtx_;
-    std::set<JsAsyncWorkHook*> asyncWorkHooks_;
+    std::mutex                callbackMtx_;
+    std::set<JsCallbackHook*> callbackHooks_;
 };
 
 /// 工具 execute 异步桥 (统一异步操作模型):
@@ -2367,6 +2550,11 @@ JsPluginCtx::~JsPluginCtx() {
             JS_FreeValue(ctx, fn);
         }
         asyncWorkCallbacks.clear();
+        for (auto& [token, fn] : channelCallbacks) {
+            (void)token;
+            JS_FreeValue(ctx, fn);
+        }
+        channelCallbacks.clear();
         JS_FreeContext(ctx);
         ctx = nullptr;
     }
@@ -3405,12 +3593,12 @@ JSValue JsEngine::bridgeCall(
 
             // 任务事件回调: 存本实例的回调表, 主程序事件投递回 JS 线程再调
             int64_t          callbackToken = 0;
-            JsAsyncWorkHook* hook          = nullptr;
+            JsCallbackHook* hook          = nullptr;
             JSValue          eventFn       = JS_GetPropertyStr(ctx, opt, "onEvent");
             if (JS_IsFunction(ctx, eventFn)) {
-                callbackToken = ++pctx->nextAsyncWorkToken;
+                callbackToken = ++pctx->nextCallbackToken;
                 pctx->asyncWorkCallbacks[callbackToken] = JS_DupValue(ctx, eventFn);
-                hook = engine->registerAsyncWorkHook(pctx->instanceKey, callbackToken);
+                hook = engine->registerCallbackHook(pctx->instanceKey, callbackToken);
             }
             JS_FreeValue(ctx, eventFn);
 
@@ -3458,7 +3646,7 @@ JSValue JsEngine::bridgeCall(
             if (rc != AGENTXX_RESULT_OK) {
                 // 提交被拒: 回调不会再被调用, 当场释放登记与 JS 回调
                 if (hook) {
-                    engine->releaseAsyncWorkHook(hook);
+                    engine->releaseCallbackHook(hook);
                     auto it = pctx->asyncWorkCallbacks.find(callbackToken);
                     if (it != pctx->asyncWorkCallbacks.end()) {
                         JS_FreeValue(ctx, it->second);
@@ -3742,6 +3930,337 @@ JSValue JsEngine::bridgeCall(
             std::string json(out.data, static_cast<size_t>(out.size));
             agentxx::plugin::PluginString::free(host, &out);
             return jsonTextToValue(ctx, json, "<mount>");
+        }
+
+        // ---- 会话运行时 (`agentxx.agent.runtime`): 自建根 / 会话通道 / 触发器 / 定时器 ----
+        // 容器级接口: 不按 agent 挂载寻址, 句柄由主程序分配。
+        // 注意: `mountRoot` 只能在容器级时机调用 (在 mount 回调里调会被拒),
+        // 而脚本实例是每个 agent 各一份 —— 多挂载时同一段顶层代码会调多次。
+        case B_MOUNT_ROOT: {
+            if (!iface.runtime || !iface.runtime->mount_root) {
+                return JS_NewString(ctx, "");
+            }
+            if (argc < 1 || !JS_IsObject(argv[0])) {
+                return JS_ThrowTypeError(ctx, "mountRoot: options object required");
+            }
+            JSValueConst  opt  = argv[0];
+            const std::string name       = propString(ctx, opt, "name");
+            const std::string configJson = propJson(ctx, opt, "config");
+            const std::string mountJson  = propJson(ctx, opt, "mountPlugins");
+            auto              sv         = [](const std::string& s) {
+                return agentxx::plugin::PluginStringView::from(s.data(), s.size());
+            };
+            AgentxxPluginMountRootSpec spec{};
+            spec.struct_size     = sizeof(AgentxxPluginMountRootSpec);
+            spec.name            = sv(name);
+            spec.config_json     = sv(configJson);
+            spec.mount_plugins   = sv(mountJson);
+            spec.include_creator = propBool(ctx, opt, "includeCreator", false) ? 1 : 0;
+            PluginxxString out{nullptr, 0};
+            const int32_t  rc = iface.runtime->mount_root(host, &spec, &out);
+            std::string    rootId;
+            if (out.data) {
+                rootId.assign(out.data, static_cast<size_t>(out.size));
+                agentxx::plugin::PluginString::free(host, &out);
+            }
+            if (rc != AGENTXX_RESULT_OK) {
+                return JS_NewString(ctx, "");
+            }
+            return JS_NewStringLen(ctx, rootId.data(), rootId.size());
+        }
+
+        case B_UNMOUNT_ROOT: {
+            if (!iface.runtime || !iface.runtime->unmount_root || argc < 1) {
+                return JS_FALSE;
+            }
+            const std::string rootId = jsToCppString(ctx, argv[0]);
+            auto              idSv   = agentxx::plugin::PluginStringView::from(
+                rootId.data(),
+                rootId.size()
+            );
+            return iface.runtime->unmount_root(host, &idSv) == AGENTXX_RESULT_OK ? JS_TRUE
+                                                                                : JS_FALSE;
+        }
+
+        case B_OPEN_CHANNEL: {
+            if (!iface.runtime || !iface.runtime->open_channel) {
+                return JS_NewInt64(ctx, 0);
+            }
+            if (argc < 1 || !JS_IsObject(argv[0])) {
+                return JS_ThrowTypeError(ctx, "openChannel: options object required");
+            }
+            JSValueConst      opt = argv[0];
+            const std::string rootId      = propString(ctx, opt, "rootId");
+            const std::string sessionId   = propString(ctx, opt, "sessionId");
+            const std::string title       = propString(ctx, opt, "title");
+            const std::string model       = propString(ctx, opt, "model");
+            auto              sv          = [](const std::string& s) {
+                return agentxx::plugin::PluginStringView::from(s.data(), s.size());
+            };
+            // 事件回调: 没有就给一个空实现 (主程序要求非空)
+            int64_t          callbackToken = 0;
+            JsCallbackHook*  hook          = nullptr;
+            JSValue          eventFn       = JS_GetPropertyStr(ctx, opt, "onEvent");
+            if (JS_IsFunction(ctx, eventFn)) {
+                callbackToken = ++pctx->nextCallbackToken;
+                pctx->channelCallbacks[callbackToken] = JS_DupValue(ctx, eventFn);
+                hook = engine->registerCallbackHook(pctx->instanceKey, callbackToken);
+            }
+            JS_FreeValue(ctx, eventFn);
+            AgentxxPluginChannelSpec spec{};
+            spec.struct_size          = sizeof(AgentxxPluginChannelSpec);
+            spec.root_id              = sv(rootId);
+            spec.session_id           = sv(sessionId);
+            spec.title                = sv(title);
+            spec.model                = sv(model);
+            spec.max_queue            = static_cast<int32_t>(propInt64(ctx, opt, "maxQueue", 0));
+            spec.interrupt_timeout_ms = propInt64(ctx, opt, "interruptTimeoutMs", 0);
+            spec.on_event             = &JsEngine::onChannelEvent;
+            spec.user_data            = hook;
+            int64_t       channelId = 0;
+            const int32_t rc        = iface.runtime->open_channel(host, &spec, &channelId);
+            if (rc != AGENTXX_RESULT_OK || channelId <= 0) {
+                if (hook) {
+                    engine->releaseCallbackHook(hook);
+                    auto it = pctx->channelCallbacks.find(callbackToken);
+                    if (it != pctx->channelCallbacks.end()) {
+                        JS_FreeValue(ctx, it->second);
+                        pctx->channelCallbacks.erase(it);
+                    }
+                }
+                return JS_NewInt64(ctx, 0);
+            }
+            return JS_NewInt64(ctx, channelId);
+        }
+
+        case B_CLOSE_CHANNEL:
+        case B_CANCEL_CHANNEL: {
+            if (!iface.runtime || argc < 1) {
+                return JS_FALSE;
+            }
+            int64_t channelId = 0;
+            JS_ToInt64(ctx, &channelId, argv[0]);
+            if (channelId <= 0) {
+                return JS_FALSE;
+            }
+            const bool close = magic == B_CLOSE_CHANNEL;
+            if (close && !iface.runtime->close_channel) {
+                return JS_FALSE;
+            }
+            if (!close && !iface.runtime->cancel) {
+                return JS_FALSE;
+            }
+            const int32_t rc = close ? iface.runtime->close_channel(host, channelId)
+                                     : iface.runtime->cancel(host, channelId);
+            return rc == AGENTXX_RESULT_OK ? JS_TRUE : JS_FALSE;
+        }
+
+        case B_SEND_INPUT: {
+            if (!iface.runtime || !iface.runtime->send_input || argc < 2) {
+                return JS_FALSE;
+            }
+            int64_t channelId = 0;
+            JS_ToInt64(ctx, &channelId, argv[0]);
+            // 第二个参数: 字符串 = 正文; 对象 = 完整输入 JSON ({text,attachments,...})
+            const std::string input = argsJsonText(ctx, argv[1]);
+            auto              inSv  = agentxx::plugin::PluginStringView::from(
+                input.data(),
+                input.size()
+            );
+            return iface.runtime->send_input(host, channelId, &inSv) == AGENTXX_RESULT_OK
+                       ? JS_TRUE
+                       : JS_FALSE;
+        }
+
+        case B_SELECT_MODEL: {
+            if (!iface.runtime || !iface.runtime->select_model || argc < 2) {
+                return JS_FALSE;
+            }
+            int64_t channelId = 0;
+            JS_ToInt64(ctx, &channelId, argv[0]);
+            const std::string modelName = jsToCppString(ctx, argv[1]);
+            auto              modelSv   = agentxx::plugin::PluginStringView::from(
+                modelName.data(),
+                modelName.size()
+            );
+            return iface.runtime->select_model(host, channelId, &modelSv) == AGENTXX_RESULT_OK
+                       ? JS_TRUE
+                       : JS_FALSE;
+        }
+
+        case B_RESPOND_INTERRUPT: {
+            if (!iface.runtime || !iface.runtime->respond_interrupt || argc < 3) {
+                return JS_FALSE;
+            }
+            int64_t channelId = 0;
+            JS_ToInt64(ctx, &channelId, argv[0]);
+            int64_t interruptId = 0;
+            JS_ToInt64(ctx, &interruptId, argv[1]);
+            // 第三个参数按 {values:{...}} 传 (对象或 JSON 文本)
+            const std::string values = argsJsonText(ctx, argv[2]);
+            auto              valSv  = agentxx::plugin::PluginStringView::from(
+                values.data(),
+                values.size()
+            );
+            return iface.runtime->respond_interrupt(host, channelId, interruptId, &valSv)
+                           == AGENTXX_RESULT_OK
+                       ? JS_TRUE
+                       : JS_FALSE;
+        }
+
+        case B_GET_CHANNEL_STATE: {
+            if (!iface.runtime || !iface.runtime->get_channel_state || argc < 1) {
+                return JS_NULL;
+            }
+            int64_t channelId = 0;
+            JS_ToInt64(ctx, &channelId, argv[0]);
+            PluginxxString out{nullptr, 0};
+            const int32_t  rc = iface.runtime->get_channel_state(host, channelId, &out);
+            std::string    json;
+            if (out.data) {
+                json.assign(out.data, static_cast<size_t>(out.size));
+                agentxx::plugin::PluginString::free(host, &out);
+            }
+            if (rc != AGENTXX_RESULT_OK) {
+                return JS_NULL;
+            }
+            return jsonTextToValue(ctx, json, "<channel_state>");
+        }
+
+        case B_GET_CHANNEL_MESSAGES: {
+            if (!iface.runtime || !iface.runtime->get_context_messages || argc < 1) {
+                return JS_NewArray(ctx);
+            }
+            int64_t channelId = 0;
+            JS_ToInt64(ctx, &channelId, argv[0]);
+            PluginxxString out{nullptr, 0};
+            const int32_t  rc = iface.runtime->get_context_messages(host, channelId, &out);
+            std::string    json;
+            if (out.data) {
+                json.assign(out.data, static_cast<size_t>(out.size));
+                agentxx::plugin::PluginString::free(host, &out);
+            }
+            if (rc != AGENTXX_RESULT_OK) {
+                return JS_NewArray(ctx);
+            }
+            JSValue arr = jsonTextToValue(ctx, json, "<channel_messages>");
+            if (!JS_IsArray(arr)) {
+                JS_FreeValue(ctx, arr);
+                return JS_NewArray(ctx);
+            }
+            return arr;
+        }
+
+        case B_LIST_RUNTIME: {
+            if (!iface.runtime || !iface.runtime->list_runtime) {
+                return JS_NewArray(ctx);
+            }
+            PluginxxString out{nullptr, 0};
+            if (iface.runtime->list_runtime(host, &out) != AGENTXX_RESULT_OK || !out.data) {
+                return JS_NewArray(ctx);
+            }
+            std::string json(out.data, static_cast<size_t>(out.size));
+            agentxx::plugin::PluginString::free(host, &out);
+            return jsonTextToValue(ctx, json, "<runtime>");
+        }
+
+        case B_REGISTER_TRIGGER: {
+            if (!iface.runtime || !iface.runtime->register_trigger) {
+                return JS_NewInt64(ctx, 0);
+            }
+            if (argc < 1 || !JS_IsObject(argv[0])) {
+                return JS_ThrowTypeError(ctx, "registerTrigger: options object required");
+            }
+            JSValueConst      opt = argv[0];
+            const std::string topic    = propString(ctx, opt, "topic");
+            const std::string delivery = propString(ctx, opt, "delivery");
+            if (topic.empty()) {
+                return JS_ThrowTypeError(ctx, "registerTrigger: topic required");
+            }
+            auto sv = [](const std::string& s) {
+                return agentxx::plugin::PluginStringView::from(s.data(), s.size());
+            };
+            AgentxxPluginTriggerSpec spec{};
+            spec.struct_size = sizeof(AgentxxPluginTriggerSpec);
+            spec.policy      = static_cast<int32_t>(propInt64(ctx, opt, "policy", 0));
+            spec.debounce_ms = static_cast<int32_t>(propInt64(ctx, opt, "debounceMs", 0));
+            spec.max_queue   = static_cast<int32_t>(propInt64(ctx, opt, "maxQueue", 0));
+            spec.topic       = sv(topic);
+            spec.channel_id  = propInt64(ctx, opt, "channelId", 0);
+            spec.delivery    = sv(delivery);
+            int64_t       triggerId = 0;
+            const int32_t rc        = iface.runtime->register_trigger(host, &spec, &triggerId);
+            if (rc != AGENTXX_RESULT_OK) {
+                return JS_NewInt64(ctx, 0);
+            }
+            return JS_NewInt64(ctx, triggerId);
+        }
+
+        case B_UNREGISTER_TRIGGER:
+        case B_UNREGISTER_TIMER: {
+            if (!iface.runtime || argc < 1) {
+                return JS_FALSE;
+            }
+            int64_t id = 0;
+            JS_ToInt64(ctx, &id, argv[0]);
+            if (id <= 0) {
+                return JS_FALSE;
+            }
+            const bool trigger = magic == B_UNREGISTER_TRIGGER;
+            if (trigger ? (iface.runtime->unregister_trigger == nullptr)
+                        : (iface.runtime->unregister_timer == nullptr)) {
+                return JS_FALSE;
+            }
+            const int32_t rc = trigger ? iface.runtime->unregister_trigger(host, id)
+                                       : iface.runtime->unregister_timer(host, id);
+            return rc == AGENTXX_RESULT_OK ? JS_TRUE : JS_FALSE;
+        }
+
+        case B_REGISTER_TIMER: {
+            if (!iface.runtime || !iface.runtime->register_timer) {
+                return JS_NewInt64(ctx, 0);
+            }
+            if (argc < 1 || !JS_IsObject(argv[0])) {
+                return JS_ThrowTypeError(ctx, "registerTimer: options object required");
+            }
+            JSValueConst      opt    = argv[0];
+            const std::string input  = propJson(ctx, opt, "input");
+            auto              inSv   = agentxx::plugin::PluginStringView::from(
+                input.data(),
+                input.size()
+            );
+            AgentxxPluginTimerSpec spec{};
+            spec.struct_size    = sizeof(AgentxxPluginTimerSpec);
+            spec.policy         = static_cast<int32_t>(propInt64(ctx, opt, "policy", 2));
+            spec.channel_id     = propInt64(ctx, opt, "channelId", 0);
+            spec.first_delay_ms = propInt64(ctx, opt, "firstDelayMs", 0);
+            spec.interval_ms    = propInt64(ctx, opt, "intervalMs", 0);
+            spec.input_json     = inSv;
+            int64_t       timerId = 0;
+            const int32_t rc      = iface.runtime->register_timer(host, &spec, &timerId);
+            if (rc != AGENTXX_RESULT_OK) {
+                return JS_NewInt64(ctx, 0);
+            }
+            return JS_NewInt64(ctx, timerId);
+        }
+
+        case B_EMIT_EVENT: {
+            if (!iface.runtime || !iface.runtime->emit_event || argc < 1) {
+                return JS_FALSE;
+            }
+            const std::string topic   = jsToCppString(ctx, argv[0]);
+            const std::string payload = argc >= 2 ? argsJsonText(ctx, argv[1]) : std::string{"{}"};
+            auto              topicSv = agentxx::plugin::PluginStringView::from(
+                topic.data(),
+                topic.size()
+            );
+            auto paySv = agentxx::plugin::PluginStringView::from(
+                payload.data(),
+                payload.size()
+            );
+            return iface.runtime->emit_event(host, &topicSv, &paySv) == AGENTXX_RESULT_OK
+                       ? JS_TRUE
+                       : JS_FALSE;
         }
 
         default:
