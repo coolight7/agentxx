@@ -32,7 +32,7 @@ std::string_view orUnknown(const std::string& value) {
 /// 主程序运行时、上下文上限与上下文状态标记说明 (内置附加段 `core-runtime`)
 ///
 /// 标记由主程序写入, 改动下列位置时需要同步更新该段文字:
-/// - `[Exception aborted]` / `[User canceled]` / `[Please continue]` / `[Empty]`:
+/// - `[Exception aborted]` / `[Canceled]` / `[Please continue]` / `[Empty]`:
 ///   nodes/modelcall.cpp (失败/取消回退消息、消息修复、空消息占位)
 /// - `[Error: ...]` / `[Canceled]` / `[Interrupt]`: nodes/toolcall.cpp (执行层唯一的
 ///   结果格式化处 —— 只有失败被套上 `[Error...]`, 其余标记仅为结构占位)
@@ -57,7 +57,7 @@ agentxx inserts markers into this conversation to report program state. They are
 
 - Status of a failed or interrupted turn (at the end of an assistant message):
     - `[Exception aborted]`: the last model API call failed (network, timeout, upstream error) even after automatic retries. It is not user feedback. When the conversation continues, resume the same task from the step whose result was lost; do not ask the user what the error means.
-    - `[User canceled]`: the running turn was interrupted. This includes the case where the user only wanted to add a note and chose to send it immediately: agentxx interrupts the current turn first and then appends that message. It is an interruption marker, not the user's answer, consent, refusal or new instruction. In particular, never treat it as the user rejecting a pending question (requirement or plan confirmation, permission request) or as a reason to change the plan. The user's real intent is only in the user message that comes after the interruption; if no message follows, the user simply stopped the work, so wait instead of resuming on your own.
+    - `[Canceled]`: the running turn was interrupted. This includes the case where the user only wanted to add a note and chose to send it immediately: agentxx interrupts the current turn first and then appends that message. It is an interruption marker, not the user's answer, consent, refusal or new instruction. In particular, never treat it as the user rejecting a pending question (requirement or plan confirmation, permission request) or as a reason to change the plan. The user's real intent is only in the user message that comes after the interruption; if no message follows, the user simply stopped the work, so wait instead of resuming on your own.
     - `[Empty]`: a placeholder for a message that had no text, thinking and tool call; nothing was said.
 - `[Please continue]` (a user message with only this text): agentxx inserted it to keep the message roles alternating, typically after it recovered from a problem itself (for example a failed model call was retried, or the turn was resumed). It does not come from the user: it is not a request to continue, not approval, and not an answer to a question you asked. Go on with the last real request without replying to the marker, and never treat it as consent for a pending confirmation.
 - Start of a tool result:
@@ -308,6 +308,7 @@ The sub-agent cannot see the parent conversation history; its final text output 
 - This call waits for the sub-agent to finish: the parent turn pauses until the text result comes back.
 - To run it in the background instead, call `agentxx_async_run` with `tool:"agentxx_subagent"` and the same arguments; the result then arrives later as an input starting with `[Event] agentxx.agent.async.done` (use `agentxx_async_query` / `agentxx_async_await` / `agentxx_async_manager` to inspect, wait for, or drop it).
 - Provide a clear, self-contained task description in `message`; the sub-agent has no access to the parent's conversation context.
+- By default the sub-agent loads the same plugins, MCP servers, skills and memory files as this agent, so its tool set is the same as yours.
 - `subagent` must be one of the registered sub-agent names (see the enum values in the parameter description).
 - `system_prompt` is optional; when `subagent` is not set, it is used as the sub-agent's system prompt.)_",
               .args =
@@ -323,10 +324,10 @@ The sub-agent cannot see the parent conversation history; its final text output 
                        R"_(Optional. Session id the sub-agent should run on. Empty (default): the sub-agent runs on its own isolated subagent thread. Non-empty (same-context mode): the sub-agent runs on the given thread with the parent session's current model, so the shared context prefix + thread id + model let the provider reuse its KV/prefix cache.)_"},
                       {"tools",
                        R"_(Optional. Tool policy for the sub-agent, as an array of tool names:
-- `[]` (empty array): no tools at all (pure text answer).
-- `["*"]`: inherit ALL tools of the parent agent.
+- `[]` (empty array): no tools at all (pure text answer; no plugins are mounted either).
+- `["*"]`: only the tools this agent has (same as the default).
 - `["name1", "name2", ...]`: only these tools.
-Absent (default): the sub-agent's default full tool set.)_"},
+Absent (default): the sub-agent runs with the same tool set as this agent — it loads the same plugins, MCP servers, skills and memory files, so plugin tools (files, commands, web, ...) are available to it too.)_"},
                       {"enable_summarization",
                        R"_(Optional boolean. Whether the sub-agent runs with context summarization enabled. Default: inherit config (enabled). Pass `false` when delegating same-context work (e.g. context compression) so the sub-agent never re-compresses the passed-in context prefix (would break KV/prefix cache reuse).)_"},
                   },

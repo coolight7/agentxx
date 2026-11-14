@@ -388,9 +388,16 @@ TUI [F3] 打开会话选择弹窗 → WireListSessions (服务端阻塞 I/O 卸�
           中断头 MessageTip
   → AgentHost::spawnBatch → spawnOneTask:
       → 每个任务派生"独立 agent" (独立 AgentContext / engine / SessionStore /
-        中间件栈), 与主 agent 完全平等 (AgentNode); 配置为轻量子代理:
-        不建 MCP 连接 / 不加载插件 / RAG / CodeGraph, 不注入父级 Skill/Memory,
-        不持久化, 默认使用配置的 subagent 模型
+        中间件栈), 与主 agent 完全平等 (AgentNode); 配置由
+        `makeSubagentConfig(parentConfig, SubagentInherit)` 派生:
+        - **缺省 (inherit 全关)** = 轻量子代理: 不建 MCP 连接 / 不加载插件 /
+          RAG / CodeGraph, 不注入父级 Skill/Memory, 不持久化, 默认 subagent 模型
+        - **inherit 全开** (`agentxx_subagent` 工具与 `agentxx_async_run` 的
+          子代理任务写的值) = 与主会话同一套插件 / 工具 / MCP / Skill / Memory:
+          继承 `pluginMountPolicy` / 名单 / 排除 / 挂载参数, 于是插件工具在子代理里
+          同样注册 (插件工具是 mount 时写进 per-agent ToolRegistry 的);
+          `tools: []` / `toolExecutionDisabled` 的纯文本运行即使要求继承也跳过
+          插件挂载 (挂了也用不上)
       → 主程序强制嵌套深度 (maxDepth) 与并发预算 (maxConcurrentSubagents)
       → 子代理构造完成后, 主程序在其全局总线上 serve service.subagent
         (与根 agent 总线 attachRoot 挂接对称): 子代理作用域内的 "subagent"

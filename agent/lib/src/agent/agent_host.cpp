@@ -931,20 +931,37 @@ std::shared_ptr<BaseAgent> AgentHost::createAgentInstance(std::shared_ptr<AgentC
     return std::make_shared<CodeAgent>(std::move(config));
 }
 
-std::shared_ptr<AgentConfig> AgentHost::makeSubagentConfig(std::shared_ptr<AgentConfig> parentConfig
+std::shared_ptr<AgentConfig> AgentHost::makeSubagentConfig(
+    std::shared_ptr<AgentConfig> parentConfig,
+    const SubagentInherit&       inherit
 ) const {
     assert(parentConfig && "makeSubagentConfig: parent config is null");
     auto cfg = std::make_shared<AgentConfig>(*parentConfig);
     // 子代理默认轻量: 不重复建立 MCP 连接 / 不加载插件 / RAG / CodeGraph,
     // 不注入父级 Skill/Memory (子代理上下文独立), 一次性运行不持久化
-    cfg->mcpServerUrls.clear();
+    // - 逐项开关由 `inherit` 决定: 缺省全关 = 旧行为; 委派方要求"与主会话
+    //   完全一致"时打开对应项 (见 SubagentInherit)
+    if (!inherit.mcp) {
+        cfg->mcpServerUrls.clear();
+    }
+    // 加载表始终清空: 子代理只使用进程共享的插件管理器 (插件只加载一次)
     cfg->plugins.clear();
-    // 子代理默认不挂载任何插件 (最小权限; 要工具由调用方显式给 Listed)
-    cfg->pluginMountPolicy = PluginMountPolicy::None;
-    cfg->pluginMountList.clear();
-    cfg->ragDocsPaths.clear();
-    cfg->skillDirPaths.clear();
-    cfg->memoryFilePaths.clear();
+    if (!inherit.plugins) {
+        // 子代理默认不挂载任何插件 (最小权限); 继承时保留父的挂载策略/名单/
+        // 排除/挂载参数 —— 插件工具是 mount 时写进 per-agent ToolRegistry 的,
+        // 不挂载就不存在
+        cfg->pluginMountPolicy = PluginMountPolicy::None;
+        cfg->pluginMountList.clear();
+    }
+    if (!inherit.rag) {
+        cfg->ragDocsPaths.clear();
+    }
+    if (!inherit.skills) {
+        cfg->skillDirPaths.clear();
+    }
+    if (!inherit.memory) {
+        cfg->memoryFilePaths.clear();
+    }
     cfg->enableSessionStore = false;
     cfg->sessionStoreDirectory.clear();
     // 模型: 与旧 subgraph 语义一致, 默认使用配置的 subagent 模型
@@ -1022,7 +1039,36 @@ asio::awaitable<events::RespSubagentBatchItem> AgentHost::spawnOneTask(
             .errorMessage = "AgentHost: root agent not attached, cannot derive subagent config",
         };
     }
-    auto subCfg = makeSubagentConfig(parentConfig);
+    // ---- 环境继承 (插件 / MCP / Skill / Memory / RAG) ----
+    // - 缺省全关 = 轻量子代理 (只有内置/中间件工具)
+    // - `agentxx_subagent` 派发的任务带 full(): 与主会话加载同一批插件与资源,
+    //   于是插件工具、MCP 工具、Skill/Memory 段落一并在子代理里出现
+    // - 「无工具运行」(tools=[] / toolExecutionDisabled, 如上下文压缩) 不挂插件:
+    //   挂了也用不上, 只是白白多一次 N 个插件的 mount
+    SubagentInherit inherit = task.inherit;
+    if (spec) {
+        inherit = inherit | spec->inherit;
+    }
+    if (inherit.plugins) {
+        const bool noTools
+            = task.toolExecutionDisabled
+              || (task.tools.has_value() && task.tools->is_array() && task.tools->empty());
+        if (noTools) {
+            inherit.plugins = false;
+        }
+    }
+    auto subCfg = makeSubagentConfig(parentConfig, inherit);
+    if (inherit.any()) {
+        XX_LOGI(
+            "spawnOneTask `{}`: inherit plugins={} mcp={} skills={} memory={} rag={}",
+            subagentName,
+            inherit.plugins,
+            inherit.mcp,
+            inherit.skills,
+            inherit.memory,
+            inherit.rag
+        );
+    }
     /// 同上下文模式: 任务指定了 sessionId (子代理与父会话共享上下文前缀与模型)
     const bool sameContext = !task.sessionId.empty();
 

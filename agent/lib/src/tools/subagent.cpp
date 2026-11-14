@@ -18,6 +18,40 @@
 namespace agentxx {
 namespace tools {
 
+namespace {
+
+/// 解析中断参数里的环境继承标记 (`"inherit"`)
+///
+/// - `true` = 全部继承 (插件/工具/MCP/Skill/Memory 与父 agent 一致)
+/// - 对象 = 逐项开关, 缺省项为 false
+/// - 未提供 / 非法值 = 全关 (轻量子代理, 与旧行为一致)
+///
+/// - `args`:
+///     - [arg] 中断参数或单个任务对象
+/// - `return` 解析出的继承选项
+agentxx::agent::SubagentInherit parseInheritArg(const utilxx_base::Json& arg) {
+    using agentxx::agent::SubagentInherit;
+    if (!arg.is_object() || !arg.contains("inherit")) {
+        return SubagentInherit::none();
+    }
+    const auto& node = arg["inherit"];
+    if (node.is_boolean()) {
+        return node.get<bool>() ? SubagentInherit::full() : SubagentInherit::none();
+    }
+    if (!node.is_object()) {
+        return SubagentInherit::none();
+    }
+    SubagentInherit out;
+    out.plugins = node.value("plugins", false);
+    out.mcp     = node.value("mcp", false);
+    out.skills  = node.value("skills", false);
+    out.memory  = node.value("memory", false);
+    out.rag     = node.value("rag", false);
+    return out;
+}
+
+} // namespace
+
 events::ReqSubagentBatch parseSubagentBatchFromInterrupt(
     const middleware::InterruptHandleArg&         interruptArg,
     std::string_view                              agentName,
@@ -56,6 +90,8 @@ events::ReqSubagentBatch parseSubagentBatchFromInterrupt(
                 .keepProvidedSystemMessage = t.value("keep_provided_system", false),
                 .inheritRequestTools       = t.value("inherit_request_tools", false),
                 .toolExecutionDisabled     = t.value("disable_tool_execution", false),
+                // 环境继承 (插件/MCP/Skill/Memory): 缺省全关 = 轻量子代理
+                .inherit        = parseInheritArg(t),
                 // 任务结果标识: 缺省按任务序号生成默认值
                 .resultId = t.value("result_id", std::string{}),
                 // 异步派发: 派出去就继续, 结果经事件回到父会话
@@ -84,6 +120,8 @@ events::ReqSubagentBatch parseSubagentBatchFromInterrupt(
             .keepProvidedSystemMessage = arg.value("keep_provided_system", false),
             .inheritRequestTools       = arg.value("inherit_request_tools", false),
             .toolExecutionDisabled     = arg.value("disable_tool_execution", false),
+            // 环境继承 (插件/MCP/Skill/Memory): 缺省全关 = 轻量子代理
+            .inherit = parseInheritArg(arg),
             .resultId                  = interruptArg.resultId,
             .async                     = arg.value("async", false),
             .eventName                 = arg.value("event_name", std::string{}),
@@ -449,6 +487,16 @@ asio::awaitable<agentxx::util::ToolResult>
                 if (task.toolExecutionDisabled) {
                     t["disable_tool_execution"] = true;
                 }
+                // 环境继承: 模型派发的子代理与主会话用同一套插件/工具/MCP/Skill/Memory
+                // - 内部路径 (压缩、事件等待) 不经过本工具, 它们的参数里没有这一项,
+                //   继续走轻量子代理
+                t["inherit"] = utilxx_base::Json{
+                    {"plugins", true},
+                    {"mcp",     true},
+                    {"skills",  true},
+                    {"memory",  true},
+                    {"rag",     true},
+                };
                 // 任务结果标识: 缺省按任务序号生成默认值
                 if (!task.resultId.empty()) {
                     t["result_id"] = task.resultId;

@@ -118,6 +118,12 @@ struct AsyncWorkSpec {
     std::string                      model;
     std::optional<utilxx_base::Json> tools; ///< 空=默认 / []=无 / ["*"]=继承创建者 / 名单
 
+    /// 从创建者配置继承哪些重量级资源 (插件/MCP/Skill/Memory/RAG)
+    /// - 缺省全关 = 现状轻量任务 (只有内置工具)
+    /// - `agentxx_subagent` 经后台任务提交时写 full(): 与创建者同一套工具
+    /// - 与 `plugins` / `mcpServers` 等显式清单可共存: 显式清单在继承之后叠加
+    SubagentInherit inherit{};
+
     /// 显式挂载清单 (空 = 不挂, 与现状子代理一致)
     std::optional<utilxx_base::Json> plugins; ///< 与 yaml `plugin.mount` 同构
     std::vector<std::string>         mcpServers;

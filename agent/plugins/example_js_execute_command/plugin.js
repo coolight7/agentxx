@@ -2,6 +2,10 @@
 // 仿 agentxx_execute_command (agentxx_execute_bash_command / windows) 的设计，
 // 提供 example_js_execute_command 工具，在 QuickJS 沙箱内执行任意 JS 代码并返回格式化输出。
 // 依赖 agentxx_javascript_engine (interpreter.js 能力) 执行。
+//
+// 运行模型 (与 C++ 插件一致): 本脚本在每个 agent 挂载时各执行一次（各自一份 JSContext），
+// 顶层 registerTool 注册的就是“本 agent 的那一份工具”；脚本里的全局变量天然按 agent 隔离。
+// 进程级状态（连接 / 线程 / 文件句柄）请写在 C++ 壳的 start 里, 不要放脚本顶层。
 
 (function () {
   var kName = "example_js_execute_command";

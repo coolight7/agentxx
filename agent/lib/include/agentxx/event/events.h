@@ -1,5 +1,6 @@
 #pragma once
 
+#include "agentxx/agent/subagent_inherit.h"
 #include "agentxx/util/tool_result.h"
 #include "neograph/graph/cancel.h"
 #include "utilxx_base/json.h"
@@ -331,6 +332,11 @@ struct SubagentBatchItem {
     /// 本次运行不执行工具: 模型若仍返回 tool_calls, 忽略它们并结束本轮
     /// - 工具定义仍在请求里 (前缀一致), 但不会调用任何工具
     bool toolExecutionDisabled = false;
+    /// 从父配置继承哪些重量级资源 (插件/MCP/Skill/Memory/RAG)
+    /// - 缺省全关 = 轻量子代理 (只带内置/中间件工具)
+    /// - `agentxx_subagent` 工具派发的任务写 full(): 与主会话同一套工具;
+    ///   内部路径 (上下文压缩等) 不写, 保持轻量
+    agentxx::agent::SubagentInherit inherit{};
     /// 任务结果标识: 回填到父 toolcall 的 tool_call_id 或自定义 id;
     /// 为空时按任务序号 (1-based) 默认编号
     std::string resultId;

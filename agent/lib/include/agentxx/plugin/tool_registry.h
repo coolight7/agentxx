@@ -5,6 +5,7 @@
 #include "utilxx_base/json.h"
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -53,6 +54,17 @@ public:
     /// - 传入 engine 已持有所有权的内置工具名; 仅作名称比对, 不持有对象
     void setStaticToolNames(std::vector<std::string> names);
 
+    /// 设置动态工具名白名单 (子代理 `tools` 策略用)
+    /// - 非空: 表内的工具只有在名单里才“存在”—— `find` / `contains` /
+    ///   `appendDefinitions` / `names` 都按名单过滤, 模型既看不到也调不到
+    /// - 空 (`std::nullopt`): 不过滤 (旧行为)
+    /// - 只影响读取侧, 不影响注册/摘除 (插件挂载时照常注册全部工具): 白名单在
+    ///   挂载前就已知, 但插件工具是 mount 时注册的, 所以只能在读取侧过滤
+    void setNameFilter(std::optional<std::vector<std::string>> names);
+
+    /// 名称是否被白名单允许 (未设置白名单时恒为 true)
+    bool nameAllowed(std::string_view name) const;
+
     /// 登记静态工具的参数 schema (BaseAgent::init 调用; 展示侧参数自愈用)
     /// - 只保存名字与参数 schema (`ChatTool::parameters`), 不持有工具对象;
     ///   与 [setStaticToolNames] 是两件事, 后者只用于插件工具注册冲突检测
@@ -68,6 +80,9 @@ public:
     bool parametersOf(std::string_view name, utilxx_base::Json& out) const;
 
 private:
+
+    /// 动态工具名白名单 (空 = 不过滤; 子代理 `tools` 策略用)
+    std::optional<std::vector<std::string>> nameFilter_{};
 
     /// 静态工具名 (内置/MCP/延迟加载工具), 冲突检测用
     std::vector<std::string> staticToolNames_{};

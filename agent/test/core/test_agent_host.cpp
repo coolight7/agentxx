@@ -16,11 +16,14 @@
 #include "utilxx/http_server.h"
 #include "utilxx_base/asio_error.h"
 #include "utilxx_base/json.h"
+#include <algorithm>
 #include <atomic>
 #include <expected>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace {
 // 本模块测试计数器 (仅本编译单元可见; 不经头文件 extern 导出)
@@ -1327,6 +1330,158 @@ asio::awaitable<void> test_host_shared_model_registry() {
     co_return;
 }
 
+/// 定位插件目录 (与 test_plugins.cpp / test_plugin_cleanup.cpp 同一策略)
+/// - 独立动态库模式: 目录里有 .dll/.so/.dylib
+/// - 内置合并模式: 目录里只有 plugin.yaml
+std::string findPluginDirForHost(std::string_view pluginName) {
+    namespace fs = std::filesystem;
+    const std::string     name{pluginName};
+    std::error_code       ec;
+    std::vector<fs::path> candidates;
+    if (auto exeDir = executableDir()) {
+        candidates.push_back(*exeDir / "plugins" / name);
+    }
+    candidates.push_back(fs::current_path(ec) / "plugins" / name);
+    auto hasPluginFiles = [](const fs::path& dir) {
+        std::error_code                     ec2;
+        std::filesystem::directory_iterator it(dir, ec2);
+        std::filesystem::directory_iterator end;
+        for (; it != end; it.increment(ec2)) {
+            const auto ext = it->path().extension().string();
+            if (ext == ".dll" || ext == ".so" || ext == ".dylib") {
+                return true;
+            }
+        }
+        return fs::exists(dir / "plugin.yaml", ec2);
+    };
+    for (const auto& dir : candidates) {
+        if (fs::is_directory(dir, ec) && hasPluginFiles(dir)) {
+            return dir.string();
+        }
+    }
+    return {};
+}
+
+/// 验证: 子代理环境继承 (`SubagentInherit`)
+/// - 全开 (`agentxx_subagent` 的默认) ⇒ 子代理挂同一批插件, 请求里带插件工具
+/// - 全关 (包装/内部路径的缺省) ⇒ 不挂插件, 请求里没有插件工具
+/// - 父 agent 自己先要持有该插件工具, 否则断言无意义 (先断言父侧)
+asio::awaitable<void> test_host_spawn_inherit_env() {
+    const std::string pluginDir = findPluginDirForHost("agentxx_math");
+    if (pluginDir.empty()) {
+        TEST_INFO << "agentxx_math plugin not found, skip inherit-env test" << std::endl;
+        co_return;
+    }
+    const std::string pluginTool = "agentxx_math_calculate";
+
+    auto sim     = startDaSimServer();
+    auto baseUrl = "http://127.0.0.1:" + std::to_string(sim.port);
+
+    g_da_sim_response_content = "inherit result";
+    g_da_sim_tool_calls       = utilxx_base::Json::array();
+    g_da_sim_delay_ms         = 0;
+    g_da_sim_requests.clear();
+
+    auto                              io = std::make_shared<asio::io_context>();
+    agentxx::agent::AgentHost::Config hostCfg;
+    hostCfg.ioCtx = io;
+    hostCfg.pluginList.push_back(agentxx::agent::PluginConfig{.path = pluginDir});
+    auto              host = agentxx::agent::AgentHost::create(hostCfg);
+    std::atomic<bool> finished{false};
+
+    asio::co_spawn(
+        *io,
+        keepAliveRun([&]() -> asio::awaitable<void> {
+            co_await host->loadPluginsAsync();
+            auto cfg = makeSimConfig(baseUrl);
+            // 经容器构造: 才会上注入共享插件管理器 (直接 new 会在 init 里自建一份空管理器)
+            auto agent = host->createAgent(cfg);
+            XX_TEST_EXPECT_TRUE(agent != nullptr);
+            if (!agent) {
+                finished = true;
+                co_return;
+            }
+            co_await agent->init();
+            host->attachRoot(agent);
+
+            // 父 agent 必须真的持有插件工具 (否则下面的对比没意义)
+            auto              ctx = agent->getContext();
+            const std::string toolName{pluginTool};
+            XX_TEST_EXPECT_TRUE(
+                std::find(ctx->toolNames.begin(), ctx->toolNames.end(), toolName)
+                != ctx->toolNames.end()
+            );
+
+            auto spawnOne = [&](agentxx::agent::SubagentInherit inherit,
+                                std::string                      tag) -> asio::awaitable<void> {
+                // [workaround] 聚合提取为具名变量, 绕过 g++ 16.1 ICE
+                agentxx::events::SubagentBatchItem item{
+                    .subagentName = "subagent_task",
+                    .systemPrompt = "You are a worker.",
+                    .message      = "do " + tag,
+                    .resultId     = "call_" + tag,
+                };
+                item.inherit = inherit;
+                agentxx::events::ReqSubagentBatch req{
+                    .parentAgentName = "root",
+                    .parentSessionId  = "parent-session",
+                    .cancelToken     = nullptr,
+                    .tasks           = {item},
+                };
+                auto resp = co_await ctx->bus->request<
+                    agentxx::events::ReqSubagentBatch,
+                    agentxx::events::RespSubagentBatch>(
+                    agentxx::events::Topic::Subagent,
+                    req,
+                    std::chrono::seconds(30)
+                );
+                if (resp.has_value() && !resp->results.empty() && resp->results[0].hasError) {
+                    TEST_FAIL << "spawn `" << tag << "` failed: " << resp->results[0].errorMessage
+                              << std::endl;
+                }
+            };
+
+            co_await spawnOne(agentxx::agent::SubagentInherit::full(), "inherit");
+            co_await spawnOne(agentxx::agent::SubagentInherit::none(), "plain");
+            finished = true;
+        }),
+        asio::detached
+    );
+    pumpIoUntil(io, finished);
+
+    // 两次子代理请求按顺序记录: 继承带插件工具, 不继承不带
+    auto toolsOf = [](const utilxx_base::Json& req) -> std::vector<std::string> {
+        std::vector<std::string> names;
+        if (req.contains("tools") && req["tools"].is_array()) {
+            for (const auto& t : req["tools"]) {
+                if (t.is_object() && t["function"].is_object()
+                    && t["function"]["name"].is_string()) {
+                    names.push_back(t["function"]["name"].get<std::string>());
+                }
+            }
+        }
+        return names;
+    };
+    auto hasTool = [](const std::vector<std::string>& names, const std::string& tool) {
+        return std::find(names.begin(), names.end(), tool) != names.end();
+    };
+
+    XX_TEST_EXPECT_EQ(g_da_sim_requests.size(), size_t{2});
+    if (g_da_sim_requests.size() >= 2) {
+        const auto inherited = toolsOf(g_da_sim_requests[0]);
+        const auto plain     = toolsOf(g_da_sim_requests[1]);
+        XX_TEST_EXPECT_TRUE(hasTool(inherited, pluginTool));
+        XX_TEST_EXPECT_FALSE(hasTool(plain, pluginTool));
+        // 内置工具两边都在
+        XX_TEST_EXPECT_TRUE(hasTool(inherited, "agentxx_share_store"));
+        XX_TEST_EXPECT_TRUE(hasTool(plain, "agentxx_share_store"));
+    }
+
+    XX_TEST_EXPECT_EQ(host->runningSubagents(), 0u);
+    XX_TEST_EXPECT_EQ(host->registry().size(), 1u);
+    co_return;
+}
+
 asio::awaitable<TestResult> run_agent_host_tests() {    g_host_passed = 0;
     g_host_failed = 0;
     try {
@@ -1335,6 +1490,7 @@ asio::awaitable<TestResult> run_agent_host_tests() {    g_host_passed = 0;
         co_await test_host_spawn_e2e();
         co_await test_host_spawn_same_context();
         co_await test_host_spawn_tool_policy();
+        co_await test_host_spawn_inherit_env();
         co_await test_subagent_summarization_switch();
         co_await test_host_spawn_nested_delegation();
         co_await test_host_spawn_batch();

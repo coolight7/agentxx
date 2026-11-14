@@ -618,6 +618,19 @@ asio::awaitable<void> BaseAgent::init() {
                     whitelist.size()
                 );
             }
+            // 动态 (插件) 工具同受同一份白名单约束
+            // - 插件工具是 mount 时注册进 toolRegistry 的, 本步骤早于插件挂载
+            //   (plugin_mount 在 engine_build 之前), 所以只能把白名单交给注册表,
+            //   由它在读取侧过滤 (否则挂了插件的 agent 会绕过 tools:[] / 自定义名单)
+            if (agentContext->toolRegistry) {
+                if (agentContext->agentConfig->enableToolFiltering) {
+                    agentContext->toolRegistry->setNameFilter(
+                        agentContext->agentConfig->toolWhitelist
+                    );
+                } else {
+                    agentContext->toolRegistry->setNameFilter(std::nullopt);
+                }
+            }
             co_return;
         },
     });
@@ -847,6 +860,20 @@ asio::awaitable<void> BaseAgent::init() {
             agentContext->toolNames.reserve(tools.size());
             for (auto& tool : tools) {
                 agentContext->toolNames.push_back(tool->get_name());
+            }
+            // 带上动态 (插件) 工具名: `tools:["*"]` 要的是"父 agent 的完整工具集",
+            // 只记静态名会让继承名单漏掉全部插件工具 (插件工具不属于 NodeContext.tools)
+            if (agentContext->toolRegistry) {
+                for (auto& name : agentContext->toolRegistry->names()) {
+                    if (std::find(
+                            agentContext->toolNames.begin(),
+                            agentContext->toolNames.end(),
+                            name
+                        )
+                        == agentContext->toolNames.end()) {
+                        agentContext->toolNames.push_back(std::move(name));
+                    }
+                }
             }
 
             // 工具加载记录: 名称 + 来源 + 行为开关

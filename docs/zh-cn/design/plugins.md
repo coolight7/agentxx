@@ -1165,11 +1165,13 @@ Agentxx 客户端采用统一的分层工具特化渲染机制，TUI 核心层�
 Agentxx 仅维护单一 C++ 插件基础设施；JS 插件经内置 `agentxx_javascript_engine` JS 运行时插件加载：
 
 - **统一插件模型**：所有插件都是 C++ 插件；JS 插件表现为标准 C++ 动态库外壳 (如 `example_js`) 附带 `plugin.js`
-- **执行流程**：主程序加载 JS 插件壳 → 壳 `create` 只构造上下文 (解析自身 `plugin.js` 路径) → 壳 `start` 校验 `interpreter.js` 能力后经该能力把 `plugin.js` 交给引擎 → 引擎在专用线程中解析并执行脚本，把脚本声明的工具与广播订阅反向注册到主程序；脚本注册属于壳实例的 start 事务，因此壳的 start 完成必须等脚本加载结束 (异步 done)，失败由主程序回滚
-- **引擎线程属于 start 事务**：`agentxx_javascript_engine` 的 `create` 只构造，`start` 才创建 JSRuntime 与专用 JS 线程并注册 `interpreter.js` 能力，`stop` 停止线程并释放 runtime；`disable → enable` 往返即一次 `stop + start`，引擎线程与脚本上下文按事务重建 (壳插件在自身 start 中重新加载脚本)
+- **执行流程**：主程序加载 JS 插件壳 → 壳 `create` 只构造上下文 (解析自身 `plugin.js` 路径) → 壳 `start` 校验 `interpreter.js` 能力后经该能力把 `plugin.js` 交给引擎 → 引擎登记脚本并在**每个 agent 挂载作用域各建一份实例**(新建 JSContext 执行脚本)，把脚本声明的工具与广播订阅绑定到该 agent；脚本注册属于壳实例的挂载事务，因此壳的 start 只需等脚本**登记**完成 (异步 done)，失败由主程序回滚
+- **一插件多 agent 挂载 (= C++ 插件同一套生命周期)**：引擎在自己的 `mount` 里登记作用域 (`agent_id` + `mount_seq`)、对该 agent 补建全部脚本实例；`unmount` 时销毁该作用域的实例。因此脚本顶层代码就是“该 agent 的插件实例初始化”，脚本里的全局变量天然按 agent 隔离；进程级状态请放在 C++ 壳的 `start` 里。同一脚本在 N 个 agent 上注册同名工具互不冲突 (各自属于自己的挂载)
+- **引擎线程属于 start 事务**：`agentxx_javascript_engine` 的 `create` 只构造，`start` 才创建 JSRuntime 与专用 JS 线程并注册 `interpreter.js` 能力，`stop` 停止线程并释放 runtime (同时清空脚本登记与挂载作用域)；`disable → enable` 往返即一次 `stop + start`，引擎线程与脚本实例按事务重建 (壳插件在自身 start 中重新加载脚本)
 - **stop 不阻塞 IO 线程**：JS 线程可能在主程序 vtable 调用中等待 IO 线程，因此 `stop` 由独立收尾线程完成 `join` 与 runtime 释放，完成通知从该线程上报；JS 线程空闲时走调用线程直接收尾的快路径，使紧邻的 stop→start 顺序确定。停止后不再执行插件 JS：新任务被拒绝，队列任务按 `CANCELLED`/`FAILED` 终结，事件投递丢弃
 - **`agentxx.callTool` 始终返回 Promise**：命中本引擎工具时同线程执行并把结果/内部 Promise 链到外层 Promise；命中主程序插件工具时经 `call_tool_async` 异步互调，完成/失败/取消事件投递回 JS 线程 settle。JS 线程不会同步等待主程序，A/B 脚本互调不存在线程自锁
-- **脚本初始化是注册事务**：脚本顶层注册的工具/订阅/资源/定时器在顶层异常或脚本卸载时统一回滚（先撤销主程序注册，再释放 JSContext），不留悬垂 user_data；订阅登记与能力 `unload` 的完成通知在 JS 执行真正结束后发出
+- **脚本初始化是注册事务**：脚本顶层注册的工具/订阅/资源/定时器在顶层异常或脚本卸载时统一回滚（先撤销主程序注册，再释放 JSContext），不留悬垂 user_data；订阅登记与能力 `unload` 的完成通知在 JS 执行真正结束后发出。agent 卸载时**不再**执行 JS 侧注销动作 (主程序已按挂载记录撤销全部注册，再照着回滚会碰到已释放的句柄)
+- **JS SDK 与 C++ 插件 SDK 同名同义**：`registerTool` / `unregisterTool` / `callTool`、`subscribe` / `unsubscribe` / `publish`、`addSkillDir` / `addMemoryFile` / `addMcpServer` (含 remove)、`registerToolPermission` / `registerReadPathPermission` / `registerWritePathPermission` / `unregisterToolPermission`、`getConfig` / `getPluginArgs` / `getLanguage` / `setLanguage`、`log`、`scope()` (返回 `{agentId, mountSeq}`，等同 C++ 侧的 `PluginxxScopeRef`)、`setTimeout` / `clearTimeout`；尚未对齐的 C++ 专有面 (net / runtime / async work / graph / 工具特化渲染) 仍需写在 C++ 壳里
 - 可自研脚本JS 运行时插件 (Python/Lua 等) 替换或扩充脚本能力
 
 ---

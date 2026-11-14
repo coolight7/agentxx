@@ -527,7 +527,10 @@ asio::awaitable<agentxx::util::ToolResult> AsyncRunTool::execute_async(const Jso
             && toolArgs["enable_summarization"].is_boolean()) {
             spec.enableSummarization = toolArgs["enable_summarization"].get<bool>();
         }
-        startedAs = fmt::format("subagent={}", subagent);
+        // 环境继承: 后台跑的也是"同一个主会话的子代理", 插件/工具/MCP/Skill/Memory
+        // 与直接调用 `agentxx_subagent` 一致 (tools=[] 时执行层仍会跳过插件挂载)
+        spec.inherit = agentxx::agent::SubagentInherit::full();
+        startedAs    = fmt::format("subagent={}", subagent);
     } else {
         // 普通工具: 内置/中间件工具 (图引擎持有) 与插件/动态注册工具都行
         if (!creatorHasTool(state.ctx, toolName)) {

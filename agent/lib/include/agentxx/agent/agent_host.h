@@ -401,8 +401,20 @@ private:
     explicit AgentHost(Config cfg);
 
     std::shared_ptr<BaseAgent> createAgentInstance(std::shared_ptr<AgentConfig> config);
-    /// 从父配置派生轻量子代理配置 (不重复建连/不持久化/独立模型)
-    std::shared_ptr<AgentConfig> makeSubagentConfig(std::shared_ptr<AgentConfig> parentConfig
+    /// 从父配置派生子代理配置
+    ///
+    /// - 缺省 (`inherit` 全关) = 轻量子代理: 不重复建连 MCP / 不挂插件 /
+    ///   不注入父级 Skill/Memory/RAG, 一次性运行不持久化; 与旧行为逐字一致
+    /// - `inherit` 打开哪一项, 就把父配置里的对应资源原样带过来 (插件还会带上
+    ///   挂载策略/名单/排除/挂载参数), 使子代理拥有与父 agent 一致的资源与工具
+    /// - `plugins` 加载表始终清空: 子代理只使用进程共享的插件管理器, 不自己加载
+    ///
+    /// - `args`:
+    ///     - [parentConfig] 父配置 (发起委派那个 agent 的配置)
+    ///     - [inherit]      要继承的资源类别 (见 [SubagentInherit])
+    std::shared_ptr<AgentConfig> makeSubagentConfig(
+        std::shared_ptr<AgentConfig> parentConfig,
+        const SubagentInherit&       inherit = SubagentInherit::none()
     ) const;
 
     /// 注入共享基础设施与插件管理器 (根与子代理共用)

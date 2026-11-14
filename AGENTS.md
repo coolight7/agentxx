@@ -116,6 +116,14 @@ resource/history/<任务短名>/        # 英文小写 + 短横线，能看出�
   返回值必须活到会话结束; 子代理 (含压缩) 的模型用量经
   `AgentContext::usageAccountSessions` + `usageAccountSessionId` 记到父会话用量记录, 自动压缩
   经总线到达 (`spawnBatch(req)` 不带父上下文) 时回退根会话, 详见 index.md 架构设计第 7 小节
+- **子代理环境继承**: 子代理配置由 `AgentHost::makeSubagentConfig(parentConfig, SubagentInherit)`
+  派生 (`agent/lib/include/agentxx/agent/subagent_inherit.h`)。缺省 `none()` = 轻量子代理
+  (不挂插件/不连 MCP/不注入 Skill/Memory/RAG, 压缩与内部直调走这条);
+  `agentxx_subagent` 工具与 `agentxx_async_run {tool:"agentxx_subagent"}` 写 `full()`,
+  子代理因此与主会话同一套插件/工具/MCP/Skill/Memory (插件工具是 mount 时写进 per-agent
+  `ToolRegistry` 的)。`tools: []` / `toolExecutionDisabled` 的纯文本运行即使要求继承也
+  **跳过插件挂载**。工具集要真的对齐还需两处配合: `ToolRegistry::setNameFilter` (动态工具也受
+  `tools` 白名单约束) 与 `agentContext->toolNames` 收动态工具名 (`tools:["*"]` 才是全集)
 - **一插件加载多 agent 挂载**: 插件只 `create`/`start` 一次, 每个 agent 各一份
   `PluginMount`; agent 级注册 (工具/权限/功能埋点实现行/提示词/图/资源/广播订阅) 只能在插件 `mount`
   回调里做, 在 `start` 里做返回 `AGENTXX_RESULT_ERR_NO_AGENT` 且无副作用。会话、事件、
@@ -290,6 +298,12 @@ path/to/agentxx_test --log-level warn string_util regex
 - 三层关系: **agentxx 是主程序**; 它使用 cxx_* 库实现的**插件框架**动态加载插件。插件有两种:
   直接加载的**动态库插件**, 以及由 **JS 运行时插件** (`agentxx_javascript_engine`) 加载的
   **JS 插件**。(cxx_* 库的文档/注释里"主程序"是通用词, 不特指 agentxx)
+- **JS 插件与 C++ 插件同一套生命周期**: 引擎按“一脚本 × 一 agent 挂载 = 一份 JSContext”建实例
+  (`plugins_` 键 = `脚本名@agentId#mountSeq`), 脚本顶层就是该 agent 的实例初始化,
+  注册归属用实例自己的 `PluginxxScopeRef`; agent 卸载只销毁自己的实例、不执行 JS 侧注销
+  (主程序已按挂载记录撤销)。JS SDK 与 C++ 侧同名同义 (`registerTool` / `subscribe` / `publish` /
+  `addSkillDir` / `registerToolPermission` / `getConfig` / `scope()` 等), 未对齐的面
+  (net / runtime / async work / graph) 仍需写在 C++ 壳里; 详见 plugins.md §12
 - 插件接口为 **API v1**: 入口为 `agentxx_plugin_agent_create` /
   `agentxx_plugin_agent_destroy` 实例对 (client 侧 `agentxx_plugin_client_create` / `_destroy`)。
   【API v1 规范】全局 API 版本及全部接口表版本均重置为 1；明确 8 字节结构体对齐与定长基础类型 (`int32_t/int64_t/uint64_t`)；跨边界函数统一 `PLUGINXX_CALL` 调用约定；结构体参数一律传递指针 (`const Struct*`)，结构体返回值一律改为指针出参 (`Struct* out`) 并返回 `int32_t` 状态码；核心 vtable 精简为 `alloc/free` 操作 (去除了 `strdup`，采用头文件内联 `pluginxx_strdup`)。

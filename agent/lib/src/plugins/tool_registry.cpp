@@ -4,6 +4,8 @@
 #include "utilxx_base/container_util.h"
 #include "utilxx_base/log.h"
 #include <algorithm>
+#include <optional>
+#include <string_view>
 
 namespace agentxx {
 namespace plugin {
@@ -44,6 +46,9 @@ std::shared_ptr<agentxx::tools::XXToolBase> ToolRegistry::unregisterTool(std::st
 }
 
 std::shared_ptr<agentxx::tools::XXToolBase> ToolRegistry::find(std::string_view name) const {
+    if (!nameAllowed(name)) {
+        return nullptr;
+    }
     auto it = tools_.find(name);
     if (it == tools_.end()) {
         return nullptr;
@@ -52,13 +57,18 @@ std::shared_ptr<agentxx::tools::XXToolBase> ToolRegistry::find(std::string_view 
 }
 
 bool ToolRegistry::contains(std::string_view name) const {
+    if (!nameAllowed(name)) {
+        return false;
+    }
     return tools_.contains(name);
 }
 
 void ToolRegistry::appendDefinitions(std::vector<neograph::ChatTool>& defs) const {
     defs.reserve(defs.size() + tools_.size());
     for (const auto& [name, tool] : tools_) {
-        (void)name;
+        if (!nameAllowed(name)) {
+            continue;
+        }
         defs.push_back(tool->get_definition());
     }
 }
@@ -72,9 +82,24 @@ std::vector<std::string> ToolRegistry::names() const {
     out.reserve(tools_.size());
     for (const auto& [name, tool] : tools_) {
         (void)tool;
+        if (!nameAllowed(name)) {
+            continue;
+        }
         out.push_back(name);
     }
     return out;
+}
+
+void ToolRegistry::setNameFilter(std::optional<std::vector<std::string>> names) {
+    nameFilter_ = std::move(names);
+}
+
+bool ToolRegistry::nameAllowed(std::string_view name) const {
+    if (!nameFilter_.has_value()) {
+        return true;
+    }
+    const auto& filter = *nameFilter_;
+    return std::find(filter.begin(), filter.end(), name) != filter.end();
 }
 
 void ToolRegistry::setStaticToolNames(std::vector<std::string> names) {

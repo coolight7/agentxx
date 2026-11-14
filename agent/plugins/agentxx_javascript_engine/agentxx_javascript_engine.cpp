@@ -236,6 +236,16 @@ enum BridgeMagic {
     B_REMOVE_MEMORY_FILE,
     B_ADD_MCP_SERVER,
     B_REMOVE_MCP_SERVER,
+    // 与 C++ 插件 SDK 对齐的查询/声明类接口 (命名同 plugin_kit.h)
+    B_SCOPE,
+    B_GET_CONFIG,
+    B_GET_PLUGIN_ARGS,
+    B_GET_LANGUAGE,
+    B_SET_LANGUAGE,
+    B_REGISTER_TOOL_PERMISSION,
+    B_UNREGISTER_TOOL_PERMISSION,
+    B_REGISTER_READ_PATH_PERMISSION,
+    B_REGISTER_WRITE_PATH_PERMISSION,
 };
 
 /// 工具执行请求/结果 (execute 桥跨线程传递)
@@ -256,7 +266,8 @@ struct ToolExecReq {
 /// 由主程序 inflight 计数保证)
 struct JsToolBinding {
     JsEngine*   engine = nullptr;
-    std::string plugin; ///< 所属JS 插件名
+    /// 所属实例键 (脚本名 + 挂载作用域): 同名工具在不同 agent 上各有自己的绑定
+    std::string instanceKey;
     std::string name;
 };
 
@@ -264,7 +275,8 @@ struct JsToolBinding {
 /// inflight 计数保证)
 struct JsHookBinding {
     JsEngine*   engine = nullptr;
-    std::string plugin;
+    /// 所属实例键 (脚本名 + 挂载作用域)
+    std::string instanceKey;
     /// 订阅的频道全名 (派发时按它过滤: 一次派发只调该频道的处理器)
     std::string topic;
 };
@@ -282,15 +294,22 @@ struct JsCallBridge {
 };
 
 /// JS 插件上下文 (生命周期: plugins_ / mirror / 进行中任务共享持有)
+/// - 一个实例 = 一份 (脚本, 挂载作用域) 组合: 每个 agent 各自一份 JSContext,
+///   脚本里的全局状态因而天然按 agent 隔离 (与 C++ 插件"一插件多 agent 挂载"一致)
 /// - 数据成员仅 JS 线程访问 (deleted/inflight 亦仅 JS 线程, 任务串行)
 /// - JSContext 释放: 析构函数 (全部进行中的任务结束后由最后一个持有者析构)
 struct JsPluginCtx {
-    std::string         name;
+    std::string name;        ///< 脚本 (JS 插件) 名
+    std::string instanceKey; ///< 实例键 (脚本名 + '\x1f' + 作用域键)
     JSContext*          ctx      = nullptr;
-    const PluginxxHost* host     = nullptr; ///< JS 插件主程序句柄
+    const PluginxxHost* host     = nullptr; ///< 调用方 (JS 插件薄壳) 的主程序句柄
     JsEngine*           engine   = nullptr;
     bool                deleted  = false; ///< 已卸载 (入队任务检查后跳过)
     size_t              inflight = 0;     ///< 进行中的任务数 (execute/hook/event)
+    /// 本实例所属挂载作用域 (agent): 注册/查询类调用都要带它
+    std::string      scopeAgentId;
+    uint64_t         scopeSeq = 0;
+    PluginxxScopeRef scopeRef{};
     /// 工具表: 普通对象 name -> {execute, name, description}
     JSValue tools = JS_UNDEFINED;
     /// 通知回调表: Array(7) 元素为 fn 或 null
@@ -301,6 +320,25 @@ struct JsPluginCtx {
     /// 脚本初始化事务的撤销动作 (注册工具/通知/订阅/资源成功时按序追加)。
     /// 顶层执行失败或脚本卸载时逆序执行, 主程序侧不留任何残留注册。
     std::vector<std::function<void()>> rollbackActions;
+
+    /// 填挂载作用域 (agent_id 拷入自有存储, scopeRef.id 指向它, 有效期同本对象)
+    void setScope(std::string_view agentId, uint64_t seq) {
+        scopeAgentId.assign(agentId.data(), agentId.size());
+        scopeSeq             = seq;
+        scopeRef             = PluginxxScopeRef{};
+        scopeRef.struct_size = static_cast<uint32_t>(sizeof(PluginxxScopeRef));
+        scopeRef.flags       = 0;
+        scopeRef.id = agentxx::plugin::PluginStringView::from(
+            scopeAgentId.data(),
+            scopeAgentId.size()
+        );
+        scopeRef.seq = scopeSeq;
+    }
+
+    /// 本实例的挂载引用 (未设作用域时为 nullptr)
+    const PluginxxScopeRef* scope() const {
+        return scopeAgentId.empty() ? nullptr : &scopeRef;
+    }
 
     /// 逆序执行并清空撤销动作; 单个动作失败只忽略 (注销本身幂等)。
     void runRollback() {
@@ -342,36 +380,84 @@ public:
 
     // ==================== 生命周期 (start / stop) ====================
 
-    // ==================== 挂载作用域 (agent 引用) ====================
+    // ==================== 挂载作用域 (每个 agent 一份) ====================
 
-    /// 设置脚本注册所属的 agent 挂载 (mount 时在 io 线程调用一次)
-    /// - 引用拷进本对象自有存储, `agentRef()` 的返回值有效期同本对象
-    /// - 说明: JS 运行时目前一份脚本只对应一个挂载作用域, 再次 mount 会覆盖它;
-    ///   真正的"每个 agent 一份 JS 脚本实例"属于后续项 (见 work.md)
-    void setMountScope(const AgentxxPluginAgentMountSpec* spec) {
-        mountAgentId_.assign(
-            spec && spec->agent_id.data && spec->agent_id.size > 0
-                ? std::string(spec->agent_id.data, static_cast<size_t>(spec->agent_id.size))
-                : std::string{}
-        );
-        mountAgentSeq_  = spec ? spec->mount_seq : 0;
-        mountRef_       = PluginxxScopeRef{};
-        mountRef_.struct_size = static_cast<uint32_t>(sizeof(PluginxxScopeRef));
-        mountRef_.flags       = 0;
-        mountRef_.id = agentxx::plugin::PluginStringView::from(mountAgentId_.data(), mountAgentId_.size());
-        mountRef_.seq         = mountAgentSeq_;
+    /// 一个挂载作用域: agent 标识 + 挂载序号 (序号防 id 复用)
+    struct MountScope {
+        std::string key;     ///< 作用域键: `<agentId>#<seq>`
+        std::string agentId; ///< agent 标识 (`root` / `sub:3` / `ext:qq:1` ...)
+        uint64_t    seq = 0;
+    };
+
+    /// mount 返回的 per-agent 状态 (主程序原样交回 unmount)
+    struct ScopeHandle {
+        MountScope scope;
+    };
+
+    /// 从挂载参数组装作用域; 无效参数返回空 key
+    static MountScope mountScopeOf(const AgentxxPluginAgentMountSpec* spec) {
+        MountScope sc;
+        if (!spec || !spec->agent_id.data || spec->agent_id.size == 0) {
+            return sc;
+        }
+        sc.agentId.assign(spec->agent_id.data, static_cast<size_t>(spec->agent_id.size));
+        sc.seq = spec->mount_seq;
+        sc.key = fmt::format("{}#{}", sc.agentId, sc.seq);
+        return sc;
     }
 
-    /// 清除挂载作用域 (unmount 时调用)
-    void clearMountScope() {
-        mountAgentId_.clear();
-        mountAgentSeq_ = 0;
-        mountRef_      = PluginxxScopeRef{};
+    /// 登记挂载作用域, 并为每个已登记脚本建一份该 agent 的实例
+    /// - **仅 io 线程调用** (来自插件的 mount 回调)
+    /// - 重复挂载同一作用域幂等; 实例创建投递到 JS 线程执行, 不阻塞 mount
+    void attachMountScope(const MountScope& scope) {
+        if (scope.key.empty() || scopes_.contains(scope.key)) {
+            return;
+        }
+        const std::string key = scope.key;
+        scopes_.emplace(key, scope);
+        logAt(2, fmt::format(
+                      "interpreter.js: mount scope {} (scripts={}, scopes={})",
+                      key,
+                      scripts_.size(),
+                      scopes_.size()
+        )
+                      .c_str());
+        // 每个脚本都为本 agent 建一份实例 (脚本的全局状态因此按 agent 隔离)
+        for (const auto& [name, entry] : scripts_) {
+            (void)name;
+            post([this, entryCopy = entry, scopeCopy = scope]() {
+                std::string err;
+                if (createInstanceOnJsThread(entryCopy, scopeCopy, err) != 0) {
+                    logAt(3, fmt::format(
+                                  "interpreter.js: create instance `{}`@{} failed: {}",
+                                  entryCopy.name,
+                                  scopeCopy.key,
+                                  err
+                    )
+                                  .c_str());
+                }
+            });
+        }
     }
 
-    /// 当前挂载引用 (未挂载时为 nullptr); 脚本注册工具/通知/订阅时使用
-    const PluginxxScopeRef* agentRef() const {
-        return mountAgentId_.empty() ? nullptr : &mountRef_;
+    /// 注销挂载作用域并销毁该 agent 的全部脚本实例
+    /// - **仅 io 线程调用** (来自插件的 unmount 回调)
+    /// - 主程序已按挂载记录撤销工具/权限/提示词等注册, 这里只收拾 JS 侧
+    void detachMountScope(const MountScope& scope) {
+        if (scope.key.empty() || !scopes_.contains(scope.key)) {
+            return;
+        }
+        const std::string key = scope.key;
+        scopes_.erase(key);
+        logAt(2, fmt::format(
+                      "interpreter.js: unmount scope {} (scopes={})",
+                      key,
+                      scopes_.size()
+        )
+                      .c_str());
+        post([this, key]() {
+            destroyScopeInstancesOnJsThread(key);
+        });
     }
 
     /// 引擎是否运行中 (JS 线程存活, 接受新任务)
@@ -448,6 +534,12 @@ public:
                 completed.swap(stopCompletions_);
             } else if (state_ == State::Running) {
                 state_ = State::Stopping;
+                // 引擎停止: 脚本登记与挂载作用域一并清空
+                // - JS 插件的注册随引擎挂载记录撤销, 脚本实例随 JS 线程退出释放
+                // - 重新 start 时插件会重新 load, 旧登记留着会让 load 命中
+                //   "plugin already loaded" (disable/enable 轮次会直接失败)
+                scripts_.clear();
+                scopes_.clear();
                 {
                     std::lock_guard<std::mutex> qlk(mtx_);
                     stop_.store(true, std::memory_order_release); ///< post() 从这里起拒绝新任务
@@ -526,6 +618,17 @@ public:
         );
     }
 
+    /// 普通运行日志 (level: 1=trace 2=info 3=warn 4=error)
+    void logAt(int level, const char* msg) const noexcept {
+        agentxx::plugin::logTo(
+            engineHost_,
+            logIface_,
+            level,
+            "agentxx_javascript_engine",
+            msg ? msg : ""
+        );
+    }
+
     /// 守卫日志闭包工厂 (捕获 this; 供静态回调内 guardCall 使用)
     auto guardLogger() const noexcept {
         return [this](const char* msg) noexcept {
@@ -550,44 +653,124 @@ private:
 
 public:
 
-    /// JS 线程内加载脚本 (公共转发; 供能力方法异步任务在 JS 线程内直调)
-    int loadScriptOnJsThread(
-        const PluginxxHost* host,
-        const std::string&  name,
-        const std::string&  path,
-        const std::string&  code,
-        std::string&        err
-    ) {
-        return doLoadScript(host, name, path, code, err);
+    // ==================== 脚本 / 实例 / 挂载作用域 ====================
+
+    /// 已交给引擎的一份脚本 (进程级登记; 仅 io 线程访问)
+    /// - 一个脚本在**每个挂载作用域**各有一份实例 (`plugins_` 里以实例键区分)
+    struct ScriptEntry {
+        std::string         name;
+        std::string         path;
+        std::string         code;
+        const PluginxxHost* host = nullptr; ///< 调用方 (JS 插件薄壳) 的主程序句柄
+    };
+
+    /// 实例键分隔符: 脚本名里没有 `@`, 作用域键是 `agentId#seq`
+    static constexpr char kInstanceKeySep = '@';
+
+    /// 实例键前缀 (脚本名 + 分隔符)
+    static std::string instanceKeyPrefix(std::string_view name) {
+        std::string out{name};
+        out.push_back(kInstanceKeySep);
+        return out;
     }
 
-    // ==================== C 回调入口 (跨线程) ====================
-    // (loadScriptInEngine 已移除: 能力 load 方法改为 JS 线程任务内直接调
-    //  doLoadScript, 不再经 postSync 阻塞等待, 见 jsCapStart)
-
-    /// 投递式卸载脚本 (不等待); 引擎停止时静默忽略
-    void unloadScript(const char* script_name) {
-        std::string name{script_name};
-        post([this, name]() {
-            doUnloadScript(name);
-        });
+    /// 实例键: 脚本名 + 分隔符 + 作用域键
+    static std::string instanceKeyOf(std::string_view name, std::string_view scopeKey) {
+        std::string out{name};
+        out.push_back(kInstanceKeySep);
+        out.append(scopeKey);
+        return out;
     }
 
-    /// 已加载脚本的工具名 JSON 数组 (【必须在 JS 线程调用】;
-    /// 异步能力方法完成回调内直接使用)
-    std::string loadedToolsJsonOnJsThread(const std::string& name) {
-        auto pctx = findPlugin(name);
-        if (!pctx || !pctx->ctx) {
-            return "[]";
+    /// 能力 op 失败收尾 (完成通知一次 + 错误文本)
+    static void failNotify(const PluginxxOperatorNotify& notify, const std::string& msg) {
+        if (!notify.done) {
+            return;
         }
-        std::string out   = "[";
-        bool        first = true;
-        for (auto& k : jsToolsSnapshot(pctx.get())) {
-            if (!first) {
-                out += ",";
+        auto errSv = agentxx::plugin::PluginStringView::from(msg.data(), msg.size());
+        notify.done(notify.host_ud, PLUGINXX_OPERATOR_FAILED, &errSv);
+    }
+
+    /// 登记脚本并给当前每个挂载作用域建实例; 完成通知在 JS 线程发出
+    /// - **仅 io 线程调用** (能力 load)
+    /// - 脚本先入 `scripts_`: 之后再挂载的 agent 由 [attachMountScope] 补建实例
+    void loadScriptAsync(
+        const PluginxxHost*           host,
+        const std::string&            name,
+        const std::string&            path,
+        const std::string&            code,
+        const PluginxxOperatorNotify& notify
+    ) {
+        if (scripts_.contains(name)) {
+            failNotify(notify, fmt::format("plugin already loaded: {}", name));
+            return;
+        }
+        ScriptEntry entry{name, path, code, host};
+        scripts_.emplace(name, entry);
+        // 作用域快照: JS 线程只认本次投递携带的列表, 不读 io 线程状态
+        std::vector<MountScope> scopes;
+        scopes.reserve(scopes_.size());
+        for (const auto& [key, scope] : scopes_) {
+            (void)key;
+            scopes.push_back(scope);
+        }
+        if (!post([this, entry, scopes, notify]() {
+                if (stopping()) {
+                    failNotify(notify, "interpreter.js engine stopped");
+                    return;
+                }
+                std::string lastErr;
+                for (const auto& scope : scopes) {
+                    std::string err;
+                    if (createInstanceOnJsThread(entry, scope, err) != 0) {
+                        lastErr = err;
+                    }
+                }
+                if (!lastErr.empty()) {
+                    failNotify(notify, lastErr);
+                    return;
+                }
+                std::string tools      = loadedToolsJsonOnJsThread(entry.name);
+                std::string payloadStr = fmt::format(R"_({{"ok": true, "tools": {}}})_", tools);
+                auto        resSv
+                    = agentxx::plugin::PluginStringView::from(payloadStr.data(), payloadStr.size());
+                notify.done(notify.host_ud, PLUGINXX_OPERATOR_OK, &resSv);
+            })) {
+            scripts_.erase(name);
+            failNotify(notify, "interpreter.js engine stopped");
+        }
+    }
+
+    /// 注销脚本及其全部实例; 完成通知在 JS 线程发出
+    /// - **仅 io 线程调用** (能力 unload)
+    void unloadScriptAsync(const std::string& name, const PluginxxOperatorNotify& notify) {
+        scripts_.erase(name);
+        if (!post([this, name, notify]() {
+                destroyScriptInstancesOnJsThread(name);
+                auto okSv = agentxx::plugin::PluginStringView::fromCstr("{\"ok\": true}");
+                notify.done(notify.host_ud, PLUGINXX_OPERATOR_OK, &okSv);
+            })) {
+            failNotify(notify, "interpreter.js engine stopped");
+        }
+    }
+
+    /// 已加载脚本的工具名 JSON 数组 (【必须在 JS 线程调用】)
+    /// - 一份脚本在每个挂载作用域各有一份实例: 返回各实例工具名的并集
+    std::string loadedToolsJsonOnJsThread(const std::string& name) {
+        std::string       out    = "[";
+        bool              first  = true;
+        const std::string prefix = instanceKeyPrefix(name);
+        for (auto& [key, pctx] : plugins_) {
+            if (!pctx || !pctx->ctx || key.rfind(prefix, 0) != 0) {
+                continue;
             }
-            first  = false;
-            out   += fmt::format("\"{}\"", k);
+            for (auto& k : jsToolsSnapshot(pctx.get())) {
+                if (!first) {
+                    out += ",";
+                }
+                first  = false;
+                out   += fmt::format("\"{}\"", k);
+            }
         }
         out += "]";
         return out;
@@ -602,11 +785,6 @@ public:
             return "[]"; // 引擎已停止
         }
         return out;
-    }
-
-    /// 【JS 线程】卸载脚本直调 (能力 unload 的 JS 线程任务内使用)
-    void unloadScriptOnJsThread(const std::string& name) {
-        doUnloadScript(name);
     }
 
     /// 主程序工具完成 (任意线程): 复制结果并投递回 JS 线程 settle Promise。
@@ -771,10 +949,10 @@ public:
 
     // ==================== 跨线程镜像 ====================
 
-    /// 查找JS 插件上下文 (跨线程; 返回强引用保证存活)
-    std::shared_ptr<JsPluginCtx> findPlugin(const std::string& name) {
+    /// 查找实例上下文 (跨线程; 参数是实例键; 返回强引用保证存活)
+    std::shared_ptr<JsPluginCtx> findPlugin(const std::string& instanceKey) {
         std::lock_guard<std::mutex> lk(mirrorMtx_);
-        auto                        it = mirror_.find(name);
+        auto                        it = mirror_.find(instanceKey);
         if (it == mirror_.end()) {
             return nullptr;
         }
@@ -873,7 +1051,7 @@ private:
             ++timerEpoch_;
             auto timer = std::move(it->second);
             it         = timers_.erase(it);
-            auto pctx  = findPlugin(timer.plugin);
+            auto pctx  = findPlugin(timer.instanceKey);
             if (!pctx || pctx->deleted || !pctx->ctx) {
                 continue; // 上下文已销毁, fn 引用随 JsPluginCtx 释放
             }
@@ -945,19 +1123,19 @@ private:
             }
         }
         // ---- 线程退出前清理 (JS 线程, 安全释放 JSValue) ----
-        // 1. 残余定时器 (正常卸载路径 doUnloadScript 已清各插件定时器, 此处补充处理)
+        // 1. 残余定时器 (正常实例卸载路径已清各实例定时器, 此处补充处理)
         for (auto& [id, t] : timers_) {
             (void)id;
-            auto pctx = findPlugin(t.plugin);
+            auto pctx = findPlugin(t.instanceKey);
             if (pctx && pctx->ctx) {
                 JS_FreeValue(pctx->ctx, t.fn);
             }
         }
         timers_.clear();
-        // 2. 残余插件上下文 (正常路径引擎卸载前JS 插件已级联卸载; 补充释放,
+        // 2. 残余实例上下文 (正常路径引擎卸载前 JS 插件已级联卸载; 补充释放,
         //    保证 JS_FreeRuntime 前所有 JSContext 已 Free, 无 gc 断言)
-        for (auto& [name, pctx] : plugins_) {
-            (void)name;
+        for (auto& [key, pctx] : plugins_) {
+            (void)key;
             pctx->deleted = true;
             pctx->host    = nullptr;
         }
@@ -981,24 +1159,27 @@ private:
         return 0;
     }
 
-    // ==================== 插件加载/卸载 (JS 线程) ====================
+    // ==================== 实例加载/卸载 (JS 线程) ====================
 
-    int doLoadScript(
-        const PluginxxHost* host,
-        const std::string&  name,
-        const std::string&  path,
-        const std::string&  code,
+    /// 为一份 (脚本, 挂载作用域) 建实例: 新建 JSContext, 注入桥, 执行脚本
+    /// - 脚本顶层就是"该 agent 的插件实例初始化", 注册归属 scope
+    /// - 已存在同键实例时直接成功 (重复 mount 幂等)
+    int createInstanceOnJsThread(
+        const ScriptEntry&  entry,
+        const MountScope&   scope,
         std::string&        err
     ) {
-        if (plugins_.find(name) != plugins_.end()) {
-            err = fmt::format("plugin already loaded: {}", name);
-            return -1;
+        const std::string key = instanceKeyOf(entry.name, scope.key);
+        if (plugins_.find(key) != plugins_.end()) {
+            return 0;
         }
-        auto pctx    = std::make_shared<JsPluginCtx>();
-        pctx->name   = name;
-        pctx->host   = host;
-        pctx->engine = this;
-        pctx->ctx    = JS_NewContext(rt_);
+        auto pctx         = std::make_shared<JsPluginCtx>();
+        pctx->name        = entry.name;
+        pctx->instanceKey = key;
+        pctx->host        = entry.host;
+        pctx->engine      = this;
+        pctx->setScope(scope.agentId, scope.seq);
+        pctx->ctx = JS_NewContext(rt_);
         if (!pctx->ctx) {
             err = "JS_NewContext failed";
             return -1;
@@ -1013,7 +1194,8 @@ private:
         }
 
         // 执行插件脚本 (顶层可调用 agentxx.registerTool 等)
-        JSValue ret = JS_Eval(pctx->ctx, code.c_str(), code.size(), path.c_str(), 0);
+        JSValue ret
+            = JS_Eval(pctx->ctx, entry.code.c_str(), entry.code.size(), entry.path.c_str(), 0);
         if (JS_IsException(ret)) {
             err = extractException(pctx->ctx, ret);
             JS_FreeValue(pctx->ctx, ret);
@@ -1024,25 +1206,32 @@ private:
         }
         JS_FreeValue(pctx->ctx, ret);
 
-        plugins_[name] = pctx;
+        plugins_[key] = pctx;
         {
             std::lock_guard<std::mutex> lk(mirrorMtx_);
-            mirror_[name] = pctx;
+            mirror_[key] = pctx;
         }
         return 0;
     }
 
-    /// 撤销脚本产生的主程序注册与脚本定时器 (失败回滚与脚本卸载共用)。
-    void rollbackScriptEffects(const std::shared_ptr<JsPluginCtx>& pctx) {
+    /// 撤销实例产生的主程序注册与定时器 (失败回滚与脚本卸载共用)。
+    /// - `runRollback=false` 用于 agent 卸载: 主程序已按挂载记录撤销了该实例的
+    ///   工具/权限/提示词/订阅/资源, 此时再去照样注销会碰到已释放的句柄
+    ///   (实测 ASan: broadcast 订阅的 shared_ptr 已随实例析构释放)
+    void rollbackScriptEffects(const std::shared_ptr<JsPluginCtx>& pctx, bool runRollback = true) {
         if (!pctx) {
             return;
         }
-        pctx->runRollback();
+        if (runRollback) {
+            pctx->runRollback();
+        } else {
+            pctx->rollbackActions.clear();
+        }
         if (!pctx->ctx) {
             return;
         }
         for (auto tit = timers_.begin(); tit != timers_.end();) {
-            if (tit->second.plugin == pctx->name) {
+            if (tit->second.instanceKey == pctx->instanceKey) {
                 JS_FreeValue(pctx->ctx, tit->second.fn);
                 tit = timers_.erase(tit);
             } else {
@@ -1051,29 +1240,67 @@ private:
         }
     }
 
-    void doUnloadScript(const std::string& name) {
-        auto it = plugins_.find(name);
+    /// 销毁单个实例 (按实例键)
+    /// - `runRollback`: 是否执行 JS 侧注册的注销 (脚本 unload 时是, agent
+    ///   unmount 时否)
+    void destroyInstanceOnJsThread(const std::string& key, bool runRollback = true) {
+        auto it = plugins_.find(key);
         if (it == plugins_.end()) {
             return;
         }
         auto pctx     = it->second;
         pctx->deleted = true;
         pctx->host    = nullptr; // 后续任务不得再调用主程序
-        // 脚本卸载同样是注册事务的收尾: 注销该脚本注册的工具/通知/订阅/资源,
+        // 脚本卸载同样是注册事务的收尾: 注销该实例注册的工具/通知/订阅/资源,
         // 不留悬垂 user_data (主程序 detachAll 只覆盖引擎实例整体卸载的场景)。
-        rollbackScriptEffects(pctx);
+        rollbackScriptEffects(pctx, runRollback);
         plugins_.erase(it);
         {
             std::lock_guard<std::mutex> lk(mirrorMtx_);
-            mirror_.erase(name);
+            mirror_.erase(key);
         }
         // 全部进行中的任务结束后 shared_ptr 归零 → JsPluginCtx 析构 → JS_FreeContext
     }
 
+    /// 销毁一份脚本的全部实例 (脚本 unload)
+    void destroyScriptInstancesOnJsThread(const std::string& name) {
+        const std::string prefix = instanceKeyPrefix(name);
+        std::vector<std::string> keys;
+        for (const auto& [key, pctx] : plugins_) {
+            (void)pctx;
+            if (key.rfind(prefix, 0) == 0) {
+                keys.push_back(key);
+            }
+        }
+        for (const auto& key : keys) {
+            // 脚本卸载: 显式撤销本实例的注册 (脚本先于 agent 卸载时主程序未必清理)
+            destroyInstanceOnJsThread(key, /*runRollback=*/true);
+        }
+    }
+
+    /// 销毁某个挂载作用域的全部实例 (agent unmount)
+    void destroyScopeInstancesOnJsThread(const std::string& scopeKey) {
+        const std::string suffix = std::string(1, kInstanceKeySep) + scopeKey;
+        std::vector<std::string> keys;
+        for (const auto& [key, pctx] : plugins_) {
+            (void)pctx;
+            if (key.size() > suffix.size()
+                && key.compare(key.size() - suffix.size(), suffix.size(), suffix) == 0) {
+                keys.push_back(key);
+            }
+        }
+        for (const auto& key : keys) {
+            // agent 卸载: 主程序已按挂载记录撤销全部注册, 这里只释放 JS 侧状态
+            // (再照着 rollback 注销会碰到已随实例析构释放的句柄, 实测 ASan UAF)
+            destroyInstanceOnJsThread(key, /*runRollback=*/false);
+        }
+    }
+
+
     // ==================== 工具执行 (JS 线程) ====================
 
     void doToolExecute(JsToolBinding* binding, ToolExecReq& req) {
-        auto pctx = findPlugin(binding->plugin);
+        auto pctx = findPlugin(binding->instanceKey);
         if (!pctx || pctx->deleted || !pctx->ctx) {
             req.error = "plugin unloaded";
             return;
@@ -1150,7 +1377,7 @@ private:
     // ==================== 通知/事件 (JS 线程) ====================
 
     void doEventFire(JsHookBinding* binding, const std::string& payload) {
-        auto pctx = findPlugin(binding->plugin);
+        auto pctx = findPlugin(binding->instanceKey);
         if (!pctx || pctx->deleted || !pctx->ctx) {
             return;
         }
@@ -1466,6 +1693,16 @@ private:
         def("removeMemoryFile", B_REMOVE_MEMORY_FILE, 1);
         def("addMcpServer", B_ADD_MCP_SERVER, 1);
         def("removeMcpServer", B_REMOVE_MCP_SERVER, 1);
+        // 与 C++ 插件 SDK 同名同义的查询/声明接口
+        def("scope", B_SCOPE, 0);
+        def("getConfig", B_GET_CONFIG, 0);
+        def("getPluginArgs", B_GET_PLUGIN_ARGS, 0);
+        def("getLanguage", B_GET_LANGUAGE, 0);
+        def("setLanguage", B_SET_LANGUAGE, 1);
+        def("registerToolPermission", B_REGISTER_TOOL_PERMISSION, 1);
+        def("unregisterToolPermission", B_UNREGISTER_TOOL_PERMISSION, 1);
+        def("registerReadPathPermission", B_REGISTER_READ_PATH_PERMISSION, 2);
+        def("registerWritePathPermission", B_REGISTER_WRITE_PATH_PERMISSION, 2);
 
         int ok = JS_SetPropertyStr(ctx, global, "agentxx", bridge) >= 0;
         // 常用工具函数注入全局 (沙箱内可用): 裸 setTimeout/clearTimeout
@@ -1533,7 +1770,7 @@ private:
     /// 定时器 (setTimeout; JS 线程访问; fn 为 Dup 引用, 到期执行后 Free)
     struct JsTimer {
         std::chrono::steady_clock::time_point due;
-        std::string                           plugin;
+        std::string                           instanceKey; ///< 所属实例
         JSValue                               fn;
     };
 
@@ -1565,12 +1802,12 @@ private:
         return out;
     }
 
-    /// JS 插件表 (JS 线程访问)
+    /// JS 插件实例表 (JS 线程访问; 键 = 实例键 `脚本名@作用域键`)
     std::map<std::string, std::shared_ptr<JsPluginCtx>, std::less<>> plugins_;
-    /// 当前挂载作用域 (见 setMountScope; 自管存储, mountRef_ 借用 mountAgentId_)
-    std::string      mountAgentId_;
-    uint64_t         mountAgentSeq_ = 0;
-    PluginxxScopeRef mountRef_{};
+    /// 脚本登记表 (仅 io 线程访问)
+    std::map<std::string, ScriptEntry, std::less<>> scripts_;
+    /// 已登记挂载作用域 (仅 io 线程访问)
+    std::map<std::string, MountScope, std::less<>> scopes_;
     /// 跨线程镜像 <name, weak_ptr> (互斥锁保护)
     std::mutex                                                     mirrorMtx_;
     std::map<std::string, std::weak_ptr<JsPluginCtx>, std::less<>> mirror_;
@@ -1771,12 +2008,12 @@ JSValue JsEngine::bridgeCall(
     auto subscribeChannel = [&](const std::string& topic, JSValueConst fn) -> int32_t {
         auto binding    = std::make_unique<JsHookBinding>();
         binding->engine = engine;
-        binding->plugin = pctx->name;
+        binding->instanceKey = pctx->instanceKey;
         binding->topic  = topic;
         auto  topicSv   = agentxx::plugin::PluginStringView::from(topic.data(), topic.size());
         auto* sub       = iface.broadcasts->subscribe_broadcast(
             host,
-            engine->agentRef(),
+            pctx->scope(),
             &topicSv,
             &JsEngine::eventFire,
             binding.get(),
@@ -1905,7 +2142,7 @@ JSValue JsEngine::bridgeCall(
             // 工具绑定 (主程序 execute 回调 → 本插件)
             auto binding    = std::make_unique<JsToolBinding>();
             binding->engine = engine;
-            binding->plugin = pctx->name;
+            binding->instanceKey = pctx->instanceKey;
             binding->name   = name;
 
             AgentxxPluginToolSpec spec{};
@@ -1918,7 +2155,7 @@ JSValue JsEngine::bridgeCall(
             spec.execute_start  = &JsEngine::toolExecuteStart;
             spec.execute_cancel = nullptr;
             spec.user_data      = binding.get();
-            int rc              = iface.tools->register_tool(host, engine->agentRef(), &spec);
+            int rc              = iface.tools->register_tool(host, pctx->scope(), &spec);
             if (rc != 0) {
                 JS_FreeValue(ctx, execFn);
                 return throwJsError(
@@ -1935,10 +2172,10 @@ JSValue JsEngine::bridgeCall(
             JS_SetPropertyStr(ctx, pctx->tools, name.c_str(), entry);
             JS_FreeValue(ctx, execFn);
 
-            // 脚本初始化事务: 注册成功登记撤销动作 (顶层失败/脚本卸载时回滚)
-            pctx->rollbackActions.push_back([host, toolsIface = iface.tools, engine, name]() {
+            // 脚本初始化事务: 注册成功登记撤销动作 (顶层失败/实例卸载时回滚)
+            pctx->rollbackActions.push_back([host, toolsIface = iface.tools, pctxRaw = pctx, name]() {
                 auto nameSv = agentxx::plugin::PluginStringView::from(name.data(), name.size());
-                toolsIface->unregister_tool(host, engine->agentRef(), &nameSv);
+                toolsIface->unregister_tool(host, pctxRaw->scope(), &nameSv);
             });
             pctx->toolBindings.push_back(std::move(binding));
             return JS_UNDEFINED;
@@ -1950,7 +2187,7 @@ JSValue JsEngine::bridgeCall(
                 return JS_ThrowTypeError(ctx, "unregisterTool: name required");
             }
             auto nameSv = agentxx::plugin::PluginStringView::from(name.data(), name.size());
-            iface.tools->unregister_tool(host, engine->agentRef(), &nameSv);
+            iface.tools->unregister_tool(host, pctx->scope(), &nameSv);
             JS_SetPropertyStr(ctx, pctx->tools, name.c_str(), JS_UNDEFINED);
             return JS_UNDEFINED;
         }
@@ -2036,7 +2273,7 @@ JSValue JsEngine::bridgeCall(
             PluginxxString err{nullptr, 0};
             auto*          handle = iface.tools->call_tool_async(
                 host,
-                engine->agentRef(),
+                pctx->scope(),
                 &nameSv,
                 &argsSv,
                 &sidSv,
@@ -2067,7 +2304,7 @@ JSValue JsEngine::bridgeCall(
             PluginxxString resp{nullptr, 0};
             auto           sidSv
                 = agentxx::plugin::PluginStringView::from(sessionId.data(), sessionId.size());
-            iface.session->get_share_store(host, engine->agentRef(), &sidSv, id, &resp);
+            iface.session->get_share_store(host, pctx->scope(), &sidSv, id, &resp);
             if (!resp.data) {
                 return JS_NULL;
             }
@@ -2088,7 +2325,7 @@ JSValue JsEngine::bridgeCall(
             auto sidSv
                 = agentxx::plugin::PluginStringView::from(sessionId.data(), sessionId.size());
             auto txtSv = agentxx::plugin::PluginStringView::from(text.data(), text.size());
-            iface.session->emit_message_tip(host, engine->agentRef(), &sidSv, &txtSv, level);
+            iface.session->emit_message_tip(host, pctx->scope(), &sidSv, &txtSv, level);
             return JS_UNDEFINED;
         }
 
@@ -2197,7 +2434,7 @@ JSValue JsEngine::bridgeCall(
             JsEngine::JsTimer t;
             t.due = std::chrono::steady_clock::now()
                     + std::chrono::milliseconds(static_cast<int64_t>(ms < 0 ? 0 : ms));
-            t.plugin            = pctx->name;
+            t.instanceKey       = pctx->instanceKey;
             t.fn                = JS_DupValue(ctx, argv[0]);
             engine->timers_[id] = std::move(t);
             ++engine->timerEpoch_; // 定时器集合变化: 唤醒等待中的 JS 线程重算
@@ -2265,8 +2502,8 @@ JSValue JsEngine::bridgeCall(
             }
             std::string p   = jsToCppString(ctx, argv[0]);
             auto        pSv = agentxx::plugin::PluginStringView::fromCstr(p.c_str());
-            int rc = (magic == B_ADD_SKILL_DIR) ? iface.resources->register_skill_dir(host, engine->agentRef(), &pSv)
-                                                : iface.resources->register_memory_file(host, engine->agentRef(), &pSv);
+            int rc = (magic == B_ADD_SKILL_DIR) ? iface.resources->register_skill_dir(host, pctx->scope(), &pSv)
+                                                : iface.resources->register_memory_file(host, pctx->scope(), &pSv);
             if (rc != 0) {
                 return throwJsError(
                     ctx,
@@ -2274,12 +2511,12 @@ JSValue JsEngine::bridgeCall(
                 );
             }
             const bool isSkillDir = (magic == B_ADD_SKILL_DIR);
-            pctx->rollbackActions.push_back([host, resIface = iface.resources, engine, p, isSkillDir]() {
+            pctx->rollbackActions.push_back([host, resIface = iface.resources, pctxRaw = pctx, p, isSkillDir]() {
                 auto pSv2 = agentxx::plugin::PluginStringView::from(p.data(), p.size());
                 if (isSkillDir) {
-                    resIface->unregister_skill_dir(host, engine->agentRef(), &pSv2);
+                    resIface->unregister_skill_dir(host, pctxRaw->scope(), &pSv2);
                 } else {
-                    resIface->unregister_memory_file(host, engine->agentRef(), &pSv2);
+                    resIface->unregister_memory_file(host, pctxRaw->scope(), &pSv2);
                 }
             });
             return JS_TRUE;
@@ -2293,8 +2530,8 @@ JSValue JsEngine::bridgeCall(
             std::string p   = jsToCppString(ctx, argv[0]);
             auto        pSv = agentxx::plugin::PluginStringView::fromCstr(p.c_str());
             bool        ok  = (magic == B_REMOVE_SKILL_DIR)
-                                  ? (iface.resources->unregister_skill_dir(host, engine->agentRef(), &pSv) == 0)
-                                  : (iface.resources->unregister_memory_file(host, engine->agentRef(), &pSv) == 0);
+                                  ? (iface.resources->unregister_skill_dir(host, pctx->scope(), &pSv) == 0)
+                                  : (iface.resources->unregister_memory_file(host, pctx->scope(), &pSv) == 0);
             return ok ? JS_TRUE : JS_FALSE;
         }
 
@@ -2332,15 +2569,15 @@ JSValue JsEngine::bridgeCall(
                 t
             );
             auto specSv = agentxx::plugin::PluginStringView::fromCstr(spec.c_str());
-            if (iface.resources->register_mcp_server(host, engine->agentRef(), &specSv) != 0) {
+            if (iface.resources->register_mcp_server(host, pctx->scope(), &specSv) != 0) {
                 return throwJsError(
                     ctx,
                     fmt::format("addMcpServer register failed (conflict?): {}", ns)
                 );
             }
-            pctx->rollbackActions.push_back([host, resIface = iface.resources, engine, ns]() {
+            pctx->rollbackActions.push_back([host, resIface = iface.resources, pctxRaw = pctx, ns]() {
                 auto nsSv2 = agentxx::plugin::PluginStringView::from(ns.data(), ns.size());
-                resIface->unregister_mcp_server(host, engine->agentRef(), &nsSv2);
+                resIface->unregister_mcp_server(host, pctxRaw->scope(), &nsSv2);
             });
             return JS_TRUE;
         }
@@ -2351,7 +2588,158 @@ JSValue JsEngine::bridgeCall(
             }
             std::string ns   = jsToCppString(ctx, argv[0]);
             auto        nsSv = agentxx::plugin::PluginStringView::from(ns.data(), ns.size());
-            return iface.resources->unregister_mcp_server(host, engine->agentRef(), &nsSv) == 0 ? JS_TRUE : JS_FALSE;
+            return iface.resources->unregister_mcp_server(host, pctx->scope(), &nsSv) == 0 ? JS_TRUE : JS_FALSE;
+        }
+
+        // ---- 与 C++ 插件 SDK 对齐的查询/声明接口 ----
+        case B_SCOPE: {
+            // 本脚本实例所属的 agent 挂载 (与 C++ 侧的 PluginxxScopeRef 同义)
+            JSValue out = JS_NewObject(ctx);
+            JS_SetPropertyStr(
+                ctx,
+                out,
+                "agentId",
+                JS_NewStringLen(ctx, pctx->scopeAgentId.data(), pctx->scopeAgentId.size())
+            );
+            JS_SetPropertyStr(
+                ctx,
+                out,
+                "mountSeq",
+                JS_NewInt64(ctx, static_cast<int64_t>(pctx->scopeSeq))
+            );
+            return out;
+        }
+
+        case B_GET_CONFIG:
+        case B_GET_PLUGIN_ARGS:
+        case B_GET_LANGUAGE: {
+            if (!iface.config) {
+                return JS_NULL;
+            }
+            PluginxxString out{nullptr, 0};
+            int32_t        rc = -1;
+            if (magic == B_GET_CONFIG) {
+                rc = iface.config->get_config(host, &out);
+            } else if (magic == B_GET_PLUGIN_ARGS) {
+                rc = iface.config->get_plugin_args(host, &out);
+            } else {
+                rc = iface.config->get_language(host, &out);
+            }
+            if (rc != 0 || !out.data) {
+                return JS_NULL;
+            }
+            JSValue result = JS_ParseJSON(
+                ctx,
+                out.data,
+                static_cast<size_t>(out.size),
+                "<config>"
+            );
+            if (JS_IsException(result)) {
+                JS_FreeValue(ctx, result);
+                result = JS_NewStringLen(ctx, out.data, static_cast<size_t>(out.size));
+            }
+            agentxx::plugin::PluginString::free(host, &out);
+            return result;
+        }
+
+        case B_SET_LANGUAGE: {
+            if (!iface.config || argc < 1 || !JS_IsString(argv[0])) {
+                return JS_FALSE;
+            }
+            std::string lang  = jsToCppString(ctx, argv[0]);
+            auto        langSv = agentxx::plugin::PluginStringView::from(lang.data(), lang.size());
+            return iface.config->set_language(host, &langSv) == 0 ? JS_TRUE : JS_FALSE;
+        }
+
+        case B_REGISTER_TOOL_PERMISSION:
+        case B_REGISTER_READ_PATH_PERMISSION:
+        case B_REGISTER_WRITE_PATH_PERMISSION: {
+            // C++ 侧同名便捷函数: 读/写路径权限 = (toolName, argName) 的简写
+            if (!iface.permission || !iface.permission->register_tool_permission) {
+                return JS_FALSE; // 主程序未加载权限中间件: 附加能力, 忽略
+            }
+            std::string toolName, targetArg, category;
+            int32_t     scope  = AGENTXX_PLUGIN_PERMISSION_SCOPE_READ;
+            int32_t     target = AGENTXX_PLUGIN_PERMISSION_TARGET_PATH;
+            if (magic == B_REGISTER_TOOL_PERMISSION) {
+                if (argc < 1 || !JS_IsObject(argv[0])) {
+                    return JS_ThrowTypeError(
+                        ctx,
+                        "registerToolPermission: spec object required"
+                    );
+                }
+                auto specObj  = argv[0];
+                toolName      = jsToCppString(ctx, JS_GetPropertyStr(ctx, specObj, "toolName"));
+                targetArg     = jsToCppString(ctx, JS_GetPropertyStr(ctx, specObj, "targetArg"));
+                category      = jsToCppString(ctx, JS_GetPropertyStr(ctx, specObj, "category"));
+                std::string scopeText
+                    = jsToCppString(ctx, JS_GetPropertyStr(ctx, specObj, "scope"));
+                std::string targetText
+                    = jsToCppString(ctx, JS_GetPropertyStr(ctx, specObj, "target"));
+                scope = scopeText == "write" ? AGENTXX_PLUGIN_PERMISSION_SCOPE_WRITE
+                                             : AGENTXX_PLUGIN_PERMISSION_SCOPE_READ;
+                if (targetText == "none") {
+                    target = AGENTXX_PLUGIN_PERMISSION_TARGET_NONE;
+                } else if (targetText == "text") {
+                    target = AGENTXX_PLUGIN_PERMISSION_TARGET_TEXT;
+                }
+            } else {
+                if (argc < 2 || !JS_IsString(argv[0]) || !JS_IsString(argv[1])) {
+                    return JS_ThrowTypeError(
+                        ctx,
+                        "registerReadPathPermission/registerWritePathPermission: "
+                        "(toolName, argName) required"
+                    );
+                }
+                toolName = jsToCppString(ctx, argv[0]);
+                targetArg = jsToCppString(ctx, argv[1]);
+                scope = magic == B_REGISTER_WRITE_PATH_PERMISSION
+                            ? AGENTXX_PLUGIN_PERMISSION_SCOPE_WRITE
+                            : AGENTXX_PLUGIN_PERMISSION_SCOPE_READ;
+            }
+            if (toolName.empty()) {
+                return JS_ThrowTypeError(ctx, "registerToolPermission: toolName required");
+            }
+            AgentxxPluginToolPermissionSpec spec{};
+            spec.struct_size = sizeof(AgentxxPluginToolPermissionSpec);
+            spec.tool_name
+                = agentxx::plugin::PluginStringView::from(toolName.data(), toolName.size());
+            spec.scope       = scope;
+            spec.target_kind = target;
+            spec.target_arg
+                = agentxx::plugin::PluginStringView::from(targetArg.data(), targetArg.size());
+            spec.category
+                = agentxx::plugin::PluginStringView::from(category.data(), category.size());
+            if (iface.permission->register_tool_permission(host, pctx->scope(), &spec) != 0) {
+                return JS_FALSE;
+            }
+            // 实例卸下时撤销声明 (主程序也会按挂载记录撤销, 这里保持两侧一致)
+            pctx->rollbackActions.push_back(
+                [host, permIface = iface.permission, pctxRaw = pctx, toolName]() {
+                    if (!permIface || !permIface->unregister_tool_permission) {
+                        return;
+                    }
+                    auto nameSv
+                        = agentxx::plugin::PluginStringView::from(toolName.data(), toolName.size());
+                    permIface->unregister_tool_permission(host, pctxRaw->scope(), &nameSv);
+                }
+            );
+            return JS_TRUE;
+        }
+
+        case B_UNREGISTER_TOOL_PERMISSION: {
+            if (!iface.permission || !iface.permission->unregister_tool_permission) {
+                return JS_FALSE;
+            }
+            if (argc < 1 || !JS_IsString(argv[0])) {
+                return JS_ThrowTypeError(ctx, "unregisterToolPermission: toolName required");
+            }
+            std::string toolName = jsToCppString(ctx, argv[0]);
+            auto        nameSv
+                = agentxx::plugin::PluginStringView::from(toolName.data(), toolName.size());
+            return iface.permission->unregister_tool_permission(host, pctx->scope(), &nameSv) == 0
+                       ? JS_TRUE
+                       : JS_FALSE;
         }
 
         default:
@@ -2458,37 +2846,9 @@ static void* PLUGINXX_CALL jsCapStart(
             if (code.empty()) {
                 return setErr("interpreter.js load: empty script file");
             }
-            // JS 线程任务: 直接调用 doLoadScript (已在 JS 线程, 无需 postSync),
-            // 完成后取工具清单并经通知器上报
-            PluginxxOperatorNotify ntfCopy = *notify;
-            if (!engine->post([engine, scriptHost, ntfCopy, name, path, code]() {
-                    if (engine->stopping()) {
-                        // 停止中: 不执行脚本加载, 但仍终结本次能力 op
-                        auto errSv = agentxx::plugin::PluginStringView::fromCstr(
-                            "interpreter.js engine stopped"
-                        );
-                        ntfCopy.done(ntfCopy.host_ud, PLUGINXX_OPERATOR_FAILED, &errSv);
-                        return;
-                    }
-                    std::string err2;
-                    const int   rc2
-                        = engine->loadScriptOnJsThread(scriptHost, name, path, code, err2);
-                    if (rc2 != 0) {
-                        auto errSv2
-                            = agentxx::plugin::PluginStringView::from(err2.data(), err2.size());
-                        ntfCopy.done(ntfCopy.host_ud, PLUGINXX_OPERATOR_FAILED, &errSv2);
-                        return;
-                    }
-                    std::string tools      = engine->loadedToolsJsonOnJsThread(name);
-                    std::string payloadStr = fmt::format(R"_({{"ok": true, "tools": {}}})_", tools);
-                    auto        resSv      = agentxx::plugin::PluginStringView::from(
-                        payloadStr.data(),
-                        payloadStr.size()
-                    );
-                    ntfCopy.done(ntfCopy.host_ud, PLUGINXX_OPERATOR_OK, &resSv);
-                })) {
-                return setErr("interpreter.js engine stopped");
-            }
+            // 脚本登记与实例创建分离: 脚本先入登记表 (此时还没有 agent 挂载就不执行),
+            // 每个已挂载 agent 各跑一份 (脚本顶层注册归属该 agent)
+            engine->loadScriptAsync(scriptHost, name, path, code, *notify);
             // 活动 op 占位 (主程序只等完成通知; execute_poll 留 NULL)。
             // 用实例成员地址而非函数级 static: 同一动态库多实例并存时
             // 每个实例各自持有稳定地址, 不共享可变静态存储。
@@ -2500,24 +2860,8 @@ static void* PLUGINXX_CALL jsCapStart(
             if (!argStr("name", name) || name.empty()) {
                 return setErr("interpreter.js unload: name (string) required");
             }
-            // done 在脚本真正卸载之后 (JS 线程执行 rollback + 定时器清理) 触发
-            PluginxxOperatorNotify ntfCopy = *notify;
-            if (!engine->post([engine, name, ntfCopy]() {
-                    if (engine->stopping()) {
-                        // 停止中: 脚本上下文由 JS 线程退出路径统一释放,
-                        // 不再执行脚本 rollback (主程序侧注册此时已撤销)。
-                        auto errSv = agentxx::plugin::PluginStringView::fromCstr(
-                            "interpreter.js engine stopped"
-                        );
-                        ntfCopy.done(ntfCopy.host_ud, PLUGINXX_OPERATOR_FAILED, &errSv);
-                        return;
-                    }
-                    engine->unloadScriptOnJsThread(name);
-                    auto okSv = agentxx::plugin::PluginStringView::fromCstr("{\"ok\": true}");
-                    ntfCopy.done(ntfCopy.host_ud, PLUGINXX_OPERATOR_OK, &okSv);
-                })) {
-                return setErr("interpreter.js engine stopped");
-            }
+            // done 在各个实例真正卸载之后 (JS 线程执行注册回滚与定时器清理) 触发
+            engine->unloadScriptAsync(name, *notify);
             return engine->capOpToken();
         }
 
@@ -2770,10 +3114,13 @@ extern "C" PLUGINXX_EXPORT void* agentxx_plugin_agent_mount(
                 );
                 return nullptr;
             }
-            // 脚本注册的归属 agent: 之后加载/登记的 JS 工具与通知挂在它名下
-            engine->setMountScope(spec);
+            // 登记挂载作用域: 已登记的脚本会为这个 agent 各建一份实例;
+            // per-agent 状态带回主程序, unmount 时原样交回 (卸载时靠它定位作用域)
+            auto  scope = JsEngine::mountScopeOf(spec);
+            auto* handle = new JsEngine::ScopeHandle{scope};
+            engine->attachMountScope(scope);
             notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
-            return nullptr;
+            return handle;
         }
     );
 }
@@ -2784,19 +3131,20 @@ extern "C" PLUGINXX_EXPORT void* agentxx_plugin_agent_unmount(
     const PluginxxOperatorNotify* notify,
     PluginxxString*
 ) {
-    (void)mount_ud;
     return agentxx::plugin::guardCall(
         [](const char* m) noexcept {
             (void)m;
         },
         static_cast<void*>(nullptr),
         [&]() -> void* {
-            // 说明: 脚本本身不随挂载销毁 (一份脚本目前对应一个挂载作用域);
-            // 工具/通知/订阅由主程序按挂载记录撤销, 这里只清掉作用域引用
-            auto* engine = static_cast<JsEngine*>(plugin_ctx);
-            if (engine) {
-                engine->clearMountScope();
+            // 注销该 agent 的脚本实例: 工具/权限/提示词/订阅由主程序按挂载记录撤销,
+            // 这里只收拾 JS 侧 (每个实例一份 JSContext + 定时器)
+            auto*       engine = static_cast<JsEngine*>(plugin_ctx);
+            auto*       handle = static_cast<JsEngine::ScopeHandle*>(mount_ud);
+            if (engine && handle) {
+                engine->detachMountScope(handle->scope);
             }
+            delete handle;
             if (notify && notify->done) {
                 notify->done(notify->host_ud, PLUGINXX_OPERATOR_OK, nullptr);
             }
