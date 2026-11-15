@@ -5112,16 +5112,29 @@ JSValue JsEngine::bridgeCall(
             if (argc >= 2) {
                 JS_ToInt64(ctx, &id, argv[1]);
             }
-            PluginxxString resp{nullptr, 0};
-            auto           sidSv
+            auto sidSv
                 = agentxx::plugin::PluginStringView::from(sessionId.data(), sessionId.size());
-            iface.session->get_share_store(host, pctx->scope(), &sidSv, id, &resp);
-            if (!resp.data) {
+            // 表成员是异步契约: 脚本线程不是主程序 IO 线程, 这里阻塞等结果
+            auto resp = agentxx::plugin::tableOpBlockingRaw(
+                host,
+                iface.cancel,
+                iface.scheduler,
+                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return iface.session->get_share_store(
+                        host,
+                        pctx->scope(),
+                        &sidSv,
+                        id,
+                        cb,
+                        ud,
+                        err
+                    );
+                }
+            );
+            if (!resp.ok()) {
                 return JS_NULL;
             }
-            JSValue out = JS_NewStringLen(ctx, resp.data, static_cast<size_t>(resp.size));
-            agentxx::plugin::PluginString::free(host, &resp);
-            return out;
+            return JS_NewStringLen(ctx, resp.payload.data(), resp.payload.size());
         }
 
         case B_EMIT_MESSAGE_TIP: {
@@ -5136,7 +5149,23 @@ JSValue JsEngine::bridgeCall(
             auto sidSv
                 = agentxx::plugin::PluginStringView::from(sessionId.data(), sessionId.size());
             auto txtSv = agentxx::plugin::PluginStringView::from(text.data(), text.size());
-            iface.session->emit_message_tip(host, pctx->scope(), &sidSv, &txtSv, level);
+            agentxx::plugin::tableOpBlockingRaw(
+                host,
+                iface.cancel,
+                iface.scheduler,
+                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return iface.session->emit_message_tip(
+                        host,
+                        pctx->scope(),
+                        &sidSv,
+                        &txtSv,
+                        level,
+                        cb,
+                        ud,
+                        err
+                    );
+                }
+            );
             return JS_UNDEFINED;
         }
 
@@ -5820,15 +5849,25 @@ JSValue JsEngine::bridgeCall(
                 sessionId.data(),
                 sessionId.size()
             );
-            PluginxxString out{nullptr, 0};
-            const int32_t  rc
-                = iface.session->get_session_work_dir(host, pctx->scope(), &sidSv, &out);
-            if (rc != AGENTXX_RESULT_OK || !out.data) {
+            auto dir = agentxx::plugin::tableOpBlockingRaw(
+                host,
+                iface.cancel,
+                iface.scheduler,
+                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return iface.session->get_session_work_dir(
+                        host,
+                        pctx->scope(),
+                        &sidSv,
+                        cb,
+                        ud,
+                        err
+                    );
+                }
+            );
+            if (!dir.ok()) {
                 return JS_NewString(ctx, "");
             }
-            JSValue dir = JS_NewStringLen(ctx, out.data, static_cast<size_t>(out.size));
-            agentxx::plugin::PluginString::free(host, &out);
-            return dir;
+            return JS_NewStringLen(ctx, dir.payload.data(), dir.payload.size());
         }
 
         case B_IS_CANCELED: {
@@ -6440,10 +6479,23 @@ JSValue JsEngine::bridgeCall(
                                                              : valueToJsonString(ctx, argv[1]);
             auto sidSv = agentxx::plugin::PluginStringView::from(sessionId.data(), sessionId.size());
             auto conSv = agentxx::plugin::PluginStringView::from(content.data(), content.size());
-            return JS_NewInt64(
-                ctx,
-                iface.session->add_share_store(host, pctx->scope(), &sidSv, &conSv)
+            auto added = agentxx::plugin::tableOpBlockingRaw(
+                host,
+                iface.cancel,
+                iface.scheduler,
+                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return iface.session->add_share_store(
+                        host,
+                        pctx->scope(),
+                        &sidSv,
+                        &conSv,
+                        cb,
+                        ud,
+                        err
+                    );
+                }
             );
+            return JS_NewInt64(ctx, added.ok() ? added.integer(-1) : int64_t{-1});
         }
 
         case B_GET_OWN_RESOURCES: {

@@ -623,25 +623,28 @@ if (CMAKE_CROSSCOMPILING AND XX_IS_WIN_D)
   add_compile_definitions(_WIN32_WINNT=0x0A00 WINVER=0x0A00 NTDDI_VERSION=0x0A000000 _WIN32_IE=0x0A00)
 endif()
 
-# 插件 API 契约代次 (v6): 工具结果改成两段上报 (正文原样字节 + 元数据 JSON)。
-# 完成通知器换成 AgentxxPluginToolNotify (四参 done), 插件互调回调换成
-# AgentxxPluginToolCallback, agentxx.agent.tools 表版本 3 → 4
+# 插件 API 契约代次 (v7): 表成员统一成**异步操作契约** —— 结果经
+# PluginxxOperatorCallback 交回, 返回 NULL 表示未受理; 受影响的表逐个抬
+# VERSION 并重置 BASELINE_SIZE, 老插件在加载阶段被拒 (未发布, 明确不兼容)。
+# - v6: 工具结果改成两段上报 (正文原样字节 + 元数据 JSON)。完成通知器换成
+#   AgentxxPluginToolNotify (四参 done), 插件互调回调换成 AgentxxPluginToolCallback,
+#   agentxx.agent.tools 表版本 3 → 4
 # - v5: 钩子 / 功能点 / 事件中枢三张业务表删除, 扩展点统一成 "功能埋点"
 #   (能力实现行 + 同名广播频道); 插件面所有发布/订阅走广播表, 网络能力
 #   走 `<应用名>.net`。client 侧删 events / json / log 三张自有表
 # - **库代码里的默认值不改**: cxx_pluginxx 被多个主程序共用, `abi.h` 的
 #   `PLUGINXX_API_VERSION` / `PLUGINXX_MIN_API_VERSION` 默认恒为 1, 不跟随任一主程序;
-# - agentxx 在自己的构建里用宏覆盖成 6 (这里是唯一改代次的地方): 嵌套构建
+# - agentxx 在自己的构建里用宏覆盖成 7 (这里是唯一改代次的地方): 嵌套构建
 #   (cxx_pluginxx / 插件 / 测试 / 客户端) 都经 _AGENTXX_COMMON_CMAKE_ARGS 继承同一份
 #   FLAGS, 因此框架、使用方与插件看到的值一致; 插件不链接框架库也能拿到 (只用头文件)
 set(
-  AGENTXX_PLUGIN_API_VERSION "6"
+  AGENTXX_PLUGIN_API_VERSION "7"
   CACHE STRING "agentxx 使用的插件 API 契约代次 (宏覆盖 cxx_pluginxx 的默认值 1)"
 )
 # 配置缓存不会因为默认值改了而自动更新: 老的 build 目录里还是上一代的值, 不纠正会让
 # 插件与主程序编译到不同代次 (表现为加载阶段就被“API 版本过低”拦住)
-if (NOT AGENTXX_PLUGIN_API_VERSION STREQUAL "6")
-  set(AGENTXX_PLUGIN_API_VERSION "6" CACHE STRING
+if (NOT AGENTXX_PLUGIN_API_VERSION STREQUAL "7")
+  set(AGENTXX_PLUGIN_API_VERSION "7" CACHE STRING
     "agentxx 使用的插件 API 契约代次 (宏覆盖 cxx_pluginxx 的默认值 1)" FORCE)
 endif()
 if (NOT(CMAKE_CXX_FLAGS MATCHES "-DPLUGINXX_API_VERSION=${AGENTXX_PLUGIN_API_VERSION}"

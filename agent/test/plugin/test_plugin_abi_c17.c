@@ -18,15 +18,15 @@
 
 /* ==================== 全局版本 ==================== */
 
-/* v6: 工具结果改成两段上报 (正文原样字节 + 元数据 JSON), 完成通知器与
-   互调回调都换成两参数形态 —— 两侧 API 与最低兼容版本一起抬到 6
+/* v7: 表成员统一成异步操作契约 (结果经 PluginxxOperatorCallback 交回,
+   返回 NULL 表示未受理) —— 两侧 API 与最低兼容版本一起抬到 7
    (旧插件被拒, 必须重编) */
-_Static_assert(PLUGINXX_API_VERSION == 6, "agent 侧 ABI 版本必须为 6");
-_Static_assert(PLUGINXX_MIN_API_VERSION == 6, "agent 侧最低兼容 ABI 版本必须为 6");
-_Static_assert(AGENTXX_CLIENT_PLUGIN_API_VERSION == 6, "client 侧 ABI 版本必须为 6");
+_Static_assert(PLUGINXX_API_VERSION == 7, "agent 侧 ABI 版本必须为 7");
+_Static_assert(PLUGINXX_MIN_API_VERSION == 7, "agent 侧最低兼容 ABI 版本必须为 7");
+_Static_assert(AGENTXX_CLIENT_PLUGIN_API_VERSION == 7, "client 侧 ABI 版本必须为 7");
 _Static_assert(
-    AGENTXX_CLIENT_PLUGIN_MIN_API_VERSION == 6,
-    "client 侧最低兼容 ABI 版本必须为 6"
+    AGENTXX_CLIENT_PLUGIN_MIN_API_VERSION == 7,
+    "client 侧最低兼容 ABI 版本必须为 7"
 );
 
 /* ==================== 8 字节对齐（全部跨边界结构体） ==================== */

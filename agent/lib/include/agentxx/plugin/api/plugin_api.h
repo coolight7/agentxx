@@ -25,6 +25,40 @@
 ///   (agentxx.agent.graph)、挂载查询 (agentxx.agent.mount)、
 ///   会话运行时 (agentxx.agent.runtime)
 /// - client 侧业务表见 `agentxx/plugin/api/client_plugin_api.h`
+///
+/// ════════════════════════════════════════════════════════════════════
+/// 调用模型: 表成员一律是**异步操作契约**
+/// ════════════════════════════════════════════════════════════════════
+/// 绝大多数成员形如
+/// ```c
+/// PluginxxOperatorHandle*(PLUGINXX_CALL* member)(
+///     const PluginxxHost*      host,
+///     ... 业务参数 ...,
+///     PluginxxOperatorCallback cb,        ///< 完成回调, 可传 NULL (不关心结果)
+///     void*                    ud,        ///< 原样回传给 cb
+///     PluginxxString*          error_out  ///< 未受理时写原因
+/// );
+/// ```
+/// - 返回 `NULL` = **未受理** (参数错 / 作用域失效 / 实例正在关闭), 原因写进
+///   `error_out`, 且 `cb` 不会被调用; 写错参数仍然立刻可见, 不用等一次往返;
+/// - 返回非 NULL = 已受理, 结果经 `cb` **恰好一次**交回, 回调在主程序 io 线程发出;
+///   `payload` 就是旧版出参 `out` 的内容 (JSON / 纯文本 / `1` 与 `0` 等标记), 语义不变;
+/// - `status` 取 `PLUGINXX_OPERATOR_OK` / `PLUGINXX_OPERATOR_FAILED` /
+///   `PLUGINXX_OPERATOR_CANCELED`; `OK` 时 `payload` 是结果, 其它值时可以是原因;
+/// - `cb` 传 `NULL` 时主程序只受理、不回程 (fire-and-forget), 适用于 `show_toast` /
+///   `publish_broadcast` / `update_*` / `unregister_*` 一类不关心结果的成员;
+/// - 未完成的调用可经 `pluginxx.cancel.op_cancel` 取消 (协作式)。
+///
+/// 顺序: 同一实例的调用按**受理顺序**执行 (FIFO)。注册类调用必须先 `co_await`
+/// (或等回调) 完成再继续,"登记后立刻可见"的语义不变。
+///
+/// 少数成员保持同步, 只因为它们能在调用方线程当场算完、根本不跨执行体:
+/// `agentxx.agent.session.is_canceled` (本地原子标记) 与
+/// `pluginxx.scheduler.is_io_thread` (线程本地判定)。
+///
+/// C++ 侧三种消费形态在 `agentxx/plugin/api/plugin_kit.h`:
+/// `co_await tableOp(ctx, ...)` / `tableOpCallback(ctx, ..., done)` /
+/// `tableOpBlocking(ctx, ...)` (仅限非 io 线程)。
 #ifndef AGENTXX_PLUGIN_API_H
 #define AGENTXX_PLUGIN_API_H
 
@@ -388,8 +422,11 @@ typedef struct AgentxxPluginPermissionIface {
 /// v2: 全部成员增加 `agent` 参数 (会话属于某个 agent)
 /// v3: 表尾追加会话工作目录与"是否已取消"查询 (原在插件框架通用表里的业务成员);
 ///     基线随本代重置为完整布局
-#define AGENTXX_PLUGIN_IFACE_AGENT_SESSION_VERSION     3
-#define AGENTXX_PLUGIN_IFACE_AGENT_SESSION_MIN_VERSION 3
+/// v4: 改成异步操作契约 (`get_share_store` / `emit_message_tip` /
+///     `add_share_store` / `get_session_work_dir`); `is_canceled` 保持同步
+///     (本地原子标记, 任意线程直接读); 基线与最低版本重置
+#define AGENTXX_PLUGIN_IFACE_AGENT_SESSION_VERSION     4
+#define AGENTXX_PLUGIN_IFACE_AGENT_SESSION_MIN_VERSION 4
 /* 基线: 重置时 = 完整布局; 以后追加成员保持不变 (改为 offsetof(第一个追加成员)) */
 #define AGENTXX_PLUGIN_IFACE_AGENT_SESSION_BASELINE_SIZE sizeof(AgentxxPluginSessionIface)
 
@@ -397,41 +434,57 @@ typedef struct AgentxxPluginSessionIface {
     int32_t  version; ///< 主程序填 AGENTXX_PLUGIN_IFACE_AGENT_SESSION_VERSION
     uint32_t struct_size;
 
-    /// 读取会话级 share_store 条目 (仅 io 线程); 返回 0 成功, out 接收数据 (host->alloc)
-    /// - 条目不存在或 id 未分配 (大于自增 id, 见 add_share_store) 时返回
-    ///   `AGENTXX_RESULT_ERR_NOT_FOUND`
-    ///   (out 不分配内存, 主程序不抛异常)
-    int32_t(PLUGINXX_CALL* get_share_store)(
+    /// 读取会话级 share_store 条目 (**异步**)
+    /// - 成功时 `payload` 是条目正文;
+    /// - 条目不存在或 id 未分配 (大于自增 id, 见 [add_share_store]) 时
+    ///   `status = PLUGINXX_OPERATOR_FAILED` 并给出原因文本 (旧版是 `ERR_NOT_FOUND`)
+    PluginxxOperatorHandle*(PLUGINXX_CALL* get_share_store)(
         const PluginxxHost*       host,
         const PluginxxScopeRef*   agent,
         const PluginxxStringView* session_id,
         int64_t                   id,
-        PluginxxString*           out
+        PluginxxOperatorCallback  cb,
+        void*                     ud,
+        PluginxxString*           error_out
     );
-    void(PLUGINXX_CALL* emit_message_tip)(
+    /// 给会话插一条提示消息 (**异步**; 不关心受理结果时 `cb` 传 NULL)
+    PluginxxOperatorHandle*(PLUGINXX_CALL* emit_message_tip)(
         const PluginxxHost*       host,
         const PluginxxScopeRef*   agent,
         const PluginxxStringView* session_id,
         const PluginxxStringView* text,
-        int32_t                   level
+        int32_t                   level,
+        PluginxxOperatorCallback  cb,
+        void*                     ud,
+        PluginxxString*           error_out
     );
-    int64_t(PLUGINXX_CALL* add_share_store)(
+    /// 写一条会话级 share_store 条目 (**异步**; 成功时 `payload` 是十进制 id)
+    ///
+    /// 旧版直接返回 `int64_t` id (失败 `-1`); 现在经回调正文交回, 用
+    /// `TableOpResult::integer(-1)` 读。
+    PluginxxOperatorHandle*(PLUGINXX_CALL* add_share_store)(
         const PluginxxHost*       host,
         const PluginxxScopeRef*   agent,
         const PluginxxStringView* session_id,
-        const PluginxxStringView* content
+        const PluginxxStringView* content,
+        PluginxxOperatorCallback  cb,
+        void*                     ud,
+        PluginxxString*           error_out
     );
-    /// (v3) 指定会话生效的工作目录 (io 线程; host->alloc; 失败时回 `AGENTXX_RESULT_ERR_*`):
-    /// - `agent` 必须非空 (引用无效返回 `AGENTXX_RESULT_ERR_NO_AGENT` 并记警告): 会话属于某个 agent
+    /// (v3) 指定会话生效的工作目录 (**异步**; 成功时 `payload` 是绝对路径):
+    /// - `agent` 必须非空 (引用无效时入口返回 NULL 并记警告): 会话属于某个 agent
     /// - session_id 非空: 会话级覆写优先 (worktree 绑定), 未设置时回退主程序默认工作目录
     /// - session_id 为空: 返回解析后的默认会话工作目录
-    int32_t(PLUGINXX_CALL* get_session_work_dir)(
+    PluginxxOperatorHandle*(PLUGINXX_CALL* get_session_work_dir)(
         const PluginxxHost*       host,
         const PluginxxScopeRef*   agent,
         const PluginxxStringView* session_id,
-        PluginxxString*           out
+        PluginxxOperatorCallback  cb,
+        void*                     ud,
+        PluginxxString*           error_out
     );
-    /// (v3) 查询会话当前轮次是否已取消 (advisory 定位; 权威通知始终是取消回调):
+    /// (v3) 查询会话当前轮次是否已取消 (**同步**; advisory 定位, 权威通知始终是取消回调):
+    /// - 保留同步: 取消状态是一个原子标记, 任意线程直接读, 不跨执行体、不产生等待
     /// - `agent` 必须非空 (引用无效返回 0 并记警告)
     /// - 返回 1 已取消 / 0 未取消
     int32_t(PLUGINXX_CALL* is_canceled)(

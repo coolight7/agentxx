@@ -199,23 +199,24 @@ asio::awaitable<TestResult> run_plugin_tests() {
             // 会话工作目录: 空 session_id = 默认会话工作目录 (经 AgentContext 解析)
             auto scopeRaw   = ref.raw();
             auto emptyKeySv = makeSv("");
-            PluginxxString workDirOut{nullptr, 0};
-            XX_TEST_EXPECT_EQ(
-                ifaceSession->get_session_work_dir(
-                    inst->hostView(),
-                    &scopeRaw,
-                    &emptyKeySv,
-                    &workDirOut
-                ),
-                0
+            auto workDirRes = agentxx::plugin::tableOpBlockingRaw(
+                inst->hostView(),
+                nullptr,
+                nullptr,
+                [&](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                    return ifaceSession->get_session_work_dir(
+                        inst->hostView(),
+                        &scopeRaw,
+                        &emptyKeySv,
+                        cb,
+                        ud,
+                        err
+                    );
+                }
             );
-            XX_TEST_EXPECT_TRUE(workDirOut.data != nullptr);
-            if (workDirOut.data) {
-                XX_TEST_EXPECT_EQ(
-                    std::string(workDirOut.data, workDirOut.size),
-                    ctx->getSessionWorkDir("")
-                );
-                agentxx::plugin::PluginString::free(inst->hostView(), &workDirOut);
+            XX_TEST_EXPECT_TRUE(workDirRes.ok());
+            if (workDirRes.ok()) {
+                XX_TEST_EXPECT_EQ(std::string{workDirRes.text()}, ctx->getSessionWorkDir(""));
             }
 
             // 取消查询: 新会话未取消 = 0; 空引用按失败处理也是 0

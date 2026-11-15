@@ -457,79 +457,209 @@ static ::PluginxxOperatorHandle* PLUGINXX_CALL xx_call_tool_async(
     });
 }
 
-static int32_t PLUGINXX_CALL xx_get_share_store(
+/// 异步表调用的公共骨架 (契约见 pluginxx/host/table_op.h 与 plugin_api.h 文件头)
+///
+/// - 入口只做"解析上下文 + 交给 [startTableOp]": 参数与作用域校验由 `work` 自己做
+///   (失败抛 [TableOpError], 经回调按 FAILED 交回);
+/// - `allowClosing=true` 用于只读查询 (关闭中仍可查), 写入口用默认值;
+/// - `work` 在自己的 IO 线程执行, 调用方本来就在 IO 线程时内联执行 —— 所以
+///   "注册完立刻可见"的顺序与同步调用一致。
+template<bool AllowClosing = false, typename Fn>
+static PluginxxOperatorHandle* asyncTableCall(
+    const PluginxxHost*      host,
+    PluginxxOperatorCallback cb,
+    void*                    ud,
+    PluginxxString*          error_out,
+    std::string              label,
+    Fn&&                     work
+) {
+    auto call = enterHost(host, AllowClosing);
+    if (!call.ok()) {
+        setTableOpError(error_out, "plugin runtime is unavailable");
+        return nullptr;
+    }
+    auto keep = call;
+    return startTableOp(
+        keep.manager(),
+        cb,
+        ud,
+        error_out,
+        std::move(label),
+        [keep, work = std::forward<Fn>(work)]() mutable -> std::string {
+            return work(keep.instance(), keep.manager());
+        }
+    );
+}
+
+/// 作用域引用的自持拷贝 (跨线程投递用)
+///
+/// 插件传来的 `PluginxxScopeRef` 中 `id` 是**借用视图**, 指向调用方的内存; 请求排到
+/// 自己的 IO 线程之后那些内存可能已经不存在, 所以投递前先把 id 字节拷一份。
+struct ScopeRefKeep {
+    std::string id;
+    uint64_t    seq   = 0;
+    bool        valid = false;
+
+    explicit ScopeRefKeep(const PluginxxScopeRef* ref) {
+        if (!pluginxx_scope_ref_ok(ref)) {
+            return;
+        }
+        valid = true;
+        if (ref->id.data != nullptr && ref->id.size > 0) {
+            id.assign(ref->id.data, static_cast<size_t>(ref->id.size));
+        }
+        seq = ref->seq;
+    }
+
+    /// 重建一份引用 (指向本对象内部, 只能在本次调用期间使用)
+    PluginxxScopeRef ref() const {
+        PluginxxScopeRef out{};
+        out.struct_size = static_cast<uint32_t>(sizeof(PluginxxScopeRef));
+        out.flags       = 0;
+        out.id          = PluginxxStringView{id.data(), static_cast<uint64_t>(id.size())};
+        out.seq         = seq;
+        return out;
+    }
+};
+
+/// 带作用域校验的异步表调用: 引用无效时按 [TableOpError] 抛出 (经回调交回)
+template<typename Fn>
+static PluginxxOperatorHandle* asyncScopedTableCall(
+    const PluginxxHost*      host,
+    const PluginxxScopeRef*  agent,
+    PluginxxOperatorCallback cb,
+    void*                    ud,
+    PluginxxString*          error_out,
+    std::string              label,
+    Fn&&                     work
+) {
+    ScopeRefKeep scope{agent};
+    return asyncTableCall(
+        host,
+        cb,
+        ud,
+        error_out,
+        std::move(label),
+        [scope, work = std::forward<Fn>(work)](
+            PluginInstance* inst,
+            PluginManager*  mgr
+        ) -> std::string {
+            auto ref = scope.ref();
+            if (!scope.valid || !scopeOk(mgr, &ref)) {
+                throw TableOpError("agent reference is invalid");
+            }
+            return work(inst, mgr, static_cast<const PluginxxScopeRef&>(ref));
+        }
+    );
+}
+
+/// 主程序堆字符串 → std::string (顺手释放)
+static std::string takePluginString(PluginxxString& s) {
+    std::string out;
+    if (s.data != nullptr) {
+        out.assign(s.data, static_cast<size_t>(s.size));
+        hostMemoryFree(s.data);
+        s = PluginxxString{};
+    }
+    return out;
+}
+
+static PluginxxOperatorHandle* PLUGINXX_CALL xx_get_share_store(
     const PluginxxHost*       host,
     const PluginxxScopeRef*   agent,
     const PluginxxStringView* session_id,
     int64_t                   id,
-    PluginxxString*           out
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
 ) {
-    return agentxx::plugin::guardVtableCall(AGENTXX_RESULT_ERR_INTERNAL, [&]() -> int32_t {
-        if (!out) {
-            return AGENTXX_RESULT_ERR_ARG;
+    return agentxx::plugin::guardVtableCall<PluginxxOperatorHandle*>(nullptr, [&]() {
+        if (agentxx::plugin::PluginStringView::empty(session_id)) {
+            setTableOpError(error_out, "get_share_store: session id is required");
+            return static_cast<PluginxxOperatorHandle*>(nullptr);
         }
-        auto call = enterHost(host, /*allowClosing=*/true);
-        auto mgr  = call.manager();
-        auto inst = call.instance();
-        if (!mgr || !inst || agentxx::plugin::PluginStringView::empty(session_id)) {
-            return AGENTXX_RESULT_ERR_ARG;
-        }
-        if (!scopeOk(mgr, agent)) {
-            return AGENTXX_RESULT_ERR_NO_AGENT;
-        }
-        auto mgrPtr  = mgr;
-        auto instPtr = inst;
-        auto sid     = *session_id;
-        *out         = ioCallSyncKeep<PluginxxString>(
-            call,
-            mgrPtr,
-            [mgrPtr, instPtr, sid, id, agent]() -> PluginxxString {
-                return mountCall(
-                    mgrPtr,
-                    agent,
+        // 入参视图只在本次调用有效: 投递到 IO 线程前先拷成自己的字符串
+        auto sid = svToStr(session_id);
+        return asyncScopedTableCall(
+            host,
+            agent,
+            cb,
+            ud,
+            error_out,
+            "session.get_share_store",
+            [sid, id](
+                PluginInstance*         inst,
+                PluginManager*          mgr,
+                const PluginxxScopeRef& ref
+            ) -> std::string {
+                auto text = mountCall(
+                    mgr,
+                    &ref,
                     [] { return PluginxxString{}; },
-                    [instPtr, sid, id](PluginMount& mount) {
-                        return mount.getShareStore(instPtr, sid, id);
+                    [inst, &sid, id](PluginMount& mount) {
+                        return mount.getShareStore(
+                            inst,
+                            PluginxxStringView{sid.data(), sid.size()},
+                            id
+                        );
                     }
                 );
+                auto out = takePluginString(text);
+                if (out.empty()) {
+                    throw TableOpError(
+                        fmt::format("share_store entry {} not found", id)
+                    );
+                }
+                return out;
             }
         );
-        return (out->data != nullptr) ? AGENTXX_RESULT_OK : AGENTXX_RESULT_ERR_NOT_FOUND;
     });
 }
 
-static int64_t PLUGINXX_CALL xx_add_share_store(
+static PluginxxOperatorHandle* PLUGINXX_CALL xx_add_share_store(
     const PluginxxHost*       host,
     const PluginxxScopeRef*   agent,
     const PluginxxStringView* session_id,
-    const PluginxxStringView* content
+    const PluginxxStringView* content,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
 ) {
-    return agentxx::plugin::guardVtableCall<int64_t>(-1, [&]() -> int64_t {
-        auto call = enterHost(host);
-        auto mgr  = call.manager();
-        auto inst = call.instance();
-        if (!mgr || !inst || !session_id || !content) {
-            return -1;
+    return agentxx::plugin::guardVtableCall<PluginxxOperatorHandle*>(nullptr, [&]() {
+        if (!content) {
+            setTableOpError(error_out, "add_share_store: content is required");
+            return static_cast<PluginxxOperatorHandle*>(nullptr);
         }
-        if (!scopeOk(mgr, agent)) {
-            return -1;
-        }
-        auto mgrPtr     = mgr;
-        auto instPtr    = inst;
-        auto sid        = *session_id;
-        auto contentVal = *content;
-        return ioCallSyncKeep<int64_t>(
-            call,
-            mgrPtr,
-            [mgrPtr, instPtr, sid, contentVal, agent]() -> int64_t {
-                return mountCall(
-                    mgrPtr,
-                    agent,
+        auto sid     = svToStr(session_id);
+        auto payload = svToStr(content);
+        return asyncScopedTableCall(
+            host,
+            agent,
+            cb,
+            ud,
+            error_out,
+            "session.add_share_store",
+            [sid, payload](
+                PluginInstance*         inst,
+                PluginManager*          mgr,
+                const PluginxxScopeRef& ref
+            ) -> std::string {
+                const auto id = mountCall(
+                    mgr,
+                    &ref,
                     [] { return int64_t{-1}; },
-                    [instPtr, sid, contentVal](PluginMount& mount) {
-                        return mount.addShareStore(instPtr, sid, contentVal);
+                    [inst, &sid, &payload](PluginMount& mount) {
+                        return mount.addShareStore(
+                            inst,
+                            PluginxxStringView{sid.data(), sid.size()},
+                            PluginxxStringView{payload.data(), payload.size()}
+                        );
                     }
                 );
+                if (id < 0) {
+                    throw TableOpError("share_store entry could not be written");
+                }
+                return std::to_string(id);
             }
         );
     });
@@ -539,24 +669,35 @@ static int64_t PLUGINXX_CALL xx_add_share_store(
 // 接口表: 会话访问的追加成员 (v3: 工作目录 / 取消查询)
 // =====================================================================
 
-/// `agentxx.agent.session.get_session_work_dir`
-/// - `agent` 必须有效 (引用无效返回 -1 并记一条警告)
+/// `agentxx.agent.session.get_session_work_dir` (**异步**)
+/// - `agent` 必须有效 (引用无效按 FAILED 交回并记一条警告)
 /// - `session_id` 可为空: 空 = 取解析后的默认会话工作目录
-static int32_t PLUGINXX_CALL xx_session_work_dir(
+static PluginxxOperatorHandle* PLUGINXX_CALL xx_session_work_dir(
     const PluginxxHost*       host,
     const PluginxxScopeRef*   agent,
     const PluginxxStringView* session_id,
-    PluginxxString*           out
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
 ) {
-    return queryScopedStringIo(
-        host,
-        agent,
-        out,
-        [agent, session_id](PluginInstance*, PluginManager* mgr) -> std::string {
-            // session_id 允许为空 (空 = 默认工作目录)
-            return mgr->sessionWorkDir(agent, svToSv(session_id));
-        }
-    );
+    return agentxx::plugin::guardVtableCall<PluginxxOperatorHandle*>(nullptr, [&]() {
+        auto sid = svToStr(session_id);
+        return asyncScopedTableCall(
+            host,
+            agent,
+            cb,
+            ud,
+            error_out,
+            "session.get_session_work_dir",
+            [sid](
+                PluginInstance*,
+                PluginManager*          mgr,
+                const PluginxxScopeRef& ref
+            ) -> std::string {
+                return mgr->sessionWorkDir(&ref, sid);
+            }
+        );
+    });
 }
 
 /// `agentxx.agent.session.is_canceled`
@@ -664,32 +805,52 @@ static const AgentxxPluginContextIface g_ifaceContext = {
     /* messages_count */ xx_context_messages_count,
 };
 
-static void PLUGINXX_CALL xx_emit_message_tip(
+static PluginxxOperatorHandle* PLUGINXX_CALL xx_emit_message_tip(
     const PluginxxHost*       host,
     const PluginxxScopeRef*   agent,
     const PluginxxStringView* session_id,
     const PluginxxStringView* text,
-    int32_t                   level
+    int32_t                   level,
+    PluginxxOperatorCallback  cb,
+    void*                     ud,
+    PluginxxString*           error_out
 ) {
-    agentxx::plugin::guardVtableCallVoid([&]() {
-        auto call = enterHost(host);
-        auto mgr  = call.manager();
-        auto inst = call.instance();
-        if (!mgr || !inst || !session_id || !text) {
-            return;
+    return agentxx::plugin::guardVtableCall<PluginxxOperatorHandle*>(nullptr, [&]() {
+        if (agentxx::plugin::PluginStringView::empty(text)) {
+            setTableOpError(error_out, "emit_message_tip: text is required");
+            return static_cast<PluginxxOperatorHandle*>(nullptr);
         }
-        if (!scopeOk(mgr, agent)) {
-            return;
-        }
-        auto mgrPtr  = mgr;
-        auto instPtr = inst;
-        auto sid     = *session_id;
-        auto txt     = *text;
-        ioCallSyncVoidKeep(call, mgrPtr, [mgrPtr, instPtr, sid, txt, level, agent]() {
-            if (auto* mount = mountIn(mgrPtr, agent); mount != nullptr) {
-                mount->emitMessageTip(instPtr, sid, txt, level);
+        auto sid  = svToStr(session_id);
+        auto body = svToStr(text);
+        return asyncScopedTableCall(
+            host,
+            agent,
+            cb,
+            ud,
+            error_out,
+            "session.emit_message_tip",
+            [sid, body, level](
+                PluginInstance*         inst,
+                PluginManager*          mgr,
+                const PluginxxScopeRef& ref
+            ) -> std::string {
+                mountCall(
+                    mgr,
+                    &ref,
+                    [] { return 0; },
+                    [inst, &sid, &body, level](PluginMount& mount) {
+                        mount.emitMessageTip(
+                            inst,
+                            PluginxxStringView{sid.data(), sid.size()},
+                            PluginxxStringView{body.data(), body.size()},
+                            level
+                        );
+                        return 0;
+                    }
+                );
+                return std::string{};
             }
-        });
+        );
     });
 }
 

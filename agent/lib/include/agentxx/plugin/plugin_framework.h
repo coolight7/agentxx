@@ -27,6 +27,7 @@
 #include "pluginxx/host/lifecycle.h"
 #include "pluginxx/host/loader.h"
 #include "pluginxx/host/manifest.h"
+#include "pluginxx/host/table_op.h"
 #include "pluginxx/host/tables_impl.h"
 #include "pluginxx/runtime/driver.h"
 #include "pluginxx/runtime/instance_base.h"
@@ -131,6 +132,12 @@ using pluginxx::PluginLoadOptions;
 // ==================== 通用表入口加载 (pluginxx/host/tables_impl.h) ====================
 using pluginxx::GenericTableEntries;
 using pluginxx::queryGenericPluginIface;
+
+// ==================== 表调用执行框架 (pluginxx/host/table_op.h) ====================
+using pluginxx::setTableOpError;
+using pluginxx::startTableOp;
+using pluginxx::startTableOpVoid;
+using pluginxx::TableOpError;
 
 // ==================== C ABI 辅助 (pluginxx/host/abi_util.h) ====================
 using pluginxx::guardVtableCall;

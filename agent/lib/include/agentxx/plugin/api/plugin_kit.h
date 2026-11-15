@@ -104,6 +104,11 @@ using pluginxx::RootRequest;
 using pluginxx::ScopeRef;
 using pluginxx::sleep;
 using pluginxx::spawn;
+using pluginxx::tableOp;
+using pluginxx::tableOpBlocking;
+using pluginxx::tableOpBlockingRaw;
+using pluginxx::tableOpCallback;
+using pluginxx::TableOpResult;
 using pluginxx::Task;
 using pluginxx::validateInterface;
 using pluginxx::yield;
@@ -1516,18 +1521,48 @@ public:
         return res;
     }
 
-    /// 写入会话共享存储 (经主程序 agentxx.agent.session 接口表)
+    /// 写入会话共享存储 (经主程序 agentxx.agent.session 接口表; 返回新条目 id, 失败 -1)
+    ///
+    /// - 阻塞形态, 适用工具实现体 / 插件自己的线程;
+    /// - 在主程序 IO 线程上调用同样可用: 主程序的表操作在 IO 线程上是内联执行的
+    ///   (见 `tableOpBlocking` 的线程规则), 不会卡住;
+    /// - 协程里请用 [addShareStoreAsync]。
     int64_t addShareStore(
-        const ScopeRef&   agent,
+        const ScopeRef&    agent,
         PluginxxStringView tid,
-        std::string_view  content
+        std::string_view   content
     ) const {
         if (!host || !iface.session || !iface.session->add_share_store) {
             return -1;
         }
-        auto ref       = agent.raw();
-        auto contentSv = PluginStringView::from(content.data(), content.size());
-        return iface.session->add_share_store(host, &ref, &tid, &contentSv);
+        auto ref  = agent.raw();
+        auto text = std::string{content};
+        auto out  = tableOpBlocking(
+            *this,
+            [this, &ref, &tid, &text](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                auto contentSv = PluginStringView::from(text.data(), text.size());
+                return iface.session->add_share_store(host, &ref, &tid, &contentSv, cb, ud, err);
+            }
+        );
+        return out.ok() ? out.integer(-1) : int64_t{-1};
+    }
+
+    /// 写入会话共享存储 (**协程形态**; `co_await` 后取 `.integer(-1)` 读 id)
+    template<typename Ctx>
+    auto addShareStoreAsync(
+        Ctx&               ctx,
+        const ScopeRef&    agent,
+        PluginxxStringView tid,
+        std::string_view   content
+    ) const {
+        auto ref  = agent;
+        auto key  = PluginStringView::from(tid.data, tid.size);
+        auto text = std::string{content};
+        return tableOp(ctx, [this, ref, key, text](auto cb, auto ud, auto err) {
+            auto r  = ref.raw();
+            auto sv = PluginStringView::from(text.data(), text.size());
+            return iface.session->add_share_store(host, &r, &key, &sv, cb, ud, err);
+        });
     }
 
     int64_t addShareStore(
@@ -1542,17 +1577,31 @@ public:
     /// - `scope` 是本挂载的作用域引用 (mount 时存下来的那份); 会话属于某个作用域
     /// - `key` 为空 = 该作用域的默认会话工作目录
     /// - 主程序未实现该能力或查询失败时返回空串
+    /// - 线程规则同 [addShareStore] (IO 线程上靠主程序内联执行);
+    ///   协程里请用 [workDirAsync]
     std::string workDir(const PluginxxScopeRef* scope, PluginxxStringView key = {}) const {
         if (!host || !iface.session || !iface.session->get_session_work_dir) {
             return {};
         }
-        PluginxxString out{nullptr, 0};
-        if (iface.session->get_session_work_dir(host, scope, &key, &out) != 0 || !out.data) {
-            return {};
-        }
-        std::string text{out.data, static_cast<size_t>(out.size)};
-        PluginString::free(host, &out);
-        return text;
+        auto out = tableOpBlocking(
+            *this,
+            [this, scope, &key](PluginxxOperatorCallback cb, void* ud, PluginxxString* err) {
+                return iface.session->get_session_work_dir(host, scope, &key, cb, ud, err);
+            }
+        );
+        return out.ok() ? std::string{out.text()} : std::string{};
+    }
+
+    /// 会话生效的工作目录 (**协程形态**)
+    template<typename Ctx>
+    auto workDirAsync(Ctx& ctx, const ScopeRef& agent, std::string_view key = {}) const {
+        auto ref = agent;
+        auto k   = std::string{key};
+        return tableOp(ctx, [this, ref, k](auto cb, auto ud, auto err) {
+            auto r  = ref.raw();
+            auto sv = PluginStringView::from(k.data(), k.size());
+            return iface.session->get_session_work_dir(host, &r, &sv, cb, ud, err);
+        });
     }
 
     std::string workDir(const PluginxxScopeRef* scope, std::string_view key) const {
