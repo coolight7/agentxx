@@ -782,6 +782,77 @@ asio::awaitable<TestResult> run_plugin_tests() {
             }
         }
 
+        // ---- 16b2. JS SDK 对齐自查 (自身信息 / 配置路径 / 路径权限 / 能力行 / 流结束) ----
+        {
+            auto tool = ctx->toolRegistry->find("js_parity_probe");
+            XX_TEST_EXPECT_TRUE(tool != nullptr);
+            if (tool) {
+                const auto result = co_await tool->execute_async(utilxx_base::Json::object());
+                XX_TEST_EXPECT_TRUE(result.status == agentxx::util::ToolStatus::Ok);
+                auto j = utilxx_base::Json::parse(result.text);
+                // getOwnInfo (`plugins.get_own_info`): 对象, 且带本插件名
+                XX_TEST_EXPECT_TRUE(j["ownInfo"].is_object());
+                XX_TEST_EXPECT_EQ(j["ownId"].get<std::string>(), std::string{"example_js"});
+                // getPluginConfigPath (`config.get_plugin_config_path`): 未配置给空串
+                XX_TEST_EXPECT_EQ(
+                    j["configPathKind"].get<std::string>(),
+                    std::string{"string"}
+                );
+                // checkPaths / filterPaths (`permission.check_paths`): 三态数组 + 允许子集
+                // - 没有权限中间件时主程序不支持查询, 桥给 null (调用方按"不过滤"处理)
+                XX_TEST_EXPECT_TRUE(j["checkPathsIsArray"].is_boolean());
+                XX_TEST_EXPECT_TRUE(j["filterPathsIsArray"].is_boolean());
+                const auto checkDecision = j["checkPathDecision"];
+                if (j["checkPathsIsArray"].get<bool>()) {
+                    XX_TEST_EXPECT_TRUE(j["filterPathsCount"].get<int64_t>() >= 0);
+                    XX_TEST_EXPECT_TRUE(checkDecision.is_string());
+                    if (checkDecision.is_string()) {
+                        const std::string d = checkDecision.get<std::string>();
+                        XX_TEST_EXPECT_TRUE(d == "allow" || d == "deny" || d == "ask");
+                    }
+                } else {
+                    XX_TEST_EXPECT_TRUE(checkDecision.is_null());
+                    XX_TEST_EXPECT_EQ(j["filterPathsCount"].get<int64_t>(), int64_t{-1});
+                }
+                const auto writeDecision = j["writeDecision"];
+                if (writeDecision.is_string()) {
+                    // 工作目录外的写入至少"没获批准" (ask) 或明确拒绝
+                    const std::string d = writeDecision.get<std::string>();
+                    XX_TEST_EXPECT_TRUE(d == "deny" || d == "ask");
+                } else {
+                    XX_TEST_EXPECT_TRUE(writeDecision.is_null());
+                }
+                // 能力行: 登记 → 调用 (值回来) → 自省 → 注销 → 再调用失败
+                XX_TEST_EXPECT_TRUE(j["provided"].is_boolean());
+                XX_TEST_EXPECT_TRUE(j["provided"].get<bool>());
+                const auto& call = j["invoke"];
+                XX_TEST_EXPECT_TRUE(call.is_object());
+                XX_TEST_EXPECT_TRUE(call["ok"].get<bool>());
+                XX_TEST_EXPECT_EQ(call["value"]["echo"].get<std::string>(), std::string{"pong"});
+                XX_TEST_EXPECT_EQ(call["value"]["from"].get<std::string>(), std::string{"js"});
+                XX_TEST_EXPECT_TRUE(j["capInfoIsObject"].get<bool>());
+                XX_TEST_EXPECT_TRUE(j["capProviders"].get<int64_t>() >= 1);
+                XX_TEST_EXPECT_EQ(
+                    j["listCapabilitiesKind"].get<std::string>(),
+                    std::string{"object"}
+                );
+                XX_TEST_EXPECT_TRUE(j["unprovided"].get<bool>());
+                const auto& after = j["invokeAfterUnprovide"];
+                XX_TEST_EXPECT_TRUE(after.is_object());
+                XX_TEST_EXPECT_FALSE(after["ok"].get<bool>());
+                // providePoint: 功能埋点实现行 (many + first + 只开 impl 阶段)
+                XX_TEST_EXPECT_TRUE(j["pointProvided"].is_boolean());
+                if (j["pointProvided"].get<bool>()) {
+                    XX_TEST_EXPECT_TRUE(j["pointProviders"].get<int64_t>() >= 1);
+                }
+                // 订阅的流结束回调: 一个订阅每次发布恰好收一次 + 一次结束原因
+                XX_TEST_EXPECT_EQ(j["seenAfterPublish"].get<int64_t>(), int64_t{1});
+                XX_TEST_EXPECT_EQ(j["plainSeenAfterPublish"].get<int64_t>(), int64_t{1});
+                XX_TEST_EXPECT_EQ(j["streamSeen"].get<int64_t>(), int64_t{1});
+                XX_TEST_EXPECT_TRUE(j["streamEndReason"].is_object());
+            }
+        }
+
         // ---- 16c. JS 网络 (agentxx.net): 连不上按业务失败返回, Promise 不 reject ----
         {
             auto tool = ctx->toolRegistry->find("js_net_fetch");

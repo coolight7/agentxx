@@ -335,6 +335,16 @@ path/to/agentxx_test --log-level warn string_util regex
     (两边互等, 界面卡死)。一次没拿到内容的渲染按"没有自定义内容"缓存, 界面用默认渲染
   - 示例 `example_js`: 双入口 + `plugin.js` 按 side 分支; 清单同时声明 `agentxx.agent.core`
     与 `agentxx.client.msg_decor`; 用例 `client_plugins` 第 34 段
+  - **脚本 SDK 与 C++ 插件 SDK 的对齐面 (2026-11)**: 能力行/功能埋点 (`provideCapability` /
+    `providePoint` / `unprovideCapability` / `listCapabilities` / `capabilityInfo` /
+    `invokeCapability`; 行归**脚本所在插件**、脚本回调在 JS 线程、`invokeCapability` 始终给
+    Promise 且结论看 `ok`)、路径权限三态 (`checkPaths` / `filterPaths`, 主程序无权限中间件时
+    给 `null`)、自身信息与配置路径 (`getOwnInfo` / `getPluginConfigPath`)、广播订阅的
+    `options` (`intervalMs` / `mode`) 与 `onEnd` (对应 `subscribe_broadcast_ex`);
+    **故意不做**: `graph.register_node_type` (图引擎在自身线程同步调节点执行, 脚本只能在自己的
+    JS 线程跑) / `scheduler.*` / `cancel.op_cancel` / `tasks.*` / `coroutine_runtime.*` /
+    `json.*`; 顺带修了两处旧 bug: 实例订阅表 `agents` 从未初始化 (脚本 `subscribe` / `onHook`
+    的回调永远不执行)、一次派发会把同频道所有处理器都调一遍 (现按订阅下标各调一次)
   - **不要再为它加 agent 侧接口表**: 2026-11 曾按"agent 侧登记 + wire 往返"实现过一版
     (`agentxx.agent.tool_render` + 三条 wire 消息), 评估后整体回退 —— 渲染器注册面只在
     client 侧一处 (见 `resource/history/subagent-tool-parity/work.md` 的"第五步 (已回退)");

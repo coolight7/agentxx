@@ -187,6 +187,21 @@ if (SIDE === "client") {
     });
   });
 
+  // ---- client 侧: 广播订阅 (与 agent 侧同一套 subscribe / onEnd) ----
+  // 订阅自己声明的频道: 发布后回调在 JS 线程执行。回调只记数 (不弹 toast),
+  // 由 `js.demo.sdk` 把上一轮收到的次数写进 toast, 端到端可断言。
+  const subChannel = "plugin.example_js.client.echo";
+  let subEcho = 0;
+  let subEnds = 0;
+  agentxx.declareBroadcast({ id: subChannel, cache: "none" });
+  agentxx.subscribe(
+    subChannel,
+    () => {
+      subEcho++;
+    },
+    { onEnd: () => { subEnds++; } },
+  );
+
   // ---- client 侧: 通用表 (配置 / 插件清单 / 广播声明-发布-读-结束) ----
   // 这些入口会等主程序 io 线程, 所以放在投递式回调 (动作) 里调。
   agentxx.bindAction("js.demo.sdk", () => {
@@ -199,13 +214,18 @@ if (SIDE === "client") {
     const current = agentxx.readBroadcast(channel);
     const ended = agentxx.endBroadcast(channel, "done");
     const afterEnd = agentxx.readBroadcast(channel);
+    // 订阅自检: 本频道的发布与结束在上一轮已经到过回调 (处理异步, 这里读到的是上一轮)
+    agentxx.publish(subChannel, { n: 1 });
+    agentxx.endBroadcast(subChannel, "round done");
     agentxx.showToast(
       "sdk: plugins=" + (plugins ? plugins.length : -1) +
         " self=" + (self && self.name ? self.name : "?") +
         " config=" + (cfg === null ? "null" : "object") +
         " read=" + (current && current.tick === 1) +
         " ended=" + ended +
-        " afterEnd=" + (afterEnd === null),
+        " afterEnd=" + (afterEnd === null) +
+        " echo=" + subEcho +
+        " ends=" + subEnds,
       0,
     );
   });
@@ -347,7 +367,86 @@ if (SIDE === "client") {
     },
   });
 
-  // ---- 工具 8: 网络 (async HTTP) ----
+  // ---- 工具 8: SDK 对齐自查 (自身信息 / 配置路径 / 路径权限 / 能力行 / 流结束) ----
+  // 逐项调一遍与 C++ 插件 SDK 同名的新接口, 返回结果形状与关键值供测试断言。
+  agentxx.registerTool({
+    name: "js_parity_probe",
+    description: "JS plugin demo: self info, path permissions, capability rows and stream end.",
+    parameters: {},
+    execute: async () => {
+      const out = {};
+      const kindOf = (v) => (v === null ? "null" : Array.isArray(v) ? "array" : typeof v);
+
+      // 1) 自身信息 / 配置文件路径 (未配置时是空串, 不是 undefined)
+      const info = agentxx.getOwnInfo();
+      out.ownInfo = info && typeof info === "object" ? info : null;
+      out.ownId = out.ownInfo && typeof out.ownInfo.name === "string" ? out.ownInfo.name : "";
+      out.configPathKind = kindOf(agentxx.getPluginConfigPath());
+
+      // 2) 路径权限三态查询: checkPaths 给三个状态, filterPaths 只留允许项
+      const dir = agentxx.getSessionWorkDir("");
+      const probePaths = [typeof dir === "string" && dir.length > 0 ? dir : "."];
+      const decisions = agentxx.checkPaths(probePaths, "read");
+      out.checkPathsIsArray = Array.isArray(decisions);
+      out.checkPathDecision = Array.isArray(decisions) && decisions.length === 1 ? decisions[0] : null;
+      const allowed = agentxx.filterPaths(probePaths, "read");
+      out.filterPathsIsArray = Array.isArray(allowed);
+      out.filterPathsCount = Array.isArray(allowed) ? allowed.length : -1;
+      const writeDecisions = agentxx.checkPaths(["/js-parity-probe/not-allowed"], "write");
+      out.writeDecision = Array.isArray(writeDecisions) && writeDecisions.length === 1 ? writeDecisions[0] : null;
+
+      // 3) 能力行: 登记 → 调用 → 自省 → 注销 → 再调用 (应当失败)
+      const capName = "js.selftest";
+      out.provided = agentxx.provideCapability({
+        id: capName,
+        handler: (args) => ({ echo: args && args.ping, from: "js" }),
+      });
+      const full = "plugin." + (out.ownId || "example_js") + "." + capName;
+      out.invoke = await agentxx.invokeCapability(full, { ping: "pong" });
+      const capInfo = agentxx.capabilityInfo(full);
+      out.capInfoIsObject = typeof capInfo === "object" && capInfo !== null;
+      out.capProviders = capInfo && Array.isArray(capInfo.providers) ? capInfo.providers.length : -1;
+      out.listCapabilitiesKind = kindOf(agentxx.listCapabilities());
+      out.unprovided = agentxx.unprovideCapability(capName);
+      out.invokeAfterUnprovide = await agentxx.invokeCapability(full, { ping: "after" });
+
+      // 4) 功能埋点实现行: 用核心点验证登记形状 (登记 / 自省 / 撤销)
+      const pointId = "agentxx.agent.point.context.countTokens";
+      out.pointProvided = agentxx.providePoint(pointId, () => ({ tokens: 7 }));
+      const pointInfo = agentxx.capabilityInfo(pointId);
+      out.pointProviders =
+        pointInfo && Array.isArray(pointInfo.providers) ? pointInfo.providers.length : -1;
+      agentxx.unprovideCapability(pointId);
+
+      // 5) 订阅的流结束回调 (onEnd 与主程序的 subscribe_broadcast_ex 对应)
+      const stream = "plugin." + (out.ownId || "example_js") + ".js.selftest.stream";
+      agentxx.declareBroadcast({ id: stream, cache: "latest", publish: "owner" });
+      const seen = [];
+      let endReason = null;
+      const token = agentxx.subscribe(
+        stream,
+        (v) => seen.push(v),
+        { onEnd: (reason) => { endReason = reason; } },
+      );
+      // 对照组: 老签名 (两个参数) 的订阅, 用来区分"事件没送到"与"新参数路径有问题"
+      let plainSeen = 0;
+      agentxx.subscribe(stream, () => { plainSeen++; });
+      out.subscribeTokenKind = kindOf(token);
+      out.published = typeof agentxx.publish(stream, { n: 1 });
+      out.readAfterPublish = kindOf(agentxx.readBroadcast(stream));
+      await new Promise((r) => setTimeout(r, 20));
+      out.seenAfterPublish = seen.length;
+      out.plainSeenAfterPublish = plainSeen;
+      agentxx.endBroadcast(stream, { why: "probe done" });
+      await new Promise((r) => setTimeout(r, 20));
+      agentxx.unsubscribe(token);
+      out.streamSeen = seen.length;
+      out.streamEndReason = endReason;
+      return out;
+    },
+  });
+
+  // ---- 工具 9: 网络 (async HTTP) ----
   // 拒绝连接 / 超时都按业务失败返回 (`ok:false` + `error`), 不会抛异常
   agentxx.registerTool({
     name: "js_net_fetch",
@@ -368,7 +467,7 @@ if (SIDE === "client") {
     },
   });
 
-  // ---- 工具 9: 返回带状态的结果 {status, text} ----
+  // ---- 工具 10: 返回带状态的结果 {status, text} ----
   // - 与返回普通值的区别: 状态显式给了, 主程序不再把结果当成功
   // - text 是给模型读的正文; 失败时只写错误内容 (不要自己加 "[Error: ...]")
   agentxx.registerTool({
